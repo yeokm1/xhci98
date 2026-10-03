@@ -731,7 +731,8 @@ static NTSTATUS hcdBusInfo(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
     }
     out->NotificationType = AcquireBusInfo;
-    out->TotalBandwidth = (pdo->SpeedClass == XHCI_SPEED_HIGH)
+    out->TotalBandwidth = (pdo->SpeedClass == XHCI_SPEED_HIGH ||
+                           pdo->SpeedClass == XHCI_SPEED_SUPER)
                               ? HCD_BUS_BANDWIDTH_HIGH
                               : HCD_BUS_BANDWIDTH_FULL;
     out->ConsumedBandwidth = 0;

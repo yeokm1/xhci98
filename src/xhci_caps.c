@@ -266,12 +266,13 @@ static ULONG xhciRecordProtocol(XHCI_READ32 read,
  * The convention (docs/usb-xhci-info/xhci-programming.md): within a USB 2.0 group of P ports
  * starting at A and a USB 3.x group of Q ports starting at B, USB 3.x port
  * B + k is the same physical connector as USB 2.0 port A + P - Q + k. It is a
- * convention, not a spec guarantee, and getting it wrong costs nothing here:
- * both halves of a pair are treated identically by this driver anyway - the
- * USB 2.0 one is managed, the USB 3.x one is not. The pairing exists so a
- * USB 3.x port with no USB 2.0 path can be named as such (an orphan, a
- * connector this driver cannot serve at all) rather than looking like an
- * ordinary unmanaged port.
+ * convention, not a spec guarantee. Since Phase 29 both halves are managed
+ * (29-A.1), and getting the pairing wrong costs nothing at enumeration: each
+ * half is served on its own. What rests on it is 29-A.5's fallback hold,
+ * which releases only on the held device's own identity read on the
+ * companion, never on a connect alone, precisely because the pairing is a
+ * convention. An orphan is a USB 3.x port with no USB 2.0 path: served at
+ * SuperSpeed, with nowhere to fall back to.
  */
 static VOID xhciPairCompanions(PXHCI_PORT_MAP map)
 {
@@ -383,8 +384,7 @@ ULONG XhciParseExtendedCaps(XHCI_READ32 read,
     xhciPairCompanions(map);
 
     for (i = 0; i < map->PortCount; i++) {
-        if (map->Class[i] == XHCI_PORT_CLASS_USB2_ONLY ||
-            map->Class[i] == XHCI_PORT_CLASS_USB2_COMPANION) {
+        if (map->Class[i] != XHCI_PORT_CLASS_NONE) {
             map->ManagedPortCount++;
         }
     }
@@ -507,13 +507,19 @@ ULONG XhciPortClass(const XHCI_PORT_MAP *map, ULONG port)
     return map->Class[port - 1];
 }
 
+/* Every port a protocol names, USB 3.x included since task 29-A.1. */
 ULONG XhciPortIsManaged(const XHCI_PORT_MAP *map, ULONG port)
+{
+    return XhciPortClass(map, port) != XHCI_PORT_CLASS_NONE ? 1 : 0;
+}
+
+ULONG XhciPortIsUsb3(const XHCI_PORT_MAP *map, ULONG port)
 {
     ULONG portClass;
 
     portClass = XhciPortClass(map, port);
-    return (portClass == XHCI_PORT_CLASS_USB2_ONLY ||
-            portClass == XHCI_PORT_CLASS_USB2_COMPANION) ? 1 : 0;
+    return (portClass == XHCI_PORT_CLASS_USB3_COMPANION ||
+            portClass == XHCI_PORT_CLASS_USB3_ORPHAN) ? 1 : 0;
 }
 
 ULONG XhciPortSlotType(const XHCI_PORT_MAP *map, ULONG port, ULONG *slotType)
@@ -575,20 +581,36 @@ static ULONG xhciSpeedClassFromKilobits(ULONG kbps)
     return XHCI_SPEED_UNKNOWN;
 }
 
-static ULONG xhciDefaultSpeedClass(ULONG psiv)
+/*
+ * The default table's rate for a PSIV, in kbit/s, and 0 for one it does not
+ * name. IDs 5 to 7 are the SuperSpeedPlus defaults and decode only on a USB
+ * 3.x group (`major` 3): on a USB 2.0 group they name nothing, as before
+ * Phase 29 (xhci-data-structures.md section 10.1; to verify against the PDF).
+ */
+static ULONG xhciDefaultKilobits(ULONG psiv, ULONG major)
 {
     switch (psiv) {
     case XHCI_PSIV_FS:
-        return XHCI_SPEED_FULL;
+        return 12000UL;
     case XHCI_PSIV_LS:
-        return XHCI_SPEED_LOW;
+        return 1500UL;
     case XHCI_PSIV_HS:
-        return XHCI_SPEED_HIGH;
+        return 480000UL;
     case XHCI_PSIV_SS:
-        return XHCI_SPEED_SUPER;
+        return XHCI_RATE_GEN1_KBPS;
+    case XHCI_PSIV_SSP_GEN2X1:
+    case XHCI_PSIV_SSP_GEN1X2:
+        return major == 3 ? 10000000UL : 0;
+    case XHCI_PSIV_SSP_GEN2X2:
+        return major == 3 ? 20000000UL : 0;
     default:
-        return XHCI_SPEED_UNKNOWN;
+        return 0;
     }
+}
+
+static ULONG xhciDefaultSpeedClass(ULONG psiv, ULONG major)
+{
+    return xhciSpeedClassFromKilobits(xhciDefaultKilobits(psiv, major));
 }
 
 ULONG XhciPortSpeedClass(const XHCI_PORT_MAP *map,
@@ -611,7 +633,7 @@ ULONG XhciPortSpeedClass(const XHCI_PORT_MAP *map,
 
     proto = &map->Protocols[map->Protocol[port - 1]];
     if (proto->PsiCount == 0) {
-        *speedClass = xhciDefaultSpeedClass(psiv);
+        *speedClass = xhciDefaultSpeedClass(psiv, proto->Major);
         return XHCI_CAPS_OK;
     }
 
@@ -643,14 +665,15 @@ static ULONG xhciDefaultPsiv(ULONG speedClass)
         return XHCI_PSIV_LS;
     case XHCI_SPEED_HIGH:
         return XHCI_PSIV_HS;
-    default:
+    case XHCI_SPEED_SUPER:
         /*
-         * SuperSpeed is deliberately absent rather than mapped to
-         * XHCI_PSIV_SS: USB 3.0 is out of scope, a SuperSpeed port is left
-         * unpowered by the port strategy, and answering here would let a
-         * caller build a Slot Context for a device this driver has no path
-         * to. XhciInitialMps0 refuses the same speed for the same reason.
+         * Gen 1x1, the one SuperSpeed rate every USB3 port has (task 29-A.1).
+         * A device behind a SuperSpeed hub (Phase 30) is described by class,
+         * and a SuperSpeedPlus rate there is the hub's extended port status's
+         * to name, not this default's.
          */
+        return XHCI_PSIV_SS;
+    default:
         return 0;
     }
 }
@@ -698,6 +721,13 @@ ULONG XhciPortPsivForSpeed(const XHCI_PORT_MAP *map,
      * a device addressed at a speed the controller never named.
      */
     for (i = 0; i < proto->PsiCount; i++) {
+        /* SuperSpeed by class covers every rate from 5 Gbit/s up, so the
+         * class alone would hand back whichever SuperSpeedPlus entry came
+         * first: the SuperSpeed answer is the Gen 1x1 rate's entry. */
+        if (speedClass == XHCI_SPEED_SUPER &&
+            xhciPsiKilobits(proto->Psi[i]) != XHCI_RATE_GEN1_KBPS) {
+            continue;
+        }
         if (xhciSpeedClassFromKilobits(xhciPsiKilobits(proto->Psi[i])) ==
             speedClass) {
             *psiv = XHCI_PSI_PSIV(proto->Psi[i]);
@@ -706,6 +736,64 @@ ULONG XhciPortPsivForSpeed(const XHCI_PORT_MAP *map,
     }
 
     return XHCI_CAPS_NOT_FOUND;
+}
+
+/*
+ * The rate kept apart from the class (task 29-A.1): the one place a PSIV is
+ * read as a number of kbit/s, so a 10 Gbit/s link is told from a 5 Gbit/s one
+ * although both are XHCI_SPEED_SUPER.
+ *
+ * `*plus` is the link protocol where the controller states one - a USB3
+ * group's PSI DWORD with LP = 1 (SuperSpeedPlus) - and otherwise the rate: a
+ * SuperSpeed-class rate above Gen 1x1's. Gen 1x2 is SuperSpeedPlus at 10
+ * Gbit/s over two Gen 1 lanes, and whether its PSI DWORD reads LP = 1 is the
+ * transcription's open question (section 10.1), so the rate rule stands
+ * beside the LP one rather than behind it.
+ */
+ULONG XhciPortRate(const XHCI_PORT_MAP *map,
+                   ULONG port,
+                   ULONG psiv,
+                   ULONG *kbps,
+                   ULONG *plus)
+{
+    const XHCI_PROTOCOL *proto;
+    ULONG rate;
+    ULONG lp;
+    ULONG i;
+
+    if (kbps == NULL || plus == NULL) {
+        return XHCI_CAPS_BAD_PARAM;
+    }
+    *kbps = 0;
+    *plus = 0;
+    if (map == NULL || port == 0 || port > map->PortCount ||
+        port > XHCI_MAX_ROOT_PORTS ||
+        map->Protocol[port - 1] == XHCI_PORT_NO_PROTOCOL) {
+        return XHCI_CAPS_NOT_FOUND;
+    }
+    proto = &map->Protocols[map->Protocol[port - 1]];
+    rate = 0;
+    lp = 0;
+    if (proto->PsiCount == 0) {
+        rate = xhciDefaultKilobits(psiv, proto->Major);
+    } else {
+        for (i = 0; i < proto->PsiCount; i++) {
+            if (XHCI_PSI_PSIV(proto->Psi[i]) == psiv) {
+                rate = xhciPsiKilobits(proto->Psi[i]);
+                if (proto->Major == 3 &&
+                    XHCI_PSI_LP(proto->Psi[i]) == XHCI_PSI_LP_SSP) {
+                    lp = 1;
+                }
+                break;
+            }
+        }
+    }
+    if (rate == 0) {
+        return XHCI_CAPS_NOT_FOUND;
+    }
+    *kbps = rate;
+    *plus = (lp || rate > XHCI_RATE_GEN1_KBPS) ? 1UL : 0UL;
+    return XHCI_CAPS_OK;
 }
 
 /* ------------------------------------------------------------------ */
@@ -896,10 +984,12 @@ ULONG XhciDeriveHcInfo(ULONG capDword0,
      * it is a 1 - which is the one direction of this decision that loses data.
      */
     derived.Fsc = 0;
+    derived.Lec = 0;
     if (derived.CapLength >= XHCI_CAP_HCCPARAMS2_BYTES &&
         mappedBytes >= XHCI_CAP_HCCPARAMS2_BYTES &&
         hccparams2 != 0xFFFFFFFFUL) {
         derived.Fsc = XHCI_HCCPARAMS2_FSC(hccparams2);
+        derived.Lec = XHCI_HCCPARAMS2_LEC(hccparams2);
     }
 
     if (derived.MaxPorts == 0) {

@@ -11,6 +11,12 @@ All tables in this file were transcribed from that local spec PDF (register
 figures and field tables checked page by page), not from memory. If this file
 and the PDF ever disagree, the PDF wins: fix this file.
 
+**Except section 10** (SuperSpeed and SuperSpeedPlus, Phase 29's task 29-0),
+which was drafted without the PDF open and is marked row by row for
+verification; read its provenance paragraph first. Since Phase 29 the driver
+manages USB3 protocol ports too, so the remarks in sections 3 and 7 that every
+managed port is a USB2 protocol port describe the driver before that phase.
+
 Conventions:
 
 - `DW0..DW3` are the four little-endian 32-bit words of a 16-byte TRB or a context row.
@@ -1500,3 +1506,281 @@ typedef struct _XHCI_TRB {
 Cross-references: initialization order in `docs/usb-xhci-info/xhci-programming.md`; rules
 that must survive refactoring in `docs/contributing/implementation-invariants.md`; per-chip
 deviations this driver acts on in `docs/usb-xhci-info/xhci-programming.md`.
+
+---
+
+## 10. SuperSpeed and SuperSpeedPlus (roadmap-hcd.md task 29-0)
+
+**Read this section's provenance before using any value in it.** Sections 1 to
+9 were transcribed from the local xHCI 1.2c PDF page by page. This section was
+not: it was drafted on 2026-10-04 from the drafting agent's knowledge of the
+xHCI 1.2 and USB 3.2 specifications, with no PDF open, to give Phase 29's code
+something to cite. Every row carries its spec section so it can be checked,
+and **every row is to be verified against the PDF** before task 29-0 is ticked;
+the rows the drafter was least sure of say so in words ("to verify" in bold).
+Where this section and the PDF disagree, the PDF wins and this section and the
+code citing it are fixed together. No page numbers are given, because none was
+read. The USB 3.2 specification is not in `docs/references/` today; fetching it
+(with its SHA-256 and licence note, the `docs/references/README.md` pattern) is
+part of verifying 10.7 to 10.9.
+
+A first check against the local xHCI 1.2c PDF was made by Codex's review of
+the Phase 29 draft (round 1, 2026-10-04; a reviewer's reading, not a page-by-
+page transcription, and no page numbers recorded): it confirmed HCCPARAMS2.LEC
+at bit 4, Max ESIT Payload Hi at Endpoint Context DW0 31:24, the 48 KiB and
+three-burst limit without LEC and Mult reserved with it, the default PSIVs 5 to
+7 as Gen 2x1, Gen 1x2 and Gen 2x2 (applicability by USB 3.1 versus 3.2 still
+to state), WPR, WRC, CEC and CAS at bits 31, 19, 23 and 24, the PLS numbers,
+TD Size counting packets and not bursts, and EP0's 512 and exponent 9; and it
+corrected the PLS write rules, the hot-to-warm conversion, warm-reset
+completion and the disconnect transition, which the rows below now carry. The
+"to verify" marks stay until the transcription itself is done.
+
+### 10.1 Supported Protocol Capability, USB3 groups and PSI DWORDs (xHCI 7.2)
+
+The capability's layout is section 6's table. What a USB3 group adds:
+
+| Field | Value | Notes |
+|---|---|---|
+| Major Revision `31:24` of DW0 | 03h | USB 3.x |
+| Minor Revision `23:16` of DW0 | 00h USB 3.0, 10h USB 3.1, 20h USB 3.2 | BCD. A 3.1 or 3.2 group may list SuperSpeedPlus rates |
+| PSIC `31:28` of DW2 | 0 to 15 | 0: the default IDs below apply |
+
+Protocol Speed ID DWORD (xHCI 7.2.1, "Protocol Speed ID" table):
+
+| Bits | Field | Meaning |
+|---|---|---|
+| 3:0 | PSIV | the value PORTSC Port Speed and the Slot Context Speed carry |
+| 5:4 | PSIE | exponent of PSIM: 0 bit/s, 1 Kb/s, 2 Mb/s, 3 Gb/s |
+| 7:6 | PLT | PSI Type: 0 symmetric, 1 reserved, 2 asymmetric Rx, 3 asymmetric Tx |
+| 8 | PFD | PSI Full-duplex |
+| 13:9 | - | reserved |
+| 15:14 | LP | Link Protocol (USB3 groups, xHCI 1.1+): 0 SuperSpeed, 1 SuperSpeedPlus, 2-3 reserved |
+| 31:16 | PSIM | mantissa |
+
+Default Protocol Speed IDs (xHCI 7.2.2.1.1, the "Default USB Speed ID
+Mapping" table), used only when PSIC = 0:
+
+| PSIV | Meaning | Rate |
+|---|---|---|
+| 1 | Full Speed | 12 Mb/s |
+| 2 | Low Speed | 1.5 Mb/s |
+| 3 | High Speed | 480 Mb/s |
+| 4 | SuperSpeed Gen 1 x1 | 5 Gb/s |
+| 5 | SuperSpeedPlus Gen 2 x1 | 10 Gb/s - **to verify** that 1.2 lists it as a default |
+| 6 | SuperSpeedPlus Gen 1 x2 | 10 Gb/s - **to verify** |
+| 7 | SuperSpeedPlus Gen 2 x2 | 20 Gb/s - **to verify** |
+
+The code decodes 5 to 7 only on a USB3 group (`xhci_caps.c`,
+`xhciDefaultKilobits`) and never on a USB2 group, which is where a PSIC = 0
+controller such as `qemu-xhci` reports them; `qemu-xhci` models no rate above
+5 Gb/s, so these three defaults are untested ground.
+
+A rate alone does not name a mode: Gen 2 x1 and Gen 1 x2 are both 10 Gb/s.
+The negotiated lane counts are in PORTLI (10.2). **To verify**: whether a Gen 1 x2
+link reports a PSIV whose DWORD has LP = 1; the code treats any SuperSpeed-class
+rate above 5 Gb/s as SuperSpeedPlus whatever LP says, and LP = 1 as
+SuperSpeedPlus whatever the rate (`XhciPortRate`).
+
+### 10.2 PORTSC, PORTLI and HCCPARAMS2 for a USB3 protocol port (xHCI 5.4.8, 5.4.10, 5.3.9)
+
+PORTSC's bit table is section 3's; these are the USB3 meanings of its
+SuperSpeed-only fields.
+
+| Bit | Field | USB3 meaning |
+|---|---|---|
+| 0 | CCS | 1 once the link has trained (left Polling for U0) and while it stays in U0, U1, U2, U3 or Recovery; **to verify** what CCS reads in SS.Inactive (Error) - the code does not rely on it (Table 5-27's CCS row) |
+| 8:5 | PLS | 10.3's encodings |
+| 19 | WRC | Warm Port Reset Change, RW1C: set when a warm reset completes, beside PRC |
+| 23 | CEC | Port Config Error Change, RW1C: the link partner could not be configured (for example both ends downstream-facing) |
+| 24 | CAS | Cold Attach Status, RO: far-end terminations seen in a state the link cannot train from; **to verify** that Table 5-27 directs software to clear it with a warm reset |
+| 31 | WPR | Warm Port Reset, RW1S, reads 0: starts a warm reset and sets PR; completes with PRC and WRC both set. **Completion is not success**: a warm reset that does not train ends in Disconnected (PLS RxDetect) and still reports its completion, so the driver requires CCS, PED and U0 as well (`XhciLinkResetDone`; Codex review of Phase 29, round 1, finding 5) |
+
+PR on a USB3 port starts a hot reset, and is permitted from every Enabled
+substate. The hot-to-warm conversion is the xHC's own and narrower than this
+section first said (corrected after Codex review of Phase 29, round 1,
+finding 5): the xHC carries a hot reset out as a warm one when the hot-reset
+TS1/TS2 handshake fails (4.19.5.1, footnote 66), and the only sign of it is WRC
+at the reset's end. Choosing WPR whenever the link is not in U0 - U1, U2, U3,
+SS.Inactive, Compliance Mode, or trained with PED clear - is **this driver's
+policy** (`xhci_link.c`), not that rule. The counter `superspeed: hot resets
+converted to warm` counts the xHC's conversions, from WRC observed after a PR
+the driver wrote; `superspeed: warm resets` counts the WPR writes.
+
+PORTLI, PORTSC + 8 (5.4.10):
+
+| Bits | Field | Notes |
+|---|---|---|
+| 15:0 | Link Error Count | USB3 ports |
+| 19:16 | RLC | Rx Lane Count, the count minus one (xHCI 1.1+; **to verify**, 5.4.10.1) |
+| 23:20 | TLC | Tx Lane Count, the count minus one (likewise) |
+
+HCCPARAMS2 (5.3.9, Table 5-16): FSC bit 2 is in section 2. **To verify** the
+rest of the bit order the code relies on: U3C 0, CMC 1, FSC 2, CTC 3, **LEC 4**
+(Large ESIT Payload Capability), CIC 5, ETC 6, ETC_TSC 7, GSC 8, VTC 9. LEC
+decides 10.6's Max ESIT Payload Hi and Mult (`XHCI_HCCPARAMS2_LEC`).
+
+### 10.3 PLS encodings (xHCI 5.4.8, Table 5-27)
+
+| PLS | Read meaning | Software writes it? |
+|---|---|---|
+| 0 | U0 | yes, with LWS: a USB3 resume from U3 is this one write (USB2 writes 15 then 0) |
+| 1 | U1 | no |
+| 2 | U2 | USB2 protocol ports only (L1 entry); not a USB3 write (Table 5-27; corrected after Codex review of Phase 29, round 1) |
+| 3 | U3 | yes, with LWS: suspend |
+| 4 | Disabled (SS.Disabled) | **to verify** whether a write of 4 is defined; the driver disables with PED = 1 instead |
+| 5 | RxDetect | yes, with LWS, from Disabled: its exit to Disconnected (10.4) |
+| 6 | Inactive (SS.Inactive) | no |
+| 7 | Polling | no |
+| 8 | Recovery | no |
+| 9 | Hot Reset | no |
+| 10 | Compliance Mode | the write **enables** the transition to Compliance Mode (with the Compliance Transition Capability, HCCPARAMS2 CTC); it is not an immediate, unconditional transition. The driver never writes it |
+| 11 | Test Mode | no |
+| 12-14 | reserved | - |
+| 15 | Resume | USB2 ports only |
+
+`src/xhci.h` names them `XHCI_PLS_*`.
+
+### 10.4 The USB3 root port state machine (xHCI 4.19.1.2, Figure 4-27)
+
+As the drafter reads it; **to verify against Figure 4-27 state by state**:
+
+| From | Trigger | To | Flags |
+|---|---|---|---|
+| Powered-off | PP 0 -> 1 | Disconnected (PLS RxDetect) | - |
+| any | PP 1 -> 0, over-current | Powered-off | - |
+| Disconnected | far-end terminations detected | Polling (PLS Polling) | - |
+| Polling | link training succeeds (U0) | Enabled | CCS, PED, CSC - **no software reset needed**, unlike USB2's Disabled -> Reset -> Enabled |
+| Polling | training fails | Error (PLS Inactive), or Disconnected after the Rx.Detect retries run out | **to verify** which, and whether CSC is set |
+| Enabled | PR = 1 | Reset (hot) -> Enabled | PRC |
+| Enabled, Error, Compliance | WPR = 1 | Reset (warm) -> Enabled, or Disconnected when the link does not train | PRC, WRC either way |
+| Enabled | PED = 1 | Disabled (PLS Disabled, link SS.Disabled, terminations withdrawn) | **to verify** whether PEC is set |
+| Enabled | link error | Error (SS.Inactive) | PLC, and **to verify** PEC/CSC |
+| any but Powered-off and Disabled | disconnect | Disconnected | CSC, PR/PED cleared (4.19.1.2.3: a Powered-off or Disabled port has no terminations to see it with) |
+| Disabled | PLS = RxDetect write with LWS | Disconnected | - |
+| Disabled | WPR = 1 | none: a warm reset does not act on a Disabled port (**to verify**) | - |
+
+**Whether the Disabled state raises CSC on a physical disconnect** is the open
+question 29-A.5's orphan rule rests on. A Disabled port has withdrawn its
+receiver terminations, so on the reading the drafter takes it cannot detect a
+disconnect at all, and the rule is written on that pessimistic reading: an
+orphan port, or a paired port whose companion never connected, holds until the
+controller's next start. Verify before relaxing it.
+
+### 10.5 The Slot Context for a SuperSpeed device (xHCI 6.2.2)
+
+- Speed (DW0 23:20) is the port's PSIV, raw, as for every speed (section 8).
+  1.2c's note that the field is "not applicable to USB3 Gen X" is section 8's;
+  the driver writes it regardless.
+- Route String is 0 on a root port; behind a SuperSpeed hub it is Phase 30's.
+- No TT fields: a SuperSpeed device has no transaction translator.
+- Max Exit Latency 0: the driver enables neither U1 nor U2 (PORTPMSC's U1 and
+  U2 timeouts stay 0), so no exit latency is owed. **To verify** that a 0 here
+  with U1/U2 disabled is what 4.23.5 expects.
+
+### 10.6 The Endpoint Context for a SuperSpeed endpoint (xHCI 6.2.3, 4.14.2)
+
+| Field | SuperSpeed value | Source |
+|---|---|---|
+| Max Packet Size | wMaxPacketSize 10:0: control 512, bulk 1024, interrupt and isoch 1-1024 (1024 when bMaxBurst > 0) | 6.2.3.5; USB 3.2 9.6.6 |
+| Max Burst Size | the SS Endpoint Companion's bMaxBurst, 0-15; 0 for EP0 | 6.2.3.4 |
+| Mult | isoch: the companion's bmAttributes 1:0 (0-2); 0 otherwise. **With LEC = 1 Mult is reserved (written 0)** and the xHC derives it as ROUNDUP(Max ESIT Payload / Max Packet Size / (Max Burst Size + 1)) - 1 - **to verify** both halves | 6.2.3.8 (Table 6-8) |
+| Interval | interrupt and isoch: bInterval - 1, bInterval 1-16 (Table 6-12's SuperSpeed row, the same as High Speed's); bulk 0 | 6.2.3.6, Table 6-12 |
+| Max ESIT Payload Lo (DW4 31:16) | periodic: wBytesPerInterval (SS companion), or the SSP isoch companion's dwBytesPerInterval 15:0 | 4.14.2, 6.2.3.8 |
+| Max ESIT Payload Hi (DW0 31:24) | bits 23:16 of the payload; defined only with LEC = 1, reserved otherwise | 6.2.3.8 |
+| MaxPStreams, LSA | 0 until Phase 31 (streams) | 6.2.3 |
+
+The largest payload the legacy fields describe is Max Packet Size x (Max
+Burst + 1) x (Mult + 1) = 1024 x 16 x 3 = 49,152 bytes (48 KiB) per interval,
+which is why a SuperSpeedPlus isochronous endpoint above it needs LEC.
+
+What this driver carries is narrower than either, and that is the driver's
+limit, not the specification's: an isochronous URB packet is one interval's
+payload, and the transfer path maps it as at most two page-bounded pieces of
+one 4 KiB page (`XhciPipeIsoFragments`, `hcd_io.c`). So any SuperSpeed or
+SuperSpeedPlus isochronous endpoint whose interval payload exceeds 4096 bytes
+is refused at SELECT_CONFIGURATION or SELECT_INTERFACE
+(`XHCI_PIPE_ESIT_REFUSED`, counted as `superspeed: endpoints refused - ESIT`),
+never admitted and never truncated (Codex review of Phase 29, round 1,
+finding 1). It also refuses one whose interval needs more than four bursts
+of its packet size and Max Burst (4096 bytes in 512-byte packets at burst 0
+is eight), because TBC is two bits (round 2, finding 2). Lifting the limit means
+multi-page isochronous packets - several TRBs per packet - in `hcd_io.c` and
+`xhci_xfer.c`.
+
+TD Size (4.11.2.4) is the formula in section 7, unchanged: it counts packets
+of Max Packet Size, so at SuperSpeed it divides by 1024 (bulk) or 512 (EP0).
+**To verify** the roadmap's "TD Size against burst": the drafter knows of no
+burst term in the TD Size formula; Max Burst enters only the isochronous TBC
+and TLBPC (4.11.2.3), which section 7 already transcribes.
+
+Table 6-9 for EP0 at SuperSpeed: Max Burst 0, Mult 0, Max Packet Size 512.
+
+### 10.7 The USB 3.2 descriptors (USB 3.2 9.6.2, 9.6.7, 9.6.8)
+
+Device descriptor at SuperSpeed (9.6.1): bcdUSB 0300h or above; bMaxPacketSize0
+is an exponent, and **09h (512) is the one legal value**.
+
+BOS descriptor, type 0Fh (9.6.2):
+
+| Offset | Field |
+|---|---|
+| 0 | bLength = 5 |
+| 1 | bDescriptorType = 0Fh |
+| 2 | wTotalLength |
+| 4 | bNumDeviceCaps |
+
+Device Capability header, type 10h: bLength, bDescriptorType, bDevCapabilityType
+(02h USB 2.0 Extension, 03h SuperSpeed USB, 04h Container ID, 0Ah
+SuperSpeedPlus - **to verify** the code points).
+
+SuperSpeed USB Device Capability (9.6.2.2), 10 bytes:
+
+| Offset | Field |
+|---|---|
+| 3 | bmAttributes (bit 1 LTM capable) |
+| 4 | wSpeedsSupported (bit 0 LS, 1 FS, 2 HS, 3 Gen 1) |
+| 6 | bFunctionalitySupport (lowest speed with full function) |
+| 7 | bU1DevExitLat (us) |
+| 8 | wU2DevExitLat (us) |
+
+SuperSpeedPlus Device Capability (9.6.2.5), 12 + 4 x (SSAC + 1) bytes:
+
+| Offset | Field |
+|---|---|
+| 3 | bReserved |
+| 4 | bmAttributes: SSAC 4:0 (sublink speed attributes - 1), SSIC 8:5 |
+| 8 | wFunctionalitySupport: SSID 3:0, min Rx lanes 11:8, min Tx lanes 15:12 |
+| 10 | wReserved |
+| 12 | bmSublinkSpeedAttr[]: SSID 3:0, LSE 5:4, ST 7:6, LP 15:14, LSM 31:16 |
+
+SuperSpeed Endpoint Companion, type 30h, 6 bytes, "shall immediately follow"
+its endpoint descriptor (9.6.7):
+
+| Offset | Field |
+|---|---|
+| 2 | bMaxBurst, 0-15 |
+| 3 | bmAttributes: bulk 4:0 MaxStreams; isoch 1:0 Mult, bit 7 SSP ISO Companion follows; interrupt reserved |
+| 4 | wBytesPerInterval |
+
+SuperSpeedPlus Isochronous Endpoint Companion, type 31h, 8 bytes, after the SS
+companion when its bit 7 is set (9.6.8): wReserved at 2, dwBytesPerInterval at
+4. When it is present the SS companion's Mult is ignored (Table 9-28's note as
+the roadmap cites it; **to verify**).
+
+### 10.8 Link states and the fallen-back upstream port (USB 3.2 7.5, 10.16)
+
+USB 3.2 link states: SS.Disabled, SS.Inactive, Rx.Detect, Polling, U0, U1, U2,
+U3, Recovery, Loopback, Hot Reset, Compliance Mode. A device whose SuperSpeed
+link fails to train (Rx.Detect gives up, or it reaches SS.Disabled) connects on
+its USB 2.0 path. **To verify** the SS.Disabled rule the roadmap names: that an
+upstream port in SS.Disabled returns to Rx.Detect on a USB 2.0 bus reset - the
+cause of the ping-pong 29-A.5's hold exists to prevent - and on a power cycle.
+
+### 10.9 Not answered by this draft
+
+- Which P14s Gen 1 connectors reach which controller (the roadmap's 29-0
+  question): whether its USB-C 3.1 Gen 2 ports are the chipset controller's
+  (`8086:02ED`) ports 13-18 or the Thunderbolt controller's own xHCI, and
+  whether that one is present to Windows 98 SE. Needs the machine, or the
+  vendor's documentation, not a specification.

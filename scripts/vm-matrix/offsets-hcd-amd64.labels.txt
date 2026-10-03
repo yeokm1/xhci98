@@ -8,22 +8,38 @@ EndpointsOpened	endpoints opened
 EndpointsNoBandwidth	endpoints refused - no bandwidth
 EndpointsNoResources	endpoints refused - no resources
 FatalStatus	fatal controller status
+HoldCompanionOthers	hold: companion visits by another device
+HoldsDropped	hold: dropped by a controller reset
+HoldsOrphan	hold: orphan
+HoldsPaired	hold: paired
+HoldsReleased	hold: released
+HoldRequestsRefused	hold: requests refused
+HoldsUnidentified	hold: unidentified
 HubsStarted	hubs started by the bus
 InterruptMaskFailures	interrupt mask failures
 IsoMissedService	iso missed service errors
 IsoPacketErrors	iso packet errors
 IsoPacketsAnswered	iso packets answered
+PortSpeedSuperPlus	port rate above gen 1 - superspeedplus
 PortSpeedFull	port speed decoded - full speed
 PortSpeedHigh	port speed decoded - high speed
 PortSpeedLow	port speed decoded - low speed
+PortSpeedSuper	port speed decoded - superspeed
 SelectEndpointsRefused	select endpoints refused
 SelectEndpointsRequested	select endpoints requested
 SelectsFailed	selects failed
 SlotSpeedFull	slot context speed - full speed
 SlotSpeedHigh	slot context speed - high speed
 SlotSpeedLow	slot context speed - low speed
+SlotSpeedSuper	slot context speed - superspeed
 SpeedDisagreements	slot speed disagreeing with port speed
 SlotsEnabled	slots enabled
+SsBosMissing	superspeed: BOS reads failed
+SsEndpointsEsitRefused	superspeed: endpoints refused - ESIT
+SsResetsConverted	superspeed: hot resets converted to warm
+SsLinksGivenUp	superspeed: links given up
+SsDevicesOnUsb2	superspeed: usb 3 devices on usb 2.0
+SsWarmResets	superspeed: warm resets
 TopoBehindHubAddressed	topology: behind-hub devices addressed
 TopoBehindHubOpens	topology: behind-hub opens
 TopoBehindHubTooDeep	topology: behind-hub refused - too deep

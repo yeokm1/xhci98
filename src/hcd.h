@@ -27,6 +27,7 @@
 #include "xhci_pipe.h"
 #include "xhci_func.h"
 #include "xhci_hub.h"
+#include "xhci_link.h"
 #include "xhci_counters.h"
 
 #define HCD_KIND_CONTROLLER_FDO 0x43464448UL /* 'HDFC' */
@@ -272,6 +273,15 @@ typedef struct _HCD_USB_DEVICE {
     UCHAR DeviceDesc[18];
     PUCHAR Config;          /* the whole configuration descriptor       */
     ULONG ConfigLength;
+    /* SuperSpeed (29-A.1, 29-A.3): the link rate the port trained at, in
+     * kbit/s, whether it is SuperSpeedPlus, and the BOS descriptor, kept
+     * whole (pool; NULL when none was read) with what XhciPipeParseBos
+     * made of it - for the endpoint rules and XHCISNAP (29-A.6). */
+    ULONG RateKbps;
+    ULONG Plus;
+    PUCHAR Bos;
+    ULONG BosLength;
+    XHCI_PIPE_BOS BosInfo;
     PDEVICE_OBJECT Pdo;     /* 26-A.4's device PDO, once it exists; for a
                              * split device its first function PDO, the
                              * rest on that PDO's Sibling chain          */
@@ -431,6 +441,11 @@ typedef struct _HCD_PORT {
     struct _HCD_HUB *AwaitHub; /* Gone: the departed hub whose subtree's
                              * PDOs it waits for as well (hcd_enum.c)    */
     ULONG HubSpeedClass;    /* a hub port: the speed its reset reported  */
+    /* A root port (29-A.1, 29-A.2): the raw PSIV its last reset left, for
+     * the Slot Context - the machine itself is fed the decoded class's
+     * default ID - and, on a USB3 protocol port, its link's record. */
+    ULONG LinkPsiv;
+    XHCI_LINK_PORT Link;
 } HCD_PORT, *PHCD_PORT;
 
 /*
@@ -467,6 +482,29 @@ typedef struct _HCD_HUB {
     ULONG PollPasses;
     ULONG Changed;          /* bit 0 the hub, bit n port n: to look at   */
 } HCD_HUB, *PHCD_HUB;
+
+/*
+ * 29-A.5's active fallback, the hold (hcd_enum.c; xhci_link.h): a device on
+ * a SuperSpeed root port sent back to its USB 2.0 companion. A small table
+ * rather than a field per port: holds are rare, and a port object is one of
+ * HCD_PORT_COUNT. Every entry is the thread's, except that
+ * HcdHoldRequestUsb2 claims one and marks it Pending under the controller
+ * lock; a full table refuses the request, counted.
+ */
+#define HCD_MAX_HOLDS               8UL
+
+/* Why a send-back was asked for (HcdHoldRequestUsb2's `reason`). */
+#define HCD_HOLD_REASON_UAS_NO_STREAMS  1UL /* 31-A.3: UAS-only, no streams */
+#define HCD_HOLD_REASON_SSP_REFUSED     2UL /* 29-A.1's SuperSpeedPlus value */
+#define HCD_HOLD_REASON_OTHER           3UL
+
+typedef struct _HCD_HOLD {
+    ULONG Used;             /* claimed                                   */
+    ULONG Pending;          /* asked for; the thread has not acted yet   */
+    ULONG Reason;           /* HCD_HOLD_REASON_*                         */
+    ULONG Port;             /* the held SuperSpeed root port             */
+    XHCI_LINK_HOLD Hold;    /* the pure state, xhci_link.c               */
+} HCD_HOLD, *PHCD_HOLD;
 
 /* A hub's port object, n from 1. */
 #define HcdHubPort(hc, hub, n)                                               \
@@ -575,6 +613,7 @@ typedef struct _HCD_CONTROLLER {
      * the DMA scratch, and the one EP0 transfer the thread waits for. */
     HCD_PORT Ports[HCD_PORT_COUNT];
     HCD_HUB Hubs[HCD_MAX_HUBS];     /* hcd_hub.c; thread only             */
+    HCD_HOLD Holds[HCD_MAX_HOLDS];  /* 29-A.5 (hcd_enum.c)                */
     PHCD_USB_DEVICE SlotDevice[XHCI_MAX_SLOTS + 1];
     PVOID ScratchVa;
     PHYSICAL_ADDRESS ScratchPa;
@@ -800,6 +839,20 @@ VOID HcdEnumAttach(PHCD_CONTROLLER hc);
 VOID HcdEnumInit(PHCD_CONTROLLER hc);
 VOID HcdEnumDrop(PHCD_CONTROLLER hc);
 ULONG HcdThreadCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb, PULONG control);
+/*
+ * 29-A.5: ask for the device on a SuperSpeed root port to be sent back to
+ * its USB 2.0 companion - its link written to SS.Disabled, its slot and PDOs
+ * gone as on an unplug, and the port held while the device runs on the USB
+ * 2.0 side, released only by the rules of xhci_link.h. Returns FALSE, with
+ * nothing done, when the device is not on a SuperSpeed root port, the port
+ * has no USB 2.0 companion (there is nowhere to send it), it is held
+ * already, or no hold entry is free; each refusal is counted. The work is
+ * the controller thread's next pass: `dev` may still be in use by the caller
+ * when this returns. IRQL: <= DISPATCH_LEVEL, controller lock not held.
+ */
+BOOLEAN HcdHoldRequestUsb2(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                           ULONG reason);
+
 ULONG HcdThreadControl(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                        UCHAR requestType, UCHAR request, USHORT value,
                        USHORT index, ULONG length, PULONG bytes);

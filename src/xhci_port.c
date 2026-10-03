@@ -177,6 +177,22 @@ ULONG XhciPortscResumeDone(ULONG portsc)
     return XhciPortscSetLinkState(portsc, XHCI_PLS_U0);
 }
 
+/*
+ * WPR is RW1S and stripped by the neutral base like PR, so this is the one
+ * place it is written: the warm reset of a USB3 protocol port (29-A.2). It is
+ * RsvdZ on a USB2 protocol port, and the caller asks only for a USB3 one.
+ */
+ULONG XhciPortscWarmReset(ULONG portsc)
+{
+    return XhciPortscWith(portsc, XHCI_PORTSC_WPR);
+}
+
+/* A Disabled USB3 port's exit to Disconnected: PLS = RxDetect with LWS. */
+ULONG XhciPortscRxDetect(ULONG portsc)
+{
+    return XhciPortscSetLinkState(portsc, XHCI_PLS_RX_DETECT);
+}
+
 /* ------------------------------------------------------------------ */
 /* The logical-port map (roadmap Phase 5 task 2)                       */
 /* ------------------------------------------------------------------ */
@@ -258,7 +274,9 @@ ULONG XhciRootHubBuild(const XHCI_PORT_MAP *map, PXHCI_ROOT_HUB rh)
     hubPort = 0;
     for (port = 1; port <= map->PortCount && port <= XHCI_MAX_ROOT_PORTS;
          port++) {
-        if (!XhciPortIsManaged(map, port)) {
+        /* A USB 2.0 hub-class map: since 29-A.1 every protocol port is
+         * managed, but only a USB 2.0 one has a place in this vocabulary. */
+        if (!XhciPortIsManaged(map, port) || XhciPortIsUsb3(map, port)) {
             continue;
         }
         hubPort++;

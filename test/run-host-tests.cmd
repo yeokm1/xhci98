@@ -30,6 +30,11 @@ rem                  page-cut SG list and hcdIsoFill's block, swept over buffer
 rem                  offsets, lengths, packet sizes, map-register grants and
 rem                  physical layouts, every TRB checked against the page table
 rem   test_enum    - the enumeration state machine (src\xhci_enum.c)
+rem   test_link    - the SuperSpeed link of a USB3 root port and 29-A.5's
+rem                  hold (src\xhci_link.c): PORTSC to link state, the
+rem                  bounded warm-reset recovery and its give-up, the hot or
+rem                  warm reset policy, U3 resume, and the hold's release
+rem                  rules case by case
 rem   test_pipe    - the URB-side computations (src\xhci_pipe.c): SETUP
 rem                  building, interface and endpoint parsing, the configure
 rem                  plan, the buffer split and the isochronous URB checks
@@ -198,6 +203,10 @@ rem test_enum links nothing else: the enumeration machine of design record 13
 rem section 5.3 is a pure transition function, driven here with no controller
 rem (task 26-A.9).
 call :run test_enum "test_enum.c ..\src\xhci_enum.c"
+rem test_link links xhci_port.c for the PORTSC writes its actions become, and
+rem xhci_caps.c because xhci_port.c's root-hub map asks it which ports exist,
+rem and xhci_enum.c so the port-change feed is checked against a real machine.
+call :run test_link "test_link.c ..\src\xhci_link.c ..\src\xhci_port.c ..\src\xhci_caps.c ..\src\xhci_enum.c"
 call :run test_pipe "test_pipe.c ..\src\xhci_pipe.c"
 rem test_func links nothing else: the composite split, the filtered
 rem configuration descriptor and the function ids are pure computations over

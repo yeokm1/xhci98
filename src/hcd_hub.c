@@ -135,8 +135,11 @@ VOID HcdDeviceSlotParams(PHCD_USB_DEVICE dev, ULONG withHub,
  * (XHCI_PIPE_SPEED_*, xhci_pipe.h), decoded from the Protocol Speed ID its
  * Slot Context carries: a controller may advertise its own PSIVs (xHCI
  * 7.2.1), so dev->Speed is not that encoding, and only the Slot Context may
- * take it raw (Codex review of 23e7715, finding 4). 0, which every endpoint
- * refuses, for a speed the root port's protocol does not name. IRQL: any.
+ * take it raw (Codex review of 23e7715, finding 4). SuperSpeedPlus apart
+ * from SuperSpeed by the trained rate (dev->Plus, 29-A.1, 29-A.6). 0, which
+ * every endpoint refuses, for a speed the root port's protocol does not
+ * name. The one decode for every endpoint rule (Phase 29's hcdCfgPipeSpeed
+ * folded in here). IRQL: any.
  */
 ULONG HcdDevicePipeSpeed(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
@@ -151,6 +154,8 @@ ULONG HcdDevicePipeSpeed(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         return XHCI_PIPE_SPEED_FULL;
     case XHCI_SPEED_HIGH:
         return XHCI_PIPE_SPEED_HIGH;
+    case XHCI_SPEED_SUPER:
+        return dev->Plus ? XHCI_PIPE_SPEED_SUPER_PLUS : XHCI_PIPE_SPEED_SUPER;
     default:
         return 0;
     }

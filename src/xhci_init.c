@@ -745,16 +745,17 @@ static ULONG xhciBuildPortMap(PXHCI_EXTENSION ext, ULONG afterReset)
     }
 
     /*
-     * A controller whose ports are all USB 3.x is one this driver cannot serve
-     * at all - SuperSpeed is out of scope, so there is nothing left to manage.
-     * The parser is right to accept such a chain; the refusal is this driver's,
-     * which is why it is raised here. It also keeps Phase 5 out of a documented
+     * A controller whose capability chain names no port at all leaves nothing
+     * to manage. Since Phase 29 (task 29-A.1) an all-SuperSpeed controller is
+     * not one of them: every USB3 protocol port is managed, so it is accepted.
+     * The parser is right to accept an empty chain; the refusal is this
+     * driver's, which is why it is raised here. It also kept Phase 5 out of a documented
      * trap: usbport's root hub creation sizes its removable/power masks from
      * the reported port count and asks for roughly 1 GB of nonpaged pool at
      * zero (docs/usb-xhci-info/usbport-miniport-abi.md section 9; roadmap Phase 5 task 1).
      */
     if (map->ManagedPortCount == 0) {
-        XHCI_DBG_TEXT("port map: no USB 2.0 protocol port to manage - "
+        XHCI_DBG_TEXT("port map: no protocol port to manage - "
                       "refusing");
         return xhciPortMapRefused(ext, afterReset, XHCI_CAPS_NO_MANAGED_PORTS);
     }
@@ -861,8 +862,7 @@ static ULONG xhciBuildPortMap(PXHCI_EXTENSION ext, ULONG afterReset)
         XhciLogNote(ext, "map.usb3", counts[XHCI_PORT_CLASS_USB3_COMPANION] +
                                          counts[XHCI_PORT_CLASS_USB3_ORPHAN]);
         for (i = 0; i < map->PortCount; i++) {
-            if (map->Class[i] == XHCI_PORT_CLASS_USB2_ONLY ||
-                map->Class[i] == XHCI_PORT_CLASS_USB2_COMPANION) {
+            if (map->Class[i] != XHCI_PORT_CLASS_NONE) {
                 /* port << 8 | class - the port number is one-based, as every
                  * PORTSC reference in this driver is. */
                 XhciLogNote(ext, "map.port",
@@ -1957,13 +1957,19 @@ static ULONG xhciWantPortPower(const XHCI_PORT_MAP *map,
                                ULONG phase)
 {
     switch (XhciPortClass(map, port)) {
+    /*
+     * Since Phase 29 a USB3 protocol port is powered like a USB 2.0 one (task
+     * 29-A.1): the HCD drives SuperSpeed itself. Before it, the miniport and
+     * the HCD to Phase 28 held these ports unpowered so a USB 3.x device fell
+     * back to its USB 2.0 path; a USB 2.0 device on the same connector is
+     * unaffected either way, since the two halves are electrically apart.
+     */
     case XHCI_PORT_CLASS_USB2_ONLY:
     case XHCI_PORT_CLASS_USB2_COMPANION:
-        return phase == XHCI_PP_PHASE_TEARDOWN ? XHCI_PP_WANT_OFF
-                                               : XHCI_PP_WANT_ON;
     case XHCI_PORT_CLASS_USB3_COMPANION:
     case XHCI_PORT_CLASS_USB3_ORPHAN:
-        return XHCI_PP_WANT_OFF;
+        return phase == XHCI_PP_PHASE_TEARDOWN ? XHCI_PP_WANT_OFF
+                                               : XHCI_PP_WANT_ON;
     default:
         return XHCI_PP_WANT_LEAVE;
     }
@@ -2211,7 +2217,7 @@ static VOID xhciPowerPorts(PXHCI_EXTENSION ext)
 
     XHCI_DBG_VALUE("port power: ports transitioned to powered", asserted);
     XHCI_DBG_VALUE("port power: managed ports powered", ext->PortsPowered);
-    XHCI_DBG_VALUE("port power: USB3 ports left unpowered",
+    XHCI_DBG_VALUE("port power: ports held unpowered",
                    ext->PortsUnpowered);
     XHCI_DBG_VALUE("port power: ports that did not reach target",
                    ext->PortPowerFailures);

@@ -300,7 +300,9 @@ ULONG XhciBuildEndpointContext(volatile ULONG *context,
         params->AverageTrbLength > XHCI_EP_AVG_TRB_MASK) {
         return XHCI_CTX_BAD_PARAM;
     }
-    if (params->MaxEsitPayload > 0xFFFFUL) {
+    /* 24 bits: Lo in DW4 31:16, Hi in DW0 31:24. Whether Hi may be nonzero
+     * is HCCPARAMS2.LEC's question, which the caller answers (29-A.6). */
+    if (params->MaxEsitPayload > XHCI_EP_MAX_ESIT_LIMIT) {
         return XHCI_CTX_BAD_PARAM;
     }
     /* CErr "shall be set to '0'" for isoch endpoints (Table 6-9), and 1-3 for
@@ -322,6 +324,7 @@ ULONG XhciBuildEndpointContext(volatile ULONG *context,
      */
     dw0 = params->Mult << XHCI_EP_MULT_SHIFT;
     dw0 |= params->Interval << XHCI_EP_INTERVAL_SHIFT;
+    dw0 |= (params->MaxEsitPayload >> 16) << XHCI_EP_MAX_ESIT_HI_SHIFT;
 
     dw1 = params->ErrorCount << XHCI_EP_CERR_SHIFT;
     dw1 |= params->EpType << XHCI_EP_TYPE_SHIFT;
@@ -334,7 +337,7 @@ ULONG XhciBuildEndpointContext(volatile ULONG *context,
     }
 
     dw4 = params->AverageTrbLength & XHCI_EP_AVG_TRB_MASK;
-    dw4 |= params->MaxEsitPayload << XHCI_EP_MAX_ESIT_SHIFT;
+    dw4 |= (params->MaxEsitPayload & 0xFFFFUL) << XHCI_EP_MAX_ESIT_SHIFT;
 
     for (i = 0; i < XHCI_CONTEXT_DWORDS; i++) {
         xhciCtxStore(context, i, 0);
@@ -360,7 +363,8 @@ ULONG XhciBuildEp0Params(ULONG maxPacketSize,
     }
     /*
      * The legal set rather than a range. bMaxPacketSize0 is 8, 16, 32 or 64
-     * (USB 2.0 section 9.6.1), and a device reporting anything else has given a
+     * (USB 2.0 section 9.6.1), or 512 at SuperSpeed (USB 3.2 9.6.1, where
+     * EP0's Max Burst is 0 too), and a device reporting anything else has given a
      * malformed descriptor - which task 6-B.4 must decline rather than program,
      * because the value ends up in the TD Size arithmetic of every later control
      * transfer.
@@ -913,11 +917,13 @@ ULONG XhciInitialMps0(ULONG speedClass)
      * reasoning and the measurement are on XHCI_EP0_MPS_FULL_INITIAL in
      * src/xhci.h.
      *
-     * SuperSpeed is deliberately absent rather than given its 512: USB 3.0 is
-     * out of scope (AGENTS.md), a SuperSpeed port is left unpowered by the port
-     * strategy, and answering 0 here makes an attempt to address one refuse at
-     * the caller instead of producing a plausible context.
+     * SuperSpeed is 512 and fixed (USB 3.2 9.6.1; task 29-A.3): the device
+     * descriptor's bMaxPacketSize0 must read 09h, the exponent, so no
+     * Evaluate Context follows at that speed.
      */
+    if (speedClass == XHCI_SPEED_SUPER) {
+        return XHCI_EP0_MPS_SUPER;
+    }
     if (speedClass == XHCI_SPEED_LOW) {
         return XHCI_EP0_MPS_LOW;
     }
