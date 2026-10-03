@@ -96,6 +96,8 @@ typedef struct _HCD_TIMER {
 #define HCD_USBD_INTERNAL_HC_ERROR  ((LONG)0x80000800L)
 #define HCD_USBD_INVALID_PIPE       ((LONG)0x80000600L)
 #define HCD_USBD_INVALID_PARAMETER  ((LONG)0x80000300L)
+/* Windows 2000 DDK inc\usbdi.h:232. */
+#define HCD_USBD_STALL_PID          ((LONG)0xC0000004L)
 #define HCD_USBD_ERROR_SHORT_TRANSFER ((LONG)0x80000900L)
 /* Windows 2000 DDK inc\usbdi.h:290 and :294. */
 #define HCD_USBD_BAD_START_FRAME    ((LONG)0xC0000A00L)
@@ -219,6 +221,11 @@ typedef struct _HCD_PIPE {
      * the endpoint's stream block. Streams and its Live under the
      * controller lock. */
     ULONG StreamId;                 /* 0: not a stream                    */
+    ULONG StreamFault;              /* a stream's own event halted or
+                                     * errored the endpoint: its recovery
+                                     * owes it a Set TR Dequeue (hcd_cfg.c,
+                                     * hcdCfgRecoverDequeue); controller
+                                     * lock                               */
     struct _HCD_PIPE *Parent;       /* a stream's endpoint pipe           */
     struct _HCD_STREAMS *Streams;   /* the endpoint's open streams        */
     ULONG XferCount;                /* records in Xfers: a stream's pipe is
@@ -243,6 +250,7 @@ typedef struct _HCD_PIPE {
  */
 typedef struct _HCD_STREAMS {
     ULONG Count;                    /* granted: Stream IDs 1..Count       */
+    ULONG Dci;                      /* the endpoint's, for a retired block */
     ULONG Entries;
     ULONG MaxPStreams;
     ULONG Live;

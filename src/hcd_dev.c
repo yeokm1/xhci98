@@ -132,6 +132,11 @@ static ULONG hcdPipeResult(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
     if (result->NeedsRecovery && !result->RefusedRetire &&
         pipe->TransferType != XHCI_PIPE_XFER_ISOCH) {
         pipe->Halted = 1;
+        /* A stream's own failure: the endpoint's recovery moves this
+         * stream alone past its failed TD (hcd_cfg.c, 31-A.1). */
+        if (pipe->StreamId != 0) {
+            pipe->StreamFault = 1;
+        }
     }
     if (result->RefusedRetire ||
         (result->NeedsRecovery &&
@@ -260,6 +265,7 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
 {
     PHCD_CONTROLLER hc;
     PHCD_PIPE pipe;
+    PHCD_PIPE endpoint;
     XHCI_XFER_EVENT_RESULT result;
     XHCI_XFER_CODE code;
     ULONG cc;
@@ -271,11 +277,27 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
     dci = XHCI_TRB_GET_EP_ID(event->Control);
     pipe = hcdEventPipe(hc, slotId, dci);
     if (pipe != NULL && pipe->Streams != NULL) {
+        endpoint = pipe;
         /* An Event Data TRB's event carries that TRB's parameter, not a
          * TRB address; the engine queues none on a stream ring. */
         pipe = XHCI_EVENT_IS_EVENT_DATA(event->Control)
                    ? NULL
                    : hcdEventStream(pipe, event->Param0);
+        if (pipe == NULL && !XHCI_EVENT_IS_EVENT_DATA(event->Control) &&
+            event->Param0 == 0 && event->Param1 == 0 &&
+            XHCI_TRB_GET_COMPLETION(event->Status) == XHCI_CC_STALL) {
+            /* A STALL in a Prime Pipe transaction: no TD was running, so
+             * the event names no TRB (xHCI 4.12), yet the endpoint is
+             * Halted with every stream's requests on it. The endpoint's,
+             * not a stream's: the thread resets it and completes what is
+             * on it as stalled (hcd_cfg.c, hcdCfgCancelOne). A nonzero
+             * pointer no stream ring holds stays unclaimed below. */
+            endpoint->Halted = 1;
+            endpoint->DrainPending = 1;
+            hc->CancelWork = 1;
+            HcdThreadWake(hc);
+            return 0;
+        }
     }
     if (pipe == NULL) {
         /* An event no queue owns is still the controller's to escalate
