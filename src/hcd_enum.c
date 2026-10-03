@@ -1604,6 +1604,11 @@ static VOID hcdRun(PHCD_CONTROLLER hc, PHCD_PORT p, XHCI_ENUM_EVENT event)
             if (act.Kind == XHCI_ENUM_ACT_NONE) {
                 XHCI_DBG_VALUE("hcd: enumeration failed, port/cause",
                                (p->PortId << 16) | p->Enum.FailCause);
+                if (p->Hub == NULL && p->HoldRecoverFails != 0) {
+                    /* Refused in place after a failed recreation and now
+                     * failed for good: the same give-up (hcdHoldResolve). */
+                    hc->HoldRecoverGiveUps++;
+                }
                 if (p->Hub != NULL && !p->Hub->Draining &&
                     p->Hub->Device != NULL) {
                     HcdHubPortDisable(hc, p->Hub, p->Number);
@@ -1695,9 +1700,14 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
         XhciWritePortsc(ext, p->PortId,
                         XhciPortscClearChanges(portsc, changes));
     }
-    if ((portsc & XHCI_PORTSC_CCS) == 0) {
-        /* Physically empty: the next device's refused send-back gets its
-         * own recreation budget (hcdHoldResolve). */
+    if ((portsc & XHCI_PORTSC_CCS) == 0 ||
+        (changes & XHCI_PORTSC_CSC) != 0) {
+        /* Physically empty, or a connection change the hardware reported
+         * - a device that may not be the one before: the next device's
+         * refused send-back gets its own recreation budget
+         * (hcdHoldResolve). The resolver's own disconnect is software
+         * only, raises no CSC and keeps the count (Codex review of the
+         * Phase 28-31 integration, round 4, finding 2). */
         p->HoldRecoverFails = 0;
     }
     /* A held SuperSpeed port is not served: its link is Disabled and stays
@@ -1967,6 +1977,31 @@ static VOID hcdHoldService(PHCD_CONTROLLER hc)
                                h->Port);
                 HcdSvcRequestReset(&hc->Hc);
             }
+            continue;
+        }
+        /* And the device must still be the one the identity was read
+         * from, on a link the hold can disable: connected, no connection
+         * change since (a CSC may be a replacement), the requester still
+         * on the port, and the fresh status still one XhciLinkDecide
+         * would disable. Otherwise the request ends, never as an active
+         * hold: the port is marked changed and this pass's ordinary
+         * inspection (hcdPortChanged) feeds the departure or the new
+         * connection and settles the device (hcdHoldResolve) (Codex
+         * review of the Phase 28-31 integration, round 4, finding 1). */
+        if ((portsc & XHCI_PORTSC_CCS) == 0 ||
+            (portsc & XHCI_PORTSC_CSC) != 0 || p->Device == NULL ||
+            !p->Device->HoldAsked ||
+            XhciLinkDecide(&p->Link, portsc, XHCI_LINK_WANT_HOLD, &act) !=
+                XHCI_LINK_ACT_DISABLE) {
+            hc->Counters.HoldRequestsRefused++;
+            XHCI_DBG_VALUE("hcd: hold refused, port changed meanwhile, "
+                           "PORTSC", portsc);
+            XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+            h->Used = 0;
+            h->Pending = 0;
+            hc->PortChange[(h->Port - 1) / 32UL] |=
+                1UL << ((h->Port - 1) % 32UL);
+            XhciControllerLockRelease(&hc->Hc, oldIrql);
             continue;
         }
         kind = XhciHoldBegin(&h->Hold, h->Port,

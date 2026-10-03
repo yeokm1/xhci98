@@ -781,9 +781,12 @@ typedef struct _HCD_CONTROLLER {
     ULONG HubPortsGivenUp;
     ULONG SsHubPortsRearmed;        /* given-up SuperSpeed hub ports put
                                      * back to RxDetect (hcd_hub.c)       */
-    ULONG HoldRecoverGiveUps;       /* devices left refused with no PDO
-                                     * after HCD_HOLD_RECOVER_TRIES failed
-                                     * recreations (hcd_enum.c)           */
+    ULONG HoldRecoverGiveUps;       /* devices left with no PDO after a
+                                     * refused send-back's recreation
+                                     * failed: at HCD_HOLD_RECOVER_TRIES,
+                                     * or their re-enumeration, refused in
+                                     * place, failing for good
+                                     * (hcd_enum.c)                       */
     ULONG TtBufferClears;
     ULONG TtBufferClearFailures;
 
