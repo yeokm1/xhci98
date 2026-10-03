@@ -26,6 +26,7 @@
 #include "xhci_enum.h"
 #include "xhci_pipe.h"
 #include "xhci_func.h"
+#include "xhci_hub.h"
 #include "xhci_counters.h"
 
 #define HCD_KIND_CONTROLLER_FDO 0x43464448UL /* 'HDFC' */
@@ -215,9 +216,32 @@ typedef struct _HCD_PIPE {
  * (section 7.5 rule 3). */
 typedef struct _HCD_USB_DEVICE {
     struct _HCD_CONTROLLER *Controller;
-    ULONG Port;             /* root port, 1-based                       */
+    ULONG Port;             /* root port, 1-based: the path starts there */
+    ULONG Location;         /* its port object, hc->Ports[Location - 1]:
+                             * the root port itself, or a hub's port     */
     ULONG SlotId;
-    ULONG Speed;            /* PORTSC speed value, carried unchanged    */
+    ULONG Speed;            /* the Protocol Speed ID: PORTSC's on a root
+                             * port, looked up for its class behind a hub */
+    /* Its place behind hubs (27-A.2; design record 13 section 10.4), fixed
+     * at Enable Slot and written into every Slot Context it is given
+     * (HcdDeviceSlotParams): all 0 on a root port. */
+    ULONG Route;            /* Route String                               */
+    ULONG Tier;             /* hubs above it                              */
+    ULONG TtSlot;           /* Parent (TT) Hub Slot ID, FS/LS behind HS   */
+    ULONG TtPort;           /* Parent (TT) Port Number                    */
+    ULONG TtMulti;          /* that hub runs its multi-TT interface       */
+    /* A hub the bus serves (hcd_hub.c): its hub object, and what its own
+     * Slot Context says of it once configured (Hub = 1). The status-change
+     * transfer's record lives here, not in the hub object, because it is
+     * the device's queue that holds it until the slot goes. */
+    struct _HCD_HUB *Hub;
+    ULONG HubMarked;        /* Configure Endpoint carries the hub fields  */
+    ULONG HubPorts;         /* Number of Ports: bNbrPorts                 */
+    ULONG HubTtt;           /* TT Think Time                              */
+    ULONG HubMtt;           /* its multi-TT interface is enabled          */
+    XHCI_TRANSFER HubXfer;
+    ULONG HubXferArmed;     /* on the ring; controller lock               */
+    ULONG HubXferDone;      /* retired, not yet looked at; controller lock */
     ULONG Mps0;
     XHCI_RING Ep0;
     /* EP0 through the transfer engine (xhci_xfer.c): its queue, the one
@@ -315,7 +339,11 @@ typedef struct _HCD_DEVICE_PDO {
     volatile LONG Busy;             /* dispatches inside hcd_urb.c, raised
                                      * before Controller is read; the
                                      * parent's release waits it out      */
-    ULONG Port;
+    ULONG Port;                     /* its device's Location: the port
+                                     * handshake (hcdPortNotify) names it */
+    ULONG InstanceKey;              /* the instance id and the address
+                                     * (XhciHubInstanceKey): the root port,
+                                     * with the route above it behind hubs */
     ULONG Speed;
     ULONG SpeedClass;               /* XHCI_SPEED_*, decoded at creation:
                                      * the raw Speed is a PSIV whose
@@ -348,24 +376,79 @@ typedef struct _HCD_DEVICE_PDO {
      ((pipe)->Interface < 32UL &&                                            \
       ((pdo)->InterfaceMask & (1UL << (pipe)->Interface)) != 0))
 
-/* A root port: its enumeration machine and the device on it. */
+/*
+ * A port: its enumeration machine and the device on it. The first
+ * XHCI_MAX_ROOT_PORTS are the root ports, PortId the xHCI port number; the
+ * rest are the ports of the hubs inside the bus (27-A.1), HCD_HUB_MAX_PORTS
+ * per hub object, PortId past the root ports' - a location only, Number the
+ * port on its hub. A location names one port object for as long as its hub
+ * object lives, so the PDO handshake (hcdPortNotify) reaches either kind.
+ */
 typedef struct _HCD_PORT {
     XHCI_ENUM_PORT Enum;
-    ULONG PortId;           /* 1-based xHCI port number                 */
+    ULONG PortId;           /* 1-based location; a root port's number    */
     PHCD_USB_DEVICE Device;
     ULONG AwaitSerial;      /* Gone: the PDO group whose deletion it
                              * waits for                                 */
+    struct _HCD_HUB *Hub;   /* NULL for a root port                      */
+    ULONG Number;           /* the port on its hub; a root port's PortId */
+    struct _HCD_HUB *AwaitHub; /* Gone: the departed hub whose subtree's
+                             * PDOs it waits for as well (hcd_enum.c)    */
+    ULONG HubSpeedClass;    /* a hub port: the speed its reset reported  */
 } HCD_PORT, *PHCD_PORT;
 
-#define HCD_PORT_WORDS ((XHCI_MAX_ROOT_PORTS + 31UL) / 32UL)
+/*
+ * A hub the bus serves (hcd_hub.c; design record 13 sections 5.2 and 10.3):
+ * never a PDO. One per topology node at most (XHCI_TOPO_NODES), each with
+ * HCD_HUB_MAX_PORTS port objects after the root ports. A hub whose device
+ * left is Draining until every port of it has settled - each waiting, as a
+ * root port does, for its own device's PDOs - and the port it sat on waits
+ * for it (AwaitHub), so nothing is enumerated at that place before PnP has
+ * let go of what was there. Thread only.
+ */
+#define HCD_MAX_HUBS        ((ULONG)XHCI_TOPO_NODES)
+#define HCD_HUB_MAX_PORTS   XHCI_HUB_MAX_PORTS
+#define HCD_PORT_COUNT      (XHCI_MAX_ROOT_PORTS + HCD_MAX_HUBS * HCD_HUB_MAX_PORTS)
+#define HCD_PORT_WORDS      ((HCD_PORT_COUNT + 31UL) / 32UL)
+
+typedef struct _HCD_HUB {
+    ULONG Used;             /* allocated: live or draining               */
+    ULONG Draining;         /* its device has left                       */
+    ULONG Index;            /* in hc->Hubs[]                             */
+    PHCD_USB_DEVICE Device; /* its record while live                     */
+    PHCD_PORT Upstream;     /* the port it sits on                       */
+    ULONG SlotId;           /* the topology graph's key while live       */
+    ULONG SpeedClass;       /* XHCI_SPEED_*                              */
+    ULONG Tier;             /* the graph's: 0 on a root port             */
+    ULONG Refused;          /* too deep: addressed, never configured     */
+    ULONG Ports;            /* managed (XhciHubManagedPorts)             */
+    XHCI_HUB_DESC Desc;
+    ULONG Alternate;        /* 1: the multi-TT interface is selected     */
+    struct _HCD_PIPE *Status; /* the status-change pipe                  */
+    ULONG StatusBytes;      /* the report's length                       */
+    ULONG StatusFailures;   /* completions in a row that failed          */
+    ULONG Polled;           /* the pipe is unusable: polled instead      */
+    ULONG PollPasses;
+    ULONG Changed;          /* bit 0 the hub, bit n port n: to look at   */
+} HCD_HUB, *PHCD_HUB;
+
+/* A hub's port object, n from 1. */
+#define HcdHubPort(hc, hub, n)                                               \
+    (&(hc)->Ports[XHCI_MAX_ROOT_PORTS +                                      \
+                  (hub)->Index * HCD_HUB_MAX_PORTS + (n) - 1UL])
 
 /* URB functions counted one by one (hcd_urb.c); the Windows 2000 DDK's
  * highest is 0x002A (usbdi.h), and anything at or above this is counted as
  * unknown. */
 #define HCD_URB_FUNCTIONS 0x40UL
 
-/* The enumeration's DMA scratch (hcd_dma.c), a 4 KB common buffer. */
+/* The enumeration's DMA scratch (hcd_dma.c), a 4 KB common buffer. Its
+ * tail holds each hub's status-change report (hcd_hub.c); the thread's
+ * control transfers use what is before it. */
 #define HCD_SCRATCH_BYTES 4096UL
+#define HCD_HUB_STATUS_BYTES    XHCI_HUB_STATUS_MAX_BYTES
+#define HCD_SCRATCH_CONTROL_BYTES                                            \
+    (HCD_SCRATCH_BYTES - HCD_MAX_HUBS * HCD_HUB_STATUS_BYTES)
 
 typedef struct _HCD_CONTROLLER {
     HCD_COMMON Common;
@@ -452,7 +535,8 @@ typedef struct _HCD_CONTROLLER {
 
     /* Enumeration (hcd_enum.c): the root ports, the device on each slot,
      * the DMA scratch, and the one EP0 transfer the thread waits for. */
-    HCD_PORT Ports[XHCI_MAX_ROOT_PORTS];
+    HCD_PORT Ports[HCD_PORT_COUNT];
+    HCD_HUB Hubs[HCD_MAX_HUBS];     /* hcd_hub.c; thread only             */
     PHCD_USB_DEVICE SlotDevice[XHCI_MAX_SLOTS + 1];
     PVOID ScratchVa;
     PHYSICAL_ADDRESS ScratchPa;
@@ -511,8 +595,9 @@ typedef struct _HCD_CONTROLLER {
     volatile ULONG CmdDoneControl;
     volatile ULONG CmdDoneLost;
     ULONG SlotFatalEvents;
-    /* Per root port bits (XHCI_MAX_ROOT_PORTS), under the controller lock:
-     * changed (the event DPC), and the PDO handshake (hcd_pdo.c). */
+    /* Per port bits (HCD_PORT_COUNT locations; PortChange the root ports'
+     * alone), under the controller lock: changed (the event DPC), and the
+     * PDO handshake (hcd_pdo.c). */
     ULONG PortChange[HCD_PORT_WORDS];
     ULONG PortPdoStarted[HCD_PORT_WORDS];
     ULONG PortPdoRemoved[HCD_PORT_WORDS];
@@ -520,7 +605,7 @@ typedef struct _HCD_CONTROLLER {
      * device dropped and enumerated afresh if it is still the one that PDO
      * serial stands for. */
     ULONG PortCycle[HCD_PORT_WORDS];
-    ULONG PortCycleSerial[XHCI_MAX_ROOT_PORTS];
+    ULONG PortCycleSerial[HCD_PORT_COUNT];
     /* Thread requests (hcd_enum.c), under the controller lock. */
     ULONG SlotsInvalidated;         /* HCRST took every slot              */
     ULONG EnumDetachRequested;      /* the root hub is going               */
@@ -678,6 +763,25 @@ ULONG HcdThreadControlEx(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 ULONG HcdThreadReaddress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 VOID HcdEnumCycle(PHCD_CONTROLLER hc, ULONG port, ULONG serial);
 
+/* hcd_hub.c */
+VOID HcdDeviceSlotParams(PHCD_USB_DEVICE dev, ULONG withHub,
+                         PXHCI_SLOT_PARAMS sp);
+ULONG HcdHubPlace(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG speedClass,
+                  PHCD_USB_DEVICE dev);
+ULONG HcdHubStart(PHCD_CONTROLLER hc, PHCD_PORT p, PHCD_USB_DEVICE dev);
+VOID HcdHubForget(PHCD_CONTROLLER hc, PHCD_HUB hub);
+VOID HcdHubFree(PHCD_CONTROLLER hc, PHCD_HUB hub);
+ULONG HcdHubPortStatus(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
+                       PULONG status, PULONG change);
+ULONG HcdHubPortDebounce(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n);
+ULONG HcdHubPortReset(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
+                      PULONG speedClass);
+ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
+                     ULONG state, PXHCI_HUB_PORT_DECISION d);
+VOID HcdHubCollect(PHCD_CONTROLLER hc, PHCD_HUB hub);
+VOID HcdHubRearm(PHCD_CONTROLLER hc, PHCD_HUB hub);
+VOID HcdHubXferRetired(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+
 /* hcd_strict.c: debug and qemu flavours only; nothing in release. */
 #if DBG
 typedef struct _HCD_STRICT_SNAP {
@@ -708,6 +812,8 @@ VOID HcdCfgCancelService(PHCD_CONTROLLER hc);
 VOID HcdCfgDeviceGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 PHCD_PIPE HcdCfgPipe(PHCD_USB_DEVICE dev, PVOID handle);
 ULONG HcdCfgParentConfigure(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+struct _HCD_PIPE *HcdCfgHubOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                const XHCI_PIPE_EP *ep, ULONG iface);
 
 /* hcd_pdo.c */
 NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);

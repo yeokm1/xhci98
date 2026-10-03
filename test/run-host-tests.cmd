@@ -36,7 +36,11 @@ rem                  plan, the buffer split and the isochronous URB checks
 rem   test_func    - the composite split with and without an IAD, the filtered
 rem                  configuration descriptor and the function ids
 rem                  (src\xhci_func.c)
-rem   test_ctx     - the Slot, Endpoint and Input Control Context encoders
+rem   test_hub     - the hub class's pure half (src\xhci_hub.c): the hub
+rem                  descriptor, the status-change bitmap, the port decision,
+rem                  the reset progress and speed bits, the depth and multi-TT
+rem                  rules and the instance key
+rem   test_ctx    - the Slot, Endpoint and Input Control Context encoders
 rem                  (src\xhci_ctx.c): the golden vectors for every speed class,
 rem                  both context strides, and the field-by-field refusals
 rem   test_topo    - the hub topology graph (src\xhci_topo.c): the snooped
@@ -191,6 +195,9 @@ rem test_func links nothing else: the composite split, the filtered
 rem configuration descriptor and the function ids are pure computations over
 rem descriptor bytes (task 26-A.7).
 call :run test_func "test_func.c ..\src\xhci_func.c"
+rem test_hub links nothing else: the hub class's decisions are pure
+rem computations over descriptor and status bytes (task 27-A.1).
+call :run test_hub "test_hub.c ..\src\xhci_hub.c"
 rem test_strict links nothing else: strict mode's command precondition table
 rem (xHCI 1.2 section 4.6) is a pure function, checked here at every cell -
 rem each command type, DW3 bit 9, slot state and EP State.

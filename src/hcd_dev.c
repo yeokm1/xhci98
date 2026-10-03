@@ -145,6 +145,12 @@ static ULONG hcdPipeResult(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
     }
     if (result->Action == XHCI_XFER_ACTION_COMPLETE) {
         for (t = result->Completed; t != NULL; t = t->Next) {
+            if (t == &pipe->Device->HubXfer) {
+                /* A hub's status-change report: the thread's, not a URB's
+                 * (hcd_hub.c). */
+                HcdHubXferRetired(hc, pipe->Device);
+                continue;
+            }
             hc->Counters.TransfersCompleted++;
             HcdIoRetired(hc, t);
         }

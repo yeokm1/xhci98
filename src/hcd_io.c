@@ -1620,7 +1620,11 @@ VOID HcdIoDrainPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd)
     t = XhciXferQueueDrain(pipe->Queue, usbd, &count);
     while (t != NULL) {
         next = t->Next;
-        if (t != &pipe->Device->Ep0Xfer) {
+        if (t == &pipe->Device->HubXfer) {
+            /* A hub's status-change record carries no IRP (hcd_hub.c). */
+            t->UsbdStatus = usbd;
+            HcdHubXferRetired(hc, pipe->Device);
+        } else if (t != &pipe->Device->Ep0Xfer) {
             t->UsbdStatus = usbd;
             hc->Counters.TransfersCancelled++;
             HcdIoRetired(hc, t);
