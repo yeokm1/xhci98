@@ -682,3 +682,32 @@ Audio therefore waits on 26-A.7, which is taken next. Isochronous transfers were
 **Round 16** (two MAJOR, four MINOR, fixed in `7df3809`): a waiter could be stranded, and an explicit StartFrame fell back to Start Isoch ASAP (SIA).
 
 **Round 17** (two MAJOR, one MINOR, fixed in `f69b723`): the cadence condition, and an access in the refusal of a short URB. Round 18 is pending.
+
+### Composite devices split into function PDOs, and Codex round 19 (c15)
+
+**c15** (`04ab898b...f8ec`, `38635f6`, 2026-10-03, development host A, fresh overlays): composite devices are split into function PDOs (26-A.7). Windows 98 SE ran on c15 and, after the install restart, c15b; Windows 2000 on c15. The stick and the C-Media device were c14's.
+- **Both primaries**:
+  - The controller and the USB mouse installed as in c14, and the mouse moved the pointer. On Windows 2000, an Explorer box, "E:\ is not accessible.", followed the controller's Finish; E: read normally from `cmd` later.
+  - The stick appeared as F:, and `fc /b` reported "no differences encountered" for `RAND.BIN` and for a copy to `F:\COPY.BIN`. Its unplug was clean.
+- **The audio device** (runtime, the debugcon traces). On both, the passthrough 0D8C:0014 was split into two function PDOs, MI_00 for audio (interfaces 0 to 2) and MI_03 for HID:
+
+  ```
+  split device configured, port/slot/value=00030201
+  device PDOs created, port/count=00030002
+  function PDO, port/MI=00030000
+  function PDO, interface mask=00000007
+  function PDO, class/subclass/protocol=00010100
+  function PDO, port/MI=00030003
+  function PDO, interface mask=00000008
+  function PDO, class/subclass/protocol=00030000
+  ```
+
+  - No bugcheck: c14's STOP 0x1E is gone. On Windows 98 SE the HID function installed from `HIDDEV.INF` and the audio function from `WDMA_USB.INF`, with no prompt and no restart.
+  - Device Manager showed the USB Audio Device and the HID-compliant consumer control device, each "This device is working properly.", and no composite parent entry. The USB Audio Device was the preferred playback device.
+  - Playback failed on both: "Your audio hardware cannot play files like the current file." (Sound Recorder, three plays on Windows 98 SE, one on Windows 2000), and on Windows 2000 Media Player's "All wave devices that can play files in the current format are in use." (two plays). No sound played.
+  - The HCD refused `usbaudio.sys`'s SELECT_INTERFACE to the streaming alternates, `select interface refused, length/number/alt=00240101` (each `thread URB done, function/status=01000300`), and earlier to `00100100` and `00100200`. On Windows 98 SE one select of interface 1, alternate 1 succeeded between refusals (`interface selected, number/alt=00000101`).
+  - It also refused a class-interface request, `function control refused, bmRequestType/wIndex=00A10054` on Windows 2000 and `00A10060` on Windows 98 SE, each with `URB refused at dispatch, function/status=1B000300`.
+  - No isochronous URB reached the HCD. Unplugging the audio device was clean on both.
+- **Windows 2000** also passed the root hub's disable (Code 22) and enable. Both shutdowns were clean.
+
+**Round 19**, on 26-A.7 (three MAJOR, four MINOR): the filtered configuration copy was not bounded by the MDL, the alternate-0 fallback claimed success, and the split rule differed from Microsoft's composite-parent rule. Both c15 defects were fixed with them in `3191f72`: the SELECT_INTERFACE had been bounded by UrbHeader.Length, which usbport does not read, and that bound is gone; and of class requests, only one naming a sibling function's interface is now refused. Round 20 is pending, and audio playback is the next leg's check.

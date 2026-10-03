@@ -189,10 +189,18 @@ static NTSTATUS hcdDeviceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
     ULONG sub;
     ULONG prot;
     PWCHAR out;
+    const WCHAR *prefix;
 
     if (pdo->Function) {
         return hcdFunctionQueryId(pdo, irp, type);
     }
+    /* A hub is offered under ids no INF knows until the bus serves hubs
+     * itself (Phase 27): the stock USB.INF files bind usbhub.sys by class
+     * and by some hubs' VID/PID too - NUSB's lists QEMU's 0409:55AA - and
+     * usbhub.sys on this PDO asked for GET_ROOTHUB_PDO and left Windows 2000
+     * resetting at every boot (golden-image build, 2026-10-03). */
+    prefix = (pdo->DeviceDesc[4] == 0x09) ? L"USB\\XHCI98HUB_VID_"
+                                          : L"USB\\VID_";
     vid = (ULONG)pdo->DeviceDesc[8] | ((ULONG)pdo->DeviceDesc[9] << 8);
     pid = (ULONG)pdo->DeviceDesc[10] | ((ULONG)pdo->DeviceDesc[11] << 8);
     rev = (ULONG)pdo->DeviceDesc[12] | ((ULONG)pdo->DeviceDesc[13] << 8);
@@ -200,7 +208,7 @@ static NTSTATUS hcdDeviceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
 
     switch (type) {
     case BusQueryDeviceID:
-        hcdPut(buf, &n, L"USB\\VID_");
+        hcdPut(buf, &n, prefix);
         hcdPutHex(buf, &n, vid, 4);
         hcdPut(buf, &n, L"&PID_");
         hcdPutHex(buf, &n, pid, 4);
@@ -208,14 +216,14 @@ static NTSTATUS hcdDeviceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
         break;
 
     case BusQueryHardwareIDs:
-        hcdPut(buf, &n, L"USB\\VID_");
+        hcdPut(buf, &n, prefix);
         hcdPutHex(buf, &n, vid, 4);
         hcdPut(buf, &n, L"&PID_");
         hcdPutHex(buf, &n, pid, 4);
         hcdPut(buf, &n, L"&REV_");
         hcdPutHex(buf, &n, rev, 4);
         buf[n++] = 0;
-        hcdPut(buf, &n, L"USB\\VID_");
+        hcdPut(buf, &n, prefix);
         hcdPutHex(buf, &n, vid, 4);
         hcdPut(buf, &n, L"&PID_");
         hcdPutHex(buf, &n, pid, 4);
@@ -225,6 +233,16 @@ static NTSTATUS hcdDeviceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
 
     case BusQueryCompatibleIDs:
         hcdClassTriple(pdo, &cls, &sub, &prot);
+        if (cls == 0x09) {
+            /* No compatible ids for a hub either (see the prefix above):
+             * it stays a device with no driver, and nothing behind it
+             * enumerates until Phase 27. */
+            XHCI_DBG_VALUE("hcd: hub device not offered to a driver, port",
+                           pdo->Port);
+            buf[n++] = 0;
+            buf[n++] = 0;
+            break;
+        }
         hcdPut(buf, &n, L"USB\\Class_");
         hcdPutHex(buf, &n, cls, 2);
         hcdPut(buf, &n, L"&SubClass_");
