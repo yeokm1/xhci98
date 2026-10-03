@@ -248,6 +248,8 @@ record 13 govern until the `2.0.0.0` cut rewrites this guide (task 32.1).
 The build constraints - C89, the arithmetic rules, ASCII and CRLF, the three
 flavours, the import and INF gates - bind the successor unchanged.
 **Do not advance past a phase whose checkpoint has not been observed to pass.**
+The one exception is the E.1 bench clauses of Phases 28 to 31, read in one
+session before the `2.0.0.0` cut (`roadmap-hcd.md`, decisions table).
 Then use the "What to read for each phase" table in `docs/README.md` for the
 documents that phase needs.
 
