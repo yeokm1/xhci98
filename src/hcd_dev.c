@@ -87,82 +87,182 @@ static ULONG hcdEp0Result(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     }
     if (result->NeedsRecovery || result->RefusedRetire) {
         hc->Ep0Recoveries++;
+        /* A URB's control transfer halted EP0 (a STALL): the thread owes
+         * Reset Endpoint and Set TR Dequeue before the next one can run.
+         * A refused retire is left to the thread's timeout and reset. */
+        if (result->NeedsRecovery && !result->RefusedRetire) {
+            dev->Ep0Halted = 1;
+            HcdThreadWake(hc);
+        }
+        if (result->RefusedRetire) {
+            dev->Ep0Pipe.DrainPending = 1;
+            hc->CancelWork = 1;
+            HcdThreadWake(hc);
+        }
     }
     if (result->Action == XHCI_XFER_ACTION_COMPLETE) {
         for (t = result->Completed; t != NULL; t = t->Next) {
             if (t == &dev->Ep0Xfer) {
                 dev->Ep0Done = 1;
                 (VOID)KeSetEvent(&hc->XferDoneEvent, IO_NO_INCREMENT, FALSE);
+            } else {
+                /* A URB's record: completed after the lock's release, by
+                 * the deferred work (hcd_io.c). */
+                HcdIoRetired(hc, t);
             }
         }
     }
     return 0;
 }
 
+/* The same decision for a pipe the configuration opened (hcd_cfg.c): its
+ * retired records go to the deferred work; a halt is the client's to
+ * clear with RESET_PIPE, as usbport left it. Controller lock held. */
+static ULONG hcdPipeResult(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
+                           const XHCI_XFER_EVENT_RESULT *result)
+{
+    PXHCI_TRANSFER t;
+
+    if (result->Fatal) {
+        return 1;
+    }
+    if (result->NeedsRecovery && !result->RefusedRetire) {
+        pipe->Halted = 1;
+    }
+    if (result->RefusedRetire) {
+        /* The ring and the record disagree about where the TD ends: the
+         * endpoint is Running and owes a Stop plus a drain, which the
+         * thread performs (hcd_cfg.c; round 2, finding 9). */
+        pipe->DrainPending = 1;
+        hc->CancelWork = 1;
+        HcdThreadWake(hc);
+    }
+    if (result->Action == XHCI_XFER_ACTION_COMPLETE) {
+        for (t = result->Completed; t != NULL; t = t->Next) {
+            HcdIoRetired(hc, t);
+        }
+    }
+    return 0;
+}
+
+/* The pipe a Transfer Event names, or NULL. Controller lock held. */
+static PHCD_PIPE hcdEventPipe(PHCD_CONTROLLER hc, ULONG slotId, ULONG dci)
+{
+    PHCD_USB_DEVICE dev;
+
+    if (slotId < 1 || slotId > XHCI_MAX_SLOTS || dci < 1 || dci > 31) {
+        return NULL;
+    }
+    dev = hc->SlotDevice[slotId];
+    if (dev == NULL) {
+        return NULL;
+    }
+    return (dci == 1) ? &dev->Ep0Pipe : dev->Pipes[dci];
+}
+
 /*
  * A Transfer Event, matched by the transfer engine (xhci_xfer.c) against the
- * EP0 queue of the device on its slot: the engine checks the TRB address,
- * the slot and the endpoint, latches the short packet's residual, and says
- * which records retire (26-A.5's first step, design record 13 section 6).
- * An event for no device's EP0 is counted. Returns nonzero when the caller
- * must request a controller reset. IRQL: DISPATCH_LEVEL, controller lock
- * held.
+ * queue of the pipe its slot and endpoint name - EP0's, or one the
+ * configuration opened: the engine checks the TRB address, the slot and the
+ * endpoint, latches the short packet's residual, and says which records
+ * retire (26-A.5, design record 13 section 6). An event for no open pipe is
+ * counted, and escalated when its code is fatal. Returns nonzero when the
+ * caller must request a controller reset. IRQL: DISPATCH_LEVEL, controller
+ * lock held.
  */
 ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
 {
     PHCD_CONTROLLER hc;
-    PHCD_USB_DEVICE dev;
+    PHCD_PIPE pipe;
     XHCI_XFER_EVENT_RESULT result;
+    XHCI_XFER_CODE code;
+    ULONG cc;
     ULONG slotId;
     ULONG dci;
 
     hc = HcdControllerFromExt(ext);
     slotId = XHCI_TRB_GET_SLOT_ID(event->Control);
     dci = XHCI_TRB_GET_EP_ID(event->Control);
-    dev = (slotId >= 1 && slotId <= XHCI_MAX_SLOTS) ? hc->SlotDevice[slotId]
-                                                     : NULL;
-    if (dev == NULL || dci != 1) {
+    pipe = hcdEventPipe(hc, slotId, dci);
+    if (pipe == NULL) {
+        /* An event no queue owns is still the controller's to escalate
+         * when its code is fatal (xhci_xfer.h, XhciXferEvent: "escalating
+         * that belongs to the caller that routed the event"; Codex review
+         * of batch (c), round 1, finding 3). */
         hc->TransferEventsUnclaimed++;
+        return XhciXferCodeInfo(XHCI_TRB_GET_COMPLETION(event->Status),
+                                &code) == XHCI_XFER_OK &&
+               code.Fatal;
+    }
+    cc = XHCI_TRB_GET_COMPLETION(event->Status);
+    if (cc == XHCI_CC_STOPPED || cc == XHCI_CC_STOPPED_LENGTH_INVALID ||
+        cc == XHCI_CC_STOPPED_SHORT_PACKET) {
+        /* A Stop Endpoint's event: it completes nothing, but its byte
+         * count is the only measure of what a stopped TD moved, latched
+         * for the abort or cancel that follows (round 2, finding 12). */
+        (VOID)XhciXferQueueStopped(pipe->Queue, pipe->Ring, event->Param0,
+                                   event->Status);
         return 0;
     }
-    if (XhciXferEvent(&dev->Ep0Queue, &dev->Ep0, slotId, 1, event->Param0,
+    if (XhciXferEvent(pipe->Queue, pipe->Ring, slotId, dci, event->Param0,
                       event->Status, event->Control, &result) !=
         XHCI_XFER_OK) {
         hc->TransferEventsUnclaimed++;
         return 0;
     }
-    return hcdEp0Result(hc, dev, &result);
+    if (dci == 1) {
+        return hcdEp0Result(hc, pipe->Device, &result);
+    }
+    return hcdPipeResult(hc, pipe, &result);
 }
 
 /* The drain saw the event ring empty: a short packet's promised tail that
- * never came settles now (XhciXferDrainSettled's gate). IRQL:
- * DISPATCH_LEVEL, controller lock held. */
+ * never came settles now (XhciXferDrainSettled's gate), on every open
+ * pipe. IRQL: DISPATCH_LEVEL, controller lock held. */
 VOID XhciSlotDrainSettled(PXHCI_EXTENSION ext)
 {
     PHCD_CONTROLLER hc;
-    PHCD_USB_DEVICE dev;
+    PHCD_PIPE pipe;
     XHCI_XFER_EVENT_RESULT result;
     ULONG slot;
+    ULONG dci;
     ULONG guard;
 
     hc = HcdControllerFromExt(ext);
     for (slot = 1; slot <= XHCI_MAX_SLOTS; slot++) {
-        dev = hc->SlotDevice[slot];
-        if (dev == NULL || !XhciXferDeferralsArmed(&dev->Ep0Queue)) {
+        if (hc->SlotDevice[slot] == NULL) {
             continue;
         }
-        for (guard = 0; guard < 8; guard++) {
-            if (XhciXferDrainSettled(&dev->Ep0Queue, &dev->Ep0, &result) !=
-                XHCI_XFER_OK) {
-                break;
+        for (dci = 1; dci < 32; dci++) {
+            pipe = hcdEventPipe(hc, slot, dci);
+            if (pipe == NULL || !XhciXferDeferralsArmed(pipe->Queue)) {
+                continue;
             }
-            if (result.Action != XHCI_XFER_ACTION_COMPLETE) {
-                if (result.NeedsRecovery) {
-                    hc->Ep0Recoveries++;
+            for (guard = 0; guard < 8; guard++) {
+                if (XhciXferDrainSettled(pipe->Queue, pipe->Ring, &result) !=
+                    XHCI_XFER_OK) {
+                    break;
                 }
-                break;
+                if (result.Action != XHCI_XFER_ACTION_COMPLETE) {
+                    if (result.NeedsRecovery || result.RefusedRetire) {
+                        /* The ring refused the settle's retire: the
+                         * transfer is still queued on a Running endpoint
+                         * and owes Stop plus a drain (xhci_xfer.h,
+                         * XhciXferDrainSettled; round 3 of the batch (c)
+                         * review, round-2 finding 9). */
+                        hc->Ep0Recoveries++;
+                        pipe->DrainPending = 1;
+                        hc->CancelWork = 1;
+                        HcdThreadWake(hc);
+                    }
+                    break;
+                }
+                if (dci == 1) {
+                    (VOID)hcdEp0Result(hc, pipe->Device, &result);
+                } else {
+                    (VOID)hcdPipeResult(hc, pipe, &result);
+                }
             }
-            (VOID)hcdEp0Result(hc, dev, &result);
         }
     }
 }
@@ -170,8 +270,9 @@ VOID XhciSlotDrainSettled(PXHCI_EXTENSION ext)
 /* IRQL: <= DISPATCH_LEVEL, controller lock released. */
 VOID XhciSlotDeferredWork(PXHCI_EXTENSION ext, ULONG armMode)
 {
-    UNREFERENCED_PARAMETER(ext);
     UNREFERENCED_PARAMETER(armMode);
+    /* The URB records the drain retired (hcd_io.c). */
+    HcdIoDeferred(HcdControllerFromExt(ext));
 }
 
 /* IRQL: <= DISPATCH_LEVEL, controller lock released. */

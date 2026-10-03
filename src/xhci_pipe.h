@@ -12,7 +12,7 @@
  *     descriptor and the device's speed;
  *   - the Configure Endpoint plan: Add and Drop flags and Context Entries;
  *   - the 8-byte SETUP packet for each control URB function, and the
- *     refusal of a raw SET_ADDRESS or SET_CONFIGURATION;
+ *     refusal of a raw SET_ADDRESS, SET_CONFIGURATION or SET_INTERFACE;
  *   - the split of one transfer buffer over the map registers available;
  *   - the USBD_STATUS to NTSTATUS table.
  *
@@ -139,11 +139,17 @@ typedef struct _XHCI_PIPE_EP {
  * The Endpoint Context fields for one endpoint descriptor of a device at
  * `speed` (XHCI_PIPE_SPEED_*). XHCI_PIPE_MALFORMED for a descriptor that is
  * not an endpoint descriptor of at least 7 bytes, an endpoint number of 0, a
- * Max Packet Size of 0 or above 1024, or a high-bandwidth count of 3 (bits
- * 12:11 = 11b, reserved); XHCI_PIPE_UNSUPPORTED for a non-default control
- * endpoint, any speed but Full, Low and High, and a Low-Speed bulk or
- * isochronous endpoint. Clamps an out-of-range bInterval to Table 6-12's
- * range and says so in IntervalClamped.
+ * Max Packet Size of 0 or above 1024, a high-bandwidth count of 3 (bits
+ * 12:11 = 11b, reserved), or a Max Packet Size its speed and type do not
+ * allow (USB 2.0 5.6.3, 5.7.3, 5.8.3, Table 9-14: LS interrupt <= 8; FS
+ * interrupt <= 64; FS bulk 8, 16, 32 or 64; FS isochronous <= 1023; HS bulk
+ * 512; HS interrupt and isochronous 1-1024, 513-1024 with one additional
+ * transaction and 683-1024 with two); XHCI_PIPE_UNSUPPORTED for a
+ * non-default control endpoint, any speed but Full, Low and High, and a
+ * Low-Speed bulk or isochronous endpoint (the speed and type refusals come
+ * first, so an LS bulk endpoint is UNSUPPORTED whatever its size). Clamps an
+ * out-of-range bInterval to Table 6-12's range and says so in
+ * IntervalClamped.
  */
 ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
                              PXHCI_PIPE_EP ep);
@@ -259,9 +265,11 @@ ULONG XhciPipeBuildSetup(const XHCI_PIPE_CONTROL *control, UCHAR *setup,
 
 /*
  * A raw SETUP packet a client supplied (URB 0x08): XHCI_PIPE_REFUSED for a
- * standard SET_ADDRESS or SET_CONFIGURATION, which this bus performs with
- * Address Device and Configure Endpoint and which must not reach the ring
- * (spec 4.5.4.1; 4.6.6); otherwise XHCI_PIPE_OK and the TRT from
+ * standard SET_ADDRESS, SET_CONFIGURATION or SET_INTERFACE, which this bus
+ * performs itself - with Address Device, and with Configure Endpoint before
+ * the SET_CONFIGURATION / SET_INTERFACE of a SELECT_CONFIGURATION /
+ * SELECT_INTERFACE - and which must not reach the ring from a client (spec
+ * 4.5.4.1; 4.6.6); otherwise XHCI_PIPE_OK and the TRT from
  * bmRequestType bit 7 and wLength.
  */
 ULONG XhciPipeCheckRawSetup(const UCHAR *setup, PULONG trt);
@@ -284,19 +292,26 @@ typedef struct _XHCI_PIPE_ELEMENT {
 
 /*
  * Split the first chunk of a buffer that starts `pageOffset` bytes into its
- * first page and is `length` bytes long, given `mapRegisters` pages of map
- * registers and room for `maxElements` elements. The chunk is bounded by the
- * smaller of the two counts, by XHCI_PIPE_CHUNK_ELEMENTS and by
- * XHCI_PIPE_TD_MAX_BYTES; *chunkBytes says how much of `length` it covers and
- * the caller maps the rest as the next chunk, whose pageOffset is 0. One
- * element per page, so none can cross a 64 KB boundary (spec 6.4.1 note).
- * Length 0 is a zero-length transfer: no element, *chunkBytes 0.
- * XHCI_PIPE_BAD_PARAM for a pageOffset of a page or more, or no page or no
- * element to put a nonzero length in.
+ * first page and is `length` bytes long, for an endpoint whose Max Packet
+ * Size is `maxPacketSize`, given `mapRegisters` pages of map registers and
+ * room for `maxElements` elements. The chunk is bounded by the smaller of the
+ * two counts, by XHCI_PIPE_CHUNK_ELEMENTS and by XHCI_PIPE_TD_MAX_BYTES, and
+ * a chunk that does not reach the end of `length` is then rounded down to a
+ * multiple of maxPacketSize, since a short packet mid-transfer would end the
+ * transfer at the device (USB 2.0 5.8.3). *chunkBytes says how much of
+ * `length` it covers and the caller maps the rest as the next chunk; that
+ * chunk's pageOffset need not be 0, and the caller recomputes it from its own
+ * address. One element per page, so none can cross a 64 KB boundary (spec
+ * 6.4.1 note). Length 0 is a zero-length transfer: no element, *chunkBytes 0.
+ * XHCI_PIPE_BAD_PARAM for a pageOffset of a page or more, a maxPacketSize of
+ * 0, no page or no element to put a nonzero length in, or a non-final chunk
+ * that rounds down to nothing (the pages available hold less than one
+ * packet).
  */
-ULONG XhciPipeSplit(ULONG pageOffset, ULONG length, ULONG mapRegisters,
-                    ULONG maxElements, PXHCI_PIPE_ELEMENT elements,
-                    PULONG count, PULONG chunkBytes);
+ULONG XhciPipeSplit(ULONG pageOffset, ULONG length, ULONG maxPacketSize,
+                    ULONG mapRegisters, ULONG maxElements,
+                    PXHCI_PIPE_ELEMENT elements, PULONG count,
+                    PULONG chunkBytes);
 
 /* ------------------------------------------------------------------ */
 /* Status                                                               */
@@ -322,6 +337,10 @@ ULONG XhciPipeSplit(ULONG pageOffset, ULONG length, ULONG mapRegisters,
 #define XHCI_PIPE_USBD_BAD_START_FRAME      0xC0000A00UL    /* :290 */
 #define XHCI_PIPE_USBD_ISOCH_REQUEST_FAILED 0xC0000B00UL    /* :294 */
 #define XHCI_PIPE_USBD_CANCELED             0x00010000UL    /* :312 */
+/* DEVICE_GONE is absent from the Windows 2000 DDK; WDK 7.1 inc\api\usb.h:459
+ * defines it, and design record 13 section 10.5 pairs it with
+ * STATUS_DEVICE_NOT_CONNECTED. */
+#define XHCI_PIPE_USBD_DEVICE_GONE          0xC0007000UL
 
 /* NTSTATUS values, Windows 2000 DDK inc\ntstatus.h. */
 #define XHCI_PIPE_NT_SUCCESS                0x00000000UL    /* :50   */
@@ -335,7 +354,7 @@ ULONG XhciPipeSplit(ULONG pageOffset, ULONG length, ULONG mapRegisters,
 
 /*
  * The NTSTATUS an IRP completes with for a URB whose status is `usbd`. The
- * table is this driver's choice, not one the DDK states (NOTES.md): the
+ * table is this driver's choice, not one the DDK states: the
  * named rows are mapped one by one, any other error-class value (bit 31) is
  * STATUS_UNSUCCESSFUL, and any other value is STATUS_SUCCESS.
  */

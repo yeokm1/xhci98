@@ -128,6 +128,16 @@ HAL.dll!WRITE_PORT_UCHAR                     qemu required  w2k-export; ntkern-n
 # --- design record 13 section 7.5 rule: SITES=hcd_pool.obj, nowhere else.     ---
 ntoskrnl.exe!ExAllocatePoolWithTag           all  required  SITES=hcd_pool.obj the pool rule (design record 13 section 7.5); w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!ExAllocatePoolWithTag, hint 7) (+61 other 98 SE); ntkern-name
 ntoskrnl.exe!ExFreePool                      all  required  SITES=hcd_pool.obj the pool rule (design record 13 section 7.5); w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!ExFreePool, hint C) (+60 other 98 SE); ntkern-name
+# --- Task 26-A.5: the MDL a URB without TransferBufferMDL needs (design     ---
+# --- record 13 section 11.3; rule 4 places them with the pool calls).       ---
+ntoskrnl.exe!IoAllocateMdl                   all  required  SITES=hcd_pool.obj the MDL rule (design record 13 section 7.5 rule 4); w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!IoAllocateMdl, hint 2E) (+11 other 98 SE); ntkern-name
+ntoskrnl.exe!IoFreeMdl                       all  required  SITES=hcd_pool.obj the MDL rule (design record 13 section 7.5 rule 4); w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!IoFreeMdl, hint 43) (+14 other 98 SE); ntkern-name
+ntoskrnl.exe!MmBuildMdlForNonPagedPool       all  required  SITES=hcd_pool.obj with the MDL it describes (design record 13 section 11.3); w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!MmBuildMdlForNonPagedPool, hint 99) (+6 other 98 SE); ntkern-name
+# --- Task 26-A.5: cancellation of a pending URB (hcd_io.c). IoSetCancelRoutine ---
+# --- is a macro over InterlockedExchange in the Windows 2000 DDK's x86 wdm.h.   ---
+ntoskrnl.exe!IoAcquireCancelSpinLock         all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoAcquireCancelSpinLock, hint 29) (+9 other 98 SE); ntkern-name
+ntoskrnl.exe!IoReleaseCancelSpinLock         all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoReleaseCancelSpinLock, hint 57) (+12 other 98 SE); ntkern-name
+ntoskrnl.exe!InterlockedExchange             all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!InterlockedExchange, hint 27) (+22 other 98 SE); ntkern-name. The IoSetCancelRoutine macro (hcd_io.c)
 ntoskrnl.exe!IoInvalidateDeviceRelations     all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!IoInvalidateDeviceRelations, hint 4F) (+3 other 98 SE); ntkern-name
 ntoskrnl.exe!RtlInitUnicodeString            all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!RtlInitUnicodeString, hint D7) (+47 other 98 SE); ntkern-name
 ntoskrnl.exe!ObfReferenceObject              all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!ObfReferenceObject, hint AD) (+14 other 98 SE) (design record 13 Appendix A row 35). The ObReferenceObject macro: every PDO a relations list returns is referenced

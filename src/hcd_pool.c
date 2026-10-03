@@ -72,3 +72,30 @@ VOID HcdPoolFreeForeign(PVOID p)
         ExFreePool(p);
     }
 }
+
+/*
+ * The MDL for a URB that carries only a virtual TransferBuffer (design record
+ * 13 section 11.3): the USB driver interface promises the buffer is
+ * non-paged, so MmBuildMdlForNonPagedPool describes it with no probe and no
+ * lock. Counted with the allocations, since it is this driver's until
+ * HcdPoolMdlFree. NULL when the system has none. IRQL: <= DISPATCH_LEVEL.
+ */
+PMDL HcdPoolMdlBuild(PVOID va, ULONG bytes)
+{
+    PMDL mdl;
+
+    mdl = IoAllocateMdl(va, bytes, FALSE, FALSE, NULL);
+    if (mdl != NULL) {
+        MmBuildMdlForNonPagedPool(mdl);
+        (VOID)InterlockedIncrement(&HcdPoolOutstanding);
+    }
+    return mdl;
+}
+
+VOID HcdPoolMdlFree(PMDL mdl)
+{
+    if (mdl != NULL) {
+        IoFreeMdl(mdl);
+        (VOID)InterlockedDecrement(&HcdPoolOutstanding);
+    }
+}

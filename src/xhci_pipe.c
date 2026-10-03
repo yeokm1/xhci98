@@ -5,7 +5,7 @@
  * Every encoding rule here cites the section it comes from; the xHCI ones
  * are spec revision 1.2c as transcribed in
  * docs/usb-xhci-info/xhci-data-structures.md, and the USB ones are USB 2.0
- * chapter 9, cross-checked against the Windows 2000 DDK's inc\usb100.h and
+ * chapters 5 and 9, cross-checked against the Windows 2000 DDK's inc\usb100.h and
  * inc\usbdi.h where those carry the constant.
  *
  * C89, pure: IRQL any.
@@ -36,6 +36,7 @@
 #define XHCI_PIPE_REQ_GET_CONFIGURATION 0x08UL
 #define XHCI_PIPE_REQ_SET_CONFIGURATION 0x09UL
 #define XHCI_PIPE_REQ_GET_INTERFACE     0x0AUL
+#define XHCI_PIPE_REQ_SET_INTERFACE     0x0BUL
 
 /* 4.14.1.1's "reasonable initial values" for Average TRB Length, and Table
  * 6-11's note fixing control at 8. All three clear the 65-byte floor the
@@ -193,6 +194,43 @@ static ULONG xhciPipeExponent(ULONG bInterval, PULONG clamped)
     return bInterval;
 }
 
+/*
+ * The Max Packet Size a USB 2.0 endpoint may declare at its speed (USB 2.0
+ * 5.6.3 isochronous, 5.7.3 interrupt, 5.8.3 bulk, Table 9-14 for the HS
+ * high-bandwidth ranges). `mps` is already 1..1024 and `transactions` (HS
+ * periodic only) 0..2. A device outside these limits declares a packet size
+ * its speed does not have, and is refused rather than programmed as declared.
+ * HS control (64, 5.5.3) has no row: control endpoints are refused earlier.
+ */
+static ULONG xhciPipeMpsLegal(ULONG speed, ULONG type, ULONG mps,
+                              ULONG transactions)
+{
+    if (speed == XHCI_PIPE_SPEED_HIGH) {
+        if (type == XHCI_PIPE_XFER_BULK) {
+            return mps == 512UL;
+        }
+        /* Table 9-14: 1 extra transaction needs 513-1024, 2 need 683-1024. */
+        if (transactions == 1UL) {
+            return mps >= 513UL;
+        }
+        if (transactions == 2UL) {
+            return mps >= 683UL;
+        }
+        return 1;
+    }
+    if (speed == XHCI_PIPE_SPEED_LOW) {
+        return mps <= 8UL;
+    }
+    switch (type) {
+    case XHCI_PIPE_XFER_BULK:
+        return mps == 8UL || mps == 16UL || mps == 32UL || mps == 64UL;
+    case XHCI_PIPE_XFER_INTERRUPT:
+        return mps <= 64UL;
+    default:
+        return mps <= 1023UL;
+    }
+}
+
 ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
                              PXHCI_PIPE_EP ep)
 {
@@ -260,6 +298,10 @@ ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
         }
         out.MaxBurstSize = transactions;
     }
+    if (!xhciPipeMpsLegal(speed, out.TransferType, out.MaxPacketSize,
+                          out.MaxBurstSize)) {
+        return XHCI_PIPE_MALFORMED;
+    }
     /* Table 6-8: Mult is 0 for everything but SS / eUSB2 isochronous. */
     out.Mult = 0;
 
@@ -295,8 +337,9 @@ ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
         }
         out.Interval = xhciPipeLog2(b * 8UL);
     } else {
-        /* Bulk. At HS the field is a NAK-rate hint (6.2.3.6) and 0 claims
-         * the most frequent retry; at FS Table 6-12 has no row for it. */
+        /* Bulk. At HS the field is the endpoint's maximum NAK rate
+         * (6.2.3.6: "A value of 0 indicates the endpoint never NAKs"), not
+         * a polling period. At FS Table 6-12 has no row for bulk. */
         out.Interval = 0;
     }
 
@@ -588,20 +631,25 @@ ULONG XhciPipeCheckRawSetup(const UCHAR *setup, PULONG trt)
         return XHCI_PIPE_BAD_PARAM;
     }
     rt = (ULONG)setup[0];
-    /* Refused at any recipient: the two requests are defined only for the
-     * device, and a reserved-recipient spelling of them is no safer. */
+    /* Refused at any recipient: each request is defined for one recipient
+     * only (the device, or the interface for SET_INTERFACE), and a
+     * reserved-recipient spelling of it is no safer. SET_INTERFACE is the
+     * bus's own, after the Configure Endpoint of a SELECT_INTERFACE; one sent
+     * raw would leave the Endpoint Contexts naming the old alternate. */
     if ((rt & XHCI_PIPE_RT_TYPE_MASK) == XHCI_PIPE_RT_STANDARD &&
         ((ULONG)setup[1] == XHCI_PIPE_REQ_SET_ADDRESS ||
-         (ULONG)setup[1] == XHCI_PIPE_REQ_SET_CONFIGURATION)) {
+         (ULONG)setup[1] == XHCI_PIPE_REQ_SET_CONFIGURATION ||
+         (ULONG)setup[1] == XHCI_PIPE_REQ_SET_INTERFACE)) {
         return XHCI_PIPE_REFUSED;
     }
     *trt = xhciPipeTrt(rt, xhciPipeWord(setup + 6));
     return XHCI_PIPE_OK;
 }
 
-ULONG XhciPipeSplit(ULONG pageOffset, ULONG length, ULONG mapRegisters,
-                    ULONG maxElements, PXHCI_PIPE_ELEMENT elements,
-                    PULONG count, PULONG chunkBytes)
+ULONG XhciPipeSplit(ULONG pageOffset, ULONG length, ULONG maxPacketSize,
+                    ULONG mapRegisters, ULONG maxElements,
+                    PXHCI_PIPE_ELEMENT elements, PULONG count,
+                    PULONG chunkBytes)
 {
     ULONG pages;
     ULONG cap;
@@ -612,7 +660,7 @@ ULONG XhciPipeSplit(ULONG pageOffset, ULONG length, ULONG mapRegisters,
     ULONG n;
 
     if (count == NULL || chunkBytes == NULL ||
-        pageOffset >= XHCI_PIPE_PAGE_SIZE) {
+        pageOffset >= XHCI_PIPE_PAGE_SIZE || maxPacketSize == 0) {
         return XHCI_PIPE_BAD_PARAM;
     }
     if (length == 0) {
@@ -639,6 +687,15 @@ ULONG XhciPipeSplit(ULONG pageOffset, ULONG length, ULONG mapRegisters,
         cap = XHCI_PIPE_TD_MAX_BYTES;
     }
     chunk = length < cap ? length : cap;
+    /* A packet shorter than Max Packet Size ends the transfer at the device
+     * (USB 2.0 5.8.3), so a chunk with more to follow must stop on a packet
+     * boundary. Only the last chunk may end short. */
+    if (chunk < length) {
+        chunk -= chunk % maxPacketSize;
+        if (chunk == 0) {
+            return XHCI_PIPE_BAD_PARAM;
+        }
+    }
 
     n = 0;
     offset = pageOffset;
@@ -679,6 +736,8 @@ ULONG XhciPipeNtStatus(ULONG usbd)
         return XHCI_PIPE_NT_INSUFFICIENT_RESOURCES;
     case XHCI_PIPE_USBD_ERROR_BUSY:
         return XHCI_PIPE_NT_DEVICE_BUSY;
+    case XHCI_PIPE_USBD_DEVICE_GONE:
+        return XHCI_PIPE_NT_DEVICE_NOT_CONNECTED;
     default:
         break;
     }

@@ -448,6 +448,18 @@ PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
     return rel;
 }
 
+/* Until no dispatch is inside the PDO's internal-IOCTL entry. IRQL:
+ * PASSIVE_LEVEL. */
+static VOID hcdWaitBusy(PHCD_DEVICE_PDO pdo)
+{
+    LARGE_INTEGER due;
+
+    while (pdo->Busy != 0) {
+        HcdRelativeMs(&due, 1);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
+}
+
 /*
  * The parent is going (the root hub's remove, or the controller's): every
  * PDO left on either list is settled - deleted when PnP has removed it or
@@ -481,14 +493,16 @@ VOID HcdDevicePdoReleaseAll(PHCD_CONTROLLER hc)
             }
             pdo->Device = NULL;
             deleteIt = pdo->RemoveReceived || !pdo->Reported;
-            if (!deleteIt) {
-                pdo->Controller = NULL;
-            }
+            pdo->Controller = NULL;
         }
         KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
         if (pdo == NULL) {
             break;
         }
+        /* A dispatch that read the controller before the line above is
+         * still inside hcd_urb.c; the controller's storage outlives it
+         * (Codex review of batch (c), round 1, finding 1). */
+        hcdWaitBusy(pdo);
         if (deleteIt) {
             hcdDeletePdo(pdo);
         }
@@ -498,6 +512,61 @@ VOID HcdDevicePdoReleaseAll(PHCD_CONTROLLER hc)
 /* ----------------------------------------------------------------------- */
 /* The device PDO's PnP and power                                           */
 /* ----------------------------------------------------------------------- */
+
+/*
+ * Before a stop or a removal completes, every URB this PDO's stack has
+ * pended here completes: a client driver unloads once its REMOVE is done,
+ * and a completion arriving after that runs code that is gone (c4-2k,
+ * 2026-10-03: bugcheck 0xCE in hidusb+0xb0a on an unplug, its interrupt
+ * read completed by the device-gone drain after the REMOVE). A device
+ * still present has its pipes aborted by the thread (AbortAll); a gone one
+ * is drained by the thread's free. IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdPdoQuiesce(PHCD_DEVICE_PDO pdo)
+{
+    PHCD_CONTROLLER hc;
+    PHCD_USB_DEVICE dev;
+    LARGE_INTEGER due;
+    KIRQL oldIrql;
+
+    /* Admission closes first and the dispatches already inside are
+     * waited out, so every URB this stack will ever pend here is counted
+     * before the count is read (Codex review of batch (c), round 3,
+     * finding 1). */
+    pdo->Closing = 1;
+    while (pdo->Busy != 0) {
+        HcdRelativeMs(&due, 1);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
+    if (pdo->UrbsPending == 0) {
+        return;
+    }
+    hc = pdo->Controller;
+    if (hc != NULL) {
+        /* Referenced while the PDO still names it, as a URB's dispatch
+         * does, so the record cannot be freed under the flag (round 3,
+         * finding 2). */
+        KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+        dev = pdo->Device;
+        if (dev != NULL) {
+            (VOID)InterlockedIncrement(&dev->Refs);
+        }
+        KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+        if (dev != NULL) {
+            XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+            dev->AbortAll = 1;
+            hc->CancelWork = 1;
+            XhciControllerLockRelease(&hc->Hc, oldIrql);
+            HcdThreadWake(hc);
+            (VOID)InterlockedDecrement(&dev->Refs);
+        }
+    }
+    while (pdo->UrbsPending != 0 &&
+           !(hc != NULL && hc->CommonBufferPinned)) {
+        HcdRelativeMs(&due, 1);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
+}
 
 /* A start after a remove (an enable after a disable) makes the PDO PnP's
  * again, so the remove it received no longer lets a parent's release delete
@@ -509,6 +578,7 @@ static VOID hcdPdoStarted(PHCD_DEVICE_PDO pdo)
     KIRQL oldIrql;
     ULONG listed;
 
+    pdo->Closing = 0;
     hc = pdo->Controller;
     if (hc == NULL) {
         pdo->RemoveReceived = 0;
@@ -626,10 +696,12 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
     case IRP_MN_STOP_DEVICE:
     case IRP_MN_SURPRISE_REMOVAL:
         pdo->Common.PnpState = HCD_PNP_STOPPED;
+        hcdPdoQuiesce(pdo);
         return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
 
     case IRP_MN_REMOVE_DEVICE:
         pdo->Common.PnpState = HCD_PNP_REMOVED;
+        hcdPdoQuiesce(pdo);
         HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
         hcdPdoRemoved(pdo);
         return STATUS_SUCCESS;

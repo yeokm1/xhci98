@@ -2,12 +2,25 @@
  * test_pipe.c - host vectors for the pure half of URB dispatch
  * (src\xhci_pipe.c; roadmap-hcd.md task 26-A.5).
  *
- * Every expected value below was worked from the specification text, not
- * from the code under test: the Endpoint Context rules from xHCI 1.2c
- * sections 4.5.1, 4.6.6, 4.14.1.1, 4.14.2 and 6.2.3 (Tables 6-9, 6-11,
- * 6-12), the SETUP bytes from USB 2.0 chapter 9 and the Windows 2000 DDK's
- * usbdi.h / usb100.h constants, and the status values from that DDK's
- * usbdi.h and ntstatus.h.
+ * Every expected value below was worked by hand, not taken from the code
+ * under test. Most come from a specification: the Endpoint Context rules
+ * from xHCI 1.2c sections 4.5.1, 4.6.6, 4.14.1.1, 4.14.2 and 6.2.3 (Tables
+ * 6-9, 6-11, 6-12), the SETUP bytes, the Max Packet Size limits and the
+ * packet-boundary rule of the split from USB 2.0 chapters 5 and 9 and the
+ * Windows 2000 DDK's usbdi.h / usb100.h constants, and the status values
+ * from that DDK's usbdi.h and ntstatus.h. The USB 2.0 specification is not
+ * in docs\references\, so its rules are restated from the published text,
+ * not from a copy this repository can check.
+ *
+ * Some are this module's own policy, chosen where the specification is
+ * silent, and test that policy rather than a spec rule: clamping an
+ * out-of-range bInterval and reporting it in IntervalClamped; Interval 0 for
+ * bulk; the Average TRB
+ * Length values; the RequestTypeReservedBits rule; the whole
+ * USBD_STATUS -> NTSTATUS table in XhciPipeNtStatus, apart from the DDK's
+ * numeric values themselves; the fixed wLength of GET_STATUS /
+ * GET_CONFIGURATION / GET_INTERFACE; the strict configuration walk; and the
+ * 32-element / 128 KB chunk caps, which are the batch plan's.
  */
 
 #include <stdio.h>
@@ -212,6 +225,130 @@ static void test_high_bandwidth(void)
     CHECK_EQ(ep.MaxEsitPayload, 64, "FS ESIT = MPS");
 }
 
+static void test_interrupt_out(void)
+{
+    XHCI_PIPE_EP ep;
+
+    /* Table 6-9: Interrupt OUT is EP Type 3. */
+    CHECK_EQ(ep_params(0x02, 0x03, 8, 1, XHCI_PIPE_SPEED_HIGH, &ep),
+             XHCI_PIPE_OK, "HS interrupt OUT accepted");
+    CHECK_EQ(ep.EpType, 3, "Interrupt OUT is EP Type 3");
+    CHECK_EQ(ep.Dci, 4, "0x02 DCI 4");
+    CHECK_EQ(ep.DirectionIn, 0, "OUT");
+    CHECK_EQ(ep.Interval, 0, "HS bInterval 1 -> 0");
+    CHECK_EQ(ep_params(0x04, 0x03, 8, 10, XHCI_PIPE_SPEED_FULL, &ep),
+             XHCI_PIPE_OK, "FS interrupt OUT accepted");
+    CHECK_EQ(ep.EpType, 3, "FS Interrupt OUT is EP Type 3 too");
+    CHECK_EQ(ep.Dci, 8, "0x04 DCI 8");
+    CHECK_EQ(ep_params(0x01, 0x03, 8, 10, XHCI_PIPE_SPEED_LOW, &ep),
+             XHCI_PIPE_OK, "LS interrupt OUT accepted");
+    CHECK_EQ(ep.EpType, 3, "LS Interrupt OUT is EP Type 3");
+}
+
+/* The status of one endpoint descriptor, for the boundary tables below. */
+static ULONG mps_status(ULONG attributes, ULONG wMaxPacketSize, ULONG speed)
+{
+    XHCI_PIPE_EP ep;
+
+    return ep_params(0x81, attributes, wMaxPacketSize, 1, speed, &ep);
+}
+
+static void test_mps_limits(void)
+{
+    XHCI_PIPE_EP ep;
+
+    /* USB 2.0 5.7.3: LS interrupt at most 8, FS interrupt at most 64. */
+    CHECK_EQ(mps_status(0x03, 8, XHCI_PIPE_SPEED_LOW), XHCI_PIPE_OK,
+             "LS interrupt 8");
+    CHECK_EQ(mps_status(0x03, 9, XHCI_PIPE_SPEED_LOW), XHCI_PIPE_MALFORMED,
+             "LS interrupt 9");
+    CHECK_EQ(mps_status(0x03, 64, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_OK,
+             "FS interrupt 64");
+    CHECK_EQ(mps_status(0x03, 65, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_MALFORMED,
+             "FS interrupt 65");
+
+    /* 5.8.3: FS bulk is exactly 8, 16, 32 or 64. */
+    CHECK_EQ(mps_status(0x02, 8, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_OK,
+             "FS bulk 8");
+    CHECK_EQ(mps_status(0x02, 16, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_OK,
+             "FS bulk 16");
+    CHECK_EQ(mps_status(0x02, 32, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_OK,
+             "FS bulk 32");
+    CHECK_EQ(mps_status(0x02, 64, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_OK,
+             "FS bulk 64");
+    CHECK_EQ(mps_status(0x02, 7, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_MALFORMED,
+             "FS bulk 7");
+    CHECK_EQ(mps_status(0x02, 9, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_MALFORMED,
+             "FS bulk 9");
+    CHECK_EQ(mps_status(0x02, 24, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_MALFORMED,
+             "FS bulk 24, inside the range but not a listed size");
+    CHECK_EQ(mps_status(0x02, 63, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_MALFORMED,
+             "FS bulk 63");
+    CHECK_EQ(mps_status(0x02, 65, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_MALFORMED,
+             "FS bulk 65");
+    CHECK_EQ(mps_status(0x02, 512, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_MALFORMED,
+             "FS bulk 512, the HS size");
+
+    /* 5.6.3: FS isochronous at most 1023. */
+    CHECK_EQ(mps_status(0x01, 1023, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_OK,
+             "FS isoch 1023");
+    CHECK_EQ(mps_status(0x01, 1024, XHCI_PIPE_SPEED_FULL), XHCI_PIPE_MALFORMED,
+             "FS isoch 1024");
+
+    /* 5.8.3: HS bulk is exactly 512. */
+    CHECK_EQ(mps_status(0x02, 512, XHCI_PIPE_SPEED_HIGH), XHCI_PIPE_OK,
+             "HS bulk 512");
+    CHECK_EQ(mps_status(0x02, 511, XHCI_PIPE_SPEED_HIGH), XHCI_PIPE_MALFORMED,
+             "HS bulk 511");
+    CHECK_EQ(mps_status(0x02, 513, XHCI_PIPE_SPEED_HIGH), XHCI_PIPE_MALFORMED,
+             "HS bulk 513");
+    CHECK_EQ(mps_status(0x02, 64, XHCI_PIPE_SPEED_HIGH), XHCI_PIPE_MALFORMED,
+             "HS bulk 64, the FS size");
+    CHECK_EQ(mps_status(0x02, 0x0800 | 512, XHCI_PIPE_SPEED_HIGH),
+             XHCI_PIPE_OK, "HS bulk 512 with 12:11 set: bits not read");
+
+    /* Table 9-14, HS interrupt: 12:11 = 0 -> 1-1024; 1 -> 513-1024;
+     * 2 -> 683-1024. */
+    CHECK_EQ(mps_status(0x03, 1, XHCI_PIPE_SPEED_HIGH), XHCI_PIPE_OK,
+             "HS interrupt 1, one transaction");
+    CHECK_EQ(mps_status(0x03, 0x0800 | 513, XHCI_PIPE_SPEED_HIGH),
+             XHCI_PIPE_OK, "HS interrupt 513, two transactions");
+    CHECK_EQ(mps_status(0x03, 0x0800 | 512, XHCI_PIPE_SPEED_HIGH),
+             XHCI_PIPE_MALFORMED, "HS interrupt 512, two transactions");
+    CHECK_EQ(mps_status(0x03, 0x0800 | 1024, XHCI_PIPE_SPEED_HIGH),
+             XHCI_PIPE_OK, "HS interrupt 1024, two transactions");
+    CHECK_EQ(mps_status(0x03, 0x0800 | 1025, XHCI_PIPE_SPEED_HIGH),
+             XHCI_PIPE_MALFORMED, "HS interrupt 1025, two transactions");
+    CHECK_EQ(mps_status(0x03, 0x1000 | 683, XHCI_PIPE_SPEED_HIGH),
+             XHCI_PIPE_OK, "HS interrupt 683, three transactions");
+    CHECK_EQ(mps_status(0x03, 0x1000 | 682, XHCI_PIPE_SPEED_HIGH),
+             XHCI_PIPE_MALFORMED, "HS interrupt 682, three transactions");
+    CHECK_EQ(mps_status(0x03, 0x1800 | 1024, XHCI_PIPE_SPEED_HIGH),
+             XHCI_PIPE_MALFORMED, "HS interrupt 12:11 = 3");
+
+    /* The same table for HS isochronous. */
+    CHECK_EQ(mps_status(0x05, 1024, XHCI_PIPE_SPEED_HIGH), XHCI_PIPE_OK,
+             "HS isoch 1024, one transaction");
+    CHECK_EQ(mps_status(0x05, 1, XHCI_PIPE_SPEED_HIGH), XHCI_PIPE_OK,
+             "HS isoch 1, one transaction");
+    CHECK_EQ(mps_status(0x05, 0x0800 | 513, XHCI_PIPE_SPEED_HIGH),
+             XHCI_PIPE_OK, "HS isoch 513, two transactions");
+    CHECK_EQ(mps_status(0x05, 0x0800 | 512, XHCI_PIPE_SPEED_HIGH),
+             XHCI_PIPE_MALFORMED, "HS isoch 512, two transactions");
+    CHECK_EQ(mps_status(0x05, 0x1000 | 683, XHCI_PIPE_SPEED_HIGH),
+             XHCI_PIPE_OK, "HS isoch 683, three transactions");
+    CHECK_EQ(mps_status(0x05, 0x1000 | 682, XHCI_PIPE_SPEED_HIGH),
+             XHCI_PIPE_MALFORMED, "HS isoch 682, three transactions");
+    CHECK_EQ(mps_status(0x05, 0x1800 | 1024, XHCI_PIPE_SPEED_HIGH),
+             XHCI_PIPE_MALFORMED, "HS isoch 12:11 = 3");
+
+    /* A size refusal writes nothing either. */
+    ep.Dci = 0xEEEE;
+    CHECK_EQ(ep_params(0x02, 0x02, 64, 0, XHCI_PIPE_SPEED_HIGH, &ep),
+             XHCI_PIPE_MALFORMED, "HS bulk 64 again");
+    CHECK_EQ(ep.Dci, 0xEEEE, "nothing written on a size refusal");
+}
+
 static void test_endpoint_refusals(void)
 {
     XHCI_PIPE_EP ep;
@@ -290,6 +427,15 @@ static const UCHAR audio[] = {
     0x09, 0x21, 0x10, 0x01, 0x00, 0x01, 0x22, 0x20, 0x00,
     0x07, 0x05, 0x83, 0x03, 0x08, 0x00, 0x0A,
     0x07, 0x05, 0x04, 0x03, 0x08, 0x00, 0x0A
+};
+
+/* The mouse with an 8-byte interface descriptor: 33 bytes, wTotalLength 33,
+ * every other length intact. */
+static const UCHAR short_interface[33] = {
+    0x09, 0x02, 0x21, 0x00, 0x01, 0x01, 0x00, 0xA0, 0x32,
+    0x08, 0x04, 0x00, 0x00, 0x01, 0x03, 0x01, 0x02,
+    0x09, 0x21, 0x01, 0x00, 0x00, 0x01, 0x22, 0x34, 0x00,
+    0x07, 0x05, 0x81, 0x03, 0x04, 0x00, 0x07
 };
 
 static void copy_bytes(UCHAR *to, const UCHAR *from, ULONG n)
@@ -428,10 +574,15 @@ static void test_walk_malformed(void)
     CHECK_EQ(XhciPipeFindInterface(c, sizeof(mouse), 0, 0, &f),
              XHCI_PIPE_MALFORMED, "an endpoint descriptor of 6 bytes");
 
-    copy_bytes(c, mouse, sizeof(mouse));
-    c[9] = 8;
-    CHECK_EQ(XhciPipeFindInterface(c, sizeof(mouse), 0, 0, &f),
+    /* The mouse with its interface descriptor cut to 8 bytes (iInterface
+     * dropped) and every later length still consistent, so the walk would
+     * succeed but for the 9-byte minimum. */
+    CHECK_EQ(XhciPipeFindInterface(short_interface, sizeof(short_interface),
+                                   0, 0, &f),
              XHCI_PIPE_MALFORMED, "an interface descriptor of 8 bytes");
+    CHECK_EQ(XhciPipeFindInterface(short_interface, sizeof(short_interface),
+                                   1, 0, &f),
+             XHCI_PIPE_MALFORMED, "refused whichever interface is asked for");
 
     copy_bytes(c, mouse, sizeof(mouse));
     c[29] = 0x80;
@@ -871,6 +1022,22 @@ static void test_raw_setup(void)
     CHECK_EQ(XhciPipeCheckRawSetup((const UCHAR *)"\x01\x09\x01\x00\x00\x00\x00\x00",
                                    &trt),
              XHCI_PIPE_REFUSED, "at any recipient");
+    trt = 0xEEEE;
+    CHECK_EQ(XhciPipeCheckRawSetup((const UCHAR *)"\x01\x0B\x01\x00\x01\x00\x00\x00",
+                                   &trt),
+             XHCI_PIPE_REFUSED, "a raw SET_INTERFACE (interface 1, alt 1)");
+    CHECK_EQ(trt, 0xEEEE, "no TRT for it either");
+    CHECK_EQ(XhciPipeCheckRawSetup((const UCHAR *)"\x00\x0B\x00\x00\x00\x00\x00\x00",
+                                   &trt),
+             XHCI_PIPE_REFUSED, "SET_INTERFACE at a device recipient");
+    CHECK_EQ(XhciPipeCheckRawSetup((const UCHAR *)"\x21\x0B\x00\x00\x00\x00\x00\x00",
+                                   &trt),
+             XHCI_PIPE_OK, "HID SET_PROTOCOL is class request 11");
+    CHECK_EQ(trt, XHCI_PIPE_TRT_NO_DATA, "no data");
+    CHECK_EQ(XhciPipeCheckRawSetup((const UCHAR *)"\x81\x0A\x00\x00\x01\x00\x01\x00",
+                                   &trt),
+             XHCI_PIPE_OK, "GET_INTERFACE passes");
+    CHECK_EQ(trt, XHCI_PIPE_TRT_IN_DATA, "IN data");
     CHECK_EQ(XhciPipeCheckRawSetup((const UCHAR *)"\x21\x09\x00\x02\x00\x00\x01\x00",
                                    &trt),
              XHCI_PIPE_OK, "HID SET_REPORT is class request 9, not standard");
@@ -927,10 +1094,10 @@ static void test_split(void)
     ULONG n;
     ULONG chunk;
 
-    CHECK_EQ(XhciPipeSplit(0xF00, 0x300, 34, 34, e, &n, &chunk),
+    CHECK_EQ(XhciPipeSplit(0xF00, 0x300, 512, 34, 34, e, &n, &chunk),
              XHCI_PIPE_OK, "0xF00 + 0x300");
     CHECK_EQ(n, 2, "two elements");
-    CHECK_EQ(chunk, 0x300, "all of it");
+    CHECK_EQ(chunk, 0x300, "all of it: a final chunk may end short");
     CHECK_EQ(e[0].Page, 0, "first in page 0");
     CHECK_EQ(e[0].Offset, 0xF00, "at 0xF00");
     CHECK_EQ(e[0].Length, 0x100, "to the page's end");
@@ -938,56 +1105,91 @@ static void test_split(void)
     CHECK_EQ(e[1].Offset, 0, "from its start");
     CHECK_EQ(e[1].Length, 0x200, "the rest");
 
-    XhciPipeSplit(0, 0x1000, 34, 34, e, &n, &chunk);
+    XhciPipeSplit(0, 0x1000, 512, 34, 34, e, &n, &chunk);
     CHECK_EQ(n, 1, "one aligned page is one element");
-    XhciPipeSplit(0, 0x1001, 34, 34, e, &n, &chunk);
+    XhciPipeSplit(0, 0x1001, 512, 34, 34, e, &n, &chunk);
     CHECK_EQ(n, 2, "one byte more is two");
     CHECK_EQ(e[1].Length, 1, "of one byte");
-    XhciPipeSplit(0xFFF, 2, 34, 34, e, &n, &chunk);
+    XhciPipeSplit(0xFFF, 2, 64, 34, 34, e, &n, &chunk);
     CHECK_EQ(n, 2, "two bytes across a page edge");
     split_sound(e, n, 0xFFF, chunk, __LINE__);
 
-    CHECK_EQ(XhciPipeSplit(0x123, 0, 0, 0, NULL, &n, &chunk), XHCI_PIPE_OK,
-             "a zero-length transfer");
+    CHECK_EQ(XhciPipeSplit(0x123, 0, 64, 0, 0, NULL, &n, &chunk),
+             XHCI_PIPE_OK, "a zero-length transfer");
     CHECK_EQ(n, 0, "no element");
     CHECK_EQ(chunk, 0, "no bytes");
 
-    XhciPipeSplit(0, 0x100000, 34, 34, e, &n, &chunk);
+    XhciPipeSplit(0, 0x100000, 512, 34, 34, e, &n, &chunk);
     CHECK_EQ(chunk, 0x20000, "an aligned 1 MB stops at 128 KB");
     CHECK_EQ(n, 32, "in 32 elements");
     split_sound(e, n, 0, chunk, __LINE__);
 
-    XhciPipeSplit(0x10, 0x100000, 34, 34, e, &n, &chunk);
-    CHECK_EQ(chunk, 0x1FFF0, "unaligned, 32 pages hold 128 KB - 0x10");
+    /* 32 pages from 0x10 hold 0x1FFF0, which is not a whole number of
+     * 512-byte packets: the chunk stops at 0xFF packets, 0x1FE00, so the
+     * device does not see a short packet mid-transfer (USB 2.0 5.8.3). */
+    CHECK_EQ(XhciPipeSplit(0x10, 0x100000, 512, 34, 34, e, &n, &chunk),
+             XHCI_PIPE_OK, "unaligned 1 MB");
+    CHECK_EQ(chunk, 0x1FE00, "rounded down to a multiple of 512");
     CHECK_EQ(n, 32, "still 32 elements");
+    CHECK_EQ(e[31].Length, 0xE10, "the last one ends mid-page");
     split_sound(e, n, 0x10, chunk, __LINE__);
 
-    XhciPipeSplit(0x800, 0x3000, 2, 34, e, &n, &chunk);
+    /* The caller's next chunk starts at (0x10 + 0x1FE00) mod 4 KB = 0xE10,
+     * not at offset 0. */
+    CHECK_EQ(XhciPipeSplit(0xE10, 0x100000 - 0x1FE00, 512, 34, 34, e, &n,
+                           &chunk),
+             XHCI_PIPE_OK, "the continuation of the unaligned 1 MB");
+    CHECK_EQ(chunk, 0x1F000, "0x20000 - 0xE10 rounded down to 512");
+    CHECK_EQ(n, 32, "32 elements again");
+    split_sound(e, n, 0xE10, chunk, __LINE__);
+
+    /* Not a power of two: 8 KB rounds down to 8 packets of 1000. */
+    CHECK_EQ(XhciPipeSplit(0, 0x3000, 1000, 2, 34, e, &n, &chunk),
+             XHCI_PIPE_OK, "Max Packet Size 1000");
+    CHECK_EQ(chunk, 8000, "8 packets of 1000");
+    CHECK_EQ(n, 2, "in two elements");
+    CHECK_EQ(e[1].Length, 8000 - 0x1000, "the second ends mid-page");
+    split_sound(e, n, 0, chunk, __LINE__);
+
+    XhciPipeSplit(0x800, 0x3000, 512, 2, 34, e, &n, &chunk);
     CHECK_EQ(chunk, 0x1800, "two map registers hold 0x1800 from 0x800");
     CHECK_EQ(n, 2, "in two elements");
     split_sound(e, n, 0x800, chunk, __LINE__);
 
-    XhciPipeSplit(0x800, 0x3000, 34, 1, e, &n, &chunk);
+    XhciPipeSplit(0x800, 0x3000, 512, 34, 1, e, &n, &chunk);
     CHECK_EQ(chunk, 0x800, "one element holds the rest of the first page");
     CHECK_EQ(n, 1, "in one element");
 
-    XhciPipeSplit(0, 0x2000, 1, 34, e, &n, &chunk);
+    XhciPipeSplit(0, 0x2000, 512, 1, 34, e, &n, &chunk);
     CHECK_EQ(chunk, 0x1000, "one map register, one page");
-    XhciPipeSplit(0, 0x1800, 1, 34, e, &n, &chunk);
-    CHECK_EQ(chunk, 0x1000, "the next chunk then starts at offset 0");
-    XhciPipeSplit(0, 0x800, 1, 34, e, &n, &chunk);
+    XhciPipeSplit(0, 0x1800, 512, 1, 34, e, &n, &chunk);
+    CHECK_EQ(chunk, 0x1000, "a page-aligned buffer's next chunk, at offset 0");
+    XhciPipeSplit(0, 0x800, 512, 1, 34, e, &n, &chunk);
     CHECK_EQ(chunk, 0x800, "and the last one is short");
 
     n = 0xEEEE;
-    CHECK_EQ(XhciPipeSplit(0x1000, 1, 34, 34, e, &n, &chunk),
+    CHECK_EQ(XhciPipeSplit(0x1000, 1, 512, 34, 34, e, &n, &chunk),
              XHCI_PIPE_BAD_PARAM, "an offset of a whole page");
     CHECK_EQ(n, 0xEEEE, "nothing written on a refusal");
-    CHECK_EQ(XhciPipeSplit(0, 1, 0, 34, e, &n, &chunk), XHCI_PIPE_BAD_PARAM,
-             "no map register");
-    CHECK_EQ(XhciPipeSplit(0, 1, 34, 0, e, &n, &chunk), XHCI_PIPE_BAD_PARAM,
-             "no element");
-    CHECK_EQ(XhciPipeSplit(0, 1, 34, 34, NULL, &n, &chunk),
+    CHECK_EQ(XhciPipeSplit(0, 1, 512, 0, 34, e, &n, &chunk),
+             XHCI_PIPE_BAD_PARAM, "no map register");
+    CHECK_EQ(XhciPipeSplit(0, 1, 512, 34, 0, e, &n, &chunk),
+             XHCI_PIPE_BAD_PARAM, "no element");
+    CHECK_EQ(XhciPipeSplit(0, 1, 512, 34, 34, NULL, &n, &chunk),
              XHCI_PIPE_BAD_PARAM, "no element array");
+    CHECK_EQ(XhciPipeSplit(0, 1, 0, 34, 34, e, &n, &chunk),
+             XHCI_PIPE_BAD_PARAM, "Max Packet Size 0");
+    CHECK_EQ(n, 0xEEEE, "nothing written for it");
+    /* One element from 0xF00 holds 0x100 bytes, less than one 512-byte
+     * packet, with more to follow: no chunk can be made. */
+    chunk = 0xEEEE;
+    CHECK_EQ(XhciPipeSplit(0xF00, 0x1000, 512, 34, 1, e, &n, &chunk),
+             XHCI_PIPE_BAD_PARAM, "less than a packet fits, more to follow");
+    CHECK_EQ(n, 0xEEEE, "nothing written");
+    CHECK_EQ(chunk, 0xEEEE, "not even the chunk size");
+    CHECK_EQ(XhciPipeSplit(0xF00, 0x100, 512, 34, 1, e, &n, &chunk),
+             XHCI_PIPE_OK, "the same 0x100 as the whole transfer is fine");
+    CHECK_EQ(chunk, 0x100, "a final short packet");
 }
 
 /* ------------------------------------------------------------------ */
@@ -1009,6 +1211,8 @@ static void test_status(void)
     CHECK_EQ(XhciPipeNtStatus(0x00000000UL), 0x00000000UL, "SUCCESS");
     CHECK_EQ(XhciPipeNtStatus(0x40000000UL), 0x00000103UL, "PENDING");
     CHECK_EQ(XhciPipeNtStatus(0x00010000UL), 0xC0000120UL, "CANCELED");
+    CHECK_EQ(XhciPipeNtStatus(0xC0007000UL), 0xC000009DUL,
+             "DEVICE_GONE is DEVICE_NOT_CONNECTED (design record 13 10.5)");
     CHECK_EQ(XhciPipeNtStatus(0x80000200UL), 0xC000000DUL,
              "INVALID_URB_FUNCTION");
     CHECK_EQ(XhciPipeNtStatus(0x80000300UL), 0xC000000DUL,
@@ -1028,8 +1232,6 @@ static void test_status(void)
              "ERROR_SHORT_TRANSFER");
     CHECK_EQ(XhciPipeNtStatus(0xC0000B00UL), 0xC0000001UL,
              "ISOCH_REQUEST_FAILED");
-    CHECK_EQ(XhciPipeNtStatus(0xC0007000UL), 0xC0000001UL,
-             "usbport's own DEVICE_GONE value, which this header lacks");
     CHECK_EQ(XhciPipeNtStatus(0x00020000UL), 0x00000000UL,
              "CANCELING, not an error");
 
@@ -1050,6 +1252,8 @@ int main(void)
     test_intervals();
     test_bulk();
     test_high_bandwidth();
+    test_interrupt_out();
+    test_mps_limits();
     test_endpoint_refusals();
     test_walk_good();
     test_walk_malformed();

@@ -24,6 +24,7 @@
 #include "xhci.h"
 #include "xhci_usbport.h"
 #include "xhci_enum.h"
+#include "xhci_pipe.h"
 
 #define HCD_KIND_CONTROLLER_FDO 0x43464448UL /* 'HDFC' */
 #define HCD_KIND_ROOTHUB_PDO    0x50524448UL /* 'HDRP' */
@@ -67,10 +68,111 @@ typedef struct _HCD_TIMER {
     UCHAR Context[HCD_TIMER_CONTEXT_BYTES];
 } HCD_TIMER, *PHCD_TIMER;
 
+/*
+ * The URB transfer path (hcd_io.c, 26-A.5; design record 13 sections 6 and
+ * 11.3). A pipe is one endpoint of one device; each carries a fixed set of
+ * transfer records, so no transfer allocates (section 7.5 rule 3). A record
+ * is the transfer engine's XHCI_TRANSFER first, so a retired engine record
+ * leads back to it, then what the URB, the MDL and the map registers need.
+ * An IRP no record can take waits on the pipe's Waiting list, linked through
+ * its Tail.Overlay.ListEntry.
+ */
+#define HCD_PIPE_SIGNATURE  0x45504950UL    /* 'PIPE' */
+
+/* USBD statuses the HCD's own files set, where usbdi.h is not included:
+ * DEVICE_GONE as WDK 7.1's inc\api\usb.h:459 defines it (absent from the
+ * Windows 2000 DDK), the rest as the Windows 2000 DDK's inc\usbdi.h does
+ * (lines 255, 263 and 279). */
+#define HCD_USBD_DEVICE_GONE        ((LONG)0xC0007000L)
+#define HCD_USBD_NO_MEMORY          ((LONG)0x80000100L)
+#define HCD_USBD_ERROR_BUSY         ((LONG)0x80000400L)
+#define HCD_USBD_INTERNAL_HC_ERROR  ((LONG)0x80000800L)
+#define HCD_USBD_INVALID_PIPE       ((LONG)0x80000600L)
+#define HCD_USBD_INVALID_PARAMETER  ((LONG)0x80000300L)
+#define HCD_USBD_ERROR_SHORT_TRANSFER ((LONG)0x80000900L)
+
+/* HcdIoSubmit flags. */
+#define HCD_IO_IN           0x1UL   /* data moves device to host          */
+#define HCD_IO_SHORT_OK     0x2UL   /* USBD_SHORT_TRANSFER_OK              */
+/* Windows 2000 DDK incSbdi.h:312: a success-class value there. */
+#define HCD_USBD_CANCELED           ((LONG)0x00010000L)
+#define HCD_PIPE_XFERS      4UL
+/* Data elements per chunk (xhci_pipe.h XHCI_PIPE_CHUNK_ELEMENTS), and the
+ * one slot the SG list's own declaration already holds beyond them. */
+#define HCD_SG_ELEMENTS     32UL
+
+#define HCD_XFER_FREE       0UL
+#define HCD_XFER_MAPPING    1UL     /* in the map pump                    */
+#define HCD_XFER_ON_RING    2UL     /* published; the engine owns it      */
+#define HCD_XFER_DONE       3UL     /* retired, on the done list          */
+#define HCD_XFER_HELD       4UL     /* mapped, waiting for its pipe       */
+
+typedef struct _HCD_XFER {
+    XHCI_TRANSFER Xfer;             /* first: CONTAINING_RECORD target    */
+    LIST_ENTRY Link;                /* the map queue, then the done list  */
+    struct _HCD_PIPE *Pipe;
+    PIRP Irp;
+    PVOID Urb;                      /* PURB; usbdi.h is hcd_io.c's alone  */
+    ULONG State;                    /* HCD_XFER_*                          */
+    ULONG Control;                  /* a control transfer (Setup used)    */
+    ULONG In;                       /* data moves device to host          */
+    XHCI_SETUP_PACKET Setup;
+    PMDL Mdl;
+    ULONG OwnMdl;                   /* built here; IoFreeMdl at the end   */
+    ULONG Length;                   /* the URB's TransferBufferLength      */
+    ULONG Offset;                   /* bytes of it moved by earlier chunks */
+    ULONG Chunk;                    /* this chunk's bytes                  */
+    PVOID MapBase;
+    ULONG MapCount;
+    LONG Status;                    /* USBD status before the engine's    */
+    ULONG Engine;                   /* published: the engine's status and
+                                     * byte count are the outcome          */
+    PULONG LengthOut;               /* the URB's TransferBufferLength      */
+    struct _HCD_DEVICE_PDO *Pdo;    /* whose stack sent it: its REMOVE waits */
+    ULONG CancelRequested;          /* its IRP was cancelled (hcd_io.c)  */
+    ULONG ShortOk;                  /* USBD_SHORT_TRANSFER_OK was set     */
+    ULONG Seq;                      /* its pipe's submission order        */
+    ULONG Mapped;                   /* held with its chunk mapped         */
+    struct {
+        USBPORT_SCATTER_GATHER_LIST List;
+        USBPORT_SCATTER_GATHER_ELEMENT More[HCD_SG_ELEMENTS];
+    } Sg;
+} HCD_XFER, *PHCD_XFER;
+
+typedef struct _HCD_PIPE {
+    ULONG Signature;
+    struct _HCD_USB_DEVICE *Device;
+    ULONG Dci;
+    ULONG EndpointAddress;
+    ULONG TransferType;             /* XHCI_PIPE_XFER_*                    */
+    ULONG MaxPacketSize;
+    ULONG Interval;                 /* bInterval, as reported to clients  */
+    PXHCI_RING Ring;                /* EP0: the device's; else OwnRing    */
+    PXHCI_TRANSFER_QUEUE Queue;     /* EP0: the device's; else OwnQueue   */
+    XHCI_RING OwnRing;
+    XHCI_TRANSFER_QUEUE OwnQueue;
+    ULONG PoolIndex;
+    LIST_ENTRY Waiting;             /* IRPs no record holds yet           */
+    ULONG Closed;                   /* deconfigured: no more submissions  */
+    ULONG Halted;                   /* a STALL; the client resets the pipe */
+    ULONG CancelPending;            /* a record of it was cancelled      */
+    ULONG DrainPending;             /* a refused retire: stop and drain  */
+    ULONG Paused;                   /* the thread is stopping or editing
+                                     * it: nothing is published meanwhile */
+    LIST_ENTRY Held;                /* records mapped while Paused, or
+                                     * behind Exclusive                   */
+    struct _HCD_XFER *Exclusive;    /* a request split into chunks: none
+                                     * other is published until it ends   */
+    ULONG Seq;                      /* the last submission's order         */
+    XHCI_PIPE_EP Ep;                /* its descriptor, decoded (xhci_pipe) */
+    HCD_XFER Xfers[HCD_PIPE_XFERS];
+} HCD_PIPE, *PHCD_PIPE;
+
 /* A device the bus has addressed (hcd_enum.c; design record 13 section
  * 5.2's "device object (the bus's)"). Pool, per device, at enumeration
  * (section 7.5 rule 3). */
 typedef struct _HCD_USB_DEVICE {
+    struct _HCD_CONTROLLER *Controller;
     ULONG Port;             /* root port, 1-based                       */
     ULONG SlotId;
     ULONG Speed;            /* PORTSC speed value, carried unchanged    */
@@ -88,6 +190,26 @@ typedef struct _HCD_USB_DEVICE {
     PDEVICE_OBJECT Pdo;     /* 26-A.4's device PDO, once it exists      */
     ULONG Abandoned;        /* off its port with the slot still enabled:
                              * the next powered pass disables it        */
+    /* The URB path (hcd_io.c). Refs counts URB IRPs that hold the record,
+     * taken under PdoListLock while the PDO still names it; Gone, under
+     * the controller lock, refuses new submissions once the thread has
+     * begun freeing it (hcdDeviceFree waits Refs out). */
+    volatile LONG Refs;
+    ULONG Gone;
+    ULONG AbortAll;         /* the PDO is being removed: abort every pipe */
+    ULONG Ep0Stuck;         /* the thread's EP0 record timed out and is
+                             * still queued: no control transfer until
+                             * the reset frees the device                 */
+    ULONG Ep0Halted;        /* a URB's control transfer stalled: the
+                             * thread owes Reset Endpoint + Set TR
+                             * Dequeue (hcd_enum.c), controller lock   */
+    HCD_PIPE Ep0Pipe;
+    /* The configuration (hcd_cfg.c, the thread): the open pipes by DCI,
+     * read by the event DPC under the controller lock, the pool rings they
+     * hold, and the configuration value SET_CONFIGURATION sent. */
+    PHCD_PIPE Pipes[32];
+    ULONG PoolRings;
+    ULONG ConfigValue;
 } HCD_USB_DEVICE, *PHCD_USB_DEVICE;
 
 /* A device PDO (hcd_pdo.c): one per enumerated device, a child of the root
@@ -105,6 +227,12 @@ typedef struct _HCD_DEVICE_PDO {
     ULONG RemoveReceived;           /* PnP's IRP_MN_REMOVE_DEVICE seen      */
     ULONG Deleted;                  /* IoDeleteDevice called: once only     */
     ULONG Serial;                   /* the name's number; a port waits on it */
+    ULONG Closing;                  /* stopping or removed: URBs refused  */
+    volatile LONG UrbsPending;      /* URB IRPs pended here and not yet
+                                     * completed; REMOVE waits for 0      */
+    volatile LONG Busy;             /* dispatches inside hcd_urb.c, raised
+                                     * before Controller is read; the
+                                     * parent's release waits it out      */
     ULONG Port;
     ULONG Speed;
     UCHAR DeviceDesc[18];
@@ -215,6 +343,36 @@ typedef struct _HCD_CONTROLLER {
     ULONG UrbCount[HCD_URB_FUNCTIONS];
     ULONG UrbUnknown;
     ULONG IoctlUnknown;
+
+    /* The map pump (hcd_dma.c, design record 13 section 11.3): records
+     * waiting for map registers, one AllocateAdapterChannel outstanding at
+     * a time, restarted from MapDpc; MapLock is innermost and is never held
+     * across a DMA_OPERATIONS call. DoneList (controller lock) holds the
+     * records the event DPC retired, completed by the deferred work after
+     * the lock's release (hcd_io.c). */
+    KSPIN_LOCK MapLock;
+    LIST_ENTRY MapQueue;
+    ULONG MapBusy;
+    ULONG MapInCall;
+    ULONG MapRefusals;
+    KDPC MapDpc;
+    KDPC MapDoneDpc;                /* the execution routine's release   */
+    volatile LONG MapDpcsInFlight;
+    ULONG MapsSynchronous;          /* execution routine ran inside the call */
+    ULONG MapsDeferred;             /* ... or later                          */
+    LIST_ENTRY DoneList;
+    /* URBs that need commands (SELECT_CONFIGURATION, ABORT_PIPE,
+     * RESET_PIPE), pended and served by the thread (hcd_cfg.c); linked
+     * through Tail.Overlay.ListEntry, the device in DriverContext[0];
+     * controller lock. */
+    LIST_ENTRY SlowIrps;
+    ULONG CancelWork;               /* some pipe has CancelPending        */
+    volatile LONG CancelsRunning;   /* cancel routines past the cancel lock */
+    ULONG UrbsCompleted;
+    ULONG UrbsGone;
+    ULONG UrbsBusy;
+    ULONG DevicesKept;              /* freed with URBs left: DMA not stopped */
+    ULONG Ep0Resets;
     ULONG EnumCommandsRefused;
     ULONG EnumCommandsTimedOut;
     ULONG EnumDisableFailures;
@@ -326,6 +484,19 @@ VOID HcdEnumDetach(PHCD_CONTROLLER hc);
 VOID HcdEnumAttach(PHCD_CONTROLLER hc);
 VOID HcdEnumInit(PHCD_CONTROLLER hc);
 VOID HcdEnumDrop(PHCD_CONTROLLER hc);
+ULONG HcdThreadCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb, PULONG control);
+ULONG HcdThreadControl(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                       UCHAR requestType, UCHAR request, USHORT value,
+                       USHORT index, ULONG length, PULONG bytes);
+
+/* hcd_cfg.c */
+NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                     struct _HCD_DEVICE_PDO *pdo, PIRP irp);
+VOID HcdCfgFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+VOID HcdCfgService(PHCD_CONTROLLER hc);
+VOID HcdCfgCancelService(PHCD_CONTROLLER hc);
+VOID HcdCfgDeviceGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+PHCD_PIPE HcdCfgPipe(PHCD_USB_DEVICE dev, PVOID handle);
 
 /* hcd_pdo.c */
 NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
@@ -340,9 +511,32 @@ NTSTATUS HcdDevicePdoPower(PHCD_DEVICE_PDO pdo, PIRP irp);
 /* hcd_urb.c */
 NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp);
 
+/* hcd_io.c */
+VOID HcdIoPipeInitEp0(PHCD_USB_DEVICE dev);
+VOID HcdIoPipeInit(PHCD_PIPE pipe, PHCD_USB_DEVICE dev);
+NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PVOID handle,
+                     struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb, const UCHAR *setup, ULONG flags,
+                     PVOID buffer, PMDL mdl, ULONG length, PULONG lengthOut);
+VOID HcdIoDrainPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd);
+VOID HcdIoPipeRelease(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
+VOID HcdIoPipePause(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
+VOID HcdIoPipeResume(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
+ULONG HcdIoPipeCancelAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
+VOID HcdIoPipeWaitCancelled(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
+VOID HcdIoWaitPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
+VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok);
+VOID HcdIoRetired(PHCD_CONTROLLER hc, PXHCI_TRANSFER t);
+VOID HcdIoDeferred(PHCD_CONTROLLER hc);
+ULONG HcdIoDeviceGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+
 /* hcd_dma.c */
 NTSTATUS HcdDmaOpen(PHCD_CONTROLLER hc);
 VOID HcdDmaClose(PHCD_CONTROLLER hc);
+VOID HcdDmaInitObjects(PHCD_CONTROLLER hc);
+VOID HcdDmaMapQueue(PHCD_CONTROLLER hc, PHCD_XFER x);
+VOID HcdDmaMapKick(PHCD_CONTROLLER hc);
+VOID HcdDmaUnmap(PHCD_CONTROLLER hc, PHCD_XFER x);
+VOID HcdDmaMapDrain(PHCD_CONTROLLER hc);
 
 /* hcd_svc.c (the services themselves are in hcd_svc.h) */
 VOID HcdRelativeMs(PLARGE_INTEGER due, ULONG milliseconds);
@@ -356,5 +550,7 @@ VOID HcdPoolFree(PVOID p);
 ULONG HcdPoolOutstandingCount(VOID);
 PVOID HcdPoolAllocHandedOff(ULONG bytes);
 VOID HcdPoolFreeForeign(PVOID p);
+PMDL HcdPoolMdlBuild(PVOID va, ULONG bytes);
+VOID HcdPoolMdlFree(PMDL mdl);
 
 #endif /* HCD_H */

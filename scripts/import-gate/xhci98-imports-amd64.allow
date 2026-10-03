@@ -94,6 +94,11 @@ ntoskrnl.exe!RtlInitUnicodeString          all  required  nt52-amd64-export; twi
 ntoskrnl.exe!ObfReferenceObject            all  required  nt52-amd64-export; twin of the x86 row (task 26-A.4)
 ntoskrnl.exe!ExAllocatePoolWithTag         all  required  SITES=hcd_pool.obj nt52-amd64-export; twin of the x86 row (task 26-A.4)
 ntoskrnl.exe!ExFreePool                    all  required  SITES=hcd_pool.obj nt52-amd64-export; twin of the x86 row (task 26-A.4)
+ntoskrnl.exe!IoAllocateMdl                 all  required  SITES=hcd_pool.obj nt52-amd64-export; twin of the x86 row (task 26-A.5)
+ntoskrnl.exe!IoFreeMdl                     all  required  SITES=hcd_pool.obj nt52-amd64-export; twin of the x86 row (task 26-A.5)
+ntoskrnl.exe!MmBuildMdlForNonPagedPool     all  required  SITES=hcd_pool.obj nt52-amd64-export; twin of the x86 row (task 26-A.5)
+ntoskrnl.exe!IoAcquireCancelSpinLock       all  required  nt52-amd64-export; twin of the x86 row (task 26-A.5)
+ntoskrnl.exe!IoReleaseCancelSpinLock       all  required  nt52-amd64-export; twin of the x86 row (task 26-A.5)
 
 [deny]
 

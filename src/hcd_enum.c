@@ -137,6 +137,13 @@ static ULONG hcdCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
     return 0;
 }
 
+/* A command from the thread for the configuration code (hcd_cfg.c). */
+ULONG HcdThreadCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
+                       PULONG control)
+{
+    return hcdCommand(hc, trb, control);
+}
+
 /* ----------------------------------------------------------------------- */
 /* Device records                                                           */
 /* ----------------------------------------------------------------------- */
@@ -157,10 +164,12 @@ static PHCD_USB_DEVICE hcdDeviceNew(PHCD_CONTROLLER hc, ULONG port,
     for (i = 0; i < sizeof(HCD_USB_DEVICE); i++) {
         p[i] = 0;
     }
+    dev->Controller = hc;
     dev->Port = port;
     dev->SlotId = slotId;
     dev->Speed = speed;
     XhciXferQueueInit(&dev->Ep0Queue);
+    HcdIoPipeInitEp0(dev);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     hc->SlotDevice[slotId] = dev;
     XhciControllerLockRelease(&hc->Hc, oldIrql);
@@ -173,9 +182,16 @@ static PHCD_USB_DEVICE hcdDeviceNew(PHCD_CONTROLLER hc, ULONG port,
 static VOID hcdDeviceFree(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     KIRQL oldIrql;
+    ULONG kept;
 
     if (dev == NULL) {
         return;
+    }
+    /* Its URBs first: the slot is disabled or HCRST has taken it, so the
+     * engine's queue can be drained and every IRP completed (hcd_io.c). */
+    kept = !HcdIoDeviceGone(hc, dev);
+    if (!kept) {
+        HcdCfgDeviceGone(hc, dev);
     }
     if (dev->SlotId != 0 && dev->SlotId <= XHCI_MAX_SLOTS) {
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
@@ -183,6 +199,12 @@ static VOID hcdDeviceFree(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
             hc->SlotDevice[dev->SlotId] = NULL;
         }
         XhciControllerLockRelease(&hc->Hc, oldIrql);
+    }
+    if (kept) {
+        /* URBs still pending against a controller that may still DMA:
+         * the record and its pipes stay allocated for good. */
+        hc->DevicesKept++;
+        return;
     }
     HcdPoolFree(dev->Config);
     HcdPoolFree(dev);
@@ -241,6 +263,49 @@ static VOID hcdDisableSlot(PHCD_CONTROLLER hc, PHCD_PORT p)
     }
     p->Device = NULL;
     hcdDisableRecord(hc, dev);
+}
+
+/*
+ * EP0 halted on a URB's control transfer (a STALL; hcd_dev.c set Ep0Halted):
+ * Reset Endpoint with TSP 0, then Set TR Dequeue to where the transfer
+ * engine already moved the software dequeue - the next TD's head, or the
+ * enqueue position - mandatory for a control endpoint after a reset (xHCI
+ * 4.6.8), and the doorbell again if transfers are waiting. A device clears
+ * a control endpoint's stall itself at the next SETUP, so no
+ * CLEAR_FEATURE is owed (.claude\batch-c-endpoint-steps.md, from the
+ * miniport). Thread only, powered.
+ */
+static VOID hcdResetEp0(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    XHCI_TRB trb;
+    KIRQL oldIrql;
+    ULONG control;
+    ULONG pa;
+    ULONG dcs;
+    ULONG waiting;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    dev->Ep0Halted = 0;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    hc->Ep0Resets++;
+    /* EP0's pipe paused for the commands: a URB's doorbell meanwhile would
+     * run on the endpoint being repositioned (round 3, finding 2). */
+    HcdIoPipePause(hc, &dev->Ep0Pipe);
+    if (XhciTrbResetEndpoint(&trb, dev->SlotId, 1, 0) == XHCI_RING_OK) {
+        (VOID)hcdCommand(hc, &trb, &control);
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    pa = XhciRingDequeuePA(&dev->Ep0);
+    dcs = XhciRingDequeueCycle(&dev->Ep0);
+    waiting = dev->Ep0Queue.Count != 0;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (XhciTrbSetTrDequeue(&trb, dev->SlotId, 1, pa, dcs) ==
+            XHCI_RING_OK &&
+        hcdCommand(hc, &trb, &control) == XHCI_CC_SUCCESS && waiting) {
+        XhciWriteDoorbell(&hc->Hc, dev->SlotId, 1);
+    }
+    HcdIoPipeResume(hc, &dev->Ep0Pipe);
+    XHCI_DBG_VALUE("hcd: EP0 reset after a stall, slot", dev->SlotId);
 }
 
 /*
@@ -421,11 +486,14 @@ static ULONG hcdEvaluate(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG mps)
  * engine builds the TD group, publishes it whole or not at all, matches its
  * events by TRB address, and latches the bytes moved and the USBD status
  * (26-A.5's first step: the enumeration and the URB path share one ring and
- * one queue). Returns 1 with *bytes the count received, 0 on any failure.
+ * one queue). `requestType` is the SETUP bmRequestType: a nonzero `length`
+ * is an IN data stage into the scratch (the thread sends no OUT data), a
+ * zero `length` no data stage at all (SET_CONFIGURATION, CLEAR_FEATURE).
+ * Returns 1 with *bytes the count received, 0 on any failure. Thread only.
  */
-static ULONG hcdControlIn(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
-                          UCHAR request, USHORT value, USHORT index,
-                          ULONG length, PULONG bytes)
+ULONG HcdThreadControl(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                       UCHAR requestType, UCHAR request, USHORT value,
+                       USHORT index, ULONG length, PULONG bytes)
 {
     XHCI_CONTROL_REQUEST req;
     XHCI_TRB trbs[XHCI_XFER_MAX_CONTROL_TRBS];
@@ -437,7 +505,13 @@ static ULONG hcdControlIn(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG i;
 
     *bytes = 0;
-    if (length == 0 || length > HCD_SCRATCH_BYTES) {
+    if (dev->Ep0Stuck) {
+        /* Its record is still queued from a timeout: reusing it would
+         * relink the engine's queue (round 2, finding 10). */
+        return 0;
+    }
+    if (length > HCD_SCRATCH_BYTES ||
+        (length != 0 && (requestType & 0x80) == 0)) {
         return 0;
     }
 
@@ -445,7 +519,7 @@ static ULONG hcdControlIn(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     for (i = 0; i < sizeof(sg); i++) {
         b[i] = 0;
     }
-    sg.SgElementCount = 1;
+    sg.SgElementCount = (length != 0) ? 1 : 0;
     sg.SgElement[0].SgPhysicalAddressLo = hc->ScratchPa.LowPart;
     sg.SgElement[0].SgTransferLength = length;
     sg.SgElement[0].SgOffset = 0;
@@ -454,13 +528,13 @@ static ULONG hcdControlIn(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     for (i = 0; i < sizeof(req); i++) {
         b[i] = 0;
     }
-    req.Setup.bmRequestType = 0x80;
+    req.Setup.bmRequestType = requestType;
     req.Setup.bRequest = request;
     req.Setup.wValue = value;
     req.Setup.wIndex = index;
     req.Setup.wLength = (USHORT)length;
     req.TransferLength = length;
-    req.TransferFlagsIn = 1;
+    req.TransferFlagsIn = (requestType & 0x80) != 0;
     req.MaxPacketSize = dev->Mps0;
     req.SgList = &sg;
 
@@ -485,6 +559,7 @@ static ULONG hcdControlIn(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
          * on the queue; the invalidation frees the device with it. */
         hc->EnumTransfersTimedOut++;
         hc->ScratchTainted = 1;
+        dev->Ep0Stuck = 1;
         HcdSvcRequestReset(&hc->Hc);
         return 0;
     }
@@ -498,7 +573,7 @@ static ULONG hcdControlIn(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 static ULONG hcdGetDescriptor(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                               UCHAR type, ULONG length, PULONG bytes)
 {
-    return hcdControlIn(hc, dev, 6, (USHORT)((ULONG)type << 8), 0, length,
+    return HcdThreadControl(hc, dev, 0x80, 6, (USHORT)((ULONG)type << 8), 0, length,
                         bytes);
 }
 
@@ -952,6 +1027,16 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
     }
     if (hc->SlotSweep && !hcdHalted(hc)) {
         hcdSweepAbandoned(hc);
+    }
+    for (i = 1; i <= XHCI_MAX_SLOTS && !hcdHalted(hc); i++) {
+        if (hc->SlotDevice[i] != NULL && hc->SlotDevice[i]->Ep0Halted) {
+            hcdResetEp0(hc, hc->SlotDevice[i]);
+        }
+    }
+    if (!hcdHalted(hc)) {
+        HcdCfgCancelService(hc);
+        /* The URBs that need commands (hcd_cfg.c). */
+        HcdCfgService(hc);
     }
 
     XhciControllerLockAcquire(ext, &oldIrql);

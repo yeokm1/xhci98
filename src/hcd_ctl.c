@@ -274,6 +274,7 @@ VOID HcdControllerInitObjects(PHCD_CONTROLLER hc)
     KeInitializeSpinLock(&hc->ControllerLock);
     KeInitializeSpinLock(&hc->PdoListLock);
     HcdTimersInit(hc);
+    HcdDmaInitObjects(hc);
     KeInitializeDpc(&hc->IsrDpc, hcdIsrDpc, hc);
     hc->DpcsInFlight = 0;
     hc->DpcClosed = 1;
@@ -561,6 +562,7 @@ static VOID hcdRelease(PHCD_CONTROLLER hc)
     XHCI_DBG_TEXT("hcd: release: timers");
     HcdTimersDrain(hc);
     XHCI_DBG_TEXT("hcd: release: DMA");
+    HcdDmaMapDrain(hc);
     HcdDmaClose(hc);
     XHCI_DBG_TEXT("hcd: release: BAR");
     if (hc->BarVa != NULL) {
@@ -712,7 +714,6 @@ VOID HcdStopController(PHCD_CONTROLLER hc)
     XHCI_DBG_TEXT("hcd: stop controller");
     ext = &hc->Hc;
     hcdThreadStop(hc);
-    HcdEnumDrop(hc);
     /*
      * Whenever a register window is mapped, not only when INITIALIZED is
      * set: the quiesce and a failed in-place recovery clear INITIALIZED with
@@ -729,6 +730,14 @@ VOID HcdStopController(PHCD_CONTROLLER hc)
             XhciFailClosedDma(ext);
         }
     }
+    /*
+     * The devices go once the controller has halted, not before: freeing a
+     * record completes its URBs (hcd_io.c, HcdIoDeviceGone), and a client
+     * buffer must not go back while a TD on a running ring can still DMA
+     * into it. Before the DMA adapter goes, since completion gives map
+     * registers back.
+     */
+    HcdEnumDrop(hc);
     (VOID)XhciControllerUpdateFlags(ext,
                                     XHCI_EXT_FLAG_STARTED |
                                         XHCI_EXT_FLAG_INTERRUPTS |

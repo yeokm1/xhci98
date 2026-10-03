@@ -476,3 +476,38 @@ shutdowns were clean.
 On Windows 2000 a shell box, "E:\ is not accessible", appeared after the
 install's Finish. That was the transfer drive's autoplay window, not the
 driver; the trace shows the controller and root hub started normally.
+
+### URBs served: control, configuration, interrupt (working tree, not yet committed)
+
+**Control URBs** (`e7881a4d...fa17`, c3 legs):
+- On Windows 2000, `hidusb.sys` sent GET_DESCRIPTOR (`0x0B`) first; served through the map pump, it then reached SELECT_CONFIGURATION (`0x00`), which that build refused.
+- On Windows 98 SE, `hidusb.sys` sent SELECT_CONFIGURATION first, with no descriptor URB before it.
+
+**The first working USB mouse** (`a006cd65...04e9`, Windows 2000, c4-2k):
+- With SELECT_CONFIGURATION (Configure Endpoint on pool rings, then SET_CONFIGURATION) and interrupt transfers, `USB Human Interface Device` reported "This device is working properly" and a `HID-compliant mouse` appeared under Mice.
+- QEMU made the USB mouse its current mouse. `mouse_move` from the monitor moved the guest pointer, so the pointer was driven by interrupt-IN transfers through this driver.
+- URBs seen, in order: `0x0B`, `0x00`, `0x1B` (SET_IDLE), `0x28` (the report descriptor), `0x09` (the interrupt reads).
+
+**Unplugging it bugchecked the guest: 0xCE** (DRIVER_UNLOADED_WITHOUT_CANCELLING_PENDING_OPERATIONS).
+- The minidump, extracted from the guest disk (qemu-img to VHD, then 7-Zip) and read with WDK 7.1's kd, gives the faulting address `hidusb+0xb0a`, in the unloaded hidusb.
+- The trace gives the order:
+  1. The thread took the PDO off the bus and began Disable Slot.
+  2. PnP sent SURPRISE_REMOVAL. hidusb's RESET_PIPE and ABORT_PIPE were refused at once, the PDO no longer naming a device, and REMOVE completed.
+  3. The device-gone drain then completed the pending interrupt read, whose completion routine was hidusb's.
+- Fixed in the tree:
+  - a device PDO counts the URBs pended through it, and its STOP, SURPRISE_REMOVAL and REMOVE complete only when that count is 0, with the thread aborting the pipes of a device still present;
+  - the device-gone drain also completes the device's queued slow URBs, which only the thread could otherwise complete while it waits for their references.
+
+**Codex rounds 2 to 4 on the URB path, and the legs between them.**
+
+Round 2 raised ten MAJOR and four MINOR, round 3 eight new MAJOR, round 4 four MAJOR and one MINOR; all were taken. The model that came out of them:
+- **Per-pipe ordering:** a pause gate holds the pipe while the thread edits it. Records wait on a held list - unmapped when they wait for an owner or a pause, so they hold no map registers. A request split into chunks owns its pipe from its submission, and a sequence number keeps earlier submissions ahead of it. The doorbell is rung under the controller lock.
+- **Endpoint state:** each stop, cancel, abort, reset and deconfigure reads the endpoint's state from the output context first. Running is stopped; Halted gets Reset Endpoint followed at once by Set TR Dequeue; Error gets Set TR Dequeue. RESET_PIPE recycles a non-Halted endpoint (Drop and Add) to restart its toggle.
+- **Cancellation:** the cancel routine only marks the record (a CancelsRunning count guards the record's lifetime); the thread stops the endpoint, takes cancelled TDs off and places the dequeue as the miniport did.
+- **Map pump:** its channel is released by a dedicated DPC queued from the execution routine.
+- **PDO admission:** a device PDO closes admission, waits its in-flight dispatches and then its pending URBs before a STOP, SURPRISE_REMOVAL or REMOVE completes.
+- **Unproven halt:** if the controller could not be proven halted, URBs stay pending and the record is kept.
+
+**Windows 2000 SP4** (`ea898a7e...17cd6`, c5-2k; `f0163503...24ea`, c6-2k): the USB mouse works end to end. The pointer moves and clicks register. Unplug and replug work with no bugcheck. Disable and enable work for the HID-compliant mouse, the root hub (c5) and the controller (c6). Shutdown is clean.
+
+**Windows 98 SE** (c4, c5, c6): still Code 10. hidusb's only URB is a SELECT_CONFIGURATION, which the c6 trace shows completed by the thread with success on the unconfigure path - its ConfigurationDescriptor was NULL - after which Windows stopped the device. Under investigation; the next build dumps the URB's fields.
