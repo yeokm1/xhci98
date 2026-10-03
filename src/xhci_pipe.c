@@ -838,7 +838,8 @@ ULONG XhciPipeConfigureUsbdStatus(ULONG completionCode)
     }
 }
 
-/* IRQL: any. */
+/* IRQL: any. A low word of 0 is skipped, so a lap is 2^32 - 1 values: the
+ * reconstruction's bound (xhci_pipe.h). */
 VOID XhciSeqNext(PXHCI_SEQ64 seq)
 {
     seq->Lo++;
@@ -856,7 +857,8 @@ VOID XhciSeqFromStamp(const XHCI_SEQ64 *current, ULONG stamp,
 
     /* current - age, with age = (current.Lo - stamp) mod 2^32: the low
      * word comes back as the stamp, and the high word borrows when the
-     * subtraction crossed a lap. */
+     * subtraction crossed a lap. Exact while fewer than 2^32 - 1
+     * submissions followed the stamp (xhci_pipe.h). */
     age = current->Lo - stamp;
     out->Lo = stamp;
     out->Hi = current->Hi - ((age > current->Lo) ? 1UL : 0UL);

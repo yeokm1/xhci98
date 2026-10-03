@@ -1435,12 +1435,32 @@ static void test_seq(void)
     CHECK(XhciSeqCovers(&h, 90, &c),
           "the same stamp in the horizon's own lap is covered");
 
-    /* The bound: a request 2^32 or more submissions old aliases into the
-     * latest lap and reads newer - documented, held until its PDO goes. */
+    /* The bound: a lap is 2^32 - 1 values (a low word of 0 skipped). A
+     * stamp of 0:1 followed by 0xFFFFFFFE submissions (count 0:FFFFFFFF)
+     * still rebuilds exactly; followed by 0xFFFFFFFF (count 1:1) it
+     * aliases into the latest lap and rebuilds as 1:1. */
+    c = seq64(0, 1);
+    XhciSeqNext(&c);
+    CHECK(c.Hi == 0 && c.Lo == 2, "one submission later");
+    c = seq64(0, 0xFFFFFFFFUL);
+    XhciSeqFromStamp(&c, 1, &f);
+    CHECK(f.Hi == 0 && f.Lo == 1,
+          "0xFFFFFFFE submissions later: still exact");
+    XhciSeqNext(&c);
+    CHECK(c.Hi == 1 && c.Lo == 1,
+          "0xFFFFFFFF submissions after 0:1 the count is 1:1");
+    XhciSeqFromStamp(&c, 1, &f);
+    CHECK(f.Hi == 1 && f.Lo == 1,
+          "the boundary: the stamp aliases into the latest lap");
+
+    /* Past the bound a request reads newer, so an earlier abort no longer
+     * covers it; a later abort of its pipe still does. */
     h = seq64(5, 10);
     c = seq64(6, 20);
     CHECK(!XhciSeqCovers(&h, 5, &c),
-          "past the bound a request reads as the latest lap's");
+          "past the bound an earlier abort no longer covers it");
+    h = seq64(6, 15);
+    CHECK(XhciSeqCovers(&h, 5, &c), "a later abort still covers it");
 
     h = seq64(0, 0);
     CHECK(!XhciSeqCovers(&h, 5, &c), "no horizon");

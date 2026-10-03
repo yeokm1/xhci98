@@ -425,13 +425,16 @@ ULONG XhciPipeConfigureUsbdStatus(ULONG completionCode);
  *
  * An IRP carries only the low 32 bits of its stamp (DriverContext[0] is all
  * it has). Its full stamp is reconstructed from the current count as the
- * latest value with those low bits not after it: exact while the request
- * is fewer than 2^32 submissions old on its PDO. Beyond that bound - one
- * request kept outstanding through 2^32 others on the same PDO, some 49
- * days at a thousand a second - the low bits alias into the latest lap and
- * cannot be told apart: such a request reads as newer than it is, is not
- * covered by an abort it predates, and stays held until its PDO stops or
- * goes, which releases every held request, or its client cancels it.
+ * latest value with those low bits not after it. A lap holds 2^32 - 1
+ * values, since a low word of 0 is skipped (XhciSeqNext), so the
+ * reconstruction is exact while fewer than 2^32 - 1 submissions have
+ * followed the request on its PDO. Beyond that bound - one request kept
+ * outstanding through 2^32 - 1 others on the same PDO, some 49 days at a
+ * thousand a second - the low bits alias into the latest lap and cannot be
+ * told apart: such a request reads as newer than it is and may lose the
+ * coverage of an abort made before the alias; a later abort of its pipe
+ * still covers and releases it, as do its client's cancel and its PDO's
+ * stop or removal, which release every held request.
  */
 typedef struct _XHCI_SEQ64 {
     ULONG Lo;
