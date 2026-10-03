@@ -96,6 +96,7 @@ NTSTATUS UasPdoCreate(PUAS_FDO fdo, ULONG lun, const UCHAR *inquiry,
     pdo->Busy = 1;
     KeInitializeEvent(&pdo->BusyIdle, NotificationEvent, FALSE);
     KeInitializeEvent(&pdo->RequestsIdle, NotificationEvent, TRUE);
+    KeInitializeEvent(&pdo->CloseDone, NotificationEvent, TRUE);
     UasCopy(pdo->Inquiry, inquiry, UAS_INQUIRY_LENGTH);
     self->Flags |= DO_DIRECT_IO | DO_POWER_PAGABLE;
     self->Flags &= ~DO_DEVICE_INITIALIZING;

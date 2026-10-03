@@ -27,6 +27,17 @@
  * the transfer or tears the device down. A task management slot whose
  * waiter gave up is released the same way.
  *
+ * TAGS AND THE DEVICE. Cancelling the host's transfers does not end the
+ * device's task (T10 UAS task management), so a tag goes back to the
+ * allocator only when the device has finished the command itself (its final
+ * IU), confirmed its end (ABORT TASK or LOGICAL UNIT RESET answered), or
+ * lost it to a port reset or a new configuration (an I_T nexus loss). A
+ * slot ended any other way - a task management function that got no answer,
+ * a LUN closed on a device that cannot be reached - is quarantined: its tag
+ * stays allocated, so no later command can collide with the device's
+ * stale task, and recovery treats a quarantine as a reason to reset the
+ * port, which releases it.
+ *
  * CANCELLATION. IoCancelIrp is called with the lock dropped, on a transfer
  * marked under the lock (Cancelling, CancelRefs). Until that call has
  * returned and CancelRefs is back to 0 the transfer is not built again and
@@ -172,7 +183,11 @@ static VOID uasCheckDone(PUAS_FDO fdo, PUAS_SLOT slot, PUAS_ACT a)
     }
     if (slot->Tmf) {
         if (slot->Aborted) {
-            (VOID)UasTagFree(&fdo->Tags, slot->Tag);
+            if (slot->Quarantine) {
+                fdo->Quarantined |= 1UL << (slot->Tag - 1);
+            } else {
+                (VOID)UasTagFree(&fdo->Tags, slot->Tag);
+            }
             slot->Tmf = FALSE;
             slot->State = UAS_SLOT_FREE;
         } else if ((slot->State == UAS_SLOT_FINAL || slot->Failed) &&
@@ -491,7 +506,11 @@ static VOID uasFinish(PUAS_FDO fdo, PUAS_SLOT slot)
     slot->DataMdl = NULL;
 
     KeAcquireSpinLock(&fdo->Lock, &irql);
-    (VOID)UasTagFree(&fdo->Tags, slot->Tag);
+    if (slot->Quarantine) {
+        fdo->Quarantined |= 1UL << (slot->Tag - 1);
+    } else {
+        (VOID)UasTagFree(&fdo->Tags, slot->Tag);
+    }
     if (fdo->Active != 0) {
         fdo->Active--;
     }
@@ -520,6 +539,7 @@ static VOID uasSlotReset(PUAS_SLOT slot)
     slot->ResponseOnly = FALSE;
     slot->TmfSignalled = FALSE;
     slot->Finishing = FALSE;
+    slot->Quarantine = FALSE;
     slot->TmfDone = NULL;
     slot->Request = NULL;
     slot->Srb = NULL;
@@ -927,7 +947,7 @@ static VOID uasTick(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2)
  * cancelling, and finished here if it is already idle - otherwise by the
  * completion that makes it idle. */
 static VOID uasEndSlotLocked(PUAS_FDO fdo, PUAS_SLOT slot, UCHAR srbStatus,
-                             PUAS_ACT a)
+                             BOOLEAN quarantine, PUAS_ACT a)
 {
     ULONG i;
 
@@ -936,6 +956,7 @@ static VOID uasEndSlotLocked(PUAS_FDO fdo, PUAS_SLOT slot, UCHAR srbStatus,
         return;
     }
     slot->Aborted = TRUE;
+    slot->Quarantine = quarantine;
     slot->FinalSrbStatus = srbStatus;
     for (i = 0; i < UAS_XFERS; i++) {
         uasActCancel(a, &slot->Xfer[i]);
@@ -946,27 +967,22 @@ static VOID uasEndSlotLocked(PUAS_FDO fdo, PUAS_SLOT slot, UCHAR srbStatus,
     uasCheckDone(fdo, slot, a);
 }
 
-static VOID uasEndSlot(PUAS_FDO fdo, PUAS_SLOT slot, UCHAR srbStatus)
-{
-    UAS_ACT a;
-    KIRQL irql;
-
-    uasActInit(&a);
-    KeAcquireSpinLock(&fdo->Lock, &irql);
-    uasEndSlotLocked(fdo, slot, srbStatus, &a);
-    KeReleaseSpinLock(&fdo->Lock, irql);
-    uasActRun(fdo, &a);
-}
-
-/* Every command of one LUN (all LUNs when lun is ~0). */
+/* Every command of one LUN (all LUNs when lun is ~0), the LUN test and
+ * the end in one hold of the lock per slot. */
 static VOID uasEndLun(PUAS_FDO fdo, ULONG lun, UCHAR srbStatus)
 {
+    UAS_ACT a;
     ULONG t;
+    KIRQL irql;
 
     for (t = 1; t <= UAS_MAX_TAGS; t++) {
+        uasActInit(&a);
+        KeAcquireSpinLock(&fdo->Lock, &irql);
         if (lun == (ULONG)~0UL || fdo->Slots[t].Lun == lun) {
-            uasEndSlot(fdo, &fdo->Slots[t], srbStatus);
+            uasEndSlotLocked(fdo, &fdo->Slots[t], srbStatus, FALSE, &a);
         }
+        KeReleaseSpinLock(&fdo->Lock, irql);
+        uasActRun(fdo, &a);
     }
 }
 
@@ -1091,8 +1107,10 @@ static ULONG uasTmf(PUAS_FDO fdo, ULONG function, ULONG lun, ULONG taskTag)
     KeAcquireSpinLock(&fdo->Lock, &irql);
     code = (wait == STATUS_SUCCESS && slot->State == UAS_SLOT_FINAL &&
             !slot->Failed) ? slot->ResponseCode : UAS_RC_TMF_FAILED;
-    /* The event is on this stack: nothing may signal it after this. */
+    /* The event is on this stack: nothing may signal it after this. An
+     * unanswered TMF may still be live in the device under its tag. */
     slot->TmfDone = NULL;
+    slot->Quarantine = (BOOLEAN)(code == UAS_RC_TMF_FAILED);
     slot->Aborted = TRUE;
     slot->State = UAS_SLOT_FINAL;
     for (i = 0; i < UAS_XFERS; i++) {
@@ -1111,6 +1129,19 @@ static BOOLEAN uasTmfOk(ULONG code)
 {
     return (BOOLEAN)(code == UAS_RC_TMF_COMPLETE ||
                      code == UAS_RC_TMF_SUCCEEDED);
+}
+
+/* Lock held. Every quarantined tag back to the allocator. */
+static VOID uasReleaseQuarantine(PUAS_FDO fdo)
+{
+    ULONG t;
+
+    for (t = 1; t <= fdo->Tags.Count; t++) {
+        if ((fdo->Quarantined & (1UL << (t - 1))) != 0) {
+            (VOID)UasTagFree(&fdo->Tags, t);
+        }
+    }
+    fdo->Quarantined = 0;
 }
 
 /*
@@ -1136,12 +1167,16 @@ static BOOLEAN uasResetDevice(PUAS_FDO fdo)
         fdo->Counters[UAS_CTR_PORT_RESETS]++;
         status = UasSyncIoctl(fdo, IOCTL_INTERNAL_USB_RESET_PORT);
     }
+    KeAcquireSpinLock(&fdo->Lock, &irql);
     if (!NT_SUCCESS(status)) {
-        KeAcquireSpinLock(&fdo->Lock, &irql);
         fdo->Dead = TRUE;
         KeReleaseSpinLock(&fdo->Lock, irql);
         return FALSE;
     }
+    /* The port reset lost every task the device held: quarantined tags
+     * are safe again. */
+    uasReleaseQuarantine(fdo);
+    KeReleaseSpinLock(&fdo->Lock, irql);
     return TRUE;
 }
 
@@ -1162,12 +1197,144 @@ static BOOLEAN uasResetLun(PUAS_FDO fdo, ULONG lun)
  * (aborted with abortStatus, or swept up by a reset). */
 static BOOLEAN uasAbortTask(PUAS_FDO fdo, PUAS_SLOT slot, UCHAR abortStatus)
 {
+    UAS_ACT a;
+    PIRP request;
+    ULONG lun;
+    ULONG tag;
+    KIRQL irql;
+
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    request = slot->Request;
+    lun = slot->Lun;
+    tag = slot->Tag;
+    KeReleaseSpinLock(&fdo->Lock, irql);
     fdo->Counters[UAS_CTR_ABORTS]++;
-    if (uasTmfOk(uasTmf(fdo, UAS_TMF_ABORT_TASK, slot->Lun, slot->Tag))) {
-        uasEndSlot(fdo, slot, abortStatus);
+    if (uasTmfOk(uasTmf(fdo, UAS_TMF_ABORT_TASK, lun, tag))) {
+        /* Ended only if it is still the same command (one hold). */
+        uasActInit(&a);
+        KeAcquireSpinLock(&fdo->Lock, &irql);
+        if (slot->Request == request) {
+            uasEndSlotLocked(fdo, slot, abortStatus, FALSE, &a);
+        }
+        KeReleaseSpinLock(&fdo->Lock, irql);
+        uasActRun(fdo, &a);
         return TRUE;
     }
-    return uasResetLun(fdo, slot->Lun);
+    return uasResetLun(fdo, lun);
+}
+
+/* Lock held. Whether a slot is a live command of the LUN's PDO. */
+static BOOLEAN uasSlotOfPdo(PUAS_SLOT slot, PUAS_PDO pdo)
+{
+    return (BOOLEAN)(slot->State != UAS_SLOT_FREE && !slot->Tmf &&
+                     !slot->Aborted && !slot->Finishing &&
+                     slot->Request != NULL &&
+                     slot->Request->Tail.Overlay.DriverContext[UAS_CTX_PDO]
+                         == pdo);
+}
+
+/*
+ * Ends every live command of a closing LUN with its close status, each test
+ * and transition in one hold of the lock, so a slot recycled in between
+ * cannot be taken for the LUN's. With quarantine the tags are held (no
+ * device-side confirmation was had); without, the caller has had one.
+ */
+static VOID uasEndPdoSlots(PUAS_FDO fdo, PUAS_PDO pdo, UCHAR srbStatus,
+                           BOOLEAN quarantine)
+{
+    UAS_ACT a;
+    ULONG t;
+    KIRQL irql;
+
+    if (fdo->Slots == NULL) {
+        return;
+    }
+    for (t = 1; t <= UAS_MAX_TAGS; t++) {
+        uasActInit(&a);
+        KeAcquireSpinLock(&fdo->Lock, &irql);
+        if (uasSlotOfPdo(&fdo->Slots[t], pdo)) {
+            uasEndSlotLocked(fdo, &fdo->Slots[t], srbStatus, quarantine, &a);
+        }
+        KeReleaseSpinLock(&fdo->Lock, irql);
+        uasActRun(fdo, &a);
+    }
+}
+
+/* Signals a closing LUN's waiter. */
+static VOID uasCloseDone(PUAS_FDO fdo, PUAS_PDO pdo)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    pdo->CloseRequested = FALSE;
+    KeSetEvent(&pdo->CloseDone, IO_NO_INCREMENT, FALSE);
+    KeReleaseSpinLock(&fdo->Lock, irql);
+}
+
+/*
+ * The worker's half of UasEngineCloseLun. ABORT TASK for each of the LUN's
+ * commands in flight, each ended with the close status once the device has
+ * answered; the first that is not answered escalates to LOGICAL UNIT RESET
+ * for the LUN, then to the port reset (uasResetLun), either of which ends
+ * the rest. No new command starts meanwhile (Recovering), so the slots
+ * looked at stay the LUN's: each is still re-tested by its request.
+ */
+static VOID uasCloseLun(PUAS_FDO fdo, PUAS_PDO pdo)
+{
+    UAS_ACT a;
+    PUAS_SLOT slot;
+    PIRP request;
+    ULONG t;
+    ULONG tag;
+    BOOLEAN escalate;
+    KIRQL irql;
+
+    escalate = FALSE;
+    for (t = 1; t <= UAS_MAX_TAGS && !escalate; t++) {
+        KeAcquireSpinLock(&fdo->Lock, &irql);
+        slot = &fdo->Slots[t];
+        request = uasSlotOfPdo(slot, pdo) ? slot->Request : NULL;
+        tag = slot->Tag;
+        KeReleaseSpinLock(&fdo->Lock, irql);
+        if (request == NULL) {
+            continue;
+        }
+        fdo->Counters[UAS_CTR_ABORTS]++;
+        if (!uasTmfOk(uasTmf(fdo, UAS_TMF_ABORT_TASK, pdo->Lun, tag))) {
+            escalate = TRUE;
+            break;
+        }
+        uasActInit(&a);
+        KeAcquireSpinLock(&fdo->Lock, &irql);
+        if (uasSlotOfPdo(slot, pdo) && slot->Request == request) {
+            uasEndSlotLocked(fdo, slot, pdo->CloseStatus, FALSE, &a);
+        }
+        KeReleaseSpinLock(&fdo->Lock, irql);
+        uasActRun(fdo, &a);
+    }
+    if (escalate) {
+        if (uasResetLun(fdo, pdo->Lun)) {
+            /* uasResetLun ended the LUN's commands BUS_RESET; any left
+             * (none, unless the reset ended them all already) close too. */
+            uasEndPdoSlots(fdo, pdo, pdo->CloseStatus, FALSE);
+        } else {
+            uasEndPdoSlots(fdo, pdo, pdo->CloseStatus, TRUE);
+        }
+    }
+    uasCloseDone(fdo, pdo);
+}
+
+/* Lock held. A LUN waiting for the worker to close it. */
+static PUAS_PDO uasCloseNext(PUAS_FDO fdo)
+{
+    ULONG i;
+
+    for (i = 0; i < fdo->LunCount; i++) {
+        if (fdo->Luns[i]->CloseRequested) {
+            return fdo->Luns[i];
+        }
+    }
+    return NULL;
 }
 
 /* Lock held. The in-flight command carrying an SRB, if any. */
@@ -1221,9 +1388,10 @@ static VOID uasRecoveryRequest(PUAS_FDO fdo, PIRP irp)
 #define UAS_RECOVER_TIMEOUT 1
 #define UAS_RECOVER_REQUEST 2
 #define UAS_RECOVER_RESET   3
+#define UAS_RECOVER_CLOSE   4
 
 static ULONG uasRecoveryNext(PUAS_FDO fdo, PUAS_SLOT *slotOut,
-                             PIRP *irpOut)
+                             PIRP *irpOut, PUAS_PDO *pdoOut)
 {
     PUAS_SLOT slot;
     PLIST_ENTRY e;
@@ -1235,6 +1403,13 @@ static ULONG uasRecoveryNext(PUAS_FDO fdo, PUAS_SLOT *slotOut,
             !slot->Aborted) {
             return UAS_RECOVER_RESET;
         }
+    }
+    *pdoOut = uasCloseNext(fdo);
+    if (*pdoOut != NULL) {
+        return UAS_RECOVER_CLOSE;
+    }
+    if (fdo->Quarantined != 0) {
+        return UAS_RECOVER_RESET;
     }
     if (!IsListEmpty(&fdo->RecoveryRequests)) {
         e = RemoveHeadList(&fdo->RecoveryRequests);
@@ -1261,6 +1436,7 @@ static VOID uasRecoveryWorker(PVOID context)
 {
     PUAS_FDO fdo;
     PUAS_SLOT slot;
+    PUAS_PDO pdo;
     PIRP irp;
     ULONG what;
     ULONG rounds;
@@ -1273,6 +1449,7 @@ static VOID uasRecoveryWorker(PVOID context)
     for (rounds = 0;; rounds++) {
         slot = NULL;
         irp = NULL;
+        pdo = NULL;
         KeAcquireSpinLock(&fdo->Lock, &irql);
         fdo->Recovering = TRUE;
         if (!fdo->Started || fdo->Gone || fdo->Dead) {
@@ -1280,9 +1457,12 @@ static VOID uasRecoveryWorker(PVOID context)
                 e = RemoveHeadList(&fdo->RecoveryRequests);
                 InsertTailList(&drain, e);
             }
-            what = UAS_RECOVER_NONE;
+            /* A close can no longer reach the device: its commands end
+             * with their tags held (uasEndPdoSlots, below the loop). */
+            pdo = uasCloseNext(fdo);
+            what = (pdo != NULL) ? UAS_RECOVER_CLOSE : UAS_RECOVER_NONE;
         } else {
-            what = uasRecoveryNext(fdo, &slot, &irp);
+            what = uasRecoveryNext(fdo, &slot, &irp, &pdo);
         }
         if (what == UAS_RECOVER_NONE) {
             /* Decided under the same hold that ends the pass, so a fault
@@ -1299,6 +1479,14 @@ static VOID uasRecoveryWorker(PVOID context)
             what = UAS_RECOVER_RESET;
         }
         switch (what) {
+        case UAS_RECOVER_CLOSE:
+            if (!fdo->Started || fdo->Gone || fdo->Dead) {
+                uasEndPdoSlots(fdo, pdo, pdo->CloseStatus, TRUE);
+                uasCloseDone(fdo, pdo);
+            } else {
+                uasCloseLun(fdo, pdo);
+            }
+            break;
         case UAS_RECOVER_TIMEOUT:
             (VOID)uasAbortTask(fdo, slot, SRB_STATUS_TIMEOUT);
             break;
@@ -1409,6 +1597,9 @@ VOID UasEngineStart(PUAS_FDO fdo)
         UasTagInit(&fdo->Tags, 2);
         fdo->QueueDepth = 1;
     }
+    /* uasFdoStart has just selected the configuration again, which the
+     * device takes as an I_T nexus loss: no task survives it. */
+    fdo->Quarantined = 0;
     fdo->Active = 0;
     fdo->Dead = FALSE;
     fdo->Recovering = FALSE;
@@ -1636,21 +1827,30 @@ VOID UasEngineOpenLun(PUAS_FDO fdo, PUAS_PDO pdo)
 }
 
 /*
- * PASSIVE_LEVEL. The LUN's PDO is stopping or leaving: admission closes,
- * its queued and held requests are failed with srbStatus, its commands in
- * flight are ended with it, and the call waits - with no timeout, since a
- * command is finished only when the bus has given its transfers back - for
- * the last of the LUN's requests to complete.
+ * PASSIVE_LEVEL. The LUN's PDO is stopping or leaving. Admission closes
+ * first, then its queued and held requests are failed with srbStatus. Its
+ * commands in flight are ended with srbStatus by the recovery worker, which
+ * has the device terminate each first (ABORT TASK, escalating: uasCloseLun)
+ * so their tags are safe to reuse; when the device cannot be reached they
+ * are ended here, their tags quarantined. The call then waits - with no
+ * timeout, since a command is finished only when the bus has given its
+ * transfers back - for the last of the LUN's requests to complete.
  */
 VOID UasEngineCloseLun(PUAS_FDO fdo, PUAS_PDO pdo, UCHAR srbStatus)
 {
     LIST_ENTRY drain;
     PLIST_ENTRY e;
     PLIST_ENTRY next;
+    BOOLEAN live;
+    BOOLEAN viaWorker;
+    BOOLEAN queue;
     ULONG t;
     KIRQL irql;
 
     InitializeListHead(&drain);
+    live = FALSE;
+    viaWorker = FALSE;
+    queue = FALSE;
     KeAcquireSpinLock(&fdo->Lock, &irql);
     pdo->Admit = FALSE;
     for (e = fdo->Queue.Flink; e != &fdo->Queue; e = next) {
@@ -1670,25 +1870,32 @@ VOID UasEngineCloseLun(PUAS_FDO fdo, PUAS_PDO pdo, UCHAR srbStatus)
             InsertTailList(&drain, e);
         }
     }
+    if (fdo->Slots != NULL) {
+        for (t = 1; t <= UAS_MAX_TAGS && !live; t++) {
+            live = uasSlotOfPdo(&fdo->Slots[t], pdo);
+        }
+    }
+    if (live && fdo->Started && !fdo->Gone && !fdo->Dead) {
+        pdo->CloseStatus = srbStatus;
+        pdo->CloseRequested = TRUE;
+        KeClearEvent(&pdo->CloseDone);
+        queue = uasWantRecovery(fdo);
+        viaWorker = TRUE;
+    }
     KeReleaseSpinLock(&fdo->Lock, irql);
     while (!IsListEmpty(&drain)) {
         e = RemoveHeadList(&drain);
         uasFailRequest(fdo, CONTAINING_RECORD(e, IRP, Tail.Overlay.ListEntry),
                        srbStatus);
     }
-    if (fdo->Slots != NULL) {
-        for (t = 1; t <= UAS_MAX_TAGS; t++) {
-            KeAcquireSpinLock(&fdo->Lock, &irql);
-            if (fdo->Slots[t].State != UAS_SLOT_FREE &&
-                !fdo->Slots[t].Tmf && fdo->Slots[t].Request != NULL &&
-                fdo->Slots[t].Request->Tail.Overlay.DriverContext[UAS_CTX_PDO]
-                    == pdo) {
-                KeReleaseSpinLock(&fdo->Lock, irql);
-                uasEndSlot(fdo, &fdo->Slots[t], srbStatus);
-            } else {
-                KeReleaseSpinLock(&fdo->Lock, irql);
-            }
+    if (viaWorker) {
+        if (queue) {
+            ExQueueWorkItem(&fdo->Recovery, DelayedWorkQueue);
         }
+        (VOID)KeWaitForSingleObject(&pdo->CloseDone, Executive, KernelMode,
+                                    FALSE, NULL);
+    } else if (live) {
+        uasEndPdoSlots(fdo, pdo, srbStatus, TRUE);
     }
     (VOID)KeWaitForSingleObject(&pdo->RequestsIdle, Executive, KernelMode,
                                 FALSE, NULL);

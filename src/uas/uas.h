@@ -124,6 +124,9 @@ typedef struct _UAS_SLOT {
     BOOLEAN ResponseOnly;           /* a RESPONSE IU ended a command */
     BOOLEAN TmfSignalled;
     BOOLEAN Finishing;              /* handed to uasFinish, by one path only */
+    BOOLEAN Quarantine;             /* ended with no device-side termination:
+                                     * its tag is held, not reused, until a
+                                     * port reset or a new configuration */
     PIRP Request;                   /* the SRB's IRP (or the internal one) */
     PSCSI_REQUEST_BLOCK Srb;
     ULONG Lun;
@@ -168,6 +171,13 @@ typedef struct _UAS_PDO {
     KEVENT RequestsIdle;
     LONG Busy;
     KEVENT BusyIdle;
+    /* A close the recovery worker carries out (UasEngineCloseLun): the
+     * LUN's commands in flight ended with CloseStatus, each by ABORT TASK
+     * (escalating), so the device has dropped them before their tags go
+     * back. FDO lock. */
+    BOOLEAN CloseRequested;
+    UCHAR CloseStatus;
+    KEVENT CloseDone;
     UCHAR Inquiry[UAS_INQUIRY_LENGTH];
 } UAS_PDO, *PUAS_PDO;
 
@@ -197,6 +207,7 @@ typedef struct _UAS_FDO {
 
     /* The engine (uas_xport.c). */
     UAS_TAGS Tags;
+    ULONG Quarantined;              /* bit (tag - 1): held, see Quarantine */
     ULONG QueueDepth;               /* commands in flight at most */
     ULONG Active;                   /* commands (not TMFs) in flight */
     LIST_ENTRY Queue;               /* IRPs, linked by Tail.Overlay.ListEntry */
