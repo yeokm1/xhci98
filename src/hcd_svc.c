@@ -239,6 +239,7 @@ ULONG HcdSvcArmTimer(PXHCI_EXTENSION ext, ULONG milliseconds, PVOID context,
     PHCD_TIMER slot;
     LARGE_INTEGER due;
     KIRQL oldIrql;
+    ULONG reused;
     ULONG i;
 
     if (ext == NULL || callback == NULL ||
@@ -248,17 +249,35 @@ ULONG HcdSvcArmTimer(PXHCI_EXTENSION ext, ULONG milliseconds, PVOID context,
     hc = HcdControllerFromExt(ext);
 
     slot = NULL;
+    reused = 0;
     KeAcquireSpinLock(&hc->TimerLock, &oldIrql);
     if (!hc->TimersClosed) {
-        for (i = 0; i < HCD_TIMER_SLOTS; i++) {
+        /*
+         * A pending arm of the same callback is superseded rather than left
+         * to hold its slot until it fires: the command watchdog, the only
+         * user, arms per command and its earlier context is stale once the
+         * next command is armed (xhci_cmd.c, one command outstanding), so
+         * with a 5 s timeout any burst of more than four commands ran
+         * unwatched (c16: 21-29 refusals a session). A slot whose timer has
+         * already fired keeps it until its DPC frees it.
+         */
+        for (i = 0; i < HCD_TIMER_SLOTS && slot == NULL; i++) {
+            if (hc->Timers[i].Busy && hc->Timers[i].Callback == callback &&
+                KeCancelTimer(&hc->Timers[i].Timer)) {
+                slot = &hc->Timers[i];
+                reused = 1;
+            }
+        }
+        for (i = 0; i < HCD_TIMER_SLOTS && slot == NULL; i++) {
             if (!hc->Timers[i].Busy) {
                 slot = &hc->Timers[i];
                 slot->Busy = 1;
-                break;
             }
         }
     }
-    if (slot != NULL) {
+    if (slot != NULL && reused) {
+        hc->TimerArmsSuperseded++;
+    } else if (slot != NULL) {
         hc->TimersInFlight++;
         if (hc->TimersInFlight == 1) {
             KeClearEvent(&hc->TimersIdle);

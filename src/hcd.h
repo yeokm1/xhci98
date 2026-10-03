@@ -53,8 +53,9 @@ typedef struct _HCD_COMMON {
 } HCD_COMMON, *PHCD_COMMON;
 
 /* The one-shot timer service's slots (hcd_svc.c). Four: the command
- * watchdog is the only user and arms one at a time; the rest absorb a
- * callback still in flight when the next command is armed. */
+ * watchdog is the only user, and a new arm of the same callback supersedes
+ * one still pending; the rest absorb callbacks already fired whose DPCs
+ * have not yet freed their slots. */
 #define HCD_TIMER_SLOTS         4UL
 #define HCD_TIMER_CONTEXT_BYTES 32UL
 
@@ -421,6 +422,8 @@ typedef struct _HCD_CONTROLLER {
     LONG TimersInFlight;            /* under TimerLock */
     ULONG TimersClosed;
     ULONG TimerArmsRefused;
+    ULONG TimerArmsSuperseded;      /* a pending arm of the same callback
+                                     * cancelled and its slot reused      */
     KEVENT TimersIdle;
     /* The MFINDEX sampler's own timer, not a slot of the service's: a
      * recurring arm must not be refused when the slots are full (Codex
@@ -556,6 +559,10 @@ typedef struct _HCD_CONTROLLER {
     KEVENT DoorGate;
     ULONG DoorRequests;
     ULONG DoorPassThru;
+    /* Root-hub FDO requests inside this controller (hcd_rh.c): raised under
+     * the root-hub PDO's ControllerLock while it still names this
+     * controller, and drained by the orphaning before the storage goes. */
+    LONG RootHubUsers;
 
     /* The controller lock (hcd_svc.h, HcdSvcControllerLock): created once at
      * AddDevice, outside Hc, which every start zeroes. */
@@ -571,6 +578,7 @@ typedef struct _HCD_CONTROLLER {
 typedef struct _HCD_ROOTHUB_PDO {
     HCD_COMMON Common;
     PHCD_CONTROLLER Controller;     /* NULL once orphaned (hcd_rh.c)      */
+    KSPIN_LOCK ControllerLock;      /* Controller and RootHubUsers' raise  */
     ULONG ReportedMissing;
     ULONG Started;
     ULONG RemoveReceived;

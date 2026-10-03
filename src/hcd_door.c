@@ -551,7 +551,8 @@ static ULONG hcdDoorPorts(PHCD_CONTROLLER hc)
  * channel (XhciLogVerbosity 0) and for a block too small for a header - the
  * three answers usbport gave for the miniport's nonzero returns - and 0 with
  * the outcome in the header otherwise. The caller holds the door gate, so
- * no start or stop runs under the copy. IRQL: PASSIVE_LEVEL.
+ * no start or stop runs under the copy; the power gate is taken inside it,
+ * the order the gates always nest in. IRQL: PASSIVE_LEVEL.
  */
 static ULONG hcdDoorSnapshot(PHCD_CONTROLLER hc, const UCHAR *guid,
                              PUCHAR params, ULONG paramLength)
@@ -622,8 +623,12 @@ static ULONG hcdDoorSnapshot(PHCD_CONTROLLER hc, const UCHAR *guid,
         return HCD_UU_OK;
     }
 
-    /* MMIO only on a started controller in D0: the gate keeps the mapping,
-     * and a powered-down function is not read. */
+    /* MMIO only on a started controller in D0: the door gate keeps the
+     * mapping, and the power gate, held from this check to the last register
+     * read, keeps a suspend from falling between the two (Codex review of
+     * 26-A.8, round 22, finding 2) - every path that changes DevicePower or
+     * SuspendedInD0 holds it. */
+    HcdPowerGateEnter(hc);
     mmio = (hc->ControllerStarted && hc->BarVa != NULL &&
             hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0 &&
             ext->HcInfoStatus == XHCI_HC_OK)
@@ -696,6 +701,7 @@ static ULONG hcdDoorSnapshot(PHCD_CONTROLLER hc, const UCHAR *guid,
         header->Status |= XHCI_SNAPSHOT_S_BAD_REGION;
     }
     XhciControllerLockRelease(ext, oldIrql);
+    HcdPowerGateLeave(hc);
     return HCD_UU_OK;
 }
 
@@ -888,6 +894,8 @@ static VOID hcdDoorConnection(PHCD_CONTROLLER hc, ULONG port,
     ULONG sourceBytes;
     ULONG wMax;
     ULONG dci;
+    ULONG offset;
+    ULONG slotDw3;
     KIRQL oldIrql;
     KIRQL lockIrql;
 
@@ -914,15 +922,24 @@ static VOID hcdDoorConnection(PHCD_CONTROLLER hc, ULONG port,
     source = NULL;
     sourceBytes = 0;
     if (dev != NULL) {
-        /* The slot id stands for the address: xHCI assigns the USB address
-         * itself, and nothing in usbui.dll reads this field. */
-        c->Address = dev->SlotId;
         c->ConfigValue = dev->ConfigValue;
         if (dev->Config != NULL) {
             source = dev->Config;
             sourceBytes = dev->ConfigLength;
         }
         XhciControllerLockAcquire(&hc->Hc, &lockIrql);
+        /* The address the xHC assigned, from the Output Slot Context: the
+         * stop clears STARTED under this lock before the common buffer
+         * goes, and below Addressed the field is not an address. */
+        if ((hc->Hc.Flags & XHCI_EXT_FLAG_STARTED) != 0 &&
+            dev->SlotId != 0 &&
+            XhciSlotContextOffset(&hc->Hc.Layout, dev->SlotId, &offset) ==
+                XHCI_LAYOUT_OK) {
+            slotDw3 = XhciCommonAt(&hc->Hc, offset)[3];
+            if (XHCI_SLOT_GET_STATE(slotDw3) >= XHCI_SLOT_STATE_ADDRESSED) {
+                c->Address = XHCI_SLOT_GET_ADDRESS(slotDw3);
+            }
+        }
         for (dci = 2; dci < 32 && c->Pipes < HCD_DOOR_PIPES; dci++) {
             pipe = dev->Pipes[dci];
             if (pipe == NULL || pipe->Closed) {
@@ -1019,9 +1036,11 @@ static NTSTATUS hcdDoorConnInfo(PHCD_CONTROLLER hc, PUCHAR buf, ULONG inLen,
     }
     buf[24] = 0;                            /* DeviceIsHub                  */
     hcdPut16(buf, 25, c.Address);
+    /* NumberOfOpenPipes is the device's count however few records fit, so
+     * a caller can size its next request from it. */
     room = (outLen - HCD_CONN_INFO_BYTES) / HCD_PIPE_INFO_BYTES;
     n = (c.Pipes < room) ? c.Pipes : room;
-    hcdPut32(buf, 27, n);
+    hcdPut32(buf, 27, c.Pipes);
     hcdPut32(buf, 31, c.Status);
     for (i = 0; i < n; i++) {
         hcdCopy(buf + HCD_CONN_INFO_BYTES + i * HCD_PIPE_INFO_BYTES,

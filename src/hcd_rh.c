@@ -95,6 +95,20 @@ static VOID hcdRootHubName(PWCHAR buffer, ULONG serial)
 /* The root-hub PDO, from the controller FDO's side                         */
 /* ----------------------------------------------------------------------- */
 
+/* The root-hub PDO forgets its controller, under the lock a request takes
+ * the controller under (hcdRhControllerEnter). IRQL: <= DISPATCH_LEVEL. */
+static VOID hcdRhOrphan(PHCD_ROOTHUB_PDO ext)
+{
+    KIRQL oldIrql;
+
+    KeAcquireSpinLock(&ext->ControllerLock, &oldIrql);
+    if (ext->Controller != NULL) {
+        ext->Controller->RootHubPdo = NULL;
+    }
+    ext->Controller = NULL;
+    KeReleaseSpinLock(&ext->ControllerLock, oldIrql);
+}
+
 /* Create the PDO once per controller, at its first successful start, and
  * have PnP ask for BusRelations. */
 NTSTATUS HcdRootHubCreatePdo(PHCD_CONTROLLER hc)
@@ -125,6 +139,7 @@ NTSTATUS HcdRootHubCreatePdo(PHCD_CONTROLLER hc)
     ext->Common.PnpState = HCD_PNP_ADDED;
     ext->Common.DevicePower = PowerDeviceD0;
     ext->Common.SystemPower = PowerSystemWorking;
+    KeInitializeSpinLock(&ext->ControllerLock);
     ext->Controller = hc;
     ext->Serial = serial;
 
@@ -145,25 +160,33 @@ NTSTATUS HcdRootHubCreatePdo(PHCD_CONTROLLER hc)
  * controller, whose storage goes now, and deletes itself at that REMOVE
  * (Codex review of batch (b), round 1, finding 2). PnP sends a parent's
  * remove only after its children's, one at a time, so this does not race
- * the root hub's own handlers.
+ * the root hub's own PnP handlers; a device-control request through a handle
+ * still open is not serialized with it, and is waited out (RootHubUsers).
  */
 VOID HcdRootHubDeletePdo(PHCD_CONTROLLER hc)
 {
     PHCD_ROOTHUB_PDO ext;
+    LARGE_INTEGER due;
 
     HcdDevicePdoReleaseAll(hc);
     if (hc->RootHubPdo == NULL) {
         return;
     }
     ext = (PHCD_ROOTHUB_PDO)hc->RootHubPdo->DeviceExtension;
-    ext->Controller = NULL;
+    hcdRhOrphan(ext);
+    /* A request that took the controller before the orphaning is still
+     * inside it; the storage outlives it (Codex review of 26-A.8, round 22,
+     * finding 1). */
+    while (hc->RootHubUsers != 0) {
+        HcdRelativeMs(&due, 1);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
     if (ext->RemoveReceived || !ext->Reported) {
         /* PnP has removed it, or never learned of it and so never will
          * (Codex review of batch (b), round 2, finding 4). */
         ext->Deleted = 1;
-        IoDeleteDevice(hc->RootHubPdo);
+        IoDeleteDevice(ext->Common.Self);
     }
-    hc->RootHubPdo = NULL;
 }
 
 /*
@@ -324,10 +347,7 @@ NTSTATUS HcdRootHubPdoPnp(PHCD_ROOTHUB_PDO pdo, PIRP irp)
         pdo->RemoveReceived = 1;
         if (pdo->Controller == NULL || pdo->ReportedMissing) {
             /* Orphaned by the controller's remove, or reported missing. */
-            if (pdo->Controller != NULL) {
-                pdo->Controller->RootHubPdo = NULL;
-                pdo->Controller = NULL;
-            }
+            hcdRhOrphan(pdo);
             pdo->Deleted = 1;
             HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
             IoDeleteDevice(pdo->Common.Self);
@@ -435,12 +455,32 @@ static VOID hcdRhIoLeave(PHCD_ROOTHUB_FDO fdo)
     }
 }
 
-/* The controller, through the root-hub PDO's extension; NULL once the
- * controller's remove has orphaned that PDO (HcdRootHubDeletePdo). The FDO
- * keeps no copy, which would outlive the controller's storage. */
-static PHCD_CONTROLLER hcdRhController(PHCD_ROOTHUB_FDO fdo)
+/* The controller, through the root-hub PDO's extension, counted in its
+ * RootHubUsers until hcdRhControllerLeave; NULL once the controller's remove
+ * has orphaned that PDO (HcdRootHubDeletePdo), which waits the count out
+ * before the storage goes. The FDO keeps no copy. IRQL: <= DISPATCH_LEVEL. */
+static PHCD_CONTROLLER hcdRhControllerEnter(PHCD_ROOTHUB_FDO fdo)
 {
-    return ((PHCD_ROOTHUB_PDO)fdo->Pdo->DeviceExtension)->Controller;
+    PHCD_ROOTHUB_PDO pdo;
+    PHCD_CONTROLLER hc;
+    KIRQL oldIrql;
+
+    pdo = (PHCD_ROOTHUB_PDO)fdo->Pdo->DeviceExtension;
+    KeAcquireSpinLock(&pdo->ControllerLock, &oldIrql);
+    hc = pdo->Controller;
+    if (hc != NULL) {
+        (VOID)InterlockedIncrement(&hc->RootHubUsers);
+    }
+    KeReleaseSpinLock(&pdo->ControllerLock, oldIrql);
+    return hc;
+}
+
+/* IRQL: <= DISPATCH_LEVEL. */
+static VOID hcdRhControllerLeave(PHCD_CONTROLLER hc)
+{
+    if (hc != NULL) {
+        (VOID)InterlockedDecrement(&hc->RootHubUsers);
+    }
 }
 
 static NTSTATUS hcdRhPassDown(PHCD_ROOTHUB_FDO fdo, PIRP irp)
@@ -521,12 +561,13 @@ NTSTATUS HcdRootHubFdoPnp(PHCD_ROOTHUB_FDO fdo, PIRP irp)
          * before the IRP goes down, since the PDO below may delete itself,
          * and its extension with the controller pointer, on the way.
          */
-        hc = hcdRhController(fdo);
+        hc = hcdRhControllerEnter(fdo);
         HcdDoorRootHubRemove(fdo, hc);
         if (hc != NULL) {
             HcdEnumDetach(hc);
             HcdDevicePdoReleaseAll(hc);
         }
+        hcdRhControllerLeave(hc);
         irp->IoStatus.Status = STATUS_SUCCESS;
         status = hcdRhPassDown(fdo, irp);
         IoDetachDevice(fdo->LowerDevice);
@@ -550,12 +591,13 @@ NTSTATUS HcdRootHubFdoPnp(PHCD_ROOTHUB_FDO fdo, PIRP irp)
         status = irp->IoStatus.Status;
         if (NT_SUCCESS(status)) {
             fdo->Common.PnpState = HCD_PNP_STARTED;
-            hc = hcdRhController(fdo);
+            hc = hcdRhControllerEnter(fdo);
             HcdDoorRootHubStart(fdo, hc);
             if (hc != NULL) {
                 /* PDOs may be created now, and every port is looked at. */
                 HcdEnumAttach(hc);
             }
+            hcdRhControllerLeave(hc);
         }
         status = HcdCompleteIrp(irp, status, 0);
         hcdRhIoLeave(fdo);
@@ -585,8 +627,9 @@ NTSTATUS HcdRootHubFdoPnp(PHCD_ROOTHUB_FDO fdo, PIRP irp)
             PDEVICE_RELATIONS rel;
 
             old = (PDEVICE_RELATIONS)irp->IoStatus.Information;
-            hc = hcdRhController(fdo);
+            hc = hcdRhControllerEnter(fdo);
             rel = (hc != NULL) ? HcdDevicePdoRelations(hc, old) : NULL;
+            hcdRhControllerLeave(hc);
             if (rel != NULL) {
                 if (old != NULL) {
                     HcdPoolFreeForeign(old);
@@ -623,12 +666,15 @@ NTSTATUS HcdRootHubFdoPower(PHCD_ROOTHUB_FDO fdo, PIRP irp)
  * (hcd_door.c), inside the FDO's I/O count so its remove waits them out. */
 NTSTATUS HcdRootHubFdoDeviceControl(PHCD_ROOTHUB_FDO fdo, PIRP irp)
 {
+    PHCD_CONTROLLER hc;
     NTSTATUS status;
 
     if (!hcdRhIoEnter(fdo)) {
         return HcdCompleteIrp(irp, STATUS_DELETE_PENDING, 0);
     }
-    status = HcdDoorRootHubIoctl(hcdRhController(fdo), irp);
+    hc = hcdRhControllerEnter(fdo);
+    status = HcdDoorRootHubIoctl(hc, irp);
+    hcdRhControllerLeave(hc);
     hcdRhIoLeave(fdo);
     return status;
 }

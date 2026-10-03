@@ -294,9 +294,10 @@ static ULONG xhciCommandArmCurrent(PXHCI_EXTENSION ext,
  *
  * `mode` is the caller's context (XHCI_ARM_*). An arm a DEFER context may not
  * make on the Version 300 tier is latched in the extension for
- * XhciCommandDrainOwedArm, and so is one Ex refused: the watchdog is the
- * command's, so a lost arm is re-owed rather than left to the 32 s age
- * detector the legacy service's silence needed.
+ * XhciCommandDrainOwedArm. One Ex refused is re-owed the same way only
+ * while ArmThroughExOnly is set; the HCD leaves it clear, and its timer
+ * service makes refusals rare by superseding the pending arm (hcd_svc.c),
+ * with the thread's own command wait and the 32 s age detector behind it.
  *
  * IRQL: <= DISPATCH_LEVEL.
  */
