@@ -519,7 +519,11 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
     end = (PUCHAR)urb + urb->UrbHeader.Length;
     while (usbd == XHCI_USBD_STATUS_SUCCESS && p + fixed <= end) {
         ii = (PUSBD_INTERFACE_INFORMATION)p;
+        /* An interface number past 31 is refused, not served: the
+         * alternate each one is at is kept for RESET_PORT's replay in a
+         * 32-entry table (Codex review of batch (c), round 16, finding 5). */
         if (ii->Length < fixed || p + ii->Length > end ||
+            ii->InterfaceNumber >= 32 ||
             XhciPipeFindInterface((const UCHAR *)cd, total,
                                   ii->InterfaceNumber, ii->AlternateSetting,
                                   &iface) != XHCI_PIPE_OK ||
@@ -693,6 +697,7 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             FIELD_OFFSET(struct _URB_SELECT_INTERFACE, Interface) + fixed ||
         ii->Length < fixed ||
         (PUCHAR)ii + ii->Length > (PUCHAR)urb + urb->UrbHeader.Length ||
+        ii->InterfaceNumber >= 32 ||
         XhciPipeFindInterface(dev->Selected, dev->SelectedLength,
                               ii->InterfaceNumber, ii->AlternateSetting,
                               &iface) != XHCI_PIPE_OK ||

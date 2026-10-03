@@ -443,6 +443,9 @@ typedef struct _HCD_CONTROLLER {
     ULONG UrbsGone;
     ULONG UrbsWaited;               /* parked on a pipe's Waiting list   */
     ULONG UrbsMdlShort;             /* length past the MDL: refused      */
+    ULONG IsoBadStartFrames;        /* explicit StartFrame not schedulable */
+    ULONG WaitingKicks;             /* a waiter started by admission or a
+                                     * cancel, not by a record's release  */
     ULONG DevicesKept;              /* freed with URBs left: DMA not stopped */
     ULONG Ep0Resets;
     ULONG EnumCommandsRefused;
@@ -613,6 +616,7 @@ NTSTATUS HcdIoRefuseLater(struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb,
 VOID HcdIoRefusedInit(struct _HCD_DEVICE_PDO *pdo);
 VOID HcdIoRefusedDrain(struct _HCD_DEVICE_PDO *pdo);
 ULONG HcdIoDeviceGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+VOID HcdIoIsoRefused(PVOID urb, LONG usbd);
 
 /* hcd_dma.c */
 NTSTATUS HcdDmaOpen(PHCD_CONTROLLER hc);

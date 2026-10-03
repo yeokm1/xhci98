@@ -722,21 +722,31 @@ static VOID hcdQueryInterfaceTrace(PIO_STACK_LOCATION stack)
 {
 #ifdef XHCI_DBG_TRACE
     static ULONG seen[8];
-    static ULONG count;
+    static LONG count;
     ULONG data1;
+    ULONG limit;
+    LONG slot;
     ULONG i;
 
     if (stack->Parameters.QueryInterface.InterfaceType == NULL) {
         return;
     }
     data1 = stack->Parameters.QueryInterface.InterfaceType->Data1;
-    for (i = 0; i < count; i++) {
+    /* The slot is claimed interlocked: two PDOs' queries on two
+     * processors share the table (Codex review of batch (c), round 16,
+     * finding 6). */
+    limit = (ULONG)count;
+    if (limit > 8) {
+        limit = 8;
+    }
+    for (i = 0; i < limit; i++) {
         if (seen[i] == data1) {
             return;
         }
     }
-    if (count < 8) {
-        seen[count++] = data1;
+    slot = InterlockedIncrement(&count) - 1;
+    if (slot < 8) {
+        seen[slot] = data1;
     }
     XHCI_DBG_VALUE("hcd: QUERY_INTERFACE not answered, GUID Data1", data1);
     XHCI_DBG_VALUE("hcd: QUERY_INTERFACE not answered, version/size",

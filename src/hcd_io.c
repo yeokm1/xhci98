@@ -235,12 +235,18 @@ static PHCD_XFER hcdTakeRecord(PHCD_PIPE pipe, PIRP irp)
  * Every IRP leaving it unserved completes at the next tick
  * (HcdIoRefuseLater), never inline.
  */
+static VOID hcdLaunch(PHCD_CONTROLLER hc, PHCD_XFER x, PVOID urb,
+                      const HCD_IO_REQUEST *req);
+static PHCD_XFER hcdWaitingStart(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
+static VOID hcdWaitingLaunch(PHCD_CONTROLLER hc, PHCD_XFER x);
+
 static VOID NTAPI hcdWaitCancel(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 {
     PHCD_DEVICE_PDO pdo;
     PHCD_CONTROLLER hc;
     PHCD_PIPE pipe;
     PHCD_USB_DEVICE dev;
+    PHCD_XFER x;
     PVOID urb;
     KIRQL oldIrql;
 
@@ -260,8 +266,13 @@ static VOID NTAPI hcdWaitCancel(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     RemoveEntryList(&Irp->Tail.Overlay.ListEntry);
     dev = pipe->Device;
+    x = hcdWaitingStart(hc, pipe);
     XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (x != NULL) {
+        hcdWaitingLaunch(hc, x);
+    }
     urb = IoGetCurrentIrpStackLocation(Irp)->Parameters.Others.Argument1;
+    HcdIoIsoRefused(urb, HCD_USBD_CANCELED);
     (VOID)HcdIoRefuseLater(pdo, Irp, urb, HCD_USBD_CANCELED);
     (VOID)InterlockedDecrement(&pdo->UrbsPending);
     (VOID)InterlockedDecrement(&dev->Refs);
@@ -332,6 +343,9 @@ static VOID hcdWaitingRefuse(PLIST_ENTRY list, PHCD_USB_DEVICE dev, LONG usbd)
         entry = RemoveHeadList(list);
         irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
         pdo = (PHCD_DEVICE_PDO)irp->Tail.Overlay.DriverContext[2];
+        HcdIoIsoRefused(
+            IoGetCurrentIrpStackLocation(irp)->Parameters.Others.Argument1,
+            usbd);
         (VOID)HcdIoRefuseLater(
             pdo, irp,
             IoGetCurrentIrpStackLocation(irp)->Parameters.Others.Argument1,
@@ -365,6 +379,54 @@ static PIRP hcdRecordRelease(PHCD_PIPE pipe, PHCD_XFER x)
         x->Seq = ++pipe->Seq;
     }
     return next;
+}
+
+/*
+ * A free record for the first waiting IRP that can be taken, claimed for
+ * it; NULL when there is no free record or no such IRP. Admission parks
+ * behind waiting IRPs without looking for a free record, and a record's
+ * release skips an IRP whose cancel routine is running, so without this a
+ * waiter could stay listed with every record free once that routine has
+ * taken its IRP away (Codex review of batch (c), round 16, finding 1): the
+ * cancel routine and every parking call it. Controller lock held.
+ */
+static PHCD_XFER hcdWaitingStart(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
+{
+    PIRP irp;
+    ULONG i;
+
+    if (pipe->Closed || pipe->Device->Gone) {
+        return NULL;
+    }
+    for (i = 0; i < HCD_PIPE_XFERS; i++) {
+        if (pipe->Xfers[i].State == HCD_XFER_FREE) {
+            break;
+        }
+    }
+    if (i == HCD_PIPE_XFERS) {
+        return NULL;
+    }
+    irp = hcdWaitingTake(pipe);
+    if (irp == NULL) {
+        return NULL;
+    }
+    hc->WaitingKicks++;
+    return hcdTakeRecord(pipe, irp);
+}
+
+/* Launch a record hcdWaitingStart or hcdRecordRelease claimed for a waiting
+ * IRP, its request re-read from the URB. IRQL: <= DISPATCH_LEVEL, no lock
+ * held. */
+static VOID hcdWaitingLaunch(PHCD_CONTROLLER hc, PHCD_XFER x)
+{
+    HCD_IO_REQUEST req;
+    PVOID urb;
+
+    x->Pdo = (PHCD_DEVICE_PDO)x->Irp->Tail.Overlay.DriverContext[2];
+    urb = IoGetCurrentIrpStackLocation(x->Irp)->Parameters.Others.Argument1;
+    hcdLaunch(hc, x, urb,
+              HcdUrbIoRequest(urb, &req) == XHCI_USBD_STATUS_SUCCESS ? &req
+                                                                     : NULL);
 }
 
 /* A record on its way: mapped by the pump, or published at once when it
@@ -557,6 +619,8 @@ static ULONG hcdIsoPublish(PHCD_CONTROLLER hc, PHCD_PIPE pipe, PHCD_XFER x)
     ULONG answer;
     ULONG start;
     ULONG now;
+    ULONG frameId;
+    ULONG ok;
     ULONG i;
 
     ext = &hc->Hc;
@@ -588,6 +652,24 @@ static ULONG hcdIsoPublish(PHCD_CONTROLLER hc, PHCD_PIPE pipe, PHCD_XFER x)
     }
     for (i = 0; i < blk->NumberOfPackets; i++) {
         blk->Packet[i].FrameNumber = start + XhciPipeIsoFrameOf(i, interval);
+    }
+    if (!x->Asap) {
+        /* The engine falls back to SIA for a group whose Frame IDs it cannot
+         * use, which would move an explicit StartFrame to "now" (Codex review
+         * of batch (c), round 16, finding 2). A start the controller cannot
+         * be told - no CFC, no frame sample, or a packet outside the IST+1
+         * to 895 frame window - is refused as BAD_START_FRAME instead. */
+        frameId = 0;
+        ok = req.Frames.Allowed;
+        for (i = 0; ok && i < blk->NumberOfPackets; i++) {
+            ok = XhciXferFrameIdUsable(&req.Frames,
+                                       blk->Packet[i].FrameNumber, &frameId);
+        }
+        if (!ok) {
+            hc->IsoBadStartFrames++;
+            x->Status = HCD_USBD_BAD_START_FRAME;
+            return XHCI_XFER_BAD_PARAM;
+        }
     }
     answer = XhciXferSubmitIso(pipe->Queue, pipe->Ring, &req,
                                req.DirectionIn, &x->Xfer, x, ext->IsoScratch,
@@ -676,13 +758,24 @@ static LONG hcdIsoComplete(PHCD_XFER x, ULONG engine, LONG status,
 /* An isochronous URB refused before a record was filled: every packet
  * says so, as hcdIsoComplete would have written it. Only for a URB whose
  * packet count hcd_urb.c accepted. */
-static VOID hcdIsoRefused(PVOID urb, LONG usbd)
+VOID HcdIoIsoRefused(PVOID urb, LONG usbd)
 {
     struct _URB_ISOCH_TRANSFER *it;
+    ULONG fixed;
+    ULONG room;
     ULONG i;
 
     it = &((PURB)urb)->UrbIsochronousTransfer;
-    for (i = 0; i < it->NumberOfPackets; i++) {
+    if (it->Hdr.Function != URB_FUNCTION_ISOCH_TRANSFER) {
+        return;
+    }
+    /* Only the packet descriptors the URB's own length holds: a refusal may
+     * be of a URB whose NumberOfPackets failed validation. */
+    fixed = FIELD_OFFSET(struct _URB_ISOCH_TRANSFER, IsoPacket);
+    room = (it->Hdr.Length > fixed)
+               ? (it->Hdr.Length - fixed) / sizeof(USBD_ISO_PACKET_DESCRIPTOR)
+               : 0;
+    for (i = 0; i < it->NumberOfPackets && i < room; i++) {
         it->IsoPacket[i].Status = usbd;
         it->IsoPacket[i].Length = 0;
     }
@@ -877,7 +970,7 @@ static VOID hcdLaunch(PHCD_CONTROLLER hc, PHCD_XFER x, PVOID urb,
         x->Pdo = NULL;
         x->Urb = NULL;
         if (req != NULL && (req->Flags & HCD_IO_ISOCH) != 0) {
-            hcdIsoRefused(urb, usbd);
+            HcdIoIsoRefused(urb, usbd);
         }
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
         nextIrp = hcdRecordRelease(pipe, x);
@@ -914,11 +1007,13 @@ NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 {
     PHCD_PIPE pipe;
     PHCD_XFER x;
+    PHCD_XFER kick;
     KIRQL oldIrql;
     ULONG gone;
     ULONG parked;
 
     x = NULL;
+    kick = NULL;
     parked = 0;
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     gone = dev->Gone;
@@ -932,9 +1027,15 @@ NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         }
         if (x == NULL) {
             parked = hcdPark(hc, pipe, pdo, irp);
+            if (parked) {
+                kick = hcdWaitingStart(hc, pipe);
+            }
         }
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (kick != NULL) {
+        hcdWaitingLaunch(hc, kick);
+    }
     if (gone) {
         (VOID)InterlockedIncrement((PLONG)&hc->UrbsGone);
         (VOID)InterlockedDecrement(&dev->Refs);

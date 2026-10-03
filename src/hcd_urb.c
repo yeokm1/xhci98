@@ -305,7 +305,10 @@ LONG HcdUrbIoRequest(PVOID urbv, PHCD_IO_REQUEST req)
 
 /* A transfer URB: parsed, then submitted with a device reference that
  * passes to the IRP (HcdIoSubmit). A URB that cannot be parsed is refused
- * inline, as every deterministic dispatch error is. */
+ * inline, as every deterministic dispatch error is - except an isochronous
+ * one, which a streaming client resubmits from its completion routine and
+ * which therefore completes at the next tick, its packets stamped (Codex
+ * review of batch (c), round 16, finding 3). */
 static NTSTATUS hcdTransferUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
                                PIRP irp, PURB urb)
 {
@@ -315,6 +318,10 @@ static NTSTATUS hcdTransferUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
 
     usbd = HcdUrbIoRequest(urb, &req);
     if (usbd != USBD_STATUS_SUCCESS) {
+        if (urb->UrbHeader.Function == URB_FUNCTION_ISOCH_TRANSFER) {
+            HcdIoIsoRefused(urb, usbd);
+            return HcdIoRefuseLater(pdo, irp, urb, usbd);
+        }
         return hcdUrbComplete(irp, urb, usbd, STATUS_INVALID_PARAMETER);
     }
     dev = hcdDeviceRef(hc, pdo);
