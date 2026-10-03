@@ -330,41 +330,56 @@ static void test_resume_outcome(void)
     tries = 0;
 
     XhciHubPortDecide(XHCI_ENUM_BOUND, on, 0, &d);
-    XhciHubResumeOutcome(XHCI_ENUM_BOUND, XHCI_HUB_RESUME_DONE, &tries, &d);
+    XhciHubResumeOutcome(XHCI_ENUM_BOUND, XHCI_HUB_RESUME_DONE, 1, &tries, &d);
     CHECK(!d.Disconnect && !d.Connect && !d.Retry && !d.GaveUp,
           "resumed: the bound device stays as it is");
 
     XhciHubPortDecide(XHCI_ENUM_EMPTY, on & ~XHCI_HUB_PORT_ENABLE, 0, &d);
-    XhciHubResumeOutcome(XHCI_ENUM_EMPTY, XHCI_HUB_RESUME_DONE, &tries, &d);
+    XhciHubResumeOutcome(XHCI_ENUM_EMPTY, XHCI_HUB_RESUME_DONE, 0, &tries, &d);
     CHECK(d.Connect, "resumed: an empty port goes on to enumerate");
 
     XhciHubPortDecide(XHCI_ENUM_BOUND, on, 0, &d);
-    XhciHubResumeOutcome(XHCI_ENUM_BOUND, XHCI_HUB_RESUME_STUCK, &tries, &d);
-    CHECK(d.Retry && !d.Disconnect && !d.Connect, "first failure: retry");
+    XhciHubResumeOutcome(XHCI_ENUM_EMPTY, XHCI_HUB_RESUME_STUCK, 0,
+                         &tries, &d);
+    CHECK(d.Retry && !d.Disconnect && !d.Connect,
+          "nothing held, first failure: retry");
     CHECK_EQ(tries, 1, "counted");
-    XhciHubResumeOutcome(XHCI_ENUM_BOUND, XHCI_HUB_RESUME_STUCK, &tries, &d);
+    XhciHubResumeOutcome(XHCI_ENUM_EMPTY, XHCI_HUB_RESUME_STUCK, 0,
+                         &tries, &d);
     CHECK(d.Retry && !d.GaveUp, "second failure: retry");
-    XhciHubResumeOutcome(XHCI_ENUM_BOUND, XHCI_HUB_RESUME_STUCK, &tries, &d);
+    XhciHubResumeOutcome(XHCI_ENUM_EMPTY, XHCI_HUB_RESUME_STUCK, 0,
+                         &tries, &d);
     CHECK(d.GaveUp && !d.Retry, "third failure: given up");
-    CHECK(d.Disconnect && d.Connect, "and the port enumerated afresh");
+    CHECK(d.Connect, "and the port enumerated afresh");
     CHECK_EQ(tries, 0, "the count restarts");
+
+    /* A device held for the resume is never let go on a failure: torn
+     * down at once (round 5, finding 1). */
+    tries = 1;
+    XhciHubPortDecide(XHCI_ENUM_BOUND, on, 0, &d);
+    XhciHubResumeOutcome(XHCI_ENUM_BOUND, XHCI_HUB_RESUME_STUCK, 1, &tries,
+                         &d);
+    CHECK(d.GaveUp && !d.Retry, "held and stuck: no retry");
+    CHECK(d.Disconnect && d.Connect, "held and stuck: torn down, then "
+                                     "enumerated afresh");
+    CHECK_EQ(tries, 0, "and the count restarts");
 
     tries = 2;
     XhciHubPortDecide(XHCI_ENUM_BOUND, on, 0, &d);
-    XhciHubResumeOutcome(XHCI_ENUM_BOUND, XHCI_HUB_RESUME_DONE, &tries, &d);
+    XhciHubResumeOutcome(XHCI_ENUM_BOUND, XHCI_HUB_RESUME_DONE, 1, &tries, &d);
     CHECK_EQ(tries, 0, "a resume that finishes restarts the count");
 
     XhciHubPortDecide(XHCI_ENUM_BOUND, on, 0, &d);
-    XhciHubResumeOutcome(XHCI_ENUM_BOUND, XHCI_HUB_RESUME_DISABLED, &tries,
+    XhciHubResumeOutcome(XHCI_ENUM_BOUND, XHCI_HUB_RESUME_DISABLED, 1, &tries,
                          &d);
     CHECK(d.Disconnect && d.Connect, "a port error: enumerate afresh");
 
     XhciHubPortDecide(XHCI_ENUM_BOUND, on, 0, &d);
-    XhciHubResumeOutcome(XHCI_ENUM_BOUND, XHCI_HUB_RESUME_GONE, &tries, &d);
+    XhciHubResumeOutcome(XHCI_ENUM_BOUND, XHCI_HUB_RESUME_GONE, 1, &tries, &d);
     CHECK(d.Disconnect && !d.Connect, "the device left: torn down");
 
     XhciHubPortDecide(XHCI_ENUM_EMPTY, on, 0, &d);
-    XhciHubResumeOutcome(XHCI_ENUM_EMPTY, XHCI_HUB_RESUME_GONE, &tries, &d);
+    XhciHubResumeOutcome(XHCI_ENUM_EMPTY, XHCI_HUB_RESUME_GONE, 0, &tries, &d);
     CHECK(!d.Disconnect && !d.Connect, "nothing held, nothing to tear down");
 }
 

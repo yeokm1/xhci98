@@ -492,10 +492,18 @@ static VOID hcdHubReleaseBelow(PHCD_CONTROLLER hc, PHCD_USB_DEVICE *devs,
  * transfer's own time-out) - its C_PORT_SUSPEND cleared, the resume
  * recovery TRSMRCY waited, and only then the devices let go. Returns the
  * outcome (XHCI_HUB_RESUME_*): DONE, DISABLED or GONE by the port's status
- * (XhciHubResumeProgress), STUCK when a request failed or the deadline
- * passed. Thread only, powered.
+ * (XhciHubResumeProgress), STUCK when a request failed, the deadline
+ * passed, or the controller needs its recovery. Only DONE lets the held
+ * devices go; on any other outcome they stay held, *held says how many,
+ * and the caller's teardown frees them with their pipes still paused (or
+ * the invalidation does, once the controller has failed): a resume that
+ * may still finish must never meet their traffic before its recovery, and
+ * nothing more is asked of a controller whose recovery is due (Codex
+ * review of the Phase 27 integration, round 5, finding 1). Thread only,
+ * powered.
  */
-static ULONG hcdHubPortResume(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
+static ULONG hcdHubPortResume(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
+                              PULONG heldOut)
 {
     PHCD_USB_DEVICE devs[XHCI_MAX_SLOTS];
     KTIMER deadline;
@@ -508,7 +516,8 @@ static ULONG hcdHubPortResume(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
 
     held = hcdHubQuiesceBelow(hc, HcdHubPort(hc, hub, n), devs);
     progress = XHCI_HUB_RESUME_STUCK;
-    if (!hcdHubFeature(hc, hub, n, 0, XHCI_HUB_FEAT_PORT_SUSPEND)) {
+    if (hc->Hc.ControllerFailed || hc->ScratchTainted ||
+        !hcdHubFeature(hc, hub, n, 0, XHCI_HUB_FEAT_PORT_SUSPEND)) {
         goto done;
     }
     hc->HubResumes++;
@@ -544,7 +553,12 @@ static ULONG hcdHubPortResume(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
 done:
     XHCI_DBG_VALUE("hcd: hub port resumed by the bus, hub/port/outcome",
                    (hub->Index << 16) | (n << 8) | progress);
-    hcdHubReleaseBelow(hc, devs, held);
+    if (progress == XHCI_HUB_RESUME_DONE && !hc->Hc.ControllerFailed &&
+        !hc->ScratchTainted) {
+        hcdHubReleaseBelow(hc, devs, held);
+        held = 0;
+    }
+    *heldOut = held;
     return progress;
 }
 
@@ -559,6 +573,7 @@ done:
 ULONG HcdHubPortReset(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
                       PULONG speedClass)
 {
+    ULONG held;
     ULONG status;
     ULONG change;
     ULONG waited;
@@ -570,10 +585,17 @@ ULONG HcdHubPortReset(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
         return 0;
     }
     /* A suspended port is resumed before it is reset (xhci_hub.h). */
-    if (XhciHubResumeBeforeReset(status) &&
-        (hcdHubPortResume(hc, hub, n) != XHCI_HUB_RESUME_DONE ||
-         !HcdHubPortStatus(hc, hub, n, &status, &change))) {
-        return 0;
+    /* A device the port still holds - a RESET_PORT's - and failing to
+     * resume stays held: the failed reset cycles it, and its teardown frees
+     * it (hcd_enum.c, HcdEnumCycle). A resume that finishes clears the
+     * port's resume debt (round 5, finding 3). */
+    if (XhciHubResumeBeforeReset(status)) {
+        if (hcdHubPortResume(hc, hub, n, &held) != XHCI_HUB_RESUME_DONE ||
+            !HcdHubPortStatus(hc, hub, n, &status, &change)) {
+            return 0;
+        }
+        HcdHubPort(hc, hub, n)->ResumeTries = 0;
+        HcdHubPort(hc, hub, n)->ResumePending = 0;
     }
     /* An older reset's change cleared first, so the one that ends this
      * reset is this reset's (XhciHubResetProgress). */
@@ -624,16 +646,37 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
 {
     PHCD_USB_DEVICE devs[XHCI_MAX_SLOTS];
     PHCD_PORT q;
+    ULONG outcome;
     ULONG held;
     ULONG status;
     ULONG change;
     ULONG bit;
     ULONG selector;
 
+    q = HcdHubPort(hc, hub, n);
     if (!HcdHubPortStatus(hc, hub, n, &status, &change)) {
-        return 0;
+        if (!q->ResumePending) {
+            return 0;
+        }
+        /* A resume owed from an earlier look is not lost with this look's
+         * GET_STATUS: it counts as one more that did not finish, and is
+         * retried or given up as one (Codex review of the Phase 27
+         * integration, round 5, finding 2). Nothing was held: a retried
+         * resume holds nothing. */
+        XhciHubPortDecide(state, 0, 0, d);
+        d->Disconnect = 0;
+        d->Connect = 0;
+        XhciHubResumeOutcome(state, XHCI_HUB_RESUME_STUCK, 0,
+                             &q->ResumeTries, d);
+        goto resumed;
     }
     XhciHubPortDecide(state, status, change, d);
+    if (!d->Resume) {
+        /* Not suspended now - resumed between looks, or the device gone or
+         * new: whatever resume was owed is settled (round 5, finding 3). */
+        q->ResumeTries = 0;
+        q->ResumePending = 0;
+    }
     for (bit = 1; bit <= XHCI_HUB_C_PORT_RESET; bit <<= 1) {
         selector = XhciHubClearSelector(bit);
         if ((d->Clear & bit) != 0 && selector != 0) {
@@ -654,25 +697,33 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
          * for the next pass, until it has failed XHCI_HUB_RESUME_TRIES
          * times and the port is enumerated afresh (Codex review of the
          * Phase 27 integration, round 4, findings 2 and 3). */
-        q = HcdHubPort(hc, hub, n);
-        XhciHubResumeOutcome(state, hcdHubPortResume(hc, hub, n),
-                             &q->ResumeTries, d);
-        if (d->Retry) {
-            hub->Changed |= 1UL << n;
-        }
-        if (d->GaveUp) {
-            hc->HubResumesFailed++;
-            XHCI_DBG_VALUE("hcd: hub port resume given up, hub/port",
-                           (hub->Index << 8) | n);
-        }
+        outcome = hcdHubPortResume(hc, hub, n, &held);
+        XhciHubResumeOutcome(state, outcome, held, &q->ResumeTries, d);
+        goto resumed;
     } else if (d->Suspended) {
         /* A resume finished - a device's remote wake among them: the
          * device stays as it is, untouched until the resume recovery has
-         * passed. */
-        held = hcdHubQuiesceBelow(hc, HcdHubPort(hc, hub, n), devs);
+         * passed, and not let go at all once the controller needs its
+         * recovery (the invalidation settles it). */
+        held = hcdHubQuiesceBelow(hc, q, devs);
         hcdHubDelay(XHCI_HUB_RESUME_RECOVERY_MS);
-        hcdHubReleaseBelow(hc, devs, held);
+        if (!hc->Hc.ControllerFailed && !hc->ScratchTainted) {
+            hcdHubReleaseBelow(hc, devs, held);
+        }
         XHCI_DBG_VALUE("hcd: hub port resumed, hub/port",
+                       (hub->Index << 8) | n);
+    }
+    return 1;
+
+resumed:
+    q->ResumePending = d->Retry;
+    if (d->Retry) {
+        hub->Changed |= 1UL << n;
+    }
+    if (d->GaveUp) {
+        q->ResumePending = 0;
+        hc->HubResumesFailed++;
+        XHCI_DBG_VALUE("hcd: hub port resume given up, hub/port",
                        (hub->Index << 8) | n);
     }
     return 1;
@@ -1208,6 +1259,7 @@ VOID HcdHubFree(PHCD_CONTROLLER hc, PHCD_HUB hub)
         q->AwaitSerial = 0;
         q->AwaitHub = NULL;
         q->ResumeTries = 0;
+        q->ResumePending = 0;
         q->Hub = NULL;
         q->Number = n;
     }
@@ -1302,6 +1354,7 @@ ULONG HcdHubStart(PHCD_CONTROLLER hc, PHCD_PORT p, PHCD_USB_DEVICE dev)
         q->AwaitSerial = 0;
         q->AwaitHub = NULL;
         q->ResumeTries = 0;
+        q->ResumePending = 0;
         q->Hub = hub;
         q->Number = n;
         if (!hcdHubFeature(hc, hub, n, 1, XHCI_HUB_FEAT_PORT_POWER)) {

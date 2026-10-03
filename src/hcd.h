@@ -440,6 +440,9 @@ typedef struct _HCD_PORT {
     ULONG HubSpeedClass;    /* a hub port: the speed its reset reported  */
     ULONG ResumeTries;      /* a hub port: resumes failed in a row
                              * (XhciHubResumeOutcome); thread only       */
+    ULONG ResumePending;    /* a hub port: a resume to try again at its
+                             * next look, even if that look's GET_STATUS
+                             * fails; thread only                        */
 } HCD_PORT, *PHCD_PORT;
 
 /*

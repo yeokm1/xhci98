@@ -225,23 +225,29 @@ ULONG XhciHubResumeProgress(ULONG status);
 
 /*
  * What a resume's outcome makes of the port's decision *d, the port's
- * enumeration machine in `state` and its failures in a row in *tries:
+ * enumeration machine in `state`, whether the resume held devices (`held`:
+ * the device on the port, and below it if it is a hub, quiesced for the
+ * resume) and the port's failures in a row in *tries:
  *
  *   DONE      the decision stands (an Empty port goes on to Connect), and
- *             the count restarts;
+ *             the count restarts; only now are the held devices let go;
  *   DISABLED  the device is enumerated afresh: Disconnect if the machine
  *             holds one, then Connect;
  *   GONE      Disconnect if the machine holds one, no Connect;
- *   STUCK     nothing now - the port is looked at again (Retry) - until
- *             XHCI_HUB_RESUME_TRIES have failed in a row, when the port is
- *             enumerated afresh (GaveUp, Disconnect, Connect), whose reset
- *             tries the resume once more first.
+ *   STUCK     with devices held: they stay held and are torn down at once
+ *             (GaveUp, Disconnect, then Connect) - a resume that may yet
+ *             finish must never meet their traffic before its recovery
+ *             (Codex review of the Phase 27 integration, round 5, finding
+ *             1); the port's reset tries the resume once more first. With
+ *             nothing held: nothing now - the port is looked at again
+ *             (Retry) - until XHCI_HUB_RESUME_TRIES have failed in a row,
+ *             when the port is enumerated afresh (GaveUp, Connect).
  *
- * Nothing the hub's report said is lost meanwhile: a retried port keeps
- * its bit for the next look.
+ * A held device is never let go on any outcome but DONE: the teardown the
+ * others ask for frees it with its pipes still paused.
  */
-VOID XhciHubResumeOutcome(ULONG state, ULONG outcome, PULONG tries,
-                          PXHCI_HUB_PORT_DECISION d);
+VOID XhciHubResumeOutcome(ULONG state, ULONG outcome, ULONG held,
+                          PULONG tries, PXHCI_HUB_PORT_DECISION d);
 
 /* The C_PORT_ feature selector that clears one wPortChange bit (bit 0 to
  * 4), or 0 for any other bit. */

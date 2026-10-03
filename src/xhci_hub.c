@@ -185,8 +185,8 @@ ULONG XhciHubResumeProgress(ULONG status)
 }
 
 /* IRQL: any. */
-VOID XhciHubResumeOutcome(ULONG state, ULONG outcome, PULONG tries,
-                          PXHCI_HUB_PORT_DECISION d)
+VOID XhciHubResumeOutcome(ULONG state, ULONG outcome, ULONG held,
+                          PULONG tries, PXHCI_HUB_PORT_DECISION d)
 {
     if (tries == NULL || d == NULL) {
         return;
@@ -208,6 +208,13 @@ VOID XhciHubResumeOutcome(ULONG state, ULONG outcome, PULONG tries,
         d->Connect = 0;
         break;
     default:
+        if (held) {
+            *tries = 0;
+            d->GaveUp = 1;
+            d->Disconnect = 1;
+            d->Connect = 1;
+            break;
+        }
         (*tries)++;
         if (*tries < XHCI_HUB_RESUME_TRIES) {
             d->Retry = 1;
