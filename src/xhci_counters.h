@@ -100,11 +100,12 @@ typedef struct _XHCIHC_COUNTERS {
      * decoded speed and the Slot Context's) for the SuperSpeed class;
      * SuperSpeedPlus counts the addressed devices whose trained rate is
      * above Gen 1x1 (29-A.1, "counted by rate"). Then the link (29-A.2):
-     * warm resets asked, hot ones converted to warm, links given up after
+     * warm resets written (driver policy and recovery), hot resets the xHC
+     * itself carried out warm (WRC seen after a PR), links given up after
      * the warm-reset budget - the device left to its USB 2.0 companion,
-     * 29-A.5's passive fallback - and USB 3.x devices (bcdUSB 0x0300 or
-     * above) enumerated below SuperSpeed on a USB 2.0 companion port, which
-     * is that fallback seen from the other side. Then the BOS reads that
+     * 29-A.5's passive fallback - and SuperSpeed-capable devices (a BOS with
+     * a SuperSpeed USB Device Capability) enumerated on a USB 2.0 companion
+     * port, which is that fallback seen from the other side. Then the BOS reads that
      * failed, and the SuperSpeedPlus isochronous endpoints refused because
      * their payload does not fit the Endpoint Context (29-A.6). */
     ULONG PortSpeedSuper;

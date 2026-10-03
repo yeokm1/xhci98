@@ -92,9 +92,12 @@ typedef struct _XHCI_LINK_PORT {
 
 typedef struct _XHCI_LINK_ACTION {
     ULONG Kind;             /* XHCI_LINK_ACT_*                            */
-    ULONG Converted;        /* a hot reset asked for, a warm one decided:
-                             * the link was not in U0 (the reading the
-                             * roadmap asks the policy to give)          */
+    ULONG Converted;        /* the enumeration asked for a reset and this
+                             * driver's policy chose a warm one, the link
+                             * not being in U0. Policy, not the xHC's own
+                             * hot-to-warm conversion, which happens after
+                             * a failed hot-reset handshake (4.19.5.1) and
+                             * shows only as WRC at the reset's end      */
 } XHCI_LINK_ACTION, *PXHCI_LINK_ACTION;
 
 /* Clear a port's record: at a start, and when its port is powered. */
@@ -116,12 +119,40 @@ ULONG XhciLinkDecide(PXHCI_LINK_PORT link, ULONG portsc, ULONG want,
  */
 ULONG XhciLinkResetDone(ULONG portsc, PULONG warmSeen);
 
+/*
+ * One root port's change, as the controller thread acts on it (hcd_enum.c,
+ * hcdPortChanged): which events the port's enumeration machine is fed and
+ * which link write, if any, is owed. `usb3` says the port is a USB3 protocol
+ * port; `portsc` is the value read before its change bits were cleared;
+ * `enumState` the machine's state (XHCI_ENUM_*). Returns XHCI_LINK_FEED_*
+ * bits, fed in the order DISCONNECT, then the write in *action, then
+ * CONNECT (the caller skips CONNECT on a halted controller).
+ *
+ * A USB 2.0 port, and a USB3 port whose link is usable, get the connect
+ * rule of design record 13 section 5.3 unchanged. A USB3 port in SS.Inactive,
+ * Compliance Mode, or Disconnected with Cold Attach Status gets the link
+ * decision: whatever the machine held is fed a disconnect - a Failed machine
+ * included, so the link's recovery finds it Empty and the trained link's
+ * reset completion, which brings no CSC when CCS never dropped, starts a new
+ * enumeration (Codex review of Phase 29, round 1, finding 2) - and the
+ * bounded warm reset or the give-up is the action. The link's record is
+ * consulted on every change, so a disconnect or a trained link refills the
+ * warm-reset budget (finding 3).
+ */
+#define XHCI_LINK_FEED_DISCONNECT   0x1UL
+#define XHCI_LINK_FEED_CONNECT      0x2UL
+
+ULONG XhciLinkPortFeed(PXHCI_LINK_PORT link, ULONG usb3, ULONG portsc,
+                       ULONG enumState, PXHCI_LINK_ACTION action);
+
 /* ------------------------------------------------------------------ */
 /* 29-A.5's hold                                                       */
 /* ------------------------------------------------------------------ */
 
-/* The serial string, as UTF-16 code units, compared up to this many; its
- * full length is compared too. USB string descriptors carry at most 126. */
+/* The serial string, as UTF-16 code units, kept up to this many. A longer
+ * serial is truncated, and a truncated identity proves nothing: it neither
+ * makes a hold identified nor matches one (Codex review of Phase 29, round
+ * 1, note 6). USB string descriptors carry at most 126. */
 #define XHCI_LINK_SERIAL_CHARS      64UL
 
 typedef struct _XHCI_LINK_IDENTITY {

@@ -207,7 +207,11 @@ ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
  *     Mult is 0, and one past 24 bits is ESIT_REFUSED; without `lec` the
  *     payload must fit three bursts (48 KiB at 1024 bytes and burst 16) and
  *     Mult is the bursts it needs less one, ESIT_REFUSED otherwise - never
- *     truncated.
+ *     truncated;
+ *   - and last, any isochronous endpoint whose interval payload exceeds what
+ *     the transfer path carries - one page (XhciPipeIsoFragments) - is
+ *     ESIT_REFUSED too, whatever the rules above allowed, until multi-page
+ *     isochronous packets exist (Codex review of Phase 29, round 1).
  *
  * XHCI_PIPE_BAD_PARAM for NULL or an offset whose 7 bytes are not inside
  * `length`.

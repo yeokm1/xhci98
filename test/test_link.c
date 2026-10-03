@@ -10,6 +10,7 @@
 
 #include <stdio.h>
 #include "../src/xhci.h"
+#include "../src/xhci_enum.h"
 #include "../src/xhci_link.h"
 #include "test_harness.h"
 
@@ -352,10 +353,128 @@ static void test_hold_kinds(void)
              "an orphan has no companion to release it");
 
     CHECK_EQ(XhciLinkSameDevice(&held, &held), 1, "a device is itself");
+    /* A serial longer than the kept prefix is a truncated identity, which
+     * neither identifies a hold nor matches one (round 1, note 6). */
+    noSerial = held;
+    noSerial.SerialLength = XHCI_LINK_SERIAL_CHARS + 1;
+    CHECK_EQ(XhciLinkSameDevice(&noSerial, &noSerial), 0,
+             "a truncated serial matches nothing, not even itself");
+    CHECK_EQ(XhciHoldBegin(&h, 5, 1, &noSerial), XHCI_HOLD_UNIDENTIFIED,
+             "and makes an unidentified hold");
     CHECK_EQ(XhciLinkSameDevice(&held, NULL), 0, "NULL is no device");
     CHECK_EQ(XhciHoldBegin(NULL, 5, 1, &held), XHCI_HOLD_NONE, "NULL hold");
     CHECK_EQ(XhciHoldCompanionDisconnect(NULL), XHCI_HOLD_KEEP,
              "NULL hold keeps");
+}
+
+/*
+ * The port-change wiring as hcd_enum.c's hcdPortChanged runs it - the feed
+ * XhciLinkPortFeed decides, applied to a real enumeration machine (Codex
+ * review of Phase 29, round 1, findings 2 and 3).
+ */
+static ULONG feed_apply(PXHCI_ENUM_PORT e, ULONG feed)
+{
+    XHCI_ENUM_EVENT ev;
+    XHCI_ENUM_ACTION a;
+
+    ev.Ok = 1;
+    ev.Speed = 0;
+    ev.SlotId = 0;
+    ev.Bytes = 0;
+    ev.Value = 0;
+    if ((feed & XHCI_LINK_FEED_DISCONNECT) != 0) {
+        ev.Kind = XHCI_ENUM_EV_DISCONNECT;
+        (VOID)XhciEnumStep(e, &ev, &a);
+    }
+    if ((feed & XHCI_LINK_FEED_CONNECT) != 0) {
+        ev.Kind = XHCI_ENUM_EV_CONNECT;
+        (VOID)XhciEnumStep(e, &ev, &a);
+    }
+    return e->State;
+}
+
+static void test_port_feed(void)
+{
+    XHCI_LINK_PORT l;
+    XHCI_LINK_ACTION a;
+    XHCI_ENUM_PORT e;
+    XHCI_ENUM_EVENT ev;
+    XHCI_ENUM_ACTION ea;
+    ULONG feed;
+    ULONG i;
+
+    /* A machine left Failed (its reset failed) while the link went to
+     * SS.Inactive with CCS still set. */
+    XhciLinkInit(&l);
+    XhciEnumReset(&e);
+    ev.Ok = 1; ev.Speed = 0; ev.SlotId = 0; ev.Bytes = 0; ev.Value = 0;
+    ev.Kind = XHCI_ENUM_EV_CONNECT;
+    (VOID)XhciEnumStep(&e, &ev, &ea);
+    ev.Kind = XHCI_ENUM_EV_DEBOUNCED;
+    (VOID)XhciEnumStep(&e, &ev, &ea);
+    ev.Kind = XHCI_ENUM_EV_RESET_DONE;
+    ev.Ok = 0;
+    (VOID)XhciEnumStep(&e, &ev, &ea);
+    CHECK_EQ(e.State, XHCI_ENUM_FAILED, "the machine is Failed");
+
+    feed = XhciLinkPortFeed(&l, 1, portsc(XHCI_PLS_INACTIVE,
+                                          CONN | XHCI_PORTSC_PLC),
+                            e.State, &a);
+    CHECK_EQ(a.Kind, XHCI_LINK_ACT_WARM_RESET, "SS.Inactive: warm reset");
+    CHECK_EQ(feed, XHCI_LINK_FEED_DISCONNECT,
+             "and the Failed machine is fed a disconnect");
+    CHECK_EQ(feed_apply(&e, feed), XHCI_ENUM_EMPTY, "which empties it");
+
+    /* The warm reset completes: PRC and WRC, CCS never dropped, no CSC. */
+    feed = XhciLinkPortFeed(&l, 1, portsc(XHCI_PLS_U0, ENAB | XHCI_PORTSC_PRC |
+                                                       XHCI_PORTSC_WRC),
+                            e.State, &a);
+    CHECK_EQ(a.Kind, XHCI_LINK_ACT_NONE, "a usable link asks for no write");
+    CHECK_EQ(feed, XHCI_LINK_FEED_CONNECT, "and starts an enumeration");
+    CHECK_EQ(feed_apply(&e, feed), XHCI_ENUM_DEBOUNCE,
+             "the recovered device is enumerated, not left Failed");
+
+    /* The budget spent, then a physical unplug and a new device that also
+     * fails to train: the unplug refills the budget. */
+    XhciLinkInit(&l);
+    XhciEnumReset(&e);
+    for (i = 0; i < XHCI_LINK_MAX_WARM_RESETS; i++) {
+        (VOID)XhciLinkPortFeed(&l, 1, portsc(XHCI_PLS_COMPLIANCE, 0),
+                               e.State, &a);
+        CHECK_EQ(a.Kind, XHCI_LINK_ACT_WARM_RESET, "Compliance: warm");
+    }
+    (VOID)XhciLinkPortFeed(&l, 1, portsc(XHCI_PLS_COMPLIANCE, 0), e.State,
+                           &a);
+    CHECK_EQ(a.Kind, XHCI_LINK_ACT_GIVE_UP, "given up");
+    feed = XhciLinkPortFeed(&l, 1, portsc(XHCI_PLS_RX_DETECT,
+                                          XHCI_PORTSC_CSC), e.State, &a);
+    CHECK_EQ(feed, 0, "the unplug feeds an Empty machine nothing");
+    CHECK_EQ(l.WarmResets, 0, "but refills the warm-reset budget");
+    CHECK_EQ(l.GaveUp, 0, "and clears the give-up");
+    (VOID)XhciLinkPortFeed(&l, 1, portsc(XHCI_PLS_COMPLIANCE, 0), e.State,
+                           &a);
+    CHECK_EQ(a.Kind, XHCI_LINK_ACT_WARM_RESET,
+             "the next device's failure is recovered again");
+
+    /* USB 2.0 ports: section 5.3's rule, unchanged. */
+    CHECK_EQ(XhciLinkPortFeed(&l, 0, XHCI_PORTSC_PP | CONN | XHCI_PORTSC_CSC,
+                              XHCI_ENUM_EMPTY, &a),
+             XHCI_LINK_FEED_CONNECT, "USB2: CSC with CCS connects");
+    CHECK_EQ(XhciLinkPortFeed(&l, 0, XHCI_PORTSC_PP | CONN | XHCI_PORTSC_CSC,
+                              XHCI_ENUM_BOUND, &a),
+             XHCI_LINK_FEED_DISCONNECT | XHCI_LINK_FEED_CONNECT,
+             "USB2: a replug drops and connects");
+    CHECK_EQ(XhciLinkPortFeed(&l, 0, XHCI_PORTSC_PP | CONN | XHCI_PORTSC_PRC,
+                              XHCI_ENUM_FAILED, &a),
+             0, "USB2: a Failed port waits for a new connection");
+    CHECK_EQ(XhciLinkPortFeed(&l, 0, XHCI_PORTSC_PP | XHCI_PORTSC_PEC,
+                              XHCI_ENUM_BOUND, &a),
+             XHCI_LINK_FEED_DISCONNECT, "USB2: no CCS, a disconnect");
+    CHECK_EQ(a.Kind, XHCI_LINK_ACT_NONE, "and never a link write");
+    /* The same Inactive-looking PLS on a USB2 port is not a link decision. */
+    CHECK_EQ(XhciLinkPortFeed(&l, 0, portsc(XHCI_PLS_INACTIVE, CONN),
+                              XHCI_ENUM_FAILED, &a),
+             0, "a USB2 port's PLS is not read as a SuperSpeed link");
 }
 
 int main(void)
@@ -366,6 +485,7 @@ int main(void)
     test_power_and_hold_writes();
     test_hold_release();
     test_hold_kinds();
+    test_port_feed();
 
     printf("%d checks, %d failures\n", checks, failures);
     return failures;

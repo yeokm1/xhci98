@@ -22,11 +22,13 @@
  * The bus's policy over them:
  *
  *   - an Enabled port is enumerated as it stands; the enumeration's own
- *     reset is a hot reset (PR) from U0, and a warm one (WPR) from any state
- *     a hot reset cannot start in - U3, Error, Compliance, or trained with
- *     PED clear - which is the hot-to-warm conversion the controller itself
- *     makes when PR is written to a link not in U0 (Table 5-27's PR row; to
- *     verify), made here explicitly so the reading names it;
+ *     reset is a hot reset (PR) from U0, and a warm one (WPR) from any other
+ *     state - U1, U2, U3, Error, Compliance, or trained with PED clear. That
+ *     is this driver's policy, not the xHC's rule: PR is legal in every
+ *     Enabled substate, and the xHC converts a hot reset to a warm one by
+ *     itself only when the hot-reset handshake fails (4.19.5.1 footnote 66;
+ *     Codex review of Phase 29, round 1, finding 5), which the caller sees
+ *     as WRC at the reset's end and counts from that;
  *   - Error and Compliance are recovered with a warm reset when they are
  *     seen, at most XHCI_LINK_MAX_WARM_RESETS times for one connection, and
  *     then given up: the device, finding no SuperSpeed partner, connects on
@@ -40,6 +42,7 @@
  */
 
 #include "xhci.h"
+#include "xhci_enum.h"
 #include "xhci_link.h"
 
 VOID XhciLinkInit(PXHCI_LINK_PORT link)
@@ -241,6 +244,48 @@ ULONG XhciLinkResetDone(ULONG portsc, PULONG warmSeen)
            XHCI_PORTSC_GET_PLS(portsc) == XHCI_PLS_U0;
 }
 
+ULONG XhciLinkPortFeed(PXHCI_LINK_PORT link, ULONG usb3, ULONG portsc,
+                       ULONG enumState, PXHCI_LINK_ACTION action)
+{
+    XHCI_LINK_ACTION scratch;
+    ULONG state;
+    ULONG feed;
+
+    if (action == NULL) {
+        action = &scratch;
+    }
+    xhciLinkAct(action, XHCI_LINK_ACT_NONE, 0);
+    feed = 0;
+    if (usb3 && link != NULL) {
+        state = XhciLinkClassify(portsc);
+        (VOID)XhciLinkDecide(link, portsc, XHCI_LINK_WANT_SERVICE, action);
+        if (state == XHCI_LINK_ERROR || state == XHCI_LINK_COMPLIANCE ||
+            (state == XHCI_LINK_DISCONNECTED &&
+             (portsc & XHCI_PORTSC_CAS) != 0)) {
+            if (enumState != XHCI_ENUM_EMPTY && enumState != XHCI_ENUM_GONE) {
+                feed |= XHCI_LINK_FEED_DISCONNECT;
+            }
+            return feed;
+        }
+        /* Usable: the decision's READY or WAIT asks for no write. */
+        xhciLinkAct(action, XHCI_LINK_ACT_NONE, 0);
+    }
+    if ((portsc & XHCI_PORTSC_CSC) != 0) {
+        if (enumState != XHCI_ENUM_EMPTY && enumState != XHCI_ENUM_FAILED &&
+            enumState != XHCI_ENUM_GONE) {
+            feed |= XHCI_LINK_FEED_DISCONNECT;
+        }
+        if ((portsc & XHCI_PORTSC_CCS) != 0) {
+            feed |= XHCI_LINK_FEED_CONNECT;
+        }
+    } else if ((portsc & XHCI_PORTSC_CCS) == 0) {
+        feed |= XHCI_LINK_FEED_DISCONNECT;
+    } else if (enumState == XHCI_ENUM_EMPTY) {
+        feed |= XHCI_LINK_FEED_CONNECT;
+    }
+    return feed;
+}
+
 /* ------------------------------------------------------------------ */
 /* 29-A.5's hold                                                       */
 /* ------------------------------------------------------------------ */
@@ -259,13 +304,11 @@ ULONG XhciLinkSameDevice(const XHCI_LINK_IDENTITY *a,
     }
     /* No serial is no identity: two units of one model cannot be told
      * apart, so vendor and product id alone match nothing. */
-    if (a->SerialLength == 0 || a->SerialLength != b->SerialLength) {
+    if (a->SerialLength == 0 || a->SerialLength != b->SerialLength ||
+        a->SerialLength > XHCI_LINK_SERIAL_CHARS) {
         return 0;
     }
     n = a->SerialLength;
-    if (n > XHCI_LINK_SERIAL_CHARS) {
-        n = XHCI_LINK_SERIAL_CHARS;
-    }
     for (i = 0; i < n; i++) {
         if (a->Serial[i] != b->Serial[i]) {
             return 0;
@@ -299,7 +342,8 @@ ULONG XhciHoldBegin(PXHCI_LINK_HOLD hold, ULONG port, ULONG companion,
     }
     if (companion == 0) {
         hold->Kind = XHCI_HOLD_ORPHAN;
-    } else if (!hold->Held.Valid || hold->Held.SerialLength == 0) {
+    } else if (!hold->Held.Valid || hold->Held.SerialLength == 0 ||
+               hold->Held.SerialLength > XHCI_LINK_SERIAL_CHARS) {
         hold->Kind = XHCI_HOLD_UNIDENTIFIED;
     } else {
         hold->Kind = XHCI_HOLD_PAIRED;

@@ -1524,6 +1524,18 @@ read. The USB 3.2 specification is not in `docs/references/` today; fetching it
 (with its SHA-256 and licence note, the `docs/references/README.md` pattern) is
 part of verifying 10.7 to 10.9.
 
+A first check against the local xHCI 1.2c PDF was made by Codex's review of
+the Phase 29 draft (round 1, 2026-10-04; a reviewer's reading, not a page-by-
+page transcription, and no page numbers recorded): it confirmed HCCPARAMS2.LEC
+at bit 4, Max ESIT Payload Hi at Endpoint Context DW0 31:24, the 48 KiB and
+three-burst limit without LEC and Mult reserved with it, the default PSIVs 5 to
+7 as Gen 2x1, Gen 1x2 and Gen 2x2 (applicability by USB 3.1 versus 3.2 still
+to state), WPR, WRC, CEC and CAS at bits 31, 19, 23 and 24, the PLS numbers,
+TD Size counting packets and not bursts, and EP0's 512 and exponent 9; and it
+corrected the PLS write rules, the hot-to-warm conversion, warm-reset
+completion and the disconnect transition, which the rows below now carry. The
+"to verify" marks stay until the transcription itself is done.
+
 ### 10.1 Supported Protocol Capability, USB3 groups and PSI DWORDs (xHCI 7.2)
 
 The capability's layout is section 6's table. What a USB3 group adds:
@@ -1582,14 +1594,18 @@ SuperSpeed-only fields.
 | 19 | WRC | Warm Port Reset Change, RW1C: set when a warm reset completes, beside PRC |
 | 23 | CEC | Port Config Error Change, RW1C: the link partner could not be configured (for example both ends downstream-facing) |
 | 24 | CAS | Cold Attach Status, RO: far-end terminations seen in a state the link cannot train from; **to verify** that Table 5-27 directs software to clear it with a warm reset |
-| 31 | WPR | Warm Port Reset, RW1S, reads 0: starts a warm reset and sets PR; completes with PRC and WRC both set and the link in U0 |
+| 31 | WPR | Warm Port Reset, RW1S, reads 0: starts a warm reset and sets PR; completes with PRC and WRC both set. **Completion is not success**: a warm reset that does not train ends in Disconnected (PLS RxDetect) and still reports its completion, so the driver requires CCS, PED and U0 as well (`XhciLinkResetDone`; Codex review of Phase 29, round 1, finding 5) |
 
-PR on a USB3 port starts a hot reset. **To verify** the hot-to-warm
-conversion: that a PR write to a link not in U0 (in U3, SS.Inactive or
-Compliance Mode, or any state where Hot Reset cannot start) is carried out by
-the xHC as a warm reset, with WRC set at the end. The driver does not depend on
-it: it asks for a warm reset itself in exactly those states (`xhci_link.c`), and
-counts the conversions it made (`superspeed: hot resets converted to warm`).
+PR on a USB3 port starts a hot reset, and is permitted from every Enabled
+substate. The hot-to-warm conversion is the xHC's own and narrower than this
+section first said (corrected after Codex review of Phase 29, round 1,
+finding 5): the xHC carries a hot reset out as a warm one when the hot-reset
+TS1/TS2 handshake fails (4.19.5.1, footnote 66), and the only sign of it is WRC
+at the reset's end. Choosing WPR whenever the link is not in U0 - U1, U2, U3,
+SS.Inactive, Compliance Mode, or trained with PED clear - is **this driver's
+policy** (`xhci_link.c`), not that rule. The counter `superspeed: hot resets
+converted to warm` counts the xHC's conversions, from WRC observed after a PR
+the driver wrote; `superspeed: warm resets` counts the WPR writes.
 
 PORTLI, PORTSC + 8 (5.4.10):
 
@@ -1610,7 +1626,7 @@ decides 10.6's Max ESIT Payload Hi and Mult (`XHCI_HCCPARAMS2_LEC`).
 |---|---|---|
 | 0 | U0 | yes, with LWS: a USB3 resume from U3 is this one write (USB2 writes 15 then 0) |
 | 1 | U1 | no |
-| 2 | U2 | yes on USB3, with LWS, **to verify** the conditions |
+| 2 | U2 | USB2 protocol ports only (L1 entry); not a USB3 write (Table 5-27; corrected after Codex review of Phase 29, round 1) |
 | 3 | U3 | yes, with LWS: suspend |
 | 4 | Disabled (SS.Disabled) | **to verify** whether a write of 4 is defined; the driver disables with PED = 1 instead |
 | 5 | RxDetect | yes, with LWS, from Disabled: its exit to Disconnected (10.4) |
@@ -1618,7 +1634,7 @@ decides 10.6's Max ESIT Payload Hi and Mult (`XHCI_HCCPARAMS2_LEC`).
 | 7 | Polling | no |
 | 8 | Recovery | no |
 | 9 | Hot Reset | no |
-| 10 | Compliance Mode | yes, **to verify** - only with the Compliance Transition Capability (HCCPARAMS2 CTC) |
+| 10 | Compliance Mode | the write **enables** the transition to Compliance Mode (with the Compliance Transition Capability, HCCPARAMS2 CTC); it is not an immediate, unconditional transition. The driver never writes it |
 | 11 | Test Mode | no |
 | 12-14 | reserved | - |
 | 15 | Resume | USB2 ports only |
@@ -1637,10 +1653,10 @@ As the drafter reads it; **to verify against Figure 4-27 state by state**:
 | Polling | link training succeeds (U0) | Enabled | CCS, PED, CSC - **no software reset needed**, unlike USB2's Disabled -> Reset -> Enabled |
 | Polling | training fails | Error (PLS Inactive), or Disconnected after the Rx.Detect retries run out | **to verify** which, and whether CSC is set |
 | Enabled | PR = 1 | Reset (hot) -> Enabled | PRC |
-| Enabled, Error, Compliance | WPR = 1 | Reset (warm) -> Enabled | PRC, WRC |
+| Enabled, Error, Compliance | WPR = 1 | Reset (warm) -> Enabled, or Disconnected when the link does not train | PRC, WRC either way |
 | Enabled | PED = 1 | Disabled (PLS Disabled, link SS.Disabled, terminations withdrawn) | **to verify** whether PEC is set |
 | Enabled | link error | Error (SS.Inactive) | PLC, and **to verify** PEC/CSC |
-| any | disconnect | Disconnected | CSC, PR/PED cleared |
+| any but Powered-off and Disabled | disconnect | Disconnected | CSC, PR/PED cleared (4.19.1.2.3: a Powered-off or Disabled port has no terminations to see it with) |
 | Disabled | PLS = RxDetect write with LWS | Disconnected | - |
 | Disabled | WPR = 1 | none: a warm reset does not act on a Disabled port (**to verify**) | - |
 
@@ -1677,6 +1693,18 @@ controller's next start. Verify before relaxing it.
 The largest payload the legacy fields describe is Max Packet Size x (Max
 Burst + 1) x (Mult + 1) = 1024 x 16 x 3 = 49,152 bytes (48 KiB) per interval,
 which is why a SuperSpeedPlus isochronous endpoint above it needs LEC.
+
+What this driver carries is narrower than either, and that is the driver's
+limit, not the specification's: an isochronous URB packet is one interval's
+payload, and the transfer path maps it as at most two page-bounded pieces of
+one 4 KiB page (`XhciPipeIsoFragments`, `hcd_io.c`). So any SuperSpeed or
+SuperSpeedPlus isochronous endpoint whose interval payload exceeds 4096 bytes
+is refused at SELECT_CONFIGURATION or SELECT_INTERFACE
+(`XHCI_PIPE_ESIT_REFUSED`, counted as `superspeed: endpoints refused - ESIT`),
+never admitted and never truncated (Codex review of Phase 29, round 1,
+finding 1). At 4096 bytes TBC holds every burst count. Lifting the limit means
+multi-page isochronous packets - several TRBs per packet - in `hcd_io.c` and
+`xhci_xfer.c`.
 
 TD Size (4.11.2.4) is the formula in section 7, unchanged: it counts packets
 of Max Packet Size, so at SuperSpeed it divides by 1024 (bulk) or 512 (EP0).

@@ -1495,19 +1495,44 @@ static void test_superspeed_endpoints(void)
                                       &ep), XHCI_PIPE_OK, "0 per interval");
     CHECK_EQ(ep.MaxEsitPayload, 2048, "the largest the burst allows");
 
-    /* Isochronous IN, 1024, burst 15, Mult 2: 48 KiB per interval. */
-    n = ss_config(c, 1, 1024, 1, 15, 2, 49152, 1, 0);
+    /* Isochronous IN, 1024, burst 3: one page per interval, the most the
+     * transfer path carries (Codex review of Phase 29, round 1, finding 1). */
+    n = ss_config(c, 1, 1024, 1, 3, 0, 4096, 1, 0);
     CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
-                                      &ep), XHCI_PIPE_OK, "SS isoch");
-    CHECK_EQ(ep.Mult, 2, "Mult from the companion");
-    CHECK_EQ(ep.MaxBurstSize, 15, "burst 15");
-    CHECK_EQ(ep.MaxEsitPayload, 49152, "48 KiB");
+                                      &ep), XHCI_PIPE_OK, "SS isoch, 4 KiB");
+    CHECK_EQ(ep.Mult, 0, "Mult 0");
+    CHECK_EQ(ep.MaxBurstSize, 3, "burst 3");
+    CHECK_EQ(ep.MaxEsitPayload, 4096, "4 KiB");
     CHECK_EQ(ep.ErrorCount, 0, "CErr 0 for isoch");
     CHECK_EQ(ep.Interval, 0, "bInterval 1 is Interval 0");
+    /* Burst 1, Mult 1: two bursts of two packets. */
+    n = ss_config(c, 1, 1024, 1, 1, 1, 4096, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_OK, "Mult 1");
+    CHECK_EQ(ep.Mult, 1, "Mult from the companion");
     CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 1,
                                       &ep), XHCI_PIPE_OK, "under LEC");
     CHECK_EQ(ep.Mult, 0, "Mult is reserved under LEC");
-    CHECK_EQ(ep.MaxEsitPayload, 49152, "the payload says it instead");
+    CHECK_EQ(ep.MaxEsitPayload, 4096, "the payload says it instead");
+    /* 48 KiB per interval: a legal SuperSpeed endpoint the transfer path
+     * cannot carry - refused at admission, never truncated. */
+    n = ss_config(c, 1, 1024, 1, 15, 2, 49152, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_ESIT_REFUSED,
+             "48 KiB refused by the transfer path's range");
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 1,
+                                      &ep), XHCI_PIPE_ESIT_REFUSED,
+             "LEC does not widen the transfer path");
+    n = ss_config(c, 1, 1024, 1, 4, 0, 4097, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_ESIT_REFUSED,
+             "one byte past a page");
+    /* wBytesPerInterval 0 takes the largest the burst allows, which is then
+     * judged by the same range. */
+    n = ss_config(c, 1, 1024, 1, 7, 0, 0, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_ESIT_REFUSED,
+             "8 KiB implied by burst 7");
     n = ss_config(c, 1, 1024, 1, 15, 3, 0, 1, 0);
     CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
                                       &ep), XHCI_PIPE_MALFORMED, "Mult 3");
@@ -1519,32 +1544,37 @@ static void test_superspeedplus_isoch(void)
     XHCI_PIPE_EP ep;
     ULONG n;
 
-    /* At 48 KiB, LEC clear: three bursts, programmed the Gen 1 way, with
-     * the SS companion's Mult (0 here) ignored. */
+    /* At 48 KiB, LEC clear: the derivation allows three bursts, and the
+     * transfer path's one-page range refuses it. */
     n = ss_config(c, 1, 1024, 1, 15, 0x80, 0, 1, 49152);
     CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
-                                      0, &ep), XHCI_PIPE_OK, "SSP 48 KiB");
-    CHECK_EQ(ep.SspIso, 1, "the SSP companion was read");
-    CHECK_EQ(ep.Mult, 2, "Mult derived: three bursts");
-    CHECK_EQ(ep.MaxEsitPayload, 49152, "the 32-bit payload");
+                                      0, &ep), XHCI_PIPE_ESIT_REFUSED,
+             "SSP 48 KiB: refused, not truncated");
 
-    /* Just above 48 KiB, LEC clear: refused, not truncated. */
+    /* Just above 48 KiB, LEC clear and set: refused either way. */
     n = ss_config(c, 1, 1024, 1, 15, 0x80, 0, 1, 49153);
     CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
                                       0, &ep), XHCI_PIPE_ESIT_REFUSED,
              "49153 without LEC");
-    /* ...and with LEC, the Hi byte carries it. */
     CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
-                                      1, &ep), XHCI_PIPE_OK, "49153 with LEC");
-    CHECK_EQ(ep.MaxEsitPayload, 49153, "Lo and Hi");
+                                      1, &ep), XHCI_PIPE_ESIT_REFUSED,
+             "49153 with LEC: past the transfer path");
+
+    /* Within the path, LEC set: Mult 0, the payload in Lo. */
+    n = ss_config(c, 1, 1024, 1, 3, 0x80, 0, 1, 4096);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
+                                      1, &ep), XHCI_PIPE_OK, "4 KiB with LEC");
+    CHECK_EQ(ep.SspIso, 1, "the SSP companion was read");
+    CHECK_EQ(ep.MaxEsitPayload, 4096, "its payload");
     CHECK_EQ(ep.Mult, 0, "Mult 0 under LEC");
 
     /* LEC clear, the SS companion says Mult 0, the SSP companion needs two
      * bursts: Mult is the SSP companion's, never the SS one's. */
-    n = ss_config(c, 1, 1024, 1, 7, 0x80, 0, 1, 8192 + 1024);
+    n = ss_config(c, 1, 1024, 1, 1, 0x80, 0, 1, 3072);
     CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
                                       0, &ep), XHCI_PIPE_OK, "two bursts");
     CHECK_EQ(ep.Mult, 1, "Mult 1 from the payload");
+    CHECK_EQ(ep.MaxEsitPayload, 3072, "3 KiB");
 
     /* A payload past the 24-bit field, even with LEC. */
     n = ss_config(c, 1, 1024, 1, 15, 0x80, 0, 1, 0x01000000UL);
@@ -1558,7 +1588,7 @@ static void test_superspeedplus_isoch(void)
                                       0, &ep), XHCI_PIPE_MALFORMED,
              "bit 7 with nothing following");
     /* At Gen 1 the bit means nothing: the SS companion's Mult is used. */
-    n = ss_config(c, 1, 1024, 1, 15, 0x81, 32768, 1, 0);
+    n = ss_config(c, 1, 1024, 1, 1, 0x81, 4096, 1, 0);
     CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
                                       &ep), XHCI_PIPE_OK, "Gen 1 ignores it");
     CHECK_EQ(ep.Mult, 1, "Mult 1 from the SS companion");
@@ -1570,6 +1600,7 @@ static void test_superspeedplus_isoch(void)
                                       &ep), XHCI_PIPE_BAD_PARAM,
              "an offset whose descriptor runs past the end");
 }
+
 
 static void test_bos(void)
 {

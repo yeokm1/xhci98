@@ -53,6 +53,10 @@
 /* Max ESIT Payload Lo and Hi together (6.2.3.8, LEC). */
 #define XHCI_PIPE_MAX_ESIT_LEC      0x00FFFFFFUL
 
+/* The largest isochronous interval payload the transfer path carries: one
+ * page, in at most two pieces (XhciPipeIsoFragments). */
+#define XHCI_PIPE_ISO_MAX_PAYLOAD   XHCI_PIPE_PAGE_SIZE
+
 ULONG XhciPipeDci(ULONG endpointAddress)
 {
     ULONG number;
@@ -548,6 +552,24 @@ static ULONG xhciPipeSuperSpeed(const UCHAR *config, ULONG total,
             out.Mult = 0;
         }
         break;
+    }
+
+    /*
+     * One range for admission, mapping and TRB construction (Codex review of
+     * Phase 29, round 1, finding 1). An isochronous URB packet is one
+     * interval's payload, and the transfer path carries it as at most two
+     * page-bounded pieces of one page in all (XhciPipeIsoFragments, through
+     * hcd_io.c's fill) with a burst count TBC can hold. An endpoint whose
+     * interval payload is larger is refused here, counted, never admitted
+     * to fail every URB later or be truncated. At 4096 bytes the burst count
+     * is at most four packets of 1024, so TBC (two bits) always holds it.
+     * Lifting it means multi-page isochronous packets (several TRBs per
+     * packet) in hcd_io.c and xhci_xfer.c; the 48 KiB and LEC derivations
+     * above stand ready for that.
+     */
+    if (out.TransferType == XHCI_PIPE_XFER_ISOCH &&
+        out.MaxEsitPayload > XHCI_PIPE_ISO_MAX_PAYLOAD) {
+        return XHCI_PIPE_ESIT_REFUSED;
     }
 
     *ep = out;
