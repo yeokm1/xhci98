@@ -234,10 +234,11 @@ static LONG hcdCfgCountEnd(PHCD_CONTROLLER hc, ULONG asked, LONG usbd)
  * disconnected or with a connect change the enumeration has yet to take
  * (an unplug and replug). A PORTSC of all ones proves nothing about the
  * device - the register could not be read - so that failure is counted
- * (Codex review round 25). Behind hubs the device is counted only when
- * every hub port on its path still reads connected and enabled with no
- * change pending, or unread in a status-change report, and its root port
- * as above (HcdHubPathPresent: a GET_STATUS per hub, from the thread).
+ * (Codex review round 25). Behind hubs the failure is not counted when a
+ * hub port on its path confirms the departure - a GET_STATUS reply that
+ * reads it disconnected, disabled or changed, or a hub already departing
+ * - or its root port does as above; a hub that does not answer confirms
+ * nothing (HcdHubPathPresent; Codex review of d54eef0, finding 2).
  * A select racing an ordinary unplug fails at
  * SET_CONFIGURATION or SET_INTERFACE before HcdEnumService sees the port
  * change, and counting it would fail a correct matrix run. A device still
@@ -2110,9 +2111,14 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         HcdIoDeferred(hc);
         return;                 /* left paused, as hcdCfgAbort */
     }
-    if (pipe->Queue->Count != 0 && state != XHCI_EP_STATE_DISABLED) {
+    /* Under the lock the teardown's freeze sets Gone under: no doorbell
+     * reaches a device being torn down (finding 1). */
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (pipe->Queue->Count != 0 && state != XHCI_EP_STATE_DISABLED &&
+        !dev->Gone) {
         XhciWriteDoorbell(&hc->Hc, dev->SlotId, pipe->Dci);
     }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
     HcdIoDeferred(hc);
     HcdIoPipeResume(hc, pipe);
 }

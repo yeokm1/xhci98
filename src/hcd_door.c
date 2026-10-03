@@ -29,7 +29,9 @@
  * The hub answers are the bus's truth within what the structures can carry:
  * a SuperSpeed device's Speed reads High Speed in the _EX form, the ceiling
  * that interface has (section 8.4). External hubs are objects inside the bus
- * (Phase 27), so DeviceIsHub is FALSE everywhere and a composite the bus
+ * (Phase 27) with no devnode and no door of their own, so DeviceIsHub is
+ * FALSE everywhere - a served hub on a root port reads as a connected
+ * device until hub traversal exists - and a composite the bus
  * splits is one connection whose driver key is its first function's (section
  * 8.10, the two rows bound to this task).
  *
@@ -146,7 +148,6 @@ typedef struct _HCD_DOOR_CONN {
     PDEVICE_OBJECT Pdo;             /* referenced, when asked for          */
     ULONG ConfigBytes;              /* copied, when asked for              */
     ULONG ConfigTotal;
-    ULONG IsHub;                    /* a hub the bus serves (no PDO)       */
 } HCD_DOOR_CONN, *PHCD_DOOR_CONN;
 
 /* ----------------------------------------------------------------------- */
@@ -922,8 +923,11 @@ static VOID hcdDoorDeviceLocked(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * referenced there unless already Gone - the teardown sets Gone under that
  * lock before the record leaves the port, and the record's freeing waits
  * out every reference (HcdIoDeviceGone) - so the descriptors stay while
- * they are copied. Devices behind the hub are not reported here: this door
- * answers for the root hub's own ports. Returns 1 when it answered. IRQL:
+ * they are copied. It is reported as a connected device, DeviceIsHub
+ * FALSE: with no devnode and no door it has no name a caller could open
+ * to walk its ports (Codex review of d54eef0, finding 3), and devices
+ * behind it are not reported here - this door answers for the root hub's
+ * own ports. Returns 1 when it answered. IRQL:
  * <= DISPATCH_LEVEL, no lock held.
  */
 static ULONG hcdDoorHubConnection(PHCD_CONTROLLER hc, ULONG port,
@@ -951,7 +955,6 @@ static ULONG hcdDoorHubConnection(PHCD_CONTROLLER hc, ULONG port,
         return 0;
     }
     c->Status = HCD_CONN_CONNECTED;
-    c->IsHub = 1;
     hcdCopy(c->DeviceDesc, dev->DeviceDesc, sizeof(c->DeviceDesc));
     cls = XHCI_SPEED_UNKNOWN;
     (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, dev->Port, dev->Speed, &cls);
@@ -1101,7 +1104,7 @@ static NTSTATUS hcdDoorConnInfo(PHCD_CONTROLLER hc, PUCHAR buf, ULONG inLen,
     } else {
         buf[23] = (c.SpeedClass == XHCI_SPEED_LOW) ? 1 : 0;
     }
-    buf[24] = (UCHAR)c.IsHub;               /* DeviceIsHub                  */
+    buf[24] = 0;                            /* DeviceIsHub                  */
     hcdPut16(buf, 25, c.Address);
     /* NumberOfOpenPipes is the device's count however few records fit, so
      * a caller can size its next request from it. */
@@ -1251,8 +1254,10 @@ NTSTATUS HcdDoorRootHubIoctl(PHCD_CONTROLLER hc, PIRP irp)
         break;
 
     case HCD_IOCTL_CONN_NAME:
-        /* No connection is a hub devnode (DeviceIsHub is FALSE): the empty
-         * name usbhub gives a connection that is not a hub. */
+        /* No connection reports itself a hub (DeviceIsHub is FALSE, a
+         * served hub included: it has no devnode and no door a caller
+         * could open by name - Codex review of d54eef0, finding 3): the
+         * empty name usbhub gives a connection that is not a hub. */
         if (inLen < 4) {
             status = STATUS_BUFFER_TOO_SMALL;
             break;

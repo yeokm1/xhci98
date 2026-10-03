@@ -395,9 +395,13 @@ static ULONG hcdResetEp0(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
          * may still sit in the TT's buffer (xHCI 4.6.8 p.116; 27-A.3). */
         HcdHubClearTt(hc, dev, 0, XHCI_HUB_TT_EP_CONTROL, 0);
     }
-    if (waiting) {
+    /* Not for a device being torn down: its freeze set Gone under this
+     * lock (Codex review of d54eef0, finding 1). */
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (waiting && !dev->Gone) {
         XhciWriteDoorbell(&hc->Hc, dev->SlotId, 1);
     }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
     HcdIoPipeResume(hc, &dev->Ep0Pipe);
     XHCI_DBG_VALUE("hcd: EP0 recovered, slot/state",
                    (dev->SlotId << 8) | state);
@@ -804,17 +808,24 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     req.MaxPacketSize = dev->Mps0;
     req.SgList = &sg;
 
+    /* Published and rung under the lock, and never for a device being
+     * torn down (Gone; Codex review of d54eef0, finding 1). */
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     dev->Ep0Done = 0;
     KeClearEvent(&hc->XferDoneEvent);
-    answer = XhciXferSubmitControl(&dev->Ep0Queue, &dev->Ep0, &req,
-                                   &dev->Ep0Xfer, dev, trbs,
-                                   XHCI_XFER_MAX_CONTROL_TRBS);
+    answer = XHCI_XFER_BUSY;
+    if (!dev->Gone) {
+        answer = XhciXferSubmitControl(&dev->Ep0Queue, &dev->Ep0, &req,
+                                       &dev->Ep0Xfer, dev, trbs,
+                                       XHCI_XFER_MAX_CONTROL_TRBS);
+        if (answer == XHCI_XFER_OK) {
+            XhciWriteDoorbell(&hc->Hc, dev->SlotId, 1);
+        }
+    }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     if (answer != XHCI_XFER_OK) {
         return 0;
     }
-    XhciWriteDoorbell(&hc->Hc, dev->SlotId, 1);
 
     done = hcdWaitEvent(&hc->XferDoneEvent, HCD_TRANSFER_WAIT_MS) &&
            dev->Ep0Done;
@@ -1454,8 +1465,14 @@ static VOID hcdSettleWaiting(PHCD_CONTROLLER hc, PULONG changed)
 /* ----------------------------------------------------------------------- */
 
 /* Step 1 for one device: from here on its URBs are refused and a mapped
- * record completes DEVICE_GONE rather than reach the ring (hcd_io.c), and a
- * hub's status-change transfer is not armed again (HcdHubRearm). */
+ * record completes DEVICE_GONE rather than reach the ring (hcd_io.c), a
+ * hub's status-change transfer is not armed again (HcdHubRearm), and no
+ * doorbell is rung for it - every doorbell of a device's endpoint tests
+ * Gone under this same lock: a publish (HcdIoMapped, HcdHubRearm, the
+ * thread's EP0 transfer), an isochronous underrun's or overrun's restart
+ * (hcd_dev.c, hcdIsoEvent), EP0 recovery and a cancel's restart - so an
+ * endpoint the teardown stops stays stopped until its slot is disabled
+ * (Codex review of d54eef0, finding 1). */
 static VOID hcdDeviceFreeze(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     KIRQL oldIrql;
