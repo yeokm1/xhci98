@@ -131,6 +131,10 @@ rem section 5.3 is a pure transition function, driven here with no controller
 rem (task 26-A.9).
 call :run test_enum "test_enum.c ..\src\xhci_enum.c"
 call :run test_pipe "test_pipe.c ..\src\xhci_pipe.c"
+rem test_func links nothing else: the composite split, the filtered
+rem configuration descriptor and the function ids are pure computations over
+rem descriptor bytes (task 26-A.7).
+call :run test_func "test_func.c ..\src\xhci_func.c"
 rem test_log links nothing else: task 11-V.7's ring is deliberately pure, so
 rem every decision it makes - the wrap, the record cap, the flush verdict, the
 rem drain's ordering - is drivable with no file system, no registry and no IRQL.

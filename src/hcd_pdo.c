@@ -14,8 +14,13 @@
  *
  * The ids are section 10.7's: USB\VID_vvvv&PID_pppp with &REV_rrrr ahead of
  * it, and the USB\Class_ compatible ids from the device descriptor or, when
- * bDeviceClass is 0, from the first interface. The instance id is the root
- * port, until the serial string is read (26-A.4 later, or 29-A.5).
+ * bDeviceClass is 0 and there is one interface, from it. The instance id is
+ * the root port, until the serial string is read (26-A.4 later, or 29-A.5).
+ *
+ * A composite device the bus splits (26-A.7; sections 10.8 and 10.9) gets no
+ * PDO of its own: one function PDO per function, each an HCD_DEVICE_PDO with
+ * Function set, its ids carrying &MI_nn (xhci_func.c), all sharing the one
+ * device record and created, listed and unlisted together (the Group).
  *
  * The URB contract is 26-A.5's, in hcd_urb.c: IRP_MJ_INTERNAL_DEVICE_CONTROL
  * reaches it, and until the transfer path lands every URB is refused, so a
@@ -85,11 +90,14 @@ static PWCHAR hcdHandOff(const WCHAR *s, ULONG count)
     return out;
 }
 
-/* The class triple the compatible ids carry: the device descriptor's, or the
- * first interface's when bDeviceClass is 0 (section 10.7). */
+/* The class triple a device PDO's compatible ids carry: the device
+ * descriptor's, or, when bDeviceClass is 0 and the configuration has
+ * exactly one interface, that interface's (section 10.7). */
 static VOID hcdClassTriple(PHCD_DEVICE_PDO pdo, PULONG cls, PULONG sub,
                            PULONG prot)
 {
+    ULONG found;
+    ULONG count;
     ULONG at;
     ULONG len;
 
@@ -99,20 +107,74 @@ static VOID hcdClassTriple(PHCD_DEVICE_PDO pdo, PULONG cls, PULONG sub,
     if (*cls != 0) {
         return;
     }
+    found = 0;
+    count = 0;
     at = 0;
     while (at + 2 <= pdo->ConfigLength) {
         len = pdo->Config[at];
         if (len < 2 || at + len > pdo->ConfigLength) {
             break;
         }
-        if (pdo->Config[at + 1] == 4 && len >= 9) {
-            *cls = pdo->Config[at + 5];
-            *sub = pdo->Config[at + 6];
-            *prot = pdo->Config[at + 7];
-            return;
+        if (pdo->Config[at + 1] == 4 && len >= 9 && pdo->Config[at + 3] == 0) {
+            if (count++ == 0) {
+                found = at;
+            }
         }
         at += len;
     }
+    /* A device the bus did not split keeps its own (zero) class when it
+     * has several interfaces: the first one's id would bind a class driver
+     * to the whole device, which Windows 2000's usbaudio.sys survives only
+     * as a function (usbaudio-crash.md, STOP 0x1E). */
+    if (count == 1) {
+        *cls = pdo->Config[found + 5];
+        *sub = pdo->Config[found + 6];
+        *prot = pdo->Config[found + 7];
+    }
+}
+
+/* A function PDO's ids (design record 13 section 10.7), xhci_func.c's
+ * ASCII widened. */
+static NTSTATUS hcdFunctionQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
+                                   BUS_QUERY_ID_TYPE type)
+{
+    char text[128];
+    WCHAR buf[128];
+    PWCHAR out;
+    ULONG which;
+    ULONG used;
+    ULONG i;
+
+    switch (type) {
+    case BusQueryDeviceID:
+        which = XHCI_FUNC_ID_DEVICE;
+        break;
+    case BusQueryHardwareIDs:
+        which = XHCI_FUNC_ID_HARDWARE;
+        break;
+    case BusQueryCompatibleIDs:
+        which = XHCI_FUNC_ID_COMPATIBLE;
+        break;
+    case BusQueryInstanceID:
+        which = XHCI_FUNC_ID_INSTANCE;
+        break;
+    default:
+        return HcdCompleteIrp(irp, irp->IoStatus.Status,
+                              irp->IoStatus.Information);
+    }
+    used = 0;
+    if (XhciFuncId(pdo->DeviceDesc, &pdo->Func, pdo->Port, which, text,
+                   sizeof(text), &used) != XHCI_FUNC_OK) {
+        return HcdCompleteIrp(irp, STATUS_UNSUCCESSFUL, 0);
+    }
+    for (i = 0; i < used; i++) {
+        buf[i] = (WCHAR)(UCHAR)text[i];
+    }
+    out = hcdHandOff(buf, used);
+    if (out == NULL) {
+        return HcdCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES, 0);
+    }
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, (ULONG_PTR)out);
 }
 
 static NTSTATUS hcdDeviceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
@@ -128,6 +190,9 @@ static NTSTATUS hcdDeviceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
     ULONG prot;
     PWCHAR out;
 
+    if (pdo->Function) {
+        return hcdFunctionQueryId(pdo, irp, type);
+    }
     vid = (ULONG)pdo->DeviceDesc[8] | ((ULONG)pdo->DeviceDesc[9] << 8);
     pid = (ULONG)pdo->DeviceDesc[10] | ((ULONG)pdo->DeviceDesc[11] << 8);
     rev = (ULONG)pdo->DeviceDesc[12] | ((ULONG)pdo->DeviceDesc[13] << 8);
@@ -251,24 +316,29 @@ static VOID hcdDeletePdo(PHCD_DEVICE_PDO pdo)
     IoDeleteDevice(pdo->Common.Self);
 }
 
-/* Create the PDO for an enumerated device, list it, and have PnP ask the
- * root hub for its relations. The descriptors are copied into the PDO, which
- * outlives the device record. */
-NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+/* One PDO, not yet listed: the device's (func NULL) with the whole
+ * configuration, or a function's with its filtered one. The descriptors are
+ * copied into the PDO, which outlives the device record. IoCreateDevice
+ * zeroes the extension. */
+static NTSTATUS hcdPdoNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                          const XHCI_FUNC *func, PHCD_DEVICE_PDO *made)
 {
     WCHAR nameBuffer[40];
     UNICODE_STRING name;
     PDEVICE_OBJECT obj;
     PHCD_DEVICE_PDO pdo;
-    KIRQL oldIrql;
     NTSTATUS status;
     ULONG serial;
+    ULONG length;
     ULONG n;
     ULONG i;
 
-    if (hc->RootHubPdo == NULL || !hc->RootHubStarted ||
-        dev->ConfigLength == 0 || dev->Config == NULL) {
-        return STATUS_DEVICE_NOT_READY;
+    *made = NULL;
+    length = dev->ConfigLength;
+    if (func != NULL &&
+        XhciFuncConfig(dev->Config, dev->ConfigLength, func, NULL, 0,
+                       &length) != XHCI_FUNC_OK) {
+        return STATUS_UNSUCCESSFUL;
     }
 
     serial = (ULONG)InterlockedIncrement(&hcdDevicePdoSerial);
@@ -287,17 +357,25 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     }
 
     pdo = (PHCD_DEVICE_PDO)obj->DeviceExtension;
-    pdo->Config = (PUCHAR)HcdPoolAlloc(dev->ConfigLength);
+    pdo->Config = (PUCHAR)HcdPoolAlloc(length);
     if (pdo->Config == NULL) {
         /* Without the configuration the compatible ids would be wrong for
          * a device whose class is its interfaces' (round 1, finding 13). */
         IoDeleteDevice(obj);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
-    for (i = 0; i < dev->ConfigLength; i++) {
-        pdo->Config[i] = dev->Config[i];
+    if (func == NULL) {
+        for (i = 0; i < length; i++) {
+            pdo->Config[i] = dev->Config[i];
+        }
+    } else {
+        (VOID)XhciFuncConfig(dev->Config, dev->ConfigLength, func,
+                             pdo->Config, length, &length);
+        pdo->Function = 1;
+        pdo->Func = *func;
+        pdo->InterfaceMask = func->InterfaceMask;
     }
-    pdo->ConfigLength = dev->ConfigLength;
+    pdo->ConfigLength = length;
     pdo->Common.Kind = HCD_KIND_DEVICE_PDO;
     pdo->Common.Self = obj;
     HcdIoRefusedInit(pdo);
@@ -315,20 +393,100 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     for (i = 0; i < sizeof(pdo->DeviceDesc); i++) {
         pdo->DeviceDesc[i] = dev->DeviceDesc[i];
     }
+    pdo->Group = serial;
 
     obj->Flags |= DO_POWER_PAGABLE;
     obj->Flags &= ~DO_DEVICE_INITIALIZING;
-    dev->Pdo = obj;
+    *made = pdo;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * The PDO(s) for an enumerated device: one device PDO, or - for a device the
+ * bus splits (xhci_func.c, design record 13 section 10.8) - the device
+ * configured by the bus and one function PDO per function, all created
+ * before any is listed, listed in one hold of PdoListLock, and announced by
+ * one relations invalidation, so PnP meets them together. On a failure
+ * nothing is listed and the port's machine fails; a device the bus already
+ * configured stays so until the slot is disabled. Thread only (the bus's
+ * configure is a thread control transfer).
+ */
+NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    XHCI_FUNC_SET set;
+    PHCD_DEVICE_PDO first;
+    PHCD_DEVICE_PDO last;
+    PHCD_DEVICE_PDO pdo;
+    KIRQL oldIrql;
+    NTSTATUS status;
+    ULONG count;
+    ULONG i;
+
+    if (hc->RootHubPdo == NULL || !hc->RootHubStarted ||
+        dev->ConfigLength == 0 || dev->Config == NULL) {
+        return STATUS_DEVICE_NOT_READY;
+    }
+    if (XhciFuncSplit(dev->DeviceDesc, dev->Config, dev->ConfigLength,
+                      &set) != XHCI_FUNC_OK) {
+        set.Count = 0;
+    }
+    if (set.Count != 0 && !HcdCfgParentConfigure(hc, dev)) {
+        XHCI_DBG_VALUE("hcd: split device not configured, port", dev->Port);
+        return STATUS_UNSUCCESSFUL;
+    }
+    count = (set.Count != 0) ? set.Count : 1;
+    first = NULL;
+    last = NULL;
+    status = STATUS_SUCCESS;
+    for (i = 0; i < count; i++) {
+        status = hcdPdoNew(hc, dev, (set.Count != 0) ? &set.Func[i] : NULL,
+                           &pdo);
+        if (!NT_SUCCESS(status)) {
+            goto cleanup;
+        }
+        if (first == NULL) {
+            first = pdo;
+        } else {
+            pdo->Group = first->Group;
+            last->Sibling = pdo;
+        }
+        last = pdo;
+    }
+    dev->Pdo = first->Common.Self;
+    dev->PdoGroup = first->Group;
 
     KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
-    pdo->Next = hc->DevicePdos;
-    hc->DevicePdos = pdo;
-    pdo->Listed = 1;
+    for (pdo = first; pdo != NULL; pdo = pdo->Sibling) {
+        pdo->Next = hc->DevicePdos;
+        hc->DevicePdos = pdo;
+        pdo->Listed = 1;
+    }
     KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
 
-    XHCI_DBG_VALUE("hcd: device PDO created on port", dev->Port);
+    XHCI_DBG_VALUE("hcd: device PDOs created, port/count",
+                   (dev->Port << 16) | count);
+    /* The first guest run reads the grouping off these (design record 13
+     * section 10.10: the real units' interface numbering is unread). */
+    for (i = 0; i < set.Count; i++) {
+        XHCI_DBG_VALUE("hcd: function PDO, port/MI",
+                       (dev->Port << 16) | set.Func[i].FirstInterface);
+        XHCI_DBG_VALUE("hcd: function PDO, interface mask",
+                       set.Func[i].InterfaceMask);
+        XHCI_DBG_VALUE("hcd: function PDO, class/subclass/protocol",
+                       (set.Func[i].Class << 16) |
+                           (set.Func[i].SubClass << 8) |
+                           set.Func[i].Protocol);
+    }
     IoInvalidateDeviceRelations(hc->RootHubPdo, BusRelations);
     return STATUS_SUCCESS;
+
+cleanup:
+    while (first != NULL) {
+        pdo = first;
+        first = first->Sibling;
+        hcdDeletePdo(pdo);
+    }
+    return status;
 }
 
 static VOID hcdUnlinkLocked(PHCD_DEVICE_PDO *head, PHCD_DEVICE_PDO pdo)
@@ -345,50 +503,74 @@ static VOID hcdUnlinkLocked(PHCD_DEVICE_PDO *head, PHCD_DEVICE_PDO pdo)
 }
 
 /*
- * The device left. Its PDO leaves the relations; a PDO PnP never saw is
- * deleted here and now. Returns 0 when nothing remains for the port to wait
- * for (no PDO, or deleted at once), otherwise the serial of the PDO whose
- * deletion the port must wait for (HcdDevicePdoExists; the PortPdoRemoved
- * bit only says when to look - round 2, finding 2). The device record goes
- * with the slot; the PDO keeps nothing of it. Thread, or the stop.
+ * The device left. Every PDO of it - one device PDO, or every function PDO
+ * of a split device - leaves the relations in one hold of PdoListLock, so the
+ * next relations answer omits them all together (design record 13 sections
+ * 10.5 step 3 and 10.9, CYCLE_PORT); a PDO PnP never saw is deleted here and
+ * now. Returns 0 when nothing remains for the port to wait for (no PDO, or
+ * every one deleted at once), otherwise the group serial the port must wait
+ * on until the last of them is deleted (HcdDevicePdoExists; the
+ * PortPdoRemoved bit only says when to look - round 2, finding 2). The
+ * device record goes with the slot; the PDOs keep nothing of it. Thread, or
+ * the stop.
  */
 ULONG HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     PHCD_DEVICE_PDO pdo;
+    PHCD_DEVICE_PDO next;
+    PHCD_DEVICE_PDO doomed;
     KIRQL oldIrql;
-    ULONG deleteNow;
-    ULONG serial;
+    ULONG waits;
+    ULONG group;
 
     if (dev == NULL || dev->Pdo == NULL) {
         return 0;
     }
     pdo = (PHCD_DEVICE_PDO)dev->Pdo->DeviceExtension;
     dev->Pdo = NULL;
+    group = pdo->Group;
+    doomed = NULL;
+    waits = 0;
 
+    /* The chain is whole here: every PDO on it is still listed, and a
+     * listed PDO is never deleted by its own REMOVE (hcdPdoRemoved); the
+     * parent's release, the one other deleter, clears dev->Pdo first. */
     KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
-    hcdUnlinkLocked(&hc->DevicePdos, pdo);
-    pdo->Listed = 0;
-    pdo->Device = NULL;
-    deleteNow = !pdo->Reported;
-    serial = pdo->Serial;
-    if (!deleteNow) {
-        pdo->Next = hc->GonePdos;
-        hc->GonePdos = pdo;
+    for (; pdo != NULL; pdo = next) {
+        next = pdo->Sibling;
+        pdo->Sibling = NULL;
+        hcdUnlinkLocked(&hc->DevicePdos, pdo);
+        pdo->Listed = 0;
+        pdo->Device = NULL;
+        if (!pdo->Reported) {
+            pdo->Next = doomed;
+            doomed = pdo;
+        } else {
+            pdo->Next = hc->GonePdos;
+            hc->GonePdos = pdo;
+            waits = 1;
+        }
     }
     KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
 
-    if (deleteNow) {
+    while (doomed != NULL) {
+        pdo = doomed;
+        doomed = pdo->Next;
+        pdo->Next = NULL;
         hcdDeletePdo(pdo);
+    }
+    if (!waits) {
         return 0;
     }
     if (hc->RootHubPdo != NULL) {
         IoInvalidateDeviceRelations(hc->RootHubPdo, BusRelations);
     }
-    return serial;
+    return group;
 }
 
-/* Whether the PDO of that serial is still on either list - not yet deleted
- * nor released. 0 for serial 0. IRQL: <= DISPATCH_LEVEL. */
+/* Whether any PDO of that group is still on either list - not yet deleted
+ * nor released. A lone device PDO's group is its own serial. 0 for serial
+ * 0. IRQL: <= DISPATCH_LEVEL. */
 ULONG HcdDevicePdoExists(PHCD_CONTROLLER hc, ULONG serial)
 {
     PHCD_DEVICE_PDO pdo;
@@ -401,10 +583,10 @@ ULONG HcdDevicePdoExists(PHCD_CONTROLLER hc, ULONG serial)
     found = 0;
     KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
     for (pdo = hc->GonePdos; pdo != NULL && !found; pdo = pdo->Next) {
-        found = pdo->Serial == serial;
+        found = pdo->Group == serial;
     }
     for (pdo = hc->DevicePdos; pdo != NULL && !found; pdo = pdo->Next) {
-        found = pdo->Serial == serial;
+        found = pdo->Group == serial;
     }
     KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
     return found;
@@ -573,11 +755,19 @@ static VOID hcdPdoQuiesce(PHCD_DEVICE_PDO pdo, ULONG removing)
         }
         KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
         if (dev != NULL) {
-            XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-            dev->AbortAll = 1;
-            hc->CancelWork = 1;
-            XhciControllerLockRelease(&hc->Hc, oldIrql);
-            HcdThreadWake(hc);
+            if (pdo->Function) {
+                /* Its own requests only, EP0's included: its siblings
+                 * share the device and keep running (design record 13
+                 * section 10.9). Its endpoints stay enabled with nothing
+                 * on them; its next SELECT_CONFIGURATION closes them. */
+                HcdIoCancelPdo(hc, dev, pdo);
+            } else {
+                XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+                dev->AbortAll = 1;
+                hc->CancelWork = 1;
+                XhciControllerLockRelease(&hc->Hc, oldIrql);
+                HcdThreadWake(hc);
+            }
             (VOID)InterlockedDecrement(&dev->Refs);
         }
     }

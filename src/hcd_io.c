@@ -1017,7 +1017,15 @@ NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     if (pipe != NULL && pipe->Closed) {
         pipe = NULL;
     }
+    if (pipe != NULL && !HcdPdoOwnsPipe(pdo, dev, pipe)) {
+        /* A sibling function's handle (design record 13 section 10.9). */
+        pipe = NULL;
+    }
     if (pipe != NULL) {
+        /* The PDO rides on the IRP from here, under this lock, so a
+         * function's cancel (HcdIoCancelPdo) finds a record by its IRP
+         * before x->Pdo is written, which happens after the lock. */
+        irp->Tail.Overlay.DriverContext[2] = pdo;
         if (IsListEmpty(&pipe->Waiting)) {
             x = hcdTakeRecord(pipe, irp);
         }
@@ -1300,6 +1308,74 @@ ULONG HcdIoPipeCancelAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
     hcdWaitingRefuse(&waiting, pipe->Device, HCD_USBD_CANCELED);
     HcdIoDeferred(hc);
     return marked;
+}
+
+/*
+ * A function PDO stopping or being removed (hcd_pdo.c): every request of
+ * that PDO on any pipe of the device - EP0's included, which its siblings
+ * share - is marked as its own cancel routine would mark it (hcdCancel),
+ * and its waiting IRPs leave their lists to complete as cancelled; the
+ * siblings' requests are not touched. The thread then takes the marked
+ * ones off each pipe with the survivors kept (hcd_cfg.c, hcdCfgCancelPipe).
+ * A record is matched by its IRP's DriverContext[2], which HcdIoSubmit and
+ * the parking write under the controller lock, not by x->Pdo, which a
+ * record handed to a waiting IRP gets only after the lock's release; under
+ * the lock a record that is not free holds an IRP not yet completed
+ * (hcdRecordRelease). The quiesce closed admission and waited out the
+ * dispatches first. IRQL: PASSIVE_LEVEL, a device reference held.
+ */
+VOID HcdIoCancelPdo(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                    PHCD_DEVICE_PDO pdo)
+{
+    LIST_ENTRY waiting;
+    PLIST_ENTRY entry;
+    PLIST_ENTRY next;
+    PHCD_PIPE pipe;
+    PHCD_XFER x;
+    PIRP irp;
+    KIRQL oldIrql;
+    ULONG marked;
+    ULONG dci;
+    ULONG i;
+
+    InitializeListHead(&waiting);
+    marked = 0;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    for (dci = 1; dci < 32; dci++) {
+        pipe = (dci == 1) ? &dev->Ep0Pipe : dev->Pipes[dci];
+        if (pipe == NULL) {
+            continue;
+        }
+        for (entry = pipe->Waiting.Flink; entry != &pipe->Waiting;
+             entry = next) {
+            next = entry->Flink;
+            irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
+            /* One whose routine already runs is left to it
+             * (hcdWaitCancel). */
+            if (irp->Tail.Overlay.DriverContext[2] == pdo &&
+                IoSetCancelRoutine(irp, NULL) != NULL) {
+                RemoveEntryList(entry);
+                InsertTailList(&waiting, entry);
+            }
+        }
+        for (i = 0; i < HCD_PIPE_XFERS; i++) {
+            x = &pipe->Xfers[i];
+            if (x->State != HCD_XFER_FREE && x->Irp != NULL &&
+                x->Irp->Tail.Overlay.DriverContext[2] == pdo) {
+                x->CancelRequested = 1;
+                pipe->CancelPending = 1;
+                marked = 1;
+            }
+        }
+    }
+    if (marked) {
+        hc->CancelWork = 1;
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    hcdWaitingRefuse(&waiting, dev, HCD_USBD_CANCELED);
+    XHCI_DBG_VALUE("hcd: function PDO requests cancelled, MI",
+                   pdo->Func.FirstInterface);
+    HcdThreadWake(hc);
 }
 
 /* Until no record of the pipe is still marked cancelled - each clears its

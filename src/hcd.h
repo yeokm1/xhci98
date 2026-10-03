@@ -25,6 +25,7 @@
 #include "xhci_usbport.h"
 #include "xhci_enum.h"
 #include "xhci_pipe.h"
+#include "xhci_func.h"
 
 #define HCD_KIND_CONTROLLER_FDO 0x43464448UL /* 'HDFC' */
 #define HCD_KIND_ROOTHUB_PDO    0x50524448UL /* 'HDRP' */
@@ -224,7 +225,16 @@ typedef struct _HCD_USB_DEVICE {
     UCHAR DeviceDesc[18];
     PUCHAR Config;          /* the whole configuration descriptor       */
     ULONG ConfigLength;
-    PDEVICE_OBJECT Pdo;     /* 26-A.4's device PDO, once it exists      */
+    PDEVICE_OBJECT Pdo;     /* 26-A.4's device PDO, once it exists; for a
+                             * split device its first function PDO, the
+                             * rest on that PDO's Sibling chain          */
+    ULONG PdoGroup;         /* the Group of its PDO(s)                   */
+    ULONG Split;            /* configured by the bus for function PDOs
+                             * (HcdCfgParentConfigure)                   */
+    ULONG IfaceUsed;        /* split: interfaces (bit n) whose endpoints
+                             * were opened since the device last restarted
+                             * their toggles; a function's re-select owes
+                             * them SET_INTERFACE (hcd_cfg.c)            */
     ULONG Abandoned;        /* off its port with the slot still enabled:
                              * the next powered pass disables it        */
     /* The URB path (hcd_io.c). Refs counts URB IRPs that hold the record,
@@ -301,14 +311,36 @@ typedef struct _HCD_DEVICE_PDO {
     UCHAR DeviceDesc[18];
     PUCHAR Config;
     ULONG ConfigLength;
+    /* A function PDO of a split device (26-A.7; design record 13 section
+     * 10.9): Config is then the function's filtered configuration
+     * descriptor, not the device's, and only the pipes of InterfaceMask's
+     * interfaces are its own. Fixed at creation. */
+    ULONG Function;
+    ULONG InterfaceMask;            /* bit n: bInterfaceNumber n           */
+    XHCI_FUNC Func;
+    /* Every PDO of one device: the serial a port waits on and a cycle
+     * names (Group, the first PDO's Serial; a lone device PDO's own), and
+     * the chain HcdDevicePdoGone walks when the device leaves (Sibling,
+     * written before the PDOs are listed, read only by the thread). */
+    ULONG Group;
+    struct _HCD_DEVICE_PDO *Sibling;
 } HCD_DEVICE_PDO, *PHCD_DEVICE_PDO;
+
+/* Whether a PDO may use a pipe of its device: a device PDO any, a function
+ * PDO the shared EP0 and its own interfaces' (design record 13 section
+ * 10.9). Controller lock held, as for any read of a pipe. */
+#define HcdPdoOwnsPipe(pdo, dev, pipe)                                       \
+    (!(pdo)->Function || (pipe) == &(dev)->Ep0Pipe ||                        \
+     ((pipe)->Interface < 32UL &&                                            \
+      ((pdo)->InterfaceMask & (1UL << (pipe)->Interface)) != 0))
 
 /* A root port: its enumeration machine and the device on it. */
 typedef struct _HCD_PORT {
     XHCI_ENUM_PORT Enum;
     ULONG PortId;           /* 1-based xHCI port number                 */
     PHCD_USB_DEVICE Device;
-    ULONG AwaitSerial;      /* Gone: the PDO whose deletion it waits for */
+    ULONG AwaitSerial;      /* Gone: the PDO group whose deletion it
+                             * waits for                                 */
 } HCD_PORT, *PHCD_PORT;
 
 #define HCD_PORT_WORDS ((XHCI_MAX_ROOT_PORTS + 31UL) / 32UL)
@@ -579,6 +611,7 @@ VOID HcdCfgService(PHCD_CONTROLLER hc);
 VOID HcdCfgCancelService(PHCD_CONTROLLER hc);
 VOID HcdCfgDeviceGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 PHCD_PIPE HcdCfgPipe(PHCD_USB_DEVICE dev, PVOID handle);
+ULONG HcdCfgParentConfigure(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 
 /* hcd_pdo.c */
 NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
@@ -605,6 +638,8 @@ VOID HcdIoPipeRelease(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoPipePause(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoPipeResume(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 ULONG HcdIoPipeCancelAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
+VOID HcdIoCancelPdo(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                    struct _HCD_DEVICE_PDO *pdo);
 VOID HcdIoPipeWaitCancelled(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoWaitPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok);

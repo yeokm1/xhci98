@@ -825,13 +825,13 @@ VOID HcdEnumCycle(PHCD_CONTROLLER hc, ULONG port, ULONG serial)
     HcdThreadWake(hc);
 }
 
-/* Whether the device on the port is still the one that PDO serial stands
- * for. Thread only (dev->Pdo's writer). */
+/* Whether the device on the port is still the one that PDO group stands
+ * for (a lone device PDO's group is its serial). Thread only (dev->Pdo's
+ * writer). */
 static ULONG hcdCycleOwns(PHCD_PORT p, ULONG serial)
 {
     return p->Device != NULL && p->Device->Pdo != NULL &&
-           ((PHCD_DEVICE_PDO)p->Device->Pdo->DeviceExtension)->Serial ==
-               serial;
+           p->Device->PdoGroup == serial;
 }
 
 /* ----------------------------------------------------------------------- */

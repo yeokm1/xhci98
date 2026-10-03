@@ -309,11 +309,23 @@ LONG HcdUrbIoRequest(PVOID urbv, PHCD_IO_REQUEST req)
  * one, which a streaming client resubmits from its completion routine and
  * which therefore completes at the next tick, its packets stamped (Codex
  * review of batch (c), round 16, finding 3). */
+static NTSTATUS hcdTransferParsed(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                                  PIRP irp, PURB urb,
+                                  const HCD_IO_REQUEST *req)
+{
+    PHCD_USB_DEVICE dev;
+
+    dev = hcdDeviceRef(hc, pdo);
+    if (dev == NULL) {
+        return hcdGoneLater(pdo, irp, urb);
+    }
+    return HcdIoSubmit(hc, dev, pdo, irp, urb, req);
+}
+
 static NTSTATUS hcdTransferUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
                                PIRP irp, PURB urb)
 {
     HCD_IO_REQUEST req;
-    PHCD_USB_DEVICE dev;
     LONG usbd;
 
     usbd = HcdUrbIoRequest(urb, &req);
@@ -324,11 +336,89 @@ static NTSTATUS hcdTransferUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         }
         return hcdUrbComplete(irp, urb, usbd, STATUS_INVALID_PARAMETER);
     }
-    dev = hcdDeviceRef(hc, pdo);
-    if (dev == NULL) {
-        return hcdGoneLater(pdo, irp, urb);
+    return hcdTransferParsed(pdo, hc, irp, urb, &req);
+}
+
+/*
+ * GET_DESCRIPTOR(CONFIGURATION) at a function PDO: answered from the PDO's
+ * filtered copy (xhci_func.c), never from the device, whose bNumInterfaces
+ * counts its siblings' interfaces too - Windows 2000's usbaudio.sys walks
+ * that count over a list holding only its own (usbaudio-crash.md). The
+ * client's buffer is reached without a mapping call: TransferBuffer, or an
+ * MDL's MappedSystemVa when the MDL says it is mapped - the first arm of
+ * the DDK's MmGetSystemAddressForMdl, whose second arm (MmMapLockedPages)
+ * this driver does not import. Completed inline, as GET_CURRENT_FRAME_NUMBER
+ * is: no client resubmits a configuration read from its completion routine.
+ */
+static NTSTATUS hcdFunctionConfig(PHCD_DEVICE_PDO pdo, PIRP irp, PURB urb,
+                                  const HCD_IO_REQUEST *req)
+{
+    PUCHAR to;
+    ULONG wLength;
+    ULONG n;
+    ULONG i;
+
+    if (req->Setup[2] != 0) {
+        /* A split device has one configuration (design record 13 section
+         * 10.9). */
+        return hcdUrbComplete(irp, urb, USBD_STATUS_INVALID_PARAMETER,
+                              STATUS_INVALID_PARAMETER);
     }
-    return HcdIoSubmit(hc, dev, pdo, irp, urb, &req);
+    to = NULL;
+    if (req->Mdl != NULL) {
+        if ((req->Mdl->MdlFlags &
+             (MDL_MAPPED_TO_SYSTEM_VA | MDL_SOURCE_IS_NONPAGED_POOL)) != 0) {
+            to = (PUCHAR)req->Mdl->MappedSystemVa;
+        }
+    } else {
+        to = (PUCHAR)req->Buffer;
+    }
+    wLength = (ULONG)req->Setup[6] | ((ULONG)req->Setup[7] << 8);
+    n = req->Length;
+    if (n > wLength) {
+        n = wLength;
+    }
+    if (n > pdo->ConfigLength) {
+        n = pdo->ConfigLength;
+    }
+    if (to == NULL && n != 0) {
+        XHCI_DBG_TEXT("hcd: function configuration read, buffer unmapped");
+        return hcdUrbComplete(irp, urb, USBD_STATUS_INVALID_PARAMETER,
+                              STATUS_INVALID_PARAMETER);
+    }
+    for (i = 0; i < n; i++) {
+        to[i] = pdo->Config[i];
+    }
+    if (req->LengthOut != NULL) {
+        *req->LengthOut = n;
+    }
+    urb->UrbHeader.Status = USBD_STATUS_SUCCESS;
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+}
+
+/* A control URB at a function PDO (design record 13 section 10.9): the
+ * configuration descriptor is the bus's to give, and a standard or class
+ * request to an interface must name one of the function's. */
+static NTSTATUS hcdFunctionControl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                                   PIRP irp, PURB urb)
+{
+    HCD_IO_REQUEST req;
+    LONG usbd;
+
+    usbd = HcdUrbIoRequest(urb, &req);
+    if (usbd != USBD_STATUS_SUCCESS) {
+        return hcdUrbComplete(irp, urb, usbd, STATUS_INVALID_PARAMETER);
+    }
+    if (req.Setup[0] == 0x80 && req.Setup[1] == 6 && req.Setup[3] == 2) {
+        return hcdFunctionConfig(pdo, irp, urb, &req);
+    }
+    if (!XhciFuncSetupAllowed(req.Setup, pdo->InterfaceMask)) {
+        XHCI_DBG_VALUE("hcd: function control refused, bmRequestType/wIndex",
+                       ((ULONG)req.Setup[0] << 16) | req.Setup[4]);
+        return hcdUrbComplete(irp, urb, USBD_STATUS_INVALID_PARAMETER,
+                              STATUS_INVALID_PARAMETER);
+    }
+    return hcdTransferParsed(pdo, hc, irp, urb, &req);
 }
 
 static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
@@ -355,6 +445,9 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     if (hc == NULL || !pdo->Listed) {
         /* Orphaned, or its device has left: nothing on the bus answers. */
         return hcdGoneLater(pdo, irp, urb);
+    }
+    if (pdo->Function && hcdIsControl(function)) {
+        return hcdFunctionControl(pdo, hc, irp, urb);
     }
     if (hcdIsControl(function) ||
         function == URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER ||
@@ -459,7 +552,8 @@ static NTSTATUS hcdHubCount(PIRP irp, PULONG count)
  * feeds the port a disconnect (HcdEnumCycle). Completed now, not when the
  * cycle is done: the cycle frees the device record, which waits for every
  * reference, and deletes this PDO, whose REMOVE waits for every IRP it
- * pended.
+ * pended. From a function PDO it cycles the whole device: every sibling
+ * leaves with it, named by the group.
  */
 static NTSTATUS hcdCyclePort(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
                              PIRP irp)
@@ -468,7 +562,7 @@ static NTSTATUS hcdCyclePort(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
     }
     XHCI_DBG_VALUE("hcd: cycle port asked, port", pdo->Port);
-    HcdEnumCycle(hc, pdo->Port, pdo->Serial);
+    HcdEnumCycle(hc, pdo->Port, pdo->Group);
     return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
 }
 
