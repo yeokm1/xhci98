@@ -1,4 +1,4 @@
-SIZEOF 192
+SIZEOF 224
 CommandsGivenUp 92
 DevicesAddressed 4
 EndpointConfigureFailures 60
@@ -31,6 +31,14 @@ SpeedDisagreements 32
 SsBosMissing 184
 SsDevicesOnUsb2 180
 SsEndpointsEsitRefused 188
+SsHubConfigErrors 212
+SsHubDepthRefused 200
+SsHubDevicesPlus 216
+SsHubLinksGivenUp 208
+SsHubPairs 196
+SsHubRateUnmatched 220
+SsHubsStarted 192
+SsHubWarmResets 204
 SsLinksGivenUp 176
 SsResetsConverted 172
 SsWarmResets 168

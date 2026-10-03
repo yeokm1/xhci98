@@ -155,8 +155,9 @@ ULONG HcdHubPlace(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG speedClass,
         return 0;
     }
     psiv = 0;
-    if (XhciPortPsivForSpeed(&hc->Hc.PortMap, child.RootPort, speedClass,
-                             &psiv) != XHCI_CAPS_OK) {
+    if (hub->Usb3 ? !HcdSsHubPsiv(hc, p, child.RootPort, &psiv)
+                  : XhciPortPsivForSpeed(&hc->Hc.PortMap, child.RootPort,
+                                         speedClass, &psiv) != XHCI_CAPS_OK) {
         XHCI_DBG_VALUE("hcd: no speed ID behind hub, class", speedClass);
         return 0;
     }
@@ -167,7 +168,7 @@ ULONG HcdHubPlace(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG speedClass,
     dev->TtSlot = 0;
     dev->TtPort = 0;
     dev->TtMulti = 0;
-    if (speedClass != XHCI_SPEED_HIGH &&
+    if (!hub->Usb3 && speedClass != XHCI_SPEED_HIGH &&
         XhciTopoTtFor(topo, hub->SlotId, p->Number, &tt)) {
         dev->TtSlot = tt.HubAddress;
         dev->TtPort = tt.HubPort;
@@ -286,6 +287,9 @@ ULONG HcdHubPortReset(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     ULONG waited;
     ULONG progress;
 
+    if (hub->Usb3) {
+        return HcdSsHubPortReset(hc, hub, n, speedClass);
+    }
     *speedClass = XHCI_SPEED_UNKNOWN;
     if (!HcdHubPortStatus(hc, hub, n, &status, &change) ||
         (status & XHCI_HUB_PORT_CONNECTION) == 0 ||
@@ -335,6 +339,9 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     ULONG bit;
     ULONG selector;
 
+    if (hub->Usb3) {
+        return HcdSsHubPortLook(hc, hub, n, state, d);
+    }
     if (!HcdHubPortStatus(hc, hub, n, &status, &change)) {
         return 0;
     }
@@ -824,7 +831,8 @@ ULONG HcdHubStart(PHCD_CONTROLLER hc, PHCD_PORT p, PHCD_USB_DEVICE dev)
                        (dev->SlotId << 8) | hub->Tier);
         return 1;
     }
-    if (!hcdHubConfigure(hc, hub)) {
+    hub->Usb3 = cls == XHCI_SPEED_SUPER;
+    if (hub->Usb3 ? !HcdSsHubConfigure(hc, hub) : !hcdHubConfigure(hc, hub)) {
         HcdHubForget(hc, hub);
         HcdHubFree(hc, hub);
         return 0;
@@ -848,7 +856,18 @@ ULONG HcdHubStart(PHCD_CONTROLLER hc, PHCD_PORT p, PHCD_USB_DEVICE dev)
     hub->Changed = XhciHubAllBits(hub->Ports);
     HcdHubRearm(hc, hub);
     hc->Counters.HubsStarted++;
+    HcdSsHubCountPair(hc, hub);
     XHCI_DBG_VALUE("hcd: hub started, slot/tier/ports",
                    (dev->SlotId << 16) | (hub->Tier << 8) | hub->Ports);
     return 1;
+}
+
+/* hcdHubRequest for the SuperSpeed half (hcd_sshub.c): one hub-class
+ * request on the hub's default pipe, seen by the graph. */
+ULONG HcdHubClassRequest(PHCD_CONTROLLER hc, PHCD_HUB hub, UCHAR type,
+                         UCHAR request, USHORT value, USHORT index,
+                         ULONG length, PULONG bytes, PULONG stalled)
+{
+    return hcdHubRequest(hc, hub, type, request, value, index, length, bytes,
+                         stalled);
 }

@@ -11,9 +11,10 @@ All tables in this file were transcribed from that local spec PDF (register
 figures and field tables checked page by page), not from memory. If this file
 and the PDF ever disagree, the PDF wins: fix this file.
 
-**Except section 10** (SuperSpeed and SuperSpeedPlus, Phase 29's task 29-0),
-which was drafted without the PDF open and is marked row by row for
-verification; read its provenance paragraph first. Since Phase 29 the driver
+**Except sections 10 and 11** (SuperSpeed and SuperSpeedPlus, Phase 29's task
+29-0; the USB 3.2 hub class, Phase 30's task 30-0), which were drafted without
+the PDF open and are marked row by row for verification; read section 10's
+provenance paragraph first. Since Phase 29 the driver
 manages USB3 protocol ports too, so the remarks in sections 3 and 7 that every
 managed port is a USB2 protocol port describe the driver before that phase.
 
@@ -1656,7 +1657,8 @@ controller's next start. Verify before relaxing it.
 - Speed (DW0 23:20) is the port's PSIV, raw, as for every speed (section 8).
   1.2c's note that the field is "not applicable to USB3 Gen X" is section 8's;
   the driver writes it regardless.
-- Route String is 0 on a root port; behind a SuperSpeed hub it is Phase 30's.
+- Route String is 0 on a root port; behind a SuperSpeed hub it is the topology
+  graph's, as for any hub (section 11.8).
 - No TT fields: a SuperSpeed device has no transaction translator.
 - Max Exit Latency 0: the driver enables neither U1 nor U2 (PORTPMSC's U1 and
   U2 timeouts stay 0), so no exit latency is owed. **To verify** that a 0 here
@@ -1754,3 +1756,268 @@ cause of the ping-pong 29-A.5's hold exists to prevent - and on a power cycle.
   (`8086:02ED`) ports 13-18 or the Thunderbolt controller's own xHCI, and
   whether that one is present to Windows 98 SE. Needs the machine, or the
   vendor's documentation, not a specification.
+
+## 11. The USB 3.2 hub class (roadmap-hcd.md task 30-0)
+
+**Read section 10's provenance paragraph first; it applies here unchanged.**
+This section was drafted on 2026-10-04 from the drafting agent's knowledge of
+the USB 3.2 specification (chapter 10, "Hub, Host Downstream Port, and Device
+Upstream Port Specification") with no PDF open, to give Phase 30's code
+something to cite. Linux's `include/uapi/linux/usb/ch11.h` and
+`drivers/usb/core/hub.c` (`external/`, interface documentation only) were the
+drafter's cross-check for numbers it was less sure of; nothing was copied from
+them. Every row carries its USB 3.2 section; **every row is to be verified
+against the specification** before task 30-0 is ticked, and the ones the
+drafter was least sure of say so in words. Section numbers are USB 3.2
+revision 1.0's as the drafter remembers them and are themselves to verify. The
+specification is not in `docs/references/`; fetching it is part of verifying
+section 10.7 to 10.9 already. Where this section and the specification
+disagree, the specification wins and `src\xhci_sshub.h`, which cites this
+section, is fixed with it.
+
+A USB 3 hub is two hubs in one enclosure: a USB 2.0 hub on its D+/D- pair
+(section 10 of design record 13; Phase 27) and a SuperSpeed hub on its
+SuperSpeed pairs, each with its own upstream port, device address,
+descriptors and status-change endpoint (USB 3.2 10.1, 10.2). This section is
+the SuperSpeed hub's class. Where a value is the same as USB 2.0's it is said
+so and design record 13 section 10.1 is the citation.
+
+### 11.1 Identification and the descriptor (USB 3.2 10.15.1, 10.15.2.1)
+
+- Device descriptor: bDeviceClass 09h, bDeviceSubClass 0, **bDeviceProtocol
+  03h** for a SuperSpeed hub (USB 2.0 hubs use 0, 1, 2); bcdUSB 0300h or above,
+  0310h or above for a hub that answers the extended port status (11.6).
+  bMaxPacketSize0 09h (512). **To verify** the protocol code.
+- One configuration, one interface (class 09h), one endpoint: the
+  status-change endpoint, interrupt IN, followed by its SuperSpeed Endpoint
+  Companion (section 10.7; bMaxBurst 0). wMaxPacketSize 2 for up to 15 ports
+  is what hubs report; **to verify** whether the specification fixes it.
+- The BOS descriptor carries a SuperSpeed USB Device Capability, a Container
+  ID (both halves report the same one, **to verify**; this driver does not
+  read it - 30-A.1 pairs nothing), and on a SuperSpeedPlus hub a
+  SuperSpeedPlus capability (section 10.7) whose sublink speed attributes
+  11.6 indexes.
+
+SuperSpeed hub descriptor, **type 2Ah**, read with GET_DESCRIPTOR,
+bmRequestType A0h, wValue 2A00h, wLength 12 (10.15.2.1, Table 10-3):
+
+| Offset | Field | Size | Notes |
+|---|---|---|---|
+| 0 | bLength | 1 | 12 |
+| 1 | bDescriptorType | 1 | 2Ah |
+| 2 | bNbrPorts | 1 | 1-15. A SuperSpeed hub has at most 15 downstream ports, so a Route String nibble names each exactly (xHCI Table 6-4 footnote 106's "above 14 is written 15" is about High- and Full-Speed hubs) |
+| 3 | wHubCharacteristics | 2 | bits 1:0 power switching (as USB 2.0), bit 2 compound device, bits 4:3 over-current protection mode; bits 6:5 (USB 2.0's TT think time) and bit 7 (port indicators) are **reserved** at SuperSpeed - **to verify** |
+| 5 | bPwrOn2PwrGood | 1 | 2 ms units, as USB 2.0 |
+| 6 | bHubContrCurrent | 1 | the hub controller's current; **to verify** the unit (the drafter recalls 4 mA units at SuperSpeed, 1 mA at USB 2.0) |
+| 7 | bHubHdrDecLat | 1 | hub packet header decode latency, in 0.1 us units, at most 10h (1.6 us). Informs U1/U2 exit-latency budgets, which this driver does not use |
+| 8 | wHubDelay | 2 | the hub's average delay, in ns, from the upstream port to a downstream port. Same remark |
+| 10 | DeviceRemovable | 2 | bit n = port n non-removable; bit 0 reserved. A fixed two bytes, unlike USB 2.0's variable bitmap; no PortPwrCtrlMask follows |
+
+`src\xhci_sshub.c` (`XhciSsHubParseDescriptor`) refuses a reply shorter than
+12, a bLength below 12 or past what arrived, a type other than 2Ah, no ports,
+and more than 15 ports. The bus manages ports 1-14 of it (every hub object has
+14 port objects; a fifteenth port is left unpowered) - a policy, not a
+specification limit.
+
+### 11.2 The class requests (USB 3.2 10.16.2, Table 10-8)
+
+| Request | bmRequestType | bRequest | wValue | wIndex | wLength | Notes |
+|---|---|---|---|---|---|---|
+| CLEAR_FEATURE (hub) | 20h | 1 | C_HUB_LOCAL_POWER 0, C_HUB_OVER_CURRENT 1 | 0 | 0 | as USB 2.0 |
+| CLEAR_FEATURE (port) | 23h | 1 | 11.4's selectors | port | 0 | |
+| GET_DESCRIPTOR | A0h | 6 | 2A00h | 0 | 12 | 11.1 |
+| GET_STATUS (hub) | A0h | 0 | 0 | 0 | 4 | wHubStatus / wHubChange: local power (bit 0) and over-current (bit 1), as USB 2.0 |
+| GET_STATUS (port) | A3h | 0 | **status type**: 0 standard, 1 PD status, 2 extended (11.6) | port | 4 standard, 8 extended | 10.16.2.6; **to verify** the type codes and that type 1 belongs to Power Delivery |
+| SET_FEATURE (hub) | 20h | 3 | | 0 | 0 | not used |
+| SET_FEATURE (port) | 23h | 3 | 11.4's selectors | port in 7:0; 15:8 a selector-specific value (11.4) | 0 | |
+| SET_HUB_DEPTH | 20h | **12** | the hub depth (11.3) | 0 | 0 | 10.16.2.9 |
+| GET_PORT_ERR_COUNT | A3h | 13 | 0 | port | 2 | link errors since the last read; not used |
+| CLEAR_TT_BUFFER, RESET_TT, GET_TT_STATE, STOP_TT | | 8-11 | | | | **not defined** for a SuperSpeed hub: it has no transaction translator |
+
+The two codes the drafter is least sure of are SET_HUB_DEPTH = 12 and
+GET_PORT_ERR_COUNT = 13: **to verify**.
+
+### 11.3 SET_HUB_DEPTH (USB 3.2 10.16.2.9)
+
+A SuperSpeed hub routes a downstream packet by the Route String in its header
+(the same five 4-bit nibbles the xHC's Slot Context carries, xHCI 4.3.3 and
+`xhci-data-structures.md` section 8, "Route String tier order"), taking the
+nibble its depth names. The hub cannot know its depth, so the host tells it:
+wValue = **the number of hubs between it and the root port**, 0 for a hub on a
+root port, 4 for the fifth hub of a chain (whose children's nibble is the
+fifth and last). It is sent **once the hub is configured** - the hub answers a
+Request Error before then - and before any downstream port is reset, since
+until it arrives the hub cannot route to one. **To verify** both the numbering
+(0-based from the root port) and that a Request Error is the specified answer
+before SET_CONFIGURATION. `hcd_sshub.c` sends it after SET_CONFIGURATION and
+before GET_DESCRIPTOR, with the topology graph's tier (0 on a root port), and
+does not serve a hub that refuses it.
+
+### 11.4 Port status, change bits and features at SuperSpeed (USB 3.2 10.16.2.6, Tables 10-9, 10-13, 10-14)
+
+wPortStatus, first word of a GET_STATUS(port) answer (Table 10-13):
+
+| Bit(s) | Field | USB 2.0's bit there | Notes |
+|---|---|---|---|
+| 0 | PORT_CONNECTION | same | a device is attached; on a SuperSpeed port, set when the link has trained (the drafter's reading; **to verify** whether it is set in SS.Inactive) |
+| 1 | PORT_ENABLE | same | set when the port is enabled; cleared by an error or a disconnect. **Not writable**: there is no ClearPortFeature(PORT_ENABLE) at SuperSpeed - a port is taken down by PORT_LINK_STATE = SS.Disabled (**to verify**) |
+| 2 | reserved | PORT_SUSPEND | suspend is the link state U3 |
+| 3 | PORT_OVER_CURRENT | same | |
+| 4 | PORT_RESET | same | set while a hot or warm reset runs |
+| 8:5 | PORT_LINK_STATE | PORT_POWER (8); 7:5 reserved | 11.5 |
+| 9 | PORT_POWER | low-speed | **power moves from bit 8 to bit 9** |
+| 12:10 | PORT_SPEED | high-speed (10), test (11), indicator (12) | negotiated speed: 0 = 5 Gb/s (Gen 1); other values reserved. A SuperSpeedPlus hub's rate is in the extended status (11.6), not here |
+| 15:13 | reserved | | |
+
+wPortChange, second word (Table 10-14):
+
+| Bit | Change | Cleared by selector | USB 2.0's bit there |
+|---|---|---|---|
+| 0 | C_PORT_CONNECTION | 16 | same |
+| 1 | reserved | - | C_PORT_ENABLE: **none at SuperSpeed** |
+| 2 | reserved | - | C_PORT_SUSPEND: none (a U3 exit is C_PORT_LINK_STATE) |
+| 3 | C_PORT_OVER_CURRENT | 19 | same |
+| 4 | C_PORT_RESET | 20 | same; a hot reset finished |
+| 5 | C_BH_PORT_RESET | 29 | a warm (BH) reset finished |
+| 6 | C_PORT_LINK_STATE | 25 | the link changed state on its own: a U3 to U0 transition completed, or the link entered SS.Inactive or Compliance Mode (**to verify** the full list of triggers) |
+| 7 | C_PORT_CONFIG_ERROR | 26 | link training could not configure the port (**to verify**: the drafter's reading is that the link is not usable until the next connect) |
+
+Port feature selectors (Table 10-9; those USB 2.0 shares keep USB 2.0's
+numbers):
+
+| Selector | Value | Set / Clear | Notes |
+|---|---|---|---|
+| PORT_CONNECTION | 0 | - | status only |
+| PORT_OVER_CURRENT | 3 | - | status only |
+| PORT_RESET | 4 | Set | hot reset; completes with C_PORT_RESET |
+| PORT_LINK_STATE | 5 | Set | wIndex 15:8 = the target state (11.5): U0, U1, U2, U3, SS.Disabled or Rx.Detect only |
+| PORT_POWER | 8 | Set, Clear | as USB 2.0 |
+| C_PORT_CONNECTION | 16 | Clear | |
+| C_PORT_OVER_CURRENT | 19 | Clear | |
+| C_PORT_RESET | 20 | Clear | |
+| PORT_U1_TIMEOUT | 23 | Set | wIndex 15:8 = timeout; 0 disables U1 (the state after reset, **to verify**) |
+| PORT_U2_TIMEOUT | 24 | Set | likewise for U2 |
+| C_PORT_LINK_STATE | 25 | Clear | |
+| C_PORT_CONFIG_ERROR | 26 | Clear | |
+| PORT_REMOTE_WAKE_MASK | 27 | Set | wIndex 15:8 = the mask, 11.7 |
+| BH_PORT_RESET | 28 | Set | warm reset; completes with C_BH_PORT_RESET |
+| C_BH_PORT_RESET | 29 | Clear | |
+| FORCE_LINKPM_ACCEPT | 30 | Set, Clear | compliance testing; not used |
+
+The selectors the drafter is least sure of are 23-30 as a block: **to verify
+each**. The status-change endpoint's report is USB 2.0's shape - bit 0 the hub,
+bit n port n, ceil((bNbrPorts + 1) / 8) bytes, two bytes for 15 ports
+(**to verify** 10.15.2.2, or wherever the SuperSpeed hub's report is
+specified).
+
+### 11.5 Link states and resets (USB 3.2 7.5, 10.16.2.6.1, 10.3)
+
+PORT_LINK_STATE values (Table 10-13's note):
+
+| Value | State | wPortStatus with it | How it is left |
+|---|---|---|---|
+| 0 | U0 | 0000h | |
+| 1 | U1 | 0020h | |
+| 2 | U2 | 0040h | |
+| 3 | U3 | 0060h | SetPortFeature(PORT_LINK_STATE, U0), then C_PORT_LINK_STATE |
+| 4 | SS.Disabled (eSS.Disabled) | 0080h | SetPortFeature(PORT_LINK_STATE, Rx.Detect) |
+| 5 | Rx.Detect | 00A0h | a far-end receiver detected, then Polling |
+| 6 | SS.Inactive | 00C0h | **warm reset only** (BH_PORT_RESET) |
+| 7 | Polling | 00E0h | training ends in U0, or falls to Rx.Detect / SS.Inactive |
+| 8 | Recovery | 0100h | |
+| 9 | Hot Reset | 0120h | |
+| 0Ah | Compliance Mode | 0140h | **warm reset only** |
+| 0Bh | Loopback | 0160h | warm reset |
+
+Two resets, as on an xHCI root port (section 10.4): a **hot reset**
+(SetPortFeature(PORT_RESET)) is in-band signalling over a trained link and can
+start only from U0 (the drafter is **not sure** whether U1, U2 and Recovery
+also admit it - the driver treats them as admitting it, since the link
+returns to U0 to carry it); a **warm reset** (SetPortFeature(BH_PORT_RESET),
+"bigger hammer") is LFPS signalling that works from any state with the port
+powered and is the only exit from SS.Inactive and Compliance Mode. A hub may
+answer a PORT_RESET with a warm reset if the link is not in U0 (**to verify**
+- the driver accepts either change bit as the end of either reset). A warm
+reset retrains the link, which the hub may also report as C_PORT_CONNECTION
+and C_PORT_LINK_STATE; Linux clears both after one, and so does the driver,
+since the device did not leave. After a reset, success is PORT_ENABLE with
+the link in U0; the reset recovery interval is USB 2.0's 10 ms
+(TRSTRCY, **to verify** that USB 3.2 keeps it for a SuperSpeed port).
+
+`XhciSsHubResetKind` encodes the policy: hot from U0, U1, U2 or Recovery with
+the port connected; warm from SS.Inactive or Compliance Mode (whether or not
+the port reads connected) and from any other state with a connection; none
+with nothing connected and the link in Rx.Detect, SS.Disabled or Polling.
+Warm resets are bounded per port by `xhci_link.h`'s
+`XHCI_LINK_MAX_WARM_RESETS` (three, this driver's number), after which the
+port is given up and the device - which falls back to its USB 2.0 path when
+its SuperSpeed link does not train - appears on the hub's USB 2.0 half.
+
+### 11.6 The extended port status of a SuperSpeedPlus hub (USB 3.2 10.16.2.6, Table 10-15)
+
+GET_STATUS(port) with wValue = 2 answers 8 bytes: wPortStatus, wPortChange,
+and **dwExtPortStatus**:
+
+| Bits | Field | Notes |
+|---|---|---|
+| 3:0 | Rx Sublink Speed ID | the SSID of the hub's own SuperSpeedPlus capability attribute (section 10.7) the receive link runs at |
+| 7:4 | Tx Sublink Speed ID | likewise, transmit |
+| 11:8 | Rx Lane Count | **the count minus one**: 0 = one lane |
+| 15:12 | Tx Lane Count | likewise |
+| 31:16 | reserved | |
+
+Only a hub of bcdUSB 0310h or above with a SuperSpeedPlus capability answers
+type 2; an older hub stalls it (**to verify**). The rate a downstream device
+runs at is that attribute's lane rate (LSM x 10^(3 x LSE) b/s; LP 1 says
+SuperSpeedPlus) times the lane count - the SSID indexes the **hub's** BOS
+attributes, not the device's or the xHC's PSI table. `XhciSsHubDownstream`
+reads the Rx sublink (an asymmetric link's Rx attribute; a Tx-only attribute
+is not a receive rate). PORT_SPEED in wPortStatus (11.4) says 0 for every
+rate, which is why the extended status exists.
+
+**The xHC is told the rate through the device's Slot Context Speed**, a PSIV
+of the root port's protocol (section 10.5 and xHCI 6.2.2): the bus looks for
+the PSIV whose PSI DWORD names SuperSpeedPlus at the aggregate rate, then at
+the lane rate, and on a protocol with no PSI table uses the default IDs - 5
+for 10 Gb/s on one lane (Gen 2x1), 6 for two lanes (Gen 1x2), 7 for 20 Gb/s
+(Gen 2x2). Whether a PSI DWORD's rate is per lane or aggregate is section
+10.1's question and is **to verify**; the two-step lookup is written to work
+under either reading. A rate no PSIV names is given SuperSpeed's ID and
+counted (`superspeed hubs: rates without an ID`).
+
+### 11.7 Remote wake masks (USB 3.2 10.16.2.10)
+
+SetPortFeature(PORT_REMOTE_WAKE_MASK) with wIndex 15:8 = a mask of the events
+that may wake the host while the hub's upstream link is in U3: bit 0
+connect, bit 1 disconnect, bit 2 over-current (**to verify** the bit order).
+The mask applies only while the hub is suspended. This driver suspends no hub
+(selective suspend is not on the roadmap, design record 13 section 10.2), so
+it sets no mask; the values are transcribed so a later phase starts from them.
+
+### 11.8 What the driver does with this (task 30-A.1)
+
+- A SuperSpeed hub on a SuperSpeed port is brought up like a USB 2.0 one
+  (design record 13 section 10.3) with three differences: SET_HUB_DEPTH after
+  SET_CONFIGURATION, the 2Ah descriptor, and a Slot Context marked Hub = 1 and
+  Number of Ports with **no TT fields** (TTT and MTT 0; xHCI Table 6-6
+  conditions both on a High-Speed hub), its status-change endpoint opened with
+  its companion at SuperSpeed.
+- A device behind it has the Route String and root port the topology graph
+  gives (design record 02), Speed its PSIV (11.6), and no Parent Hub Slot ID
+  or Port Number: those name a transaction translator, and a SuperSpeed path
+  has none.
+- Its two halves are two hubs of the bus. Nothing passes between them; a
+  counter (`superspeed hubs: halves paired`) records that a SuperSpeed hub
+  and a USB 2.0 hub of the same vendor sit at the same tier and route on a
+  companion-paired root port.
+
+### 11.9 Not answered by this draft
+
+- Whether PORT_CONNECTION reads 1 in SS.Inactive and Compliance Mode (the
+  driver warm-resets on the link state alone, so it does not depend on it).
+- Whether a hub converts a PORT_RESET it cannot carry into a warm reset on
+  its own and which change bit it then raises.
+- The bench unit's own answers (`05E3:0610` and `05E3:0612`,
+  `test-equipment.md`): its descriptor bytes, bcdUSB, whether it carries a
+  SuperSpeedPlus capability, and what it reports on a hot-plug - 30-E.1's
+  reading, the first execution of this whole path.

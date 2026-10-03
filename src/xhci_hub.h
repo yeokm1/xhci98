@@ -196,7 +196,8 @@ ULONG XhciHubPortSpeedClass(ULONG status);
 
 /* The enumeration machine's speed value (XHCI_ENUM_SPEED_*, the default
  * Protocol Speed IDs) for a speed class, 0 for none: the machine takes its
- * initial EP0 size from it (XhciEnumInitialMps0). */
+ * initial EP0 size from it (XhciEnumInitialMps0). SuperSpeed is a
+ * SuperSpeed hub's port (xhci_sshub.h, 30-A.1). */
 ULONG XhciHubEnumSpeed(ULONG speedClass);
 
 /*

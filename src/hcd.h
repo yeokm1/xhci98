@@ -27,6 +27,7 @@
 #include "xhci_pipe.h"
 #include "xhci_func.h"
 #include "xhci_hub.h"
+#include "xhci_sshub.h"
 #include "xhci_link.h"
 #include "xhci_counters.h"
 
@@ -410,6 +411,11 @@ typedef struct _HCD_PORT {
      * default ID - and, on a USB3 protocol port, its link's record. */
     ULONG LinkPsiv;
     XHCI_LINK_PORT Link;
+    /* A SuperSpeed hub's port (30-A.1, hcd_sshub.c): the link its last
+     * reset left, from the extended port status on a SuperSpeedPlus hub
+     * (zero otherwise), for the Protocol Speed ID its device is given;
+     * Link.WarmResets is that port's warm-reset budget. */
+    XHCI_SSHUB_LINK HubSsLink;
 } HCD_PORT, *PHCD_PORT;
 
 /*
@@ -445,6 +451,11 @@ typedef struct _HCD_HUB {
     ULONG Polled;           /* the pipe is unusable: polled instead      */
     ULONG PollPasses;
     ULONG Changed;          /* bit 0 the hub, bit n port n: to look at   */
+    /* The SuperSpeed half of a USB 3 hub (30-A.1, hcd_sshub.c): Desc is
+     * filled from SsDesc so the shared code reads one shape. */
+    ULONG Usb3;
+    XHCI_SSHUB_DESC SsDesc;
+    ULONG ExtStatus;        /* answers GET_PORT_STATUS type 2            */
 } HCD_HUB, *PHCD_HUB;
 
 /* A hub's port object, n from 1. */
@@ -796,6 +807,19 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
 VOID HcdHubCollect(PHCD_CONTROLLER hc, PHCD_HUB hub);
 VOID HcdHubRearm(PHCD_CONTROLLER hc, PHCD_HUB hub);
 VOID HcdHubXferRetired(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+ULONG HcdHubClassRequest(PHCD_CONTROLLER hc, PHCD_HUB hub, UCHAR type,
+                         UCHAR request, USHORT value, USHORT index,
+                         ULONG length, PULONG bytes, PULONG stalled);
+
+/* hcd_sshub.c: the SuperSpeed half of a USB 3 hub (30-A.1) */
+ULONG HcdSsHubConfigure(PHCD_CONTROLLER hc, PHCD_HUB hub);
+ULONG HcdSsHubPortReset(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
+                        PULONG speedClass);
+ULONG HcdSsHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
+                       ULONG state, PXHCI_HUB_PORT_DECISION d);
+ULONG HcdSsHubPsiv(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG rootPort,
+                   PULONG psiv);
+VOID HcdSsHubCountPair(PHCD_CONTROLLER hc, PHCD_HUB hub);
 
 /* hcd_strict.c: debug and qemu flavours only; nothing in release. */
 #if DBG

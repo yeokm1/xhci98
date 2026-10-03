@@ -199,6 +199,8 @@ ULONG XhciHubEnumSpeed(ULONG speedClass)
         return XHCI_ENUM_SPEED_FULL;
     case XHCI_SPEED_HIGH:
         return XHCI_ENUM_SPEED_HIGH;
+    case XHCI_SPEED_SUPER:
+        return XHCI_ENUM_SPEED_SUPER;
     default:
         return 0;
     }
