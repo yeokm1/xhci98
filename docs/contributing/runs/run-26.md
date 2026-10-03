@@ -563,3 +563,69 @@ Round 2 raised ten MAJOR and four MINOR, round 3 eight new MAJOR, round 4 four M
   - Replug, disable and enable of the HID-compliant mouse, disable and enable of the root hub, and shutdown all passed.
   - After the mouse was re-enabled, its first move appeared some 20 to 30 s late; later moves were prompt.
 - **Windows 2000** (c9-2k): install, move and click, unplug, replug, disable and enable of the mouse and of the controller, and shutdown all passed with no bugcheck.
+
+### Beyond the mouse: keyboard, tablet, several devices at once (c10 to c12)
+
+**c10** (`747698e1...2d3f`, refusals on per-PDO timers):
+- **Windows 2000** (c10-2k): every step passed.
+  - The USB keyboard and the USB tablet both bound and worked.
+  - The tablet moved the pointer as an absolute device.
+  - Unplugging both 0.4 s apart left no bugcheck.
+- **Windows 98 SE** (c10-98): the keyboard and tablet installed and worked. The tablet pinned the pointer to a corner, as Windows 98's HID mouse driver handles an absolute device.
+- **The hang:** unplugging the keyboard and tablet back to back hung the guest.
+  - The taskbar clock stopped and the Start menu stopped opening. No blue screen appeared.
+  - `info registers` samples placed the CPU in `hidclass.sys`, in the routine that fails a collection's pending reads (`0x1030C`, called from `0x103BF`).
+- **c10s-98:** a keyboard unplugged on its own hung the guest as well.
+
+**The control leg (u1).** Windows 98 SE on its own UHCI stack (QEMU `piix3-usb-uhci`, no xhci98) was given the same keyboard and tablet unplugged 0.3 s apart. Twice, it did not hang, so the hang was this driver's.
+
+**Class requests refused.** Every vendor or class URB with a nonzero `RequestTypeReservedBits` was refused with INVALID_PARAMETER, on both primaries.
+- Windows 98 SE's `hidusb.sys` stores 0x22 there for SET_REPORT and SET_IDLE (`0x10C2A`, `0x11044`, static).
+- Windows 2000 SP4's `usbport.sys` writes type, direction and recipient over that byte, which overlays the SETUP packet's bmRequestType, and then clears bits 4:2 (`0x235E4`, static). Nothing a client puts there reaches the bus.
+- `XhciPipeBuildSetup` no longer reads the field, and the host suite carries hidusb's 0x22 case.
+- With that change (c11, `8e81d9f8...8842`), a keyboard unplugged alone no longer hung Windows 98. Typing and Caps Lock worked. The keyboard and tablet unplugged together still hung.
+
+**The REMOVE that never ended.** The c11 trace showed both device PDOs receiving REMOVE, and nothing after. `hidclass.sys` (98 SE) answers a read that fails with STATUS_DEVICE_NOT_CONNECTED in two ways while its device is still started:
+- it fails every client read and resubmits at once (`0x110A7`; `0x10C20` tests the state at `0x10C60`, static);
+- any other failure takes a one-second back-off instead.
+
+It leaves the started state only after the REMOVE below it returns. That REMOVE waited for its refusals, which therefore never ended.
+
+The fix (`9a593a6`): once a STOP or REMOVE has begun, the refusal DPC completes with STATUS_DELETE_PENDING.
+
+**c12** (`e6e9e801...0f61`):
+- **Windows 98 SE** (c12-98):
+  - The keyboard and tablet unplugged 0.3 s apart: no hang, and the HID entries left Device Manager.
+  - Keyboard, tablet and mouse unplugged within 0.5 s: no hang.
+  - A mouse after that moved the pointer.
+  - The root hub's disable and enable brought it back.
+  - Shutdown was clean.
+- **Windows 2000** (c12-2k):
+  - Typing and Caps Lock worked on the USB keyboard.
+  - The keyboard and tablet unplugged 0.3 s apart: no bugcheck.
+  - The mouse worked after the controller's disable and enable, and its unplug was clean.
+  - Shutdown was clean.
+
+### SELECT_INTERFACE, GET_CURRENT_FRAME_NUMBER, and Codex rounds 11 to 15
+
+**SELECT_INTERFACE** (`a50db22`) is a thread URB:
+- The interface's open pipes are brought to rest and closed.
+- One Configure Endpoint drops their endpoints, and any left enabled by an earlier failure (`dev->Stale`), and adds the new alternate setting's.
+- Then the driver sends SET_INTERFACE. It reads the configuration the client selected, which is copied at SELECT_CONFIGURATION.
+
+**GET_CURRENT_FRAME_NUMBER** answers at dispatch from the miniport's 32-bit MFINDEX-delta counter.
+
+**Round 11** (three MAJOR, one MINOR):
+- A STALLed SET_INTERFACE, which USB 2.0 9.4.10 lets a single-setting interface return, had been tolerated. It is now a failure, since Drop and Add reset the controller's toggles while the device keeps its own.
+- EP0 is recovered before the thread's next SETUP.
+- The configuration copy is taken before anything is committed.
+
+**Rounds 12 and 13** (one MAJOR and one MINOR, then one MAJOR and two MINOR):
+- A thread control transfer now waits until no client transfer is on EP0. It reads the halt flag and the queue count under one lock, recovers a STALL as it is found, and is bounded by an elapsed-time deadline.
+- MFINDEX is sampled every 500 ms by a dedicated timer, so a long thread wait loses no 2,048-frame lap.
+
+**Round 14:** clean.
+
+**Round 15**, on the DELETE_PENDING change: no MAJOR or MINOR. Two notes:
+- The REMOVE wait still relies on a client not resubmitting at once on DELETE_PENDING. The inspected clients back off: `hidclass.sys` 98 SE and 2000, `usbstor.sys` 2000, `usbaudio.sys` 2000.
+- Before the PDO closes, a gone device's refusals still return DEVICE_NOT_CONNECTED, so Windows 98's hidclass retries once per timer tick until PnP removes it. c12 showed no harm from it.
