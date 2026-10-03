@@ -139,7 +139,8 @@ derivation, and `-ValidateOnly` checks the real table against the set):
   refused`, `endpoint refusals - type` / `- params` / `- ring pool`,
   `endpoint configure failures`, `endpoints refused - no bandwidth` / `- no
   resources`, `URBs refused - malformed`, `selects failed` (a select
-  answered with any failure but the `BUFFER_TOO_SMALL` length probe; in the
+  answered with any failure but the `BUFFER_TOO_SMALL` length probe, and
+  not one on a device whose port already reads it unplugged; in the
   refusal set, so a select whose endpoints opened and whose
   `SET_CONFIGURATION` or `SET_INTERFACE` then failed is not a `NODRIVER` or a
   `PASS`)

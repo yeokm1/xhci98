@@ -26,15 +26,28 @@ if not exist XHCISNAP.EXE (
 
 rem A directory of this run's own under xhcisnap\out\ (ignored), not a name
 rem in %TEMP%: two builds started in the same second draw the same %RANDOM%,
-rem so a shared %TEMP% name is one name, and mkdir is the claim on it.
+rem so a shared %TEMP% name is one name, and mkdir is the claim on it. Only a
+rem name that exists is a collision: any other mkdir failure fails at once,
+rem and twenty collisions in a row fail too.
 if not exist out mkdir out
 if not exist out\ (
     echo ERROR: could not create %~dp0out
     exit /b 1
 )
+set CLAIMTRIES=0
 :claimrundir
+set /a CLAIMTRIES+=1
+if %CLAIMTRIES% GTR 20 (
+    echo ERROR: 20 run directory names under %~dp0out were already taken
+    exit /b 1
+)
 set "RUNDIR=%~dp0out\s%RANDOM%%RANDOM%"
-mkdir "%RUNDIR%" 2>nul || goto claimrundir
+mkdir "%RUNDIR%" 2>nul && goto claimedrundir
+if exist "%RUNDIR%" goto claimrundir
+echo ERROR: could not create %RUNDIR% (not a name collision: check the
+echo directory's permissions and free space)
+exit /b 1
+:claimedrundir
 set "BASE=%RUNDIR%\report"
 set FAILED=0
 
