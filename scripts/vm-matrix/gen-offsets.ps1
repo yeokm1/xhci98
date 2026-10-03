@@ -3,9 +3,22 @@
 Generate the counter offset table the matrix harness reads a live guest with.
 
 .DESCRIPTION
-The harness reads the miniport extension's counters straight out of guest
-memory through the QEMU monitor, by byte offset.  This script produces that
-offset table.
+The harness reads the driver's counters straight out of guest memory through
+the QEMU monitor, by byte offset.  This script produces that offset table.
+
+TWO DRIVERS, ONE OF THEM FROZEN (roadmap-hcd.md 26-A.10; design record 13
+section 9.5).  Until 2026-10-02 the counters were the usbport miniport's
+XHCI_EXTENSION, published as `ext->Field`, and the table was offsets.txt and
+offsets-amd64.txt.  The miniport left the tree that day, so that table can no
+longer be derived from it: it is kept frozen for matrix.psd1, and
+`-Driver miniport` is refused here rather than allowed to overwrite it from
+sources that no longer describe it (regenerate it from branch 1.2.0.0).
+The default, `-Driver hcd`, is the successor's counter block: one DDK-free
+struct, XHCIHC_COUNTERS in src\xhci_counters.h (section 9.4 item 1),
+published as `cnt->Field`, read from the files src\sources names rather than
+the src\*.c glob, and written to offsets-hcd.txt and offsets-hcd-amd64.txt.
+Everything below about the derivation holds for both; where it says
+`ext->`, read the driver's pointer name.
 
 WHY IT IS DERIVED AND NOT A LIST.  scripts\local\offsets.c is a 509-line
 hand-maintained roster of fields, and it is one host's file rather than the
@@ -67,9 +80,27 @@ deliberately retired.  Retiring one is legitimate and rare, and then the switch
 says so out loud.  Keep a label a single literal; if it will not fit, shorten
 the label rather than wrapping it.
 
+.PARAMETER Driver
+hcd (the default): the successor's counter block. miniport: refused - its
+table is frozen (see above).
+
 .PARAMETER OutFile
-Where to write the table. Defaults to scripts\vm-matrix\offsets.txt, or
-scripts\vm-matrix\offsets-amd64.txt with -Arch amd64.
+Where to write the table. Defaults to scripts\vm-matrix\offsets-hcd.txt, or
+scripts\vm-matrix\offsets-hcd-amd64.txt with -Arch amd64.
+
+.PARAMETER SrcDir
+The source directory: its `sources` file names the .c files read, and it is
+the include directory the header is compiled from. Defaults to the
+repository's src. Another directory is for a stand-in tree, which is how the
+derivation is exercised before the counter block exists.
+
+.PARAMETER Header
+.PARAMETER Struct
+.PARAMETER Pointer
+The counter block's header, struct and the pointer name its print sites use
+(`XHCI_DBG_VALUE_CHANGED("label", <Pointer>->Field)`). Default
+xhci_counters.h, XHCIHC_COUNTERS and cnt - design record 13 section 9.4's
+working names; if the HCD settles on others, change the defaults here.
 
 .PARAMETER Arch
 Which build's layout to measure. x86 (the default) compiles with MSVC 6.0,
@@ -97,6 +128,11 @@ tools\MSVC600.
 param(
     [string]$OutFile = "",
     [ValidateSet('x86', 'amd64')][string]$Arch = 'x86',
+    [ValidateSet('hcd', 'miniport')][string]$Driver = 'hcd',
+    [string]$SrcDir = "",
+    [string]$Header = "xhci_counters.h",
+    [string]$Struct = "XHCIHC_COUNTERS",
+    [string]$Pointer = "cnt",
     [string]$Msvc6 = "",
     [string]$Wdk71 = "",
     [switch]$AllowRemovals,
@@ -105,8 +141,19 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+if ($Driver -eq 'miniport') {
+    throw ("-Driver miniport is refused: the miniport left src\ on 2026-10-02, so its XHCI_EXTENSION print sites are no longer in this tree, and a derivation here would overwrite offsets.txt / offsets-amd64.txt - the frozen table matrix.psd1 is read with - from sources that no longer describe it. Regenerate it from a checkout of branch 1.2.0.0.")
+}
 if ($OutFile -eq "") {
-    $OutFile = Join-Path $PSScriptRoot $(if ($Arch -eq 'amd64') { "offsets-amd64.txt" } else { "offsets.txt" })
+    $OutFile = Join-Path $PSScriptRoot $(if ($Arch -eq 'amd64') { "offsets-hcd-amd64.txt" } else { "offsets-hcd.txt" })
+}
+if ($SrcDir -eq "") { $SrcDir = Join-Path $repo "src" }
+$SrcDir = (Resolve-Path -LiteralPath $SrcDir).Path
+if ($Pointer -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { throw ("-Pointer '{0}' is not a C identifier" -f $Pointer) }
+if ($Struct -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { throw ("-Struct '{0}' is not a C identifier" -f $Struct) }
+if (-not (Test-Path -LiteralPath (Join-Path $SrcDir $Header))) {
+    throw ("{0} is not in {1}. The HCD's counter block - one DDK-free struct {2} that every counter the matrix reads lives in, published through XHCI_DBG_VALUE_CHANGED(`"<label>`", {3}->Field) sites - is design record 13 section 9.4 item 1, and this table is derived from it. Add the block first (or pass -Header / -Struct / -Pointer if it was named otherwise)." -f `
+        $Header, $SrcDir, $Struct, $Pointer)
 }
 
 if ($Arch -eq 'amd64') {
@@ -129,7 +176,32 @@ if ($Arch -eq 'amd64') {
 }
 
 # --------------------------------------------------- derive the field list ---
-$srcFiles = Get-ChildItem (Join-Path $repo "src\*.c")
+# THE FILES src\sources NAMES, NOT THE GLOB (design record 13 section 9.5).
+# src\ holds files no image is built from - the miniport's Adapted files sat
+# there unbuilt until 26-A.2 - and a print site in one of them would put a
+# field in the table that no running driver has. The SOURCES= macro is read
+# with its backslash continuations; only its .c entries are source.
+$sourcesFile = Join-Path $SrcDir "sources"
+if (-not (Test-Path -LiteralPath $sourcesFile)) { throw ("no sources file in {0}, so which files the image is built from is unknown" -f $SrcDir) }
+$srcNames = @()
+$inSources = $false
+foreach ($line in (Get-Content -LiteralPath $sourcesFile)) {
+    $l = ($line -replace '#.*$', '').Trim()
+    if (-not $inSources) {
+        if ($l -match '^SOURCES\s*=\s*(.*)$') { $inSources = $true; $l = $Matches[1] } else { continue }
+    }
+    $cont = $l.EndsWith('\')
+    $l = $l.TrimEnd('\').Trim()
+    foreach ($tok in ($l -split '\s+')) { if ($tok -match '^[A-Za-z0-9_]+\.c$') { $srcNames += $tok } }
+    if (-not $cont) { break }
+}
+if ($srcNames.Count -eq 0) { throw ("{0} names no .c file in SOURCES=" -f $sourcesFile) }
+$srcFiles = @()
+foreach ($n in $srcNames) {
+    $f = Join-Path $SrcDir $n
+    if (-not (Test-Path -LiteralPath $f)) { throw ("{0} names {1}, which is not in {2}" -f $sourcesFile, $n, $SrcDir) }
+    $srcFiles += (Get-Item -LiteralPath $f)
+}
 $all = ($srcFiles | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
 # The member path may be NESTED - `ext->Topology.Descriptors` - and offsetof
 # takes a dotted path perfectly well.  A first version matched only a bare
@@ -141,7 +213,9 @@ $all = ($srcFiles | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }
 # - which offsetof takes as a member designator (`&((T*)0)->Field[IDX]`) and
 # which stringizes to a row name with no whitespace in it.  A computed or
 # macro-call index stays outside this grammar (see the header).
-$rx = [regex]'XHCI_DBG_VALUE_CHANGED\(\s*"([^"]+)"\s*,\s*ext->([A-Za-z_][A-Za-z0-9_.]*(?:\[[A-Za-z_][A-Za-z0-9_]*\])?)\s*\)'
+# The identifier before `->` is the driver's pointer name (-Pointer), the one
+# thing the grammar does not fix.
+$rx = [regex]('XHCI_DBG_VALUE_CHANGED\(\s*"([^"]+)"\s*,\s*' + $Pointer + '->([A-Za-z_][A-Za-z0-9_.]*(?:\[[A-Za-z_][A-Za-z0-9_]*\])?)\s*\)')
 $pairs = @{}
 $fieldOfLabel = @{}
 foreach ($m in $rx.Matches($all)) {
@@ -158,7 +232,7 @@ foreach ($m in $rx.Matches($all)) {
 }
 $fields = $pairs.Keys | Sort-Object
 if ($fields.Count -eq 0) {
-    throw "no XHCI_DBG_VALUE_CHANGED(`"...`", ext->Field) pairs found in src\*.c - has the print macro been renamed?"
+    throw ("no XHCI_DBG_VALUE_CHANGED(`"...`", {0}->Field) pairs found in the {1} files {2} names - has the print macro or the pointer name been renamed?" -f $Pointer, $srcFiles.Count, $sourcesFile)
 }
 if (-not $Quiet) { Write-Host ("derived {0} counter fields from {1} source files" -f $fields.Count, $srcFiles.Count) }
 
@@ -181,7 +255,7 @@ if (-not $AllowRemovals -and (Test-Path -LiteralPath $OutFile)) {
         }
     }
     if ($lost.Count -gt 0) {
-        throw ("{0} field(s) in {1} are no longer derivable from src\*.c and would be dropped: {2}. " -f `
+        throw ("{0} field(s) in {1} are no longer derivable from the files src\sources names and would be dropped: {2}. " -f `
                    $lost.Count, $OutFile, ($lost -join ", ")) +
               "The usual cause is a print site this script stopped matching - most often a label " +
               "split across adjacent string literals, which C concatenates but the pattern does not. " +
@@ -197,13 +271,13 @@ try {
     $c += "/* GENERATED by scripts\vm-matrix\gen-offsets.ps1 - do not edit. */"
     $c += "#include <stdio.h>"
     $c += "#include <stddef.h>"
-    $c += "#include `"xhci.h`""
+    $c += ("#include `"{0}`"" -f $Header)
     $c += ""
-    $c += "#define P(f) printf(`"%s %u\n`", #f, (unsigned)offsetof(XHCI_EXTENSION, f))"
+    $c += ("#define P(f) printf(`"%s %u\n`", #f, (unsigned)offsetof({0}, f))" -f $Struct)
     $c += ""
     $c += "int main(void)"
     $c += "{"
-    $c += "    printf(`"SIZEOF %u\n`", (unsigned)sizeof(XHCI_EXTENSION));"
+    $c += ("    printf(`"SIZEOF %u\n`", (unsigned)sizeof({0}));" -f $Struct)
     foreach ($f in $fields) { $c += ("    P({0});" -f $f) }
     $c += "    return 0;"
     $c += "}"
@@ -228,7 +302,7 @@ try {
 
     $exe = Join-Path $work "offsets.exe"
     $obj = Join-Path $work "offsets.obj"
-    $srcInc = Join-Path $repo "src"
+    $srcInc = $SrcDir
     # ErrorActionPreference is relaxed across both native calls on purpose, the
     # same way `scripts\import-gate\check-imports.ps1` relaxes it for dumpbin
     # (repo audit D4): in Windows PowerShell 5.1 a native command's stderr line

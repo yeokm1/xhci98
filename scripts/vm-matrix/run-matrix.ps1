@@ -26,6 +26,16 @@ running driver prints - so a guest running a different build than the source
 tree was built from is REFUSED rather than measured.  That check is the whole
 reason a stale reading cannot be mistaken for a wrong value.
 
+TWO EXPECTATION SETS (roadmap-hcd.md 26-A.10).  The default is
+matrix-hcd.psd1, the successor HCD's set, which says `Driver = 'hcd'`: its
+counters are read from the HCD's counter block at offsets-hcd.txt's offsets,
+the block is found by its `counters start= / size= / VA ...` lines rather
+than by `cb ... a=`, there is no virtual-hub switch to read, and every row's
+ExpectedSpeed becomes speed expectations the harness writes itself
+(lib\verdict.ps1, "the HCD's expectation set").  `-Matrix matrix.psd1` is the
+miniport's frozen set and runs as it always did, against a 1.2.0.0-era guest
+and offsets.txt.  Design record 06's verdict rules are the same for both.
+
 .PARAMETER ReportName
 The Phase 10 report's file name under the output directory.  The post-release
 run ignores it: that run writes one report per target, named
@@ -60,7 +70,8 @@ powershell -File scripts\vm-matrix\run-matrix.ps1 -Config scripts\vm-matrix\matr
 param(
     [string]$Config = "",
     # The device matrix itself - the rows, their groups and their per-target
-    # expectations. Default: matrix.psd1 beside this script. Separate from
+    # expectations. Default: matrix-hcd.psd1 beside this script, the HCD's
+    # set; matrix.psd1 is the miniport's, frozen (26-A.10). Separate from
     # -Config, which is the HOST's part (images, ports, where QEMU is): the
     # matrix is committed and the config is not.
     [string]$Matrix = "",
@@ -111,8 +122,12 @@ if ($Config -eq "" -or -not (Test-Path -LiteralPath (Resolve-RepoPath $Config)))
     throw ("no configuration found. Copy scripts\vm-matrix\config.sample.psd1, edit the paths, and pass it with -Config.")
 }
 $cfg = Import-PowerShellDataFile -LiteralPath (Resolve-RepoPath $Config)
-if ($Matrix -eq "") { $Matrix = Join-Path $PSScriptRoot "matrix.psd1" }
+if ($Matrix -eq "") { $Matrix = Join-Path $PSScriptRoot "matrix-hcd.psd1" }
 $mx = Import-PowerShellDataFile -LiteralPath (Resolve-RepoPath $Matrix)
+# Which driver the set describes decides the offset table, the identity lines,
+# the switch read and the refusal set (lib\verdict.ps1, Get-MatrixDriver).
+$matrixDriver = Get-MatrixDriver -Matrix $mx
+$isHcd = ($matrixDriver -eq 'hcd')
 # The version under test, from the single source the packager reads.  The
 # post-release run's output directory and every stamp check are keyed by it.
 $version = Get-DriverVersionUnderTest -RepoRoot $repo
@@ -134,7 +149,7 @@ $vmDir = Resolve-RepoPath $cfg.VmDir
 
 Write-Host ("qemu   : {0} ({1})" -f $qemuBin, $qemuVer)
 Write-Host ("vm dir : {0}" -f $vmDir)
-Write-Host ("matrix : {0}" -f (Resolve-RepoPath $Matrix))
+Write-Host ("matrix : {0} (driver {1})" -f (Resolve-RepoPath $Matrix), $matrixDriver)
 Write-Host ("out    : {0}" -f $OutDir)
 Write-Host ("version: {0}{1}" -f $version, $(if ($PostRelease) { "  (post-release run)" } else { "" }))
 if ($PostRelease -and $PSBoundParameters.ContainsKey('ReportName')) {
@@ -152,7 +167,7 @@ if ($PostRelease -and $PSBoundParameters.ContainsKey('ReportName')) {
 $tables = @{}
 foreach ($t in $cfg.Targets) {
     $a = Get-TargetArch -Target $t
-    if (-not $tables.ContainsKey($a)) { $tables[$a] = Import-CounterTable -Arch $a }
+    if (-not $tables.ContainsKey($a)) { $tables[$a] = Import-CounterTable -Arch $a -Driver $matrixDriver }
 }
 $table = if ($tables.ContainsKey('x86')) { $tables['x86'] } else { $tables['amd64'] }
 $available = Get-QemuUsbModels -Qemu $qemuBin
@@ -178,6 +193,15 @@ if (Test-Path -LiteralPath $samplePath) {
 }
 $noDriverKeys = @($noDriverKeys | Sort-Object -Unique)
 
+# The HCD's set: every row decided, no switch, no retired label (lib\verdict.ps1,
+# Get-HcdSetProblems). Its rows are judged at one "switch value", 0, which is
+# only the key the parsed table is indexed by - nothing is read for it.
+$switchValuesForSet = $script:VhubSwitchValues
+if ($isHcd) {
+    $problems += @(Get-HcdSetProblems -Matrix $mx)
+    $switchValuesForSet = @(0)
+}
+
 foreach ($g in $mx.Groups) {
     foreach ($r in $g.Rows) {
         $rowCount++
@@ -192,11 +216,17 @@ foreach ($g in $mx.Groups) {
         }
         $problems += (Get-RowWedgeProblems -Row $r -TargetIds $targetIds)
         $problems += (Get-RowNoDriverProblems -Row $r -KnownKeys $noDriverKeys)
-        $switchProblems = @(Get-RowSwitchProblems -Row $r)
+        $switchProblems = @()
+        if (-not $isHcd) { $switchProblems = @(Get-RowSwitchProblems -Row $r) }
         $problems += $switchProblems
         $texts = @()
         $texts += $mx.Always
         if ($r.ContainsKey('Expect')) { $texts += $r.Expect }
+        # The row's speed, as the lines the harness writes for it. A malformed
+        # ExpectedSpeed is already a problem from Get-HcdSetProblems.
+        if ($isHcd -and $r.ContainsKey('ExpectedSpeed')) {
+            try { $texts += @(Get-HcdSpeedExpectationTexts -ExpectedSpeed $r.ExpectedSpeed) } catch { }
+        }
         foreach ($t in $cfg.Targets) {
             $per = @()
             if ($r.ContainsKey('ExpectByTarget')) {
@@ -216,7 +246,7 @@ foreach ($g in $mx.Groups) {
                     $problems += ("row {0} [{1}]: {2}" -f $r.Name, $t.Id, $_.Exception.Message)
                 }
             }
-            foreach ($sw in $script:VhubSwitchValues) {
+            foreach ($sw in $switchValuesForSet) {
                 $key = "{0}|{1}|{2}" -f $r.Name, $t.Id, $sw
                 $parsed[$key] = @($common)
                 if ($switchProblems.Count -gt 0) { continue }
@@ -938,8 +968,12 @@ foreach ($tgt in $targetsToRun) {
             Write-Host ("waiting for the driver to start (deadline {0} s)..." -f $tgt.BootSeconds)
             $sw = [Diagnostics.Stopwatch]::StartNew()
             $ident = $null
+            # The HCD has no usbport to start it and prints no `cb` line: its
+            # counter block announces itself at each controller start
+            # (lib\counters.ps1, Find-CounterBlockIdentity).
+            $sizeName = Get-DriverSizeName -Driver $matrixDriver
             while ($sw.Elapsed.TotalSeconds -lt $tgt.BootSeconds) {
-                $ident = Find-ExtensionIdentity -DebugconLog $dbgLog -Arch (Get-TargetArch -Target $tgt)
+                $ident = Find-DriverIdentity -Driver $matrixDriver -DebugconLog $dbgLog -Arch (Get-TargetArch -Target $tgt)
                 if ($null -ne $ident.Va) { break }
                 Start-Sleep -Seconds 3
             }
@@ -947,18 +981,23 @@ foreach ($tgt in $targetsToRun) {
                 # The leaf name, not the absolute path: this reading reaches
                 # the diffable report body, where an absolute path is a
                 # per-host difference (the 2026-09-17 audit's D10).
-                throw ("no `cb ... a=<VA>` line in {0} after {1} s. Either the guest did not boot, or the driver did not load, or it is not the QEMU build - since task 13-L.1 the port-0xE9 trace exists only in that flavour, so a `debug` guest produces this exact silence. Build it with: scripts\build-driver.cmd qemu, then scripts\package\make-package.ps1 -Flavor qemu, then prepare-image.ps1 -Xfer." -f (Split-Path -Leaf $dbgLog), $tgt.BootSeconds)
+                $want = if ($isHcd) { "`counters start= / size= / VA low=` record" } else { "`cb ... a=<VA>` line" }
+                throw ("no {2} in {0} after {1} s. Either the guest did not boot, or the driver did not load, or it is not the QEMU build - since task 13-L.1 the port-0xE9 trace exists only in that flavour, so a `debug` guest produces this exact silence. Build it with: scripts\build-driver.cmd qemu, then scripts\package\make-package.ps1 -Flavor qemu, then prepare-image.ps1 -Xfer." -f (Split-Path -Leaf $dbgLog), $tgt.BootSeconds, $want)
             }
-            Write-Host ("driver up: extension at 0x{0}, MiniPortExtensionSize={1}" -f $ident.Va, $ident.Size)
+            if ($isHcd) {
+                Write-Host ("driver up: counter block at 0x{0}, {1}={2}, start {3}" -f $ident.Va, $sizeName, $ident.Size, $ident.Start)
+            } else {
+                Write-Host ("driver up: extension at 0x{0}, MiniPortExtensionSize={1}" -f $ident.Va, $ident.Size)
+            }
 
             if ($ident.Spans) {
                 throw ("this group's debug console log already spans more than one driver load or binary (VAs: {0}; sizes: {1}). The log was deleted at group start, so this is a live restart and every reading in the group would straddle it." -f `
                     ($ident.AllVas -join ", "), ($ident.AllSizes -join ", "))
             }
             if ($null -ne $ident.Size) {
-                Assert-OffsetsFresh -OffsetsFile $table.OffsetsFile -ExtensionSizeFromTrace $ident.Size | Out-Null
+                Assert-OffsetsFresh -OffsetsFile $table.OffsetsFile -ExtensionSizeFromTrace $ident.Size -SizeName $sizeName | Out-Null
             } else {
-                throw "the driver never printed MiniPortExtensionSize, so the offset table cannot be checked against it. A run on unchecked offsets is a run of wrong values."
+                throw ("the driver never printed {0}, so the offset table cannot be checked against it. A run on unchecked offsets is a run of wrong values." -f $sizeName)
             }
 
             # A healthy trace is not a living guest.  Batch 7b-V0 measured a
@@ -1015,18 +1054,25 @@ foreach ($tgt in $targetsToRun) {
             # is judged by (lib\verdict.ps1, Get-VhubSwitchReading).  Taken once
             # usbport has asked for the root hub's data, which a group with the
             # keep-alive has long passed and a group without one may not have.
-            $sw3 = [Diagnostics.Stopwatch]::StartNew()
-            while (-not (Test-RootHubDataAsked -DebugconLog $dbgLog)) {
-                if ($sw3.Elapsed.TotalSeconds -ge $tgt.BootSeconds) {
-                    throw ("usbport never asked for the root hub's data (no `cb RH_GetRootHubData` in {0} after {1} s), so the virtual-hub switch cannot be read and no row can be judged" -f (Split-Path -Leaf $dbgLog), $tgt.BootSeconds)
+            # The HCD has no switch and no usbport to ask (design record 13
+            # section 9.4 item 3): its rows are parsed under key 0 and nothing
+            # is read.
+            if ($isHcd) {
+                $groupSwitch = 0
+            } else {
+                $sw3 = [Diagnostics.Stopwatch]::StartNew()
+                while (-not (Test-RootHubDataAsked -DebugconLog $dbgLog)) {
+                    if ($sw3.Elapsed.TotalSeconds -ge $tgt.BootSeconds) {
+                        throw ("usbport never asked for the root hub's data (no `cb RH_GetRootHubData` in {0} after {1} s), so the virtual-hub switch cannot be read and no row can be judged" -f (Split-Path -Leaf $dbgLog), $tgt.BootSeconds)
+                    }
+                    Start-Sleep -Seconds 3
                 }
-                Start-Sleep -Seconds 3
+                $switchRead = Get-VhubSwitchFromSnapshot -Table $table `
+                                  -Snapshot (Read-Counters -Port $tgt.Monitor -BaseVa $ident.Va -Table $table -Process $proc)
+                $groupSwitch = [int]$switchRead.Switch
+                $switchByGroup[$grp.Name] = $groupSwitch
+                Write-Host ("virtual hub: {0}" -f $switchRead.Text)
             }
-            $switchRead = Get-VhubSwitchFromSnapshot -Table $table `
-                              -Snapshot (Read-Counters -Port $tgt.Monitor -BaseVa $ident.Va -Table $table -Process $proc)
-            $groupSwitch = [int]$switchRead.Switch
-            $switchByGroup[$grp.Name] = $groupSwitch
-            Write-Host ("virtual hub: {0}" -f $switchRead.Text)
 
             $rowIndex = 0
             foreach ($row in $grp.Rows) {
@@ -1125,7 +1171,9 @@ foreach ($tgt in $targetsToRun) {
                     foreach ($e in $expectations) {
                         $results += [pscustomobject]@{ Expectation = $e; Test = (Test-Expectation -Expectation $e -Delta $delta) }
                     }
-                    $outcome = Get-RowOutcome -Results $results -Delta $delta -HarnessError "" -Table $table
+                    $outcome = Get-RowOutcome -Results $results -Delta $delta -HarnessError "" -Table $table `
+                                   -Driver $matrixDriver -ClaimedLabel (Get-RowClaimLabel -Row $row) `
+                                   -EnumerationLabels $(if ($isHcd) { @(Get-HcdEnumerationLabels) } else { @() })
 
                     foreach ($r in $results) {
                         # Per-expectation lines carry the ROW's outcome so the report
@@ -1374,7 +1422,7 @@ foreach ($tgt in $targetsToRun) {
                    -QemuVersion $qemuVer -Accel $accel -Sizeof $table.Sizeof -Counters $table.Offsets.Count `
                    -Started $tgtStarted -Elapsed $tgtClock.Elapsed -Verdict $verdict -Rows $script:tgtTally.Rows `
                    -NoDriverExpected $script:tgtTally.NoDriverExpected -NotReached $script:tgtTally.NotReached `
-                   -VhubLine (Format-VhubSwitchLine -ByGroup $switchByGroup -GroupOrder $switchGroupOrder[$tgt.Id])
+                   -VhubLine $(if ($isHcd) { $script:HcdNoSwitchLine } else { Format-VhubSwitchLine -ByGroup $switchByGroup -GroupOrder $switchGroupOrder[$tgt.Id] })
         $body = @()
         if ($report.Count -gt $tgtReportStart) { $body = @($report[$tgtReportStart..($report.Count - 1)]) }
         $tgtReport = Write-PostReleaseReport -Path (Join-Path $OutDir ("post-release-{0}.txt" -f $tgt.Id)) -Header $hdr `
@@ -1414,9 +1462,13 @@ $header += ("# host   : {0}" -f $env:COMPUTERNAME)
 foreach ($a in ($tables.Keys | Sort-Object)) {
     $header += ("# offsets: {0} SIZEOF {1}, {2} counters" -f $a, $tables[$a].Sizeof, $tables[$a].Offsets.Count)
 }
-$header += ("# matrix : {0} rows" -f $rowCount)
+$header += ("# matrix : {0} rows, driver {1} ({2})" -f $rowCount, $matrixDriver, (Split-Path -Leaf $Matrix))
 foreach ($k in ($switchByTarget.Keys | Sort-Object)) {
-    $header += ("# vhub   : {0} {1}" -f $k, (Format-VhubSwitchLine -ByGroup $switchByTarget[$k] -GroupOrder $switchGroupOrder[$k]))
+    if ($isHcd) {
+        $header += ("# vhub   : {0} {1}" -f $k, $script:HcdNoSwitchLine)
+    } else {
+        $header += ("# vhub   : {0} {1}" -f $k, (Format-VhubSwitchLine -ByGroup $switchByTarget[$k] -GroupOrder $switchGroupOrder[$k]))
+    }
 }
 $header += "#"
 $header += "# Outcomes: PASS FAIL NODRIVER INERT ERROR, plus EXCLUDED for a row not run on a target - see docs/contributing/design/06-device-matrix-verdict.md"
