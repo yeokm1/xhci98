@@ -365,20 +365,20 @@ typedef struct _HCD_DEVICE_PDO {
     LIST_ENTRY ParkedIrps;
     ULONG ParkedCount;
     /* Abort horizons (HcdIoAbortMark, hcd_io.c), under the cancel spin
-     * lock: every URB IRP is stamped with SubmitSeq at its dispatch, in
-     * its DriverContext[0], and an ABORT_PIPE records the sequence it saw
-     * as its pipe's horizon - or, for a handle it cannot place, every
-     * pipe's (AbortAll). A request whose stamp is at or below its pipe's
-     * horizon was submitted before an abort of it and is completed
-     * CANCELED rather than held, by a wrap-safe order that retires a
-     * horizon 2^30 submissions old (xhci_pipe.h, XHCI_PIPE_SEQ_AGE);
-     * none younger is cleared or evicted, and a table that is full
-     * raises AbortAll instead. */
-    volatile LONG SubmitSeq;
-    ULONG AbortAll;
+     * lock: every URB IRP is stamped at its dispatch with the next value
+     * of SubmitSeq - a 64-bit count as a Lo/Hi pair; the IRP keeps its low
+     * word in DriverContext[0] - and an ABORT_PIPE records the value its
+     * own stamp took as its pipe's horizon, or, for a handle it cannot
+     * place, every pipe's (AbortAll). A request whose stamp is at or below
+     * its pipe's horizon was submitted before an abort of it and is
+     * completed CANCELED rather than held (xhci_pipe.h, XhciSeqCovers). A
+     * horizon is never cleared or evicted: a table that is full raises
+     * AbortAll instead. */
+    XHCI_SEQ64 SubmitSeq;
+    XHCI_SEQ64 AbortAll;
     ULONG AbortCount;
     PVOID AbortPipe[HCD_PDO_ABORTS];
-    ULONG AbortHorizon[HCD_PDO_ABORTS];
+    XHCI_SEQ64 AbortHorizon[HCD_PDO_ABORTS];
     volatile LONG Busy;             /* dispatches inside hcd_urb.c, raised
                                      * before Controller is read; the
                                      * parent's release waits it out      */

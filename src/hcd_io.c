@@ -1794,57 +1794,26 @@ static VOID hcdParkedCancel(PDEVICE_OBJECT obj, PIRP irp);
 
 static VOID hcdParkedComplete(PHCD_DEVICE_PDO pdo, PIRP irp);
 
-/* The PDO's current submission count, for the aging rule. */
-static ULONG hcdSeqNow(PHCD_DEVICE_PDO pdo)
-{
-    return (ULONG)pdo->SubmitSeq;
-}
-
 /* Whether an IRP was submitted at or before an abort of its pipe - its own
- * horizon or every pipe's - by the wrap-safe order and aging of
- * xhci_pipe.h (XhciPipeSeqCovers; Codex review of ed025d2). Cancel spin
- * lock held. */
+ * horizon or every pipe's - its full stamp rebuilt from the PDO's 64-bit
+ * count (xhci_pipe.h, XhciSeqCovers; Codex review of 09ed9d1). Cancel
+ * spin lock held. */
 static ULONG hcdAbortedLocked(PHCD_DEVICE_PDO pdo, PIRP irp, PVOID handle)
 {
     ULONG stamp;
-    ULONG now;
     ULONG i;
 
     stamp = (ULONG)(ULONG_PTR)irp->Tail.Overlay.DriverContext[0];
-    now = hcdSeqNow(pdo);
-    if (XhciPipeSeqCovers(pdo->AbortAll, stamp, now)) {
+    if (XhciSeqCovers(&pdo->AbortAll, stamp, &pdo->SubmitSeq)) {
         return 1;
     }
     for (i = 0; i < pdo->AbortCount; i++) {
         if (pdo->AbortPipe[i] == handle &&
-            XhciPipeSeqCovers(pdo->AbortHorizon[i], stamp, now)) {
+            XhciSeqCovers(&pdo->AbortHorizon[i], stamp, &pdo->SubmitSeq)) {
             return 1;
         }
     }
     return 0;
-}
-
-/* Aged horizons retired (XhciPipeSeqAged): they cover nothing, and their
- * slots are free again. Cancel spin lock held. */
-static VOID hcdHorizonsAge(PHCD_DEVICE_PDO pdo)
-{
-    ULONG now;
-    ULONG i;
-    ULONG k;
-
-    now = hcdSeqNow(pdo);
-    if (XhciPipeSeqAged(pdo->AbortAll, now)) {
-        pdo->AbortAll = 0;
-    }
-    k = 0;
-    for (i = 0; i < pdo->AbortCount; i++) {
-        if (!XhciPipeSeqAged(pdo->AbortHorizon[i], now)) {
-            pdo->AbortPipe[k] = pdo->AbortPipe[i];
-            pdo->AbortHorizon[k] = pdo->AbortHorizon[i];
-            k++;
-        }
-    }
-    pdo->AbortCount = k;
 }
 
 /*
@@ -1856,14 +1825,16 @@ static VOID hcdHorizonsAge(PHCD_DEVICE_PDO pdo)
  */
 VOID HcdIoStamp(PHCD_DEVICE_PDO pdo, PIRP irp)
 {
-    LONG seq;
+    KIRQL cancelIrql;
+    ULONG stamp;
 
-    seq = InterlockedIncrement(&pdo->SubmitSeq);
-    if (seq == 0) {
-        /* 0 means unstamped: a wrap takes the next. */
-        seq = InterlockedIncrement(&pdo->SubmitSeq);
-    }
-    irp->Tail.Overlay.DriverContext[0] = (PVOID)(ULONG_PTR)(ULONG)seq;
+    /* The 64-bit count moves under the lock its readers hold; its low word
+     * is never 0 (XhciSeqNext), which marks an unstamped IRP. */
+    IoAcquireCancelSpinLock(&cancelIrql);
+    XhciSeqNext(&pdo->SubmitSeq);
+    stamp = pdo->SubmitSeq.Lo;
+    IoReleaseCancelSpinLock(cancelIrql);
+    irp->Tail.Overlay.DriverContext[0] = (PVOID)(ULONG_PTR)stamp;
 }
 
 ULONG HcdIoPark(PHCD_DEVICE_PDO pdo, PIRP irp, PVOID urb, PVOID handle)
@@ -1900,9 +1871,8 @@ ULONG HcdIoPark(PHCD_DEVICE_PDO pdo, PIRP irp, PVOID urb, PVOID handle)
  * before it - held now or reaching the hold later - completes CANCELED
  * (HcdIoPark, HcdIoParkedRelease). `known`: the caller placed the handle -
  * a pipe of the live device (validated there), or one a held request of a
- * departed device names. Horizons are ordered and aged wrap-safely
- * (xhci_pipe.h, XHCI_PIPE_SEQ_AGE): a horizon 2^30 submissions old is
- * retired, never one younger.
+ * departed device names. Horizons live in the 64-bit count's space
+ * (xhci_pipe.h), so none is ever retired or reused.
  *
  * The every-pipe horizon (AbortAll) is a deliberately conservative
  * departure policy: when the handle cannot be placed - an unknown handle
@@ -1920,14 +1890,13 @@ VOID HcdIoAbortMark(PHCD_DEVICE_PDO pdo, PIRP abortIrp, PVOID handle,
 {
     PLIST_ENTRY entry;
     KIRQL cancelIrql;
-    ULONG horizon;
-    ULONG now;
+    XHCI_SEQ64 horizon;
     ULONG i;
 
-    horizon = (ULONG)(ULONG_PTR)abortIrp->Tail.Overlay.DriverContext[0];
     IoAcquireCancelSpinLock(&cancelIrql);
-    hcdHorizonsAge(pdo);
-    now = hcdSeqNow(pdo);
+    XhciSeqFromStamp(&pdo->SubmitSeq,
+                     (ULONG)(ULONG_PTR)abortIrp->Tail.Overlay.DriverContext[0],
+                     &horizon);
     if (!known) {
         for (i = 0; i < pdo->AbortCount && !known; i++) {
             known = pdo->AbortPipe[i] == handle;
@@ -1939,7 +1908,7 @@ VOID HcdIoAbortMark(PHCD_DEVICE_PDO pdo, PIRP abortIrp, PVOID handle,
                     ->Tail.Overlay.DriverContext[1] == handle;
     }
     if (!known) {
-        pdo->AbortAll = XhciPipeSeqLatest(pdo->AbortAll, horizon, now);
+        XhciSeqLatest(&pdo->AbortAll, &horizon);
     } else {
         for (i = 0; i < pdo->AbortCount; i++) {
             if (pdo->AbortPipe[i] == handle) {
@@ -1947,14 +1916,13 @@ VOID HcdIoAbortMark(PHCD_DEVICE_PDO pdo, PIRP abortIrp, PVOID handle,
             }
         }
         if (i < pdo->AbortCount) {
-            pdo->AbortHorizon[i] =
-                XhciPipeSeqLatest(pdo->AbortHorizon[i], horizon, now);
+            XhciSeqLatest(&pdo->AbortHorizon[i], &horizon);
         } else if (pdo->AbortCount < HCD_PDO_ABORTS) {
             pdo->AbortPipe[pdo->AbortCount] = handle;
             pdo->AbortHorizon[pdo->AbortCount] = horizon;
             pdo->AbortCount++;
         } else {
-            pdo->AbortAll = XhciPipeSeqLatest(pdo->AbortAll, horizon, now);
+            XhciSeqLatest(&pdo->AbortAll, &horizon);
         }
     }
     IoReleaseCancelSpinLock(cancelIrql);
@@ -2174,12 +2142,15 @@ VOID HcdIoRefusedInit(PHCD_DEVICE_PDO pdo)
     InitializeListHead(&pdo->RefusedIrps);
     InitializeListHead(&pdo->ParkedIrps);
     pdo->ParkedCount = 0;
-    pdo->SubmitSeq = 0;
-    pdo->AbortAll = 0;
+    pdo->SubmitSeq.Lo = 0;
+    pdo->SubmitSeq.Hi = 0;
+    pdo->AbortAll.Lo = 0;
+    pdo->AbortAll.Hi = 0;
     pdo->AbortCount = 0;
     for (i = 0; i < HCD_PDO_ABORTS; i++) {
         pdo->AbortPipe[i] = NULL;
-        pdo->AbortHorizon[i] = 0;
+        pdo->AbortHorizon[i].Lo = 0;
+        pdo->AbortHorizon[i].Hi = 0;
     }
     KeInitializeTimer(&pdo->RefuseTimer);
     KeInitializeDpc(&pdo->RefuseDpc, hcdRefusedDpc, pdo);

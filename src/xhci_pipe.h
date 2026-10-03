@@ -416,32 +416,49 @@ ULONG XhciPipeNtStatus(ULONG usbd);
 ULONG XhciPipeConfigureUsbdStatus(ULONG completionCode);
 
 /*
- * Submission sequences and abort horizons (hcd_io.c, HcdIoPark): a 32-bit
- * per-PDO count that wraps, so every order is a signed difference, and a
- * horizon or stamp more than XHCI_PIPE_SEQ_AGE submissions behind the
- * current count is aged - every comparison is then within half the range.
- * 0 is never a stamp or a horizon (none).
+ * Submission sequences and abort horizons (hcd_io.c, HcdIoPark): a per-PDO
+ * count that never wraps in practice - 64 bits, kept as a Lo/Hi pair, as
+ * every 64-bit quantity here is (no 64-bit arithmetic) - and horizons in
+ * the same 64-bit space, so a horizon is never retired and never becomes
+ * young again (Codex review of 09ed9d1). 0:0 is never a stamp or a horizon
+ * (none).
  *
- * The bound: a horizon older than 2^30 submissions is retired (covers
- * nothing), since its abort's pipe has long since been closed or used
- * again. A request whose own stamp is that old predates every live horizon
- * and is covered by any live one. A request and a horizon both that old
- * cannot be ordered: the request is not covered and is held until its PDO
- * stops or goes, which releases every held request - a client would have
- * to keep one request outstanding through 2^30 others on its PDO (twelve
- * days at a thousand a second) for that to arise.
+ * An IRP carries only the low 32 bits of its stamp (DriverContext[0] is all
+ * it has). Its full stamp is reconstructed from the current count as the
+ * latest value with those low bits not after it: exact while the request
+ * is fewer than 2^32 submissions old on its PDO. Beyond that bound - one
+ * request kept outstanding through 2^32 others on the same PDO, some 49
+ * days at a thousand a second - the low bits alias into the latest lap and
+ * cannot be told apart: such a request reads as newer than it is, is not
+ * covered by an abort it predates, and stays held until its PDO stops or
+ * goes, which releases every held request, or its client cancels it.
  */
-#define XHCI_PIPE_SEQ_AGE 0x40000000UL
+typedef struct _XHCI_SEQ64 {
+    ULONG Lo;
+    ULONG Hi;
+} XHCI_SEQ64, *PXHCI_SEQ64;
 
-/* Whether `seq` (nonzero) is aged against `current`. */
-ULONG XhciPipeSeqAged(ULONG seq, ULONG current);
+/* The next value; a Lo of 0 is skipped, so a stamp's low word is never 0
+ * (0 in an IRP means unstamped). */
+VOID XhciSeqNext(PXHCI_SEQ64 seq);
 
-/* Whether a live horizon covers a request stamped `stamp`: the request was
- * submitted at or before the abort, by the rules above. */
-ULONG XhciPipeSeqCovers(ULONG horizon, ULONG stamp, ULONG current);
+/* The full stamp whose low word is `stamp` (nonzero), the latest such
+ * value not after `current`. */
+VOID XhciSeqFromStamp(const XHCI_SEQ64 *current, ULONG stamp,
+                      PXHCI_SEQ64 out);
 
-/* The later of two horizons, either possibly 0 or aged (which yields to
- * the other); 0 when both are. */
-ULONG XhciPipeSeqLatest(ULONG a, ULONG b, ULONG current);
+/* a <= b. */
+ULONG XhciSeqLessEq(const XHCI_SEQ64 *a, const XHCI_SEQ64 *b);
+
+ULONG XhciSeqIsNone(const XHCI_SEQ64 *a);
+
+/* Whether a horizon covers a request whose stamp's low word is `stamp`,
+ * at count `current`: the horizon is set and the request's full stamp is
+ * at or before it. */
+ULONG XhciSeqCovers(const XHCI_SEQ64 *horizon, ULONG stamp,
+                    const XHCI_SEQ64 *current);
+
+/* *into = the later of *into and *with (either possibly none). */
+VOID XhciSeqLatest(PXHCI_SEQ64 into, const XHCI_SEQ64 *with);
 
 #endif /* XHCI_PIPE_H */

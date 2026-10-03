@@ -839,37 +839,61 @@ ULONG XhciPipeConfigureUsbdStatus(ULONG completionCode)
 }
 
 /* IRQL: any. */
-ULONG XhciPipeSeqAged(ULONG seq, ULONG current)
+VOID XhciSeqNext(PXHCI_SEQ64 seq)
 {
-    return seq != 0 && (ULONG)(current - seq) >= XHCI_PIPE_SEQ_AGE;
+    seq->Lo++;
+    if (seq->Lo == 0) {
+        seq->Hi++;
+        seq->Lo = 1;
+    }
 }
 
 /* IRQL: any. */
-ULONG XhciPipeSeqCovers(ULONG horizon, ULONG stamp, ULONG current)
+VOID XhciSeqFromStamp(const XHCI_SEQ64 *current, ULONG stamp,
+                      PXHCI_SEQ64 out)
 {
-    if (horizon == 0 || stamp == 0 || XhciPipeSeqAged(horizon, current)) {
+    ULONG age;
+
+    /* current - age, with age = (current.Lo - stamp) mod 2^32: the low
+     * word comes back as the stamp, and the high word borrows when the
+     * subtraction crossed a lap. */
+    age = current->Lo - stamp;
+    out->Lo = stamp;
+    out->Hi = current->Hi - ((age > current->Lo) ? 1UL : 0UL);
+}
+
+/* IRQL: any. */
+ULONG XhciSeqLessEq(const XHCI_SEQ64 *a, const XHCI_SEQ64 *b)
+{
+    return a->Hi < b->Hi || (a->Hi == b->Hi && a->Lo <= b->Lo);
+}
+
+/* IRQL: any. */
+ULONG XhciSeqIsNone(const XHCI_SEQ64 *a)
+{
+    return a->Lo == 0 && a->Hi == 0;
+}
+
+/* IRQL: any. */
+ULONG XhciSeqCovers(const XHCI_SEQ64 *horizon, ULONG stamp,
+                    const XHCI_SEQ64 *current)
+{
+    XHCI_SEQ64 full;
+
+    if (XhciSeqIsNone(horizon) || stamp == 0) {
         return 0;
     }
-    if (XhciPipeSeqAged(stamp, current)) {
-        return 1;
-    }
-    return (LONG)(stamp - horizon) <= 0;
+    XhciSeqFromStamp(current, stamp, &full);
+    return XhciSeqLessEq(&full, horizon);
 }
 
 /* IRQL: any. */
-ULONG XhciPipeSeqLatest(ULONG a, ULONG b, ULONG current)
+VOID XhciSeqLatest(PXHCI_SEQ64 into, const XHCI_SEQ64 *with)
 {
-    if (a == 0 || XhciPipeSeqAged(a, current)) {
-        a = 0;
+    if (XhciSeqIsNone(with)) {
+        return;
     }
-    if (b == 0 || XhciPipeSeqAged(b, current)) {
-        b = 0;
+    if (XhciSeqIsNone(into) || XhciSeqLessEq(into, with)) {
+        *into = *with;
     }
-    if (a == 0) {
-        return b;
-    }
-    if (b == 0) {
-        return a;
-    }
-    return ((LONG)(a - b) >= 0) ? a : b;
 }
