@@ -3116,6 +3116,12 @@ static ULONG xhciXferIsoCadenceAgrees(const USBPORT_ISO_TRANSFER *iso,
  * endpoint's, and every packet's frame inside the window. Exported so a
  * caller that must not be silently moved to SIA - an explicit StartFrame -
  * can ask the same question before submitting. Any IRQL.
+ *
+ * A block XhciXferBuildIso would refuse before reading a packet - no
+ * signature, no packets, more than XHCI_XFER_MAX_ISO_PACKETS - is answered
+ * 0 here before reading one too: exported, this is reached without the
+ * build's own checks in front of it, and an empty block otherwise passed
+ * both loops vacuously and answered 1 (test\test_td.c, task 26-A.9).
  */
 ULONG XhciXferIsoUsesFrameIds(const XHCI_ISO_REQUEST *request)
 {
@@ -3127,6 +3133,11 @@ ULONG XhciXferIsoUsesFrameIds(const XHCI_ISO_REQUEST *request)
         return 0;
     }
     iso = request->Iso;
+    if (iso->Signature != USBPORT_ISO_SIGNATURE ||
+        iso->NumberOfPackets == 0 ||
+        iso->NumberOfPackets > XHCI_XFER_MAX_ISO_PACKETS) {
+        return 0;
+    }
     if (!xhciXferIsoCadenceAgrees(iso, iso->NumberOfPackets,
                                   request->PacketsPerFrame)) {
         return 0;

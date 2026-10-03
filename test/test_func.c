@@ -585,6 +585,86 @@ static void test_iad_ids(void)
              "IAD compatible ids: the IAD's SubClass 00, not the 01");
 }
 
+/*
+ * The id builder at its edges, with a function made by hand rather than
+ * split (task 26-A.9): hex digits A-F in every field, an interface number
+ * past 9, the widest port number, the size query with no buffer, and a
+ * buffer too small, which is written to its last byte and not past it.
+ */
+static void id_is(const XHCI_FUNC *f, ULONG port, ULONG which,
+                  const char *want, ULONG wantLength, const char *what)
+{
+    char out[160];
+    ULONG used;
+
+    memset(out, 'x', sizeof(out));
+    used = 0;
+    CHECK_EQ(XhciFuncId(dev, f, port, which, out, sizeof(out), &used),
+             XHCI_FUNC_OK, what);
+    CHECK_EQ(used, wantLength, what);
+    CHECK_EQ(memcmp(out, want, wantLength), 0, what);
+    CHECK_EQ(out[wantLength], 'x', what);
+}
+
+static void test_id_edges(void)
+{
+    static const UCHAR hexDev[18] = {
+        0x12, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x40,
+        0xCD, 0xAB, 0xEF, 0x00, 0x34, 0x12, 0x01, 0x02, 0x00, 0x01
+    };
+    static const char devId[] = "USB\\VID_ABCD&PID_00EF&MI_0A\0";
+    static const char hwIds[] =
+        "USB\\VID_ABCD&PID_00EF&REV_1234&MI_0A\0"
+        "USB\\VID_ABCD&PID_00EF&MI_0A\0";
+    static const char compatIds[] =
+        "USB\\Class_FF&SubClass_0A&Prot_BC\0"
+        "USB\\Class_FF&SubClass_0A\0"
+        "USB\\Class_FF\0";
+    XHCI_FUNC f;
+    char small[10];
+    ULONG used;
+
+    memset(&f, 0, sizeof(f));
+    f.FirstInterface = 10;
+    f.InterfaceMask = 1UL << 10;
+    f.InterfaceCount = 1;
+    f.Class = 0xFF;
+    f.SubClass = 0x0A;
+    f.Protocol = 0xBC;
+    copy_dev(hexDev);
+
+    id_is(&f, 1, XHCI_FUNC_ID_DEVICE, devId, sizeof(devId) - 1,
+          "device id: upper-case hex, interface 10 is MI_0A");
+    id_is(&f, 1, XHCI_FUNC_ID_HARDWARE, hwIds, sizeof(hwIds),
+          "hardware ids: bcdDevice 0x1234 is REV_1234");
+    id_is(&f, 1, XHCI_FUNC_ID_COMPATIBLE, compatIds, sizeof(compatIds),
+          "compatible ids: FF/0A/BC");
+    id_is(&f, 0, XHCI_FUNC_ID_INSTANCE, "00A", 4,
+          "instance id: port 0 is one digit, the interface two");
+    id_is(&f, 0xFFFFFFFFUL, XHCI_FUNC_ID_INSTANCE, "42949672950A", 13,
+          "instance id: the widest port, ten digits");
+
+    used = 0;
+    CHECK_EQ(XhciFuncId(dev, &f, 1, XHCI_FUNC_ID_HARDWARE, NULL, 0, &used),
+             XHCI_FUNC_TOO_SMALL, "the size query with no buffer");
+    CHECK_EQ(used, sizeof(hwIds), "answers the whole multi-string's size");
+
+    memset(small, 'x', sizeof(small));
+    CHECK_EQ(XhciFuncId(dev, &f, 1, XHCI_FUNC_ID_DEVICE, small, 9, &used),
+             XHCI_FUNC_TOO_SMALL, "nine bytes for a 28-byte id");
+    CHECK_EQ(memcmp(small, "USB\\VID_A", 9), 0, "filled to its capacity");
+    CHECK_EQ(small[9], 'x', "and not one byte past it");
+
+    CHECK_EQ(XhciFuncId(NULL, &f, 1, XHCI_FUNC_ID_DEVICE, small, 9, &used),
+             XHCI_FUNC_BAD_PARAM, "no device descriptor");
+    CHECK_EQ(XhciFuncId(dev, NULL, 1, XHCI_FUNC_ID_DEVICE, small, 9, &used),
+             XHCI_FUNC_BAD_PARAM, "no function");
+    CHECK_EQ(XhciFuncId(dev, &f, 1, XHCI_FUNC_ID_DEVICE, NULL, 9, &used),
+             XHCI_FUNC_BAD_PARAM, "a capacity with no buffer");
+    CHECK_EQ(XhciFuncId(dev, &f, 1, XHCI_FUNC_ID_DEVICE, small, 9, NULL),
+             XHCI_FUNC_BAD_PARAM, "nowhere to say the size");
+}
+
 int main(void)
 {
     test_cmedia();
@@ -597,6 +677,7 @@ int main(void)
     test_malformed();
     test_setup();
     test_ids();
+    test_id_edges();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;
