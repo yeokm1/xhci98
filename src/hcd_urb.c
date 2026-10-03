@@ -629,6 +629,16 @@ NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp)
     NTSTATUS status;
     ULONG code;
 
+    /* Every IRP this dispatch pends reads STATUS_PENDING in its IoStatus
+     * until it completes, as usbport has it (NUSB 3.3 USBPORT.SYS image VA
+     * 0x15851, beside its IoMarkIrpPending; external/reactos/usbport/
+     * queue.c, USBPORT_QueuePendingTransferIrp). ASIX's Windows 98
+     * AX88772.SYS 3.0.3.12 waits for a URB by polling that field (image VA
+     * 0x103B5 and 0x10321): it read the 0 IoAllocateIrp left there, freed
+     * an IRP still in flight and selected a configuration from a descriptor
+     * not yet read (26-V.1, 2026-10-04). Set on entry, before anything can
+     * complete the IRP; every synchronous completion overwrites it. */
+    irp->IoStatus.Status = STATUS_PENDING;
     (VOID)InterlockedIncrement(&pdo->Busy);
     if (pdo->Closing) {
         /* Stopping or removed (hcd_pdo.c): nothing more is pended. The
