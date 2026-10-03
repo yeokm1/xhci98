@@ -843,17 +843,19 @@ that does not exist, or clear that one yourself.
         Write-Host "           (every boot), then Device Manager -> Update Driver -> this directory"
         Write-Host ""
         #
-        # This warning named XP x64 as the only amd64 guest and Vista x64 /
-        # Windows 7 x64 as outside the tier until 2026-09-18; roadmap task 21.8
-        # closed on 2026-09-16 with both in it, on an F8 boot only.
+        # Until 2026-10-04 this warning named the three guests the miniport's
+        # amd64 build ran on (tasks 21.5, 21.8 and 22.5). That standing was the
+        # miniport's and left the tree with it: the HCD is a different driver,
+        # and its amd64 build has its first guest leg in task 28-A.2 (XP x64)
+        # and the rest in 28-V.1. Restate this when those legs are read.
         #
-        Write-Warn "Three guests have run an amd64 build: Windows XP x64 SP2 (both shipping"
-        Write-Warn "flavours, roadmap task 21.5), Vista x64 SP2 and Windows 7 x64 SP1 (the qemu"
-        Write-Warn "build, tasks 21.8 and 22.5). Windows Server 2003 x64 rests on being the same"
-        Write-Warn "operating system as XP x64 and was never booted. On Vista x64 and 7 x64 the"
-        Write-Warn "driver loads only on a boot with signature enforcement disabled from F8."
-        Write-Warn "No amd64 build has ever run on real hardware. Treat a guest booted from this"
-        Write-Warn "media as the experiment it is, and do not put it on a machine you need working."
+        Write-Warn "This is the successor HCD, not the 1.2.0.0 miniport, and the guests the"
+        Write-Warn "miniport's amd64 build ran on say nothing about it. Its amd64 build is read"
+        Write-Warn "in QEMU guests only (roadmap-hcd.md tasks 28-A.2 and 28-V.1), XP x64 first."
+        Write-Warn "Windows Server 2003 x64 rests on being the same operating system as XP x64."
+        Write-Warn "On Vista x64 and 7 x64 the driver loads only on a boot with signature"
+        Write-Warn "enforcement disabled from F8. No amd64 build has ever run on real hardware."
+        Write-Warn "Treat a guest booted from this media as the experiment it is."
     } else {
         Write-Host "  Win98    Device Manager -> the xHCI device -> Update Driver -> Specify a location"
         Write-Host "  Win2000  Device Manager -> the xHCI device -> Update Driver -> Have Disk"

@@ -7,9 +7,10 @@
 # Since 2026-10-02 xhci98.sys is the successor HCD (design record 13); the
 # gate's three HCD rules stated in xhci98-imports.allow - no USBPORT.SYS pair,
 # an empty import table only while the scaffold marker is in the image, the
-# pool family denied until its rows exist - apply here unchanged. Phase 28 task
-# 28-A.2 is the amd64 build's own phase; until then this file grows in step
-# with the x86 one.
+# pool family denied until its rows exist - apply here unchanged. Task 28-A.2,
+# the amd64 build that loads in a guest, was taken at the start of Phase 27
+# (owner, 2026-10-03); from then this file grows in step with the x86 one in
+# the same change, since every batch builds and gates both architectures.
 
 [imports]
 

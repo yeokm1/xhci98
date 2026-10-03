@@ -135,6 +135,15 @@ typedef struct _HCD_ISO_BLOCK {
     USBPORT_ISO_PACKET More[XHCI_XFER_MAX_ISO_PACKETS - 1];
 } HCD_ISO_BLOCK, *PHCD_ISO_BLOCK;
 
+/* The engine indexes Packet[] past its declared one into More[], so More
+ * must start exactly where Packet[1] would: no padding between them on
+ * either architecture (roadmap-hcd.md task 28-A.2). Block is the first
+ * member; MSVC 6.0 takes no nested member in a constant offset. */
+XHCI_C_ASSERT(hcd_iso_block_tail,
+              XHCI_OFFSET_OF(HCD_ISO_BLOCK, More) ==
+                  XHCI_OFFSET_OF(USBPORT_ISO_TRANSFER, Packet) +
+                      sizeof(USBPORT_ISO_PACKET));
+
 #define HCD_XFER_FREE       0UL
 #define HCD_XFER_MAPPING    1UL     /* in the map pump                    */
 #define HCD_XFER_ON_RING    2UL     /* published; the engine owns it      */
@@ -169,11 +178,21 @@ typedef struct _HCD_XFER {
     ULONG Asap;                     /* USBD_START_ISO_TRANSFER_ASAP       */
     ULONG Seq;                      /* its pipe's submission order        */
     ULONG Mapped;                   /* held with its chunk mapped         */
-    struct {
+    struct _HCD_XFER_SG {
         USBPORT_SCATTER_GATHER_LIST List;
         USBPORT_SCATTER_GATHER_ELEMENT More[HCD_SG_ELEMENTS];
     } Sg;
 } HCD_XFER, *PHCD_XFER;
+
+/* The same for the SG list: hcd_dma.c writes SgElement[n] for n up to
+ * HCD_SG_ELEMENTS - 1, past the two the list declares. The list is
+ * 8-aligned on amd64 (its CurrentVa), so a size that were not a multiple
+ * of 8 there would leave a hole before More (task 28-A.2). List is the
+ * first member, so its own offset of SgElement is the one that counts. */
+XHCI_C_ASSERT(hcd_sg_list_tail,
+              XHCI_OFFSET_OF(struct _HCD_XFER_SG, More) ==
+                  XHCI_OFFSET_OF(USBPORT_SCATTER_GATHER_LIST, SgElement) +
+                      2 * sizeof(USBPORT_SCATTER_GATHER_ELEMENT));
 
 typedef struct _HCD_PIPE {
     ULONG Signature;
