@@ -19,9 +19,13 @@ Before the first run, once:
 
 ```powershell
 copy scripts\vm-matrix\config.sample.psd1 scripts\vm-matrix\matrix.config.psd1   # then edit paths
-powershell -File scripts\vm-matrix\gen-offsets.ps1             # after any driver change
+powershell -File scripts\vm-matrix\gen-offsets.ps1             # after any driver change (the HCD's table)
 powershell -File scripts\vm-matrix\run-matrix.ps1 -Config scripts\vm-matrix\matrix.config.psd1 -ValidateOnly
 ```
+
+The runner reads `matrix-hcd.psd1`, the successor HCD's expectation set, by
+default; `-Matrix scripts\vm-matrix\matrix.psd1` is the miniport's, frozen.
+See "Two expectation sets" below.
 
 Useful narrowings:
 
@@ -37,7 +41,8 @@ Useful narrowings:
 | File | What it is |
 |---|---|
 | `run-matrix.ps1` | The runner. Boot, stage, drive, collect, verdict, teardown. |
-| `matrix.psd1` | The rows and what each is expected to move. The design lives here, not in the runner. |
+| `matrix-hcd.psd1` | The rows and what each is expected to move, for the successor HCD (roadmap-hcd.md 26-A.10): the default. The design lives here, not in the runner. |
+| `matrix.psd1` | The same rows with the usbport miniport's expectations, frozen as what 1.2.0.0 was judged by. Read with `-Matrix`, against a 1.2.0.0-era guest. |
 | `config.sample.psd1` | Per-host paths. Copy and edit; nothing committed knows where your QEMU or images are. |
 | `probe-devices.ps1` | Guestless population probe: what this QEMU build can present, and at what speed. |
 | `prepare-image.ps1` | One-off, operator-driven: boots a target image without `-snapshot` so a class's driver install is answered once and persisted, so the matrix run itself meets no wizard. On a fresh target it also clones the base image out of a pre-driver snapshot (`-Clone`) and takes the stamp the post-release run checks (`-Stamp`). |
@@ -45,12 +50,13 @@ Useful narrowings:
 | `soak-11v.ps1` | Batch 11-V stage F: N unplug/replug cycles per class, then a sustained multi-class load, against an already-running guest whose monitor it is pointed at. |
 | `lifecycle-11v.ps1` | Batch 11-V stage G: an orderly guest shutdown with traffic in flight, a device churned across the whole teardown, and the stop-time counters read out of the stopped guest. Drives an already-running guest. |
 | `wedge-observe.ps1` | Finding 3's wedge as an observatory: the bench plug/pull recipes replayed in QEMU with every trace channel open. |
-| `matrix.broken.psd1` | A mutated matrix, run against a real guest as the whole-pipeline half of the same proof. Tracked on purpose; the self-test's guestless half cannot replace it. Do not "fix" its rows. |
-| `gen-offsets.ps1` | Derives the counter offset table from the driver's own sources. |
-| `offsets.txt`, `offsets.labels.txt` | Generated. Do not edit. |
+| `matrix.broken.psd1`, `matrix-hcd.broken.psd1` | Mutated matrices, the miniport's and the HCD's, run against a real guest as the whole-pipeline half of the same proof. Tracked on purpose; the self-test's guestless half cannot replace them. Do not "fix" their rows. |
+| `gen-offsets.ps1` | Derives the HCD's counter offset table from the driver's own sources. Refuses `-Driver miniport`: that table is frozen. |
+| `offsets-hcd.txt`, `offsets-hcd-amd64.txt` and their `.labels.txt` | Generated from the HCD's counter block. Do not edit. Not yet written: the block is not in `src\` (see "Two expectation sets"). |
+| `offsets.txt`, `offsets-amd64.txt` and their `.labels.txt` | The miniport's, generated at the 1.2.0.0-era tree and frozen with `matrix.psd1`. Do not edit or regenerate here. |
 | `lib/monitor.ps1` | QEMU monitor transport. |
 | `lib/qemu.ps1` | QEMU discovery, launch, and the traps enforced in code. |
-| `lib/counters.ps1` | Reading the miniport extension out of a live guest. |
+| `lib/counters.ps1` | Reading the driver's counters out of a live guest: the HCD's counter block, or the miniport extension. |
 | `lib/verdict.ps1` | Parsing and evaluating expectations; deciding a row's outcome. |
 | `lib/fresh.ps1` | The post-release run's own rules: the image stamp and its refusals, the replug verdict, `ExpectNoDriver`, the report header. Every refusal in it has a self-test case. |
 | `guest/` | The load scripts that run inside the guest for the concurrent-load stage, in two non-interchangeable pairs (Windows 2000 `cmd.exe`, Windows 98 `COMMAND.COM`). `guest/README.md` says which pair is which and why running the wrong one fails silently. |
@@ -63,7 +69,89 @@ operator has already started, and their comments name the per-host launchers
 (`qemu-win98-run-11v.cmd`, `qemu-win2k-smp-run-11v.cmd`, `hidpump-11v.ps1`)
 those runs used. What such a run needs from a launcher is stated in each
 script's header: a monitor port, the drives, the trace event list and, for
-the SMP guest, `-smp`.
+the SMP guest, `-smp`. They read the miniport's identity and table only.
+
+## Two expectation sets (roadmap-hcd.md 26-A.10)
+
+`matrix.psd1` encodes the miniport's behaviour, not a device's: its
+`endpoint speed mismatches` rows assert usbport's High-Speed lie, its
+`ExpectBySwitch` rows assert the virtual hub's extra tier and usbport's naming
+of it, and its counters are read at the miniport extension's offsets. A
+correct HCD would fail it field for field. So the successor is judged by
+`matrix-hcd.psd1` (design record 13 section 9.6), which declares
+`Driver = 'hcd'`; a set without `Driver` is the miniport's. The device
+population - groups, rows, models, steps and the guest facts
+(`ExcludedOnTarget`, `ExpectNoDriver`, `MayWedgeGuest`) - is copied unchanged,
+and `selftest.ps1` holds the two files to it. Design record 06's verdict rules
+are the same for both; `Get-RowOutcome` names different counters, nothing more.
+
+For an HCD set the harness:
+
+- **asserts each row's speed.** Every row carries `ExpectedSpeed` (`'HS'`,
+  `'FS'` or `'LS'`, or `@{ FS = 11 }` for a row whose `Steps` present several
+  devices), and the harness writes the lines itself
+  (`Get-HcdSpeedExpectationTexts`): `port speed decoded - <speed>` (the speed
+  the HCD decoded from the port) and `slot context speed - <speed>` (the speed
+  it programmed into the Slot Context of the Address Device) each advance by
+  exactly the row's count at that speed and not at all at the other two, and
+  `slot speed disagreeing with port speed` stays zero. Those six counters are
+  also this driver's own enumeration in the `NODRIVER` inference, so a wrong
+  speed on a device no class driver claims reads `FAIL`.
+- **refuses an undecided row** - no `Expect`, no `ExpectedSpeed`, or an
+  `ExpectBySwitch` - and **any line naming a retired label**: the usbport and
+  virtual-hub counters (`$script:HcdRetiredLabels`, each with its reason). Not
+  `inert`, which the harness resolves to a real field and reads.
+- **reads the HCD's refusal set** (`$script:HcdRefusalLabelsPermanent`), which
+  has no transient refusal, and a row's `ClaimLabel` (the hub rows name
+  `hubs started by the bus`: no function driver binds a hub under the HCD).
+- **finds the counter block by its own lines**, written by the qemu flavour
+  at every controller start with `XhciDbgValue`, in this order:
+
+  ```
+  xhci98: counters start=<8 hex>      per-load start number, from 1
+  xhci98: counters size=<8 hex>       sizeof(XHCIHC_COUNTERS)
+  xhci98: counters VA high=<8 hex>    amd64 build only
+  xhci98: counters VA low=<8 hex>     the pointer, or its low half
+  ```
+
+  A new start number at the same VA is a restart (the block does not move on
+  a stop and start), and the size is checked against `offsets-hcd.txt`'s
+  `SIZEOF`. There is no switch read and no `RH_GetRootHubData` wait.
+
+**What is not there yet.** The HCD keeps none of these counters in a
+readable block today: `gen-offsets.ps1` derives the table from
+`XHCI_DBG_VALUE_CHANGED("<label>", cnt-><Field>)` sites over
+`XHCIHC_COUNTERS` in `src\xhci_counters.h` (DDK-free, compiled under
+`XHCI_HOST_TEST`), in the files `src\sources` names, and refuses until that
+header exists. Until then `-ValidateOnly` with the HCD set stops at the
+missing `offsets-hcd.txt`. The block must publish these 38 labels (the set's
+and the harness's own; `selftest.ps1` builds its stand-in table from the same
+derivation, and `-ValidateOnly` checks the real table against the set):
+
+- enumeration: `devices addressed`, `slots enabled`, `port speed decoded -
+  high speed` / `- full speed` / `- low speed`, `slot context speed - high
+  speed` / `- full speed` / `- low speed`, `slot speed disagreeing with port
+  speed`
+- the bind and the pipes: `endpoints opened` (a non-default endpoint opened at
+  a function PDO's `SELECT_CONFIGURATION` or `SELECT_INTERFACE`, never the
+  bus's own hub pipe), `select endpoints requested`, `select endpoints
+  refused`, `endpoint refusals - type` / `- params` / `- ring pool`,
+  `endpoint configure failures`, `endpoints refused - no bandwidth` / `- no
+  resources`, `URBs refused - malformed`
+- the controller: `fatal controller status`, `transfer events for no open
+  endpoint`, `interrupt mask failures`, `commands the engine gave up on`
+- transfers: `transfers submitted`, `transfers completed`, `transfers
+  cancelled`, `iso packets answered`, `iso missed service errors`, `iso packet
+  errors`
+- hubs (Phase 27's, read 0 until then): `hubs started by the bus`,
+  `topology: hub descriptors folded`, `topology: hub descriptors malformed`,
+  `topology: hub slots marked`, `topology: nodes dropped`, `topology:
+  behind-hub devices addressed`, `topology: behind-hub opens`, `topology:
+  behind-hub refused - too deep`, `topology: TT pairs programmed`
+
+The hub group is Phase 27's: until the bus serves hubs it offers one as a
+device with no driver, so `usb-hub/fs` reads `NODRIVER` and `usb-hub/churn`
+`FAIL`. Phase 26 runs `-Group audio,hid,storage,other`.
 
 ## Prerequisites, and the one that bites
 

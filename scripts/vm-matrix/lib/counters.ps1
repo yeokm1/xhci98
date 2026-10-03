@@ -13,6 +13,18 @@
 # image on disable/enable and the common buffer moves between binds (Phase 3
 # task 9), so the harness re-reads it per boot rather than caching it.
 
+# The offset table's file name for one driver and architecture, beside the
+# scripts. gen-offsets.ps1 writes the same names.
+function Get-CounterTableFileName {
+    param(
+        [ValidateSet('miniport', 'hcd')][string]$Driver = 'miniport',
+        [ValidateSet('x86', 'amd64')][string]$Arch = 'x86'
+    )
+    $stem = if ($Driver -eq 'hcd') { "offsets-hcd" } else { "offsets" }
+    if ($Arch -eq 'amd64') { $stem += "-amd64" }
+    return ($stem + ".txt")
+}
+
 # Load the offset table and the label map that scripts\vm-matrix\gen-offsets.ps1
 # produced.  Both are derived from the driver's own sources, so a counter that
 # was renamed there is renamed here, and an expectation naming the old name
@@ -23,14 +35,23 @@ function Import-CounterTable {
         [string]$LabelsFile = "",
         # Which build's layout (gen-offsets.ps1 -Arch): offsets.txt for x86,
         # offsets-amd64.txt for amd64. Ignored when -OffsetsFile names a file.
-        [ValidateSet('x86', 'amd64')][string]$Arch = 'x86'
+        [ValidateSet('x86', 'amd64')][string]$Arch = 'x86',
+        # Which driver's table (roadmap-hcd.md 26-A.10). `miniport` is the
+        # frozen table of the usbport miniport that left the tree on
+        # 2026-10-02 (offsets.txt, offsets-amd64.txt: XHCI_EXTENSION, read at
+        # the extension usbport handed it), kept for matrix.psd1. `hcd` is the
+        # successor's counter block (offsets-hcd.txt, offsets-hcd-amd64.txt:
+        # XHCIHC_COUNTERS, design record 13 section 9.4), read by
+        # matrix-hcd.psd1. Ignored when -OffsetsFile names a file.
+        [ValidateSet('miniport', 'hcd')][string]$Driver = 'miniport'
     )
     if ($OffsetsFile -eq "") {
-        $OffsetsFile = Join-Path $PSScriptRoot $(if ($Arch -eq 'amd64') { "..\offsets-amd64.txt" } else { "..\offsets.txt" })
+        $OffsetsFile = Join-Path $PSScriptRoot ("..\" + (Get-CounterTableFileName -Driver $Driver -Arch $Arch))
     }
     if ($LabelsFile -eq "") { $LabelsFile = [IO.Path]::ChangeExtension($OffsetsFile, ".labels.txt") }
     if (-not (Test-Path -LiteralPath $OffsetsFile)) {
-        throw ("offset table not found: {0}. Run scripts\vm-matrix\gen-offsets.ps1 first." -f $OffsetsFile)
+        throw ("offset table not found: {0}. Run scripts\vm-matrix\gen-offsets.ps1 -Driver {1}{2} first." -f `
+            $OffsetsFile, $Driver, $(if ($Arch -eq 'amd64') { " -Arch amd64" } else { "" }))
     }
     if (-not (Test-Path -LiteralPath $LabelsFile)) {
         throw ("label map not found: {0}. It is written beside the offsets by gen-offsets.ps1." -f $LabelsFile)
@@ -57,6 +78,7 @@ function Import-CounterTable {
 
     return [pscustomobject]@{
         Arch        = $Arch
+        Driver      = $Driver
         Offsets     = $offsets
         FieldOfLabel = $fieldOf
         Sizeof      = $sizeof
@@ -350,7 +372,8 @@ function Get-ExtensionIdentityDrift {
         [Parameter(Mandatory = $true)][string]$DebugconLog
     )
     $identArch = if ($Ident.PSObject.Properties['Arch'] -and $Ident.Arch) { [string]$Ident.Arch } else { 'x86' }
-    $fresh = Find-ExtensionIdentity -DebugconLog $DebugconLog -Arch $identArch
+    $identDriver = if ($Ident.PSObject.Properties['Driver'] -and $Ident.Driver) { [string]$Ident.Driver } else { 'miniport' }
+    $fresh = Find-DriverIdentity -Driver $identDriver -DebugconLog $DebugconLog -Arch $identArch
     if ($null -eq $fresh.Va) {
         # The leaf name: this text reaches the diffable report body, where an
         # absolute path is a per-host difference.
@@ -362,6 +385,11 @@ function Get-ExtensionIdentityDrift {
     }
     if ($fresh.Va -ne $Ident.Va) {
         return ("the driver's extension moved from 0x{0} to 0x{1} since the group started; a reload happened and the window is void" -f $Ident.Va, $fresh.Va)
+    }
+    # The HCD's block does not move on a stop and start (design record 13
+    # section 9.4 item 2), so a restart is a new start number at the same VA.
+    if ($identDriver -eq 'hcd' -and $fresh.Start -ne $Ident.Start) {
+        return ("the controller restarted since the group started (counter block start {0} -> {1} at the same VA); the window is void" -f $Ident.Start, $fresh.Start)
     }
     return ""
 }
@@ -437,6 +465,108 @@ function Find-ExtensionIdentity {
         Spans    = (($distinctSizes.Count -gt 1) -or ($distinctVas.Count -gt 1))
         Arch     = $Arch
     }
+}
+
+# THE HCD'S IDENTITY (design record 13 section 9.4; roadmap-hcd.md 26-A.10).
+# The successor has no usbport to hand it an extension and prints no `cb`
+# lines, so the counter block announces itself. At every controller start,
+# after it has zeroed the block and advanced its start number, the qemu
+# flavour writes four XhciDbgValue lines, in this order:
+#
+#   xhci98: counters start=<8 hex>      the per-load start number, from 1
+#   xhci98: counters size=<8 hex>       sizeof(XHCIHC_COUNTERS)
+#   xhci98: counters VA high=<8 hex>    amd64 build only: the pointer's high half
+#   xhci98: counters VA low=<8 hex>     the pointer (x86), or its low half
+#
+# The low line completes the record, so a boot poll that sees the start or
+# size line alone has no identity yet - the miniport's amd64 lesson (Codex
+# review of fcbf9a1), applied to both architectures. The start number is what
+# the miniport's "a second VA" could not see: the HCD's block lives in the
+# controller FDO's extension, which a STOP_DEVICE and START_DEVICE keep at the
+# same VA, so a restart is a new start number and not a new address. `Spans`
+# is therefore "more than one (VA, start) pair, or more than one size".
+#
+# The kernel-address filter of the miniport's reader is kept: an x86 VA, or an
+# amd64 high half, without bit 31 is not a kernel address and is not taken.
+function Find-CounterBlockIdentity {
+    param(
+        [Parameter(Mandatory = $true)][string]$DebugconLog,
+        [ValidateSet('x86', 'amd64')][string]$Arch = 'x86'
+    )
+    $none = [pscustomobject]@{ Va = $null; Size = $null; Start = $null; AllVas = @(); AllSizes = @(); AllStarts = @(); Spans = $false; Arch = $Arch; Driver = 'hcd' }
+    if (-not (Test-Path -LiteralPath $DebugconLog)) { return $none }
+    $records = @()
+    $sizes = @()
+    $pendingStart = $null
+    $pendingSize = $null
+    $pendingHigh = $null
+    foreach ($line in Get-Content -LiteralPath $DebugconLog) {
+        if ($line -match '\bcounters start=([0-9A-Fa-f]{8})\b') {
+            $pendingStart = [Convert]::ToUInt32($Matches[1], 16); $pendingSize = $null; $pendingHigh = $null; continue
+        }
+        if ($line -match '\bcounters size=([0-9A-Fa-f]{8})\b') {
+            $pendingSize = [Convert]::ToInt32($Matches[1], 16); $sizes += $pendingSize; continue
+        }
+        if ($line -match '\bcounters VA high=([0-9A-Fa-f]{8})\b') { $pendingHigh = $Matches[1]; continue }
+        if ($line -match '\bcounters VA low=([0-9A-Fa-f]{8})\b') {
+            $low = $Matches[1]
+            $va = $null
+            if ($Arch -eq 'amd64') {
+                if ($null -ne $pendingHigh -and ([Convert]::ToUInt32($pendingHigh, 16) -band [uint32]2147483648) -ne 0) {
+                    $va = ($pendingHigh + $low).ToUpperInvariant()
+                }
+            } elseif (([Convert]::ToUInt32($low, 16) -band [uint32]2147483648) -ne 0) {
+                $va = $low.ToUpperInvariant()
+            }
+            if ($null -ne $va -and $null -ne $pendingStart -and $null -ne $pendingSize) {
+                $records += [pscustomobject]@{ Va = $va; Size = $pendingSize; Start = $pendingStart }
+            }
+            $pendingStart = $null; $pendingSize = $null; $pendingHigh = $null
+            continue
+        }
+    }
+    if ($records.Count -eq 0) {
+        $none.AllSizes = @($sizes | Sort-Object -Unique)
+        return $none
+    }
+    $last = $records[$records.Count - 1]
+    $pairs = @($records | ForEach-Object { "{0}/{1}" -f $_.Va, $_.Start } | Sort-Object -Unique)
+    $distinctSizes = @($sizes | Sort-Object -Unique)
+    return [pscustomobject]@{
+        Va        = $last.Va
+        Size      = $last.Size
+        Start     = $last.Start
+        AllVas    = @($records | ForEach-Object { $_.Va } | Sort-Object -Unique)
+        AllSizes  = $distinctSizes
+        AllStarts = @($records | ForEach-Object { $_.Start } | Sort-Object -Unique)
+        Spans     = (($pairs.Count -gt 1) -or ($distinctSizes.Count -gt 1))
+        Arch      = $Arch
+        Driver    = 'hcd'
+    }
+}
+
+# One identity reader per driver: the miniport's `cb ... a=` and
+# `MiniPortExtensionSize=` lines, or the HCD's counter-block lines. The
+# records have the same shape (Va, Size, AllVas, AllSizes, Spans, Arch), and
+# carry their driver so a later drift check reads the same lines again.
+function Find-DriverIdentity {
+    param(
+        [ValidateSet('miniport', 'hcd')][string]$Driver = 'miniport',
+        [Parameter(Mandatory = $true)][string]$DebugconLog,
+        [ValidateSet('x86', 'amd64')][string]$Arch = 'x86'
+    )
+    if ($Driver -eq 'hcd') { return (Find-CounterBlockIdentity -DebugconLog $DebugconLog -Arch $Arch) }
+    $id = Find-ExtensionIdentity -DebugconLog $DebugconLog -Arch $Arch
+    $id | Add-Member -NotePropertyName Driver -NotePropertyValue 'miniport' -Force
+    return $id
+}
+
+# The name the running driver gives its counter size on the debug console,
+# for messages that compare it with a table's SIZEOF.
+function Get-DriverSizeName {
+    param([ValidateSet('miniport', 'hcd')][string]$Driver = 'miniport')
+    if ($Driver -eq 'hcd') { return "counters size" }
+    return "MiniPortExtensionSize"
 }
 
 # WHAT COUNTS AS A TEARDOWN, read from the same debug console, for batch 11-V

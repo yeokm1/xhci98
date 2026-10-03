@@ -217,7 +217,10 @@ function Get-ScreendumpPath {
 function Assert-OffsetsFresh {
     param(
         [Parameter(Mandatory = $true)][string]$OffsetsFile,
-        [Parameter(Mandatory = $true)][int]$ExtensionSizeFromTrace
+        [Parameter(Mandatory = $true)][int]$ExtensionSizeFromTrace,
+        # What the running driver calls the size it printed (Get-DriverSizeName):
+        # the miniport's MiniPortExtensionSize, the HCD's `counters size`.
+        [string]$SizeName = "MiniPortExtensionSize"
     )
     if (-not (Test-Path -LiteralPath $OffsetsFile)) {
         throw ("offsets file not found: {0}" -f $OffsetsFile)
@@ -231,8 +234,8 @@ function Assert-OffsetsFresh {
         throw ("{0} has no SIZEOF line, so its freshness cannot be checked. Regenerate it." -f $OffsetsFile)
     }
     if ($sizeof -ne $ExtensionSizeFromTrace) {
-        throw ("STALE OFFSETS: {0} says SIZEOF={1} but the running driver reports MiniPortExtensionSize={2}. Every counter read would be off by the difference. Regenerate offsets before trusting this run." -f `
-            $OffsetsFile, $sizeof, $ExtensionSizeFromTrace)
+        throw ("STALE OFFSETS: {0} says SIZEOF={1} but the running driver reports {3}={2}. Every counter read would be off by the difference. Regenerate offsets before trusting this run." -f `
+            $OffsetsFile, $sizeof, $ExtensionSizeFromTrace, $SizeName)
     }
     return $true
 }

@@ -1062,6 +1062,322 @@ $churnAt0 = @{ 'devices addressed' = 11; 'slots enabled' = 11; 'endpoints opened
 Assert "churn at 0, run 23's leg: PASS"           "PASS" (Get-SwitchOutcome $churn 0 $churnAt0)
 Assert "churn at 2 on run 23's leg: FAIL"         "FAIL" (Get-SwitchOutcome $churn 2 $churnAt0)
 
+
+Write-Host "--- the HCD's expectation set (26-A.10): every row decided, a wrong speed a FAIL, the retired labels refused ---"
+#
+# Driven against a STAND-IN table: one invented field per label the HCD's set
+# and this harness name, because the counter block those labels will be
+# derived from (design record 13 section 9.4) is not in src\ yet, and the
+# vectors below are about the evaluator and the set, not about offsets. The
+# real table is checked against the same set by run-matrix.ps1 -ValidateOnly
+# once gen-offsets.ps1 -Driver hcd can write it.
+$mxHcd = Import-PowerShellDataFile -LiteralPath (Join-Path $PSScriptRoot "matrix-hcd.psd1")
+$mxHcdBroken = Import-PowerShellDataFile -LiteralPath (Join-Path $PSScriptRoot "matrix-hcd.broken.psd1")
+Assert "matrix-hcd.psd1 is the HCD's set"            "hcd" (Get-MatrixDriver -Matrix $mxHcd)
+Assert "matrix.psd1 is the miniport's"               "miniport" (Get-MatrixDriver -Matrix (Import-PowerShellDataFile -LiteralPath (Join-Path $PSScriptRoot "matrix.psd1")))
+$threw = $false; try { Get-MatrixDriver -Matrix @{ Driver = 'usbport' } | Out-Null } catch { $threw = $true }
+Assert "an unknown Driver is refused"                $true $threw
+Assert "the tracked HCD set validates clean"         0 @(Get-HcdSetProblems -Matrix $mxHcd).Count
+Assert "the broken HCD set validates clean"          0 @(Get-HcdSetProblems -Matrix $mxHcdBroken).Count
+Assert "the miniport's set is refused as an HCD set" $true (@(Get-HcdSetProblems -Matrix (Import-PowerShellDataFile -LiteralPath (Join-Path $PSScriptRoot "matrix.psd1"))).Count -gt 0)
+
+# The stand-in: every label the set names, the harness's own, the HCD refusal
+# set and the speed labels - and nothing else, so a retired label cannot
+# resolve against it.
+$hcdLabels = @('devices addressed', 'slots enabled', 'endpoints opened', 'transfers completed') +
+             @($script:HcdRefusalLabelsPermanent) + @(Get-HcdEnumerationLabels) + @($script:HcdSpeedDisagreeLabel)
+foreach ($t in @($mxHcd.Always)) { $hcdLabels += @(Get-ExpectationLabels -Text $t) }
+foreach ($g in $mxHcd.Groups) {
+    foreach ($r in $g.Rows) {
+        foreach ($t in @($r.Expect)) { $hcdLabels += @(Get-ExpectationLabels -Text $t) }
+        if ($r.ContainsKey('ExpectByTarget')) { foreach ($k in $r.ExpectByTarget.Keys) { foreach ($t in @($r.ExpectByTarget[$k])) { $hcdLabels += @(Get-ExpectationLabels -Text $t) } } }
+        if ($r.ContainsKey('ClaimLabel')) { $hcdLabels += [string]$r.ClaimLabel }
+    }
+}
+$hcdLabels = @($hcdLabels | Sort-Object -Unique)
+$hcdOff = Join-Path ([IO.Path]::GetTempPath()) ("xhci98-selftest-hcd-" + [Guid]::NewGuid().ToString("N").Substring(0, 8) + ".txt")
+$hcdOffLines = @(("SIZEOF {0}" -f (4 * $hcdLabels.Count)))
+$hcdMapLines = @()
+for ($i = 0; $i -lt $hcdLabels.Count; $i++) {
+    $hcdOffLines += ("F{0} {1}" -f $i, (4 * $i))
+    $hcdMapLines += ("F{0}`t{1}" -f $i, $hcdLabels[$i])
+}
+Set-Content -LiteralPath $hcdOff -Value $hcdOffLines -Encoding ascii
+Set-Content -LiteralPath ([IO.Path]::ChangeExtension($hcdOff, ".labels.txt")) -Value $hcdMapLines -Encoding ascii
+$hcdTable = Import-CounterTable -OffsetsFile $hcdOff -Driver hcd
+Remove-Item -LiteralPath $hcdOff, ([IO.Path]::ChangeExtension($hcdOff, ".labels.txt")) -Force -ErrorAction SilentlyContinue
+Assert "the stand-in table says which driver it is"  "hcd" $hcdTable.Driver
+
+function Get-HcdRow { param($Matrix, [string]$Name) foreach ($g in $Matrix.Groups) { foreach ($r in $g.Rows) { if ($r.Name -eq $Name) { return $r } } } }
+function New-HcdDelta {
+    param([hashtable]$ByLabel)
+    $v = @{}
+    foreach ($f in $hcdTable.Offsets.Keys) { $v[$f] = 0 }
+    foreach ($label in $ByLabel.Keys) { $v[(Resolve-CounterLabel -Table $hcdTable -Label $label)] = $ByLabel[$label] }
+    return [pscustomobject]@{ Values = $v; WentBackwards = @(); Restarted = $false }
+}
+# A row judged as run-matrix.ps1 judges it: Always, Expect, the target's
+# ExpectByTarget, the harness's speed lines, the row's claim label and the
+# HCD's refusal and enumeration sets. -NoEnumerationLabels drops the last, to
+# show it is load-bearing.
+function Get-HcdOutcome {
+    param($Row, $Delta, [string]$TargetKey = "", [switch]$NoEnumerationLabels, [switch]$Why, $Matrix = $mxHcd)
+    $texts = @($Matrix.Always) + @($Row.Expect)
+    if ($TargetKey -ne "" -and $Row.ContainsKey('ExpectByTarget') -and $Row.ExpectByTarget.ContainsKey($TargetKey)) { $texts += @($Row.ExpectByTarget[$TargetKey]) }
+    $texts += @(Get-HcdSpeedExpectationTexts -ExpectedSpeed $Row.ExpectedSpeed)
+    $results = @()
+    foreach ($t in $texts) {
+        $e = ConvertTo-Expectation -Text $t -Table $hcdTable
+        $results += [pscustomobject]@{ Expectation = $e; Test = (Test-Expectation -Expectation $e -Delta $Delta) }
+    }
+    $enum = if ($NoEnumerationLabels) { @() } else { @(Get-HcdEnumerationLabels) }
+    $o = Get-RowOutcome -Results $results -Delta $Delta -HarnessError "" -Table $hcdTable -Driver hcd `
+             -ClaimedLabel (Get-RowClaimLabel -Row $Row) -EnumerationLabels $enum
+    if ($Why) { return $o.Why }
+    return $o.Outcome
+}
+
+# Every line of the set, for every target key it names, parses against the
+# stand-in: the vocabulary is consistent, and is the list the counter block
+# must publish.
+$hcdParseProblems = @()
+foreach ($g in $mxHcd.Groups) {
+    foreach ($r in $g.Rows) {
+        $keys = @("")
+        if ($r.ContainsKey('ExpectByTarget')) { $keys += @($r.ExpectByTarget.Keys) }
+        foreach ($k in $keys) {
+            $texts = @($mxHcd.Always) + @($r.Expect)
+            # A row with no usable ExpectedSpeed is the validator's to report
+            # (above); here it is one more problem rather than the end of the run.
+            try { $texts += @(Get-HcdSpeedExpectationTexts -ExpectedSpeed $r.ExpectedSpeed) } catch { $hcdParseProblems += $_.Exception.Message }
+            if ($k -ne "") { $texts += @($r.ExpectByTarget[$k]) }
+            foreach ($t in $texts) { try { ConvertTo-Expectation -Text $t -Table $hcdTable | Out-Null } catch { $hcdParseProblems += $_.Exception.Message } }
+        }
+    }
+}
+Assert "every HCD row's lines parse"                 0 $hcdParseProblems.Count
+foreach ($lbl in @('endpoint speed mismatches', 'endpoint refusals - not ready', 'vhub started')) {
+    $threw = $false; try { Resolve-CounterLabel -Table $hcdTable -Label $lbl | Out-Null } catch { $threw = $true }
+    Assert ("a retired label '{0}' resolves to nothing in the HCD's table" -f $lbl) $true $threw
+}
+# ...so the miniport's refusal rule cannot be run against the HCD's table:
+# its transient label is retired, and asking for it is an error, not a zero.
+$threw = $false
+try { Get-DriverRefusalEvidence -Delta (New-HcdDelta @{}) -Table $hcdTable -Driver miniport | Out-Null } catch { $threw = $true }
+Assert "the miniport's refusal set does not resolve against the HCD's table" $true $threw
+
+Write-Host "--- the HCD set's validator refuses an undecided or miniport-shaped row ---"
+$okRow = @{ Name = 'r'; Model = 'usb-kbd'; Settle = 20; ExpectedSpeed = 'HS'; Expect = @('advance endpoints opened >= 1') }
+Assert "a decided row is clean"                      0 @(Get-HcdRowProblems -Row $okRow).Count
+$bad = $okRow.Clone(); $bad.Remove('ExpectedSpeed')
+Assert "no ExpectedSpeed is refused"                 $true ((@(Get-HcdRowProblems -Row $bad) -join ' ') -match 'no ExpectedSpeed')
+$bad = $okRow.Clone(); $bad.Remove('Expect')
+Assert "no Expect is refused"                        $true ((@(Get-HcdRowProblems -Row $bad) -join ' ') -match 'no Expect lines')
+$bad = $okRow.Clone(); $bad.Expect = @()
+Assert "an empty Expect is refused"                  $true ((@(Get-HcdRowProblems -Row $bad) -join ' ') -match 'no Expect lines')
+$bad = $okRow.Clone(); $bad.ExpectBySwitch = @{ '0,1,2' = @('zero fatal controller status') }
+Assert "ExpectBySwitch is refused"                   $true ((@(Get-HcdRowProblems -Row $bad) -join ' ') -match 'ExpectBySwitch')
+$bad = $okRow.Clone(); $bad.Expect = @('advance endpoints opened >= 1', 'zero endpoint speed mismatches')
+Assert "the usbport mismatch counter is refused by name" $true ((@(Get-HcdRowProblems -Row $bad) -join ' ') -match "retires - usbport's High-Speed lie")
+$bad = $okRow.Clone(); $bad.Expect = @('advance endpoints opened >= 1', 'inert endpoint speed mismatches because the HCD has none')
+Assert "...and refused as inert too"                 $true ((@(Get-HcdRowProblems -Row $bad) -join ' ') -match 'retires')
+$bad = $okRow.Clone(); $bad.ExpectByTarget = @{ '2b' = @('advance topology: TT pairs agreeing with usbport') }
+Assert "a retired label in ExpectByTarget is refused" $true ((@(Get-HcdRowProblems -Row $bad) -join ' ') -match 'row r \[2b\].*retires')
+$bad = $okRow.Clone(); $bad.Expect = @('advance endpoints opened >= 1', 'zero vhub hubs created')
+Assert "any vhub label is refused"                   $true ((@(Get-HcdRowProblems -Row $bad) -join ' ') -match 'virtual hub')
+$bad = $okRow.Clone(); $bad.Expect = @('advance endpoints opened >= 1', 'identity endpoint opens seen == endpoints opened')
+Assert "a retired label inside an identity is refused" $true ((@(Get-HcdRowProblems -Row $bad) -join ' ') -match 'endpoint opens seen')
+$bad = $okRow.Clone(); $bad.Expect = @('advance endpoints opened >= 1', 'advance port speed decoded - high speed == 1')
+Assert "a speed line written by hand is refused"     $true ((@(Get-HcdRowProblems -Row $bad) -join ' ') -match 'by hand')
+Assert "a retired label in Always is refused"        $true (@(Get-HcdSetProblems -Matrix @{ Driver = 'hcd'; Always = @('zero endpoint opens refused - malformed call'); Groups = @() }).Count -eq 1)
+foreach ($sp in @('SS', 'fs ', 480, @{}, @{ FS = 0 }, @{ XS = 1 }, @{ FS = 'two' })) {
+    $bad = $okRow.Clone(); $bad.ExpectedSpeed = $sp
+    Assert ("ExpectedSpeed '{0}' is refused" -f $(if ($sp -is [hashtable]) { "@{" + (($sp.Keys | ForEach-Object { "$_=$($sp[$_])" }) -join ';') + "}" } else { $sp })) $true (@(Get-HcdRowProblems -Row $bad).Count -gt 0)
+}
+$bad = $okRow.Clone(); $bad.ClaimLabel = ' '
+Assert "an empty ClaimLabel is refused"              $true ((@(Get-HcdRowProblems -Row $bad) -join ' ') -match 'ClaimLabel is empty')
+
+Write-Host "--- the speed lines the harness writes ---"
+$hsLines = @(Get-HcdSpeedExpectationTexts -ExpectedSpeed 'HS')
+Assert "HS: seven lines"                             7 $hsLines.Count
+Assert "HS: the port speed advances by exactly one"  $true ($hsLines -contains 'advance port speed decoded - high speed == 1')
+Assert "HS: the slot speed advances by exactly one"  $true ($hsLines -contains 'advance slot context speed - high speed == 1')
+Assert "HS: full speed must not move"                $true (($hsLines -contains 'zero port speed decoded - full speed') -and ($hsLines -contains 'zero slot context speed - full speed'))
+Assert "HS: low speed must not move"                 $true (($hsLines -contains 'zero port speed decoded - low speed') -and ($hsLines -contains 'zero slot context speed - low speed'))
+Assert "HS: no slot/port disagreement"               $true ($hsLines -contains 'zero slot speed disagreeing with port speed')
+Assert "a counted form: FS == 11"                    $true (@(Get-HcdSpeedExpectationTexts -ExpectedSpeed @{ FS = 11 }) -contains 'advance slot context speed - full speed == 11')
+
+Write-Host "--- a wrong speed is a FAIL, never a silence (usb-kbd/hs) ---"
+$kbdHs = Get-HcdRow $mxHcd 'usb-kbd/hs'
+$hsOk = @{ 'devices addressed' = 1; 'slots enabled' = 1; 'endpoints opened' = 1; 'select endpoints requested' = 1
+           'port speed decoded - high speed' = 1; 'slot context speed - high speed' = 1 }
+Assert "HS keyboard at HS, bound: PASS"              "PASS" (Get-HcdOutcome $kbdHs (New-HcdDelta $hsOk))
+$v = $hsOk.Clone(); $v.Remove('port speed decoded - high speed'); $v.Remove('slot context speed - high speed')
+$v['port speed decoded - full speed'] = 1; $v['slot context speed - full speed'] = 1
+Assert "HS keyboard reported FS: FAIL"               "FAIL" (Get-HcdOutcome $kbdHs (New-HcdDelta $v))
+Assert "...naming the speed lines"                   $true ((Get-HcdOutcome $kbdHs (New-HcdDelta $v) -Why) -match 'port speed decoded - high speed == 1')
+$v2 = $hsOk.Clone(); $v2.Remove('slot context speed - high speed'); $v2['slot context speed - full speed'] = 1; $v2['slot speed disagreeing with port speed'] = 1
+Assert "port right, Slot Context wrong: FAIL"        "FAIL" (Get-HcdOutcome $kbdHs (New-HcdDelta $v2))
+$v3 = $hsOk.Clone(); $v3['slot speed disagreeing with port speed'] = 1
+Assert "a disagreement alone: FAIL"                  "FAIL" (Get-HcdOutcome $kbdHs (New-HcdDelta $v3))
+$v4 = $hsOk.Clone(); $v4.Remove('port speed decoded - high speed'); $v4.Remove('slot context speed - high speed')
+Assert "no speed counted at all: FAIL, not PASS"     "FAIL" (Get-HcdOutcome $kbdHs (New-HcdDelta $v4))
+$v5 = $hsOk.Clone(); $v5['port speed decoded - high speed'] = 2; $v5['slot context speed - high speed'] = 2
+Assert "counted twice: FAIL"                         "FAIL" (Get-HcdOutcome $kbdHs (New-HcdDelta $v5))
+# Unbound: the speed still decides. A right speed and no bind is the OS's
+# silence; a wrong speed and no bind is this driver's defect.
+$nb = $hsOk.Clone(); $nb['endpoints opened'] = 0; $nb['select endpoints requested'] = 0
+Assert "right speed, never bound: NODRIVER"          "NODRIVER" (Get-HcdOutcome $kbdHs (New-HcdDelta $nb))
+$nbWrong = $v.Clone(); $nbWrong['endpoints opened'] = 0; $nbWrong['select endpoints requested'] = 0
+Assert "wrong speed, never bound: FAIL, not NODRIVER" "FAIL" (Get-HcdOutcome $kbdHs (New-HcdDelta $nbWrong))
+$nbSilent = $v4.Clone(); $nbSilent['endpoints opened'] = 0; $nbSilent['select endpoints requested'] = 0
+Assert "no speed counted, never bound: FAIL"         "FAIL" (Get-HcdOutcome $kbdHs (New-HcdDelta $nbSilent))
+Assert "...which without the enumeration labels would read NODRIVER" "NODRIVER" (Get-HcdOutcome $kbdHs (New-HcdDelta $nbSilent) -NoEnumerationLabels)
+$kbdFsH = Get-HcdRow $mxHcd 'usb-kbd/fs'
+$fsOk = @{ 'devices addressed' = 1; 'slots enabled' = 1; 'endpoints opened' = 1; 'select endpoints requested' = 1
+           'port speed decoded - full speed' = 1; 'slot context speed - full speed' = 1 }
+Assert "FS keyboard at FS: PASS"                     "PASS" (Get-HcdOutcome $kbdFsH (New-HcdDelta $fsOk))
+Assert "FS keyboard reported HS (the miniport's lie): FAIL" "FAIL" (Get-HcdOutcome $kbdFsH (New-HcdDelta $hsOk))
+
+Write-Host "--- the HCD's refusal set, its URB refusals and its identity ---"
+$f3h = $nb.Clone(); $f3h['select endpoints requested'] = 1; $f3h['select endpoints refused'] = 1; $f3h['endpoint refusals - ring pool'] = 1
+Assert "a ring-pool refusal, nothing opened: FAIL, not NODRIVER" "FAIL" (Get-HcdOutcome $kbdHs (New-HcdDelta $f3h))
+Assert "...naming it"                                $true ((Get-HcdOutcome $kbdHs (New-HcdDelta $f3h) -Why) -match 'refused.*ring pool \+1')
+foreach ($lbl in @($script:HcdRefusalLabelsPermanent)) {
+    $v = $nb.Clone(); $v['select endpoints requested'] = 1; $v['select endpoints refused'] = 1; $v[$lbl] = 1
+    Assert ("'{0}' with no bind: FAIL, not NODRIVER" -f $lbl) "FAIL" (Get-HcdOutcome $kbdHs (New-HcdDelta $v))
+}
+$cf = $hsOk.Clone(); $cf['endpoint configure failures'] = 1
+Assert "an open then a configure failure: FAIL, not PASS" "FAIL" (Get-HcdOutcome $kbdHs (New-HcdDelta $cf))
+$ub = $hsOk.Clone(); $ub['URBs refused - malformed'] = 1
+Assert "a malformed-URB refusal: FAIL"               "FAIL" (Get-HcdOutcome $kbdHs (New-HcdDelta $ub))
+$id = $hsOk.Clone(); $id['select endpoints requested'] = 2
+Assert "an endpoint requested and neither opened nor refused: FAIL" "FAIL" (Get-HcdOutcome $kbdHs (New-HcdDelta $id))
+$ud = New-HcdDelta $hsOk; $ud.Values.Remove((Resolve-CounterLabel -Table $hcdTable -Label 'endpoint refusals - params'))
+Assert "an unread HCD refusal counter: ERROR"        "ERROR" (Get-HcdOutcome $kbdHs $ud)
+
+Write-Host "--- hub rows: the claim is the bus's hub start, not a function driver's pipe ---"
+$hubFs = Get-HcdRow $mxHcd 'usb-hub/fs'
+Assert "usb-hub/fs names its claim"                  "hubs started by the bus" (Get-RowClaimLabel -Row $hubFs)
+Assert "a row with no ClaimLabel reads endpoints opened" "endpoints opened" (Get-RowClaimLabel -Row $kbdHs)
+$hubOk = @{ 'devices addressed' = 1; 'slots enabled' = 1; 'hubs started by the bus' = 1; 'port speed decoded - full speed' = 1; 'slot context speed - full speed' = 1
+            'topology: hub descriptors folded' = 1; 'topology: hub slots marked' = 1 }
+Assert "hub served by the bus: PASS"                 "PASS" (Get-HcdOutcome $hubFs (New-HcdDelta $hubOk))
+$hub26 = @{ 'devices addressed' = 1; 'slots enabled' = 1; 'port speed decoded - full speed' = 1; 'slot context speed - full speed' = 1 }
+Assert "Phase 26's hub, offered with no driver: NODRIVER" "NODRIVER" (Get-HcdOutcome $hubFs (New-HcdDelta $hub26))
+$hubNoFold = $hubOk.Clone(); $hubNoFold['topology: hub descriptors folded'] = 0
+Assert "hub started, descriptor never folded: FAIL"  "FAIL" (Get-HcdOutcome $hubFs (New-HcdDelta $hubNoFold))
+$hubFsDefault = $hubFs.Clone(); $hubFsDefault.Remove('ClaimLabel')
+Assert "...which the default claim would misread as NODRIVER" "NODRIVER" (Get-HcdOutcome $hubFsDefault (New-HcdDelta $hubNoFold))
+$churnH = Get-HcdRow $mxHcd 'usb-hub/churn'
+$churn27 = @{ 'devices addressed' = 11; 'slots enabled' = 11; 'hubs started by the bus' = 6
+              'port speed decoded - full speed' = 11; 'slot context speed - full speed' = 11
+              'topology: hub descriptors folded' = 6; 'topology: behind-hub opens' = 5; 'topology: behind-hub devices addressed' = 10 }
+Assert "churn, five tiers deep and the tier-5 mouse addressed: PASS" "PASS" (Get-HcdOutcome $churnH (New-HcdDelta $churn27))
+$churnVhub = $churn27.Clone(); $churnVhub['devices addressed'] = 10; $churnVhub['slots enabled'] = 10
+$churnVhub['port speed decoded - full speed'] = 10; $churnVhub['slot context speed - full speed'] = 10; $churnVhub['topology: behind-hub devices addressed'] = 9
+Assert "churn stopping at the virtual hub's tier: FAIL" "FAIL" (Get-HcdOutcome $churnH (New-HcdDelta $churnVhub))
+Assert "churn on Phase 26's bus (hub only): FAIL"    "FAIL" (Get-HcdOutcome $churnH (New-HcdDelta $hub26))
+$churnTt = $churn27.Clone(); $churnTt['topology: TT pairs programmed'] = 1
+Assert "churn with a TT programmed on QEMU: FAIL (the inert claim broke)" "FAIL" (Get-HcdOutcome $churnH (New-HcdDelta $churnTt))
+
+Write-Host "--- the audio row keeps its per-target guest facts ---"
+$audio = Get-HcdRow $mxHcd 'usb-audio/fs'
+$aud = @{ 'devices addressed' = 1; 'slots enabled' = 1; 'endpoints opened' = 2; 'select endpoints requested' = 2
+          'port speed decoded - full speed' = 1; 'slot context speed - full speed' = 1 }
+Assert "audio on 2b, idle: PASS"                     "PASS" (Get-HcdOutcome $audio (New-HcdDelta $aud) -TargetKey '2b')
+$audMiss = $aud.Clone(); $audMiss['iso missed service errors'] = 1
+Assert "audio on 2b with a missed service: FAIL"     "FAIL" (Get-HcdOutcome $audio (New-HcdDelta $audMiss) -TargetKey '2b')
+
+Write-Host "--- the broken HCD set fails a healthy HS keyboard ---"
+$kbdBroken = Get-HcdRow $mxHcdBroken 'usb-kbd/hs-broken'
+Assert "a healthy HS keyboard under the broken set: FAIL" "FAIL" (Get-HcdOutcome $kbdBroken (New-HcdDelta $hsOk) -Matrix $mxHcdBroken)
+$brokenNoAlways = @{ Driver = 'hcd'; Always = @('advance devices addressed'); Groups = @() }
+Assert "...on its ExpectedSpeed alone"               "FAIL" (Get-HcdOutcome @{ Name = 'x'; ExpectedSpeed = $kbdBroken.ExpectedSpeed; Expect = @('advance endpoints opened >= 1') } (New-HcdDelta $hsOk) -Matrix $brokenNoAlways)
+
+Write-Host "--- matrix-hcd.psd1 carries matrix.psd1's device population unchanged ---"
+$mxMini = Import-PowerShellDataFile -LiteralPath (Join-Path $PSScriptRoot "matrix.psd1")
+function Get-PopulationKey {
+    param($Group, $Row)
+    $parts = @($Group.Name, [string]$Group.Pump, $Row.Name, $Row.Model, [string]$Row.AddArgs, [string]$Row.Child, [string]$Row.Settle,
+               [string]$Row.NeedsNetdev, [string]$Row.NeedsChardev, (@($Row.MayWedgeGuest) -join ','))
+    foreach ($k in @('ExcludedOnTarget', 'ExpectNoDriver')) {
+        if ($Row.ContainsKey($k)) { $parts += (($Row[$k].Keys | Sort-Object | ForEach-Object { "{0}={1}" -f $_, $Row[$k][$_] }) -join ';') } else { $parts += "" }
+    }
+    if ($Row.ContainsKey('Steps')) { $parts += (($Row.Steps | ForEach-Object { "{0}|{1}|{2}|{3}" -f $_.Do, $_.Spec, $_.Id, $_.Wait }) -join ';') } else { $parts += "" }
+    return ($parts -join '#')
+}
+$popMini = @(); foreach ($g in $mxMini.Groups) { foreach ($r in $g.Rows) { $popMini += (Get-PopulationKey $g $r) } }
+$popHcd = @(); foreach ($g in $mxHcd.Groups) { foreach ($r in $g.Rows) { $popHcd += (Get-PopulationKey $g $r) } }
+Assert "the same number of rows"                     $popMini.Count $popHcd.Count
+$popDiff = @(Compare-Object -ReferenceObject $popMini -DifferenceObject $popHcd -SyncWindow 0)
+Assert "every row's population fields, in order, unchanged" 0 $popDiff.Count
+if ($popDiff.Count -gt 0) { $popDiff | Select-Object -First 2 | ForEach-Object { Write-Host ("    {0} {1}" -f $_.SideIndicator, $_.InputObject) } }
+
+Write-Host "--- the HCD's identity: the counter block's start, size and VA lines ---"
+$cbLog = Join-Path $env:TEMP ("xhci98-selftest-cb-" + [Guid]::NewGuid().ToString("N").Substring(0, 8) + ".log")
+Set-Content -LiteralPath $cbLog -Encoding ascii -Value @(
+    'xhci98: counters start=00000001'
+    'xhci98: counters size=00000468')
+Assert "start and size alone are no identity"        $null (Find-CounterBlockIdentity -DebugconLog $cbLog).Va
+Add-Content -LiteralPath $cbLog -Encoding ascii -Value 'xhci98: counters VA low=81A2C400'
+$cb = Find-CounterBlockIdentity -DebugconLog $cbLog
+Assert "x86: the low line completes the record"      "81A2C400" $cb.Va
+Assert "...with its size"                            0x468 $cb.Size
+Assert "...and its start number"                     1 ([int]$cb.Start)
+Assert "...and its driver"                           "hcd" $cb.Driver
+Assert "one load is no span"                         $false $cb.Spans
+Assert "Find-DriverIdentity hcd reads the same"      "81A2C400" (Find-DriverIdentity -Driver hcd -DebugconLog $cbLog).Va
+Assert "the miniport reader finds nothing in it"     $null (Find-DriverIdentity -Driver miniport -DebugconLog $cbLog).Va
+Assert "a drift check on an unchanged log is clean"  "" (Get-ExtensionIdentityDrift -Ident $cb -DebugconLog $cbLog)
+# A stop and start keeps the FDO, so the VA repeats with a new start number.
+Add-Content -LiteralPath $cbLog -Encoding ascii -Value @(
+    'xhci98: counters start=00000002'
+    'xhci98: counters size=00000468'
+    'xhci98: counters VA low=81A2C400')
+Assert "a restart at the same VA is a span"          $true (Find-CounterBlockIdentity -DebugconLog $cbLog).Spans
+Assert "...and the drift check says so"              $true ((Get-ExtensionIdentityDrift -Ident $cb -DebugconLog $cbLog) -match 'more than one driver load|restarted')
+Set-Content -LiteralPath $cbLog -Encoding ascii -Value @(
+    'xhci98: counters start=00000002', 'xhci98: counters size=00000468', 'xhci98: counters VA low=81A2C400')
+Assert "a new start number alone is drift"           $true ((Get-ExtensionIdentityDrift -Ident $cb -DebugconLog $cbLog) -match 'restarted.*start 1 -> 2')
+Set-Content -LiteralPath $cbLog -Encoding ascii -Value @(
+    'xhci98: counters start=00000001', 'xhci98: counters size=00000468', 'xhci98: counters VA low=81A2C400'
+    'xhci98: counters start=00000001', 'xhci98: counters size=0000046C', 'xhci98: counters VA low=81A2C400')
+Assert "two sizes are a span (two binaries)"         $true (Find-CounterBlockIdentity -DebugconLog $cbLog).Spans
+Set-Content -LiteralPath $cbLog -Encoding ascii -Value @(
+    'xhci98: counters start=00000001', 'xhci98: counters size=00000468', 'xhci98: counters VA low=01A2C400')
+Assert "a non-kernel x86 address is not taken"       $null (Find-CounterBlockIdentity -DebugconLog $cbLog).Va
+Set-Content -LiteralPath $cbLog -Encoding ascii -Value @(
+    'xhci98: counters start=00000001', 'xhci98: counters size=00000530', 'xhci98: counters VA low=CE2F5DC8')
+Assert "amd64: the low half alone is no identity"    $null (Find-CounterBlockIdentity -DebugconLog $cbLog -Arch amd64).Va
+Set-Content -LiteralPath $cbLog -Encoding ascii -Value @(
+    'xhci98: counters start=00000001', 'xhci98: counters size=00000530'
+    'xhci98: counters VA high=FFFFFADF', 'xhci98: counters VA low=CE2F5DC8')
+Assert "amd64: the completed pair is read"           "FFFFFADFCE2F5DC8" (Find-CounterBlockIdentity -DebugconLog $cbLog -Arch amd64).Va
+Set-Content -LiteralPath $cbLog -Encoding ascii -Value @(
+    'xhci98: counters start=00000001', 'xhci98: counters size=00000530'
+    'xhci98: counters VA high=0000FADF', 'xhci98: counters VA low=CE2F5DC8')
+Assert "amd64: a high half without bit 31 is not taken" $null (Find-CounterBlockIdentity -DebugconLog $cbLog -Arch amd64).Va
+Remove-Item -LiteralPath $cbLog -Force -ErrorAction SilentlyContinue
+Assert "no log: no identity"                         $null (Find-CounterBlockIdentity -DebugconLog $cbLog).Va
+
+Write-Host "--- the HCD's table names, and its size in the freshness messages ---"
+Assert "x86 HCD table"                               "offsets-hcd.txt" (Get-CounterTableFileName -Driver hcd -Arch x86)
+Assert "amd64 HCD table"                             "offsets-hcd-amd64.txt" (Get-CounterTableFileName -Driver hcd -Arch amd64)
+Assert "the miniport's table is unchanged"           "offsets.txt" (Get-CounterTableFileName -Driver miniport -Arch x86)
+$threw = ""
+try { Import-CounterTable -OffsetsFile (Join-Path $env:TEMP "xhci98-no-such-table.txt") -Driver hcd | Out-Null } catch { $threw = $_.Exception.Message }
+Assert "a missing HCD table names the regeneration"  $true ($threw -match 'gen-offsets\.ps1 -Driver hcd')
+Assert "the HCD's size is called by its own name"    "counters size" (Get-DriverSizeName -Driver hcd)
+$stampHcd = @{ Port = 56694; PortFree = $true; Image = 'D:\vm\fresh-2a.img'; ImageExists = $true; DebugconLog = 'x.log'; IdentSize = 1128; TableSizeof = 1132; SizeName = 'counters size' }
+Assert "a stamp against the wrong HCD build names its size" $true ((@(Get-StampProblems @stampHcd) -join ' ') -match 'counters size=1128')
+$tmpOffHcd = Join-Path ([IO.Path]::GetTempPath()) ("xhci98-selftest-" + [Guid]::NewGuid().ToString("N").Substring(0, 8) + ".txt")
+Set-Content -LiteralPath $tmpOffHcd -Value @("SIZEOF 1132", "F0 0") -Encoding ascii
+$threw = ""
+try { Assert-OffsetsFresh -OffsetsFile $tmpOffHcd -ExtensionSizeFromTrace 1128 -SizeName 'counters size' | Out-Null } catch { $threw = $_.Exception.Message }
+Remove-Item -LiteralPath $tmpOffHcd -Force -ErrorAction SilentlyContinue
+Assert "stale HCD offsets are refused by name"       $true ($threw -match 'STALE OFFSETS.*counters size=1128')
+
 Write-Host ""
 if ($failures -eq 0) {
     Write-Host ("selftest: {0} checks, all passed" -f $checks)

@@ -232,17 +232,49 @@ $script:DriverRefusalLabelsPermanent = @(
 )
 $script:DriverRefusalLabelTransient = 'endpoint refusals - not ready'
 
+# THE HCD'S REFUSAL SET (roadmap-hcd.md 26-A.10; design record 13 section
+# 9.6). The rule above is unchanged; what changes is which counters it names.
+# The successor is the bus, so a function driver's pipes come from its own
+# SELECT_CONFIGURATION and SELECT_INTERFACE handling, and the three refusals
+# that handling can make keep their labels with that meaning: a type the bus
+# does not serve, properties the context builder would not encode, the ring
+# pool declining. The three Configure Endpoint completion classes are the
+# same command's and keep theirs. Two of the miniport's leave: `- no device`
+# was usbport's device handle (the PDO is the device), and the transient
+# `- not ready` was usbport's retry (the bus reports a PDO only once it has
+# enumerated it), so the HCD has no transient refusal.
+$script:HcdRefusalLabelsPermanent = @(
+    'endpoint refusals - type'
+    'endpoint refusals - params'
+    'endpoint refusals - ring pool'
+    'endpoint configure failures'
+    'endpoints refused - no bandwidth'
+    'endpoints refused - no resources'
+)
+
 # Returns $null when no refusal counter moved, an ERROR-shaped record when one
 # could not be read (unread is never a zero), or a record naming the refusals.
 # `Claimed` is the row's `endpoints opened` delta, which decides whether the
-# transient counter counts.
+# transient counter counts. `Driver` picks the label set.
 function Get-DriverRefusalEvidence {
     param(
         [Parameter(Mandatory = $true)]$Delta,
         [Parameter(Mandatory = $true)]$Table,
-        [int]$Claimed = 0
+        [int]$Claimed = 0,
+        [ValidateSet('miniport', 'hcd')][string]$Driver = 'miniport'
     )
     $moved = @()
+    if ($Driver -eq 'hcd') {
+        foreach ($lbl in $script:HcdRefusalLabelsPermanent) {
+            $f = Resolve-CounterLabel -Table $Table -Label $lbl
+            if (-not $Delta.Values.ContainsKey($f)) {
+                return [pscustomobject]@{ Unread = $true; Label = $lbl; Moved = @(); Transient = $false }
+            }
+            if ($Delta.Values[$f] -ne 0) { $moved += ("{0} +{1}" -f $lbl, $Delta.Values[$f]) }
+        }
+        if ($moved.Count -eq 0) { return $null }
+        return [pscustomobject]@{ Unread = $false; Label = ""; Moved = $moved; Transient = $false }
+    }
     foreach ($lbl in $script:DriverRefusalLabelsPermanent) {
         $f = Resolve-CounterLabel -Table $Table -Label $lbl
         if (-not $Delta.Values.ContainsKey($f)) {
@@ -276,7 +308,15 @@ function Get-RowOutcome {
         [string]$HarnessError = "",
         [string]$AddressedLabel = "devices addressed",
         [string]$ClaimedLabel = "endpoints opened",
-        [Parameter(Mandatory = $true)]$Table
+        [Parameter(Mandatory = $true)]$Table,
+        # Which refusal set the refusal rule reads (Get-DriverRefusalEvidence).
+        [ValidateSet('miniport', 'hcd')][string]$Driver = 'miniport',
+        # Counters of this driver's own enumeration beside AddressedLabel and
+        # `slots enabled`: a failed expectation on one is a defect a missing
+        # bind cannot explain. The HCD's set adds its per-speed counters
+        # (Get-HcdEnumerationLabels), so a device addressed at the wrong speed
+        # on a target with no class driver for it reads FAIL, not NODRIVER.
+        [string[]]$EnumerationLabels = @()
     )
     if ($HarnessError -ne "") {
         return [pscustomobject]@{ Outcome = "ERROR"; Why = $HarnessError }
@@ -324,7 +364,7 @@ function Get-RowOutcome {
     # have it waived as the OS's silence.  The reason is carried in Why so the
     # report says WHICH refusal, not just that one happened.
     $failed = @($Results | Where-Object { -not $_.Test.Held })
-    $refused = Get-DriverRefusalEvidence -Delta $Delta -Table $Table -Claimed $claimed
+    $refused = Get-DriverRefusalEvidence -Delta $Delta -Table $Table -Claimed $claimed -Driver $Driver
     if ($null -ne $refused) {
         if ($refused.Unread) {
             return [pscustomobject]@{
@@ -368,7 +408,7 @@ function Get-RowOutcome {
         #      passed, and a bind that never happened cannot make a counter
         #      move further than expected.
         $ourFields = @()
-        foreach ($lbl in @($AddressedLabel, 'slots enabled')) {
+        foreach ($lbl in (@($AddressedLabel, 'slots enabled') + @($EnumerationLabels))) {
             try { $ourFields += (Resolve-CounterLabel -Table $Table -Label $lbl) } catch { }
         }
         $unexplained = @($failed | Where-Object {
@@ -550,4 +590,222 @@ function Format-VhubSwitchLine {
         return ("switch {0} in {1}{2}" -f $values[0], $where, $tail)
     }
     return ("SWITCH DIFFERS BY GROUP: {0}{1}" -f (($read | ForEach-Object { "{0} {1}" -f $_, $ByGroup[$_] }) -join ", "), $tail)
+}
+
+# ------------------------------------------------- the HCD's expectation set ---
+#
+# Roadmap-hcd.md 26-A.10 and design record 13 section 9.6. matrix.psd1 encodes
+# the miniport's behaviour, not a device's: its speed-mismatch rows assert
+# usbport's High-Speed lie, its switch rows assert the virtual hub's extra
+# tier and usbport's naming of it, and its counters are read at the miniport
+# extension's offsets. A correct HCD would fail it field for field. So the
+# successor is judged by a second set, matrix-hcd.psd1, which says so with
+# `Driver = 'hcd'`; a set with no `Driver` is the miniport's (matrix.psd1,
+# kept frozen beside it, and matrix.broken.psd1).
+#
+# Three things differ, and design record 06's verdict rules are not among
+# them - Get-RowOutcome's order is untouched; what changes is which counters
+# it names (the refusal set above, the claim label per row, and the
+# enumeration labels below):
+#
+#   1. Every row is decided. The validator refuses a row with no `Expect` or
+#      no `ExpectedSpeed`, so nothing is inherited by omission, and refuses
+#      `ExpectBySwitch`: the HCD has no virtual-hub switch to key on.
+#   2. A wrong speed is a FAIL, never a silence. Each row's `ExpectedSpeed`
+#      becomes expectations the harness writes itself, over two per-speed
+#      counters the HCD keeps: the speed it decoded from the port, and the
+#      speed it programmed into the Slot Context of the Address Device it
+#      issued. The row's speed must advance by exactly the number of devices
+#      it presents and the other two speeds must not move, in both counters,
+#      and `slot speed disagreeing with port speed` must stay zero.
+#   3. The labels that name usbport or the virtual hub are retired by name,
+#      with the reason, so a line naming one is refused before a boot. Not
+#      `inert`: the harness resolves an inert label to a real counter field
+#      and reads it, so an absent field would be an error, not a reading.
+
+$script:HcdSpeedWords = [ordered]@{ HS = 'high speed'; FS = 'full speed'; LS = 'low speed' }
+$script:HcdPortSpeedLabel = 'port speed decoded - {0}'
+$script:HcdSlotSpeedLabel = 'slot context speed - {0}'
+$script:HcdSpeedDisagreeLabel = 'slot speed disagreeing with port speed'
+
+$script:HcdRetiredLabels = [ordered]@{
+    'endpoint speed mismatches' = "usbport's High-Speed lie on a root port; the HCD reports the true speed, which ExpectedSpeed asserts"
+    'endpoint opens refused - unusable buffer' = "the buffer usbport handed OpenEndpoint; the HCD's own URB refusals are 'URBs refused - malformed'"
+    'endpoint opens refused - malformed call' = "the call shape usbport handed OpenEndpoint; the HCD's own URB refusals are 'URBs refused - malformed'"
+    'endpoint refusals - no device' = "usbport's device handle; the PDO is the device"
+    'endpoint refusals - not ready' = "usbport's retry of a transient refusal; the bus reports a PDO only once it has enumerated it"
+    'endpoint opens seen' = "usbport's OpenEndpoint accounting; the HCD's identity is over 'select endpoints requested'"
+    'endpoint opens accepted' = "usbport's OpenEndpoint accounting; the HCD's identity is over 'select endpoints requested'"
+    'EP0 opens refused' = "usbport's OpenEndpoint accounting; the bus opens EP0 itself"
+    'topology: behind-hub refused - no record' = "usbport opening a device the snoop never saw; the bus creates the record before it addresses"
+    'topology: TT pairs disagreeing with usbport' = "usbport naming a TT, and the virtual hub; the HCD has neither"
+    'topology: TT pairs agreeing with usbport' = "usbport naming a TT, and the virtual hub; the HCD has neither"
+}
+$script:HcdRetiredPrefix = 'vhub '
+
+# The report header's vhub line for a run of this set.
+$script:HcdNoSwitchLine = "not applicable (the HCD has no virtual-hub switch)"
+
+# The labels an expectation line names, without resolving them against a
+# table: the HCD set is checked for retired labels before any table exists.
+# The same grammar as ConvertTo-Expectation; a line it cannot parse yields
+# nothing here and is refused there.
+function Get-ExpectationLabels {
+    param([Parameter(Mandatory = $true)][string]$Text)
+    $t = $Text.Trim()
+    if ($t -match '^advance\s+(.+?)\s*(==|>=)\s*\d+$') { return @($Matches[1].Trim()) }
+    if ($t -match '^advance\s+(.+)$') { return @($Matches[1].Trim()) }
+    if ($t -match '^zero\s+(.+)$') { return @($Matches[1].Trim()) }
+    if ($t -match '^inert\s+(.+?)\s+because\s+') { return @($Matches[1].Trim()) }
+    if ($t -match '^identity\s+(.+?)\s*==\s*(.+)$') {
+        return @((($Matches[1] -split '\s*\+\s*') + ($Matches[2] -split '\s*\+\s*')) | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
+    }
+    return @()
+}
+
+# Why a label is retired from the HCD's set, or "" when it is not.
+function Get-HcdRetiredReason {
+    param([Parameter(Mandatory = $true)][string]$Label)
+    if ($script:HcdRetiredLabels.Contains($Label)) { return [string]$script:HcdRetiredLabels[$Label] }
+    if ($Label.StartsWith($script:HcdRetiredPrefix)) { return "the virtual hub; the HCD has none" }
+    return ""
+}
+
+# Which driver a loaded expectation set describes.
+function Get-MatrixDriver {
+    param([Parameter(Mandatory = $true)]$Matrix)
+    if (-not $Matrix.ContainsKey('Driver')) { return 'miniport' }
+    $d = [string]$Matrix.Driver
+    if (@('miniport', 'hcd') -notcontains $d) {
+        throw ("the matrix says Driver = '{0}', and the harness knows 'miniport' (matrix.psd1) and 'hcd' (matrix-hcd.psd1)" -f $d)
+    }
+    return $d
+}
+
+# The six per-speed labels, which are this driver's own enumeration.
+function Get-HcdEnumerationLabels {
+    $out = @()
+    foreach ($w in $script:HcdSpeedWords.Values) {
+        $out += ($script:HcdPortSpeedLabel -f $w)
+        $out += ($script:HcdSlotSpeedLabel -f $w)
+    }
+    return $out
+}
+
+# A row's ExpectedSpeed as a count per speed. 'HS', 'FS' or 'LS' is one device
+# at that speed; a table such as @{ FS = 11 } is a row whose Steps present
+# more than one device, each counted at its speed. Throws on anything else.
+function ConvertTo-HcdSpeedCounts {
+    param([Parameter(Mandatory = $true)][AllowNull()]$ExpectedSpeed)
+    $counts = [ordered]@{}
+    foreach ($k in $script:HcdSpeedWords.Keys) { $counts[$k] = 0 }
+    if ($ExpectedSpeed -is [string]) {
+        if (-not $script:HcdSpeedWords.Contains($ExpectedSpeed)) {
+            throw ("ExpectedSpeed '{0}' is not one of {1}" -f $ExpectedSpeed, ($script:HcdSpeedWords.Keys -join ", "))
+        }
+        $counts[$ExpectedSpeed] = 1
+        return $counts
+    }
+    if ($ExpectedSpeed -is [hashtable] -and $ExpectedSpeed.Count -gt 0) {
+        foreach ($k in $ExpectedSpeed.Keys) {
+            if (-not $script:HcdSpeedWords.Contains([string]$k)) {
+                throw ("ExpectedSpeed names '{0}', which is not one of {1}" -f $k, ($script:HcdSpeedWords.Keys -join ", "))
+            }
+            $n = $ExpectedSpeed[$k]
+            if (-not ($n -is [int]) -or $n -lt 1) {
+                throw ("ExpectedSpeed {0} = '{1}' is not a device count of 1 or more" -f $k, $n)
+            }
+            $counts[[string]$k] = [int]$n
+        }
+        return $counts
+    }
+    throw "ExpectedSpeed must be 'HS', 'FS' or 'LS', or a table of those to device counts"
+}
+
+# The expectation lines a row's ExpectedSpeed stands for. Written by the
+# harness rather than by hand, so no row can state a speed and forget a half.
+function Get-HcdSpeedExpectationTexts {
+    param([Parameter(Mandatory = $true)][AllowNull()]$ExpectedSpeed)
+    $counts = ConvertTo-HcdSpeedCounts -ExpectedSpeed $ExpectedSpeed
+    $out = @()
+    foreach ($k in $script:HcdSpeedWords.Keys) {
+        $w = $script:HcdSpeedWords[$k]
+        foreach ($fmt in @($script:HcdPortSpeedLabel, $script:HcdSlotSpeedLabel)) {
+            $label = $fmt -f $w
+            if ($counts[$k] -gt 0) { $out += ("advance {0} == {1}" -f $label, $counts[$k]) } else { $out += ("zero {0}" -f $label) }
+        }
+    }
+    $out += ("zero {0}" -f $script:HcdSpeedDisagreeLabel)
+    return $out
+}
+
+# The counter a row's bind is read from: `endpoints opened` unless the row
+# names another (design record 13 section 9.6, consequence 1: no function
+# driver binds an external hub under the HCD, so a hub row reads the bus's
+# own hub start instead).
+function Get-RowClaimLabel {
+    param([Parameter(Mandatory = $true)]$Row)
+    if ($Row.ContainsKey('ClaimLabel') -and -not [string]::IsNullOrWhiteSpace([string]$Row.ClaimLabel)) { return [string]$Row.ClaimLabel }
+    return 'endpoints opened'
+}
+
+# Problems with one line of the HCD's set: a retired label, or a speed label
+# written by hand where ExpectedSpeed says it.
+function Get-HcdLineProblems {
+    param([Parameter(Mandatory = $true)][string]$Where, [Parameter(Mandatory = $true)][string]$Text)
+    $out = @()
+    $speedLabels = @(Get-HcdEnumerationLabels) + @($script:HcdSpeedDisagreeLabel)
+    foreach ($label in (Get-ExpectationLabels -Text $Text)) {
+        $why = Get-HcdRetiredReason -Label $label
+        if ($why -ne "") {
+            $out += ("{0}: '{1}' names '{2}', which the HCD's set retires - {3}" -f $Where, $Text, $label, $why)
+        }
+        if ($speedLabels -contains $label) {
+            $out += ("{0}: '{1}' names a speed counter by hand; a row states its speed with ExpectedSpeed and the harness writes these lines" -f $Where, $Text)
+        }
+    }
+    return $out
+}
+
+# Problems with the HCD's set as a whole and with each of its rows, checked
+# before any table is loaded or any boot is spent.
+function Get-HcdSetProblems {
+    param([Parameter(Mandatory = $true)]$Matrix)
+    $out = @()
+    foreach ($t in @($Matrix.Always)) { $out += (Get-HcdLineProblems -Where "Always" -Text ([string]$t)) }
+    foreach ($g in @($Matrix.Groups)) {
+        foreach ($r in @($g.Rows)) { $out += (Get-HcdRowProblems -Row $r) }
+    }
+    return $out
+}
+
+function Get-HcdRowProblems {
+    param([Parameter(Mandatory = $true)]$Row)
+    $out = @()
+    $name = [string]$Row.Name
+    if ($Row.ContainsKey('ExpectBySwitch')) {
+        $out += ("row {0}: ExpectBySwitch is the miniport's virtual-hub switch, which the HCD does not have; state the row's one form in Expect" -f $name)
+    }
+    $lines = @()
+    if ($Row.ContainsKey('Expect')) { $lines = @($Row.Expect | Where-Object { $_ -is [string] -and -not [string]::IsNullOrWhiteSpace($_) }) }
+    if ($lines.Count -eq 0) {
+        $out += ("row {0}: no Expect lines - every row of the HCD's set is decided, not inherited by omission" -f $name)
+    }
+    if (-not $Row.ContainsKey('ExpectedSpeed')) {
+        $out += ("row {0}: no ExpectedSpeed - every row states the speed its device enumerates at, so a wrong speed is a FAIL" -f $name)
+    } else {
+        try { [void](ConvertTo-HcdSpeedCounts -ExpectedSpeed $Row.ExpectedSpeed) } catch { $out += ("row {0}: {1}" -f $name, $_.Exception.Message) }
+    }
+    if ($Row.ContainsKey('ClaimLabel') -and [string]::IsNullOrWhiteSpace([string]$Row.ClaimLabel)) {
+        $out += ("row {0}: ClaimLabel is empty" -f $name)
+    }
+    foreach ($t in $lines) { $out += (Get-HcdLineProblems -Where ("row {0}" -f $name) -Text ([string]$t)) }
+    if ($Row.ContainsKey('ExpectByTarget')) {
+        foreach ($k in $Row.ExpectByTarget.Keys) {
+            foreach ($t in @($Row.ExpectByTarget[$k])) {
+                $out += (Get-HcdLineProblems -Where ("row {0} [{1}]" -f $name, $k) -Text ([string]$t))
+            }
+        }
+    }
+    return $out
 }
