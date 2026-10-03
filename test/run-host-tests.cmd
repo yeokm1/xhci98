@@ -64,6 +64,15 @@ rem                  13-L.2 retired the ring-0 file sink and those functions
 rem                  with it, and test_log.c had said so for
 rem                  two days while this summary had not.)
 rem
+rem   test_uas     - the pure core of xhciuas.sys, the UAS class driver
+rem                  (src\uas\uas_iu.c, task 31-A.2): the COMMAND and TASK
+rem                  MANAGEMENT IU encoders and the SENSE, RESPONSE and READY
+rem                  IU parser byte for byte, the SAM LUN field, the tag
+rem                  allocator's order and refusals, the walk for the UAS
+rem                  alternate setting and its Pipe Usage descriptors at High
+rem                  Speed and SuperSpeed, REPORT LUNS, the status fold, the
+rem                  CDB direction table and the storage id strings
+rem
 rem RETIRED ON 2026-10-02 with the miniport's sources (design record 13):
 rem test_vhub (src\xhci_vhub.c) and test_init (the miniport's MMIO-facing code
 rem and its usbport callback surface). Their last copies are on branch
@@ -209,6 +218,9 @@ rem encoder is what turns it into an Interval, so the two halves of task 9-A.2
 rem are one subject and a vector that stopped at the table would not have tested
 rem the number the hardware sees.
 call :run test_desc "test_desc.c ..\src\xhci_desc.c ..\src\xhci_ctx.c ..\src\xhci_mem.c"
+rem test_uas links nothing else: the UAS driver's information units, tags,
+rem descriptor walk and ids are pure computations over bytes (task 31-A.2).
+call :run test_uas "test_uas.c ..\src\uas\uas_iu.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64

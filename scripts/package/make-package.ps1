@@ -9,6 +9,8 @@ is this project's two files and nothing else:
 
     xhci98.inf     the dual-path INF
     xhci98.sys     the built miniport (debug or release)
+    xhciuas.inf    the UAS class driver's INF (x86, roadmap task 31-A.2)
+    xhciuas.sys    the UAS class driver, the same flavour
 
 The Microsoft files the driver depends on, usbd.sys and usbhub.sys (both
 targets), usbport.sys (the NT targets; on Windows 98 the USB 2.0 stack
@@ -70,6 +72,19 @@ The binary to stage, overriding `src\obj<flavour>\<archdir>\xhci98.sys`. The
 flavour marker in the image is still checked against -Flavor, so this cannot be
 used to publish one flavour under another's name. Exists for the self-tests,
 which stage text stand-ins carrying a marker and nothing else.
+
+.PARAMETER UasInfPath
+The UAS class driver's INF to stage (task 31-A.2), overriding
+`src\uas\xhciuas.inf`.
+
+.PARAMETER UasDriverPath
+The UAS class driver to stage, overriding
+`src\uas\obj<flavour>\i386\xhciuas.sys`. The x86 package carries the
+UAS driver whenever it is built from the default paths: a missing xhciuas.sys
+is then a refusal, not an omission. A caller that names -DriverPath (the
+self-tests' stand-ins) stages the UAS pair only when it names -UasDriverPath
+too, so a stand-in package is not filled from whatever the last build left
+in src\uas. The amd64 package has no UAS driver yet.
 
 .PARAMETER SkipPackageGate
 Skip the post-staging check-inf.ps1 -PackageDir run only. The INF is gated
@@ -168,6 +183,8 @@ param(
     [string]$OutDir = "",
     [string]$InfPath = "",
     [string]$DriverPath = "",
+    [string]$UasInfPath = "",
+    [string]$UasDriverPath = "",
     [switch]$SkipPackageGate,
     [switch]$SkipBinaryGates,
     [switch]$NoTargetEvidence,
@@ -189,6 +206,21 @@ $repo = Get-RepoRoot
 $archDir = if ($Arch -eq "amd64") { "amd64" } else { "i386" }
 $archInf = if ($Arch -eq "amd64") { "src\xhci98-amd64.inf" } else { "src\xhci98.inf" }
 if ($InfPath -eq "") { $InfPath = Join-Path $repo $archInf }
+#
+# The UAS class driver (task 31-A.2), x86 only for now. Decided before
+# -DriverPath is defaulted, because whether the caller named one is the
+# question: see the -UasDriverPath help.
+#
+$stageUas = ($Arch -eq "x86") -and (($DriverPath -eq "") -or ($UasDriverPath -ne ""))
+if ($UasInfPath -eq "") { $UasInfPath = Join-Path $repo "src\uas\xhciuas.inf" }
+if ($UasDriverPath -eq "") {
+    $uasObjDir = switch ($Flavor) {
+        "debug"   { "objchk" }
+        "qemu"    { "objchk_qemu" }
+        default   { "objfre" }
+    }
+    $UasDriverPath = Join-Path $repo "src\uas\$uasObjDir\i386\xhciuas.sys"
+}
 if ($DriverPath -eq "") {
     # Three flavours, two of them checked: "objchk" alone stopped identifying a
     # build when task 13-L.1 added qemu, which is exactly why it has a tree of
@@ -572,6 +604,50 @@ looks exactly like a bad INF.
         }
     }
 
+    # --- the UAS class driver, held to the same gates (task 31-A.2) ---------
+    #
+    # After xhci98.sys's gates, so a stand-in refused by those is refused for
+    # the reason the self-tests expect, and before anything is staged.
+    if ($stageUas) {
+        Write-Step ("UAS class driver ({0}, {1})" -f $Flavor, $Arch)
+        if (-not (Test-Path -LiteralPath $UasDriverPath)) {
+            throw @"
+no $Flavor xhciuas.sys at '$UasDriverPath'.
+The x86 package carries the UAS class driver. Build it first:
+  scripts\build-driver.cmd $Flavor
+"@
+        }
+        $uasFlavour = Get-ImageFlavourMarker -Path $UasDriverPath
+        if ($uasFlavour -ne $Flavor) {
+            throw "'$UasDriverPath' carries the flavour marker '$uasFlavour', not $Flavor's. Rebuild: scripts\build-driver.cmd $Flavor"
+        }
+        $savedEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            if (-not $SkipBinaryGates) {
+                $uasGateArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                                 (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") "check-imports.ps1"),
+                                 "-Image", $UasDriverPath, "-Flavor", $Flavor, "-Arch", $Arch,
+                                 "-AllowPath", (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") "xhciuas-imports.allow"))
+                if ($NoTargetEvidence) { $uasGateArgs += "-NoTargetEvidence" }
+                & powershell.exe @uasGateArgs
+                if ($LASTEXITCODE -ne 0) {
+                    throw "'$UasDriverPath' failed the import-compatibility gate against xhciuas-imports.allow."
+                }
+            }
+            & powershell -NoProfile -ExecutionPolicy Bypass -File `
+                (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-uas-inf.ps1") `
+                -InfPath $UasInfPath
+            if ($LASTEXITCODE -ne 0) {
+                throw "'$UasInfPath' failed scripts\inf-gate\check-uas-inf.ps1 - fix it before packaging."
+            }
+        } finally {
+            $ErrorActionPreference = $savedEap
+        }
+    } elseif ($Arch -eq "x86") {
+        Write-Warn "no UAS class driver staged: -DriverPath was named without -UasDriverPath (a stand-in package)."
+    }
+
     # --- where each file goes, from the gate's own parse ---------------------
     Write-Step "INF gate, and the media layout it derives"
 
@@ -626,6 +702,12 @@ usbhub.sys through the INF's LayoutFile, and the gate refuses them here.
         Ensure-Directory (Split-Path -Parent $dest)
         Copy-Item -LiteralPath $staging[$name] -Destination $dest -Force
         $mediaPaths[$name] = $dest
+    }
+    # The UAS pair goes to the package root, where xhciuas.inf's one
+    # SourceDisksNames entry looks for both files.
+    if ($stageUas) {
+        Copy-Item -LiteralPath $UasInfPath -Destination (Join-Path $stageDir "xhciuas.inf") -Force
+        Copy-Item -LiteralPath $UasDriverPath -Destination (Join-Path $stageDir "xhciuas.sys") -Force
     }
     $rootInf = Join-Path $stageDir "xhci98.inf"
     if (-not (Test-Path -LiteralPath $rootInf)) {
@@ -720,6 +802,20 @@ a build that was never made.
         }
         if ($LASTEXITCODE -ne 0) {
             throw "the staged package failed scripts\inf-gate\check-inf.ps1 - do not install it."
+        }
+        if ($stageUas) {
+            $savedEap = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                & powershell -NoProfile -ExecutionPolicy Bypass -File `
+                    (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-uas-inf.ps1") `
+                    -InfPath (Join-Path $stageDir "xhciuas.inf") -PackageDir $stageDir
+            } finally {
+                $ErrorActionPreference = $savedEap
+            }
+            if ($LASTEXITCODE -ne 0) {
+                throw "the staged package failed scripts\inf-gate\check-uas-inf.ps1 - do not install it."
+            }
         }
     }
 
