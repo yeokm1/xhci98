@@ -415,4 +415,78 @@ ULONG XhciPipeNtStatus(ULONG usbd);
  * anything else is INTERNAL_HC_ERROR. */
 ULONG XhciPipeConfigureUsbdStatus(ULONG completionCode);
 
+/* ------------------------------------------------------------------ */
+/* What Windows XP onward asks a device PDO (task 28-A.1)               */
+/* ------------------------------------------------------------------ */
+
+/* A buffer too short for the answer (STATUS_BUFFER_TOO_SMALL's case). */
+#define XHCI_PIPE_TOO_SMALL         6UL
+
+/* The pipe URB functions above the Windows 2000 DDK's set: WDK 7.1
+ * inc\api\usb.h (URB_FUNCTION_SYNC_RESET_PIPE, _SYNC_CLEAR_STALL and
+ * _CONTROL_TRANSFER_EX, Windows XP and Vista). 0x1E is the 2000 DDK's
+ * RESET_PIPE, which usb.h names SYNC_RESET_PIPE_AND_CLEAR_STALL. */
+#define XHCI_PIPE_URB_RESET_PIPE                0x001EUL
+#define XHCI_PIPE_URB_SYNC_RESET_PIPE           0x0030UL
+#define XHCI_PIPE_URB_SYNC_CLEAR_STALL          0x0031UL
+#define XHCI_PIPE_URB_CONTROL_TRANSFER_EX       0x0032UL
+
+/* The halves of a pipe reset: the controller's endpoint (Reset Endpoint and
+ * Set TR Dequeue, which restart the host's data toggle) and the device's
+ * (CLEAR_FEATURE(ENDPOINT_HALT) to the endpoint). */
+#define XHCI_PIPE_RESET_HOST        0x1UL
+#define XHCI_PIPE_RESET_DEVICE      0x2UL
+
+/* Which halves `function` asks for: both for 0x1E, the host's for 0x30, the
+ * device's for 0x31, none (0) for any other function. */
+ULONG XhciPipeResetParts(ULONG function);
+
+/* USB_BUS_INTERFACE_USBDI_GUID's versions and their sizes. The structure
+ * (WDK 7.1 inc\ddk\usbbusif.h lines 252-414) is two USHORTs, then pointers
+ * only: BusContext, InterfaceReference, InterfaceDereference and four
+ * functions in V0, one more in V1 (IsDeviceHighSpeed) and V2
+ * (EnumLogEntry), two more in V3 (QueryBusTimeEx, QueryControllerType). The
+ * two USHORTs pad to one pointer. Design record 13 section 6.1's table: x86
+ * 0x20, 0x24, 0x28, 0x30; x64 0x40, 0x48, 0x50, 0x60. */
+#define XHCI_PIPE_USBDI_VERSION_MAX 3UL
+
+/* The size of USBDI version `version` with `pointerBytes`-byte pointers (4
+ * or 8), or 0 for a version above 3 or another pointer size. */
+ULONG XhciPipeUsbdiSize(ULONG version, ULONG pointerBytes);
+
+/* USB_BUS_INFORMATION_LEVEL_0 and _1 (usbbusif.h): two ULONGs, then for
+ * level 1 a ULONG name length and a one-WCHAR name array, 16 bytes with the
+ * structure's ULONG alignment. */
+#define XHCI_PIPE_BUSINFO0_BYTES    8UL
+#define XHCI_PIPE_BUSINFO1_BYTES    16UL
+
+/*
+ * The answer to QueryBusInformation(Level) for a controller that exposes no
+ * symbolic name: level 0 is TotalBandwidth and ConsumedBandwidth, level 1
+ * adds a ControllerNameLength of 0 and an empty name. `*actual` (when not
+ * NULL) is the size the level needs and `*length` is set to it on success; a
+ * `*length` below it is XHCI_PIPE_TOO_SMALL with nothing written, a level
+ * other than 0 or 1 is XHCI_PIPE_UNSUPPORTED with nothing written, and a NULL
+ * buffer or length is XHCI_PIPE_BAD_PARAM. Little-endian bytes into
+ * `buffer`.
+ */
+ULONG XhciPipeBusInformation(ULONG level, ULONG totalBandwidth,
+                             ULONG consumedBandwidth, UCHAR *buffer,
+                             PULONG length, PULONG actual);
+
+/* USB_TOPOLOGY_ADDRESS (WDK 7.1 inc\api\usbioctl.h): four ULONGs (PCI bus,
+ * device, function, reserved), the root hub's port, five hub ports below it
+ * and a reserved USHORT - 30 bytes, 32 with its ULONG alignment. */
+#define XHCI_PIPE_TOPOLOGY_BYTES    32UL
+
+/*
+ * A USB_TOPOLOGY_ADDRESS for a device on root port `rootPort` with no hub
+ * between: the controller's PCI bus number, and its device and function from
+ * a DevicePropertyAddress value (device in bits 31:16, function in 15:0, as
+ * the PCI bus driver reports it), every hub port 0. XHCI_PIPE_BAD_PARAM for a
+ * NULL buffer or a root port outside 1..255.
+ */
+ULONG XhciPipeTopologyAddress(ULONG pciBus, ULONG pciAddress, ULONG rootPort,
+                              UCHAR *out);
+
 #endif /* XHCI_PIPE_H */

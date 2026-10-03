@@ -1382,6 +1382,113 @@ static void test_iso_frames(void)
              "1024 back, the inclusive edge");
 }
 
+/* ------------------------------------------------------------------ */
+/* What Windows XP onward asks (task 28-A.1)                            */
+/* ------------------------------------------------------------------ */
+
+static ULONG get32(const UCHAR *p)
+{
+    return (ULONG)p[0] | ((ULONG)p[1] << 8) | ((ULONG)p[2] << 16) |
+           ((ULONG)p[3] << 24);
+}
+
+static void test_xp_requests(void)
+{
+    UCHAR b[40];
+    ULONG length;
+    ULONG actual;
+    ULONG i;
+
+    /* WDK 7.1 inc\api\usb.h's function codes, restated. */
+    CHECK_EQ(XhciPipeResetParts(0x1E), 3, "RESET_PIPE: both halves");
+    CHECK_EQ(XhciPipeResetParts(0x30), XHCI_PIPE_RESET_HOST,
+             "SYNC_RESET_PIPE: the controller's half");
+    CHECK_EQ(XhciPipeResetParts(0x31), XHCI_PIPE_RESET_DEVICE,
+             "SYNC_CLEAR_STALL: the device's half");
+    CHECK_EQ(XhciPipeResetParts(0x02), 0, "ABORT_PIPE is no reset");
+    CHECK_EQ(XhciPipeResetParts(0x32), 0, "CONTROL_TRANSFER_EX is no reset");
+
+    /* Design record 13 section 6.1's sizes, read from the class drivers'
+     * own QUERY_INTERFACE stores. */
+    CHECK_EQ(XhciPipeUsbdiSize(0, 4), 0x20, "V0 x86");
+    CHECK_EQ(XhciPipeUsbdiSize(1, 4), 0x24, "V1 x86 (XP usbstor)");
+    CHECK_EQ(XhciPipeUsbdiSize(2, 4), 0x28, "V2 x86");
+    CHECK_EQ(XhciPipeUsbdiSize(3, 4), 0x30, "V3 x86");
+    CHECK_EQ(XhciPipeUsbdiSize(0, 8), 0x40, "V0 x64 (XP x64 usbaudio)");
+    CHECK_EQ(XhciPipeUsbdiSize(1, 8), 0x48, "V1 x64 (XP x64 usbstor)");
+    CHECK_EQ(XhciPipeUsbdiSize(2, 8), 0x50, "V2 x64");
+    CHECK_EQ(XhciPipeUsbdiSize(3, 8), 0x60, "V3 x64");
+    CHECK_EQ(XhciPipeUsbdiSize(4, 4), 0, "no V4");
+    CHECK_EQ(XhciPipeUsbdiSize(0, 2), 0, "no 16-bit pointers");
+
+    for (i = 0; i < sizeof(b); i++) {
+        b[i] = 0xAA;
+    }
+    length = 8;
+    actual = 0;
+    CHECK_EQ(XhciPipeBusInformation(0, 400000, 0, b, &length, &actual),
+             XHCI_PIPE_OK, "level 0");
+    CHECK_EQ(length, 8, "level 0 length");
+    CHECK_EQ(actual, 8, "level 0 actual");
+    CHECK_EQ(get32(b), 400000, "level 0 total");
+    CHECK_EQ(get32(b + 4), 0, "level 0 consumed");
+    CHECK_EQ(b[8], 0xAA, "level 0 writes nothing past 8 bytes");
+
+    for (i = 0; i < sizeof(b); i++) {
+        b[i] = 0xAA;
+    }
+    length = 40;
+    CHECK_EQ(XhciPipeBusInformation(1, 12000, 5, b, &length, &actual),
+             XHCI_PIPE_OK, "level 1");
+    CHECK_EQ(length, 16, "level 1 length is the structure's");
+    CHECK_EQ(actual, 16, "level 1 actual");
+    CHECK_EQ(get32(b), 12000, "level 1 total");
+    CHECK_EQ(get32(b + 4), 5, "level 1 consumed");
+    CHECK_EQ(get32(b + 8), 0, "level 1 name length 0");
+    CHECK_EQ(b[12] | (b[13] << 8), 0, "level 1 empty name");
+    CHECK_EQ(b[16], 0xAA, "level 1 writes nothing past 16 bytes");
+
+    b[0] = 0xAA;
+    length = 7;
+    actual = 0;
+    CHECK_EQ(XhciPipeBusInformation(0, 1, 1, b, &length, &actual),
+             XHCI_PIPE_TOO_SMALL, "level 0, 7 bytes");
+    CHECK_EQ(actual, 8, "too small still says what it needs");
+    CHECK_EQ(length, 7, "too small leaves the length");
+    CHECK_EQ(b[0], 0xAA, "too small writes nothing");
+    length = 15;
+    CHECK_EQ(XhciPipeBusInformation(1, 1, 1, b, &length, NULL),
+             XHCI_PIPE_TOO_SMALL, "level 1, 15 bytes");
+    length = 40;
+    CHECK_EQ(XhciPipeBusInformation(2, 1, 1, b, &length, &actual),
+             XHCI_PIPE_UNSUPPORTED, "level 2");
+    CHECK_EQ(XhciPipeBusInformation(0, 1, 1, b, NULL, NULL),
+             XHCI_PIPE_BAD_PARAM, "no length");
+    CHECK_EQ(XhciPipeBusInformation(0, 1, 1, NULL, &length, NULL),
+             XHCI_PIPE_BAD_PARAM, "no buffer");
+
+    for (i = 0; i < sizeof(b); i++) {
+        b[i] = 0xAA;
+    }
+    CHECK_EQ(XhciPipeTopologyAddress(3, (0x14UL << 16) | 2UL, 5, b),
+             XHCI_PIPE_OK, "topology, root port 5");
+    CHECK_EQ(get32(b), 3, "PCI bus");
+    CHECK_EQ(get32(b + 4), 0x14, "PCI device from bits 31:16");
+    CHECK_EQ(get32(b + 8), 2, "PCI function from bits 15:0");
+    CHECK_EQ(get32(b + 12), 0, "reserved");
+    CHECK_EQ(b[16] | (b[17] << 8), 5, "RootHubPortNumber");
+    for (i = 18; i < 32; i++) {
+        CHECK_EQ(b[i], 0, "no hub between, reserved zero");
+    }
+    CHECK_EQ(b[32], 0xAA, "32 bytes and no more");
+    CHECK_EQ(XhciPipeTopologyAddress(0, 0, 0, b), XHCI_PIPE_BAD_PARAM,
+             "port 0");
+    CHECK_EQ(XhciPipeTopologyAddress(0, 0, 256, b), XHCI_PIPE_BAD_PARAM,
+             "port 256");
+    CHECK_EQ(XhciPipeTopologyAddress(0, 0, 1, NULL), XHCI_PIPE_BAD_PARAM,
+             "no buffer");
+}
+
 int main(void)
 {
     test_dci();
@@ -1402,6 +1509,7 @@ int main(void)
     test_iso_check();
     test_iso_fragments();
     test_iso_frames();
+    test_xp_requests();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;
