@@ -168,6 +168,9 @@ typedef struct _XHCI_HUB_PORT_DECISION {
     ULONG Repower;
     ULONG Suspended;        /* C_PORT_SUSPEND: a resume finished          */
     ULONG Resume;           /* connected and suspended: resume it         */
+    ULONG Retry;            /* a resume did not finish: look again later  */
+    ULONG GaveUp;           /* XHCI_HUB_RESUME_TRIES resumes did not
+                             * finish: the port is enumerated afresh     */
 } XHCI_HUB_PORT_DECISION, *PXHCI_HUB_PORT_DECISION;
 
 VOID XhciHubPortDecide(ULONG state, ULONG status, ULONG change,
@@ -199,10 +202,46 @@ VOID XhciHubPortDecide(ULONG state, ULONG status, ULONG change,
  * suspended. */
 ULONG XhciHubResumeBeforeReset(ULONG status);
 
-/* A resume's progress from one GET_STATUS answer: XHCI_HUB_RESET_PENDING
- * while the suspend bit is still set, XHCI_HUB_RESET_ENABLED once it is
- * clear on a connected port, XHCI_HUB_RESET_FAILED when the device left. */
+/*
+ * A resume's outcome, from one GET_STATUS answer (XhciHubResumeProgress):
+ * PENDING while the suspend bit is still set; DONE once it is clear on a
+ * connected, enabled port; DISABLED when it cleared with the enable bit -
+ * a port error during the resume, which USB 2.0 11.24.2.7.1.3 allows (to
+ * transcribe) - the device to be enumerated afresh; GONE when the device
+ * left. STUCK is the caller's: the request failed or the resume did not
+ * end by its deadline.
+ */
+#define XHCI_HUB_RESUME_PENDING     0UL
+#define XHCI_HUB_RESUME_DONE        1UL
+#define XHCI_HUB_RESUME_DISABLED    2UL
+#define XHCI_HUB_RESUME_GONE        3UL
+#define XHCI_HUB_RESUME_STUCK       4UL
+
+/* Resumes of one port that may fail in a row before the bus gives up and
+ * enumerates the port afresh (a bus policy number). */
+#define XHCI_HUB_RESUME_TRIES       3UL
+
 ULONG XhciHubResumeProgress(ULONG status);
+
+/*
+ * What a resume's outcome makes of the port's decision *d, the port's
+ * enumeration machine in `state` and its failures in a row in *tries:
+ *
+ *   DONE      the decision stands (an Empty port goes on to Connect), and
+ *             the count restarts;
+ *   DISABLED  the device is enumerated afresh: Disconnect if the machine
+ *             holds one, then Connect;
+ *   GONE      Disconnect if the machine holds one, no Connect;
+ *   STUCK     nothing now - the port is looked at again (Retry) - until
+ *             XHCI_HUB_RESUME_TRIES have failed in a row, when the port is
+ *             enumerated afresh (GaveUp, Disconnect, Connect), whose reset
+ *             tries the resume once more first.
+ *
+ * Nothing the hub's report said is lost meanwhile: a retried port keeps
+ * its bit for the next look.
+ */
+VOID XhciHubResumeOutcome(ULONG state, ULONG outcome, PULONG tries,
+                          PXHCI_HUB_PORT_DECISION d);
 
 /* The C_PORT_ feature selector that clears one wPortChange bit (bit 0 to
  * 4), or 0 for any other bit. */

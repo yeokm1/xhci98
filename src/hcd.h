@@ -438,6 +438,8 @@ typedef struct _HCD_PORT {
     struct _HCD_HUB *AwaitHub; /* Gone: the departed hub whose subtree's
                              * PDOs it waits for as well (hcd_enum.c)    */
     ULONG HubSpeedClass;    /* a hub port: the speed its reset reported  */
+    ULONG ResumeTries;      /* a hub port: resumes failed in a row
+                             * (XhciHubResumeOutcome); thread only       */
 } HCD_PORT, *PHCD_PORT;
 
 /*
@@ -640,6 +642,8 @@ typedef struct _HCD_CONTROLLER {
     ULONG TeardownStops;
     ULONG TeardownStopFailures;
     ULONG HubPortsGivenUp;
+    ULONG HubResumes;               /* hub ports resumed by the bus       */
+    ULONG HubResumesFailed;         /* ... given up after their tries     */
     ULONG TtBufferClears;
     ULONG TtBufferClearFailures;
 
