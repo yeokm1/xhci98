@@ -116,19 +116,12 @@ static ULONG hcdIsControl(ULONG function)
  * One control-transfer URB onto the device's default pipe: its SETUP bytes
  * from xhci_pipe.c (or, for URB_FUNCTION_CONTROL_TRANSFER, the client's own,
  * which may not be SET_ADDRESS, SET_CONFIGURATION or SET_INTERFACE - the bus
- * performs those itself), its buffer and its direction, then HcdIoSubmit.
+ * performs those itself), its buffer and its direction.
  */
-static NTSTATUS hcdControlUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
-                              PIRP irp, PURB urb, ULONG function)
+static LONG hcdControlRequest(PURB urb, ULONG function, PHCD_IO_REQUEST req)
 {
     struct _URB_CONTROL_TRANSFER *ct;
     XHCI_PIPE_CONTROL c;
-    PHCD_USB_DEVICE dev;
-    UCHAR setup[8];
-    PVOID buffer;
-    PMDL mdl;
-    PULONG lengthOut;
-    ULONG length;
     ULONG answer;
     ULONG trt;
     ULONG i;
@@ -138,19 +131,16 @@ static NTSTATUS hcdControlUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         ((PUCHAR)&c)[i] = 0;
     }
     c.Function = function;
-    buffer = NULL;
-    mdl = NULL;
-    lengthOut = NULL;
-    length = 0;
+    req->Control = 1;
     if (hcdIsFeature(function)) {
         c.FeatureSelector = urb->UrbControlFeatureRequest.FeatureSelector;
         c.Index = urb->UrbControlFeatureRequest.Index;
     } else {
-        length = ct->TransferBufferLength;
-        buffer = ct->TransferBuffer;
-        mdl = ct->TransferBufferMDL;
-        lengthOut = &ct->TransferBufferLength;
-        c.Length = length;
+        req->Length = ct->TransferBufferLength;
+        req->Buffer = ct->TransferBuffer;
+        req->Mdl = ct->TransferBufferMDL;
+        req->LengthOut = &ct->TransferBufferLength;
+        c.Length = req->Length;
         switch (function) {
         case XHCI_PIPE_URB_GET_DESC_DEVICE:
         case XHCI_PIPE_URB_SET_DESC_DEVICE:
@@ -188,47 +178,99 @@ static NTSTATUS hcdControlUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     }
 
     if (function == XHCI_PIPE_URB_CONTROL_TRANSFER) {
-        /* Only the default pipe exists until SELECT_CONFIGURATION opens
-         * others (26-A.5's next step). */
+        /* The default pipe is the only control pipe the bus opens: no
+         * configuration this project has met carries another. */
         if (ct->PipeHandle != NULL &&
             (ct->TransferFlags & USBD_DEFAULT_PIPE_TRANSFER) == 0) {
-            return hcdUrbComplete(irp, urb, USBD_STATUS_INVALID_PIPE_HANDLE,
-                                  STATUS_INVALID_PARAMETER);
+            return USBD_STATUS_INVALID_PIPE_HANDLE;
         }
         for (i = 0; i < 8; i++) {
-            setup[i] = ct->SetupPacket[i];
+            req->Setup[i] = ct->SetupPacket[i];
         }
-        answer = XhciPipeCheckRawSetup(setup, &trt);
+        answer = XhciPipeCheckRawSetup(req->Setup, &trt);
     } else {
-        answer = XhciPipeBuildSetup(&c, setup, &trt);
+        answer = XhciPipeBuildSetup(&c, req->Setup, &trt);
     }
     if (answer == XHCI_PIPE_UNSUPPORTED) {
-        return hcdUrbComplete(irp, urb, USBD_STATUS_INVALID_URB_FUNCTION,
-                              STATUS_INVALID_PARAMETER);
+        return USBD_STATUS_INVALID_URB_FUNCTION;
     }
     if (answer != XHCI_PIPE_OK) {
-        return hcdUrbComplete(irp, urb, USBD_STATUS_INVALID_PARAMETER,
-                              STATUS_INVALID_PARAMETER);
+        return USBD_STATUS_INVALID_PARAMETER;
     }
     if (trt == XHCI_PIPE_TRT_NO_DATA) {
-        length = 0;
+        req->Length = 0;
     }
+    if (trt == XHCI_PIPE_TRT_IN_DATA) {
+        req->Flags = HCD_IO_IN;
+    }
+    return USBD_STATUS_SUCCESS;
+}
 
+/*
+ * The transfer a URB asks for - a control transfer on the default pipe, or
+ * a bulk or interrupt transfer on the pipe its handle names - or the USBD
+ * status that refuses it. Read at dispatch, and read again from the same
+ * URB, which its client may not touch while the IRP is pending, when an IRP
+ * that waited for one of its pipe's records is given one (hcd_io.c).
+ */
+LONG HcdUrbIoRequest(PVOID urbv, PHCD_IO_REQUEST req)
+{
+    struct _URB_BULK_OR_INTERRUPT_TRANSFER *bi;
+    PURB urb;
+    ULONG function;
+    ULONG i;
+
+    urb = (PURB)urbv;
+    for (i = 0; i < sizeof(*req); i++) {
+        ((PUCHAR)req)[i] = 0;
+    }
+    function = urb->UrbHeader.Function;
+    if (hcdIsControl(function)) {
+        return hcdControlRequest(urb, function, req);
+    }
+    if (function != URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER) {
+        return USBD_STATUS_INVALID_URB_FUNCTION;
+    }
+    bi = &urb->UrbBulkOrInterruptTransfer;
+    req->Handle = bi->PipeHandle;
+    if (bi->TransferFlags & USBD_TRANSFER_DIRECTION_IN) {
+        req->Flags |= HCD_IO_IN;
+    }
+    if (bi->TransferFlags & USBD_SHORT_TRANSFER_OK) {
+        req->Flags |= HCD_IO_SHORT_OK;
+    }
+    req->Buffer = bi->TransferBuffer;
+    req->Mdl = bi->TransferBufferMDL;
+    req->Length = bi->TransferBufferLength;
+    req->LengthOut = &bi->TransferBufferLength;
+    return USBD_STATUS_SUCCESS;
+}
+
+/* A transfer URB: parsed, then submitted with a device reference that
+ * passes to the IRP (HcdIoSubmit). A URB that cannot be parsed is refused
+ * inline, as every deterministic dispatch error is. */
+static NTSTATUS hcdTransferUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                               PIRP irp, PURB urb)
+{
+    HCD_IO_REQUEST req;
+    PHCD_USB_DEVICE dev;
+    LONG usbd;
+
+    usbd = HcdUrbIoRequest(urb, &req);
+    if (usbd != USBD_STATUS_SUCCESS) {
+        return hcdUrbComplete(irp, urb, usbd, STATUS_INVALID_PARAMETER);
+    }
     dev = hcdDeviceRef(hc, pdo);
     if (dev == NULL) {
         return hcdGoneLater(pdo, irp, urb);
     }
-    /* The reference passes to the IRP (HcdIoSubmit). */
-    return HcdIoSubmit(hc, dev, NULL, pdo, irp, urb, setup,
-                       trt == XHCI_PIPE_TRT_IN_DATA, buffer, mdl, length,
-                       lengthOut);
+    return HcdIoSubmit(hc, dev, pdo, irp, urb, &req);
 }
 
 static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
                              PIRP irp, PURB urb)
 {
     ULONG function;
-    struct _URB_BULK_OR_INTERRUPT_TRANSFER *bi;
     PHCD_USB_DEVICE dev;
 
     if (urb == NULL) {
@@ -250,8 +292,9 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         /* Orphaned, or its device has left: nothing on the bus answers. */
         return hcdGoneLater(pdo, irp, urb);
     }
-    if (hcdIsControl(function)) {
-        return hcdControlUrb(pdo, hc, irp, urb, function);
+    if (hcdIsControl(function) ||
+        function == URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER) {
+        return hcdTransferUrb(pdo, hc, irp, urb);
     }
     switch (function) {
     case URB_FUNCTION_GET_CURRENT_FRAME_NUMBER:
@@ -277,23 +320,6 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
             return hcdGoneLater(pdo, irp, urb);
         }
         return HcdCfgQueue(hc, dev, pdo, irp);
-
-    case URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER:
-        dev = hcdDeviceRef(hc, pdo);
-        if (dev == NULL) {
-            return hcdGoneLater(pdo, irp, urb);
-        }
-        bi = &urb->UrbBulkOrInterruptTransfer;
-        /* The reference passes to the IRP (HcdIoSubmit), which checks
-         * the handle against the pipes the device still has open. */
-        return HcdIoSubmit(hc, dev, bi->PipeHandle, pdo, irp, urb, NULL,
-                           ((bi->TransferFlags & USBD_TRANSFER_DIRECTION_IN) ? HCD_IO_IN : 0) |
-                               ((bi->TransferFlags & USBD_SHORT_TRANSFER_OK)
-                                    ? HCD_IO_SHORT_OK
-                                    : 0),
-                           bi->TransferBuffer, bi->TransferBufferMDL,
-                           bi->TransferBufferLength,
-                           &bi->TransferBufferLength);
 
     default:
         break;

@@ -94,6 +94,20 @@ typedef struct _HCD_TIMER {
 /* HcdIoSubmit flags. */
 #define HCD_IO_IN           0x1UL   /* data moves device to host          */
 #define HCD_IO_SHORT_OK     0x2UL   /* USBD_SHORT_TRANSFER_OK              */
+
+/* One transfer as a URB asks for it (hcd_urb.c, HcdUrbIoRequest): read
+ * once at dispatch, and again from the URB when an IRP that waited on its
+ * pipe is given a record (hcd_io.c). */
+typedef struct _HCD_IO_REQUEST {
+    PVOID Handle;                   /* the pipe; NULL is the default pipe  */
+    ULONG Control;                  /* Setup holds the SETUP bytes         */
+    UCHAR Setup[8];
+    ULONG Flags;                    /* HCD_IO_*                            */
+    PVOID Buffer;
+    PMDL Mdl;                       /* wins over Buffer                    */
+    ULONG Length;
+    PULONG LengthOut;               /* the URB's TransferBufferLength      */
+} HCD_IO_REQUEST, *PHCD_IO_REQUEST;
 /* Windows 2000 DDK incSbdi.h:312: a success-class value there. */
 #define HCD_USBD_CANCELED           ((LONG)0x00010000L)
 #define HCD_PIPE_XFERS      4UL
@@ -153,7 +167,8 @@ typedef struct _HCD_PIPE {
     XHCI_RING OwnRing;
     XHCI_TRANSFER_QUEUE OwnQueue;
     ULONG PoolIndex;
-    LIST_ENTRY Waiting;             /* IRPs no record holds yet           */
+    LIST_ENTRY Waiting;             /* IRPs no record holds yet, in
+                                     * submission order; controller lock  */
     ULONG Closed;                   /* deconfigured: no more submissions  */
     ULONG Halted;                   /* a STALL; the client resets the pipe */
     ULONG CancelPending;            /* a record of it was cancelled      */
@@ -395,7 +410,8 @@ typedef struct _HCD_CONTROLLER {
     volatile LONG CancelsRunning;   /* cancel routines past the cancel lock */
     ULONG UrbsCompleted;
     ULONG UrbsGone;
-    ULONG UrbsBusy;
+    ULONG UrbsWaited;               /* parked on a pipe's Waiting list   */
+    ULONG UrbsMdlShort;             /* length past the MDL: refused      */
     ULONG DevicesKept;              /* freed with URBs left: DMA not stopped */
     ULONG Ep0Resets;
     ULONG EnumCommandsRefused;
@@ -535,14 +551,14 @@ NTSTATUS HcdDevicePdoPower(PHCD_DEVICE_PDO pdo, PIRP irp);
 
 /* hcd_urb.c */
 NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp);
+LONG HcdUrbIoRequest(PVOID urb, PHCD_IO_REQUEST req);
 
 /* hcd_io.c */
 VOID HcdIoPipeInitEp0(PHCD_USB_DEVICE dev);
 VOID HcdIoPipeInit(PHCD_PIPE pipe, PHCD_USB_DEVICE dev);
-NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PVOID handle,
+NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                      struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb,
-                     const UCHAR *setup, ULONG flags,
-                     PVOID buffer, PMDL mdl, ULONG length, PULONG lengthOut);
+                     const HCD_IO_REQUEST *req);
 VOID HcdIoDrainPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd);
 VOID HcdIoPipeRelease(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoPipePause(PHCD_CONTROLLER hc, PHCD_PIPE pipe);

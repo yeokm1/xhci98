@@ -1023,7 +1023,8 @@ static ULONG hcdCfgPipeBusy(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
     ULONG i;
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    busy = pipe->Queue->Count != 0 || !IsListEmpty(&pipe->Held);
+    busy = pipe->Queue->Count != 0 || !IsListEmpty(&pipe->Held) ||
+           !IsListEmpty(&pipe->Waiting);
     for (i = 0; i < HCD_PIPE_XFERS; i++) {
         if (pipe->Xfers[i].State != HCD_XFER_FREE) {
             busy = 1;

@@ -218,15 +218,151 @@ static PHCD_XFER hcdTakeRecord(PHCD_PIPE pipe, PIRP irp)
     return NULL;
 }
 
-/* A claimed record given back before anything was published. */
-static VOID hcdFreeRecord(PHCD_CONTROLLER hc, PHCD_XFER x)
+/*
+ * The Waiting list. An IRP that finds every record of its pipe out - or an
+ * earlier IRP already waiting, so the pipe keeps submission order - is
+ * parked on the pipe, linked through its Tail.Overlay.ListEntry, with its
+ * PDO in DriverContext[2] and its pipe in DriverContext[3]. It holds its
+ * device reference and is counted in its PDO's UrbsPending as a record's IRP
+ * is, so a REMOVE or the device's free waits for it. A record that finishes
+ * is handed straight to the first waiting IRP rather than freed
+ * (hcdRecordRelease), so the pipe a record belongs to stays alive across the
+ * hand-over. The list is under the controller lock; an IRP is taken off it
+ * only once its cancel routine is cleared, and one whose routine is already
+ * running is left for the routine to take (the cancel-safe queue pattern).
+ * Every IRP leaving it unserved completes at the next tick
+ * (HcdIoRefuseLater), never inline.
+ */
+static VOID NTAPI hcdWaitCancel(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 {
+    PHCD_DEVICE_PDO pdo;
+    PHCD_CONTROLLER hc;
+    PHCD_PIPE pipe;
+    PHCD_USB_DEVICE dev;
+    PVOID urb;
     KIRQL oldIrql;
 
+    pdo = (PHCD_DEVICE_PDO)DeviceObject->DeviceExtension;
+    hc = pdo->Controller;
+    /* Counted while the cancel lock still holds the IRP, so the pipe and
+     * device stay until this routine is done with them (HcdIoWaitPipe,
+     * HcdIoDeviceGone), as hcdCancel does. */
+    if (hc != NULL) {
+        (VOID)InterlockedIncrement(&hc->CancelsRunning);
+    }
+    IoReleaseCancelSpinLock(Irp->CancelIrql);
+    if (hc == NULL) {
+        return;
+    }
+    pipe = (PHCD_PIPE)Irp->Tail.Overlay.DriverContext[3];
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    x->Irp = NULL;
-    x->State = HCD_XFER_FREE;
+    RemoveEntryList(&Irp->Tail.Overlay.ListEntry);
+    dev = pipe->Device;
     XhciControllerLockRelease(&hc->Hc, oldIrql);
+    urb = IoGetCurrentIrpStackLocation(Irp)->Parameters.Others.Argument1;
+    (VOID)HcdIoRefuseLater(pdo, Irp, urb, HCD_USBD_CANCELED);
+    (VOID)InterlockedDecrement(&pdo->UrbsPending);
+    (VOID)InterlockedDecrement(&dev->Refs);
+    (VOID)InterlockedDecrement(&hc->CancelsRunning);
+}
+
+/* Park an IRP on its pipe. Returns 0 when it was cancelled before it could
+ * wait: the caller refuses it. Controller lock held. */
+static ULONG hcdPark(PHCD_CONTROLLER hc, PHCD_PIPE pipe, PHCD_DEVICE_PDO pdo,
+                     PIRP irp)
+{
+    irp->Tail.Overlay.DriverContext[2] = pdo;
+    irp->Tail.Overlay.DriverContext[3] = pipe;
+    IoMarkIrpPending(irp);
+    (VOID)IoSetCancelRoutine(irp, hcdWaitCancel);
+    if (irp->Cancel && IoSetCancelRoutine(irp, NULL) != NULL) {
+        return 0;
+    }
+    /* Listed even when the routine is already running: it waits for this
+     * lock and then takes the IRP off the list. */
+    InsertTailList(&pipe->Waiting, &irp->Tail.Overlay.ListEntry);
+    (VOID)InterlockedIncrement(&pdo->UrbsPending);
+    hc->UrbsWaited++;
+    return 1;
+}
+
+/* The first waiting IRP whose cancel routine this call cleared, off the
+ * list; NULL when none can be taken. Controller lock held. */
+static PIRP hcdWaitingTake(PHCD_PIPE pipe)
+{
+    PLIST_ENTRY entry;
+    PIRP irp;
+
+    for (entry = pipe->Waiting.Flink; entry != &pipe->Waiting;
+         entry = entry->Flink) {
+        irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
+        if (IoSetCancelRoutine(irp, NULL) != NULL) {
+            RemoveEntryList(entry);
+            return irp;
+        }
+    }
+    return NULL;
+}
+
+/* Every waiting IRP that can be taken, onto `out`. Controller lock held. */
+static VOID hcdWaitingFlush(PHCD_PIPE pipe, PLIST_ENTRY out)
+{
+    PIRP irp;
+
+    for (;;) {
+        irp = hcdWaitingTake(pipe);
+        if (irp == NULL) {
+            break;
+        }
+        InsertTailList(out, &irp->Tail.Overlay.ListEntry);
+    }
+}
+
+/* Complete what hcdWaitingFlush took, with `usbd`, at the next tick. IRQL:
+ * <= DISPATCH_LEVEL, no lock held. */
+static VOID hcdWaitingRefuse(PLIST_ENTRY list, PHCD_USB_DEVICE dev, LONG usbd)
+{
+    PLIST_ENTRY entry;
+    PHCD_DEVICE_PDO pdo;
+    PIRP irp;
+
+    while (!IsListEmpty(list)) {
+        entry = RemoveHeadList(list);
+        irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
+        pdo = (PHCD_DEVICE_PDO)irp->Tail.Overlay.DriverContext[2];
+        (VOID)HcdIoRefuseLater(
+            pdo, irp,
+            IoGetCurrentIrpStackLocation(irp)->Parameters.Others.Argument1,
+            usbd);
+        (VOID)InterlockedDecrement(&pdo->UrbsPending);
+        (VOID)InterlockedDecrement(&dev->Refs);
+    }
+}
+
+/*
+ * A record done with its IRP: handed to the first waiting IRP, which it
+ * then belongs to (returned, to be launched once the lock is released), or
+ * freed. Nothing is handed over on a pipe closing or a device going - their
+ * drains take the waiting IRPs. Controller lock held.
+ */
+static PIRP hcdRecordRelease(PHCD_PIPE pipe, PHCD_XFER x)
+{
+    PIRP next;
+
+    next = NULL;
+    if (!pipe->Closed && !pipe->Device->Gone) {
+        next = hcdWaitingTake(pipe);
+    }
+    x->CancelRequested = 0;
+    x->Mapped = 0;
+    x->Irp = next;
+    if (next == NULL) {
+        x->State = HCD_XFER_FREE;
+    } else {
+        x->State = HCD_XFER_MAPPING;
+        x->Seq = ++pipe->Seq;
+    }
+    return next;
 }
 
 /* A record on its way: mapped by the pump, or published at once when it
@@ -270,118 +406,96 @@ static PHCD_PIPE hcdPipeFromHandle(PHCD_USB_DEVICE dev, PVOID handle)
 }
 
 /*
- * Submit one transfer for `irp` on the pipe `handle` names (NULL: the
- * default pipe) of `dev`, on which the caller holds a reference (hcd_urb.c).
- * The handle is resolved and a record taken in one hold of the controller
- * lock, so a pipe the thread is closing cannot be freed between the two.
- * `setup` is the 8 SETUP bytes of a control transfer, NULL otherwise; `in`
- * the data direction; `buffer` or `mdl` the data (the MDL wins);
- * `lengthOut` the URB's TransferBufferLength, written at completion. The
- * reference passes to the IRP: it is returned at completion, here on a
- * refusal or later in HcdIoDeferred. Returns STATUS_PENDING or the
- * refusal's status, the IRP completed either way.
+ * Fill a claimed record from its request: the SETUP bytes, the direction,
+ * the MDL - the client's, or one built here over its buffer - and the first
+ * chunk. Returns the USBD status that refuses the request, or success. The
+ * MDL is the only one the transfer maps, from its start, as usbport maps it
+ * (ReactOS usbport.c USBPORT_MapTransfer, static): URB clients on these
+ * targets pass no chained MDLs, and a length past the MDL's own byte count
+ * is refused rather than mapped past its page list. IRQL: <= DISPATCH_LEVEL,
+ * no lock held.
  */
-NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PVOID handle,
-                     PHCD_DEVICE_PDO pdo, PIRP irp, PVOID urb,
-                     const UCHAR *setup, ULONG flags, PVOID buffer, PMDL mdl,
-                     ULONG length, PULONG lengthOut)
+static LONG hcdFill(PHCD_CONTROLLER hc, PHCD_XFER x, PVOID urb,
+                    const HCD_IO_REQUEST *req)
 {
-    PHCD_PIPE pipe;
-    PHCD_XFER x;
-    KIRQL oldIrql;
-    ULONG gone;
     ULONG i;
 
-    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    gone = dev->Gone;
-    pipe = gone ? NULL : hcdPipeFromHandle(dev, handle);
-    if (pipe != NULL && pipe->Closed) {
-        pipe = NULL;
-    }
-    x = (pipe == NULL) ? NULL : hcdTakeRecord(pipe, irp);
-    XhciControllerLockRelease(&hc->Hc, oldIrql);
-    if (gone) {
-        (VOID)InterlockedIncrement((PLONG)&hc->UrbsGone);
-        (VOID)InterlockedDecrement(&dev->Refs);
-        return HcdIoRefuseLater(pdo, irp, urb, HCD_USBD_DEVICE_GONE);
-    }
-    if (pipe == NULL) {
-        return hcdRefuse(hc, dev, pdo, irp, (PURB)urb, HCD_USBD_INVALID_PIPE);
-    }
-    if (x == NULL) {
-        /* Every record is out. The waiting list that queues instead is
-         * the interrupt and bulk pipes' (26-A.5's next step); a control
-         * client has one request out at a time. Counted. */
-        (VOID)InterlockedIncrement((PLONG)&hc->UrbsBusy);
-        return hcdRefuse(hc, dev, pdo, irp, (PURB)urb, HCD_USBD_ERROR_BUSY);
-    }
-
     x->Urb = urb;
-    x->Control = (setup != NULL);
-    x->In = (flags & HCD_IO_IN) != 0;
-    x->ShortOk = (flags & HCD_IO_SHORT_OK) != 0;
-    if (setup != NULL) {
-        x->Setup.bmRequestType = setup[0];
-        x->Setup.bRequest = setup[1];
-        x->Setup.wValue = (USHORT)(setup[2] | (setup[3] << 8));
-        x->Setup.wIndex = (USHORT)(setup[4] | (setup[5] << 8));
-        x->Setup.wLength = (USHORT)(setup[6] | (setup[7] << 8));
-    }
-    x->Length = length;
-    x->Offset = 0;
-    x->Chunk = 0;
-    x->MapBase = NULL;
-    x->MapCount = 0;
-    x->Status = XHCI_USBD_STATUS_SUCCESS;
-    x->Engine = 0;
-    x->LengthOut = lengthOut;
     x->Mdl = NULL;
     x->OwnMdl = 0;
+    x->MapBase = NULL;
+    x->MapCount = 0;
+    if (req == NULL) {
+        return HCD_USBD_INVALID_PARAMETER;
+    }
+    x->Control = req->Control;
+    x->In = (req->Flags & HCD_IO_IN) != 0;
+    x->ShortOk = (req->Flags & HCD_IO_SHORT_OK) != 0;
+    if (req->Control) {
+        x->Setup.bmRequestType = req->Setup[0];
+        x->Setup.bRequest = req->Setup[1];
+        x->Setup.wValue = (USHORT)(req->Setup[2] | (req->Setup[3] << 8));
+        x->Setup.wIndex = (USHORT)(req->Setup[4] | (req->Setup[5] << 8));
+        x->Setup.wLength = (USHORT)(req->Setup[6] | (req->Setup[7] << 8));
+    }
+    x->Length = req->Length;
+    x->Offset = 0;
+    x->Chunk = 0;
+    x->Status = XHCI_USBD_STATUS_SUCCESS;
+    x->Engine = 0;
+    x->LengthOut = req->LengthOut;
     x->Sg.List.SgElementCount = 0;
     for (i = 0; i < sizeof(x->Sg.List) - sizeof(x->Sg.List.SgElement);
          i++) {
         ((PUCHAR)&x->Sg.List)[i] = 0;
     }
-    if (length != 0) {
-        if (mdl != NULL) {
-            x->Mdl = mdl;
-        } else if (buffer != NULL) {
-            x->Mdl = HcdPoolMdlBuild(buffer, length);
-            x->OwnMdl = 1;
-        }
-        if (x->Mdl == NULL) {
-            hcdFreeRecord(hc, x);
-            return hcdRefuse(
-                hc, dev, pdo, irp, (PURB)urb,
-                buffer == NULL ? (LONG)USBD_STATUS_INVALID_PARAMETER
-                               : HCD_USBD_NO_MEMORY);
-        }
-        if (!hcdPlanChunk(hc, x)) {
-            if (x->OwnMdl) {
-                HcdPoolMdlFree(x->Mdl);
-            }
-            x->Mdl = NULL;
-            hcdFreeRecord(hc, x);
-            return hcdRefuse(hc, dev, pdo, irp, (PURB)urb,
-                             (LONG)USBD_STATUS_INVALID_PARAMETER);
-        }
+    if (req->Length == 0) {
+        return XHCI_USBD_STATUS_SUCCESS;
     }
+    if (req->Mdl != NULL) {
+        if (MmGetMdlByteCount(req->Mdl) < req->Length) {
+            (VOID)InterlockedIncrement((PLONG)&hc->UrbsMdlShort);
+            return HCD_USBD_INVALID_PARAMETER;
+        }
+        x->Mdl = req->Mdl;
+    } else if (req->Buffer != NULL) {
+        x->Mdl = HcdPoolMdlBuild(req->Buffer, req->Length);
+        if (x->Mdl == NULL) {
+            return HCD_USBD_NO_MEMORY;
+        }
+        x->OwnMdl = 1;
+    } else {
+        return HCD_USBD_INVALID_PARAMETER;
+    }
+    if (!hcdPlanChunk(hc, x)) {
+        if (x->OwnMdl) {
+            HcdPoolMdlFree(x->Mdl);
+        }
+        x->Mdl = NULL;
+        x->OwnMdl = 0;
+        return HCD_USBD_INVALID_PARAMETER;
+    }
+    return XHCI_USBD_STATUS_SUCCESS;
+}
 
-    /* Counted on the PDO until completed: its REMOVE waits the count out,
-     * so no completion can reach a client driver that has unloaded
-     * (c4-2k: 0xCE in hidusb on an unplug, 2026-10-03). */
-    x->Pdo = pdo;
-    (VOID)InterlockedIncrement(&pdo->UrbsPending);
-    IoMarkIrpPending(irp);
-    hcdCancelOn(irp, x);
+/*
+ * A filled record's IRP made cancellable and the record started. A request
+ * split into chunks owns the pipe from its start, and a request started
+ * while another owns it waits here unmapped, on the pipe's Held list: it
+ * holds no map registers the owner's next chunk may need (round 3, finding
+ * 8), and it cannot land between two of the owner's chunks (round 2,
+ * finding 7). HcdIoPipeRelease starts it. IRQL: <= DISPATCH_LEVEL, no lock
+ * held.
+ */
+static VOID hcdGo(PHCD_CONTROLLER hc, PHCD_XFER x)
+{
+    PHCD_PIPE pipe;
+    PHCD_USB_DEVICE dev;
+    KIRQL oldIrql;
 
-    /*
-     * A request split into chunks owns the pipe from its submission, and a
-     * request submitted while another owns it waits here unmapped, on the
-     * pipe's Held list: it holds no map registers the owner's next chunk
-     * may need (round 3, finding 8), and it cannot land between two of the
-     * owner's chunks (round 2, finding 7). HcdIoPipeRelease starts it.
-     */
+    pipe = x->Pipe;
+    dev = pipe->Device;
+    hcdCancelOn(x->Irp, x);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     if (x->CancelRequested || pipe->Closed || dev->Gone) {
         /* Cancelled, or its pipe or device going, while it was being
@@ -393,7 +507,7 @@ NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PVOID handle,
         InsertTailList(&hc->DoneList, &x->Link);
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         HcdIoDeferred(hc);
-        return STATUS_PENDING;
+        return;
     }
     if (pipe->Exclusive != NULL || pipe->Paused) {
         /* Held unmapped: behind the pipe's owner, or while the thread has
@@ -403,13 +517,125 @@ NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PVOID handle,
         x->State = HCD_XFER_HELD;
         InsertTailList(&pipe->Held, &x->Link);
         XhciControllerLockRelease(&hc->Hc, oldIrql);
-        return STATUS_PENDING;
+        return;
     }
-    if (length != 0 && x->Chunk < length) {
+    if (x->Length != 0 && x->Chunk < x->Length) {
         pipe->Exclusive = x;
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     hcdStart(hc, x);
+}
+
+/*
+ * Launch a claimed record for its IRP, which holds a device reference and
+ * is counted in its PDO's UrbsPending, its PDO in x->Pdo. A request that
+ * cannot be filled is refused at the next tick and the record goes to the
+ * next waiting IRP, which is launched in turn - a loop, so a run of
+ * refusals never recurses. `req` NULL refuses. IRQL: <= DISPATCH_LEVEL, no
+ * lock held.
+ */
+static VOID hcdLaunch(PHCD_CONTROLLER hc, PHCD_XFER x, PVOID urb,
+                      const HCD_IO_REQUEST *req)
+{
+    HCD_IO_REQUEST next;
+    PHCD_PIPE pipe;
+    PHCD_USB_DEVICE dev;
+    PHCD_DEVICE_PDO pdo;
+    PIRP irp;
+    PIRP nextIrp;
+    KIRQL oldIrql;
+    LONG usbd;
+
+    pipe = x->Pipe;
+    dev = pipe->Device;
+    for (;;) {
+        usbd = hcdFill(hc, x, urb, req);
+        if (usbd == XHCI_USBD_STATUS_SUCCESS) {
+            hcdGo(hc, x);
+            return;
+        }
+        irp = x->Irp;
+        pdo = x->Pdo;
+        x->Pdo = NULL;
+        x->Urb = NULL;
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        nextIrp = hcdRecordRelease(pipe, x);
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        (VOID)HcdIoRefuseLater(pdo, irp, urb, usbd);
+        (VOID)InterlockedDecrement(&pdo->UrbsPending);
+        /* The record and its pipe stay with nextIrp's reference; with no
+         * next IRP neither is touched after this. */
+        (VOID)InterlockedDecrement(&dev->Refs);
+        if (nextIrp == NULL) {
+            return;
+        }
+        x->Pdo = (PHCD_DEVICE_PDO)nextIrp->Tail.Overlay.DriverContext[2];
+        urb = IoGetCurrentIrpStackLocation(nextIrp)
+                  ->Parameters.Others.Argument1;
+        req = (HcdUrbIoRequest(urb, &next) == XHCI_USBD_STATUS_SUCCESS)
+                  ? &next
+                  : NULL;
+    }
+}
+
+/*
+ * Submit one transfer for `irp`, as `req` describes it, on `dev`, on which
+ * the caller holds a reference (hcd_urb.c). The handle is resolved and a
+ * record taken - or the IRP parked behind the pipe's waiting IRPs - in one
+ * hold of the controller lock, so a pipe the thread is closing cannot be
+ * freed between the two. The reference passes to the IRP: it is returned at
+ * completion, here on a refusal or later in HcdIoDeferred. Returns
+ * STATUS_PENDING, the IRP completed either way, never inside this call.
+ */
+NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                     PHCD_DEVICE_PDO pdo, PIRP irp, PVOID urb,
+                     const HCD_IO_REQUEST *req)
+{
+    PHCD_PIPE pipe;
+    PHCD_XFER x;
+    KIRQL oldIrql;
+    ULONG gone;
+    ULONG parked;
+
+    x = NULL;
+    parked = 0;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    gone = dev->Gone;
+    pipe = gone ? NULL : hcdPipeFromHandle(dev, req->Handle);
+    if (pipe != NULL && pipe->Closed) {
+        pipe = NULL;
+    }
+    if (pipe != NULL) {
+        if (IsListEmpty(&pipe->Waiting)) {
+            x = hcdTakeRecord(pipe, irp);
+        }
+        if (x == NULL) {
+            parked = hcdPark(hc, pipe, pdo, irp);
+        }
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (gone) {
+        (VOID)InterlockedIncrement((PLONG)&hc->UrbsGone);
+        (VOID)InterlockedDecrement(&dev->Refs);
+        return HcdIoRefuseLater(pdo, irp, urb, HCD_USBD_DEVICE_GONE);
+    }
+    if (pipe == NULL) {
+        return hcdRefuse(hc, dev, pdo, irp, (PURB)urb, HCD_USBD_INVALID_PIPE);
+    }
+    if (x == NULL) {
+        if (parked) {
+            return STATUS_PENDING;
+        }
+        return hcdRefuse(hc, dev, pdo, irp, (PURB)urb, HCD_USBD_CANCELED);
+    }
+
+    /* Counted on the PDO until completed: its REMOVE waits the count out,
+     * so no completion can reach a client driver that has unloaded
+     * (c4-2k: 0xCE in hidusb on an unplug, 2026-10-03). */
+    x->Pdo = pdo;
+    (VOID)InterlockedIncrement(&pdo->UrbsPending);
+    IoMarkIrpPending(irp);
+    hcdLaunch(hc, x, urb, req);
     return STATUS_PENDING;
 }
 
@@ -604,12 +830,17 @@ ULONG HcdIoPipeCancelAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
 {
     PHCD_XFER x;
     PLIST_ENTRY entry;
+    LIST_ENTRY waiting;
     KIRQL oldIrql;
     ULONG marked;
     ULONG i;
 
     marked = 0;
+    InitializeListHead(&waiting);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    /* The waiting IRPs were submitted before the abort, so they go with
+     * it; an IRP submitted after it may take a record or wait. */
+    hcdWaitingFlush(pipe, &waiting);
     for (i = 0; i < HCD_PIPE_XFERS; i++) {
         x = &pipe->Xfers[i];
         if (x->State != HCD_XFER_FREE && x->Irp != NULL) {
@@ -626,6 +857,7 @@ ULONG HcdIoPipeCancelAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
         InsertTailList(&hc->DoneList, &x->Link);
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
+    hcdWaitingRefuse(&waiting, pipe->Device, HCD_USBD_CANCELED);
     HcdIoDeferred(hc);
     return marked;
 }
@@ -708,6 +940,8 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
     KIRQL oldIrql;
     LONG status;
     PHCD_DEVICE_PDO pdo;
+    PIRP nextIrp;
+    HCD_IO_REQUEST req;
     ULONG bytes;
     ULONG more;
     ULONG release;
@@ -786,9 +1020,7 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
             HcdIoPipeRelease(hc, x->Pipe);
         }
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-        x->Irp = NULL;
-        x->CancelRequested = 0;
-        x->State = HCD_XFER_FREE;
+        nextIrp = hcdRecordRelease(x->Pipe, x);
         XhciControllerLockRelease(&hc->Hc, oldIrql);
 
         if (!engine && status != XHCI_USBD_STATUS_SUCCESS) {
@@ -808,6 +1040,17 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
         (VOID)InterlockedIncrement((PLONG)&hc->UrbsCompleted);
         (VOID)InterlockedDecrement(&pdo->UrbsPending);
         (VOID)InterlockedDecrement(&dev->Refs);
+        if (nextIrp != NULL) {
+            /* The record went to a waiting IRP, whose own reference keeps
+             * the device and pipe. */
+            x->Pdo = (PHCD_DEVICE_PDO)nextIrp->Tail.Overlay.DriverContext[2];
+            urb = (PURB)IoGetCurrentIrpStackLocation(nextIrp)
+                      ->Parameters.Others.Argument1;
+            hcdLaunch(hc, x, urb,
+                      HcdUrbIoRequest(urb, &req) == XHCI_USBD_STATUS_SUCCESS
+                          ? &req
+                          : NULL);
+        }
     }
 }
 
@@ -828,11 +1071,14 @@ VOID HcdIoDrainPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd)
     PXHCI_TRANSFER t;
     PXHCI_TRANSFER next;
     PLIST_ENTRY entry;
+    LIST_ENTRY waiting;
     PHCD_XFER x;
     KIRQL oldIrql;
     ULONG count;
 
+    InitializeListHead(&waiting);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hcdWaitingFlush(pipe, &waiting);
     /* The held records too: they are on neither the engine's queue nor
      * the done list, and a closed or gone pipe never releases them (Codex
      * review of batch (c), round 3, finding 5). */
@@ -854,6 +1100,7 @@ VOID HcdIoDrainPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd)
         t = next;
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
+    hcdWaitingRefuse(&waiting, pipe->Device, usbd);
     HcdIoDeferred(hc);
 }
 
@@ -863,11 +1110,19 @@ VOID HcdIoDrainPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd)
 VOID HcdIoWaitPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
 {
     LARGE_INTEGER due;
+    KIRQL oldIrql;
     ULONG busy;
     ULONG i;
 
     for (;;) {
-        busy = hc->CancelsRunning != 0;
+        /* A waiting IRP whose cancel routine was running at the drain is
+         * still listed until the routine takes it. */
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        busy = !IsListEmpty(&pipe->Waiting);
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        if (hc->CancelsRunning != 0) {
+            busy = 1;
+        }
         for (i = 0; i < HCD_PIPE_XFERS; i++) {
             if (pipe->Xfers[i].State != HCD_XFER_FREE) {
                 busy = 1;
