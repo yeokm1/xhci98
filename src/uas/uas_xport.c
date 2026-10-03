@@ -12,26 +12,46 @@
  * READY or WRITE READY IU naming the tag releases the data transfer on the
  * shared data pipe; one command is in flight at a time. Either way the
  * command ends on its SENSE IU (SCSI status and sense) or a RESPONSE IU
- * (the device refused the COMMAND IU), and the request completes once the
- * final IU is in and none of its transfers is still busy (uasFinish).
+ * (the device refused the COMMAND IU).
  *
- * CANCELLATION. A transfer's IRP is this driver's own memory, initialised
- * before each use and freed only by UasEngineFree, after every transfer has
- * completed. So IoCancelIrp may be called on it after the lock is dropped
- * with no risk of reaching freed memory; a completion that lands first
- * leaves the cancel a no-op on an idle IRP. A transfer this driver
- * cancelled is marked Cancelling, so its error is not read as a fault.
+ * OWNERSHIP. A slot - its tag, its transfers and their IRPs, its data MDL
+ * and the request and SRB it carries - is finished (uasFinish: the MDL
+ * freed, the tag returned, the request completed) only when it is idle: no
+ * transfer busy and no IoCancelIrp on one still running. Whatever ended it
+ * - its final IU, or recovery or teardown setting Aborted and
+ * FinalSrbStatus - the finish happens in whichever context first sees it
+ * idle (uasCheckDone), which for a transfer the bus has not yet given back
+ * is that transfer's own completion. Nothing waits out a cancellation in
+ * order to free: a cancellation the bus does not honour leaves the slot
+ * owned, its request pending, and the device Dead, until the bus completes
+ * the transfer or tears the device down. A task management slot whose
+ * waiter gave up is released the same way.
+ *
+ * CANCELLATION. IoCancelIrp is called with the lock dropped, on a transfer
+ * marked under the lock (Cancelling, CancelRefs). Until that call has
+ * returned and CancelRefs is back to 0 the transfer is not built again and
+ * its slot counts as busy, so a completion that lands first cannot let the
+ * IRP be reused under the cancel (uasActRun).
+ *
+ * RUNDOWN. fdo->IoCount holds a reference for each transfer from its build
+ * to the last line of its completion routine, for each queued recovery
+ * worker to its last line, and for each timer DPC run that does work.
+ * UasEngineStop drops the bias and waits for 0, with no timeout: the bus
+ * completes every transfer by the time it tears the device down.
  *
  * RECOVERY (uasRecoveryWorker, PASSIVE_LEVEL on a system worker thread).
  * Triggered by a command timing out (the one-second timer), by a transfer
- * failing, by SRB_FUNCTION_ABORT_COMMAND or SRB_FUNCTION_RESET_DEVICE. In
- * escalating order: ABORT TASK for a timed-out command; LOGICAL UNIT RESET
- * if that fails or a reset was asked for; and a device reset if either
- * fails or a transfer failed - every transfer cancelled, every request in
- * flight completed with SRB_STATUS_BUS_RESET (which the class driver
- * retries), then IOCTL_INTERNAL_USB_RESET_PORT, after which the bus has the
- * streams open again on the same handles. A device that cannot be brought back is marked Dead and every
- * later request fails with SRB_STATUS_NO_DEVICE.
+ * failing, by SRB_FUNCTION_ABORT_COMMAND or a reset SRB, which wait on the
+ * recovery list for their outcome. In escalating order: ABORT TASK for a
+ * timed-out or aborted command (completed SRB_STATUS_TIMEOUT or
+ * SRB_STATUS_ABORTED); LOGICAL UNIT RESET if that fails or a reset was
+ * asked for; and a device reset if either fails or a transfer failed -
+ * every transfer cancelled, every request in flight ended with
+ * SRB_STATUS_BUS_RESET (which the class driver retries), and, once every
+ * transfer has come back, IOCTL_INTERNAL_USB_RESET_PORT, after which the
+ * bus has the streams open again on the same handles. A device whose
+ * transfers do not come back, or whose port reset fails, is marked Dead and
+ * every later request fails with SRB_STATUS_NO_DEVICE.
  *
  * IRQL: as uas.h states per entry; completion routines and the timer DPC
  * at DISPATCH_LEVEL; the lock is held by no caller of any function here
@@ -43,7 +63,7 @@
 typedef struct _UAS_ACT {
     PUAS_XFER Submit[4];
     ULONG SubmitCount;
-    PIRP Cancel[UAS_XFERS + 1];
+    PUAS_XFER Cancel[UAS_XFERS + 1];
     ULONG CancelCount;
     PUAS_SLOT Finish[2];
     ULONG FinishCount;
@@ -52,10 +72,24 @@ typedef struct _UAS_ACT {
 
 static VOID uasPump(PUAS_FDO fdo);
 static VOID uasFinish(PUAS_FDO fdo, PUAS_SLOT slot);
+static VOID uasRecoveryWorker(PVOID context);
 
 /* ------------------------------------------------------------------ */
-/* Small helpers                                                      */
+/* Rundown and small helpers                                          */
 /* ------------------------------------------------------------------ */
+
+static VOID uasRef(PUAS_FDO fdo)
+{
+    (VOID)InterlockedIncrement(&fdo->IoCount);
+}
+
+/* The last access to the FDO a referenced context makes. */
+static VOID uasDeref(PUAS_FDO fdo)
+{
+    if (InterlockedDecrement(&fdo->IoCount) == 0) {
+        KeSetEvent(&fdo->IoIdle, IO_NO_INCREMENT, FALSE);
+    }
+}
 
 static VOID uasActInit(PUAS_ACT a)
 {
@@ -70,34 +104,37 @@ static VOID uasActSubmit(PUAS_ACT a, PUAS_XFER x)
     }
 }
 
-/* Lock held. A busy transfer this driver means to cancel. */
+/* Lock held. A busy transfer this driver means to cancel: marked, and held
+ * against reuse until the IoCancelIrp call has returned. */
 static VOID uasActCancel(PUAS_ACT a, PUAS_XFER x)
 {
     if (x->Busy && !x->Cancelling && a->CancelCount < UAS_XFERS + 1) {
         x->Cancelling = TRUE;
-        a->Cancel[a->CancelCount++] = x->Irp;
+        x->CancelRefs++;
+        a->Cancel[a->CancelCount++] = x;
     }
 }
 
-/* Lock held. Whether a recovery pass needs queueing; marks it queued. */
+/* Lock held. Whether a recovery pass needs queueing; marks it queued and
+ * takes the worker's reference. */
 static BOOLEAN uasWantRecovery(PUAS_FDO fdo)
 {
     if (!fdo->Started || fdo->RecoveryQueued) {
         return FALSE;
     }
     fdo->RecoveryQueued = TRUE;
-    KeClearEvent(&fdo->RecoveryIdle);
+    uasRef(fdo);
     return TRUE;
 }
 
-/* Lock held. No transfer of the slot's is busy (the shared status read is
- * not the slot's). */
+/* Lock held. No transfer of the slot's busy or under a cancel call (the
+ * shared status read is not the slot's). */
 static BOOLEAN uasSlotIdle(PUAS_SLOT slot)
 {
     ULONG i;
 
     for (i = 0; i < UAS_XFERS; i++) {
-        if (slot->Xfer[i].Busy) {
+        if (slot->Xfer[i].Busy || slot->Xfer[i].CancelRefs != 0) {
             return FALSE;
         }
     }
@@ -121,36 +158,46 @@ static BOOLEAN uasNeedShared(PUAS_FDO fdo)
     return FALSE;
 }
 
-/* Lock held. A final slot whose transfers are idle is ready: a command is
- * finished by the caller after the lock is dropped, a TMF wakes its waiter. */
-static VOID uasCheckDone(PUAS_SLOT slot, PUAS_ACT a)
+/*
+ * Lock held. The one place a slot is let go, and only when it is idle. A
+ * command whose final IU is in, or which recovery or teardown ended
+ * (Aborted, FinalSrbStatus), is handed to uasFinish once; a TMF wakes its
+ * waiter, or - when the waiter has given up (Aborted) - releases its tag.
+ * A Failed command waits for recovery to end it.
+ */
+static VOID uasCheckDone(PUAS_FDO fdo, PUAS_SLOT slot, PUAS_ACT a)
 {
     if (slot->State == UAS_SLOT_FREE || !uasSlotIdle(slot)) {
         return;
     }
     if (slot->Tmf) {
-        /* A failed TMF wakes its waiter too, rather than leaving it to
-         * time out. */
-        if ((slot->State == UAS_SLOT_FINAL || slot->Failed) &&
-            !slot->TmfSignalled && slot->TmfDone != NULL) {
+        if (slot->Aborted) {
+            (VOID)UasTagFree(&fdo->Tags, slot->Tag);
+            slot->Tmf = FALSE;
+            slot->State = UAS_SLOT_FREE;
+        } else if ((slot->State == UAS_SLOT_FINAL || slot->Failed) &&
+                   !slot->TmfSignalled && slot->TmfDone != NULL) {
             slot->TmfSignalled = TRUE;
             KeSetEvent(slot->TmfDone, IO_NO_INCREMENT, FALSE);
         }
         return;
     }
-    if (slot->State != UAS_SLOT_FINAL || slot->Failed || slot->Aborted ||
-        slot->Finishing) {
+    if (slot->Finishing) {
         return;
     }
-    if (a->FinishCount < 2) {
-        slot->Finishing = TRUE;
-        a->Finish[a->FinishCount++] = slot;
+    if ((slot->Aborted && slot->FinalSrbStatus != 0) ||
+        (slot->State == UAS_SLOT_FINAL && !slot->Failed && !slot->Aborted)) {
+        if (a->FinishCount < 2) {
+            slot->Finishing = TRUE;
+            a->Finish[a->FinishCount++] = slot;
+        }
     }
 }
 
 static NTSTATUS uasXferDone(PDEVICE_OBJECT device, PIRP irp, PVOID context);
 
-/* Lock held. Builds one bulk transfer and marks it busy. */
+/* Lock held. Builds one bulk transfer, marks it busy and takes its
+ * reference. The caller has checked it is neither busy nor under a cancel. */
 static VOID uasXferBuild(PUAS_FDO fdo, PUAS_XFER x, USBD_PIPE_HANDLE pipe,
                          PVOID buffer, PMDL mdl, ULONG length, BOOLEAN in)
 {
@@ -174,6 +221,7 @@ static VOID uasXferBuild(PUAS_FDO fdo, PUAS_XFER x, USBD_PIPE_HANDLE pipe,
     UAS_SET_COMPLETION_ALWAYS(x->Irp, uasXferDone, x);
     x->Busy = TRUE;
     x->Cancelling = FALSE;
+    uasRef(fdo);
 }
 
 /* Lock held. The status read for a slot: on its own stream when streamed,
@@ -184,7 +232,7 @@ static VOID uasPostStatus(PUAS_FDO fdo, PUAS_SLOT slot, PUAS_ACT a)
 
     if (fdo->Streamed) {
         x = &slot->Xfer[UAS_XFER_STATUS];
-        if (x->Busy) {
+        if (x->Busy || x->CancelRefs != 0) {
             return;
         }
         uasXferBuild(fdo, x,
@@ -193,7 +241,7 @@ static VOID uasPostStatus(PUAS_FDO fdo, PUAS_SLOT slot, PUAS_ACT a)
                      slot->Stat, NULL, UAS_STATUS_BUFFER, TRUE);
     } else {
         x = &fdo->SharedStatus;
-        if (x->Busy) {
+        if (x->Busy || x->CancelRefs != 0) {
             return;
         }
         uasXferBuild(fdo, x, fdo->Pipe[UAS_PIPE_STATUS - 1],
@@ -209,7 +257,8 @@ static VOID uasPostData(PUAS_FDO fdo, PUAS_SLOT slot, PUAS_ACT a)
     ULONG which;
 
     x = &slot->Xfer[UAS_XFER_DATA];
-    if (x->Busy || slot->DataPosted || !slot->NeedsData) {
+    if (x->Busy || x->CancelRefs != 0 || slot->DataPosted ||
+        !slot->NeedsData) {
         return;
     }
     which = slot->DataIn ? UAS_STREAM_DATA_IN : UAS_STREAM_DATA_OUT;
@@ -235,9 +284,16 @@ static VOID uasPostIu(PUAS_FDO fdo, PUAS_SLOT slot, ULONG length,
     uasActSubmit(a, x);
 }
 
-/* No lock held: runs what a locked section decided. */
+/*
+ * No lock held: runs what a locked section decided. Each IoCancelIrp is
+ * followed, under the lock, by dropping that transfer's CancelRefs and
+ * looking again at what the cancel was holding back: the slot, which may
+ * now be idle, or the shared read, which may be wanted again.
+ */
 static VOID uasActRun(PUAS_FDO fdo, PUAS_ACT a)
 {
+    UAS_ACT after;
+    PUAS_XFER x;
     ULONG i;
     BOOLEAN queue;
     KIRQL irql;
@@ -246,7 +302,18 @@ static VOID uasActRun(PUAS_FDO fdo, PUAS_ACT a)
         (VOID)IoCallDriver(fdo->Lower, a->Submit[i]->Irp);
     }
     for (i = 0; i < a->CancelCount; i++) {
-        (VOID)IoCancelIrp(a->Cancel[i]);
+        x = a->Cancel[i];
+        (VOID)IoCancelIrp(x->Irp);
+        uasActInit(&after);
+        KeAcquireSpinLock(&fdo->Lock, &irql);
+        x->CancelRefs--;
+        if (x->Slot != NULL) {
+            uasCheckDone(fdo, x->Slot, &after);
+        } else if (!fdo->Gone && uasNeedShared(fdo)) {
+            uasPostStatus(fdo, NULL, &after);
+        }
+        KeReleaseSpinLock(&fdo->Lock, irql);
+        uasActRun(fdo, &after);
     }
     for (i = 0; i < a->FinishCount; i++) {
         uasFinish(fdo, a->Finish[i]);
@@ -268,42 +335,104 @@ static VOID uasActRun(PUAS_FDO fdo, PUAS_ACT a)
 /* Completing a request                                               */
 /* ------------------------------------------------------------------ */
 
-static VOID uasCompleteRequest(PIRP irp, PSCSI_REQUEST_BLOCK srb)
+/*
+ * The request's IRP status follows the SRB status, except a short transfer
+ * (SRB_STATUS_DATA_OVERRUN with the bytes moved), which stays
+ * STATUS_SUCCESS: the class driver reads the SRB itself, and how Windows
+ * 98's NUSB mapping layer treats STATUS_DATA_OVERRUN on the IRP is unread,
+ * so a short INQUIRY must not become a failure there.
+ * The LUN's request count is dropped after the completion, under the lock.
+ */
+static VOID uasCompleteRequest(PUAS_FDO fdo, PIRP irp,
+                               PSCSI_REQUEST_BLOCK srb)
 {
     PKEVENT event;
+    PUAS_PDO pdo;
     NTSTATUS status;
     ULONG s;
+    KIRQL irql;
 
     event = (PKEVENT)irp->Tail.Overlay.DriverContext[UAS_CTX_EVENT];
     if (event != NULL) {
         KeSetEvent(event, IO_NO_INCREMENT, FALSE);
         return;
     }
+    pdo = (PUAS_PDO)irp->Tail.Overlay.DriverContext[UAS_CTX_PDO];
     s = SRB_STATUS(srb->SrbStatus);
-    if (s == SRB_STATUS_SUCCESS || s == SRB_STATUS_DATA_OVERRUN) {
+    switch (s) {
+    case SRB_STATUS_SUCCESS:
         status = STATUS_SUCCESS;
-    } else if (s == SRB_STATUS_BUSY) {
+        break;
+    case SRB_STATUS_DATA_OVERRUN:
+        status = STATUS_SUCCESS;
+        break;
+    case SRB_STATUS_BUSY:
         status = STATUS_DEVICE_BUSY;
-    } else if (s == SRB_STATUS_NO_DEVICE) {
+        break;
+    case SRB_STATUS_NO_DEVICE:
         status = STATUS_NO_SUCH_DEVICE;
-    } else {
+        break;
+    case SRB_STATUS_ABORTED:
+    case SRB_STATUS_REQUEST_FLUSHED:
+        status = STATUS_CANCELLED;
+        break;
+    case SRB_STATUS_TIMEOUT:
+        status = STATUS_IO_TIMEOUT;
+        break;
+    case SRB_STATUS_INVALID_REQUEST:
+        status = STATUS_INVALID_DEVICE_REQUEST;
+        break;
+    default:
         status = STATUS_IO_DEVICE_ERROR;
+        break;
     }
     irp->IoStatus.Status = status;
     irp->IoStatus.Information = srb->DataTransferLength;
     IoCompleteRequest(irp, IO_NO_INCREMENT);
+    if (pdo != NULL) {
+        KeAcquireSpinLock(&fdo->Lock, &irql);
+        if (pdo->Requests != 0) {
+            pdo->Requests--;
+        }
+        if (pdo->Requests == 0) {
+            KeSetEvent(&pdo->RequestsIdle, IO_NO_INCREMENT, FALSE);
+        }
+        KeReleaseSpinLock(&fdo->Lock, irql);
+    }
 }
 
-/* A request that never reached a slot. */
-static VOID uasFailRequest(PIRP irp, UCHAR srbStatus)
+/* A request that never reached a slot, or a recovery SRB. */
+static VOID uasFailRequest(PUAS_FDO fdo, PIRP irp, UCHAR srbStatus)
 {
     PSCSI_REQUEST_BLOCK srb;
 
     srb = (PSCSI_REQUEST_BLOCK)irp->Tail.Overlay.DriverContext[UAS_CTX_SRB];
     srb->SrbStatus = srbStatus;
     srb->ScsiStatus = 0;
-    srb->DataTransferLength = 0;
-    uasCompleteRequest(irp, srb);
+    if (srb->Function == SRB_FUNCTION_EXECUTE_SCSI) {
+        srb->DataTransferLength = 0;
+    }
+    uasCompleteRequest(fdo, irp, srb);
+}
+
+/* Lock held. Admits one request of a LUN: counted, its context set. */
+static BOOLEAN uasAdmit(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
+                        PSCSI_REQUEST_BLOCK srb)
+{
+    if (!fdo->Started || fdo->Gone || fdo->Dead ||
+        (pdo != NULL && !pdo->Admit)) {
+        return FALSE;
+    }
+    irp->Tail.Overlay.DriverContext[UAS_CTX_PDO] = pdo;
+    irp->Tail.Overlay.DriverContext[UAS_CTX_SRB] = srb;
+    irp->Tail.Overlay.DriverContext[UAS_CTX_EVENT] = NULL;
+    if (pdo != NULL) {
+        if (pdo->Requests == 0) {
+            KeClearEvent(&pdo->RequestsIdle);
+        }
+        pdo->Requests++;
+    }
+    return TRUE;
 }
 
 /* The response codes a COMMAND IU can be refused with, as SRB status. */
@@ -320,9 +449,9 @@ static UCHAR uasResponseStatus(ULONG code)
 }
 
 /*
- * No lock held. A command slot whose final IU is in (or which recovery has
- * ended, FinalSrbStatus set) and none of whose transfers is busy: the SRB
- * gets its status, the tag goes back, the request completes.
+ * No lock held. A command slot uasCheckDone handed over: idle, ended by its
+ * final IU or by recovery or teardown. The SRB gets its status, the MDL is
+ * freed, the tag goes back, the request completes.
  */
 static VOID uasFinish(PUAS_FDO fdo, PUAS_SLOT slot)
 {
@@ -371,23 +500,16 @@ static VOID uasFinish(PUAS_FDO fdo, PUAS_SLOT slot)
     slot->Srb = NULL;
     KeReleaseSpinLock(&fdo->Lock, irql);
 
-    uasCompleteRequest(request, srb);
+    uasCompleteRequest(fdo, request, srb);
 }
 
 /* ------------------------------------------------------------------ */
 /* Starting commands                                                  */
 /* ------------------------------------------------------------------ */
 
-/*
- * Lock held. Fills a free slot from a request. Returns 0 when it is ready to
- * go, or the SRB status to fail the request with.
- */
-static UCHAR uasSlotPrepare(PUAS_FDO fdo, PUAS_SLOT slot, PIRP irp,
-                            PSCSI_REQUEST_BLOCK srb, ULONG lun)
+/* Lock held. A slot's flags for a new command or TMF. */
+static VOID uasSlotReset(PUAS_SLOT slot)
 {
-    ULONG dir;
-    ULONG attribute;
-
     slot->Tmf = FALSE;
     slot->DataIn = FALSE;
     slot->DataPosted = FALSE;
@@ -399,9 +521,8 @@ static UCHAR uasSlotPrepare(PUAS_FDO fdo, PUAS_SLOT slot, PIRP irp,
     slot->TmfSignalled = FALSE;
     slot->Finishing = FALSE;
     slot->TmfDone = NULL;
-    slot->Request = irp;
-    slot->Srb = srb;
-    slot->Lun = lun;
+    slot->Request = NULL;
+    slot->Srb = NULL;
     slot->DataMdl = NULL;
     slot->DataLength = 0;
     slot->Transferred = 0;
@@ -409,6 +530,22 @@ static UCHAR uasSlotPrepare(PUAS_FDO fdo, PUAS_SLOT slot, PIRP irp,
     slot->SenseLength = 0;
     slot->ResponseCode = 0;
     slot->FinalSrbStatus = 0;
+}
+
+/*
+ * Lock held. Fills a free slot from a request. Returns 0 when it is ready to
+ * go, or the SRB status to fail the request with.
+ */
+static UCHAR uasSlotPrepare(PUAS_SLOT slot, PIRP irp,
+                            PSCSI_REQUEST_BLOCK srb, ULONG lun)
+{
+    ULONG dir;
+    ULONG attribute;
+
+    uasSlotReset(slot);
+    slot->Request = irp;
+    slot->Srb = srb;
+    slot->Lun = lun;
     slot->TimeLeft = (srb->TimeOutValue != 0) ? (LONG)srb->TimeOutValue
                                               : UAS_DEFAULT_TIMEOUT;
 
@@ -452,9 +589,11 @@ static UCHAR uasSlotPrepare(PUAS_FDO fdo, PUAS_SLOT slot, PIRP irp,
 }
 
 /*
- * <= DISPATCH_LEVEL, no lock held. Starts queued requests while the queue
- * depth and the tags allow. A request whose LUN has its queue locked waits
- * unless it bypasses the lock (the class driver's power SRBs).
+ * <= DISPATCH_LEVEL, no lock held, from a context that keeps the FDO (a
+ * referenced engine context or a PDO dispatch inside its Busy count).
+ * Starts queued requests while the queue depth and the tags allow. A
+ * request whose LUN has its queue locked waits unless it bypasses the lock
+ * (the class driver's power SRBs).
  */
 static VOID uasPump(PUAS_FDO fdo)
 {
@@ -486,7 +625,8 @@ static VOID uasPump(PUAS_FDO fdo)
             }
             e = RemoveHeadList(&fdo->Queue);
             KeReleaseSpinLock(&fdo->Lock, irql);
-            uasFailRequest(CONTAINING_RECORD(e, IRP, Tail.Overlay.ListEntry),
+            uasFailRequest(fdo,
+                           CONTAINING_RECORD(e, IRP, Tail.Overlay.ListEntry),
                            SRB_STATUS_NO_DEVICE);
             continue;
         }
@@ -520,9 +660,10 @@ static VOID uasPump(PUAS_FDO fdo)
         srb = (PSCSI_REQUEST_BLOCK)irp->Tail.Overlay.DriverContext[UAS_CTX_SRB];
         lun = (pdo != NULL) ? pdo->Lun : srb->Lun;
         slot = &fdo->Slots[tag];
-        fail = uasSlotPrepare(fdo, slot, irp, srb, lun);
+        fail = uasSlotPrepare(slot, irp, srb, lun);
         if (fail != 0) {
             (VOID)UasTagFree(&fdo->Tags, tag);
+            uasSlotReset(slot);
             failIrp = irp;
         } else {
             slot->State = UAS_SLOT_ACTIVE;
@@ -536,7 +677,7 @@ static VOID uasPump(PUAS_FDO fdo)
         }
         KeReleaseSpinLock(&fdo->Lock, irql);
         if (failIrp != NULL) {
-            uasFailRequest(failIrp, fail);
+            uasFailRequest(fdo, failIrp, fail);
             continue;
         }
         uasActRun(fdo, &a);
@@ -548,14 +689,15 @@ static VOID uasPump(PUAS_FDO fdo)
 /* ------------------------------------------------------------------ */
 
 /* Lock held. Marks a slot failed and asks for recovery. */
-static VOID uasSlotFault(PUAS_FDO fdo, PUAS_SLOT slot, PUAS_ACT a)
+static VOID uasSlotFault(PUAS_SLOT slot, PUAS_ACT a)
 {
     if (slot->State == UAS_SLOT_FREE || slot->Aborted) {
         return;
     }
     slot->Failed = TRUE;
-    a->Recover = TRUE;
-    UNREFERENCED_PARAMETER(fdo);
+    if (!slot->Tmf) {
+        a->Recover = TRUE;
+    }
 }
 
 /* Lock held. One status IU read: dispatch it by tag. */
@@ -579,7 +721,7 @@ static VOID uasStatusIu(PUAS_FDO fdo, PUAS_XFER x, PUAS_ACT a)
     if (target == NULL || (x->Slot != NULL && target != x->Slot)) {
         fdo->Counters[UAS_CTR_PROTOCOL]++;
         if (x->Slot != NULL) {
-            uasSlotFault(fdo, x->Slot, a);
+            uasSlotFault(x->Slot, a);
         }
         return;
     }
@@ -588,7 +730,7 @@ static VOID uasStatusIu(PUAS_FDO fdo, PUAS_XFER x, PUAS_ACT a)
     case UAS_IU_SENSE:
         if (target->Tmf) {
             fdo->Counters[UAS_CTR_PROTOCOL]++;
-            uasSlotFault(fdo, target, a);
+            uasSlotFault(target, a);
             return;
         }
         target->ScsiStatus = iu.Status;
@@ -625,7 +767,7 @@ static VOID uasStatusIu(PUAS_FDO fdo, PUAS_XFER x, PUAS_ACT a)
         if (target->Tmf || !target->NeedsData ||
             target->DataIn != (BOOLEAN)(iu.Id == UAS_IU_READ_READY)) {
             fdo->Counters[UAS_CTR_PROTOCOL]++;
-            uasSlotFault(fdo, target, a);
+            uasSlotFault(target, a);
             return;
         }
         /* Streamed, the data transfer went out with the command and the
@@ -636,11 +778,16 @@ static VOID uasStatusIu(PUAS_FDO fdo, PUAS_XFER x, PUAS_ACT a)
 
     default:
         fdo->Counters[UAS_CTR_PROTOCOL]++;
-        uasSlotFault(fdo, target, a);
+        uasSlotFault(target, a);
         break;
     }
 }
 
+/*
+ * The completion of every transfer. It holds the reference uasXferBuild
+ * took until its last line, so nothing it starts - the finish of a slot,
+ * a re-post, a recovery request, a pump - can outlive the FDO.
+ */
 static NTSTATUS uasXferDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
 {
     PUAS_XFER x;
@@ -668,12 +815,12 @@ static NTSTATUS uasXferDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
     if (!ok) {
         if (!cancelled) {
             if (slot != NULL) {
-                uasSlotFault(fdo, slot, &a);
+                uasSlotFault(slot, &a);
             } else {
                 /* The shared status read: every slot waiting on it. */
                 for (t = 1; t <= fdo->Tags.Count; t++) {
                     if (fdo->Slots[t].State != UAS_SLOT_FREE) {
-                        uasSlotFault(fdo, &fdo->Slots[t], &a);
+                        uasSlotFault(&fdo->Slots[t], &a);
                     }
                 }
             }
@@ -697,15 +844,16 @@ static NTSTATUS uasXferDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
     }
 
     if (slot != NULL) {
-        uasCheckDone(slot, &a);
+        uasCheckDone(fdo, slot, &a);
     } else {
         for (t = 1; t <= fdo->Tags.Count; t++) {
-            uasCheckDone(&fdo->Slots[t], &a);
+            uasCheckDone(fdo, &fdo->Slots[t], &a);
         }
     }
     KeReleaseSpinLock(&fdo->Lock, irql);
 
     uasActRun(fdo, &a);
+    uasDeref(fdo);
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
@@ -739,10 +887,11 @@ static VOID uasTick(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2)
     expired = FALSE;
     KeAcquireSpinLock(&fdo->Lock, &irql);
     if (fdo->TimerStop) {
-        KeSetEvent(&fdo->TimerDone, IO_NO_INCREMENT, FALSE);
         KeReleaseSpinLock(&fdo->Lock, irql);
+        KeSetEvent(&fdo->TimerDone, IO_NO_INCREMENT, FALSE);
         return;
     }
+    uasRef(fdo);
     for (t = 1; t <= fdo->Tags.Count; t++) {
         slot = &fdo->Slots[t];
         if (slot->State == UAS_SLOT_FREE || slot->Tmf || slot->TimedOut ||
@@ -766,6 +915,87 @@ static VOID uasTick(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2)
     if (queue) {
         ExQueueWorkItem(&fdo->Recovery, DelayedWorkQueue);
     }
+    uasDeref(fdo);
+}
+
+/* ------------------------------------------------------------------ */
+/* Ending slots (any IRQL <= DISPATCH unless noted)                   */
+/* ------------------------------------------------------------------ */
+
+/* Lock held. Ends one command slot with srbStatus: marked aborted, its busy
+ * transfers (and the shared read, when nothing else needs it) put up for
+ * cancelling, and finished here if it is already idle - otherwise by the
+ * completion that makes it idle. */
+static VOID uasEndSlotLocked(PUAS_FDO fdo, PUAS_SLOT slot, UCHAR srbStatus,
+                             PUAS_ACT a)
+{
+    ULONG i;
+
+    if (slot->State == UAS_SLOT_FREE || slot->Tmf || slot->Finishing ||
+        slot->Aborted) {
+        return;
+    }
+    slot->Aborted = TRUE;
+    slot->FinalSrbStatus = srbStatus;
+    for (i = 0; i < UAS_XFERS; i++) {
+        uasActCancel(a, &slot->Xfer[i]);
+    }
+    if (!fdo->Streamed && !uasNeedShared(fdo)) {
+        uasActCancel(a, &fdo->SharedStatus);
+    }
+    uasCheckDone(fdo, slot, a);
+}
+
+static VOID uasEndSlot(PUAS_FDO fdo, PUAS_SLOT slot, UCHAR srbStatus)
+{
+    UAS_ACT a;
+    KIRQL irql;
+
+    uasActInit(&a);
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    uasEndSlotLocked(fdo, slot, srbStatus, &a);
+    KeReleaseSpinLock(&fdo->Lock, irql);
+    uasActRun(fdo, &a);
+}
+
+/* Every command of one LUN (all LUNs when lun is ~0). */
+static VOID uasEndLun(PUAS_FDO fdo, ULONG lun, UCHAR srbStatus)
+{
+    ULONG t;
+
+    for (t = 1; t <= UAS_MAX_TAGS; t++) {
+        if (lun == (ULONG)~0UL || fdo->Slots[t].Lun == lun) {
+            uasEndSlot(fdo, &fdo->Slots[t], srbStatus);
+        }
+    }
+}
+
+/* Every command ended with srbStatus, and every task management function's
+ * transfers cancelled so its waiter returns. */
+static VOID uasAbortAll(PUAS_FDO fdo, UCHAR srbStatus)
+{
+    UAS_ACT a;
+    ULONG t;
+    ULONG i;
+    KIRQL irql;
+
+    uasEndLun(fdo, (ULONG)~0UL, srbStatus);
+    for (t = 0; t <= UAS_MAX_TAGS; t++) {
+        uasActInit(&a);
+        KeAcquireSpinLock(&fdo->Lock, &irql);
+        if (t == 0) {
+            uasActCancel(&a, &fdo->SharedStatus);
+        } else if (fdo->Slots[t].State != UAS_SLOT_FREE &&
+                   fdo->Slots[t].Tmf) {
+            fdo->Slots[t].Failed = TRUE;
+            for (i = 0; i < UAS_XFERS; i++) {
+                uasActCancel(&a, &fdo->Slots[t].Xfer[i]);
+            }
+            uasCheckDone(fdo, &fdo->Slots[t], &a);
+        }
+        KeReleaseSpinLock(&fdo->Lock, irql);
+        uasActRun(fdo, &a);
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -781,9 +1011,10 @@ static VOID uasSleepMs(ULONG ms)
     (VOID)KeDelayExecutionThread(KernelMode, FALSE, &t);
 }
 
-/* Waits for every transfer of the given slot (NULL: of every slot, and the
- * shared read) to be idle. FALSE after five seconds. */
-static BOOLEAN uasWaitIdle(PUAS_FDO fdo, PUAS_SLOT only)
+/* Whether every slot is free and the shared read idle, within five
+ * seconds. FALSE leaves everything as it is: owned, to be finished by the
+ * completions still due. */
+static BOOLEAN uasWaitAllFree(PUAS_FDO fdo)
 {
     ULONG round;
     ULONG t;
@@ -792,13 +1023,10 @@ static BOOLEAN uasWaitIdle(PUAS_FDO fdo, PUAS_SLOT only)
 
     for (round = 0; round < 500; round++) {
         KeAcquireSpinLock(&fdo->Lock, &irql);
-        if (only != NULL) {
-            busy = (BOOLEAN)!uasSlotIdle(only);
-        } else {
-            busy = fdo->SharedStatus.Busy;
-            for (t = 1; t <= UAS_MAX_TAGS && !busy; t++) {
-                busy = (BOOLEAN)!uasSlotIdle(&fdo->Slots[t]);
-            }
+        busy = (BOOLEAN)(fdo->SharedStatus.Busy ||
+                         fdo->SharedStatus.CancelRefs != 0);
+        for (t = 1; t <= UAS_MAX_TAGS && !busy; t++) {
+            busy = (BOOLEAN)(fdo->Slots[t].State != UAS_SLOT_FREE);
         }
         KeReleaseSpinLock(&fdo->Lock, irql);
         if (!busy) {
@@ -809,32 +1037,11 @@ static BOOLEAN uasWaitIdle(PUAS_FDO fdo, PUAS_SLOT only)
     return FALSE;
 }
 
-/* Cancels every busy transfer of a slot (and the shared read when asked),
- * then waits for them. */
-static BOOLEAN uasCancelSlot(PUAS_FDO fdo, PUAS_SLOT slot, BOOLEAN shared)
-{
-    UAS_ACT a;
-    ULONG i;
-    KIRQL irql;
-
-    uasActInit(&a);
-    KeAcquireSpinLock(&fdo->Lock, &irql);
-    for (i = 0; i < UAS_XFERS; i++) {
-        uasActCancel(&a, &slot->Xfer[i]);
-    }
-    if (shared) {
-        uasActCancel(&a, &fdo->SharedStatus);
-    }
-    KeReleaseSpinLock(&fdo->Lock, irql);
-    for (i = 0; i < a.CancelCount; i++) {
-        (VOID)IoCancelIrp(a.Cancel[i]);
-    }
-    return uasWaitIdle(fdo, slot);
-}
-
 /*
  * One task management function, waited for. Returns the response code, or
- * UAS_RC_TMF_FAILED when it could not be sent or no answer came.
+ * UAS_RC_TMF_FAILED when it could not be sent or no answer came. The slot
+ * is not waited for: when the waiter gives up it is marked aborted, its
+ * transfers cancelled, and it releases its own tag once idle (uasCheckDone).
  */
 static ULONG uasTmf(PUAS_FDO fdo, ULONG function, ULONG lun, ULONG taskTag)
 {
@@ -846,34 +1053,28 @@ static ULONG uasTmf(PUAS_FDO fdo, ULONG function, ULONG lun, ULONG taskTag)
     ULONG tag;
     ULONG code;
     ULONG length;
-    BOOLEAN lonely;
+    ULONG i;
     KIRQL irql;
 
     KeInitializeEvent(&done, NotificationEvent, FALSE);
     uasActInit(&a);
     KeAcquireSpinLock(&fdo->Lock, &irql);
     tag = UasTagAlloc(&fdo->Tags);
-    if (tag == 0) {
+    if (tag == 0 || fdo->Gone) {
+        if (tag != 0) {
+            (VOID)UasTagFree(&fdo->Tags, tag);
+        }
         KeReleaseSpinLock(&fdo->Lock, irql);
         return UAS_RC_TMF_FAILED;
     }
     slot = &fdo->Slots[tag];
+    uasSlotReset(slot);
     UasZero(slot->Iu, sizeof(slot->Iu));
     length = UasIuBuildTaskMgmt(slot->Iu, sizeof(slot->Iu), tag, function,
                                 taskTag, lun);
     slot->Tmf = TRUE;
     slot->TmfDone = &done;
-    slot->TmfSignalled = FALSE;
-    slot->Finishing = FALSE;
-    slot->Failed = FALSE;
-    slot->Aborted = FALSE;
-    slot->TimedOut = FALSE;
-    slot->NeedsData = FALSE;
-    slot->DataPosted = FALSE;
-    slot->ResponseOnly = FALSE;
     slot->ResponseCode = UAS_RC_TMF_FAILED;
-    slot->Request = NULL;
-    slot->Srb = NULL;
     slot->Lun = lun;
     slot->State = UAS_SLOT_ACTIVE;
     uasPostStatus(fdo, slot, &a);
@@ -886,22 +1087,23 @@ static ULONG uasTmf(PUAS_FDO fdo, ULONG function, ULONG lun, ULONG taskTag)
     wait = KeWaitForSingleObject(&done, Executive, KernelMode, FALSE,
                                  &timeout);
 
+    uasActInit(&a);
     KeAcquireSpinLock(&fdo->Lock, &irql);
     code = (wait == STATUS_SUCCESS && slot->State == UAS_SLOT_FINAL &&
             !slot->Failed) ? slot->ResponseCode : UAS_RC_TMF_FAILED;
+    /* The event is on this stack: nothing may signal it after this. */
+    slot->TmfDone = NULL;
     slot->Aborted = TRUE;
     slot->State = UAS_SLOT_FINAL;
-    lonely = (BOOLEAN)!uasNeedShared(fdo);
+    for (i = 0; i < UAS_XFERS; i++) {
+        uasActCancel(&a, &slot->Xfer[i]);
+    }
+    if (!fdo->Streamed && !uasNeedShared(fdo)) {
+        uasActCancel(&a, &fdo->SharedStatus);
+    }
+    uasCheckDone(fdo, slot, &a);
     KeReleaseSpinLock(&fdo->Lock, irql);
-
-    (VOID)uasCancelSlot(fdo, slot, (BOOLEAN)(!fdo->Streamed && lonely));
-
-    KeAcquireSpinLock(&fdo->Lock, &irql);
-    slot->State = UAS_SLOT_FREE;
-    slot->Tmf = FALSE;
-    slot->TmfDone = NULL;
-    (VOID)UasTagFree(&fdo->Tags, tag);
-    KeReleaseSpinLock(&fdo->Lock, irql);
+    uasActRun(fdo, &a);
     return code;
 }
 
@@ -911,212 +1113,218 @@ static BOOLEAN uasTmfOk(ULONG code)
                      code == UAS_RC_TMF_SUCCEEDED);
 }
 
-/* Ends one command slot from recovery: its transfers cancelled and waited
- * for, its request completed with the given status. */
-static VOID uasEndSlot(PUAS_FDO fdo, PUAS_SLOT slot, UCHAR srbStatus)
-{
-    BOOLEAN lonely;
-    KIRQL irql;
-
-    KeAcquireSpinLock(&fdo->Lock, &irql);
-    if (slot->State == UAS_SLOT_FREE || slot->Tmf || slot->Finishing) {
-        /* Free, a TMF, or already handed to uasFinish by a completion. */
-        KeReleaseSpinLock(&fdo->Lock, irql);
-        return;
-    }
-    slot->Aborted = TRUE;
-    slot->Finishing = TRUE;
-    slot->FinalSrbStatus = srbStatus;
-    lonely = (BOOLEAN)!uasNeedShared(fdo);
-    KeReleaseSpinLock(&fdo->Lock, irql);
-    (VOID)uasCancelSlot(fdo, slot, (BOOLEAN)(!fdo->Streamed && lonely));
-    uasFinish(fdo, slot);
-}
-
-/* Every command of one LUN (all LUNs when lun is ~0). */
-static VOID uasEndLun(PUAS_FDO fdo, ULONG lun, UCHAR srbStatus)
-{
-    ULONG t;
-
-    for (t = 1; t <= UAS_MAX_TAGS; t++) {
-        if (lun == (ULONG)~0UL || fdo->Slots[t].Lun == lun) {
-            uasEndSlot(fdo, &fdo->Slots[t], srbStatus);
-        }
-    }
-}
-
-/*
- * Every command in flight ended with srbStatus: each slot marked aborted
- * (so no completion re-posts a status read for it), every busy transfer
- * cancelled and waited for, every request completed. FALSE when a transfer
- * never completed, in which case nothing may be reused and the FDO is Dead.
- */
-static BOOLEAN uasAbortAll(PUAS_FDO fdo, UCHAR srbStatus)
-{
-    UAS_ACT a;
-    ULONG t;
-    ULONG i;
-    BOOLEAN idle;
-    KIRQL irql;
-
-    KeAcquireSpinLock(&fdo->Lock, &irql);
-    for (t = 1; t <= UAS_MAX_TAGS; t++) {
-        if (fdo->Slots[t].State != UAS_SLOT_FREE) {
-            fdo->Slots[t].Aborted = TRUE;
-        }
-    }
-    KeReleaseSpinLock(&fdo->Lock, irql);
-    /* Cancel in rounds: UAS_ACT holds a slot's worth at a time. */
-    for (t = 0; t <= UAS_MAX_TAGS; t++) {
-        uasActInit(&a);
-        KeAcquireSpinLock(&fdo->Lock, &irql);
-        if (t == 0) {
-            uasActCancel(&a, &fdo->SharedStatus);
-        } else {
-            for (i = 0; i < UAS_XFERS; i++) {
-                uasActCancel(&a, &fdo->Slots[t].Xfer[i]);
-            }
-        }
-        KeReleaseSpinLock(&fdo->Lock, irql);
-        for (i = 0; i < a.CancelCount; i++) {
-            (VOID)IoCancelIrp(a.Cancel[i]);
-        }
-    }
-    idle = uasWaitIdle(fdo, NULL);
-    uasEndLun(fdo, (ULONG)~0UL, srbStatus);
-    if (!idle) {
-        KeAcquireSpinLock(&fdo->Lock, &irql);
-        fdo->Dead = TRUE;
-        KeReleaseSpinLock(&fdo->Lock, irql);
-    }
-    return idle;
-}
-
 /*
  * The last resort: everything in flight ended with BUS_RESET (NO_DEVICE if
- * the device has gone), then the port reset. The bus restores the device
- * with its streams open and every stream handle valid
- * (src\xhci98_streams.h), so nothing is reopened here.
+ * the device has gone), then - only once every transfer has come back - the
+ * port reset. The bus restores the device with its streams open and every
+ * stream handle valid (src\xhci98_streams.h), so nothing is reopened.
+ * FALSE, with the FDO Dead, when transfers did not come back or the reset
+ * failed.
  */
-static VOID uasResetDevice(PUAS_FDO fdo)
+static BOOLEAN uasResetDevice(PUAS_FDO fdo)
 {
     NTSTATUS status;
     KIRQL irql;
 
-    if (!uasAbortAll(fdo, (UCHAR)(fdo->Gone ? SRB_STATUS_NO_DEVICE
-                                            : SRB_STATUS_BUS_RESET)) ||
-        fdo->Gone) {
-        return;
+    uasAbortAll(fdo, (UCHAR)(fdo->Gone ? SRB_STATUS_NO_DEVICE
+                                       : SRB_STATUS_BUS_RESET));
+    if (fdo->Gone) {
+        return FALSE;
     }
-    fdo->Counters[UAS_CTR_PORT_RESETS]++;
-    status = UasSyncIoctl(fdo, IOCTL_INTERNAL_USB_RESET_PORT);
+    status = STATUS_IO_TIMEOUT;
+    if (uasWaitAllFree(fdo)) {
+        fdo->Counters[UAS_CTR_PORT_RESETS]++;
+        status = UasSyncIoctl(fdo, IOCTL_INTERNAL_USB_RESET_PORT);
+    }
     if (!NT_SUCCESS(status)) {
         KeAcquireSpinLock(&fdo->Lock, &irql);
         fdo->Dead = TRUE;
         KeReleaseSpinLock(&fdo->Lock, irql);
+        return FALSE;
     }
+    return TRUE;
+}
+
+/* Recovery after a LOGICAL UNIT RESET was wanted: the TMF, then the port
+ * reset if it fails. TRUE when the LUN's commands are gone and it is
+ * usable. */
+static BOOLEAN uasResetLun(PUAS_FDO fdo, ULONG lun)
+{
+    fdo->Counters[UAS_CTR_LUN_RESETS]++;
+    if (uasTmfOk(uasTmf(fdo, UAS_TMF_LOGICAL_UNIT_RESET, lun, 0))) {
+        uasEndLun(fdo, lun, SRB_STATUS_BUS_RESET);
+        return TRUE;
+    }
+    return uasResetDevice(fdo);
+}
+
+/* ABORT TASK for one command, escalating. TRUE when the command is gone
+ * (aborted with abortStatus, or swept up by a reset). */
+static BOOLEAN uasAbortTask(PUAS_FDO fdo, PUAS_SLOT slot, UCHAR abortStatus)
+{
+    fdo->Counters[UAS_CTR_ABORTS]++;
+    if (uasTmfOk(uasTmf(fdo, UAS_TMF_ABORT_TASK, slot->Lun, slot->Tag))) {
+        uasEndSlot(fdo, slot, abortStatus);
+        return TRUE;
+    }
+    return uasResetLun(fdo, slot->Lun);
+}
+
+/* Lock held. The in-flight command carrying an SRB, if any. */
+static PUAS_SLOT uasFindSrb(PUAS_FDO fdo, PSCSI_REQUEST_BLOCK victim)
+{
+    ULONG t;
+    PUAS_SLOT slot;
+
+    for (t = 1; t <= UAS_MAX_TAGS; t++) {
+        slot = &fdo->Slots[t];
+        if (slot->State != UAS_SLOT_FREE && !slot->Tmf && !slot->Aborted &&
+            !slot->Finishing && slot->Srb == victim) {
+            return slot;
+        }
+    }
+    return NULL;
+}
+
+/* One held ABORT_COMMAND or reset SRB, completed with its outcome. */
+static VOID uasRecoveryRequest(PUAS_FDO fdo, PIRP irp)
+{
+    PSCSI_REQUEST_BLOCK srb;
+    PUAS_PDO pdo;
+    PUAS_SLOT slot;
+    UCHAR st;
+    KIRQL irql;
+
+    srb = (PSCSI_REQUEST_BLOCK)irp->Tail.Overlay.DriverContext[UAS_CTX_SRB];
+    pdo = (PUAS_PDO)irp->Tail.Overlay.DriverContext[UAS_CTX_PDO];
+    if (srb->Function == SRB_FUNCTION_ABORT_COMMAND) {
+        KeAcquireSpinLock(&fdo->Lock, &irql);
+        slot = uasFindSrb(fdo, srb->NextSrb);
+        KeReleaseSpinLock(&fdo->Lock, irql);
+        if (slot == NULL) {
+            st = SRB_STATUS_ABORT_FAILED;   /* it had already completed */
+        } else {
+            st = uasAbortTask(fdo, slot, SRB_STATUS_ABORTED)
+                     ? SRB_STATUS_SUCCESS : SRB_STATUS_ABORT_FAILED;
+        }
+    } else if (srb->Function == SRB_FUNCTION_RESET_BUS) {
+        st = uasResetDevice(fdo) ? SRB_STATUS_SUCCESS : SRB_STATUS_ERROR;
+    } else {
+        st = uasResetLun(fdo, pdo->Lun) ? SRB_STATUS_SUCCESS
+                                        : SRB_STATUS_ERROR;
+    }
+    uasFailRequest(fdo, irp, st);
 }
 
 /* Lock held. What recovery should look at next. */
 #define UAS_RECOVER_NONE    0
-#define UAS_RECOVER_ABORT   1
-#define UAS_RECOVER_LUN     2
+#define UAS_RECOVER_TIMEOUT 1
+#define UAS_RECOVER_REQUEST 2
 #define UAS_RECOVER_RESET   3
 
-static ULONG uasRecoveryNext(PUAS_FDO fdo, PULONG tag, PULONG lun)
+static ULONG uasRecoveryNext(PUAS_FDO fdo, PUAS_SLOT *slotOut,
+                             PIRP *irpOut)
 {
     PUAS_SLOT slot;
+    PLIST_ENTRY e;
     ULONG t;
 
-    if (fdo->Gone) {
-        for (t = 1; t <= UAS_MAX_TAGS; t++) {
-            if (fdo->Slots[t].State != UAS_SLOT_FREE && !fdo->Slots[t].Tmf) {
-                return UAS_RECOVER_RESET;
-            }
-        }
-        return UAS_RECOVER_NONE;
-    }
     for (t = 1; t <= UAS_MAX_TAGS; t++) {
         slot = &fdo->Slots[t];
         if (slot->State != UAS_SLOT_FREE && !slot->Tmf && slot->Failed &&
-            slot->FinalSrbStatus == 0) {
+            !slot->Aborted) {
             return UAS_RECOVER_RESET;
         }
     }
-    if (fdo->ResetRequested) {
-        fdo->ResetRequested = FALSE;
-        *lun = fdo->ResetLun;
-        return UAS_RECOVER_LUN;
+    if (!IsListEmpty(&fdo->RecoveryRequests)) {
+        e = RemoveHeadList(&fdo->RecoveryRequests);
+        *irpOut = CONTAINING_RECORD(e, IRP, Tail.Overlay.ListEntry);
+        return UAS_RECOVER_REQUEST;
     }
     for (t = 1; t <= UAS_MAX_TAGS; t++) {
         slot = &fdo->Slots[t];
         if (slot->State != UAS_SLOT_FREE && !slot->Tmf && slot->TimedOut &&
             !slot->Aborted && !slot->Finishing) {
-            *tag = t;
-            *lun = slot->Lun;
-            return UAS_RECOVER_ABORT;
+            *slotOut = slot;
+            return UAS_RECOVER_TIMEOUT;
         }
     }
     return UAS_RECOVER_NONE;
 }
 
+/*
+ * The worker. Holds the reference uasWantRecovery took until its last
+ * line. A stopped engine, a gone device or a Dead one ends the pass: the
+ * held recovery SRBs are then failed here (UasEngineStop fails them too).
+ */
 static VOID uasRecoveryWorker(PVOID context)
 {
     PUAS_FDO fdo;
+    PUAS_SLOT slot;
+    PIRP irp;
     ULONG what;
-    ULONG tag;
-    ULONG lun;
     ULONG rounds;
+    LIST_ENTRY drain;
+    PLIST_ENTRY e;
     KIRQL irql;
 
     fdo = (PUAS_FDO)context;
+    InitializeListHead(&drain);
     for (rounds = 0;; rounds++) {
-        tag = 0;
-        lun = 0;
+        slot = NULL;
+        irp = NULL;
         KeAcquireSpinLock(&fdo->Lock, &irql);
         fdo->Recovering = TRUE;
-        what = (fdo->Dead && !fdo->Gone) ? UAS_RECOVER_NONE
-                                          : uasRecoveryNext(fdo, &tag, &lun);
+        if (!fdo->Started || fdo->Gone || fdo->Dead) {
+            while (!IsListEmpty(&fdo->RecoveryRequests)) {
+                e = RemoveHeadList(&fdo->RecoveryRequests);
+                InsertTailList(&drain, e);
+            }
+            what = UAS_RECOVER_NONE;
+        } else {
+            what = uasRecoveryNext(fdo, &slot, &irp);
+        }
         if (what == UAS_RECOVER_NONE) {
             /* Decided under the same hold that ends the pass, so a fault
              * flagged after this sees RecoveryQueued FALSE and queues
-             * another. */
+             * another worker with its own reference. */
             fdo->Recovering = FALSE;
             fdo->RecoveryQueued = FALSE;
-            KeSetEvent(&fdo->RecoveryIdle, IO_NO_INCREMENT, FALSE);
             KeReleaseSpinLock(&fdo->Lock, irql);
             break;
         }
         KeReleaseSpinLock(&fdo->Lock, irql);
 
-        if (rounds >= 16) {
+        if (rounds >= 16 && what == UAS_RECOVER_TIMEOUT) {
             what = UAS_RECOVER_RESET;
         }
-        if (what == UAS_RECOVER_ABORT) {
-            fdo->Counters[UAS_CTR_ABORTS]++;
-            if (uasTmfOk(uasTmf(fdo, UAS_TMF_ABORT_TASK, lun, tag))) {
-                uasEndSlot(fdo, &fdo->Slots[tag], SRB_STATUS_TIMEOUT);
-                continue;
-            }
-            what = UAS_RECOVER_LUN;
+        switch (what) {
+        case UAS_RECOVER_TIMEOUT:
+            (VOID)uasAbortTask(fdo, slot, SRB_STATUS_TIMEOUT);
+            break;
+        case UAS_RECOVER_REQUEST:
+            uasRecoveryRequest(fdo, irp);
+            break;
+        default:
+            (VOID)uasResetDevice(fdo);
+            break;
         }
-        if (what == UAS_RECOVER_LUN) {
-            fdo->Counters[UAS_CTR_LUN_RESETS]++;
-            if (uasTmfOk(uasTmf(fdo, UAS_TMF_LOGICAL_UNIT_RESET, lun, 0))) {
-                uasEndLun(fdo, lun, SRB_STATUS_BUS_RESET);
-                continue;
-            }
-        }
-        uasResetDevice(fdo);
+    }
+    while (!IsListEmpty(&drain)) {
+        e = RemoveHeadList(&drain);
+        uasFailRequest(fdo, CONTAINING_RECORD(e, IRP, Tail.Overlay.ListEntry),
+                       SRB_STATUS_NO_DEVICE);
     }
     uasPump(fdo);
+    uasDeref(fdo);
 }
 
 /* ------------------------------------------------------------------ */
 /* Entries                                                            */
 /* ------------------------------------------------------------------ */
 
-/* PASSIVE_LEVEL. The slots, their IRPs, the shared read, the timer. */
+/* PASSIVE_LEVEL. The slots, their IRPs, the shared read, the timer, the
+ * rundown. */
 NTSTATUS UasEngineInit(PUAS_FDO fdo)
 {
     PUAS_SLOT slot;
@@ -1163,7 +1371,7 @@ cleanup:
     return STATUS_INSUFFICIENT_RESOURCES;
 }
 
-/* PASSIVE_LEVEL, after every transfer has completed (UasEngineStop). */
+/* PASSIVE_LEVEL, after UasEngineStop has run the engine down. */
 VOID UasEngineFree(PUAS_FDO fdo)
 {
     ULONG t;
@@ -1205,7 +1413,6 @@ VOID UasEngineStart(PUAS_FDO fdo)
     fdo->Dead = FALSE;
     fdo->Recovering = FALSE;
     fdo->RecoveryQueued = FALSE;
-    fdo->ResetRequested = FALSE;
     fdo->TimerStop = FALSE;
     KeClearEvent(&fdo->TimerDone);
     fdo->Started = TRUE;
@@ -1214,15 +1421,16 @@ VOID UasEngineStart(PUAS_FDO fdo)
 }
 
 /*
- * PASSIVE_LEVEL. Stops the timer and recovery, ends every request in flight
- * or queued with srbStatus, and waits for every transfer. The engine can be
- * started again afterwards.
+ * PASSIVE_LEVEL. Closes admission, stops the timer, ends every command in
+ * flight and fails every queued and held request with srbStatus, then runs
+ * the engine down: waits, with no timeout, until every transfer's
+ * completion, every recovery worker and every timer run has finished with
+ * the FDO. The engine can be started again afterwards.
  */
 VOID UasEngineStop(PUAS_FDO fdo, UCHAR srbStatus)
 {
     LIST_ENTRY drain;
     PLIST_ENTRY e;
-    BOOLEAN timerQueued;
     BOOLEAN wasStarted;
     KIRQL irql;
 
@@ -1232,62 +1440,265 @@ VOID UasEngineStop(PUAS_FDO fdo, UCHAR srbStatus)
     fdo->Started = FALSE;
     fdo->TimerStop = TRUE;
     KeReleaseSpinLock(&fdo->Lock, irql);
-    if (wasStarted) {
-        timerQueued = KeCancelTimer(&fdo->Timer);
-        if (!timerQueued) {
-            (VOID)KeWaitForSingleObject(&fdo->TimerDone, Executive,
-                                        KernelMode, FALSE, NULL);
-        }
+    if (wasStarted && !KeCancelTimer(&fdo->Timer)) {
+        (VOID)KeWaitForSingleObject(&fdo->TimerDone, Executive, KernelMode,
+                                    FALSE, NULL);
     }
-    (VOID)KeWaitForSingleObject(&fdo->RecoveryIdle, Executive, KernelMode,
-                                FALSE, NULL);
     if (fdo->Slots != NULL) {
-        (VOID)uasAbortAll(fdo, srbStatus);
+        uasAbortAll(fdo, srbStatus);
     }
     KeAcquireSpinLock(&fdo->Lock, &irql);
     while (!IsListEmpty(&fdo->Queue)) {
         e = RemoveHeadList(&fdo->Queue);
         InsertTailList(&drain, e);
     }
+    while (!IsListEmpty(&fdo->RecoveryRequests)) {
+        e = RemoveHeadList(&fdo->RecoveryRequests);
+        InsertTailList(&drain, e);
+    }
     KeReleaseSpinLock(&fdo->Lock, irql);
     while (!IsListEmpty(&drain)) {
         e = RemoveHeadList(&drain);
-        uasFailRequest(CONTAINING_RECORD(e, IRP, Tail.Overlay.ListEntry),
+        uasFailRequest(fdo, CONTAINING_RECORD(e, IRP, Tail.Overlay.ListEntry),
                        srbStatus);
     }
+
+    /* The rundown: drop the bias, wait for 0, take the bias back. */
+    KeClearEvent(&fdo->IoIdle);
+    if (InterlockedDecrement(&fdo->IoCount) != 0) {
+        (VOID)KeWaitForSingleObject(&fdo->IoIdle, Executive, KernelMode,
+                                    FALSE, NULL);
+    }
+    (VOID)InterlockedIncrement(&fdo->IoCount);
 }
 
 /* <= DISPATCH_LEVEL. Queues one SRB's IRP; it completes later. */
 NTSTATUS UasEngineSubmit(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
                          PSCSI_REQUEST_BLOCK srb)
 {
+    BOOLEAN admitted;
     KIRQL irql;
-    UCHAR refuse;
 
-    irp->Tail.Overlay.DriverContext[UAS_CTX_PDO] = pdo;
-    irp->Tail.Overlay.DriverContext[UAS_CTX_SRB] = srb;
-    irp->Tail.Overlay.DriverContext[UAS_CTX_EVENT] = NULL;
     srb->SrbStatus = SRB_STATUS_PENDING;
-    refuse = 0;
     KeAcquireSpinLock(&fdo->Lock, &irql);
-    if (!fdo->Started || fdo->Gone || fdo->Dead) {
-        refuse = SRB_STATUS_NO_DEVICE;
-    } else {
+    admitted = uasAdmit(fdo, pdo, irp, srb);
+    if (admitted) {
         IoMarkIrpPending(irp);
         InsertTailList(&fdo->Queue, &irp->Tail.Overlay.ListEntry);
     }
     KeReleaseSpinLock(&fdo->Lock, irql);
-    if (refuse != 0) {
-        uasFailRequest(irp, refuse);
-        return STATUS_NO_SUCH_DEVICE;
+    if (!admitted) {
+        srb->SrbStatus = SRB_STATUS_NO_DEVICE;
+        return UasCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
     }
     uasPump(fdo);
     return STATUS_PENDING;
 }
 
 /*
+ * <= DISPATCH_LEVEL. SRB_FUNCTION_ABORT_COMMAND. A victim still queued is
+ * taken off the queue and completed SRB_STATUS_ABORTED, and the abort SRB
+ * succeeds at once. A victim in flight is the recovery worker's: the abort
+ * SRB is held until ABORT TASK (or the reset it escalates to) has ended it.
+ * A victim that is neither has already completed: SRB_STATUS_ABORT_FAILED.
+ */
+NTSTATUS UasEngineAbort(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
+                        PSCSI_REQUEST_BLOCK srb)
+{
+    PLIST_ENTRY e;
+    PIRP victimIrp;
+    PSCSI_REQUEST_BLOCK victim;
+    BOOLEAN admitted;
+    BOOLEAN queue;
+    UCHAR st;
+    KIRQL irql;
+
+    victim = srb->NextSrb;
+    victimIrp = NULL;
+    queue = FALSE;
+    st = SRB_STATUS_ABORT_FAILED;
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    admitted = uasAdmit(fdo, pdo, irp, srb);
+    if (admitted && victim != NULL) {
+        for (e = fdo->Queue.Flink; e != &fdo->Queue; e = e->Flink) {
+            if (CONTAINING_RECORD(e, IRP, Tail.Overlay.ListEntry)
+                    ->Tail.Overlay.DriverContext[UAS_CTX_SRB] == victim) {
+                victimIrp = CONTAINING_RECORD(e, IRP, Tail.Overlay.ListEntry);
+                RemoveEntryList(e);
+                st = SRB_STATUS_SUCCESS;
+                break;
+            }
+        }
+        if (victimIrp == NULL && uasFindSrb(fdo, victim) != NULL) {
+            IoMarkIrpPending(irp);
+            InsertTailList(&fdo->RecoveryRequests,
+                           &irp->Tail.Overlay.ListEntry);
+            queue = uasWantRecovery(fdo);
+            st = 0;
+        }
+    }
+    KeReleaseSpinLock(&fdo->Lock, irql);
+    if (!admitted) {
+        srb->SrbStatus = SRB_STATUS_NO_DEVICE;
+        return UasCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+    }
+    if (victimIrp != NULL) {
+        uasFailRequest(fdo, victimIrp, SRB_STATUS_ABORTED);
+    }
+    if (st == 0) {
+        if (queue) {
+            ExQueueWorkItem(&fdo->Recovery, DelayedWorkQueue);
+        }
+        return STATUS_PENDING;
+    }
+    uasFailRequest(fdo, irp, st);
+    uasPump(fdo);
+    /* The status uasCompleteRequest gave the IRP. */
+    return (st == SRB_STATUS_SUCCESS) ? STATUS_SUCCESS
+                                      : STATUS_IO_DEVICE_ERROR;
+}
+
+/* <= DISPATCH_LEVEL. SRB_FUNCTION_RESET_DEVICE, _RESET_LOGICAL_UNIT and
+ * _RESET_BUS: held on the recovery list, one entry per SRB, and completed
+ * with the outcome of the LOGICAL UNIT RESET (or the port reset). */
+NTSTATUS UasEngineReset(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
+                        PSCSI_REQUEST_BLOCK srb)
+{
+    BOOLEAN admitted;
+    BOOLEAN queue;
+    KIRQL irql;
+
+    queue = FALSE;
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    admitted = uasAdmit(fdo, pdo, irp, srb);
+    if (admitted) {
+        IoMarkIrpPending(irp);
+        InsertTailList(&fdo->RecoveryRequests, &irp->Tail.Overlay.ListEntry);
+        queue = uasWantRecovery(fdo);
+    }
+    KeReleaseSpinLock(&fdo->Lock, irql);
+    if (!admitted) {
+        srb->SrbStatus = SRB_STATUS_NO_DEVICE;
+        return UasCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+    }
+    if (queue) {
+        ExQueueWorkItem(&fdo->Recovery, DelayedWorkQueue);
+    }
+    return STATUS_PENDING;
+}
+
+/* <= DISPATCH_LEVEL. SRB_FUNCTION_FLUSH_QUEUE: every request of the LUN
+ * still queued is completed SRB_STATUS_REQUEST_FLUSHED. */
+NTSTATUS UasEngineFlush(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
+                        PSCSI_REQUEST_BLOCK srb)
+{
+    LIST_ENTRY drain;
+    PLIST_ENTRY e;
+    PLIST_ENTRY next;
+    BOOLEAN admitted;
+    KIRQL irql;
+
+    InitializeListHead(&drain);
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    admitted = uasAdmit(fdo, pdo, irp, srb);
+    if (admitted) {
+        for (e = fdo->Queue.Flink; e != &fdo->Queue; e = next) {
+            next = e->Flink;
+            if (CONTAINING_RECORD(e, IRP, Tail.Overlay.ListEntry)
+                    ->Tail.Overlay.DriverContext[UAS_CTX_PDO] == pdo) {
+                RemoveEntryList(e);
+                InsertTailList(&drain, e);
+            }
+        }
+    }
+    KeReleaseSpinLock(&fdo->Lock, irql);
+    if (!admitted) {
+        srb->SrbStatus = SRB_STATUS_NO_DEVICE;
+        return UasCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+    }
+    while (!IsListEmpty(&drain)) {
+        e = RemoveHeadList(&drain);
+        uasFailRequest(fdo, CONTAINING_RECORD(e, IRP, Tail.Overlay.ListEntry),
+                       SRB_STATUS_REQUEST_FLUSHED);
+    }
+    uasFailRequest(fdo, irp, SRB_STATUS_SUCCESS);
+    return STATUS_SUCCESS;
+}
+
+/* <= DISPATCH_LEVEL. The LUN's PDO started: admission opens. */
+VOID UasEngineOpenLun(PUAS_FDO fdo, PUAS_PDO pdo)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    pdo->Admit = TRUE;
+    KeReleaseSpinLock(&fdo->Lock, irql);
+}
+
+/*
+ * PASSIVE_LEVEL. The LUN's PDO is stopping or leaving: admission closes,
+ * its queued and held requests are failed with srbStatus, its commands in
+ * flight are ended with it, and the call waits - with no timeout, since a
+ * command is finished only when the bus has given its transfers back - for
+ * the last of the LUN's requests to complete.
+ */
+VOID UasEngineCloseLun(PUAS_FDO fdo, PUAS_PDO pdo, UCHAR srbStatus)
+{
+    LIST_ENTRY drain;
+    PLIST_ENTRY e;
+    PLIST_ENTRY next;
+    ULONG t;
+    KIRQL irql;
+
+    InitializeListHead(&drain);
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    pdo->Admit = FALSE;
+    for (e = fdo->Queue.Flink; e != &fdo->Queue; e = next) {
+        next = e->Flink;
+        if (CONTAINING_RECORD(e, IRP, Tail.Overlay.ListEntry)
+                ->Tail.Overlay.DriverContext[UAS_CTX_PDO] == pdo) {
+            RemoveEntryList(e);
+            InsertTailList(&drain, e);
+        }
+    }
+    for (e = fdo->RecoveryRequests.Flink; e != &fdo->RecoveryRequests;
+         e = next) {
+        next = e->Flink;
+        if (CONTAINING_RECORD(e, IRP, Tail.Overlay.ListEntry)
+                ->Tail.Overlay.DriverContext[UAS_CTX_PDO] == pdo) {
+            RemoveEntryList(e);
+            InsertTailList(&drain, e);
+        }
+    }
+    KeReleaseSpinLock(&fdo->Lock, irql);
+    while (!IsListEmpty(&drain)) {
+        e = RemoveHeadList(&drain);
+        uasFailRequest(fdo, CONTAINING_RECORD(e, IRP, Tail.Overlay.ListEntry),
+                       srbStatus);
+    }
+    if (fdo->Slots != NULL) {
+        for (t = 1; t <= UAS_MAX_TAGS; t++) {
+            KeAcquireSpinLock(&fdo->Lock, &irql);
+            if (fdo->Slots[t].State != UAS_SLOT_FREE &&
+                !fdo->Slots[t].Tmf && fdo->Slots[t].Request != NULL &&
+                fdo->Slots[t].Request->Tail.Overlay.DriverContext[UAS_CTX_PDO]
+                    == pdo) {
+                KeReleaseSpinLock(&fdo->Lock, irql);
+                uasEndSlot(fdo, &fdo->Slots[t], srbStatus);
+            } else {
+                KeReleaseSpinLock(&fdo->Lock, irql);
+            }
+        }
+    }
+    (VOID)KeWaitForSingleObject(&pdo->RequestsIdle, Executive, KernelMode,
+                                FALSE, NULL);
+    uasPump(fdo);
+}
+
+/*
  * PASSIVE_LEVEL. One command of the driver's own (REPORT LUNS, INQUIRY)
  * through the same engine, waited for. buffer is nonpaged pool, read into.
+ * Only from the FDO's start, inside its PnP IRP.
  */
 NTSTATUS UasInternalCommand(PUAS_FDO fdo, ULONG lun, const UCHAR *cdb,
                             ULONG cdbLength, PVOID buffer, ULONG length,
@@ -1327,15 +1738,12 @@ NTSTATUS UasInternalCommand(PUAS_FDO fdo, ULONG lun, const UCHAR *cdb,
     srb->SrbFlags |= SRB_FLAGS_DISABLE_AUTOSENSE;
     srb->TimeOutValue = 10;
     srb->SrbStatus = SRB_STATUS_PENDING;
-    irp->Tail.Overlay.DriverContext[UAS_CTX_PDO] = NULL;
-    irp->Tail.Overlay.DriverContext[UAS_CTX_SRB] = srb;
-    irp->Tail.Overlay.DriverContext[UAS_CTX_EVENT] = &done;
 
-    queued = FALSE;
     KeAcquireSpinLock(&fdo->Lock, &irql);
-    if (fdo->Started && !fdo->Gone && !fdo->Dead) {
+    queued = uasAdmit(fdo, NULL, irp, srb);
+    if (queued) {
+        irp->Tail.Overlay.DriverContext[UAS_CTX_EVENT] = &done;
         InsertTailList(&fdo->Queue, &irp->Tail.Overlay.ListEntry);
-        queued = TRUE;
     }
     KeReleaseSpinLock(&fdo->Lock, irql);
     if (queued) {
@@ -1353,49 +1761,6 @@ NTSTATUS UasInternalCommand(PUAS_FDO fdo, ULONG lun, const UCHAR *cdb,
     IoFreeIrp(irp);
     UasFree(srb);
     return status;
-}
-
-/* <= DISPATCH_LEVEL. SRB_FUNCTION_ABORT_COMMAND: the victim, if it is in
- * flight, is treated as timed out, so recovery sends ABORT TASK for it. */
-VOID UasEngineAbortSrb(PUAS_FDO fdo, PSCSI_REQUEST_BLOCK victim)
-{
-    PUAS_SLOT slot;
-    BOOLEAN queue;
-    ULONG t;
-    KIRQL irql;
-
-    queue = FALSE;
-    KeAcquireSpinLock(&fdo->Lock, &irql);
-    if (fdo->Slots != NULL) {
-        for (t = 1; t <= fdo->Tags.Count; t++) {
-            slot = &fdo->Slots[t];
-            if (slot->State == UAS_SLOT_ACTIVE && !slot->Tmf &&
-                slot->Srb == victim && !slot->Aborted) {
-                slot->TimedOut = TRUE;
-                queue = uasWantRecovery(fdo);
-            }
-        }
-    }
-    KeReleaseSpinLock(&fdo->Lock, irql);
-    if (queue) {
-        ExQueueWorkItem(&fdo->Recovery, DelayedWorkQueue);
-    }
-}
-
-/* <= DISPATCH_LEVEL. SRB_FUNCTION_RESET_DEVICE: a LOGICAL UNIT RESET. */
-VOID UasEngineResetLun(PUAS_FDO fdo, ULONG lun)
-{
-    BOOLEAN queue;
-    KIRQL irql;
-
-    KeAcquireSpinLock(&fdo->Lock, &irql);
-    fdo->ResetRequested = TRUE;
-    fdo->ResetLun = lun;
-    queue = uasWantRecovery(fdo);
-    KeReleaseSpinLock(&fdo->Lock, irql);
-    if (queue) {
-        ExQueueWorkItem(&fdo->Recovery, DelayedWorkQueue);
-    }
 }
 
 /* <= DISPATCH_LEVEL. A LUN's queue was unlocked: start what waited. */

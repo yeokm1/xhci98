@@ -457,10 +457,26 @@ static NTSTATUS uasBusRelations(PUAS_FDO fdo, PIRP irp)
     return STATUS_SUCCESS;
 }
 
+/*
+ * After UasEngineStop: every request has completed and the engine has run
+ * down. Each LUN PDO's dispatches are then run down too (Gone set, the
+ * Busy bias dropped, the last dispatch waited for), so none still holds
+ * this FDO, before the PDO is deleted and the FDO's memory goes. PnP has
+ * sent each child its REMOVE before this parent's.
+ */
 static VOID uasFdoRemove(PUAS_FDO fdo)
 {
+    PUAS_PDO pdo;
     ULONG i;
 
+    for (i = 0; i < fdo->LunCount; i++) {
+        pdo = fdo->Luns[i];
+        pdo->Gone = TRUE;
+        if (InterlockedDecrement(&pdo->Busy) != 0) {
+            (VOID)KeWaitForSingleObject(&pdo->BusyIdle, Executive,
+                                        KernelMode, FALSE, NULL);
+        }
+    }
     UasStreamsClose(&fdo->Streams);
     UasEngineFree(fdo);
     for (i = 0; i < fdo->LunCount; i++) {

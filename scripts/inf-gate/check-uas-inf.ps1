@@ -184,9 +184,14 @@ function Test-UasInfText {
                 $file = ($l.Raw -split ',')[0].Trim()
                 if ($file -notmatch '^[A-Za-z0-9_\-]{1,8}(\.[A-Za-z0-9_]{1,3})?$') { & $add "W98-83" "[$name] copies '$file', not an 8.3 name." }
                 $copied[$file.ToLowerInvariant()] = $destOf[$name.ToLowerInvariant()]
+                $file.ToLowerInvariant()
             }
         }
     }
+    # $checkCopy emits the files its CopyFiles list copies, so each install
+    # path is held to its OWN set: $copied is the union over every path, and
+    # a file one path copies says nothing about another (Codex review of
+    # 31-A.2, round 1).
 
     # [Manufacturer] and the models.
     $mfg = & $get "Manufacturer"
@@ -238,16 +243,15 @@ function Test-UasInfText {
             }
             if (-not $haveLoader) { & $add "PATH-9X" "[$inst] writes no HKR,,DevLoader,,*NTKERN." }
             if (-not $haveMp) { & $add "PATH-9X" "[$inst] writes no HKR,,NTMPDriver,,$binary." }
-            $before = $copied.Count
-            & $checkCopy ((& $directive $s9 "CopyFiles") -join ',') "[$inst]"
-            if (-not $copied.ContainsKey($binary)) { & $add "PATH-9X" "[$inst] does not copy $binary." }
+            $own = @(& $checkCopy ((& $directive $s9 "CopyFiles") -join ',') "[$inst]")
+            if ($own -notcontains $binary) { & $add "PATH-9X" "[$inst] does not copy $binary." }
         }
         # NT.
         $snt = & $get "$inst$ntSuffix"
         if ($null -eq $snt) { & $add "PATH-NT" "no [$inst$ntSuffix] for the NT targets." }
         else {
-            & $checkCopy ((& $directive $snt "CopyFiles") -join ',') "[$inst$ntSuffix]"
-            if (-not $copied.ContainsKey($binary)) { & $add "PATH-NT" "[$inst$ntSuffix] does not copy $binary." }
+            $own = @(& $checkCopy ((& $directive $snt "CopyFiles") -join ',') "[$inst$ntSuffix]")
+            if ($own -notcontains $binary) { & $add "PATH-NT" "[$inst$ntSuffix] does not copy $binary." }
         }
         $ssv = & $get "$inst$ntSuffix.Services"
         if ($null -eq $ssv) { & $add "PATH-NT" "no [$inst$ntSuffix.Services]: the NT targets would install a devnode with no service." }
@@ -276,7 +280,7 @@ function Test-UasInfText {
     }
     foreach ($d in @("DefaultInstall", "DefaultInstall$ntSuffix")) {
         $ds = & $get $d
-        if ($null -ne $ds) { & $checkCopy ((& $directive $ds "CopyFiles") -join ',') "[$d]" }
+        if ($null -ne $ds) { $null = @(& $checkCopy ((& $directive $ds "CopyFiles") -join ',') "[$d]") }
     }
     if ($copied.ContainsKey($binary) -and $copied[$binary] -ne "10,System32\Drivers") {
         & $add "BOTH-DEST" "$binary goes to '$($copied[$binary])', not 10,System32\Drivers."
@@ -326,6 +330,7 @@ if ($SelfTest) {
                 @{ Rule = "FILE-ASCII";    Text = $text.Replace('Provider="Yeo', ('Provider="' + [char]0xE9 + 'Yeo')) },
                 @{ Rule = "UAS-ID";        Text = $text.Replace("Prot_62", "Prot_50") },
                 @{ Rule = "PATH-NT";       Text = $text.Replace("[Uas.Dev.NTx86.Services]", "[Uas.Dev.NTx86.Svc]") },
+                @{ Rule = "PATH-NT";       Text = $text.Replace("[Uas.Dev.NTx86]`r`nCopyFiles=Uas.CopyFiles", "[Uas.Dev.NTx86]") },
                 @{ Rule = "PATH-9X";       Text = $text.Replace("HKR,,NTMPDriver,,xhciuas.sys", "HKR,,NTMPDriver,,other.sys") },
                 @{ Rule = "BOTH-VERSION";  Text = ($text -replace 'DriverVer=\d\d/\d\d/\d{4},[0-9.]+', 'DriverVer=01/01/2020,9.9.9.9') },
                 @{ Rule = "W98-DIRID12";   Text = $text.Replace("Uas.CopyFiles=10,System32\Drivers", "Uas.CopyFiles=12") },
@@ -339,6 +344,7 @@ if ($SelfTest) {
             $cases = @(
                 @{ Rule = "UAS-ID";        Text = $text.Replace("Prot_62", "Prot_50") },
                 @{ Rule = "PATH-NT";       Text = $text.Replace("[Uas.Dev.NTamd64.Services]", "[Uas.Dev.NTamd64.Svc]") },
+                @{ Rule = "PATH-NT";       Text = $text.Replace("[Uas.Dev.NTamd64]`r`nCopyFiles=Uas.CopyFiles", "[Uas.Dev.NTamd64]") },
                 @{ Rule = "PATH-MFGDEC";   Text = $text.Replace("%Mfg%=UasModels,NTamd64", "%Mfg%=UasModels,NTamd64,NTamd64.6.0") },
                 @{ Rule = "PATH-NO9X";     Text = $text.Replace("[UasModels.NTamd64]", "[UasModels]`r`n%UasDesc%=Uas.Dev,USB\Class_08&SubClass_06&Prot_62`r`n`r`n[UasModels.NTamd64]") },
                 @{ Rule = "PATH-NO9X";     Text = $text.Replace("[Uas.Dev.NTamd64]", "[Uas.Dev]`r`nCopyFiles=Uas.CopyFiles`r`n`r`n[Uas.Dev.NTamd64]") },

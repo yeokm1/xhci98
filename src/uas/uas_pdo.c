@@ -19,11 +19,21 @@
  * (10) and (16), TEST UNIT READY, MODE SENSE, REQUEST SENSE, SYNCHRONIZE
  * CACHE, START STOP UNIT and the rest all travel in a COMMAND IU as they
  * came. The queue is never frozen: a failed SRB completes with autosense and
- * without SRB_STATUS_QUEUE_FROZEN, so RELEASE_QUEUE and FLUSH_QUEUE have
- * nothing to do. LOCK_QUEUE and UNLOCK_QUEUE hold back every SRB of the LUN
- * not flagged SRB_FLAGS_BYPASS_LOCKED_QUEUE (the class driver's power
- * path). CLAIM_DEVICE and RELEASE_DEVICE keep one claimant. ABORT_COMMAND
- * and RESET_DEVICE go to recovery as ABORT TASK and LOGICAL UNIT RESET.
+ * without SRB_STATUS_QUEUE_FROZEN, so RELEASE_QUEUE has nothing to do;
+ * FLUSH_QUEUE completes the LUN's queued requests SRB_STATUS_REQUEST_FLUSHED.
+ * LOCK_QUEUE and UNLOCK_QUEUE hold back every SRB of the LUN not flagged
+ * SRB_FLAGS_BYPASS_LOCKED_QUEUE (the class driver's power path).
+ * CLAIM_DEVICE and RELEASE_DEVICE keep one claimant. ABORT_COMMAND takes a
+ * queued victim off the queue, or holds the abort SRB while recovery sends
+ * ABORT TASK for one in flight; the reset SRBs are held while recovery
+ * sends LOGICAL UNIT RESET (or resets the port). Each completes with its
+ * outcome, not before it.
+ *
+ * LIFETIME. STOP, SURPRISE_REMOVAL and REMOVE close the LUN's admission and
+ * wait for its requests to finish (UasEngineCloseLun). The SCSI and device
+ * control dispatches run inside pdo->Busy, which the parent's removal waits
+ * out before the parent goes (uas_fdo.c); PnP IRPs reach a PDO only while
+ * its parent is there, PnP sending the parent's REMOVE last.
  *
  * IRQL: UasPdoCreate and PnP and power at PASSIVE_LEVEL; SCSI and device
  * control at <= DISPATCH_LEVEL.
@@ -83,6 +93,9 @@ NTSTATUS UasPdoCreate(PUAS_FDO fdo, ULONG lun, const UCHAR *inquiry,
     pdo->Fdo = fdo;
     pdo->Lun = lun;
     pdo->Present = TRUE;
+    pdo->Busy = 1;
+    KeInitializeEvent(&pdo->BusyIdle, NotificationEvent, FALSE);
+    KeInitializeEvent(&pdo->RequestsIdle, NotificationEvent, TRUE);
     UasCopy(pdo->Inquiry, inquiry, UAS_INQUIRY_LENGTH);
     self->Flags |= DO_DIRECT_IO | DO_POWER_PAGABLE;
     self->Flags &= ~DO_DEVICE_INITIALIZING;
@@ -170,8 +183,13 @@ NTSTATUS UasPdoPnp(PUAS_PDO pdo, PIRP irp)
     status = irp->IoStatus.Status;
     switch (stack->MinorFunction) {
     case IRP_MN_START_DEVICE:
+        if (pdo->Fdo == NULL) {
+            status = STATUS_NO_SUCH_DEVICE;
+            break;
+        }
         pdo->Started = TRUE;
         pdo->Removed = FALSE;
+        UasEngineOpenLun(pdo->Fdo, pdo);
         status = STATUS_SUCCESS;
         break;
 
@@ -183,15 +201,30 @@ NTSTATUS UasPdoPnp(PUAS_PDO pdo, PIRP irp)
         break;
 
     case IRP_MN_STOP_DEVICE:
+        pdo->Started = FALSE;
+        if (pdo->Fdo != NULL) {
+            UasEngineCloseLun(pdo->Fdo, pdo, SRB_STATUS_REQUEST_FLUSHED);
+        }
+        status = STATUS_SUCCESS;
+        break;
+
     case IRP_MN_SURPRISE_REMOVAL:
         pdo->Started = FALSE;
+        if (pdo->Fdo != NULL) {
+            UasEngineCloseLun(pdo->Fdo, pdo, SRB_STATUS_NO_DEVICE);
+        }
         status = STATUS_SUCCESS;
         break;
 
     case IRP_MN_REMOVE_DEVICE:
-        /* The object stays until the FDO is removed: the unit is still on
-         * the bus while the FDO reports it, and PnP may start it again. */
+        /* Admission closed and the LUN's requests all finished before the
+         * queue lock and the claim are cleared. The object stays until the
+         * FDO is removed: the unit is still on the bus while the FDO reports
+         * it, and PnP may start it again. */
         pdo->Started = FALSE;
+        if (pdo->Fdo != NULL) {
+            UasEngineCloseLun(pdo->Fdo, pdo, SRB_STATUS_NO_DEVICE);
+        }
         pdo->Removed = TRUE;
         pdo->QueueLocked = FALSE;
         pdo->Claimed = FALSE;
@@ -294,23 +327,58 @@ static NTSTATUS uasSrbDone(PIRP irp, PSCSI_REQUEST_BLOCK srb, UCHAR srbStatus)
     return UasCompleteIrp(irp, status, 0);
 }
 
+/* The parent rundown: a dispatch that will read pdo->Fdo enters, and the
+ * parent's removal sets Gone and waits for the last to leave. */
+static BOOLEAN uasPdoEnter(PUAS_PDO pdo)
+{
+    (VOID)InterlockedIncrement(&pdo->Busy);
+    if (pdo->Gone || pdo->Fdo == NULL) {
+        if (InterlockedDecrement(&pdo->Busy) == 0) {
+            KeSetEvent(&pdo->BusyIdle, IO_NO_INCREMENT, FALSE);
+        }
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static VOID uasPdoLeave(PUAS_PDO pdo)
+{
+    if (InterlockedDecrement(&pdo->Busy) == 0) {
+        KeSetEvent(&pdo->BusyIdle, IO_NO_INCREMENT, FALSE);
+    }
+}
+
+static NTSTATUS uasPdoScsiInside(PUAS_PDO pdo, PUAS_FDO fdo, PIRP irp,
+                                 PSCSI_REQUEST_BLOCK srb);
+
 NTSTATUS UasPdoScsi(PUAS_PDO pdo, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
     PSCSI_REQUEST_BLOCK srb;
-    PUAS_FDO fdo;
-    UCHAR result;
-    KIRQL irql;
+    NTSTATUS status;
 
     stack = IoGetCurrentIrpStackLocation(irp);
     srb = stack->Parameters.Scsi.Srb;
-    fdo = pdo->Fdo;
     if (srb == NULL) {
         return UasCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
     }
-    if (fdo == NULL || !pdo->Present) {
+    if (!uasPdoEnter(pdo)) {
         return uasSrbDone(irp, srb, SRB_STATUS_NO_DEVICE);
     }
+    if (!pdo->Present) {
+        status = uasSrbDone(irp, srb, SRB_STATUS_NO_DEVICE);
+    } else {
+        status = uasPdoScsiInside(pdo, pdo->Fdo, irp, srb);
+    }
+    uasPdoLeave(pdo);
+    return status;
+}
+
+static NTSTATUS uasPdoScsiInside(PUAS_PDO pdo, PUAS_FDO fdo, PIRP irp,
+                                 PSCSI_REQUEST_BLOCK srb)
+{
+    UCHAR result;
+    KIRQL irql;
 
     switch (srb->Function) {
     case SRB_FUNCTION_EXECUTE_SCSI:
@@ -348,22 +416,20 @@ NTSTATUS UasPdoScsi(PUAS_PDO pdo, PIRP irp)
         return uasSrbDone(irp, srb, SRB_STATUS_SUCCESS);
 
     case SRB_FUNCTION_RELEASE_QUEUE:
-    case SRB_FUNCTION_FLUSH_QUEUE:
     case SRB_FUNCTION_FLUSH:
     case SRB_FUNCTION_SHUTDOWN:
         return uasSrbDone(irp, srb, SRB_STATUS_SUCCESS);
 
+    case SRB_FUNCTION_FLUSH_QUEUE:
+        return UasEngineFlush(fdo, pdo, irp, srb);
+
     case SRB_FUNCTION_ABORT_COMMAND:
-        if (srb->NextSrb != NULL) {
-            UasEngineAbortSrb(fdo, srb->NextSrb);
-        }
-        return uasSrbDone(irp, srb, SRB_STATUS_SUCCESS);
+        return UasEngineAbort(fdo, pdo, irp, srb);
 
     case SRB_FUNCTION_RESET_DEVICE:
     case SRB_FUNCTION_RESET_LOGICAL_UNIT:
     case SRB_FUNCTION_RESET_BUS:
-        UasEngineResetLun(fdo, pdo->Lun);
-        return uasSrbDone(irp, srb, SRB_STATUS_SUCCESS);
+        return UasEngineReset(fdo, pdo, irp, srb);
 
     default:
         return uasSrbDone(irp, srb, SRB_STATUS_INVALID_REQUEST);
@@ -485,7 +551,11 @@ NTSTATUS UasPdoDeviceControl(PUAS_PDO pdo, PIRP irp)
     inLength = stack->Parameters.DeviceIoControl.InputBufferLength;
     outLength = stack->Parameters.DeviceIoControl.OutputBufferLength;
     written = 0;
-    if (!pdo->Present || pdo->Fdo == NULL) {
+    if (!uasPdoEnter(pdo)) {
+        return UasCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+    }
+    if (!pdo->Present) {
+        uasPdoLeave(pdo);
         return UasCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
     }
 
@@ -545,5 +615,7 @@ NTSTATUS UasPdoDeviceControl(PUAS_PDO pdo, PIRP irp)
         status = STATUS_INVALID_DEVICE_REQUEST;
         break;
     }
-    return UasCompleteIrp(irp, status, written);
+    status = UasCompleteIrp(irp, status, written);
+    uasPdoLeave(pdo);
+    return status;
 }

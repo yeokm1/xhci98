@@ -81,8 +81,10 @@ static NTSTATUS uasAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
     fdo->Pdo = pdo;
     KeInitializeSpinLock(&fdo->Lock);
     InitializeListHead(&fdo->Queue);
+    InitializeListHead(&fdo->RecoveryRequests);
     KeInitializeEvent(&fdo->TimerDone, NotificationEvent, TRUE);
-    KeInitializeEvent(&fdo->RecoveryIdle, NotificationEvent, TRUE);
+    fdo->IoCount = 1;
+    KeInitializeEvent(&fdo->IoIdle, NotificationEvent, FALSE);
     fdo->Lower = IoAttachDeviceToDeviceStack(self, pdo);
     if (fdo->Lower == NULL) {
         IoDeleteDevice(self);

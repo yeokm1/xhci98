@@ -86,9 +86,9 @@ struct _UAS_PDO;
 /*
  * One bulk transfer. Its IRP is this driver's own memory, initialised with
  * the I/O manager's IRP initialiser before each use and freed only at
- * stop (uas_mem.c, UasIrpReset), so an IoCancelIrp
- * made after the lock is dropped can never reach freed memory (uas_xport.c,
- * "Cancellation").
+ * stop (uas_mem.c, UasIrpReset). A transfer is not built again, and its
+ * slot not recycled, while Busy or while CancelRefs says an IoCancelIrp on
+ * it has not yet returned (uas_xport.c, "CANCELLATION").
  */
 typedef struct _UAS_XFER {
     struct _UAS_FDO *Fdo;
@@ -98,6 +98,7 @@ typedef struct _UAS_XFER {
     USHORT IrpSize;
     BOOLEAN Busy;                   /* submitted, completion not yet run */
     BOOLEAN Cancelling;             /* this driver cancelled it */
+    LONG CancelRefs;                /* IoCancelIrp calls not yet returned */
     struct _URB_BULK_OR_INTERRUPT_TRANSFER Urb;
 } UAS_XFER, *PUAS_XFER;
 
@@ -118,7 +119,8 @@ typedef struct _UAS_SLOT {
     BOOLEAN NeedsData;
     BOOLEAN TimedOut;
     BOOLEAN Failed;                 /* a transfer failed: recovery owns it */
-    BOOLEAN Aborted;                /* recovery completed it */
+    BOOLEAN Aborted;                /* ended by recovery or teardown, with
+                                     * FinalSrbStatus; finished when idle */
     BOOLEAN ResponseOnly;           /* a RESPONSE IU ended a command */
     BOOLEAN TmfSignalled;
     BOOLEAN Finishing;              /* handed to uasFinish, by one path only */
@@ -139,7 +141,17 @@ typedef struct _UAS_SLOT {
     UAS_XFER Xfer[UAS_XFERS];
 } UAS_SLOT, *PUAS_SLOT;
 
-/* One logical unit's PDO extension. */
+/*
+ * One logical unit's PDO extension.
+ *
+ * Two rundowns. Requests counts the LUN's requests the engine holds (queued,
+ * in flight, or waiting on recovery), under the FDO lock, with RequestsIdle
+ * set when it is 0; Admit, also under that lock, closes admission, so a
+ * PDO's STOP, SURPRISE_REMOVAL and REMOVE close it and wait the count out.
+ * Busy counts the SCSI and device-control dispatches inside the driver,
+ * which read Fdo: it starts at 1 (the bias), and the FDO's removal sets Gone
+ * and waits it out before the parent's extension can go.
+ */
 typedef struct _UAS_PDO {
     ULONG Kind;
     PDEVICE_OBJECT Self;
@@ -150,6 +162,12 @@ typedef struct _UAS_PDO {
     BOOLEAN Removed;
     BOOLEAN Claimed;
     BOOLEAN QueueLocked;            /* SRB_FUNCTION_LOCK_QUEUE */
+    BOOLEAN Admit;                  /* FDO lock: new requests accepted */
+    BOOLEAN Gone;                   /* the parent is going: no Fdo access */
+    ULONG Requests;                 /* FDO lock */
+    KEVENT RequestsIdle;
+    LONG Busy;
+    KEVENT BusyIdle;
     UCHAR Inquiry[UAS_INQUIRY_LENGTH];
 } UAS_PDO, *PUAS_PDO;
 
@@ -167,8 +185,6 @@ typedef struct _UAS_FDO {
     BOOLEAN Recovering;
     BOOLEAN RecoveryQueued;
     BOOLEAN Dead;                   /* a reset failed: every SRB fails */
-    BOOLEAN ResetRequested;         /* a LOGICAL UNIT RESET is wanted */
-    ULONG ResetLun;
 
     /* The configuration this driver selected. */
     PUCHAR Config;
@@ -184,6 +200,8 @@ typedef struct _UAS_FDO {
     ULONG QueueDepth;               /* commands in flight at most */
     ULONG Active;                   /* commands (not TMFs) in flight */
     LIST_ENTRY Queue;               /* IRPs, linked by Tail.Overlay.ListEntry */
+    LIST_ENTRY RecoveryRequests;    /* ABORT_COMMAND and reset SRBs held for
+                                     * the recovery worker's outcome */
     PUAS_SLOT Slots;                /* UAS_MAX_TAGS + 1, indexed by tag */
     UAS_XFER SharedStatus;          /* streamless: the one status reader */
     PUCHAR SharedBuffer;
@@ -194,7 +212,13 @@ typedef struct _UAS_FDO {
     BOOLEAN TimerStop;
     KEVENT TimerDone;
     WORK_QUEUE_ITEM Recovery;
-    KEVENT RecoveryIdle;
+
+    /* The engine's rundown: 1 (the bias) plus one per transfer from build
+     * to the end of its completion routine, per queued recovery worker to
+     * its last access, and per timer DPC run. IoIdle is set at 0, which only
+     * UasEngineStop's drain reaches. */
+    LONG IoCount;
+    KEVENT IoIdle;
 
     /* The logical units. */
     ULONG LunCount;
@@ -245,8 +269,9 @@ NTSTATUS UasPdoPower(PUAS_PDO pdo, PIRP irp);
 NTSTATUS UasPdoScsi(PUAS_PDO pdo, PIRP irp);
 NTSTATUS UasPdoDeviceControl(PUAS_PDO pdo, PIRP irp);
 
-/* uas_xport.c - the engine. Init/Start/Stop/Internal at PASSIVE; Submit at
- * <= DISPATCH, caller holding no lock. */
+/* uas_xport.c - the engine. Init/Start/Stop/Internal/CloseLun at PASSIVE;
+ * Submit, Abort, Reset, Flush, OpenLun and UnlockQueue at <= DISPATCH;
+ * callers hold no lock. */
 NTSTATUS UasEngineInit(PUAS_FDO fdo);
 VOID UasEngineStart(PUAS_FDO fdo);
 VOID UasEngineStop(PUAS_FDO fdo, UCHAR srbStatus);
@@ -256,8 +281,14 @@ NTSTATUS UasEngineSubmit(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
 NTSTATUS UasInternalCommand(PUAS_FDO fdo, ULONG lun, const UCHAR *cdb,
                             ULONG cdbLength, PVOID buffer, ULONG length,
                             PULONG transferred, PUCHAR scsiStatus);
-VOID UasEngineAbortSrb(PUAS_FDO fdo, PSCSI_REQUEST_BLOCK victim);
-VOID UasEngineResetLun(PUAS_FDO fdo, ULONG lun);
+NTSTATUS UasEngineAbort(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
+                        PSCSI_REQUEST_BLOCK srb);
+NTSTATUS UasEngineReset(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
+                        PSCSI_REQUEST_BLOCK srb);
+NTSTATUS UasEngineFlush(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
+                        PSCSI_REQUEST_BLOCK srb);
 VOID UasEngineUnlockQueue(PUAS_FDO fdo);
+VOID UasEngineOpenLun(PUAS_FDO fdo, PUAS_PDO pdo);
+VOID UasEngineCloseLun(PUAS_FDO fdo, PUAS_PDO pdo, UCHAR srbStatus);
 
 #endif /* UAS_H */
