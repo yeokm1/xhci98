@@ -837,3 +837,105 @@ ULONG XhciPipeConfigureUsbdStatus(ULONG completionCode)
         return XHCI_PIPE_USBD_INTERNAL_HC_ERROR;
     }
 }
+
+ULONG XhciPipeResetParts(ULONG function)
+{
+    switch (function) {
+    case XHCI_PIPE_URB_RESET_PIPE:
+        return XHCI_PIPE_RESET_HOST | XHCI_PIPE_RESET_DEVICE;
+    case XHCI_PIPE_URB_SYNC_RESET_PIPE:
+        return XHCI_PIPE_RESET_HOST;
+    case XHCI_PIPE_URB_SYNC_CLEAR_STALL:
+        return XHCI_PIPE_RESET_DEVICE;
+    default:
+        return 0;
+    }
+}
+
+ULONG XhciPipeUsbdiSize(ULONG version, ULONG pointerBytes)
+{
+    ULONG pointers;
+
+    if (pointerBytes != 4UL && pointerBytes != 8UL) {
+        return 0;
+    }
+    switch (version) {
+    case 0:
+        pointers = 7;
+        break;
+    case 1:
+        pointers = 8;
+        break;
+    case 2:
+        pointers = 9;
+        break;
+    case 3:
+        pointers = 11;
+        break;
+    default:
+        return 0;
+    }
+    /* Size and Version, padded to the first pointer. */
+    return pointerBytes + pointers * pointerBytes;
+}
+
+static VOID xhciPipePut32(UCHAR *p, ULONG value)
+{
+    p[0] = (UCHAR)(value & 0xFFUL);
+    p[1] = (UCHAR)((value >> 8) & 0xFFUL);
+    p[2] = (UCHAR)((value >> 16) & 0xFFUL);
+    p[3] = (UCHAR)((value >> 24) & 0xFFUL);
+}
+
+ULONG XhciPipeBusInformation(ULONG level, ULONG totalBandwidth,
+                             ULONG consumedBandwidth, UCHAR *buffer,
+                             PULONG length, PULONG actual)
+{
+    ULONG need;
+    ULONG i;
+
+    if (level == 0) {
+        need = XHCI_PIPE_BUSINFO0_BYTES;
+    } else if (level == 1) {
+        need = XHCI_PIPE_BUSINFO1_BYTES;
+    } else {
+        return XHCI_PIPE_UNSUPPORTED;
+    }
+    if (actual != NULL) {
+        *actual = need;
+    }
+    if (length == NULL) {
+        return XHCI_PIPE_BAD_PARAM;
+    }
+    if (*length < need) {
+        return XHCI_PIPE_TOO_SMALL;
+    }
+    if (buffer == NULL) {
+        return XHCI_PIPE_BAD_PARAM;
+    }
+    for (i = 0; i < need; i++) {
+        buffer[i] = 0;
+    }
+    xhciPipePut32(buffer, totalBandwidth);
+    xhciPipePut32(buffer + 4, consumedBandwidth);
+    *length = need;
+    return XHCI_PIPE_OK;
+}
+
+ULONG XhciPipeTopologyAddress(ULONG pciBus, ULONG pciAddress, ULONG rootPort,
+                              UCHAR *out)
+{
+    ULONG i;
+
+    if (out == NULL || rootPort == 0 || rootPort > 255UL) {
+        return XHCI_PIPE_BAD_PARAM;
+    }
+    for (i = 0; i < XHCI_PIPE_TOPOLOGY_BYTES; i++) {
+        out[i] = 0;
+    }
+    xhciPipePut32(out, pciBus);
+    xhciPipePut32(out + 4, (pciAddress >> 16) & 0xFFFFUL);
+    xhciPipePut32(out + 8, pciAddress & 0xFFFFUL);
+    out[16] = (UCHAR)(rootPort & 0xFFUL);
+    return XHCI_PIPE_OK;
+}

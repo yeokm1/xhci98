@@ -12,7 +12,17 @@
  * traced once (design record 13 section 6.3 lists what each target's class
  * drivers send).
  *
- * IRQL: <= DISPATCH_LEVEL (a function driver may send these at DISPATCH).
+ * What Windows XP onward adds (task 28-A.1; design record 13 sections 6.4
+ * and 6.5) is here too: USB_BUS_INTERFACE_USBDI V0 to V3, the IRP-less
+ * interface XP and XP x64 usbstor and usbaudio and Vista and 7 usbstor and
+ * usbaudio query; GET_DEVICE_HANDLE; SUBMIT_IDLE_NOTIFICATION, held;
+ * GET_TOPOLOGY_ADDRESS (Windows 7 usbstor); RECORD_FAILURE (Windows 7
+ * usbaudio); and the SYNC_RESET_PIPE / SYNC_CLEAR_STALL halves of
+ * RESET_PIPE (hcd_cfg.c).
+ *
+ * IRQL: <= DISPATCH_LEVEL (a function driver may send these at DISPATCH),
+ * except HcdUrbQueryInterface (PASSIVE_LEVEL, a PnP IRP) and the bus
+ * interface's functions (any IRQL, as usbbusif.h requires).
  */
 
 /* The DDK's USB headers come first: WDK 7.1's usb200.h declares
@@ -25,6 +35,12 @@
 #include "xhci_hw.h"
 #include "xhci_dbg.h"
 #include "xhci_pipe.h"
+
+/* The amd64 build's WDK carries usbbusif.h, and the structures below are
+ * checked against it there; the Windows 2000 DDK has none. */
+#ifdef _WIN64
+#include <usbbusif.h>
+#endif
 
 /* Absent from the Windows 2000 DDK's usbdi.h; values as WDK 7.1's
  * inc\api\usb.h defines them (lines 459 and 439). */
@@ -54,6 +70,158 @@ static LONG hcdIoctlSeen[HCD_IOCTL_SLOTS];
  * usbport's own value was not read. */
 #define HCD_BUS_BANDWIDTH_FULL   12000UL
 #define HCD_BUS_BANDWIDTH_HIGH   400000UL
+
+/*
+ * The internal IOCTLs Windows XP onward adds, absent from the Windows 2000
+ * DDK's usbioctl.h (and the NT 6.x ones from WDK 7.1's WNET headers): WDK
+ * 7.1 inc\api\usbiodef.h lines 56-66 for the function indexes, usbioctl.h
+ * for METHOD_NEITHER, design record 13 section 6.1 for the values, which the
+ * asserts below restate.
+ */
+#ifndef IOCTL_INTERNAL_USB_SUBMIT_IDLE_NOTIFICATION
+#define IOCTL_INTERNAL_USB_SUBMIT_IDLE_NOTIFICATION                           \
+    CTL_CODE(FILE_DEVICE_USB, 9, METHOD_NEITHER, FILE_ANY_ACCESS)
+#endif
+#ifndef IOCTL_INTERNAL_USB_RECORD_FAILURE
+#define IOCTL_INTERNAL_USB_RECORD_FAILURE                                     \
+    CTL_CODE(FILE_DEVICE_USB, 10, METHOD_NEITHER, FILE_ANY_ACCESS)
+#endif
+#ifndef IOCTL_INTERNAL_USB_GET_DEVICE_HANDLE
+#define IOCTL_INTERNAL_USB_GET_DEVICE_HANDLE                                  \
+    CTL_CODE(FILE_DEVICE_USB, 268, METHOD_NEITHER, FILE_ANY_ACCESS)
+#endif
+#ifndef IOCTL_INTERNAL_USB_GET_TOPOLOGY_ADDRESS
+#define IOCTL_INTERNAL_USB_GET_TOPOLOGY_ADDRESS                               \
+    CTL_CODE(FILE_DEVICE_USB, 271, METHOD_NEITHER, FILE_ANY_ACCESS)
+#endif
+
+XHCI_C_ASSERT(ioctl_idle_value,
+              IOCTL_INTERNAL_USB_SUBMIT_IDLE_NOTIFICATION == 0x220027UL);
+XHCI_C_ASSERT(ioctl_failure_value,
+              IOCTL_INTERNAL_USB_RECORD_FAILURE == 0x22002BUL);
+XHCI_C_ASSERT(ioctl_handle_value,
+              IOCTL_INTERNAL_USB_GET_DEVICE_HANDLE == 0x220433UL);
+XHCI_C_ASSERT(ioctl_topology_value,
+              IOCTL_INTERNAL_USB_GET_TOPOLOGY_ADDRESS == 0x22043FUL);
+
+/* The URB functions XP onward adds that are refused here, by name in the
+ * trace (WDK 7.1 inc\api\usb.h). */
+#define HCD_URB_GET_MS_FEATURE_DESCRIPTOR   0x002AUL
+
+#ifndef STATUS_NO_CALLBACK_ACTIVE
+#define STATUS_NO_CALLBACK_ACTIVE ((NTSTATUS)0xC0000258L)
+#endif
+
+/* USB_IDLE_CALLBACK_INFO (WDK 7.1 usbioctl.h): the callback and its
+ * context. Only read for NULL here: the bus never calls the callback. */
+typedef struct _HCD_IDLE_CALLBACK_INFO {
+    PVOID IdleCallback;
+    PVOID IdleContext;
+} HCD_IDLE_CALLBACK_INFO, *PHCD_IDLE_CALLBACK_INFO;
+
+/* USB_START_FAILDATA (WDK 7.1 usbioctl.h), read for the trace only. */
+typedef struct _HCD_START_FAILDATA {
+    ULONG LengthInBytes;
+    NTSTATUS NtStatus;
+    LONG UsbdStatus;
+    ULONG ConnectStatus;
+    UCHAR DriverData[4];
+} HCD_START_FAILDATA, *PHCD_START_FAILDATA;
+
+/*
+ * USB_BUS_INTERFACE_USBDI_V3 (WDK 7.1 inc\ddk\usbbusif.h lines 252-414),
+ * the union of V0 to V2 as each is a prefix of the next. Declared here
+ * because the Windows 2000 DDK has no usbbusif.h; every function pointer is
+ * USB_BUSIFFN (__stdcall), and InterfaceReference / InterfaceDereference
+ * are the DDK's PINTERFACE_REFERENCE, whose convention the build's default
+ * gives. The offsets are asserted against design record 13 section 6.1's
+ * sizes, which were read from the class drivers' own stores, and on the
+ * amd64 build against the WDK's own structures too.
+ */
+#define HCD_BUSIFFN __stdcall
+
+typedef VOID (HCD_BUSIFFN *HCD_BUSIF_GETUSBDI_VERSION)(
+    PVOID, PUSBD_VERSION_INFORMATION, PULONG);
+typedef NTSTATUS (HCD_BUSIFFN *HCD_BUSIF_QUERY_BUS_TIME)(PVOID, PULONG);
+typedef NTSTATUS (HCD_BUSIFFN *HCD_BUSIF_SUBMIT_ISO_OUT_URB)(PVOID, PURB);
+typedef NTSTATUS (HCD_BUSIFFN *HCD_BUSIF_QUERY_BUS_INFORMATION)(
+    PVOID, ULONG, PVOID, PULONG, PULONG);
+typedef BOOLEAN (HCD_BUSIFFN *HCD_BUSIF_IS_DEVICE_HIGH_SPEED)(PVOID);
+typedef NTSTATUS (HCD_BUSIFFN *HCD_BUSIF_ENUM_LOG_ENTRY)(
+    PVOID, ULONG, ULONG, ULONG, ULONG);
+typedef NTSTATUS (HCD_BUSIFFN *HCD_BUSIF_QUERY_BUS_TIME_EX)(PVOID, PULONG);
+typedef NTSTATUS (HCD_BUSIFFN *HCD_BUSIF_QUERY_CONTROLLER_TYPE)(
+    PVOID, PULONG, PUSHORT, PUSHORT, PUCHAR, PUCHAR, PUCHAR, PUCHAR);
+
+typedef struct _HCD_USBDI_INTERFACE {
+    USHORT Size;
+    USHORT Version;
+    PVOID BusContext;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    HCD_BUSIF_GETUSBDI_VERSION GetUSBDIVersion;
+    HCD_BUSIF_QUERY_BUS_TIME QueryBusTime;
+    HCD_BUSIF_SUBMIT_ISO_OUT_URB SubmitIsoOutUrb;
+    HCD_BUSIF_QUERY_BUS_INFORMATION QueryBusInformation;
+    HCD_BUSIF_IS_DEVICE_HIGH_SPEED IsDeviceHighSpeed;         /* V1 */
+    HCD_BUSIF_ENUM_LOG_ENTRY EnumLogEntry;                    /* V2 */
+    HCD_BUSIF_QUERY_BUS_TIME_EX QueryBusTimeEx;               /* V3 */
+    HCD_BUSIF_QUERY_CONTROLLER_TYPE QueryControllerType;      /* V3 */
+} HCD_USBDI_INTERFACE, *PHCD_USBDI_INTERFACE;
+
+#ifdef _WIN64
+#define HCD_USBDI_V0_BYTES 0x40UL
+#define HCD_USBDI_V1_BYTES 0x48UL
+#define HCD_USBDI_V2_BYTES 0x50UL
+#define HCD_USBDI_V3_BYTES 0x60UL
+#else
+#define HCD_USBDI_V0_BYTES 0x20UL
+#define HCD_USBDI_V1_BYTES 0x24UL
+#define HCD_USBDI_V2_BYTES 0x28UL
+#define HCD_USBDI_V3_BYTES 0x30UL
+#endif
+
+XHCI_C_ASSERT(usbdi_v0_size,
+              FIELD_OFFSET(HCD_USBDI_INTERFACE, IsDeviceHighSpeed) ==
+                  HCD_USBDI_V0_BYTES);
+XHCI_C_ASSERT(usbdi_v1_size,
+              FIELD_OFFSET(HCD_USBDI_INTERFACE, EnumLogEntry) ==
+                  HCD_USBDI_V1_BYTES);
+XHCI_C_ASSERT(usbdi_v2_size,
+              FIELD_OFFSET(HCD_USBDI_INTERFACE, QueryBusTimeEx) ==
+                  HCD_USBDI_V2_BYTES);
+XHCI_C_ASSERT(usbdi_v3_size,
+              sizeof(HCD_USBDI_INTERFACE) == HCD_USBDI_V3_BYTES);
+XHCI_C_ASSERT(usbdi_header,
+              FIELD_OFFSET(HCD_USBDI_INTERFACE, BusContext) ==
+                  FIELD_OFFSET(INTERFACE, Context) &&
+              FIELD_OFFSET(HCD_USBDI_INTERFACE, InterfaceDereference) ==
+                  FIELD_OFFSET(INTERFACE, InterfaceDereference));
+#ifdef _WIN64
+XHCI_C_ASSERT(usbdi_v0_native,
+              sizeof(USB_BUS_INTERFACE_USBDI_V0) == HCD_USBDI_V0_BYTES &&
+              FIELD_OFFSET(USB_BUS_INTERFACE_USBDI_V0, QueryBusTime) ==
+                  FIELD_OFFSET(HCD_USBDI_INTERFACE, QueryBusTime));
+XHCI_C_ASSERT(usbdi_v1_native,
+              sizeof(USB_BUS_INTERFACE_USBDI_V1) == HCD_USBDI_V1_BYTES &&
+              FIELD_OFFSET(USB_BUS_INTERFACE_USBDI_V1, IsDeviceHighSpeed) ==
+                  FIELD_OFFSET(HCD_USBDI_INTERFACE, IsDeviceHighSpeed));
+XHCI_C_ASSERT(usbdi_v2_native,
+              sizeof(USB_BUS_INTERFACE_USBDI_V2) == HCD_USBDI_V2_BYTES &&
+              FIELD_OFFSET(USB_BUS_INTERFACE_USBDI_V2, EnumLogEntry) ==
+                  FIELD_OFFSET(HCD_USBDI_INTERFACE, EnumLogEntry));
+#endif
+
+/* {B1A96A13-3DE0-4574-9B01-C08FEAB318D6}, WDK 7.1 usbbusif.h line 258. */
+static const GUID hcdUsbdiGuid = {
+    0xb1a96a13, 0x3de0, 0x4574,
+    { 0x9b, 0x01, 0xc0, 0x8f, 0xea, 0xb3, 0x18, 0xd6 }
+};
+
+/* The USBDI version GetUSBDIVersion reports: usbport's own, 0x500 on NT 5.x
+ * (usbbusif.h's list) and 0x600 on NT 6.x (WDK 7.1 inc\api\usb.h:48,
+ * USBDI_VERSION). Set at the first QUERY_INTERFACE, at PASSIVE_LEVEL. */
+static ULONG hcdUsbdiVersion = 0x500UL;
 
 static VOID hcdCount(PULONG counter)
 {
@@ -490,14 +658,35 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     case URB_FUNCTION_SELECT_INTERFACE:
     case URB_FUNCTION_ABORT_PIPE:
     case URB_FUNCTION_RESET_PIPE:
-        /* Commands: pended for the controller thread (hcd_cfg.c). */
+    case XHCI_PIPE_URB_SYNC_RESET_PIPE:
+    case XHCI_PIPE_URB_SYNC_CLEAR_STALL:
+        /* Commands: pended for the controller thread (hcd_cfg.c). The two
+         * halves of RESET_PIPE are Windows XP's (task 28-A.1); no class
+         * driver read sends them (design record 13 section 6.5), and
+         * usbport serves both. */
         dev = hcdDeviceRef(hc, pdo);
         if (dev == NULL) {
             return hcdGoneLater(pdo, irp, urb);
         }
         return HcdCfgQueue(hc, dev, pdo, irp);
 
+    case HCD_URB_GET_MS_FEATURE_DESCRIPTOR:
+        /* XP onward's hidusb asks for a HID device's Genre descriptor
+         * (design record 13 section 6.4). It needs the device's MS OS
+         * vendor code from string descriptor 0xEE, which this bus does not
+         * read at enumeration; ReactOS's usbport refuses it the same way
+         * (urb.c, INVALID_URB_FUNCTION), and a device without MS OS
+         * descriptors - every one this project tests - fails it under the
+         * stock stack too. */
+        XHCI_DBG_TEXT("hcd: GET_MS_FEATURE_DESCRIPTOR refused");
+        break;
+
     default:
+        /* Among them CONTROL_TRANSFER_EX (0x32, Vista) and Windows 8's
+         * OPEN_STATIC_STREAMS / CLOSE_STATIC_STREAMS and
+         * GET_ISOCH_PIPE_TRANSFER_PATH_DELAYS: no class driver on any
+         * target sends one (section 6.5), and the stock usbport of XP and
+         * of 2000 refuses them all as an unknown function. */
         break;
     }
     return hcdUrbComplete(irp, urb, USBD_STATUS_INVALID_URB_FUNCTION,
@@ -599,6 +788,447 @@ static NTSTATUS hcdResetPortIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     return HcdCfgQueue(hc, dev, pdo, irp);
 }
 
+/* ----------------------------------------------------------------------- */
+/* What Windows XP onward sends (task 28-A.1)                               */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * IOCTL_INTERNAL_USB_GET_DEVICE_HANDLE: an opaque handle for the caller's
+ * device, which usbhub gives as its usbport device handle (ReactOS usbport
+ * ioctl.c answers its own PDO the same way). The bus has no usbport handle
+ * and no interface that takes one back, so the handle is the PDO's
+ * extension: stable for the PDO's life and never dereferenced by anyone.
+ * No class driver read sends it (design record 13 section 6.5).
+ */
+static NTSTATUS hcdDeviceHandle(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                                PIRP irp, PVOID *out)
+{
+    if (out == NULL) {
+        return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
+    }
+    if (hc == NULL || !pdo->Listed) {
+        return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+    }
+    *out = pdo;
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+}
+
+/* The held idle request cancelled by its client: taken off the PDO under
+ * the cancel lock it is called with, and completed. */
+static VOID NTAPI hcdIdleCancel(PDEVICE_OBJECT DeviceObject, PIRP Irp)
+{
+    PHCD_DEVICE_PDO pdo;
+
+    pdo = (PHCD_DEVICE_PDO)DeviceObject->DeviceExtension;
+    if (pdo->IdleIrp == Irp) {
+        pdo->IdleIrp = NULL;
+    }
+    IoReleaseCancelSpinLock(Irp->CancelIrql);
+    (VOID)HcdCompleteIrp(Irp, STATUS_CANCELLED, 0);
+}
+
+/*
+ * IOCTL_INTERNAL_USB_SUBMIT_IDLE_NOTIFICATION (XP onward's hidusb, design
+ * record 13 section 6.5): the selective-suspend handshake. A client sends
+ * it when its device has been idle; the parent hub calls the callback when
+ * the device may be suspended, and the IRP stays pending until the client
+ * cancels it on its way back to D0. The bus has no selective-suspend policy
+ * (roadmap 28.3, the idle that never sleeps), so the minimal correct answer
+ * is the one where the hub never finds the moment: hold the IRP, never call
+ * the callback, complete it STATUS_CANCELLED when the client cancels it or
+ * the PDO stops. The device stays in D0, which is what the client gets on a
+ * hub that will not suspend. One per PDO: a second while one is held is
+ * STATUS_DEVICE_BUSY, and one with no callback STATUS_NO_CALLBACK_ACTIVE,
+ * as usbhub answers both (Microsoft's "USB Selective Suspend" pages).
+ */
+static NTSTATUS hcdIdleSubmit(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                              PIRP irp, PHCD_IDLE_CALLBACK_INFO info)
+{
+    KIRQL cancelIrql;
+
+    if (hc == NULL || !pdo->Listed) {
+        return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+    }
+    if (info == NULL || info->IdleCallback == NULL) {
+        return HcdCompleteIrp(irp, STATUS_NO_CALLBACK_ACTIVE, 0);
+    }
+    IoAcquireCancelSpinLock(&cancelIrql);
+    if (pdo->IdleIrp != NULL) {
+        IoReleaseCancelSpinLock(cancelIrql);
+        return HcdCompleteIrp(irp, STATUS_DEVICE_BUSY, 0);
+    }
+    if (irp->Cancel) {
+        IoReleaseCancelSpinLock(cancelIrql);
+        return HcdCompleteIrp(irp, STATUS_CANCELLED, 0);
+    }
+    /* Armed and recorded in one hold of the cancel lock, so a cancel and a
+     * flush always agree on who owns the IRP: whoever finds the routine
+     * still set under the lock takes it. */
+    IoMarkIrpPending(irp);
+    (VOID)IoSetCancelRoutine(irp, hcdIdleCancel);
+    pdo->IdleIrp = irp;
+    IoReleaseCancelSpinLock(cancelIrql);
+    XHCI_DBG_VALUE("hcd: idle notification held, port", pdo->Port);
+    return STATUS_PENDING;
+}
+
+/*
+ * The held idle request, completed STATUS_CANCELLED: at a stop, surprise
+ * removal or removal of the PDO (hcd_pdo.c, after the dispatches inside it
+ * are waited out, so none can hold another), and at its deletion. A cancel
+ * routine already called has taken it under the lock; it touches the PDO
+ * no further once the lock is released. IRQL: <= DISPATCH_LEVEL.
+ */
+VOID HcdUrbIdleFlush(PHCD_DEVICE_PDO pdo)
+{
+    KIRQL cancelIrql;
+    PIRP irp;
+
+    IoAcquireCancelSpinLock(&cancelIrql);
+    irp = pdo->IdleIrp;
+    if (irp != NULL && IoSetCancelRoutine(irp, NULL) != NULL) {
+        pdo->IdleIrp = NULL;
+    } else {
+        irp = NULL;
+    }
+    IoReleaseCancelSpinLock(cancelIrql);
+    if (irp != NULL) {
+        (VOID)HcdCompleteIrp(irp, STATUS_CANCELLED, 0);
+    }
+}
+
+/*
+ * IOCTL_INTERNAL_USB_GET_TOPOLOGY_ADDRESS (Windows 7 usbstor's
+ * IsDeviceConnectedToRootHub, design record 13 section 6.4): the
+ * controller's PCI location and the root port, every hub port 0 - the bus
+ * offers no hub to a driver until Phase 27, which must fill the chain here.
+ * The PCI location is read once, at PASSIVE_LEVEL, from the controller's
+ * PDO (IoGetDeviceProperty, already imported); a request at DISPATCH_LEVEL
+ * before that, or a property the PCI bus will not give, leaves it 0, which
+ * usbstor does not read.
+ */
+static NTSTATUS hcdTopologyAddress(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                                   PIRP irp, PUCHAR out)
+{
+    ULONG bus;
+    ULONG address;
+    ULONG bytes;
+
+    if (out == NULL) {
+        return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
+    }
+    if (hc == NULL || !pdo->Listed) {
+        return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+    }
+    if (!pdo->PciRead && hc->Pdo != NULL &&
+        KeGetCurrentIrql() == PASSIVE_LEVEL) {
+        bus = 0;
+        address = 0;
+        if (NT_SUCCESS(IoGetDeviceProperty(hc->Pdo, DevicePropertyBusNumber,
+                                           sizeof(bus), &bus, &bytes)) &&
+            NT_SUCCESS(IoGetDeviceProperty(hc->Pdo, DevicePropertyAddress,
+                                           sizeof(address), &address,
+                                           &bytes))) {
+            pdo->PciBus = bus;
+            pdo->PciAddress = address;
+            pdo->PciRead = 1;
+        }
+    }
+    if (XhciPipeTopologyAddress(pdo->PciBus, pdo->PciAddress, pdo->Port,
+                                out) != XHCI_PIPE_OK) {
+        return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
+    }
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+}
+
+/* IOCTL_INTERNAL_USB_RECORD_FAILURE (Windows 7 usbaudio's start failure,
+ * design record 13 section 6.4): usbhub records it for its own diagnostics
+ * and completes it; the bus has nowhere to record it but the trace. */
+static NTSTATUS hcdRecordFailure(PHCD_DEVICE_PDO pdo, PIRP irp,
+                                 PHCD_START_FAILDATA data)
+{
+    if (data != NULL && data->LengthInBytes >= 12UL) {
+        XHCI_DBG_VALUE("hcd: client start failure recorded, port", pdo->Port);
+        XHCI_DBG_VALUE("hcd: client start failure, NTSTATUS",
+                       (ULONG)data->NtStatus);
+        XHCI_DBG_VALUE("hcd: client start failure, USBD status",
+                       (ULONG)data->UsbdStatus);
+    }
+#ifndef XHCI_DBG_TRACE
+    UNREFERENCED_PARAMETER(pdo);
+#endif
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+}
+
+/* ----------------------------------------------------------------------- */
+/* USB_BUS_INTERFACE_USBDI (task 28-A.1)                                    */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * The functions behind the interface run at any IRQL, on no IRP, and may be
+ * called after the PDO's controller has gone (a surprise removal with the
+ * client still bound). Each raises the PDO's Busy count before it reads
+ * Controller, as the IOCTL entry does, so the parent's release
+ * (HcdDevicePdoReleaseAll), which clears Controller and then waits Busy
+ * out, cannot free the controller under one. The PDO itself outlives every
+ * call: a client drops its references before its own REMOVE completes.
+ */
+static PHCD_CONTROLLER hcdBusifEnter(PHCD_DEVICE_PDO pdo)
+{
+    (VOID)InterlockedIncrement(&pdo->Busy);
+    return pdo->Controller;
+}
+
+static VOID hcdBusifLeave(PHCD_DEVICE_PDO pdo)
+{
+    (VOID)InterlockedDecrement(&pdo->Busy);
+}
+
+static VOID hcdBusifReference(PVOID context)
+{
+    (VOID)InterlockedIncrement(&((PHCD_DEVICE_PDO)context)->BusifRefs);
+}
+
+static VOID hcdBusifDereference(PVOID context)
+{
+    (VOID)InterlockedDecrement(&((PHCD_DEVICE_PDO)context)->BusifRefs);
+}
+
+/* What usbport's own answers: its USBDI version, USB 2.0, no real-time
+ * thread capability. Answered for the client by usbd.sys's export too,
+ * never through here, on every target read (design record 13 section 6.3). */
+static VOID HCD_BUSIFFN hcdBusifVersion(PVOID context,
+                                        PUSBD_VERSION_INFORMATION info,
+                                        PULONG caps)
+{
+    UNREFERENCED_PARAMETER(context);
+    if (info != NULL) {
+        info->USBDI_Version = hcdUsbdiVersion;
+        info->Supported_USB_Version = 0x200;
+    }
+    if (caps != NULL) {
+        *caps = 0;
+    }
+}
+
+/* The 32-bit frame number GET_CURRENT_FRAME_NUMBER gives (XhciFrameNumber):
+ * XP onward's usbaudio asks it here instead (design record 13 section 6.5).
+ * Above DISPATCH_LEVEL, where the controller lock cannot be taken, the last
+ * number published is given unlocked - an aligned ULONG, at most one health
+ * poll stale. */
+static NTSTATUS HCD_BUSIFFN hcdBusifBusTime(PVOID context, PULONG frame)
+{
+    PHCD_DEVICE_PDO pdo;
+    PHCD_CONTROLLER hc;
+    ULONG now;
+
+    pdo = (PHCD_DEVICE_PDO)context;
+    hc = hcdBusifEnter(pdo);
+    now = 0;
+    if (hc != NULL) {
+        if (KeGetCurrentIrql() <= DISPATCH_LEVEL) {
+            now = XhciFrameNumber(&hc->Hc);
+        } else {
+            now = *(volatile ULONG *)&hc->Hc.FrameNumber;
+        }
+    }
+    hcdBusifLeave(pdo);
+    if (frame != NULL) {
+        *frame = now;
+    }
+    return STATUS_SUCCESS;
+}
+
+/* usbbusif.h: "Returns STATUS_NOT_SUPPORTED", usbport's own answer. */
+static NTSTATUS HCD_BUSIFFN hcdBusifIsoOut(PVOID context, PURB urb)
+{
+    UNREFERENCED_PARAMETER(context);
+    UNREFERENCED_PARAMETER(urb);
+    return STATUS_NOT_SUPPORTED;
+}
+
+/* Levels 0 and 1 (xhci_pipe.c), with GET_BUS_INFO's totals; the bus exposes
+ * no controller symbolic name, so level 1's is empty. */
+static NTSTATUS HCD_BUSIFFN hcdBusifBusInformation(PVOID context, ULONG level,
+                                                   PVOID buffer,
+                                                   PULONG length,
+                                                   PULONG actual)
+{
+    PHCD_DEVICE_PDO pdo;
+
+    pdo = (PHCD_DEVICE_PDO)context;
+    switch (XhciPipeBusInformation(level,
+                                   (pdo->SpeedClass == XHCI_SPEED_HIGH)
+                                       ? HCD_BUS_BANDWIDTH_HIGH
+                                       : HCD_BUS_BANDWIDTH_FULL,
+                                   0, (UCHAR *)buffer, length, actual)) {
+    case XHCI_PIPE_OK:
+        return STATUS_SUCCESS;
+    case XHCI_PIPE_TOO_SMALL:
+        return STATUS_BUFFER_TOO_SMALL;
+    case XHCI_PIPE_UNSUPPORTED:
+        return STATUS_NOT_SUPPORTED;
+    default:
+        return STATUS_INVALID_PARAMETER;
+    }
+}
+
+/* The device's true speed: High-Speed only. usbport answers whether the
+ * controller is USB 2.0 (ReactOS iface.c), which on an EHCI is the same
+ * thing because a Full or Low Speed device sits on a companion; on xHCI
+ * every speed shares the controller, and XP's usbstor sizes its transfers
+ * from this answer (design record 13 section 6.3). */
+static BOOLEAN HCD_BUSIFFN hcdBusifHighSpeed(PVOID context)
+{
+    return (BOOLEAN)(((PHCD_DEVICE_PDO)context)->SpeedClass ==
+                     XHCI_SPEED_HIGH);
+}
+
+static NTSTATUS HCD_BUSIFFN hcdBusifLogEntry(PVOID context, ULONG driverTag,
+                                             ULONG enumTag, ULONG p1,
+                                             ULONG p2)
+{
+    UNREFERENCED_PARAMETER(context);
+    UNREFERENCED_PARAMETER(driverTag);
+    UNREFERENCED_PARAMETER(enumTag);
+    UNREFERENCED_PARAMETER(p1);
+    UNREFERENCED_PARAMETER(p2);
+    return STATUS_SUCCESS;
+}
+
+/* The High-Speed (micro)frame counter: the frame number times eight, the
+ * first microframe of the current frame - the bus keeps no 32-bit
+ * microframe count, and MFINDEX's three microframe bits are not read
+ * outside the controller lock. No class driver read asks for V3. */
+static NTSTATUS HCD_BUSIFFN hcdBusifBusTimeEx(PVOID context, PULONG frame)
+{
+    ULONG now;
+
+    (VOID)hcdBusifBusTime(context, &now);
+    if (frame != NULL) {
+        *frame = now << 3;
+    }
+    return STATUS_SUCCESS;
+}
+
+/* The controller's PCI identity: vendor and device from the configuration
+ * space read at start, class 0C/03/30 (xHCI); the revision is not kept
+ * and reads 0. */
+static NTSTATUS HCD_BUSIFFN hcdBusifControllerType(
+    PVOID context, PULONG flags, PUSHORT vendor, PUSHORT device,
+    PUCHAR pciClass, PUCHAR subClass, PUCHAR revision, PUCHAR progIf)
+{
+    PHCD_DEVICE_PDO pdo;
+    PHCD_CONTROLLER hc;
+    ULONG id;
+
+    pdo = (PHCD_DEVICE_PDO)context;
+    hc = hcdBusifEnter(pdo);
+    id = (hc != NULL) ? hc->Hc.PciVendorDevice : 0;
+    hcdBusifLeave(pdo);
+    if (hc == NULL) {
+        return STATUS_DEVICE_NOT_CONNECTED;
+    }
+    if (flags != NULL) {
+        *flags = 0;
+    }
+    if (vendor != NULL) {
+        *vendor = (USHORT)(id & 0xFFFFUL);
+    }
+    if (device != NULL) {
+        *device = (USHORT)((id >> 16) & 0xFFFFUL);
+    }
+    if (pciClass != NULL) {
+        *pciClass = 0x0C;
+    }
+    if (subClass != NULL) {
+        *subClass = 0x03;
+    }
+    if (revision != NULL) {
+        *revision = 0;
+    }
+    if (progIf != NULL) {
+        *progIf = 0x30;
+    }
+    return STATUS_SUCCESS;
+}
+
+/* Whether a QUERY_INTERFACE names USB_BUS_INTERFACE_USBDI_GUID - compared
+ * field by field, since the DDK's IsEqualGUID is a memcmp. */
+ULONG HcdUrbIsUsbdiQuery(const GUID *guid)
+{
+    ULONG i;
+
+    if (guid == NULL || guid->Data1 != hcdUsbdiGuid.Data1 ||
+        guid->Data2 != hcdUsbdiGuid.Data2 ||
+        guid->Data3 != hcdUsbdiGuid.Data3) {
+        return 0;
+    }
+    for (i = 0; i < 8; i++) {
+        if (guid->Data4[i] != hcdUsbdiGuid.Data4[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/*
+ * IRP_MN_QUERY_INTERFACE for USB_BUS_INTERFACE_USBDI_GUID (the caller has
+ * checked the GUID). Versions 0 to 3, each the one before plus its members;
+ * the Size must hold the version asked for (xhci_pipe.c's sizes, design
+ * record 13 section 6.1), and only that much of the caller's structure is
+ * written. A version above 3 is left as the IRP came, as any interface a
+ * bus does not export; the one reference the caller then owns is taken
+ * before the IRP completes. IRQL: PASSIVE_LEVEL.
+ */
+NTSTATUS HcdUrbQueryInterface(PHCD_DEVICE_PDO pdo, PIRP irp)
+{
+    PIO_STACK_LOCATION stack;
+    PHCD_USBDI_INTERFACE out;
+    ULONG version;
+    ULONG need;
+
+    stack = IoGetCurrentIrpStackLocation(irp);
+    version = stack->Parameters.QueryInterface.Version;
+    out = (PHCD_USBDI_INTERFACE)stack->Parameters.QueryInterface.Interface;
+    XHCI_DBG_VALUE("hcd: USBDI interface asked, version/size",
+                   (version << 16) | stack->Parameters.QueryInterface.Size);
+    need = XhciPipeUsbdiSize(version, (ULONG)sizeof(PVOID));
+    if (need == 0) {
+        return HcdCompleteIrp(irp, irp->IoStatus.Status,
+                              irp->IoStatus.Information);
+    }
+    if (out == NULL || stack->Parameters.QueryInterface.Size < need) {
+        return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
+    }
+    if (pdo->Controller == NULL || !pdo->Listed) {
+        return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+    }
+    hcdUsbdiVersion = IoIsWdmVersionAvailable(6, 0) ? 0x600UL : 0x500UL;
+
+    out->Size = (USHORT)need;
+    out->Version = (USHORT)version;
+    out->BusContext = pdo;
+    out->InterfaceReference = hcdBusifReference;
+    out->InterfaceDereference = hcdBusifDereference;
+    out->GetUSBDIVersion = hcdBusifVersion;
+    out->QueryBusTime = hcdBusifBusTime;
+    out->SubmitIsoOutUrb = hcdBusifIsoOut;
+    out->QueryBusInformation = hcdBusifBusInformation;
+    if (version >= 1) {
+        out->IsDeviceHighSpeed = hcdBusifHighSpeed;
+    }
+    if (version >= 2) {
+        out->EnumLogEntry = hcdBusifLogEntry;
+    }
+    if (version >= 3) {
+        out->QueryBusTimeEx = hcdBusifBusTimeEx;
+        out->QueryControllerType = hcdBusifControllerType;
+    }
+    hcdBusifReference(pdo);
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+}
+
 /* The slot an internal IOCTL is traced under once: its function number, the
  * internal range (USB_IOCTL_INTERNAL_INDEX, 0) at 0..0x1F and the
  * USB_IOCTL_INDEX range (0xFF) above it, everything else in the last. */
@@ -682,11 +1312,38 @@ NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp)
         status = hcdHubCount(irp, (PULONG)stack->Parameters.Others.Argument1);
         break;
 
+    case IOCTL_INTERNAL_USB_GET_DEVICE_HANDLE:
+        status = hcdDeviceHandle(pdo, hc, irp,
+                                 (PVOID *)stack->Parameters.Others.Argument1);
+        break;
+
+    case IOCTL_INTERNAL_USB_SUBMIT_IDLE_NOTIFICATION:
+        status = hcdIdleSubmit(pdo, hc, irp,
+                               (PHCD_IDLE_CALLBACK_INFO)
+                                   stack->Parameters.Others.Argument1);
+        break;
+
+    case IOCTL_INTERNAL_USB_GET_TOPOLOGY_ADDRESS:
+        status = hcdTopologyAddress(pdo, hc, irp,
+                                    (PUCHAR)stack->Parameters.Others.Argument1);
+        break;
+
+    case IOCTL_INTERNAL_USB_RECORD_FAILURE:
+        status = hcdRecordFailure(pdo, irp,
+                                  (PHCD_START_FAILDATA)
+                                      stack->Parameters.Others.Argument1);
+        break;
+
     default:
-        /* GET_ROOTHUB_PDO, GET_DEVICE_HANDLE and the name requests among
-         * them: no Windows 98 SE or 2000 class driver sends one (design
-         * record 13 section 6.3), and each needs an object this bus does
-         * not yet give out. */
+        /* Refused, as no class driver on any target sends one (design
+         * record 13 section 6.5) and each needs an object this bus does not
+         * give out: GET_ROOTHUB_PDO, ENABLE_PORT and GET_HUB_NAME (hub
+         * driver requests), GET_CONTROLLER_NAME and GET_BUSGUID_INFO (no
+         * controller symbolic name is exposed), GET_PARENT_HUB_INFO (the
+         * parent is the root hub, which no driver above may talk to as a
+         * hub), GET_DEVICE_HANDLE_EX and GET_TT_DEVICE_HANDLE (Vista's hub
+         * handles), NOTIFY_IDLE_READY, REQ_GLOBAL_SUSPEND / _RESUME and
+         * GET_DEVICE_CONFIG_INFO (usbhub's own). */
         if (hc != NULL) {
             hcdCount(&hc->IoctlUnknown);
         }

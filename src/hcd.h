@@ -338,6 +338,18 @@ typedef struct _HCD_DEVICE_PDO {
      * written before the PDOs are listed, read only by the thread). */
     ULONG Group;
     struct _HCD_DEVICE_PDO *Sibling;
+    /* What Windows XP onward asks (task 28-A.1, hcd_urb.c). IdleIrp: the
+     * one IOCTL_INTERNAL_USB_SUBMIT_IDLE_NOTIFICATION held, under the
+     * cancel spin lock, until its client cancels it or the PDO stops.
+     * BusifRefs: USB_BUS_INTERFACE_USBDI references handed out and not yet
+     * dropped, counted for the trace only. PciBus and PciAddress: the
+     * controller's location for GET_TOPOLOGY_ADDRESS, read once at
+     * PASSIVE_LEVEL (PciRead set after both). */
+    PIRP IdleIrp;
+    volatile LONG BusifRefs;
+    ULONG PciBus;
+    ULONG PciAddress;
+    volatile ULONG PciRead;
 } HCD_DEVICE_PDO, *PHCD_DEVICE_PDO;
 
 /* Whether a PDO may use a pipe of its device: a device PDO any, a function
@@ -722,6 +734,9 @@ NTSTATUS HcdDevicePdoPower(PHCD_DEVICE_PDO pdo, PIRP irp);
 /* hcd_urb.c */
 NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp);
 LONG HcdUrbIoRequest(PVOID urb, PHCD_IO_REQUEST req);
+ULONG HcdUrbIsUsbdiQuery(const GUID *guid);
+NTSTATUS HcdUrbQueryInterface(PHCD_DEVICE_PDO pdo, PIRP irp);
+VOID HcdUrbIdleFlush(PHCD_DEVICE_PDO pdo);
 
 /* hcd_io.c */
 VOID HcdIoPipeInitEp0(PHCD_USB_DEVICE dev);

@@ -51,6 +51,9 @@
 #define HCD_URB_SELECT_INTERFACE        0x0001
 #define HCD_URB_ABORT_PIPE              0x0002
 #define HCD_URB_RESET_PIPE              0x001E
+/* Windows XP's halves of it (WDK 7.1 inc\api\usb.h; task 28-A.1). */
+#define HCD_URB_SYNC_RESET_PIPE         0x0030
+#define HCD_URB_SYNC_CLEAR_STALL        0x0031
 
 /* The interface handle a client gets back: an opaque nonzero cookie the
  * select-interface path (26-A.5, later) decodes. */
@@ -1898,11 +1901,38 @@ static ULONG hcdCfgPipeBusy(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
 }
 
 /*
- * RESET_PIPE: inside the pipe's pause from the start, so nothing is
- * published between the check and the reset (round 3, finding 7). Anything
- * still on the pipe is aborted first. Then the controller's half by the
- * endpoint's state (round 2, finding 6) and the device's -
- * CLEAR_FEATURE(ENDPOINT_HALT) - so both ends restart the data toggle:
+ * SYNC_CLEAR_STALL, the device's half alone (task 28-A.1):
+ * CLEAR_FEATURE(ENDPOINT_HALT) to the endpoint, the controller's endpoint
+ * and the pipe's requests untouched, as usbport's ClearStall leaves them
+ * (ReactOS usbport urb.c, USBPORT_ClearStall). An isochronous endpoint has
+ * no halt to clear (the same skip as below). A failed request is the
+ * client's to see; it says nothing about the controller's toggle, so no
+ * recovery is asked for.
+ */
+static LONG hcdCfgClearStall(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                             PHCD_PIPE pipe)
+{
+    ULONG bytes;
+
+    if (pipe->TransferType == XHCI_PIPE_XFER_ISOCH) {
+        return XHCI_USBD_STATUS_SUCCESS;
+    }
+    if (!HcdThreadControl(hc, dev, 0x02, 1, 0,
+                          (USHORT)pipe->EndpointAddress, 0, &bytes)) {
+        return (LONG)XHCI_PIPE_USBD_REQUEST_FAILED;
+    }
+    return XHCI_USBD_STATUS_SUCCESS;
+}
+
+/*
+ * RESET_PIPE (`parts` both halves) and SYNC_RESET_PIPE (the controller's
+ * half only, task 28-A.1): inside the pipe's pause from the start, so
+ * nothing is published between the check and the reset (round 3, finding
+ * 7). Anything still on the pipe is aborted first. Then the controller's
+ * half by the endpoint's state (round 2, finding 6) and, for RESET_PIPE, the
+ * device's - CLEAR_FEATURE(ENDPOINT_HALT) - so both ends restart the data
+ * toggle; SYNC_RESET_PIPE leaves the device's toggle to its client, which
+ * sends SYNC_CLEAR_STALL or a request of its own:
  *
  *   Halted    Reset Endpoint (TSP 0, which restarts the toggle), then Set TR
  *             Dequeue past the failed TD;
@@ -1911,12 +1941,15 @@ static ULONG hcdCfgPipeBusy(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
  *             endpoint has (xHCI 4.6.8).
  */
 static LONG hcdCfgReset(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
-                        PHCD_PIPE pipe)
+                        PHCD_PIPE pipe, ULONG parts)
 {
     ULONG bytes;
     ULONG ok;
     LONG result;
 
+    if ((parts & XHCI_PIPE_RESET_HOST) == 0) {
+        return hcdCfgClearStall(hc, dev, pipe);
+    }
     HcdIoPipePause(hc, pipe);
     result = XHCI_USBD_STATUS_SUCCESS;
     if (hcdCfgPipeBusy(hc, pipe)) {
@@ -1939,7 +1972,8 @@ static LONG hcdCfgReset(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         return result;          /* left paused, as hcdCfgAbort */
     }
     pipe->Halted = 0;
-    if (pipe->TransferType != XHCI_PIPE_XFER_ISOCH &&
+    if ((parts & XHCI_PIPE_RESET_DEVICE) != 0 &&
+        pipe->TransferType != XHCI_PIPE_XFER_ISOCH &&
         !HcdThreadControl(hc, dev, 0x02, 1, 0,
                           (USHORT)pipe->EndpointAddress, 0, &bytes)) {
         /* As in hcdCfgQuiesce: toggles that may disagree are settled
@@ -2379,6 +2413,8 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
             break;
         case HCD_URB_ABORT_PIPE:
         case HCD_URB_RESET_PIPE:
+        case HCD_URB_SYNC_RESET_PIPE:
+        case HCD_URB_SYNC_CLEAR_STALL:
             XhciControllerLockAcquire(&hc->Hc, &oldIrql);
             pipe = HcdCfgPipe(dev, urb->UrbPipeRequest.PipeHandle);
             if (pipe != NULL && !HcdPdoOwnsPipe(pdo, dev, pipe)) {
@@ -2392,7 +2428,9 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
             } else if (urb->UrbHeader.Function == HCD_URB_ABORT_PIPE) {
                 usbd = hcdCfgAbort(hc, dev, pipe, HCD_USBD_CANCELED);
             } else {
-                usbd = hcdCfgReset(hc, dev, pipe);
+                usbd = hcdCfgReset(
+                    hc, dev, pipe,
+                    XhciPipeResetParts(urb->UrbHeader.Function));
             }
             break;
         default:

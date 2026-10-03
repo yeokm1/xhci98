@@ -327,6 +327,7 @@ static VOID hcdDeletePdo(PHCD_DEVICE_PDO pdo)
 {
     /* Its refusal timer and DPC live in the extension (hcd_io.c). */
     HcdIoRefusedDrain(pdo);
+    HcdUrbIdleFlush(pdo);
     pdo->Deleted = 1;
     pdo->Controller = NULL;
     HcdPoolFree(pdo->Config);
@@ -757,6 +758,9 @@ static VOID hcdPdoQuiesce(PHCD_DEVICE_PDO pdo, ULONG removing)
         HcdRelativeMs(&due, 1);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
     }
+    /* A held idle notification (hcd_urb.c, task 28-A.1) is no URB: it
+     * completes here, before the client's stop or removal goes on. */
+    HcdUrbIdleFlush(pdo);
     if (pdo->UrbsPending == 0) {
         hcdPdoRefusalsWait(pdo, removing);
         return;
@@ -949,8 +953,8 @@ static NTSTATUS hcdDeviceCapabilities(PHCD_DEVICE_PDO pdo, PIRP irp)
 }
 
 /*
- * A QUERY_INTERFACE no PDO answers yet (USBDI's is roadmap 28-A.1's, asked
- * for by XP onward only), traced once per interface GUID by its first ULONG,
+ * A QUERY_INTERFACE no PDO answers (USBDI's is answered in hcd_urb.c, task
+ * 28-A.1), traced once per interface GUID by its first ULONG,
  * so a guest run shows what a class driver looked for. Past the table's room
  * every query is traced. PnP IRPs come one at a time per device; two devices
  * at once can at worst trace one GUID twice.
@@ -1072,6 +1076,10 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
                               irp->IoStatus.Information);
 
     case IRP_MN_QUERY_INTERFACE:
+        if (HcdUrbIsUsbdiQuery(
+                stack->Parameters.QueryInterface.InterfaceType)) {
+            return HcdUrbQueryInterface(pdo, irp);
+        }
         hcdQueryInterfaceTrace(stack);
         return HcdCompleteIrp(irp, irp->IoStatus.Status,
                               irp->IoStatus.Information);
