@@ -247,6 +247,20 @@ ULONG XhciXportId(const UCHAR *device, const XHCI_XPORT *x, ULONG mi,
     t.Used = 0;
     switch (which) {
     case XHCI_XPORT_ID_HARDWARE:
+        if (x->Transport == XHCI_XPORT_REFUSED) {
+            /* No VID/PID-derived id any INF could name (xhci_xport.h). */
+            xhciXportStr(&t, XHCI_XPORT_REFUSED_PREFIX);
+            xhciXportStr(&t, "VID_");
+            xhciXportHexN(&t, xhciXportWord(device + 8), 4);
+            xhciXportStr(&t, "&PID_");
+            xhciXportHexN(&t, xhciXportWord(device + 10), 4);
+            xhciXportStr(&t, "&REV_");
+            xhciXportHexN(&t, xhciXportWord(device + 12), 4);
+            xhciXportMi(&t, mi);
+            xhciXportChar(&t, 0);
+            xhciXportChar(&t, 0);
+            break;
+        }
         xhciXportVidPid(&t, device);
         xhciXportStr(&t, "&REV_");
         xhciXportHexN(&t, xhciXportWord(device + 12), 4);
@@ -284,4 +298,13 @@ ULONG XhciXportId(const UCHAR *device, const XHCI_XPORT *x, ULONG mi,
     }
     *used = t.Used;
     return (t.Used > capacity) ? XHCI_XPORT_TOO_SMALL : XHCI_XPORT_OK;
+}
+
+ULONG XhciXportRefusedAt(ULONG route, ULONG companion)
+{
+    if (route != 0) {
+        return XHCI_XPORT_AT_BEHIND_HUB;
+    }
+    return (companion != 0) ? XHCI_XPORT_AT_ROOT_COMPANION
+                            : XHCI_XPORT_AT_ROOT_ALONE;
 }

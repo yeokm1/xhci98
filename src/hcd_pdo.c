@@ -22,8 +22,10 @@
  *
  * A storage interface offering UAS gets one transport, chosen at creation
  * (31-A.3; xhci_xport.h, hcdXportDecide), and its hardware and compatible
- * ids follow it: only that transport's class ids, and under UAS no
- * VID/PID-only hardware id for usbstor.inf's hand-listed lines to match.
+ * ids follow it: only that transport's class ids. A device with no
+ * transport it can run shows the project-owned XHCI98_NOXPORT hardware id
+ * and no compatible id, and on a companion-paired root port is offered to
+ * 29-A.5's hold (hcdXportRefusal, HcdHoldRequestUsb2).
  *
  * A composite device the bus splits (26-A.7; sections 10.8 and 10.9) gets no
  * PDO of its own: one function PDO per function, each an HCD_DEVICE_PDO with
@@ -410,18 +412,65 @@ static VOID hcdXportDecide(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo,
     XHCI_DBG_VALUE("hcd: storage transport, port/transport/why/alternate",
                    (pdo->Port << 16) | (pdo->Xport.Transport << 12) |
                        (pdo->Xport.Why << 8) | (pdo->Xport.Alternate & 0xFFUL));
-    if (pdo->Xport.Transport == XHCI_XPORT_REFUSED) {
-        /* TODO(29-A.5): a UAS-only device at SuperSpeed on a controller that
-         * does not stream has no transport. On a root port with a USB 2.0
-         * companion the roadmap sends it back to USB 2.0 by 29-A.5's hold,
-         * where it runs streamless UAS; that hold is not wired, so until it
-         * is the device is refused in place everywhere - its PDO exposes no
-         * storage id, never a Bulk-Only one it cannot honour - which is the
-         * roadmap's rule behind a SuperSpeed hub and on a root port with no
-         * companion in any case. Counted as XHCI_XPORT_WHY_NO_STREAMS. */
-        XHCI_DBG_VALUE("hcd: UAS-only at SuperSpeed without streams, refused, "
-                       "port", pdo->Port);
+}
+
+/*
+ * A device one of whose PDOs has no transport (31-A.3: UAS-only at
+ * SuperSpeed on a controller that does not stream), once per device, before
+ * any PDO is listed. Where it sits decides (XhciXportRefusedAt): on a
+ * companion-paired root port 29-A.5's hold is asked to send it back to USB
+ * 2.0 (HcdHoldRequestUsb2); on a root port with no companion, behind a
+ * SuperSpeed hub, or when the hold is not taken, it is refused in place -
+ * its PDOs list with the XHCI98_NOXPORT hardware id and no compatible ids,
+ * its hub port and siblings untouched. Each place is counted. Returns
+ * nonzero when the hold was taken. Thread only, PASSIVE_LEVEL.
+ */
+static ULONG hcdXportRefusal(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                             PHCD_DEVICE_PDO first)
+{
+    PHCD_DEVICE_PDO pdo;
+    ULONG companion;
+    ULONG at;
+
+    for (pdo = first; pdo != NULL; pdo = pdo->Sibling) {
+        if (pdo->Xport.Transport == XHCI_XPORT_REFUSED) {
+            break;
+        }
     }
+    if (pdo == NULL) {
+        return 0;
+    }
+    companion = 0;
+    if (dev->Route == 0 && dev->Port >= 1 &&
+        dev->Port <= XHCI_MAX_ROOT_PORTS) {
+        companion = (ULONG)hc->Hc.PortMap.Companion[dev->Port - 1];
+    }
+    at = XhciXportRefusedAt(dev->Route, companion);
+    hc->XportRefusedAt[at]++;
+    XHCI_DBG_VALUE("hcd: UAS-only at SuperSpeed without streams, port/where",
+                   (dev->Port << 16) | at);
+    if (at != XHCI_XPORT_AT_ROOT_COMPANION) {
+        return 0;
+    }
+    if (HcdHoldRequestUsb2(hc, dev, HCD_HOLD_WHY_UAS_NO_STREAMS)) {
+        return 1;
+    }
+    hc->XportHoldsNotTaken++;
+    return 0;
+}
+
+/*
+ * STUB of the 31-A.3 / 29-A.5 call boundary (hcd.h): takes no hold, so the
+ * device is refused in place. Phase 29's executor (branch p29) replaces this
+ * definition at integration - delete it then. Thread only, PASSIVE_LEVEL.
+ */
+ULONG HcdHoldRequestUsb2(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                         ULONG reason)
+{
+    UNREFERENCED_PARAMETER(hc);
+    UNREFERENCED_PARAMETER(dev);
+    UNREFERENCED_PARAMETER(reason);
+    return 0;
 }
 
 /* One PDO, not yet listed: the device's (func NULL) with the whole
@@ -574,6 +623,11 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
             last->Sibling = pdo;
         }
         last = pdo;
+    }
+    if (hcdXportRefusal(hc, dev, first)) {
+        /* The device is leaving for the USB 2.0 companion (29-A.5). */
+        status = STATUS_DEVICE_REMOVED;
+        goto cleanup;
     }
     dev->Pdo = first->Common.Self;
     dev->PdoGroup = first->Group;

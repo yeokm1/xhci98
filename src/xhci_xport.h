@@ -17,9 +17,14 @@
  * also SubClass_08&Prot_52) - never USB\Class_08&SubClass_06 or USB\Class_08
  * alone, never Prot_62; and by hand, USB\VID_v&PID_p (16 lines on 2000 SP4,
  * 61 on XP to 7, 135 and 152 under NUSB) and USB\VID_v&PID_p&MI_nn (6 to 7
- * lines, not on 2000), never a &REV_ form and never a vendor id alone. So
- * under UAS the hardware ids drop the short VID/PID form (and its &MI_ twin
- * on a function), keeping only the &REV_ form no usbstor.inf line names.
+ * lines, not on 2000), never a &REV_ form and never a vendor id alone. Under
+ * UAS the VID/PID hardware ids stay, so a device usbstor.inf lists by hand
+ * still binds usbstor.sys - the residual case roadmap 31-A.3 records rather
+ * than fights. A REFUSED interface (no transport it can run) shows no
+ * VID/PID-derived hardware id at all: its one hardware id is
+ * USB\XHCI98_NOXPORT&VID_v&PID_p&REV_r[&MI_nn], a project-owned form no
+ * INF names, so neither usbstor.inf nor a vendor INF can bind a storage
+ * driver to it, and the device shows in Device Manager with no driver.
  *
  * The decision:
  *   - no UAS alternate on the interface: XHCI_XPORT_NONE, the ids as
@@ -126,11 +131,35 @@ ULONG XhciXportChoose(const UCHAR *config, ULONG length, ULONG iface,
  * section 10.7's forms: hardware USB\VID_v&PID_p&REV_r[&MI_nn] and, when
  * x->ShortHardwareId, USB\VID_v&PID_p[&MI_nn]; compatible
  * USB\Class_cc&SubClass_ss&Prot_pp, USB\Class_cc&SubClass_ss, USB\Class_cc.
- * XHCI_XPORT_NO_IDS (*used 0) for the compatible ids of a refused
- * interface: the PDO answers that query with none. *used is the whole
- * answer's length even when it did not fit.
+ * A refused interface: the one hardware id
+ * XHCI_XPORT_REFUSED_PREFIX "VID_v&PID_p&REV_r[&MI_nn]", and
+ * XHCI_XPORT_NO_IDS (*used 0) for its compatible ids - the PDO answers that
+ * query with none. *used is the whole answer's length even when it did not
+ * fit.
  */
+#define XHCI_XPORT_REFUSED_PREFIX "USB\\XHCI98_NOXPORT&"
+
 ULONG XhciXportId(const UCHAR *device, const XHCI_XPORT *x, ULONG mi,
                   ULONG which, char *out, ULONG capacity, PULONG used);
+
+/*
+ * Where a refused device sits, which decides what 31-A.3 does with it:
+ *   - XHCI_XPORT_AT_ROOT_COMPANION: a root port (Route String 0) paired with
+ *     a USB 2.0 companion - 29-A.5's hold sends it back to USB 2.0, where it
+ *     runs streamless UAS;
+ *   - XHCI_XPORT_AT_ROOT_ALONE: a root port with no companion - refused in
+ *     place, nowhere to send it;
+ *   - XHCI_XPORT_AT_BEHIND_HUB: behind a SuperSpeed hub (Route String
+ *     nonzero) - refused in place: 29-A.5's mechanism is the controller's own
+ *     PORTSC, and a USB 3 hub's two halves are unpaired (30-A.1).
+ * `route` is the device's Route String; `companion` the root port's paired
+ * port number from the port map, 0 for none.
+ */
+#define XHCI_XPORT_AT_ROOT_COMPANION 0UL
+#define XHCI_XPORT_AT_ROOT_ALONE     1UL
+#define XHCI_XPORT_AT_BEHIND_HUB     2UL
+#define XHCI_XPORT_AT_COUNT          3UL
+
+ULONG XhciXportRefusedAt(ULONG route, ULONG companion);
 
 #endif /* XHCI_XPORT_H */

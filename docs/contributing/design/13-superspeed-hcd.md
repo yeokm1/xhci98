@@ -2166,9 +2166,18 @@ a device PDO's one interface, or a function's when no IAD groups it) gets
 one transport, and both tables above change for it. The compatible ids are
 the chosen setting's triple - `USB\Class_08&SubClass_06&Prot_62` and its two
 shorter forms under UAS, alternate 0's `Prot_50` triple under Bulk-Only -
-and none at all for an interface with no transport it can run. For that
-refused interface the hardware ids also drop `USB\VID_vvvv&PID_pppp`
-(`&MI_nn` on a function) and keep only the `&REV_` form; under UAS they
+and none at all for an interface with no transport it can run. That
+refused interface shows no VID/PID-derived hardware id either: its one
+hardware id is the project-owned
+`USB\XHCI98_NOXPORT&VID_vvvv&PID_pppp&REV_rrrr` (`&MI_nn` on a function),
+which no INF names, so no `usbstor.inf` or vendor INF line binds a storage
+driver to a device whose transport cannot run; it shows with no driver.
+Where it sits decides the rest (`XhciXportRefusedAt`): on a
+companion-paired root port the bus asks 29-A.5's hold to send it back to
+USB 2.0 (`HcdHoldRequestUsb2`, the call boundary; a stub that takes nothing
+until Phase 29's executor is integrated), and on a root port with no
+companion or behind a SuperSpeed hub it is refused in place; each place is
+counted. Under UAS the VID/PID hardware ids
 stay, so a device a `usbstor.inf` lists by hand still binds `usbstor.sys`
 on it - roadmap 31-A.3's residual case, recorded rather than fought. The
 compatible-id rule rests on what the targets' `usbstor.inf` files match on (read

@@ -90,8 +90,6 @@ static const UCHAR compCfg[110] = {
 #define STR XHCI_XPORT_F_HC_STREAMS
 #define FRC XHCI_XPORT_F_FORCE_BOT
 
-static const char hwDualShort[] =
-    "USB\\VID_174C&PID_5106&REV_0210\0\0";
 static const char hwDualBoth[] =
     "USB\\VID_174C&PID_5106&REV_0210\0USB\\VID_174C&PID_5106\0\0";
 static const char ciUas[] =
@@ -218,7 +216,8 @@ static void test_uas_only(void)
     CHECK_EQ(x.Why, XHCI_XPORT_WHY_NO_STREAMS, "UAS-only SS no streams: why");
     CHECK_EQ(x.ShortHardwareId, 0, "refused: no VID/PID-only id");
     CHECK_ID(dualDev, &x, XHCI_XPORT_NO_MI, XHCI_XPORT_ID_HARDWARE,
-             hwDualShort, "refused: REV form alone");
+             "USB\\XHCI98_NOXPORT&VID_174C&PID_5106&REV_0210\0\0",
+             "refused: the project-owned id alone, no USB\\VID_ form");
     {
         char buf[16];
         ULONG used;
@@ -234,6 +233,19 @@ static void test_uas_only(void)
     choose(uasCfg, sizeof(uasCfg), 0, SS | FRC, &x);
     CHECK_EQ(x.Transport, XHCI_XPORT_REFUSED,
              "UAS-only SS no streams, forced: still no Bulk-Only to honour");
+}
+
+/* Where a refused device sits decides send-back or refusal in place. */
+static void test_refused_at(void)
+{
+    CHECK_EQ(XhciXportRefusedAt(0, 5), XHCI_XPORT_AT_ROOT_COMPANION,
+             "root port paired with port 5: 29-A.5's send-back");
+    CHECK_EQ(XhciXportRefusedAt(0, 0), XHCI_XPORT_AT_ROOT_ALONE,
+             "root port with no companion: refused in place");
+    CHECK_EQ(XhciXportRefusedAt(0x00003, 5), XHCI_XPORT_AT_BEHIND_HUB,
+             "behind a hub on a paired root port: refused in place");
+    CHECK_EQ(XhciXportRefusedAt(0x00021, 0), XHCI_XPORT_AT_BEHIND_HUB,
+             "two tiers down, unpaired root: refused in place");
 }
 
 /* Bulk-Only only at alternate 1: usbstor.sys selects alternate 0, so that
@@ -308,6 +320,19 @@ static void test_function(void)
              "storage function forced: both hardware ids");
     CHECK_ID(compDev, &x, 1, XHCI_XPORT_ID_COMPATIBLE, ciBot,
              "storage function forced: Prot_50");
+
+    /* A refused function (the decision is test_uas_only's; only the ids
+     * are new here): the project-owned id with its &MI_, nothing else. */
+    memset(&x, 0, sizeof(x));
+    x.Transport = XHCI_XPORT_REFUSED;
+    x.Why = XHCI_XPORT_WHY_NO_STREAMS;
+    CHECK_ID(compDev, &x, 1, XHCI_XPORT_ID_HARDWARE,
+             "USB\\XHCI98_NOXPORT&VID_1234&PID_5678&REV_0001&MI_01\0\0",
+             "refused function: no USB\\VID_ form, &MI_ kept");
+    x.ShortHardwareId = 1;
+    CHECK_ID(compDev, &x, 1, XHCI_XPORT_ID_HARDWARE,
+             "USB\\XHCI98_NOXPORT&VID_1234&PID_5678&REV_0001&MI_01\0\0",
+             "refused function: ShortHardwareId cannot bring one back");
 }
 
 static void test_single(void)
@@ -388,6 +413,7 @@ int main(void)
     test_reversed();
     test_untouched();
     test_function();
+    test_refused_at();
     test_single();
     test_malformed();
 

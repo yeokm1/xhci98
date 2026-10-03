@@ -720,6 +720,11 @@ typedef struct _HCD_CONTROLLER {
      * and outside the matrix block, whose offsets the harness reads (the
      * matrix's transport field is 31-A.3's harness half, not drafted). */
     ULONG XportDecisions[XHCI_XPORT_WHY_COUNT];
+    /* Each refused device once (31-A.3), by where it sits
+     * (XHCI_XPORT_AT_*), and the companion-port requests the 29-A.5 hold
+     * did not take - all of them until its executor is wired. */
+    ULONG XportRefusedAt[XHCI_XPORT_AT_COUNT];
+    ULONG XportHoldsNotTaken;
 
     /* The kept controller sequence's state, as the miniport's extension. */
     XHCI_EXTENSION Hc;
@@ -883,6 +888,22 @@ PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
 VOID HcdDevicePdoReleaseAll(PHCD_CONTROLLER hc);
 NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp);
 NTSTATUS HcdDevicePdoPower(PHCD_DEVICE_PDO pdo, PIRP irp);
+
+/*
+ * The call boundary between 31-A.3 and 29-A.5: send a device back from its
+ * SuperSpeed root port to the USB 2.0 companion and hold the port, for
+ * `reason` (HCD_HOLD_WHY_*). Called only for a device on a companion-paired
+ * root port (XHCI_XPORT_AT_ROOT_COMPANION), on the controller thread, before
+ * any of its PDOs is listed. Nonzero: the hold is taken - the device is
+ * leaving this port, so the caller lists no PDO and fails the creation with
+ * STATUS_DEVICE_REMOVED; 0: not taken, and the device is refused in place.
+ * hcd_pdo.c carries a stub that takes nothing (the executor is Phase 29's,
+ * on branch p29); the integration replaces the stub with the executor's
+ * entry, and the identity read and release rules are 29-A.5's.
+ */
+#define HCD_HOLD_WHY_UAS_NO_STREAMS 1UL /* UAS-only at SS, HC has no streams */
+ULONG HcdHoldRequestUsb2(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                         ULONG reason);
 
 /* hcd_urb.c */
 NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp);
