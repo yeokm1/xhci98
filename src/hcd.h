@@ -360,6 +360,12 @@ typedef struct _HCD_DEVICE_PDO {
      * list under the cancel spin lock, each still counted in UrbsPending. */
     LIST_ENTRY ParkedIrps;
     ULONG ParkedCount;
+    /* Pipes the client aborted and has not submitted to since, by handle
+     * (HCD_PDO_ABORTS, the oldest overwritten), under the cancel spin
+     * lock: a request of one of them is completed CANCELED rather than
+     * held (HcdIoPark), whenever its device's departure reaches it. */
+    PVOID AbortedPipe[8];
+    ULONG AbortedNext;
     volatile LONG Busy;             /* dispatches inside hcd_urb.c, raised
                                      * before Controller is read; the
                                      * parent's release waits it out      */
@@ -891,8 +897,12 @@ ULONG HcdIoDeviceDrain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 NTSTATUS HcdIoRefuseLater(struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb,
                           LONG usbd);
 VOID HcdIoRefusedInit(struct _HCD_DEVICE_PDO *pdo);
+#define HCD_PDO_ABORTS 8UL
 ULONG HcdIoPark(struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb);
-ULONG HcdIoParkedRelease(struct _HCD_DEVICE_PDO *pdo);
+ULONG HcdIoParkedRelease(struct _HCD_DEVICE_PDO *pdo, ULONG onePipe,
+                         PVOID handle);
+VOID HcdIoAbortMark(struct _HCD_DEVICE_PDO *pdo, PVOID handle);
+VOID HcdIoAbortClear(struct _HCD_DEVICE_PDO *pdo, PVOID handle);
 VOID HcdIoRefusedDrain(struct _HCD_DEVICE_PDO *pdo);
 ULONG HcdIoDeviceGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 VOID HcdIoIsoRefused(PVOID urb, LONG usbd);

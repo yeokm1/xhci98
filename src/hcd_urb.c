@@ -329,6 +329,11 @@ static NTSTATUS hcdTransferUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     LONG usbd;
 
     usbd = HcdUrbIoRequest(urb, &req);
+    if (usbd == USBD_STATUS_SUCCESS) {
+        /* A submission after an abort: the pipe's requests are held again
+         * on a departure (hcd_io.c, HcdIoAbortClear). */
+        HcdIoAbortClear(pdo, req.Handle);
+    }
     if (usbd != USBD_STATUS_SUCCESS) {
         hcdCount(&hc->Counters.UrbsMalformed);
         if (urb->UrbHeader.Function == URB_FUNCTION_ISOCH_TRANSFER) {
@@ -459,6 +464,23 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         hcdCount(&hc->UrbUnknown);
     }
 
+    if (function == URB_FUNCTION_ABORT_PIPE) {
+        /*
+         * Remembered first, whatever follows (hcd_io.c, HcdIoAbortMark): a
+         * request of the pipe that its device's departure reaches later is
+         * completed CANCELED, not held. On a PDO whose device has left - or
+         * an orphan - the abort is answered here with no controller or
+         * device record: what the departure left held for the pipe is
+         * completed, and the abort succeeds, as on a pipe with nothing on
+         * it (Codex review of f99f184, findings 1 and 2).
+         */
+        HcdIoAbortMark(pdo, urb->UrbPipeRequest.PipeHandle);
+        if (hc == NULL || !pdo->Listed) {
+            (VOID)HcdIoParkedRelease(pdo, 1, urb->UrbPipeRequest.PipeHandle);
+            urb->UrbHeader.Status = USBD_STATUS_SUCCESS;
+            return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+        }
+    }
     if (hc == NULL || !pdo->Listed) {
         /* Orphaned, or its device has left: nothing on the bus answers. */
         return hcdGoneLater(pdo, irp, urb);
@@ -491,13 +513,15 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     case URB_FUNCTION_ABORT_PIPE:
     case URB_FUNCTION_RESET_PIPE:
         /* Commands: pended for the controller thread (hcd_cfg.c). An
-         * abort on a PDO whose device left completes what that device
-         * left held (hcd_io.c, HcdIoPark), and is then refused as any
-         * request to a gone device is. */
+         * abort whose device left between the check above and here is
+         * answered as one on a departed PDO is. */
         dev = hcdDeviceRef(hc, pdo);
         if (dev == NULL) {
             if (function == URB_FUNCTION_ABORT_PIPE) {
-                (VOID)HcdIoParkedRelease(pdo);
+                (VOID)HcdIoParkedRelease(pdo, 1,
+                                         urb->UrbPipeRequest.PipeHandle);
+                urb->UrbHeader.Status = USBD_STATUS_SUCCESS;
+                return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
             }
             return hcdGoneLater(pdo, irp, urb);
         }

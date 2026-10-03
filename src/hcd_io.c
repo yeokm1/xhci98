@@ -1744,7 +1744,7 @@ ULONG HcdIoDeviceGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
  * for a record: held on its PDO, cancellable, instead of completed
  * DEVICE_GONE - as a request to a device that stopped answering stays
  * pending under the hub drivers this bus stands in for - until its client
- * aborts a pipe (ABORT_PIPE, hcd_urb.c), cancels the IRP, or its PDO is
+ * aborts its pipe (ABORT_PIPE, hcd_urb.c), cancels the IRP, or its PDO is
  * stopped, surprise removed or removed (hcdPdoQuiesce); each completes it
  * CANCELED (HcdIoParkedRelease). A URB submitted after the device left is
  * still refused DEVICE_GONE at the next tick (HcdIoRefuseLater).
@@ -1757,28 +1757,69 @@ ULONG HcdIoDeviceGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
  * a root port, its reads completed DEVICE_GONE as the teardown drained
  * them. A read that never fails puts hidclass in no such state.
  *
+ * An abort is remembered (HcdIoAbortMark): a request of a pipe the client
+ * has aborted, and not submitted to since, is completed CANCELED here at
+ * once instead of held - one the teardown reaches only after the abort
+ * released the list would otherwise be held for good while its client
+ * waits for it before passing its removal down (Codex review of f99f184,
+ * finding 2). Its hardware resources are already released by then.
+ *
  * Not held once the PDO is closing (a stop or removal under way, read under
  * the cancel spin lock its release takes, so nothing is held after the
  * release has run) or the IRP is cancelled: the caller completes those as
- * before. Returns 1 when held. The IRP keeps its count in pdo->UrbsPending;
- * the caller returns its device reference, which a held IRP no longer
- * needs. IRQL: <= DISPATCH_LEVEL, no lock held.
+ * before (returns 0). Returns 1 when held or completed here; either way
+ * the IRP's count in pdo->UrbsPending is this file's to return, and the
+ * caller returns its device reference, which neither needs. IRQL:
+ * <= DISPATCH_LEVEL, no lock held.
  */
 static VOID hcdParkedCancel(PDEVICE_OBJECT obj, PIRP irp);
+
+static VOID hcdParkedComplete(PHCD_DEVICE_PDO pdo, PIRP irp);
+
+/* Whether the client aborted that pipe and has not submitted to it since.
+ * Cancel spin lock held. */
+static ULONG hcdAbortedLocked(PHCD_DEVICE_PDO pdo, PVOID handle)
+{
+    ULONG i;
+
+    for (i = 0; i < HCD_PDO_ABORTS; i++) {
+        if (pdo->AbortedPipe[i] == handle && handle != NULL) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The pipe handle a URB names: NULL for the default pipe. */
+static PVOID hcdUrbPipe(PVOID urb)
+{
+    HCD_IO_REQUEST req;
+
+    (VOID)HcdUrbIoRequest(urb, &req);
+    return req.Handle;
+}
 
 ULONG HcdIoPark(PHCD_DEVICE_PDO pdo, PIRP irp, PVOID urb)
 {
     KIRQL cancelIrql;
+    PVOID handle;
 
     if (pdo == NULL) {
         return 0;
     }
+    handle = hcdUrbPipe(urb);
     IoAcquireCancelSpinLock(&cancelIrql);
     if (pdo->Closing || irp->Cancel) {
         IoReleaseCancelSpinLock(cancelIrql);
         return 0;
     }
+    if (hcdAbortedLocked(pdo, handle)) {
+        IoReleaseCancelSpinLock(cancelIrql);
+        hcdParkedComplete(pdo, irp);
+        return 1;
+    }
     ((PURB)urb)->UrbHeader.Status = HCD_USBD_DEVICE_GONE;
+    irp->Tail.Overlay.DriverContext[1] = handle;
     irp->Tail.Overlay.DriverContext[2] = pdo;
     IoMarkIrpPending(irp);
     (VOID)IoSetCancelRoutine(irp, hcdParkedCancel);
@@ -1786,6 +1827,47 @@ ULONG HcdIoPark(PHCD_DEVICE_PDO pdo, PIRP irp, PVOID urb)
     pdo->ParkedCount++;
     IoReleaseCancelSpinLock(cancelIrql);
     return 1;
+}
+
+/*
+ * ABORT_PIPE seen on the PDO (hcd_urb.c), whatever becomes of it: the pipe
+ * is remembered as aborted until the client submits to it again
+ * (HcdIoAbortClear), so a request of it that its device's departure reaches
+ * later is completed CANCELED, not held (HcdIoPark). Kept per PDO, by
+ * handle, the oldest of HCD_PDO_ABORTS overwritten. IRQL: <= DISPATCH_LEVEL.
+ */
+VOID HcdIoAbortMark(PHCD_DEVICE_PDO pdo, PVOID handle)
+{
+    KIRQL cancelIrql;
+
+    if (handle == NULL) {
+        return;
+    }
+    IoAcquireCancelSpinLock(&cancelIrql);
+    if (!hcdAbortedLocked(pdo, handle)) {
+        pdo->AbortedPipe[pdo->AbortedNext % HCD_PDO_ABORTS] = handle;
+        pdo->AbortedNext = (pdo->AbortedNext + 1) % HCD_PDO_ABORTS;
+    }
+    IoReleaseCancelSpinLock(cancelIrql);
+}
+
+/* A transfer submitted to the pipe after its abort: requests of it are
+ * held again on a departure. IRQL: <= DISPATCH_LEVEL. */
+VOID HcdIoAbortClear(PHCD_DEVICE_PDO pdo, PVOID handle)
+{
+    KIRQL cancelIrql;
+    ULONG i;
+
+    if (handle == NULL) {
+        return;
+    }
+    IoAcquireCancelSpinLock(&cancelIrql);
+    for (i = 0; i < HCD_PDO_ABORTS; i++) {
+        if (pdo->AbortedPipe[i] == handle) {
+            pdo->AbortedPipe[i] = NULL;
+        }
+    }
+    IoReleaseCancelSpinLock(cancelIrql);
 }
 
 static VOID hcdParkedComplete(PHCD_DEVICE_PDO pdo, PIRP irp)
@@ -1813,25 +1895,32 @@ static VOID hcdParkedCancel(PDEVICE_OBJECT obj, PIRP irp)
     hcdParkedComplete(pdo, irp);
 }
 
-/* Every IRP held on the PDO completed CANCELED. Returns how many. IRQL:
- * <= DISPATCH_LEVEL, no lock held. */
-ULONG HcdIoParkedRelease(PHCD_DEVICE_PDO pdo)
+/* The IRPs held on the PDO - every one, or with `onePipe` those of pipe
+ * `handle` - completed CANCELED. Returns how many. IRQL: <= DISPATCH_LEVEL,
+ * no lock held. */
+ULONG HcdIoParkedRelease(PHCD_DEVICE_PDO pdo, ULONG onePipe, PVOID handle)
 {
     LIST_ENTRY mine;
     PLIST_ENTRY entry;
+    PLIST_ENTRY next;
     PIRP irp;
     KIRQL cancelIrql;
     ULONG n;
 
     InitializeListHead(&mine);
     IoAcquireCancelSpinLock(&cancelIrql);
-    while (!IsListEmpty(&pdo->ParkedIrps)) {
-        entry = RemoveHeadList(&pdo->ParkedIrps);
+    for (entry = pdo->ParkedIrps.Flink; entry != &pdo->ParkedIrps;
+         entry = next) {
+        next = entry->Flink;
         irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
+        if (onePipe && irp->Tail.Overlay.DriverContext[1] != handle) {
+            continue;
+        }
+        RemoveEntryList(entry);
         (VOID)IoSetCancelRoutine(irp, NULL);
         InsertTailList(&mine, entry);
+        pdo->ParkedCount--;
     }
-    pdo->ParkedCount = 0;
     IoReleaseCancelSpinLock(cancelIrql);
     n = 0;
     while (!IsListEmpty(&mine)) {
@@ -1989,9 +2078,15 @@ static VOID hcdRefusedDpc(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2)
  * PASSIVE_LEVEL. */
 VOID HcdIoRefusedInit(PHCD_DEVICE_PDO pdo)
 {
+    ULONG i;
+
     InitializeListHead(&pdo->RefusedIrps);
     InitializeListHead(&pdo->ParkedIrps);
     pdo->ParkedCount = 0;
+    for (i = 0; i < HCD_PDO_ABORTS; i++) {
+        pdo->AbortedPipe[i] = NULL;
+    }
+    pdo->AbortedNext = 0;
     KeInitializeTimer(&pdo->RefuseTimer);
     KeInitializeDpc(&pdo->RefuseDpc, hcdRefusedDpc, pdo);
     pdo->RefuseArmed = 0;
