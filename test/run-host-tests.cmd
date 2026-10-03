@@ -43,7 +43,14 @@ rem   test_topo    - the hub topology graph (src\xhci_topo.c): the snooped
 rem                  hub-class requests as measured on the wire, the hub
 rem                  descriptor and port-status folds, the pending-parent
 rem                  claim, Route String nibble arithmetic with its five-tier
-rem                  refusal, and subtree/generation pruning
+rem                  refusal, and subtree/generation pruning; and task
+rem                  27-A.4's vectors: placements with their Route String,
+rem                  root port and TT triple behind single-TT, multi-TT and
+rem                  Full-Speed hubs to the depth limit, removal, malformed
+rem                  hub descriptors, the well-formedness of the hub port
+rem                  table in test\hub_port_vectors.h, and the known gaps
+rem                  against the design records, printed as KNOWN GAP lines
+rem                  that do not fail the run
 rem   test_strict  - strict mode's command precondition table (src\xhci_strict.c):
 rem                  every command type x DW3 bit 9 x slot state x EP State,
 rem                  the Configure Endpoint flag rule and the refusal codes
