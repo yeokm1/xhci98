@@ -913,8 +913,8 @@ VOID HcdUrbIdleDrain(PHCD_DEVICE_PDO pdo)
 /*
  * IOCTL_INTERNAL_USB_GET_TOPOLOGY_ADDRESS (Windows 7 usbstor's
  * IsDeviceConnectedToRootHub, design record 13 section 6.4): the
- * controller's PCI location and the root port, every hub port 0 - the bus
- * offers no hub to a driver until Phase 27, which must fill the chain here.
+ * controller's PCI location, the root port and the hub ports below it from
+ * the device's Route String (all 0 on a root port).
  * The PCI location is read once, at PASSIVE_LEVEL, from the controller's
  * PDO (IoGetDeviceProperty, already imported); a request at DISPATCH_LEVEL
  * before that, or a property the PCI bus will not give, leaves it 0, which
@@ -947,8 +947,8 @@ static NTSTATUS hcdTopologyAddress(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
             pdo->PciRead = 1;
         }
     }
-    if (XhciPipeTopologyAddress(pdo->PciBus, pdo->PciAddress, pdo->Port,
-                                out) != XHCI_PIPE_OK) {
+    if (XhciPipeTopologyAddress(pdo->PciBus, pdo->PciAddress, pdo->RootPort,
+                                pdo->Route, out) != XHCI_PIPE_OK) {
         return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
     }
     return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);

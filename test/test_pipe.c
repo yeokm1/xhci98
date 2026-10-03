@@ -1470,7 +1470,7 @@ static void test_xp_requests(void)
     for (i = 0; i < sizeof(b); i++) {
         b[i] = 0xAA;
     }
-    CHECK_EQ(XhciPipeTopologyAddress(3, (0x14UL << 16) | 2UL, 5, b),
+    CHECK_EQ(XhciPipeTopologyAddress(3, (0x14UL << 16) | 2UL, 5, 0, b),
              XHCI_PIPE_OK, "topology, root port 5");
     CHECK_EQ(get32(b), 3, "PCI bus");
     CHECK_EQ(get32(b + 4), 0x14, "PCI device from bits 31:16");
@@ -1481,11 +1481,20 @@ static void test_xp_requests(void)
         CHECK_EQ(b[i], 0, "no hub between, reserved zero");
     }
     CHECK_EQ(b[32], 0xAA, "32 bytes and no more");
-    CHECK_EQ(XhciPipeTopologyAddress(0, 0, 0, b), XHCI_PIPE_BAD_PARAM,
+    CHECK_EQ(XhciPipeTopologyAddress(0, 0, 2, 0x5F3UL, b), XHCI_PIPE_OK,
+             "topology, three hubs below root port 2");
+    CHECK_EQ(b[16] | (b[17] << 8), 2, "RootHubPortNumber behind hubs");
+    CHECK_EQ(b[18] | (b[19] << 8), 3, "first hub's port, route bits 3:0");
+    CHECK_EQ(b[20] | (b[21] << 8), 15, "second hub's port");
+    CHECK_EQ(b[22] | (b[23] << 8), 5, "third hub's port");
+    for (i = 24; i < 32; i++) {
+        CHECK_EQ(b[i], 0, "the path ends: zero");
+    }
+    CHECK_EQ(XhciPipeTopologyAddress(0, 0, 0, 0, b), XHCI_PIPE_BAD_PARAM,
              "port 0");
-    CHECK_EQ(XhciPipeTopologyAddress(0, 0, 256, b), XHCI_PIPE_BAD_PARAM,
+    CHECK_EQ(XhciPipeTopologyAddress(0, 0, 256, 0, b), XHCI_PIPE_BAD_PARAM,
              "port 256");
-    CHECK_EQ(XhciPipeTopologyAddress(0, 0, 1, NULL), XHCI_PIPE_BAD_PARAM,
+    CHECK_EQ(XhciPipeTopologyAddress(0, 0, 1, 0, NULL), XHCI_PIPE_BAD_PARAM,
              "no buffer");
 }
 

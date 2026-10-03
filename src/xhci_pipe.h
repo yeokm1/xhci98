@@ -480,13 +480,15 @@ ULONG XhciPipeBusInformation(ULONG level, ULONG totalBandwidth,
 #define XHCI_PIPE_TOPOLOGY_BYTES    32UL
 
 /*
- * A USB_TOPOLOGY_ADDRESS for a device on root port `rootPort` with no hub
- * between: the controller's PCI bus number, and its device and function from
- * a DevicePropertyAddress value (device in bits 31:16, function in 15:0, as
- * the PCI bus driver reports it), every hub port 0. XHCI_PIPE_BAD_PARAM for a
- * NULL buffer or a root port outside 1..255.
+ * A USB_TOPOLOGY_ADDRESS for a device below root port `rootPort` at Route
+ * String `route` (xHCI 8.9: a nibble per hub tier, the first hub's port in
+ * bits 3:0, 0 where the path ends): the controller's PCI bus number, its
+ * device and function from a DevicePropertyAddress value (device in bits
+ * 31:16, function in 15:0, as the PCI bus driver reports it), the root port,
+ * and HubPortNumber[0..4] from the route's five nibbles - all 0 on a root
+ * port. XHCI_PIPE_BAD_PARAM for a NULL buffer or a root port outside 1..255.
  */
 ULONG XhciPipeTopologyAddress(ULONG pciBus, ULONG pciAddress, ULONG rootPort,
-                              UCHAR *out);
+                              ULONG route, UCHAR *out);
 
 #endif /* XHCI_PIPE_H */

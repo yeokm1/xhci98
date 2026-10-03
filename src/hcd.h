@@ -363,6 +363,8 @@ typedef struct _HCD_DEVICE_PDO {
     ULONG InstanceKey;              /* the instance id and the address
                                      * (XhciHubInstanceKey): the root port,
                                      * with the route above it behind hubs */
+    ULONG RootPort;                 /* its device's Port and Route, fixed */
+    ULONG Route;                    /* at creation (GET_TOPOLOGY_ADDRESS) */
     ULONG Speed;
     ULONG SpeedClass;               /* XHCI_SPEED_*, decoded at creation:
                                      * the raw Speed is a PSIV whose

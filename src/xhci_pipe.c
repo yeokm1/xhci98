@@ -923,7 +923,7 @@ ULONG XhciPipeBusInformation(ULONG level, ULONG totalBandwidth,
 }
 
 ULONG XhciPipeTopologyAddress(ULONG pciBus, ULONG pciAddress, ULONG rootPort,
-                              UCHAR *out)
+                              ULONG route, UCHAR *out)
 {
     ULONG i;
 
@@ -937,5 +937,8 @@ ULONG XhciPipeTopologyAddress(ULONG pciBus, ULONG pciAddress, ULONG rootPort,
     xhciPipePut32(out + 4, (pciAddress >> 16) & 0xFFFFUL);
     xhciPipePut32(out + 8, pciAddress & 0xFFFFUL);
     out[16] = (UCHAR)(rootPort & 0xFFUL);
+    for (i = 0; i < 5UL; i++) {
+        out[18 + 2 * i] = (UCHAR)((route >> (4 * i)) & 0xFUL);
+    }
     return XHCI_PIPE_OK;
 }

@@ -397,6 +397,8 @@ static NTSTATUS hcdPdoNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     pdo->Serial = serial;
     pdo->Port = dev->Location;
     pdo->InstanceKey = XhciHubInstanceKey(dev->Port, dev->Route);
+    pdo->RootPort = dev->Port;
+    pdo->Route = dev->Route;
     pdo->Speed = dev->Speed;
     pdo->SpeedClass = XHCI_SPEED_UNKNOWN;
     (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, dev->Port, dev->Speed,
