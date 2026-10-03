@@ -1267,6 +1267,8 @@ Assert "a row with no ClaimLabel reads endpoints opened" "endpoints opened" (Get
 $hubOk = @{ 'devices addressed' = 1; 'slots enabled' = 1; 'hubs started by the bus' = 1; 'port speed decoded - full speed' = 1; 'slot context speed - full speed' = 1
             'topology: hub descriptors folded' = 1; 'topology: hub slots marked' = 1 }
 Assert "hub served by the bus: PASS"                 "PASS" (Get-HcdOutcome $hubFs (New-HcdDelta $hubOk))
+$hubTt = $hubOk.Clone(); $hubTt['topology: TT pairs programmed'] = 1
+Assert "an FS hub on a root port with a TT programmed: FAIL" "FAIL" (Get-HcdOutcome $hubFs (New-HcdDelta $hubTt))
 $hub26 = @{ 'devices addressed' = 1; 'slots enabled' = 1; 'port speed decoded - full speed' = 1; 'slot context speed - full speed' = 1 }
 Assert "Phase 26's hub, offered with no driver: NODRIVER" "NODRIVER" (Get-HcdOutcome $hubFs (New-HcdDelta $hub26))
 $hubNoFold = $hubOk.Clone(); $hubNoFold['topology: hub descriptors folded'] = 0
@@ -1276,8 +1278,13 @@ Assert "...which the default claim would misread as NODRIVER" "NODRIVER" (Get-Hc
 $churnH = Get-HcdRow $mxHcd 'usb-hub/churn'
 $churn27 = @{ 'devices addressed' = 11; 'slots enabled' = 11; 'hubs started by the bus' = 6
               'port speed decoded - full speed' = 11; 'slot context speed - full speed' = 11
-              'topology: hub descriptors folded' = 6; 'topology: behind-hub opens' = 5; 'topology: behind-hub devices addressed' = 10 }
+              'topology: hub descriptors folded' = 6; 'topology: hub slots marked' = 6; 'topology: behind-hub opens' = 10; 'topology: behind-hub devices addressed' = 10
+              'endpoints opened' = 5; 'select endpoints requested' = 5 }
 Assert "churn, five tiers deep and the tier-5 mouse addressed: PASS" "PASS" (Get-HcdOutcome $churnH (New-HcdDelta $churn27))
+$churnUnbound = $churn27.Clone(); $churnUnbound['topology: behind-hub opens'] = 9; $churnUnbound['endpoints opened'] = 4; $churnUnbound['select endpoints requested'] = 4
+Assert "churn with the tier-5 mouse addressed but not bound: FAIL" "FAIL" (Get-HcdOutcome $churnH (New-HcdDelta $churnUnbound))
+$churnHubShort = $churn27.Clone(); $churnHubShort['hubs started by the bus'] = 5
+Assert "churn with a hub of the chain never started: FAIL" "FAIL" (Get-HcdOutcome $churnH (New-HcdDelta $churnHubShort))
 $churnVhub = $churn27.Clone(); $churnVhub['devices addressed'] = 10; $churnVhub['slots enabled'] = 10
 $churnVhub['port speed decoded - full speed'] = 10; $churnVhub['slot context speed - full speed'] = 10; $churnVhub['topology: behind-hub devices addressed'] = 9
 Assert "churn stopping at the virtual hub's tier: FAIL" "FAIL" (Get-HcdOutcome $churnH (New-HcdDelta $churnVhub))
