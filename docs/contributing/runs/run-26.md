@@ -649,3 +649,36 @@ The fix (`9a593a6`): once a STOP or REMOVE has begun, the refusal DPC completes 
 **Why the stick failed** (runtime, the debugcon traces). On both, `usbstor.sys` selects its configuration, which succeeds, and then sends IOCTL_INTERNAL_USB_RESET_PORT (0x00220007): once on Windows 98 SE, three times on Windows 2000. The HCD answers STATUS_NOT_SUPPORTED, and `usbstor.sys` fails its start. On Windows 98 SE it first unconfigures (a SELECT_CONFIGURATION with a NULL configuration) and the PDO then receives a STOP; on Windows 2000 the PDO receives a REMOVE.
 
 The Waiting list was not exercised here: no client in this leg queues more than four requests on a pipe, so c13 was a regression check for HID. RESET_PORT (26-A.6) is what gates storage on both primaries, and it is taken next.
+
+### Storage on both primaries, a USB audio device, and Codex rounds 16 and 17 (c14)
+
+**c14** (`fbe2eb88...15c8`, `1fa0cc2`, 2026-10-03, development host A, fresh overlays): RESET_PORT, CYCLE_PORT, GET_BUS_INFO and GET_HUB_COUNT are served, on top of the Waiting list (`08c0d5a`) and isochronous transfers (`fb8d8f0`). Windows 98 SE ran on c14 and, after the install restart, c14b; Windows 2000 on c14. The stick was c13's.
+- **Windows 98 SE** (c14-98):
+  - The controller and the USB mouse installed as in c13, asking for the CD for `usbd.sys` and then `hidclass.sys`, and the controller for a restart. The mouse moved the pointer.
+  - The stick enumerated at 480 Mb/s and `USBSTOR.INF` installed with no file prompt and, unlike c13, no restart prompt. An Explorer window opened on F: by itself, and Device Manager showed a USB Disk under Storage device, with no bangs.
+  - `dir F:\` listed `RAND.BIN` (4,194,304 bytes) and `README.TXT` (18 bytes), and `type F:\README.TXT` printed `xhci98 c13 stick`.
+  - `fc /b` reported "no differences encountered" for `F:\RAND.BIN`, for a copy to `F:\COPY.BIN`, and for a copy from F: back to C:. By the host clock the copy to F: took 3 s or less and the copy back 1 s or less.
+  - Unplugging the stick, then the mouse: no hang and no dialog, and the Start menu opened after each.
+  - Shutdown was clean.
+- **Windows 2000** (c14-2k):
+  - The controller installed with no restart prompt, and the USB mouse moved the pointer.
+  - The stick enumerated at 480 Mb/s with no prompt at all, and appeared as "QEMU QEMU HARDDISK USB Device" under Disk drives and as F:.
+  - `dir`, `type` and the three `fc /b` comparisons gave the same results as on Windows 98 SE. Each copy returned within 5.2 s by the host clock; the guest clock gave 0.05 s and 0.02 s, as the copies returned from cache and the writes to F: are lazy.
+  - Unplugging the stick: no bugcheck and no dialog, and the disk left Device Manager.
+- Neither trace has a RESET_PORT refusal or a "not served" line.
+
+**The USB audio device.** On Windows 2000, a C-Media USB Audio Device (0D8C:0014, 12 Mb/s) was passed through from the host with `usb-host`, its bus and address read from `info usbhost`.
+- Some 35 s later the guest had rebooted. It bugchecked on every boot while the device stayed attached: STOP 0x0000001E (0xC0000005, 0xBF48AA90, 0, 0x00310030) in `usbaudio.sys` (base BF486000, DateStamp 3803cad4).
+- Each cycle's trace ends right after a second SELECT_CONFIGURATION (URB length 0x70) completed.
+- The rest of the leg was not run.
+
+**Why** (static, `usbaudio.sys` of Windows 2000 SP4; RVA 0x4A90 lies in the function that builds its configuration request):
+- It sizes its interface list by the configuration's bNumInterfaces but fills only the audio interfaces and the NULL terminator, whose Interface field `usbd.sys`'s USBD_CreateConfigurationRequestEx leaves unwritten.
+- It then reads list[i].Interface for every i < bNumInterfaces. For this device (AudioControl, two AudioStreaming and HID), the pointer at i = 3 is uninitialised.
+- On the stock stack `usbaudio.sys` is bound to a function PDO, whose filtered configuration descriptor carries only its own interfaces. This HCD does not yet split composite devices (26-A.7), so `usbaudio.sys` was bound to the whole device through the first interface's class.
+
+Audio therefore waits on 26-A.7, which is taken next. Isochronous transfers were not reached: the bugcheck came first.
+
+**Round 16** (two MAJOR, four MINOR, fixed in `7df3809`): a waiter could be stranded, and an explicit StartFrame fell back to Start Isoch ASAP (SIA).
+
+**Round 17** (two MAJOR, one MINOR, fixed in `f69b723`): the cadence condition, and an access in the refusal of a short URB. Round 18 is pending.

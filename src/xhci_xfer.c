@@ -3150,7 +3150,6 @@ ULONG XhciXferBuildIso(const XHCI_ISO_REQUEST *request,
     const USBPORT_ISO_TRANSFER *iso;
     ULONG packets;
     ULONG useFrameId;
-    ULONG frameId;
     ULONG status;
     ULONG i;
 
