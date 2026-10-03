@@ -144,16 +144,7 @@ ULONG HcdDevicePipeSpeed(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 
     cls = XHCI_SPEED_UNKNOWN;
     (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, dev->Port, dev->Speed, &cls);
-    switch (cls) {
-    case XHCI_SPEED_LOW:
-        return XHCI_PIPE_SPEED_LOW;
-    case XHCI_SPEED_FULL:
-        return XHCI_PIPE_SPEED_FULL;
-    case XHCI_SPEED_HIGH:
-        return XHCI_PIPE_SPEED_HIGH;
-    default:
-        return 0;
-    }
+    return XhciPipeSpeedFromClass(cls);
 }
 
 /*
@@ -297,7 +288,9 @@ ULONG HcdHubPortStatus(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
  * port disconnected (Codex review of 23e7715, finding 7). Returns 1 once
  * connected and stable; 0 once stably disconnected, once
  * HCD_HUB_DEBOUNCE_LIMIT_MS have elapsed without a stable connection, or
- * when the hub does not answer.
+ * when the hub does not answer. The limit is soft: it is checked between
+ * reads, and a GET_STATUS already sent can run to the control transfer's
+ * own 5 s time-out (HCD_TRANSFER_WAIT_MS) before the check comes round.
  */
 ULONG HcdHubPortDebounce(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
 {
@@ -354,6 +347,49 @@ ULONG HcdHubPortDebounce(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
 }
 
 /*
+ * A suspended hub port resumed (xhci_hub.h, "handled, never initiated"):
+ * ClearPortFeature(PORT_SUSPEND), the hub's resume signalling waited out -
+ * polled from TDRSMDN on, given up at XHCI_HUB_RESUME_WAIT_MS - its
+ * C_PORT_SUSPEND cleared, then the resume recovery TRSMRCY. Returns 1 once
+ * the port reads resumed.
+ */
+static ULONG hcdHubPortResume(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
+{
+    ULONG status;
+    ULONG change;
+    ULONG waited;
+    ULONG progress;
+
+    if (!hcdHubFeature(hc, hub, n, 0, XHCI_HUB_FEAT_PORT_SUSPEND)) {
+        return 0;
+    }
+    hcdHubDelay(XHCI_HUB_RESUME_FIRST_MS);
+    waited = XHCI_HUB_RESUME_FIRST_MS;
+    for (;;) {
+        if (!HcdHubPortStatus(hc, hub, n, &status, &change)) {
+            return 0;
+        }
+        progress = XhciHubResumeProgress(status);
+        if (progress != XHCI_HUB_RESET_PENDING ||
+            waited >= XHCI_HUB_RESUME_WAIT_MS) {
+            break;
+        }
+        hcdHubDelay(HCD_HUB_POLL_STEP_MS);
+        waited += HCD_HUB_POLL_STEP_MS;
+    }
+    if ((change & XHCI_HUB_C_PORT_SUSPEND) != 0) {
+        (VOID)hcdHubFeature(hc, hub, n, 0, XHCI_HUB_FEAT_C_PORT_SUSPEND);
+    }
+    XHCI_DBG_VALUE("hcd: hub port resumed by the bus, hub/port/progress",
+                   (hub->Index << 16) | (n << 8) | progress);
+    if (progress != XHCI_HUB_RESET_ENABLED) {
+        return 0;
+    }
+    hcdHubDelay(XHCI_HUB_RESUME_RECOVERY_MS);
+    return 1;
+}
+
+/*
  * SET_FEATURE(PORT_RESET) on hub port n, waited for (section 10.2 step 4):
  * C_PORT_RESET cleared, the port required enabled, the speed read from
  * wPortStatus, then the reset recovery. One device is between its reset
@@ -372,6 +408,12 @@ ULONG HcdHubPortReset(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     *speedClass = XHCI_SPEED_UNKNOWN;
     if (!HcdHubPortStatus(hc, hub, n, &status, &change) ||
         (status & XHCI_HUB_PORT_CONNECTION) == 0) {
+        return 0;
+    }
+    /* A suspended port is resumed before it is reset (xhci_hub.h). */
+    if (XhciHubResumeBeforeReset(status) &&
+        (!hcdHubPortResume(hc, hub, n) ||
+         !HcdHubPortStatus(hc, hub, n, &status, &change))) {
         return 0;
     }
     /* An older reset's change cleared first, so the one that ends this
@@ -443,7 +485,14 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     if (d->Repower) {
         (VOID)hcdHubFeature(hc, hub, n, 1, XHCI_HUB_FEAT_PORT_POWER);
     }
-    if (d->Suspended) {
+    if (d->Resume) {
+        /* Reported suspended: resumed before anything else is asked of the
+         * device (handled, never initiated; xhci_hub.h). */
+        (VOID)hcdHubPortResume(hc, hub, n);
+    } else if (d->Suspended) {
+        /* A resume finished - a device's remote wake among them: the
+         * device stays as it is, after the resume recovery. */
+        hcdHubDelay(XHCI_HUB_RESUME_RECOVERY_MS);
         XHCI_DBG_VALUE("hcd: hub port resumed, hub/port",
                        (hub->Index << 8) | n);
     }
@@ -500,7 +549,11 @@ static VOID hcdHubSelf(PHCD_CONTROLLER hc, PHCD_HUB hub)
  * read and confirms nothing (Codex review round 25). The reads clear no
  * change bit - the hub service acts on each - but a GET_STATUS reply is
  * folded into the topology graph as every hub request's is (hcdHubRequest).
- * Thread only, powered.
+ * Once the controller has failed or a timed-out transfer may still DMA into
+ * the scratch (a GET_STATUS here can be what requested that recovery), no
+ * further hub is asked: the probe stops and the failure is counted, since
+ * nothing more was learnt (Codex review of the Phase 27 integration, round
+ * 3). Thread only, powered.
  */
 ULONG HcdHubPathPresent(PHCD_CONTROLLER hc, PHCD_PORT q)
 {
@@ -517,6 +570,9 @@ ULONG HcdHubPathPresent(PHCD_CONTROLLER hc, PHCD_PORT q)
         }
         if (hub->Draining || hub->Device == NULL) {
             return 0;
+        }
+        if (hc->Hc.ControllerFailed || hc->ScratchTainted) {
+            return 1;
         }
         if (HcdHubPortStatus(hc, hub, q->Number, &status, &change) &&
             ((status & XHCI_HUB_PORT_CONNECTION) == 0 ||

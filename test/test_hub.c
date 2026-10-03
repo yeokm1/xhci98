@@ -14,6 +14,7 @@
 #include "../src/xhci.h"
 #include "../src/xhci_enum.h"
 #include "../src/xhci_hub.h"
+#include "../src/xhci_pipe.h"
 #include "test_harness.h"
 
 static void test_descriptor(void)
@@ -264,8 +265,99 @@ static void test_release_order(void)
     CHECK_EQ(XhciHubReleaseOrder(NULL, 10, 0, order), 0, "NULL parent");
 }
 
+/* Suspend and resume, handled and never initiated (the owner's decision of
+ * 2026-10-04; xhci_hub.h): a port the hub reports suspended is resumed, a
+ * finished resume or a remote wake needs no re-enumeration, and a
+ * suspended port is resumed before its reset. */
+static void test_suspend(void)
+{
+    XHCI_HUB_PORT_DECISION d;
+    ULONG on;
+
+    on = XHCI_HUB_PORT_POWER | XHCI_HUB_PORT_CONNECTION |
+         XHCI_HUB_PORT_ENABLE;
+
+    XhciHubPortDecide(XHCI_ENUM_BOUND, on, XHCI_HUB_C_PORT_SUSPEND, &d);
+    CHECK(d.Suspended && !d.Resume, "a remote wake: resume finished");
+    CHECK(!d.Disconnect && !d.Connect, "and no re-enumeration");
+    CHECK_EQ(d.Clear, XHCI_HUB_C_PORT_SUSPEND, "its change cleared");
+
+    XhciHubPortDecide(XHCI_ENUM_BOUND, on | XHCI_HUB_PORT_SUSPEND, 0, &d);
+    CHECK(d.Resume, "a bound device reported suspended is resumed");
+    CHECK(!d.Disconnect && !d.Connect, "in place");
+
+    XhciHubPortDecide(XHCI_ENUM_EMPTY,
+                      XHCI_HUB_PORT_POWER | XHCI_HUB_PORT_CONNECTION |
+                          XHCI_HUB_PORT_SUSPEND,
+                      0, &d);
+    CHECK(d.Resume && d.Connect, "an empty port found suspended: resume, "
+                                 "then enumerate");
+
+    XhciHubPortDecide(XHCI_ENUM_BOUND,
+                      XHCI_HUB_PORT_POWER | XHCI_HUB_PORT_SUSPEND, 0, &d);
+    CHECK(!d.Resume && d.Disconnect, "a disconnected port is not resumed");
+
+    CHECK(XhciHubResumeBeforeReset(on | XHCI_HUB_PORT_SUSPEND),
+          "resume before a reset");
+    CHECK(!XhciHubResumeBeforeReset(on), "not when awake");
+    CHECK(!XhciHubResumeBeforeReset(XHCI_HUB_PORT_SUSPEND),
+          "not when nothing is connected");
+
+    CHECK_EQ(XhciHubResumeProgress(on | XHCI_HUB_PORT_SUSPEND),
+             XHCI_HUB_RESET_PENDING, "still resuming");
+    CHECK_EQ(XhciHubResumeProgress(on), XHCI_HUB_RESET_ENABLED, "resumed");
+    CHECK_EQ(XhciHubResumeProgress(XHCI_HUB_PORT_POWER),
+             XHCI_HUB_RESET_FAILED, "the device left");
+    CHECK(XHCI_HUB_RESUME_FIRST_MS >= 20UL, "TDRSMDN at least 20 ms");
+    CHECK_EQ(XHCI_HUB_RESUME_RECOVERY_MS, 10UL, "TRSMRCY 10 ms");
+}
+
+/*
+ * The Low-Speed mouse at bInterval 10 polled every 8 ms (27-V.1's clause,
+ * moved to 28-E.1's bench by the owner's decision of 2026-10-04): its
+ * interrupt endpoint is programmed from the device's own speed class - on a
+ * root port, and behind QEMU's Full-Speed hub, whose port reports it Low
+ * Speed - to xHCI Interval 6, 2^6 x 125 us = 8 ms (xHCI 6.2.3.6 for Full
+ * and Low Speed: bInterval ms rounded down to a power of two in 125 us
+ * frames). The hub's Full Speed is not what the endpoint is given: a bulk
+ * endpoint, which Low Speed has not, is refused on that device.
+ */
+static void test_low_speed_mouse(void)
+{
+    UCHAR ep[7] = { 7, 5, 0x81, 0x03, 8, 0, 10 };
+    UCHAR bulk[7] = { 7, 5, 0x82, 0x02, 8, 0, 0 };
+    XHCI_PIPE_EP p;
+    ULONG speed;
+
+    /* On a root port: the class PORTSC decoded, Low Speed. */
+    speed = XhciPipeSpeedFromClass(XHCI_SPEED_LOW);
+    CHECK_EQ(speed, XHCI_PIPE_SPEED_LOW, "root port: the endpoint is LS");
+    CHECK_EQ(XhciPipeEndpointParams(ep, speed, &p), XHCI_PIPE_OK,
+             "root port: LS interrupt IN accepted");
+    CHECK_EQ(p.Interval, 6, "root port: bInterval 10 -> Interval 6");
+    CHECK_EQ((1UL << p.Interval) * 125UL, 8000UL, "root port: every 8 ms");
+
+    /* Behind a Full-Speed hub: the hub's port reports Low Speed. */
+    speed = XhciPipeSpeedFromClass(
+        XhciHubPortSpeedClass(XHCI_HUB_PORT_CONNECTION |
+                              XHCI_HUB_PORT_ENABLE | XHCI_HUB_PORT_POWER |
+                              XHCI_HUB_PORT_LOW_SPEED));
+    CHECK_EQ(speed, XHCI_PIPE_SPEED_LOW, "behind the FS hub: still LS");
+    CHECK_EQ(XhciPipeEndpointParams(ep, speed, &p), XHCI_PIPE_OK,
+             "behind the FS hub: LS interrupt IN accepted");
+    CHECK_EQ(p.Interval, 6, "behind the FS hub: Interval 6");
+    CHECK_EQ((1UL << p.Interval) * 125UL, 8000UL,
+             "behind the FS hub: every 8 ms");
+    CHECK(XhciPipeEndpointParams(bulk, speed, &p) != XHCI_PIPE_OK,
+          "the device's speed, not the hub's: LS bulk refused");
+    CHECK_EQ(XhciPipeSpeedFromClass(XHCI_SPEED_UNKNOWN), 0,
+             "an unknown class gives no speed");
+}
+
 int main(void)
 {
+    test_suspend();
+    test_low_speed_mouse();
     test_descriptor();
     test_bitmap();
     test_decide();

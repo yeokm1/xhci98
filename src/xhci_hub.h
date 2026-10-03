@@ -167,10 +167,42 @@ typedef struct _XHCI_HUB_PORT_DECISION {
     ULONG OverCurrent;
     ULONG Repower;
     ULONG Suspended;        /* C_PORT_SUSPEND: a resume finished          */
+    ULONG Resume;           /* connected and suspended: resume it         */
 } XHCI_HUB_PORT_DECISION, *PXHCI_HUB_PORT_DECISION;
 
 VOID XhciHubPortDecide(ULONG state, ULONG status, ULONG change,
                        PXHCI_HUB_PORT_DECISION out);
+
+/*
+ * Suspend and resume, handled and never initiated (the owner's decision of
+ * 2026-10-04; selective suspend waits for 28.3's idle policy): the bus
+ * starts no suspend, but a hub may report a port suspended - its device
+ * suspended by something else, or left so across the hub's own reset - or
+ * a resume finished (C_PORT_SUSPEND, a device's remote wake among them).
+ * XhciHubPortDecide sets Resume for a connected port whose wPortStatus shows
+ * PORT_SUSPEND, so the bus resumes it before anything else is asked of the
+ * device; a C_PORT_SUSPEND on a connected, enabled port is a finished resume
+ * and needs no re-enumeration (Suspended, and neither Disconnect nor
+ * Connect). XhciHubResumeBeforeReset says the same before a reset.
+ *
+ * The bus resumes a port with ClearPortFeature(PORT_SUSPEND); the hub then
+ * drives resume signalling for at least TDRSMDN, 20 ms (USB 2.0 7.1.7.7,
+ * quoted by xHCI p.256; to transcribe), and ends it with C_PORT_SUSPEND and
+ * the suspend bit clear. Then the resume recovery, TRSMRCY 10 ms (USB 2.0
+ * 7.1.7.7, to transcribe), before the device is addressed.
+ */
+#define XHCI_HUB_RESUME_FIRST_MS    20UL    /* TDRSMDN, to transcribe   */
+#define XHCI_HUB_RESUME_WAIT_MS     100UL   /* bus policy               */
+#define XHCI_HUB_RESUME_RECOVERY_MS 10UL    /* TRSMRCY, to transcribe   */
+
+/* Whether a port must be resumed before it is reset: connected and
+ * suspended. */
+ULONG XhciHubResumeBeforeReset(ULONG status);
+
+/* A resume's progress from one GET_STATUS answer: XHCI_HUB_RESET_PENDING
+ * while the suspend bit is still set, XHCI_HUB_RESET_ENABLED once it is
+ * clear on a connected port, XHCI_HUB_RESET_FAILED when the device left. */
+ULONG XhciHubResumeProgress(ULONG status);
 
 /* The C_PORT_ feature selector that clears one wPortChange bit (bit 0 to
  * 4), or 0 for any other bit. */

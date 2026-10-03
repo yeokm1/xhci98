@@ -203,9 +203,10 @@ rem test_func links nothing else: the composite split, the filtered
 rem configuration descriptor and the function ids are pure computations over
 rem descriptor bytes (task 26-A.7).
 call :run test_func "test_func.c ..\src\xhci_func.c"
-rem test_hub links nothing else: the hub class's decisions are pure
-rem computations over descriptor and status bytes (task 27-A.1).
-call :run test_hub "test_hub.c ..\src\xhci_hub.c"
+rem test_hub links the pipe policy beside the hub class (task 27-A.1): the
+rem hub class's decisions are pure computations over descriptor and status
+rem bytes, and the Low-Speed mouse's interval behind a hub needs both.
+call :run test_hub "test_hub.c ..\src\xhci_hub.c ..\src\xhci_pipe.c"
 rem test_strict links nothing else: strict mode's command precondition table
 rem (xHCI 1.2 section 4.6) is a pure function, checked here at every cell -
 rem each command type, DW3 bit 9, slot state and EP State.

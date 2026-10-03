@@ -11,6 +11,7 @@
  * C89, pure: IRQL any.
  */
 
+#include "xhci.h"
 #include "xhci_pipe.h"
 
 /* bmRequestType (USB 2.0 9.3, Table 9-2): direction 7, type 6:5,
@@ -897,5 +898,20 @@ VOID XhciSeqLatest(PXHCI_SEQ64 into, const XHCI_SEQ64 *with)
     }
     if (XhciSeqIsNone(into) || XhciSeqLessEq(into, with)) {
         *into = *with;
+    }
+}
+
+/* IRQL: any. */
+ULONG XhciPipeSpeedFromClass(ULONG speedClass)
+{
+    switch (speedClass) {
+    case XHCI_SPEED_LOW:
+        return XHCI_PIPE_SPEED_LOW;
+    case XHCI_SPEED_FULL:
+        return XHCI_PIPE_SPEED_FULL;
+    case XHCI_SPEED_HIGH:
+        return XHCI_PIPE_SPEED_HIGH;
+    default:
+        return 0;
     }
 }
