@@ -522,6 +522,22 @@ typedef struct _HCD_CONTROLLER {
     volatile ULONG CmdDonePA;       /* the completed command's TRB        */
     volatile ULONG PortEvents;
 
+#if DBG
+    /* Strict mode (hcd_strict.c): the command preconditions a conforming
+     * xHC enforces and QEMU does not, checked before each command. Thread
+     * only. StrictSlotEnabled is the half of the slot state the Output
+     * Slot Context cannot say (Disabled and Enabled are both 0). The Seen
+     * maps hold one trace per (command with DW3 bit 9, slot and EP state)
+     * and per (command, refusal code). */
+    ULONG StrictSlotEnabled[(XHCI_MAX_SLOTS + 1 + 31) / 32];
+    ULONG StrictChecked;            /* commands checked                   */
+    ULONG StrictViolations;         /* precondition the xHC would refuse  */
+    ULONG StrictUndefined;          /* the spec's "undefined behavior"    */
+    ULONG StrictRefusals;           /* answered SNE, Parameter or CSE     */
+    ULONG StrictSeen[64][2];
+    ULONG StrictRefusalSeen[64];
+#endif
+
     /* The controller lock (hcd_svc.h, HcdSvcControllerLock): created once at
      * AddDevice, outside Hc, which every start zeroes. */
     KSPIN_LOCK ControllerLock;
@@ -617,6 +633,25 @@ ULONG HcdThreadControlEx(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                          PULONG stalled);
 ULONG HcdThreadReaddress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 VOID HcdEnumCycle(PHCD_CONTROLLER hc, ULONG port, ULONG serial);
+
+/* hcd_strict.c: debug and qemu flavours only; nothing in release. */
+#if DBG
+typedef struct _HCD_STRICT_SNAP {
+    ULONG Type;
+    ULONG Key;                      /* Type, plus 32 when DW3 bit 9 is set */
+    ULONG SlotId;
+    ULONG Dci;
+    ULONG SlotState;                /* XHCI_STRICT_SLOT_*                 */
+    ULONG EpState;
+    ULONG Verdict;                  /* XHCI_STRICT_*                      */
+} HCD_STRICT_SNAP, *PHCD_STRICT_SNAP;
+
+VOID HcdStrictBefore(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
+                     PHCD_STRICT_SNAP snap);
+VOID HcdStrictAfter(PHCD_CONTROLLER hc, const HCD_STRICT_SNAP *snap,
+                    ULONG code, ULONG control);
+VOID HcdStrictForgetSlots(PHCD_CONTROLLER hc);
+#endif
 
 /* hcd_cfg.c */
 NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,

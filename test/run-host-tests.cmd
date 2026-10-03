@@ -24,6 +24,9 @@ rem                  hub-class requests as measured on the wire, the hub
 rem                  descriptor and port-status folds, the pending-parent
 rem                  claim, Route String nibble arithmetic with its five-tier
 rem                  refusal, and subtree/generation pruning
+rem   test_strict  - strict mode's command precondition table (src\xhci_strict.c):
+rem                  every command type x DW3 bit 9 x slot state x EP State,
+rem                  the Configure Endpoint flag rule and the refusal codes
 rem   test_desc    - the configuration-descriptor snoop (src\xhci_desc.c, task
 rem                  9-A.2): which EP0 setup packets are worth capturing, the
 rem                  descriptor walk fed at every chunk size, the isochronous
@@ -135,6 +138,10 @@ rem test_func links nothing else: the composite split, the filtered
 rem configuration descriptor and the function ids are pure computations over
 rem descriptor bytes (task 26-A.7).
 call :run test_func "test_func.c ..\src\xhci_func.c"
+rem test_strict links nothing else: strict mode's command precondition table
+rem (xHCI 1.2 section 4.6) is a pure function, checked here at every cell -
+rem each command type, DW3 bit 9, slot state and EP State.
+call :run test_strict "test_strict.c ..\src\xhci_strict.c"
 rem test_log links nothing else: task 11-V.7's ring is deliberately pure, so
 rem every decision it makes - the wrap, the record cap, the flush verdict, the
 rem drain's ordering - is drivable with no file system, no registry and no IRQL.
