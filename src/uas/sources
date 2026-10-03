@@ -1,0 +1,51 @@
+#
+# sources - Windows 2000 DDK build description for xhciuas.sys, the
+# project's USB Attached SCSI class driver (roadmap-hcd.md task 31-A.2), a
+# second binary beside xhci98.sys with its own INF (xhciuas.inf).
+#
+# Build with scripts\build-driver.cmd, which builds this directory after
+# src\ for every flavour and runs the import gate on the result against
+# scripts\import-gate\xhciuas-imports.allow. Output: src\uas\objfre\i386\
+# xhciuas.sys (release), src\uas\objchk (debug), src\uas\objchk_qemu (qemu).
+#
+# THE PURE CORE: uas_iu.c, DDK-free and host-tested (test\test_uas.c).
+# uas_mem.c is the one file that allocates pool, MDLs and IRP memory; the
+# allowlist holds those imports to it with SITES=uas_mem.obj.
+#
+
+TARGETNAME=xhciuas
+TARGETTYPE=DRIVER
+TARGETPATH=obj
+
+INCLUDES=$(BASEDIR)\inc;$(BASEDIR)\inc\ddk
+
+SOURCES=uas_iu.c      \
+        uas_mem.c     \
+        uas_streams.c \
+        uas_entry.c   \
+        uas_fdo.c     \
+        uas_pdo.c     \
+        uas_xport.c   \
+        xhciuas.rc
+
+!IF "$(XHCI_EXTRA_DEFINES)" != ""
+!ERROR XHCI_EXTRA_DEFINES is set, and xhciuas.sys has no diagnostic builds. Clear it before building.
+!ENDIF
+
+#
+# The three flavours, derived from BUILD_ALT_DIR exactly as src\sources
+# derives them for xhci98.sys (design record 08), so the same flavour
+# marker check and packaging refusals apply to this binary. The qemu flavour
+# differs from debug only in its marker: this driver has no port-0xE9 trace.
+#
+!IF "$(BUILD_ALT_DIR)" == "chk_qemu"
+C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_QEMU
+!ELSEIF "$(BUILD_ALT_DIR)" == "chk"
+C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_DEBUG
+!ELSEIF "$(BUILD_ALT_DIR)" == "fre"
+C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_RELEASE
+!ELSE
+!ERROR BUILD_ALT_DIR is "$(BUILD_ALT_DIR)" and this tree knows exactly three flavours - fre (release), chk (debug) and chk_qemu (qemu). Build through scripts\build-driver.cmd.
+!ENDIF
+
+LINKER_FLAGS=-merge:.rdata=.text

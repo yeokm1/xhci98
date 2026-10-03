@@ -493,6 +493,16 @@ $archInfPath  = @{ "x86" = "src\xhci98.inf"; "x64" = "src\xhci98-amd64.inf" }
 # two [SourceDisksFiles] names - see releases\README.md.
 $publishable = @("xhci98.inf", "xhci98.sys")
 
+# The UAS class driver's pair (roadmap task 31-A.2), published beside them in
+# every flavour directory a cut writes. Not in $publishable, which is the
+# controller INF's declared media and what tells a flavour directory from any
+# other: xhciuas.inf declares these two itself, its own gate
+# (scripts\inf-gate\check-uas-inf.ps1) checks them in place, and the binary is
+# held to every refusal xhci98.sys is (Assert-UasPublished). A version
+# published before 2.0.0.0 has no such pair, so -UploadSetOnly gates it where
+# it is present and does not require it.
+$uasPublishable = @("xhciuas.inf", "xhciuas.sys")
+
 # The DDK's obj directory is the one place its vocabulary is still read; the
 # published directory name is built from the flavour and the architecture
 # together by New-ReleaseLegs below, so the flavour word is no longer a
@@ -1048,9 +1058,13 @@ function Assert-PackageMatchesDeclaredMedia {
         [hashtable]$Expected,
         [hashtable]$PublishedPaths,
         [string]$InfName,
-        [string]$Flavor
+        [string]$Flavor,
+        # Files accepted at the package root beside the declared set: the UAS
+        # pair, which its own INF declares and its own gate checks.
+        [string[]]$Also = @()
     )
 
+    $alsoKeys = @($Also | ForEach-Object { $_.ToLowerInvariant() })
     $unexpected = @()
     $seen = @{}
     foreach ($item in (Get-ChildItem -LiteralPath $PkgDir -File -Recurse)) {
@@ -1060,6 +1074,9 @@ function Assert-PackageMatchesDeclaredMedia {
             $PublishedPaths[$key].ToLowerInvariant() -eq $relative.ToLowerInvariant()) {
             # One of this project's own two, at the place the INF puts it. It
             # comes from the published tree, not from the package.
+            continue
+        }
+        if ($key -in $alsoKeys -and $relative.ToLowerInvariant() -eq $key) {
             continue
         }
         if (-not $Expected.ContainsKey($key) -or
@@ -1089,6 +1106,73 @@ new media file is a release-layout decision recorded there, not a packaging step
 Rebuild the package with scripts\package\make-package.ps1 -Flavor $Flavor, which
 stages every file the INF declares and gates the result.
 "@
+    }
+}
+
+function Assert-UasPublished {
+    # xhciuas.sys, the UAS class driver (roadmap task 31-A.2), held to the
+    # refusals the build loop makes of xhci98.sys, in the same order and for
+    # the same reasons, which are argued there: the release FileVersion,
+    # VS_FF_DEBUG, the flavour marker, the staged bytes being the built ones,
+    # and the source stamp beside the build (scripts\source-stamp.ps1
+    # -Driver xhciuas), unstamped only under -AllowUnstampedDriver.
+    param([string]$Sys, [object]$Leg, [string]$Flavor, [string]$Version, [string]$ObjRoot)
+
+    $rebuild = "scripts\build-driver.cmd $Flavor" + $(if ($Leg.Arch -eq "x64") { " -amd64" } else { "" })
+    if (-not (Test-Path -LiteralPath $Sys)) {
+        throw "the $($Leg.Id) leg has no xhciuas.sys to publish. Rebuild: $rebuild"
+    }
+    $info = (Get-Item -LiteralPath $Sys).VersionInfo
+    if (-not (Test-DriverVersionMatches -Reported $info.FileVersion -Declared $Version)) {
+        throw "the UAS binary for $($Leg.Dir)\ reports FileVersion '$($info.FileVersion)', not $Version. Rebuild: $rebuild"
+    }
+    if ($info.IsDebug -ne ($Flavor -eq "debug")) {
+        throw "the UAS binary about to be published as $($Leg.Dir)\ has VS_FF_DEBUG = $($info.IsDebug); that is the wrong obj directory. Rebuild: $rebuild"
+    }
+    $marker = Get-ImageFlavourMarker -Path $Sys
+    if ($marker -ne $Flavor) {
+        $found = if ($marker -eq "") { "none" } else { $marker }
+        throw "the UAS binary about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release and debug are published. Rebuild: $rebuild"
+    }
+    $builtSys = Join-Path $ObjRoot "xhciuas.sys"
+    if (-not (Test-Path -LiteralPath $builtSys)) {
+        throw "the $($Leg.Id) UAS binary about to be published has no counterpart at $builtSys, so nothing ties it to the sources in src\uas. Rebuild: $rebuild"
+    }
+    if ((Get-FileHash -LiteralPath $builtSys -Algorithm SHA256).Hash -ne
+        (Get-FileHash -LiteralPath $Sys -Algorithm SHA256).Hash) {
+        throw "the UAS binary about to be published as $($Leg.Dir)\ is not the one in $builtSys, so its source stamp says nothing about the bytes being shipped. Rebuild: $rebuild"
+    }
+    $stampScript = Join-Path $repo "scripts\source-stamp.ps1"
+    $savedEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $stampOut = & powershell -NoProfile -ExecutionPolicy Bypass `
+            -File $stampScript -Driver xhciuas -Check $ObjRoot 2>&1
+        $stampCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedEap
+    }
+    if ($stampCode -eq 1) {
+        throw @"
+the UAS binary about to be published as $($Leg.Dir)\ was built from sources this
+tree no longer holds:
+$($stampOut -join "`n")
+Rebuild it ($rebuild) so the published bytes are ones the tree can reproduce.
+"@
+    } elseif ($stampCode -eq 2) {
+        if (-not $AllowUnstampedDriver) {
+            throw @"
+no source stamp beside the $Flavor UAS binary in $ObjRoot, so this script
+cannot tell whether src\uas still reproduces it. Rebuild it ($rebuild), which
+writes the stamp as it goes; or, for a binary that must ship unstamped, pass
+-AllowUnstampedDriver, as for xhci98.sys.
+"@
+        }
+        Write-Warn "no source stamp beside the $Flavor UAS binary, and -AllowUnstampedDriver was passed."
+    } elseif ($stampCode -ne 0) {
+        throw "scripts\source-stamp.ps1 -Driver xhciuas -Check '$ObjRoot' failed: $($stampOut -join "`n")"
+    } else {
+        Write-Ok "$($Leg.Id) UAS binary matches the sources in src\uas"
     }
 }
 
@@ -1290,7 +1374,8 @@ their defaults.
             # already made on the package it has just built.
             Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $expected `
                                                -PublishedPaths $publishedPaths `
-                                               -InfName $infName -Flavor $f
+                                               -InfName $infName -Flavor $f `
+                                               -Also $uasPublishable
 
             # Copied at the path the INF declares, which is where the check
             # below will look for it. Taking the layout from the gate's parse
@@ -1373,6 +1458,35 @@ $gateOut
         }
 
         Write-Ok ("{0}\ is complete install media, by its own INF" -f $f)
+
+        # The UAS pair, by its own INF and gate. Required of a directory this
+        # cut built; gated where present in one -UploadSetOnly reads, since a
+        # version published before 2.0.0.0 has none.
+        $uasInf = Join-Path $uploadFlavorDir "xhciuas.inf"
+        if (Test-Path -LiteralPath $uasInf) {
+            $uasGate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-uas-inf.ps1"
+            $savedEap = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                $gateOut = & powershell.exe @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $uasGate,
+                                              "-InfPath", $uasInf, "-Arch", $LegArches[$f],
+                                              "-PackageDir", $uploadFlavorDir) 2>&1 | Out-String
+            } finally {
+                $ErrorActionPreference = $savedEap
+            }
+            if ($LASTEXITCODE -ne 0) {
+                throw @"
+the assembled upload set's $f\ directory failed scripts\inf-gate\check-uas-inf.ps1.
+Do not upload it: the UAS class driver's INF and binary are not the media they
+claim to be.
+
+$gateOut
+"@
+            }
+            Write-Ok ("{0}\ carries the UAS class driver, by its own INF" -f $f)
+        } elseif ($null -ne $pkgDir) {
+            throw "the assembled upload set's $f\ directory has no xhciuas.inf, and this cut built it with one."
+        }
     }
 
     if (Test-Path -LiteralPath $uploadZip) {
@@ -1861,7 +1975,7 @@ runs are what stand between a broken binary and a guest that cannot boot.
         Ensure-Directory $destRoot
         Ensure-Directory $destDir
 
-        foreach ($name in $publishable) {
+        foreach ($name in ($publishable + $uasPublishable)) {
             $src = Join-Path $pkgDir $name
             if (-not (Test-Path -LiteralPath $src)) {
                 throw "make-package.ps1 produced no '$name' in '$pkgDir'."
@@ -1877,7 +1991,8 @@ runs are what stand between a broken binary and a guest that cannot boot.
         # is the second instance of that shape in this loop.
         Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected[$leg.Arch] `
                                            -PublishedPaths $declaredPublished[$leg.Arch] `
-                                           -InfName "xhci98.inf" -Flavor $leg.Id
+                                           -InfName "xhci98.inf" -Flavor $leg.Id `
+                                           -Also $uasPublishable
 
         $sys = Join-Path $destDir "xhci98.sys"
         $info = (Get-Item -LiteralPath $sys).VersionInfo
@@ -2042,6 +2157,11 @@ invalidate readings already taken on these exact bytes - say so:
             }
         }
 
+        # The UAS class driver beside it, held to the same refusals.
+        $uasSys = Join-Path $destDir "xhciuas.sys"
+        Assert-UasPublished -Sys $uasSys -Leg $leg -Flavor $f -Version $Version `
+                            -ObjRoot (Join-Path $repo ("src\uas\" + $objDirName[$f] + "\" + $archDirName[$leg.Arch]))
+
         $staged[$leg.Id] = [pscustomobject]@{
             Flavor    = $f
             Arch      = $leg.Arch
@@ -2055,6 +2175,8 @@ invalidate readings already taken on these exact bytes - say so:
             PkgDir    = $pkgDir
             Length    = (Get-Item -LiteralPath $sys).Length
             Sha256    = (Get-FileHash -LiteralPath $sys -Algorithm SHA256).Hash
+            UasLength = (Get-Item -LiteralPath $uasSys).Length
+            UasSha256 = (Get-FileHash -LiteralPath $uasSys -Algorithm SHA256).Hash
         }
     }
 
@@ -2365,6 +2487,10 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $contents += ("      xhci98.sys   {0:N0} bytes" -f $s.Length)
         $contents += "      SHA-256"
         $contents += ("      {0}" -f $s.Sha256)
+        $contents += "      xhciuas.inf  (the UAS storage class driver's INF)"
+        $contents += ("      xhciuas.sys  {0:N0} bytes" -f $s.UasLength)
+        $contents += "      SHA-256"
+        $contents += ("      {0}" -f $s.UasSha256)
         $contents += ""
     }
     if ($multiArch) {

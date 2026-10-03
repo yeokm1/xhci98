@@ -218,3 +218,7 @@ handoff.md
 # Phase 10: the per-host device-matrix config (copy of config.sample.psd1 beside
 # it). Lives with the harness, not at the repo root; the loaders look only here.
 scripts/vm-matrix/matrix.config.psd1
+
+# build.exe's warning log for the UAS class driver (src\uas, task 31-A.2):
+# written only when a flavour warns, and never source.
+src/uas/build*.wrn
