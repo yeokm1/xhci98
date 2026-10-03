@@ -256,6 +256,9 @@
  */
 #define XHCI_LOG_REASON_STOP     0
 #define XHCI_LOG_REASON_FAILURE  1
+/* The HCD's controller thread, emitting the ring as it fills (task 26-A.8):
+ * a PASSIVE context the miniport never had between start and stop. */
+#define XHCI_LOG_REASON_PERIODIC 2
 
 /* What XhciLogFlushBegin decided. */
 #define XHCI_LOG_FLUSH_GO         0  /* drain and write                      */

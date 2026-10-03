@@ -539,6 +539,23 @@ typedef struct _HCD_CONTROLLER {
     ULONG StrictSeen[64][2];
     ULONG StrictRefusalSeen[64];
 #endif
+    /* The door (hcd_door.c, 26-A.8; design record 13 section 8): the
+     * FDO's name's number, \DosDevices\HCD<n>, the host controller
+     * interface, and the root hub's name GET_ROOT_HUB_NAME returns (under
+     * PdoListLock). DoorGate is a synchronization event used as a mutex:
+     * held by a start, a stop and a door request that reads the extension
+     * or the registers, so a request never meets a half-built extension or
+     * an unmapped BAR. Outside Hc, which every start zeroes. */
+    ULONG FdoSerial;
+    ULONG HcdIndex;
+    ULONG HcdLinkMade;
+    UNICODE_STRING HcInterface;
+    ULONG HcInterfaceOn;
+    WCHAR RootHubName[24];
+    ULONG RootHubNameChars;
+    KEVENT DoorGate;
+    ULONG DoorRequests;
+    ULONG DoorPassThru;
 
     /* The controller lock (hcd_svc.h, HcdSvcControllerLock): created once at
      * AddDevice, outside Hc, which every start zeroes. */
@@ -559,6 +576,7 @@ typedef struct _HCD_ROOTHUB_PDO {
     ULONG RemoveReceived;
     ULONG Reported;                 /* returned in a BusRelations answer    */
     ULONG Deleted;                  /* IoDeleteDevice called: once only     */
+    ULONG Serial;                   /* \Device\XHCI98RH<Serial>            */
 } HCD_ROOTHUB_PDO, *PHCD_ROOTHUB_PDO;
 
 /* The root hub's FDO, this driver's second role, attached over the root-hub
@@ -569,6 +587,11 @@ typedef struct _HCD_ROOTHUB_FDO {
     PDEVICE_OBJECT LowerDevice;
     LONG OutstandingIo;
     KEVENT RemoveEvent;
+    /* The door (hcd_door.c): \DosDevices\XHCI98RH<n> and the hub
+     * interface. */
+    ULONG LinkMade;
+    UNICODE_STRING Interface;
+    ULONG InterfaceOn;
 } HCD_ROOTHUB_FDO, *PHCD_ROOTHUB_FDO;
 
 #define HcdControllerFromExt(ext) \
@@ -595,6 +618,7 @@ NTSTATUS HcdRootHubPdoPower(PHCD_ROOTHUB_PDO pdo, PIRP irp);
 NTSTATUS HcdRootHubAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo);
 NTSTATUS HcdRootHubFdoPnp(PHCD_ROOTHUB_FDO fdo, PIRP irp);
 NTSTATUS HcdRootHubFdoPower(PHCD_ROOTHUB_FDO fdo, PIRP irp);
+NTSTATUS HcdRootHubFdoDeviceControl(PHCD_ROOTHUB_FDO fdo, PIRP irp);
 
 /* hcd_entry.c */
 extern PDRIVER_OBJECT HcdDriverObject;
@@ -722,6 +746,22 @@ VOID HcdTimersInit(PHCD_CONTROLLER hc);
 VOID HcdTimersDrain(PHCD_CONTROLLER hc);
 VOID HcdTimersOpen(PHCD_CONTROLLER hc);
 VOID HcdFrameTimerStart(PHCD_CONTROLLER hc);
+
+/* hcd_door.c */
+VOID HcdDoorGateEnter(PHCD_CONTROLLER hc);
+VOID HcdDoorGateLeave(PHCD_CONTROLLER hc);
+VOID HcdDoorControllerStart(PHCD_CONTROLLER hc);
+VOID HcdDoorControllerStop(PHCD_CONTROLLER hc);
+VOID HcdDoorControllerRemove(PHCD_CONTROLLER hc);
+VOID HcdDoorRootHubStart(PHCD_ROOTHUB_FDO fdo, PHCD_CONTROLLER hc);
+VOID HcdDoorRootHubStop(PHCD_ROOTHUB_FDO fdo);
+VOID HcdDoorRootHubRemove(PHCD_ROOTHUB_FDO fdo, PHCD_CONTROLLER hc);
+NTSTATUS HcdDoorCreateClose(PIRP irp);
+NTSTATUS HcdDoorControllerIoctl(PHCD_CONTROLLER hc, PIRP irp);
+NTSTATUS HcdDoorRootHubIoctl(PHCD_CONTROLLER hc, PIRP irp);
+
+/* hcd_log.c */
+VOID HcdLogFlush(PHCD_CONTROLLER hc, ULONG reason, ULONG counters);
 
 /* hcd_pool.c */
 PVOID HcdPoolAlloc(ULONG bytes);

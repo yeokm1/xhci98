@@ -85,7 +85,7 @@ ntoskrnl.exe!RtlQueryRegistryValues        all  required  nt52-amd64-export; twi
 ntoskrnl.exe!ZwClose                       all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
 ntoskrnl.exe!IoGetDmaAdapter               all  required  SITES=hcd_dma.obj nt52-amd64-export; twin of the x86 row (task 26-A.2)
 HAL.dll!KeStallExecutionProcessor          all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
-ntoskrnl.exe!DbgPrint                      qemu required  nt52-amd64-export; the qemu flavour's live trace only (xhci_dbg.c), as on x86 (task 26-A.2)
+ntoskrnl.exe!DbgPrint                      all  required  SITES=hcd_log.obj,xhci_dbg.obj nt52-amd64-export; the log ring's DebugView sink (hcd_log.c, task 26-A.8) and the qemu trace (xhci_dbg.c), as on x86
 
 
 # --- Task 26-A.4: the root hub (twins of the x86 rows of the same task) ---
@@ -99,6 +99,14 @@ ntoskrnl.exe!IoFreeMdl                     all  required  SITES=hcd_pool.obj nt5
 ntoskrnl.exe!MmBuildMdlForNonPagedPool     all  required  SITES=hcd_pool.obj nt52-amd64-export; twin of the x86 row (task 26-A.5)
 ntoskrnl.exe!IoAcquireCancelSpinLock       all  required  nt52-amd64-export; twin of the x86 row (task 26-A.5)
 ntoskrnl.exe!IoReleaseCancelSpinLock       all  required  nt52-amd64-export; twin of the x86 row (task 26-A.5)
+
+# --- Task 26-A.8: the door (twins of the x86 rows of the same task) ---
+ntoskrnl.exe!IoCreateSymbolicLink          all  required  nt52-amd64-export; twin of the x86 row (task 26-A.8)
+ntoskrnl.exe!IoDeleteSymbolicLink          all  required  nt52-amd64-export; twin of the x86 row (task 26-A.8)
+ntoskrnl.exe!IoRegisterDeviceInterface     all  required  nt52-amd64-export; twin of the x86 row (task 26-A.8)
+ntoskrnl.exe!IoSetDeviceInterfaceState     all  required  nt52-amd64-export; twin of the x86 row (task 26-A.8)
+ntoskrnl.exe!IoGetDeviceProperty           all  required  nt52-amd64-export; twin of the x86 row (task 26-A.8)
+ntoskrnl.exe!ZwSetValueKey                 all  required  nt52-amd64-export; twin of the x86 row (task 26-A.8)
 
 [deny]
 

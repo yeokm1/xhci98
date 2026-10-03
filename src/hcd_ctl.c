@@ -14,8 +14,8 @@
  * The thread (design record 13 section 5.4, layer 1) is the PASSIVE-level
  * context the HCD owns: a system thread rather than work items, because it
  * waits between steps. In this task it runs the health poll and the in-place
- * recovery; the enumeration machines of 26-A.4 and the log flusher of 26-A.8
- * join it.
+ * recovery; the enumeration machines of 26-A.4 joined it, and the log
+ * flusher of 26-A.8 (hcd_log.c) runs at every wake.
  *
  * IRQL: each function carries its own.
  */
@@ -133,8 +133,15 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
 
     verbosity = 0;
     debugView = 0;
-    (VOID)hcdReadDword(hc, HCD_VALUE_LOG_VERBOSITY, &verbosity);
-    (VOID)hcdReadDword(hc, HCD_VALUE_LOG_DEBUGVIEW, &debugView);
+    /* The read statuses travel in XHCISNAP's header (schema 5), so a reader
+     * tells a zero somebody set from a value never found. */
+    ext->Log.SwitchRead = 1;
+    status = hcdReadDword(hc, HCD_VALUE_LOG_VERBOSITY, &verbosity);
+    ext->Log.SwitchStatusVerbosity = NT_SUCCESS(status) ? MP_STATUS_SUCCESS
+                                                        : MP_STATUS_FAILURE;
+    status = hcdReadDword(hc, HCD_VALUE_LOG_DEBUGVIEW, &debugView);
+    ext->Log.SwitchStatusDebugView = NT_SUCCESS(status) ? MP_STATUS_SUCCESS
+                                                        : MP_STATUS_FAILURE;
     (VOID)XhciLogApplySwitches(&ext->Log, verbosity, debugView);
     XhciLogNote(ext, "log.verbosity", ext->Log.Verbosity);
     XhciLogNote(ext, "log.verbosity.read", ext->Log.VerbosityRead);
@@ -283,6 +290,7 @@ VOID HcdControllerInitObjects(PHCD_CONTROLLER hc)
     KeInitializeEvent(&hc->PowerGate, SynchronizationEvent, TRUE);
     KeInitializeEvent(&hc->XferDoneEvent, NotificationEvent, FALSE);
     KeInitializeEvent(&hc->EnumDetachDone, NotificationEvent, TRUE);
+    KeInitializeEvent(&hc->DoorGate, SynchronizationEvent, TRUE);
 }
 
 /*
@@ -432,6 +440,10 @@ static VOID NTAPI hcdThread(PVOID Context)
                                hc->Common.DevicePower == PowerDeviceD0 &&
                                !hc->SuspendedInD0);
         HcdPowerGateLeave(hc);
+        /* The continuous sink (26-A.8): whatever the producers recorded
+         * since the last wake, emitted here at PASSIVE_LEVEL and nowhere
+         * nearer a DPC. */
+        HcdLogFlush(hc, XHCI_LOG_REASON_PERIODIC, 0);
     }
     XHCI_DBG_TEXT("hcd: controller thread leaving its loop");
     /* No root hub waits on a thread that is gone (HcdEnumDetach). */
@@ -571,12 +583,14 @@ static VOID hcdRelease(PHCD_CONTROLLER hc)
     }
 }
 
+static VOID hcdStopBody(PHCD_CONTROLLER hc);
+
 /*
  * Bring the controller up: resources, BAR, adapter and common buffer, the
  * interrupt, XhciInitController, the interrupt enables, the thread. Called
  * after the PCI stack has started (hcd_pnp.c). IRQL: PASSIVE_LEVEL.
  */
-NTSTATUS HcdStartController(PHCD_CONTROLLER hc, PIRP irp)
+static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
 {
     PXHCI_EXTENSION ext;
     KIRQL raised;
@@ -697,7 +711,7 @@ NTSTATUS HcdStartController(PHCD_CONTROLLER hc, PIRP irp)
 
     status = hcdThreadStart(hc);
     if (!NT_SUCCESS(status)) {
-        HcdStopController(hc);
+        hcdStopBody(hc);
         return status;
     }
     HcdFrameTimerStart(hc);
@@ -710,7 +724,7 @@ NTSTATUS HcdStartController(PHCD_CONTROLLER hc, PIRP irp)
  * proves DMA stopped or says it could not), then the resources. Safe to call
  * on a controller that is not started. IRQL: PASSIVE_LEVEL.
  */
-VOID HcdStopController(PHCD_CONTROLLER hc)
+static VOID hcdStopBody(PHCD_CONTROLLER hc)
 {
     PXHCI_EXTENSION ext;
     KIRQL raised;
@@ -751,4 +765,31 @@ VOID HcdStopController(PHCD_CONTROLLER hc)
         hcdRelease(hc);
     }
     hc->ControllerStarted = 0;
+}
+
+/*
+ * The start and the stop, each under the door gate (hcd_door.c), so an
+ * XHCISNAP window or a controller-information request never reads an
+ * extension the start is zeroing or a BAR the stop is unmapping. The
+ * controller thread never takes the gate, so the stop may wait for it
+ * there. IRQL: PASSIVE_LEVEL.
+ */
+NTSTATUS HcdStartController(PHCD_CONTROLLER hc, PIRP irp)
+{
+    NTSTATUS status;
+
+    HcdDoorGateEnter(hc);
+    status = hcdStartBody(hc, irp);
+    HcdDoorGateLeave(hc);
+    return status;
+}
+
+/* The stop's flush carries the counter block, and it is the last: the
+ * thread has gone and the next start zeroes the ring. IRQL: PASSIVE_LEVEL. */
+VOID HcdStopController(PHCD_CONTROLLER hc)
+{
+    HcdDoorGateEnter(hc);
+    hcdStopBody(hc);
+    HcdLogFlush(hc, XHCI_LOG_REASON_STOP, 1);
+    HcdDoorGateLeave(hc);
 }
