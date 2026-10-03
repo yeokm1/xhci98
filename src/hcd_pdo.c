@@ -744,9 +744,13 @@ static VOID hcdQueryInterfaceTrace(PIO_STACK_LOCATION stack)
             return;
         }
     }
-    slot = InterlockedIncrement(&count) - 1;
-    if (slot < 8) {
-        seen[slot] = data1;
+    if (count < 8) {
+        /* Reserved only while the table has room, so the count stops a
+         * little past 8 rather than wrapping (round 17, finding 3). */
+        slot = InterlockedIncrement(&count) - 1;
+        if (slot >= 0 && slot < 8) {
+            seen[slot] = data1;
+        }
     }
     XHCI_DBG_VALUE("hcd: QUERY_INTERFACE not answered, GUID Data1", data1);
     XHCI_DBG_VALUE("hcd: QUERY_INTERFACE not answered, version/size",

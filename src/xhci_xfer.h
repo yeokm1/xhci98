@@ -770,6 +770,8 @@ typedef struct _XHCI_ISO_REQUEST {
     XHCI_ISO_FRAME_POLICY Frames;
 } XHCI_ISO_REQUEST, *PXHCI_ISO_REQUEST;
 
+ULONG XhciXferIsoUsesFrameIds(const XHCI_ISO_REQUEST *request);
+
 /*
  * Decode one Transfer Event completion code **on an isochronous ring**.
  *

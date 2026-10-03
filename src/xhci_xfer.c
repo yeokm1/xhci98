@@ -3110,6 +3110,36 @@ static ULONG xhciXferIsoCadenceAgrees(const USBPORT_ISO_TRANSFER *iso,
     return 1;
 }
 
+/*
+ * The Frame ID decision for a whole request, as XhciXferSubmitIso takes it:
+ * allowed by the caller's policy, the packets' cadence agreeing with the
+ * endpoint's, and every packet's frame inside the window. Exported so a
+ * caller that must not be silently moved to SIA - an explicit StartFrame -
+ * can ask the same question before submitting. Any IRQL.
+ */
+ULONG XhciXferIsoUsesFrameIds(const XHCI_ISO_REQUEST *request)
+{
+    const USBPORT_ISO_TRANSFER *iso;
+    ULONG frameId;
+    ULONG i;
+
+    if (request == NULL || request->Iso == NULL || !request->Frames.Allowed) {
+        return 0;
+    }
+    iso = request->Iso;
+    if (!xhciXferIsoCadenceAgrees(iso, iso->NumberOfPackets,
+                                  request->PacketsPerFrame)) {
+        return 0;
+    }
+    for (i = 0; i < iso->NumberOfPackets; i++) {
+        if (!XhciXferFrameIdUsable(&request->Frames,
+                                   iso->Packet[i].FrameNumber, &frameId)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 ULONG XhciXferBuildIso(const XHCI_ISO_REQUEST *request,
                        ULONG transferFlagsIn,
                        XHCI_TRB *out,
@@ -3210,14 +3240,7 @@ ULONG XhciXferBuildIso(const XHCI_ISO_REQUEST *request,
         xhciXferIsoCadenceAgrees(iso, packets, request->PacketsPerFrame)
             ? 0UL : 1UL;
 
-    useFrameId = (request->Frames.Allowed && !layout->CadenceMismatch)
-                     ? 1UL : 0UL;
-    for (i = 0; useFrameId && i < packets; i++) {
-        if (!XhciXferFrameIdUsable(&request->Frames,
-                                   iso->Packet[i].FrameNumber, &frameId)) {
-            useFrameId = 0;
-        }
-    }
+    useFrameId = XhciXferIsoUsesFrameIds(request);
 
     state.Out = out;
     state.Capacity = capacity;

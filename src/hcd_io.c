@@ -619,8 +619,6 @@ static ULONG hcdIsoPublish(PHCD_CONTROLLER hc, PHCD_PIPE pipe, PHCD_XFER x)
     ULONG answer;
     ULONG start;
     ULONG now;
-    ULONG frameId;
-    ULONG ok;
     ULONG i;
 
     ext = &hc->Hc;
@@ -657,15 +655,11 @@ static ULONG hcdIsoPublish(PHCD_CONTROLLER hc, PHCD_PIPE pipe, PHCD_XFER x)
         /* The engine falls back to SIA for a group whose Frame IDs it cannot
          * use, which would move an explicit StartFrame to "now" (Codex review
          * of batch (c), round 16, finding 2). A start the controller cannot
-         * be told - no CFC, no frame sample, or a packet outside the IST+1
-         * to 895 frame window - is refused as BAD_START_FRAME instead. */
-        frameId = 0;
-        ok = req.Frames.Allowed;
-        for (i = 0; ok && i < blk->NumberOfPackets; i++) {
-            ok = XhciXferFrameIdUsable(&req.Frames,
-                                       blk->Packet[i].FrameNumber, &frameId);
-        }
-        if (!ok) {
+         * be told - no CFC, no frame sample, a packet cadence the endpoint's
+         * Interval does not share, or a packet outside the IST+1 to 895
+         * frame window - is refused as BAD_START_FRAME instead; the engine's
+         * own decision is asked, so the two cannot drift (round 17). */
+        if (!XhciXferIsoUsesFrameIds(&req)) {
             hc->IsoBadStartFrames++;
             x->Status = HCD_USBD_BAD_START_FRAME;
             return XHCI_XFER_BAD_PARAM;
@@ -769,12 +763,14 @@ VOID HcdIoIsoRefused(PVOID urb, LONG usbd)
     if (it->Hdr.Function != URB_FUNCTION_ISOCH_TRANSFER) {
         return;
     }
-    /* Only the packet descriptors the URB's own length holds: a refusal may
-     * be of a URB whose NumberOfPackets failed validation. */
+    /* Only what the URB's own length holds: a refusal may be of a URB too
+     * short for its fixed fields, or whose NumberOfPackets failed
+     * validation (round 17, finding 2). */
     fixed = FIELD_OFFSET(struct _URB_ISOCH_TRANSFER, IsoPacket);
-    room = (it->Hdr.Length > fixed)
-               ? (it->Hdr.Length - fixed) / sizeof(USBD_ISO_PACKET_DESCRIPTOR)
-               : 0;
+    if (it->Hdr.Length < fixed) {
+        return;
+    }
+    room = (it->Hdr.Length - fixed) / sizeof(USBD_ISO_PACKET_DESCRIPTOR);
     for (i = 0; i < it->NumberOfPackets && i < room; i++) {
         it->IsoPacket[i].Status = usbd;
         it->IsoPacket[i].Length = 0;
