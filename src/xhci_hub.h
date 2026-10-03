@@ -134,6 +134,11 @@ ULONG XhciHubStatusBytes(ULONG declared);
  * up to `managed`; a bit past what arrived is 0. */
 ULONG XhciHubStatusBitmap(const UCHAR *data, ULONG bytes, ULONG managed);
 
+/* Whether a report of `bytes` bytes carries bit `bit` - any bit, managed or
+ * not: the bus reads the unmanaged ones only to silence them (hcd_hub.c,
+ * HcdHubSilence). */
+ULONG XhciHubReportHas(const UCHAR *data, ULONG bytes, ULONG bit);
+
 /* Every bit the bus acts on for a hub of `managed` ports: the hub's own and
  * each port's - what a poll, or a hub's first look, treats as changed. */
 ULONG XhciHubAllBits(ULONG managed);
@@ -197,7 +202,8 @@ ULONG XhciHubPortSpeedClass(ULONG status);
 
 /* The enumeration machine's speed value (XHCI_ENUM_SPEED_*, the default
  * Protocol Speed IDs) for a speed class, 0 for none: the machine takes its
- * initial EP0 size from it (XhciEnumInitialMps0). */
+ * initial EP0 size from it (XhciEnumInitialMps0). SuperSpeed is a
+ * SuperSpeed hub's port (xhci_sshub.h, 30-A.1). */
 ULONG XhciHubEnumSpeed(ULONG speedClass);
 
 /*

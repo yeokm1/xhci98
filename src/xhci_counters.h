@@ -135,9 +135,26 @@ typedef struct _XHCIHC_COUNTERS {
     ULONG HoldCompanionOthers;
     ULONG HoldRequestsRefused;
     ULONG HoldsDropped;
+
+    /* SuperSpeed hubs: Phase 30's (30-A.1), appended after the hold. The
+     * SuperSpeed halves configured; hub pairs that look like the two halves
+     * of one unit (a counter and nothing more); SET_HUB_DEPTH refused (the
+     * hub not served); warm resets of SuperSpeed hub ports, and links given
+     * up after the per-port budget - the device left to the hub's USB 2.0
+     * half; C_PORT_CONFIG_ERROR seen; and devices behind a SuperSpeedPlus
+     * hub given a SuperSpeedPlus Protocol Speed ID from the extended port
+     * status, or given SuperSpeed's because none matched the rate. */
+    ULONG SsHubsStarted;
+    ULONG SsHubPairs;
+    ULONG SsHubDepthRefused;
+    ULONG SsHubWarmResets;
+    ULONG SsHubLinksGivenUp;
+    ULONG SsHubConfigErrors;
+    ULONG SsHubDevicesPlus;
+    ULONG SsHubRateUnmatched;
 } XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 55 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 63 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */

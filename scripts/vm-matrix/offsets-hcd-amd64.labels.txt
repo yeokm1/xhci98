@@ -34,6 +34,14 @@ SlotSpeedLow	slot context speed - low speed
 SlotSpeedSuper	slot context speed - superspeed
 SpeedDisagreements	slot speed disagreeing with port speed
 SlotsEnabled	slots enabled
+SsHubPairs	superspeed hubs: halves paired
+SsHubConfigErrors	superspeed hubs: port config errors
+SsHubLinksGivenUp	superspeed hubs: port links given up
+SsHubWarmResets	superspeed hubs: port warm resets
+SsHubRateUnmatched	superspeed hubs: rates without an ID
+SsHubDepthRefused	superspeed hubs: refused - hub depth
+SsHubsStarted	superspeed hubs: started
+SsHubDevicesPlus	superspeed hubs: superspeedplus devices
 SsBosMissing	superspeed: BOS reads failed
 SsEndpointsEsitRefused	superspeed: endpoints refused - ESIT
 SsResetsConverted	superspeed: hot resets converted to warm

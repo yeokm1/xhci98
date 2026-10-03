@@ -197,6 +197,8 @@ ULONG XhciHubEnumSpeed(ULONG speedClass)
         return XHCI_ENUM_SPEED_FULL;
     case XHCI_SPEED_HIGH:
         return XHCI_ENUM_SPEED_HIGH;
+    case XHCI_SPEED_SUPER:
+        return XHCI_ENUM_SPEED_SUPER;
     default:
         return 0;
     }
@@ -301,4 +303,13 @@ ULONG XhciHubReleaseOrder(const ULONG *parent, ULONG count, ULONG top,
         }
     }
     return written;
+}
+
+/* IRQL: any. */
+ULONG XhciHubReportHas(const UCHAR *data, ULONG bytes, ULONG bit)
+{
+    if (data == NULL || bit / 8UL >= bytes) {
+        return 0;
+    }
+    return (data[bit / 8UL] & (1U << (bit % 8UL))) != 0;
 }

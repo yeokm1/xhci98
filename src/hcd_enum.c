@@ -25,8 +25,9 @@
  * number of warm resets and then given up (the device appears on its USB
  * 2.0 companion, 29-A.5's passive fallback, counted), the enumeration's own
  * reset hot from U0 and warm otherwise - and its device addressed at EP0
- * 512 with its BOS descriptor read. A SuperSpeed hub is Phase 30's and is
- * refused here.
+ * 512 with its BOS descriptor read. A SuperSpeed hub is brought up as any
+ * hub is (30-A.1): hcd_hub.c takes it, and its USB3 half's class requests
+ * are hcd_sshub.c's.
  *
  * Timings, section 10.2: attach debounce 100 ms (TATTDB), the reset timed by
  * the xHC and waited for up to 500 ms, reset recovery 10 ms (TRSTRCY),
@@ -632,6 +633,7 @@ static ULONG hcdAddress(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG mps)
         }
         return 0;
     }
+    HcdSsHubAdoptSpeed(hc, p, dev);
     hcdCountAddressed(hc, dev);
     if (dev->Tier != 0) {
         hc->Counters.TopoBehindHubAddressed++;
@@ -1513,23 +1515,12 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
         return 1;
 
     case XHCI_ENUM_ACT_CREATE_PDO:
-        speedClass = XHCI_SPEED_UNKNOWN;
-        (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, p->Device->Port,
-                                 p->Device->Speed, &speedClass);
-        if (p->Device->DeviceDesc[4] == XHCI_HUB_CLASS &&
-            speedClass == XHCI_SPEED_SUPER) {
-            /* A SuperSpeed hub is Phase 30's: its hub class, descriptor
-             * and Route String handling are not this bus's yet. Its USB
-             * 2.0 half on the companion port is served as before. */
-            XHCI_DBG_VALUE("hcd: SuperSpeed hub refused (Phase 30), port",
-                           p->PortId);
-            hcdEventInit(next, XHCI_ENUM_EV_PDO_CREATED, 0);
-            return 1;
-        }
         if (p->Device->DeviceDesc[4] == XHCI_HUB_CLASS) {
             /* A hub is the bus's and never a PDO (section 10.3): brought
              * up here, it is Present with nothing for PnP to start, so the
-             * machine is told its PDO exists and has started at once. */
+             * machine is told its PDO exists and has started at once. A
+             * SuperSpeed hub is one too (30-A.1); its USB 2.0 half is a
+             * separate hub on the companion port. */
             ok = HcdHubStart(hc, p, p->Device);
             hcdEventInit(next, XHCI_ENUM_EV_PDO_CREATED, ok);
             if (!ok) {
@@ -2469,6 +2460,14 @@ static VOID hcdHubPortChanged(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
     }
     if (d.Disconnect) {
         hcdFeed(hc, q, XHCI_ENUM_EV_DISCONNECT);
+    }
+    if (q->HubSsRecover) {
+        /* A SuperSpeed hub port's link recovery (30-A.1): the warm reset
+         * only now, with the device it held and that device's subtree torn
+         * down by the disconnect just fed (Codex review of 034a119,
+         * finding 1). */
+        d.Connect = !hcdHalted(hc) && HcdSsHubPortRecover(hc, hub, n);
+        q->HubSsRecover = 0;
     }
     if (d.Connect && !hcdHalted(hc)) {
         hcdFeed(hc, q, XHCI_ENUM_EV_CONNECT);

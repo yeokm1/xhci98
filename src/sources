@@ -76,6 +76,8 @@ SOURCES=xhci_mem.c    \
         xhci_func.c   \
         xhci_hub.c    \
         hcd_hub.c     \
+        xhci_sshub.c  \
+        hcd_sshub.c   \
         hcd_pool.c    \
         xhci_strict.c \
         hcd_strict.c  \

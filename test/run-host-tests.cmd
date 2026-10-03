@@ -45,6 +45,12 @@ rem   test_hub     - the hub class's pure half (src\xhci_hub.c): the hub
 rem                  descriptor, the status-change bitmap, the port decision,
 rem                  the reset progress and speed bits, the depth and multi-TT
 rem                  rules and the instance key
+rem   test_sshub   - the SuperSpeed hub class's pure half (src\xhci_sshub.c,
+rem                  30-A.2): the 0x2A descriptor, the link-state field, the
+rem                  port decision over every SuperSpeed change bit, the hot
+rem                  or warm reset over every link state, its progress and
+rem                  clears, the extended port status, sublink rates, the
+rem                  downstream Protocol Speed ID and the pairing rule
 rem   test_ctx    - the Slot, Endpoint and Input Control Context encoders
 rem                  (src\xhci_ctx.c): the golden vectors for every speed class,
 rem                  both context strides, and the field-by-field refusals
@@ -215,6 +221,10 @@ call :run test_func "test_func.c ..\src\xhci_func.c"
 rem test_hub links nothing else: the hub class's decisions are pure
 rem computations over descriptor and status bytes (task 27-A.1).
 call :run test_hub "test_hub.c ..\src\xhci_hub.c"
+rem test_sshub links xhci_hub.c for the shape and limits the SuperSpeed half
+rem shares with a USB 2.0 hub, and xhci_caps.c for the PSI table a downstream
+rem SuperSpeedPlus rate is looked up in (30-A.2).
+call :run test_sshub "test_sshub.c ..\src\xhci_sshub.c ..\src\xhci_hub.c ..\src\xhci_caps.c"
 rem test_strict links nothing else: strict mode's command precondition table
 rem (xHCI 1.2 section 4.6) is a pure function, checked here at every cell -
 rem each command type, DW3 bit 9, slot state and EP State.

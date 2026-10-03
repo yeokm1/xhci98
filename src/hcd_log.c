@@ -290,6 +290,22 @@ static VOID hcdCountersTrace(const XHCIHC_COUNTERS *cnt)
                            cnt->HoldRequestsRefused);
     XHCI_DBG_VALUE_CHANGED("hold: dropped by a controller reset",
                            cnt->HoldsDropped);
+
+    XHCI_DBG_VALUE_CHANGED("superspeed hubs: started", cnt->SsHubsStarted);
+    XHCI_DBG_VALUE_CHANGED("superspeed hubs: halves paired",
+                           cnt->SsHubPairs);
+    XHCI_DBG_VALUE_CHANGED("superspeed hubs: refused - hub depth",
+                           cnt->SsHubDepthRefused);
+    XHCI_DBG_VALUE_CHANGED("superspeed hubs: port warm resets",
+                           cnt->SsHubWarmResets);
+    XHCI_DBG_VALUE_CHANGED("superspeed hubs: port links given up",
+                           cnt->SsHubLinksGivenUp);
+    XHCI_DBG_VALUE_CHANGED("superspeed hubs: port config errors",
+                           cnt->SsHubConfigErrors);
+    XHCI_DBG_VALUE_CHANGED("superspeed hubs: superspeedplus devices",
+                           cnt->SsHubDevicesPlus);
+    XHCI_DBG_VALUE_CHANGED("superspeed hubs: rates without an ID",
+                           cnt->SsHubRateUnmatched);
 }
 #endif
 
