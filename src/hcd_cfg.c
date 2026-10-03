@@ -234,7 +234,10 @@ static LONG hcdCfgCountEnd(PHCD_CONTROLLER hc, ULONG asked, LONG usbd)
  * disconnected or with a connect change the enumeration has yet to take
  * (an unplug and replug). A PORTSC of all ones proves nothing about the
  * device - the register could not be read - so that failure is counted
- * (Codex review round 25). A select racing an ordinary unplug fails at
+ * (Codex review round 25). Behind a hub the port has no register to read
+ * without a control transfer of its own, so only the record is asked: a
+ * device whose hub port still holds it is counted. A select racing an
+ * ordinary unplug fails at
  * SET_CONFIGURATION or SET_INTERFACE before HcdEnumService sees the port
  * change, and counting it would fail a correct matrix run. A device still
  * on its port that refuses - SET_CONFIGURATION(0) among them - is counted
@@ -249,8 +252,12 @@ static VOID hcdCfgCountSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         usbd == HCD_USBD_BUFFER_TOO_SMALL) {
         return;
     }
-    if (dev->Gone || dev->Port == 0 || dev->Port > XHCI_MAX_ROOT_PORTS ||
-        hc->Ports[dev->Port - 1].Device != dev) {
+    if (dev->Gone || dev->Location == 0 || dev->Location > HCD_PORT_COUNT ||
+        hc->Ports[dev->Location - 1].Device != dev) {
+        return;
+    }
+    if (hc->Ports[dev->Location - 1].Hub != NULL) {
+        hc->Counters.SelectsFailed++;
         return;
     }
     portsc = XhciReadPortsc(&hc->Hc, dev->Port);
@@ -279,8 +286,9 @@ static VOID hcdCfgZero(PXHCI_EXTENSION ext, ULONG offset, ULONG bytes)
 
 /*
  * The Input Context for one Configure Endpoint: the control flags, the Slot
- * Context rewritten whole (a root-port device: route 0, the port's speed,
- * Context Entries the highest DCI enabled after it), and an Endpoint Context
+ * Context rewritten whole (HcdDeviceSlotParams: the device's route, root
+ * port, speed and TT fields, a hub's marking, Context Entries the highest
+ * DCI enabled after it), and an Endpoint Context
  * for each DCI being added, its dequeue pointer and cycle state read from
  * the ring now. Returns 0 when a builder refuses a value.
  */
@@ -309,12 +317,7 @@ static ULONG hcdCfgBuildInput(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                      plan->DropFlags) != 0) {
         return 0;
     }
-    for (i = 0; i < sizeof(sp); i++) {
-        ((PUCHAR)&sp)[i] = 0;
-    }
-    sp.RouteString = 0;
-    sp.Psiv = dev->Speed;
-    sp.RootHubPort = dev->Port;
+    HcdDeviceSlotParams(dev, 1, &sp);
     sp.ContextEntries = plan->ContextEntries;
     if (XhciBuildSlotContext(XhciCommonAt(ext, isc), &sp) != 0) {
         return 0;
@@ -569,6 +572,65 @@ ULONG HcdCfgParentConfigure(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     XHCI_DBG_VALUE("hcd: split device configured, port/slot/value",
                    (dev->Port << 16) | (dev->SlotId << 8) | dev->ConfigValue);
     return 1;
+}
+
+/*
+ * A hub's status-change endpoint (hcd_hub.c; design record 13 section 10.3
+ * step 3): one pipe on a pool ring, opened by the one Configure Endpoint
+ * that also carries the hub marking HcdDeviceSlotParams adds once
+ * dev->HubMarked is set - an Evaluate Context cannot set those fields. The
+ * hub has no client, so no URB ever names this pipe; its one record is the
+ * device's HubXfer. Returns the pipe, listed in dev->Pipes, or NULL with
+ * nothing enabled. Thread only, powered.
+ */
+PHCD_PIPE HcdCfgHubOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                        const XHCI_PIPE_EP *ep, ULONG iface)
+{
+    PHCD_PIPE add[32];
+    XHCI_PIPE_PLAN plan;
+    PXHCI_EXTENSION ext;
+    XHCI_TRB trb;
+    KIRQL oldIrql;
+    PHCD_PIPE pipe;
+    ULONG control;
+    ULONG code;
+    ULONG dci;
+    LONG usbd;
+
+    ext = &hc->Hc;
+    if (ep->Dci < 2 || ep->Dci > 31 || dev->Pipes[ep->Dci] != NULL) {
+        return NULL;
+    }
+    usbd = XHCI_USBD_STATUS_SUCCESS;
+    pipe = hcdCfgPipeNew(hc, dev, ep, &usbd);
+    if (pipe == NULL) {
+        return NULL;
+    }
+    pipe->Interface = iface;
+    for (dci = 0; dci < 32; dci++) {
+        add[dci] = NULL;
+    }
+    add[ep->Dci] = pipe;
+    code = 0;
+    if (XhciPipeConfigurePlan(0, 0, XHCI_PIPE_DCI_BIT(ep->Dci), &plan) ==
+            XHCI_PIPE_OK &&
+        hcdCfgBuildInput(hc, dev, &plan, add) &&
+        XhciTrbConfigureEndpoint(&trb, dev->SlotId,
+                                 XhciCommonPA(ext,
+                                              ext->Layout.InputContextOffset),
+                                 0) == XHCI_RING_OK) {
+        code = HcdThreadCommand(hc, &trb, &control);
+    }
+    if (code != XHCI_CC_SUCCESS) {
+        XHCI_DBG_VALUE("hcd: hub Configure Endpoint failed, slot/code",
+                       (dev->SlotId << 8) | code);
+        hcdCfgPipeFree(hc, dev, pipe);
+        return NULL;
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    dev->Pipes[ep->Dci] = pipe;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    return pipe;
 }
 
 /* ----------------------------------------------------------------------- */
@@ -2005,7 +2067,8 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     survivor = NULL;
     count = 0;
     for (t = head; t != NULL; t = t->Next) {
-        if (t != &dev->Ep0Xfer && ((PHCD_XFER)t)->CancelRequested) {
+        if (t != &dev->Ep0Xfer && t != &dev->HubXfer &&
+            ((PHCD_XFER)t)->CancelRequested) {
             if (count < HCD_PIPE_XFERS) {
                 cancelled[count++] = t;
             }
@@ -2135,8 +2198,8 @@ static LONG hcdCfgResetPort(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     ULONG ok;
 
     ext = &hc->Hc;
-    if (dev->Port == 0 || dev->Port > XHCI_MAX_ROOT_PORTS ||
-        hc->Ports[dev->Port - 1].Device != dev) {
+    if (dev->Location == 0 || dev->Location > HCD_PORT_COUNT ||
+        hc->Ports[dev->Location - 1].Device != dev) {
         return HCD_USBD_DEVICE_GONE;
     }
     XHCI_DBG_VALUE("hcd: reset port, port/slot",
@@ -2212,7 +2275,7 @@ cleanup:
         XHCI_DBG_VALUE("hcd: reset port failed, cycling port", dev->Port);
         if (dev->Pdo != NULL) {
             /* The device's group: every function PDO of it goes. */
-            HcdEnumCycle(hc, dev->Port, dev->PdoGroup);
+            HcdEnumCycle(hc, dev->Location, dev->PdoGroup);
         }
         return HCD_USBD_INTERNAL_HC_ERROR;
     }

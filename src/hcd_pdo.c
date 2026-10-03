@@ -15,7 +15,10 @@
  * The ids are section 10.7's: USB\VID_vvvv&PID_pppp with &REV_rrrr ahead of
  * it, and the USB\Class_ compatible ids from the device descriptor or, when
  * bDeviceClass is 0 and there is one interface, from it. The instance id is
- * the root port, until the serial string is read (26-A.4 later, or 29-A.5).
+ * the device's place - the root port, with the Route String above it for a
+ * device behind hubs (XhciHubInstanceKey) - until the serial string is read
+ * (26-A.4 later, or 29-A.5). A hub is the bus's own and never reaches here
+ * (hcd_hub.c, 27-A.1).
  *
  * A composite device the bus splits (26-A.7; sections 10.8 and 10.9) gets no
  * PDO of its own: one function PDO per function, each an HCD_DEVICE_PDO with
@@ -163,7 +166,7 @@ static NTSTATUS hcdFunctionQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
                               irp->IoStatus.Information);
     }
     used = 0;
-    if (XhciFuncId(pdo->DeviceDesc, &pdo->Func, pdo->Port, which, text,
+    if (XhciFuncId(pdo->DeviceDesc, &pdo->Func, pdo->InstanceKey, which, text,
                    sizeof(text), &used) != XHCI_FUNC_OK) {
         return HcdCompleteIrp(irp, STATUS_UNSUCCESSFUL, 0);
     }
@@ -194,13 +197,7 @@ static NTSTATUS hcdDeviceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
     if (pdo->Function) {
         return hcdFunctionQueryId(pdo, irp, type);
     }
-    /* A hub is offered under ids no INF knows until the bus serves hubs
-     * itself (Phase 27): the stock USB.INF files bind usbhub.sys by class
-     * and by some hubs' VID/PID too - NUSB's lists QEMU's 0409:55AA - and
-     * usbhub.sys on this PDO asked for GET_ROOTHUB_PDO and left Windows 2000
-     * resetting at every boot (golden-image build, 2026-10-03). */
-    prefix = (pdo->DeviceDesc[4] == 0x09) ? L"USB\\XHCI98HUB_VID_"
-                                          : L"USB\\VID_";
+    prefix = L"USB\\VID_";
     vid = (ULONG)pdo->DeviceDesc[8] | ((ULONG)pdo->DeviceDesc[9] << 8);
     pid = (ULONG)pdo->DeviceDesc[10] | ((ULONG)pdo->DeviceDesc[11] << 8);
     rev = (ULONG)pdo->DeviceDesc[12] | ((ULONG)pdo->DeviceDesc[13] << 8);
@@ -233,16 +230,6 @@ static NTSTATUS hcdDeviceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
 
     case BusQueryCompatibleIDs:
         hcdClassTriple(pdo, &cls, &sub, &prot);
-        if (cls == 0x09) {
-            /* No compatible ids for a hub either (see the prefix above):
-             * it stays a device with no driver, and nothing behind it
-             * enumerates until Phase 27. */
-            XHCI_DBG_VALUE("hcd: hub device not offered to a driver, port",
-                           pdo->Port);
-            buf[n++] = 0;
-            buf[n++] = 0;
-            break;
-        }
         hcdPut(buf, &n, L"USB\\Class_");
         hcdPutHex(buf, &n, cls, 2);
         hcdPut(buf, &n, L"&SubClass_");
@@ -262,7 +249,7 @@ static NTSTATUS hcdDeviceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
         break;
 
     case BusQueryInstanceID:
-        hcdPutDecimal(buf, &n, pdo->Port);
+        hcdPutDecimal(buf, &n, pdo->InstanceKey);
         buf[n++] = 0;
         break;
 
@@ -311,7 +298,7 @@ static VOID hcdPortNotify(PHCD_CONTROLLER hc, PULONG bits, ULONG port)
 {
     KIRQL oldIrql;
 
-    if (port == 0 || port > XHCI_MAX_ROOT_PORTS) {
+    if (port == 0 || port > HCD_PORT_COUNT) {
         return;
     }
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
@@ -403,7 +390,8 @@ static NTSTATUS hcdPdoNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     pdo->Controller = hc;
     pdo->Device = dev;
     pdo->Serial = serial;
-    pdo->Port = dev->Port;
+    pdo->Port = dev->Location;
+    pdo->InstanceKey = XhciHubInstanceKey(dev->Port, dev->Route);
     pdo->Speed = dev->Speed;
     pdo->SpeedClass = XHCI_SPEED_UNKNOWN;
     (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, dev->Port, dev->Speed,
@@ -937,8 +925,8 @@ static NTSTATUS hcdDeviceCapabilities(PHCD_DEVICE_PDO pdo, PIRP irp)
     caps->SilentInstall = FALSE;
     caps->RawDeviceOK = FALSE;
     caps->SurpriseRemovalOK = TRUE;
-    caps->Address = pdo->Port;
-    caps->UINumber = pdo->Port;
+    caps->Address = pdo->InstanceKey;
+    caps->UINumber = pdo->InstanceKey;
     caps->DeviceState[PowerSystemWorking] = PowerDeviceD0;
     for (i = PowerSystemSleeping1; i < PowerSystemMaximum; i++) {
         caps->DeviceState[i] = PowerDeviceD3;
