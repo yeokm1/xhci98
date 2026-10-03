@@ -526,6 +526,9 @@ typedef struct _HCD_PORT {
      * (HubSsRearms) up to a cap (hcd_hub.c, hcdHubRearmPorts). */
     ULONG HubSsRearmWait;
     ULONG HubSsRearms;
+    ULONG HubSsSeen;        /* a connection read since its last re-arm:
+                             * an empty port after that is a departure of
+                             * the device's own, which restarts the waits */
 } HCD_PORT, *PHCD_PORT;
 
 /*
@@ -595,6 +598,8 @@ typedef struct _HCD_HOLD {
     ULONG Pending;          /* asked for; the thread has not acted yet   */
     ULONG Reason;           /* HCD_HOLD_REASON_*                         */
     ULONG Port;             /* the held SuperSpeed root port             */
+    ULONG Unreadable;       /* passes its PORTSC read all ones while the
+                             * request was pending                       */
     XHCI_LINK_HOLD Hold;    /* the pure state, xhci_link.c               */
 } HCD_HOLD, *PHCD_HOLD;
 
@@ -960,7 +965,7 @@ ULONG HcdThreadCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb, PULONG control);
  * and its machine waits in Present; Codex review of Phase 31, round 2,
  * unit C). Sets dev->HoldAsked; a request the service later refuses for a
  * device still there ends with the device refused in place (hcd_enum.c,
- * hcdHoldRefusedLate).
+ * hcdHoldResolve).
  * IRQL: <= DISPATCH_LEVEL, controller lock not held.
  */
 BOOLEAN HcdHoldRequestUsb2(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,

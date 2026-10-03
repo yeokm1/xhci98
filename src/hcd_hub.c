@@ -554,6 +554,32 @@ ULONG HcdHubPathPresent(PHCD_CONTROLLER hc, PHCD_PORT q)
             (portsc & XHCI_PORTSC_CSC) == 0);
 }
 
+/* The hub's re-arm timer cancelled and every port's pending re-arm
+ * forgotten: whenever the hub stops being served (HcdHubForget, and
+ * HcdHubFree), whether or not its object is kept for PnP's removals - a
+ * queued KTIMER must never outlive the controller extension that holds it
+ * (Codex review of the Phase 28-31 integration, round 2, finding A). */
+static VOID hcdHubRearmStop(PHCD_HUB hub)
+{
+    if (hub->RearmArmed) {
+        (VOID)KeCancelTimer(&hub->RearmTimer);
+        hub->RearmArmed = 0;
+    }
+    hub->RearmPorts = 0;
+}
+
+/* A port's next re-arm wait: HCD_SSHUB_REARM_FIRST ticks doubled with each
+ * re-arm or failed re-arm in a row, never more than HCD_SSHUB_REARM_CAP. */
+static VOID hcdHubRearmBackoff(PHCD_PORT q)
+{
+    q->HubSsRearmWait = HCD_SSHUB_REARM_FIRST << q->HubSsRearms;
+    if (q->HubSsRearmWait >= HCD_SSHUB_REARM_CAP) {
+        q->HubSsRearmWait = HCD_SSHUB_REARM_CAP;
+    } else {
+        q->HubSsRearms++;
+    }
+}
+
 /* The hub's re-arm timer set for one tick, unless it is set already. */
 static VOID hcdHubRearmTick(PHCD_HUB hub)
 {
@@ -572,25 +598,26 @@ static VOID hcdHubRearmTick(PHCD_HUB hub)
  * The given-up SuperSpeed hub ports whose wait has run out, put back to
  * RxDetect - SET_FEATURE(PORT_LINK_STATE) with RxDetect (5) in wIndex bits
  * 15:8, the exit from SS.Disabled (USB 3.2 10.3.1 and Table 10-9, to
- * verify); never BH_PORT_RESET, which is not that exit - and each one's
- * status read at once and the port looked at in this pass, as a change
- * (Codex review of the Phase 28-31 integration, finding 1). A port that
- * reads nothing connected starts its next give-up's waits from the first.
- * Called once a pass for each live hub, before its ports are looked at; the
- * timer is polled with a zero wait, as the debounce polls its own. Thread
- * only, powered.
+ * verify); never BH_PORT_RESET, which is not that exit - and each one
+ * looked at in this pass, as a change (Codex review of the Phase 28-31
+ * integration, finding 1). A port stays pending until its request
+ * succeeds: a failed one is tried again after the next, longer wait (round
+ * 2, finding B). Nothing here restarts the waits - a port read empty just
+ * after RxDetect may only be detecting its receiver; HcdSsHubPortLook does
+ * it on an independent departure, and hcd_enum.c on an enumeration that
+ * reached Present (round 2, finding C). Called once a pass for each live
+ * hub, before its ports are looked at; the timer is polled with a zero
+ * wait, as the debounce polls its own. Thread only, powered.
  */
 static VOID hcdHubRearmPorts(PHCD_CONTROLLER hc, PHCD_HUB hub)
 {
     LARGE_INTEGER now;
     PHCD_PORT q;
-    ULONG status;
-    ULONG change;
     ULONG bytes;
     ULONG stalled;
     ULONG n;
 
-    if (!hub->RearmArmed) {
+    if (!hub->RearmArmed || hub->Draining || hub->Device == NULL) {
         return;
     }
     now.QuadPart = 0;
@@ -608,25 +635,22 @@ static VOID hcdHubRearmPorts(PHCD_CONTROLLER hc, PHCD_HUB hub)
             q->HubSsRearmWait--;
             continue;
         }
-        hub->RearmPorts &= ~(1UL << n);
         if (!hcdHubRequest(hc, hub, XHCI_HUB_RT_PORT_OUT,
                            XHCI_HUB_REQ_SET_FEATURE,
                            (USHORT)XHCI_SSHUB_FEAT_PORT_LINK_STATE,
                            (USHORT)(n | (XHCI_SSHUB_LINK_RX_DETECT << 8)), 0,
                            &bytes, &stalled)) {
-            XHCI_DBG_VALUE("hcd: SS hub port not re-armed, hub/port",
+            XHCI_DBG_VALUE("hcd: SS hub port not re-armed, retried, hub/port",
                            (hub->Index << 8) | n);
+            hcdHubRearmBackoff(q);
             continue;
         }
+        hub->RearmPorts &= ~(1UL << n);
+        q->HubSsSeen = 0;
         hc->SsHubPortsRearmed++;
-        status = 0;
-        if (HcdHubPortStatus(hc, hub, n, &status, &change) &&
-            (status & XHCI_SSHUB_PORT_CONNECTION) == 0) {
-            q->HubSsRearms = 0;
-        }
         hub->Changed |= 1UL << n;
-        XHCI_DBG_VALUE("hcd: SS hub port re-armed, hub/port/status",
-                       (hub->Index << 24) | (n << 16) | (status & 0xFFFFUL));
+        XHCI_DBG_VALUE("hcd: SS hub port re-armed, hub/port",
+                       (hub->Index << 8) | n);
     }
     if (hub->RearmPorts != 0) {
         hcdHubRearmTick(hub);
@@ -668,12 +692,7 @@ VOID HcdHubPortDisable(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
                    (hub->Index << 8) | n);
     if (hub->Usb3) {
         q = HcdHubPort(hc, hub, n);
-        q->HubSsRearmWait = HCD_SSHUB_REARM_FIRST << q->HubSsRearms;
-        if (q->HubSsRearmWait >= HCD_SSHUB_REARM_CAP) {
-            q->HubSsRearmWait = HCD_SSHUB_REARM_CAP;
-        } else {
-            q->HubSsRearms++;
-        }
+        hcdHubRearmBackoff(q);
         hub->RearmPorts |= 1UL << n;
         hcdHubRearmTick(hub);
     }
@@ -1120,6 +1139,7 @@ static ULONG hcdHubConfigure(PHCD_CONTROLLER hc, PHCD_HUB hub)
  * The caller decides when the object itself is freed (HcdHubFree). */
 VOID HcdHubForget(PHCD_CONTROLLER hc, PHCD_HUB hub)
 {
+    hcdHubRearmStop(hub);
     if (hub->SlotId != 0) {
         XhciTopoDetach(&hc->Hc.Topology, hub->SlotId);
     }
@@ -1153,6 +1173,7 @@ VOID HcdHubFree(PHCD_CONTROLLER hc, PHCD_HUB hub)
         q->HubSsRecover = 0;
         q->HubSsRearmWait = 0;
         q->HubSsRearms = 0;
+        q->HubSsSeen = 0;
         XhciLinkInit(&q->Link);
         b = (PUCHAR)&q->HubSsLink;
         for (i = 0; i < sizeof(q->HubSsLink); i++) {
@@ -1161,9 +1182,7 @@ VOID HcdHubFree(PHCD_CONTROLLER hc, PHCD_HUB hub)
     }
     /* A set timer is in the kernel's queue: cancelled before the object
      * that holds it is cleared. */
-    if (hub->RearmArmed) {
-        (VOID)KeCancelTimer(&hub->RearmTimer);
-    }
+    hcdHubRearmStop(hub);
     index = hub->Index;
     b = (PUCHAR)hub;
     for (i = 0; i < sizeof(*hub); i++) {

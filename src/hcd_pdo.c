@@ -460,7 +460,7 @@ static ULONG hcdXportRefusal(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         return 0;
     }
     if (dev->HoldRefused) {
-        /* Asked once and refused late (hcd_enum.c, hcdHoldRefusedLate):
+        /* Asked once and refused late (hcd_enum.c, hcdHoldResolve):
          * refused in place, not asked again. */
         hc->XportHoldsNotTaken++;
         return 0;
