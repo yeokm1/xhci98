@@ -102,11 +102,18 @@ static ULONG hcdCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
     ULONG trbPA;
     ULONG answer;
     ULONG rounds;
+#if DBG
+    HCD_STRICT_SNAP strict;
+#endif
 
     *control = 0;
     if (hcdHalted(hc)) {
         return 0;
     }
+#if DBG
+    /* Read before the doorbell: the completion rewrites the contexts. */
+    HcdStrictBefore(hc, trb, &strict);
+#endif
     KeClearEvent(&hc->CmdDoneEvent);
     hc->CmdDoneLost = 0;
     hc->CmdDonePA = 0;
@@ -126,6 +133,9 @@ static ULONG hcdCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
         }
         if (hc->CmdDonePA == trbPA) {
             *control = hc->CmdDoneControl;
+#if DBG
+            HcdStrictAfter(hc, &strict, hc->CmdDoneCode, *control);
+#endif
             return hc->CmdDoneCode;
         }
         if (!hcdWaitEvent(&hc->CmdDoneEvent, HCD_COMMAND_WAIT_MS)) {
@@ -1178,6 +1188,9 @@ static VOID hcdInvalidate(PHCD_CONTROLLER hc)
     for (i = 1; i <= XHCI_MAX_SLOTS; i++) {
         hcdDeviceFree(hc, hc->SlotDevice[i]);
     }
+#if DBG
+    HcdStrictForgetSlots(hc);
+#endif
     hc->ScratchTainted = 0;
     hc->SlotSweep = 0;
 }
@@ -1449,5 +1462,8 @@ VOID HcdEnumDrop(PHCD_CONTROLLER hc)
     for (i = 1; i <= XHCI_MAX_SLOTS; i++) {
         hcdDeviceFree(hc, hc->SlotDevice[i]);
     }
+#if DBG
+    HcdStrictForgetSlots(hc);
+#endif
     hc->SlotSweep = 0;
 }
