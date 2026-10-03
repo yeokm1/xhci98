@@ -328,6 +328,10 @@ typedef struct _HCD_USB_DEVICE {
                                      * over (hcd_cfg.c); thread           */
 } HCD_USB_DEVICE, *PHCD_USB_DEVICE;
 
+/* Distinct pipe handles a PDO keeps an abort horizon for: more than any
+ * configuration opens (31 endpoints and the default pipe). */
+#define HCD_PDO_ABORTS 32UL
+
 /* A device PDO (hcd_pdo.c): one per enumerated device, a child of the root
  * hub. Carries its own copies of the descriptors, so it may outlive the
  * device record; Device is the record while the device is present. */
@@ -355,6 +359,26 @@ typedef struct _HCD_DEVICE_PDO {
     KDPC RefuseDpc;
     ULONG RefuseArmed;
     volatile LONG RefusedPending;
+    /* URB IRPs of a device that left, held until the client aborts or
+     * cancels them or the PDO stops or goes (HcdIoPark, hcd_io.c): the
+     * list under the cancel spin lock, each still counted in UrbsPending. */
+    LIST_ENTRY ParkedIrps;
+    ULONG ParkedCount;
+    /* Abort horizons (HcdIoAbortMark, hcd_io.c), under the cancel spin
+     * lock: every URB IRP is stamped at its dispatch with the next value
+     * of SubmitSeq - a 64-bit count as a Lo/Hi pair; the IRP keeps its low
+     * word in DriverContext[0] - and an ABORT_PIPE records the value its
+     * own stamp took as its pipe's horizon, or, for a handle it cannot
+     * place, every pipe's (AbortAll). A request whose stamp is at or below
+     * its pipe's horizon was submitted before an abort of it and is
+     * completed CANCELED rather than held (xhci_pipe.h, XhciSeqCovers). A
+     * horizon is never cleared or evicted: a table that is full raises
+     * AbortAll instead. */
+    XHCI_SEQ64 SubmitSeq;
+    XHCI_SEQ64 AbortAll;
+    ULONG AbortCount;
+    PVOID AbortPipe[HCD_PDO_ABORTS];
+    XHCI_SEQ64 AbortHorizon[HCD_PDO_ABORTS];
     volatile LONG Busy;             /* dispatches inside hcd_urb.c, raised
                                      * before Controller is read; the
                                      * parent's release waits it out      */
@@ -886,6 +910,12 @@ ULONG HcdIoDeviceDrain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 NTSTATUS HcdIoRefuseLater(struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb,
                           LONG usbd);
 VOID HcdIoRefusedInit(struct _HCD_DEVICE_PDO *pdo);
+ULONG HcdIoPark(struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb,
+                PVOID handle);
+ULONG HcdIoParkedRelease(struct _HCD_DEVICE_PDO *pdo, ULONG aborted);
+VOID HcdIoStamp(struct _HCD_DEVICE_PDO *pdo, PIRP irp);
+VOID HcdIoAbortMark(struct _HCD_DEVICE_PDO *pdo, PIRP abortIrp,
+                    PVOID handle, ULONG known);
 VOID HcdIoRefusedDrain(struct _HCD_DEVICE_PDO *pdo);
 ULONG HcdIoDeviceGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 VOID HcdIoIsoRefused(PVOID urb, LONG usbd);
