@@ -313,6 +313,56 @@ ULONG XhciPipeSplit(ULONG pageOffset, ULONG length, ULONG maxPacketSize,
                     PULONG chunkBytes);
 
 /* ------------------------------------------------------------------ */
+/* Isochronous URBs                                                     */
+/* ------------------------------------------------------------------ */
+
+/* USBD_ISO_PACKET_DESCRIPTOR's layout (Windows 2000 DDK inc\usbdi.h
+ * lines 741-748): Offset in, Length and Status out. */
+typedef struct _XHCI_PIPE_ISO_PACKET {
+    ULONG Offset;
+    ULONG Length;
+    ULONG Status;
+} XHCI_PIPE_ISO_PACKET, *PXHCI_PIPE_ISO_PACKET;
+
+/* How far behind the current frame a StartFrame may lie (usbdi.h:160). */
+#define XHCI_PIPE_ISO_START_RANGE   1024UL
+
+/*
+ * An isochronous URB's packet table against its buffer: 1..maxCount packets,
+ * offsets non-decreasing and none past bufferLength (a packet may be empty),
+ * and no packet longer than maxPacket (0: unbounded). XHCI_PIPE_BAD_PARAM for
+ * any of those, a NULL table or a bufferLength of 0.
+ */
+ULONG XhciPipeIsoCheck(const XHCI_PIPE_ISO_PACKET *packets, ULONG count,
+                       ULONG bufferLength, ULONG maxCount, ULONG maxPacket);
+
+/* Packet i's length: up to the next packet's offset, the last one up to
+ * bufferLength. Only for a table XhciPipeIsoCheck accepted. */
+ULONG XhciPipeIsoLength(const XHCI_PIPE_ISO_PACKET *packets, ULONG count,
+                        ULONG bufferLength, ULONG i);
+
+/*
+ * The page-bounded pieces of a packet `length` bytes long at byte `offset`
+ * of a buffer starting `pageOffset` bytes into its first page: 1 or 2,
+ * their lengths in lengths[0..1] (lengths[1] 0 for one). 0 for a packet
+ * longer than a page, a pageOffset of a page or more, or NULL. An empty
+ * packet is one empty piece.
+ */
+ULONG XhciPipeIsoFragments(ULONG pageOffset, ULONG offset, ULONG length,
+                           PULONG lengths);
+
+/* Frames from the first packet to packet i, and frames `packets` packets
+ * span, at an Endpoint Context Interval (ESIT = 2^interval microframes).
+ * packets <= 62 and interval <= 15 cannot overflow. */
+ULONG XhciPipeIsoFrameOf(ULONG i, ULONG interval);
+ULONG XhciPipeIsoFrames(ULONG packets, ULONG interval);
+
+/* A StartFrame up to `ahead` frames after `now` or up to
+ * XHCI_PIPE_ISO_START_RANGE before it, in the wrapping 32-bit frame domain:
+ * XHCI_PIPE_OK, else XHCI_PIPE_REFUSED. */
+ULONG XhciPipeIsoStartOk(ULONG startFrame, ULONG now, ULONG ahead);
+
+/* ------------------------------------------------------------------ */
 /* Status                                                               */
 /* ------------------------------------------------------------------ */
 

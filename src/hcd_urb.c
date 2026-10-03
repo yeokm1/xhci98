@@ -206,12 +206,57 @@ static LONG hcdControlRequest(PURB urb, ULONG function, PHCD_IO_REQUEST req)
     return USBD_STATUS_SUCCESS;
 }
 
+XHCI_C_ASSERT(iso_packet_mirror,
+              sizeof(USBD_ISO_PACKET_DESCRIPTOR) ==
+                  sizeof(XHCI_PIPE_ISO_PACKET));
+
+/*
+ * An isochronous URB: its packet table checked against its buffer, and the
+ * transfer it asks for. The checks that need the pipe - its type, its Max
+ * ESIT Payload, the StartFrame against the frame axis - are hcd_io.c's
+ * (hcdIsoAdmit). The direction is the pipe's too, so none is taken here.
+ */
+static LONG hcdIsochRequest(PURB urb, PHCD_IO_REQUEST req)
+{
+    struct _URB_ISOCH_TRANSFER *it;
+    ULONG fixed;
+
+    it = &urb->UrbIsochronousTransfer;
+    fixed = FIELD_OFFSET(struct _URB_ISOCH_TRANSFER, IsoPacket);
+    /* UrbHeader.Length is a USHORT and the count is bounded first, so the
+     * product cannot wrap. */
+    if (urb->UrbHeader.Length < fixed || it->NumberOfPackets == 0 ||
+        it->NumberOfPackets > XHCI_XFER_MAX_ISO_PACKETS ||
+        urb->UrbHeader.Length <
+            fixed + it->NumberOfPackets * sizeof(USBD_ISO_PACKET_DESCRIPTOR)) {
+        return USBD_STATUS_INVALID_PARAMETER;
+    }
+    if (XhciPipeIsoCheck((const XHCI_PIPE_ISO_PACKET *)it->IsoPacket,
+                         it->NumberOfPackets, it->TransferBufferLength,
+                         XHCI_XFER_MAX_ISO_PACKETS, 0) != XHCI_PIPE_OK) {
+        return USBD_STATUS_INVALID_PARAMETER;
+    }
+    req->Handle = it->PipeHandle;
+    req->Flags = HCD_IO_ISOCH;
+    if (it->TransferFlags & USBD_START_ISO_TRANSFER_ASAP) {
+        req->Flags |= HCD_IO_ASAP;
+    }
+    req->Buffer = it->TransferBuffer;
+    req->Mdl = it->TransferBufferMDL;
+    req->Length = it->TransferBufferLength;
+    req->LengthOut = &it->TransferBufferLength;
+    return USBD_STATUS_SUCCESS;
+}
+
 /*
  * The transfer a URB asks for - a control transfer on the default pipe, or
- * a bulk or interrupt transfer on the pipe its handle names - or the USBD
- * status that refuses it. Read at dispatch, and read again from the same
- * URB, which its client may not touch while the IRP is pending, when an IRP
- * that waited for one of its pipe's records is given one (hcd_io.c).
+ * a bulk, interrupt or isochronous transfer on the pipe its handle names -
+ * or the USBD status that refuses it. Read at dispatch, and read again from
+ * the same URB, which its client may not touch while the IRP is pending,
+ * when an IRP that waited for one of its pipe's records is given one
+ * (hcd_io.c). A bulk or interrupt URB's direction flag counts only on the
+ * default pipe: on any other the pipe's endpoint decides, as usbport has it
+ * (hcd_io.c, hcdFill).
  */
 LONG HcdUrbIoRequest(PVOID urbv, PHCD_IO_REQUEST req)
 {
@@ -227,6 +272,9 @@ LONG HcdUrbIoRequest(PVOID urbv, PHCD_IO_REQUEST req)
     function = urb->UrbHeader.Function;
     if (hcdIsControl(function)) {
         return hcdControlRequest(urb, function, req);
+    }
+    if (function == URB_FUNCTION_ISOCH_TRANSFER) {
+        return hcdIsochRequest(urb, req);
     }
     if (function != URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER) {
         return USBD_STATUS_INVALID_URB_FUNCTION;
@@ -293,7 +341,8 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         return hcdGoneLater(pdo, irp, urb);
     }
     if (hcdIsControl(function) ||
-        function == URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER) {
+        function == URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER ||
+        function == URB_FUNCTION_ISOCH_TRANSFER) {
         return hcdTransferUrb(pdo, hc, irp, urb);
     }
     switch (function) {

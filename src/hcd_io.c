@@ -73,7 +73,9 @@ VOID HcdIoPipeInitEp0(PHCD_USB_DEVICE dev)
 
 /* The next chunk: the pages it may span are bounded by the adapter's grant
  * and by the SG elements a record carries; a control transfer is one TD and
- * cannot be split. Returns 0 when the remainder cannot be mapped at all. */
+ * cannot be split, and neither is an isochronous one - its second chunk
+ * would reach the ring only after the first retired, a gap in the stream
+ * every time. Returns 0 when the remainder cannot be mapped at all. */
 static ULONG hcdPlanChunk(PHCD_CONTROLLER hc, PHCD_XFER x)
 {
     PUCHAR va;
@@ -97,7 +99,7 @@ static ULONG hcdPlanChunk(PHCD_CONTROLLER hc, PHCD_XFER x)
     if (remaining <= room) {
         x->Chunk = remaining;
     } else {
-        if (x->Control) {
+        if (x->Control || x->Isoch) {
             return 0;
         }
         /* A chunk that is not the last ends on a packet boundary, or the
@@ -405,6 +407,288 @@ static PHCD_PIPE hcdPipeFromHandle(PHCD_USB_DEVICE dev, PVOID handle)
     return NULL;
 }
 
+/* ----------------------------------------------------------------------- */
+/* Isochronous transfers                                                    */
+/* ----------------------------------------------------------------------- */
+
+static PUSBPORT_ISO_TRANSFER hcdIsoBlock(PHCD_XFER x)
+{
+    return &x->Pipe->Iso[x - x->Pipe->Xfers].Block;
+}
+
+/*
+ * The pipe-dependent half of an isochronous URB's checks (hcd_urb.c has the
+ * rest): no packet above the endpoint's Max ESIT Payload, which the xHC
+ * must not be given (4.14.2.1 p.238), and an explicit StartFrame no further
+ * ahead than an xHCI Frame ID can name (4.11.2.5 p.199) - 895 frames,
+ * narrower than usbdi.h's 1024. The frame axis is read here, with no lock
+ * held, so it is synced before the publish asks XhciFrameIdNow under the
+ * lock. IRQL: <= DISPATCH_LEVEL, no lock held.
+ */
+static LONG hcdIsoAdmit(PHCD_CONTROLLER hc, PHCD_XFER x)
+{
+    struct _URB_ISOCH_TRANSFER *it;
+    PHCD_PIPE pipe;
+    ULONG now;
+
+    it = &((PURB)x->Urb)->UrbIsochronousTransfer;
+    pipe = x->Pipe;
+    if (XhciPipeIsoCheck((const XHCI_PIPE_ISO_PACKET *)it->IsoPacket,
+                         it->NumberOfPackets, it->TransferBufferLength,
+                         XHCI_XFER_MAX_ISO_PACKETS,
+                         pipe->Ep.MaxEsitPayload) != XHCI_PIPE_OK) {
+        (VOID)InterlockedIncrement((PLONG)&hc->Hc.IsoRefusalsMalformed);
+        return HCD_USBD_INVALID_PARAMETER;
+    }
+    now = XhciFrameNumber(&hc->Hc);
+    /* The shape usbaudio.sys gives its URBs on each target is still to be
+     * measured (packets, ASAP, how far ahead an explicit start is). */
+    XHCI_DBG_VALUE_CHANGED(
+        "hcd: isoch URB, packets << 16 | ASAP << 15 | start - now",
+        (it->NumberOfPackets << 16) | (x->Asap ? 0x8000UL : 0UL) |
+            (x->Asap ? 0UL : ((it->StartFrame - now) & 0x7FFFUL)));
+    if (!x->Asap &&
+        XhciPipeIsoStartOk(it->StartFrame, now, XHCI_FRAME_ID_WINDOW_END) !=
+            XHCI_PIPE_OK) {
+        return HCD_USBD_BAD_START_FRAME;
+    }
+    return XHCI_USBD_STATUS_SUCCESS;
+}
+
+/* The physical address of byte `offset` of the mapped chunk, from the SG
+ * element holding it; 0 when none does. */
+static ULONG hcdSgPa(const USBPORT_SCATTER_GATHER_LIST *sg, ULONG offset,
+                     PULONG pa)
+{
+    const USBPORT_SCATTER_GATHER_ELEMENT *e;
+    ULONG i;
+
+    for (i = 0; i < sg->SgElementCount; i++) {
+        e = &sg->SgElement[i];
+        if (offset >= e->SgOffset &&
+            offset - e->SgOffset < e->SgTransferLength) {
+            *pa = e->SgPhysicalAddressLo + (offset - e->SgOffset);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * The record's block from its URB and its mapped chunk, each packet one or
+ * two page-bounded fragments: the pump cuts its elements at page bounds
+ * (hcd_dma.c), so a fragment never spans two. Rewritten whole each time, so
+ * a record held mapped is filled again when released. IRQL:
+ * <= DISPATCH_LEVEL.
+ */
+static ULONG hcdIsoFill(PHCD_XFER x)
+{
+    struct _URB_ISOCH_TRANSFER *it;
+    PUSBPORT_ISO_TRANSFER blk;
+    PUSBPORT_ISO_PACKET p;
+    ULONG lengths[2];
+    ULONG page;
+    ULONG off;
+    ULONG pa;
+    ULONG n;
+    ULONG i;
+    ULONG b;
+
+    it = &((PURB)x->Urb)->UrbIsochronousTransfer;
+    blk = hcdIsoBlock(x);
+    n = it->NumberOfPackets;
+    page = BYTE_OFFSET(MmGetMdlVirtualAddress(x->Mdl));
+    blk->Signature = USBPORT_ISO_SIGNATURE;
+    blk->NumberOfPackets = n;
+    blk->SgElementCount = x->Sg.List.SgElementCount;
+    blk->Reserved = 0;
+    for (i = 0; i < n; i++) {
+        p = &blk->Packet[i];
+        for (b = 0; b < sizeof(*p); b++) {
+            ((PUCHAR)p)[b] = 0;
+        }
+        off = it->IsoPacket[i].Offset;
+        p->Length = XhciPipeIsoLength(
+            (const XHCI_PIPE_ISO_PACKET *)it->IsoPacket, n, x->Length, i);
+        p->FragmentCount = 1;
+        if (p->Length == 0) {
+            /* One empty TRB (xhci_xfer.c), at an address the chunk owns. */
+            if (!hcdSgPa(&x->Sg.List, 0, &pa)) {
+                return 0;
+            }
+            p->Fragment0AddressLo = pa;
+            continue;
+        }
+        p->FragmentCount = XhciPipeIsoFragments(page, off, p->Length,
+                                                lengths);
+        if (p->FragmentCount == 0 || !hcdSgPa(&x->Sg.List, off, &pa)) {
+            return 0;
+        }
+        p->Fragment0Length = lengths[0];
+        p->Fragment0AddressLo = pa;
+        if (p->FragmentCount == 2) {
+            if (!hcdSgPa(&x->Sg.List, off + lengths[0], &pa)) {
+                return 0;
+            }
+            p->Fragment1Length = lengths[1];
+            p->Fragment1AddressLo = pa;
+        }
+    }
+    return 1;
+}
+
+/*
+ * Publish an isochronous record. ASAP is always SIA: SIA is "after the last
+ * queued TD" by definition, where an explicit Frame ID from an estimate of
+ * the stream's position would open a gap or miss a service whenever the
+ * estimate is off by one. An explicit StartFrame gets Frame IDs only when
+ * the controller has CFC (4.11.2.5 p.200) and the frame axis is congruent;
+ * the engine decides the rest, all or nothing. The extension's IsoScratch
+ * and IsoLayout are shared by every isochronous pipe, which the controller
+ * lock makes sound. Controller lock held.
+ */
+static ULONG hcdIsoPublish(PHCD_CONTROLLER hc, PHCD_PIPE pipe, PHCD_XFER x)
+{
+    PXHCI_EXTENSION ext;
+    struct _URB_ISOCH_TRANSFER *it;
+    PUSBPORT_ISO_TRANSFER blk;
+    XHCI_ISO_REQUEST req;
+    ULONG interval;
+    ULONG answer;
+    ULONG start;
+    ULONG now;
+    ULONG i;
+
+    ext = &hc->Hc;
+    it = &((PURB)x->Urb)->UrbIsochronousTransfer;
+    blk = hcdIsoBlock(x);
+    interval = pipe->Ep.Interval;
+    for (i = 0; i < sizeof(req); i++) {
+        ((PUCHAR)&req)[i] = 0;
+    }
+    req.Iso = blk;
+    req.DirectionIn = pipe->Ep.DirectionIn;
+    req.MaxPacketSize = pipe->Ep.MaxPacketSize;
+    req.MaxBurstSize = pipe->Ep.MaxBurstSize;
+    req.MaxEsitPayload = pipe->Ep.MaxEsitPayload;
+    req.PacketsPerFrame = (interval <= 3UL) ? (8UL >> interval) : 0UL;
+    req.Frames.IstFrames = ext->HcInfo.IstFrames;
+    if (XhciFrameIdNow(ext, &now)) {
+        req.Frames.CurrentFrame = now;
+        req.Frames.Allowed = (ext->HcInfo.Cfc && !x->Asap) ? 1UL : 0UL;
+    } else {
+        now = ext->FrameNumber;
+    }
+    if (!x->Asap) {
+        start = it->StartFrame;
+    } else if (pipe->Queue->Count != 0) {
+        start = pipe->IsoNext;
+    } else {
+        start = now + ext->HcInfo.IstFrames + 1UL;
+    }
+    for (i = 0; i < blk->NumberOfPackets; i++) {
+        blk->Packet[i].FrameNumber = start + XhciPipeIsoFrameOf(i, interval);
+    }
+    answer = XhciXferSubmitIso(pipe->Queue, pipe->Ring, &req,
+                               req.DirectionIn, &x->Xfer, x, ext->IsoScratch,
+                               XHCI_XFER_MAX_ISO_TRBS, &ext->IsoLayout);
+    if (answer == XHCI_XFER_OK) {
+        if (x->Asap) {
+            it->StartFrame = start;
+        }
+        pipe->IsoNext = start + XhciPipeIsoFrames(blk->NumberOfPackets,
+                                                  interval);
+        ext->IsoSubmits++;
+        ext->IsoPacketsSubmitted += ext->IsoLayout.TdCount;
+        if (ext->IsoLayout.FrameIdsUsed) {
+            ext->IsoSubmitsWithFrameId++;
+        }
+        if (ext->IsoLayout.CadenceMismatch && req.PacketsPerFrame != 0) {
+            ext->IsoCadenceMismatches++;
+        }
+        XHCI_DBG_VALUE_CHANGED(
+            "hcd: isoch published, TRBs << 16 | Frame IDs << 8 | packets",
+            (ext->IsoLayout.TrbCount << 16) |
+                (ext->IsoLayout.FrameIdsUsed << 8) |
+                (ext->IsoLayout.TdCount & 0xFFUL));
+    } else if (answer == XHCI_XFER_ISO_TOO_LARGE) {
+        ext->IsoRefusalsTooLarge++;
+    } else if (answer != XHCI_XFER_BUSY) {
+        ext->IsoRefusalsMalformed++;
+    }
+    return answer;
+}
+
+/*
+ * An isochronous record's end: the engine's per-packet answers - every
+ * packet no event answered stamped first (XhciXferIsoFinalise) - copied into
+ * the URB as usbport does (usbport-miniport-abi.md, "Isochronous
+ * transfers"): DATA_UNDERRUN is stored as success and not counted in
+ * ErrorCount, and Length is the bytes for IN and 0 for OUT (usbdi.h:745-746).
+ * The URB fails only as a whole (CANCELED, DEVICE_GONE) or with every packet
+ * failed (usbdi.h:292-294). A record the ring never had gives every packet
+ * its refusal. Returns the URB status, the bytes in *bytesOut. IRQL:
+ * <= DISPATCH_LEVEL, no lock held.
+ */
+static LONG hcdIsoComplete(PHCD_XFER x, ULONG engine, LONG status,
+                           PULONG bytesOut)
+{
+    struct _URB_ISOCH_TRANSFER *it;
+    PUSBPORT_ISO_TRANSFER blk;
+    LONG s;
+    ULONG bytes;
+    ULONG errors;
+    ULONG len;
+    ULONG n;
+    ULONG i;
+
+    it = &((PURB)x->Urb)->UrbIsochronousTransfer;
+    blk = hcdIsoBlock(x);
+    n = it->NumberOfPackets;
+    if (engine) {
+        XhciXferIsoFinalise(&x->Xfer);
+    }
+    bytes = 0;
+    errors = 0;
+    for (i = 0; i < n; i++) {
+        s = engine ? blk->Packet[i].Status : status;
+        len = engine ? blk->Packet[i].LengthTransferred : 0;
+        if (s == XHCI_USBD_STATUS_DATA_UNDERRUN) {
+            s = XHCI_USBD_STATUS_SUCCESS;
+        }
+        if (s != XHCI_USBD_STATUS_SUCCESS) {
+            errors++;
+        }
+        it->IsoPacket[i].Status = s;
+        it->IsoPacket[i].Length = x->In ? len : 0;
+        bytes += len;
+    }
+    it->ErrorCount = errors;
+    *bytesOut = bytes;
+    if (!engine || status == HCD_USBD_CANCELED ||
+        status == HCD_USBD_DEVICE_GONE) {
+        return status;
+    }
+    return (errors == n) ? HCD_USBD_ISOCH_REQUEST_FAILED
+                         : XHCI_USBD_STATUS_SUCCESS;
+}
+
+/* An isochronous URB refused before a record was filled: every packet
+ * says so, as hcdIsoComplete would have written it. Only for a URB whose
+ * packet count hcd_urb.c accepted. */
+static VOID hcdIsoRefused(PVOID urb, LONG usbd)
+{
+    struct _URB_ISOCH_TRANSFER *it;
+    ULONG i;
+
+    it = &((PURB)urb)->UrbIsochronousTransfer;
+    for (i = 0; i < it->NumberOfPackets; i++) {
+        it->IsoPacket[i].Status = usbd;
+        it->IsoPacket[i].Length = 0;
+    }
+    it->ErrorCount = it->NumberOfPackets;
+}
+
 /*
  * Fill a claimed record from its request: the SETUP bytes, the direction,
  * the MDL - the client's, or one built here over its buffer - and the first
@@ -418,6 +702,8 @@ static PHCD_PIPE hcdPipeFromHandle(PHCD_USB_DEVICE dev, PVOID handle)
 static LONG hcdFill(PHCD_CONTROLLER hc, PHCD_XFER x, PVOID urb,
                     const HCD_IO_REQUEST *req)
 {
+    LONG usbd;
+    ULONG isochPipe;
     ULONG i;
 
     x->Urb = urb;
@@ -431,6 +717,29 @@ static LONG hcdFill(PHCD_CONTROLLER hc, PHCD_XFER x, PVOID urb,
     x->Control = req->Control;
     x->In = (req->Flags & HCD_IO_IN) != 0;
     x->ShortOk = (req->Flags & HCD_IO_SHORT_OK) != 0;
+    x->Isoch = (req->Flags & HCD_IO_ISOCH) != 0;
+    x->Asap = (req->Flags & HCD_IO_ASAP) != 0;
+    if (!req->Control) {
+        /* A URB's function must match its pipe's type: an isochronous URB
+         * only on an isochronous pipe and a bulk or interrupt one on any
+         * other, the default pipe never - a Normal or Isoch TD on a
+         * control ring is a TRB Error at best. */
+        isochPipe = (x->Pipe->TransferType == XHCI_PIPE_XFER_ISOCH) ? 1UL
+                                                                    : 0UL;
+        if (x->Pipe->TransferType == XHCI_PIPE_XFER_CONTROL ||
+            x->Isoch != isochPipe) {
+            if (x->Isoch || isochPipe) {
+                (VOID)InterlockedIncrement(
+                    (PLONG)&hc->Hc.IsoSubmitsWrongType);
+            }
+            return HCD_USBD_INVALID_PIPE;
+        }
+        /* The endpoint's direction, never the client's flag: usbport sets
+         * the flag from the endpoint for every non-control pipe (ReactOS
+         * usbport urb.c:393-401), and the map's WriteToDevice and the
+         * engine's direction check both follow x->In. */
+        x->In = x->Pipe->Ep.DirectionIn ? 1UL : 0UL;
+    }
     if (req->Control) {
         x->Setup.bmRequestType = req->Setup[0];
         x->Setup.bRequest = req->Setup[1];
@@ -448,6 +757,12 @@ static LONG hcdFill(PHCD_CONTROLLER hc, PHCD_XFER x, PVOID urb,
     for (i = 0; i < sizeof(x->Sg.List) - sizeof(x->Sg.List.SgElement);
          i++) {
         ((PUCHAR)&x->Sg.List)[i] = 0;
+    }
+    if (x->Isoch) {
+        usbd = hcdIsoAdmit(hc, x);
+        if (usbd != XHCI_USBD_STATUS_SUCCESS) {
+            return usbd;
+        }
     }
     if (req->Length == 0) {
         return XHCI_USBD_STATUS_SUCCESS;
@@ -473,6 +788,9 @@ static LONG hcdFill(PHCD_CONTROLLER hc, PHCD_XFER x, PVOID urb,
         }
         x->Mdl = NULL;
         x->OwnMdl = 0;
+        if (x->Isoch) {
+            (VOID)InterlockedIncrement((PLONG)&hc->Hc.IsoRefusalsTooLarge);
+        }
         return HCD_USBD_INVALID_PARAMETER;
     }
     return XHCI_USBD_STATUS_SUCCESS;
@@ -558,6 +876,9 @@ static VOID hcdLaunch(PHCD_CONTROLLER hc, PHCD_XFER x, PVOID urb,
         pdo = x->Pdo;
         x->Pdo = NULL;
         x->Urb = NULL;
+        if (req != NULL && (req->Flags & HCD_IO_ISOCH) != 0) {
+            hcdIsoRefused(urb, usbd);
+        }
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
         nextIrp = hcdRecordRelease(pipe, x);
         XhciControllerLockRelease(&hc->Hc, oldIrql);
@@ -672,14 +993,20 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
     pipe = x->Pipe;
     dev = pipe->Device;
     answer = XHCI_XFER_BAD_PARAM;
+    if (ok && x->Isoch && !hcdIsoFill(x)) {
+        ok = 0;
+        x->Status = HCD_USBD_INVALID_PARAMETER;
+    }
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     if (ok && !dev->Gone && !pipe->Closed && !x->CancelRequested &&
         (pipe->Paused ||
          (pipe->Exclusive != NULL && pipe->Exclusive != x &&
-          x->Seq > pipe->Exclusive->Seq))) {
+          x->Seq > pipe->Exclusive->Seq) ||
+         (x->Isoch && pipe->RingWait && pipe->Queue->Count != 0))) {
         /* Held mapped: the thread has the pipe paused, or a request
-         * submitted before this one owns it. A request submitted before
-         * the owner is not held - it goes first, as it was asked first. */
+         * submitted before this one owns it, or an earlier isochronous
+         * request waits for ring room. A request submitted before the
+         * owner is not held - it goes first, as it was asked first. */
         x->State = HCD_XFER_HELD;
         x->Mapped = 1;
         InsertTailList(&pipe->Held, &x->Link);
@@ -699,6 +1026,8 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
             answer = XhciXferSubmitControl(pipe->Queue, pipe->Ring, &creq,
                                            &x->Xfer, x, trbs,
                                            XHCI_XFER_MAX_CONTROL_TRBS);
+        } else if (x->Isoch) {
+            answer = hcdIsoPublish(hc, pipe, x);
         } else {
             for (i = 0; i < sizeof(nreq); i++) {
                 ((PUCHAR)&nreq)[i] = 0;
@@ -725,12 +1054,26 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         return;
     }
+    if (answer == XHCI_XFER_BUSY && x->Isoch && pipe->Queue->Count != 0) {
+        /* The ring still holds the pipe's earlier groups: this one waits
+         * for room, mapped, and the pipe's next completion releases it
+         * (HcdIoDeferred). Failing it would be a gap in the stream. */
+        pipe->RingWait = 1;
+        x->State = HCD_XFER_HELD;
+        x->Mapped = 1;
+        InsertTailList(&pipe->Held, &x->Link);
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        return;
+    }
     if (x->Status == XHCI_USBD_STATUS_SUCCESS) {
         x->Status = dev->Gone      ? HCD_USBD_DEVICE_GONE
                     : (pipe->Closed || x->CancelRequested)
                         ? HCD_USBD_CANCELED
                     : answer == XHCI_XFER_BUSY ? HCD_USBD_ERROR_BUSY
-                                               : HCD_USBD_INTERNAL_HC_ERROR;
+                    : (answer == XHCI_XFER_ISO_MALFORMED ||
+                       answer == XHCI_XFER_ISO_TOO_LARGE)
+                        ? HCD_USBD_INVALID_PARAMETER
+                        : HCD_USBD_INTERNAL_HC_ERROR;
     }
     x->Engine = 0;
     x->State = HCD_XFER_DONE;
@@ -967,28 +1310,33 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
             status = x->Status;
             bytes = 0;
         }
-        if (bytes > x->Chunk) {
-            bytes = x->Chunk;
-        }
-        x->Offset += bytes;
+        if (x->Isoch) {
+            status = hcdIsoComplete(x, engine, status, &bytes);
+            x->Offset = bytes;
+        } else {
+            if (bytes > x->Chunk) {
+                bytes = x->Chunk;
+            }
+            x->Offset += bytes;
 
-        more = status == XHCI_USBD_STATUS_SUCCESS && !x->Control &&
-               x->Engine && bytes == x->Chunk && x->Offset < x->Length &&
-               !dev->Gone && !x->Pipe->Closed && !x->CancelRequested;
-        if (more && hcdPlanChunk(hc, x)) {
-            x->State = HCD_XFER_MAPPING;
-            x->Engine = 0;
-            HcdDmaMapQueue(hc, x);
-            continue;
-        }
-        if (x->CancelRequested && status == XHCI_USBD_STATUS_SUCCESS &&
-            x->Offset < x->Length) {
-            status = HCD_USBD_CANCELED;
-        } else if (status == XHCI_USBD_STATUS_SUCCESS && !x->Control &&
-                   !x->ShortOk && x->Offset < x->Length) {
-            /* A short transfer the client did not allow (Windows 2000 DDK
-             * usbdi.h:282-284; round 2, finding 11). */
-            status = HCD_USBD_ERROR_SHORT_TRANSFER;
+            more = status == XHCI_USBD_STATUS_SUCCESS && !x->Control &&
+                   x->Engine && bytes == x->Chunk && x->Offset < x->Length &&
+                   !dev->Gone && !x->Pipe->Closed && !x->CancelRequested;
+            if (more && hcdPlanChunk(hc, x)) {
+                x->State = HCD_XFER_MAPPING;
+                x->Engine = 0;
+                HcdDmaMapQueue(hc, x);
+                continue;
+            }
+            if (x->CancelRequested && status == XHCI_USBD_STATUS_SUCCESS &&
+                x->Offset < x->Length) {
+                status = HCD_USBD_CANCELED;
+            } else if (status == XHCI_USBD_STATUS_SUCCESS && !x->Control &&
+                       !x->ShortOk && x->Offset < x->Length) {
+                /* A short transfer the client did not allow (Windows 2000
+                 * DDK usbdi.h:282-284; round 2, finding 11). */
+                status = HCD_USBD_ERROR_SHORT_TRANSFER;
+            }
         }
 
         urb = (PURB)x->Urb;
@@ -1009,12 +1357,14 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
         /* The owner's release runs while this record is still not free:
          * a record not free keeps its pipe from being closed and freed
          * (HcdIoWaitPipe), so the pipe is alive for the call (round 3,
-         * finding 6). */
+         * finding 6). Any end of a record also releases one that waited
+         * for ring room on the pipe. */
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-        release = (x->Pipe->Exclusive == x);
-        if (release) {
+        release = (x->Pipe->Exclusive == x) || x->Pipe->RingWait;
+        if (x->Pipe->Exclusive == x) {
             x->Pipe->Exclusive = NULL;
         }
+        x->Pipe->RingWait = 0;
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         if (release) {
             HcdIoPipeRelease(hc, x->Pipe);

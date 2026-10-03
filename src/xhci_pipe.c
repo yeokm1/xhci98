@@ -722,6 +722,77 @@ ULONG XhciPipeSplit(ULONG pageOffset, ULONG length, ULONG maxPacketSize,
     return XHCI_PIPE_OK;
 }
 
+ULONG XhciPipeIsoLength(const XHCI_PIPE_ISO_PACKET *packets, ULONG count,
+                        ULONG bufferLength, ULONG i)
+{
+    ULONG end;
+
+    end = (i + 1 < count) ? packets[i + 1].Offset : bufferLength;
+    return end - packets[i].Offset;
+}
+
+ULONG XhciPipeIsoCheck(const XHCI_PIPE_ISO_PACKET *packets, ULONG count,
+                       ULONG bufferLength, ULONG maxCount, ULONG maxPacket)
+{
+    ULONG i;
+
+    if (packets == NULL || count == 0 || count > maxCount ||
+        bufferLength == 0) {
+        return XHCI_PIPE_BAD_PARAM;
+    }
+    for (i = 0; i < count; i++) {
+        if (packets[i].Offset > bufferLength ||
+            (i + 1 < count && packets[i + 1].Offset < packets[i].Offset)) {
+            return XHCI_PIPE_BAD_PARAM;
+        }
+        if (maxPacket != 0 &&
+            XhciPipeIsoLength(packets, count, bufferLength, i) > maxPacket) {
+            return XHCI_PIPE_BAD_PARAM;
+        }
+    }
+    return XHCI_PIPE_OK;
+}
+
+ULONG XhciPipeIsoFragments(ULONG pageOffset, ULONG offset, ULONG length,
+                           PULONG lengths)
+{
+    ULONG room;
+
+    if (lengths == NULL || pageOffset >= XHCI_PIPE_PAGE_SIZE ||
+        length > XHCI_PIPE_PAGE_SIZE) {
+        return 0;
+    }
+    room = XHCI_PIPE_PAGE_SIZE -
+           ((pageOffset + offset) & XHCI_PIPE_PAGE_MASK);
+    if (length <= room) {
+        lengths[0] = length;
+        lengths[1] = 0;
+        return 1;
+    }
+    lengths[0] = room;
+    lengths[1] = length - room;
+    return 2;
+}
+
+ULONG XhciPipeIsoFrameOf(ULONG i, ULONG interval)
+{
+    return (i << interval) >> 3;
+}
+
+ULONG XhciPipeIsoFrames(ULONG packets, ULONG interval)
+{
+    return ((packets << interval) + 7UL) >> 3;
+}
+
+ULONG XhciPipeIsoStartOk(ULONG startFrame, ULONG now, ULONG ahead)
+{
+    if (startFrame - now <= ahead ||
+        now - startFrame <= XHCI_PIPE_ISO_START_RANGE) {
+        return XHCI_PIPE_OK;
+    }
+    return XHCI_PIPE_REFUSED;
+}
+
 ULONG XhciPipeNtStatus(ULONG usbd)
 {
     switch (usbd) {

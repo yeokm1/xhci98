@@ -639,6 +639,9 @@ NTSTATUS HcdStartController(PHCD_CONTROLLER hc, PIRP irp)
     XhciLogNoteAddress(ext, "start.bar", hc->BarRaw.LowPart);
     XhciLogNote(ext, "start.common.pa", ext->StartPA);
     XhciLogNote(ext, "start.mapregs", hc->MapRegisters);
+    /* The design record 13 section 11.4 reading, on the debug channel
+     * too: the log ring has no reader until 26-A.8. */
+    XHCI_DBG_VALUE("hcd: start, map registers granted", hc->MapRegisters);
 
     p = (PUCHAR)&res;
     for (i = 0; i < sizeof(res); i++) {

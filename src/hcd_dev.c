@@ -117,7 +117,9 @@ static ULONG hcdEp0Result(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 
 /* The same decision for a pipe the configuration opened (hcd_cfg.c): its
  * retired records go to the deferred work; a halt is the client's to
- * clear with RESET_PIPE, as usbport left it. Controller lock held. */
+ * clear with RESET_PIPE, as usbport left it. An isochronous endpoint never
+ * halts (xHCI p.177): what it owes is the thread's stop and drain, as a
+ * refused retire does. Controller lock held. */
 static ULONG hcdPipeResult(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
                            const XHCI_XFER_EVENT_RESULT *result)
 {
@@ -126,10 +128,13 @@ static ULONG hcdPipeResult(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
     if (result->Fatal) {
         return 1;
     }
-    if (result->NeedsRecovery && !result->RefusedRetire) {
+    if (result->NeedsRecovery && !result->RefusedRetire &&
+        pipe->TransferType != XHCI_PIPE_XFER_ISOCH) {
         pipe->Halted = 1;
     }
-    if (result->RefusedRetire) {
+    if (result->RefusedRetire ||
+        (result->NeedsRecovery &&
+         pipe->TransferType == XHCI_PIPE_XFER_ISOCH)) {
         /* The ring and the record disagree about where the TD ends: the
          * endpoint is Running and owes a Stop plus a drain, which the
          * thread performs (hcd_cfg.c; round 2, finding 9). */
@@ -143,6 +148,50 @@ static ULONG hcdPipeResult(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
         }
     }
     return 0;
+}
+
+/*
+ * A Transfer Event on an isochronous pipe. Ring Underrun and Overrun name
+ * no TD (4.10.3.1 p.185) and never reach the engine: the endpoint left the
+ * schedule and a doorbell puts it back (4.14.2.1 p.239) - withheld while
+ * the thread has the pipe paused or owes it a stop, since a doorbell then
+ * would restart the endpoint under the thread's edit. Everything else is
+ * the engine's per-packet match; a TRB Error leaves the endpoint in Error,
+ * not Halted (p.177), and the thread stops and drains it as it does a
+ * refused retire (hcdPipeResult). Returns nonzero for a fatal event. IRQL:
+ * DISPATCH_LEVEL, controller lock held.
+ */
+static ULONG hcdIsoEvent(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG slotId,
+                         ULONG dci, const XHCI_TRB *event, ULONG cc)
+{
+    XHCI_XFER_EVENT_RESULT result;
+
+    if (cc == XHCI_CC_RING_UNDERRUN || cc == XHCI_CC_RING_OVERRUN) {
+        if (cc == XHCI_CC_RING_UNDERRUN) {
+            hc->Hc.IsoRingUnderruns++;
+        } else {
+            hc->Hc.IsoRingOverruns++;
+        }
+        if (pipe->Queue->Count == 0) {
+            hc->Hc.IsoEventsUnattributed++;
+        } else if (pipe->Paused || pipe->Closed || pipe->DrainPending ||
+                   pipe->CancelPending) {
+            hc->Hc.IsoDoorbellsSuppressed++;
+        } else {
+            XhciWriteDoorbell(&hc->Hc, slotId, dci);
+        }
+        return 0;
+    }
+    if (XhciXferIsoEvent(pipe->Queue, pipe->Ring, slotId, dci, event->Param0,
+                         event->Status, event->Control, &result) !=
+        XHCI_XFER_OK) {
+        hc->TransferEventsUnclaimed++;
+        return 0;
+    }
+    if (result.NeedsRecovery && !result.RefusedRetire && !result.Fatal) {
+        hc->Hc.IsoTrbErrorRecoveries++;
+    }
+    return hcdPipeResult(hc, pipe, &result);
 }
 
 /* The pipe a Transfer Event names, or NULL. Controller lock held. */
@@ -203,6 +252,9 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
         (VOID)XhciXferQueueStopped(pipe->Queue, pipe->Ring, event->Param0,
                                    event->Status);
         return 0;
+    }
+    if (pipe->TransferType == XHCI_PIPE_XFER_ISOCH) {
+        return hcdIsoEvent(hc, pipe, slotId, dci, event, cc);
     }
     if (XhciXferEvent(pipe->Queue, pipe->Ring, slotId, dci, event->Param0,
                       event->Status, event->Control, &result) !=

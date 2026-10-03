@@ -274,6 +274,15 @@ static PHCD_PIPE hcdCfgPipeNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     pipe->Ring = &pipe->OwnRing;
     pipe->Queue = &pipe->OwnQueue;
     XhciXferQueueInit(&pipe->OwnQueue);
+    if (ep->TransferType == XHCI_PIPE_XFER_ISOCH) {
+        pipe->Iso = (PHCD_ISO_BLOCK)HcdPoolAlloc(
+            (ULONG)(HCD_PIPE_XFERS * sizeof(HCD_ISO_BLOCK)));
+        if (pipe->Iso == NULL) {
+            HcdPoolFree(pipe);
+            *usbd = HCD_USBD_NO_MEMORY;
+            return NULL;
+        }
+    }
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     answer = XhciPoolAcquire(&ext->RingPool, dev->SlotId,
@@ -290,6 +299,7 @@ static PHCD_PIPE hcdCfgPipeNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             dev->PoolRings--;
             XhciControllerLockRelease(&hc->Hc, oldIrql);
         }
+        HcdPoolFree(pipe->Iso);
         HcdPoolFree(pipe);
         *usbd = HCD_USBD_NO_MEMORY;
         return NULL;
@@ -306,6 +316,7 @@ static PHCD_PIPE hcdCfgPipeNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         (VOID)XhciPoolRelease(&ext->RingPool, dev->SlotId, index);
         dev->PoolRings--;
         XhciControllerLockRelease(&hc->Hc, oldIrql);
+        HcdPoolFree(pipe->Iso);
         HcdPoolFree(pipe);
         *usbd = HCD_USBD_INTERNAL_HC_ERROR;
         return NULL;
@@ -326,6 +337,7 @@ static VOID hcdCfgPipeFree(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         dev->PoolRings--;
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
+    HcdPoolFree(pipe->Iso);
     HcdPoolFree(pipe);
 }
 

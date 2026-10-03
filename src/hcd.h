@@ -90,10 +90,15 @@ typedef struct _HCD_TIMER {
 #define HCD_USBD_INVALID_PIPE       ((LONG)0x80000600L)
 #define HCD_USBD_INVALID_PARAMETER  ((LONG)0x80000300L)
 #define HCD_USBD_ERROR_SHORT_TRANSFER ((LONG)0x80000900L)
+/* Windows 2000 DDK inc\usbdi.h:290 and :294. */
+#define HCD_USBD_BAD_START_FRAME    ((LONG)0xC0000A00L)
+#define HCD_USBD_ISOCH_REQUEST_FAILED ((LONG)0xC0000B00L)
 
 /* HcdIoSubmit flags. */
 #define HCD_IO_IN           0x1UL   /* data moves device to host          */
 #define HCD_IO_SHORT_OK     0x2UL   /* USBD_SHORT_TRANSFER_OK              */
+#define HCD_IO_ISOCH        0x4UL   /* URB_FUNCTION_ISOCH_TRANSFER         */
+#define HCD_IO_ASAP         0x8UL   /* USBD_START_ISO_TRANSFER_ASAP        */
 
 /* One transfer as a URB asks for it (hcd_urb.c, HcdUrbIoRequest): read
  * once at dispatch, and again from the URB when an IRP that waited on its
@@ -114,6 +119,15 @@ typedef struct _HCD_IO_REQUEST {
 /* Data elements per chunk (xhci_pipe.h XHCI_PIPE_CHUNK_ELEMENTS), and the
  * one slot the SG list's own declaration already holds beyond them. */
 #define HCD_SG_ELEMENTS     32UL
+
+/* An isochronous record's request in the transfer engine's input format
+ * (xhci_usbport.h), which the engine was written against and no usbport
+ * builds here: one per record of an isochronous pipe, allocated with the
+ * pipe (hcd_cfg.c), so no transfer allocates. */
+typedef struct _HCD_ISO_BLOCK {
+    USBPORT_ISO_TRANSFER Block;
+    USBPORT_ISO_PACKET More[XHCI_XFER_MAX_ISO_PACKETS - 1];
+} HCD_ISO_BLOCK, *PHCD_ISO_BLOCK;
 
 #define HCD_XFER_FREE       0UL
 #define HCD_XFER_MAPPING    1UL     /* in the map pump                    */
@@ -145,6 +159,8 @@ typedef struct _HCD_XFER {
     struct _HCD_DEVICE_PDO *Pdo;    /* whose stack sent it: its REMOVE waits */
     ULONG CancelRequested;          /* its IRP was cancelled (hcd_io.c)  */
     ULONG ShortOk;                  /* USBD_SHORT_TRANSFER_OK was set     */
+    ULONG Isoch;                    /* URB_FUNCTION_ISOCH_TRANSFER        */
+    ULONG Asap;                     /* USBD_START_ISO_TRANSFER_ASAP       */
     ULONG Seq;                      /* its pipe's submission order        */
     ULONG Mapped;                   /* held with its chunk mapped         */
     struct {
@@ -181,6 +197,11 @@ typedef struct _HCD_PIPE {
                                      * other is published until it ends   */
     ULONG Seq;                      /* the last submission's order         */
     XHCI_PIPE_EP Ep;                /* its descriptor, decoded (xhci_pipe) */
+    PHCD_ISO_BLOCK Iso;             /* isochronous: HCD_PIPE_XFERS blocks  */
+    ULONG IsoNext;                  /* the frame after the last queued
+                                     * packet's; controller lock          */
+    ULONG RingWait;                 /* a record waits for ring room;
+                                     * controller lock                    */
     HCD_XFER Xfers[HCD_PIPE_XFERS];
 } HCD_PIPE, *PHCD_PIPE;
 

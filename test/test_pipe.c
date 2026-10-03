@@ -1251,6 +1251,137 @@ static void test_status(void)
              "Context State Error");
 }
 
+/* ------------------------------------------------------------------ */
+/* Isochronous URBs                                                     */
+/* ------------------------------------------------------------------ */
+
+static void iso_table(XHCI_PIPE_ISO_PACKET *p, ULONG a, ULONG b, ULONG c)
+{
+    ULONG i;
+
+    for (i = 0; i < 3; i++) {
+        p[i].Length = 0xDEADBEEFUL;
+        p[i].Status = 0xDEADBEEFUL;
+    }
+    p[0].Offset = a;
+    p[1].Offset = b;
+    p[2].Offset = c;
+}
+
+static void test_iso_check(void)
+{
+    XHCI_PIPE_ISO_PACKET p[63];
+    ULONG i;
+
+    iso_table(p, 0, 192, 384);
+    CHECK_EQ(XhciPipeIsoCheck(p, 3, 576, 62, 0), XHCI_PIPE_OK,
+             "10 ms of 48 kHz stereo, three packets");
+    CHECK_EQ(XhciPipeIsoCheck(p, 3, 384, 62, 0), XHCI_PIPE_OK,
+             "the last packet empty");
+    CHECK_EQ(XhciPipeIsoCheck(p, 3, 383, 62, 0), XHCI_PIPE_BAD_PARAM,
+             "an offset past the buffer");
+    CHECK_EQ(XhciPipeIsoCheck(p, 3, 576, 62, 191), XHCI_PIPE_BAD_PARAM,
+             "a packet above the Max ESIT Payload");
+    CHECK_EQ(XhciPipeIsoCheck(p, 3, 576, 62, 192), XHCI_PIPE_OK,
+             "every packet at the Max ESIT Payload");
+    CHECK_EQ(XhciPipeIsoCheck(p, 0, 576, 62, 0), XHCI_PIPE_BAD_PARAM,
+             "no packet");
+    CHECK_EQ(XhciPipeIsoCheck(p, 3, 0, 62, 0), XHCI_PIPE_BAD_PARAM,
+             "no buffer");
+    CHECK_EQ(XhciPipeIsoCheck(NULL, 3, 576, 62, 0), XHCI_PIPE_BAD_PARAM,
+             "no table");
+    iso_table(p, 0, 200, 100);
+    CHECK_EQ(XhciPipeIsoCheck(p, 3, 576, 62, 0), XHCI_PIPE_BAD_PARAM,
+             "offsets decreasing");
+    iso_table(p, 0, 0, 0);
+    CHECK_EQ(XhciPipeIsoCheck(p, 3, 192, 62, 0), XHCI_PIPE_OK,
+             "two empty packets, the last 192");
+    for (i = 0; i < 63; i++) {
+        p[i].Offset = i;
+    }
+    CHECK_EQ(XhciPipeIsoCheck(p, 63, 63, 62, 0), XHCI_PIPE_BAD_PARAM,
+             "63 packets against a limit of 62");
+    CHECK_EQ(XhciPipeIsoCheck(p, 62, 62, 62, 0), XHCI_PIPE_OK,
+             "62 packets at the limit");
+
+    iso_table(p, 0, 192, 384);
+    CHECK_EQ(XhciPipeIsoLength(p, 3, 576, 0), 192, "length of packet 0");
+    CHECK_EQ(XhciPipeIsoLength(p, 3, 576, 2), 192, "the last to the end");
+    iso_table(p, 0, 100, 1000);
+    CHECK_EQ(XhciPipeIsoLength(p, 3, 1000, 2), 0, "the last one empty");
+    CHECK_EQ(XhciPipeIsoLength(p, 3, 1000, 1), 900, "a middle one");
+}
+
+static void frags_are(ULONG pageOffset, ULONG offset, ULONG length,
+                      ULONG wantCount, ULONG want0, ULONG want1,
+                      const char *what)
+{
+    ULONG lengths[2];
+    ULONG n;
+
+    lengths[0] = 0xDEADBEEFUL;
+    lengths[1] = 0xDEADBEEFUL;
+    n = XhciPipeIsoFragments(pageOffset, offset, length, lengths);
+    CHECK_EQ(n, wantCount, what);
+    if (n != 0 && wantCount != 0) {
+        CHECK_EQ(lengths[0], want0, what);
+        CHECK_EQ(lengths[1], want1, what);
+    }
+}
+
+static void test_iso_fragments(void)
+{
+    frags_are(0, 0, 192, 1, 192, 0, "one page, one piece");
+    frags_are(0xF80, 0, 192, 2, 128, 64, "the buffer starts near a page end");
+    frags_are(0, 4000, 192, 2, 96, 96, "the packet crosses a page");
+    frags_are(0, 3904, 192, 1, 192, 0, "ends exactly on the page");
+    frags_are(0, 0, 4096, 1, 4096, 0, "a whole page");
+    frags_are(1, 0, 4096, 2, 4095, 1, "a page's worth, one byte in");
+    frags_are(0, 0, 4097, 0, 0, 0, "longer than a page");
+    frags_are(4096, 0, 1, 0, 0, 0, "a page offset of a whole page");
+    frags_are(0x10, 4064, 32, 2, 16, 16,
+              "the buffer's page offset moves the cut");
+    frags_are(0x10, 8176, 32, 1, 32, 0, "starts exactly on a page");
+    frags_are(0, 0, 0, 1, 0, 0, "an empty packet is one empty piece");
+    CHECK_EQ(XhciPipeIsoFragments(0, 0, 1, NULL), 0, "no output");
+}
+
+static void test_iso_frames(void)
+{
+    CHECK_EQ(XhciPipeIsoFrameOf(0, 3), 0, "FS 1 ms, packet 0");
+    CHECK_EQ(XhciPipeIsoFrameOf(1, 3), 1, "FS 1 ms, packet 1");
+    CHECK_EQ(XhciPipeIsoFrameOf(9, 3), 9, "FS 1 ms, packet 9");
+    CHECK_EQ(XhciPipeIsoFrameOf(0, 0), 0, "HS 125 us, packet 0");
+    CHECK_EQ(XhciPipeIsoFrameOf(7, 0), 0, "HS 125 us, packet 7");
+    CHECK_EQ(XhciPipeIsoFrameOf(8, 0), 1, "HS 125 us, packet 8");
+    CHECK_EQ(XhciPipeIsoFrameOf(15, 0), 1, "HS 125 us, packet 15");
+    CHECK_EQ(XhciPipeIsoFrameOf(16, 0), 2, "HS 125 us, packet 16");
+    CHECK_EQ(XhciPipeIsoFrameOf(3, 4), 6, "2 ms, packet 3");
+    CHECK_EQ(XhciPipeIsoFrameOf(2, 6), 16, "FS bInterval 4, packet 2");
+
+    CHECK_EQ(XhciPipeIsoFrames(10, 3), 10, "ten FS packets");
+    CHECK_EQ(XhciPipeIsoFrames(8, 0), 1, "eight HS packets, one frame");
+    CHECK_EQ(XhciPipeIsoFrames(9, 0), 2, "nine HS packets, two frames");
+    CHECK_EQ(XhciPipeIsoFrames(1, 0), 1, "one HS packet, rounded up");
+    CHECK_EQ(XhciPipeIsoFrames(3, 4), 6, "three 2 ms packets");
+    CHECK_EQ(XhciPipeIsoFrames(62, 15), 253952, "the extremes");
+
+    CHECK_EQ(XhciPipeIsoStartOk(1000, 1000, 895), XHCI_PIPE_OK, "now");
+    CHECK_EQ(XhciPipeIsoStartOk(1895, 1000, 895), XHCI_PIPE_OK,
+             "895 ahead, the window's end");
+    CHECK_EQ(XhciPipeIsoStartOk(1896, 1000, 895), XHCI_PIPE_REFUSED,
+             "896 ahead");
+    CHECK_EQ(XhciPipeIsoStartOk(0, 1000, 895), XHCI_PIPE_OK, "1000 back");
+    CHECK_EQ(XhciPipeIsoStartOk(0xFFFFFFF0UL, 1000, 895), XHCI_PIPE_OK,
+             "1016 back, across the wrap");
+    CHECK_EQ(XhciPipeIsoStartOk(0xFFFFFFE7UL, 1000, 895), XHCI_PIPE_REFUSED,
+             "1025 back");
+    CHECK_EQ(XhciPipeIsoStartOk(0x10, 0xFFFFFF00UL, 895), XHCI_PIPE_OK,
+             "272 ahead, across the wrap");
+    CHECK_EQ(XhciPipeIsoStartOk(0xFFFFFC05UL, 5, 895), XHCI_PIPE_OK,
+             "1024 back, the inclusive edge");
+}
+
 int main(void)
 {
     test_dci();
@@ -1268,6 +1399,9 @@ int main(void)
     test_raw_setup();
     test_split();
     test_status();
+    test_iso_check();
+    test_iso_fragments();
+    test_iso_frames();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;
