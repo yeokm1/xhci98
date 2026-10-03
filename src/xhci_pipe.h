@@ -599,4 +599,53 @@ ULONG XhciPipeBusInformation(ULONG level, ULONG totalBandwidth,
 ULONG XhciPipeTopologyAddress(ULONG pciBus, ULONG pciAddress, ULONG rootPort,
                               ULONG route, UCHAR *out);
 
+/*
+ * Submission sequences and abort horizons (hcd_io.c, HcdIoPark): a per-PDO
+ * count that never wraps in practice - 64 bits, kept as a Lo/Hi pair, as
+ * every 64-bit quantity here is (no 64-bit arithmetic) - and horizons in
+ * the same 64-bit space, so a horizon is never retired and never becomes
+ * young again (Codex review of 09ed9d1). 0:0 is never a stamp or a horizon
+ * (none).
+ *
+ * An IRP carries only the low 32 bits of its stamp (DriverContext[0] is all
+ * it has). Its full stamp is reconstructed from the current count as the
+ * latest value with those low bits not after it. A lap holds 2^32 - 1
+ * values, since a low word of 0 is skipped (XhciSeqNext), so the
+ * reconstruction is exact while fewer than 2^32 - 1 submissions have
+ * followed the request on its PDO. Beyond that bound - one request kept
+ * outstanding through 2^32 - 1 others on the same PDO, some 49 days at a
+ * thousand a second - the low bits alias into the latest lap and cannot be
+ * told apart: such a request reads as newer than it is and may lose the
+ * coverage of an abort made before the alias; a later abort of its pipe
+ * still covers and releases it, as do its client's cancel and its PDO's
+ * stop or removal, which release every held request.
+ */
+typedef struct _XHCI_SEQ64 {
+    ULONG Lo;
+    ULONG Hi;
+} XHCI_SEQ64, *PXHCI_SEQ64;
+
+/* The next value; a Lo of 0 is skipped, so a stamp's low word is never 0
+ * (0 in an IRP means unstamped). */
+VOID XhciSeqNext(PXHCI_SEQ64 seq);
+
+/* The full stamp whose low word is `stamp` (nonzero), the latest such
+ * value not after `current`. */
+VOID XhciSeqFromStamp(const XHCI_SEQ64 *current, ULONG stamp,
+                      PXHCI_SEQ64 out);
+
+/* a <= b. */
+ULONG XhciSeqLessEq(const XHCI_SEQ64 *a, const XHCI_SEQ64 *b);
+
+ULONG XhciSeqIsNone(const XHCI_SEQ64 *a);
+
+/* Whether a horizon covers a request whose stamp's low word is `stamp`,
+ * at count `current`: the horizon is set and the request's full stamp is
+ * at or before it. */
+ULONG XhciSeqCovers(const XHCI_SEQ64 *horizon, ULONG stamp,
+                    const XHCI_SEQ64 *current);
+
+/* *into = the later of *into and *with (either possibly none). */
+VOID XhciSeqLatest(PXHCI_SEQ64 into, const XHCI_SEQ64 *with);
+
 #endif /* XHCI_PIPE_H */

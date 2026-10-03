@@ -362,7 +362,10 @@ static VOID hcdPortNotify(PHCD_CONTROLLER hc, PULONG bits, ULONG port)
  * and touches no controller (Codex review of batch (b), round 2, finding 1). */
 static VOID hcdDeletePdo(PHCD_DEVICE_PDO pdo)
 {
-    /* Its refusal timer and DPC live in the extension (hcd_io.c). */
+    /* Its refusal timer and DPC live in the extension (hcd_io.c), as do
+     * the IRPs a departed device left held. */
+    pdo->Closing = 1;
+    (VOID)HcdIoParkedRelease(pdo, 0);
     HcdIoRefusedDrain(pdo);
     HcdUrbIdleDrain(pdo);
     /* Its interface context forgets it before the extension goes, and no
@@ -934,6 +937,9 @@ static VOID hcdPdoQuiesce(PHCD_DEVICE_PDO pdo, ULONG removing)
      * client's stop or removal goes on (Codex review of 28-A.1, round 1,
      * finding 2). */
     HcdUrbIdleDrain(pdo);
+    /* What a departed device left held here completes now, CANCELED; with
+     * Closing set nothing more is held (hcd_io.c, HcdIoPark). */
+    (VOID)HcdIoParkedRelease(pdo, 0);
     if (pdo->UrbsPending == 0) {
         hcdPdoRefusalsWait(pdo, removing);
         return;
