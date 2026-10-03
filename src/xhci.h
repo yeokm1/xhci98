@@ -90,7 +90,8 @@ XHCI_C_ASSERT(erst_entry_size, sizeof(XHCI_ERST_ENTRY) == 16);
 /* Transfer State Preserve, Reset Endpoint only (section 5's TRB table: TSP `9`).
  * The fourth command to use bit 9, and named separately for the same reason the
  * three above are: TSP = 1 is the Soft Retry of spec 4.6.8.1, which preserves the
- * Data Toggle, and this driver always wants the opposite. */
+ * Data Toggle. Only the HCD's SYNC_RESET_PIPE wants that (hcd_cfg.c, task
+ * 28-A.1); every other reset wants the opposite. */
 #define XHCI_TRB_TSP            0x00000200UL        /* Reset Endpoint     */
 /* Suspend, Stop Endpoint only (section 5's TRB table: SP `23`). Its own bit
  * rather than a shared one, and this driver always writes it as 0 - a suspend
@@ -2607,8 +2608,9 @@ ULONG XhciTrbConfigureEndpoint(XHCI_TRB *trb,
  * stated above the builders in src/xhci_ring.c.
  *
  * `suspend` is Stop Endpoint's SP flag and `preserveState` is Reset Endpoint's
- * TSP. This driver writes both as 0 and the arguments exist so a caller has to
- * say so: SP is for a controller entering a low-power state (Phase 11's since
+ * TSP. This driver writes both as 0, except TSP = 1 for the HCD's
+ * SYNC_RESET_PIPE (hcd_cfg.c, task 28-A.1), and the arguments exist so a caller
+ * has to say so: SP is for a controller entering a low-power state (Phase 11's since
  * the phase split), and
  * TSP = 1 is the Soft Retry of 4.6.8.1, which deliberately does *not* reset the
  * Data Toggle - the opposite of what a reset-pipe needs.

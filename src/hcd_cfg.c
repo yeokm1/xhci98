@@ -1611,13 +1611,15 @@ static ULONG hcdCfgSetDequeue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
            HcdThreadCommand(hc, &trb, &control) == XHCI_CC_SUCCESS;
 }
 
+/* Reset Endpoint. `preserve` is TSP: 0 restarts the host's data toggle,
+ * 1 keeps it (xHCI 4.6.8 p.115), which only SYNC_RESET_PIPE asks for. */
 static ULONG hcdCfgResetEndpoint(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
-                                 PHCD_PIPE pipe)
+                                 PHCD_PIPE pipe, ULONG preserve)
 {
     XHCI_TRB trb;
     ULONG control;
 
-    return XhciTrbResetEndpoint(&trb, dev->SlotId, pipe->Dci, 0) ==
+    return XhciTrbResetEndpoint(&trb, dev->SlotId, pipe->Dci, preserve) ==
                XHCI_RING_OK &&
            HcdThreadCommand(hc, &trb, &control) == XHCI_CC_SUCCESS;
 }
@@ -1680,7 +1682,7 @@ static ULONG hcdCfgQuiesce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
          * engine already moved past that TD - a later doorbell would
          * otherwise retry into a request already completed (Codex review
          * of batch (c), round 4, finding 3). */
-        if (!hcdCfgResetEndpoint(hc, dev, pipe) ||
+        if (!hcdCfgResetEndpoint(hc, dev, pipe, 0) ||
             !hcdCfgSetDequeue(hc, dev, pipe)) {
             HcdSvcRequestReset(&hc->Hc);
             return XHCI_EP_STATE_RUNNING;
@@ -1925,14 +1927,66 @@ static LONG hcdCfgClearStall(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 }
 
 /*
- * RESET_PIPE (`parts` both halves) and SYNC_RESET_PIPE (the controller's
- * half only, task 28-A.1): inside the pipe's pause from the start, so
- * nothing is published between the check and the reset (round 3, finding
- * 7). Anything still on the pipe is aborted first. Then the controller's
- * half by the endpoint's state (round 2, finding 6) and, for RESET_PIPE, the
- * device's - CLEAR_FEATURE(ENDPOINT_HALT) - so both ends restart the data
- * toggle; SYNC_RESET_PIPE leaves the device's toggle to its client, which
- * sends SYNC_CLEAR_STALL or a request of its own:
+ * SYNC_RESET_PIPE, the controller's half alone (task 28-A.1; Codex review
+ * of 28-A.1, round 1, finding 1): the host's halt is cleared and the data
+ * toggle KEPT, as Microsoft's URB contract states for this function - the
+ * device's toggle is its client's business (SYNC_CLEAR_STALL, or a request
+ * of its own), and a host toggle restarted under a device that kept its own
+ * loses the next packet as a duplicate. So nothing here may restart it:
+ *
+ *   busy      any request still on the pipe: USBD_STATUS_ERROR_BUSY, and the
+ *             pipe left as it was - usbport's answer (ReactOS usbport
+ *             urb.c, USBPORT_ResetPipe) - never the abort-and-quiesce of
+ *             RESET_PIPE, whose recovery sends CLEAR_FEATURE(ENDPOINT_HALT);
+ *   Halted    Reset Endpoint with TSP 1, which keeps the toggle and moves
+ *             the endpoint to Stopped, then Set TR Dequeue to the software
+ *             dequeue, which with nothing on the pipe is past the failed TD
+ *             (4.6.8 p.116: the retry position is cleared only by it; 4.6.10
+ *             touches no toggle). Not a Soft Retry: the doorbell that
+ *             follows starts a new TD, not the failed one;
+ *   Error     Set TR Dequeue alone (4.8.3), which moves it to Stopped;
+ *   other     no halt to clear: nothing is sent, and no context is
+ *             recreated - that would restart the toggle (4.6.8 p.118).
+ *
+ * A command the controller refuses asks for the recovery and leaves the
+ * pipe paused, as hcdCfgAbort does.
+ */
+static LONG hcdCfgResetHost(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                            PHCD_PIPE pipe)
+{
+    ULONG state;
+    ULONG ok;
+
+    HcdIoPipePause(hc, pipe);
+    if (hcdCfgPipeBusy(hc, pipe)) {
+        HcdIoPipeResume(hc, pipe);
+        return HCD_USBD_ERROR_BUSY;
+    }
+    state = hcdCfgEpState(hc, dev, pipe->Dci);
+    ok = 1;
+    if (state == XHCI_EP_STATE_HALTED) {
+        ok = hcdCfgResetEndpoint(hc, dev, pipe, 1) &&
+             hcdCfgSetDequeue(hc, dev, pipe);
+    } else if (state == XHCI_EP_STATE_ERROR) {
+        ok = hcdCfgSetDequeue(hc, dev, pipe);
+    }
+    if (!ok) {
+        HcdSvcRequestReset(&hc->Hc);
+        return HCD_USBD_INTERNAL_HC_ERROR;
+    }
+    pipe->Halted = 0;
+    HcdIoPipeResume(hc, pipe);
+    return XHCI_USBD_STATUS_SUCCESS;
+}
+
+/*
+ * RESET_PIPE (`parts` both halves), with SYNC_RESET_PIPE (hcdCfgResetHost)
+ * and SYNC_CLEAR_STALL (hcdCfgClearStall) sent to their own paths: inside
+ * the pipe's pause from the start, so nothing is published between the
+ * check and the reset (round 3, finding 7). Anything still on the pipe is
+ * aborted first. Then the controller's half by the endpoint's state (round
+ * 2, finding 6) and the device's - CLEAR_FEATURE(ENDPOINT_HALT) - so both
+ * ends restart the data toggle:
  *
  *   Halted    Reset Endpoint (TSP 0, which restarts the toggle), then Set TR
  *             Dequeue past the failed TD;
@@ -1950,6 +2004,9 @@ static LONG hcdCfgReset(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     if ((parts & XHCI_PIPE_RESET_HOST) == 0) {
         return hcdCfgClearStall(hc, dev, pipe);
     }
+    if ((parts & XHCI_PIPE_RESET_DEVICE) == 0) {
+        return hcdCfgResetHost(hc, dev, pipe);
+    }
     HcdIoPipePause(hc, pipe);
     result = XHCI_USBD_STATUS_SUCCESS;
     if (hcdCfgPipeBusy(hc, pipe)) {
@@ -1957,7 +2014,7 @@ static LONG hcdCfgReset(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     }
     if (result == XHCI_USBD_STATUS_SUCCESS) {
         if (hcdCfgEpState(hc, dev, pipe->Dci) == XHCI_EP_STATE_HALTED) {
-            ok = hcdCfgResetEndpoint(hc, dev, pipe) &&
+            ok = hcdCfgResetEndpoint(hc, dev, pipe, 0) &&
                  hcdCfgSetDequeue(hc, dev, pipe);
         } else {
             ok = hcdCfgQuiesce(hc, dev, pipe) != XHCI_EP_STATE_RUNNING &&
@@ -1972,8 +2029,7 @@ static LONG hcdCfgReset(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         return result;          /* left paused, as hcdCfgAbort */
     }
     pipe->Halted = 0;
-    if ((parts & XHCI_PIPE_RESET_DEVICE) != 0 &&
-        pipe->TransferType != XHCI_PIPE_XFER_ISOCH &&
+    if (pipe->TransferType != XHCI_PIPE_XFER_ISOCH &&
         !HcdThreadControl(hc, dev, 0x02, 1, 0,
                           (USHORT)pipe->EndpointAddress, 0, &bytes)) {
         /* As in hcdCfgQuiesce: toggles that may disagree are settled

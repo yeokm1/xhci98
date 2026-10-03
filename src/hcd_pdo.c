@@ -327,7 +327,11 @@ static VOID hcdDeletePdo(PHCD_DEVICE_PDO pdo)
 {
     /* Its refusal timer and DPC live in the extension (hcd_io.c). */
     HcdIoRefusedDrain(pdo);
-    HcdUrbIdleFlush(pdo);
+    HcdUrbIdleDrain(pdo);
+    /* Its interface context forgets it before the extension goes, and no
+     * interface call is inside it then (Codex review of 28-A.1, round 1,
+     * finding 3). */
+    HcdUrbBusifRelease(pdo);
     pdo->Deleted = 1;
     pdo->Controller = NULL;
     HcdPoolFree(pdo->Config);
@@ -759,8 +763,10 @@ static VOID hcdPdoQuiesce(PHCD_DEVICE_PDO pdo, ULONG removing)
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
     }
     /* A held idle notification (hcd_urb.c, task 28-A.1) is no URB: it
-     * completes here, before the client's stop or removal goes on. */
-    HcdUrbIdleFlush(pdo);
+     * completes here, and its completion has returned, before the
+     * client's stop or removal goes on (Codex review of 28-A.1, round 1,
+     * finding 2). */
+    HcdUrbIdleDrain(pdo);
     if (pdo->UrbsPending == 0) {
         hcdPdoRefusalsWait(pdo, removing);
         return;

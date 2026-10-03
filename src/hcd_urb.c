@@ -814,7 +814,10 @@ static NTSTATUS hcdDeviceHandle(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
 }
 
 /* The held idle request cancelled by its client: taken off the PDO under
- * the cancel lock it is called with, and completed. */
+ * the cancel lock it is called with, and completed; IdlePending drops only
+ * once the completion has returned, the PDO's last touch here, so a REMOVE
+ * that waits for it cannot let the client unload under a completion routine
+ * still to run (Codex review of 28-A.1, round 1, finding 2). */
 static VOID NTAPI hcdIdleCancel(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 {
     PHCD_DEVICE_PDO pdo;
@@ -825,6 +828,7 @@ static VOID NTAPI hcdIdleCancel(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     }
     IoReleaseCancelSpinLock(Irp->CancelIrql);
     (VOID)HcdCompleteIrp(Irp, STATUS_CANCELLED, 0);
+    (VOID)InterlockedDecrement(&pdo->IdlePending);
 }
 
 /*
@@ -864,6 +868,7 @@ static NTSTATUS hcdIdleSubmit(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     /* Armed and recorded in one hold of the cancel lock, so a cancel and a
      * flush always agree on who owns the IRP: whoever finds the routine
      * still set under the lock takes it. */
+    (VOID)InterlockedIncrement(&pdo->IdlePending);
     IoMarkIrpPending(irp);
     (VOID)IoSetCancelRoutine(irp, hcdIdleCancel);
     pdo->IdleIrp = irp;
@@ -873,14 +878,17 @@ static NTSTATUS hcdIdleSubmit(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
 }
 
 /*
- * The held idle request, completed STATUS_CANCELLED: at a stop, surprise
- * removal or removal of the PDO (hcd_pdo.c, after the dispatches inside it
- * are waited out, so none can hold another), and at its deletion. A cancel
- * routine already called has taken it under the lock; it touches the PDO
- * no further once the lock is released. IRQL: <= DISPATCH_LEVEL.
+ * The held idle request, completed STATUS_CANCELLED, and then every
+ * completion of one waited out: at a stop, surprise removal or removal of
+ * the PDO (hcd_pdo.c, after the dispatches inside it are waited out, so
+ * none can hold another), and at its deletion. A cancel routine already
+ * called has taken the IRP under the lock; its completion is counted in
+ * IdlePending until it has returned, and this waits for that too (Codex
+ * review of 28-A.1, round 1, finding 2). IRQL: PASSIVE_LEVEL.
  */
-VOID HcdUrbIdleFlush(PHCD_DEVICE_PDO pdo)
+VOID HcdUrbIdleDrain(PHCD_DEVICE_PDO pdo)
 {
+    LARGE_INTEGER due;
     KIRQL cancelIrql;
     PIRP irp;
 
@@ -894,6 +902,11 @@ VOID HcdUrbIdleFlush(PHCD_DEVICE_PDO pdo)
     IoReleaseCancelSpinLock(cancelIrql);
     if (irp != NULL) {
         (VOID)HcdCompleteIrp(irp, STATUS_CANCELLED, 0);
+        (VOID)InterlockedDecrement(&pdo->IdlePending);
+    }
+    while (pdo->IdlePending != 0) {
+        HcdRelativeMs(&due, 1);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
     }
 }
 
@@ -965,33 +978,151 @@ static NTSTATUS hcdRecordFailure(PHCD_DEVICE_PDO pdo, PIRP irp,
 /* ----------------------------------------------------------------------- */
 
 /*
- * The functions behind the interface run at any IRQL, on no IRP, and may be
- * called after the PDO's controller has gone (a surprise removal with the
- * client still bound). Each raises the PDO's Busy count before it reads
- * Controller, as the IOCTL entry does, so the parent's release
- * (HcdDevicePdoReleaseAll), which clears Controller and then waits Busy
- * out, cannot free the controller under one. The PDO itself outlives every
- * call: a client drops its references before its own REMOVE completes.
+ * THE CONTEXT (Codex review of 28-A.1, round 1, finding 3). A client keeps
+ * BusContext, and may call through it or dereference it, for as long as it
+ * likes - and Windows 7's usbaudio.sys never dereferences it at all: its
+ * USBDeviceStart (6.1.7601.17514 x86, 0x1CA0B) puts the interface block in
+ * its KS object bag and frees it with ExFreePool, and no image site calls
+ * InterfaceDereference (static, cdb -z with the public PDB, 2026-10-04).
+ * So the context cannot be the PDO extension, which IoDeleteDevice frees,
+ * and an object reference would keep a device object, and with it the
+ * driver image, for every audio device ever started. It is a slot of a
+ * static table instead, which lives as long as the image:
+ *
+ *   Pdo        the PDO while it exists; claimed at its first query, under
+ *              hcdBusifLock, and given back by its deletion
+ *              (HcdUrbBusifRelease), which sets Gone (interlocked), waits
+ *              Busy out and only then lets the slot go;
+ *   Busy       calls inside the slot: raised before Gone is read, so a call
+ *              that finds Gone clear reads a PDO whose deletion is waiting
+ *              for it;
+ *   Refs       references held: what the client's Reference/Dereference
+ *              move, on the slot alone. A free slot with none is taken
+ *              first; with every free slot still referenced - clients like
+ *              Windows 7's usbaudio - the first free one is reused, and a
+ *              stale caller then reads another live device's answers,
+ *              never freed memory.
+ *
+ * Inside a call the PDO's own Busy is raised too before Controller is read,
+ * as the IOCTL entry does, so the parent's release (HcdDevicePdoReleaseAll)
+ * cannot free the controller under it. QUERY_REMOVE is not failed for an
+ * outstanding reference, although Microsoft's query-remove page asks it:
+ * the references here are the device's own function driver's, which takes
+ * one at every start and, on Windows 7, never drops it, so a refusal would
+ * leave every audio device impossible to disable or remove.
  */
-static PHCD_CONTROLLER hcdBusifEnter(PHCD_DEVICE_PDO pdo)
+#define HCD_BUSIF_SLOTS 64UL
+
+typedef struct _HCD_BUSIF_SLOT {
+    PHCD_DEVICE_PDO Pdo;            /* hcdBusifLock; NULL when free       */
+    volatile LONG Gone;             /* its PDO is being deleted           */
+    volatile LONG Busy;
+    volatile LONG Refs;
+} HCD_BUSIF_SLOT, *PHCD_BUSIF_SLOT;
+
+static HCD_BUSIF_SLOT hcdBusifSlots[HCD_BUSIF_SLOTS];
+static KSPIN_LOCK hcdBusifLock;
+
+/* DriverEntry. IRQL: PASSIVE_LEVEL. */
+VOID HcdUrbInit(VOID)
 {
-    (VOID)InterlockedIncrement(&pdo->Busy);
-    return pdo->Controller;
+    KeInitializeSpinLock(&hcdBusifLock);
 }
 
-static VOID hcdBusifLeave(PHCD_DEVICE_PDO pdo)
+/* The PDO's slot, claimed at its first query. NULL when the table is full
+ * of live PDOs. IRQL: <= DISPATCH_LEVEL. */
+static PHCD_BUSIF_SLOT hcdBusifClaim(PHCD_DEVICE_PDO pdo)
 {
-    (VOID)InterlockedDecrement(&pdo->Busy);
+    PHCD_BUSIF_SLOT slot;
+    KIRQL oldIrql;
+    ULONG i;
+
+    KeAcquireSpinLock(&hcdBusifLock, &oldIrql);
+    slot = (PHCD_BUSIF_SLOT)pdo->BusifSlot;
+    if (slot == NULL) {
+        for (i = 0; i < HCD_BUSIF_SLOTS && slot == NULL; i++) {
+            if (hcdBusifSlots[i].Pdo == NULL && hcdBusifSlots[i].Refs == 0) {
+                slot = &hcdBusifSlots[i];
+            }
+        }
+        for (i = 0; i < HCD_BUSIF_SLOTS && slot == NULL; i++) {
+            if (hcdBusifSlots[i].Pdo == NULL) {
+                slot = &hcdBusifSlots[i];
+            }
+        }
+        if (slot != NULL) {
+            slot->Pdo = pdo;
+            (VOID)InterlockedExchange(&slot->Gone, 0);
+            pdo->BusifSlot = slot;
+        }
+    }
+    KeReleaseSpinLock(&hcdBusifLock, oldIrql);
+    return slot;
+}
+
+/* The PDO is about to be deleted: its slot forgets it once no call is
+ * inside it. IRQL: PASSIVE_LEVEL. */
+VOID HcdUrbBusifRelease(PHCD_DEVICE_PDO pdo)
+{
+    PHCD_BUSIF_SLOT slot;
+    LARGE_INTEGER due;
+    KIRQL oldIrql;
+
+    slot = (PHCD_BUSIF_SLOT)pdo->BusifSlot;
+    if (slot == NULL) {
+        return;
+    }
+    (VOID)InterlockedExchange(&slot->Gone, 1);
+    while (slot->Busy != 0) {
+        HcdRelativeMs(&due, 1);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
+    KeAcquireSpinLock(&hcdBusifLock, &oldIrql);
+    slot->Pdo = NULL;
+    pdo->BusifSlot = NULL;
+    KeReleaseSpinLock(&hcdBusifLock, oldIrql);
+}
+
+/* Into a call: the slot's PDO, NULL once it is being deleted, with the
+ * PDO's Busy raised as well; *hc its controller, or NULL. Every Enter that
+ * returned a PDO is paired with hcdBusifLeave(slot, pdo); one that returned
+ * NULL with hcdBusifLeave(slot, NULL). */
+static PHCD_DEVICE_PDO hcdBusifEnter(PVOID context, PHCD_CONTROLLER *hc)
+{
+    PHCD_BUSIF_SLOT slot;
+    PHCD_DEVICE_PDO pdo;
+
+    slot = (PHCD_BUSIF_SLOT)context;
+    *hc = NULL;
+    (VOID)InterlockedIncrement(&slot->Busy);
+    if (slot->Gone) {
+        return NULL;
+    }
+    pdo = slot->Pdo;
+    if (pdo == NULL) {
+        return NULL;
+    }
+    (VOID)InterlockedIncrement(&pdo->Busy);
+    *hc = pdo->Controller;
+    return pdo;
+}
+
+static VOID hcdBusifLeave(PVOID context, PHCD_DEVICE_PDO pdo)
+{
+    if (pdo != NULL) {
+        (VOID)InterlockedDecrement(&pdo->Busy);
+    }
+    (VOID)InterlockedDecrement(&((PHCD_BUSIF_SLOT)context)->Busy);
 }
 
 static VOID hcdBusifReference(PVOID context)
 {
-    (VOID)InterlockedIncrement(&((PHCD_DEVICE_PDO)context)->BusifRefs);
+    (VOID)InterlockedIncrement(&((PHCD_BUSIF_SLOT)context)->Refs);
 }
 
 static VOID hcdBusifDereference(PVOID context)
 {
-    (VOID)InterlockedDecrement(&((PHCD_DEVICE_PDO)context)->BusifRefs);
+    (VOID)InterlockedDecrement(&((PHCD_BUSIF_SLOT)context)->Refs);
 }
 
 /* What usbport's own answers: its USBDI version, USB 2.0, no real-time
@@ -1022,8 +1153,7 @@ static NTSTATUS HCD_BUSIFFN hcdBusifBusTime(PVOID context, PULONG frame)
     PHCD_CONTROLLER hc;
     ULONG now;
 
-    pdo = (PHCD_DEVICE_PDO)context;
-    hc = hcdBusifEnter(pdo);
+    pdo = hcdBusifEnter(context, &hc);
     now = 0;
     if (hc != NULL) {
         if (KeGetCurrentIrql() <= DISPATCH_LEVEL) {
@@ -1032,7 +1162,7 @@ static NTSTATUS HCD_BUSIFFN hcdBusifBusTime(PVOID context, PULONG frame)
             now = *(volatile ULONG *)&hc->Hc.FrameNumber;
         }
     }
-    hcdBusifLeave(pdo);
+    hcdBusifLeave(context, pdo);
     if (frame != NULL) {
         *frame = now;
     }
@@ -1055,12 +1185,18 @@ static NTSTATUS HCD_BUSIFFN hcdBusifBusInformation(PVOID context, ULONG level,
                                                    PULONG actual)
 {
     PHCD_DEVICE_PDO pdo;
+    PHCD_CONTROLLER hc;
+    ULONG high;
 
-    pdo = (PHCD_DEVICE_PDO)context;
+    pdo = hcdBusifEnter(context, &hc);
+    high = (pdo != NULL && pdo->SpeedClass == XHCI_SPEED_HIGH);
+    hcdBusifLeave(context, pdo);
+    if (pdo == NULL) {
+        return STATUS_DEVICE_NOT_CONNECTED;
+    }
     switch (XhciPipeBusInformation(level,
-                                   (pdo->SpeedClass == XHCI_SPEED_HIGH)
-                                       ? HCD_BUS_BANDWIDTH_HIGH
-                                       : HCD_BUS_BANDWIDTH_FULL,
+                                   high ? HCD_BUS_BANDWIDTH_HIGH
+                                        : HCD_BUS_BANDWIDTH_FULL,
                                    0, (UCHAR *)buffer, length, actual)) {
     case XHCI_PIPE_OK:
         return STATUS_SUCCESS;
@@ -1080,8 +1216,14 @@ static NTSTATUS HCD_BUSIFFN hcdBusifBusInformation(PVOID context, ULONG level,
  * from this answer (design record 13 section 6.3). */
 static BOOLEAN HCD_BUSIFFN hcdBusifHighSpeed(PVOID context)
 {
-    return (BOOLEAN)(((PHCD_DEVICE_PDO)context)->SpeedClass ==
-                     XHCI_SPEED_HIGH);
+    PHCD_DEVICE_PDO pdo;
+    PHCD_CONTROLLER hc;
+    BOOLEAN high;
+
+    pdo = hcdBusifEnter(context, &hc);
+    high = (BOOLEAN)(pdo != NULL && pdo->SpeedClass == XHCI_SPEED_HIGH);
+    hcdBusifLeave(context, pdo);
+    return high;
 }
 
 static NTSTATUS HCD_BUSIFFN hcdBusifLogEntry(PVOID context, ULONG driverTag,
@@ -1096,19 +1238,16 @@ static NTSTATUS HCD_BUSIFFN hcdBusifLogEntry(PVOID context, ULONG driverTag,
     return STATUS_SUCCESS;
 }
 
-/* The High-Speed (micro)frame counter: the frame number times eight, the
- * first microframe of the current frame - the bus keeps no 32-bit
- * microframe count, and MFINDEX's three microframe bits are not read
- * outside the controller lock. No class driver read asks for V3. */
+/* The High-Speed microframe counter: not supported. The bus keeps a
+ * 32-bit frame count (XhciFrameNumber) but no microframe count read in the
+ * same hold, and the frame times eight would claim a precision it does not
+ * have (Codex review of 28-A.1, round 1, finding 4). No class driver read
+ * asks for V3 (design record 13 section 6.5). */
 static NTSTATUS HCD_BUSIFFN hcdBusifBusTimeEx(PVOID context, PULONG frame)
 {
-    ULONG now;
-
-    (VOID)hcdBusifBusTime(context, &now);
-    if (frame != NULL) {
-        *frame = now << 3;
-    }
-    return STATUS_SUCCESS;
+    UNREFERENCED_PARAMETER(context);
+    UNREFERENCED_PARAMETER(frame);
+    return STATUS_NOT_SUPPORTED;
 }
 
 /* The controller's PCI identity: vendor and device from the configuration
@@ -1122,10 +1261,9 @@ static NTSTATUS HCD_BUSIFFN hcdBusifControllerType(
     PHCD_CONTROLLER hc;
     ULONG id;
 
-    pdo = (PHCD_DEVICE_PDO)context;
-    hc = hcdBusifEnter(pdo);
+    pdo = hcdBusifEnter(context, &hc);
     id = (hc != NULL) ? hc->Hc.PciVendorDevice : 0;
-    hcdBusifLeave(pdo);
+    hcdBusifLeave(context, pdo);
     if (hc == NULL) {
         return STATUS_DEVICE_NOT_CONNECTED;
     }
@@ -1185,6 +1323,7 @@ NTSTATUS HcdUrbQueryInterface(PHCD_DEVICE_PDO pdo, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
     PHCD_USBDI_INTERFACE out;
+    PHCD_BUSIF_SLOT slot;
     ULONG version;
     ULONG need;
 
@@ -1204,11 +1343,16 @@ NTSTATUS HcdUrbQueryInterface(PHCD_DEVICE_PDO pdo, PIRP irp)
     if (pdo->Controller == NULL || !pdo->Listed) {
         return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
     }
+    slot = hcdBusifClaim(pdo);
+    if (slot == NULL) {
+        XHCI_DBG_TEXT("hcd: USBDI interface refused, no context slot");
+        return HcdCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES, 0);
+    }
     hcdUsbdiVersion = IoIsWdmVersionAvailable(6, 0) ? 0x600UL : 0x500UL;
 
     out->Size = (USHORT)need;
     out->Version = (USHORT)version;
-    out->BusContext = pdo;
+    out->BusContext = slot;
     out->InterfaceReference = hcdBusifReference;
     out->InterfaceDereference = hcdBusifDereference;
     out->GetUSBDIVersion = hcdBusifVersion;
@@ -1225,7 +1369,7 @@ NTSTATUS HcdUrbQueryInterface(PHCD_DEVICE_PDO pdo, PIRP irp)
         out->QueryBusTimeEx = hcdBusifBusTimeEx;
         out->QueryControllerType = hcdBusifControllerType;
     }
-    hcdBusifReference(pdo);
+    hcdBusifReference(slot);
     return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
 }
 
