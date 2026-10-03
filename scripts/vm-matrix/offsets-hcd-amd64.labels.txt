@@ -18,6 +18,7 @@ PortSpeedHigh	port speed decoded - high speed
 PortSpeedLow	port speed decoded - low speed
 SelectEndpointsRefused	select endpoints refused
 SelectEndpointsRequested	select endpoints requested
+SelectsFailed	selects failed
 SlotSpeedFull	slot context speed - full speed
 SlotSpeedHigh	slot context speed - high speed
 SlotSpeedLow	slot context speed - low speed

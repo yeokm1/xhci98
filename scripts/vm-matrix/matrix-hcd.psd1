@@ -102,6 +102,10 @@
         'zero endpoint configure failures'
         'zero endpoints refused - no bandwidth'
         'zero endpoints refused - no resources'
+        # A select answered with a failure, whatever moved above: one whose
+        # endpoints opened and whose SET_CONFIGURATION / SET_INTERFACE then
+        # failed moves none of the six. Not the BUFFER_TOO_SMALL probe.
+        'zero selects failed'
 
         # Replaces the miniport's nine-term open-accounting identity, which
         # was usbport's OpenEndpoint accounting.  Every non-default endpoint a

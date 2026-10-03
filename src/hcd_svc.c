@@ -230,8 +230,56 @@ VOID HcdTimersInit(PHCD_CONTROLLER hc)
     }
 }
 
-/* Returns 0 when armed. IRQL: <= DISPATCH_LEVEL, no lock of the caller's
- * taken; the slot lock is innermost. */
+/*
+ * Is an incoming context older than a pending one of the same callback? The
+ * only caller arms with an XHCI_COMMAND_TIMEOUT, whose (Epoch, Generation,
+ * Phase, Attempt) orders its arms: a command timeout's abort-arm, made after
+ * the controller lock is dropped, can land after the next command's own
+ * watchdog, and superseding that would leave the newer command unwatched
+ * (Codex review round 23, finding 1). Epoch and generation wrap, so they are
+ * ordered by signed difference. An older arm is always a stale one: its
+ * callback could only count itself stale. IRQL: DISPATCH_LEVEL, TimerLock
+ * held.
+ */
+static ULONG hcdArmIsOlder(const HCD_TIMER *pending, PVOID context,
+                           ULONG contextLength)
+{
+    XHCI_COMMAND_TIMEOUT incoming;
+    XHCI_COMMAND_TIMEOUT held;
+    PUCHAR in;
+    PUCHAR out;
+    ULONG i;
+
+    if (contextLength != sizeof(XHCI_COMMAND_TIMEOUT) ||
+        pending->ContextLength != sizeof(XHCI_COMMAND_TIMEOUT)) {
+        return 0;
+    }
+    in = (PUCHAR)context;
+    out = (PUCHAR)&incoming;
+    for (i = 0; i < sizeof(XHCI_COMMAND_TIMEOUT); i++) {
+        out[i] = in[i];
+    }
+    out = (PUCHAR)&held;
+    for (i = 0; i < sizeof(XHCI_COMMAND_TIMEOUT); i++) {
+        out[i] = pending->Context[i];
+    }
+    if (incoming.Epoch != held.Epoch) {
+        return ((LONG)(incoming.Epoch - held.Epoch) < 0) ? 1UL : 0UL;
+    }
+    if (incoming.Generation != held.Generation) {
+        return ((LONG)(incoming.Generation - held.Generation) < 0) ? 1UL : 0UL;
+    }
+    if (incoming.Phase != held.Phase) {
+        return (incoming.Phase < held.Phase) ? 1UL : 0UL;
+    }
+    return (incoming.Attempt < held.Attempt) ? 1UL : 0UL;
+}
+
+/*
+ * Returns 0 when armed, and also when the arm is older than one pending:
+ * that is not a refusal, since nothing is owed to it. IRQL: <=
+ * DISPATCH_LEVEL, no lock of the caller's taken; the slot lock is innermost.
+ */
 ULONG HcdSvcArmTimer(PXHCI_EXTENSION ext, ULONG milliseconds, PVOID context,
                      ULONG contextLength, XHCI_ASYNC_TIMER_CALLBACK *callback)
 {
@@ -240,6 +288,7 @@ ULONG HcdSvcArmTimer(PXHCI_EXTENSION ext, ULONG milliseconds, PVOID context,
     LARGE_INTEGER due;
     KIRQL oldIrql;
     ULONG reused;
+    ULONG stale;
     ULONG i;
 
     if (ext == NULL || callback == NULL ||
@@ -250,8 +299,20 @@ ULONG HcdSvcArmTimer(PXHCI_EXTENSION ext, ULONG milliseconds, PVOID context,
 
     slot = NULL;
     reused = 0;
+    stale = 0;
     KeAcquireSpinLock(&hc->TimerLock, &oldIrql);
     if (!hc->TimersClosed) {
+        /*
+         * Ordered against every busy slot of this callback, fired or not,
+         * before any is cancelled, and under the lock the replacement takes:
+         * a check followed by an unlocked arm would keep the race.
+         */
+        for (i = 0; i < HCD_TIMER_SLOTS && !stale; i++) {
+            if (hc->Timers[i].Busy && hc->Timers[i].Callback == callback &&
+                hcdArmIsOlder(&hc->Timers[i], context, contextLength)) {
+                stale = 1;
+            }
+        }
         /*
          * A pending arm of the same callback is superseded rather than left
          * to hold its slot until it fires: the command watchdog, the only
@@ -261,21 +322,23 @@ ULONG HcdSvcArmTimer(PXHCI_EXTENSION ext, ULONG milliseconds, PVOID context,
          * unwatched (c16: 21-29 refusals a session). A slot whose timer has
          * already fired keeps it until its DPC frees it.
          */
-        for (i = 0; i < HCD_TIMER_SLOTS && slot == NULL; i++) {
+        for (i = 0; i < HCD_TIMER_SLOTS && slot == NULL && !stale; i++) {
             if (hc->Timers[i].Busy && hc->Timers[i].Callback == callback &&
                 KeCancelTimer(&hc->Timers[i].Timer)) {
                 slot = &hc->Timers[i];
                 reused = 1;
             }
         }
-        for (i = 0; i < HCD_TIMER_SLOTS && slot == NULL; i++) {
+        for (i = 0; i < HCD_TIMER_SLOTS && slot == NULL && !stale; i++) {
             if (!hc->Timers[i].Busy) {
                 slot = &hc->Timers[i];
                 slot->Busy = 1;
             }
         }
     }
-    if (slot != NULL && reused) {
+    if (stale) {
+        hc->TimerArmsStale++;
+    } else if (slot != NULL && reused) {
         hc->TimerArmsSuperseded++;
     } else if (slot != NULL) {
         hc->TimersInFlight++;
@@ -285,18 +348,18 @@ ULONG HcdSvcArmTimer(PXHCI_EXTENSION ext, ULONG milliseconds, PVOID context,
     } else {
         hc->TimerArmsRefused++;
     }
+    if (slot != NULL) {
+        /* Under the lock: the next arm's ordering reads this context. */
+        slot->Callback = callback;
+        slot->ContextLength = contextLength;
+        for (i = 0; i < HCD_TIMER_CONTEXT_BYTES; i++) {
+            slot->Context[i] = (i < contextLength) ? ((PUCHAR)context)[i] : 0;
+        }
+        HcdRelativeMs(&due, milliseconds);
+        (VOID)KeSetTimer(&slot->Timer, due, &slot->Dpc);
+    }
     KeReleaseSpinLock(&hc->TimerLock, oldIrql);
-    if (slot == NULL) {
-        return 1;
-    }
-
-    slot->Callback = callback;
-    for (i = 0; i < HCD_TIMER_CONTEXT_BYTES; i++) {
-        slot->Context[i] = (i < contextLength) ? ((PUCHAR)context)[i] : 0;
-    }
-    HcdRelativeMs(&due, milliseconds);
-    (VOID)KeSetTimer(&slot->Timer, due, &slot->Dpc);
-    return 0;
+    return (slot != NULL || stale) ? 0UL : 1UL;
 }
 
 /*

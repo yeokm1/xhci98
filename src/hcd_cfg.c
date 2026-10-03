@@ -225,6 +225,17 @@ static LONG hcdCfgCountEnd(PHCD_CONTROLLER hc, ULONG asked, LONG usbd)
     return usbd;
 }
 
+/* Every select's answer, counted where every exit meets: the endpoint
+ * counts above see only the exits that follow a parsed interface, and a
+ * select whose endpoints all opened can still fail at the device. */
+static VOID hcdCfgCountSelect(PHCD_CONTROLLER hc, LONG usbd)
+{
+    if (usbd != XHCI_USBD_STATUS_SUCCESS &&
+        usbd != HCD_USBD_BUFFER_TOO_SMALL) {
+        hc->Counters.SelectsFailed++;
+    }
+}
+
 /* ----------------------------------------------------------------------- */
 /* Input Context                                                            */
 /* ----------------------------------------------------------------------- */
@@ -2329,6 +2340,7 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
             usbd = pdo->Function
                        ? hcdCfgSelectFunction(hc, dev, pdo, urb, &held)
                        : hcdCfgSelect(hc, dev, urb);
+            hcdCfgCountSelect(hc, usbd);
             break;
         case HCD_URB_SELECT_INTERFACE:
             usbd = hcdCfgSelectInterface(hc, dev, pdo, urb);
@@ -2337,6 +2349,7 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
                 held &= ~(1UL << number);
                 hcdCfgReleaseSettled(dev, 1UL << number);
             }
+            hcdCfgCountSelect(hc, usbd);
             break;
         case HCD_URB_ABORT_PIPE:
         case HCD_URB_RESET_PIPE:

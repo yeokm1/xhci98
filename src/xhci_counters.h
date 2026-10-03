@@ -57,6 +57,13 @@ typedef struct _XHCIHC_COUNTERS {
     ULONG EndpointsNoBandwidth;
     ULONG EndpointsNoResources;
     ULONG UrbsMalformed;
+    /* A SELECT_CONFIGURATION or SELECT_INTERFACE answered with a failure,
+     * once per request whatever its cause, so a select that fails after its
+     * endpoints were opened on the controller - SET_CONFIGURATION or
+     * SET_INTERFACE refused by the device - or on a malformed record is
+     * still a refusal. BUFFER_TOO_SMALL is not one: it is the length probe
+     * a client resizes from. */
+    ULONG SelectsFailed;
 
     /* The controller. */
     ULONG FatalStatus;
@@ -88,6 +95,6 @@ typedef struct _XHCIHC_COUNTERS {
 } XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 38 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 39 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */

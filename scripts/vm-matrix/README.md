@@ -108,14 +108,16 @@ For an HCD set the harness:
   at every controller start with `XhciDbgValue`, in this order:
 
   ```
-  xhci98: counters start=<8 hex>      per-load start number, from 1
+  xhci98: counters start=<8 hex>      start number, from 1, across every controller of the load
   xhci98: counters size=<8 hex>       sizeof(XHCIHC_COUNTERS)
   xhci98: counters VA high=<8 hex>    amd64 build only
   xhci98: counters VA low=<8 hex>     the pointer, or its low half
   ```
 
   A new start number at the same VA is a restart (the block does not move on
-  a stop and start), and the size is checked against `offsets-hcd.txt`'s
+  a stop and start), and so is a second complete record even when it repeats
+  the first (a recreated controller FDO, or a reloaded image, can be given
+  the same allocation; Codex review round 23, finding 3), and the size is checked against `offsets-hcd.txt`'s
   `SIZEOF`. There is no switch read and no `RH_GetRootHubData` wait.
 
 **The block.** `XHCIHC_COUNTERS` in `src\xhci_counters.h` (DDK-free,
@@ -123,7 +125,7 @@ compiled under `XHCI_HOST_TEST`), embedded in the controller FDO's extension
 and zeroed at every start (26-A.10). `gen-offsets.ps1` derives the table from
 its `XHCI_DBG_VALUE_CHANGED("<label>", cnt-><Field>)` sites, one per field, in
 `src\hcd_log.c` (`hcdCountersTrace`); the identity lines are
-`HcdCountersStart`'s. The block publishes these 38 labels (the set's and the
+`HcdCountersStart`'s. The block publishes these 39 labels (the set's and the
 harness's own; `selftest.ps1` builds its stand-in table from the same
 derivation, and `-ValidateOnly` checks the real table against the set):
 
@@ -136,7 +138,11 @@ derivation, and `-ValidateOnly` checks the real table against the set):
   bus's own hub pipe), `select endpoints requested`, `select endpoints
   refused`, `endpoint refusals - type` / `- params` / `- ring pool`,
   `endpoint configure failures`, `endpoints refused - no bandwidth` / `- no
-  resources`, `URBs refused - malformed`
+  resources`, `URBs refused - malformed`, `selects failed` (a select
+  answered with any failure but the `BUFFER_TOO_SMALL` length probe; in the
+  refusal set, so a select whose endpoints opened and whose
+  `SET_CONFIGURATION` or `SET_INTERFACE` then failed is not a `NODRIVER` or a
+  `PASS`)
 - the controller: `fatal controller status`, `transfer events for no open
   endpoint`, `interrupt mask failures`, `commands the engine gave up on`
 - transfers: `transfers submitted`, `transfers completed`, `transfers

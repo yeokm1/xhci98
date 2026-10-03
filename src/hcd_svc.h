@@ -21,7 +21,9 @@
  *                       (the stale-callback rule of the command watchdog is
  *                       unchanged). Unlike usbport's, a refusal is reported:
  *                       the slots are preallocated, and when none is free the
- *                       arm is refused rather than lost.
+ *                       arm is refused rather than lost. A pending arm of
+ *                       the same callback is superseded, unless the new
+ *                       context is the older one: that arm is dropped.
  *   HcdSvcRequestReset  UsbPortInvalidateController(RESET): the controller is
  *                       declared failed and the recovery runs from the HCD's
  *                       PASSIVE-level thread rather than a usbport DPC.

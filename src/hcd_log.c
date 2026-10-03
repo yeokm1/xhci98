@@ -187,7 +187,7 @@ VOID HcdLogFlush(PHCD_CONTROLLER hc, ULONG reason, ULONG counters)
 #ifdef XHCI_DBG_TRACE
 /*
  * One site per field, under the label matrix-hcd.psd1 names it by
- * (scripts/vm-matrix/README.md lists the 38). Change-gated, so an idle poll
+ * (scripts/vm-matrix/README.md lists the 39). Change-gated, so an idle poll
  * prints nothing; the matrix reads the block, not these lines.
  * IRQL: PASSIVE_LEVEL (the controller thread).
  */
@@ -228,6 +228,7 @@ static VOID hcdCountersTrace(const XHCIHC_COUNTERS *cnt)
     XHCI_DBG_VALUE_CHANGED("endpoints refused - no resources",
                            cnt->EndpointsNoResources);
     XHCI_DBG_VALUE_CHANGED("URBs refused - malformed", cnt->UrbsMalformed);
+    XHCI_DBG_VALUE_CHANGED("selects failed", cnt->SelectsFailed);
 
     XHCI_DBG_VALUE_CHANGED("fatal controller status", cnt->FatalStatus);
     XHCI_DBG_VALUE_CHANGED("transfer events for no open endpoint",
@@ -265,6 +266,16 @@ static VOID hcdCountersTrace(const XHCIHC_COUNTERS *cnt)
 #endif
 
 /*
+ * The start numbers, drawn for every controller this image serves rather
+ * than kept per controller: a controller FDO removed and created again can
+ * be given the same allocation, and a per-extension count would then start
+ * again at 1 and publish an identity the reader has already seen (Codex
+ * review round 23, finding 3). Interlocked, because controllers start
+ * independently.
+ */
+static LONG hcdCountersStarts;
+
+/*
  * A controller start: the block zeroed, so a restart inside a matrix window
  * reads as the negative delta the harness voids it on, and the qemu
  * flavour's identity lines, in the order lib\counters.ps1 reads them. The
@@ -281,9 +292,9 @@ VOID HcdCountersStart(PHCD_CONTROLLER hc)
     for (i = 0; i < sizeof(XHCIHC_COUNTERS); i++) {
         p[i] = 0;
     }
-    hc->CountersStart++;
+    hc->CountersStart = (ULONG)InterlockedIncrement(&hcdCountersStarts);
     if (hc->CountersStart == 0) {
-        hc->CountersStart = 1;
+        hc->CountersStart = (ULONG)InterlockedIncrement(&hcdCountersStarts);
     }
     XHCI_DBG_VALUE("counters start", hc->CountersStart);
     XHCI_DBG_VALUE("counters size", sizeof(XHCIHC_COUNTERS));
@@ -299,8 +310,10 @@ VOID HcdCountersStart(PHCD_CONTROLLER hc)
  * The thread's poll: the two counters the kept controller sequence keeps in
  * XHCI_EXTENSION copied in - both zeroed with it at the same start, so a
  * copy is exact - and, in the qemu flavour, the trace. The health poll that
- * moves FatalStatusDetected runs just before this, on the same thread.
- * IRQL: PASSIVE_LEVEL (the controller thread).
+ * moves FatalStatusDetected runs just before this, on the same thread. The
+ * stop calls it once more after the thread has gone, since its own
+ * XhciDisableInterrupts can count a mask failure (Codex review round 23,
+ * finding 4). IRQL: PASSIVE_LEVEL (the controller thread, or the stop).
  */
 VOID HcdCountersPoll(PHCD_CONTROLLER hc)
 {

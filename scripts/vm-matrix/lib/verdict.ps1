@@ -242,7 +242,12 @@ $script:DriverRefusalLabelTransient = 'endpoint refusals - not ready'
 # same command's and keep theirs. Two of the miniport's leave: `- no device`
 # was usbport's device handle (the PDO is the device), and the transient
 # `- not ready` was usbport's retry (the bus reports a PDO only once it has
-# enumerated it), so the HCD has no transient refusal.
+# enumerated it), so the HCD has no transient refusal. `selects failed` is
+# the HCD's own: a select can fail after every endpoint it named opened on the
+# controller (SET_CONFIGURATION or SET_INTERFACE refused by the device), or on
+# a malformed record before any was counted, and neither moves a cause above
+# (Codex review round 23, finding 2). The BUFFER_TOO_SMALL length probe is
+# not counted in it.
 $script:HcdRefusalLabelsPermanent = @(
     'endpoint refusals - type'
     'endpoint refusals - params'
@@ -250,6 +255,7 @@ $script:HcdRefusalLabelsPermanent = @(
     'endpoint configure failures'
     'endpoints refused - no bandwidth'
     'endpoints refused - no resources'
+    'selects failed'
 )
 
 # Returns $null when no refusal counter moved, an ERROR-shaped record when one
