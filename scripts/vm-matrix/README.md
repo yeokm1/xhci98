@@ -52,7 +52,7 @@ Useful narrowings:
 | `wedge-observe.ps1` | Finding 3's wedge as an observatory: the bench plug/pull recipes replayed in QEMU with every trace channel open. |
 | `matrix.broken.psd1`, `matrix-hcd.broken.psd1` | Mutated matrices, the miniport's and the HCD's, run against a real guest as the whole-pipeline half of the same proof. Tracked on purpose; the self-test's guestless half cannot replace them. Do not "fix" their rows. |
 | `gen-offsets.ps1` | Derives the HCD's counter offset table from the driver's own sources. Refuses `-Driver miniport`: that table is frozen. |
-| `offsets-hcd.txt`, `offsets-hcd-amd64.txt` and their `.labels.txt` | Generated from the HCD's counter block. Do not edit. Not yet written: the block is not in `src\` (see "Two expectation sets"). |
+| `offsets-hcd.txt`, `offsets-hcd-amd64.txt` and their `.labels.txt` | Generated from the HCD's counter block (see "Two expectation sets"). Do not edit; regenerate after any change to `src\xhci_counters.h` or its print sites. |
 | `offsets.txt`, `offsets-amd64.txt` and their `.labels.txt` | The miniport's, generated at the 1.2.0.0-era tree and frozen with `matrix.psd1`. Do not edit or regenerate here. |
 | `lib/monitor.ps1` | QEMU monitor transport. |
 | `lib/qemu.ps1` | QEMU discovery, launch, and the traps enforced in code. |
@@ -118,14 +118,13 @@ For an HCD set the harness:
   a stop and start), and the size is checked against `offsets-hcd.txt`'s
   `SIZEOF`. There is no switch read and no `RH_GetRootHubData` wait.
 
-**What is not there yet.** The HCD keeps none of these counters in a
-readable block today: `gen-offsets.ps1` derives the table from
-`XHCI_DBG_VALUE_CHANGED("<label>", cnt-><Field>)` sites over
-`XHCIHC_COUNTERS` in `src\xhci_counters.h` (DDK-free, compiled under
-`XHCI_HOST_TEST`), in the files `src\sources` names, and refuses until that
-header exists. Until then `-ValidateOnly` with the HCD set stops at the
-missing `offsets-hcd.txt`. The block must publish these 38 labels (the set's
-and the harness's own; `selftest.ps1` builds its stand-in table from the same
+**The block.** `XHCIHC_COUNTERS` in `src\xhci_counters.h` (DDK-free,
+compiled under `XHCI_HOST_TEST`), embedded in the controller FDO's extension
+and zeroed at every start (26-A.10). `gen-offsets.ps1` derives the table from
+its `XHCI_DBG_VALUE_CHANGED("<label>", cnt-><Field>)` sites, one per field, in
+`src\hcd_log.c` (`hcdCountersTrace`); the identity lines are
+`HcdCountersStart`'s. The block publishes these 38 labels (the set's and the
+harness's own; `selftest.ps1` builds its stand-in table from the same
 derivation, and `-ValidateOnly` checks the real table against the set):
 
 - enumeration: `devices addressed`, `slots enabled`, `port speed decoded -

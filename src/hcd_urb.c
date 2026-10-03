@@ -330,6 +330,7 @@ static NTSTATUS hcdTransferUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
 
     usbd = HcdUrbIoRequest(urb, &req);
     if (usbd != USBD_STATUS_SUCCESS) {
+        hcdCount(&hc->Counters.UrbsMalformed);
         if (urb->UrbHeader.Function == URB_FUNCTION_ISOCH_TRANSFER) {
             HcdIoIsoRefused(urb, usbd);
             return HcdIoRefuseLater(pdo, irp, urb, usbd);
@@ -353,7 +354,8 @@ static NTSTATUS hcdTransferUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
  * refusal a client can retry from its completion routine does (Codex review
  * of batch (c), round 19, finding 7).
  */
-static NTSTATUS hcdFunctionConfig(PHCD_DEVICE_PDO pdo, PIRP irp, PURB urb,
+static NTSTATUS hcdFunctionConfig(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                                  PIRP irp, PURB urb,
                                   const HCD_IO_REQUEST *req)
 {
     PUCHAR to;
@@ -372,6 +374,7 @@ static NTSTATUS hcdFunctionConfig(PHCD_DEVICE_PDO pdo, PIRP irp, PURB urb,
          * URB states would let the copy run past the client's pages. */
         if (MmGetMdlByteCount(req->Mdl) < req->Length) {
             XHCI_DBG_TEXT("hcd: function configuration read, MDL short");
+            hcdCount(&hc->Counters.UrbsMalformed);
             return HcdIoRefuseLater(pdo, irp, urb,
                                     USBD_STATUS_INVALID_PARAMETER);
         }
@@ -392,6 +395,7 @@ static NTSTATUS hcdFunctionConfig(PHCD_DEVICE_PDO pdo, PIRP irp, PURB urb,
     }
     if (to == NULL && n != 0) {
         XHCI_DBG_TEXT("hcd: function configuration read, buffer unmapped");
+        hcdCount(&hc->Counters.UrbsMalformed);
         return HcdIoRefuseLater(pdo, irp, urb, USBD_STATUS_INVALID_PARAMETER);
     }
     for (i = 0; i < n; i++) {
@@ -415,10 +419,11 @@ static NTSTATUS hcdFunctionControl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
 
     usbd = HcdUrbIoRequest(urb, &req);
     if (usbd != USBD_STATUS_SUCCESS) {
+        hcdCount(&hc->Counters.UrbsMalformed);
         return HcdIoRefuseLater(pdo, irp, urb, usbd);
     }
     if (req.Setup[0] == 0x80 && req.Setup[1] == 6 && req.Setup[3] == 2) {
-        return hcdFunctionConfig(pdo, irp, urb, &req);
+        return hcdFunctionConfig(pdo, hc, irp, urb, &req);
     }
     if (!XhciFuncSetupAllowed(req.Setup, pdo->InterfaceMask,
                               pdo->Func.DeviceMask)) {
@@ -473,6 +478,7 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
          * health poll as well, so no 2,048-frame lap is lost. */
         if (urb->UrbHeader.Length <
             sizeof(struct _URB_GET_CURRENT_FRAME_NUMBER)) {
+            hcdCount(&hc->Counters.UrbsMalformed);
             return hcdUrbComplete(irp, urb, USBD_STATUS_INVALID_PARAMETER,
                                   STATUS_INVALID_PARAMETER);
         }

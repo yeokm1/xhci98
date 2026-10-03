@@ -1,0 +1,38 @@
+﻿CommandsGivenUp	commands the engine gave up on
+DevicesAddressed	devices addressed
+EndpointConfigureFailures	endpoint configure failures
+EndpointRefusalsParams	endpoint refusals - params
+EndpointRefusalsPool	endpoint refusals - ring pool
+EndpointRefusalsType	endpoint refusals - type
+EndpointsOpened	endpoints opened
+EndpointsNoBandwidth	endpoints refused - no bandwidth
+EndpointsNoResources	endpoints refused - no resources
+FatalStatus	fatal controller status
+HubsStarted	hubs started by the bus
+InterruptMaskFailures	interrupt mask failures
+IsoMissedService	iso missed service errors
+IsoPacketErrors	iso packet errors
+IsoPacketsAnswered	iso packets answered
+PortSpeedFull	port speed decoded - full speed
+PortSpeedHigh	port speed decoded - high speed
+PortSpeedLow	port speed decoded - low speed
+SelectEndpointsRefused	select endpoints refused
+SelectEndpointsRequested	select endpoints requested
+SlotSpeedFull	slot context speed - full speed
+SlotSpeedHigh	slot context speed - high speed
+SlotSpeedLow	slot context speed - low speed
+SpeedDisagreements	slot speed disagreeing with port speed
+SlotsEnabled	slots enabled
+TopoBehindHubAddressed	topology: behind-hub devices addressed
+TopoBehindHubOpens	topology: behind-hub opens
+TopoBehindHubTooDeep	topology: behind-hub refused - too deep
+TopoDescriptors	topology: hub descriptors folded
+TopoDescriptorsBad	topology: hub descriptors malformed
+TopoHubSlotsMarked	topology: hub slots marked
+TopoNodesDropped	topology: nodes dropped
+TopoTtProgrammed	topology: TT pairs programmed
+TransferEventsUnclaimed	transfer events for no open endpoint
+TransfersCancelled	transfers cancelled
+TransfersCompleted	transfers completed
+TransfersSubmitted	transfers submitted
+UrbsMalformed	URBs refused - malformed

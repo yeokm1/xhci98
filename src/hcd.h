@@ -26,6 +26,7 @@
 #include "xhci_enum.h"
 #include "xhci_pipe.h"
 #include "xhci_func.h"
+#include "xhci_counters.h"
 
 #define HCD_KIND_CONTROLLER_FDO 0x43464448UL /* 'HDFC' */
 #define HCD_KIND_ROOTHUB_PDO    0x50524448UL /* 'HDRP' */
@@ -504,7 +505,6 @@ typedef struct _HCD_CONTROLLER {
     volatile ULONG CmdDoneControl;
     volatile ULONG CmdDoneLost;
     ULONG SlotFatalEvents;
-    ULONG TransferEventsUnclaimed;
     /* Per root port bits (XHCI_MAX_ROOT_PORTS), under the controller lock:
      * changed (the event DPC), and the PDO handshake (hcd_pdo.c). */
     ULONG PortChange[HCD_PORT_WORDS];
@@ -560,6 +560,12 @@ typedef struct _HCD_CONTROLLER {
     /* The controller lock (hcd_svc.h, HcdSvcControllerLock): created once at
      * AddDevice, outside Hc, which every start zeroes. */
     KSPIN_LOCK ControllerLock;
+
+    /* The device matrix's counters (xhci_counters.h), zeroed at every
+     * start; CountersStart numbers the starts, from 1, so the harness can
+     * tell a restart from a block that did not move. */
+    XHCIHC_COUNTERS Counters;
+    ULONG CountersStart;
 
     /* The kept controller sequence's state, as the miniport's extension. */
     XHCI_EXTENSION Hc;
@@ -762,6 +768,8 @@ NTSTATUS HcdDoorRootHubIoctl(PHCD_CONTROLLER hc, PIRP irp);
 
 /* hcd_log.c */
 VOID HcdLogFlush(PHCD_CONTROLLER hc, ULONG reason, ULONG counters);
+VOID HcdCountersStart(PHCD_CONTROLLER hc);
+VOID HcdCountersPoll(PHCD_CONTROLLER hc);
 
 /* hcd_pool.c */
 PVOID HcdPoolAlloc(ULONG bytes);
