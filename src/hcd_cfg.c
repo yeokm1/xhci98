@@ -483,6 +483,20 @@ ULONG HcdCfgParentConfigure(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 /* SELECT_CONFIGURATION                                                     */
 /* ----------------------------------------------------------------------- */
 
+/* An interface record too short for its alternate's pipes is answered with
+ * the length it needs, as both shipping usbport binaries answer it (Windows
+ * 2000 at image VA 0x2A963, NUSB at 0x2A181; external/reactos/usbport/
+ * device.c, USBPORT_InitInterfaceInfo), so a caller that resizes from the
+ * returned Length can retry (Codex review of batch (c), round 20, finding
+ * 3). */
+static VOID hcdCfgNeedLength(PUSBD_INTERFACE_INFORMATION ii,
+                             const XHCI_PIPE_IFACE *iface)
+{
+    ii->Length = (USHORT)(FIELD_OFFSET(USBD_INTERFACE_INFORMATION, Pipes) +
+                          iface->EndpointCount *
+                              sizeof(USBD_PIPE_INFORMATION));
+}
+
 static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
 {
     struct _URB_SELECT_CONFIGURATION *sc;
@@ -578,9 +592,13 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
             ii->InterfaceNumber >= 32 ||
             XhciPipeFindInterface((const UCHAR *)cd, total,
                                   ii->InterfaceNumber, ii->AlternateSetting,
-                                  &iface) != XHCI_PIPE_OK ||
-            ii->Length < fixed + iface.EndpointCount *
-                                     sizeof(USBD_PIPE_INFORMATION)) {
+                                  &iface) != XHCI_PIPE_OK) {
+            usbd = HCD_USBD_INVALID_PARAMETER;
+        } else if (ii->Length < fixed + iface.EndpointCount *
+                                            sizeof(USBD_PIPE_INFORMATION)) {
+            usbd = HCD_USBD_BUFFER_TOO_SMALL;
+        }
+        if (usbd != XHCI_USBD_STATUS_SUCCESS) {
             XHCI_DBG_VALUE("hcd: select refused, interface length/number/alt",
                            ((ULONG)ii->Length << 16) |
                                ((ULONG)ii->InterfaceNumber << 8) |
@@ -588,7 +606,9 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
             XHCI_DBG_VALUE("hcd: select refused, URB length/offset",
                            ((ULONG)urb->UrbHeader.Length << 16) |
                                (ULONG)(p - (PUCHAR)urb));
-            usbd = HCD_USBD_INVALID_PARAMETER;
+            if (usbd == HCD_USBD_BUFFER_TOO_SMALL) {
+                hcdCfgNeedLength(ii, &iface);
+            }
             break;
         }
         ii->Class = (UCHAR)iface.InterfaceClass;
@@ -789,6 +809,7 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                        ((ULONG)ii->Length << 16) |
                            ((ULONG)ii->InterfaceNumber << 8) |
                            ii->AlternateSetting);
+        hcdCfgNeedLength(ii, &iface);
         return HCD_USBD_BUFFER_TOO_SMALL;
     }
     if ((ULONG)urb->UrbHeader.Length <
@@ -1073,11 +1094,12 @@ static ULONG hcdCfgSetInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * each of its interfaces left at a nonzero alternate sent back to 0, so an
  * audio function stops reserving isochronous bandwidth; a SET_INTERFACE
  * that fails leaves that interface as it was. 1 when the Configure Endpoint
- * succeeded. */
+ * succeeded; *owed gets the interfaces not yet released (all of them when
+ * the Configure Endpoint failed). */
 static ULONG hcdCfgUnconfigureFunction(PHCD_CONTROLLER hc,
                                        PHCD_USB_DEVICE dev,
                                        ULONG interfaceMask, ULONG keep,
-                                       ULONG old)
+                                       ULONG old, PULONG owed)
 {
     PHCD_PIPE none[32];
     ULONG bytes;
@@ -1086,14 +1108,20 @@ static ULONG hcdCfgUnconfigureFunction(PHCD_CONTROLLER hc,
     for (n = 0; n < 32; n++) {
         none[n] = NULL;
     }
+    *owed = interfaceMask;
     if (!hcdCfgReplace(hc, dev, keep, old, 0, none)) {
         return 0;
     }
+    *owed = 0;
     for (n = 0; n < 32; n++) {
-        if ((interfaceMask & (1UL << n)) != 0 && dev->Alternate[n] != 0 &&
-            HcdThreadControl(hc, dev, 0x01, 11, 0, (USHORT)n, 0, &bytes)) {
+        if ((interfaceMask & (1UL << n)) == 0 || dev->Alternate[n] == 0) {
+            continue;
+        }
+        if (HcdThreadControl(hc, dev, 0x01, 11, 0, (USHORT)n, 0, &bytes)) {
             dev->Alternate[n] = 0;
             dev->IfaceUsed &= ~(1UL << n);
+        } else {
+            *owed |= 1UL << n;
         }
     }
     return 1;
@@ -1101,11 +1129,12 @@ static ULONG hcdCfgUnconfigureFunction(PHCD_CONTROLLER hc,
 
 /*
  * A function PDO removed (hcd_pdo.c): its interfaces are owed a release,
- * done by the thread before it serves the next slow IRP (hcdCfgReleases),
- * so a select from the same PDO started again cannot be overtaken by it.
- * The REMOVE does not wait for it: the PDO's URBs are complete already,
- * the release reads only the device record and the mask, never the PDO,
- * and a device that leaves first is freed with its pipes anyway. IRQL:
+ * done by the thread at its next pass (hcdCfgReleases), or claimed with the
+ * first slow IRP of the device dequeued after it (HcdCfgService), so a
+ * select from the same PDO started again cannot be overtaken by it. The
+ * REMOVE does not wait for it: the PDO's URBs are complete already, the
+ * release reads only the device record and the mask, never the PDO, and a
+ * device that leaves first is freed with its pipes anyway. IRQL:
  * <= DISPATCH_LEVEL; the caller holds a reference on `dev`.
  */
 VOID HcdCfgReleaseFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
@@ -1119,20 +1148,79 @@ VOID HcdCfgReleaseFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     HcdThreadWake(hc);
 }
 
-/* Every release HcdCfgReleaseFunction has recorded. Its failures are
- * ignored: a failed Configure Endpoint leaves the DCIs in Stale for the next
- * one to drop, and a failed quiesce has requested the reset that settles
- * the whole device. Thread only, powered, the controller not halted. */
+/* Passes a refused release is tried in before it is given up: a Configure
+ * Endpoint or SET_INTERFACE the device keeps refusing with no reset would
+ * otherwise be retried at every poll for as long as the device stays. */
+#define HCD_CFG_RELEASE_TRIES 3
+
+/* One claimed release (`mask`, interfaces). Returns the interfaces still
+ * owed, for the caller to record again so the next pass retries them: none
+ * when it succeeded, when a failure has brought the controller to the
+ * recovery that settles the whole device (a failed quiesce requests it;
+ * a command that never completes enters it), or when the tries are spent.
+ * Thread only, powered, the controller not halted. */
+static ULONG hcdCfgReleaseOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                              ULONG mask)
+{
+    ULONG keep;
+    ULONG old;
+    ULONG owed;
+
+    if (mask == 0 || dev->Gone || !dev->Split ||
+        dev->Selected == NULL || dev->ConfigValue == 0) {
+        return 0;
+    }
+    XHCI_DBG_VALUE("hcd: removed function released, port/mask",
+                   (dev->Port << 24) | (mask & 0x00FFFFFFUL));
+    old = hcdCfgCloseFunction(hc, dev, mask, &keep);
+    if (old == 0xFFFFFFFFUL) {
+        return 0;
+    }
+    (VOID)hcdCfgUnconfigureFunction(hc, dev, mask, keep, old, &owed);
+    if (owed == 0 || hc->Hc.ControllerFailed || hc->ScratchTainted) {
+        dev->FuncReleaseTries = 0;
+        return 0;
+    }
+    dev->FuncReleaseTries++;
+    if (dev->FuncReleaseTries >= HCD_CFG_RELEASE_TRIES) {
+        XHCI_DBG_VALUE("hcd: function release abandoned, port/mask",
+                       (dev->Port << 24) | (owed & 0x00FFFFFFUL));
+        dev->FuncReleaseTries = 0;
+        hc->FuncReleasesAbandoned++;
+        return 0;
+    }
+    return owed;
+}
+
+/* `owed` recorded again for the next pass (hcdCfgReleaseOne). IRQL:
+ * PASSIVE_LEVEL; takes the controller lock. */
+static VOID hcdCfgReleaseAgain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                               ULONG owed)
+{
+    KIRQL oldIrql;
+
+    if (owed == 0) {
+        return;
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    dev->FuncRelease |= owed;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
+/* Every release HcdCfgReleaseFunction has recorded, once a pass, so a
+ * refused one is retried at the next. Thread only, powered, the controller
+ * not halted. */
 static VOID hcdCfgReleases(PHCD_CONTROLLER hc)
 {
     PHCD_USB_DEVICE dev;
     KIRQL oldIrql;
     ULONG mask;
-    ULONG keep;
-    ULONG old;
     ULONG slot;
 
     for (slot = 1; slot <= XHCI_MAX_SLOTS; slot++) {
+        if (hc->Hc.ControllerFailed || hc->ScratchTainted) {
+            break;
+        }
         dev = hc->SlotDevice[slot];
         if (dev == NULL) {
             continue;
@@ -1141,16 +1229,7 @@ static VOID hcdCfgReleases(PHCD_CONTROLLER hc)
         mask = dev->FuncRelease;
         dev->FuncRelease = 0;
         XhciControllerLockRelease(&hc->Hc, oldIrql);
-        if (mask == 0 || dev->Gone || !dev->Split ||
-            dev->Selected == NULL || dev->ConfigValue == 0) {
-            continue;
-        }
-        XHCI_DBG_VALUE("hcd: removed function released, port/mask",
-                       (dev->Port << 24) | (mask & 0x00FFFFFFUL));
-        old = hcdCfgCloseFunction(hc, dev, mask, &keep);
-        if (old != 0xFFFFFFFFUL) {
-            (VOID)hcdCfgUnconfigureFunction(hc, dev, mask, keep, old);
-        }
+        hcdCfgReleaseAgain(hc, dev, hcdCfgReleaseOne(hc, dev, mask));
     }
 }
 
@@ -1185,6 +1264,7 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG fixed;
     ULONG named;
     ULONG opened;
+    ULONG owed;
     ULONG keep;
     ULONG old;
     ULONG mask;
@@ -1215,14 +1295,21 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             (named & (1UL << ii->InterfaceNumber)) != 0 ||
             XhciPipeFindInterface(dev->Selected, dev->SelectedLength,
                                   ii->InterfaceNumber, ii->AlternateSetting,
-                                  &iface) != XHCI_PIPE_OK ||
-            ii->Length < fixed + iface.EndpointCount *
-                                     sizeof(USBD_PIPE_INFORMATION)) {
+                                  &iface) != XHCI_PIPE_OK) {
             XHCI_DBG_VALUE("hcd: function select refused, length/number/alt",
                            ((ULONG)ii->Length << 16) |
                                ((ULONG)ii->InterfaceNumber << 8) |
                                ii->AlternateSetting);
             return HCD_USBD_INVALID_PARAMETER;
+        }
+        if (ii->Length < fixed + iface.EndpointCount *
+                                     sizeof(USBD_PIPE_INFORMATION)) {
+            XHCI_DBG_VALUE("hcd: function select too small, length/number/alt",
+                           ((ULONG)ii->Length << 16) |
+                               ((ULONG)ii->InterfaceNumber << 8) |
+                               ii->AlternateSetting);
+            hcdCfgNeedLength(ii, &iface);
+            return HCD_USBD_BUFFER_TOO_SMALL;
         }
         named |= 1UL << ii->InterfaceNumber;
         alt[ii->InterfaceNumber] = ii->AlternateSetting;
@@ -1236,7 +1323,7 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     if (sc->ConfigurationDescriptor == NULL) {
         /* This function's unconfigure; the siblings keep theirs. */
         if (!hcdCfgUnconfigureFunction(hc, dev, pdo->InterfaceMask, keep,
-                                       old)) {
+                                       old, &owed)) {
             return HCD_USBD_INTERNAL_HC_ERROR;
         }
         sc->ConfigurationHandle = NULL;
@@ -2008,8 +2095,11 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
     PIRP irp;
     PURB urb;
     KIRQL oldIrql;
+    ULONG release;
+    ULONG owed;
     LONG usbd;
 
+    hcdCfgReleases(hc);
     for (;;) {
         if (hc->Hc.ControllerFailed || hc->ScratchTainted) {
             /* A command or EP0 transfer just failed into the reset: the
@@ -2017,27 +2107,46 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
              * them with their devices (round 2, finding 10). */
             break;
         }
-        /* Before every IRP, so a REMOVE's release always precedes a
-         * select its PDO sends after it. */
-        hcdCfgReleases(hc);
-        if (hc->Hc.ControllerFailed || hc->ScratchTainted) {
-            break;
-        }
+        /* The IRP's device's pending releases are claimed in the lock hold
+         * that dequeues it and run before it is served. A REMOVE records
+         * its release under this lock before it completes, so before its
+         * PDO, started again, can queue anything; and every release the
+         * thread claimed earlier ran to its end before this dequeue. So no
+         * slow IRP is served while a release recorded before it waits, and
+         * none can close the pipes a later select opened (Codex review of
+         * batch (c), round 20, finding 1). */
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
         if (IsListEmpty(&hc->SlowIrps)) {
             XhciControllerLockRelease(&hc->Hc, oldIrql);
             break;
         }
         entry = RemoveHeadList(&hc->SlowIrps);
-        XhciControllerLockRelease(&hc->Hc, oldIrql);
-
         irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
         dev = (PHCD_USB_DEVICE)irp->Tail.Overlay.DriverContext[0];
+        release = dev->FuncRelease;
+        dev->FuncRelease = 0;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+
         pdo = (PHCD_DEVICE_PDO)irp->Tail.Overlay.DriverContext[2];
         urb = hcdCfgUrbOf(irp);
         if (dev->Gone) {
             hcdCfgComplete(dev, irp, urb, HCD_USBD_DEVICE_GONE);
             continue;
+        }
+        owed = hcdCfgReleaseOne(hc, dev, release);
+        if (pdo->Function) {
+            /* A retry left owed for this PDO's own interfaces would run
+             * after its request and could undo it: the PDO is started again
+             * and its own selects settle them. */
+            owed &= ~pdo->InterfaceMask;
+        }
+        hcdCfgReleaseAgain(hc, dev, owed);
+        if (hc->Hc.ControllerFailed || hc->ScratchTainted) {
+            /* Put back for the recovery's invalidation to complete. */
+            XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+            InsertHeadList(&hc->SlowIrps, entry);
+            XhciControllerLockRelease(&hc->Hc, oldIrql);
+            break;
         }
         if (urb == NULL) {
             hcdCfgComplete(dev, irp, NULL, hcdCfgResetPort(hc, dev));

@@ -275,6 +275,9 @@ typedef struct _HCD_USB_DEVICE {
                                      * and alternates the thread owes a
                                      * release (hcd_cfg.c); controller
                                      * lock                               */
+    ULONG FuncReleaseTries;         /* failed release passes in a row, so
+                                     * a refused one is retried, but not
+                                     * forever (hcd_cfg.c); thread        */
 } HCD_USB_DEVICE, *PHCD_USB_DEVICE;
 
 /* A device PDO (hcd_pdo.c): one per enumerated device, a child of the root
@@ -446,6 +449,8 @@ typedef struct _HCD_CONTROLLER {
     PHYSICAL_ADDRESS ScratchPa;
     KEVENT XferDoneEvent;           /* a device's Ep0Done was set          */
     ULONG Ep0Recoveries;            /* EP0 halted or refused a retire      */
+    ULONG FuncReleasesAbandoned;    /* function releases given up after
+                                     * HCD_CFG_RELEASE_TRIES (hcd_cfg.c)  */
 
     /* The function-driver contract (hcd_urb.c): what arrived, counted. */
     ULONG UrbCount[HCD_URB_FUNCTIONS];
