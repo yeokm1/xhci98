@@ -1377,8 +1377,8 @@ static const TV_PLACEMENT placements[] = {
 /*
  * Identify an attached hub the way the bus does (design record 13 section
  * 10.3 step 2, the descriptor), then select its multi-TT interface where the
- * row asks for it. The order is descriptor first, which is the order the
- * graph supports today; the bus's own order is known gap G1 below.
+ * row asks for it. The order is descriptor first, the order usbhub used;
+ * the bus's own order (SET_INTERFACE first) is the closed gap G1 below.
  */
 static void identifyHub(ULONG address, ULONG multiTt)
 {
@@ -1843,10 +1843,16 @@ static void testMalformedDescriptors(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* Task 27-A.4: the known gaps                                         */
+/* Task 27-A.4: the gaps G1-G3, closed by 27-A.1                       */
 /* ------------------------------------------------------------------ */
 
-static void testKnownGaps(void)
+/*
+ * These three were KNOWN_GAP vectors when 27-A.4 wrote them against the
+ * graph as the miniport left it, and the hub class (27-A.1) closed all
+ * three; they are ordinary checks now, kept under their gap ids so the
+ * record of what was behind stays readable.
+ */
+static void testClosedGaps(void)
 {
     XHCI_SETUP_PACKET s;
     XHCI_TOPO_SNOOP snoop;
@@ -1861,12 +1867,10 @@ static void testKnownGaps(void)
      * then SET_INTERFACE alternate 1 on a multi-TT hub (step 1), then
      * GET_DESCRIPTOR(Hub) (step 2), then the marking (step 3), and feeds the
      * graph "through the same entry points the miniport fed from its snoop".
-     * `XhciTopoApplySetInterface` ignores a SET_INTERFACE on a device not yet
-     * known as a hub, and nothing before step 2 makes it one, so the multi-TT
-     * selection is lost: the hub is marked MTT 0 and every FS/LS child gets
-     * MTT 0. Under usbhub the descriptor came first; under the bus it does
-     * not. The fix is in xhci_topo.c or in the order the caller reports, and
-     * is not this suite's to choose.
+     * Under usbhub the descriptor came first; under the bus it does not, and
+     * `XhciTopoApplySetInterface` used to ignore a SET_INTERFACE on a device
+     * not yet known as a hub, losing the multi-TT selection. Since 27-A.1 an
+     * attached node takes it.
      */
     resetTopo();
     XhciTopoAttachRoot(&topo, 2, 1, 1, XHCI_SPEED_HIGH);
@@ -1875,34 +1879,35 @@ static void testKnownGaps(void)
     XhciTopoObserveSetup(&topo, 2, &s, &snoop);
     (void)foldReply(&topo, &snoop, hubDescBytes, 11);
     (void)XhciTopoHubMark(XhciTopoFind(&topo, 2), XHCI_SPEED_HIGH, &mark);
-    KNOWN_GAP(mark.MultiTt == 1, "G1 (DR13 s10.3 steps 1-3)",
-              "a multi-TT hub whose SET_INTERFACE(1) completes before its "
-              "hub descriptor is marked MTT 0, want 1");
+    CHECK(mark.MultiTt == 1,
+          "G1 (DR13 s10.3 steps 1-3): a multi-TT hub whose SET_INTERFACE(1) "
+          "completes before its hub descriptor is marked MTT 1");
     (void)XhciTopoTtFor(&topo, 2, 3, &tt);
-    KNOWN_GAP(tt.MultiTt == 1, "G1 (DR13 s10.3, s10.4 MTT row)",
-              "...and an FS/LS device below it gets MTT 0, want 1");
+    CHECK(tt.MultiTt == 1,
+          "G1 (DR13 s10.3, s10.4 MTT row): ...and an FS/LS device below it "
+          "gets MTT 1");
 
     /*
      * G2. Design record 13 section 10.3: `XHCI_TOPO_NODES` 8, the miniport's
      * table, "becomes a pool-backed count for a bus that owns every hub".
      * Roadmap 27-V.1 runs hubs behind hubs to the depth limit; two such
-     * chains on two root ports are ten hubs, and the table drops two.
+     * chains on two root ports are ten hubs, which the miniport's eight
+     * dropped two of. 27-A.1 made it sixteen (a fixed table still).
      */
     resetTopo();
     held = buildChain(10, 1, 5, XHCI_SPEED_HIGH) +
            buildChain(20, 2, 5, XHCI_SPEED_HIGH);
-    KNOWN_GAP(held == 10 && topo.Dropped == 0, "G2 (DR13 s10.3)",
-              "two five-hub chains need 10 graph nodes; XHCI_TOPO_NODES is "
-              "8 and the rest are dropped");
+    CHECK(held == 10 && topo.Dropped == 0,
+          "G2 (DR13 s10.3): two five-hub chains hold all 10 graph nodes "
+          "and drop none");
 
     /*
      * G3. Design record 13 section 10.5 names three removal triggers for a
      * hub's subtree; one is "the parent disables the hub (C_PORT_ENABLE with
-     * enable 0)". The reply fold reports a departure only from the connect
-     * bit and C_PORT_CONNECTION (design record 02's disconnect row), so a
-     * disabled port that stays connected reports nothing and keeps the hub
-     * node below it. Either the fold or the bus's own port machine
-     * (test\hub_port_vectors.h has the row) must carry it.
+     * enable 0)". The reply fold used to report a departure only from the
+     * connect bit and C_PORT_CONNECTION (design record 02's disconnect row),
+     * so a disabled port that stayed connected reported nothing and kept the
+     * node below it; since 27-A.1 the fold reports it and prunes.
      */
     resetTopo();
     XhciTopoAttachRoot(&topo, 2, 1, 1, XHCI_SPEED_HIGH);
@@ -1912,10 +1917,9 @@ static void testKnownGaps(void)
     XhciTopoObserveSetup(&topo, 2, &s, &snoop);
     (void)foldReply(&topo, &snoop, portConnectedBytes, 4);
     (void)foldReply(&topo, &snoop, disabledBytes, 4);
-    KNOWN_GAP(lastGone.Disconnected == 1 && XhciTopoFind(&topo, 3) == NULL,
-              "G3 (DR13 s10.5)",
-              "a GET_STATUS reply with C_PORT_ENABLE set and enable 0 under "
-              "a hub reports no departure and prunes nothing");
+    CHECK(lastGone.Disconnected == 1 && XhciTopoFind(&topo, 3) == NULL,
+          "G3 (DR13 s10.5): a GET_STATUS reply with C_PORT_ENABLE set and "
+          "enable 0 under a hub reports a departure and prunes the child");
 }
 
 /* ------------------------------------------------------------------ */
@@ -2107,7 +2111,7 @@ int main(void)
     testHubMarkVectors();
     testRemovalVectors();
     testMalformedDescriptors();
-    testKnownGaps();
+    testClosedGaps();
     testHubPortVectorTable();
 
     checkClaimIdentity(&topo, "end of main");

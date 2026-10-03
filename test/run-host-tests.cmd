@@ -52,9 +52,10 @@ rem                  27-A.4's vectors: placements with their Route String,
 rem                  root port and TT triple behind single-TT, multi-TT and
 rem                  Full-Speed hubs to the depth limit, removal, malformed
 rem                  hub descriptors, the well-formedness of the hub port
-rem                  table in test\hub_port_vectors.h, and the known gaps
-rem                  against the design records, printed as KNOWN GAP lines
-rem                  that do not fail the run
+rem                  table in test\hub_port_vectors.h, and the gaps G1-G3
+rem                  against the design records that 27-A.1 closed (a gap
+rem                  still open prints as a KNOWN GAP line and does not
+rem                  fail the run)
 rem   test_strict  - strict mode's command precondition table (src\xhci_strict.c):
 rem                  every command type x DW3 bit 9 x slot state x EP State,
 rem                  the Configure Endpoint flag rule and the refusal codes
