@@ -629,3 +629,23 @@ The fix (`9a593a6`): once a STOP or REMOVE has begun, the refusal DPC completes 
 **Round 15**, on the DELETE_PENDING change: no MAJOR or MINOR. Two notes:
 - The REMOVE wait still relies on a client not resubmitting at once on DELETE_PENDING. The inspected clients back off: `hidclass.sys` 98 SE and 2000, `usbstor.sys` 2000, `usbaudio.sys` 2000.
 - Before the PDO closes, a gone device's refusals still return DEVICE_NOT_CONNECTED, so Windows 98's hidclass retries once per timer tick until PnP removes it. c12 showed no harm from it.
+
+### The Waiting list on both primaries, and a USB stick (c13)
+
+**c13** (`72ce2098...2a34`, `08c0d5a`, 2026-10-03, development host A, fresh overlays): a transfer that finds every record of its pipe out waits on the pipe's Waiting list instead of being refused with ERROR_BUSY, and the transfer MDL is bounded to its byte count. Windows 98 SE ran on c13 and, after the install restart, c13b; Windows 2000 on c13. The stick was a QEMU `usb-storage` on a read-only `fat:` directory (`snapshot=on`) holding a 4 MiB random `RAND.BIN` (`04a6b846...fe78`) and `README.TXT`.
+- **Windows 98 SE** (c13-98):
+  - The controller install asked for the Windows 98 SE CD for `usbd.sys`, then for a restart.
+  - The USB mouse installed (the CD again, for `hidclass.sys`) and moved the pointer.
+  - The stick enumerated at 480 Mb/s and `USBSTOR.INF` installed with no file prompt. Windows then asked for a restart, answered No. The USB Mass Storage Device showed Code 10, with no disk drive and no drive letter.
+  - Unplugging the stick, then the mouse: no hang and no dialog, and the Start menu opened after each.
+  - Shutdown was clean.
+- **Windows 2000** (c13-2k):
+  - The controller install brought no CD or signature prompt and, unlike c12, no restart prompt.
+  - The USB mouse moved the pointer.
+  - The stick enumerated at 480 Mb/s and showed Code 10 ("This device cannot start"), with no disk and no drive letter. Two restart prompts followed, answered No.
+  - Unplugging the stick, then the mouse: no bugcheck, and both left Device Manager.
+  - The root hub's disable (Code 22) and enable passed, and shutdown was clean.
+
+**Why the stick failed** (runtime, the debugcon traces). On both, `usbstor.sys` selects its configuration, which succeeds, and then sends IOCTL_INTERNAL_USB_RESET_PORT (0x00220007): once on Windows 98 SE, three times on Windows 2000. The HCD answers STATUS_NOT_SUPPORTED, and `usbstor.sys` fails its start. On Windows 98 SE it first unconfigures (a SELECT_CONFIGURATION with a NULL configuration) and the PDO then receives a STOP; on Windows 2000 the PDO receives a REMOVE.
+
+The Waiting list was not exercised here: no client in this leg queues more than four requests on a pipe, so c13 was a regression check for HID. RESET_PORT (26-A.6) is what gates storage on both primaries, and it is taken next.
