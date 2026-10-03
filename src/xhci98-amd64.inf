@@ -11,8 +11,10 @@
 ; and the root hub the controller creates, under the project-owned id
 ; (xhci98.inf has the long form).
 ;
-; ROADMAP TASK 25.8: the build scaffold's INF; never staged. Phase 28 task
-; 28-A.2 is the amd64 build's own phase and 28-V.1 its first install.
+; Written as task 25.8's scaffold INF; stageable since 26-A.1 removed the
+; scaffold marker from the image. Task 28-A.2 (taken at the start of Phase
+; 27) is the amd64 build that loads in a guest: this file's first install
+; is its XP x64 leg, and 28-V.1 the rest of the amd64 guests.
 ;
 ; ASCII only, CRLF line endings.
 

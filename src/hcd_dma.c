@@ -50,6 +50,15 @@ NTSTATUS HcdDmaOpen(PHCD_CONTROLLER hc)
 
     va = hc->Dma->DmaOperations->AllocateCommonBuffer(
         hc->Dma, XHCI_HC_RESOURCES_SIZE, &pa, TRUE);
+    /* The controller is programmed with the low dword alone (StartPA). The
+     * 32-bit adapter keeps the block below 4 GB, which only an amd64 or PAE
+     * machine could put to the test; checked rather than assumed (task
+     * 28-A.2). */
+    if (va != NULL && pa.HighPart != 0) {
+        hc->Dma->DmaOperations->FreeCommonBuffer(
+            hc->Dma, XHCI_HC_RESOURCES_SIZE, pa, va, TRUE);
+        va = NULL;
+    }
     if (va == NULL) {
         hc->Dma->DmaOperations->PutDmaAdapter(hc->Dma);
         hc->Dma = NULL;
@@ -68,6 +77,11 @@ NTSTATUS HcdDmaOpen(PHCD_CONTROLLER hc)
      * HcdEnumService checks for. */
     hc->ScratchVa = hc->Dma->DmaOperations->AllocateCommonBuffer(
         hc->Dma, HCD_SCRATCH_BYTES, &hc->ScratchPa, TRUE);
+    if (hc->ScratchVa != NULL && hc->ScratchPa.HighPart != 0) {
+        hc->Dma->DmaOperations->FreeCommonBuffer(
+            hc->Dma, HCD_SCRATCH_BYTES, hc->ScratchPa, hc->ScratchVa, TRUE);
+        hc->ScratchVa = NULL;
+    }
     return STATUS_SUCCESS;
 }
 

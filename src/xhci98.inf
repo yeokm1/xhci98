@@ -8,10 +8,9 @@
 ; OS's own usbhub.sys claims on every NT target (roadmap-hcd.md, decisions
 ; table). Device PDOs are children of that root hub.
 ;
-; ROADMAP TASK 25.8: this is the build scaffold's INF. It passes the INF gate
-; and is never staged - make-package.ps1 refuses the scaffold image - and the
-; root hub's id is the one task 25.4 chose (design record 13, section 8).
-; Its first install is task 26-V.0's.
+; Written as task 25.8's scaffold INF and stageable since 26-A.1 removed the
+; scaffold marker from the image; the root hub's id is the one task 25.4
+; chose (design record 13, section 8). Its first install was task 26-V.0's.
 ;
 ; The install-path rules are the ones the miniport's INF carried until
 ; 1.2.0.0, and scripts\inf-gate\check-inf.ps1 enforces them: Windows 98 SE and ME read the undecorated
