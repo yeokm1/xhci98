@@ -132,6 +132,11 @@ static ULONG hcdPipeResult(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
     if (result->NeedsRecovery && !result->RefusedRetire &&
         pipe->TransferType != XHCI_PIPE_XFER_ISOCH) {
         pipe->Halted = 1;
+        /* A stream's own failure: the endpoint's recovery moves this
+         * stream alone past its failed TD (hcd_cfg.c, 31-A.1). */
+        if (pipe->StreamId != 0) {
+            pipe->StreamFault = 1;
+        }
     }
     if (result->RefusedRetire ||
         (result->NeedsRecovery &&
@@ -237,6 +242,21 @@ static PHCD_PIPE hcdEventPipe(PHCD_CONTROLLER hc, ULONG slotId, ULONG dci)
     return (dci == 1) ? &dev->Ep0Pipe : dev->Pipes[dci];
 }
 
+/* The stream of an endpoint with streams open whose ring holds `trbPA`: a
+ * Transfer Event names its TRB and not its stream (xHCI 6.4.2.1), and every
+ * stream ring is one segment (xhci_stream.h, XhciStreamFind). NULL when no
+ * stream's ring holds it. Controller lock held. */
+static PHCD_PIPE hcdEventStream(PHCD_PIPE pipe, ULONG trbPA)
+{
+    PHCD_STREAMS s;
+    ULONG id;
+
+    s = pipe->Streams;
+    id = XhciStreamFind((const XHCI_RING *const *)s->Ring, s->Count + 1UL,
+                        trbPA);
+    return id == 0 ? NULL : s->Pipe[id];
+}
+
 /*
  * A Transfer Event, matched by the transfer engine (xhci_xfer.c) against the
  * queue of the pipe its slot and endpoint name - EP0's, or one the
@@ -251,6 +271,7 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
 {
     PHCD_CONTROLLER hc;
     PHCD_PIPE pipe;
+    PHCD_PIPE endpoint;
     XHCI_XFER_EVENT_RESULT result;
     XHCI_XFER_CODE code;
     ULONG cc;
@@ -261,6 +282,29 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
     slotId = XHCI_TRB_GET_SLOT_ID(event->Control);
     dci = XHCI_TRB_GET_EP_ID(event->Control);
     pipe = hcdEventPipe(hc, slotId, dci);
+    if (pipe != NULL && pipe->Streams != NULL) {
+        endpoint = pipe;
+        /* An Event Data TRB's event carries that TRB's parameter, not a
+         * TRB address; the engine queues none on a stream ring. */
+        pipe = XHCI_EVENT_IS_EVENT_DATA(event->Control)
+                   ? NULL
+                   : hcdEventStream(pipe, event->Param0);
+        if (pipe == NULL && !XHCI_EVENT_IS_EVENT_DATA(event->Control) &&
+            event->Param0 == 0 && event->Param1 == 0 &&
+            XHCI_TRB_GET_COMPLETION(event->Status) == XHCI_CC_STALL) {
+            /* A STALL in a Prime Pipe transaction: no TD was running, so
+             * the event names no TRB (xHCI 4.12), yet the endpoint is
+             * Halted with every stream's requests on it. The endpoint's,
+             * not a stream's: the thread resets it and completes what is
+             * on it as stalled (hcd_cfg.c, hcdCfgCancelOne). A nonzero
+             * pointer no stream ring holds stays unclaimed below. */
+            endpoint->Halted = 1;
+            endpoint->DrainPending = 1;
+            hc->CancelWork = 1;
+            HcdThreadWake(hc);
+            return 0;
+        }
+    }
     if (pipe == NULL) {
         /* An event no queue owns is still the controller's to escalate
          * when its code is fatal (xhci_xfer.h, XhciXferEvent: "escalating
@@ -296,17 +340,51 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
     return hcdPipeResult(hc, pipe, &result);
 }
 
+/* One pipe's settle: a short packet's promised tail that never came. The
+ * ring refusing the settle's retire leaves the transfer queued on a Running
+ * endpoint, which owes Stop plus a drain (xhci_xfer.h, XhciXferDrainSettled;
+ * round 3 of the batch (c) review, round-2 finding 9). Controller lock
+ * held. */
+static VOID hcdSettlePipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG dci)
+{
+    XHCI_XFER_EVENT_RESULT result;
+    ULONG guard;
+
+    if (pipe == NULL || !XhciXferDeferralsArmed(pipe->Queue)) {
+        return;
+    }
+    for (guard = 0; guard < 8; guard++) {
+        if (XhciXferDrainSettled(pipe->Queue, pipe->Ring, &result) !=
+            XHCI_XFER_OK) {
+            break;
+        }
+        if (result.Action != XHCI_XFER_ACTION_COMPLETE) {
+            if (result.NeedsRecovery || result.RefusedRetire) {
+                hc->Ep0Recoveries++;
+                pipe->DrainPending = 1;
+                hc->CancelWork = 1;
+                HcdThreadWake(hc);
+            }
+            break;
+        }
+        if (dci == 1) {
+            (VOID)hcdEp0Result(hc, pipe->Device, &result);
+        } else {
+            (VOID)hcdPipeResult(hc, pipe, &result);
+        }
+    }
+}
+
 /* The drain saw the event ring empty: a short packet's promised tail that
- * never came settles now (XhciXferDrainSettled's gate), on every open
- * pipe. IRQL: DISPATCH_LEVEL, controller lock held. */
+ * never came settles now (XhciXferDrainSettled's gate), on every open pipe
+ * and every open stream. IRQL: DISPATCH_LEVEL, controller lock held. */
 VOID XhciSlotDrainSettled(PXHCI_EXTENSION ext)
 {
     PHCD_CONTROLLER hc;
     PHCD_PIPE pipe;
-    XHCI_XFER_EVENT_RESULT result;
     ULONG slot;
     ULONG dci;
-    ULONG guard;
+    ULONG id;
 
     hc = HcdControllerFromExt(ext);
     for (slot = 1; slot <= XHCI_MAX_SLOTS; slot++) {
@@ -315,34 +393,13 @@ VOID XhciSlotDrainSettled(PXHCI_EXTENSION ext)
         }
         for (dci = 1; dci < 32; dci++) {
             pipe = hcdEventPipe(hc, slot, dci);
-            if (pipe == NULL || !XhciXferDeferralsArmed(pipe->Queue)) {
+            if (pipe != NULL && pipe->Streams != NULL) {
+                for (id = 1; id <= pipe->Streams->Count; id++) {
+                    hcdSettlePipe(hc, pipe->Streams->Pipe[id], dci);
+                }
                 continue;
             }
-            for (guard = 0; guard < 8; guard++) {
-                if (XhciXferDrainSettled(pipe->Queue, pipe->Ring, &result) !=
-                    XHCI_XFER_OK) {
-                    break;
-                }
-                if (result.Action != XHCI_XFER_ACTION_COMPLETE) {
-                    if (result.NeedsRecovery || result.RefusedRetire) {
-                        /* The ring refused the settle's retire: the
-                         * transfer is still queued on a Running endpoint
-                         * and owes Stop plus a drain (xhci_xfer.h,
-                         * XhciXferDrainSettled; round 3 of the batch (c)
-                         * review, round-2 finding 9). */
-                        hc->Ep0Recoveries++;
-                        pipe->DrainPending = 1;
-                        hc->CancelWork = 1;
-                        HcdThreadWake(hc);
-                    }
-                    break;
-                }
-                if (dci == 1) {
-                    (VOID)hcdEp0Result(hc, pipe->Device, &result);
-                } else {
-                    (VOID)hcdPipeResult(hc, pipe, &result);
-                }
-            }
+            hcdSettlePipe(hc, pipe, dci);
         }
     }
 }

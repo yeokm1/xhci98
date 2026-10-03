@@ -2025,6 +2025,7 @@ static VOID hcdDeviceStop(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     ULONG control;
     ULONG code;
     ULONG dci;
+    ULONG sid;
 
     for (dci = 1; dci < 32; dci++) {
         if (hcdHalted(hc)) {
@@ -2036,6 +2037,13 @@ static VOID hcdDeviceStop(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         }
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
         queued = pipe->Queue->Count != 0;
+        /* A streams endpoint's TDs are on its streams' rings (31-A.1). */
+        for (sid = 1; pipe->Streams != NULL && sid <= pipe->Streams->Count;
+             sid++) {
+            if (pipe->Streams->Pipe[sid]->Queue->Count != 0) {
+                queued = 1;
+            }
+        }
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         if (!queued || hcdEpState(hc, dev, dci) != XHCI_EP_STATE_RUNNING) {
             continue;
