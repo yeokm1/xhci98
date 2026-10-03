@@ -33,7 +33,14 @@ OS file, each rule named as check-inf.ps1 names its families.
   UAS-*    The models bind USB\Class_08&SubClass_06&Prot_62 and nothing else:
            a Bulk-Only id (Prot_50) here would put this driver on a device the
            bus chose Bulk-Only for (task 31-A.3). No file of Microsoft's is
-           named anywhere.
+           copied or listed anywhere. UAS-FILTER: the Windows 98 install's
+           [<install>.HW] writes HKR,,upperfilters,0,"USBNTMAP.SYS" and
+           nothing else - NUSB's USBSTOR.INF value, without which NUSB's
+           port driver fails every unit (Code 10) - naming the file, never
+           copying it; no .NTx86.HW or .NTamd64.HW section exists, so the NT
+           path is unchanged. UAS-TMPNAME (x86): xhciuas.sys is copied with
+           no temporary-file name, which on Windows 98 routes the copy
+           through WININIT.INI and a restart even at a first install.
   PKG-*    With -PackageDir: every [SourceDisksFiles] entry is in the staged
            package.
 
@@ -183,6 +190,10 @@ function Test-UasInfText {
             foreach ($l in $cs.Lines) {
                 $file = ($l.Raw -split ',')[0].Trim()
                 if ($file -notmatch '^[A-Za-z0-9_\-]{1,8}(\.[A-Za-z0-9_]{1,3})?$') { & $add "W98-83" "[$name] copies '$file', not an 8.3 name." }
+                $tmpField = @($l.Raw -split ',')
+                if ($Profile -eq "x86" -and $file -ieq $binary -and $tmpField.Count -ge 3 -and $tmpField[2].Trim() -ne "") {
+                    & $add "UAS-TMPNAME" "[$name] gives $binary the temporary name '$($tmpField[2].Trim())': Windows 98 then copies through WININIT.INI and asks for a restart at a first install, when the driver is not loaded."
+                }
                 $copied[$file.ToLowerInvariant()] = $destOf[$name.ToLowerInvariant()]
                 $file.ToLowerInvariant()
             }
@@ -245,7 +256,32 @@ function Test-UasInfText {
             if (-not $haveMp) { & $add "PATH-9X" "[$inst] writes no HKR,,NTMPDriver,,$binary." }
             $own = @(& $checkCopy ((& $directive $s9 "CopyFiles") -join ',') "[$inst]")
             if ($own -notcontains $binary) { & $add "PATH-9X" "[$inst] does not copy $binary." }
+            # The unit's port driver on Windows 98 (usbntmap.inf's
+            # USBMPHLP.PDR -> USBNTMAP.SYS) serves only a unit USBNTMAP.SYS
+            # has filtered, and it filters the units of a parent it sits on
+            # as an upper filter: NUSB's own USBSTOR.INF value, exactly.
+            $shw = & $get "$inst.HW"
+            if ($null -eq $shw) { & $add "UAS-FILTER" "no [$inst.HW]: Windows 98 needs HKR,,upperfilters,0,`"USBNTMAP.SYS`" on the device's hardware key, or every unit is Code 10." }
+            else {
+                $haveFilter = $false
+                foreach ($r in ((& $directive $shw "AddReg") -join ',' -split ',')) {
+                    if ($r.Trim() -eq "") { continue }
+                    $rs = & $get $r.Trim()
+                    if ($null -eq $rs) { & $add "BOTH-XREF" "[$inst.HW] AddReg names [$($r.Trim())], which does not exist."; continue }
+                    foreach ($l in $rs.Lines) {
+                        $f = @($l.Raw -split ',' | ForEach-Object { $_.Trim() })
+                        if ($f.Count -eq 5 -and $f[0] -ieq "HKR" -and $f[1] -eq "" -and $f[2] -ieq "upperfilters" -and $f[3] -eq "0" -and $f[4] -ieq '"USBNTMAP.SYS"') { $haveFilter = $true }
+                        else { & $add "UAS-FILTER" "[$($rs.Name)] writes '$($l.Raw)'; the hardware key carries the USBNTMAP.SYS upper filter and nothing else." }
+                    }
+                }
+                foreach ($d in @($shw.Lines | Where-Object { $_.Key -ine "AddReg" })) { & $add "UAS-FILTER" "[$inst.HW] carries '$($d.Raw)'; it names the filter only (the file is Microsoft's, placed by NUSB)." }
+                if (-not $haveFilter) { & $add "UAS-FILTER" "[$inst.HW] writes no HKR,,upperfilters,0,`"USBNTMAP.SYS`"." }
+            }
         }
+        if ($Profile -eq "amd64" -and $null -ne (& $get "$inst.HW")) { & $add "PATH-NO9X" "an undecorated [$inst.HW] is one a 32-bit engine would read." }
+        # The NT path is unchanged: disk.sys takes the units with no filter,
+        # and a filter named there with no service would fail the stack.
+        if ($null -ne (& $get "$inst$ntSuffix.HW")) { & $add "UAS-FILTER" "[$inst$ntSuffix.HW]: the NT targets take no filter." }
         # NT.
         $snt = & $get "$inst$ntSuffix"
         if ($null -eq $snt) { & $add "PATH-NT" "no [$inst$ntSuffix] for the NT targets." }
@@ -335,10 +371,19 @@ if ($SelfTest) {
                 @{ Rule = "BOTH-VERSION";  Text = ($text -replace 'DriverVer=\d\d/\d\d/\d{4},[0-9.]+', 'DriverVer=01/01/2020,9.9.9.9') },
                 @{ Rule = "W98-DIRID12";   Text = $text.Replace("Uas.CopyFiles=10,System32\Drivers", "Uas.CopyFiles=12") },
                 @{ Rule = "W98-SECTLEN";   Text = $text.Replace("[Uas.AddService]", "[Uas.AddService.Very.Long.Section]").Replace("Uas.AddService`r`n", "Uas.AddService.Very.Long.Section`r`n").Replace(",Uas.AddService", ",Uas.AddService.Very.Long.Section") },
-                @{ Rule = "UAS-MSFILE";    Text = $text.Replace("xhciuas.sys,,xhciuas.tmp", "xhciuas.sys,,xhciuas.tmp`r`nusbd.sys,,,16") },
+                @{ Rule = "UAS-MSFILE";    Text = $text.Replace("[Uas.CopyFiles]`r`nxhciuas.sys", "[Uas.CopyFiles]`r`nxhciuas.sys`r`nusbd.sys,,,16") },
                 @{ Rule = "PATH-MFGDEC";   Text = $text.Replace("%Mfg%=UasModels", "%Mfg%=UasModels,NTx86.6.0") },
                 @{ Rule = "BOTH-STRINGS";  Text = $text.Replace('UasDesc="', 'UasDescription="') },
-                @{ Rule = "UAS-LAYOUT";    Text = $text.Replace("Provider=%Provider%", "Provider=%Provider%`r`nLayoutFile=layout.inf") }
+                @{ Rule = "UAS-LAYOUT";    Text = $text.Replace("Provider=%Provider%", "Provider=%Provider%`r`nLayoutFile=layout.inf") },
+                @{ Rule = "UAS-FILTER";    Text = $text.Replace("[Uas.Dev.HW]", "[Uas.Dev.Hw2]") },
+                @{ Rule = "UAS-FILTER";    Text = $text.Replace("[Uas.Dev.HW]`r`nAddReg=Uas.HW.AddReg", "[Uas.Dev.HW]") },
+                @{ Rule = "UAS-FILTER";    Text = $text.Replace('upperfilters,0,"USBNTMAP.SYS"', 'lowerfilters,0,"USBNTMAP.SYS"') },
+                @{ Rule = "UAS-FILTER";    Text = $text.Replace('upperfilters,0,"USBNTMAP.SYS"', 'upperfilters,0,"USBSTOR.SYS"') },
+                @{ Rule = "UAS-FILTER";    Text = $text.Replace('upperfilters,0,"USBNTMAP.SYS"', 'upperfilters,0x00010000,"USBNTMAP.SYS"') },
+                @{ Rule = "UAS-FILTER";    Text = $text.Replace("[Uas.Dev.HW]`r`nAddReg=Uas.HW.AddReg", "[Uas.Dev.HW]`r`nAddReg=Uas.HW.AddReg`r`nCopyFiles=Uas.CopyFiles") },
+                @{ Rule = "UAS-FILTER";    Text = $text.Replace("[Uas.Dev.NTx86.Services]", "[Uas.Dev.NTx86.HW]`r`nAddReg=Uas.HW.AddReg`r`n`r`n[Uas.Dev.NTx86.Services]") },
+                @{ Rule = "UAS-MSFILE";    Text = $text.Replace("[Uas.CopyFiles]`r`nxhciuas.sys", "[Uas.CopyFiles]`r`nxhciuas.sys`r`nusbntmap.sys") },
+                @{ Rule = "UAS-TMPNAME";   Text = $text.Replace("[Uas.CopyFiles]`r`nxhciuas.sys", "[Uas.CopyFiles]`r`nxhciuas.sys,,xhciuas.tmp") }
             )
         } else {
             $cases = @(
@@ -349,7 +394,9 @@ if ($SelfTest) {
                 @{ Rule = "PATH-NO9X";     Text = $text.Replace("[UasModels.NTamd64]", "[UasModels]`r`n%UasDesc%=Uas.Dev,USB\Class_08&SubClass_06&Prot_62`r`n`r`n[UasModels.NTamd64]") },
                 @{ Rule = "PATH-NO9X";     Text = $text.Replace("[Uas.Dev.NTamd64]", "[Uas.Dev]`r`nCopyFiles=Uas.CopyFiles`r`n`r`n[Uas.Dev.NTamd64]") },
                 @{ Rule = "BOTH-VERSION";  Text = ($text -replace 'DriverVer=\d\d/\d\d/\d{4},[0-9.]+', 'DriverVer=01/01/2020,9.9.9.9') },
-                @{ Rule = "UAS-MSFILE";    Text = $text.Replace("xhciuas.sys,,xhciuas.tmp", "xhciuas.sys,,xhciuas.tmp`r`nusbd.sys,,,16") }
+                @{ Rule = "UAS-MSFILE";    Text = $text.Replace("xhciuas.sys,,xhciuas.tmp", "xhciuas.sys,,xhciuas.tmp`r`nusbd.sys,,,16") },
+                @{ Rule = "UAS-FILTER";    Text = $text.Replace("[Uas.Dev.NTamd64.Services]", "[Uas.Dev.NTamd64.HW]`r`nAddReg=Uas.HW.AddReg`r`n`r`n[Uas.HW.AddReg]`r`nHKR,,upperfilters,0,`"USBNTMAP.SYS`"`r`n`r`n[Uas.Dev.NTamd64.Services]") },
+                @{ Rule = "PATH-NO9X";     Text = $text.Replace("[Uas.Dev.NTamd64.Services]", "[Uas.Dev.HW]`r`nAddReg=Uas.HW.AddReg`r`n`r`n[Uas.HW.AddReg]`r`nHKR,,upperfilters,0,`"USBNTMAP.SYS`"`r`n`r`n[Uas.Dev.NTamd64.Services]") }
             )
         }
         foreach ($c in $cases) {
