@@ -3074,6 +3074,7 @@ static ULONG hcdCfgStreamsOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG hcEntries;
     ULONG exponent;
     ULONG answer;
+    ULONG cleared;
     ULONG code;
     ULONG id;
 
@@ -3137,8 +3138,8 @@ static ULONG hcdCfgStreamsOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     }
     /* The device's half first, on the paused and settled endpoint: a
      * refusal fails the open with the host's context untouched. */
-    if (hcdCfgStreamsSequence(hc, dev, pipe, hcdCfgStreamsUsed(hc, pipe)) !=
-        HCD_CTL_DONE) {
+    cleared = hcdCfgStreamsUsed(hc, pipe);
+    if (hcdCfgStreamsSequence(hc, dev, pipe, cleared) != HCD_CTL_DONE) {
         hcdCfgStreamsFree(hc, st);
         if (!dev->Ep0Stuck) {
             HcdIoPipeResume(hc, pipe);
@@ -3176,6 +3177,22 @@ static ULONG hcdCfgStreamsOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         if (hc->Hc.ControllerFailed) {
             return XHCI98_STREAMS_FAILED;
         }
+        /* The device's sequence was restarted by the clear above, and the
+         * old context kept the host's: the two must match before anything
+         * runs again. Reset Endpoint is legal only on a Halted endpoint
+         * (xHCI 4.6.8) and this one is Stopped, so the host's is restarted
+         * the one other way, a fresh context for the endpoint as it was,
+         * without streams (hcdCfgRecycleCode; 4.6.6). If that is refused
+         * too the endpoint stays paused and the controller is reset - it
+         * never resumes with the two ends apart (Codex review of the Phase
+         * 28-31 integration, round 7, finding 1). SeqUsed stays 0: both
+         * ends are fresh. */
+        if (cleared && hcdCfgRecycleCode(hc, dev, pipe) != XHCI_CC_SUCCESS) {
+            XHCI_DBG_VALUE("hcd: streams open failed, host sequence not "
+                           "restarted, endpoint", pipe->EndpointAddress);
+            HcdSvcRequestReset(&hc->Hc);
+            return XHCI98_STREAMS_FAILED;
+        }
         HcdIoPipeResume(hc, pipe);
         return code == XHCI_CC_RESOURCE_ERROR ? XHCI98_STREAMS_NO_RESOURCES
                                               : XHCI98_STREAMS_FAILED;
@@ -3196,17 +3213,18 @@ static ULONG hcdCfgStreamsOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 }
 
 /*
- * CLOSE_STREAMS, and ABORT_PIPE on the endpoint's own handle: every
- * stream's requests aborted (hcdCfgAbortPaused over the endpoint, which
- * reaches every stream and leaves the endpoint Stopped), the streams
- * detached and closed - their handles stop resolving and anything submitted
- * meanwhile, held by the pause, completes as cancelled - the endpoint given
- * a fresh context on its own ring again (hcdCfgRecycleCode with no streams),
- * the device's sequence restarted before it (hcdCfgStreamsSequence; a
- * refusal fails the close with the streams open), the streams freed and the
- * endpoint resumed. A refused Configure Endpoint leaves the array the controller's:
- * the streams stay attached, closed, for the reset the failure asked for to
- * free with the device. Thread only, powered.
+ * CLOSE_STREAMS: every stream's requests aborted (hcdCfgAbortPaused over
+ * the endpoint, which reaches every stream and leaves the endpoint
+ * Stopped), the device's sequence restarted (hcdCfgStreamsSequence; a
+ * refusal fails the close with the streams open), the streams detached and
+ * closed - their handles stop resolving and anything submitted meanwhile,
+ * held by the pause, completes as cancelled - the endpoint given a fresh
+ * context on its own ring again (hcdCfgRecycleCode with no streams), the
+ * streams freed and the endpoint resumed. A refused Configure Endpoint
+ * leaves the array the controller's: the streams stay attached, closed, for
+ * the reset the failure asked for to free with the device. ABORT_PIPE on
+ * the endpoint's own handle does not come here: it closes nothing. Thread
+ * only, powered.
  */
 static ULONG hcdCfgStreamsClose(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                 PHCD_PIPE pipe)
@@ -3515,15 +3533,14 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
             XhciControllerLockRelease(&hc->Hc, oldIrql);
             if (pipe == NULL) {
                 usbd = HCD_USBD_INVALID_PIPE;
-            } else if (urb->UrbHeader.Function == HCD_URB_ABORT_PIPE &&
-                       pipe->Streams != NULL) {
-                /* The endpoint's own handle closes its streams
-                 * (xhci98_streams.h). */
-                usbd = hcdCfgStreamsClose(hc, dev, pipe) ==
-                               XHCI98_STREAMS_SUCCESS
-                           ? XHCI_USBD_STATUS_SUCCESS
-                           : HCD_USBD_INTERNAL_HC_ERROR;
             } else if (urb->UrbHeader.Function == HCD_URB_ABORT_PIPE) {
+                /* On a streams endpoint's own handle the abort reaches
+                 * every stream and closes nothing: the streams, their
+                 * handles and the endpoint's context stay, with no
+                 * Configure Endpoint and no CLEAR_FEATURE; only
+                 * CLOSE_STREAMS, a select and removal close them
+                 * (xhci98_streams.h; Codex review of the Phase 28-31
+                 * integration, round 7, finding 2). */
                 usbd = hcdCfgAbort(hc, dev, pipe, HCD_USBD_CANCELED);
             } else {
                 usbd = hcdCfgReset(

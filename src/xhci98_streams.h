@@ -41,16 +41,25 @@
  *                                   cancelled; the other streams run on and
  *                                   every handle stays valid;
  *   ABORT_PIPE on the endpoint's    every stream's requests complete as
- *     own handle                    cancelled and the streams are CLOSED:
- *                                   the stream handles go invalid and the
- *                                   endpoint is an ordinary bulk pipe again
- *                                   (open them again to continue);
+ *     own handle                    cancelled; the streams stay OPEN and
+ *                                   every handle stays valid (no Configure
+ *                                   Endpoint, no CLEAR_FEATURE) - only
+ *                                   CLOSE_STREAMS, a select and removal
+ *                                   close them;
  *   RESET_PIPE on either            the whole endpoint: every stream's
  *                                   requests cancelled, the endpoint reset
  *                                   on both sides (CLEAR_FEATURE(
  *                                   ENDPOINT_HALT) to the device), the
  *                                   streams left open, every handle valid;
- *   CLOSE_STREAMS                   as ABORT_PIPE on the endpoint's handle;
+ *   CLOSE_STREAMS                   every stream's requests complete as
+ *                                   cancelled and the streams are CLOSED:
+ *                                   the stream handles go invalid and the
+ *                                   endpoint is an ordinary bulk pipe again
+ *                                   (open them again to continue); on an
+ *                                   endpoint that carried data the device
+ *                                   is sent CLEAR_FEATURE(ENDPOINT_HALT)
+ *                                   first, and if it refuses, the close
+ *                                   fails with the streams still open;
  *   IOCTL_INTERNAL_USB_RESET_PORT   the device restored with its streams
  *                                   open, every handle valid, what was in
  *                                   flight cancelled;
