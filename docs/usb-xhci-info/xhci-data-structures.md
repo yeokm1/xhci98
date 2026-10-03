@@ -364,7 +364,7 @@ Each doorbell is one 32-bit register: `DB Target 7:0`, RsvdZ `15:8`, `DB Stream 
 | Register | Write value | Meaning |
 |---|---|---|
 | DB[0] | 0 | Host controller doorbell: run the command ring |
-| DB[SlotID] | DCI (1..31) | Ring endpoint DCI of that slot; stream bits stay 0 (no streams) |
+| DB[SlotID] | DCI (1..31) | Ring endpoint DCI of that slot; stream bits 0 on an endpoint without streams. On an endpoint with streams open, `DCI + (StreamID << 16)`, one doorbell per stream: see "Streams" in section 8 |
 
 Doorbell writes may be posted; a read of any xHCI register flushes them
 (rarely needed, only when ordering a doorbell against something else).
@@ -751,7 +751,7 @@ applicable, DW2 = 0, DW3 carries C, Type, and:
 | Reset Device | 17 | Slot ID `31:24` | 0 |
 | Reset Endpoint | 14 | TSP `9`, Endpoint ID (DCI) `20:16`, Slot ID `31:24` | 0 |
 | Stop Endpoint | 15 | Endpoint ID (DCI) `20:16`, SP `23` (suspend), Slot ID `31:24` | 0 |
-| Set TR Dequeue Ptr | 16 | Endpoint ID (DCI) `20:16`, Slot ID `31:24`; DW2: Stream ID `31:16` = 0 | New dequeue ptr, with SCT `3:1` = 0 and DCS `0` = the ring's current dequeue cycle - see below |
+| Set TR Dequeue Ptr | 16 | Endpoint ID (DCI) `20:16`, Slot ID `31:24`; DW2: Stream ID `31:16` = 0 on an endpoint without streams | New dequeue ptr, with SCT `3:1` = 0 and DCS `0` = the ring's current dequeue cycle - see below. On an endpoint with streams open, Stream ID names the stream and SCT is 1 (Primary TR): see "Streams" in section 8 |
 
 #### DCS is not a constant
 
@@ -1238,8 +1238,8 @@ ignore the rest.
 |---|---|---|---|
 | 0 | 2:0 | EP State | OUTPUT: 0 Disabled, 1 Running, 2 Halted, 3 Stopped, 4 Error. Input: write 0 |
 | 0 | 9:8 | Mult | 0 for all USB2 endpoints |
-| 0 | 14:10 | MaxPStreams | 0 (no streams) |
-| 0 | 15 | LSA | 0 |
+| 0 | 14:10 | MaxPStreams | 0 (no streams); with streams open, 1..15 and the array is 2^(MaxPStreams+1) entries - see "Streams" below |
+| 0 | 15 | LSA | 0; 1 with streams open (Linear Stream Array: primary streams only) |
 | 0 | 23:16 | Interval | Period = 2^Interval * 125 us. See conversion table below |
 | 1 | 2:1 | CErr | Error count; use 3 for control/bulk/interrupt, must be 0 for isoch |
 | 1 | 5:3 | EP Type | 0 invalid, 1 Isoch OUT, 2 Bulk OUT, 3 Interrupt OUT, 4 Control, 5 Isoch IN, 6 Bulk IN, 7 Interrupt IN |
@@ -1440,6 +1440,49 @@ Full-Speed device with `bMaxPacketSize0` != 8 fail to enumerate at all. Linux
 assumes 64 for a Full-Speed control endpoint for the same reason and corrects
 afterwards. See `docs/contributing/runs/run-13e.md`, "Session record - bench
 session 1".
+
+### Streams (spec 4.12, 5.3.6, 5.6, 6.2.3, 6.2.4, 6.4.2.1, 6.4.3.9) - task 31-0's static notes
+
+Written for roadmap task 31-A.1, primary streams in the bus (`src/xhci_stream.h`,
+`src/hcd_cfg.c`; the private request a class driver opens them with is
+`src/xhci98_streams.h`). **Unlike the rest of this file, the rows below were
+not transcribed from the local PDF, which was not at hand when they were
+written**; they are the reading Linux's `xhci-mem.c` and `xhci.c` (interface
+documentation, `external/README.md`) agree with, and every row marked "to
+verify" is the first thing a reader with the PDF checks. Nothing here has been
+observed on a controller: QEMU's model streams, but this tree enumerates no
+SuperSpeed device until Phase 29's work lands, so the path has run nowhere.
+
+Only primary streams with a Linear Stream Array are used: no Secondary Stream
+Arrays (HCCPARAMS1.NSS is not consulted), a Stream ID is an index into the one
+Primary Stream Context Array, and stream rings are one segment each.
+
+| Item | Rule | Spec | Status |
+|---|---|---|---|
+| Controller support | HCCPARAMS1 MaxPSASize `15:12`: the largest Primary Stream Context Array is 2^(MaxPSASize+1) entries; "a value of '0' indicates that Streams are not supported" | 5.3.6 | to verify (wording); the field position is section 2's row |
+| Device support | SuperSpeed Endpoint Companion (`bDescriptorType` 0x30, 6 bytes) immediately after the bulk endpoint descriptor; `bmAttributes 4:0` MaxStreams, 0 none, 1..16 meaning 2^MaxStreams streams, above 16 reserved | USB 3.2 9.6.7, Table 9-27 | to verify against the USB 3.2 text |
+| Stream ID 0 | Reserved: its Stream Context is all zero and no doorbell names it, so an array serving N streams has at least N + 1 entries | 4.12.2 | to verify (section number) |
+| Endpoint Context, streams | MaxPStreams `DW0 14:10` > 0 and LSA `DW0 15` = 1: the TR Dequeue Pointer (`DW2/3`) is the Primary Stream Context Array's address, DCS 0; with LSA = 1 MaxPStreams is 1..15 and the array 2^(MaxPStreams+1) entries; MaxPStreams must not exceed MaxPSASize | 6.2.3, Table 6-8, Table 6-10 | to verify: that DCS is 0 rather than ignored |
+| Array alignment | 16-byte aligned; this driver also keeps the whole array (at most 32 x 16 = 512 bytes) inside one page | Table 6-1 | to verify: Table 6-1's boundary column for the Stream Context Array (the row is absent from section 1 above) |
+| Stream Context (16 bytes) | `DW0` bit 0 DCS, bits `3:1` SCT, bits `31:4` TR Dequeue Pointer low; `DW1` pointer high (0 here); `DW2 23:0` Stopped EDTLA (written 0); `DW3` reserved | 6.2.4.1 | to verify (Stopped EDTLA width) |
+| SCT values | 0 Secondary Transfer Ring, 1 Primary Transfer Ring, 2..7 a Secondary Stream Array of 8..256 entries; with LSA = 1 every used entry is 1 | Table 6-13 | to verify |
+| Normal TRB | Carries no Stream ID: the stream is the ring the TD is placed on | 6.4.1.1 | as transcribed in "Transfer TRBs" |
+| Doorbell | `DB Stream ID 31:16` names the stream whose ring has work; a stream endpoint is rung once per stream that has a TD to run, and a stopped stream endpoint restarts only for the streams rung | 5.6, 4.12 | to verify: whether the xHC re-arms every stream with a non-empty ring itself after a Stop Endpoint (this driver assumes it does not, and rings each) |
+| Transfer Event | Carries no Stream ID: the TRB Pointer (`DW0/1`) names the TRB, so the stream is the ring holding that address (`XhciStreamFind`). An event with ED = 1 carries an Event Data value instead and names no ring | 6.4.2.1 | the event layout is the "Event TRBs" table above |
+| Set TR Dequeue Pointer | `DW0` new pointer with SCT `3:1` and DCS `0`; `DW2 31:16` Stream ID - 0 on an endpoint without streams, the stream otherwise; legal only with the endpoint Stopped (or Error); one command per stream | 6.4.3.9, 4.6.10 | to verify: that SCT is required (Linux writes 1 for a primary ring) |
+| Reset Endpoint, Stop Endpoint | The endpoint's, not a stream's: every stream stops together. After a Reset Endpoint this driver sets every stream's dequeue, since the halted stream is not recorded per event | 4.6.8, 4.6.9 | to verify: whether the xHC preserves the other streams' contexts across Reset Endpoint |
+| Installing and removing streams | One Configure Endpoint that drops and adds the DCI (4.6.6 forbids an Add on an endpoint that is not Disabled without its Drop), the Endpoint Context carrying the array; removing them is the same command with MaxPStreams 0 and the endpoint's own ring | 4.6.6 | as transcribed in "Which command may set which Slot Context field" for the flags; Linux does the same (`xhci_alloc_streams`, `xhci_free_streams`) |
+| Completion codes | 10 Invalid Stream Type, 34 Invalid Stream ID (Table 6-90 above): a doorbell or context naming a stream the array does not hold | 6.4.5 | as transcribed |
+
+What the driver chooses inside those rules, and which are policy rather than
+specification (tested as policy by `test\test_stream.c`): at most 32 array
+entries (31 streams) per endpoint; never fewer than 4 entries; the grant is
+the smallest of the request, 2^MaxStreams and the array size less one; one
+page-aligned common buffer per stream endpoint holding the array at offset 0
+and one 64-TRB ring per stream at a multiple of its own size, so no ring
+crosses a page or a 64 KB boundary; and a fresh Configure Endpoint (with a
+CLEAR_FEATURE(ENDPOINT_HALT) to the device, as RESET_PIPE does) whenever streams
+are installed or removed.
 
 ### Event Ring Segment Table entry (spec 6.5)
 

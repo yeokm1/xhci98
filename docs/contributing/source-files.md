@@ -22,7 +22,12 @@
 > machine, host suite `test_enum`). Batch (c) (26-A.5, 26-A.6) adds `hcd_urb.c`
 > (the device PDOs' internal device controls) and the pure `xhci_pipe.c`
 > (configuration walk, endpoint parameters, Configure Endpoint plans, setup
-> packets, buffer splits and the USBD status table; host suite `test_pipe`). The tables below are the
+> packets, buffer splits and the USBD status table; host suite `test_pipe`).
+> Task 31-A.1 adds the pure `xhci_stream.c` / `xhci_stream.h` (bulk streams'
+> plan, block layout, Stream Context and command encoders, the event's stream;
+> host suite `test_stream`) and `xhci98_streams.h`, the private open-streams
+> interface a separate class driver includes; the streams themselves are served
+> in `hcd_cfg.c` and reach every stream's pipe through `hcd_io.c`. The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name

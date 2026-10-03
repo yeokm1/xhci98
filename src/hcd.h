@@ -27,6 +27,7 @@
 #include "xhci_pipe.h"
 #include "xhci_func.h"
 #include "xhci_hub.h"
+#include "xhci_stream.h"
 #include "xhci_counters.h"
 
 #define HCD_KIND_CONTROLLER_FDO 0x43464448UL /* 'HDFC' */
@@ -122,6 +123,10 @@ typedef struct _HCD_IO_REQUEST {
 /* Windows 2000 DDK incSbdi.h:312: a success-class value there. */
 #define HCD_USBD_CANCELED           ((LONG)0x00010000L)
 #define HCD_PIPE_XFERS      4UL
+/* A stream's pipe (31-A.1) carries fewer: one request per stream at a time
+ * is UAS's whole use of one (a tag per stream), and one more lets the next
+ * be mapped while the first is on the ring. */
+#define HCD_STREAM_XFERS    2UL
 /* Data elements per chunk (xhci_pipe.h XHCI_PIPE_CHUNK_ELEMENTS), and the
  * one slot the SG list's own declaration already holds beyond them. */
 #define HCD_SG_ELEMENTS     32UL
@@ -208,8 +213,46 @@ typedef struct _HCD_PIPE {
                                      * packet's; controller lock          */
     ULONG RingWait;                 /* a record waits for ring room;
                                      * controller lock                    */
-    HCD_XFER Xfers[HCD_PIPE_XFERS];
+    /* Streams (31-A.1; xhci98_streams.h). An endpoint with streams open
+     * has Streams, and takes no transfer itself; each stream is a pipe of
+     * its own with Parent the endpoint's and StreamId 1..31, on a ring in
+     * the endpoint's stream block. Streams and its Live under the
+     * controller lock. */
+    ULONG StreamId;                 /* 0: not a stream                    */
+    struct _HCD_PIPE *Parent;       /* a stream's endpoint pipe           */
+    struct _HCD_STREAMS *Streams;   /* the endpoint's open streams        */
+    ULONG XferCount;                /* records in Xfers: a stream's pipe is
+                                     * allocated short (HCD_STREAM_XFERS) */
+    HCD_XFER Xfers[HCD_PIPE_XFERS]; /* last: see XferCount                */
 } HCD_PIPE, *PHCD_PIPE;
+
+/* The bytes of a stream's pipe: the records past HCD_STREAM_XFERS are not
+ * allocated, and nothing reads past XferCount. */
+#define HCD_STREAM_PIPE_BYTES                                                \
+    ((ULONG)(FIELD_OFFSET(HCD_PIPE, Xfers) +                                 \
+             HCD_STREAM_XFERS * sizeof(HCD_XFER)))
+
+/*
+ * An endpoint's open streams (hcd_cfg.c, 31-A.1): the plan, the one common
+ * buffer holding the Primary Stream Context Array and every stream's ring
+ * (xhci_stream.h, XhciStreamLayout), and the pipes. Ring and Pipe are
+ * indexed by Stream ID, [0] unused. Live is set once the Configure Endpoint
+ * that installs the array has succeeded: only then does a stream's handle
+ * resolve. Allocated and freed by the thread; read by the event DPC and the
+ * dispatch under the controller lock.
+ */
+typedef struct _HCD_STREAMS {
+    ULONG Count;                    /* granted: Stream IDs 1..Count       */
+    ULONG Entries;
+    ULONG MaxPStreams;
+    ULONG Live;
+    PVOID Va;
+    PHYSICAL_ADDRESS Pa;
+    XHCI_STREAM_LAYOUT Layout;
+    PXHCI_RING Ring[XHCI_STREAM_MAX_ENTRIES];
+    struct _HCD_PIPE *Pipe[XHCI_STREAM_MAX_ENTRIES];
+    struct _HCD_STREAMS *Next;      /* the device's StreamsRetired list    */
+} HCD_STREAMS, *PHCD_STREAMS;
 
 /* A device the bus has addressed (hcd_enum.c; design record 13 section
  * 5.2's "device object (the bus's)"). Pool, per device, at enumeration
@@ -307,6 +350,11 @@ typedef struct _HCD_USB_DEVICE {
                                      * is retried, but not forever; reset
                                      * when its debt is settled or taken
                                      * over (hcd_cfg.c); thread           */
+    struct _HCD_STREAMS *StreamsRetired; /* stream blocks of pipes closed
+                                     * while their endpoint was still
+                                     * enabled: the controller may hold
+                                     * the array until the slot goes
+                                     * (hcd_cfg.c, 31-A.1); thread        */
 } HCD_USB_DEVICE, *PHCD_USB_DEVICE;
 
 /* A device PDO (hcd_pdo.c): one per enumerated device, a child of the root
@@ -832,6 +880,7 @@ LONG HcdUrbIoRequest(PVOID urb, PHCD_IO_REQUEST req);
 /* hcd_io.c */
 VOID HcdIoPipeInitEp0(PHCD_USB_DEVICE dev);
 VOID HcdIoPipeInit(PHCD_PIPE pipe, PHCD_USB_DEVICE dev);
+VOID HcdIoPipeInitCount(PHCD_PIPE pipe, PHCD_USB_DEVICE dev, ULONG records);
 NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                      struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb,
                      const HCD_IO_REQUEST *req);
@@ -863,6 +912,9 @@ VOID HcdDmaMapQueue(PHCD_CONTROLLER hc, PHCD_XFER x);
 VOID HcdDmaMapKick(PHCD_CONTROLLER hc);
 VOID HcdDmaUnmap(PHCD_CONTROLLER hc, PHCD_XFER x);
 VOID HcdDmaMapDrain(PHCD_CONTROLLER hc);
+PVOID HcdDmaStreamAlloc(PHCD_CONTROLLER hc, ULONG bytes, PPHYSICAL_ADDRESS pa);
+VOID HcdDmaStreamFree(PHCD_CONTROLLER hc, ULONG bytes, PHYSICAL_ADDRESS pa,
+                      PVOID va);
 
 /* hcd_svc.c (the services themselves are in hcd_svc.h) */
 VOID HcdRelativeMs(PLARGE_INTEGER due, ULONG milliseconds);

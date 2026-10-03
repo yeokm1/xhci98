@@ -8,7 +8,9 @@
  * first occurrence traced; transfers go to hcd_io.c and the URBs that need
  * commands to the thread (hcd_cfg.c). GET_PORT_STATUS, GET_BUS_INFO,
  * GET_HUB_COUNT and CYCLE_PORT are answered here; RESET_PORT is pended for
- * the thread. Any other control code is refused as STATUS_NOT_SUPPORTED and
+ * the thread, and so are this project's private streams requests
+ * (xhci98_streams.h, 31-A.1). Any other control code is refused as
+ * STATUS_NOT_SUPPORTED and
  * traced once (design record 13 section 6.3 lists what each target's class
  * drivers send).
  *
@@ -25,6 +27,7 @@
 #include "xhci_hw.h"
 #include "xhci_dbg.h"
 #include "xhci_pipe.h"
+#include "xhci98_streams.h"
 
 /* Absent from the Windows 2000 DDK's usbdi.h; values as WDK 7.1's
  * inc\api\usb.h defines them (lines 459 and 439). */
@@ -599,6 +602,40 @@ static NTSTATUS hcdResetPortIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     return HcdCfgQueue(hc, dev, pdo, irp);
 }
 
+/*
+ * IOCTL_XHCI98_OPEN_STREAMS and IOCTL_XHCI98_CLOSE_STREAMS (xhci98_streams.h,
+ * 31-A.1): the request's header checked, its outputs set to "failed" so a
+ * request that never reaches the thread - its device gone - says so, and the
+ * IRP pended for the thread with a device reference (hcd_cfg.c,
+ * hcdCfgStreamsRequest). Status is written only into a request whose Size
+ * covers the whole structure.
+ */
+static NTSTATUS hcdStreamsIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                                PIRP irp, PXHCI98_STREAMS_REQUEST rq)
+{
+    PHCD_USB_DEVICE dev;
+    ULONG i;
+
+    if (rq == NULL || rq->Size < sizeof(XHCI98_STREAMS_REQUEST)) {
+        return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
+    }
+    rq->StreamsGranted = 0;
+    for (i = 0; i <= XHCI98_STREAMS_MAX; i++) {
+        rq->StreamPipeHandle[i] = NULL;
+    }
+    if (rq->Signature != XHCI98_STREAMS_SIGNATURE ||
+        rq->Version != XHCI98_STREAMS_VERSION) {
+        rq->Status = XHCI98_STREAMS_INVALID_REQUEST;
+        return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
+    }
+    rq->Status = XHCI98_STREAMS_FAILED;
+    dev = (hc != NULL) ? hcdDeviceRef(hc, pdo) : NULL;
+    if (dev == NULL) {
+        return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+    }
+    return HcdCfgQueue(hc, dev, pdo, irp);
+}
+
 /* The slot an internal IOCTL is traced under once: its function number, the
  * internal range (USB_IOCTL_INTERNAL_INDEX, 0) at 0..0x1F and the
  * USB_IOCTL_INDEX range (0xFF) above it, everything else in the last. */
@@ -680,6 +717,13 @@ NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp)
 
     case IOCTL_INTERNAL_USB_GET_HUB_COUNT:
         status = hcdHubCount(irp, (PULONG)stack->Parameters.Others.Argument1);
+        break;
+
+    case IOCTL_XHCI98_OPEN_STREAMS:
+    case IOCTL_XHCI98_CLOSE_STREAMS:
+        status = hcdStreamsIoctl(pdo, hc, irp,
+                                 (PXHCI98_STREAMS_REQUEST)
+                                     stack->Parameters.Others.Argument1);
         break;
 
     default:
