@@ -159,6 +159,57 @@ static VOID NTAPI hcdTimerDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
     KeReleaseSpinLock(&hc->TimerLock, oldIrql);
 }
 
+/*
+ * MFINDEX sampled every HCD_FRAME_SAMPLE_MS, well inside its 2,048-frame
+ * lap, so GET_CURRENT_FRAME_NUMBER (XhciFrameNumber's masked delta) loses
+ * no lap while the thread is busy in a long command or control wait: the
+ * health poll alone samples only between the thread's passes (Codex review
+ * of batch (c), round 12, finding 2). Its own timer, re-armed by its DPC
+ * under TimerLock until the service closes (round 13, finding 2).
+ * XhciFrameSample reads nothing from a controller not running. IRQL:
+ * DISPATCH_LEVEL.
+ */
+#define HCD_FRAME_SAMPLE_MS 500UL
+
+static VOID hcdFrameDpc(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2)
+{
+    PHCD_CONTROLLER hc;
+    LARGE_INTEGER due;
+    KIRQL oldIrql;
+
+    UNREFERENCED_PARAMETER(dpc);
+    UNREFERENCED_PARAMETER(arg1);
+    UNREFERENCED_PARAMETER(arg2);
+    hc = (PHCD_CONTROLLER)context;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    XhciFrameSample(&hc->Hc);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    KeAcquireSpinLock(&hc->TimerLock, &oldIrql);
+    if (hc->TimersClosed) {
+        /* The last touch of the controller: the drain waits for it. */
+        hc->FrameArmed = 0;
+    } else {
+        HcdRelativeMs(&due, HCD_FRAME_SAMPLE_MS);
+        (VOID)KeSetTimer(&hc->FrameTimer, due, &hc->FrameDpc);
+    }
+    KeReleaseSpinLock(&hc->TimerLock, oldIrql);
+}
+
+/* After the controller has started; once per start. IRQL: PASSIVE_LEVEL. */
+VOID HcdFrameTimerStart(PHCD_CONTROLLER hc)
+{
+    LARGE_INTEGER due;
+    KIRQL oldIrql;
+
+    KeAcquireSpinLock(&hc->TimerLock, &oldIrql);
+    if (!hc->TimersClosed && !hc->FrameArmed) {
+        hc->FrameArmed = 1;
+        HcdRelativeMs(&due, HCD_FRAME_SAMPLE_MS);
+        (VOID)KeSetTimer(&hc->FrameTimer, due, &hc->FrameDpc);
+    }
+    KeReleaseSpinLock(&hc->TimerLock, oldIrql);
+}
+
 /* IRQL: PASSIVE_LEVEL (start). */
 VOID HcdTimersInit(PHCD_CONTROLLER hc)
 {
@@ -168,6 +219,9 @@ VOID HcdTimersInit(PHCD_CONTROLLER hc)
     KeInitializeEvent(&hc->TimersIdle, NotificationEvent, TRUE);
     hc->TimersInFlight = 0;
     hc->TimersClosed = 0;
+    hc->FrameArmed = 0;
+    KeInitializeTimer(&hc->FrameTimer);
+    KeInitializeDpc(&hc->FrameDpc, hcdFrameDpc, hc);
     for (i = 0; i < HCD_TIMER_SLOTS; i++) {
         hc->Timers[i].Controller = hc;
         hc->Timers[i].Busy = 0;
@@ -236,9 +290,19 @@ VOID HcdTimersDrain(PHCD_CONTROLLER hc)
     KIRQL oldIrql;
     ULONG i;
 
+    LARGE_INTEGER due;
+
     KeAcquireSpinLock(&hc->TimerLock, &oldIrql);
     hc->TimersClosed = 1;
+    if (hc->FrameArmed && KeCancelTimer(&hc->FrameTimer)) {
+        hc->FrameArmed = 0;
+    }
     KeReleaseSpinLock(&hc->TimerLock, oldIrql);
+    /* A sampler DPC queued or running clears it under TimerLock, closed. */
+    while (hc->FrameArmed) {
+        HcdRelativeMs(&due, 1);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
 
     for (i = 0; i < HCD_TIMER_SLOTS; i++) {
         KeAcquireSpinLock(&hc->TimerLock, &oldIrql);

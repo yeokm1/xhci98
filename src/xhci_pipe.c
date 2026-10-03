@@ -20,7 +20,6 @@
 #define XHCI_PIPE_RT_CLASS          0x20UL
 #define XHCI_PIPE_RT_VENDOR         0x40UL
 #define XHCI_PIPE_RT_TYPE_MASK      0x60UL
-#define XHCI_PIPE_RT_RESERVED_MASK  0x1CUL
 #define XHCI_PIPE_RCPT_DEVICE       0UL
 #define XHCI_PIPE_RCPT_INTERFACE    1UL
 #define XHCI_PIPE_RCPT_ENDPOINT     2UL
@@ -577,8 +576,7 @@ ULONG XhciPipeBuildSetup(const XHCI_PIPE_CONTROL *control, UCHAR *setup,
     case XHCI_PIPE_URB_CLASS_ENDPOINT:
     case XHCI_PIPE_URB_CLASS_OTHER:
         if (control->Request > 0xFFUL || control->Value > 0xFFFFUL ||
-            control->Index > 0xFFFFUL ||
-            (control->ReservedBits & ~XHCI_PIPE_RT_RESERVED_MASK) != 0) {
+            control->Index > 0xFFFFUL) {
             return XHCI_PIPE_BAD_PARAM;
         }
         switch (control->Function) {
@@ -605,9 +603,16 @@ ULONG XhciPipeBuildSetup(const XHCI_PIPE_CONTROL *control, UCHAR *setup,
                    ? XHCI_PIPE_RT_VENDOR
                    : XHCI_PIPE_RT_CLASS;
         /* "direction is specified in TransferFlags" (inc\usbdi.h lines
-         * 112 and 120), bit 0 (line 151). */
+         * 112 and 120), bit 0 (line 151). RequestTypeReservedBits is not
+         * read: it overlays the SETUP packet's bmRequestType, and Windows
+         * 2000 SP4's usbport.sys writes type, direction and recipient over
+         * that byte and then clears bits 4:2 (`and cl,0E3h` at 0x235E4,
+         * static), so nothing a client puts there reaches the bus. Windows
+         * 98 SE's hidusb.sys puts 0x22 there for SET_REPORT and SET_IDLE
+         * (`mov byte ptr [esi+48h],22h` at 0x10C2A and 0x11044, static);
+         * refusing it failed every one (c10, 2026-10-03). */
         rt = (control->DirectionIn ? XHCI_PIPE_RT_IN : 0UL) | type |
-             control->ReservedBits | recipient;
+             recipient;
         request = control->Request;
         value = control->Value;
         index = control->Index;

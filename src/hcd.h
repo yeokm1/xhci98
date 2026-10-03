@@ -334,6 +334,13 @@ typedef struct _HCD_CONTROLLER {
     ULONG TimersClosed;
     ULONG TimerArmsRefused;
     KEVENT TimersIdle;
+    /* The MFINDEX sampler's own timer, not a slot of the service's: a
+     * recurring arm must not be refused when the slots are full (Codex
+     * review of batch (c), round 13, finding 2). FrameArmed under
+     * TimerLock; the drain waits it to 0. */
+    KTIMER FrameTimer;
+    KDPC FrameDpc;
+    volatile LONG FrameArmed;
 
     /* The controller thread (hcd_ctl.c). */
     PVOID ThreadObject;
@@ -567,6 +574,7 @@ VOID HcdRelativeMs(PLARGE_INTEGER due, ULONG milliseconds);
 VOID HcdTimersInit(PHCD_CONTROLLER hc);
 VOID HcdTimersDrain(PHCD_CONTROLLER hc);
 VOID HcdTimersOpen(PHCD_CONTROLLER hc);
+VOID HcdFrameTimerStart(PHCD_CONTROLLER hc);
 
 /* hcd_pool.c */
 PVOID HcdPoolAlloc(ULONG bytes);

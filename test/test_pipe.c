@@ -857,8 +857,14 @@ static void test_setup(void)
     c = ctl(XHCI_PIPE_URB_CLASS_INTERFACE);
     c.Request = 0x0A;
     c.ReservedBits = 0x04;
-    SETUP_IS(c, "\x25\x0A\x00\x00\x00\x00\x00\x00", XHCI_PIPE_TRT_NO_DATA,
-             "reserved bits 4:2 pass into bmRequestType");
+    SETUP_IS(c, "\x21\x0A\x00\x00\x00\x00\x00\x00", XHCI_PIPE_TRT_NO_DATA,
+             "reserved bits 4:2 cleared, as usbport clears them");
+
+    c = ctl(XHCI_PIPE_URB_CLASS_INTERFACE);
+    c.Request = 0x0A;
+    c.ReservedBits = 0x22;
+    SETUP_IS(c, "\x21\x0A\x00\x00\x00\x00\x00\x00", XHCI_PIPE_TRT_NO_DATA,
+             "98 SE hidusb's SET_IDLE with 0x22 in the reserved byte");
 
     c = ctl(XHCI_PIPE_URB_CLEAR_FEATURE_ENDPOINT);
     c.FeatureSelector = 0;
@@ -982,11 +988,11 @@ static void test_setup(void)
              "wValue past a word");
     c = ctl(XHCI_PIPE_URB_VENDOR_DEVICE);
     c.ReservedBits = 0x80;
-    CHECK_EQ(XhciPipeBuildSetup(&c, s, &trt), XHCI_PIPE_BAD_PARAM,
-             "reserved bits that would turn the direction");
+    SETUP_IS(c, "\x40\x00\x00\x00\x00\x00\x00\x00", XHCI_PIPE_TRT_NO_DATA,
+             "reserved bits cannot turn the direction");
     c.ReservedBits = 0x01;
-    CHECK_EQ(XhciPipeBuildSetup(&c, s, &trt), XHCI_PIPE_BAD_PARAM,
-             "reserved bits that would turn the recipient");
+    SETUP_IS(c, "\x40\x00\x00\x00\x00\x00\x00\x00", XHCI_PIPE_TRT_NO_DATA,
+             "reserved bits cannot turn the recipient");
     c = ctl(XHCI_PIPE_URB_GET_DESC_DEVICE);
     c.DescriptorType = 0x100;
     CHECK_EQ(XhciPipeBuildSetup(&c, s, &trt), XHCI_PIPE_BAD_PARAM,

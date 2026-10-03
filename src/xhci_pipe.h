@@ -241,7 +241,7 @@ typedef struct _XHCI_PIPE_CONTROL {
     ULONG Function;             /* XHCI_PIPE_URB_*                         */
     ULONG Length;               /* TransferBufferLength                    */
     ULONG DirectionIn;          /* TransferFlags bit 0 (vendor/class)      */
-    ULONG ReservedBits;         /* RequestTypeReservedBits                 */
+    ULONG ReservedBits;         /* RequestTypeReservedBits: not read      */
     ULONG Request;
     ULONG Value;
     ULONG Index;
@@ -255,8 +255,7 @@ typedef struct _XHCI_PIPE_CONTROL {
  * The SETUP bytes for one control URB, and the Setup TRB's TRT. 0x08
  * (CONTROL_TRANSFER, whose caller supplies the bytes) and every function this
  * module does not list are XHCI_PIPE_UNSUPPORTED; a Length above 0xFFFF, a
- * field wider than its SETUP slot, ReservedBits outside bmRequestType 4:2,
- * and a GET_STATUS or GET_CONFIGURATION / GET_INTERFACE Length shorter than
+ * field wider than its SETUP slot, and a GET_STATUS or GET_CONFIGURATION / GET_INTERFACE Length shorter than
  * the reply's fixed size (2, 1, 1; wLength is that size whatever the buffer)
  * are XHCI_PIPE_BAD_PARAM. Nothing is written on a refusal.
  */

@@ -509,25 +509,51 @@ static ULONG hcdEvaluate(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG mps)
  */
 static ULONG hcdEp0Quiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
+    KTIMER deadline;
     LARGE_INTEGER due;
-    ULONG waited;
+    LARGE_INTEGER now;
+    KIRQL oldIrql;
+    ULONG halted;
+    ULONG count;
+    ULONG ok;
 
-    for (waited = 0; waited < HCD_TRANSFER_WAIT_MS; waited++) {
-        if (dev->Ep0Halted) {
+    /* An elapsed-time bound, not a count of 1 ms sleeps, whose length the
+     * clock's resolution decides (round 13, finding 3): a timer, polled
+     * with a zero wait - no clock read is on the import allowlist. */
+    KeInitializeTimer(&deadline);
+    HcdRelativeMs(&due, HCD_TRANSFER_WAIT_MS);
+    (VOID)KeSetTimer(&deadline, due, NULL);
+    now.QuadPart = 0;
+    ok = 0;
+    for (;;) {
+        /* Both under the lock the retirement and the halt are recorded
+         * under, so the last client request's STALL cannot fall between
+         * the two reads (round 13, finding 1). */
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        halted = dev->Ep0Halted;
+        count = dev->Ep0Queue.Count;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        if (halted) {
             if (!hcdResetEp0(hc, dev)) {
-                return 0;
+                break;
             }
             continue;
         }
-        if (dev->Ep0Queue.Count == 0) {
-            return 1;
+        if (count == 0) {
+            ok = 1;
+            break;
+        }
+        if (KeWaitForSingleObject(&deadline, Executive, KernelMode, FALSE,
+                                  &now) == STATUS_SUCCESS) {
+            hc->EnumTransfersTimedOut++;
+            break;
         }
         HcdRelativeMs(&due, 1);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
         HcdIoDeferred(hc);
     }
-    hc->EnumTransfersTimedOut++;
-    return 0;
+    (VOID)KeCancelTimer(&deadline);
+    return ok;
 }
 
 static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
