@@ -275,9 +275,11 @@ typedef struct _HCD_USB_DEVICE {
                                      * and alternates the thread owes a
                                      * release (hcd_cfg.c); controller
                                      * lock                               */
-    ULONG FuncReleaseTries;         /* failed release passes in a row, so
-                                     * a refused one is retried, but not
-                                     * forever (hcd_cfg.c); thread        */
+    UCHAR FuncReleaseTries[32];     /* each interface's failed release
+                                     * passes in a row, so a refused one
+                                     * is retried, but not forever; reset
+                                     * when its debt is settled or taken
+                                     * over (hcd_cfg.c); thread           */
 } HCD_USB_DEVICE, *PHCD_USB_DEVICE;
 
 /* A device PDO (hcd_pdo.c): one per enumerated device, a child of the root

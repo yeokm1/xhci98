@@ -276,22 +276,48 @@ static VOID hcdDisableSlot(PHCD_CONTROLLER hc, PHCD_PORT p)
     hcdDisableRecord(hc, dev);
 }
 
+/* EP0's state as the controller keeps it in the output Device Context
+ * (xHCI 6.2.3, EP State); Disabled when the slot has no context. */
+static ULONG hcdEp0State(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    ULONG offset;
+
+    if (XhciEndpointContextOffset(&hc->Hc.Layout, dev->SlotId, 1,
+                                  &offset) != XHCI_LAYOUT_OK) {
+        return XHCI_EP_STATE_DISABLED;
+    }
+    return XHCI_EP_GET_STATE(XhciCommonAt(&hc->Hc, offset)[0]);
+}
+
 /*
- * EP0 halted on a URB's control transfer (a STALL; hcd_dev.c set Ep0Halted):
- * Reset Endpoint with TSP 0, then Set TR Dequeue to where the transfer
- * engine already moved the software dequeue - the next TD's head, or the
- * enqueue position - mandatory for a control endpoint after a reset (xHCI
- * 4.6.8), and the doorbell again if transfers are waiting. A device clears
- * a control endpoint's stall itself at the next SETUP, so no
- * CLEAR_FEATURE is owed (.claude\batch-c-endpoint-steps.md, from the
- * miniport). Returns 0 when a command failed: EP0 then stays paused and
- * the controller reset is requested. Thread only, powered.
+ * EP0 needed recovery on a URB's control transfer (hcd_dev.c set
+ * Ep0Halted): repositioned by the state the controller left it in, since
+ * not every failure halts it - a TRB Error leaves it in Error (xHCI 4.8.3),
+ * and Reset Endpoint anywhere but Halted is a Context State Error (4.6.8):
+ *
+ *   Halted          Reset Endpoint with TSP 0, then Set TR Dequeue;
+ *   Error, Stopped  Set TR Dequeue alone;
+ *   Running         Stop Endpoint, then by the state that leaves;
+ *   Disabled        no command - the slot is disabled, its record on the
+ *                   way out; EP0 stays paused and 0 is returned with no
+ *                   reset requested.
+ *
+ * Set TR Dequeue goes to where the transfer engine already moved the
+ * software dequeue - the next TD's head, or the enqueue position -
+ * mandatory for a control endpoint after a reset (4.6.8), and the doorbell
+ * again if transfers are waiting. A device clears a control endpoint's
+ * stall itself at the next SETUP, so no CLEAR_FEATURE is owed
+ * (.claude\batch-c-endpoint-steps.md, from the miniport). Returns 0 when a
+ * command failed (EP0 then stays paused and the controller reset is
+ * requested) or EP0 is Disabled. Thread only, powered.
  */
 static ULONG hcdResetEp0(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     XHCI_TRB trb;
     KIRQL oldIrql;
     ULONG control;
+    ULONG code;
+    ULONG state;
     ULONG pa;
     ULONG dcs;
     ULONG waiting;
@@ -303,8 +329,32 @@ static ULONG hcdResetEp0(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     /* EP0's pipe paused for the commands: a URB's doorbell meanwhile would
      * run on the endpoint being repositioned (round 3, finding 2). */
     HcdIoPipePause(hc, &dev->Ep0Pipe);
-    if (XhciTrbResetEndpoint(&trb, dev->SlotId, 1, 0) == XHCI_RING_OK) {
-        (VOID)hcdCommand(hc, &trb, &control);
+    state = hcdEp0State(hc, dev);
+    if (state == XHCI_EP_STATE_RUNNING) {
+        code = 0;
+        if (XhciTrbStopEndpoint(&trb, dev->SlotId, 1, 0) == XHCI_RING_OK) {
+            code = hcdCommand(hc, &trb, &control);
+        }
+        /* A Context State Error: it halted or stopped meanwhile, which the
+         * state read again tells. */
+        if (code != XHCI_CC_SUCCESS && code != XHCI_CC_CONTEXT_STATE_ERROR) {
+            HcdSvcRequestReset(&hc->Hc);
+            return 0;
+        }
+        state = hcdEp0State(hc, dev);
+    }
+    if (state == XHCI_EP_STATE_DISABLED) {
+        /* No doorbell may reach a disabled context: EP0 stays paused, and
+         * the record's freeing completes what waits on it. */
+        XHCI_DBG_VALUE("hcd: EP0 recovery skipped, disabled, slot",
+                       dev->SlotId);
+        return 0;
+    }
+    if (state == XHCI_EP_STATE_HALTED &&
+        (XhciTrbResetEndpoint(&trb, dev->SlotId, 1, 0) != XHCI_RING_OK ||
+         hcdCommand(hc, &trb, &control) != XHCI_CC_SUCCESS)) {
+        HcdSvcRequestReset(&hc->Hc);
+        return 0;
     }
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     pa = XhciRingDequeuePA(&dev->Ep0);
@@ -323,7 +373,8 @@ static ULONG hcdResetEp0(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         XhciWriteDoorbell(&hc->Hc, dev->SlotId, 1);
     }
     HcdIoPipeResume(hc, &dev->Ep0Pipe);
-    XHCI_DBG_VALUE("hcd: EP0 reset after a stall, slot", dev->SlotId);
+    XHCI_DBG_VALUE("hcd: EP0 recovered, slot/state",
+                   (dev->SlotId << 8) | state);
     return 1;
 }
 
@@ -515,7 +566,8 @@ static ULONG hcdEvaluate(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG mps)
  * is waited for (the queue's count), a STALL recovered as it is found. The
  * caller has EP0's pipe paused, which hcdResetEp0's own pause and resume
  * nest inside. Returns 0 when a recovery command failed (EP0 then stays
- * paused for the reset it requested) or the wait ran out. Thread only.
+ * paused for the reset it requested), EP0 is Disabled, or the wait ran
+ * out. Thread only.
  */
 static ULONG hcdEp0Quiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
