@@ -23,12 +23,16 @@
  *             HCD now owns the request usbport answered (the endpoint's
  *             data toggle restarts at both ends).
  *
+ * IOCTL_INTERNAL_USB_RESET_PORT shares the queue (hcdCfgResetPort): it
+ * carries no URB, which hcdCfgUrbOf tells apart.
+ *
  * IRQL: PASSIVE_LEVEL (the controller thread), except HcdCfgQueue and
  * HcdCfgPipe (<= DISPATCH_LEVEL).
  */
 
 #include <ntddk.h>
 #include <usbdi.h>
+#include <usbioctl.h>
 #include "hcd.h"
 #include "hcd_svc.h"
 #include "xhci_hw.h"
@@ -56,13 +60,31 @@ static VOID hcdCfgComplete(PHCD_USB_DEVICE dev, PIRP irp, PURB urb,
 /* Queueing                                                                 */
 /* ----------------------------------------------------------------------- */
 
-/* Pend one URB IRP for the thread; the caller's device reference passes to
- * it. IRQL: <= DISPATCH_LEVEL. */
+/* The URB a pended IRP carries, or NULL for RESET_PORT, which carries none.
+ * By the control code, never by Argument1: Parameters.Others.Argument1
+ * aliases OutputBufferLength, so a request without a URB need not hold NULL
+ * there. IRQL: any. */
+static PURB hcdCfgUrbOf(PIRP irp)
+{
+    PIO_STACK_LOCATION stack;
+
+    stack = IoGetCurrentIrpStackLocation(irp);
+    if (stack->Parameters.DeviceIoControl.IoControlCode !=
+        IOCTL_INTERNAL_USB_SUBMIT_URB) {
+        return NULL;
+    }
+    return (PURB)stack->Parameters.Others.Argument1;
+}
+
+/* Pend one IRP for the thread - a URB, or RESET_PORT; the caller's device
+ * reference passes to it. IRQL: <= DISPATCH_LEVEL. */
 NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                      PHCD_DEVICE_PDO pdo, PIRP irp)
 {
     KIRQL oldIrql;
+    PURB urb;
 
+    urb = hcdCfgUrbOf(irp);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     if (dev->Gone) {
         /* The thread has begun freeing the device and has flushed its
@@ -71,10 +93,12 @@ NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
          * tick, not inline (round 8, finding 4). */
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         (VOID)InterlockedDecrement(&dev->Refs);
-        return HcdIoRefuseLater(pdo, irp,
-                                IoGetCurrentIrpStackLocation(irp)
-                                    ->Parameters.Others.Argument1,
-                                HCD_USBD_DEVICE_GONE);
+        if (urb == NULL) {
+            /* No URB to carry a status, and no client resubmits a port
+             * reset from its completion routine: completed now. */
+            return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+        }
+        return HcdIoRefuseLater(pdo, irp, urb, HCD_USBD_DEVICE_GONE);
     }
     irp->Tail.Overlay.DriverContext[0] = dev;
     irp->Tail.Overlay.DriverContext[2] = pdo;
@@ -92,11 +116,19 @@ static VOID hcdCfgComplete(PHCD_USB_DEVICE dev, PIRP irp, PURB urb,
     PHCD_DEVICE_PDO pdo;
 
     pdo = (PHCD_DEVICE_PDO)irp->Tail.Overlay.DriverContext[2];
-    urb->UrbHeader.Status = usbd;
-    XHCI_DBG_VALUE("hcd: thread URB done, function/status",
-                   ((ULONG)urb->UrbHeader.Function << 24) |
-                       ((ULONG)usbd & 0x00FFFFFFUL));
-    irp->IoStatus.Status = (NTSTATUS)XhciPipeNtStatus((ULONG)usbd);
+    if (urb != NULL) {
+        urb->UrbHeader.Status = usbd;
+        XHCI_DBG_VALUE("hcd: thread URB done, function/status",
+                       ((ULONG)urb->UrbHeader.Function << 24) |
+                           ((ULONG)usbd & 0x00FFFFFFUL));
+        irp->IoStatus.Status = (NTSTATUS)XhciPipeNtStatus((ULONG)usbd);
+    } else if (usbd == XHCI_USBD_STATUS_SUCCESS) {
+        irp->IoStatus.Status = STATUS_SUCCESS;
+    } else if (usbd == HCD_USBD_DEVICE_GONE) {
+        irp->IoStatus.Status = STATUS_NO_SUCH_DEVICE;
+    } else {
+        irp->IoStatus.Status = STATUS_UNSUCCESSFUL;
+    }
     irp->IoStatus.Information = 0;
     IoCompleteRequest(irp, IO_NO_INCREMENT);
     (VOID)InterlockedDecrement(&pdo->UrbsPending);
@@ -128,10 +160,7 @@ VOID HcdCfgFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     while (!IsListEmpty(&mine)) {
         entry = RemoveHeadList(&mine);
         irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
-        hcdCfgComplete(dev, irp,
-                       (PURB)IoGetCurrentIrpStackLocation(irp)
-                           ->Parameters.Others.Argument1,
-                       HCD_USBD_DEVICE_GONE);
+        hcdCfgComplete(dev, irp, hcdCfgUrbOf(irp), HCD_USBD_DEVICE_GONE);
     }
 }
 
@@ -408,6 +437,7 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
     PUSB_CONFIGURATION_DESCRIPTOR cd;
     PUSBD_INTERFACE_INFORMATION ii;
     PHCD_PIPE add[32];
+    UCHAR alt[32];
     XHCI_PIPE_IFACE iface;
     XHCI_PIPE_EP ep;
     XHCI_PIPE_PLAN plan;
@@ -438,6 +468,12 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
                        sc->Interface.AlternateSetting);
     if (!hcdCfgDeconfigure(hc, dev)) {
         return HCD_USBD_INTERNAL_HC_ERROR;
+    }
+    /* Nothing of the old configuration is open now, so a RESET_PORT before
+     * this select succeeds restores none of it. */
+    dev->ConfigValue = 0;
+    for (dci = 0; dci < 32; dci++) {
+        dev->Alternate[dci] = 0;
     }
     HcdPoolFree(dev->Selected);
     dev->Selected = NULL;
@@ -474,6 +510,7 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
 
     for (dci = 0; dci < 32; dci++) {
         add[dci] = NULL;
+        alt[dci] = 0;
     }
     mask = 0;
     usbd = XHCI_USBD_STATUS_SUCCESS;
@@ -503,6 +540,9 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
         ii->Protocol = (UCHAR)iface.InterfaceProtocol;
         ii->InterfaceHandle = HCD_IFACE_COOKIE(iface.InterfaceNumber);
         ii->NumberOfPipes = iface.EndpointCount;
+        if (iface.InterfaceNumber < 32) {
+            alt[iface.InterfaceNumber] = (UCHAR)iface.AlternateSetting;
+        }
         for (e = 0; e < iface.EndpointCount; e++) {
             if (XhciPipeEndpointParams((const UCHAR *)cd +
                                            iface.EndpointOffset[e],
@@ -549,6 +589,19 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
                           (USHORT)cd->bConfigurationValue, 0, 0, &bytes)) {
         usbd = HCD_USBD_INTERNAL_HC_ERROR;
     }
+    /* SET_CONFIGURATION leaves every interface at its alternate 0 (USB 2.0
+     * 9.4.7), so one the client selected at another needs its
+     * SET_INTERFACE here, or the device's endpoints would not be the ones
+     * just opened. */
+    for (dci = 0; dci < 32 && usbd == XHCI_USBD_STATUS_SUCCESS; dci++) {
+        if (alt[dci] != 0 &&
+            !HcdThreadControl(hc, dev, 0x01, 11, (USHORT)alt[dci],
+                              (USHORT)dci, 0, &bytes)) {
+            XHCI_DBG_VALUE("hcd: select, SET_INTERFACE failed, number/alt",
+                           (dci << 8) | alt[dci]);
+            usbd = HCD_USBD_INTERNAL_HC_ERROR;
+        }
+    }
 
     if (usbd != XHCI_USBD_STATUS_SUCCESS) {
         XHCI_DBG_VALUE("hcd: select configuration failed, USBD status",
@@ -580,6 +633,9 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     dev->ConfigValue = cd->bConfigurationValue;
+    for (dci = 0; dci < 32; dci++) {
+        dev->Alternate[dci] = alt[dci];
+    }
     sc->ConfigurationHandle = (USBD_CONFIGURATION_HANDLE)dev;
     XHCI_DBG_VALUE("hcd: configured, slot/endpoint mask",
                    (dev->SlotId << 24) | (mask >> 8));
@@ -670,6 +726,11 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     }
     hcdCfgCloseMask(hc, dev, old, HCD_USBD_CANCELED);
     old |= dev->Stale;
+    if (iface.InterfaceNumber < 32) {
+        /* No pipe of the interface is open until this succeeds: a reset
+         * meanwhile leaves it at the alternate 0 the reset gives it. */
+        dev->Alternate[iface.InterfaceNumber] = 0;
+    }
 
     for (dci = 0; dci < 32; dci++) {
         add[dci] = NULL;
@@ -749,6 +810,9 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         }
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (iface.InterfaceNumber < 32) {
+        dev->Alternate[iface.InterfaceNumber] = (UCHAR)iface.AlternateSetting;
+    }
     ii->Class = (UCHAR)iface.InterfaceClass;
     ii->SubClass = (UCHAR)iface.InterfaceSubClass;
     ii->Protocol = (UCHAR)iface.InterfaceProtocol;
@@ -1198,6 +1262,179 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 }
 
 /* ----------------------------------------------------------------------- */
+/* RESET_PORT                                                               */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * RESET_PORT's first step on one pipe, EP0's included, which the caller has
+ * paused: every request on it cancelled wherever it is, the endpoint stopped
+ * if it runs, what was on its ring completed as CANCELED, and the ring left
+ * empty at its enqueue position for the context that re-adds it. Unlike
+ * hcdCfgAbortPaused, a Halted or Error endpoint is left as it is - no Reset
+ * Endpoint, Set TR Dequeue or CLEAR_FEATURE(ENDPOINT_HALT) - because the
+ * Reset Device that follows disables it (xHCI 4.6.11) and the device's own
+ * reset clears its halt. Returns 0 when Stop Endpoint failed; the controller
+ * reset is then requested.
+ */
+static ULONG hcdCfgResetQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                              PHCD_PIPE pipe)
+{
+    XHCI_TRB trb;
+    KIRQL oldIrql;
+    ULONG control;
+    ULONG code;
+
+    (VOID)HcdIoPipeCancelAll(hc, pipe);
+    if (hcdCfgEpState(hc, dev, pipe->Dci) == XHCI_EP_STATE_RUNNING) {
+        code = 0;
+        if (XhciTrbStopEndpoint(&trb, dev->SlotId, pipe->Dci, 0) ==
+            XHCI_RING_OK) {
+            code = HcdThreadCommand(hc, &trb, &control);
+        }
+        if (code != XHCI_CC_SUCCESS && code != XHCI_CC_CONTEXT_STATE_ERROR) {
+            HcdSvcRequestReset(&hc->Hc);
+            return 0;
+        }
+    }
+    HcdIoDrainPipe(hc, pipe, HCD_USBD_CANCELED);
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    (VOID)XhciRingSetDequeue(pipe->Ring,
+                             XhciRingTrbPA(pipe->Ring, pipe->Ring->Enqueue));
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    HcdIoPipeWaitCancelled(hc, pipe);
+    pipe->Halted = 0;
+    pipe->DrainPending = 0;
+    return 1;
+}
+
+/*
+ * IOCTL_INTERNAL_USB_RESET_PORT (design record 13 section 10.9): the device
+ * reset on the wire and restored as it was - same slot, the same
+ * configuration and alternates, every pipe handle still valid; what was in
+ * flight completes as cancelled. usbstor keeps its pipe handles across it.
+ *
+ *   every pipe paused and brought to rest (hcdCfgResetQuiet), EP0's too;
+ *   the port reset, Reset Device, Address Device (HcdThreadReaddress);
+ *   the device descriptor read back and compared byte for byte, so a
+ *     different device behind the reset is not configured as the old one;
+ *   every open endpoint added back in one Configure Endpoint, each on its
+ *     emptied ring - a fresh context, so the controller's data toggle starts
+ *     at DATA0, as the device's does after its reset;
+ *   SET_CONFIGURATION, then SET_INTERFACE for each interface the last select
+ *     left at a nonzero alternate;
+ *   the pipes resumed: what was submitted meanwhile is published now.
+ *
+ * Any failure becomes a cycle (HcdEnumCycle): the device is dropped and
+ * enumerated afresh, and its pipes stay paused, so nothing is published to
+ * an endpoint the reset disabled - the device's free completes whatever
+ * waits. Thread only, powered.
+ */
+static LONG hcdCfgResetPort(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    PXHCI_EXTENSION ext;
+    PHCD_PIPE add[32];
+    XHCI_PIPE_PLAN plan;
+    XHCI_TRB trb;
+    PUCHAR s;
+    ULONG control;
+    ULONG bytes;
+    ULONG mask;
+    ULONG dci;
+    ULONG ok;
+
+    ext = &hc->Hc;
+    if (dev->Port == 0 || dev->Port > XHCI_MAX_ROOT_PORTS ||
+        hc->Ports[dev->Port - 1].Device != dev) {
+        return HCD_USBD_DEVICE_GONE;
+    }
+    XHCI_DBG_VALUE("hcd: reset port, port/slot",
+                   (dev->Port << 16) | dev->SlotId);
+
+    ok = 0;
+    mask = 0;
+    HcdIoPipePause(hc, &dev->Ep0Pipe);
+    for (dci = 0; dci < 32; dci++) {
+        add[dci] = NULL;
+        if (dci >= 2 && dev->Pipes[dci] != NULL) {
+            add[dci] = dev->Pipes[dci];
+            mask |= 1UL << dci;
+            HcdIoPipePause(hc, add[dci]);
+        }
+    }
+    for (dci = 2; dci < 32; dci++) {
+        if (add[dci] != NULL && !hcdCfgResetQuiet(hc, dev, add[dci])) {
+            goto cleanup;
+        }
+    }
+    if (!hcdCfgResetQuiet(hc, dev, &dev->Ep0Pipe) ||
+        !HcdThreadReaddress(hc, dev)) {
+        goto cleanup;
+    }
+    /* Reset Device disabled every endpoint but EP0, the stale ones too. */
+    dev->Stale = 0;
+
+    s = (PUCHAR)hc->ScratchVa;
+    if (!HcdThreadControl(hc, dev, 0x80, 6, 0x0100, 0, 18, &bytes) ||
+        bytes != 18) {
+        goto cleanup;
+    }
+    for (dci = 0; dci < 18; dci++) {
+        if (s[dci] != dev->DeviceDesc[dci]) {
+            XHCI_DBG_TEXT("hcd: reset port, another device answered");
+            goto cleanup;
+        }
+    }
+
+    if (dev->ConfigValue == 0) {
+        if (mask != 0) {
+            goto cleanup;
+        }
+    } else {
+        if (mask != 0 &&
+            (XhciPipeConfigurePlan(0, 0, mask, &plan) != XHCI_PIPE_OK ||
+             !hcdCfgBuildInput(hc, dev, &plan, add) ||
+             XhciTrbConfigureEndpoint(&trb, dev->SlotId,
+                                      XhciCommonPA(ext,
+                                          ext->Layout.InputContextOffset),
+                                      0) != XHCI_RING_OK ||
+             HcdThreadCommand(hc, &trb, &control) != XHCI_CC_SUCCESS)) {
+            goto cleanup;
+        }
+        if (!HcdThreadControl(hc, dev, 0x00, 9, (USHORT)dev->ConfigValue, 0,
+                              0, &bytes)) {
+            goto cleanup;
+        }
+        for (dci = 0; dci < 32; dci++) {
+            if (dev->Alternate[dci] != 0 &&
+                !HcdThreadControl(hc, dev, 0x01, 11,
+                                  (USHORT)dev->Alternate[dci], (USHORT)dci,
+                                  0, &bytes)) {
+                goto cleanup;
+            }
+        }
+    }
+    ok = 1;
+
+cleanup:
+    if (!ok) {
+        XHCI_DBG_VALUE("hcd: reset port failed, cycling port", dev->Port);
+        if (dev->Pdo != NULL) {
+            HcdEnumCycle(hc, dev->Port,
+                         ((PHCD_DEVICE_PDO)dev->Pdo->DeviceExtension)->Serial);
+        }
+        return HCD_USBD_INTERNAL_HC_ERROR;
+    }
+    for (dci = 2; dci < 32; dci++) {
+        if (add[dci] != NULL) {
+            HcdIoPipeResume(hc, add[dci]);
+        }
+    }
+    HcdIoPipeResume(hc, &dev->Ep0Pipe);
+    XHCI_DBG_VALUE("hcd: reset port done, endpoint mask", mask);
+    return XHCI_USBD_STATUS_SUCCESS;
+}
+
+/* ----------------------------------------------------------------------- */
 /* Cancellation                                                             */
 /* ----------------------------------------------------------------------- */
 
@@ -1254,7 +1491,7 @@ VOID HcdCfgCancelService(PHCD_CONTROLLER hc)
 /* The thread's service                                                     */
 /* ----------------------------------------------------------------------- */
 
-/* Every pended URB, in order. Thread only, powered, the controller not
+/* Every pended IRP, in order. Thread only, powered, the controller not
  * halted (HcdEnumService). */
 VOID HcdCfgService(PHCD_CONTROLLER hc)
 {
@@ -1283,10 +1520,13 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
 
         irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
         dev = (PHCD_USB_DEVICE)irp->Tail.Overlay.DriverContext[0];
-        urb = (PURB)IoGetCurrentIrpStackLocation(irp)
-                  ->Parameters.Others.Argument1;
+        urb = hcdCfgUrbOf(irp);
         if (dev->Gone) {
             hcdCfgComplete(dev, irp, urb, HCD_USBD_DEVICE_GONE);
+            continue;
+        }
+        if (urb == NULL) {
+            hcdCfgComplete(dev, irp, NULL, hcdCfgResetPort(hc, dev));
             continue;
         }
         switch (urb->UrbHeader.Function) {

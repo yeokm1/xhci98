@@ -309,6 +309,9 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     pdo->Serial = serial;
     pdo->Port = dev->Port;
     pdo->Speed = dev->Speed;
+    pdo->SpeedClass = XHCI_SPEED_UNKNOWN;
+    (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, dev->Port, dev->Speed,
+                             &pdo->SpeedClass);
     for (i = 0; i < sizeof(pdo->DeviceDesc); i++) {
         pdo->DeviceDesc[i] = dev->DeviceDesc[i];
     }
@@ -708,6 +711,42 @@ static NTSTATUS hcdDeviceCapabilities(PHCD_DEVICE_PDO pdo, PIRP irp)
     return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
 }
 
+/*
+ * A QUERY_INTERFACE no PDO answers yet (USBDI's is roadmap 28-A.1's, asked
+ * for by XP onward only), traced once per interface GUID by its first ULONG,
+ * so a guest run shows what a class driver looked for. Past the table's room
+ * every query is traced. PnP IRPs come one at a time per device; two devices
+ * at once can at worst trace one GUID twice.
+ */
+static VOID hcdQueryInterfaceTrace(PIO_STACK_LOCATION stack)
+{
+#ifdef XHCI_DBG_TRACE
+    static ULONG seen[8];
+    static ULONG count;
+    ULONG data1;
+    ULONG i;
+
+    if (stack->Parameters.QueryInterface.InterfaceType == NULL) {
+        return;
+    }
+    data1 = stack->Parameters.QueryInterface.InterfaceType->Data1;
+    for (i = 0; i < count; i++) {
+        if (seen[i] == data1) {
+            return;
+        }
+    }
+    if (count < 8) {
+        seen[count++] = data1;
+    }
+    XHCI_DBG_VALUE("hcd: QUERY_INTERFACE not answered, GUID Data1", data1);
+    XHCI_DBG_VALUE("hcd: QUERY_INTERFACE not answered, version/size",
+                   ((ULONG)stack->Parameters.QueryInterface.Version << 16) |
+                       stack->Parameters.QueryInterface.Size);
+#else
+    UNREFERENCED_PARAMETER(stack);
+#endif
+}
+
 NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
@@ -777,6 +816,11 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
             ObReferenceObject(pdo->Common.Self);
             return HcdCompleteIrp(irp, STATUS_SUCCESS, (ULONG_PTR)rel);
         }
+        return HcdCompleteIrp(irp, irp->IoStatus.Status,
+                              irp->IoStatus.Information);
+
+    case IRP_MN_QUERY_INTERFACE:
+        hcdQueryInterfaceTrace(stack);
         return HcdCompleteIrp(irp, irp->IoStatus.Status,
                               irp->IoStatus.Information);
 

@@ -726,6 +726,114 @@ static ULONG hcdPortConnected(PHCD_CONTROLLER hc, ULONG port)
     return portsc != 0xFFFFFFFFUL && (portsc & XHCI_PORTSC_CCS) != 0;
 }
 
+/*
+ * RESET_PORT's hardware half (hcd_cfg.c), on a slot that is kept. The order
+ * is the spec's: the Reset Device Command "is used by software to inform the
+ * xHC that the USB Device associated with a Device Slot has been Reset (by
+ * ... setting the Root Hub port PR flag ...)", and "Undefined behavior may
+ * occur if this command is executed and the device associated with it is not
+ * successfully reset" (xHCI 1.2 section 4.6.11; xhci-data-structures.md,
+ * "Which Slot State each command requires"). So the port reset comes first;
+ * Reset Device then takes the slot from Addressed or Configured to Default,
+ * with USB address 0, Context Entries 1 and every endpoint but EP0 Disabled;
+ * and Address Device with BSR = 0, legal from Default (4.6.5), gives the
+ * device its address again on an EP0 ring started afresh. The Output Device
+ * Context and its DCBAA entry stay as they are: unlike hcdAddress's slot,
+ * this one is the controller's already. The caller has every endpoint at
+ * rest and its pipe paused ("Software should stop all endpoint activity
+ * before issuing a Reset Device Command", 4.6.11), EP0's queue empty. Returns
+ * 0 on any failure; a command that never answered has requested the
+ * controller reset. Thread only, powered.
+ */
+ULONG HcdThreadReaddress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    PXHCI_EXTENSION ext;
+    PXHCI_HC_LAYOUT layout;
+    LARGE_INTEGER due;
+    XHCI_TRB trb;
+    KIRQL oldIrql;
+    ULONG ringOffset;
+    ULONG control;
+    ULONG speed;
+    ULONG code;
+    ULONG ok;
+
+    ext = &hc->Hc;
+    layout = &ext->Layout;
+    speed = 0;
+    if (hcdHalted(hc) || dev->Ep0Stuck ||
+        !hcdResetPort(hc, dev->Port, &speed) || speed != dev->Speed) {
+        XHCI_DBG_VALUE("hcd: reset port, port reset failed, speed", speed);
+        return 0;
+    }
+    code = 0;
+    if (XhciTrbResetDevice(&trb, dev->SlotId) == XHCI_RING_OK) {
+        code = hcdCommand(hc, &trb, &control);
+    }
+    if (code != XHCI_CC_SUCCESS) {
+        XHCI_DBG_VALUE("hcd: reset port, Reset Device code", code);
+        return 0;
+    }
+    if (XhciEp0RingOffset(layout, dev->SlotId, &ringOffset) !=
+        XHCI_LAYOUT_OK) {
+        return 0;
+    }
+    hcdZeroCommon(ext, ringOffset, layout->Ep0RingTrbs * XHCI_TRB_BYTES);
+    /* Under the lock the event DPC reads EP0's ring and halt flag under;
+     * the queue is empty, so no event of the old ring is still owed. */
+    XhciControllerLockAcquire(ext, &oldIrql);
+    ok = XhciRingInit(&dev->Ep0,
+                      (volatile XHCI_TRB *)XhciCommonAt(ext, ringOffset),
+                      XhciCommonPA(ext, ringOffset), layout->Ep0RingTrbs,
+                      XHCI_RING_KIND_ENDPOINT) == XHCI_RING_OK &&
+         dev->Ep0Queue.Count == 0;
+    dev->Ep0Halted = 0;
+    XhciControllerLockRelease(ext, oldIrql);
+    if (!ok || !hcdBuildEp0Input(hc, dev, dev->Mps0, 1) ||
+        XhciTrbAddressDevice(&trb, dev->SlotId,
+                             XhciCommonPA(ext, layout->InputContextOffset),
+                             0) != XHCI_RING_OK) {
+        return 0;
+    }
+    code = hcdCommand(hc, &trb, &control);
+    if (code != XHCI_CC_SUCCESS) {
+        XHCI_DBG_VALUE("hcd: reset port, Address Device code", code);
+        return 0;
+    }
+    HcdRelativeMs(&due, HCD_SETADDRESS_MS);
+    (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    return 1;
+}
+
+/*
+ * CYCLE_PORT, or a RESET_PORT that failed: ask the thread to drop the device
+ * on `port` - what an unplug does - if it is still the one PDO `serial`
+ * stands for, so a request that arrives after the device has already gone and
+ * come back does not drop its successor. IRQL: <= DISPATCH_LEVEL.
+ */
+VOID HcdEnumCycle(PHCD_CONTROLLER hc, ULONG port, ULONG serial)
+{
+    KIRQL oldIrql;
+
+    if (port == 0 || port > XHCI_MAX_ROOT_PORTS || serial == 0) {
+        return;
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->PortCycle[(port - 1) / 32UL] |= 1UL << ((port - 1) % 32UL);
+    hc->PortCycleSerial[port - 1] = serial;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    HcdThreadWake(hc);
+}
+
+/* Whether the device on the port is still the one that PDO serial stands
+ * for. Thread only (dev->Pdo's writer). */
+static ULONG hcdCycleOwns(PHCD_PORT p, ULONG serial)
+{
+    return p->Device != NULL && p->Device->Pdo != NULL &&
+           ((PHCD_DEVICE_PDO)p->Device->Pdo->DeviceExtension)->Serial ==
+               serial;
+}
+
 /* ----------------------------------------------------------------------- */
 /* The executor                                                             */
 /* ----------------------------------------------------------------------- */
@@ -1092,6 +1200,7 @@ static VOID hcdDetach(PHCD_CONTROLLER hc, ULONG powered)
     for (i = 0; i < HCD_PORT_WORDS; i++) {
         hc->PortPdoStarted[i] = 0;
         hc->PortPdoRemoved[i] = 0;
+        hc->PortCycle[i] = 0;
     }
     hc->EnumDetachRequested = 0;
     XhciControllerLockRelease(&hc->Hc, oldIrql);
@@ -1114,7 +1223,9 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
     ULONG changed[HCD_PORT_WORDS];
     ULONG started[HCD_PORT_WORDS];
     ULONG removed[HCD_PORT_WORDS];
+    ULONG cycle[HCD_PORT_WORDS];
     KIRQL oldIrql;
+    ULONG serial;
     ULONG invalidated;
     ULONG detach;
     ULONG bit;
@@ -1163,9 +1274,11 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
         changed[i] = hc->PortChange[i];
         started[i] = hc->PortPdoStarted[i];
         removed[i] = hc->PortPdoRemoved[i];
+        cycle[i] = hc->PortCycle[i];
         hc->PortChange[i] = 0;
         hc->PortPdoStarted[i] = 0;
         hc->PortPdoRemoved[i] = 0;
+        hc->PortCycle[i] = 0;
         if (invalidated) {
             changed[i] = 0xFFFFFFFFUL;
         }
@@ -1184,6 +1297,20 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
         }
         if ((started[(port - 1) / 32UL] & bit) != 0) {
             hcdFeed(hc, p, XHCI_ENUM_EV_PDO_STARTED);
+        }
+        if ((cycle[(port - 1) / 32UL] & bit) != 0) {
+            XhciControllerLockAcquire(ext, &oldIrql);
+            serial = hc->PortCycleSerial[port - 1];
+            XhciControllerLockRelease(ext, oldIrql);
+            if (hcdCycleOwns(p, serial) && !hcdHalted(hc)) {
+                /* An unplug as the machine sees one: the PDO goes and the
+                 * slot with it, the port waits in Gone for the PDO's
+                 * deletion (hcdSettleGone), and an Empty port that reads
+                 * connected is then a new device (hcdPortChanged). */
+                XHCI_DBG_VALUE("hcd: cycling port", port);
+                hcdFeed(hc, p, XHCI_ENUM_EV_DISCONNECT);
+                changed[(port - 1) / 32UL] |= bit;
+            }
         }
     }
 
@@ -1281,6 +1408,7 @@ VOID HcdEnumInit(PHCD_CONTROLLER hc)
         hc->PortChange[i] = 0xFFFFFFFFUL;
         hc->PortPdoStarted[i] = 0;
         hc->PortPdoRemoved[i] = 0;
+        hc->PortCycle[i] = 0;
     }
     hc->SlotsInvalidated = 0;
     hc->EnumDetachRequested = 0;

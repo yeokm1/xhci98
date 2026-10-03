@@ -255,6 +255,10 @@ typedef struct _HCD_USB_DEVICE {
                                      * controller with no pipe, after a
                                      * failed select; the next Configure
                                      * Endpoint drops them                */
+    UCHAR Alternate[32];            /* each interface's alternate setting
+                                     * by bInterfaceNumber, as the last
+                                     * select left it: RESET_PORT replays
+                                     * the nonzero ones (hcd_cfg.c)       */
 } HCD_USB_DEVICE, *PHCD_USB_DEVICE;
 
 /* A device PDO (hcd_pdo.c): one per enumerated device, a child of the root
@@ -289,6 +293,11 @@ typedef struct _HCD_DEVICE_PDO {
                                      * parent's release waits it out      */
     ULONG Port;
     ULONG Speed;
+    ULONG SpeedClass;               /* XHCI_SPEED_*, decoded at creation:
+                                     * the raw Speed is a PSIV whose
+                                     * meaning the port's protocol decides,
+                                     * and the PortMap a restart rewrites
+                                     * is not read at dispatch            */
     UCHAR DeviceDesc[18];
     PUCHAR Config;
     ULONG ConfigLength;
@@ -423,7 +432,8 @@ typedef struct _HCD_CONTROLLER {
     ULONG MapsDeferred;             /* ... or later                          */
     LIST_ENTRY DoneList;
     /* URBs that need commands (SELECT_CONFIGURATION, ABORT_PIPE,
-     * RESET_PIPE), pended and served by the thread (hcd_cfg.c); linked
+     * RESET_PIPE) and IOCTL_INTERNAL_USB_RESET_PORT, which carries no URB,
+     * pended and served by the thread (hcd_cfg.c); linked
      * through Tail.Overlay.ListEntry, the device in DriverContext[0];
      * controller lock. */
     LIST_ENTRY SlowIrps;
@@ -452,6 +462,11 @@ typedef struct _HCD_CONTROLLER {
     ULONG PortChange[HCD_PORT_WORDS];
     ULONG PortPdoStarted[HCD_PORT_WORDS];
     ULONG PortPdoRemoved[HCD_PORT_WORDS];
+    /* CYCLE_PORT, or a RESET_PORT that failed (HcdEnumCycle): the port's
+     * device dropped and enumerated afresh if it is still the one that PDO
+     * serial stands for. */
+    ULONG PortCycle[HCD_PORT_WORDS];
+    ULONG PortCycleSerial[XHCI_MAX_ROOT_PORTS];
     /* Thread requests (hcd_enum.c), under the controller lock. */
     ULONG SlotsInvalidated;         /* HCRST took every slot              */
     ULONG EnumDetachRequested;      /* the root hub is going               */
@@ -550,6 +565,8 @@ ULONG HcdThreadCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb, PULONG control);
 ULONG HcdThreadControl(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                        UCHAR requestType, UCHAR request, USHORT value,
                        USHORT index, ULONG length, PULONG bytes);
+ULONG HcdThreadReaddress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+VOID HcdEnumCycle(PHCD_CONTROLLER hc, ULONG port, ULONG serial);
 
 /* hcd_cfg.c */
 NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,

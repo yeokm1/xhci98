@@ -3,15 +3,14 @@
  * controls a USB function driver sends its PDO (roadmap-hcd.md tasks 26-A.5
  * and 26-A.6; design record 13 section 6).
  *
- * THIS IS THE ENTRY, NOT YET THE TRANSFERS. Every IRP_MJ_INTERNAL_DEVICE_CONTROL
- * reaching a device PDO arrives here and is counted by its control code and,
- * for IOCTL_INTERNAL_USB_SUBMIT_URB, by its URB function, with the first
- * occurrence of each function traced, so a guest run shows what each target's
- * class drivers send before any of it is served. GET_PORT_STATUS is answered
- * from the port's PORTSC. Every URB is still refused - as an unknown function
- * the controller does not serve, USBD_STATUS_INVALID_URB_FUNCTION with
- * STATUS_INVALID_PARAMETER - until the transfer path lands (design record 13
- * section 6.3 lists which functions each target's drivers send).
+ * Every IRP_MJ_INTERNAL_DEVICE_CONTROL reaching a device PDO arrives here.
+ * For IOCTL_INTERNAL_USB_SUBMIT_URB each URB function is counted and its
+ * first occurrence traced; transfers go to hcd_io.c and the URBs that need
+ * commands to the thread (hcd_cfg.c). GET_PORT_STATUS, GET_BUS_INFO,
+ * GET_HUB_COUNT and CYCLE_PORT are answered here; RESET_PORT is pended for
+ * the thread. Any other control code is refused as STATUS_NOT_SUPPORTED and
+ * traced once (design record 13 section 6.3 lists what each target's class
+ * drivers send).
  *
  * IRQL: <= DISPATCH_LEVEL (a function driver may send these at DISPATCH).
  */
@@ -45,6 +44,16 @@
  * finding 5). The per-controller counts are interlocked for the same
  * reason. */
 static LONG hcdUrbSeen[HCD_URB_FUNCTIONS];
+
+/* The same for each internal IOCTL refused as unserved (hcdIoctlSlot). */
+#define HCD_IOCTL_SLOTS 0x40UL
+static LONG hcdIoctlSeen[HCD_IOCTL_SLOTS];
+
+/* The bus totals ReactOS's miniports register (usbmport.h:541-542,
+ * TOTAL_USB11_BUS_BANDWIDTH and TOTAL_USB20_BUS_BANDWIDTH); the Windows 2000
+ * usbport's own value was not read. */
+#define HCD_BUS_BANDWIDTH_FULL   12000UL
+#define HCD_BUS_BANDWIDTH_HIGH   400000UL
 
 static VOID hcdCount(PULONG counter)
 {
@@ -398,6 +407,97 @@ static NTSTATUS hcdPortStatus(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
 }
 
 /*
+ * IOCTL_INTERNAL_USB_GET_BUS_INFO: Windows 2000 usbaudio's bandwidth check
+ * before it streams (design record 13 section 6.3). Argument1 is the
+ * USB_BUS_NOTIFICATION itself - the sender builds the IRP with no buffers -
+ * and only TotalBandwidth and ConsumedBandwidth are read. Nothing is counted
+ * as consumed: the controller admits or refuses an endpoint at Configure
+ * Endpoint (NO_BANDWIDTH, hcd_cfg.c), which is the check that counts.
+ */
+static NTSTATUS hcdBusInfo(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                           PIRP irp, PUSB_BUS_NOTIFICATION out)
+{
+    if (out == NULL) {
+        return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
+    }
+    if (hc == NULL || !pdo->Listed) {
+        return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+    }
+    out->NotificationType = AcquireBusInfo;
+    out->TotalBandwidth = (pdo->SpeedClass == XHCI_SPEED_HIGH)
+                              ? HCD_BUS_BANDWIDTH_HIGH
+                              : HCD_BUS_BANDWIDTH_FULL;
+    out->ConsumedBandwidth = 0;
+    out->ControllerNameLength = 0;
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+}
+
+/* IOCTL_INTERNAL_USB_GET_HUB_COUNT: each hub between the caller and the
+ * controller adds one, the root hub included (usbport's root-hub PDO
+ * increments the count it is handed; ReactOS usbport ioctl.c:353-363). The
+ * bus's hubs are its own (design record 13 section 10.3), so a device PDO's
+ * chain is the root hub alone. */
+static NTSTATUS hcdHubCount(PIRP irp, PULONG count)
+{
+    if (count == NULL) {
+        return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
+    }
+    (*count)++;
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+}
+
+/*
+ * IOCTL_INTERNAL_USB_CYCLE_PORT: the device leaves the bus and is enumerated
+ * again (design record 13 section 10.9). Only asked for here; the thread
+ * feeds the port a disconnect (HcdEnumCycle). Completed now, not when the
+ * cycle is done: the cycle frees the device record, which waits for every
+ * reference, and deletes this PDO, whose REMOVE waits for every IRP it
+ * pended.
+ */
+static NTSTATUS hcdCyclePort(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                             PIRP irp)
+{
+    if (hc == NULL || !pdo->Listed) {
+        return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+    }
+    XHCI_DBG_VALUE("hcd: cycle port asked, port", pdo->Port);
+    HcdEnumCycle(hc, pdo->Port, pdo->Serial);
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+}
+
+/* IOCTL_INTERNAL_USB_RESET_PORT: pended for the thread with a device
+ * reference, as the URBs that need commands are (hcd_cfg.c,
+ * hcdCfgResetPort). */
+static NTSTATUS hcdResetPortIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                                  PIRP irp)
+{
+    PHCD_USB_DEVICE dev;
+
+    dev = (hc != NULL) ? hcdDeviceRef(hc, pdo) : NULL;
+    if (dev == NULL) {
+        return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+    }
+    return HcdCfgQueue(hc, dev, pdo, irp);
+}
+
+/* The slot an internal IOCTL is traced under once: its function number, the
+ * internal range (USB_IOCTL_INTERNAL_INDEX, 0) at 0..0x1F and the
+ * USB_IOCTL_INDEX range (0xFF) above it, everything else in the last. */
+static ULONG hcdIoctlSlot(ULONG code)
+{
+    ULONG function;
+
+    function = (code >> 2) & 0xFFFUL;
+    if (function < 0x20UL) {
+        return function;
+    }
+    if (function >= 0xFFUL && function < 0xFFUL + 0x1FUL) {
+        return 0x20UL + (function - 0xFFUL);
+    }
+    return HCD_IOCTL_SLOTS - 1;
+}
+
+/*
  * The entry. The PDO's Busy count is raised before its Controller is read,
  * and the parent's release (HcdDevicePdoReleaseAll) clears Controller and
  * then waits Busy out, so a controller read here is not freed under this
@@ -445,11 +545,35 @@ NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp)
                                (PULONG)stack->Parameters.Others.Argument1);
         break;
 
+    case IOCTL_INTERNAL_USB_GET_BUS_INFO:
+        status = hcdBusInfo(pdo, hc, irp,
+                            (PUSB_BUS_NOTIFICATION)
+                                stack->Parameters.Others.Argument1);
+        break;
+
+    case IOCTL_INTERNAL_USB_RESET_PORT:
+        status = hcdResetPortIoctl(pdo, hc, irp);
+        break;
+
+    case IOCTL_INTERNAL_USB_CYCLE_PORT:
+        status = hcdCyclePort(pdo, hc, irp);
+        break;
+
+    case IOCTL_INTERNAL_USB_GET_HUB_COUNT:
+        status = hcdHubCount(irp, (PULONG)stack->Parameters.Others.Argument1);
+        break;
+
     default:
+        /* GET_ROOTHUB_PDO, GET_DEVICE_HANDLE and the name requests among
+         * them: no Windows 98 SE or 2000 class driver sends one (design
+         * record 13 section 6.3), and each needs an object this bus does
+         * not yet give out. */
         if (hc != NULL) {
             hcdCount(&hc->IoctlUnknown);
         }
-        XHCI_DBG_VALUE("hcd: internal IOCTL not served", code);
+        if (InterlockedIncrement(&hcdIoctlSeen[hcdIoctlSlot(code)]) == 1) {
+            XHCI_DBG_VALUE("hcd: internal IOCTL not served", code);
+        }
         status = HcdCompleteIrp(irp, STATUS_NOT_SUPPORTED, 0);
         break;
     }
