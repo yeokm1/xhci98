@@ -448,6 +448,18 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
         return HCD_USBD_INVALID_PARAMETER;
     }
 
+    /* SELECT_INTERFACE reads the configuration selected, not the one
+     * enumerated: a device with several may differ. Taken first, so a
+     * configuration that succeeds always has it (round 11, finding 4). */
+    dev->Selected = (PUCHAR)HcdPoolAlloc(total);
+    if (dev->Selected == NULL) {
+        return HCD_USBD_NO_MEMORY;
+    }
+    for (e = 0; e < total; e++) {
+        dev->Selected[e] = ((PUCHAR)cd)[e];
+    }
+    dev->SelectedLength = total;
+
     for (dci = 0; dci < 32; dci++) {
         add[dci] = NULL;
     }
@@ -529,6 +541,9 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
     if (usbd != XHCI_USBD_STATUS_SUCCESS) {
         XHCI_DBG_VALUE("hcd: select configuration failed, USBD status",
                        (ULONG)usbd);
+        HcdPoolFree(dev->Selected);
+        dev->Selected = NULL;
+        dev->SelectedLength = 0;
         if (mask != 0) {
             /* Enabled, then refused by the device: take them back down. */
             XhciControllerLockAcquire(&hc->Hc, &oldIrql);
@@ -547,16 +562,6 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
         return usbd;
     }
 
-    /* SELECT_INTERFACE reads the configuration selected, not the one
-     * enumerated: a device with several may differ. Without the copy an
-     * interface cannot be changed, but the configuration stands. */
-    dev->Selected = (PUCHAR)HcdPoolAlloc(total);
-    if (dev->Selected != NULL) {
-        for (e = 0; e < total; e++) {
-            dev->Selected[e] = ((PUCHAR)cd)[e];
-        }
-        dev->SelectedLength = total;
-    }
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     for (dci = 2; dci < 32; dci++) {
         dev->Pipes[dci] = add[dci];
@@ -581,9 +586,11 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
  * earlier failure (dev->Stale) - and adds the new setting's; then
  * SET_INTERFACE. A failure leaves the interface with no pipes, as a client
  * that sees the error must select again. The other interfaces' pipes are
- * untouched (keepMask). USB 2.0 9.4.10 lets a device with only a default
- * setting STALL SET_INTERFACE: for alternate 0 of an interface with no
- * alternate 1 that failure is tolerated. Thread only.
+ * untouched (keepMask). Every SET_INTERFACE failure fails the request, a
+ * STALL included: USB 2.0 9.4.10 lets a device with only a default setting
+ * STALL it, but then the device has not reset its endpoints' toggles while
+ * Drop and Add has reset the controller's (Codex review of batch (c),
+ * round 11, findings 1 and 3). Thread only.
  */
 static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                   PURB urb)
@@ -592,7 +599,6 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     PUSBD_INTERFACE_INFORMATION ii;
     PHCD_PIPE add[32];
     XHCI_PIPE_IFACE iface;
-    XHCI_PIPE_IFACE other;
     XHCI_PIPE_EP ep;
     XHCI_PIPE_PLAN plan;
     PXHCI_EXTENSION ext;
@@ -707,18 +713,10 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         !HcdThreadControl(hc, dev, 0x01, 11,
                           (USHORT)iface.AlternateSetting,
                           (USHORT)iface.InterfaceNumber, 0, &bytes)) {
-        if (iface.AlternateSetting == 0 &&
-            XhciPipeFindInterface(dev->Selected, dev->SelectedLength,
-                                  iface.InterfaceNumber, 1,
-                                  &other) != XHCI_PIPE_OK) {
-            XHCI_DBG_VALUE("hcd: SET_INTERFACE refused, single setting",
-                           iface.InterfaceNumber);
-        } else {
-            /* Enabled on the controller, not on the device: dropped by
-             * the next command. */
-            usbd = HCD_USBD_INTERNAL_HC_ERROR;
-            dev->Stale = mask;
-        }
+        /* Enabled on the controller, not on the device: dropped by the
+         * next command. */
+        usbd = HCD_USBD_INTERNAL_HC_ERROR;
+        dev->Stale = mask;
     }
 
     if (usbd != XHCI_USBD_STATUS_SUCCESS) {

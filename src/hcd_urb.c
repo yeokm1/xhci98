@@ -254,6 +254,19 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         return hcdControlUrb(pdo, hc, irp, urb, function);
     }
     switch (function) {
+    case URB_FUNCTION_GET_CURRENT_FRAME_NUMBER:
+        /* The 32-bit frame number the miniport kept (xhci_init.c,
+         * XhciFrameNumber): MFINDEX deltas, sampled by the thread's
+         * health poll as well, so no 2,048-frame lap is lost. */
+        if (urb->UrbHeader.Length <
+            sizeof(struct _URB_GET_CURRENT_FRAME_NUMBER)) {
+            return hcdUrbComplete(irp, urb, USBD_STATUS_INVALID_PARAMETER,
+                                  STATUS_INVALID_PARAMETER);
+        }
+        urb->UrbGetCurrentFrameNumber.FrameNumber = XhciFrameNumber(&hc->Hc);
+        urb->UrbHeader.Status = USBD_STATUS_SUCCESS;
+        return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+
     case URB_FUNCTION_SELECT_CONFIGURATION:
     case URB_FUNCTION_SELECT_INTERFACE:
     case URB_FUNCTION_ABORT_PIPE:

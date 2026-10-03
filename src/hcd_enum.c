@@ -274,9 +274,10 @@ static VOID hcdDisableSlot(PHCD_CONTROLLER hc, PHCD_PORT p)
  * 4.6.8), and the doorbell again if transfers are waiting. A device clears
  * a control endpoint's stall itself at the next SETUP, so no
  * CLEAR_FEATURE is owed (.claude\batch-c-endpoint-steps.md, from the
- * miniport). Thread only, powered.
+ * miniport). Returns 0 when a command failed: EP0 then stays paused and
+ * the controller reset is requested. Thread only, powered.
  */
-static VOID hcdResetEp0(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+static ULONG hcdResetEp0(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     XHCI_TRB trb;
     KIRQL oldIrql;
@@ -306,13 +307,14 @@ static VOID hcdResetEp0(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         /* EP0 stays paused until the reset the failure asked for
          * invalidates the device (round 5, finding 1). */
         HcdSvcRequestReset(&hc->Hc);
-        return;
+        return 0;
     }
     if (waiting) {
         XhciWriteDoorbell(&hc->Hc, dev->SlotId, 1);
     }
     HcdIoPipeResume(hc, &dev->Ep0Pipe);
     XHCI_DBG_VALUE("hcd: EP0 reset after a stall, slot", dev->SlotId);
+    return 1;
 }
 
 /*
@@ -515,6 +517,14 @@ ULONG HcdThreadControl(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     if (dev->Ep0Stuck) {
         /* Its record is still queued from a timeout: reusing it would
          * relink the engine's queue (round 2, finding 10). */
+        return 0;
+    }
+    if (dev->Ep0Halted && !hcdResetEp0(hc, dev)) {
+        /* A STALL earlier in this pass - the last thread request's, or a
+         * URB's - is recovered before the next SETUP, not at the end of
+         * the pass: a control transfer on a Halted EP0 would only time out
+         * into a controller reset (Codex review of batch (c), round 11,
+         * finding 2). */
         return 0;
     }
     if (length > HCD_SCRATCH_BYTES ||
