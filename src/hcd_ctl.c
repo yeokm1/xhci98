@@ -700,6 +700,11 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
             XhciFailClosedDma(ext);
         }
         hcdRelease(hc);
+        /* No thread ever ran to poll, and the half-built start's fatal
+         * status or its stop's mask failure is the reading a refused start
+         * leaves; the mirrors are embedded scalars, so the poll is safe
+         * after the release (Codex review round 24, finding 2). */
+        HcdCountersPoll(hc);
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
     (VOID)XhciControllerUpdateFlags(ext, 0, XHCI_EXT_FLAG_STARTED);

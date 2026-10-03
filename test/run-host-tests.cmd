@@ -137,11 +137,20 @@ rem clobbered each other's captures, and a suite read that way "died before
 rem printing a result". mkdir is the claim, since it fails on a directory that
 rem exists: two runs started in the same second draw the same %RANDOM%, and the
 rem loser draws again. Relative, so the /Fo and /Fe arguments hold no space.
+rem Only a name that exists is a collision: any other mkdir failure (no rights,
+rem a full disk) fails at once, and twenty collisions in a row fail too.
 if not exist out mkdir out
 if not exist out\ goto nooutdir
+set CLAIMTRIES=0
 :claimrundir
+set /a CLAIMTRIES+=1
+if %CLAIMTRIES% GTR 20 goto norundirfree
 set "RUNDIR=out\r%RANDOM%%RANDOM%"
-mkdir "%RUNDIR%" 2>nul || goto claimrundir
+mkdir "%RUNDIR%" 2>nul && goto claimedrundir
+if exist "%RUNDIR%" goto claimrundir
+set "RUNDIR="
+goto norundir
+:claimedrundir
 
 rem Every suite runs even after one fails: the whole point of the host suite is
 rem that a second failure costs milliseconds, not another build.
@@ -417,6 +426,19 @@ goto :eof
 :nooutdir
 echo.
 echo ERROR: could not create %~dp0out, where each run keeps its files.
+endlocal
+exit /b 1
+
+:norundir
+echo.
+echo ERROR: could not create a run directory under %~dp0out (not a name
+echo collision: check the directory's permissions and free space).
+endlocal
+exit /b 1
+
+:norundirfree
+echo.
+echo ERROR: 20 run directory names under %~dp0out were already taken.
 endlocal
 exit /b 1
 

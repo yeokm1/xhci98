@@ -227,13 +227,36 @@ static LONG hcdCfgCountEnd(PHCD_CONTROLLER hc, ULONG asked, LONG usbd)
 
 /* Every select's answer, counted where every exit meets: the endpoint
  * counts above see only the exits that follow a parsed interface, and a
- * select whose endpoints all opened can still fail at the device. */
-static VOID hcdCfgCountSelect(PHCD_CONTROLLER hc, LONG usbd)
+ * select whose endpoints all opened can still fail at the device.
+ *
+ * A failure is not counted once the device is proven to have left: its
+ * record is gone or no longer its port's, or its root port reads all ones,
+ * disconnected, or with a connect change the enumeration has yet to take
+ * (an unplug and replug). A select racing an ordinary unplug fails at
+ * SET_CONFIGURATION or SET_INTERFACE before HcdEnumService sees the port
+ * change, and counting it would fail a correct matrix run. A device still
+ * on its port that refuses - SET_CONFIGURATION(0) among them - is counted
+ * (Codex review round 24, finding 1). IRQL: PASSIVE_LEVEL (the thread,
+ * which owns the port records). */
+static VOID hcdCfgCountSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                              LONG usbd)
 {
-    if (usbd != XHCI_USBD_STATUS_SUCCESS &&
-        usbd != HCD_USBD_BUFFER_TOO_SMALL) {
-        hc->Counters.SelectsFailed++;
+    ULONG portsc;
+
+    if (usbd == XHCI_USBD_STATUS_SUCCESS ||
+        usbd == HCD_USBD_BUFFER_TOO_SMALL) {
+        return;
     }
+    if (dev->Gone || dev->Port == 0 || dev->Port > XHCI_MAX_ROOT_PORTS ||
+        hc->Ports[dev->Port - 1].Device != dev) {
+        return;
+    }
+    portsc = XhciReadPortsc(&hc->Hc, dev->Port);
+    if (portsc == 0xFFFFFFFFUL || (portsc & XHCI_PORTSC_CCS) == 0 ||
+        (portsc & XHCI_PORTSC_CSC) != 0) {
+        return;
+    }
+    hc->Counters.SelectsFailed++;
 }
 
 /* ----------------------------------------------------------------------- */
@@ -2340,7 +2363,7 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
             usbd = pdo->Function
                        ? hcdCfgSelectFunction(hc, dev, pdo, urb, &held)
                        : hcdCfgSelect(hc, dev, urb);
-            hcdCfgCountSelect(hc, usbd);
+            hcdCfgCountSelect(hc, dev, usbd);
             break;
         case HCD_URB_SELECT_INTERFACE:
             usbd = hcdCfgSelectInterface(hc, dev, pdo, urb);
@@ -2349,7 +2372,7 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
                 held &= ~(1UL << number);
                 hcdCfgReleaseSettled(dev, 1UL << number);
             }
-            hcdCfgCountSelect(hc, usbd);
+            hcdCfgCountSelect(hc, dev, usbd);
             break;
         case HCD_URB_ABORT_PIPE:
         case HCD_URB_RESET_PIPE:

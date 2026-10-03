@@ -58,11 +58,13 @@ typedef struct _XHCIHC_COUNTERS {
     ULONG EndpointsNoResources;
     ULONG UrbsMalformed;
     /* A SELECT_CONFIGURATION or SELECT_INTERFACE answered with a failure,
-     * once per request whatever its cause, so a select that fails after its
+     * once per request, so a select that fails after its
      * endpoints were opened on the controller - SET_CONFIGURATION or
      * SET_INTERFACE refused by the device - or on a malformed record is
      * still a refusal. BUFFER_TOO_SMALL is not one: it is the length probe
-     * a client resizes from. */
+     * a client resizes from. Nor is a failure on a device proven to have
+     * left its port (hcd_cfg.c, hcdCfgCountSelect): a select racing an
+     * unplug is not a refusal. */
     ULONG SelectsFailed;
 
     /* The controller. */
