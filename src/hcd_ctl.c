@@ -576,6 +576,9 @@ static VOID hcdRelease(PHCD_CONTROLLER hc)
  * interrupt, XhciInitController, the interrupt enables, the thread. Called
  * after the PCI stack has started (hcd_pnp.c). IRQL: PASSIVE_LEVEL.
  */
+static VOID NTAPI hcdFrameTimer(PVOID extension, PVOID context);
+#define HCD_FRAME_SAMPLE_MS 500UL
+
 NTSTATUS HcdStartController(PHCD_CONTROLLER hc, PIRP irp)
 {
     PXHCI_EXTENSION ext;
@@ -697,8 +700,32 @@ NTSTATUS HcdStartController(PHCD_CONTROLLER hc, PIRP irp)
         HcdStopController(hc);
         return status;
     }
+    (VOID)HcdSvcArmTimer(ext, HCD_FRAME_SAMPLE_MS, NULL, 0, hcdFrameTimer);
     hc->ControllerStarted = 1;
     return STATUS_SUCCESS;
+}
+
+/*
+ * MFINDEX sampled every HCD_FRAME_SAMPLE_MS, well inside its 2,048-frame
+ * lap, so GET_CURRENT_FRAME_NUMBER (XhciFrameNumber's masked delta) loses
+ * no lap while the thread is busy in a long command or control wait: the
+ * health poll alone samples only between the thread's passes (Codex review
+ * of batch (c), round 12, finding 2). A timer of the kept service
+ * (hcd_svc.c), so the release's HcdTimersDrain waits it out; it re-arms
+ * itself until the service is closed. XhciFrameSample reads nothing from a
+ * controller not running. IRQL: DISPATCH_LEVEL.
+ */
+static VOID NTAPI hcdFrameTimer(PVOID extension, PVOID context)
+{
+    PXHCI_EXTENSION ext;
+    KIRQL oldIrql;
+
+    UNREFERENCED_PARAMETER(context);
+    ext = (PXHCI_EXTENSION)extension;
+    XhciControllerLockAcquire(ext, &oldIrql);
+    XhciFrameSample(ext);
+    XhciControllerLockRelease(ext, oldIrql);
+    (VOID)HcdSvcArmTimer(ext, HCD_FRAME_SAMPLE_MS, NULL, 0, hcdFrameTimer);
 }
 
 /*

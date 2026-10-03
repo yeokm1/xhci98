@@ -500,9 +500,85 @@ static ULONG hcdEvaluate(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG mps)
  * zero `length` no data stage at all (SET_CONFIGURATION, CLEAR_FEATURE).
  * Returns 1 with *bytes the count received, 0 on any failure. Thread only.
  */
+/*
+ * Until EP0 carries no client transfer and is not Halted: each retired one
+ * is waited for (the queue's count), a STALL recovered as it is found. The
+ * caller has EP0's pipe paused, which hcdResetEp0's own pause and resume
+ * nest inside. Returns 0 when a recovery command failed (EP0 then stays
+ * paused for the reset it requested) or the wait ran out. Thread only.
+ */
+static ULONG hcdEp0Quiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    LARGE_INTEGER due;
+    ULONG waited;
+
+    for (waited = 0; waited < HCD_TRANSFER_WAIT_MS; waited++) {
+        if (dev->Ep0Halted) {
+            if (!hcdResetEp0(hc, dev)) {
+                return 0;
+            }
+            continue;
+        }
+        if (dev->Ep0Queue.Count == 0) {
+            return 1;
+        }
+        HcdRelativeMs(&due, 1);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+        HcdIoDeferred(hc);
+    }
+    hc->EnumTransfersTimedOut++;
+    return 0;
+}
+
+static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                   UCHAR requestType, UCHAR request,
+                                   USHORT value, USHORT index, ULONG length,
+                                   PULONG bytes);
+
 ULONG HcdThreadControl(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                        UCHAR requestType, UCHAR request, USHORT value,
                        USHORT index, ULONG length, PULONG bytes)
+{
+    ULONG ok;
+
+    *bytes = 0;
+    if (dev->Ep0Stuck) {
+        /* Its record is still queued from a timeout: reusing it would
+         * relink the engine's queue (round 2, finding 10). */
+        return 0;
+    }
+    if (length > HCD_SCRATCH_BYTES ||
+        (length != 0 && (requestType & 0x80) == 0)) {
+        return 0;
+    }
+    /*
+     * EP0 to itself: client URBs are held at the pipe's gate, those already
+     * on the ring are let finish, and a STALL among them is recovered here,
+     * before this SETUP - a control transfer queued behind a Halted EP0
+     * would only time out into a controller reset (Codex review of batch
+     * (c), round 11, finding 2, and round 12, finding 1). A client transfer
+     * that never ends within the transfer wait fails this request instead,
+     * without a reset.
+     */
+    HcdIoPipePause(hc, &dev->Ep0Pipe);
+    if (!hcdEp0Quiet(hc, dev)) {
+        HcdIoPipeResume(hc, &dev->Ep0Pipe);
+        return 0;
+    }
+    ok = hcdThreadControlQuiet(hc, dev, requestType, request, value, index,
+                               length, bytes);
+    if (!dev->Ep0Stuck) {
+        /* A timed-out one leaves EP0 paused for the reset it requested. */
+        HcdIoPipeResume(hc, &dev->Ep0Pipe);
+    }
+    return ok;
+}
+
+/* The transfer itself, on a quiet EP0. Thread only. */
+static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                   UCHAR requestType, UCHAR request,
+                                   USHORT value, USHORT index, ULONG length,
+                                   PULONG bytes)
 {
     XHCI_CONTROL_REQUEST req;
     XHCI_TRB trbs[XHCI_XFER_MAX_CONTROL_TRBS];
@@ -512,25 +588,6 @@ ULONG HcdThreadControl(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG answer;
     ULONG done;
     ULONG i;
-
-    *bytes = 0;
-    if (dev->Ep0Stuck) {
-        /* Its record is still queued from a timeout: reusing it would
-         * relink the engine's queue (round 2, finding 10). */
-        return 0;
-    }
-    if (dev->Ep0Halted && !hcdResetEp0(hc, dev)) {
-        /* A STALL earlier in this pass - the last thread request's, or a
-         * URB's - is recovered before the next SETUP, not at the end of
-         * the pass: a control transfer on a Halted EP0 would only time out
-         * into a controller reset (Codex review of batch (c), round 11,
-         * finding 2). */
-        return 0;
-    }
-    if (length > HCD_SCRATCH_BYTES ||
-        (length != 0 && (requestType & 0x80) == 0)) {
-        return 0;
-    }
 
     b = (PUCHAR)&sg;
     for (i = 0; i < sizeof(sg); i++) {
