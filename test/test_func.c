@@ -206,8 +206,8 @@ static void test_iad(void)
     CHECK_EQ(set.Count, 3, "IAD device: CDC, audio, HID");
     check_func(&set.Func[0], 0, 0x03, 2, 0x02, 0x02, 0x01, 9,
                "IAD F0: CDC pair", __LINE__);
-    check_func(&set.Func[1], 2, 0x0C, 2, 0x01, 0x01, 0x20, 66,
-               "IAD F1: UAC 2.0 pair", __LINE__);
+    check_func(&set.Func[1], 2, 0x0C, 2, 0x01, 0x00, 0x20, 66,
+               "IAD F1: UAC 2.0 pair, the IAD's triple", __LINE__);
     check_func(&set.Func[2], 4, 0x10, 1, 0x03, 0x00, 0x00, 0,
                "IAD F2: HID alone", __LINE__);
     CHECK_EQ(set.Func[1].StringIndex, 5, "iFunction wins over iInterface");
@@ -220,14 +220,55 @@ static void test_iad(void)
     check_filtered(iadCfg, sizeof(iadCfg), &set.Func[2], 34, 1, 117, 25,
                    "IAD F2 descriptor, no IAD", __LINE__);
 
-    /* An IAD forces the split whatever the device class says (section
-     * 10.8, "or the configuration carries IADs"). */
+    /* Microsoft's composite parent: an IAD does not override a device
+     * class of the device's own. */
     dev[4] = 0x02;
     dev[5] = 0x00;
     dev[6] = 0x00;
+    CHECK_EQ(XhciFuncSplit(dev, iadCfg, sizeof(iadCfg), &set),
+             XHCI_FUNC_NO_SPLIT, "IAD with device class 02: whole");
+    CHECK_EQ(set.Count, 0, "no functions");
+
+    dev[4] = 0x00;
     CHECK_EQ(XhciFuncSplit(dev, iadCfg, sizeof(iadCfg), &set), XHCI_FUNC_OK,
-             "IAD with device class 02 still splits");
-    CHECK_EQ(set.Count, 3, "still three functions");
+             "IAD with device class 00 splits");
+    CHECK_EQ(set.Count, 3, "three functions");
+
+    copy_dev(iadDev);
+    dev[6] = 0x00;
+    CHECK_EQ(XhciFuncSplit(dev, iadCfg, sizeof(iadCfg), &set),
+             XHCI_FUNC_NO_SPLIT, "EF/02/00: whole");
+
+    copy_dev(iadDev);
+    dev[17] = 2;
+    CHECK_EQ(XhciFuncSplit(dev, iadCfg, sizeof(iadCfg), &set),
+             XHCI_FUNC_NO_SPLIT, "EF/02/01 with two configurations: whole");
+}
+
+/* IAD over if0-1 (CDC), then AudioControl if2 and AudioStreaming if3 with
+ * no IAD: the IAD turns the audio rule off for the whole configuration. */
+static const UCHAR iadAudioCfg[53] = {
+    0x09, 0x02, 0x35, 0x00, 0x04, 0x01, 0x00, 0x80, 0x32,
+    /* 9 */  0x08, 0x0B, 0x00, 0x02, 0x02, 0x02, 0x01, 0x00,
+    /* 17 */ 0x09, 0x04, 0x00, 0x00, 0x00, 0x02, 0x02, 0x01, 0x00,
+    /* 26 */ 0x09, 0x04, 0x01, 0x00, 0x00, 0x0A, 0x00, 0x00, 0x00,
+    /* 35 */ 0x09, 0x04, 0x02, 0x00, 0x00, 0x01, 0x01, 0x00, 0x00,
+    /* 44 */ 0x09, 0x04, 0x03, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00 };
+
+static void test_iad_audio(void)
+{
+    XHCI_FUNC_SET set;
+
+    copy_dev(kbDev);
+    CHECK_EQ(XhciFuncSplit(dev, iadAudioCfg, sizeof(iadAudioCfg), &set),
+             XHCI_FUNC_OK, "IAD plus legacy audio splits");
+    CHECK_EQ(set.Count, 3, "MI_00, MI_02, MI_03");
+    check_func(&set.Func[0], 0, 0x3, 2, 0x02, 0x02, 0x01, 9,
+               "IAD + audio F0: the IAD", __LINE__);
+    check_func(&set.Func[1], 2, 0x4, 1, 0x01, 0x01, 0x00, 0,
+               "IAD + audio F1: AC alone", __LINE__);
+    check_func(&set.Func[2], 3, 0x8, 1, 0x01, 0x02, 0x00, 0,
+               "IAD + audio F2: AS alone", __LINE__);
 }
 
 static void test_no_split(void)
@@ -256,13 +297,13 @@ static void test_no_split(void)
     CHECK_EQ(XhciFuncSplit(dev, cmCfg, sizeof(cmCfg), &set),
              XHCI_FUNC_NO_SPLIT, "no configuration at all: whole");
 
-    /* Several configurations: split by the first, the one the bus selects
-     * (design record 13 section 10.8; coordinator, 2026-10-03). */
+    /* Several configurations: Microsoft's composite parent leaves the
+     * device whole, under the driver that matched USB\VID_v&PID_p. */
     copy_dev(cmDev);
     dev[17] = 2;
-    CHECK_EQ(XhciFuncSplit(dev, cmCfg, sizeof(cmCfg), &set), XHCI_FUNC_OK,
-             "two configurations: split by the first");
-    CHECK_EQ(set.Count, 2, "the same two functions");
+    CHECK_EQ(XhciFuncSplit(dev, cmCfg, sizeof(cmCfg), &set),
+             XHCI_FUNC_NO_SPLIT, "two configurations: whole");
+    CHECK_EQ(set.Count, 0, "no functions");
 
     memcpy(one, kbCfg, 34);
     one[2] = 34;
@@ -422,21 +463,43 @@ static void test_setup(void)
                                      0x00, 0x00, 0xFF, 0x00 };
     static const UCHAR high[8] = { 0x81, 0x0A, 0x00, 0x00,
                                    0x20, 0x00, 0x01, 0x00 };
+    static const UCHAR uacOwn[8] = { 0xA1, 0x81, 0x00, 0x02,
+                                     0x01, 0x02, 0x02, 0x00 };
+    static const UCHAR uacSibling[8] = { 0xA1, 0x81, 0x00, 0x02,
+                                         0x03, 0x02, 0x02, 0x00 };
 
-    CHECK_EQ(XhciFuncSetupAllowed(hidReport, 0x7), 1,
+    XHCI_FUNC_SET set;
+
+    CHECK_EQ(XhciFuncSetupAllowed(hidReport, 0x7, 0xF), 1,
              "interface 0 is the function's");
-    CHECK_EQ(XhciFuncSetupAllowed(hidReport, 0x8), 0,
+    CHECK_EQ(XhciFuncSetupAllowed(hidReport, 0x8, 0xF), 0,
              "interface 0 is a sibling's");
-    CHECK_EQ(XhciFuncSetupAllowed(setIdle, 0x8), 1, "SET_IDLE on if3");
-    CHECK_EQ(XhciFuncSetupAllowed(setIdle, 0x7), 0, "SET_IDLE, not ours");
-    CHECK_EQ(XhciFuncSetupAllowed(vendor, 0x1), 1,
+    CHECK_EQ(XhciFuncSetupAllowed(setIdle, 0x8, 0xF), 1, "SET_IDLE on if3");
+    CHECK_EQ(XhciFuncSetupAllowed(setIdle, 0x7, 0xF), 0,
+             "SET_IDLE, not ours");
+    CHECK_EQ(XhciFuncSetupAllowed(vendor, 0x1, 0xFF), 1,
              "vendor to an interface passes");
-    CHECK_EQ(XhciFuncSetupAllowed(toEndpoint, 0x1), 1,
+    CHECK_EQ(XhciFuncSetupAllowed(toEndpoint, 0x1, 0xF), 1,
              "endpoint recipient passes");
-    CHECK_EQ(XhciFuncSetupAllowed(device, 0x1), 1, "device recipient");
-    CHECK_EQ(XhciFuncSetupAllowed(high, 0xFFFFFFFFUL), 0,
-             "interface 32 is nobody's");
-    CHECK_EQ(XhciFuncSetupAllowed(NULL, 0xFFFFFFFFUL), 0, "NULL setup");
+    CHECK_EQ(XhciFuncSetupAllowed(device, 0x1, 0xF), 1, "device recipient");
+    CHECK_EQ(XhciFuncSetupAllowed(high, 0x1, 0xF), 1,
+             "interface 32 is nobody's: the device answers");
+    CHECK_EQ(XhciFuncSetupAllowed(setIdle, 0x1, 0x3), 1,
+             "interface 3 absent from the device: the device answers");
+    CHECK_EQ(XhciFuncSetupAllowed(NULL, 0xFFFFFFFFUL, 0xFFFFFFFFUL), 0,
+             "NULL setup");
+
+    /* UAC 1.0 GET_CUR to entity 2: the entity in wIndex's high byte, the
+     * interface in its low (c15, Windows 2000 usbaudio.sys). */
+    CHECK_EQ(XhciFuncSetupAllowed(uacOwn, 0x7, 0xF), 1,
+             "wIndex 0x0201 from the audio function (mask 7)");
+    CHECK_EQ(XhciFuncSetupAllowed(uacSibling, 0x7, 0xF), 0,
+             "wIndex 0x0203: the HID sibling's interface");
+
+    copy_dev(cmDev);
+    (VOID)XhciFuncSplit(dev, cmCfg, sizeof(cmCfg), &set);
+    CHECK_EQ(set.Func[0].DeviceMask, 0xF, "C-Media device mask, F0");
+    CHECK_EQ(set.Func[1].DeviceMask, 0xF, "C-Media device mask, F1");
 }
 
 static void check_id(ULONG which, const char *want, ULONG wantLength,
@@ -500,11 +563,35 @@ static void test_ids(void)
              XHCI_FUNC_BAD_PARAM, "no such id");
 }
 
+static void test_iad_ids(void)
+{
+    static const char compatIds[] =
+        "USB\\Class_01&SubClass_00&Prot_20\0"
+        "USB\\Class_01&SubClass_00\0"
+        "USB\\Class_01\0";
+    XHCI_FUNC_SET set;
+    char out[128];
+    ULONG used;
+
+    copy_dev(iadDev);
+    (VOID)XhciFuncSplit(dev, iadCfg, sizeof(iadCfg), &set);
+    memset(out, 'x', sizeof(out));
+    used = 0;
+    CHECK_EQ(XhciFuncId(dev, &set.Func[1], 1, XHCI_FUNC_ID_COMPATIBLE, out,
+                        sizeof(out), &used),
+             XHCI_FUNC_OK, "IAD compatible ids");
+    CHECK_EQ(used, sizeof(compatIds), "IAD compatible ids: length");
+    CHECK_EQ(memcmp(out, compatIds, sizeof(compatIds)), 0,
+             "IAD compatible ids: the IAD's SubClass 00, not the 01");
+}
+
 int main(void)
 {
     test_cmedia();
     test_keyboard();
     test_iad();
+    test_iad_audio();
+    test_iad_ids();
     test_no_split();
     test_positional();
     test_malformed();

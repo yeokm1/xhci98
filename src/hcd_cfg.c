@@ -29,10 +29,11 @@
  * A device the bus splits (26-A.7) is configured once by the bus
  * (HcdCfgParentConfigure); each function PDO's select then opens and closes
  * only its own interfaces' endpoints beside its siblings'
- * (hcdCfgSelectFunction), and RESET_PORT restores the whole device.
+ * (hcdCfgSelectFunction), a removed function's are released the same way
+ * (HcdCfgReleaseFunction), and RESET_PORT restores the whole device.
  *
- * IRQL: PASSIVE_LEVEL (the controller thread), except HcdCfgQueue and
- * HcdCfgPipe (<= DISPATCH_LEVEL).
+ * IRQL: PASSIVE_LEVEL (the controller thread), except HcdCfgQueue,
+ * HcdCfgReleaseFunction and HcdCfgPipe (<= DISPATCH_LEVEL).
  */
 
 #include <ntddk.h>
@@ -725,7 +726,14 @@ static USBD_CONFIGURATION_HANDLE hcdCfgHandle(PHCD_USB_DEVICE dev,
  * Drop and Add has reset the controller's (Codex review of batch (c),
  * round 11, findings 1 and 3). From a function PDO the handle is the PDO's
  * own and the interface must be one of its (design record 13 section
- * 10.9). Thread only.
+ * 10.9). The interface information's own Length bounds it, as usbport has
+ * it (external/reactos/usbport/device.c, USBPORT_HandleSelectInterface and
+ * USBPORT_InitInterfaceInfo): UrbHeader.Length is not read - usbport
+ * rewrites it - and a Length too short for the alternate's pipes is
+ * USBD_STATUS_BUFFER_TOO_SMALL. Windows 2000's usbaudio.sys sends its
+ * alternate-1 select with an interface Length of 0x24, room for its one
+ * pipe, and every one was refused here while the header was read (c15,
+ * 2026-10-03). Thread only.
  */
 static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                   PHCD_DEVICE_PDO pdo, PURB urb)
@@ -755,24 +763,41 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ii = &si->Interface;
     fixed = FIELD_OFFSET(USBD_INTERFACE_INFORMATION, Pipes);
     if (dev->Selected == NULL || dev->ConfigValue == 0 ||
-        si->ConfigurationHandle != hcdCfgHandle(dev, pdo) ||
-        urb->UrbHeader.Length <
-            FIELD_OFFSET(struct _URB_SELECT_INTERFACE, Interface) + fixed ||
-        ii->Length < fixed ||
-        (PUCHAR)ii + ii->Length > (PUCHAR)urb + urb->UrbHeader.Length ||
-        ii->InterfaceNumber >= 32 ||
+        si->ConfigurationHandle != hcdCfgHandle(dev, pdo)) {
+        XHCI_DBG_VALUE("hcd: select interface refused, handle/selected",
+                       ((si->ConfigurationHandle != hcdCfgHandle(dev, pdo))
+                            ? 0x100UL : 0UL) |
+                           ((dev->Selected == NULL) ? 0x10UL : 0UL) |
+                           ((dev->ConfigValue == 0) ? 1UL : 0UL));
+        return HCD_USBD_INVALID_PARAMETER;
+    }
+    if (ii->Length < fixed || ii->InterfaceNumber >= 32 ||
         (pdo->Function &&
          (pdo->InterfaceMask & (1UL << ii->InterfaceNumber)) == 0) ||
         XhciPipeFindInterface(dev->Selected, dev->SelectedLength,
                               ii->InterfaceNumber, ii->AlternateSetting,
-                              &iface) != XHCI_PIPE_OK ||
-        ii->Length < fixed + iface.EndpointCount *
-                                 sizeof(USBD_PIPE_INFORMATION)) {
+                              &iface) != XHCI_PIPE_OK) {
         XHCI_DBG_VALUE("hcd: select interface refused, length/number/alt",
                        ((ULONG)ii->Length << 16) |
                            ((ULONG)ii->InterfaceNumber << 8) |
                            ii->AlternateSetting);
         return HCD_USBD_INVALID_PARAMETER;
+    }
+    if (ii->Length < fixed + iface.EndpointCount *
+                                 sizeof(USBD_PIPE_INFORMATION)) {
+        XHCI_DBG_VALUE("hcd: select interface too small, length/number/alt",
+                       ((ULONG)ii->Length << 16) |
+                           ((ULONG)ii->InterfaceNumber << 8) |
+                           ii->AlternateSetting);
+        return HCD_USBD_BUFFER_TOO_SMALL;
+    }
+    if ((ULONG)urb->UrbHeader.Length <
+        FIELD_OFFSET(struct _URB_SELECT_INTERFACE, Interface) +
+            (ULONG)ii->Length) {
+        /* Served all the same, as usbport serves it; traced so a guest run
+         * shows whether this was c15's refusal. */
+        XHCI_DBG_VALUE("hcd: select interface, URB header short, header/length",
+                       ((ULONG)urb->UrbHeader.Length << 16) | ii->Length);
     }
 
     /* The interface's pipes, to rest and closed; the others kept. */
@@ -901,12 +926,13 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 /* SELECT_CONFIGURATION from a function PDO                                 */
 /* ----------------------------------------------------------------------- */
 
-/* The function's open pipes brought to rest (paused, cancelled, quiesced)
- * and closed; *keep gets the siblings' DCIs, the return the function's.
- * 0xFFFFFFFF when a quiesce failed: the reset it requested settles the
- * device, and the pipes stay paused until it, as hcdCfgAbort leaves them. */
+/* The open pipes of the function whose interfaces are `interfaceMask`,
+ * brought to rest (paused, cancelled, quiesced) and closed; *keep gets the
+ * siblings' DCIs, the return the function's. 0xFFFFFFFF when a quiesce
+ * failed: the reset it requested settles the device, and the pipes stay
+ * paused until it, as hcdCfgAbort leaves them. */
 static ULONG hcdCfgCloseFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
-                                 PHCD_DEVICE_PDO pdo, PULONG keep)
+                                 ULONG interfaceMask, PULONG keep)
 {
     PHCD_PIPE pipe;
     ULONG old;
@@ -919,7 +945,8 @@ static ULONG hcdCfgCloseFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         if (pipe == NULL) {
             continue;
         }
-        if (!HcdPdoOwnsPipe(pdo, dev, pipe)) {
+        if (pipe->Interface >= 32UL ||
+            (interfaceMask & (1UL << pipe->Interface)) == 0) {
             *keep |= 1UL << dci;
             continue;
         }
@@ -965,28 +992,68 @@ static ULONG hcdCfgReplace(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     return 1;
 }
 
+/* Whether interface `number` has an alternate setting other than 0 in the
+ * device's configuration (walked to wTotalLength; a malformed tail counts
+ * as one, so the caller does not assume a single setting). */
+static ULONG hcdCfgHasAlternates(PHCD_USB_DEVICE dev, ULONG number)
+{
+    ULONG total;
+    ULONG at;
+    ULONG len;
+
+    if (dev->Config == NULL || dev->ConfigLength < 9) {
+        return 1;
+    }
+    total = (ULONG)dev->Config[2] | ((ULONG)dev->Config[3] << 8);
+    if (total > dev->ConfigLength) {
+        total = dev->ConfigLength;
+    }
+    at = dev->Config[0];
+    while (at < total) {
+        if (total - at < 2) {
+            return 1;
+        }
+        len = dev->Config[at];
+        if (len < 2 || len > total - at) {
+            return 1;
+        }
+        if (dev->Config[at + 1] == 4 && len >= 9 &&
+            (ULONG)dev->Config[at + 2] == number &&
+            dev->Config[at + 3] != 0) {
+            return 1;
+        }
+        at += len;
+    }
+    return 0;
+}
+
 /*
  * An interface's device-side toggles restarted after its endpoints were
  * re-added (fresh contexts start at DATA0): SET_INTERFACE, or - for an
  * alternate 0 a single-setting device STALLs it on (USB 2.0 9.4.10) -
  * CLEAR_FEATURE(ENDPOINT_HALT) on each of its new non-isochronous
- * endpoints, which restarts the device's toggle too (9.4.5). The STALL
- * halts EP0 on the controller; the engine reports it for the thread's own
- * record as for a URB's (hcd_dev.c, Ep0Halted), and the next thread control
- * transfer resets EP0 before its SETUP (hcd_enum.c, hcdEp0Quiet).
+ * endpoints, which restarts the device's toggle too (9.4.5). Only that
+ * case falls back: a SET_INTERFACE that never reached the device, failed
+ * otherwise, or was STALLed by an interface with other alternates has not
+ * moved the device to alternate 0, and recording 0 then would be false
+ * (Codex review of batch (c), round 19, finding 2). The STALL halts EP0 on
+ * the controller; the engine reports it for the thread's own record as for
+ * a URB's (hcd_dev.c, Ep0Halted), and the next thread control transfer
+ * resets EP0 before its SETUP (hcd_enum.c, hcdEp0Quiet).
  */
 static ULONG hcdCfgSetInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                 PHCD_PIPE *add, ULONG number, ULONG alt)
 {
     ULONG bytes;
+    ULONG stalled;
     ULONG dci;
 
-    if (HcdThreadControl(hc, dev, 0x01, 11, (USHORT)alt, (USHORT)number, 0,
-                         &bytes)) {
+    if (HcdThreadControlEx(hc, dev, 0x01, 11, (USHORT)alt, (USHORT)number, 0,
+                           &bytes, &stalled)) {
         dev->Alternate[number] = (UCHAR)alt;
         return 1;
     }
-    if (alt != 0) {
+    if (alt != 0 || !stalled || hcdCfgHasAlternates(dev, number)) {
         return 0;
     }
     for (dci = 2; dci < 32; dci++) {
@@ -999,6 +1066,92 @@ static ULONG hcdCfgSetInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     }
     dev->Alternate[number] = 0;
     return 1;
+}
+
+/* A function's endpoints, closed already (hcdCfgCloseFunction gave `old`
+ * and `keep`), dropped in one Configure Endpoint beside its siblings', and
+ * each of its interfaces left at a nonzero alternate sent back to 0, so an
+ * audio function stops reserving isochronous bandwidth; a SET_INTERFACE
+ * that fails leaves that interface as it was. 1 when the Configure Endpoint
+ * succeeded. */
+static ULONG hcdCfgUnconfigureFunction(PHCD_CONTROLLER hc,
+                                       PHCD_USB_DEVICE dev,
+                                       ULONG interfaceMask, ULONG keep,
+                                       ULONG old)
+{
+    PHCD_PIPE none[32];
+    ULONG bytes;
+    ULONG n;
+
+    for (n = 0; n < 32; n++) {
+        none[n] = NULL;
+    }
+    if (!hcdCfgReplace(hc, dev, keep, old, 0, none)) {
+        return 0;
+    }
+    for (n = 0; n < 32; n++) {
+        if ((interfaceMask & (1UL << n)) != 0 && dev->Alternate[n] != 0 &&
+            HcdThreadControl(hc, dev, 0x01, 11, 0, (USHORT)n, 0, &bytes)) {
+            dev->Alternate[n] = 0;
+            dev->IfaceUsed &= ~(1UL << n);
+        }
+    }
+    return 1;
+}
+
+/*
+ * A function PDO removed (hcd_pdo.c): its interfaces are owed a release,
+ * done by the thread before it serves the next slow IRP (hcdCfgReleases),
+ * so a select from the same PDO started again cannot be overtaken by it.
+ * The REMOVE does not wait for it: the PDO's URBs are complete already,
+ * the release reads only the device record and the mask, never the PDO,
+ * and a device that leaves first is freed with its pipes anyway. IRQL:
+ * <= DISPATCH_LEVEL; the caller holds a reference on `dev`.
+ */
+VOID HcdCfgReleaseFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                           ULONG interfaceMask)
+{
+    KIRQL oldIrql;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    dev->FuncRelease |= interfaceMask;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    HcdThreadWake(hc);
+}
+
+/* Every release HcdCfgReleaseFunction has recorded. Its failures are
+ * ignored: a failed Configure Endpoint leaves the DCIs in Stale for the next
+ * one to drop, and a failed quiesce has requested the reset that settles
+ * the whole device. Thread only, powered, the controller not halted. */
+static VOID hcdCfgReleases(PHCD_CONTROLLER hc)
+{
+    PHCD_USB_DEVICE dev;
+    KIRQL oldIrql;
+    ULONG mask;
+    ULONG keep;
+    ULONG old;
+    ULONG slot;
+
+    for (slot = 1; slot <= XHCI_MAX_SLOTS; slot++) {
+        dev = hc->SlotDevice[slot];
+        if (dev == NULL) {
+            continue;
+        }
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        mask = dev->FuncRelease;
+        dev->FuncRelease = 0;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        if (mask == 0 || dev->Gone || !dev->Split ||
+            dev->Selected == NULL || dev->ConfigValue == 0) {
+            continue;
+        }
+        XHCI_DBG_VALUE("hcd: removed function released, port/mask",
+                       (dev->Port << 24) | (mask & 0x00FFFFFFUL));
+        old = hcdCfgCloseFunction(hc, dev, mask, &keep);
+        if (old != 0xFFFFFFFFUL) {
+            (VOID)hcdCfgUnconfigureFunction(hc, dev, mask, keep, old);
+        }
+    }
 }
 
 /*
@@ -1035,7 +1188,6 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG keep;
     ULONG old;
     ULONG mask;
-    ULONG bytes;
     ULONG dci;
     ULONG e;
     ULONG n;
@@ -1076,26 +1228,16 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         alt[ii->InterfaceNumber] = ii->AlternateSetting;
     }
 
-    old = hcdCfgCloseFunction(hc, dev, pdo, &keep);
+    old = hcdCfgCloseFunction(hc, dev, pdo->InterfaceMask, &keep);
     if (old == 0xFFFFFFFFUL) {
         return HCD_USBD_INTERNAL_HC_ERROR;
     }
 
     if (sc->ConfigurationDescriptor == NULL) {
-        /* This function's unconfigure; the siblings keep theirs. An
-         * interface left at a nonzero alternate goes back to 0, so an
-         * audio function stops reserving isochronous bandwidth. */
-        if (!hcdCfgReplace(hc, dev, keep, old, 0, add)) {
+        /* This function's unconfigure; the siblings keep theirs. */
+        if (!hcdCfgUnconfigureFunction(hc, dev, pdo->InterfaceMask, keep,
+                                       old)) {
             return HCD_USBD_INTERNAL_HC_ERROR;
-        }
-        for (n = 0; n < 32; n++) {
-            if ((pdo->InterfaceMask & (1UL << n)) != 0 &&
-                dev->Alternate[n] != 0 &&
-                HcdThreadControl(hc, dev, 0x01, 11, 0, (USHORT)n, 0,
-                                 &bytes)) {
-                dev->Alternate[n] = 0;
-                dev->IfaceUsed &= ~(1UL << n);
-            }
         }
         sc->ConfigurationHandle = NULL;
         return XHCI_USBD_STATUS_SUCCESS;
@@ -1873,6 +2015,12 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
             /* A command or EP0 transfer just failed into the reset: the
              * rest wait for the recovery, whose invalidation completes
              * them with their devices (round 2, finding 10). */
+            break;
+        }
+        /* Before every IRP, so a REMOVE's release always precedes a
+         * select its PDO sends after it. */
+        hcdCfgReleases(hc);
+        if (hc->Hc.ControllerFailed || hc->ScratchTainted) {
             break;
         }
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);

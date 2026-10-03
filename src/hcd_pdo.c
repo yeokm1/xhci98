@@ -759,7 +759,8 @@ static VOID hcdPdoQuiesce(PHCD_DEVICE_PDO pdo, ULONG removing)
                 /* Its own requests only, EP0's included: its siblings
                  * share the device and keep running (design record 13
                  * section 10.9). Its endpoints stay enabled with nothing
-                 * on them; its next SELECT_CONFIGURATION closes them. */
+                 * on them until its next SELECT_CONFIGURATION, or the
+                 * release a REMOVE queues (hcdPdoFunctionRelease). */
                 HcdIoCancelPdo(hc, dev, pdo);
             } else {
                 XhciControllerLockAcquire(&hc->Hc, &oldIrql);
@@ -777,6 +778,34 @@ static VOID hcdPdoQuiesce(PHCD_DEVICE_PDO pdo, ULONG removing)
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
     }
     hcdPdoRefusalsWait(pdo, removing);
+}
+
+/* A removed function's endpoints and alternates handed back while its
+ * siblings run on (hcd_cfg.c, HcdCfgReleaseFunction): a REMOVE without a
+ * prior unconfigure would otherwise leave an audio function's periodic
+ * bandwidth reserved for as long as the device stays (Codex review of
+ * batch (c), round 19, finding 4). After hcdPdoQuiesce, so its URBs are
+ * complete. IRQL: PASSIVE_LEVEL. */
+static VOID hcdPdoFunctionRelease(PHCD_DEVICE_PDO pdo)
+{
+    PHCD_CONTROLLER hc;
+    PHCD_USB_DEVICE dev;
+    KIRQL oldIrql;
+
+    hc = pdo->Controller;
+    if (!pdo->Function || hc == NULL) {
+        return;
+    }
+    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    dev = pdo->Device;
+    if (dev != NULL) {
+        (VOID)InterlockedIncrement((PLONG)&dev->Refs);
+    }
+    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    if (dev != NULL) {
+        HcdCfgReleaseFunction(hc, dev, pdo->InterfaceMask);
+        (VOID)InterlockedDecrement((PLONG)&dev->Refs);
+    }
 }
 
 /* A start after a remove (an enable after a disable) makes the PDO PnP's
@@ -981,6 +1010,7 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
     case IRP_MN_REMOVE_DEVICE:
         pdo->Common.PnpState = HCD_PNP_REMOVED;
         hcdPdoQuiesce(pdo, 1);
+        hcdPdoFunctionRelease(pdo);
         HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
         hcdPdoRemoved(pdo);
         return STATUS_SUCCESS;

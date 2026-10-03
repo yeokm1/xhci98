@@ -81,10 +81,11 @@ typedef struct _HCD_TIMER {
 #define HCD_PIPE_SIGNATURE  0x45504950UL    /* 'PIPE' */
 
 /* USBD statuses the HCD's own files set, where usbdi.h is not included:
- * DEVICE_GONE as WDK 7.1's inc\api\usb.h:459 defines it (absent from the
- * Windows 2000 DDK), the rest as the Windows 2000 DDK's inc\usbdi.h does
- * (lines 255, 263 and 279). */
+ * DEVICE_GONE and BUFFER_TOO_SMALL as WDK 7.1's inc\api\usb.h:459 and :451
+ * define them (absent from the Windows 2000 DDK), the rest as the Windows
+ * 2000 DDK's inc\usbdi.h does (lines 255, 263 and 279). */
 #define HCD_USBD_DEVICE_GONE        ((LONG)0xC0007000L)
+#define HCD_USBD_BUFFER_TOO_SMALL   ((LONG)0xC0003000L)
 #define HCD_USBD_NO_MEMORY          ((LONG)0x80000100L)
 #define HCD_USBD_ERROR_BUSY         ((LONG)0x80000400L)
 #define HCD_USBD_INTERNAL_HC_ERROR  ((LONG)0x80000800L)
@@ -269,6 +270,11 @@ typedef struct _HCD_USB_DEVICE {
                                      * by bInterfaceNumber, as the last
                                      * select left it: RESET_PORT replays
                                      * the nonzero ones (hcd_cfg.c)       */
+    ULONG FuncRelease;              /* split: interfaces (bit n) of
+                                     * function PDOs removed, whose pipes
+                                     * and alternates the thread owes a
+                                     * release (hcd_cfg.c); controller
+                                     * lock                               */
 } HCD_USB_DEVICE, *PHCD_USB_DEVICE;
 
 /* A device PDO (hcd_pdo.c): one per enumerated device, a child of the root
@@ -600,12 +606,18 @@ ULONG HcdThreadCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb, PULONG control);
 ULONG HcdThreadControl(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                        UCHAR requestType, UCHAR request, USHORT value,
                        USHORT index, ULONG length, PULONG bytes);
+ULONG HcdThreadControlEx(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                         UCHAR requestType, UCHAR request, USHORT value,
+                         USHORT index, ULONG length, PULONG bytes,
+                         PULONG stalled);
 ULONG HcdThreadReaddress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 VOID HcdEnumCycle(PHCD_CONTROLLER hc, ULONG port, ULONG serial);
 
 /* hcd_cfg.c */
 NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                      struct _HCD_DEVICE_PDO *pdo, PIRP irp);
+VOID HcdCfgReleaseFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                           ULONG interfaceMask);
 VOID HcdCfgFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 VOID HcdCfgService(PHCD_CONTROLLER hc);
 VOID HcdCfgCancelService(PHCD_CONTROLLER hc);

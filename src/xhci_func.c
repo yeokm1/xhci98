@@ -137,14 +137,15 @@ ULONG XhciFuncSplit(const UCHAR *device, const UCHAR *config, ULONG length,
         at[count++] = offset;
     }
 
-    /* Design record 13 section 10.8, "When". A device with several
-     * configurations is split by its first, the one the bus selects. */
+    /* Microsoft's composite-parent rule ("Enumeration of the composite
+     * parent device"), not design record 13 section 10.8's wider one: a
+     * device Windows leaves under one whole-device driver (several
+     * configurations, or a class of its own, IADs or not) must keep the
+     * USB\VID_v&PID_p id that driver matched on. */
     cls = (ULONG)device[4];
-    if ((ULONG)device[17] == 0 || count < 2 || cls == 0x09UL ||
-        cls == 0xFFUL ||
+    if ((ULONG)device[17] != 1UL || count < 2 ||
         !(cls == 0 ||
-          (cls == 0xEFUL && device[5] == 0x02 && device[6] == 0x01) ||
-          iads != 0)) {
+          (cls == 0xEFUL && device[5] == 0x02 && device[6] == 0x01))) {
         return XHCI_FUNC_NO_SPLIT;
     }
 
@@ -188,14 +189,16 @@ ULONG XhciFuncSplit(const UCHAR *device, const UCHAR *config, ULONG length,
         } else if (cls == 0x0DUL) {
             taken |= mask;          /* Content Security: no function     */
             continue;
-        } else if (cls == 0x01UL) {
+        } else if (cls == 0x01UL && iads == 0) {
             /* Positional, as Microsoft's parent is: baInterfaceNr is not
-             * read (design record 13 section 10.8). */
+             * read (design record 13 section 10.8). Any IAD in the
+             * configuration turns the audio rule off for every interface,
+             * per Microsoft's grouping hierarchy ("Support for interface
+             * collections"). */
             sub = (ULONG)config[at[i] + 6];
             for (j = i + 1; j < count; j++) {
                 m = (ULONG)config[at[j] + 2];
-                if ((covered & XHCI_FUNC_BIT(m)) != 0 ||
-                    (ULONG)config[at[j] + 5] != 0x01UL ||
+                if ((ULONG)config[at[j] + 5] != 0x01UL ||
                     (ULONG)config[at[j] + 6] == sub) {
                     break;
                 }
@@ -214,9 +217,17 @@ ULONG XhciFuncSplit(const UCHAR *device, const UCHAR *config, ULONG length,
         f->SubClass = (ULONG)config[iface + 6];
         f->Protocol = (ULONG)config[iface + 7];
         f->IadOffset = (k < iads) ? iadAt[k] : 0;
+        f->DeviceMask = present;
         f->StringIndex = (ULONG)config[iface + 8];
-        if (k < iads && config[iadAt[k] + 7] != 0) {
-            f->StringIndex = (ULONG)config[iadAt[k] + 7];
+        if (k < iads) {
+            /* Microsoft's compatible ids for an IAD function ("Support for
+             * interface collections"). */
+            f->Class = (ULONG)config[iadAt[k] + 4];
+            f->SubClass = (ULONG)config[iadAt[k] + 5];
+            f->Protocol = (ULONG)config[iadAt[k] + 6];
+            if (config[iadAt[k] + 7] != 0) {
+                f->StringIndex = (ULONG)config[iadAt[k] + 7];
+            }
         }
         taken |= mask;
     }
@@ -303,7 +314,8 @@ ULONG XhciFuncConfig(const UCHAR *config, ULONG length, const XHCI_FUNC *func,
     return XHCI_FUNC_OK;
 }
 
-ULONG XhciFuncSetupAllowed(const UCHAR *setup, ULONG interfaceMask)
+ULONG XhciFuncSetupAllowed(const UCHAR *setup, ULONG interfaceMask,
+                           ULONG deviceMask)
 {
     ULONG type;
     ULONG n;
@@ -319,7 +331,10 @@ ULONG XhciFuncSetupAllowed(const UCHAR *setup, ULONG interfaceMask)
         return 1;                   /* vendor: the function's business   */
     }
     n = (ULONG)setup[4];
-    return n < 32UL && (interfaceMask & XHCI_FUNC_BIT(n)) != 0;
+    if (n >= 32UL || (deviceMask & XHCI_FUNC_BIT(n)) == 0) {
+        return 1;
+    }
+    return (interfaceMask & XHCI_FUNC_BIT(n)) != 0;
 }
 
 /* The id text, counted past the capacity so the caller learns the size. */
@@ -414,9 +429,6 @@ ULONG XhciFuncId(const UCHAR *device, const XHCI_FUNC *func, ULONG port,
         xhciFuncChar(&t, 0);
         break;
     case XHCI_FUNC_ID_COMPATIBLE:
-        /* For an IAD function too the first interface's triple, not the
-         * IAD's bFunctionClass (design record 13 sections 10.7 and 10.10:
-         * chosen, Microsoft's choice unread). */
         for (depth = 3; depth != 0; depth--) {
             xhciFuncStr(&t, "USB\\Class_");
             xhciFuncHexN(&t, func->Class, 2);

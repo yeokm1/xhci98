@@ -347,8 +347,11 @@ static NTSTATUS hcdTransferUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
  * client's buffer is reached without a mapping call: TransferBuffer, or an
  * MDL's MappedSystemVa when the MDL says it is mapped - the first arm of
  * the DDK's MmGetSystemAddressForMdl, whose second arm (MmMapLockedPages)
- * this driver does not import. Completed inline, as GET_CURRENT_FRAME_NUMBER
+ * this driver does not import. Answered inline, as GET_CURRENT_FRAME_NUMBER
  * is: no client resubmits a configuration read from its completion routine.
+ * A refusal still waits for the next tick (HcdIoRefuseLater), as every
+ * refusal a client can retry from its completion routine does (Codex review
+ * of batch (c), round 19, finding 7).
  */
 static NTSTATUS hcdFunctionConfig(PHCD_DEVICE_PDO pdo, PIRP irp, PURB urb,
                                   const HCD_IO_REQUEST *req)
@@ -361,11 +364,17 @@ static NTSTATUS hcdFunctionConfig(PHCD_DEVICE_PDO pdo, PIRP irp, PURB urb,
     if (req->Setup[2] != 0) {
         /* A split device has one configuration (design record 13 section
          * 10.9). */
-        return hcdUrbComplete(irp, urb, USBD_STATUS_INVALID_PARAMETER,
-                              STATUS_INVALID_PARAMETER);
+        return HcdIoRefuseLater(pdo, irp, urb, USBD_STATUS_INVALID_PARAMETER);
     }
     to = NULL;
     if (req->Mdl != NULL) {
+        /* hcdFill's check (hcd_io.c): an MDL shorter than the length the
+         * URB states would let the copy run past the client's pages. */
+        if (MmGetMdlByteCount(req->Mdl) < req->Length) {
+            XHCI_DBG_TEXT("hcd: function configuration read, MDL short");
+            return HcdIoRefuseLater(pdo, irp, urb,
+                                    USBD_STATUS_INVALID_PARAMETER);
+        }
         if ((req->Mdl->MdlFlags &
              (MDL_MAPPED_TO_SYSTEM_VA | MDL_SOURCE_IS_NONPAGED_POOL)) != 0) {
             to = (PUCHAR)req->Mdl->MappedSystemVa;
@@ -383,8 +392,7 @@ static NTSTATUS hcdFunctionConfig(PHCD_DEVICE_PDO pdo, PIRP irp, PURB urb,
     }
     if (to == NULL && n != 0) {
         XHCI_DBG_TEXT("hcd: function configuration read, buffer unmapped");
-        return hcdUrbComplete(irp, urb, USBD_STATUS_INVALID_PARAMETER,
-                              STATUS_INVALID_PARAMETER);
+        return HcdIoRefuseLater(pdo, irp, urb, USBD_STATUS_INVALID_PARAMETER);
     }
     for (i = 0; i < n; i++) {
         to[i] = pdo->Config[i];
@@ -407,16 +415,20 @@ static NTSTATUS hcdFunctionControl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
 
     usbd = HcdUrbIoRequest(urb, &req);
     if (usbd != USBD_STATUS_SUCCESS) {
-        return hcdUrbComplete(irp, urb, usbd, STATUS_INVALID_PARAMETER);
+        return HcdIoRefuseLater(pdo, irp, urb, usbd);
     }
     if (req.Setup[0] == 0x80 && req.Setup[1] == 6 && req.Setup[3] == 2) {
         return hcdFunctionConfig(pdo, irp, urb, &req);
     }
-    if (!XhciFuncSetupAllowed(req.Setup, pdo->InterfaceMask)) {
+    if (!XhciFuncSetupAllowed(req.Setup, pdo->InterfaceMask,
+                              pdo->Func.DeviceMask)) {
         XHCI_DBG_VALUE("hcd: function control refused, bmRequestType/wIndex",
-                       ((ULONG)req.Setup[0] << 16) | req.Setup[4]);
-        return hcdUrbComplete(irp, urb, USBD_STATUS_INVALID_PARAMETER,
-                              STATUS_INVALID_PARAMETER);
+                       ((ULONG)req.Setup[0] << 16) |
+                           ((ULONG)req.Setup[5] << 8) | req.Setup[4]);
+        XHCI_DBG_VALUE("hcd: function control refused, bRequest/wValue",
+                       ((ULONG)req.Setup[1] << 16) |
+                           ((ULONG)req.Setup[3] << 8) | req.Setup[2]);
+        return HcdIoRefuseLater(pdo, irp, urb, USBD_STATUS_INVALID_PARAMETER);
     }
     return hcdTransferParsed(pdo, hc, irp, urb, &req);
 }

@@ -559,15 +559,31 @@ static ULONG hcdEp0Quiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                    UCHAR requestType, UCHAR request,
                                    USHORT value, USHORT index, ULONG length,
-                                   PULONG bytes);
+                                   PULONG bytes, PULONG stalled);
 
 ULONG HcdThreadControl(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                        UCHAR requestType, UCHAR request, USHORT value,
                        USHORT index, ULONG length, PULONG bytes)
 {
+    ULONG stalled;
+
+    return HcdThreadControlEx(hc, dev, requestType, request, value, index,
+                              length, bytes, &stalled);
+}
+
+/* HcdThreadControl, and *stalled 1 only when the request reached the device
+ * and the device answered it with a STALL - not when it never went out, or
+ * failed any other way (Codex review of batch (c), round 19, finding 2).
+ * Thread only. */
+ULONG HcdThreadControlEx(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                         UCHAR requestType, UCHAR request, USHORT value,
+                         USHORT index, ULONG length, PULONG bytes,
+                         PULONG stalled)
+{
     ULONG ok;
 
     *bytes = 0;
+    *stalled = 0;
     if (dev->Ep0Stuck) {
         /* Its record is still queued from a timeout: reusing it would
          * relink the engine's queue (round 2, finding 10). */
@@ -592,7 +608,7 @@ ULONG HcdThreadControl(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         return 0;
     }
     ok = hcdThreadControlQuiet(hc, dev, requestType, request, value, index,
-                               length, bytes);
+                               length, bytes, stalled);
     if (!dev->Ep0Stuck) {
         /* A timed-out one leaves EP0 paused for the reset it requested. */
         HcdIoPipeResume(hc, &dev->Ep0Pipe);
@@ -604,7 +620,7 @@ ULONG HcdThreadControl(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                    UCHAR requestType, UCHAR request,
                                    USHORT value, USHORT index, ULONG length,
-                                   PULONG bytes)
+                                   PULONG bytes, PULONG stalled)
 {
     XHCI_CONTROL_REQUEST req;
     XHCI_TRB trbs[XHCI_XFER_MAX_CONTROL_TRBS];
@@ -664,6 +680,7 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         return 0;
     }
     if (dev->Ep0Xfer.UsbdStatus != XHCI_USBD_STATUS_SUCCESS) {
+        *stalled = dev->Ep0Xfer.UsbdStatus == XHCI_USBD_STATUS_STALL_PID;
         return 0;
     }
     *bytes = dev->Ep0Xfer.BytesTransferred;

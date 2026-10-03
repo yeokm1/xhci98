@@ -46,11 +46,13 @@ typedef struct _XHCI_FUNC {
     ULONG FirstInterface;       /* MI_nn                                 */
     ULONG InterfaceMask;        /* bit n: bInterfaceNumber n             */
     ULONG InterfaceCount;       /* the filtered bNumInterfaces           */
-    ULONG Class;                /* the first interface's, alternate 0    */
+    ULONG Class;                /* the IAD's bFunction triple, else the  */
+                                /* first interface's (alternate 0)       */
     ULONG SubClass;
     ULONG Protocol;
     ULONG IadOffset;            /* of its IAD; 0 when grouped without    */
     ULONG StringIndex;          /* iFunction, else iInterface            */
+    ULONG DeviceMask;           /* every interface of the configuration  */
 } XHCI_FUNC, *PXHCI_FUNC;
 
 typedef struct _XHCI_FUNC_SET {
@@ -60,9 +62,11 @@ typedef struct _XHCI_FUNC_SET {
 
 /*
  * The functions of a device with the 18-byte `device` descriptor and the
- * whole configuration `config` of `length` bytes - its first configuration,
- * the one the bus reads and selects, whatever bNumConfigurations says
- * (design record 13 section 10.8). XHCI_FUNC_OK with Count >= 1 when the bus
+ * whole configuration `config` of `length` bytes. Split only as Microsoft's
+ * composite parent is: bNumConfigurations 1, at least two interfaces, and
+ * bDeviceClass 0 or class/subclass/protocol EF/02/01. Grouped by IAD; with
+ * no IAD in the configuration at all, by the positional audio rule; else
+ * one interface per function. XHCI_FUNC_OK with Count >= 1 when the bus
  * splits it, in the order of their first interfaces' descriptors;
  * XHCI_FUNC_NO_SPLIT (Count 0) when it stays one device PDO;
  * XHCI_FUNC_MALFORMED for a header that is not a configuration descriptor,
@@ -84,9 +88,13 @@ ULONG XhciFuncConfig(const UCHAR *config, ULONG length, const XHCI_FUNC *func,
                      UCHAR *out, ULONG capacity, PULONG total);
 
 /* 1 when the 8-byte SETUP may go to the device from the function whose
- * interfaces are `interfaceMask`: a standard or class request with interface
- * recipient must name one of them in wIndex's low byte. */
-ULONG XhciFuncSetupAllowed(const UCHAR *setup, ULONG interfaceMask);
+ * interfaces are `interfaceMask`, of the device's `deviceMask`: a standard
+ * or class request with interface recipient may not name a sibling's
+ * interface in wIndex's low byte (the high byte is the class's own - UAC
+ * 1.0 puts an entity ID there). One naming no interface of the device is
+ * the device's to answer. */
+ULONG XhciFuncSetupAllowed(const UCHAR *setup, ULONG interfaceMask,
+                           ULONG deviceMask);
 
 #define XHCI_FUNC_ID_DEVICE     0UL
 #define XHCI_FUNC_ID_HARDWARE   1UL
