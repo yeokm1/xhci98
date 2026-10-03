@@ -1667,6 +1667,25 @@ static VOID hcdPortInspectAgain(PHCD_CONTROLLER hc, PHCD_PORT p)
 }
 
 /*
+ * An inspection of root port p that read PORTSC as all ones, at any of its
+ * reads. Unreadable says nothing: whatever the inspection was owed - a
+ * change, a refused send-back to settle, a re-inspection asked for - is
+ * owed again at the next pass, until an inspection completes on readable
+ * reads; a port that stays unreadable hands the controller to recovery,
+ * whose invalidation settles every port. An unreadable PORTSC never drops
+ * pending port work (Codex review of the Phase 28-31 integration, rounds 5
+ * and 6). Thread.
+ */
+static VOID hcdPortUnreadable(PHCD_CONTROLLER hc, PHCD_PORT p)
+{
+    if (++p->Unreadable == HCD_PORT_UNREADABLE_PASSES) {
+        XHCI_DBG_VALUE("hcd: PORTSC unreadable, recovery, port", p->PortId);
+        HcdSvcRequestReset(&hc->Hc);
+    }
+    hcdPortInspectAgain(hc, p);
+}
+
+/*
  * A hold released (29-A.5): the SuperSpeed port re-armed with PLS =
  * RxDetect and LWS - the Disabled state's exit to Disconnected - and never
  * a warm reset, which does not act on a Disabled port, nor a power cycle.
@@ -1727,22 +1746,9 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
     ext = &hc->Hc;
     portsc = XhciReadPortsc(ext, p->PortId);
     if (portsc == 0xFFFFFFFFUL) {
-        /* Unreadable says nothing: whatever the inspection was owed - a
-         * change, a refused send-back to settle, a re-inspection asked
-         * for - is owed again at the next pass, until a read succeeds; a
-         * port that stays unreadable hands the controller to recovery,
-         * whose invalidation settles every port. An unreadable PORTSC
-         * never drops pending port work (Codex review of the Phase 28-31
-         * integration, round 5). */
-        if (++p->Unreadable == HCD_PORT_UNREADABLE_PASSES) {
-            XHCI_DBG_VALUE("hcd: PORTSC unreadable, recovery, port",
-                           p->PortId);
-            HcdSvcRequestReset(ext);
-        }
-        hcdPortInspectAgain(hc, p);
+        hcdPortUnreadable(hc, p);
         return;
     }
-    p->Unreadable = 0;
     changes = portsc & XHCI_PORTSC_CHANGE_MASK;
     if (changes != 0) {
         XhciWritePortsc(ext, p->PortId,
@@ -1761,6 +1767,7 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
     /* A held SuperSpeed port is not served: its link is Disabled and stays
      * so until the hold is released (29-A.5). */
     if (hcdHoldOf(hc, p->PortId) != NULL) {
+        p->Unreadable = 0;
         return;
     }
     /* The companion of a held port: its departures and arrivals are the
@@ -1800,7 +1807,17 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
     if ((feed & XHCI_LINK_FEED_CONNECT) != 0 && !hcdHalted(hc)) {
         hcdFeed(hc, p, XHCI_ENUM_EV_CONNECT);
     }
-    hcdHoldResolve(hc, p, XhciReadPortsc(ext, p->PortId));
+    /* The resolver reads the port as it is now, through the same rule: an
+     * unreadable read owes the whole inspection again, and the budget is
+     * charged until an inspection completes (Codex review of the Phase
+     * 28-31 integration, round 6, finding 1). */
+    portsc = XhciReadPortsc(ext, p->PortId);
+    if (portsc == 0xFFFFFFFFUL) {
+        hcdPortUnreadable(hc, p);
+        return;
+    }
+    p->Unreadable = 0;
+    hcdHoldResolve(hc, p, portsc);
 }
 
 /* ----------------------------------------------------------------------- */

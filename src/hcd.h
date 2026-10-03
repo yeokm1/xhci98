@@ -223,15 +223,14 @@ typedef struct _HCD_PIPE {
     ULONG Closed;                   /* deconfigured: no more submissions  */
     ULONG Halted;                   /* a STALL; the client resets the pipe */
     /* The device's sequence (an endpoint's pipe, never a stream's; under
-     * the controller lock). SeqUsed: a TD was published on the endpoint
-     * or any stream of it since its sequence was last restarted at both
-     * ends - the select that opened it, or a recovery whose
+     * the controller lock): a TD was published, or a surviving TD
+     * restarted, on the endpoint or any stream of it since both ends last
+     * restarted its sequence - the select that opened it, a RESET_PIPE or
+     * RESET_PORT that succeeded, or a streams open or close whose
      * CLEAR_FEATURE(ENDPOINT_HALT) the device took (hcd_io.c, hcd_cfg.c).
-     * SeqUncertain: the host's sequence was restarted and the device did
-     * not take that clear, so the two ends may disagree: every request on
-     * it fails STALL_PID until the client's RESET_PIPE succeeds. */
+     * A streams open or close of a used endpoint owes the device that
+     * clear (hcdCfgStreamsSequence). */
     ULONG SeqUsed;
-    ULONG SeqUncertain;
     ULONG CancelPending;            /* a record of it was cancelled      */
     ULONG DrainPending;             /* a refused retire: stop and drain  */
     ULONG Paused;                   /* the thread is stopping or editing
