@@ -34,6 +34,8 @@ static volatile const char HcdVersionString[] = "xhci98 " XHCI_VER_STR;
 
 PDRIVER_OBJECT HcdDriverObject;
 
+static LONG hcdFdoSerial;
+
 NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath);
 static NTSTATUS NTAPI hcdAddDevice(PDRIVER_OBJECT DriverObject,
                                    PDEVICE_OBJECT Pdo);
@@ -106,6 +108,13 @@ static NTSTATUS NTAPI hcdAddDevice(PDRIVER_OBJECT DriverObject,
     PDEVICE_OBJECT fdo;
     PHCD_CONTROLLER hc;
     NTSTATUS status;
+    UNICODE_STRING name;
+    WCHAR nameBuffer[32];
+    ULONG serial;
+    ULONG n;
+    ULONG d;
+    WCHAR digits[12];
+    static const WCHAR prefix[] = L"\\Device\\XHCI98HC";
 
     /* A PDO of this driver's own is the root hub's: the second role
      * (design record 13 section 5.2). */
@@ -113,7 +122,24 @@ static NTSTATUS NTAPI hcdAddDevice(PDRIVER_OBJECT DriverObject,
         return HcdRootHubAddDevice(DriverObject, Pdo);
     }
 
-    status = IoCreateDevice(DriverObject, sizeof(HCD_CONTROLLER), NULL,
+    /* Named, because \DosDevices\HCD<n> must point at a name (hcd_door.c);
+     * usbport names its FDO \Device\USBFDO-<n> for the same link. */
+    serial = (ULONG)InterlockedIncrement(&hcdFdoSerial);
+    n = 0;
+    for (d = 0; prefix[d] != 0; d++) {
+        nameBuffer[n++] = prefix[d];
+    }
+    d = 0;
+    do {
+        digits[d++] = (WCHAR)(L'0' + (serial % 10UL));
+        serial /= 10UL;
+    } while (serial != 0 && d < 11);
+    while (d > 0) {
+        nameBuffer[n++] = digits[--d];
+    }
+    nameBuffer[n] = 0;
+    RtlInitUnicodeString(&name, nameBuffer);
+    status = IoCreateDevice(DriverObject, sizeof(HCD_CONTROLLER), &name,
                             FILE_DEVICE_CONTROLLER, 0, FALSE, &fdo);
     if (!NT_SUCCESS(status)) {
         return status;
@@ -128,6 +154,7 @@ static NTSTATUS NTAPI hcdAddDevice(PDRIVER_OBJECT DriverObject,
     hc->Common.DevicePower = PowerDeviceD3;
     hc->Common.SystemPower = PowerSystemWorking;
     hc->Pdo = Pdo;
+    hc->FdoSerial = (ULONG)hcdFdoSerial;
     hc->OutstandingIo = 1;
     KeInitializeEvent(&hc->RemoveEvent, NotificationEvent, FALSE);
     HcdControllerInitObjects(hc);
@@ -184,21 +211,33 @@ static NTSTATUS NTAPI hcdDispatchPower(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     return HcdCompleteIrp(Irp, Irp->IoStatus.Status, Irp->IoStatus.Information);
 }
 
-/* Everything that is neither PnP nor power: the controller FDO forwards it to
- * the PCI stack (IRP_MJ_SYSTEM_CONTROL is the one that arrives there); the
- * door of task 26-A.8 takes IRP_MJ_DEVICE_CONTROL over later. */
+/* Everything that is neither PnP nor power. The door (hcd_door.c, 26-A.8)
+ * takes CREATE, CLOSE, CLEANUP and DEVICE_CONTROL on both FDOs; the
+ * controller FDO forwards the rest to the PCI stack (IRP_MJ_SYSTEM_CONTROL is
+ * the one that arrives there). */
 static NTSTATUS NTAPI hcdDispatchOther(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 {
     PHCD_COMMON common;
     PHCD_CONTROLLER hc;
     NTSTATUS status;
+    UCHAR major;
 
     common = (PHCD_COMMON)DeviceObject->DeviceExtension;
+    major = IoGetCurrentIrpStackLocation(Irp)->MajorFunction;
     if (common->Kind == HCD_KIND_DEVICE_PDO &&
-        IoGetCurrentIrpStackLocation(Irp)->MajorFunction ==
-            IRP_MJ_INTERNAL_DEVICE_CONTROL) {
+        major == IRP_MJ_INTERNAL_DEVICE_CONTROL) {
         /* The function-driver contract (hcd_urb.c, 26-A.5). */
         return HcdDevicePdoInternalIoctl((PHCD_DEVICE_PDO)common, Irp);
+    }
+    if ((common->Kind == HCD_KIND_CONTROLLER_FDO ||
+         common->Kind == HCD_KIND_ROOTHUB_FDO) &&
+        (major == IRP_MJ_CREATE || major == IRP_MJ_CLOSE ||
+         major == IRP_MJ_CLEANUP)) {
+        return HcdDoorCreateClose(Irp);
+    }
+    if (common->Kind == HCD_KIND_ROOTHUB_FDO &&
+        major == IRP_MJ_DEVICE_CONTROL) {
+        return HcdRootHubFdoDeviceControl((PHCD_ROOTHUB_FDO)common, Irp);
     }
     if (common->Kind != HCD_KIND_CONTROLLER_FDO) {
         return HcdCompleteIrp(Irp, STATUS_NOT_SUPPORTED, 0);
@@ -207,7 +246,11 @@ static NTSTATUS NTAPI hcdDispatchOther(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     if (!HcdIoEnter(hc)) {
         return HcdCompleteIrp(Irp, STATUS_DELETE_PENDING, 0);
     }
-    status = HcdPassDown(hc, Irp);
+    if (major == IRP_MJ_DEVICE_CONTROL) {
+        status = HcdDoorControllerIoctl(hc, Irp);
+    } else {
+        status = HcdPassDown(hc, Irp);
+    }
     HcdIoLeave(hc);
     return status;
 }

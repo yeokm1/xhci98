@@ -118,8 +118,12 @@ ntoskrnl.exe!ObfDereferenceObject           all  required  w2k-export; win98-pre
 ntoskrnl.exe!IoIsWdmVersionAvailable        all  required  w2k-export; win98-precedent ohci1394.sys 4.10.2222 (NTOSKRNL.EXE!IoIsWdmVersionAvailable, hint 51) (Appendix A row 40); NUSB USBPORT.SYS 5.00.2195.5652 (hint 55). Chooses the thread-stop wait: (1, 0x10) is TRUE from Windows 2000 (WDM 1.10) on and FALSE on 98 (1.00) and ME (1.05)
 ntoskrnl.exe!ExQueueWorkItem                 all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!ExQueueWorkItem, hint 17) (+23 other 98 SE); ntkern-name. The power work item (hcd_power.c): a D0 resume or a system-IRP completion that arrives above PASSIVE_LEVEL
 
-# --- The qemu flavour's live trace channel (xhci_dbg.c), never published ---
-ntoskrnl.exe!DbgPrint                        qemu required  w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!DbgPrint, hint 1) (+1 other 98 SE); ntkern-name. The qemu flavour's live trace only (xhci_dbg.c); the log ring's DebugView sink of task 26-A.8 decides the other flavours
+# --- DbgPrint: the log ring's DebugView sink (hcd_log.c, task 26-A.8) in    ---
+# --- every flavour, emitted from the controller thread at PASSIVE_LEVEL      ---
+# --- only, and the qemu flavour's live trace (xhci_dbg.c). AGENTS.md allows  ---
+# --- no third site, and SITES holds the import to those two objects.        ---
+ntoskrnl.exe!DbgPrint                        all  required  SITES=hcd_log.obj,xhci_dbg.obj the one emit site and the qemu trace; w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!DbgPrint, hint 1) (+1 other 98 SE); ntkern-name (design record 13 section 7.4)
+# --- The qemu flavour's port-0xE9 mirror, never published ---
 HAL.dll!WRITE_PORT_UCHAR                     qemu required  w2k-export; ntkern-name; MEASURED NOT LOADING on E460 Win98 SE metal (the miniport's allowlist on branch 1.2.0.0 has the record; design record 08). The qemu flavour is never published, so this row is what keeps the import out of every binary a user can install.
 
 
@@ -141,6 +145,18 @@ ntoskrnl.exe!InterlockedExchange             all  required  w2k-export; win98-pr
 ntoskrnl.exe!IoInvalidateDeviceRelations     all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!IoInvalidateDeviceRelations, hint 4F) (+3 other 98 SE); ntkern-name
 ntoskrnl.exe!RtlInitUnicodeString            all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!RtlInitUnicodeString, hint D7) (+47 other 98 SE); ntkern-name
 ntoskrnl.exe!ObfReferenceObject              all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!ObfReferenceObject, hint AD) (+14 other 98 SE) (design record 13 Appendix A row 35). The ObReferenceObject macro: every PDO a relations list returns is referenced
+# --- Task 26-A.8: the door (hcd_door.c; design record 13 section 8.7) - the  ---
+# --- \DosDevices names, the two device interfaces, SymbolicName on each     ---
+# --- devnode, and the driver key names usbui.dll matches devnodes by. The  ---
+# --- kernel rows are section 7.4 verbatim; the link pair and ZwSetValueKey  ---
+# --- are Appendix A rows 15, 16 and 159 (stock 98 SE precedent each, the    ---
+# --- same usbd.sys and usbhub.sys that create such names on Windows 98).    ---
+ntoskrnl.exe!IoCreateSymbolicLink            all  required  w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!IoCreateSymbolicLink, hint 3B) (+13 other 98 SE); ntkern-name (design record 13 Appendix A row 15)
+ntoskrnl.exe!IoDeleteSymbolicLink            all  required  w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!IoDeleteSymbolicLink, hint 3E) (+13 other 98 SE); ntkern-name (design record 13 Appendix A row 16)
+ntoskrnl.exe!IoRegisterDeviceInterface       all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!IoRegisterDeviceInterface, hint 54) (+9 other 98 SE); ntkern-name
+ntoskrnl.exe!IoSetDeviceInterfaceState       all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!IoSetDeviceInterfaceState, hint 5A) (+8 other 98 SE); ntkern-name
+ntoskrnl.exe!IoGetDeviceProperty             all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!IoGetDeviceProperty, hint 49) (+7 other 98 SE); ntkern-name
+ntoskrnl.exe!ZwSetValueKey                   all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!ZwSetValueKey, hint FF) (+12 other 98 SE); ntkern-name (design record 13 Appendix A row 159)
 
 [deny]
 

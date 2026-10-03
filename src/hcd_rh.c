@@ -104,13 +104,14 @@ NTSTATUS HcdRootHubCreatePdo(PHCD_CONTROLLER hc)
     PDEVICE_OBJECT pdo;
     PHCD_ROOTHUB_PDO ext;
     NTSTATUS status;
+    ULONG serial;
 
     if (hc->RootHubPdo != NULL) {
         return STATUS_SUCCESS;
     }
 
-    hcdRootHubName(nameBuffer,
-                   (ULONG)InterlockedIncrement(&hcdRootHubSerial));
+    serial = (ULONG)InterlockedIncrement(&hcdRootHubSerial);
+    hcdRootHubName(nameBuffer, serial);
     RtlInitUnicodeString(&name, nameBuffer);
     status = IoCreateDevice(HcdDriverObject, sizeof(HCD_ROOTHUB_PDO), &name,
                             FILE_DEVICE_BUS_EXTENDER, 0, FALSE, &pdo);
@@ -125,6 +126,7 @@ NTSTATUS HcdRootHubCreatePdo(PHCD_CONTROLLER hc)
     ext->Common.DevicePower = PowerDeviceD0;
     ext->Common.SystemPower = PowerSystemWorking;
     ext->Controller = hc;
+    ext->Serial = serial;
 
     pdo->Flags |= DO_POWER_PAGABLE;
     pdo->Flags &= ~DO_DEVICE_INITIALIZING;
@@ -520,6 +522,7 @@ NTSTATUS HcdRootHubFdoPnp(PHCD_ROOTHUB_FDO fdo, PIRP irp)
          * and its extension with the controller pointer, on the way.
          */
         hc = hcdRhController(fdo);
+        HcdDoorRootHubRemove(fdo, hc);
         if (hc != NULL) {
             HcdEnumDetach(hc);
             HcdDevicePdoReleaseAll(hc);
@@ -548,6 +551,7 @@ NTSTATUS HcdRootHubFdoPnp(PHCD_ROOTHUB_FDO fdo, PIRP irp)
         if (NT_SUCCESS(status)) {
             fdo->Common.PnpState = HCD_PNP_STARTED;
             hc = hcdRhController(fdo);
+            HcdDoorRootHubStart(fdo, hc);
             if (hc != NULL) {
                 /* PDOs may be created now, and every port is looked at. */
                 HcdEnumAttach(hc);
@@ -561,10 +565,12 @@ NTSTATUS HcdRootHubFdoPnp(PHCD_ROOTHUB_FDO fdo, PIRP irp)
     switch (stack->MinorFunction) {
     case IRP_MN_STOP_DEVICE:
         fdo->Common.PnpState = HCD_PNP_STOPPED;
+        HcdDoorRootHubStop(fdo);
         irp->IoStatus.Status = STATUS_SUCCESS;
         break;
     case IRP_MN_SURPRISE_REMOVAL:
         fdo->Common.PnpState = HCD_PNP_SURPRISE_REMOVED;
+        HcdDoorRootHubStop(fdo);
         irp->IoStatus.Status = STATUS_SUCCESS;
         break;
     case IRP_MN_QUERY_STOP_DEVICE:
@@ -609,6 +615,20 @@ NTSTATUS HcdRootHubFdoPower(PHCD_ROOTHUB_FDO fdo, PIRP irp)
     PoStartNextPowerIrp(irp);
     IoSkipCurrentIrpStackLocation(irp);
     status = PoCallDriver(fdo->LowerDevice, irp);
+    hcdRhIoLeave(fdo);
+    return status;
+}
+
+/* IRP_MJ_DEVICE_CONTROL on the root-hub FDO: the hub IOCTLs of the Power tab
+ * (hcd_door.c), inside the FDO's I/O count so its remove waits them out. */
+NTSTATUS HcdRootHubFdoDeviceControl(PHCD_ROOTHUB_FDO fdo, PIRP irp)
+{
+    NTSTATUS status;
+
+    if (!hcdRhIoEnter(fdo)) {
+        return HcdCompleteIrp(irp, STATUS_DELETE_PENDING, 0);
+    }
+    status = HcdDoorRootHubIoctl(hcdRhController(fdo), irp);
     hcdRhIoLeave(fdo);
     return status;
 }

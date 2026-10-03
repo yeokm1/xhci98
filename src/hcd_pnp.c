@@ -57,6 +57,9 @@ static NTSTATUS hcdStart(PHCD_CONTROLLER hc, PIRP irp)
     if (NT_SUCCESS(status)) {
         hc->Common.PnpState = HCD_PNP_STARTED;
         hc->Common.DevicePower = PowerDeviceD0;
+        /* The door's names (hcd_door.c, 26-A.8), best effort: a missing
+         * name costs a property page, not the controller. */
+        HcdDoorControllerStart(hc);
         /* The root hub, the controller's one child (design record 13
          * section 5.2). A failure leaves the controller started and the
          * bus empty; it is traced, and the next start tries again. */
@@ -93,6 +96,8 @@ static NTSTATUS hcdRemove(PHCD_CONTROLLER hc, PIRP irp)
     if (hc->ControllerStarted) {
         HcdStopController(hc);
     }
+    /* Before the IRP goes down: the interface belongs to the PCI PDO. */
+    HcdDoorControllerRemove(hc);
 
     irp->IoStatus.Status = STATUS_SUCCESS;
     status = HcdPassDown(hc, irp);
@@ -145,6 +150,7 @@ NTSTATUS HcdControllerPnp(PHCD_CONTROLLER hc, PIRP irp)
         break;
 
     case IRP_MN_STOP_DEVICE:
+        HcdDoorControllerStop(hc);
         HcdStopController(hc);
         hc->Common.PnpState = HCD_PNP_STOPPED;
         irp->IoStatus.Status = STATUS_SUCCESS;
@@ -152,6 +158,7 @@ NTSTATUS HcdControllerPnp(PHCD_CONTROLLER hc, PIRP irp)
         break;
 
     case IRP_MN_SURPRISE_REMOVAL:
+        HcdDoorControllerStop(hc);
         HcdStopController(hc);
         hc->Common.PnpState = HCD_PNP_SURPRISE_REMOVED;
         irp->IoStatus.Status = STATUS_SUCCESS;

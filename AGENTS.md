@@ -562,15 +562,19 @@ tag that has drifted onto its neighbour is worse than no tag.
 
 Never use `DbgPrint` outside `#if DBG` guards, with one exception, which is a
 switch a user sets rather than a trace site: the `XhciLogDebugView` sink in
-`src/xhci_dispatch.c` emits the bounded log ring through `DbgPrint` from the
-PASSIVE-level flush in every build flavour, so `ntoskrnl.exe!DbgPrint` is an
-`all` row in the import allowlist. **Do not widen it to a second call site.**
-Per-line printing from DPC and ISR contexts at real interrupt rates is what
-bugchecks Windows 98 on bare metal, and a second emit site would have to be
-PASSIVE_LEVEL, which a Windows 98 machine running this package never reaches
-between `StartController` and shutdown. See
-`docs/contributing/build-and-test.md`, "Getting a trace off a bare-metal
-machine".
+`src/hcd_log.c` emits the bounded log ring through `DbgPrint` in every build
+flavour, from the controller thread at PASSIVE_LEVEL only - continuously, on
+every wake, and once more with the counter block at each stop (task 26-A.8) -
+so `ntoskrnl.exe!DbgPrint` is an `all` row in the import allowlist whose
+`SITES` admits `hcd_log.obj` and the qemu trace's `xhci_dbg.obj` and nothing
+else. **Do not widen it to a third call site.** Per-line printing from DPC
+and ISR contexts at real interrupt rates is what bugchecks Windows 98 on bare
+metal (design record 08), and owning the driver object does not change that:
+producers record from any IRQL and only the thread emits. (Until 1.2.0.0 the
+miniport's sink was in `src/xhci_dispatch.c` and could flush only at
+`StopController`, the one PASSIVE context a Windows 98 machine reached before
+shutdown.) See `docs/contributing/build-and-test.md`, "Getting a trace off a
+bare-metal machine".
 
 **Source is ASCII with CRLF endings, and a gate now says so.** Every source
 edit in this repository passes through a PowerShell string layer, because the
