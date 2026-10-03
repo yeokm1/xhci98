@@ -484,7 +484,12 @@ function Find-ExtensionIdentity {
 # the miniport's "a second VA" could not see: the HCD's block lives in the
 # controller FDO's extension, which a STOP_DEVICE and START_DEVICE keep at the
 # same VA, so a restart is a new start number and not a new address. `Spans`
-# is therefore "more than one (VA, start) pair, or more than one size".
+# is therefore "more than one complete record, or more than one size": a
+# second record is a second lifetime even when it repeats the first's (VA,
+# start), since a reloaded image numbers its starts from 1 again and a
+# recreated FDO can be given the same allocation (Codex review round 23,
+# finding 3). The driver draws start numbers image-wide, so within one load a
+# repeat cannot be the same start.
 #
 # The kernel-address filter of the miniport's reader is kept: an x86 VA, or an
 # amd64 high half, without bit 31 is not a kernel address and is not taken.
@@ -539,7 +544,7 @@ function Find-CounterBlockIdentity {
         AllVas    = @($records | ForEach-Object { $_.Va } | Sort-Object -Unique)
         AllSizes  = $distinctSizes
         AllStarts = @($records | ForEach-Object { $_.Start } | Sort-Object -Unique)
-        Spans     = (($pairs.Count -gt 1) -or ($distinctSizes.Count -gt 1))
+        Spans     = (($records.Count -gt 1) -or ($pairs.Count -gt 1) -or ($distinctSizes.Count -gt 1))
         Arch      = $Arch
         Driver    = 'hcd'
     }

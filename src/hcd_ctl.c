@@ -766,6 +766,8 @@ static VOID hcdStopBody(PHCD_CONTROLLER hc)
     if (hc->BarVa != NULL || hc->Dma != NULL || hc->Interrupt != NULL) {
         hcdRelease(hc);
     }
+    /* The thread's last poll ran before the disable above. */
+    HcdCountersPoll(hc);
     hc->ControllerStarted = 0;
 }
 

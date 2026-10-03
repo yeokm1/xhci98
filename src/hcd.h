@@ -68,6 +68,7 @@ typedef struct _HCD_TIMER {
     struct _HCD_CONTROLLER *Controller;
     volatile ULONG Busy;
     XHCI_ASYNC_TIMER_CALLBACK *Callback;
+    ULONG ContextLength;            /* under TimerLock                    */
     UCHAR Context[HCD_TIMER_CONTEXT_BYTES];
 } HCD_TIMER, *PHCD_TIMER;
 
@@ -425,6 +426,8 @@ typedef struct _HCD_CONTROLLER {
     ULONG TimerArmsRefused;
     ULONG TimerArmsSuperseded;      /* a pending arm of the same callback
                                      * cancelled and its slot reused      */
+    ULONG TimerArmsStale;           /* an arm older than one pending,
+                                     * dropped (hcdArmIsOlder)            */
     KEVENT TimersIdle;
     /* The MFINDEX sampler's own timer, not a slot of the service's: a
      * recurring arm must not be refused when the slots are full (Codex
@@ -569,7 +572,8 @@ typedef struct _HCD_CONTROLLER {
     KSPIN_LOCK ControllerLock;
 
     /* The device matrix's counters (xhci_counters.h), zeroed at every
-     * start; CountersStart numbers the starts, from 1, so the harness can
+     * start; CountersStart numbers the starts, from 1 and across every
+     * controller of this image (hcd_log.c), so the harness can
      * tell a restart from a block that did not move. */
     XHCIHC_COUNTERS Counters;
     ULONG CountersStart;

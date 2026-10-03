@@ -1249,6 +1249,10 @@ foreach ($lbl in @($script:HcdRefusalLabelsPermanent)) {
 }
 $cf = $hsOk.Clone(); $cf['endpoint configure failures'] = 1
 Assert "an open then a configure failure: FAIL, not PASS" "FAIL" (Get-HcdOutcome $kbdHs (New-HcdDelta $cf))
+$sf = $hsOk.Clone(); $sf['selects failed'] = 1
+Assert "endpoints opened, then the select failed at the device: FAIL, not PASS" "FAIL" (Get-HcdOutcome $kbdHs (New-HcdDelta $sf))
+$sn = $nb.Clone(); $sn['selects failed'] = 1
+Assert "a malformed select, nothing counted: FAIL, not NODRIVER" "FAIL" (Get-HcdOutcome $kbdHs (New-HcdDelta $sn))
 $ub = $hsOk.Clone(); $ub['URBs refused - malformed'] = 1
 Assert "a malformed-URB refusal: FAIL"               "FAIL" (Get-HcdOutcome $kbdHs (New-HcdDelta $ub))
 $id = $hsOk.Clone(); $id['select endpoints requested'] = 2
@@ -1344,6 +1348,10 @@ Set-Content -LiteralPath $cbLog -Encoding ascii -Value @(
     'xhci98: counters start=00000001', 'xhci98: counters size=00000468', 'xhci98: counters VA low=81A2C400'
     'xhci98: counters start=00000001', 'xhci98: counters size=0000046C', 'xhci98: counters VA low=81A2C400')
 Assert "two sizes are a span (two binaries)"         $true (Find-CounterBlockIdentity -DebugconLog $cbLog).Spans
+Set-Content -LiteralPath $cbLog -Encoding ascii -Value @(
+    'xhci98: counters start=00000001', 'xhci98: counters size=00000468', 'xhci98: counters VA low=81A2C400'
+    'xhci98: counters start=00000001', 'xhci98: counters size=00000468', 'xhci98: counters VA low=81A2C400')
+Assert "a repeated record is a span (a second lifetime)" $true (Find-CounterBlockIdentity -DebugconLog $cbLog).Spans
 Set-Content -LiteralPath $cbLog -Encoding ascii -Value @(
     'xhci98: counters start=00000001', 'xhci98: counters size=00000468', 'xhci98: counters VA low=01A2C400')
 Assert "a non-kernel x86 address is not taken"       $null (Find-CounterBlockIdentity -DebugconLog $cbLog).Va

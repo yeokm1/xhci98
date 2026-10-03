@@ -129,6 +129,20 @@ set LIB=%MSVC6%\VC98\LIB
 
 cd /d "%~dp0"
 
+rem Every file a suite makes - objects, binary, captured output - goes in a
+rem directory of this run's own under test\out\ (ignored), never under %TEMP%
+rem or beside the sources: two runs at once, from two worktrees or from an x86
+rem and an amd64 build of one tree, shared %TEMP%\xhci98-<suite>.out and
+rem clobbered each other's captures, and a suite read that way "died before
+rem printing a result". mkdir is the claim, since it fails on a directory that
+rem exists: two runs started in the same second draw the same %RANDOM%, and the
+rem loser draws again. Relative, so the /Fo and /Fe arguments hold no space.
+if not exist out mkdir out
+if not exist out\ goto nooutdir
+:claimrundir
+set "RUNDIR=out\r%RANDOM%%RANDOM%"
+mkdir "%RUNDIR%" 2>nul || goto claimrundir
+
 rem Every suite runs even after one fails: the whole point of the host suite is
 rem that a second failure costs milliseconds, not another build.
 set "SUITEFAILED="
@@ -205,6 +219,7 @@ echo therefore unchecked in this run. Set WDK71 to a WDK 7.1 root, or read the
 echo verdict below as covering x86 alone.
 
 :amd64done
+call :cleanrun
 if defined SUITEFAILED goto testfail
 if defined SUITEBLOCKED goto blocked
 
@@ -253,7 +268,9 @@ set SRC=%~2
 set ARCH=%~3
 echo.
 echo === %NAME% ===
-if exist %NAME%.exe del %NAME%.exe
+set "EXE=%RUNDIR%\%NAME%.exe"
+set "OUT=%RUNDIR%\%NAME%.out"
+if exist "%EXE%" del "%EXE%"
 
 rem /Za enforces C89 (no // comments, no mid-block declarations) - the same
 rem dialect gate the DDK build applies, caught here first.
@@ -269,7 +286,7 @@ rem rather than being verified only by a bench plug. It is empty in every
 rem ordinary run and is NOT a way to ship behaviour: the DDK build's own
 rem XHCI_EXTRA_DEFINES is the one that decides what a binary contains.
 if /i "%ARCH%"=="amd64" goto suitebuild64
-cl /nologo /W3 /WX /Za /DXHCI_HOST_TEST %XHCI_HOST_TEST_DEFINES% /Fe%NAME%.exe %SRC%
+cl /nologo /W3 /WX /Za /DXHCI_HOST_TEST %XHCI_HOST_TEST_DEFINES% /Fe%EXE% /Fo%RUNDIR%\ %SRC%
 goto suitebuilt
 
 rem WDK 7.1's x86-hosted amd64 cross compiler, against the WDK's own CRT headers
@@ -280,11 +297,11 @@ rem dialect.
 set PATH=%WDK71%\bin\x86\amd64;%WDK71%\bin\x86;%PATH%
 set INCLUDE=%WDK71%\inc\crt;%WDK71%\inc\api
 set LIB=%WDK71%\lib\Crt\amd64;%WDK71%\lib\wnet\amd64
-cl /nologo /W3 /WX /DXHCI_HOST_TEST %XHCI_HOST_TEST_DEFINES% /Fe%NAME%.exe %SRC%
+cl /nologo /W3 /WX /DXHCI_HOST_TEST %XHCI_HOST_TEST_DEFINES% /Fe%EXE% /Fo%RUNDIR%\ %SRC%
 
 :suitebuilt
 if errorlevel 1 goto suitebuilderr
-if not exist %NAME%.exe goto suitebuilderr
+if not exist "%EXE%" goto suitebuilderr
 if defined NORUN goto suitenotrun
 
 rem Absolute path: this host sets NoDefaultCurrentDirectoryInExePath, so a bare
@@ -307,12 +324,12 @@ rem discriminator is the reputation block's own message, which the redirection
 rem above captures: only that is "run this again". Anything else that ran and
 rem produced no verdict is a FAILURE, because a suite that cannot finish is not
 rem a suite that passed.
-"%~dp0%NAME%.exe" > "%TEMP%\xhci98-%NAME%.out" 2>&1
+"%~dp0%EXE%" > "%OUT%" 2>&1
 set RC=%ERRORLEVEL%
-type "%TEMP%\xhci98-%NAME%.out"
-findstr /c:"checks, " "%TEMP%\xhci98-%NAME%.out" >nul 2>&1
+type "%OUT%"
+findstr /c:"checks, " "%OUT%" >nul 2>&1
 if not errorlevel 1 goto suiteresult
-findstr /i /c:"Device Guard" /c:"blocked by" "%TEMP%\xhci98-%NAME%.out" >nul 2>&1
+findstr /i /c:"Device Guard" /c:"blocked by" "%OUT%" >nul 2>&1
 if not errorlevel 1 goto suiteblocked
 goto suitecrashed
 
@@ -330,7 +347,7 @@ rem `test_ctx: N checks, N failures`, and a `^0 checks` pattern could never
 rem match it - the one suite of twelve this gate could not see. `\<0 checks,`
 rem still cannot match `20 checks,` (the 0 there follows a word character), and
 rem the trailing comma keeps it on the verdict line.
-findstr /r /c:"\<0 checks," "%TEMP%\xhci98-%NAME%.out" >nul 2>&1
+findstr /r /c:"\<0 checks," "%OUT%" >nul 2>&1
 if not errorlevel 1 goto suitenochecks
 if not "%RC%"=="0" goto suitefailed
 call :cleanup %NAME%
@@ -369,7 +386,7 @@ exit /b 1
 echo %NAME% FAILED - it ran and died before printing a result line (exit %RC%).
 echo This is a crashing vector, not a launch that was blocked: the output above
 echo is the suite's own, up to the point it stopped. Re-running will reproduce
-echo it. Run %NAME%.exe under a debugger, or bisect the vectors.
+echo it. Build %NAME% again and run it under a debugger, or bisect the vectors.
 call :cleanup %NAME%
 endlocal
 exit /b 1
@@ -390,6 +407,19 @@ echo instead, and re-running that one changes nothing.)
 endlocal
 exit /b 2
 
+rem The run's directory, and test\out\ with it once no other run holds one
+rem (rd refuses a directory that is not empty).
+:cleanrun
+if defined RUNDIR if exist "%RUNDIR%" rd /s /q "%RUNDIR%"
+rd out 2>nul
+goto :eof
+
+:nooutdir
+echo.
+echo ERROR: could not create %~dp0out, where each run keeps its files.
+endlocal
+exit /b 1
+
 :nocompiler
 echo.
 echo ERROR: cl.exe not found under %MSVC6%.
@@ -404,7 +434,7 @@ endlocal
 exit /b 1
 
 :cleanup
-if exist %~1.exe del %~1.exe
-if exist "%TEMP%\xhci98-%~1.out" del "%TEMP%\xhci98-%~1.out"
-if exist *.obj del *.obj
+if exist "%RUNDIR%\%~1.exe" del "%RUNDIR%\%~1.exe"
+if exist "%RUNDIR%\%~1.out" del "%RUNDIR%\%~1.out"
+if exist "%RUNDIR%\*.obj" del "%RUNDIR%\*.obj"
 goto :eof

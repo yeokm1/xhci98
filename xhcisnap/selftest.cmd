@@ -24,7 +24,18 @@ if not exist XHCISNAP.EXE (
     exit /b 1
 )
 
-set "BASE=%TEMP%\xhcisnap-selftest-%RANDOM%"
+rem A directory of this run's own under xhcisnap\out\ (ignored), not a name
+rem in %TEMP%: two builds started in the same second draw the same %RANDOM%,
+rem so a shared %TEMP% name is one name, and mkdir is the claim on it.
+if not exist out mkdir out
+if not exist out\ (
+    echo ERROR: could not create %~dp0out
+    exit /b 1
+)
+:claimrundir
+set "RUNDIR=%~dp0out\s%RANDOM%%RANDOM%"
+mkdir "%RUNDIR%" 2>nul || goto claimrundir
+set "BASE=%RUNDIR%\report"
 set FAILED=0
 
 set "XHCISNAP_FAULT="
@@ -100,7 +111,8 @@ if exist "%BASE%-probe.TXT" (
     set FAILED=1
 )
 
-del /q "%BASE%.TXT" "%BASE%.no-fault.log" "%BASE%.write-fault.log" "%BASE%.close-fault.log" "%BASE%.readonly.log" "%BASE%.probe-dump.log" 2> nul
+rd /s /q "%RUNDIR%" 2> nul
+rd out 2> nul
 
 if "%FAILED%"=="1" (
     echo xhcisnap selftest FAILED
