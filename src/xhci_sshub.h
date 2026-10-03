@@ -191,12 +191,17 @@ ULONG XhciSsHubLinkState(ULONG status);
  *                       is enumerated afresh (SuperSpeed has no
  *                       C_PORT_ENABLE to say the hub disabled it);
  *   link SS.Inactive or Compliance Mode, whatever the change bits:
- *                       WarmReset - the executor issues BH_PORT_RESET
- *                       within the port's warm-reset budget, its device
- *                       (if the machine holds one) goes first, and the port
- *                       is decided again from what the reset left;
- *   C_PORT_CONFIG_ERROR the link could not be configured: ConfigError,
- *                       and a device the machine holds goes;
+ *                       WarmReset - checked before every other rule. The
+ *                       device the machine holds goes first (Disconnect,
+ *                       carried out to the end of its teardown), only then
+ *                       does the executor issue BH_PORT_RESET within the
+ *                       port's warm-reset budget, and the port is decided
+ *                       again from what the reset left. A config error
+ *                       seen with such a link takes this branch too, so
+ *                       its recovery is the warm reset's;
+ *   C_PORT_CONFIG_ERROR on a link in any other state: ConfigError, a
+ *                       device the machine holds goes, and the port stays
+ *                       down until its next connect change;
  *   C_PORT_OVER_CURRENT with PORT_POWER clear: OverCurrent and Repower;
  *   C_PORT_LINK_STATE, C_PORT_RESET, C_BH_PORT_RESET outside a reset:
  *                       cleared, nothing else.
@@ -289,16 +294,28 @@ ULONG XhciSsHubDownstream(const struct _XHCI_PIPE_BOS *bos, ULONG extStatus,
  * SuperSpeed hub on root port `rootPort`: for a Gen 1x1 link (link NULL or
  * not Plus) the SuperSpeed class's ID (XhciPortPsivForSpeed); for a
  * SuperSpeedPlus link the ID whose rate the root port's protocol names as
- * SuperSpeedPlus at the aggregate, then at the lane rate - and, where the
- * protocol advertises no PSI table, the default IDs: 5 for 10 Gbit/s on
- * one lane, 6 on two, 7 for 20 Gbit/s. *matched 0 when a SuperSpeedPlus
- * link found no ID and the SuperSpeed class's was given instead - the
- * device is still addressed (at Gen 1's ID, which a SuperSpeed path
- * carries), and the caller counts it.
+ * SuperSpeedPlus at the aggregate rate - and, where the protocol advertises
+ * no PSI table, the default IDs: 5 for 10 Gbit/s on one lane, 6 on two, 7
+ * for 20 Gbit/s. Only those are matches. Failing them, the ID named at the
+ * lane rate, else the SuperSpeed class's, is given with *matched 0: the
+ * device is still addressed, the caller counts it, and the controller's
+ * output Slot Context decides after Address Device (XhciSsHubAdoptSpeed).
  */
 ULONG XhciSsHubPsiv(const struct _XHCI_PORT_MAP *map, ULONG rootPort,
                     const XHCI_SSHUB_LINK *link, PULONG psiv,
                     PULONG matched);
+
+/*
+ * The Protocol Speed ID a device behind a SuperSpeed hub keeps after its
+ * Address Device: `output`, the speed the controller wrote into the output
+ * Slot Context, when it differs from `given` (what the bus asked for) and
+ * names a SuperSpeed-class rate on `rootPort`'s protocol - the controller
+ * is authoritative where the bus guessed (an unmatched SuperSpeedPlus rate,
+ * Codex review of 034a119, finding 2); otherwise `given`, including for an
+ * output of 0 or a speed the protocol does not name.
+ */
+ULONG XhciSsHubAdoptSpeed(const struct _XHCI_PORT_MAP *map, ULONG rootPort,
+                          ULONG given, ULONG output);
 
 /*
  * Whether a SuperSpeed hub and a USB 2.0 hub look like the two halves of

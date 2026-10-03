@@ -70,6 +70,15 @@ static void test_bitmap(void)
     CHECK_EQ(XhciHubStatusBitmap(r, 1, 8), 0x005, "short report");
     CHECK_EQ(XhciHubStatusBitmap(r, 2, 4), 0x005, "past managed ignored");
     CHECK_EQ(XhciHubAllBits(4), 0x1F, "hub and four ports");
+    {
+        UCHAR w[2] = { 0x00, 0x80 };    /* port 15 alone */
+
+        CHECK(XhciHubReportHas(w, 2, 15), "port 15 seen, unmanaged");
+        CHECK_EQ(XhciHubStatusBitmap(w, 2, 14), 0, "and not acted on");
+        CHECK(!XhciHubReportHas(w, 1, 15), "past the bytes that arrived");
+        CHECK(!XhciHubReportHas(w, 2, 14), "port 14 clear");
+        CHECK(!XhciHubReportHas(NULL, 2, 15), "NULL report");
+    }
 }
 
 static void test_decide(void)

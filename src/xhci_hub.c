@@ -237,3 +237,12 @@ ULONG XhciHubPowerWaitMs(ULONG powerGoodMs)
     }
     return powerGoodMs;
 }
+
+/* IRQL: any. */
+ULONG XhciHubReportHas(const UCHAR *data, ULONG bytes, ULONG bit)
+{
+    if (data == NULL || bit / 8UL >= bytes) {
+        return 0;
+    }
+    return (data[bit / 8UL] & (1U << (bit % 8UL))) != 0;
+}

@@ -615,8 +615,9 @@ static void test_psiv(void)
           "table: Gen 1x2 takes the 10 Gb/s entry (one rate, two modes)");
     linkOf(&l, 20, 2);
     (VOID)XhciSsHubPsiv(&m, 2, &l, &psiv, &matched);
-    CHECK(psiv == 12 && matched,
-          "table: no 40 Gb/s entry, the 20 Gb/s lane rate's");
+    CHECK(psiv == 12 && !matched,
+          "table: no 40 Gb/s entry - the 20 Gb/s lane rate's ID, a guess, "
+          "counted unmatched");
     linkOf(&l, 5, 1);
     (VOID)XhciSsHubPsiv(&m, 2, &l, &psiv, &matched);
     CHECK(psiv == 4 && matched, "table: Gen 1x1 is the table's Gen 1 ID");
@@ -628,6 +629,23 @@ static void test_psiv(void)
 
     CHECK_EQ(XhciSsHubPsiv(&m, 4, NULL, &psiv, &matched),
              XHCI_SSHUB_NOT_FOUND, "a port no protocol claims");
+
+    /* After Address Device the controller's output Slot Context speed is
+     * authoritative where it names a SuperSpeed rate. */
+    CHECK_EQ(XhciSsHubAdoptSpeed(&m, 2, 12, 9), 9,
+             "the controller corrected a guessed rate");
+    CHECK_EQ(XhciSsHubAdoptSpeed(&m, 2, 12, 12), 12, "agreement");
+    CHECK_EQ(XhciSsHubAdoptSpeed(&m, 2, 12, 0), 12,
+             "an output of 0 is no answer");
+    CHECK_EQ(XhciSsHubAdoptSpeed(&m, 2, 12, 3), 12,
+             "a PSIV the table does not name is not adopted");
+    CHECK_EQ(XhciSsHubAdoptSpeed(&m, 1, 4, 5), 5,
+             "defaults: Gen 2x1 adopted over Gen 1");
+    CHECK_EQ(XhciSsHubAdoptSpeed(&m, 1, 4, 3), 4,
+             "defaults: a High-Speed ID is not a SuperSpeed answer");
+    CHECK_EQ(XhciSsHubAdoptSpeed(&m, 4, 4, 5), 4,
+             "a port no protocol claims keeps what was given");
+    CHECK_EQ(XhciSsHubAdoptSpeed(NULL, 1, 4, 5), 4, "NULL map");
     CHECK_EQ(XhciSsHubPsiv(&m, 0, NULL, &psiv, &matched),
              XHCI_SSHUB_NOT_FOUND, "port 0");
     CHECK_EQ(XhciSsHubPsiv(&m, 9, NULL, &psiv, &matched),

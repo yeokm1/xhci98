@@ -416,6 +416,8 @@ typedef struct _HCD_PORT {
      * (zero otherwise), for the Protocol Speed ID its device is given;
      * Link.WarmResets is that port's warm-reset budget. */
     XHCI_SSHUB_LINK HubSsLink;
+    ULONG HubSsRecover;     /* its link wants a warm reset once the device
+                             * it held is torn down (HcdSsHubPortRecover) */
 } HCD_PORT, *PHCD_PORT;
 
 /*
@@ -807,6 +809,7 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
 VOID HcdHubCollect(PHCD_CONTROLLER hc, PHCD_HUB hub);
 VOID HcdHubRearm(PHCD_CONTROLLER hc, PHCD_HUB hub);
 VOID HcdHubXferRetired(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+VOID HcdHubSilence(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n);
 ULONG HcdHubClassRequest(PHCD_CONTROLLER hc, PHCD_HUB hub, UCHAR type,
                          UCHAR request, USHORT value, USHORT index,
                          ULONG length, PULONG bytes, PULONG stalled);
@@ -817,6 +820,9 @@ ULONG HcdSsHubPortReset(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
                         PULONG speedClass);
 ULONG HcdSsHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
                        ULONG state, PXHCI_HUB_PORT_DECISION d);
+ULONG HcdSsHubPortRecover(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n);
+VOID HcdSsHubAdoptSpeed(PHCD_CONTROLLER hc, PHCD_PORT p,
+                        PHCD_USB_DEVICE dev);
 ULONG HcdSsHubPsiv(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG rootPort,
                    PULONG psiv);
 VOID HcdSsHubCountPair(PHCD_CONTROLLER hc, PHCD_HUB hub);

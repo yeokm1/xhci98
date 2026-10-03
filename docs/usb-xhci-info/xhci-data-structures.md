@@ -1809,15 +1809,18 @@ bmRequestType A0h, wValue 2A00h, wLength 12 (10.15.2.1, Table 10-3):
 | 3 | wHubCharacteristics | 2 | bits 1:0 power switching (as USB 2.0), bit 2 compound device, bits 4:3 over-current protection mode; bits 6:5 (USB 2.0's TT think time) and bit 7 (port indicators) are **reserved** at SuperSpeed - **to verify** |
 | 5 | bPwrOn2PwrGood | 1 | 2 ms units, as USB 2.0 |
 | 6 | bHubContrCurrent | 1 | the hub controller's current; **to verify** the unit (the drafter recalls 4 mA units at SuperSpeed, 1 mA at USB 2.0) |
-| 7 | bHubHdrDecLat | 1 | hub packet header decode latency, in 0.1 us units, at most 10h (1.6 us). Informs U1/U2 exit-latency budgets, which this driver does not use |
-| 8 | wHubDelay | 2 | the hub's average delay, in ns, from the upstream port to a downstream port. Same remark |
+| 7 | bHubHdrDecLat | 1 | hub packet header decode latency, in 0.1 us units: 00h to 0Ah (1.0 us) are defined, 0Bh-FFh reserved (Codex review of 034a119, finding 4). Informs U1/U2 exit-latency budgets, which this driver does not use |
+| 8 | wHubDelay | 2 | the hub's maximum forwarding delay, in ns, for a packet in either direction (upstream to downstream or the reverse; same review). Same remark |
 | 10 | DeviceRemovable | 2 | bit n = port n non-removable; bit 0 reserved. A fixed two bytes, unlike USB 2.0's variable bitmap; no PortPwrCtrlMask follows |
 
 `src\xhci_sshub.c` (`XhciSsHubParseDescriptor`) refuses a reply shorter than
 12, a bLength below 12 or past what arrived, a type other than 2Ah, no ports,
 and more than 15 ports. The bus manages ports 1-14 of it (every hub object has
-14 port objects; a fifteenth port is left unpowered) - a policy, not a
-specification limit.
+14 port objects) - a policy, not a specification limit. A fifteenth port is
+cleared of PORT_POWER at bring-up and any change it reports is read and
+cleared, so it never keeps the status-change endpoint completing; a USB 2.0
+hub's ports above 14 are treated the same (Codex review of 034a119, finding
+3).
 
 ### 11.2 The class requests (USB 3.2 10.16.2, Table 10-8)
 
@@ -1880,7 +1883,7 @@ wPortChange, second word (Table 10-14):
 | 4 | C_PORT_RESET | 20 | same; a hot reset finished |
 | 5 | C_BH_PORT_RESET | 29 | a warm (BH) reset finished |
 | 6 | C_PORT_LINK_STATE | 25 | the link changed state on its own: a U3 to U0 transition completed, or the link entered SS.Inactive or Compliance Mode (**to verify** the full list of triggers) |
-| 7 | C_PORT_CONFIG_ERROR | 26 | link training could not configure the port (**to verify**: the drafter's reading is that the link is not usable until the next connect) |
+| 7 | C_PORT_CONFIG_ERROR | 26 | link training could not configure the port. The driver's decision checks the link state first: a link in SS.Inactive or Compliance Mode takes the warm-reset recovery whatever else changed, so a config error seen with one is recovered by that warm reset and the port decided again; on a link in any other state the device is dropped and the port stays down until its next connect change (**to verify** the specification's recovery for this case) |
 
 Port feature selectors (Table 10-9; those USB 2.0 shares keep USB 2.0's
 numbers):
@@ -1977,13 +1980,16 @@ rate, which is why the extended status exists.
 
 **The xHC is told the rate through the device's Slot Context Speed**, a PSIV
 of the root port's protocol (section 10.5 and xHCI 6.2.2): the bus looks for
-the PSIV whose PSI DWORD names SuperSpeedPlus at the aggregate rate, then at
-the lane rate, and on a protocol with no PSI table uses the default IDs - 5
-for 10 Gb/s on one lane (Gen 2x1), 6 for two lanes (Gen 1x2), 7 for 20 Gb/s
-(Gen 2x2). Whether a PSI DWORD's rate is per lane or aggregate is section
-10.1's question and is **to verify**; the two-step lookup is written to work
-under either reading. A rate no PSIV names is given SuperSpeed's ID and
-counted (`superspeed hubs: rates without an ID`).
+the PSIV whose PSI DWORD names SuperSpeedPlus at the aggregate rate - a PSI
+DWORD's rate is the aggregate, a BOS sublink attribute's the lane rate
+(Codex review of 034a119, finding 2, citing Linux's PSI-to-BOS conversion;
+**to verify** against xHCI 7.2.1) - and on a protocol with no PSI table uses
+the default IDs - 5 for 10 Gb/s on one lane (Gen 2x1), 6 for two lanes (Gen
+1x2), 7 for 20 Gb/s (Gen 2x2). Only those are matches. Failing them, the
+PSIV named at the lane rate, else SuperSpeed's, is given as a guess and
+counted (`superspeed hubs: rates without an ID`), and after Address Device
+the speed the controller wrote into the output Slot Context is taken as
+authoritative when it names a SuperSpeed-class rate (`XhciSsHubAdoptSpeed`).
 
 ### 11.7 Remote wake masks (USB 3.2 10.16.2.10)
 

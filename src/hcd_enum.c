@@ -616,6 +616,7 @@ static ULONG hcdAddress(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG mps)
     if (hcdCommand(hc, &trb, &control) != XHCI_CC_SUCCESS) {
         return 0;
     }
+    HcdSsHubAdoptSpeed(hc, p, dev);
     hcdCountAddressed(hc, dev);
     if (dev->Tier != 0) {
         hc->Counters.TopoBehindHubAddressed++;
@@ -1893,6 +1894,14 @@ static VOID hcdHubPortChanged(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
     }
     if (d.Disconnect) {
         hcdFeed(hc, q, XHCI_ENUM_EV_DISCONNECT);
+    }
+    if (q->HubSsRecover) {
+        /* A SuperSpeed hub port's link recovery (30-A.1): the warm reset
+         * only now, with the device it held and that device's subtree torn
+         * down by the disconnect just fed (Codex review of 034a119,
+         * finding 1). */
+        d.Connect = !hcdHalted(hc) && HcdSsHubPortRecover(hc, hub, n);
+        q->HubSsRecover = 0;
     }
     if (d.Connect && !hcdHalted(hc)) {
         hcdFeed(hc, q, XHCI_ENUM_EV_CONNECT);

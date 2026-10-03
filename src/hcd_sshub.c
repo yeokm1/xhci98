@@ -24,13 +24,19 @@
  *     link's rate and lane count;
  *   a port look (HcdSsHubPortLook): the SuperSpeed decision
  *     (XhciSsHubPortDecide), its change bits cleared by their own
- *     selectors, a link found in SS.Inactive or Compliance Mode recovered
- *     with a warm reset there and then, and the outcome in xhci_hub.h's
- *     decision shape, which hcd_enum.c feeds the port's machine as for any
- *     hub port;
+ *     selectors, and the outcome in xhci_hub.h's decision shape, which
+ *     hcd_enum.c feeds the port's machine as for any hub port; a link found
+ *     in SS.Inactive or Compliance Mode is marked for recovery, and the
+ *     warm reset (HcdSsHubPortRecover) goes on the wire only after
+ *     hcd_enum.c has fed the disconnect and the old device and its subtree
+ *     are torn down;
  *   the Protocol Speed ID of a device behind it (HcdSsHubPsiv), for
  *     HcdHubPlace: SuperSpeed's, or a SuperSpeedPlus rate's from the
- *     extended status.
+ *     extended status - and after Address Device the controller's own
+ *     answer in the output Slot Context (HcdSsHubAdoptSpeed);
+ *   the ports above the 14 the bus manages (HcdHubSilence, hcd_hub.c):
+ *     unpowered and their changes acknowledged, so they never keep the
+ *     status-change pipe busy.
  *
  * The two halves are independent: neither is told of the other, and a
  * counter (HcdSsHubCountPair) is all that notices a likely pair.
@@ -41,6 +47,7 @@
 
 #include "hcd.h"
 #include "hcd_svc.h"
+#include "xhci_hw.h"
 #include "xhci_enum.h"
 #include "xhci_dbg.h"
 
@@ -267,6 +274,7 @@ ULONG HcdSsHubConfigure(PHCD_CONTROLLER hc, PHCD_HUB hub)
     for (n = 1; n <= hub->Ports; n++) {
         q = HcdHubPort(hc, hub, n);
         XhciLinkInit(&q->Link);
+        q->HubSsRecover = 0;
         b = (PUCHAR)&q->HubSsLink;
         for (i = 0; i < sizeof(q->HubSsLink); i++) {
             b[i] = 0;
@@ -438,21 +446,22 @@ ULONG HcdSsHubPortReset(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
 /*
  * One SuperSpeed hub port the status-change report (or a poll, or the first
  * look) named: GET_STATUS, the SuperSpeed decision, every change bit it saw
- * cleared, a port that lost its power to over-current powered again, a link
- * in SS.Inactive or Compliance Mode warm-reset here and the port decided
- * again from what the reset left - and the outcome in *d for hcd_enum.c.
- * Returns 0 when the hub did not answer.
+ * cleared, a port that lost its power to over-current powered again, and
+ * the outcome in *d for hcd_enum.c. A link in SS.Inactive or Compliance
+ * Mode is NOT reset here: the port is marked HubSsRecover and *d asks only
+ * for the disconnect of whatever it held, so hcd_enum.c tears the old
+ * device and its subtree down - frozen, its transfers ended, its slot
+ * disabled - before HcdSsHubPortRecover puts the warm reset on the wire
+ * (Codex review of 034a119, finding 1). Returns 0 when the hub did not
+ * answer.
  */
 ULONG HcdSsHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
                        ULONG state, PXHCI_HUB_PORT_DECISION d)
 {
     XHCI_SSHUB_PORT_DECISION sd;
-    XHCI_SSHUB_PORT_DECISION after;
     PHCD_PORT q;
     ULONG status;
     ULONG change;
-    ULONG warmSeen;
-    ULONG progress;
 
     d->Clear = 0;
     d->Disconnect = 0;
@@ -494,28 +503,62 @@ ULONG HcdSsHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     d->Connect = sd.Connect;
     d->OverCurrent = sd.OverCurrent;
     d->Repower = sd.Repower;
+    q->HubSsRecover = sd.WarmReset;
     if (sd.WarmReset) {
         XHCI_DBG_VALUE("hcd: SS hub port link error, port/link",
                        (n << 8) | XhciSsHubLinkState(status));
-        if (!hcdSsHubWarmAllowed(hc, hub, n) ||
-            !hcdSsHubFeature(hc, hub, n, 1, XHCI_SSHUB_FEAT_BH_PORT_RESET)) {
-            return 1;
-        }
-        warmSeen = 0;
-        progress = hcdSsHubResetWait(hc, hub, n, HCD_SSHUB_WARM_WAIT_MS,
-                                     &status, &change, &warmSeen);
-        hcdSsHubClear(hc, hub, n, XhciSsHubResetClears(change, 1));
-        if (progress == XHCI_HUB_RESET_ENABLED) {
-            q->Link.WarmResets = 0;
-            q->Link.GaveUp = 0;
-        }
-        /* Decided again as the port the disconnect leaves - Empty, or
-         * the Gone state it waits in - with the change bits already
-         * cleared: a connection now is a device to enumerate. */
-        XhciSsHubPortDecide(XHCI_ENUM_EMPTY, status, 0, &after);
-        d->Connect = after.Connect;
     }
     return 1;
+}
+
+/*
+ * The second half of a link recovery HcdSsHubPortLook marked: the warm
+ * reset, issued only once the port holds no device - hcd_enum.c has fed
+ * the disconnect and the teardown has run to its end, so no slot, ring or
+ * URB of the old device or its subtree is live while the hub retrains the
+ * link. A port that still holds a device (a teardown that could not
+ * finish) is not reset; it is looked at again next pass. Within the
+ * port's warm-reset budget; the port is then decided again as the Empty
+ * port the disconnect left. Returns 1 when that decision is a connect.
+ * Thread only, powered, controller not halted (the caller's test).
+ */
+ULONG HcdSsHubPortRecover(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
+{
+    XHCI_SSHUB_PORT_DECISION after;
+    PHCD_PORT q;
+    ULONG status;
+    ULONG change;
+    ULONG warmSeen;
+    ULONG progress;
+
+    q = HcdHubPort(hc, hub, n);
+    if (!q->HubSsRecover) {
+        return 0;
+    }
+    q->HubSsRecover = 0;
+    if (hub->Device == NULL || hub->Draining) {
+        return 0;
+    }
+    if (q->Device != NULL) {
+        XHCI_DBG_VALUE("hcd: SS hub port still held, warm reset deferred",
+                       (hub->Index << 8) | n);
+        hub->Changed |= 1UL << n;
+        return 0;
+    }
+    if (!hcdSsHubWarmAllowed(hc, hub, n) ||
+        !hcdSsHubFeature(hc, hub, n, 1, XHCI_SSHUB_FEAT_BH_PORT_RESET)) {
+        return 0;
+    }
+    warmSeen = 0;
+    progress = hcdSsHubResetWait(hc, hub, n, HCD_SSHUB_WARM_WAIT_MS,
+                                 &status, &change, &warmSeen);
+    hcdSsHubClear(hc, hub, n, XhciSsHubResetClears(change, 1));
+    if (progress == XHCI_HUB_RESET_ENABLED) {
+        q->Link.WarmResets = 0;
+        q->Link.GaveUp = 0;
+    }
+    XhciSsHubPortDecide(XHCI_ENUM_EMPTY, status, 0, &after);
+    return after.Connect;
 }
 
 /*
@@ -593,5 +636,37 @@ VOID HcdSsHubCountPair(PHCD_CONTROLLER hc, PHCD_HUB hub)
                            (ss->SlotId << 8) | hs->SlotId);
             return;
         }
+    }
+}
+
+/*
+ * Address Device has succeeded for the device on SuperSpeed hub port p: the
+ * speed the controller wrote into its output Slot Context is authoritative
+ * where it differs from the one the bus asked for and names a SuperSpeed
+ * rate (XhciSsHubAdoptSpeed) - so a SuperSpeedPlus rate the bus could only
+ * guess at is replaced by the controller's, and every later Slot Context
+ * carries it (Codex review of 034a119, finding 2). Thread only, powered;
+ * before hcdCountAddressed reads the rate.
+ */
+VOID HcdSsHubAdoptSpeed(PHCD_CONTROLLER hc, PHCD_PORT p,
+                        PHCD_USB_DEVICE dev)
+{
+    ULONG offset;
+    ULONG output;
+    ULONG keep;
+
+    if (p->Hub == NULL || !p->Hub->Usb3 ||
+        XhciSlotContextOffset(&hc->Hc.Layout, dev->SlotId, &offset) !=
+            XHCI_LAYOUT_OK) {
+        return;
+    }
+    output = (XhciCommonAt(&hc->Hc, offset)[0] & XHCI_SLOT_SPEED_MASK) >>
+             XHCI_SLOT_SPEED_SHIFT;
+    keep = XhciSsHubAdoptSpeed(&hc->Hc.PortMap, dev->Port, dev->Speed,
+                               output);
+    if (keep != dev->Speed) {
+        XHCI_DBG_VALUE("hcd: SS hub device speed from the controller, "
+                       "asked/output", (dev->Speed << 8) | keep);
+        dev->Speed = keep;
     }
 }

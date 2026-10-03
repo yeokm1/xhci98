@@ -103,9 +103,10 @@ VOID XhciSsHubPortDecide(ULONG state, ULONG status, ULONG change,
         return;
     }
     if (out->ConfigError) {
-        /* The link could not be configured: the device cannot be used as
-         * it is, and enumerating it again would meet the same error. It
-         * stays down until its next connect change. */
+        /* The link could not be configured and is not in a state a warm
+         * reset recovers (that branch, above, comes first): enumerating
+         * it again would meet the same error, so it stays down until its
+         * next connect change. */
         out->Disconnect = xhciSsHubHolds(state);
         return;
     }
@@ -370,9 +371,18 @@ ULONG XhciSsHubPsiv(const XHCI_PORT_MAP *map, ULONG rootPort,
                 v = XHCI_PSIV_SSP_GEN2X2;
             }
         } else if (proto->Major == 3) {
+            /* A PSI DWORD names the aggregate rate (Codex review of
+             * 034a119, finding 2), so only that is a match; the lane
+             * rate's ID is a guess, given unmatched, and the controller's
+             * output Slot Context settles it after Address Device
+             * (XhciSsHubAdoptSpeed). */
             v = xhciSsHubPsivAt(map, rootPort, link->Kbps);
             if (v == 0) {
                 v = xhciSsHubPsivAt(map, rootPort, link->LaneKbps);
+                if (v != 0) {
+                    *psiv = v;
+                    return XHCI_SSHUB_OK;
+                }
             }
         }
         if (v != 0) {
@@ -388,6 +398,23 @@ ULONG XhciSsHubPsiv(const XHCI_PORT_MAP *map, ULONG rootPort,
     *psiv = v;
     *matched = (link == NULL || !link->Plus) ? 1UL : 0UL;
     return XHCI_SSHUB_OK;
+}
+
+/* IRQL: any. */
+ULONG XhciSsHubAdoptSpeed(const XHCI_PORT_MAP *map, ULONG rootPort,
+                          ULONG given, ULONG output)
+{
+    ULONG cls;
+
+    if (map == NULL || output == 0 || output == given) {
+        return given;
+    }
+    cls = XHCI_SPEED_UNKNOWN;
+    if (XhciPortSpeedClass(map, rootPort, output, &cls) != XHCI_CAPS_OK ||
+        cls != XHCI_SPEED_SUPER) {
+        return given;
+    }
+    return output;
 }
 
 /* IRQL: any. */

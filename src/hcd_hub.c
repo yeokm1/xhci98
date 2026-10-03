@@ -490,6 +490,51 @@ VOID HcdHubRearm(PHCD_CONTROLLER hc, PHCD_HUB hub)
 }
 
 /*
+ * A port above the ones the bus manages (XHCI_HUB_MAX_PORTS: a USB 2.0 hub
+ * past 14, a SuperSpeed hub's fifteenth) is never enumerated, but its
+ * change bits are still the hub's to report: left set, they would complete
+ * every status-change transfer at once with the same bit for as long as the
+ * hub is up (Codex review of 034a119, finding 3). So such a port is
+ * unpowered at bring-up, and each change it reports is read and cleared
+ * here - by the SuperSpeed selectors on a SuperSpeed hub, by USB 2.0's
+ * otherwise - and nothing else is done with it.
+ */
+VOID HcdHubSilence(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
+{
+    ULONG status;
+    ULONG change;
+    ULONG bit;
+    ULONG selector;
+
+    if (!HcdHubPortStatus(hc, hub, n, &status, &change)) {
+        return;
+    }
+    for (bit = 1; bit <= 0x80UL; bit <<= 1) {
+        if ((change & bit) == 0) {
+            continue;
+        }
+        selector = hub->Usb3 ? XhciSsHubClearSelector(bit)
+                             : XhciHubClearSelector(bit);
+        if (selector != 0) {
+            (VOID)hcdHubFeature(hc, hub, n, 0, selector);
+        }
+    }
+}
+
+/* Every unmanaged port a status-change report names, silenced. */
+static VOID hcdHubSilenceReported(PHCD_CONTROLLER hc, PHCD_HUB hub,
+                                  const UCHAR *report, ULONG bytes)
+{
+    ULONG n;
+
+    for (n = hub->Ports + 1; n <= hub->Desc.Ports; n++) {
+        if (XhciHubReportHas(report, bytes, n)) {
+            HcdHubSilence(hc, hub, n);
+        }
+    }
+}
+
+/*
  * What the hub has to say since the last pass, into hub->Changed: the
  * status-change report if one completed (a failed one counted towards the
  * pipe's giving-up), every port when the hub is polled and its turn has
@@ -519,6 +564,7 @@ VOID HcdHubCollect(PHCD_CONTROLLER hc, PHCD_HUB hub)
     if (done) {
         if (usbd == XHCI_USBD_STATUS_SUCCESS) {
             hub->StatusFailures = 0;
+            hcdHubSilenceReported(hc, hub, hcdHubReport(hc, hub), bytes);
             hub->Changed |= XhciHubStatusBitmap(hcdHubReport(hc, hub),
                                                 bytes, hub->Ports);
         } else {
@@ -849,6 +895,10 @@ ULONG HcdHubStart(PHCD_CONTROLLER hc, PHCD_PORT p, PHCD_USB_DEVICE dev)
             XHCI_DBG_VALUE("hcd: hub port not powered, hub/port",
                            (hub->Index << 8) | n);
         }
+    }
+    for (n = hub->Ports + 1; n <= hub->Desc.Ports; n++) {
+        (VOID)hcdHubFeature(hc, hub, n, 0, XHCI_HUB_FEAT_PORT_POWER);
+        HcdHubSilence(hc, hub, n);
     }
     hcdHubDelay(XhciHubPowerWaitMs(hub->Desc.PowerGoodMs));
     /* Every port looked at once: a device present at power-on need raise
