@@ -8,6 +8,7 @@
 #include "hcd.h"
 #include "hcd_svc.h"
 #include "xhci_hw.h"
+#include "xhci_dbg.h"
 
 /* --------------------------------------------------------------------- */
 /* Waits                                                                  */
@@ -440,6 +441,8 @@ VOID HcdSvcRequestReset(PXHCI_EXTENSION ext)
     }
     hc = HcdControllerFromExt(ext);
     ext->ResetControllerCalls++;
+    XHCI_DBG_VALUE("hcd: controller reset requested, calls",
+                   ext->ResetControllerCalls);
     XhciControllerLockAcquire(ext, &oldIrql);
     if (!ext->ControllerFailed) {
         if ((ext->Flags & XHCI_EXT_FLAG_INITIALIZED) != 0) {
