@@ -238,14 +238,17 @@
                 }
                 # usb-bot and usb-uas are SCSI host adapters with a scsi-hd as
                 # their Child, each on its own drive (matrix.psd1 says why).
-                # Both measured at 12 Mb/s on an xHCI port, whatever their row
-                # names suggest about the class.
+                # probe-devices.ps1 measured both at 12 Mb/s, but with their
+                # scsi-hd child attached QEMU 11.1 presents both at 480 Mb/s on
+                # an xHCI USB 2.0 port (`info usb`, and the HCD's port and slot
+                # context speeds agreeing, first HCD matrix run 2026-10-04 on
+                # both targets), so ExpectedSpeed is 'HS'.  The row names stay.
                 @{
                     Name = 'usb-bot/fs'
                     Model = 'usb-bot'
                     Child = 'scsi-hd,bus={ID}.0,drive=matrixdrv2'
                     Settle = 30
-                    ExpectedSpeed = 'FS'
+                    ExpectedSpeed = 'HS'
                     Expect = @( 'advance endpoints opened >= 1' )
                 }
                 @{
@@ -253,7 +256,7 @@
                     Model = 'usb-uas'
                     Child = 'scsi-hd,bus={ID}.0,drive=matrixdrv3,scsi-id=0,lun=0'
                     Settle = 30
-                    ExpectedSpeed = 'FS'
+                    ExpectedSpeed = 'HS'
                     Expect = @( 'advance endpoints opened >= 1' )
                     ExpectNoDriver = @{
                         '2a' = 'measured NODRIVER on both legs of the second post-release run (2026-08-30, fresh Windows 98 SE guest, class taught): the adapter is addressed and neither Windows 98 SE nor NUSB 3.3 has a UAS class driver'
