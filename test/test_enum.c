@@ -382,6 +382,193 @@ static void test_disconnect_every_stage(void)
     }
 }
 
+/* The speed table, the EP0 sizes each speed may claim, and the two NULLs
+ * (task 26-A.9). */
+static void test_sizes_and_nulls(void)
+{
+    static const ULONG fsGood[] = { 8, 16, 32, 64 };
+    static const ULONG fsBad[] = { 0, 4, 9, 48, 128, 255 };
+    XHCI_ENUM_PORT p;
+    XHCI_ENUM_ACTION a;
+    XHCI_ENUM_EVENT e;
+    ULONG i;
+
+    CHECK_EQ(XhciEnumInitialMps0(XHCI_ENUM_SPEED_LOW), 8, "Low Speed: 8");
+    CHECK_EQ(XhciEnumInitialMps0(XHCI_ENUM_SPEED_FULL), 64, "Full Speed: 64");
+    CHECK_EQ(XhciEnumInitialMps0(XHCI_ENUM_SPEED_HIGH), 64, "High Speed: 64");
+    CHECK_EQ(XhciEnumInitialMps0(0), 0, "speed 0: none");
+    CHECK_EQ(XhciEnumInitialMps0(4), 0, "SuperSpeed: none");
+    CHECK_EQ(XhciEnumInitialMps0(15), 0, "a PSIV past the defaults: none");
+
+    for (i = 0; i < sizeof(fsGood) / sizeof(fsGood[0]); i++) {
+        drive_full(&p, 5, &a);
+        e = full_event(5, 1);
+        e.Value = fsGood[i];
+        step(&p, e, &a);
+        CHECK_EQ(p.State, fsGood[i] == 64 ? XHCI_ENUM_DESC18
+                                           : XHCI_ENUM_EVALUATE,
+                 "a Full Speed EP0 of 8, 16, 32 or 64 is taken");
+        CHECK_EQ(p.Mps0, fsGood[i], "and carried");
+    }
+    for (i = 0; i < sizeof(fsBad) / sizeof(fsBad[0]); i++) {
+        drive_full(&p, 5, &a);
+        e = full_event(5, 1);
+        e.Value = fsBad[i];
+        step(&p, e, &a);
+        CHECK_EQ(p.FailCause, XHCI_ENUM_FAIL_DESCRIPTOR,
+                 "any other Full Speed EP0 size fails the descriptor");
+        CHECK_EQ(a.Kind, XHCI_ENUM_ACT_DISABLE_SLOT, "giving the slot back");
+    }
+
+    /* Low Speed claiming 64. */
+    XhciEnumReset(&p);
+    step(&p, ev(XHCI_ENUM_EV_CONNECT, 1), &a);
+    step(&p, ev(XHCI_ENUM_EV_DEBOUNCED, 1), &a);
+    e = ev(XHCI_ENUM_EV_RESET_DONE, 1);
+    e.Speed = XHCI_ENUM_SPEED_LOW;
+    step(&p, e, &a);
+    e = ev(XHCI_ENUM_EV_COMMAND_DONE, 1);
+    e.SlotId = 9;
+    step(&p, e, &a);
+    CHECK_EQ(a.Mps0, 8, "Low Speed is addressed at 8");
+    step(&p, ev(XHCI_ENUM_EV_COMMAND_DONE, 1), &a);
+    e = ev(XHCI_ENUM_EV_TRANSFER_DONE, 1);
+    e.Bytes = 8;
+    e.Value = 64;
+    step(&p, e, &a);
+    CHECK_EQ(p.FailCause, XHCI_ENUM_FAIL_DESCRIPTOR,
+             "a Low Speed device claiming 64 fails");
+
+    /* Enable Slot answering success with slot 0 is no slot. */
+    drive_full(&p, 3, &a);
+    e = full_event(3, 1);
+    e.SlotId = 0;
+    step(&p, e, &a);
+    CHECK_EQ(p.FailCause, XHCI_ENUM_FAIL_NO_SLOT, "slot 0 is no slot");
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_NONE, "and nothing to give back");
+
+    e = ev(XHCI_ENUM_EV_CONNECT, 1);
+    a.Kind = XHCI_ENUM_ACT_RESET;
+    CHECK_EQ(XhciEnumStep(NULL, &e, &a), XHCI_ENUM_EMPTY, "no port: Empty");
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_NONE, "and no action");
+    XhciEnumReset(&p);
+    a.Kind = XHCI_ENUM_ACT_RESET;
+    CHECK_EQ(XhciEnumStep(&p, NULL, &a), XHCI_ENUM_EMPTY, "no event: Empty");
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_NONE, "and no action");
+    CHECK_EQ(p.State, XHCI_ENUM_EMPTY, "the port untouched");
+}
+
+static ULONG same_port(const XHCI_ENUM_PORT *x, const XHCI_ENUM_PORT *y)
+{
+    return x->State == y->State && x->Speed == y->Speed &&
+           x->SlotId == y->SlotId && x->Mps0 == y->Mps0 &&
+           x->ConfigLength == y->ConfigLength && x->Retries == y->Retries &&
+           x->FailCause == y->FailCause && x->PdoExists == y->PdoExists;
+}
+
+/*
+ * Every event that does not belong to a state, in every state of the full
+ * sequence plus Gone: nothing changes and nothing is asked (xhci_enum.h, "an
+ * event that does not apply to the current state changes nothing and asks
+ * for nothing"). A late COMMAND_DONE or a stray TRANSFER_DONE reaching the
+ * wrong state is how a machine skips a step.
+ */
+static void test_out_of_place_everywhere(void)
+{
+    XHCI_ENUM_PORT p;
+    XHCI_ENUM_PORT before;
+    XHCI_ENUM_ACTION a;
+    XHCI_ENUM_EVENT e;
+    ULONG expected;
+    ULONG kind;
+    ULONG bad;
+    ULONG i;
+
+    bad = 0;
+    for (i = 0; i <= FULL_SEQUENCE; i++) {
+        for (kind = XHCI_ENUM_EV_CONNECT; kind <= XHCI_ENUM_EV_PDO_REMOVED;
+             kind++) {
+            if (kind == XHCI_ENUM_EV_DISCONNECT) {
+                continue;
+            }
+            expected = (i < FULL_SEQUENCE) ? full_event(i, 1).Kind : 0;
+            if (kind == expected) {
+                continue;
+            }
+            drive_full(&p, i, &a);
+            before = p;
+            e = ev(kind, 1);
+            e.Speed = XHCI_ENUM_SPEED_HIGH;
+            e.SlotId = 6;
+            e.Bytes = 18;
+            e.Value = 64;
+            step(&p, e, &a);
+            if (!same_port(&p, &before) || a.Kind != XHCI_ENUM_ACT_NONE) {
+                printf("  after %lu events, event %lu moved the machine\n",
+                       i, kind);
+                bad++;
+            }
+        }
+    }
+    CHECK_EQ(bad, 0, "no out-of-place event moves any state of the sequence");
+
+    /* Gone: only the remove moves it. */
+    bad = 0;
+    for (kind = XHCI_ENUM_EV_CONNECT; kind < XHCI_ENUM_EV_PDO_REMOVED;
+         kind++) {
+        drive_full(&p, FULL_SEQUENCE, &a);
+        step(&p, ev(XHCI_ENUM_EV_DISCONNECT, 1), &a);
+        before = p;
+        step(&p, ev(kind, 1), &a);
+        if (!same_port(&p, &before) || a.Kind != XHCI_ENUM_ACT_NONE) {
+            bad++;
+        }
+    }
+    CHECK_EQ(bad, 0, "Gone waits for the remove through every other event");
+}
+
+/* The one retry, taken from a failure that held a slot, carries a device
+ * all the way to Bound; a retry asked where nothing failed does nothing. */
+static void test_retry_to_bound(void)
+{
+    XHCI_ENUM_PORT p;
+    XHCI_ENUM_ACTION a;
+    ULONG i;
+
+    drive_full(&p, 7, &a);
+    step(&p, full_event(7, 0), &a);
+    CHECK_EQ(p.State, XHCI_ENUM_FAILED, "the 18-byte read failed");
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_DISABLE_SLOT, "the slot given back");
+    XhciEnumRetry(&p, &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_RESET, "the retry resets");
+    CHECK_EQ(p.Retries, 1, "and is counted");
+    for (i = 2; i < FULL_SEQUENCE; i++) {
+        step(&p, full_event(i, 1), &a);
+    }
+    CHECK_EQ(p.State, XHCI_ENUM_BOUND, "the retried device is bound");
+    CHECK_EQ(p.Mps0, 8, "at the size its own descriptor gave");
+    CHECK_EQ(p.SlotId, 4, "on its new slot");
+    CHECK_EQ(p.Retries, 1, "the retry still counted while it stays");
+    XhciEnumRetry(&p, &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_NONE, "no retry where nothing failed");
+    CHECK_EQ(p.State, XHCI_ENUM_BOUND, "Bound stays Bound");
+
+    drive_full(&p, 4, &a);
+    XhciEnumRetry(&p, &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_NONE, "no retry mid-sequence either");
+    CHECK_EQ(p.State, XHCI_ENUM_ADDRESS, "the step in flight is kept");
+
+    /* A PDO that could not be created: Failed with the slot back, and a
+     * disconnect from there has nothing left to undo. */
+    drive_full(&p, 10, &a);
+    step(&p, ev(XHCI_ENUM_EV_PDO_CREATED, 0), &a);
+    CHECK_EQ(p.FailCause, XHCI_ENUM_FAIL_PDO, "PDO creation failed");
+    CHECK_EQ(p.PdoExists, 0, "no PDO recorded");
+    step(&p, ev(XHCI_ENUM_EV_DISCONNECT, 1), &a);
+    CHECK_EQ(p.State, XHCI_ENUM_EMPTY, "a disconnect from Failed: Empty");
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_NONE, "the slot was already given back");
+}
+
 int main(void)
 {
     test_clean_paths();
@@ -391,6 +578,9 @@ int main(void)
     test_each_step_fails();
     test_short_reads();
     test_disconnect_every_stage();
+    test_sizes_and_nulls();
+    test_out_of_place_everywhere();
+    test_retry_to_bound();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

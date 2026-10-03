@@ -16,6 +16,26 @@ rem   test_caps    - the extended-capability walk, port classification, and
 rem                  PSI speed decoding (src\xhci_caps.c)
 rem   test_port    - PORTSC write construction, the logical-port map and the
 rem                  per-port shadow (src\xhci_port.c)
+rem   test_xfer    - the transfer engine (src\xhci_xfer.c): Setup/Data/Status
+rem                  and Normal TD construction, the scatter/gather walk and
+rem                  its 64 KB splits, the pending-transfer queue, and what a
+rem                  Transfer Event means to one transfer
+rem   test_iso     - the isochronous engine (src\xhci_xfer.c, task 9-A.1): the
+rem                  Isoch TRB's own fields including TBC/TLBPC, the Valid Frame
+rem                  Window across both of its wraps, and the per-packet
+rem                  completion write-back into the parameter block
+rem   test_td      - the same builders over the HCD's own mapping (task
+rem                  26-A.9): a model of hcd_io.c's chunk plan, hcd_dma.c's
+rem                  page-cut SG list and hcdIsoFill's block, swept over buffer
+rem                  offsets, lengths, packet sizes, map-register grants and
+rem                  physical layouts, every TRB checked against the page table
+rem   test_enum    - the enumeration state machine (src\xhci_enum.c)
+rem   test_pipe    - the URB-side computations (src\xhci_pipe.c): SETUP
+rem                  building, interface and endpoint parsing, the configure
+rem                  plan, the buffer split and the isochronous URB checks
+rem   test_func    - the composite split with and without an IAD, the filtered
+rem                  configuration descriptor and the function ids
+rem                  (src\xhci_func.c)
 rem   test_ctx     - the Slot, Endpoint and Input Control Context encoders
 rem                  (src\xhci_ctx.c): the golden vectors for every speed class,
 rem                  both context strides, and the field-by-field refusals
@@ -42,10 +62,10 @@ rem                  with it, and test_log.c had said so for
 rem                  two days while this summary had not.)
 rem
 rem RETIRED ON 2026-10-02 with the miniport's sources (design record 13):
-rem test_xfer and test_iso (src\xhci_xfer.c), test_vhub (src\xhci_vhub.c) and
-rem test_init (the miniport's MMIO-facing code and its usbport callback
-rem surface). Their last copies are on branch 1.2.0.0; Phase 26's host suites
-rem (26-A.9) replace them for the HCD's own code.
+rem test_vhub (src\xhci_vhub.c) and test_init (the miniport's MMIO-facing code
+rem and its usbport callback surface). Their last copies are on branch
+rem 1.2.0.0. test_xfer and test_iso left with them and came back with task
+rem 26-A.9, unchanged, because src\xhci_xfer.c was kept whole (26-A.4).
 rem
 rem THE SECOND ARCHITECTURE (roadmap task 21.4). Two suites are compiled and run
 rem twice: once with MSVC 6.0 for x86, and once with WDK 7.1's amd64 cross
@@ -126,6 +146,16 @@ rem one context ends and the next begins is the carve's answer, and pairing them
 rem is what makes "eight DWORDs whatever the stride" checkable at both strides.
 call :run test_ctx "test_ctx.c ..\src\xhci_ctx.c ..\src\xhci_mem.c"
 call :run test_topo "test_topo.c ..\src\xhci_topo.c"
+rem test_xfer links xhci_ring.c: the transfer engine's whole job is to
+rem produce TRBs and then read completion events back off the ring it wrote
+rem them to, so testing it against a stub ring would test neither half.
+call :run test_xfer "test_xfer.c ..\src\xhci_xfer.c ..\src\xhci_ring.c"
+rem test_iso links the same two files and for the same reason.
+call :run test_iso "test_iso.c ..\src\xhci_xfer.c ..\src\xhci_ring.c"
+rem test_td links xhci_pipe.c as well: hcd_io.c fills the isochronous block
+rem with its packet-length and fragment helpers, so the block the engine is
+rem given here is built by the same code that builds it in the driver.
+call :run test_td "test_td.c ..\src\xhci_xfer.c ..\src\xhci_ring.c ..\src\xhci_pipe.c"
 rem test_enum links nothing else: the enumeration machine of design record 13
 rem section 5.3 is a pure transition function, driven here with no controller
 rem (task 26-A.9).
