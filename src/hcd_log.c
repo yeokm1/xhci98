@@ -187,7 +187,8 @@ VOID HcdLogFlush(PHCD_CONTROLLER hc, ULONG reason, ULONG counters)
 #ifdef XHCI_DBG_TRACE
 /*
  * One site per field, under the label matrix-hcd.psd1 names it by
- * (scripts/vm-matrix/README.md lists the 39). Change-gated, so an idle poll
+ * (scripts/vm-matrix/README.md lists them; 48 since Phase 29). Change-gated,
+ * so an idle poll
  * prints nothing; the matrix reads the block, not these lines.
  * IRQL: PASSIVE_LEVEL (the controller thread).
  */
@@ -262,6 +263,23 @@ static VOID hcdCountersTrace(const XHCIHC_COUNTERS *cnt)
                            cnt->TopoBehindHubTooDeep);
     XHCI_DBG_VALUE_CHANGED("topology: TT pairs programmed",
                            cnt->TopoTtProgrammed);
+
+    XHCI_DBG_VALUE_CHANGED("port speed decoded - superspeed",
+                           cnt->PortSpeedSuper);
+    XHCI_DBG_VALUE_CHANGED("slot context speed - superspeed",
+                           cnt->SlotSpeedSuper);
+    XHCI_DBG_VALUE_CHANGED("port rate above gen 1 - superspeedplus",
+                           cnt->PortSpeedSuperPlus);
+    XHCI_DBG_VALUE_CHANGED("superspeed: warm resets", cnt->SsWarmResets);
+    XHCI_DBG_VALUE_CHANGED("superspeed: hot resets converted to warm",
+                           cnt->SsResetsConverted);
+    XHCI_DBG_VALUE_CHANGED("superspeed: links given up",
+                           cnt->SsLinksGivenUp);
+    XHCI_DBG_VALUE_CHANGED("superspeed: usb 3 devices on usb 2.0",
+                           cnt->SsDevicesOnUsb2);
+    XHCI_DBG_VALUE_CHANGED("superspeed: BOS reads failed", cnt->SsBosMissing);
+    XHCI_DBG_VALUE_CHANGED("superspeed: endpoints refused - ESIT",
+                           cnt->SsEndpointsEsitRefused);
 }
 #endif
 

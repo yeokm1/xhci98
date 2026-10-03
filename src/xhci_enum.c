@@ -14,6 +14,10 @@
  *              --size agrees-->      Desc18     [GET_DESCRIPTOR(DEVICE, 18)]
  *   Evaluate   --ok-->               Desc18     [GET_DESCRIPTOR(DEVICE, 18)]
  *   Desc18     --18 bytes-->         Config9    [GET_DESCRIPTOR(CONFIG, 9)]
+ *              --18 bytes, SS-->     Bos5       [GET_DESCRIPTOR(BOS, 5)]
+ *   Bos5       --wTotalLength-->     BosFull    [GET_DESCRIPTOR(BOS, all)]
+ *              --failed-->           Config9    (BosMissing)
+ *   BosFull    --all of it, or not-> Config9
  *   Config9    --wTotalLength-->     ConfigFull [GET_DESCRIPTOR(CONFIG, all)]
  *   ConfigFull --all of it-->        Present    [create the PDO]
  *   Present    --PDO started-->      Bound
@@ -26,6 +30,15 @@
  *
  * There is no SET_ADDRESS anywhere - the bus addresses with Address Device -
  * and no speed lie: the speed the reset reports is the speed carried on.
+ *
+ * SuperSpeed (task 29-A.3) changes three things: EP0 starts at 512 and stays
+ * there, since bMaxPacketSize0 must be 09h - the exponent - and nothing else
+ * is legal; and the BOS descriptor is read after the device descriptor. A
+ * BOS read that fails does not fail the enumeration: USB 3.2 makes the BOS
+ * mandatory for such a device, but nothing this bus does at Phase 29 needs
+ * it (U1/U2 are never enabled, so the exit latencies it carries go unused),
+ * and a device that answers everything else is served without it, with
+ * BosMissing saying so.
  *
  * C89, pure: IRQL any.
  */
@@ -46,6 +59,8 @@ ULONG XhciEnumInitialMps0(ULONG speed)
         return 64UL;
     case XHCI_ENUM_SPEED_HIGH:
         return 64UL;
+    case XHCI_ENUM_SPEED_SUPER:
+        return 512UL;
     default:
         return 0UL;
     }
@@ -61,10 +76,25 @@ VOID XhciEnumReset(PXHCI_ENUM_PORT port)
     port->Retries = 0;
     port->FailCause = XHCI_ENUM_FAIL_NONE;
     port->PdoExists = 0;
+    port->BosLength = 0;
+    port->BosMissing = 0;
+}
+
+/* bMaxPacketSize0 as a size: at SuperSpeed the field is an exponent, and 9
+ * (512) is the one value USB 3.2 9.6.1 allows; 0 for anything else. */
+static ULONG xhciEnumMps0Of(ULONG speed, ULONG value)
+{
+    if (speed == XHCI_ENUM_SPEED_SUPER) {
+        return value == 9UL ? 512UL : 0UL;
+    }
+    return value;
 }
 
 static ULONG xhciEnumMps0Valid(ULONG speed, ULONG mps)
 {
+    if (speed == XHCI_ENUM_SPEED_SUPER) {
+        return mps == 512UL;
+    }
     if (speed == XHCI_ENUM_SPEED_LOW) {
         return mps == 8UL;
     }
@@ -139,12 +169,16 @@ ULONG XhciEnumStep(PXHCI_ENUM_PORT port, const XHCI_ENUM_EVENT *event,
         if (event->Kind == XHCI_ENUM_EV_CONNECT) {
             port->Retries = 0;
             port->FailCause = XHCI_ENUM_FAIL_NONE;
+            port->BosLength = 0;
+            port->BosMissing = 0;
             port->State = XHCI_ENUM_DEBOUNCE;
             xhciEnumAct(action, XHCI_ENUM_ACT_DEBOUNCE, 0, 0);
         } else if (event->Kind == XHCI_ENUM_EV_RETRY_INTERNAL &&
                    port->State == XHCI_ENUM_FAILED &&
                    port->Retries < XHCI_ENUM_RETRIES) {
             port->Retries++;
+            port->BosLength = 0;
+            port->BosMissing = 0;
             port->State = XHCI_ENUM_RESET;
             xhciEnumAct(action, XHCI_ENUM_ACT_RESET, 0, 0);
         }
@@ -200,11 +234,13 @@ ULONG XhciEnumStep(PXHCI_ENUM_PORT port, const XHCI_ENUM_EVENT *event,
     case XHCI_ENUM_DESC8:
         if (event->Kind == XHCI_ENUM_EV_TRANSFER_DONE) {
             if (!ok || event->Bytes < 8UL ||
-                !xhciEnumMps0Valid(port->Speed, event->Value)) {
+                !xhciEnumMps0Valid(port->Speed,
+                                   xhciEnumMps0Of(port->Speed,
+                                                  event->Value))) {
                 return xhciEnumFail(port, XHCI_ENUM_FAIL_DESCRIPTOR, action);
             }
-            if (event->Value != port->Mps0) {
-                port->Mps0 = event->Value;
+            if (xhciEnumMps0Of(port->Speed, event->Value) != port->Mps0) {
+                port->Mps0 = xhciEnumMps0Of(port->Speed, event->Value);
                 port->State = XHCI_ENUM_EVALUATE;
                 xhciEnumAct(action, XHCI_ENUM_ACT_EVALUATE, 0, port->Mps0);
             } else {
@@ -230,6 +266,40 @@ ULONG XhciEnumStep(PXHCI_ENUM_PORT port, const XHCI_ENUM_EVENT *event,
         if (event->Kind == XHCI_ENUM_EV_TRANSFER_DONE) {
             if (!ok || event->Bytes != XHCI_ENUM_DEVICE_DESC_BYTES) {
                 return xhciEnumFail(port, XHCI_ENUM_FAIL_DESCRIPTOR, action);
+            }
+            if (port->Speed == XHCI_ENUM_SPEED_SUPER) {
+                port->State = XHCI_ENUM_BOS5;
+                xhciEnumAct(action, XHCI_ENUM_ACT_GET_BOS,
+                            XHCI_ENUM_BOS_HEAD_BYTES, 0);
+                break;
+            }
+            port->State = XHCI_ENUM_CONFIG9;
+            xhciEnumAct(action, XHCI_ENUM_ACT_GET_CONFIG,
+                        XHCI_ENUM_CONFIG_HEAD_BYTES, 0);
+        }
+        break;
+
+    case XHCI_ENUM_BOS5:
+        if (event->Kind == XHCI_ENUM_EV_TRANSFER_DONE) {
+            if (ok && event->Bytes >= XHCI_ENUM_BOS_HEAD_BYTES &&
+                event->Value >= XHCI_ENUM_BOS_HEAD_BYTES) {
+                port->BosLength = event->Value;
+                port->State = XHCI_ENUM_BOS_FULL;
+                xhciEnumAct(action, XHCI_ENUM_ACT_GET_BOS, port->BosLength,
+                            0);
+                break;
+            }
+            port->BosMissing = 1;
+            port->State = XHCI_ENUM_CONFIG9;
+            xhciEnumAct(action, XHCI_ENUM_ACT_GET_CONFIG,
+                        XHCI_ENUM_CONFIG_HEAD_BYTES, 0);
+        }
+        break;
+
+    case XHCI_ENUM_BOS_FULL:
+        if (event->Kind == XHCI_ENUM_EV_TRANSFER_DONE) {
+            if (!ok || event->Bytes != port->BosLength) {
+                port->BosMissing = 1;
             }
             port->State = XHCI_ENUM_CONFIG9;
             xhciEnumAct(action, XHCI_ENUM_ACT_GET_CONFIG,
@@ -279,6 +349,8 @@ ULONG XhciEnumStep(PXHCI_ENUM_PORT port, const XHCI_ENUM_EVENT *event,
             port->Retries = 0;
             port->Speed = 0;
             port->Mps0 = 0;
+            port->BosLength = 0;
+            port->BosMissing = 0;
         }
         break;
 

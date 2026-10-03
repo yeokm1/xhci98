@@ -22,7 +22,9 @@
 > machine, host suite `test_enum`). Batch (c) (26-A.5, 26-A.6) adds `hcd_urb.c`
 > (the device PDOs' internal device controls) and the pure `xhci_pipe.c`
 > (configuration walk, endpoint parameters, Configure Endpoint plans, setup
-> packets, buffer splits and the USBD status table; host suite `test_pipe`). The tables below are the
+> packets, buffer splits and the USBD status table; host suite `test_pipe`). Phase 29 (drafted
+> 2026-10-04) adds the pure `xhci_link.c` (a USB3 root port's link state machine and
+> 29-A.5's hold and release rules; host suite `test_link`). The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name

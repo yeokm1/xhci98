@@ -50,6 +50,9 @@
 
 #define XHCI_PIPE_MAX_PACKET        1024UL
 
+/* Max ESIT Payload Lo and Hi together (6.2.3.8, LEC). */
+#define XHCI_PIPE_MAX_ESIT_LEC      0x00FFFFFFUL
+
 ULONG XhciPipeDci(ULONG endpointAddress)
 {
     ULONG number;
@@ -251,6 +254,9 @@ ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
     out.DirectionIn = (out.Address & 0x80UL) != 0 ? 1UL : 0UL;
     out.BInterval = (ULONG)endpoint[6];
     out.IntervalClamped = 0;
+    out.CompanionMissing = 0;
+    out.MaxStreams = 0;
+    out.SspIso = 0;
     wMaxPacketSize = xhciPipeWord(endpoint + 4);
 
     out.Dci = XhciPipeDci(out.Address);
@@ -258,7 +264,7 @@ ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
         return XHCI_PIPE_MALFORMED;
     }
     /* SuperSpeed needs the companion descriptor for Max Burst and Max ESIT
-     * Payload (6.2.3.4, 4.14.2), and is out of scope here anyway. */
+     * Payload (6.2.3.4, 4.14.2): XhciPipeEndpointParamsAt reads it. */
     if (speed != XHCI_PIPE_SPEED_FULL && speed != XHCI_PIPE_SPEED_LOW &&
         speed != XHCI_PIPE_SPEED_HIGH) {
         return XHCI_PIPE_UNSUPPORTED;
@@ -361,6 +367,312 @@ ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
                              : 0UL;
 
     *ep = out;
+    return XHCI_PIPE_OK;
+}
+
+static ULONG xhciPipeDword(const UCHAR *p)
+{
+    return (ULONG)p[0] | ((ULONG)p[1] << 8) | ((ULONG)p[2] << 16) |
+           ((ULONG)p[3] << 24);
+}
+
+/* The bytes of `config` the descriptors may be read in: wTotalLength when
+ * the header says one inside `length`, `length` otherwise. */
+static ULONG xhciPipeTotal(const UCHAR *config, ULONG length)
+{
+    ULONG total;
+
+    if (length < 4UL) {
+        return length;
+    }
+    total = xhciPipeWord(config + 2);
+    return (total >= 4UL && total <= length) ? total : length;
+}
+
+/*
+ * The SuperSpeed endpoint (29-A.3) and its SuperSpeedPlus isochronous case
+ * (29-A.6). The rules and their sources are on XhciPipeEndpointParamsAt in
+ * xhci_pipe.h; section 10.6 of xhci-data-structures.md has the Endpoint
+ * Context half, every row marked for verification against the PDF.
+ */
+static ULONG xhciPipeSuperSpeed(const UCHAR *config, ULONG total,
+                                ULONG offset, ULONG speed, ULONG lec,
+                                PXHCI_PIPE_EP ep)
+{
+    XHCI_PIPE_EP out;
+    const UCHAR *endpoint;
+    ULONG wMaxPacketSize;
+    ULONG next;
+    ULONG burst;
+    ULONG attributes;
+    ULONG perInterval;
+    ULONG largest;
+    ULONG perBurst;
+    ULONG bursts;
+    ULONG sspFollows;
+    ULONG b;
+
+    endpoint = config + offset;
+    out.Address = (ULONG)endpoint[2];
+    out.TransferType = (ULONG)endpoint[3] & 0x03UL;
+    out.DirectionIn = (out.Address & 0x80UL) != 0 ? 1UL : 0UL;
+    out.BInterval = (ULONG)endpoint[6];
+    out.IntervalClamped = 0;
+    out.CompanionMissing = 0;
+    out.MaxStreams = 0;
+    out.SspIso = 0;
+    wMaxPacketSize = xhciPipeWord(endpoint + 4);
+    out.Dci = XhciPipeDci(out.Address);
+    if (out.Dci == 0) {
+        return XHCI_PIPE_MALFORMED;
+    }
+    if (out.TransferType == XHCI_PIPE_XFER_CONTROL) {
+        return XHCI_PIPE_UNSUPPORTED;
+    }
+    /* At SuperSpeed bits 12:11 are reserved: the burst is the companion's. */
+    out.MaxPacketSize = wMaxPacketSize & 0x07FFUL;
+    if (out.MaxPacketSize == 0 || out.MaxPacketSize > XHCI_PIPE_MAX_PACKET) {
+        return XHCI_PIPE_MALFORMED;
+    }
+
+    /* The SuperSpeed Endpoint Companion "shall immediately follow" the
+     * endpoint descriptor (USB 3.2 9.6.7). */
+    next = offset + (ULONG)endpoint[0];
+    burst = 0;
+    attributes = 0;
+    perInterval = 0;
+    if (next < total && total - next >= XHCI_PIPE_SS_COMPANION_BYTES &&
+        (ULONG)config[next + 1] == XHCI_PIPE_DT_SS_COMPANION) {
+        if ((ULONG)config[next] < XHCI_PIPE_SS_COMPANION_BYTES ||
+            (ULONG)config[next] > total - next) {
+            return XHCI_PIPE_MALFORMED;
+        }
+        burst = (ULONG)config[next + 2];
+        attributes = (ULONG)config[next + 3];
+        perInterval = xhciPipeWord(config + next + 4);
+    } else {
+        out.CompanionMissing = 1;
+    }
+    if (burst > 15UL) {
+        return XHCI_PIPE_MALFORMED;
+    }
+    if (out.TransferType == XHCI_PIPE_XFER_BULK) {
+        if (out.MaxPacketSize != 1024UL) {
+            return XHCI_PIPE_MALFORMED;
+        }
+    } else if (burst != 0 && out.MaxPacketSize != 1024UL) {
+        return XHCI_PIPE_MALFORMED;
+    }
+    out.MaxBurstSize = burst;
+    out.Mult = 0;
+    out.MaxEsitPayload = 0;
+
+    switch (out.TransferType) {
+    case XHCI_PIPE_XFER_BULK:
+        out.EpType = out.DirectionIn ? XHCI_PIPE_EPT_BULK_IN
+                                     : XHCI_PIPE_EPT_BULK_OUT;
+        out.MaxStreams = attributes & 0x1FUL;
+        out.Interval = 0;
+        out.ErrorCount = XHCI_PIPE_CERR;
+        out.AverageTrbLength = XHCI_PIPE_AVG_TRB_BULK;
+        break;
+
+    case XHCI_PIPE_XFER_INTERRUPT:
+        out.EpType = out.DirectionIn ? XHCI_PIPE_EPT_INTERRUPT_IN
+                                     : XHCI_PIPE_EPT_INTERRUPT_OUT;
+        largest = out.MaxPacketSize * (burst + 1UL);
+        if (perInterval > largest) {
+            return XHCI_PIPE_MALFORMED;
+        }
+        out.MaxEsitPayload = perInterval != 0 ? perInterval : largest;
+        b = xhciPipeExponent(out.BInterval, &out.IntervalClamped);
+        out.Interval = b - 1UL;
+        out.ErrorCount = XHCI_PIPE_CERR;
+        out.AverageTrbLength = XHCI_PIPE_AVG_TRB_INTERRUPT;
+        break;
+
+    default:
+        out.EpType = out.DirectionIn ? XHCI_PIPE_EPT_ISOCH_IN
+                                     : XHCI_PIPE_EPT_ISOCH_OUT;
+        b = xhciPipeExponent(out.BInterval, &out.IntervalClamped);
+        out.Interval = b - 1UL;
+        out.ErrorCount = 0;
+        out.AverageTrbLength = XHCI_PIPE_AVG_TRB_ISOCH;
+        perBurst = out.MaxPacketSize * (burst + 1UL);
+        sspFollows = (attributes & 0x80UL) != 0 &&
+                     speed == XHCI_PIPE_SPEED_SUPER_PLUS;
+        if (sspFollows) {
+            /* USB 3.2 9.6.8: the SuperSpeedPlus Isochronous Endpoint
+             * Companion follows the SS companion, and its 32-bit
+             * dwBytesPerInterval replaces wBytesPerInterval and Mult. */
+            next += (ULONG)config[next];
+            if (next >= total ||
+                total - next < XHCI_PIPE_SSP_ISO_COMPANION_BYTES ||
+                (ULONG)config[next + 1] != XHCI_PIPE_DT_SSP_ISO_COMPANION ||
+                (ULONG)config[next] < XHCI_PIPE_SSP_ISO_COMPANION_BYTES ||
+                (ULONG)config[next] > total - next) {
+                return XHCI_PIPE_MALFORMED;
+            }
+            perInterval = xhciPipeDword(config + next + 4);
+            out.SspIso = 1;
+            if (lec) {
+                if (perInterval > XHCI_PIPE_MAX_ESIT_LEC) {
+                    return XHCI_PIPE_ESIT_REFUSED;
+                }
+                out.MaxEsitPayload = perInterval;
+                out.Mult = 0;
+            } else {
+                /* The legacy Mult describes up to three bursts per
+                 * interval; a payload needing more cannot be programmed. */
+                bursts = (perInterval + perBurst - 1UL) / perBurst;
+                if (bursts > 3UL) {
+                    return XHCI_PIPE_ESIT_REFUSED;
+                }
+                out.Mult = bursts != 0 ? bursts - 1UL : 0UL;
+                out.MaxEsitPayload = perInterval;
+            }
+            break;
+        }
+        out.Mult = attributes & 0x03UL;
+        if (out.Mult == 3UL) {
+            return XHCI_PIPE_MALFORMED;
+        }
+        largest = perBurst * (out.Mult + 1UL);
+        if (perInterval > largest) {
+            return XHCI_PIPE_MALFORMED;
+        }
+        out.MaxEsitPayload = perInterval != 0 ? perInterval : largest;
+        if (lec) {
+            /* Reserved under LEC: the xHC derives it from Max ESIT Payload,
+             * Max Packet Size and Max Burst Size (6.2.3.8; to verify). */
+            out.Mult = 0;
+        }
+        break;
+    }
+
+    *ep = out;
+    return XHCI_PIPE_OK;
+}
+
+ULONG XhciPipeEndpointParamsAt(const UCHAR *config, ULONG length,
+                               ULONG offset, ULONG speed, ULONG lec,
+                               PXHCI_PIPE_EP ep)
+{
+    ULONG total;
+
+    if (config == NULL || ep == NULL) {
+        return XHCI_PIPE_BAD_PARAM;
+    }
+    total = xhciPipeTotal(config, length);
+    if (offset >= total || total - offset < XHCI_PIPE_ENDPOINT_BYTES) {
+        return XHCI_PIPE_BAD_PARAM;
+    }
+    if (speed != XHCI_PIPE_SPEED_SUPER &&
+        speed != XHCI_PIPE_SPEED_SUPER_PLUS) {
+        return XhciPipeEndpointParams(config + offset, speed, ep);
+    }
+    if ((ULONG)config[offset] < XHCI_PIPE_ENDPOINT_BYTES ||
+        (ULONG)config[offset] > total - offset ||
+        (ULONG)config[offset + 1] != XHCI_PIPE_DT_ENDPOINT) {
+        return XHCI_PIPE_MALFORMED;
+    }
+    return xhciPipeSuperSpeed(config, total, offset, speed, lec, ep);
+}
+
+ULONG XhciPipeParseBos(const UCHAR *data, ULONG length, PXHCI_PIPE_BOS bos)
+{
+    XHCI_PIPE_BOS out;
+    ULONG total;
+    ULONG offset;
+    ULONG bLength;
+    ULONG declared;
+    ULONG i;
+
+    if (data == NULL || bos == NULL) {
+        return XHCI_PIPE_BAD_PARAM;
+    }
+    if (length < XHCI_PIPE_BOS_BYTES ||
+        (ULONG)data[0] < XHCI_PIPE_BOS_BYTES ||
+        (ULONG)data[1] != XHCI_PIPE_DT_BOS) {
+        return XHCI_PIPE_MALFORMED;
+    }
+    total = xhciPipeWord(data + 2);
+    if (total < XHCI_PIPE_BOS_BYTES || total > length ||
+        (ULONG)data[0] > total) {
+        return XHCI_PIPE_MALFORMED;
+    }
+    out.Capabilities = 0;
+    out.Usb2Attributes = 0;
+    out.HasSuperSpeed = 0;
+    out.SsAttributes = 0;
+    out.SsSpeeds = 0;
+    out.SsFunctionality = 0;
+    out.SsU1ExitLatency = 0;
+    out.SsU2ExitLatency = 0;
+    out.HasSuperSpeedPlus = 0;
+    out.SspAttributes = 0;
+    out.SspFunctionality = 0;
+    out.SspSublinks = 0;
+    for (i = 0; i < XHCI_PIPE_BOS_SUBLINKS; i++) {
+        out.SspSublink[i] = 0;
+    }
+
+    offset = (ULONG)data[0];
+    while (offset < total) {
+        if (total - offset < 3UL) {
+            return XHCI_PIPE_MALFORMED;
+        }
+        bLength = (ULONG)data[offset];
+        if (bLength < 3UL || bLength > total - offset) {
+            return XHCI_PIPE_MALFORMED;
+        }
+        if ((ULONG)data[offset + 1] == XHCI_PIPE_DT_DEVICE_CAP) {
+            out.Capabilities++;
+            switch ((ULONG)data[offset + 2]) {
+            case XHCI_PIPE_CAP_USB2_EXTENSION:
+                if (bLength >= 7UL) {
+                    out.Usb2Attributes = xhciPipeDword(data + offset + 3);
+                }
+                break;
+            case XHCI_PIPE_CAP_SUPERSPEED:
+                if (bLength < 10UL) {
+                    return XHCI_PIPE_MALFORMED;
+                }
+                out.HasSuperSpeed = 1;
+                out.SsAttributes = (ULONG)data[offset + 3];
+                out.SsSpeeds = xhciPipeWord(data + offset + 4);
+                out.SsFunctionality = (ULONG)data[offset + 6];
+                out.SsU1ExitLatency = (ULONG)data[offset + 7];
+                out.SsU2ExitLatency = xhciPipeWord(data + offset + 8);
+                break;
+            case XHCI_PIPE_CAP_SUPERSPEED_PLUS:
+                /* bReserved 3, bmAttributes 7:4, wFunctionalitySupport
+                 * 9:8, wReserved 11:10, then SSAC + 1 attribute DWORDs
+                 * (USB 3.2 Table 9-19; to verify). */
+                if (bLength < 12UL) {
+                    return XHCI_PIPE_MALFORMED;
+                }
+                out.SspAttributes = xhciPipeDword(data + offset + 4);
+                declared = (out.SspAttributes & 0x1FUL) + 1UL;
+                if (bLength < 12UL + declared * 4UL) {
+                    return XHCI_PIPE_MALFORMED;
+                }
+                out.HasSuperSpeedPlus = 1;
+                out.SspFunctionality = xhciPipeWord(data + offset + 8);
+                out.SspSublinks = declared < XHCI_PIPE_BOS_SUBLINKS
+                                      ? declared : XHCI_PIPE_BOS_SUBLINKS;
+                for (i = 0; i < out.SspSublinks; i++) {
+                    out.SspSublink[i] =
+                        xhciPipeDword(data + offset + 12 + i * 4UL);
+                }
+                break;
+            default:
+                break;
+            }
+        }
+        offset += bLength;
+    }
+    *bos = out;
     return XHCI_PIPE_OK;
 }
 

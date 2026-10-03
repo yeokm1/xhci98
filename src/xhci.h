@@ -374,6 +374,10 @@ XHCI_C_ASSERT(event_type_range_is_eight_wide, XHCI_EVENT_TYPE_COUNT == 8);
  * driver has no need to make now that it reads the bit.
  */
 #define XHCI_HCCPARAMS2_FSC(v)  ((((ULONG)(v)) >> 2) & 0x1UL)
+/* Large ESIT Payload Capability, HCCPARAMS2 bit 4 (Table 5-16; to verify).
+ * With it set the Endpoint Context's Max ESIT Payload Hi is defined and its
+ * Mult field is reserved (6.2.3.8; xhci-data-structures.md section 10.6). */
+#define XHCI_HCCPARAMS2_LEC(v)  ((((ULONG)(v)) >> 4) & 0x1UL)
 
 /* Operational registers, BAR0 + CAPLENGTH (spec 5.4). */
 #define XHCI_OP_USBCMD          0x00UL
@@ -389,6 +393,13 @@ XHCI_C_ASSERT(event_type_range_is_eight_wide, XHCI_EVENT_TYPE_COUNT == 8);
 /* PORTSC of port n (1-based), as an offset from the operational base. */
 #define XHCI_OP_PORTSC(n) \
     (XHCI_OP_PORTSC_BASE + ((((ULONG)(n)) - 1UL) * XHCI_OP_PORT_STRIDE))
+/* PORTLI of port n, 8 bytes past its PORTSC (5.4.10). On a USB3 protocol
+ * port: Link Error Count 15:0, and from xHCI 1.1 the Rx Lane Count 19:16
+ * and Tx Lane Count 23:20, each the count minus one (5.4.10.1; to verify).
+ * A PSI rate alone cannot tell Gen 2x1 from Gen 1x2; these can (29-A.6). */
+#define XHCI_OP_PORTLI(n)       (XHCI_OP_PORTSC(n) + 0x8UL)
+#define XHCI_PORTLI_RLC(v)      ((((ULONG)(v)) >> 16) & 0xFUL)
+#define XHCI_PORTLI_TLC(v)      ((((ULONG)(v)) >> 20) & 0xFUL)
 
 #define XHCI_USBCMD_RS          0x00000001UL
 #define XHCI_USBCMD_HCRST       0x00000002UL
@@ -697,12 +708,33 @@ XHCI_C_ASSERT(portsc_change_mask_is_within_rw1c_range,
 #define XHCI_PLS_U0             0
 #define XHCI_PLS_U3             3
 #define XHCI_PLS_RESUME         15
+/*
+ * The rest of Table 5-27's PLS encodings, which a USB3 protocol port passes
+ * through (task 29-A.2; xhci-data-structures.md section 10.3, where each value
+ * is marked for verification against the PDF).
+ */
+#define XHCI_PLS_U1             1
+#define XHCI_PLS_U2             2
+#define XHCI_PLS_DISABLED       4
+#define XHCI_PLS_RX_DETECT      5
+#define XHCI_PLS_INACTIVE       6
+#define XHCI_PLS_POLLING        7
+#define XHCI_PLS_RECOVERY       8
+#define XHCI_PLS_HOT_RESET      9
+#define XHCI_PLS_COMPLIANCE     10
+#define XHCI_PLS_TEST_MODE      11
 
 /* Default Protocol Speed IDs (spec 7.2, used only when PSIC = 0). */
 #define XHCI_PSIV_FS            1
 #define XHCI_PSIV_LS            2
 #define XHCI_PSIV_HS            3
 #define XHCI_PSIV_SS            4
+/* The SuperSpeedPlus defaults of a USB 3.x protocol group with PSIC = 0:
+ * Gen 2x1, Gen 1x2 and Gen 2x2 (xhci-data-structures.md section 10.1, to
+ * verify against the PDF). Decoded only on a USB 3.x group. */
+#define XHCI_PSIV_SSP_GEN2X1    5
+#define XHCI_PSIV_SSP_GEN1X2    6
+#define XHCI_PSIV_SSP_GEN2X2    7
 
 /* Decoded speed classes. The raw PSIV still goes into the Slot Context;
  * every functional decision uses one of these
@@ -711,7 +743,13 @@ XHCI_C_ASSERT(portsc_change_mask_is_within_rw1c_range,
 #define XHCI_SPEED_LOW          1
 #define XHCI_SPEED_FULL         2
 #define XHCI_SPEED_HIGH         3
+/* Every rate at or above 5 Gbit/s. SuperSpeed and SuperSpeedPlus share the
+ * class because their framing is one (1024-byte packets, burst, the
+ * companion descriptor); the rate is kept apart by XhciPortRate (29-A.1). */
 #define XHCI_SPEED_SUPER        4
+
+/* Gen 1x1, in kbit/s: a SuperSpeed-class rate above it is SuperSpeedPlus. */
+#define XHCI_RATE_GEN1_KBPS     5000000UL
 
 /*
  * The sticky "this start has decoded a device at this speed" set
@@ -1372,11 +1410,19 @@ ULONG XhciCommonBufferAllocationBytes(ULONG resourcesSize);
 #define XHCI_EP0_MPS_LOW            8UL
 #define XHCI_EP0_MPS_FULL_INITIAL   64UL
 #define XHCI_EP0_MPS_HIGH           64UL
+/* SuperSpeed (task 29-A.3): EP0 is 512 bytes, and the device descriptor's
+ * bMaxPacketSize0 carries the exponent 9 rather than the size (USB 3.2
+ * 9.6.1; xhci-data-structures.md section 10.6). */
+#define XHCI_EP0_MPS_SUPER          512UL
+#define XHCI_EP0_MPS_SUPER_EXPONENT 9UL
 
 /* Every legal EP0 Max Packet Size, as a validation set rather than a range:
- * bMaxPacketSize0 is one of exactly these four (USB 2.0 9.6.1). */
+ * bMaxPacketSize0 is one of exactly these four (USB 2.0 9.6.1), or 512 at
+ * SuperSpeed. Which one a device may use is its speed's question
+ * (xhci_enum.c); this set only refuses a size no speed has. */
 #define XHCI_EP0_MPS_IS_LEGAL(m) \
-    ((m) == 8UL || (m) == 16UL || (m) == 32UL || (m) == 64UL)
+    ((m) == 8UL || (m) == 16UL || (m) == 32UL || (m) == 64UL || \
+     (m) == XHCI_EP0_MPS_SUPER)
 
 /* Context builder status codes. */
 #define XHCI_CTX_OK                 0
@@ -1420,8 +1466,15 @@ typedef struct _XHCI_EP_PARAMS {
     ULONG DequeuePA;        /* 16-byte aligned transfer-ring base */
     ULONG Dcs;              /* the ring's current dequeue cycle state */
     ULONG AverageTrbLength; /* must be nonzero */
+    /* Up to 24 bits: 15:0 go to DW4 (Max ESIT Payload Lo), 23:16 to DW0
+     * 31:24 (Max ESIT Payload Hi), which only a controller with
+     * HCCPARAMS2.LEC set defines - the caller's decision (29-A.6). */
     ULONG MaxEsitPayload;
 } XHCI_EP_PARAMS, *PXHCI_EP_PARAMS;
+
+/* Max ESIT Payload Hi, Endpoint Context DW0 31:24 (xHCI 1.1+, LEC). */
+#define XHCI_EP_MAX_ESIT_HI_SHIFT   24
+#define XHCI_EP_MAX_ESIT_LIMIT      0x00FFFFFFUL
 
 /*
  * Encoders. Each writes XHCI_CONTEXT_DWORDS words at `context`, which is a
@@ -1719,6 +1772,14 @@ typedef struct _XHCI_HC_INFO {
      * cannot make complete.
      */
     ULONG Fsc;
+    /*
+     * Large ESIT Payload Capability, HCCPARAMS2 bit 4 (task 29-A.6; to verify
+     * against Table 5-16). Read under the same two gates as Fsc, and zero
+     * when the register is not there: zero is the direction that refuses a
+     * SuperSpeedPlus isochronous endpoint above 48 KiB per interval rather
+     * than programming Max ESIT Payload Hi on a controller that reserves it.
+     */
+    ULONG Lec;
 } XHCI_HC_INFO, *PXHCI_HC_INFO;
 
 /* Derivation status codes. Nonzero refuses the controller. */
@@ -1830,6 +1891,18 @@ ULONG XhciHcInfoEqual(const XHCI_HC_INFO *a, const XHCI_HC_INFO *b);
 #define XHCI_PSI_PSIV(dw)            (((ULONG)(dw)) & 0xFUL)
 #define XHCI_PSI_PSIE(dw)            ((((ULONG)(dw)) >> 4) & 0x3UL)
 #define XHCI_PSI_PSIM(dw)            ((((ULONG)(dw)) >> 16) & 0xFFFFUL)
+/* The rest of the PSI DWORD (7.2.1; xhci-data-structures.md section 10.1,
+ * to verify): PSI Type 7:6 (0 symmetric, 2 asymmetric Rx, 3 asymmetric Tx),
+ * PSI Full-duplex 8, and Link Protocol 15:14 (0 SuperSpeed, 1
+ * SuperSpeedPlus) on a USB3 protocol group. */
+#define XHCI_PSI_PLT(dw)             ((((ULONG)(dw)) >> 6) & 0x3UL)
+#define XHCI_PSI_PFD(dw)             ((((ULONG)(dw)) >> 8) & 0x1UL)
+#define XHCI_PSI_LP(dw)              ((((ULONG)(dw)) >> 14) & 0x3UL)
+#define XHCI_PSI_PLT_SYMMETRIC       0UL
+#define XHCI_PSI_PLT_ASYM_RX         2UL
+#define XHCI_PSI_PLT_ASYM_TX         3UL
+#define XHCI_PSI_LP_SS               0UL
+#define XHCI_PSI_LP_SSP              1UL
 
 /* ------------------------------------------------------------------ */
 /* Port classification (src/xhci_caps.c)                               */
@@ -1844,11 +1917,18 @@ ULONG XhciHcInfoEqual(const XHCI_HC_INFO *a, const XHCI_HC_INFO *b);
  * (docs/contributing/implementation-invariants.md, "Port Speed Decoding"). */
 #define XHCI_MAX_PSI            15
 
+/*
+ * Every class but NONE is managed - powered and enumerated - since Phase 29
+ * (task 29-A.1): the HCD drives SuperSpeed itself, so the two USB3 classes
+ * no longer mean "leave unpowered". They stay distinct because the pairing
+ * still says something: a USB3 companion has a USB 2.0 path for its
+ * connector (29-A.5's fallback), an orphan has none.
+ */
 #define XHCI_PORT_CLASS_NONE            0   /* named by no protocol capability */
-#define XHCI_PORT_CLASS_USB2_ONLY       1   /* manage: power on, handle connects */
-#define XHCI_PORT_CLASS_USB2_COMPANION  2   /* manage: the USB2 half of a connector */
-#define XHCI_PORT_CLASS_USB3_COMPANION  3   /* leave unpowered and unmanaged     */
-#define XHCI_PORT_CLASS_USB3_ORPHAN     4   /* out of scope - needs SuperSpeed    */
+#define XHCI_PORT_CLASS_USB2_ONLY       1   /* USB 2.0, no SuperSpeed partner  */
+#define XHCI_PORT_CLASS_USB2_COMPANION  2   /* the USB2 half of a connector    */
+#define XHCI_PORT_CLASS_USB3_COMPANION  3   /* the USB3 half of a connector    */
+#define XHCI_PORT_CLASS_USB3_ORPHAN     4   /* USB3 with no USB 2.0 path       */
 /* One past the last class, so a per-class tally can be an array. */
 #define XHCI_PORT_CLASS_COUNT           5
 
@@ -1880,7 +1960,7 @@ typedef struct _XHCI_PROTOCOL {
 typedef struct _XHCI_PORT_MAP {
     ULONG PortCount;                /* HCSPARAMS1.MaxPorts */
     ULONG ProtocolCount;
-    ULONG ManagedPortCount;         /* the USB2-only and USB2-companion ports */
+    ULONG ManagedPortCount;         /* every port a protocol names (29-A.1) */
     ULONG LegacySupportOffset;      /* byte offset from BAR0; 0 = no such cap */
     ULONG DebugCapabilityOffset;    /* byte offset from BAR0; 0 = absent      */
     XHCI_PROTOCOL Protocols[XHCI_MAX_PROTOCOLS];
@@ -1911,7 +1991,7 @@ typedef struct _XHCI_PORT_MAP {
  * XHCI_INIT_STEP_PORT_MAP_RECHECK, because both are statements about a second
  * parse disagreeing with the first.
  */
-#define XHCI_CAPS_NO_MANAGED_PORTS      9   /* no USB 2.0 port to serve       */
+#define XHCI_CAPS_NO_MANAGED_PORTS      9   /* no port a protocol names      */
 #define XHCI_CAPS_LEGACY_MOVED          10  /* USBLEGSUP is not where the
                                              * handoff found it (RECHECK)     */
 #define XHCI_CAPS_TOPOLOGY_CHANGED      11  /* the re-parse disagrees with the
@@ -2032,6 +2112,27 @@ ULONG XhciPortPsivForSpeed(const XHCI_PORT_MAP *map,
                            ULONG speedClass,
                            ULONG *psiv);
 
+/*
+ * The rate a raw Port Speed value means on this port, kept apart from the
+ * speed class (task 29-A.1): `*kbps` the signalling rate in kbit/s, from the
+ * group's PSI DWORD for that PSIV - or from the default table when the group
+ * advertises none (PSIC = 0, as qemu-xhci reports) - and `*plus` 1 for a
+ * SuperSpeedPlus link: a USB3 group's PSI DWORD with Link Protocol 1, or any
+ * SuperSpeed-class rate above Gen 1x1's 5 Gbit/s. A rate is all a PSI DWORD
+ * says: Gen 2x1 and Gen 1x2 are both 10 Gbit/s, and only PORTLI's lane counts
+ * tell them apart. Answers XHCI_CAPS_NOT_FOUND for a PSIV the group does not
+ * name, or a port no group claims; both outputs are written 0 then.
+ * IRQL: any.
+ */
+ULONG XhciPortRate(const XHCI_PORT_MAP *map,
+                   ULONG port,
+                   ULONG psiv,
+                   ULONG *kbps,
+                   ULONG *plus);
+
+/* Whether a port is one of a USB 3.x protocol group (a SuperSpeed link). */
+ULONG XhciPortIsUsb3(const XHCI_PORT_MAP *map, ULONG port);
+
 /* ------------------------------------------------------------------ */
 /* PORTSC write construction (src/xhci_port.c)                         */
 /* ------------------------------------------------------------------ */
@@ -2064,6 +2165,16 @@ ULONG XhciPortscSuspend(ULONG portsc);
  */
 ULONG XhciPortscResumeSignal(ULONG portsc);
 ULONG XhciPortscResumeDone(ULONG portsc);
+/*
+ * The USB3 protocol port's own writes (task 29-A.2). A warm reset is WPR,
+ * RW1S, "the Warm Reset sequence as defined in the USB3 Specification is
+ * initiated and the PR flag is set to '1'" (Table 5-27); it completes with
+ * PRC and WRC both set. Re-arming a Disabled USB3 port is a PLS write of
+ * RxDetect with LWS - its exit to Disconnected - and never a warm reset
+ * (29-A.5; xhci-data-structures.md section 10.4).
+ */
+ULONG XhciPortscWarmReset(ULONG portsc);
+ULONG XhciPortscRxDetect(ULONG portsc);
 
 /* ------------------------------------------------------------------ */
 /* The root hub as usbport sees it (src/xhci_port.c, src/xhci_rh.c)    */

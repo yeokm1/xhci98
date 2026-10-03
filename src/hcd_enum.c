@@ -13,7 +13,20 @@
  * by slot and endpoint (hcd_dev.c).
  *
  * The speed is the port's own, carried into the Slot Context and onward:
- * there is no High-Speed lie and no SET_ADDRESS (section 5.3).
+ * there is no High-Speed lie and no SET_ADDRESS (section 5.3). Two
+ * vocabularies, kept apart (Phase 29; the split 27-A.3 makes for the
+ * endpoint rules): the raw PSIV the port reported goes into the Slot
+ * Context, and the class the controller's PSI table decodes it to - as its
+ * default ID - is what the enumeration machine and every rule are given.
+ *
+ * SuperSpeed root ports (tasks 29-A.1 to 29-A.3): a USB3 protocol port is
+ * powered and served like a USB 2.0 one, with its link judged by
+ * xhci_link.c - SS.Inactive and Compliance Mode recovered with a bounded
+ * number of warm resets and then given up (the device appears on its USB
+ * 2.0 companion, 29-A.5's passive fallback, counted), the enumeration's own
+ * reset hot from U0 and warm otherwise - and its device addressed at EP0
+ * 512 with its BOS descriptor read. A SuperSpeed hub is Phase 30's and is
+ * refused here.
  *
  * Timings, section 10.2: attach debounce 100 ms (TATTDB), the reset timed by
  * the xHC and waited for up to 500 ms, reset recovery 10 ms (TRSTRCY),
@@ -48,6 +61,10 @@
 
 #define HCD_DEBOUNCE_MS        100UL
 #define HCD_RESET_WAIT_MS      500UL
+/* A warm reset is LFPS for tens of milliseconds and then link training
+ * (USB 3.2 7.5, to verify); twice the hot reset's wait is this driver's
+ * margin, not a specification number. */
+#define HCD_WARM_RESET_WAIT_MS 1000UL
 #define HCD_RESET_RECOVERY_MS  10UL
 #define HCD_SETADDRESS_MS      2UL
 #define HCD_COMMAND_WAIT_MS    5000UL
@@ -56,6 +73,7 @@
 
 #define HCD_DESC_DEVICE        1
 #define HCD_DESC_CONFIGURATION 2
+#define HCD_DESC_BOS           15
 
 /* No RtlCopyBytes: the DDK spells it as memcpy, an import no row admits. */
 static VOID hcdCopy(PUCHAR to, const UCHAR *from, ULONG bytes)
@@ -232,6 +250,7 @@ static VOID hcdDeviceFree(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         return;
     }
     HcdPoolFree(dev->Config);
+    HcdPoolFree(dev->Bos);
     HcdPoolFree(dev->Selected);
     HcdPoolFree(dev);
 }
@@ -484,12 +503,14 @@ static ULONG hcdBuildEp0Input(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     return 1;
 }
 
-/* One speed class into one of a counter triple (High, Full, Low); any other
- * class counts in none, which the matrix reads as a wrong speed. */
-static VOID hcdCountSpeed(ULONG speedClass, PULONG high, PULONG full,
-                          PULONG low)
+/* One speed class into one of a counter set (Super, High, Full, Low); any
+ * other class counts in none, which the matrix reads as a wrong speed. */
+static VOID hcdCountSpeed(ULONG speedClass, PULONG super, PULONG high,
+                          PULONG full, PULONG low)
 {
-    if (speedClass == XHCI_SPEED_HIGH) {
+    if (speedClass == XHCI_SPEED_SUPER) {
+        (*super)++;
+    } else if (speedClass == XHCI_SPEED_HIGH) {
         (*high)++;
     } else if (speedClass == XHCI_SPEED_FULL) {
         (*full)++;
@@ -528,12 +549,21 @@ static VOID hcdCountAddressed(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
                                      XHCI_SLOT_SPEED_SHIFT,
                                  &slotClass);
     }
-    hcdCountSpeed(portClass, &c->PortSpeedHigh, &c->PortSpeedFull,
-                  &c->PortSpeedLow);
-    hcdCountSpeed(slotClass, &c->SlotSpeedHigh, &c->SlotSpeedFull,
-                  &c->SlotSpeedLow);
+    hcdCountSpeed(portClass, &c->PortSpeedSuper, &c->PortSpeedHigh,
+                  &c->PortSpeedFull, &c->PortSpeedLow);
+    hcdCountSpeed(slotClass, &c->SlotSpeedSuper, &c->SlotSpeedHigh,
+                  &c->SlotSpeedFull, &c->SlotSpeedLow);
     if (portClass != slotClass || portClass == XHCI_SPEED_UNKNOWN) {
         c->SpeedDisagreements++;
+    }
+    /* The rate beside the class (29-A.1): a SuperSpeedPlus link is
+     * accepted at its trained rate and counted by it. */
+    dev->RateKbps = 0;
+    dev->Plus = 0;
+    (VOID)XhciPortRate(&ext->PortMap, dev->Port, dev->Speed, &dev->RateKbps,
+                       &dev->Plus);
+    if (portClass == XHCI_SPEED_SUPER && dev->Plus) {
+        c->PortSpeedSuperPlus++;
     }
 }
 
@@ -835,22 +865,76 @@ static ULONG hcdGetDescriptor(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 /* Root ports                                                               */
 /* ----------------------------------------------------------------------- */
 
-/* Reset a USB 2.0 root port and wait for the xHC to finish it; the speed is
- * read from PORTSC once it has. Returns 1 when the port came back enabled. */
-static ULONG hcdResetPort(PHCD_CONTROLLER hc, ULONG port, PULONG speed)
+/*
+ * The SuperSpeed half of a root port reset (29-A.2): which reset the link's
+ * state allows - hot from U0, warm from any state a hot one cannot start in,
+ * none from a link with nothing trained or one held Disabled - written, and
+ * counted. Returns the PORTSC value written, or 0 when no reset is owed;
+ * *wait the time to give it.
+ */
+static ULONG hcdUsb3ResetWrite(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG portsc,
+                               PULONG wait)
+{
+    XHCI_LINK_ACTION act;
+
+    switch (XhciLinkDecide(&p->Link, portsc, XHCI_LINK_WANT_RESET, &act)) {
+    case XHCI_LINK_ACT_HOT_RESET:
+        *wait = HCD_RESET_WAIT_MS;
+        return XhciPortscReset(portsc);
+    case XHCI_LINK_ACT_WARM_RESET:
+        hc->Counters.SsWarmResets++;
+        if (act.Converted) {
+            hc->Counters.SsResetsConverted++;
+        }
+        XHCI_DBG_VALUE("hcd: warm reset, port/converted",
+                       (p->PortId << 8) | act.Converted);
+        *wait = HCD_WARM_RESET_WAIT_MS;
+        return XhciPortscWarmReset(portsc);
+    case XHCI_LINK_ACT_GIVE_UP:
+        hc->Counters.SsLinksGivenUp++;
+        XHCI_DBG_VALUE("hcd: SuperSpeed link given up, port", p->PortId);
+        return 0;
+    default:
+        return 0;
+    }
+}
+
+/* Reset a root port and wait for the xHC to finish it; the speed is read
+ * from PORTSC once it has. A USB3 protocol port's reset is hot or warm by
+ * its link's state (hcdUsb3ResetWrite), and completes with PRC - and WRC
+ * when warm - and the link in U0. Returns 1 when the port came back
+ * enabled. */
+static ULONG hcdResetPort(PHCD_CONTROLLER hc, PHCD_PORT p, PULONG speed)
 {
     PXHCI_EXTENSION ext;
     LARGE_INTEGER due;
     ULONG portsc;
     ULONG waited;
+    ULONG wait;
+    ULONG write;
+    ULONG usb3;
+    ULONG warm;
+    ULONG port;
 
     ext = &hc->Hc;
+    port = p->PortId;
+    usb3 = XhciPortIsUsb3(&ext->PortMap, port);
     portsc = XhciReadPortsc(ext, port);
-    if (portsc == 0xFFFFFFFFUL || (portsc & XHCI_PORTSC_CCS) == 0) {
+    if (portsc == 0xFFFFFFFFUL ||
+        (!usb3 && (portsc & XHCI_PORTSC_CCS) == 0)) {
         return 0;
     }
-    XhciWritePortsc(ext, port, XhciPortscReset(portsc));
-    for (waited = 0; waited < HCD_RESET_WAIT_MS; waited += HCD_POLL_STEP_MS) {
+    wait = HCD_RESET_WAIT_MS;
+    if (usb3) {
+        write = hcdUsb3ResetWrite(hc, p, portsc, &wait);
+        if (write == 0) {
+            return 0;
+        }
+    } else {
+        write = XhciPortscReset(portsc);
+    }
+    XhciWritePortsc(ext, port, write);
+    for (waited = 0; waited < wait; waited += HCD_POLL_STEP_MS) {
         HcdRelativeMs(&due, HCD_POLL_STEP_MS);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
         portsc = XhciReadPortsc(ext, port);
@@ -862,8 +946,17 @@ static ULONG hcdResetPort(PHCD_CONTROLLER hc, ULONG port, PULONG speed)
         }
     }
     XhciWritePortsc(ext, port,
-                    XhciPortscClearChanges(portsc, XHCI_PORTSC_PRC));
-    if ((portsc & XHCI_PORTSC_PRC) == 0 || (portsc & XHCI_PORTSC_PED) == 0) {
+                    XhciPortscClearChanges(portsc, XHCI_PORTSC_PRC |
+                                                       (usb3 ? XHCI_PORTSC_WRC
+                                                             : 0)));
+    if (usb3) {
+        warm = 0;
+        if (!XhciLinkResetDone(portsc, &warm)) {
+            XHCI_DBG_VALUE("hcd: SuperSpeed reset failed, PORTSC", portsc);
+            return 0;
+        }
+    } else if ((portsc & XHCI_PORTSC_PRC) == 0 ||
+               (portsc & XHCI_PORTSC_PED) == 0) {
         return 0;
     }
     *speed = (portsc & XHCI_PORTSC_SPEED_MASK) >> XHCI_PORTSC_SPEED_SHIFT;
@@ -898,7 +991,7 @@ static ULONG hcdPortReset(PHCD_CONTROLLER hc, PHCD_PORT p,
     }
     speed = 0;
     *speedClass = XHCI_SPEED_UNKNOWN;
-    if (!hcdResetPort(hc, p->PortId, &speed)) {
+    if (!hcdResetPort(hc, p, &speed)) {
         return 0;
     }
     (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, p->PortId, speed, speedClass);
@@ -1022,6 +1115,40 @@ static ULONG hcdCycleOwns(PHCD_PORT p, ULONG serial)
 /* The executor                                                             */
 /* ----------------------------------------------------------------------- */
 
+/* A decoded class as the machine's speed: its default ID (xhci_enum.h).
+ * 0 for a class the machine does not take, which fails the reset as a
+ * speed failure. */
+static ULONG hcdEnumSpeedOf(ULONG speedClass)
+{
+    switch (speedClass) {
+    case XHCI_SPEED_LOW:
+        return XHCI_ENUM_SPEED_LOW;
+    case XHCI_SPEED_FULL:
+        return XHCI_ENUM_SPEED_FULL;
+    case XHCI_SPEED_HIGH:
+        return XHCI_ENUM_SPEED_HIGH;
+    case XHCI_SPEED_SUPER:
+        return XHCI_ENUM_SPEED_SUPER;
+    default:
+        return 0;
+    }
+}
+
+/* A USB 3.x device (bcdUSB 0x0300 or above) that enumerated below
+ * SuperSpeed on a root port's USB 2.0 half: its SuperSpeed link did not
+ * train, or was given up, and it fell back (29-A.5, the passive case). */
+static VOID hcdCountFallback(PHCD_CONTROLLER hc, PHCD_PORT p, const UCHAR *d)
+{
+    if (p->Hub == NULL &&
+        XhciPortClass(&hc->Hc.PortMap, p->PortId) ==
+            XHCI_PORT_CLASS_USB2_COMPANION &&
+        ((ULONG)d[2] | ((ULONG)d[3] << 8)) >= 0x0300UL) {
+        hc->Counters.SsDevicesOnUsb2++;
+        XHCI_DBG_VALUE("hcd: USB 3.x device on its USB 2.0 path, port",
+                       p->PortId);
+    }
+}
+
 static VOID hcdEventInit(PXHCI_ENUM_EVENT e, ULONG kind, ULONG ok)
 {
     e->Kind = kind;
@@ -1045,6 +1172,7 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
     ULONG control;
     ULONG code;
     ULONG speed;
+    ULONG speedClass;
     ULONG bytes;
     ULONG ok;
     PUCHAR s;
@@ -1071,7 +1199,16 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
             ok = HcdHubPortReset(hc, p->Hub, p->Number, &p->HubSpeedClass);
             speed = ok ? XhciHubEnumSpeed(p->HubSpeedClass) : 0;
         } else {
-            ok = hcdResetPort(hc, p->PortId, &speed);
+            /* The raw PSIV is kept for the Slot Context; the machine is
+             * given the class the controller's PSI table decodes it to. */
+            ok = hcdResetPort(hc, p, &speed);
+            p->LinkPsiv = ok ? speed : 0;
+            speedClass = XHCI_SPEED_UNKNOWN;
+            if (ok) {
+                (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, p->PortId, speed,
+                                         &speedClass);
+            }
+            speed = hcdEnumSpeedOf(speedClass);
         }
         hcdEventInit(next, XHCI_ENUM_EV_RESET_DONE, ok);
         next->Speed = speed;
@@ -1096,7 +1233,8 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
                 HcdSvcRequestReset(&hc->Hc);
                 return 1;
             }
-            if (hcdDeviceNew(hc, p, next->SlotId, p->Enum.Speed) ==
+            if (hcdDeviceNew(hc, p, next->SlotId,
+                             p->Hub == NULL ? p->LinkPsiv : p->Enum.Speed) ==
                 NULL) {
                 /* The slot is enabled but unowned: give it back here, the
                  * machine never learns of it (round 1, finding 11). */
@@ -1143,6 +1281,7 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
         if (ok && bytes == XHCI_ENUM_DEVICE_DESC_BYTES) {
             hcdCopy(p->Device->DeviceDesc, s,
                          XHCI_ENUM_DEVICE_DESC_BYTES);
+            hcdCountFallback(hc, p, s);
             XHCI_DBG_VALUE("hcd: device descriptor, idVendor/idProduct",
                            ((ULONG)s[9] << 24) | ((ULONG)s[8] << 16) |
                                ((ULONG)s[11] << 8) | (ULONG)s[10]);
@@ -1171,7 +1310,56 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
         }
         return 1;
 
+    case XHCI_ENUM_ACT_GET_BOS:
+        /* SuperSpeed (29-A.3): the head for wTotalLength, then the whole,
+         * kept with what XhciPipeParseBos made of it. A failure of either
+         * read is counted and the machine goes on without it. */
+        bytes = 0;
+        ok = hcdGetDescriptor(hc, p->Device, HCD_DESC_BOS, act->Length,
+                              &bytes);
+        hcdEventInit(next, XHCI_ENUM_EV_TRANSFER_DONE, ok);
+        next->Bytes = bytes;
+        if (ok && act->Length == XHCI_ENUM_BOS_HEAD_BYTES && bytes >= 4) {
+            next->Value = (ULONG)s[2] | ((ULONG)s[3] << 8);
+        }
+        if (act->Length == XHCI_ENUM_BOS_HEAD_BYTES) {
+            if (!ok || bytes < XHCI_ENUM_BOS_HEAD_BYTES ||
+                next->Value < XHCI_ENUM_BOS_HEAD_BYTES) {
+                hc->Counters.SsBosMissing++;
+            }
+            return 1;
+        }
+        if (!ok || bytes != act->Length ||
+            XhciPipeParseBos(s, bytes, &p->Device->BosInfo) !=
+                XHCI_PIPE_OK) {
+            hc->Counters.SsBosMissing++;
+            return 1;
+        }
+        HcdPoolFree(p->Device->Bos);
+        p->Device->Bos = (PUCHAR)HcdPoolAlloc(bytes);
+        p->Device->BosLength = 0;
+        if (p->Device->Bos != NULL) {
+            hcdCopy(p->Device->Bos, s, bytes);
+            p->Device->BosLength = bytes;
+        }
+        XHCI_DBG_VALUE("hcd: BOS, bytes/capabilities",
+                       (bytes << 8) | p->Device->BosInfo.Capabilities);
+        return 1;
+
     case XHCI_ENUM_ACT_CREATE_PDO:
+        speedClass = XHCI_SPEED_UNKNOWN;
+        (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, p->Device->Port,
+                                 p->Device->Speed, &speedClass);
+        if (p->Device->DeviceDesc[4] == XHCI_HUB_CLASS &&
+            speedClass == XHCI_SPEED_SUPER) {
+            /* A SuperSpeed hub is Phase 30's: its hub class, descriptor
+             * and Route String handling are not this bus's yet. Its USB
+             * 2.0 half on the companion port is served as before. */
+            XHCI_DBG_VALUE("hcd: SuperSpeed hub refused (Phase 30), port",
+                           p->PortId);
+            hcdEventInit(next, XHCI_ENUM_EV_PDO_CREATED, 0);
+            return 1;
+        }
         if (p->Device->DeviceDesc[4] == XHCI_HUB_CLASS) {
             /* A hub is the bus's and never a PDO (section 10.3): brought
              * up here, it is Present with nothing for PnP to start, so the
@@ -1273,6 +1461,49 @@ static VOID hcdFeed(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG kind)
  *               reads connected starts - a Failed port waits for a new
  *               connection rather than retrying for ever.
  */
+/*
+ * A USB3 protocol port's link, judged before its connection (29-A.2). A link
+ * in SS.Inactive or Compliance Mode has lost whatever was enumerated on it,
+ * which is fed a disconnect, and is warm-reset - its completion is a change
+ * of its own, after which the trained link reads as a connection. Once the
+ * budget is spent the link is given up and the device left to find its USB
+ * 2.0 path. Returns 1 when the port was handled here.
+ */
+static ULONG hcdUsb3LinkService(PHCD_CONTROLLER hc, PHCD_PORT p,
+                                ULONG portsc)
+{
+    XHCI_LINK_ACTION act;
+    ULONG link;
+    ULONG state;
+
+    link = XhciLinkClassify(portsc);
+    if (link != XHCI_LINK_ERROR && link != XHCI_LINK_COMPLIANCE &&
+        !(link == XHCI_LINK_DISCONNECTED &&
+          (portsc & XHCI_PORTSC_CAS) != 0)) {
+        return 0;
+    }
+    state = p->Enum.State;
+    if (state != XHCI_ENUM_EMPTY && state != XHCI_ENUM_FAILED &&
+        state != XHCI_ENUM_GONE) {
+        hcdFeed(hc, p, XHCI_ENUM_EV_DISCONNECT);
+    }
+    switch (XhciLinkDecide(&p->Link, portsc, XHCI_LINK_WANT_SERVICE, &act)) {
+    case XHCI_LINK_ACT_WARM_RESET:
+        hc->Counters.SsWarmResets++;
+        XHCI_DBG_VALUE("hcd: SuperSpeed link recovery, port/state",
+                       (p->PortId << 8) | link);
+        XhciWritePortsc(&hc->Hc, p->PortId, XhciPortscWarmReset(portsc));
+        break;
+    case XHCI_LINK_ACT_GIVE_UP:
+        hc->Counters.SsLinksGivenUp++;
+        XHCI_DBG_VALUE("hcd: SuperSpeed link given up, port", p->PortId);
+        break;
+    default:
+        break;
+    }
+    return 1;
+}
+
 static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
 {
     PXHCI_EXTENSION ext;
@@ -1289,6 +1520,10 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
     if (changes != 0) {
         XhciWritePortsc(ext, p->PortId,
                         XhciPortscClearChanges(portsc, changes));
+    }
+    if (XhciPortIsUsb3(&ext->PortMap, p->PortId) &&
+        hcdUsb3LinkService(hc, p, portsc)) {
+        return;
     }
     state = p->Enum.State;
     if ((changes & XHCI_PORTSC_CSC) != 0) {
@@ -1916,6 +2151,8 @@ VOID HcdEnumInit(PHCD_CONTROLLER hc)
         p->Number = i + 1;
         p->Hub = NULL;
         p->Device = NULL;
+        p->LinkPsiv = 0;
+        XhciLinkInit(&p->Link);
         if (p->Enum.State == XHCI_ENUM_GONE && !hcdPortQuiet(hc, p)) {
             continue;
         }

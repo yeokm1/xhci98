@@ -350,8 +350,8 @@ static void test_ep0_context_by_speed(void)
              "field bounds what the controller accepts and usbport's first "
              "descriptor request is 64 bytes; declaring 8 babbles (batch 13-E)");
     CHECK_EQ(XhciInitialMps0(XHCI_SPEED_HIGH), 64UL, "HS EP0 MPS is 64");
-    CHECK_EQ(XhciInitialMps0(XHCI_SPEED_SUPER), 0UL,
-             "SuperSpeed is refused rather than given a plausible 512");
+    CHECK_EQ(XhciInitialMps0(XHCI_SPEED_SUPER), 512UL,
+             "SuperSpeed EP0 is 512 since 29-A.3");
     CHECK_EQ(XhciInitialMps0(XHCI_SPEED_UNKNOWN), 0UL,
              "an undecoded speed is refused");
 
@@ -386,6 +386,13 @@ static void test_ep0_context_by_speed(void)
              "FS EP0 corrected to 32");
     CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_OK, "builds");
     CHECK_EQ(block[1], 0x00200026UL, "EP0 DW1 at MPS 32");
+
+    /* SuperSpeed (29-A.3): 512, Max Burst 0, everything else as EP0's. */
+    CHECK_EQ(XhciBuildEp0Params(512UL, 0x00201000UL, 1UL, &ep), XHCI_CTX_OK,
+             "SS EP0 params build");
+    CHECK_EQ(ep.MaxBurstSize, 0UL, "EP0 bursts nothing");
+    CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_OK, "builds");
+    CHECK_EQ(block[1], 0x02000026UL, "EP0 DW1 at MPS 512");
 }
 
 static void test_ep0_params_refusals(void)
@@ -396,16 +403,18 @@ static void test_ep0_params_refusals(void)
              "NULL params refused");
     /*
      * The legal set, not a range. 0 and 9 are both things a malformed device
-     * descriptor produces, and 512 is the SuperSpeed value a copied-in table
-     * would supply - all three would otherwise reach the TD Size arithmetic of
-     * every later control transfer.
+     * descriptor produces (9 is SuperSpeed's exponent, never a size), and 1024
+     * is no EP0's size at all - each would otherwise reach the TD Size
+     * arithmetic of every later control transfer. 512 is legal since 29-A.3.
      */
     CHECK_EQ(XhciBuildEp0Params(0UL, 0x1000UL, 0UL, &ep), XHCI_CTX_BAD_PARAM,
              "MPS 0 refused");
     CHECK_EQ(XhciBuildEp0Params(9UL, 0x1000UL, 0UL, &ep), XHCI_CTX_BAD_PARAM,
              "MPS 9 refused");
-    CHECK_EQ(XhciBuildEp0Params(512UL, 0x1000UL, 0UL, &ep), XHCI_CTX_BAD_PARAM,
-             "MPS 512 refused");
+    CHECK_EQ(XhciBuildEp0Params(1024UL, 0x1000UL, 0UL, &ep),
+             XHCI_CTX_BAD_PARAM, "MPS 1024 refused");
+    CHECK_EQ(XhciBuildEp0Params(256UL, 0x1000UL, 0UL, &ep),
+             XHCI_CTX_BAD_PARAM, "MPS 256 refused");
 }
 
 /*
@@ -471,14 +480,26 @@ static void test_endpoint_field_ranges(void)
              "4 is refused rather than masked to 0");
     ep.ErrorCount = XHCI_EP_CERR_DEFAULT;
 
-    /* Max ESIT Payload is 31:16 of DW4 - sixteen bits. */
+    /* Max ESIT Payload Lo is 31:16 of DW4 - sixteen bits - and Hi 31:24 of
+     * DW0, eight more (29-A.6; whether Hi may be used is LEC's question,
+     * answered by the caller). */
     ep.MaxEsitPayload = 0xFFFFUL;
     CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_OK,
-             "Max ESIT Payload 65535 fits its sixteen bits");
+             "Max ESIT Payload 65535 fits Lo");
     CHECK_EQ(block[4] & 0xFFFF0000UL, 0xFFFF0000UL, "and lands at 31:16");
+    CHECK_EQ(block[0] & 0xFF000000UL, 0UL, "with Hi zero");
     ep.MaxEsitPayload = 0x10000UL;
+    CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_OK,
+             "65536 carries into Hi");
+    CHECK_EQ(block[4] & 0xFFFF0000UL, 0UL, "Lo 0");
+    CHECK_EQ(block[0] & 0xFF000000UL, 0x01000000UL, "Hi 1");
+    ep.MaxEsitPayload = 0xFFFFFFUL;
+    CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_OK,
+             "the 24-bit maximum fits");
+    CHECK_EQ(block[0] & 0xFF000000UL, 0xFF000000UL, "Hi FF");
+    ep.MaxEsitPayload = 0x1000000UL;
     CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_BAD_PARAM,
-             "65536 is refused rather than masked to 0");
+             "2^24 is refused rather than masked to 0");
     ep.MaxEsitPayload = 0;
 
     /* Max Packet Size is 31:16 of DW1, and its lower bound is a refusal of its

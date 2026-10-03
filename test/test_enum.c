@@ -141,9 +141,9 @@ static void test_bad_sizes(void)
     step(&p, ev(XHCI_ENUM_EV_CONNECT, 1), &a);
     step(&p, ev(XHCI_ENUM_EV_DEBOUNCED, 1), &a);
     e = ev(XHCI_ENUM_EV_RESET_DONE, 1);
-    e.Speed = 4;
+    e.Speed = 5;
     step(&p, e, &a);
-    CHECK_EQ(p.State, XHCI_ENUM_FAILED, "a SuperSpeed value is refused");
+    CHECK_EQ(p.State, XHCI_ENUM_FAILED, "a speed past the machine's refused");
     CHECK_EQ(p.FailCause, XHCI_ENUM_FAIL_SPEED, "as a speed failure");
     CHECK_EQ(a.Kind, XHCI_ENUM_ACT_NONE, "with no slot to give back");
 }
@@ -397,7 +397,9 @@ static void test_sizes_and_nulls(void)
     CHECK_EQ(XhciEnumInitialMps0(XHCI_ENUM_SPEED_FULL), 64, "Full Speed: 64");
     CHECK_EQ(XhciEnumInitialMps0(XHCI_ENUM_SPEED_HIGH), 64, "High Speed: 64");
     CHECK_EQ(XhciEnumInitialMps0(0), 0, "speed 0: none");
-    CHECK_EQ(XhciEnumInitialMps0(4), 0, "SuperSpeed: none");
+    CHECK_EQ(XhciEnumInitialMps0(XHCI_ENUM_SPEED_SUPER), 512,
+             "SuperSpeed: 512 (29-A.3)");
+    CHECK_EQ(XhciEnumInitialMps0(5), 0, "past SuperSpeed: none");
     CHECK_EQ(XhciEnumInitialMps0(15), 0, "a PSIV past the defaults: none");
 
     for (i = 0; i < sizeof(fsGood) / sizeof(fsGood[0]); i++) {
@@ -569,6 +571,120 @@ static void test_retry_to_bound(void)
     CHECK_EQ(a.Kind, XHCI_ENUM_ACT_NONE, "the slot was already given back");
 }
 
+/*
+ * SuperSpeed (task 29-A.3): EP0 at 512, bMaxPacketSize0 the exponent 9, and
+ * the BOS read between the device descriptor and the configuration - which
+ * does not fail the enumeration when it fails.
+ */
+static void ss_to_desc18(PXHCI_ENUM_PORT p, PXHCI_ENUM_ACTION a)
+{
+    XHCI_ENUM_EVENT e;
+
+    XhciEnumReset(p);
+    step(p, ev(XHCI_ENUM_EV_CONNECT, 1), a);
+    step(p, ev(XHCI_ENUM_EV_DEBOUNCED, 1), a);
+    e = ev(XHCI_ENUM_EV_RESET_DONE, 1);
+    e.Speed = XHCI_ENUM_SPEED_SUPER;
+    step(p, e, a);
+    e = ev(XHCI_ENUM_EV_COMMAND_DONE, 1);
+    e.SlotId = 3;
+    step(p, e, a);
+    CHECK_EQ(a->Kind, XHCI_ENUM_ACT_ADDRESS, "SS: Address Device");
+    CHECK_EQ(a->Mps0, 512, "at EP0 512");
+    step(p, ev(XHCI_ENUM_EV_COMMAND_DONE, 1), a);
+    e = ev(XHCI_ENUM_EV_TRANSFER_DONE, 1);
+    e.Bytes = 8;
+    e.Value = 9;
+    step(p, e, a);
+    CHECK_EQ(a->Kind, XHCI_ENUM_ACT_GET_DEVICE,
+             "bMaxPacketSize0 09h is 512: no Evaluate Context");
+    CHECK_EQ(a->Length, 18, "the whole descriptor");
+    e = ev(XHCI_ENUM_EV_TRANSFER_DONE, 1);
+    e.Bytes = 18;
+    step(p, e, a);
+}
+
+static void test_superspeed(void)
+{
+    XHCI_ENUM_PORT p;
+    XHCI_ENUM_ACTION a;
+    XHCI_ENUM_EVENT e;
+
+    ss_to_desc18(&p, &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_GET_BOS, "SS: the BOS head next");
+    CHECK_EQ(a.Length, 5, "5 bytes");
+    CHECK_EQ(p.State, XHCI_ENUM_BOS5, "Bos5");
+    e = ev(XHCI_ENUM_EV_TRANSFER_DONE, 1);
+    e.Bytes = 5;
+    e.Value = 22;
+    step(&p, e, &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_GET_BOS, "then wTotalLength of it");
+    CHECK_EQ(a.Length, 22, "22 bytes");
+    e = ev(XHCI_ENUM_EV_TRANSFER_DONE, 1);
+    e.Bytes = 22;
+    step(&p, e, &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_GET_CONFIG, "then the configuration");
+    CHECK_EQ(a.Length, 9, "its head");
+    CHECK_EQ(p.BosMissing, 0, "with the BOS read");
+    CHECK_EQ(p.BosLength, 22, "and its length kept");
+
+    /* A BOS read that stalls does not fail the enumeration. */
+    ss_to_desc18(&p, &a);
+    step(&p, ev(XHCI_ENUM_EV_TRANSFER_DONE, 0), &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_GET_CONFIG, "a failed BOS head: go on");
+    CHECK_EQ(p.BosMissing, 1, "BosMissing says so");
+    CHECK_EQ(p.State, XHCI_ENUM_CONFIG9, "Config9");
+
+    /* Nor does a short whole read. */
+    ss_to_desc18(&p, &a);
+    e = ev(XHCI_ENUM_EV_TRANSFER_DONE, 1);
+    e.Bytes = 5;
+    e.Value = 22;
+    step(&p, e, &a);
+    e = ev(XHCI_ENUM_EV_TRANSFER_DONE, 1);
+    e.Bytes = 10;
+    step(&p, e, &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_GET_CONFIG, "a short BOS: go on");
+    CHECK_EQ(p.BosMissing, 1, "BosMissing");
+
+    /* A wTotalLength below the header is no BOS. */
+    ss_to_desc18(&p, &a);
+    e = ev(XHCI_ENUM_EV_TRANSFER_DONE, 1);
+    e.Bytes = 5;
+    e.Value = 4;
+    step(&p, e, &a);
+    CHECK_EQ(p.BosMissing, 1, "wTotalLength 4: missing");
+
+    /* A disconnect mid-BOS gives the slot back. */
+    ss_to_desc18(&p, &a);
+    step(&p, ev(XHCI_ENUM_EV_DISCONNECT, 1), &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_DISABLE_SLOT, "slot given back");
+    CHECK_EQ(p.State, XHCI_ENUM_EMPTY, "Empty");
+
+    /* bMaxPacketSize0 anything but 09h at SuperSpeed is a bad descriptor -
+     * 64 included, a USB 2.0 size. */
+    XhciEnumReset(&p);
+    step(&p, ev(XHCI_ENUM_EV_CONNECT, 1), &a);
+    step(&p, ev(XHCI_ENUM_EV_DEBOUNCED, 1), &a);
+    e = ev(XHCI_ENUM_EV_RESET_DONE, 1);
+    e.Speed = XHCI_ENUM_SPEED_SUPER;
+    step(&p, e, &a);
+    e = ev(XHCI_ENUM_EV_COMMAND_DONE, 1);
+    e.SlotId = 3;
+    step(&p, e, &a);
+    step(&p, ev(XHCI_ENUM_EV_COMMAND_DONE, 1), &a);
+    e = ev(XHCI_ENUM_EV_TRANSFER_DONE, 1);
+    e.Bytes = 8;
+    e.Value = 64;
+    step(&p, e, &a);
+    CHECK_EQ(p.State, XHCI_ENUM_FAILED, "64 at SuperSpeed is refused");
+    CHECK_EQ(p.FailCause, XHCI_ENUM_FAIL_DESCRIPTOR, "a descriptor failure");
+
+    /* A USB 2.0 device never sees a BOS read. */
+    CHECK_EQ(drive_to_present(&p, XHCI_ENUM_SPEED_HIGH, 64), 0,
+             "High Speed: no BOS");
+}
+
 int main(void)
 {
     test_clean_paths();
@@ -581,6 +697,7 @@ int main(void)
     test_sizes_and_nulls();
     test_out_of_place_everywhere();
     test_retry_to_bound();
+    test_superspeed();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

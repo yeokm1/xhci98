@@ -303,15 +303,16 @@ ULONG XhciXferCodeInfo(ULONG completionCode, PXHCI_XFER_CODE info)
 #define XHCI_SETUP_DTD_IN 0x80
 
 /*
- * EP0's Max Packet Size is one of exactly four values (USB2 9.6.1
- * bMaxPacketSize0: 8, 16, 32 or 64), and the TD Size arithmetic divides by it.
- * Refusing anything else here is cheap and turns a wrong endpoint context into
- * a refused transfer instead of a silently wrong TD Size field, which the
+ * EP0's Max Packet Size is one of exactly four values at USB 2.0 speeds (USB2
+ * 9.6.1 bMaxPacketSize0: 8, 16, 32 or 64) and 512 at SuperSpeed (USB 3.2
+ * 9.6.1, task 29-A.3), and the TD Size arithmetic divides by it. Refusing
+ * anything else here is cheap and turns a wrong endpoint context into a
+ * refused transfer instead of a silently wrong TD Size field, which the
  * hardware treats as a hint and no test would ever catch.
  */
 static ULONG xhciXferMps0Valid(ULONG mps)
 {
-    return (mps == 8 || mps == 16 || mps == 32 || mps == 64) ? 1 : 0;
+    return XHCI_EP0_MPS_IS_LEGAL(mps) ? 1 : 0;
 }
 
 /*

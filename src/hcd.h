@@ -27,6 +27,7 @@
 #include "xhci_pipe.h"
 #include "xhci_func.h"
 #include "xhci_hub.h"
+#include "xhci_link.h"
 #include "xhci_counters.h"
 
 #define HCD_KIND_CONTROLLER_FDO 0x43464448UL /* 'HDFC' */
@@ -253,6 +254,15 @@ typedef struct _HCD_USB_DEVICE {
     UCHAR DeviceDesc[18];
     PUCHAR Config;          /* the whole configuration descriptor       */
     ULONG ConfigLength;
+    /* SuperSpeed (29-A.1, 29-A.3): the link rate the port trained at, in
+     * kbit/s, whether it is SuperSpeedPlus, and the BOS descriptor, kept
+     * whole (pool; NULL when none was read) with what XhciPipeParseBos
+     * made of it - for the endpoint rules and XHCISNAP (29-A.6). */
+    ULONG RateKbps;
+    ULONG Plus;
+    PUCHAR Bos;
+    ULONG BosLength;
+    XHCI_PIPE_BOS BosInfo;
     PDEVICE_OBJECT Pdo;     /* 26-A.4's device PDO, once it exists; for a
                              * split device its first function PDO, the
                              * rest on that PDO's Sibling chain          */
@@ -395,6 +405,11 @@ typedef struct _HCD_PORT {
     struct _HCD_HUB *AwaitHub; /* Gone: the departed hub whose subtree's
                              * PDOs it waits for as well (hcd_enum.c)    */
     ULONG HubSpeedClass;    /* a hub port: the speed its reset reported  */
+    /* A root port (29-A.1, 29-A.2): the raw PSIV its last reset left, for
+     * the Slot Context - the machine itself is fed the decoded class's
+     * default ID - and, on a USB3 protocol port, its link's record. */
+    ULONG LinkPsiv;
+    XHCI_LINK_PORT Link;
 } HCD_PORT, *PHCD_PORT;
 
 /*

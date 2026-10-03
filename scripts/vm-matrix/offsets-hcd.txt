@@ -1,4 +1,4 @@
-SIZEOF 156
+SIZEOF 192
 CommandsGivenUp 92
 DevicesAddressed 4
 EndpointConfigureFailures 60
@@ -17,6 +17,8 @@ IsoPacketsAnswered 108
 PortSpeedFull 12
 PortSpeedHigh 8
 PortSpeedLow 16
+PortSpeedSuper 156
+PortSpeedSuperPlus 164
 SelectEndpointsRefused 44
 SelectEndpointsRequested 40
 SelectsFailed 76
@@ -24,7 +26,14 @@ SlotsEnabled 0
 SlotSpeedFull 24
 SlotSpeedHigh 20
 SlotSpeedLow 28
+SlotSpeedSuper 160
 SpeedDisagreements 32
+SsBosMissing 184
+SsDevicesOnUsb2 180
+SsEndpointsEsitRefused 188
+SsLinksGivenUp 176
+SsResetsConverted 172
+SsWarmResets 168
 TopoBehindHubAddressed 140
 TopoBehindHubOpens 144
 TopoBehindHubTooDeep 148

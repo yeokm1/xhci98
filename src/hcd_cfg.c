@@ -184,6 +184,37 @@ static VOID hcdCfgCountEndpoint(PHCD_CONTROLLER hc, ULONG answer)
     } else {
         hc->Counters.EndpointRefusalsParams++;
     }
+    if (answer == XHCI_PIPE_ESIT_REFUSED) {
+        hc->Counters.SsEndpointsEsitRefused++;
+    }
+}
+
+/*
+ * The speed the endpoint rules are given for a device: the class its Slot
+ * Context PSIV decodes to on the controller's PSI table, as a default ID -
+ * never the raw PSIV, which a PSI table may number differently - and
+ * SuperSpeedPlus apart from SuperSpeed by the trained rate (29-A.1, 29-A.6).
+ * 0 for a class with no rules, which the rules refuse. Thread only.
+ */
+static ULONG hcdCfgPipeSpeed(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    ULONG speedClass;
+
+    speedClass = XHCI_SPEED_UNKNOWN;
+    (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, dev->Port, dev->Speed,
+                             &speedClass);
+    switch (speedClass) {
+    case XHCI_SPEED_LOW:
+        return XHCI_PIPE_SPEED_LOW;
+    case XHCI_SPEED_FULL:
+        return XHCI_PIPE_SPEED_FULL;
+    case XHCI_SPEED_HIGH:
+        return XHCI_PIPE_SPEED_HIGH;
+    case XHCI_SPEED_SUPER:
+        return dev->Plus ? XHCI_PIPE_SPEED_SUPER_PLUS : XHCI_PIPE_SPEED_SUPER;
+    default:
+        return 0;
+    }
 }
 
 /* A Configure Endpoint that was to add `mask`'s endpoints and did not; code
@@ -776,9 +807,10 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
             alt[iface.InterfaceNumber] = (UCHAR)iface.AlternateSetting;
         }
         for (e = 0; e < iface.EndpointCount; e++) {
-            answer = XhciPipeEndpointParams((const UCHAR *)cd +
-                                                iface.EndpointOffset[e],
-                                            dev->Speed, &ep);
+            answer = XhciPipeEndpointParamsAt((const UCHAR *)cd, total,
+                                              iface.EndpointOffset[e],
+                                              hcdCfgPipeSpeed(hc, dev),
+                                              hc->Hc.HcInfo.Lec, &ep);
             if (answer != XHCI_PIPE_OK || add[ep.Dci] != NULL) {
                 XHCI_DBG_VALUE("hcd: select refused, endpoint index/speed",
                                (e << 8) | dev->Speed);
@@ -1018,9 +1050,10 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     mask = 0;
     usbd = XHCI_USBD_STATUS_SUCCESS;
     for (e = 0; e < iface.EndpointCount; e++) {
-        answer = XhciPipeEndpointParams(dev->Selected +
-                                            iface.EndpointOffset[e],
-                                        dev->Speed, &ep);
+        answer = XhciPipeEndpointParamsAt(dev->Selected, dev->SelectedLength,
+                                          iface.EndpointOffset[e],
+                                          hcdCfgPipeSpeed(hc, dev),
+                                          hc->Hc.HcInfo.Lec, &ep);
         if (answer != XHCI_PIPE_OK || add[ep.Dci] != NULL ||
             (keep & (1UL << ep.Dci)) != 0) {
             XHCI_DBG_VALUE("hcd: select interface refused, endpoint/speed",
@@ -1564,9 +1597,11 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             opened |= 1UL << ii->InterfaceNumber;
         }
         for (e = 0; e < iface.EndpointCount; e++) {
-            answer = XhciPipeEndpointParams(dev->Selected +
-                                                iface.EndpointOffset[e],
-                                            dev->Speed, &ep);
+            answer = XhciPipeEndpointParamsAt(dev->Selected,
+                                              dev->SelectedLength,
+                                              iface.EndpointOffset[e],
+                                              hcdCfgPipeSpeed(hc, dev),
+                                              hc->Hc.HcInfo.Lec, &ep);
             if (answer != XHCI_PIPE_OK || add[ep.Dci] != NULL ||
                 (keep & (1UL << ep.Dci)) != 0) {
                 XHCI_DBG_VALUE("hcd: function select refused, endpoint/speed",

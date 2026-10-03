@@ -34,7 +34,12 @@
 #define XHCI_ENUM_BOUND          11UL
 #define XHCI_ENUM_GONE           12UL
 #define XHCI_ENUM_FAILED         13UL
-#define XHCI_ENUM_STATE_COUNT    14UL
+/* SuperSpeed only (task 29-A.3): the BOS descriptor, between the device
+ * descriptor and the configuration. Numbered after the rest so the states
+ * Phase 26 named keep their values. */
+#define XHCI_ENUM_BOS5           14UL
+#define XHCI_ENUM_BOS_FULL       15UL
+#define XHCI_ENUM_STATE_COUNT    16UL
 
 /* Events. Each carries the fields its outcome needs in XHCI_ENUM_EVENT. */
 #define XHCI_ENUM_EV_CONNECT       1UL  /* CCS seen set on a change        */
@@ -59,6 +64,7 @@
 #define XHCI_ENUM_ACT_CREATE_PDO    8UL
 #define XHCI_ENUM_ACT_DISABLE_SLOT  9UL /* and drop what the slot owned       */
 #define XHCI_ENUM_ACT_REPORT_GONE   10UL /* report the PDO missing            */
+#define XHCI_ENUM_ACT_GET_BOS       11UL /* GET_DESCRIPTOR(BOS), Length       */
 
 /* Why a port reached XHCI_ENUM_FAILED (XHCI_ENUM_PORT.FailCause). */
 #define XHCI_ENUM_FAIL_NONE         0UL
@@ -70,15 +76,26 @@
 #define XHCI_ENUM_FAIL_PDO          6UL
 #define XHCI_ENUM_FAIL_SPEED        7UL
 
-/* PORTSC speed values (xHCI Table 7-13 default PSIV, USB 2.0 ports). */
+/*
+ * The machine's speeds: the default Protocol Speed IDs (xHCI 7.2.1), as a
+ * vocabulary of classes rather than a reading of PORTSC. The caller decodes
+ * the port's raw PSIV through the controller's PSI table and hands the
+ * machine the class's default ID; the raw PSIV goes to the Slot Context by
+ * another path (hcd_enum.c). SUPER stands for every SuperSpeed-class rate,
+ * SuperSpeedPlus included (29-A.1): EP0 and the BOS read are the same.
+ */
 #define XHCI_ENUM_SPEED_FULL        1UL
 #define XHCI_ENUM_SPEED_LOW         2UL
 #define XHCI_ENUM_SPEED_HIGH        3UL
+#define XHCI_ENUM_SPEED_SUPER       4UL
 
 /* The length of a USB device descriptor, and of a configuration descriptor's
  * own header (USB 2.0 9.6.1, 9.6.3). */
 #define XHCI_ENUM_DEVICE_DESC_BYTES 18UL
 #define XHCI_ENUM_CONFIG_HEAD_BYTES 9UL
+/* The BOS descriptor's own header (USB 3.2 9.6.2): bLength 5, then
+ * wTotalLength at offset 2. */
+#define XHCI_ENUM_BOS_HEAD_BYTES    5UL
 
 /* One retry of the whole reset-to-descriptors sequence on a failure, as the
  * targets' own hub drivers do (section 5.3's Failed row). */
@@ -93,6 +110,9 @@ typedef struct _XHCI_ENUM_PORT {
     ULONG Retries;          /* used of XHCI_ENUM_RETRIES                */
     ULONG FailCause;        /* XHCI_ENUM_FAIL_*                         */
     ULONG PdoExists;        /* a PDO has been created and not removed   */
+    ULONG BosLength;        /* SuperSpeed: wTotalLength of the BOS      */
+    ULONG BosMissing;       /* SuperSpeed: the BOS read failed, and the
+                             * enumeration went on without it           */
 } XHCI_ENUM_PORT, *PXHCI_ENUM_PORT;
 
 typedef struct _XHCI_ENUM_EVENT {
@@ -102,8 +122,10 @@ typedef struct _XHCI_ENUM_EVENT {
     ULONG SlotId;           /* COMMAND_DONE after Enable Slot           */
     ULONG Bytes;            /* TRANSFER_DONE: bytes received            */
     ULONG Value;            /* TRANSFER_DONE: bMaxPacketSize0 after the
-                             * 8-byte read, wTotalLength after the
-                             * 9-byte configuration read                */
+                             * 8-byte read (at SuperSpeed the exponent,
+                             * 9 for 512), wTotalLength after the
+                             * 9-byte configuration read and after the
+                             * 5-byte BOS read                          */
 } XHCI_ENUM_EVENT, *PXHCI_ENUM_EVENT;
 
 typedef struct _XHCI_ENUM_ACTION {
@@ -114,7 +136,8 @@ typedef struct _XHCI_ENUM_ACTION {
 
 /* The EP0 packet size Address Device uses for a speed before the device
  * has said (section 10.2 step 7; the miniport's Finding 2 fix for Full
- * Speed). 0 for a speed the machine does not take. */
+ * Speed), 512 at SuperSpeed (29-A.3). 0 for a speed the machine does not
+ * take. */
 ULONG XhciEnumInitialMps0(ULONG speed);
 
 /* Put a port in XHCI_ENUM_EMPTY with nothing owned. */
