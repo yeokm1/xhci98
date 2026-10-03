@@ -1050,6 +1050,20 @@ static VOID hcdRefusedDpc(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2)
             /* The URB says what the IRP says (round 9, finding 3). */
             urb->UrbHeader.Status = HCD_USBD_CANCELED;
             status = STATUS_CANCELLED;
+        } else if (pdo->Closing) {
+            /*
+             * A STOP or REMOVE is under way: STATUS_DELETE_PENDING, never
+             * STATUS_DEVICE_NOT_CONNECTED. Windows 98 SE's hidclass.sys
+             * answers a read failing with DEVICE_NOT_CONNECTED by failing
+             * every client read and resubmitting at once while its device
+             * is still started (0x110A7, then 0x10C20's state test at
+             * 0x10C60, static), and it leaves that state only after the
+             * REMOVE this PDO is waiting in returns - so the resubmissions
+             * never stopped and the REMOVE never ended (c10/c11, a USB
+             * keyboard and tablet unplugged, 2026-10-03). Any other
+             * failure takes its one-second back-off instead.
+             */
+            status = STATUS_DELETE_PENDING;
         } else {
             status = (NTSTATUS)XhciPipeNtStatus(
                 (ULONG)urb->UrbHeader.Status);
