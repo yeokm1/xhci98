@@ -230,9 +230,11 @@ static LONG hcdCfgCountEnd(PHCD_CONTROLLER hc, ULONG asked, LONG usbd)
  * select whose endpoints all opened can still fail at the device.
  *
  * A failure is not counted once the device is proven to have left: its
- * record is gone or no longer its port's, or its root port reads all ones,
- * disconnected, or with a connect change the enumeration has yet to take
- * (an unplug and replug). A select racing an ordinary unplug fails at
+ * record is gone or no longer its port's, or its root port reads
+ * disconnected or with a connect change the enumeration has yet to take
+ * (an unplug and replug). A PORTSC of all ones proves nothing about the
+ * device - the register could not be read - so that failure is counted
+ * (Codex review round 25). A select racing an ordinary unplug fails at
  * SET_CONFIGURATION or SET_INTERFACE before HcdEnumService sees the port
  * change, and counting it would fail a correct matrix run. A device still
  * on its port that refuses - SET_CONFIGURATION(0) among them - is counted
@@ -252,8 +254,9 @@ static VOID hcdCfgCountSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         return;
     }
     portsc = XhciReadPortsc(&hc->Hc, dev->Port);
-    if (portsc == 0xFFFFFFFFUL || (portsc & XHCI_PORTSC_CCS) == 0 ||
-        (portsc & XHCI_PORTSC_CSC) != 0) {
+    if (portsc != 0xFFFFFFFFUL &&
+        ((portsc & XHCI_PORTSC_CCS) == 0 ||
+         (portsc & XHCI_PORTSC_CSC) != 0)) {
         return;
     }
     hc->Counters.SelectsFailed++;
