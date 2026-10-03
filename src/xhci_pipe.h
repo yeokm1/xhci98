@@ -211,7 +211,9 @@ ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
  *   - and last, any isochronous endpoint whose interval payload exceeds what
  *     the transfer path carries - one page (XhciPipeIsoFragments) - is
  *     ESIT_REFUSED too, whatever the rules above allowed, until multi-page
- *     isochronous packets exist (Codex review of Phase 29, round 1).
+ *     isochronous packets exist (Codex review of Phase 29, round 1); and so
+ *     is one whose interval needs more than four bursts of its packet size
+ *     and Max Burst, which the Isoch TRB's TBC cannot describe (round 2).
  *
  * XHCI_PIPE_BAD_PARAM for NULL or an offset whose 7 bytes are not inside
  * `length`.

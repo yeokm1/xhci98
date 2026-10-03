@@ -1576,6 +1576,28 @@ static void test_superspeedplus_isoch(void)
     CHECK_EQ(ep.Mult, 1, "Mult 1 from the payload");
     CHECK_EQ(ep.MaxEsitPayload, 3072, "3 KiB");
 
+    /* Within the page but past TBC: 4096 bytes in 512-byte packets at
+     * burst 0 is eight bursts, which the Isoch TRB cannot describe (Codex
+     * review of Phase 29, round 2, finding 2). */
+    n = ss_config(c, 1, 512, 1, 0, 0x80, 0, 1, 4096);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
+                                      1, &ep), XHCI_PIPE_ESIT_REFUSED,
+             "eight bursts under LEC refused");
+    /* Four bursts of one 512-byte packet: the most TBC holds. */
+    n = ss_config(c, 1, 512, 1, 0, 0x80, 0, 1, 2048);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
+                                      1, &ep), XHCI_PIPE_OK,
+             "four bursts under LEC admitted");
+    n = ss_config(c, 1, 512, 1, 0, 0x80, 0, 1, 2049);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
+                                      1, &ep), XHCI_PIPE_ESIT_REFUSED,
+             "one byte more is a fifth burst");
+    /* 4 KiB in 1024-byte packets at burst 0 is four bursts: admitted. */
+    n = ss_config(c, 1, 1024, 1, 0, 0x80, 0, 1, 4096);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
+                                      1, &ep), XHCI_PIPE_OK,
+             "4 KiB in four bursts of one 1024-byte packet");
+
     /* A payload past the 24-bit field, even with LEC. */
     n = ss_config(c, 1, 1024, 1, 15, 0x80, 0, 1, 0x01000000UL);
     CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,

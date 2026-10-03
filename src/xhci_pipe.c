@@ -56,6 +56,9 @@
 /* The largest isochronous interval payload the transfer path carries: one
  * page, in at most two pieces (XhciPipeIsoFragments). */
 #define XHCI_PIPE_ISO_MAX_PAYLOAD   XHCI_PIPE_PAGE_SIZE
+/* The most bursts one isochronous TD may carry: TBC is two bits, the count
+ * minus one (xhci.h, XHCI_TRB_TBC_MAX; 4.11.2.3). */
+#define XHCI_PIPE_ISO_MAX_BURSTS    4UL
 
 ULONG XhciPipeDci(ULONG endpointAddress)
 {
@@ -561,15 +564,33 @@ static ULONG xhciPipeSuperSpeed(const UCHAR *config, ULONG total,
      * page-bounded pieces of one page in all (XhciPipeIsoFragments, through
      * hcd_io.c's fill) with a burst count TBC can hold. An endpoint whose
      * interval payload is larger is refused here, counted, never admitted
-     * to fail every URB later or be truncated. At 4096 bytes the burst count
-     * is at most four packets of 1024, so TBC (two bits) always holds it.
-     * Lifting it means multi-page isochronous packets (several TRBs per
-     * packet) in hcd_io.c and xhci_xfer.c; the 48 KiB and LEC derivations
-     * above stand ready for that.
+     * to fail every URB later or be truncated. Lifting it means multi-page
+     * isochronous packets (several TRBs per packet) in hcd_io.c and
+     * xhci_xfer.c; the 48 KiB and LEC derivations above stand ready for that.
+     *
+     * The page is not the whole bound: the TRB builder also needs the
+     * interval's burst count, ROUNDUP(packets / (Max Burst + 1)), to fit TBC
+     * (xhci_xfer.c, xhciXferIsoBurstFields; 4.11.2.3), and the page alone
+     * guarantees that only at 1024-byte packets. A small packet size with
+     * burst 0 - 4096 bytes in 512-byte packets is eight bursts - would be
+     * admitted and then fail every full-sized request, so the builder's
+     * bound is applied here too (Codex review of Phase 29, round 2, finding
+     * 2). Without LEC the Mult the endpoint is programmed with already
+     * covers the bursts (the SS companion's payload is held to it above,
+     * and the SSP derivation computes it from them).
      */
-    if (out.TransferType == XHCI_PIPE_XFER_ISOCH &&
-        out.MaxEsitPayload > XHCI_PIPE_ISO_MAX_PAYLOAD) {
-        return XHCI_PIPE_ESIT_REFUSED;
+    if (out.TransferType == XHCI_PIPE_XFER_ISOCH) {
+        ULONG packets;
+
+        if (out.MaxEsitPayload > XHCI_PIPE_ISO_MAX_PAYLOAD) {
+            return XHCI_PIPE_ESIT_REFUSED;
+        }
+        packets = (out.MaxEsitPayload + out.MaxPacketSize - 1UL) /
+                  out.MaxPacketSize;
+        if ((packets + out.MaxBurstSize) / (out.MaxBurstSize + 1UL) >
+            XHCI_PIPE_ISO_MAX_BURSTS) {
+            return XHCI_PIPE_ESIT_REFUSED;
+        }
     }
 
     *ep = out;

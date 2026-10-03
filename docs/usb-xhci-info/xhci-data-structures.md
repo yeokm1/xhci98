@@ -1702,7 +1702,9 @@ SuperSpeedPlus isochronous endpoint whose interval payload exceeds 4096 bytes
 is refused at SELECT_CONFIGURATION or SELECT_INTERFACE
 (`XHCI_PIPE_ESIT_REFUSED`, counted as `superspeed: endpoints refused - ESIT`),
 never admitted and never truncated (Codex review of Phase 29, round 1,
-finding 1). At 4096 bytes TBC holds every burst count. Lifting the limit means
+finding 1). It also refuses one whose interval needs more than four bursts
+of its packet size and Max Burst (4096 bytes in 512-byte packets at burst 0
+is eight), because TBC is two bits (round 2, finding 2). Lifting the limit means
 multi-page isochronous packets - several TRBs per packet - in `hcd_io.c` and
 `xhci_xfer.c`.
 

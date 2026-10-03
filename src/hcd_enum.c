@@ -913,6 +913,7 @@ static ULONG hcdResetPort(PHCD_CONTROLLER hc, PHCD_PORT p, PULONG speed)
     ULONG write;
     ULONG usb3;
     ULONG warm;
+    ULONG ok;
     ULONG port;
 
     ext = &hc->Hc;
@@ -950,17 +951,21 @@ static ULONG hcdResetPort(PHCD_CONTROLLER hc, PHCD_PORT p, PULONG speed)
                                                              : 0)));
     if (usb3) {
         warm = 0;
-        if (!XhciLinkResetDone(portsc, &warm)) {
-            XHCI_DBG_VALUE("hcd: SuperSpeed reset failed, PORTSC", portsc);
-            return 0;
-        }
+        ok = XhciLinkResetDone(portsc, &warm);
         /* A hot reset asked for that the xHC carried out warm - after a
          * failed hot-reset handshake (4.19.5.1) - shows as WRC; counted
          * from what was observed, not from what was written (Codex review
-         * of Phase 29, round 1, finding 5). */
+         * of Phase 29, round 1, finding 5), and whether or not the link
+         * then trained: WRC has just been acknowledged, so this is the one
+         * chance to see it (round 2, finding 3). */
         if (warm && p->Link.LastReset == XHCI_LINK_ACT_HOT_RESET) {
             hc->Counters.SsResetsConverted++;
-            XHCI_DBG_VALUE("hcd: hot reset converted to warm, port", port);
+            XHCI_DBG_VALUE("hcd: hot reset converted to warm, port/ok",
+                           (port << 8) | ok);
+        }
+        if (!ok) {
+            XHCI_DBG_VALUE("hcd: SuperSpeed reset failed, PORTSC", portsc);
+            return 0;
         }
     } else if ((portsc & XHCI_PORTSC_PRC) == 0 ||
                (portsc & XHCI_PORTSC_PED) == 0) {
@@ -1141,55 +1146,6 @@ static ULONG hcdEnumSpeedOf(ULONG speedClass)
     }
 }
 
-/*
- * A SuperSpeed-capable device that enumerated on a root port's USB 2.0 half:
- * its SuperSpeed link did not train, or was given up, and it fell back
- * (29-A.5, the passive case). bcdUSB is no evidence - such a device reports
- * 0210h on its USB 2.0 connection, and so do USB 2.0 devices with LPM
- * (Codex review of Phase 29, round 1, finding 4) - so the evidence is its
- * BOS descriptor's SuperSpeed USB Device Capability, read here for a device
- * at bcdUSB 0210h or above on a USB 2.0 companion port only. A failed or
- * stalled read counts nothing and changes nothing: the enumeration goes on
- * from the device descriptor it already has, and a STALL is recovered
- * before the next control transfer (hcdEp0Quiet). The scratch is
- * overwritten; the caller has copied what it needed out of it. Thread only.
- */
-static VOID hcdProbeFallback(PHCD_CONTROLLER hc, PHCD_PORT p,
-                             PHCD_USB_DEVICE dev)
-{
-    XHCI_PIPE_BOS bos;
-    ULONG bytes;
-    ULONG total;
-    PUCHAR s;
-
-    if (p->Hub != NULL || dev == NULL ||
-        XhciPortClass(&hc->Hc.PortMap, p->PortId) !=
-            XHCI_PORT_CLASS_USB2_COMPANION ||
-        ((ULONG)dev->DeviceDesc[2] | ((ULONG)dev->DeviceDesc[3] << 8)) <
-            0x0210UL) {
-        return;
-    }
-    s = (PUCHAR)hc->ScratchVa;
-    bytes = 0;
-    if (!hcdGetDescriptor(hc, dev, HCD_DESC_BOS, XHCI_ENUM_BOS_HEAD_BYTES,
-                          &bytes) ||
-        bytes < XHCI_ENUM_BOS_HEAD_BYTES) {
-        return;
-    }
-    total = (ULONG)s[2] | ((ULONG)s[3] << 8);
-    if (total < XHCI_ENUM_BOS_HEAD_BYTES ||
-        total > HCD_SCRATCH_CONTROL_BYTES ||
-        !hcdGetDescriptor(hc, dev, HCD_DESC_BOS, total, &bytes) ||
-        bytes != total ||
-        XhciPipeParseBos(s, bytes, &bos) != XHCI_PIPE_OK ||
-        !bos.HasSuperSpeed) {
-        return;
-    }
-    hc->Counters.SsDevicesOnUsb2++;
-    XHCI_DBG_VALUE("hcd: SuperSpeed-capable device on its USB 2.0 path, port",
-                   p->PortId);
-}
-
 static VOID hcdEventInit(PXHCI_ENUM_EVENT e, ULONG kind, ULONG ok)
 {
     e->Kind = kind;
@@ -1325,7 +1281,6 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
             XHCI_DBG_VALUE("hcd: device descriptor, idVendor/idProduct",
                            ((ULONG)s[9] << 24) | ((ULONG)s[8] << 16) |
                                ((ULONG)s[11] << 8) | (ULONG)s[10]);
-            hcdProbeFallback(hc, p, p->Device);
         }
         return 1;
 

@@ -105,7 +105,12 @@ typedef struct _XHCIHC_COUNTERS {
      * the warm-reset budget - the device left to its USB 2.0 companion,
      * 29-A.5's passive fallback - and SuperSpeed-capable devices (a BOS with
      * a SuperSpeed USB Device Capability) enumerated on a USB 2.0 companion
-     * port, which is that fallback seen from the other side. Then the BOS reads that
+     * port, which is that fallback seen from the other side. That last one
+     * reads 0 for now: the evidence needs a BOS read, and an optional
+     * request on the USB 2.0 path that a device could time out into a
+     * controller reset is not worth a diagnostic (Codex review of Phase 29,
+     * round 2, finding 1). It is 29-A.5's hold logic to move it, from an
+     * identity the SuperSpeed port already read, with no extra traffic. Then the BOS reads that
      * failed, and the SuperSpeedPlus isochronous endpoints refused because
      * their payload does not fit the Endpoint Context (29-A.6). */
     ULONG PortSpeedSuper;
