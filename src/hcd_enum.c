@@ -1549,7 +1549,12 @@ static ULONG hcdDeviceGo(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG how,
     ULONG serial;
 
     dev = q->Device;
+    /* Reported already, as the teardown froze it (hcdReportGone): the
+     * serial waited for is the one that report left on the port. */
     serial = HcdDevicePdoGone(hc, dev);
+    if (serial == 0) {
+        serial = q->AwaitSerial;
+    }
     q->Device = NULL;
     if (how == HCD_GO_TAKEN) {
         hcdDeviceFree(hc, dev);
@@ -1560,6 +1565,28 @@ static ULONG hcdDeviceGo(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG how,
         hc->SlotSweep = 1;
     }
     return serial;
+}
+
+/*
+ * Step 3, taken with the freeze: the device's PDOs reported missing, and the
+ * group serial its port will wait for kept on the port, before any of its
+ * URBs completes. Windows 98 SE's hidclass.sys answers a read completing
+ * DEVICE_NOT_CONNECTED by failing every client read and resubmitting at
+ * once while its device is still started (hcd_io.c, hcdRefusedDpc), and its
+ * clients' retries then keep the processor busy enough that the
+ * configuration manager does not act on a relations change raised only
+ * afterwards: the REMOVE never came (27-V.1, a USB keyboard unplugged from
+ * a root port, 2026-10-04; Phase 26, which reported the PDO first and
+ * completed the URBs at the Disable Slot after it, did not stall). So the
+ * relations change goes first, as it did there, and GET_PORT_STATUS reads
+ * the device disconnected by the time its first URB fails (hcd_urb.c,
+ * hcdPortStatus). Design record 13 section 10.5 lists steps 2 and 3 the
+ * other way round; the hardware order, URBs completed before the Disable
+ * Slot, is kept.
+ */
+static VOID hcdReportGone(PHCD_CONTROLLER hc, PHCD_PORT q)
+{
+    q->AwaitSerial = HcdDevicePdoGone(hc, q->Device);
 }
 
 /* A port below the departing device, once its own device has gone: where a
@@ -1662,14 +1689,15 @@ static VOID hcdHubGo(PHCD_CONTROLLER hc, PHCD_HUB hub, PHCD_PORT top,
  *
  *   1 freeze: every hub of the subtree stops serving its ports and
  *     re-arming its status-change pipe (Draining), and every device refuses
- *     new work;
+ *     new work - and, with it, has its PDOs reported missing (step 3,
+ *     taken before any URB fails; hcdReportGone has the Windows 98 reason);
  *   2 fail I/O at the edge, with the slots still enabled: each device's
  *     running endpoints stopped and every URB of it completed DEVICE_GONE,
  *     leaf first (HCD_GO_UNPLUG only - a taken slot runs nothing, and its
  *     URBs are drained as its record is freed);
- *   3 and 4, leaf first: each device's PDOs reported missing and its slot
- *     given back, the devices on a hub's ports before the hub's own, so no
- *     enabled slot's Parent Hub Slot ID or TT names a disabled one;
+ *   4 leaf first: each device's slot given back, the devices on a hub's
+ *     ports before the hub's own, so no enabled slot's Parent Hub Slot ID
+ *     or TT names a disabled one;
  *   5 each hub's node pruned as it goes.
  *
  * The hubs are taken deepest first (XhciHubReleaseOrder), the order the host
@@ -1713,10 +1741,12 @@ static ULONG hcdSubtreeGo(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG how,
             q = HcdHubPort(hc, hub, n);
             if (q->Device != NULL) {
                 hcdDeviceFreeze(hc, q->Device);
+                hcdReportGone(hc, q);
             }
         }
     }
     hcdDeviceFreeze(hc, dev);
+    hcdReportGone(hc, p);
 
     if (how == HCD_GO_UNPLUG) {
         for (k = 0; k < count; k++) {
