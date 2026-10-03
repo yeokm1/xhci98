@@ -2049,30 +2049,73 @@ after an Address Device transaction error behind a TT (10.2).
 Triggers: the hub's upstream port reports a disconnect (a root `PORTSC` CSC
 with `CCS` 0, or the parent hub's C_PORT_CONNECTION with connect 0), the
 status-change pipe fails twice (10.1), or the parent disables the hub
-(C_PORT_ENABLE with enable 0). For the subtree rooted at the departing hub:
+(C_PORT_ENABLE with enable 0). The same walk serves every way a device
+leaves - a root port or a parent hub reporting a disconnect, an enumeration
+that fails, a CYCLE_PORT, an HCRST that took every slot, the root hub's
+removal - as one teardown (`hcdSubtreeGo`, `src\hcd_enum.c`). For the
+subtree rooted at the departing device, the hubs taken deepest first
+(`XhciHubReleaseOrder`, checked by the host suite):
 
-1. **Freeze the subtree.** A post-order walk of the graph: every hub node
-   below and including the departing one stops re-arming its status-change
-   pipe and accepts no new port work; an enumeration in flight in the subtree
-   is abandoned, and the serialisation lock of 10.2 released.
-2. **Fail I/O at the edge.** Every device and function PDO in the subtree is
-   marked gone: new URBs complete at once with `STATUS_DEVICE_NOT_CONNECTED`
-   / `USBD_STATUS_DEVICE_GONE`; queued and in-flight transfers are stopped
-   (Stop Endpoint per running endpoint) and completed as cancelled.
-3. **Tell PnP.** `IoInvalidateDeviceRelations(BusRelations)` on the root-hub
-   PDO's stack (every device PDO is a child of the root hub); the next
+1. **Freeze the subtree.** Every hub node below and including the departing
+   one stops re-arming its status-change pipe and accepts no new port work
+   (Draining); an enumeration in flight in the subtree is abandoned, and the
+   serialisation lock of 10.2 released. Every device in it is marked gone and
+   rings no doorbell from here on: a URB submitted to it is refused
+   `STATUS_DEVICE_NOT_CONNECTED` / `USBD_STATUS_DEVICE_GONE` at the next tick
+   (`HcdIoRefuseLater`).
+2. **Report the PDOs missing first** (`hcdReportGone`), as each device is
+   frozen and before any of its URBs leaves the ring:
+   `IoInvalidateDeviceRelations(BusRelations)` on the root-hub PDO's stack
+   (every device PDO is a child of the root hub); the next
    `IRP_MN_QUERY_DEVICE_RELATIONS` omits the subtree's PDOs, so NT sends
    `IRP_MN_SURPRISE_REMOVAL` then `IRP_MN_REMOVE_DEVICE`, and Windows 98 sends
    `IRP_MN_REMOVE_DEVICE` alone (its out-of-sequence remove, 26-A.2). A PDO
    reported missing is deleted at its `REMOVE_DEVICE`, never before.
+3. **Stop the endpoints and park the URBs - not complete them.** Leaf first,
+   with the slots still enabled, each device's running endpoints are stopped
+   (Stop Endpoint) and every URB IRP of the departed device - queued, on the
+   ring, or waiting for a transfer record - is released from the hardware
+   and **held on its PDO**, cancellable (`HcdIoPark`, `src\hcd_io.c`). A held
+   IRP is completed `STATUS_CANCELLED` / `USBD_STATUS_CANCELED` only at one
+   of three events (`HcdIoParkedRelease`):
+   - the client cancels it;
+   - the client's ABORT_PIPE covers it. Every URB IRP is stamped at dispatch
+     with its PDO's 64-bit submission sequence (`HcdIoStamp`), and an
+     ABORT_PIPE records its own stamp as its pipe's horizon
+     (`HcdIoAbortMark`). An ABORT_PIPE on a departed PDO is answered without
+     a device record. A request at or below its pipe's horizon is completed
+     at once rather than held, so a request the teardown reaches after the
+     abort is not stranded;
+   - the PDO's stop, surprise removal or removal.
+   An HCRST that took the slots stops nothing; its URBs are drained as each
+   record is freed.
 4. **Release the hardware leaf-first.** Disable Slot for each device in
    post-order - children before the hub they hang off, the departing hub
-   last - so no live slot's Parent Hub Slot ID ever names a disabled slot.
-   This does not wait for step 3's IRPs: after step 2 no PDO touches its
+   last - so no live slot's Parent Hub Slot ID or TT ever names a disabled
+   slot. This does not wait for step 2's IRPs: after step 1 no PDO touches its
    slot. The Disable Slot comes once the endpoints are stopped (xHCI 3.3.3:
    "issued when a device is detached from the USB").
-5. **Prune the graph** (`XhciTopoDetach` per node, post-order) and count
-   `topology: behind-hub devices gone` and `topology: nodes pruned`.
+5. **Prune the graph deepest-first** (`XhciTopoDetach` per hub as it goes,
+   with whatever is left below it) and count `topology: behind-hub devices
+   gone` and `topology: nodes pruned`. A departed hub's object is freed once
+   every port of it has settled, and until then the port it sat on waits for
+   it.
+
+**Why report first and park (Windows 98 SE, 27-V.1, 2026-10-04;
+`runs/run-27.md`, "The Windows 98 SE HID-unplug stall").** This order
+replaces the one this section first gave, in which the URBs were completed
+DEVICE_GONE before PnP was told. Windows 98 SE's `hidclass.sys` answers a
+read failing `STATUS_DEVICE_NOT_CONNECTED`, while its device is still
+started, by failing every client read and resubmitting at once (`0x110A7`,
+static; `run-26.md`, "The REMOVE that never ended"). Each resubmission is
+refused at the next tick, and the retries kept the guest so busy that its
+configuration manager sent the REMOVE that ends the started state only 129 s
+to 11 minutes after a keyboard's unplug. Reporting the PDO first did not cure
+it (`26e7cb6`); a read that never fails does (`f99f184`), and the REMOVE then
+came within about a second on each unplug read. A request held for a device
+that stopped answering is also what the hub drivers this bus stands in for
+do. Windows 2000 reads the same order cleanly (SURPRISE_REMOVAL and REMOVE
+within about a second, a stick pulled mid-copy included).
 
 A root port going down sweeps everything behind it by the same walk; a device
 pulled mid-transfer behind a live hub is the one-node case. A reconnect on
