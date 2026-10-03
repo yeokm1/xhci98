@@ -315,7 +315,7 @@ static VOID hcdDeletePdo(PHCD_DEVICE_PDO pdo)
     /* Its refusal timer and DPC live in the extension (hcd_io.c), as do
      * the IRPs a departed device left held. */
     pdo->Closing = 1;
-    (VOID)HcdIoParkedRelease(pdo, 0, NULL);
+    (VOID)HcdIoParkedRelease(pdo, 0);
     HcdIoRefusedDrain(pdo);
     pdo->Deleted = 1;
     pdo->Controller = NULL;
@@ -750,7 +750,7 @@ static VOID hcdPdoQuiesce(PHCD_DEVICE_PDO pdo, ULONG removing)
     }
     /* What a departed device left held here completes now, CANCELED; with
      * Closing set nothing more is held (hcd_io.c, HcdIoPark). */
-    (VOID)HcdIoParkedRelease(pdo, 0, NULL);
+    (VOID)HcdIoParkedRelease(pdo, 0);
     if (pdo->UrbsPending == 0) {
         hcdPdoRefusalsWait(pdo, removing);
         return;

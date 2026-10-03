@@ -329,11 +329,6 @@ static NTSTATUS hcdTransferUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     LONG usbd;
 
     usbd = HcdUrbIoRequest(urb, &req);
-    if (usbd == USBD_STATUS_SUCCESS) {
-        /* A submission after an abort: the pipe's requests are held again
-         * on a departure (hcd_io.c, HcdIoAbortClear). */
-        HcdIoAbortClear(pdo, req.Handle);
-    }
     if (usbd != USBD_STATUS_SUCCESS) {
         hcdCount(&hc->Counters.UrbsMalformed);
         if (urb->UrbHeader.Function == URB_FUNCTION_ISOCH_TRANSFER) {
@@ -447,6 +442,8 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
                              PIRP irp, PURB urb)
 {
     ULONG function;
+    ULONG valid;
+    KIRQL lockIrql;
     PHCD_USB_DEVICE dev;
 
     if (urb == NULL) {
@@ -464,22 +461,24 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         hcdCount(&hc->UrbUnknown);
     }
 
-    if (function == URB_FUNCTION_ABORT_PIPE) {
+    /* Stamped before anything here reads or rewrites the URB: the order a
+     * held request is measured against an abort by (hcd_io.c,
+     * HcdIoStamp; Codex review of 6dae92b, finding 1). */
+    HcdIoStamp(pdo, irp);
+    if (function == URB_FUNCTION_ABORT_PIPE && (hc == NULL || !pdo->Listed)) {
         /*
-         * Remembered first, whatever follows (hcd_io.c, HcdIoAbortMark): a
-         * request of the pipe that its device's departure reaches later is
-         * completed CANCELED, not held. On a PDO whose device has left - or
-         * an orphan - the abort is answered here with no controller or
-         * device record: what the departure left held for the pipe is
-         * completed, and the abort succeeds, as on a pipe with nothing on
-         * it (Codex review of f99f184, findings 1 and 2).
+         * On a PDO whose device has left - or an orphan - the abort is
+         * answered here, with no controller or device record (Codex review
+         * of f99f184, finding 1): its horizon recorded for the pipe if a
+         * held request or an earlier abort names it, for every pipe
+         * otherwise; what that horizon covers completed; and the abort
+         * succeeds, as on a pipe with nothing on it. Requests that reach
+         * the hold later are measured against the same horizon.
          */
-        HcdIoAbortMark(pdo, urb->UrbPipeRequest.PipeHandle);
-        if (hc == NULL || !pdo->Listed) {
-            (VOID)HcdIoParkedRelease(pdo, 1, urb->UrbPipeRequest.PipeHandle);
-            urb->UrbHeader.Status = USBD_STATUS_SUCCESS;
-            return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
-        }
+        HcdIoAbortMark(pdo, irp, urb->UrbPipeRequest.PipeHandle, 0);
+        (VOID)HcdIoParkedRelease(pdo, 1);
+        urb->UrbHeader.Status = USBD_STATUS_SUCCESS;
+        return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
     }
     if (hc == NULL || !pdo->Listed) {
         /* Orphaned, or its device has left: nothing on the bus answers. */
@@ -518,12 +517,25 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         dev = hcdDeviceRef(hc, pdo);
         if (dev == NULL) {
             if (function == URB_FUNCTION_ABORT_PIPE) {
-                (VOID)HcdIoParkedRelease(pdo, 1,
-                                         urb->UrbPipeRequest.PipeHandle);
+                HcdIoAbortMark(pdo, irp, urb->UrbPipeRequest.PipeHandle, 0);
+                (VOID)HcdIoParkedRelease(pdo, 1);
                 urb->UrbHeader.Status = USBD_STATUS_SUCCESS;
                 return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
             }
             return hcdGoneLater(pdo, irp, urb);
+        }
+        if (function == URB_FUNCTION_ABORT_PIPE) {
+            /* A live device's abort records its horizon only for a pipe
+             * the device has open now - a stale or wrong handle the
+             * thread refuses claims nothing (Codex review of 6dae92b,
+             * finding 3) - and leaves the rest to the thread. */
+            XhciControllerLockAcquire(&hc->Hc, &lockIrql);
+            valid = HcdCfgPipe(dev, urb->UrbPipeRequest.PipeHandle) != NULL;
+            XhciControllerLockRelease(&hc->Hc, lockIrql);
+            if (valid) {
+                HcdIoAbortMark(pdo, irp, urb->UrbPipeRequest.PipeHandle, 1);
+                (VOID)HcdIoParkedRelease(pdo, 1);
+            }
         }
         return HcdCfgQueue(hc, dev, pdo, irp);
 
