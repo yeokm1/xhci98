@@ -1034,14 +1034,24 @@ NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     KIRQL oldIrql;
     ULONG gone;
     ULONG parked;
+    ULONG uncertain;
 
     x = NULL;
     kick = NULL;
     parked = 0;
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     gone = dev->Gone;
+    uncertain = 0;
     pipe = gone ? NULL : hcdPipeFromHandle(dev, req->Handle);
     if (pipe != NULL && pipe->Closed) {
+        pipe = NULL;
+    }
+    if (pipe != NULL &&
+        (pipe->Parent != NULL ? pipe->Parent : pipe)->SeqUncertain) {
+        /* The device did not take a recovery's CLEAR_FEATURE(ENDPOINT_HALT):
+         * nothing runs on the endpoint until the client's RESET_PIPE
+         * (hcd_cfg.c; Codex review of c4ec1c3, finding 1). */
+        uncertain = 1;
         pipe = NULL;
     }
     if (pipe != NULL && !HcdPdoOwnsPipe(pdo, dev, pipe)) {
@@ -1071,6 +1081,10 @@ NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         (VOID)InterlockedIncrement((PLONG)&hc->UrbsGone);
         (VOID)InterlockedDecrement(&dev->Refs);
         return HcdIoRefuseLater(pdo, irp, urb, HCD_USBD_DEVICE_GONE);
+    }
+    if (uncertain) {
+        return hcdRefuse(hc, dev, pdo, irp, (PURB)urb,
+                         XHCI_USBD_STATUS_STALL_PID);
     }
     if (pipe == NULL) {
         return hcdRefuse(hc, dev, pdo, irp, (PURB)urb, HCD_USBD_INVALID_PIPE);
@@ -1112,6 +1126,7 @@ NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
 {
     PHCD_PIPE pipe;
+    PHCD_PIPE ep;
     PHCD_USB_DEVICE dev;
     XHCI_CONTROL_REQUEST creq;
     XHCI_NORMAL_REQUEST nreq;
@@ -1124,12 +1139,21 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
 
     pipe = x->Pipe;
     dev = pipe->Device;
+    ep = (pipe->Parent != NULL) ? pipe->Parent : pipe;
     answer = XHCI_XFER_BAD_PARAM;
     if (ok && x->Isoch && !hcdIsoFill(x)) {
         ok = 0;
         x->Status = HCD_USBD_INVALID_PARAMETER;
     }
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (ok && ep->SeqUncertain) {
+        /* Held or mapped before a recovery left the device's sequence in
+         * doubt: it fails as a new request would (HcdIoSubmit). */
+        ok = 0;
+        if (x->Status == XHCI_USBD_STATUS_SUCCESS) {
+            x->Status = XHCI_USBD_STATUS_STALL_PID;
+        }
+    }
     if (ok && !dev->Gone && !pipe->Closed && !x->CancelRequested &&
         (pipe->Paused ||
          (pipe->Exclusive != NULL && pipe->Exclusive != x &&
@@ -1176,6 +1200,10 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
     if (answer == XHCI_XFER_OK) {
         x->State = HCD_XFER_ON_RING;
         x->Engine = 1;
+        /* The device's sequence moves from here (hcd_cfg.c reads it once
+         * the endpoint is paused and settled; Codex review of c4ec1c3,
+         * finding 2). */
+        ep->SeqUsed = 1;
         hc->Counters.TransfersSubmitted++;
         /* The doorbell under the lock: once it is released the thread may
          * pause and stop the endpoint, and a doorbell rung after that

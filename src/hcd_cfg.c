@@ -2033,31 +2033,64 @@ static ULONG hcdCfgEpState(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 }
 
 /*
- * CLEAR_FEATURE(ENDPOINT_HALT) to the device after the controller's half of
- * a recovery restarted the host's toggle or sequence. A device that answers
- * it with a STALL or any other failure has refused it itself - the
- * controller is not at fault, and a controller reset would only re-enumerate
- * every device to settle one device's toggle - so it is traced and the
- * recovery goes on (QEMU's usb-uas STALLs every endpoint CLEAR_FEATURE; a
- * reset here was a re-init loop, s29k launches 1 and 2). 0 only when the
- * request timed out: its control path has already asked for the reset (EP0
- * stuck). Thread only.
+ * CLEAR_FEATURE(ENDPOINT_HALT) to the device, and what became of it
+ * (HCD_CTL_*, HcdThreadControlOutcome): taken, refused by the device
+ * (STALLED or FAILED), or never sent. A device's refusal is the device's -
+ * the controller is not at fault, and a controller reset would only
+ * re-enumerate every device to settle one device's toggle (QEMU's usb-uas
+ * STALLs every endpoint CLEAR_FEATURE; a reset here was a re-init loop,
+ * s29k launches 1 and 2) - so no caller resets the controller for it; each
+ * says what the failure means instead (Codex review of c4ec1c3, finding
+ * 1). Thread only.
  */
 static ULONG hcdCfgDeviceClearHalt(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                    PHCD_PIPE pipe)
 {
     ULONG bytes;
-    ULONG stalled;
+    ULONG outcome;
 
-    if (HcdThreadControlEx(hc, dev, 0x02, 1, 0,
-                           (USHORT)pipe->EndpointAddress, 0, &bytes,
-                           &stalled)) {
-        return 1;
+    outcome = HcdThreadControlOutcome(hc, dev, 0x02, 1, 0,
+                                      (USHORT)pipe->EndpointAddress, 0,
+                                      &bytes);
+    if (outcome != HCD_CTL_DONE) {
+        XHCI_DBG_VALUE("hcd: CLEAR_FEATURE(ENDPOINT_HALT) not taken, "
+                       "endpoint << 16 | outcome",
+                       (pipe->EndpointAddress << 16) | outcome);
     }
-    XHCI_DBG_VALUE("hcd: device refused CLEAR_FEATURE(ENDPOINT_HALT), "
-                   "endpoint << 16 | stalled",
-                   (pipe->EndpointAddress << 16) | stalled);
-    return dev->Ep0Stuck ? 0 : 1;
+    return outcome;
+}
+
+/*
+ * The device's half of a recovery whose host half has already restarted
+ * the host's sequence (an abort's or cancel's quiesce, a streams open or
+ * close of a used endpoint): CLEAR_FEATURE(ENDPOINT_HALT), and on success
+ * both ends are fresh (SeqUsed and SeqUncertain cleared). When the device
+ * refuses it, or it never went out, the two ends may disagree: the
+ * endpoint is marked SeqUncertain and fails every request STALL_PID until
+ * the client's RESET_PIPE succeeds (hcd_io.c) - never resumed as if
+ * recovered, never a controller reset. Returns 0 only when the request
+ * timed out (EP0 stuck), the reset its control path requested then
+ * settling the endpoint. Thread only.
+ */
+static ULONG hcdCfgSequenceRestart(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                   PHCD_PIPE pipe)
+{
+    KIRQL oldIrql;
+    ULONG outcome;
+
+    outcome = hcdCfgDeviceClearHalt(hc, dev, pipe);
+    if (dev->Ep0Stuck) {
+        return 0;
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (outcome == HCD_CTL_DONE) {
+        pipe->SeqUsed = 0;
+        pipe->SeqUncertain = 0;
+    } else {
+        pipe->SeqUncertain = 1;
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    return 1;
 }
 
 /*
@@ -2113,7 +2146,7 @@ static ULONG hcdCfgQuiesce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
          * pp.116-117; round 5, finding 2). A control endpoint has no
          * toggle to keep: its SETUP restarts it. */
         if (pipe->Dci != 1 && pipe->TransferType != XHCI_PIPE_XFER_ISOCH &&
-            !hcdCfgDeviceClearHalt(hc, dev, pipe)) {
+            !hcdCfgSequenceRestart(hc, dev, hcdCfgEndpointOf(pipe))) {
             return XHCI_EP_STATE_RUNNING;
         }
         state = XHCI_EP_STATE_STOPPED;
@@ -2463,9 +2496,11 @@ static LONG hcdCfgResetHost(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * and SYNC_CLEAR_STALL (hcdCfgClearStall) sent to their own paths: inside
  * the pipe's pause from the start, so nothing is published between the
  * check and the reset (round 3, finding 7). Anything still on the pipe is
- * aborted first. Then the controller's half by the endpoint's state (round
- * 2, finding 6) and the device's - CLEAR_FEATURE(ENDPOINT_HALT) - so both
- * ends restart the data toggle:
+ * aborted first. Then the device's half - CLEAR_FEATURE(ENDPOINT_HALT),
+ * whose failure is returned with the host's half not done (usbport's order;
+ * Codex review of c4ec1c3, finding 1) - and the controller's by the
+ * endpoint's state (round 2, finding 6), so both ends restart the data
+ * toggle and the pipe's sequence is certain again (SeqUncertain cleared):
  *
  *   Halted    Reset Endpoint (TSP 0, which restarts the toggle), then Set TR
  *             Dequeue past the failed TD;
@@ -2476,6 +2511,7 @@ static LONG hcdCfgResetHost(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 static LONG hcdCfgReset(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                         PHCD_PIPE pipe, ULONG parts)
 {
+    KIRQL oldIrql;
     ULONG ok;
     LONG result;
 
@@ -2493,33 +2529,58 @@ static LONG hcdCfgReset(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     if (hcdCfgPipeBusy(hc, pipe)) {
         result = hcdCfgAbortPaused(hc, dev, pipe, HCD_USBD_CANCELED);
     }
-    if (result == XHCI_USBD_STATUS_SUCCESS) {
-        if (hcdCfgEpState(hc, dev, pipe->Dci) == XHCI_EP_STATE_HALTED) {
-            ok = hcdCfgResetEndpoint(hc, dev, pipe, 0) &&
-                 hcdCfgSetDequeue(hc, dev, pipe);
-            if (ok) {
-                HcdHubClearTt(hc, dev, pipe->EndpointAddress,
-                              pipe->TransferType, 0);
-            }
-        } else {
-            ok = hcdCfgQuiesce(hc, dev, pipe) != XHCI_EP_STATE_RUNNING &&
-                 hcdCfgRecycle(hc, dev, pipe);
-        }
-        if (!ok) {
-            HcdSvcRequestReset(&hc->Hc);
-            result = HCD_USBD_INTERNAL_HC_ERROR;
-            return result;      /* left paused, as hcdCfgAbort */
-        }
-    } else {
+    if (result != XHCI_USBD_STATUS_SUCCESS) {
         return result;          /* left paused, as hcdCfgAbort */
     }
-    pipe->Halted = 0;
-    if (pipe->TransferType != XHCI_PIPE_XFER_ISOCH &&
-        !hcdCfgDeviceClearHalt(hc, dev, pipe)) {
-        /* As in hcdCfgQuiesce: timed out, and the reset its control
-         * path asked for settles the pipe, paused until it. */
-        return HCD_USBD_INTERNAL_HC_ERROR;
+    /* The device's half first, as usbport orders it (SP4 USBPORT.SYS image
+     * VA 0x24123 and the failure branch at 0x2412D, NUSB 3.3's 0x23AA3 and
+     * 0x23AAD, static; ReactOS usbport urb.c, USBPORT_ResetPipe): a clear
+     * the device does not take is the client's answer, and the host's half
+     * is not done - the two ends are left as they were, and no controller
+     * reset is asked for (Codex review of c4ec1c3, finding 1). A clear that
+     * never went out is no answer from the device: it fails busy. */
+    if (pipe->TransferType != XHCI_PIPE_XFER_ISOCH) {
+        switch (hcdCfgDeviceClearHalt(hc, dev, pipe)) {
+        case HCD_CTL_DONE:
+            break;
+        case HCD_CTL_STALLED:
+            HcdIoPipeResume(hc, pipe);
+            return XHCI_USBD_STATUS_STALL_PID;
+        case HCD_CTL_FAILED:
+            HcdIoPipeResume(hc, pipe);
+            return HCD_USBD_INTERNAL_HC_ERROR;
+        default:
+            if (dev->Ep0Stuck) {
+                /* Timed out: the reset its control path requested settles
+                 * the pipe, paused until it. */
+                return HCD_USBD_INTERNAL_HC_ERROR;
+            }
+            HcdIoPipeResume(hc, pipe);
+            return HCD_USBD_ERROR_BUSY;
+        }
     }
+    if (hcdCfgEpState(hc, dev, pipe->Dci) == XHCI_EP_STATE_HALTED) {
+        ok = hcdCfgResetEndpoint(hc, dev, pipe, 0) &&
+             hcdCfgSetDequeue(hc, dev, pipe);
+        if (ok) {
+            HcdHubClearTt(hc, dev, pipe->EndpointAddress,
+                          pipe->TransferType, 0);
+        }
+    } else {
+        ok = hcdCfgQuiesce(hc, dev, pipe) != XHCI_EP_STATE_RUNNING &&
+             hcdCfgRecycle(hc, dev, pipe);
+    }
+    if (!ok) {
+        HcdSvcRequestReset(&hc->Hc);
+        result = HCD_USBD_INTERNAL_HC_ERROR;
+        return result;          /* left paused, as hcdCfgAbort */
+    }
+    /* Both ends restarted: the sequence is fresh and certain again. */
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    pipe->Halted = 0;
+    pipe->SeqUsed = 0;
+    pipe->SeqUncertain = 0;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
     HcdIoPipeResume(hc, pipe);
     hcdCfgStreamKick(hc, dev, pipe);
     return result;
@@ -2931,35 +2992,36 @@ fail:
     return NULL;
 }
 
-/* 1 when a request has ever been taken on `pipe` or, with streams, on any
- * of its streams since the select that opened it (HCD_PIPE Seq). Thread
- * only. */
-static ULONG hcdCfgStreamsUsed(PHCD_PIPE pipe)
+/* Whether the device's sequence on endpoint `pipe` has moved since both
+ * ends last restarted it (SeqUsed, set at each publication by hcd_io.c on
+ * the endpoint whichever stream carried it). Read under the lock, by a
+ * caller that has the endpoint paused and its requests settled, so no
+ * publication can follow the read (Codex review of c4ec1c3, finding 2).
+ * Thread only. */
+static ULONG hcdCfgStreamsUsed(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
 {
-    ULONG id;
+    KIRQL oldIrql;
+    ULONG used;
 
-    if (pipe->Seq != 0) {
-        return 1;
-    }
-    for (id = 1; pipe->Streams != NULL && id <= pipe->Streams->Count; id++) {
-        if (pipe->Streams->Pipe[id]->Seq != 0) {
-            return 1;
-        }
-    }
-    return 0;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    used = pipe->SeqUsed;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    return used;
 }
 
 /*
  * Both ends' sequence restarted after a Configure Endpoint gave the
  * endpoint a fresh context. An endpoint that has carried no request since
- * the select that opened it (`used` 0, hcdCfgStreamsUsed) needs nothing:
- * that select's SET_CONFIGURATION or SET_INTERFACE already restarted the
- * device's sequence (USB 3.2 9.4.5), and the Configure Endpoint the
- * controller's - the UAS start opens its streams there. Otherwise
- * CLEAR_FEATURE(ENDPOINT_HALT) to the device (hcdCfgDeviceClearHalt), as
- * RESET_PIPE's recycle sends it: a device that refuses it costs the
- * controller no reset. 0 only when the request timed out (EP0 stuck), the
- * reset its control path asked for then settling the endpoint. Thread only.
+ * both ends last restarted its sequence (`used` 0, hcdCfgStreamsUsed) needs
+ * nothing: the select's SET_CONFIGURATION or SET_INTERFACE, or the
+ * recovery's clear, already restarted the device's (USB 3.2 9.4.5), and the
+ * Configure Endpoint the controller's - the UAS start opens its streams
+ * there. Otherwise CLEAR_FEATURE(ENDPOINT_HALT) to the device
+ * (hcdCfgSequenceRestart): one the device does not take leaves the
+ * endpoint SeqUncertain, failing its requests until the client's
+ * RESET_PIPE, and costs the controller no reset. 0 only when the request
+ * timed out (EP0 stuck), the reset its control path asked for then
+ * settling the endpoint. Thread only.
  */
 static ULONG hcdCfgStreamsSequence(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                    PHCD_PIPE pipe, ULONG used)
@@ -2969,7 +3031,7 @@ static ULONG hcdCfgStreamsSequence(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                        pipe->EndpointAddress);
         return 1;
     }
-    return hcdCfgDeviceClearHalt(hc, dev, pipe);
+    return hcdCfgSequenceRestart(hc, dev, pipe);
 }
 
 /*
@@ -3096,7 +3158,7 @@ static ULONG hcdCfgStreamsOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         return code == XHCI_CC_RESOURCE_ERROR ? XHCI98_STREAMS_NO_RESOURCES
                                               : XHCI98_STREAMS_FAILED;
     }
-    if (!hcdCfgStreamsSequence(hc, dev, pipe, pipe->Seq != 0)) {
+    if (!hcdCfgStreamsSequence(hc, dev, pipe, hcdCfgStreamsUsed(hc, pipe))) {
         return XHCI98_STREAMS_FAILED;   /* left paused: the reset frees it */
     }
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
@@ -3135,12 +3197,15 @@ static ULONG hcdCfgStreamsClose(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG id;
 
     st = pipe->Streams;
-    used = hcdCfgStreamsUsed(pipe);
     HcdIoPipePause(hc, pipe);
     if (hcdCfgAbortPaused(hc, dev, pipe, HCD_USBD_CANCELED) !=
         XHCI_USBD_STATUS_SUCCESS) {
         return XHCI98_STREAMS_FAILED;   /* left paused, as hcdCfgAbort */
     }
+    /* Paused and every request settled: nothing can publish after this
+     * read, and SeqUsed outlives the stream records freed below (Codex
+     * review of c4ec1c3, finding 2). */
+    used = hcdCfgStreamsUsed(hc, pipe);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     st->Live = 0;
     for (id = 1; id <= st->Count; id++) {

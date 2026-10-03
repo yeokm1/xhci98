@@ -222,6 +222,16 @@ typedef struct _HCD_PIPE {
                                      * submission order; controller lock  */
     ULONG Closed;                   /* deconfigured: no more submissions  */
     ULONG Halted;                   /* a STALL; the client resets the pipe */
+    /* The device's sequence (an endpoint's pipe, never a stream's; under
+     * the controller lock). SeqUsed: a TD was published on the endpoint
+     * or any stream of it since its sequence was last restarted at both
+     * ends - the select that opened it, or a recovery whose
+     * CLEAR_FEATURE(ENDPOINT_HALT) the device took (hcd_io.c, hcd_cfg.c).
+     * SeqUncertain: the host's sequence was restarted and the device did
+     * not take that clear, so the two ends may disagree: every request on
+     * it fails STALL_PID until the client's RESET_PIPE succeeds. */
+    ULONG SeqUsed;
+    ULONG SeqUncertain;
     ULONG CancelPending;            /* a record of it was cancelled      */
     ULONG DrainPending;             /* a refused retire: stop and drain  */
     ULONG Paused;                   /* the thread is stopping or editing
@@ -999,6 +1009,16 @@ ULONG HcdThreadControlEx(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                          UCHAR requestType, UCHAR request, USHORT value,
                          USHORT index, ULONG length, PULONG bytes,
                          PULONG stalled);
+/* What became of one thread control transfer (HcdThreadControlOutcome). */
+#define HCD_CTL_DONE        0UL /* the device took it                    */
+#define HCD_CTL_STALLED     1UL /* the device answered with a STALL      */
+#define HCD_CTL_FAILED      2UL /* it completed with another error       */
+#define HCD_CTL_NOT_SENT    3UL /* it never went out, or it timed out
+                                 * (dev->Ep0Stuck, the reset requested)  */
+ULONG HcdThreadControlOutcome(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                              UCHAR requestType, UCHAR request,
+                              USHORT value, USHORT index, ULONG length,
+                              PULONG bytes);
 ULONG HcdThreadReaddress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 VOID HcdEnumCycle(PHCD_CONTROLLER hc, ULONG port, ULONG serial);
 

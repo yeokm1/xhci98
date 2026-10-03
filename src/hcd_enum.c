@@ -750,7 +750,7 @@ static ULONG hcdEp0Quiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                    UCHAR requestType, UCHAR request,
                                    USHORT value, USHORT index, ULONG length,
-                                   PULONG bytes, PULONG stalled);
+                                   PULONG bytes);
 
 ULONG HcdThreadControl(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                        UCHAR requestType, UCHAR request, USHORT value,
@@ -771,18 +771,35 @@ ULONG HcdThreadControlEx(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                          USHORT index, ULONG length, PULONG bytes,
                          PULONG stalled)
 {
-    ULONG ok;
+    ULONG outcome;
+
+    outcome = HcdThreadControlOutcome(hc, dev, requestType, request, value,
+                                      index, length, bytes);
+    *stalled = outcome == HCD_CTL_STALLED;
+    return outcome == HCD_CTL_DONE;
+}
+
+/* The same, saying what became of it (HCD_CTL_*): a request the device
+ * refused - STALLED, or FAILED with another completion - apart from one
+ * that never reached it (NOT_SENT: EP0 still busy with a client's transfer,
+ * the device going, or a timeout), which says nothing about the device
+ * (Codex review of c4ec1c3, finding 1). Thread only. */
+ULONG HcdThreadControlOutcome(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                              UCHAR requestType, UCHAR request,
+                              USHORT value, USHORT index, ULONG length,
+                              PULONG bytes)
+{
+    ULONG outcome;
 
     *bytes = 0;
-    *stalled = 0;
     if (dev->Ep0Stuck) {
         /* Its record is still queued from a timeout: reusing it would
          * relink the engine's queue (round 2, finding 10). */
-        return 0;
+        return HCD_CTL_NOT_SENT;
     }
     if (length > HCD_SCRATCH_CONTROL_BYTES ||
         (length != 0 && (requestType & 0x80) == 0)) {
-        return 0;
+        return HCD_CTL_NOT_SENT;
     }
     /*
      * EP0 to itself: client URBs are held at the pipe's gate, those already
@@ -796,22 +813,22 @@ ULONG HcdThreadControlEx(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     HcdIoPipePause(hc, &dev->Ep0Pipe);
     if (!hcdEp0Quiet(hc, dev)) {
         HcdIoPipeResume(hc, &dev->Ep0Pipe);
-        return 0;
+        return HCD_CTL_NOT_SENT;
     }
-    ok = hcdThreadControlQuiet(hc, dev, requestType, request, value, index,
-                               length, bytes, stalled);
+    outcome = hcdThreadControlQuiet(hc, dev, requestType, request, value,
+                                    index, length, bytes);
     if (!dev->Ep0Stuck) {
         /* A timed-out one leaves EP0 paused for the reset it requested. */
         HcdIoPipeResume(hc, &dev->Ep0Pipe);
     }
-    return ok;
+    return outcome;
 }
 
-/* The transfer itself, on a quiet EP0. Thread only. */
+/* The transfer itself, on a quiet EP0; HCD_CTL_*. Thread only. */
 static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                    UCHAR requestType, UCHAR request,
                                    USHORT value, USHORT index, ULONG length,
-                                   PULONG bytes, PULONG stalled)
+                                   PULONG bytes)
 {
     XHCI_CONTROL_REQUEST req;
     XHCI_TRB trbs[XHCI_XFER_MAX_CONTROL_TRBS];
@@ -861,7 +878,7 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     if (answer != XHCI_XFER_OK) {
-        return 0;
+        return HCD_CTL_NOT_SENT;
     }
 
     done = hcdWaitEvent(&hc->XferDoneEvent, HCD_TRANSFER_WAIT_MS) &&
@@ -875,14 +892,15 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         hc->ScratchTainted = 1;
         dev->Ep0Stuck = 1;
         HcdSvcRequestReset(&hc->Hc);
-        return 0;
+        return HCD_CTL_NOT_SENT;
     }
     if (dev->Ep0Xfer.UsbdStatus != XHCI_USBD_STATUS_SUCCESS) {
-        *stalled = dev->Ep0Xfer.UsbdStatus == XHCI_USBD_STATUS_STALL_PID;
-        return 0;
+        return dev->Ep0Xfer.UsbdStatus == XHCI_USBD_STATUS_STALL_PID
+                   ? HCD_CTL_STALLED
+                   : HCD_CTL_FAILED;
     }
     *bytes = dev->Ep0Xfer.BytesTransferred;
-    return 1;
+    return HCD_CTL_DONE;
 }
 
 static ULONG hcdGetDescriptor(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
