@@ -711,3 +711,28 @@ Audio therefore waits on 26-A.7, which is taken next. Isochronous transfers were
 - **Windows 2000** also passed the root hub's disable (Code 22) and enable. Both shutdowns were clean.
 
 **Round 19**, on 26-A.7 (three MAJOR, four MINOR): the filtered configuration copy was not bounded by the MDL, the alternate-0 fallback claimed success, and the split rule differed from Microsoft's composite-parent rule. Both c15 defects were fixed with them in `3191f72`: the SELECT_INTERFACE had been bounded by UrbHeader.Length, which usbport does not read, and that bound is gone; and of class requests, only one naming a sibling function's interface is now refused. Round 20 is pending, and audio playback is the next leg's check.
+
+### The golden images (2026-10-03)
+
+Each leg to c15 started from the clean bases, so every debugging leg first ran the controller install, the class-driver wizards, Windows 98 SE's CD prompts and its restart. From c16 the debugging legs start from a golden image per primary instead: a fresh overlay over the same clean base, on which the controller, the root hub, the HID class drivers (mouse, keyboard, tablet) and `usbstor.sys` were installed once, one device at a time, each unplugged cleanly.
+- **Windows 98 SE** (`vm\t26\win98-gold.qcow2`): `C:\AUTOEXEC.BAT` holds one line, `if exist D:\XHCI98.SYS copy /Y D:\XHCI98.SYS C:\WINDOWS\SYSTEM32\DRIVERS\XHCI98.SYS`, so each boot puts the package's driver over the installed one.
+- **Windows 2000** (`vm\t26\win2k-gold.qcow2`): saved with the controller disabled (Code 22). A leg copies the `.sys` over the installed one (`copy /Y E:\xhci98.sys C:\WINNT\system32\drivers\xhci98.sys`, "1 file(s) copied.") and enables the controller, which starts with no restart prompt. Proven on the image before it was saved.
+
+The launchers now give `qemu-xhci` eight USB 2.0 ports (`p2=8`). The first attempt at each image ran on four, and the stick, plugged as the fourth device, made QEMU insert its own full-speed hub (0409:55AA) on port 4 with the stick behind it. That exposed the hub defect fixed in `4e79718` (runtime, the debugcon traces): on Windows 2000, `usbhub.sys` bound the hub's device PDO and sent GET_ROOTHUB_PDO (`internal IOCTL not served=0022000F`), and the guest reset some 23 s into every boot from then on; Windows 98 SE showed the hub as "NEC USB Hub" with Code 2. Both images were redone on fresh overlays with eight ports, and no hub appeared.
+
+Formal 26-V legs still install from the clean bases. A build that changes the INF or the device ids refreshes the golden images.
+
+### Audio playback on both primaries (c16)
+
+**c16** (`636df7db...bf46`, `e2470ce`, 2026-10-03, development host A, `qemu` flavour, the golden images): Codex round 20's fixes over c15's two audio fixes (`3191f72`). The stick and the C-Media device were c14's. This is the first audio playback reading of the HCD on both primaries.
+- **Both primaries**:
+  - The driver swap held: on Windows 98 SE the installed `XHCI98.SYS` matched `D:\XHCI98.SYS` (115,328 bytes); on Windows 2000 the copy gave "1 file(s) copied." and the enable brought no prompt. The controller and the root hub were "working properly".
+  - The stick appeared as F:, and `fc /b` reported "no differences encountered" for `RAND.BIN`. Its unplug was clean. On Windows 98 SE the `USBSTOR.INF` wizard ran again, with no prompt.
+- **The audio device** (runtime, the debugcon traces). On both, 0D8C:0014 was split into MI_00 (audio) and MI_03 (HID) as in c15, and both functions showed "This device is working properly." On Windows 98 SE the HID function's install asked for the CD for `hidclass.sys`; the audio function installed from `WDMA_USB.INF` with no prompt and no restart.
+  - `usbaudio.sys`'s SELECT_INTERFACE to the streaming alternate was accepted on both, at every play: `interface selected, number/alt=00000101`, `endpoint mask=00000004`. Neither trace has a `select interface refused`, `function control refused`, `URB refused at dispatch` or `not served` line.
+  - Isochronous URBs were admitted, two per play (`isoch URB, packets << 16 | ASAP << 15 | start - now=00018000`, then `=000A8000`), and published: 32 `isoch published, TRBs << 16 | Frame IDs << 8 | packets=` lines on each, `00010001` then `000A000A` and `000B000A`, all in the first play. The site prints only when its value changes, which is why the later plays show none.
+  - Playback ran with no error on both. Windows 2000: Sound Recorder and Media Player, each given `chimes.wav`, closed by themselves; Media Player played "Windows Logon Sound.wav" (5.51 s), its position advancing through 00.39, 00.90, 01.26 and 03.97 over some 17 s, then closed by itself. Windows 98 SE: Sound Recorder played three files, each closing by itself, and showed Position 4.75 of 7.85 sec (`The Microsoft Sound.wav`) and 0.25 of 0.63 sec (`CHIMES.WAV`) while playing. Nothing was heard: the guest has no audio path out, and audible playback is the bench's.
+  - Each stream ended with completion code 0x0E (Ring Underrun), `event: transfer, code=0000000E`, on Windows 98 SE; Windows 2000's trace has no transfer-event line after the attach.
+  - EP0 STALLs (code 6) were recovered: on Windows 98 SE five `event: transfer, code=00000006` during the audio function's start, each followed by `EP0 reset after a stall, slot=00000001`; on Windows 2000 one `EP0 reset after a stall` at the attach and one at the start of each play.
+  - Unplugging the audio device was clean on both.
+- Both shutdowns were clean.
