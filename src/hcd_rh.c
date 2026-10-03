@@ -242,7 +242,25 @@ static NTSTATUS hcdRootHubCapabilities(PIRP irp)
 
     stack = IoGetCurrentIrpStackLocation(irp);
     caps = stack->Parameters.DeviceCapabilities.Capabilities;
-    if (caps->Version != 1 || caps->Size < sizeof(DEVICE_CAPABILITIES)) {
+    /*
+     * Every field written here precedes D1Latency, so a structure at least
+     * that long is enough. Windows 98 SE's hidclass.sys sends a shorter
+     * DEVICE_CAPABILITIES than the Windows 2000 DDK's (inferred: its start
+     * failed without ever reaching this PDO, 2026-10-03, c6-98), and a
+     * refusal here fails the client's start - Code 10.
+     */
+    XHCI_DBG_VALUE("hcd: capabilities query, version/size",
+                   ((ULONG)caps->Version << 16) | caps->Size);
+    /* Windows 98 SE's hidclass.sys sends Version 0 and Size 0 - the fields
+     * left unset - in the query its start depends on (measured, c7-98,
+     * 2026-10-03: every query from the PnP manager read version 1 size
+     * 0x40, hidclass's read 0/0, and refusing it was the Code 10). A
+     * caller that sets nothing still passes a whole structure, and every
+     * field written here is in its fixed prefix; only a caller that states
+     * a size too short for them is refused. */
+    if (!(caps->Version == 0 && caps->Size == 0) &&
+        (caps->Version < 1 ||
+         caps->Size < FIELD_OFFSET(DEVICE_CAPABILITIES, D1Latency))) {
         return HcdCompleteIrp(irp, STATUS_UNSUCCESSFUL, 0);
     }
     caps->DeviceD1 = FALSE;

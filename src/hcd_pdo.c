@@ -242,6 +242,8 @@ static VOID hcdPortNotify(PHCD_CONTROLLER hc, PULONG bits, ULONG port)
  * and touches no controller (Codex review of batch (b), round 2, finding 1). */
 static VOID hcdDeletePdo(PHCD_DEVICE_PDO pdo)
 {
+    /* Its refusal timer and DPC live in the extension (hcd_io.c). */
+    HcdIoRefusedDrain(pdo);
     pdo->Deleted = 1;
     pdo->Controller = NULL;
     HcdPoolFree(pdo->Config);
@@ -298,6 +300,7 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     pdo->ConfigLength = dev->ConfigLength;
     pdo->Common.Kind = HCD_KIND_DEVICE_PDO;
     pdo->Common.Self = obj;
+    HcdIoRefusedInit(pdo);
     pdo->Common.PnpState = HCD_PNP_ADDED;
     pdo->Common.DevicePower = PowerDeviceD0;
     pdo->Common.SystemPower = PowerSystemWorking;
@@ -513,6 +516,19 @@ VOID HcdDevicePdoReleaseAll(PHCD_CONTROLLER hc)
 /* The device PDO's PnP and power                                           */
 /* ----------------------------------------------------------------------- */
 
+/* The refusals pended here (hcd_io.c, HcdIoRefuseLater), at a REMOVE only:
+ * each completes at a clock tick, but a client may resubmit from its
+ * completion routine until its own stack hears of the stop, so a STOP or
+ * SURPRISE_REMOVAL that waited for them might never return (Codex review
+ * of batch (c), round 8, finding 3). A REMOVE comes after every driver
+ * above has handled it and stopped submitting. IRQL: PASSIVE_LEVEL. */
+static VOID hcdPdoRefusalsWait(PHCD_DEVICE_PDO pdo, ULONG removing)
+{
+    if (removing) {
+        HcdIoRefusedDrain(pdo);
+    }
+}
+
 /*
  * Before a stop or a removal completes, every URB this PDO's stack has
  * pended here completes: a client driver unloads once its REMOVE is done,
@@ -522,7 +538,7 @@ VOID HcdDevicePdoReleaseAll(PHCD_CONTROLLER hc)
  * still present has its pipes aborted by the thread (AbortAll); a gone one
  * is drained by the thread's free. IRQL: PASSIVE_LEVEL.
  */
-static VOID hcdPdoQuiesce(PHCD_DEVICE_PDO pdo)
+static VOID hcdPdoQuiesce(PHCD_DEVICE_PDO pdo, ULONG removing)
 {
     PHCD_CONTROLLER hc;
     PHCD_USB_DEVICE dev;
@@ -539,6 +555,7 @@ static VOID hcdPdoQuiesce(PHCD_DEVICE_PDO pdo)
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
     }
     if (pdo->UrbsPending == 0) {
+        hcdPdoRefusalsWait(pdo, removing);
         return;
     }
     hc = pdo->Controller;
@@ -566,6 +583,7 @@ static VOID hcdPdoQuiesce(PHCD_DEVICE_PDO pdo)
         HcdRelativeMs(&due, 1);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
     }
+    hcdPdoRefusalsWait(pdo, removing);
 }
 
 /* A start after a remove (an enable after a disable) makes the PDO PnP's
@@ -648,7 +666,25 @@ static NTSTATUS hcdDeviceCapabilities(PHCD_DEVICE_PDO pdo, PIRP irp)
 
     stack = IoGetCurrentIrpStackLocation(irp);
     caps = stack->Parameters.DeviceCapabilities.Capabilities;
-    if (caps->Version != 1 || caps->Size < sizeof(DEVICE_CAPABILITIES)) {
+    /*
+     * Every field written here precedes D1Latency, so a structure at least
+     * that long is enough. Windows 98 SE's hidclass.sys sends a shorter
+     * DEVICE_CAPABILITIES than the Windows 2000 DDK's (inferred: its start
+     * failed without ever reaching this PDO, 2026-10-03, c6-98), and a
+     * refusal here fails the client's start - Code 10.
+     */
+    XHCI_DBG_VALUE("hcd: capabilities query, version/size",
+                   ((ULONG)caps->Version << 16) | caps->Size);
+    /* Windows 98 SE's hidclass.sys sends Version 0 and Size 0 - the fields
+     * left unset - in the query its start depends on (measured, c7-98,
+     * 2026-10-03: every query from the PnP manager read version 1 size
+     * 0x40, hidclass's read 0/0, and refusing it was the Code 10). A
+     * caller that sets nothing still passes a whole structure, and every
+     * field written here is in its fixed prefix; only a caller that states
+     * a size too short for them is refused. */
+    if (!(caps->Version == 0 && caps->Size == 0) &&
+        (caps->Version < 1 ||
+         caps->Size < FIELD_OFFSET(DEVICE_CAPABILITIES, D1Latency))) {
         return HcdCompleteIrp(irp, STATUS_UNSUCCESSFUL, 0);
     }
     caps->DeviceD1 = FALSE;
@@ -696,12 +732,12 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
     case IRP_MN_STOP_DEVICE:
     case IRP_MN_SURPRISE_REMOVAL:
         pdo->Common.PnpState = HCD_PNP_STOPPED;
-        hcdPdoQuiesce(pdo);
+        hcdPdoQuiesce(pdo, 0);
         return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
 
     case IRP_MN_REMOVE_DEVICE:
         pdo->Common.PnpState = HCD_PNP_REMOVED;
-        hcdPdoQuiesce(pdo);
+        hcdPdoQuiesce(pdo, 1);
         HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
         hcdPdoRemoved(pdo);
         return STATUS_SUCCESS;

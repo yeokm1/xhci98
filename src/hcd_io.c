@@ -126,6 +126,7 @@ static ULONG hcdPlanChunk(PHCD_CONTROLLER hc, PHCD_XFER x)
 static VOID NTAPI hcdCancel(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 {
     PHCD_XFER x;
+    ULONG seq;
     PHCD_USB_DEVICE dev;
     PHCD_CONTROLLER hc;
     KIRQL oldIrql;
@@ -137,6 +138,10 @@ static VOID NTAPI hcdCancel(PDEVICE_OBJECT DeviceObject, PIRP Irp)
      * controller comes from the PDO, which outlives the record. */
     hc = ((PHCD_DEVICE_PDO)DeviceObject->DeviceExtension)->Controller;
     x = (PHCD_XFER)Irp->Tail.Overlay.DriverContext[1];
+    /* The submission's identity, read while the cancel lock still holds
+     * the IRP: a record freed and reused by the same IRP meanwhile has a
+     * new Seq (Codex review of batch (c), round 5, finding 4). */
+    seq = x->Seq;
     if (hc != NULL) {
         (VOID)InterlockedIncrement(&hc->CancelsRunning);
     }
@@ -146,7 +151,7 @@ static VOID NTAPI hcdCancel(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     }
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    if (x->Irp == Irp && x->State != HCD_XFER_FREE) {
+    if (x->Irp == Irp && x->Seq == seq && x->State != HCD_XFER_FREE) {
         x->CancelRequested = 1;
         x->Pipe->CancelPending = 1;
         hc->CancelWork = 1;
@@ -236,16 +241,14 @@ static VOID hcdStart(PHCD_CONTROLLER hc, PHCD_XFER x)
     }
 }
 
-static NTSTATUS hcdRefuse(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PIRP irp,
-                          PURB urb, LONG usbd)
+/* A refusal at submission: the device reference goes back now, and the
+ * IRP completes at the next tick, never inside this dispatch (Codex review
+ * of batch (c), round 8, finding 4; HcdIoRefuseLater). */
+static NTSTATUS hcdRefuse(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                          PHCD_DEVICE_PDO pdo, PIRP irp, PURB urb, LONG usbd)
 {
-    urb->UrbHeader.Status = usbd;
-    irp->IoStatus.Status = (NTSTATUS)XhciPipeNtStatus((ULONG)usbd);
-    irp->IoStatus.Information = 0;
-    IoCompleteRequest(irp, IO_NO_INCREMENT);
     (VOID)InterlockedDecrement(&dev->Refs);
-    UNREFERENCED_PARAMETER(hc);
-    return (NTSTATUS)XhciPipeNtStatus((ULONG)usbd);
+    return HcdIoRefuseLater(pdo, irp, urb, usbd);
 }
 
 /* A client's pipe handle, checked against the device's open pipes - a
@@ -299,17 +302,18 @@ NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PVOID handle,
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     if (gone) {
         (VOID)InterlockedIncrement((PLONG)&hc->UrbsGone);
-        return hcdRefuse(hc, dev, irp, (PURB)urb, HCD_USBD_DEVICE_GONE);
+        (VOID)InterlockedDecrement(&dev->Refs);
+        return HcdIoRefuseLater(pdo, irp, urb, HCD_USBD_DEVICE_GONE);
     }
     if (pipe == NULL) {
-        return hcdRefuse(hc, dev, irp, (PURB)urb, HCD_USBD_INVALID_PIPE);
+        return hcdRefuse(hc, dev, pdo, irp, (PURB)urb, HCD_USBD_INVALID_PIPE);
     }
     if (x == NULL) {
         /* Every record is out. The waiting list that queues instead is
          * the interrupt and bulk pipes' (26-A.5's next step); a control
          * client has one request out at a time. Counted. */
         (VOID)InterlockedIncrement((PLONG)&hc->UrbsBusy);
-        return hcdRefuse(hc, dev, irp, (PURB)urb, HCD_USBD_ERROR_BUSY);
+        return hcdRefuse(hc, dev, pdo, irp, (PURB)urb, HCD_USBD_ERROR_BUSY);
     }
 
     x->Urb = urb;
@@ -347,9 +351,10 @@ NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PVOID handle,
         }
         if (x->Mdl == NULL) {
             hcdFreeRecord(hc, x);
-            return hcdRefuse(hc, dev, irp, (PURB)urb,
-                             buffer == NULL ? (LONG)USBD_STATUS_INVALID_PARAMETER
-                                            : HCD_USBD_NO_MEMORY);
+            return hcdRefuse(
+                hc, dev, pdo, irp, (PURB)urb,
+                buffer == NULL ? (LONG)USBD_STATUS_INVALID_PARAMETER
+                               : HCD_USBD_NO_MEMORY);
         }
         if (!hcdPlanChunk(hc, x)) {
             if (x->OwnMdl) {
@@ -357,7 +362,7 @@ NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PVOID handle,
             }
             x->Mdl = NULL;
             hcdFreeRecord(hc, x);
-            return hcdRefuse(hc, dev, irp, (PURB)urb,
+            return hcdRefuse(hc, dev, pdo, irp, (PURB)urb,
                              (LONG)USBD_STATUS_INVALID_PARAMETER);
         }
     }
@@ -706,6 +711,7 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
     ULONG bytes;
     ULONG more;
     ULONG release;
+    ULONG engine;
 
     for (;;) {
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
@@ -719,7 +725,8 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
         x = CONTAINING_RECORD(entry, HCD_XFER, Link);
         dev = x->Pipe->Device;
         HcdDmaUnmap(hc, x);
-        if (x->Engine) {
+        engine = x->Engine;
+        if (engine) {
             status = x->Xfer.UsbdStatus;
             bytes = x->Xfer.BytesTransferred;
         } else {
@@ -784,9 +791,20 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
         x->State = HCD_XFER_FREE;
         XhciControllerLockRelease(&hc->Hc, oldIrql);
 
-        irp->IoStatus.Status = (NTSTATUS)XhciPipeNtStatus((ULONG)status);
-        irp->IoStatus.Information = 0;
-        IoCompleteRequest(irp, IO_NO_INCREMENT);
+        if (!engine && status != XHCI_USBD_STATUS_SUCCESS) {
+            /* Failed before the ring had it - a refused submit, a mapping
+             * that failed, a cancel while it was filled in. This call may
+             * be inside the client's submission, so the IRP completes at
+             * the next tick (HcdIoRefuseLater), never here: a client that
+             * resubmits from its completion routine would recurse (static
+             * sweep of batch (c), after Codex round 8). */
+            (VOID)HcdIoRefuseLater(pdo, irp, urb, status);
+        } else {
+            irp->IoStatus.Status =
+                (NTSTATUS)XhciPipeNtStatus((ULONG)status);
+            irp->IoStatus.Information = 0;
+            IoCompleteRequest(irp, IO_NO_INCREMENT);
+        }
         (VOID)InterlockedIncrement((PLONG)&hc->UrbsCompleted);
         (VOID)InterlockedDecrement(&pdo->UrbsPending);
         (VOID)InterlockedDecrement(&dev->Refs);
@@ -871,9 +889,17 @@ VOID HcdIoWaitPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
  * references. The pipes themselves are freed by HcdCfgDeviceGone after.
  * IRQL: PASSIVE_LEVEL.
  */
-ULONG HcdIoDeviceGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+/*
+ * The drain half alone: refuse new submissions and complete everything the
+ * device has queued, without waiting. A stop or a reset invalidation drains
+ * every device first and waits after (HcdIoDeviceGone), so no device's wait
+ * holds up another's drain - a request of one waiting for map registers
+ * another's outstanding transfers keep would otherwise never end (Codex
+ * review of batch (c), round 5, finding 3). Idempotent. Returns 0 when the
+ * device must be kept (DMA not proven stopped). IRQL: PASSIVE_LEVEL.
+ */
+ULONG HcdIoDeviceDrain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
-    LARGE_INTEGER due;
     KIRQL oldIrql;
     ULONG dci;
 
@@ -887,7 +913,6 @@ ULONG HcdIoDeviceGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
          * review of batch (c), round 2, finding 8). */
         return 0;
     }
-
     HcdCfgFlushDevice(hc, dev);
     HcdIoDrainPipe(hc, &dev->Ep0Pipe, HCD_USBD_DEVICE_GONE);
     for (dci = 2; dci < 32; dci++) {
@@ -895,10 +920,168 @@ ULONG HcdIoDeviceGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
             HcdIoDrainPipe(hc, dev->Pipes[dci], HCD_USBD_DEVICE_GONE);
         }
     }
+    return 1;
+}
+
+ULONG HcdIoDeviceGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    LARGE_INTEGER due;
+
+    if (!HcdIoDeviceDrain(hc, dev)) {
+        return 0;
+    }
     while (dev->Refs != 0 || hc->CancelsRunning != 0) {
         HcdRelativeMs(&due, 1);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
         HcdIoDeferred(hc);
     }
     return 1;
+}
+
+/* ----------------------------------------------------------------------- */
+/* Refusals completed later                                                 */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * A URB this dispatch refuses is not completed inside the dispatch that
+ * received it: Windows 98 SE's hidclass.sys resubmits its interrupt read
+ * from that read's completion routine, so a refusal completed inline
+ * recursed until the kernel stack overflowed and the guest reset (measured,
+ * c8-98, 2026-10-03: a mouse unplugged, the trace one "refused" line after
+ * another, then the guest gone). It is pended instead and completed by a
+ * timer DPC at the next clock tick, which also paces a client's retries to
+ * the tick. The timer, not the controller thread: the thread stops before
+ * the devices' transfers are drained at a controller stop, and a drained
+ * read's completion resubmits (Codex review of batch (c), round 8, finding
+ * 1). Every refusal the URB path can reach comes here - device gone, PDO
+ * closing, a closed pipe, no record free, no MDL (finding 4).
+ *
+ * The list, timer and DPC are the PDO's own, not the controller's: a PDO
+ * can outlive its controller (orphaned while it awaits its REMOVE), and its
+ * refusals must stay deferred then too, while the controller's storage
+ * goes (Codex review of batch (c), round 9, findings 1 and 2). The list
+ * lives under the cancel spin lock, so a refusal is cancellable like any
+ * pended IRP (round 8, finding 3). Counted on the PDO apart from its URBs
+ * (RefusedPending, which also holds one count while the timer is armed or
+ * its DPC runs): a STOP or SURPRISE_REMOVAL waits for the URBs only, since
+ * a client may keep resubmitting until its own stack hears of the stop; a
+ * REMOVE, which reaches this PDO after every driver above has stopped
+ * submitting, waits for both, and the PDO is never deleted before the
+ * count is 0 (hcd_pdo.c). IRQL: <= DISPATCH_LEVEL.
+ */
+static VOID hcdRefusedCancel(PDEVICE_OBJECT obj, PIRP irp);
+
+NTSTATUS HcdIoRefuseLater(PHCD_DEVICE_PDO pdo, PIRP irp, PVOID urb,
+                          LONG usbd)
+{
+    LARGE_INTEGER due;
+    KIRQL cancelIrql;
+
+    ((PURB)urb)->UrbHeader.Status = usbd;
+    irp->Tail.Overlay.DriverContext[2] = pdo;
+    (VOID)InterlockedIncrement(&pdo->RefusedPending);
+    IoMarkIrpPending(irp);
+    IoAcquireCancelSpinLock(&cancelIrql);
+    (VOID)IoSetCancelRoutine(irp, hcdRefusedCancel);
+    InsertTailList(&pdo->RefusedIrps, &irp->Tail.Overlay.ListEntry);
+    if (!pdo->RefuseArmed) {
+        pdo->RefuseArmed = 1;
+        (VOID)InterlockedIncrement(&pdo->RefusedPending);
+        due.QuadPart = -10000;          /* 1 ms: the next tick */
+        (VOID)KeSetTimer(&pdo->RefuseTimer, due, &pdo->RefuseDpc);
+    }
+    IoReleaseCancelSpinLock(cancelIrql);
+    return STATUS_PENDING;
+}
+
+/* A refusal cancelled before its tick: completed here, as cancelled. The
+ * DPC takes its IRPs off the list under the cancel spin lock and clears
+ * their routines there, so one still listed is this routine's alone.
+ * Called with the cancel spin lock held. */
+static VOID hcdRefusedCancel(PDEVICE_OBJECT obj, PIRP irp)
+{
+    PHCD_DEVICE_PDO pdo;
+
+    UNREFERENCED_PARAMETER(obj);
+    RemoveEntryList(&irp->Tail.Overlay.ListEntry);
+    IoReleaseCancelSpinLock(irp->CancelIrql);
+    pdo = (PHCD_DEVICE_PDO)irp->Tail.Overlay.DriverContext[2];
+    ((PURB)IoGetCurrentIrpStackLocation(irp)->Parameters.Others.Argument1)
+        ->UrbHeader.Status = HCD_USBD_CANCELED;
+    irp->IoStatus.Status = STATUS_CANCELLED;
+    irp->IoStatus.Information = 0;
+    IoCompleteRequest(irp, IO_NO_INCREMENT);
+    (VOID)InterlockedDecrement(&pdo->RefusedPending);
+}
+
+/* The refusals listed at the tick - only those, so a client resubmitting
+ * from its completion routine waits for the next one. IRQL:
+ * DISPATCH_LEVEL. */
+static VOID hcdRefusedDpc(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2)
+{
+    LIST_ENTRY mine;
+    PLIST_ENTRY entry;
+    PHCD_DEVICE_PDO pdo;
+    PIRP irp;
+    PURB urb;
+    NTSTATUS status;
+    KIRQL cancelIrql;
+
+    UNREFERENCED_PARAMETER(dpc);
+    UNREFERENCED_PARAMETER(arg1);
+    UNREFERENCED_PARAMETER(arg2);
+    pdo = (PHCD_DEVICE_PDO)context;
+    InitializeListHead(&mine);
+    IoAcquireCancelSpinLock(&cancelIrql);
+    while (!IsListEmpty(&pdo->RefusedIrps)) {
+        entry = RemoveHeadList(&pdo->RefusedIrps);
+        irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
+        (VOID)IoSetCancelRoutine(irp, NULL);
+        InsertTailList(&mine, entry);
+    }
+    pdo->RefuseArmed = 0;
+    IoReleaseCancelSpinLock(cancelIrql);
+    while (!IsListEmpty(&mine)) {
+        entry = RemoveHeadList(&mine);
+        irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
+        urb = (PURB)IoGetCurrentIrpStackLocation(irp)
+                  ->Parameters.Others.Argument1;
+        if (irp->Cancel) {
+            /* The URB says what the IRP says (round 9, finding 3). */
+            urb->UrbHeader.Status = HCD_USBD_CANCELED;
+            status = STATUS_CANCELLED;
+        } else {
+            status = (NTSTATUS)XhciPipeNtStatus(
+                (ULONG)urb->UrbHeader.Status);
+        }
+        irp->IoStatus.Status = status;
+        irp->IoStatus.Information = 0;
+        IoCompleteRequest(irp, IO_NO_INCREMENT);
+        (VOID)InterlockedDecrement(&pdo->RefusedPending);
+    }
+    /* The arm's count, last: once it is 0 the PDO may be deleted. */
+    (VOID)InterlockedDecrement(&pdo->RefusedPending);
+}
+
+/* The PDO's list, timer and DPC, at its creation (hcd_pdo.c). IRQL:
+ * PASSIVE_LEVEL. */
+VOID HcdIoRefusedInit(PHCD_DEVICE_PDO pdo)
+{
+    InitializeListHead(&pdo->RefusedIrps);
+    KeInitializeTimer(&pdo->RefuseTimer);
+    KeInitializeDpc(&pdo->RefuseDpc, hcdRefusedDpc, pdo);
+    pdo->RefuseArmed = 0;
+    pdo->RefusedPending = 0;
+}
+
+/* Before the PDO is deleted, and at its REMOVE: every refusal completed,
+ * the timer disarmed and its DPC returned. IRQL: PASSIVE_LEVEL. */
+VOID HcdIoRefusedDrain(PHCD_DEVICE_PDO pdo)
+{
+    LARGE_INTEGER due;
+
+    while (pdo->RefusedPending != 0) {
+        HcdRelativeMs(&due, 1);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
 }

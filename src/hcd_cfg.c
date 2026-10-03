@@ -60,22 +60,23 @@ NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 {
     KIRQL oldIrql;
 
-    irp->Tail.Overlay.DriverContext[0] = dev;
-    irp->Tail.Overlay.DriverContext[2] = pdo;
-    (VOID)InterlockedIncrement(&pdo->UrbsPending);
-    IoMarkIrpPending(irp);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     if (dev->Gone) {
         /* The thread has begun freeing the device and has flushed its
          * queued URBs already: one queued now would hold a reference
-         * nothing ever returns (round 3, finding 1). */
+         * nothing ever returns (round 3, finding 1). Refused at the next
+         * tick, not inline (round 8, finding 4). */
         XhciControllerLockRelease(&hc->Hc, oldIrql);
-        hcdCfgComplete(dev, irp,
-                       (PURB)IoGetCurrentIrpStackLocation(irp)
-                           ->Parameters.Others.Argument1,
-                       HCD_USBD_DEVICE_GONE);
-        return STATUS_PENDING;
+        (VOID)InterlockedDecrement(&dev->Refs);
+        return HcdIoRefuseLater(pdo, irp,
+                                IoGetCurrentIrpStackLocation(irp)
+                                    ->Parameters.Others.Argument1,
+                                HCD_USBD_DEVICE_GONE);
     }
+    irp->Tail.Overlay.DriverContext[0] = dev;
+    irp->Tail.Overlay.DriverContext[2] = pdo;
+    (VOID)InterlockedIncrement(&pdo->UrbsPending);
+    IoMarkIrpPending(irp);
     InsertTailList(&hc->SlowIrps, &irp->Tail.Overlay.ListEntry);
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     HcdThreadWake(hc);
@@ -402,13 +403,13 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
     ext = &hc->Hc;
     sc = &urb->UrbSelectConfiguration;
     cd = sc->ConfigurationDescriptor;
-    XHCI_DBG_VALUE("hcd: select, URB length/descriptor pointer low",
-                   ((ULONG)urb->UrbHeader.Length << 16) |
-                       ((ULONG)(ULONG_PTR)cd & 0xFFFFUL));
-    XHCI_DBG_VALUE("hcd: select, URB dword 4 (first interface length/nums)",
-                   ((PULONG)urb)[4]);
-    XHCI_DBG_VALUE("hcd: select, URB dword 5", ((PULONG)urb)[5]);
-    XHCI_DBG_VALUE("hcd: select, URB dword 6", ((PULONG)urb)[6]);
+    XHCI_DBG_VALUE("hcd: select, URB length", urb->UrbHeader.Length);
+    XHCI_DBG_VALUE("hcd: select, ConfigurationDescriptor",
+                   (ULONG)(ULONG_PTR)cd);
+    XHCI_DBG_VALUE("hcd: select, first interface length/number/alternate",
+                   ((ULONG)sc->Interface.Length << 16) |
+                       ((ULONG)sc->Interface.InterfaceNumber << 8) |
+                       sc->Interface.AlternateSetting);
     if (!hcdCfgDeconfigure(hc, dev)) {
         return HCD_USBD_INTERNAL_HC_ERROR;
     }
@@ -610,6 +611,7 @@ static ULONG hcdCfgQuiesce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG control;
     ULONG code;
     ULONG state;
+    ULONG bytes;
 
     state = hcdCfgEpState(hc, dev, pipe->Dci);
     if (state == XHCI_EP_STATE_RUNNING) {
@@ -633,6 +635,20 @@ static ULONG hcdCfgQuiesce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
          * of batch (c), round 4, finding 3). */
         if (!hcdCfgResetEndpoint(hc, dev, pipe) ||
             !hcdCfgSetDequeue(hc, dev, pipe)) {
+            HcdSvcRequestReset(&hc->Hc);
+            return XHCI_EP_STATE_RUNNING;
+        }
+        /* Reset Endpoint restarted the host's data toggle (TSP 0); the
+         * device's restarts with CLEAR_FEATURE(ENDPOINT_HALT), or the two
+         * ends disagree and a packet is lost as a duplicate (xHCI 4.6.8
+         * pp.116-117; round 5, finding 2). A control endpoint has no
+         * toggle to keep: its SETUP restarts it. */
+        if (pipe->Dci != 1 && pipe->TransferType != XHCI_PIPE_XFER_ISOCH &&
+            !HcdThreadControl(hc, dev, 0x02, 1, 0,
+                              (USHORT)pipe->EndpointAddress, 0, &bytes)) {
+            /* The device did not take the clear: the two toggles may
+             * disagree, which only the reset the failure asks for settles
+             * (round 6). */
             HcdSvcRequestReset(&hc->Hc);
             return XHCI_EP_STATE_RUNNING;
         }
@@ -780,7 +796,13 @@ static LONG hcdCfgAbort(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 
     HcdIoPipePause(hc, pipe);
     result = hcdCfgAbortPaused(hc, dev, pipe, usbd);
-    HcdIoPipeResume(hc, pipe);
+    if (result == XHCI_USBD_STATUS_SUCCESS) {
+        HcdIoPipeResume(hc, pipe);
+    }
+    /* On a failure the pipe stays paused: the endpoint may still hold a
+     * position no doorbell may restart, and the reset the failure asked
+     * for invalidates the device, which drains what is held (Codex review
+     * of batch (c), round 5, finding 1). */
     return result;
 }
 
@@ -839,15 +861,19 @@ static LONG hcdCfgReset(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         if (!ok) {
             HcdSvcRequestReset(&hc->Hc);
             result = HCD_USBD_INTERNAL_HC_ERROR;
+            return result;      /* left paused, as hcdCfgAbort */
         }
+    } else {
+        return result;          /* left paused, as hcdCfgAbort */
     }
-    if (result == XHCI_USBD_STATUS_SUCCESS) {
-        pipe->Halted = 0;
-        if (pipe->TransferType != XHCI_PIPE_XFER_ISOCH &&
-            !HcdThreadControl(hc, dev, 0x02, 1, 0,
-                              (USHORT)pipe->EndpointAddress, 0, &bytes)) {
-            result = HCD_USBD_INTERNAL_HC_ERROR;
-        }
+    pipe->Halted = 0;
+    if (pipe->TransferType != XHCI_PIPE_XFER_ISOCH &&
+        !HcdThreadControl(hc, dev, 0x02, 1, 0,
+                          (USHORT)pipe->EndpointAddress, 0, &bytes)) {
+        /* As in hcdCfgQuiesce: toggles that may disagree are settled
+         * only by the reset; the pipe stays paused until it (round 6). */
+        HcdSvcRequestReset(&hc->Hc);
+        return HCD_USBD_INTERNAL_HC_ERROR;
     }
     HcdIoPipeResume(hc, pipe);
     return result;
@@ -884,8 +910,7 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     HcdIoPipePause(hc, pipe);
     state = hcdCfgQuiesce(hc, dev, pipe);
     if (state == XHCI_EP_STATE_RUNNING) {
-        HcdIoPipeResume(hc, pipe);
-        return;
+        return;                 /* left paused, as hcdCfgAbort */
     }
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
@@ -941,7 +966,10 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 
     if (move && !hcdCfgSetDequeue(hc, dev, pipe)) {
         HcdSvcRequestReset(&hc->Hc);
-    } else if (pipe->Queue->Count != 0) {
+        HcdIoDeferred(hc);
+        return;                 /* left paused, as hcdCfgAbort */
+    }
+    if (pipe->Queue->Count != 0) {
         XhciWriteDoorbell(&hc->Hc, dev->SlotId, pipe->Dci);
     }
     HcdIoDeferred(hc);

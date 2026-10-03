@@ -299,9 +299,15 @@ static VOID hcdResetEp0(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     dcs = XhciRingDequeueCycle(&dev->Ep0);
     waiting = dev->Ep0Queue.Count != 0;
     XhciControllerLockRelease(&hc->Hc, oldIrql);
-    if (XhciTrbSetTrDequeue(&trb, dev->SlotId, 1, pa, dcs) ==
-            XHCI_RING_OK &&
-        hcdCommand(hc, &trb, &control) == XHCI_CC_SUCCESS && waiting) {
+    if (XhciTrbSetTrDequeue(&trb, dev->SlotId, 1, pa, dcs) !=
+            XHCI_RING_OK ||
+        hcdCommand(hc, &trb, &control) != XHCI_CC_SUCCESS) {
+        /* EP0 stays paused until the reset the failure asked for
+         * invalidates the device (round 5, finding 1). */
+        HcdSvcRequestReset(&hc->Hc);
+        return;
+    }
+    if (waiting) {
         XhciWriteDoorbell(&hc->Hc, dev->SlotId, 1);
     }
     HcdIoPipeResume(hc, &dev->Ep0Pipe);
@@ -923,11 +929,30 @@ static VOID hcdDropPort(PHCD_CONTROLLER hc, PHCD_PORT p)
     hcdSettleGone(hc, p);
 }
 
+/* Every device's URBs drained before any one device is waited out
+ * (HcdIoDeviceDrain; round 5, finding 3). The slot is gone for each. */
+static VOID hcdDrainAll(PHCD_CONTROLLER hc)
+{
+    ULONG i;
+
+    for (i = 0; i < XHCI_MAX_ROOT_PORTS; i++) {
+        if (hc->Ports[i].Device != NULL) {
+            (VOID)HcdIoDeviceDrain(hc, hc->Ports[i].Device);
+        }
+    }
+    for (i = 1; i <= XHCI_MAX_SLOTS; i++) {
+        if (hc->SlotDevice[i] != NULL) {
+            (VOID)HcdIoDeviceDrain(hc, hc->SlotDevice[i]);
+        }
+    }
+}
+
 static VOID hcdInvalidate(PHCD_CONTROLLER hc)
 {
     ULONG i;
 
     XHCI_DBG_TEXT("hcd: slots invalidated, dropping every device");
+    hcdDrainAll(hc);
     for (i = 0; i < XHCI_MAX_ROOT_PORTS; i++) {
         hcdDropPort(hc, &hc->Ports[i]);
     }
@@ -1178,6 +1203,7 @@ VOID HcdEnumDrop(PHCD_CONTROLLER hc)
 {
     ULONG i;
 
+    hcdDrainAll(hc);
     for (i = 0; i < XHCI_MAX_ROOT_PORTS; i++) {
         hcdDropPort(hc, &hc->Ports[i]);
     }

@@ -230,6 +230,15 @@ typedef struct _HCD_DEVICE_PDO {
     ULONG Closing;                  /* stopping or removed: URBs refused  */
     volatile LONG UrbsPending;      /* URB IRPs pended here and not yet
                                      * completed; REMOVE waits for 0      */
+    /* Refusals completed at the next clock tick (HcdIoRefuseLater):
+     * the list under the cancel spin lock. RefusedPending counts each
+     * refusal and one more while the timer is armed or its DPC runs;
+     * REMOVE and the PDO's deletion wait for 0. */
+    LIST_ENTRY RefusedIrps;
+    KTIMER RefuseTimer;
+    KDPC RefuseDpc;
+    ULONG RefuseArmed;
+    volatile LONG RefusedPending;
     volatile LONG Busy;             /* dispatches inside hcd_urb.c, raised
                                      * before Controller is read; the
                                      * parent's release waits it out      */
@@ -515,7 +524,8 @@ NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp);
 VOID HcdIoPipeInitEp0(PHCD_USB_DEVICE dev);
 VOID HcdIoPipeInit(PHCD_PIPE pipe, PHCD_USB_DEVICE dev);
 NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PVOID handle,
-                     struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb, const UCHAR *setup, ULONG flags,
+                     struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb,
+                     const UCHAR *setup, ULONG flags,
                      PVOID buffer, PMDL mdl, ULONG length, PULONG lengthOut);
 VOID HcdIoDrainPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd);
 VOID HcdIoPipeRelease(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
@@ -527,6 +537,11 @@ VOID HcdIoWaitPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok);
 VOID HcdIoRetired(PHCD_CONTROLLER hc, PXHCI_TRANSFER t);
 VOID HcdIoDeferred(PHCD_CONTROLLER hc);
+ULONG HcdIoDeviceDrain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+NTSTATUS HcdIoRefuseLater(struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb,
+                          LONG usbd);
+VOID HcdIoRefusedInit(struct _HCD_DEVICE_PDO *pdo);
+VOID HcdIoRefusedDrain(struct _HCD_DEVICE_PDO *pdo);
 ULONG HcdIoDeviceGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 
 /* hcd_dma.c */

@@ -61,6 +61,16 @@ static NTSTATUS hcdUrbComplete(PIRP irp, PURB urb, USBD_STATUS usbd,
     return HcdCompleteIrp(irp, status, 0);
 }
 
+/* A device gone: refused, but completed at the next tick (HcdIoRefuseLater,
+ * hcd_io.c) - never inside this dispatch, which a client's completion
+ * routine can re-enter by resubmitting. The PDO's own timer, so an orphan
+ * whose controller has gone defers too (Codex review of batch (c), round
+ * 9, finding 2). */
+static NTSTATUS hcdGoneLater(PHCD_DEVICE_PDO pdo, PIRP irp, PURB urb)
+{
+    return HcdIoRefuseLater(pdo, irp, urb, USBD_STATUS_DEVICE_GONE);
+}
+
 /*
  * The device record behind a listed PDO, referenced: taken under PdoListLock
  * while the PDO still names it, so the thread's free (which unlists first and
@@ -206,8 +216,7 @@ static NTSTATUS hcdControlUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
 
     dev = hcdDeviceRef(hc, pdo);
     if (dev == NULL) {
-        return hcdUrbComplete(irp, urb, USBD_STATUS_DEVICE_GONE,
-                              STATUS_DEVICE_NOT_CONNECTED);
+        return hcdGoneLater(pdo, irp, urb);
     }
     /* The reference passes to the IRP (HcdIoSubmit). */
     return HcdIoSubmit(hc, dev, NULL, pdo, irp, urb, setup,
@@ -239,8 +248,7 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
 
     if (hc == NULL || !pdo->Listed) {
         /* Orphaned, or its device has left: nothing on the bus answers. */
-        return hcdUrbComplete(irp, urb, USBD_STATUS_DEVICE_GONE,
-                              STATUS_DEVICE_NOT_CONNECTED);
+        return hcdGoneLater(pdo, irp, urb);
     }
     if (hcdIsControl(function)) {
         return hcdControlUrb(pdo, hc, irp, urb, function);
@@ -252,16 +260,14 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         /* Commands: pended for the controller thread (hcd_cfg.c). */
         dev = hcdDeviceRef(hc, pdo);
         if (dev == NULL) {
-            return hcdUrbComplete(irp, urb, USBD_STATUS_DEVICE_GONE,
-                                  STATUS_DEVICE_NOT_CONNECTED);
+            return hcdGoneLater(pdo, irp, urb);
         }
         return HcdCfgQueue(hc, dev, pdo, irp);
 
     case URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER:
         dev = hcdDeviceRef(hc, pdo);
         if (dev == NULL) {
-            return hcdUrbComplete(irp, urb, USBD_STATUS_DEVICE_GONE,
-                                  STATUS_DEVICE_NOT_CONNECTED);
+            return hcdGoneLater(pdo, irp, urb);
         }
         bi = &urb->UrbBulkOrInterruptTransfer;
         /* The reference passes to the IRP (HcdIoSubmit), which checks
@@ -325,10 +331,14 @@ NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp)
         if (stack->Parameters.DeviceIoControl.IoControlCode ==
                 IOCTL_INTERNAL_USB_SUBMIT_URB &&
             stack->Parameters.Others.Argument1 != NULL) {
-            ((PURB)stack->Parameters.Others.Argument1)->UrbHeader.Status =
-                USBD_STATUS_DEVICE_GONE;
+            /* Completed at the next tick, not here (HcdIoRefuseLater) -
+             * an orphaned PDO's too (round 9, finding 2). */
+            status = HcdIoRefuseLater(
+                pdo, irp, stack->Parameters.Others.Argument1,
+                USBD_STATUS_DEVICE_GONE);
+        } else {
+            status = HcdCompleteIrp(irp, STATUS_DELETE_PENDING, 0);
         }
-        status = HcdCompleteIrp(irp, STATUS_DELETE_PENDING, 0);
         (VOID)InterlockedDecrement(&pdo->Busy);
         return status;
     }

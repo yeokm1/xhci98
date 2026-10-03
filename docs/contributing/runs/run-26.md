@@ -511,3 +511,55 @@ Round 2 raised ten MAJOR and four MINOR, round 3 eight new MAJOR, round 4 four M
 **Windows 2000 SP4** (`ea898a7e...17cd6`, c5-2k; `f0163503...24ea`, c6-2k): the USB mouse works end to end. The pointer moves and clicks register. Unplug and replug work with no bugcheck. Disable and enable work for the HID-compliant mouse, the root hub (c5) and the controller (c6). Shutdown is clean.
 
 **Windows 98 SE** (c4, c5, c6): still Code 10. hidusb's only URB is a SELECT_CONFIGURATION, which the c6 trace shows completed by the thread with success on the unconfigure path - its ConfigurationDescriptor was NULL - after which Windows stopped the device. Under investigation; the next build dumps the URB's fields.
+
+**Codex rounds 5 to 7.**
+- **Round 5** (four MAJOR, one MINOR):
+  - a failed dequeue recovery could still ring the doorbell into the old DMA position;
+  - an abort or cancel reset the host's data toggle without the device's;
+  - tearing down devices one after another could deadlock on another device's map registers;
+  - a late cancel routine could cancel a reused IRP's next transfer.
+- **The fixes:**
+  - a Halted endpoint is reset, its dequeue set, and CLEAR_FEATURE(ENDPOINT_HALT) sent;
+  - invalidation and stop drain every device before any per-device wait;
+  - the cancel routine compares a sequence number captured under the cancel lock.
+- **Round 6** (one MAJOR): a CLEAR_FEATURE that failed was treated as success. Now a failure in the quiesce or in RESET_PIPE requests controller recovery and keeps the pipe paused.
+- **Round 7:** clean.
+
+**The Windows 98 SE Code 10** (c7-98, `dfc725b5...f523d`): the trace showed `hidclass.sys` sending IRP_MN_QUERY_CAPABILITIES with a DEVICE_CAPABILITIES of Version 0 and Size 0. The PDO refused it as too short, and Windows reported Code 10. Both PDO kinds now accept Version 0 / Size 0 as well as any Size that reaches `D1Latency`, and write no field past it.
+
+**The first working mouse on Windows 98 SE, and an unplug that reset the guest** (c8, `f498e911...3490`):
+- **On Windows 98 SE:**
+  - The mouse installed as `USB Human Interface Device` plus `HID-compliant mouse`, both working, and the pointer moved.
+  - Unplugging it left the guest "paused (shutdown)" within about 30 s, with no blue screen. Under `-no-reboot` that is a reset.
+  - The cause: `hidclass.sys` resubmits its interrupt read from that read's completion routine. Each device-gone refusal was completed inside the dispatch that received the resubmission, so the stack grew with every retry until it overflowed. The trace shows one "refused" line after another up to the stop.
+- **On Windows 2000** (c8-2k), the same build passed every step.
+
+**Refusals completed later: Codex rounds 8 to 10.**
+- The first fix had the controller thread complete refusals at its next poll.
+- **Round 8** (five MAJOR) showed that was not enough:
+  - the thread stops before the stop path drains transfers, and a drained read's completion resubmits;
+  - a refusal could be queued after the final flush;
+  - a client that kept resubmitting kept a STOP from finishing;
+  - other refusals were still completed inline (a closed pipe, no free record, no MDL, the slow-URB queue);
+  - the fallback read the IRP after completing it.
+- **A static sweep after round 8** found three more inline failures: a record that failed before reaching the ring (a zero-length control transfer the ring refused, a failed adapter-channel request, a cancel while the request was being filled in).
+- **Round 9** (two MAJOR, one MINOR):
+  - a refusal timer in the controller could outlive the controller once a PDO was orphaned;
+  - an orphaned PDO still refused inline;
+  - a cancelled refusal left the URB's status unchanged.
+- **Round 10:** clean.
+- **The model that came out of them** (`HcdIoRefuseLater`, `src\hcd_io.c`):
+  - Every refusal the URB path can reach is pended and completed by a one-shot timer DPC at the next clock tick, which also paces a resubmitting client. This includes a record that fails before the ring has it.
+  - The list, timer and DPC belong to the device PDO, not the controller, so an orphaned PDO defers too.
+  - The list sits under the cancel spin lock, so a refusal can be cancelled; a cancelled one completes with `STATUS_CANCELLED` and `USBD_STATUS_CANCELED`.
+  - Refusals are counted apart from URBs (`RefusedPending`, plus one while the timer is armed or its DPC runs):
+    - STOP and SURPRISE_REMOVAL wait for the URBs only, since a client may resubmit until its own stack hears of the stop;
+    - REMOVE, which reaches the PDO after every driver above it has stopped submitting, also waits for the refusals;
+    - the PDO is never deleted before that count is 0.
+
+**Both primaries after the thread-completed refusals** (c9, `7f4bb2f6...0e01`):
+- **Windows 98 SE** (c9-98):
+  - Unplugging the mouse no longer stops the guest: it stayed running through 60 s and the HID devices left Device Manager.
+  - Replug, disable and enable of the HID-compliant mouse, disable and enable of the root hub, and shutdown all passed.
+  - After the mouse was re-enabled, its first move appeared some 20 to 30 s late; later moves were prompt.
+- **Windows 2000** (c9-2k): install, move and click, unplug, replug, disable and enable of the mouse and of the controller, and shutdown all passed with no bugcheck.
