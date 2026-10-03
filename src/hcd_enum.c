@@ -63,6 +63,11 @@
 #include "xhci_dbg.h"
 
 #define HCD_DEBOUNCE_MS        100UL
+/* Passes a root port's PORTSC may read all ones - at its inspection, or at
+ * a pending hold's reads - before the controller is handed to recovery:
+ * about five seconds at the thread's 100 ms tick; a bus policy number. */
+#define HCD_PORT_UNREADABLE_PASSES 50UL
+#define HCD_HOLD_UNREADABLE_PASSES HCD_PORT_UNREADABLE_PASSES
 #define HCD_RESET_WAIT_MS      500UL
 /* A warm reset is LFPS for tens of milliseconds and then link training
  * (USB 3.2 7.5, to verify); twice the hot reset's wait is this driver's
@@ -1632,6 +1637,17 @@ static VOID hcdFeed(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG kind)
 
 static VOID hcdHoldResolve(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG portsc);
 
+/* Root port p owed an inspection at the next pass (its PortChange bit),
+ * whatever raised it. Thread. */
+static VOID hcdPortInspectAgain(PHCD_CONTROLLER hc, PHCD_PORT p)
+{
+    KIRQL oldIrql;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->PortChange[(p->PortId - 1) / 32UL] |= 1UL << ((p->PortId - 1) % 32UL);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
 /*
  * A hold released (29-A.5): the SuperSpeed port re-armed with PLS =
  * RxDetect and LWS - the Disabled state's exit to Disconnected - and never
@@ -1693,8 +1709,22 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
     ext = &hc->Hc;
     portsc = XhciReadPortsc(ext, p->PortId);
     if (portsc == 0xFFFFFFFFUL) {
+        /* Unreadable says nothing: whatever the inspection was owed - a
+         * change, a refused send-back to settle, a re-inspection asked
+         * for - is owed again at the next pass, until a read succeeds; a
+         * port that stays unreadable hands the controller to recovery,
+         * whose invalidation settles every port. An unreadable PORTSC
+         * never drops pending port work (Codex review of the Phase 28-31
+         * integration, round 5). */
+        if (++p->Unreadable == HCD_PORT_UNREADABLE_PASSES) {
+            XHCI_DBG_VALUE("hcd: PORTSC unreadable, recovery, port",
+                           p->PortId);
+            HcdSvcRequestReset(ext);
+        }
+        hcdPortInspectAgain(hc, p);
         return;
     }
+    p->Unreadable = 0;
     changes = portsc & XHCI_PORTSC_CHANGE_MASK;
     if (changes != 0) {
         XhciWritePortsc(ext, p->PortId,
@@ -1807,11 +1837,6 @@ BOOLEAN HcdHoldRequestUsb2(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     return TRUE;
 }
 
-/* Passes a pending hold may read its port's PORTSC as all ones before the
- * controller is handed to recovery - about five seconds at the thread's
- * 100 ms tick; a bus policy number. */
-#define HCD_HOLD_UNREADABLE_PASSES 50UL
-
 /* Whether a send-back for root port `port` is queued and not yet acted on.
  * Thread. */
 static ULONG hcdHoldPendingOn(PHCD_CONTROLLER hc, ULONG port)
@@ -1852,7 +1877,6 @@ static ULONG hcdHoldPendingOn(PHCD_CONTROLLER hc, ULONG port)
 static VOID hcdHoldResolve(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG portsc)
 {
     PHCD_USB_DEVICE dev;
-    KIRQL oldIrql;
 
     dev = p->Device;
     if (p->Hub != NULL || dev == NULL || dev->Pdo != NULL ||
@@ -1886,9 +1910,7 @@ static VOID hcdHoldResolve(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG portsc)
         return;
     }
     hcdFeed(hc, p, XHCI_ENUM_EV_DISCONNECT);
-    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    hc->PortChange[(p->PortId - 1) / 32UL] |= 1UL << ((p->PortId - 1) % 32UL);
-    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    hcdPortInspectAgain(hc, p);
 }
 
 /*
@@ -1955,6 +1977,7 @@ static VOID hcdHoldService(PHCD_CONTROLLER hc)
             h->Pending = 0;
             XhciControllerLockRelease(&hc->Hc, oldIrql);
             hcdHoldResolve(hc, p, portsc);
+            hcdPortInspectAgain(hc, p);
             continue;
         }
         hcdReadIdentity(hc, p->Device, &id);
@@ -1999,9 +2022,8 @@ static VOID hcdHoldService(PHCD_CONTROLLER hc)
             XhciControllerLockAcquire(&hc->Hc, &oldIrql);
             h->Used = 0;
             h->Pending = 0;
-            hc->PortChange[(h->Port - 1) / 32UL] |=
-                1UL << ((h->Port - 1) % 32UL);
             XhciControllerLockRelease(&hc->Hc, oldIrql);
+            hcdPortInspectAgain(hc, p);
             continue;
         }
         kind = XhciHoldBegin(&h->Hold, h->Port,
@@ -2915,6 +2937,7 @@ VOID HcdEnumInit(PHCD_CONTROLLER hc)
         p->Hub = NULL;
         p->Device = NULL;
         p->LinkPsiv = 0;
+        p->Unreadable = 0;
         XhciLinkInit(&p->Link);
         if (p->Enum.State == XHCI_ENUM_GONE && !hcdPortQuiet(hc, p)) {
             continue;

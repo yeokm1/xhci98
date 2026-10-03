@@ -531,6 +531,11 @@ typedef struct _HCD_PORT {
      * on the port asks for a send-back again; at HCD_HOLD_RECOVER_TRIES
      * the device is left refused with no PDO. */
     ULONG HoldRecoverFails;
+    /* Root port: inspections in a row that read PORTSC as all ones. The
+     * inspection is owed again at every pass until one reads it, and at
+     * HCD_PORT_UNREADABLE_PASSES the controller goes to recovery
+     * (hcd_enum.c, hcdPortChanged). */
+    ULONG Unreadable;
     ULONG HubSsSeen;        /* a connection read since its last re-arm:
                              * an empty port after that is a departure of
                              * the device's own, which restarts the waits */
