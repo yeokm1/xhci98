@@ -30,6 +30,7 @@
 
 #include "hcd.h"
 #include "xhci_hw.h"
+#include "hcd_svc.h"
 #include "xhci_xfer.h"
 #include "xhci_enum.h"
 #include "xhci_dbg.h"
@@ -73,32 +74,67 @@ static ULONG hcdWaitEvent(PKEVENT event, ULONG milliseconds)
 /* Commands                                                                 */
 /* ----------------------------------------------------------------------- */
 
-/* Submit one command and wait for its completion. Returns the completion
+/* The enumeration stops for the pass once the controller has failed or a
+ * timed-out transfer may still DMA into the scratch: the recovery that
+ * follows invalidates every slot, and the thread rescans from there. */
+static ULONG hcdHalted(PHCD_CONTROLLER hc)
+{
+    return hc->Hc.ControllerFailed || hc->ScratchTainted;
+}
+
+/*
+ * Submit one command and wait for its own completion. Returns the completion
  * code, or 0 when it never completed (lost, refused or timed out); *control
- * receives the Command Completion Event's DW3. */
+ * receives the Command Completion Event's DW3.
+ *
+ * A completion counts only when its TRB is the one this submit placed
+ * (CmdDonePA, from hcd_dev.c): a completion of an earlier command, the
+ * start's No Op among them, can land between the clear and the submit
+ * (Codex review of batch (b), round 1, finding 7). The event is cleared
+ * before the address is read, so a completion arriving in between still
+ * leaves it signalled. A command that never answers is the controller's
+ * failure: the reset is requested, and the recovery's invalidation settles
+ * whatever the command owned.
+ */
 static ULONG hcdCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
                         PULONG control)
 {
     ULONG trbPA;
     ULONG answer;
+    ULONG rounds;
 
     *control = 0;
+    if (hcdHalted(hc)) {
+        return 0;
+    }
     KeClearEvent(&hc->CmdDoneEvent);
     hc->CmdDoneLost = 0;
+    hc->CmdDonePA = 0;
+    trbPA = 0;
     answer = XhciCommandSubmit(&hc->Hc, trb, &trbPA, XHCI_ARM_UNLOCKED);
     if (answer != XHCI_CMD_OK) {
         hc->EnumCommandsRefused++;
         return 0;
     }
-    if (!hcdWaitEvent(&hc->CmdDoneEvent, HCD_COMMAND_WAIT_MS)) {
-        hc->EnumCommandsTimedOut++;
-        return 0;
+    for (rounds = 0; rounds < 4; rounds++) {
+        KeClearEvent(&hc->CmdDoneEvent);
+        if (hc->CmdDoneLost) {
+            /* The engine's own watchdog aborted it: what the command did,
+             * an Enable Slot's slot among it, is unknown, and only the
+             * reset settles that (round 2, finding 5). */
+            break;
+        }
+        if (hc->CmdDonePA == trbPA) {
+            *control = hc->CmdDoneControl;
+            return hc->CmdDoneCode;
+        }
+        if (!hcdWaitEvent(&hc->CmdDoneEvent, HCD_COMMAND_WAIT_MS)) {
+            break;
+        }
     }
-    if (hc->CmdDoneLost) {
-        return 0;
-    }
-    *control = hc->CmdDoneControl;
-    return hc->CmdDoneCode;
+    hc->EnumCommandsTimedOut++;
+    HcdSvcRequestReset(&hc->Hc);
+    return 0;
 }
 
 /* ----------------------------------------------------------------------- */
@@ -139,32 +175,80 @@ static VOID hcdDeviceFree(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     HcdPoolFree(dev);
 }
 
-/* Give a slot back: Disable Slot, its DCBAA entry cleared, its record freed.
- * The command's outcome is counted, not acted on - after a disconnect or a
- * failed step there is nothing better to do with the slot. */
-static VOID hcdDisableSlot(PHCD_CONTROLLER hc, PHCD_PORT p)
+/* Disable Slot for a slot id. Returns 1 when the controller confirmed it; on
+ * any other outcome the reset is requested, since only the HCRST still
+ * proves the slot's contexts and rings out of the controller's hands. */
+static ULONG hcdDisableSlotId(PHCD_CONTROLLER hc, ULONG slotId)
 {
-    PXHCI_EXTENSION ext;
     XHCI_TRB trb;
     ULONG control;
+
+    if (XhciTrbDisableSlot(&trb, slotId) == XHCI_RING_OK &&
+        hcdCommand(hc, &trb, &control) == XHCI_CC_SUCCESS) {
+        return 1;
+    }
+    hc->EnumDisableFailures++;
+    HcdSvcRequestReset(&hc->Hc);
+    return 0;
+}
+
+/*
+ * Give a slot back: Disable Slot, then its DCBAA entry cleared and its
+ * record freed. A Disable Slot the controller did not confirm leaves the
+ * record quarantined instead - off the port, still in SlotDevice[], its
+ * DCBAA entry and EP0 ring untouched - until the recovery the failure
+ * requested invalidates every slot and the thread frees it (Codex review of
+ * batch (b), round 1, finding 8).
+ */
+static VOID hcdDisableRecord(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    PXHCI_EXTENSION ext;
     ULONG slotId;
     volatile ULONG *dcbaa;
 
     ext = &hc->Hc;
-    if (p->Device == NULL) {
+    slotId = dev->SlotId;
+    if (!hcdDisableSlotId(hc, slotId)) {
+        dev->Abandoned = 0;
         return;
-    }
-    slotId = p->Device->SlotId;
-    if (XhciTrbDisableSlot(&trb, slotId) == XHCI_RING_OK) {
-        if (hcdCommand(hc, &trb, &control) != XHCI_CC_SUCCESS) {
-            hc->EnumDisableFailures++;
-        }
     }
     dcbaa = XhciCommonAt(ext, ext->Layout.DcbaaOffset + slotId * 8UL);
     dcbaa[0] = 0;
     dcbaa[1] = 0;
-    hcdDeviceFree(hc, p->Device);
+    hcdDeviceFree(hc, dev);
+}
+
+static VOID hcdDisableSlot(PHCD_CONTROLLER hc, PHCD_PORT p)
+{
+    PHCD_USB_DEVICE dev;
+
+    dev = p->Device;
+    if (dev == NULL) {
+        return;
+    }
     p->Device = NULL;
+    hcdDisableRecord(hc, dev);
+}
+
+/*
+ * The records an unpowered root-hub detach left Abandoned - off their
+ * ports, their slots still enabled - get their Disable Slot at the first
+ * powered pass, so a restore that kept the slots does not strand them
+ * (Codex review of batch (b), round 2, finding 3). A failure quarantines the
+ * record as hcdDisableSlot's does. Thread only, powered.
+ */
+static VOID hcdSweepAbandoned(PHCD_CONTROLLER hc)
+{
+    PHCD_USB_DEVICE dev;
+    ULONG i;
+
+    hc->SlotSweep = 0;
+    for (i = 1; i <= XHCI_MAX_SLOTS && !hcdHalted(hc); i++) {
+        dev = hc->SlotDevice[i];
+        if (dev != NULL && dev->Abandoned) {
+            hcdDisableRecord(hc, dev);
+        }
+    }
 }
 
 /* ----------------------------------------------------------------------- */
@@ -378,8 +462,13 @@ static ULONG hcdControlIn(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     XhciWriteDoorbell(&hc->Hc, dev->SlotId, 1);
 
     if (!hcdWaitEvent(&hc->XferDoneEvent, HCD_TRANSFER_WAIT_MS)) {
+        /* The TD is still on the ring and may yet DMA into the scratch:
+         * nothing reuses it until the recovery's HCRST has taken every slot
+         * (Codex review of batch (b), round 1, finding 8). */
         hc->XferWaitSlot = 0;
         hc->EnumTransfersTimedOut++;
+        hc->ScratchTainted = 1;
+        HcdSvcRequestReset(&hc->Hc);
         return 0;
     }
     hc->XferWaitSlot = 0;
@@ -505,8 +594,19 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
         if (code == XHCI_CC_SUCCESS) {
             next->SlotId = XHCI_TRB_GET_SLOT_ID(control);
             if (next->SlotId == 0 || next->SlotId > XHCI_MAX_SLOTS ||
-                hcdDeviceNew(hc, p->PortId, next->SlotId, p->Enum.Speed) ==
-                    NULL) {
+                hc->SlotDevice[next->SlotId] != NULL) {
+                /* A slot id no record can take, or one a quarantined
+                 * record still holds: the controller and this driver
+                 * disagree, which only its reset settles. */
+                next->SlotId = 0;
+                HcdSvcRequestReset(&hc->Hc);
+                return 1;
+            }
+            if (hcdDeviceNew(hc, p->PortId, next->SlotId, p->Enum.Speed) ==
+                NULL) {
+                /* The slot is enabled but unowned: give it back here, the
+                 * machine never learns of it (round 1, finding 11). */
+                (VOID)hcdDisableSlotId(hc, next->SlotId);
                 next->SlotId = 0;
                 return 1;
             }
@@ -579,8 +679,14 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
         return 0;
 
     case XHCI_ENUM_ACT_REPORT_GONE:
-        HcdDevicePdoGone(hc, p->Device);
+        /* The machine waits in Gone for that PDO's deletion (AwaitSerial,
+         * checked when PortPdoRemoved says to look) unless it went at
+         * once. */
+        p->AwaitSerial = HcdDevicePdoGone(hc, p->Device);
         hcdDisableSlot(hc, p);
+        if (p->AwaitSerial != 0) {
+            return 0;
+        }
         hcdEventInit(next, XHCI_ENUM_EV_PDO_REMOVED, 1);
         return 1;
 
@@ -590,17 +696,27 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
 }
 
 /* Run the machine from one event until it asks for nothing, retrying once
- * from Reset after a failure while the port still reads connected. */
+ * from Reset after a failure while the port still reads connected. A halted
+ * controller (hcdHalted) ends the run where it stands; the invalidation that
+ * follows the recovery settles the port from any state. */
 static VOID hcdRun(PHCD_CONTROLLER hc, PHCD_PORT p, XHCI_ENUM_EVENT event)
 {
     XHCI_ENUM_ACTION act;
     ULONG guard;
 
     for (guard = 0; guard < 64; guard++) {
+        /* An outcome is always fed back before the run can stop: a halt is
+         * looked for only between the machine's step and the next action,
+         * so a PDO just created is recorded (PdoExists) and the
+         * invalidation that follows takes the port to Gone, not Empty
+         * (Codex review of batch (b), round 3, finding 1). */
         (VOID)XhciEnumStep(&p->Enum, &event, &act);
+        if (act.Kind != XHCI_ENUM_ACT_NONE && hcdHalted(hc)) {
+            break;
+        }
         if (act.Kind == XHCI_ENUM_ACT_NONE ||
             !hcdPerform(hc, p, &act, &event)) {
-            if (p->Enum.State != XHCI_ENUM_FAILED ||
+            if (p->Enum.State != XHCI_ENUM_FAILED || hcdHalted(hc) ||
                 !hcdPortConnected(hc, p->PortId)) {
                 break;
             }
@@ -617,78 +733,357 @@ static VOID hcdRun(PHCD_CONTROLLER hc, PHCD_PORT p, XHCI_ENUM_EVENT event)
     }
 }
 
-/* One port marked changed: read it, acknowledge the change bits, and feed
- * its machine. */
+static VOID hcdFeed(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG kind)
+{
+    XHCI_ENUM_EVENT event;
+
+    hcdEventInit(&event, kind, 1);
+    hcdRun(hc, p, event);
+}
+
+/*
+ * One port marked changed: read it, acknowledge the change bits this read
+ * saw - only those, so a change arriving after the read stays for the next
+ * pass (Codex review of batch (b), round 1, finding 10) - and feed its
+ * machine by the connection change, not by the connection state alone
+ * (finding 9):
+ *
+ *   CSC set     the device left, or left and came back: whatever the port
+ *               held goes (DISCONNECT), and a connection now is a new device
+ *               (CONNECT);
+ *   CSC clear   a change of another kind (the reset's own PRC among them):
+ *               a port that reads disconnected goes, and an Empty one that
+ *               reads connected starts - a Failed port waits for a new
+ *               connection rather than retrying for ever.
+ */
 static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
 {
     PXHCI_EXTENSION ext;
-    XHCI_ENUM_EVENT event;
     ULONG portsc;
+    ULONG changes;
+    ULONG state;
 
     ext = &hc->Hc;
     portsc = XhciReadPortsc(ext, p->PortId);
     if (portsc == 0xFFFFFFFFUL) {
         return;
     }
-    if ((portsc & XHCI_PORTSC_CHANGE_MASK) != 0) {
+    changes = portsc & XHCI_PORTSC_CHANGE_MASK;
+    if (changes != 0) {
         XhciWritePortsc(ext, p->PortId,
-                        XhciPortscClearChanges(portsc,
-                                               XHCI_PORTSC_CHANGE_MASK));
+                        XhciPortscClearChanges(portsc, changes));
     }
-    hcdEventInit(&event,
-                 (portsc & XHCI_PORTSC_CCS) ? XHCI_ENUM_EV_CONNECT
-                                            : XHCI_ENUM_EV_DISCONNECT,
-                 1);
-    hcdRun(hc, p, event);
+    state = p->Enum.State;
+    if ((changes & XHCI_PORTSC_CSC) != 0) {
+        if (state != XHCI_ENUM_EMPTY && state != XHCI_ENUM_FAILED &&
+            state != XHCI_ENUM_GONE) {
+            hcdFeed(hc, p, XHCI_ENUM_EV_DISCONNECT);
+        }
+        if ((portsc & XHCI_PORTSC_CCS) != 0 && !hcdHalted(hc)) {
+            hcdFeed(hc, p, XHCI_ENUM_EV_CONNECT);
+        }
+    } else if ((portsc & XHCI_PORTSC_CCS) == 0) {
+        hcdFeed(hc, p, XHCI_ENUM_EV_DISCONNECT);
+    } else if (state == XHCI_ENUM_EMPTY) {
+        hcdFeed(hc, p, XHCI_ENUM_EV_CONNECT);
+    }
 }
 
-/* The thread's port service: every port the event DPC (or the controller's
- * start) marked. Only the controller thread calls it. */
-VOID HcdEnumService(PHCD_CONTROLLER hc)
+/*
+ * HCRST took every slot (recovery, a resume that reinitialised): drop every
+ * record without a command - the quarantined ones in SlotDevice[] with the
+ * ports' - take each port's PDO off the bus, and put each machine where a
+ * disconnect would, with the slot already gone. A port whose PDO PnP still
+ * holds waits in Gone for its removal; the rescan that follows finds what is
+ * connected now (Codex review of batch (b), round 1, finding 6).
+ */
+/*
+ * A port in Gone leaves it only once the PDO it waits for is deleted - that
+ * PDO, by serial, not whichever PDO last reported its port (Codex review of
+ * batch (b), round 2, finding 2). Pure transitions, no action run.
+ */
+static VOID hcdSettleGone(PHCD_CONTROLLER hc, PHCD_PORT p)
 {
-    PXHCI_EXTENSION ext;
-    ULONG mask;
-    ULONG port;
+    XHCI_ENUM_EVENT event;
+    XHCI_ENUM_ACTION act;
 
-    ext = &hc->Hc;
-    mask = (ULONG)InterlockedExchange((PLONG)&hc->PortChangeMask, 0);
-    if (mask == 0 || hc->ScratchVa == NULL) {
+    if (p->Enum.State != XHCI_ENUM_GONE ||
+        HcdDevicePdoExists(hc, p->AwaitSerial)) {
         return;
     }
-    for (port = 1; port <= ext->PortMap.PortCount && port <= 32; port++) {
-        if ((mask & (1UL << (port - 1))) == 0 ||
+    p->AwaitSerial = 0;
+    hcdEventInit(&event, XHCI_ENUM_EV_PDO_REMOVED, 1);
+    (VOID)XhciEnumStep(&p->Enum, &event, &act);
+}
+
+/* A port whose slot HCRST took: its record goes without a command, its PDO
+ * off the bus, and its machine where a disconnect would put it - waiting in
+ * Gone, by serial, for a PDO PnP still holds. */
+static VOID hcdDropPort(PHCD_CONTROLLER hc, PHCD_PORT p)
+{
+    XHCI_ENUM_EVENT event;
+    XHCI_ENUM_ACTION act;
+
+    if (p->Device != NULL) {
+        p->AwaitSerial = HcdDevicePdoGone(hc, p->Device);
+        hcdDeviceFree(hc, p->Device);
+        p->Device = NULL;
+    }
+    hcdEventInit(&event, XHCI_ENUM_EV_DISCONNECT, 1);
+    (VOID)XhciEnumStep(&p->Enum, &event, &act);
+    hcdSettleGone(hc, p);
+}
+
+static VOID hcdInvalidate(PHCD_CONTROLLER hc)
+{
+    ULONG i;
+
+    XHCI_DBG_TEXT("hcd: slots invalidated, dropping every device");
+    for (i = 0; i < XHCI_MAX_ROOT_PORTS; i++) {
+        hcdDropPort(hc, &hc->Ports[i]);
+    }
+    for (i = 1; i <= XHCI_MAX_SLOTS; i++) {
+        hcdDeviceFree(hc, hc->SlotDevice[i]);
+    }
+    hc->ScratchTainted = 0;
+    hc->SlotSweep = 0;
+}
+
+/*
+ * The root hub is going (HcdEnumDetach): every device leaves the bus and
+ * every machine starts again from Empty, so a root hub started again
+ * enumerates afresh (Codex review of batch (b), round 1, finding 1). With
+ * the controller unpowered no command can run: the records are left
+ * Abandoned, and the first powered pass disables their slots
+ * (hcdSweepAbandoned; round 2, finding 3) unless an invalidation has
+ * dropped them first.
+ */
+static VOID hcdDetach(PHCD_CONTROLLER hc, ULONG powered)
+{
+    PHCD_PORT p;
+    KIRQL oldIrql;
+    ULONG i;
+
+    XHCI_DBG_TEXT("hcd: root hub detaching, dropping every device");
+    for (i = 0; i < XHCI_MAX_ROOT_PORTS; i++) {
+        p = &hc->Ports[i];
+        if (p->Device != NULL) {
+            (VOID)HcdDevicePdoGone(hc, p->Device);
+            if (powered && !hcdHalted(hc)) {
+                hcdDisableSlot(hc, p);
+            } else {
+                p->Device->Abandoned = 1;
+                p->Device = NULL;
+                hc->SlotSweep = 1;
+            }
+        }
+        p->AwaitSerial = 0;
+        XhciEnumReset(&p->Enum);
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    for (i = 0; i < HCD_PORT_WORDS; i++) {
+        hc->PortPdoStarted[i] = 0;
+        hc->PortPdoRemoved[i] = 0;
+    }
+    hc->EnumDetachRequested = 0;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    (VOID)KeSetEvent(&hc->EnumDetachDone, IO_NO_INCREMENT, FALSE);
+}
+
+/*
+ * The thread's port service, under the power gate; `powered` is the
+ * controller's state read under it (Codex review of batch (b), round 1,
+ * finding 5). In order: an invalidation HCRST left, a detach the root hub
+ * asked for, the abandoned slots' sweep, the PDO handshake (design record 13 section 5.3: PDO_REMOVED
+ * takes a Gone port to Empty and a connected one on to a new enumeration,
+ * PDO_STARTED takes Present to Bound), then every port marked changed.
+ * Unpowered, only a detach runs; the rest stays marked. Only the controller
+ * thread calls it.
+ */
+VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
+{
+    PXHCI_EXTENSION ext;
+    ULONG changed[HCD_PORT_WORDS];
+    ULONG started[HCD_PORT_WORDS];
+    ULONG removed[HCD_PORT_WORDS];
+    KIRQL oldIrql;
+    ULONG invalidated;
+    ULONG detach;
+    ULONG bit;
+    ULONG port;
+    ULONG i;
+    PHCD_PORT p;
+
+    ext = &hc->Hc;
+    XhciControllerLockAcquire(ext, &oldIrql);
+    detach = hc->EnumDetachRequested;
+    invalidated = 0;
+    if (powered) {
+        invalidated = hc->SlotsInvalidated;
+        hc->SlotsInvalidated = 0;
+    }
+    XhciControllerLockRelease(ext, oldIrql);
+
+    /* An invalidation first: what HCRST took needs no Disable Slot, which a
+     * detach after it would otherwise send and, refused, turn into another
+     * reset (round 3, finding 2). */
+    if (invalidated) {
+        hcdInvalidate(hc);
+    }
+    if (detach) {
+        hcdDetach(hc, powered);
+    }
+    if (!powered) {
+        return;
+    }
+    if (hc->SlotSweep && !hcdHalted(hc)) {
+        hcdSweepAbandoned(hc);
+    }
+
+    XhciControllerLockAcquire(ext, &oldIrql);
+    for (i = 0; i < HCD_PORT_WORDS; i++) {
+        changed[i] = hc->PortChange[i];
+        started[i] = hc->PortPdoStarted[i];
+        removed[i] = hc->PortPdoRemoved[i];
+        hc->PortChange[i] = 0;
+        hc->PortPdoStarted[i] = 0;
+        hc->PortPdoRemoved[i] = 0;
+        if (invalidated) {
+            changed[i] = 0xFFFFFFFFUL;
+        }
+    }
+    XhciControllerLockRelease(ext, oldIrql);
+
+    for (port = 1; port <= XHCI_MAX_ROOT_PORTS; port++) {
+        bit = 1UL << ((port - 1) % 32UL);
+        p = &hc->Ports[port - 1];
+        if ((removed[(port - 1) / 32UL] & bit) != 0 &&
+            p->Enum.State == XHCI_ENUM_GONE) {
+            /* The bit says when to look; the serial says whether the PDO
+             * this port waits for is the one that went. */
+            hcdSettleGone(hc, p);
+            changed[(port - 1) / 32UL] |= bit;
+        }
+        if ((started[(port - 1) / 32UL] & bit) != 0) {
+            hcdFeed(hc, p, XHCI_ENUM_EV_PDO_STARTED);
+        }
+    }
+
+    if (!hc->RootHubStarted || hc->ScratchVa == NULL || hcdHalted(hc)) {
+        /* Nothing is enumerated without a started root hub to report to;
+         * its start marks every port again. A halted controller's recovery
+         * does the same through the invalidation. */
+        return;
+    }
+    for (port = 1; port <= ext->PortMap.PortCount &&
+                   port <= XHCI_MAX_ROOT_PORTS; port++) {
+        if ((changed[(port - 1) / 32UL] & (1UL << ((port - 1) % 32UL))) ==
+                0 ||
             !XhciPortIsManaged(&ext->PortMap, port)) {
             continue;
         }
         hcdPortChanged(hc, &hc->Ports[port - 1]);
+        if (hcdHalted(hc)) {
+            break;
+        }
     }
 }
 
-/* At a start: every port empty, every port numbered. IRQL: PASSIVE_LEVEL. */
+/*
+ * The root hub's removal (hcd_rh.c): no PDO is created from here on, and the
+ * thread drops every device and resets every machine before this returns, so
+ * the caller can release the PDOs with nothing listing more. Without a
+ * running thread the stop has dropped them already (HcdEnumDrop).
+ * IRQL: PASSIVE_LEVEL.
+ */
+VOID HcdEnumDetach(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+    ULONG wait;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->RootHubStarted = 0;
+    wait = hc->ThreadRunning;
+    if (wait) {
+        hc->EnumDetachRequested = 1;
+        KeClearEvent(&hc->EnumDetachDone);
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (!wait) {
+        return;
+    }
+    HcdThreadWake(hc);
+    (VOID)KeWaitForSingleObject(&hc->EnumDetachDone, Executive, KernelMode,
+                                FALSE, NULL);
+}
+
+/*
+ * The root hub's start (hcd_rh.c): PDOs may be created, and every port is
+ * looked at. IRQL: PASSIVE_LEVEL.
+ */
+VOID HcdEnumAttach(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+    ULONG i;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->RootHubStarted = 1;
+    for (i = 0; i < HCD_PORT_WORDS; i++) {
+        hc->PortChange[i] = 0xFFFFFFFFUL;
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    HcdThreadWake(hc);
+}
+
+/* At a start: every port empty, every port numbered, no request pending -
+ * except a port still waiting in Gone for a PDO PnP holds across the
+ * controller's stop, which keeps waiting (round 2, finding 2). RootHubStarted
+ * is kept: a root hub started before a controller restart is still started.
+ * IRQL: PASSIVE_LEVEL, the thread not yet running. */
 VOID HcdEnumInit(PHCD_CONTROLLER hc)
 {
+    PHCD_PORT p;
     ULONG i;
 
     for (i = 0; i < XHCI_MAX_ROOT_PORTS; i++) {
-        XhciEnumReset(&hc->Ports[i].Enum);
-        hc->Ports[i].PortId = i + 1;
-        hc->Ports[i].Device = NULL;
+        p = &hc->Ports[i];
+        p->PortId = i + 1;
+        p->Device = NULL;
+        if (p->Enum.State == XHCI_ENUM_GONE &&
+            HcdDevicePdoExists(hc, p->AwaitSerial)) {
+            continue;
+        }
+        XhciEnumReset(&p->Enum);
+        p->AwaitSerial = 0;
     }
     for (i = 0; i <= XHCI_MAX_SLOTS; i++) {
         hc->SlotDevice[i] = NULL;
     }
+    for (i = 0; i < HCD_PORT_WORDS; i++) {
+        hc->PortChange[i] = 0xFFFFFFFFUL;
+        hc->PortPdoStarted[i] = 0;
+        hc->PortPdoRemoved[i] = 0;
+    }
+    hc->SlotsInvalidated = 0;
+    hc->EnumDetachRequested = 0;
+    hc->ScratchTainted = 0;
+    (VOID)KeSetEvent(&hc->EnumDetachDone, IO_NO_INCREMENT, FALSE);
 }
 
 /* At a stop: the HCRST that follows takes every slot, so the records go
- * without commands. IRQL: PASSIVE_LEVEL, the thread stopped. */
+ * without commands, the quarantined and abandoned ones with the rest, and
+ * each port is dropped as an invalidation drops it - a port whose PDO PnP
+ * still holds waits for it in Gone (round 2, finding 2). IRQL:
+ * PASSIVE_LEVEL, the thread stopped. */
 VOID HcdEnumDrop(PHCD_CONTROLLER hc)
 {
     ULONG i;
 
     for (i = 0; i < XHCI_MAX_ROOT_PORTS; i++) {
-        HcdDevicePdoGone(hc, hc->Ports[i].Device);
-        hcdDeviceFree(hc, hc->Ports[i].Device);
-        hc->Ports[i].Device = NULL;
-        XhciEnumReset(&hc->Ports[i].Enum);
+        hcdDropPort(hc, &hc->Ports[i]);
     }
+    for (i = 1; i <= XHCI_MAX_SLOTS; i++) {
+        hcdDeviceFree(hc, hc->SlotDevice[i]);
+    }
+    hc->SlotSweep = 0;
 }

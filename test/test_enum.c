@@ -239,12 +239,158 @@ static void test_disconnects(void)
     CHECK_EQ(p.PdoExists, 0, "with no PDO");
 }
 
+/* The events of a whole Full Speed enumeration with an 8-byte EP0, so the
+ * Evaluate Context step is in it, through to the PDO's start. */
+#define FULL_SEQUENCE 12
+
+static XHCI_ENUM_EVENT full_event(ULONG i, ULONG ok)
+{
+    XHCI_ENUM_EVENT e;
+
+    switch (i) {
+    case 0:  e = ev(XHCI_ENUM_EV_CONNECT, ok); break;
+    case 1:  e = ev(XHCI_ENUM_EV_DEBOUNCED, ok); break;
+    case 2:  e = ev(XHCI_ENUM_EV_RESET_DONE, ok);
+             e.Speed = XHCI_ENUM_SPEED_FULL; break;
+    case 3:  e = ev(XHCI_ENUM_EV_COMMAND_DONE, ok); e.SlotId = 4; break;
+    case 4:  e = ev(XHCI_ENUM_EV_COMMAND_DONE, ok); break;
+    case 5:  e = ev(XHCI_ENUM_EV_TRANSFER_DONE, ok);
+             e.Bytes = 8; e.Value = 8; break;
+    case 6:  e = ev(XHCI_ENUM_EV_COMMAND_DONE, ok); break;
+    case 7:  e = ev(XHCI_ENUM_EV_TRANSFER_DONE, ok); e.Bytes = 18; break;
+    case 8:  e = ev(XHCI_ENUM_EV_TRANSFER_DONE, ok);
+             e.Bytes = 9; e.Value = 34; break;
+    case 9:  e = ev(XHCI_ENUM_EV_TRANSFER_DONE, ok); e.Bytes = 34; break;
+    case 10: e = ev(XHCI_ENUM_EV_PDO_CREATED, ok); break;
+    default: e = ev(XHCI_ENUM_EV_PDO_STARTED, ok); break;
+    }
+    return e;
+}
+
+/* Feed the first `count` events of the sequence. */
+static void drive_full(PXHCI_ENUM_PORT p, ULONG count, PXHCI_ENUM_ACTION a)
+{
+    ULONG i;
+
+    XhciEnumReset(p);
+    a->Kind = XHCI_ENUM_ACT_NONE;
+    for (i = 0; i < count; i++) {
+        step(p, full_event(i, 1), a);
+    }
+}
+
+/* Every step's failure, its cause, and the slot given back from the step
+ * that owns one on (Codex review of batch (b), round 1, finding 16). */
+static void test_each_step_fails(void)
+{
+    static const ULONG cause[FULL_SEQUENCE] = {
+        0, 0, XHCI_ENUM_FAIL_RESET, XHCI_ENUM_FAIL_NO_SLOT,
+        XHCI_ENUM_FAIL_ADDRESS, XHCI_ENUM_FAIL_DESCRIPTOR,
+        XHCI_ENUM_FAIL_ADDRESS, XHCI_ENUM_FAIL_DESCRIPTOR,
+        XHCI_ENUM_FAIL_CONFIG, XHCI_ENUM_FAIL_CONFIG, XHCI_ENUM_FAIL_PDO, 0
+    };
+    XHCI_ENUM_PORT p;
+    XHCI_ENUM_ACTION a;
+    ULONG i;
+
+    for (i = 2; i < FULL_SEQUENCE - 1; i++) {
+        drive_full(&p, i, &a);
+        step(&p, full_event(i, 0), &a);
+        CHECK_EQ(p.State, XHCI_ENUM_FAILED, "a failed step fails the port");
+        CHECK_EQ(p.FailCause, cause[i], "with that step's cause");
+        CHECK_EQ(a.Kind, i >= 4 ? XHCI_ENUM_ACT_DISABLE_SLOT
+                                : XHCI_ENUM_ACT_NONE,
+                 "the slot given back exactly when one was held");
+        CHECK_EQ(p.SlotId, 0, "and forgotten");
+        CHECK_EQ(p.PdoExists, 0, "with no PDO");
+    }
+}
+
+/* Short reads that report success (round 1, finding 16): each is refused. */
+static void test_short_reads(void)
+{
+    XHCI_ENUM_PORT p;
+    XHCI_ENUM_ACTION a;
+    XHCI_ENUM_EVENT e;
+
+    drive_full(&p, 5, &a);
+    e = full_event(5, 1);
+    e.Bytes = 7;
+    step(&p, e, &a);
+    CHECK_EQ(p.FailCause, XHCI_ENUM_FAIL_DESCRIPTOR, "7 of 8 bytes");
+
+    drive_full(&p, 7, &a);
+    e = full_event(7, 1);
+    e.Bytes = 17;
+    step(&p, e, &a);
+    CHECK_EQ(p.FailCause, XHCI_ENUM_FAIL_DESCRIPTOR, "17 of 18 bytes");
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_DISABLE_SLOT, "the slot given back");
+
+    drive_full(&p, 8, &a);
+    e = full_event(8, 1);
+    e.Bytes = 8;
+    step(&p, e, &a);
+    CHECK_EQ(p.FailCause, XHCI_ENUM_FAIL_CONFIG, "8 of 9 configuration bytes");
+
+    drive_full(&p, 8, &a);
+    e = full_event(8, 1);
+    e.Value = 8;
+    step(&p, e, &a);
+    CHECK_EQ(p.FailCause, XHCI_ENUM_FAIL_CONFIG,
+             "a wTotalLength shorter than its own header");
+
+    drive_full(&p, 9, &a);
+    e = full_event(9, 1);
+    e.Bytes = 33;
+    step(&p, e, &a);
+    CHECK_EQ(p.FailCause, XHCI_ENUM_FAIL_CONFIG, "33 of 34 bytes");
+    CHECK_EQ(p.State, XHCI_ENUM_FAILED, "is no Present");
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_DISABLE_SLOT, "the slot given back");
+
+    drive_full(&p, 9, &a);
+    e = full_event(9, 1);
+    e.Bytes = 35;
+    step(&p, e, &a);
+    CHECK_EQ(p.FailCause, XHCI_ENUM_FAIL_CONFIG, "35 of 34 bytes");
+}
+
+/* A disconnect after every step of the sequence (round 1, finding 16). */
+static void test_disconnect_every_stage(void)
+{
+    XHCI_ENUM_PORT p;
+    XHCI_ENUM_ACTION a;
+    ULONG held;
+    ULONG pdo;
+    ULONG i;
+
+    for (i = 1; i <= FULL_SEQUENCE; i++) {
+        drive_full(&p, i, &a);
+        held = p.SlotId != 0;
+        pdo = p.PdoExists;
+        step(&p, ev(XHCI_ENUM_EV_DISCONNECT, 1), &a);
+        if (pdo) {
+            CHECK_EQ(p.State, XHCI_ENUM_GONE, "with a PDO: Gone");
+            CHECK_EQ(a.Kind, XHCI_ENUM_ACT_REPORT_GONE, "reported missing");
+        } else {
+            CHECK_EQ(p.State, XHCI_ENUM_EMPTY, "without a PDO: Empty");
+            CHECK_EQ(a.Kind, held ? XHCI_ENUM_ACT_DISABLE_SLOT
+                                  : XHCI_ENUM_ACT_NONE,
+                     "the slot given back exactly when one was held");
+        }
+        CHECK_EQ(p.SlotId, 0, "no slot is kept");
+        CHECK_EQ(held, i >= 4 && i <= FULL_SEQUENCE, "slot held from step 4");
+    }
+}
+
 int main(void)
 {
     test_clean_paths();
     test_bad_sizes();
     test_failures_and_retry();
     test_disconnects();
+    test_each_step_fails();
+    test_short_reads();
+    test_disconnect_every_stage();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

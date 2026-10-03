@@ -12,9 +12,11 @@
  * (section 5.2).
  *
  * Lifetime, the WDM bus-driver rule: the root-hub PDO is deleted by the
- * controller FDO's remove, or by its own remove once the controller has
- * reported it missing - never by its own remove alone, which PnP sends on a
- * disable of the root hub while the controller still enumerates it.
+ * controller FDO's remove when PnP has removed it, by its own remove once
+ * the controller has reported it missing or orphaned it - never by its own
+ * remove alone, which PnP sends on a disable of the root hub while the
+ * controller still enumerates it. The root-hub FDO reaches the controller
+ * only through that PDO's extension, which an orphan clears.
  *
  * IRQL: PASSIVE_LEVEL throughout (PnP and power on DO_POWER_PAGABLE objects).
  */
@@ -23,7 +25,7 @@
 #include "xhci_dbg.h"
 
 static const WCHAR hcdRootHubId[] = L"XHCI98\\ROOT_HUB";
-static const WCHAR hcdRootHubText[] = L"xhci98 USB 3.x Root Hub";
+static const WCHAR hcdRootHubText[] = L"xHCI98 USB 3.x Root Hub";
 
 static LONG hcdRootHubSerial;
 
@@ -133,13 +135,33 @@ NTSTATUS HcdRootHubCreatePdo(PHCD_CONTROLLER hc)
     return STATUS_SUCCESS;
 }
 
-/* The controller's remove: the child goes with it. */
+/*
+ * The controller's remove, the controller stopped: the device PDOs are
+ * settled first (HcdDevicePdoReleaseAll), then the root-hub PDO - deleted
+ * when PnP has removed it, orphaned when it still awaits its REMOVE (a
+ * surprise removal with the root hub's handles open): it forgets the
+ * controller, whose storage goes now, and deletes itself at that REMOVE
+ * (Codex review of batch (b), round 1, finding 2). PnP sends a parent's
+ * remove only after its children's, one at a time, so this does not race
+ * the root hub's own handlers.
+ */
 VOID HcdRootHubDeletePdo(PHCD_CONTROLLER hc)
 {
-    if (hc->RootHubPdo != NULL) {
-        IoDeleteDevice(hc->RootHubPdo);
-        hc->RootHubPdo = NULL;
+    PHCD_ROOTHUB_PDO ext;
+
+    HcdDevicePdoReleaseAll(hc);
+    if (hc->RootHubPdo == NULL) {
+        return;
     }
+    ext = (PHCD_ROOTHUB_PDO)hc->RootHubPdo->DeviceExtension;
+    ext->Controller = NULL;
+    if (ext->RemoveReceived || !ext->Reported) {
+        /* PnP has removed it, or never learned of it and so never will
+         * (Codex review of batch (b), round 2, finding 4). */
+        ext->Deleted = 1;
+        IoDeleteDevice(hc->RootHubPdo);
+    }
+    hc->RootHubPdo = NULL;
 }
 
 /*
@@ -172,6 +194,7 @@ NTSTATUS HcdControllerBusRelations(PHCD_CONTROLLER hc, PIRP irp)
     rel->Objects[count] = hc->RootHubPdo;
     rel->Count = count + 1;
     ObReferenceObject(hc->RootHubPdo);
+    ((PHCD_ROOTHUB_PDO)hc->RootHubPdo->DeviceExtension)->Reported = 1;
     if (old != NULL) {
         HcdPoolFreeForeign(old);
     }
@@ -254,6 +277,7 @@ NTSTATUS HcdRootHubPdoPnp(PHCD_ROOTHUB_PDO pdo, PIRP irp)
     switch (stack->MinorFunction) {
     case IRP_MN_START_DEVICE:
         pdo->Started = 1;
+        pdo->RemoveReceived = 0;
         pdo->Common.PnpState = HCD_PNP_STARTED;
         return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
 
@@ -272,8 +296,19 @@ NTSTATUS HcdRootHubPdoPnp(PHCD_ROOTHUB_PDO pdo, PIRP irp)
     case IRP_MN_REMOVE_DEVICE:
         pdo->Started = 0;
         pdo->Common.PnpState = HCD_PNP_REMOVED;
-        if (pdo->ReportedMissing) {
-            pdo->Controller->RootHubPdo = NULL;
+        if (pdo->Deleted) {
+            /* A REMOVE again while a reference keeps the object (round 2,
+             * finding 1): deleted once already. */
+            return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+        }
+        pdo->RemoveReceived = 1;
+        if (pdo->Controller == NULL || pdo->ReportedMissing) {
+            /* Orphaned by the controller's remove, or reported missing. */
+            if (pdo->Controller != NULL) {
+                pdo->Controller->RootHubPdo = NULL;
+                pdo->Controller = NULL;
+            }
+            pdo->Deleted = 1;
             HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
             IoDeleteDevice(pdo->Common.Self);
             return STATUS_SUCCESS;
@@ -380,6 +415,14 @@ static VOID hcdRhIoLeave(PHCD_ROOTHUB_FDO fdo)
     }
 }
 
+/* The controller, through the root-hub PDO's extension; NULL once the
+ * controller's remove has orphaned that PDO (HcdRootHubDeletePdo). The FDO
+ * keeps no copy, which would outlive the controller's storage. */
+static PHCD_CONTROLLER hcdRhController(PHCD_ROOTHUB_FDO fdo)
+{
+    return ((PHCD_ROOTHUB_PDO)fdo->Pdo->DeviceExtension)->Controller;
+}
+
 static NTSTATUS hcdRhPassDown(PHCD_ROOTHUB_FDO fdo, PIRP irp)
 {
     IoSkipCurrentIrpStackLocation(irp);
@@ -421,7 +464,6 @@ NTSTATUS HcdRootHubAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
     ext->Common.DevicePower = PowerDeviceD0;
     ext->Common.SystemPower = PowerSystemWorking;
     ext->Pdo = pdo;
-    ext->Controller = pdoExt->Controller;
     ext->OutstandingIo = 1;
     KeInitializeEvent(&ext->RemoveEvent, NotificationEvent, FALSE);
 
@@ -439,6 +481,7 @@ NTSTATUS HcdRootHubAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
 NTSTATUS HcdRootHubFdoPnp(PHCD_ROOTHUB_FDO fdo, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
+    PHCD_CONTROLLER hc;
     KEVENT done;
     NTSTATUS status;
 
@@ -450,12 +493,22 @@ NTSTATUS HcdRootHubFdoPnp(PHCD_ROOTHUB_FDO fdo, PIRP irp)
         hcdRhIoLeave(fdo);
         (VOID)KeWaitForSingleObject(&fdo->RemoveEvent, Executive, KernelMode,
                                     FALSE, NULL);
+        /*
+         * The bus is detached before its children are settled: the thread
+         * drops every device and stops creating PDOs (HcdEnumDetach), and
+         * only then is each PDO deleted or orphaned (HcdDevicePdoReleaseAll;
+         * Codex review of batch (b), round 1, findings 1 and 2). Both run
+         * before the IRP goes down, since the PDO below may delete itself,
+         * and its extension with the controller pointer, on the way.
+         */
+        hc = hcdRhController(fdo);
+        if (hc != NULL) {
+            HcdEnumDetach(hc);
+            HcdDevicePdoReleaseAll(hc);
+        }
         irp->IoStatus.Status = STATUS_SUCCESS;
         status = hcdRhPassDown(fdo, irp);
         IoDetachDevice(fdo->LowerDevice);
-        /* The device PDOs still listed go with their parent (the WDM bus
-         * rule): PnP has removed each of them already. */
-        HcdDevicePdoDeleteAll(fdo->Controller);
         IoDeleteDevice(fdo->Common.Self);
         return status;
     }
@@ -476,6 +529,11 @@ NTSTATUS HcdRootHubFdoPnp(PHCD_ROOTHUB_FDO fdo, PIRP irp)
         status = irp->IoStatus.Status;
         if (NT_SUCCESS(status)) {
             fdo->Common.PnpState = HCD_PNP_STARTED;
+            hc = hcdRhController(fdo);
+            if (hc != NULL) {
+                /* PDOs may be created now, and every port is looked at. */
+                HcdEnumAttach(hc);
+            }
         }
         status = HcdCompleteIrp(irp, status, 0);
         hcdRhIoLeave(fdo);
@@ -503,7 +561,8 @@ NTSTATUS HcdRootHubFdoPnp(PHCD_ROOTHUB_FDO fdo, PIRP irp)
             PDEVICE_RELATIONS rel;
 
             old = (PDEVICE_RELATIONS)irp->IoStatus.Information;
-            rel = HcdDevicePdoRelations(fdo->Controller, old);
+            hc = hcdRhController(fdo);
+            rel = (hc != NULL) ? HcdDevicePdoRelations(hc, old) : NULL;
             if (rel != NULL) {
                 if (old != NULL) {
                     HcdPoolFreeForeign(old);

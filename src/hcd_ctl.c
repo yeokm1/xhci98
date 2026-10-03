@@ -281,6 +281,7 @@ VOID HcdControllerInitObjects(PHCD_CONTROLLER hc)
     KeInitializeEvent(&hc->CmdDoneEvent, SynchronizationEvent, FALSE);
     KeInitializeEvent(&hc->PowerGate, SynchronizationEvent, TRUE);
     KeInitializeEvent(&hc->XferDoneEvent, NotificationEvent, FALSE);
+    KeInitializeEvent(&hc->EnumDetachDone, NotificationEvent, TRUE);
 }
 
 /*
@@ -422,14 +423,18 @@ static VOID NTAPI hcdThread(PVOID Context)
             break;
         }
         hcdPoll(hc);
-        if ((hc->Hc.Flags & XHCI_EXT_FLAG_STARTED) != 0 &&
-            hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0) {
-            HcdPowerGateEnter(hc);
-            HcdEnumService(hc);
-            HcdPowerGateLeave(hc);
-        }
+        /* The powered state is read under the gate, as the recovery's is: a
+         * check before it could pass and then lose to a power-down (Codex
+         * review of batch (b), round 1, finding 5). */
+        HcdPowerGateEnter(hc);
+        HcdEnumService(hc, (hc->Hc.Flags & XHCI_EXT_FLAG_STARTED) != 0 &&
+                               hc->Common.DevicePower == PowerDeviceD0 &&
+                               !hc->SuspendedInD0);
+        HcdPowerGateLeave(hc);
     }
     XHCI_DBG_TEXT("hcd: controller thread leaving its loop");
+    /* No root hub waits on a thread that is gone (HcdEnumDetach). */
+    (VOID)KeSetEvent(&hc->EnumDetachDone, IO_NO_INCREMENT, FALSE);
     (VOID)KeSetEvent(&hc->ThreadExited, IO_NO_INCREMENT, FALSE);
     (VOID)PsTerminateSystemThread(STATUS_SUCCESS);
 }

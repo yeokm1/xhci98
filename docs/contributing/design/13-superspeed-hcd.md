@@ -157,8 +157,9 @@ is the index; this is the same list in the proposal's order:
 - **Pool and the HCD's own DMA buffers are allowed**, by import-allowlist
   rows with Windows 98 export evidence (task 25.3). The miniport's "allocate
   no pool" rule stands for `src/`.
-- **The device names** are `xhci98 USB 3.x eXtensible Host Controller` and
-  `xhci98 USB 3.x Root Hub` (owner, 2026-10-02), the INFs' device
+- **The device names** are `xHCI98 USB 3.x eXtensible Host Controller` and
+  `xHCI98 USB 3.x Root Hub` (owner, 2026-10-02; spelled xHCI98 by the owner
+  2026-10-03), the INFs' device
   descriptions on every path.
 - **The root hub is a devnode, and both property tabs are kept** (owner,
   2026-10-02, reversing a narrower answer given on the Codex review earlier
@@ -219,7 +220,7 @@ successor"):
 |---|---|---|
 | Lifted, the pure core | `xhci_mem.c`, `xhci_ring.c`, `xhci_caps.c`, `xhci_port.c`, `xhci_ctx.c`, `xhci_topo.c`, `xhci_desc.c`, `xhci_log.c` and their headers | Built, DDK-free (design record 03), host suites in `test\` unchanged. Three include `xhci_usbport.h` for its DDK-free type declarations, and `xhci.h` still carries the miniport's extension layout, which the HCD embeds unchanged in its controller FDO (`hcd.h`); the carve down to what the HCD uses waits for 26-A.5, which replaces the transfer structures most of it describes |
 | Adapted | `xhci_init.c`, `xhci_cmd.c`, `xhci_evt.c`, `xhci_pci.c` | **Built since 26-A.2** (2026-10-03), with `xhci_dbg.c`: every usbport service call replaced by `hcd_svc.h`'s (wait, configuration space, the one-shot timer, the reset request, the fail-closed DMA verdict, the controller lock). Their comments still argue in usbport's terms; `hcd_svc.h`, "READING THE KEPT FILES", is the key |
-| Rewritten | `xhci_dispatch.c`, `xhci_rh.c`, `xhci_slot.c`, `xhci_xfer.c`, `xhci_vhub.c`, `xhci_probe.c` | **Deleted** from the tree with their host suites (`test_xfer`, `test_iso`, `test_vhub`, `test_init`), as are `scripts\make-usbport-lib.cmd` and `scripts\usbport-lib\`. Their headers stay until 26-A.5's carve, because `xhci.h` includes them. `xhci_xfer.c` came back in 26-A.2 holding only the completion-code table, lifted unchanged |
+| Rewritten | `xhci_dispatch.c`, `xhci_rh.c`, `xhci_slot.c`, `xhci_xfer.c`, `xhci_vhub.c`, `xhci_probe.c` | **Deleted** from the tree with their host suites (`test_xfer`, `test_iso`, `test_vhub`, `test_init`), as are `scripts\make-usbport-lib.cmd` and `scripts\usbport-lib\`. Their headers stay until 26-A.5's carve, because `xhci.h` includes them. `xhci_xfer.c` came back in 26-A.2 holding only the completion-code table, lifted unchanged, and whole in 26-A.4 (its pure TD builder; corrected 2026-10-03) |
 | New | `hcd_*.c`, `hcd.h`, `hcd_svc.h` | The scaffold of 25.8 (below) became the controller FDO in 26-A.1 and 26-A.2: `hcd_entry.c`, `hcd_pnp.c`, `hcd_power.c`, `hcd_ctl.c`, `hcd_svc.c`, `hcd_dma.c`, `hcd_dev.c`; `hcd_pool.c` waits for the first allocation |
 
 One measurement from the first layout is kept because it constrains any
@@ -268,7 +269,7 @@ inside the bus that the PnP manager never sees.
 
 Every device PDO and every function PDO is a child of the root hub, not of the
 hub it is plugged into: external hubs are objects of the bus (the decisions
-table), so a device behind a hub appears directly under `xhci98 USB 3.x Root
+table), so a device behind a hub appears directly under `xHCI98 USB 3.x Root
 Hub` in Device Manager, and the Power tab reports the budget the bus itself
 keeps (section 8).
 
@@ -283,8 +284,27 @@ Lifetimes follow the WDM rules the targets enforce, with two of this
 project's own. A device that leaves (its port reports a disconnect, its hub is
 removed, or the controller stops) has its slot disabled and its pipes failed
 at once, but its PDO lives until the PnP manager has been told it is missing
-in a `QUERY_DEVICE_RELATIONS` answer and has sent the PDO its remove; the
-device object inside the bus is freed only then. And a surprise removal on
+in a `QUERY_DEVICE_RELATIONS` answer and has sent the PDO its remove. The
+device object inside the bus goes with the slot, not with the PDO: the PDO
+keeps copies of the descriptors its ids are made from, and nothing of the
+device object (corrected 2026-10-03 from "freed only then", which the
+implementation never did; Codex review of batch (b), round 1, finding 17).
+A Disable Slot the controller does not confirm is the exception: the device
+object stays, quarantined in the slot table, until the controller reset that
+failure requests has taken every slot. The PDO's own lifecycle, as 26-A.4
+implements it (`hcd_pdo.c`): only the controller thread lists a device PDO
+or moves it off the relations (the controller's stop does too, with the
+thread stopped), the other unlinkings being the PDO's own deleting remove
+and its parent's release, each under the PDO-list lock (5.4; corrected
+after round 2 of the same review, note 7), and each relations answer marks
+the PDOs it carries as reported
+and the unlisted ones as reported missing, under the same lock hold as the
+copy; a PDO is deleted by its own remove once reported missing, at once by
+the thread when the PnP manager never saw it, or by its parent's removal when
+the PnP manager has removed it already - and when its parent goes first while
+it still awaits its remove, it is orphaned, forgets the controller, and
+deletes itself at that remove. The root-hub PDO follows the same orphan rule
+against the controller FDO. And a surprise removal on
 Windows 98 arrives as an out-of-sequence `IRP_MN_REMOVE_DEVICE` with no
 `SURPRISE_REMOVAL` before it (`docs/usb-xhci-info/win98-wdm.md`), so every
 remove handler is written to be the first PnP IRP the object sees after
@@ -312,6 +332,24 @@ wait. The states and their exits:
 | `Bound` | | the PDOs' own IRPs are served (26-A.5, 26-A.6) | a disconnect or a parent's removal: `Gone` |
 | `Gone` | | slot disabled, pipes failed, PDOs reported missing at the next relations query | the PDOs' removes complete: `Empty` |
 | `Failed` | any failed step | the slot disabled if one was enabled; counted per cause | `Empty` on the next connect change; one retry of `Reset` first, as the targets' own hub drivers do (section 10 has the retry rule) |
+
+What counts as a connect change, as 26-A.3 implements it for root ports
+(`hcd_enum.c`): the port's connect status change bit, not its connection
+state. A port whose `PORTSC.CSC` is set gives up what it held (a disconnect)
+and, when it reads connected, starts a new enumeration; a change of another
+kind - the reset's own `PRC` among them - only takes a port that reads
+disconnected to `Empty` and an `Empty` port that reads connected into
+`Debounce`, so a `Failed` port waits for a real reconnection rather than
+retrying for ever. Only the change bits the read saw are acknowledged. A
+controller reset (recovery, a resume that reinitialised) or the root hub's
+removal settles every port from whatever state it is in, and the PDOs are
+reported missing. After a reset the device objects go without commands and
+the ports are rescanned; a port waiting in `Gone` keeps waiting for the PDO
+it reported, by that PDO's serial, so a later device on the port is not
+enumerated before the earlier PDO is deleted. On the root hub's removal a
+powered controller gives each slot back with Disable Slot, and an unpowered
+one leaves the records for its first powered pass to disable; every port then
+starts again from `Empty` when the root hub starts again.
 
 Two things are deliberately missing. There is no `SET_ADDRESS` anywhere: the
 bus addresses with the Address Device command, and since the bus builds the
@@ -359,9 +397,15 @@ What is new has three layers, in this order from outermost to innermost:
    can block between steps and a work item borrowed from the system pool must
    not; 26-A.2 confirms the choice on both primaries, and the same thread is
    where 26-A.8's PASSIVE-level log flusher runs.
-2. **The PDO-list lock.** A spin lock in the root-hub FDO's extension guarding
-   the list `QUERY_DEVICE_RELATIONS` reads and the enumeration context
-   writes. Held only to link, unlink or copy the list.
+2. **The PDO-list lock.** A spin lock (`PdoListLock`) guarding the device-PDO
+   lists `QUERY_DEVICE_RELATIONS` reads and marks. Drafted in the root-hub
+   FDO's extension, it sits in the controller's since 26-A.4, so that the
+   controller's stop and remove reach it with no root hub present. The
+   enumeration context links and unlinks the PDOs, a PDO's deleting remove
+   and a parent's release unlink them too, and so the PDO list is the one
+   part of the topology whose single-writer rule in layer 1 does not hold
+   (Codex review of batch (b), round 2, note 7). Held only to link, unlink,
+   mark or copy the lists.
 3. **The controller lock**, innermost, as above.
 
 A function driver's IRP enters at the PDO at up to DISPATCH_LEVEL and touches
@@ -385,7 +429,7 @@ Two INFs in `src\`, the files the miniport's two were:
 Windows 7 x64). Each models section carries two models: the controller under
 `PCI\CC_0C0330` and the root hub under `XHCI98\ROOT_HUB`, both bound to
 `xhci98.sys` through one service, `xhci98`. The device descriptions are
-the owner's names: `xhci98 USB 3.x eXtensible Host Controller` and `xhci98
+the owner's names: `xHCI98 USB 3.x eXtensible Host Controller` and `xHCI98
 USB 3.x Root Hub`. Both files pass the INF gate under its HCD profile
 (section 9).
 

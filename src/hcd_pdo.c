@@ -25,6 +25,7 @@
  */
 
 #include "hcd.h"
+#include "xhci_hw.h"
 #include "xhci_dbg.h"
 
 static LONG hcdDevicePdoSerial;
@@ -197,9 +198,59 @@ static NTSTATUS hcdDeviceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
 /* Creation, listing and loss - the controller thread's side               */
 /* ----------------------------------------------------------------------- */
 
+/*
+ * THE LIFECYCLE (Codex review of batch (b), round 1, findings 1-4 and 12).
+ * Only the controller thread lists and unlists a PDO; BusRelations answers
+ * mark it, under PdoListLock, in the same hold that copies the list. A PDO is
+ *
+ *   listed    - on DevicePdos while its device is present; every relations
+ *               answer carries it and sets Reported;
+ *   gone      - on GonePdos once its device left; the next relations answer
+ *               omits it and sets MissingReported;
+ *   deleted   - by its own IRP_MN_REMOVE_DEVICE once it is gone and either
+ *               reported missing or never reported at all; by the thread at
+ *               once when it leaves before PnP ever saw it; or by its
+ *               parent's removal when PnP has already removed it;
+ *   orphaned  - when its parent goes first while it still awaits a REMOVE
+ *               (a surprise removal with handles open): it leaves both lists,
+ *               forgets the controller, and deletes itself at that REMOVE.
+ *
+ * A REMOVE while still listed (a disable of the device) keeps the PDO, the
+ * WDM bus rule. A deletion is fed back to the port's machine as PDO_REMOVED
+ * (the port bit PortPdoRemoved), and a start as PDO_STARTED, so the machine
+ * waits in Gone for the PDO it reported and reaches Bound (design record 13
+ * section 5.3).
+ */
+
+/* A port's handshake bit, under the controller lock. IRQL: <= DISPATCH. */
+static VOID hcdPortNotify(PHCD_CONTROLLER hc, PULONG bits, ULONG port)
+{
+    KIRQL oldIrql;
+
+    if (port == 0 || port > XHCI_MAX_ROOT_PORTS) {
+        return;
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    bits[(port - 1) / 32UL] |= 1UL << ((port - 1) % 32UL);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    HcdThreadWake(hc);
+}
+
+/* The one IoDeleteDevice of a PDO. Deleted stays readable while a reference
+ * keeps the object, so a later REMOVE completes and deletes nothing again,
+ * and touches no controller (Codex review of batch (b), round 2, finding 1). */
+static VOID hcdDeletePdo(PHCD_DEVICE_PDO pdo)
+{
+    pdo->Deleted = 1;
+    pdo->Controller = NULL;
+    HcdPoolFree(pdo->Config);
+    pdo->Config = NULL;
+    IoDeleteDevice(pdo->Common.Self);
+}
+
 /* Create the PDO for an enumerated device, list it, and have PnP ask the
  * root hub for its relations. The descriptors are copied into the PDO, which
- * may outlive the device record. */
+ * outlives the device record. */
 NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     WCHAR nameBuffer[40];
@@ -208,17 +259,22 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     PHCD_DEVICE_PDO pdo;
     KIRQL oldIrql;
     NTSTATUS status;
+    ULONG serial;
     ULONG n;
     ULONG i;
 
-    if (hc->RootHubPdo == NULL) {
+    if (hc->RootHubPdo == NULL || !hc->RootHubStarted ||
+        dev->ConfigLength == 0 || dev->Config == NULL) {
         return STATUS_DEVICE_NOT_READY;
     }
 
+    serial = (ULONG)InterlockedIncrement(&hcdDevicePdoSerial);
+    if (serial == 0) {
+        serial = (ULONG)InterlockedIncrement(&hcdDevicePdoSerial);
+    }
     n = 0;
     hcdPut(nameBuffer, &n, L"\\Device\\XHCI98DEV");
-    hcdPutDecimal(nameBuffer, &n,
-                  (ULONG)InterlockedIncrement(&hcdDevicePdoSerial));
+    hcdPutDecimal(nameBuffer, &n, serial);
     nameBuffer[n] = 0;
     RtlInitUnicodeString(&name, nameBuffer);
     status = IoCreateDevice(HcdDriverObject, sizeof(HCD_DEVICE_PDO), &name,
@@ -228,6 +284,17 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     }
 
     pdo = (PHCD_DEVICE_PDO)obj->DeviceExtension;
+    pdo->Config = (PUCHAR)HcdPoolAlloc(dev->ConfigLength);
+    if (pdo->Config == NULL) {
+        /* Without the configuration the compatible ids would be wrong for
+         * a device whose class is its interfaces' (round 1, finding 13). */
+        IoDeleteDevice(obj);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    for (i = 0; i < dev->ConfigLength; i++) {
+        pdo->Config[i] = dev->Config[i];
+    }
+    pdo->ConfigLength = dev->ConfigLength;
     pdo->Common.Kind = HCD_KIND_DEVICE_PDO;
     pdo->Common.Self = obj;
     pdo->Common.PnpState = HCD_PNP_ADDED;
@@ -235,21 +302,11 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     pdo->Common.SystemPower = PowerSystemWorking;
     pdo->Controller = hc;
     pdo->Device = dev;
+    pdo->Serial = serial;
     pdo->Port = dev->Port;
     pdo->Speed = dev->Speed;
     for (i = 0; i < sizeof(pdo->DeviceDesc); i++) {
         pdo->DeviceDesc[i] = dev->DeviceDesc[i];
-    }
-    pdo->ConfigLength = 0;
-    pdo->Config = NULL;
-    if (dev->ConfigLength != 0) {
-        pdo->Config = (PUCHAR)HcdPoolAlloc(dev->ConfigLength);
-        if (pdo->Config != NULL) {
-            for (i = 0; i < dev->ConfigLength; i++) {
-                pdo->Config[i] = dev->Config[i];
-            }
-            pdo->ConfigLength = dev->ConfigLength;
-        }
     }
 
     obj->Flags |= DO_POWER_PAGABLE;
@@ -267,45 +324,92 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     return STATUS_SUCCESS;
 }
 
-static VOID hcdUnlink(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
+static VOID hcdUnlinkLocked(PHCD_DEVICE_PDO *head, PHCD_DEVICE_PDO pdo)
 {
     PHCD_DEVICE_PDO *at;
-    KIRQL oldIrql;
 
-    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
-    for (at = &hc->DevicePdos; *at != NULL; at = &(*at)->Next) {
+    for (at = head; *at != NULL; at = &(*at)->Next) {
         if (*at == pdo) {
             *at = pdo->Next;
-            break;
+            pdo->Next = NULL;
+            return;
         }
-    }
-    pdo->Listed = 0;
-    pdo->Device = NULL;
-    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
-}
-
-/* The device left: its PDO leaves the relations, PnP is told, and the
- * PDO's own remove deletes it. The device record goes with the slot; the
- * PDO keeps nothing of it. */
-VOID HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
-{
-    PHCD_DEVICE_PDO pdo;
-
-    if (dev == NULL || dev->Pdo == NULL) {
-        return;
-    }
-    pdo = (PHCD_DEVICE_PDO)dev->Pdo->DeviceExtension;
-    dev->Pdo = NULL;
-    hcdUnlink(hc, pdo);
-    if (hc->RootHubPdo != NULL) {
-        IoInvalidateDeviceRelations(hc->RootHubPdo, BusRelations);
     }
 }
 
 /*
- * The root hub's BusRelations: every listed PDO, referenced, after whatever
- * the list already held. Returns the new list in handed-off pool, or NULL
- * when there is nothing to add or no pool. IRQL: PASSIVE_LEVEL.
+ * The device left. Its PDO leaves the relations; a PDO PnP never saw is
+ * deleted here and now. Returns 0 when nothing remains for the port to wait
+ * for (no PDO, or deleted at once), otherwise the serial of the PDO whose
+ * deletion the port must wait for (HcdDevicePdoExists; the PortPdoRemoved
+ * bit only says when to look - round 2, finding 2). The device record goes
+ * with the slot; the PDO keeps nothing of it. Thread, or the stop.
+ */
+ULONG HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    PHCD_DEVICE_PDO pdo;
+    KIRQL oldIrql;
+    ULONG deleteNow;
+    ULONG serial;
+
+    if (dev == NULL || dev->Pdo == NULL) {
+        return 0;
+    }
+    pdo = (PHCD_DEVICE_PDO)dev->Pdo->DeviceExtension;
+    dev->Pdo = NULL;
+
+    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    hcdUnlinkLocked(&hc->DevicePdos, pdo);
+    pdo->Listed = 0;
+    pdo->Device = NULL;
+    deleteNow = !pdo->Reported;
+    serial = pdo->Serial;
+    if (!deleteNow) {
+        pdo->Next = hc->GonePdos;
+        hc->GonePdos = pdo;
+    }
+    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+
+    if (deleteNow) {
+        hcdDeletePdo(pdo);
+        return 0;
+    }
+    if (hc->RootHubPdo != NULL) {
+        IoInvalidateDeviceRelations(hc->RootHubPdo, BusRelations);
+    }
+    return serial;
+}
+
+/* Whether the PDO of that serial is still on either list - not yet deleted
+ * nor released. 0 for serial 0. IRQL: <= DISPATCH_LEVEL. */
+ULONG HcdDevicePdoExists(PHCD_CONTROLLER hc, ULONG serial)
+{
+    PHCD_DEVICE_PDO pdo;
+    KIRQL oldIrql;
+    ULONG found;
+
+    if (serial == 0) {
+        return 0;
+    }
+    found = 0;
+    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    for (pdo = hc->GonePdos; pdo != NULL && !found; pdo = pdo->Next) {
+        found = pdo->Serial == serial;
+    }
+    for (pdo = hc->DevicePdos; pdo != NULL && !found; pdo = pdo->Next) {
+        found = pdo->Serial == serial;
+    }
+    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    return found;
+}
+
+/*
+ * The root hub's BusRelations: whatever the list already held, then every
+ * listed PDO, referenced and marked Reported; every gone PDO is marked
+ * MissingReported, since this answer omits it. One hold of PdoListLock for
+ * the count, the allocation and the copy (round 1, finding 3). NULL when the
+ * pool has nothing. IRQL: PASSIVE_LEVEL (the allocation is NonPagedPool, so
+ * it is legal under the spin lock).
  */
 PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
                                         PDEVICE_RELATIONS old)
@@ -317,67 +421,153 @@ PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
     ULONG count;
     ULONG i;
 
+    count = (old != NULL) ? old->Count : 0;
     KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
     listed = 0;
     for (pdo = hc->DevicePdos; pdo != NULL; pdo = pdo->Next) {
         listed++;
     }
-    count = (old != NULL) ? old->Count : 0;
-    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
-
     rel = (PDEVICE_RELATIONS)HcdPoolAllocHandedOff(
         sizeof(DEVICE_RELATIONS) + (count + listed) * sizeof(PDEVICE_OBJECT));
-    if (rel == NULL) {
-        return NULL;
-    }
-    for (i = 0; i < count; i++) {
-        rel->Objects[i] = old->Objects[i];
-    }
-
-    /* The list may have changed between the count and here; only the thread
-     * links, and it links at most the count it can see, so what is copied is
-     * bounded by what was allocated. */
-    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
-    for (pdo = hc->DevicePdos; pdo != NULL && i < count + listed;
-         pdo = pdo->Next) {
-        rel->Objects[i++] = pdo->Common.Self;
-        ObReferenceObject(pdo->Common.Self);
+    if (rel != NULL) {
+        for (i = 0; i < count; i++) {
+            rel->Objects[i] = old->Objects[i];
+        }
+        for (pdo = hc->DevicePdos; pdo != NULL; pdo = pdo->Next) {
+            rel->Objects[i++] = pdo->Common.Self;
+            ObReferenceObject(pdo->Common.Self);
+            pdo->Reported = 1;
+        }
+        rel->Count = i;
+        for (pdo = hc->GonePdos; pdo != NULL; pdo = pdo->Next) {
+            pdo->MissingReported = 1;
+        }
     }
     KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
-    rel->Count = i;
     return rel;
 }
 
-/* The root hub is going: every PDO still listed goes with it. IRQL:
- * PASSIVE_LEVEL (the root-hub FDO's remove). */
-VOID HcdDevicePdoDeleteAll(PHCD_CONTROLLER hc)
+/*
+ * The parent is going (the root hub's remove, or the controller's): every
+ * PDO left on either list is settled - deleted when PnP has removed it or
+ * never knew it, orphaned when it still awaits its REMOVE (round 1, finding
+ * 2). The thread has detached the bus first, so nothing lists more PDOs
+ * meanwhile. IRQL: PASSIVE_LEVEL.
+ */
+VOID HcdDevicePdoReleaseAll(PHCD_CONTROLLER hc)
 {
     PHCD_DEVICE_PDO pdo;
     KIRQL oldIrql;
+    ULONG deleteIt;
 
     for (;;) {
         KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
         pdo = hc->DevicePdos;
         if (pdo != NULL) {
             hc->DevicePdos = pdo->Next;
+        } else {
+            pdo = hc->GonePdos;
+            if (pdo != NULL) {
+                hc->GonePdos = pdo->Next;
+            }
+        }
+        deleteIt = 0;
+        if (pdo != NULL) {
+            pdo->Next = NULL;
             pdo->Listed = 0;
             if (pdo->Device != NULL) {
                 pdo->Device->Pdo = NULL;
             }
             pdo->Device = NULL;
+            deleteIt = pdo->RemoveReceived || !pdo->Reported;
+            if (!deleteIt) {
+                pdo->Controller = NULL;
+            }
         }
         KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
         if (pdo == NULL) {
             break;
         }
-        HcdPoolFree(pdo->Config);
-        IoDeleteDevice(pdo->Common.Self);
+        if (deleteIt) {
+            hcdDeletePdo(pdo);
+        }
     }
 }
 
 /* ----------------------------------------------------------------------- */
 /* The device PDO's PnP and power                                           */
 /* ----------------------------------------------------------------------- */
+
+/* A start after a remove (an enable after a disable) makes the PDO PnP's
+ * again, so the remove it received no longer lets a parent's release delete
+ * it. Then PDO_STARTED for the port's machine; an orphan or a gone PDO has
+ * no port left to tell. IRQL: PASSIVE_LEVEL. */
+static VOID hcdPdoStarted(PHCD_DEVICE_PDO pdo)
+{
+    PHCD_CONTROLLER hc;
+    KIRQL oldIrql;
+    ULONG listed;
+
+    hc = pdo->Controller;
+    if (hc == NULL) {
+        pdo->RemoveReceived = 0;
+        return;
+    }
+    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    pdo->RemoveReceived = 0;
+    listed = pdo->Listed;
+    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    if (listed) {
+        hcdPortNotify(hc, hc->PortPdoStarted, pdo->Port);
+    }
+}
+
+/*
+ * IRP_MN_REMOVE_DEVICE, already completed. The lifecycle above decides: an
+ * orphan deletes itself; a gone PDO that PnP has seen reported missing (or
+ * never saw) is unlinked and deleted, once, and its port told PDO_REMOVED; a
+ * listed PDO stays (a disable), as does a gone one whose absence PnP has not
+ * yet been told - its REMOVE after the next relations answer, or the
+ * parent's release, deletes it. IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdPdoRemoved(PHCD_DEVICE_PDO pdo)
+{
+    PHCD_CONTROLLER hc;
+    KIRQL oldIrql;
+    ULONG deleteIt;
+    ULONG port;
+
+    if (pdo->Deleted) {
+        /* A REMOVE again while a reference keeps the object: already
+         * deleted, and the controller may be gone. */
+        return;
+    }
+    hc = pdo->Controller;
+    if (hc == NULL) {
+        hcdDeletePdo(pdo);
+        return;
+    }
+    deleteIt = 0;
+    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    if (pdo->Controller == NULL) {
+        deleteIt = 2;
+    } else {
+        pdo->RemoveReceived = 1;
+        if (!pdo->Listed && (pdo->MissingReported || !pdo->Reported)) {
+            hcdUnlinkLocked(&hc->GonePdos, pdo);
+            deleteIt = 1;
+        }
+    }
+    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    if (deleteIt == 0) {
+        return;
+    }
+    port = pdo->Port;
+    hcdDeletePdo(pdo);
+    if (deleteIt == 1) {
+        hcdPortNotify(hc, hc->PortPdoRemoved, port);
+    }
+}
 
 static NTSTATUS hcdDeviceCapabilities(PHCD_DEVICE_PDO pdo, PIRP irp)
 {
@@ -423,6 +613,7 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
     switch (stack->MinorFunction) {
     case IRP_MN_START_DEVICE:
         pdo->Common.PnpState = HCD_PNP_STARTED;
+        hcdPdoStarted(pdo);
         return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
 
     case IRP_MN_QUERY_STOP_DEVICE:
@@ -438,14 +629,9 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
 
     case IRP_MN_REMOVE_DEVICE:
         pdo->Common.PnpState = HCD_PNP_REMOVED;
-        if (!pdo->Listed) {
-            HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
-            HcdPoolFree(pdo->Config);
-            pdo->Config = NULL;
-            IoDeleteDevice(pdo->Common.Self);
-            return STATUS_SUCCESS;
-        }
-        return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+        HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+        hcdPdoRemoved(pdo);
+        return STATUS_SUCCESS;
 
     case IRP_MN_QUERY_ID:
         return hcdDeviceQueryId(pdo, irp, stack->Parameters.QueryId.IdType);

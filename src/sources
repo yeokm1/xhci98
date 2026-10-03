@@ -27,7 +27,8 @@
 # xhci_pci.c - the miniport's controller sequence, command engine and event
 # drain, with their usbport service calls replaced by hcd_svc.h's - and
 # xhci_dbg.c, the qemu flavour's port-0xE9 trace channel. xhci_xfer.c holds
-# only the completion-code table those files classify with.
+# its whole pure transfer engine since 26-A.4 (the completion-code table those
+# files classify with came first, in 26-A.2).
 #
 # THE HCD'S OWN FILES, hcd_*.c: the controller FDO (entry, PnP, power,
 # start/stop and thread, services, DMA, the device layer). hcd_pool.c, the

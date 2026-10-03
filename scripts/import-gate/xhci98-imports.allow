@@ -131,8 +131,6 @@ ntoskrnl.exe!ExFreePool                      all  required  SITES=hcd_pool.obj t
 ntoskrnl.exe!IoInvalidateDeviceRelations     all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!IoInvalidateDeviceRelations, hint 4F) (+3 other 98 SE); ntkern-name
 ntoskrnl.exe!RtlInitUnicodeString            all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!RtlInitUnicodeString, hint D7) (+47 other 98 SE); ntkern-name
 ntoskrnl.exe!ObfReferenceObject              all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!ObfReferenceObject, hint AD) (+14 other 98 SE) (design record 13 Appendix A row 35). The ObReferenceObject macro: every PDO a relations list returns is referenced
-# --- Task 26-A.3: the port service ---
-ntoskrnl.exe!InterlockedExchange             all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!InterlockedExchange, hint 27) (+22 other 98 SE); ntkern-name. The port service takes the change mask the event DPC builds (hcd_enum.c)
 
 [deny]
 

@@ -43,6 +43,9 @@ VOID XhciSlotCommandEvent(PXHCI_EXTENSION ext, ULONG completionCode,
     hc->CmdDoneCode = completionCode;
     hc->CmdDoneControl = control;
     hc->CmdDoneLost = 0;
+    /* The engine recorded the matched TRB before calling here
+     * (xhciCommandCompleted); the waiter takes only its own (hcd_enum.c). */
+    hc->CmdDonePA = ext->LastCommandTrbPA;
     (VOID)KeSetEvent(&hc->CmdDoneEvent, IO_NO_INCREMENT, FALSE);
 }
 
@@ -124,12 +127,17 @@ VOID XhciSlotResumeSweep(PXHCI_EXTENSION ext)
     UNREFERENCED_PARAMETER(ext);
 }
 
-/* Every slot is gone (HCRST, stop, recovery). IRQL: <= DISPATCH_LEVEL,
- * controller lock held. */
+/* Every slot is gone (HCRST, stop, recovery): the thread drops the records
+ * and settles the ports at its next powered pass (hcd_enum.c,
+ * hcdInvalidate). IRQL: <= DISPATCH_LEVEL, controller lock held. */
 VOID XhciSlotInvalidateAll(PXHCI_EXTENSION ext, ULONG controllerStopped)
 {
-    UNREFERENCED_PARAMETER(ext);
+    PHCD_CONTROLLER hc;
+
     UNREFERENCED_PARAMETER(controllerStopped);
+    hc = HcdControllerFromExt(ext);
+    hc->SlotsInvalidated = 1;
+    HcdThreadWake(hc);
 }
 
 /* ----------------------------------------------------------------------- */
@@ -139,8 +147,14 @@ VOID XhciSlotInvalidateAll(PXHCI_EXTENSION ext, ULONG controllerStopped)
 /* IRQL: PASSIVE_LEVEL, or DISPATCH_LEVEL with InitBelowPassive set. */
 ULONG XhciRootHubInit(PXHCI_EXTENSION ext, ULONG afterRestore)
 {
+    PHCD_CONTROLLER hc;
+    ULONG i;
+
     UNREFERENCED_PARAMETER(afterRestore);
-    HcdControllerFromExt(ext)->PortChangeMask = 0xFFFFFFFFUL;
+    hc = HcdControllerFromExt(ext);
+    for (i = 0; i < HCD_PORT_WORDS; i++) {
+        hc->PortChange[i] = 0xFFFFFFFFUL;
+    }
     return XHCI_RH_OK;
 }
 
@@ -152,8 +166,8 @@ VOID XhciRootHubPortEvent(PXHCI_EXTENSION ext, ULONG portId)
     PHCD_CONTROLLER hc;
 
     hc = HcdControllerFromExt(ext);
-    if (portId >= 1 && portId <= 32) {
-        hc->PortChangeMask |= 1UL << (portId - 1);
+    if (portId >= 1 && portId <= XHCI_MAX_ROOT_PORTS) {
+        hc->PortChange[(portId - 1) / 32UL] |= 1UL << ((portId - 1) % 32UL);
     }
     hc->PortEvents++;
 }

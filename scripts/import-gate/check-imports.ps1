@@ -689,9 +689,14 @@ function Join-CSplices {
     # The splices first (phases 1 and 2), then the comments, which become a
     # space before tokens are read (phase 3): a name in a comment is no
     # reference (a header that only discusses a pool call is not a site).
+    # Comments and string and character literals are read in one pass, left
+    # to right, as the compiler's tokenizer does: a "//" inside a string is no
+    # comment, and a "/*" inside one opens none (Codex review of batch (b),
+    # round 1, finding 15). A literal becomes a space as a comment does - no
+    # name inside one is a call.
     $joined = $Text -replace "(\\|\?\?/)\r?\n", ""
-    $joined = [regex]::Replace($joined, "/\*.*?\*/", " ", [System.Text.RegularExpressions.RegexOptions]::Singleline)
-    $joined = [regex]::Replace($joined, "//[^\r\n]*", " ")
+    $lexeme = '"(?:[^"\\\r\n]|\\.)*"|''(?:[^''\\\r\n]|\\.)*''|/\*.*?\*/|//[^\r\n]*'
+    $joined = [regex]::Replace($joined, $lexeme, " ", [System.Text.RegularExpressions.RegexOptions]::Singleline)
     # A directive that only tests or removes a macro name - #undef, #ifdef,
     # #ifndef - can never become a call (xhci_compat.h undoes the DDKs' pool
     # rewrites that way); a #define can, and stays.

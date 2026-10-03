@@ -80,6 +80,8 @@ typedef struct _HCD_USB_DEVICE {
     PUCHAR Config;          /* the whole configuration descriptor       */
     ULONG ConfigLength;
     PDEVICE_OBJECT Pdo;     /* 26-A.4's device PDO, once it exists      */
+    ULONG Abandoned;        /* off its port with the slot still enabled:
+                             * the next powered pass disables it        */
 } HCD_USB_DEVICE, *PHCD_USB_DEVICE;
 
 /* A device PDO (hcd_pdo.c): one per enumerated device, a child of the root
@@ -88,9 +90,15 @@ typedef struct _HCD_USB_DEVICE {
 typedef struct _HCD_DEVICE_PDO {
     HCD_COMMON Common;
     struct _HCD_CONTROLLER *Controller;
-    struct _HCD_DEVICE_PDO *Next;   /* the controller's list, PdoListLock */
-    PHCD_USB_DEVICE Device;
-    ULONG Listed;                   /* in the list, so in the relations   */
+    struct _HCD_DEVICE_PDO *Next;   /* listed or gone list, PdoListLock    */
+    PHCD_USB_DEVICE Device;         /* the record while present (thread)   */
+    /* The lifecycle, under PdoListLock (hcd_pdo.c):                         */
+    ULONG Listed;                   /* on DevicePdos: in the relations      */
+    ULONG Reported;                 /* returned in a BusRelations answer    */
+    ULONG MissingReported;          /* omitted from one since it was gone   */
+    ULONG RemoveReceived;           /* PnP's IRP_MN_REMOVE_DEVICE seen      */
+    ULONG Deleted;                  /* IoDeleteDevice called: once only     */
+    ULONG Serial;                   /* the name's number; a port waits on it */
     ULONG Port;
     ULONG Speed;
     UCHAR DeviceDesc[18];
@@ -103,7 +111,10 @@ typedef struct _HCD_PORT {
     XHCI_ENUM_PORT Enum;
     ULONG PortId;           /* 1-based xHCI port number                 */
     PHCD_USB_DEVICE Device;
+    ULONG AwaitSerial;      /* Gone: the PDO whose deletion it waits for */
 } HCD_PORT, *PHCD_PORT;
+
+#define HCD_PORT_WORDS ((XHCI_MAX_ROOT_PORTS + 31UL) / 32UL)
 
 /* The enumeration's DMA scratch (hcd_dma.c), a 4 KB common buffer. */
 #define HCD_SCRATCH_BYTES 4096UL
@@ -171,7 +182,9 @@ typedef struct _HCD_CONTROLLER {
     PVOID ThreadObject;
     PDEVICE_OBJECT RootHubPdo;
     KSPIN_LOCK PdoListLock;
-    PHCD_DEVICE_PDO DevicePdos;
+    PHCD_DEVICE_PDO DevicePdos;     /* listed: present, in the relations */
+    PHCD_DEVICE_PDO GonePdos;       /* unlisted, awaiting their deletion */
+    ULONG RootHubStarted;           /* enumeration creates PDOs only then */
     volatile ULONG ThreadRunning;
     ULONG ThreadReferenceFailures;
     KEVENT ThreadExited;
@@ -200,7 +213,18 @@ typedef struct _HCD_CONTROLLER {
     volatile ULONG CmdDoneLost;
     ULONG SlotFatalEvents;
     ULONG TransferEventsUnclaimed;
-    volatile ULONG PortChangeMask;
+    /* Per root port bits (XHCI_MAX_ROOT_PORTS), under the controller lock:
+     * changed (the event DPC), and the PDO handshake (hcd_pdo.c). */
+    ULONG PortChange[HCD_PORT_WORDS];
+    ULONG PortPdoStarted[HCD_PORT_WORDS];
+    ULONG PortPdoRemoved[HCD_PORT_WORDS];
+    /* Thread requests (hcd_enum.c), under the controller lock. */
+    ULONG SlotsInvalidated;         /* HCRST took every slot              */
+    ULONG EnumDetachRequested;      /* the root hub is going               */
+    KEVENT EnumDetachDone;
+    ULONG ScratchTainted;           /* a timed-out EP0 transfer may DMA    */
+    ULONG SlotSweep;                /* Abandoned records await Disable Slot */
+    volatile ULONG CmdDonePA;       /* the completed command's TRB        */
     volatile ULONG PortEvents;
 
     /* The controller lock (hcd_svc.h, HcdSvcControllerLock): created once at
@@ -216,9 +240,12 @@ typedef struct _HCD_CONTROLLER {
  * reported missing. */
 typedef struct _HCD_ROOTHUB_PDO {
     HCD_COMMON Common;
-    PHCD_CONTROLLER Controller;
+    PHCD_CONTROLLER Controller;     /* NULL once orphaned (hcd_rh.c)      */
     ULONG ReportedMissing;
     ULONG Started;
+    ULONG RemoveReceived;
+    ULONG Reported;                 /* returned in a BusRelations answer    */
+    ULONG Deleted;                  /* IoDeleteDevice called: once only     */
 } HCD_ROOTHUB_PDO, *PHCD_ROOTHUB_PDO;
 
 /* The root hub's FDO, this driver's second role, attached over the root-hub
@@ -227,7 +254,6 @@ typedef struct _HCD_ROOTHUB_FDO {
     HCD_COMMON Common;
     PDEVICE_OBJECT Pdo;
     PDEVICE_OBJECT LowerDevice;
-    PHCD_CONTROLLER Controller;
     LONG OutstandingIo;
     KEVENT RemoveEvent;
 } HCD_ROOTHUB_FDO, *PHCD_ROOTHUB_FDO;
@@ -281,16 +307,19 @@ VOID HcdPowerGateEnter(PHCD_CONTROLLER hc);
 VOID HcdPowerGateLeave(PHCD_CONTROLLER hc);
 
 /* hcd_enum.c */
-VOID HcdEnumService(PHCD_CONTROLLER hc);
+VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered);
+VOID HcdEnumDetach(PHCD_CONTROLLER hc);
+VOID HcdEnumAttach(PHCD_CONTROLLER hc);
 VOID HcdEnumInit(PHCD_CONTROLLER hc);
 VOID HcdEnumDrop(PHCD_CONTROLLER hc);
 
 /* hcd_pdo.c */
 NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
-VOID HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+ULONG HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+ULONG HcdDevicePdoExists(PHCD_CONTROLLER hc, ULONG serial);
 PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
                                         PDEVICE_RELATIONS old);
-VOID HcdDevicePdoDeleteAll(PHCD_CONTROLLER hc);
+VOID HcdDevicePdoReleaseAll(PHCD_CONTROLLER hc);
 NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp);
 NTSTATUS HcdDevicePdoPower(PHCD_DEVICE_PDO pdo, PIRP irp);
 

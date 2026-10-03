@@ -322,3 +322,129 @@ under `xhci98 USB 3.x Root Hub`. Unplugged, it left Device Manager on both
 and a shutdown followed with no fault. The Windows 98 agent pressed Remove on
 "Computer" once by mistake; Windows refused it and nothing changed. Notes
 `b3-98-notes.md`, `b3-2k-notes.md`.
+
+### The Codex review of batch (b), rounds 1 and 2, and the fixes they took
+
+Round 1 (`f5e9b5f..9a7ffcd`) raised ten MAJOR, six MINOR and one NOTE, all
+taken:
+- **PDO lifetime:** a device PDO is listed, gone, deleted or orphaned
+  (`hcd_pdo.c`). Only the thread lists one; the relations answer marks
+  Reported / MissingReported in the hold that copies the list. A PDO is
+  deleted:
+  - by its own remove once it is reported missing;
+  - by the thread at once if PnP never saw it;
+  - by its parent's release once PnP has removed it.
+  When its parent goes first, it is orphaned and deletes itself at its own
+  remove.
+- **Root-hub removal:** it detaches the bus on the controller thread before
+  its children are settled, and the root-hub FDO reaches the controller only
+  through its PDO. Controller removal orphans or deletes the root-hub PDO.
+- **Commands:** a command completion counts only for its own TRB. A command
+  that times out or is lost requests the controller reset.
+- **Slots:**
+  - a Disable Slot the controller does not confirm quarantines the record;
+  - an EP0 timeout taints the scratch until that reset;
+  - HCRST's slot invalidation drops every record and rescans;
+  - an enabled slot with no record is given back.
+- **Ports:** connects and disconnects follow `CSC`, and only the change bits
+  a read saw are acknowledged. Every root port is serviced, not the first 32.
+  The powered check moved inside the power gate.
+- **Smaller fixes:**
+  - the LTCG source scan reads string and character literals;
+  - `test_enum` grows from 136 to 238 checks;
+  - design record 13 sections 5.2-5.4 are corrected;
+  - the `InterlockedExchange` row went, since nothing imports it any more.
+
+Round 2 (the same diff, uncommitted) confirmed twelve of the seventeen fixed.
+It raised two MAJOR, three MINOR and two NOTE, all taken except one NOTE:
+- a PDO is deleted once only, so a repeated remove is answered and nothing
+  more;
+- a port waiting in `Gone` waits for its own PDO by serial, across an
+  invalidation and a controller stop/start;
+- an unpowered detach leaves its slots to the first powered pass;
+- an unreported root-hub PDO is deleted at the controller's remove;
+- the records' wording is corrected.
+The NOTE left is that a restricted name inside a `#include <...>` header-name
+still reads as a reference. That only fails the gate closed, so it stays.
+
+### Both primaries after round 1 (`7b8a522d...6b00`, `qemu` flavour)
+
+Fresh overlays, the QEMU mouse hot-plugged from the monitor. The build has
+the round-1 fixes, and START clearing `RemoveReceived`. It predates the
+round-2 fixes and the owner's renaming of the devices to `xHCI98 USB 3.x ...`
+(2026-10-03); a confirmation leg on the later build follows.
+
+**Windows 2000 SP4** (`b5-2k-notes.md`):
+- **Install:** no prompts.
+- **Mouse:** plugged, it showed Code 10, as expected. Unplugged, it left
+  Device Manager with no rescan; plugged again, it came back. Each plug also
+  raised the OS's own restart prompts for the HID install, answered No.
+- **Root-hub disable:** QUERY_REMOVE and REMOVE. The trace shows "root hub
+  detaching, dropping every device", the root hub shows Code 22, and the HID
+  device leaves.
+- **Root-hub enable:** the mouse was enumerated again with a new PDO and
+  showed Code 10.
+- **Controller disable:** the root hub detached first, then the thread
+  stopped. Only the controller remained, at Code 22.
+- **Controller enable:** the controller, the root hub and the mouse all came
+  back.
+- **Shutdown:** reached "It is now safe to turn off your computer". With
+  `acpi=off` the guest does not power off.
+
+**Windows 98 SE** (`b5-98-notes.md`, traces `vm\t26-win98-b5-`, `-b5b-`):
+- **Install:** the same CD prompts as before (`usbd.sys`; `hidclass.sys` for
+  the HID install) and a restart. The root hub installed by itself after the
+  restart.
+- **Mouse:** Code 10 on each plug, as expected. Each unplug removed it, and
+  each replug opened a new HID wizard with no disk prompt.
+- **Root-hub disable:** 98 sends QUERY_STOP and STOP, not a remove. So no
+  detach runs, and Windows 98 keeps the never-started HID device listed
+  under the disabled root hub. On enable the same PDO stays (no new wizard).
+- **Controller disable:** also a STOP. The stop drops the device. On enable a
+  new PDO is created, and the old one gets its remove once the next relations
+  answer omits it. The HID device shown is the replacement.
+- **Shutdown:** clean ("paused (shutdown)").
+- Not followed up: an "Unknown Device" under Other devices, which the agent
+  saw after the restart and did not look into.
+
+While the root hub is stopped on 98, enumeration still runs: STOP leaves
+RootHubStarted set (only the root hub's remove clears it), so a device
+plugged in then is enumerated and its PDO created while the hub is stopped;
+PnP is asked for the relations at once and reports the PDO when it queries
+the hub (inferred from the code; not exercised).
+
+### Rounds 3 and 4
+
+Round 3 confirmed round 2's findings fixed and raised one MAJOR and one
+MINOR, both taken:
+- A controller reset latched just after a PDO was created could end the run
+  before the machine recorded the PDO, and a recovery would then have let the
+  port go Empty and re-enumerate before the old PDO was removed. A halt is now
+  looked for only between the machine's step and the next action.
+- A detach pending with an invalidation sent Disable Slot for slots HCRST had
+  already taken. The invalidation now runs first.
+
+Round 4 confirmed both fixed and found no new MAJOR or MINOR. Its one NOTE, a
+stale comment on the service order, was corrected. The header-name note stays
+as round 2 left it.
+
+### Confirmation on both primaries after round 2 (`9090face...8ab20`, `qemu` flavour)
+
+The round-2 fixes and the owner's renaming, on fresh overlays (notes
+`b6-98-notes.md`, `b6-2k-notes.md`). Both installs, Device Manager and the
+Windows 2000 disable prompts read `xHCI98 USB 3.x eXtensible Host Controller`
+and `xHCI98 USB 3.x Root Hub`, manufacturer `xHCI98 Project`. Every step
+matched the run before:
+- **Install:** no prompt on Windows 2000; Windows 98 asked for the CD
+  (`usbd.sys`) and a restart.
+- **Mouse:** Code 10, as expected; it left on each unplug and came back on
+  each plug.
+- **Root-hub disable and enable:** on Windows 2000 the HID device left and
+  came back; on Windows 98 (STOP) it stayed listed.
+- **Controller disable and enable:** all three devices came back.
+- **Shutdown:** clean on both.
+
+On Windows 98 the controller's enable dropped the old HID entry at once, and
+a Refresh showed its replacement, as the b5 trace explains. The round-3
+fixes (`hcdRun`'s halt check, the service order) postdate this build. They
+change only paths that a controller failure reaches, which no leg exercised.
