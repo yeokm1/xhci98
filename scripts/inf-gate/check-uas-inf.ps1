@@ -42,7 +42,8 @@ OS file, each rule named as check-inf.ps1 names its families.
            no temporary-file name, which on Windows 98 routes the copy
            through WININIT.INI and a restart even at a first install.
   PKG-*    With -PackageDir: every [SourceDisksFiles] entry is in the staged
-           package.
+           package (PKG-LAYOUT), and no Microsoft file is, under any of the
+           names UAS-MSFILE knows, at the root or below it (PKG-MSFILE).
 
 -SelfTest mutates both committed INFs in memory, one rule at a time, and fails
 unless the gate refuses every mutation and passes the original - the gate's own
@@ -342,6 +343,15 @@ function Test-UasInfText {
         foreach ($f in $listed) {
             if (-not (Test-Path -LiteralPath (Join-Path $Package $f))) { & $add "PKG-LAYOUT" "[SourceDisksFiles] lists '$f' and the package has none." }
         }
+        # The INF names USBNTMAP.SYS as a filter and never ships it; the
+        # media carries no Microsoft file (legal-provenance.md section 5).
+        if (Test-Path -LiteralPath $Package) {
+            foreach ($item in (Get-ChildItem -LiteralPath $Package -File -Recurse)) {
+                if ($msFiles -contains $item.Name.ToLowerInvariant()) {
+                    & $add "PKG-MSFILE" "the staged package holds '$($item.Name)', a Microsoft file; the media carries none."
+                }
+            }
+        }
     }
     return $fail
 }
@@ -408,6 +418,28 @@ if ($SelfTest) {
                 Write-Err ("$profile mutation for $($c.Rule) was not refused by that rule. Got:`n  " + ($got -join "`n  "))
             } else {
                 Write-Ok "$profile $($c.Rule) refuses its mutation"
+            }
+        }
+        # A package carrying a Microsoft file, at the root and below it: the
+        # INF names USBNTMAP.SYS, and drift could put it on the media.
+        foreach ($sub in @("", "osfiles")) {
+            $total++
+            $pkg = Join-Path ([System.IO.Path]::GetTempPath()) ("xhciuas-pkgtest-" + [Guid]::NewGuid().ToString("N"))
+            try {
+                New-Item -ItemType Directory -Path $pkg | Out-Null
+                foreach ($f in @("xhciuas.sys", "xhciuas.inf")) { [System.IO.File]::WriteAllText((Join-Path $pkg $f), "stand-in") }
+                $at = $pkg
+                if ($sub -ne "") { $at = Join-Path $pkg $sub; New-Item -ItemType Directory -Path $at | Out-Null }
+                [System.IO.File]::WriteAllText((Join-Path $at "USBNTMAP.SYS"), "stand-in")
+                $got = @(Test-UasInfText -Bytes $orig -HeaderText $headerText -Package $pkg -Profile $profile)
+            } finally {
+                Remove-Item -LiteralPath $pkg -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            if (@($got | Where-Object { $_.StartsWith("PKG-MSFILE ") }).Count -eq 0) {
+                $bad++
+                Write-Err ("$profile package holding USBNTMAP.SYS ('$sub') was not refused by PKG-MSFILE. Got:`n  " + ($got -join "`n  "))
+            } else {
+                Write-Ok "$profile PKG-MSFILE refuses a package holding USBNTMAP.SYS"
             }
         }
     }
