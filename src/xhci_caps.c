@@ -585,7 +585,14 @@ static ULONG xhciSpeedClassFromKilobits(ULONG kbps)
  * The default table's rate for a PSIV, in kbit/s, and 0 for one it does not
  * name. IDs 5 to 7 are the SuperSpeedPlus defaults and decode only on a USB
  * 3.x group (`major` 3): on a USB 2.0 group they name nothing, as before
- * Phase 29 (xhci-data-structures.md section 10.1; to verify against the PDF).
+ * Phase 29 (Table 7-13, p.485; xhci-data-structures.md section 10.1,
+ * verified). The rates are Table 7-13's PSIM column - 10, 10 and 20 Gb/s,
+ * aggregate - not its "Bit Rate" column, which prints the lane rate for 6
+ * and 7. A leniency, kept deliberately: 7.2.2.1.2 (p.485-486) defines 5
+ * only for a USB 3.1 or 3.2 group and 6 and 7 only for a USB 3.2 group,
+ * and this decodes them on any USB 3.x group whatever its Minor Revision.
+ * A conforming controller never reports an ID its group does not define,
+ * so nothing it does is decoded differently.
  */
 static ULONG xhciDefaultKilobits(ULONG psiv, ULONG major)
 {

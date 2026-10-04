@@ -188,6 +188,50 @@ static ULONG xhciPipeLog2(ULONG value)
 }
 
 /*
+ * A zero-bandwidth isochronous endpoint: wMaxPacketSize 0, what an audio or
+ * video interface's alternate 0 typically declares. Accepted, so the
+ * SELECT_CONFIGURATION or SELECT_INTERFACE naming one succeeds (owner's
+ * ruling, 2026-10-04). Which sizes are legal:
+ *
+ *   - SuperSpeed: USB 3.2 Table 9-26 (USB 3.2 p.365) lets an isochronous
+ *     endpoint with bMaxBurst 0 have "any value from 0 to 1024", and
+ *     requires 1024 when bMaxBurst is nonzero, 1-1024 for interrupt, 1024
+ *     for bulk and 512 for control. So a zero size with a nonzero burst is
+ *     MALFORMED, as is any zero-size endpoint that is not isochronous. So
+ *     is a nonzero wBytesPerInterval beside a zero size (Table 9-28: the
+ *     bytes "this endpoint will transfer", and it can transfer none), and
+ *     an SSP isochronous companion beside it (Table 9-29's companion is for
+ *     an endpoint needing more than 48K per interval, USB 3.2 9.6.8,
+ *     p.369).
+ *   - USB 2.0: its specification is not in docs/references. The zero-size
+ *     isochronous allowance (USB 2.0 5.6.3, where a default interface
+ *     setting carries no isochronous payload) is taken as the same rule,
+ *     and the zero-size refusal of every other type with it; at High
+ *     Speed a zero size with additional transactions in 12:11 is already
+ *     MALFORMED by Table 9-14's ranges (xhciPipeMpsLegal).
+ *
+ * How it is programmed: the Endpoint Context is built and added like any
+ * other, with Max Packet Size 0 - what xHCI 1.2c 6.2.3.5 (p.419) prescribes,
+ * "bits 10:0 of the USB Endpoint Descriptor wMaxPacketSize" - and Max ESIT
+ * Payload 0, which by 4.14.2's "Reserved Bandwidth = Max ESIT Payload /
+ * (2^Interval * 0.000125)" (p.237) reserves no periodic bandwidth; Average
+ * TRB Length stays nonzero (Table 6-11). Leaving the context out of the
+ * Configure Endpoint instead would make the pipe the one handle on the
+ * device the xHC does not know, and every Stop Endpoint, Reset Endpoint,
+ * Set TR Dequeue and Drop this bus issues by DCI would have to step round
+ * it. No URB is ever made a TD on it: hcd_io.c refuses an isochronous URB
+ * on such a pipe before any TRB is built, so no TD Size, TBC or chunk
+ * arithmetic divides by its size. That a controller accepts Max Packet Size
+ * 0 is unobserved; 6.2.3.2 (p.417) asks only that it be "within range for
+ * endpoint type and the speed of the device".
+ */
+ULONG XhciPipeZeroBandwidth(const XHCI_PIPE_EP *ep)
+{
+    return ep != NULL && ep->TransferType == XHCI_PIPE_XFER_ISOCH &&
+           ep->MaxPacketSize == 0;
+}
+
+/*
  * Table 6-12's bInterval range for the rows that take 2^(bInterval-1): the
  * HS interrupt and isoch row and the FS isoch row both list 1-16.
  */
@@ -207,8 +251,10 @@ static ULONG xhciPipeExponent(ULONG bInterval, PULONG clamped)
 /*
  * The Max Packet Size a USB 2.0 endpoint may declare at its speed (USB 2.0
  * 5.6.3 isochronous, 5.7.3 interrupt, 5.8.3 bulk, Table 9-14 for the HS
- * high-bandwidth ranges). `mps` is already 1..1024 and `transactions` (HS
- * periodic only) 0..2. A device outside these limits declares a packet size
+ * high-bandwidth ranges). `mps` is already 0..1024, and 0 only for an
+ * isochronous endpoint (XhciPipeZeroBandwidth), which passes here unless
+ * HS additional transactions demand 513 or 683 and up; `transactions` (HS
+ * periodic only) is 0..2. A device outside these limits declares a packet size
  * its speed does not have, and is refused rather than programmed as declared.
  * HS control (64, 5.5.3) has no row: control endpoints are refused earlier.
  */
@@ -288,11 +334,14 @@ ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
         return XHCI_PIPE_UNSUPPORTED;
     }
 
-    /* 6.2.3.5: "bits 10:0 of the USB Endpoint Descriptor wMaxPacketSize";
-     * 0 would divide the TD Size arithmetic (4.11.2.4), and USB 2.0 allows
-     * no endpoint more than 1024. */
+    /* 6.2.3.5: "bits 10:0 of the USB Endpoint Descriptor wMaxPacketSize",
+     * and USB 2.0 allows no endpoint more than 1024. A size of 0 is a
+     * zero-bandwidth isochronous endpoint, accepted (XhciPipeZeroBandwidth
+     * says why and how); on any other type it is refused. */
     out.MaxPacketSize = wMaxPacketSize & 0x07FFUL;
-    if (out.MaxPacketSize == 0 || out.MaxPacketSize > XHCI_PIPE_MAX_PACKET) {
+    if (out.MaxPacketSize > XHCI_PIPE_MAX_PACKET ||
+        (out.MaxPacketSize == 0 &&
+         out.TransferType != XHCI_PIPE_XFER_ISOCH)) {
         return XHCI_PIPE_MALFORMED;
     }
 
@@ -401,7 +450,7 @@ static ULONG xhciPipeTotal(const UCHAR *config, ULONG length)
  * The SuperSpeed endpoint (29-A.3) and its SuperSpeedPlus isochronous case
  * (29-A.6). The rules and their sources are on XhciPipeEndpointParamsAt in
  * xhci_pipe.h; section 10.6 of xhci-data-structures.md has the Endpoint
- * Context half, every row marked for verification against the PDF.
+ * Context half, every row verified against xHCI 1.2c and USB 3.2.
  */
 static ULONG xhciPipeSuperSpeed(const UCHAR *config, ULONG total,
                                 ULONG offset, ULONG speed, ULONG lec,
@@ -437,9 +486,13 @@ static ULONG xhciPipeSuperSpeed(const UCHAR *config, ULONG total,
     if (out.TransferType == XHCI_PIPE_XFER_CONTROL) {
         return XHCI_PIPE_UNSUPPORTED;
     }
-    /* At SuperSpeed bits 12:11 are reserved: the burst is the companion's. */
+    /* At SuperSpeed bits 12:11 are reserved: the burst is the companion's.
+     * Size 0 only for isochronous (USB 3.2 Table 9-26; XhciPipeZeroBandwidth),
+     * and then only with burst 0, which the burst check below enforces. */
     out.MaxPacketSize = wMaxPacketSize & 0x07FFUL;
-    if (out.MaxPacketSize == 0 || out.MaxPacketSize > XHCI_PIPE_MAX_PACKET) {
+    if (out.MaxPacketSize > XHCI_PIPE_MAX_PACKET ||
+        (out.MaxPacketSize == 0 &&
+         out.TransferType != XHCI_PIPE_XFER_ISOCH)) {
         return XHCI_PIPE_MALFORMED;
     }
 
@@ -509,6 +562,18 @@ static ULONG xhciPipeSuperSpeed(const UCHAR *config, ULONG total,
         perBurst = out.MaxPacketSize * (burst + 1UL);
         sspFollows = (attributes & 0x80UL) != 0 &&
                      speed == XHCI_PIPE_SPEED_SUPER_PLUS;
+        if (out.MaxPacketSize == 0) {
+            /* Zero bandwidth (XhciPipeZeroBandwidth): burst 0 is already
+             * held to (a burst needs 1024 above), and an endpoint with no
+             * packet transfers no bytes per interval and needs no SSP
+             * companion. Mult 0: Table 9-28 has it zero with bMaxBurst 0. */
+            if (sspFollows || perInterval != 0) {
+                return XHCI_PIPE_MALFORMED;
+            }
+            out.Mult = 0;
+            out.MaxEsitPayload = 0;
+            break;
+        }
         if (sspFollows) {
             /* USB 3.2 9.6.8: the SuperSpeedPlus Isochronous Endpoint
              * Companion follows the SS companion, and its 32-bit
@@ -552,7 +617,8 @@ static ULONG xhciPipeSuperSpeed(const UCHAR *config, ULONG total,
         out.MaxEsitPayload = perInterval != 0 ? perInterval : largest;
         if (lec) {
             /* Reserved under LEC: the xHC derives it from Max ESIT Payload,
-             * Max Packet Size and Max Burst Size (6.2.3.8; to verify). */
+             * Max Packet Size and Max Burst Size (xHCI 1.2c Table 6-8,
+             * p.414; verified). */
             out.Mult = 0;
         }
         break;
@@ -580,7 +646,7 @@ static ULONG xhciPipeSuperSpeed(const UCHAR *config, ULONG total,
      * covers the bursts (the SS companion's payload is held to it above,
      * and the SSP derivation computes it from them).
      */
-    if (out.TransferType == XHCI_PIPE_XFER_ISOCH) {
+    if (out.TransferType == XHCI_PIPE_XFER_ISOCH && out.MaxPacketSize != 0) {
         ULONG packets;
 
         if (out.MaxEsitPayload > XHCI_PIPE_ISO_MAX_PAYLOAD) {
@@ -692,7 +758,7 @@ ULONG XhciPipeParseBos(const UCHAR *data, ULONG length, PXHCI_PIPE_BOS bos)
             case XHCI_PIPE_CAP_SUPERSPEED_PLUS:
                 /* bReserved 3, bmAttributes 7:4, wFunctionalitySupport
                  * 9:8, wReserved 11:10, then SSAC + 1 attribute DWORDs
-                 * (USB 3.2 Table 9-19; to verify). */
+                 * (USB 3.2 Table 9-19, USB 3.2 p.357-358; verified). */
                 if (bLength < 12UL) {
                     return XHCI_PIPE_MALFORMED;
                 }

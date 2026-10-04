@@ -528,6 +528,19 @@ static LONG hcdIsoAdmit(PHCD_CONTROLLER hc, PHCD_XFER x)
 
     it = &((PURB)x->Urb)->UrbIsochronousTransfer;
     pipe = x->Pipe;
+    /* A zero-bandwidth endpoint (wMaxPacketSize 0, Max ESIT Payload 0:
+     * xhci_pipe.c, XhciPipeZeroBandwidth) moves nothing, so a URB on it is
+     * a client error, refused here before any TRB is built - and before
+     * XhciPipeIsoCheck, whose bound of 0 means "unbounded". INVALID_PARAMETER
+     * is this driver's choice: the handle is valid (ABORT_PIPE and
+     * RESET_PIPE act on it), the request is what cannot be served. The
+     * caller stamps every packet and completes the URB at the next tick, as
+     * for every other isochronous refusal. */
+    if (XhciPipeZeroBandwidth(&pipe->Ep)) {
+        XHCI_DBG_VALUE("hcd: isoch URB on a zero-bandwidth pipe, DCI",
+                       pipe->Dci);
+        return HCD_USBD_INVALID_PARAMETER;
+    }
     if (XhciPipeIsoCheck((const XHCI_PIPE_ISO_PACKET *)it->IsoPacket,
                          it->NumberOfPackets, it->TransferBufferLength,
                          XHCI_XFER_MAX_ISO_PACKETS,

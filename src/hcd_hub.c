@@ -125,8 +125,12 @@ VOID HcdDeviceSlotParams(PHCD_USB_DEVICE dev, ULONG withHub,
     sp->Psiv = dev->Speed;
     sp->RootHubPort = dev->Port;
     sp->ContextEntries = 1;
-    sp->ParentSlotId = dev->TtSlot;
-    sp->ParentPortNumber = dev->TtPort;
+    /* Table 6-6's two fields: a TT's for an LS/FS device behind a
+     * High-Speed hub, or a higher-rank SuperSpeed hub's for an SS/SSP
+     * device (HcdHubPlace); never both, since one device is of one kind. */
+    sp->ParentSlotId = dev->TtSlot != 0 ? dev->TtSlot : dev->SsParentSlot;
+    sp->ParentPortNumber = dev->TtSlot != 0 ? dev->TtPort
+                                            : dev->SsParentPort;
     sp->MultiTt = dev->TtMulti;
     if (withHub && dev->HubMarked) {
         sp->Hub = 1;
@@ -207,6 +211,29 @@ ULONG HcdHubPlace(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG speedClass,
     dev->Route = child.Route;
     dev->Tier = child.Tier;
     dev->Speed = psiv;
+    /* Behind a SuperSpeed hub: the device's link rank from the hub's
+     * extended port status (read at the port's reset, hcd_sshub.c), and
+     * xHCI Table 6-6's Parent Hub Slot ID and Parent Port Number when the
+     * hub's own upstream link (hub->Device->SsLinkRank) outranks it - a
+     * Gen 1x1 device behind a Gen 1x2 hub - or the hub's own pair when the
+     * device ranks the same as the hub, the boundary being further up.
+     * Either rank unknown leaves both 0, a best-effort fallback
+     * (XhciSsParentNeeded says why). Implemented, host vectors only: no
+     * SuperSpeedPlus hub is held (xhci-data-structures.md sections 10.5
+     * and 11.8). A USB 2.0 hub decides nothing here; its TT is below. */
+    dev->SsLinkRank = 0;
+    dev->SsParentSlot = 0;
+    dev->SsParentPort = 0;
+    (VOID)XhciSsHubParentOf(hub->Usb3,
+                            hub->Device->BosInfo.HasSuperSpeedPlus,
+                            hub->Device->SsLinkRank,
+                            hub->Device->SsParentSlot,
+                            hub->Device->SsParentPort, &p->HubSsLink,
+                            hub->SlotId, p->Number, &dev->SsLinkRank,
+                            &dev->SsParentSlot, &dev->SsParentPort);
+    XHCI_DBG_VALUE("hcd: behind hub, SS rank hub/device, parent slot/port",
+                   (hub->Device->SsLinkRank << 24) | (dev->SsLinkRank << 16) |
+                       (dev->SsParentSlot << 8) | dev->SsParentPort);
     dev->TtSlot = 0;
     dev->TtPort = 0;
     dev->TtMulti = 0;
@@ -559,7 +586,8 @@ static VOID hcdHubReleaseBelow(PHCD_CONTROLLER hc, PHCD_USB_DEVICE *devs,
  * ClearPortFeature(PORT_SUSPEND), its progress read by
  * XhciSsHubResumeProgress, and C_PORT_LINK_STATE cleared in place of
  * C_PORT_SUSPEND; the quiesce, the deadline, the recovery wait and the
- * outcome are the USB 2.0 port's (USB 3.2 10.16.2.10, to verify; the
+ * outcome are the USB 2.0 port's (USB 3.2 r1.1 10.16.2.6 and 10.16.2.10,
+ * printed pp.446-454, read in the merge's Codex review; the
  * Phase 27 and Phase 30 merge, p28-31-int). No SuperSpeed port is resumed
  * before a reset: a warm reset may start from U3 (XhciSsHubResetKind).
  * Thread only, powered.
@@ -972,8 +1000,10 @@ static VOID hcdHubRearmTick(PHCD_HUB hub)
 /*
  * The given-up SuperSpeed hub ports whose wait has run out, put back to
  * RxDetect - SET_FEATURE(PORT_LINK_STATE) with RxDetect (5) in wIndex bits
- * 15:8, the exit from SS.Disabled (USB 3.2 10.3.1 and Table 10-9, to
- * verify); never BH_PORT_RESET, which is not that exit - and each one
+ * 15:8, the exit from SS.Disabled: valid only in DSPORT.Disabled, to
+ * DSPORT.Disconnected (USB 3.2 10.16.2.10, USB 3.2 p.454, and 10.3.1.2,
+ * p.387; verified); never BH_PORT_RESET, which a port in DSPORT.Disabled
+ * ignores (10.3.1.6, p.388) - and each one
  * looked at in this pass, as a change (Codex review of the Phase 28-31
  * integration, finding 1). A port stays pending until its request
  * succeeds: a failed one is tried again after the next, longer wait (round
