@@ -345,6 +345,19 @@ static NTSTATUS hcdDeviceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
  *   deleted   - at that answer; by the thread at once when it leaves before
  *               PnP ever saw it; or by its parent's removal when PnP has
  *               already removed it;
+ *   dormant   - listed with no device: the controller stopped while PnP
+ *               had this PDO (and every sibling of its group) stopped, not
+ *               removed or surprise-removed - Windows 98 SE's and ME's
+ *               disable of the controller, which STOPs the whole tree and
+ *               STARTs it again at the enable, expecting the same devnodes
+ *               back (HcdDevicePdoDormantAll). Its device's re-enumeration
+ *               at the same place with the same descriptors revives it
+ *               (HcdDevicePdoCreate); its START waits for that, and if it
+ *               does not come, or a different device comes, the PDO is
+ *               reported gone. A new PDO beside a stopped one at the same
+ *               instance id wedged ME's configuration manager (2026-10-04,
+ *               28-V.1 clause 8: START refused on the stale PDOs, new PDOs
+ *               never started, the shell hung);
  *   orphaned  - when its parent goes first while it still awaits a REMOVE
  *               (a surprise removal with handles open): it leaves both lists,
  *               forgets the controller, and is deleted after that REMOVE:
@@ -607,6 +620,235 @@ static NTSTATUS hcdPdoNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     return STATUS_SUCCESS;
 }
 
+/* ----------------------------------------------------------------------- */
+/* Dormant PDOs: kept across a controller stop PnP stopped them for         */
+/* ----------------------------------------------------------------------- */
+
+static ULONG hcdBytesEqual(const UCHAR *a, const UCHAR *b, ULONG n)
+{
+    ULONG i;
+
+    for (i = 0; i < n; i++) {
+        if (a[i] != b[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Whether PDO `old` stands for the same thing as the freshly built `nu`:
+ * the place, the device descriptor, the (filtered) configuration, the
+ * function and the transport decision. PdoListLock held. */
+static ULONG hcdDormantSame(PHCD_DEVICE_PDO old, PHCD_DEVICE_PDO nu)
+{
+    return old->InstanceKey == nu->InstanceKey &&
+           old->Function == nu->Function &&
+           old->InterfaceMask == nu->InterfaceMask &&
+           old->ConfigLength == nu->ConfigLength &&
+           old->Speed == nu->Speed &&
+           hcdBytesEqual(old->DeviceDesc, nu->DeviceDesc,
+                         sizeof(old->DeviceDesc)) &&
+           hcdBytesEqual(old->Config, nu->Config, old->ConfigLength) &&
+           hcdBytesEqual((const UCHAR *)&old->Xport, (const UCHAR *)&nu->Xport,
+                         sizeof(old->Xport));
+}
+
+/*
+ * The controller stops (HcdEnumDrop, the thread stopped): every device
+ * whose PDOs PnP has all stopped - not removed, not surprise-removed, still
+ * listed - keeps them listed with no device, Dormant, and lets go of them
+ * (dev->Pdo NULL), so the drop that follows reports nothing gone and leaves
+ * the port Empty for the restart's rescan. Only on the controller's
+ * orderly PnP STOP (StopPreserve). Windows 2000 onward remove the children
+ * before a controller disable, so nothing goes dormant there, and a PnP
+ * stop of the controller alone (a rebalance) leaves the children started,
+ * which are dropped and reported gone as before. Matched by place and
+ * descriptors, not by serial string: two identical serial-less units
+ * swapped while disabled are taken for each other. IRQL: PASSIVE_LEVEL.
+ */
+VOID HcdDevicePdoDormantAll(PHCD_CONTROLLER hc)
+{
+    PHCD_USB_DEVICE dev;
+    PHCD_DEVICE_PDO first;
+    PHCD_DEVICE_PDO pdo;
+    KIRQL oldIrql;
+    ULONG keep;
+    ULONG i;
+
+    for (i = 1; i <= XHCI_MAX_SLOTS; i++) {
+        dev = hc->SlotDevice[i];
+        if (dev == NULL || dev->Pdo == NULL) {
+            continue;
+        }
+        first = (PHCD_DEVICE_PDO)dev->Pdo->DeviceExtension;
+        KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+        keep = 1;
+        for (pdo = first; pdo != NULL; pdo = pdo->Sibling) {
+            if (!pdo->Listed || pdo->Common.PnpState != HCD_PNP_STOPPED ||
+                pdo->Surprised || pdo->RemoveReceived || pdo->UrbsPending != 0) {
+                keep = 0;
+            }
+        }
+        if (keep) {
+            for (pdo = first; pdo != NULL; pdo = pdo->Sibling) {
+                pdo->Device = NULL;
+                pdo->Dormant = 1;
+            }
+            dev->Pdo = NULL;
+        }
+        KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+        if (keep) {
+            XHCI_DBG_VALUE("hcd: stopped PDOs kept dormant, port", dev->Port);
+        }
+    }
+}
+
+/* Every dormant PDO of the group at `instanceKey` (or of `group` when it is
+ * not 0) unlisted onto GonePdos, its siblings with it, for the next
+ * relations answer to report missing. Returns how many. PdoListLock held. */
+static ULONG hcdDormantRetireLocked(PHCD_CONTROLLER hc, ULONG instanceKey,
+                                   ULONG group)
+{
+    PHCD_DEVICE_PDO *at;
+    PHCD_DEVICE_PDO pdo;
+    ULONG n;
+
+    n = 0;
+    at = &hc->DevicePdos;
+    while (*at != NULL) {
+        pdo = *at;
+        if (!pdo->Dormant ||
+            (group != 0 ? pdo->Group != group
+                        : pdo->InstanceKey != instanceKey)) {
+            at = &pdo->Next;
+            continue;
+        }
+        *at = pdo->Next;
+        pdo->Dormant = 0;
+        pdo->Listed = 0;
+        pdo->Sibling = NULL;
+        pdo->Next = hc->GonePdos;
+        hc->GonePdos = pdo;
+        n++;
+    }
+    return n;
+}
+
+/*
+ * A device enumerated at the place of a dormant group, built as `first`
+ * (its PDOs not listed): when every PDO matches the dormant one in the same
+ * position, the dormant group gets the device back - dev->Pdo names it,
+ * each PDO names the record and its new port object - and 1 is returned
+ * for the caller to delete the new ones. PdoListLock taken. Thread only.
+ */
+static ULONG hcdDormantRevive(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                              PHCD_DEVICE_PDO first)
+{
+    PHCD_DEVICE_PDO old;
+    PHCD_DEVICE_PDO a;
+    PHCD_DEVICE_PDO b;
+    KIRQL oldIrql;
+    ULONG same;
+
+    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    for (old = hc->DevicePdos; old != NULL; old = old->Next) {
+        if (old->Dormant && old->Group == old->Serial &&
+            old->InstanceKey == first->InstanceKey) {
+            break;
+        }
+    }
+    same = 0;
+    if (old != NULL) {
+        same = 1;
+        for (a = old, b = first; a != NULL || b != NULL;
+             a = a->Sibling, b = b->Sibling) {
+            if (a == NULL || b == NULL || !a->Dormant ||
+                !hcdDormantSame(a, b)) {
+                same = 0;
+                break;
+            }
+        }
+    }
+    if (same) {
+        for (a = old; a != NULL; a = a->Sibling) {
+            a->Device = dev;
+            a->Port = dev->Location;
+            a->RootPort = dev->Port;
+            a->Route = dev->Route;
+            a->Dormant = 0;
+        }
+        dev->Pdo = old->Common.Self;
+        dev->PdoGroup = old->Group;
+    }
+    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    return same;
+}
+
+/* REMOVE on a dormant PDO: its group reported gone. IRQL: PASSIVE_LEVEL. */
+static VOID hcdDormantRemoved(PHCD_DEVICE_PDO pdo)
+{
+    PHCD_CONTROLLER hc;
+    KIRQL oldIrql;
+    ULONG retired;
+
+    hc = pdo->Controller;
+    if (hc == NULL) {
+        return;
+    }
+    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    retired = pdo->Dormant ? hcdDormantRetireLocked(hc, 0, pdo->Group) : 0;
+    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    if (retired != 0 && hc->RootHubPdo != NULL) {
+        IoInvalidateDeviceRelations(hc->RootHubPdo, BusRelations);
+    }
+}
+
+/*
+ * START on a dormant PDO (Windows 98 SE and ME start the tree again right
+ * after the root hub, before the restarted controller has rescanned): waits
+ * up to HCD_DORMANT_WAIT_MS for the device to come back to it. If it does
+ * not - unplugged meanwhile, or another device there - the group is
+ * reported gone and the START is refused as any departed PDO's is. IRQL:
+ * PASSIVE_LEVEL.
+ */
+#define HCD_DORMANT_WAIT_MS 10000UL
+
+static VOID hcdDormantWait(PHCD_DEVICE_PDO pdo)
+{
+    PHCD_CONTROLLER hc;
+    LARGE_INTEGER due;
+    KIRQL oldIrql;
+    ULONG waited;
+    ULONG retired;
+
+    hc = pdo->Controller;
+    if (hc == NULL) {
+        return;
+    }
+    HcdThreadWake(hc);
+    for (waited = 0; waited < HCD_DORMANT_WAIT_MS && pdo->Dormant &&
+                     pdo->Controller != NULL;
+         waited += 50) {
+        HcdRelativeMs(&due, 50);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
+    retired = 0;
+    if (pdo->Controller == NULL) {
+        /* Orphaned meanwhile: the parent's release settled it. */
+        return;
+    }
+    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    if (pdo->Dormant) {
+        retired = hcdDormantRetireLocked(hc, 0, pdo->Group);
+    }
+    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    if (retired != 0 && hc->RootHubPdo != NULL) {
+        XHCI_DBG_VALUE("hcd: dormant PDO not revived, reported gone, port",
+                       pdo->Port);
+        IoInvalidateDeviceRelations(hc->RootHubPdo, BusRelations);
+    }
+}
+
 /*
  * The PDO(s) for an enumerated device: one device PDO, or - for a device the
  * bus splits (xhci_func.c, design record 13 section 10.8) - the device
@@ -670,6 +912,18 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         }
         last = pdo;
     }
+    if (hcdDormantRevive(hc, dev, first)) {
+        /* The device came back to the PDOs PnP kept across the controller
+         * stop: they are its own again, and the new ones, never listed,
+         * go. Nothing changes in the relations. */
+        while (first != NULL) {
+            pdo = first;
+            first = first->Sibling;
+            hcdDeletePdo(pdo);
+        }
+        XHCI_DBG_VALUE("hcd: stopped PDOs revived, port", dev->Port);
+        return STATUS_SUCCESS;
+    }
     if (hcdXportRefusal(hc, dev, first)) {
         /* The hold is queued (29-A.5): the device stays enumerated, with
          * no PDO, until the hold service's PED write and disconnect on the
@@ -689,6 +943,10 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     dev->PdoGroup = first->Group;
 
     KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    /* A dormant group at the same place that this device did not revive
+     * (different descriptors) is reported gone in the same hold, so the
+     * relations answer that brings the new PDOs omits it. */
+    hcdDormantRetireLocked(hc, first->InstanceKey, 0);
     for (pdo = first; pdo != NULL; pdo = pdo->Sibling) {
         pdo->Next = hc->DevicePdos;
         hc->DevicePdos = pdo;
@@ -1401,6 +1659,9 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
 
     switch (stack->MinorFunction) {
     case IRP_MN_START_DEVICE:
+        if (pdo->Dormant) {
+            hcdDormantWait(pdo);
+        }
         if (!hcdPdoStarted(pdo)) {
             XHCI_DBG_VALUE("hcd: START refused, device gone, port",
                            pdo->Port);
@@ -1417,11 +1678,20 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
 
     case IRP_MN_STOP_DEVICE:
     case IRP_MN_SURPRISE_REMOVAL:
+        if (stack->MinorFunction == IRP_MN_SURPRISE_REMOVAL) {
+            pdo->Surprised = 1;
+        }
         pdo->Common.PnpState = HCD_PNP_STOPPED;
         hcdPdoQuiesce(pdo, 0);
         return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
 
     case IRP_MN_REMOVE_DEVICE:
+        if (pdo->Dormant) {
+            /* Removed while its controller was stopped: no device will
+             * come back to it. Reported gone, then handled as any gone
+             * PDO's REMOVE (hcdPdoRemoved). */
+            hcdDormantRemoved(pdo);
+        }
         pdo->Common.PnpState = HCD_PNP_REMOVED;
         hcdPdoQuiesce(pdo, 1);
         hcdPdoFunctionRelease(pdo);
