@@ -1,0 +1,142 @@
+; xhci98-amd64.inf - the successor xHCI host controller driver, the 64-bit
+; package
+;
+; The amd64 counterpart of src\xhci98.inf, for the reasons the miniport's
+; two INFs were two files: a second binary from a second
+; toolchain (WDK 7.1) in a second package, with no Windows 98 path - an
+; undecorated section here is one a 32-bit engine falls back to (PATH-NO9X).
+; NT 5.2 takes [XhciModels.NTamd64], which fetches usbd.sys and usbui.dll
+; through LayoutFile; Vista and Windows 7 x64 take [XhciModels.NTamd64.6.0],
+; which copies the driver alone. Both models sections carry the controller
+; and the root hub the controller creates, under the project-owned id
+; (xhci98.inf has the long form).
+;
+; Written as task 25.8's scaffold INF; stageable since 26-A.1 removed the
+; scaffold marker from the image. Task 28-A.2 (taken at the start of Phase
+; 27) is the amd64 build that loads in a guest: this file's first install
+; is its XP x64 leg, and 28-V.1 the rest of the amd64 guests.
+;
+; ASCII only, CRLF line endings.
+
+[Version]
+Signature="$CHICAGO$"
+Class=USB
+ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
+Provider=%Provider%
+LayoutFile=layout.inf
+; Must equal src\xhci_version.h.
+DriverVer=10/05/2026,2.1.0.0
+
+[Manufacturer]
+%Mfg%=XhciModels,NTamd64,NTamd64.6.0
+
+[XhciModels.NTamd64]
+%XhciDesc%=Xhci.Dev,PCI\CC_0C0330
+%RootHubDesc%=RootHub.Dev,XHCI98\ROOT_HUB
+%HubDesc%=Hub.Dev,XHCI98\HUB
+%Hub30Desc%=Hub.Dev,XHCI98\HUB30
+
+[XhciModels.NTamd64.6.0]
+%XhciDesc%=Xhci.Dev6,PCI\CC_0C0330
+%RootHubDesc%=RootHub.Dev6,XHCI98\ROOT_HUB
+%HubDesc%=Hub.Dev6,XHCI98\HUB
+%Hub30Desc%=Hub.Dev6,XHCI98\HUB30
+
+[SourceDisksNames]
+1=%DiskName%,xhci98.sys,,
+
+[SourceDisksFiles]
+xhci98.sys=1
+xhci98.inf=1
+
+[DestinationDirs]
+DefaultDestDir=10
+Xhci.CopyFiles=10,System32\Drivers
+Xhci.CopyOS=10,System32\Drivers
+Xhci.CopyUI=11
+
+[Xhci.Dev.NTamd64]
+AddReg=Xhci.AddReg.NT
+CopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI
+
+[Xhci.Dev.NTamd64.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
+[Xhci.Dev6.NTamd64]
+AddReg=Xhci.AddReg.NT
+CopyFiles=Xhci.CopyFiles
+
+[Xhci.Dev6.NTamd64.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
+[RootHub.Dev.NTamd64]
+AddReg=RootHub.AddReg.NT
+CopyFiles=Xhci.CopyFiles
+
+[RootHub.Dev.NTamd64.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
+[RootHub.Dev6.NTamd64]
+AddReg=RootHub.AddReg.NT
+CopyFiles=Xhci.CopyFiles
+
+[RootHub.Dev6.NTamd64.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
+; An external hub (task 33.4; design record 13, section 10.11): presented by
+; the bus under XHCI98\HUB or XHCI98\HUB30 and bound to xhci98.sys again.
+; Its sections copy NOTHING - the devnode exists only under a running
+; xhci98.sys - so a hub plugged in long after the install never asks for the
+; original media (HCD-HUBCOPY).
+[Hub.Dev.NTamd64]
+AddReg=RootHub.AddReg.NT
+
+[Hub.Dev.NTamd64.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
+[Hub.Dev6.NTamd64]
+AddReg=RootHub.AddReg.NT
+
+[Hub.Dev6.NTamd64.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
+[Xhci.AddService]
+DisplayName=%XhciSvcDesc%
+ServiceType=1                       ; SERVICE_KERNEL_DRIVER
+StartType=3                         ; SERVICE_DEMAND_START
+ErrorControl=1                      ; SERVICE_ERROR_NORMAL
+ServiceBinary=%12%\xhci98.sys
+LoadOrderGroup=Base
+
+[Xhci.AddReg.NT]
+HKR,,XhciLogVerbosity,0x00010001,0
+HKR,,XhciLogDebugView,0x00010001,0
+HKR,,XhciImodInterval250ns,0x00010001,160
+HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"
+HKR,,Controller,1,01
+
+; The root hub's Power tab (design record 13, section 8).
+[RootHub.AddReg.NT]
+HKR,,EnumPropPages32,,"usbui.dll,USBHubPropPageProvider"
+
+[Xhci.CopyFiles]
+xhci98.sys
+
+[Xhci.CopyOS]
+usbd.sys,,,16
+
+[Xhci.CopyUI]
+usbui.dll,,,16
+
+[DefaultInstall.NTamd64]
+CopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI
+
+[Strings]
+Provider="Yeo Kheng Meng"
+Mfg="xHCI98 Project"
+DiskName="xhci98 xHCI Host Controller Disk"
+XhciDesc="xHCI98 USB 3.x eXtensible Host Controller"
+RootHubDesc="xHCI98 USB 3.x Root Hub"
+HubDesc="xHCI98 USB Hub"
+Hub30Desc="xHCI98 USB 3.x Hub"
+XhciSvcDesc="xHCI98 USB 3.x eXtensible Host Controller Driver (xhci98)"
