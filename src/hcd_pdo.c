@@ -930,7 +930,9 @@ static VOID hcdDormantRetireSerialLocked(PHCD_CONTROLLER hc,
  * on the location form for a duplicate keeps its own and never takes a
  * different unit's - Codex review of 33.2, round 2, finding 2; when every
  * read of `first`'s failed its serial is unknown, not different, and the
- * place and descriptors decide - round 3) or by
+ * place and descriptors decide - round 3; likewise when every read of the
+ * group's failed and `first` answers the location form too - round 4;
+ * XhciFuncReviveByPlace) or by
  * `first`'s serial id, exactly. NULL for none. PdoListLock held. */
 static PHCD_DEVICE_PDO hcdDormantFindLocked(PHCD_CONTROLLER hc,
                                             PHCD_DEVICE_PDO first,
@@ -948,8 +950,10 @@ static PHCD_DEVICE_PDO hcdDormantFindLocked(PHCD_CONTROLLER hc,
         if (byPlace ? (old->InstanceKey != first->InstanceKey ||
                        !XhciFuncReviveByPlace(old->SerialId,
                                               old->ReadSerialId,
+                                              old->SerialUnread,
                                               first->ReadSerialId,
-                                              first->SerialUnread))
+                                              first->SerialUnread,
+                                              first->SerialId[0] == 0))
                     : !XhciFuncReviveBySerial(old->SerialId,
                                               first->SerialId)) {
             continue;
@@ -1008,6 +1012,9 @@ static ULONG hcdDormantRevive(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             a->SerialId[0] = 0;
         }
         *duplicate = 1;
+        /* Now on the location form: a group at this place whose own reads
+         * failed answers the same id (Codex review of 33.2, round 4). */
+        old = hcdDormantFindLocked(hc, first, 1);
     }
     same = (old != NULL);
     if (same) {

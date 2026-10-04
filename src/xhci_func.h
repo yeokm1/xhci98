@@ -156,14 +156,18 @@ ULONG XhciFuncInstanceId(const char *serial, ULONG location, ULONG mi,
  * Which dormant group a re-enumerated device may revive on Windows 98 SE
  * and ME (task 33.2 on 33.1's dormant PDOs), by the ids alone - the caller
  * compares place and descriptors. A group named by its place (its
- * `oldSerial` empty) at the device's place: only when the device read the
- * same serial id the group's did (`oldRead`, `newRead`, exact, both empty
- * for no serial), or every read of the device's failed (`newUnread`: not
- * known to differ). A group named by its serial id: only by a device with
- * exactly that serial id (`newSerial`). 1 when it may.
+ * `oldSerial` empty) at the device's place: when the device read the same
+ * serial id the group's did (`oldRead`, `newRead`, exact, both empty for
+ * no serial); or every read of the device's failed (`newUnread`: not known
+ * to differ); or every read of the group's device failed (`oldUnread`)
+ * and the device answers the location form itself (`newLocation`: no
+ * serial id, or one a duplicate emptied) - the same id either way. A
+ * group named by its serial id: only by a device with exactly that serial
+ * id (`newSerial`). 1 when it may.
  */
 ULONG XhciFuncReviveByPlace(const char *oldSerial, const char *oldRead,
-                            const char *newRead, ULONG newUnread);
+                            ULONG oldUnread, const char *newRead,
+                            ULONG newUnread, ULONG newLocation);
 ULONG XhciFuncReviveBySerial(const char *oldSerial, const char *newSerial);
 
 #endif /* XHCI_FUNC_H */

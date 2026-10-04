@@ -2451,7 +2451,9 @@ device keeps the location form and `UniqueID` FALSE.
   by the device's place whose device read the same serial id, or none (so
   a unit a duplicate left on the location form revives its own PDOs, and
   a serial-named unit never takes another unit's location group; a device
-  whose every read failed this time counts as unknown, not different),
+  whose every read failed this time counts as unknown, not different, and
+  a group whose device's reads all failed is revived by a device that
+  answers the location form at that place, since the id is the same),
   then a group named by its serial id, wherever the device comes back
   (`XhciFuncReviveByPlace`, `XhciFuncReviveBySerial`, host vectors in
   `test_func`). A revived PDO answers the id

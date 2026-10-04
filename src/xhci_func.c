@@ -540,13 +540,15 @@ static ULONG xhciFuncExact(const char *a, const char *b)
 }
 
 ULONG XhciFuncReviveByPlace(const char *oldSerial, const char *oldRead,
-                            const char *newRead, ULONG newUnread)
+                            ULONG oldUnread, const char *newRead,
+                            ULONG newUnread, ULONG newLocation)
 {
     if (oldSerial == NULL || oldRead == NULL || newRead == NULL ||
         oldSerial[0] != 0) {
         return 0;
     }
-    return newUnread || xhciFuncExact(oldRead, newRead);
+    return newUnread || (oldUnread && newLocation) ||
+           xhciFuncExact(oldRead, newRead);
 }
 
 ULONG XhciFuncReviveBySerial(const char *oldSerial, const char *newSerial)

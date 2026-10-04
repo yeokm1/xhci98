@@ -854,28 +854,42 @@ static void test_instance_ids(void)
 static void test_revive(void)
 {
     /* A group named by its place, a unit with no serial: the same. */
-    CHECK_EQ(XhciFuncReviveByPlace("", "", "", 0), 1,
+    CHECK_EQ(XhciFuncReviveByPlace("", "", 0, "", 0, 1), 1,
              "no serial then, none now");
-    /* A unit a duplicate left on the location form keeps its group. */
-    CHECK_EQ(XhciFuncReviveByPlace("", "S1", "S1", 0), 1,
+    /* A unit a duplicate left on the location form keeps its group,
+     * before the duplicate check and after it. */
+    CHECK_EQ(XhciFuncReviveByPlace("", "S1", 0, "S1", 0, 0), 1,
              "duplicate's location group, same serial read");
+    CHECK_EQ(XhciFuncReviveByPlace("", "S1", 0, "S1", 0, 1), 1,
+             "duplicate's location group, a duplicate again");
     /* ... even when its reads fail at the re-enable (round 3). */
-    CHECK_EQ(XhciFuncReviveByPlace("", "S1", "", 1), 1,
+    CHECK_EQ(XhciFuncReviveByPlace("", "S1", 0, "", 1, 1), 1,
              "duplicate's location group, every read failed now");
+    /* A group whose reads failed, its device reading S now: not before
+     * the duplicate check (it may be another unit, A of round 2) ... */
+    CHECK_EQ(XhciFuncReviveByPlace("", "", 1, "S1", 0, 0), 0,
+             "unread group, a serial id now, not yet a duplicate");
+    /* ... and once S proved a duplicate, the same location id (round 4). */
+    CHECK_EQ(XhciFuncReviveByPlace("", "", 1, "S1", 0, 1), 1,
+             "unread group, now a duplicate on the location form");
+    CHECK_EQ(XhciFuncReviveByPlace("", "", 1, "", 0, 1), 1,
+             "unread group, no serial or a refused one now");
     /* A serial-named unit never takes another unit's location group
      * (round 2): B read nothing, A reads S. */
-    CHECK_EQ(XhciFuncReviveByPlace("", "", "S1", 0), 0,
+    CHECK_EQ(XhciFuncReviveByPlace("", "", 0, "S1", 0, 0), 0,
              "another unit's location group, serial now");
-    CHECK_EQ(XhciFuncReviveByPlace("", "S2", "S1", 0), 0,
+    CHECK_EQ(XhciFuncReviveByPlace("", "", 0, "S1", 0, 1), 0,
+             "a known serial-less group, a duplicate now");
+    CHECK_EQ(XhciFuncReviveByPlace("", "S2", 0, "S1", 0, 0), 0,
              "another duplicate's location group");
-    CHECK_EQ(XhciFuncReviveByPlace("", "s1", "S1", 0), 0,
+    CHECK_EQ(XhciFuncReviveByPlace("", "s1", 0, "S1", 0, 0), 0,
              "the serial read is compared exactly");
     /* A group named by its serial id is never its place's. */
-    CHECK_EQ(XhciFuncReviveByPlace("S1", "S1", "S1", 0), 0,
+    CHECK_EQ(XhciFuncReviveByPlace("S1", "S1", 0, "S1", 0, 0), 0,
              "a serial-named group, by place");
-    CHECK_EQ(XhciFuncReviveByPlace("S1", "S1", "", 1), 0,
+    CHECK_EQ(XhciFuncReviveByPlace("S1", "S1", 0, "", 1, 1), 0,
              "a serial-named group, by place, reads failed");
-    CHECK_EQ(XhciFuncReviveByPlace(NULL, "", "", 0), 0, "NULL");
+    CHECK_EQ(XhciFuncReviveByPlace(NULL, "", 0, "", 0, 1), 0, "NULL");
 
     /* By serial: exactly the id the group answers. */
     CHECK_EQ(XhciFuncReviveBySerial("S1", "S1"), 1, "the same serial id");
