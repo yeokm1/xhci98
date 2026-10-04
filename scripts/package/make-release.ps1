@@ -3259,12 +3259,6 @@ May be addressed in a later release:
     any ordinary USB stick once, then unplug the UAS drive and plug it back
     in. No Remove and no restart are needed.
 
-  * WINDOWS ME: RE-ENABLING THE CONTROLLER WITH A USB MOUSE OR KEYBOARD
-    ATTACHED MAKES WINDOWS ME STOP RESPONDING. A USB storage device alone is
-    fine. Unplug the mouse or keyboard before re-enabling the controller. If
-    ME stops responding, restart it and re-enable the controller with
-    nothing attached. Being fixed.
-
   * A DEVICE MOVED TO A DIFFERENT PORT IS FOUND AGAIN AS NEW HARDWARE. This
     driver names a device by its port; Microsoft's hub driver uses the
     device's serial number. A later release may do the same.
