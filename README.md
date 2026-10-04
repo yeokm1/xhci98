@@ -187,7 +187,7 @@ It is read each time a device enumerates, so unplug and replug the drive after c
 
 ## What is tested, and what is not
 
-Windows 98 SE and Windows 2000 SP4 are the primary targets, and both are validated in QEMU virtual machines. Windows 98 SE is also validated on real hardware, below. Windows 2000 has never run on real hardware. The other targets, 32-bit Windows 7 included, are virtual machines only.
+Windows 98 SE and Windows 2000 SP4 are the primary targets, and both are validated in QEMU virtual machines. Windows 98 SE has also run on real hardware, the ThinkPad E460 and the ThinkPad P14s Gen 1. Windows 2000 has never run on real hardware. The other targets, 32-bit Windows 7 included, are virtual machines only.
 
 | Target | 2.0.0.0 state |
 |---|---|
