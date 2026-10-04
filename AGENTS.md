@@ -181,7 +181,7 @@ driver fills the gap for both.
 | Primary targets | Windows 98 SE (4.10.2222) and Windows 2000 SP4 - one binary, both required |
 | Supported in VM | How each target was admitted, under the miniport; the HCD's standing on each is the release notes' "Targets and their standing", every one virtual-machine only for `2.0.0.0`. Windows ME (4.90.3000), under SweetLow's USB 2.0 stack only - observed in one QEMU guest on 2026-09-02, never on metal, no checkpoint tax. Same 16-bit setup engine and undecorated INF half as Windows 98 SE; see `docs/contributing/build-and-test.md`, "Windows ME target VM". 32-bit Windows XP (SP3) - observed in one QEMU guest on 2026-09-03 (xHCI-only package install, HID, mass storage, composite audio, the disable/enable/remove/rescan sequence), never on metal, no checkpoint tax; the `.NTx86` INF half under XP's own `usbport.sys`. Accommodate it where the change is small and low-risk, never at a primary target's expense; see `docs/contributing/build-and-test.md`, "Windows XP target VM", and `docs/usb-xhci-info/win98-wdm.md`, "What about Windows XP?" Windows XP x64 / Server 2003 x64 (NT 5.2.3790) - observed in one QEMU guest on 2026-09-09 (the same clauses, on the `qemu` build and then the `release` flavour; `debug-x64` has never been read in a guest), never on metal, no checkpoint tax; the `.NTamd64` half of the *second* INF, and **a second binary, not this one** - see "Windows XP x64 target VM" and `docs/contributing/design/11-x64-targets.md`. Windows Vista (SP2) and Windows 7 (SP1), 32-bit and x64 - observed in four QEMU guests on 2026-09-13 (the same clauses plus five disable/enable cycles each, on the `qemu` build; the published `release` package was then installed on all four on 2026-09-18, roadmap task 22.10), never on metal except one 32-bit Windows 7 session on the E460 (2026-09-19), no checkpoint tax; the `Xhci.Dev6` install path of both INFs and the Version 300 registration path of both binaries. **The x64 half loads only on an F8 boot with signature enforcement disabled, every boot**; see "Windows Vista and Windows 7 target VMs" and "Vista x64 and Windows 7 x64 target VMs" |
 | USB scope | SuperSpeed (5 Gbit/s) and USB 2.0 (HS/FS/LS) devices and hubs, and UAS; HID, mass storage, USB Ethernet, and USB Audio validation targets. SuperSpeedPlus links are accepted at their trained rate and are untested ground, as is SuperSpeed isochronous (`roadmap-hcd.md`, decisions table; the release notes, "Untested ground"). The frozen miniport was USB 2.0 only |
-| Integration model | A monolithic bus driver (design record 13): `xhci98.sys` is the controller's FDO and its root hub's FDO, runs hubs and composite splitting inside the bus, and presents device PDOs to each target's own class drivers. It replaces `usbport.sys`, `usbhub.sys`, `usbhub20.sys` and `usbccgp.sys`; `xhciuas.sys` is the UAS class driver above it. The miniport's model, a `usbport.sys` miniport (Option A), is the `1.2.0.0` branch's |
+| Integration model | A monolithic bus driver (design record 13): `xhci98.sys` is the controller's FDO and its root hub's FDO, runs hubs and composite splitting inside the bus, and presents device PDOs to each target's own class drivers; since `2.1.0.0` each external hub also has a PDO under a project-owned id, bound to `xhci98.sys` again as a hub FDO (design record 13 section 10.11). It replaces `usbport.sys`, `usbhub.sys`, `usbhub20.sys` and `usbccgp.sys`; `xhciuas.sys` is the UAS class driver above it. The miniport's model, a `usbport.sys` miniport (Option A), is the `1.2.0.0` branch's |
 | Compiler | MSVC 6.0, run in place from `tools/MSVC600` (unpacked from `tools/MSVC600.zip`). The amd64 build is the exception and cannot be otherwise: it is WDK 7.1's `cl` 15.00 from `tools/WinDDK71`, reached by `build-driver.cmd <flavour> -amd64`, because no compiler here older than that can target x64 |
 | DDK | Windows 2000 DDK, unpacked into `tools/ntddk` (from `tools/WIN2KDDK.EXE`), for every 32-bit build; WDK 7.1 in `tools/WinDDK71` (`x64 WNET`) for the amd64 one, whether it stays being design record 11's decision 3. All of them live in the repo and install nothing machine-wide; every script finds them relative to itself. `DDKROOT` overrides where the DDK is found and reaches its `setenv.bat`, so it does redirect the compiler the driver is built with. `MSVC6` does NOT: the DDK build takes its compiler from the generated environment script, and `MSVC6` only redirects the host-side tools that need `dumpbin` and `cl` of their own - the import gate and `scripts\vm-matrix\gen-offsets.ps1` |
 | Language | C (C89/C90 compatible with MSVC 6.0) |
@@ -292,7 +292,9 @@ child, the root-hub PDO, under a **project-owned** hardware id (never
 `USB\ROOT_HUB`, which the OS's own `usbhub.sys` would claim); bound to that
 PDO by its own INF, it is the root hub's FDO too, enumerates every device on
 the bus and creates a PDO per device, or per function of a composite device,
-with the id strings each target's class INFs match. External hubs are run
+with the id strings each target's class INFs match (and, since `2.1.0.0`, an
+instance id from the device's serial number where it has a usable one,
+design record 13 section 10.7). External hubs are run
 by the bus and, since `2.1.0.0` (roadmap-hcd task 33.4, design record 13
 section 10.11), also presented as devnodes under project-owned ids
 (`XHCI98\HUB`, `XHCI98\HUB30`) bound to `xhci98.sys` once more, with the
@@ -476,7 +478,10 @@ binary on a 32-bit machine, and the gate refuses it by name (`PATH-NO9X`,
 `xhciuas.sys` has the same pair of its own, `src/uas/xhciuas.inf` and
 `src/uas/xhciuas-amd64.inf`, gated on every build by
 `scripts\inf-gate\check-uas-inf.ps1`, and every flavour directory of a
-package carries both drivers with their INFs.
+package carries both drivers with their INFs. Since `2.1.0.0` it also
+carries `txtsetup.oem` (from `src\txtsetup.oem` or `src\txtsetup-amd64.oem`)
+for text-mode Setup's F6 prompt, held by
+`scripts\inf-gate\check-txtsetup-oem.ps1` (design record 13 section 5.6).
 
 The media carries no Microsoft file. The HCD's INFs have the setup engine
 copy two of the OS's own files, `usbd.sys` (whose helper exports the class
