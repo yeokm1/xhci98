@@ -2001,6 +2001,136 @@ static void test_zero_bandwidth(void)
              "a bound of 0 is unbounded: the zero-bandwidth test comes first");
 }
 
+/*
+ * Fast polling (33.8; design record 13 section 13). The rates are
+ * hidusbf's own documentation (README.2kHz-8kHz.ENG.TXT: "2kHz-4kHz driver
+ * 31 = 2000Hz 62 = 4000Hz", "4kHz-8kHz driver 31 = 4000Hz 62 = 8000Hz"),
+ * taken as this driver's policy: its "31 Hz" is bInterval 32 (Table 6-12
+ * Interval 8, 2^8 * 125 us = 32 ms) and its "62 Hz" bInterval 16 (Interval
+ * 7); 2000, 4000 and 8000 Hz are 500, 250 and 125 us, Interval 2, 1 and 0
+ * by 6.2.3.6's 125 us * 2^Interval. The completion codes are Table 6-90's:
+ * 17 Parameter Error, 8 Bandwidth Error, 35 Secondary Bandwidth Error.
+ */
+static ULONG fast_interval(ULONG mode, ULONG speed, ULONG route,
+                           ULONG attributes, ULONG bInterval, PULONG applied)
+{
+    XHCI_PIPE_EP ep;
+
+    ep_params(0x81, attributes, 8, bInterval, speed, &ep);
+    *applied = XhciPipeFastPoll(mode, speed, route, &ep);
+    return ep.Interval;
+}
+
+static void test_fast_poll(void)
+{
+    XHCI_PIPE_EP ep;
+    ULONG applied;
+    ULONG b;
+
+    CHECK_EQ(XhciPipeFastMode(0), XHCI_PIPE_FAST_OFF, "0 is off");
+    CHECK_EQ(XhciPipeFastMode(1), XHCI_PIPE_FAST_1K, "1 is 1K");
+    CHECK_EQ(XhciPipeFastMode(2), XHCI_PIPE_FAST_2K4K, "2 is 2K4K");
+    CHECK_EQ(XhciPipeFastMode(3), XHCI_PIPE_FAST_4K8K, "3 is 4K8K");
+    CHECK_EQ(XhciPipeFastMode(4), XHCI_PIPE_FAST_OFF, "4 is off");
+    CHECK_EQ(XhciPipeFastMode(0xFFFFFFFFUL), XHCI_PIPE_FAST_OFF,
+             "all ones is off");
+
+    /* Fresh from the parser: not fast, SpecInterval = Interval. */
+    CHECK_EQ(ep_params(0x81, 3, 8, 16, XHCI_PIPE_SPEED_LOW, &ep),
+             XHCI_PIPE_OK, "LS bInterval 16 accepted");
+    CHECK_EQ(ep.FastPoll, 0, "the parser sets no fast poll");
+    CHECK_EQ(ep.SpecInterval, 7, "SpecInterval = Interval 7");
+
+    /* The table, Low Speed and Full Speed alike, at a root port. */
+    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_2K4K, XHCI_PIPE_SPEED_LOW, 0, 3,
+                           32, &applied), 2, "2K4K: LS 32 ms -> 500 us");
+    CHECK_EQ(applied, 1, "applied");
+    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_2K4K, XHCI_PIPE_SPEED_LOW, 0, 3,
+                           16, &applied), 1, "2K4K: LS 16 ms -> 250 us");
+    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_4K8K, XHCI_PIPE_SPEED_LOW, 0, 3,
+                           32, &applied), 1, "4K8K: LS 32 ms -> 250 us");
+    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_4K8K, XHCI_PIPE_SPEED_LOW, 0, 3,
+                           16, &applied), 0, "4K8K: LS 16 ms -> 125 us");
+    CHECK_EQ(applied, 1, "applied");
+    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_4K8K, XHCI_PIPE_SPEED_FULL, 0, 3,
+                           16, &applied), 0, "4K8K: FS 16 ms -> 125 us");
+    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_2K4K, XHCI_PIPE_SPEED_FULL, 0, 3,
+                           32, &applied), 2, "2K4K: FS 32 ms -> 500 us");
+
+    /* Every bInterval of the two bands is mapped, and nothing outside
+     * them: 15 and 64 keep Table 6-12's 6 and 9. */
+    for (b = 16; b <= 63; b++) {
+        CHECK_EQ(fast_interval(XHCI_PIPE_FAST_4K8K, XHCI_PIPE_SPEED_LOW, 0, 3,
+                               b, &applied), b < 32 ? 0UL : 1UL,
+                 "4K8K maps the whole 16-63 band");
+    }
+    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_4K8K, XHCI_PIPE_SPEED_LOW, 0, 3,
+                           15, &applied), 6, "15 ms keeps Interval 6");
+    CHECK_EQ(applied, 0, "not applied");
+    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_4K8K, XHCI_PIPE_SPEED_LOW, 0, 3,
+                           64, &applied), 9, "64 ms keeps Interval 9");
+    CHECK_EQ(applied, 0, "not applied");
+    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_4K8K, XHCI_PIPE_SPEED_LOW, 0, 3,
+                           1, &applied), 3, "1 ms keeps Interval 3");
+    CHECK_EQ(applied, 0, "not applied");
+    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_4K8K, XHCI_PIPE_SPEED_FULL, 0, 3,
+                           10, &applied), 6, "QEMU's FS mouse keeps 6");
+
+    /* Off, 1K and an unknown mode change nothing. */
+    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_OFF, XHCI_PIPE_SPEED_LOW, 0, 3,
+                           16, &applied), 7, "off keeps 7");
+    CHECK_EQ(applied, 0, "not applied");
+    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_1K, XHCI_PIPE_SPEED_LOW, 0, 3,
+                           16, &applied), 7, "1K keeps 7");
+    CHECK_EQ(fast_interval(4, XHCI_PIPE_SPEED_LOW, 0, 3, 16, &applied), 7,
+             "mode 4 keeps 7");
+    CHECK_EQ(applied, 0, "not applied");
+
+    /* Behind a hub (route nonzero), at High Speed, and not interrupt. */
+    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_4K8K, XHCI_PIPE_SPEED_LOW, 0x1, 3,
+                           16, &applied), 7, "behind a hub keeps 7");
+    CHECK_EQ(applied, 0, "not applied");
+    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_4K8K, XHCI_PIPE_SPEED_HIGH, 0, 3,
+                           8, &applied), 7, "HS bInterval 8 keeps 7");
+    CHECK_EQ(applied, 0, "not applied");
+    CHECK_EQ(ep_params(0x81, 1, 8, 5, XHCI_PIPE_SPEED_FULL, &ep),
+             XHCI_PIPE_OK, "FS isoch, bInterval 5");
+    CHECK_EQ(ep.Interval, 7, "FS isoch 2^4 ms is Interval 7");
+    CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_4K8K, XHCI_PIPE_SPEED_FULL, 0,
+                              &ep), 0, "isochronous is not fast-polled");
+    CHECK_EQ(ep.Interval, 7, "and keeps 7");
+    CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_4K8K, XHCI_PIPE_SPEED_FULL, 0,
+                              NULL), 0, "NULL");
+
+    /* Applied once only: a second call does not stack. */
+    ep_params(0x81, 3, 8, 32, XHCI_PIPE_SPEED_LOW, &ep);
+    CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_2K4K, XHCI_PIPE_SPEED_LOW, 0,
+                              &ep), 1, "first applies");
+    CHECK_EQ(ep.Interval, 2, "Interval 2");
+    CHECK_EQ(ep.SpecInterval, 8, "SpecInterval 8");
+    CHECK_EQ(ep.FastPoll, 1, "FastPoll set");
+    CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_4K8K, XHCI_PIPE_SPEED_LOW, 0,
+                              &ep), 0, "second refuses");
+    CHECK_EQ(ep.Interval, 2, "still 2");
+
+    /* The fallback: back to Table 6-12, once. */
+    CHECK_EQ(XhciPipeFastRevert(&ep), 1, "reverted");
+    CHECK_EQ(ep.Interval, 8, "Interval 8 again");
+    CHECK_EQ(ep.FastPoll, 0, "FastPoll cleared");
+    CHECK_EQ(XhciPipeFastRevert(&ep), 0, "nothing left to revert");
+    CHECK_EQ(ep.Interval, 8, "still 8");
+    CHECK_EQ(XhciPipeFastRevert(NULL), 0, "NULL");
+
+    /* Which refusals are retried at the Table 6-12 Interval. */
+    CHECK_EQ(XhciPipeFastRetry(17), 1, "Parameter Error retries");
+    CHECK_EQ(XhciPipeFastRetry(8), 1, "Bandwidth Error retries");
+    CHECK_EQ(XhciPipeFastRetry(35), 1, "Secondary Bandwidth Error retries");
+    CHECK_EQ(XhciPipeFastRetry(1), 0, "Success does not");
+    CHECK_EQ(XhciPipeFastRetry(7), 0, "Resource Error does not");
+    CHECK_EQ(XhciPipeFastRetry(19), 0, "Context State Error does not");
+    CHECK_EQ(XhciPipeFastRetry(0), 0, "no code does not");
+}
+
 int main(void)
 {
     test_seq();
@@ -2027,6 +2157,7 @@ int main(void)
     test_superspeedplus_isoch();
     test_bos();
     test_zero_bandwidth();
+    test_fast_poll();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

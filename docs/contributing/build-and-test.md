@@ -3881,10 +3881,11 @@ qemu-system-i386 -machine pc -m 512 -smp 2 \
    sent with `"device": "vga0"`; an input device bound to a console takes
    that console's events ahead of the unbound PS/2 one - but only while it
    exists: remove it and QEMU falls back to the PS/2 keyboard, so a
-   `device_del` is no negative control here. Where the QEMU build offers
-   it (`qemu-system-i386 -machine pc,help` lists `i8042`), launch with
-   `-machine pc,i8042=off` instead, and the USB keyboard is the guest's
-   only keyboard once Windows has started. Otherwise read the path off the
+   `device_del` is no negative control here. **Do not launch with
+   `-machine pc,i8042=off`**: NTDETECT ("Setup is inspecting your
+   computer's hardware configuration") then spins on port 0x60 for ever,
+   on Windows 2000, XP and XP x64 alike (2026-10-04, `lessons.md`). Keep
+   the PS/2 controller and read the path off the
    controller (the hardware oracle of "QEMU xHCI trace events", one events
    file): trace `usb_xhci_slot_address`, `usb_xhci_xfer_start` and
    `usb_xhci_xfer_success`. `usb_xhci_slot_address` names the slot the
@@ -3895,7 +3896,9 @@ qemu-system-i386 -machine pc -m 512 -smp 2 \
    slot's interrupt-IN endpoint.
 4. At "Press F6 if you need to install a third party SCSI or RAID driver",
    press F6 (SeaBIOS's own xHCI keyboard support answers it; nothing of this
-   driver runs yet). At the screen that follows, press S, then Enter at the
+   driver runs yet). Under TCG the window is short: hold F6 down for
+   200 ms every 350 ms rather than tapping it, or Setup goes straight on
+   to Welcome. At the screen that follows, press S, then Enter at the
    prompt for the disk in drive A:. Expect the list to offer "xHCI98 USB
    3.x Host Controller (32-bit Windows 2000/XP)" (or "... (Windows XP
    x64)"); choose it with Enter, and press Enter again at the screen that

@@ -9605,3 +9605,89 @@ Rules. **Do not read port events out of a long debugcon log**: use the event
 counters, `XHCISNAP` or a fresh launch. And **check the controller's port
 count (`p2`, `p3`) before choosing a port**, and `info usb` after every
 attach.
+
+## Windows 2000 text-mode Setup binds only the USB devices of the first enumeration: a bus driver must report the devices present at start in its first BusRelations
+
+Roadmap task 33.3, 2026-10-04 (`out\phase33\f6\`, git-ignored; QEMU 11 on
+development host A, TCG). `xhci98.sys` loaded from an F6 floppy through
+`txtsetup.oem` started the controller and the root hub on Windows 2000 SP4,
+XP SP3 and XP x64 SP2 alike. On both XPs the USB keyboard answered at
+Welcome and the USB stick was listed at the partition screen. On Windows
+2000 neither worked, and no stop screen came.
+
+**What the trace showed.** The qemu flavour's debugcon on Windows 2000: the
+root hub FDO's first `IRP_MN_QUERY_DEVICE_RELATIONS` (BusRelations) answered
+**zero devices**, because port enumeration runs on the controller thread and
+had not finished. The device PDOs came afterwards, after the port-change
+events, and were then queried (ids, capabilities, text, resources), but none
+was ever sent `IRP_MN_START_DEVICE`.
+
+**The control.** The same Windows 2000 Setup on its own UHCI stack, without
+`xhci98.sys`, bound a USB keyboard and a stick present at boot. A keyboard
+hot-plugged during text mode stayed dead there too, and on `xhci98.sys` the
+same. **Windows 2000 text mode binds only what the first enumeration
+reports; XP binds late arrivals**, which is why XP passed with the same
+driver.
+
+**How long a first answer may wait.** Microsoft's hub driver enumerates the
+ports that are connected at start before it answers. The figures come from
+documentation and source, not from this driver:
+
+- The Microsoft USB core team's account of the Windows hub driver ("How
+  does USB stack enumerate a device?", techcommunity.microsoft.com, the
+  Microsoft USB blog):
+  - debounce: 100 ms with no connect change, port disabled if it is not
+    stable after 200 ms;
+  - a 5 second timeout on each port reset;
+  - up to 3 enumeration retries, 500 ms apart, then "Unknown Device";
+  - 10 ms reset recovery, and 10 ms after SET_ADDRESS.
+- USB 2.0, 9.2.6.4: a request without a data stage completes within 50 ms;
+  a data stage starts within 500 ms; after SET_ADDRESS the device has 2 ms.
+- ReactOS `usbhub` (`USBH_FdoQueryBusRelations`) enumerates synchronously
+  inside the BusRelations handler with no overall cap. Linux enumerates
+  asynchronously and never holds a first answer. Both are read as interface
+  documentation only.
+
+A normal device is ready in about 0.15 to 0.3 s, and one that needs a retry
+in about 1 to 2 s. Only a dead device whose every reset times out takes
+about 16 s, and it ends as an Unknown Device anyway. Ports are enumerated
+one at a time on the controller thread, so one dead port can use up a
+shared budget before a keyboard behind it gets its turn.
+
+The fix decided on is on branch `p33-initenum` and is owed its reading
+(roadmap 33.3):
+
+- Each FDO's first BusRelations (the root hub's, and each external hub's
+  for its own ports) waits until the ports connected at start have settled.
+  Settled means their PDOs are published, or the port disconnected, or it
+  terminally failed or was refused.
+- The wait has a 2 s budget per port, so a slow port is deferred and
+  reported late, not allowed to starve the others.
+- It has a 5 s cap on the whole answer, and it costs nothing when nothing
+  is attached.
+- Both limits are registry values (owner, 2026-10-04). A 15 s cap was
+  proposed and rejected as too long.
+- Text-mode Setup has no INF-written registry values, so the built-in
+  defaults are what F6 gets.
+
+Two harness traps from the same legs:
+
+- **`-machine pc,i8042=off` hangs NT5 Setup.** NTDETECT ("Setup is
+  inspecting your computer's hardware configuration") spins in real mode
+  reading port 0x60 for ever, on all three targets. Keep the PS/2
+  controller, and prove the USB keyboard's keystrokes from the controller
+  trace: its slot's interrupt-IN completions.
+- **Setup's F6 window is short under TCG.** One F6 press every 1.3 s
+  through QMP missed it. Holding F6 down for 200 ms every 350 ms catches
+  it.
+
+Also seen: a USB stick present at the partition screen takes `C:`, and
+Windows installs to the next letter.
+
+Rules:
+
+- **Report the devices present at start in a bus driver's first
+  BusRelations answer, bounded.** An empty first answer is invisible on XP
+  and later and fatal in Windows 2000 text mode.
+- **Run the F6 legs with the PS/2 controller present.**
+- **Hold F6 down; do not tap it.**

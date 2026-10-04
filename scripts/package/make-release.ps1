@@ -3120,8 +3120,38 @@ mouse and USB storage drivers above it.
     Bulk-Only mode. Most USB flash sticks are Bulk-Only only and always
     work; use one of those.
   - Installing Windows ONTO a USB disk is not supported.
+  - A USB DRIVE PRESENT AT THE PARTITION SCREEN TAKES THE LETTER C:.
+    Unplug the USB drives you do not need, or Windows installs to the next
+    letter.
+  - On Windows 2000, plug the USB keyboard and the USB stick in BEFORE
+    Setup starts. Its text-mode Setup uses only the USB devices present
+    when the driver first reports them; one plugged in later stays unused
+    there. The driver waits up to 5 seconds for them (section 9,
+    XhciFirstEnumWaitMs). TODO(33.3 legs): the Windows 2000 result.
   - Later in Setup, Windows installs the driver again from xhci98.inf and
     may ask for the floppy or the Windows CD.
+  - WINDOWS XP NEEDS A PS/2 KEYBOARD, OR A LAPTOP'S BUILT-IN ONE, LATER IN
+    SETUP. Setup copies Windows' own HID and USB helper files only with
+    Microsoft's own USB controller drivers, so the USB keyboard and mouse
+    do nothing until the "Installing Devices" step installs them from the
+    CD - and that step first asks about this unsigned driver, default No.
+    A machine whose only keyboard is USB cannot answer, and Setup stops.
+    A laptop's built-in keyboard (connected inside as PS/2) or any PS/2
+    keyboard answers it; afterwards the USB keyboard and mouse work. This
+    package cannot carry those files. Windows 2000 does not ask.
+
+UPDATING FROM AN EARLIER 2.x RELEASE
+....................................
+
+Install over it the same way as above: Update Driver on "xHCI98 USB 3.x
+eXtensible Host Controller", picking the driver from a list with Have Disk
+on Windows 2000 and later. Nothing needs renaming first. Afterwards some
+devices are found once more as new hardware, one time each: a device with a
+serial number, at its first plug, and on Windows 2000 and later a device
+without one that sits behind a hub. Let Windows install them. A hidusbf
+setting on such a device has to be applied again (section 5).
+TODO(33.9): the update read on each system. TODO(33.2 legs), TODO(33.4
+legs): which devices each system finds again.
 
 UPGRADING FROM THE EARLIER, USB 2.0-ONLY RELEASES (1.x)
 .......................................................
@@ -3150,6 +3180,10 @@ download.
     5. Each USB device is found once more as new hardware.
   If you already updated in place and got the blue screen, restart: this
   driver comes up on its own.
+
+  On every system each USB device is a new entry in Device Manager after
+  the upgrade, so a hidusbf polling rate set under 1.x has to be set again
+  (section 5).
 
   WINDOWS 98 SE WITH SWEETLOW'S STACK, AND WINDOWS ME: the same Update
   Driver route, in place. Windows does not ask you to restart, but you
@@ -3190,8 +3224,31 @@ Things specific to this driver, worth knowing in advance:
     says nothing about the real link. XHCISNAP's report (section 6) shows the
     speed the driver actually uses.
 
-  * HUBS DO NOT APPEAR IN DEVICE MANAGER. The driver runs every hub itself,
-    so a device behind a hub appears under the root hub like any other.
+  * HUBS HAVE ENTRIES OF THEIR OWN IN DEVICE MANAGER. A hub appears as
+    "xHCI98 USB Hub", with the devices behind it beneath it. A USB 3 hub
+    appears twice, the second time as "xHCI98 USB 3.x Hub" for its
+    SuperSpeed half. Each hub has a Power tab. A hub installs from the
+    driver already installed, with no file copied and no disk asked for.
+    The driver still runs every hub itself. TODO(33.4 legs).
+
+  * A DEVICE WITH A SERIAL NUMBER KEEPS ITS ENTRY ON ANY PORT. Moved to
+    another port or behind a hub, it is not found again as new hardware.
+    A device without a serial number is known by its port, as under
+    Microsoft's own hub driver, and moved elsewhere it is found again.
+    TODO(33.2 legs).
+
+  * DEVICES ARE LISTED UNDER THEIR OWN PRODUCT NAMES, in the Add New
+    Hardware wizard and in Device Manager; one that reports no name is
+    "USB Device". On Windows 98 SE and ME a character outside plain ASCII
+    shows as '?'. TODO(33.6 legs).
+
+  * SWEETLOW'S HIDUSBF sets a mouse's polling rate, and this driver
+    programs the rate it sets, up to 1000 Hz for a Low- or Full-Speed
+    device (more only with XhciFastPollFsLs, section 9). On a stock
+    Windows 98 SE it does not load (Code 2): Windows 98 SE's own usbd.sys
+    lacks a routine hidusbf.sys needs. Its setting is kept on the device's
+    Device Manager entry, so it has to be applied again whenever the device
+    is found as new hardware. TODO(33.7 legs).
 
   * IDLE DEVICES ARE NEVER PUT TO SLEEP. The driver never starts selective
     suspend, of a device or of a hub port, so an idle device draws its
@@ -3305,6 +3362,13 @@ being unsigned, and no change to this driver can remove them:
     own device manager stops responding; it does the same on Microsoft's
     own USB stack. Wait for the install to finish before unplugging.
 
+  * A SUPERSPEED DEVICE'S POWER READS A QUARTER OF ITS DRAW on the Power
+    tab: the page doubles a value that is in 8 mA units at SuperSpeed.
+
+  * WINDOWS XP FROM THE F6 FLOPPY: GUI-MODE SETUP ASKS ABOUT THE UNSIGNED
+    DRIVER BEFORE THE USB KEYBOARD WORKS. A PS/2 or built-in laptop
+    keyboard answers it (section 4).
+
 May be addressed in a later release:
 
   * THE DRIVER NEVER STARTS SELECTIVE SUSPEND (section 5). Idle devices and
@@ -3323,9 +3387,10 @@ May be addressed in a later release:
     any ordinary USB stick once, then unplug the UAS drive and plug it back
     in. No Remove and no restart are needed.
 
-  * A DEVICE MOVED TO A DIFFERENT PORT IS FOUND AGAIN AS NEW HARDWARE. This
-    driver names a device by its port; Microsoft's hub driver uses the
-    device's serial number. A later release may do the same.
+  * WINDOWS VISTA AND 7: THE CONTROLLER'S ADVANCED TAB SHOWS NO BANDWIDTH.
+    The figure comes from a query this driver does not answer.
+
+  * WINDOWS 98 SE AND ME SHOW A DEVICE NAME'S NON-ASCII CHARACTERS AS '?'.
 
 Untested ground:
 
@@ -3340,6 +3405,12 @@ Untested ground:
     sent back to its USB 2.0 port and runs UAS at High Speed, or is refused
     if it has no USB 2.0 port. Built from the specification; no such
     controller has been held.
+
+  * A USB 3 HUB'S SECOND ENTRY, "xHCI98 USB 3.x Hub". No virtual machine
+    models a SuperSpeed hub. TODO(33.4 legs).
+
+  * POLLING ABOVE 1000 HZ (XhciFastPollFsLs, section 9). Outside the xHCI
+    specification and read on no real controller. TODO(33.8 legs).
 
 
 ==============================================================================
@@ -3361,9 +3432,11 @@ debug throughout, in its build scripts and its documentation alike.)
  9. REGISTRY SETTINGS
 ==============================================================================
 
-Every registry value this driver reads. There are four, all DWORDs. The
-install writes one of them, XhciImodInterval250ns; the other three are
-absent until you set them, and absent means 0.
+Every registry value this driver reads. There are seven, all DWORDs. The
+install writes one of them, XhciImodInterval250ns; the other six are absent
+until you set them, and absent means the default each one states.
+TODO(33.3 legs): the count includes XhciFirstEnumWaitMs and
+XhciFirstEnumPortMs, whose names and defaults are confirmed at their merge.
 
   YOU SHOULD NOT NEED THIS SECTION FOR A LOG. If the maintainer asks for one,
   XHCISNAP -verbosity 2 sets the value that matters, on every controller, and
@@ -3439,7 +3512,45 @@ absent until you set them, and absent means 0.
   installed keeps its driver until you uninstall it in Device Manager and
   plug it back in.
 
-  THOSE FOUR ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
+  XhciFastPollFsLs  -  Low- and Full-Speed polling above 1000 Hz
+  ..............................................................
+
+  Default 0 (absent): off. For a mouse on a ROOT PORT that hidusbf has set
+  to its "31 Hz" or "62 Hz" rate:
+
+      2      "31 Hz" becomes 2000 Hz, "62 Hz" becomes 4000 Hz
+      3      "31 Hz" becomes 4000 Hz, "62 Hz" becomes 8000 Hz
+
+  Any other value is off. A device behind a hub keeps its normal rate.
+
+  THIS IS OUTSIDE THE xHCI SPECIFICATION, which sets 1 ms as the shortest
+  interval for these devices. A controller that refuses it is caught: the
+  device runs at its normal rate, and XHCISNAP's report counts it as
+  fastpoll.fallbacks. A controller that accepts it and then misbehaves
+  cannot be caught; if anything misbehaves, delete the value and restart.
+  While it is set, ANY Low- or Full-Speed device on a root port that asks
+  for 16 to 63 ms is polled faster too. Read when the controller starts, so
+  restart after changing it. It has been read on no real controller yet.
+  TODO(33.8 legs).
+
+  XhciFirstEnumWaitMs, XhciFirstEnumPortMs  -  the first report's wait
+  ....................................................................
+
+  When the root hub or a hub first reports its devices after it starts,
+  the driver waits for the devices already plugged in to be ready, so
+  that they are in that first report (Windows 2000's Setup uses only
+  those, section 4). The wait ends as soon as they are ready.
+
+      XhciFirstEnumWaitMs   the longest wait, in milliseconds. Default
+                            5000; 0 turns the wait off; above 30000 is
+                            held to 30000.
+      XhciFirstEnumPortMs   the longest one port may hold it. Default
+                            2000, held to the total; a slower device is
+                            reported later instead.
+
+  TODO(33.3 legs): names, defaults and limits confirmed at the merge.
+
+  THOSE SEVEN ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
   XhciVirtualHSHubVid and XhciVirtualHSHubPid are not read: a copy left in
   the key by an earlier install has no effect, because this driver reports
   every device at its true speed with no virtual hub in the way. Delete

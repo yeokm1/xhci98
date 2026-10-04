@@ -1,5 +1,5 @@
-xhci98 - an xHCI host controller miniport driver for Windows 98 SE and
-Windows 2000 SP4.
+xhci98 - an xHCI USB host controller driver, and a USB Attached SCSI class
+driver, for Windows 98 SE and Windows 2000 SP4.
 
 Copyright (c) 2026 Yeo Kheng Meng
 
@@ -370,14 +370,18 @@ The licence above covers the copyrightable contributions of this project's
 authors. It does not, and cannot, grant any right in third-party material.
 
 Some third-party material is unavoidably present in tracked files and keeps its
-own terms: short verbatim quotations from the xHCI specification, quoted for
-identification where a rule's exact wording matters; interface elements -
-constants, structure layouts, and function signatures - that any driver
-plugging into usbport.sys must declare; short verbatim quotations of
-instructions disassembled from Microsoft's own usbport.sys and ntoskrnl.exe,
-carried in docs/usb-xhci-info/usbport-miniport-abi.md to identify the behaviour
-a claim rests on so that a reader can check the claim without the binary, and
-inventoried by source method in docs/contributing/legal-provenance.md section 4;
+own terms: short verbatim quotations from the xHCI and USB specifications,
+quoted for identification where a rule's exact wording matters; interface
+elements - constants, structure layouts, and function signatures - that a
+driver presenting USB devices to Windows' own class drivers must declare (and,
+for the 1.x.x.x releases, a driver plugging into usbport.sys); short verbatim
+quotations of instructions disassembled from Microsoft's own binaries - among
+them usbport.sys, usbhub.sys, ntoskrnl.exe, usbui.dll and the USB class
+drivers - carried in docs/usb-xhci-info/usbport-miniport-abi.md and in design
+record 13 (docs/contributing/design/13-superspeed-hcd.md) to identify the
+behaviour a claim rests on so that a reader can check the claim without the
+binary, and inventoried by source method in
+docs/contributing/legal-provenance.md section 4;
 generated output carrying its producer's own notices, such as XHCIQUAL.MAP,
 the Open Watcom linker map that sits beside XHCIQUAL.EXE in every release
 directory - a download included - and the archived map under xhciqual/results/;
@@ -413,37 +417,44 @@ reader's records the Visual C++ runtime linkage and quotes none of its terms.
 Each of those two executables is therefore a single file combining this
 project's code with code under other licences, and
 docs/contributing/legal-provenance.md section 2a records what is in each.
-The driver itself - xhci98.sys - contains no runtime and no extender; the
-one compiler-supplied object in the 64-bit build is described next.
+The drivers themselves - xhci98.sys, the host controller driver, and
+xhciuas.sys, the USB Attached SCSI class driver - contain no runtime and no
+extender; the one compiler-supplied object in their 64-bit builds is described
+next.
 
-xhci98.sys is linked by the Windows 2000 DDK (the 32-bit build) or by the
+Each driver is linked by the Windows 2000 DDK (the 32-bit build) or by the
 Windows Driver Kit 7.1 (the amd64 build) against import libraries for
-ntoskrnl.exe, hal.dll and usbport.sys, and it runs only as a component loaded
-by those operating systems' kernels. Those import libraries contribute no code
-to the image - the import table names symbols and nothing more, which
+ntoskrnl.exe and hal.dll, and runs only as a component loaded by those
+operating systems' kernels. Since release 2.0.0.0 neither imports usbport.sys:
+xhci98.sys replaces Windows' own USB port and hub drivers rather than plugging
+into them, as the 1.x.x.x releases did. Those import libraries contribute no
+code to the image - the import table names symbols and nothing more, which
 scripts\import-gate\check-imports.ps1 prints in full. No runtime or extender
-is linked into either build. The 32-bit build links no third-party object at
-all. The amd64 build carries one object that is not this project's code: WDK
-7.1 compiles amd64 drivers with /GS stack-buffer checks, and its libraries
-supply the cookie check (__security_check_cookie) and the handler it jumps to
-on a mismatch (__report_gsfailure, which calls KeBugCheckEx and is that
-import's only call site in the image). Nothing in this project's source calls
-it, and it runs only on a stack-buffer overrun. Whether that object asks for a
-notice of its own has not been read; docs/contributing/legal-provenance.md
-section 2 records it as an open question, and records the boundary above.
-The driver is distributed by itself and loaded by a kernel this project does
-not ship and could not ship.
+is linked into any build. The 32-bit builds link no third-party object at all.
+The amd64 builds carry one object that is not this project's code: WDK 7.1
+compiles amd64 drivers with /GS stack-buffer checks, and its libraries supply
+the cookie check (__security_check_cookie) and the handler it jumps to on a
+mismatch (__report_gsfailure, which calls KeBugCheckEx and is that import's
+only call site in each image). Nothing in this project's source calls it, and
+it runs only on a stack-buffer overrun. Whether that object asks for a notice
+of its own has not been read; docs/contributing/legal-provenance.md section 2
+records it as an open question, and records the boundary above. The drivers
+are distributed by themselves and loaded by a kernel this project does not ship
+and could not ship.
 
 The release download - as distinct from this repository - carries no Microsoft
-file. The usbd.sys and usbhub.sys the driver depends on, the usbui.dll that
-provides the USB Root Hub's property page, and on the Windows 2000, Windows
-XP and Windows XP x64 install paths the usbport.sys it plugs into, are those
-systems' own files: the INF has Windows Setup copy them from the user's own
-installation source, never overwriting a file already present, and none of them
-is in the download or in this repository. The Windows Vista and Windows 7
-install paths copy none of them, because every install of those systems
-already carries all four. Nothing here purports to license
-them to anyone. From release 0.0.0.4 to 1.0.0.0 the assembled download did
+file. Since release 2.0.0.0 the drivers depend on two of the operating
+systems' own files: usbd.sys, whose helper functions the class drivers above
+xhci98.sys call, and usbui.dll, which provides the controller's and the root
+hub's property pages. The INF has Windows Setup copy them from the user's own
+installation source, never overwriting a file already present, and neither is
+in the download or in this repository. The Windows Vista and Windows 7 install
+paths copy neither, because every install of those systems already carries
+both. On Windows 98 SE, xhciuas.inf names NUSB's USBNTMAP.SYS as a filter by
+name and never ships it; the txtsetup.oem files name no Microsoft file.
+Nothing here purports to license any of them to anyone.
+
+The 1.x.x.x releases depended on more of them. From release 0.0.0.4 to 1.0.0.0 the assembled download did
 carry three of them, renamed (usbd98.sys and usbd2k.sys, the two systems' own
 usbd.sys, and usbhub98.sys, Windows 98 SE's own usbhub.sys), because an
 xHCI-only machine never has them placed by Windows Setup; that decision was

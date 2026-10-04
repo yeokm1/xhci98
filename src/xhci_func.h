@@ -173,6 +173,20 @@ ULONG XhciFuncReviveByPlace(const char *oldSerial, const char *oldRead,
 ULONG XhciFuncReviveBySerial(const char *oldSerial, const char *newSerial);
 
 /*
+ * Whether a dormant group the device just listed did not revive is retired
+ * for that device's place (Windows 98 SE and ME): named by its place (its
+ * `oldSerial` empty), at the same instance key (XhciHubInstanceKey) and
+ * under the same parent (`oldParent`, `newParent`: the presented parent's
+ * serial, 0 for the root hub). The instance key carries no hub identity,
+ * so a group under another hub at the same route and root port is not
+ * this place's - its own parent's re-enumeration, or its START's wait,
+ * settles it (Codex review of the 33.1-33.6 integration, finding 3).
+ * 1 when it is retired.
+ */
+ULONG XhciFuncRetireByPlace(const char *oldSerial, ULONG oldKey,
+                            ULONG oldParent, ULONG newKey, ULONG newParent);
+
+/*
  * Device text (roadmap-hcd.md task 33.6; design record 13 section 10.7):
  * the DeviceTextDescription a PDO answers, from a string descriptor. At
  * most 126 UTF-16 units, as for a serial, and the NUL.

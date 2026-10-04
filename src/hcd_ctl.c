@@ -36,11 +36,14 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
 /* The device-key values the HCD reads (design record 13 section 5.5).
  * The miniport's three XhciVirtualHSHub* values are not read. The fourth,
  * XhciForceBulkOnly (31-A.3), is read at every enumeration rather than at
- * start, and no INF writes it: absent is 0, UAS where the device offers it. */
+ * start, and no INF writes it: absent is 0, UAS where the device offers it.
+ * XhciFastPollFsLs (33.8) is read at start and no INF writes it either:
+ * absent is 0, every interval by Table 6-12. */
 #define HCD_VALUE_LOG_VERBOSITY L"XhciLogVerbosity"
 #define HCD_VALUE_LOG_DEBUGVIEW L"XhciLogDebugView"
 #define HCD_VALUE_IMOD          L"XhciImodInterval250ns"
 #define HCD_VALUE_FORCE_BOT     L"XhciForceBulkOnly"
+#define HCD_VALUE_FAST_POLL     L"XhciFastPollFsLs"
 /* Task 33.3: the first answer's settle, in ms (xhci_enum.h). No INF writes
  * either; absent, the defaults stand, which is what text-mode Setup gets. */
 #define HCD_VALUE_SETTLE_TOTAL  L"XhciFirstEnumWaitMs"
@@ -134,6 +137,7 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     ULONG verbosity;
     ULONG debugView;
     ULONG imod;
+    ULONG fast;
     ULONG value;
     NTSTATUS status;
 
@@ -163,6 +167,15 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     ext->ImodRequested = NT_SUCCESS(status) ? imod : 0;
     XhciLogNote(ext, "imod.status", ext->ImodStatus);
     XhciLogNote(ext, "imod.requested", ext->ImodRequested);
+
+    /* Off unless a value of 1 to 3 is there (XhciPipeFastMode). */
+    fast = 0;
+    if (!NT_SUCCESS(hcdReadDword(hc, HCD_VALUE_FAST_POLL, &fast))) {
+        fast = 0;
+    }
+    hc->FastPollMode = XhciPipeFastMode(fast);
+    XhciLogNote(ext, "fastpoll.value", fast);
+    XhciLogNote(ext, "fastpoll.mode", hc->FastPollMode);
 
     /* Outside Hc, read at every start: a change takes effect at the next. */
     value = 0;
