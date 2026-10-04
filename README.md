@@ -203,7 +203,7 @@ Windows 98 SE was validated on real hardware in one bench session before the rel
 |---|---|---|---|
 | 2016 ThinkPad E460 | Intel Skylake, Sunrise Point-LP (100-series) PCH. xHCI 1.0. | Works on Windows 98 SE: the bench session above. Windows 7 not tested on it for `2.0.0.0`. | Me |
 | 2020 ThinkPad P14s Gen 1 | Intel Comet Lake PCH-LP (400-series). xHCI 1.1. | Works on Windows 98 SE: the bench session above, and UAS at SuperSpeed with NUSB (throughput above). | Me |
-| Omores' Intel and AMD desktops | H110, B360, B550, X570, X670 | `TODO(cut): no 2.0.0.0 report yet.` | [Omores](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) (1.x) |
+| Omores' Intel and AMD desktops | H110, B360, B550, X570, X670 | No `2.0.0.0` report yet. | [Omores](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) (1.x) |
 
 The devices, each characterised in [test-equipment.md](docs/contributing/test-equipment.md):
 
