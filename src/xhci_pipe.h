@@ -598,6 +598,11 @@ ULONG XhciPipeBusInformation(ULONG level, ULONG totalBandwidth,
  */
 ULONG XhciPipeTopologyAddress(ULONG pciBus, ULONG pciAddress, ULONG rootPort,
                               ULONG route, UCHAR *out);
+/* The endpoint policy's speed (XHCI_PIPE_SPEED_*) for a device's own speed
+ * class (xhci.h XHCI_SPEED_*), as decoded from its Slot Context's Protocol
+ * Speed ID - on a root port and behind hubs alike, the device's speed and
+ * never its hub's. 0, which every endpoint refuses, for any other class. */
+ULONG XhciPipeSpeedFromClass(ULONG speedClass);
 
 /*
  * Submission sequences and abort horizons (hcd_io.c, HcdIoPark): a per-PDO

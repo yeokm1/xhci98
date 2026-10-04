@@ -9392,3 +9392,158 @@ copy from a Windows 98 binary, not from the DDK's samples**: read what
 `uhcd.sys` or NUSB's usbport does before choosing the target. And **a
 lifecycle path is not tested until its disable has run on Windows 98 SE** -
 the start passing proves nothing about the stop.
+
+## Make STATUS_PENDING visible before pending a URB IRP: some class drivers poll IoStatus.Status instead of waiting on an event
+
+Roadmap task 26-V.1, 2026-10-04, Windows 98 SE under NUSB 3.3 in QEMU
+(`docs/contributing/runs/run-26.md`, "26-V.1"). Installing ASIX's Windows 98
+driver for the AX88772A, `AX88772.SYS` 3.0.3.12, over the HCD's `40efd31`
+build gave "A fatal exception 0E has occurred at 0028:C188D256 in VXD
+ax88772(01) + 00001576." The trace just before it: a GET_DESCRIPTOR, then
+`select, URB length=00000018` and `select refused,
+bLength/wTotalLength=00100000` - a SELECT_CONFIGURATION built from a
+descriptor that had not been read.
+
+A subagent's static read (`legal-provenance.md` section 4): the driver
+imports no `KeWaitForSingleObject` and waits for each URB by polling
+`Irp->IoStatus.Status` for `0x103` (`cmp dword ptr [esi+18h],103h` at
+`0x103B5`, then `IoFreeIrp`). `IoAllocateIrp` leaves that field 0, and the
+HCD pended the IRP without writing it, so the driver read success at once,
+freed its GET_DESCRIPTOR IRP while it was in flight, and selected from an
+unfilled buffer. NUSB's `USBPORT.SYS` stores `STATUS_PENDING` there
+(`0x15851`) before `IoMarkIrpPending`, which is why the driver works under
+usbport. `ac25e4e` sets it on entry to `HcdDevicePdoInternalIoctl`, and on
+that build the same install bound on NUSB 3.3 and on SweetLow's stack.
+
+Rules. **Before pending an IRP, write `STATUS_PENDING` into its
+`IoStatus.Status`, as usbport does**: the DDK's contract is the return value
+and the completion, but a shipping driver can read the field, and a 0 there
+reads as success. And **a class driver's behaviour on the stack it was
+written for is a contract the replacement inherits**: when one misbehaves
+only under the HCD, read what the stack it was tested on does at the same
+point before calling the class driver wrong.
+
+## A QEMU chardev file log is truncated at every launch with the same tag: relaunches lose the previous boot's trace - use a new tag or copy the log first
+
+Phase 26's guest legs, 2026-10-03 and 2026-10-04 (`run-26.md`). The
+launchers write the `qemu` flavour's port-0xE9 trace through `-chardev
+file,id=dbgcon,path=...` to `vm\t26-<os>-<tag>-debugcon.log`, a path made
+from the tag alone. QEMU opens a file chardev for writing and truncates it,
+so relaunching the same overlay with the same tag - which every Windows 98 SE
+driver replacement needs, since the launcher turns the guest's restart into a
+shutdown - empties the previous boot's trace before the new boot writes a
+line. 26-V.1 and 26-V.2 kept theirs only by copying each log aside before
+the relaunch (`...-boot1-debugcon.log`, `...debugcon.boot2.log`) or by giving
+the relaunch a new tag (`v2a4`, `v2a4b`).
+
+Rules. **Before relaunching a guest, copy its trace aside or give the launch
+a new tag**; the trace of the boot that failed is the one a relaunch to
+investigate it destroys. QEMU's `append=on` on the chardev keeps every boot
+in one file instead, at the cost of telling the boots apart by the driver's
+start lines.
+
+## Windows 98 SE's hidclass resubmits at once on STATUS_DEVICE_NOT_CONNECTED while its device is started: park a departed device's reads, do not fail them
+
+Roadmap tasks 27-A.3 and 27-V.1, 2026-10-04, Windows 98 SE in QEMU
+(`docs/contributing/runs/run-27.md`, "The Windows 98 SE HID-unplug stall").
+27-A.3's teardown stopped a departing device's endpoints and completed its
+pending interrupt reads `STATUS_DEVICE_NOT_CONNECTED` /
+`USBD_STATUS_DEVICE_GONE`, the obvious answer for a device that has gone. On
+Windows 98 SE every root-port HID unplug then stalled the guest. The REMOVE
+came 129 s to 11 minutes later; a timed trace of a keyboard's unplug reads
+`+660s xhci98: hcd: device PDO PnP minor=00000002`.
+
+`hidclass.sys` (98 SE) answers that status, while its device is still
+started, by failing every client read and resubmitting at once (`0x110A7`,
+static; `run-26.md`, "The REMOVE that never ended"). Each resubmission was
+refused at the next tick. The loop kept the guest busy enough that its
+configuration manager did not act on the relations change for minutes, and
+only the REMOVE ends the started state. Phase 26 had already met the same
+loop and paced it to one retry per tick, which was harmless while a PDO was
+reported missing before any read failed.
+
+The first fix restored that order, the PDOs reported missing at the freeze
+(`26e7cb6`). **It did not cure the stall.** The fix that did (`f99f184`):
+- A departed device's URB IRPs are **held on the PDO**, cancellable
+  (`HcdIoPark`).
+- They complete CANCELLED only when the client cancels them or aborts the
+  pipe, or the PDO is stopped, surprise-removed or removed.
+- With no failed read, `hidclass.sys` never enters its retry state. The
+  REMOVE came within about a second on every unplug read, on both
+  primaries.
+
+Holding a request for a device that stopped answering is what the hub
+drivers this bus stands in for do.
+
+The abort then needed four Codex rounds (`6dae92b` to `53b43c0`):
+- An ABORT_PIPE must release what it covers, including requests the
+  teardown parks after the abort, and a later submission must not revoke
+  that.
+- So every IRP is stamped at dispatch with a per-PDO submission sequence,
+  and an abort records its stamp as its pipe's horizon.
+- The sequence is 64-bit, since a 32-bit one wraps.
+
+Rules. **Do not fail a departed device's I/O while its PDO is still started
+on Windows 98 SE: park it until the client aborts or cancels, or PnP stops
+or removes the PDO.** A completion status is an instruction to the class
+driver above, and `hidclass.sys` reads this one as "retry now". And **report
+the PDO missing before anything of the departed device completes**, so PnP's
+REMOVE is already on its way when a client looks.
+
+## Prepare a Windows 98 SE image location by location, with Setup's SourcePath where the CD files are: a modal Insert Disk stops all PnP and looks like a driver wedge
+
+Roadmap task 27-V.1, 2026-10-04, the Windows 98 SE golden image for the hub
+rows (`docs/contributing/runs/run-27.md`, "The behind-hub replug that made a
+new devnode" and "27-V.1").
+
+The HCD gives each location its own instance id, `(route << 8) | root port`.
+Windows 98 SE therefore makes one devnode per location, and the first device
+at a location the image has not seen raises the Add New Hardware Wizard. On
+the first images, three readings looked like the HCD's:
+- a mouse replugged behind a hub made a new devnode;
+- the five-tier hub churn enumerated 2 of its 6 hubs (`h98fh-hub`,
+  `h98hh-hub`);
+- a soak's classes after the hub class addressed nothing (hubmouse +1, u2f,
+  ccid and audio +0 on `soak-h98f`).
+
+All three were the image's:
+- The prep had unplugged devices before every location's HID child had
+  installed.
+- A modal "Insert Disk" for the Windows 98 CD, the install source pointing
+  where the CD files were not, stopped every PnP action behind it.
+- A port whose last PDO PnP has not deleted holds its next device, so the
+  enumeration waited on the dialog, per port, as designed.
+
+The image prepared again was used for `h98jh` and `soak-h98j`, and on it the
+churn passed with its tier-5 mouse bound. It had
+`"SourcePath"="E:\\WIN98\\"` under
+`HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Setup`, and
+each location's HID child had installed before that location's unplug.
+
+Rules. **When preparing a Windows 98 SE image, set Setup's `SourcePath` to
+where the CD's files really are, and let every location's HID child finish
+installing before its device is unplugged.** And **before reading a stalled
+Windows 98 SE enumeration as the driver's, look at the screen for a modal
+dialog**: an Insert Disk or a wizard waiting on Next halts PnP as completely
+as a wedge, while the driver's own counters keep moving on every other port.
+
+## The agent harness stops a background QEMU after 30 minutes unless the task is given longer: launch guests with the 2-hour limit
+
+Phases 26 and 27, 2026-10-04 (`runs/run-26.md`, "26-V.1", "The overlay the
+tooling broke"; `runs/run-27.md`, "How the guests were driven"). A QEMU
+process started as a background shell task inherits that task's time limit,
+30 minutes by default. At the limit the harness stops the task, and QEMU
+with it, whatever the guest is doing.
+- **26-V.1.** It ended a Windows 98 SE guest in the middle of its second
+  boot. The next boot gave "Warning: Windows has detected a
+  registry/configuration error.", ScanDisk, and "Invalid VxD dynamic link
+  call from VWIN32(01) + 00000714 to device "0009", service 1." The overlay
+  was lost, and the rest of that leg moved to fresh overlays.
+- **28-A.2's XP x64 leg.** It shut its first boot down early on the
+  coordinator's warning that the launch carried the 30-minute limit, then
+  relaunched with 2 hours.
+
+Rules. **Launch every QEMU guest as a background task with the 2-hour limit
+(7,200,000 ms), not the default.** **Shut the guest down from inside before
+any limit can fire.** A guest killed mid-run is not a reading: a Windows 98
+SE registry damaged that way says nothing about the driver.

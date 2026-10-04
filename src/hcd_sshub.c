@@ -29,7 +29,9 @@
  *     in SS.Inactive or Compliance Mode is marked for recovery, and the
  *     warm reset (HcdSsHubPortRecover) goes on the wire only after
  *     hcd_enum.c has fed the disconnect and the old device and its subtree
- *     are torn down;
+ *     are torn down; a link found in U3 under a held device, or a finished
+ *     U3 exit, is resumed or held through its recovery by hcd_hub.c's
+ *     USB 2.0 hub-port resume (suspend handled, never initiated);
  *   the Protocol Speed ID of a device behind it (HcdSsHubPsiv), for
  *     HcdHubPlace: SuperSpeed's, or a SuperSpeedPlus rate's from the
  *     extended status - and after Address Device the controller's own
@@ -452,8 +454,12 @@ ULONG HcdSsHubPortReset(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
  * for the disconnect of whatever it held, so hcd_enum.c tears the old
  * device and its subtree down - frozen, its transfers ended, its slot
  * disabled - before HcdSsHubPortRecover puts the warm reset on the wire
- * (Codex review of 034a119, finding 1). Returns 0 when the hub did not
- * answer.
+ * (Codex review of 034a119, finding 1). A link in U3 under a held device
+ * is named in d->Resume and a finished U3 exit in d->Suspended, which
+ * hcd_hub.c's HcdHubPortLook carries out as for a USB 2.0 hub port: the
+ * devices quiesced, the link brought to U0 or the recovery waited, and the
+ * outcome decided by the same rules (the Phase 27 and Phase 30 merge).
+ * Returns 0 when the hub did not answer.
  */
 ULONG HcdSsHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
                        ULONG state, PXHCI_HUB_PORT_DECISION d)
@@ -469,6 +475,9 @@ ULONG HcdSsHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     d->OverCurrent = 0;
     d->Repower = 0;
     d->Suspended = 0;
+    d->Resume = 0;
+    d->Retry = 0;
+    d->GaveUp = 0;
     if (!HcdHubPortStatus(hc, hub, n, &status, &change)) {
         return 0;
     }
@@ -514,6 +523,8 @@ ULONG HcdSsHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     d->Connect = sd.Connect;
     d->OverCurrent = sd.OverCurrent;
     d->Repower = sd.Repower;
+    d->Resume = sd.Resume;
+    d->Suspended = sd.Resumed;
     q->HubSsRecover = sd.WarmReset;
     if (sd.WarmReset) {
         XHCI_DBG_VALUE("hcd: SS hub port link error, port/link",

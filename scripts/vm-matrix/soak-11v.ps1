@@ -117,7 +117,24 @@ param(
     [string]$AudioDev = "cap",
     # Skip the pointer re-pin after a HID attach.  Only for an unattended run
     # where nobody needs the guest's mouse back.
-    [switch]$NoRepin
+    [switch]$NoRepin,
+    # WHOSE COUNTERS (roadmap-hcd.md 27-V.1). `miniport` reads the frozen
+    # 1.2.0.0 extension as before; `hcd` reads the HCD's counter block
+    # (offsets-hcd.txt), found by its `counters start= / size= / VA` lines,
+    # and swaps the miniport-only labels for the HCD's (see $RefusalLabel).
+    [ValidateSet('miniport', 'hcd')][string]$Driver = 'miniport',
+    # THE HUB-CHURN SOAK (task 12.5's churn, re-measured for 27-V.1): after the
+    # cycle phase, N `usb-hub` attach/detach pairs on -ChurnPort, one every
+    # -ChurnIntervalMs, against a populated bus (a usb-storage is put on
+    # -ChurnStoragePort for the duration; the launcher already has its
+    # keep-alive on port 1). 0 skips it. Under the miniport the same churn
+    # wedged Windows 98 at 12 to 18 enumerations (lessons.md, task 12.5's
+    # control); a clean result needs the guest alive afterwards AND the
+    # enumerations to have kept pace with the attaches.
+    [int]$HubChurn = 0,
+    [int]$ChurnIntervalMs = 600,
+    [int]$ChurnPort = 3,
+    [int]$ChurnStoragePort = 4
 )
 
 $ErrorActionPreference = "Stop"
@@ -137,7 +154,7 @@ if (-not (Test-Path -LiteralPath $StorageImage)) {
 }
 
 $classList = @($Classes -split ',' | ForEach-Object { $_.Trim().ToLower() } | Where-Object { $_ -ne "" })
-$known = @('hid', 'storage', 'net', 'audio')
+$known = @('hid', 'storage', 'net', 'audio', 'kbd', 'tablet', 'wacom', 'ccid', 'u2f', 'hub', 'hubmouse')
 foreach ($c in $classList) {
     if ($known -notcontains $c) { throw ("unknown class '{0}'. Known: {1}" -f $c, ($known -join ", ")) }
 }
@@ -157,6 +174,26 @@ $HEALTH   = @('devices addressed', 'slots enabled', 'endpoints opened',
               'transfers on a halted endpoint', 'command timer failures',
               'DMA failures closed', 'EP0 opens refused', 'transfers refused - ring full')
 
+# THE HCD'S BLOCK HAS NO ABORT ACCOUNTING AND NO usbport REFUSALS (design
+# record 13 section 9.4): an abort is a cancel there, and the refusals are the
+# bus's own. So for -Driver hcd the abort block is empty, the health block is
+# the HCD's failure-shaped and topology counters, and the per-cycle line's
+# refusal column reads `selects failed`.
+$RefusalLabel = 'EP0 opens refused'
+$AbortedLabel = 'transfers aborted'
+if ($Driver -eq 'hcd') {
+    $ABORTS = @()
+    $HEALTH = @('devices addressed', 'slots enabled', 'endpoints opened', 'select endpoints requested',
+                'select endpoints refused', 'selects failed', 'URBs refused - malformed',
+                'fatal controller status', 'transfer events for no open endpoint',
+                'commands the engine gave up on', 'hubs started by the bus',
+                'topology: hub descriptors folded', 'topology: behind-hub devices addressed',
+                'topology: behind-hub opens', 'topology: nodes dropped',
+                'topology: hub descriptors malformed', 'topology: TT pairs programmed')
+    $RefusalLabel = 'selects failed'
+    $AbortedLabel = $null
+}
+
 $script:table = $null
 $script:baseVa = $null
 
@@ -174,7 +211,7 @@ function Read-Now {
     # and a two-controller machine has two of them.  A cached VA would read the
     # counter table out of whatever now occupies the old pool block - a
     # plausible set of numbers, never an error.
-    $ident = Find-ExtensionIdentity -DebugconLog $DebugconLog
+    $ident = Find-DriverIdentity -Driver $Driver -DebugconLog $DebugconLog
     if ($null -eq $ident.Va) { throw ("no extension address in {0} - is the driver up, and is it the QEMU build? Since task 13-L.1 that trace exists in no other flavour." -f $DebugconLog) }
     if ($ident.Spans) {
         throw ("the debug console log now spans more than one driver load or binary (VAs: {0}; sizes: {1}). The driver restarted mid-soak, so every delta across that point is void." -f `
@@ -251,6 +288,15 @@ function Get-AttachSpec {
         'hid'     { return "usb-mouse,id=$Id,bus=xhci.0,port=$DutPort" }
         'storage' { return "usb-storage,id=$Id,bus=xhci.0,port=$DutPort,drive=${Id}_drv,removable=on" }
         'audio'   { return "usb-audio,id=$Id,bus=xhci.0,port=$DutPort,audiodev=$AudioDev" }
+        'kbd'     { return "usb-kbd,id=$Id,bus=xhci.0,port=$DutPort" }
+        'tablet'  { return "usb-tablet,id=$Id,bus=xhci.0,port=$DutPort" }
+        'wacom'   { return "usb-wacom-tablet,id=$Id,bus=xhci.0,port=$DutPort" }
+        'ccid'    { return "usb-ccid,id=$Id,bus=xhci.0,port=$DutPort" }
+        'u2f'     { return "u2f-emulated,id=$Id,bus=xhci.0,port=$DutPort" }
+        'hub'     { return "usb-hub,id=$Id,bus=xhci.0,port=$DutPort" }
+        # Behind the resident hub the cycle phase puts on $DutPort for this
+        # class (soak_resident_hub): a Full-Speed mouse at its port 1.
+        'hubmouse' { return "usb-mouse,id=$Id,bus=xhci.0,port=$DutPort.1" }
         'net'     {
             $a = Get-AsixBusAddr
             if ($null -eq $a) { return $null }
@@ -422,8 +468,8 @@ Write-Host "=== preflight"
 if (Test-MonitorPortFree -Port $Monitor) {
     throw ("nothing is listening on monitor port {0}. This script drives an ALREADY-RUNNING guest - start the stage's launcher first." -f $Monitor)
 }
-$script:table = Import-CounterTable
-$ident0 = Find-ExtensionIdentity -DebugconLog $DebugconLog
+$script:table = Import-CounterTable -Driver $Driver
+$ident0 = Find-DriverIdentity -Driver $Driver -DebugconLog $DebugconLog
 if ($null -eq $ident0.Va) { throw ("no extension address in {0}" -f $DebugconLog) }
 if ($ident0.Spans) {
     throw ("{0} already spans more than one driver load or binary (VAs: {1}; sizes: {2}). Restart the guest so the soak measures one continuous load." -f `
@@ -440,8 +486,8 @@ if ($ident0.Spans) {
 if ($null -eq $ident0.Size) {
     throw ("{0} carries no MiniPortExtensionSize line, so the offset table cannot be checked against the running driver. A soak on unchecked offsets is a soak of wrong values." -f $DebugconLog)
 }
-Assert-OffsetsFresh -OffsetsFile $script:table.OffsetsFile -ExtensionSizeFromTrace $ident0.Size | Out-Null
-Write-Host ("driver up: extension 0x{0}, MiniPortExtensionSize={1}, table SIZEOF {2} - AGREE" -f $ident0.Va, $ident0.Size, $script:table.Sizeof)
+Assert-OffsetsFresh -OffsetsFile $script:table.OffsetsFile -ExtensionSizeFromTrace $ident0.Size -SizeName (Get-DriverSizeName -Driver $Driver) | Out-Null
+Write-Host ("driver up: counters 0x{0}, {3}={1}, table SIZEOF {2} - AGREE" -f $ident0.Va, $ident0.Size, $script:table.Sizeof, (Get-DriverSizeName -Driver $Driver))
 
 $alive = Test-GuestAlive -Port $Monitor
 if (-not $alive.Alive) { throw ("the guest is not alive before the soak even started [{0}]: {1} ({2})" -f $alive.Verdict, $alive.Why, $alive.Detail) }
@@ -453,6 +499,7 @@ Add-Line ("target          : {0}" -f $(if ($Target -ne "") { $Target } else { "(
 Add-Line ("started         : {0}" -f $stamp)
 Add-Line ("classes         : {0}" -f ($classList -join ", "))
 Add-Line ("cycles per class: {0}" -f $Cycles)
+Add-Line ("driver          : {0}" -f $Driver)
 Add-Line ("extension size  : {0} (table SIZEOF {1})" -f $ident0.Size, $script:table.Sizeof)
 Add-Line ("storage medium  : {0}" -f $StorageImage)
 Add-Line ""
@@ -467,6 +514,12 @@ $cycleResults = @()
 foreach ($class in $classList) {
     Add-Line ("--- {0}: {1} unplug/replug cycles" -f $class, $Cycles)
     $ok = 0; $failed = 0; $firstError = ""
+    if ($class -eq 'hubmouse') {
+        Send-Checked -Port $Monitor -Command ("device_add usb-hub,id=soak_resident_hub,bus=xhci.0,port={0}" -f $DutPort) | Out-Null
+        $rh = Confirm-Attached -Id 'soak_resident_hub' -Class 'hub'
+        if ($rh -ne "") { throw ("the resident hub for the hubmouse cycles did not attach: {0}" -f $rh) }
+        Start-Sleep -Seconds 15
+    }
     $classBefore = Read-Now
 
     for ($i = 1; $i -le $Cycles; $i++) {
@@ -539,7 +592,7 @@ foreach ($class in $classList) {
             # declining, which is a different defect from usbport having given
             # up (both frozen) or from the replug never reaching us (neither
             # moving, with RH ports reset also flat).
-            $ref = $snap.Values[(Resolve-CounterLabel -Table $script:table -Label 'EP0 opens refused')]
+            $ref = $snap.Values[(Resolve-CounterLabel -Table $script:table -Label $RefusalLabel)]
             Add-Line ("  cycle {0,3}/{1}: ok={2} failed={3}  addressed={4} ep0refused={5} submitted={6} completed={7} cancelled={8} gap={9}  guest={10}" -f `
                       $i, $Cycles, $ok, $failed, $addr, $ref, $live['transfers submitted'], $live['transfers completed'],
                       $live['transfers cancelled'], $live['gap'], $a.Verdict)
@@ -551,11 +604,19 @@ foreach ($class in $classList) {
     }
 
     $classAfter = Read-Now
+    if ($class -eq 'hubmouse') {
+        Send-Checked -Port $Monitor -Command "device_del soak_resident_hub" | Out-Null
+        if (-not (Confirm-Departed -Id 'soak_resident_hub')) { Add-Failure "the resident hub did not leave the bus" }
+        Start-Sleep -Seconds 5
+    }
     $d = Get-CounterDelta -Before $classBefore -After $classAfter
     if ($d.Restarted) {
         Add-Line ("  *** the driver RESTARTED during this class ({0}) - every delta above is void" -f ($d.WentBackwards -join ", "))
     }
     Add-Line ("  {0}: {1}/{2} cycles completed, {3} failed" -f $class, $ok, $Cycles, $failed)
+    $dAddr = $d.Values[(Resolve-CounterLabel -Table $script:table -Label 'devices addressed')]
+    $dOpen = $d.Values[(Resolve-CounterLabel -Table $script:table -Label 'endpoints opened')]
+    Add-Line ("  {0}: across the class, devices addressed +{1}, endpoints opened +{2}" -f $class, $dAddr, $dOpen)
     if ($firstError -ne "") { Add-Line ("  first failure - {0}" -f $firstError) }
     Add-Line ""
     $cycleResults += [pscustomobject]@{ Class = $class; Ok = $ok; Failed = $failed; FirstError = $firstError }
@@ -677,6 +738,72 @@ if ($LoadSeconds -gt 0) {
     Add-Line ""
 }
 
+# ---------------------------------------------------------- the hub churn ---
+if ($HubChurn -gt 0) {
+    Add-Line ("--- hub churn: {0} usb-hub attach/detach pairs on root port {1}, {2} ms apart, usb-storage resident on port {3}" -f `
+              $HubChurn, $ChurnPort, $ChurnIntervalMs, $ChurnStoragePort)
+    Add-StorageBackend -Id "churn_resident_drv"
+    Send-Checked -Port $Monitor -Command ("device_add usb-storage,id=churn_resident,bus=xhci.0,port={0},drive=churn_resident_drv,removable=on" -f $ChurnStoragePort) | Out-Null
+    $rs = Confirm-Attached -Id 'churn_resident' -Class 'storage'
+    if ($rs -ne "") { Add-Failure ("the churn's resident usb-storage did not attach: {0}" -f $rs) }
+    Start-Sleep -Seconds 20
+    $hubLabel = if ($Driver -eq 'hcd') { 'hubs started by the bus' } else { 'devices addressed' }
+    $irqA = Get-MonitorText -Port $Monitor -Command "info irq"
+    $churnBefore = Read-Now
+    $adds = 0; $dels = 0; $refusals = 0
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    for ($i = 1; $i -le $HubChurn; $i++) {
+        $id = "churnhub$i"
+        $e0 = Get-MonitorErrors
+        Send-Checked -Port $Monitor -Command ("device_add usb-hub,id={0},bus=xhci.0,port={1}" -f $id, $ChurnPort) | Out-Null
+        if ((Get-MonitorErrors) -gt $e0) { $refusals++ } else { $adds++ }
+        Start-Sleep -Milliseconds $ChurnIntervalMs
+        $e0 = Get-MonitorErrors
+        Send-Checked -Port $Monitor -Command ("device_del {0}" -f $id) | Out-Null
+        if ((Get-MonitorErrors) -gt $e0) { $refusals++ } else { $dels++ }
+        if (-not (Confirm-Departed -Id $id -TimeoutSeconds 10)) { $refusals++ }
+        Start-Sleep -Milliseconds $ChurnIntervalMs
+    }
+    Add-Line ("  {0} attach(es), {1} detach(es), {2} refusal(s) in {3:N0} s" -f $adds, $dels, $refusals, $sw.Elapsed.TotalSeconds)
+    Start-Sleep -Seconds 20
+    $churnAfter = Read-Now
+    $cd = Get-CounterDelta -Before $churnBefore -After $churnAfter
+    $enum = $cd.Values[(Resolve-CounterLabel -Table $script:table -Label $hubLabel)]
+    $addrD = $cd.Values[(Resolve-CounterLabel -Table $script:table -Label 'devices addressed')]
+    Add-Line ("  enumerations completed ('{0}'): +{1}; devices addressed +{2}" -f $hubLabel, $enum, $addrD)
+    # IDE IRQ 14 is the one wedge signature that survived task 12.5's control:
+    # it moved on the healthy UHCI leg and froze on every wedged sample. Sampled
+    # across the churn and across a quiet 30 s after it, beside the timer-based
+    # probe, which a wedged Windows 98 passes.
+    function Get-Irq14 { param($Lines) foreach ($l in $Lines) { if ($l -match '^\s*14:\s*(\d+)') { return [int64]$Matches[1] } }; return $null }
+    $irqB = Get-MonitorText -Port $Monitor -Command "info irq"
+    Start-Sleep -Seconds 30
+    $irqC = Get-MonitorText -Port $Monitor -Command "info irq"
+    $a14 = Get-Irq14 $irqA; $b14 = Get-Irq14 $irqB; $c14 = Get-Irq14 $irqC
+    Add-Line ("  IDE IRQ 14: {0} -> {1} across the churn, -> {2} 30 s later" -f $a14, $b14, $c14)
+    $alive = Test-GuestAlive -Port $Monitor
+    Add-Line ("  liveness after the churn: {0} ({1})" -f $alive.Verdict, $alive.Detail)
+    $shot = Save-GuestScreenshot -Port $Monitor -Path (Join-Path $OutDir ("soak-{0}-churn-after.ppm" -f $Target))
+    Add-Line ("  screenshot after the churn: {0}" -f $shot)
+    if (-not $alive.Alive) { Add-Failure ("the guest is not alive after the hub churn [{0}]: {1}" -f $alive.Verdict, $alive.Why) }
+    # A FROZEN IRQ 14 IS NOT BY ITSELF A WEDGE: an idle Windows 98 disk reads
+    # frozen too. Measured 2026-10-04 (27-V.1, h98j): 14 frozen at 18,966 across
+    # the churn and the 30 s after it, yet the guest opened a DOS box and listed
+    # a directory at once (IRQ 14 -> 20,465). task 12.5's control saw it move
+    # on its healthy leg, which a busier guest happened to do. So it is printed
+    # as the signature to check, not counted as a failure; the operator's
+    # stimulus (or the screenshot) decides.
+    if ($null -ne $c14 -and $c14 -eq $a14) {
+        Add-Line "  NOTE: IDE IRQ 14 did not move across the churn or the 30 s after it - task 12.5's wedge signature, OR an idle disk. Not a verdict: stimulate the guest (open a window, list a directory) and read 14 again."
+    }
+    if ($enum -lt $adds) {
+        Add-Failure ("the churn attached {0} hubs and only {1} were enumerated - the enumeration fell behind the attaches (task 12.5's shape: 12 of 121)" -f $adds, $enum)
+    }
+    Send-Checked -Port $Monitor -Command "device_del churn_resident" | Out-Null
+    if (-not (Confirm-Departed -Id 'churn_resident')) { Add-Failure "the churn's resident usb-storage did not leave the bus" }
+    Add-Line ""
+}
+
 # ------------------------------------------------------- the settled reading ---
 
 # THE IDENTITY IS ONLY EXACTLY TRUE AT A SETTLED BUS, so this is taken with
@@ -694,7 +821,7 @@ Add-Line ("  read 1: submitted={0} completed={1} cancelled={2} gap={3}" -f `
 Add-Line ("  read 2: submitted={0} completed={1} cancelled={2} gap={3}" -f `
           $id2['transfers submitted'], $id2['transfers completed'], $id2['transfers cancelled'], $id2['gap'])
 
-$aborted = $settled2.Values[(Resolve-CounterLabel -Table $script:table -Label 'transfers aborted')]
+$aborted = if ($null -ne $AbortedLabel) { $settled2.Values[(Resolve-CounterLabel -Table $script:table -Label $AbortedLabel)] } else { 0 }
 if ($id2['gap'] -eq 0) {
     Add-Line "  IDENTITY EXACT: submitted = completed + cancelled, with nothing on the bus."
 } elseif ($id1['gap'] -eq $id2['gap'] -and $id1['transfers submitted'] -eq $id2['transfers submitted']) {
@@ -767,7 +894,7 @@ if ($monErrors -gt 0) {
 # outright whatever the load window says.)
 $cyclesRun = 0
 foreach ($r in $cycleResults) { $cyclesRun += ($r.Ok + $r.Failed) }
-if ($cyclesRun -eq 0 -and $LoadSeconds -le 0) {
+if ($cyclesRun -eq 0 -and $LoadSeconds -le 0 -and $HubChurn -le 0) {
     Add-Failure ("this invocation performed no work at all - {0} cycle(s) over {1} class(es) and no load window, so there is nothing here to pass" -f `
                  $Cycles, $classList.Count)
 }
@@ -777,7 +904,7 @@ if ($cyclesRun -eq 0 -and $LoadSeconds -le 0) {
 # vacuously satisfied, and the load window still measures the bus - so transfers
 # from whatever was already attached, or from the guest's own devices, can carry
 # it to a PASS that this script did nothing to produce.
-if ($classList.Count -eq 0) {
+if ($classList.Count -eq 0 -and $HubChurn -le 0) {
     Add-Failure "no device classes were requested (-Classes is empty), so nothing this script controls was ever put on the bus - any movement measured below belongs to something else"
 }
 

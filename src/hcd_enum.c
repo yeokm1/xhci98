@@ -45,11 +45,11 @@
  * that place in the Slot Context, and a hub that reaches Present is brought
  * up by the bus and gets no PDO. A device that leaves goes by one teardown
  * whatever the cause (hcdSubtreeGo; section 10.5): a hub takes its subtree
- * with it, every device below frozen, its running endpoints stopped and its
- * URBs completed while its slot is still enabled, then its PDOs reported
- * missing and its slot disabled before the hub's own (leaf first), and the
- * port the hub sat on waits until PnP has deleted every PDO of the subtree
- * (hcdPortQuiet).
+ * with it, every device below frozen and its PDOs reported missing, its
+ * running endpoints stopped and its URBs taken off the rings and held on its
+ * PDO while its slot is still enabled, then its slot disabled before the
+ * hub's own (leaf first), and the port the hub sat on waits until PnP has
+ * deleted every PDO of the subtree (hcdPortQuiet).
  *
  * IRQL: PASSIVE_LEVEL (the controller thread), except where a function says
  * otherwise.
@@ -2229,7 +2229,7 @@ static VOID hcdSettleWaiting(PHCD_CONTROLLER hc, PULONG changed)
 /* ----------------------------------------------------------------------- */
 
 /* Step 1 for one device: from here on its URBs are refused and a mapped
- * record completes DEVICE_GONE rather than reach the ring (hcd_io.c), a
+ * record is held on its PDO rather than reach the ring (hcd_io.c), a
  * hub's status-change transfer is not armed again (HcdHubRearm), and no
  * doorbell is rung for it - every doorbell of a device's endpoint tests
  * Gone under this same lock: a publish (HcdIoMapped, HcdHubRearm, the
@@ -2247,12 +2247,13 @@ static VOID hcdDeviceFreeze(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 }
 
 /*
- * Step 2 for one device, its slot still enabled (section 10.5): every
+ * Step 3 for one device, its slot still enabled (section 10.5): every
  * endpoint with a TD on its ring that is Running is stopped (Stop Endpoint),
  * so the controller owns none of its TRBs - an endpoint Stopped, Halted or
  * in Error runs nothing already - and everything the device holds, bulk,
- * interrupt, isochronous and control alike, then completes DEVICE_GONE
- * (HcdIoDeviceDrain). So no URB is left on a ring whose slot is about to go.
+ * interrupt, isochronous and control alike, is then taken off the rings
+ * (HcdIoDeviceDrain) and held on its PDO rather than completed (hcd_io.c,
+ * HcdIoPark). So no URB is left on a ring whose slot is about to go.
  * Nothing reaches a ring after the freeze, so an endpoint with an empty
  * queue needs no command. A Stop Endpoint that fails requests the reset and
  * leaves the URBs where they are: the invalidation drains them once HCRST
@@ -2340,9 +2341,9 @@ static ULONG hcdDeviceGo(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG how,
 }
 
 /*
- * Step 3, taken with the freeze: the device's PDOs reported missing, and the
+ * Step 2, taken with the freeze: the device's PDOs reported missing, and the
  * group serial its port will wait for kept on the port, before any of its
- * URBs completes. Windows 98 SE's hidclass.sys answers a read completing
+ * URBs leaves the ring. Windows 98 SE's hidclass.sys answers a read completing
  * DEVICE_NOT_CONNECTED by failing every client read and resubmitting at
  * once while its device is still started (hcd_io.c, hcdRefusedDpc), and its
  * clients' retries then keep the processor busy enough that the
@@ -2351,10 +2352,11 @@ static ULONG hcdDeviceGo(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG how,
  * a root port, 2026-10-04; Phase 26, which reported the PDO first and
  * completed the URBs at the Disable Slot after it, did not stall). So the
  * relations change goes first, as it did there, and GET_PORT_STATUS reads
- * the device disconnected by the time its first URB fails (hcd_urb.c,
- * hcdPortStatus). Design record 13 section 10.5 lists steps 2 and 3 the
- * other way round; the hardware order, URBs completed before the Disable
- * Slot, is kept.
+ * the device disconnected by the time any URB of it is touched (hcd_urb.c,
+ * hcdPortStatus) - design record 13 section 10.5's step 2. Reporting first
+ * did not by itself end the stall; holding the URBs instead of failing them
+ * did (step 3, hcd_io.c, HcdIoPark). The hardware order, the URBs off the
+ * rings before the Disable Slot, is kept.
  */
 static VOID hcdReportGone(PHCD_CONTROLLER hc, PHCD_PORT q)
 {
@@ -2461,12 +2463,15 @@ static VOID hcdHubGo(PHCD_CONTROLLER hc, PHCD_HUB hub, PHCD_PORT top,
  *
  *   1 freeze: every hub of the subtree stops serving its ports and
  *     re-arming its status-change pipe (Draining), and every device refuses
- *     new work - and, with it, has its PDOs reported missing (step 3,
- *     taken before any URB fails; hcdReportGone has the Windows 98 reason);
- *   2 fail I/O at the edge, with the slots still enabled: each device's
- *     running endpoints stopped and every URB of it completed DEVICE_GONE,
- *     leaf first (HCD_GO_UNPLUG only - a taken slot runs nothing, and its
- *     URBs are drained as its record is freed);
+ *     new work and rings no doorbell;
+ *   2 with it, each device's PDOs reported missing, before any URB of it
+ *     leaves the ring (hcdReportGone has the Windows 98 reason);
+ *   3 with the slots still enabled, leaf first, each device's running
+ *     endpoints stopped and its URBs taken off the rings and held on its
+ *     PDO - not completed - until the client cancels them or aborts their
+ *     pipe, or the PDO is stopped or removed (hcd_io.c, HcdIoPark;
+ *     HCD_GO_UNPLUG only - a taken slot runs nothing, and its URBs are
+ *     drained as its record is freed, and held the same way);
  *   4 leaf first: each device's slot given back, the devices on a hub's
  *     ports before the hub's own, so no enabled slot's Parent Hub Slot ID
  *     or TT names a disabled one;

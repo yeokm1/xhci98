@@ -81,6 +81,8 @@ VOID XhciSsHubPortDecide(ULONG state, ULONG status, ULONG change,
     out->WarmReset = 0;
     out->ConfigError = (change & XHCI_SSHUB_C_PORT_CONFIG_ERROR) != 0;
     out->LinkChange = (change & XHCI_SSHUB_C_PORT_LINK_STATE) != 0;
+    out->Resume = 0;
+    out->Resumed = 0;
     connected = (status & XHCI_SSHUB_PORT_CONNECTION) != 0;
     link = XhciSsHubLinkState(status);
 
@@ -122,8 +124,41 @@ VOID XhciSsHubPortDecide(ULONG state, ULONG status, ULONG change,
         out->Connect = 1;
         return;
     }
+    if (xhciSsHubHolds(state) && (status & XHCI_SSHUB_PORT_ENABLE) != 0) {
+        if (link == XHCI_SSHUB_LINK_U3) {
+            out->Resume = 1;
+        } else if (out->LinkChange && link == XHCI_SSHUB_LINK_U0) {
+            out->Resumed = 1;
+        }
+    }
     if (state == XHCI_ENUM_EMPTY) {
         out->Connect = 1;
+    }
+}
+
+/* IRQL: any. */
+ULONG XhciSsHubResumeProgress(ULONG status)
+{
+    ULONG link;
+
+    if ((status & XHCI_SSHUB_PORT_CONNECTION) == 0) {
+        return XHCI_HUB_RESUME_GONE;
+    }
+    link = XhciSsHubLinkState(status);
+    switch (link) {
+    case XHCI_SSHUB_LINK_U3:
+    case XHCI_SSHUB_LINK_RESUME:
+    case XHCI_SSHUB_LINK_RECOVERY:
+        return XHCI_HUB_RESUME_PENDING;
+    case XHCI_SSHUB_LINK_U0:
+    case XHCI_SSHUB_LINK_U1:
+    case XHCI_SSHUB_LINK_U2:
+        if ((status & XHCI_SSHUB_PORT_ENABLE) != 0) {
+            return XHCI_HUB_RESUME_DONE;
+        }
+        return XHCI_HUB_RESUME_DISABLED;
+    default:
+        return XHCI_HUB_RESUME_DISABLED;
     }
 }
 

@@ -103,6 +103,7 @@ struct _XHCI_PIPE_BOS;
 #define XHCI_SSHUB_LINK_HOT_RESET       0x9UL
 #define XHCI_SSHUB_LINK_COMPLIANCE      0xAUL
 #define XHCI_SSHUB_LINK_LOOPBACK        0xBUL
+#define XHCI_SSHUB_LINK_RESUME          0xFUL
 
 /* Port feature selectors at SuperSpeed (USB 3.2 Table 10-9; to verify).
  * PORT_RESET 4, PORT_POWER 8, C_PORT_CONNECTION 16, C_PORT_OVER_CURRENT 19
@@ -204,7 +205,18 @@ ULONG XhciSsHubLinkState(ULONG status);
  *                       down until its next connect change;
  *   C_PORT_OVER_CURRENT with PORT_POWER clear: OverCurrent and Repower;
  *   C_PORT_LINK_STATE, C_PORT_RESET, C_BH_PORT_RESET outside a reset:
- *                       cleared, nothing else.
+ *                       cleared, nothing else - except, when no rule above
+ *                       took the port and the machine holds a device on a
+ *                       connected, enabled port:
+ *   link U3             Resume: the bus brings the link to U0 before
+ *                       anything else is asked of the device - suspend
+ *                       handled and never initiated, as at a USB 2.0 hub
+ *                       port (xhci_hub.h; the Phase 27 and Phase 30 merge);
+ *   C_PORT_LINK_STATE with the link in U0: Resumed, a U3 exit finished (a
+ *                       device's remote wake among them) - the device is
+ *                       held through the resume recovery as at USB 2.0.
+ * A connected port under a held device that reads not enabled is the rule
+ * above it (enumerated afresh), whatever its link.
  */
 typedef struct _XHCI_SSHUB_PORT_DECISION {
     ULONG Clear;            /* XHCI_SSHUB_C_* bits to clear               */
@@ -215,6 +227,8 @@ typedef struct _XHCI_SSHUB_PORT_DECISION {
     ULONG WarmReset;        /* recover the link with BH_PORT_RESET        */
     ULONG ConfigError;
     ULONG LinkChange;       /* C_PORT_LINK_STATE was set                  */
+    ULONG Resume;           /* held device, link in U3: resume to U0      */
+    ULONG Resumed;          /* held device, a U3 exit finished            */
 } XHCI_SSHUB_PORT_DECISION, *PXHCI_SSHUB_PORT_DECISION;
 
 VOID XhciSsHubPortDecide(ULONG state, ULONG status, ULONG change,
@@ -247,6 +261,17 @@ ULONG XhciSsHubResetKind(ULONG status, PULONG converted);
  * Enabled is PORT_ENABLE with the link in U0 and the port connected.
  */
 ULONG XhciSsHubResetProgress(ULONG status, ULONG change, PULONG warmSeen);
+
+/*
+ * A resume's progress from one GET_STATUS answer (xhci_hub.h's
+ * XHCI_HUB_RESUME_*): GONE when the port reads disconnected; PENDING while
+ * the link is still in U3, Resume or Recovery; DONE once it is in U0, U1 or
+ * U2 with the port enabled; DISABLED for anything else - the link fell
+ * elsewhere (SS.Inactive, SS.Disabled, Compliance Mode, ...) or the port
+ * reads not enabled - and the device is enumerated afresh, its reset a warm
+ * one where the link needs it (XhciSsHubResetKind).
+ */
+ULONG XhciSsHubResumeProgress(ULONG status);
 
 /* The change bits a finished reset leaves for the executor to clear:
  * C_PORT_RESET and C_BH_PORT_RESET where set, and after a warm reset also

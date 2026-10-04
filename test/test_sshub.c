@@ -167,7 +167,7 @@ static const DECIDE_ROW decideRows[] = {
       C_CONN, 1, 1, 0, 0, 0, 0, 0 },
     { "nothing changed", B, UP, 0,
       0, 0, 0, 0, 0, 0, 0, 0 },
-    { "suspended in U3, nothing changed", B,
+    { "suspended in U3, nothing changed (resumed: test_resume)", B,
       PWR | CONN | ENA | LINK(XHCI_SSHUB_LINK_U3), 0,
       0, 0, 0, 0, 0, 0, 0, 0 },
     { "U3 to U0 completed", B, UP, C_LS,
@@ -400,6 +400,104 @@ static void test_reset_progress(void)
     CHECK_EQ(XhciSsHubResetClears(0, 1), 0, "nothing set, nothing cleared");
     CHECK_EQ(XhciSsHubResetClears(C_CFG | C_RST, 1), C_RST,
              "a config error is the look's to see");
+}
+
+/*
+ * Suspend handled, never initiated, at a SuperSpeed hub port (the Phase 27
+ * and Phase 30 merge): a held device on a connected, enabled port whose link
+ * reads U3 is resumed (Resume), and a C_PORT_LINK_STATE with the link back
+ * in U0 under a held device is a finished U3 exit (Resumed); every other
+ * rule comes first. The resume's progress over every link state.
+ */
+typedef struct _RESUME_ROW {
+    const char *what;
+    ULONG state;
+    ULONG status;
+    ULONG change;
+    ULONG resume;
+    ULONG resumed;
+    ULONG disconnect;
+    ULONG connect;
+} RESUME_ROW;
+
+static const RESUME_ROW resumeRows[] = {
+    /* what                                  state status change
+     *                                       resume resumed dis con */
+    { "held in U3: resumed", B, PWR | CONN | ENA | LINK(XHCI_SSHUB_LINK_U3),
+      0, 1, 0, 0, 0 },
+    { "held in U3 with a stray link change", B,
+      PWR | CONN | ENA | LINK(XHCI_SSHUB_LINK_U3), C_LS, 1, 0, 0, 0 },
+    { "empty port in U3: a new device, no resume", E,
+      PWR | CONN | ENA | LINK(XHCI_SSHUB_LINK_U3), 0, 0, 0, 0, 1 },
+    { "failed port in U3: no resume", F,
+      PWR | CONN | ENA | LINK(XHCI_SSHUB_LINK_U3), 0, 0, 0, 0, 0 },
+    { "held in U3, not enabled: afresh", B,
+      PWR | CONN | LINK(XHCI_SSHUB_LINK_U3), 0, 0, 0, 1, 1 },
+    { "held in U3 with a connect change: a new device", B,
+      PWR | CONN | ENA | LINK(XHCI_SSHUB_LINK_U3), C_CONN, 0, 0, 1, 1 },
+    { "U3 exit finished under a held device", B, UP, C_LS, 0, 1, 0, 0 },
+    { "U0 with no link change: nothing", B, UP, 0, 0, 0, 0, 0 },
+    { "link change into U1: not a U3 exit", B,
+      PWR | CONN | ENA | LINK(XHCI_SSHUB_LINK_U1), C_LS, 0, 0, 0, 0 },
+    { "link change on an empty port", E, UP, C_LS, 0, 0, 0, 1 },
+    { "SS.Inactive from U3 under a device: the warm reset's", B,
+      PWR | CONN | ENA | LINK(XHCI_SSHUB_LINK_INACTIVE), C_LS, 0, 0, 1, 0 },
+};
+
+typedef struct _RPROGRESS_ROW {
+    const char *what;
+    ULONG status;
+    ULONG progress;
+} RPROGRESS_ROW;
+
+static const RPROGRESS_ROW rprogressRows[] = {
+    { "still in U3", PWR | CONN | ENA | LINK(XHCI_SSHUB_LINK_U3),
+      XHCI_HUB_RESUME_PENDING },
+    { "in Resume", PWR | CONN | ENA | LINK(XHCI_SSHUB_LINK_RESUME),
+      XHCI_HUB_RESUME_PENDING },
+    { "in Recovery", PWR | CONN | ENA | LINK(XHCI_SSHUB_LINK_RECOVERY),
+      XHCI_HUB_RESUME_PENDING },
+    { "back in U0", UP, XHCI_HUB_RESUME_DONE },
+    { "U1 already", PWR | CONN | ENA | LINK(XHCI_SSHUB_LINK_U1),
+      XHCI_HUB_RESUME_DONE },
+    { "U2 already", PWR | CONN | ENA | LINK(XHCI_SSHUB_LINK_U2),
+      XHCI_HUB_RESUME_DONE },
+    { "U0 but not enabled", PWR | CONN | LINK(XHCI_SSHUB_LINK_U0),
+      XHCI_HUB_RESUME_DISABLED },
+    { "fell to SS.Inactive", PWR | CONN | ENA |
+          LINK(XHCI_SSHUB_LINK_INACTIVE), XHCI_HUB_RESUME_DISABLED },
+    { "fell to SS.Disabled", PWR | CONN | LINK(XHCI_SSHUB_LINK_DISABLED),
+      XHCI_HUB_RESUME_DISABLED },
+    { "Compliance Mode", PWR | CONN | LINK(XHCI_SSHUB_LINK_COMPLIANCE),
+      XHCI_HUB_RESUME_DISABLED },
+    { "device left", PWR | LINK(XHCI_SSHUB_LINK_RX_DETECT),
+      XHCI_HUB_RESUME_GONE },
+    { "device left mid-resume", PWR | LINK(XHCI_SSHUB_LINK_U3),
+      XHCI_HUB_RESUME_GONE },
+};
+
+static void test_resume(void)
+{
+    XHCI_SSHUB_PORT_DECISION d;
+    ULONG i;
+
+    for (i = 0; i < sizeof(resumeRows) / sizeof(resumeRows[0]); i++) {
+        const RESUME_ROW *r = &resumeRows[i];
+
+        XhciSsHubPortDecide(r->state, r->status, r->change, &d);
+        check_eq_impl(d.Resume, r->resume, r->what, __FILE__, __LINE__);
+        check_eq_impl(d.Resumed, r->resumed, r->what, __FILE__, __LINE__);
+        check_eq_impl(d.Disconnect, r->disconnect, r->what, __FILE__,
+                      __LINE__);
+        check_eq_impl(d.Connect, r->connect, r->what, __FILE__, __LINE__);
+    }
+    for (i = 0; i < sizeof(rprogressRows) / sizeof(rprogressRows[0]); i++) {
+        check_eq_impl(XhciSsHubResumeProgress(rprogressRows[i].status),
+                      rprogressRows[i].progress, rprogressRows[i].what,
+                      __FILE__, __LINE__);
+    }
+    CHECK_EQ(XhciSsHubLinkState(LINK(XHCI_SSHUB_LINK_RESUME)), 0xF,
+             "the Resume link state is 0xF");
 }
 
 /* ----------------------------------------------------------------------- */
@@ -685,6 +783,7 @@ int main(void)
     test_selectors();
     test_reset_kind();
     test_reset_progress();
+    test_resume();
     test_ext_status();
     test_psiv();
     test_pairing();
