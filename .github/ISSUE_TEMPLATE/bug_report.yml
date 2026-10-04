@@ -108,7 +108,7 @@ body:
         The driver does not need these: it replaces their port and hub drivers.
         What still matters is storage on Windows 98 SE, which needs NUSB's
         mass-storage files (the release notes say why). On Windows 2000, XP,
-        Vista or 7, pick "Windows 2000, XP, Vista or 7: nothing applies".
+        Vista or 7, pick "Windows 2000, XP, Vista or 7: nothing extra".
       options:
         - "Windows 98 SE: nothing extra (a stock install)"
         - "Windows 98 SE: NUSB 3.3"
@@ -118,7 +118,7 @@ body:
         - "Windows 98 SE: SweetLow's USB 2.0 stack (Windows 98 QuickInstall)"
         - "Windows ME: SweetLow's USB 2.0 stack"
         - "Windows ME: nothing extra (a stock install)"
-        - "Windows 2000, XP, Vista or 7: nothing applies"
+        - "Windows 2000, XP, Vista or 7: nothing extra"
         - Not sure
     validations:
       required: true

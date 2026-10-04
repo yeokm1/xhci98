@@ -74,7 +74,7 @@ body:
         - "Windows 98 SE: SweetLow's USB 2.0 stack (Windows 98 QuickInstall)"
         - "Windows ME: SweetLow's USB 2.0 stack"
         - "Windows ME: nothing extra (a stock install)"
-        - "Windows 2000, XP, Vista or 7: nothing applies"
+        - "Windows 2000, XP, Vista or 7: nothing extra"
         - Not sure
     validations:
       required: false
