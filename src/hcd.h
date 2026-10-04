@@ -345,6 +345,8 @@ typedef struct _HCD_DEVICE_PDO {
     ULONG Reported;                 /* returned in a BusRelations answer    */
     ULONG MissingReported;          /* omitted from one since it was gone   */
     ULONG RemoveReceived;           /* PnP's IRP_MN_REMOVE_DEVICE seen      */
+    ULONG DeletePending;            /* on RemovedPdos, deleted at the next
+                                     * relations answer (hcd_pdo.c)       */
     ULONG Deleted;                  /* IoDeleteDevice called: once only     */
     ULONG Serial;                   /* the name's number; a port waits on it */
     ULONG Closing;                  /* stopping or removed: URBs refused  */
@@ -576,6 +578,8 @@ typedef struct _HCD_CONTROLLER {
     KSPIN_LOCK PdoListLock;
     PHCD_DEVICE_PDO DevicePdos;     /* listed: present, in the relations */
     PHCD_DEVICE_PDO GonePdos;       /* unlisted, awaiting their deletion */
+    PHCD_DEVICE_PDO RemovedPdos;    /* removed by PnP, deleted at the next
+                                     * BusRelations answer (hcd_pdo.c)    */
     ULONG RootHubStarted;           /* enumeration creates PDOs only then */
     volatile ULONG ThreadRunning;
     ULONG ThreadReferenceFailures;

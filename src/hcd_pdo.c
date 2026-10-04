@@ -278,13 +278,30 @@ static NTSTATUS hcdDeviceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
  *               answer carries it and sets Reported;
  *   gone      - on GonePdos once its device left; the next relations answer
  *               omits it and sets MissingReported;
- *   deleted   - by its own IRP_MN_REMOVE_DEVICE once it is gone and either
- *               reported missing or never reported at all; by the thread at
- *               once when it leaves before PnP ever saw it; or by its
- *               parent's removal when PnP has already removed it;
+ *   removed   - its own IRP_MN_REMOVE_DEVICE came once it was gone and
+ *               either reported missing or never reported at all: it leaves
+ *               GonePdos for RemovedPdos, its port is told PDO_REMOVED, and
+ *               it is deleted at the next BusRelations answer
+ *               (HcdDevicePdoRelations), not at the REMOVE (below);
+ *   deleted   - at that answer; by the thread at once when it leaves before
+ *               PnP ever saw it; or by its parent's removal when PnP has
+ *               already removed it;
  *   orphaned  - when its parent goes first while it still awaits a REMOVE
  *               (a surprise removal with handles open): it leaves both lists,
  *               forgets the controller, and deletes itself at that REMOVE.
+ *
+ * Why not at the REMOVE: Windows 98 SE's configuration manager sends the
+ * removed PDO more IRPs after its REMOVE has completed - a
+ * QUERY_DEVICE_RELATIONS (BusRelations) and a QUERY_PNP_DEVICE_STATE, in
+ * the same removal pass (2026-10-04, a diagnostic build that kept the PDO:
+ * REMOVE, then minor 7 type 0 and minor 13, on every unplug of a bound
+ * usb-audio). Deleted at the REMOVE, those IRPs reached a freed device
+ * object, and once its memory was reused - a device whose audio stack had
+ * opened it, its devnode installed at an earlier boot - the guest took
+ * fatal exception 0E at 0028:C002A3A7 right after the REMOVE. The next
+ * relations answer comes from a later pass of the configuration manager,
+ * which runs one at a time; Windows 2000 sends nothing after a REMOVE, so
+ * the deferral only holds the object a little longer there.
  *
  * A REMOVE while still listed (a disable of the device) keeps the PDO, the
  * WDM bus rule. A deletion is fed back to the port's machine as PDO_REMOVED
@@ -601,13 +618,46 @@ ULONG HcdDevicePdoExists(PHCD_CONTROLLER hc, ULONG serial)
     return found;
 }
 
+/* Until no dispatch is inside the PDO's internal-IOCTL entry. IRQL:
+ * PASSIVE_LEVEL. */
+static VOID hcdWaitBusy(PHCD_DEVICE_PDO pdo)
+{
+    LARGE_INTEGER due;
+
+    while (pdo->Busy != 0) {
+        HcdRelativeMs(&due, 1);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
+}
+
+/* The PDOs PnP removed before this answer, deleted: their removal passes
+ * are over (the lifecycle above). IRQL: PASSIVE_LEVEL. */
+static VOID hcdReapRemoved(PHCD_CONTROLLER hc)
+{
+    PHCD_DEVICE_PDO pdo;
+    PHCD_DEVICE_PDO next;
+    KIRQL oldIrql;
+
+    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    pdo = hc->RemovedPdos;
+    hc->RemovedPdos = NULL;
+    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    for (; pdo != NULL; pdo = next) {
+        next = pdo->Next;
+        pdo->Next = NULL;
+        hcdWaitBusy(pdo);
+        hcdDeletePdo(pdo);
+    }
+}
+
 /*
  * The root hub's BusRelations: whatever the list already held, then every
  * listed PDO, referenced and marked Reported; every gone PDO is marked
  * MissingReported, since this answer omits it. One hold of PdoListLock for
  * the count, the allocation and the copy (round 1, finding 3). NULL when the
- * pool has nothing. IRQL: PASSIVE_LEVEL (the allocation is NonPagedPool, so
- * it is legal under the spin lock).
+ * pool has nothing. Then the PDOs removed before it are deleted. IRQL:
+ * PASSIVE_LEVEL (the allocation is NonPagedPool, so it is legal under the
+ * spin lock).
  */
 PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
                                         PDEVICE_RELATIONS old)
@@ -642,19 +692,8 @@ PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
         }
     }
     KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    hcdReapRemoved(hc);
     return rel;
-}
-
-/* Until no dispatch is inside the PDO's internal-IOCTL entry. IRQL:
- * PASSIVE_LEVEL. */
-static VOID hcdWaitBusy(PHCD_DEVICE_PDO pdo)
-{
-    LARGE_INTEGER due;
-
-    while (pdo->Busy != 0) {
-        HcdRelativeMs(&due, 1);
-        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
-    }
 }
 
 /*
@@ -675,10 +714,13 @@ VOID HcdDevicePdoReleaseAll(PHCD_CONTROLLER hc)
         pdo = hc->DevicePdos;
         if (pdo != NULL) {
             hc->DevicePdos = pdo->Next;
-        } else {
+        } else if (hc->GonePdos != NULL) {
             pdo = hc->GonePdos;
+            hc->GonePdos = pdo->Next;
+        } else {
+            pdo = hc->RemovedPdos;
             if (pdo != NULL) {
-                hc->GonePdos = pdo->Next;
+                hc->RemovedPdos = pdo->Next;
             }
         }
         deleteIt = 0;
@@ -848,10 +890,13 @@ static VOID hcdPdoStarted(PHCD_DEVICE_PDO pdo)
 /*
  * IRP_MN_REMOVE_DEVICE, already completed. The lifecycle above decides: an
  * orphan deletes itself; a gone PDO that PnP has seen reported missing (or
- * never saw) is unlinked and deleted, once, and its port told PDO_REMOVED; a
- * listed PDO stays (a disable), as does a gone one whose absence PnP has not
- * yet been told - its REMOVE after the next relations answer, or the
- * parent's release, deletes it. IRQL: PASSIVE_LEVEL.
+ * never saw) moves to RemovedPdos, once, for the next relations answer to
+ * delete, and its port is told PDO_REMOVED; a listed PDO stays (a disable),
+ * as does a gone one whose absence PnP has not yet been told - its REMOVE
+ * after the next relations answer, or the parent's release, deletes it.
+ * Nothing here reads the PDO once it is on RemovedPdos: on Windows 2000 a
+ * relations answer on another thread may delete it from then on. IRQL:
+ * PASSIVE_LEVEL.
  */
 static VOID hcdPdoRemoved(PHCD_DEVICE_PDO pdo)
 {
@@ -860,9 +905,9 @@ static VOID hcdPdoRemoved(PHCD_DEVICE_PDO pdo)
     ULONG deleteIt;
     ULONG port;
 
-    if (pdo->Deleted) {
+    if (pdo->Deleted || pdo->DeletePending) {
         /* A REMOVE again while a reference keeps the object: already
-         * deleted, and the controller may be gone. */
+         * deleted or to be, and the controller may be gone. */
         return;
     }
     hc = pdo->Controller;
@@ -871,6 +916,7 @@ static VOID hcdPdoRemoved(PHCD_DEVICE_PDO pdo)
         return;
     }
     deleteIt = 0;
+    port = pdo->Port;
     KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
     if (pdo->Controller == NULL) {
         deleteIt = 2;
@@ -878,16 +924,16 @@ static VOID hcdPdoRemoved(PHCD_DEVICE_PDO pdo)
         pdo->RemoveReceived = 1;
         if (!pdo->Listed && (pdo->MissingReported || !pdo->Reported)) {
             hcdUnlinkLocked(&hc->GonePdos, pdo);
+            pdo->DeletePending = 1;
+            pdo->Next = hc->RemovedPdos;
+            hc->RemovedPdos = pdo;
             deleteIt = 1;
         }
     }
     KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
-    if (deleteIt == 0) {
-        return;
-    }
-    port = pdo->Port;
-    hcdDeletePdo(pdo);
-    if (deleteIt == 1) {
+    if (deleteIt == 2) {
+        hcdDeletePdo(pdo);
+    } else if (deleteIt == 1) {
         hcdPortNotify(hc, hc->PortPdoRemoved, port);
     }
 }
