@@ -35,7 +35,7 @@ notes say what was read on which system.
   installed: on Windows 98 SE and 2000 with nothing to answer, on Windows XP
   with the Found New Hardware wizard and the unsigned-driver warning for
   each newly plugged hub. Disabling and enabling an external hub in Device
-  Manager brings back the devices behind it (`TODO(33.4 hubre legs)`). The
+  Manager brings back the devices behind it (read on 98 SE, 2000 and XP). The
   driver still runs every hub itself. Read on QEMU's USB 1.1 Full-Speed hub
   only: a High-Speed hub's entry and the "xHCI98 USB 3.x Hub" are untested
   ground.

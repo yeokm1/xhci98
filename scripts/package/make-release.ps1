@@ -3266,7 +3266,7 @@ Things specific to this driver, worth knowing in advance:
     answer, on Windows XP with the Found New Hardware wizard and the
     unsigned-driver warning (Continue Anyway) for each newly plugged hub.
     Disabling and enabling a hub in Device Manager brings back the devices
-    behind it. TODO(33.4 hubre legs). The driver still runs every hub
+    behind it (read on 98 SE, 2000, XP). The driver still runs every hub
     itself.
 
   * A DEVICE WITH A SERIAL NUMBER KEEPS ITS ENTRY ON ANY PORT. Moved to
