@@ -641,6 +641,7 @@ static NTSTATUS hcdPdoNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     }
     pdo->SerialId[0] = 0;
     pdo->ReadSerialId[0] = 0;
+    pdo->SerialUnread = (dev->SerialState == HCD_SERIAL_FAILED) ? 1 : 0;
     if (dev->SerialState == HCD_SERIAL_OK) {
         for (i = 0; i < sizeof(pdo->SerialId); i++) {
             pdo->SerialId[i] = dev->SerialId[i];
@@ -667,21 +668,6 @@ static ULONG hcdBytesEqual(const UCHAR *a, const UCHAR *b, ULONG n)
     for (i = 0; i < n; i++) {
         if (a[i] != b[i]) {
             return 0;
-        }
-    }
-    return 1;
-}
-
-static ULONG hcdSerialEqual(const char *a, const char *b)
-{
-    ULONG i;
-
-    for (i = 0; i < XHCI_SERIAL_ID_BYTES; i++) {
-        if (a[i] != b[i]) {
-            return 0;
-        }
-        if (a[i] == 0) {
-            break;
         }
     }
     return 1;
@@ -942,7 +928,9 @@ static VOID hcdDormantRetireSerialLocked(PHCD_CONTROLLER hc,
  * the group named by `first`'s place (`byPlace`: a group without a serial
  * id whose device read the same serial id as `first`, or none, so a unit
  * on the location form for a duplicate keeps its own and never takes a
- * different unit's - Codex review of 33.2, round 2, finding 2) or by
+ * different unit's - Codex review of 33.2, round 2, finding 2; when every
+ * read of `first`'s failed its serial is unknown, not different, and the
+ * place and descriptors decide - round 3) or by
  * `first`'s serial id, exactly. NULL for none. PdoListLock held. */
 static PHCD_DEVICE_PDO hcdDormantFindLocked(PHCD_CONTROLLER hc,
                                             PHCD_DEVICE_PDO first,
@@ -957,11 +945,13 @@ static PHCD_DEVICE_PDO hcdDormantFindLocked(PHCD_CONTROLLER hc,
         if (!old->Dormant || old->Group != old->Serial) {
             continue;
         }
-        if (byPlace ? (old->SerialId[0] != 0 ||
-                       old->InstanceKey != first->InstanceKey ||
-                       !hcdSerialEqual(old->ReadSerialId, first->ReadSerialId))
-                    : (first->SerialId[0] == 0 ||
-                       !hcdSerialEqual(old->SerialId, first->SerialId))) {
+        if (byPlace ? (old->InstanceKey != first->InstanceKey ||
+                       !XhciFuncReviveByPlace(old->SerialId,
+                                              old->ReadSerialId,
+                                              first->ReadSerialId,
+                                              first->SerialUnread))
+                    : !XhciFuncReviveBySerial(old->SerialId,
+                                              first->SerialId)) {
             continue;
         }
         same = 1;

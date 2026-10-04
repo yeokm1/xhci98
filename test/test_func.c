@@ -850,6 +850,43 @@ static void test_instance_ids(void)
              XHCI_FUNC_BAD_PARAM, "nowhere to say the size");
 }
 
+/* Windows 98's dormant groups (33.1) under serial ids (33.2). */
+static void test_revive(void)
+{
+    /* A group named by its place, a unit with no serial: the same. */
+    CHECK_EQ(XhciFuncReviveByPlace("", "", "", 0), 1,
+             "no serial then, none now");
+    /* A unit a duplicate left on the location form keeps its group. */
+    CHECK_EQ(XhciFuncReviveByPlace("", "S1", "S1", 0), 1,
+             "duplicate's location group, same serial read");
+    /* ... even when its reads fail at the re-enable (round 3). */
+    CHECK_EQ(XhciFuncReviveByPlace("", "S1", "", 1), 1,
+             "duplicate's location group, every read failed now");
+    /* A serial-named unit never takes another unit's location group
+     * (round 2): B read nothing, A reads S. */
+    CHECK_EQ(XhciFuncReviveByPlace("", "", "S1", 0), 0,
+             "another unit's location group, serial now");
+    CHECK_EQ(XhciFuncReviveByPlace("", "S2", "S1", 0), 0,
+             "another duplicate's location group");
+    CHECK_EQ(XhciFuncReviveByPlace("", "s1", "S1", 0), 0,
+             "the serial read is compared exactly");
+    /* A group named by its serial id is never its place's. */
+    CHECK_EQ(XhciFuncReviveByPlace("S1", "S1", "S1", 0), 0,
+             "a serial-named group, by place");
+    CHECK_EQ(XhciFuncReviveByPlace("S1", "S1", "", 1), 0,
+             "a serial-named group, by place, reads failed");
+    CHECK_EQ(XhciFuncReviveByPlace(NULL, "", "", 0), 0, "NULL");
+
+    /* By serial: exactly the id the group answers. */
+    CHECK_EQ(XhciFuncReviveBySerial("S1", "S1"), 1, "the same serial id");
+    CHECK_EQ(XhciFuncReviveBySerial("S1", "s1"), 0, "case differs");
+    CHECK_EQ(XhciFuncReviveBySerial("S1", "S2"), 0, "another serial id");
+    CHECK_EQ(XhciFuncReviveBySerial("", ""), 0, "no serial: by place only");
+    CHECK_EQ(XhciFuncReviveBySerial("S1", ""), 0, "no serial now");
+    CHECK_EQ(XhciFuncReviveBySerial("", "S1"), 0, "a location group");
+    CHECK_EQ(XhciFuncReviveBySerial(NULL, "S1"), 0, "NULL");
+}
+
 int main(void)
 {
     test_cmedia();
@@ -865,6 +902,7 @@ int main(void)
     test_id_edges();
     test_serial_ids();
     test_instance_ids();
+    test_revive();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

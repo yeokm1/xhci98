@@ -524,6 +524,39 @@ ULONG XhciFuncSerialSame(const char *a, const char *b)
     return 1;
 }
 
+static ULONG xhciFuncExact(const char *a, const char *b)
+{
+    ULONG i;
+
+    for (i = 0; i < XHCI_SERIAL_ID_BYTES; i++) {
+        if (a[i] != b[i]) {
+            return 0;
+        }
+        if (a[i] == 0) {
+            break;
+        }
+    }
+    return 1;
+}
+
+ULONG XhciFuncReviveByPlace(const char *oldSerial, const char *oldRead,
+                            const char *newRead, ULONG newUnread)
+{
+    if (oldSerial == NULL || oldRead == NULL || newRead == NULL ||
+        oldSerial[0] != 0) {
+        return 0;
+    }
+    return newUnread || xhciFuncExact(oldRead, newRead);
+}
+
+ULONG XhciFuncReviveBySerial(const char *oldSerial, const char *newSerial)
+{
+    if (oldSerial == NULL || newSerial == NULL || newSerial[0] == 0) {
+        return 0;
+    }
+    return xhciFuncExact(oldSerial, newSerial);
+}
+
 ULONG XhciFuncInstanceId(const char *serial, ULONG location, ULONG mi,
                          char *out, ULONG capacity, PULONG used)
 {

@@ -503,6 +503,9 @@ typedef struct _HCD_DEVICE_PDO {
                                      * kept when a duplicate empties
                                      * SerialId: what a dormant group
                                      * named by its place is matched on  */
+    ULONG SerialUnread;             /* every serial read failed
+                                     * (HCD_SERIAL_FAILED): ReadSerialId
+                                     * is unknown, not empty              */
     ULONG RootPort;                 /* its device's Port and Route, fixed */
     ULONG Route;                    /* at creation (GET_TOPOLOGY_ADDRESS) */
     ULONG Speed;

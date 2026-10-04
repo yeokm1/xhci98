@@ -2450,8 +2450,11 @@ device keeps the location form and `UniqueID` FALSE.
   instance id they answer, before the duplicate check: first a group named
   by the device's place whose device read the same serial id, or none (so
   a unit a duplicate left on the location form revives its own PDOs, and
-  a serial-named unit never takes another unit's location group), then a
-  group named by its serial id, wherever the device comes back. A revived PDO answers the id
+  a serial-named unit never takes another unit's location group; a device
+  whose every read failed this time counts as unknown, not different),
+  then a group named by its serial id, wherever the device comes back
+  (`XhciFuncReviveByPlace`, `XhciFuncReviveBySerial`, host vectors in
+  `test_func`). A revived PDO answers the id
   it had. A dormant group the newcomer did not revive is retired in the
   hold that lists the new PDOs when it is named by the newcomer's place or
   carries the serial id the newcomer keeps; one named by a serial id is
