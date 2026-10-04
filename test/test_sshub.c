@@ -689,6 +689,24 @@ static XHCI_SSHUB_LINK ss_link(ULONG laneKbps, ULONG lanes)
     return l;
 }
 
+/* XhciSsHubParentOf's outputs, for the short calls below. */
+static ULONG po_rank;
+static ULONG po_slot;
+static ULONG po_port;
+
+/* A device on port `hubPort` of the SuperSpeed hub in slot `hubSlot`,
+ * whose own rank is `hubRank` and own parent pair (`hps`, `hpp`); `ssp`
+ * says the hub has the SuperSpeedPlus capability. */
+static ULONG po(ULONG usb3, ULONG ssp, ULONG hubRank, ULONG hps, ULONG hpp,
+                const XHCI_SSHUB_LINK *link, ULONG hubSlot, ULONG hubPort)
+{
+    po_rank = 0xEE;
+    po_slot = 0xEE;
+    po_port = 0xEE;
+    return XhciSsHubParentOf(usb3, ssp, hubRank, hps, hpp, link, hubSlot,
+                             hubPort, &po_rank, &po_slot, &po_port);
+}
+
 /*
  * Link rank (USB 3.2 7.5.4.5: Gen 2x2 > Gen 2x1 > Gen 1x2 > Gen 1x1) and
  * xHCI Table 6-6's Parent Hub Slot ID / Parent Port Number for an SS/SSP
@@ -697,9 +715,6 @@ static XHCI_SSHUB_LINK ss_link(ULONG laneKbps, ULONG lanes)
 static void test_parent_rank(void)
 {
     XHCI_SSHUB_LINK l;
-    ULONG rank;
-    ULONG slot;
-    ULONG port;
 
     /* Ranks from lane rate and count. */
     CHECK_EQ(XhciSsLinkRank(5000000UL, 1), XHCI_SS_RANK_GEN1X1, "Gen 1x1");
@@ -741,57 +756,79 @@ static void test_parent_rank(void)
 
     /* A Gen 1x1 device behind a Gen 1x2 hub: Table 6-6's own example. */
     l = ss_link(5000000UL, 1);
-    CHECK_EQ(XhciSsHubParentOf(1, 1, XHCI_SS_RANK_GEN1X2, &l, 7, 3, &rank,
-                               &slot, &port), 1,
+    CHECK_EQ(po(1, 1, XHCI_SS_RANK_GEN1X2, 0, 0, &l, 7, 3), 1,
              "Gen 1x1 behind Gen 1x2: parent fields");
-    CHECK_EQ(rank, XHCI_SS_RANK_GEN1X1, "device ranked Gen 1x1");
-    CHECK_EQ(slot, 7, "the hub's Slot ID");
-    CHECK_EQ(port, 3, "the hub's port");
+    CHECK_EQ(po_rank, XHCI_SS_RANK_GEN1X1, "device ranked Gen 1x1");
+    CHECK_EQ(po_slot, 7, "the hub's Slot ID");
+    CHECK_EQ(po_port, 3, "the hub's port");
     /* The same behind a Gen 2x1 hub. */
-    CHECK_EQ(XhciSsHubParentOf(1, 1, XHCI_SS_RANK_GEN2X1, &l, 7, 3, &rank,
-                               &slot, &port), 1,
+    CHECK_EQ(po(1, 1, XHCI_SS_RANK_GEN2X1, 0, 0, &l, 7, 3), 1,
              "Gen 1x1 behind Gen 2x1: parent fields");
-    CHECK(slot == 7 && port == 3, "the hub's slot and port");
+    CHECK(po_slot == 7 && po_port == 3, "the hub's slot and port");
     /* Table 6-6's second example: Gen 1x2 behind Gen 2x2. */
     l = ss_link(5000000UL, 2);
-    CHECK_EQ(XhciSsHubParentOf(1, 1, XHCI_SS_RANK_GEN2X2, &l, 9, 1, &rank,
-                               &slot, &port), 1, "Gen 1x2 behind Gen 2x2");
-    CHECK(rank == XHCI_SS_RANK_GEN1X2 && slot == 9 && port == 1,
+    CHECK_EQ(po(1, 1, XHCI_SS_RANK_GEN2X2, 0, 0, &l, 9, 1), 1,
+             "Gen 1x2 behind Gen 2x2");
+    CHECK(po_rank == XHCI_SS_RANK_GEN1X2 && po_slot == 9 && po_port == 1,
           "Gen 1x2, slot 9 port 1");
     /* Gen 1x2 behind Gen 2x1 is lower-rank too, though both are 10G. */
-    CHECK_EQ(XhciSsHubParentOf(1, 1, XHCI_SS_RANK_GEN2X1, &l, 9, 1, &rank,
-                               &slot, &port), 1, "Gen 1x2 behind Gen 2x1");
+    CHECK_EQ(po(1, 1, XHCI_SS_RANK_GEN2X1, 0, 0, &l, 9, 1), 1,
+             "Gen 1x2 behind Gen 2x1");
 
-    /* Equal ranks: nothing isolated, both fields 0. */
+    /* Equal ranks under a hub with no parent pair: both fields 0. */
     l = ss_link(10000000UL, 1);
-    slot = 0xEE;
-    port = 0xEE;
-    CHECK_EQ(XhciSsHubParentOf(1, 1, XHCI_SS_RANK_GEN2X1, &l, 7, 3, &rank,
-                               &slot, &port), 0, "Gen 2x1 behind Gen 2x1");
-    CHECK(slot == 0 && port == 0, "both 0");
+    CHECK_EQ(po(1, 1, XHCI_SS_RANK_GEN2X1, 0, 0, &l, 7, 3), 0,
+             "Gen 2x1 behind Gen 2x1");
+    CHECK(po_slot == 0 && po_port == 0, "both 0");
     l = ss_link(0, 0);
     l.Kbps = 0;
-    CHECK_EQ(XhciSsHubParentOf(1, 0, XHCI_SS_RANK_GEN1X1, &l, 7, 3, &rank,
-                               &slot, &port), 0,
+    CHECK_EQ(po(1, 0, XHCI_SS_RANK_GEN1X1, 0, 0, &l, 7, 3), 0,
              "a Gen 1x1 device behind a Gen 1x1 SuperSpeed hub");
-    CHECK(rank == XHCI_SS_RANK_GEN1X1 && slot == 0 && port == 0,
+    CHECK(po_rank == XHCI_SS_RANK_GEN1X1 && po_slot == 0 && po_port == 0,
           "ranked Gen 1x1, both 0");
-    /* A device outranking its hub's upstream link: 0. */
+    /* A device outranking its hub's upstream link: 0, and its pair is not
+     * inherited either. */
     l = ss_link(10000000UL, 2);
-    CHECK_EQ(XhciSsHubParentOf(1, 1, XHCI_SS_RANK_GEN1X1, &l, 7, 3, &rank,
-                               &slot, &port), 0,
+    CHECK_EQ(po(1, 1, XHCI_SS_RANK_GEN1X1, 0, 0, &l, 7, 3), 0,
              "a Gen 2x2 link behind a hub on a Gen 1x1 upstream link");
+    CHECK_EQ(po(1, 1, XHCI_SS_RANK_GEN1X1, 4, 2, &l, 7, 3), 0,
+             "...even when that hub has a parent pair of its own");
+
+    /* Chained hubs: root, a Gen 2x1 hub A (slot 4), a Gen 1x1 hub B (slot
+     * 7) on A's port 2 - B's pair names A - and a device on B's port 3. */
+    l = ss_link(5000000UL, 1);
+    CHECK_EQ(po(1, 1, XHCI_SS_RANK_GEN2X1, 0, 0, &l, 4, 2), 1,
+             "hub B behind A: B's pair names A");
+    CHECK(po_slot == 4 && po_port == 2, "A's slot 4, port 2");
+    CHECK_EQ(po(1, 0, XHCI_SS_RANK_GEN1X1, 4, 2, &l, 7, 3), 1,
+             "a Gen 1x1 device behind B inherits B's pair");
+    CHECK(po_rank == XHCI_SS_RANK_GEN1X1 && po_slot == 4 && po_port == 2,
+          "the boundary is A, and A's port");
+    /* The same chain with B an SSP hub: its Gen 1x1 child inherits too. */
+    CHECK_EQ(po(1, 1, XHCI_SS_RANK_GEN1X1, 4, 2, &l, 7, 3), 1,
+             "Gen 1x1 behind Gen 1x1 B behind Gen 2x1 A");
+    CHECK(po_slot == 4 && po_port == 2, "A's pair");
+    /* A lower rank behind B than B's own: B is the nearer boundary. */
+    CHECK_EQ(po(1, 1, XHCI_SS_RANK_GEN1X2, 4, 2, &l, 7, 3), 1,
+             "Gen 1x1 behind Gen 1x2 B behind Gen 2x2 A");
+    CHECK(po_slot == 7 && po_port == 3, "B, the nearer boundary");
+    /* An unknown device rank inherits nothing. */
+    l.Kbps = 0;
+    CHECK_EQ(po(1, 1, XHCI_SS_RANK_GEN1X1, 4, 2, &l, 7, 3), 0,
+             "an unknown rank behind B: nothing inherited");
+    CHECK(po_slot == 0 && po_port == 0, "both 0");
 
     /* Unknown ranks: the spec-safe default, both 0. */
     l = ss_link(5000000UL, 1);
-    CHECK_EQ(XhciSsHubParentOf(1, 1, XHCI_SS_RANK_UNKNOWN, &l, 7, 3, &rank,
-                               &slot, &port), 0, "the hub's rank unknown");
-    CHECK(slot == 0 && port == 0, "both 0");
+    CHECK_EQ(po(1, 1, XHCI_SS_RANK_UNKNOWN, 0, 0, &l, 7, 3), 0,
+             "the hub's rank unknown");
+    CHECK(po_slot == 0 && po_port == 0, "both 0");
+    CHECK_EQ(po(1, 1, XHCI_SS_RANK_UNKNOWN, 4, 2, &l, 7, 3), 0,
+             "the hub's rank unknown: its pair is not inherited");
     l.Kbps = 0;
-    CHECK_EQ(XhciSsHubParentOf(1, 1, XHCI_SS_RANK_GEN2X2, &l, 7, 3, &rank,
-                               &slot, &port), 0,
+    CHECK_EQ(po(1, 1, XHCI_SS_RANK_GEN2X2, 0, 0, &l, 7, 3), 0,
              "the device's rank unknown (no extended status)");
-    CHECK(rank == XHCI_SS_RANK_UNKNOWN && slot == 0 && port == 0,
+    CHECK(po_rank == XHCI_SS_RANK_UNKNOWN && po_slot == 0 && po_port == 0,
           "unknown, both 0");
     CHECK(!XhciSsParentNeeded(XHCI_SS_RANK_UNKNOWN, XHCI_SS_RANK_UNKNOWN),
           "both unknown");
@@ -799,16 +836,12 @@ static void test_parent_rank(void)
     /* A USB 2.0 hub (a USB 3 hub's USB 2.0 half with its TT): this rule
      * decides nothing - the TT fields are xhci_topo.c's, unchanged. */
     l = ss_link(5000000UL, 1);
-    rank = 0xEE;
-    slot = 0xEE;
-    port = 0xEE;
-    CHECK_EQ(XhciSsHubParentOf(0, 1, XHCI_SS_RANK_GEN2X2, &l, 7, 3, &rank,
-                               &slot, &port), 0,
+    CHECK_EQ(po(0, 1, XHCI_SS_RANK_GEN2X2, 4, 2, &l, 7, 3), 0,
              "a USB 2.0 hub: no SuperSpeed parent");
-    CHECK(rank == XHCI_SS_RANK_UNKNOWN && slot == 0 && port == 0,
+    CHECK(po_rank == XHCI_SS_RANK_UNKNOWN && po_slot == 0 && po_port == 0,
           "rank and both fields 0");
-    CHECK_EQ(XhciSsHubParentOf(1, 1, XHCI_SS_RANK_GEN2X2, &l, 0, 3, &rank,
-                               &slot, &port), 0, "no hub slot: nothing");
+    CHECK_EQ(po(1, 1, XHCI_SS_RANK_GEN2X2, 0, 0, &l, 0, 3), 0,
+             "no hub slot: nothing");
 }
 
 int main(void)

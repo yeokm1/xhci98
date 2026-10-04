@@ -439,19 +439,45 @@ static ULONG hcdResetEp0(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
  * The records an unpowered root-hub detach left Abandoned - off their
  * ports, their slots still enabled - get their Disable Slot at the first
  * powered pass, so a restore that kept the slots does not strand them
- * (Codex review of batch (b), round 2, finding 3). A failure quarantines the
- * record as a departing device's does. Thread only, powered.
+ * (Codex review of batch (b), round 2, finding 3). Deepest tier first, as
+ * every other teardown goes (hcdSubtreeGo), never by slot ID: a hub may
+ * hold a higher or lower slot than the devices behind it, and a device's
+ * Parent Hub Slot ID - a TT's, or since 29-0 a higher-rank SuperSpeed
+ * hub's (xHCI Table 6-6) - must not name a slot already disabled. A
+ * failure quarantines the record as a departing device's does, and ends
+ * the sweep: the reset that failure requested invalidates every slot left,
+ * so no hub is disabled under a child the controller still holds (Codex
+ * review of b6e569e, finding 2). Thread only, powered.
  */
 static VOID hcdSweepAbandoned(PHCD_CONTROLLER hc)
 {
     PHCD_USB_DEVICE dev;
+    ULONG tier;
+    ULONG at;
     ULONG i;
 
     hc->SlotSweep = 0;
-    for (i = 1; i <= XHCI_MAX_SLOTS && !hcdHalted(hc); i++) {
-        dev = hc->SlotDevice[i];
-        if (dev != NULL && dev->Abandoned) {
+    tier = XHCI_TOPO_MAX_TIER + 1UL;
+    while (tier-- != 0) {
+        for (i = 1; i <= XHCI_MAX_SLOTS; i++) {
+            if (hcdHalted(hc)) {
+                return;
+            }
+            dev = hc->SlotDevice[i];
+            if (dev == NULL || !dev->Abandoned) {
+                continue;
+            }
+            at = dev->Tier < XHCI_TOPO_MAX_TIER ? dev->Tier
+                                                : XHCI_TOPO_MAX_TIER;
+            if (at != tier) {
+                continue;
+            }
             hcdDisableRecord(hc, dev);
+            if (hc->SlotDevice[i] == dev) {
+                /* Not confirmed: quarantined, and the reset it requested
+                 * owns every slot left. */
+                return;
+            }
         }
     }
 }
@@ -1095,6 +1121,51 @@ static ULONG hcdPortReset(PHCD_CONTROLLER hc, PHCD_PORT p,
  * 0 on any failure; a command that never answered has requested the
  * controller reset. Thread only, powered.
  */
+/*
+ * A SuperSpeed device's link rank as the port's latest reset left it: on a
+ * root port from PORTSC's speed, its PSI rate and PORTLI (XhciSsRootRank),
+ * behind a SuperSpeed hub from the extended status that reset re-read
+ * (XhciSsHubChildRank); XHCI_SS_RANK_UNKNOWN for a USB 2.0 device or path.
+ * Thread only, powered.
+ */
+static ULONG hcdLinkRankNow(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    PXHCI_EXTENSION ext;
+    PHCD_PORT p;
+    ULONG psiv;
+    ULONG cls;
+    ULONG kbps;
+    ULONG plus;
+
+    ext = &hc->Hc;
+    if (dev->Location == 0 || dev->Location > HCD_PORT_COUNT) {
+        return XHCI_SS_RANK_UNKNOWN;
+    }
+    p = &hc->Ports[dev->Location - 1];
+    if (p->Hub != NULL) {
+        if (!p->Hub->Usb3 || p->Hub->Device == NULL) {
+            return XHCI_SS_RANK_UNKNOWN;
+        }
+        return XhciSsHubChildRank(p->Hub->Device->BosInfo.HasSuperSpeedPlus,
+                                  &p->HubSsLink);
+    }
+    if (!XhciPortIsUsb3(&ext->PortMap, dev->Port)) {
+        return XHCI_SS_RANK_UNKNOWN;
+    }
+    psiv = XHCI_PORTSC_GET_SPEED(XhciReadPortsc(ext, dev->Port));
+    cls = XHCI_SPEED_UNKNOWN;
+    kbps = 0;
+    plus = 0;
+    if (XhciPortSpeedClass(&ext->PortMap, dev->Port, psiv, &cls) !=
+            XHCI_CAPS_OK ||
+        cls != XHCI_SPEED_SUPER ||
+        XhciPortRate(&ext->PortMap, dev->Port, psiv, &kbps, &plus) !=
+            XHCI_CAPS_OK) {
+        return XHCI_SS_RANK_UNKNOWN;
+    }
+    return XhciSsRootRank(kbps, XhciReadOp(ext, XHCI_OP_PORTLI(dev->Port)));
+}
+
 ULONG HcdThreadReaddress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     PXHCI_EXTENSION ext;
@@ -1120,6 +1191,20 @@ ULONG HcdThreadReaddress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         speed != was) {
         XHCI_DBG_VALUE("hcd: reset port, port reset failed, speed", speed);
         return 0;
+    }
+    /* A SuperSpeed link can retrain to another rank on this reset - a warm
+     * one above all - and the slot's Speed, Parent Hub Slot ID and Parent
+     * Port Number (xHCI Table 6-6; HcdHubPlace) were placed for the old
+     * one. Readdressing would carry them over stale, so a changed rank
+     * fails the RESET_PORT, which drops the device to be enumerated afresh
+     * at the link it now has (Codex review of b6e569e, finding 3). */
+    if (was == XHCI_SPEED_SUPER) {
+        speed = hcdLinkRankNow(hc, dev);
+        if (speed != dev->SsLinkRank) {
+            XHCI_DBG_VALUE("hcd: reset port, SS link rank changed, was/now",
+                           (dev->SsLinkRank << 8) | speed);
+            return 0;
+        }
     }
     code = 0;
     if (XhciTrbResetDevice(&trb, dev->SlotId) == XHCI_RING_OK) {

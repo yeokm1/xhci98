@@ -220,17 +220,20 @@ ULONG HcdHubPlace(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG speedClass,
      * extended port status (read at the port's reset, hcd_sshub.c), and
      * xHCI Table 6-6's Parent Hub Slot ID and Parent Port Number when the
      * hub's own upstream link (hub->Device->SsLinkRank) outranks it - a
-     * Gen 1x1 device behind a Gen 1x2 hub. Either rank unknown leaves both
-     * 0, the spec-safe default (XhciSsParentNeeded says why). Implemented,
-     * host vectors only: no SuperSpeedPlus hub is held
-     * (xhci-data-structures.md sections 10.5 and 11.8). A USB 2.0 hub
-     * decides nothing here; its TT is below. */
+     * Gen 1x1 device behind a Gen 1x2 hub - or the hub's own pair when the
+     * device ranks the same as the hub, the boundary being further up.
+     * Either rank unknown leaves both 0, the spec-safe default
+     * (XhciSsParentNeeded says why). Implemented, host vectors only: no
+     * SuperSpeedPlus hub is held (xhci-data-structures.md sections 10.5
+     * and 11.8). A USB 2.0 hub decides nothing here; its TT is below. */
     dev->SsLinkRank = 0;
     dev->SsParentSlot = 0;
     dev->SsParentPort = 0;
     (VOID)XhciSsHubParentOf(hub->Usb3,
                             hub->Device->BosInfo.HasSuperSpeedPlus,
-                            hub->Device->SsLinkRank, &p->HubSsLink,
+                            hub->Device->SsLinkRank,
+                            hub->Device->SsParentSlot,
+                            hub->Device->SsParentPort, &p->HubSsLink,
                             hub->SlotId, p->Number, &dev->SsLinkRank,
                             &dev->SsParentSlot, &dev->SsParentPort);
     XHCI_DBG_VALUE("hcd: behind hub, SS rank hub/device, parent slot/port",

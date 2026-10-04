@@ -380,6 +380,7 @@ ULONG XhciSsParentNeeded(ULONG hubRank, ULONG childRank)
 
 /* IRQL: any. */
 ULONG XhciSsHubParentOf(ULONG hubUsb3, ULONG hubSsp, ULONG hubRank,
+                        ULONG hubParentSlot, ULONG hubParentPort,
                         const XHCI_SSHUB_LINK *link, ULONG hubSlot,
                         ULONG hubPort, PULONG childRank, PULONG parentSlot,
                         PULONG parentPort)
@@ -399,13 +400,26 @@ ULONG XhciSsHubParentOf(ULONG hubUsb3, ULONG hubSsp, ULONG hubRank,
     if (childRank != NULL) {
         *childRank = rank;
     }
-    if (!hubUsb3 || !XhciSsParentNeeded(hubRank, rank) || hubSlot == 0 ||
-        hubPort == 0 || parentSlot == NULL || parentPort == NULL) {
+    if (!hubUsb3 || parentSlot == NULL || parentPort == NULL) {
         return 0;
     }
-    *parentSlot = hubSlot;
-    *parentPort = hubPort;
-    return 1;
+    if (XhciSsParentNeeded(hubRank, rank)) {
+        if (hubSlot == 0 || hubPort == 0) {
+            return 0;
+        }
+        /* This hub is the boundary. */
+        *parentSlot = hubSlot;
+        *parentPort = hubPort;
+        return 1;
+    }
+    if (rank != XHCI_SS_RANK_UNKNOWN && rank == hubRank &&
+        hubParentSlot != 0 && hubParentPort != 0) {
+        /* The same rank as the hub: behind the hub's own boundary. */
+        *parentSlot = hubParentSlot;
+        *parentPort = hubParentPort;
+        return 1;
+    }
+    return 0;
 }
 
 /* The SuperSpeedPlus ID at exactly `kbps` among the root port protocol's

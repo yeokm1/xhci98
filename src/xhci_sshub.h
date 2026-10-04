@@ -388,13 +388,26 @@ ULONG XhciSsParentNeeded(ULONG hubRank, ULONG childRank);
  * What HcdHubPlace writes for a device placed on port `hubPort` of the hub
  * in slot `hubSlot`. Only a SuperSpeed hub (`hubUsb3`) is decided here:
  * *childRank is the device's link rank (XhciSsHubChildRank, from `hubSsp`
- * and `link`), and *parentSlot / *parentPort are the hub's slot and port
- * when XhciSsParentNeeded(hubRank, *childRank), 0 otherwise. A USB 2.0 hub
- * - including a USB 3 hub's USB 2.0 half, whose TT is xhci_topo.c's
- * (XhciTopoTtFor) - gets 0 in all three: the TT fields are not this
- * rule's. Returns *parentSlot != 0.
+ * and `link`), and *parentSlot / *parentPort are:
+ *
+ *   - the hub's own slot and port, when XhciSsParentNeeded(hubRank,
+ *     *childRank) - the hub is the boundary;
+ *   - the hub's own parent pair (`hubParentSlot`, `hubParentPort`, what
+ *     this rule gave the hub when it was placed), when the device's link
+ *     ranks the same as the hub's: the boundary is further up and the
+ *     device sits behind it as the hub does - root, a Gen 2x1 hub A, a
+ *     Gen 1x1 hub B behind it (B's pair names A), and a Gen 1x1 device
+ *     behind B, which crosses A's boundary too (footnote 110; Codex review
+ *     of b6e569e, finding 1), as a Full-Speed device behind a Full-Speed hub
+ *     keeps the High-Speed hub above both as its TT;
+ *   - 0 otherwise, including any unknown rank.
+ *
+ * A USB 2.0 hub - including a USB 3 hub's USB 2.0 half, whose TT is
+ * xhci_topo.c's (XhciTopoTtFor) - gets 0 in all three: the TT fields are
+ * not this rule's. Returns *parentSlot != 0.
  */
 ULONG XhciSsHubParentOf(ULONG hubUsb3, ULONG hubSsp, ULONG hubRank,
+                        ULONG hubParentSlot, ULONG hubParentPort,
                         const XHCI_SSHUB_LINK *link, ULONG hubSlot,
                         ULONG hubPort, PULONG childRank, PULONG parentSlot,
                         PULONG parentPort);

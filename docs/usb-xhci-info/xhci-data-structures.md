@@ -1780,8 +1780,16 @@ the controller's next start.
     (`XhciSsHubChildRank`);
   - `HcdHubPlace` fills Parent Hub Slot ID and Parent Port Number with the
     hub's slot and port when the hub's own upstream link outranks the
-    device's (`XhciSsHubParentOf`, `XhciSsParentNeeded`). Kept apart from
+    device's (`XhciSsHubParentOf`, `XhciSsParentNeeded`), and with the
+    hub's own pair when the device ranks the same as the hub, so a device
+    behind a chain of equal-rank hubs names the boundary hub above them, as
+    an LS/FS device behind an FS hub names the HS hub's TT. Kept apart from
     the TT fields, which CLEAR_TT_BUFFER is sent through;
+  - a slot named as a parent is disabled after its children: the abandoned
+    sweep goes deepest tier first and stops at a failed Disable Slot, as
+    every other teardown goes deepest first;
+  - a RESET_PORT whose link retrains to another rank fails, so the device
+    is enumerated afresh rather than readdressed with a stale pair;
   - when either rank is unknown - PORTLI unreadable, or an SSP hub whose
     extended status was not read - both stay 0, the spec-safe default: 0 is
     right on every path whose links rank alike, which every Gen 1x1 hub's
