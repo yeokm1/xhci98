@@ -559,6 +559,15 @@ ULONG XhciFuncReviveBySerial(const char *oldSerial, const char *newSerial)
     return xhciFuncExact(oldSerial, newSerial);
 }
 
+ULONG XhciFuncRetireByPlace(const char *oldSerial, ULONG oldKey,
+                            ULONG oldParent, ULONG newKey, ULONG newParent)
+{
+    if (oldSerial == NULL || oldSerial[0] != 0) {
+        return 0;
+    }
+    return oldKey == newKey && oldParent == newParent;
+}
+
 ULONG XhciFuncInstanceId(const char *serial, ULONG location, ULONG mi,
                          char *out, ULONG capacity, PULONG used)
 {
