@@ -511,29 +511,49 @@ static NTSTATUS NTAPI hcdRhSignal(PDEVICE_OBJECT DeviceObject, PIRP Irp,
  * the controller and leaves it before the sleep, so nothing the controller's
  * remove waits for (RootHubUsers) is held across one, and no lock is; the
  * controller thread it waits for needs nothing this IRP holds. Bounded by
- * the controller's deadline (HcdEnumSettleStep). IRQL: PASSIVE_LEVEL.
+ * the controller's deadline, a relative timer on this stack frame (task
+ * 33.3; Codex review of 33.3, round 1, finding 4). IRQL: PASSIVE_LEVEL.
  */
 static VOID hcdRhSettle(PHCD_ROOTHUB_FDO fdo, ULONG target)
 {
     PHCD_CONTROLLER hc;
     LARGE_INTEGER due;
+    KTIMER deadline;
+    ULONG armed;
     ULONG start;
     ULONG next;
+    ULONG why;
 
     start = HcdEnumSettleClock();
+    armed = 0;
     for (;;) {
         hc = hcdRhControllerEnter(fdo);
-        next = (hc != NULL) ? HcdEnumSettleStep(hc, target, start) : 0;
+        why = HCD_SETTLE_TORNDOWN;
+        next = 0;
+        if (hc != NULL) {
+            if (!armed) {
+                /* No deadline is no wait. */
+                armed = HcdEnumSettleArm(hc, &deadline) ? 1UL : 2UL;
+            }
+            if (armed == 1) {
+                next = HcdEnumSettleStep(hc, target, &deadline, &why);
+            } else {
+                why = HCD_SETTLE_DEADLINE;
+            }
+        }
         if (next == 0) {
             if (hc != NULL) {
-                HcdEnumSettleEnd(hc, target, start);
+                HcdEnumSettleEnd(hc, target, start, why);
             }
             hcdRhControllerLeave(hc);
-            return;
+            break;
         }
         hcdRhControllerLeave(hc);
         HcdRelativeMs(&due, next);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
+    if (armed == 1) {
+        (VOID)KeCancelTimer(&deadline);
     }
 }
 

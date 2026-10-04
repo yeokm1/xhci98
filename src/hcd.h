@@ -644,6 +644,12 @@ typedef struct _HCD_PORT {
      * port is not looked at again until no first answer waits and does
      * not hold the ports after it back. Thread only. */
     ULONG SettleDeferred;
+    /* Task 33.3: a root port's SuperSpeed link warm-reset by its last
+     * inspection, its outcome not yet read; and a hub port's GET_STATUS
+     * failures in a row, its look owed again up to HCD_HUB_LOOK_TRIES.
+     * Thread only. */
+    ULONG LinkRecovering;
+    ULONG LookFails;
 } HCD_PORT, *PHCD_PORT;
 
 /*
@@ -743,6 +749,9 @@ typedef struct _HCD_HOLD {
 #define HCD_HUB_STATUS_BYTES    XHCI_HUB_STATUS_MAX_BYTES
 #define HCD_SCRATCH_BYTES                                                    \
     (HCD_SCRATCH_CONTROL_BYTES + HCD_MAX_HUBS * HCD_HUB_STATUS_BYTES)
+
+/* Hub ports remembered as deferred for the first answer (task 33.3). */
+#define HCD_SETTLE_DEFER_HUB 8UL
 
 typedef struct _HCD_CONTROLLER {
     HCD_COMMON Common;
@@ -1024,16 +1033,25 @@ typedef struct _HCD_CONTROLLER {
      * SettleCapMs is the deadline and SettlePortMs the per-port budget,
      * from XhciFirstEnumWaitMs and XhciFirstEnumPortMs at each start.
      * The rest are counts, never zeroed: answers that waited, answers
-     * whose deadline passed, ports deferred, and the last wait in ms. */
+     * whose deadline passed, answers cut short by a teardown, ports
+     * deferred, and the last wait in ms. SettleDeferHub holds the hub ports
+     * deferred, by physical path, so a recovery that rebuilds their hub
+     * keeps them deferred (thread only). */
     ULONG SettleAsked;
     ULONG SettleDone;
     ULONG SettleCapMs;
     ULONG SettlePortMs;
     ULONG SettleWaits;
     ULONG SettleTimeouts;
+    ULONG SettleAborts;
     ULONG SettleDeferrals;
     ULONG SettleLastMs;
     ULONG SettleDeferredNow;        /* a port deferred; thread only       */
+    struct {
+        ULONG RootPort;             /* 0: the entry is free               */
+        ULONG Route;                /* the hub's own Route String         */
+        ULONG Number;               /* the port on that hub               */
+    } SettleDeferHub[HCD_SETTLE_DEFER_HUB];
 } HCD_CONTROLLER, *PHCD_CONTROLLER;
 
 /* The root hub's PDO, created by the controller FDO (hcd_rh.c; design record
@@ -1151,8 +1169,17 @@ VOID HcdEnumDetach(PHCD_CONTROLLER hc);
 ULONG HcdEnumAttach(PHCD_CONTROLLER hc);
 ULONG HcdEnumSettleAsk(PHCD_CONTROLLER hc);
 ULONG HcdEnumSettleClock(VOID);
-ULONG HcdEnumSettleStep(PHCD_CONTROLLER hc, ULONG target, ULONG startLow);
-VOID HcdEnumSettleEnd(PHCD_CONTROLLER hc, ULONG target, ULONG startLow);
+ULONG HcdEnumSettleArm(PHCD_CONTROLLER hc, PKTIMER deadline);
+/* Why a first answer stopped waiting (HcdEnumSettleStep). */
+#define HCD_SETTLE_DONE      0UL
+#define HCD_SETTLE_TORNDOWN  1UL
+#define HCD_SETTLE_DEADLINE  2UL
+ULONG HcdEnumSettleStep(PHCD_CONTROLLER hc, ULONG target, PKTIMER deadline,
+                        PULONG why);
+VOID HcdEnumSettleEnd(PHCD_CONTROLLER hc, ULONG target, ULONG startLow,
+                      ULONG why);
+ULONG HcdEnumSettleDeferredAt(PHCD_CONTROLLER hc, ULONG rootPort,
+                              ULONG route, ULONG number);
 VOID HcdEnumInit(PHCD_CONTROLLER hc);
 VOID HcdEnumDrop(PHCD_CONTROLLER hc);
 ULONG HcdThreadCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb, PULONG control);

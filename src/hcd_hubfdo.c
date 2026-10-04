@@ -157,23 +157,42 @@ static VOID hcdHubSettle(PHCD_HUB_FDO fdo, ULONG target)
 {
     PHCD_CONTROLLER hc;
     LARGE_INTEGER due;
+    KTIMER deadline;
+    ULONG armed;
     ULONG start;
     ULONG next;
+    ULONG why;
 
     start = HcdEnumSettleClock();
+    armed = 0;
     for (;;) {
         hc = hcdHubControllerEnter(fdo);
-        next = (hc != NULL) ? HcdEnumSettleStep(hc, target, start) : 0;
+        why = HCD_SETTLE_TORNDOWN;
+        next = 0;
+        if (hc != NULL) {
+            if (!armed) {
+                /* No deadline is no wait. */
+                armed = HcdEnumSettleArm(hc, &deadline) ? 1UL : 2UL;
+            }
+            if (armed == 1) {
+                next = HcdEnumSettleStep(hc, target, &deadline, &why);
+            } else {
+                why = HCD_SETTLE_DEADLINE;
+            }
+        }
         if (next == 0) {
             if (hc != NULL) {
-                HcdEnumSettleEnd(hc, target, start);
+                HcdEnumSettleEnd(hc, target, start, why);
             }
             hcdHubControllerLeave(fdo, hc);
-            return;
+            break;
         }
         hcdHubControllerLeave(fdo, hc);
         HcdRelativeMs(&due, next);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
+    if (armed == 1) {
+        (VOID)KeCancelTimer(&deadline);
     }
 }
 

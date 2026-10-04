@@ -438,14 +438,3 @@ ULONG XhciEnumSettleReached(ULONG done, ULONG target)
 {
     return ((done - target) < 0x80000000UL) ? 1UL : 0UL;
 }
-
-ULONG XhciEnumSettleNextWait(ULONG waitedMs, ULONG capMs, ULONG stepMs)
-{
-    if (waitedMs >= capMs || stepMs == 0) {
-        return 0;
-    }
-    if (capMs - waitedMs < stepMs) {
-        return capMs - waitedMs;
-    }
-    return stepMs;
-}

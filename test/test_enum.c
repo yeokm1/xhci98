@@ -782,15 +782,6 @@ static void test_settle(void)
     CHECK_EQ(XhciEnumElapsedMs(0, 10000), 1, "1 ms in 100 ns units");
     CHECK_EQ(XhciEnumElapsedMs(100, 50000100UL), 5000, "5 s");
     CHECK_EQ(XhciEnumElapsedMs(0xFFFFFFF0UL, 9990), 1, "across the wrap");
-    CHECK(XhciEnumElapsedMs(20000, 10000) > 30000, "backwards is long");
-
-    /* The waiter's steps. */
-    CHECK_EQ(XhciEnumSettleNextWait(0, 5000, 20), 20, "a whole step");
-    CHECK_EQ(XhciEnumSettleNextWait(4990, 5000, 20), 10, "cut to the cap");
-    CHECK_EQ(XhciEnumSettleNextWait(5000, 5000, 20), 0, "cap spent");
-    CHECK_EQ(XhciEnumSettleNextWait(9000, 5000, 20), 0, "cap overrun");
-    CHECK_EQ(XhciEnumSettleNextWait(0, 0, 20), 0, "no cap: no wait");
-    CHECK_EQ(XhciEnumSettleNextWait(0, 5000, 0), 0, "no step: no wait");
 }
 
 int main(void)

@@ -716,8 +716,12 @@ invalidation its PDO's creation makes.
   halted), `hcdSettleCheck` declares the generation settled when nothing is
   owed or in flight: no root port change bit (the reset's own change
   included, so one more pass looks), no hub `Changed` bit, every managed
-  port's machine at rest (`XhciEnumAtRest`), no send-back of the window in
-  flight (`XhciEnumHoldInFlight`). `SettleDone` only moves forward. With
+  port's machine at rest (`XhciEnumAtRest`), no SuperSpeed root link whose
+  warm reset (29-A.2) has not yet been read back (`LinkRecovering`), no
+  send-back of the window in flight (`XhciEnumHoldInFlight`). A hub port
+  whose `GET_STATUS` failed is owed its look again up to three times in a
+  row (`HCD_HUB_LOOK_TRIES`) rather than taken as looked at (Codex review of
+  33.3, round 1, findings 2 and 3). `SettleDone` only moves forward. With
   nothing attached, the first pass after the start finds nothing in flight.
 - **The waiter never holds what the thread needs.** The first answer looks
   (`HcdEnumSettleStep`) and sleeps 20 ms (`KeDelayExecutionThread`) between
@@ -732,23 +736,31 @@ invalidation its PDO's creation makes.
   same devnode during the answer is legal and only asks once more. The
   wait ends on the settle, on the root hub not started or detaching or the
   thread not running (teardown), or at the deadline.
-- **The deadline is one per answer.** Measured from the answer's first look
-  with `KeQuerySystemTime` (its low word, in 100 ns units; no 64-bit
-  arithmetic; the import is task 25.3's evidenced pair, `uhcd.sys` among
-  ten stock Windows 98 SE precedents, and on amd64 a macro over shared user
-  data with no import), not renewed per port. At the deadline the waiter
-  settles its own generation, counts it (`SettleTimeouts`), and answers;
-  the thread finishes what it was doing, and those devices are reported
-  late. A clock set backwards reads as a long time and ends the wait early.
+- **The deadline is one per answer**, not renewed per port: a relative
+  `KTIMER` on the waiter's stack, armed at its first look and polled with a
+  zero wait, the pattern `HcdHubPortDebounce` already uses on every target,
+  so a change of the system time moves no bound (Codex review of 33.3, round
+  1, finding 4). At the deadline the waiter retires its own generation,
+  counts it (`SettleTimeouts`; a teardown is counted apart, `SettleAborts`,
+  finding 5) and answers; the thread finishes what it was doing, and those
+  devices are reported late. The time waited is traced from
+  `KeQuerySystemTime` (its low word, in 100 ns units; no 64-bit arithmetic;
+  task 25.3's evidenced pair, `uhcd.sys` among ten stock Windows 98 SE
+  precedents, and on amd64 a macro with no import), for the trace alone.
 - **A per-port budget, for fairness.** The thread enumerates the ports one
   after another, so a slow device on a lower-numbered port would spend the
   deadline of every port after it. `hcdRun` checks, between the machine's
-  steps, how long the run has taken; past the budget while a first answer
+  steps, whether its own relative timer has fired; past the budget while a
+  first answer
   waits, the attempt is given up as an unplug gives it up (the slot back,
   the machine to Empty) and the port **deferred**: its look kept owed (a
   root port's in `PortChange`, a hub port's in its hub's `Changed`) and not
   taken, and not counted against the settle, until no first answer waits,
-  when the port is enumerated afresh. A port whose enumeration halted the
+  when the port is enumerated afresh. A deferred hub port is also
+  remembered by its physical path (the hub's root port and Route String and
+  the port's number), so the recovery that frees the hub object and builds
+  it again keeps it deferred (`SettleDeferHub`; finding 1). A port whose
+  enumeration halted the
   controller (a command or an EP0 transfer that never completed: a 5 s
   wait and a recovery) is deferred the same way, so the rescan does not
   meet it first again. Counted (`SettleDeferrals`), traced. The check sits
@@ -792,9 +804,9 @@ specification's and stay unconfigurable.
 1. **Always, not gated to NT 5.0 text mode.** Nothing in the driver can
    tell text mode from a running system before the answer, and the wait is
    what Microsoft's own hub driver does on every system; it costs one look
-   when nothing is attached and the devices' own enumeration time when
-   something is, which a normal boot then no longer spends discovering
-   them later. Measured (below): 31 to 562 ms.
+   when nothing is attached (20 ms measured, one step of the waiter) and
+   the devices' own enumeration time when something is, which they then do
+   not spend being found afterwards. Measured (below): 20 ms to 1.1 s.
 2. **Every start, not only the first.** A `STOP` and `START` of a hub FDO is
    a fresh start: Windows 98 SE's and ME's controller re-enable (task 33.1)
    stops and starts the root hub, and the first answer after it waits for
@@ -805,14 +817,16 @@ specification's and stay unconfigurable.
    `SURPRISE_REMOVAL` clear a pending wait.
 3. **Only the first answer after a start.** The flag is cleared before the
    wait, so an answer that fails (pool) does not wait again, and two
-   concurrent first queries (NT may query two devnodes at once) each wait
+   concurrent first queries, should two ever run at once, each wait
    on their own FDO's generation.
 4. **A hub FDO waits on the whole bus's settle**, not only its own ports.
    The thread can state "nothing in flight anywhere" cheaply and exactly;
    a per-hub cohort would need a second bookkeeping of the same machines.
-   A hub's ports were looked at in its bring-up (10.3), before its PDO was
-   made, so its FDO's first answer is one look unless the bus is busy
-   elsewhere (31 ms measured). It never waits on a descendant hub FDO's
+   A hub's ports are seeded for their first look in its bring-up (10.3) and
+   looked at in the same pass, after its PDO is made and before PnP can
+   start it (corrected after Codex review of 33.3, round 1), so its FDO's
+   first answer is one look unless the bus is busy elsewhere (0 to 31 ms
+   measured). It never waits on a descendant hub FDO's
    start. Tiers add up at boot: a hub FDO starts only after its parent's
    answer, so a chain of hubs pays each tier's own settle in turn, each
    bounded by its own deadline.
@@ -820,12 +834,28 @@ specification's and stay unconfigurable.
    under the next hub up (10.11) and are in that hub's answer; the
    bus-wide settle covers them whichever FDO answers.
 
-**Measured** (runtime, the qemu flavour's trace, 2026-10-04, development
-host A, QEMU TCG): Windows 2000 SP4 text mode, F6, keyboard and stick at
-root ports - the root hub's first answer after 343 ms with both PDOs, both
-started; keyboard behind a `usb-hub` - 562 ms for the root hub's (the hub's
-PDO, the stick), 31 ms for the hub FDO's (the keyboard). The rest of the
-legs are in the roadmap's 33.3 line.
+**Measured** (runtime, the `qemu` flavour's trace unless it says
+`release`, 2026-10-04 and 05, development host A, QEMU TCG, the first
+build of this section; `out\phase33\initenum\`, git-ignored):
+
+| Leg | Devices at start | Root hub's first answer | Hub FDO's first answer | Result |
+|---|---|---|---|---|
+| Windows 2000 SP4 text mode, F6 (`qemu`) | keyboard, stick at root ports | 343 ms, both PDOs | - | keyboard answers at Welcome and the licence, stick listed at the partition screen |
+| the same, `release` | the same | (no trace) | - | the same |
+| the same, `qemu` | keyboard behind a `usb-hub`, stick at a root port | 562 ms | 31 ms | the same |
+| 32-bit XP SP3 text mode, F6, `release`, two processors | keyboard, stick at root ports | (no trace) | - | the same |
+| Windows 98 SE, installed, cold boot | mouse, stick at root ports; mouse behind a `usb-hub` | 625 to 650 ms | 0 ms | all started |
+| Windows 2000 SP4, installed | mouse, stick at root ports; mouse and stick behind a `usb-hub` | 961 to 1,081 ms | 20 ms | all started, both sticks with drive letters |
+| the same guest, every device unplugged, restart | nothing | 20 ms | - | - |
+
+No answer reached its deadline and no port was deferred. Windows 98 SE's
+NTKERN took the waits with no stall: the root hub's first answer is
+issued while the controller thread enumerates and calls
+`IoInvalidateDeviceRelations`, and it ended at the settle each time.
+Windows 98 SE's hub FDO is asked for its relations well after its start
+(the hardware wizard runs first), so its wait is nothing. Not read here:
+Windows ME, the 33.1 re-enable with this wait, Driver Verifier, and a
+device that never answers (QEMU models none).
 ## 6. The function-driver contract (task 25.2)
 
 What each target's class drivers send a USB device PDO, read out of the

@@ -205,8 +205,9 @@ ULONG XhciEnumSettleCap(ULONG found, ULONG value);
 ULONG XhciEnumSettlePortCap(ULONG found, ULONG value, ULONG total);
 
 /* Milliseconds between two readings of the low 32 bits of the system time
- * (100 ns units), across one wrap of that word (429 s); a clock set
- * backwards reads as a long time, which ends a wait rather than holding it. */
+ * (100 ns units), across one wrap of that word (429 s): the trace's figure
+ * for a wait, never its bound - both bounds are relative timers, which a
+ * change of the system time does not move (hcd_enum.c). */
 ULONG XhciEnumElapsedMs(ULONG startLow, ULONG nowLow);
 /* 1 when a port's machine is at rest - nothing in flight: Empty, Present
  * (its PDOs created, or a send-back pending, which XhciEnumHoldInFlight
@@ -231,8 +232,5 @@ ULONG XhciEnumSettleQuiet(ULONG enumerated, ULONG rootPending,
  * reached). */
 ULONG XhciEnumSettleReached(ULONG done, ULONG target);
 
-/* The waiter's next sleep in milliseconds, given what it has slept so far:
- * the step, cut to what is left of the cap; 0 once the cap is spent. */
-ULONG XhciEnumSettleNextWait(ULONG waitedMs, ULONG capMs, ULONG stepMs);
 
 #endif /* XHCI_ENUM_H */
