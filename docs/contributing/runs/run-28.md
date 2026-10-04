@@ -96,8 +96,9 @@ guest's position was read; the guest has no audio path out.
   ME rerun on `1ed1ba6` read it PASS - the HCD split `usb-audio` itself, only
   `MI_00` devnodes appeared, and ME's `usbccgp.sys` was not used
   (`out\phase28\pre\me\report-rerun.md`, "Other clauses"). That is a reading
-  on the pre-read build; the official one is the ME leg on Package B:
-  TBD(Package B).
+  on the pre-read build; the official one, the ME leg on Package B, read
+  the same: the HCD split `usb-audio` into function PDOs itself ("The
+  reading on the merged build", below).
 - **The unanswered QUERY_INTERFACE GUIDs: left unanswered for `2.0.0.0`.**
   Every NT guest logs `QUERY_INTERFACE not answered` once per driver load for
   GUID Data1 `496B8280` and `4747B320`, and Windows 7 once more for
@@ -403,22 +404,22 @@ the table and are not the clause's reading.
 
 | # | Clause | ME (SweetLow) | XP SP3 | XP x64 | Vista x86 | Vista x64 (F8) | 7 x86 | 7 x64 (F8) |
 |---|---|---|---|---|---|---|---|---|
-| 1 | Install from clean, prompts as recorded | TBD(Package B) | PASS | PASS | PASS | PASS | PASS | PASS |
-| 2 | HID mouse on a root port | TBD(Package B) | PASS | PASS | PASS | PASS | PASS | PASS |
-| 3 | Storage, `fc /b` read and write | TBD(Package B) | PASS | PASS | PASS | PASS | PASS | PASS |
-| 4 | Unplug and replug | TBD(Package B) | PASS | PASS | PASS | PASS | PASS | PASS |
-| 5 | `usb-hub` with a mouse and a stick behind it | TBD(Package B) | PASS | PASS | PASS | PASS | PASS | PASS |
-| 6 | Audio bound at a root port and behind the hub; audio unplugged; hub pulled with devices beneath | TBD(Package B) | PASS | PASS | PASS | PASS | PASS | PASS |
-| 7 | Root hub disable and enable | TBD(Package B) | PASS | PASS | PASS | PASS | PASS | PASS |
-| 8 | Controller disable and enable (five cycles on Vista and 7) | TBD(Package B) | PASS | PASS | PASS, 5 cycles | PASS, 5 cycles | PASS, 5 cycles | PASS, 5 cycles |
-| 9 | Advanced tab and Power tab | TBD(Package B) | PASS (note) | NOTE | PASS | PASS | PASS | NOTE |
-| 10 | `XHCISNAP` | TBD(Package B) | PASS | PASS | PASS | PASS | PASS | PASS |
-| 11 | Restart and shutdown | TBD(Package B) | PASS | PASS | PASS | PASS | PASS | PASS |
-| 12 | Soak, 10 cycles per class | TBD(Package B) | TBD(Package B) | TBD(Package B) | TBD(Package B) | TBD(Package B) | TBD(Package B) | TBD(Package B) |
-| 13 | `usb-uas` at High Speed | TBD(Package B) | PASS (A) | PASS (`c0d8a51`) | PASS (`c0d8a51` and A) | PASS (A) | PASS (A) | PASS (A) |
-| 14 | `usb-storage` at SuperSpeed | TBD(Package B) | PASS (A) | PASS (A) | PASS (A) | PASS (A) | PASS (A) | PASS (A) |
-| 15 | `usb-uas` at SuperSpeed | TBD(Package B) | PASS (A) | PASS (A) | PASS (A) | PASS (A) | PASS (A) | PASS (A) |
-| - | 28-A.1: ME's own `usbccgp.sys` left unused | TBD(Package B) | n/a | n/a | n/a | n/a | n/a | n/a |
+| 1 | Install from clean, prompts as recorded | PASS (B) | PASS | PASS | PASS | PASS | PASS | PASS |
+| 2 | HID mouse on a root port | PASS (B) | PASS | PASS | PASS | PASS | PASS | PASS |
+| 3 | Storage, `fc /b` read and write | PASS (B) | PASS | PASS | PASS | PASS | PASS | PASS |
+| 4 | Unplug and replug | PASS (B) | PASS | PASS | PASS | PASS | PASS | PASS |
+| 5 | `usb-hub` with a mouse and a stick behind it | PASS (B) | PASS | PASS | PASS | PASS | PASS | PASS |
+| 6 | Audio bound at a root port and behind the hub; audio unplugged; hub pulled with devices beneath | PASS (B) | PASS | PASS | PASS | PASS | PASS | PASS |
+| 7 | Root hub disable and enable | PASS (B) | PASS | PASS | PASS | PASS | PASS | PASS |
+| 8 | Controller disable and enable (five cycles on Vista and 7) | FAIL (B): the re-enable limitation | PASS | PASS | PASS, 5 cycles | PASS, 5 cycles | PASS, 5 cycles | PASS, 5 cycles |
+| 9 | Advanced tab and Power tab | NOTE (B) | PASS (note) | NOTE | PASS | PASS | PASS | NOTE |
+| 10 | `XHCISNAP` | PASS (B), note | PASS | PASS | PASS | PASS | PASS | PASS |
+| 11 | Restart and shutdown | NOTE (B): shutdown PASS, warm restart the known vehicle wedge | PASS | PASS | PASS | PASS | PASS | PASS |
+| 12 | Soak, 10 cycles per class | PASS (B) | PASS (B) | PASS (B) | PASS (B) | PASS (B) | PASS (B) | PASS with a NOTE (B): storage +3 of 10 attaches seen |
+| 13 | `usb-uas` at High Speed | PASS (B) | PASS (A) | PASS (`c0d8a51`) | PASS (`c0d8a51` and A) | PASS (A) | PASS (A) | PASS (A) |
+| 14 | `usb-storage` at SuperSpeed | PASS (B) | PASS (A) | PASS (A) | PASS (A) | PASS (A) | PASS (A) | PASS (A) |
+| 15 | `usb-uas` at SuperSpeed | PASS (B) | PASS (A) | PASS (A) | PASS (A) | PASS (A) | PASS (A) | PASS (A) |
+| - | 28-A.1: ME's own `usbccgp.sys` left unused | PASS (B): the HCD split `usb-audio` | n/a | n/a | n/a | n/a | n/a | n/a |
 
 **No HCD or `xhciuas` defect on any of the six guests**: no bugcheck, no
 hang, no `not served` or `refused` line, every refusal, fatal and gave-up
@@ -488,8 +489,54 @@ harness's preflight because their trace spanned more than one driver load
 (`vx86\soak\soak-vx86-L1-aborted.txt`, `w7x86\soak-L1-aborted\`); Vista x64
 and Windows 7 x64 took none.
 
-**Windows ME** is read on Package B, by its own leg: TBD(Package B). Its
-pre-read and rerun on `1ed1ba6` are above and in
+**The soak on Package B** (the clause's reading; development host A,
+2026-10-04; `out\phase28\v1b\report.md`). Package B is `p28-31-int` at
+`417199e`, `out\merged\pkg-417199e\qemu`, its `SHA256SUMS.txt` checked: x86
+`xhci98.sys` `10f1d58c...d134`, `xhciuas.sys` `627fdd02...4095`; amd64
+`xhci98.sys` `86743f92...8bc1`, `xhciuas.sys` `911d2b95...6665`. Each NT
+guest got a fresh install on a new overlay (`vm\t28pre\<guest>-v1b.qcow2`)
+and an `fc /b` of the installed `xhci98.sys` against the package, and the
+soak ran in a fresh launch: `hid`, `hubmouse` and `storage` +10 each, the
+settled gap 0, "IDENTITY EXACT", every health counter 0, and a clean
+`quiesce: halted` at shutdown, on XP SP3, XP x64, Vista x86 and x64 and 7
+x86. On Windows 7 x64 the harness counted 10 of 10 storage cycles but only 3
+attaches reached the driver, under heavy host load; the retries (a slow
+6-cycle probe 6 of 6, a storage-only soak +10, `hubmouse` and `storage`
++10 each) were clean. Its verdict: no driver defect - a port held for a
+departed PDO drops CONNECT while it is gone and re-reads `PORTSC` on its
+release, enumerating a present device, and Windows 7 under load answered the
+relations query late, so an attach and detach pair inside the hold was never
+seen; a Windows 2000 test of the soak's shape read 10 of 10, and a replug
+within 0.8 s then left in place 5 of 5 (`out\phase28\hold\`). Recorded as PASS with
+a NOTE; the harness counts a cycle OK without checking it was addressed.
+
+**Windows ME** is read on Package B, by its own leg, under SweetLow's stack
+(`out\phase28\v1b\me\report.md`, traces `debugcon-m1-<n>.log`,
+`c8-evidence-1.txt` and `-2.txt`, `L3-boot-ctl-still-disabled.txt`; the
+installed `xhci98.sys` and `xhciuas.sys` `fc /b` against the package on both
+guests). Clauses 1 to 7, 10 and 12 to 15 PASS, with the IMOD register `0xA0`
+after the install; 9 a NOTE (the Advanced tab's one "System reserved 11 %"
+row, the Power tab's devices "Unknown"); 10 with a note (`XHCISNAP -probe`
+declined before the restart, live after); 11 a NOTE (the shutdown clean, the
+warm restart wedging at the ME logo, the known vehicle). The HCD split
+`usb-audio` into function PDOs itself (`split device configured`, `function
+PDO, port/MI` in `debugcon-m1-2.log`), so ME's own `usbccgp.sys` was left
+unused (28-A.1). Clause 16, a UAS drive first on a fresh ME: Code 2, then an
+ordinary stick installed silently with no CD and no restart and placed
+`USBSTOR.SYS`, `USBNTMAP.SYS` and `USBMPHLP.PDR`, then the UAS drive
+replugged on the same port working, a round trip clean - the replug alone,
+no Remove and no restart. **Clause 8 FAIL**: with a mouse and a stick
+attached, the controller's "Disable in this hardware profile" sent the
+device PDOs QUERY_STOP and STOP and no REMOVE; unticking it restarted the
+controller, the stale PDOs' STARTs were refused, the HCD re-enumerated both
+ports and created new PDOs, and ME then sent nothing more - its shell wedged
+with IRQ 11 frozen, and the re-enable was not saved. ME's Microsoft UHCI
+stack re-enables with devices attached (`out\phase28\me-control\enable`), so
+the hang is the HCD's: a known limitation of `2.0.0.0` in the release notes
+(unplug the devices first), its fix - the STOPPED PDOs revived at the
+controller's restart, as `usbhub` does - in progress on branch
+`p28-reenable`. A limitation does not block the cut (owner, 2026-10-04).
+Its pre-read and rerun on `1ed1ba6` are above and in
 `out\phase28\pre\me\report-rerun.md`.
 
 ### The ten install legs on the `release` flavour
@@ -498,20 +545,50 @@ The checkpoint reads the ten install legs on the `qemu` build and then on the
 `release` flavour. The kit is ready (`out\phase28\release`: `launch.ps1
 -Leg`, `stage.ps1 -Pkg out\merged\pkg-<commit>\release`, nine clauses in
 three launches, fresh overlays `vm\t28rel\<leg>-rel`), so the same-`DriverVer`
-trap cannot bite. Release package: TBD(Package B) (commit, hashes).
+trap cannot bite. Release package: Package B's `release` flavour,
+`out\merged\pkg-417199e\release`, its `SHA256SUMS.txt` checked: x86
+`xhci98.sys` `70282eda...d81c`, `xhciuas.sys` `6687958b...c693`; amd64
+`xhci98.sys` `2382f91f...ea66`, `xhciuas.sys` `79fa44fb...3f30`; every
+installed binary `fc /b` against it in the guest, and all 26 debug logs 0
+bytes, as a `release` build should leave them. Read on development host A,
+2026-10-04, by two subagents, the second taking the clauses the first left
+for time (`out\phase28\release\report-pkgB.md`, screenshots under each
+leg's directory).
 
-| Install leg | `release` package installed | Controller and root hub working | HID, storage `fc`, audio bound | Controller disable and enable | Shutdown |
-|---|---|---|---|---|---|
-| Windows 98 SE, NUSB 3.3 | TBD(Package B) | TBD(Package B) | TBD(Package B) | TBD(Package B) | TBD(Package B) |
-| Windows 98 SE, SweetLow | TBD(Package B) | TBD(Package B) | TBD(Package B) | TBD(Package B) | TBD(Package B) |
-| Windows 2000 SP4 | TBD(Package B) | TBD(Package B) | TBD(Package B) | TBD(Package B) | TBD(Package B) |
-| Windows ME, SweetLow | TBD(Package B) | TBD(Package B) | TBD(Package B) | TBD(Package B) | TBD(Package B) |
-| XP SP3 | TBD(Package B) | TBD(Package B) | TBD(Package B) | TBD(Package B) | TBD(Package B) |
-| XP x64 | TBD(Package B) | TBD(Package B) | TBD(Package B) | TBD(Package B) | TBD(Package B) |
-| Vista x86 | TBD(Package B) | TBD(Package B) | TBD(Package B) | TBD(Package B) | TBD(Package B) |
-| Vista x64 (F8) | TBD(Package B) | TBD(Package B) | TBD(Package B) | TBD(Package B) | TBD(Package B) |
-| 7 x86 | TBD(Package B) | TBD(Package B) | TBD(Package B) | TBD(Package B) | TBD(Package B) |
-| 7 x64 (F8) | TBD(Package B) | TBD(Package B) | TBD(Package B) | TBD(Package B) | TBD(Package B) |
+The report's clause numbers, 1 to 9, in three launches; P is PASS, N a PASS
+with a NOTE, F a FAIL, `-` not reached:
+
+| Install leg | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8a | 8b | 9 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Windows 98 SE, NUSB 3.3 | P | P | P | P | P | P | P | P | P | N |
+| Windows 98 SE, SweetLow | P | P | P | P | P | P | P | P | N | N |
+| Windows 2000 SP4 | N | P | P | P | P | P | P | P | N | N |
+| Windows ME, SweetLow | P | P | P | P | P | F | F/- | P | P | P |
+| XP SP3 | P | P | P | P | P | P | P | P | P | N |
+| XP x64 | P | P | P | P | P | P | P | P | P | N |
+| Vista x86 | P | P | P | P | P | P | P | N | P | P |
+| Vista x64 (F8) | P | P | P | P | P | P | P | P | P | P |
+| 7 x86 | P | P | P | P | P | P | P | P | P | P |
+| 7 x64 (F8) | P | P | P | P | P | P | P | P | P | P |
+
+- 8a is SuperSpeed storage, 8b UAS at SuperSpeed and 9 UAS at High Speed.
+  The Windows 98 SE (NUSB) 8a, 8b and 9 and the ME 8b and 9 were taken by the
+  second subagent: no restart after the UAS install on either.
+- The NOTEs: Windows 2000's clause 1 went through the Upgrade Device Driver
+  Wizard, since the kit's `pnpctl` update fails there; clause 9's High-Speed
+  UAS devnode raised a Found New Hardware wizard on XP, XP x64, 2000 and 98
+  SE under SweetLow, bound with no driver choice; Vista x86's 8a `fc` first
+  ran before F: mounted and was clean when re-run. The report's notes cover
+  the rest (both Windows 98 SE legs list `xhci98.tmp` in Driver File
+  Details, from the INF's rename entry; Windows 2000's Driver tab blank in a
+  sheet already open; Windows 7's UAS disk Offline on the `vvfat` signature
+  collision until `diskpart` brought it online).
+- **ME clause 6, the controller's re-enable with a mouse attached, hung the
+  guest** for over 9 minutes (IRQ 11 frozen, no bugcheck; the re-enable not
+  saved, and a re-enable with nothing attached worked). It is the Windows ME
+  limitation of the `qemu` leg's clause 8 above, read once more here.
+- The idle-gap missed attach was watched for and not seen (gaps up to about
+  12 minutes, every attach seen).
 
 ### Windows 98 SE with no USB 2.0 stack, and with SweetLow's alone
 
@@ -715,11 +792,11 @@ block the cut (`roadmap-hcd.md`, decisions table). The list as read on
 |---|---|---|---|
 | The NUSB stop crash | Stopping a running controller on Windows 98 under NUSB 3.3 crashes (`fatal exception 0E at 0028:C00312EE`, the same with Microsoft's `usbehci.sys`); it is NUSB's `usbport.sys`, which the HCD replaces | Stopping the HCD itself: in QEMU, Windows 98 SE under NUSB 3.3, the controller's disable, enable, remove and rescan clean on `a7ddbfa` (`runs/run-26.md`, "The Windows 98 door sequence"); disable and enable clean with a hub subtree beneath it on `981f56b` (`runs/run-27.md`, "The orderly path with a hub subtree beneath it"). Upgrading from `1.2.0.0` in place: the same fatal 0E at `0028:C00312EE`, the HCD's trace empty, so NUSB's `usbport.sys` stopping the running miniport before any HCD code runs; a cold boot then comes up on the HCD; the rename-and-cold-boot route avoids it (`out\phase28\upgrade\report.md`; "The upgrade from `1.2.0.0`" above). Physical machine: none | **Carried, on the upgrade path only**: gone for the HCD's own disable, enable and removal; the upgrade over a running `1.2.0.0` under NUSB still crashes, and the README gives the rename-and-cold-boot route |
 | The idle that never sleeps | The controller never idles; the driver tells Windows so as it registers | The bus initiates no suspend: the owner's decision of 2026-10-04 on 27-A.1 ("handle, not initiate", `runs/run-27.md`, "The hub-port resume"); `SUBMIT_IDLE_NOTIFICATION` is held and never called back (28-A.1) | **Carried**, by the owner's ruling of 2026-10-04 (`roadmap-hcd.md`, decisions table, "The idle power policy (28.3)"): `2.0.0.0` never initiates selective suspend, of a device or a hub port, and handles one it is asked for or a hub reports |
-| The Windows 98 churn wedge | Plugging and unplugging a device every 0.6 s for minutes froze Windows 98 (the miniport's own defect, at 12 and 18 enumerations) | In QEMU, Windows 98 SE under NUSB 3.3: the 120-hub churn with storage resident enumerated 120 of 120 and the guest stayed responsive, on `f99f184` (`soak-h98f`) and `09ed9d1` (`soak-h98j`) (`runs/run-27.md`, "The soak"). On the final build: TBD(Package B soak) | TBD(Package B soak) |
+| The Windows 98 churn wedge | Plugging and unplugging a device every 0.6 s for minutes froze Windows 98 (the miniport's own defect, at 12 and 18 enumerations) | In QEMU, Windows 98 SE under NUSB 3.3: the 120-hub churn with storage resident enumerated 120 of 120 and the guest stayed responsive, on `f99f184` (`soak-h98f`) and `09ed9d1` (`soak-h98j`) (`runs/run-27.md`, "The soak"). On Package B: the device matrix's hub group with the five-tier churn PASS on Windows 98 SE and Windows 2000, and the 10-cycle soaks PASS on both (`out\phase28\primaries\report.md`) | **Gone**: not seen under the HCD in any reading |
 | The Windows 7 disable hang | On the E460, 32-bit Windows 7, the first controller disable never finished (2026-09-19); VMs did not show it | Not reproduced under the HCD in QEMU: the pre-read on Windows 7 x86 (above), then five controller disable and enable cycles each on Windows 7 x86 and x64 on `c0d8a51`, about 113 to 120 s a cycle, none hung (`out\phase28\v1\w7x86\report.md`, `w7x64\report.md`, clause 8). Windows 7 is not benched (owner, 2026-10-04, about 14:05), so no metal re-measure follows | **Gone**: removed from the `2.0.0.0` limitations by the owner's ruling (2026-10-04, about 14:10) - a `1.2.0.0` miniport and usbport issue, not reproduced under the HCD, with no metal caveat |
 | The Windows 98 audio-load wedge | The miniport had it: an intermittent wedge on an audio replug after a cold boot (`1.1.0.0` 2 of 10, `1.1.1.0` 5 of 10; `lessons.md`) | Seen on every HCD build tried, timing-dependent (5 of 6 at about 40 s after boot, 0 of 20 after 120 s), every IRP to the function PDO completed and nothing outstanding at the HCD (`runs/run-27.md`, "The Windows 98 SE audio-load wedge") | Carried: pre-existing, above the HCD |
 | Windows 2000: an audio device unplugged during playback gets no REMOVE | Not on the `1.2.0.0` list | Phase 27: SURPRISE_REMOVAL and ABORT_PIPE, then no REMOVE within minutes, on `ed025d2`, `26e7cb6` and Phase 26's `a7ddbfa` (`runs/run-27.md`). On `1ed1ba6`: 7 of 7 unplugs during playback got REMOVE within about 1 s, root port, behind a hub and with the hub pulled, with Sound Recorder and Media Player (`out\phase28\w2k-audio-unplug\report.md`; "The Windows 2000 audio unplug during playback" above) | **Gone** |
-| Windows ME: a UAS drive as the first USB storage device | Not on the `1.2.0.0` list (`1.2.0.0` had no UAS driver) | On a fresh ME install whose first storage device is a UAS drive, the drive shows Code 2: ME copies its own `USBNTMAP.SYS` and `USBMPHLP.PDR` only when its first ordinary stick installs, and `xhciuas.inf` names `USBNTMAP.SYS` as its upper filter (`out\phase28\pre\me\report-rerun.md`; `runs/run-31.md`, "Windows ME: a UAS drive first") | **New, carried** (owner, 2026-10-04, option C). The recovery - an ordinary stick once, then the UAS drive replugged - is unmeasured: TODO(28-V.1, ME on Package B) |
+| Windows ME: a UAS drive as the first USB storage device | Not on the `1.2.0.0` list (`1.2.0.0` had no UAS driver) | On a fresh ME install whose first storage device is a UAS drive, the drive shows Code 2: ME copies its own `USBNTMAP.SYS` and `USBMPHLP.PDR` only when its first ordinary stick installs, and `xhciuas.inf` names `USBNTMAP.SYS` as its upper filter (`out\phase28\pre\me\report-rerun.md`; `runs/run-31.md`, "Windows ME: a UAS drive first") | **New, carried** (owner, 2026-10-04, option C). The recovery - an ordinary stick once, then the UAS drive replugged - read on Package B: the replug alone, no Remove and no restart (`out\phase28\v1b\me\report.md`, clause 16) |
 
 ---
 
@@ -872,7 +949,12 @@ The Phases 28-31 integration was reviewed in nine rounds over `p28-31-int`
 taken in `81d3942`, `2943dfe`, `3c56beb`, `bf4612c`, `c0f9ad6`, `d05990a`
 and `28e9254`; round 8 over `28e9254` found no MAJOR or MINOR; round 9 over
 the `p27-fix` merge `239d23a` found no MAJOR or MINOR and one NOTE. 28-A.1's
-own review is in `fe8480b`. A review of `1ed1ba6` (an INF and gate change)
-and of the merged build: TBD.
+own review is in `fe8480b`. A review of `1ed1ba6` (an INF and gate change):
+TBD. The merged build `c0d8a51` was reviewed over `1ed1ba6..c0d8a51`: round
+1 taken in `9e2d4b9` (the hub-port resume), round 2 in `2f6030a` (the Windows
+98 retired list, MAJOR). The branches merged after it were each reviewed to
+clean on their branch: `p29-spec` (`4cef6d3`, `101016f`, `4017eff`,
+`f7abde2`), `p28-pdoleak` (five rounds to `8993884`, among them `8a1a0c4`)
+and `p31-meuas` (`eb14b23`).
 
 Closed: TBD.
