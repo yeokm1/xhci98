@@ -15,6 +15,7 @@ families.
            [Files.scsi.XHCI98] and [HardwareIds.scsi.XHCI98], each once.
            "scsi" is the one component class F6 offers; a keyboard,
            computer, display or mouse section is refused by name.
+  OEM-QUOTE  A quote anywhere is balanced and wraps its whole field.
   OEM-DEFAULT  [Defaults] is "scsi = XHCI98" alone, and [scsi] names XHCI98
            alone, with a quoted description.
   OEM-DISK [Disks] is one disk, d1, whose tag file is \xhci98.sys and whose
@@ -120,21 +121,30 @@ function Read-OemText {
 function Split-OemFields {
     param([string]$Value)
     # Comma-separated fields; a quoted field keeps its commas and loses its
-    # quotes. Returns @{ Text; Quoted } per field.
+    # quotes. Returns @{ Text; Quoted; Bad } per field: Bad when a quote is
+    # unbalanced or does not wrap the whole field (OEM-QUOTE).
     $out = New-Object System.Collections.ArrayList
+    $fields = New-Object System.Collections.ArrayList
     $buf = ""
     $inQuote = $false
-    $quoted = $false
     foreach ($ch in $Value.ToCharArray()) {
-        if ($ch -eq '"') { $inQuote = -not $inQuote; $quoted = $true; continue }
-        if ($ch -eq ',' -and -not $inQuote) {
-            [void]$out.Add(@{ Text = $buf.Trim(); Quoted = $quoted })
-            $buf = ""; $quoted = $false
-            continue
-        }
+        if ($ch -eq '"') { $inQuote = -not $inQuote }
+        if ($ch -eq ',' -and -not $inQuote) { [void]$fields.Add($buf); $buf = ""; continue }
         $buf += $ch
     }
-    [void]$out.Add(@{ Text = $buf.Trim(); Quoted = $quoted })
+    [void]$fields.Add($buf)
+    for ($k = 0; $k -lt $fields.Count; $k++) {
+        $raw = ([string]$fields[$k]).Trim()
+        $n = @($raw.ToCharArray() | Where-Object { $_ -eq '"' }).Count
+        $quoted = ($n -gt 0)
+        $bad = $false
+        if ($n -ne 0 -and ($n -ne 2 -or -not ($raw.StartsWith('"') -and $raw.EndsWith('"')))) { $bad = $true }
+        if ($k -eq $fields.Count - 1 -and $inQuote) { $bad = $true }
+        $text = $raw
+        if ($quoted -and -not $bad) { $text = $raw.Substring(1, $raw.Length - 2).Trim() }
+        elseif ($quoted) { $text = $raw.Replace('"', '').Trim() }
+        [void]$out.Add(@{ Text = $text; Quoted = $quoted; Bad = $bad })
+    }
     return $out
 }
 
@@ -218,6 +228,14 @@ function Test-OemText {
     $get = { param($n) if ($byName.ContainsKey($n.ToLowerInvariant())) { return $byName[$n.ToLowerInvariant()] } return $null }
     foreach ($n in $sections) {
         if ($null -eq (& $get $n)) { & $add "OEM-SECTION" "no [$n] section." }
+    }
+
+    foreach ($s in $parsed) {
+        foreach ($l in $s.Lines) {
+            foreach ($x in @(Split-OemFields -Value $l.Value)) {
+                if ($x.Bad) { & $add "OEM-QUOTE" "[$($s.Name)] '$($l.Key) = $($l.Value)': a quote is unbalanced or does not wrap its whole field." }
+            }
+        }
     }
 
     $descs = @()
@@ -415,17 +433,28 @@ if ($SelfTest) {
             @{ Rule = "OEM-MSFILE";   Text = $text.Replace("inf    = d1, xhci98.inf", "inf    = d1, xhci98.inf`r`ndll = d1, usbd.sys") },
             @{ Rule = "OEM-83";       Text = $text.Replace("inf    = d1, xhci98.inf", "inf    = d1, xhci98-amd64.inf") },
             @{ Rule = "OEM-ARCH";     Text = $text.Replace($word, "any") },
+            @{ Rule = "OEM-QUOTE";    Text = $text.Replace("`"XHCI98\ROOT_HUB`", `"xhci98`"", "`"XHCI98\ROOT_HUB`", `"xhci98") },
+            @{ Rule = "OEM-QUOTE";    Text = $text.Replace("`"PCI\CC_0C0330`", `"xhci98`"", "`"PCI\CC_0C0330`" x, `"xhci98`"") },
+            @{ Rule = "OEM-QUOTE";    Text = $text.Replace("scsi = XHCI98`r`n", "scsi = XHCI98`"`r`n") },
             @{ Rule = "OEM-PAIR";     Text = $text.Replace("id = `"PCI\CC_0C0330`", `"xhci98`"", "id = `"PCI\CC_0C0330`", `"xhci98`"`r`nid = `"PCI\CC_0C0330`", `"xhci98`"") }
         )
         foreach ($c in $cases) {
-            $total++
-            $got = @(Test-OemText -Bytes $enc.GetBytes($c.Text) -InfText $inf -Package "" -Profile $profile -PairBytes $pair)
-            $hit = @($got | Where-Object { $_.StartsWith($c.Rule + " ") })
-            if ($hit.Count -eq 0) {
-                $bad++
-                Write-Err ("$profile mutation for $($c.Rule) was not refused by that rule. Got:`n  " + ($got -join "`n  "))
-            } else {
-                Write-Ok "$profile $($c.Rule) refuses its mutation"
+            # Twice: with the pair, as build-driver.cmd runs the gate, and
+            # without it, as the packagers run it on a staged -OemPath. Every
+            # rule but OEM-PAIR must refuse on both.
+            foreach ($withPair in @($true, $false)) {
+                if (-not $withPair -and $c.Rule -eq "OEM-PAIR") { continue }
+                $total++
+                $pb = if ($withPair) { $pair } else { $null }
+                $got = @(Test-OemText -Bytes $enc.GetBytes($c.Text) -InfText $inf -Package "" -Profile $profile -PairBytes $pb)
+                $hit = @($got | Where-Object { $_.StartsWith($c.Rule + " ") })
+                $how = if ($withPair) { "paired" } else { "unpaired" }
+                if ($hit.Count -eq 0) {
+                    $bad++
+                    Write-Err ("$profile $how mutation for $($c.Rule) was not refused by that rule. Got:`n  " + ($got -join "`n  "))
+                } else {
+                    Write-Ok "$profile $how $($c.Rule) refuses its mutation"
+                }
             }
         }
         # The INF side of OEM-IDS and OEM-SERVICE: an INF that grows a model

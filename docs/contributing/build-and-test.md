@@ -3850,29 +3850,39 @@ driver at the F6 prompt. The install leg per target, in a virtual machine:
 1. Stage the package: `scripts\package\make-package.ps1 -Flavor release`
    (add `-Arch amd64` for XP x64). The directory is 8.3-clean and fits a
    1.44 MB floppy, so QEMU can serve it as one directly.
-2. A blank disk for the install: `qemu-img create -f qcow2 <disk> 8G`, and a
-   small raw image for the USB stick, `qemu-img create -f raw <stick> 64M`.
+2. A blank disk for the install: `qemu-img create -f qcow2 <disk> 8G`. The
+   USB stick is a host directory served read-only through VVFAT, which QEMU
+   presents as a partitioned FAT disk, so it needs no preparation and has a
+   volume for step 7 to find; put a small file in it to look for.
 3. Launch with the install CD on IDE, the floppy on the emulated FDC, and no
-   USB controller but `qemu-xhci`:
+   USB controller but `qemu-xhci`. The `fat:` backends are read-only, so
+   both drives carry `readonly=on` (QEMU refuses them with "Block node is
+   read-only" otherwise). QEMU's `usb-storage` is Bulk-Only, so the bus
+   never chooses UAS for it:
 
 ```
 qemu-system-i386 -machine pc -m 512 -smp 2 \
   -drive file=<disk>,format=qcow2,if=ide \
   -cdrom <install iso> -boot d \
-  -drive if=floppy,format=raw,file=fat:floppy:out\pkg-release-x86 \
+  -drive if=floppy,format=raw,readonly=on,file=fat:floppy:out\pkg-release-x86 \
+  -vga none -device VGA,id=vga0 \
   -device qemu-xhci,id=xhci \
-  -device usb-kbd,bus=xhci.0,id=ukbd \
-  -drive if=none,id=stick,format=raw,file=<stick> \
+  -device usb-kbd,bus=xhci.0,id=ukbd,display=vga0 \
+  -drive if=none,id=stick,format=raw,readonly=on,file=fat:<stick dir> \
   -device usb-storage,bus=xhci.0,drive=stick \
   -qmp tcp:127.0.0.1:<port>,server,nowait
 ```
 
    (`qemu-system-x86_64` and `out\pkg-release-amd64` for XP x64; Windows
    2000 runs with `-smp 1` or `2` as its target VM does.) The `pc` machine
-   always has an i8042 PS/2 keyboard, so a keystroke typed into the QEMU
-   window may reach either; send the leg's keystrokes to the USB keyboard by
-   id, with QMP `input-send-event` and `"device": "ukbd"`, so what is
-   observed is the USB path.
+   always has an i8042 PS/2 keyboard as well. QMP `input-send-event` names a
+   display console, not an input device, so the USB keyboard is bound to the
+   display `vga0` by its `display=` property and the leg's keystrokes are
+   sent with `"device": "vga0"`; an input device bound to a console takes
+   that console's events ahead of the unbound PS/2 one. Before reading step
+   5 as a USB-path observation, confirm it: `device_del ukbd` on the QMP
+   socket must stop the guest answering (then `device_add usb-kbd,bus=xhci.0,
+   id=ukbd,display=vga0` to carry on).
 4. At "Press F6 if you need to install a third party SCSI or RAID driver",
    press F6 (SeaBIOS's own xHCI keyboard support answers it; nothing of this
    driver runs yet). At the screen that follows, press S, then Enter at the
@@ -3882,8 +3892,8 @@ qemu-system-i386 -machine pc -m 512 -smp 2 \
    lists it as the device Setup will load.
 5. Setup loads its files and starts the kernel. Expect: the Welcome screen
    answers keystrokes sent to `ukbd` (the BIOS has handed the controller to
-   the driver by then); the partition screen lists the 64 MB USB disk beside
-   the IDE disk (the bus's device PDO, Setup's `usbstor` and `disk` above it);
+   the driver by then); the partition screen lists the USB disk beside the
+   IDE disk (the bus's device PDO, Setup's `usbstor` and `disk` above it);
    no stop screen. Install onto the IDE disk.
 6. Text mode copies `xhci98.sys` from A: and restarts. Leave the floppy in
    until GUI mode is finished: it may be asked for when GUI mode installs the
@@ -3893,7 +3903,8 @@ qemu-system-i386 -machine pc -m 512 -smp 2 \
 7. In the installed system: Device Manager shows "xHCI98 USB 3.x eXtensible
    Host Controller" and "xHCI98 USB 3.x Root Hub" with no warning mark, the
    service `xhci98` is the INF's (`Start` 3, not the boot start text mode
-   gave it), the USB keyboard types and the stick has a drive letter.
+   gave it), the USB keyboard types, and the stick has a drive letter with
+   the file put in it in step 2.
 
 The leg passes on steps 4, 5 and 7; step 6's prompts are recorded, not
 failed. Until it has passed on a target, design record 13 section 5.6 stays

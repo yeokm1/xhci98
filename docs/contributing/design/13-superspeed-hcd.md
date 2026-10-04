@@ -566,13 +566,17 @@ floppy, and whether 32-bit XP's unsigned-driver policy during GUI mode
 installs it silently, warns or skips it, is not readable from these files
 and is owed to the install leg.
 
-**`xhciuas.sys` is not on the text-mode disk.** A UAS device presents its
-Bulk-Only alternate setting's class id when the bus chose Bulk-Only, which
-Setup's own `usbstor` row binds; a device the bus drives as UAS needs
-`xhciuas.sys` and its INF, and loading a second OEM driver in text mode
-would need its own `scsi` option and ids for no install medium this phase
-needs. GUI-mode Setup and the installed system install it from the package
-as before.
+**`xhciuas.sys` is not on the text-mode disk, and a UAS-capable disk is
+lost in text mode.** The bus chooses UAS whenever a device offers a usable
+UAS alternate setting, even beside a Bulk-Only one (`src\xhci_xport.c`),
+and only `XhciForceBulkOnly`, a value in the controller's driver key, turns
+that off (`src\hcd_ctl.c` `HcdCtlForceBulkOnly`) - a key text mode never
+writes. Such a device then presents the UAS class id, which no Setup row
+binds, so it is not usable until GUI mode; only a Bulk-Only-only device
+(most USB flash sticks; QEMU's `usb-storage`) meets Setup's own `usbstor`.
+Carrying `xhciuas.sys` as a second `scsi` option would need its own
+hardware ids and a text-mode reading of its own, and is left out. GUI-mode
+Setup and the installed system install it from the package as before.
 
 **XP x64.** The format is the same; the x64 directory carries its own file
 (`src\txtsetup-amd64.oem`, staged as `txtsetup.oem`) naming the amd64
@@ -596,7 +600,9 @@ The limits, all of them the user's to know:
    Setup reads every F6 disk.
 3. Installing Windows onto a USB disk is not supported: nothing here makes
    the installed system boot from one.
-4. A disk the bus drives as UAS is not usable in text mode (above).
+4. A disk that offers UAS is not usable in text mode, even if it also
+   offers Bulk-Only, since the bus prefers UAS and no driver for it is
+   loaded (above). Only a Bulk-Only-only device is.
 5. Text mode runs with interrupt moderation at the code default and the log
    off, since no INF value is written until GUI mode.
 6. If the target disk needs one of Setup's own `[SCSI]` miniports, the user
@@ -607,7 +613,7 @@ The limits, all of them the user's to know:
 `build-driver.cmd` on every build, self-tested by mutation first, and by
 `make-package.ps1` and `make-release.ps1` against each staged and published
 directory) holds the two files to exactly the shape above: the five
-sections and nothing else, the `scsi` component alone, the driver at the
+sections and nothing else, balanced quotes, the `scsi` component alone, the driver at the
 disk root as both the tag file and the `driver` line, the `inf` line, no
 catalog and no second driver, the service the INF adds, the INF's model ids
 and no `USB\` id, no Microsoft file, 8.3 names, an architecture word in each

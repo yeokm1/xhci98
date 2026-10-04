@@ -3115,8 +3115,9 @@ mouse and USB storage drivers above it.
 
   - Pressing F6 itself needs the firmware's own USB keyboard support.
   - The floppy must be drive A: as the firmware sees it.
-  - A UAS-only disk is not usable during Setup; a USB disk that also
-    speaks Bulk-Only is.
+  - A USB disk that supports UAS (most USB 3 enclosures and SSDs) is not
+    usable during Setup, even if it also supports the older Bulk-Only
+    mode; most USB flash sticks are Bulk-Only and are usable.
   - Installing Windows ONTO a USB disk is not supported.
   - Later in Setup, Windows installs the driver again from xhci98.inf and
     may ask for the floppy or the Windows CD.
