@@ -1218,7 +1218,11 @@ static NTSTATUS hcdDoorConnInfo(PHCD_CONTROLLER hc, PUCHAR buf, ULONG inLen,
  * enumeration: the device descriptor, and configuration 0 (the one the bus
  * reads, and the one usbui.dll takes bMaxPower from). Anything else - a
  * string above all - would be a control transfer on the device's EP0, which
- * this door does not issue. IRQL: <= DISPATCH_LEVEL.
+ * this door does not issue. bRequest 0 is taken as GET_DESCRIPTOR: every
+ * target's usbui.dll zero-fills the request and sets only ConnectionIndex,
+ * wValue and wLength (UsbItem::GetConfigDescriptor, static, section 8.3),
+ * and refusing it left every device's power "unknown".
+ * IRQL: <= DISPATCH_LEVEL.
  */
 static NTSTATUS hcdDoorDescriptor(PHCD_CONTROLLER hc, PUCHAR buf,
                                   ULONG inLen, ULONG outLen, PULONG_PTR info)
@@ -1238,7 +1242,8 @@ static NTSTATUS hcdDoorDescriptor(PHCD_CONTROLLER hc, PUCHAR buf,
     request = buf[5];
     value = (ULONG)buf[6] | ((ULONG)buf[7] << 8);
     length = (ULONG)buf[10] | ((ULONG)buf[11] << 8);
-    if (port == 0 || port > hcdDoorPorts(hc) || request != 6) {
+    if (port == 0 || port > hcdDoorPorts(hc) ||
+        (request != 0 && request != 6)) {
         return STATUS_INVALID_PARAMETER;
     }
     room = outLen - HCD_DESC_REQUEST_BYTES;

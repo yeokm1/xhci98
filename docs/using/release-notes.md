@@ -102,12 +102,12 @@ from the release asset itself after the cut.
 |---|---|---|
 | Windows 98 SE | Primary | Virtual machines, under NUSB 3.3 and under SweetLow's stack: the install, mouse, keyboard, storage with a verified file compare, a composite audio device split into its functions and played to its end (unheard: the guest has no audio out), the ASIX Ethernet adapter passed through, the controller's Advanced tab and the root hub's Power tab, and disable, enable, remove and rescan. Hubs behind QEMU's Full-Speed hub to five tiers, 25 plug cycles per device class, and a 120-hub churn with the guest responsive. A stock install with no USB 2.0 stack: the controller, hubs, a HID mouse and a composite audio device work (next section). SuperSpeed storage and UAS at SuperSpeed (16 streams) and at High Speed, each with a verified round trip, on the integration build. UAS and forced Bulk-Only on a passed-through dual-transport bridge, each with a verified round trip. Real hardware, on a ThinkPad E460 and a ThinkPad P14s Gen 1: the install, HID, storage, the ASIX Ethernet adapter, and a Full-Speed audio device played and heard at a root port and behind a hub; High-Speed hubs, single- and multi-TT, with Low- and Full-Speed devices behind them, and a Full-Speed hub behind a High-Speed hub (a USB 2.0 hub held at Full Speed by a full/low-speed isolator); a Low-Speed mouse polled every 8 ms at a root port and behind a hub; two SuperSpeed drives on a root port, the link read as SuperSpeed in `XHCISNAP`'s slot table, with round trips and throughput against the same drive behind a USB 2.0 hub; a SuperSpeed hub with a SuperSpeed drive behind its SuperSpeed half and a High-Speed device behind its USB 2.0 half, plugged, unplugged and plugged in again; and UAS on a dual-transport bridge at SuperSpeed and, behind a USB 2.0 hub, at High Speed, UAS on a UAS flash drive at SuperSpeed with Bulk-Only behind a USB 2.0 hub, and the forced-Bulk-Only value on both at SuperSpeed, each with a round trip and throughput against Bulk-Only |
 | Windows 2000 SP4 | Primary, virtual machines only | The same device, hub and Device Manager rows as Windows 98 SE, under Driver Verifier, plus a multiprocessor guest. SuperSpeed storage, and UAS at SuperSpeed and at High Speed, on the integration build. UAS, forced Bulk-Only and the switch between them on a passed-through dual-transport bridge, each with a verified round trip. SuperSpeed hubs: untested, as no virtual machine models one; built from the specification. Never run on real hardware |
-| Windows ME | Virtual machines only | Under SweetLow's stack, on the integration build: the install, HID, storage with a verified file compare, unplug and replug, a hub with a mouse and a stick behind it, a composite audio device bound at a root port and behind a hub, the root hub's disable and enable, a 10-cycle soak per device class, SuperSpeed storage, and UAS at SuperSpeed (streams) and at High Speed. Bulk-Only storage works on Windows ME's own mass-storage files, and UAS once those are present (next section). Re-enabling the controller with a device attached hangs Windows ME ("Known limitations") |
+| Windows ME | Virtual machines only | Under SweetLow's stack, on the integration build: the install, HID, storage with a verified file compare, unplug and replug, a hub with a mouse and a stick behind it, a composite audio device bound at a root port and behind a hub, the root hub's disable and enable, a 10-cycle soak per device class, SuperSpeed storage, and UAS at SuperSpeed (streams) and at High Speed. Bulk-Only storage works on Windows ME's own mass-storage files, and UAS once those are present (next section). Re-enabling the controller with a USB mouse attached hung Windows ME under `2.0.0.0` (a keyboard was never tried); `2.1.0.0` fixes it: the devices are kept across the controller's stop and revived on the re-enable, as Microsoft's hub driver does (`TODO(33.1 legs)`: read again on the `2.1.0.0` package) |
 | 32-bit Windows XP SP3 | Virtual machines only | On the integration build: install, HID, storage with a verified file compare, unplug and replug, a hub with devices behind it, composite audio bound, the root hub's and the controller's disable and enable, shutdown; SuperSpeed storage, and UAS at SuperSpeed and at High Speed. A 10-cycle soak per device class (HID, a hub with a mouse, storage) |
 | Windows XP x64 SP2 | Virtual machines only; the 64-bit drivers | The same clauses as 32-bit XP, with the 64-bit `xhciuas.sys` at SuperSpeed and at High Speed, and the same soak |
 | Windows Vista SP2, 32-bit and x64 | Virtual machines only | The same clauses, at four virtual processors; x64 on starts with driver signature enforcement disabled. The same soak |
 | Windows 7 SP1, 32-bit and x64 | Virtual machines only | The same clauses, at four virtual processors; x64 on starts with driver signature enforcement disabled; five controller disable and enable cycles on each. The same soak. Windows 7 is not read on real hardware for `2.0.0.0` |
-| Every target, from the release package | | The `release` flavour of the integration build, on the ten install legs (Windows 98 SE under NUSB and under SweetLow's stack, ME, 2000, XP, XP x64, and Vista and 7 in both architectures): installed, controller and root hub started, HID, storage with a verified file compare, composite audio bound, the controller's disable and enable, and shutdown, with SuperSpeed storage and UAS at SuperSpeed and at High Speed on most legs. The one defect is Windows ME's controller re-enable ("Known limitations"). The legs are read again from the release asset after the cut |
+| Every target, from the release package | | The `release` flavour of the integration build, on the ten install legs (Windows 98 SE under NUSB and under SweetLow's stack, ME, 2000, XP, XP x64, and Vista and 7 in both architectures): installed, controller and root hub started, HID, storage with a verified file compare, composite audio bound, the controller's disable and enable, and shutdown, with SuperSpeed storage and UAS at SuperSpeed and at High Speed on most legs. The one defect was Windows ME's controller re-enable, which `2.1.0.0` fixes (`TODO(33.1 legs)`). The legs are read again from the release asset after the cut |
 
 The virtual machines are QEMU's `qemu-xhci`, which models no SuperSpeed hub,
 no link faster than 5 Gbit/s, no Low-Speed device and no High-Speed hub; what
@@ -245,6 +245,27 @@ install already has them. The driver needs no `usbport.sys` and no
 Windows 2000 note: the first Update Driver after a cancelled Found New
 Hardware Wizard was once seen to leave the controller with no driver; a
 second Update Driver filled it.
+
+### Installing Windows 2000 or XP itself: the F6 floppy
+
+From `2.1.0.0` every flavour directory carries `txtsetup.oem`, for a machine
+whose keyboard or install medium is on an xHCI controller. Copy the files of
+`release-x86\` (`release-x64\` for Windows XP x64) to the root of a floppy,
+press F6 when text-mode Setup offers it, press S, and pick "xHCI98 USB 3.x
+Host Controller". Setup then drives a USB keyboard, mouse and USB stick
+through its own drivers above this one, and GUI-mode Setup installs the
+driver from `xhci98.inf` as usual. Limits:
+
+- Pressing F6 needs the firmware's own USB keyboard support.
+- The floppy must be drive A: as the firmware sees it.
+- A disk the driver runs as UAS (most USB 3 enclosures and SSDs) is not
+  usable until GUI-mode Setup; Bulk-Only flash sticks are.
+- Installing Windows onto a USB disk is not supported.
+- GUI-mode Setup may ask for the floppy or the Windows CD.
+
+**Untested ground** (`TODO(33.3)`): this path has been checked against
+Setup's own files only; no install from it has been run on any target, in
+a virtual machine or on real hardware.
 
 ### Upgrading from 1.2.0.0
 
@@ -406,6 +427,22 @@ answers the requests they send. The Power tab reports the power budget the
 driver itself keeps, since external hubs are the driver's own. Read on Windows 98 SE under both stacks and on Windows
 2000, in virtual machines.
 
+Up to `2.0.0.0` the Power tab showed every device's power as unknown, on
+every target: the driver refused the descriptor request the page sends,
+whose request code Windows leaves at zero. `2.1.0.0` answers it
+(`TODO(33.5)`: read on the `2.1.0.0` package). Two things the pages show
+are Windows' own arithmetic, not the driver's:
+
+- **Bandwidth counts isochronous pipes in use, and nothing else.** On
+  Windows 98 SE to XP the Advanced tab adds up only the isochronous pipes
+  a device has open, as it does over Microsoft's own stack, so a mouse, a
+  keyboard or a drive adds nothing, and an audio device adds its share only
+  while it plays or records. On Vista and 7 the figure comes from a WMI
+  query the driver does not answer, and stays at zero.
+- **A SuperSpeed device's power reads a quarter of its draw.** The page
+  doubles the configuration descriptor's `bMaxPower`, which is in 2 mA units
+  at USB 2.0 and in 8 mA units at SuperSpeed.
+
 ## The log, and how to send one
 
 The driver keeps a small log of what happened on the bus, inside itself, and
@@ -477,11 +514,6 @@ Each was measured, in a virtual machine unless it names a physical machine.
 - **Windows 98 shows no driver version on the Driver tab**, only the file
   date; the four-part version is under Driver File Details, which also lists
   `xhci98.tmp`, a leftover of the install's temporary copy (cosmetic).
-- **Windows ME: re-enabling the controller with a USB mouse or keyboard
-  attached makes Windows ME stop responding.** A USB storage device alone
-  is fine. Unplug the mouse or keyboard before re-enabling the controller in
-  Device Manager. If ME stops responding, restart it and re-enable the
-  controller with nothing attached. Being fixed.
 - **USB storage on Windows 98 is slower than the drive.** An observation,
   not a defect found: Windows 98 sends one command at a time. On the P14s
   with the MSSU10 at 64 KB, about 208 MB/s on Windows 98 against 277 MB/s

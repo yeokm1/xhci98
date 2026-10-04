@@ -12,6 +12,57 @@ every published directory carries the history up to and including itself.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
+## 2.1.0.0 - TBD
+
+Drafted, not cut: the date and every `TODO(...)` below are the cut's to
+settle (`TODO(33.6)`).
+
+The first update of the host controller driver. It adds two things
+`2.0.0.0` did not have, external hubs in Device Manager and devices named by
+their serial numbers, and fixes the Windows ME controller re-enable. Every
+system `2.0.0.0` supports is supported, from the
+same four directories.
+
+### What changed
+
+- External hubs appear in Device Manager as entries of their own, with the
+  devices behind them beneath them, as on Microsoft's own USB stacks, and
+  USBView and the hub pages of Device Manager can walk into them. The driver
+  still runs every hub itself (`TODO(33.4)`: the hub legs, and whether a
+  device behind a hub is found again once after the update).
+- A device with a serial number is named by it, as Microsoft's hub driver
+  names it: moved to another port, it keeps its Device Manager entry and is
+  not found again as new hardware, and two identical devices plugged into the
+  same port in turn no longer share one entry. A device without a serial
+  number is still named by its port (`TODO(33.2)`: the port-move legs, and
+  whether a device with a serial is found again once after the update).
+- Fixed on Windows ME: re-enabling the controller in Device Manager with a
+  USB mouse attached no longer makes Windows ME stop responding.
+  The devices on the controller are now kept while it is disabled and come
+  back as the same Device Manager entries when it is enabled again, as under
+  Microsoft's own hub driver, instead of being removed and found again
+  (`TODO(33.1 legs)`: read on the `2.1.0.0` package, on Windows ME, 98 SE
+  and 2000).
+- Fixed: the root hub's Power page in Device Manager showed every device's
+  power as unknown, on every system, because the driver refused the request
+  Windows sends for it (`TODO(33.5)`: read on the `2.1.0.0` package on
+  Windows 98 SE and 2000). The Advanced page's bandwidth figure counts only
+  isochronous pipes in use, as Microsoft's own stack does, so a mouse, a
+  keyboard or a drive adds nothing to it; on Windows Vista and 7 it stays at
+  zero, a known limitation.
+- `txtsetup.oem` in every flavour directory, so that Windows 2000, XP and
+  XP x64 text-mode Setup can load the driver from a floppy at its F6 prompt
+  on a machine whose keyboard or install medium is on an xHCI controller.
+  Setup's own HID and storage drivers then run above this one. Limits:
+  pressing F6 needs the firmware's own USB keyboard support, the floppy
+  must be drive A:, a disk the driver runs as UAS is not usable until
+  GUI-mode Setup, and installing Windows onto a USB disk is not supported
+  (`TODO(33.3)`: the F6 install legs on Windows 2000 and XP; until then it
+  is untested ground, read from Setup's own files only).
+- Known limitations: those of `2.0.0.0`, less the Windows ME controller
+  re-enable and (`TODO(33.2)`) the device moved to another port. The release
+  notes have the full list.
+
 ## 2.0.0.0 - 2026-10-04
 
 The driver is rewritten as a whole USB host controller driver. `xhci98.sys`
