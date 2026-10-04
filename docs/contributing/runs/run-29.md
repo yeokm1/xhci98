@@ -158,22 +158,33 @@ printed at the trace's verbosity (`v1-2k-notes.md`, row 2).
 
 ### The reading on the merged build
 
-Build: TBD (commit, `xhci98.sys` SHA-256). Evidence directory: TBD.
+Build: `c0d8a51`, the first merged build of `p28-31-int`
+(`out\merged\pkg-c0d8a51\qemu`, x86 `xhci98.sys` SHA-256 `8e14104f...f2fd`).
+Evidence directory: `out\phase29\v1-merged` (the subagent's `notes.md`, the
+traces and screenshots), summarised in `out\phase28\primaries\report.md`.
+Read on development host A, 2026-10-04. On Windows 2000 `xhci98.sys` was
+copied in by hand, since the kit's `pnpctl` update matches nothing there,
+so that guest ran the old INF's IMOD value, 500.
 
 | Clause | Windows 98 SE, NUSB 3.3 | Windows 2000 SP4 |
 |---|---|---|
-| Controller and root hub on the SuperSpeed launcher, every port powered | TBD(merged build) | TBD(merged build) |
-| `usb-storage` at 5000 Mb/s, enumerated | TBD(merged build) | TBD(merged build) |
-| Port speed decoded SuperSpeed and slot speed SuperSpeed (trace) | TBD(merged build) | TBD(merged build) |
-| `XHCISNAP`: the port's decoded speed and the slot's speed field | TBD(merged build) | TBD(merged build) |
-| Bound to the target's `usbstor.sys` | TBD(merged build) | TBD(merged build) |
-| `fc /b` read round trip | TBD(merged build) | TBD(merged build) |
-| Write and `fc /b` | TBD(merged build) | TBD(merged build) |
-| Unplug | TBD(merged build) | TBD(merged build) |
-| USB 2.0 row: `usb-storage` at 480 Mb/s, `fc /b` | TBD(merged build) | TBD(merged build) |
-| USB 2.0 rows of Phase 27 unchanged (matrix or soak) | TBD(merged build) | TBD(merged build) |
-| Controller disable and enable | TBD(merged build) | TBD(merged build) |
-| Shutdown | TBD(merged build) | TBD(merged build) |
+| Controller and root hub on the SuperSpeed launcher, every port powered | PASS | PASS |
+| `usb-storage` at 5000 Mb/s, enumerated | PASS | PASS |
+| Port speed decoded SuperSpeed and slot speed SuperSpeed (trace) | PASS | PASS |
+| `XHCISNAP`: the port's decoded speed and the slot's speed field | NOTE: this build's `.TXT` has no slot-speed field; the trace's `slot context speed - superspeed=00000001` stands as the witness (the field was added in `a60f6e5`) | NOTE: the same |
+| Bound to the target's `usbstor.sys` | PASS | PASS |
+| `fc /b` read round trip | PASS | PASS |
+| Write and `fc /b` | PASS | PASS |
+| Unplug | PASS | PASS |
+| USB 2.0 row: `usb-storage` at 480 Mb/s, `fc /b` | PASS | PASS |
+| USB 2.0 rows of Phase 27 unchanged (matrix or soak) | PASS on Package B: the HID, storage and hub matrix groups and a 10-cycle soak (`out\phase28\primaries\report.md`) | PASS on Package B: the same |
+| Controller disable and enable | PASS | PASS |
+| Shutdown | PASS | PASS |
+
+Verdict: **29-V.1 passes on both primaries.** SuperSpeed storage passed
+again on the other eight install legs (the NT guests on Package A,
+`2f6030a`, Windows ME on Package B, `417199e`) and on Package B's ten
+`release`-flavour legs (`runs/run-28.md`, 28-V.1, clause 14 and 8a).
 
 ---
 

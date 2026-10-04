@@ -90,12 +90,15 @@ built, never executed.
 `034a119`: `test_sshub` (434 checks) and SuperSpeed rows in `test_topo`, over
 the vectors of 27-A.4.
 
+Run on `c9fcbde` (the merge of Phases 28 to 31 into `2.0.0.0`) with
+`test\run-host-tests.cmd`, MSVC 6.0, on development host A, 2026-10-04:
+
 | Host suite | Merged build |
 |---|---|
-| `test_sshub` | TBD(merged build) |
-| `test_topo`, SuperSpeed rows included | TBD(merged build) |
-| `test_hub` | TBD(merged build) |
-| `test_link` | TBD(merged build) |
+| `test_sshub` | 553 checks, 0 failures |
+| `test_topo`, SuperSpeed rows included | 2257 checks, 0 failures |
+| `test_hub` | 137 checks, 0 failures |
+| `test_link` | 124 checks, 0 failures |
 
 ---
 

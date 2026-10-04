@@ -283,23 +283,32 @@ read at both speeds under NUSB 3.3 and at SuperSpeed under SweetLow (above).
 
 ### The reading on the merged build
 
-Build: TBD (commit, `xhci98.sys` and `xhciuas.sys` SHA-256). Evidence
-directory: TBD.
+Build: `c0d8a51`, the first merged build of `p28-31-int`
+(`out\merged\pkg-c0d8a51\qemu`, x86 `xhci98.sys` `8e14104f...f2fd`,
+`xhciuas.sys` `6b62378f...d3d3`). Evidence directory: `out\phase31\v1-merged`
+(the subagent's `notes.md`, traces and screenshots), summarised in
+`out\phase28\primaries\report.md`. Read on development host A, 2026-10-04.
 
 | Clause | Windows 98 SE, NUSB 3.3 | Windows 2000 SP4 |
 |---|---|---|
-| SuperSpeed: enumerated at 5000 Mb/s, transport UAS | TBD(merged build) | TBD(merged build) |
-| SuperSpeed: bound to `xhciuas.sys`, LUN started, drive letter | TBD(merged build) | TBD(merged build) |
-| SuperSpeed: streams granted (count per endpoint) | TBD(merged build) | TBD(merged build) |
-| SuperSpeed: `fc /b` read and write round trip | TBD(merged build) | TBD(merged build) |
-| High Speed: enumerated at 480 Mb/s, transport UAS, streamless | TBD(merged build) | TBD(merged build) |
-| High Speed: bound to `xhciuas.sys`, LUN started, drive letter | TBD(merged build) | TBD(merged build) |
-| High Speed: `fc /b` read and write round trip | TBD(merged build) | TBD(merged build) |
-| Fresh install: prompts and restart as recorded | TBD(merged build) | TBD(merged build) |
-| After uninstall and re-plug, SuperSpeed: round trip | TBD(merged build) | TBD(merged build) |
-| After uninstall and re-plug, High Speed: round trip | TBD(merged build) | TBD(merged build) |
-| `XhciForceBulkOnly` set: the UAS-only device stays UAS, counted | TBD(merged build) | TBD(merged build) |
-| Unplug, no controller re-init, no stall storm | TBD(merged build) | TBD(merged build) |
+| SuperSpeed: enumerated at 5000 Mb/s, transport UAS | PASS (why 2) | PASS (why 2) |
+| SuperSpeed: bound to `xhciuas.sys`, LUN started, drive letter | PASS | PASS |
+| SuperSpeed: streams granted (count per endpoint) | PASS: 16 on `0x82`, `0x83` and `0x04` | PASS: the same |
+| SuperSpeed: `fc /b` read and write round trip | PASS | PASS |
+| High Speed: enumerated at 480 Mb/s, transport UAS, streamless | PASS | PASS |
+| High Speed: bound to `xhciuas.sys`, LUN started, drive letter | PASS | PASS |
+| High Speed: `fc /b` read and write round trip | PASS | PASS |
+| Fresh install: prompts and restart as recorded | PASS: no restart, no `.TMP` | PASS: the same |
+| After uninstall and re-plug, SuperSpeed: round trip | PASS | PASS |
+| After uninstall and re-plug, High Speed: round trip | PASS | PASS |
+| `XhciForceBulkOnly` set: the UAS-only device stays UAS, counted | PASS (why 3) | PASS (why 3) |
+| Unplug, no controller re-init, no stall storm | PASS: one init per boot | PASS: the same |
+
+Verdict: **31-V.1 passes on both primaries.** UAS at both speeds passed
+again on the other eight install legs, x86 and amd64 (the NT guests on
+Package A, `2f6030a`, Windows ME on Package B, `417199e`), and on Package
+B's ten `release`-flavour legs (`runs/run-28.md`, 28-V.1, clauses 13 and 15,
+8b and 9).
 
 ---
 
@@ -386,7 +395,7 @@ across a virtual replug:
 | Fresh install: UAS chosen (`Prot_62` ids), `xhciuas.sys` bound | PASS (steps 2 and 4: the transport line's why 1, the Found New Hardware wizard or Reinstall Driver to `e:\xhciuas.inf`, "xHCI98 USB Attached SCSI Storage" started) | PASS (step 1 (a): `00012101`, `PROT_62` compatible ids, upper filter `USBNTMAP.SYS`, the wizard to `D:\XHCIUAS.INF`) |
 | UAS round trip, `fc /b` | PASS | PASS |
 | Value set, uninstall and re-plug: Bulk-Only chosen (`Prot_50` ids), `usbstor.sys` bound | PASS (step 4: `00011400`, why 4, alternate 0; service `USBSTOR`, the `Prot_50` triple, no `Prot_62`) | PASS for the choice (`00011400`, NUSB's `USBSTOR.INF` bound); the port re-enumerated after the Remove, which is finding 2 below |
-| Bulk-Only round trip, `fc /b` | PASS (step 4: `USBSTOR\DISK&VEN_STOREJET&PROD_TRANSCEND` started, F:, `fc /b` "no differences", no port reset, no stall) | Code 10 in step 1, before the physical replug: GET_MAX_LUN done, the first bulk URB timed out, three port resets, the guest's interface frozen for about 5 minutes then back. The vehicle, as the clean Windows 2000 test shows; not retaken after a physical replug: TBD |
+| Bulk-Only round trip, `fc /b` | PASS (step 4: `USBSTOR\DISK&VEN_STOREJET&PROD_TRANSCEND` started, F:, `fc /b` "no differences", no port reset, no stall) | Code 10 in step 1, before the physical replug: GET_MAX_LUN done, the first bulk URB timed out, three port resets, the guest's interface frozen for about 5 minutes then back. The vehicle, as the clean Windows 2000 test shows; retaken on Package B after a physical replug: PASS ("The Windows 98 SE retake on Package B", below) |
 | Value cleared, uninstall and re-plug: back to UAS | PASS (steps 2 and 4) | PASS (step 3: the value 0 and a re-attach chose UAS, why 1, but the existing devnode kept `USBSTOR` and read Code 10, as expected of a devnode not re-matched; Device Manager Remove, unplug, replug, the wizard to `xhciuas` - "xHCI98 USB Attached SCSI Storage") |
 | UAS round trip after the switch back | PASS (in step 2 the LUN's volumes had no drive letter until a guest restart; in step 4 F: at once) | PASS |
 | Finding 1 settled (vehicle or driver) | **The vehicle.** With the bridge physically replugged and Bulk-Only its first setting, Bulk-Only passed; the earlier Code 10s followed a UAS session the virtual replug did not reset | n/a |
@@ -395,8 +404,25 @@ across a virtual replug:
 Verdict on Package A: **31-V.2 passes on Windows 2000**, every clause, on the
 clean test after the physical replug, and Windows 98 SE's control passes
 every clause but the Bulk-Only round trip, whose Code 10 was taken before the
-replug and is the vehicle's by the Windows 2000 reading. Package B:
-TBD(Package B), if the coordinator re-reads it there.
+replug and is the vehicle's by the Windows 2000 reading.
+
+### The Windows 98 SE retake on Package B
+
+The owner ordered the Windows 98 SE control's Bulk-Only clause retaken on
+Package B (`p28-31-int` at `417199e`, `pkg-417199e`, `qemu` x86) after one
+more physical replug of the StoreJet; taken on development host A,
+2026-10-04, on a Windows 98 SE guest under NUSB 3.3 (`out\phase31\v2-b98`:
+`launch.ps1`, traces `b1-debugcon.log` and `b2-debugcon.log` with their
+`usb-host` traces, screenshots `shots\b98-*`, the transfer kit `xfer\` with
+`FB0.REG` and `FB1.REG`). With `XhciForceBulkOnly` set before the attach,
+the bridge was chosen Bulk-Only (`port/transport/why/alternate=00011400`),
+the wizard installed it (`b98-24` to `b98-28`), F: appeared and `fc /b` of `RAND.BIN` was clean
+(`b98-29-dirF`, `b98-30-bot-fc`); with the value cleared and the device
+re-installed through the wizard to `xhciuas.inf`, UAS again (`00012101`) and
+`fc /b` clean (`b98-57-uas-fc`); `fc /b` of the installed drivers against
+the package clean (`b98-62-fc-drivers`), and a clean shutdown. Verdict:
+**PASS**, clauses (b) and (c); with Package A's (a), the control passes every
+clause, and 31-V.2 is done.
 
 ---
 
@@ -451,9 +477,13 @@ drive, the drive shows Code 2 (NTKERN.VXD device loader(s) could not load).
 ME has not yet copied its own USBNTMAP.SYS and USBMPHLP.PDR, which it
 installs only when its first ordinary USB stick is plugged in. To recover,
 plug in any ordinary USB stick once, then unplug the UAS drive and plug it
-back in." **The recovery is unmeasured**: Code 2, then an ordinary stick,
-then the UAS drive replugged and working, is the ME leg's on Package B -
-TODO(28-V.1, ME on Package B).
+back in." **The recovery was measured on Package B** (`417199e`; ME's
+official 28-V.1 leg, clause 16, `out\phase28\v1b\me\report.md`): on a fresh
+ME the UAS drive first showed Code 2; an ordinary stick then installed
+silently, with no CD and no restart, and placed the three files; the UAS
+drive unplugged and plugged back on the same port worked, a round trip
+clean - the replug alone, no Remove and no restart (`runs/run-28.md`,
+"The reading on the merged build, `qemu` flavour").
 
 ---
 
