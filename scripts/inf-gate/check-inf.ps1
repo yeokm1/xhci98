@@ -240,9 +240,15 @@ $ErrorActionPreference = "Stop"
 #                          which the OS's own usbhub.sys claims on every NT
 #                          target (roadmap-hcd.md, decisions table; design
 #                          record 13 section 8).
+#   HubIds                 the hardware ids of the external hubs the HCD
+#                          presents as devnodes since task 33.4 (design
+#                          record 13 section 10.11): a model with one is a
+#                          HUB install, which copies nothing (HCD-HUBCOPY),
+#                          and the controller-only rules do not apply to it.
 #
 $prod = @{ VerHeader = "xhci_version.h"; VerPrefix = "XHCI"; RcName = "xhci98.rc";
-           Binary = "xhci98.sys"; RootHubId = "XHCI98\ROOT_HUB" }
+           Binary = "xhci98.sys"; RootHubId = "XHCI98\ROOT_HUB";
+           HubIds = @("XHCI98\HUB", "XHCI98\HUB30") }
 
 $script:failures = @()
 $script:warnings = @()
@@ -761,6 +767,7 @@ foreach ($ms in $modelSections) {
         }
         $role = "controller"
         if ($prod.RootHubId -ne "" -and $fields[1] -ieq $prod.RootHubId) { $role = "roothub" }
+        foreach ($hid in $prod.HubIds) { if ($fields[1] -ieq $hid) { $role = "hub" } }
         [void]$models.Add(@{ Section = $fields[0]; Id = $fields[1]; Desc = $desc; Line = $e.Line; Decoration = $ms.Decoration; Role = $role; Ids = @($fields | Select-Object -Skip 1) })
     }
 }
@@ -797,6 +804,62 @@ foreach ($m in $models) {
     foreach ($id in $m.Ids) {
         if ($id -match '^USB\\ROOT_HUB') {
             Add-Failure "HCD-ROOTHUB" ("models line {0} matches '{1}', which is the OS hub driver's id for usbport's root hubs. The HCD's root hub is '{2}'." -f $m.Line, $id, $prod.RootHubId)
+        }
+    }
+}
+
+#
+# ---- HCD-HUB: external hubs as devnodes (task 33.4) ----------------------
+#
+# Since 2.1.0.0 the bus presents every hub it serves as a devnode under a
+# project-owned id - XHCI98\HUB, or XHCI98\HUB30 for a USB 3 hub's SuperSpeed
+# half - bound to xhci98.sys again (design record 13 section 10.11). A models
+# section without either leaves that kind of hub a devnode with no driver
+# on its path. Every id on a hub's line must be the project's own, and no
+# line anywhere may name a Microsoft hub id: USB\CLASS_09 (and its forms),
+# USB\HUBCLASS, USB\USB20_HUB and USB\USB30_HUB are the OS hub drivers' on
+# every target (section 10.11 lists the sweep), and a model for one would
+# compete with usbhub.sys for every other stack's hubs on the machine.
+#
+foreach ($ms in $modelSections) {
+    $here = @($models | Where-Object { $_.Decoration -eq $ms.Decoration })
+    foreach ($hid in $prod.HubIds) {
+        if (@($here | Where-Object { $_.Role -eq "hub" -and $_.Id -ieq $hid }).Count -eq 0) {
+            Add-Failure "HCD-HUB" ("models section [{0}] has no hub model under '{1}'. The HCD presents each hub it serves as a devnode under that id and binds it to itself through this INF; without the model that hub is a devnode with no driver on this path." -f $ms.Section, $hid)
+        }
+    }
+}
+foreach ($m in $models) {
+    foreach ($id in $m.Ids) {
+        if ($id -match '^USB\\(CLASS_09|HUBCLASS|USB20_HUB|USB30_HUB)') {
+            Add-Failure "HCD-HUB" ("models line {0} matches '{1}', which is the OS hub driver's id. The HCD's hubs are '{2}'." -f $m.Line, $id, ($prod.HubIds -join "' and '"))
+        }
+        if ($m.Role -eq "hub" -and $id -notmatch '^XHCI98\\') {
+            Add-Failure "HCD-HUB" ("hub models line {0} carries '{1}'. A hub's ids are the project's own, under XHCI98\, so no OS INF can match the devnode and no other line here can match an OS hub." -f $m.Line, $id)
+        }
+    }
+}
+
+#
+# ---- HCD-HUBCOPY: a hub install copies nothing (task 33.4) --------------
+#
+# A hub devnode exists only under a running xhci98.sys, so the binary is on
+# disk and loaded before any hub section runs, and a hub plugged in months
+# after the install must not send the setup engine looking for the media it
+# came from: Windows 98's 16-bit engine and NT 5.x's setupapi both resolve a
+# source for every queued copy and ask for it when it is gone. So every hub
+# install section, on every path, has no CopyFiles at all, and the loader
+# value or service binary it writes names the driver the controller's own
+# install delivers - which is why PATH-W98's and PATH-NT's "its own
+# CopyFiles delivers it" checks stand aside for this role.
+#
+foreach ($m in @($models | Where-Object { $_.Role -eq "hub" })) {
+    foreach ($ap in @(Get-ModelPaths $m)) {
+        $install = $m.Section + $ap.Suffix
+        if (-not (Test-SectionExists $inf $install)) { continue }  # PATH-* said so
+        $hubCopy = @(Get-Directive $inf $install "CopyFiles")
+        if ($hubCopy.Count -gt 0) {
+            Add-Failure "HCD-HUBCOPY" ("the {0} hub install [{1}] has CopyFiles={2}. A hub section copies nothing: its devnode exists only under a running {3}, and a copy would ask a user who plugs a hub in later for the original media." -f $ap.Os, $install, ($hubCopy -join ','), $prod.Binary)
         }
     }
 }
@@ -885,6 +948,14 @@ foreach ($m in $models) {
                     }
                 }
                 foreach ($d in $ntmpFiles) {
+                    if ($m.Role -eq "hub") {
+                        # HCD-HUBCOPY: a hub copies nothing and loads the
+                        # driver the controller's install delivered.
+                        if ($d -ine $prod.Binary) {
+                            Add-Failure "HCD-HUBCOPY" ("[{0}] sets NTMPDriver to '{1}'. A hub section copies nothing, so it may name only {2}, which the controller's install delivers." -f $base, $d, $prod.Binary)
+                        }
+                        continue
+                    }
                     if (-not $w98Delivered.Contains($d.ToLowerInvariant())) {
                         Add-Failure "PATH-W98" ("[{0}] sets NTMPDriver to '{1}' but its own CopyFiles delivers ({2}). Windows 98 would write the loader value and never copy the file it names; the device shows a yellow bang with no diagnostic." -f $base, $d, ($w98Delivered -join ', '))
                     }
@@ -996,7 +1067,13 @@ foreach ($m in $models) {
                         if ($dst -ne "") { [void]$delivered.Add($dst.ToLowerInvariant()) }
                     }
                 }
-                if (-not $delivered.Contains($svcFile.ToLowerInvariant())) {
+                if ($m.Role -eq "hub") {
+                    # HCD-HUBCOPY: a hub copies nothing and runs the
+                    # controller's service binary.
+                    if ($svcFile -ine $prod.Binary) {
+                        Add-Failure "HCD-HUBCOPY" ("[{0}] ServiceBinary is '{1}'. A hub section copies nothing, so its service may run only {2}, which the controller's install delivers." -f $svcInstall, $svcFile, $prod.Binary)
+                    }
+                } elseif (-not $delivered.Contains($svcFile.ToLowerInvariant())) {
                     Add-Failure "PATH-NT" ("[{0}] ServiceBinary is '{1}' but the CopyFiles of [{2}] delivers ({3}). Win2000 would create a service pointing at a file the install never copied." -f $svcInstall, $svcFile, $nt, ($delivered -join ', '))
                 }
             }
@@ -1162,7 +1239,7 @@ function Get-AddRegValues {
 }
 
 foreach ($m in $models) {
-    if ($m.Role -eq "roothub") { continue }    # controller-only rule; the root hub is HCD-ROOTHUB's
+    if ($m.Role -ne "controller") { continue }    # controller-only rule; the hubs are HCD-ROOTHUB's and HCD-HUB's
     $paths = @(Get-ModelPaths $m | ForEach-Object {
         @{ Name = $_.Os; Install = ($m.Section + $_.Suffix) }
     })
@@ -1275,7 +1352,7 @@ $propController = @{
 }
 
 foreach ($m in $models) {
-    if ($m.Role -eq "roothub") { continue }    # controller-only rule; the root hub is HCD-ROOTHUB's
+    if ($m.Role -ne "controller") { continue }    # controller-only rule; the hubs are HCD-ROOTHUB's and HCD-HUB's
     foreach ($p in @(Get-ModelPaths $m)) {
         $install = $m.Section + $p.Suffix
         if (-not (Test-SectionExists $inf $install)) { continue }  # PATH-* said so
@@ -1343,7 +1420,9 @@ $hubPage = @{
     "9x" = @{ Name = "EnumPropPages";   Data = '"sysclass.dll,USBHubPropPage"' }
     "nt" = @{ Name = "EnumPropPages32"; Data = '"usbui.dll,USBHubPropPageProvider"' }
 }
-foreach ($m in @($models | Where-Object { $_.Role -eq "roothub" })) {
+# Since task 33.4 the external hubs' installs too: each hub devnode has the
+# Power tab the root hub has, from the same providers.
+foreach ($m in @($models | Where-Object { $_.Role -eq "roothub" -or $_.Role -eq "hub" })) {
     foreach ($p in @(Get-ModelPaths $m)) {
         $install = $m.Section + $p.Suffix
         if (-not (Test-SectionExists $inf $install)) { continue }  # PATH-* said so
@@ -1750,7 +1829,7 @@ foreach ($defaultSection in $rightClickSections) {
 }
 
 foreach ($m in $models) {
-    if ($m.Role -eq "roothub") { continue }    # controller-only rule; the root hub is HCD-ROOTHUB's
+    if ($m.Role -ne "controller") { continue }    # controller-only rule; the hubs are HCD-ROOTHUB's and HCD-HUB's
     $base = $m.Section
     $missing = @(Get-ModelPaths $m | Where-Object { -not (Test-SectionExists $inf ($base + $_.Suffix)) })
     if ($missing.Count -gt 0) {
@@ -1852,7 +1931,7 @@ foreach ($m in $models) {
 # the self-test probed it a root-hub section fetching usbhub.sys passed - and
 # that is the likeliest place for an editor to put the hub driver back.
 #
-foreach ($m in @($models | Where-Object { $_.Role -eq "roothub" })) {
+foreach ($m in @($models | Where-Object { $_.Role -eq "roothub" -or $_.Role -eq "hub" })) {
     foreach ($p in @(Get-ModelPaths $m)) {
         $install = $m.Section + $p.Suffix
         if (-not (Test-SectionExists $inf $install)) { continue }  # PATH-* said so

@@ -1641,15 +1641,25 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
 
     case XHCI_ENUM_ACT_CREATE_PDO:
         if (p->Device->DeviceDesc[4] == XHCI_HUB_CLASS) {
-            /* A hub is the bus's and never a PDO (section 10.3): brought
-             * up here, it is Present with nothing for PnP to start, so the
-             * machine is told its PDO exists and has started at once. A
-             * SuperSpeed hub is one too (30-A.1); its USB 2.0 half is a
-             * separate hub on the companion port. */
+            /* A hub is the bus's (section 10.3): brought up here, it is
+             * Present with nothing PnP must start before the bus serves
+             * it, so the machine is told its PDO exists and has started at
+             * once. A SuperSpeed hub is one too (30-A.1); its USB 2.0 half
+             * is a separate hub on the companion port. Since task 33.4
+             * (section 10.11) each half is also presented as a devnode, a
+             * PDO bound to this driver as a hub FDO, created now - after
+             * the hub's own bring-up and before any port of it is looked
+             * at, so every device behind it names it as its parent. A PDO
+             * that cannot be created costs only the presentation: the
+             * devices behind it are presented under the next hub up. */
             ok = HcdHubStart(hc, p, p->Device);
             hcdEventInit(next, XHCI_ENUM_EV_PDO_CREATED, ok);
             if (!ok) {
                 return 1;
+            }
+            if (!NT_SUCCESS(HcdDevicePdoCreate(hc, p->Device))) {
+                XHCI_DBG_VALUE("hcd: hub PDO not created, location",
+                               p->PortId);
             }
             /* The port enumerated: a later give-up of it starts its re-arm
              * waits from the first (hcd_hub.c; Codex review of the Phase

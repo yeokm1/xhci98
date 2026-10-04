@@ -105,6 +105,24 @@ servicevalue|Windows XP x64|xhci98|Xhci.AddService|StartType|3
 servicevalue|Windows XP x64|xhci98|Xhci.AddService|ErrorControl|1
 servicevalue|Windows XP x64|xhci98|Xhci.AddService|ServiceBinary|%12%\xhci98.sys
 servicevalue|Windows XP x64|xhci98|Xhci.AddService|LoadOrderGroup|Base
+path|Windows XP x64|device install|Hub.Dev.NTamd64
+reg|Windows XP x64|RootHub.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBHubPropPageProvider"|remove
+service|Windows XP x64|xhci98|Xhci.AddService|0x00000002|remove
+servicevalue|Windows XP x64|xhci98|Xhci.AddService|DisplayName|%XhciSvcDesc%
+servicevalue|Windows XP x64|xhci98|Xhci.AddService|ServiceType|1
+servicevalue|Windows XP x64|xhci98|Xhci.AddService|StartType|3
+servicevalue|Windows XP x64|xhci98|Xhci.AddService|ErrorControl|1
+servicevalue|Windows XP x64|xhci98|Xhci.AddService|ServiceBinary|%12%\xhci98.sys
+servicevalue|Windows XP x64|xhci98|Xhci.AddService|LoadOrderGroup|Base
+path|Windows XP x64|device install|Hub.Dev.NTamd64
+reg|Windows XP x64|RootHub.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBHubPropPageProvider"|remove
+service|Windows XP x64|xhci98|Xhci.AddService|0x00000002|remove
+servicevalue|Windows XP x64|xhci98|Xhci.AddService|DisplayName|%XhciSvcDesc%
+servicevalue|Windows XP x64|xhci98|Xhci.AddService|ServiceType|1
+servicevalue|Windows XP x64|xhci98|Xhci.AddService|StartType|3
+servicevalue|Windows XP x64|xhci98|Xhci.AddService|ErrorControl|1
+servicevalue|Windows XP x64|xhci98|Xhci.AddService|ServiceBinary|%12%\xhci98.sys
+servicevalue|Windows XP x64|xhci98|Xhci.AddService|LoadOrderGroup|Base
 path|Windows Vista and 7 x64|device install|Xhci.Dev6.NTamd64
 file|Windows Vista and 7 x64|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys||0|remove
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciLogVerbosity|0x00010001|0|remove
@@ -121,6 +139,24 @@ servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|ServiceBinary|%12%\x
 servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|LoadOrderGroup|Base
 path|Windows Vista and 7 x64|device install|RootHub.Dev6.NTamd64
 file|Windows Vista and 7 x64|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys||0|remove
+reg|Windows Vista and 7 x64|RootHub.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBHubPropPageProvider"|remove
+service|Windows Vista and 7 x64|xhci98|Xhci.AddService|0x00000002|remove
+servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|DisplayName|%XhciSvcDesc%
+servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|ServiceType|1
+servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|StartType|3
+servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|ErrorControl|1
+servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|ServiceBinary|%12%\xhci98.sys
+servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|LoadOrderGroup|Base
+path|Windows Vista and 7 x64|device install|Hub.Dev6.NTamd64
+reg|Windows Vista and 7 x64|RootHub.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBHubPropPageProvider"|remove
+service|Windows Vista and 7 x64|xhci98|Xhci.AddService|0x00000002|remove
+servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|DisplayName|%XhciSvcDesc%
+servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|ServiceType|1
+servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|StartType|3
+servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|ErrorControl|1
+servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|ServiceBinary|%12%\xhci98.sys
+servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|LoadOrderGroup|Base
+path|Windows Vista and 7 x64|device install|Hub.Dev6.NTamd64
 reg|Windows Vista and 7 x64|RootHub.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBHubPropPageProvider"|remove
 service|Windows Vista and 7 x64|xhci98|Xhci.AddService|0x00000002|remove
 servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|DisplayName|%XhciSvcDesc%

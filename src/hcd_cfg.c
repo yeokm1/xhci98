@@ -314,7 +314,9 @@ static ULONG hcdCfgFault(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
                        dev->SlotId);
         return 0;
     }
-    if (dev->Pdo != NULL &&
+    /* A hub's own PDO (task 33.4) is presentation only: a hub's failed
+     * command keeps the reset it always requested. */
+    if (dev->Pdo != NULL && dev->Hub == NULL &&
         !HcdHubPathPresent(hc, &hc->Ports[dev->Location - 1])) {
         XHCI_DBG_VALUE("hcd: command failed on a departing device, "
                        "cycling location", dev->Location);

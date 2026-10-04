@@ -292,13 +292,17 @@ child, the root-hub PDO, under a **project-owned** hardware id (never
 `USB\ROOT_HUB`, which the OS's own `usbhub.sys` would claim); bound to that
 PDO by its own INF, it is the root hub's FDO too, enumerates every device on
 the bus and creates a PDO per device, or per function of a composite device,
-with the id strings each target's class INFs match. External hubs are
-objects inside the bus and get no PDO.
+with the id strings each target's class INFs match. External hubs are run
+by the bus and, since `2.1.0.0` (roadmap-hcd task 33.4, design record 13
+section 10.11), also presented as devnodes under project-owned ids
+(`XHCI98\HUB`, `XHCI98\HUB30`) bound to `xhci98.sys` once more, with the
+devices behind each nested beneath it.
 
 ```
   [hidusb.sys, usbstor.sys, usbaudio.sys, vendor drivers, xhciuas.sys]
        |  (IOCTL_INTERNAL_USB_SUBMIT_URB and its siblings, per target)
   [device / function PDOs]   <- created by xhci98.sys as the root hub's FDO
+                                 (or an external hub's FDO, its own third role)
   [root-hub PDO]             <- created by xhci98.sys as the controller's FDO
   [xhci98.sys]               <- THIS DRIVER: controller, root hub, hubs,
        |                        composite splitting, URB dispatch, the door

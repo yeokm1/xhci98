@@ -37,7 +37,11 @@
 > in `hcd_cfg.c` and reach every stream's pipe through `hcd_io.c`. Task 31-A.3
 > adds the pure `xhci_xport.c` / `xhci_xport.h` (the storage transport policy:
 > Bulk-Only or UAS for an interface offering either, and the ids that follow;
-> host suite `test_xport`), applied in `hcd_pdo.c`. The tables below are the
+> host suite `test_xport`), applied in `hcd_pdo.c`. Task 33.4 adds `hcd_hubfdo.c`
+> (an external hub's FDO, the third PnP role: each hub the bus serves is a
+> devnode under `XHCI98\HUB` or `XHCI98\HUB30`, design record 13 section 10.11)
+> and the hub PDO's pure half in `xhci_hub.c` (its ids, the presented parent,
+> node information; host suite `test_hub`). The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name
