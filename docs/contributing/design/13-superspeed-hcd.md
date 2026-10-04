@@ -719,7 +719,8 @@ invalidation its PDO's creation makes.
   port's machine at rest (`XhciEnumAtRest`), no SuperSpeed root link whose
   warm reset (29-A.2) is still read in progress (`PORTSC.PR`; the port's
   inspection is owed again meanwhile and feeds nothing; a reset still in
-  progress past twice its own 1 s wait is the controller's failure, its
+  progress past twice its own 1 s wait (a relative timer the thread alone
+  arms and cancels as it leaves) is the controller's failure, its
   recovery asked for as for an unreadable port; `LinkRecovering`, rounds 2
   and 3), no
   send-back of the window in flight (`XhciEnumHoldInFlight`). A hub port

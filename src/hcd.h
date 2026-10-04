@@ -650,7 +650,6 @@ typedef struct _HCD_PORT {
      * failures in a row, its look owed again up to HCD_HUB_LOOK_TRIES.
      * Thread only. */
     ULONG LinkRecovering;
-    ULONG LinkRecoverStart;        /* HcdEnumSettleClock at the reset   */
     ULONG LookFails;
 } HCD_PORT, *PHCD_PORT;
 
@@ -1049,6 +1048,10 @@ typedef struct _HCD_CONTROLLER {
     ULONG SettleDeferrals;
     ULONG SettleLastMs;
     ULONG SettleDeferredNow;        /* a port deferred; thread only       */
+    /* A root link's warm reset still in progress past this is the
+     * controller's failure (hcd_enum.c): armed by the thread alone and
+     * cancelled as it leaves (hcd_ctl.c). Initialised at AddDevice. */
+    KTIMER LinkRecoverTimer;
     struct {
         ULONG RootPort;             /* 0: the entry is free               */
         ULONG Route;                /* the hub's own Route String         */

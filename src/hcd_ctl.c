@@ -343,6 +343,7 @@ VOID HcdControllerInitObjects(PHCD_CONTROLLER hc)
     KeInitializeEvent(&hc->XferDoneEvent, NotificationEvent, FALSE);
     KeInitializeEvent(&hc->EnumDetachDone, NotificationEvent, TRUE);
     KeInitializeEvent(&hc->DoorGate, SynchronizationEvent, TRUE);
+    KeInitializeTimer(&hc->LinkRecoverTimer);
 }
 
 /*
@@ -499,6 +500,9 @@ static VOID NTAPI hcdThread(PVOID Context)
         HcdLogFlush(hc, XHCI_LOG_REASON_PERIODIC, 0);
     }
     XHCI_DBG_TEXT("hcd: controller thread leaving its loop");
+    /* The only arming party leaves: no timer of the controller's stays
+     * queued past its storage (task 33.3). */
+    (VOID)KeCancelTimer(&hc->LinkRecoverTimer);
     /* No root hub waits on a thread that is gone (HcdEnumDetach). */
     (VOID)KeSetEvent(&hc->EnumDetachDone, IO_NO_INCREMENT, FALSE);
     (VOID)KeSetEvent(&hc->ThreadExited, IO_NO_INCREMENT, FALSE);

@@ -2168,6 +2168,7 @@ static VOID hcdHoldRelease(PHCD_CONTROLLER hc, PHCD_HOLD h)
  */
 static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
 {
+    LARGE_INTEGER due;
     PXHCI_EXTENSION ext;
     XHCI_LINK_ACTION act;
     PHCD_HOLD h;
@@ -2186,16 +2187,15 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
      * nothing is acknowledged or fed until it reads otherwise, so neither a
      * first answer nor the machine takes a link still training for settled
      * (Codex review of 33.3, round 2, finding 1). A reset still in progress
-     * past twice its own wait (HCD_WARM_RESET_WAIT_MS, by the clock and, a
-     * clock set backwards notwithstanding, by passes) is the controller's
+     * past twice its own wait (HCD_WARM_RESET_WAIT_MS, by a relative timer,
+     * and by passes as a fallback) is the controller's
      * failure, as an unreadable port is: its recovery is asked for once and
      * the inspection stays owed - never an ordinary inspection of a port
      * still in reset (round 3). */
     if (p->LinkRecovering != 0 && (portsc & XHCI_PORTSC_PR) != 0) {
         if (p->LinkRecovering != HCD_LINK_RECOVERY_FAILED) {
             p->LinkRecovering++;
-            if (XhciEnumElapsedMs(p->LinkRecoverStart, HcdEnumSettleClock()) >=
-                    2UL * HCD_WARM_RESET_WAIT_MS ||
+            if (hcdTimerFired(&hc->LinkRecoverTimer) ||
                 p->LinkRecovering >= HCD_LINK_RECOVERY_PASSES) {
                 p->LinkRecovering = HCD_LINK_RECOVERY_FAILED;
                 XHCI_DBG_VALUE("hcd: warm reset never ended, recovery, port",
@@ -2252,7 +2252,12 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
      * (task 33.3; Codex review of 33.3, round 1, finding 2). */
     p->LinkRecovering = (act.Kind == XHCI_LINK_ACT_WARM_RESET) ? 1UL : 0UL;
     if (p->LinkRecovering) {
-        p->LinkRecoverStart = HcdEnumSettleClock();
+        /* One relative timer for every root link in recovery, re-armed by
+         * each warm reset (a later one extends the others' bound), armed
+         * only here and cancelled when the thread leaves (hcd_ctl.c), so
+         * none outlives the controller's storage (round 4). */
+        HcdRelativeMs(&due, 2UL * HCD_WARM_RESET_WAIT_MS);
+        (VOID)KeSetTimer(&hc->LinkRecoverTimer, due, NULL);
     }
     switch (act.Kind) {
     case XHCI_LINK_ACT_WARM_RESET:
