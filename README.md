@@ -51,8 +51,6 @@ The [roadmap](docs/contributing/roadmap-hcd.md) has the phases this took and [de
 
 My ThinkPad P14s Gen 1 under Windows 98 SE with NUSB: the MSSU10-128GSR flash drive at SuperSpeed through `xhciuas.sys`, with Device Manager showing the controller, its root hub and the UAS storage device. ATTO Disk Benchmark (Direct I/O) reads about 205 to 217 MB/s write and 198 to 224 MB/s read from 512 KB transfers upward, against about 34 MB/s for `1.2.0.0` at High Speed on the same drive.
 
-This was an informal run of mine on real hardware, not one of the release's bench readings.
-
 Some things to know:
 
 - A UAS-capable drive gets UAS, and anything else gets Windows' own `usbstor.sys` (Bulk-Only), at whatever speed it connects. A drive that offers both can be forced to Bulk-Only (see "Tuning" below).
