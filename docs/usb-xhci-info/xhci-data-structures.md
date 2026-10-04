@@ -1791,9 +1791,11 @@ the controller's next start.
   - a RESET_PORT whose link retrains to another rank fails, so the device
     is enumerated afresh rather than readdressed with a stale pair;
   - when either rank is unknown - PORTLI unreadable, or an SSP hub whose
-    extended status was not read - both stay 0, the spec-safe default: 0 is
-    right on every path whose links rank alike, which every Gen 1x1 hub's
-    do, and a nonzero pair would claim an isolation that may not exist;
+    extended status was not read - both stay 0. That is a best-effort
+    fallback, not a rule the specification gives: it invents no boundary
+    and is right on every path whose links rank alike, which every Gen 1x1
+    hub's do, but it still leaves both 0 where an unobserved boundary
+    exists, an unresolved case;
   - a USB 2.0 device behind a USB 3 hub's USB 2.0 half is unchanged: its TT
     fields are the topology graph's.
 - Max Exit Latency 0: "a Max Exit Latency value of '0' indicates to the xHC
@@ -2315,7 +2317,9 @@ the values are transcribed so a later phase starts from them.
   gives (design record 02), Speed its PSIV (11.6), and Parent Hub Slot ID
   and Port Number 0 - except a lower-rank device behind a hub whose own
   upstream link outranks it, which gets the hub's Slot ID and port as xHCI
-  Table 6-6 requires (section 10.5; implemented, host vectors only).
+  Table 6-6 requires, and a device that ranks the same as its hub, which
+  inherits the hub's own pair, the boundary being further up (section 10.5;
+  implemented, host vectors only).
 - Its two halves are two hubs of the bus. Nothing passes between them; a
   counter (`superspeed hubs: halves paired`) records that a SuperSpeed hub
   and a USB 2.0 hub of the same vendor sit at the same tier and route on a

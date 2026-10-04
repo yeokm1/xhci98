@@ -376,11 +376,13 @@ ULONG XhciSsHubChildRank(ULONG hubSsp, const XHCI_SSHUB_LINK *link);
  * 110's hub whose downstream port isolates the signalling between its
  * upstream and downstream ports. `hubRank` is the hub's own upstream link,
  * `childRank` the device's. 1 when both are known and the hub's ranks
- * higher; 0 otherwise, which leaves both fields 0. That is the spec-safe
- * default when either rank is unknown: 0 is right for every path whose
- * links rank alike, which every Gen 1x1 hub's do, while a nonzero pair
- * tells the xHC the hub isolates a link it may not; the device that would
- * have needed the pair is left exactly as before this rule existed.
+ * higher, 0 otherwise - and then this hub is not the boundary, though one
+ * further up may be (XhciSsHubParentOf). With either rank unknown the
+ * answer is 0, a best-effort fallback rather than a rule the specification
+ * gives: it invents no boundary, and is right on every path whose links
+ * rank alike, which every Gen 1x1 hub's do, but it still leaves both fields
+ * 0 where an unobserved boundary exists - an unresolved case, and the one
+ * this driver had for every device before this rule.
  */
 ULONG XhciSsParentNeeded(ULONG hubRank, ULONG childRank);
 

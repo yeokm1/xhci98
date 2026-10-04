@@ -1103,25 +1103,6 @@ static ULONG hcdPortReset(PHCD_CONTROLLER hc, PHCD_PORT p,
 }
 
 /*
- * RESET_PORT's hardware half (hcd_cfg.c), on a slot that is kept. The order
- * is the spec's: the Reset Device Command "is used by software to inform the
- * xHC that the USB Device associated with a Device Slot has been Reset (by
- * ... setting the Root Hub port PR flag ...)", and "Undefined behavior may
- * occur if this command is executed and the device associated with it is not
- * successfully reset" (xHCI 1.2 section 4.6.11; xhci-data-structures.md,
- * "Which Slot State each command requires"). So the port reset comes first;
- * Reset Device then takes the slot from Addressed or Configured to Default,
- * with USB address 0, Context Entries 1 and every endpoint but EP0 Disabled;
- * and Address Device with BSR = 0, legal from Default (4.6.5), gives the
- * device its address again on an EP0 ring started afresh. The Output Device
- * Context and its DCBAA entry stay as they are: unlike hcdAddress's slot,
- * this one is the controller's already. The caller has every endpoint at
- * rest and its pipe paused ("Software should stop all endpoint activity
- * before issuing a Reset Device Command", 4.6.11), EP0's queue empty. Returns
- * 0 on any failure; a command that never answered has requested the
- * controller reset. Thread only, powered.
- */
-/*
  * A SuperSpeed device's link rank as the port's latest reset left it: on a
  * root port from PORTSC's speed, its PSI rate and PORTLI (XhciSsRootRank),
  * behind a SuperSpeed hub from the extended status that reset re-read
@@ -1166,6 +1147,25 @@ static ULONG hcdLinkRankNow(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     return XhciSsRootRank(kbps, XhciReadOp(ext, XHCI_OP_PORTLI(dev->Port)));
 }
 
+/*
+ * RESET_PORT's hardware half (hcd_cfg.c), on a slot that is kept. The order
+ * is the spec's: the Reset Device Command "is used by software to inform the
+ * xHC that the USB Device associated with a Device Slot has been Reset (by
+ * ... setting the Root Hub port PR flag ...)", and "Undefined behavior may
+ * occur if this command is executed and the device associated with it is not
+ * successfully reset" (xHCI 1.2 section 4.6.11; xhci-data-structures.md,
+ * "Which Slot State each command requires"). So the port reset comes first;
+ * Reset Device then takes the slot from Addressed or Configured to Default,
+ * with USB address 0, Context Entries 1 and every endpoint but EP0 Disabled;
+ * and Address Device with BSR = 0, legal from Default (4.6.5), gives the
+ * device its address again on an EP0 ring started afresh. The Output Device
+ * Context and its DCBAA entry stay as they are: unlike hcdAddress's slot,
+ * this one is the controller's already. The caller has every endpoint at
+ * rest and its pipe paused ("Software should stop all endpoint activity
+ * before issuing a Reset Device Command", 4.6.11), EP0's queue empty. Returns
+ * 0 on any failure; a command that never answered has requested the
+ * controller reset. Thread only, powered.
+ */
 ULONG HcdThreadReaddress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     PXHCI_EXTENSION ext;
