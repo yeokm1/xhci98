@@ -1516,6 +1516,61 @@ try {
     Remove-Variable -Name Version, Flavor, ReleasesDir, UploadDir -ErrorAction SilentlyContinue
     Remove-Variable -Name boundArgs -Scope Script -ErrorAction SilentlyContinue
 
+    # --- a draft is refused: no TODO(...) or TBD reaches a user -------------
+    #
+    # Roadmap task 32.3. The 2.0.0.0 release notes, readme template and
+    # history entry were drafted ahead of their readings, each owed reading
+    # tagged TODO(...) or TBD, and make-release.ps1 refuses a cut while any is
+    # left in the history entry, the release notes or the rendered readme.
+    # Like the repair-command case above, the matcher is EXECUTED: its body is
+    # loaded from make-release.ps1's text and driven with fixtures. Then the
+    # two call sites are held to the order that makes the refusal useful -
+    # the source check before the build, the readme check before the readme
+    # is written, both long before the publish swap.
+    Write-Step "a draft marker in the history entry, release notes or readme refuses the cut"
+    $fnAt = $releaserText.IndexOf('function Find-DraftMarkers')
+    Assert-True ($fnAt -ge 0) "make-release.ps1 no longer has Find-DraftMarkers, so a cut can publish a TODO(...) line."
+    if ($fnAt -ge 0) {
+        $fnEnd = $releaserText.IndexOf("`n}", $fnAt)
+        Invoke-Expression $releaserText.Substring($fnAt, $fnEnd - $fnAt + 2)
+        $draftFixture = @(
+            "A finished sentence.",
+            "Audio at a root port: TODO(bench).",
+            "## 9.9.9.9 - TBD",
+            "lower-case todo( and TBDx and xTBD are prose, not markers",
+            "Another finished sentence."
+        )
+        $found = @(Find-DraftMarkers -Lines $draftFixture -Label "fixture")
+        Assert-True ($found.Count -eq 2) ("Find-DraftMarkers found " + $found.Count + " marker(s) in the fixture, not 2: " + ($found -join " | "))
+        Assert-True ($found.Count -ge 1 -and $found[0] -eq "fixture line 2: Audio at a root port: TODO(bench).") ("the first hit is not reported with its label and line: " + ($found -join " | "))
+        Assert-True ($found.Count -ge 2 -and $found[1] -eq "fixture line 3: ## 9.9.9.9 - TBD") ("a TBD heading is not reported: " + ($found -join " | "))
+        $clean = @(Find-DraftMarkers -Lines @("Validated.", "Nothing owed here.") -Label "clean")
+        Assert-True ($clean.Count -eq 0) ("Find-DraftMarkers reported a clean text as a draft: " + ($clean -join " | "))
+        $empty = @(Find-DraftMarkers -Lines @() -Label "empty")
+        Assert-True ($empty.Count -eq 0) "Find-DraftMarkers reported markers in an empty text."
+    }
+    $draftMarks = @(
+        @{ Name = "the history and release-notes draft check"; Find = '$draftHits = @(Find-DraftMarkers -Lines $historyLines' },
+        @{ Name = "the make-package call";                     Find = '& powershell.exe @pkgArgs' },
+        @{ Name = "the rendered-readme draft check";           Find = '$readmeDraft = @(Find-DraftMarkers -Lines ($readme' },
+        @{ Name = "the readme write";                          Find = 'Write-GeneratedText -Path (Join-Path $destRoot "readme.txt")' },
+        @{ Name = "the publish swap";                          Find = 'Move-Item -LiteralPath $destRoot -Destination $finalRoot' }
+    )
+    $draftAt = @()
+    foreach ($m in $draftMarks) {
+        $i = $releaserText.IndexOf($m.Find)
+        Assert-True ($i -ge 0) ("make-release.ps1 no longer contains " + $m.Name + " as this test recognises it.")
+        $draftAt += $i
+    }
+    if (@($draftAt | Where-Object { $_ -lt 0 }).Count -eq 0) {
+        for ($i = 1; $i -lt $draftMarks.Count; $i++) {
+            Assert-True ($draftAt[$i - 1] -lt $draftAt[$i]) `
+                ("$($draftMarks[$i - 1].Name) must come before $($draftMarks[$i].Name) in make-release.ps1.")
+        }
+    }
+    Assert-True ($releaserText.Contains('Join-Path $repo "docs\using\release-notes.md"')) `
+        "make-release.ps1's draft check no longer reads docs\using\release-notes.md."
+
     # --- the readme template may not carry the two claims 1.0.1.0 shipped ----
     #
     # roadmap Phase 20, F7. The rendered readme.txt is byte-identical to the

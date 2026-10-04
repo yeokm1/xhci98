@@ -657,6 +657,25 @@ function Get-InfDriverDate {
     return $parsed.ToString('yyyy-MM-dd')
 }
 
+# The draft markers a document carries while a reading is still owed: a
+# `TODO(<what fills it>)` tag, or `TBD`. Roadmap task 32.1 drafted the
+# 2.0.0.0 release notes, the readme template and the history entry ahead of
+# their readings with exactly these two markers, so that what was still owed
+# was greppable; this is what makes the cut refuse while any is left. It
+# writes one line per hit, "<label> line <n>: <text>", and nothing when
+# there is none (callers wrap it in @()). Case-sensitive, and TBD only as a
+# whole word, so prose such as "todo" or "TBDx" is not caught.
+function Find-DraftMarkers {
+    param([string[]]$Lines, [string]$Label)
+    $hits = @()
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i] -cmatch 'TODO\(|\bTBD\b') {
+            $hits += ("{0} line {1}: {2}" -f $Label, ($i + 1), $Lines[$i].Trim())
+        }
+    }
+    return $hits
+}
+
 # The declared package version, out of src\xhci_version.h - the one place it is
 # edited since task 14.1.10. It used to be read out of xhciqual\qual.h, which
 # declared its own literal; that file now expands the shared macro, and this
@@ -1866,6 +1885,37 @@ readme.txt prints it beside the history entry, so the two cannot disagree.
 "@
     }
     Write-Ok ("changelog entry for {0} found in releases\history.md, dated {1} in agreement with the INF" -f $Version, $releaseDate)
+    # --- no draft marker in what the user reads -----------------------------
+    #
+    # Roadmap task 32.3. The 2.0.0.0 documents were drafted ahead of their
+    # readings, each owed reading tagged TODO(...) or TBD, and a cut that
+    # shipped one would tell a user "TODO(bench)" about their own machine.
+    # Checked here, before anything is built, for the two sources a cut takes
+    # its user-facing text from: this version's history.md entry, which the
+    # readme embeds verbatim, and docs\using\release-notes.md, which the readme
+    # is transcribed from and which is the user-facing record of it. The
+    # rendered readme is checked again after substitution, below, because the
+    # template lives in this script and is not in scope yet.
+    $entryStart = [Array]::IndexOf($historyLines, $headings[0])
+    $entryEnd = $historyLines.Count
+    for ($i = $entryStart + 1; $i -lt $historyLines.Count; $i++) {
+        if ($historyLines[$i] -match '^##\s') { $entryEnd = $i; break }
+    }
+    $draftHits = @(Find-DraftMarkers -Lines $historyLines[$entryStart..($entryEnd - 1)] -Label "releases\history.md ($Version entry, from its heading)")
+    $notesPath = Join-Path $repo "docs\using\release-notes.md"
+    if (Test-Path -LiteralPath $notesPath) {
+        $draftHits += @(Find-DraftMarkers -Lines @(Get-Content -LiteralPath $notesPath) -Label "docs\using\release-notes.md")
+    }
+    if ($draftHits.Count -gt 0) {
+        throw @"
+$Version is still a draft: $($draftHits.Count) TODO(...) or TBD marker(s) remain
+in what this cut would publish. Each is a reading still owed; take it, write
+the result in place of the marker, then cut again. The first:
+  $(($draftHits | Select-Object -First 10) -join "`n  ")
+"@
+    }
+    Write-Ok "no TODO(...) or TBD in the $Version history entry or the release notes"
+
 
     # --- where the INF puts this project's own two files ---------------------
     #
@@ -3433,6 +3483,19 @@ $(($missingTools | ForEach-Object { "      " + $_ }) -join "`r`n")
     # would otherwise ship as literal braces in a file nobody re-reads.
     if ($readme -match '\{[A-Z]+\}') {
         throw "readme template left an unsubstituted placeholder: $($Matches[0])"
+    }
+
+    # The rendered readme, after substitution: the template's own TODO(...)
+    # lines (task 32.1's draft) and anything a substitution brought in. The
+    # history entry and the release notes were checked before the build.
+    $readmeDraft = @(Find-DraftMarkers -Lines ($readme -split "`r?`n") -Label "readme.txt (rendered)")
+    if ($readmeDraft.Count -gt 0) {
+        throw @"
+the rendered readme.txt still carries $($readmeDraft.Count) TODO(...) or TBD
+marker(s); the template near the end of make-release.ps1 is a draft until each
+is replaced by its reading. The first:
+  $(($readmeDraft | Select-Object -First 10) -join "`n  ")
+"@
     }
 
     # 78 columns, checked rather than trusted. The file is read in Windows 98
