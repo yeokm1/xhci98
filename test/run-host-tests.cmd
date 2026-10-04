@@ -36,14 +36,26 @@ rem                  plan, the buffer split and the isochronous URB checks
 rem   test_func    - the composite split with and without an IAD, the filtered
 rem                  configuration descriptor and the function ids
 rem                  (src\xhci_func.c)
-rem   test_ctx     - the Slot, Endpoint and Input Control Context encoders
+rem   test_hub     - the hub class's pure half (src\xhci_hub.c): the hub
+rem                  descriptor, the status-change bitmap, the port decision,
+rem                  the reset progress and speed bits, the depth and multi-TT
+rem                  rules and the instance key
+rem   test_ctx    - the Slot, Endpoint and Input Control Context encoders
 rem                  (src\xhci_ctx.c): the golden vectors for every speed class,
 rem                  both context strides, and the field-by-field refusals
 rem   test_topo    - the hub topology graph (src\xhci_topo.c): the snooped
 rem                  hub-class requests as measured on the wire, the hub
 rem                  descriptor and port-status folds, the pending-parent
 rem                  claim, Route String nibble arithmetic with its five-tier
-rem                  refusal, and subtree/generation pruning
+rem                  refusal, and subtree/generation pruning; and task
+rem                  27-A.4's vectors: placements with their Route String,
+rem                  root port and TT triple behind single-TT, multi-TT and
+rem                  Full-Speed hubs to the depth limit, removal, malformed
+rem                  hub descriptors, the well-formedness of the hub port
+rem                  table in test\hub_port_vectors.h, and the gaps G1-G3
+rem                  against the design records that 27-A.1 closed (a gap
+rem                  still open prints as a KNOWN GAP line and does not
+rem                  fail the run)
 rem   test_strict  - strict mode's command precondition table (src\xhci_strict.c):
 rem                  every command type x DW3 bit 9 x slot state x EP State,
 rem                  the Configure Endpoint flag rule and the refusal codes
@@ -191,6 +203,10 @@ rem test_func links nothing else: the composite split, the filtered
 rem configuration descriptor and the function ids are pure computations over
 rem descriptor bytes (task 26-A.7).
 call :run test_func "test_func.c ..\src\xhci_func.c"
+rem test_hub links the pipe policy beside the hub class (task 27-A.1): the
+rem hub class's decisions are pure computations over descriptor and status
+rem bytes, and the Low-Speed mouse's interval behind a hub needs both.
+call :run test_hub "test_hub.c ..\src\xhci_hub.c ..\src\xhci_pipe.c"
 rem test_strict links nothing else: strict mode's command precondition table
 rem (xHCI 1.2 section 4.6) is a pure function, checked here at every cell -
 rem each command type, DW3 bit 9, slot state and EP State.

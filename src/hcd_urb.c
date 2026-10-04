@@ -442,6 +442,8 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
                              PIRP irp, PURB urb)
 {
     ULONG function;
+    ULONG valid;
+    KIRQL lockIrql;
     PHCD_USB_DEVICE dev;
 
     if (urb == NULL) {
@@ -459,6 +461,25 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         hcdCount(&hc->UrbUnknown);
     }
 
+    /* Stamped before anything here reads or rewrites the URB: the order a
+     * held request is measured against an abort by (hcd_io.c,
+     * HcdIoStamp; Codex review of 6dae92b, finding 1). */
+    HcdIoStamp(pdo, irp);
+    if (function == URB_FUNCTION_ABORT_PIPE && (hc == NULL || !pdo->Listed)) {
+        /*
+         * On a PDO whose device has left - or an orphan - the abort is
+         * answered here, with no controller or device record (Codex review
+         * of f99f184, finding 1): its horizon recorded for the pipe if a
+         * held request or an earlier abort names it, for every pipe
+         * otherwise; what that horizon covers completed; and the abort
+         * succeeds, as on a pipe with nothing on it. Requests that reach
+         * the hold later are measured against the same horizon.
+         */
+        HcdIoAbortMark(pdo, irp, urb->UrbPipeRequest.PipeHandle, 0);
+        (VOID)HcdIoParkedRelease(pdo, 1);
+        urb->UrbHeader.Status = USBD_STATUS_SUCCESS;
+        return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+    }
     if (hc == NULL || !pdo->Listed) {
         /* Orphaned, or its device has left: nothing on the bus answers. */
         return hcdGoneLater(pdo, irp, urb);
@@ -490,10 +511,31 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     case URB_FUNCTION_SELECT_INTERFACE:
     case URB_FUNCTION_ABORT_PIPE:
     case URB_FUNCTION_RESET_PIPE:
-        /* Commands: pended for the controller thread (hcd_cfg.c). */
+        /* Commands: pended for the controller thread (hcd_cfg.c). An
+         * abort whose device left between the check above and here is
+         * answered as one on a departed PDO is. */
         dev = hcdDeviceRef(hc, pdo);
         if (dev == NULL) {
+            if (function == URB_FUNCTION_ABORT_PIPE) {
+                HcdIoAbortMark(pdo, irp, urb->UrbPipeRequest.PipeHandle, 0);
+                (VOID)HcdIoParkedRelease(pdo, 1);
+                urb->UrbHeader.Status = USBD_STATUS_SUCCESS;
+                return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+            }
             return hcdGoneLater(pdo, irp, urb);
+        }
+        if (function == URB_FUNCTION_ABORT_PIPE) {
+            /* A live device's abort records its horizon only for a pipe
+             * the device has open now - a stale or wrong handle the
+             * thread refuses claims nothing (Codex review of 6dae92b,
+             * finding 3) - and leaves the rest to the thread. */
+            XhciControllerLockAcquire(&hc->Hc, &lockIrql);
+            valid = HcdCfgPipe(dev, urb->UrbPipeRequest.PipeHandle) != NULL;
+            XhciControllerLockRelease(&hc->Hc, lockIrql);
+            if (valid) {
+                HcdIoAbortMark(pdo, irp, urb->UrbPipeRequest.PipeHandle, 1);
+                (VOID)HcdIoParkedRelease(pdo, 1);
+            }
         }
         return HcdCfgQueue(hc, dev, pdo, irp);
 

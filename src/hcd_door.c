@@ -29,7 +29,9 @@
  * The hub answers are the bus's truth within what the structures can carry:
  * a SuperSpeed device's Speed reads High Speed in the _EX form, the ceiling
  * that interface has (section 8.4). External hubs are objects inside the bus
- * (Phase 27), so DeviceIsHub is FALSE everywhere and a composite the bus
+ * (Phase 27) with no devnode and no door of their own, so DeviceIsHub is
+ * FALSE everywhere - a served hub on a root port reads as a connected
+ * device until hub traversal exists - and a composite the bus
  * splits is one connection whose driver key is its first function's (section
  * 8.10, the two rows bound to this task).
  *
@@ -874,6 +876,103 @@ NTSTATUS HcdDoorControllerIoctl(PHCD_CONTROLLER hc, PIRP irp)
 /* The root hub's IOCTLs                                                     */
 /* ----------------------------------------------------------------------- */
 
+/* The address and open pipes of a device record, into *c. Controller lock
+ * held. */
+static VOID hcdDoorDeviceLocked(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                PHCD_DOOR_CONN c)
+{
+    PHCD_PIPE pipe;
+    ULONG wMax;
+    ULONG dci;
+    ULONG offset;
+    ULONG slotDw3;
+
+    /* The address the xHC assigned, from the Output Slot Context: the stop
+     * clears STARTED under this lock before the common buffer goes, and
+     * below Addressed the field is not an address. */
+    if ((hc->Hc.Flags & XHCI_EXT_FLAG_STARTED) != 0 && dev->SlotId != 0 &&
+        XhciSlotContextOffset(&hc->Hc.Layout, dev->SlotId, &offset) ==
+            XHCI_LAYOUT_OK) {
+        slotDw3 = XhciCommonAt(&hc->Hc, offset)[3];
+        if (XHCI_SLOT_GET_STATE(slotDw3) >= XHCI_SLOT_STATE_ADDRESSED) {
+            c->Address = XHCI_SLOT_GET_ADDRESS(slotDw3);
+        }
+    }
+    for (dci = 2; dci < 32 && c->Pipes < HCD_DOOR_PIPES; dci++) {
+        pipe = dev->Pipes[dci];
+        if (pipe == NULL || pipe->Closed) {
+            continue;
+        }
+        wMax = (pipe->MaxPacketSize & 0x7FFUL) |
+               ((pipe->Ep.MaxBurstSize & 3UL) << 11);
+        c->Pipe[c->Pipes][0] = 7;
+        c->Pipe[c->Pipes][1] = 5;
+        c->Pipe[c->Pipes][2] = (UCHAR)pipe->EndpointAddress;
+        c->Pipe[c->Pipes][3] = (UCHAR)(pipe->TransferType & 3UL);
+        c->Pipe[c->Pipes][4] = (UCHAR)(wMax & 0xFFUL);
+        c->Pipe[c->Pipes][5] = (UCHAR)((wMax >> 8) & 0xFFUL);
+        c->Pipe[c->Pipes][6] = (UCHAR)pipe->Interval;
+        c->Pipes++;
+    }
+}
+
+/*
+ * A root port whose device is a hub the bus serves: no PDO stands for it
+ * (design record 13 section 10.3), so the device record answers (Codex
+ * review of 23e7715, finding 9). It is read under the controller lock and
+ * referenced there unless already Gone - the teardown sets Gone under that
+ * lock before the record leaves the port, and the record's freeing waits
+ * out every reference (HcdIoDeviceGone) - so the descriptors stay while
+ * they are copied. It is reported as a connected device, DeviceIsHub
+ * FALSE: with no devnode and no door it has no name a caller could open
+ * to walk its ports (Codex review of d54eef0, finding 3), and devices
+ * behind it are not reported here - this door answers for the root hub's
+ * own ports. Returns 1 when it answered. IRQL:
+ * <= DISPATCH_LEVEL, no lock held.
+ */
+static ULONG hcdDoorHubConnection(PHCD_CONTROLLER hc, ULONG port,
+                                  PHCD_DOOR_CONN c, PUCHAR config,
+                                  ULONG configCap)
+{
+    PHCD_USB_DEVICE dev;
+    KIRQL lockIrql;
+    ULONG cls;
+
+    if (port < 1 || port > XHCI_MAX_ROOT_PORTS) {
+        return 0;
+    }
+    XhciControllerLockAcquire(&hc->Hc, &lockIrql);
+    dev = hc->Ports[port - 1].Device;
+    if (dev != NULL && (dev->Gone || dev->Hub == NULL)) {
+        dev = NULL;
+    }
+    if (dev != NULL) {
+        (VOID)InterlockedIncrement(&dev->Refs);
+        hcdDoorDeviceLocked(hc, dev, c);
+    }
+    XhciControllerLockRelease(&hc->Hc, lockIrql);
+    if (dev == NULL) {
+        return 0;
+    }
+    c->Status = HCD_CONN_CONNECTED;
+    hcdCopy(c->DeviceDesc, dev->DeviceDesc, sizeof(c->DeviceDesc));
+    cls = XHCI_SPEED_UNKNOWN;
+    (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, dev->Port, dev->Speed, &cls);
+    c->SpeedClass = cls;
+    c->ConfigValue = dev->ConfigValue;
+    if (dev->Config != NULL) {
+        c->ConfigTotal = dev->ConfigLength;
+        if (config != NULL) {
+            c->ConfigBytes = (dev->ConfigLength < configCap)
+                                 ? dev->ConfigLength
+                                 : configCap;
+            hcdCopy(config, dev->Config, c->ConfigBytes);
+        }
+    }
+    (VOID)InterlockedDecrement(&dev->Refs);
+    return 1;
+}
+
 /*
  * What the bus knows about root port `port`: the PDO standing for its device
  * (a lone device PDO, or a split device's first function, whose Group is its
@@ -889,13 +988,8 @@ static VOID hcdDoorConnection(PHCD_CONTROLLER hc, ULONG port,
 {
     PHCD_DEVICE_PDO pdo;
     PHCD_USB_DEVICE dev;
-    PHCD_PIPE pipe;
     const UCHAR *source;
     ULONG sourceBytes;
-    ULONG wMax;
-    ULONG dci;
-    ULONG offset;
-    ULONG slotDw3;
     KIRQL oldIrql;
     KIRQL lockIrql;
 
@@ -908,6 +1002,9 @@ static VOID hcdDoorConnection(PHCD_CONTROLLER hc, ULONG port,
     }
     if (pdo == NULL) {
         KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+        if (hcdDoorHubConnection(hc, port, c, config, configCap)) {
+            return;
+        }
         if (port >= 1 && port <= XHCI_MAX_ROOT_PORTS &&
             hc->Ports[port - 1].Enum.State == XHCI_ENUM_FAILED) {
             c->Status = HCD_CONN_FAILED_ENUM;
@@ -928,34 +1025,7 @@ static VOID hcdDoorConnection(PHCD_CONTROLLER hc, ULONG port,
             sourceBytes = dev->ConfigLength;
         }
         XhciControllerLockAcquire(&hc->Hc, &lockIrql);
-        /* The address the xHC assigned, from the Output Slot Context: the
-         * stop clears STARTED under this lock before the common buffer
-         * goes, and below Addressed the field is not an address. */
-        if ((hc->Hc.Flags & XHCI_EXT_FLAG_STARTED) != 0 &&
-            dev->SlotId != 0 &&
-            XhciSlotContextOffset(&hc->Hc.Layout, dev->SlotId, &offset) ==
-                XHCI_LAYOUT_OK) {
-            slotDw3 = XhciCommonAt(&hc->Hc, offset)[3];
-            if (XHCI_SLOT_GET_STATE(slotDw3) >= XHCI_SLOT_STATE_ADDRESSED) {
-                c->Address = XHCI_SLOT_GET_ADDRESS(slotDw3);
-            }
-        }
-        for (dci = 2; dci < 32 && c->Pipes < HCD_DOOR_PIPES; dci++) {
-            pipe = dev->Pipes[dci];
-            if (pipe == NULL || pipe->Closed) {
-                continue;
-            }
-            wMax = (pipe->MaxPacketSize & 0x7FFUL) |
-                   ((pipe->Ep.MaxBurstSize & 3UL) << 11);
-            c->Pipe[c->Pipes][0] = 7;
-            c->Pipe[c->Pipes][1] = 5;
-            c->Pipe[c->Pipes][2] = (UCHAR)pipe->EndpointAddress;
-            c->Pipe[c->Pipes][3] = (UCHAR)(pipe->TransferType & 3UL);
-            c->Pipe[c->Pipes][4] = (UCHAR)(wMax & 0xFFUL);
-            c->Pipe[c->Pipes][5] = (UCHAR)((wMax >> 8) & 0xFFUL);
-            c->Pipe[c->Pipes][6] = (UCHAR)pipe->Interval;
-            c->Pipes++;
-        }
+        hcdDoorDeviceLocked(hc, dev, c);
         XhciControllerLockRelease(&hc->Hc, lockIrql);
     } else if (!pdo->Function && pdo->Config != NULL) {
         source = pdo->Config;
@@ -1184,8 +1254,10 @@ NTSTATUS HcdDoorRootHubIoctl(PHCD_CONTROLLER hc, PIRP irp)
         break;
 
     case HCD_IOCTL_CONN_NAME:
-        /* No connection is a hub devnode (DeviceIsHub is FALSE): the empty
-         * name usbhub gives a connection that is not a hub. */
+        /* No connection reports itself a hub (DeviceIsHub is FALSE, a
+         * served hub included: it has no devnode and no door a caller
+         * could open by name - Codex review of d54eef0, finding 3): the
+         * empty name usbhub gives a connection that is not a hub. */
         if (inLen < 4) {
             status = STATUS_BUFFER_TOO_SMALL;
             break;

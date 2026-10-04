@@ -234,7 +234,12 @@ static LONG hcdCfgCountEnd(PHCD_CONTROLLER hc, ULONG asked, LONG usbd)
  * disconnected or with a connect change the enumeration has yet to take
  * (an unplug and replug). A PORTSC of all ones proves nothing about the
  * device - the register could not be read - so that failure is counted
- * (Codex review round 25). A select racing an ordinary unplug fails at
+ * (Codex review round 25). Behind hubs the failure is not counted when a
+ * hub port on its path confirms the departure - a GET_STATUS reply that
+ * reads it disconnected, disabled or changed, or a hub already departing
+ * - or its root port does as above; a hub that does not answer confirms
+ * nothing (HcdHubPathPresent; Codex review of d54eef0, finding 2).
+ * A select racing an ordinary unplug fails at
  * SET_CONFIGURATION or SET_INTERFACE before HcdEnumService sees the port
  * change, and counting it would fail a correct matrix run. A device still
  * on its port that refuses - SET_CONFIGURATION(0) among them - is counted
@@ -243,20 +248,17 @@ static LONG hcdCfgCountEnd(PHCD_CONTROLLER hc, ULONG asked, LONG usbd)
 static VOID hcdCfgCountSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                               LONG usbd)
 {
-    ULONG portsc;
-
     if (usbd == XHCI_USBD_STATUS_SUCCESS ||
         usbd == HCD_USBD_BUFFER_TOO_SMALL) {
         return;
     }
-    if (dev->Gone || dev->Port == 0 || dev->Port > XHCI_MAX_ROOT_PORTS ||
-        hc->Ports[dev->Port - 1].Device != dev) {
+    if (dev->Gone || dev->Location == 0 || dev->Location > HCD_PORT_COUNT ||
+        hc->Ports[dev->Location - 1].Device != dev) {
         return;
     }
-    portsc = XhciReadPortsc(&hc->Hc, dev->Port);
-    if (portsc != 0xFFFFFFFFUL &&
-        ((portsc & XHCI_PORTSC_CCS) == 0 ||
-         (portsc & XHCI_PORTSC_CSC) != 0)) {
+    /* Behind hubs, every port on the path is asked as well (Codex review
+     * of 23e7715, finding 6). */
+    if (!HcdHubPathPresent(hc, &hc->Ports[dev->Location - 1])) {
         return;
     }
     hc->Counters.SelectsFailed++;
@@ -279,8 +281,9 @@ static VOID hcdCfgZero(PXHCI_EXTENSION ext, ULONG offset, ULONG bytes)
 
 /*
  * The Input Context for one Configure Endpoint: the control flags, the Slot
- * Context rewritten whole (a root-port device: route 0, the port's speed,
- * Context Entries the highest DCI enabled after it), and an Endpoint Context
+ * Context rewritten whole (HcdDeviceSlotParams: the device's route, root
+ * port, speed and TT fields, a hub's marking, Context Entries the highest
+ * DCI enabled after it), and an Endpoint Context
  * for each DCI being added, its dequeue pointer and cycle state read from
  * the ring now. Returns 0 when a builder refuses a value.
  */
@@ -309,12 +312,7 @@ static ULONG hcdCfgBuildInput(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                      plan->DropFlags) != 0) {
         return 0;
     }
-    for (i = 0; i < sizeof(sp); i++) {
-        ((PUCHAR)&sp)[i] = 0;
-    }
-    sp.RouteString = 0;
-    sp.Psiv = dev->Speed;
-    sp.RootHubPort = dev->Port;
+    HcdDeviceSlotParams(dev, 1, &sp);
     sp.ContextEntries = plan->ContextEntries;
     if (XhciBuildSlotContext(XhciCommonAt(ext, isc), &sp) != 0) {
         return 0;
@@ -571,6 +569,65 @@ ULONG HcdCfgParentConfigure(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     return 1;
 }
 
+/*
+ * A hub's status-change endpoint (hcd_hub.c; design record 13 section 10.3
+ * step 3): one pipe on a pool ring, opened by the one Configure Endpoint
+ * that also carries the hub marking HcdDeviceSlotParams adds once
+ * dev->HubMarked is set - an Evaluate Context cannot set those fields. The
+ * hub has no client, so no URB ever names this pipe; its one record is the
+ * device's HubXfer. Returns the pipe, listed in dev->Pipes, or NULL with
+ * nothing enabled. Thread only, powered.
+ */
+PHCD_PIPE HcdCfgHubOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                        const XHCI_PIPE_EP *ep, ULONG iface)
+{
+    PHCD_PIPE add[32];
+    XHCI_PIPE_PLAN plan;
+    PXHCI_EXTENSION ext;
+    XHCI_TRB trb;
+    KIRQL oldIrql;
+    PHCD_PIPE pipe;
+    ULONG control;
+    ULONG code;
+    ULONG dci;
+    LONG usbd;
+
+    ext = &hc->Hc;
+    if (ep->Dci < 2 || ep->Dci > 31 || dev->Pipes[ep->Dci] != NULL) {
+        return NULL;
+    }
+    usbd = XHCI_USBD_STATUS_SUCCESS;
+    pipe = hcdCfgPipeNew(hc, dev, ep, &usbd);
+    if (pipe == NULL) {
+        return NULL;
+    }
+    pipe->Interface = iface;
+    for (dci = 0; dci < 32; dci++) {
+        add[dci] = NULL;
+    }
+    add[ep->Dci] = pipe;
+    code = 0;
+    if (XhciPipeConfigurePlan(0, 0, XHCI_PIPE_DCI_BIT(ep->Dci), &plan) ==
+            XHCI_PIPE_OK &&
+        hcdCfgBuildInput(hc, dev, &plan, add) &&
+        XhciTrbConfigureEndpoint(&trb, dev->SlotId,
+                                 XhciCommonPA(ext,
+                                              ext->Layout.InputContextOffset),
+                                 0) == XHCI_RING_OK) {
+        code = HcdThreadCommand(hc, &trb, &control);
+    }
+    if (code != XHCI_CC_SUCCESS) {
+        XHCI_DBG_VALUE("hcd: hub Configure Endpoint failed, slot/code",
+                       (dev->SlotId << 8) | code);
+        hcdCfgPipeFree(hc, dev, pipe);
+        return NULL;
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    dev->Pipes[ep->Dci] = pipe;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    return pipe;
+}
+
 /* ----------------------------------------------------------------------- */
 /* SELECT_CONFIGURATION                                                     */
 /* ----------------------------------------------------------------------- */
@@ -720,7 +777,7 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
         for (e = 0; e < iface.EndpointCount; e++) {
             answer = XhciPipeEndpointParams((const UCHAR *)cd +
                                                 iface.EndpointOffset[e],
-                                            dev->Speed, &ep);
+                                            HcdDevicePipeSpeed(hc, dev), &ep);
             if (answer != XHCI_PIPE_OK || add[ep.Dci] != NULL) {
                 XHCI_DBG_VALUE("hcd: select refused, endpoint index/speed",
                                (e << 8) | dev->Speed);
@@ -876,6 +933,7 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG control;
     ULONG code;
     ULONG bytes;
+    ULONG stalled;
     ULONG asked;
     ULONG answer;
     ULONG dci;
@@ -962,7 +1020,7 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     for (e = 0; e < iface.EndpointCount; e++) {
         answer = XhciPipeEndpointParams(dev->Selected +
                                             iface.EndpointOffset[e],
-                                        dev->Speed, &ep);
+                                        HcdDevicePipeSpeed(hc, dev), &ep);
         if (answer != XHCI_PIPE_OK || add[ep.Dci] != NULL ||
             (keep & (1UL << ep.Dci)) != 0) {
             XHCI_DBG_VALUE("hcd: select interface refused, endpoint/speed",
@@ -1011,12 +1069,18 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         dev->Stale = old;
     }
     if (usbd == XHCI_USBD_STATUS_SUCCESS &&
-        !HcdThreadControl(hc, dev, 0x01, 11,
-                          (USHORT)iface.AlternateSetting,
-                          (USHORT)iface.InterfaceNumber, 0, &bytes)) {
+        !HcdThreadControlEx(hc, dev, 0x01, 11,
+                            (USHORT)iface.AlternateSetting,
+                            (USHORT)iface.InterfaceNumber, 0, &bytes,
+                            &stalled)) {
         /* Enabled on the controller, not on the device: dropped by the
-         * next command. */
-        usbd = HCD_USBD_INTERNAL_HC_ERROR;
+         * next command. A device that STALLed SET_INTERFACE refused it
+         * itself and is answered with its own status, not one that
+         * blames the controller (26-V.2: a C-Media whose alternate 1 the
+         * passthrough refused). */
+        XHCI_DBG_VALUE("hcd: SET_INTERFACE failed, stalled", stalled);
+        usbd = stalled ? XHCI_USBD_STATUS_STALL_PID :
+                         HCD_USBD_INTERNAL_HC_ERROR;
         dev->Stale = mask;
     }
 
@@ -1508,7 +1572,7 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         for (e = 0; e < iface.EndpointCount; e++) {
             answer = XhciPipeEndpointParams(dev->Selected +
                                                 iface.EndpointOffset[e],
-                                            dev->Speed, &ep);
+                                            HcdDevicePipeSpeed(hc, dev), &ep);
             if (answer != XHCI_PIPE_OK || add[ep.Dci] != NULL ||
                 (keep & (1UL << ep.Dci)) != 0) {
                 XHCI_DBG_VALUE("hcd: function select refused, endpoint/speed",
@@ -1682,6 +1746,9 @@ static ULONG hcdCfgQuiesce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             HcdSvcRequestReset(&hc->Hc);
             return XHCI_EP_STATE_RUNNING;
         }
+        /* Behind a TT, a control or bulk endpoint's TT buffer may still
+         * hold the halted transaction (xHCI 4.6.8 p.116; 27-A.3). */
+        HcdHubClearTt(hc, dev, pipe->EndpointAddress, pipe->TransferType, 0);
         /* Reset Endpoint restarted the host's data toggle (TSP 0); the
          * device's restarts with CLEAR_FEATURE(ENDPOINT_HALT), or the two
          * ends disagree and a packet is lost as a duplicate (xHCI 4.6.8
@@ -1926,6 +1993,10 @@ static LONG hcdCfgReset(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         if (hcdCfgEpState(hc, dev, pipe->Dci) == XHCI_EP_STATE_HALTED) {
             ok = hcdCfgResetEndpoint(hc, dev, pipe) &&
                  hcdCfgSetDequeue(hc, dev, pipe);
+            if (ok) {
+                HcdHubClearTt(hc, dev, pipe->EndpointAddress,
+                              pipe->TransferType, 0);
+            }
         } else {
             ok = hcdCfgQuiesce(hc, dev, pipe) != XHCI_EP_STATE_RUNNING &&
                  hcdCfgRecycle(hc, dev, pipe);
@@ -2005,7 +2076,8 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     survivor = NULL;
     count = 0;
     for (t = head; t != NULL; t = t->Next) {
-        if (t != &dev->Ep0Xfer && ((PHCD_XFER)t)->CancelRequested) {
+        if (t != &dev->Ep0Xfer && t != &dev->HubXfer &&
+            ((PHCD_XFER)t)->CancelRequested) {
             if (count < HCD_PIPE_XFERS) {
                 cancelled[count++] = t;
             }
@@ -2046,9 +2118,14 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         HcdIoDeferred(hc);
         return;                 /* left paused, as hcdCfgAbort */
     }
-    if (pipe->Queue->Count != 0 && state != XHCI_EP_STATE_DISABLED) {
+    /* Under the lock the teardown's freeze sets Gone under: no doorbell
+     * reaches a device being torn down (finding 1). */
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (pipe->Queue->Count != 0 && state != XHCI_EP_STATE_DISABLED &&
+        !dev->Gone) {
         XhciWriteDoorbell(&hc->Hc, dev->SlotId, pipe->Dci);
     }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
     HcdIoDeferred(hc);
     HcdIoPipeResume(hc, pipe);
 }
@@ -2135,8 +2212,8 @@ static LONG hcdCfgResetPort(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     ULONG ok;
 
     ext = &hc->Hc;
-    if (dev->Port == 0 || dev->Port > XHCI_MAX_ROOT_PORTS ||
-        hc->Ports[dev->Port - 1].Device != dev) {
+    if (dev->Location == 0 || dev->Location > HCD_PORT_COUNT ||
+        hc->Ports[dev->Location - 1].Device != dev) {
         return HCD_USBD_DEVICE_GONE;
     }
     XHCI_DBG_VALUE("hcd: reset port, port/slot",
@@ -2212,7 +2289,7 @@ cleanup:
         XHCI_DBG_VALUE("hcd: reset port failed, cycling port", dev->Port);
         if (dev->Pdo != NULL) {
             /* The device's group: every function PDO of it goes. */
-            HcdEnumCycle(hc, dev->Port, dev->PdoGroup);
+            HcdEnumCycle(hc, dev->Location, dev->PdoGroup);
         }
         return HCD_USBD_INTERNAL_HC_ERROR;
     }
