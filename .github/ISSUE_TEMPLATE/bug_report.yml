@@ -21,7 +21,7 @@ body:
         device drivers above it (keyboard, mouse, storage, audio) are Windows'
         own. The `1.x.x.x` releases were a different driver, a plug-in under
         Windows' or NUSB's USB 2.0 stack; `1.2.0.0` was the last, and it gets
-        no more fixes. If you are on `1.x.x.x`, please try the latest `2.x`
+        no more fixes. If you are on `1.x.x.x`, please try the latest `2.x.x.x`
         release before reporting.
 
         **One thing is already known:** upgrading in place over a running
@@ -77,7 +77,7 @@ body:
       options:
         - A fresh install, no earlier xhci98 driver on this Windows
         - An upgrade over a 1.x.x.x release
-        - An update over an earlier 2.x release
+        - An update over an earlier 2.x.x.x release
         - Not sure
     validations:
       required: true
@@ -166,7 +166,7 @@ body:
       description: |
         If the machine keeps running, the driver's own log is the most useful
         thing you can send. XHCISNAP.EXE is in the download; use the one from
-        the release you installed, not a copy from a 1.x release:
+        the release you installed, not a copy from a 1.x.x.x release:
 
             XHCISNAP -verbosity 2
             (restart the machine)
