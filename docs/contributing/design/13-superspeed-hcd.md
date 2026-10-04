@@ -3120,7 +3120,17 @@ port because, with `DeviceTextLocationInformation` unanswered (section
 and a port reads truer than 0 or 259 there. XP's `usbhub` answers
 `DeviceTextLocationInformation` with the `iProduct` string (static, the
 same row); answering it is not taken here. The instance key itself, the
-instance ids of 33.2 and the dormant matching of 33.1 are unchanged.
+instance ids of 33.2 and the dormant matching of 33.1 are unchanged. The
+helper's loop is written around an MSVC 6.0 code-generation fault that
+made its first form answer the instance key on the guest while its host
+vectors passed (`lessons.md`, the last entry). **Read on the XP SP3 guest**
+(runtime, 2026-10-05, development host A, the `qemu` build of `a9dd367`,
+a QEMU `usb-hub` at root port 3 and a mouse on its port 1): the bus's trace
+read the mouse's answer as `Address` 1 under the hub PDO; `Setup.exe`'s
+"Copy IDs" showed `BusSpeed: 1 (Full)` and `bInterval: 10`; 1000, 500 and
+250 Hz set through it gave the Output Endpoint Context `Interval` 3, 4 and
+5 (HMP `xp` of the controller's device context); and Device Manager's
+Location line read "Location 1". Windows 7's Location text was not read.
 **Relations.** The root hub FDO's `BusRelations` carry the listed PDOs whose
 `ParentSerial` is 0; a hub FDO's carry those whose `ParentSerial` is its hub
 PDO's `Serial` (`HcdDevicePdoRelations(hc, old, parent)`). The marking rules
