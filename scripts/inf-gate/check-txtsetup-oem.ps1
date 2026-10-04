@@ -24,9 +24,10 @@ families.
            "inf = d1, xhci98.inf" and nothing else: no catalog (the package is
            not signed), no dll, no second driver (xhciuas.sys is not loaded in
            text mode; section 5.6).
-  OEM-SERVICE  The driver line's service key is the service the INF beside it
-           adds (AddService), so GUI-mode Setup's INF install updates the
-           service text mode created rather than adding a second one.
+  OEM-SERVICE  The driver line's service key is the one service the INF beside
+           it adds (AddService, every model the same one), so GUI-mode
+           Setup's INF install updates the service text mode created rather
+           than adding a second one.
   OEM-IDS  [HardwareIds.scsi.XHCI98] maps exactly the INF's model ids
            (PCI\CC_0C0330 and XHCI98\ROOT_HUB) to that service. OEM-USBID: no
            USB\ id at all - USB\ROOT_HUB and the class ids belong to Setup's
@@ -300,6 +301,11 @@ function Test-OemText {
     $facts = Get-InfFacts -Text $InfText
     if ($svc -ne "" -and -not $facts.Services.ContainsKey($svc.ToLowerInvariant())) {
         & $add "OEM-SERVICE" "the driver's service key '$svc' is not a service the INF adds ($(@($facts.Services.Keys) -join ', '))."
+    } elseif ($facts.Services.Count -gt 1) {
+        # Every id below is mapped to the one service, so every model must
+        # add that same service: an INF adding two would give some model a
+        # service text mode did not create (whole-branch review of 2.1.0.0).
+        & $add "OEM-SERVICE" "the INF adds more than one service ($(@($facts.Services.Keys) -join ', ')); every model this file maps must add '$svc' alone."
     }
 
     $hw = & $get "HardwareIds.scsi.$optionId"
@@ -461,7 +467,8 @@ if ($SelfTest) {
         # or renames its service must fail the unchanged oem file.
         $infCases = @(
             @{ Rule = "OEM-IDS";     Inf = $inf.Replace("%RootHubDesc%=RootHub.Dev,XHCI98\ROOT_HUB", "%RootHubDesc%=RootHub.Dev,XHCI98\ROOT_HUB`r`n%RootHubDesc%=RootHub.Dev,XHCI98\OTHER_HUB") },
-            @{ Rule = "OEM-SERVICE"; Inf = $inf.Replace("AddService=xhci98,", "AddService=xhcihcd,") }
+            @{ Rule = "OEM-SERVICE"; Inf = $inf.Replace("AddService=xhci98,", "AddService=xhcihcd,") },
+            @{ Rule = "OEM-SERVICE"; Inf = ([regex]'(\[Hub\.Dev\.NT[a-z0-9]+\.Services\]\r?\nAddService=)xhci98,').Replace($inf, '${1}xhcihub,', 1) }
         )
         foreach ($c in $infCases) {
             $total++
