@@ -128,7 +128,7 @@ is a virtual-machine target and no QEMU device models a SuperSpeed hub, so
 that half has no vehicle. The owner's decision of 2026-10-02 is that a
 Windows 2000 vehicle is required for now, revisited when this phase opens;
 until a vehicle exists or that decision changes, this phase cannot close and
-Phases 31 and 32 wait on it. The owner's revisit: TBD.
+Phases 31 and 32 wait on it. The owner's revisit (2026-10-04): released untested on Windows 2000, built from the specification and the host vectors; a vehicle stays future work (`roadmap-hcd.md`, decisions table).
 
 ---
 
