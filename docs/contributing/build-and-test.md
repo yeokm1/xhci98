@@ -3879,10 +3879,15 @@ qemu-system-i386 -machine pc -m 512 -smp 2 \
    display console, not an input device, so the USB keyboard is bound to the
    display `vga0` by its `display=` property and the leg's keystrokes are
    sent with `"device": "vga0"`; an input device bound to a console takes
-   that console's events ahead of the unbound PS/2 one. Before reading step
-   5 as a USB-path observation, confirm it: `device_del ukbd` on the QMP
-   socket must stop the guest answering (then `device_add usb-kbd,bus=xhci.0,
-   id=ukbd,display=vga0` to carry on).
+   that console's events ahead of the unbound PS/2 one - but only while it
+   exists: remove it and QEMU falls back to the PS/2 keyboard, so a
+   `device_del` is no negative control here. Where the QEMU build offers
+   it (`qemu-system-i386 -machine pc,help` lists `i8042`), launch with
+   `-machine pc,i8042=off` instead, and the USB keyboard is the guest's
+   only keyboard once Windows has started. Otherwise read the path off the
+   controller: launch with `-trace usb_xhci_xfer_success` (the hardware
+   oracle of "QEMU xHCI trace events") and confirm each keystroke sent in
+   step 5 completes transfers on the keyboard's slot.
 4. At "Press F6 if you need to install a third party SCSI or RAID driver",
    press F6 (SeaBIOS's own xHCI keyboard support answers it; nothing of this
    driver runs yet). At the screen that follows, press S, then Enter at the

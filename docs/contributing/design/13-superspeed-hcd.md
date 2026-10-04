@@ -566,14 +566,18 @@ floppy, and whether 32-bit XP's unsigned-driver policy during GUI mode
 installs it silently, warns or skips it, is not readable from these files
 and is owed to the install leg.
 
-**`xhciuas.sys` is not on the text-mode disk, and a UAS-capable disk is
-lost in text mode.** The bus chooses UAS whenever a device offers a usable
-UAS alternate setting, even beside a Bulk-Only one (`src\xhci_xport.c`),
-and only `XhciForceBulkOnly`, a value in the controller's driver key, turns
-that off (`src\hcd_ctl.c` `HcdCtlForceBulkOnly`) - a key text mode never
-writes. Such a device then presents the UAS class id, which no Setup row
-binds, so it is not usable until GUI mode; only a Bulk-Only-only device
-(most USB flash sticks; QEMU's `usb-storage`) meets Setup's own `usbstor`.
+**`xhciuas.sys` is not on the text-mode disk, so a disk the bus selects
+for UAS is lost in text mode.** The bus selects UAS whenever a device
+offers a UAS alternate setting the controller can run - at SuperSpeed that
+means stream support; below it, always - even beside a Bulk-Only one
+(`src\xhci_xport.c`), and the one override, `XhciForceBulkOnly` in the
+controller's driver key (`src\hcd_ctl.c` `HcdCtlForceBulkOnly`), is a value
+text mode never writes. A dual-mode SuperSpeed device on a controller
+without streams falls back to Bulk-Only and is usable. A device selected
+for UAS presents the UAS class id, which no Setup row binds, so it is not
+usable until GUI mode; a Bulk-Only-only device (most USB flash sticks;
+QEMU's `usb-storage`) always meets Setup's own `usbstor`, and is the one
+to use for a predictable result.
 Carrying `xhciuas.sys` as a second `scsi` option would need its own
 hardware ids and a text-mode reading of its own, and is left out. GUI-mode
 Setup and the installed system install it from the package as before.
@@ -600,9 +604,9 @@ The limits, all of them the user's to know:
    Setup reads every F6 disk.
 3. Installing Windows onto a USB disk is not supported: nothing here makes
    the installed system boot from one.
-4. A disk that offers UAS is not usable in text mode, even if it also
-   offers Bulk-Only, since the bus prefers UAS and no driver for it is
-   loaded (above). Only a Bulk-Only-only device is.
+4. A disk the bus selects for UAS is not usable in text mode, even if it
+   also offers Bulk-Only, since no UAS driver is loaded (above); a
+   Bulk-Only-only device always is.
 5. Text mode runs with interrupt moderation at the code default and the log
    off, since no INF value is written until GUI mode.
 6. If the target disk needs one of Setup's own `[SCSI]` miniports, the user
