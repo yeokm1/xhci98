@@ -12,6 +12,57 @@ every published directory carries the history up to and including itself.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
+## 2.0.0.0 - 2026-10-04
+
+The driver is rewritten as a whole USB host controller driver. `xhci98.sys`
+no longer plugs in underneath Windows' own USB port driver: it runs the
+controller, the root hub, every hub and the splitting of composite devices
+itself, and Windows' own class drivers sit on top of it unchanged. Because
+nothing of the USB 2.0-era stack is left underneath it, it drives SuperSpeed
+devices and hubs, and a second driver in the same package, `xhciuas.sys`,
+runs UAS storage. Every system `1.2.0.0` supports is supported, from the same
+four directories, each now holding both drivers.
+
+### What changed
+
+- SuperSpeed (USB 3.x, 5 Gbit/s) devices on the root ports, and SuperSpeed
+  hubs. A link that trains faster (SuperSpeedPlus) is accepted at its trained
+  rate, untested. Device Manager on these systems still shows a SuperSpeed
+  device as High Speed at most; the interface it reads predates SuperSpeed.
+- UAS storage, through `xhciuas.sys`, with streams at SuperSpeed and without
+  at High Speed. A drive that offers both UAS and Bulk-Only gets UAS unless
+  the new `XhciForceBulkOnly` value is set to `1`.
+- Every device is reported to Windows at its true speed, on a root port and
+  behind a hub. The virtual High-Speed hub of `1.2.0.0` is gone, and its
+  three values (`XhciVirtualHSHub`, `XhciVirtualHSHubVid`,
+  `XhciVirtualHSHubPid`) have no effect.
+- Windows 98 SE needs no USB 2.0 stack for the controller, hubs, mice,
+  keyboards and audio. USB storage there, UAS included, still needs NUSB's
+  mass-storage component (NUSB 3.3 or 3.6, or its five storage files on their
+  own); the release notes and the readme's section 3 have the details.
+- The install writes an interrupt moderation interval of `160` (40
+  microseconds) instead of `500`. On the one machine measured, a UAS drive
+  at SuperSpeed lost 15 to 22% of its throughput at `500`.
+- In Device Manager the controller is "xHCI98 USB 3.x eXtensible Host
+  Controller" and the root hub "xHCI98 USB 3.x Root Hub", with every device
+  beneath it; external hubs no longer appear as entries of their own.
+- Gone under `2.0.0.0`: the Windows 2000 audio device unplugged during
+  playback that was never fully removed, the Windows 7 controller disable
+  that hung, the Windows 98 freeze on fast repeated plugging, and the Windows
+  98 crash under NUSB when the controller was stopped - except on one path:
+  updating in place over a running `1.2.0.0` under NUSB still crashes,
+  because NUSB stops the old driver before the new one runs.
+- Upgrading from `1.2.0.0`: on Windows 98 SE with NUSB, rename the old
+  `XHCI98.SYS` and cold-boot before updating; on every system, pick the
+  driver from a list with Have Disk rather than let Windows search. The
+  readme's section 4 has the steps for each system.
+- Known limitations: the driver never puts an idle device or hub port to
+  sleep; Windows 98 SE can wedge when a USB audio device is plugged in soon
+  after a cold boot, as it could under `1.2.0.0`; on Windows ME, re-enabling
+  the controller with a device attached can hang the machine; a device moved
+  to a different port is found again as new hardware. The release notes have
+  the full list and the untested ground.
+
 ## 1.2.0.0 - 2026-10-02
 
 The driver gains an optional virtual USB 2.0 hub that lets a Full- or

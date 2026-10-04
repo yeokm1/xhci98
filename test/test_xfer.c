@@ -762,17 +762,22 @@ static void test_build_refusals(void)
                                   &layout),
              XHCI_XFER_OK, "no data stage, no direction conflict");
 
-    /* EP0's Max Packet Size is one of exactly four values (USB2 9.6.1). */
+    /* EP0's Max Packet Size is one of exactly four values (USB2 9.6.1), or
+     * 512 at SuperSpeed (USB 3.2 9.6.1; task 29-A.3). */
     request_init(&req, 0x00, 0x05, 3, 0, 0, 0, 0, NULL);
     CHECK_EQ(XhciXferBuildControl(&req, out, XHCI_XFER_MAX_CONTROL_TRBS,
                                   &layout),
              XHCI_XFER_BAD_PARAM, "MPS 0 would divide by zero");
-    request_init(&req, 0x00, 0x05, 3, 0, 0, 0, 512, NULL);
+    request_init(&req, 0x00, 0x05, 3, 0, 0, 0, 1024, NULL);
     CHECK_EQ(XhciXferBuildControl(&req, out, XHCI_XFER_MAX_CONTROL_TRBS,
                                   &layout),
-             XHCI_XFER_BAD_PARAM, "512 is not a legal EP0 Max Packet Size");
-    for (i = 0; i < 4; i++) {
-        static const ULONG legal[4] = { 8, 16, 32, 64 };
+             XHCI_XFER_BAD_PARAM, "1024 is not a legal EP0 Max Packet Size");
+    request_init(&req, 0x00, 0x05, 3, 0, 0, 0, 128, NULL);
+    CHECK_EQ(XhciXferBuildControl(&req, out, XHCI_XFER_MAX_CONTROL_TRBS,
+                                  &layout),
+             XHCI_XFER_BAD_PARAM, "nor is 128");
+    for (i = 0; i < 5; i++) {
+        static const ULONG legal[5] = { 8, 16, 32, 64, 512 };
 
         request_init(&req, 0x00, 0x05, 3, 0, 0, 0, legal[i], NULL);
         CHECK_EQ(XhciXferBuildControl(&req, out, XHCI_XFER_MAX_CONTROL_TRBS,

@@ -1,0 +1,70 @@
+# xhciuas.sys import allowlist (amd64) - the UAS class driver's 64-bit build
+# (roadmap-hcd.md task 31-A.2), held to NT 5.2 amd64 evidence
+# (winxp64-baselines.expected), as xhci98-imports-amd64.allow holds
+# xhci98.sys. scripts\build-driver.cmd passes it with -AllowPath on every
+# -amd64 link of src\uas. Format and rules: xhci98-imports.allow's header;
+# the amd64 evidence rule (resolution against the authenticated NT 5.2 amd64
+# kernel IS the evidence, no Windows 98 proxy wanted): xhci98-imports-amd64.allow's.
+#
+# Every row is the amd64 twin of a row in xhciuas-imports.allow, except where
+# the architecture changes the pair: the Interlocked and Kf* spin-lock pairs
+# and KeInitializeSpinLock are intrinsics or inlines on amd64, which imports
+# KeAcquireSpinLockRaiseToDpc / KeReleaseSpinLock instead; WDK 7.1's checked
+# headers import RtlAssert (debug and qemu only); and /GS imports
+# KeBugCheckEx, exactly as in xhci98-imports-amd64.allow, whose comments say
+# why each is accepted. The pool rule holds: SITES=uas_mem.obj.
+
+[imports]
+
+# --- Compiler- and header-added pairs, as in xhci98-imports-amd64.allow ---
+ntoskrnl.exe!KeBugCheckEx                  all    required  nt52-amd64-export; /GS __report_gsfailure only, bugcheck 0xF7 (as xhci98-imports-amd64.allow)
+ntoskrnl.exe!RtlAssert                     debug  required  nt52-amd64-export; WDK 7.1 checked-header ASSERTs only
+ntoskrnl.exe!RtlAssert                     qemu   required  nt52-amd64-export; WDK 7.1 checked-header ASSERTs only
+
+# --- PnP, the FDO attach and the LUN PDOs ---
+ntoskrnl.exe!IoCreateDevice                all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IoDeleteDevice                all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IoAttachDeviceToDeviceStack   all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IoDetachDevice                all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IofCallDriver                 all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IofCompleteRequest            all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!RtlInitUnicodeString          all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!ObfReferenceObject            all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!PoStartNextPowerIrp           all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!PoCallDriver                  all    required  nt52-amd64-export; twin of the x86 row
+
+# --- The bus requests, the waits, the engine's lock, timer and worker ---
+ntoskrnl.exe!IoAllocateIrp                 all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IoFreeIrp                     all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!KeInitializeEvent             all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!KeSetEvent                    all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!KeClearEvent                  all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!KeWaitForSingleObject         all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!KeDelayExecutionThread        all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!KeAcquireSpinLockRaiseToDpc   all    required  nt52-amd64-export; KeAcquireSpinLock/KeReleaseSpinLock on amd64 (the x86 HAL.dll Kf* rows)
+ntoskrnl.exe!KeReleaseSpinLock             all    required  nt52-amd64-export; KeAcquireSpinLock/KeReleaseSpinLock on amd64 (the x86 HAL.dll Kf* rows)
+ntoskrnl.exe!KeInitializeDpc               all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!KeInitializeTimer             all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!KeSetTimer                    all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!KeCancelTimer                 all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!ExQueueWorkItem               all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IoCancelIrp                   all    required  nt52-amd64-export; twin of the x86 row
+
+# --- Pool, MDLs and transfer-IRP memory: uas_mem.obj only ---
+ntoskrnl.exe!ExAllocatePoolWithTag         all    required  SITES=uas_mem.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!ExFreePool                    all    required  SITES=uas_mem.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IoAllocateMdl                 all    required  SITES=uas_mem.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IoFreeMdl                     all    required  SITES=uas_mem.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!MmBuildMdlForNonPagedPool     all    required  SITES=uas_mem.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IoBuildPartialMdl             all    required  SITES=uas_mem.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IoInitializeIrp               all    required  SITES=uas_mem.obj nt52-amd64-export; twin of the x86 row
+
+[deny]
+
+ExAllocatePool              Not the HCD's spelling (xhci98-imports.allow; task 25.3). Allocate with ExAllocatePoolWithTag once its row exists.
+ExFreePoolWithTag           No Windows 98 evidence, and the x86 and amd64 sources are one tree: free with ExFreePool on both.
+IoForwardIrpSynchronously   Windows XP and later - blocks the load on Win2000, and the x86 and amd64 sources are one tree. Use IoCallDriver plus a completion routine that signals a KEVENT.
+IoSetCompletionRoutineEx    Windows XP and later - blocks the load on Win2000, as above.
+IoCsqInitialize             Cancel-safe queues arrived with the XP DDK and are not in the Win2K DDK's libraries.
+IoCsqInsertIrp              Cancel-safe queue family - not in the Win2K DDK.
+IoCsqRemoveNextIrp          Cancel-safe queue family - not in the Win2K DDK.

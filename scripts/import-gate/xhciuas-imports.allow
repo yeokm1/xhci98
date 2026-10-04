@@ -1,0 +1,108 @@
+# xhciuas.sys import allowlist (x86) - module/symbol pairs the UAS class
+# driver may import (roadmap-hcd.md task 31-A.2). scripts\build-driver.cmd
+# runs scripts\import-gate\check-imports.ps1 with -AllowPath naming this file
+# on every link of src\uas, so the second binary of the package is gated as
+# the first is: the same format, the same three evidence tags, the same rule
+# that every row carries Windows 98 evidence of its own, and the same deny
+# set. See xhci98-imports.allow's header for the format and the rules; this
+# header says only what differs.
+#
+# EVERY ROW IS EITHER A PAIR xhci98.sys ALREADY IMPORTS, with that file's
+# evidence text verbatim, or one of three pairs new to the package, each with
+# its design record 13 Appendix A row (task 25.3's table): IoInitializeIrp
+# (row 26), IoCancelIrp (row 30) and IoBuildPartialMdl (row 129), each
+# "evidenced (stock 98 SE precedent)" there. No pair here is new to the
+# evidence base.
+#
+# THE POOL RULE (design record 13 section 7.5) holds for this binary too:
+# every pool, MDL and IRP-memory pair is SITES=uas_mem.obj.
+#
+# No USBPORT.SYS pair (the gate refuses one by name), no USBD.SYS pair: the
+# driver builds its URBs itself rather than through usbd.sys's helpers, so it
+# needs nothing that Windows 98 SE's or NUSB's usbd.sys would have to export.
+#
+# Format, one entry per line, whitespace separated:
+#
+#   MODULE!SYMBOL   FLAVORS   REQUIREMENT   evidence notes to end of line
+
+[imports]
+
+# --- PnP, the FDO attach and the LUN PDOs ---
+ntoskrnl.exe!IoCreateDevice                  all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoCreateDevice, hint 38) (+43 other 98 SE); ntkern-name
+ntoskrnl.exe!IoDeleteDevice                  all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoDeleteDevice, hint 3D) (+41 other 98 SE); ntkern-name
+ntoskrnl.exe!IoAttachDeviceToDeviceStack     all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoAttachDeviceToDeviceStack, hint 30) (+36 other 98 SE); ntkern-name
+ntoskrnl.exe!IoDetachDevice                  all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoDetachDevice, hint 3F) (+26 other 98 SE); ntkern-name
+ntoskrnl.exe!IofCallDriver                   all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IofCallDriver, hint 68) (+49 other 98 SE); ntkern-name
+ntoskrnl.exe!IofCompleteRequest              all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!IofCompleteRequest, hint 69) (+43 other 98 SE); ntkern-name
+
+# --- The bus requests and their waits (synchronous URBs, the streams query) ---
+ntoskrnl.exe!IoAllocateIrp                   all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoAllocateIrp, hint 2D) (+30 other 98 SE); ntkern-name
+ntoskrnl.exe!IoFreeIrp                       all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoFreeIrp, hint 42) (+31 other 98 SE); ntkern-name
+ntoskrnl.exe!KeInitializeEvent               all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeEvent, hint 74) (+48 other 98 SE); ntkern-name
+ntoskrnl.exe!KeSetEvent                      all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeSetEvent, hint 8E) (+42 other 98 SE); ntkern-name
+ntoskrnl.exe!KeClearEvent                    all  required  w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!KeClearEvent, hint 6E) (+5 other 98 SE); ntkern-name
+ntoskrnl.exe!KeWaitForSingleObject           all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeWaitForSingleObject, hint 95) (+51 other 98 SE); ntkern-name
+ntoskrnl.exe!KeDelayExecutionThread          all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeDelayExecutionThread, hint 6F) (+12 other 98 SE); ntkern-name
+
+# --- The engine: its lock, the one-second timer and the recovery worker ---
+ntoskrnl.exe!KeInitializeSpinLock            all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeSpinLock, hint 77) (+32 other 98 SE); ntkern-name
+ntoskrnl.exe!KeInitializeDpc                 all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeDpc, hint 73) (+24 other 98 SE)
+ntoskrnl.exe!KeInitializeTimer               all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeTimer, hint 78) (+20 other 98 SE)
+ntoskrnl.exe!KeSetTimer                      all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeSetTimer, hint 90) (+18 other 98 SE)
+ntoskrnl.exe!KeCancelTimer                   all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeCancelTimer, hint 6D) (+20 other 98 SE)
+ntoskrnl.exe!ExQueueWorkItem                 all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!ExQueueWorkItem, hint 17) (+23 other 98 SE); ntkern-name. The recovery worker (uas_xport.c), queued from the timer DPC and from transfer completions
+ntoskrnl.exe!InterlockedIncrement            all  required  w2k-export; win98-precedent openhci.sys 4.10.2222 (NTOSKRNL.EXE!InterlockedIncrement, hint 28) (+35 other 98 SE); ntkern-name
+ntoskrnl.exe!InterlockedDecrement           all  required  w2k-export; win98-precedent openhci.sys 4.10.2222 (NTOSKRNL.EXE!InterlockedDecrement, hint 26) (+33 other 98 SE); ntkern-name. The engine and LUN rundowns (uas_xport.c, uas_pdo.c, uas_fdo.c)
+ntoskrnl.exe!PoStartNextPowerIrp             all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!PoStartNextPowerIrp, hint B6) (+25 other 98 SE); ntkern-name
+ntoskrnl.exe!PoCallDriver                    all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!PoCallDriver, hint AE) (+21 other 98 SE); ntkern-name
+ntoskrnl.exe!RtlInitUnicodeString            all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!RtlInitUnicodeString, hint D7) (+47 other 98 SE); ntkern-name
+ntoskrnl.exe!ObfReferenceObject              all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!ObfReferenceObject, hint AD) (+14 other 98 SE) (design record 13 Appendix A row 35). The ObReferenceObject macro: every PDO a relations list returns is referenced
+HAL.dll!KfAcquireSpinLock                    all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KfAcquireSpinLock, hint 6) (+31 other 98 SE); ntkern-name
+HAL.dll!KfReleaseSpinLock                    all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KfReleaseSpinLock, hint 9) (+31 other 98 SE); ntkern-name
+ntoskrnl.exe!IoCancelIrp                     all  required  w2k-export; win98-precedent openhci.sys 4.10.2222 (NTOSKRNL.EXE!IoCancelIrp, hint 35) (+14 other 98 SE); ntkern-name (design record 13 Appendix A row 30). Cancels this driver's own transfer IRPs in recovery
+
+# --- Pool, MDLs and transfer-IRP memory: uas_mem.obj only ---
+ntoskrnl.exe!ExAllocatePoolWithTag           all  required  SITES=uas_mem.obj w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!ExAllocatePoolWithTag, hint 7) (+61 other 98 SE); ntkern-name
+ntoskrnl.exe!ExFreePool                      all  required  SITES=uas_mem.obj w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!ExFreePool, hint C) (+60 other 98 SE); ntkern-name
+ntoskrnl.exe!IoAllocateMdl                   all  required  SITES=uas_mem.obj w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!IoAllocateMdl, hint 2E) (+11 other 98 SE); ntkern-name
+ntoskrnl.exe!IoFreeMdl                       all  required  SITES=uas_mem.obj w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!IoFreeMdl, hint 43) (+14 other 98 SE); ntkern-name
+ntoskrnl.exe!MmBuildMdlForNonPagedPool       all  required  SITES=uas_mem.obj w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!MmBuildMdlForNonPagedPool, hint 99) (+6 other 98 SE); ntkern-name
+ntoskrnl.exe!IoBuildPartialMdl               all  required  SITES=uas_mem.obj w2k-export; win98-precedent 1394bus.sys 4.10.2222 (NTOSKRNL.EXE!IoBuildPartialMdl, hint 33) (+1 other 98 SE: sbp2port.sys) (design record 13 Appendix A row 129). The data MDL over a class driver's SRB buffer, as a port driver builds it
+ntoskrnl.exe!IoInitializeIrp                 all  required  SITES=uas_mem.obj w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!IoInitializeIrp, hint 4D) (+9 other 98 SE) (design record 13 Appendix A row 26). Transfer IRPs in this driver's own pool, initialised before each use: IoReuseIrp has no Windows 98 evidence (row 27)
+
+[deny]
+
+# xhci98-imports.allow's deny set, unchanged: each reason is a fact about a
+# target and binds any binary loaded there.
+
+ExAllocatePool              Not the HCD's spelling: task 25.3 found no Windows 98 SE or NUSB binary importing the untagged name, while ExAllocatePoolWithTag has dozens of stock 98 SE importers (design record 13 section 7). The HCD allocates with ExAllocatePoolWithTag and frees with ExFreePool.
+ExFreePoolWithTag           No Windows 98 evidence at all (task 25.3: no stock 98 SE driver imports it, and NUSB 3.6's wdmstub.sys appears to supply it), so it stays denied after the pool rows arrive. Free with ExFreePool.
+MmGetSystemRoutineAddress   Missing on Win98 (Oney p.438). There is no runtime symbol resolution on that target - every import decision is static and made here.
+KeNumberProcessors          Not exported on Win98 (Oney p.441).
+IoAllocateWorkItem          Not exported on Win98 (Oney p.375); task 25.3 found it among the names NUSB 3.6's wdmstub.sys supplies. ExQueueWorkItem has stock 98 SE precedent.
+IoQueueWorkItem             Not exported on Win98 (Oney p.375).
+IoFreeWorkItem              Not exported on Win98 (Oney p.375).
+IoAcquireRemoveLock         The IO_REMOVE_LOCK family is missing on Win98 SE (Oney p.191). Keep an outstanding-I/O count instead.
+IoReleaseRemoveLock         IO_REMOVE_LOCK family - missing on Win98 SE (Oney p.191).
+IoReleaseRemoveLockAndWait  IO_REMOVE_LOCK family - missing on Win98 SE (Oney p.191).
+MmMapLockedPagesSpecifyCache  Missing on Win98; MmGetSystemAddressForMdlSafe expands to it (Oney p.225). Task 25.7's transfer route needs no system mapping of a URB buffer.
+MmGetPhysicalAddress        No Windows 98 binary precedent in any of the 86 scanned (task 25.3), and it would bypass the HAL's map registers; transfer buffers go through the DMA adapter's MapTransfer (design record 13 section 11).
+HalGetAdapter               No Windows 98 binary precedent (task 25.3). The DMA adapter comes from IoGetDmaAdapter, as Windows 98 SE's own uhcd.sys and openhci.sys get theirs, and the two routes are never mixed (design record 13 section 11).
+HalAllocateCommonBuffer     No Windows 98 binary precedent (task 25.3). Under ntddk.h a call by this name is a HAL import; call the adapter's DMA_OPERATIONS slot instead.
+HalFreeCommonBuffer         Same as HalAllocateCommonBuffer.
+PsGetVersion                Missing on Win98 (Oney p.437). Use IoIsWdmVersionAvailable.
+KeReadStateEvent            Missing on Win98 (Oney p.95).
+IoReportTargetDeviceChangeAsynchronous  Not exported on Win98 - a load-blocking import, not a runtime failure (Oney p.191).
+PoRegisterDeviceNotify      Not implemented on Win98 (Oney p.254).
+PoCancelDeviceNotify        Not implemented on Win98 (Oney p.254).
+PoRegisterSystemState       Not implemented on Win98 (Oney p.254).
+PoSetSystemState            Not implemented on Win98 (Oney p.254).
+PoUnregisterSystemState     Not implemented on Win98 (Oney p.254).
+HalTranslateBusAddress      Only partially available on Win98 (Oney p.441). Use the translated resources PnP supplies in IRP_MN_START_DEVICE.
+KeAcquireInterruptSpinLock  Windows XP and later - blocks the load on Win2000 (docs\usb-xhci-info\win98-wdm.md). Use KeSynchronizeExecution, which the HCD can now call because it owns its interrupt object.
+KeReleaseInterruptSpinLock  Windows XP and later - blocks the load on Win2000.
+IoForwardIrpSynchronously   Windows XP and later - blocks the load on Win2000. Use IoCallDriver plus a completion routine that signals a KEVENT.
+IoSetCompletionRoutineEx    Windows XP and later - blocks the load on Win2000.
+IoCsqInitialize             Cancel-safe queues arrived with the XP DDK and are not in the Win2K DDK's libraries.
+IoCsqInsertIrp              Cancel-safe queue family - not in the Win2K DDK.
+IoCsqRemoveNextIrp          Cancel-safe queue family - not in the Win2K DDK.

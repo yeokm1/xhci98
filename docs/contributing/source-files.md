@@ -22,7 +22,22 @@
 > machine, host suite `test_enum`). Batch (c) (26-A.5, 26-A.6) adds `hcd_urb.c`
 > (the device PDOs' internal device controls) and the pure `xhci_pipe.c`
 > (configuration walk, endpoint parameters, Configure Endpoint plans, setup
-> packets, buffer splits and the USBD status table; host suite `test_pipe`). The tables below are the
+> packets, buffer splits and the USBD status table; host suite `test_pipe`). Phase 29 (drafted
+> 2026-10-04) adds the pure `xhci_link.c` (a USB3 root port's link state machine and
+> 29-A.5's hold and release rules; host suite `test_link`). Phase 30 (drafted
+> 2026-10-04) adds the pure `xhci_sshub.c` (the SuperSpeed hub class's decisions:
+> the 0x2A descriptor, the SuperSpeed port decision, hot or warm hub-port reset,
+> the extended port status and a downstream SuperSpeedPlus rate's speed ID; host
+> suite `test_sshub`) and `hcd_sshub.c` (the SuperSpeed half of a USB 3 hub on the
+> controller thread, entered from `hcd_hub.c` where `hub->Usb3`).
+> Task 31-A.1 adds the pure `xhci_stream.c` / `xhci_stream.h` (bulk streams'
+> plan, block layout, Stream Context and command encoders, the event's stream;
+> host suite `test_stream`) and `xhci98_streams.h`, the private open-streams
+> interface a separate class driver includes; the streams themselves are served
+> in `hcd_cfg.c` and reach every stream's pipe through `hcd_io.c`. Task 31-A.3
+> adds the pure `xhci_xport.c` / `xhci_xport.h` (the storage transport policy:
+> Bulk-Only or UAS for an interface offering either, and the ids that follow;
+> host suite `test_xport`), applied in `hcd_pdo.c`. The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name

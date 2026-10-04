@@ -1,6 +1,15 @@
 /*
- * xhcisnap.c - read xhci98.sys's miniport extension and raw PORTSC array out
- * of a running Windows 98 or Windows 2000 machine, from user mode.
+ * xhcisnap.c - read xhci98.sys's extension, raw PORTSC array and (from
+ * 2.0.0.0) its enabled slots out of a running machine, from user mode.
+ *
+ * TWO DRIVERS ANSWER IT. From 2.0.0.0 xhci98.sys is the successor host
+ * controller driver (roadmap-hcd.md, design record 13): it owns its driver
+ * object, creates \DosDevices\HCD<n> itself and answers the same USBUSER
+ * PassThru request through its own door (src/hcd_door.c, schema 5
+ * unchanged, the slots region added). Most of the history below is the 1.x
+ * miniport's, which ran under usbport.sys and reached this tool through
+ * usbport's escape; where it says usbport or the miniport, that is the 1.x
+ * route, which this tool still reads.
  *
  * WHY THIS EXISTS, and since task 13-L.2 it is not a bench tool. On Windows 98
  * the driver records everything a maintainer needs - the counters and the note
@@ -269,7 +278,7 @@ static const char *uu_status_text(unsigned long code)
      * is where a user who ran a DUMP against a shut channel actually reads it.
      * **Do not put an explanation back into a column.**
      */
-    case 6:  return "MINIPORT DECLINED";
+    case 6:  return "DRIVER DECLINED";
     case 7:  return "buffer too small";
     default: return "unknown";
     }
@@ -321,6 +330,18 @@ static const unsigned long snap_guid[4] = {
 
 #define SNAP_REGION_EXTENSION       0UL
 #define SNAP_REGION_PORTSC          1UL
+/*
+ * The HCD's enabled slots (src/xhci.h, XHCI_SNAPSHOT_REGION_SLOTS; 2.0.0.0
+ * on): one record of SNAP_SLOT_WORDS ULONGs per device, so the report can
+ * name the speed each device's Slot Context actually carries - the witness
+ * roadmap-hcd.md 29-E.1 asks for beside the decoded port speed. A region,
+ * not a header change, so the schema stays 5: a 1.x driver answers it with
+ * BAD_REGION and the report says the driver does not serve it.
+ */
+#define SNAP_REGION_SLOTS           2UL
+#define SNAP_SLOT_WORDS             10UL
+#define SNAP_SLOT_MAX               64UL
+#define SNAP_SLOT_UNREAD            0xFFFFFFFFUL
 
 /*
  * The verbosity ladder, as the driver's `XHCI_LOG_VERBOSITY_*` spells it. This
@@ -501,7 +522,7 @@ static int take_window(HANDLE device, unsigned long region,
      */
     status = get32(snap_buffer, UU_STATUS);
     if (status != 0) {
-        printf("  usbport refused the request: %lu (%s)\n",
+        printf("  the request was refused: %lu (%s)\n",
                status, uu_status_text(status));
         /*
          * The advice that used to travel inside `uu_status_text`'s code-6
@@ -534,6 +555,18 @@ static int take_window(HANDLE device, unsigned long region,
                "same tree as the driver.\n",
                header->SchemaVersion, header->HeaderBytes,
                SNAP_SCHEMA, (unsigned)sizeof(SNAP_HEADER));
+        return 0;
+    }
+    /* The reply must cover the payload it claims: a short one would leave
+     * this buffer's zeroes to be read as data (Codex review of the slots
+     * change, NOTE 3). Every answer the door and usbport give covers the
+     * whole block. */
+    if (header->PayloadBytes > SNAP_PARAM_BYTES - sizeof(SNAP_HEADER) ||
+        (unsigned long)returned < UU_PARAMETERS + sizeof(SNAP_HEADER) +
+                                      header->PayloadBytes) {
+        printf("  the reply is %lu bytes, short of the %lu-byte payload it "
+               "claims - refusing it\n", (unsigned long)returned,
+               header->PayloadBytes);
         return 0;
     }
     *payload = block + sizeof(SNAP_HEADER);
@@ -1101,8 +1134,7 @@ static void write_companion_header(const SNAP_HEADER *h)
                  "'it was zero' - the\n"
                  "          driver looked and found nothing. No INF has run "
                  "for this device,\n"
-                 "          the value is absent, or usbport refused the "
-                 "read.\n");
+                 "          the value is absent, or the read failed.\n");
         }
         write_companion_imod(h);
         write_companion_vhub(h);
@@ -1295,11 +1327,12 @@ static void print_portsc(const unsigned char *values, unsigned long ports)
      * repaired by task 13-L.2 rather than rediscovered at a bench).
      *
      * It used to announce the unpowered case only when EVERY port read
-     * `PP = 0`, which **cannot happen on a controller with SuperSpeed ports** -
-     * they leave six of the E460's eighteen unpowered by design, because this
-     * driver manages USB 2.0 protocol ports only and deliberately leaves the
-     * SuperSpeed ones alone. So on real silicon the headline stayed silent
-     * while the per-port table said the thing it was meant to shout.
+     * `PP = 0`, which could not happen under the 1.x miniport on a controller
+     * with SuperSpeed ports - it left six of the E460's eighteen unpowered by
+     * design, managing USB 2.0 protocol ports only. So on real silicon the
+     * headline stayed silent while the per-port table said the thing it was
+     * meant to shout. The 2.0.0.0 driver manages and powers both port classes,
+     * so there an unpowered port is no longer expected at all.
      *
      * The test that survives that is per port and not over all of them: **a
      * port with a device on it and no power** is Finding Q read off the
@@ -1316,13 +1349,128 @@ static void print_portsc(const unsigned char *values, unsigned long ports)
     if (ports != 0 && unpowered == ports) {
         comp("\n  *** PP is CLEAR on EVERY port.\n");
     } else if (unpowered != 0) {
-        comp("\n  (PP is clear on %lu of %lu ports. On a controller with "
-             "SuperSpeed ports that\n   is EXPECTED: this driver manages USB "
-             "2.0 protocol ports only and leaves the\n   SuperSpeed ones "
-             "unpowered by design. It is not a fault on its own.)\n",
+        comp("\n  (PP is clear on %lu of %lu ports. xhci98.sys from 2.0.0.0 "
+             "powers every port,\n   USB 2.0 and SuperSpeed alike, so there "
+             "an unpowered port is one over-current\n   or a stop left off. "
+             "Under a 1.x miniport the SuperSpeed ports were unpowered\n   "
+             "by design, and this line was expected.)\n",
              unpowered, ports);
     }
     comp("  (%lu of %lu ports report a device connected.)\n", connected, ports);
+}
+
+/* ---- the slots: the speed each device's Slot Context carries ----------- */
+
+/* The decoded class the driver reports (its XHCI_SPEED_* values) in words;
+ * SuperSpeedPlus is SuperSpeed's class with the Plus word set, by the rate
+ * the link trained at (xHCI 1.2c Table 6-4 and the port's PSI dwords). */
+static const char *slot_speed_text(unsigned long cls, unsigned long plus)
+{
+    switch (cls) {
+    case 1:  return "Low Speed";
+    case 2:  return "Full Speed";
+    case 3:  return "High Speed";
+    case 4:  return plus ? "SuperSpeedPlus" : "SuperSpeed";
+    default: return "unknown";
+    }
+}
+
+/* The SuperSpeed link's rank (the driver's XHCI_SS_RANK_*): Gen and lanes. */
+static const char *slot_rank_text(unsigned long rank)
+{
+    switch (rank) {
+    case 1:  return "Gen 1x1";
+    case 2:  return "Gen 1x2";
+    case 3:  return "Gen 2x1";
+    case 4:  return "Gen 2x2";
+    default: return "";
+    }
+}
+
+static const char *slot_state_text(unsigned long state)
+{
+    switch (state) {
+    case 0:  return "enabled";
+    case 1:  return "default";
+    case 2:  return "addressed";
+    case 3:  return "configured";
+    case SNAP_SLOT_UNREAD: return "not read";
+    default: return "reserved";
+    }
+}
+
+/*
+ * One line per device the driver holds a slot for: its Slot ID, root port and
+ * Route String, the Output Slot Context's state and Speed field (the raw
+ * PSIV) and that PSIV decoded on the root port's protocol, and for a
+ * SuperSpeed link the rate it trained at and its Gen and lane count.
+ */
+static void print_slots(const unsigned char *records, unsigned long count)
+{
+    unsigned long i;
+    unsigned long kbps;
+    const char *rank;
+    char rate[48];
+    const unsigned char *r;
+
+    comp("\n  slot  port  route  tier  state       PSIV  speed\n");
+    for (i = 0; i < count; i++) {
+        r = records + i * SNAP_SLOT_WORDS * 4;
+        rate[0] = 0;
+        kbps = get32(r, 8 * 4);
+        rank = slot_rank_text(get32(r, 9 * 4));
+        if (get32(r, 6 * 4) == 4 && kbps != 0) {
+            if ((kbps % 1000000UL) / 100000UL != 0) {
+                sprintf(rate, ", %lu.%lu Gbit/s", kbps / 1000000UL,
+                        (kbps % 1000000UL) / 100000UL);
+            } else {
+                sprintf(rate, ", %lu Gbit/s", kbps / 1000000UL);
+            }
+            if (rank[0] != 0) {
+                strcat(rate, ", ");
+                strcat(rate, rank);
+            }
+        }
+        if (get32(r, 5 * 4) == SNAP_SLOT_UNREAD) {
+            comp("  %4lu  %4lu  %05lX  %4lu  %-10s  ----  (controller not "
+                 "started)\n",
+                 get32(r, 0), get32(r, 4), get32(r, 8), get32(r, 12),
+                 slot_state_text(get32(r, 16)));
+            continue;
+        }
+        comp("  %4lu  %4lu  %05lX  %4lu  %-10s  %4lu  %s%s\n",
+             get32(r, 0), get32(r, 4), get32(r, 8), get32(r, 12),
+             slot_state_text(get32(r, 16)), get32(r, 20),
+             slot_speed_text(get32(r, 24), get32(r, 28)), rate);
+    }
+    comp("  (%lu device(s) hold a slot. PSIV is the Speed field of the "
+         "controller's own\n   Output Slot Context; speed is that value "
+         "decoded on the root port's\n   protocol.)\n", count);
+}
+
+/* `-selftest-slots`: the slot decode over canned records, on the screen,
+ * for xhcisnap\selftest.cmd - no device needed. */
+static int selftest_slots(void)
+{
+    static const unsigned long rec[5][SNAP_SLOT_WORDS] = {
+        { 1, 1, 0x00000, 0, 3, 4, 4, 0, 5000000UL, 1 },
+        { 2, 5, 0x00001, 1, 3, 3, 3, 0, 0, 0 },
+        { 3, 2, 0x00000, 0, 3, 7, 4, 1, 10000000UL, 3 },
+        { 4, 5, 0x00021, 2, 2, 2, 1, 0, 0, 0 },
+        { 5, 3, 0x00000, 0, SNAP_SLOT_UNREAD, SNAP_SLOT_UNREAD, 0, 0, 0, 0 }
+    };
+    unsigned char bytes[5 * SNAP_SLOT_WORDS * 4];
+    unsigned long i;
+    unsigned long w;
+
+    for (i = 0; i < 5; i++) {
+        for (w = 0; w < SNAP_SLOT_WORDS; w++) {
+            put32(bytes, (i * SNAP_SLOT_WORDS + w) * 4, rec[i][w]);
+        }
+    }
+    companion = NULL;
+    print_slots(bytes, 5);
+    return 0;
 }
 
 /* ---- -probe: is the ROUTE alive, independent of this driver? ------------ */
@@ -1392,7 +1540,7 @@ static int probe_route(HANDLE device)
     printf("  %-34s status %2lu (%s)\n", "PassThru, our GUID", passthru,
            uu_status_text(passthru));
     if (passthru == 0) {
-        printf("    the miniport ANSWERED - the channel is live, take the "
+        printf("    the driver ANSWERED - the channel is live, take the "
                "dump\n");
     } else if (passthru == 6) {
         /*
@@ -1404,18 +1552,18 @@ static int probe_route(HANDLE device)
          * saying which it is would be a guess. What it can do is name both and
          * say what to do about the one that is fixable from here.
          */
-        say("    ", "the request reached a miniport and it DECLINED. The ROUTE "
-                    "WORKS.");
+        say("    ", "the request reached the controller's driver and it "
+                    "DECLINED. The ROUTE WORKS.");
         say("    ", "Two things look exactly like this and the driver cannot "
                     "tell you which:");
         say_hang("      ", "         ", "1. an xhci98 whose channel is switched off - the default "
                       "on every machine. Fix: xhcisnap -verbosity 2, then "
                       "RESTART, reproduce, and dump.");
-        say_hang("      ", "         ", "2. some other miniport on this HCD index, or an xhci98 "
+        say_hang("      ", "         ", "2. some other controller's driver on this HCD index, or an xhci98 "
                       "from before the channel shipped. Try -c 1, -c 2, or "
                       "check the installed xhci98.sys.");
     } else {
-        printf("    *** the request did not reach a miniport\n");
+        printf("    *** the request did not reach the controller's driver\n");
     }
 
     probe_one(device, "unknown request code 15",
@@ -2680,8 +2828,9 @@ static void usage_long(void)
 {
     printf("xhcisnap %s   built %s\n", XHCISNAP_VERSION, XHCISNAP_BUILT);
     printf(
-"read xhci98.sys's own log and PORTSC off a running machine, from user mode,\n"
-"through usbport's PassThru escape.\n"
+"read xhci98.sys's own log, PORTSC and slots off a running machine, from user\n"
+"mode, through the USBUSER PassThru request (the driver's own door from\n"
+"2.0.0.0; usbport's escape under a 1.x miniport).\n"
 "\n"
 "EVERY ARGUMENT.  With none at all you get the short usage, not a dump - a\n"
 "program's name typed to find out what it is should not write three files.\n"
@@ -2744,8 +2893,93 @@ static void usage_long(void)
 "AND A FIFTH STEP THAT IS NOT ONE OF THE FOUR:  xhcisnap -disable , once you\n"
 "have sent the capture.  While the channel is on, anyone using this machine\n"
 "can read this driver's own diagnostic state through it.  This driver cannot\n"
-"put a lock on that door - it belongs to Windows' USB port driver, which opens\n"
-"it to anyone - so the value you set IS the lock.\n");
+"put a lock on that door - Windows' USB property pages need it open to\n"
+"anyone, as usbport's was under a 1.x miniport - so the value you set IS the\n"
+"lock.\n");
+}
+
+/*
+ * The slots region, in as many windows as it takes (one, in practice: 32
+ * records of 40 bytes). Returns the record count; *state is 1 when read, 2
+ * when the driver does not serve the region (BAD_REGION), 0 on a failure
+ * already explained. Not part of the published .BIN/.PSC set - it is read
+ * for the report alone - but its windows count in the tear detector.
+ */
+static unsigned char slot_records[SNAP_SLOT_MAX * SNAP_SLOT_WORDS * 4];
+
+static unsigned long read_slots(HANDLE device, int *state,
+                                unsigned long *tearFirst,
+                                unsigned long *tearLast, int *tearTorn,
+                                int *tearSeen)
+{
+    SNAP_HEADER header;
+    const unsigned char *payload;
+    unsigned long have;
+    unsigned long record;
+
+    record = SNAP_SLOT_WORDS * 4;
+    have = 0;
+    *state = 0;
+    for (;;) {
+        if (!take_window(device, SNAP_REGION_SLOTS, have * record, &header,
+                         &payload)) {
+            return 0;
+        }
+        if ((header.Status & SNAP_S_BAD_REGION) != 0) {
+            *state = 2;
+            return 0;
+        }
+        /* Its tear detector joins the dump's, so the coherence line still
+         * speaks for every window taken (Codex review of the slots change,
+         * MINOR 2). */
+        if (!*tearSeen) {
+            *tearFirst = header.TearDetector;
+            *tearSeen = 1;
+        } else if (header.TearDetector != *tearFirst) {
+            *tearTorn = 1;
+        }
+        *tearLast = header.TearDetector;
+        if ((header.Status & ~(SNAP_S_TRUNCATED | SNAP_S_PAST_END)) != 0) {
+            printf("  slots: the driver refused the read, status %08lX\n",
+                   header.Status);
+            return 0;
+        }
+        /* Every window must be the one asked for and fit the region it
+         * describes, or the listing would claim devices it never received
+         * (MINOR 1). */
+        if (header.Region != SNAP_REGION_SLOTS ||
+            header.Offset != have * record ||
+            (header.RegionBytes % record) != 0 ||
+            header.RegionBytes > SNAP_SLOT_MAX * record ||
+            header.PayloadBytes > SNAP_PARAM_BYTES - sizeof(SNAP_HEADER) ||
+            (header.PayloadBytes % record) != 0 ||
+            header.Offset > header.RegionBytes ||
+            header.PayloadBytes > header.RegionBytes - header.Offset ||
+            (header.PayloadBytes == 0 &&
+             (header.Status & SNAP_S_TRUNCATED) != 0)) {
+            printf("  slots: an inconsistent reply (region %lu, offset %lu, "
+                   "%lu of %lu bytes)\n", header.Region, header.Offset,
+                   header.PayloadBytes, header.RegionBytes);
+            return 0;
+        }
+        while (header.PayloadBytes >= record) {
+            memcpy(slot_records + have * record, payload, record);
+            payload += record;
+            header.PayloadBytes -= record;
+            have++;
+        }
+        if ((header.Status & SNAP_S_TRUNCATED) == 0) {
+            break;
+        }
+    }
+    if (have * record != header.RegionBytes) {
+        printf("  slots: %lu of %lu device record(s) arrived - incomplete, "
+               "not reported\n", have, header.RegionBytes / record);
+        return 0;
+    }
+    *state = 1;
+    printf("  slots: %lu device(s) hold a slot\n", have);
+    return have;
 }
 
 /*
@@ -2804,6 +3038,8 @@ int main(int argc, char **argv)
      */
     SNAP_HEADER extLast;
     SNAP_HEADER portscLast;
+    unsigned long slotCount;
+    int slotState;
     int companionWasWritten;
     HANDLE device;
     char devicePath[32];
@@ -2930,6 +3166,8 @@ int main(int argc, char **argv)
             return 0;
         } else if (strcmp(argv[i], "-probe") == 0) {
             probeOnly = 1;
+        } else if (strcmp(argv[i], "-selftest-slots") == 0) {
+            return selftest_slots();
         } else if (strcmp(argv[i], "-selftest-report") == 0 && i + 1 < argc) {
             /*
              * The report path on its own, with no device: open BASE.TXT, write
@@ -3134,6 +3372,8 @@ int main(int argc, char **argv)
                               &portscLast,
                               &tearFirst, &tearLast, &tearTorn, &tearSeen,
                               portsc_values, sizeof(portsc_values));
+    slotCount = read_slots(device, &slotState, &tearFirst, &tearLast,
+                           &tearTorn, &tearSeen);
     CloseHandle(device);
     if (portscBytes == (unsigned long)-1) {
         DeleteFileA(extTmpPath);
@@ -3247,6 +3487,21 @@ int main(int argc, char **argv)
                      "at verbosity 3 and above.\n");
             }
         }
+    }
+
+    /*
+     * The slots go into the file at every level, and onto the screen when
+     * there is no file: a Slot ID, a port, a route and a speed carry no
+     * address, and the speed is the reading a bench session takes.
+     */
+    if (slotState == 1) {
+        print_slots(slot_records, slotCount);
+    } else if (slotState == 2) {
+        comp("\nslots: not served by this driver (an xhci98.sys before "
+             "2.0.0.0 has no slots\n  region; its PORTSC table above is what "
+             "it gives).\n");
+    } else {
+        comp("\nslots: the read failed; see the progress lines above.\n");
     }
 
     /*

@@ -30,16 +30,36 @@ rem                  page-cut SG list and hcdIsoFill's block, swept over buffer
 rem                  offsets, lengths, packet sizes, map-register grants and
 rem                  physical layouts, every TRB checked against the page table
 rem   test_enum    - the enumeration state machine (src\xhci_enum.c)
+rem   test_link    - the SuperSpeed link of a USB3 root port and 29-A.5's
+rem                  hold (src\xhci_link.c): PORTSC to link state, the
+rem                  bounded warm-reset recovery and its give-up, the hot or
+rem                  warm reset policy, U3 resume, and the hold's release
+rem                  rules case by case
 rem   test_pipe    - the URB-side computations (src\xhci_pipe.c): SETUP
 rem                  building, interface and endpoint parsing, the configure
 rem                  plan, the buffer split and the isochronous URB checks
 rem   test_func    - the composite split with and without an IAD, the filtered
 rem                  configuration descriptor and the function ids
 rem                  (src\xhci_func.c)
+rem   test_stream  - bulk streams' pure half (src\xhci_stream.c, task 31-A.1):
+rem                  MaxPSASize, the companion's MaxStreams, the grant and the
+rem                  array size, the block layout, the Stream Context, the
+rem                  Endpoint Context's stream fields, Set TR Dequeue with a
+rem                  Stream ID, the doorbell value and the event's stream
+rem   test_xport   - the mass-storage transport policy (src\xhci_xport.c, task
+rem                  31-A.3): Bulk-Only or UAS for an interface offering
+rem                  either, and the hardware and compatible ids that follow
 rem   test_hub     - the hub class's pure half (src\xhci_hub.c): the hub
 rem                  descriptor, the status-change bitmap, the port decision,
 rem                  the reset progress and speed bits, the depth and multi-TT
 rem                  rules and the instance key
+rem   test_sshub   - the SuperSpeed hub class's pure half (src\xhci_sshub.c,
+rem                  30-A.2): the 0x2A descriptor, the link-state field, the
+rem                  port decision over every SuperSpeed change bit, the hot
+rem                  or warm reset over every link state, its progress and
+rem                  clears, the extended port status, sublink rates, the
+rem                  downstream Protocol Speed ID, the pairing rule, and
+rem                  a held U3 link's resume and its progress
 rem   test_ctx    - the Slot, Endpoint and Input Control Context encoders
 rem                  (src\xhci_ctx.c): the golden vectors for every speed class,
 rem                  both context strides, and the field-by-field refusals
@@ -75,6 +95,15 @@ rem                  validation, root composition and sink selection; task
 rem                  13-L.2 retired the ring-0 file sink and those functions
 rem                  with it, and test_log.c had said so for
 rem                  two days while this summary had not.)
+rem
+rem   test_uas     - the pure core of xhciuas.sys, the UAS class driver
+rem                  (src\uas\uas_iu.c, task 31-A.2): the COMMAND and TASK
+rem                  MANAGEMENT IU encoders and the SENSE, RESPONSE and READY
+rem                  IU parser byte for byte, the SAM LUN field, the tag
+rem                  allocator's order and refusals, the walk for the UAS
+rem                  alternate setting and its Pipe Usage descriptors at High
+rem                  Speed and SuperSpeed, REPORT LUNS, the status fold, the
+rem                  CDB direction table and the storage id strings
 rem
 rem RETIRED ON 2026-10-02 with the miniport's sources (design record 13):
 rem test_vhub (src\xhci_vhub.c) and test_init (the miniport's MMIO-facing code
@@ -198,6 +227,10 @@ rem test_enum links nothing else: the enumeration machine of design record 13
 rem section 5.3 is a pure transition function, driven here with no controller
 rem (task 26-A.9).
 call :run test_enum "test_enum.c ..\src\xhci_enum.c"
+rem test_link links xhci_port.c for the PORTSC writes its actions become, and
+rem xhci_caps.c because xhci_port.c's root-hub map asks it which ports exist,
+rem and xhci_enum.c so the port-change feed is checked against a real machine.
+call :run test_link "test_link.c ..\src\xhci_link.c ..\src\xhci_port.c ..\src\xhci_caps.c ..\src\xhci_enum.c"
 call :run test_pipe "test_pipe.c ..\src\xhci_pipe.c"
 rem test_func links nothing else: the composite split, the filtered
 rem configuration descriptor and the function ids are pure computations over
@@ -207,6 +240,17 @@ rem test_hub links the pipe policy beside the hub class (task 27-A.1): the
 rem hub class's decisions are pure computations over descriptor and status
 rem bytes, and the Low-Speed mouse's interval behind a hub needs both.
 call :run test_hub "test_hub.c ..\src\xhci_hub.c ..\src\xhci_pipe.c"
+rem test_sshub links xhci_hub.c for the shape and limits the SuperSpeed half
+rem shares with a USB 2.0 hub, and xhci_caps.c for the PSI table a downstream
+rem SuperSpeedPlus rate is looked up in (30-A.2).
+call :run test_sshub "test_sshub.c ..\src\xhci_sshub.c ..\src\xhci_hub.c ..\src\xhci_caps.c"
+rem test_stream links nothing else: the stream plan, the block layout and
+rem the encoders are pure computations over registers' and descriptors'
+rem values (task 31-A.1).
+call :run test_stream "test_stream.c ..\src\xhci_stream.c"
+rem test_xport links nothing else: the transport choice and its ids are pure
+rem computations over descriptor bytes and three flags (task 31-A.3).
+call :run test_xport "test_xport.c ..\src\xhci_xport.c"
 rem test_strict links nothing else: strict mode's command precondition table
 rem (xHCI 1.2 section 4.6) is a pure function, checked here at every cell -
 rem each command type, DW3 bit 9, slot state and EP State.
@@ -225,6 +269,9 @@ rem encoder is what turns it into an Interval, so the two halves of task 9-A.2
 rem are one subject and a vector that stopped at the table would not have tested
 rem the number the hardware sees.
 call :run test_desc "test_desc.c ..\src\xhci_desc.c ..\src\xhci_ctx.c ..\src\xhci_mem.c"
+rem test_uas links nothing else: the UAS driver's information units, tags,
+rem descriptor walk and ids are pure computations over bytes (task 31-A.2).
+call :run test_uas "test_uas.c ..\src\uas\uas_iu.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64

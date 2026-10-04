@@ -1382,6 +1382,414 @@ static void test_iso_frames(void)
              "1024 back, the inclusive edge");
 }
 
+/* ------------------------------------------------------------------ */
+/* What Windows XP onward asks (task 28-A.1)                            */
+/* ------------------------------------------------------------------ */
+
+static ULONG get32(const UCHAR *p)
+{
+    return (ULONG)p[0] | ((ULONG)p[1] << 8) | ((ULONG)p[2] << 16) |
+           ((ULONG)p[3] << 24);
+}
+
+static void test_xp_requests(void)
+{
+    UCHAR b[40];
+    ULONG length;
+    ULONG actual;
+    ULONG i;
+
+    /* WDK 7.1 inc\api\usb.h's function codes, restated. */
+    CHECK_EQ(XhciPipeResetParts(0x1E), 3, "RESET_PIPE: both halves");
+    CHECK_EQ(XhciPipeResetParts(0x30), XHCI_PIPE_RESET_HOST,
+             "SYNC_RESET_PIPE: the controller's half");
+    CHECK_EQ(XhciPipeResetParts(0x31), XHCI_PIPE_RESET_DEVICE,
+             "SYNC_CLEAR_STALL: the device's half");
+    CHECK_EQ(XhciPipeResetParts(0x02), 0, "ABORT_PIPE is no reset");
+    CHECK_EQ(XhciPipeResetParts(0x32), 0, "CONTROL_TRANSFER_EX is no reset");
+
+    /* Design record 13 section 6.1's sizes, read from the class drivers'
+     * own QUERY_INTERFACE stores. */
+    CHECK_EQ(XhciPipeUsbdiSize(0, 4), 0x20, "V0 x86");
+    CHECK_EQ(XhciPipeUsbdiSize(1, 4), 0x24, "V1 x86 (XP usbstor)");
+    CHECK_EQ(XhciPipeUsbdiSize(2, 4), 0x28, "V2 x86");
+    CHECK_EQ(XhciPipeUsbdiSize(3, 4), 0x30, "V3 x86");
+    CHECK_EQ(XhciPipeUsbdiSize(0, 8), 0x40, "V0 x64 (XP x64 usbaudio)");
+    CHECK_EQ(XhciPipeUsbdiSize(1, 8), 0x48, "V1 x64 (XP x64 usbstor)");
+    CHECK_EQ(XhciPipeUsbdiSize(2, 8), 0x50, "V2 x64");
+    CHECK_EQ(XhciPipeUsbdiSize(3, 8), 0x60, "V3 x64");
+    CHECK_EQ(XhciPipeUsbdiSize(4, 4), 0, "no V4");
+    CHECK_EQ(XhciPipeUsbdiSize(0, 2), 0, "no 16-bit pointers");
+
+    for (i = 0; i < sizeof(b); i++) {
+        b[i] = 0xAA;
+    }
+    length = 8;
+    actual = 0;
+    CHECK_EQ(XhciPipeBusInformation(0, 400000, 0, b, &length, &actual),
+             XHCI_PIPE_OK, "level 0");
+    CHECK_EQ(length, 8, "level 0 length");
+    CHECK_EQ(actual, 8, "level 0 actual");
+    CHECK_EQ(get32(b), 400000, "level 0 total");
+    CHECK_EQ(get32(b + 4), 0, "level 0 consumed");
+    CHECK_EQ(b[8], 0xAA, "level 0 writes nothing past 8 bytes");
+
+    for (i = 0; i < sizeof(b); i++) {
+        b[i] = 0xAA;
+    }
+    length = 40;
+    CHECK_EQ(XhciPipeBusInformation(1, 12000, 5, b, &length, &actual),
+             XHCI_PIPE_OK, "level 1");
+    CHECK_EQ(length, 16, "level 1 length is the structure's");
+    CHECK_EQ(actual, 16, "level 1 actual");
+    CHECK_EQ(get32(b), 12000, "level 1 total");
+    CHECK_EQ(get32(b + 4), 5, "level 1 consumed");
+    CHECK_EQ(get32(b + 8), 0, "level 1 name length 0");
+    CHECK_EQ(b[12] | (b[13] << 8), 0, "level 1 empty name");
+    CHECK_EQ(b[16], 0xAA, "level 1 writes nothing past 16 bytes");
+
+    b[0] = 0xAA;
+    length = 7;
+    actual = 0;
+    CHECK_EQ(XhciPipeBusInformation(0, 1, 1, b, &length, &actual),
+             XHCI_PIPE_TOO_SMALL, "level 0, 7 bytes");
+    CHECK_EQ(actual, 8, "too small still says what it needs");
+    CHECK_EQ(length, 7, "too small leaves the length");
+    CHECK_EQ(b[0], 0xAA, "too small writes nothing");
+    length = 15;
+    CHECK_EQ(XhciPipeBusInformation(1, 1, 1, b, &length, NULL),
+             XHCI_PIPE_TOO_SMALL, "level 1, 15 bytes");
+    length = 40;
+    CHECK_EQ(XhciPipeBusInformation(2, 1, 1, b, &length, &actual),
+             XHCI_PIPE_UNSUPPORTED, "level 2");
+    CHECK_EQ(XhciPipeBusInformation(0, 1, 1, b, NULL, NULL),
+             XHCI_PIPE_BAD_PARAM, "no length");
+    CHECK_EQ(XhciPipeBusInformation(0, 1, 1, NULL, &length, NULL),
+             XHCI_PIPE_BAD_PARAM, "no buffer");
+
+    for (i = 0; i < sizeof(b); i++) {
+        b[i] = 0xAA;
+    }
+    CHECK_EQ(XhciPipeTopologyAddress(3, (0x14UL << 16) | 2UL, 5, 0, b),
+             XHCI_PIPE_OK, "topology, root port 5");
+    CHECK_EQ(get32(b), 3, "PCI bus");
+    CHECK_EQ(get32(b + 4), 0x14, "PCI device from bits 31:16");
+    CHECK_EQ(get32(b + 8), 2, "PCI function from bits 15:0");
+    CHECK_EQ(get32(b + 12), 0, "reserved");
+    CHECK_EQ(b[16] | (b[17] << 8), 5, "RootHubPortNumber");
+    for (i = 18; i < 32; i++) {
+        CHECK_EQ(b[i], 0, "no hub between, reserved zero");
+    }
+    CHECK_EQ(b[32], 0xAA, "32 bytes and no more");
+    CHECK_EQ(XhciPipeTopologyAddress(0, 0, 2, 0x5F3UL, b), XHCI_PIPE_OK,
+             "topology, three hubs below root port 2");
+    CHECK_EQ(b[16] | (b[17] << 8), 2, "RootHubPortNumber behind hubs");
+    CHECK_EQ(b[18] | (b[19] << 8), 3, "first hub's port, route bits 3:0");
+    CHECK_EQ(b[20] | (b[21] << 8), 15, "second hub's port");
+    CHECK_EQ(b[22] | (b[23] << 8), 5, "third hub's port");
+    for (i = 24; i < 32; i++) {
+        CHECK_EQ(b[i], 0, "the path ends: zero");
+    }
+    CHECK_EQ(XhciPipeTopologyAddress(0, 0, 0, 0, b), XHCI_PIPE_BAD_PARAM,
+             "port 0");
+    CHECK_EQ(XhciPipeTopologyAddress(0, 0, 256, 0, b), XHCI_PIPE_BAD_PARAM,
+             "port 256");
+    CHECK_EQ(XhciPipeTopologyAddress(0, 0, 1, 0, NULL), XHCI_PIPE_BAD_PARAM,
+             "no buffer");
+}
+
+/* ------------------------------------------------------------------ */
+/* SuperSpeed endpoints (29-A.3, 29-A.4) and SuperSpeedPlus isoch (29-A.6) */
+/* ------------------------------------------------------------------ */
+
+/* A configuration of one interface with one endpoint, its SS companion and,
+ * when sspBytes is nonzero, an SSP isochronous companion. The endpoint
+ * descriptor is at offset 18. Returns the length. */
+static ULONG ss_config(UCHAR *c, ULONG attrs, ULONG mps, ULONG bInterval,
+                       ULONG burst, ULONG compAttrs, ULONG bytesPerInterval,
+                       ULONG withCompanion, ULONG sspBytes)
+{
+    ULONG n;
+
+    n = 0;
+    c[n++] = 9; c[n++] = 2; c[n++] = 0; c[n++] = 0; c[n++] = 1; c[n++] = 1;
+    c[n++] = 0; c[n++] = 0x80; c[n++] = 50;
+    c[n++] = 9; c[n++] = 4; c[n++] = 0; c[n++] = 0; c[n++] = 1; c[n++] = 8;
+    c[n++] = 6; c[n++] = 0x50; c[n++] = 0;
+    c[n++] = 7; c[n++] = 5; c[n++] = 0x81; c[n++] = (UCHAR)attrs;
+    c[n++] = (UCHAR)(mps & 0xFF); c[n++] = (UCHAR)(mps >> 8);
+    c[n++] = (UCHAR)bInterval;
+    if (withCompanion) {
+        c[n++] = 6; c[n++] = 0x30; c[n++] = (UCHAR)burst;
+        c[n++] = (UCHAR)compAttrs;
+        c[n++] = (UCHAR)(bytesPerInterval & 0xFF);
+        c[n++] = (UCHAR)(bytesPerInterval >> 8);
+    }
+    if (sspBytes != 0) {
+        c[n++] = 8; c[n++] = 0x31; c[n++] = 0; c[n++] = 0;
+        c[n++] = (UCHAR)(sspBytes & 0xFF);
+        c[n++] = (UCHAR)((sspBytes >> 8) & 0xFF);
+        c[n++] = (UCHAR)((sspBytes >> 16) & 0xFF);
+        c[n++] = (UCHAR)((sspBytes >> 24) & 0xFF);
+    }
+    c[2] = (UCHAR)(n & 0xFF);
+    c[3] = (UCHAR)(n >> 8);
+    return n;
+}
+
+static void test_superspeed_endpoints(void)
+{
+    UCHAR c[64];
+    XHCI_PIPE_EP ep;
+    XHCI_PIPE_IFACE iface;
+    ULONG n;
+
+    /* Bulk IN, 1024, burst 15: a SuperSpeed flash drive's shape. */
+    n = ss_config(c, 2, 1024, 0, 15, 0, 0, 1, 0);
+    CHECK_EQ(XhciPipeFindInterface(c, n, 0, 0, &iface), XHCI_PIPE_OK,
+             "the walk passes over the companion");
+    CHECK_EQ(iface.EndpointCount, 1, "one endpoint, the companion not one");
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, iface.EndpointOffset[0],
+                                      XHCI_PIPE_SPEED_SUPER, 0, &ep),
+             XHCI_PIPE_OK, "SS bulk");
+    CHECK_EQ(ep.MaxPacketSize, 1024, "1024");
+    CHECK_EQ(ep.MaxBurstSize, 15, "burst from the companion");
+    CHECK_EQ(ep.Mult, 0, "Mult 0");
+    CHECK_EQ(ep.MaxEsitPayload, 0, "no ESIT payload for bulk");
+    CHECK_EQ(ep.Interval, 0, "Interval 0");
+    CHECK_EQ(ep.EpType, XHCI_PIPE_EPT_BULK_IN, "Bulk IN");
+    CHECK_EQ(ep.CompanionMissing, 0, "companion read");
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
+                                      0, &ep),
+             XHCI_PIPE_OK, "SSP bulk is SS bulk");
+    CHECK_EQ(ep.MaxBurstSize, 15, "same burst");
+
+    /* Streams declared: kept, unused. */
+    n = ss_config(c, 2, 1024, 0, 0, 4, 0, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_OK, "bulk with streams");
+    CHECK_EQ(ep.MaxStreams, 4, "MaxStreams kept for Phase 31");
+
+    /* Bulk at 512 is a High Speed size, not a SuperSpeed one. */
+    n = ss_config(c, 2, 512, 0, 0, 0, 0, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_MALFORMED,
+             "SS bulk at 512 refused");
+    /* ...but the same bytes at High Speed are fine. */
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_HIGH, 0,
+                                      &ep), XHCI_PIPE_OK,
+             "USB 2.0 speeds go the USB 2.0 way");
+
+    /* A missing companion: burst 0, tolerated and said so. */
+    n = ss_config(c, 2, 1024, 0, 0, 0, 0, 0, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_OK, "no companion");
+    CHECK_EQ(ep.CompanionMissing, 1, "CompanionMissing");
+    CHECK_EQ(ep.MaxBurstSize, 0, "burst 0");
+
+    /* A burst past 15 is no companion. */
+    n = ss_config(c, 2, 1024, 0, 16, 0, 0, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_MALFORMED, "burst 16");
+
+    /* Interrupt IN, 1024 burst 0, bInterval 4: the SS hub's shape. */
+    n = ss_config(c, 3, 2, 4, 0, 0, 2, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_OK, "SS interrupt");
+    CHECK_EQ(ep.Interval, 3, "bInterval 4 is Interval 3");
+    CHECK_EQ(ep.MaxEsitPayload, 2, "wBytesPerInterval");
+    n = ss_config(c, 3, 512, 1, 1, 0, 1024, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_MALFORMED,
+             "a burst needs a 1024-byte packet");
+    n = ss_config(c, 3, 1024, 1, 1, 0, 4096, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_MALFORMED,
+             "more per interval than the burst carries");
+    n = ss_config(c, 3, 1024, 1, 1, 0, 0, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_OK, "0 per interval");
+    CHECK_EQ(ep.MaxEsitPayload, 2048, "the largest the burst allows");
+
+    /* Isochronous IN, 1024, burst 3: one page per interval, the most the
+     * transfer path carries (Codex review of Phase 29, round 1, finding 1). */
+    n = ss_config(c, 1, 1024, 1, 3, 0, 4096, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_OK, "SS isoch, 4 KiB");
+    CHECK_EQ(ep.Mult, 0, "Mult 0");
+    CHECK_EQ(ep.MaxBurstSize, 3, "burst 3");
+    CHECK_EQ(ep.MaxEsitPayload, 4096, "4 KiB");
+    CHECK_EQ(ep.ErrorCount, 0, "CErr 0 for isoch");
+    CHECK_EQ(ep.Interval, 0, "bInterval 1 is Interval 0");
+    /* Burst 1, Mult 1: two bursts of two packets. */
+    n = ss_config(c, 1, 1024, 1, 1, 1, 4096, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_OK, "Mult 1");
+    CHECK_EQ(ep.Mult, 1, "Mult from the companion");
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 1,
+                                      &ep), XHCI_PIPE_OK, "under LEC");
+    CHECK_EQ(ep.Mult, 0, "Mult is reserved under LEC");
+    CHECK_EQ(ep.MaxEsitPayload, 4096, "the payload says it instead");
+    /* 48 KiB per interval: a legal SuperSpeed endpoint the transfer path
+     * cannot carry - refused at admission, never truncated. */
+    n = ss_config(c, 1, 1024, 1, 15, 2, 49152, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_ESIT_REFUSED,
+             "48 KiB refused by the transfer path's range");
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 1,
+                                      &ep), XHCI_PIPE_ESIT_REFUSED,
+             "LEC does not widen the transfer path");
+    n = ss_config(c, 1, 1024, 1, 4, 0, 4097, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_ESIT_REFUSED,
+             "one byte past a page");
+    /* wBytesPerInterval 0 takes the largest the burst allows, which is then
+     * judged by the same range. */
+    n = ss_config(c, 1, 1024, 1, 7, 0, 0, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_ESIT_REFUSED,
+             "8 KiB implied by burst 7");
+    n = ss_config(c, 1, 1024, 1, 15, 3, 0, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_MALFORMED, "Mult 3");
+}
+
+static void test_superspeedplus_isoch(void)
+{
+    UCHAR c[64];
+    XHCI_PIPE_EP ep;
+    ULONG n;
+
+    /* At 48 KiB, LEC clear: the derivation allows three bursts, and the
+     * transfer path's one-page range refuses it. */
+    n = ss_config(c, 1, 1024, 1, 15, 0x80, 0, 1, 49152);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
+                                      0, &ep), XHCI_PIPE_ESIT_REFUSED,
+             "SSP 48 KiB: refused, not truncated");
+
+    /* Just above 48 KiB, LEC clear and set: refused either way. */
+    n = ss_config(c, 1, 1024, 1, 15, 0x80, 0, 1, 49153);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
+                                      0, &ep), XHCI_PIPE_ESIT_REFUSED,
+             "49153 without LEC");
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
+                                      1, &ep), XHCI_PIPE_ESIT_REFUSED,
+             "49153 with LEC: past the transfer path");
+
+    /* Within the path, LEC set: Mult 0, the payload in Lo. */
+    n = ss_config(c, 1, 1024, 1, 3, 0x80, 0, 1, 4096);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
+                                      1, &ep), XHCI_PIPE_OK, "4 KiB with LEC");
+    CHECK_EQ(ep.SspIso, 1, "the SSP companion was read");
+    CHECK_EQ(ep.MaxEsitPayload, 4096, "its payload");
+    CHECK_EQ(ep.Mult, 0, "Mult 0 under LEC");
+
+    /* LEC clear, the SS companion says Mult 0, the SSP companion needs two
+     * bursts: Mult is the SSP companion's, never the SS one's. */
+    n = ss_config(c, 1, 1024, 1, 1, 0x80, 0, 1, 3072);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
+                                      0, &ep), XHCI_PIPE_OK, "two bursts");
+    CHECK_EQ(ep.Mult, 1, "Mult 1 from the payload");
+    CHECK_EQ(ep.MaxEsitPayload, 3072, "3 KiB");
+
+    /* Within the page but past TBC: 4096 bytes in 512-byte packets at
+     * burst 0 is eight bursts, which the Isoch TRB cannot describe (Codex
+     * review of Phase 29, round 2, finding 2). */
+    n = ss_config(c, 1, 512, 1, 0, 0x80, 0, 1, 4096);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
+                                      1, &ep), XHCI_PIPE_ESIT_REFUSED,
+             "eight bursts under LEC refused");
+    /* Four bursts of one 512-byte packet: the most TBC holds. */
+    n = ss_config(c, 1, 512, 1, 0, 0x80, 0, 1, 2048);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
+                                      1, &ep), XHCI_PIPE_OK,
+             "four bursts under LEC admitted");
+    n = ss_config(c, 1, 512, 1, 0, 0x80, 0, 1, 2049);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
+                                      1, &ep), XHCI_PIPE_ESIT_REFUSED,
+             "one byte more is a fifth burst");
+    /* 4 KiB in 1024-byte packets at burst 0 is four bursts: admitted. */
+    n = ss_config(c, 1, 1024, 1, 0, 0x80, 0, 1, 4096);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
+                                      1, &ep), XHCI_PIPE_OK,
+             "4 KiB in four bursts of one 1024-byte packet");
+
+    /* A payload past the 24-bit field, even with LEC. */
+    n = ss_config(c, 1, 1024, 1, 15, 0x80, 0, 1, 0x01000000UL);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
+                                      1, &ep), XHCI_PIPE_ESIT_REFUSED,
+             "2^24 bytes per interval");
+
+    /* A malformed companion: bit 7 set and no SSP companion after it. */
+    n = ss_config(c, 1, 1024, 1, 15, 0x80, 0, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
+                                      0, &ep), XHCI_PIPE_MALFORMED,
+             "bit 7 with nothing following");
+    /* At Gen 1 the bit means nothing: the SS companion's Mult is used. */
+    n = ss_config(c, 1, 1024, 1, 1, 0x81, 4096, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_OK, "Gen 1 ignores it");
+    CHECK_EQ(ep.Mult, 1, "Mult 1 from the SS companion");
+    CHECK_EQ(ep.SspIso, 0, "no SSP companion read");
+
+    CHECK_EQ(XhciPipeEndpointParamsAt(NULL, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_BAD_PARAM, "NULL");
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, n - 3, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_BAD_PARAM,
+             "an offset whose descriptor runs past the end");
+}
+
+
+static void test_bos(void)
+{
+    /* BOS: USB 2.0 Extension, SuperSpeed USB, SuperSpeedPlus with two
+     * sublink attributes (SSAC 1). */
+    static const UCHAR bos[] = {
+        5, 0x0F, 50, 0, 3,
+        7, 0x10, 0x02, 0x06, 0x00, 0x00, 0x00,
+        10, 0x10, 0x03, 0x00, 0x0E, 0x00, 0x01, 0x0A, 0xFF, 0x07,
+        20, 0x10, 0x0A, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x11, 0x00, 0x00,
+        0x30, 0x40, 0x0A, 0x00, 0xB0, 0x40, 0x0A, 0x00,
+        0, 0, 0, 0, 0, 0, 0, 0
+    };
+    XHCI_PIPE_BOS b;
+    UCHAR bad[64];
+    ULONG i;
+
+    CHECK_EQ(XhciPipeParseBos(bos, 42, &b), XHCI_PIPE_MALFORMED,
+             "wTotalLength 50 past a 42-byte buffer");
+    for (i = 0; i < 42; i++) {
+        bad[i] = bos[i];
+    }
+    bad[2] = 42;
+    CHECK_EQ(XhciPipeParseBos(bad, 42, &b), XHCI_PIPE_OK, "the BOS parses");
+    CHECK_EQ(b.Capabilities, 3, "three capabilities");
+    CHECK_EQ(b.Usb2Attributes, 6, "LPM bits of the USB 2.0 Extension");
+    CHECK_EQ(b.HasSuperSpeed, 1, "SuperSpeed capability");
+    CHECK_EQ(b.SsSpeeds, 0x0E, "FS, HS and Gen 1");
+    CHECK_EQ(b.SsU1ExitLatency, 0x0A, "U1 exit latency");
+    CHECK_EQ(b.SsU2ExitLatency, 0x07FF, "U2 exit latency");
+    CHECK_EQ(b.HasSuperSpeedPlus, 1, "SuperSpeedPlus capability");
+    CHECK_EQ(b.SspSublinks, 2, "SSAC 1 is two attributes");
+    CHECK_EQ(b.SspSublink[0], 0x000A4030UL, "Rx sublink, 10 Gbit/s");
+    CHECK_EQ(b.SspFunctionality, 0x1100, "min lanes");
+
+    /* An SSP capability declaring more attributes than it carries. */
+    bad[26] = 0x03;
+    CHECK_EQ(XhciPipeParseBos(bad, 42, &b), XHCI_PIPE_MALFORMED,
+             "SSAC 3 needs 28 bytes, 20 given");
+    bad[26] = 0x01;
+
+    /* A capability of length 2 never advances. */
+    bad[5] = 2;
+    CHECK_EQ(XhciPipeParseBos(bad, 42, &b), XHCI_PIPE_MALFORMED, "bLength 2");
+    bad[5] = 7;
+    bad[1] = 0x02;
+    CHECK_EQ(XhciPipeParseBos(bad, 42, &b), XHCI_PIPE_MALFORMED,
+             "not a BOS descriptor");
+    CHECK_EQ(XhciPipeParseBos(NULL, 42, &b), XHCI_PIPE_BAD_PARAM, "NULL");
+}
+
 static XHCI_SEQ64 seq64(ULONG hi, ULONG lo)
 {
     XHCI_SEQ64 s;
@@ -1482,6 +1890,117 @@ static void test_seq(void)
     CHECK(h.Hi == 3 && h.Lo == 1, "none changes nothing");
 }
 
+/*
+ * Zero-bandwidth isochronous endpoints (wMaxPacketSize 0): accepted at every
+ * speed with Max ESIT Payload 0, so the select naming one succeeds (owner's
+ * ruling, 2026-10-04); every other type with size 0 still refused (USB 3.2
+ * Table 9-26, USB 3.2 p.365). xhci_pipe.c, XhciPipeZeroBandwidth.
+ */
+static void test_zero_bandwidth(void)
+{
+    UCHAR c[64];
+    XHCI_PIPE_EP ep;
+    XHCI_PIPE_ISO_PACKET p[3];
+    ULONG n;
+
+    /* Full Speed: an audio interface's alternate 0. */
+    CHECK_EQ(ep_params(0x01, 0x09, 0, 1, XHCI_PIPE_SPEED_FULL, &ep),
+             XHCI_PIPE_OK, "FS isoch OUT, MPS 0, accepted");
+    CHECK_EQ(ep.MaxPacketSize, 0, "MPS 0 kept");
+    CHECK_EQ(ep.MaxEsitPayload, 0, "no ESIT payload: no bandwidth");
+    CHECK_EQ(ep.EpType, XHCI_PIPE_EPT_ISOCH_OUT, "isoch OUT");
+    CHECK(ep.AverageTrbLength != 0, "Average TRB Length still nonzero");
+    CHECK_EQ(ep.ErrorCount, 0, "CErr 0 as for any isoch");
+    CHECK(XhciPipeZeroBandwidth(&ep), "zero bandwidth");
+    /* High Speed, IN, bInterval 0 clamped as for any isoch. */
+    CHECK_EQ(ep_params(0x82, 0x05, 0, 0, XHCI_PIPE_SPEED_HIGH, &ep),
+             XHCI_PIPE_OK, "HS isoch IN, MPS 0, accepted");
+    CHECK_EQ(ep.MaxEsitPayload, 0, "HS: no ESIT payload");
+    CHECK_EQ(ep.MaxBurstSize, 0, "no additional transactions");
+    CHECK(XhciPipeZeroBandwidth(&ep), "HS zero bandwidth");
+    /* ...but not with additional transactions, which need 513-1024 or
+     * 683-1024 (Table 9-14). */
+    CHECK_EQ(ep_params(0x82, 0x05, 0x0800, 1, XHCI_PIPE_SPEED_HIGH, &ep),
+             XHCI_PIPE_MALFORMED, "HS isoch MPS 0 with one more transaction");
+    /* Every other type stays refused at size 0. */
+    CHECK_EQ(ep_params(0x81, 0x03, 0, 1, XHCI_PIPE_SPEED_FULL, &ep),
+             XHCI_PIPE_MALFORMED, "FS interrupt MPS 0");
+    CHECK_EQ(ep_params(0x81, 0x03, 0, 1, XHCI_PIPE_SPEED_LOW, &ep),
+             XHCI_PIPE_MALFORMED, "LS interrupt MPS 0");
+    CHECK_EQ(ep_params(0x81, 0x02, 0, 0, XHCI_PIPE_SPEED_FULL, &ep),
+             XHCI_PIPE_MALFORMED, "FS bulk MPS 0");
+    CHECK_EQ(ep_params(0x81, 0x02, 0, 0, XHCI_PIPE_SPEED_HIGH, &ep),
+             XHCI_PIPE_MALFORMED, "HS bulk MPS 0");
+
+    /* SuperSpeed: isoch, MPS 0, burst 0, wBytesPerInterval 0. */
+    n = ss_config(c, 1, 0, 1, 0, 0, 0, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_OK,
+             "SS isoch, MPS 0, accepted");
+    CHECK_EQ(ep.MaxPacketSize, 0, "SS MPS 0 kept");
+    CHECK_EQ(ep.MaxEsitPayload, 0, "SS: no ESIT payload");
+    CHECK_EQ(ep.Mult, 0, "SS: Mult 0");
+    CHECK_EQ(ep.MaxBurstSize, 0, "SS: burst 0");
+    CHECK(XhciPipeZeroBandwidth(&ep), "SS zero bandwidth");
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 1,
+                                      &ep), XHCI_PIPE_OK,
+             "SS isoch, MPS 0, with LEC");
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
+                                      0, &ep), XHCI_PIPE_OK,
+             "SSP isoch, MPS 0, no SSP companion");
+    /* A companion Mult on a zero-size endpoint is programmed as 0. */
+    n = ss_config(c, 1, 0, 1, 0, 2, 0, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_OK,
+             "SS isoch, MPS 0, companion Mult 2");
+    CHECK_EQ(ep.Mult, 0, "programmed Mult 0");
+    /* No companion at all: burst 0, still zero bandwidth. */
+    n = ss_config(c, 1, 0, 1, 0, 0, 0, 0, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_OK,
+             "SS isoch, MPS 0, no companion");
+    CHECK_EQ(ep.CompanionMissing, 1, "CompanionMissing");
+    /* Table 9-26: "1024 if ... bMaxBurst greater than zero". */
+    n = ss_config(c, 1, 0, 1, 1, 0, 0, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_MALFORMED,
+             "SS isoch, MPS 0, burst 1");
+    n = ss_config(c, 1, 0, 1, 15, 0, 0, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_MALFORMED,
+             "SS isoch, MPS 0, burst 15");
+    /* No packet carries no bytes. */
+    n = ss_config(c, 1, 0, 1, 0, 0, 1, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_MALFORMED,
+             "SS isoch, MPS 0, wBytesPerInterval 1");
+    /* An SSP isoch companion beside a zero size. */
+    n = ss_config(c, 1, 0, 1, 0, 0x80, 1, 1, 1);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
+                                      0, &ep), XHCI_PIPE_MALFORMED,
+             "SSP isoch, MPS 0, SSP companion");
+    /* SS interrupt and bulk at size 0 stay refused (Table 9-26). */
+    n = ss_config(c, 3, 0, 4, 0, 0, 0, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_MALFORMED,
+             "SS interrupt MPS 0");
+    n = ss_config(c, 2, 0, 0, 0, 0, 0, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_MALFORMED,
+             "SS bulk MPS 0");
+
+    /* What the URB path rests on: the zero-bandwidth test, which hcd_io.c
+     * asks before XhciPipeIsoCheck - whose bound of 0 means "unbounded",
+     * so a pipe's Max ESIT Payload of 0 would otherwise refuse nothing. */
+    CHECK_EQ(ep_params(0x01, 0x01, 192, 1, XHCI_PIPE_SPEED_FULL, &ep),
+             XHCI_PIPE_OK, "a sized FS isoch");
+    CHECK(!XhciPipeZeroBandwidth(&ep), "is not zero bandwidth");
+    CHECK(!XhciPipeZeroBandwidth(NULL), "NULL is not");
+    iso_table(p, 0, 0, 0);
+    CHECK_EQ(XhciPipeIsoCheck(p, 3, 1, 3, 0), XHCI_PIPE_OK,
+             "a bound of 0 is unbounded: the zero-bandwidth test comes first");
+}
+
 int main(void)
 {
     test_seq();
@@ -1503,6 +2022,11 @@ int main(void)
     test_iso_check();
     test_iso_fragments();
     test_iso_frames();
+    test_xp_requests();
+    test_superspeed_endpoints();
+    test_superspeedplus_isoch();
+    test_bos();
+    test_zero_bandwidth();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

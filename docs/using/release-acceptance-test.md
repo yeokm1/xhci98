@@ -5,11 +5,14 @@ release it has never run, and what they must see at each step.
 
 This is a fixed procedure. It is re-run unchanged against every release, by
 someone who was not there when the driver was written, on hardware nobody here
-has characterised. It was written for `1.0.0.0` and applies to every release
-after it. The release under test is named once, at the head of whatever record
-the tester keeps; everything version-specific below is a citation of that
-release's own files, `readme.txt` and `releases/history.md`, rather than a copy
-of them, so a new version needs no edit here.
+has characterised. It was written for `1.0.0.0` and adapted for the host
+controller driver at `2.0.0.0` (roadmap-hcd task 32.2); it applies to every
+release from `2.0.0.0` on. The `1.x` miniport's version of this document is on
+the `1.2.0.0` branch, and a run against a `1.x` release follows that one. The
+release under test is named once, at the head of whatever record the tester
+keeps; everything version-specific below is a citation of that release's own
+files, `readme.txt` and `releases/history.md`, rather than a copy of them, so
+a new version needs no edit here.
 
 It is not a second install guide. `releases/<version>/readme.txt` is what a
 user follows, and two copies of an install procedure is how one of them goes
@@ -25,15 +28,16 @@ on: a defect, as an issue, and a correction to this document when the procedure
 itself was what was wrong. A SKIP with a reason is a result; a blank is not,
 and so is a verdict with no reading beside it.
 
-Two things the test never does on Windows 98, and both bite before the step
-that says so. Do not disable, remove or upgrade the driver in Device Manager:
-under NUSB's stack, which is what this test installs on Windows 98, each of
-the three blue-screens that system at `0028:C00312EE`, and 7.1 is where that
-is recorded (under SweetLow's stack they complete; the release notes say so,
-and this test exercises that stack only on Windows ME, in 4.5, where it is
-the one stack the driver has run under). Do not cycle one device rapidly in and out of a port: that
-can freeze the machine and it is this driver's own defect (release notes,
-"Known limitations").
+A clause marked "record only" is an expectation this project has not
+observed on the `2.0.0.0` driver: write down what is seen, and do not fail
+the step on it.
+
+One caution for Windows 98 SE, carried from the `1.x` releases. Do not
+update to `2.0.0.0` in place over a running `1.x` driver under NUSB: NUSB's
+stack blue-screens as it stops the `1.x` driver. Follow the upgrade route of
+`readme.txt` section 4 (rename the old file and cold-boot first). The `1.x`
+freeze on cycling a device rapidly in and out of a port was not seen under
+`2.0.0.0`.
 
 ---
 
@@ -48,12 +52,12 @@ characterisation record for the hardware this project holds, and
 
 | # | What | The property that matters |
 |---|---|---|
-| 1 | An xHCI machine | PCI class code `0C0330`, at least one USB 2.0 port, a memory window below 4 GB, and a legacy interrupt pin. Step 3 confirms all four. A controller with no interrupt pin cannot be driven on either target, and there is no software workaround |
-| 2 | One target OS, already installed and working | Windows 98 SE (4.10.2222) with NUSB 3.3 already installed, or Windows 2000 SP4; for the VM-only rows, Windows ME (4.90.3000) with SweetLow's USB 2.0 stack installed (4.5, 7.7-7.8), 32-bit Windows XP SP3 (4.6, 7.9-7.12), Windows XP Professional x64 / Windows Server 2003 x64 SP2 (4.8, 7.13-7.16), 32-bit Windows Vista SP2 or Windows 7 SP1 (4.9, 7.17-7.19), or Windows Vista x64 SP2 or Windows 7 x64 SP1 (4.10, 7.17-7.20). Do not install NUSB on the NT targets. The two 64-bit rows are the targets that take a different package: a separate 64-bit build in its own directory, not the same file under another name (step 2); and on Vista x64 and Windows 7 x64 the driver loads only on a boot where Disable Driver Signature Enforcement was chosen from the F8 menu, at every start (4.10). One OS per run: a dual-boot machine is two runs and two records |
+| 1 | An xHCI machine | PCI class code `0C0330`, a memory window below 4 GB, and a legacy interrupt pin. Step 3 confirms them. A controller with no interrupt pin cannot be driven on any target, and there is no software workaround |
+| 2 | One target OS, already installed and working | Windows 98 SE (4.10.2222) or Windows 2000 SP4; for the VM-only rows, Windows ME (4.90.3000) (4.5, 7.7-7.8), 32-bit Windows XP SP3 (4.6, 7.9-7.12), Windows XP Professional x64 SP2 (4.8, 7.13-7.16), 32-bit Windows Vista SP2 or Windows 7 SP1 (4.9, 7.17-7.19), or Windows Vista x64 SP2 or Windows 7 x64 SP1 (4.10, 7.17-7.20). **On Windows 98 SE, NUSB 3.3 or 3.6 installed** if the storage clauses (5.2, 5.7, 5.8) are to be taken: storage there needs NUSB's mass-storage component, and without it those clauses are a SKIP with that reason (4.1). Do not install NUSB on any other target. The two 64-bit rows take a different package: separate 64-bit builds in their own directories (step 2); and on Vista x64 and Windows 7 x64 the drivers load only on a boot where driver signature enforcement was disabled, at every start (4.10). One OS per run: a dual-boot machine is two runs and two records |
 | 3 | A PS/2 or built-in keyboard and pointing device | A USB keyboard on the controller under test is unusable during the DOS pass and can stop responding mid-run. On a laptop the built-in keyboard is normally i8042-attached, but that is per machine; confirm it rather than assuming (`docs/contributing/build-and-test.md`, "Bootstrapping xHCI-only machines") |
 | 4 | A real-DOS boot medium, and a way to get a file off it | MS-DOS or FreeDOS on floppy, CD or USB key, booted without EMM386, a V86 monitor or a paging memory manager, but with `HIMEM.SYS` available, which is not one of those and which the qualifier may need (step 3). Not a DOS box inside Windows: the qualifier needs memory it can address one-to-one. Step 3 leaves `PROBE.LOG` on it, and that file is the run's first artefact |
-| 5 | A way to put the package on a machine whose USB does not work yet | Pull the disk and stage from another machine, burn a CD, or use a network share. On an xHCI-only machine there is no USB until this driver works; that is the chicken-and-egg this driver exists inside (`docs/contributing/build-and-test.md`, "Bootstrapping xHCI-only machines"). Pre-stage generously: every forgotten file is another disk swap |
-| 6 | A way back | A recovery rung that survives a driver which loads and then fails. Windows 98: the Startup Menu and Safe Mode, both of which run before this driver's BIOS handoff. The NT targets: F8, and the Recovery Console pre-installed with `winnt32 /cmdcons` while USB still works. Test-boot the rung once before the first install, not after |
+| 5 | A way to put the package on a machine whose USB does not work yet | Pull the disk and stage from another machine, burn a CD, or use a network share. On an xHCI-only machine there is no USB until this driver works (`docs/contributing/build-and-test.md`, "Bootstrapping xHCI-only machines"). Pre-stage generously: every forgotten file is another disk swap |
+| 6 | A way back | A recovery rung that survives a driver which loads and then fails. Windows 98: the Startup Menu and Safe Mode. The NT targets: F8, and the Recovery Console pre-installed with `winnt32 /cmdcons` while USB still works. Test-boot the rung once before the first install, not after |
 
 ### What an individual clause needs
 
@@ -62,11 +66,13 @@ A clause whose device is absent is a SKIP with a reason, which is a result.
 | Clause | Device | The property that matters |
 |---|---|---|
 | 5.1 | A Low-Speed HID | 1.5 Mbps signalling: an older mouse or keyboard. `scripts/hub-characterise.ps1` reads the negotiated speed as `Low` |
-| 5.2 | A High-Speed flash drive | 480 Mbps. A USB 3.0 stick also serves: it falls back and enumerates at High Speed through this driver, which is itself worth recording |
-| 5.3 | A hub, plus a device to put behind it | Any hub. Record whether it is self- or bus-powered and, if the tester can read it, its TT class: `bDeviceProtocol` 1 = single-TT, 2 = multi-TT, 0 = a Full-Speed USB 1.1 hub |
-| 5.4, optional | A USB Ethernet adapter | With a driver for the target OS. Without one it enumerates and does nothing, which tests the stack above this driver rather than this driver. It is the cheapest sustained bulk-IN load a tester is likely to have |
-| 5.5, optional | A USB Audio device | With a driver for the target OS. On Windows 98, read the USB Audio entry in the release notes' "Known limitations" before running this: one physical UAC 1.0 device has played clean on real hardware, and what QEMU's emulated device shows there (a CD prompt on a second arrival, and on an older guest a fault inside that system's own `USBAUDIO.VXD`) is that stack and not this driver. Keep the installation CD to hand |
-| 7.3 | A composite device | One physical unit that is more than one thing at once: a headset with buttons, a keyboard with media keys. Windows 98 only; this is the clause Windows 98's own `usbhub.sys`, which the install has Windows copy from its CD or CABs, exists for |
+| 5.2 | A High-Speed flash drive | 480 Mbps, Bulk-Only. A USB 2.0 stick: a USB 3.x stick on a USB 3.x connector now runs at SuperSpeed, which is 5.8's reading, not this one |
+| 5.3 | A hub, plus a device to put behind it | Any USB 2.0 hub. Record whether it is self- or bus-powered and, if the tester can read it, its TT class: `bDeviceProtocol` 1 = single-TT, 2 = multi-TT, 0 = a Full-Speed USB 1.1 hub |
+| 5.4, optional | A USB Ethernet adapter | With a driver for the target OS. Without one it enumerates and does nothing, which tests the stack above this driver rather than this driver |
+| 5.5, optional | A USB Audio device | UAC 1.0, with the target OS's own driver. On Windows 98 SE, plug it in only once the machine has settled for a couple of minutes after a cold boot (the release notes' "Known limitations", the audio wedge) |
+| 5.7 | A UAS storage device | One that offers the UAS interface (`bInterfaceProtocol` `0x62`). A USB-to-SATA bridge or an enclosure is the usual form. Read at SuperSpeed on a USB 3.x connector; behind a USB 2.0 hub it runs at High Speed, which is a second reading |
+| 5.8 | A SuperSpeed device and a USB 3.x connector | Any USB 3.x storage device. Its SuperSpeed is witnessed by `XHCISNAP` (step 8), not by Device Manager |
+| 7.3 | A composite device | One physical unit that is more than one thing at once: a headset with buttons, a keyboard with media keys |
 | Step 8 | Nothing extra | The log channel is `XHCISNAP.EXE` out of this release, one setting it writes for you, and a restart of the machine |
 
 ### Suggested devices
@@ -80,13 +86,14 @@ is required, and a device that satisfies the property is as good.
 | Clause | Suggested unit | Why this one |
 |---|---|---|
 | 5.1 | Logitech USB Optical Mouse `046D:C077`, or any pre-2005 USB mouse or keyboard | Verified Low Speed: HID boot mouse, one interrupt IN at `bInterval=10`. Most modern HIDs enumerate at Full Speed, so a new mouse off the shelf usually does not satisfy this clause |
-| 5.2 | SanDisk U3 Titanium `0781:5408`, or any USB 2.0 stick. A USB 3.0 stick such as `090C:2320` or `0781:55AB` also serves | The 2.0 unit fails safe: it is High Speed wherever it is plugged. A 3.0 unit in a USB 3.0 connector is quietly testing the fallback as well, which is worth recording but is a second reading, not this one |
-| 5.2 | A USB-to-SATA enclosure, such as the ASMedia `174C:5106` | The only storage unit this project has round-tripped a file through on real silicon. Both targets ship BOT-only storage drivers, so a bridge that also offers UAS still runs BOT here |
-| 5.3 | Terminus 4-port `1A40:0101` (single-TT) or 7-port `1A40:0201` (multi-TT) | Plain USB 2.0 hubs, no SuperSpeed half, one chip and one tier, so what is behind the hub is behind one transaction translator. Adjacent product IDs from one vendor, so the pair changes only the TT class |
+| 5.2 | SanDisk U3 Titanium `0781:5408`, or any USB 2.0 stick | High Speed wherever it is plugged, and Bulk-Only |
+| 5.3 | Terminus 4-port `1A40:0101` (single-TT) or 7-port `1A40:0201` (multi-TT) | Plain USB 2.0 hubs, no SuperSpeed half, one chip and one tier. Adjacent product IDs from one vendor, so the pair changes only the TT class |
 | 5.3 | Avoid a hub enclosure containing cascaded chips, such as Genesys `05E3:0608` | Its sockets are not equivalent: three sit at tier 1 and four at tier 2, with different route strings and a different TT, so a reading depends on which socket was used |
-| 5.4 | An ASIX AX88772-based adapter, such as `0B95:7720` | ASIX parts have Windows 98 and Windows 2000 drivers. Read the chipset, not the packaging: the RTL8153 in most modern USB-C dongles has no driver for either target, and driver absence is the commonest way a validation result gets misattributed |
-| 5.5, 7.3 | C-Media `0D8C:0014`, the generic chip in a very large number of cheap USB audio adapters, or a Creative Sound Blaster Play! 2 `041E:323D` | UAC 1.0, Full Speed, and composite: four interfaces with an HID alongside the audio, so one unit serves both the audio clause and the composite clause |
-| 5.5 | Not a UAC 2.0 unit such as the Sound Blaster X4 `041E:3278` | Measured on real silicon: it does not bind. Both targets ship UAC 1.0 audio drivers, and that unit offers no UAC 1.0 fallback configuration |
+| 5.4 | An ASIX AX88772-based adapter, such as `0B95:7720` | ASIX parts have Windows 98 and Windows 2000 drivers. Read the chipset, not the packaging: the RTL8153 in most modern USB-C dongles has no driver for either target |
+| 5.5, 7.3 | C-Media `0D8C:0014`, or a Creative Sound Blaster Play! 2 `041E:323D` | UAC 1.0, Full Speed, and composite: audio interfaces with an HID beside them and no IAD, so one unit serves both the audio clause and the composite clause |
+| 5.5 | Not a UAC 2.0 unit such as the Sound Blaster X4 `041E:3278` | These systems ship UAC 1.0 audio drivers, and that unit offers no UAC 1.0 fallback |
+| 5.7 | MSSU10-128GSR flash drive `090C:2320`, or the ASMedia USB-to-SATA bridge `174C:5106` | Both offer UAS at SuperSpeed. The ASMedia bridge offers both transports at both speeds, so it also serves the forced-Bulk-Only reading; the MSSU10 offers only Bulk-Only behind a USB 2.0 hub |
+| 5.8 | SanDisk 3.2Gen1 flash drive `0781:55AB` | SuperSpeed, Bulk-Only, so it reads SuperSpeed through Windows' own `usbstor.sys` with no UAS involved |
 
 ---
 
@@ -110,14 +117,12 @@ failed" are different findings.
 |---|---|---|
 | 1.1 | Fill every field of "What to record for each machine" in `xhciqual/hardware-testing.md`: model, chipset, BIOS version and date, the DOS version and boot medium, and whether PS/2 or built-in input is available | Every field filled, or explicitly `n/a` with the reason |
 | 1.2 | Read every USB-related BIOS setting and write each one down, before anything else is done to the machine | Each setting with its value. A BIOS that offers no USB option at all is a result; write `NOT PRESENT` |
-| 1.3 | Record the target OS and its build, and whether any previous version of this package was ever installed here | Windows 98 SE (4.10.2222) or Windows 2000 SP4, or, for the VM-only rows, Windows ME (4.90.3000), 32-bit Windows XP SP3, Windows XP x64 / Windows Server 2003 x64 SP2, Windows Vista SP2 or Windows 7 SP1 (32-bit or x64), with the architecture written down beside the build because it decides which package step 4 installs, and on Vista and Windows 7 whether it is x64, because that decides whether the driver loads without an F8 boot (4.10); and `none` or the version. A machine that had one produces an upgrade result, which is a different measurement and is not what this test measures (the release notes' "Known limitations", the Windows 2000 upgrade entry) |
+| 1.3 | Record the target OS and its build, its architecture, on Windows 98 SE whether NUSB (and which version) or SweetLow's stack is installed, and whether any previous version of this package was ever installed here | The OS and build, the architecture (it decides which package step 4 installs, and on Vista and 7 whether the drivers load without signature enforcement disabled, 4.10), the USB stack, and `none` or the version. A machine that had one produces an upgrade result, which is a different measurement and is not what this test measures |
 
-1.2 comes before anything else rather than as an afterthought because on Intel
-7- and 8-series chipsets a BIOS setting decides which controller owns the USB
-2.0 ports: `XUSB2PR` routes them between EHCI and xHCI, so the same machine
-presents a working xHCI or one with nothing on it depending on a setting nobody
-recorded. On an Intel 7/8-series machine this typically reads as "USB 3.0
-Mode"; on another machine it will read as something else, or not exist at all.
+1.2 comes before anything else because on Intel 7- and 8-series chipsets a
+BIOS setting decides which controller owns the USB ports: `XUSB2PR` routes the
+USB 2.0 ports between EHCI and xHCI, so the same machine presents a working
+xHCI or one with nothing on it depending on a setting nobody recorded.
 
 If a field cannot be answered: write what was looked at and why it could not be
 answered. A blank is not a result.
@@ -131,60 +136,38 @@ Controller Deviations This Driver Acts On".
 
 ### Step 2. Check the download
 
-Do: unzip the release asset and look at what came out.
-
 | # | Do | Expected reading |
 |---|---|---|
-| 2.1 | Unzip the asset and list the top level | No top-level directory: `readme.txt`, `LICENSE`, the flavour directories, `xhciqual\` and `xhcisnap\` come out directly. From `1.1.0.0` a flavour directory carries its architecture in its name: `release-x86\` and `debug-x86\`, with `release-x64\` and `debug-x64\` beside them when the cut carries a 64-bit driver. A cut before that has `release\` and `debug\`, and is 32-bit only |
+| 2.1 | Unzip the asset and list the top level | No top-level directory: `readme.txt`, `LICENSE`, the flavour directories (`release-x86\`, `debug-x86\`, `release-x64\`, `debug-x64\`), `xhciqual\` and `xhcisnap\` come out directly |
 | 2.2 | Check that `xhcisnap\` is one of them | Present. It is what step 8 needs, so a download without it is a cut made with `-SkipSnapTool` and step 8 cannot be run against it. Report that rather than skipping the step |
-| 2.3 | List each flavour directory against the file list in `readme.txt` section 8 | Each holds every file that section names. Read the list off that file rather than from memory, because it can change between releases |
+| 2.3 | List each flavour directory against the file list in `readme.txt` section 8 | Each holds every file that section names: `xhci98.inf`, `xhci98.sys`, `xhciuas.inf` and `xhciuas.sys`. Read the list off that file rather than from memory |
 | 2.4 | Look for a version directory nested inside another | None |
-| 2.5 | On a 64-bit target only: check that the cut carries a 64-bit pair at all | `release-x64\` and `debug-x64\` present, and `readme.txt` naming a 64-bit system among what it supports. A cut without them has no driver for this machine; record the version and stop the run there rather than pointing it at the 32-bit directory |
+| 2.5 | On a 64-bit target only: check that the cut carries a 64-bit pair at all | `release-x64\` and `debug-x64\` present, and `readme.txt` naming a 64-bit system among what it supports |
 
-The `release` directory for the machine's architecture is the one to install:
-`release-x86\` on 32-bit Windows, `release-x64\` on 64-bit. The `debug`
-directory beside it is the same driver built for diagnosis and is for a machine
-that has already gone wrong. It carries no per-line trace either; that lives
-only in the never-published `qemu` flavour.
+The `release` directory for the machine's architecture is the one to install.
+The `debug` directory beside it is the same drivers built for diagnosis, for a
+machine that has already gone wrong. Pointing a machine at the other
+architecture's directory is safe in both directions: the wrong directory
+offers no driver at all rather than installing one that cannot load. Record it
+as a wrong pick and point at the other one.
 
-Pointing a machine at the other architecture's directory is safe in both
-directions, and it is worth knowing that before step 4 rather than after: the
-64-bit setup engine ignores the 32-bit INF's undecorated models section and the
-32-bit engines skip a `[Manufacturer]` line decorated `NTamd64`, so the wrong
-directory offers no driver at all rather than installing one that cannot load.
-Record it as a wrong pick and point at the other one.
-
-A flavour directory holds exactly `xhci98.inf` and `xhci98.sys` (2.3), since
-1.0.0.1: the download carries no Microsoft file, and a copy taken from the
-source repository is the same two files. Both architectures use those two
-names, so a loose file says nothing about which one it is; the 64-bit pair's
-`xhci98.inf` is a second INF carrying the `.NTamd64` path, not a third path
-inside the first. What the install needs beyond them,
-`usbd.sys` and `usbhub.sys` on every target, since 1.0.1.0 `usbport.sys` on
-Windows 2000 and XP, and, since 1.0.2.0, `usbui.dll` on every target, Windows
-supplies from its own installation source at step 4: the NT targets take them
-from their driver cache with no prompt (`Driver Cache\i386`, and
-`Driver Cache\amd64` on Windows XP x64), and
-an xHCI-only Windows 98 machine may ask for the Windows 98 SE CD, so have it
-at hand for that step (`readme.txt` section 3; section 8 is the per-directory
-file list 2.3 checks). On Windows Vista and Windows 7, in either
-architecture, the install copies none of the four: every install of those
-systems already carries them, and both INFs' `Xhci.Dev6` sections copy
-`xhci98.sys` alone.
+A flavour directory holds the two drivers and their INFs and no Microsoft
+file. What the install needs beyond them, `usbd.sys` and `usbui.dll`, Windows
+supplies from its own installation source at step 4 (`readme.txt` section 3).
+On Windows 98 SE the storage clauses also need NUSB's mass-storage component,
+which this package does not carry.
 
 If one directory nests another copy of the version inside itself (2.4): stop,
 and report the asset rather than the driver. That is a packaging defect and it
-has happened: an asset was built with the published tree nested one level
-deeper than the Microsoft files, leaving no directory in the download holding a
-complete install set.
+has happened once, under `1.x`.
 
 Observed: the layout and the assertion that protects it are
-`scripts/package/make-release.ps1`, `New-UploadSet`; the architecture-tagged
-directory names, and why a wrong pick is safe in both directions, are
-`releases/README.md`, "These are the names the whole repository uses"; the
-nesting defect and its fix are recorded in that function's own comments, and
+`scripts/package/make-release.ps1`, `New-UploadSet`; the directory names, and
+why a wrong pick is safe, are `releases/README.md`;
 `docs/contributing/legal-provenance.md` section 5 records why the asset
-carries no Microsoft file.
+carries no Microsoft file. The four-file directory (two drivers, two INFs)
+was staged for the `release` legs of the integration build and is read
+again from the `2.0.0.0` asset.
 
 ### Step 3. The DOS pass
 
@@ -193,155 +176,139 @@ carries no Microsoft file.
 | 3.1 | Boot real DOS with `XHCIQUAL.EXE` from the download's `XHCIQUAL\` directory, keeping `XHCIQUAL.MAP` beside it. No EMM386, no V86 monitor or paging memory manager, and not a DOS box inside Windows | A prompt on a machine whose memory the qualifier can address one-to-one |
 | 3.2 | `XHCIQUAL` | One of three verdicts: `LOOKS QUALIFIED`, `DISQUALIFIED` or `CANNOT SAY`. `LOOKS QUALIFIED` is the one that continues |
 | 3.3 | `XHCIQUAL --probe-only --no-page --log PROBE.LOG` | Read-only, writes nothing to the machine, and leaves `PROBE.LOG`, the run's first artefact |
-| 3.4 | Read the controller `FACT` line out of `PROBE.LOG` | `hciver`, `ports`, `usb2ports` (the managed and unmanaged split: this driver drives the USB 2.0 ports and leaves the USB 3.0 ones alone), `pin`, `bar` and `irq`, each written down |
+| 3.4 | Read the controller `FACT` line out of `PROBE.LOG` | `hciver`, `ports`, `usb2ports` (the split between USB 2.0 and USB 3.x protocol ports; the `2.0.0.0` driver manages both), `pin`, `bar` and `irq`, each written down |
 
-This step is the same on every target, the 64-bit one included. `XHCIQUAL` is a
-DOS program that reads the machine rather than the operating system installed
-on it, so the download carries one build of it and needs no other.
+This step is the same on every target. `XHCIQUAL` reads the machine rather
+than the operating system installed on it.
 
 If the tool will not run at all (3.1): add `HIMEM.SYS` before concluding
-anything about the machine. It is not what "no memory manager" excludes (the
-exclusion is EMM386, V86 monitors and paging managers), and the tool runs
-32-bit through an embedded DOS/32A extender, so it needs extended memory. The
-line is `DEVICE=C:\WINDOWS\HIMEM.SYS /M:1 /V` in `CONFIG.SYS`, with the path
-pointed at wherever `HIMEM.SYS` actually is. A program that never started has
-produced no verdict, which is a different record from `DISQUALIFIED`; say which
-one this was. (`xhciqual/hardware-testing.md`, "Safety and preparation" step 1.)
+anything about the machine. The line is `DEVICE=C:\WINDOWS\HIMEM.SYS /M:1 /V`
+in `CONFIG.SYS`, with the path pointed at wherever `HIMEM.SYS` actually is. A
+program that never started has produced no verdict, which is a different
+record from `DISQUALIFIED`; say which one this was.
+(`xhciqual/hardware-testing.md`, "Safety and preparation" step 1.)
 
-`DISQUALIFIED` on the interrupt pin is a stop. A controller reporting `pin=0`
-cannot be driven on either target: neither Windows 98 nor Windows 2000 has an
-MSI path, and there is no software workaround. Record the verdict, complete the
-record, and stop. That is a complete result about the machine.
+`DISQUALIFIED` on the interrupt pin is a stop: the driver has no MSI path, and
+there is no software workaround. Record the verdict, complete the record, and
+stop. `DISQUALIFIED` on "no USB 2.0 ports" is the qualifier's criterion from
+the `1.x` releases; record it and continue to step 4 (the `2.0.0.0` driver
+accepts such a controller, built from the specification and untested).
 
-`CANNOT SAY` sends the tester to the BIOS, not to the driver: something the
-tool is not allowed to change is in the way, usually the controller powered
-down or its memory access switched off. Change the setting, cold-boot, and
-re-run.
+`CANNOT SAY` sends the tester to the BIOS, not to the driver. Change the
+setting, cold-boot, and re-run.
 
-Keep the logs. `PROBE.LOG` goes with everything else the run produces, and
-`xhciqual/hardware-testing.md`, "What to record for each machine", is the shape
-to follow for the machine's own details.
-
-Observed: the verdicts and the command line are `readme.txt` section 1;
-"Interrupt Pin 0 is an unconditional failure because neither target has an MSI
-path" is the roadmap's Phase 0 checkpoint. Real bare-metal passes of this
-shape are in `xhciqual/results/`.
+Observed: the verdicts and the command line are `readme.txt` section 1.
+Real bare-metal passes of this shape are in `xhciqual/results/`.
 
 ### Step 4. Install, from the release directory
 
 Do: follow `readme.txt` section 4 for the target, out of the `release`
 directory for the machine's architecture (step 2). Point at a directory, never
-at a loose `xhci98.sys`; nothing about a copied file says which flavour it is,
-and since `1.1.0.0` nothing about it says which architecture either.
+at a loose `.sys`.
 
 The rows are grouped by phase rather than by number: the seven install rows
-first, one per target, then the three readings taken once the install is done.
-4.5, 4.6, 4.8, 4.9 and 4.10 were added after 4.3 and 4.4 and keep their ids,
-because the roadmap and the run sheets cite them.
+first, one per target, then the readings taken once the install is done. The
+ids are kept from the `1.x` version of this test, because the roadmap and the
+run sheets cite them.
 
 | # | Target | Do | Expected reading |
 |---|---|---|---|
-| 4.1 | Windows 98 SE | NUSB 3.3 first, then Device Manager, the unclaimed xHCI controller, Properties -> Driver -> Update Driver -> Specify a location -> `RELEASE-X86\` | On an xHCI-only machine the copy phase asks for the Windows 98 Second Edition CD-ROM ("Insert Disk"); give it the CD, or its `WIN98` folder if asked where to copy from, and the install completes. A machine that already has `usbd.sys`, `usbhub.sys` and `usbui.dll` is not asked. One that has the first two from an earlier release but not `usbui.dll`, which is new in `1.0.2.0`, is asked again although that earlier install was silent; that is expected, not a fault. It never asks for a file from the driver's own disk. Record which it was |
-| 4.2 | Windows 2000 SP4 | Device Manager, the controller, Properties -> Driver -> Update Driver -> Have Disk -> `RELEASE-X86\` | Completes with no prompt; `usbport.sys`, `usbd.sys` and `usbhub.sys` come from the driver cache (`sp4.cab`) and `usbui.dll` from `driver.cab` beside them, two cabinets in one pass |
-| 4.5 | Windows ME | SweetLow's stack first (NUSB is a Windows 98 SE package), then the Windows 98 SE route of 4.1 | Completes. The virtual machine tried asked for no CD, its Setup having left the CABs on the hard disk; a machine without them may ask for the Windows ME CD, for `usbd.sys`, `usbhub.sys` and `usbui.dll`. Record which it was. This target is supported in virtual machines only |
-| 4.6 | Windows XP | Device Manager, the controller, Properties -> Driver -> Update Driver -> Have Disk -> `RELEASE-X86\`; Continue Anyway at the unsigned-driver warning | Completes with no other prompt; `usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll` all come from the driver cache (`sp3.cab`). This target is supported in virtual machines only |
-| 4.8 | Windows XP x64, Windows Server 2003 x64 | The Windows 2000 route of 4.2, pointed at `RELEASE-X64\`; Continue Anyway at the unsigned-driver warning | Completes with no other prompt; `usbport.sys` and `usbhub.sys` come from `Driver Cache\amd64\sp2.cab` and `usbd.sys` and `usbui.dll` from `driver.cab` beside it, two cabinets in one pass. `RELEASE-X86\` offers this machine no driver at all, which is what a wrong pick looks like rather than a failed install. This target is supported in virtual machines only, and only Windows XP x64 has been tried |
-| 4.9 | Windows Vista, Windows 7 (32-bit) | Device Manager, the unrecognised xHCI device, Update Driver Software -> Browse my computer for driver software -> `RELEASE-X86\`. Use Device Manager rather than right-clicking `xhci98.inf`: the right-click Install route is not supported on these systems. If Windows warns that the driver is not signed or its publisher cannot be verified, choose to install it anyway, and write down the prompt's wording and when it appeared | Completes with no file prompt: the INF's `Xhci.Dev6` path copies `xhci98.sys` alone, because every install of these systems already carries `usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll`. 32-bit Vista and Windows 7 do not enforce kernel-mode signing, so the driver starts on the ordinary boot. This target is supported in virtual machines only. The `1.1.0.0` asset's `RELEASE-X86\` was installed on both in virtual machines (roadmap task 22.10), behind "Windows can't verify the publisher of this driver software", taken with "Install this driver software anyway"; if the prompt reads differently here, write that down |
-| 4.10 | Windows Vista x64, Windows 7 x64 | The route of 4.9, pointed at `RELEASE-X64\`. The install itself can be done on an ordinary boot. Then restart, press F8 before the Windows logo, and choose Disable Driver Signature Enforcement; that choice lasts one boot, and every later boot that is to have working USB needs it again | Completes with no file prompt, by the 64-bit INF's `Xhci.Dev6` path, which copies `xhci98.sys` alone. The driver starts only on the F8 boot; on any other boot Device Manager shows Code 39 on the controller and nothing on it works (Vista x64 was where that boot was looked at). `RELEASE-X86\` offers this machine no driver at all, which is a wrong pick rather than a failed install. This target is supported in virtual machines only, and the package is not signed (design record 11 section 12, decision 9) |
-| 4.3 | All seven | Look at Device Manager when the install is done | The two nodes below, and neither carries a warning mark. On Vista x64 and Windows 7 x64, on the F8 boot of 4.10 |
-| 4.4 | Windows 98 SE | Look for the two cosmetic readings and note them | `xhci98.tmp` left in `System32\Drivers` and listed in Driver File Details (cosmetic; the loaded binary is the real one), and the Driver tab showing a date but no version (release notes, "Known limitations"). Neither is a failure and neither should be reported as one |
-| 4.7 | Windows 2000, Windows XP, Windows XP x64 | The USB Root Hub of 4.3, Properties | A **Power** tab beside General and Driver, reading "The hub is self powered" and "Total power available: 500 mA per port", with the port count listed below. This is the reading that says `usbui.dll` arrived: Windows' own INF asks for that page and names that file as its provider, and on a machine that never had a USB controller the file is absent and the tab silently is too. Its absence is not a driver fault; record it. On Windows XP x64 the 64-bit INF copies the 64-bit `usbui.dll` by the same route, but the tab itself has not been read on that target here; whatever it shows is new information |
+| 4.1 | Windows 98 SE | NUSB 3.3 or 3.6 first if the storage clauses are to be taken (none is needed for the controller, hubs, HID or audio), then Device Manager, the unclaimed xHCI controller, Properties -> Driver -> Update Driver -> Specify a location -> `RELEASE-X86\` | On an xHCI-only machine, "Insert Disk" asks for the Windows 98 Second Edition CD-ROM, then reports that `usbd.sys` cannot be found and asks where to copy from; give it the CD's `WIN98` folder. Then a request to restart. A machine that already has the file is not asked. Record which it was |
+| 4.2 | Windows 2000 SP4 | Device Manager, the controller, Properties -> Driver -> Update Driver -> Have Disk -> `RELEASE-X86\` | Completes with no prompt |
+| 4.5 | Windows ME | SweetLow's USB 2.0 stack first (every Windows ME reading was taken under it); then the Windows 98 SE route of 4.1 | Completes, with a request to restart. In the virtual machines no CD was asked for. This target is supported in virtual machines only |
+| 4.6 | Windows XP | Device Manager, the controller, Properties -> Driver -> Update Driver -> Have Disk -> `RELEASE-X86\`; Continue Anyway at the unsigned-driver warning | Completes with no file prompt. This target is supported in virtual machines only |
+| 4.8 | Windows XP x64 | The Windows 2000 route of 4.2, pointed at `RELEASE-X64\`; Continue Anyway at the unsigned-driver warning | Completes with Windows' signature and Logo prompts only, no file prompt and no restart. `RELEASE-X86\` offers this machine no driver at all, which is what a wrong pick looks like. This target is supported in virtual machines only |
+| 4.9 | Windows Vista, Windows 7 (32-bit) | Device Manager, the unrecognised xHCI device, Update Driver Software -> Browse my computer for driver software -> `RELEASE-X86\`. Use Device Manager rather than right-clicking an INF. If Windows warns that the driver is not signed or its publisher cannot be verified, choose to install it anyway, and write down the prompt's wording | Completes with no file prompt: the INF's `Xhci.Dev6` path copies `xhci98.sys` alone. 32-bit Vista and Windows 7 do not enforce kernel-mode signing, so the driver starts on the ordinary boot. This target is supported in virtual machines only |
+| 4.10 | Windows Vista x64, Windows 7 x64 | The route of 4.9, pointed at `RELEASE-X64\`. Then restart with driver signature enforcement disabled (the Advanced Boot Options menu); that lasts one boot, and every later boot that is to have working USB needs it again | Completes with no file prompt. The drivers start only on a boot with enforcement disabled; on any other boot Device Manager shows Code 39 on the controller and nothing on it works. This target is supported in virtual machines only, and the package is not signed |
+| 4.3 | All seven | Look at Device Manager when the install is done | The two nodes below, and neither carries a warning mark. On Vista x64 and Windows 7 x64, on the boot of 4.10 |
+| 4.4 | Windows 98 SE | Record only: open the controller's Driver File Details and the Driver tab | Driver File Details lists `xhci98.tmp` (the `release` legs, under NUSB and under SweetLow's stack). Under `1.x`, `xhci98.tmp` was left in `System32\Drivers` and listed there (cosmetic), and the Driver tab showed a date but no version; the `2.0.0.0` INF keeps the same temporary-copy line |
+| 4.7 | Every target | The root hub of 4.3, Properties; then the controller's Properties | A **Power** tab on the root hub and an **Advanced** tab on the controller. Record what each shows. These are Windows' own pages, drawn with `usbui.dll` (on Windows 98 SE and ME through `sysclass.dll`), which the install has Windows copy; their absence is a missing file rather than a driver fault, and is recorded |
 
 The two nodes of 4.3, as Device Manager shows them:
 
 ```
-USB 2.0 eXtensible Host Controller (xhci98)
-    USB Root Hub
+xHCI98 USB 3.x eXtensible Host Controller
+    xHCI98 USB 3.x Root Hub
 ```
 
-The controller string is the INF's, as written; the root hub is the system's
-own. Both INFs carry the same string, so those two lines look the same on a
-64-bit machine as on a 32-bit one and do not say which package was installed;
-what says that is which directory was pointed at.
+Both are the INFs' strings, and both architectures' INFs carry the same ones,
+so they do not say which package was installed; what says that is which
+directory was pointed at. External hubs plugged in later appear nowhere in
+Device Manager: the driver runs them itself, and the devices behind them appear
+under the root hub.
 
-The rows name the directories a cut from `1.1.0.0` on writes. On an earlier cut
-the same directory is `RELEASE\` and there is no 64-bit one at all (2.1, 2.5).
+If a USB device's own driver fails to load after the install and Windows 98
+SE asked for the CD at 4.1: `usbd.sys` is missing, which means the Insert Disk
+prompt was cancelled or answered with the wrong disk. Put the CD in and
+install the driver again.
 
-If the root hub fails with `0xc0000034` naming `usbhub20.sys` (the NT targets)
-or sits at Code 2 (Windows 98): `usbd.sys` is missing, which on Windows 98
-means the Insert Disk prompt of 4.1 was cancelled or answered with the wrong
-disk. Put the CD in and install the driver again.
+If the controller reports `Code 10` (the NT targets): the driver loaded and
+then failed while bringing the controller up. Record it together with the
+whole of step 1's machine record.
 
-If the controller reports `Code 10` (Windows 2000): the driver loaded and then
-failed while bringing the controller up. Record it together with the whole of
-step 1's machine record; this is the one failure mode where the two supported
-systems behave very differently.
-
-If Windows 98 stops with `Windows protection error. You need to restart your
-computer.`: the same fault, in that system's response to it. Recover through
-Safe mode per the failed-start entry in the release notes' "Known
-limitations", which carries the steps and
-records that recovery is complete and loses nothing.
-
-Observed: the device string is `src/xhci98.inf`'s `XhciDesc`, and
-`src/xhci98-amd64.inf` carries the same one. The `0xc0000034`
-failure is `readme.txt` section 3 and `docs/contributing/lessons.md`, the
-`USBD.SYS` lesson. `Code 10` versus the Windows 98 protection error was
-measured in both virtual machines (roadmap task 12.3; release notes, "Known
-limitations"). 4.8 was measured on the Windows XP x64 virtual machine of
-2026-09-09, which took the `.NTamd64` path with no prompt for the CD on a
-machine that had had no USB stack on disk at all (roadmap task 21.5;
-`docs/contributing/build-and-test.md`, "Windows XP x64 target VM"). That
-reading was taken from a package staged out of the source tree; the same
-install from a published download is what this step asks for and is what
-roadmap task 22.10's fifth leg exists to take.
+Observed: the device strings are `src/xhci98.inf`'s `XhciDesc` and
+`RootHubDesc`. 4.1's prompts, word for word, and the restart were read on
+Windows 98 SE in virtual machines under NUSB 3.3, under SweetLow's stack and
+on a stock install (roadmap-hcd 26-V.0 and 26-V.1, and the stock and
+SweetLow-only readings of Phase 28). 4.2 is 26-V.0's and 26-V.2's. 4.8 is
+28-A.2's, on Windows XP x64 in a virtual machine. 4.6, 4.9 and 4.10 are the
+Phase 28 guest legs on the integration build, read again on its `release`
+flavour, and read once more from the release asset after the cut. 4.7's two tabs were read on Windows 98 SE under both
+stacks and on Windows 2000 (26-A.8).
 
 ### Step 5. Devices, one at a time, then a hub
 
 Do: with the machine running, take each device in turn on a root port. Plug it
 in, confirm it enumerates, use it, unplug it, plug it back in. Then assemble a
 hub at a root port with children behind it, and repeat for the children. One
-device at a time, and do not cycle a device rapidly: on Windows 98 fast
-repeated plug and unplug of the same device can freeze the machine, and that is
-this driver's own defect (release notes, "Known limitations").
+device at a time, and do not cycle a device rapidly.
 
 | # | Device | Do | Expected reading |
 |---|---|---|---|
-| 5.1 | A Low-Speed HID | On a root port: plug in, use it, unplug, plug it back in | It appears with the right identity and no warning mark, the pointer moves or the keys type, unplugging removes the node, and replugging brings it back with no Refresh and no prompting |
-| 5.2 | A High-Speed flash drive | The same, and round-trip a file: write one to it and read it back | A drive letter appears and the file reads back with matching contents, and the node comes and goes with the device |
-| 5.3 | A hub at a root port, with children behind it | Assemble it, then take 5.1 and 5.2 again on the children | Every child named and working, and the hub itself carrying no warning mark. Record whether the hub is self- or bus-powered and, if it can be read, its TT class |
+| 5.1 | A Low-Speed HID | On a root port: plug in, use it, unplug, plug it back in | It appears with the right identity and no warning mark, the pointer moves or the keys type, unplugging removes the node, and replugging brings it back with no Refresh and no prompting. On Windows 98 SE the first HID device may ask for the CD for `hidclass.sys`, once |
+| 5.2 | A High-Speed flash drive | The same, and round-trip a file: write one to it and read it back | A drive letter appears and the file reads back with matching contents, and the node comes and goes with the device. On Windows 98 SE without NUSB's mass-storage component: "Unknown Device", Code 28, which is the missing prerequisite, not this driver; record it and SKIP the rest of the clause |
+| 5.3 | A hub at a root port, with children behind it | Assemble it, then take 5.1 and 5.2 again on the children | Every child named and working, under the root hub. Record whether the hub is self- or bus-powered and, if it can be read, its TT class |
 | 5.4 | A USB Ethernet adapter (optional) | On a root port, then behind the hub: bring it up and pass traffic | It takes an address and passes traffic |
-| 5.5 | A USB Audio device (optional) | On a root port: play something through it | It plays. On Windows 98 read the release notes' USB Audio entry before running this at all |
-| 5.6 | Every device above | Record the negotiated speed wherever the OS will show it | `Low`, `Full` or `High`. A USB 3.0 device on a USB 3.0 connector is expected to fall back and run at High Speed: the SuperSpeed half of every connector is left switched off by design |
+| 5.5 | A USB Audio device (optional) | On a root port, then behind the hub: play something through it | It plays and is heard |
+| 5.6 | Every device above | Record the negotiated speed wherever the OS will show it | `Low`, `Full` or `High`, the device's true speed, on a root port and behind a hub alike. Device Manager on these systems shows `High` at most, so a SuperSpeed device is 5.8's reading |
+| 5.7 | A UAS storage device | On a USB 3.x connector: plug in; on its first arrival the Found New Hardware wizard asks for a driver for "xHCI98 USB Attached SCSI Storage" - point it at the same `release` directory. Round-trip a file, unplug, plug it back in | It installs with no restart, a drive letter appears, and the file reads back with matching contents. On Windows 98 SE without NUSB's mass-storage component it sits at Code 2; that is the missing prerequisite (`readme.txt` section 3), so record it and SKIP. If the device offers both transports, also record which driver Device Manager shows; `XhciForceBulkOnly` is `readme.txt` section 9 and is not this clause |
+| 5.8 | A SuperSpeed device | On a USB 3.x connector: plug in, round-trip a file. Keep it plugged in for step 8 | It works, with matching contents. Its SuperSpeed is read at 8.8 from `XHCISNAP`, not from Device Manager, which shows `High` at most |
 
-If a device is only noticed after pressing Refresh in Device Manager (Windows
-98): that is the idle-sleep symptom, and it points at step 7's idle hot-plug
-check rather than at the device. Take step 7 now, and
-say in the record that it was reached this way.
+On Windows 98 SE, the first storage device installed from NUSB's five
+mass-storage files on their own, rather than from an NUSB install, takes one
+step more: Windows binds the new disk to its generic "Disk drive" and no drive
+letter appears until that entry is updated to "USB Disk" and the device
+replugged (`readme.txt` section 3). That is a reading of the prerequisite and
+not a failure of 5.2 or 5.7; record that it was needed.
+
+If a device is only noticed after pressing Refresh in Device Manager: record
+it, take step 7's idle hot-plug check now, and say in the record that it was
+reached this way.
 
 If a device does not enumerate at all: record its VID/PID, its speed if
 anything reports one, and whether it behaves the same on a root port and behind
 the hub. That pair is the discriminating reading, and it should be read for
 what it excludes and no more. The same fault in both places rules out a
 hub-specific defect (Route String, TT, topology) and leaves everything the two
-paths share: this driver's common code, the usbport/class stack above it, and
-the device itself. Different behaviour points at the hub path without proving
-it. Bench session 1 is the reminder not to read "identical in both places" as
-"above this driver": two devices failed identically in both places and the
-cause was this driver's EP0 initial-MPS assumption (`test-equipment.md`,
-"`bMaxPacketSize0`").
+paths share: this driver's common code, the class driver above it, and the
+device itself. Different behaviour points at the hub path without proving it.
 
-Observed: enumerate/work/unplug/replug on real xHCI silicon is
-`docs/contributing/runs/run-13e.md` stages E3 and E4 (E460), across HID, a
-two-tier hub tree and a USB Ethernet adapter, the last taking a DHCP lease and
-five parallel ping streams. The 20-cycle unplug/replug per device class passed
-on all three virtual vehicles in batch 11-V. The storage round-trip has been
-measured once on real silicon: the `174C:5106` USB-SATA bridge at a root port
-on the E460 took a drive letter, and a file written to it read back with
-matching contents (stage E4.2's I/O half, `run-13e.md`). A tester's file copy
-is therefore a repetition on another release and another machine; record it as
-one more reading. The USB 2.0 fallback on a USB 3.0 connector is `readme.txt`
-section 5 and release notes "What this is not".
+Observed: under `2.0.0.0`, in virtual machines: HID, storage with a verified
+file compare, hubs with devices behind them and unplug and replug on both
+primary targets and the Phase 28 guests (roadmap-hcd 26-V.1, 26-V.2, 27-V.1
+and 28-V.1's legs on the integration build); UAS at SuperSpeed and at High
+Speed with a round trip and no restart (31-V.1, and the Windows 98 SE storage
+readings of Phase 31); SuperSpeed storage (29-V.1). The Windows 98 SE storage
+prerequisite and the "Disk drive" step are the SweetLow-only reading of
+Phase 28. On real hardware, every clause of this step was observed on
+Windows 98 SE on a ThinkPad E460 and a ThinkPad P14s Gen 1, at the bench
+session before the release (roadmap-hcd 28-E.1, 29-E.1, 30-E.1 and 31-E.1):
+High-Speed hubs, single- and multi-TT, with Low- and Full-Speed devices
+behind them and a Full-Speed hub behind a High-Speed one, a Low-Speed mouse
+polled every 8 ms at a root port and behind a hub, audio played and heard at
+a root port and behind a hub, SuperSpeed storage, a SuperSpeed hub, and UAS
+at SuperSpeed and High Speed with forced Bulk-Only. The Low-Speed clause
+(5.1) has no virtual-machine vehicle and rests on that bench reading.
 
 ### Step 6. Reboot with devices attached
 
@@ -354,9 +321,9 @@ If a device does not come back: try one replug and record whether that
 recovers it. A device that returns on a replug but not on a boot is a different
 result from one that returns on neither, and the record should say which.
 
-Observed: batch 11-V, on both systems. Restarting brought all three device
-classes back with no prompting, on a bus that had been under live traffic at
-the shutdown (roadmap batch 11-V).
+Observed: record only for `2.0.0.0`; the guest legs restarted with devices
+attached but did not read this step as a clause. Under `1.x` this was batch
+11-V's, on both primary targets.
 
 ### Step 7. The target-specific clauses
 
@@ -367,248 +334,131 @@ Windows 98 SE
 
 | # | Do | Expected reading |
 |---|---|---|
-| 7.1 | Do not disable, remove or upgrade this driver in Device Manager. Disabling the USB Root Hub is fine | Nothing to see: the clause is a prohibition, and what the record says is that it was respected. Each of the three blue-screens the machine at `0028:C00312EE` under NUSB's stack, the one this test installs |
-| 7.2 | Unplug everything from the machine's USB ports, leave it a full minute, then plug in a mouse | It enumerates on its own, with no Refresh in Device Manager. And: `HKLM\System\CurrentControlSet\Services\USB` has NO `DisableSelectiveSuspend` value written by this install - on a machine upgraded from 1.0.2.0 or earlier it may be there from before, which is expected and is not this package's |
-| 7.3 | Plug in one composite device, something that is more than one thing at once | It enumerates and its functions load, rather than `USB Composite Device` with `Code 2` and nothing above it |
+| 7.1 | Disable the controller in Device Manager, enable it, then remove it and refresh | It goes and comes back each time, with no crash. Under `1.x` with NUSB this blue-screened the machine at `0028:C00312EE`, in NUSB's `usbport.sys`, which `2.0.0.0` does not use |
+| 7.2 | Unplug everything from the machine's USB ports, leave it a full minute, then plug in a mouse | It enumerates on its own, with no Refresh in Device Manager |
+| 7.3 | Plug in one composite device, something that is more than one thing at once | It enumerates and each of its functions loads under the root hub, rather than one entry with a warning mark |
 
-7.1 is not this driver: Microsoft's own `usbehci.sys` does the same on the same
-machine. A tester who needs the driver gone uses the unload-first route in
-`readme.txt` section 5. (Release notes, "Known limitations".)
+7.1 was read under `2.0.0.0` in Windows 98 SE virtual machines under NUSB 3.3
+and under SweetLow's stack: disable, enable, remove and rescan, with a mouse
+attached (roadmap-hcd Phase 26, "the Windows 98 door sequence"). It has not
+been read on real hardware.
 
-7.2 is a behaviour check since `1.1.0.0`, and that is the point of the change.
-Without the fix the USB stack idle-suspends the controller within about half a
-second of the last transfer, and a device plugged in afterwards is noticed by
-nothing until Refresh. Until `1.0.2.0` the fix was a registry value and this
-step read the value; now it is `USB_MINIPORT_FLAGS_DISABLE_SS` inside the
-driver, where there is nothing to look at, so the step reads the behaviour
-instead - which is what the value was ever a proxy for. **Empty the bus
-properly:** any attached device keeps the controller awake, even one with no
-driver, so a machine with an internal USB device cannot show this either way.
-(Measured on the Windows 98 virtual machine; release notes, "Known
-limitations"; `src/xhci_dispatch.c` above `XHCI_MINIPORT_FLAGS`, and
-`docs/issues/05-idle-suspend-and-disableselectivesuspend.md`.)
+7.2 checks that nothing idles the controller out from under a plug. The driver
+initiates no selective suspend at all (the release notes' "Known
+limitations"), so an empty bus is the one condition left to try. **Empty the
+bus properly**: any attached device keeps the bus busy, so a machine with an
+internal USB device cannot show this either way.
 
-7.3 is what Windows 98's own `usbhub.sys` is for, which the install at step 4
-has Windows copy from its CD or CABs: Windows 98 Setup places its composite
-parent only when it finds a USB controller it recognises, so an xHCI-only
-machine never got one. (Established by remedy on the E460, roadmap task
-13-E.1 and `run-13e.md` Finding D, and cross-checked on a non-xHCI machine
-running the same OS and the same NUSB. Under SweetLow's stack the parent is
-his `usbccgp.sys` and the file is not needed.)
+7.3 is the driver's own composite split: there is no composite parent driver
+under `2.0.0.0` on any target. Read in virtual machines on both primary
+targets with the C-Media `0D8C:0014`, which has no IAD (roadmap-hcd 26-A.7).
 
 Windows 2000 SP4
 
 | # | Do | Expected reading |
 |---|---|---|
-| 7.4 | Unplug everything from the machine's USB ports, leave it a full minute, then plug in a mouse | It enumerates on its own, with no Refresh. And no `DisableSelectiveSuspend` under `HKLM\System\CurrentControlSet\Services\USB` from this install - see 7.2 |
-| 7.5 | Look at the Driver tab | The version is present and the date reads `Not available` |
+| 7.4 | Unplug everything from the machine's USB ports, leave it a full minute, then plug in a mouse | It enumerates on its own, with no Refresh |
+| 7.5 | Record only: look at the Driver tab | Write down the date and version shown. Under `1.x` the version was present and the date read `Not available` |
 | 7.6 | Disable the controller in Device Manager, then re-enable it once | It goes and comes back, with no crash |
 
-7.4 is 7.2's step on the other primary target, and it is weaker here than it
-reads. Windows 2000 SP4's `usbport` was never seen idling this controller
-with the old registry value deleted (2026-09-06, a virtual-machine reading),
-and its start routine explains that statically - it defaults the setting to
-enabled-off on Windows 2000 unless `Services\usb` holds an explicit 0. So a
-pass here is consistent with the fix working and equally consistent with this
-target never idling in the first place; it is the Windows 98 and Windows XP
-steps that carry the reading. (The NT install path had the old value from
-`1.0.1.0` and has no registry value at all from `1.1.0.0`;
-`docs/issues/05-idle-suspend-and-disableselectivesuspend.md` section 5.)
-
-7.5 is expected and is not a failed install: the engine reads this package's
-`DriverVer` and declines the date half specifically. (Roadmap task 12.4,
-measured on a Windows 2000 guest; release notes, "Known limitations".)
-
-7.6 Windows 2000 disables, re-enables and uninstalls without crashing; the blue
-screen in the other block is that system's, not this driver's. This is also the
-mechanism step 8 needs. Upgrade is a separate matter and is not tested here: on
-Windows 2000 installing a newer package over an older one is refused rather
-than crashing, and there is a manual step that works (release notes,
-"Known limitations"). (Batch 11-V, measured on that target; `readme.txt` section 5.)
+7.6 was read under `2.0.0.0` in the Windows 2000 virtual machine, under Driver
+Verifier, with the remove and rescan beside it (roadmap-hcd 26-V.2). It is also
+the mechanism step 8 needs.
 
 Windows ME (virtual machines only)
 
 | # | Do | Expected reading |
 |---|---|---|
-| 7.7 | Confirm the stack before anything else: `usbport.sys` in `WINDOWS\SYSTEM32\DRIVERS`, from SweetLow's package | Present. On the stock Windows ME stack the controller sits at Code 2 ("The NTKERN.VXD device loader(s) for this device could not load the device driver") and nothing below is testable; that is the missing stack, not this driver |
-| 7.8 | Plug in one composite device, as 7.3 | It enumerates as `Composite Device` under Universal Serial Bus controllers with its functions loaded beneath it: Windows ME's own `usbccgp.sys` is the parent, so 7.3's `usbhub.sys` clause does not apply here |
-
-7.7 and 7.8 were measured once, on the Windows ME virtual machine of 2026-09-02
-(roadmap tasks 18.2 and 18.3; `docs/contributing/build-and-test.md`, "Windows
-ME target VM"). Windows 98 SE's 7.1 and 7.2 have not been measured on Windows
-ME and are `SKIP - other target` there.
+| 7.7 | Record the USB stack installed, if any | SweetLow's USB 2.0 stack, under which every Windows ME reading was taken |
+| 7.8 | Plug in one composite device, as 7.3 | Each function loads under the root hub, as 7.3; read on the integration build with QEMU's `usb-audio` at a root port and behind a hub |
+| 7.9 | Do not re-enable the controller in Device Manager with a USB device attached | Known limitation: it can hang Windows ME. Unplug USB devices before re-enabling |
 
 Windows XP (virtual machines only)
 
 | # | Do | Expected reading |
 |---|---|---|
-| 7.9 | Look in `HKLM\System\CurrentControlSet\Services\USB` for a DWORD `DisableSelectiveSuspend` | ABSENT, and on a clean XP install `Services\USB` should not exist at all - this package no longer creates it. If the key is there, this machine ran 1.0.2.0 or earlier; note that in the record, because it would mask 7.10 |
-| 7.10 | Leave the machine idle for two minutes after boot with nothing plugged in, then plug in a Low-Speed HID | It enumerates and works with no Refresh. This is the sharpest form of the check on any target bar Windows 7: without the fix XP's `usbport` suspends the controller about thirty seconds after start and the device is invisible |
-| 7.11 | Plug in a flash drive, then a composite device, each for the first time on this installation | Each binds on its first attach, with no replug needed, while Windows installs its class driver |
+| 7.9 | Look in `HKLM\System\CurrentControlSet\Services\USB` for a DWORD `DisableSelectiveSuspend` | Absent: no `2.0.0.0` INF writes it. If it is there, a `1.0.2.0` or earlier package ran on this machine; note it |
+| 7.10 | Leave the machine idle for two minutes after boot with nothing plugged in, then plug in a Low-Speed HID | It enumerates and works with no Refresh |
+| 7.11 | Plug in a flash drive, then a composite device, each for the first time on this installation | Each binds on its first attach, with no replug needed |
 | 7.12 | Disable the controller in Device Manager, re-enable it, then uninstall it and Scan for hardware changes | It goes and comes back each time, with no crash; the Found New Hardware wizard returns on the rescan |
 
-7.9 to 7.12 were measured on the Windows XP virtual machine of 2026-09-03
-(roadmap tasks 19.2, 19.3, 19.4 and 19.7; `docs/contributing/build-and-test.md`,
-"Windows XP target VM"), **and 7.9 has inverted since**: the reading of
-2026-09-03 was taken against a package that wrote the value, and from `1.1.0.0`
-no package does. 7.10 is unchanged and is now the whole of the check - it was
-always the clause that read the effect. 7.11 is issue 4's clause: before
-`1.0.1.0` a device XP re-created mid-enumeration was failed by this driver and
-bound only on a replug (`docs/issues/04-xp-restore-device-ep0-remove.md`).
-Windows 2000's 7.5 has not been measured on XP and is `SKIP - other target`
-there.
-
-Windows XP x64 and Windows Server 2003 x64 (virtual machines only)
+Windows XP x64 (virtual machines only)
 
 | # | Do | Expected reading |
 |---|---|---|
-| 7.13 | Look in `HKLM\System\CurrentControlSet\Services\USB` for a DWORD `DisableSelectiveSuspend` | ABSENT. The 64-bit INF wrote it by the same `AddReg` the 32-bit one used until `1.0.2.0`, and both files stopped at `1.1.0.0` |
-| 7.14 | Leave the machine idle for two minutes after boot with nothing plugged in, then plug in a Low-Speed HID | It enumerates and works with no Refresh, as on 32-bit XP |
+| 7.13 | Look in `HKLM\System\CurrentControlSet\Services\USB` for a DWORD `DisableSelectiveSuspend` | Absent, as 7.9 |
+| 7.14 | Leave the machine idle for two minutes after boot with nothing plugged in, then plug in a Low-Speed HID | It enumerates and works with no Refresh |
 | 7.15 | Plug in a flash drive, then a composite device, each for the first time on this installation | Each binds on its first attach, with no replug needed |
 | 7.16 | Disable the controller in Device Manager, re-enable it, then uninstall it and Scan for hardware changes | It goes and comes back each time, with no crash, and the rescan reinstalls with no media prompt |
 
-7.13 to 7.16 were measured on the Windows XP x64 virtual machine of 2026-09-09
-(roadmap task 21.5; `docs/contributing/build-and-test.md`, "Windows XP x64
-target VM"), and 7.13 has inverted with 7.9 for the same reason: that run
-installed a package that wrote the value, and from `1.1.0.0` none does. Two of
-them are narrower than they read, and the record should say
-so where they are taken. 7.14's underlying reading there was the absence of any
-`SuspendController` on an idle controller in the driver's own trace, not this
-two-minute clause; and 7.15's devices were hot-plugged onto a running guest,
-which is the same act a tester performs but was not read as a first-ever
-class-driver install the way 32-bit XP's 7.11 was.
-
-Windows 2000's 7.5 has not been measured here and is `SKIP - other target`.
-
-Windows Server 2003 x64 is the same operating system as Windows XP x64, NT
-5.2.3790, and the same driver is meant for it, but no Server 2003 machine has
-been tried at all. A run of this block on one is new information rather than a
-repetition, so say in the record which of the two it was.
+7.12 and 7.16 were read under `2.0.0.0` on the XP guests in virtual machines
+(roadmap-hcd 28-A.2 on XP x64, and the Phase 28 guest legs). 7.10 and 7.14's
+Low-Speed device has no virtual-machine vehicle; a Full-Speed one is what the
+virtual machines read.
 
 Windows Vista and Windows 7, 32-bit and x64 (virtual machines only)
 
 | # | Do | Expected reading |
 |---|---|---|
-| 7.17 | Look in `HKLM\System\CurrentControlSet\Services\USB` for a DWORD `DisableSelectiveSuspend` | ABSENT: the `1.1.0.0` package writes no registry value on any target, and no earlier release carried an install path for these systems. On a clean Windows 7 install the `Services\USB` key does not exist at all; a clean Vista x64 install's `Services\usb` holds only `FastS4_OverrideBiosS4`, which is Windows' own |
-| 7.18 | Leave the machine idle for two minutes after boot with nothing plugged in, then plug in a Low-Speed HID | It enumerates and works with no Refresh. On 32-bit Windows 7 this is the sharpest form of the check on any target: without the fix its `usbport` halts the controller between 10 and 20 s after start. 32-bit Vista is the weak one: it was not seen idling the controller in five minutes either way, so a pass there says less |
-| 7.19 | Disable the controller in Device Manager and re-enable it, five times, then uninstall it and Scan for hardware changes | It comes back each time, with no crash and no enable that hangs; the rescan reinstalls with no media prompt and, on x64, with no second F8. Record how long each enable took. **On a real machine, save everything first**: on the one real Windows 7 machine tried (32-bit, a ThinkPad E460, 2026-09-19) the first Disable never finished and the restart after it hung until the machine was powered off (release notes, "Known limitations"). The four virtual machines passed all five cycles. A hang here is a reading of that known limitation, not a new failure: record at which disable it happened, whether the restart finished, and whether Enable afterwards brought USB back |
-| 7.20 | x64 only: restart without pressing F8, then restart again with Disable Driver Signature Enforcement chosen | On the ordinary boot the controller shows Code 39 and nothing on it works; on the F8 boot the two nodes of 4.3 are back and the mouse of step 5 works. Record both. 32-bit Vista and Windows 7 do not enforce kernel-mode signing and this clause is `SKIP - other target` there |
+| 7.17 | Look in `HKLM\System\CurrentControlSet\Services\USB` for a DWORD `DisableSelectiveSuspend` | Absent, as 7.9 |
+| 7.18 | Leave the machine idle for two minutes after boot with nothing plugged in, then plug in a Low-Speed HID | It enumerates and works with no Refresh |
+| 7.19 | Disable the controller in Device Manager and re-enable it, five times, then uninstall it and Scan for hardware changes | It comes back each time, with no crash and no hang; the rescan reinstalls with no media prompt and, on x64, with no second boot needed. Record how long each enable took |
+| 7.20 | x64 only: restart normally, then restart again with driver signature enforcement disabled | On the ordinary boot the controller shows Code 39 and nothing on it works; on the other the two nodes of 4.3 are back and the mouse of step 5 works. Record both. `SKIP - other target` on 32-bit Vista and Windows 7 |
 
-Two runs stand behind this block, and each clause comes from one of them.
-7.19 is the run of 2026-09-13 on the four virtual machines - Vista Business
-SP2 and Windows 7 Professional SP1, each 32-bit and x64, four virtual
-processors, the `qemu` build installed from a staged copy of the INF's NT 6.x
-sections: install, the three devices, five watched disable/enable cycles, a
-remove and a rescan on every guest
-(`docs/issues/07-win7-x86-enable-arrest-usbport-done-dpc.md` section 7.5;
-`docs/contributing/build-and-test.md`, "Windows Vista and Windows 7 target
-VMs" and "Vista x64 and Windows 7 x64 target VMs"). That run read no
-registry value and no idle: the package it installed still wrote the
-machine-wide value, and it did not wait on an empty bus. 7.19 is issue 7's
-clause - before the fix Windows 7's enable arrested inside `usbport` - and
-five cycles a guest is what the record rests on, which issue 7 section 6
-says is not a proof that it cannot recur. 7.17 and 7.18 are the run of
-2026-09-17 (`docs/issues/05-idle-suspend-and-disableselectivesuspend.md`
-section 5.5), one clean install of the `1.1.0.0` package per guest on all
-four, each beside a control leg of the previous build with its value
-deleted: the registry state read in-guest per leg (`Services\USB` absent on
-Windows 7 x86 and x64; `Services\usb` holding only `FastS4_OverrideBiosS4`
-on Vista x64, as on Vista x86), then five minutes on an empty bus, a
-keyboard hot-plugged and addressed (within 10 s on Windows 7 x86, 6 s on
-the two x64 guests), and no re-idle after its unplug. On 32-bit Vista the
-five idle minutes showed nothing either way and the discriminator was the
-power plan's selective-suspend flip, so 7.18 there is the weaker reading the
-row says it is. That day was also the first time Vista x64 and Windows 7
-x64 (with XP x64) were ever booted without the value; 32-bit Vista and
-Windows 7 had been read without it on 2026-09-16 (section 5.3). 7.20 is
-the F8 requirement read from the other side: the package is not signed, and
-the Code 39 reading is Vista x64's (release notes, "Known limitations",
-2026-09-10 to 2026-09-16). The published `release` directories were
-installed on all four guests afterwards, from the `1.1.0.0` asset (roadmap
-task 22.10, legs 6 to 9, 2026-09-18); on a run of this block record which
-build and which directory it was.
+7.19 was read under `2.0.0.0` in virtual machines: five disable and enable
+cycles each on Windows 7 x86 and x64 with no hang (roadmap-hcd 28.3). The
+controller disable that hung 32-bit Windows 7 on a ThinkPad E460 under `1.x`
+belonged to the miniport under Microsoft's `usbport.sys` and did not occur
+under `2.0.0.0`. Windows 7 has not been run on real hardware with `2.0.0.0`.
 
-Windows 2000's 7.5 has not been measured here and is `SKIP - other target`.
-
-### Step 8. Produce the log channel
+### Step 8. Produce the log channel, and read the SuperSpeed witness
 
 The point of a log channel is that a stranger can produce one. This step tests
 the instruction a user is given, not the driver. That instruction is
-`docs/using/release-notes.md`, "The log, and how to send one" and "DebugView", and
-`readme.txt` sections 6 and 9, which say the same
-thing in the user's words. Read them for the target under test and do what they
-say. The table below carries the commands and what to read back, and nothing
-else those two documents own.
+`docs/using/release-notes.md`, "The log, and how to send one", and
+`readme.txt` sections 6 and 9, which say the same thing in the user's words.
+Read them for the target under test and do what they say. The table below
+carries the commands and what to read back, and nothing else those two
+documents own.
 
-It is the same procedure on both targets, which is itself worth confirming.
-Everything here runs out of this release's `XHCISNAP` directory.
-
-On Windows XP x64 it is the same procedure and the same tool: the download
-carries one `XHCISNAP.EXE`, a 32-bit program, and on that target it runs under
-WOW64 against a 64-bit driver. What it prints comes off the wire rather than
-out of an offset table, so nothing a tester reads back at 8.5 is specific to
-the architecture, and the keys it writes at 8.1 sit under
-`System\CurrentControlSet`, which WOW64 does not redirect. Both of those are
-properties of how the tool is built, not readings: it has never been run on a
-64-bit Windows at all. Take the step as written, and if it fails there, report
-the exact output as a finding about the tool on that target rather than reading
-it as a driver defect. The `.BIN` written beside the report is the one part
-that is architecture-specific: it is the raw extension image, and it is decoded
-by a maintainer against the offsets of the architecture the driver was built
-for, not read by the tester.
+It is the same procedure on every target. Everything here runs out of this
+release's `XHCISNAP` directory. On the 64-bit targets the one `XHCISNAP.EXE`,
+a 32-bit program, runs under WOW64 against the 64-bit driver; `XHCISNAP
+-probe` was read that way on Windows XP x64 (roadmap-hcd 28-A.2).
 
 | # | Do | Expected reading |
 |---|---|---|
 | 8.1 | `XHCISNAP -verbosity 2` | It names each driver key it wrote to and prints the level that key held before, once per xHCI controller the machine has |
-| 8.2 | Restart the machine | This is what makes it take: the driver reads the value only when it starts |
-| 8.3 | Use a device, or reproduce whatever is wrong | Nothing to read yet. An empty note ring at 8.5 is a reading rather than a failure |
+| 8.2 | Restart the machine | This is what makes it take: the driver reads the value when it starts |
+| 8.3 | Use a device, or reproduce whatever is wrong; leave 5.8's SuperSpeed device plugged in | Nothing to read yet. An empty note ring at 8.5 is a reading rather than a failure |
 | 8.4 | `XHCISNAP -o C:\MYDUMP` | It writes `C:\MYDUMP.TXT` and prints the resolved absolute path it wrote it to |
-| 8.5 | Read that file's header | The tool's version and build stamp, the driver's counters, and at level 2 the driver's own note ring below them. A report whose version is not this release's is a report from the wrong build, which is what the tool's version check exists to make visible |
+| 8.5 | Read that file's header | The tool's version and build stamp, the driver's counters, and at level 2 the driver's own note ring below them. A report whose version is not this release's is a report from the wrong build |
 | 8.6 | `XHCISNAP -disable` | It reports the channel off again. A machine left with the channel on is a machine whose diagnostic state anyone using it can read |
-| 8.7 | Record only: look at the driver's own key for `XhciLogVerbosity`, `XhciLogDebugView` and `XhciImodInterval250ns`, then read the 8.4 report's "registry values" block | Write down whether each value is there and what its data is. There are three values and all three are `REG_DWORD`s; on a fresh install `XhciImodInterval250ns` holds `500`. In the report, the `XhciImodInterval250ns` line should read `read, value 500`, and the `interval in force` line under it `500 x 250 ns = 125.00 us; register reads 500`, with no `^` line below them. This is not a pass criterion; do not fail the step on it |
+| 8.7 | Record only: look at the driver's own key for `XhciLogVerbosity`, `XhciLogDebugView`, `XhciImodInterval250ns` and `XhciForceBulkOnly`, then read the 8.4 report's "registry values" block | Write down whether each value is there and what its data is. On a fresh install `XhciImodInterval250ns` holds `160`, written by the INF, and the report shows it read and in force; the other three are absent unless set. Write down the report's lines for the value read and the interval in force |
+| 8.8 | The SuperSpeed witness: in the 8.4 report, find 5.8's device | The speed the driver decoded from its port, SuperSpeed, and the speed it programmed into the device's slot, SuperSpeed, agreeing. The slot's speed is the report's slot table: `PSIV` is the Speed field of the controller's own Slot Context for the device, and `speed` is that value decoded, `SuperSpeed, 5 Gbit/s, Gen 1x1` for a 5 Gbit/s link. A SuperSpeed device that reads High Speed here ran on the USB 2.0 port of its connector; record which connector it was in |
 
 If nothing comes back (8.4): run `XHCISNAP -probe`, which answers whether the
 route to a driver exists at all separately from whether this driver answered on
-it. The ordinary cause of an empty report is a skipped 8.2. A machine whose own
-USB stack already owns `HCD0` leaves this driver at `HCD1` or `HCD2`, so try
-`-c 1` and `-c 2` before concluding anything. `xhcisnap/README.md` decodes the
-four probe controls, including that the first is state-dependent and that `6`
-is its shipping value.
+it. The ordinary cause of an empty report is a skipped 8.2. `xhcisnap/README.md`
+decodes what the probe prints.
 
-An empty note ring is a reading, not a failure. The report says why it is
-empty, and a machine still at level `0` (every fresh install) is the commonest
-reason.
+8.8 is the SuperSpeed clause's witness because nothing else on these systems
+can be: Device Manager and the other Windows tools read an interface that
+predates SuperSpeed and report High Speed at most (design record 13, section
+8.4). The port speed and the slot speed are two readings of one fact taken at
+two places, so their agreement is part of the reading.
 
-Windows 98 only, and a separate route from this step's: do not run DebugView on
-real hardware while capturing. Plugging a device in while it captures crashes
-the machine, measured across three device classes. That route is closed on that
-target and `XHCISNAP` is what replaced it.
+On Windows 98 real hardware, do not run DebugView while capturing; that route
+crashed the `1.x` driver's machines and has not been read on `2.0.0.0` there.
+`XHCISNAP` is the route.
 
-8.7 is record-only for a reason. A key still holding `XhciLogFile` or
-`XhciLogSnapshot` is a leftover from something other than this package, which
-places neither, and is worth writing down as one. That the
-installer writes the two log values has never been observed on either system; no
-task before the release takes the reading. An acceptance run on a
-fresh guest is the first thing that could, so the step asks.
-`XhciImodInterval250ns` is the one of the three whose installed data the
-report can confirm on its own: the driver prints what it read and what it
-programmed, so a `500` in the key and a `500` in force say the installer's
-value reached the controller. A missing value reads `NOT read, value 0` with
-an interval of `4000` and a line saying the default was used, which is what
-an upgrade over a running driver on Windows 98 with NUSB leaves behind
-(`docs/using/release-notes.md`, "Known limitations"), so record which kind of
-install the machine had.
-
-Observed: both the release and the debug build handed their log
-to `XHCISNAP` on the ThinkPad E460 under Windows 98 SE (task 13-L.3), and the
-same route was exercised in the Windows 2000 SP4 guest against SP4's own
-`usbport.sys` 6681 on the same day (`xhcisnap/README.md`, "What has been
-executed, and what has not"). An earlier ring-0 file sink, since retired,
-produced a 2,107-byte log at a user-chosen path on Windows 2000 (task 11-V.9);
-it is named here only so that its absence is not read as a regression. The
-DebugView bugchecks are `docs/contributing/build-and-test.md`, "Getting a
-trace off a bare-metal machine", with the three E460 addresses in
-`run-13e.md`'s DebugView-check session record.
+Observed: under `2.0.0.0`, `XHCISNAP -probe` answered "the channel is live"
+with the channel on and a full `-o` report was read on Windows 98 SE under NUSB
+3.3 and under SweetLow's stack and on Windows 2000 (roadmap-hcd 26-A.8, in
+virtual machines). In 29-V.1 the decoded port speed and the slot speed were
+read from the driver's trace on both primary targets, in virtual machines;
+the report's slot table, added for this witness, read a SuperSpeed drive as
+SuperSpeed on real hardware under Windows 98 SE at the bench (29-E.1).
 
 ### Step 9. Shut down with devices attached
 
@@ -626,10 +476,9 @@ on it at all. Use an Explorer file copy for the live traffic.
 If the shutdown hangs: record what was attached, what was transferring, and
 how far the shutdown got. Cut the power only after writing that down.
 
-Observed: batch 11-V, taken twice on each system with the bus moving traffic,
-on Windows 98 with a write slowed on purpose so it could not finish before the
-shutdown committed. Nothing was recorded as broken and the transfer books
-closed across the teardown each time (roadmap batch 11-V).
+Observed: a clean shutdown with devices attached closed every guest leg of
+roadmap-hcd Phases 26 to 28 in virtual machines; with traffic moving at the
+shutdown, record only.
 
 ---
 
@@ -639,18 +488,16 @@ Report it; do not diagnose it. File an issue with
 `.github/ISSUE_TEMPLATE/bug_report.yml`, attach `PROBE.LOG` and the readings
 from the run, and say which substep and which reading.
 `docs/using/release-notes.md`'s "Known limitations" is worth reading first,
-since several of the things a tester will meet are measured, published, and not
-this driver, but report it anyway if it is not there.
+since several of the things a tester will meet are measured and published, but
+report it anyway if it is not there.
 
 Two things make a report worth far more than the failure alone, and both are
 free at the time:
 
 - The same device on a root port and behind a hub. Identical behaviour in both
   places rules out a hub-specific defect and leaves this driver's common code,
-  the stack above it and the device; different behaviour points at the hub
-  path. This is the control this project uses on itself, and bench session 1
-  is the reminder that "identical in both places" was once this driver's own
-  EP0 assumption, not something above it.
+  the class driver above it and the device; different behaviour points at the
+  hub path.
 - The step 1 machine record. Nearly every hard question this project has had
   to answer about a bare-metal result turned out to be a question about the
   machine's BIOS.

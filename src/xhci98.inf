@@ -32,7 +32,7 @@ ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
 Provider=%Provider%
 LayoutFile=layout.inf
 ; Must equal src\xhci_version.h.
-DriverVer=10/02/2026,1.99.0.0
+DriverVer=10/04/2026,2.0.0.0
 
 [Manufacturer]
 %Mfg%=XhciModels,NTx86.6.0
@@ -71,7 +71,7 @@ HKR,,NTMPDriver,,xhci98.sys
 HKR,,EnumPropPages,,"sysclass.dll,USBControllerPropPage"
 HKR,,XhciLogVerbosity,0x00010001,0
 HKR,,XhciLogDebugView,0x00010001,0
-HKR,,XhciImodInterval250ns,0x00010001,500
+HKR,,XhciImodInterval250ns,0x00010001,160
 
 [RootHub.Dev]
 AddReg=RootHub.AddReg
@@ -96,7 +96,7 @@ AddService=xhci98,0x00000002,Xhci.AddService
 [Xhci.AddReg.NT]
 HKR,,XhciLogVerbosity,0x00010001,0
 HKR,,XhciLogDebugView,0x00010001,0
-HKR,,XhciImodInterval250ns,0x00010001,500
+HKR,,XhciImodInterval250ns,0x00010001,160
 HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"
 HKR,,Controller,1,01
 

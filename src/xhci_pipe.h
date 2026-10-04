@@ -42,13 +42,23 @@
 #define XHCI_PIPE_NOT_FOUND         3UL /* no such interface / alternate     */
 #define XHCI_PIPE_UNSUPPORTED       4UL /* legal, but not served here        */
 #define XHCI_PIPE_REFUSED           5UL /* a request this bus must not pass  */
+#define XHCI_PIPE_ESIT_REFUSED      6UL /* a SuperSpeedPlus isochronous
+                                         * payload the controller's Endpoint
+                                         * Context cannot describe (29-A.6) */
 
-/* PORTSC Port Speed values for USB 2.0 ports (xhci-data-structures.md
- * section 8, Slot Context DW0 23:20: "1 = FS, 2 = LS, 3 = HS"). Equal to
- * XHCI_ENUM_SPEED_*. */
+/*
+ * The endpoint rules' speeds: a decoded class in the default-ID vocabulary
+ * (1 = FS, 2 = LS, 3 = HS, 4 = SS; equal to XHCI_ENUM_SPEED_*), never the
+ * controller's raw PSIV, which a PSI table may assign differently - the
+ * caller decodes it (hcd_cfg.c). SUPER_PLUS is a SuperSpeed-class link above
+ * Gen 1x1 (29-A.1's rate): its bulk and interrupt rules are SUPER's, and it
+ * alone reads the SuperSpeedPlus Isochronous Endpoint Companion (29-A.6).
+ */
 #define XHCI_PIPE_SPEED_FULL        1UL
 #define XHCI_PIPE_SPEED_LOW         2UL
 #define XHCI_PIPE_SPEED_HIGH        3UL
+#define XHCI_PIPE_SPEED_SUPER       4UL
+#define XHCI_PIPE_SPEED_SUPER_PLUS  5UL
 
 /* USB descriptor types and lengths (Windows 2000 DDK inc\usb100.h lines
  * 14-18; USB 2.0 Tables 9-10, 9-12, 9-13). */
@@ -58,6 +68,15 @@
 #define XHCI_PIPE_CONFIG_BYTES      9UL
 #define XHCI_PIPE_INTERFACE_BYTES   9UL
 #define XHCI_PIPE_ENDPOINT_BYTES    7UL
+/* USB 3.2 Table 9-6 (USB 3.2 p.332) and 9.6.2 to 9.6.8
+ * (xhci-data-structures.md section 10.7, verified against USB 3.2 r1.1). */
+#define XHCI_PIPE_DT_BOS            0x0FUL
+#define XHCI_PIPE_DT_DEVICE_CAP     0x10UL
+#define XHCI_PIPE_DT_SS_COMPANION   0x30UL
+#define XHCI_PIPE_DT_SSP_ISO_COMPANION 0x31UL
+#define XHCI_PIPE_BOS_BYTES         5UL
+#define XHCI_PIPE_SS_COMPANION_BYTES 6UL
+#define XHCI_PIPE_SSP_ISO_COMPANION_BYTES 8UL
 
 /* bmAttributes 1:0 (inc\usb100.h lines 32-37). */
 #define XHCI_PIPE_XFER_CONTROL      0UL
@@ -133,13 +152,22 @@ typedef struct _XHCI_PIPE_EP {
     ULONG MaxEsitPayload;
     ULONG BInterval;            /* as the descriptor gave it               */
     ULONG IntervalClamped;      /* bInterval was outside Table 6-12's range */
+    /* SuperSpeed (29-A.3, 29-A.6): what the companion descriptors said. */
+    ULONG CompanionMissing;     /* no SS companion followed: burst 0      */
+    ULONG MaxStreams;           /* bulk: bmAttributes 4:0, unused before
+                                 * Phase 31                               */
+    ULONG SspIso;               /* the SSP isochronous companion's
+                                 * dwBytesPerInterval was used            */
 } XHCI_PIPE_EP, *PXHCI_PIPE_EP;
 
 /*
  * The Endpoint Context fields for one endpoint descriptor of a device at
  * `speed` (XHCI_PIPE_SPEED_*). XHCI_PIPE_MALFORMED for a descriptor that is
  * not an endpoint descriptor of at least 7 bytes, an endpoint number of 0, a
- * Max Packet Size of 0 or above 1024, a high-bandwidth count of 3 (bits
+ * Max Packet Size above 1024, or of 0 on anything but an isochronous
+ * endpoint (a zero-size isochronous one is a zero-bandwidth endpoint and is
+ * accepted, Max ESIT Payload 0: XhciPipeZeroBandwidth), a high-bandwidth
+ * count of 3 (bits
  * 12:11 = 11b, reserved), or a Max Packet Size its speed and type do not
  * allow (USB 2.0 5.6.3, 5.7.3, 5.8.3, Table 9-14: LS interrupt <= 8; FS
  * interrupt <= 64; FS bulk 8, 16, 32 or 64; FS isochronous <= 1023; HS bulk
@@ -153,6 +181,103 @@ typedef struct _XHCI_PIPE_EP {
  */
 ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
                              PXHCI_PIPE_EP ep);
+
+/*
+ * The same for the endpoint descriptor at `offset` of a whole configuration
+ * descriptor `config` of `length` bytes (one XhciPipeFindInterface has
+ * accepted), at any speed: USB 2.0 speeds are XhciPipeEndpointParams
+ * unchanged, and SuperSpeed reads the companions that follow the endpoint
+ * descriptor (tasks 29-A.3 and 29-A.6; USB 3.2 9.6.7 and 9.6.8, USB 3.2
+ * p.367-370, verified):
+ *
+ *   - wMaxPacketSize 10:0: bulk exactly 1024, interrupt 1-1024,
+ *     isochronous 0-1024, and 1024 whenever bMaxBurst is nonzero (USB 3.2
+ *     Table 9-26). A zero-size isochronous endpoint is zero bandwidth
+ *     (XhciPipeZeroBandwidth): Mult and Max ESIT Payload 0, and MALFORMED
+ *     with a nonzero wBytesPerInterval or an SSP isochronous companion;
+ *   - Max Burst = the SS companion's bMaxBurst (0-15); a missing companion
+ *     is taken as burst 0 and said so in CompanionMissing, the way Linux
+ *     tolerates one, rather than refusing the device;
+ *   - Mult = the isochronous companion's bmAttributes 1:0 (3 is reserved:
+ *     MALFORMED), 0 for every other type, and 0 always when `lec` is set
+ *     (HCCPARAMS2.LEC: the field is reserved and the xHC derives it);
+ *   - Max ESIT Payload = wBytesPerInterval for a periodic endpoint, or the
+ *     largest payload its burst and Mult allow when the device wrote 0;
+ *     above that largest payload is MALFORMED;
+ *   - Interval = bInterval - 1 for a periodic endpoint (Table 6-12's
+ *     SuperSpeed row, bInterval 1-16, clamped as at High Speed), 0 for bulk;
+ *   - at SUPER_PLUS, an isochronous endpoint whose SS companion sets
+ *     bmAttributes bit 7 takes its payload from the SuperSpeedPlus
+ *     Isochronous Endpoint Companion that must follow (MALFORMED if it does
+ *     not), and ignores the SS companion's Mult (USB 3.2 Table 9-28): with
+ *     `lec` the 32-bit dwBytesPerInterval is Max ESIT Payload Lo and Hi and
+ *     Mult is 0, and one past 24 bits is ESIT_REFUSED; without `lec` the
+ *     payload must fit three bursts (48 KiB at 1024 bytes and burst 16) and
+ *     Mult is the bursts it needs less one, ESIT_REFUSED otherwise - never
+ *     truncated;
+ *   - and last, any isochronous endpoint whose interval payload exceeds what
+ *     the transfer path carries - one page (XhciPipeIsoFragments) - is
+ *     ESIT_REFUSED too, whatever the rules above allowed, until multi-page
+ *     isochronous packets exist (Codex review of Phase 29, round 1); and so
+ *     is one whose interval needs more than four bursts of its packet size
+ *     and Max Burst, which the Isoch TRB's TBC cannot describe (round 2).
+ *
+ * XHCI_PIPE_BAD_PARAM for NULL or an offset whose 7 bytes are not inside
+ * `length`.
+ */
+ULONG XhciPipeEndpointParamsAt(const UCHAR *config, ULONG length,
+                               ULONG offset, ULONG speed, ULONG lec,
+                               PXHCI_PIPE_EP ep);
+
+/*
+ * Nonzero for a zero-bandwidth endpoint: isochronous with Max Packet Size 0.
+ * Its Endpoint Context is configured as any other (Max Packet Size 0, Max
+ * ESIT Payload 0, so no periodic bandwidth is reserved), its pipe handle is
+ * valid for ABORT_PIPE and RESET_PIPE, and an isochronous URB on it is
+ * refused before any TRB is built (hcd_io.c, hcdIsoAdmit). xhci_pipe.c has
+ * the specification text. 0 for NULL.
+ */
+ULONG XhciPipeZeroBandwidth(const XHCI_PIPE_EP *ep);
+
+/* ------------------------------------------------------------------ */
+/* The BOS descriptor (29-A.3, 29-A.6)                                 */
+/* ------------------------------------------------------------------ */
+
+/* bDevCapabilityType (USB 3.2 Table 9-14, USB 3.2 p.351; verified). */
+#define XHCI_PIPE_CAP_USB2_EXTENSION    0x02UL
+#define XHCI_PIPE_CAP_SUPERSPEED        0x03UL
+#define XHCI_PIPE_CAP_CONTAINER_ID      0x04UL
+#define XHCI_PIPE_CAP_SUPERSPEED_PLUS   0x0AUL
+/* Sublink speed attributes kept from a SuperSpeedPlus capability: SSAC is
+ * five bits, so up to 32; XHCISNAP needs the few a real device lists. */
+#define XHCI_PIPE_BOS_SUBLINKS          8UL
+
+typedef struct _XHCI_PIPE_BOS {
+    ULONG Capabilities;         /* bNumDeviceCaps as walked              */
+    ULONG Usb2Attributes;       /* USB 2.0 Extension bmAttributes        */
+    ULONG HasSuperSpeed;        /* a SuperSpeed USB capability (10 bytes) */
+    ULONG SsAttributes;         /* its bmAttributes (bit 1 LTM)          */
+    ULONG SsSpeeds;             /* wSpeedsSupported                      */
+    ULONG SsFunctionality;      /* bFunctionalitySupport                 */
+    ULONG SsU1ExitLatency;      /* bU1DevExitLat, us                     */
+    ULONG SsU2ExitLatency;      /* wU2DevExitLat, us                     */
+    ULONG HasSuperSpeedPlus;    /* a SuperSpeedPlus capability           */
+    ULONG SspAttributes;        /* bmAttributes: SSAC 4:0, SSIC 8:5      */
+    ULONG SspFunctionality;     /* wFunctionalitySupport                 */
+    ULONG SspSublinks;          /* attributes kept, at most the array's  */
+    ULONG SspSublink[XHCI_PIPE_BOS_SUBLINKS];
+} XHCI_PIPE_BOS, *PXHCI_PIPE_BOS;
+
+/*
+ * Walk a BOS descriptor of `length` bytes and keep what the bus uses or
+ * XHCISNAP shows. XHCI_PIPE_MALFORMED for a header that is not a BOS
+ * descriptor, a wTotalLength below 5 or above `length`, a capability whose
+ * bLength is below 3 or runs past wTotalLength, or a SuperSpeed or
+ * SuperSpeedPlus capability shorter than its fixed part (10 and 12 bytes, the
+ * latter plus four per sublink attribute it declares). Capabilities of other
+ * types are skipped. `bos` is written only on XHCI_PIPE_OK.
+ */
+ULONG XhciPipeParseBos(const UCHAR *data, ULONG length, PXHCI_PIPE_BOS bos);
 
 /* The DCI for a non-control endpoint address (spec 4.5.1): 2n OUT, 2n+1 IN;
  * 0 for endpoint number 0. */
@@ -415,6 +540,81 @@ ULONG XhciPipeNtStatus(ULONG usbd);
  * anything else is INTERNAL_HC_ERROR. */
 ULONG XhciPipeConfigureUsbdStatus(ULONG completionCode);
 
+/* ------------------------------------------------------------------ */
+/* What Windows XP onward asks a device PDO (task 28-A.1)               */
+/* ------------------------------------------------------------------ */
+
+/* A buffer too short for the answer (STATUS_BUFFER_TOO_SMALL's case). */
+#define XHCI_PIPE_TOO_SMALL         6UL
+
+/* The pipe URB functions above the Windows 2000 DDK's set: WDK 7.1
+ * inc\api\usb.h (URB_FUNCTION_SYNC_RESET_PIPE, _SYNC_CLEAR_STALL and
+ * _CONTROL_TRANSFER_EX, Windows XP and Vista). 0x1E is the 2000 DDK's
+ * RESET_PIPE, which usb.h names SYNC_RESET_PIPE_AND_CLEAR_STALL. */
+#define XHCI_PIPE_URB_RESET_PIPE                0x001EUL
+#define XHCI_PIPE_URB_SYNC_RESET_PIPE           0x0030UL
+#define XHCI_PIPE_URB_SYNC_CLEAR_STALL          0x0031UL
+#define XHCI_PIPE_URB_CONTROL_TRANSFER_EX       0x0032UL
+
+/* The halves of a pipe reset: the controller's endpoint (Reset Endpoint and
+ * Set TR Dequeue, which restart the host's data toggle) and the device's
+ * (CLEAR_FEATURE(ENDPOINT_HALT) to the endpoint). */
+#define XHCI_PIPE_RESET_HOST        0x1UL
+#define XHCI_PIPE_RESET_DEVICE      0x2UL
+
+/* Which halves `function` asks for: both for 0x1E, the host's for 0x30, the
+ * device's for 0x31, none (0) for any other function. */
+ULONG XhciPipeResetParts(ULONG function);
+
+/* USB_BUS_INTERFACE_USBDI_GUID's versions and their sizes. The structure
+ * (WDK 7.1 inc\ddk\usbbusif.h lines 252-414) is two USHORTs, then pointers
+ * only: BusContext, InterfaceReference, InterfaceDereference and four
+ * functions in V0, one more in V1 (IsDeviceHighSpeed) and V2
+ * (EnumLogEntry), two more in V3 (QueryBusTimeEx, QueryControllerType). The
+ * two USHORTs pad to one pointer. Design record 13 section 6.1's table: x86
+ * 0x20, 0x24, 0x28, 0x30; x64 0x40, 0x48, 0x50, 0x60. */
+#define XHCI_PIPE_USBDI_VERSION_MAX 3UL
+
+/* The size of USBDI version `version` with `pointerBytes`-byte pointers (4
+ * or 8), or 0 for a version above 3 or another pointer size. */
+ULONG XhciPipeUsbdiSize(ULONG version, ULONG pointerBytes);
+
+/* USB_BUS_INFORMATION_LEVEL_0 and _1 (usbbusif.h): two ULONGs, then for
+ * level 1 a ULONG name length and a one-WCHAR name array, 16 bytes with the
+ * structure's ULONG alignment. */
+#define XHCI_PIPE_BUSINFO0_BYTES    8UL
+#define XHCI_PIPE_BUSINFO1_BYTES    16UL
+
+/*
+ * The answer to QueryBusInformation(Level) for a controller that exposes no
+ * symbolic name: level 0 is TotalBandwidth and ConsumedBandwidth, level 1
+ * adds a ControllerNameLength of 0 and an empty name. `*actual` (when not
+ * NULL) is the size the level needs and `*length` is set to it on success; a
+ * `*length` below it is XHCI_PIPE_TOO_SMALL with nothing written, a level
+ * other than 0 or 1 is XHCI_PIPE_UNSUPPORTED with nothing written, and a NULL
+ * buffer or length is XHCI_PIPE_BAD_PARAM. Little-endian bytes into
+ * `buffer`.
+ */
+ULONG XhciPipeBusInformation(ULONG level, ULONG totalBandwidth,
+                             ULONG consumedBandwidth, UCHAR *buffer,
+                             PULONG length, PULONG actual);
+
+/* USB_TOPOLOGY_ADDRESS (WDK 7.1 inc\api\usbioctl.h): four ULONGs (PCI bus,
+ * device, function, reserved), the root hub's port, five hub ports below it
+ * and a reserved USHORT - 30 bytes, 32 with its ULONG alignment. */
+#define XHCI_PIPE_TOPOLOGY_BYTES    32UL
+
+/*
+ * A USB_TOPOLOGY_ADDRESS for a device below root port `rootPort` at Route
+ * String `route` (xHCI 8.9: a nibble per hub tier, the first hub's port in
+ * bits 3:0, 0 where the path ends): the controller's PCI bus number, its
+ * device and function from a DevicePropertyAddress value (device in bits
+ * 31:16, function in 15:0, as the PCI bus driver reports it), the root port,
+ * and HubPortNumber[0..4] from the route's five nibbles - all 0 on a root
+ * port. XHCI_PIPE_BAD_PARAM for a NULL buffer or a root port outside 1..255.
+ */
+ULONG XhciPipeTopologyAddress(ULONG pciBus, ULONG pciAddress, ULONG rootPort,
+                              ULONG route, UCHAR *out);
 /* The endpoint policy's speed (XHCI_PIPE_SPEED_*) for a device's own speed
  * class (xhci.h XHCI_SPEED_*), as decoded from its Slot Context's Protocol
  * Speed ID - on a root port and behind hubs alike, the device's speed and

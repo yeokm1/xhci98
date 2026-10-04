@@ -123,6 +123,11 @@ param(
     # (offsets-hcd.txt), found by its `counters start= / size= / VA` lines,
     # and swaps the miniport-only labels for the HCD's (see $RefusalLabel).
     [ValidateSet('miniport', 'hcd')][string]$Driver = 'miniport',
+    # WHICH BUILD'S COUNTER BLOCK. `amd64` reads offsets-hcd-amd64.txt and
+    # joins the `counters VA high=` and `low=` lines into a 64-bit address;
+    # left at x86 on an amd64 guest the soak reads the low dword as the whole
+    # address and aborts on a short reply (28-V.1 pre-read, XP x64).
+    [ValidateSet('x86', 'amd64')][string]$Arch = 'x86',
     # THE HUB-CHURN SOAK (task 12.5's churn, re-measured for 27-V.1): after the
     # cycle phase, N `usb-hub` attach/detach pairs on -ChurnPort, one every
     # -ChurnIntervalMs, against a populated bus (a usb-storage is put on
@@ -211,7 +216,7 @@ function Read-Now {
     # and a two-controller machine has two of them.  A cached VA would read the
     # counter table out of whatever now occupies the old pool block - a
     # plausible set of numbers, never an error.
-    $ident = Find-DriverIdentity -Driver $Driver -DebugconLog $DebugconLog
+    $ident = Find-DriverIdentity -Driver $Driver -DebugconLog $DebugconLog -Arch $Arch
     if ($null -eq $ident.Va) { throw ("no extension address in {0} - is the driver up, and is it the QEMU build? Since task 13-L.1 that trace exists in no other flavour." -f $DebugconLog) }
     if ($ident.Spans) {
         throw ("the debug console log now spans more than one driver load or binary (VAs: {0}; sizes: {1}). The driver restarted mid-soak, so every delta across that point is void." -f `
@@ -468,8 +473,8 @@ Write-Host "=== preflight"
 if (Test-MonitorPortFree -Port $Monitor) {
     throw ("nothing is listening on monitor port {0}. This script drives an ALREADY-RUNNING guest - start the stage's launcher first." -f $Monitor)
 }
-$script:table = Import-CounterTable -Driver $Driver
-$ident0 = Find-DriverIdentity -Driver $Driver -DebugconLog $DebugconLog
+$script:table = Import-CounterTable -Driver $Driver -Arch $Arch
+$ident0 = Find-DriverIdentity -Driver $Driver -DebugconLog $DebugconLog -Arch $Arch
 if ($null -eq $ident0.Va) { throw ("no extension address in {0}" -f $DebugconLog) }
 if ($ident0.Spans) {
     throw ("{0} already spans more than one driver load or binary (VAs: {1}; sizes: {2}). Restart the guest so the soak measures one continuous load." -f `
@@ -499,7 +504,7 @@ Add-Line ("target          : {0}" -f $(if ($Target -ne "") { $Target } else { "(
 Add-Line ("started         : {0}" -f $stamp)
 Add-Line ("classes         : {0}" -f ($classList -join ", "))
 Add-Line ("cycles per class: {0}" -f $Cycles)
-Add-Line ("driver          : {0}" -f $Driver)
+Add-Line ("driver          : {0} ({1})" -f $Driver, $Arch)
 Add-Line ("extension size  : {0} (table SIZEOF {1})" -f $ident0.Size, $script:table.Sizeof)
 Add-Line ("storage medium  : {0}" -f $StorageImage)
 Add-Line ""

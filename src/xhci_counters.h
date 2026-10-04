@@ -94,9 +94,67 @@ typedef struct _XHCIHC_COUNTERS {
     ULONG TopoBehindHubOpens;
     ULONG TopoBehindHubTooDeep;
     ULONG TopoTtProgrammed;
+
+    /* SuperSpeed: Phase 29's. Appended, so every earlier offset stands.
+     * The speed pair counts as the High/Full/Low ones do (the port's
+     * decoded speed and the Slot Context's) for the SuperSpeed class;
+     * SuperSpeedPlus counts the addressed devices whose trained rate is
+     * above Gen 1x1 (29-A.1, "counted by rate"). Then the link (29-A.2):
+     * warm resets written (driver policy and recovery), hot resets the xHC
+     * itself carried out warm (WRC seen after a PR), links given up after
+     * the warm-reset budget - the device left to its USB 2.0 companion,
+     * 29-A.5's passive fallback - and SuperSpeed-capable devices (a BOS with
+     * a SuperSpeed USB Device Capability) enumerated on a USB 2.0 companion
+     * port, which is that fallback seen from the other side. A BOS read for
+     * it on the USB 2.0 path was withdrawn (Codex review of Phase 29, round
+     * 2, finding 1): it counts instead the held device itself enumerating on
+     * its companion, matched by the identity 29-A.5's hold read on the
+     * SuperSpeed port. Then the BOS reads that
+     * failed, and the SuperSpeedPlus isochronous endpoints refused because
+     * their payload does not fit the Endpoint Context (29-A.6). */
+    ULONG PortSpeedSuper;
+    ULONG SlotSpeedSuper;
+    ULONG PortSpeedSuperPlus;
+    ULONG SsWarmResets;
+    ULONG SsResetsConverted;
+    ULONG SsLinksGivenUp;
+    ULONG SsDevicesOnUsb2;
+    ULONG SsBosMissing;
+    ULONG SsEndpointsEsitRefused;
+
+    /* 29-A.5's hold, appended: holds begun by kind - identified and
+     * companion-paired (releasable), unidentified (no serial, no descriptor,
+     * a failed identity read: until the next start), orphan - then holds
+     * released, companion visits by some other device, send-back requests
+     * refused, and holds dropped by a controller reset that took the port
+     * out of SS.Disabled. */
+    ULONG HoldsPaired;
+    ULONG HoldsUnidentified;
+    ULONG HoldsOrphan;
+    ULONG HoldsReleased;
+    ULONG HoldCompanionOthers;
+    ULONG HoldRequestsRefused;
+    ULONG HoldsDropped;
+
+    /* SuperSpeed hubs: Phase 30's (30-A.1), appended after the hold. The
+     * SuperSpeed halves configured; hub pairs that look like the two halves
+     * of one unit (a counter and nothing more); SET_HUB_DEPTH refused (the
+     * hub not served); warm resets of SuperSpeed hub ports, and links given
+     * up after the per-port budget - the device left to the hub's USB 2.0
+     * half; C_PORT_CONFIG_ERROR seen; and devices behind a SuperSpeedPlus
+     * hub given a SuperSpeedPlus Protocol Speed ID from the extended port
+     * status, or given SuperSpeed's because none matched the rate. */
+    ULONG SsHubsStarted;
+    ULONG SsHubPairs;
+    ULONG SsHubDepthRefused;
+    ULONG SsHubWarmResets;
+    ULONG SsHubLinksGivenUp;
+    ULONG SsHubConfigErrors;
+    ULONG SsHubDevicesPlus;
+    ULONG SsHubRateUnmatched;
 } XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 39 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 63 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */

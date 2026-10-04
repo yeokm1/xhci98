@@ -51,6 +51,16 @@
 
 #define XHCI_PIPE_MAX_PACKET        1024UL
 
+/* Max ESIT Payload Lo and Hi together (6.2.3.8, LEC). */
+#define XHCI_PIPE_MAX_ESIT_LEC      0x00FFFFFFUL
+
+/* The largest isochronous interval payload the transfer path carries: one
+ * page, in at most two pieces (XhciPipeIsoFragments). */
+#define XHCI_PIPE_ISO_MAX_PAYLOAD   XHCI_PIPE_PAGE_SIZE
+/* The most bursts one isochronous TD may carry: TBC is two bits, the count
+ * minus one (xhci.h, XHCI_TRB_TBC_MAX; 4.11.2.3). */
+#define XHCI_PIPE_ISO_MAX_BURSTS    4UL
+
 ULONG XhciPipeDci(ULONG endpointAddress)
 {
     ULONG number;
@@ -178,6 +188,50 @@ static ULONG xhciPipeLog2(ULONG value)
 }
 
 /*
+ * A zero-bandwidth isochronous endpoint: wMaxPacketSize 0, what an audio or
+ * video interface's alternate 0 typically declares. Accepted, so the
+ * SELECT_CONFIGURATION or SELECT_INTERFACE naming one succeeds (owner's
+ * ruling, 2026-10-04). Which sizes are legal:
+ *
+ *   - SuperSpeed: USB 3.2 Table 9-26 (USB 3.2 p.365) lets an isochronous
+ *     endpoint with bMaxBurst 0 have "any value from 0 to 1024", and
+ *     requires 1024 when bMaxBurst is nonzero, 1-1024 for interrupt, 1024
+ *     for bulk and 512 for control. So a zero size with a nonzero burst is
+ *     MALFORMED, as is any zero-size endpoint that is not isochronous. So
+ *     is a nonzero wBytesPerInterval beside a zero size (Table 9-28: the
+ *     bytes "this endpoint will transfer", and it can transfer none), and
+ *     an SSP isochronous companion beside it (Table 9-29's companion is for
+ *     an endpoint needing more than 48K per interval, USB 3.2 9.6.8,
+ *     p.369).
+ *   - USB 2.0: its specification is not in docs/references. The zero-size
+ *     isochronous allowance (USB 2.0 5.6.3, where a default interface
+ *     setting carries no isochronous payload) is taken as the same rule,
+ *     and the zero-size refusal of every other type with it; at High
+ *     Speed a zero size with additional transactions in 12:11 is already
+ *     MALFORMED by Table 9-14's ranges (xhciPipeMpsLegal).
+ *
+ * How it is programmed: the Endpoint Context is built and added like any
+ * other, with Max Packet Size 0 - what xHCI 1.2c 6.2.3.5 (p.419) prescribes,
+ * "bits 10:0 of the USB Endpoint Descriptor wMaxPacketSize" - and Max ESIT
+ * Payload 0, which by 4.14.2's "Reserved Bandwidth = Max ESIT Payload /
+ * (2^Interval * 0.000125)" (p.237) reserves no periodic bandwidth; Average
+ * TRB Length stays nonzero (Table 6-11). Leaving the context out of the
+ * Configure Endpoint instead would make the pipe the one handle on the
+ * device the xHC does not know, and every Stop Endpoint, Reset Endpoint,
+ * Set TR Dequeue and Drop this bus issues by DCI would have to step round
+ * it. No URB is ever made a TD on it: hcd_io.c refuses an isochronous URB
+ * on such a pipe before any TRB is built, so no TD Size, TBC or chunk
+ * arithmetic divides by its size. That a controller accepts Max Packet Size
+ * 0 is unobserved; 6.2.3.2 (p.417) asks only that it be "within range for
+ * endpoint type and the speed of the device".
+ */
+ULONG XhciPipeZeroBandwidth(const XHCI_PIPE_EP *ep)
+{
+    return ep != NULL && ep->TransferType == XHCI_PIPE_XFER_ISOCH &&
+           ep->MaxPacketSize == 0;
+}
+
+/*
  * Table 6-12's bInterval range for the rows that take 2^(bInterval-1): the
  * HS interrupt and isoch row and the FS isoch row both list 1-16.
  */
@@ -197,8 +251,10 @@ static ULONG xhciPipeExponent(ULONG bInterval, PULONG clamped)
 /*
  * The Max Packet Size a USB 2.0 endpoint may declare at its speed (USB 2.0
  * 5.6.3 isochronous, 5.7.3 interrupt, 5.8.3 bulk, Table 9-14 for the HS
- * high-bandwidth ranges). `mps` is already 1..1024 and `transactions` (HS
- * periodic only) 0..2. A device outside these limits declares a packet size
+ * high-bandwidth ranges). `mps` is already 0..1024, and 0 only for an
+ * isochronous endpoint (XhciPipeZeroBandwidth), which passes here unless
+ * HS additional transactions demand 513 or 683 and up; `transactions` (HS
+ * periodic only) is 0..2. A device outside these limits declares a packet size
  * its speed does not have, and is refused rather than programmed as declared.
  * HS control (64, 5.5.3) has no row: control endpoints are refused earlier.
  */
@@ -252,6 +308,9 @@ ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
     out.DirectionIn = (out.Address & 0x80UL) != 0 ? 1UL : 0UL;
     out.BInterval = (ULONG)endpoint[6];
     out.IntervalClamped = 0;
+    out.CompanionMissing = 0;
+    out.MaxStreams = 0;
+    out.SspIso = 0;
     wMaxPacketSize = xhciPipeWord(endpoint + 4);
 
     out.Dci = XhciPipeDci(out.Address);
@@ -259,7 +318,7 @@ ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
         return XHCI_PIPE_MALFORMED;
     }
     /* SuperSpeed needs the companion descriptor for Max Burst and Max ESIT
-     * Payload (6.2.3.4, 4.14.2), and is out of scope here anyway. */
+     * Payload (6.2.3.4, 4.14.2): XhciPipeEndpointParamsAt reads it. */
     if (speed != XHCI_PIPE_SPEED_FULL && speed != XHCI_PIPE_SPEED_LOW &&
         speed != XHCI_PIPE_SPEED_HIGH) {
         return XHCI_PIPE_UNSUPPORTED;
@@ -275,11 +334,14 @@ ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
         return XHCI_PIPE_UNSUPPORTED;
     }
 
-    /* 6.2.3.5: "bits 10:0 of the USB Endpoint Descriptor wMaxPacketSize";
-     * 0 would divide the TD Size arithmetic (4.11.2.4), and USB 2.0 allows
-     * no endpoint more than 1024. */
+    /* 6.2.3.5: "bits 10:0 of the USB Endpoint Descriptor wMaxPacketSize",
+     * and USB 2.0 allows no endpoint more than 1024. A size of 0 is a
+     * zero-bandwidth isochronous endpoint, accepted (XhciPipeZeroBandwidth
+     * says why and how); on any other type it is refused. */
     out.MaxPacketSize = wMaxPacketSize & 0x07FFUL;
-    if (out.MaxPacketSize == 0 || out.MaxPacketSize > XHCI_PIPE_MAX_PACKET) {
+    if (out.MaxPacketSize > XHCI_PIPE_MAX_PACKET ||
+        (out.MaxPacketSize == 0 &&
+         out.TransferType != XHCI_PIPE_XFER_ISOCH)) {
         return XHCI_PIPE_MALFORMED;
     }
 
@@ -362,6 +424,365 @@ ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
                              : 0UL;
 
     *ep = out;
+    return XHCI_PIPE_OK;
+}
+
+static ULONG xhciPipeDword(const UCHAR *p)
+{
+    return (ULONG)p[0] | ((ULONG)p[1] << 8) | ((ULONG)p[2] << 16) |
+           ((ULONG)p[3] << 24);
+}
+
+/* The bytes of `config` the descriptors may be read in: wTotalLength when
+ * the header says one inside `length`, `length` otherwise. */
+static ULONG xhciPipeTotal(const UCHAR *config, ULONG length)
+{
+    ULONG total;
+
+    if (length < 4UL) {
+        return length;
+    }
+    total = xhciPipeWord(config + 2);
+    return (total >= 4UL && total <= length) ? total : length;
+}
+
+/*
+ * The SuperSpeed endpoint (29-A.3) and its SuperSpeedPlus isochronous case
+ * (29-A.6). The rules and their sources are on XhciPipeEndpointParamsAt in
+ * xhci_pipe.h; section 10.6 of xhci-data-structures.md has the Endpoint
+ * Context half, every row verified against xHCI 1.2c and USB 3.2.
+ */
+static ULONG xhciPipeSuperSpeed(const UCHAR *config, ULONG total,
+                                ULONG offset, ULONG speed, ULONG lec,
+                                PXHCI_PIPE_EP ep)
+{
+    XHCI_PIPE_EP out;
+    const UCHAR *endpoint;
+    ULONG wMaxPacketSize;
+    ULONG next;
+    ULONG burst;
+    ULONG attributes;
+    ULONG perInterval;
+    ULONG largest;
+    ULONG perBurst;
+    ULONG bursts;
+    ULONG sspFollows;
+    ULONG b;
+
+    endpoint = config + offset;
+    out.Address = (ULONG)endpoint[2];
+    out.TransferType = (ULONG)endpoint[3] & 0x03UL;
+    out.DirectionIn = (out.Address & 0x80UL) != 0 ? 1UL : 0UL;
+    out.BInterval = (ULONG)endpoint[6];
+    out.IntervalClamped = 0;
+    out.CompanionMissing = 0;
+    out.MaxStreams = 0;
+    out.SspIso = 0;
+    wMaxPacketSize = xhciPipeWord(endpoint + 4);
+    out.Dci = XhciPipeDci(out.Address);
+    if (out.Dci == 0) {
+        return XHCI_PIPE_MALFORMED;
+    }
+    if (out.TransferType == XHCI_PIPE_XFER_CONTROL) {
+        return XHCI_PIPE_UNSUPPORTED;
+    }
+    /* At SuperSpeed bits 12:11 are reserved: the burst is the companion's.
+     * Size 0 only for isochronous (USB 3.2 Table 9-26; XhciPipeZeroBandwidth),
+     * and then only with burst 0, which the burst check below enforces. */
+    out.MaxPacketSize = wMaxPacketSize & 0x07FFUL;
+    if (out.MaxPacketSize > XHCI_PIPE_MAX_PACKET ||
+        (out.MaxPacketSize == 0 &&
+         out.TransferType != XHCI_PIPE_XFER_ISOCH)) {
+        return XHCI_PIPE_MALFORMED;
+    }
+
+    /* The SuperSpeed Endpoint Companion "shall immediately follow" the
+     * endpoint descriptor (USB 3.2 9.6.7). */
+    next = offset + (ULONG)endpoint[0];
+    burst = 0;
+    attributes = 0;
+    perInterval = 0;
+    if (next < total && total - next >= XHCI_PIPE_SS_COMPANION_BYTES &&
+        (ULONG)config[next + 1] == XHCI_PIPE_DT_SS_COMPANION) {
+        if ((ULONG)config[next] < XHCI_PIPE_SS_COMPANION_BYTES ||
+            (ULONG)config[next] > total - next) {
+            return XHCI_PIPE_MALFORMED;
+        }
+        burst = (ULONG)config[next + 2];
+        attributes = (ULONG)config[next + 3];
+        perInterval = xhciPipeWord(config + next + 4);
+    } else {
+        out.CompanionMissing = 1;
+    }
+    if (burst > 15UL) {
+        return XHCI_PIPE_MALFORMED;
+    }
+    if (out.TransferType == XHCI_PIPE_XFER_BULK) {
+        if (out.MaxPacketSize != 1024UL) {
+            return XHCI_PIPE_MALFORMED;
+        }
+    } else if (burst != 0 && out.MaxPacketSize != 1024UL) {
+        return XHCI_PIPE_MALFORMED;
+    }
+    out.MaxBurstSize = burst;
+    out.Mult = 0;
+    out.MaxEsitPayload = 0;
+
+    switch (out.TransferType) {
+    case XHCI_PIPE_XFER_BULK:
+        out.EpType = out.DirectionIn ? XHCI_PIPE_EPT_BULK_IN
+                                     : XHCI_PIPE_EPT_BULK_OUT;
+        out.MaxStreams = attributes & 0x1FUL;
+        out.Interval = 0;
+        out.ErrorCount = XHCI_PIPE_CERR;
+        out.AverageTrbLength = XHCI_PIPE_AVG_TRB_BULK;
+        break;
+
+    case XHCI_PIPE_XFER_INTERRUPT:
+        out.EpType = out.DirectionIn ? XHCI_PIPE_EPT_INTERRUPT_IN
+                                     : XHCI_PIPE_EPT_INTERRUPT_OUT;
+        largest = out.MaxPacketSize * (burst + 1UL);
+        if (perInterval > largest) {
+            return XHCI_PIPE_MALFORMED;
+        }
+        out.MaxEsitPayload = perInterval != 0 ? perInterval : largest;
+        b = xhciPipeExponent(out.BInterval, &out.IntervalClamped);
+        out.Interval = b - 1UL;
+        out.ErrorCount = XHCI_PIPE_CERR;
+        out.AverageTrbLength = XHCI_PIPE_AVG_TRB_INTERRUPT;
+        break;
+
+    default:
+        out.EpType = out.DirectionIn ? XHCI_PIPE_EPT_ISOCH_IN
+                                     : XHCI_PIPE_EPT_ISOCH_OUT;
+        b = xhciPipeExponent(out.BInterval, &out.IntervalClamped);
+        out.Interval = b - 1UL;
+        out.ErrorCount = 0;
+        out.AverageTrbLength = XHCI_PIPE_AVG_TRB_ISOCH;
+        perBurst = out.MaxPacketSize * (burst + 1UL);
+        sspFollows = (attributes & 0x80UL) != 0 &&
+                     speed == XHCI_PIPE_SPEED_SUPER_PLUS;
+        if (out.MaxPacketSize == 0) {
+            /* Zero bandwidth (XhciPipeZeroBandwidth): burst 0 is already
+             * held to (a burst needs 1024 above), and an endpoint with no
+             * packet transfers no bytes per interval and needs no SSP
+             * companion. Mult 0: Table 9-28 has it zero with bMaxBurst 0. */
+            if (sspFollows || perInterval != 0) {
+                return XHCI_PIPE_MALFORMED;
+            }
+            out.Mult = 0;
+            out.MaxEsitPayload = 0;
+            break;
+        }
+        if (sspFollows) {
+            /* USB 3.2 9.6.8: the SuperSpeedPlus Isochronous Endpoint
+             * Companion follows the SS companion, and its 32-bit
+             * dwBytesPerInterval replaces wBytesPerInterval and Mult. */
+            next += (ULONG)config[next];
+            if (next >= total ||
+                total - next < XHCI_PIPE_SSP_ISO_COMPANION_BYTES ||
+                (ULONG)config[next + 1] != XHCI_PIPE_DT_SSP_ISO_COMPANION ||
+                (ULONG)config[next] < XHCI_PIPE_SSP_ISO_COMPANION_BYTES ||
+                (ULONG)config[next] > total - next) {
+                return XHCI_PIPE_MALFORMED;
+            }
+            perInterval = xhciPipeDword(config + next + 4);
+            out.SspIso = 1;
+            if (lec) {
+                if (perInterval > XHCI_PIPE_MAX_ESIT_LEC) {
+                    return XHCI_PIPE_ESIT_REFUSED;
+                }
+                out.MaxEsitPayload = perInterval;
+                out.Mult = 0;
+            } else {
+                /* The legacy Mult describes up to three bursts per
+                 * interval; a payload needing more cannot be programmed. */
+                bursts = (perInterval + perBurst - 1UL) / perBurst;
+                if (bursts > 3UL) {
+                    return XHCI_PIPE_ESIT_REFUSED;
+                }
+                out.Mult = bursts != 0 ? bursts - 1UL : 0UL;
+                out.MaxEsitPayload = perInterval;
+            }
+            break;
+        }
+        out.Mult = attributes & 0x03UL;
+        if (out.Mult == 3UL) {
+            return XHCI_PIPE_MALFORMED;
+        }
+        largest = perBurst * (out.Mult + 1UL);
+        if (perInterval > largest) {
+            return XHCI_PIPE_MALFORMED;
+        }
+        out.MaxEsitPayload = perInterval != 0 ? perInterval : largest;
+        if (lec) {
+            /* Reserved under LEC: the xHC derives it from Max ESIT Payload,
+             * Max Packet Size and Max Burst Size (xHCI 1.2c Table 6-8,
+             * p.414; verified). */
+            out.Mult = 0;
+        }
+        break;
+    }
+
+    /*
+     * One range for admission, mapping and TRB construction (Codex review of
+     * Phase 29, round 1, finding 1). An isochronous URB packet is one
+     * interval's payload, and the transfer path carries it as at most two
+     * page-bounded pieces of one page in all (XhciPipeIsoFragments, through
+     * hcd_io.c's fill) with a burst count TBC can hold. An endpoint whose
+     * interval payload is larger is refused here, counted, never admitted
+     * to fail every URB later or be truncated. Lifting it means multi-page
+     * isochronous packets (several TRBs per packet) in hcd_io.c and
+     * xhci_xfer.c; the 48 KiB and LEC derivations above stand ready for that.
+     *
+     * The page is not the whole bound: the TRB builder also needs the
+     * interval's burst count, ROUNDUP(packets / (Max Burst + 1)), to fit TBC
+     * (xhci_xfer.c, xhciXferIsoBurstFields; 4.11.2.3), and the page alone
+     * guarantees that only at 1024-byte packets. A small packet size with
+     * burst 0 - 4096 bytes in 512-byte packets is eight bursts - would be
+     * admitted and then fail every full-sized request, so the builder's
+     * bound is applied here too (Codex review of Phase 29, round 2, finding
+     * 2). Without LEC the Mult the endpoint is programmed with already
+     * covers the bursts (the SS companion's payload is held to it above,
+     * and the SSP derivation computes it from them).
+     */
+    if (out.TransferType == XHCI_PIPE_XFER_ISOCH && out.MaxPacketSize != 0) {
+        ULONG packets;
+
+        if (out.MaxEsitPayload > XHCI_PIPE_ISO_MAX_PAYLOAD) {
+            return XHCI_PIPE_ESIT_REFUSED;
+        }
+        packets = (out.MaxEsitPayload + out.MaxPacketSize - 1UL) /
+                  out.MaxPacketSize;
+        if ((packets + out.MaxBurstSize) / (out.MaxBurstSize + 1UL) >
+            XHCI_PIPE_ISO_MAX_BURSTS) {
+            return XHCI_PIPE_ESIT_REFUSED;
+        }
+    }
+
+    *ep = out;
+    return XHCI_PIPE_OK;
+}
+
+ULONG XhciPipeEndpointParamsAt(const UCHAR *config, ULONG length,
+                               ULONG offset, ULONG speed, ULONG lec,
+                               PXHCI_PIPE_EP ep)
+{
+    ULONG total;
+
+    if (config == NULL || ep == NULL) {
+        return XHCI_PIPE_BAD_PARAM;
+    }
+    total = xhciPipeTotal(config, length);
+    if (offset >= total || total - offset < XHCI_PIPE_ENDPOINT_BYTES) {
+        return XHCI_PIPE_BAD_PARAM;
+    }
+    if (speed != XHCI_PIPE_SPEED_SUPER &&
+        speed != XHCI_PIPE_SPEED_SUPER_PLUS) {
+        return XhciPipeEndpointParams(config + offset, speed, ep);
+    }
+    if ((ULONG)config[offset] < XHCI_PIPE_ENDPOINT_BYTES ||
+        (ULONG)config[offset] > total - offset ||
+        (ULONG)config[offset + 1] != XHCI_PIPE_DT_ENDPOINT) {
+        return XHCI_PIPE_MALFORMED;
+    }
+    return xhciPipeSuperSpeed(config, total, offset, speed, lec, ep);
+}
+
+ULONG XhciPipeParseBos(const UCHAR *data, ULONG length, PXHCI_PIPE_BOS bos)
+{
+    XHCI_PIPE_BOS out;
+    ULONG total;
+    ULONG offset;
+    ULONG bLength;
+    ULONG declared;
+    ULONG i;
+
+    if (data == NULL || bos == NULL) {
+        return XHCI_PIPE_BAD_PARAM;
+    }
+    if (length < XHCI_PIPE_BOS_BYTES ||
+        (ULONG)data[0] < XHCI_PIPE_BOS_BYTES ||
+        (ULONG)data[1] != XHCI_PIPE_DT_BOS) {
+        return XHCI_PIPE_MALFORMED;
+    }
+    total = xhciPipeWord(data + 2);
+    if (total < XHCI_PIPE_BOS_BYTES || total > length ||
+        (ULONG)data[0] > total) {
+        return XHCI_PIPE_MALFORMED;
+    }
+    out.Capabilities = 0;
+    out.Usb2Attributes = 0;
+    out.HasSuperSpeed = 0;
+    out.SsAttributes = 0;
+    out.SsSpeeds = 0;
+    out.SsFunctionality = 0;
+    out.SsU1ExitLatency = 0;
+    out.SsU2ExitLatency = 0;
+    out.HasSuperSpeedPlus = 0;
+    out.SspAttributes = 0;
+    out.SspFunctionality = 0;
+    out.SspSublinks = 0;
+    for (i = 0; i < XHCI_PIPE_BOS_SUBLINKS; i++) {
+        out.SspSublink[i] = 0;
+    }
+
+    offset = (ULONG)data[0];
+    while (offset < total) {
+        if (total - offset < 3UL) {
+            return XHCI_PIPE_MALFORMED;
+        }
+        bLength = (ULONG)data[offset];
+        if (bLength < 3UL || bLength > total - offset) {
+            return XHCI_PIPE_MALFORMED;
+        }
+        if ((ULONG)data[offset + 1] == XHCI_PIPE_DT_DEVICE_CAP) {
+            out.Capabilities++;
+            switch ((ULONG)data[offset + 2]) {
+            case XHCI_PIPE_CAP_USB2_EXTENSION:
+                if (bLength >= 7UL) {
+                    out.Usb2Attributes = xhciPipeDword(data + offset + 3);
+                }
+                break;
+            case XHCI_PIPE_CAP_SUPERSPEED:
+                if (bLength < 10UL) {
+                    return XHCI_PIPE_MALFORMED;
+                }
+                out.HasSuperSpeed = 1;
+                out.SsAttributes = (ULONG)data[offset + 3];
+                out.SsSpeeds = xhciPipeWord(data + offset + 4);
+                out.SsFunctionality = (ULONG)data[offset + 6];
+                out.SsU1ExitLatency = (ULONG)data[offset + 7];
+                out.SsU2ExitLatency = xhciPipeWord(data + offset + 8);
+                break;
+            case XHCI_PIPE_CAP_SUPERSPEED_PLUS:
+                /* bReserved 3, bmAttributes 7:4, wFunctionalitySupport
+                 * 9:8, wReserved 11:10, then SSAC + 1 attribute DWORDs
+                 * (USB 3.2 Table 9-19, USB 3.2 p.357-358; verified). */
+                if (bLength < 12UL) {
+                    return XHCI_PIPE_MALFORMED;
+                }
+                out.SspAttributes = xhciPipeDword(data + offset + 4);
+                declared = (out.SspAttributes & 0x1FUL) + 1UL;
+                if (bLength < 12UL + declared * 4UL) {
+                    return XHCI_PIPE_MALFORMED;
+                }
+                out.HasSuperSpeedPlus = 1;
+                out.SspFunctionality = xhciPipeWord(data + offset + 8);
+                out.SspSublinks = declared < XHCI_PIPE_BOS_SUBLINKS
+                                      ? declared : XHCI_PIPE_BOS_SUBLINKS;
+                for (i = 0; i < out.SspSublinks; i++) {
+                    out.SspSublink[i] =
+                        xhciPipeDword(data + offset + 12 + i * 4UL);
+                }
+                break;
+            default:
+                break;
+            }
+        }
+        offset += bLength;
+    }
+    *bos = out;
     return XHCI_PIPE_OK;
 }
 
@@ -837,6 +1258,111 @@ ULONG XhciPipeConfigureUsbdStatus(ULONG completionCode)
     default:
         return XHCI_PIPE_USBD_INTERNAL_HC_ERROR;
     }
+}
+
+ULONG XhciPipeResetParts(ULONG function)
+{
+    switch (function) {
+    case XHCI_PIPE_URB_RESET_PIPE:
+        return XHCI_PIPE_RESET_HOST | XHCI_PIPE_RESET_DEVICE;
+    case XHCI_PIPE_URB_SYNC_RESET_PIPE:
+        return XHCI_PIPE_RESET_HOST;
+    case XHCI_PIPE_URB_SYNC_CLEAR_STALL:
+        return XHCI_PIPE_RESET_DEVICE;
+    default:
+        return 0;
+    }
+}
+
+ULONG XhciPipeUsbdiSize(ULONG version, ULONG pointerBytes)
+{
+    ULONG pointers;
+
+    if (pointerBytes != 4UL && pointerBytes != 8UL) {
+        return 0;
+    }
+    switch (version) {
+    case 0:
+        pointers = 7;
+        break;
+    case 1:
+        pointers = 8;
+        break;
+    case 2:
+        pointers = 9;
+        break;
+    case 3:
+        pointers = 11;
+        break;
+    default:
+        return 0;
+    }
+    /* Size and Version, padded to the first pointer. */
+    return pointerBytes + pointers * pointerBytes;
+}
+
+static VOID xhciPipePut32(UCHAR *p, ULONG value)
+{
+    p[0] = (UCHAR)(value & 0xFFUL);
+    p[1] = (UCHAR)((value >> 8) & 0xFFUL);
+    p[2] = (UCHAR)((value >> 16) & 0xFFUL);
+    p[3] = (UCHAR)((value >> 24) & 0xFFUL);
+}
+
+ULONG XhciPipeBusInformation(ULONG level, ULONG totalBandwidth,
+                             ULONG consumedBandwidth, UCHAR *buffer,
+                             PULONG length, PULONG actual)
+{
+    ULONG need;
+    ULONG i;
+
+    if (level == 0) {
+        need = XHCI_PIPE_BUSINFO0_BYTES;
+    } else if (level == 1) {
+        need = XHCI_PIPE_BUSINFO1_BYTES;
+    } else {
+        return XHCI_PIPE_UNSUPPORTED;
+    }
+    if (actual != NULL) {
+        *actual = need;
+    }
+    if (length == NULL) {
+        return XHCI_PIPE_BAD_PARAM;
+    }
+    if (*length < need) {
+        return XHCI_PIPE_TOO_SMALL;
+    }
+    if (buffer == NULL) {
+        return XHCI_PIPE_BAD_PARAM;
+    }
+    for (i = 0; i < need; i++) {
+        buffer[i] = 0;
+    }
+    xhciPipePut32(buffer, totalBandwidth);
+    xhciPipePut32(buffer + 4, consumedBandwidth);
+    *length = need;
+    return XHCI_PIPE_OK;
+}
+
+ULONG XhciPipeTopologyAddress(ULONG pciBus, ULONG pciAddress, ULONG rootPort,
+                              ULONG route, UCHAR *out)
+{
+    ULONG i;
+
+    if (out == NULL || rootPort == 0 || rootPort > 255UL) {
+        return XHCI_PIPE_BAD_PARAM;
+    }
+    for (i = 0; i < XHCI_PIPE_TOPOLOGY_BYTES; i++) {
+        out[i] = 0;
+    }
+    xhciPipePut32(out, pciBus);
+    xhciPipePut32(out + 4, (pciAddress >> 16) & 0xFFFFUL);
+    xhciPipePut32(out + 8, pciAddress & 0xFFFFUL);
+    out[16] = (UCHAR)(rootPort & 0xFFUL);
+    for (i = 0; i < 5UL; i++) {
+        out[18 + 2 * i] = (UCHAR)((route >> (4 * i)) & 0xFUL);
+    }
+    return XHCI_PIPE_OK;
 }
 
 /* IRQL: any. A low word of 0 is skipped, so a lap is 2^32 - 1 values: the

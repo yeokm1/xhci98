@@ -134,6 +134,11 @@ ULONG XhciHubStatusBytes(ULONG declared);
  * up to `managed`; a bit past what arrived is 0. */
 ULONG XhciHubStatusBitmap(const UCHAR *data, ULONG bytes, ULONG managed);
 
+/* Whether a report of `bytes` bytes carries bit `bit` - any bit, managed or
+ * not: the bus reads the unmanaged ones only to silence them (hcd_hub.c,
+ * HcdHubSilence). */
+ULONG XhciHubReportHas(const UCHAR *data, ULONG bytes, ULONG bit);
+
 /* Every bit the bus acts on for a hub of `managed` ports: the hub's own and
  * each port's - what a poll, or a hub's first look, treats as changed. */
 ULONG XhciHubAllBits(ULONG managed);
@@ -224,6 +229,16 @@ ULONG XhciHubResumeBeforeReset(ULONG status);
 ULONG XhciHubResumeProgress(ULONG status);
 
 /*
+ * A resume's outcome settled against the change bits its last GET_STATUS
+ * read: DONE with C_PORT_CONNECTION raised is DISABLED - the device was
+ * replaced during the resume, so the held devices are not let go and the
+ * port is enumerated afresh (Codex review of the Phase 28-31 merge,
+ * finding 1). C_PORT_CONNECTION is bit 0 at USB 2.0 and SuperSpeed alike
+ * (xhci_sshub.h), so one rule serves both. Every other outcome stands.
+ */
+ULONG XhciHubResumeSettle(ULONG progress, ULONG change);
+
+/*
  * What a resume's outcome makes of the port's decision *d, the port's
  * enumeration machine in `state`, whether the resume held devices (`held`:
  * the device on the port, and below it if it is a hub, quiesced for the
@@ -274,7 +289,8 @@ ULONG XhciHubPortSpeedClass(ULONG status);
 
 /* The enumeration machine's speed value (XHCI_ENUM_SPEED_*, the default
  * Protocol Speed IDs) for a speed class, 0 for none: the machine takes its
- * initial EP0 size from it (XhciEnumInitialMps0). */
+ * initial EP0 size from it (XhciEnumInitialMps0). SuperSpeed is a
+ * SuperSpeed hub's port (xhci_sshub.h, 30-A.1). */
 ULONG XhciHubEnumSpeed(ULONG speedClass);
 
 /*

@@ -458,7 +458,7 @@ task. The miniport reads six values from its device key (`src\*.c`, the six
 |---|---|
 | `XhciLogVerbosity` | Carried over, same meaning, same shipping default 0, controller only |
 | `XhciLogDebugView` | Carried over, same meaning; under the HCD it also selects 26-A.8's continuous PASSIVE flusher |
-| `XhciImodInterval250ns` | Carried over, same meaning and default 500 |
+| `XhciImodInterval250ns` | Carried over, same meaning and code default 4000; both INFs write 160 (40 us) on every install path since the owner's ruling of 2026-10-04 (`roadmap-hcd.md`, decisions table), 500 until then |
 | `XhciVirtualHSHub`, `XhciVirtualHSHubVid`, `XhciVirtualHSHubPid` | Not read and not written (owner, 2026-10-02); the INF gate refuses them in an HCD INF (`VAL-HCDVHUB`) |
 
 The root-hub sections write no value of the controller's: they carry the
@@ -1963,6 +1963,35 @@ ms before resuming it (xHCI p.454). Resume recovery (`TRSMRCY`, 10 ms) is to
 transcribe. Through an external hub: SET_FEATURE(PORT_SUSPEND) /
 CLEAR_FEATURE(PORT_SUSPEND), then C_PORT_SUSPEND.
 
+**At a SuperSpeed hub's port** (decided when Phase 27's hub-port resume met
+Phase 30's SuperSpeed hub on `p28-31-int`, 2026-10-04): the same rule,
+handled and never initiated, through the same code. Phase 30 had no suspend
+or resume of its own - a link found in U3 under a held device was left as
+it was, and only a reset noticed it (a warm one, since a hot reset cannot
+start from U3) - so there was nothing to reconcile, only a gap to close.
+`XhciSsHubPortDecide` now names a connected, enabled port whose link reads
+U3 under a device the machine holds (`Resume`), and a `C_PORT_LINK_STATE`
+with the link back in U0 under one (`Resumed`, a finished host-requested U3
+exit; a remote-wake U3 exit sets no `C_PORT_LINK_STATE`, USB 3.2
+10.16.2.6.2, printed p.449), after every other rule; `HcdHubPortLook` carries both out
+exactly as for a USB 2.0 port - the devices below quiesced, the link asked
+to U0 with SET_FEATURE(PORT_LINK_STATE) and U0 in `wIndex` 15:8, progress
+read by `XhciSsHubResumeProgress` (U3 or Recovery pending; U0, U1 or U2
+enabled done; anything else, the reserved link states 0xC to 0xF included,
+re-enumerated; disconnected gone),
+`C_PORT_LINK_STATE` cleared, the 10 ms recovery waited, and the same
+outcome, retry and give-up rules - a resume whose last reading carries
+`C_PORT_CONNECTION` is a replaced device and is enumerated afresh, at
+either speed (`XhciHubResumeSettle`). No SuperSpeed port is resumed before a
+reset: a warm reset may start from U3 (`XhciSsHubResetKind`). The quiesce
+reaches streams: an endpoint with streams open is stopped when any stream
+has work, and rung again per stream by its Stream ID. The request's
+encoding, `C_PORT_LINK_STATE` on a host-directed U3 exit and `PORT_ENABLE`
+staying set in U3 were read from USB 3.2 r1.1 10.16.2.6 and 10.16.2.10
+(Codex review of the merge, printed pp.446-454); no QEMU model has a SuperSpeed
+hub, so `test_sshub`'s `test_resume` vectors are the only evidence until
+the bench (30-E.1).
+
 ### 10.3 The hub inside the bus
 
 **Bring-up, in this order.** A device whose device descriptor says class
@@ -2203,6 +2232,41 @@ case-insensitive matching above, and the form most INF lines use.
 | `BusQueryHardwareIDs` | `USB\VID_vvvv&PID_pppp&REV_rrrr&MI_nn`, `USB\VID_vvvv&PID_pppp&MI_nn` |
 | `BusQueryCompatibleIDs` | `USB\Class_cc&SubClass_ss&Prot_pp`, `USB\Class_cc&SubClass_ss`, `USB\Class_cc`: for an IAD function from the IAD's `bFunctionClass` / `bFunctionSubClass` / `bFunctionProtocol`, as Microsoft's "Support for interface collections" gives them; for any other function, a legacy audio group included, from its first interface (alternate 0). Decided 2026-10-03 (Codex review of batch (c), round 19, finding 5); it was open (10.10) |
 | `BusQueryInstanceID` | the port number in decimal, then `nn`: port 3's `MI_03` is `303`. Digits and `A`-`F` only, since Windows 98's instance-id character set is unread (10.10) (corrected 2026-10-03 by 26-A.7 from "the parent device's instance string plus the function number") |
+
+**A storage interface that offers UAS** (roadmap task 31-A.3, `xhci_xport.c`;
+a device PDO's one interface, or a function's when no IAD groups it) gets
+one transport, and both tables above change for it. The compatible ids are
+the chosen setting's triple - `USB\Class_08&SubClass_06&Prot_62` and its two
+shorter forms under UAS, alternate 0's `Prot_50` triple under Bulk-Only -
+and none at all for an interface with no transport it can run. That
+refused interface shows no VID/PID-derived hardware id either: its one
+hardware id is the project-owned
+`USB\XHCI98_NOXPORT&VID_vvvv&PID_pppp&REV_rrrr` (`&MI_nn` on a function),
+which no INF names, so no `usbstor.inf` or vendor INF line binds a storage
+driver to a device whose transport cannot run; it shows with no driver.
+Where it sits decides the rest (`XhciXportRefusedAt`): on a
+companion-paired root port the bus asks 29-A.5's hold to send it back to
+USB 2.0 (`HcdHoldRequestUsb2`, Phase 29's executor: an accepted request is
+queued for the thread's next pass, the device given no PDO and left
+Present until the hold's PED write and disconnect take it as an unplug,
+or, if the hold is refused then, refused in place with its PDOs created
+there; a refused request leaves it refused in place), and on a root port
+with no companion or behind a SuperSpeed hub it is refused in place; each place is
+counted. Under UAS the VID/PID hardware ids
+stay, so a device a `usbstor.inf` lists by hand still binds `usbstor.sys`
+on it - roadmap 31-A.3's residual case, recorded rather than fought. The
+compatible-id rule rests on what the targets' `usbstor.inf` files match on (read
+2026-10-04, static, a text read of the INFs hashed in 10.6 and NUSB 3.3's
+and 3.6's): full class triples only - never `USB\Class_08&SubClass_06` or
+`USB\Class_08`, never `Prot_62` - and, listed by hand, `USB\VID_v&PID_p`
+(16 lines on 2000 SP4, 61 on XP to 7, 135 and 152 under NUSB 3.3 and 3.6)
+and `USB\VID_v&PID_p&MI_nn` (6 or 7, none on 2000); never a `&REV_` form,
+never a vendor id alone. Bulk-Only counts only at alternate 0, because
+`usbstor.sys` selects alternate 0; the UAS driver selects its own setting.
+The device id is unchanged. Whether Windows 98's configuration manager
+matches an INF line against the device id as well as the hardware ids is
+unread; if it does, a hand-listed `VID&PID` still wins there, roadmap
+31-A.3's residual case.
 
 Microsoft's parent forms the `MI_` suffix with the format string `&MI_%02x`
 (Windows 7 SP1 and XP SP3 `usbccgp.sys`): lower-case hex, which the

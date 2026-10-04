@@ -26,7 +26,11 @@
 #include "xhci_enum.h"
 #include "xhci_pipe.h"
 #include "xhci_func.h"
+#include "xhci_xport.h"
 #include "xhci_hub.h"
+#include "xhci_sshub.h"
+#include "xhci_link.h"
+#include "xhci_stream.h"
 #include "xhci_counters.h"
 
 #define HCD_KIND_CONTROLLER_FDO 0x43464448UL /* 'HDFC' */
@@ -52,6 +56,8 @@ typedef struct _HCD_COMMON {
     ULONG PnpStateBeforeQuery;
     DEVICE_POWER_STATE DevicePower;
     SYSTEM_POWER_STATE SystemPower;
+    PDEVICE_OBJECT RetiredNext;     /* an orphaned PDO on Windows 98's
+                                     * retired list (hcd_pdo.c)          */
 } HCD_COMMON, *PHCD_COMMON;
 
 /* The one-shot timer service's slots (hcd_svc.c). Four: the command
@@ -95,6 +101,8 @@ typedef struct _HCD_TIMER {
 #define HCD_USBD_INTERNAL_HC_ERROR  ((LONG)0x80000800L)
 #define HCD_USBD_INVALID_PIPE       ((LONG)0x80000600L)
 #define HCD_USBD_INVALID_PARAMETER  ((LONG)0x80000300L)
+/* Windows 2000 DDK inc\usbdi.h:232. */
+#define HCD_USBD_STALL_PID          ((LONG)0xC0000004L)
 #define HCD_USBD_ERROR_SHORT_TRANSFER ((LONG)0x80000900L)
 /* Windows 2000 DDK inc\usbdi.h:290 and :294. */
 #define HCD_USBD_BAD_START_FRAME    ((LONG)0xC0000A00L)
@@ -122,6 +130,10 @@ typedef struct _HCD_IO_REQUEST {
 /* Windows 2000 DDK incSbdi.h:312: a success-class value there. */
 #define HCD_USBD_CANCELED           ((LONG)0x00010000L)
 #define HCD_PIPE_XFERS      4UL
+/* A stream's pipe (31-A.1) carries fewer: one request per stream at a time
+ * is UAS's whole use of one (a tag per stream), and one more lets the next
+ * be mapped while the first is on the ring. */
+#define HCD_STREAM_XFERS    2UL
 /* Data elements per chunk (xhci_pipe.h XHCI_PIPE_CHUNK_ELEMENTS), and the
  * one slot the SG list's own declaration already holds beyond them. */
 #define HCD_SG_ELEMENTS     32UL
@@ -212,6 +224,15 @@ typedef struct _HCD_PIPE {
                                      * submission order; controller lock  */
     ULONG Closed;                   /* deconfigured: no more submissions  */
     ULONG Halted;                   /* a STALL; the client resets the pipe */
+    /* The device's sequence (an endpoint's pipe, never a stream's; under
+     * the controller lock): a TD was published, or a surviving TD
+     * restarted, on the endpoint or any stream of it since both ends last
+     * restarted its sequence - the select that opened it, a RESET_PIPE or
+     * RESET_PORT that succeeded, or a streams open or close whose
+     * CLEAR_FEATURE(ENDPOINT_HALT) the device took (hcd_io.c, hcd_cfg.c).
+     * A streams open or close of a used endpoint owes the device that
+     * clear (hcdCfgStreamsSequence). */
+    ULONG SeqUsed;
     ULONG CancelPending;            /* a record of it was cancelled      */
     ULONG DrainPending;             /* a refused retire: stop and drain  */
     ULONG Paused;                   /* the thread is stopping or editing
@@ -227,8 +248,52 @@ typedef struct _HCD_PIPE {
                                      * packet's; controller lock          */
     ULONG RingWait;                 /* a record waits for ring room;
                                      * controller lock                    */
-    HCD_XFER Xfers[HCD_PIPE_XFERS];
+    /* Streams (31-A.1; xhci98_streams.h). An endpoint with streams open
+     * has Streams, and takes no transfer itself; each stream is a pipe of
+     * its own with Parent the endpoint's and StreamId 1..31, on a ring in
+     * the endpoint's stream block. Streams and its Live under the
+     * controller lock. */
+    ULONG StreamId;                 /* 0: not a stream                    */
+    ULONG StreamFault;              /* a stream's own event halted or
+                                     * errored the endpoint: its recovery
+                                     * owes it a Set TR Dequeue (hcd_cfg.c,
+                                     * hcdCfgRecoverDequeue); controller
+                                     * lock                               */
+    struct _HCD_PIPE *Parent;       /* a stream's endpoint pipe           */
+    struct _HCD_STREAMS *Streams;   /* the endpoint's open streams        */
+    ULONG XferCount;                /* records in Xfers: a stream's pipe is
+                                     * allocated short (HCD_STREAM_XFERS) */
+    HCD_XFER Xfers[HCD_PIPE_XFERS]; /* last: see XferCount                */
 } HCD_PIPE, *PHCD_PIPE;
+
+/* The bytes of a stream's pipe: the records past HCD_STREAM_XFERS are not
+ * allocated, and nothing reads past XferCount. */
+#define HCD_STREAM_PIPE_BYTES                                                \
+    ((ULONG)(FIELD_OFFSET(HCD_PIPE, Xfers) +                                 \
+             HCD_STREAM_XFERS * sizeof(HCD_XFER)))
+
+/*
+ * An endpoint's open streams (hcd_cfg.c, 31-A.1): the plan, the one common
+ * buffer holding the Primary Stream Context Array and every stream's ring
+ * (xhci_stream.h, XhciStreamLayout), and the pipes. Ring and Pipe are
+ * indexed by Stream ID, [0] unused. Live is set once the Configure Endpoint
+ * that installs the array has succeeded: only then does a stream's handle
+ * resolve. Allocated and freed by the thread; read by the event DPC and the
+ * dispatch under the controller lock.
+ */
+typedef struct _HCD_STREAMS {
+    ULONG Count;                    /* granted: Stream IDs 1..Count       */
+    ULONG Dci;                      /* the endpoint's, for a retired block */
+    ULONG Entries;
+    ULONG MaxPStreams;
+    ULONG Live;
+    PVOID Va;
+    PHYSICAL_ADDRESS Pa;
+    XHCI_STREAM_LAYOUT Layout;
+    PXHCI_RING Ring[XHCI_STREAM_MAX_ENTRIES];
+    struct _HCD_PIPE *Pipe[XHCI_STREAM_MAX_ENTRIES];
+    struct _HCD_STREAMS *Next;      /* the device's StreamsRetired list    */
+} HCD_STREAMS, *PHCD_STREAMS;
 
 /* A device the bus has addressed (hcd_enum.c; design record 13 section
  * 5.2's "device object (the bus's)"). Pool, per device, at enumeration
@@ -272,6 +337,26 @@ typedef struct _HCD_USB_DEVICE {
     UCHAR DeviceDesc[18];
     PUCHAR Config;          /* the whole configuration descriptor       */
     ULONG ConfigLength;
+    /* SuperSpeed (29-A.1, 29-A.3): the link rate the port trained at, in
+     * kbit/s, whether it is SuperSpeedPlus, and the BOS descriptor, kept
+     * whole (pool; NULL when none was read) with what XhciPipeParseBos
+     * made of it - for the endpoint rules and XHCISNAP (29-A.6). */
+    ULONG RateKbps;
+    ULONG Plus;
+    /* Its own SuperSpeed link's rank (XHCI_SS_RANK_*, xhci_sshub.h): on a
+     * root port from the PSI rate and PORTLI at Address Device
+     * (hcd_enum.c), behind a SuperSpeed hub from that hub's extended port
+     * status (HcdHubPlace); 0 unknown, and 0 for a USB 2.0 device. And,
+     * for an SS/SSP device behind a hub that outranks its link, that hub's
+     * Slot ID and port for the Slot Context's Parent Hub Slot ID and Parent
+     * Port Number (xHCI Table 6-6) - kept apart from TtSlot/TtPort, which
+     * name a transaction translator that CLEAR_TT_BUFFER is sent to. */
+    ULONG SsLinkRank;
+    ULONG SsParentSlot;
+    ULONG SsParentPort;
+    PUCHAR Bos;
+    ULONG BosLength;
+    XHCI_PIPE_BOS BosInfo;
     PDEVICE_OBJECT Pdo;     /* 26-A.4's device PDO, once it exists; for a
                              * split device its first function PDO, the
                              * rest on that PDO's Sibling chain          */
@@ -284,6 +369,11 @@ typedef struct _HCD_USB_DEVICE {
                              * them SET_INTERFACE (hcd_cfg.c)            */
     ULONG Abandoned;        /* off its port with the slot still enabled:
                              * the next powered pass disables it        */
+    ULONG HoldAsked;        /* a send-back to USB 2.0 was accepted for it
+                             * (HcdHoldRequestUsb2): no PDO, Present until
+                             * the hold service disconnects or refuses it */
+    ULONG HoldRefused;      /* that request was refused late: refused in
+                             * place, never asked again (hcd_pdo.c)      */
     /* The URB path (hcd_io.c). Refs counts URB IRPs that hold the record,
      * taken under PdoListLock while the PDO still names it; Gone, under
      * the controller lock, refuses new submissions once the thread has
@@ -326,6 +416,11 @@ typedef struct _HCD_USB_DEVICE {
                                      * is retried, but not forever; reset
                                      * when its debt is settled or taken
                                      * over (hcd_cfg.c); thread           */
+    struct _HCD_STREAMS *StreamsRetired; /* stream blocks of pipes closed
+                                     * while their endpoint was still
+                                     * enabled: the controller may hold
+                                     * the array until the slot goes
+                                     * (hcd_cfg.c, 31-A.1); thread        */
 } HCD_USB_DEVICE, *PHCD_USB_DEVICE;
 
 /* Distinct pipe handles a PDO keeps an abort horizon for: more than any
@@ -389,6 +484,8 @@ typedef struct _HCD_DEVICE_PDO {
     ULONG InstanceKey;              /* the instance id and the address
                                      * (XhciHubInstanceKey): the root port,
                                      * with the route above it behind hubs */
+    ULONG RootPort;                 /* its device's Port and Route, fixed */
+    ULONG Route;                    /* at creation (GET_TOPOLOGY_ADDRESS) */
     ULONG Speed;
     ULONG SpeedClass;               /* XHCI_SPEED_*, decoded at creation:
                                      * the raw Speed is a PSIV whose
@@ -405,12 +502,31 @@ typedef struct _HCD_DEVICE_PDO {
     ULONG Function;
     ULONG InterfaceMask;            /* bit n: bInterfaceNumber n           */
     XHCI_FUNC Func;
+    /* The storage transport the bus chose for this PDO's interface
+     * (31-A.3; xhci_xport.h), fixed at creation so every id query answers
+     * alike. Transport XHCI_XPORT_NONE: section 10.7's ids unchanged. */
+    XHCI_XPORT Xport;
     /* Every PDO of one device: the serial a port waits on and a cycle
      * names (Group, the first PDO's Serial; a lone device PDO's own), and
      * the chain HcdDevicePdoGone walks when the device leaves (Sibling,
      * written before the PDOs are listed, read only by the thread). */
     ULONG Group;
     struct _HCD_DEVICE_PDO *Sibling;
+    /* What Windows XP onward asks (task 28-A.1, hcd_urb.c). IdleIrp: the
+     * one IOCTL_INTERNAL_USB_SUBMIT_IDLE_NOTIFICATION held, under the
+     * cancel spin lock, until its client cancels it or the PDO stops;
+     * IdlePending counts it from acceptance until its completion has
+     * returned, and a stop or removal waits for 0. BusifSlot: the
+     * USB_BUS_INTERFACE_USBDI context this PDO's clients were given, in
+     * hcd_urb.c's static table, which outlives the PDO. PciBus and
+     * PciAddress: the controller's location for GET_TOPOLOGY_ADDRESS, read
+     * once at PASSIVE_LEVEL (PciRead set after both). */
+    PIRP IdleIrp;
+    volatile LONG IdlePending;
+    PVOID BusifSlot;
+    ULONG PciBus;
+    ULONG PciAddress;
+    volatile ULONG PciRead;
 } HCD_DEVICE_PDO, *PHCD_DEVICE_PDO;
 
 /* Whether a PDO may use a pipe of its device: a device PDO any, a function
@@ -440,6 +556,37 @@ typedef struct _HCD_PORT {
     struct _HCD_HUB *AwaitHub; /* Gone: the departed hub whose subtree's
                              * PDOs it waits for as well (hcd_enum.c)    */
     ULONG HubSpeedClass;    /* a hub port: the speed its reset reported  */
+    /* A root port (29-A.1, 29-A.2): the raw PSIV its last reset left, for
+     * the Slot Context - the machine itself is fed the decoded class's
+     * default ID - and, on a USB3 protocol port, its link's record. */
+    ULONG LinkPsiv;
+    XHCI_LINK_PORT Link;
+    /* A SuperSpeed hub's port (30-A.1, hcd_sshub.c): the link its last
+     * reset left, from the extended port status on a SuperSpeedPlus hub
+     * (zero otherwise), for the Protocol Speed ID its device is given;
+     * Link.WarmResets is that port's warm-reset budget. */
+    XHCI_SSHUB_LINK HubSsLink;
+    ULONG HubSsRecover;     /* its link wants a warm reset once the device
+                             * it held is torn down (HcdSsHubPortRecover) */
+    /* Given up and left in SS.Disabled (HcdHubPortDisable), which detects
+     * nothing: re-armed to RxDetect after HubSsRearmWait more ticks of its
+     * hub's re-arm timer, the wait doubling with each re-arm in a row
+     * (HubSsRearms) up to a cap (hcd_hub.c, hcdHubRearmPorts). */
+    ULONG HubSsRearmWait;
+    ULONG HubSsRearms;
+    /* Root port: PDO recreations hcdHoldResolve saw fail since the port
+     * last read physically disconnected (hcd_enum.c). Nonzero, no device
+     * on the port asks for a send-back again; at HCD_HOLD_RECOVER_TRIES
+     * the device is left refused with no PDO. */
+    ULONG HoldRecoverFails;
+    /* Root port: inspections in a row that read PORTSC as all ones. The
+     * inspection is owed again at every pass until one reads it, and at
+     * HCD_PORT_UNREADABLE_PASSES the controller goes to recovery
+     * (hcd_enum.c, hcdPortChanged). */
+    ULONG Unreadable;
+    ULONG HubSsSeen;        /* a connection read since its last re-arm:
+                             * an empty port after that is a departure of
+                             * the device's own, which restarts the waits */
     ULONG ResumeTries;      /* a hub port: resumes failed in a row
                              * (XhciHubResumeOutcome); thread only       */
     ULONG ResumePending;    /* a hub port: a resume to try again at its
@@ -480,7 +627,49 @@ typedef struct _HCD_HUB {
     ULONG Polled;           /* the pipe is unusable: polled instead      */
     ULONG PollPasses;
     ULONG Changed;          /* bit 0 the hub, bit n port n: to look at   */
+    /* The SuperSpeed half of a USB 3 hub (30-A.1, hcd_sshub.c): Desc is
+     * filled from SsDesc so the shared code reads one shape. */
+    ULONG Usb3;
+    XHCI_SSHUB_DESC SsDesc;
+    ULONG ExtStatus;        /* answers GET_PORT_STATUS type 2            */
+    /* Ports given up in SS.Disabled awaiting their re-arm (bit n port n),
+     * and the timer whose expiry is one tick of their waits (hcd_hub.c).
+     * RearmArmed: the timer is set and must be cancelled before the object
+     * is cleared. */
+    ULONG RearmPorts;
+    ULONG RearmArmed;
+    KTIMER RearmTimer;
 } HCD_HUB, *PHCD_HUB;
+
+/*
+ * 29-A.5's active fallback, the hold (hcd_enum.c; xhci_link.h): a device on
+ * a SuperSpeed root port sent back to its USB 2.0 companion. A small table
+ * rather than a field per port: holds are rare, and a port object is one of
+ * HCD_PORT_COUNT. Every entry is the thread's, except that
+ * HcdHoldRequestUsb2 claims one and marks it Pending under the controller
+ * lock; a full table refuses the request, counted.
+ */
+#define HCD_MAX_HOLDS               8UL
+
+/* PDO recreations after a refused send-back that may fail on one root port
+ * before its device is left refused with no PDO (hcd_enum.c,
+ * hcdHoldResolve); a bus policy number. */
+#define HCD_HOLD_RECOVER_TRIES      3UL
+
+/* Why a send-back was asked for (HcdHoldRequestUsb2's `reason`). */
+#define HCD_HOLD_REASON_UAS_NO_STREAMS  1UL /* 31-A.3: UAS-only, no streams */
+#define HCD_HOLD_REASON_SSP_REFUSED     2UL /* 29-A.1's SuperSpeedPlus value */
+#define HCD_HOLD_REASON_OTHER           3UL
+
+typedef struct _HCD_HOLD {
+    ULONG Used;             /* claimed                                   */
+    ULONG Pending;          /* asked for; the thread has not acted yet   */
+    ULONG Reason;           /* HCD_HOLD_REASON_*                         */
+    ULONG Port;             /* the held SuperSpeed root port             */
+    ULONG Unreadable;       /* passes its PORTSC read all ones while the
+                             * request was pending                       */
+    XHCI_LINK_HOLD Hold;    /* the pure state, xhci_link.c               */
+} HCD_HOLD, *PHCD_HOLD;
 
 /* A hub's port object, n from 1. */
 #define HcdHubPort(hc, hub, n)                                               \
@@ -591,6 +780,7 @@ typedef struct _HCD_CONTROLLER {
      * the DMA scratch, and the one EP0 transfer the thread waits for. */
     HCD_PORT Ports[HCD_PORT_COUNT];
     HCD_HUB Hubs[HCD_MAX_HUBS];     /* hcd_hub.c; thread only             */
+    HCD_HOLD Holds[HCD_MAX_HOLDS];  /* 29-A.5 (hcd_enum.c)                */
     PHCD_USB_DEVICE SlotDevice[XHCI_MAX_SLOTS + 1];
     PVOID ScratchVa;
     PHYSICAL_ADDRESS ScratchPa;
@@ -649,6 +839,14 @@ typedef struct _HCD_CONTROLLER {
     ULONG TeardownStops;
     ULONG TeardownStopFailures;
     ULONG HubPortsGivenUp;
+    ULONG SsHubPortsRearmed;        /* given-up SuperSpeed hub ports put
+                                     * back to RxDetect (hcd_hub.c)       */
+    ULONG HoldRecoverGiveUps;       /* devices left with no PDO after a
+                                     * refused send-back's recreation
+                                     * failed: at HCD_HOLD_RECOVER_TRIES,
+                                     * or their re-enumeration, refused in
+                                     * place, failing for good
+                                     * (hcd_enum.c)                       */
     ULONG HubResumes;               /* hub ports resumed by the bus       */
     ULONG HubResumesFailed;         /* ... given up after their tries     */
     ULONG TtBufferClears;
@@ -727,6 +925,16 @@ typedef struct _HCD_CONTROLLER {
      * tell a restart from a block that did not move. */
     XHCIHC_COUNTERS Counters;
     ULONG CountersStart;
+    /* The storage transport decisions (31-A.3), one per XHCI_XPORT_WHY_*
+     * but NOT_UAS, by the controller thread at PDO creation; never zeroed,
+     * and outside the matrix block, whose offsets the harness reads (the
+     * matrix's transport field is 31-A.3's harness half, not drafted). */
+    ULONG XportDecisions[XHCI_XPORT_WHY_COUNT];
+    /* Each refused device once (31-A.3), by where it sits
+     * (XHCI_XPORT_AT_*), and the companion-port requests the 29-A.5 hold
+     * did not take - all of them until its executor is wired. */
+    ULONG XportRefusedAt[XHCI_XPORT_AT_COUNT];
+    ULONG XportHoldsNotTaken;
 
     /* The kept controller sequence's state, as the miniport's extension. */
     XHCI_EXTENSION Hc;
@@ -810,6 +1018,7 @@ VOID HcdThreadWake(PHCD_CONTROLLER hc);
 VOID HcdControllerFail(PHCD_CONTROLLER hc);
 VOID HcdPowerGateEnter(PHCD_CONTROLLER hc);
 VOID HcdPowerGateLeave(PHCD_CONTROLLER hc);
+ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc);
 
 /* hcd_enum.c */
 VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered);
@@ -818,6 +1027,28 @@ VOID HcdEnumAttach(PHCD_CONTROLLER hc);
 VOID HcdEnumInit(PHCD_CONTROLLER hc);
 VOID HcdEnumDrop(PHCD_CONTROLLER hc);
 ULONG HcdThreadCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb, PULONG control);
+/*
+ * 29-A.5: ask for the device on a SuperSpeed root port to be sent back to
+ * its USB 2.0 companion - its link written to SS.Disabled, its slot and PDOs
+ * gone as on an unplug, and the port held while the device runs on the USB
+ * 2.0 side, released only by the rules of xhci_link.h. Returns FALSE, with
+ * nothing done, when the device is not on a SuperSpeed root port, the port
+ * has no USB 2.0 companion (there is nowhere to send it), it is held
+ * already, or no hold entry is free; each refusal is counted. The work is
+ * the controller thread's next pass: `dev` may still be in use by the caller
+ * when this returns. TRUE means "accepted for deferred execution": the
+ * device record and its enumeration stay as they are until that pass, whose
+ * identity read needs them; a caller that gets TRUE must not fail or tear
+ * the device down itself (31-A.3's HcdDevicePdoCreate lists no PDO for it
+ * and its machine waits in Present; Codex review of Phase 31, round 2,
+ * unit C). Sets dev->HoldAsked; a request the service later refuses for a
+ * device still there ends with the device refused in place (hcd_enum.c,
+ * hcdHoldResolve).
+ * IRQL: <= DISPATCH_LEVEL, controller lock not held.
+ */
+BOOLEAN HcdHoldRequestUsb2(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                           ULONG reason);
+
 ULONG HcdThreadControl(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                        UCHAR requestType, UCHAR request, USHORT value,
                        USHORT index, ULONG length, PULONG bytes);
@@ -825,6 +1056,16 @@ ULONG HcdThreadControlEx(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                          UCHAR requestType, UCHAR request, USHORT value,
                          USHORT index, ULONG length, PULONG bytes,
                          PULONG stalled);
+/* What became of one thread control transfer (HcdThreadControlOutcome). */
+#define HCD_CTL_DONE        0UL /* the device took it                    */
+#define HCD_CTL_STALLED     1UL /* the device answered with a STALL      */
+#define HCD_CTL_FAILED      2UL /* it completed with another error       */
+#define HCD_CTL_NOT_SENT    3UL /* it never went out, or it timed out
+                                 * (dev->Ep0Stuck, the reset requested)  */
+ULONG HcdThreadControlOutcome(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                              UCHAR requestType, UCHAR request,
+                              USHORT value, USHORT index, ULONG length,
+                              PULONG bytes);
 ULONG HcdThreadReaddress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 VOID HcdEnumCycle(PHCD_CONTROLLER hc, ULONG port, ULONG serial);
 
@@ -851,6 +1092,23 @@ VOID HcdHubPortDisable(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n);
 ULONG HcdHubPathPresent(PHCD_CONTROLLER hc, PHCD_PORT q);
 VOID HcdHubClearTt(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                    ULONG endpointAddress, ULONG type, ULONG addressZero);
+VOID HcdHubSilence(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n);
+ULONG HcdHubClassRequest(PHCD_CONTROLLER hc, PHCD_HUB hub, UCHAR type,
+                         UCHAR request, USHORT value, USHORT index,
+                         ULONG length, PULONG bytes, PULONG stalled);
+
+/* hcd_sshub.c: the SuperSpeed half of a USB 3 hub (30-A.1) */
+ULONG HcdSsHubConfigure(PHCD_CONTROLLER hc, PHCD_HUB hub);
+ULONG HcdSsHubPortReset(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
+                        PULONG speedClass);
+ULONG HcdSsHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
+                       ULONG state, PXHCI_HUB_PORT_DECISION d);
+ULONG HcdSsHubPortRecover(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n);
+VOID HcdSsHubAdoptSpeed(PHCD_CONTROLLER hc, PHCD_PORT p,
+                        PHCD_USB_DEVICE dev);
+ULONG HcdSsHubPsiv(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG rootPort,
+                   PULONG psiv);
+VOID HcdSsHubCountPair(PHCD_CONTROLLER hc, PHCD_HUB hub);
 
 /* hcd_strict.c: debug and qemu flavours only; nothing in release. */
 #if DBG
@@ -892,16 +1150,25 @@ ULONG HcdDevicePdoExists(PHCD_CONTROLLER hc, ULONG serial);
 PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
                                         PDEVICE_RELATIONS old);
 VOID HcdDevicePdoReleaseAll(PHCD_CONTROLLER hc);
+VOID HcdPdoRetireInit(VOID);
+ULONG HcdPdoRetire(PDEVICE_OBJECT obj);
+VOID HcdPdoReapRetired(VOID);
 NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp);
 NTSTATUS HcdDevicePdoPower(PHCD_DEVICE_PDO pdo, PIRP irp);
 
 /* hcd_urb.c */
 NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp);
 LONG HcdUrbIoRequest(PVOID urb, PHCD_IO_REQUEST req);
+ULONG HcdUrbIsUsbdiQuery(const GUID *guid);
+NTSTATUS HcdUrbQueryInterface(PHCD_DEVICE_PDO pdo, PIRP irp);
+VOID HcdUrbIdleDrain(PHCD_DEVICE_PDO pdo);
+VOID HcdUrbBusifRelease(PHCD_DEVICE_PDO pdo);
+VOID HcdUrbInit(VOID);
 
 /* hcd_io.c */
 VOID HcdIoPipeInitEp0(PHCD_USB_DEVICE dev);
 VOID HcdIoPipeInit(PHCD_PIPE pipe, PHCD_USB_DEVICE dev);
+VOID HcdIoPipeInitCount(PHCD_PIPE pipe, PHCD_USB_DEVICE dev, ULONG records);
 NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                      struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb,
                      const HCD_IO_REQUEST *req);
@@ -910,6 +1177,7 @@ VOID HcdIoPipeRelease(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoPipePause(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoPipeResume(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 ULONG HcdIoPipeCancelAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
+ULONG HcdIoPipeMarkAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd);
 VOID HcdIoCancelPdo(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                     struct _HCD_DEVICE_PDO *pdo);
 VOID HcdIoPipeWaitCancelled(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
@@ -922,7 +1190,7 @@ NTSTATUS HcdIoRefuseLater(struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb,
                           LONG usbd);
 VOID HcdIoRefusedInit(struct _HCD_DEVICE_PDO *pdo);
 ULONG HcdIoPark(struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb,
-                PVOID handle);
+                PVOID handle, PVOID endpoint);
 ULONG HcdIoParkedRelease(struct _HCD_DEVICE_PDO *pdo, ULONG aborted);
 VOID HcdIoStamp(struct _HCD_DEVICE_PDO *pdo, PIRP irp);
 VOID HcdIoAbortMark(struct _HCD_DEVICE_PDO *pdo, PIRP abortIrp,
@@ -939,6 +1207,9 @@ VOID HcdDmaMapQueue(PHCD_CONTROLLER hc, PHCD_XFER x);
 VOID HcdDmaMapKick(PHCD_CONTROLLER hc);
 VOID HcdDmaUnmap(PHCD_CONTROLLER hc, PHCD_XFER x);
 VOID HcdDmaMapDrain(PHCD_CONTROLLER hc);
+PVOID HcdDmaStreamAlloc(PHCD_CONTROLLER hc, ULONG bytes, PPHYSICAL_ADDRESS pa);
+VOID HcdDmaStreamFree(PHCD_CONTROLLER hc, ULONG bytes, PHYSICAL_ADDRESS pa,
+                      PVOID va);
 
 /* hcd_svc.c (the services themselves are in hcd_svc.h) */
 VOID HcdRelativeMs(PLARGE_INTEGER due, ULONG milliseconds);

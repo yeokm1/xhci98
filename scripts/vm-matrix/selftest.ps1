@@ -1393,6 +1393,21 @@ try { Assert-OffsetsFresh -OffsetsFile $tmpOffHcd -ExtensionSizeFromTrace 1128 -
 Remove-Item -LiteralPath $tmpOffHcd -Force -ErrorAction SilentlyContinue
 Assert "stale HCD offsets are refused by name"       $true ($threw -match 'STALE OFFSETS.*counters size=1128')
 
+Write-Host "--- an empty bus is an answer, not a missing reply (28-V.1 pre-read) ---"
+& {
+    function Send-Mon { param($Port, $Command, [switch]$Reply, [switch]$Quiet) return $script:fakeReply }
+    $script:fakeReply = "info usb`r`n(qemu) "
+    $r = Get-MonitorText -Port 1 -Command "info usb"
+    Assert "a complete empty info usb is not null"        $false ($null -eq $r)
+    Assert "...and holds no lines"                        0 (@($r).Count)
+    Assert "...so a pulled device reads as gone"          $false (Test-UsbDeviceListed -Port 1 -Id "dut1")
+    $script:fakeReply = "info usb`r`n  Device 0.1, Port 2, Speed 480 Mb/s, Product QEMU USB MSD, ID: dut1`r`n(qemu) "
+    Assert "a listed device reads as present"             $true (Test-UsbDeviceListed -Port 1 -Id "dut1")
+    $script:fakeReply = $null
+    Assert "no reply at all is still null"                $null (Get-MonitorText -Port 1 -Command "info usb")
+    Assert "...and leaves the departure unknown"          $null (Test-UsbDeviceListed -Port 1 -Id "dut1")
+}
+
 Write-Host ""
 if ($failures -eq 0) {
     Write-Host ("selftest: {0} checks, all passed" -f $checks)

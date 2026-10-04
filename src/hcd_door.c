@@ -547,6 +547,96 @@ static ULONG hcdDoorPorts(PHCD_CONTROLLER hc)
 }
 
 /*
+ * The slots region (xhci.h, XHCI_SNAPSHOT_REGION_SLOTS): one record per
+ * device in SlotDevice[], the Output Slot Context's state and Speed read
+ * only while the controller is STARTED (the stop clears that flag under
+ * this lock before the common buffer goes, as hcdDoorDeviceLocked relies
+ * on). A record leaves SlotDevice[] under this lock before it is freed
+ * (hcd_enum.c, hcdDeviceFree), so the ones read here are live. Controller
+ * lock held. */
+static VOID hcdDoorSlots(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
+                         PUCHAR payload, ULONG capacity, ULONG offset)
+{
+    PHCD_USB_DEVICE dev;
+    ULONG record;
+    ULONG count;
+    ULONG first;
+    ULONG fits;
+    ULONG copied;
+    ULONG ctx;
+    ULONG dw0;
+    ULONG dw3;
+    ULONG cls;
+    ULONG psiv;
+    ULONG i;
+    PUCHAR r;
+
+    record = XHCI_SNAPSHOT_SLOT_WORDS * (ULONG)sizeof(ULONG);
+    count = 0;
+    for (i = 1; i <= XHCI_MAX_SLOTS; i++) {
+        if (hc->SlotDevice[i] != NULL) {
+            count++;
+        }
+    }
+    header->RegionBytes = count * record;
+    if ((offset % record) != 0) {
+        header->Status |= XHCI_SNAPSHOT_S_BAD_REQUEST;
+        return;
+    }
+    if (offset >= header->RegionBytes) {
+        if (count != 0 || offset != 0) {
+            header->Status |= XHCI_SNAPSHOT_S_PAST_END;
+        }
+        return;
+    }
+    first = offset / record;
+    fits = capacity / record;
+    copied = 0;
+    count = 0;
+    for (i = 1; i <= XHCI_MAX_SLOTS && copied < fits; i++) {
+        dev = hc->SlotDevice[i];
+        if (dev == NULL) {
+            continue;
+        }
+        if (count++ < first) {
+            continue;
+        }
+        r = payload + copied * record;
+        dw0 = 0xFFFFFFFFUL;
+        dw3 = 0xFFFFFFFFUL;
+        if ((hc->Hc.Flags & XHCI_EXT_FLAG_STARTED) != 0 &&
+            XhciSlotContextOffset(&hc->Hc.Layout, i, &ctx) ==
+                XHCI_LAYOUT_OK) {
+            dw0 = XhciCommonAt(&hc->Hc, ctx)[0];
+            dw3 = XhciCommonAt(&hc->Hc, ctx)[3];
+        }
+        psiv = (dw0 == 0xFFFFFFFFUL)
+                   ? 0xFFFFFFFFUL
+                   : (dw0 & XHCI_SLOT_SPEED_MASK) >> XHCI_SLOT_SPEED_SHIFT;
+        cls = XHCI_SPEED_UNKNOWN;
+        if (psiv != 0xFFFFFFFFUL) {
+            (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, dev->Port, psiv, &cls);
+        }
+        hcdPut32(r, XHCI_SNAPSHOT_SLOT_ID * 4, i);
+        hcdPut32(r, XHCI_SNAPSHOT_SLOT_PORT * 4, dev->Port);
+        hcdPut32(r, XHCI_SNAPSHOT_SLOT_ROUTE * 4, dev->Route);
+        hcdPut32(r, XHCI_SNAPSHOT_SLOT_TIER * 4, dev->Tier);
+        hcdPut32(r, XHCI_SNAPSHOT_SLOT_STATE * 4,
+                 (dw3 == 0xFFFFFFFFUL) ? dw3 : XHCI_SLOT_GET_STATE(dw3));
+        hcdPut32(r, XHCI_SNAPSHOT_SLOT_CTX_SPEED * 4, psiv);
+        hcdPut32(r, XHCI_SNAPSHOT_SLOT_CLASS * 4, cls);
+        hcdPut32(r, XHCI_SNAPSHOT_SLOT_PLUS * 4, dev->Plus);
+        hcdPut32(r, XHCI_SNAPSHOT_SLOT_RATE_KBPS * 4, dev->RateKbps);
+        hcdPut32(r, XHCI_SNAPSHOT_SLOT_RANK * 4, dev->SsLinkRank);
+        copied++;
+    }
+    header->PayloadBytes = copied * record;
+    if (first + copied < header->RegionBytes / record) {
+        header->Status |= XHCI_SNAPSHOT_S_TRUNCATED;
+    }
+}
+
+/*
  * XHCISNAP's window, the miniport's xhciPassThru (branch 1.2.0.0) over the
  * HCD's embedded XHCI_EXTENSION: schema 5 unchanged, so the published tool
  * reads it. Returns the USBUSER status: 6 for a GUID not ours, for the shut
@@ -699,6 +789,8 @@ static ULONG hcdDoorSnapshot(PHCD_CONTROLLER hc, const UCHAR *guid,
                 }
             }
         }
+    } else if (requestRegion == XHCI_SNAPSHOT_REGION_SLOTS) {
+        hcdDoorSlots(hc, header, payload, capacity, requestOffset);
     } else {
         header->Status |= XHCI_SNAPSHOT_S_BAD_REGION;
     }

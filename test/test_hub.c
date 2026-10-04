@@ -72,6 +72,15 @@ static void test_bitmap(void)
     CHECK_EQ(XhciHubStatusBitmap(r, 1, 8), 0x005, "short report");
     CHECK_EQ(XhciHubStatusBitmap(r, 2, 4), 0x005, "past managed ignored");
     CHECK_EQ(XhciHubAllBits(4), 0x1F, "hub and four ports");
+    {
+        UCHAR w[2] = { 0x00, 0x80 };    /* port 15 alone */
+
+        CHECK(XhciHubReportHas(w, 2, 15), "port 15 seen, unmanaged");
+        CHECK_EQ(XhciHubStatusBitmap(w, 2, 14), 0, "and not acted on");
+        CHECK(!XhciHubReportHas(w, 1, 15), "past the bytes that arrived");
+        CHECK(!XhciHubReportHas(w, 2, 14), "port 14 clear");
+        CHECK(!XhciHubReportHas(NULL, 2, 15), "NULL report");
+    }
 }
 
 static void test_decide(void)
@@ -328,6 +337,34 @@ static void test_resume_outcome(void)
     on = XHCI_HUB_PORT_POWER | XHCI_HUB_PORT_CONNECTION |
          XHCI_HUB_PORT_ENABLE | XHCI_HUB_PORT_SUSPEND;
     tries = 0;
+
+    /* A device replaced during the resume (Codex review of the Phase 28-31
+     * merge, finding 1): its last reading DONE with C_PORT_CONNECTION is
+     * re-enumerated, never let go; at SuperSpeed the bit is the same. */
+    CHECK_EQ(XhciHubResumeSettle(XHCI_HUB_RESUME_DONE,
+                                 XHCI_HUB_C_PORT_CONNECTION),
+             XHCI_HUB_RESUME_DISABLED, "resumed, but a connect change: afresh");
+    CHECK_EQ(XhciHubResumeSettle(XHCI_HUB_RESUME_DONE,
+                                 XHCI_HUB_C_PORT_SUSPEND),
+             XHCI_HUB_RESUME_DONE, "resumed with C_PORT_SUSPEND: done");
+    CHECK_EQ(XhciHubResumeSettle(XHCI_HUB_RESUME_DONE, 0x0040UL),
+             XHCI_HUB_RESUME_DONE, "SuperSpeed C_PORT_LINK_STATE: done");
+    CHECK_EQ(XhciHubResumeSettle(XHCI_HUB_RESUME_DONE, 0x0041UL),
+             XHCI_HUB_RESUME_DISABLED,
+             "SuperSpeed U0 with C_PORT_CONNECTION: afresh");
+    CHECK_EQ(XhciHubResumeSettle(XHCI_HUB_RESUME_GONE,
+                                 XHCI_HUB_C_PORT_CONNECTION),
+             XHCI_HUB_RESUME_GONE, "gone stays gone");
+    CHECK_EQ(XhciHubResumeSettle(XHCI_HUB_RESUME_STUCK,
+                                 XHCI_HUB_C_PORT_CONNECTION),
+             XHCI_HUB_RESUME_STUCK, "stuck stays stuck");
+    XhciHubPortDecide(XHCI_ENUM_BOUND, on, 0, &d);
+    XhciHubResumeOutcome(XHCI_ENUM_BOUND,
+                         XhciHubResumeSettle(XHCI_HUB_RESUME_DONE,
+                                             XHCI_HUB_C_PORT_CONNECTION),
+                         1, &tries, &d);
+    CHECK(d.Disconnect && d.Connect && !d.Retry,
+          "a held device replaced mid-resume is torn down and re-enumerated");
 
     XhciHubPortDecide(XHCI_ENUM_BOUND, on, 0, &d);
     XhciHubResumeOutcome(XHCI_ENUM_BOUND, XHCI_HUB_RESUME_DONE, 1, &tries, &d);

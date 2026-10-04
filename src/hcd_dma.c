@@ -115,6 +115,49 @@ VOID HcdDmaClose(PHCD_CONTROLLER hc)
     hc->Dma = NULL;
 }
 
+/*
+ * A stream endpoint's block (31-A.1; xhci_stream.h, XhciStreamLayout): the
+ * Primary Stream Context Array and every stream's ring, one allocation per
+ * endpoint with streams open - the second-allocation route design record 13
+ * section 11.2 left for streams, since the fixed block's ring pool is sized
+ * for endpoints, not for 31 rings at a time. Whole pages, cache-enabled as
+ * the main block is, below 4 GB by the adapter's Dma32BitAddresses; NULL
+ * when the allocation fails or lands above 4 GB, which no pointer field
+ * here can name. IRQL: PASSIVE_LEVEL.
+ */
+PVOID HcdDmaStreamAlloc(PHCD_CONTROLLER hc, ULONG bytes, PPHYSICAL_ADDRESS pa)
+{
+    PVOID va;
+
+    if (hc->Dma == NULL || bytes == 0) {
+        return NULL;
+    }
+    va = hc->Dma->DmaOperations->AllocateCommonBuffer(hc->Dma, bytes, pa,
+                                                      TRUE);
+    if (va != NULL && pa->HighPart != 0) {
+        hc->Dma->DmaOperations->FreeCommonBuffer(hc->Dma, bytes, *pa, va,
+                                                 TRUE);
+        va = NULL;
+    }
+    return va;
+}
+
+/* Its release, once the controller holds no pointer into it - or, while a
+ * bus master may still run (CommonBufferPinned), kept for good and counted,
+ * as the main block is kept (HcdDmaClose). IRQL: PASSIVE_LEVEL. */
+VOID HcdDmaStreamFree(PHCD_CONTROLLER hc, ULONG bytes, PHYSICAL_ADDRESS pa,
+                      PVOID va)
+{
+    if (va == NULL) {
+        return;
+    }
+    if (hc->Dma == NULL || hc->CommonBufferPinned) {
+        hc->CommonBuffersKept++;
+        return;
+    }
+    hc->Dma->DmaOperations->FreeCommonBuffer(hc->Dma, bytes, pa, va, TRUE);
+}
+
 /* ----------------------------------------------------------------------- */
 /* The map pump (26-A.5; design record 13 section 11.3)                     */
 /* ----------------------------------------------------------------------- */

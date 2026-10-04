@@ -357,7 +357,7 @@ separates its causes in one command:
 
 | `-probe` says | It means |
 |---|---|
-| `the miniport ANSWERED` | the channel is live; take the dump |
+| `the driver ANSWERED` (`the miniport ANSWERED` before 2.0.0.0) | the channel is live; take the dump |
 | `the request reached a miniport and it DECLINED` | usbport is fine. Two situations, and the driver cannot tell you which; see below |
 | `cannot open` | no usbport HCD link on this machine at all |
 | opens, but `DeviceIoControl failed` | something else owns that name; try `-c 1`, `-c 2` |

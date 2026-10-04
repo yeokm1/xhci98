@@ -43,8 +43,17 @@ under-covers: a header nothing includes changing is a false positive, and a
 false positive here costs a rebuild while a false negative ships a binary
 nobody can reproduce.
 
+.PARAMETER Driver
+Which binary: `xhci98` (the default; `src\`, `xhci98.srcstamp` beside
+`xhci98.sys`) or `xhciuas`, the UAS class driver of roadmap task 31-A.2
+(`src\uas\`, `xhciuas.srcstamp` beside `xhciuas.sys`). The UAS driver's
+set is `src\uas\sources`' list, every header in `src\uas\` and, because it
+includes `xhci_compat.h`, `xhci_version.h` and `xhci98_streams.h` from
+`src\`, every header in `src\` too - over-covering, as above.
+
 .PARAMETER Write
-The `src\obj*\i386` directory holding the binary to stamp.
+The `src\obj*\i386` (or `src\uas\obj*\<arch>`) directory holding the
+binary to stamp.
 
 .PARAMETER Check
 The same directory, to verify. Answers exit 0 when both the sources and the
@@ -63,7 +72,9 @@ Both take the directory, not the file: the stamp is written beside
 #>
 param(
     [string]$Write = "",
-    [string]$Check = ""
+    [string]$Check = "",
+    [ValidateSet("xhci98", "xhciuas")]
+    [string]$Driver = "xhci98"
 )
 
 $ErrorActionPreference = "Stop"
@@ -73,6 +84,14 @@ $repo = Split-Path -Parent $PSScriptRoot
 $srcDir = Join-Path $repo "src"
 $stampName = "xhci98.srcstamp"
 $binaryName = "xhci98.sys"
+# The parent headers a driver in a subdirectory of src\ includes by path.
+$parentHeaders = $false
+if ($Driver -eq "xhciuas") {
+    $srcDir = Join-Path $repo "src\uas"
+    $stampName = "xhciuas.srcstamp"
+    $binaryName = "xhciuas.sys"
+    $parentHeaders = $true
+}
 # Prefixed rather than listed like a source file, so the source comparison
 # below cannot mistake it for a file that appeared in src\.
 $binaryTag = "BINARY"
@@ -99,6 +118,11 @@ function Get-SourceFiles {
     }
     foreach ($n in @("sources", "makefile")) {
         if (Test-Path -LiteralPath (Join-Path $srcDir $n)) { $wanted.Add($n) }
+    }
+    if ($parentHeaders) {
+        foreach ($f in (Get-ChildItem -LiteralPath (Split-Path -Parent $srcDir) -File)) {
+            if ($f.Extension -ieq ".h") { $wanted.Add("..\" + $f.Name) }
+        }
     }
 
     return @($wanted | Sort-Object -Unique)

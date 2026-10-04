@@ -267,6 +267,16 @@
             Family   = 'win7'
             CloneFrom = @{ Image = 'win7.img'; Snapshot = 'win7-clean-autologon' }
         }
+        # VISTA (28-V.1). There is no `vista` Family: a Vista x86 or x64 target
+        # takes Family = 'win7' (NT 6.0 and 6.1 share the Version 300 path and
+        # the in-box class drivers the rows name), plus Arch = 'amd64' for x64.
+        # Every ExpectNoDriver reason that names win7 was measured on Windows 7,
+        # not Vista; a row where Vista disagrees is a reading to report, not a
+        # reason to edit the set. Vista x64 also stops at the Advanced Boot
+        # Options menu on every boot (its clean-autologon snapshot carries
+        # advancedoptions), and this harness sends no keys: send `up`, `up`,
+        # `ret` on the target's monitor while the run waits for the boot.
+
         # THE WINDOWS ME TARGET (docs\contributing\build-and-test.md, "Windows
         # ME target VM"). Installed by hand from a Windows ME CD into a new
         # image, so it has no CloneFrom, and `PrepareOnly` keeps it out of both

@@ -2083,6 +2083,126 @@ static void testHubPortVectorTable(void)
 
 /* ------------------------------------------------------------------ */
 
+/*
+ * **SuperSpeed hubs (roadmap-hcd.md 30-A.1, 30-A.2).** The bus attaches a
+ * SuperSpeed hub's node at its speed class and folds its 12-byte type 0x2A
+ * descriptor through the same entry point: the fold reads bNbrPorts and
+ * wHubCharacteristics at the offsets both descriptor types share, records
+ * the type without requiring 0x29, and the marking is Hub and Number of
+ * Ports with no TT field. A SuperSpeed path has no transaction translator,
+ * a SuperSpeed hub's port 15 is its own route nibble, five SuperSpeed hubs
+ * deep is the ceiling as for USB 2.0, and the USB 2.0 half of the same unit
+ * on the companion root port is a separate tree the SuperSpeed one never
+ * touches - in either direction, including at teardown.
+ */
+static void testSuperSpeedHubs(void)
+{
+    XHCI_SETUP_PACKET s;
+    XHCI_TOPO_SNOOP snoop;
+    XHCI_TOPO_HUBMARK mark;
+    XHCI_TOPO_CHILD child;
+    XHCI_TOPO_TT tt;
+    ULONG addr;
+    /* bLength 12, 0x2A, 4 ports, wHubCharacteristics with bits 6:5 set
+     * (reserved at SuperSpeed: must not become a TTT), bPwrOn2PwrGood,
+     * bHubContrCurrent, bHubHdrDecLat, wHubDelay, DeviceRemovable. */
+    static UCHAR ssDesc[12] = { 12, 0x2A, 4, 0x69, 0x00, 50, 0, 4, 0x90,
+                                0x01, 0x00, 0x00 };
+    static UCHAR ssDesc15[12] = { 12, 0x2A, 15, 0x09, 0x00, 50, 0, 4, 0x90,
+                                  0x01, 0x00, 0x00 };
+
+    resetTopo();
+
+    /* The SuperSpeed half on root port 5, its USB 2.0 half on root port 1. */
+    CHECK_EQ(XhciTopoAttachRoot(&topo, 2, 5, 0, XHCI_SPEED_SUPER), 1,
+             "a SuperSpeed hub attaches at its root port");
+    CHECK_EQ(XhciTopoAttachRoot(&topo, 3, 1, 0, XHCI_SPEED_HIGH), 1,
+             "its USB 2.0 half attaches on the companion");
+    s = setupOf(0xA0, 0x06, 0x2A00, 0, 12);
+    XhciTopoObserveSetup(&topo, 2, &s, &snoop);
+    CHECK_EQ(snoop.Reply, XHCI_TOPO_REPLY_HUB_DESC,
+             "GET_DESCRIPTOR(0x2A00) is a hub descriptor request");
+    CHECK_EQ(foldReply(&topo, &snoop, ssDesc, 12), 1,
+             "the SuperSpeed descriptor folds");
+    CHECK_EQ(topo.DescriptorsBad, 0, "and is not malformed");
+    CHECK_EQ(nodeOrEmpty(XhciTopoFind(&topo, 2))->PortCount, 4,
+             "bNbrPorts at offset 2");
+    CHECK_EQ(nodeOrEmpty(XhciTopoFind(&topo, 2))->DescriptorType, 0x2A,
+             "type 0x2A recorded");
+    CHECK_EQ(nodeOrEmpty(XhciTopoFind(&topo, 2))->Flags &
+                 XHCI_TOPO_F_DESC_TYPE_OK, 0,
+             "and not taken for 0x29");
+    /* Even a selected alternate must not make a SuperSpeed hub multi-TT. */
+    XhciTopoApplySetInterface(&topo, 2, 1);
+    CHECK_EQ(XhciTopoHubMark(XhciTopoFind(&topo, 2), XHCI_SPEED_SUPER, &mark),
+             1, "a described SuperSpeed hub is markable");
+    CHECK_EQ(mark.Hub, 1, "Hub = 1");
+    CHECK_EQ(mark.NumberOfPorts, 4, "Number of Ports");
+    CHECK_EQ(mark.TtThinkTime, 0, "no TTT: bits 6:5 are not a think time");
+    CHECK_EQ(mark.MultiTt, 0, "no MTT at SuperSpeed");
+
+    /* A device on its port 3: tier 1, route 0x3, root port 5, no TT. */
+    CHECK_EQ(XhciTopoChildOf(&topo, 2, 3, &child), 1, "(a position)");
+    CHECK_EQ(child.Route, 0x3UL, "route nibble 0 is the port");
+    CHECK_EQ(child.RootPort, 5, "the SuperSpeed root port");
+    CHECK_EQ(child.Tier, 1, "tier 1");
+    CHECK_EQ(XhciTopoTtFor(&topo, 2, 3, &tt), 0,
+             "a SuperSpeed device behind a SuperSpeed hub has no TT");
+    CHECK_EQ(tt.HubAddress, 0, "and no TT slot");
+
+    /* A second SuperSpeed hub on port 3, with 15 ports: port 15 is the
+     * nibble 15 itself, no clamp involved. */
+    CHECK_EQ(XhciTopoAttachChild(&topo, 4, &child, XHCI_SPEED_SUPER), 1,
+             "a SuperSpeed hub one tier down");
+    s = setupOf(0xA0, 0x06, 0x2A00, 0, 12);
+    XhciTopoObserveSetup(&topo, 4, &s, &snoop);
+    CHECK_EQ(foldReply(&topo, &snoop, ssDesc15, 12), 1, "(15-port fold)");
+    CHECK_EQ(XhciTopoChildOf(&topo, 4, 15, &child), 1, "(port 15)");
+    CHECK_EQ(child.Route, 0xF3UL, "port 15 is nibble F, exactly");
+    CHECK_EQ(child.Tier, 2, "tier 2");
+    CHECK_EQ(XhciTopoTtFor(&topo, 4, 15, &tt), 0,
+             "no TT two SuperSpeed tiers down either");
+    CHECK_EQ(XhciTopoChildOf(&topo, 4, 7, &child), 1, "(port 7)");
+    CHECK_EQ(child.Route, 0x73UL, "route 0x73");
+
+    /* Five SuperSpeed hubs deep: hubs 2 and 4 are tiers 0 and 1; three
+     * more at tiers 2, 3 and 4 on port 1 each, then the sixth's children
+     * are unroutable. */
+    for (addr = 5; addr <= 7; addr++) {
+        CHECK_EQ(XhciTopoChildOf(&topo, addr - 1, 1, &child), 1,
+                 "(next tier)");
+        CHECK_EQ(XhciTopoAttachChild(&topo, addr, &child, XHCI_SPEED_SUPER),
+                 1, "a SuperSpeed hub further down");
+    }
+    CHECK_EQ(XhciTopoChildOf(&topo, 7, 2, &child), 1, "(a fifth-tier device)");
+    CHECK_EQ(child.Tier, 5, "the fifth tier");
+    CHECK_EQ(child.TooDeep, 0, "still routable");
+    CHECK_EQ(child.Route, 0x21113UL, "five nibbles, hand-computed");
+    CHECK_EQ(XhciTopoAttachChild(&topo, 8, &child, XHCI_SPEED_SUPER), 1,
+             "a fifth-tier SuperSpeed hub attaches");
+    CHECK_EQ(XhciTopoChildOf(&topo, 8, 1, &child), 1, "(sixth tier)");
+    CHECK_EQ(child.TooDeep, 1, "its children are too deep");
+
+    /* The USB 2.0 half's tree: its own TT, untouched by the SuperSpeed
+     * nodes, which no TT walk ever crosses into. */
+    CHECK_EQ(XhciTopoTtFor(&topo, 3, 3, &tt), 1,
+             "the USB 2.0 half is its children's TT");
+    CHECK_EQ(tt.HubAddress, 3, "named by its own slot");
+    CHECK_EQ(XhciTopoChildOf(&topo, 3, 3, &child), 1, "(HS position)");
+    CHECK_EQ(child.RootPort, 1, "on the USB 2.0 root port");
+    CHECK_EQ(child.Route, 0x3UL,
+             "the same route as the SuperSpeed half's port 3, another port");
+
+    /* The SuperSpeed half leaves: its whole subtree with it, and the USB
+     * 2.0 half stays. */
+    XhciTopoDetach(&topo, 2);
+    CHECK(XhciTopoFind(&topo, 2) == NULL, "the SuperSpeed hub is gone");
+    CHECK(XhciTopoFind(&topo, 4) == NULL, "its child hub with it");
+    CHECK(XhciTopoFind(&topo, 8) == NULL, "down to the fifth tier");
+    CHECK(XhciTopoFind(&topo, 3) != NULL, "the USB 2.0 half remains");
+    CHECK_EQ(topo.Count, 1, "one node left");
+}
+
 int main(void)
 {
     testResetIsEmpty();
@@ -2102,6 +2222,7 @@ int main(void)
     testMultiTt();
     testHubMark();
     testTableFull();
+    testSuperSpeedHubs();
 
     /* Task 27-A.4. */
     testPlacements();

@@ -867,6 +867,52 @@ try {
         Assert-True (Test-Path -LiteralPath $uploadZip) "no upload archive was written when assembled without a package root."
         Assert-True (-not (Test-Path -LiteralPath $noOut)) "the run created the package root it was told did not exist."
 
+        # --- the UAS class driver's pair (roadmap task 31-A.2) ---------------
+        #
+        # A flavour directory carrying xhciuas.inf is gated by that INF's own
+        # gate in place: the pair is carried into the asset when it passes,
+        # and a directory whose UAS INF would bind Bulk-Only devices is
+        # refused. Where the pair is absent (every version before 2.0.0.0, and
+        # the cases above) nothing is required of it in this mode.
+        Write-Step "the upload set gates the UAS class driver's pair by its own INF"
+        $uasInfSrc = Join-Path $repo "src\uas\xhciuas.inf"
+        foreach ($fl in @("release", "debug")) {
+            Copy-Item -LiteralPath $uasInfSrc -Destination (Join-Path $pubRoot "$fl\xhciuas.inf") -Force
+            [System.IO.File]::WriteAllBytes((Join-Path $pubRoot "$fl\xhciuas.sys"),
+                [System.Text.Encoding]::ASCII.GetBytes("stand-in xhciuas.sys, $fl flavour"))
+        }
+        Remove-Item -LiteralPath $uploadDir -Recurse -Force
+        Remove-Item -LiteralPath $uploadZip -Force
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
+                               "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -eq 0) ("the upload set was not assembled with the UAS pair present:`n" + $r.Output)
+        Assert-True ($r.Output -match "carries the UAS class driver") `
+            ("expected the UAS pair to be gated by its own INF. Output:`n" + $r.Output)
+        foreach ($fl in @("release", "debug")) {
+            foreach ($name in @("xhciuas.sys", "xhciuas.inf")) {
+                Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\$name")) `
+                    "'$name' is missing from the upload set's $fl\ directory though the published one carries it."
+            }
+        }
+        $uasBad = [System.IO.File]::ReadAllText($uasInfSrc).Replace("Prot_62", "Prot_50")
+        [System.IO.File]::WriteAllBytes((Join-Path $pubRoot "release\xhciuas.inf"),
+            [System.Text.Encoding]::ASCII.GetBytes($uasBad))
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
+                               "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -ne 0) "a published UAS INF binding a Bulk-Only id was assembled into the asset."
+        Assert-True ($r.Output -match "check-uas-inf") `
+            ("expected the refusal to name the UAS INF gate. Output:`n" + $r.Output)
+        # Back to the fixture the cases below were written against.
+        foreach ($fl in @("release", "debug")) {
+            Remove-Item -LiteralPath (Join-Path $pubRoot "$fl\xhciuas.inf") -Force
+            Remove-Item -LiteralPath (Join-Path $pubRoot "$fl\xhciuas.sys") -Force
+        }
+        if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
+        if (Test-Path -LiteralPath $uploadZip) { Remove-Item -LiteralPath $uploadZip -Force }
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
+                               "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -eq 0) ("the upload set did not assemble again once the UAS pair was removed:`n" + $r.Output)
+
         # --- and only the current cut's asset -------------------------------
         #
         # The INF gate this mode runs encodes the current release's rules, and
@@ -1470,6 +1516,61 @@ try {
     Remove-Variable -Name Version, Flavor, ReleasesDir, UploadDir -ErrorAction SilentlyContinue
     Remove-Variable -Name boundArgs -Scope Script -ErrorAction SilentlyContinue
 
+    # --- a draft is refused: no TODO(...) or TBD reaches a user -------------
+    #
+    # Roadmap task 32.3. The 2.0.0.0 release notes, readme template and
+    # history entry were drafted ahead of their readings, each owed reading
+    # tagged TODO(...) or TBD, and make-release.ps1 refuses a cut while any is
+    # left in the history entry, the release notes or the rendered readme.
+    # Like the repair-command case above, the matcher is EXECUTED: its body is
+    # loaded from make-release.ps1's text and driven with fixtures. Then the
+    # two call sites are held to the order that makes the refusal useful -
+    # the source check before the build, the readme check before the readme
+    # is written, both long before the publish swap.
+    Write-Step "a draft marker in the history entry, release notes or readme refuses the cut"
+    $fnAt = $releaserText.IndexOf('function Find-DraftMarkers')
+    Assert-True ($fnAt -ge 0) "make-release.ps1 no longer has Find-DraftMarkers, so a cut can publish a TODO(...) line."
+    if ($fnAt -ge 0) {
+        $fnEnd = $releaserText.IndexOf("`n}", $fnAt)
+        Invoke-Expression $releaserText.Substring($fnAt, $fnEnd - $fnAt + 2)
+        $draftFixture = @(
+            "A finished sentence.",
+            "Audio at a root port: TODO(bench).",
+            "## 9.9.9.9 - TBD",
+            "lower-case todo( and TBDx and xTBD are prose, not markers",
+            "Another finished sentence."
+        )
+        $found = @(Find-DraftMarkers -Lines $draftFixture -Label "fixture")
+        Assert-True ($found.Count -eq 2) ("Find-DraftMarkers found " + $found.Count + " marker(s) in the fixture, not 2: " + ($found -join " | "))
+        Assert-True ($found.Count -ge 1 -and $found[0] -eq "fixture line 2: Audio at a root port: TODO(bench).") ("the first hit is not reported with its label and line: " + ($found -join " | "))
+        Assert-True ($found.Count -ge 2 -and $found[1] -eq "fixture line 3: ## 9.9.9.9 - TBD") ("a TBD heading is not reported: " + ($found -join " | "))
+        $clean = @(Find-DraftMarkers -Lines @("Validated.", "Nothing owed here.") -Label "clean")
+        Assert-True ($clean.Count -eq 0) ("Find-DraftMarkers reported a clean text as a draft: " + ($clean -join " | "))
+        $empty = @(Find-DraftMarkers -Lines @() -Label "empty")
+        Assert-True ($empty.Count -eq 0) "Find-DraftMarkers reported markers in an empty text."
+    }
+    $draftMarks = @(
+        @{ Name = "the history and release-notes draft check"; Find = '$draftHits = @(Find-DraftMarkers -Lines $historyLines' },
+        @{ Name = "the make-package call";                     Find = '& powershell.exe @pkgArgs' },
+        @{ Name = "the rendered-readme draft check";           Find = '$readmeDraft = @(Find-DraftMarkers -Lines ($readme' },
+        @{ Name = "the readme write";                          Find = 'Write-GeneratedText -Path (Join-Path $destRoot "readme.txt")' },
+        @{ Name = "the publish swap";                          Find = 'Move-Item -LiteralPath $destRoot -Destination $finalRoot' }
+    )
+    $draftAt = @()
+    foreach ($m in $draftMarks) {
+        $i = $releaserText.IndexOf($m.Find)
+        Assert-True ($i -ge 0) ("make-release.ps1 no longer contains " + $m.Name + " as this test recognises it.")
+        $draftAt += $i
+    }
+    if (@($draftAt | Where-Object { $_ -lt 0 }).Count -eq 0) {
+        for ($i = 1; $i -lt $draftMarks.Count; $i++) {
+            Assert-True ($draftAt[$i - 1] -lt $draftAt[$i]) `
+                ("$($draftMarks[$i - 1].Name) must come before $($draftMarks[$i].Name) in make-release.ps1.")
+        }
+    }
+    Assert-True ($releaserText.Contains('Join-Path $repo "docs\using\release-notes.md"')) `
+        "make-release.ps1's draft check no longer reads docs\using\release-notes.md."
+
     # --- the readme template may not carry the two claims 1.0.1.0 shipped ----
     #
     # roadmap Phase 20, F7. The rendered readme.txt is byte-identical to the
@@ -1586,6 +1687,34 @@ try {
     Assert-True ((Invoke-Stamp "-Check" $stampWork) -eq 1) `
         "a binary swapped under an unchanged stamp must be refused (audit H13)."
     [System.IO.File]::WriteAllBytes($stampSys, [byte[]](1, 2, 3, 4))
+
+    # The UAS class driver's stamp (task 31-A.2): its own file name, its own
+    # binary, and its source set from src\uas plus the src\ headers it
+    # includes - the same two answers for the same two cases.
+    $uasStampWork = Join-Path $script:work "stamp-uas"
+    New-Item -ItemType Directory -Path $uasStampWork | Out-Null
+    $uasStampSys = Join-Path $uasStampWork "xhciuas.sys"
+    [System.IO.File]::WriteAllBytes($uasStampSys, [byte[]](5, 6, 7, 8))
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $null = & powershell -NoProfile -ExecutionPolicy Bypass -File $stampScript -Driver xhciuas -Write $uasStampWork 2>&1
+        $uasWrite = $LASTEXITCODE
+        $null = & powershell -NoProfile -ExecutionPolicy Bypass -File $stampScript -Driver xhciuas -Check $uasStampWork 2>&1
+        $uasCheck = $LASTEXITCODE
+        [System.IO.File]::WriteAllBytes($uasStampSys, [byte[]](5, 6, 7, 9))
+        $null = & powershell -NoProfile -ExecutionPolicy Bypass -File $stampScript -Driver xhciuas -Check $uasStampWork 2>&1
+        $uasSwap = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $saved
+    }
+    $uasStampText = [System.IO.File]::ReadAllText((Join-Path $uasStampWork "xhciuas.srcstamp"))
+    Assert-True ($uasWrite -eq 0 -and $uasCheck -eq 0) "source-stamp.ps1 -Driver xhciuas did not write and pass a fresh stamp."
+    Assert-True ($uasSwap -eq 1) "a UAS binary swapped under an unchanged stamp must be refused."
+    Assert-True ($uasStampText -cmatch '(?m)^BINARY [0-9A-F]{64} xhciuas\.sys\r?$' -and
+                 $uasStampText -cmatch '(?m)^[0-9A-F]{64} uas_xport\.c\r?$' -and
+                 $uasStampText -cmatch '(?m)^[0-9A-F]{64} \.\.\\xhci98_streams\.h\r?$') `
+        "the UAS stamp does not cover its binary, its own sources and the src\ headers it includes."
 
     # A stamp written before the BINARY line existed. Sources agree, identity
     # is unavailable: exit 2, which is the ONLY case -AllowUnstampedDriver may
