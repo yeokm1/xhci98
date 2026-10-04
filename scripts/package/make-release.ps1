@@ -3222,40 +3222,63 @@ it anyway if it is not there - the reports are what fix it:
 
       https://github.com/yeokm1/xhci98/issues
 
-The ones you are most likely to meet:
+Known limitations:
 
-  * NO USB STORAGE ON A WINDOWS 98 SE WITHOUT NUSB'S MASS-STORAGE PART
-    (section 3). Mice, keyboards, hubs and audio work without it.
+  * THE DRIVER NEVER STARTS SELECTIVE SUSPEND (section 5). Idle devices and
+    hub ports are never suspended to save power. A suspend or resume a hub
+    reports is handled.
 
-  * IDLE DEVICES AND HUB PORTS ARE NEVER PUT TO SLEEP (section 5).
+  * UPGRADING IN PLACE OVER A RUNNING 1.2.0.0 UNDER NUSB BLUE-SCREENS.
+    NUSB's usbport.sys crashes the machine as it stops 1.2.0.0, before this
+    release runs. Follow section 4, which avoids it.
 
-  * WINDOWS 98 SE: A USB AUDIO DEVICE PLUGGED IN SOON AFTER A COLD BOOT CAN
-    WEDGE THE MACHINE as Windows loads its driver, with the taskbar clock
-    stopped. It is above this driver - the earlier releases showed it too -
-    and it depends on timing: plug a USB audio device in once the machine
-    has settled for a couple of minutes.
+  * USB STORAGE ON WINDOWS 98 IS SLOWER THAN THE DRIVE. An observation, not
+    a defect found: Windows 98 sends one command at a time. On a ThinkPad
+    P14s Gen 1 with an MSSU10 drive at 64 KB, about 208 MB/s on Windows 98
+    against 277 MB/s on Windows 11 at the same queue depth of one. This may
+    be looked into in a later release.
 
-  * WINDOWS 98 SE: A DEVICE ON A PORT WINDOWS HAS NOT SEEN BEFORE RAISES THE
-    ADD NEW HARDWARE WIZARD, and that port waits until it is answered.
+  * WINDOWS VISTA X64 AND 7 X64 NEED DRIVER SIGNATURE ENFORCEMENT DISABLED.
+    The driver is not signed. Driver signature enforcement must be disabled
+    at every start, or the controller sits at Code 39.
 
-  * SUPERSPEED ISOCHRONOUS DEVICES, LINKS FASTER THAN 5 GBIT/S AND
-    SUPERSPEEDPLUS HUBS HAVE NOT BEEN TESTED AT ALL. The driver accepts
-    them, built from the specification. A report from one is welcome.
+  * NO USB STORAGE ON A STOCK WINDOWS 98 SE (section 3). With no NUSB
+    installed there is no mass-storage driver at all. HID and audio still
+    work.
 
-  * STANDBY AND HIBERNATION HAVE NOT BEEN TESTED.
+  * WINDOWS ME: A UAS DRIVE AS THE FIRST USB STORAGE DEVICE SHOWS CODE 2.
+    ME has not yet copied its own USBNTMAP.SYS and USBMPHLP.PDR, which it
+    installs only when its first ordinary USB stick is plugged in. Plug in
+    any ordinary USB stick once, then unplug the UAS drive and plug it back
+    in. No Remove and no restart are needed.
 
-  * WINDOWS ME: RE-ENABLING THE CONTROLLER WITH A USB DEVICE ATTACHED CAN
-    MAKE WINDOWS ME STOP RESPONDING. Unplug USB devices before re-enabling
-    it. If ME stops responding, restart it and re-enable the controller
-    with nothing attached. Being fixed.
+  * WINDOWS ME: RE-ENABLING THE CONTROLLER WITH A USB MOUSE OR KEYBOARD
+    ATTACHED MAKES WINDOWS ME STOP RESPONDING. A USB storage device alone is
+    fine. Unplug the mouse or keyboard before re-enabling the controller. If
+    ME stops responding, restart it and re-enable the controller with
+    nothing attached. Being fixed.
 
   * WINDOWS ME: DO NOT UNPLUG A DEVICE WHILE WINDOWS IS INSTALLING IT. ME's
     own device manager stops responding; it does the same on Microsoft's
-    own USB stack.
+    own USB stack. Wait for the install to finish before unplugging.
 
   * A DEVICE MOVED TO A DIFFERENT PORT IS FOUND AGAIN AS NEW HARDWARE. This
     driver names a device by its port; Microsoft's hub driver uses the
-    device's serial number.
+    device's serial number. A later release may do the same.
+
+Untested ground:
+
+  * SUPERSPEED ISOCHRONOUS TRANSFERS. Built from the specification. No
+    SuperSpeed isochronous device has been held and QEMU models none.
+
+  * SUPERSPEEDPLUS (USB 3.1 GEN 2, USB 3.2 GEN 1X2 AND GEN 2X2). Accepted at
+    its trained rate, built from the specification. No Gen 2 device has been
+    tested, so every mode is untested.
+
+  * A UAS-ONLY DRIVE AT SUPERSPEED ON A CONTROLLER WITHOUT STREAMS. It is
+    sent back to its USB 2.0 port and runs UAS at High Speed, or is refused
+    if it has no USB 2.0 port. Built from the specification; no such
+    controller has been held.
 
 
 ==============================================================================

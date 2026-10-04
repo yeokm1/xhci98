@@ -474,15 +474,19 @@ Each was measured, in a virtual machine unless it names a physical machine.
 - **Windows 98 SE: a device at a location the system has not seen before
   raises the Add New Hardware Wizard, and holds that port until it is
   answered.** That is per port and by design of Windows 98.
-- **The power handlers have not run.** No test machine has been put into
-  standby or hibernation with this driver; see "Untested ground".
 - **Windows 98 shows no driver version on the Driver tab**, only the file
   date; the four-part version is under Driver File Details, which also lists
   `xhci98.tmp`, a leftover of the install's temporary copy (cosmetic).
-- **Windows ME: re-enabling the controller with a device attached can make
-  Windows ME stop responding.** Unplug USB devices before re-enabling the
-  controller in Device Manager. If ME stops responding, restart it and
-  re-enable the controller with nothing attached. Being fixed.
+- **Windows ME: re-enabling the controller with a USB mouse or keyboard
+  attached makes Windows ME stop responding.** A USB storage device alone
+  is fine. Unplug the mouse or keyboard before re-enabling the controller in
+  Device Manager. If ME stops responding, restart it and re-enable the
+  controller with nothing attached. Being fixed.
+- **USB storage on Windows 98 is slower than the drive.** An observation,
+  not a defect found: Windows 98 sends one command at a time. On the P14s
+  with the MSSU10 at 64 KB, about 208 MB/s on Windows 98 against 277 MB/s
+  on Windows 11 at the same queue depth of one. This may be looked into in a
+  later release.
 - **Windows ME: do not unplug a device while Windows is installing it.**
   ME's own device manager stops responding; it does the same on Microsoft's
   own USB stack.
@@ -532,7 +536,6 @@ information.
 | SuperSpeed hubs, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only; no virtual machine models one. On Windows 2000, which has no bench, built from the specification and untested |
 | High-Speed hubs, single- and multi-TT, and Full and Low Speed devices behind them, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only. Virtual machines model only a Full-Speed hub, so on every other target the High-Speed paths rest on host tests |
 | A UAS-only device at SuperSpeed on a controller that cannot stream | Built from the specification against host tests; no such controller held |
-| Standby and hibernation | The power handlers have not run: no test machine sleeps |
 
 ## Licensing
 

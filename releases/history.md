@@ -59,9 +59,9 @@ four directories, each now holding both drivers.
 - Known limitations: the driver never puts an idle device or hub port to
   sleep; Windows 98 SE can wedge when a USB audio device is plugged in soon
   after a cold boot, as it could under `1.2.0.0`; on Windows ME, re-enabling
-  the controller with a device attached can hang the machine; a device moved
-  to a different port is found again as new hardware. The release notes have
-  the full list and the untested ground.
+  the controller with a USB mouse or keyboard attached hangs the machine; a
+  device moved to a different port is found again as new hardware. The
+  release notes have the full list and the untested ground.
 
 ## 1.2.0.0 - 2026-10-02
 
