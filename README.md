@@ -120,20 +120,20 @@ readme.txt     the release notes in plain text
 
 The `2.0.0.0` controller in Device Manager on the P14s Gen 1 under Windows 98 SE: Driver File Details shows `xhci98.sys` at file version `2.0.0.0`.
 
-### Upgrading from 1.2.0.0
+### Upgrading from 1.x.x.x to 2.y.y.y
 
-`2.0.0.0` replaces the `1.2.0.0` driver file, which has the same name. Going back is a reinstall of the `1.2.0.0` package.
+A `2.y.y.y` release replaces the `1.x.x.x` driver file, which has the same name; `1.2.0.0` was the last `1.x.x.x` release. Going back is a reinstall of the `1.x.x.x` package.
 
 On every system, update the "USB 2.0 eXtensible Host Controller (xhci98)" entry in Device Manager, and always pick the driver from a list rather than let Windows search: searching can reinstall the old driver from Windows' own copy instead.
 
-- **Windows 98 SE with NUSB**: do not use Update Driver while `1.2.0.0` is running: NUSB's `usbport.sys` crashes the machine with a blue screen as it stops the old driver. Instead:
+- **Windows 98 SE with NUSB**: do not use Update Driver while `1.x.x.x` is running: NUSB's `usbport.sys` crashes the machine with a blue screen as it stops the old driver. Instead:
   1. Open an MS-DOS Prompt and type `ren C:\WINDOWS\SYSTEM32\DRIVERS\XHCI98.SYS XHCI98.SAV`.
   2. Shut the machine down and switch it on again. The controller now shows a yellow mark.
   3. In Device Manager open the controller, Update Driver, "Display a list of all the drivers in a specific location", Have Disk -> the `release-x86\` directory.
   4. Pick "xHCI98 USB 3.x eXtensible Host Controller", give it the Windows 98 SE CD when it asks for `usbd.sys`, and restart when asked.
   5. Each USB device is found once more as new hardware; let Windows install it. It may ask for the CD again.
 
-  If you already updated in place and got the blue screen, restart: `2.0.0.0` comes up on its own.
+  If you already updated in place and got the blue screen, restart: the `2.y.y.y` driver comes up on its own.
 - **Windows 98 SE with SweetLow's stack**: Update Driver, "Display a list of all the drivers in a specific location", Have Disk -> the `release-x86\` directory, pick "xHCI98 USB 3.x eXtensible Host Controller". Windows does not ask you to restart, but you must: shut down and switch on again straight away. Until you do, USB devices stop working and Windows may respond slowly. After the restart each USB device is found once more as new hardware.
 - **Windows ME**: not tested. ME runs the same USB 2.0 stack as Windows 98 SE with SweetLow's, so follow that route above, restart included.
 - **Windows 2000**: Driver -> Update Driver -> "Display a list of the known drivers" -> Have Disk -> the `release-x86\` directory. Windows lists three models: pick "xHCI98 USB 3.x eXtensible Host Controller", the first, not the Root Hub or the storage entry. It starts at once with no restart; at your next restart Windows may ask for one more, say Yes.
@@ -142,7 +142,7 @@ On every system, update the "USB 2.0 eXtensible Host Controller (xhci98)" entry 
 
 These steps were tested on Windows 98 SE (NUSB and SweetLow), 2000, XP SP3 and 32-bit 7, in virtual machines. On XP x64, Vista and 7 x64 the same steps apply, pointed at `release-x64\` on the 64-bit systems; they have not been tested as an upgrade there.
 
-After upgrading you can delete the `1.2.0.0` virtual-hub values `XhciVirtualHSHub`, `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid` from the controller's driver key (see "Tuning" below for where it is). They have no effect under `2.0.0.0`, so leaving them is harmless too.
+After upgrading you can delete the `1.2.0.0` virtual-hub values `XhciVirtualHSHub`, `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid` from the controller's driver key (see "Tuning" below for where it is). They have no effect under `2.y.y.y`, so leaving them is harmless too.
 
 ### Updating xhciuas.sys over an older one
 
@@ -236,7 +236,7 @@ These come from Windows, NUSB or the driver being unsigned, and no change to thi
 
 | Limitation | Detail |
 |---|---|
-| Upgrading in place over a running `1.2.0.0` under NUSB blue-screens | NUSB's `usbport.sys` crashes the machine as it stops `1.2.0.0`, before `2.0.0.0` runs. Follow "Upgrading from 1.2.0.0" above, which avoids it. |
+| Upgrading in place over a running `1.x.x.x` under NUSB blue-screens | NUSB's `usbport.sys` crashes the machine as it stops `1.x.x.x`, before `2.y.y.y` runs. Follow "Upgrading from 1.x.x.x to 2.y.y.y" above, which avoids it. |
 | Vista x64 and 7 x64 need driver signature enforcement disabled | The driver is not signed. Driver signature enforcement must be disabled at every start, or the controller sits at Code 39. |
 | No USB storage on a stock Windows 98 SE | With no NUSB installed there is no mass-storage driver at all. HID and audio still work. |
 | Windows ME: unplugging a device while Windows installs it | ME's own device manager stops responding if a device is unplugged while Windows is still installing its driver. ME does the same on Microsoft's own USB stack. Wait for the install to finish before unplugging. |
