@@ -2419,6 +2419,9 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
     # release directory has no repository to read - so the install and usage
     # procedure is transcribed here rather than linked to. Everything below is
     # from docs\using\release-notes.md; when that file changes, change this too.
+    # Rewritten for the host controller driver and its two drivers per
+    # directory by roadmap task 32.1. Its TODO(...) lines are readings the
+    # cut (task 32.3) owes; a readme still carrying one is not ready to cut.
     #
     # **A literal here-string, not a double-quoted one.** Backtick is PowerShell's
     # escape character, so in @"..."@ every markdown `code span` would lose its
@@ -2598,8 +2601,8 @@ other.
 "@
         $readmeArchOs = @"
 
-  - Windows XP, Vista and 7, x64, through a separate 64-bit driver. On Vista
-    x64 and 7 x64 it is unsigned, so driver signature enforcement must be
+  - Windows XP, Vista and 7, x64, through separate 64-bit drivers. On Vista
+    x64 and 7 x64 they are unsigned, so driver signature enforcement must be
     disabled (section 4).
 "@
         $readmeArchOsReq = @"
@@ -2614,16 +2617,16 @@ other.
   64-BIT WINDOWS
       The same route as the 32-bit edition of the same Windows, pointed at
       RELEASE-X64\. On Windows Vista x64 and Windows 7 x64 the install works
-      on an ordinary start, but the driver runs only while driver signature
-      enforcement is disabled, as it is unsigned; otherwise the controller
-      shows Code 39. Windows XP x64 needs none of that.
+      on an ordinary start, but the drivers run only while driver signature
+      enforcement is disabled, at every start, as they are unsigned;
+      otherwise the controller shows Code 39 and nothing on it works.
+      Windows XP x64 needs none of that.
 "@
         $readmeArchFiles = @"
 
-  WINDOWS XP x64  Nothing to do either, from Driver Cache\amd64: usbport.sys
-                  and usbhub.sys out of sp2.cab, usbd.sys and usbui.dll out
-                  of driver.cab beside it. The machine tried (a virtual one,
-                  which had never had a USB controller) asked for nothing.
+  WINDOWS XP x64  Nothing to do either: both come from Driver Cache\amd64.
+                  The machine tried (a virtual one, which had never had a
+                  USB controller) asked for no file.
 "@
     }
 
@@ -2633,42 +2636,26 @@ other.
     $template = @'
 ==============================================================================
                               x h c i 9 8   {VERSION}
-  USB 2.0 for Windows 98 SE, ME, 2000, XP, Vista and 7 on xHCI-only machines
+    USB 3.x for Windows 98 SE, ME, 2000, XP, Vista and 7 on xHCI machines
 ==============================================================================
 
 Released {DATE}.{INCOMPLETE}
 
-Most PCs made from the mid 2010s onward have only USB 3.0 (xHCI) controllers,
-which older Windows cannot use. This driver drives them as USB 2.0 on:
+Most PCs made from the mid 2010s onward have only USB 3.x (xHCI)
+controllers, which older Windows cannot use. This package drives them on:
 
   - Windows 98 SE, ME, 2000 SP4, XP, Vista and 7, 32-bit{ARCHOS}
 
+xhci98.sys is a whole USB host controller driver. It runs the controller,
+the root hub, every hub behind it and the splitting of composite devices
+itself, and Windows' own drivers for keyboards, mice, storage, audio and
+network adapters sit on top of it unchanged. It drives SuperSpeed (USB 3.x)
+devices and hubs as well as High, Full and Low Speed ones. The second driver
+beside it, xhciuas.sys, runs UAS (USB Attached SCSI) storage, which none of
+these systems has a driver of its own for.
+
 Only Windows 98 SE has been validated on real hardware; the rest in virtual
-machines only. Speeds are USB 2.0 (High, Full and Low Speed); a USB 3.0
-device still works, at USB 2.0 speed, through the same connector.
-
-
-WHY ONLY USB 2.0, WHEN THE CONTROLLER IS A USB 3.0 ONE
-------------------------------------------------------------------------------
-
-The existing usbport.sys this driver depends on does not support USB 3.0, and
-neither does anything above it. This driver, xhci98.sys, is only the miniport
-underneath that stack.
-
-SuperSpeed would mean rewriting the entire USB host controller driver for
-every one of these operating systems. That is significantly more work than
-this driver, for a speed that most machines running Windows 98 or Windows
-2000 are unlikely to effectively use. The project's xHCI programming guide,
-docs/usb-xhci-info/xhci-programming.md in the source repository, summarises
-what it would take.
-
-Every USB 3.x connector (USB4 and Thunderbolt included) also carries the USB
-2.0 wires, and xHCI exposes them as a separate logical port per connector.
-This driver manages those USB 2.0 ports and leaves the USB 3.x ones
-unpowered, so a SuperSpeed-capable device falls back on the USB 2.0 port and
-runs at High Speed. What can differ on such a machine is which controller a
-given port belongs to, so the machine may show more than one unrecognised USB
-controller - install on the one XHCIQUAL reports USB 2.0 ports for.
+machines only. TODO(bench): the real-hardware reading of this release.
 
 
 ISSUE REPORTING
@@ -2690,7 +2677,7 @@ CONTENTS OF THIS FILE
 
   1. Check the machine first (optional, but recommended)
   2. What you need
-  3. The files Windows supplies
+  3. The files Windows supplies, and USB storage on Windows 98 SE
   4. Install
   5. Using it
   6. If something goes wrong
@@ -2840,9 +2827,14 @@ read; those codes are for batch files.
    controller being tested can stop responding mid-run; and do not boot or
    write a log through that same controller.
 
-A controller reporting no interrupt pin cannot be driven at all, on either
-Windows version. There is no software workaround: neither system can use the
-modern interrupt mechanism (MSI) that such a controller would require.
+A controller reporting no interrupt pin cannot be driven at all, on any of
+these systems. There is no software workaround: the driver uses the legacy
+interrupt pin and has no path for the newer mechanism (MSI) that such a
+controller would require.
+
+The checker's last criterion, "no USB 2.0 ports", dates from the earlier,
+USB 2.0-only releases. TODO(29-A.1): whether this driver accepts a
+controller with no USB 2.0 port at all.
 
 
 ==============================================================================
@@ -2851,74 +2843,52 @@ modern interrupt mechanism (MSI) that such a controller would require.
 
   Operating system   Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows
                      ME, 32-bit Windows XP (SP3), 32-bit Windows Vista (SP2)
-                     and 32-bit Windows 7 (SP1) in virtual machines only
-                     (of these, only 32-bit Windows 7 has run on a real
-                     machine, once; see section 7).{ARCHOSREQ}
+                     and 32-bit Windows 7 (SP1) in virtual machines only.
+                     Windows 2000 has never run on real hardware.{ARCHOSREQ}
 
-  On Windows 98      NUSB 3.3 or the newer SweetLow USB 2.0 stack, your
-                     choice, installed BEFORE this driver (section 4).
+  On Windows 98 SE   Nothing for the controller, hubs, mice, keyboards and
+                     audio: no USB 2.0 stack is needed. FOR USB STORAGE,
+                     NUSB 3.3 or 3.6, or at least its mass-storage part
+                     (section 3). SweetLow's USB 2.0 stack alone has no
+                     storage part.
 
-  On Windows ME      SweetLow's USB 2.0 stack, installed BEFORE this driver
-                     (section 4). NOT NUSB: that is a Windows 98 SE package.
-                     Windows ME's own USB stack has no usbport.sys, and on
-                     it this driver installs and shows Code 2.
+  On Windows ME      TODO(28-V.1): whether anything is needed first.
+                     Windows ME carries its own USB storage files. DO NOT
+                     install NUSB on Windows ME: it is a Windows 98 SE
+                     package.
 
-  On Windows 2000    SP4's own USB stack, or the standalone USB 2.0 update
-                     KB319973. DO NOT install NUSB on Windows 2000.
+  On Windows 2000,   Nothing to install. DO NOT install NUSB on these.
+  XP, Vista and 7
 
-  On Windows XP      XP's own USB stack; nothing to install. DO NOT install
-                     NUSB on Windows XP.
-
-  On Windows Vista   The system's own USB stack; nothing to install.
-  and Windows 7
-
-  Controller         xHCI, PCI class code 0C0330, at least one USB 2.0 port,
-                     a memory window below 4 GB, and a legacy interrupt pin.
+  Controller         xHCI, PCI class code 0C0330, a memory window below
+                     4 GB, and a legacy interrupt pin.
 
 
 ==============================================================================
- 3. THE FILES WINDOWS SUPPLIES
+ 3. THE FILES WINDOWS SUPPLIES, AND USB STORAGE ON WINDOWS 98 SE
 ==============================================================================
 
-xhci98.inf names two files of its own, xhci98.inf and xhci98.sys, and they
-are in:
+The package's own files are four, and they are in:
 
       {DIRLIST}
 
-Nothing else is in the package, and there is nothing to complete: a copy
-taken from the project's source repository is the same two files.
+  xhci98.inf, xhci98.sys     the USB host controller driver
+  xhciuas.inf, xhciuas.sys   the UAS storage driver
 
-Four files the driver depends on are NOT in the package, because they are
+Nothing else is in the package, and there is nothing to complete.
+
+Two files the driver depends on are NOT in the package, because they are
 Windows' own, unmodified, and no Microsoft file is in this download:
 
-  usbd.sys     The USB 2.0 root hub imports it on every target. Without it
-               the USB ROOT HUB fails: Code 2 on Windows 98 and Windows ME,
-               error 0xc0000034 naming usbhub20.sys on Windows 2000 and
-               Windows XP.
+  usbd.sys     Helper routines the drivers above this one call. Without it
+               the USB devices' own drivers do not load.
 
-  usbhub.sys   On Windows 98, the driver for devices that are more than one
-               thing at once - a sound card with a volume knob, a headset
-               with buttons, a keyboard with media keys. Without it every
-               such device stops at USB Composite Device with Code 2 and
-               does nothing at all (under NUSB's stack; SweetLow's brings
-               its own composite driver). On Windows 2000 it is the USB hub
-               driver.
-
-  usbport.sys  The USB stack this driver plugs into. Without it the
-               controller shows Code 39 and the driver never runs. On Windows
-               98 and ME the USB 2.0 stack installed first (NUSB or
-               SweetLow's) supplies it.
-
-  usbui.dll    The one file here that is only cosmetic. It adds an extra USB
-               property page in Device Manager.
+  usbui.dll    The USB property pages in Device Manager. Only cosmetic.
 
 UP TO WINDOWS XP, WINDOWS ONLY INSTALLS ITS USB FILES WHEN SETUP FINDS A USB
-CONTROLLER IT RECOGNISES, and on an xHCI-only machine it never does, so on
-such a machine none of them is there. The install in step 4 therefore asks
-Windows to copy them from its own installation source. Each is copied only
-if it is absent, so a machine that already has them - one that ever had a USB
-controller Windows recognised - keeps its own files and is asked for nothing.
-Windows Vista and Windows 7 always have all four.
+CONTROLLER IT RECOGNISES, and on an xHCI-only machine it never does. The
+install in step 4 therefore asks Windows to copy them from its own
+installation source, each only if it is absent.
 
   WINDOWS 98 SE   HAVE THE WINDOWS 98 SE INSTALLATION CD AT HAND. Unless the
                   Windows CABs are on the hard disk (C:\WINDOWS\OPTIONS\CABS,
@@ -2926,27 +2896,55 @@ Windows Vista and Windows 7 always have all four.
                   install shows "Insert Disk" asking for the Windows 98
                   Second Edition CD-ROM: insert it and click OK, and if it
                   then asks where to copy from, give it the CD's WIN98
-                  folder. It is asking for usbd.sys, usbhub.sys and
-                  usbui.dll, not for anything of this driver's.
+                  folder. It is asking for usbd.sys, not for anything of
+                  this driver's. The first mouse or keyboard can ask again,
+                  for Windows' own hidclass.sys; give it the same.
 
-  WINDOWS ME      The same as Windows 98 SE, with the Windows ME CD. The
-                  machine tried (a virtual one) had the CABs on its hard
-                  disk from its own Setup and asked for nothing.
+  WINDOWS ME      The same, with the Windows ME CD, or the CABs its Setup
+                  left on the hard disk.
 
-  WINDOWS 2000    Nothing to do: all four come from the driver cache every
-  AND XP          Windows 2000 or XP installation has (Driver Cache\i386).
-                  On 32-bit Windows XP all four are in sp3.cab; on Windows
-                  2000 three are in sp4.cab and usbui.dll in driver.cab
-                  beside it, two cabinets in one pass and still no prompt.{ARCHFILES}
+  WINDOWS 2000    Nothing to do: both come from the driver cache every
+  AND XP          installation has, with no prompt.{ARCHFILES}
 
-  WINDOWS VISTA   Nothing to do: every installation already has all four,
-  AND 7           and the install copies none of them.
+  WINDOWS VISTA   Nothing to do: every installation already has both.
+  AND 7
 
-If the prompt is cancelled the driver still installs, but the root hub fails
-as described above. That reads as a fault in this driver and is not one: put
-the CD in and install the driver again, or copy usbd.sys (and, on Windows 98
-with NUSB, usbhub.sys) out of the CD's WIN98 CABs into
-C:\WINDOWS\SYSTEM32\DRIVERS yourself.
+USB STORAGE ON WINDOWS 98 SE NEEDS NUSB'S MASS-STORAGE PART
+...........................................................
+
+Windows 98 SE has no USB storage driver, and a drive letter there comes from
+a layer this package does not replace. It needs five files, which NUSB 3.3
+and NUSB 3.6 install:
+
+      USBSTOR.INF, USBSTOR.SYS     the Bulk-Only storage driver
+      USBNTMAP.INF, USBNTMAP.SYS   what gives a USB disk a drive letter
+      USBMPHLP.PDR                 the mapping port driver
+
+They are Microsoft's, and this package does not carry them.
+
+  WITHOUT THEM a USB stick has no driver at all ("Unknown Device", Code 28),
+  and a UAS disk installs and then sits at Code 2 ("The NTKERN.VXD device
+  loader(s) for this device could not load the device driver"). A restart
+  does not change that.
+
+  WITH NUSB 3.3 OR 3.6 INSTALLED, storage works.
+
+  THE FIVE FILES CAN ALSO BE INSTALLED ON THEIR OWN, without the rest of
+  NUSB: point the Add New Hardware Wizard, or Update Driver on the device,
+  at a folder holding them. ON THE FIRST STORAGE DEVICE, ONE STEP IS NOT
+  OBVIOUS. Windows gives the new disk its own generic "Disk drive" before it
+  has seen USBNTMAP.INF, and no drive letter appears. Then:
+
+    1. Device Manager -> Disk drives -> "Disk drive" -> Driver -> Update
+       Driver, pointed at the same folder. It installs "USB Disk".
+    2. Unplug the device and plug it back in.
+
+  After that every storage device, USB stick or UAS disk, works with no
+  extra step.
+
+On Windows ME, Windows' own storage files serve USB sticks: they are copied
+from the Windows ME CABs when the first stick installs. TODO(ME): UAS disks
+on Windows ME.
 
 
 ==============================================================================
@@ -2959,95 +2957,66 @@ INSTALL FROM THE RELEASE DIRECTORY:
 
 This package carries BOTH builds side by side, RELEASE and DEBUG, each a
 complete set of files with the same names, so the directory you point
-Windows at is what decides which driver you get. RELEASE is the one you
-want. DEBUG ({DEBUGDIR}\) is the same driver built so that a
-crash on it can be traced further back. It records nothing more than RELEASE
-does, and it is there only for troubleshooting a machine that has already
-gone wrong. It prints nothing as it runs. Section 8 describes both, and
-nothing about a copied file says which one it is - so point at a directory,
-never at a loose xhci98.sys.{ARCHNOTE}
+Windows at is what decides which drivers you get. RELEASE is the one you
+want. DEBUG ({DEBUGDIR}\) is the same drivers built so that a crash on them
+can be traced further back. It records nothing more than RELEASE does, and
+it is there only for troubleshooting a machine that has already gone wrong.
+It prints nothing as it runs. Section 8 describes both, and nothing about a
+copied file says which one it is - so point at a directory, never at a
+loose .sys file.{ARCHNOTE}
 
 Put the whole unzipped package somewhere the machine can read - a floppy, a
 CD, a shared folder - then:
 
   WINDOWS 98 SE
-      A USB 2.0 stack (usbport.sys + usbhub20.sys) has to be there first:
-      either NUSB 3.3 or the newer SweetLow stack, your choice.
-
-        NUSB 3.3 - the configuration this driver is tested against.
-        Install it first. NUSB 3.6 carries the same stack and also works.
-
-        SWEETLOW'S STACK - the newer Windows XP lineage of the same port
-        driver, under which disabling, removing and upgrading this driver
-        do NOT crash Windows 98 (section 5). A system installed with
-        Windows 98 QuickInstall 1.0.1 or later already has it. On any other
-        Windows 98 SE, download
-        http://sweetlow.orgfree.com/download/usb20_win9x.zip (the same
-        files win98-driver-lib-base carries as [MBD]_sweetlow_usb2.0),
-        unzip it, right-click the USB2.INF at its root, choose Install,
-        and reboot. If NUSB is already installed,
-        first remove its USB 2.0 stack through Add/Remove Programs ("Remove
-        Unofficial Universal USB 2.0 Stack"), then install SweetLow's before
-        rebooting.
-
+      If you want USB storage, install NUSB 3.3 or 3.6 first (section 3).
       Then open Device Manager and find the unrecognised xHCI controller:
       it sits unclaimed with a yellow mark, usually under "Other devices".
       Then
           Properties -> Driver -> Update Driver -> Specify a location
-      and point it at the RELEASE-X86\ directory.
-      During the copy, on a machine that never had a USB controller Windows
-      recognised, "Insert Disk" asks for the Windows 98 Second Edition
-      CD-ROM: that is Windows fetching its own usbd.sys, usbhub.sys and
-      usbui.dll (section 3). Insert it and click OK. Reboot when asked.
+      and point it at the RELEASE-X86\ directory. "Insert Disk" may ask for
+      the Windows 98 Second Edition CD-ROM (section 3). Restart when asked.
 
       (If Windows finds the controller for you first, the Add New Hardware
       Wizard asks the same question - give it the same directory.)
 
   WINDOWS ME
-      SweetLow's stack has to be there first, and only that one: NUSB is a
-      Windows 98 SE package and is not for Windows ME. Download
-      http://sweetlow.orgfree.com/download/usb20_win9x.zip, unzip it,
-      right-click the USB2.INF at its root, choose Install, and reboot.
-      Then the same Device Manager route as Windows 98 SE:
-          Properties -> Driver -> Update Driver -> Specify a location
-      pointed at the RELEASE-X86\ directory.
-      Without the stack the driver installs and the controller shows Code 2.
-      Windows ME has only been run in a virtual machine.
+      TODO(28-V.1): the Windows ME prerequisites. Then the same Device
+      Manager route as Windows 98 SE, pointed at the RELEASE-X86\
+      directory. Windows ME has only been run in a virtual machine.
 
-  WINDOWS 2000 SP4
+  WINDOWS 2000 SP4 AND WINDOWS XP (32-BIT)
       Open Device Manager and find the unrecognised xHCI controller, then
           Properties -> Driver -> Update Driver -> Have Disk
-      and point it at the RELEASE-X86\ directory.
-      Nothing else is asked for; usbport.sys, usbd.sys, usbhub.sys and
-      usbui.dll come from the driver cache every installation has. If the
-      Found New Hardware wizard is used instead, it ends by asking for a
-      restart; No is fine, the driver is already running.
-
-  WINDOWS XP (32-BIT)
-      The same route as Windows 2000 SP4:
-          Properties -> Driver -> Update Driver -> Have Disk
-      pointed at the RELEASE-X86\ directory.
-      Choose "Continue Anyway" at the unsigned-driver warning. Nothing else
-      is asked for. Windows XP has only been run in a virtual machine.
+      and point it at the RELEASE-X86\ directory. On Windows XP choose
+      "Continue Anyway" at the unsigned-driver warning. Nothing else is
+      asked for. Windows XP has only been run in a virtual machine.
 
   WINDOWS VISTA AND WINDOWS 7 (32-BIT)
       Open Device Manager and find the unrecognised xHCI controller, then
           Update Driver Software -> Browse my computer for driver software
-      and point it at the RELEASE-X86\ directory.
-      If Windows warns that it cannot verify the publisher, install the
-      driver anyway. Do NOT right-click xhci98.inf and choose Install on
-      these systems: it asks for usbport.sys, which you cannot supply, and
-      installs no driver. Both have only been run in virtual machines.{ARCHINSTALL}
+      and point it at the RELEASE-X86\ directory. If Windows warns that it
+      cannot verify the publisher, install the driver anyway. Use Device
+      Manager, not a right-click on the INF. Both have only been run in
+      virtual machines.{ARCHINSTALL}
 
-It installs as "USB 2.0 eXtensible Host Controller (xhci98)", with a "USB
-Root Hub" underneath it. Neither should carry a warning mark.
+It installs as "xHCI98 USB 3.x eXtensible Host Controller", with "xHCI98
+USB 3.x Root Hub" underneath it. Neither should carry a warning mark.
 
->> ON WINDOWS 98 WITH NUSB, READ SECTION 5 BEFORE YOU EVER DISABLE, REMOVE <<
-   OR UPGRADE THIS DRIVER IN DEVICE MANAGER. Each of those blue-screens that
-   system, and there is a way round it. It is not this driver - Microsoft's
-   own USB drivers do the same on the same machine, and under SweetLow's
-   stack the same driver survives all three - but it is easier to know
-   before than after.
+THE UAS DRIVER installs the first time a UAS disk is plugged in: the Found
+New Hardware wizard asks for a driver for "xHCI98 USB Attached SCSI
+Storage". Point it at the same directory. No restart is needed.
+
+UPGRADING FROM THE EARLIER, USB 2.0-ONLY RELEASES (1.x)
+.......................................................
+
+This driver replaces the 1.x driver, which has the same file name,
+xhci98.sys. Going back is a reinstall of a 1.x package from its own
+download.
+
+  TODO(upgrade): the measured upgrade route from the last 1.x release on
+  each system, and whether the 1.x crash on Windows 98 with NUSB when the
+  running driver is stopped still has to be worked around.
 
 
 ==============================================================================
@@ -3055,112 +3024,36 @@ Root Hub" underneath it. Neither should carry a warning mark.
 ==============================================================================
 
 Plug devices in and they are found and installed the usual way. Keyboards,
-mice, flash drives, USB Ethernet adapters and hubs all work through the
-system's own drivers - this driver only replaces the controller layer
-underneath them.
+mice, flash drives, USB disks, USB Ethernet adapters, audio devices and hubs
+all work through the system's own drivers.
 
-Two things are specific to this driver and worth knowing in advance:
+Things specific to this driver, worth knowing in advance:
 
-  * USB 3.0 PORTS STILL WORK, AT USB 2.0 SPEED. Every USB 3.0 connector also
-    carries the USB 2.0 wires, and that is the path used. The SuperSpeed half
-    of each connector is deliberately left switched off.
+  * USB DISKS GET UAS WHERE THEY OFFER IT. A disk that can do UAS gets
+    xhciuas.sys; anything else gets Windows' own Bulk-Only storage driver,
+    at whatever speed it connects. A disk that offers both can be kept on
+    Bulk-Only (XhciForceBulkOnly, section 9).
 
-  * THIS CONTROLLER NEVER GOES TO SLEEP, SO IT DRAWS SLIGHTLY MORE POWER.
-    Windows normally puts an idle USB controller to sleep - Windows 98 within
-    about half a second of the last transfer, Windows XP within about half a
-    minute of a start with nothing attached, 32-bit Windows 7 within about
-    ten seconds - and a sleeping controller of this kind cannot notice
-    anything plugged in afterwards. The driver tells Windows not to, for this
-    controller only. Nothing else in the machine is affected and nothing is
-    written outside the device's own settings. There is no switch to turn it
-    back on.
+  * DEVICE MANAGER SHOWS A SUPERSPEED DEVICE AS HIGH SPEED AT MOST. The
+    interface it reads on these systems predates SuperSpeed, so that display
+    says nothing about the real link. XHCISNAP's report (section 6) shows the
+    speed the driver actually uses.
 
-  WINDOWS 98 WITH NUSB: STOPPING A RUNNING USB CONTROLLER CRASHES THE MACHINE
-  ..........................................................................
+  * HUBS DO NOT APPEAR IN DEVICE MANAGER. The driver runs every hub itself,
+    so a device behind a hub appears under the root hub like any other.
 
-  DISABLING OR REMOVING ANY USB HOST CONTROLLER IN DEVICE MANAGER BLUE-SCREENS
-  WINDOWS 98 WHEN NUSB'S USB 2.0 STACK IS INSTALLED - the fatal-exception
-  screen, "A fatal exception 0E ... at 0028:C00312EE", which on that system
-  means a reboot and whatever was unsaved.
+  * IDLE DEVICES ARE NEVER PUT TO SLEEP. The driver never starts selective
+    suspend, of a device or of a hub port, so an idle device draws its
+    normal power. There is no switch for it.
 
-  THIS IS NOT THIS DRIVER - it happens identically with Microsoft's own
-  usbehci.sys on the same machine. The fault is in NUSB's usbport.sys, the
-  Windows 2000 build of the USB 2.0 stack: under SweetLow's build of that
-  stack (section 4) the same driver on the same machine disables,
-  re-enables, removes and upgrades without crashing, and so does Windows
-  2000. Disabling the USB ROOT HUB is fine on either stack. Everything
-  below this line applies to NUSB systems.
+  UPDATING xhciuas.sys OVER AN OLDER COPY
+  .......................................
 
-  Everything that stops the running driver reaches that same crash, which on
-  Windows 98 means all three of these:
-
-    DISABLE      crashes.
-
-    UNINSTALL    crashes, AND THE REMOVAL DOES NOT HAPPEN. The next boot
-    (Remove)     comes back with the driver still installed and working, so
-                 you have paid a crash and are no further forward.
-
-    UPGRADE      crashes. The new file is copied BEFORE the crash, so the
-    (installing  new driver does load afterwards - but nothing after that
-    over an      copy runs, so the machine still reports the OLD version
-    existing     and any registry setting the new package introduces is
-    install)     never written. See "TO UPGRADE WITHOUT CRASHING" below.
-
-  There is no Roll Back Driver on Windows 98, so a rollback is an uninstall
-  followed by a reinstall - two of the above.
-
-  BEFORE YOU SPEND ONE OF THESE CRASHES, HAVE A WAY BACK. One of them left
-  a test machine unable to reach the desktop on the next boot, with ScanDisk
-  reporting the disk perfectly clean.
-
-  TO REMOVE THE DRIVER WITHOUT CRASHING, UNLOAD IT FIRST
-  .....................................................
-
-    1. From an MS-DOS Prompt:
-           ren C:\WINDOWS\SYSTEM32\DRIVERS\XHCI98.SYS XHCI98.SAV
-    2. Reboot. The controller comes up with a yellow mark and no USB Root
-       Hub under it - that is the driver not loading, and it is what makes
-       the next step safe.
-    3. Back in Windows, rename it back:
-           ren C:\WINDOWS\SYSTEM32\DRIVERS\XHCI98.SAV XHCI98.SYS
-       DO NOT press Refresh in Device Manager - that would load it again.
-    4. Device Manager -> the controller -> Remove. It completes, with no
-       crash.
-
-  A Windows 98 uninstall then removes REGISTRY ENTRIES ONLY. xhci98.sys, the
-  usbd.sys, usbhub.sys and usbui.dll the install had Windows copy from its
-  CD (section 3) and the setup engine's cached copy of xhci98.inf (under
-  C:\WINDOWS\INF\OTHER) all stay behind. Delete them by hand if you want them
-  gone; the three Windows files are Windows' own and harmless where they are.
-
-  TO UPGRADE WITHOUT CRASHING, OR AFTER AN UPGRADE THAT CRASHED
-  .............................................................
-
-  Start with the same rename, so that nothing is running to be stopped:
-
-    1. From an MS-DOS Prompt:
-           ren C:\WINDOWS\SYSTEM32\DRIVERS\XHCI98.SYS XHCI98.SAV
-    2. Shut the machine down and switch it on again - not Restart: a warm
-       restart leaves Windows 98 stuck at its starting screen. The
-       controller comes up with a yellow mark, as above.
-    3. Device Manager -> the controller ->
-           Properties -> Driver -> Update Driver -> Specify a location
-       and point it at the new package's RELEASE-X86\ directory. With no
-       driver loaded there is no controller to stop, so it finishes
-       normally and writes the new package's settings.
-    4. Shut down and switch on again.
-
-  That is the only route measured to deliver a new package's registry
-  settings on this stack. If an upgrade has already crashed, take the same
-  four steps: the crashed upgrade did copy the new xhci98.sys, so the file
-  is already in place, and what it lost is the settings, which step 3
-  writes.
-
-  DO NOT RELY ON RIGHT-CLICKING xhci98.inf AND CHOOSING INSTALL FOR THIS.
-  Earlier copies of this file said to, and it does not do the job: it
-  copies files and writes no registry value at all, and it could never
-  write a setting that belongs to the device itself, which is the kind the
-  crash loses.
+  When the new xhciuas.sys carries the same version as the one installed,
+  "Search for a better driver" keeps the copy Windows already has. Instead:
+  Update Driver on "xHCI98 USB Attached SCSI Storage" -> "Display a list of
+  all the drivers in a specific location" -> Have Disk -> this package's
+  directory.
 
 
 ==============================================================================
@@ -3178,9 +3071,8 @@ Two things are specific to this driver and worth knowing in advance:
   XHCISNAP.EXE is in the XHCISNAP directory of this package. It reads the
   driver's own log straight out of the running machine and writes a report
   you can attach to that issue. On Windows 98 and Windows ME it is the ONLY
-  way to get anything out. On Windows Vista and Windows 7 it finds and sets
-  the driver's setting, but reading the log back has not been tried there.
-  When you are asked, it is four steps, and none of them is REGEDIT:
+  way to get anything out. When you are asked, it is four steps, and none of
+  them is REGEDIT:
 
       1. XHCISNAP -verbosity 2
       2. restart the machine
@@ -3189,29 +3081,22 @@ Two things are specific to this driver and worth knowing in advance:
 
   Then send C:\MYDUMP.TXT. Attach C:\MYDUMP.BIN as well if you are asked
   for it. Step 1 finds the right registry key for you, on every controller
-  this driver runs - see section 9 for what it sets and why finding that key
-  by hand is easy to get wrong.
+  this driver runs - see section 9 for what it sets.
 
-  STEP 2 IS NOT OPTIONAL. The driver reads that setting once, when it
-  starts, and nothing re-reads it while it is running. Without the restart the
-  driver is still at whatever it read last time - which on a fresh install is
-  OFF, and then XHCISNAP gets no answer at all rather than an empty one.
+  STEP 2 IS NOT OPTIONAL. The driver reads that setting when it starts.
+  Without the restart the driver is still at whatever it read last time -
+  which on a fresh install is OFF, and then XHCISNAP gets no answer at all
+  rather than an empty one.
 
   If nothing comes back at all, run XHCISNAP -probe. It checks the route to
   the driver separately from whether this driver answers on it.
 
   USE THE XHCISNAP.EXE FROM THIS PACKAGE, not a copy kept from an earlier
-  release. This driver's report is snapshot schema 5, which grew by the
-  interrupt moderation setting and the virtual hub's switch and ids
-  (section 9), so an older XHCISNAP refuses it
-  with "schema mismatch" and reports nothing, and this one refuses an older
-  driver the same way.
+  release. This driver's report is snapshot schema 5.
 
   XHCISNAP.EXE changes nothing about how the driver behaves on the bus, and
   writes no file it was not asked to. It does READ the controller's port
-  registers, which is a hardware access - it just does not write one, and it
-  deliberately does not clear the "something changed here" flags it finds, so
-  it takes no evidence away from the driver either.
+  registers, which is a hardware access - it just does not write one.
 
   What step 1 DOES change is ONE of this driver's own settings, and it says
   so as it writes it - that is the point of it, and it is why step 2 is a
@@ -3227,121 +3112,50 @@ Two things are specific to this driver and worth knowing in advance:
 
   THE DRIVER WRITES NO LOG FILE ITSELF, and there is no registry value that
   makes it. XHCISNAP writes the file, and you name it on the command line.
-  That is the arrangement because a driver on Windows 98 has no reliable way
-  to open a file at all.
 
-  DEBUGVIEW (Sysinternals), with "Capture Kernel" switched on, captures this
-  driver's stop-time dump if XhciLogDebugView is set. LIKE XHCISNAP, USE IT
-  ONLY WHEN THE MAINTAINER ASKS FOR IT. Windows 2000 runs any
-  current version. WINDOWS 98 NEEDS v4.64 - later versions do not run on it
-  at all - and on Windows 98 it does not help anyway: the dump happens when
-  the driver stops, the only stop on that system is the shutdown, and Windows
-  closes the capture program before it gets there. Use XHCISNAP.
+  DEBUGVIEW (Sysinternals), with "Capture Kernel" switched on, receives this
+  driver's log as it runs if XhciLogDebugView is set. LIKE XHCISNAP, USE IT
+  ONLY WHEN THE MAINTAINER ASKS FOR IT.
 
       !! Do not run DebugView on Windows 98 on real hardware while
-         capturing. Plugging in a device while it captures can crash the
-         machine, and neither build in this package has been shown safe
-         there. Inside a virtual machine it is fine. You do not need
-         DebugView to send a report.
+         capturing. Under the earlier releases, plugging in a device while
+         it captured crashed the machine, and this driver has not been
+         run under DebugView on Windows 98 hardware. Inside a virtual
+         machine it is fine. You do not need DebugView to send a report.
 
 
 ==============================================================================
  7. KNOWN LIMITATIONS
 ==============================================================================
 
-The ones called out above are those you are most likely to meet. The full
-measured list, including USB Audio on Windows 98, is in the project's
-docs/using/release-notes.md.
-
-Read it before reporting a problem, and then report it anyway if it is not
-there - the reports are what fix it:
+The full measured list is in the project's docs/using/release-notes.md,
+together with what has and has not been tested on real hardware as opposed
+to in a virtual machine. Read it before reporting a problem, and then report
+it anyway if it is not there - the reports are what fix it:
 
       https://github.com/yeokm1/xhci98/issues
 
-That file also records what has and has not been tested on real hardware as
-opposed to in a virtual machine, and each entry says which.
+The ones you are most likely to meet:
 
-SEVERAL OF THEM ARE NOT IN THIS DRIVER. They are in the USB stack it plugs
-into, which on Windows 98 is NUSB 3.3's back-port of the Windows 2000 stack
-plus that system's own class drivers. They are listed anyway, because you
-meet them through this driver and have no other way to find out. The two
-measured so far, each established by reproducing the same failure without
-this driver involved, and the two you are likeliest to meet:
+  * NO USB STORAGE ON A WINDOWS 98 SE WITHOUT NUSB'S MASS-STORAGE PART
+    (section 3). Mice, keyboards, hubs and audio work without it.
 
-  * THE CONTROLLER TEARDOWN CRASH of section 5 - the same crash, at the same
-    address, with Microsoft's own usbehci.sys.
+  * IDLE DEVICES AND HUB PORTS ARE NEVER PUT TO SLEEP (section 5).
 
-  * USB AUDIO PLAYBACK ON WINDOWS 98 IN A VIRTUAL MACHINE fails inside that
-    system's own USBAUDIO.VXD, and does so at the same address through a
-    completely different USB controller with this driver idle. That is not
-    a statement about Windows 98 itself: one physical USB audio device played
-    clean on a real machine, on a root port and behind a hub, on clips of
-    seconds. See the release notes' "Known limitations", the USB Audio entry.
+  * WINDOWS 98 SE: A USB AUDIO DEVICE PLUGGED IN SOON AFTER A COLD BOOT CAN
+    WEDGE THE MACHINE as Windows loads its driver, with the taskbar clock
+    stopped. It is above this driver - the earlier releases showed it too -
+    and it depends on timing: plug a USB audio device in once the machine
+    has settled for a couple of minutes.
 
-THREE THAT ARE THIS DRIVER'S, from how it reports speeds, AND THE
-EXPERIMENTAL VIRTUAL HUB SWITCH ADDRESSES ALL THREE. Every device on a root
-port is reported to Windows as High Speed (the release notes say why). The
-switch of section 9, at 1 or 2, puts a virtual hub between the root port
-and the device. It is off by default, so on a normal install these apply,
-with the workarounds below. All three were measured in virtual machines:
+  * WINDOWS 98 SE: A DEVICE ON A PORT WINDOWS HAS NOT SEEN BEFORE RAISES THE
+    ADD NEW HARDWARE WIZARD, and that port waits until it is answered.
 
-  * WINDOWS VISTA AND 7, 32-BIT AND X64: A USB 1.1 HUB ON A ROOT PORT CRASHES
-    THE MACHINE (STOP 0x7E in USBPORT.SYS) once a mouse, keyboard or other
-    Full or Low Speed device is used behind it. Plug such devices into a
-    root port directly, or behind a USB 2.0 hub (measured on one real
-    32-bit Windows 7 machine: no crash). The same hub works on Windows 98,
-    2000, XP and XP x64.
+  * SUPERSPEED ISOCHRONOUS DEVICES, LINKS FASTER THAN 5 GBIT/S AND
+    SUPERSPEEDPLUS HUBS HAVE NOT BEEN TESTED AT ALL. The driver accepts
+    them, built from the specification. A report from one is welcome.
 
-  * A MOUSE OR KEYBOARD ON A ROOT PORT POLLS AT 1, 2 OR 4 MS ONLY, whatever
-    it asks for, and a polling-rate tool shows no effect inside one of those
-    steps. Behind a hub a device is reported at its true speed and polls at
-    its own interval (on Vista and 7 use a USB 2.0 hub, see above).
-
-  * WINDOWS XP AND LATER: A FULL-SPEED USB AUDIO DEVICE ON A ROOT PORT PLAYS
-    NOTHING, though Windows shows it playing. Behind a hub it played on
-    32-bit XP; on Vista and 7 use a USB 2.0 hub (measured on one real
-    32-bit Windows 7 machine: silent on a root port, plays behind the hub).
-    Windows 2000 plays on a root port.
-
-ONE WHOSE CAUSE IS NOT KNOWN YET, found on the one real Windows 7 machine
-tried (32-bit, a ThinkPad E460):
-
-  * WINDOWS 7: DISABLING THE USB CONTROLLER IN DEVICE MANAGER CAN HANG. The
-    first Disable never finished, and the next restart hung until the
-    machine was switched off at the power button; after that the controller
-    started disabled, and enabling it brought USB back. Uninstalling or
-    upgrading the driver stops the controller too and was not tried; expect
-    the same. The Vista and 7 virtual machines did not show it. Until it is
-    understood, do not disable, uninstall or upgrade the controller on
-    Vista or 7 with unsaved work open, and be ready to power off if the
-    restart that follows does not finish.
-
-ONE THAT COMES WITH THE MODERATION SETTING, found on one real Windows 98 SE
-machine (a ThinkPad P14s Gen 1, NUSB 3.3):
-
-  * WINDOWS 98: USB AUDIO CAN STUTTER WHILE A USB DRIVE IS READ AT FULL
-    SPEED. A Full-Speed audio device on a root port stuttered from the
-    2048 KB reads onwards in a disk benchmark at the install's 500, and the
-    same at 1000; at 4000 only on the last, 8192 KB write. It follows the
-    doubled read speed that 500 brings. If audio matters more than read
-    speed, raise the value towards 4000 or delete it (section 9).
-
-COMPOSITE DEVICES ON WINDOWS 98 - HANDLED BY THIS PACKAGE
-.........................................................
-
-A device that is more than one thing at once - a headset with buttons, a
-keyboard with media keys - stops at "USB Composite Device", Code 2, with
-nothing loading above it, on a Windows 98 machine that is missing one file.
-The install asks Windows for that file (section 3), so it is worth knowing
-what it is if you ever see that symptom on a machine this package did not set
-up, or on one where the Insert Disk prompt was cancelled.
-
-NUSB does not ship the composite parent, but that is not an NUSB defect:
-the parent is Windows 98 SE's own usbhub.sys, and Windows 98 setup only
-places its USB driver FILES when it finds a USB controller it recognises,
-so on an xHCI-only machine that file was simply never put there. Under
-SweetLow's stack the parent is its own usbccgp.sys and the file is not
-needed.
+  * STANDBY AND HIBERNATION HAVE NOT BEEN TESTED.
 
 
 ==============================================================================
@@ -3349,9 +3163,9 @@ needed.
 ==============================================================================
 
 {CONTENTS}
-Every driver binary in this download is called xhci98.sys and every one
-carries driver version {VERSION}, so a copy taken out of its directory cannot
-be identified by name or by version.
+Every driver binary in this download is called xhci98.sys or xhciuas.sys
+and every one carries driver version {VERSION}, so a copy taken out of its
+directory cannot be identified by name or by version.
 {TELLAPART}
 
 (In Windows driver-kit terms, RELEASE is what the DDK calls a "free" build
@@ -3363,61 +3177,49 @@ debug throughout, in its build scripts and its documentation alike.)
  9. REGISTRY SETTINGS
 ==============================================================================
 
-Every registry value this driver reads. There are six, and the driver
-writes none of them: the installer creates all six.
+Every registry value this driver reads. There are four, all DWORDs. The
+install writes one of them, XhciImodInterval250ns; the other three are
+absent until you set them, and absent means 0.
 
   YOU SHOULD NOT NEED THIS SECTION FOR A LOG. If the maintainer asks for one,
   XHCISNAP -verbosity 2 sets the value that matters, on every controller, and
-  finds the key itself. The first two values below are here so you can check
-  what is in the key if you are asked to. The third, XhciImodInterval250ns,
-  is the one setting here you may want to change yourself. The last three
-  are the virtual High-Speed hub, which is EXPERIMENTAL and off unless you
-  turn it on: ONLY USE IT IF YOU KNOW WHAT YOU ARE DOING.
+  finds the key itself.
 
-  XhciLogVerbosity  -  the whole switch
-  .....................................
+  XhciLogVerbosity  -  the whole log switch
+  .........................................
 
-  DWORD, default 0. Level 0 is off outright; above it each level is the one
-  below plus one thing:
+  Default 0. Level 0 is off outright; above it each level is the one below
+  plus one thing:
 
-      0   OFF. The driver does not answer XHCISNAP at all - it replies
-          exactly as a build without the channel would, which is deliberate
-          and is why -probe cannot tell you which of the two you have. This
-          is the default, so this is what a fresh install does.
+      0   OFF. The driver does not answer XHCISNAP at all. This is what a
+          fresh install does.
       1   the channel, plus the counters. The log of what happened is still
           off, so this is the cheapest reading there is.
       2   plus the log of what happened.  USE THIS ONE.
-      3   plus the USB port register table.  Still no internal addresses -
-          the driver refuses to record one below level 4, so this is a
-          property of what it wrote rather than a promise about what you
-          are reading.
+      3   plus the USB port register table.  Still no internal addresses.
       4   plus everything, including internal addresses. Only if asked -
           it is more than you would want to paste in public.
 
   A value outside 0-4 is REFUSED rather than treated as the nearest one: the
-  driver falls back to 0, which is off, so a mistyped level leaves the channel
-  shut rather than opening it at some level nobody asked for.
+  driver falls back to 0, which is off.
 
-  XhciLogDebugView  -  the stored log to a capture tool, when the driver stops
-  ...........................................................................
+  XhciLogDebugView  -  the log to a capture tool
+  ..............................................
 
-  DWORD, default 0. Set it to 1 to have the log handed to DebugView when the
-  driver stops. This is ONE DUMP AT THE STOP, not continuous output. It is
-  useful on Windows 2000, where disabling the controller is a real stop with
-  a capture program still running; on Windows 98 the only stop is the
-  shutdown and Windows closes the capture first. It does not affect what
-  XHCISNAP reads, which is a different route entirely. Leave it at 0 unless
-  the maintainer asks for a DebugView capture.
+  Default 0. Set it to 1 to have the log handed to DebugView as the driver
+  runs, and once more when the controller stops. It does not affect what
+  XHCISNAP reads. Leave it at 0 unless the maintainer asks for a DebugView
+  capture, and see section 6 about DebugView on Windows 98.
 
   XhciImodInterval250ns  -  how long the controller holds back an interrupt
   .........................................................................
 
-  DWORD, counted in UNITS OF 250 NANOSECONDS. It sets how long the
-  controller waits after one interrupt before raising the next. A shorter
-  interval makes USB mass storage faster at the cost of more interrupts.
+  Counted in UNITS OF 250 NANOSECONDS. It sets how long the controller
+  waits after one interrupt before raising the next. A shorter interval
+  makes USB storage faster at the cost of more interrupts.
 
-      500    written by the install: 125 microseconds, at most 8,000
-             interrupts a second.
+      160    written by the install: 40 microseconds, at most 25,000
+             interrupts a second. The value Linux uses.
       4000   used when the value is MISSING, UNREADABLE, OR OUTSIDE
              10-4000: 1 ms, at most 1,000 a second.
       10     the lowest accepted: 2.5 microseconds, at most 400,000 a
@@ -3427,114 +3229,39 @@ writes none of them: the installer creates all six.
   limit, so a mistyped 0 cannot turn moderation off. 4000 is the
   controller's own power-on value.
 
-  ATTO Disk Benchmark with an MSSU10-128GSR flash drive at 500 (125
-  microseconds), on a ThinkPad P14s Gen 1 under Windows 98 SE, gives about
-  33 to 34.6 MB/s read and write from 64 KB transfers upward where the
-  previous default 4000 gave about 18 MB/s.
+  On a ThinkPad P14s Gen 1 under Windows 98 SE, a UAS flash drive at
+  SuperSpeed read about 221 MB/s and wrote about 211 MB/s at 8 MB transfers
+  at 160, against about 181 MB/s at 500, the value the earlier releases
+  wrote. 40 added only 1 to 3% more.
 
-  Linux's xHCI driver defaults to 160 (40 microseconds). This package ships
-  500 to be more conservative since this is a generic driver.
+  FEEL FREE TO TUNE IT. Raise it towards 4000 (or delete it) if you get
+  audio stutter or instability under load. TODO(bench): audio while a drive
+  is read at full speed, at 160. Enter it as a decimal DWORD. The driver
+  reads it when it starts, so a change takes effect after a restart;
+  XHCISNAP's report then shows under "registry values" the value it read,
+  the interval in force, and what the controller took.
 
-  FEEL FREE TO TUNE IT. Lower towards 160 for the last few percent of
-  storage speed, or raise it towards 4000 (or delete it) if you get audio
-  stutter or instability under load. 500 may produce audio stuttering while
-  a USB drive is being read at full speed, so if you want to prioritise
-  audio over bandwidth, raise the value (section 7). Enter it as a decimal
-  DWORD (500), or in hexadecimal (1f4) - Registry Editor lets you choose.
-  The driver reads it when it starts, so a change takes effect after a
-  restart; after the restart, XHCISNAP's report shows under "registry
-  values" the value it read, the interval in force, and what the controller
-  took.
+  XhciForceBulkOnly  -  keep storage on Bulk-Only instead of UAS
+  ..............................................................
 
-  ON WINDOWS 98 WITH NUSB, AN UPGRADE DOES NOT SET IT. An upgrade over an
-  existing install crashes before the value is written (see section 5), so
-  the driver runs at 4000 until you set it by hand here - or take section
-  5's "TO UPGRADE WITHOUT CRASHING" steps, which write it, even after an
-  upgrade that has already crashed.
+  Default 0 (absent): a disk that offers UAS gets UAS. Set it to 1 and every
+  disk on that controller that offers BOTH transports gets Bulk-Only,
+  Windows' own storage driver, instead. A UAS-only disk stays on UAS
+  whatever this says.
 
-  XhciVirtualHSHub  -  the virtual High-Speed hub switch
-  ......................................................
+  It is read each time a device is plugged in, so unplug the disk and plug
+  it back in after changing it. On Windows 2000 and later a disk already
+  installed keeps its driver until you uninstall it in Device Manager and
+  plug it back in.
 
-  EXPERIMENTAL AND OFF BY DEFAULT. Only use it if you know what you are
-  doing.
+  THOSE FOUR ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
+  XhciVirtualHSHubVid and XhciVirtualHSHubPid are not read: a copy left in
+  the key by an earlier install has no effect, because this driver reports
+  every device at its true speed with no virtual hub in the way. Delete
+  them if you want them gone.
 
-  Every device plugged directly into a root port is reported to Windows as
-  High Speed, because the USB stack this driver plugs into crashes the
-  machine when a Full or Low Speed device is reported there at its true
-  speed. That is what costs a mouse on a root port its polling rate, a
-  Full-Speed audio device its sound from Windows XP on, and Windows Vista
-  and 7 a crash behind a USB 1.1 hub (section 7). This switch puts a
-  virtual USB 2.0 hub, answered by the driver itself, between the root port
-  and the device, which is then reported at its true speed.
-
-  DWORD:
-
-      0   OFF, the default and what the install writes. Root ports are
-          reported exactly as with no switch at all.
-      1   ON DEMAND. When a Full or Low Speed device is plugged into a root
-          port, a virtual hub appears above it, and it goes away when the
-          device is unplugged. A High-Speed device gets no hub.
-      2   ALWAYS ON. Every USB 2.0 port carries a virtual hub from start-up,
-          plugged or not, and every device on a root port sits behind one,
-          High Speed included.
-
-  Any other value is REFUSED, not rounded: the driver applies 0.
-
-  THE EXTRA HUB IS VISIBLE. At 1 a slower device brings a hub with it, a
-  second entry in Device Manager that comes and goes with the device, and
-  takes about two seconds longer to become usable. At 2 every USB 2.0 port
-  carries one from start-up. On Windows 98 the first appearance of the hub
-  on each port may run the Add New Hardware wizard once. The hub calls
-  itself "xHCI98 virtual HS Hub".
-
-  THE VIRTUAL HUB IS A HUB TIER. USB allows five hubs in a chain below a
-  root port. With the switch at 1 or 2, a chain of external hubs on a root
-  port can be one hub shorter than that before the devices at its end stop
-  enumerating, because Windows counts the virtual hub as one of the five.
-  At 1 only when the device on the root port is a Full-Speed (USB 1.1) hub,
-  which is what puts that port in virtual-hub mode. Measured at 2 on
-  Windows 2000, in a virtual machine: a mouse at the end of a chain of five
-  hubs was never addressed, and the driver refused nothing.
-
-  XhciVirtualHSHubVid and XhciVirtualHSHubPid  -  the virtual hub's id
-  ....................................................................
-
-  STRINGS (REG_SZ), not DWORDs: the hub's USB vendor and product id, as
-  four hexadecimal digits each, either case, optionally prefixed 0x. The
-  install writes "1209" and "0001": pid.codes' SHARED TEST ID 1209:0001,
-  which pid.codes reserves for private testing and which is NOT an id
-  allocated to this project. A vendor id of 0000 is refused.
-
-  Change them only if another device's driver on the machine claims
-  USB\VID_1209&PID_0001 and binds itself to the virtual hub. A new id is a
-  new device to Windows, so it installs the hub again on each port. With
-  the switch at 1 or 2, a missing or invalid id turns the virtual hub off
-  for that start - the driver has no id of its own to fall back on. With
-  the switch at 0 neither value is read.
-
-  Set the three in Registry Editor - the switch as a DWORD, the ids as
-  String Values - and restart: the driver reads them only when it starts.
-  Reinstalling the package writes the install's values back, which turns
-  the switch off. After the restart, XHCISNAP's report shows under
-  "registry values" what the driver read, what it applied, and why it
-  refused anything.
-
-  Everything measured with it on was measured in virtual machines; the
-  virtual hub has never run on real hardware. The project's
-  docs/using/release-notes.md says what it was measured to change.
-
-  THOSE SIX ARE THE WHOLE LIST. This driver reads no other setting of its
-  own, and no registry value makes it write a file.
-
-  FOUR ARE DWORDS AND TWO ARE STRINGS. The two log values and the virtual
-  hub switch default to 0, the moderation interval to 500, the two ids to
-  1209 and 0001, and all six are created by the installer, so they are
-  already there and only their data changes. A value that is missing
-  entirely is not an error either - the driver starts normally, with the log
-  off, the interval at 4000 and the virtual hub off, and the report says
-  whether it read nothing or read a value. They live in the device's own
-  driver key, which is spelled one way on the NT targets and another on the
-  9x ones:
+  WHERE THE KEY IS. The values live in the controller's own driver key,
+  which is spelled one way on the NT systems and another on the 9x ones:
 
     Windows 2000, XP, Vista and 7
       HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\
@@ -3545,58 +3272,30 @@ writes none of them: the installer creates all six.
 
   THE LAST PART OF THE PATH IS ASSIGNED BY THE MACHINE AND WILL NOT
   NECESSARILY BE 0002 ON YOURS. That is also why no ready-made .REG file
-  ships here: a .REG file cannot name a key whose last part differs per
-  machine.
+  ships here.
 
   DO NOT IDENTIFY THAT KEY BY ITS DESCRIPTION, AND DO NOT ASSUME THERE IS
   ONLY ONE. If the controller has ever been enumerated at more than one PCI
-  slot - the card was moved, or the machine's slots were re-ordered - there
-  is one such key per slot, all carrying this driver's name, and two of them
-  have been measured carrying an IDENTICAL DriverDesc.
-  Values typed into a stale one are read by nothing, and the driver reports
-  no error: it cannot tell "no such value" from "the key would not open".
-
-  Ask the device itself which key it uses. Find your controller under
+  slot, there is one such key per slot, all carrying this driver's name.
+  Values typed into a stale one are read by nothing. Ask the device itself
+  which key it uses. Find your controller under
 
     Windows 98    HKEY_LOCAL_MACHINE\Enum\PCI
     Windows 2000  HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Enum\PCI
     and later
 
   open the subkey for the slot it occupies, and read its Driver value. It
-  names the key to edit - for example USB\0004 - and that is the key the
-  driver will actually read, by definition.
+  names the key to edit - for example USB\0004.
 
   SET THE TWO LOG VALUES ONLY WHILE DIAGNOSING SOMETHING, AND RUN
-  XHCISNAP -DISABLE WHEN YOU HAVE SENT THE CAPTURE. That is not
-  housekeeping. While the channel is enabled, anyone using this machine can
-  read the driver's own diagnostic state through it - counters, the log, the
-  port table, and at level 4
+  XHCISNAP -DISABLE WHEN YOU HAVE SENT THE CAPTURE. While the channel is
+  enabled, anyone using this machine can read the driver's own diagnostic
+  state through it - counters, the log, the port table, and at level 4
   internal addresses. It is this driver's own state and nothing else: no
-  documents, no passwords, no other program's memory. But this driver cannot
-  put a lock on that door - the door belongs to Windows' own USB port driver,
-  which opens it to anyone - so the value you just set IS the lock. On
-  Windows 2000 and later you need administrator rights to set it (on Vista
-  and 7, a Command Prompt started with "Run as administrator"); Windows 98
-  has no such distinction.
-
-  The driver keeps a 16 KB buffer whether or not you set anything; what
-  XhciLogVerbosity 2 and above adds is a small amount of work each time
-  something happens on the bus. Level 1 adds none of that and still lets
-  XHCISNAP read the counters, which is why it exists.
-
-  ON WINDOWS 98 THE SNAPSHOT ROUTE IS THE ONE THAT WORKS. XhciLogDebugView
-  delivers nothing there, for the reason given above, and there is no
-  driver-written log file. XhciLogVerbosity plus XHCISNAP is how a Windows 98
-  machine produces a report - see section 6. On Windows 2000 both routes
-  work.
-
-  SLEEP
-  .....
-
-  THERE IS NOTHING TO SET HERE. The driver tells Windows, as it registers,
-  never to put THIS controller to sleep. It is part of the driver and there
-  is no registry value behind it. THE CONTROLLER NEVER IDLES, SO IT DRAWS
-  SLIGHTLY MORE POWER, and there is no switch to turn it back on.
+  documents, no passwords, no other program's memory. At level 0 the driver
+  does not answer at all, so the value you set IS the lock. On Windows 2000
+  and later you need administrator rights to set it (on Vista and 7, a
+  Command Prompt started with "Run as administrator").
 
 
 ==============================================================================
@@ -3610,12 +3309,15 @@ writes none of them: the installer creates all six.
 ==============================================================================
 
 GNU GPL v2 - see the LICENSE file in this directory, beside this readme. This
-applies to xhci98.sys and xhci98.inf, which are this driver's own work.
+applies to xhci98.sys, xhciuas.sys and their INFs, which are this project's
+own work.
 
-No Microsoft file is in this download. The usbd.sys, usbhub.sys, usbui.dll
-and (on Windows 2000 and XP) usbport.sys the install needs are copied by
-Windows from your own Windows installation source (section 3); nothing here
-grants you any right in them, and nothing here redistributes them.
+No Microsoft file is in this download. The usbd.sys and usbui.dll the
+install needs are copied by Windows from your own Windows installation
+source (section 3), and on Windows 98 SE the storage files of section 3 come
+from NUSB; nothing here grants you any right in them, and nothing here
+copies them. xhciuas.inf names NUSB's USBNTMAP.SYS on Windows 98 SE; the
+file is named, never shipped.
 
 The provenance record for everything the project depends on but does not own
 is in docs/contributing/legal-provenance.md, in the project's source
