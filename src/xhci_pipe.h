@@ -158,6 +158,10 @@ typedef struct _XHCI_PIPE_EP {
                                  * Phase 31                               */
     ULONG SspIso;               /* the SSP isochronous companion's
                                  * dwBytesPerInterval was used            */
+    /* Fast polling (33.8, XhciPipeFastPoll): Interval was set below Table
+     * 6-12's FS/LS interrupt range, and the in-range one it replaced. */
+    ULONG FastPoll;
+    ULONG SpecInterval;
 } XHCI_PIPE_EP, *PXHCI_PIPE_EP;
 
 /*
@@ -238,6 +242,61 @@ ULONG XhciPipeEndpointParamsAt(const UCHAR *config, ULONG length,
  * the specification text. 0 for NULL.
  */
 ULONG XhciPipeZeroBandwidth(const XHCI_PIPE_EP *ep);
+
+/* ------------------------------------------------------------------ */
+/* Fast polling of Low- and Full-Speed interrupt endpoints (33.8)       */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The XhciFastPollFsLs modes (design record 13 section 13). Numbered as
+ * hidusbf numbers its PatchUSBXHCI value (its README.ENG.TXT, 2025/11/05),
+ * because a user of that filter already chooses its rate in those terms:
+ * OFF (0, absent, or any value but 1 to 3) and 1K (1) program every
+ * endpoint by Table 6-12, which already polls a Low-Speed endpoint at
+ * 1 ms; 2K4K (2) and 4K8K (3) give the two slowest rates hidusbf offers,
+ * bInterval 32-63 (its "31 Hz", Interval 8) and 16-31 ("62 Hz", Interval
+ * 7), the rates its documentation gives them on a patched usbxhci.sys:
+ *
+ *   mode   Interval 8 (bInterval 32-63)   Interval 7 (bInterval 16-31)
+ *   2K4K   2, 500 us (2000 Hz)            1, 250 us (4000 Hz)
+ *   4K8K   1, 250 us (4000 Hz)            0, 125 us (8000 Hz)
+ */
+#define XHCI_PIPE_FAST_OFF      0UL
+#define XHCI_PIPE_FAST_1K       1UL
+#define XHCI_PIPE_FAST_2K4K     2UL
+#define XHCI_PIPE_FAST_4K8K     3UL
+
+/* The mode a registry value asks for: 1 to 3 as themselves, anything else
+ * OFF, so a value outside the table can never program an Interval. */
+ULONG XhciPipeFastMode(ULONG value);
+
+/*
+ * Apply `mode` to one endpoint XhciPipeEndpointParams has filled for a
+ * device at `speed` and Route String `route`. Only a Low- or Full-Speed
+ * interrupt endpoint of a device on a root port (route 0) whose Interval is
+ * 7 or 8 is changed: Interval becomes the table's, SpecInterval keeps the
+ * Table 6-12 value and FastPoll is set, and the return is 1. Every other
+ * endpoint, mode and NULL returns 0 with `ep` untouched - a device behind a
+ * hub included, whose Full- or Low-Speed periodic traffic a transaction
+ * translator or a Full-Speed hub carries one frame at a time.
+ */
+ULONG XhciPipeFastPoll(ULONG mode, ULONG speed, ULONG route,
+                       PXHCI_PIPE_EP ep);
+
+/* Back to Table 6-12: Interval = SpecInterval and FastPoll cleared, 1 when
+ * `ep` had been changed by XhciPipeFastPoll, else 0 with it untouched. */
+ULONG XhciPipeFastRevert(PXHCI_PIPE_EP ep);
+
+/*
+ * Whether a Configure Endpoint that failed with `completionCode` while
+ * adding an endpoint XhciPipeFastPoll changed is retried at the Table 6-12
+ * Interval: Parameter Error (17, Table 6-90: "a Context parameter is
+ * invalid", which an Interval outside Table 6-12's range is) and Bandwidth
+ * and Secondary Bandwidth Error (8 and 35), since a period eight or
+ * sixty-four times shorter reserves that much more. Anything else is not
+ * the Interval's doing, and fails the select as before.
+ */
+ULONG XhciPipeFastRetry(ULONG completionCode);
 
 /* ------------------------------------------------------------------ */
 /* The BOS descriptor (29-A.3, 29-A.6)                                 */

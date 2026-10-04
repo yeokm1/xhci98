@@ -460,6 +460,7 @@ task. The miniport reads six values from its device key (`src\*.c`, the six
 | `XhciLogDebugView` | Carried over, same meaning; under the HCD it also selects 26-A.8's continuous PASSIVE flusher |
 | `XhciImodInterval250ns` | Carried over, same meaning and code default 4000; both INFs write 160 (40 us) on every install path since the owner's ruling of 2026-10-04 (`roadmap-hcd.md`, decisions table), 500 until then |
 | `XhciVirtualHSHub`, `XhciVirtualHSHubVid`, `XhciVirtualHSHubPid` | Not read and not written (owner, 2026-10-02); the INF gate refuses them in an HCD INF (`VAL-HCDVHUB`) |
+| `XhciFastPollFsLs` | New in `2.1.0.0` (task 33.8), the HCD's own: read at each controller start, written by no INF, absent or 0 is off. Lets a Low- or Full-Speed interrupt endpoint on a root port be polled faster than 1 ms; section 13 |
 
 The root-hub sections write no value of the controller's: they carry the
 loader values on Windows 98 and the hub property-page registration on every
@@ -2816,6 +2817,156 @@ the detail; this is the index.
 | The USB 2.0 hub and reset timings marked "to transcribe" | 10 | 27-A.1's transcription, before the hub class is written |
 | Common-buffer growth beyond design record 04's limits | 11.2 | the phase that first hits a limit (27 for slots, 31 for streams) |
 | The `win98-evidence.list` rows for the new precedent binaries | 7, Appendix A | added with this record; the gate re-derives the HCD's rows from them when 26-A.1 adds the rows themselves |
+
+## 13. Polling a Low- or Full-Speed interrupt endpoint faster than 1 ms (task 33.8, 2026-10-04)
+
+The request is issue 4's: LordOfMice, who maintains SweetLow's hidusbf,
+asked on 2026-10-03 for "8000 Hz on Low Speed device as under modern Windows
+NT OSes". Under the `1.x.x.x` miniport's virtual High-Speed hub his device
+looked High Speed, hidusbf offered its High-Speed values 1 to 3 (8000 to
+2000 Hz), and the driver gave 1000 Hz. The owner's decision of 2026-10-04
+for `2.1.0.0`: see whether it can be set higher. Every fact below is tagged
+with how it was obtained; nothing in this section was read out of a binary,
+so it adds no `legal-provenance.md` row.
+
+### 13.1 How hidusbf asks for more than 1000 Hz (documentation)
+
+A Low- or Full-Speed `bInterval` is in milliseconds, 1 to 255 (Table 6-12),
+so no descriptor value says "faster than 1 ms", and hidusbf does not write
+one. Its own documentation, in `tools\hidusbf-extracted` (`hidusbf.zip`,
+SHA-256 `bd8d1fb0...f797`, not tracked), says how it gets there:
+
+- `README.2kHz-8kHz.ENG.TXT`: the 2-8 kHz rates need "usb 3.x", "the
+  microsoft usb 3.x driver" and Windows 8, 8.1 or 10, and they **reuse the
+  two slowest rates of the list**: "2kHz-4kHz driver 31 = 2000Hz 62 =
+  4000Hz", "4kHz-8kHz driver 31 = 4000Hz 62 = 8000Hz".
+- `README.ENG.TXT`, the entry of 2025/11/05: the variants differ only by a
+  registry value, `PatchUSBXHCI`, "0 - disable patching, 1 - 1k patching,
+  2 - 2k-4k patching, 3 - 4k-8k patching"; and its warnings: overclocking
+  "may not work for Low Speed USB devices which controlled by non Microsoft
+  USB stack", and the patching builds must not run under Memory Integrity.
+  The entry of 2005/12/26 names the method: "patching the code of
+  USBPORT.SYS on the fly".
+
+So (documentation, plus one inference marked as such): the filter keeps
+writing an ordinary millisecond `bInterval` into the configuration
+descriptor of `URB_FUNCTION_SELECT_CONFIGURATION` - the Windows 9x filter
+was read doing exactly that (static, `legal-provenance.md` section 4,
+hidusbf row) - and the rate above 1000 Hz comes from **patching Microsoft's
+`usbxhci.sys` in memory** so that it programs a smaller Interval for the
+"31 Hz" and "62 Hz" settings. That those are `bInterval` 32 and 16 (Interval
+8 and 7 by footnote 113) is inferred from the labels (1000/32 and 1000/16),
+not read. How the patch computes its Interval, and whether it touches
+devices the filter is not on, is not documented and was not read; this
+project reads no patch code and patches nothing. Under the HCD there is no
+`usbxhci.sys` and no `usbport.sys` to patch, so the HCD is the only place
+the rate can come from.
+
+### 13.2 What Linux programs (reference source)
+
+`external/linux/xhci-mem.c` (torvalds/linux `c6859eed`), function
+`xhci_get_endpoint_interval`: a Low- or Full-Speed interrupt endpoint goes
+through `xhci_parse_frame_interval`, which is
+`xhci_microframes_to_exponent(udev, ep, bInterval * 8, 3, 10)` - the
+exponent clamped to **3..10**. The two interval quirks only lower large
+values (`XHCI_LIMIT_ENDPOINT_INTERVAL_9`, AMD and one ATI part: 9 and up
+become 8; `_7`, TI 0x8241, High Speed and up only: 7 and up become 6).
+No path in the mirror programs a Full- or Low-Speed interrupt Interval
+below 3.
+
+### 13.3 What xHCI 1.2c says about an Interval below 3 (specification)
+
+- Table 6-12 (p.420), FS/LS Interrupt row: bInterval 1-255, "bInterval *
+  1ms", **"Endpoint Context Valid Interval range 3-10"**; footnote 113:
+  "round the computed value ... down to the nearest base 2 multiple of
+  bInterval * 8".
+- 6.2.3.6 (p.419): "system software shall translate the bInterval field in
+  the USB Endpoint Descriptor to the appropriate value for this field" and
+  "Refer to Table 6-12 for the range of valid Interval values".
+- Configure Endpoint, 4.6.6 (p.112): "Not all Input Endpoint Contexts
+  identified by Add Context flag fields = '1' are valid" gives
+  **Parameter Error**; Table 6-90 (p.467): Parameter Error is "Asserted by
+  a command if a Context parameter is invalid", Bandwidth Error (8) when
+  the periodic endpoints declared do not fit.
+- 4.14.3 (p.244): the Interval is "treated as a throttling parameter or a
+  deadline by the xHC for Interrupt endpoints"; "the xHC should consume no
+  more than one TD per ESIT".
+
+So an Interval of 0 to 2 on a FS/LS interrupt endpoint is **outside the
+valid range**: a controller may refuse it with Parameter Error (it "should
+check"; nothing says it must), may refuse it on bandwidth, or may accept
+it and run it, and what a controller that accepts it does on the wire is
+not specified. That hidusbf's 2-8 kHz rates work under Microsoft's
+`usbxhci.sys` (documentation and its users' reports, not this project's
+measurement) says that at least the controllers its users own accept and
+run it at a root port.
+
+### 13.4 What QEMU's xHCI does with the field (emulator source)
+
+`external/qemu/hcd-xhci.c`, tag `v11.1.0` (fetched 2026-10-04, SHA-256
+`561518AE...65CD8`): `xhci_init_epctx` takes `interval = 1u << MIN(Interval,
+18)` with no check against speed or type, `xhci_configure_slot` returns no
+Parameter Error for any Endpoint Context field, and `xhci_calc_intr_kick`
+schedules an interrupt TD at `MAX(asap, mfindex_last + interval)`
+microframes. So QEMU accepts Interval 0 on a Full-Speed endpoint and paces
+it at 125 us. A QEMU reading can show that the HCD programmed the Interval
+and that the emulator paces by it; it **cannot** show that a real
+controller accepts it, and it can never exercise the fallback below.
+
+### 13.5 The verdict and the design
+
+**Feasible on some controllers only, and off by default.** Out of
+specification by Table 6-12; the Configure Endpoint refusal is the
+specification's own failure mode, so it can be caught and undone; whether a
+given controller accepts and honours it is for the bench to read
+(13.6). The risk with it off is none: nothing changes. With it on: a
+controller that accepts an out-of-range Interval and then misbehaves -
+polls at its own rate, starves other periodic traffic, or worse - which
+no QEMU run can rule out.
+
+- **The value**: `XhciFastPollFsLs`, a REG_DWORD on the controller's driver
+  key, read at each controller start (`hcd_ctl.c`), written by no INF.
+  `XhciPipeFastMode`: 1, 2 and 3 are themselves, anything else - absent, 0,
+  a value of another type, 4 and up - is off. Logged as `fastpoll.value`
+  and `fastpoll.mode`.
+- **The mapping** (`XhciPipeFastPoll`, `xhci_pipe.c`), hidusbf's own numbers
+  so a user picks the rate in the terms its Setup already uses: 1 changes
+  nothing (Table 6-12 already gives a Low-Speed endpoint 1 ms); 2 maps
+  Interval 8 (`bInterval` 32-63, its "31 Hz") to 2 (500 us, 2000 Hz) and
+  Interval 7 (16-31, "62 Hz") to 1 (250 us, 4000 Hz); 3 maps them to 1
+  (4000 Hz) and 0 (125 us, 8000 Hz). Nothing else changes: not another
+  `bInterval`, not High Speed or SuperSpeed, not isochronous, not a hub's
+  own status endpoint (`HcdCfgHubOpen` never asks), and **not a device
+  behind a hub** (Route String nonzero), whose Full- or Low-Speed periodic
+  traffic a transaction translator or a Full-Speed hub carries one frame at
+  a time. The bound is the table: no Interval below 0, none from any other
+  input. The client is told the `bInterval` it gave, as before. The cost
+  is that a device that itself declares 16-63 ms on a root port is sped up
+  too while the value is set, which is why it is a controller value a user
+  sets for a purpose and not a default.
+- **The refusal path** (`hcdCfgConfigureAdd`, `hcd_cfg.c`): every Configure
+  Endpoint that adds pipes - `SELECT_CONFIGURATION`, `SELECT_INTERFACE`, a
+  function's select, and the replays (`RESET_PORT`, the endpoint recycle) -
+  goes through one helper. If it fails with Parameter, Bandwidth or
+  Secondary Bandwidth Error (`XhciPipeFastRetry`) while adding a pipe the
+  mapping changed, every such pipe goes back to its Table 6-12 Interval
+  (`XhciPipeFastRevert`) and the command is built and issued once more - a
+  refused command leaves the Output Device Context as it was (4.6.6), so the
+  second command is the one the select would have issued with the value
+  off. Counted in `fastpoll.fallbacks` (with a `fastpoll.fallback` record:
+  slot, how many pipes, the code); an endpoint opened fast is
+  `fastpoll.opened` and a `fastpoll.open` record (slot, DCI, the Table 6-12
+  Interval, the one programmed). Both counts are in the counter block.
+- **Host vectors**: `test\test_pipe.c`, `test_fast_poll`: the mode
+  sanitising, the table at both speeds, the whole 16-63 band and its edges
+  (15, 64, 1), off/1/unknown modes, behind a hub, High Speed, isochronous,
+  no double application, the revert and the retry codes.
+
+### 13.6 What is still owed
+
+The real reading is the owner's hardware, the ThinkPad E460 and the P14s
+Gen 1 (Intel controllers on both). Section 13.7 has what QEMU showed; the
+bench procedure is in the run record of the session that takes it.
 
 ## Appendix A. The Windows 98 export evidence, pair by pair (task 25.3)
 

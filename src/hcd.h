@@ -969,6 +969,14 @@ typedef struct _HCD_CONTROLLER {
     ULONG SerialIdsRefused;
     ULONG SerialReadsFailed;
     ULONG SerialIdsDuplicate;
+    /* Fast polling (33.8; hcd_cfg.c, XhciPipeFastPoll): the
+     * XhciFastPollFsLs mode read at each start (XHCI_PIPE_FAST_*), the
+     * endpoints a select opened below Table 6-12's FS/LS range, and the
+     * Configure Endpoint commands that refused one and were issued again at
+     * the Table 6-12 Interval. The two counts are never zeroed. */
+    ULONG FastPollMode;
+    ULONG FastPollOpened;
+    ULONG FastPollFallbacks;
     /* The driver's controllers, for the machine-wide serial check
      * (hcd_pdo.c, hcdSerialLock). */
     struct _HCD_CONTROLLER *SerialNext;
