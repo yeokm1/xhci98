@@ -2962,11 +2962,50 @@ no QEMU run can rule out.
   (15, 64, 1), off/1/unknown modes, behind a hub, High Speed, isochronous,
   no double application, the revert and the retry codes.
 
-### 13.6 What is still owed
+### 13.6 What is still owed, and the bench procedure
 
-The real reading is the owner's hardware, the ThinkPad E460 and the P14s
-Gen 1 (Intel controllers on both). Section 13.7 has what QEMU showed; the
-bench procedure is in the run record of the session that takes it.
+Nothing here has run on a guest or on metal. A QEMU leg was tried on
+2026-10-04 (Windows ME, `winme-sl-base` overlay, `qemu` build of the
+branch, harness `out\phase33\fastpoll\`, git-ignored): the controller
+installed from `xhci98.inf`, and every boot after the install's restart
+stopped in real mode before Windows entered protected mode (CR0 = 0x10, CS
+= 0x933B, EIP fixed at 0x6173, an empty debug console - no driver code
+ran), a hard reset included; not investigated further. By 13.4 a QEMU
+reading could in any case show only that the Interval was programmed and
+paced, never a controller's acceptance or the fallback.
+
+The reading that matters is the owner's hardware, the ThinkPad E460 and
+the P14s Gen 1, on a build of this branch:
+
+1. A Low-Speed (or Full-Speed) mouse **on a root port**, no hub. hidusbf on
+   it as 33.7 installs it: on Windows 98 SE (with NUSB 3.6's `usbd.sys`)
+   or ME, `hidusbf.sys` in `SYSTEM32\DRIVERS`, `LowerFilters` =
+   `"hidusbf.sys"` on the mouse's `Enum\USB` instance and a `bInterval`
+   DWORD on the instance and on its `Class\HID` driver key; on XP,
+   hidusbf's `Setup.exe` (the `NOPATCH` build: there is no `usbport.sys`
+   or `usbxhci.sys` under the HCD to patch).
+2. `bInterval` 16 (hidusbf's "62 Hz"), `XhciFastPollFsLs` absent: replug,
+   read the rate with a mouse rate tool (about 62 Hz) and the driver's log
+   (`XHCISNAP`, or the DebugView sink): the `fastpoll.mode` note of the
+   start, the `fastpoll.*` records, and the counter block the next stop
+   appends (`fastpoll.mode` 0, `fastpoll.opened` 0).
+3. `XhciFastPollFsLs` = 3 (REG_DWORD) on the controller's driver key (the
+   `Class\USB\nnnn` key the other `Xhci*` values are in), restart (it is
+   read at controller start), replug: expect `fastpoll.mode` 3,
+   `fastpoll.opened` 1, a `fastpoll.open` record ending `0700` (Interval 7
+   to 0), `fastpoll.fallbacks` 0, and the tool reading toward 8000 Hz - or
+   `fastpoll.fallbacks` 1 and 62 Hz again on a controller that refuses,
+   which is itself the reading.
+4. `bInterval` 32 ("31 Hz") at 3 (4000 Hz expected, record `0801`), and
+   both at 2 (2000 and 4000 Hz).
+5. With the value at 3, ten minutes of use: the mouse never stalls, a
+   keyboard and a stick on the other ports keep working, and the same mouse
+   behind a hub stays at its Table 6-12 rate (`fastpoll.opened` unchanged).
+   Then delete the value, restart, and confirm 62 Hz again.
+
+A machine whose Windows mouse path cannot report more than it is given
+(Windows 98's mouse stack may coalesce) still shows the programmed rate in
+the counters; the rate tool is the second reading, not the first.
 
 ## Appendix A. The Windows 98 export evidence, pair by pair (task 25.3)
 
