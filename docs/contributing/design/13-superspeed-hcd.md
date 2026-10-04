@@ -2999,15 +2999,18 @@ the P14s Gen 1, on a build of this branch:
 3. `XhciFastPollFsLs` = 3 (REG_DWORD) on the controller's driver key (the
    `Class\USB\nnnn` key the other `Xhci*` values are in), restart (it is
    read at controller start), replug: expect `fastpoll.mode` 3,
-   `fastpoll.opened` 1, a `fastpoll.open` record ending `0700` (Interval 7
-   to 0), `fastpoll.fallbacks` 0, and the tool reading toward 8000 Hz - or
-   `fastpoll.fallbacks` 1 and 62 Hz again on a controller that refuses,
-   which is itself the reading.
+   `fastpoll.opened` up by one per configuration of the mouse (the counts
+   are never zeroed, and a mouse attached across the restart is configured
+   once at start and again at the replug, so compare before and after one
+   attachment), a `fastpoll.open` record ending `0700` (Interval 7
+   to 0), `fastpoll.fallbacks` unchanged, and the tool reading toward
+   8000 Hz - or `fastpoll.fallbacks` up by one and 62 Hz again on a
+   controller that refuses, which is itself the reading.
 4. `bInterval` 32 ("31 Hz") at 3 (4000 Hz expected, record `0801`), and
    both at 2 (2000 and 4000 Hz).
 5. With the value at 3, ten minutes of use: the mouse never stalls, a
    keyboard and a stick on the other ports keep working, and the same mouse
-   behind a hub stays at its Table 6-12 rate (`fastpoll.opened` unchanged).
+   behind a hub stays at its Table 6-12 rate (no `fastpoll.open` record).
    Then delete the value, restart, and confirm 62 Hz again.
 
 A machine whose Windows mouse path cannot report more than it is given
