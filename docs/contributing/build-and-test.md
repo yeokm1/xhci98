@@ -473,7 +473,9 @@ generate `src\usbport.lib` if it is missing, run the import gate's
 authenticated-baseline regression tests and its flavour-rules tests, run the
 INF gate's self-tests and then the gate on **both** INFs - `src\xhci98.inf`
 under `-Arch x86` and `src\xhci98-amd64.inf` under `-Arch amd64`, two runs
-whatever architecture is being built - run the packager
+whatever architecture is being built - then the UAS INF gate and the
+`txtsetup.oem` gate (`scripts\inf-gate\check-txtsetup-oem.ps1`, task 33.3),
+each self-tested first and run over both architectures' files, run the packager
 self-tests, the QEMU launcher self-tests, the vm-matrix verdict self-tests,
 the tracked batch files' line-ending check and the source charset check, run
 the XHCISNAP report self-test
@@ -3837,6 +3839,65 @@ composite device has ever been seen binding on NUSB alone, in any batch,
 because every other QEMU device model is single-interface. That confound is
 why the missing file could not be isolated from this guest: the whole stack
 went in at once.
+
+### Text-mode Setup from an F6 floppy (roadmap task 33.3)
+
+Since task 33.3 every flavour directory of a package carries `txtsetup.oem`
+at its root beside `xhci98.sys` and `xhci98.inf` (design record 13 section
+5.6), so Windows 2000, 32-bit XP and XP x64 text-mode Setup can load the
+driver at the F6 prompt. The install leg per target, in a virtual machine:
+
+1. Stage the package: `scripts\package\make-package.ps1 -Flavor release`
+   (add `-Arch amd64` for XP x64). The directory is 8.3-clean and fits a
+   1.44 MB floppy, so QEMU can serve it as one directly.
+2. A blank disk for the install: `qemu-img create -f qcow2 <disk> 8G`, and a
+   small raw image for the USB stick, `qemu-img create -f raw <stick> 64M`.
+3. Launch with the install CD on IDE, the floppy on the emulated FDC, and no
+   USB controller but `qemu-xhci`:
+
+```
+qemu-system-i386 -machine pc -m 512 -smp 2 \
+  -drive file=<disk>,format=qcow2,if=ide \
+  -cdrom <install iso> -boot d \
+  -drive if=floppy,format=raw,file=fat:floppy:out\pkg-release-x86 \
+  -device qemu-xhci,id=xhci \
+  -device usb-kbd,bus=xhci.0,id=ukbd \
+  -drive if=none,id=stick,format=raw,file=<stick> \
+  -device usb-storage,bus=xhci.0,drive=stick \
+  -qmp tcp:127.0.0.1:<port>,server,nowait
+```
+
+   (`qemu-system-x86_64` and `out\pkg-release-amd64` for XP x64; Windows
+   2000 runs with `-smp 1` or `2` as its target VM does.) The `pc` machine
+   always has an i8042 PS/2 keyboard, so a keystroke typed into the QEMU
+   window may reach either; send the leg's keystrokes to the USB keyboard by
+   id, with QMP `input-send-event` and `"device": "ukbd"`, so what is
+   observed is the USB path.
+4. At "Press F6 if you need to install a third party SCSI or RAID driver",
+   press F6 (SeaBIOS's own xHCI keyboard support answers it; nothing of this
+   driver runs yet). At the screen that follows, press S, then Enter at the
+   prompt for the disk in drive A:. Expect the list to offer "xHCI98 USB
+   3.x Host Controller (32-bit Windows 2000/XP)" (or "... (Windows XP
+   x64)"); choose it with Enter, and press Enter again at the screen that
+   lists it as the device Setup will load.
+5. Setup loads its files and starts the kernel. Expect: the Welcome screen
+   answers keystrokes sent to `ukbd` (the BIOS has handed the controller to
+   the driver by then); the partition screen lists the 64 MB USB disk beside
+   the IDE disk (the bus's device PDO, Setup's `usbstor` and `disk` above it);
+   no stop screen. Install onto the IDE disk.
+6. Text mode copies `xhci98.sys` from A: and restarts. Leave the floppy in
+   until GUI mode is finished: it may be asked for when GUI mode installs the
+   controller and root hub from `xhci98.inf`, and so may the CD, for
+   `usbd.sys` and `usbui.dll`. Record any prompt and any unsigned-driver
+   dialog (32-bit XP) as the leg's reading.
+7. In the installed system: Device Manager shows "xHCI98 USB 3.x eXtensible
+   Host Controller" and "xHCI98 USB 3.x Root Hub" with no warning mark, the
+   service `xhci98` is the INF's (`Start` 3, not the boot start text mode
+   gave it), the USB keyboard types and the stick has a drive letter.
+
+The leg passes on steps 4, 5 and 7; step 6's prompts are recorded, not
+failed. Until it has passed on a target, design record 13 section 5.6 stays
+`static` for that target and the release notes say so.
 
 ### Recommended USB Host Chips for Comprehensive Testing
 

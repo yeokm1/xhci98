@@ -1,0 +1,36 @@
+# txtsetup.oem - the text-mode Setup driver description for xhci98.sys, the
+# 32-bit package: Windows 2000 and 32-bit Windows XP (roadmap-hcd.md task
+# 33.3; design record 13, section 5.6).
+#
+# At the start of text-mode Setup, press F6, then S at the "Setup could not
+# determine the type of one or more mass storage devices" screen, and give
+# Setup this disk in drive A:. Setup loads xhci98.sys as a "scsi" component,
+# the one class F6 offers, and binds it by the two ids below: the xHCI
+# controller's PCI class code, and the root hub the driver creates under a
+# project-owned id. The devices behind the root hub are then bound by Setup's
+# own HID and storage drivers (hidusb, kbdhid, mouhid, usbstor) through
+# txtsetup.sif's own hardware-id table, with usbd.sys, hidclass.sys and
+# hidparse.sys loaded from Setup's own source; none of them is on this disk.
+#
+# The 64-bit package's file is src\txtsetup-amd64.oem, staged under this
+# name; scripts\inf-gate\check-txtsetup-oem.ps1 gates both and holds them
+# equal outside their two description strings.
+#
+# ASCII only, CRLF line endings.
+
+[Disks]
+d1 = "xHCI98 USB 3.x Driver Disk (32-bit)", \xhci98.sys, \
+
+[Defaults]
+scsi = XHCI98
+
+[scsi]
+XHCI98 = "xHCI98 USB 3.x Host Controller (32-bit Windows 2000/XP)"
+
+[Files.scsi.XHCI98]
+driver = d1, xhci98.sys, xhci98
+inf    = d1, xhci98.inf
+
+[HardwareIds.scsi.XHCI98]
+id = "PCI\CC_0C0330", "xhci98"
+id = "XHCI98\ROOT_HUB", "xhci98"

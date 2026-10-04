@@ -503,6 +503,14 @@ $publishable = @("xhci98.inf", "xhci98.sys")
 # it is present and does not require it.
 $uasPublishable = @("xhciuas.inf", "xhciuas.sys")
 
+# The text-mode Setup driver description (roadmap task 33.3), published at the
+# root of every flavour directory a cut writes, where text-mode Setup of
+# Windows 2000 and XP reads it from A:\. Not an INF-declared file either: its
+# own gate (scripts\inf-gate\check-txtsetup-oem.ps1) checks it in place against
+# the INF beside it. A version published before 2.1.0.0 has none, so
+# -UploadSetOnly gates it where it is present and does not require it.
+$oemPublishable = @("txtsetup.oem")
+
 # The DDK's obj directory is the one place its vocabulary is still read; the
 # published directory name is built from the flavour and the architecture
 # together by New-ReleaseLegs below, so the flavour word is no longer a
@@ -1394,7 +1402,7 @@ their defaults.
             Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $expected `
                                                -PublishedPaths $publishedPaths `
                                                -InfName $infName -Flavor $f `
-                                               -Also $uasPublishable
+                                               -Also ($uasPublishable + $oemPublishable)
 
             # Copied at the path the INF declares, which is where the check
             # below will look for it. Taking the layout from the gate's parse
@@ -1505,6 +1513,37 @@ $gateOut
             Write-Ok ("{0}\ carries the UAS class driver, by its own INF" -f $f)
         } elseif ($null -ne $pkgDir) {
             throw "the assembled upload set's $f\ directory has no xhciuas.inf, and this cut built it with one."
+        }
+
+        # The text-mode Setup description, by its own gate against the INF
+        # beside it. Required of a directory this cut built; gated where
+        # present in one -UploadSetOnly reads, since a version published
+        # before 2.1.0.0 has none.
+        $oemFile = Join-Path $uploadFlavorDir "txtsetup.oem"
+        if (Test-Path -LiteralPath $oemFile) {
+            $oemGate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-txtsetup-oem.ps1"
+            $oemArch = if ($LegArches[$f] -eq "amd64") { "amd64" } else { "x86" }
+            $savedEap = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                $gateOut = & powershell.exe @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $oemGate,
+                                              "-OemPath", $oemFile, "-InfPath", $flavorInf, "-Arch", $oemArch,
+                                              "-PackageDir", $uploadFlavorDir) 2>&1 | Out-String
+            } finally {
+                $ErrorActionPreference = $savedEap
+            }
+            if ($LASTEXITCODE -ne 0) {
+                throw @"
+the assembled upload set's $f\ directory failed scripts\inf-gate\check-txtsetup-oem.ps1.
+Do not upload it: the text-mode Setup description does not match the driver and
+INF beside it.
+
+$gateOut
+"@
+            }
+            Write-Ok ("{0}\ carries the text-mode Setup description, by its own gate" -f $f)
+        } elseif ($null -ne $pkgDir) {
+            throw "the assembled upload set's $f\ directory has no txtsetup.oem, and this cut built it with one."
         }
     }
 
@@ -2025,7 +2064,7 @@ runs are what stand between a broken binary and a guest that cannot boot.
         Ensure-Directory $destRoot
         Ensure-Directory $destDir
 
-        foreach ($name in ($publishable + $uasPublishable)) {
+        foreach ($name in ($publishable + $uasPublishable + $oemPublishable)) {
             $src = Join-Path $pkgDir $name
             if (-not (Test-Path -LiteralPath $src)) {
                 throw "make-package.ps1 produced no '$name' in '$pkgDir'."
@@ -2042,7 +2081,7 @@ runs are what stand between a broken binary and a guest that cannot boot.
         Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected[$leg.Arch] `
                                            -PublishedPaths $declaredPublished[$leg.Arch] `
                                            -InfName "xhci98.inf" -Flavor $leg.Id `
-                                           -Also $uasPublishable
+                                           -Also ($uasPublishable + $oemPublishable)
 
         $sys = Join-Path $destDir "xhci98.sys"
         $info = (Get-Item -LiteralPath $sys).VersionInfo
@@ -2544,6 +2583,7 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $contents += ("      xhciuas.sys  {0:N0} bytes" -f $s.UasLength)
         $contents += "      SHA-256"
         $contents += ("      {0}" -f $s.UasSha256)
+        $contents += "      txtsetup.oem (for Windows 2000 and XP Setup's F6 prompt)"
         $contents += ""
     }
     if ($multiArch) {
@@ -2917,12 +2957,14 @@ tested.
  3. THE FILES WINDOWS SUPPLIES, AND USB STORAGE ON WINDOWS 98 SE
 ==============================================================================
 
-The package's own files are four, and they are in:
+The package's own files are five, and they are in:
 
       {DIRLIST}
 
   xhci98.inf, xhci98.sys     the USB host controller driver
   xhciuas.inf, xhciuas.sys   the UAS storage driver
+  txtsetup.oem               the driver description Windows 2000 and XP
+                             Setup read when F6 is pressed (section 4)
 
 Nothing else is in the package, and there is nothing to complete.
 
@@ -3058,6 +3100,26 @@ USB 3.x Root Hub" underneath it. Neither should carry a warning mark.
 THE UAS DRIVER installs the first time a UAS disk is plugged in: the Found
 New Hardware wizard asks for a driver for "xHCI98 USB Attached SCSI
 Storage". Point it at the same directory. No restart is needed.
+
+INSTALLING WINDOWS 2000 OR XP ITSELF ON AN xHCI-ONLY MACHINE
+............................................................
+
+When the keyboard or the install medium is on the xHCI controller, Setup
+can load this driver at its F6 prompt. Copy the files of RELEASE-X86\ (or
+RELEASE-X64\ for Windows XP x64) to the root of a floppy disk - it holds
+txtsetup.oem, xhci98.sys and xhci98.inf, which is all F6 reads. Start
+Setup, press F6 when "Press F6 if you need to install a third party SCSI
+or RAID driver" shows, press S at the next screen, insert the floppy, and
+pick "xHCI98 USB 3.x Host Controller". Setup then uses its own keyboard,
+mouse and USB storage drivers above it.
+
+  - Pressing F6 itself needs the firmware's own USB keyboard support.
+  - The floppy must be drive A: as the firmware sees it.
+  - A UAS-only disk is not usable during Setup; a USB disk that also
+    speaks Bulk-Only is.
+  - Installing Windows ONTO a USB disk is not supported.
+  - Later in Setup, Windows installs the driver again from xhci98.inf and
+    may ask for the floppy or the Windows CD.
 
 UPGRADING FROM THE EARLIER, USB 2.0-ONLY RELEASES (1.x)
 .......................................................
