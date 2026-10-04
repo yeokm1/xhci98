@@ -3015,12 +3015,12 @@ INSTALL FROM THE RELEASE DIRECTORY:
 This package carries BOTH builds side by side, RELEASE and DEBUG, each a
 complete set of files with the same names, so the directory you point
 Windows at is what decides which drivers you get. RELEASE is the one you
-want. DEBUG ({DEBUGDIR}\) is the same drivers built so that a crash on them
-can be traced further back. It records nothing more than RELEASE does, and
-it is there only for troubleshooting a machine that has already gone wrong.
-It prints nothing as it runs. Section 8 describes both, and nothing about a
-copied file says which one it is - so point at a directory, never at a
-loose .sys file.{ARCHNOTE}
+want. DEBUG ({DEBUGDIR}\) is the same drivers built
+so that a crash on them can be traced further back. It records nothing more
+than RELEASE does, and it is there only for troubleshooting a machine that
+has already gone wrong. It prints nothing as it runs. Section 8 describes
+both, and nothing about a copied file says which one it is - so point at a
+directory, never at a loose .sys file.{ARCHNOTE}
 
 Put the whole unzipped package somewhere the machine can read - a floppy, a
 CD, a shared folder - then:
