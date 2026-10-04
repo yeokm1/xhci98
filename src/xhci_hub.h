@@ -371,4 +371,65 @@ ULONG XhciHubClearTtPort(ULONG multiTt, ULONG ttPort);
 ULONG XhciHubReleaseOrder(const ULONG *parent, ULONG count, ULONG top,
                           PULONG order);
 
+/*
+ * A hub as a devnode (roadmap-hcd.md task 33.4; design record 13 section
+ * 10.11). The bus still runs the hub; these are the pure halves of how it
+ * is presented.
+ */
+
+/* The ids a hub PDO answers, project-owned so no OS hub INF matches them:
+ * XHCI98\HUB (a USB 2.0 or 1.1 hub, or a USB 3 hub's USB 2.0 half) or
+ * XHCI98\HUB30 (a USB 3 hub's SuperSpeed half), qualified by the device
+ * descriptor's idVendor, idProduct and bcdDevice. NUL-terminated strings,
+ * a second NUL closing a multi-string (the hardware ids), upper-case hex,
+ * as XhciFuncId writes them; *used is the length the answer needs, NULs
+ * included. A hub answers no compatible id, and BAD_PARAM for one. */
+#define XHCI_HUBPDO_ID_DEVICE       0UL
+#define XHCI_HUBPDO_ID_HARDWARE     1UL
+#define XHCI_HUBPDO_ID_COMPATIBLE   2UL
+#define XHCI_HUBPDO_ID_INSTANCE     3UL
+
+#define XHCI_HUBPDO_OK              0UL
+#define XHCI_HUBPDO_TOO_SMALL       1UL
+#define XHCI_HUBPDO_BAD_PARAM       2UL
+
+ULONG XhciHubPdoId(const UCHAR *device, ULONG usb3, ULONG instanceKey,
+                   ULONG which, char *out, ULONG capacity, PULONG used);
+
+/*
+ * The hub PDO a device is presented under: the nearest hub above it that
+ * has a PDO, or 0 for the root hub. `start` is the index of the hub whose
+ * port the device sits on (XHCI_HUB_NO_PARENT on a root port); parent[i] is
+ * as XhciHubReleaseOrder takes it and serial[i] hub i's PDO serial, 0 when
+ * it has none. A chain longer than `count` (a loop) or a detached hub ends
+ * the walk at the root hub.
+ */
+ULONG XhciHubPresentedParent(const ULONG *parent, const ULONG *serial,
+                             ULONG count, ULONG start);
+
+/* The port location (hcd.h's PortId, 1-based) of port `n` of hub object
+ * `index`, after `rootPorts` root ports and `perHub` locations a hub; 0 for
+ * n outside 1..perHub. */
+ULONG XhciHubPortLocation(ULONG rootPorts, ULONG perHub, ULONG index,
+                          ULONG n);
+
+/*
+ * IOCTL_USB_GET_NODE_INFORMATION's answer for an external hub, the 0x4C
+ * bytes of usbioctl.h's #pragma pack(1) USB_NODE_INFORMATION: NodeType
+ * UsbHub (0), a 0x29 hub descriptor from the bus's parse (a SuperSpeed
+ * half's in the same shape - the one the structure has), every removable
+ * and power-mask bit 0, then HubIsBusPowered. `desc` NULL (a hub refused
+ * as too deep, never described) answers no ports.
+ */
+#define XHCI_HUB_NODE_INFO_BYTES    0x4CUL
+
+VOID XhciHubNodeInfo(const XHCI_HUB_DESC *desc, ULONG busPowered,
+                     UCHAR *out);
+
+/* USB_HUB_CAP_FLAGS (WDK 7.1 usbioctl.h): HubIsHighSpeedCapable bit 0,
+ * HubIsHighSpeed bit 1, HubIsMultiTtCapable bit 2, HubIsMultiTt bit 3,
+ * HubIsRoot bit 4 - for an external hub of `speedClass`, multi-TT
+ * capable (bDeviceProtocol 2) and with its multi-TT interface selected. */
+ULONG XhciHubCapsEx(ULONG speedClass, ULONG multiTtCapable, ULONG multiTtOn);
+
 #endif /* XHCI_HUB_H */
