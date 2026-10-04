@@ -3228,9 +3228,9 @@ Known limitations:
     hub ports are never suspended to save power. A suspend or resume a hub
     reports is handled.
 
-  * UPGRADING IN PLACE OVER A RUNNING 1.2.0.0 UNDER NUSB BLUE-SCREENS.
-    NUSB's usbport.sys crashes the machine as it stops 1.2.0.0, before this
-    release runs. Follow section 4, which avoids it.
+  * UPGRADING IN PLACE OVER A RUNNING 1.X DRIVER UNDER NUSB BLUE-SCREENS.
+    NUSB's usbport.sys crashes the machine as it stops the old driver,
+    before this release runs. Follow section 4, which avoids it.
 
   * USB STORAGE ON WINDOWS 98 IS SLOWER THAN THE DRIVE. An observation, not
     a defect found: Windows 98 sends one command at a time. On a ThinkPad
