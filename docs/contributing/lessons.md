@@ -9654,22 +9654,30 @@ about 16 s, and it ends as an Unknown Device anyway. Ports are enumerated
 one at a time on the controller thread, so one dead port can use up a
 shared budget before a keyboard behind it gets its turn.
 
-The fix decided on is on branch `p33-initenum` and is owed its reading
-(roadmap 33.3):
+The fix is on branch `p33-initenum` (design record 13 section 5.7), and
+its reading passed (2026-10-04 and 05, `out\phase33\initenum\`):
 
-- Each FDO's first BusRelations (the root hub's, and each external hub's
-  for its own ports) waits until the ports connected at start have settled.
-  Settled means their PDOs are published, or the port disconnected, or it
-  terminally failed or was refused.
-- The wait has a 2 s budget per port, so a slow port is deferred and
-  reported late, not allowed to starve the others.
-- It has a 5 s cap on the whole answer, and it costs nothing when nothing
-  is attached.
-- Both limits are registry values (owner, 2026-10-04). A 15 s cap was
-  proposed and rejected as too long.
+- Each hub FDO's first BusRelations after a start (the root hub's, and
+  each external hub's) waits until the ports connected at start have
+  settled: their PDOs created, or the port failed or was refused. The
+  controller thread declares it at the end of a pass with nothing owed or
+  in flight; the waiter polls every 20 ms holding no lock.
+- Bounds, both relative timers and both REG_DWORDs in milliseconds on the
+  controller's driver key: `XhciFirstEnumWaitMs`, the whole answer, default
+  5000 (0 turns the wait off, held to 30000); `XhciFirstEnumPortMs`, per
+  port, default 2000 (0 for none, held to the total). A port past its
+  budget is deferred and reported late, not allowed to starve the others.
+  A 15 s cap was proposed and rejected as too long (owner, 2026-10-04).
 - Text-mode Setup has no INF-written registry values, so the built-in
   defaults are what F6 gets.
-
+- **Result: Windows 2000 SP4 text mode now passes**, `release` and `qemu`
+  flavours, keyboard at a root port and behind a `usb-hub`: the keyboard
+  answers at Welcome and the stick is listed at the partition screen. XP
+  SP3 still passes. Measured first answers: 343 ms (keyboard and stick at
+  root ports), 562 ms (keyboard behind a hub) with the hub FDO's own 31 ms;
+  on an installed Windows 98 SE 625 to 650 ms, on an installed Windows 2000
+  961 to 1,081 ms with five devices, and **20 ms with nothing attached**
+  (one step of the waiter). No answer reached its deadline.
 Two harness traps from the same legs:
 
 - **`-machine pc,i8042=off` hangs NT5 Setup.** NTDETECT ("Setup is

@@ -840,28 +840,35 @@ specification's and stay unconfigurable.
    under the next hub up (10.11) and are in that hub's answer; the
    bus-wide settle covers them whichever FDO answers.
 
-**Measured** (runtime, the `qemu` flavour's trace unless it says
-`release`, 2026-10-04 and 05, development host A, QEMU TCG, the first
-build of this section; `out\phase33\initenum\`, git-ignored):
+**Measured** (runtime, the `qemu` flavour's trace unless a row says
+`release`, 2026-10-04 and 05, development host A, QEMU TCG;
+`out\phase33\initenum\`, git-ignored). The first rows were taken on
+`89a8025`, the rows marked "final" on `59e1897` (Codex rounds 1 and 2 in);
+round 3's change after it touches only a SuperSpeed root link still in
+reset, which none of these legs has.
 
 | Leg | Devices at start | Root hub's first answer | Hub FDO's first answer | Result |
 |---|---|---|---|---|
-| Windows 2000 SP4 text mode, F6 (`qemu`) | keyboard, stick at root ports | 343 ms, both PDOs | - | keyboard answers at Welcome and the licence, stick listed at the partition screen |
-| the same, `release` | the same | (no trace) | - | the same |
-| the same, `qemu` | keyboard behind a `usb-hub`, stick at a root port | 562 ms | 31 ms | the same |
+| Windows 2000 SP4 text mode, F6 | keyboard, stick at root ports | 343 ms, both PDOs | - | keyboard answers at Welcome and the licence; stick listed at the partition screen |
+| the same, `release`, and again final | the same | (no trace) | - | the same |
+| the same, keyboard behind a `usb-hub`, and again final | keyboard behind the hub, stick at a root port | 562 ms | 31 ms | the same |
 | 32-bit XP SP3 text mode, F6, `release`, two processors | keyboard, stick at root ports | (no trace) | - | the same |
-| Windows 98 SE, installed, cold boot | mouse, stick at root ports; mouse behind a `usb-hub` | 625 to 650 ms | 0 ms | all started |
-| Windows 2000 SP4, installed | mouse, stick at root ports; mouse and stick behind a `usb-hub` | 961 to 1,081 ms | 20 ms | all started, both sticks with drive letters |
+| Windows 98 SE, installed (`win98-gold` overlay), cold boots | mouse, stick at root ports; mouse behind a `usb-hub` | 625 to 650 ms | 0 ms | all started, no wizard at the second cold boot |
+| the same, controller disabled and enabled in Device Manager (task 33.1) | the same | 0 ms | 0 ms | every PDO kept dormant and revived; the hub FDO started before the root hub's answer was asked |
+| Windows 2000 SP4, installed (`win2k-au28a` overlay), and again final | mouse, stick at root ports; mouse and stick behind a `usb-hub` | 961 to 1,081 ms | 20 ms | all started, both sticks with drive letters |
 | the same guest, every device unplugged, restart | nothing | 20 ms | - | - |
 
 No answer reached its deadline and no port was deferred. Windows 98 SE's
 NTKERN took the waits with no stall: the root hub's first answer is
-issued while the controller thread enumerates and calls
+asked for while the controller thread enumerates and calls
 `IoInvalidateDeviceRelations`, and it ended at the settle each time.
-Windows 98 SE's hub FDO is asked for its relations well after its start
-(the hardware wizard runs first), so its wait is nothing. Not read here:
-Windows ME, the 33.1 re-enable with this wait, Driver Verifier, and a
-device that never answers (QEMU models none).
+Windows 98 SE asks a hub FDO for its relations well after its start, so
+its wait is nothing. One Windows 98 SE restart (Start, Shut Down,
+Restart) hung after the controller's D3 with the guest in real mode, and a
+`system_reset` met the same hang; a Shut Down and a cold boot were clean.
+It is outside this wait (no relations answer is involved after the D3)
+and was not bisected. Not read here: Windows ME, Driver Verifier, a
+SuperSpeed device, and a device that never answers (QEMU models none).
 ## 6. The function-driver contract (task 25.2)
 
 What each target's class drivers send a USB device PDO, read out of the
