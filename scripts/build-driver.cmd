@@ -50,6 +50,10 @@ rem      same flavour marker check and source stamp, and its two INFs' own
 rem      gate (scripts\inf-gate\check-uas-inf.ps1, self-tested first, run
 rem      over src\uas\xhciuas.inf and xhciuas-amd64.inf on every build) beside
 rem      the two runs of check-inf.ps1
+rem  13. the text-mode Setup driver descriptions of task 33.3,
+rem      src\txtsetup.oem and src\txtsetup-amd64.oem, gated by
+rem      scripts\inf-gate\check-txtsetup-oem.ps1 (self-tested first) beside
+rem      the INF gates
 rem
 rem Any failure stops the run. scripts\local\ddk-debug.cmd still exists for an
 rem interactive DDK prompt, but a binary built that way has not been through the
@@ -310,6 +314,29 @@ echo === UAS INF gate (amd64) ===
 set "INFFILE=src\uas\xhciuas-amd64.inf"
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\inf-gate\check-uas-inf.ps1" -Arch amd64
+if errorlevel 1 goto inffail
+
+rem The text-mode Setup driver descriptions (task 33.3): src\txtsetup.oem and
+rem src\txtsetup-amd64.oem, self-tested by mutation first, then each gated
+rem against the INF of its own architecture and against the other file.
+echo.
+echo === txtsetup.oem gate self-tests ===
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\inf-gate\check-txtsetup-oem.ps1" -SelfTest
+if errorlevel 1 goto inftestfail
+
+echo.
+echo === txtsetup.oem gate (x86) ===
+set "INFFILE=src\txtsetup.oem"
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\inf-gate\check-txtsetup-oem.ps1" -Arch x86
+if errorlevel 1 goto inffail
+
+echo.
+echo === txtsetup.oem gate (amd64) ===
+set "INFFILE=src\txtsetup-amd64.oem"
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\inf-gate\check-txtsetup-oem.ps1" -Arch amd64
 if errorlevel 1 goto inffail
 
 rem Stand-ins only - no build, no staged media, no VM - so this runs here with
