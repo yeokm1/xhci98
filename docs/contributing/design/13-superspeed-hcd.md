@@ -320,6 +320,28 @@ Windows 98 arrives as an out-of-sequence `IRP_MN_REMOVE_DEVICE` with no
 remove handler is written to be the first PnP IRP the object sees after
 start.
 
+**The controller's orderly stop is the exception to "the controller stops,
+the PDOs are reported missing"** (corrected 2026-10-04; roadmap task 33.1,
+merge `a9a7577`; `docs/issues/09-me-controller-reenable-stopped-pdos.md`).
+Windows 98 SE and ME disable a controller by STOPping its whole tree and
+STARTing it again at the enable, expecting the same devnodes back; a new PDO
+at the instance id of a stopped one wedged ME's configuration manager. So on
+an orderly PnP `STOP` of the controller (`StopPreserve`), every device whose
+PDOs PnP has all stopped - listed, not removed, not surprise-removed, no URB
+pending - keeps them listed with no device record, **dormant**
+(`HcdDevicePdoDormantAll`), and the drop that follows reports nothing gone
+for it. At the restart the device's re-enumeration at the same place with
+the same descriptors revives the dormant group (`hcdDormantRevive`), whose
+`START` waits for that (up to 10 s, `hcdDormantWait`); a device that does
+not come back, or a different one there, has the dormant group reported
+missing then. Windows 2000 onward remove the children before a controller
+disable, so nothing goes dormant there, and a stop of the controller alone
+(a rebalance) leaves the children started, which are dropped and reported
+missing as above. Hub PDOs (task 33.4, section 10.11) follow the same model:
+a hub's dormant PDO is revived by the hub's re-enumeration with its serial
+kept, a device behind a hub is kept dormant only when that hub's PDO is, and
+a dormant group retired takes the dormant groups below it with it.
+
 ### 5.3 The enumeration state machine
 
 One machine per port object, driven from one PASSIVE-level context per
