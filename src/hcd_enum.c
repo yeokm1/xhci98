@@ -83,6 +83,11 @@
 /* Looks at a hub port whose GET_STATUS failed, in a row, before its look
  * is no longer owed (task 33.3): a bus policy number. */
 #define HCD_HUB_LOOK_TRIES     3UL
+/* A warm reset read still in progress (task 33.3): the passes after which,
+ * whatever the clock says, it is the controller's failure, and the mark that
+ * its recovery has been asked for. */
+#define HCD_LINK_RECOVERY_PASSES 600UL
+#define HCD_LINK_RECOVERY_FAILED 0xFFFFFFFFUL
 
 #define HCD_DESC_DEVICE        1
 #define HCD_DESC_CONFIGURATION 2
@@ -2180,16 +2185,27 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
      * port still reads it in progress: the inspection is owed again and
      * nothing is acknowledged or fed until it reads otherwise, so neither a
      * first answer nor the machine takes a link still training for settled
-     * (Codex review of 33.3, round 2, finding 1). Bounded as an unreadable
-     * port is; past it the inspection goes on as before. Below may start
-     * another. */
-    if (p->LinkRecovering != 0 && (portsc & XHCI_PORTSC_PR) != 0 &&
-        p->LinkRecovering < HCD_PORT_UNREADABLE_PASSES) {
-        p->LinkRecovering++;
+     * (Codex review of 33.3, round 2, finding 1). A reset still in progress
+     * past twice its own wait (HCD_WARM_RESET_WAIT_MS, by the clock and, a
+     * clock set backwards notwithstanding, by passes) is the controller's
+     * failure, as an unreadable port is: its recovery is asked for once and
+     * the inspection stays owed - never an ordinary inspection of a port
+     * still in reset (round 3). */
+    if (p->LinkRecovering != 0 && (portsc & XHCI_PORTSC_PR) != 0) {
+        if (p->LinkRecovering != HCD_LINK_RECOVERY_FAILED) {
+            p->LinkRecovering++;
+            if (XhciEnumElapsedMs(p->LinkRecoverStart, HcdEnumSettleClock()) >=
+                    2UL * HCD_WARM_RESET_WAIT_MS ||
+                p->LinkRecovering >= HCD_LINK_RECOVERY_PASSES) {
+                p->LinkRecovering = HCD_LINK_RECOVERY_FAILED;
+                XHCI_DBG_VALUE("hcd: warm reset never ended, recovery, port",
+                               p->PortId);
+                HcdSvcRequestReset(&hc->Hc);
+            }
+        }
         hcdPortInspectAgain(hc, p);
         return;
-    }
-    p->LinkRecovering = 0;
+    }    p->LinkRecovering = 0;
     changes = portsc & XHCI_PORTSC_CHANGE_MASK;
     if (changes != 0) {
         XhciWritePortsc(ext, p->PortId,
@@ -2235,6 +2251,9 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
      * change brings; until then the first answer counts it in flight
      * (task 33.3; Codex review of 33.3, round 1, finding 2). */
     p->LinkRecovering = (act.Kind == XHCI_LINK_ACT_WARM_RESET) ? 1UL : 0UL;
+    if (p->LinkRecovering) {
+        p->LinkRecoverStart = HcdEnumSettleClock();
+    }
     switch (act.Kind) {
     case XHCI_LINK_ACT_WARM_RESET:
         hc->Counters.SsWarmResets++;

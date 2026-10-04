@@ -650,6 +650,7 @@ typedef struct _HCD_PORT {
      * failures in a row, its look owed again up to HCD_HUB_LOOK_TRIES.
      * Thread only. */
     ULONG LinkRecovering;
+    ULONG LinkRecoverStart;        /* HcdEnumSettleClock at the reset   */
     ULONG LookFails;
 } HCD_PORT, *PHCD_PORT;
 

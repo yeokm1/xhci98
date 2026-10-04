@@ -718,8 +718,10 @@ invalidation its PDO's creation makes.
   included, so one more pass looks), no hub `Changed` bit, every managed
   port's machine at rest (`XhciEnumAtRest`), no SuperSpeed root link whose
   warm reset (29-A.2) is still read in progress (`PORTSC.PR`; the port's
-  inspection is owed again meanwhile and feeds nothing, within the
-  unreadable-port bound; `LinkRecovering`, round 2), no
+  inspection is owed again meanwhile and feeds nothing; a reset still in
+  progress past twice its own 1 s wait is the controller's failure, its
+  recovery asked for as for an unreadable port; `LinkRecovering`, rounds 2
+  and 3), no
   send-back of the window in flight (`XhciEnumHoldInFlight`). A hub port
   whose `GET_STATUS` failed is owed its look again up to three times in a
   row (`HCD_HUB_LOOK_TRIES`) rather than taken as looked at (Codex review of
