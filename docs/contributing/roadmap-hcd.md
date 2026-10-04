@@ -291,6 +291,8 @@ machines and the E460's Windows 7.
 
 Status: drafted, and merged into the integration branch `p28-31-int` with Phases 28 to 31 (2026-10-04); its VM legs are pending, to be read once on the merged build (decisions table, the run plan), and its E.1 clause waits for the combined bench session.
 
+Progress (2026-10-04, development host A; status, not ticks - the V and E ticks come with the run records once Package B's readings are in): the 28-V.1 `qemu` legs on XP SP3, XP x64, Vista x86 and x64 and 7 x86 and x64 passed every clause but the soak - clauses 1 to 11 on `c0d8a51`, 13 to 15 (UAS at High Speed, SuperSpeed storage, UAS at SuperSpeed) on Package A, `2f6030a`; the soaks wait for Package B. No HCD defect was found; the amd64 `xhciuas` passed at High Speed and SuperSpeed on XP x64, Vista x64 and 7 x64 (`out\phase28\v1\<guest>\report.md`). Windows ME's official legs wait for Package B; its pre-read and findings are in `out\phase28\pre\me`. The `release`-flavour kit for the ten install legs is ready (`out\phase28\release`).
+
 Why a phase: a target is not a build. The NT 5.x and 6.x class drivers query
 interfaces Windows 2000's do not, the amd64 build is a second toolchain, and
 the bench is where the miniport found issue 2, the hot-plug wedge no VM ever
@@ -298,11 +300,13 @@ showed.
 
 - [ ] 28-A.1 the per-target deltas of 25.2: the `USB_BUS_INTERFACE_USBDI` versions, `GET_DEVICE_HANDLE` and whatever else XP onward sends; Windows ME under SweetLow's stack with its own `usbccgp.sys` left unused
   - Note, not a tick (2026-10-04): drafted on `p28-a1` and merged into `p28-31-int` - the USBDI versions 0 to 3 through image-lifetime interface slots, the idle notification held and drained, and `SYNC_RESET_PIPE`; on the XP x64 guest the composite audio device bound and played in real time. The guest legs that tick it are 28-V.1's, on the merged build
+  - Note, closing the open question of the interfaces left unanswered (2026-10-04): the three `QUERY_INTERFACE` GUIDs the guests send that the bus does not answer are identified and are left unanswered by design. `GUID_BUS_INTERFACE_STANDARD` and `BUSID_SoftwareDeviceEnumerator` come from `ks.sys` for `usbaudio`, and the stock `usbhub.sys` and `usbccgp.sys` refuse them too; `GUID_PNP_LOCATION_INTERFACE` comes from Windows 7's PnP manager, and the only cost of refusing it is an empty Location paths property (`out\phase28\qi-guids.txt`)
 - [x] 28-A.2 (moved to the start of Phase 27 by the owner's decision of 2026-10-03, so amd64 guest legs run beside the x86 legs from then on; it stays numbered here) the amd64 build of the HCD: WDK 7.1 as `WNET`, no `usbport` import library at all, the `_WIN64` halves of the bus's own structures, the amd64 allowlist, the second INF. Done 2026-10-04 in Phase 27 (`runs/run-27.md`, "28-A.2 on Windows XP x64"; `dff49ae`): the overflow arrays' layout checked at compile time on both architectures, a common buffer above 4 GB refused, the stale INF, allowlist and packager text gone; on Windows XP x64 SP2 under QEMU, the `qemu` flavour installed from clean with Windows' signature and Logo prompts only and no restart, the mouse moving the pointer, storage `fc /b` clean, disable, enable, uninstall and rescan, the Advanced and Power tabs, `XHCISNAP -probe` through WOW64, and a clean shutdown; the `release` package the same, its gates passed. Audio there showed Code 10 on the unanswered `USB_BUS_INTERFACE_USBDI` query until 28-A.1, and bound and played in real time with 28-A.1 on branch `p28-a1` (`fe8480b`, not in Phase 27). The other guests' amd64 legs are 28-V.1's
 - [ ] 28-V.1 the seven other guests: ME, XP SP3, XP x64, Vista x86 and x64, 7 x86 and x64, each the same clauses as 26-V and 27-V, Vista and 7 at four virtual processors; Vista x64 and Windows 7 x64 on an F8 boot, as before, and XP x64 with no such need. With the three Windows 98 SE and Windows 2000 legs of Phases 26 and 27 these are the ten install legs every cut reads
 - [ ] 28-E.1 the bench: the E460 on Windows 98 SE and on 32-bit Windows 7, and the second Windows 98 SE machine, through `run-13e.md`'s stage list - install, HID, storage, Ethernet, audio played and heard on a root port and behind a hub (Phase 27's playback clause, which only the bench can take), five hot-plugs, the controller disable that hung Windows 7 under the miniport - and Phase 27's High-Speed hub clauses, which only the bench can take: the hub rig at positions H1 to H4 with the single-TT and multi-TT units of `test-equipment.md`, Low and Full Speed devices behind each, the Full-Speed hub clause if a specimen is held by then and otherwise recorded as untested ground as Phase 13 recorded it; and Phase 27's Low-Speed mouse clause, moved here by the owner's decision of 2026-10-04 since no QEMU model is Low Speed - a Low-Speed mouse at `bInterval` 10 polled every 8 ms on a root port and behind a hub, on the host vectors of `test_hub`'s `test_low_speed_mouse` until then; read in the combined bench session before the `2.0.0.0` cut (owner, 2026-10-03; decisions table)
 - [ ] 28.3 every known limitation of `1.2.0.0` re-measured under the HCD and written down as gone, carried or new: the NUSB stop crash (usbport's, so expected gone), the idle that never sleeps (now the bus's own power policy, so a decision, which also decides whether the bus suspends hub ports: Phase 27 handles a suspended or resumed hub port and initiates no suspend, by the owner's decision of 2026-10-04), the Windows 98 churn wedge, the Windows 7 disable hang
   - Note (2026-10-04): the Windows 98 SE audio-load wedge, which Phase 27 found and which predates it and lies above the HCD (Phase 27's status, "Pre-existing limitation"), is carried here as a fourth item. The idle policy and the survivors' standing are the decisions table's
+  - Progress (2026-10-04), item by item: the Windows 2000 audio unplug during playback is gone - REMOVE arrived within about 1 s in 7 of 7 (`out\phase28\w2k-audio-unplug\report.md`); the Windows 7 disable hang did not reproduce in QEMU, 5 cycles each on 7 x86 and x64, and its E460 re-measure is the bench's (28-E.1); the Windows 98 SE audio-load wedge is pre-existing, above the HCD, and carried; the NUSB stop crash waits on the upgrade report (`out\phase28\upgrade`); the idle that never sleeps is carried by ruling (decisions table)
 
 Checkpoint: the ten install legs read on the `qemu` build and then the
 `release` flavour; the bench run on both Windows 98 SE machines and the E460's
@@ -319,6 +323,8 @@ with the bulk, interrupt and isochronous paths at that speed, and a USB 2.0
 device on the same connector unchanged.
 
 Status: drafted, and merged into the integration branch `p28-31-int` with Phases 28 to 31 (2026-10-04); its VM legs are pending, to be read once on the merged build (decisions table, the run plan), and its E.1 clause waits for the combined bench session.
+
+Progress (2026-10-04; not ticks): 29-V.1 passed on both primaries on `c0d8a51` - a SuperSpeed `usb-storage` at 5000 Mb/s by the trace and `XHCISNAP`, `usbstor.sys` bound, `fc` clean, the USB 2.0 rows unchanged, the controller disable and enable and the shutdown clean; one caveat, `XHCISNAP`'s `.TXT` has no slot-speed field (`out\phase29\v1-merged\notes.md`). 29-0 is done (below). The SuperSpeedPlus parent-hub fields (xHCI Table 6-6, a device below a lower-rank link) and zero-bandwidth isochronous endpoints are implemented, on host vectors only, merged from `p29-spec` (`f7abde2`).
 
 Why a phase: this is the reason the successor exists. The port class the
 miniport left unpowered is powered for the first time, the link has a state
@@ -362,6 +368,8 @@ devices as a Phase 27 hub.
 
 Status: drafted, and merged into the integration branch `p28-31-int` with Phases 28 to 31 (2026-10-04); its VM legs are pending, to be read once on the merged build (decisions table, the run plan), and its E.1 clause waits for the combined bench session.
 
+Progress (2026-10-04; not ticks): 30-0 is done (below). The SuperSpeedPlus parent-hub fields for a device behind a SuperSpeed hub are implemented on host vectors only (`p29-spec`, merged), as is the SuperSpeed hub-port resume, handled and never initiated (design record 13 section 10.2). No QEMU model has a SuperSpeed hub; 30-E.1 is the bench's.
+
 Why a phase: a USB 3 hub is two hubs on two ports with their own descriptor,
 their own port status format and their own depth and link-state requests, and
 no QEMU device models one, so the readings are bench readings.
@@ -389,6 +397,8 @@ so that a UAS-capable device runs UAS at SuperSpeed and at High Speed, with
 Bulk-Only still selectable.
 
 Status: drafted, and merged into the integration branch `p28-31-int` with Phases 28 to 31 (2026-10-04); its VM legs are pending, to be read once on the merged build (decisions table, the run plan), and its E.1 clause waits for the combined bench session.
+
+Progress (2026-10-04; not ticks): 31-V.1 passed on both primaries on `c0d8a51` - at SuperSpeed with 16 streams, a fresh install with no restart, uninstall and re-plug, `XhciForceBulkOnly` ignored for the UAS-only device as designed, and clean unplugs; at High Speed streamless, the same install, round trip, uninstall and re-plug, and clean unplugs and shutdown (`out\phase31\v1-merged\notes.md`). 31-V.2 is in progress on Package A (`out\phase31\v2-merged`). Windows 98 SE under SweetLow's stack alone: storage needs NUSB's five mass-storage files - without them a stick shows Code 28 and the UAS device Code 2 (`out\phase28\sweetlow-only\report.md`). Stock Windows 98 SE on Package A: the controller, a mouse and hubs work with no USB 2.0 stack installed (`out\phase28\stock98\notes.txt`).
 
 Why a phase: streams are a transfer model the bus has never had, UAS is a
 class driver with a storage-stack contract of its own on each target, and
