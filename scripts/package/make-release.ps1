@@ -3286,7 +3286,7 @@ Things specific to this driver, worth knowing in advance:
     device (more only with XhciFastPollFsLs, section 9). Read in virtual
     machines at a root port and behind a hub on Windows 98 SE under NUSB
     and on ME, and at a root port on XP and on a stock Windows 98 SE. It
-    works behind a hub on XP too. TODO(33.7 addr legs). Its setting is
+    works behind a hub on XP too (read). Its setting is
     kept on the device's Device Manager entry, so it has to be applied
     again whenever the device is found as new hardware.
 

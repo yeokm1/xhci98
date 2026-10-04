@@ -90,7 +90,7 @@ notes say what was read on which system.
   a root port and behind a hub on Windows 98 SE under NUSB 3.6 and on ME,
   at a root port on XP, and loading on a stock Windows 98 SE too, whose own
   `usbd.sys` has the routine it needs. It works behind a hub on XP as well
-  (`TODO(33.7 addr legs)`). Its setting must be applied again after an
+  (read on XP). Its setting must be applied again after an
   upgrade from `1.x.x.x`.
 - `XhciFastPollFsLs`, a new value, off by default: at `2` or `3` a Low- or
   Full-Speed device on a root port that hidusbf sets to "31 Hz" or "62 Hz"
