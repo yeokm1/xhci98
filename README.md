@@ -140,7 +140,7 @@ On every system, update the "USB 2.0 eXtensible Host Controller (xhci98)" entry 
 
 These steps were tested on Windows 98 SE (NUSB and SweetLow), 2000, XP SP3 and 32-bit 7, in virtual machines. On XP x64, Vista and 7 x64 the same steps apply, pointed at `release-x64\` on the 64-bit systems; they have not been tested as an upgrade there.
 
-The `1.2.0.0` virtual-hub values left in the registry have no effect under `2.0.0.0`.
+After upgrading you can delete the `1.2.0.0` virtual-hub values `XhciVirtualHSHub`, `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid` from the controller's driver key (see "Tuning" below for where it is). They have no effect under `2.0.0.0`, so leaving them is harmless too.
 
 ### Updating xhciuas.sys over an older one
 

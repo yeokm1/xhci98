@@ -2704,12 +2704,6 @@ devices and hubs as well as High, Full and Low Speed ones. The second driver
 beside it, xhciuas.sys, runs UAS (USB Attached SCSI) storage, which none of
 these systems has a driver of its own for.
 
-Only Windows 98 SE has been validated on real hardware, on a ThinkPad E460
-and a ThinkPad P14s Gen 1: HID, storage, Ethernet, audio played and heard,
-High-Speed, Full-Speed and SuperSpeed hubs with devices behind them,
-SuperSpeed storage, and UAS at SuperSpeed and High Speed. The rest in virtual
-machines only.
-
 
 ISSUE REPORTING
 ------------------------------------------------------------------------------

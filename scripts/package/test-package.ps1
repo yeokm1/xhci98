@@ -1628,13 +1628,12 @@ try {
     # otherwise is the one file a user reads before trusting the driver with
     # a machine.
     #
-    # Asserted as a pair - the wrong sentence absent, the right one present -
-    # because the absence alone is satisfied by deleting the paragraph, and
-    # the qualification is the point.
+    # The wrong sentence must stay absent.
     Assert-True ($releaserText -notmatch "validated on, including on real hardware") `
         "make-release.ps1 tells the reader Windows 2000 SP4 is validated on real hardware; AGENTS.md says every Windows 2000 observation in this project is a virtual-machine one."
-    Assert-True ($releaserText -match "Only Windows 98 SE has been validated on") `
-        "make-release.ps1 no longer says which target the real-hardware validation belongs to, so the reader cannot tell that Windows 2000 SP4's is virtual-machine only."
+    # The positive half ("Only Windows 98 SE has been validated on ...") was
+    # dropped on 2026-10-04: the owner removed that paragraph from the 2.0.0.0
+    # readme, which now makes no real-hardware claim for any target.
 
     # --- the source stamp: what it can and cannot vouch for -----------------
     #
