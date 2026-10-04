@@ -916,7 +916,14 @@ static VOID hcdDormantKeep(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
     keep = 1;
     for (pdo = first; pdo != NULL; pdo = pdo->Sibling) {
-        if (!pdo->Listed || pdo->Surprised || pdo->UrbsPending != 0) {
+        if (!pdo->Listed || pdo->Surprised || pdo->UrbsPending != 0 ||
+            pdo->ParentLetGo) {
+            /* Let go of with its hub's removed FDO (HcdDevicePdoLetGo):
+             * PnP has no devnode to revive it into, and a revived let-go
+             * PDO would wait for a cycle its hub's start may have asked
+             * before the revival, and lost. Dropped, it is missing at once
+             * and comes back as new PDOs (Codex review of the hub
+             * re-enable fix, round 1). */
             keep = 0;
         } else if (pdo->RemoveReceived) {
             /* Disabled in Device Manager and still present (the WDM rule
