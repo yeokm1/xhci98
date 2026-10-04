@@ -1111,12 +1111,16 @@ static VOID hcdDormantWait(PHCD_DEVICE_PDO pdo)
 NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     XHCI_FUNC_SET set;
+    HCD_TEXT_READ textRead;
     PHCD_DEVICE_PDO first;
     PHCD_DEVICE_PDO last;
     PHCD_DEVICE_PDO pdo;
     KIRQL oldIrql;
     KIRQL serialIrql;
     NTSTATUS status;
+    ULONG indexes[XHCI_TEXT_PICKS];
+    ULONG textFlags;
+    ULONG picks;
     ULONG xportFlags;
     ULONG elsewhere;
     ULONG duplicate;
@@ -1155,6 +1159,15 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     first = NULL;
     last = NULL;
     status = STATUS_SUCCESS;
+    textRead.LangidRead = 0;
+    textRead.Langid = 0;
+    for (i = 0; i < 8; i++) {
+        textRead.Failed[i] = 0;
+    }
+    /* Windows 98 and ME keep the description in the ANSI devnode, made
+     * from this text by a conversion this project has not read; ASCII
+     * passes any (design record 13 section 10.7). */
+    textFlags = IoIsWdmVersionAvailable(1, 0x10) ? 0 : XHCI_TEXT_FOLD_ASCII;
     for (i = 0; i < count; i++) {
         status = hcdPdoNew(hc, dev, (set.Count != 0) ? &set.Func[i] : NULL,
                            xportFlags, &pdo);
@@ -1168,6 +1181,16 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
             last->Sibling = pdo;
         }
         last = pdo;
+        /* Its name (33.6), read now, while the device is here: a revived
+         * PDO keeps the one it had, and these go. */
+        picks = XhciFuncTextIndexes(dev->DeviceDesc,
+                                    (set.Count != 0) ? &set.Func[i] : NULL,
+                                    dev->Config, dev->ConfigLength, indexes);
+        if (!HcdDeviceReadText(hc, dev, indexes, picks, textFlags, &textRead,
+                               pdo->Text)) {
+            status = STATUS_DEVICE_NOT_READY;
+            goto cleanup;
+        }
     }
     /* One hold of hcdSerialLock from the identity's choice to the listing,
      * so no other controller lists the same serial id in between. */
@@ -1928,6 +1951,7 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
     PIO_STACK_LOCATION stack;
     PDEVICE_RELATIONS rel;
     PWCHAR text;
+    ULONG n;
 
     stack = IoGetCurrentIrpStackLocation(irp);
     XHCI_DBG_VALUE("hcd: device PDO PnP minor", stack->MinorFunction);
@@ -1980,7 +2004,13 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
     case IRP_MN_QUERY_DEVICE_TEXT:
         if (stack->Parameters.QueryDeviceText.DeviceTextType ==
             DeviceTextDescription) {
-            text = hcdHandOff(L"USB Device", 11);
+            /* Its product, function or interface string (33.6, design
+             * record 13 section 10.7), else what every PDO answered
+             * before 2.1.0.0. */
+            for (n = 0; n < XHCI_TEXT_CHARS && pdo->Text[n] != 0; n++) {
+            }
+            text = (n != 0) ? hcdHandOff(pdo->Text, n + 1)
+                            : hcdHandOff(L"USB Device", 11);
             if (text == NULL) {
                 return HcdCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES, 0);
             }

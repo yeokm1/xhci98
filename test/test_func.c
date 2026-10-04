@@ -901,6 +901,257 @@ static void test_revive(void)
     CHECK_EQ(XhciFuncReviveBySerial(NULL, "S1"), 0, "NULL");
 }
 
+/* Device text (task 33.6): the indexes a PDO is named from, in order. */
+static void check_picks(const UCHAR *device, const XHCI_FUNC *func,
+                        const UCHAR *cfg, ULONG length, ULONG n, ULONG a,
+                        ULONG b, ULONG c, const char *what, int line)
+{
+    ULONG got[XHCI_TEXT_PICKS];
+    ULONG want[XHCI_TEXT_PICKS];
+    ULONG count;
+    ULONG i;
+
+    want[0] = a;
+    want[1] = b;
+    want[2] = c;
+    for (i = 0; i < XHCI_TEXT_PICKS; i++) {
+        got[i] = 0xEEUL;
+    }
+    count = XhciFuncTextIndexes(device, func, cfg, length, got);
+    check_eq_impl(count, n, what, __FILE__, line);
+    for (i = 0; i < n && i < XHCI_TEXT_PICKS; i++) {
+        check_eq_impl(got[i], want[i], what, __FILE__, line);
+    }
+}
+
+static void test_text_picks(void)
+{
+    XHCI_FUNC_SET set;
+    UCHAR cfg[sizeof(iadCfg)];
+
+    /* A device PDO: iProduct alone (iadDev's is 2). */
+    copy_dev(iadDev);
+    check_picks(dev, NULL, iadCfg, sizeof(iadCfg), 1, 2, 0, 0,
+                "device PDO: iProduct", __LINE__);
+    dev[15] = 0;
+    check_picks(dev, NULL, iadCfg, sizeof(iadCfg), 0, 0, 0, 0,
+                "device PDO without iProduct: none, USB Device", __LINE__);
+
+    copy_dev(iadDev);
+    CHECK_EQ(XhciFuncSplit(dev, iadCfg, sizeof(iadCfg), &set), XHCI_FUNC_OK,
+             "text picks: IAD device splits");
+    check_picks(dev, &set.Func[0], iadCfg, sizeof(iadCfg), 1, 2, 0, 0,
+                "IAD F0: no iFunction, no iInterface: iProduct", __LINE__);
+    check_picks(dev, &set.Func[1], iadCfg, sizeof(iadCfg), 2, 5, 2, 0,
+                "IAD F1: iFunction, then iProduct", __LINE__);
+    check_picks(dev, &set.Func[2], iadCfg, sizeof(iadCfg), 2, 7, 2, 0,
+                "F2 without an IAD: iInterface, then iProduct", __LINE__);
+
+    /* All three, in order; then a repeat left out. */
+    memcpy(cfg, iadCfg, sizeof(cfg));
+    cfg[82] = 6;
+    check_picks(dev, &set.Func[1], cfg, sizeof(cfg), 3, 5, 6, 2,
+                "IAD F1: iFunction, iInterface, iProduct", __LINE__);
+    cfg[73] = 2;
+    check_picks(dev, &set.Func[1], cfg, sizeof(cfg), 2, 2, 6, 0,
+                "iFunction equal to iProduct asked once", __LINE__);
+    cfg[73] = 6;
+    check_picks(dev, &set.Func[1], cfg, sizeof(cfg), 2, 6, 2, 0,
+                "iFunction equal to iInterface asked once", __LINE__);
+
+    /* The alternate-0 interface's iInterface, not an earlier alternate
+     * 1's: offset 74 made if2 alt 1 (iInterface 9), 92 if2 alt 0 (6). */
+    memcpy(cfg, iadCfg, sizeof(cfg));
+    cfg[77] = 1;
+    cfg[82] = 9;
+    cfg[94] = 2;
+    cfg[95] = 0;
+    cfg[100] = 6;
+    check_picks(dev, &set.Func[1], cfg, sizeof(cfg), 3, 5, 6, 2,
+                "alternate 0's iInterface, not alternate 1's", __LINE__);
+
+    /* A configuration that is not sound gives iProduct alone. */
+    check_picks(dev, &set.Func[1], iadCfg, 20, 1, 2, 0, 0,
+                "a short configuration: iProduct", __LINE__);
+    check_picks(dev, &set.Func[1], NULL, 0, 1, 2, 0, 0,
+                "no configuration: iProduct", __LINE__);
+    dev[15] = 0;
+    check_picks(dev, &set.Func[0], iadCfg, sizeof(iadCfg), 0, 0, 0, 0,
+                "a function with no string at all: USB Device", __LINE__);
+    CHECK_EQ(XhciFuncTextIndexes(NULL, NULL, NULL, 0, NULL), 0,
+             "no device descriptor");
+}
+
+static void check_text(const USHORT *wide, ULONG chars, ULONG flags,
+                       ULONG expect, const USHORT *want, ULONG wantChars,
+                       const char *what, int line)
+{
+    UCHAR d[256];
+    WCHAR out[XHCI_TEXT_WCHARS];
+    ULONG bytes;
+    ULONG got;
+    ULONG i;
+
+    for (i = 0; i < XHCI_TEXT_WCHARS; i++) {
+        out[i] = 0x5A5A;
+    }
+    got = 0xEEUL;
+    bytes = make_string(d, NULL, wide, chars);
+    check_eq_impl(XhciFuncText(d, bytes, flags, out, XHCI_TEXT_WCHARS, &got),
+                  expect, what, __FILE__, line);
+    if (expect != XHCI_FUNC_OK) {
+        check_eq_impl(out[0], 0, what, __FILE__, line);
+        check_eq_impl(got, 0, what, __FILE__, line);
+        return;
+    }
+    check_eq_impl(got, wantChars, what, __FILE__, line);
+    for (i = 0; i < wantChars; i++) {
+        check_eq_impl(out[i], want[i], what, __FILE__, line);
+    }
+    check_eq_impl(out[wantChars], 0, what, __FILE__, line);
+}
+
+/* An ASCII string as UTF-16 units, for the vectors below. */
+static ULONG widen(const char *s, USHORT *out)
+{
+    ULONG n;
+
+    for (n = 0; s[n] != 0; n++) {
+        out[n] = (USHORT)(UCHAR)s[n];
+    }
+    return n;
+}
+
+static void check_text_ascii(const char *in, ULONG flags, const char *want,
+                             const char *what, int line)
+{
+    USHORT a[130];
+    USHORT b[130];
+    ULONG na;
+    ULONG nb;
+
+    na = widen(in, a);
+    if (want == NULL) {
+        check_text(a, na, flags, XHCI_FUNC_BAD_TEXT, NULL, 0, what, line);
+        return;
+    }
+    nb = widen(want, b);
+    check_text(a, na, flags, XHCI_FUNC_OK, b, nb, what, line);
+}
+
+static void test_text(void)
+{
+    static const USHORT latin[] = { 'A', 0x00E9, 'B' };
+    static const USHORT latinFolded[] = { 'A', '?', 'B' };
+    static const USHORT cjk[] = { 0x4E2D, 0x6587 };
+    static const USHORT pair[] = { 'X', 0xD83D, 0xDE00, 'Y' };
+    static const USHORT pairFolded[] = { 'X', '?', 'Y' };
+    static const USHORT loneHigh[] = { 0xD800, 'A' };
+    static const USHORT loneHighOut[] = { '?', 'A' };
+    static const USHORT loneLow[] = { 'A', 0xDC00 };
+    static const USHORT loneLowOut[] = { 'A', '?' };
+    static const USHORT highAtEnd[] = { 'A', 0xDBFF };
+    static const USHORT nonChars[] = { 'A', 0xFFFF, 0xFFFE, 'B' };
+    static const USHORT nonCharsOut[] = { 'A', '?', '?', 'B' };
+    static const USHORT c1[] = { 'A', 0x0085, 'B', 0x009F };
+    static const USHORT c1Out[] = { 'A', ' ', 'B' };
+    static const USHORT nul[] = { 'A', 'B', 0x0000, 'C' };
+    static const USHORT nulFirst[] = { 0x0000, 'A', 'B' };
+    static const USHORT onlyQ[] = { '?', 0xD800 };
+    USHORT longest[XHCI_TEXT_CHARS];
+    UCHAR d[256];
+    WCHAR out[XHCI_TEXT_WCHARS];
+    ULONG bytes;
+    ULONG got;
+    ULONG i;
+
+    /* QEMU's own strings, and the ordinary case. */
+    check_text_ascii("QEMU USB Mouse", 0, "QEMU USB Mouse",
+                     "a product string is kept", __LINE__);
+    check_text_ascii("QEMU USB HARDDRIVE", XHCI_TEXT_FOLD_ASCII,
+                     "QEMU USB HARDDRIVE", "ASCII is the same folded",
+                     __LINE__);
+    check_text_ascii("Mouse?", 0, "Mouse?", "a real '?' is kept", __LINE__);
+
+    /* Spaces and controls. */
+    check_text_ascii("  Foo  Bar \r\n", 0, "Foo Bar",
+                     "spaces trimmed and collapsed, CR LF trailing",
+                     __LINE__);
+    check_text_ascii("A\tB", 0, "A B", "a tab is a space", __LINE__);
+    check_text_ascii("A\x01\x02" "B", 0, "A B", "controls are one space",
+                     __LINE__);
+    check_text_ascii("A\x7F" "B", 0, "A B", "DEL is a space", __LINE__);
+    check_text(c1, 4, 0, XHCI_FUNC_OK, c1Out, 3, "C1 controls are spaces",
+               __LINE__);
+    check_text(nul, 4, 0, XHCI_FUNC_OK, nul, 2, "the string ends at a NUL",
+               __LINE__);
+
+    /* Nothing to show: the next pick, or USB Device. */
+    check_text_ascii("", 0, NULL, "an empty string", __LINE__);
+    check_text_ascii("   ", 0, NULL, "spaces only", __LINE__);
+    check_text_ascii("\x01\x1F", 0, NULL, "controls only", __LINE__);
+    check_text(nulFirst, 3, 0, XHCI_FUNC_BAD_TEXT, NULL, 0, "a NUL first",
+               __LINE__);
+    check_text_ascii("??", 0, NULL, "question marks only", __LINE__);
+    check_text(onlyQ, 2, 0, XHCI_FUNC_BAD_TEXT, NULL, 0,
+               "a '?' and a broken surrogate", __LINE__);
+    check_text(cjk, 2, XHCI_TEXT_FOLD_ASCII, XHCI_FUNC_BAD_TEXT, NULL, 0,
+               "CJK only, folded: nothing", __LINE__);
+
+    /* Unicode: kept on NT, folded for Windows 98 and ME. */
+    check_text(latin, 3, 0, XHCI_FUNC_OK, latin, 3, "U+00E9 kept", __LINE__);
+    check_text(latin, 3, XHCI_TEXT_FOLD_ASCII, XHCI_FUNC_OK, latinFolded, 3,
+               "U+00E9 folded", __LINE__);
+    check_text(cjk, 2, 0, XHCI_FUNC_OK, cjk, 2, "CJK kept", __LINE__);
+    check_text(pair, 4, 0, XHCI_FUNC_OK, pair, 4, "a surrogate pair kept",
+               __LINE__);
+    check_text(pair, 4, XHCI_TEXT_FOLD_ASCII, XHCI_FUNC_OK, pairFolded, 3,
+               "a surrogate pair folded to one '?'", __LINE__);
+    check_text(loneHigh, 2, 0, XHCI_FUNC_OK, loneHighOut, 2,
+               "a lone high surrogate", __LINE__);
+    check_text(loneLow, 2, 0, XHCI_FUNC_OK, loneLowOut, 2,
+               "a lone low surrogate", __LINE__);
+    check_text(highAtEnd, 2, 0, XHCI_FUNC_OK, loneLowOut, 2,
+               "a high surrogate last", __LINE__);
+    check_text(nonChars, 4, 0, XHCI_FUNC_OK, nonCharsOut, 4,
+               "U+FFFF and U+FFFE", __LINE__);
+
+    /* The longest string fits whole. */
+    for (i = 0; i < XHCI_TEXT_CHARS; i++) {
+        longest[i] = (USHORT)('A' + (i % 26));
+    }
+    check_text(longest, XHCI_TEXT_CHARS, 0, XHCI_FUNC_OK, longest,
+               XHCI_TEXT_CHARS, "126 characters, then the NUL", __LINE__);
+
+    /* Not a string descriptor, or no room. */
+    bytes = make_string(d, "ABCD", NULL, 4);
+    d[1] = 2;
+    got = 0xEE;
+    CHECK_EQ(XhciFuncText(d, bytes, 0, out, XHCI_TEXT_WCHARS, &got),
+             XHCI_FUNC_MALFORMED, "text: bDescriptorType 2");
+    CHECK_EQ(out[0], 0, "text: malformed leaves nothing");
+    CHECK_EQ(got, 0, "text: malformed, no characters");
+    d[1] = 3;
+    CHECK_EQ(XhciFuncText(d, bytes - 1, 0, out, XHCI_TEXT_WCHARS, &got),
+             XHCI_FUNC_MALFORMED, "text: bLength past the bytes read");
+    d[0] = 1;
+    CHECK_EQ(XhciFuncText(d, bytes, 0, out, XHCI_TEXT_WCHARS, &got),
+             XHCI_FUNC_MALFORMED, "text: bLength 1");
+    CHECK_EQ(XhciFuncText(d, 1, 0, out, XHCI_TEXT_WCHARS, &got),
+             XHCI_FUNC_MALFORMED, "text: one byte read");
+    d[0] = (UCHAR)(bytes - 1);
+    CHECK_EQ(XhciFuncText(d, bytes, 0, out, XHCI_TEXT_WCHARS, &got),
+             XHCI_FUNC_OK, "text: an odd bLength");
+    CHECK_EQ(got, 3, "text: an odd bLength's last byte ignored");
+    d[0] = (UCHAR)bytes;
+    CHECK_EQ(XhciFuncText(d, bytes, 0, out, XHCI_TEXT_CHARS, &got),
+             XHCI_FUNC_BAD_PARAM, "text: room for 126 only");
+    CHECK_EQ(XhciFuncText(NULL, bytes, 0, out, XHCI_TEXT_WCHARS, &got),
+             XHCI_FUNC_BAD_PARAM, "text: no descriptor");
+    CHECK_EQ(XhciFuncText(d, bytes, 0, out, XHCI_TEXT_WCHARS, NULL),
+             XHCI_FUNC_BAD_PARAM, "text: no count");
+}
+
 int main(void)
 {
     test_cmedia();
@@ -917,6 +1168,8 @@ int main(void)
     test_serial_ids();
     test_instance_ids();
     test_revive();
+    test_text_picks();
+    test_text();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

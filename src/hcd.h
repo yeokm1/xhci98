@@ -506,6 +506,10 @@ typedef struct _HCD_DEVICE_PDO {
     ULONG SerialUnread;             /* every serial read failed
                                      * (HCD_SERIAL_FAILED): ReadSerialId
                                      * is unknown, not empty              */
+    WCHAR Text[XHCI_TEXT_WCHARS];   /* DeviceTextDescription (33.6,
+                                     * HcdDeviceReadText), NUL-terminated;
+                                     * empty for "USB Device". Fixed at
+                                     * creation, kept by a revived PDO   */
     ULONG RootPort;                 /* its device's Port and Route, fixed */
     ULONG Route;                    /* at creation (GET_TOPOLOGY_ADDRESS) */
     ULONG Speed;
@@ -1112,6 +1116,16 @@ ULONG HcdThreadReaddress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 #define HCD_SERIAL_REFUSED  3UL
 #define HCD_SERIAL_FAILED   4UL
 ULONG HcdDeviceReadSerial(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+/* What one enumeration's text reads (33.6) carry from PDO to PDO: the
+ * language id, once read, and the string indexes that gave nothing. */
+typedef struct _HCD_TEXT_READ {
+    ULONG LangidRead;
+    ULONG Langid;
+    ULONG Failed[8];            /* bit (index & 31) of word index >> 5 */
+} HCD_TEXT_READ, *PHCD_TEXT_READ;
+ULONG HcdDeviceReadText(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                        const ULONG *indexes, ULONG count, ULONG flags,
+                        PHCD_TEXT_READ state, WCHAR *out);
 VOID HcdEnumCycle(PHCD_CONTROLLER hc, ULONG port, ULONG serial);
 
 /* hcd_hub.c */

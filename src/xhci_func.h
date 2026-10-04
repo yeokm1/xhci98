@@ -2,7 +2,7 @@
  * xhci_func.h - the pure half of composite splitting in xhci98.sys
  * (roadmap-hcd.md task 26-A.7; design record 13 sections 10.7 to 10.9).
  *
- * Five computations, none touching a register, a lock or a kernel service,
+ * Six computations, none touching a register, a lock or a kernel service,
  * so the host suite drives each (test\test_func.c):
  *
  *   - whether a device is split, and its functions: IADs first, then the
@@ -13,8 +13,10 @@
  *   - whether a SETUP packet may leave a function PDO (an interface
  *     recipient must be one of its interfaces);
  *   - the function PDO's ids (section 10.7), as ASCII multi-strings;
- *   - and every PDO's instance id: the serial number string when it is
- *     usable, else the location (task 33.2).
+ *   - every PDO's instance id: the serial number string when it is
+ *     usable, else the location (task 33.2);
+ *   - and every PDO's device text: which string it is named by, and that
+ *     string made fit to show (task 33.6).
  *
  * DDK-free: part of the pure core.
  */
@@ -169,5 +171,43 @@ ULONG XhciFuncReviveByPlace(const char *oldSerial, const char *oldRead,
                             ULONG oldUnread, const char *newRead,
                             ULONG newUnread, ULONG newLocation);
 ULONG XhciFuncReviveBySerial(const char *oldSerial, const char *newSerial);
+
+/*
+ * Device text (roadmap-hcd.md task 33.6; design record 13 section 10.7):
+ * the DeviceTextDescription a PDO answers, from a string descriptor. At
+ * most 126 UTF-16 units, as for a serial, and the NUL.
+ */
+#define XHCI_TEXT_CHARS         126UL
+#define XHCI_TEXT_WCHARS        127UL
+#define XHCI_TEXT_PICKS         3UL
+#define XHCI_FUNC_BAD_TEXT      6UL /* a string, but nothing to show       */
+#define XHCI_TEXT_FOLD_ASCII    1UL /* XhciFuncText flag: see below        */
+
+/*
+ * The string indexes a PDO's text is tried from, in order, into
+ * `indexes` (XHCI_TEXT_PICKS of them); returns how many, zeros and
+ * repeats left out. A device PDO (`func` NULL): iProduct. A function PDO:
+ * its IAD's iFunction, then its first interface's iInterface (alternate
+ * 0, found in the device's whole configuration `config` of `length`
+ * bytes), then the device's iProduct. 0 when there is none: the caller's
+ * "USB Device".
+ */
+ULONG XhciFuncTextIndexes(const UCHAR *device, const XHCI_FUNC *func,
+                          const UCHAR *config, ULONG length, PULONG indexes);
+
+/*
+ * The text of the string descriptor `desc`, `bytes` of it read, into
+ * `out` (at least XHCI_TEXT_WCHARS), NUL-terminated, *chars its length.
+ * The string ends at its first NUL unit. A C0 or C1 control or DEL is a
+ * space; a run of spaces is one; leading and trailing spaces go. A
+ * surrogate that is not half of a pair, U+FFFE and U+FFFF are '?'. With
+ * XHCI_TEXT_FOLD_ASCII every character above U+007E, a pair included, is
+ * '?' too (Windows 98 and ME: see design record 13 section 10.7).
+ * XHCI_FUNC_OK; XHCI_FUNC_MALFORMED (out empty) as XhciFuncSerialId's;
+ * XHCI_FUNC_BAD_TEXT (out empty) when nothing but '?' and spaces would
+ * remain, an empty string included.
+ */
+ULONG XhciFuncText(const UCHAR *desc, ULONG bytes, ULONG flags, WCHAR *out,
+                   ULONG capacity, PULONG chars);
 
 #endif /* XHCI_FUNC_H */

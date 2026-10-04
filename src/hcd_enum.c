@@ -1479,6 +1479,106 @@ ULONG HcdDeviceReadSerial(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 }
 
 /*
+ * A PDO's device text (roadmap-hcd.md task 33.6; design record 13 section
+ * 10.7) into `out` (XHCI_TEXT_WCHARS): the first of the `count` string
+ * indexes (XhciFuncTextIndexes) whose string XhciFuncText takes, in the
+ * device's first language id, as the serial read takes it (0409h when
+ * string descriptor 0 STALLs, lists none or is not read); `out` empty when
+ * none does, which is "USB Device". A name is not worth a slow enumeration:
+ * a STALL or a string with nothing to show is final, any other failure is
+ * tried HCD_TEXT_READ_TRIES times in all, and an index that gave nothing
+ * is not asked again for the device's other PDOs (`state`, zeroed by the
+ * caller once per enumeration). A timeout returns 0, as the serial read's
+ * does: the reset it requested takes the device. Every other return is 1.
+ * The reads use the scratch. Thread only, powered.
+ */
+#define HCD_TEXT_READ_TRIES 2UL
+
+ULONG HcdDeviceReadText(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                        const ULONG *indexes, ULONG count, ULONG flags,
+                        PHCD_TEXT_READ state, WCHAR *out)
+{
+    PUCHAR s;
+    ULONG outcome;
+    ULONG answer;
+    ULONG bytes;
+    ULONG chars;
+    ULONG index;
+    ULONG tries;
+    ULONG k;
+
+    out[0] = 0;
+    s = (PUCHAR)hc->ScratchVa;
+    for (k = 0; k < count; k++) {
+        index = indexes[k];
+        if (index == 0 || index > 0xFFUL ||
+            (state->Failed[index >> 5] & (1UL << (index & 31UL))) != 0) {
+            continue;
+        }
+        if (!state->LangidRead) {
+            state->Langid = 0x0409UL;
+            for (tries = 0; tries < HCD_TEXT_READ_TRIES; tries++) {
+                bytes = 0;
+                outcome = HcdThreadControlOutcome(hc, dev, 0x80, 6,
+                                                  (USHORT)0x0300, 0, 4,
+                                                  &bytes);
+                if (dev->Ep0Stuck) {
+                    return 0;
+                }
+                if (outcome == HCD_CTL_STALLED) {
+                    break;
+                }
+                if (outcome != HCD_CTL_DONE || bytes < 2 || s[1] != 3 ||
+                    s[0] < 2) {
+                    continue;
+                }
+                /* An empty list is the device's answer; a first id that
+                 * did not arrive is a failed read and tried again. */
+                if (s[0] < 4) {
+                    break;
+                }
+                if (bytes >= 4) {
+                    state->Langid = (ULONG)s[2] | ((ULONG)s[3] << 8);
+                    break;
+                }
+            }
+            state->LangidRead = 1;
+        }
+        for (tries = 0; tries < HCD_TEXT_READ_TRIES; tries++) {
+            bytes = 0;
+            outcome = HcdThreadControlOutcome(hc, dev, 0x80, 6,
+                                              (USHORT)(0x0300UL | index),
+                                              (USHORT)state->Langid, 255,
+                                              &bytes);
+            if (dev->Ep0Stuck) {
+                return 0;
+            }
+            if (outcome == HCD_CTL_STALLED) {
+                break;
+            }
+            if (outcome != HCD_CTL_DONE) {
+                continue;
+            }
+            /* A descriptor that did not arrive whole is a failed read and
+             * tried again; one with nothing to show is the device's own
+             * answer. */
+            answer = XhciFuncText(s, bytes, flags, out, XHCI_TEXT_WCHARS,
+                                  &chars);
+            if (answer == XHCI_FUNC_OK) {
+                return 1;
+            }
+            if (answer != XHCI_FUNC_MALFORMED) {
+                break;
+            }
+        }
+        state->Failed[index >> 5] |= 1UL << (index & 31UL);
+        XHCI_DBG_VALUE("hcd: no device text from string, port/index",
+                       (dev->Port << 16) | index);
+    }
+    return 1;
+}
+
+/*
  * A device enumerating on the USB 2.0 companion of a held port, its device
  * descriptor just read: told to the hold, which matches it against the held
  * identity. Only an identified hold that has seen a companion connect asks,
