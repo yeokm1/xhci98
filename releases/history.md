@@ -12,10 +12,7 @@ every published directory carries the history up to and including itself.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
-## 2.0.0.0 - TBD
-
-Drafted, not cut: the date and every `TODO(...)` below are the cut's to
-settle (`TODO(32.3)`).
+## 2.0.0.0 - 2026-10-04
 
 The driver is rewritten as a whole USB host controller driver. `xhci98.sys`
 no longer plugs in underneath Windows' own USB port driver: it runs the
