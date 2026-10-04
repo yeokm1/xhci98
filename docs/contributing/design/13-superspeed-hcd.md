@@ -2985,10 +2985,14 @@ the P14s Gen 1, on a build of this branch:
    hidusbf's `Setup.exe` (the `NOPATCH` build: there is no `usbport.sys`
    or `usbxhci.sys` under the HCD to patch).
 2. `bInterval` 16 (hidusbf's "62 Hz"), `XhciFastPollFsLs` absent: replug,
-   read the rate with a mouse rate tool (about 62 Hz) and the driver's log
-   (`XHCISNAP`, or the DebugView sink): the `fastpoll.mode` note of the
-   start, the `fastpoll.*` records, and the counter block the next stop
-   appends (`fastpoll.mode` 0, `fastpoll.opened` 0).
+   read the rate with a mouse rate tool (about 62 Hz) and the driver's log.
+   The install writes `XhciLogVerbosity` and `XhciLogDebugView` 0, which
+   records nothing: set `XhciLogVerbosity` to 2 or more (the ring records
+   the `fastpoll.value`/`.mode` notes of each start and the
+   `fastpoll.open`/`.fallback` records, read with `XHCISNAP`) and
+   `XhciLogDebugView` to 1 with DebugView running (the only route to the
+   counter block, which a controller stop - a disable or a shutdown -
+   appends: `fastpoll.mode` 0, `fastpoll.opened` 0 here).
 3. `XhciFastPollFsLs` = 3 (REG_DWORD) on the controller's driver key (the
    `Class\USB\nnnn` key the other `Xhci*` values are in), restart (it is
    read at controller start), replug: expect `fastpoll.mode` 3,
