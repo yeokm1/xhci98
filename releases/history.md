@@ -15,7 +15,7 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 ## 2.1.0.0 - TBD
 
 Drafted, not cut: the date and every `TODO(...)` below are the cut's to
-settle (`TODO(33.6)`).
+settle (`TODO(33.7)`).
 
 The first update of the host controller driver. It adds two things
 `2.0.0.0` did not have, external hubs in Device Manager and devices named by
@@ -36,6 +36,9 @@ same four directories.
   same port in turn no longer share one entry. A device without a serial
   number is still named by its port (`TODO(33.2)`: the port-move legs, and
   whether a device with a serial is found again once after the update).
+- Fixed: a newly plugged device is named by its own product string again, in
+  Windows 98's Add New Hardware wizard and in Device Manager, instead of
+  "USB Device" (`TODO(33.6)`).
 - Fixed on Windows ME: re-enabling the controller in Device Manager with a
   USB mouse attached no longer makes Windows ME stop responding.
   The devices on the controller are now kept while it is disabled and come
