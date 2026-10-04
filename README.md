@@ -112,7 +112,7 @@ A value outside `10`-`4000` is replaced by `4000`, not rounded to the nearest li
 
 ATTO Disk Benchmark with an MSSU10-128GSR flash drive at `500` (125us). This gives about 33 to 34.6 MB/s read and write from 64 KB transfers upward where the previous default `4000` gave about 18 MB/s.
 
-Linux's xHCI driver defaults to `160` (40 us). This package ships `500` to be more conservative since this is a generic driver.
+Linux's xHCI driver defaults to `160` (40 us). This package ships `500` to be more conservative since this is a generic driver. The successor driver, from `2.0.0.0`, ships `160` on every install path of both packages (owner, 2026-10-04): on the same ThinkPad under Windows 98 SE, a USB Attached SCSI drive at SuperSpeed lost 15 to 22% of its bulk throughput at `500`.
 
 Feel free to tune it. Lower towards `160` for the last few percent of storage speed, or raise it towards `4000` (or delete it) if you get audio stutter or instability under load. `500` may produce audio stuttering while a USB drive is being read at full speed, so if you want to prioritise audio over bandwidth, raise the value. 
 

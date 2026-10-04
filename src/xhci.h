@@ -578,10 +578,14 @@ XHCI_C_ASSERT(config_maxslotsen_is_defined,
  *
  * The default is the hardware's own reset value, 4000 (1 ms), so a machine
  * whose value is absent runs exactly as every release before 23.4 did. The
- * INFs write 500 (125 us) on every install path: 23.5's silent pass there,
- * which fills the rung 23.3's ladder lacked, read at 98% of the read plateau
- * 23.3 measured, and 23.5 played a Full-Speed audio stream through it
- * (docs/contributing/runs/run-23.md).
+ * HCD's INFs write 160 (40 us, Linux's long-standing value) on every install
+ * path, both architectures: the owner's ruling of 2026-10-04 (roadmap-hcd.md,
+ * decisions table), on an ATTO QD1 reading of a UAS drive at SuperSpeed under
+ * Windows 98 SE on the P14s Gen 1, where 500 (125 us) cost 15 to 22% of bulk
+ * throughput, 160 took almost all of it back and 40 added only 1 to 3% for
+ * up to four times the interrupt rate. The miniport shipped 500 from 1.1.1.0
+ * (23.5's reading, docs/contributing/runs/run-23.md); a Full-Speed audio
+ * stream was read again at 160 on Windows 2000 before the change.
  *
  * 10 is the floor so a user can go no lower than 2.5 us; nothing above 4000 is
  * accepted because a longer interval only adds latency. **Anything outside the

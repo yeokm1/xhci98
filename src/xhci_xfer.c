@@ -3049,7 +3049,7 @@ static ULONG xhciXferBuildIsoPacket(XHCI_ISO_BUILD_STATE *state,
      * interval: 1,000 a second on a Full-Speed audio stream, 8,000 on a
      * High-Speed one. The interrupter's own moderation (IMOD, written by the
      * start from `XhciImodInterval250ns` - 4000, 1 ms, unless the registry
-     * says otherwise, 500 as the INFs ship - and written back to its saved
+     * says otherwise, 160 as the INFs ship - and written back to its saved
      * value by the restore) is what absorbs that.
      *
      * BEI suppresses the interrupt while keeping the event, which is exactly

@@ -5010,9 +5010,12 @@ shipping one - 10 to 4000 used as given, anything else replaced by 4000 - so a
 sweep can no longer reach 0. The interval the driver chose, and what the
 register read back, are in every `XHCISNAP` `.TXT` under "registry values"
 (since snapshot schema 4), and the interrupt and DPC counts still come out of the
-`.BIN` against an offsets table from the same tree. The INF writes 500, so a
-bench machine goes back to the package's own setting with `IMOD98 500 NNNN`,
-not with `CLEAR`, which leaves the driver at 4000.
+`.BIN` against an offsets table from the same tree. The miniport's INF wrote
+500 to `1.2.0.0`; the HCD's INFs write 160 on every install path of both
+packages (owner, 2026-10-04; `roadmap-hcd.md`, decisions table). So a bench
+machine goes back to the package's own setting with `IMOD98 160 NNNN` under
+the HCD (`IMOD98 500 NNNN` under `1.2.0.0`), not with `CLEAR`, which leaves
+the driver at 4000.
 
 ### Manual Installation on Windows 2000 SP4 (Development)
 
