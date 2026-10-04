@@ -1964,6 +1964,19 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
     stack = IoGetCurrentIrpStackLocation(irp);
     XHCI_DBG_VALUE("hcd: device PDO PnP minor", stack->MinorFunction);
 
+    /* A hub's own name (task 33.4): the INF's model text replaces it once
+     * the hub is installed. */
+    if (pdo->Hub && stack->MinorFunction == IRP_MN_QUERY_DEVICE_TEXT &&
+        stack->Parameters.QueryDeviceText.DeviceTextType ==
+            DeviceTextDescription) {
+        text = pdo->HubUsb3 ? hcdHandOff(L"xHCI98 USB 3.x Hub", 19)
+                            : hcdHandOff(L"xHCI98 USB Hub", 15);
+        if (text == NULL) {
+            return HcdCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES, 0);
+        }
+        return HcdCompleteIrp(irp, STATUS_SUCCESS, (ULONG_PTR)text);
+    }
+
     switch (stack->MinorFunction) {
     case IRP_MN_START_DEVICE:
         if (pdo->Dormant) {
@@ -2012,13 +2025,7 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
     case IRP_MN_QUERY_DEVICE_TEXT:
         if (stack->Parameters.QueryDeviceText.DeviceTextType ==
             DeviceTextDescription) {
-            if (!pdo->Hub) {
-                text = hcdHandOff(L"USB Device", 11);
-            } else if (pdo->HubUsb3) {
-                text = hcdHandOff(L"xHCI98 USB 3.x Hub", 19);
-            } else {
-                text = hcdHandOff(L"xHCI98 USB Hub", 15);
-            }
+            text = hcdHandOff(L"USB Device", 11);
             if (text == NULL) {
                 return HcdCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES, 0);
             }
