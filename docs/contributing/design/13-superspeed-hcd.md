@@ -3092,8 +3092,9 @@ of its PDO extension (static, `legal-provenance.md` section 4). A tool may
 take `Address` as the connection index to ask the parent for, and hidusbf's
 `Setup.exe` (2026-10-03 build) does: it reads the device's
 `SPDRP_ADDRESS`, and when that is not 0 it sends the parent hub
-`IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX` (then the plain form, then
-`_EX_V2`) with it as `ConnectionIndex`; only an `Address` of 0 makes it walk
+`IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX` with it as
+`ConnectionIndex` (followed by `_EX_V2` when it succeeds, replaced by the plain
+form when it fails); only an `Address` of 0 makes it walk
 the hub's ports by `GET_NODE_CONNECTION_DRIVERKEY_NAME` instead (static,
 `legal-provenance.md` section 4). On leg 2c (XP SP3, runtime) its "Copy IDs"
 showed no `BusSpeed` or `bInterval` for a Full-Speed mouse on port 1 of a hub
