@@ -3115,5 +3115,12 @@ VOID HcdEnumInit(PHCD_CONTROLLER hc)
  * PASSIVE_LEVEL, the thread stopped. */
 VOID HcdEnumDrop(PHCD_CONTROLLER hc)
 {
+    /* PDOs PnP itself stopped first - Windows 98 SE's and ME's disable of
+     * the controller - stay listed for their devices to come back to
+     * (hcd_pdo.c, HcdDevicePdoDormantAll); the drop then finds them
+     * detached and leaves their ports Empty, not waiting in Gone. */
+    if (hc->StopPreserve) {
+        HcdDevicePdoDormantAll(hc);
+    }
     hcdDropAll(hc);
 }

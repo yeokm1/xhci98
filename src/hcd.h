@@ -442,6 +442,10 @@ typedef struct _HCD_DEVICE_PDO {
     ULONG RemoveReceived;           /* PnP's IRP_MN_REMOVE_DEVICE seen      */
     ULONG DeletePending;            /* on RemovedPdos, deleted at the next
                                      * relations answer (hcd_pdo.c)       */
+    ULONG Dormant;                  /* listed with no device: stopped by PnP
+                                     * across a controller stop, revived by
+                                     * its device's re-enumeration        */
+    ULONG Surprised;                /* IRP_MN_SURPRISE_REMOVAL seen        */
     ULONG Deleted;                  /* IoDeleteDevice called: once only     */
     ULONG Serial;                   /* the name's number; a port waits on it */
     ULONG Closing;                  /* stopping or removed: URBs refused  */
@@ -769,6 +773,8 @@ typedef struct _HCD_CONTROLLER {
     PHCD_DEVICE_PDO GonePdos;       /* unlisted, awaiting their deletion */
     PHCD_DEVICE_PDO RemovedPdos;    /* removed by PnP, deleted at the next
                                      * BusRelations answer (hcd_pdo.c)    */
+    ULONG StopPreserve;             /* an orderly PnP STOP is under way: the
+                                     * drop keeps stopped PDOs dormant    */
     ULONG RootHubStarted;           /* enumeration creates PDOs only then */
     volatile ULONG ThreadRunning;
     ULONG ThreadReferenceFailures;
@@ -1146,6 +1152,7 @@ struct _HCD_PIPE *HcdCfgHubOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 /* hcd_pdo.c */
 NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 ULONG HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+VOID HcdDevicePdoDormantAll(PHCD_CONTROLLER hc);
 ULONG HcdDevicePdoExists(PHCD_CONTROLLER hc, ULONG serial);
 PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
                                         PDEVICE_RELATIONS old);
