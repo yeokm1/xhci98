@@ -110,7 +110,8 @@ Phase 26 is the USB 2.0 bus driver on root ports, at parity with the miniport
 on both primary targets. Phase 27 brings external USB 2.0 hubs inside the
 bus. Phase 28 takes the seven other guests, the amd64 build and the bench.
 Phase 29 is SuperSpeed on root ports, Phase 30 SuperSpeed hubs, Phase 31
-streams and UAS, and Phase 32 the `2.0.0.0` cut. The order is deliberate:
+streams and UAS, and Phase 32 the `2.0.0.0` cut; Phase 33 is the first
+update, `2.0.1.0`. The order is deliberate:
 parity first, because round 12's device matrix and the acceptance test are a
 free oracle for everything USB 2.0; SuperSpeed before hubs, because root-port
 storage is what a user plugs in first; UAS last, because it needs streams and
@@ -494,6 +495,30 @@ as above, and the owner's acceptance in the bench verdict and the merge to
 Records: `releases/history.md`; `releases/2.0.0.0/`;
 `docs/using/release-notes.md`; `docs/using/release-acceptance-test.md`.
 
+## Phase 33 - Release `2.0.1.0`
+
+Goal: the first update of the HCD generation: the Windows ME controller
+re-enable fix, a device named by its serial number, and a `txtsetup.oem` so
+text-mode Setup of Windows 2000 and XP can load the driver.
+
+Status: opened 2026-10-04 on branch `2.0.1.0`, from `main` at `3eb2d2b`
+(the closed roadmap after the `2.0.0.0` release).
+
+Why a phase: two of these change how Windows sees every device, and the
+third adds an install path the project has never had.
+
+- [ ] 33.1 the Windows ME controller re-enable fix: device PDOs STOPPED by an orderly controller stop are kept dormant and revived at the same instance key on re-enable, as `usbhub` does, instead of being reported gone and replaced (the hang with a USB mouse or keyboard attached, 3 of 3 on `2.0.0.0`). Merged into `2.0.1.0` at `256bd72` from `p28-reenable` (`fa2af9b`; Codex clean); its legs passed on the `qemu` package `out\phase28\pkg-reenable1`: ME re-enable with a mouse 3 of 3, with a mouse and a stick, Windows 98 SE and Windows 2000 disable and enable with a soak each (`out\phase28\pdoleak\`). Owed: the same legs on the `2.0.1.0` package, and the limitation removed from the README, the release notes and the readme template
+- [ ] 33.2 a device's instance id from its serial number: answer `UniqueID` TRUE and an instance id built from the serial number string for a device with a valid one, as `usbhub` does, and keep the location for a device without one, on every target. A device moved to another port keeps its devnode, and two devices with the same VID and PID on one port no longer share one (the `2.0.0.0` difference recorded in the release notes; `out\phase28\w2k-disable\`). The serial read must tell "no serial" from "read failed"; composite functions and devices behind hubs keep their own suffixes; host vectors for the id rules; legs on both primaries and the NT guests, moving a stick between ports and checking no new hardware is found
+- [ ] 33.3 `txtsetup.oem`: a text-mode Setup driver description for Windows 2000 and XP (and XP x64 from the x64 directory), so a machine whose keyboard or install medium sits on an xHCI controller can load `xhci98.sys` at Setup's driver prompt. First the feasibility: which files text-mode Setup must load with a bus driver that replaces `usbport.sys` and `usbhub.sys` (`usbd.sys`, the HID and storage class drivers), and whether Setup's own USB support conflicts with it; then the file, its INF gate, the packaging (`make-package.ps1`, `make-release.ps1`) and an install leg per target from a floppy image in a virtual machine
+- [ ] 33.4 the cut: `xhci_version.h` and the four INFs' `DriverVer` at `2.0.1.0`, `releases/history.md`, the release notes and the README for 33.1 to 33.3, `make-release.ps1`, and the ten install legs read from the asset
+
+Checkpoint: 33.1's legs and 33.2's port-move legs passing on the `2.0.1.0`
+package on every target, 33.3's Setup leg on Windows 2000 and XP or its
+feasibility recorded as a decision, and the ten install legs read from the
+asset.
+
+Records: `releases/history.md`; `docs/using/release-notes.md`.
+
 ---
 
 ## What is not on this roadmap
@@ -511,21 +536,6 @@ Records: `releases/history.md`; `releases/2.0.0.0/`;
   (`future-plans/superspeed-storage-behind-a-switch.md`). It was the way to
   SuperSpeed storage without leaving the miniport; with the miniport frozen it
   stays a record of what that would have taken.
-- **A device's instance id from its serial number.** `2.0.0.0` builds a
-  device PDO's instance id from its location alone (`UniqueID` FALSE, no
-  serial), where Microsoft's `usbhub` uses the serial number string when the
-  device has a valid one. So a device moved to another port is found again as
-  new hardware, and two devices with the same VID and PID on the same port
-  share one devnode (on 2026-10-04 a QEMU `usb-mouse` reused a stale keyboard
-  devnode on Windows 2000; `out\phase28\w2k-disable\`). The owner placed the
-  fix after `2.0.0.0` (2026-10-04): answer `UniqueID` TRUE and an instance id
-  from the serial for a device with a valid serial string, keep the location
-  for one without, on every target. The release notes carry the difference.
-- **The Windows ME controller re-enable fix.** Branch `p28-reenable` at
-  `fa2af9b` (rebased onto `main`; the source tested as `5b554f4`): STOPPED
-  device PDOs kept dormant on an orderly controller stop and revived at the
-  same instance key on re-enable, as `usbhub` does. Its legs passed on
-  Windows ME, Windows 98 SE and Windows 2000; it is for `2.0.0.1`.
 - **The SuperSpeedPlus refusal value (29-A.1).** Dropped from `2.0.0.0`:
   no registry value sends a SuperSpeedPlus link back to USB 2.0, and
   `HCD_HOLD_REASON_SSP_REFUSED` in `src\hcd.h` is unused.
