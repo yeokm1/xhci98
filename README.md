@@ -49,7 +49,7 @@ The [roadmap](docs/contributing/roadmap-hcd.md) has the phases this took and [de
 
 <img src="images/xhci98-flash-speed-test.jpg" width="800">
 
-My ThinkPad P14s Gen 1 under Windows 98 SE with NUSB: the MSSU10-128GSR flash drive at SuperSpeed through `xhciuas.sys`, with Device Manager showing the controller, its root hub and the UAS storage device. ATTO Disk Benchmark (Direct I/O) reads about 205 to 217 MB/s write and 198 to 224 MB/s read from 512 KB transfers upward, against about 34 MB/s for `1.2.0.0` at High Speed on the same drive.
+My ThinkPad P14s Gen 1 under Windows 98 SE with NUSB, on `2.0.0.0`: the MSSU10-128GSR flash drive at SuperSpeed through `xhciuas.sys`, with Device Manager showing the controller, its root hub and the UAS storage device, and the drive listed under Unplug or Eject Hardware. ATTO Disk Benchmark (Direct I/O) reads about 201 to 215 MB/s write and 196 to 221 MB/s read from 512 KB transfers upward, against about 34 MB/s for `1.2.0.0` at High Speed on the same drive.
 
 Some things to know:
 
@@ -116,7 +116,9 @@ readme.txt     the release notes in plain text
 6. Reboot if requested.
 7. Plug in a UAS disk, and when the wizard asks for "xHCI98 USB Attached SCSI Storage", point it at the same directory. No restart is needed for `xhciuas.sys`.
 
-![Device Manager with the xhci98 driver installed](images/xhci98-driver-info.jpg)
+<img src="images/xhci98-driver-info.jpg" width="800">
+
+The `2.0.0.0` controller in Device Manager on the P14s Gen 1 under Windows 98 SE: Driver File Details shows `xhci98.sys` at file version `2.0.0.0`.
 
 ### Upgrading from 1.2.0.0
 
