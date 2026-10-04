@@ -2899,16 +2899,11 @@ static void usage_long(void)
 }
 
 /*
- * `-selftest-report BASE`: the report path alone. See the switch in main.
- * Exit 0 with BASE.TXT complete, 3 with it incomplete or not created - the
- * same codes the dump answers for the same conditions.
- */
-/*
  * The slots region, in as many windows as it takes (one, in practice: 32
  * records of 40 bytes). Returns the record count; *state is 1 when read, 2
  * when the driver does not serve the region (BAD_REGION), 0 on a failure
- * already explained. Not part of the published .BIN/.PSC set and not in the
- * tear detector: it is read for the report alone.
+ * already explained. Not part of the published .BIN/.PSC set - it is read
+ * for the report alone - but its windows count in the tear detector.
  */
 static unsigned char slot_records[SNAP_SLOT_MAX * SNAP_SLOT_WORDS * 4];
 
@@ -2987,6 +2982,11 @@ static unsigned long read_slots(HANDLE device, int *state,
     return have;
 }
 
+/*
+ * `-selftest-report BASE`: the report path alone. See the switch in main.
+ * Exit 0 with BASE.TXT complete, 3 with it incomplete or not created - the
+ * same codes the dump answers for the same conditions.
+ */
 static int selftest_report(const char *base)
 {
     char textPath[MAX_PATH];
