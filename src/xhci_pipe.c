@@ -250,8 +250,10 @@ static ULONG xhciPipeExponent(ULONG bInterval, PULONG clamped)
 /*
  * The Max Packet Size a USB 2.0 endpoint may declare at its speed (USB 2.0
  * 5.6.3 isochronous, 5.7.3 interrupt, 5.8.3 bulk, Table 9-14 for the HS
- * high-bandwidth ranges). `mps` is already 1..1024 and `transactions` (HS
- * periodic only) 0..2. A device outside these limits declares a packet size
+ * high-bandwidth ranges). `mps` is already 0..1024, and 0 only for an
+ * isochronous endpoint (XhciPipeZeroBandwidth), which passes here unless
+ * HS additional transactions demand 513 or 683 and up; `transactions` (HS
+ * periodic only) is 0..2. A device outside these limits declares a packet size
  * its speed does not have, and is refused rather than programmed as declared.
  * HS control (64, 5.5.3) has no row: control endpoints are refused earlier.
  */

@@ -1759,9 +1759,24 @@ the controller's next start.
 - Route String is 0 on a root port; behind a SuperSpeed hub it is the
   topology graph's, as for any hub (section 11.8). The root port is not part
   of the Route String (USB 3.2 Figure 10-5, USB 3.2 p.377; verified).
-- No TT fields: a SuperSpeed device has no transaction translator; Parent Hub
-  Slot ID applies only to a Low- or Full-speed device behind a High-speed hub
-  (Table 6-6, p.409; verified).
+- No TT: a SuperSpeed device has no transaction translator, and TTT and MTT
+  are a High-speed hub's and its LS/FS children's (Tables 6-4 and 6-6). **But
+  Parent Hub Slot ID and Parent Port Number are not TT-only**: Table 6-6
+  (p.409-410; verified) also requires them for an SS or SSP device "connected
+  through a higher rank hub" - "a Gen1 x1 connected behind a Gen1 x2 hub, or
+  Gen1 x2 device connected behind Gen2 x2 hub" - where footnote 110 makes a
+  higher rank hub one whose downstream port isolates the signalling between
+  its upstream and downstream ports, ranks as USB 3.2 Polling.PortMatch
+  orders them: Gen 2x2, Gen 2x1, Gen 1x2, Gen 1x1 (USB 3.2 7.5.4.5, USB 3.2 p.176).
+  Both stay 0 for a device on a root port, a High-Speed device, and the
+  highest-rank SS/SSP device the xHC supports. **This driver does not
+  implement the higher-rank case** (section 11.8): every SS/SSP device behind
+  a SuperSpeed hub gets 0 in both, which is right whenever the device's link
+  ranks with the hub's own - always on a Gen 1x1 hub - and wrong for a
+  lower-rank device behind a SuperSpeedPlus hub, untested ground (no
+  SuperSpeedPlus hub is held). Doing it needs each hub's own link rank,
+  which for a hub on a root port needs PORTLI's lane counts, read nowhere
+  today.
 - Max Exit Latency 0: "a Max Exit Latency value of '0' indicates to the xHC
   that no links in the path to the device are being power managed" (4.23.5.2,
   p.326; verified). That holds here because the driver enables neither U1 nor
@@ -2162,7 +2177,7 @@ column is the value shifted to bits 8:5):
 | 7 | Polling | 00E0h | training ends in U0, or falls to Rx.Detect / eSS.Inactive |
 | 8 | Recovery | 0100h | |
 | 9 | Hot Reset | 0120h | |
-| 0Ah | Compliance Mode | 0140h | warm reset only |
+| 0Ah | Compliance Mode | 0140h | a warm reset (the only reset that leaves it), or SetPortFeature(PORT_LINK_STATE, eSS.Disabled) (7.5.5.2, USB 3.2 p.188) |
 | 0Bh | Loopback | 0160h | a successful Loopback exit (to Rx.Detect) or a warm reset |
 | 0Ch-0Fh | reserved | | |
 
@@ -2248,9 +2263,13 @@ Only those are matches. Failing them, the PSIV named at the lane rate, else
 SuperSpeed's, is given as a guess and counted (`superspeed hubs: rates
 without an ID`), and after Address Device the speed the controller wrote into
 the output Slot Context is taken as authoritative when it names a
-SuperSpeed-class rate (`XhciSsHubAdoptSpeed`). 1.2c says the Slot Context
-Speed field "is not applicable to USB3 Gen X" (Table 6-4, p.408), so how much
-any controller uses the value is its own.
+SuperSpeed-class rate (`XhciSsHubAdoptSpeed`). That is what xHCI 4.19.9
+(p.304-305; verified) specifies: a SuperSpeedPlus device sends a Sublink
+Speed Device Notification right after SET_ADDRESS, and an SSP-capable xHC
+that receives one during Address Device "shall ignore the value of the Input
+Slot Context:Speed field and update the Output Slot Context:Speed field"
+before completing the command - which is also why 1.2c calls the input field
+"not applicable to USB3 Gen X" (Table 6-4, p.408).
 
 ### 11.7 Remote wake masks (USB 3.2 10.16.2.10, Table 10-18)
 
@@ -2274,9 +2293,11 @@ the values are transcribed so a later phase starts from them.
   conditions both on a High-Speed hub), its status-change endpoint opened with
   its companion at SuperSpeed.
 - A device behind it has the Route String and root port the topology graph
-  gives (design record 02), Speed its PSIV (11.6), and no Parent Hub Slot ID
-  or Port Number: those name a transaction translator, and a SuperSpeed path
-  has none.
+  gives (design record 02), Speed its PSIV (11.6), and Parent Hub Slot ID
+  and Port Number 0. That is right for a device whose link ranks with the
+  hub's own, and an **open deviation** for a lower-rank device behind a
+  SuperSpeedPlus hub, where xHCI Table 6-6 requires the hub's Slot ID and
+  port (section 10.5 has the rule and what implementing it needs).
 - Its two halves are two hubs of the bus. Nothing passes between them; a
   counter (`superspeed hubs: halves paired`) records that a SuperSpeed hub
   and a USB 2.0 hub of the same vendor sit at the same tier and route on a

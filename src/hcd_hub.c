@@ -212,6 +212,11 @@ ULONG HcdHubPlace(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG speedClass,
     dev->Route = child.Route;
     dev->Tier = child.Tier;
     dev->Speed = psiv;
+    /* Behind a SuperSpeed hub both parent fields stay 0. Open deviation:
+     * xHCI Table 6-6 (p.409-410) wants the hub's Slot ID and port for an
+     * SS/SSP device behind a higher-rank hub (a Gen 1x1 device behind a
+     * Gen 1x2 hub); this driver does not yet know a hub's own link rank
+     * (xhci-data-structures.md sections 10.5 and 11.8). */
     dev->TtSlot = 0;
     dev->TtPort = 0;
     dev->TtMulti = 0;
