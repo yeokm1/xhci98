@@ -55,12 +55,12 @@
         block is found by its `counters start= / size= / VA ...` lines on
         the debug console (lib\counters.ps1, Find-CounterBlockIdentity).
 
-    THE HUB ROWS ARE PHASE 27'S.  Until the bus serves hubs itself (27-A.1 to
-    27-A.3) it offers a hub as a device with no driver and enumerates nothing
-    behind it (4e79718), so `usb-hub/fs` reads NODRIVER and `usb-hub/churn`
-    reads FAIL on the HCD of Phase 26.  Both are written for the HCD that
-    serves hubs, and Phase 26's runs take the root-port groups:
-    `-Group audio,hid,storage,other`.
+    THE HUB ROWS ARE PHASE 27'S.  The HCD of Phase 26 offered a hub as a
+    device with no driver and enumerated nothing behind it (4e79718), so on
+    that build `usb-hub/fs` reads NODRIVER and `usb-hub/churn` FAIL, and its
+    runs took the root-port groups only.  From Phase 27 (27-A.1 to 27-A.3)
+    the bus serves the hub itself and the hub group is part of every run:
+    `-Group audio,hid,storage,other,hub` (roadmap 27-V.1).
 #>
 @{
     Schema = 2
@@ -289,13 +289,21 @@
                     # matrix.psd1's `zero topology: behind-hub refused - no
                     # record` was usbport opening a device the snoop never saw;
                     # the bus creates the record before it addresses, so it is
-                    # retired.
+                    # retired.  One hub, alone on a root port: it is started,
+                    # its descriptor folded and its slot marked exactly once,
+                    # nothing behind it is addressed, and QEMU's hub is Full
+                    # Speed on a root port, so no transaction translator is
+                    # programmed (a TT pair here would be the miniport's
+                    # phantom TT come back) and nothing is too deep.
                     Expect = @(
-                        'advance hubs started by the bus'
-                        'advance topology: hub descriptors folded'
-                        'advance topology: hub slots marked'
+                        'advance hubs started by the bus == 1'
+                        'advance topology: hub descriptors folded == 1'
+                        'advance topology: hub slots marked == 1'
+                        'zero topology: behind-hub devices addressed'
                         'zero topology: hub descriptors malformed'
                         'zero topology: nodes dropped'
+                        'zero topology: TT pairs programmed'
+                        'zero topology: behind-hub refused - too deep'
                     )
                 }
 
@@ -313,9 +321,20 @@
                 # five-tier chain is five deep in Windows' view again and the
                 # tier-5 mouse is addressed (roadmap 27-V.1): eleven devices,
                 # the first hub on the root port and ten behind hubs.  Derived
-                # from the Steps, to be confirmed by the first run that serves
-                # hubs.  `TT pairs programmed` stays a line, inert, because
-                # QEMU models no High-Speed hub for a TT to be programmed for.
+                # from the Steps: six hubs (the row's own and ch2, ch4..ch7),
+                # each started, folded and slot-marked once; five mice behind
+                # hubs (ch1 twice, ch1 moved, ch3, ch8 at tier 5), each bound
+                # by the mouse driver - one interrupt pipe apiece, so
+                # `endpoints opened` == 5 - and `behind-hub opens` == 10, which
+                # counts every device behind a hub that opened a pipe: the five
+                # mice and the five hubs below the first, whose status-change
+                # pipes the bus opens (measured on Windows 2000, 2026-10-04:
+                # select endpoints requested 5, endpoints opened 5, behind-hub
+                # opens 10).  The tier-5 mouse is the deepest USB 2.0
+                # allows (five hubs above it), so `too deep` stays zero.
+                # `TT pairs programmed` is zero, not inert: every hub QEMU
+                # models is Full Speed, so a TT programmed here is a defect
+                # (Phase 27, 2026-10-04).
                 @{
                     Name = 'usb-hub/churn'
                     Model = 'usb-hub'
@@ -337,15 +356,17 @@
                     ExpectedSpeed = @{ FS = 11 }
                     ClaimLabel = 'hubs started by the bus'
                     Expect = @(
-                        'advance hubs started by the bus'
+                        'advance hubs started by the bus == 6'
                         'advance devices addressed == 11'
                         'advance topology: behind-hub devices addressed == 10'
-                        'advance topology: hub descriptors folded >= 2'
-                        'advance topology: behind-hub opens >= 2'
+                        'advance topology: hub descriptors folded == 6'
+                        'advance topology: hub slots marked == 6'
+                        'advance topology: behind-hub opens == 10'
+                        'advance endpoints opened == 5'
                         'zero topology: hub descriptors malformed'
                         'zero topology: nodes dropped'
                         'zero topology: behind-hub refused - too deep'
-                        'inert topology: TT pairs programmed because QEMU models no High-Speed hub, so no transaction translator exists to program (roadmap 27-V.1)'
+                        'zero topology: TT pairs programmed'
                     )
                     ExcludedOnTarget = @{
                         '2a' = 'behind-hub device instances are not taught to this image; each raises a modal wizard that blocks the bind - prep them at their hub ports first'

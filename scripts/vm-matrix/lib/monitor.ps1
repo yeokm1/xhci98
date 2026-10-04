@@ -317,7 +317,13 @@ function Get-MonitorText {
     )
     $raw = Send-Mon -Port $Port -Command $Command -Reply
     if ($null -eq $raw) { return $null }
-    return (ConvertFrom-MonitorReply $raw $Command)
+    # THE COMMA IS THE FIX, not decoration. A function's empty array unrolls
+    # to $null on the pipeline, so without it a complete `info usb` on an
+    # empty bus came back as $null - "no complete reply" - and every
+    # Confirm-Departed on a bus left empty by the pull timed out (28-V.1
+    # pre-read, the first Windows 7 x86 soak: 20 of 20 hid and storage
+    # cycles "failed" with the device gone).
+    return , @(ConvertFrom-MonitorReply $raw $Command)
 }
 
 # IS A DEVICE ID ON THE BUS, as three answers rather than two.  $true: `info
