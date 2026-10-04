@@ -3101,8 +3101,8 @@ THE UAS DRIVER installs the first time a UAS disk is plugged in: the Found
 New Hardware wizard asks for a driver for "xHCI98 USB Attached SCSI
 Storage". Point it at the same directory. No restart is needed.
 
-INSTALLING WINDOWS 2000 OR XP ITSELF ON AN xHCI-ONLY MACHINE
-............................................................
+WINDOWS 2000 OR XP SETUP, OR THE RECOVERY CONSOLE, ON AN xHCI-ONLY MACHINE
+..........................................................................
 
 When the keyboard or the install medium is on the xHCI controller, Setup
 can load this driver at its F6 prompt. Copy the files of RELEASE-X86\ (or
@@ -3112,6 +3112,12 @@ Setup, press F6 when "Press F6 if you need to install a third party SCSI
 or RAID driver" shows, press S at the next screen, insert the floppy, and
 pick "xHCI98 USB 3.x Host Controller". Setup then uses its own keyboard,
 mouse and USB storage drivers above it.
+
+The same floppy serves the RECOVERY CONSOLE of Windows 2000 and XP: press
+F6 as for an install, then R at Setup's Welcome screen (on Windows 2000,
+then C for the console). The USB keyboard logs in and types commands. The
+console runs in text mode throughout, so the Windows XP restriction below
+does not touch it.
 
   - Pressing F6 itself needs the firmware's own USB keyboard support.
   - The floppy must be drive A: as the firmware sees it.
@@ -3127,31 +3133,59 @@ mouse and USB storage drivers above it.
     Setup starts. Its text-mode Setup uses only the USB devices present
     when the driver first reports them; one plugged in later stays unused
     there. The driver waits up to 5 seconds for them (section 9,
-    XhciFirstEnumWaitMs). TODO(33.3 legs): the Windows 2000 result.
+    XhciFirstEnumWaitMs).
   - Later in Setup, Windows installs the driver again from xhci98.inf and
     may ask for the floppy or the Windows CD.
-  - WINDOWS XP NEEDS A PS/2 KEYBOARD, OR A LAPTOP'S BUILT-IN ONE, LATER IN
-    SETUP. Setup copies Windows' own HID and USB helper files only with
-    Microsoft's own USB controller drivers, so the USB keyboard and mouse
-    do nothing until the "Installing Devices" step installs them from the
-    CD - and that step first asks about this unsigned driver, default No.
-    A machine whose only keyboard is USB cannot answer, and Setup stops.
-    A laptop's built-in keyboard (connected inside as PS/2) or any PS/2
-    keyboard answers it; afterwards the USB keyboard and mouse work. This
-    package cannot carry those files. Windows 2000 does not ask.
+  - INSTALLING WINDOWS XP NEEDS A PS/2 KEYBOARD, OR A LAPTOP'S BUILT-IN
+    ONE, LATER IN SETUP. Setup copies Windows' own HID and USB helper files
+    only with Microsoft's own USB controller drivers, so the USB keyboard
+    and mouse do nothing until the "Installing Devices" step installs them
+    from the CD - and that step first asks about this unsigned driver,
+    default No. A machine whose only keyboard is USB cannot answer, and
+    Setup stops. A laptop's built-in keyboard (connected inside as PS/2) or
+    any PS/2 keyboard answers it; afterwards the USB keyboard and mouse
+    work. This package cannot carry those files. Windows 2000 does not ask.
+
+  What has run, in virtual machines only: text mode with a USB keyboard
+  and a USB stick on Windows 2000 and XP, and the Recovery Console on both,
+  logged in and running commands with the USB keyboard alone, on this
+  release's code; and Windows XP and XP x64 installed to the desktop this
+  way on the build before it. Nothing of this has run on real hardware. A
+  repair install, Windows 2000's Emergency Repair Disk and Windows XP's
+  Automated System Recovery were not tried.
 
 UPDATING FROM AN EARLIER 2.x RELEASE
 ....................................
 
-Install over it the same way as above: Update Driver on "xHCI98 USB 3.x
-eXtensible Host Controller", picking the driver from a list with Have Disk
-on Windows 2000 and later. Nothing needs renaming first. Afterwards some
-devices are found once more as new hardware, one time each: a device with a
-serial number, at its first plug, and on Windows 2000 and later a device
-without one that sits behind a hub. Let Windows install them. A hidusbf
-setting on such a device has to be applied again (section 5).
-TODO(33.9): the update read on each system. TODO(33.2 legs), TODO(33.4
-legs): which devices each system finds again.
+Install over it with Update Driver on "xHCI98 USB 3.x eXtensible Host
+Controller", pointed at the same directory as a new install. Nothing needs
+renaming first. As read in virtual machines:
+
+  WINDOWS 98 SE AND ME: RESTART AFTERWARDS, ALTHOUGH WINDOWS DOES NOT ASK.
+  The new file waits to replace the old one at the next start, and until
+  then the earlier release keeps running. Under SweetLow's stack the
+  controller showed a problem for a minute or two after Finish; on ME it
+  shows one until the restart, while the devices keep working.
+
+  WINDOWS 2000: USE HAVE DISK. Letting Windows search answers that a
+  suitable driver is already installed and keeps the earlier release. Use
+  "Display a list of the known drivers" -> Have Disk, as below.
+
+  WINDOWS XP, XP X64, VISTA AND 7: the update took effect at once, with no
+  restart. (Read with a command-line driver update rather than Device
+  Manager.)
+
+  THE ROOT HUB'S DRIVER TAB STILL SHOWS THE EARLIER VERSION (on 98 SE and
+  ME, its date), although it runs the new file. To change it, run Update
+  Driver on "xHCI98 USB 3.x Root Hub" too: on Vista and 7, "Let me pick
+  from a list of device drivers on my computer" and the new entry;
+  elsewhere Have Disk.
+
+  Afterwards each device is found once more as new hardware, exactly once:
+  a stick under its serial number, the other devices under a new id. On
+  the NT systems this needs no answer; on Windows 98 SE the wizard runs for
+  each and may ask for the CD for hidclass.sys. Let Windows install them.
+  A hidusbf setting on such a device has to be applied again (section 5).
 
 UPGRADING FROM THE EARLIER, USB 2.0-ONLY RELEASES (1.x)
 .......................................................
@@ -3228,27 +3262,33 @@ Things specific to this driver, worth knowing in advance:
     "xHCI98 USB Hub", with the devices behind it beneath it. A USB 3 hub
     appears twice, the second time as "xHCI98 USB 3.x Hub" for its
     SuperSpeed half. Each hub has a Power tab. A hub installs from the
-    driver already installed, with no file copied and no disk asked for.
-    The driver still runs every hub itself. TODO(33.4 legs).
+    driver already installed: on Windows 98 SE and 2000 with nothing to
+    answer, on Windows XP with the Found New Hardware wizard and the
+    unsigned-driver warning (Continue Anyway) for each newly plugged hub.
+    Disabling and enabling a hub in Device Manager brings back the devices
+    behind it. TODO(33.4 hubre legs). The driver still runs every hub
+    itself.
 
   * A DEVICE WITH A SERIAL NUMBER KEEPS ITS ENTRY ON ANY PORT. Moved to
     another port or behind a hub, it is not found again as new hardware.
     A device without a serial number is known by its port, as under
     Microsoft's own hub driver, and moved elsewhere it is found again.
-    TODO(33.2 legs).
 
-  * DEVICES ARE LISTED UNDER THEIR OWN PRODUCT NAMES, in the Add New
-    Hardware wizard and in Device Manager; one that reports no name is
-    "USB Device". On Windows 98 SE and ME a character outside plain ASCII
-    shows as '?'. TODO(33.6 legs).
+  * DEVICES NO WINDOWS INF NAMES ARE LISTED UNDER THEIR OWN PRODUCT NAMES,
+    in the Add New Hardware wizard and in Device Manager, instead of "USB
+    Device". Where one of Windows' own INFs names a device (a mouse, a
+    keyboard, a USB stick), that name shows, as over Microsoft's own
+    stack. On Windows 98 SE and ME a character outside plain ASCII shows
+    as '?'.
 
   * SWEETLOW'S HIDUSBF sets a mouse's polling rate, and this driver
     programs the rate it sets, up to 1000 Hz for a Low- or Full-Speed
-    device (more only with XhciFastPollFsLs, section 9). On a stock
-    Windows 98 SE it does not load (Code 2): Windows 98 SE's own usbd.sys
-    lacks a routine hidusbf.sys needs. Its setting is kept on the device's
-    Device Manager entry, so it has to be applied again whenever the device
-    is found as new hardware. TODO(33.7 legs).
+    device (more only with XhciFastPollFsLs, section 9). Read in virtual
+    machines at a root port and behind a hub on Windows 98 SE under NUSB
+    and on ME, and at a root port on XP and on a stock Windows 98 SE. It
+    works behind a hub on XP too. TODO(33.7 addr legs). Its setting is
+    kept on the device's Device Manager entry, so it has to be applied
+    again whenever the device is found as new hardware.
 
   * IDLE DEVICES ARE NEVER PUT TO SLEEP. The driver never starts selective
     suspend, of a device or of a hub port, so an idle device draws its
@@ -3406,11 +3446,14 @@ Untested ground:
     if it has no USB 2.0 port. Built from the specification; no such
     controller has been held.
 
-  * A USB 3 HUB'S SECOND ENTRY, "xHCI98 USB 3.x Hub". No virtual machine
-    models a SuperSpeed hub. TODO(33.4 legs).
+  * A USB 3 HUB'S SECOND ENTRY, "xHCI98 USB 3.x Hub", AND A HIGH-SPEED
+    HUB'S OWN ENTRY. Hub entries were read in virtual machines on QEMU's
+    USB 1.1 Full-Speed hub only; no virtual machine models a SuperSpeed or
+    a High-Speed hub, and neither entry was read on real hardware.
 
   * POLLING ABOVE 1000 HZ (XhciFastPollFsLs, section 9). Outside the xHCI
-    specification and read on no real controller. TODO(33.8 legs).
+    specification, and read on no real controller and in no virtual
+    machine.
 
 
 ==============================================================================
@@ -3435,8 +3478,6 @@ debug throughout, in its build scripts and its documentation alike.)
 Every registry value this driver reads. There are seven, all DWORDs. The
 install writes one of them, XhciImodInterval250ns; the other six are absent
 until you set them, and absent means the default each one states.
-TODO(33.3 legs): the count includes XhciFirstEnumWaitMs and
-XhciFirstEnumPortMs, whose names and defaults are confirmed at their merge.
 
   YOU SHOULD NOT NEED THIS SECTION FOR A LOG. If the maintainer asks for one,
   XHCISNAP -verbosity 2 sets the value that matters, on every controller, and
@@ -3530,8 +3571,8 @@ XhciFirstEnumPortMs, whose names and defaults are confirmed at their merge.
   cannot be caught; if anything misbehaves, delete the value and restart.
   While it is set, ANY Low- or Full-Speed device on a root port that asks
   for 16 to 63 ms is polled faster too. Read when the controller starts, so
-  restart after changing it. It has been read on no real controller yet.
-  TODO(33.8 legs).
+  restart after changing it. It has been read on no real controller and
+  in no virtual machine yet.
 
   XhciFirstEnumWaitMs, XhciFirstEnumPortMs  -  the first report's wait
   ....................................................................
@@ -3546,9 +3587,12 @@ XhciFirstEnumPortMs, whose names and defaults are confirmed at their merge.
                             held to 30000.
       XhciFirstEnumPortMs   the longest one port may hold it. Default
                             2000, held to the total; a slower device is
-                            reported later instead.
+                            reported later instead. 0 sets no limit
+                            per port.
 
-  TODO(33.3 legs): names, defaults and limits confirmed at the merge.
+  In virtual machines, with the defaults, the first report went 20 to 30
+  ms after the start with nothing plugged in, and 0.3 to 0.9 s after it
+  with a mouse and a stick plugged in.
 
   THOSE SEVEN ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
   XhciVirtualHSHubVid and XhciVirtualHSHubPid are not read: a copy left in
