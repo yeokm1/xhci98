@@ -2488,8 +2488,19 @@ device keeps the location form and `UniqueID` FALSE.
   hold that lists the new PDOs when it is named by the newcomer's place or
   carries the serial id the newcomer keeps; one named by a serial id is
   not retired for its old place, and goes at its START's wait if its
-  device does not come back. Two identical units swapped while disabled
-  are taken for each other, as before.
+  device does not come back. The place is the instance key **under the
+  same parent** (`XhciFuncRetireByPlace`, host vectors in `test_func`):
+  the key, `(route << 8) | root port`, names no hub, so before this rule a
+  serial-less device C dormant at port 1 of a serial-named hub A, with A
+  moved to another root port and a hub B carrying a device D put where A
+  was, was retired by D's listing although A revived and still reported
+  it, and only B's side was invalidated - C's START failed and C sat as a
+  failed devnode under A (Codex review of the 33.1-33.6 integration,
+  finding 3). Now C waits out its START and goes then, its own parent
+  invalidated. A serial-less hub replaced by a different hub at the same
+  root port still retires the old hub's group, and its children with it.
+  Two identical units swapped while disabled are taken for each other, as
+  before.
 - **Upgrading** from `2.0.0.0` gives every device with a usable serial one
   new devnode, at its first plug, because its instance id changed once.
 
@@ -2557,7 +2568,29 @@ Add New Hardware wizard showed for every device (owner report).
   gave nothing is not asked again for the next function. A read that
   times out is the serial read's case: no PDO, the device left to the
   controller reset it requested. Nothing is counted; the debug trace
-  names the port and index.
+  names the port and index. **Not read** for a hub, whose PDO answers its
+  fixed name (section 10.11), nor for a group that looks set to revive a
+  dormant one on Windows 98 SE or ME ("Kept" below): read there,
+  the text is thrown away, its time counts against the dormant `START`'s
+  10 s wait, and a timeout's reset reports the device gone before its
+  revival is tried - for a hub, the revived hub reported gone and its
+  replacement given a new `Serial` that its dormant children can never
+  match (Codex review of the 33.1-33.6 integration, findings 1 and 2).
+  "Looks set to" is a hint taken under `PdoListLock` alone after the
+  group is built, `hcdDormantFindLocked` by place and then by serial id,
+  and the reads run, outside every lock, only when it finds nothing. The
+  decision that counts is still `hcdDormantRevive`'s, under
+  `hcdSerialLock`, after the reads; where the two differ - a serial id
+  another controller carries, so the decision does not look by serial;
+  a duplicate whose location form revives a group whose reads failed; a
+  group retired between the two - the new PDOs answer `USB Device` for
+  that plug, or the reads run as they did before, and the identity is the
+  decision's either way. A more exact preview (`hcdSerialLock` taken for
+  the hint too, and a parameter to `hcdDormantFindLocked` for the
+  location form a duplicate would take) was weighed and not taken: the
+  locks are let go for the reads, so it would still be a hint, and it
+  would widen the matcher every revival goes through to narrow two cases
+  that each need a serial id on two units at once.
 - **Made fit to show**: the string ends at its first NUL unit; C0 and C1
   controls and DEL become spaces, runs of spaces one, leading and trailing
   spaces go; a surrogate that is not half of a pair, U+FFFE and U+FFFF
@@ -2882,7 +2915,10 @@ ancestor rule above. The hub PDO is referenced across the call.
    children enumerated behind it compute the same `ParentSerial` and revive
    theirs; `ParentSerial`, `Hub` and `HubUsb3` join the descriptors in the
    sameness test, so no group is revived under another parent. A dormant group retired (not revived) takes the dormant groups
-   below it with it.
+   below it with it. A newcomer retires a serial-less dormant group for its
+   place only under its own parent (section 10.7), and a hub's PDO reads no
+   device text, so a hub's revival is never preceded by a string read whose
+   timeout could reset the controller first.
 
 **The hub FDO** (`hcd_hubfdo.c`): `AddDevice` for a hub PDO; PnP passed down
 like the root hub FDO's, with `BusRelations` answered as above and
