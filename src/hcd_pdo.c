@@ -1323,7 +1323,9 @@ static NTSTATUS hcdDeviceCapabilities(PHCD_DEVICE_PDO pdo, PIRP irp)
     caps->UniqueID = FALSE;
     caps->SilentInstall = FALSE;
     caps->RawDeviceOK = FALSE;
-    caps->SurpriseRemovalOK = TRUE;
+    /* FALSE, as Windows 2000's usbhub reports a device PDO: the hot-plug
+     * applet lists a removable device only when it is FALSE. */
+    caps->SurpriseRemovalOK = FALSE;
     caps->Address = pdo->InstanceKey;
     caps->UINumber = pdo->InstanceKey;
     caps->DeviceState[PowerSystemWorking] = PowerDeviceD0;
