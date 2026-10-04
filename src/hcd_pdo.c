@@ -473,6 +473,15 @@ static NTSTATUS hcdDeviceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
  * (the port bit PortPdoRemoved), and a start as PDO_STARTED, so the machine
  * waits in Gone for the PDO it reported and reaches Bound (design record 13
  * section 5.3).
+ *
+ * A REMOVE while listed is a disable only while the parent's devnode
+ * stays. When the hub's own devnode is disabled, PnP removes the children
+ * and then the hub's FDO, and forgets the children's devnodes with it:
+ * reported again to the next FDO, the same PDOs were never started
+ * (Windows 2000, 2026-10-05, the 2.1.0.0 leg 1e). So the hub FDO's remove
+ * lets them go (HcdDevicePdoLetGo, ParentLetGo): no answer carries them
+ * again, and the next hub FDO start cycles their ports, so each device
+ * comes back as new PDOs at its old instance id (HcdDevicePdoRepresent).
  */
 
 /* A port's handshake bit, under the controller lock. IRQL: <= DISPATCH. */
@@ -1693,10 +1702,12 @@ ULONG HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         if (!pdo->Reported) {
             pdo->Next = doomed;
             doomed = pdo;
-        } else if (hcdAncestorGoneLocked(hc, pdo)) {
+        } else if (pdo->ParentLetGo || hcdAncestorGoneLocked(hc, pdo)) {
             /* Under a hub PnP has let go of (task 33.4): missing now, since
              * no answer of its parent's FDO can come first, and its port
-             * must not wait for one (Codex review of 33.4, round 1). */
+             * must not wait for one (Codex review of 33.4, round 1). A PDO
+             * let go of with its hub's removed FDO (HcdDevicePdoLetGo) is
+             * one PnP has forgotten the same way. */
             pdo->MissingReported = 1;
             if (pdo->RemoveReceived) {
                 pdo->DeletePending = 1;
@@ -1892,7 +1903,8 @@ PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
     hc->RemovedPdos = NULL;
     listed = 0;
     for (pdo = hc->DevicePdos; pdo != NULL; pdo = pdo->Next) {
-        if (pdo->ParentSerial == parent) {
+        if (XhciEnumAnswerCarries(pdo->ParentSerial, parent,
+                                  pdo->ParentLetGo)) {
             listed++;
         }
     }
@@ -1903,7 +1915,8 @@ PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
             rel->Objects[i] = old->Objects[i];
         }
         for (pdo = hc->DevicePdos; pdo != NULL; pdo = pdo->Next) {
-            if (pdo->ParentSerial != parent) {
+            if (!XhciEnumAnswerCarries(pdo->ParentSerial, parent,
+                                       pdo->ParentLetGo)) {
                 continue;
             }
             rel->Objects[i++] = pdo->Common.Self;
@@ -1916,7 +1929,7 @@ PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
             at = &hc->GonePdos;
             while (*at != NULL) {
                 pdo = *at;
-                if (pdo->ParentSerial != parent &&
+                if (pdo->ParentSerial != parent && !pdo->ParentLetGo &&
                     !hcdAncestorGoneLocked(hc, pdo)) {
                     at = &pdo->Next;
                     continue;
@@ -1959,6 +1972,110 @@ PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
         }
     }
     return rel;
+}
+
+/*
+ * A hub's FDO is being removed (hcd_hubfdo.c) - its devnode disabled, or
+ * the tree it is in removed. PnP removes a devnode's children before the
+ * devnode, and with the hub's devnode it forgets theirs: a child PDO that
+ * PnP was shown and has removed, still listed because its device is still
+ * here (the WDM bus rule), is one PnP will not take back from the next FDO
+ * on this hub PDO - Windows 2000 started nothing when the same PDOs were
+ * reported again (2026-10-05, the 2.1.0.0 leg 1e). Each is marked
+ * ParentLetGo (XhciEnumLetGo): no answer carries it again, and once it is
+ * gone it is missing at once, as under a hub PDO PnP has let go of. The
+ * device keeps running; the next start of a hub FDO on this PDO cycles its
+ * port (HcdDevicePdoRepresent). A child PnP never saw stays as it is, for
+ * the next answer. Returns how many. IRQL: <= DISPATCH_LEVEL.
+ */
+ULONG HcdDevicePdoLetGo(PHCD_CONTROLLER hc, ULONG hubSerial)
+{
+    PHCD_DEVICE_PDO pdo;
+    KIRQL oldIrql;
+    ULONG n;
+
+    if (hubSerial == 0) {
+        return 0;
+    }
+    n = 0;
+    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    for (pdo = hc->DevicePdos; pdo != NULL; pdo = pdo->Next) {
+        if (pdo->ParentSerial == hubSerial && !pdo->ParentLetGo &&
+            XhciEnumLetGo(pdo->Listed, pdo->Reported, pdo->RemoveReceived)) {
+            pdo->ParentLetGo = 1;
+            n++;
+        }
+    }
+    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    if (n != 0) {
+        XHCI_DBG_VALUE("hcd: hub FDO removed, children let go, serial/count",
+                       (hubSerial << 16) | (n & 0xFFFFUL));
+    }
+    return n;
+}
+
+#define HCD_REPRESENT_BATCH 16UL
+
+/*
+ * A hub FDO starts on the PDO `hubSerial` (hcd_hubfdo.c): every child PnP
+ * let go of with an earlier FDO (HcdDevicePdoLetGo) has its port cycled
+ * (HcdEnumCycle, CYCLE_PORT's path): its PDOs leave, missing at once and
+ * deleted at the next relations answer, and the device enumerates afresh
+ * as new PDOs with the same instance id - its serial id, or its place
+ * under the same hub devnode - so PnP finds the devnode it had. Called
+ * before the start asks its settle generation, so the first answer waits
+ * for those enumerations (design record 13 section 5.7). In batches, the
+ * cycle taking the controller lock outside PdoListLock. Returns how many
+ * PDOs were asked for. IRQL: <= DISPATCH_LEVEL.
+ */
+ULONG HcdDevicePdoRepresent(PHCD_CONTROLLER hc, ULONG hubSerial)
+{
+    PHCD_DEVICE_PDO pdo;
+    KIRQL oldIrql;
+    ULONG ports[HCD_REPRESENT_BATCH];
+    ULONG groups[HCD_REPRESENT_BATCH];
+    ULONG total;
+    ULONG n;
+    ULONG i;
+
+    if (hubSerial == 0) {
+        return 0;
+    }
+    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    for (pdo = hc->DevicePdos; pdo != NULL; pdo = pdo->Next) {
+        if (pdo->ParentSerial == hubSerial) {
+            pdo->RepresentAsked = 0;
+        }
+    }
+    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    total = 0;
+    for (;;) {
+        n = 0;
+        KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+        for (pdo = hc->DevicePdos; pdo != NULL && n < HCD_REPRESENT_BATCH;
+             pdo = pdo->Next) {
+            if (pdo->ParentSerial == hubSerial && pdo->ParentLetGo &&
+                !pdo->RepresentAsked) {
+                pdo->RepresentAsked = 1;
+                ports[n] = pdo->Port;
+                groups[n] = pdo->Group;
+                n++;
+            }
+        }
+        KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+        if (n == 0) {
+            break;
+        }
+        for (i = 0; i < n; i++) {
+            HcdEnumCycle(hc, ports[i], groups[i]);
+        }
+        total += n;
+    }
+    if (total != 0) {
+        XHCI_DBG_VALUE("hcd: hub FDO started, let-go PDOs cycled, serial/count",
+                       (hubSerial << 16) | (total & 0xFFFFUL));
+    }
+    return total;
 }
 
 /*
@@ -2160,6 +2277,10 @@ static ULONG hcdPdoStarted(PHCD_DEVICE_PDO pdo)
     listed = pdo->Listed;
     if (listed) {
         pdo->RemoveReceived = 0;
+        /* PnP started it again, so it has not forgotten it after all: it
+         * is carried again, and a cycle already asked takes it as an
+         * unplug that waits for its answer. */
+        pdo->ParentLetGo = 0;
     }
     KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
     if (!listed) {
@@ -2226,6 +2347,7 @@ static VOID hcdPdoRemoved(PHCD_DEVICE_PDO pdo)
     } else {
         pdo->RemoveReceived = 1;
         if (!pdo->Listed && (pdo->MissingReported || !pdo->Reported ||
+                             pdo->ParentLetGo ||
                              hcdAncestorGoneLocked(hc, pdo))) {
             /* Gone under a hub PnP has let go of (task 33.4): its parent's
              * FDO answers no more, and this REMOVE is the subtree's. */

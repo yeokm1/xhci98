@@ -784,6 +784,26 @@ static void test_settle(void)
     CHECK_EQ(XhciEnumElapsedMs(0xFFFFFFF0UL, 9990), 1, "across the wrap");
 }
 
+/* A hub's devnode disabled and enabled again (task 33.4, the 2.1.0.0
+ * leg 1e defect): which children PnP let go of, and which an answer
+ * carries. */
+static void test_hub_let_go(void)
+{
+    CHECK(XhciEnumLetGo(1, 1, 1), "listed, shown, removed: let go");
+    CHECK(!XhciEnumLetGo(1, 0, 1), "never shown: the new FDO shows it");
+    CHECK(!XhciEnumLetGo(1, 0, 0), "never shown, never removed");
+    CHECK(!XhciEnumLetGo(1, 1, 0), "shown, not removed: PnP still holds it");
+    CHECK(!XhciEnumLetGo(0, 1, 1), "gone already: its own path");
+    CHECK(!XhciEnumLetGo(0, 0, 0), "nothing");
+
+    CHECK(XhciEnumAnswerCarries(0, 0, 0), "a root hub child, root answer");
+    CHECK(XhciEnumAnswerCarries(17, 17, 0), "a hub child, its hub's answer");
+    CHECK(!XhciEnumAnswerCarries(17, 0, 0), "a hub child, root answer");
+    CHECK(!XhciEnumAnswerCarries(0, 17, 0), "a root child, a hub's answer");
+    CHECK(!XhciEnumAnswerCarries(17, 17, 1), "let go: never carried again");
+    CHECK(!XhciEnumAnswerCarries(18, 17, 0), "another hub's child");
+}
+
 int main(void)
 {
     test_clean_paths();
@@ -799,6 +819,7 @@ int main(void)
     test_hub_port_attempts();
     test_superspeed();
     test_settle();
+    test_hub_let_go();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

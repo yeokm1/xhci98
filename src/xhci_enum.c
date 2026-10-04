@@ -438,3 +438,14 @@ ULONG XhciEnumSettleReached(ULONG done, ULONG target)
 {
     return ((done - target) < 0x80000000UL) ? 1UL : 0UL;
 }
+
+ULONG XhciEnumLetGo(ULONG listed, ULONG reported, ULONG removeReceived)
+{
+    return (listed && reported && removeReceived) ? 1UL : 0UL;
+}
+
+ULONG XhciEnumAnswerCarries(ULONG parentSerial, ULONG answering,
+                            ULONG letGo)
+{
+    return (parentSerial == answering && !letGo) ? 1UL : 0UL;
+}
