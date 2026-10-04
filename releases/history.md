@@ -15,7 +15,7 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 ## 2.1.0.0 - TBD
 
 Drafted, not cut: the date and every `TODO(...)` below are the cut's to
-settle (`TODO(33.8)`).
+settle (`TODO(33.9)`).
 
 The first update of the host controller driver. It adds two things
 `2.0.0.0` did not have, external hubs in Device Manager and devices named by

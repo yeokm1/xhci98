@@ -552,7 +552,7 @@ re-measured, or answered by the design, under `2.0.0.0`:
 | Windows 2000: a newer package over an older one was refused; disabling the controller with an audio device attached asked for a restart | The upgrade from `1.2.0.0` installs in place on Windows 2000. The disable with an audio device attached was not re-measured |
 | Windows 98: a driver that failed while starting the controller stopped the machine with a protection error | Not re-measured: no failing start was provoked under `2.0.0.0` |
 | On a controller without Force Save Context, a wake from standby rebuilt the bus | Untested: the power handlers have not run |
-| The virtual High-Speed hub switch and its costs | No switch: the values have no effect (see "Registry settings") |
+| The virtual High-Speed hub switch and its costs. It also did nothing unless `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid` were set beside `XhciVirtualHSHub`, since `1.2.0.0` has no default for either (reported on GitHub issue 4, 2026-10-03) | No switch: all three values have no effect (see "Registry settings") |
 
 ## Untested ground
 
