@@ -37,7 +37,7 @@ same four directories.
   number is still named by its port (`TODO(33.2)`: the port-move legs, and
   whether a device with a serial is found again once after the update).
 - Fixed on Windows ME: re-enabling the controller in Device Manager with a
-  USB mouse or keyboard attached no longer makes Windows ME stop responding.
+  USB mouse attached no longer makes Windows ME stop responding.
   The devices on the controller are now kept while it is disabled and come
   back as the same Device Manager entries when it is enabled again, as under
   Microsoft's own hub driver, instead of being removed and found again
@@ -50,9 +50,15 @@ same four directories.
   isochronous pipes in use, as Microsoft's own stack does, so a mouse, a
   keyboard or a drive adds nothing to it; on Windows Vista and 7 it stays at
   zero, a known limitation.
-- `txtsetup.oem`, so that Windows 2000 and XP text-mode Setup can load the
-  driver: `TODO(33.3)`, the file and its install legs, or the feasibility
-  decision and this line removed.
+- `txtsetup.oem` in every flavour directory, so that Windows 2000, XP and
+  XP x64 text-mode Setup can load the driver from a floppy at its F6 prompt
+  on a machine whose keyboard or install medium is on an xHCI controller.
+  Setup's own HID and storage drivers then run above this one. Limits:
+  pressing F6 needs the firmware's own USB keyboard support, the floppy
+  must be drive A:, a disk the driver runs as UAS is not usable until
+  GUI-mode Setup, and installing Windows onto a USB disk is not supported
+  (`TODO(33.3)`: the F6 install legs on Windows 2000 and XP; until then it
+  is untested ground, read from Setup's own files only).
 - Known limitations: those of `2.0.0.0`, less the Windows ME controller
   re-enable and (`TODO(33.2)`) the device moved to another port. The release
   notes have the full list.
