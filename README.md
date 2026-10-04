@@ -231,14 +231,12 @@ The `1.2.0.0` results are in its [README](https://github.com/yeokm1/xhci98/blob/
 | Limitation | Detail |
 |---|---|
 | The driver never starts selective suspend | Idle devices and hub ports are never suspended to save power. A suspend or resume a hub reports is handled. |
-| Disabling, uninstalling or upgrading under NUSB crashed `1.2.0.0` | That was a defect in NUSB's `usbport.sys`, which `2.0.0.0` no longer uses. Disabling, enabling, removing and rescanning `2.0.0.0` survive under NUSB 3.3 and SweetLow's stack in a Windows 98 SE virtual machine. One case remains: upgrading in place over a running `1.2.0.0` under NUSB still crashes, because NUSB's `usbport.sys` stops `1.2.0.0` before `2.0.0.0` runs. Follow "Upgrading from 1.2.0.0" above. |
-| Fast, repeated plug and unplug froze Windows 98 under `1.2.0.0` | The hub churn soak that wedged `1.2.0.0` at 12 to 18 hubs ran 120 of 120 with the guest responsive in a Windows 98 SE virtual machine, and the hub churn of the final build's device matrix passed on Windows 98 SE and 2000. Not seen under `2.0.0.0`. |
-| USB storage on Windows 98 is slower than the drive | An observation, not a defect found: Windows 98 sends one command at a time. On the P14s with the MSSU10 at 64 KB, about 208 MB/s on Windows 98 against 277 MB/s on Windows 11 at the same queue depth of one. |
-| A UAS-only drive at SuperSpeed on a controller without streams | It is sent back to its USB 2.0 port and runs UAS at High Speed, or is refused if it has no USB 2.0 port. Built from the specification; no such controller has been held. |
+| Upgrading in place over a running `1.2.0.0` under NUSB blue-screens | NUSB's `usbport.sys` crashes the machine as it stops `1.2.0.0`, before `2.0.0.0` runs. Follow "Upgrading from 1.2.0.0" above, which avoids it. |
+| USB storage on Windows 98 is slower than the drive | An observation, not a defect found: Windows 98 sends one command at a time. On the P14s with the MSSU10 at 64 KB, about 208 MB/s on Windows 98 against 277 MB/s on Windows 11 at the same queue depth of one. This may be looked into in a later release. |
 | Vista x64 and 7 x64 need driver signature enforcement disabled | The driver is not signed. Driver signature enforcement must be disabled at every start, or the controller sits at Code 39. |
 | No USB storage on a stock Windows 98 SE | With no NUSB installed there is no mass-storage driver at all. HID and audio still work. |
 | A UAS drive as the first USB storage device on Windows ME | On a fresh Windows ME installation whose first USB storage device is a UAS drive, the drive shows Code 2 (NTKERN.VXD device loader(s) could not load). ME has not yet copied its own `USBNTMAP.SYS` and `USBMPHLP.PDR`, which it installs only when its first ordinary USB stick is plugged in. To recover, plug in any ordinary USB stick once, then unplug the UAS drive and plug it back in. No Remove and no restart are needed. |
-| Windows ME: re-enabling the controller with a device attached | Re-enabling the controller in Device Manager while a USB device is plugged in can make Windows ME stop responding. Unplug USB devices before re-enabling it. If ME stops responding, restart it and re-enable the controller with nothing attached. Being fixed. |
+| Windows ME: re-enabling the controller with a USB mouse or keyboard attached | Re-enabling the controller in Device Manager while a USB mouse or keyboard is plugged in makes Windows ME stop responding. A USB storage device alone is fine. Unplug the mouse or keyboard before re-enabling the controller. If ME stops responding, restart it and re-enable the controller with nothing attached. Being fixed. |
 | Windows ME: unplugging a device while Windows installs it | ME's own device manager stops responding if a device is unplugged while Windows is still installing its driver. ME does the same on Microsoft's own USB stack. Wait for the install to finish before unplugging. |
 | A device moved to a different port is found again as new hardware | The driver names a device by the port it is plugged into. Microsoft's hub driver uses the device's serial number instead, so there a device keeps its identity across ports. A later release may do the same. |
 
@@ -248,7 +246,7 @@ The `1.2.0.0` results are in its [README](https://github.com/yeokm1/xhci98/blob/
 |---|---|
 | SuperSpeed isochronous transfers | Built from the specification. No SuperSpeed isochronous device has been held and QEMU models none. |
 | SuperSpeedPlus (USB 3.1 Gen 2, USB 3.2 Gen 1x2 and Gen 2x2) | Accepted at its trained rate, built from the specification. Not read on any hardware: no Gen 2 device has been tested, so every mode is untested. |
-| Standby and resume | The power handlers have not run: no test machine has been put into standby or hibernation with this driver. |
+| A UAS-only drive at SuperSpeed on a controller without streams | It is sent back to its USB 2.0 port and runs UAS at High Speed, or is refused if it has no USB 2.0 port. Built from the specification; no such controller has been held. |
 
 ## Toolchain and building
 
