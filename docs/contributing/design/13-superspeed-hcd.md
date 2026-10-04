@@ -2701,11 +2701,7 @@ that rule to every gone PDO, whichever parent it answers for, so the ports
 behind a departed hub stop waiting and a gone PDO whose REMOVE has come
 reaches `RemovedPdos` and its deletion at the next answer, as any other.
 The rule is applied at the departure too (`HcdDevicePdoGone`), so a port
-never waits for an answer no FDO can give, and it has one more case: a PDO
-PnP has removed already (a disabled device) under a hub kept dormant across
-a controller stop is missing at once - its hub's FDO answers nothing until
-the hub is enumerated again, which its port's wait would otherwise prevent
-(Codex review of 33.4, round 1, finding 1).
+never waits for an answer no FDO can give (Codex review of 33.4, round 1).
 
 **Invalidation.** `IoInvalidateDeviceRelations` goes to the PDO a change
 belongs under: the root-hub PDO for `ParentSerial` 0, otherwise the hub PDO,
@@ -2745,7 +2741,16 @@ ancestor rule above. The hub PDO is referenced across the call.
    stopped by PnP across an orderly controller stop is kept dormant like any
    device PDO, and its children with it - but a child is kept only when its
    hub PDO is (`HcdDevicePdoDormantAll` now takes the devices tier by tier,
-   root ports first). At the restart the hub re-enumerates first and revives
+   root ports first). Behind a hub, a PDO the user disabled (removed by PnP
+   while present, so still listed) is kept with its group and revived still
+   disabled: dropped, it would be gone and waiting for an answer only its
+   dormant hub's FDO could give, and its port's wait would keep that hub
+   from being enumerated again; nor may it be taken for absent, since PnP
+   still holds it present (Codex review of 33.4, rounds 1 and 2). A
+   composite with one function disabled is kept whole the same way. The
+   residue: a disabled device unplugged while the controller is off stays
+   listed, disabled, until a device enumerates at its place or its hub's
+   dormant group is retired. At the restart the hub re-enumerates first and revives
    its dormant PDO at the same instance key, keeping its `Serial`, so the
    children enumerated behind it compute the same `ParentSerial` and revive
    theirs; `ParentSerial` and `Hub` join the descriptors in the sameness

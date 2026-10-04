@@ -762,9 +762,8 @@ static PHCD_DEVICE_PDO hcdHubFindLocked(PHCD_CONTROLLER hc, ULONG serial)
  * removed by PnP (which removes a devnode's children first, so each child
  * has had its own REMOVE), on its way to deletion, or deleted already. A
  * gone PDO under such a parent is missing whichever relations answer looks
- * at it, since its parent's FDO answers nothing more; and a PDO PnP has
- * removed already under a dormant hub (below). 0 for a child of the root
- * hub. PdoListLock held.
+ * at it, since its parent's FDO answers nothing more. 0 for a child of the
+ * root hub. PdoListLock held.
  */
 static ULONG hcdAncestorGoneLocked(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
 {
@@ -777,14 +776,6 @@ static ULONG hcdAncestorGoneLocked(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
         up = hcdHubFindLocked(hc, serial);
         if (up == NULL || up->MissingReported || up->DeletePending ||
             up->Deleted || up->Common.PnpState == HCD_PNP_REMOVED) {
-            return 1;
-        }
-        /* A PDO PnP has removed already (a disabled device) under a hub
-         * kept dormant across a controller stop: that hub's FDO answers
-         * nothing until the hub is enumerated again, and the hub cannot be
-         * while a port below it waits for this PDO (Codex review of 33.4,
-         * round 1, finding 1). Its REMOVE has come; nothing more is owed. */
-        if (up->Dormant && pdo->RemoveReceived) {
             return 1;
         }
         serial = up->ParentSerial;
@@ -881,8 +872,22 @@ static VOID hcdDormantKeep(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
     keep = 1;
     for (pdo = first; pdo != NULL; pdo = pdo->Sibling) {
-        if (!pdo->Listed || pdo->Common.PnpState != HCD_PNP_STOPPED ||
-            pdo->Surprised || pdo->RemoveReceived || pdo->UrbsPending != 0) {
+        if (!pdo->Listed || pdo->Surprised || pdo->UrbsPending != 0) {
+            keep = 0;
+        } else if (pdo->RemoveReceived) {
+            /* Disabled in Device Manager and still present (the WDM rule
+             * keeps it listed). Behind a hub it is kept with its group and
+             * revived still disabled (task 33.4): dropped, it would wait as
+             * gone for an answer only its dormant hub's FDO could give,
+             * and that hub cannot be enumerated again while a port below
+             * it waits - nor may the PDO be taken for absent, since PnP
+             * still holds it present (Codex review of 33.4, round 2,
+             * findings 1 and 2). Under the root hub the root's own answer
+             * settles it, as before 33.4. */
+            if (first->ParentSerial == 0) {
+                keep = 0;
+            }
+        } else if (pdo->Common.PnpState != HCD_PNP_STOPPED) {
             keep = 0;
         }
     }
@@ -1316,11 +1321,9 @@ ULONG HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
             pdo->Next = doomed;
             doomed = pdo;
         } else if (hcdAncestorGoneLocked(hc, pdo)) {
-            /* Under a hub PnP has let go of, or removed by PnP already
-             * under a dormant hub (task 33.4): missing now, since no answer
-             * of its parent's FDO can come first - and its port must not
-             * wait for one, or the hub could never be enumerated again to
-             * revive (Codex review of 33.4, round 1, finding 1). */
+            /* Under a hub PnP has let go of (task 33.4): missing now, since
+             * no answer of its parent's FDO can come first, and its port
+             * must not wait for one (Codex review of 33.4, round 1). */
             pdo->MissingReported = 1;
             if (pdo->RemoveReceived) {
                 pdo->DeletePending = 1;

@@ -832,7 +832,8 @@ try {
     }
     Assert-RuleFires "hcd-hub-coinstallers-copy-amd64" "HCD-HUBCOPY" -Source $prodInfAmd64 -Arch amd64 {
         param($t) $t.Replace("[Hub.Dev6.NTamd64.Services]", "[Hub.Dev6.NTamd64.CoInstallers]`r`nCopyFiles=Xhci.CopyFiles`r`n`r`n[Hub.Dev6.NTamd64.Services]")
-    }    Assert-RuleFires "hcd-hub-other-driver" "HCD-HUBCOPY" {
+    }
+    Assert-RuleFires "hcd-hub-other-driver" "HCD-HUBCOPY" {
         param($t) $t.Replace("[Hub.AddReg]`r`nHKR,,DevLoader,,*NTKERN`r`nHKR,,NTMPDriver,,xhci98.sys", "[Hub.AddReg]`r`nHKR,,DevLoader,,*NTKERN`r`nHKR,,NTMPDriver,,usbhub.sys")
     }
     Assert-RuleFires "hcd-hub-no-hubpage-9x" "HCD-HUBPAGE" {
