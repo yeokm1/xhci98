@@ -170,9 +170,9 @@ It is read each time a device enumerates, so unplug and replug the drive after c
 
 ## What is tested, and what is not
 
-Windows 98 SE and Windows 2000 SP4 are the primary targets, and both are validated in QEMU virtual machines. Windows 98 SE on real hardware is the bench session below. Windows 2000 has never run on real hardware. The other targets are virtual machines only, apart from 32-bit Windows 7 on the E460 at the bench.
+Windows 98 SE and Windows 2000 SP4 are the primary targets, and both are validated in QEMU virtual machines. Windows 98 SE on real hardware is the bench session below. Windows 2000 has never run on real hardware. The other targets, 32-bit Windows 7 included, are virtual machines only.
 
-`TODO(bench): the combined bench session before the cut - 28-E.1, 29-E.1, 30-E.1 and 31-E.1 - on the E460 (Windows 98 SE and 32-bit Windows 7) and the second Windows 98 SE machine.`
+`TODO(bench): the combined bench session before the cut - 28-E.1, 29-E.1, 30-E.1 and 31-E.1 - on the E460 and the second Windows 98 SE machine, both under Windows 98 SE.`
 
 | Target | 2.0.0.0 state |
 |---|---|
@@ -181,7 +181,7 @@ Windows 98 SE and Windows 2000 SP4 are the primary targets, and both are validat
 | Windows ME | `TODO(28-V.1)` |
 | 32-bit Windows XP | `TODO(28-V.1)` |
 | Windows XP x64 | The amd64 build installed with the mouse and storage working on the `qemu` build (Phase 27). `TODO(28-V.1)` for the full leg. |
-| Windows Vista SP2 and Windows 7 SP1, 32-bit and x64 | `TODO(28-V.1)`. On Vista x64 and 7 x64, driver signature enforcement has to be disabled as this driver is not signed. 32-bit Windows 7 on real hardware: `TODO(bench)`. |
+| Windows Vista SP2 and Windows 7 SP1, 32-bit and x64 | `TODO(28-V.1)`. On Vista x64 and 7 x64, driver signature enforcement has to be disabled as this driver is not signed. |
 | Every target, from the release package | `TODO(32.3): the ten install legs read from the release asset, each with SuperSpeed storage and UAS at SuperSpeed and High Speed.` |
 
 | Machine | Controller | 2.0.0.0 result | Tested by |
@@ -198,7 +198,7 @@ The devices, each characterised in [test-equipment.md](docs/contributing/test-eq
 | Terminus 4-port hub, single-TT | `1A40:0101` | High | `TODO(bench)` |
 | Genesys 7-port hub (two cascaded chips), single-TT | `05E3:0608` | High | `TODO(bench)` |
 | Genesys USB 3.0 hub | `05E3:0610`, `05E3:0612` | SuperSpeed and High | `TODO(bench): 30-E.1, a SuperSpeed drive behind its SuperSpeed half and a High-Speed device behind the other.` |
-| A USB 1.1 hub behind a High-Speed hub | | Full | `TODO(bench): the Full-Speed hub clause of 28-E.1, on a hub bought for it.` |
+| A Full-Speed hub behind a High-Speed hub | | Full | `TODO(bench): the Full-Speed hub clause of 28-E.1, a USB 2.0 hub held at Full Speed by an ADuM full/low-speed isolator in front of it.` |
 | Logitech USB Optical Mouse | `046D:C077` | Low | `TODO(bench): at a root port and behind a hub, polled every 8 ms.` |
 | Microsoft Wired Keyboard 600 (composite) | `045E:0750` | Low | `TODO(bench)` |
 | SanDisk U3 Titanium flash drive | `0781:5408` | High | `TODO(bench)` |
@@ -218,11 +218,9 @@ The `1.2.0.0` results are in its [README](https://github.com/yeokm1/xhci98/blob/
 | The driver never starts selective suspend | Idle devices and hub ports are never suspended to save power. A suspend or resume a hub reports is handled. |
 | Disabling, uninstalling or upgrading under NUSB crashed `1.2.0.0` | That was a defect in NUSB's `usbport.sys`, which `2.0.0.0` no longer uses. Disable, enable, remove and rescan survive under NUSB 3.3 and SweetLow's stack in a Windows 98 SE virtual machine. `TODO(28.3): gone, carried or new.` |
 | Fast, repeated plug and unplug froze Windows 98 under `1.2.0.0` | The hub churn soak that wedged `1.2.0.0` at 12 to 18 hubs ran 120 of 120 with the guest responsive in a Windows 98 SE virtual machine. `TODO(28.3): gone, carried or new.` |
-| Disabling the USB controller hung Windows 7 under `1.2.0.0` | `TODO(28.3): re-measured on the E460 at the bench; gone, carried or new.` |
-| Windows 2000: a USB audio device unplugged while it plays is never fully removed | Windows sends the surprise removal and no remove for minutes afterwards, with the desktop responsive. An idle audio device unplugs cleanly. |
 | USB storage on Windows 98 is slower than the drive | An observation, not a defect found: Windows 98 sends one command at a time. On the P14s with the MSSU10 at 64 KB, about 208 MB/s on Windows 98 against 277 MB/s on Windows 11 at the same queue depth of one. |
 | A UAS-only drive at SuperSpeed on a controller without streams | It is sent back to its USB 2.0 port and runs UAS at High Speed, or is refused if it has no USB 2.0 port. Built from the specification; no such controller has been held. |
-| Vista x64 and 7 x64 need driver signature enforcement disabled | The driver is not signed. Press F8 and choose "Disable Driver Signature Enforcement" at every start, or the controller sits at Code 39. |
+| Vista x64 and 7 x64 need driver signature enforcement disabled | The driver is not signed. Driver signature enforcement must be disabled at every start, or the controller sits at Code 39. |
 | No USB storage on a stock Windows 98 SE | With no NUSB installed there is no mass-storage driver at all. HID and audio still work. |
 
 ### Untested ground
