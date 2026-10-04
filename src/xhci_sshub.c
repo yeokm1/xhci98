@@ -90,9 +90,14 @@ VOID XhciSsHubPortDecide(ULONG state, ULONG status, ULONG change,
     }
     if (link == XHCI_SSHUB_LINK_INACTIVE ||
         link == XHCI_SSHUB_LINK_COMPLIANCE) {
-        /* Only a warm reset leaves these states (USB 3.2 7.5.2 and 7.5.3,
-         * to verify): whatever the port held goes first, and what the
-         * reset leaves is decided afresh by the executor. */
+        /* A warm reset is the only reset that leaves these states: a
+         * downstream port leaves eSS.Inactive when directed, on a
+         * detected disconnect or on a warm reset, and Compliance Mode on a
+         * warm reset or when directed to eSS.Disabled (USB 3.2 7.5.2 and
+         * 7.5.5.2, USB 3.2 p.163-164 and p.188), and a PORT_RESET in
+         * either is sent as a warm reset anyway (7.4.2, p.158); verified.
+         * Whatever the port held goes first, and what the reset leaves is
+         * decided afresh by the executor. */
         out->WarmReset = 1;
         out->Disconnect = xhciSsHubHolds(state);
         return;
@@ -170,8 +175,12 @@ ULONG XhciSsHubResetKind(ULONG status, PULONG converted)
             break;
         default:
             /* U3, a stuck Polling or Hot Reset, Loopback, or a connection
-             * the link state does not account for: a hot reset cannot
-             * start there (USB 3.2 7.4.2, to verify). */
+             * the link state does not account for: BH_PORT_RESET, valid in
+             * every link state but eSS.Disabled (USB 3.2 7.4.2, USB 3.2
+             * p.158-159; verified). For U3 and Loopback that is what the
+             * hub would send for PORT_RESET too; for Polling and Hot Reset
+             * the hub would try a hot reset first, so the warm one there
+             * is this driver's policy, not the specification's rule. */
             kind = XHCI_SSHUB_RESET_WARM;
             break;
         }

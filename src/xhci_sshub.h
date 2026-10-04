@@ -2,7 +2,8 @@
  * xhci_sshub.h - the SuperSpeed hub class inside the bus, its pure half
  * (roadmap-hcd.md tasks 30-A.1 and 30-A.2; xhci-data-structures.md section
  * 11, the USB 3.2 hub class as transcribed by task 30-0, every row of which
- * is marked for verification against the USB 3.2 specification).
+ * is verified against the USB 3.2 specification, revision 1.1; every
+ * "USB 3.2 p.N" is the page that copy prints).
  *
  * A USB 3 hub is two hubs: its USB 2.0 half on a High-Speed port is a
  * Phase 27 hub (xhci_hub.c) and its SuperSpeed half on a SuperSpeed port is
@@ -50,17 +51,21 @@ struct _XHCI_PIPE_BOS;
 #define XHCI_SSHUB_BAD_PARAM    2UL
 #define XHCI_SSHUB_NOT_FOUND    3UL
 
-/* bDeviceProtocol of a SuperSpeed hub (USB 3.2 10.15.1, to verify). */
+/* bDeviceProtocol of a SuperSpeed hub (USB 3.2 10.15.1, USB 3.2 p.432;
+ * verified). */
 #define XHCI_SSHUB_PROTOCOL             0x03UL
 
-/* Hub class requests a USB 3 hub adds (USB 3.2 Table 10-8, to verify):
- * SET_HUB_DEPTH (bmRequestType 0x20, wValue the depth, wIndex 0, no data)
- * and GET_PORT_ERR_COUNT (not used). */
+/* Hub class requests a USB 3 hub adds (USB 3.2 Tables 10-7 and 10-8, USB 3.2
+ * p.440; verified): SET_HUB_DEPTH (bmRequestType 0x20, wValue the depth,
+ * wIndex 0, no data; a depth above 4 is a Request Error, and before the hub
+ * is configured the answer is undefined, 10.16.2.9, p.451-452) and
+ * GET_PORT_ERR_COUNT (not used). */
 #define XHCI_SSHUB_REQ_SET_HUB_DEPTH    0x0CU
 #define XHCI_SSHUB_REQ_GET_PORT_ERR_COUNT 0x0DU
 
-/* The SuperSpeed hub descriptor (USB 3.2 10.15.2.1, Table 10-3; to
- * verify): GET_DESCRIPTOR with wValue 0x2A00, 12 bytes. */
+/* The Enhanced SuperSpeed hub descriptor (USB 3.2 10.15.2.1, Table 10-5,
+ * USB 3.2 p.437-438; verified): GET_DESCRIPTOR with wValue 0x2A00, 12
+ * bytes. */
 #define XHCI_SSHUB_DESC_TYPE            0x2AUL
 #define XHCI_SSHUB_DESC_VALUE           0x2A00U
 #define XHCI_SSHUB_DESC_BYTES           12UL
@@ -69,7 +74,9 @@ struct _XHCI_PIPE_BOS;
  * Table 6-4 footnote 106 is for High- and Full-Speed hubs only. */
 #define XHCI_SSHUB_MAX_PORTS            15UL
 
-/* wPortStatus at SuperSpeed (USB 3.2 Table 10-13; to verify). */
+/* wPortStatus at SuperSpeed (USB 3.2 Table 10-13, USB 3.2 p.445-446;
+ * verified). PORT_CONNECTION keeps its previous value in DSPORT.Resetting
+ * and DSPORT.Error (p.446). */
 #define XHCI_SSHUB_PORT_CONNECTION      0x0001UL
 #define XHCI_SSHUB_PORT_ENABLE          0x0002UL
 #define XHCI_SSHUB_PORT_OVER_CURRENT    0x0008UL
@@ -80,8 +87,11 @@ struct _XHCI_PIPE_BOS;
 #define XHCI_SSHUB_PORT_SPEED_MASK      0x1C00UL
 #define XHCI_SSHUB_PORT_SPEED_SHIFT     10
 
-/* wPortChange at SuperSpeed (USB 3.2 Table 10-14; to verify). Bits 1 and 2,
- * USB 2.0's C_PORT_ENABLE and C_PORT_SUSPEND, are reserved. */
+/* wPortChange at SuperSpeed (USB 3.2 Table 10-14, USB 3.2 p.448-450;
+ * verified). Bits 1 and 2, USB 2.0's C_PORT_ENABLE and C_PORT_SUSPEND, are
+ * reserved. C_PORT_RESET and C_BH_PORT_RESET are set only on a reset that
+ * succeeds (Resetting to Enabled); a failed one ends in DSPORT.Disconnected
+ * with neither (10.3.1.6, p.388-389). */
 #define XHCI_SSHUB_C_PORT_CONNECTION    0x0001UL
 #define XHCI_SSHUB_C_PORT_OVER_CURRENT  0x0008UL
 #define XHCI_SSHUB_C_PORT_RESET         0x0010UL
@@ -90,7 +100,8 @@ struct _XHCI_PIPE_BOS;
 #define XHCI_SSHUB_C_PORT_CONFIG_ERROR  0x0080UL
 #define XHCI_SSHUB_C_PORT_MASK          0x00F9UL
 
-/* PORT_LINK_STATE values (USB 3.2 Table 10-13's note; to verify). */
+/* PORT_LINK_STATE values (USB 3.2 Table 10-13, USB 3.2 p.446; verified;
+ * 0xC-0xF reserved). */
 #define XHCI_SSHUB_LINK_U0              0x0UL
 #define XHCI_SSHUB_LINK_U1              0x1UL
 #define XHCI_SSHUB_LINK_U2              0x2UL
@@ -104,7 +115,8 @@ struct _XHCI_PIPE_BOS;
 #define XHCI_SSHUB_LINK_COMPLIANCE      0xAUL
 #define XHCI_SSHUB_LINK_LOOPBACK        0xBUL
 
-/* Port feature selectors at SuperSpeed (USB 3.2 Table 10-9; to verify).
+/* Port feature selectors at SuperSpeed (USB 3.2 Table 10-9, USB 3.2 p.441;
+ * verified; 21 is reserved, used by USB 2.0).
  * PORT_RESET 4, PORT_POWER 8, C_PORT_CONNECTION 16, C_PORT_OVER_CURRENT 19
  * and C_PORT_RESET 20 are USB 2.0's numbers and xhci_hub.h's names. */
 #define XHCI_SSHUB_FEAT_PORT_LINK_STATE     5UL
@@ -117,31 +129,39 @@ struct _XHCI_PIPE_BOS;
 #define XHCI_SSHUB_FEAT_C_BH_PORT_RESET     29UL
 #define XHCI_SSHUB_FEAT_FORCE_LINKPM_ACCEPT 30UL
 
-/* PORT_REMOTE_WAKE_MASK's mask, in wIndex 15:8 (USB 3.2 10.16.2.10; to
- * verify). The bus suspends no hub port, so it sets none of them. */
+/* PORT_REMOTE_WAKE_MASK's mask, in wIndex 15:8 (USB 3.2 10.16.2.10, Table
+ * 10-18, USB 3.2 p.454-455; verified): Conn_RWEnable, Disconn_RWEnable,
+ * OC_RWEnable, bits 7:3 reserved, all zero after power-on or a hub reset.
+ * The bus suspends no hub port, so it sets none of them. */
 #define XHCI_SSHUB_WAKE_CONNECT         0x01UL
 #define XHCI_SSHUB_WAKE_DISCONNECT      0x02UL
 #define XHCI_SSHUB_WAKE_OVER_CURRENT    0x04UL
 
-/* GET_PORT_STATUS's status type in wValue (USB 3.2 10.16.2.6, Table 10-12;
- * to verify), and the extended answer's length: wPortStatus, wPortChange
- * and dwExtPortStatus. Only a hub of bcdUSB 0x0310 or above that carries a
- * SuperSpeedPlus capability answers type 2. */
+/* GET_PORT_STATUS's status type in wValue 7:0 (USB 3.2 10.16.2.6, Table
+ * 10-12, USB 3.2 p.444-445; verified), and the extended answer's length:
+ * wPortStatus, wPortChange and dwExtPortStatus. Type 1 (PD_STATUS) is
+ * deprecated and "shall not be used". Type 2 is a Request Error to a hub
+ * that defines no SuperSpeedPlus USB Capability; the specification keys it
+ * to the capability alone, and XhciSsHubHasExtStatus also asks bcdUSB
+ * 0x0310 - narrower, so never a request a hub refuses. */
 #define XHCI_SSHUB_STATUS_STANDARD      0U
 #define XHCI_SSHUB_STATUS_PD            1U
 #define XHCI_SSHUB_STATUS_EXT           2U
 #define XHCI_SSHUB_STATUS_EXT_BYTES     8UL
 #define XHCI_SSHUB_BCD_EXT_STATUS       0x0310UL
 
-/* dwExtPortStatus (USB 3.2 Table 10-15; to verify): the Rx and Tx sublink
- * speed ids, and the lane counts, each the count minus one. */
+/* dwExtPortStatus (USB 3.2 Table 10-15, USB 3.2 p.450; verified): the Rx
+ * and Tx sublink speed ids, and the lane counts, each zero-based (the count
+ * minus one); valid with PORT_ENABLE. The port's speed is the sublink's
+ * lane speed times the lane count (10.16.2.6.3). */
 #define XHCI_SSHUB_EXT_RX_SSID(dw)      (((ULONG)(dw)) & 0xFUL)
 #define XHCI_SSHUB_EXT_TX_SSID(dw)      ((((ULONG)(dw)) >> 4) & 0xFUL)
 #define XHCI_SSHUB_EXT_RX_LANES(dw)     (((((ULONG)(dw)) >> 8) & 0xFUL) + 1UL)
 #define XHCI_SSHUB_EXT_TX_LANES(dw)     (((((ULONG)(dw)) >> 12) & 0xFUL) + 1UL)
 
 /* A bmSublinkSpeedAttr of the SuperSpeedPlus capability (USB 3.2 9.6.2.5,
- * Table 9-19; xhci-data-structures.md 10.7; to verify). */
+ * Table 9-19, USB 3.2 p.357-358; xhci-data-structures.md 10.7; verified).
+ * ST is two bits of their own: bit 6 asymmetric, bit 7 transmit. */
 #define XHCI_SSHUB_SSA_SSID(dw)         (((ULONG)(dw)) & 0xFUL)
 #define XHCI_SSHUB_SSA_LSE(dw)          ((((ULONG)(dw)) >> 4) & 0x3UL)
 #define XHCI_SSHUB_SSA_ST(dw)           ((((ULONG)(dw)) >> 6) & 0x3UL)
@@ -201,7 +221,11 @@ ULONG XhciSsHubLinkState(ULONG status);
  *                       its recovery is the warm reset's;
  *   C_PORT_CONFIG_ERROR on a link in any other state: ConfigError, a
  *                       device the machine holds goes, and the port stays
- *                       down until its next connect change;
+ *                       down until its next connect change. A hub that
+ *                       follows USB 3.2 never reaches this rule: a config
+ *                       error always puts the port in DSPORT.Error, its
+ *                       link in eSS.Inactive (10.3.1.4, USB 3.2 p.387;
+ *                       p.450), which the rule above takes;
  *   C_PORT_OVER_CURRENT with PORT_POWER clear: OverCurrent and Repower;
  *   C_PORT_LINK_STATE, C_PORT_RESET, C_BH_PORT_RESET outside a reset:
  *                       cleared, nothing else.
@@ -231,7 +255,11 @@ ULONG XhciSsHubClearSelector(ULONG changeBit);
  * with a connection, or a connected port whose link state says nothing
  * trained; NONE with nothing connected and the link in Rx.Detect or
  * SS.Disabled - there is nothing to reset. *converted is 1 when a hot
- * reset was the want and a warm one is decided.
+ * reset was the want and a warm one is decided. USB 3.2 7.4.2 (p.158-159)
+ * has a hub answer PORT_RESET with a warm reset in exactly U3, Loopback,
+ * Compliance Mode and eSS.Inactive and a hot one otherwise; the warm reset
+ * from Polling and Hot Reset is this driver's choice, which BH_PORT_RESET
+ * (valid in every link state but eSS.Disabled) allows.
  */
 #define XHCI_SSHUB_RESET_NONE   0UL
 #define XHCI_SSHUB_RESET_HOT    1UL
@@ -259,8 +287,12 @@ ULONG XhciSsHubResetClears(ULONG change, ULONG warm);
 /* SuperSpeedPlus downstream rates                                          */
 /* ----------------------------------------------------------------------- */
 
-/* Whether a hub answers the extended port status: bcdUSB 0x0310 or above
- * and a SuperSpeedPlus capability in its BOS descriptor. */
+/* Whether the bus asks a hub for the extended port status: bcdUSB 0x0310 or
+ * above and a SuperSpeedPlus capability in its BOS descriptor. The
+ * specification's condition is the capability alone (Table 10-12's rule,
+ * USB 3.2 p.445); also asking bcdUSB is a leniency in the safe direction -
+ * it never sends the request to a hub that would refuse it, and skips only
+ * a hub that has the capability with an older bcdUSB. */
 ULONG XhciSsHubHasExtStatus(ULONG bcdUsb, const struct _XHCI_PIPE_BOS *bos);
 
 /*
@@ -296,8 +328,11 @@ ULONG XhciSsHubDownstream(const struct _XHCI_PIPE_BOS *bos, ULONG extStatus,
  * SuperSpeedPlus link the ID whose rate the root port's protocol names as
  * SuperSpeedPlus at the aggregate rate - and, where the protocol advertises
  * no PSI table, the default IDs: 5 for 10 Gbit/s on one lane, 6 on two, 7
- * for 20 Gbit/s. Only those are matches. Failing them, the ID named at the
- * lane rate, else the SuperSpeed class's, is given with *matched 0: the
+ * for 20 Gbit/s (xHCI Table 7-13, p.485; a leniency kept as xhci_caps.c
+ * keeps it: 7.2.2.1.2 defines 5 only on a USB 3.1 or 3.2 group and 6 and 7
+ * only on a USB 3.2 group, and this does not narrow the choice by the
+ * group's Minor Revision). Only those are matches. Failing them, the ID
+ * named at the lane rate, else the SuperSpeed class's, is given with *matched 0: the
  * device is still addressed, the caller counts it, and the controller's
  * output Slot Context decides after Address Device (XhciSsHubAdoptSpeed).
  */
@@ -311,7 +346,10 @@ ULONG XhciSsHubPsiv(const struct _XHCI_PORT_MAP *map, ULONG rootPort,
  * Slot Context, when it differs from `given` (what the bus asked for) and
  * names a SuperSpeed-class rate on `rootPort`'s protocol - the controller
  * is authoritative where the bus guessed (an unmatched SuperSpeedPlus rate,
- * Codex review of 034a119, finding 2); otherwise `given`, including for an
+ * Codex review of 034a119, finding 2) - as xHCI 4.19.9 (p.304-305) has it:
+ * a SuperSpeedPlus device sends a Sublink Speed Device Notification after
+ * SET_ADDRESS, and the xHC writes the speed it reports into the output Slot
+ * Context, ignoring the input's; otherwise `given`, including for an
  * output of 0 or a speed the protocol does not name.
  */
 ULONG XhciSsHubAdoptSpeed(const struct _XHCI_PORT_MAP *map, ULONG rootPort,

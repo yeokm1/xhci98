@@ -68,8 +68,8 @@
 #define XHCI_PIPE_CONFIG_BYTES      9UL
 #define XHCI_PIPE_INTERFACE_BYTES   9UL
 #define XHCI_PIPE_ENDPOINT_BYTES    7UL
-/* USB 3.2 Table 9-6 and 9.6.2 to 9.6.8 (xhci-data-structures.md section
- * 10.7; to verify against the USB 3.2 specification). */
+/* USB 3.2 Table 9-6 (USB 3.2 p.332) and 9.6.2 to 9.6.8
+ * (xhci-data-structures.md section 10.7, verified against USB 3.2 r1.1). */
 #define XHCI_PIPE_DT_BOS            0x0FUL
 #define XHCI_PIPE_DT_DEVICE_CAP     0x10UL
 #define XHCI_PIPE_DT_SS_COMPANION   0x30UL
@@ -164,7 +164,10 @@ typedef struct _XHCI_PIPE_EP {
  * The Endpoint Context fields for one endpoint descriptor of a device at
  * `speed` (XHCI_PIPE_SPEED_*). XHCI_PIPE_MALFORMED for a descriptor that is
  * not an endpoint descriptor of at least 7 bytes, an endpoint number of 0, a
- * Max Packet Size of 0 or above 1024, a high-bandwidth count of 3 (bits
+ * Max Packet Size above 1024, or of 0 on anything but an isochronous
+ * endpoint (a zero-size isochronous one is a zero-bandwidth endpoint and is
+ * accepted, Max ESIT Payload 0: XhciPipeZeroBandwidth), a high-bandwidth
+ * count of 3 (bits
  * 12:11 = 11b, reserved), or a Max Packet Size its speed and type do not
  * allow (USB 2.0 5.6.3, 5.7.3, 5.8.3, Table 9-14: LS interrupt <= 8; FS
  * interrupt <= 64; FS bulk 8, 16, 32 or 64; FS isochronous <= 1023; HS bulk
@@ -184,10 +187,14 @@ ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
  * descriptor `config` of `length` bytes (one XhciPipeFindInterface has
  * accepted), at any speed: USB 2.0 speeds are XhciPipeEndpointParams
  * unchanged, and SuperSpeed reads the companions that follow the endpoint
- * descriptor (tasks 29-A.3 and 29-A.6; USB 3.2 9.6.7 and 9.6.8, to verify):
+ * descriptor (tasks 29-A.3 and 29-A.6; USB 3.2 9.6.7 and 9.6.8, USB 3.2
+ * p.367-370, verified):
  *
- *   - wMaxPacketSize 10:0: bulk exactly 1024, interrupt and isochronous
- *     1-1024, and 1024 whenever bMaxBurst is nonzero;
+ *   - wMaxPacketSize 10:0: bulk exactly 1024, interrupt 1-1024,
+ *     isochronous 0-1024, and 1024 whenever bMaxBurst is nonzero (USB 3.2
+ *     Table 9-26). A zero-size isochronous endpoint is zero bandwidth
+ *     (XhciPipeZeroBandwidth): Mult and Max ESIT Payload 0, and MALFORMED
+ *     with a nonzero wBytesPerInterval or an SSP isochronous companion;
  *   - Max Burst = the SS companion's bMaxBurst (0-15); a missing companion
  *     is taken as burst 0 and said so in CompanionMissing, the way Linux
  *     tolerates one, rather than refusing the device;
@@ -222,11 +229,21 @@ ULONG XhciPipeEndpointParamsAt(const UCHAR *config, ULONG length,
                                ULONG offset, ULONG speed, ULONG lec,
                                PXHCI_PIPE_EP ep);
 
+/*
+ * Nonzero for a zero-bandwidth endpoint: isochronous with Max Packet Size 0.
+ * Its Endpoint Context is configured as any other (Max Packet Size 0, Max
+ * ESIT Payload 0, so no periodic bandwidth is reserved), its pipe handle is
+ * valid for ABORT_PIPE and RESET_PIPE, and an isochronous URB on it is
+ * refused before any TRB is built (hcd_io.c, hcdIsoAdmit). xhci_pipe.c has
+ * the specification text. 0 for NULL.
+ */
+ULONG XhciPipeZeroBandwidth(const XHCI_PIPE_EP *ep);
+
 /* ------------------------------------------------------------------ */
 /* The BOS descriptor (29-A.3, 29-A.6)                                 */
 /* ------------------------------------------------------------------ */
 
-/* bDevCapabilityType (USB 3.2 Table 9-14; to verify). */
+/* bDevCapabilityType (USB 3.2 Table 9-14, USB 3.2 p.351; verified). */
 #define XHCI_PIPE_CAP_USB2_EXTENSION    0x02UL
 #define XHCI_PIPE_CAP_SUPERSPEED        0x03UL
 #define XHCI_PIPE_CAP_CONTAINER_ID      0x04UL

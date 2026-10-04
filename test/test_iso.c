@@ -798,6 +798,17 @@ static void test_build_refusals(void)
              "a request with no packets is refused");
     iso.Block.NumberOfPackets = 1;
 
+    /* A zero-bandwidth endpoint (Max Packet Size 0, Max ESIT Payload 0;
+     * xhci_pipe.c, XhciPipeZeroBandwidth) is refused before any TRB by
+     * hcd_io.c; if one ever reached the builder it is still refused, never
+     * divided by. */
+    req.MaxPacketSize = 0;
+    req.MaxEsitPayload = 0;
+    CHECK_EQ(XhciXferBuildIso(&req, 1, out, 8, &layout), XHCI_XFER_BAD_PARAM,
+             "a zero-bandwidth endpoint builds no TD");
+    req.MaxPacketSize = 1024;
+    req.MaxEsitPayload = 1024;
+
     /* Direction: usbport's flag against the endpoint's, checked and not chosen
      * between - the third statement of a rule the other two builders carry. */
     CHECK_EQ(XhciXferBuildIso(&req, 0, out, 8, &layout),

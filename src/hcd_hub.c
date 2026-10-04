@@ -597,8 +597,10 @@ static VOID hcdHubRearmTick(PHCD_HUB hub)
 /*
  * The given-up SuperSpeed hub ports whose wait has run out, put back to
  * RxDetect - SET_FEATURE(PORT_LINK_STATE) with RxDetect (5) in wIndex bits
- * 15:8, the exit from SS.Disabled (USB 3.2 10.3.1 and Table 10-9, to
- * verify); never BH_PORT_RESET, which is not that exit - and each one
+ * 15:8, the exit from SS.Disabled: valid only in DSPORT.Disabled, to
+ * DSPORT.Disconnected (USB 3.2 10.16.2.10, USB 3.2 p.454, and 10.3.1.2,
+ * p.387; verified); never BH_PORT_RESET, which a port in DSPORT.Disabled
+ * ignores (10.3.1.6, p.388) - and each one
  * looked at in this pass, as a change (Codex review of the Phase 28-31
  * integration, finding 1). A port stays pending until its request
  * succeeds: a failed one is tried again after the next, longer wait (round

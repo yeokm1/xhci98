@@ -69,9 +69,11 @@
 #define HCD_PORT_UNREADABLE_PASSES 50UL
 #define HCD_HOLD_UNREADABLE_PASSES HCD_PORT_UNREADABLE_PASSES
 #define HCD_RESET_WAIT_MS      500UL
-/* A warm reset is LFPS for tens of milliseconds and then link training
- * (USB 3.2 7.5, to verify); twice the hot reset's wait is this driver's
- * margin, not a specification number. */
+/* A warm reset is LFPS for tReset, 80 to 120 ms (USB 3.2 Table 6-30, USB
+ * 3.2 p.100; verified), then Rx.Detect and link training (7.4.2, p.158); a
+ * hub gives one up after 100 to 200 ms in Rx.Detect (tTimeForResetError,
+ * Table 10-19, p.460). Twice the hot reset's wait covers both, and is this
+ * driver's margin, not a specification number. */
 #define HCD_WARM_RESET_WAIT_MS 1000UL
 #define HCD_RESET_RECOVERY_MS  10UL
 #define HCD_SETADDRESS_MS      2UL

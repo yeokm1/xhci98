@@ -1890,6 +1890,117 @@ static void test_seq(void)
     CHECK(h.Hi == 3 && h.Lo == 1, "none changes nothing");
 }
 
+/*
+ * Zero-bandwidth isochronous endpoints (wMaxPacketSize 0): accepted at every
+ * speed with Max ESIT Payload 0, so the select naming one succeeds (owner's
+ * ruling, 2026-10-04); every other type with size 0 still refused (USB 3.2
+ * Table 9-26, USB 3.2 p.365). xhci_pipe.c, XhciPipeZeroBandwidth.
+ */
+static void test_zero_bandwidth(void)
+{
+    UCHAR c[64];
+    XHCI_PIPE_EP ep;
+    XHCI_PIPE_ISO_PACKET p[3];
+    ULONG n;
+
+    /* Full Speed: an audio interface's alternate 0. */
+    CHECK_EQ(ep_params(0x01, 0x09, 0, 1, XHCI_PIPE_SPEED_FULL, &ep),
+             XHCI_PIPE_OK, "FS isoch OUT, MPS 0, accepted");
+    CHECK_EQ(ep.MaxPacketSize, 0, "MPS 0 kept");
+    CHECK_EQ(ep.MaxEsitPayload, 0, "no ESIT payload: no bandwidth");
+    CHECK_EQ(ep.EpType, XHCI_PIPE_EPT_ISOCH_OUT, "isoch OUT");
+    CHECK(ep.AverageTrbLength != 0, "Average TRB Length still nonzero");
+    CHECK_EQ(ep.ErrorCount, 0, "CErr 0 as for any isoch");
+    CHECK(XhciPipeZeroBandwidth(&ep), "zero bandwidth");
+    /* High Speed, IN, bInterval 0 clamped as for any isoch. */
+    CHECK_EQ(ep_params(0x82, 0x05, 0, 0, XHCI_PIPE_SPEED_HIGH, &ep),
+             XHCI_PIPE_OK, "HS isoch IN, MPS 0, accepted");
+    CHECK_EQ(ep.MaxEsitPayload, 0, "HS: no ESIT payload");
+    CHECK_EQ(ep.MaxBurstSize, 0, "no additional transactions");
+    CHECK(XhciPipeZeroBandwidth(&ep), "HS zero bandwidth");
+    /* ...but not with additional transactions, which need 513-1024 or
+     * 683-1024 (Table 9-14). */
+    CHECK_EQ(ep_params(0x82, 0x05, 0x0800, 1, XHCI_PIPE_SPEED_HIGH, &ep),
+             XHCI_PIPE_MALFORMED, "HS isoch MPS 0 with one more transaction");
+    /* Every other type stays refused at size 0. */
+    CHECK_EQ(ep_params(0x81, 0x03, 0, 1, XHCI_PIPE_SPEED_FULL, &ep),
+             XHCI_PIPE_MALFORMED, "FS interrupt MPS 0");
+    CHECK_EQ(ep_params(0x81, 0x03, 0, 1, XHCI_PIPE_SPEED_LOW, &ep),
+             XHCI_PIPE_MALFORMED, "LS interrupt MPS 0");
+    CHECK_EQ(ep_params(0x81, 0x02, 0, 0, XHCI_PIPE_SPEED_FULL, &ep),
+             XHCI_PIPE_MALFORMED, "FS bulk MPS 0");
+    CHECK_EQ(ep_params(0x81, 0x02, 0, 0, XHCI_PIPE_SPEED_HIGH, &ep),
+             XHCI_PIPE_MALFORMED, "HS bulk MPS 0");
+
+    /* SuperSpeed: isoch, MPS 0, burst 0, wBytesPerInterval 0. */
+    n = ss_config(c, 1, 0, 1, 0, 0, 0, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_OK,
+             "SS isoch, MPS 0, accepted");
+    CHECK_EQ(ep.MaxPacketSize, 0, "SS MPS 0 kept");
+    CHECK_EQ(ep.MaxEsitPayload, 0, "SS: no ESIT payload");
+    CHECK_EQ(ep.Mult, 0, "SS: Mult 0");
+    CHECK_EQ(ep.MaxBurstSize, 0, "SS: burst 0");
+    CHECK(XhciPipeZeroBandwidth(&ep), "SS zero bandwidth");
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 1,
+                                      &ep), XHCI_PIPE_OK,
+             "SS isoch, MPS 0, with LEC");
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
+                                      0, &ep), XHCI_PIPE_OK,
+             "SSP isoch, MPS 0, no SSP companion");
+    /* A companion Mult on a zero-size endpoint is programmed as 0. */
+    n = ss_config(c, 1, 0, 1, 0, 2, 0, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_OK,
+             "SS isoch, MPS 0, companion Mult 2");
+    CHECK_EQ(ep.Mult, 0, "programmed Mult 0");
+    /* No companion at all: burst 0, still zero bandwidth. */
+    n = ss_config(c, 1, 0, 1, 0, 0, 0, 0, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_OK,
+             "SS isoch, MPS 0, no companion");
+    CHECK_EQ(ep.CompanionMissing, 1, "CompanionMissing");
+    /* Table 9-26: "1024 if ... bMaxBurst greater than zero". */
+    n = ss_config(c, 1, 0, 1, 1, 0, 0, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_MALFORMED,
+             "SS isoch, MPS 0, burst 1");
+    n = ss_config(c, 1, 0, 1, 15, 0, 0, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_MALFORMED,
+             "SS isoch, MPS 0, burst 15");
+    /* No packet carries no bytes. */
+    n = ss_config(c, 1, 0, 1, 0, 0, 1, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_MALFORMED,
+             "SS isoch, MPS 0, wBytesPerInterval 1");
+    /* An SSP isoch companion beside a zero size. */
+    n = ss_config(c, 1, 0, 1, 0, 0x80, 1, 1, 1);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
+                                      0, &ep), XHCI_PIPE_MALFORMED,
+             "SSP isoch, MPS 0, SSP companion");
+    /* SS interrupt and bulk at size 0 stay refused (Table 9-26). */
+    n = ss_config(c, 3, 0, 4, 0, 0, 0, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_MALFORMED,
+             "SS interrupt MPS 0");
+    n = ss_config(c, 2, 0, 0, 0, 0, 0, 1, 0);
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_MALFORMED,
+             "SS bulk MPS 0");
+
+    /* What the URB path rests on: the zero-bandwidth test, which hcd_io.c
+     * asks before XhciPipeIsoCheck - whose bound of 0 means "unbounded",
+     * so a pipe's Max ESIT Payload of 0 would otherwise refuse nothing. */
+    CHECK_EQ(ep_params(0x01, 0x01, 192, 1, XHCI_PIPE_SPEED_FULL, &ep),
+             XHCI_PIPE_OK, "a sized FS isoch");
+    CHECK(!XhciPipeZeroBandwidth(&ep), "is not zero bandwidth");
+    CHECK(!XhciPipeZeroBandwidth(NULL), "NULL is not");
+    iso_table(p, 0, 0, 0);
+    CHECK_EQ(XhciPipeIsoCheck(p, 3, 1, 3, 0), XHCI_PIPE_OK,
+             "a bound of 0 is unbounded: the zero-bandwidth test comes first");
+}
+
 int main(void)
 {
     test_seq();
@@ -1915,6 +2026,7 @@ int main(void)
     test_superspeed_endpoints();
     test_superspeedplus_isoch();
     test_bos();
+    test_zero_bandwidth();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

@@ -53,7 +53,11 @@
 
 /* The hub times the reset; polled from 20 ms on and given up at 500 ms for
  * a hot reset, 1000 ms for a warm one - as hcd_enum.c's root port, a bus
- * policy and not a specification number; reset recovery 10 ms. */
+ * policy and not a specification number (the hub itself gives a warm reset
+ * up after tTimeForResetError, 100-200 ms in Rx.Detect, Table 10-19, USB
+ * 3.2 p.460, and reports it as a disconnect). Reset recovery 10 ms is
+ * USB 2.0's TRSTRCY kept as margin: USB 3.2 has the device usable at once
+ * after a reset (9.2.6.2, USB 3.2 p.327; verified). */
 #define HCD_SSHUB_RESET_FIRST_MS    20UL
 #define HCD_SSHUB_HOT_WAIT_MS       500UL
 #define HCD_SSHUB_WARM_WAIT_MS      1000UL
@@ -223,9 +227,14 @@ ULONG HcdSsHubConfigure(PHCD_CONTROLLER hc, PHCD_HUB hub)
     hub->Alternate = 0;
     dev->Alternate[number] = 0;
 
-    /* The depth is the hub's tier: 0 on a root port (USB 3.2 10.16.2.9, to
-     * verify), so the hub routes by Route String nibble `tier`. A hub that
-     * refuses it would route by a nibble nobody chose: not served. */
+    /* The depth is the hub's tier: 0 on a root port, so the hub routes by
+     * Route String nibble `tier` ("the Hub Depth left shifted by two is the
+     * offset into the Route String", USB 3.2 10.16.2.9, p.451, and Figure
+     * 10-5, p.377; verified). Sent after SET_CONFIGURATION because an
+     * unconfigured hub's answer is undefined (p.452), and before any port
+     * is used because until then the hub ignores the Route String
+     * (10.1.3.1, p.376). A hub that refuses it would route by a nibble
+     * nobody chose: not served. */
     if (!HcdThreadControl(hc, dev, XHCI_HUB_RT_HUB_OUT,
                           XHCI_SSHUB_REQ_SET_HUB_DEPTH, (USHORT)hub->Tier, 0,
                           0, &bytes)) {

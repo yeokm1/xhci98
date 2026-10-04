@@ -276,9 +276,16 @@ ULONG XhciBuildEndpointContext(volatile ULONG *context,
     if (params->EpType == XHCI_EP_TYPE_INVALID || params->EpType > 0x07UL) {
         return XHCI_CTX_BAD_PARAM;
     }
-    /* "Max Packet Size ... 31:16" (Table 6-9), and a zero-length packet size
-     * would divide the TD Size computation by zero (4.11.2.4). */
-    if (params->MaxPacketSize == 0 || params->MaxPacketSize > 0xFFFFUL) {
+    /* "Max Packet Size ... 31:16" (Table 6-9). A zero packet size would
+     * divide the TD Size computation by zero (4.11.2.4), so it is refused
+     * except on an isochronous endpoint, where 0 is a zero-bandwidth
+     * endpoint (6.2.3.5 sets the field from wMaxPacketSize 10:0, which USB
+     * 3.2 Table 9-26 lets be 0 there); that endpoint's pipe never builds a
+     * TD (xhci_pipe.c, XhciPipeZeroBandwidth). */
+    if (params->MaxPacketSize > 0xFFFFUL ||
+        (params->MaxPacketSize == 0 &&
+         params->EpType != XHCI_EP_TYPE_ISOCH_IN &&
+         params->EpType != XHCI_EP_TYPE_ISOCH_OUT)) {
         return XHCI_CTX_BAD_PARAM;
     }
     if (params->MaxBurstSize > 0xFFUL || params->Mult > 0x03UL ||

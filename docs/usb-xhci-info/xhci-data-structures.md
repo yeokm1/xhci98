@@ -1805,12 +1805,20 @@ is eight), because TBC is two bits without ETC (4.11.2.3, p.197; round 2,
 finding 2). Lifting the limit means multi-page isochronous packets - several
 TRBs per packet - in `hcd_io.c` and `xhci_xfer.c`.
 
-The driver also refuses any endpoint whose Max Packet Size is 0, at every
-speed (`xhci_pipe.c`, both paths), which USB 3.2 Table 9-26 allows for an
-isochronous endpoint with bMaxBurst 0. That refusal fails the whole
-SELECT_CONFIGURATION or SELECT_INTERFACE. That is a deviation from the
-specification, recorded here and left to the owner; this transcription did
-not change the code.
+A zero-bandwidth isochronous endpoint - Max Packet Size 0, which USB 3.2
+Table 9-26 allows for an isochronous endpoint with bMaxBurst 0 and for no
+other type - is accepted (owner's ruling, 2026-10-04; `xhci_pipe.c`,
+`XhciPipeZeroBandwidth`), so the SELECT_CONFIGURATION or SELECT_INTERFACE
+naming one succeeds. Its Endpoint Context is configured as any other, with
+Max Packet Size 0 (6.2.3.5's literal rule) and Max ESIT Payload 0, which by
+4.14.2's bandwidth formula (p.237) reserves nothing; the pipe handle is
+valid, and an isochronous URB on it is refused with
+USBD_STATUS_INVALID_PARAMETER before any TRB is built (`hcd_io.c`,
+`hcdIsoAdmit`), so no TD Size or TBC arithmetic divides by its size. A zero
+size with a nonzero bMaxBurst, a nonzero wBytesPerInterval or an SSP
+isochronous companion is malformed, and so is size 0 on a bulk or interrupt
+endpoint. Whether a controller accepts an Endpoint Context with Max Packet
+Size 0 is unobserved.
 
 TD Size (xHCI 4.11.2.4, p.198; verified) has no burst term: it counts packets
 of Max Packet Size remaining in the TD (TD Packet Count = ROUNDUP(TD Transfer
