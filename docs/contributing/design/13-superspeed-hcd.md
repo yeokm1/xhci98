@@ -659,6 +659,162 @@ target or source where the leg uses one, GUI mode completing, and the
 installed system's controller and root hub on this INF. Until those pass,
 every clause above stays `static` and the release notes say so.
 
+### 5.7 The first relations answer waits for the devices present at start (task 33.3, 2026-10-04)
+
+**The reading that asked for it** (runtime, 2026-10-04, development host A,
+QEMU; `out\phase33\f6\w2k*`, not tracked). At Windows 2000 SP4's text-mode
+Setup, F6-loaded `xhci98.sys` started the controller and the root hub, and
+no USB device was ever started: the keyboard was dead and the stick absent
+from the partition screen. The qemu flavour's trace showed the root-hub
+FDO's first `IRP_MN_QUERY_DEVICE_RELATIONS` (`BusRelations`) answered with
+no device, because the controller thread had not yet enumerated any port;
+the device PDOs came later, after the ports' change events, were queried
+for their ids, capabilities, text and resources, and were never started. A
+control guest on Windows 2000's own UHCI stack bound a USB keyboard and
+stick in text mode, and a keyboard hot-plugged during text mode stayed dead
+there too: **Windows 2000's text mode starts only what a hub's first answer
+carries.** 32-bit XP and XP x64 start late PDOs, which is why their F6 legs
+passed without this.
+
+**The rule.** The first `BusRelations` answer of a hub FDO after its
+`START_DEVICE` - the root hub's (`hcd_rh.c`) and each external hub's
+(`hcd_hubfdo.c`, section 10.11) - waits, bounded, until the devices
+connected when the bus first looked at the ports have settled, then
+answers with what is listed. Settled means: every port that read connected
+when the thread looked at it has its PDOs created (Present or Bound), or
+has failed or been refused (Failed, a hub refused as too deep, a UAS device
+refused in place with its PDOs); every hub brought up has had its ports
+looked at once (its `Changed` bitmap empty); and a send-back to the USB 2.0
+companion (29-A.5) asked for in the window has reached the companion's
+connect, which the companion's own enumeration then settles. Addressed
+alone is not settled. Every later answer is as before; a device that
+misses the first answer is reported later, as before, through the
+invalidation its PDO's creation makes.
+
+**The mechanism**, against 5.3 and 5.4:
+
+- **A generation.** `HcdEnumAttach` (the root hub's start) marks every root
+  port changed and, in the same hold of the controller lock, increments
+  `SettleAsked`; an external hub FDO's start asks the same way
+  (`HcdEnumSettleAsk`). The FDO keeps the generation (`SettleTarget`,
+  `SettlePending`).
+- **The thread settles it.** `HcdEnumService` reads `SettleAsked` before the
+  ports' change bits, so a pass that reads a generation has the bits the
+  start set with it; the ports' machines run to rest inside the pass (5.3).
+  At the end of a pass that enumerated (powered, root hub started, not
+  halted), `hcdSettleCheck` declares the generation settled when nothing is
+  owed or in flight: no root port change bit (the reset's own change
+  included, so one more pass looks), no hub `Changed` bit, every managed
+  port's machine at rest (`XhciEnumAtRest`), no send-back of the window in
+  flight (`XhciEnumHoldInFlight`). `SettleDone` only moves forward. With
+  nothing attached, the first pass after the start finds nothing in flight.
+- **The waiter never holds what the thread needs.** The first answer looks
+  (`HcdEnumSettleStep`) and sleeps 20 ms (`KeDelayExecutionThread`) between
+  looks at PASSIVE_LEVEL, holding no spin lock, not the power gate (the
+  thread takes it for every pass, `hcd_ctl.c`), and not the controller: it
+  enters for each look (the root hub through `RootHubUsers`, a hub FDO
+  through its PDO's `Busy`) and leaves before the sleep, so the
+  controller's remove and the parent's release, which wait those counts
+  out, never wait on a sleep. The thread it waits for creates PDOs and calls
+  `IoInvalidateDeviceRelations` but waits on no PnP IRP, a child's start or
+  removal included, so the two cannot deadlock; an invalidation of the
+  same devnode during the answer is legal and only asks once more. The
+  wait ends on the settle, on the root hub not started or detaching or the
+  thread not running (teardown), or at the deadline.
+- **The deadline is one per answer.** Measured from the answer's first look
+  with `KeQuerySystemTime` (its low word, in 100 ns units; no 64-bit
+  arithmetic; the import is task 25.3's evidenced pair, `uhcd.sys` among
+  ten stock Windows 98 SE precedents, and on amd64 a macro over shared user
+  data with no import), not renewed per port. At the deadline the waiter
+  settles its own generation, counts it (`SettleTimeouts`), and answers;
+  the thread finishes what it was doing, and those devices are reported
+  late. A clock set backwards reads as a long time and ends the wait early.
+- **A per-port budget, for fairness.** The thread enumerates the ports one
+  after another, so a slow device on a lower-numbered port would spend the
+  deadline of every port after it. `hcdRun` checks, between the machine's
+  steps, how long the run has taken; past the budget while a first answer
+  waits, the attempt is given up as an unplug gives it up (the slot back,
+  the machine to Empty) and the port **deferred**: its look kept owed (a
+  root port's in `PortChange`, a hub port's in its hub's `Changed`) and not
+  taken, and not counted against the settle, until no first answer waits,
+  when the port is enumerated afresh. A port whose enumeration halted the
+  controller (a command or an EP0 transfer that never completed: a 5 s
+  wait and a recovery) is deferred the same way, so the rescan does not
+  meet it first again. Counted (`SettleDeferrals`), traced. The check sits
+  between steps, so one step's own timeout (a command or a transfer, 5 s,
+  `hcd_enum.c`) can carry a port past its budget: **a device that never
+  answers one request costs that request's 5 s**, which is the whole
+  default deadline, and a keyboard on a later port is then reported late.
+  No QEMU device models a device that never answers, so that case is
+  argued, not read.
+
+**The bounds** (owner, 2026-10-04): **5 s total** per FDO's first answer
+and **2 s per port**, both on the controller's driver key as REG_DWORDs in
+milliseconds read at every start: `XhciFirstEnumWaitMs` (0 turns the wait
+off; held to 30,000) and `XhciFirstEnumPortMs` (0 for no per-port budget;
+held to the total). No INF writes either. **Text-mode Setup writes no
+driver-key value, so the defaults are what F6 Setup gets**, and they are
+chosen to be right on their own. Their scale is documentation, not a
+binary reading: Microsoft's account of its own hub driver's enumeration
+(the Microsoft USB blog, "How does USB stack enumerate a device?",
+techcommunity.microsoft.com, read 2026-10-04: a 100 ms stable debounce, the
+port given up if not stable within 200 ms, a 5 s timeout on each port
+reset, up to three enumeration tries 500 ms apart, 10 ms reset recovery and
+10 ms after SET_ADDRESS) and USB 2.0 section 9.2.6.4 (a request with no
+data stage done within 50 ms, a data stage begun within 500 ms, 2 ms after
+SET_ADDRESS): a normal device is ready in 0.15 to 0.3 s, one retry takes 1
+to 2 s, and only a device that times out every try takes longer. Two
+reference hub drivers were read for the shape, as interface documentation
+only (section 3 of `legal-provenance.md`; nothing taken into `src\`):
+ReactOS's `usbhub` (`drivers/usb/usbhub/pnp.c`, `USBH_FdoQueryBusRelations`,
+master as fetched 2026-10-04) enumerates synchronously inside its
+`BusRelations` handler, port by port, with a 5 s timeout per reset
+(`USBH_SyncResetPort`), up to three device-creation tries 500 ms apart and
+no overall cap; Linux's `hub.c` (`drivers/usb/core/hub.c`, the same day)
+enumerates asynchronously and blocks no first report, with a 100 ms stable
+debounce (in 25 ms steps, given up at 2 s) and resets of 10 to 200 ms. The
+debounce, reset and recovery timings of 10.2 are the USB 2.0
+specification's and stay unconfigurable.
+
+**Decisions.**
+
+1. **Always, not gated to NT 5.0 text mode.** Nothing in the driver can
+   tell text mode from a running system before the answer, and the wait is
+   what Microsoft's own hub driver does on every system; it costs one look
+   when nothing is attached and the devices' own enumeration time when
+   something is, which a normal boot then no longer spends discovering
+   them later. Measured (below): 31 to 562 ms.
+2. **Every start, not only the first.** A `STOP` and `START` of a hub FDO is
+   a fresh start: Windows 98 SE's and ME's controller re-enable (task 33.1)
+   stops and starts the root hub, and the first answer after it waits for
+   the re-enumeration that revives the dormant PDOs (5.2). The revived PDOs
+   stay listed throughout and are in the answer whether revived or not,
+   and a dormant PDO's own `START` wait (`hcdDormantWait`) is on another
+   devnode's IRP after the answer, so the two waits never nest. `STOP` and
+   `SURPRISE_REMOVAL` clear a pending wait.
+3. **Only the first answer after a start.** The flag is cleared before the
+   wait, so an answer that fails (pool) does not wait again, and two
+   concurrent first queries (NT may query two devnodes at once) each wait
+   on their own FDO's generation.
+4. **A hub FDO waits on the whole bus's settle**, not only its own ports.
+   The thread can state "nothing in flight anywhere" cheaply and exactly;
+   a per-hub cohort would need a second bookkeeping of the same machines.
+   A hub's ports were looked at in its bring-up (10.3), before its PDO was
+   made, so its FDO's first answer is one look unless the bus is busy
+   elsewhere (31 ms measured). It never waits on a descendant hub FDO's
+   start. Tiers add up at boot: a hub FDO starts only after its parent's
+   answer, so a chain of hubs pays each tier's own settle in turn, each
+   bounded by its own deadline.
+5. **Devices behind a hub whose PDO could not be created** are presented
+   under the next hub up (10.11) and are in that hub's answer; the
+   bus-wide settle covers them whichever FDO answers.
+
+**Measured** (runtime, the qemu flavour's trace, 2026-10-04, development
+host A, QEMU TCG): Windows 2000 SP4 text mode, F6, keyboard and stick at
+root ports - the root hub's first answer after 343 ms with both PDOs, both
+started; keyboard behind a `usb-hub` - 562 ms for the root hub's (the hub's
+PDO, the stick), 31 ms for the hub FDO's (the keyboard). The rest of the
+legs are in the roadmap's 33.3 line.
 ## 6. The function-driver contract (task 25.2)
 
 What each target's class drivers send a USB device PDO, read out of the
