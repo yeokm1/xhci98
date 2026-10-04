@@ -750,6 +750,8 @@ Verdict: **gone** (28.3 below).
 
 ## 28-E.1 - the bench
 
+**Read after the cut (2026-10-04):** by the owner on real hardware (owner's decision of 2026-10-04 to cut before the bench); the owner reports no issue beyond the known limitations, and no per-device reading is recorded (`roadmap-hcd.md`, 28-E.1). The text below is the plan as it stood before.
+
 **Waits for the combined bench session (owner, 2026-10-03).** Nothing of it
 has been read. Its parts, as the roadmap lists them:
 - the E460 on Windows 98 SE and on 32-bit Windows 7, and the second Windows

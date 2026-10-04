@@ -190,6 +190,8 @@ again on the other eight install legs (the NT guests on Package A,
 
 ## 29-E.1 - the bench
 
+**Read after the cut (2026-10-04):** by the owner on real hardware (owner's decision of 2026-10-04 to cut before the bench); the owner reports no issue beyond the known limitations, and no per-device reading is recorded (`roadmap-hcd.md`, 29-E.1; 29-E.2 was recorded as not taken, the P14s Gen 1's 10 Gbit/s connector being a Thunderbolt port where a Gen 2 drive did not mount under Windows 11 or Windows 98 SE). The text below is the plan as it stood before.
+
 **Waits for the combined bench session (owner, 2026-10-03).** The two
 SuperSpeed drives of `test-equipment.md` at rig position D on Windows 98 SE
 and 32-bit Windows 7: round trips, throughput against the same unit behind a

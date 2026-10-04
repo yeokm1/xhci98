@@ -113,6 +113,8 @@ when a controller is sent that command - and no guest sends this phase's.
 
 ## 30-E.1 - the bench
 
+**Read after the cut (2026-10-04):** by the owner on real hardware (owner's decision of 2026-10-04 to cut before the bench); the owner reports no issue beyond the known limitations, and no per-device reading is recorded (`roadmap-hcd.md`, 30-E.1). The text below is the plan as it stood before.
+
 **Waits for the combined bench session (owner, 2026-10-03).** The bench unit
 (`05E3:0610` and `05E3:0612`): a SuperSpeed drive behind the SuperSpeed half
 and a High-Speed device behind the other, on Windows 98 SE and 32-bit Windows
