@@ -3873,8 +3873,16 @@ qemu-system-i386 -machine pc -m 512 -smp 2 \
   -qmp tcp:127.0.0.1:<port>,server,nowait
 ```
 
-   (`qemu-system-x86_64` and `out\pkg-release-amd64` for XP x64; Windows
-   2000 runs with `-smp 1` or `2` as its target VM does.) The `pc` machine
+   (`qemu-system-x86_64` and `out\pkg-release-amd64` for XP x64.) **Windows
+   2000 takes its own target VM's machine**, `scripts\setup-qemu-win2k.ps1`'s
+   recipe: `-machine pc,acpi=off`, `-cpu pentium3,-apic`, `-m 256`, Cirrus
+   VGA, and its IDE install hack, at `-smp 1`. Under the ACPI HAL with TCG
+   on QEMU 11.1, its GUI-mode Setup restarts itself after "Installing
+   Components" and loops back to Regional Settings, with no xhci98 present
+   as with it (2026-10-04, a no-driver control, `out\phase33\f6\w2kc\`).
+   A paused reboot (`-action reboot=shutdown`) resumes with QMP
+   `set-action reboot=reset`, `system_reset`, `cont`, then the action set
+   back: under that action `system_reset` is a shutdown too. The `pc` machine
    always has an i8042 PS/2 keyboard as well. QMP `input-send-event` names a
    display console, not an input device, so the USB keyboard is bound to the
    display `vga0` by its `display=` property and the leg's keystrokes are

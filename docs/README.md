@@ -110,7 +110,9 @@ source comments, scripts, and other docs use these same locations.
   enable arrest inside usbport's own DPC state machine, and the SMP list-head
   corruption that came out of completing without the transfer's endpoint
   lock, and Windows ME's controller re-enable stopping on PDOs the HCD had
-  replaced rather than kept across the stop), with a list of the next candidates. Narratives distilled from `lessons.md` and the run sheets;
+  replaced rather than kept across the stop, and Windows XP's GUI-mode
+  Setup leaving the USB keyboard dead after an F6 install because Setup
+  copies Windows' own HID files only with its own host controllers), with a list of the next candidates. Narratives distilled from `lessons.md` and the run sheets;
   those remain the evidence.
 
 ## Future plans

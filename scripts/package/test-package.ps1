@@ -70,7 +70,11 @@ function Invoke-Packager {
     } finally {
         $ErrorActionPreference = $saved
     }
-    return @{ Output = $out; ExitCode = $LASTEXITCODE }
+    # Whitespace collapsed: Windows PowerShell wraps a native command's stderr
+    # ErrorRecord at the console width, so on a long repository path a refusal
+    # such as "volume or repository root" arrived split across lines and its
+    # phrase match failed (F6 legs, 2026-10-04: a 41-character worktree path).
+    return @{ Output = ($out -replace '\s+', ' '); ExitCode = $LASTEXITCODE }
 }
 
 function Invoke-Releaser {
@@ -85,7 +89,11 @@ function Invoke-Releaser {
     } finally {
         $ErrorActionPreference = $saved
     }
-    return @{ Output = $out; ExitCode = $LASTEXITCODE }
+    # Whitespace collapsed: Windows PowerShell wraps a native command's stderr
+    # ErrorRecord at the console width, so on a long repository path a refusal
+    # such as "volume or repository root" arrived split across lines and its
+    # phrase match failed (F6 legs, 2026-10-04: a 41-character worktree path).
+    return @{ Output = ($out -replace '\s+', ' '); ExitCode = $LASTEXITCODE }
 }
 
 $tempBase = [System.IO.Path]::GetFullPath($env:TEMP)
