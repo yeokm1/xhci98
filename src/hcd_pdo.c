@@ -857,72 +857,61 @@ static VOID hcdDeleteChain(PHCD_DEVICE_PDO pdo)
  * driver's controllers or root hubs - a later pass, as c038326's rule has
  * it - or kept for good, a bounded leak, when none comes. Windows 2000 and
  * later send nothing after a REMOVE, and there it is deleted at once, as
- * before, so the image can still unload. A full list deletes at once too.
+ * before, so the image can still unload.
  */
-#define HCD_RETIRED_MAX 32
-
 static KSPIN_LOCK hcdRetiredLock;
-static PDEVICE_OBJECT hcdRetired[HCD_RETIRED_MAX];
+static PDEVICE_OBJECT hcdRetired;       /* linked through RetiredNext */
 static ULONG hcdRetireDefers;
 
 /* IRQL: PASSIVE_LEVEL (DriverEntry). */
 VOID HcdPdoRetireInit(VOID)
 {
-    ULONG i;
-
     KeInitializeSpinLock(&hcdRetiredLock);
-    for (i = 0; i < HCD_RETIRED_MAX; i++) {
-        hcdRetired[i] = NULL;
-    }
+    hcdRetired = NULL;
     hcdRetireDefers = !IoIsWdmVersionAvailable(1, 0x10);
 }
 
 /* An orphan's REMOVE, already completed: 1 when it is kept for a later
- * relations answer to delete, 0 when the caller deletes it now. IRQL:
- * PASSIVE_LEVEL. */
+ * relations answer to delete (always, on Windows 98: the list is linked
+ * through the extension, so it never fills - Codex review of the merge,
+ * round 2), 0 when the caller deletes it now. IRQL: PASSIVE_LEVEL. */
 ULONG HcdPdoRetire(PDEVICE_OBJECT obj)
 {
+    PHCD_COMMON common;
     KIRQL oldIrql;
-    ULONG i;
 
     if (!hcdRetireDefers) {
         return 0;
     }
+    common = (PHCD_COMMON)obj->DeviceExtension;
     KeAcquireSpinLock(&hcdRetiredLock, &oldIrql);
-    for (i = 0; i < HCD_RETIRED_MAX; i++) {
-        if (hcdRetired[i] == NULL) {
-            hcdRetired[i] = obj;
-            break;
-        }
-    }
+    common->RetiredNext = hcdRetired;
+    hcdRetired = obj;
     KeReleaseSpinLock(&hcdRetiredLock, oldIrql);
-    return i < HCD_RETIRED_MAX;
+    return 1;
 }
 
 /* Every retired orphan deleted. IRQL: PASSIVE_LEVEL. */
 VOID HcdPdoReapRetired(VOID)
 {
-    PDEVICE_OBJECT taken[HCD_RETIRED_MAX];
+    PDEVICE_OBJECT obj;
+    PDEVICE_OBJECT next;
     PHCD_COMMON common;
     KIRQL oldIrql;
-    ULONG i;
 
     KeAcquireSpinLock(&hcdRetiredLock, &oldIrql);
-    for (i = 0; i < HCD_RETIRED_MAX; i++) {
-        taken[i] = hcdRetired[i];
-        hcdRetired[i] = NULL;
-    }
+    obj = hcdRetired;
+    hcdRetired = NULL;
     KeReleaseSpinLock(&hcdRetiredLock, oldIrql);
-    for (i = 0; i < HCD_RETIRED_MAX; i++) {
-        if (taken[i] == NULL) {
-            continue;
-        }
-        common = (PHCD_COMMON)taken[i]->DeviceExtension;
+    for (; obj != NULL; obj = next) {
+        common = (PHCD_COMMON)obj->DeviceExtension;
+        next = common->RetiredNext;
+        common->RetiredNext = NULL;
         if (common->Kind == HCD_KIND_DEVICE_PDO) {
             hcdWaitBusy((PHCD_DEVICE_PDO)common);
             hcdDeletePdo((PHCD_DEVICE_PDO)common);
         } else {
-            IoDeleteDevice(taken[i]);
+            IoDeleteDevice(obj);
         }
     }
 }

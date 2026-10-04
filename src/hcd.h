@@ -56,6 +56,8 @@ typedef struct _HCD_COMMON {
     ULONG PnpStateBeforeQuery;
     DEVICE_POWER_STATE DevicePower;
     SYSTEM_POWER_STATE SystemPower;
+    PDEVICE_OBJECT RetiredNext;     /* an orphaned PDO on Windows 98's
+                                     * retired list (hcd_pdo.c)          */
 } HCD_COMMON, *PHCD_COMMON;
 
 /* The one-shot timer service's slots (hcd_svc.c). Four: the command
