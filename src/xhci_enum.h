@@ -232,5 +232,19 @@ ULONG XhciEnumSettleQuiet(ULONG enumerated, ULONG rootPending,
  * reached). */
 ULONG XhciEnumSettleReached(ULONG done, ULONG target);
 
+/* A hub's devnode disabled (task 33.4; design record 13 sections 5.7 and
+ * 10.11): when its FDO is removed, a child PDO still listed that PnP was
+ * shown and has since removed is one PnP has forgotten with the hub's
+ * subtree - 1 when the PDO's flags say so. Such a PDO is never carried
+ * again: a hub FDO started on that PDO later cycles its port, so the
+ * device comes back as a new PDO at the same instance id. */
+ULONG XhciEnumLetGo(ULONG listed, ULONG reported, ULONG removeReceived);
+
+/* 1 when a relations answer for the parent `answering` (0 the root hub,
+ * else the hub PDO's serial) carries a listed PDO presented under
+ * `parentSerial`: its own children, never one PnP let go of. */
+ULONG XhciEnumAnswerCarries(ULONG parentSerial, ULONG answering,
+                            ULONG letGo);
+
 
 #endif /* XHCI_ENUM_H */

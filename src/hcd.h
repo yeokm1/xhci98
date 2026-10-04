@@ -452,7 +452,14 @@ typedef struct _HCD_DEVICE_PDO {
                                      * across a controller stop, revived by
                                      * its device's re-enumeration        */
     ULONG Surprised;                /* IRP_MN_SURPRISE_REMOVAL seen        */
-    ULONG Deleted;                  /* IoDeleteDevice called: once only     */
+    ULONG ParentLetGo;              /* removed by PnP, then its hub's FDO
+                                     * removed too: PnP has forgotten it,
+                                     * no answer carries it again, and the
+                                     * next hub FDO start cycles its port
+                                     * (HcdDevicePdoLetGo, task 33.4)     */
+    ULONG RepresentAsked;           /* its cycle asked in this start's
+                                     * batch (HcdDevicePdoRepresent)      */
+    ULONG Deleted;                 /* IoDeleteDevice called: once only     */
     ULONG Serial;                   /* the name's number; a port waits on it */
     ULONG Closing;                  /* stopping or removed: URBs refused  */
     volatile LONG UrbsPending;      /* URB IRPs pended here and not yet
@@ -1332,6 +1339,8 @@ ULONG HcdDevicePdoExists(PHCD_CONTROLLER hc, ULONG serial);
 PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
                                         PDEVICE_RELATIONS old, ULONG parent);
 VOID HcdDevicePdoReleaseAll(PHCD_CONTROLLER hc);
+ULONG HcdDevicePdoLetGo(PHCD_CONTROLLER hc, ULONG hubSerial);
+ULONG HcdDevicePdoRepresent(PHCD_CONTROLLER hc, ULONG hubSerial);
 VOID HcdPdoRetireInit(VOID);
 VOID HcdSerialInit(VOID);
 VOID HcdSerialControllerAdd(PHCD_CONTROLLER hc);

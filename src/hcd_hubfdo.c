@@ -11,7 +11,11 @@
  * door the hub IOCTLs of the Power tab for the hub's own ports
  * (hcd_door.c). Its remove tears down only itself: the bus, the hub and
  * the devices behind it keep running, and the PDOs stay listed (the WDM
- * rule), to be reported again when PnP adds the FDO again.
+ * rule) - but those PnP had and removed are let go of, PnP having
+ * forgotten them with this devnode, and when PnP adds and starts an FDO
+ * again their ports are cycled so the devices come back as new PDOs under
+ * the same instance ids, inside the first answer's settle
+ * (HcdDevicePdoLetGo, HcdDevicePdoRepresent; 2.1.0.0 leg 1e).
  *
  * The controller is reached only through the hub PDO's Controller, inside
  * that PDO's Busy count - the guard a device PDO's own dispatch takes, and
@@ -138,6 +142,11 @@ static VOID hcdHubStarted(PHCD_HUB_FDO fdo)
 
     hc = hcdHubControllerEnter(fdo);
     HcdDoorHubStart(fdo, hc);
+    if (hc != NULL) {
+        /* Before the settle is asked, so the pass that settles it has
+         * re-enumerated what an earlier FDO's removal let go of. */
+        (VOID)HcdDevicePdoRepresent(hc, hcdHubPdoOf(fdo)->Serial);
+    }
     fdo->SettleTarget = (hc != NULL) ? HcdEnumSettleAsk(hc) : 0;
     fdo->SettlePending = fdo->SettleTarget != 0;
     hcdHubControllerLeave(fdo, hc);
@@ -215,8 +224,14 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
         (VOID)KeWaitForSingleObject(&fdo->RemoveEvent, Executive, KernelMode,
                                     FALSE, NULL);
         /* Only the door goes; the bus keeps the hub and the devices behind
-         * it, whose PDOs PnP has removed already and which stay listed. */
+         * it, whose PDOs PnP has removed already and which stay listed -
+         * let go of, since PnP forgets them with this devnode: the next
+         * FDO's start presents those devices again as new PDOs (2.1.0.0
+         * leg 1e; design record 13 section 10.11). */
         hc = hcdHubControllerEnter(fdo);
+        if (hc != NULL) {
+            (VOID)HcdDevicePdoLetGo(hc, hcdHubPdoOf(fdo)->Serial);
+        }
         HcdDoorHubRemove(fdo, hc);
         hcdHubControllerLeave(fdo, hc);
         irp->IoStatus.Status = STATUS_SUCCESS;
@@ -285,6 +300,7 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
                       : NULL;
             hcdHubControllerLeave(fdo, hc);
             if (rel != NULL) {
+                XHCI_DBG_VALUE("hcd: hub FDO relations, count", rel->Count);
                 if (old != NULL) {
                     HcdPoolFreeForeign(old);
                 }

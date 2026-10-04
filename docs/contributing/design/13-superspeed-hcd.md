@@ -840,6 +840,16 @@ specification's and stay unconfigurable.
 5. **Devices behind a hub whose PDO could not be created** are presented
    under the next hub up (10.11) and are in that hub's answer; the
    bus-wide settle covers them whichever FDO answers.
+6. **A hub FDO started after its devnode was disabled** (added 2026-10-05;
+   10.11, ordering item 4) asks for the cycles of the children PnP let go
+   of with the removed FDO before it asks its generation. The pass that
+   reads the generation has therefore taken the cycles, in that pass or an
+   earlier one. A let-go PDO is missing at once, so its port leaves Gone
+   in the same pass, is marked for a look, and is enumerated before the
+   pass's `hcdSettleCheck`. The first answer then carries the devices
+   again, as at a fresh start, and the bounds above are unchanged: a
+   device that misses the deadline is reported late through its PDO's
+   invalidation, as before.
 
 **Measured** (runtime, the `qemu` flavour's trace unless a row says
 `release`, 2026-10-04 and 05, development host A, QEMU TCG;
@@ -3124,7 +3134,37 @@ ancestor rule above. The hub PDO is referenced across the call.
 4. A hub disabled in Device Manager: presentation only. PnP removes the hub
    FDO and its children's stacks; the PDOs stay listed (the WDM rule); the
    bus keeps the hub and the devices behind it running with no client.
-   Enabling it re-adds the FDO and re-reports them.
+   **Corrected 2026-10-05** (roadmap-hcd 33.4; the 2.1.0.0 legs 1e on
+   Windows 2000 and 1g on XP, runtime, development host A, QEMU): enabling
+   it re-adds the FDO, but re-reporting the same PDOs brings nothing back.
+   With the hub's devnode, NT forgets its children's devnodes, and the PDO
+   objects reported again to the new FDO were never queried or started; no
+   port changed, so nothing re-enumerated, and only a replug recovered. So
+   the hub FDO's `REMOVE` **lets go** of every child that PnP was shown and
+   has removed, still listed (`HcdDevicePdoLetGo`, `ParentLetGo`, pure rule
+   `XhciEnumLetGo`, host vectors in `test_enum`). No relations answer
+   carries a let-go PDO again (`XhciEnumAnswerCarries`), and once its
+   device leaves it is missing at once, like a PDO under a hub PDO that
+   PnP has let go of. The device keeps running. The next `START` of a hub
+   FDO on that PDO cycles each let-go child's port (`HcdDevicePdoRepresent`,
+   `CYCLE_PORT`'s path, `HcdEnumCycle`) before it asks its settle
+   generation (5.7). The old PDOs leave, missing at once, and are deleted
+   by the next relations answer before any answer carries their
+   successors. The devices enumerate afresh, behind a second-tier hub too,
+   as new PDOs at the same instance ids: the serial id, or the place under
+   the same hub devnode. PnP finds the devnodes it had, so no new devnode
+   and no wizard, and the first answer carries them. A child that PnP
+   never saw is not let go: the new FDO's first answer reports it. A let-go
+   PDO that PnP starts again is PnP's again. Windows 98 SE `STOP`s the hub
+   instead of removing it (the 33.4 leg 1c and this fix's 98 leg). That
+   leaves nothing let go and changes nothing there. A controller stop never
+   keeps a let-go group dormant, unlike a user-disabled PDO (item 6). PnP
+   has no devnode to revive it into, and a revival could come after the
+   hub's start had already asked for its cycle, and lost it. So the stop
+   drops the group, missing at once, and the device comes back as new PDOs
+   (Codex review of this fix, round 1). The root hub needs nothing of this: its `REMOVE` detaches the bus,
+   and its `START` marks every port changed (`HcdEnumDetach`,
+   `HcdEnumAttach`).
 5. The controller's stop and remove, and the root hub's: unchanged.
    `HcdDevicePdoReleaseAll` settles hub PDOs and their children with the
    rest. A hub FDO reaches the controller through its PDO's `Controller`,
