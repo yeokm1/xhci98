@@ -16,22 +16,69 @@ rem   test_caps    - the extended-capability walk, port classification, and
 rem                  PSI speed decoding (src\xhci_caps.c)
 rem   test_port    - PORTSC write construction, the logical-port map and the
 rem                  per-port shadow (src\xhci_port.c)
-rem   test_xfer    - the control-transfer engine (src\xhci_xfer.c): Setup/Data/
-rem                  Status TD construction, the scatter/gather walk and its
-rem                  64 KB splits, the pending-transfer queue, and what a
-rem                  Transfer Event means to one usbport transfer
+rem   test_xfer    - the transfer engine (src\xhci_xfer.c): Setup/Data/Status
+rem                  and Normal TD construction, the scatter/gather walk and
+rem                  its 64 KB splits, the pending-transfer queue, and what a
+rem                  Transfer Event means to one transfer
 rem   test_iso     - the isochronous engine (src\xhci_xfer.c, task 9-A.1): the
 rem                  Isoch TRB's own fields including TBC/TLBPC, the Valid Frame
 rem                  Window across both of its wraps, and the per-packet
-rem                  completion write-back into usbport's parameter block
-rem   test_ctx     - the Slot, Endpoint and Input Control Context encoders
+rem                  completion write-back into the parameter block
+rem   test_td      - the same builders over the HCD's own mapping (task
+rem                  26-A.9): a model of hcd_io.c's chunk plan, hcd_dma.c's
+rem                  page-cut SG list and hcdIsoFill's block, swept over buffer
+rem                  offsets, lengths, packet sizes, map-register grants and
+rem                  physical layouts, every TRB checked against the page table
+rem   test_enum    - the enumeration state machine (src\xhci_enum.c)
+rem   test_link    - the SuperSpeed link of a USB3 root port and 29-A.5's
+rem                  hold (src\xhci_link.c): PORTSC to link state, the
+rem                  bounded warm-reset recovery and its give-up, the hot or
+rem                  warm reset policy, U3 resume, and the hold's release
+rem                  rules case by case
+rem   test_pipe    - the URB-side computations (src\xhci_pipe.c): SETUP
+rem                  building, interface and endpoint parsing, the configure
+rem                  plan, the buffer split and the isochronous URB checks
+rem   test_func    - the composite split with and without an IAD, the filtered
+rem                  configuration descriptor and the function ids
+rem                  (src\xhci_func.c)
+rem   test_stream  - bulk streams' pure half (src\xhci_stream.c, task 31-A.1):
+rem                  MaxPSASize, the companion's MaxStreams, the grant and the
+rem                  array size, the block layout, the Stream Context, the
+rem                  Endpoint Context's stream fields, Set TR Dequeue with a
+rem                  Stream ID, the doorbell value and the event's stream
+rem   test_xport   - the mass-storage transport policy (src\xhci_xport.c, task
+rem                  31-A.3): Bulk-Only or UAS for an interface offering
+rem                  either, and the hardware and compatible ids that follow
+rem   test_hub     - the hub class's pure half (src\xhci_hub.c): the hub
+rem                  descriptor, the status-change bitmap, the port decision,
+rem                  the reset progress and speed bits, the depth and multi-TT
+rem                  rules and the instance key
+rem   test_sshub   - the SuperSpeed hub class's pure half (src\xhci_sshub.c,
+rem                  30-A.2): the 0x2A descriptor, the link-state field, the
+rem                  port decision over every SuperSpeed change bit, the hot
+rem                  or warm reset over every link state, its progress and
+rem                  clears, the extended port status, sublink rates, the
+rem                  downstream Protocol Speed ID, the pairing rule, and
+rem                  a held U3 link's resume and its progress
+rem   test_ctx    - the Slot, Endpoint and Input Control Context encoders
 rem                  (src\xhci_ctx.c): the golden vectors for every speed class,
 rem                  both context strides, and the field-by-field refusals
 rem   test_topo    - the hub topology graph (src\xhci_topo.c): the snooped
 rem                  hub-class requests as measured on the wire, the hub
 rem                  descriptor and port-status folds, the pending-parent
 rem                  claim, Route String nibble arithmetic with its five-tier
-rem                  refusal, and subtree/generation pruning
+rem                  refusal, and subtree/generation pruning; and task
+rem                  27-A.4's vectors: placements with their Route String,
+rem                  root port and TT triple behind single-TT, multi-TT and
+rem                  Full-Speed hubs to the depth limit, removal, malformed
+rem                  hub descriptors, the well-formedness of the hub port
+rem                  table in test\hub_port_vectors.h, and the gaps G1-G3
+rem                  against the design records that 27-A.1 closed (a gap
+rem                  still open prints as a KNOWN GAP line and does not
+rem                  fail the run)
+rem   test_strict  - strict mode's command precondition table (src\xhci_strict.c):
+rem                  every command type x DW3 bit 9 x slot state x EP State,
+rem                  the Configure Endpoint flag rule and the refusal codes
 rem   test_desc    - the configuration-descriptor snoop (src\xhci_desc.c, task
 rem                  9-A.2): which EP0 setup packets are worth capturing, the
 rem                  descriptor walk fed at every chunk size, the isochronous
@@ -48,29 +95,21 @@ rem                  validation, root composition and sink selection; task
 rem                  13-L.2 retired the ring-0 file sink and those functions
 rem                  with it, and test_log.c had said so for
 rem                  two days while this summary had not.)
-rem   test_vhub    - the virtual USB 2.0 hub's pure core (src\xhci_vhub.c,
-rem                  roadmap task 24.3.2, design record 12): the switch and
-rem                  its two id strings in both encodings, the request table
-rem                  fed the measured setup packets, value 1's decision, the
-rem                  two views of one port and their suspend merge, value 2's
-rem                  hub from start to stop, and rule 2's off state. It links
-rem                  xhci_topo.c for the vectors that put a real hub behind a
-rem                  virtual one. Sub-task 24.3.3 wired it into the driver, so
-rem                  test_init links it too and src\sources builds it.
-rem   test_init    - the driver's MMIO-facing code against a synthetic
-rem                  controller: the init sequence (src\xhci_init.c), the
-rem                  interrupt path (src\xhci_evt.c), the asynchronous command
-rem                  engine (src\xhci_cmd.c), the root-hub callback family
-rem                  (src\xhci_rh.c), the Phase 6 device layer (src\xhci_slot.c),
-rem                  the task 6-V.1 transfer-contract probe (src\xhci_probe.c -
-rem                  its classification and gates, since the suite compiles the
-rem                  release path where its printing does not exist),
-rem                  and the registered callback surface (src\xhci_dispatch.c,
-rem                  with DriverEntry excluded under XHCI_HOST_TEST), all through
-rem                  src\xhci_pci.c. The one suite here that is not over pure
-rem                  code: it redirects the DDK register, stall and spin-lock
-rem                  primitives at a model, which is what makes access *order*,
-rem                  lock scope, and a refusal writing nothing at all checkable.
+rem
+rem   test_uas     - the pure core of xhciuas.sys, the UAS class driver
+rem                  (src\uas\uas_iu.c, task 31-A.2): the COMMAND and TASK
+rem                  MANAGEMENT IU encoders and the SENSE, RESPONSE and READY
+rem                  IU parser byte for byte, the SAM LUN field, the tag
+rem                  allocator's order and refusals, the walk for the UAS
+rem                  alternate setting and its Pipe Usage descriptors at High
+rem                  Speed and SuperSpeed, REPORT LUNS, the status fold, the
+rem                  CDB direction table and the storage id strings
+rem
+rem RETIRED ON 2026-10-02 with the miniport's sources (design record 13):
+rem test_vhub (src\xhci_vhub.c) and test_init (the miniport's MMIO-facing code
+rem and its usbport callback surface). Their last copies are on branch
+rem 1.2.0.0. test_xfer and test_iso left with them and came back with task
+rem 26-A.9, unchanged, because src\xhci_xfer.c was kept whole (26-A.4).
 rem
 rem THE SECOND ARCHITECTURE (roadmap task 21.4). Two suites are compiled and run
 rem twice: once with MSVC 6.0 for x86, and once with WDK 7.1's amd64 cross
@@ -131,6 +170,29 @@ set LIB=%MSVC6%\VC98\LIB
 
 cd /d "%~dp0"
 
+rem Every file a suite makes - objects, binary, captured output - goes in a
+rem directory of this run's own under test\out\ (ignored), never under %TEMP%
+rem or beside the sources: two runs at once, from two worktrees or from an x86
+rem and an amd64 build of one tree, shared %TEMP%\xhci98-<suite>.out and
+rem clobbered each other's captures, and a suite read that way "died before
+rem printing a result". mkdir is the claim, since it fails on a directory that
+rem exists: two runs started in the same second draw the same %RANDOM%, and the
+rem loser draws again. Relative, so the /Fo and /Fe arguments hold no space.
+rem Only a name that exists is a collision: any other mkdir failure (no rights,
+rem a full disk) fails at once, and twenty collisions in a row fail too.
+if not exist out mkdir out
+if not exist out\ goto nooutdir
+set CLAIMTRIES=0
+:claimrundir
+set /a CLAIMTRIES+=1
+if %CLAIMTRIES% GTR 20 goto norundirfree
+set "RUNDIR=out\r%RANDOM%%RANDOM%"
+mkdir "%RUNDIR%" 2>nul && goto claimedrundir
+if exist "%RUNDIR%" goto claimrundir
+set "RUNDIR="
+goto norundir
+:claimedrundir
+
 rem Every suite runs even after one fails: the whole point of the host suite is
 rem that a second failure costs milliseconds, not another build.
 set "SUITEFAILED="
@@ -146,24 +208,59 @@ rem test_port links xhci_caps.c too, since Phase 5: the root-hub map is derived
 rem from the port classification, so XhciRootHubBuild asks XhciPortIsManaged
 rem which ports it may present rather than re-deciding it from the class codes.
 call :run test_port "test_port.c ..\src\xhci_port.c ..\src\xhci_caps.c"
-rem test_xfer links xhci_ring.c: the control-transfer engine's whole job is to
-rem produce TRBs and then read completion events back off the ring it wrote
-rem them to, so testing it against a stub ring would test neither half.
-call :run test_xfer "test_xfer.c ..\src\xhci_xfer.c ..\src\xhci_ring.c"
-rem test_iso links the same two files and for the same reason: the isochronous
-rem engine builds TRB groups onto a ring and then reads its own controller's
-rem events back off it, so a stub ring would test neither half.
-call :run test_iso "test_iso.c ..\src\xhci_xfer.c ..\src\xhci_ring.c"
 rem test_ctx links xhci_mem.c: the context *encoders* are its subject, but where
 rem one context ends and the next begins is the carve's answer, and pairing them
 rem is what makes "eight DWORDs whatever the stride" checkable at both strides.
 call :run test_ctx "test_ctx.c ..\src\xhci_ctx.c ..\src\xhci_mem.c"
 call :run test_topo "test_topo.c ..\src\xhci_topo.c"
+rem test_xfer links xhci_ring.c: the transfer engine's whole job is to
+rem produce TRBs and then read completion events back off the ring it wrote
+rem them to, so testing it against a stub ring would test neither half.
+call :run test_xfer "test_xfer.c ..\src\xhci_xfer.c ..\src\xhci_ring.c"
+rem test_iso links the same two files and for the same reason.
+call :run test_iso "test_iso.c ..\src\xhci_xfer.c ..\src\xhci_ring.c"
+rem test_td links xhci_pipe.c as well: hcd_io.c fills the isochronous block
+rem with its packet-length and fragment helpers, so the block the engine is
+rem given here is built by the same code that builds it in the driver.
+call :run test_td "test_td.c ..\src\xhci_xfer.c ..\src\xhci_ring.c ..\src\xhci_pipe.c"
+rem test_enum links nothing else: the enumeration machine of design record 13
+rem section 5.3 is a pure transition function, driven here with no controller
+rem (task 26-A.9).
+call :run test_enum "test_enum.c ..\src\xhci_enum.c"
+rem test_link links xhci_port.c for the PORTSC writes its actions become, and
+rem xhci_caps.c because xhci_port.c's root-hub map asks it which ports exist,
+rem and xhci_enum.c so the port-change feed is checked against a real machine.
+call :run test_link "test_link.c ..\src\xhci_link.c ..\src\xhci_port.c ..\src\xhci_caps.c ..\src\xhci_enum.c"
+call :run test_pipe "test_pipe.c ..\src\xhci_pipe.c"
+rem test_func links nothing else: the composite split, the filtered
+rem configuration descriptor and the function ids are pure computations over
+rem descriptor bytes (task 26-A.7).
+call :run test_func "test_func.c ..\src\xhci_func.c"
+rem test_hub links the pipe policy beside the hub class (task 27-A.1): the
+rem hub class's decisions are pure computations over descriptor and status
+rem bytes, and the Low-Speed mouse's interval behind a hub needs both.
+call :run test_hub "test_hub.c ..\src\xhci_hub.c ..\src\xhci_pipe.c"
+rem test_sshub links xhci_hub.c for the shape and limits the SuperSpeed half
+rem shares with a USB 2.0 hub, and xhci_caps.c for the PSI table a downstream
+rem SuperSpeedPlus rate is looked up in (30-A.2).
+call :run test_sshub "test_sshub.c ..\src\xhci_sshub.c ..\src\xhci_hub.c ..\src\xhci_caps.c"
+rem test_stream links nothing else: the stream plan, the block layout and
+rem the encoders are pure computations over registers' and descriptors'
+rem values (task 31-A.1).
+call :run test_stream "test_stream.c ..\src\xhci_stream.c"
+rem test_xport links nothing else: the transport choice and its ids are pure
+rem computations over descriptor bytes and three flags (task 31-A.3).
+call :run test_xport "test_xport.c ..\src\xhci_xport.c"
+rem test_strict links nothing else: strict mode's command precondition table
+rem (xHCI 1.2 section 4.6) is a pure function, checked here at every cell -
+rem each command type, DW3 bit 9, slot state and EP State.
+call :run test_strict "test_strict.c ..\src\xhci_strict.c"
 rem test_log links nothing else: task 11-V.7's ring is deliberately pure, so
 rem every decision it makes - the wrap, the record cap, the flush verdict, the
 rem drain's ordering - is drivable with no file system, no registry and no IRQL.
 rem The DDK half (the KeGetCurrentIrql guard, the two registry reads and the
-rem DbgPrint emission) is exercised through test_init.c's stand-ins instead.
+rem DbgPrint emission) was exercised through the miniport's test_init.c, retired
+rem with it; the HCD's own suites take it up (26-A.9).
 rem It named ZwCreateFile/ZwWriteFile too until task 13-L.2 retired
 rem the ring-0 file sink and those imports with it.
 call :run test_log "test_log.c ..\src\xhci_log.c"
@@ -172,8 +269,9 @@ rem encoder is what turns it into an Interval, so the two halves of task 9-A.2
 rem are one subject and a vector that stopped at the table would not have tested
 rem the number the hardware sees.
 call :run test_desc "test_desc.c ..\src\xhci_desc.c ..\src\xhci_ctx.c ..\src\xhci_mem.c"
-call :run test_vhub "test_vhub.c ..\src\xhci_vhub.c ..\src\xhci_topo.c"
-call :run test_init "test_init.c ..\src\xhci_init.c ..\src\xhci_evt.c ..\src\xhci_cmd.c ..\src\xhci_rh.c ..\src\xhci_slot.c ..\src\xhci_probe.c ..\src\xhci_topo.c ..\src\xhci_desc.c ..\src\xhci_vhub.c ..\src\xhci_log.c ..\src\xhci_pci.c ..\src\xhci_caps.c ..\src\xhci_mem.c ..\src\xhci_ring.c ..\src\xhci_port.c ..\src\xhci_ctx.c ..\src\xhci_xfer.c ..\src\xhci_dispatch.c"
+rem test_uas links nothing else: the UAS driver's information units, tags,
+rem descriptor walk and ids are pure computations over bytes (task 31-A.2).
+call :run test_uas "test_uas.c ..\src\uas\uas_iu.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64
@@ -193,6 +291,7 @@ echo therefore unchecked in this run. Set WDK71 to a WDK 7.1 root, or read the
 echo verdict below as covering x86 alone.
 
 :amd64done
+call :cleanrun
 if defined SUITEFAILED goto testfail
 if defined SUITEBLOCKED goto blocked
 
@@ -241,7 +340,9 @@ set SRC=%~2
 set ARCH=%~3
 echo.
 echo === %NAME% ===
-if exist %NAME%.exe del %NAME%.exe
+set "EXE=%RUNDIR%\%NAME%.exe"
+set "OUT=%RUNDIR%\%NAME%.out"
+if exist "%EXE%" del "%EXE%"
 
 rem /Za enforces C89 (no // comments, no mid-block declarations) - the same
 rem dialect gate the DDK build applies, caught here first.
@@ -257,7 +358,7 @@ rem rather than being verified only by a bench plug. It is empty in every
 rem ordinary run and is NOT a way to ship behaviour: the DDK build's own
 rem XHCI_EXTRA_DEFINES is the one that decides what a binary contains.
 if /i "%ARCH%"=="amd64" goto suitebuild64
-cl /nologo /W3 /WX /Za /DXHCI_HOST_TEST %XHCI_HOST_TEST_DEFINES% /Fe%NAME%.exe %SRC%
+cl /nologo /W3 /WX /Za /DXHCI_HOST_TEST %XHCI_HOST_TEST_DEFINES% /Fe%EXE% /Fo%RUNDIR%\ %SRC%
 goto suitebuilt
 
 rem WDK 7.1's x86-hosted amd64 cross compiler, against the WDK's own CRT headers
@@ -268,11 +369,11 @@ rem dialect.
 set PATH=%WDK71%\bin\x86\amd64;%WDK71%\bin\x86;%PATH%
 set INCLUDE=%WDK71%\inc\crt;%WDK71%\inc\api
 set LIB=%WDK71%\lib\Crt\amd64;%WDK71%\lib\wnet\amd64
-cl /nologo /W3 /WX /DXHCI_HOST_TEST %XHCI_HOST_TEST_DEFINES% /Fe%NAME%.exe %SRC%
+cl /nologo /W3 /WX /DXHCI_HOST_TEST %XHCI_HOST_TEST_DEFINES% /Fe%EXE% /Fo%RUNDIR%\ %SRC%
 
 :suitebuilt
 if errorlevel 1 goto suitebuilderr
-if not exist %NAME%.exe goto suitebuilderr
+if not exist "%EXE%" goto suitebuilderr
 if defined NORUN goto suitenotrun
 
 rem Absolute path: this host sets NoDefaultCurrentDirectoryInExePath, so a bare
@@ -295,12 +396,12 @@ rem discriminator is the reputation block's own message, which the redirection
 rem above captures: only that is "run this again". Anything else that ran and
 rem produced no verdict is a FAILURE, because a suite that cannot finish is not
 rem a suite that passed.
-"%~dp0%NAME%.exe" > "%TEMP%\xhci98-%NAME%.out" 2>&1
+"%~dp0%EXE%" > "%OUT%" 2>&1
 set RC=%ERRORLEVEL%
-type "%TEMP%\xhci98-%NAME%.out"
-findstr /c:"checks, " "%TEMP%\xhci98-%NAME%.out" >nul 2>&1
+type "%OUT%"
+findstr /c:"checks, " "%OUT%" >nul 2>&1
 if not errorlevel 1 goto suiteresult
-findstr /i /c:"Device Guard" /c:"blocked by" "%TEMP%\xhci98-%NAME%.out" >nul 2>&1
+findstr /i /c:"Device Guard" /c:"blocked by" "%OUT%" >nul 2>&1
 if not errorlevel 1 goto suiteblocked
 goto suitecrashed
 
@@ -318,7 +419,7 @@ rem `test_ctx: N checks, N failures`, and a `^0 checks` pattern could never
 rem match it - the one suite of twelve this gate could not see. `\<0 checks,`
 rem still cannot match `20 checks,` (the 0 there follows a word character), and
 rem the trailing comma keeps it on the verdict line.
-findstr /r /c:"\<0 checks," "%TEMP%\xhci98-%NAME%.out" >nul 2>&1
+findstr /r /c:"\<0 checks," "%OUT%" >nul 2>&1
 if not errorlevel 1 goto suitenochecks
 if not "%RC%"=="0" goto suitefailed
 call :cleanup %NAME%
@@ -357,7 +458,7 @@ exit /b 1
 echo %NAME% FAILED - it ran and died before printing a result line (exit %RC%).
 echo This is a crashing vector, not a launch that was blocked: the output above
 echo is the suite's own, up to the point it stopped. Re-running will reproduce
-echo it. Run %NAME%.exe under a debugger, or bisect the vectors.
+echo it. Build %NAME% again and run it under a debugger, or bisect the vectors.
 call :cleanup %NAME%
 endlocal
 exit /b 1
@@ -378,6 +479,32 @@ echo instead, and re-running that one changes nothing.)
 endlocal
 exit /b 2
 
+rem The run's directory, and test\out\ with it once no other run holds one
+rem (rd refuses a directory that is not empty).
+:cleanrun
+if defined RUNDIR if exist "%RUNDIR%" rd /s /q "%RUNDIR%"
+rd out 2>nul
+goto :eof
+
+:nooutdir
+echo.
+echo ERROR: could not create %~dp0out, where each run keeps its files.
+endlocal
+exit /b 1
+
+:norundir
+echo.
+echo ERROR: could not create a run directory under %~dp0out (not a name
+echo collision: check the directory's permissions and free space).
+endlocal
+exit /b 1
+
+:norundirfree
+echo.
+echo ERROR: 20 run directory names under %~dp0out were already taken.
+endlocal
+exit /b 1
+
 :nocompiler
 echo.
 echo ERROR: cl.exe not found under %MSVC6%.
@@ -392,7 +519,7 @@ endlocal
 exit /b 1
 
 :cleanup
-if exist %~1.exe del %~1.exe
-if exist "%TEMP%\xhci98-%~1.out" del "%TEMP%\xhci98-%~1.out"
-if exist *.obj del *.obj
+if exist "%RUNDIR%\%~1.exe" del "%RUNDIR%\%~1.exe"
+if exist "%RUNDIR%\%~1.out" del "%RUNDIR%\%~1.out"
+if exist "%RUNDIR%\*.obj" del "%RUNDIR%\*.obj"
 goto :eof

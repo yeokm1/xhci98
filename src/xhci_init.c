@@ -1,6 +1,11 @@
 /*
  * xhci_init.c - the controller initialization sequence.
  *
+ * KEPT FROM THE MINIPORT (roadmap-hcd.md task 26-A.2). This file was the
+ * usbport miniport's; its comments still speak of usbport, its callbacks and
+ * its locks. src/hcd_svc.h, "READING THE KEPT FILES", is the key from each
+ * of those names to the HCD code that now plays the part.
+ *
  * Roadmap Phase 4 tasks 2, 3 and 5. usbport calls StartController once it has
  * mapped BAR0, connected the interrupt and placed the fixed common buffer; this
  * file turns that into a controller whose DCBAA, scratchpad, command ring and
@@ -38,6 +43,7 @@
 #include "xhci_usbport.h"
 #include "xhci_hw.h"
 #include "xhci_dbg.h"
+#include "hcd_svc.h"
 
 /*
  * Bounded waits, all specification-derived.
@@ -739,16 +745,17 @@ static ULONG xhciBuildPortMap(PXHCI_EXTENSION ext, ULONG afterReset)
     }
 
     /*
-     * A controller whose ports are all USB 3.x is one this driver cannot serve
-     * at all - SuperSpeed is out of scope, so there is nothing left to manage.
-     * The parser is right to accept such a chain; the refusal is this driver's,
-     * which is why it is raised here. It also keeps Phase 5 out of a documented
+     * A controller whose capability chain names no port at all leaves nothing
+     * to manage. Since Phase 29 (task 29-A.1) an all-SuperSpeed controller is
+     * not one of them: every USB3 protocol port is managed, so it is accepted.
+     * The parser is right to accept an empty chain; the refusal is this
+     * driver's, which is why it is raised here. It also kept Phase 5 out of a documented
      * trap: usbport's root hub creation sizes its removable/power masks from
      * the reported port count and asks for roughly 1 GB of nonpaged pool at
      * zero (docs/usb-xhci-info/usbport-miniport-abi.md section 9; roadmap Phase 5 task 1).
      */
     if (map->ManagedPortCount == 0) {
-        XHCI_DBG_TEXT("port map: no USB 2.0 protocol port to manage - "
+        XHCI_DBG_TEXT("port map: no protocol port to manage - "
                       "refusing");
         return xhciPortMapRefused(ext, afterReset, XHCI_CAPS_NO_MANAGED_PORTS);
     }
@@ -855,8 +862,7 @@ static ULONG xhciBuildPortMap(PXHCI_EXTENSION ext, ULONG afterReset)
         XhciLogNote(ext, "map.usb3", counts[XHCI_PORT_CLASS_USB3_COMPANION] +
                                          counts[XHCI_PORT_CLASS_USB3_ORPHAN]);
         for (i = 0; i < map->PortCount; i++) {
-            if (map->Class[i] == XHCI_PORT_CLASS_USB2_ONLY ||
-                map->Class[i] == XHCI_PORT_CLASS_USB2_COMPANION) {
+            if (map->Class[i] != XHCI_PORT_CLASS_NONE) {
                 /* port << 8 | class - the port number is one-based, as every
                  * PORTSC reference in this driver is. */
                 XhciLogNote(ext, "map.port",
@@ -1951,13 +1957,19 @@ static ULONG xhciWantPortPower(const XHCI_PORT_MAP *map,
                                ULONG phase)
 {
     switch (XhciPortClass(map, port)) {
+    /*
+     * Since Phase 29 a USB3 protocol port is powered like a USB 2.0 one (task
+     * 29-A.1): the HCD drives SuperSpeed itself. Before it, the miniport and
+     * the HCD to Phase 28 held these ports unpowered so a USB 3.x device fell
+     * back to its USB 2.0 path; a USB 2.0 device on the same connector is
+     * unaffected either way, since the two halves are electrically apart.
+     */
     case XHCI_PORT_CLASS_USB2_ONLY:
     case XHCI_PORT_CLASS_USB2_COMPANION:
-        return phase == XHCI_PP_PHASE_TEARDOWN ? XHCI_PP_WANT_OFF
-                                               : XHCI_PP_WANT_ON;
     case XHCI_PORT_CLASS_USB3_COMPANION:
     case XHCI_PORT_CLASS_USB3_ORPHAN:
-        return XHCI_PP_WANT_OFF;
+        return phase == XHCI_PP_PHASE_TEARDOWN ? XHCI_PP_WANT_OFF
+                                               : XHCI_PP_WANT_ON;
     default:
         return XHCI_PP_WANT_LEAVE;
     }
@@ -2205,7 +2217,7 @@ static VOID xhciPowerPorts(PXHCI_EXTENSION ext)
 
     XHCI_DBG_VALUE("port power: ports transitioned to powered", asserted);
     XHCI_DBG_VALUE("port power: managed ports powered", ext->PortsPowered);
-    XHCI_DBG_VALUE("port power: USB3 ports left unpowered",
+    XHCI_DBG_VALUE("port power: ports held unpowered",
                    ext->PortsUnpowered);
     XHCI_DBG_VALUE("port power: ports that did not reach target",
                    ext->PortPowerFailures);
@@ -2501,14 +2513,7 @@ VOID XhciFailClosedDma(PXHCI_EXTENSION ext)
     XHCI_DBG_VALUE("teardown: bus master clear retries",
                    ext->BusMasterClearRetries);
 
-    if (XhciRegPacket.UsbPortBugCheck == NULL) {
-        ext->DmaFailClosedUnavailable++;
-        XHCI_DBG_TEXT("teardown: no UsbPortBugCheck service - the buffer will "
-                      "be reclaimed under a live bus master");
-        return;
-    }
-
-    XhciRegPacket.UsbPortBugCheck(ext);
+    HcdSvcDmaNotStopped(ext);
 }
 
 /* ------------------------------------------------------------------ */
@@ -2527,7 +2532,7 @@ ULONG XhciFrameNumber(PXHCI_EXTENSION ext)
         return 0;
     }
 
-    XhciControllerLockAcquire(&oldIrql);
+    XhciControllerLockAcquire(ext, &oldIrql);
 
     /*
      * The same admission the ISR and the health poll use, and for the same
@@ -2600,7 +2605,7 @@ ULONG XhciFrameNumber(PXHCI_EXTENSION ext)
              * poll being the only thing that counts. */
             ext->FrameSampleStale = 0;
             value = ext->FrameNumber;
-            XhciControllerLockRelease(oldIrql);
+            XhciControllerLockRelease(ext, oldIrql);
             return value;
         }
         ext->FrameReadFailures++;
@@ -2631,7 +2636,7 @@ ULONG XhciFrameNumber(PXHCI_EXTENSION ext)
     ext->FrameNumber++;
     value = ext->FrameNumber;
 
-    XhciControllerLockRelease(oldIrql);
+    XhciControllerLockRelease(ext, oldIrql);
     return value;
 }
 
@@ -3855,9 +3860,9 @@ MPSTATUS XhciResumeController(PXHCI_EXTENSION ext)
         halted = (usbsts != 0xFFFFFFFFUL &&
                   (usbsts & XHCI_USBSTS_HCH) != 0) ? 1UL : 0UL;
 
-        XhciControllerLockAcquire(&oldIrql);
+        XhciControllerLockAcquire(ext, &oldIrql);
         XhciSlotInvalidateAll(ext, halted);
-        XhciControllerLockRelease(oldIrql);
+        XhciControllerLockRelease(ext, oldIrql);
         XhciSlotDeferredWorkForced(ext, XHCI_ARM_UNLOCKED);
     }
 
@@ -4074,9 +4079,9 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
     halted = (usbsts != 0xFFFFFFFFUL &&
               (usbsts & XHCI_USBSTS_HCH) != 0) ? 1UL : 0UL;
 
-    XhciControllerLockAcquire(&oldIrql);
+    XhciControllerLockAcquire(ext, &oldIrql);
     XhciSlotInvalidateAll(ext, halted);
-    XhciControllerLockRelease(oldIrql);
+    XhciControllerLockRelease(ext, oldIrql);
     XhciSlotDeferredWorkForced(ext, XHCI_ARM_DEFER);
 
     ext->InitBelowPassive = 1;
@@ -4108,9 +4113,9 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
          * what it adds is that the health poll's arming predicate reads this
          * word, so without it a failed attempt would never be retried.
          */
-        XhciControllerLockAcquire(&oldIrql);
+        XhciControllerLockAcquire(ext, &oldIrql);
         ext->ControllerFailed = 1;
-        XhciControllerLockRelease(oldIrql);
+        XhciControllerLockRelease(ext, oldIrql);
         XhciLogNote(ext, "ctrl.recover.refused", ext->InitStep);
         XHCI_DBG_VALUE_CHANGED("recover: reinitialization refused at step",
                                ext->InitStep);
@@ -4451,9 +4456,9 @@ ULONG XhciStopController(PXHCI_EXTENSION ext)
          * about the *buffer*, and says nothing about whether the slots inside it
          * are still the hardware's.
          */
-        XhciControllerLockAcquire(&oldIrql);
+        XhciControllerLockAcquire(ext, &oldIrql);
         XhciSlotInvalidateAll(ext, quiesced);
-        XhciControllerLockRelease(oldIrql);
+        XhciControllerLockRelease(ext, oldIrql);
         XhciSlotDeferredWorkForced(ext, XHCI_INIT_ARM_MODE(ext));
 
         return quiesced;
@@ -4832,7 +4837,7 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
     {
         KIRQL failedIrql;
 
-        XhciControllerLockAcquire(&failedIrql);
+        XhciControllerLockAcquire(ext, &failedIrql);
         ext->ControllerFailed = 0;
         /*
          * And the health poll's transition latch, in the same breath. The
@@ -4845,7 +4850,7 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
          * exists to close.
          */
         ext->ControllerFatal = 0;
-        XhciControllerLockRelease(failedIrql);
+        XhciControllerLockRelease(ext, failedIrql);
     }
 
     /*
@@ -4921,7 +4926,7 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
      * of structures out of a 4 KB buffer would be the last thing that ever
      * worked on that machine.
      */
-    if (ext->Layout.TotalBytes > XhciRegPacket.MiniPortResourcesSize) {
+    if (ext->Layout.TotalBytes > XHCI_HC_RESOURCES_SIZE) {
         XHCI_DBG_VALUE("layout does not fit the declared buffer, need",
                        ext->Layout.TotalBytes);
         return xhciInitFailed(ext, XHCI_INIT_STEP_LAYOUT, XHCI_LAYOUT_OVERFLOW,

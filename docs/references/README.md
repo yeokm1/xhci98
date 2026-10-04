@@ -34,6 +34,7 @@ re-verify a citation without downloading the source.
 | `xHCI__Rev1.2c.pdf` (Intel's download name) | 1.2c (600 pages, October 2025) | `0b06318005c3e0c8b896f2a002c2a3c78426b5fdacac4ad1cc02ffec15835190` | Intel, [xHCI for USB - requirements specification][intel-xhci]. Every `p.N` in this tree is a page this copy prints |
 | `extensible-host-controller-interface-usb-xhci.pdf` | 1.2 (645 pages, May 2019) | `9257ca24f34bff08e6020623f707c788ca0f0df657aa713309ff489a68b1731e` | The revision the citations were first made against, before Phase 15 moved them to 1.2c. Intel no longer serves it and nothing here needs it; the row stays so the migration below can be re-derived by anyone who still has a copy |
 | `xhci-backwards-compatibility-testing-v1-7.pdf` | 1.7 | `6e6464b293f10600ae208c72c7c6796162f75430841c901265db8e18fe37fcc2` | USB-IF, [xHCI Backwards Compatibility Testing][usb-bct] |
+| `usb_32_202206/USB 3.2 Revision 1.1.pdf` (the zip's own folder and name) | USB 3.2 revision 1.1 (569 pages, June 2022), with its ECNs in `usb_32_202206/USB 3.2 ECNs/` | `26e025a56ce0352f4f91fcaaca67b622d8e9e030ca429804bf7da98f52e674fd` | USB-IF document library, "USB 3.2 Revision 1.1 - June 2022", delivered as `usb_32_202206.zip`. Cited as `USB 3.2 p.N`; see "USB 3.2 revision 1.1" below |
 
 [intel-xhci]: https://www.intel.com/content/www/us/en/content-details/868295/extensible-host-controller-interface-for-universal-serial-bus-xhci-requirements-specification-r1-2c.html
 [usb-bct]: https://www.usb.org/sites/default/files/xHCI_Backwards_Compatibility_Testing_v1_7.pdf
@@ -277,3 +278,48 @@ own offset: `docs/usb-xhci-info/win98-wdm.md`,
 `docs/contributing/implementation-invariants.md`. Derive that split rather
 than reading it here (`grep -l Oney` over the same file set), for the same
 reason hand-written lists are not trusted above.
+
+## USB 3.2 revision 1.1
+
+The USB 3.2 specification, revision 1.1 (June 2022), is the source for the
+USB 3.2 side of roadmap tasks 29-0 and 30-0: the BOS, device capability and
+endpoint companion descriptors, the link states and eSS.Disabled rules of
+chapter 7, and the hub class of chapter 10. `xhci-data-structures.md`
+sections 10 and 11 were verified against it on 2026-10-04.
+
+- Keep the zip's layout: `usb_32_202206/USB 3.2 Revision 1.1.pdf`, SHA-256
+  `26e025a56ce0352f4f91fcaaca67b622d8e9e030ca429804bf7da98f52e674fd`
+  (569 pages). The same folder carries a redline against revision 1.0 and
+  `USB 3.2 ECNs/`. Revision 1.1 already contains the ECNs that touch what
+  this tree cites: the "UFP Exit Condition Clarification" ECN's text is the
+  1.1 text of 7.5.1.1.2 and 7.5.1.2.3, and the "USB FW Update" ECN's
+  FWStatus capability (11h) is in 1.1's Table 9-14. The others are physical
+  layer and re-timer changes.
+- Licence: the document carries the USB 3.0 Promoter Group's copyright and
+  "All rights reserved", and states that providing it grants no licence to any
+  intellectual-property rights. It is fetched, never tracked, like the other
+  rows.
+- Text dump: `usb32-r1.1-dump.txt` beside it (git-ignored), made with
+  `pdftotext` (poppler) rather than pypdf, in the same `===PAGE N===` format
+  as the xHCI dump, N being the PDF page index plus 1. The shape of the
+  recipe, one `pdftotext` run whose form feeds become the markers:
+
+  ```sh
+  cd docs/references
+  pdftotext "usb_32_202206/USB 3.2 Revision 1.1.pdf" - |
+    gawk 'BEGIN { RS = "\f" } RT != "" { printf "\n===PAGE %d===\n%s", NR, $0 }' \
+    > usb32-r1.1-dump.txt
+  grep -c '^===PAGE' usb32-r1.1-dump.txt       # 569
+  ```
+
+  This recipe reproduces the dump's format and page markers; it has not been
+  re-run to compare the two byte for byte.
+  pdftotext keeps a table's cells in reading order but not in rows, so read a
+  table from the rendered page when the dump scrambles it.
+- **The printed page is not N.** The front matter is unnumbered or roman, and
+  the printed number is **N - 31**: Table 9-12 (BOS) is on dump page 381 and
+  prints 350, Table 10-5 (the hub descriptor) is on dump page 468 and prints
+  437, and dump page 377 prints `- 346 -`, all as the table of contents says.
+  Cite the printed number, as `USB 3.2 p.N`, and check it the way the xHCI
+  section above checks its own: the number sits in the running head as
+  `- N -`, after "Revision 1.1 June 2022".

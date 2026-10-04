@@ -2,6 +2,11 @@
  * xhci_evt.c - the interrupt path: the miniport ISR body and the event-ring
  * drain that usbport's DPC calls.
  *
+ * KEPT FROM THE MINIPORT (roadmap-hcd.md task 26-A.2). This file was the
+ * usbport miniport's; its comments still speak of usbport, its callbacks and
+ * its locks. src/hcd_svc.h, "READING THE KEPT FILES", is the key from each
+ * of those names to the HCD code that now plays the part.
+ *
  * Roadmap Phase 4 task 4, and it lands *before* anything enables a hardware
  * interrupt on purpose (docs/contributing/implementation-invariants.md, "Interrupt
  * Ordering"): usbport owns the interrupt object and calls EnableInterrupts the
@@ -755,14 +760,14 @@ ULONG XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts)
      * draining after either transition would publish ERDP and re-arm IMAN.IE
      * into a controller that is failed or heading toward D3.
      */
-    XhciControllerLockAcquire(&oldIrql);
+    XhciControllerLockAcquire(ext, &oldIrql);
     if (ext->ControllerFailed) {
         ext->DpcsAfterFailure++;
-        XhciControllerLockRelease(oldIrql);
+        XhciControllerLockRelease(ext, oldIrql);
         return 0;
     }
     if ((ext->Flags & XHCI_EXT_FLAG_INITIALIZED) == 0) {
-        XhciControllerLockRelease(oldIrql);
+        XhciControllerLockRelease(ext, oldIrql);
         return 0;
     }
 
@@ -902,7 +907,7 @@ ULONG XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts)
         }
     }
 
-    XhciControllerLockRelease(oldIrql);
+    XhciControllerLockRelease(ext, oldIrql);
 
     /*
      * The root hub's two deferred actions, and they are here because both are
@@ -1039,11 +1044,11 @@ VOID XhciEnableInterrupts(PXHCI_EXTENSION ext)
      * requested state for resume, but it cannot resurrect INITIALIZED from a
      * value read before quiesce cleared it.
      */
-    XhciControllerLockAcquire(&oldIrql);
+    XhciControllerLockAcquire(ext, &oldIrql);
     ext->Flags |= XHCI_EXT_FLAG_INTERRUPTS;
     if (ext->ControllerFailed ||
         (ext->Flags & XHCI_EXT_FLAG_INITIALIZED) == 0) {
-        XhciControllerLockRelease(oldIrql);
+        XhciControllerLockRelease(ext, oldIrql);
         return;
     }
     /*
@@ -1068,7 +1073,7 @@ VOID XhciEnableInterrupts(PXHCI_EXTENSION ext)
     xhciPublishErdp(ext, 1);
 
     unmasked = XhciUnmaskInterrupts(ext);
-    XhciControllerLockRelease(oldIrql);
+    XhciControllerLockRelease(ext, oldIrql);
 
     /*
      * The controller was started and usbport believes interrupts are on, but
@@ -1123,7 +1128,7 @@ VOID XhciDisableInterrupts(PXHCI_EXTENSION ext)
     }
 
     ext->InterruptDisables++;
-    XhciControllerLockAcquire(&oldIrql);
+    XhciControllerLockAcquire(ext, &oldIrql);
     /*
      * Sampled *before* the clear below, and it says **usbport ever asked this
      * driver for interrupts during this start** - not that any hardware enable
@@ -1162,7 +1167,7 @@ VOID XhciDisableInterrupts(PXHCI_EXTENSION ext)
      * lock either way.
      */
     suppressed = !everRequested || ext->InterruptDeliverySuppressed;
-    XhciControllerLockRelease(oldIrql);
+    XhciControllerLockRelease(ext, oldIrql);
 
     /*
      * **This is the one mask whose failure the ISR cannot cover for.**

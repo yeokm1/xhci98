@@ -188,13 +188,18 @@ struct _XHCI_SETUP_PACKET;
  * exactly what a *child* cannot derive for itself: where its parent hub sits.
  *
  * Five tiers is xHCI's own limit on the Route String, so a bus that needs more
- * than five hub nodes on one path is already unrepresentable. Eight is that
- * with room for hubs on other root ports, and `Dropped` is what says a ninth
- * was met - a full table silently forgetting one is the failure mode this
- * project has paid for twice (batch 6-0's `PassThru`, batch 7b-A.1.0's
- * accepted-open).
+ * than five hub nodes on one path is already unrepresentable. The miniport's
+ * eight was that with room for hubs on other root ports; the HCD owns every
+ * hub (design record 13 section 10.3) and roadmap 27-V.1 runs hub chains to
+ * the depth limit, two of which on two root ports are ten nodes, so sixteen
+ * since 27-A.1 - a fixed table still, embedded in the extension, rather than
+ * the pool-backed count section 10.3 names, and `Dropped` is what says a
+ * seventeenth was met - a full table silently forgetting one is the failure
+ * mode this project has paid for twice (batch 6-0's `PassThru`, batch
+ * 7b-A.1.0's accepted-open). The HCD keeps one hub object per node
+ * (hcd.h, HCD_MAX_HUBS).
  */
-#define XHCI_TOPO_NODES         8
+#define XHCI_TOPO_NODES         16
 
 /*
  * The Route String holds five 4-bit tiers (Slot Context DW0 `19:0`,
@@ -515,9 +520,15 @@ VOID XhciTopoObserveSetup(PXHCI_TOPOLOGY topo,
  * `XhciDescSelectInterface`, which reads the same packet under the same rule.
  *
  * `alternate` is the setup packet's `wValue`. Records nothing for a NULL graph,
- * for address 0, for a device with no node, or for a node that is not a hub -
- * this promotes nothing, because every device with an alternate setting sends
- * this request and only a hub's means MTT.
+ * for address 0, for a device with no node, or for a node that is not known
+ * as a hub - this promotes nothing, because every device with an alternate
+ * setting sends this request and only a hub's means MTT. A node is known as a
+ * hub once hub-class traffic promoted it **or once an attach entry point gave
+ * it a position**: `XhciTopoAttachRoot` and `XhciTopoAttachChild` are the
+ * statement "this device is a hub", and the bus brings a multi-TT hub up as
+ * SET_INTERFACE before GET_DESCRIPTOR(Hub) (design record 13 section 10.3
+ * steps 1 and 2), so the selection lands on an attached node no hub-class
+ * request has promoted yet (27-A.1; 27-A.4's gap G1).
  */
 VOID XhciTopoApplySetInterface(PXHCI_TOPOLOGY topo,
                                ULONG address,

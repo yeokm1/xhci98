@@ -1,0 +1,42 @@
+/*
+ * xhciuas.rc - the file version resource of xhciuas.sys, the UAS class
+ * driver (roadmap-hcd.md task 31-A.2). The version is the package's, from
+ * src\xhci_version.h, so the two binaries of one package cannot disagree
+ * and xhciuas.inf's DriverVer is checked against the same header.
+ */
+
+#include <windows.h>
+#include "../xhci_version.h"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     XHCI_VER_CSV
+PRODUCTVERSION  XHCI_VER_CSV
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+#if DBG
+FILEFLAGS       VS_FF_DEBUG
+#else
+FILEFLAGS       0
+#endif
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_DRV
+FILESUBTYPE     VFT2_DRV_SYSTEM
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "Yeo Kheng Meng\0"
+            VALUE "FileDescription",  "xhci98 USB Attached SCSI Class Driver\0"
+            VALUE "FileVersion",      XHCI_VER_STR "\0"
+            VALUE "InternalName",     "xhciuas.sys\0"
+            VALUE "LegalCopyright",   "Copyright (c) 2026 Yeo Kheng Meng. GNU GPL v2.\0"
+            VALUE "OriginalFilename", "xhciuas.sys\0"
+            VALUE "ProductName",      "xhci98 - USB host controller driver for xHCI\0"
+            VALUE "ProductVersion",   XHCI_VER_STR "\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

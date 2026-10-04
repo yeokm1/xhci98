@@ -71,6 +71,10 @@ powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a-fresh -Stamp
 param(
     [Parameter(Mandatory = $true)][string]$Target,
     [string]$Config = "",
+    # Whose identity -Status and -Stamp read off the debug console, and whose
+    # offset table they check it against (roadmap-hcd.md 26-A.10): `hcd`, the
+    # driver this tree builds, by default; `miniport` for a 1.2.0.0-era image.
+    [ValidateSet('hcd', 'miniport')][string]$Driver = 'hcd',
     [switch]$Boot,
     # Fresh targets only: clone the config's CloneFrom snapshot into the
     # target's image, and stamp the prepared image.  See the block below.
@@ -333,11 +337,12 @@ if ($Stamp) {
         $pathLines = @(Get-Content -LiteralPath $pathsFile)
         if ($pathLines.Count -ge 2) { $bootedImage = [string]$pathLines[1] }
     }
-    $ident = Find-ExtensionIdentity -DebugconLog $dbg -Arch $arch
-    $table = Import-CounterTable -Arch $arch
+    $ident = Find-DriverIdentity -Driver $Driver -DebugconLog $dbg -Arch $arch
+    $table = Import-CounterTable -Arch $arch -Driver $Driver
     $stampProblems = @(Get-StampProblems -Port $port -PortFree ([bool](Test-MonitorPortFree -Port $port)) -Image $image `
                            -ImageExists ([bool](Test-Path -LiteralPath $image)) -BootedImage $bootedImage `
-                           -DebugconLog $dbg -IdentSize $ident.Size -TableSizeof $table.Sizeof)
+                           -DebugconLog $dbg -IdentSize $ident.Size -TableSizeof $table.Sizeof `
+                           -SizeName (Get-DriverSizeName -Driver $Driver))
     if ($stampProblems.Count -gt 0) { throw ($stampProblems -join " ") }
     $version = Get-DriverVersionUnderTest -RepoRoot $repo
     $name = Get-BaseStampName -Version $version -Flavour "qemu"
@@ -967,13 +972,13 @@ if ($Shot) {
 }
 
 if ($Status) {
-    $ident = Find-ExtensionIdentity -DebugconLog $dbg -Arch $arch
+    $ident = Find-DriverIdentity -Driver $Driver -DebugconLog $dbg -Arch $arch
     if ($null -eq $ident.Va) {
         Write-Host "the driver has not written to the debug console yet (still booting, or not the qemu build - since task 13-L.1 no other flavour writes to port 0xE9)."
         exit 0
     }
-    $table = Import-CounterTable -Arch $arch
-    Write-Host ("extension 0x{0}, MiniPortExtensionSize={1}" -f $ident.Va, $ident.Size)
+    $table = Import-CounterTable -Arch $arch -Driver $Driver
+    Write-Host ("counters 0x{0}, {1}={2}" -f $ident.Va, (Get-DriverSizeName -Driver $Driver), $ident.Size)
     if ($ident.Size -ne $table.Sizeof) {
         Write-Host ("*** the offset table says SIZEOF {0} - counters below would be WRONG. Regenerate or reinstall." -f $table.Sizeof)
         exit 1
@@ -982,7 +987,11 @@ if ($Status) {
     # `endpoints opened` is the one that matters: it counts NON-DEFAULT endpoint
     # opens, so it moves only once a FUNCTION DRIVER has claimed a device.  That
     # is precisely what this whole pass exists to make happen.
-    foreach ($n in @('devices addressed', 'slots enabled', 'endpoints opened', 'endpoint opens seen')) {
+    # `endpoint opens seen` was usbport's OpenEndpoint accounting, which the
+    # HCD does not have (matrix-hcd.psd1).
+    $statusLabels = @('devices addressed', 'slots enabled', 'endpoints opened')
+    if ($Driver -eq 'miniport') { $statusLabels += 'endpoint opens seen' }
+    foreach ($n in $statusLabels) {
         $f = Resolve-CounterLabel -Table $table -Label $n
         Write-Host ("  {0,-22} {1}" -f $n, $c.Values[$f])
     }

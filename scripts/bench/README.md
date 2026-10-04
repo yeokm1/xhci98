@@ -51,9 +51,9 @@ cosmetic.
 Since `1.1.1.0` **every build reads the value** at every start and writes the
 result to IR0's IMOD (roadmap task 23.4). The contract is the driver's: 10 to
 4000 is used as given, and anything else - absent, 0, 5000 - is replaced by
-4000, the hardware reset value, not clamped. An INF install writes 500. So
-`CLEAR` is the control arm of a sweep and **not** what the package installs;
-set 500 to put a machine back, and leave a bench machine at 500 when a session
+4000, the hardware reset value, not clamped. An INF install writes 160 (500 up
+to `1.2.0.0`; owner, 2026-10-04). So `CLEAR` is the control arm of a sweep and **not** what the package installs;
+set 160 to put a machine back, and leave a bench machine at 160 when a session
 ends or say in the run sheet that it was not.
 
 *(Task 23.3 used an experimental build, `XHCI_EXTRA_DEFINES=-DXHCI_IMOD_EXPERIMENT`,

@@ -9,6 +9,9 @@ is this project's two files and nothing else:
 
     xhci98.inf     the dual-path INF
     xhci98.sys     the built miniport (debug or release)
+    xhciuas.inf    the UAS class driver's INF (roadmap task 31-A.2;
+                   src\uas\xhciuas-amd64.inf under this name for amd64)
+    xhciuas.sys    the UAS class driver, the same flavour
 
 The Microsoft files the driver depends on, usbd.sys and usbhub.sys (both
 targets), usbport.sys (the NT targets; on Windows 98 the USB 2.0 stack
@@ -71,6 +74,21 @@ flavour marker in the image is still checked against -Flavor, so this cannot be
 used to publish one flavour under another's name. Exists for the self-tests,
 which stage text stand-ins carrying a marker and nothing else.
 
+.PARAMETER UasInfPath
+The UAS class driver's INF to stage (task 31-A.2), overriding
+`src\uas\xhciuas.inf` (x86) or `src\uas\xhciuas-amd64.inf` (amd64). Staged
+as `xhciuas.inf` either way, the name its [SourceDisksFiles] gives it, and
+gated under -Arch.
+
+.PARAMETER UasDriverPath
+The UAS class driver to stage, overriding
+`src\uas\obj<flavour>\<archdir>\xhciuas.sys`. Both packages carry the
+UAS driver whenever they are built from the default paths: a missing xhciuas.sys
+is then a refusal, not an omission. A caller that names -DriverPath (the
+self-tests' stand-ins) stages the UAS pair only when it names -UasDriverPath
+too, so a stand-in package is not filled from whatever the last build left
+in src\uas.
+
 .PARAMETER SkipPackageGate
 Skip the post-staging check-inf.ps1 -PackageDir run only. The INF is gated
 before staging either way, because that run is also where the media layout
@@ -90,6 +108,13 @@ Passed through to the import gate on a host with no extracted target binaries
 staged. Enforcement of the committed allowlist still runs.
 
 .PARAMETER FailStartArtifact
+**No current build produces this artifact.** It was the miniport's; since
+2026-10-02 src\ is the successor HCD, which has no diagnostic builds, and both
+src\sources and scripts\build-driver.cmd refuse any XHCI_EXTRA_DEFINES. The
+switch and its marker checks stay, fail-closed: an HCD image carries no
+XHCI98_FAILSTART_ARTIFACT_TASK_12_3, so the switch refuses it. The recipe below
+is the miniport's, and works on branch 1.2.0.0 only.
+
 Stage roadmap task 12.3's failed-start artifact: a package that installs,
 *loads*, and then fails inside StartController, which is the one recovery route
 neither target has ever exercised. Build it first with
@@ -115,10 +140,10 @@ nothing else. Both markers are present in any build that merely *includes*
 -DXHCI_FAIL_START_CONTROLLER, so a mixed diagnostic build would satisfy this
 switch's marker test while behaving like neither artifact. This switch cannot
 tell the difference - a marker says what was defined, not what else was - so the
-refusal lives at build time in three places: src\sources refuses any
-XHCI_EXTRA_DEFINES that is not exactly -DXHCI_FAIL_START_CONTROLLER (which binds
-a bare `build` from a DDK prompt), scripts\build-driver.cmd refuses it earlier
-with a fuller message, and src\xhci_dispatch.c carries an #error for the one
+refusal lived at build time in three places (on branch 1.2.0.0): src\sources refused any
+XHCI_EXTRA_DEFINES that was not exactly -DXHCI_FAIL_START_CONTROLLER (which bound
+a bare `build` from a DDK prompt), scripts\build-driver.cmd refused it earlier
+with a fuller message, and src\xhci_dispatch.c carried an #error for the one
 other define this tree documents. Review finding 2, round 2 finding 4.
 
 Mutually exclusive with -UnpaddedDriverVerExperiment.
@@ -161,6 +186,8 @@ param(
     [string]$OutDir = "",
     [string]$InfPath = "",
     [string]$DriverPath = "",
+    [string]$UasInfPath = "",
+    [string]$UasDriverPath = "",
     [switch]$SkipPackageGate,
     [switch]$SkipBinaryGates,
     [switch]$NoTargetEvidence,
@@ -182,6 +209,23 @@ $repo = Get-RepoRoot
 $archDir = if ($Arch -eq "amd64") { "amd64" } else { "i386" }
 $archInf = if ($Arch -eq "amd64") { "src\xhci98-amd64.inf" } else { "src\xhci98.inf" }
 if ($InfPath -eq "") { $InfPath = Join-Path $repo $archInf }
+#
+# The UAS class driver (task 31-A.2), in both packages. Decided before
+# -DriverPath is defaulted, because whether the caller named one is the
+# question: see the -UasDriverPath help.
+#
+$stageUas = ($DriverPath -eq "") -or ($UasDriverPath -ne "")
+$uasInfName = if ($Arch -eq "amd64") { "xhciuas-amd64.inf" } else { "xhciuas.inf" }
+$uasAllow = if ($Arch -eq "amd64") { "xhciuas-imports-amd64.allow" } else { "xhciuas-imports.allow" }
+if ($UasInfPath -eq "") { $UasInfPath = Join-Path $repo "src\uas\$uasInfName" }
+if ($UasDriverPath -eq "") {
+    $uasObjDir = switch ($Flavor) {
+        "debug"   { "objchk" }
+        "qemu"    { "objchk_qemu" }
+        default   { "objfre" }
+    }
+    $UasDriverPath = Join-Path $repo "src\uas\$uasObjDir\$archDir\xhciuas.sys"
+}
 if ($DriverPath -eq "") {
     # Three flavours, two of them checked: "objchk" alone stopped identifying a
     # build when task 13-L.1 added qemu, which is exactly why it has a tree of
@@ -395,6 +439,21 @@ Build it first: scripts\build-driver.cmd $Flavor
 "@
     }
     #
+    # The successor HCD's build scaffold (roadmap task 25.8) must never reach a
+    # package: it is a DriverEntry that registers nothing. Refused first, by the
+    # marker the image carries, so no later message can describe it as anything
+    # else. Task 26-A.1 removed the marker from the source when the HCD became
+    # stageable; the refusal stays for an old scaffold image left in an obj
+    # directory.
+    #
+    if (Test-ImageMarker -Path $DriverPath -Marker "XHCI98_SCAFFOLD_DO_NOT_STAGE") {
+        throw @"
+'$DriverPath' is the build scaffold of the successor HCD (roadmap task 25.8)
+and cannot be packaged. It registers nothing and drives no hardware. Rebuild:
+since task 26-A.1 the source carries no scaffold marker.
+"@
+    }
+    #
     # The image has to be the flavour that was asked for (task 13-L.1). Checked
     # here rather than inferred from the path, because -DriverPath can name a
     # binary anywhere and because "objchk_qemu" contains "objchk" - so a path
@@ -550,6 +609,50 @@ looks exactly like a bad INF.
         }
     }
 
+    # --- the UAS class driver, held to the same gates (task 31-A.2) ---------
+    #
+    # After xhci98.sys's gates, so a stand-in refused by those is refused for
+    # the reason the self-tests expect, and before anything is staged.
+    if ($stageUas) {
+        Write-Step ("UAS class driver ({0}, {1})" -f $Flavor, $Arch)
+        if (-not (Test-Path -LiteralPath $UasDriverPath)) {
+            throw @"
+no $Flavor xhciuas.sys at '$UasDriverPath'.
+The package carries the UAS class driver. Build it first:
+  scripts\build-driver.cmd $Flavor
+"@
+        }
+        $uasFlavour = Get-ImageFlavourMarker -Path $UasDriverPath
+        if ($uasFlavour -ne $Flavor) {
+            throw "'$UasDriverPath' carries the flavour marker '$uasFlavour', not $Flavor's. Rebuild: scripts\build-driver.cmd $Flavor"
+        }
+        $savedEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            if (-not $SkipBinaryGates) {
+                $uasGateArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                                 (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") "check-imports.ps1"),
+                                 "-Image", $UasDriverPath, "-Flavor", $Flavor, "-Arch", $Arch,
+                                 "-AllowPath", (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") $uasAllow))
+                if ($NoTargetEvidence) { $uasGateArgs += "-NoTargetEvidence" }
+                & powershell.exe @uasGateArgs
+                if ($LASTEXITCODE -ne 0) {
+                    throw "'$UasDriverPath' failed the import-compatibility gate against $uasAllow."
+                }
+            }
+            & powershell -NoProfile -ExecutionPolicy Bypass -File `
+                (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-uas-inf.ps1") `
+                -InfPath $UasInfPath -Arch $Arch
+            if ($LASTEXITCODE -ne 0) {
+                throw "'$UasInfPath' failed scripts\inf-gate\check-uas-inf.ps1 - fix it before packaging."
+            }
+        } finally {
+            $ErrorActionPreference = $savedEap
+        }
+    } else {
+        Write-Warn "no UAS class driver staged: -DriverPath was named without -UasDriverPath (a stand-in package)."
+    }
+
     # --- where each file goes, from the gate's own parse ---------------------
     Write-Step "INF gate, and the media layout it derives"
 
@@ -604,6 +707,12 @@ usbhub.sys through the INF's LayoutFile, and the gate refuses them here.
         Ensure-Directory (Split-Path -Parent $dest)
         Copy-Item -LiteralPath $staging[$name] -Destination $dest -Force
         $mediaPaths[$name] = $dest
+    }
+    # The UAS pair goes to the package root, where xhciuas.inf's one
+    # SourceDisksNames entry looks for both files.
+    if ($stageUas) {
+        Copy-Item -LiteralPath $UasInfPath -Destination (Join-Path $stageDir "xhciuas.inf") -Force
+        Copy-Item -LiteralPath $UasDriverPath -Destination (Join-Path $stageDir "xhciuas.sys") -Force
     }
     $rootInf = Join-Path $stageDir "xhci98.inf"
     if (-not (Test-Path -LiteralPath $rootInf)) {
@@ -698,6 +807,20 @@ a build that was never made.
         }
         if ($LASTEXITCODE -ne 0) {
             throw "the staged package failed scripts\inf-gate\check-inf.ps1 - do not install it."
+        }
+        if ($stageUas) {
+            $savedEap = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                & powershell -NoProfile -ExecutionPolicy Bypass -File `
+                    (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-uas-inf.ps1") `
+                    -InfPath (Join-Path $stageDir "xhciuas.inf") -PackageDir $stageDir -Arch $Arch
+            } finally {
+                $ErrorActionPreference = $savedEap
+            }
+            if ($LASTEXITCODE -ne 0) {
+                throw "the staged package failed scripts\inf-gate\check-uas-inf.ps1 - do not install it."
+            }
         }
     }
 
@@ -821,17 +944,19 @@ that does not exist, or clear that one yourself.
         Write-Host "           (every boot), then Device Manager -> Update Driver -> this directory"
         Write-Host ""
         #
-        # This warning named XP x64 as the only amd64 guest and Vista x64 /
-        # Windows 7 x64 as outside the tier until 2026-09-18; roadmap task 21.8
-        # closed on 2026-09-16 with both in it, on an F8 boot only.
+        # Until 2026-10-04 this warning named the three guests the miniport's
+        # amd64 build ran on (tasks 21.5, 21.8 and 22.5). That standing was the
+        # miniport's and left the tree with it: the HCD is a different driver,
+        # and its amd64 build has its first guest leg in task 28-A.2 (XP x64)
+        # and the rest in 28-V.1. Restate this when those legs are read.
         #
-        Write-Warn "Three guests have run an amd64 build: Windows XP x64 SP2 (both shipping"
-        Write-Warn "flavours, roadmap task 21.5), Vista x64 SP2 and Windows 7 x64 SP1 (the qemu"
-        Write-Warn "build, tasks 21.8 and 22.5). Windows Server 2003 x64 rests on being the same"
-        Write-Warn "operating system as XP x64 and was never booted. On Vista x64 and 7 x64 the"
-        Write-Warn "driver loads only on a boot with signature enforcement disabled from F8."
-        Write-Warn "No amd64 build has ever run on real hardware. Treat a guest booted from this"
-        Write-Warn "media as the experiment it is, and do not put it on a machine you need working."
+        Write-Warn "This is the successor HCD, not the 1.2.0.0 miniport, and the guests the"
+        Write-Warn "miniport's amd64 build ran on say nothing about it. Its amd64 build is read"
+        Write-Warn "in QEMU guests only (roadmap-hcd.md tasks 28-A.2 and 28-V.1), XP x64 first."
+        Write-Warn "Windows Server 2003 x64 rests on being the same operating system as XP x64."
+        Write-Warn "On Vista x64 and 7 x64 the driver loads only on a boot with signature"
+        Write-Warn "enforcement disabled from F8. No amd64 build has ever run on real hardware."
+        Write-Warn "Treat a guest booted from this media as the experiment it is."
     } else {
         Write-Host "  Win98    Device Manager -> the xHCI device -> Update Driver -> Specify a location"
         Write-Host "  Win2000  Device Manager -> the xHCI device -> Update Driver -> Have Disk"

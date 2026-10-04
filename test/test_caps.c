@@ -214,10 +214,12 @@ static void test_intel_shape(void)
         CHECK_EQ(XhciPortClass(&map, i), XHCI_PORT_CLASS_USB3_COMPANION,
                  "USB 3.0 companion port");
         CHECK_EQ(map.Companion[i - 1], i - 4, "paired back");
-        CHECK_EQ(XhciPortIsManaged(&map, i), 0,
-                 "USB 3.x ports are never managed");
+        CHECK_EQ(XhciPortIsManaged(&map, i), 1,
+                 "USB 3.x ports are managed since 29-A.1");
+        CHECK_EQ(XhciPortIsUsb3(&map, i), 1, "and are USB 3.x");
     }
-    CHECK_EQ(map.ManagedPortCount, 14, "all 14 USB 2.0 ports are managed");
+    CHECK_EQ(XhciPortIsUsb3(&map, 11), 0, "a USB 2.0 companion is not USB 3.x");
+    CHECK_EQ(map.ManagedPortCount, 18, "all 18 ports are managed");
 
     CHECK_EQ(XhciPortSlotType(&map, 1, &value), XHCI_CAPS_OK, "slot type read");
     CHECK_EQ(value, 9, "USB2 port carries the USB2 slot type");
@@ -253,8 +255,9 @@ static void test_qemu_shape(void)
     for (i = 5; i <= 8; i++) {
         CHECK_EQ(XhciPortClass(&map, i), XHCI_PORT_CLASS_USB3_COMPANION,
                  "USB 3.0 companion");
+        CHECK_EQ(XhciPortIsManaged(&map, i), 1, "managed since 29-A.1");
     }
-    CHECK_EQ(map.ManagedPortCount, 4, "four managed ports");
+    CHECK_EQ(map.ManagedPortCount, 8, "all eight ports managed");
 }
 
 /* A USB 2.0-only controller: nothing to pair, everything managed. */
@@ -278,9 +281,9 @@ static void test_usb2_only_shape(void)
 
 /*
  * More USB 3.x ports than USB 2.0 ports: the surplus are orphans - physical
- * connectors with no USB 2.0 path, which this driver cannot serve at all
- * (AGENTS.md, "Port Strategy"). Naming them is the point; they must not look
- * like ordinary unmanaged ports.
+ * connectors with no USB 2.0 path. Since 29-A.1 they are served at
+ * SuperSpeed; what the name still says is that they have nowhere to fall
+ * back to (29-A.5).
  */
 static void test_orphan_usb3(void)
 {
@@ -299,18 +302,18 @@ static void test_orphan_usb3(void)
         CHECK_EQ(XhciPortClass(&map, i), XHCI_PORT_CLASS_USB3_ORPHAN,
                  "USB 3.x port with no USB 2.0 companion");
         CHECK_EQ(map.Companion[i - 1], 0, "unpaired");
-        CHECK_EQ(XhciPortIsManaged(&map, i), 0, "and unmanaged");
+        CHECK_EQ(XhciPortIsManaged(&map, i), 1, "and managed");
     }
-    CHECK_EQ(map.ManagedPortCount, 2, "only the two USB 2.0 ports");
+    CHECK_EQ(map.ManagedPortCount, 6, "every port managed");
 }
 
 /*
- * A well-formed chain that leaves nothing to manage: every port is USB 3.x.
- * The parser is right to accept it - it is a correct reading of a legal
- * controller - so the refusal belongs to the caller, and src/xhci_init.c makes
- * it (XHCI_CAPS_NO_MANAGED_PORTS) rather than starting a controller with no
- * port it can serve. This vector exists to pin the input that refusal keys on:
- * XHCI_CAPS_OK with a managed count of zero.
+ * An all-SuperSpeed controller. Until Phase 29 it left this driver nothing to
+ * manage and src/xhci_init.c refused it (XHCI_CAPS_NO_MANAGED_PORTS); since
+ * 29-A.1 every USB3 port is managed, so the same chain now has four ports to
+ * serve and the controller is accepted. The refusal still keys on a managed
+ * count of zero, which only a chain naming no port at all now produces
+ * (test_chain_shapes).
  */
 static void test_no_managed_ports(void)
 {
@@ -322,11 +325,11 @@ static void test_no_managed_ports(void)
 
     CHECK_EQ(XhciParseExtendedCaps(bar_read, NULL, 0x100, 0x800, 4, &map),
              XHCI_CAPS_OK, "an all-USB3 controller is a legal chain");
-    CHECK_EQ(map.ManagedPortCount, 0, "and leaves this driver nothing to do");
+    CHECK_EQ(map.ManagedPortCount, 4, "and is served since 29-A.1");
     for (i = 1; i <= 4; i++) {
         CHECK_EQ(XhciPortClass(&map, i), XHCI_PORT_CLASS_USB3_ORPHAN,
                  "every port is an orphan");
-        CHECK_EQ(XhciPortIsManaged(&map, i), 0, "unmanaged");
+        CHECK_EQ(XhciPortIsManaged(&map, i), 1, "managed");
     }
 }
 
@@ -718,13 +721,109 @@ static void test_speed_encode(void)
              XHCI_CAPS_OK, "default High Speed");
     CHECK_EQ(psiv, XHCI_PSIV_HS, "PSIV 3");
     /*
-     * SuperSpeed is refused even by the defaults, deliberately: USB 3.0 is out
-     * of scope, so answering would let a caller build a Slot Context for a
-     * device this driver has no path to. `XhciInitialMps0` refuses the same
-     * speed for the same reason.
+     * SuperSpeed was refused even by the defaults until Phase 29; since
+     * 29-A.1 its default ID is 4 (Gen 1x1), which a SuperSpeed hub's child
+     * will need in Phase 30.
      */
     CHECK_EQ(XhciPortPsivForSpeed(&map, 1, XHCI_SPEED_SUPER, &psiv),
-             XHCI_CAPS_NOT_FOUND, "SuperSpeed refused even by the defaults");
+             XHCI_CAPS_OK, "SuperSpeed has a default ID since 29-A.1");
+    CHECK_EQ(psiv, XHCI_PSIV_SS, "PSIV 4");
+}
+
+/*
+ * Task 29-A.1's vectors: the rate kept distinct from the class. Every
+ * SuperSpeed-class rate is XHCI_SPEED_SUPER; XhciPortRate is what tells
+ * 5 Gbit/s from 10 or 20, and SuperSpeed from SuperSpeedPlus.
+ *
+ * PSI DWORDs (7.2.1, to verify): PSIV 3:0, PSIE 5:4 (3 = Gb/s), PLT 7:6,
+ * PFD 8, LP 15:14 (1 = SuperSpeedPlus), PSIM 31:16.
+ */
+#define PSI_SS_FD    0x00050134UL   /* PSIV 4, 5 Gb/s, full duplex, LP 0  */
+#define PSI_G2X1     0x000A4135UL   /* PSIV 5, 10 Gb/s, LP 1 (Gen 2x1)    */
+#define PSI_G1X2     0x000A4136UL   /* PSIV 6, 10 Gb/s, LP 1 (Gen 1x2)    */
+#define PSI_G2X2     0x00144137UL   /* PSIV 7, 20 Gb/s, LP 1 (Gen 2x2)    */
+
+static void test_rate(void)
+{
+    static const ULONG psi2[3] = { PSI_FS, PSI_LS, PSI_HS };
+    static const ULONG ssp[4] = { PSI_SS_FD, PSI_G2X1, PSI_G1X2, PSI_G2X2 };
+    static const ULONG ssOnly[1] = { PSI_SS_FD };
+    XHCI_PORT_MAP map;
+    ULONG kbps;
+    ULONG plus;
+    ULONG speed;
+    ULONG psiv;
+
+    /* Gen 1 on qemu-xhci's shape: PSIC 0, the default table. */
+    bar_reset(0x800);
+    put_protocol(0x100, 4, 2, 0, 1, 4, 9, NULL, 0);
+    put_protocol(0x104, 0, 3, 0, 5, 4, 10, NULL, 0);
+    CHECK_EQ(XhciParseExtendedCaps(bar_read, NULL, 0x100, 0x800, 8, &map),
+             XHCI_CAPS_OK, "qemu shape parsed");
+    CHECK_EQ(XhciPortRate(&map, 5, 4, &kbps, &plus), XHCI_CAPS_OK,
+             "default PSIV 4 has a rate");
+    CHECK_EQ(kbps, 5000000UL, "5 Gbit/s");
+    CHECK_EQ(plus, 0, "Gen 1x1 is not SuperSpeedPlus");
+    CHECK_EQ(XhciPortRate(&map, 5, 5, &kbps, &plus), XHCI_CAPS_OK,
+             "default PSIV 5 on a USB3 group");
+    CHECK_EQ(kbps, 10000000UL, "Gen 2x1, 10 Gbit/s");
+    CHECK_EQ(plus, 1, "SuperSpeedPlus");
+    CHECK_EQ(XhciPortSpeedClass(&map, 5, 5, &speed), XHCI_CAPS_OK, "class");
+    CHECK_EQ(speed, XHCI_SPEED_SUPER, "and still the SuperSpeed class");
+    CHECK_EQ(XhciPortRate(&map, 5, 7, &kbps, &plus), XHCI_CAPS_OK,
+             "default PSIV 7");
+    CHECK_EQ(kbps, 20000000UL, "Gen 2x2, 20 Gbit/s");
+    CHECK_EQ(XhciPortRate(&map, 1, 5, &kbps, &plus), XHCI_CAPS_NOT_FOUND,
+             "PSIV 5 names nothing on a USB 2.0 group");
+    CHECK_EQ(kbps, 0, "and the outputs are zeroed");
+    CHECK_EQ(XhciPortRate(&map, 1, 3, &kbps, &plus), XHCI_CAPS_OK,
+             "High Speed has a rate too");
+    CHECK_EQ(kbps, 480000UL, "480 Mbit/s");
+    CHECK_EQ(plus, 0, "not SuperSpeedPlus");
+    CHECK_EQ(XhciPortIsUsb3(&map, 5), 1, "port 5 is USB 3.x");
+    CHECK_EQ(XhciPortIsUsb3(&map, 1), 0, "port 1 is not");
+
+    /* Each SuperSpeedPlus rate from PSI DWORDs. */
+    bar_reset(0x800);
+    put_protocol(0x100, 8, 2, 0, 1, 4, 9, psi2, 3);
+    put_protocol(0x108, 0, 3, 0x20, 5, 4, 10, ssp, 4);
+    CHECK_EQ(XhciParseExtendedCaps(bar_read, NULL, 0x100, 0x800, 8, &map),
+             XHCI_CAPS_OK, "USB 3.2 chain parsed");
+    CHECK_EQ(map.Protocols[1].Minor, 0x20, "minor revision 3.2");
+    CHECK_EQ(XhciPortRate(&map, 6, 4, &kbps, &plus), XHCI_CAPS_OK, "Gen 1x1");
+    CHECK_EQ(kbps, 5000000UL, "5 Gbit/s");
+    CHECK_EQ(plus, 0, "LP 0");
+    CHECK_EQ(XhciPortRate(&map, 6, 5, &kbps, &plus), XHCI_CAPS_OK, "Gen 2x1");
+    CHECK_EQ(kbps, 10000000UL, "10 Gbit/s");
+    CHECK_EQ(plus, 1, "SuperSpeedPlus");
+    CHECK_EQ(XhciPortRate(&map, 6, 6, &kbps, &plus), XHCI_CAPS_OK, "Gen 1x2");
+    CHECK_EQ(kbps, 10000000UL, "the same 10 Gbit/s: PORTLI tells the modes "
+                               "apart, not the rate");
+    CHECK_EQ(plus, 1, "SuperSpeedPlus");
+    CHECK_EQ(XhciPortRate(&map, 6, 7, &kbps, &plus), XHCI_CAPS_OK, "Gen 2x2");
+    CHECK_EQ(kbps, 20000000UL, "20 Gbit/s");
+    CHECK_EQ(XhciPortSpeedClass(&map, 6, 7, &speed), XHCI_CAPS_OK, "class");
+    CHECK_EQ(speed, XHCI_SPEED_SUPER, "the SuperSpeed class");
+    CHECK_EQ(XhciPortPsivForSpeed(&map, 6, XHCI_SPEED_SUPER, &psiv),
+             XHCI_CAPS_OK, "SuperSpeed by class");
+    CHECK_EQ(psiv, 4, "is the Gen 1x1 entry, not the first SSP one");
+    CHECK_EQ(XhciPortRate(&map, 6, 8, &kbps, &plus), XHCI_CAPS_NOT_FOUND,
+             "a PSIV the table does not list");
+
+    /* A PSI table that lists no SuperSpeedPlus rate. */
+    bar_reset(0x800);
+    put_protocol(0x100, 0, 3, 0x10, 1, 2, 10, ssOnly, 1);
+    CHECK_EQ(XhciParseExtendedCaps(bar_read, NULL, 0x100, 0x800, 2, &map),
+             XHCI_CAPS_OK, "SuperSpeed-only table parsed");
+    CHECK_EQ(XhciPortRate(&map, 1, 4, &kbps, &plus), XHCI_CAPS_OK, "Gen 1");
+    CHECK_EQ(plus, 0, "not SuperSpeedPlus");
+    CHECK_EQ(XhciPortRate(&map, 1, 5, &kbps, &plus), XHCI_CAPS_NOT_FOUND,
+             "the table replaces the defaults: no PSIV 5 here");
+    CHECK_EQ(XhciPortSpeedClass(&map, 1, 5, &speed), XHCI_CAPS_OK, "decode");
+    CHECK_EQ(speed, XHCI_SPEED_UNKNOWN, "unknown, never a default");
+
+    CHECK_EQ(XhciPortRate(&map, 1, 4, NULL, &plus), XHCI_CAPS_BAD_PARAM,
+             "NULL output refused");
 }
 
 /* ------------------------------------------------------------------ */
@@ -1036,6 +1135,14 @@ static void test_hc_info(void)
                              HC_MAPPED, &info),
                  XHCI_HC_OK, "a 1.1 controller derives");
         CHECK_EQ(info.Fsc, 1UL, "and its HCCPARAMS2 bit 2 is FSC");
+        CHECK_EQ(info.Lec, 0UL, "bit 4 clear: no LEC");
+
+        CHECK_EQ(derive_hcc2(cap11, HC_HCSPARAMS1, HC_HCSPARAMS2,
+                             HC_HCCPARAMS1, 0x00000010UL, HC_DBOFF, HC_RTSOFF,
+                             HC_MAPPED, &info),
+                 XHCI_HC_OK, "a 1.1 controller with LEC");
+        CHECK_EQ(info.Lec, 1UL, "HCCPARAMS2 bit 4 is LEC (29-A.6)");
+        CHECK_EQ(info.Fsc, 0UL, "and is not FSC");
 
         CHECK_EQ(derive_hcc2(cap11, HC_HCSPARAMS1, HC_HCSPARAMS2,
                              HC_HCCPARAMS1, ~fscSet, HC_DBOFF, HC_RTSOFF,
@@ -1086,6 +1193,7 @@ static void test_hc_info(void)
                              "controller - the register is optional");
         CHECK_EQ(info.Fsc, 0UL,
                  "but it is not data either, and bit 2 of it is a 1");
+        CHECK_EQ(info.Lec, 0UL, "nor is bit 4: LEC stays 0");
 
         CHECK_EQ(derive_hcc2(cap11, HC_HCSPARAMS1, HC_HCSPARAMS2,
                              HC_HCCPARAMS1, fscSet, HC_DBOFF, HC_RTSOFF,
@@ -1423,12 +1531,12 @@ static void check_fleet_port_map(const XHCI_PORT_MAP *map)
     }
     for (i = 13; i <= 18; i++) {
         CHECK_EQ(XhciPortClass(map, i), XHCI_PORT_CLASS_USB3_COMPANION,
-                 "ports 13-18: USB3 companion (unmanaged)");
+                 "ports 13-18: USB3 companion");
         CHECK_EQ(map->Companion[i - 1], i - 6, "paired back with 7-12");
-        CHECK_EQ(XhciPortIsManaged(map, i), 0, "unmanaged");
+        CHECK_EQ(XhciPortIsManaged(map, i), 1, "managed since 29-A.1");
     }
-    /* The report's FACT line: usb2ports=12. */
-    CHECK_EQ(map->ManagedPortCount, 12, "12 managed USB 2.0 ports");
+    /* The report's FACT line says usb2ports=12; the HCD manages all 18. */
+    CHECK_EQ(map->ManagedPortCount, 18, "18 managed ports");
 }
 
 /*
@@ -1582,6 +1690,7 @@ int main(void)
     test_protocol_refusals();
     test_speed_decode();
     test_speed_encode();
+    test_rate();
     test_hc_info();
     test_port_map_equal();
     test_digest_collision();

@@ -1,6 +1,6 @@
 # 09 - The post-release unattended run
 
-Phase 16, task 16.1 (added after the `1.0.0.0` cut as task 14.3, carried for a day as task 15.5). What an
+Phase 16, task 16.1 (added after the `1.0.0.0` cut as task 14.3, carried for a day as task 15.5), adapted to the host controller driver by roadmap-hcd task 32.2 (section 13). What an
 automated run on freshly installed guests has to do, what it is allowed to
 cost a tester, and which readings it can honestly produce. Written before the
 script, because the decisions in sections 2 and 7 were taken by the project
@@ -683,3 +683,146 @@ system has a driver for binds, unbinds and binds again on the same root port
 with no fatal status, no refused endpoint open and the transfer identity
 intact, and the one row that fails does so on a Windows 98 file-copy prompt
 the harness is not allowed to answer.
+
+## 13. Under the host controller driver, from `2.0.0.0` (roadmap-hcd task 32.2)
+
+Sections 1 to 12 were written for the miniport, and their rules carry over
+whole: one manual rung (2.1), the `qemu` flavour as the binary and never a
+reading of the release (2.2), the qualifier and the log channel out of scope
+(2.3), TCG (2.5), fresh images cloned out of pre-driver snapshots and stamped
+(3), design record 06's verdicts with `ExpectNoDriver` (4.2), the replug leg
+judged from counters (5), the refusals (6), the preparation (8) and the
+record (9). This section says what the HCD changes, what the run must learn
+for the two clauses task 32.2 adds - a UAS row and a SuperSpeed row - and what
+is still owed. It is a design, written before the run: nothing here has run
+on the HCD yet (`TODO(32.3)`: the first post-release run of `2.0.0.0`).
+
+### 13.1 What the harness already does for the HCD
+
+Read from the code on 2026-10-04, not run:
+
+- **The expectation set is `matrix-hcd.psd1`** (`Driver = 'hcd'`), with an
+  `ExpectedSpeed` on every row and the usbport and virtual-hub labels refused
+  (`scripts/vm-matrix/README.md`, "Two expectation sets"). Section 4.1's
+  inert audio clauses and `MayWedgeGuest` are copied into it unchanged.
+- **The second witness of section 3.3 is the HCD's counter block.** The
+  stamp's prep-boot check and the run's offset check compare the table's
+  `SIZEOF` with the size the running driver prints in its `counters size`
+  line, where the miniport printed `MiniPortExtensionSize`
+  (`Get-DriverSizeName`, used by `run-matrix.ps1` and `prepare-image.ps1`).
+  The amd64 targets read `offsets-hcd-amd64.txt`.
+- **The header's `vhub:` line** prints "not applicable (the HCD has no
+  virtual-hub switch)" (`lib/verdict.ps1`, `HcdNoSwitchLine`), so section 9's
+  header keeps its shape and a diff against a `1.x` report shows the line
+  change rather than a missing line.
+
+### 13.2 The Windows 98 storage prerequisite
+
+Storage on Windows 98 SE under the HCD needs NUSB's mass-storage component -
+`USBSTOR.INF`/`.SYS`, `USBNTMAP.INF`/`.SYS` and `USBMPHLP.PDR` - for Bulk-Only
+and UAS alike (roadmap-hcd, decisions table; the release notes, "Windows 98 SE
+and ME: the stock install, and storage"). Without them a Bulk-Only device
+reads Code 28, which the counters show as `NODRIVER`, and a UAS device installs
+`xhciuas.sys` and then sits at Code 2 with the driver never started, because
+NTKERN will not load a devnode whose named upper filter, `USBNTMAP.SYS`, is
+missing (the SweetLow-only reading, `out\phase28\sweetlow-only\report.md`,
+development host A, 2026-10-04; the stock reading, `out\phase28\stock98\notes.txt`).
+
+Target `2a-fresh` already meets it. Its source snapshot, `post-nusb`
+(section 3.1), is an install with NUSB 3.3, whose install places the five
+files, so the storage rows have their class drivers on that image as they
+always had. That is the reason not to move the post-release run to a stock
+Windows 98 SE base, although stock is now a supported configuration for
+everything but storage: on a stock base every storage row would read its
+prerequisite, not the driver. A stock target, if one is ever added, carries
+`ExpectNoDriver` entries on its storage rows saying so (as 26-V.3's stock
+reading did by hand, `runs/run-26.md`), and no UAS row at all, since a UAS
+device there never reaches its driver. The SweetLow-only configuration needs
+the same treatment and is not a post-release target either.
+
+### 13.3 The UAS row
+
+The device population already has `usb-uas/fs` (QEMU's `usb-uas` with a
+`scsi-hd` LUN), which QEMU 11.1 presents at High Speed on a USB 2.0 port, so
+`matrix-hcd.psd1` carries it with `ExpectedSpeed = 'HS'` and the row name
+kept. What changes under the HCD is the expectation. Under the miniport no
+target had a UAS class driver, and the row's `ExpectNoDriver` entries say so
+for all four fresh targets. Under `2.0.0.0` the package carries `xhciuas.sys`,
+so on a prepared image the row is expected to bind: `endpoints opened`
+advances, and at SuperSpeed (13.4) the bus opens streams. The entries become
+wrong, and they are removed from the set the post-release run reads, in the
+same change that teaches the images the class (owed, 13.6).
+
+The preparation teaches it like any other class (section 8 step 5): the
+transfer drive carries the whole `qemu` package, `xhciuas.inf` and
+`xhciuas.sys` included, and `prepare-image.ps1 -Attach uas` with the row's
+`scsi-hd` child raises the Found New Hardware wizard for "xHCI98 USB Attached
+SCSI Storage", which the operator answers from the transfer drive. On Windows
+98 SE that install asks for no restart (roadmap-hcd 31-V.1). On the NT targets
+the wizard is the same rung. Once taught, the run meets no wizard, as section
+2.1 requires.
+
+What the UAS row cannot show, stated as for section 4.3: QEMU's `usb-uas` is
+UAS only, with no Bulk-Only alternate setting (roadmap-hcd 31-0), so the
+forced-Bulk-Only value is not a post-release reading; it is 31-V.2's and the
+bench's.
+
+### 13.4 The SuperSpeed row
+
+A SuperSpeed row needs three things the harness does not have today:
+
+1. **SuperSpeed root ports in the launcher.** `run-matrix.ps1` and
+   `prepare-image.ps1` start `qemu-xhci` with `p3=0`, which leaves no USB 3.x
+   root port, under a comment from the miniport's time ("USB 3.0 is out of
+   scope"). The post-release targets need `p3` ports; a device that can do
+   SuperSpeed is then attached at 5000 Mb/s on one of them (the Phase 28
+   readings used `qemu-xhci p2=4,p3=4`).
+2. **A fourth speed in the expectation.** `Get-HcdSpeedExpectationTexts`
+   knows `HS`, `FS` and `LS`. An `'SS'` row asserts that `port speed decoded
+   - superspeed` and `slot context speed - superspeed` each advance by the
+   row's count and the other speeds do not, and that `slot speed disagreeing
+   with port speed` stays zero; both counters are already in the HCD's block
+   (`scripts/vm-matrix/README.md`, the SuperSpeed group).
+3. **Two rows.** `usb-storage/ss`: QEMU's `usb-storage` on a USB 3.x root
+   port, `ExpectedSpeed = 'SS'`, expecting each target's `usbstor.sys` to bind
+   (`endpoints opened` advances), as 29-V.1 read by hand on both primary
+   targets. `usb-uas/ss`: `usb-uas` on a USB 3.x root port, `ExpectedSpeed =
+   'SS'`, expecting `xhciuas.sys` to bind with streams opened. On Windows 98
+   SE both rest on 13.2's prerequisite, which `2a-fresh` meets.
+
+**The witness.** In this run the SuperSpeed witness is those two counters,
+because section 2.3 keeps `XHCISNAP` out of the run. The hand run's witness is
+`XHCISNAP`'s report: the decoded port speed and the slot-speed field
+`XHCISNAP` gained for task 32.2, the slot table's `PSIV` and `speed` columns
+(`a60f6e5`; `docs/using/release-acceptance-test.md`, 8.8). The two are the
+same fact read through two routes - the counters from the debug console of
+the `qemu` build, the report through the door - so the run and the hand
+acceptance can be compared row for row. Device Manager is a witness for
+neither (design record 13 section 8.4).
+
+Like section 4.3's storage row, neither SuperSpeed row round-trips a file;
+29-V.1 and 31-V.1 did, by hand, and task 32.3's ten install legs read a round
+trip on every guest from the release asset.
+
+### 13.5 The targets
+
+The four fresh targets of sections 2.4 and 2.6 stand: `2a-fresh` (Windows 98
+SE with NUSB 3.3), `2b-fresh` (Windows 2000 SP4 with no USB controller ever
+attached), `xp64-fresh` (the amd64 HCD) and `win7-fresh` (32-bit Windows 7).
+Each is cloned again and stamped `base-<DriverVer>-qemu` for `2.0.0.0`
+(section 3.2: an image prepared for one release may not judge the next, and
+the `1.x` stamps name the miniport). The miniport's `ExpectNoDriver` guesses
+for `xp64-fresh` and `win7-fresh` were taken against usbport's class-driver
+behaviour; the HCD's first post-release run corrects them as section 4.2 says.
+
+### 13.6 What is owed before the first HCD post-release run
+
+- The launcher's `p3` ports and the `'SS'` speed (13.4, items 1 and 2), with
+  self-test cases in `selftest.ps1` for the new speed.
+- The two SuperSpeed rows in `matrix-hcd.psd1`, and the UAS row's
+  `ExpectNoDriver` entries removed (13.3), each target's entry as the run
+  measures it.
+- The four fresh images re-prepared on the `2.0.0.0` `qemu` package, with
+  `uas` taught (13.3), and stamped.
+- `TODO(32.3)`: the run itself, after the cut, with its reports under
+  `out\post-release\2.0.0.0\`.

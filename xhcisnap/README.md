@@ -114,6 +114,16 @@ published, so what is left is an absence and not a mixture. (The `.TXT` was
 left standing on that branch until the 2026-09-16 audit, which made the newest
 file in the directory a report of a set that had just been deleted.)
 
+The `.TXT` also carries, from a 2.0.0.0 driver and at every level, one line per
+device the driver holds a slot for: its Slot ID, root port, Route String and
+tier, the Output Slot Context's state and Speed field (the raw PSIV, xHCI
+Table 6-4), that PSIV decoded on the root port's protocol - Low, Full, High,
+SuperSpeed or SuperSpeedPlus - and for a SuperSpeed link the rate it trained
+at and its Gen and lane count. It is the witness of the speed a device's slot
+actually carries (roadmap-hcd.md 29-E.1). It is read from a third snapshot
+region that is not saved as a raw file; a 1.x driver does not serve it, and
+the report says so. `-selftest-slots` prints the decode over canned records.
+
 The PORTSC decode is printed on screen whatever the level, because that is what
 the bench reads on the spot. The headline test is per port: a port reporting a
 device connected with `PP` clear is Finding Q read off the register, whatever
@@ -257,8 +267,8 @@ checks now, and reports, is only that every window's detector agreed.
 
 Only three of those four numbers are fixed. The first control reports whether
 this driver answered, so it is state-dependent by design: `0` when the channel
-is on and the miniport answers (which is what this reading was taken with), and
-`6` (`MINIPORT DECLINED`) when it is off, which is where every machine sits by
+is on and the driver answers (which is what this reading was taken with), and
+`6` (`DRIVER DECLINED`; `MINIPORT DECLINED` before 2.0.0.0) when it is off, which is where every machine sits by
 default. A `6` there is the ordinary shipping reading and not a fault. The
 other three are properties of the route rather than of the driver's consent,
 and do not move.
@@ -299,8 +309,8 @@ So run `-probe` before trusting anything, and read it this way:
 
 | `-probe` says | It means |
 |---|---|
-| `the miniport ANSWERED` | the channel is live; take the dump |
-| `the request reached a miniport and it DECLINED` | usbport is fine. Two situations and the driver cannot tell you which; see below |
+| `the driver ANSWERED` (`the miniport ANSWERED` before 2.0.0.0) | the channel is live; take the dump |
+| `the request reached the controller's driver and it DECLINED` (`... a miniport ...` before 2.0.0.0) | the route is fine. Two situations and the driver cannot tell you which; see below |
 | `cannot open` | no usbport HCD link on this machine at all |
 | opens, but `DeviceIoControl failed` | something else owns that name; try `-c 1`, `-c 2` |
 

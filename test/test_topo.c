@@ -21,6 +21,21 @@
  * - enforced by routing every claim in this file through one wrapper, so a
  * vector written later cannot opt out.
  *
+ * Roadmap task 27-A.4 adds the vectors the bus's own hub class is held to,
+ * since on Windows 2000 they are the only coverage the High-Speed hub and
+ * transaction-translator paths have (roadmap-hcd.md, Phase 27 checkpoint):
+ * table-driven placements with their Route String, Root Hub Port Number and
+ * TT triple, each row citing the design record it was typed from; the depth
+ * limit; subtree removal; malformed hub descriptors; and the well-formedness
+ * of test\hub_port_vectors.h, the port state-machine table 27-A.1 will run.
+ *
+ * KNOWN GAPS. Where src\xhci_topo.c does not yet do what a design record
+ * says, the vector is a KNOWN_GAP rather than a CHECK: it prints what the
+ * record expects and is counted apart, and it does not fail the suite. The
+ * expected value is still the record's - a gap is a statement that the code
+ * is behind, never that the record is wrong. A gap that starts to hold says
+ * so loudly, and should then become a CHECK.
+ *
  * Build and run:  test\run-host-tests.cmd
  * Exit code = number of failed checks (0 = pass).
  *
@@ -32,6 +47,7 @@
 #include "../src/xhci_usbport.h"
 #include "../src/xhci_topo.h"
 #include "test_harness.h"
+#include "hub_port_vectors.h"
 
 /*
  * A node's fields are read through this, never off a raw pointer.
@@ -161,6 +177,29 @@ static ULONG foldReply(PXHCI_TOPOLOGY t,
                        ULONG length)
 {
     return XhciTopoObserveReply(t, s, data, length, &lastGone);
+}
+
+/* ------------------------------------------------------------------ */
+/* Known gaps (see the file header)                                    */
+/* ------------------------------------------------------------------ */
+
+static int gapsOpen;
+static int gapsHeld;
+
+#define KNOWN_GAP(holds, id, what) \
+    knownGapImpl(((holds) != 0), (id), (what), __LINE__)
+
+static void knownGapImpl(int holds, const char *id, const char *what,
+                         int line)
+{
+    if (holds) {
+        gapsHeld++;
+        printf("NOTE test_topo.c:%d: known gap %s now holds - make it a "
+               "CHECK and take it off the list: %s\n", line, id, what);
+        return;
+    }
+    gapsOpen++;
+    printf("KNOWN GAP test_topo.c:%d: %s: %s\n", line, id, what);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1197,6 +1236,972 @@ static void testTableFull(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* Task 27-A.4: placements                                             */
+/* ------------------------------------------------------------------ */
+
+/*
+ * One row is a bus: up to six hubs, each on a root port or on a port of an
+ * earlier hub, and one device below one of them. What the row asserts is
+ * what the device's own Slot Context must carry - Route String, Root Hub Port
+ * Number, and the TT triple (Parent Hub, Parent Port, MTT) - typed out by hand
+ * from the design record the row names, never recomputed through the code's
+ * own shift (the test_ctx.c rule).
+ *
+ * TtHub is the TT hub's address in the graph; turning it into a Slot ID is the
+ * caller's (design record 02 section 1). The speed gate is the caller's too:
+ * `XhciTopoTtFor` answers for a device that is not High Speed, and design
+ * record 13 section 10.4 gives a High-Speed device no TT at all, so the runner
+ * applies that gate exactly once, below, and a High-Speed row expects zeros.
+ */
+#define TV_HUBS 6
+#define TV_ROOT 0xFFUL
+#define TV_HS   XHCI_SPEED_HIGH
+#define TV_FS   XHCI_SPEED_FULL
+#define TV_LS   XHCI_SPEED_LOW
+
+typedef struct _TV_HUB {
+    ULONG Address;
+    ULONG Parent;       /* index into Hub[], or TV_ROOT                  */
+    ULONG Port;         /* the root port under TV_ROOT, else the port on
+                         * the parent                                    */
+    ULONG Speed;
+    ULONG MultiTt;      /* a SET_INTERFACE(1) completed on it            */
+} TV_HUB;
+
+typedef struct _TV_PLACEMENT {
+    const char *Name;   /* the case, and the record it was typed from    */
+    ULONG HubCount;
+    TV_HUB Hub[TV_HUBS];
+    ULONG DevParent;    /* index into Hub[]                              */
+    ULONG DevPort;
+    ULONG DevSpeed;
+    ULONG TooDeep;
+    ULONG Tier;
+    ULONG Route;
+    ULONG RootPort;
+    ULONG TtHub;        /* 0: no TT                                      */
+    ULONG TtPort;
+    ULONG Mtt;
+} TV_PLACEMENT;
+
+/* Five hubs from root port 2, hub N on port N + 2 of the one above: the
+ * chain buildChain() below makes, typed out for the table. */
+#define TV_CHAIN5(sp) \
+    { { 2, TV_ROOT, 2, sp, 0 }, { 3, 0, 3, sp, 0 }, { 4, 1, 4, sp, 0 }, \
+      { 5, 2, 5, sp, 0 }, { 6, 3, 6, sp, 0 } }
+
+static const TV_PLACEMENT placements[] = {
+    { "FS device on a single-TT HS hub on a root port "
+      "(DR02 s2 step 3; DR13 s10.4)",
+      1, { { 2, TV_ROOT, 3, TV_HS, 0 } }, 0, 2, TV_FS,
+      0, 1, 0x00002UL, 3, 2, 2, 0 },
+    { "LS device on a single-TT HS hub (DR12 s3.6 and s8: a real HS hub, "
+      "Full and Low Speed behind it, single TT)",
+      1, { { 2, TV_ROOT, 3, TV_HS, 0 } }, 0, 4, TV_LS,
+      0, 1, 0x00004UL, 3, 2, 4, 0 },
+    { "FS device on a multi-TT HS hub (DR12 s8, multi TT; DR02 Step 3: "
+      "the child's MTT follows the enabled alternate setting)",
+      1, { { 2, TV_ROOT, 3, TV_HS, 1 } }, 0, 2, TV_FS,
+      0, 1, 0x00002UL, 3, 2, 2, 1 },
+    { "LS device on a multi-TT HS hub (DR12 s8, multi TT)",
+      1, { { 2, TV_ROOT, 3, TV_HS, 1 } }, 0, 7, TV_LS,
+      0, 1, 0x00007UL, 3, 2, 7, 1 },
+    { "HS device on a HS hub carries no TT (DR02 s1; DR13 s10.4: "
+      "Parent Hub Slot ID only if FS or LS, else 0)",
+      1, { { 2, TV_ROOT, 3, TV_HS, 1 } }, 0, 2, TV_HS,
+      0, 1, 0x00002UL, 3, 0, 0, 0 },
+    { "FS hub on HS hub port 2, FS device on its port 1: the TT port is 2 "
+      "(DR13 s10.4, the 2.2.1 example)",
+      2, { { 2, TV_ROOT, 2, TV_HS, 0 }, { 3, 0, 2, TV_FS, 0 } }, 1, 1, TV_FS,
+      0, 2, 0x00012UL, 2, 2, 2, 0 },
+    { "the same below a multi-TT HS hub (DR02 Step 3; DR13 s10.4 MTT row)",
+      2, { { 2, TV_ROOT, 2, TV_HS, 1 }, { 3, 0, 2, TV_FS, 0 } }, 1, 1, TV_FS,
+      0, 2, 0x00012UL, 2, 2, 2, 1 },
+    { "LS device two FS hubs below HS hub port 5: the TT port at any depth "
+      "is the one on the HS hub (DR02 s1, PortNumber)",
+      3, { { 2, TV_ROOT, 1, TV_HS, 0 }, { 3, 0, 5, TV_FS, 0 },
+           { 4, 1, 3, TV_FS, 0 } }, 2, 2, TV_LS,
+      0, 3, 0x00235UL, 1, 2, 5, 0 },
+    { "HS hub below a multi-TT HS hub: the nearer one is the TT, with its "
+      "own single TT (DR02 s1, nearest High-Speed ancestor)",
+      2, { { 2, TV_ROOT, 4, TV_HS, 1 }, { 3, 0, 6, TV_HS, 0 } }, 1, 1, TV_FS,
+      0, 2, 0x00016UL, 4, 3, 1, 0 },
+    { "the measured all-FS bus: tier 2, route 0x00012, root port 6, parent "
+      "hub 4 port 1, and no TT although usbport claimed hub 2 port 2 "
+      "(DR02 Step 3 observed)",
+      2, { { 2, TV_ROOT, 6, TV_FS, 0 }, { 4, 0, 2, TV_FS, 0 } }, 1, 1, TV_FS,
+      0, 2, 0x00012UL, 6, 0, 0, 0 },
+    { "FS device on FS hub port 1: route 0x00001 (DR02 Step 4 observed)",
+      1, { { 2, TV_ROOT, 2, TV_FS, 0 } }, 0, 1, TV_FS,
+      0, 1, 0x00001UL, 2, 0, 0, 0 },
+    { "...moved to port 3: route rebuilt to 0x00003 (DR02 Step 4 observed)",
+      1, { { 2, TV_ROOT, 2, TV_FS, 0 } }, 0, 3, TV_FS,
+      0, 1, 0x00003UL, 2, 0, 0, 0 },
+    { "LS device on a FS hub on a root port: no TT (roadmap 27-V.1's QEMU "
+      "row; DR13 s10.4, an all-FS path)",
+      1, { { 2, TV_ROOT, 5, TV_FS, 0 } }, 0, 4, TV_LS,
+      0, 1, 0x00004UL, 5, 0, 0, 0 },
+    { "five HS hubs, FS device at tier 5: five nibbles, TT the fifth hub "
+      "(DR13 s10.3, depth; xhci-data-structures.md, Route String tier order)",
+      5, TV_CHAIN5(TV_HS), 4, 7, TV_FS,
+      0, 5, 0x76543UL, 2, 6, 7, 0 },
+    { "five FS hubs, FS device at tier 5: the 27-V.1 chain, no TT "
+      "(DR13 s10.3; roadmap 27-V.1)",
+      5, TV_CHAIN5(TV_FS), 4, 7, TV_FS,
+      0, 5, 0x76543UL, 2, 0, 0, 0 },
+    { "a sixth hub in the chain: its device is too deep and the route is "
+      "left as the parent's (DR13 s10.3; xhci_topo.h XHCI_TOPO_MAX_TIER)",
+      6, { { 2, TV_ROOT, 2, TV_HS, 0 }, { 3, 0, 3, TV_HS, 0 },
+           { 4, 1, 4, TV_HS, 0 }, { 5, 2, 5, TV_HS, 0 },
+           { 6, 3, 6, TV_HS, 0 }, { 7, 4, 7, TV_HS, 0 } }, 5, 1, TV_FS,
+      1, 6, 0x76543UL, 2, 0, 0, 0 },
+    { "port 15 on a HS hub: nibble F (xHCI Table 6-4 footnote 106, as "
+      "quoted in xhci-data-structures.md)",
+      1, { { 2, TV_ROOT, 1, TV_HS, 0 } }, 0, 15, TV_FS,
+      0, 1, 0x0000FUL, 1, 2, 15, 0 },
+    { "port 16 clamps to F and the TT port stays 16: only the route clamps "
+      "(footnote 106; DR13 s10.4)",
+      1, { { 2, TV_ROOT, 1, TV_HS, 0 } }, 0, 16, TV_FS,
+      0, 1, 0x0000FUL, 1, 2, 16, 0 },
+    { "port 255 clamps to F (footnote 106)",
+      1, { { 2, TV_ROOT, 1, TV_HS, 0 } }, 0, 255, TV_LS,
+      0, 1, 0x0000FUL, 1, 2, 255, 0 },
+    { "a hub on port 20, a device on port 14 below it: 0x000EF "
+      "(footnote 106)",
+      2, { { 2, TV_ROOT, 1, TV_HS, 0 }, { 3, 0, 20, TV_HS, 0 } }, 1, 14, TV_FS,
+      0, 2, 0x000EFUL, 1, 3, 14, 0 }
+};
+
+#define TV_PLACEMENTS (sizeof(placements) / sizeof(placements[0]))
+
+/*
+ * Identify an attached hub the way the bus does (design record 13 section
+ * 10.3 step 2, the descriptor), then select its multi-TT interface where the
+ * row asks for it. The order is descriptor first, the order usbhub used;
+ * the bus's own order (SET_INTERFACE first) is the closed gap G1 below.
+ */
+static void identifyHub(ULONG address, ULONG multiTt)
+{
+    XHCI_SETUP_PACKET s;
+    XHCI_TOPO_SNOOP snoop;
+
+    s = hubDescRequest();
+    XhciTopoObserveSetup(&topo, address, &s, &snoop);
+    (void)foldReply(&topo, &snoop, hubDescBytes, 11);
+    if (multiTt) {
+        XhciTopoApplySetInterface(&topo, address, 1);
+    }
+}
+
+static void runPlacement(const TV_PLACEMENT *v)
+{
+    XHCI_TOPO_CHILD at;
+    XHCI_TOPO_TT tt;
+    ULONG i;
+    ULONG parent;
+    ULONG haveTt;
+    ULONG slotTtHub;
+    ULONG slotTtPort;
+    ULONG slotMtt;
+    int before;
+
+    before = failures;
+    resetTopo();
+
+    for (i = 0; i < v->HubCount; i++) {
+        const TV_HUB *h;
+
+        h = &v->Hub[i];
+        if (h->Parent == TV_ROOT) {
+            CHECK_EQ(XhciTopoAttachRoot(&topo, h->Address, h->Port, 1,
+                                        h->Speed),
+                     1, "placement: a hub attaches on its root port");
+        } else {
+            CHECK_EQ(XhciTopoChildOf(&topo, v->Hub[h->Parent].Address,
+                                     h->Port, &at),
+                     1, "placement: a hub has a position below its parent");
+            CHECK_EQ(XhciTopoAttachChild(&topo, h->Address, &at, h->Speed),
+                     1, "placement: a hub attaches below its parent");
+        }
+        identifyHub(h->Address, h->MultiTt);
+    }
+
+    parent = v->Hub[v->DevParent].Address;
+    CHECK_EQ(XhciTopoChildOf(&topo, parent, v->DevPort, &at), 1,
+             "placement: the device has a position");
+    CHECK_EQ(at.TooDeep, v->TooDeep, "placement: too deep or not");
+    CHECK_EQ(at.Tier, v->Tier, "placement: tier");
+    CHECK_EQ(at.Route, v->Route, "placement: Route String");
+    CHECK_EQ(at.RootPort, v->RootPort, "placement: Root Hub Port Number");
+    CHECK_EQ(at.HubAddress, parent, "placement: the hub it is plugged into");
+    CHECK_EQ(at.HubPort, v->DevPort, "placement: the port it is plugged into");
+
+    if (v->TooDeep) {
+        /* Refused, not truncated: nothing is attached and no slot is built,
+         * so there is no TT triple to assert. */
+        CHECK_EQ(XhciTopoAttachChild(&topo, 99, &at, v->DevSpeed), 0,
+                 "placement: a too-deep position is refused");
+    } else {
+        haveTt = XhciTopoTtFor(&topo, parent, v->DevPort, &tt);
+        if (v->DevSpeed == XHCI_SPEED_HIGH || !haveTt) {
+            slotTtHub = 0;
+            slotTtPort = 0;
+            slotMtt = 0;
+        } else {
+            slotTtHub = tt.HubAddress;
+            slotTtPort = tt.HubPort;
+            slotMtt = tt.MultiTt;
+        }
+        CHECK_EQ(slotTtHub, v->TtHub, "placement: Parent (TT) Hub");
+        CHECK_EQ(slotTtPort, v->TtPort, "placement: Parent (TT) Port Number");
+        CHECK_EQ(slotMtt, v->Mtt, "placement: MTT");
+    }
+
+    if (failures != before) {
+        printf("  ...in placement \"%s\"\n", v->Name);
+    }
+}
+
+static void testPlacements(void)
+{
+    ULONG i;
+
+    for (i = 0; i < TV_PLACEMENTS; i++) {
+        runPlacement(&placements[i]);
+    }
+}
+
+/*
+ * A device on a root port is no position of the graph's: Route String 0,
+ * Root Hub Port Number N, no TT fields (design record 12 section 3.6, the
+ * first rule; xHCI 4.3.3 footnote 8). With no hub address there is nothing
+ * to place it under and nothing to walk.
+ */
+static void testRootPortDevice(void)
+{
+    XHCI_TOPO_CHILD at;
+    XHCI_TOPO_TT tt;
+
+    resetTopo();
+    XhciTopoAttachRoot(&topo, 2, 1, 1, XHCI_SPEED_HIGH);
+    CHECK_EQ(XhciTopoChildOf(&topo, 0, 3, &at), 0,
+             "a root-port device has no hub to be placed under");
+    CHECK_EQ(XhciTopoTtFor(&topo, 0, 3, &tt), 0,
+             "and no TT, whatever hub sits on another root port");
+    CHECK_EQ(tt.HubAddress, 0, "(the TT answer is zeroed)");
+}
+
+/* Hub N of a chain on port N + 2 of hub N - 1, as TV_CHAIN5 types it. */
+static ULONG buildChain(ULONG base, ULONG rootPort, ULONG count, ULONG speed)
+{
+    XHCI_TOPO_CHILD at;
+    ULONG i;
+    ULONG attached;
+
+    attached = 0;
+    if (count == 0) {
+        return 0;
+    }
+    if (XhciTopoAttachRoot(&topo, base, rootPort, 1, speed)) {
+        attached++;
+    }
+    for (i = 1; i < count; i++) {
+        if (XhciTopoChildOf(&topo, base + i - 1, 2 + i, &at) &&
+            XhciTopoAttachChild(&topo, base + i, &at, speed)) {
+            attached++;
+        }
+    }
+    return attached;
+}
+
+/*
+ * The depth limit through the claim path the bus will use (design record 13
+ * section 10.3): a sixth hub is placed - "the bus addresses a hub at any depth
+ * it can route" - and a reset on one of its ports yields a claim that says
+ * too deep, which is what tells the bus not to configure it.
+ */
+static void testDepthClaim(void)
+{
+    XHCI_SETUP_PACKET s;
+    XHCI_TOPO_SNOOP snoop;
+    XHCI_TOPO_CHILD at;
+
+    resetTopo();
+    CHECK_EQ(buildChain(2, 2, 5, XHCI_SPEED_HIGH), 5, "(five hubs)");
+    CHECK_EQ(XhciTopoChildOf(&topo, 6, 7, &at), 1, "(a sixth position)");
+    CHECK_EQ(at.TooDeep, 0, "the sixth hub itself is routable");
+    CHECK_EQ(XhciTopoAttachChild(&topo, 7, &at, XHCI_SPEED_HIGH), 1,
+             "and is placed");
+    CHECK((nodeOrEmpty(XhciTopoFind(&topo, 7))->Flags &
+           XHCI_TOPO_F_TOO_DEEP) == 0,
+          "and not flagged: only its children are past the Route String");
+
+    s = portReset(1);
+    XhciTopoObserveSetup(&topo, 7, &s, &snoop);
+    CHECK_EQ(claim(&topo, &at), 1, "a reset below the sixth hub is claimed");
+    CHECK_EQ(at.TooDeep, 1, "and the claim says too deep");
+    CHECK_EQ(at.Tier, 6, "at tier 6");
+    CHECK_EQ(topo.ClaimsTooDeep, 1, "counted");
+    CHECK_EQ(XhciTopoAttachChild(&topo, 8, &at, XHCI_SPEED_FULL), 0,
+             "and nothing is placed from it");
+
+    s = portReset(7);
+    XhciTopoObserveSetup(&topo, 6, &s, &snoop);
+    CHECK_EQ(claim(&topo, &at), 1, "a reset below the fifth hub is claimed");
+    CHECK_EQ(at.TooDeep, 0, "and is addressable");
+    CHECK_EQ(at.Route, 0x76543UL, "with all five nibbles");
+    checkClaimIdentity(&topo, "depth claim");
+}
+
+/* `Topology.MaxTier` counts hubs only, so it reads 1 while a leaf sits at
+ * tier 2 (design record 02, Step 3's last bullet). */
+static void testMaxTierHubsOnly(void)
+{
+    XHCI_TOPO_CHILD at;
+
+    resetTopo();
+    XhciTopoAttachRoot(&topo, 2, 1, 1, XHCI_SPEED_HIGH);
+    XhciTopoChildOf(&topo, 2, 1, &at);
+    XhciTopoAttachChild(&topo, 3, &at, XHCI_SPEED_HIGH);
+    CHECK_EQ(XhciTopoChildOf(&topo, 3, 1, &at), 1, "(a leaf position)");
+    CHECK_EQ(at.Tier, 2, "the leaf is at tier 2");
+    CHECK_EQ(topo.MaxTier, 1, "and MaxTier still reads the deepest hub");
+}
+
+/*
+ * The FS hub's own Slot Context. Design record 02 Step 3: "A Full-Speed hub
+ * behind a multi-TT High-Speed hub carries MTT for both reasons, so the hub
+ * marking ORs the bit rather than assigning it"; design record 13 section
+ * 10.4's MTT row says the same. The OR is the caller's - `XhciTopoHubMark`
+ * gives a Full-Speed hub no MTT of its own (Table 6-4) and `XhciTopoTtFor` at
+ * the hub's own position gives the parent's - so this checks the two halves
+ * the caller ORs. Then TTT across all four think times, which only a
+ * High-Speed hub carries (Table 6-6 p.409).
+ */
+static void testHubMarkVectors(void)
+{
+    static const ULONG tttRows[][2] = {
+        /* wHubCharacteristics, TTT (bits 6:5) */
+        { 0x0000UL, 0 }, { 0x0020UL, 1 }, { 0x0040UL, 2 }, { 0x0060UL, 3 },
+        { 0x00E9UL, 3 }, { 0x0189UL, 0 }
+    };
+    XHCI_SETUP_PACKET s;
+    XHCI_TOPO_SNOOP snoop;
+    XHCI_TOPO_CHILD at;
+    XHCI_TOPO_HUBMARK mark;
+    XHCI_TOPO_TT tt;
+    UCHAR d[9];
+    ULONG i;
+
+    resetTopo();
+    XhciTopoAttachRoot(&topo, 2, 1, 1, XHCI_SPEED_HIGH);
+    identifyHub(2, 1);
+    XhciTopoChildOf(&topo, 2, 4, &at);
+    XhciTopoAttachChild(&topo, 3, &at, XHCI_SPEED_FULL);
+    identifyHub(3, 0);
+
+    CHECK_EQ(XhciTopoHubMark(XhciTopoFind(&topo, 3), XHCI_SPEED_FULL, &mark),
+             1, "the FS hub below the multi-TT hub is markable");
+    CHECK_EQ(mark.Hub, 1, "Hub = 1");
+    CHECK_EQ(mark.NumberOfPorts, 8, "its own port count");
+    CHECK_EQ(mark.TtThinkTime, 0, "no TTT on a FS hub");
+    CHECK_EQ(mark.MultiTt, 0, "and no MTT of its own");
+    CHECK_EQ(XhciTopoTtFor(&topo, 2, 4, &tt), 1,
+             "its own position is behind a TT");
+    CHECK_EQ(tt.HubAddress, 2, "the multi-TT hub's");
+    CHECK_EQ(tt.HubPort, 4, "on the port the FS hub is plugged into");
+    CHECK_EQ(mark.MultiTt | tt.MultiTt, 1,
+             "so its Slot Context carries MTT 1 by the OR");
+
+    /* The FS hub on a root port: DR02 Step 1's observed marking, Hub = 1,
+     * Number of Ports = 8, TTT = 0, MTT = 0, and no TT for its own slot. */
+    resetTopo();
+    XhciTopoAttachRoot(&topo, 2, 1, 1, XHCI_SPEED_FULL);
+    identifyHub(2, 0);
+    CHECK_EQ(XhciTopoHubMark(XhciTopoFind(&topo, 2), XHCI_SPEED_FULL, &mark),
+             1, "QEMU's usb-hub shape is markable");
+    CHECK_EQ(mark.Hub, 1, "Hub = 1 (DR02 Step 1)");
+    CHECK_EQ(mark.NumberOfPorts, 8, "Number of Ports = 8 (DR02 Step 1)");
+    CHECK_EQ(mark.TtThinkTime, 0, "TTT = 0 (DR02 Step 1)");
+    CHECK_EQ(mark.MultiTt, 0, "MTT = 0 (DR02 Step 1)");
+
+    for (i = 0; i < sizeof(tttRows) / sizeof(tttRows[0]); i++) {
+        resetTopo();
+        d[0] = 9;
+        d[1] = 0x29;
+        d[2] = 4;
+        d[3] = (UCHAR)(tttRows[i][0] & 0xFF);
+        d[4] = (UCHAR)(tttRows[i][0] >> 8);
+        d[5] = 50;
+        d[6] = 100;
+        d[7] = 0x00;
+        d[8] = 0xFF;
+        XhciTopoAttachRoot(&topo, 2, 1, 1, XHCI_SPEED_HIGH);
+        s = hubDescRequest();
+        XhciTopoObserveSetup(&topo, 2, &s, &snoop);
+        CHECK_EQ(foldReply(&topo, &snoop, d, 9), 1, "(descriptor folds)");
+        (void)XhciTopoHubMark(XhciTopoFind(&topo, 2), XHCI_SPEED_HIGH, &mark);
+        CHECK_EQ(mark.TtThinkTime, tttRows[i][1],
+                 "a HS hub's TTT is wHubCharacteristics bits 6:5");
+        (void)XhciTopoHubMark(XhciTopoFind(&topo, 2), XHCI_SPEED_FULL, &mark);
+        CHECK_EQ(mark.TtThinkTime, 0, "and the same hub at FS carries none");
+    }
+}
+
+/*
+ * Removal (design record 02 "Step 4 observed"; design record 13 section
+ * 10.5). The bus of the observed run: hub 1 (address 2) on root port 2, hub
+ * 2 (address 4) on its port 2, live devices on hub 1 ports 1 and 3 and on
+ * hub 2 port 1. Leaves are not graph nodes, so "gone 2 -> 5" is the caller's
+ * count of records; the graph's reading is its two hub nodes.
+ */
+static void buildRemovalBus(void)
+{
+    XHCI_SETUP_PACKET s;
+    XHCI_TOPO_SNOOP snoop;
+    XHCI_TOPO_CHILD at;
+    ULONG p;
+
+    resetTopo();
+    XhciTopoAttachRoot(&topo, 2, 2, 1, XHCI_SPEED_FULL);
+    XhciTopoChildOf(&topo, 2, 2, &at);
+    XhciTopoAttachChild(&topo, 4, &at, XHCI_SPEED_FULL);
+    for (p = 1; p <= 3; p++) {
+        s = portStatus((USHORT)p);
+        XhciTopoObserveSetup(&topo, 2, &s, &snoop);
+        (void)foldReply(&topo, &snoop, portConnectedBytes, 4);
+    }
+    s = portStatus(1);
+    XhciTopoObserveSetup(&topo, 4, &s, &snoop);
+    (void)foldReply(&topo, &snoop, portConnectedBytes, 4);
+}
+
+static void testRemovalVectors(void)
+{
+    XHCI_SETUP_PACKET s;
+    XHCI_TOPO_SNOOP snoop;
+    XHCI_TOPO_CHILD at;
+    UCHAR shortReconnect[4] = { 0x01, 0x01, 0x01, 0x00 };
+
+    /* The root port goes: everything behind it, both hub nodes. */
+    buildRemovalBus();
+    CHECK_EQ(topo.Count, 2, "(two hub nodes)");
+    XhciTopoDetach(&topo, 2);
+    CHECK_EQ(topo.Count, 0, "a root port going down sweeps the subtree");
+    CHECK_EQ(topo.Prunes, 2, "both hub nodes pruned (DR02 Step 4)");
+    CHECK(XhciTopoFind(&topo, 4) == NULL, "the hub below went too");
+
+    /* Hub 2 pulled from hub 1's port 2, with a reset armed on its own port:
+     * the departure names (2, 2), hub 1 stays, and the claim dies with the
+     * hub it named rather than being handed to the next open. */
+    buildRemovalBus();
+    s = portReset(1);
+    XhciTopoObserveSetup(&topo, 4, &s, &snoop);
+    CHECK_EQ(topo.Pending, 1, "(a reset armed below hub 2)");
+    s = portStatus(2);
+    XhciTopoObserveSetup(&topo, 2, &s, &snoop);
+    CHECK_EQ(foldReply(&topo, &snoop, portEmptyBytes, 4), 1, "(port 2 empty)");
+    CHECK_EQ(lastGone.Disconnected, 1, "the departure is reported");
+    CHECK_EQ(lastGone.HubAddress, 2, "on hub 1");
+    CHECK_EQ(lastGone.HubPort, 2, "port 2");
+    CHECK(XhciTopoFind(&topo, 4) == NULL, "hub 2's node pruned");
+    CHECK(XhciTopoFind(&topo, 2) != NULL, "hub 1's node kept");
+    CHECK_EQ(topo.Prunes, 1, "one node pruned");
+    CHECK_EQ(topo.Pending, 0, "the claim naming hub 2 died with it");
+    CHECK_EQ(claim(&topo, &at), 0, "so the next open is unarmed");
+
+    /* The same claim, with the root-tier hub going instead: the orphan sweep
+     * that takes hub 2 drops the claim as well. */
+    buildRemovalBus();
+    s = portReset(1);
+    XhciTopoObserveSetup(&topo, 4, &s, &snoop);
+    XhciTopoDetach(&topo, 2);
+    CHECK_EQ(topo.Pending, 0,
+             "a claim on a grandchild hub dies in the orphan sweep");
+
+    /* A swap between polls on the port holding hub 2 (DR02's graph table,
+     * B10): connected, change bit set - a departure, and the subtree goes. */
+    buildRemovalBus();
+    s = portStatus(2);
+    XhciTopoObserveSetup(&topo, 2, &s, &snoop);
+    CHECK_EQ(foldReply(&topo, &snoop, portReconnectBytes, 4), 1,
+             "(connected again, change bit set)");
+    CHECK_EQ(lastGone.Disconnected, 1, "a hub swapped between polls is gone");
+    CHECK(XhciTopoFind(&topo, 4) == NULL, "and its node pruned");
+
+    /* Short GET_STATUS replies: two bytes carry no change word, so a swap
+     * cannot be seen and none is invented; one byte is no reading. */
+    buildRemovalBus();
+    s = portStatus(3);
+    XhciTopoObserveSetup(&topo, 2, &s, &snoop);
+    CHECK_EQ(foldReply(&topo, &snoop, shortReconnect, 2), 1,
+             "(a two-byte reply folds)");
+    CHECK_EQ(lastGone.Disconnected, 0,
+             "and invents no departure from a change word it never got");
+    CHECK_EQ(foldReply(&topo, &snoop, portEmptyBytes, 1), 0,
+             "a one-byte reply is no reading");
+    CHECK_EQ(lastGone.Disconnected, 0, "and reports nothing");
+    CHECK_EQ(nodeOrEmpty(XhciTopoFind(&topo, 2))->Connected, 0x7,
+             "ports 1 to 3 still read connected");
+    checkClaimIdentity(&topo, "removal vectors");
+}
+
+/*
+ * Malformed and edge-case hub descriptors, against design record 02's rule:
+ * self-consistency, not the type byte - the declared length must cover the
+ * fields read (5) and must not claim more than arrived. A refused reply moves
+ * no number and leaves the hub unmarkable; an accepted one is marked from
+ * `bNbrPorts` unless that is 0. Whether a declared length below
+ * 7 + 2 x ceil((ports + 1) / 8) should be refused is design record 13 section
+ * 10.1's formula, marked there "to transcribe", so the 5-byte row records
+ * today's acceptance and decides nothing.
+ */
+typedef struct _TV_HUBDESC {
+    const char *What;
+    UCHAR Bytes[11];
+    ULONG Length;
+    ULONG Folds;
+    ULONG Ports;
+} TV_HUBDESC;
+
+static const TV_HUBDESC hubDescRows[] = {
+    { "nothing arrived",
+      { 11, 0x29, 8, 0x40, 0x00 }, 0, 0, 0 },
+    { "four bytes: no wHubCharacteristics",
+      { 11, 0x29, 8, 0x40, 0x00 }, 4, 0, 0 },
+    { "declared length 0",
+      { 0, 0x29, 8, 0x40, 0x00 }, 5, 0, 0 },
+    { "declared length 4, short of the fields read",
+      { 4, 0x29, 8, 0x40, 0x00 }, 5, 0, 0 },
+    { "declared 255 of 11 arrived",
+      { 255, 0x29, 8, 0x40, 0x00, 50, 100, 0x00, 0x00, 0xFF, 0xFF }, 11, 0, 0 },
+    { "declared 11 of 9 arrived: a short packet",
+      { 11, 0x29, 8, 0x40, 0x00, 50, 100, 0x00, 0x00, 0xFF, 0xFF }, 9, 0, 0 },
+    { "declared 5, exactly the fields read",
+      { 5, 0x29, 4, 0x20, 0x00 }, 5, 1, 4 },
+    { "the measured 8-port descriptor, 71 asked and 11 moved",
+      { 11, 0x29, 8, 0x40, 0x00, 50, 100, 0x00, 0x00, 0xFF, 0xFF }, 11, 1, 8 },
+    { "255 ports",
+      { 11, 0x29, 255, 0x00, 0x00, 50, 100, 0x00, 0x00, 0xFF, 0xFF }, 11, 1,
+      255 },
+    { "type byte 0: recorded, not required",
+      { 9, 0x00, 4, 0x00, 0x00, 50, 100, 0x00, 0xFF }, 9, 1, 4 },
+    { "no ports: folds, is counted, is never marked",
+      { 9, 0x29, 0, 0x00, 0x00, 50, 100, 0x00, 0xFF }, 9, 1, 0 }
+};
+
+static void testMalformedDescriptors(void)
+{
+    XHCI_SETUP_PACKET s;
+    XHCI_TOPO_SNOOP snoop;
+    XHCI_TOPO_HUBMARK mark;
+    const XHCI_TOPO_NODE *node;
+    ULONG i;
+    int before;
+
+    for (i = 0; i < sizeof(hubDescRows) / sizeof(hubDescRows[0]); i++) {
+        const TV_HUBDESC *r;
+
+        r = &hubDescRows[i];
+        before = failures;
+        resetTopo();
+        XhciTopoAttachRoot(&topo, 2, 1, 1, XHCI_SPEED_HIGH);
+        s = hubDescRequest();
+        XhciTopoObserveSetup(&topo, 2, &s, &snoop);
+        CHECK_EQ(foldReply(&topo, &snoop, r->Bytes, r->Length), r->Folds,
+                 "descriptor: folds or is refused");
+        CHECK_EQ(topo.DescriptorsBad, r->Folds ? 0 : 1,
+                 "descriptor: a refusal is counted bad");
+        CHECK_EQ(topo.DescriptorsNoPorts, (r->Folds && r->Ports == 0) ? 1 : 0,
+                 "descriptor: a zero-port fold is counted apart");
+        node = XhciTopoFind(&topo, 2);
+        CHECK_EQ((nodeOrEmpty(node)->Flags & XHCI_TOPO_F_DESCRIPTOR) != 0,
+                 r->Folds, "descriptor: facts taken only from a fold");
+        CHECK_EQ(nodeOrEmpty(node)->PortCount, r->Ports,
+                 "descriptor: bNbrPorts, or nothing");
+        CHECK_EQ(XhciTopoHubMark(node, XHCI_SPEED_HIGH, &mark),
+                 (r->Folds && r->Ports != 0) ? 1 : 0,
+                 "descriptor: markable only with ports");
+        CHECK_EQ(mark.NumberOfPorts, r->Folds ? r->Ports : 0,
+                 "descriptor: Number of Ports");
+        if (failures != before) {
+            printf("  ...in hub descriptor row \"%s\"\n", r->What);
+        }
+    }
+
+    /* A reply the snoop did not ask for, and no bytes at all. */
+    resetTopo();
+    XhciTopoAttachRoot(&topo, 2, 1, 1, XHCI_SPEED_HIGH);
+    s = portPower(1);
+    XhciTopoObserveSetup(&topo, 2, &s, &snoop);
+    CHECK_EQ(foldReply(&topo, &snoop, hubDescBytes, 11), 0,
+             "a reply to a request with no reply is not folded");
+    s = hubDescRequest();
+    XhciTopoObserveSetup(&topo, 2, &s, &snoop);
+    CHECK_EQ(foldReply(&topo, &snoop, NULL, 11), 0, "no bytes, no fold");
+    CHECK_EQ(topo.Descriptors, 0, "neither counted as a descriptor");
+}
+
+/* ------------------------------------------------------------------ */
+/* Task 27-A.4: the gaps G1-G3, closed by 27-A.1                       */
+/* ------------------------------------------------------------------ */
+
+/*
+ * These three were KNOWN_GAP vectors when 27-A.4 wrote them against the
+ * graph as the miniport left it, and the hub class (27-A.1) closed all
+ * three; they are ordinary checks now, kept under their gap ids so the
+ * record of what was behind stays readable.
+ */
+static void testClosedGaps(void)
+{
+    XHCI_SETUP_PACKET s;
+    XHCI_TOPO_SNOOP snoop;
+    XHCI_TOPO_CHILD at;
+    XHCI_TOPO_HUBMARK mark;
+    XHCI_TOPO_TT tt;
+    ULONG held;
+    UCHAR disabledBytes[4] = { 0x01, 0x01, 0x02, 0x00 };
+
+    /*
+     * G1. Design record 13 section 10.3 brings a hub up as SET_CONFIGURATION,
+     * then SET_INTERFACE alternate 1 on a multi-TT hub (step 1), then
+     * GET_DESCRIPTOR(Hub) (step 2), then the marking (step 3), and feeds the
+     * graph "through the same entry points the miniport fed from its snoop".
+     * Under usbhub the descriptor came first; under the bus it does not, and
+     * `XhciTopoApplySetInterface` used to ignore a SET_INTERFACE on a device
+     * not yet known as a hub, losing the multi-TT selection. Since 27-A.1 an
+     * attached node takes it.
+     */
+    resetTopo();
+    XhciTopoAttachRoot(&topo, 2, 1, 1, XHCI_SPEED_HIGH);
+    XhciTopoApplySetInterface(&topo, 2, 1);
+    s = setupOf(0xA0, 0x06, 0x2900, 0, 71);
+    XhciTopoObserveSetup(&topo, 2, &s, &snoop);
+    (void)foldReply(&topo, &snoop, hubDescBytes, 11);
+    (void)XhciTopoHubMark(XhciTopoFind(&topo, 2), XHCI_SPEED_HIGH, &mark);
+    CHECK(mark.MultiTt == 1,
+          "G1 (DR13 s10.3 steps 1-3): a multi-TT hub whose SET_INTERFACE(1) "
+          "completes before its hub descriptor is marked MTT 1");
+    (void)XhciTopoTtFor(&topo, 2, 3, &tt);
+    CHECK(tt.MultiTt == 1,
+          "G1 (DR13 s10.3, s10.4 MTT row): ...and an FS/LS device below it "
+          "gets MTT 1");
+
+    /*
+     * G2. Design record 13 section 10.3: `XHCI_TOPO_NODES` 8, the miniport's
+     * table, "becomes a pool-backed count for a bus that owns every hub".
+     * Roadmap 27-V.1 runs hubs behind hubs to the depth limit; two such
+     * chains on two root ports are ten hubs, which the miniport's eight
+     * dropped two of. 27-A.1 made it sixteen (a fixed table still).
+     */
+    resetTopo();
+    held = buildChain(10, 1, 5, XHCI_SPEED_HIGH) +
+           buildChain(20, 2, 5, XHCI_SPEED_HIGH);
+    CHECK(held == 10 && topo.Dropped == 0,
+          "G2 (DR13 s10.3): two five-hub chains hold all 10 graph nodes "
+          "and drop none");
+
+    /*
+     * G3. Design record 13 section 10.5 names three removal triggers for a
+     * hub's subtree; one is "the parent disables the hub (C_PORT_ENABLE with
+     * enable 0)". The reply fold used to report a departure only from the
+     * connect bit and C_PORT_CONNECTION (design record 02's disconnect row),
+     * so a disabled port that stayed connected reported nothing and kept the
+     * node below it; since 27-A.1 the fold reports it and prunes.
+     */
+    resetTopo();
+    XhciTopoAttachRoot(&topo, 2, 1, 1, XHCI_SPEED_HIGH);
+    XhciTopoChildOf(&topo, 2, 2, &at);
+    XhciTopoAttachChild(&topo, 3, &at, XHCI_SPEED_FULL);
+    s = portStatus(2);
+    XhciTopoObserveSetup(&topo, 2, &s, &snoop);
+    (void)foldReply(&topo, &snoop, portConnectedBytes, 4);
+    (void)foldReply(&topo, &snoop, disabledBytes, 4);
+    CHECK(lastGone.Disconnected == 1 && XhciTopoFind(&topo, 3) == NULL,
+          "G3 (DR13 s10.5): a GET_STATUS reply with C_PORT_ENABLE set and "
+          "enable 0 under a hub reports a departure and prunes the child");
+}
+
+/* ------------------------------------------------------------------ */
+/* Task 27-A.4: the hub port vector table is well formed               */
+/* ------------------------------------------------------------------ */
+
+/* Written apart from any decoder in src\: LS bit, HS bit, neither is FS
+ * (design record 13 section 10.2, hub step 5). */
+static ULONG hpvSpeedOf(ULONG status)
+{
+    if ((status & XHCI_HUB_PORT_LOW_SPEED) != 0) {
+        return XHCI_SPEED_LOW;
+    }
+    if ((status & XHCI_HUB_PORT_HIGH_SPEED) != 0) {
+        return XHCI_SPEED_HIGH;
+    }
+    return XHCI_SPEED_FULL;
+}
+
+static ULONG hpvEnumerating(ULONG state)
+{
+    return (state == HPV_ST_RESETTING || state == HPV_ST_RECOVERY ||
+            state == HPV_ST_ADDRESSING) ? 1UL : 0UL;
+}
+
+static ULONG hpvHoldsDevice(ULONG state)
+{
+    return (state == HPV_ST_ENABLED || state == HPV_ST_SUSPENDED ||
+            state == HPV_ST_RESUMING || state == HPV_ST_RESUME_RECOVERY) ?
+           1UL : 0UL;
+}
+
+/* Each change bit and the CLEAR_FEATURE that acknowledges it. */
+static const ULONG hpvClears[][2] = {
+    { XHCI_HUB_C_PORT_CONNECTION,   HPV_ACT_CLEAR_C_CONNECTION },
+    { XHCI_HUB_C_PORT_ENABLE,       HPV_ACT_CLEAR_C_ENABLE },
+    { XHCI_HUB_C_PORT_SUSPEND,      HPV_ACT_CLEAR_C_SUSPEND },
+    { XHCI_HUB_C_PORT_OVER_CURRENT, HPV_ACT_CLEAR_C_OVER_CURRENT },
+    { XHCI_HUB_C_PORT_RESET,        HPV_ACT_CLEAR_C_RESET }
+};
+
+static void testHubPortVectorTable(void)
+{
+    const ULONG knownStatus = XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_ENABLE |
+                              XHCI_HUB_PORT_SUSPEND |
+                              XHCI_HUB_PORT_OVER_CURRENT |
+                              XHCI_HUB_PORT_RESET | XHCI_HUB_PORT_POWER |
+                              XHCI_HUB_PORT_LOW_SPEED |
+                              XHCI_HUB_PORT_HIGH_SPEED;
+    ULONG seen[HPV_ST_COUNT];
+    ULONG i;
+    ULONG j;
+    ULONG k;
+    ULONG decodes;
+    int before;
+
+    for (i = 0; i < HPV_ST_COUNT; i++) {
+        seen[i] = 0;
+    }
+
+    for (i = 0; i < HPV_ROWS; i++) {
+        const HPV_ROW *r;
+
+        r = &hpvRows[i];
+        before = failures;
+
+        CHECK(r->State < HPV_ST_COUNT && r->NextState < HPV_ST_COUNT,
+              "hpv: states in range");
+        CHECK(r->Event >= 1 && r->Event < HPV_EV_COUNT, "hpv: event in range");
+        CHECK(r->Attempt <= 3, "hpv: at most three attempts (10.2 step 7)");
+        CHECK((r->PortChange & ~XHCI_HUB_C_PORT_MASK) == 0,
+              "hpv: only the five port change bits");
+        CHECK((r->PortStatus & ~knownStatus) == 0, "hpv: known status bits");
+        CHECK((r->PortStatus & XHCI_HUB_PORT_LOW_SPEED) == 0 ||
+              (r->PortStatus & XHCI_HUB_PORT_HIGH_SPEED) == 0,
+              "hpv: never both speed bits");
+
+        if (r->Event == HPV_EV_STATUS) {
+            CHECK((r->PortStatus & XHCI_HUB_PORT_POWER) != 0,
+                  "hpv: a status read is of a powered port");
+            /* Design record 13 section 10.1: "clear each with its
+             * CLEAR_FEATURE C_*" - and nothing that was not reported. */
+            for (k = 0; k < sizeof(hpvClears) / sizeof(hpvClears[0]); k++) {
+                CHECK_EQ((r->PortChange & hpvClears[k][0]) != 0,
+                         (r->Actions & hpvClears[k][1]) != 0,
+                         "hpv: a change bit is cleared exactly when read");
+            }
+        } else {
+            CHECK(r->PortStatus == 0 && r->PortChange == 0,
+                  "hpv: only a status read carries status");
+            for (k = 0; k < sizeof(hpvClears) / sizeof(hpvClears[0]); k++) {
+                CHECK((r->Actions & hpvClears[k][1]) == 0,
+                      "hpv: nothing to clear without a status read");
+            }
+        }
+
+        decodes = (r->Event == HPV_EV_STATUS &&
+                   r->State == HPV_ST_RESETTING &&
+                   (r->PortChange & XHCI_HUB_C_PORT_RESET) != 0 &&
+                   (r->PortStatus & XHCI_HUB_PORT_ENABLE) != 0) ? 1UL : 0UL;
+        CHECK_EQ(r->Speed != XHCI_SPEED_UNKNOWN, decodes,
+                 "hpv: a speed is decoded exactly where a reset ends enabled");
+        if (decodes) {
+            CHECK_EQ(r->Speed, hpvSpeedOf(r->PortStatus),
+                     "hpv: and it is the speed the status bits say");
+        }
+
+        /* 10.2 step 3: the lock is taken entering enumeration and released
+         * on every way out of it, including an unplug (10.5 step 1). */
+        CHECK_EQ((r->Actions & HPV_ACT_ENUM_LOCK) != 0,
+                 !hpvEnumerating(r->State) && hpvEnumerating(r->NextState),
+                 "hpv: the enumeration lock is taken on the way in");
+        CHECK_EQ((r->Actions & HPV_ACT_ENUM_UNLOCK) != 0,
+                 hpvEnumerating(r->State) && !hpvEnumerating(r->NextState),
+                 "hpv: and released on every way out");
+
+        if ((r->Actions & HPV_ACT_REPORT_GONE) != 0) {
+            CHECK(hpvHoldsDevice(r->State),
+                  "hpv: only a port that held a device reports one gone");
+        }
+        if (hpvHoldsDevice(r->State) && r->Event == HPV_EV_STATUS &&
+            (r->PortChange & (XHCI_HUB_C_PORT_CONNECTION |
+                              XHCI_HUB_C_PORT_ENABLE)) != 0) {
+            CHECK((r->Actions & HPV_ACT_REPORT_GONE) != 0,
+                  "hpv: a lost connection or enable reports the device gone");
+        }
+
+        CHECK_EQ((r->Actions & HPV_ACT_ADDRESS) != 0,
+                 r->NextState == HPV_ST_ADDRESSING &&
+                 r->State != HPV_ST_ADDRESSING,
+                 "hpv: Address Device exactly on entering ADDRESSING");
+        CHECK_EQ((r->Actions & HPV_ACT_SET_RESET) != 0,
+                 (r->Actions & HPV_ACT_TIMER_RESET) != 0,
+                 "hpv: every port reset arms its time-out");
+        if (r->Attempt == 3) {
+            CHECK((r->Actions & HPV_ACT_SET_RESET) == 0,
+                  "hpv: the third attempt is the last");
+        }
+
+        for (j = 0; j < i; j++) {
+            CHECK(!(hpvRows[j].State == r->State &&
+                    hpvRows[j].Event == r->Event &&
+                    hpvRows[j].Attempt == r->Attempt &&
+                    hpvRows[j].PortStatus == r->PortStatus &&
+                    hpvRows[j].PortChange == r->PortChange),
+                  "hpv: one row per input");
+        }
+
+        if (r->State < HPV_ST_COUNT) {
+            seen[r->State] = 1;
+        }
+        if (failures != before) {
+            printf("  ...in hub port row %lu \"%s\"\n", i, r->What);
+        }
+    }
+
+    for (i = 0; i < HPV_ST_COUNT; i++) {
+        CHECK(seen[i], "hpv: every state has a row leaving it");
+    }
+}
+
+/* ------------------------------------------------------------------ */
+
+/*
+ * **SuperSpeed hubs (roadmap-hcd.md 30-A.1, 30-A.2).** The bus attaches a
+ * SuperSpeed hub's node at its speed class and folds its 12-byte type 0x2A
+ * descriptor through the same entry point: the fold reads bNbrPorts and
+ * wHubCharacteristics at the offsets both descriptor types share, records
+ * the type without requiring 0x29, and the marking is Hub and Number of
+ * Ports with no TT field. A SuperSpeed path has no transaction translator,
+ * a SuperSpeed hub's port 15 is its own route nibble, five SuperSpeed hubs
+ * deep is the ceiling as for USB 2.0, and the USB 2.0 half of the same unit
+ * on the companion root port is a separate tree the SuperSpeed one never
+ * touches - in either direction, including at teardown.
+ */
+static void testSuperSpeedHubs(void)
+{
+    XHCI_SETUP_PACKET s;
+    XHCI_TOPO_SNOOP snoop;
+    XHCI_TOPO_HUBMARK mark;
+    XHCI_TOPO_CHILD child;
+    XHCI_TOPO_TT tt;
+    ULONG addr;
+    /* bLength 12, 0x2A, 4 ports, wHubCharacteristics with bits 6:5 set
+     * (reserved at SuperSpeed: must not become a TTT), bPwrOn2PwrGood,
+     * bHubContrCurrent, bHubHdrDecLat, wHubDelay, DeviceRemovable. */
+    static UCHAR ssDesc[12] = { 12, 0x2A, 4, 0x69, 0x00, 50, 0, 4, 0x90,
+                                0x01, 0x00, 0x00 };
+    static UCHAR ssDesc15[12] = { 12, 0x2A, 15, 0x09, 0x00, 50, 0, 4, 0x90,
+                                  0x01, 0x00, 0x00 };
+
+    resetTopo();
+
+    /* The SuperSpeed half on root port 5, its USB 2.0 half on root port 1. */
+    CHECK_EQ(XhciTopoAttachRoot(&topo, 2, 5, 0, XHCI_SPEED_SUPER), 1,
+             "a SuperSpeed hub attaches at its root port");
+    CHECK_EQ(XhciTopoAttachRoot(&topo, 3, 1, 0, XHCI_SPEED_HIGH), 1,
+             "its USB 2.0 half attaches on the companion");
+    s = setupOf(0xA0, 0x06, 0x2A00, 0, 12);
+    XhciTopoObserveSetup(&topo, 2, &s, &snoop);
+    CHECK_EQ(snoop.Reply, XHCI_TOPO_REPLY_HUB_DESC,
+             "GET_DESCRIPTOR(0x2A00) is a hub descriptor request");
+    CHECK_EQ(foldReply(&topo, &snoop, ssDesc, 12), 1,
+             "the SuperSpeed descriptor folds");
+    CHECK_EQ(topo.DescriptorsBad, 0, "and is not malformed");
+    CHECK_EQ(nodeOrEmpty(XhciTopoFind(&topo, 2))->PortCount, 4,
+             "bNbrPorts at offset 2");
+    CHECK_EQ(nodeOrEmpty(XhciTopoFind(&topo, 2))->DescriptorType, 0x2A,
+             "type 0x2A recorded");
+    CHECK_EQ(nodeOrEmpty(XhciTopoFind(&topo, 2))->Flags &
+                 XHCI_TOPO_F_DESC_TYPE_OK, 0,
+             "and not taken for 0x29");
+    /* Even a selected alternate must not make a SuperSpeed hub multi-TT. */
+    XhciTopoApplySetInterface(&topo, 2, 1);
+    CHECK_EQ(XhciTopoHubMark(XhciTopoFind(&topo, 2), XHCI_SPEED_SUPER, &mark),
+             1, "a described SuperSpeed hub is markable");
+    CHECK_EQ(mark.Hub, 1, "Hub = 1");
+    CHECK_EQ(mark.NumberOfPorts, 4, "Number of Ports");
+    CHECK_EQ(mark.TtThinkTime, 0, "no TTT: bits 6:5 are not a think time");
+    CHECK_EQ(mark.MultiTt, 0, "no MTT at SuperSpeed");
+
+    /* A device on its port 3: tier 1, route 0x3, root port 5, no TT. */
+    CHECK_EQ(XhciTopoChildOf(&topo, 2, 3, &child), 1, "(a position)");
+    CHECK_EQ(child.Route, 0x3UL, "route nibble 0 is the port");
+    CHECK_EQ(child.RootPort, 5, "the SuperSpeed root port");
+    CHECK_EQ(child.Tier, 1, "tier 1");
+    CHECK_EQ(XhciTopoTtFor(&topo, 2, 3, &tt), 0,
+             "a SuperSpeed device behind a SuperSpeed hub has no TT");
+    CHECK_EQ(tt.HubAddress, 0, "and no TT slot");
+
+    /* A second SuperSpeed hub on port 3, with 15 ports: port 15 is the
+     * nibble 15 itself, no clamp involved. */
+    CHECK_EQ(XhciTopoAttachChild(&topo, 4, &child, XHCI_SPEED_SUPER), 1,
+             "a SuperSpeed hub one tier down");
+    s = setupOf(0xA0, 0x06, 0x2A00, 0, 12);
+    XhciTopoObserveSetup(&topo, 4, &s, &snoop);
+    CHECK_EQ(foldReply(&topo, &snoop, ssDesc15, 12), 1, "(15-port fold)");
+    CHECK_EQ(XhciTopoChildOf(&topo, 4, 15, &child), 1, "(port 15)");
+    CHECK_EQ(child.Route, 0xF3UL, "port 15 is nibble F, exactly");
+    CHECK_EQ(child.Tier, 2, "tier 2");
+    CHECK_EQ(XhciTopoTtFor(&topo, 4, 15, &tt), 0,
+             "no TT two SuperSpeed tiers down either");
+    CHECK_EQ(XhciTopoChildOf(&topo, 4, 7, &child), 1, "(port 7)");
+    CHECK_EQ(child.Route, 0x73UL, "route 0x73");
+
+    /* Five SuperSpeed hubs deep: hubs 2 and 4 are tiers 0 and 1; three
+     * more at tiers 2, 3 and 4 on port 1 each, then the sixth's children
+     * are unroutable. */
+    for (addr = 5; addr <= 7; addr++) {
+        CHECK_EQ(XhciTopoChildOf(&topo, addr - 1, 1, &child), 1,
+                 "(next tier)");
+        CHECK_EQ(XhciTopoAttachChild(&topo, addr, &child, XHCI_SPEED_SUPER),
+                 1, "a SuperSpeed hub further down");
+    }
+    CHECK_EQ(XhciTopoChildOf(&topo, 7, 2, &child), 1, "(a fifth-tier device)");
+    CHECK_EQ(child.Tier, 5, "the fifth tier");
+    CHECK_EQ(child.TooDeep, 0, "still routable");
+    CHECK_EQ(child.Route, 0x21113UL, "five nibbles, hand-computed");
+    CHECK_EQ(XhciTopoAttachChild(&topo, 8, &child, XHCI_SPEED_SUPER), 1,
+             "a fifth-tier SuperSpeed hub attaches");
+    CHECK_EQ(XhciTopoChildOf(&topo, 8, 1, &child), 1, "(sixth tier)");
+    CHECK_EQ(child.TooDeep, 1, "its children are too deep");
+
+    /* The USB 2.0 half's tree: its own TT, untouched by the SuperSpeed
+     * nodes, which no TT walk ever crosses into. */
+    CHECK_EQ(XhciTopoTtFor(&topo, 3, 3, &tt), 1,
+             "the USB 2.0 half is its children's TT");
+    CHECK_EQ(tt.HubAddress, 3, "named by its own slot");
+    CHECK_EQ(XhciTopoChildOf(&topo, 3, 3, &child), 1, "(HS position)");
+    CHECK_EQ(child.RootPort, 1, "on the USB 2.0 root port");
+    CHECK_EQ(child.Route, 0x3UL,
+             "the same route as the SuperSpeed half's port 3, another port");
+
+    /* The SuperSpeed half leaves: its whole subtree with it, and the USB
+     * 2.0 half stays. */
+    XhciTopoDetach(&topo, 2);
+    CHECK(XhciTopoFind(&topo, 2) == NULL, "the SuperSpeed hub is gone");
+    CHECK(XhciTopoFind(&topo, 4) == NULL, "its child hub with it");
+    CHECK(XhciTopoFind(&topo, 8) == NULL, "down to the fifth tier");
+    CHECK(XhciTopoFind(&topo, 3) != NULL, "the USB 2.0 half remains");
+    CHECK_EQ(topo.Count, 1, "one node left");
+}
 
 int main(void)
 {
@@ -1217,12 +2222,26 @@ int main(void)
     testMultiTt();
     testHubMark();
     testTableFull();
+    testSuperSpeedHubs();
+
+    /* Task 27-A.4. */
+    testPlacements();
+    testRootPortDevice();
+    testDepthClaim();
+    testMaxTierHubsOnly();
+    testHubMarkVectors();
+    testRemovalVectors();
+    testMalformedDescriptors();
+    testClosedGaps();
+    testHubPortVectorTable();
 
     checkClaimIdentity(&topo, "end of main");
     /* The never-reset twin: an identity that never saw a claim would pass
      * every run as a net over nothing (task 7b-A.1.0's rule). */
     CHECK(claimCallsEver >= 5, "the claim identity measured real claims");
 
+    /* Reported, never counted as failures (see the file header). */
+    printf("%d known gaps open, %d now holding\n", gapsOpen, gapsHeld);
     printf("%d checks, %d failures\n", checks, failures);
     return failures;
 }

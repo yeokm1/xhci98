@@ -1,160 +1,120 @@
-# xhci98.sys amd64 import allowlist - module/symbol pairs the NT 5.2 amd64
-# build may import.
+# xhci98.sys import allowlist (amd64) - the 64-bit build, held to NT 5.2
+# amd64 evidence (winxp64-baselines.expected). A sibling file rather than a
+# column in xhci98-imports.allow (the owner's decision, 2026-09-09): Windows 98
+# is not a target of this binary, so the x86 file's Windows 98 denials do not
+# transfer, and most XP-era APIs exist here.
 #
-# The amd64 sibling of xhci98-imports.allow. Same grammar, same enforcement,
-# different rows and a different evidence rule; check-imports.ps1 selects
-# between the two on the architecture of the image it is gating.
-#
-# **WHY A SEPARATE FILE RATHER THAN A COLUMN** (the owner's decision,
-# 2026-09-09, roadmap task 21.3). Two reasons, and the second is the stronger.
-# Of the thirteen distinct kernel/HAL rows across both architectures only two
-# are shared, so a merged file would be two lists sharing a header. And the
-# other file's [deny] section is justified end to end by "not exported on
-# Win98" and "Windows XP and later - blocks the load on Win2000": reasoning
-# about two 32-bit operating systems that does not transfer here, where most of
-# those APIs genuinely exist. Merging would have meant re-justifying 27 denials
-# against a target none of them was written about.
-#
-# Format is xhci98-imports.allow's, unchanged:
-#
-#   MODULE!SYMBOL   FLAVORS   REQUIREMENT   evidence notes to end of line
-#
-# Pairs, not names, for the same reason as there: the PE import descriptor
-# names the providing module, so ntoskrnl.exe!X and HAL.dll!X are different
-# imports and only one of them resolves. Module names match
-# case-insensitively, symbol names exactly.
-#
-# ---------------------------------------------------------------------------
-# THE EVIDENCE RULE HERE IS STRONGER THAN THE WINDOWS 98 ONE, NOT WEAKER
-# ---------------------------------------------------------------------------
-#
-# The other file's standing rule is that every pair must carry Windows 98
-# evidence of its own - a precedent binary importing the same pair, or the
-# symbol appearing in ntkern.vxd's name table. That rule is a *compensation for
-# an unreadable target*: Windows 98 builds its NT-style export tables at run
-# time in ntkern.vxd rather than reading them from a file, so there is no
-# export table on disk to resolve against and both sources are proxies whose
-# absence proves nothing.
-#
-# NT 5.2 amd64 has a real export table. So the rule here is direct resolution:
-# **every ntoskrnl.exe or hal.dll pair must appear in the export table of every
-# baseline image in winxp64-baselines.expected** - both kernels and the one
-# HAL - as a real code export rather than a forwarder. That is dispositive in a
-# way no Windows 98 evidence ever is, which is why no proxy rule is stated
-# here and none is wanted. It is the same check task 22.2 ran for the 6.0 and
-# 6.1 x86 kernels.
-#
-# The consequence to keep in mind: when the baselines are not staged in a
-# working copy, an amd64 row has NO evidence behind it at all. The gate warns
-# rather than failing in that case, exactly as the x86 half does, and a build
-# taken that way has not been through this rule.
-#
-# ---------------------------------------------------------------------------
-# WHAT THE FLAVORS COLUMN CANNOT DO HERE, AND IT MATTERS
-# ---------------------------------------------------------------------------
-#
-# On x86, HAL.dll!WRITE_PORT_UCHAR is a `qemu required` row and is described
-# there as "what keeps the import out of every binary a user can install" - the
-# whole of task 13-L.1's enforcement, and the reason the ThinkPad E460's Code 2
-# build can never ship.
-#
-# **On amd64 that row has no counterpart, because the import does not exist.**
-# The compiler emits the `out` instruction inline instead of calling the HAL
-# export, so the qemu flavour's import table is byte-for-byte the same set as
-# the release flavour's. Measured 2026-09-09 on all three amd64 flavours: seven
-# pairs each, identical.
-#
-# So the import gate cannot tell an amd64 qemu build from an amd64 release
-# build, and nothing in this file can be written to make it. The guarantee
-# still holds - scripts\check-flavour-marker.ps1 reads XHCI98_FLAVOUR_* out of
-# every linked image and make-package.ps1 refuses the qemu flavour by name -
-# but on amd64 it rests on the in-image marker alone where on x86 it rests on
-# the marker and an import. That asymmetry is recorded deliberately (the
-# owner's decision, 2026-09-09) so that nobody later reads this gate as
-# covering something it cannot. Design record 11 section 8 carries it too.
-#
-# ---------------------------------------------------------------------------
-# THE ROWS
-# ---------------------------------------------------------------------------
-#
-# Six kernel/HAL pairs, against x86's ten plus the qemu row - the sixth on each
-# side is IoIsWdmVersionAvailable, which arrived here with task 21.8 and on the
-# x86 side with task 22.5, and the header said five while listing six (the
-# 2026-09-16 audit's E4). The USBPORT.SYS
-# pairs are NOT listed here for the same reason they are not listed there: they
-# are read from scripts\usbport-lib\usbport-imports.expected, which the .def
-# and both import libraries are generated from, so a second hand-maintained
-# copy cannot drift out of step with them. Design record 11's M1 read the same
-# two names at the same two ordinals off the amd64 usbport.sys, undecorated.
-#
-# Every "nt52-amd64-export" tag below was re-derived by the gate itself on
-# 2026-09-09 against ntoskrnl.exe, ntkrnlmp.exe and hal.dll 5.2.3790.3959, and
-# each hint is the one the linker recorded in our own binary - they match the
-# real export hints, which is a cross-check the x86 rows cannot make.
+# Since 2026-10-02 xhci98.sys is the successor HCD (design record 13); the
+# gate's three HCD rules stated in xhci98-imports.allow - no USBPORT.SYS pair,
+# an empty import table only while the scaffold marker is in the image, the
+# pool family denied until its rows exist - apply here unchanged. Task 28-A.2,
+# the amd64 build that loads in a guest, was taken at the start of Phase 27
+# (owner, 2026-10-03); from then this file grows in step with the x86 one in
+# the same change, since every batch builds and gates both architectures.
 
 [imports]
 
-# --- The register and stall primitives -------------------------------------
-# Only one of the x86 pair survives into amd64. READ_REGISTER_ULONG and
-# WRITE_REGISTER_ULONG are compiler intrinsics here and are emitted inline, so
-# they are not imported and must not be listed: a `required` row for a symbol
-# the binary cannot import would fail every build.
-HAL.dll!KeStallExecutionProcessor         all  required  nt52-amd64-export (hint 3B, hal.dll RVA 0x10320); the only HAL import the amd64 build has
-
-# --- The controller lock (src\xhci_cmd.c) ----------------------------------
-# **These two replace the x86 HAL pair and the change is structural, not a
-# rename.** On x86 the DDK's KeAcquireSpinLock(a,b) macro expands to
-# HAL.dll!KfAcquireSpinLock, a __fastcall HAL export that exists only on i386.
-# On amd64 the same source line resolves to ntoskrnl.exe!KeAcquireSpinLockRaise
-# ToDpc and ntoskrnl.exe!KeReleaseSpinLock - a different module as well as a
-# different name, which is exactly the case the "pairs, not names" rule is for.
-# KeInitializeSpinLock and HAL.dll!KeGetCurrentIrql are inlined here and so are
-# absent, as is ntoskrnl.exe!InterlockedIncrement, which is an intrinsic.
-ntoskrnl.exe!KeAcquireSpinLockRaiseToDpc  all  required  nt52-amd64-export (hint 20C, ntoskrnl RVA 0x38000 / ntkrnlmp 0x25010)
-ntoskrnl.exe!KeReleaseSpinLock            all  required  nt52-amd64-export (hint 265, ntoskrnl RVA 0x380A0 / ntkrnlmp 0x24FF0)
-
-# --- The log channel (src\xhci_log.c, src\xhci_dispatch.c) -----------------
-# Required in every flavour by task 11-V.9's DebugView sink, as on x86.
-ntoskrnl.exe!DbgPrint                     all  required  nt52-amd64-export (hint 31, ntoskrnl RVA 0x595F0 / ntkrnlmp 0x56660)
-
+# Task 25.8's scaffold calls nothing. The amd64 image imports one pair the
+# compiler adds rather than the source:
+#
 # --- The /GS stack cookie handler ------------------------------------------
 # **Nothing in this driver calls KeBugCheckEx, and this row is not a licence to
-# start.** It is pulled in by the compiler, not by the source: WDK 7.1 enables
-# /GS buffer security checks for amd64, so every function with a stack buffer
-# gets a cookie check, and __security_check_cookie jumps to __report_gsfailure
-# on a mismatch, which is the single call site - one, in the whole of .text, at
-# RVA 0x25218 in the release image, reached by nothing else. It issues
-# KeBugCheckEx(0xF7, ...) = DRIVER_OVERRAN_STACK_BUFFER.
-#
-# It is therefore unreachable except on a genuine stack-buffer overrun, and it
-# is a safety feature the x86 binary CANNOT have: MSVC 6.0 predates /GS
-# entirely, so a stack smash there corrupts silently where here it becomes an
-# attributable bugcheck. That is the whole reason this row is accepted rather
-# than the flag being turned off to match x86.
-#
-# If a second call site ever appears, that is a real call from this driver's
-# own code and needs its own decision - the same discipline the other file
-# applies to DbgPrint's single emit site.
-ntoskrnl.exe!KeBugCheckEx                 all  required  nt52-amd64-export (hint 213, ntoskrnl RVA 0x41690 / ntkrnlmp 0x2E950); /GS __report_gsfailure only, one call site, bugcheck 0xF7
-ntoskrnl.exe!IoIsWdmVersionAvailable      all  required  nt52-amd64-export (hint 197, ntoskrnl RVA 0x28BDE0 / ntkrnlmp 0x322B90); DriverEntry only, one call site - selects the three- or four-argument form of USBPORT_RegisterUSBPortDriver (src\xhci_usbport.h). NOT PsGetVersion, which docs\usb-xhci-info\win98-wdm.md rules out as unexported on Win98/Me. amd64-only from task 21.8 until 2026-09-11; since task 22.5 the 32-bit allowlist carries the same pair, with NUSB's own USBPORT.SYS as its Windows 98 precedent, because the same answer now selects the Version 300 interface on both architectures
+# start.** WDK 7.1 enables /GS buffer security checks for amd64, so every
+# function with a stack buffer gets a cookie check, and __security_check_cookie
+# jumps to __report_gsfailure on a mismatch, which issues KeBugCheckEx(0xF7) =
+# DRIVER_OVERRAN_STACK_BUFFER. Unreachable except on a genuine stack-buffer
+# overrun, and a safety the x86 build (MSVC 6.0, pre-/GS) cannot have, which
+# is why the row is accepted rather than the flag turned off. The miniport's
+# amd64 file carried the same row from task 21.3. A second call site would be
+# this driver's own and needs its own decision.
+ntoskrnl.exe!KeBugCheckEx                 all  required  nt52-amd64-export (hint 213, ntoskrnl RVA 0x41690 / ntkrnlmp 0x2E950); /GS __report_gsfailure only, bugcheck 0xF7
+
+# --- Task 26-A.1: the FDO's attach, PnP forwarding and power pass-through ---
+# The amd64 twins of the x86 file's rows of the same task; NT 5.2 amd64's
+# export table is the evidence, which the gate re-derives from
+# winxp64-baselines.expected for every row. The Interlocked pair is a
+# compiler intrinsic on amd64 and imports nothing.
+ntoskrnl.exe!IoCreateDevice                all  required  nt52-amd64-export; twin of the x86 row (task 26-A.1)
+ntoskrnl.exe!IoDeleteDevice                all  required  nt52-amd64-export; twin of the x86 row (task 26-A.1)
+ntoskrnl.exe!IoAttachDeviceToDeviceStack   all  required  nt52-amd64-export; twin of the x86 row (task 26-A.1)
+ntoskrnl.exe!IoDetachDevice                all  required  nt52-amd64-export; twin of the x86 row (task 26-A.1)
+ntoskrnl.exe!IofCallDriver                 all  required  nt52-amd64-export; twin of the x86 row (task 26-A.1)
+ntoskrnl.exe!IofCompleteRequest            all  required  nt52-amd64-export; twin of the x86 row (task 26-A.1)
+ntoskrnl.exe!KeInitializeEvent             all  required  nt52-amd64-export; twin of the x86 row (task 26-A.1)
+ntoskrnl.exe!KeSetEvent                    all  required  nt52-amd64-export; twin of the x86 row (task 26-A.1)
+ntoskrnl.exe!KeWaitForSingleObject         all  required  nt52-amd64-export; twin of the x86 row (task 26-A.1)
+ntoskrnl.exe!PoStartNextPowerIrp           all  required  nt52-amd64-export; twin of the x86 row (task 26-A.1)
+ntoskrnl.exe!PoCallDriver                  all  required  nt52-amd64-export; twin of the x86 row (task 26-A.1)
+ntoskrnl.exe!PoSetPowerState               all  required  nt52-amd64-export; twin of the x86 row (task 26-A.1)
+# WDK 7.1's checked headers wrap the IRP stack-location macros
+# (IoSkipCurrentIrpStackLocation and its siblings) in ASSERT, which the x86
+# Windows 2000 DDK's do not, so the amd64 checked builds import RtlAssert and
+# the x86 ones do not. Checked flavours only; no source calls it.
+ntoskrnl.exe!RtlAssert                     debug  required  nt52-amd64-export; WDK 7.1 checked-header ASSERTs only (task 26-A.1)
+ntoskrnl.exe!RtlAssert                     qemu   required  nt52-amd64-export; WDK 7.1 checked-header ASSERTs only (task 26-A.1)
+
+
+# --- Task 26-A.2: the controller FDO. Twins of the x86 rows of the same task ---
+# --- where amd64 imports the pair at all: the Interlocked, Kf* spin-lock and  ---
+# --- IRQL, and register-accessor pairs are intrinsics or ntoskrnl inlines on   ---
+# --- amd64, which instead imports KeAcquireSpinLockRaiseToDpc /               ---
+# --- KeReleaseSpinLock for KeAcquireSpinLock/KeReleaseSpinLock.                 ---
+ntoskrnl.exe!IoAllocateIrp                 all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!IoFreeIrp                     all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!IoConnectInterrupt            all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!IoDisconnectInterrupt         all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!IoOpenDeviceRegistryKey       all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeAcquireSpinLockRaiseToDpc   all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeReleaseSpinLock             all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeCancelTimer                 all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeClearEvent                  all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeDelayExecutionThread        all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeInitializeDpc               all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeInitializeTimer             all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeInsertQueueDpc              all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeSetTimer                    all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!MmMapIoSpace                  all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!MmUnmapIoSpace                all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!PoRequestPowerIrp             all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!PsCreateSystemThread          all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!PsTerminateSystemThread       all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!ObReferenceObjectByHandle    all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!ObfDereferenceObject         all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!IoIsWdmVersionAvailable      all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!ExQueueWorkItem               all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!RtlQueryRegistryValues        all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!ZwClose                       all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!IoGetDmaAdapter               all  required  SITES=hcd_dma.obj nt52-amd64-export; twin of the x86 row (task 26-A.2)
+HAL.dll!KeStallExecutionProcessor          all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!DbgPrint                      all  required  SITES=hcd_log.obj,xhci_dbg.obj nt52-amd64-export; the log ring's DebugView sink (hcd_log.c, task 26-A.8) and the qemu trace (xhci_dbg.c), as on x86
+
+
+# --- Task 26-A.4: the root hub (twins of the x86 rows of the same task) ---
+ntoskrnl.exe!IoInvalidateDeviceRelations   all  required  nt52-amd64-export; twin of the x86 row (task 26-A.4)
+ntoskrnl.exe!RtlInitUnicodeString          all  required  nt52-amd64-export; twin of the x86 row (task 26-A.4)
+ntoskrnl.exe!ObfReferenceObject            all  required  nt52-amd64-export; twin of the x86 row (task 26-A.4)
+ntoskrnl.exe!ExAllocatePoolWithTag         all  required  SITES=hcd_pool.obj nt52-amd64-export; twin of the x86 row (task 26-A.4)
+ntoskrnl.exe!ExFreePool                    all  required  SITES=hcd_pool.obj nt52-amd64-export; twin of the x86 row (task 26-A.4)
+ntoskrnl.exe!IoAllocateMdl                 all  required  SITES=hcd_pool.obj nt52-amd64-export; twin of the x86 row (task 26-A.5)
+ntoskrnl.exe!IoFreeMdl                     all  required  SITES=hcd_pool.obj nt52-amd64-export; twin of the x86 row (task 26-A.5)
+ntoskrnl.exe!MmBuildMdlForNonPagedPool     all  required  SITES=hcd_pool.obj nt52-amd64-export; twin of the x86 row (task 26-A.5)
+ntoskrnl.exe!IoAcquireCancelSpinLock       all  required  nt52-amd64-export; twin of the x86 row (task 26-A.5)
+ntoskrnl.exe!IoReleaseCancelSpinLock       all  required  nt52-amd64-export; twin of the x86 row (task 26-A.5)
+
+# --- Task 26-A.8: the door (twins of the x86 rows of the same task) ---
+ntoskrnl.exe!IoCreateSymbolicLink          all  required  nt52-amd64-export; twin of the x86 row (task 26-A.8)
+ntoskrnl.exe!IoDeleteSymbolicLink          all  required  nt52-amd64-export; twin of the x86 row (task 26-A.8)
+ntoskrnl.exe!IoRegisterDeviceInterface     all  required  nt52-amd64-export; twin of the x86 row (task 26-A.8)
+ntoskrnl.exe!IoSetDeviceInterfaceState     all  required  nt52-amd64-export; twin of the x86 row (task 26-A.8)
+ntoskrnl.exe!IoGetDeviceProperty           all  required  nt52-amd64-export; twin of the x86 row (task 26-A.8)
+ntoskrnl.exe!ZwSetValueKey                 all  required  nt52-amd64-export; twin of the x86 row (task 26-A.8)
 
 [deny]
-#
-# **THE x86 FILE'S DENIALS ARE NOT REPEATED HERE, AND THAT IS THE POINT OF THE
-# SPLIT.** All 27 of them are justified by absence on Windows 98 (Oney page
-# cites) or by "Windows XP and later - blocks the load on Win2000". Neither
-# argument holds on NT 5.2 amd64: Windows 98 is not a target of this binary at
-# all, and the XP-and-later APIs those rows refuse are present here. Copying
-# them across would have produced a file full of refusals with false reasons,
-# which is worse than a short list with true ones.
-#
-# What survives the change of target is the one denial that is about this
-# project's own architecture rather than about an operating system's vintage.
-#
-ExAllocatePool              Option A needs no private pool at all - fixed metadata belongs in the usbport-allocated miniport and common-buffer extensions (docs\contributing\design\04-controller-common-buffer.md). AGENTS.md states the rule as policy rather than as a missing export, and it is policy on every target: an allocation here would be this driver doing usbport's job. The same reasoning covers the tagged forms below.
-ExAllocatePoolWithTag       Same rule as ExAllocatePool. On amd64 the DDK's POOL_TAGGING rewrite that makes this the *default* spelling on x86 is not the reason for the denial - the denial is the no-private-pool policy itself.
-ExFreePool                  Nothing is allocated, so nothing is freed.
-ExFreePoolWithTag           Same.
-KeAcquireInterruptSpinLock  Under Option A usbport owns the interrupt object, so the miniport has no business synchronising against it directly. Unlike the x86 file's row, this is NOT denied here because it blocks a load - it exists on NT 5.2 - it is denied because reaching for it means the miniport has taken on something usbport owns.
-KeReleaseInterruptSpinLock  Same.
-MmMapLockedPagesSpecifyCache  Option B only. Under Option A every buffer this driver touches is one usbport mapped and handed over.
+
+ExAllocatePool              Not the HCD's spelling (xhci98-imports.allow; task 25.3). Allocate with ExAllocatePoolWithTag once its row exists.
+ExFreePoolWithTag           No Windows 98 evidence, and the x86 and amd64 sources are one tree: free with ExFreePool on both.
+IoForwardIrpSynchronously   Windows XP and later - blocks the load on Win2000, and the x86 and amd64 sources are one tree. Use IoCallDriver plus a completion routine that signals a KEVENT.
+IoSetCompletionRoutineEx    Windows XP and later - blocks the load on Win2000, as above.
+IoCsqInitialize             Cancel-safe queues arrived with the XP DDK and are not in the Win2K DDK's libraries.
+IoCsqInsertIrp              Cancel-safe queue family - not in the Win2K DDK.
+IoCsqRemoveNextIrp          Cancel-safe queue family - not in the Win2K DDK.

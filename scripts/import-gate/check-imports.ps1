@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-Post-link import-compatibility gate for xhci98.sys (roadmap Phase 3 task 5).
+Post-link import-compatibility gate for xhci98.sys (roadmap Phase 3 task 5),
+since 2026-10-02 the successor HCD that took the name (design record 13).
 
 .DESCRIPTION
 An unresolved module/symbol import stops a WDM driver before DriverEntry on
@@ -13,8 +14,8 @@ Three things happen, in order:
 
   1. Enforcement, always. Every module/symbol pair in the linked binary must
      appear in scripts\import-gate\xhci98-imports.allow for the build flavor
-     being checked, with the USBPORT.SYS rows read from
-     scripts\usbport-lib\usbport-imports.expected rather than restated. Pairs
+     being checked; no USBPORT.SYS pair is allowed at all, because the HCD
+     replaces usbport.sys. Pairs
      the allowlist marks `required` must be present. Symbols in the allowlist's
      [deny] section are reported with their specific diagnosed cause - the
      Win2K DDK's ExAllocatePool -> ExAllocatePoolWithTag rewrite is the one
@@ -99,9 +100,6 @@ param(
     # Default: winxp64-baselines.expected beside this script.
     [string]$Amd64ManifestPath = "",
 
-    # The usbport import expectations make-usbport-lib.cmd records.
-    # Default: scripts\usbport-lib\usbport-imports.expected.
-    [string]$UsbportExpectedPath = "",
 
     # Where the extracted Windows 2000 SP4 ntoskrnl.exe/hal.dll are staged, for
     # step 2's export check. Default: tools\win2ksp4-extracted. An absent
@@ -175,9 +173,6 @@ if ($Amd64Dir -eq "") {
 }
 if ($Amd64ManifestPath -eq "") {
     $Amd64ManifestPath = Join-Path $PSScriptRoot "winxp64-baselines.expected"
-}
-if ($UsbportExpectedPath -eq "") {
-    $UsbportExpectedPath = Join-Path $repo "scripts\usbport-lib\usbport-imports.expected"
 }
 if ($Win2kDir -eq "") {
     $Win2kDir = Join-Path $repo "tools\win2ksp4-extracted"
@@ -463,16 +458,30 @@ function Read-AllowFile {
             if ($requirement -notin @("required", "optional")) {
                 throw "$Path line ${lineNo}: REQUIREMENT must be required or optional"
             }
+            $module = $Matches[1]
+            $symbol = $Matches[2]
             $notes = ""
             if ($fields.Count -eq 4) {
                 $notes = $fields[3]
             }
+            # SITES=a.obj,b.obj as the first word of the notes names the only
+            # object files that may reference the import (design record 13
+            # section 7.5: the pool and DMA calls each live in one file). A row
+            # without it is unrestricted.
+            $sites = @()
+            if ($notes -match "^SITES=(\S*)") {
+                $sites = @($Matches[1].ToLower() -split "," | Where-Object { $_ -ne "" })
+                if ($sites.Count -eq 0 -or @($sites | Where-Object { $_ -notmatch "^[a-z0-9_]+\.obj$" }).Count -gt 0) {
+                    throw "$Path line ${lineNo}: SITES= must list object file names (name.obj), comma separated"
+                }
+            }
             $allow += [pscustomobject]@{
-                Module      = $Matches[1]
-                Symbol      = $Matches[2]
+                Module      = $module
+                Symbol      = $symbol
                 Flavors     = $flavors
                 Requirement = $requirement
                 Notes       = $notes
+                Sites       = $sites
                 Source      = "allowlist"
             }
             continue
@@ -497,34 +506,6 @@ function Read-AllowFile {
     return [pscustomobject]@{ Allow = $allow; Deny = $deny }
 }
 
-function Read-UsbportExpected {
-    param([string]$Path)
-
-    if (-not (Test-Path -LiteralPath $Path)) {
-        throw "USBPORT.SYS import manifest not found: $Path"
-    }
-
-    $rows = @()
-    foreach ($raw in Get-Content -LiteralPath $Path) {
-        $name = $raw.Trim()
-        if ($name -eq "" -or $name.StartsWith("#")) {
-            continue
-        }
-        $rows += [pscustomobject]@{
-            Module      = "USBPORT.SYS"
-            Symbol      = $name
-            Flavors     = "all"
-            Requirement = "required"
-            Notes       = "read from scripts\usbport-lib\usbport-imports.expected"
-            Source      = "usbport manifest"
-        }
-    }
-
-    if ($rows.Count -eq 0) {
-        throw "no names parsed out of $Path"
-    }
-    return $rows
-}
 
 # ---------------------------------------------------------------- evidence ---
 
@@ -659,6 +640,163 @@ function Test-NtkernName {
 
 # -------------------------------------------------------------------- main ---
 
+function Get-ObjectImportRefs {
+    param([string[]]$DumpLines)
+
+    # `dumpbin /symbols` on an object lists each import it calls as an UNDEF
+    # External: the thunk `__imp__ExFreePool@4` (x86 stdcall),
+    # `__imp_@IofCallDriver@8` (x86 fastcall) or `__imp_ExFreePool` (amd64)
+    # when the declaration carries dllimport, and the plain symbol
+    # `_ExFreePool@4` when it does not and the import library's stub resolves
+    # it - so every undefined external is taken, with the decoration stripped
+    # (Codex review of 26-A.2, round 1, finding 9).
+    $names = @()
+    foreach ($line in $DumpLines) {
+        if ($line -match "\bUNDEF\b.*\bExternal\s+\|\s+(\S+)") {
+            $name = $Matches[1]
+            if ($name -match "^__imp_(.+)$") {
+                $name = $Matches[1]
+            }
+            if ($name -match "^[_@](.+)$") {
+                $name = $Matches[1]
+            }
+            if ($name -match "^(.+)@\d+$") {
+                $name = $Matches[1]
+            }
+            $names += $name
+        }
+    }
+    return $names
+}
+
+# WDK 7.1 compiles the amd64 objects for link-time code generation, and the
+# dumper sees nothing in them, so the rule falls back to the sources: each
+# object's .c file (beside the sources file, two levels above obj<fl>\<arch>)
+# is searched for each restricted symbol as an identifier. A name reached only
+# through a macro of another spelling is not seen, which the per-object check
+# on x86 does see; an amd64-only call written by name is (Codex review of
+# 26-A.2, round 1, finding 10).
+# C joins a backslash-newline before it reads a token (translation phase 2),
+# and `??/` is a backslash under trigraph replacement (phase 1), so a name can
+# be split across lines and still compile to the import (Codex review of
+# 26-A.2, round 5, finding 3). The scan joins them first. What it still cannot
+# see is a name assembled by token pasting (`##`) inside a macro - the one
+# spelling that needs the preprocessor itself; the x86 per-object check sees
+# it in shared code, and an amd64-only pasted call is the scan's recorded
+# residual.
+function Join-CSplices {
+    param([string]$Text)
+    # The splices first (phases 1 and 2), then the comments, which become a
+    # space before tokens are read (phase 3): a name in a comment is no
+    # reference (a header that only discusses a pool call is not a site).
+    # Comments and string and character literals are read in one pass, left
+    # to right, as the compiler's tokenizer does: a "//" inside a string is no
+    # comment, and a "/*" inside one opens none (Codex review of batch (b),
+    # round 1, finding 15). A literal becomes a space as a comment does - no
+    # name inside one is a call.
+    $joined = $Text -replace "(\\|\?\?/)\r?\n", ""
+    $lexeme = '"(?:[^"\\\r\n]|\\.)*"|''(?:[^''\\\r\n]|\\.)*''|/\*.*?\*/|//[^\r\n]*'
+    $joined = [regex]::Replace($joined, $lexeme, " ", [System.Text.RegularExpressions.RegexOptions]::Singleline)
+    # A directive that only tests or removes a macro name - #undef, #ifdef,
+    # #ifndef - can never become a call (xhci_compat.h undoes the DDKs' pool
+    # rewrites that way); a #define can, and stays.
+    return [regex]::Replace($joined, "(?m)^[ \t]*#[ \t]*(undef|ifdef|ifndef)\b[^\r\n]*", " ")
+}
+
+function Test-ImportSitesFromSource {
+    param(
+        [string]$ImagePath,
+        [object[]]$SiteRows,
+        [object[]]$Objects
+    )
+
+    $srcDir = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $ImagePath))
+    $checked = 0
+    # A restricted name in a header, at any depth below the sources, can reach
+    # any object through a macro, and no per-file scan can attribute it, so
+    # none is allowed in one (Codex review of 26-A.2, rounds 2 and 3).
+    foreach ($header in @(Get-ChildItem -LiteralPath $srcDir -Filter "*.h" -File -Recurse -ErrorAction SilentlyContinue)) {
+        $headerText = Join-CSplices ([System.IO.File]::ReadAllText($header.FullName))
+        foreach ($row in $SiteRows) {
+            if ($headerText -cmatch ("\b" + [regex]::Escape($row.Symbol) + "\b")) {
+                Add-Failure "$($row.Module)!$($row.Symbol) is named in the header $($header.FullName): a macro there could reach any object, so a SITES-restricted name may not appear in a header (source scan, the objects being LTCG)."
+            }
+        }
+    }
+    foreach ($obj in $Objects) {
+        $source = Join-Path $srcDir ([System.IO.Path]::GetFileNameWithoutExtension($obj.Name) + ".c")
+        if (-not (Test-Path -LiteralPath $source)) {
+            Add-Failure "SITES rule: $($obj.Name) beside $ImagePath is an unreadable LTCG object and its source $source was not found, so the rule cannot be checked for it."
+            continue
+        }
+        $text = Join-CSplices ([System.IO.File]::ReadAllText($source))
+        foreach ($row in $SiteRows) {
+            if ($text -cnotmatch ("\b" + [regex]::Escape($row.Symbol) + "\b")) {
+                continue
+            }
+            $checked++
+            if ($row.Sites -notcontains $obj.Name.ToLower()) {
+                Add-Failure "$($row.Module)!$($row.Symbol) is named in $source, but its allowlist row restricts it to SITES=$($row.Sites -join ',') (design record 13 section 7.5; a source scan, the objects being LTCG)."
+            }
+        }
+    }
+    Write-Ok "SITES rule (a source scan over $($Objects.Count) LTCG object(s)): $($SiteRows.Count) restricted pair(s), $checked reference(s) checked"
+}
+
+function Test-ImportSites {
+    param(
+        [string]$ImagePath,
+        [object]$Rules,
+        [string]$Dumpbin
+    )
+
+    $siteRows = @($Rules.Allow | Where-Object { $_.Sites.Count -gt 0 })
+    if ($siteRows.Count -eq 0) {
+        return
+    }
+
+    # build.exe writes the objects beside the image it links them into.
+    $objDir = Split-Path -Parent $ImagePath
+    $objects = @(Get-ChildItem -LiteralPath $objDir -Filter "*.obj" -File -ErrorAction SilentlyContinue)
+    if ($objects.Count -eq 0) {
+        Add-Failure "$ImagePath has SITES= rows to check but no object files beside it in $objDir - the per-object rule cannot be read from the image alone."
+        return
+    }
+
+    $checked = 0
+    $anonymous = 0
+    foreach ($obj in $objects) {
+        $dump = @(Invoke-Dumpbin -Exe $Dumpbin -Mode "/symbols" -Path $obj.FullName)
+        # WDK 7.1 compiles amd64 objects for link-time code generation (/GL):
+        # the dumper reports them as ANONYMOUS OBJECT and lists no symbols, so
+        # nothing can be read from them, and saying "0 references" would read
+        # as a pass. They are counted and reported instead.
+        if (@($dump | Where-Object { $_ -match "ANONYMOUS OBJECT" }).Count -gt 0) {
+            $anonymous++
+            continue
+        }
+        $refs = @(Get-ObjectImportRefs $dump)
+        foreach ($row in $siteRows) {
+            if ($refs -cnotcontains $row.Symbol) {
+                continue
+            }
+            $checked++
+            if ($row.Sites -notcontains $obj.Name.ToLower()) {
+                Add-Failure "$($row.Module)!$($row.Symbol) is referenced from $($obj.Name), but its allowlist row restricts it to SITES=$($row.Sites -join ',') (design record 13 section 7.5)."
+            }
+        }
+    }
+    if ($anonymous -eq $objects.Count) {
+        Test-ImportSitesFromSource -ImagePath $ImagePath -SiteRows $siteRows -Objects $objects
+        return
+    }
+    if ($anonymous -gt 0) {
+        Add-Failure "SITES rule: $anonymous of $($objects.Count) object file(s) beside $ImagePath are unreadable (ANONYMOUS OBJECT) and the rest are not - a mixed obj directory, so the rule cannot be read from it."
+        return
+    }
+    Write-Ok "SITES rule: $($siteRows.Count) restricted pair(s), $checked object reference(s) checked across $($objects.Count) object file(s)"
+}
+
 function Test-Image {
     param(
         [string]$Path,
@@ -680,7 +818,17 @@ function Test-Image {
 
     $pairs = @(Get-ImportPairs (Invoke-Dumpbin -Exe $Dumpbin -Mode "/imports" -Path $Path))
     if ($pairs.Count -eq 0) {
-        Add-Failure "$Path imports nothing at all - it cannot be a usbport miniport."
+        # The HCD's task 25.8 scaffold is a DriverEntry that registers nothing
+        # and links the pure core, which imports nothing; an empty table is its
+        # honest result. Accepted only while the image says it is the scaffold,
+        # read from the bytes as make-package.ps1 reads them, so the exception
+        # retires itself when 26-A.1 removes the marker.
+        $text = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($Path))
+        if ($text.Contains("XHCI98_SCAFFOLD_DO_NOT_STAGE")) {
+            Write-Ok "imports nothing at all - accepted for the task 25.8 scaffold, whose marker is in the image"
+            return
+        }
+        Add-Failure "$Path imports nothing at all and does not carry the scaffold marker - past task 25.8 a driver that imports nothing cannot be one."
         return
     }
 
@@ -696,6 +844,15 @@ function Test-Image {
 
         if ($Rules.Deny.ContainsKey($pair.Symbol)) {
             Add-Failure "$($pair.Module)!$($pair.Symbol) is DENIED: $($Rules.Deny[$pair.Symbol])"
+            continue
+        }
+
+        # The successor replaces usbport.sys and must not import from it - on a
+        # stock Windows 98 SE there is no usbport.sys to resolve against, which
+        # is the reason the HCD is a second binary at all (roadmap-hcd.md,
+        # decisions table, "Pure HCD, not a registry switch").
+        if ($pair.Module -ieq "USBPORT.SYS") {
+            Add-Failure "$($pair.Module)!$($pair.Symbol): the HCD imports nothing from usbport.sys - it replaces it, and a stock Windows 98 SE has none to resolve against."
             continue
         }
 
@@ -715,7 +872,7 @@ function Test-Image {
             if ($elsewhere.Count -gt 0) {
                 Add-Failure "$($pair.Module)!$($pair.Symbol): allowed only from $(($elsewhere | ForEach-Object { $_.Module }) -join ', '). The PE import descriptor names the provider, so this is a different import and only one of them resolves."
             } else {
-                Add-Failure "$($pair.Module)!$($pair.Symbol): not in the allowlist. Add it to scripts\import-gate\xhci98-imports.allow only with target evidence that it resolves - see that file's header."
+                Add-Failure "$($pair.Module)!$($pair.Symbol): not in the allowlist. Add it to scripts\import-gate\xhci98-imports.allow (or its -amd64 sibling) only with target evidence that it resolves - see that file's header."
             }
             continue
         }
@@ -748,10 +905,6 @@ function Test-Image {
                     $evidence += if ($ImageArch -eq "amd64") { "nt52-amd64-export" } else { "w2k-export" }
                 }
             }
-        }
-
-        if ($pair.Module -ieq "USBPORT.SYS") {
-            $evidence += "usbport manifest"
         }
 
         if ($null -ne $Precedent) {
@@ -793,8 +946,8 @@ function Test-Image {
         # carrying the symbol. Both are host-side files this repository does
         # not ship, so the check can only run when they are present: with
         # neither source loaded there is nothing to conclude and the pair is
-        # left to the warning above. `usbport manifest` is not Windows 98
-        # evidence either way - that module is the same file on both targets.
+        # left to the warning above. (No USBPORT.SYS pair reaches this point:
+        # the refusal above has already failed it.)
         #
         if ($pair.Module -ieq "ntoskrnl.exe" -or $pair.Module -ieq "hal.dll") {
             if ($ImageArch -eq "amd64") {
@@ -841,6 +994,8 @@ function Test-Image {
         }
     }
 
+    Test-ImportSites -ImagePath $Path -Rules $Rules -Dumpbin $Dumpbin
+
     foreach ($row in $Rules.Allow) {
         if ($row.Requirement -ne "required") {
             continue
@@ -878,13 +1033,12 @@ try {
     $dumpers = @{ "x86" = $dumpbin }
 
     $rules = Read-AllowFile -Path $AllowPath
-    $usbportRows = Read-UsbportExpected -Path $UsbportExpectedPath
+
     $rules = [pscustomobject]@{
-        Allow = @($rules.Allow + $usbportRows)
+        Allow = @($rules.Allow)
         Deny  = $rules.Deny
     }
-    Write-Ok ("allowlist: {0} pairs ({1} read from usbport-imports.expected), {2} denied symbols" -f `
-        $rules.Allow.Count, $usbportRows.Count, $rules.Deny.Count)
+    Write-Ok ("allowlist: {0} pairs, {1} denied symbols" -f $rules.Allow.Count, $rules.Deny.Count)
 
     # Per-architecture rule sets, populated as images of each are met. The x86
     # set is the one read above; the amd64 set comes from its sibling file and
@@ -902,13 +1056,10 @@ try {
             $images += (Resolve-Path -LiteralPath $path).Path
         }
     } else {
-        foreach ($candidate in @("src\objfre\i386\xhci98.sys",
-                                 "src\objchk\i386\xhci98.sys",
-                                 "src\objchk_qemu\i386\xhci98.sys",
-                                 "src\objfre\amd64\xhci98.sys",
-                                 "src\objchk\amd64\xhci98.sys",
-                                 "src\objchk_qemu\amd64\xhci98.sys")) {
-            $path = Join-Path $repo $candidate
+
+        foreach ($candidate in @("objfre\i386", "objchk\i386", "objchk_qemu\i386",
+                                 "objfre\amd64", "objchk\amd64", "objchk_qemu\amd64")) {
+            $path = Join-Path $repo "src\$candidate\xhci98.sys"
             if (Test-Path -LiteralPath $path) {
                 $images += $path
             }
@@ -1067,12 +1218,11 @@ Fix it one of these ways:
                 $amd64AllowPath = if ($script:allowPathPinned) { $AllowPath } else { $AllowPathAmd64 }
                 $parsed = Read-AllowFile -Path $amd64AllowPath
                 $amd64Rules = [pscustomobject]@{
-                    Allow = @($parsed.Allow + $usbportRows)
+                    Allow = @($parsed.Allow)
                     Deny  = $parsed.Deny
                 }
                 $rulesByArch["amd64"] = $amd64Rules
-                Write-Ok ("amd64 allowlist: {0} pairs ({1} read from usbport-imports.expected), {2} denied symbols" -f `
-                    $amd64Rules.Allow.Count, $usbportRows.Count, $amd64Rules.Deny.Count)
+                Write-Ok ("amd64 allowlist: {0} pairs, {1} denied symbols" -f $amd64Rules.Allow.Count, $amd64Rules.Deny.Count)
 
                 if (-not $NoTargetEvidence) {
                     $amd64Manifest = @(Read-Win2kBaselineManifest -Path $Amd64ManifestPath)

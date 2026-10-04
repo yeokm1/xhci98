@@ -632,7 +632,9 @@ function Get-StampProblems {
         [string]$BootedImage = "",
         [Parameter(Mandatory = $true)][string]$DebugconLog,
         $IdentSize = $null,
-        [Parameter(Mandatory = $true)][int]$TableSizeof
+        [Parameter(Mandatory = $true)][int]$TableSizeof,
+        # The running driver's name for that size (Get-DriverSizeName).
+        [string]$SizeName = "MiniPortExtensionSize"
     )
     $problems = @()
     if (-not $PortFree) {
@@ -648,11 +650,11 @@ function Get-StampProblems {
         return $problems
     }
     if ($null -eq $IdentSize) {
-        $problems += ("no MiniPortExtensionSize in {0}: the last prep boot never showed the qemu build running, so there is nothing to stamp as installed. Boot with -Boot -Xfer, install, restart the guest, confirm with -Status, shut down, then stamp." -f $DebugconLog)
+        $problems += ("no {1} in {0}: the last prep boot never showed the qemu build running, so there is nothing to stamp as installed. Boot with -Boot -Xfer, install, restart the guest, confirm with -Status, shut down, then stamp." -f $DebugconLog, $SizeName)
         return $problems
     }
     if ([int]$IdentSize -ne $TableSizeof) {
-        $problems += ("the last prep boot ran a driver with MiniPortExtensionSize={0} and the offset table says SIZEOF {1}: that is not the build under test. Reinstall from a package built from this tree (or regenerate the offsets), and confirm with -Status before stamping." -f $IdentSize, $TableSizeof)
+        $problems += ("the last prep boot ran a driver with {2}={0} and the offset table says SIZEOF {1}: that is not the build under test. Reinstall from a package built from this tree (or regenerate the offsets), and confirm with -Status before stamping." -f $IdentSize, $TableSizeof, $SizeName)
     }
     return $problems
 }

@@ -1,5 +1,50 @@
 # Source Files
 
+> **Since 2026-10-02 `src\` is the successor HCD** (design record 13 section 5.1,
+> which has the current map). Deleted that day with the miniport: `xhci_dispatch.c`,
+> `xhci_rh.c`, `xhci_slot.c`, `xhci_xfer.c`, `xhci_vhub.c`, `xhci_probe.c` and the
+> host suites `test_xfer`, `test_iso`, `test_vhub` and `test_init`. **Since task
+> 26-A.2 (2026-10-03)** the kept files are built again - `xhci_init.c`,
+> `xhci_cmd.c`, `xhci_evt.c`, `xhci_pci.c`, `xhci_dbg.c` - with their usbport
+> service calls replaced by `hcd_svc.h`'s, and `xhci_xfer.c` came back holding only
+> the completion-code table, lifted unchanged from `1.2.0.0`, and whole since
+> 26-A.4 as the transfer engine. The HCD's own files:
+> `hcd.h` (the device extensions), `hcd_entry.c` (DriverEntry, AddDevice,
+> dispatch), `hcd_pnp.c` and `hcd_power.c` (the controller FDO's PnP and power),
+> `hcd_ctl.c` (start and stop, the interrupt and DPC, the controller thread),
+> `hcd_svc.h`/`hcd_svc.c` (the services that replace usbport's, and the
+> controller lock), `hcd_dma.c` (the one DMA adapter file), `hcd_dev.c` (the
+> device layer the kept files call into) and `hcd_pool.c` (the one pool file;
+> not linked until the first allocation, 26-A.4). Batch (b) (26-A.3, 26-A.4)
+> added `hcd_rh.c` (the root-hub PDO and FDO), `hcd_enum.c` (the controller
+> thread's port service and enumeration executor), `hcd_pdo.c` (device PDOs,
+> their ids and lifecycle) and the pure `xhci_enum.c` (the per-port enumeration
+> machine, host suite `test_enum`). Batch (c) (26-A.5, 26-A.6) adds `hcd_urb.c`
+> (the device PDOs' internal device controls) and the pure `xhci_pipe.c`
+> (configuration walk, endpoint parameters, Configure Endpoint plans, setup
+> packets, buffer splits and the USBD status table; host suite `test_pipe`). Phase 29 (drafted
+> 2026-10-04) adds the pure `xhci_link.c` (a USB3 root port's link state machine and
+> 29-A.5's hold and release rules; host suite `test_link`). Phase 30 (drafted
+> 2026-10-04) adds the pure `xhci_sshub.c` (the SuperSpeed hub class's decisions:
+> the 0x2A descriptor, the SuperSpeed port decision, hot or warm hub-port reset,
+> the extended port status and a downstream SuperSpeedPlus rate's speed ID; host
+> suite `test_sshub`) and `hcd_sshub.c` (the SuperSpeed half of a USB 3 hub on the
+> controller thread, entered from `hcd_hub.c` where `hub->Usb3`).
+> Task 31-A.1 adds the pure `xhci_stream.c` / `xhci_stream.h` (bulk streams'
+> plan, block layout, Stream Context and command encoders, the event's stream;
+> host suite `test_stream`) and `xhci98_streams.h`, the private open-streams
+> interface a separate class driver includes; the streams themselves are served
+> in `hcd_cfg.c` and reach every stream's pipe through `hcd_io.c`. Task 31-A.3
+> adds the pure `xhci_xport.c` / `xhci_xport.h` (the storage transport policy:
+> Bulk-Only or UAS for an interface offering either, and the ids that follow;
+> host suite `test_xport`), applied in `hcd_pdo.c`. The tables below are the
+> miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
+> kept files still speak of usbport as the design argument for each step;
+> `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name
+> to the HCD code that now plays the part, and a comment that names a deleted
+> file (`xhci_dispatch.c`, `xhci_slot.c`, `test_init.c` and the rest) describes
+> the miniport on branch `1.2.0.0`.
+
 What every file in `src/` is for, in one table per kind. The authoritative description of each file is the comment block at its head; this page is the map, and it says which files the host test suite compiles (the "pure core" of [design record 03](design/03-host-unit-tests.md)) and which need the DDK. Line counts are omitted on purpose - they drift, the roles do not.
 
 The rule that organises the whole directory: files in the pure core **decide** (they encode TRBs, compute layouts, classify ports, run state machines over caller-supplied memory) and touch no register, no DDK service and no IRQL; everything else is where those decisions become bus cycles and usbport callbacks. `src/sources` names the pure list and the reason each file is on or off it.
@@ -47,6 +92,7 @@ These need `ntddk.h` or a usbport service, take the controller lock, or derefere
 | `xhci_xfer.h` | The transfer engine's interface (`xhci_xfer.c`), kept out of `xhci.h` because it needs `xhci_usbport.h`. | yes |
 | `xhci_desc.h` | The descriptor snoop's interface, and the argument for why it must exist. | yes |
 | `xhci_topo.h` | The topology graph's types and interface, with the measured wire constants. | yes |
+| `xhci_counters.h` | The device matrix's counter block, `XHCIHC_COUNTERS` (roadmap-hcd.md 26-A.10): embedded in the controller FDO's extension, zeroed at every start, and measured by `scripts\vm-matrix\gen-offsets.ps1` under `XHCI_HOST_TEST`, which is why it is a header of its own. | yes |
 | `xhci_log.h` | The log ring's contract: the verbosity ladder, the sinks, and the rule that recording is not emission. | yes |
 | `xhci_probe.h` | The probe's classification and counters. | no - it takes the lock |
 | `xhci_hw.h` | The driver-only side of the split: MMIO accessors, PCI config access, bounded waits. Implemented in `xhci_pci.c`. | no |

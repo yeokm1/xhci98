@@ -89,7 +89,7 @@ BEGIN
         BLOCK "040904B0"
         BEGIN
             VALUE "CompanyName",      "Yeo Kheng Meng\0"
-            VALUE "FileDescription",  "xHCI USB 2.0 Host Controller Miniport Driver (xhci98)\0"
+            VALUE "FileDescription",  "xhci98 USB 3.x eXtensible Host Controller Driver\0"
             VALUE "FileVersion",      XHCI_VER_STR "\0"
             VALUE "InternalName",     "xhci98.sys\0"
             /* Transcribed from the repository's own LICENSE rather than
@@ -97,7 +97,7 @@ BEGIN
              * Kheng Meng. */
             VALUE "LegalCopyright",   "Copyright (c) 2026 Yeo Kheng Meng. GNU GPL v2.\0"
             VALUE "OriginalFilename", "xhci98.sys\0"
-            VALUE "ProductName",      "xhci98 - USB 2.0 host controller driver for xHCI\0"
+            VALUE "ProductName",      "xhci98 - USB host controller driver for xHCI\0"
             VALUE "ProductVersion",   XHCI_VER_STR "\0"
         END
     END

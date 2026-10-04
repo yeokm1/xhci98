@@ -2,6 +2,13 @@
  * test_iso.c - host tests for the isochronous engine (src/xhci_xfer.c), task
  * 9-A.1.
  *
+ * RESTORED for the HCD (roadmap-hcd.md task 26-A.9), unchanged from its last
+ * copy before Phase 25 retired it with the miniport: the isochronous engine
+ * was kept whole (task 26-A.4), and hcd_io.c builds the usbport-shaped block
+ * it reads (HCD_ISO_BLOCK) so that it could be. "usbport" below is the
+ * miniport's caller; test_td.c checks the blocks hcd_io.c builds, and the
+ * Frame ID decision it asks before an explicit StartFrame.
+ *
  * The roadmap calls batch 9-A "unusually vector-heavy for its size", and names
  * the reason: **frame-number and MFINDEX wraps are the defect class here, and
  * they are cheap to construct on the host and expensive to reproduce on a
@@ -790,6 +797,17 @@ static void test_build_refusals(void)
     CHECK_EQ(XhciXferBuildIso(&req, 1, out, 8, &layout), XHCI_XFER_ISO_MALFORMED,
              "a request with no packets is refused");
     iso.Block.NumberOfPackets = 1;
+
+    /* A zero-bandwidth endpoint (Max Packet Size 0, Max ESIT Payload 0;
+     * xhci_pipe.c, XhciPipeZeroBandwidth) is refused before any TRB by
+     * hcd_io.c; if one ever reached the builder it is still refused, never
+     * divided by. */
+    req.MaxPacketSize = 0;
+    req.MaxEsitPayload = 0;
+    CHECK_EQ(XhciXferBuildIso(&req, 1, out, 8, &layout), XHCI_XFER_BAD_PARAM,
+             "a zero-bandwidth endpoint builds no TD");
+    req.MaxPacketSize = 1024;
+    req.MaxEsitPayload = 1024;
 
     /* Direction: usbport's flag against the endpoint's, checked and not chosen
      * between - the third statement of a rule the other two builders carry. */

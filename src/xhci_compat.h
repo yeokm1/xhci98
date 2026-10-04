@@ -178,6 +178,17 @@ LONG XhciHostInterlockedIncrement(LONG *addend);
 #undef ExAllocatePool
 #endif
 
+/*
+ * WDK 7.1's ntddk.h, under the same POOL_TAGGING, rewrites ExFreePool(a) into
+ * ExFreePoolWithTag(a, 0), which the amd64 build then imports. Undone for the
+ * same reason as the rewrite above: one spelling, ExFreePool, on both
+ * architectures, and the HCD's pool rule (design record 13 section 7.5) names
+ * ExFreePool as its free entry point.
+ */
+#ifdef ExFreePool
+#undef ExFreePool
+#endif
+
 #endif /* XHCI_HOST_TEST */
 
 /*

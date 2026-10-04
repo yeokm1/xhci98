@@ -18,7 +18,10 @@ tree wins.
 The virtual-hub page, the one entry here that ever carried a task id, left
 on 2026-09-25 to become design record 12
 (`docs/contributing/design/12-virtual-hub-on-root-ports.md`) when roadmap
-task 24.3 took it up.
+task 24.3 took it up. The SuperSpeed HCD page left on 2026-10-02 to become
+design record 13 (`docs/contributing/design/13-superspeed-hcd.md`) when the
+owner froze the miniport at `1.2.0.0` and scheduled its successor as roadmap
+Phases 25 onward (`docs/contributing/roadmap-hcd.md`).
 
 - [superspeed-storage-behind-a-switch.md](superspeed-storage-behind-a-switch.md) -
   Proposal, written 2026-09-04 and not yet built (it was design record 10
@@ -33,12 +36,6 @@ task 24.3 took it up.
   narrow (SuperSpeed hubs and isochronous devices sent back to USB 2.0, UAS
   never selected), the port-reset policy, what QEMU can and cannot show,
   the batches, the owner's five decisions, and the two reviews' corrections.
-- [superspeed-hcd-reimplementation.md](superspeed-hcd-reimplementation.md) -
-  General USB 3.x SuperSpeed support, and why it is a separate driver-stack
-  project: the Win2000-era `usbport.sys` has no SuperSpeed concept and no
-  newer port driver runs on these targets, so it would first need the
-  Option B monolithic host controller driver that re-implements usbport's
-  role, and only then the link, descriptor, burst and stream, USB 3.x hub
-  and bandwidth work listed there. On the cards as the miniport driver's
-  successor, once the miniport stabilises (owner, 2026-10-02); no phase or
-  task id yet.
+  With the miniport frozen at `1.2.0.0` (owner, 2026-10-02) it stays here as
+  the record of what SuperSpeed storage inside the miniport would have taken;
+  the successor takes SuperSpeed storage in Phase 29 of `roadmap-hcd.md`.

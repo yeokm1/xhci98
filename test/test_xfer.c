@@ -2,6 +2,15 @@
  * test_xfer.c - host tests for the control-transfer engine (src/xhci_xfer.c),
  * Phase 6 batch A.
  *
+ * RESTORED for the HCD (roadmap-hcd.md task 26-A.9), unchanged from its last
+ * copy before Phase 25 retired it with the miniport: src/xhci_xfer.c was
+ * kept whole (task 26-A.4), so every vector here still describes code the
+ * HCD runs - the control builder for hcd_enum.c's EP0 reads and hcd_io.c's
+ * control URBs, the Normal builder for bulk and interrupt, and the queue and
+ * event path for all three. "usbport" below is the miniport's caller; the
+ * HCD fills the same request structures itself (src/hcd_svc.h, "READING THE
+ * KEPT FILES"), and test_td.c checks the lists it fills them with.
+ *
  * Three things are checked here that a VM cannot show and a review cannot
  * settle:
  *
@@ -753,17 +762,22 @@ static void test_build_refusals(void)
                                   &layout),
              XHCI_XFER_OK, "no data stage, no direction conflict");
 
-    /* EP0's Max Packet Size is one of exactly four values (USB2 9.6.1). */
+    /* EP0's Max Packet Size is one of exactly four values (USB2 9.6.1), or
+     * 512 at SuperSpeed (USB 3.2 9.6.1; task 29-A.3). */
     request_init(&req, 0x00, 0x05, 3, 0, 0, 0, 0, NULL);
     CHECK_EQ(XhciXferBuildControl(&req, out, XHCI_XFER_MAX_CONTROL_TRBS,
                                   &layout),
              XHCI_XFER_BAD_PARAM, "MPS 0 would divide by zero");
-    request_init(&req, 0x00, 0x05, 3, 0, 0, 0, 512, NULL);
+    request_init(&req, 0x00, 0x05, 3, 0, 0, 0, 1024, NULL);
     CHECK_EQ(XhciXferBuildControl(&req, out, XHCI_XFER_MAX_CONTROL_TRBS,
                                   &layout),
-             XHCI_XFER_BAD_PARAM, "512 is not a legal EP0 Max Packet Size");
-    for (i = 0; i < 4; i++) {
-        static const ULONG legal[4] = { 8, 16, 32, 64 };
+             XHCI_XFER_BAD_PARAM, "1024 is not a legal EP0 Max Packet Size");
+    request_init(&req, 0x00, 0x05, 3, 0, 0, 0, 128, NULL);
+    CHECK_EQ(XhciXferBuildControl(&req, out, XHCI_XFER_MAX_CONTROL_TRBS,
+                                  &layout),
+             XHCI_XFER_BAD_PARAM, "nor is 128");
+    for (i = 0; i < 5; i++) {
+        static const ULONG legal[5] = { 8, 16, 32, 64, 512 };
 
         request_init(&req, 0x00, 0x05, 3, 0, 0, 0, legal[i], NULL);
         CHECK_EQ(XhciXferBuildControl(&req, out, XHCI_XFER_MAX_CONTROL_TRBS,

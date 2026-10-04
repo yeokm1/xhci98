@@ -1,306 +1,185 @@
-# xhci98.sys import allowlist - module/symbol pairs this driver may import.
+# xhci98.sys import allowlist (x86) - module/symbol pairs the driver may
+# import. scripts\import-gate\check-imports.ps1 enforces it after every link.
+#
+# SINCE 2026-10-02 xhci98.sys IS THE SUCCESSOR HOST CONTROLLER DRIVER (design
+# record 13): the usbport miniport left the tree, and with it this file's
+# usbport rows, its Option A arguments and its "allocate no pool" policy. The
+# miniport's last allowlist is on branch 1.2.0.0.
 #
 # An unresolved import stops the driver before DriverEntry on both targets,
-# with no call-site diagnostic (docs\usb-xhci-info\win98-wdm.md "Imports are a silent
-# load-time gate"). This file is the committed decision about which pairs are
-# allowed to appear in the linked binary; scripts\import-gate\check-imports.ps1
-# enforces it after every link and rejects anything else.
+# with no call-site diagnostic (docs\usb-xhci-info\win98-wdm.md "Imports are
+# a silent load-time gate"). This file is the committed decision about which
+# pairs may appear in the linked binary.
 #
 # Pairs, not names. The PE import descriptor names the providing module, so
 # NTOSKRNL.EXE!DbgPrint and HAL.DLL!DbgPrint are different imports and only one
-# of them resolves. Module names are matched case-insensitively (the loader
-# does too - the linker records "ntoskrnl.exe" and "HAL.dll" in this build but
-# "NTOSKRNL.EXE" and "HAL.DLL" in the shipping NUSB miniport); symbol names are
-# matched exactly and case-sensitively.
-#
-# USBPORT.SYS rows are deliberately absent. They are read from
-# scripts\usbport-lib\usbport-imports.expected, which the .def and the import
-# library are already generated from; a second hand-maintained copy of the same
-# two names is how the lists silently diverge (roadmap Phase 3 task 5).
+# of them resolves. Module names are matched case-insensitively; symbol names
+# exactly.
 #
 # Format, one entry per line, whitespace separated:
 #
 #   MODULE!SYMBOL   FLAVORS   REQUIREMENT   evidence notes to end of line
 #
 #   FLAVORS      release | debug | qemu | all - which build flavor may import it
-#   REQUIREMENT  required                     - the gate fails if it is missing
-#                optional                     - may be absent (build-flag
-#                                               dependent)
-#
-# **"both" is retired and check-imports.ps1 refuses it** (task 13-L.1). It was
-# this column's word for "every flavor" while there were two, and there are now
-# three - release, debug and qemu - so a row written about two builds must not
-# be silently read as covering three. The word is "all". A qemu row is the
-# strongest statement this file can make about a published binary: qemu is
-# never published, so "qemu required" means "and no shipping build may have it".
+#                ("both" is retired and refused: there are three flavours)
+#   REQUIREMENT  required | optional
 #
 # Evidence tags in the last column, strongest first. check-imports.ps1
-# re-derives all three when the extracted target files are present and prints
-# which ones ran, so a row's claim is never taken on trust:
+# re-derives all three when the extracted target files are present:
 #
-#   w2k-export         The symbol is in the export table of every Windows 2000
-#                      SP4 kernel and HAL image on the media - not just the pair
-#                      the 2b VM happens to run. Authoritative for Win2000:
-#                      that is exactly what its loader resolves against.
-#   win98-precedent    A binary that ships as part of Win98 SE or of the NUSB
-#                      package installed on the 2a VM imports the same pair.
-#                      Strong but indirect: it says the pair resolved for that
-#                      driver on this platform, not that ours will load.
-#   ntkern-name        The symbol name appears as a NUL-delimited string in
-#                      Win98 SE's ntkern.vxd, which builds the NT-style export
-#                      tables at init. Positive evidence only: the absence of a
-#                      name there means nothing (Win98 SE's own usbd.sys
-#                      imports names that are not in it - see below).
+#   w2k-export         in the export table of every Windows 2000 SP4 kernel
+#                      and HAL image (win2k-baselines.expected).
+#   win98-precedent    an authenticated Windows 98 SE or NUSB binary
+#                      (win98-evidence.list) imports the same pair.
+#   ntkern-name        the name is a NUL-delimited string in Windows 98 SE's
+#                      ntkern.vxd. Positive evidence only, and module-blind:
+#                      task 25.3 found 19 names stock 98 SE drivers import that
+#                      are absent from it (design record 13 section 7).
 #
-# The authoritative Win98 check is the load itself, on the 2a VM (roadmap
-# Phase 3 task 8). Nothing host-side can replace it: on Win98 the NT-style
-# export tables are built at run time by ntkern.vxd rather than read from a
-# file, so there is no export table on disk to resolve against.
+# Every row is added with its Windows 98 evidence: a w2k-export tick alone does
+# not admit a pair. The authoritative Windows 98 check is still the load itself.
 #
-# No baseline file identities are recorded here. Each evidence source has one
-# tracked manifest that both names the files and authenticates them, so there is
-# no prose copy to drift out of date - a hash nobody compares is decoration:
+# Three rules are the gate's rather than this file's:
 #
-#   scripts\import-gate\win2k-baselines.expected  both SP4 kernel images and all
-#     eight HAL images on the media, including the SMP kernel, the ACPI HALs,
-#     and the one uncompressed image a HAL*.DL_ pattern misses.
-#   scripts\import-gate\win98-evidence.list       the [precedent] binaries
-#     (Win98 SE's own USB 1.1 stack and the NUSB set installed on the 2a VM) and
-#     the [nametable] file, ntkern.vxd.
-#
-# Both are verified by version, length, and SHA-256 before the gate reads a
-# single export name or reports a single evidence tag.
+#   - No USBPORT.SYS pair is allowed at all. The HCD replaces usbport.sys
+#     (roadmap-hcd.md, "The shape of the successor"), and a stock Windows 98 SE
+#     has none to resolve against.
+#   - An image that imports nothing at all passes only while it carries the
+#     scaffold marker XHCI98_SCAFFOLD_DO_NOT_STAGE (task 25.8). Task 26-A.1
+#     removed the marker (2026-10-03), so an empty import table is a failure.
+#   - Pool is allowed by rows here, with the rule naming the sites that may
+#     allocate (design record 13 section 7; the owner's decision of 2026-10-02,
+#     roadmap-hcd.md decisions table, "Pool and DMA"). The pair
+#     ExAllocatePoolWithTag + ExFreePool arrived with the root hub (task
+#     26-A.4), each row SITES=hcd_pool.obj; the untagged and WithTag-free
+#     names stay denied below.
 
 [imports]
 
-# --- MMIO and register-settle waits (src\xhci_pci.c) ---------------------
-# Phase 4 task 2 is where this driver first touches BAR0, so these are the
-# first imports the release build has ever carried beyond the two usbport exports.
-# All three are the exact module/symbol pairs NUSB's own USBEHCI.SYS imports on
-# Win98 - including the surprise that READ/WRITE_REGISTER_ULONG come from
-# NTOSKRNL.EXE and not from HAL.DLL, which is the whole reason this file
-# records pairs rather than names. On x86 the Win2K DDK declares all three as
-# real imports (wdm.h's NTHALAPI block); they are macros only on Alpha/IA64.
-ntoskrnl.exe!READ_REGISTER_ULONG     all  required  w2k-export; win98-precedent USBEHCI.SYS (NTOSKRNL.EXE!READ_REGISTER_ULONG, hint C7)
-ntoskrnl.exe!WRITE_REGISTER_ULONG    all  required  w2k-export; win98-precedent USBEHCI.SYS (NTOSKRNL.EXE!WRITE_REGISTER_ULONG, hint F4)
-# The busy-wait half of XhciWaitForBits. Callable at any IRQL and never used as
-# a timer (docs\contributing\implementation-invariants.md, "Wait Primitives").
-HAL.dll!KeStallExecutionProcessor    all  required  w2k-export; win98-precedent USBEHCI.SYS (HAL.DLL!KeStallExecutionProcessor, hint 5)
+# Rows are added as the HCD comes to import them, each from task 25.3's
+# evidence table (design record 13 section 7.4 and Appendix A), with that
+# table's evidence text verbatim. A SITES= first word in the notes restricts
+# the pair to the named object files (design record 13 section 7.5; the gate
+# reads it per object with dumpbin /symbols).
 
-# --- The miniport's interior lock (src\xhci_cmd.c) -----------------------
-# Phase 4 task 7. The command engine is reached from three contexts that no
-# single usbport lock covers - a submit under MiniportSpinLock, the completion
-# under MiniportInterruptsSpinLock, and an uncancellable async timeout under
-# neither (docs\usb-xhci-info\usbport-miniport-abi.md section 7) - so the miniport needs its
-# own. The ISR is deliberately not one of them, which is what keeps this an
-# ordinary DISPATCH-level spin lock rather than an interrupt spin lock (whose
-# XP-era Ke* entry points are on the deny list below).
-#
-# These are the exact pairs the Win2K DDK's x86 declarations produce:
-# KeInitializeSpinLock is NTKERNELAPI, and KeAcquireSpinLock/KeReleaseSpinLock
-# are macros over the FASTCALL Kf* entry points that _DECL_HAL_KE_IMPORT puts
-# in HAL.DLL. Win98 SE's *own* usbhub.sys and usbd.sys import all three, from
-# those same modules, which is the strongest Win98 evidence this project has.
-#
-# The shipping usbehci.sys imports none of them - it keeps no state that two
-# usbport locks can reach at once. This driver's command engine does, so this is
-# the one place where being a strict subset of that miniport's import profile
-# had to be given up, deliberately and with the reason recorded.
-ntoskrnl.exe!KeInitializeSpinLock     all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeSpinLock, hint 77); ntkern-name
-# The command engine's start epoch. Shared across every controller this driver
-# serves, and PnP can start two of them concurrently - nothing in the miniport
-# ABI serializes StartController across controllers - so a plain ++ could hand
-# the same token to both, which is the one thing that counter must never do.
-ntoskrnl.exe!InterlockedIncrement     all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!InterlockedIncrement, hint 28); ntkern-name
-# --- The NT 6.x discriminator (src\xhci_dispatch.c, DriverEntry) ---------
-# One call site, DriverEntry only, PASSIVE_LEVEL. IoIsWdmVersionAvailable(6, 0)
-# is what selects the four-argument registration call, the NT 6.x resource
-# mask and the Version 300 interface for Vista and Windows 7 (roadmap task
-# 22.5; design record 11 sections 6.1-6.5). It was amd64-only from task 21.8
-# until 2026-09-11, when the owner decided the 32-bit binary is to run on
-# Vista and Windows 7 as well. Windows 98 reports WDM 1.0 from it, so the 9x
-# targets take the NT 5.x arm. NOT PsGetVersion, which
-# docs\usb-xhci-info\win98-wdm.md rules out as unexported on Win98/Me. The
-# Windows 98 evidence is the strongest kind this file has: NUSB's own
-# USBPORT.SYS - the module this miniport registers with on the 2a VM -
-# imports the same pair, and the name is in ntkern.vxd's table.
-ntoskrnl.exe!IoIsWdmVersionAvailable  all  required  w2k-export (ordinal 357, hint 153, ntoskrnl RVA 0x97AC6 / ntkrnlmp 0xA7AF4); win98-precedent USBPORT.SYS 5.00.2195.5652 NUSB (NTOSKRNL.EXE!IoIsWdmVersionAvailable, hint 55); ntkern-name
-HAL.dll!KfAcquireSpinLock             all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (HAL.DLL!KfAcquireSpinLock, hint 6); ntkern-name. KeAcquireSpinLock(a,b) is the DDK's x86 macro for this.
-HAL.dll!KfReleaseSpinLock             all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (HAL.DLL!KfReleaseSpinLock, hint 9); ntkern-name. KeReleaseSpinLock(a,b) is the DDK's x86 macro for this.
+# --- Task 26-A.1: the FDO's attach, PnP forwarding and power pass-through ---
+ntoskrnl.exe!InterlockedIncrement            all  required  w2k-export; win98-precedent openhci.sys 4.10.2222 (NTOSKRNL.EXE!InterlockedIncrement, hint 28) (+35 other 98 SE); ntkern-name
+ntoskrnl.exe!InterlockedDecrement            all  required  w2k-export; win98-precedent openhci.sys 4.10.2222 (NTOSKRNL.EXE!InterlockedDecrement, hint 26) (+33 other 98 SE); ntkern-name
+ntoskrnl.exe!KeSetEvent                      all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeSetEvent, hint 8E) (+42 other 98 SE); ntkern-name
+ntoskrnl.exe!KeInitializeEvent               all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeEvent, hint 74) (+48 other 98 SE); ntkern-name
+ntoskrnl.exe!KeWaitForSingleObject           all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeWaitForSingleObject, hint 95) (+51 other 98 SE); ntkern-name
+ntoskrnl.exe!IofCompleteRequest              all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!IofCompleteRequest, hint 69) (+43 other 98 SE); ntkern-name
+ntoskrnl.exe!IofCallDriver                   all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IofCallDriver, hint 68) (+49 other 98 SE); ntkern-name
+ntoskrnl.exe!IoCreateDevice                  all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoCreateDevice, hint 38) (+43 other 98 SE); ntkern-name
+ntoskrnl.exe!IoDeleteDevice                  all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoDeleteDevice, hint 3D) (+41 other 98 SE); ntkern-name
+ntoskrnl.exe!IoAttachDeviceToDeviceStack     all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoAttachDeviceToDeviceStack, hint 30) (+36 other 98 SE); ntkern-name
+ntoskrnl.exe!IoDetachDevice                  all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoDetachDevice, hint 3F) (+26 other 98 SE); ntkern-name
+ntoskrnl.exe!PoStartNextPowerIrp             all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!PoStartNextPowerIrp, hint B6) (+25 other 98 SE); ntkern-name
+ntoskrnl.exe!PoCallDriver                    all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!PoCallDriver, hint AE) (+21 other 98 SE); ntkern-name
+ntoskrnl.exe!PoSetPowerState                 all  required  w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!PoSetPowerState, hint B4) (+5 other 98 SE); ntkern-name
 
-# --- The log ring's IRQL guard (src\xhci_dispatch.c) ---------------------
-# **Task 11-V.7's three file-sink imports - ZwCreateFile, ZwWriteFile and
-# ZwClose - and the block that justified them were REMOVED here by task 13-L.2
-#, with the sink itself.** The reason is evidential and it is not
-# a load-time one: those two names rest on `ntkern-name` alone and DO resolve on
-# the E460, since the release build loads there. What retired them is that the
-# file sink has never written a byte on any real machine, on either target -
-# task 11-V.7 ran on the 2a and 2b guests, so both halves of its record are
-# virtual-machine readings, and Windows 2000 has never run on real hardware in
-# this project at all. A channel measured working only in an emulator, force
-# declined on the one target that has metal, and unknown in both directions
-# there, is not what 1.0.0.0 publishes. The log file did not go away with it: it
-# moved to ring 3, where XHCISNAP writes it and names it from the command line.
-#
-# **The `ntkern-name` tier is NOT retired by their departure** and neither are
-# defect 2b's two boots. The WRITE_PORT_UCHAR block below used to cite these two
-# rows as its reason for caring about the tier; that consequence goes and the
-# question does not - the tier is unreliable rather than wrong, and it is what
-# every future Windows 98 import is judged on.
-#
-# One finding worth keeping out of that block: ZwSetInformationFile is one of
-# the Zw* names *missing* from ntkern.vxd's table, which is why the retired
-# append used FILE_APPEND_DATA plus a FILE_WRITE_TO_END_OF_FILE offset rather
-# than a seek. Anyone reaching for file I/O in this driver again starts there.
-# Promoted from debug-only by task 11-V.7: the flush measures its own IRQL and
-# refuses above PASSIVE_LEVEL rather than resting on a static claim about which
-# lifecycle callbacks are passive - a claim whose derivation was started and not
-# finished (src\xhci_log.c). It outlives the file sink that motivated it: the
-# flush now hands the ring to DbgPrint, and DbgPrint from DPC and ISR contexts
-# is the other thing this project has measured bugchecking Windows 98 metal, so
-# the guard is if anything more load-bearing than it was.
-HAL.dll!KeGetCurrentIrql         all  required  w2k-export; win98-precedent NTMAP.SYS 4.10.2227 (HAL.DLL!KeGetCurrentIrql, hint 3). NOT in ntkern.vxd's name strings - that source has false negatives, see the header.
-# Promoted from debug-only by task 11-V.9's `XhciLogDebugView` sink, and the
-# promotion is the whole of that value's cost. **What the release build gains
-# is one bulk dump of the ring from the PASSIVE flush, not the debug build's
-# per-line mirroring** - it is exactly that per-line profile, from DPC and ISR
-# contexts at real interrupt rates, that bugchecks Windows 98 on metal
-# (0028:C208D79D and 0028:C207B26D, roadmap task 12.2), which is why the sink is
-# reachable only from the flush and why live mirroring stays a build
-# distinction rather than something a registry value can turn on.
-#
-# The Windows 98 evidence is its own and is not inherited from the debug build's
-# row below: DbgPrint was measured reaching DebugView inside the 2a VM on
-# in batch 7b, cross-checked against the 0xE9 sink. That the bulk dump is *safe*
-# on Windows 98 **metal** is not established and is not claimed here - task 12.2
-# owns the decision about a channel, and Phase 13 owns the observation if that
-# decision asks for one.
-ntoskrnl.exe!DbgPrint            all  required  w2k-export; ntkern-name; runtime-observed reaching DebugView in the 2a VM (cross-checked against the port-0xE9 sink)
 
-# --- The qemu flavour's trace channel (src\xhci_dbg.c) -----------------
-# Through Phase 4 task 5 the release profile was a strict *subset* of the
-# shipping NUSB usbehci.sys's (which also imports NTOSKRNL.EXE!KeQuerySystemTime);
-# task 7's spin lock ended that, for the reason recorded in its block above. The
-# rule that replaces it is the same one in weaker form: every pair here must
-# carry Win98 evidence of its own, because every addition is a new way for the
-# load to fail silently on Win98.
-#
-# DbgPrint used to be a debug-only row here and is now required in every flavor
-# by task 11-V.9's DebugView sink - see its block above.
-#
-# **And since task 13-L.1 that is the ONLY reason any published binary imports
-# it**, because the live per-line trace this block is about is now the `qemu`
-# flavour's alone. `src/xhci_dbg.c` compiles away without `XHCI_DBG_LIVE`, which
-# only `qemu` defines. The reason is the same measurement in both directions:
-# per-line DbgPrint from DPC and ISR contexts at real interrupt rates is what
-# bugchecks Windows 98 on metal across three device classes, and `debug` is the
-# flavour a user with a problem is told to install. So `debug` and `release`
-# emit identically - one bulk dump from the PASSIVE flush - and what separates
-# them is smaller than "checked versus free" sounds: **both compile /Oxs**, and
-# this driver has no runtime asserts at all. `debug` adds /Oy- (frame
-# pointers), VS_FF_DEBUG in the version resource, the snapshot header's DEBUG
-# bit and the XHCI98_FLAVOUR_* marker - and nothing else. The measured compiler
-# delta is -DDBG=1, -DFPO=0 against -DFPO=1, the flavour define, and /Oy- against
-# /Oy; compare src/buildchk.log and src/buildfre.log, which print the line. (This comment said "the DDK's own asserts and optimisation"
-# until the post-Phase 13 review rounds; both halves of that were wrong and the same sentence had
-# already been written wrongly three times elsewhere. Check it against
-# src/sources and src/buildchk.log, never against a comment.) (The first cut of
-# the split gated only the port-0xE9 half and left this one behind; a Codex
-# review of commit `efa86a3` caught it.)
-#
-# "Prints", not "mirrors into the log ring" - the two channels are DISJOINT and
-# an earlier wording here said otherwise. XhciDbgEmit (src\xhci_dbg.c) writes
-# port 0xE9 and DbgPrint and touches no ring; the ring is filled only by the
-# explicit XhciLogNote producers, identically in every flavor. So the qemu build
-# has a live per-event trace AS WELL AS the ring, not a copy of one inside the
-# other - which is why an XHCI_DBG_* site is not evidence in a stored log.
-# KeGetCurrentIrql used to be a debug-only row here, dropped by XHCI_DBG_NO_IRQL
-# without touching a call site. It is now required in every flavor by task
-# 11-V.7's flush guard - see its block above - so that escape hatch no longer
-# removes the import, only the IRQL field of a trace line.
-#
-# --- The QEMU port-0xE9 mirror, and why this row is the enforcement ------
-#
-# **THIS ROW IS TASK 13-L.1's REPAIR.** It was `debug optional` and is now
-# `qemu required`, and that single change is what turns a recorded defect into
-# an enforced one: qemu is never published, so a published binary carrying this
-# import now FAILS THE GATE rather than merely being noted in this file. The
-# `required` half matters as much as the flavor - it is what catches a qemu
-# build that quietly lost the mirror and would then have answered defect 2b's
-# question about a binary that never had the import in the first place.
-#
-# **MEASURED AND THIS IS THE DEFECT THE ROW NOW PREVENTS.**
-# The published debug flavour of 0.0.0.4 does not load on the ThinkPad E460
-# (Win98 SE, NUSB 3.3): the controller devnode takes a yellow bang and Code 2,
-# with no crash and nothing loaded. This pair is the **sole** import difference
-# between the two 0.0.0.4 binaries - verified by DUMPBIN /IMPORTS on both - and
-# a rebuild without this pair loads clean and drives real devices on that
-# machine. The control was taken and it is the one that can be taken after the
-# fact: restoring the previous binary cleared the bang, which implicates the
-# BUILD rather than something already on the machine. It does not implicate the
-# import, and that rebuild was not otherwise identical either - it was a
-# diagnostic build, so it carried the do-not-deploy marker as well. (That rebuild was `XHCI_EXTRA_DEFINES=-DXHCI_DBG_NO_E9`,
-# which is also why it could not be shipped: any nonempty XHCI_EXTRA_DEFINES
-# marks the image undeployable. The negative is retired - the mirror is now the
-# opt-IN `XHCI_DBG_E9` that only the qemu flavor defines - so the binary that
-# loads is the ordinary debug flavor and needs no escape hatch at all.)
-#
-# **Why is not established, and the two readings have different consequences:**
-# either the import does not resolve there - which would make `ntkern-name`
-# insufficient rather than merely incomplete, since the name IS in the SE CD's
-# ntkern.vxd and that machine was installed from that CD - or port 0xE9 is
-# decoded by something on that chipset and the write faults during early init,
-# which would refute src\xhci_dbg.c's comment that "on real hardware nothing
-# decodes that port and the byte is discarded". A clean Code 2 rather than a
-# bugcheck favours the first and does not settle it.
-#
-# The tier is unreliable, not wrong, and this row does not retire it. That used
-# to be said by pointing at ZwCreateFile and ZwWriteFile, which rested on
-# `ntkern-name` alone and DO resolve on that machine since the release build
-# loads there. **Task 13-L.2 removed those two rows with the file sink**, so
-# that particular illustration is gone - and the question is not: `ntkern-name`
-# is still the evidence tier every future Windows 98 import is judged on, and
-# defect 2b's two boots are still owed.
-#
-# **The discriminating binaries are BUILT** and the question is
-# now waiting on two boots rather than on any work. -DXHCI_DBG_E9_NOEXEC keeps
-# this import - behind a file-scope volatile gate nothing ever sets - and never
-# executes the write; its import table is IDENTICAL to the published debug
-# flavour's, 18 symbols, verified with DUMPBIN, so the only runtime difference
-# is whether the write happens. Code 2 from that binary settles it as the
-# import; a clean load points at the port, pending one control boot for
-# XHCI_DIAGNOSTIC_BUILD. Procedure, hashes and decision tree:
-# docs\contributing\runs\run-13e.md, "P6. Build the two binaries that settle
-# defect 2b".
-#
-# **Do not "fix" this by dropping the pair**, and do not move it back to `debug`
-# to make some build convenient. The mirror is this project's primary instrument
-# in QEMU, where port 0xE9 is the whole point of it, and the qemu flavour exists
-# so that instrument can keep it while no published binary does. "What to publish
-# for bare metal" owned no task when this block was first written; it is now task
-# 13-L.1 and this row is its enforcement. Evidence:
-# docs\contributing\runs\run-13e.md, "Session record - the DebugView ban, measured", finding A, and
-# docs\contributing\design\08-build-flavours-and-the-log-channel.md.
-HAL.dll!WRITE_PORT_UCHAR        qemu    required  w2k-export; ntkern-name; MEASURED NOT LOADING on E460 Win98 SE metal - see the block above. The qemu flavour is never published, so this row is what keeps the import out of every binary a user can install.
+# --- Task 26-A.2: the controller FDO - resources, BAR, interrupt and DPC, the ---
+# --- DMA adapter, PCI configuration through the stack, timers, the controller ---
+# --- thread, the registry values, power requests. Kernel and HAL rows are     ---
+# --- section 7.4 verbatim; the thread pairs are Appendix A rows 34, 40, 112,  ---
+# --- 113 and 116 (stock 98 SE precedent each).                                ---
+ntoskrnl.exe!PoRequestPowerIrp               all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!PoRequestPowerIrp, hint B3) (+14 other 98 SE); ntkern-name
+ntoskrnl.exe!KeInitializeDpc                 all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeDpc, hint 73) (+24 other 98 SE)
+ntoskrnl.exe!KeInsertQueueDpc                all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInsertQueueDpc, hint 7C) (+10 other 98 SE)
+ntoskrnl.exe!IoConnectInterrupt              all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoConnectInterrupt, hint 37) (+6 other 98 SE); ntkern-name
+ntoskrnl.exe!IoDisconnectInterrupt           all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoDisconnectInterrupt, hint 40) (+6 other 98 SE); ntkern-name
+ntoskrnl.exe!MmMapIoSpace                    all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!MmMapIoSpace, hint 9C) (+7 other 98 SE); ntkern-name
+ntoskrnl.exe!MmUnmapIoSpace                  all  required  w2k-export; win98-precedent acpi.sys 4.10.2222 (NTOSKRNL.EXE!MmUnmapIoSpace, hint A6) (+5 other 98 SE); ntkern-name
+ntoskrnl.exe!READ_REGISTER_ULONG             all  required  w2k-export; win98-precedent openhci.sys 4.10.2222 (NTOSKRNL.EXE!READ_REGISTER_ULONG, hint C0) (+3 other 98 SE); ntkern-name
+ntoskrnl.exe!WRITE_REGISTER_ULONG            all  required  w2k-export; win98-precedent openhci.sys 4.10.2222 (NTOSKRNL.EXE!WRITE_REGISTER_ULONG, hint ED) (+3 other 98 SE); ntkern-name
+ntoskrnl.exe!IoGetDmaAdapter                 all  required  SITES=hcd_dma.obj the one adapter call (design record 13 section 7.5 rule 4); w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoGetDmaAdapter, hint 4A) (+6 other 98 SE); ntkern-name
+ntoskrnl.exe!IoAllocateIrp                   all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoAllocateIrp, hint 2D) (+30 other 98 SE); ntkern-name
+ntoskrnl.exe!IoFreeIrp                       all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoFreeIrp, hint 42) (+31 other 98 SE); ntkern-name
+ntoskrnl.exe!IoOpenDeviceRegistryKey         all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!IoOpenDeviceRegistryKey, hint 53) (+18 other 98 SE); ntkern-name
+ntoskrnl.exe!RtlQueryRegistryValues          all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!RtlQueryRegistryValues, hint DA) (+8 other 98 SE); ntkern-name
+ntoskrnl.exe!ZwClose                         all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!ZwClose, hint EF) (+29 other 98 SE); ntkern-name
+ntoskrnl.exe!KeInitializeTimer               all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeTimer, hint 78) (+20 other 98 SE)
+ntoskrnl.exe!KeSetTimer                      all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeSetTimer, hint 90) (+18 other 98 SE)
+ntoskrnl.exe!KeCancelTimer                   all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeCancelTimer, hint 6D) (+20 other 98 SE)
+ntoskrnl.exe!KeClearEvent                    all  required  w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!KeClearEvent, hint 6E) (+5 other 98 SE); ntkern-name
+ntoskrnl.exe!KeDelayExecutionThread          all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeDelayExecutionThread, hint 6F) (+12 other 98 SE); ntkern-name
+ntoskrnl.exe!KeInitializeSpinLock            all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeSpinLock, hint 77) (+32 other 98 SE); ntkern-name
+HAL.dll!KfAcquireSpinLock                    all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KfAcquireSpinLock, hint 6) (+31 other 98 SE); ntkern-name
+HAL.dll!KfReleaseSpinLock                    all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KfReleaseSpinLock, hint 9) (+31 other 98 SE); ntkern-name
+HAL.dll!KfRaiseIrql                          all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KfRaiseIrql, hint 8) (+8 other 98 SE)
+HAL.dll!KfLowerIrql                          all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KfLowerIrql, hint 7) (+9 other 98 SE)
+HAL.dll!KeGetCurrentIrql                     all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KeGetCurrentIrql, hint 3) (+15 other 98 SE)
+HAL.dll!KeStallExecutionProcessor            all  required  w2k-export; win98-precedent openhci.sys 4.10.2222 (HAL.DLL!KeStallExecutionProcessor, hint 5) (+15 other 98 SE); ntkern-name
+ntoskrnl.exe!PsCreateSystemThread            all  required  w2k-export; win98-precedent bt829.sys 4.10.2222 (NTOSKRNL.EXE!PsCreateSystemThread, hint BA); NUSB USBPORT.SYS 5.00.2195.5652 (hint C1) (design record 13 Appendix A row 112). The controller thread (section 5.4)
+ntoskrnl.exe!PsTerminateSystemThread         all  required  w2k-export; win98-precedent bt829.sys 4.10.2222 (NTOSKRNL.EXE!PsTerminateSystemThread, hint BB); NUSB USBPORT.SYS 5.00.2195.5652 (hint C2) (Appendix A row 113)
+ntoskrnl.exe!ObReferenceObjectByHandle      all  required  w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!ObReferenceObjectByHandle, hint AA) (+11 other 98 SE) (Appendix A row 116). Called on NT only (IoIsWdmVersionAvailable(1, 0x10): Windows 2000 is WDM 1.10, Windows 98 1.00, ME 1.05): the stop waits on the thread object there and on an event on Windows 98, where that wait faulted (runs/run-26.md). A NULL object type: PsThreadType is a data import
+ntoskrnl.exe!ObfDereferenceObject           all  required  w2k-export; win98-precedent hidclass.sys 4.10.2222 (NTOSKRNL.EXE!ObfDereferenceObject, hint AC) (+16 other 98 SE) (Appendix A row 34). The ObDereferenceObject macro; NT only, as above
+ntoskrnl.exe!IoIsWdmVersionAvailable        all  required  w2k-export; win98-precedent ohci1394.sys 4.10.2222 (NTOSKRNL.EXE!IoIsWdmVersionAvailable, hint 51) (Appendix A row 40); NUSB USBPORT.SYS 5.00.2195.5652 (hint 55). Chooses the thread-stop wait: (1, 0x10) is TRUE from Windows 2000 (WDM 1.10) on and FALSE on 98 (1.00) and ME (1.05)
+ntoskrnl.exe!ExQueueWorkItem                 all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!ExQueueWorkItem, hint 17) (+23 other 98 SE); ntkern-name. The power work item (hcd_power.c): a D0 resume or a system-IRP completion that arrives above PASSIVE_LEVEL
+
+# --- DbgPrint: the log ring's DebugView sink (hcd_log.c, task 26-A.8) in    ---
+# --- every flavour, emitted from the controller thread at PASSIVE_LEVEL      ---
+# --- only, and the qemu flavour's live trace (xhci_dbg.c). AGENTS.md allows  ---
+# --- no third site, and SITES holds the import to those two objects.        ---
+ntoskrnl.exe!DbgPrint                        all  required  SITES=hcd_log.obj,xhci_dbg.obj the one emit site and the qemu trace; w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!DbgPrint, hint 1) (+1 other 98 SE); ntkern-name (design record 13 section 7.4)
+# --- The qemu flavour's port-0xE9 mirror, never published ---
+HAL.dll!WRITE_PORT_UCHAR                     qemu required  w2k-export; ntkern-name; MEASURED NOT LOADING on E460 Win98 SE metal (the miniport's allowlist on branch 1.2.0.0 has the record; design record 08). The qemu flavour is never published, so this row is what keeps the import out of every binary a user can install.
+
+
+# --- Task 26-A.4: the root hub - its PDO, the relations PnP asks for, and the ---
+# --- pool the id strings and relation lists live in. The pool pair is the    ---
+# --- design record 13 section 7.5 rule: SITES=hcd_pool.obj, nowhere else.     ---
+ntoskrnl.exe!ExAllocatePoolWithTag           all  required  SITES=hcd_pool.obj the pool rule (design record 13 section 7.5); w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!ExAllocatePoolWithTag, hint 7) (+61 other 98 SE); ntkern-name
+ntoskrnl.exe!ExFreePool                      all  required  SITES=hcd_pool.obj the pool rule (design record 13 section 7.5); w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!ExFreePool, hint C) (+60 other 98 SE); ntkern-name
+# --- Task 26-A.5: the MDL a URB without TransferBufferMDL needs (design     ---
+# --- record 13 section 11.3; rule 4 places them with the pool calls).       ---
+ntoskrnl.exe!IoAllocateMdl                   all  required  SITES=hcd_pool.obj the MDL rule (design record 13 section 7.5 rule 4); w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!IoAllocateMdl, hint 2E) (+11 other 98 SE); ntkern-name
+ntoskrnl.exe!IoFreeMdl                       all  required  SITES=hcd_pool.obj the MDL rule (design record 13 section 7.5 rule 4); w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!IoFreeMdl, hint 43) (+14 other 98 SE); ntkern-name
+ntoskrnl.exe!MmBuildMdlForNonPagedPool       all  required  SITES=hcd_pool.obj with the MDL it describes (design record 13 section 11.3); w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!MmBuildMdlForNonPagedPool, hint 99) (+6 other 98 SE); ntkern-name
+# --- Task 26-A.5: cancellation of a pending URB (hcd_io.c). IoSetCancelRoutine ---
+# --- is a macro over InterlockedExchange in the Windows 2000 DDK's x86 wdm.h.   ---
+ntoskrnl.exe!IoAcquireCancelSpinLock         all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoAcquireCancelSpinLock, hint 29) (+9 other 98 SE); ntkern-name
+ntoskrnl.exe!IoReleaseCancelSpinLock         all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoReleaseCancelSpinLock, hint 57) (+12 other 98 SE); ntkern-name
+ntoskrnl.exe!InterlockedExchange             all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!InterlockedExchange, hint 27) (+22 other 98 SE); ntkern-name. The IoSetCancelRoutine macro (hcd_io.c)
+ntoskrnl.exe!IoInvalidateDeviceRelations     all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!IoInvalidateDeviceRelations, hint 4F) (+3 other 98 SE); ntkern-name
+ntoskrnl.exe!RtlInitUnicodeString            all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!RtlInitUnicodeString, hint D7) (+47 other 98 SE); ntkern-name
+ntoskrnl.exe!ObfReferenceObject              all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!ObfReferenceObject, hint AD) (+14 other 98 SE) (design record 13 Appendix A row 35). The ObReferenceObject macro: every PDO a relations list returns is referenced
+# --- Task 26-A.8: the door (hcd_door.c; design record 13 section 8.7) - the  ---
+# --- \DosDevices names, the two device interfaces, SymbolicName on each     ---
+# --- devnode, and the driver key names usbui.dll matches devnodes by. The  ---
+# --- kernel rows are section 7.4 verbatim; the link pair and ZwSetValueKey  ---
+# --- are Appendix A rows 15, 16 and 159 (stock 98 SE precedent each, the    ---
+# --- same usbd.sys and usbhub.sys that create such names on Windows 98).    ---
+ntoskrnl.exe!IoCreateSymbolicLink            all  required  w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!IoCreateSymbolicLink, hint 3B) (+13 other 98 SE); ntkern-name (design record 13 Appendix A row 15)
+ntoskrnl.exe!IoDeleteSymbolicLink            all  required  w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!IoDeleteSymbolicLink, hint 3E) (+13 other 98 SE); ntkern-name (design record 13 Appendix A row 16)
+ntoskrnl.exe!IoRegisterDeviceInterface       all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!IoRegisterDeviceInterface, hint 54) (+9 other 98 SE); ntkern-name
+ntoskrnl.exe!IoSetDeviceInterfaceState       all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!IoSetDeviceInterfaceState, hint 5A) (+8 other 98 SE); ntkern-name
+ntoskrnl.exe!IoGetDeviceProperty             all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!IoGetDeviceProperty, hint 49) (+7 other 98 SE); ntkern-name
+ntoskrnl.exe!ZwSetValueKey                   all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!ZwSetValueKey, hint FF) (+12 other 98 SE); ntkern-name (design record 13 Appendix A row 159)
 
 [deny]
 
-# Symbols that must never appear in the binary, whatever module claims to
-# provide them and whoever calls them. A denied name is reported with its
-# reason instead of the generic "not in the allowlist", because each of these
-# has a specific, already-diagnosed cause. Matched by symbol name alone.
+# Where the reason is a fact about a target - absent on Windows 98, or
+# blocking the load on Windows 2000 - and so binds any binary on those
+# targets. The miniport's denials argued from Option A ("usbport owns it") are
+# gone with it.
 
-ExAllocatePoolWithTag       The local Win2K DDK defines POOL_TAGGING and rewrites ExAllocatePool(a,b) into this. Undefine the macro in src\xhci_compat.h after the DDK includes and call the real two-argument ExAllocatePool. Under Option A the miniport should need no private pool at all - fixed metadata belongs in the usbport-allocated extensions (docs\contributing\design\04-controller-common-buffer.md).
-ExFreePoolWithTag           Same DDK macro family as ExAllocatePoolWithTag; use ExFreePool.
+ExAllocatePool              Not the HCD's spelling: task 25.3 found no Windows 98 SE or NUSB binary importing the untagged name, while ExAllocatePoolWithTag has dozens of stock 98 SE importers (design record 13 section 7). The HCD allocates with ExAllocatePoolWithTag and frees with ExFreePool.
+ExFreePoolWithTag           No Windows 98 evidence at all (task 25.3: no stock 98 SE driver imports it, and NUSB 3.6's wdmstub.sys appears to supply it), so it stays denied after the pool rows arrive. Free with ExFreePool.
 MmGetSystemRoutineAddress   Missing on Win98 (Oney p.438). There is no runtime symbol resolution on that target - every import decision is static and made here.
-KeNumberProcessors          Not exported on Win98 (Oney p.441). Win98 is uniprocessor by construction; per-CPU code belongs behind a Win2000-only build, not a runtime check.
-IoAllocateWorkItem          Not exported on Win98 (Oney p.375). Use usbport's UsbPortRequestAsyncCallback with miniport-owned synchronization.
+KeNumberProcessors          Not exported on Win98 (Oney p.441).
+IoAllocateWorkItem          Not exported on Win98 (Oney p.375); task 25.3 found it among the names NUSB 3.6's wdmstub.sys supplies. ExQueueWorkItem has stock 98 SE precedent.
 IoQueueWorkItem             Not exported on Win98 (Oney p.375).
 IoFreeWorkItem              Not exported on Win98 (Oney p.375).
 IoAcquireRemoveLock         The IO_REMOVE_LOCK family is missing on Win98 SE (Oney p.191). Keep an outstanding-I/O count instead.
 IoReleaseRemoveLock         IO_REMOVE_LOCK family - missing on Win98 SE (Oney p.191).
 IoReleaseRemoveLockAndWait  IO_REMOVE_LOCK family - missing on Win98 SE (Oney p.191).
-MmMapLockedPagesSpecifyCache  Missing on Win98; MmGetSystemAddressForMdlSafe expands to it (Oney p.225). Option B only.
+MmMapLockedPagesSpecifyCache  Missing on Win98; MmGetSystemAddressForMdlSafe expands to it (Oney p.225). Task 25.7's transfer route needs no system mapping of a URB buffer.
+MmGetPhysicalAddress        No Windows 98 binary precedent in any of the 86 scanned (task 25.3), and it would bypass the HAL's map registers; transfer buffers go through the DMA adapter's MapTransfer (design record 13 section 11).
+HalGetAdapter               No Windows 98 binary precedent (task 25.3). The DMA adapter comes from IoGetDmaAdapter, as Windows 98 SE's own uhcd.sys and openhci.sys get theirs, and the two routes are never mixed (design record 13 section 11).
+HalAllocateCommonBuffer     No Windows 98 binary precedent (task 25.3). Under ntddk.h a call by this name is a HAL import; call the adapter's DMA_OPERATIONS slot instead.
+HalFreeCommonBuffer         Same as HalAllocateCommonBuffer.
 PsGetVersion                Missing on Win98 (Oney p.437). Use IoIsWdmVersionAvailable.
 KeReadStateEvent            Missing on Win98 (Oney p.95).
 IoReportTargetDeviceChangeAsynchronous  Not exported on Win98 - a load-blocking import, not a runtime failure (Oney p.191).
@@ -309,8 +188,8 @@ PoCancelDeviceNotify        Not implemented on Win98 (Oney p.254).
 PoRegisterSystemState       Not implemented on Win98 (Oney p.254).
 PoSetSystemState            Not implemented on Win98 (Oney p.254).
 PoUnregisterSystemState     Not implemented on Win98 (Oney p.254).
-HalTranslateBusAddress      Only partially available on Win98 (Oney p.441). Use the translated resources PnP already supplies; under Option A usbport hands the miniport its resources.
-KeAcquireInterruptSpinLock  Windows XP and later - blocks the load on Win2000 (docs\usb-xhci-info\win98-wdm.md). Under Option A usbport owns the interrupt object.
+HalTranslateBusAddress      Only partially available on Win98 (Oney p.441). Use the translated resources PnP supplies in IRP_MN_START_DEVICE.
+KeAcquireInterruptSpinLock  Windows XP and later - blocks the load on Win2000 (docs\usb-xhci-info\win98-wdm.md). Use KeSynchronizeExecution, which the HCD can now call because it owns its interrupt object.
 KeReleaseInterruptSpinLock  Windows XP and later - blocks the load on Win2000.
 IoForwardIrpSynchronously   Windows XP and later - blocks the load on Win2000. Use IoCallDriver plus a completion routine that signals a KEVENT.
 IoSetCompletionRoutineEx    Windows XP and later - blocks the load on Win2000.

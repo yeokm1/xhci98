@@ -2,6 +2,14 @@
  * xhci_xfer.c - the control-transfer engine: TD construction, the pending-
  * transfer queue, and what a Transfer Event means to one usbport transfer.
  *
+ * KEPT FROM THE MINIPORT, whole and unchanged, from branch 1.2.0.0 (roadmap-
+ * hcd.md task 26-A.4). It is pure, so it built as it stood; the HCD uses its
+ * completion-code table and its control-TD builder (the enumeration's EP0
+ * reads, hcd_enum.c), and 26-A.5 decides what of the queue the URB path
+ * keeps. "usbport" below is the miniport's caller; src/hcd_svc.h, "READING
+ * THE KEPT FILES", is the key. Its host suite, test_xfer, left the tree with
+ * the miniport and returns with 26-A.9.
+ *
  * Pure computation plus stores into caller-supplied common-buffer memory: no
  * MMIO, no DDK calls, no usbport services, no IRQL dependencies, so it builds
  * and runs on the host under XHCI_HOST_TEST (docs/contributing/design/03-host-unit-tests.md).
@@ -295,15 +303,16 @@ ULONG XhciXferCodeInfo(ULONG completionCode, PXHCI_XFER_CODE info)
 #define XHCI_SETUP_DTD_IN 0x80
 
 /*
- * EP0's Max Packet Size is one of exactly four values (USB2 9.6.1
- * bMaxPacketSize0: 8, 16, 32 or 64), and the TD Size arithmetic divides by it.
- * Refusing anything else here is cheap and turns a wrong endpoint context into
- * a refused transfer instead of a silently wrong TD Size field, which the
+ * EP0's Max Packet Size is one of exactly four values at USB 2.0 speeds (USB2
+ * 9.6.1 bMaxPacketSize0: 8, 16, 32 or 64) and 512 at SuperSpeed (USB 3.2
+ * 9.6.1, task 29-A.3), and the TD Size arithmetic divides by it. Refusing
+ * anything else here is cheap and turns a wrong endpoint context into a
+ * refused transfer instead of a silently wrong TD Size field, which the
  * hardware treats as a hint and no test would ever catch.
  */
 static ULONG xhciXferMps0Valid(ULONG mps)
 {
-    return (mps == 8 || mps == 16 || mps == 32 || mps == 64) ? 1 : 0;
+    return XHCI_EP0_MPS_IS_LEGAL(mps) ? 1 : 0;
 }
 
 /*
@@ -3040,7 +3049,7 @@ static ULONG xhciXferBuildIsoPacket(XHCI_ISO_BUILD_STATE *state,
      * interval: 1,000 a second on a Full-Speed audio stream, 8,000 on a
      * High-Speed one. The interrupter's own moderation (IMOD, written by the
      * start from `XhciImodInterval250ns` - 4000, 1 ms, unless the registry
-     * says otherwise, 500 as the INFs ship - and written back to its saved
+     * says otherwise, 160 as the INFs ship - and written back to its saved
      * value by the restore) is what absorbs that.
      *
      * BEI suppresses the interrupt while keeping the event, which is exactly
@@ -3102,6 +3111,47 @@ static ULONG xhciXferIsoCadenceAgrees(const USBPORT_ISO_TRANSFER *iso,
     return 1;
 }
 
+/*
+ * The Frame ID decision for a whole request, as XhciXferSubmitIso takes it:
+ * allowed by the caller's policy, the packets' cadence agreeing with the
+ * endpoint's, and every packet's frame inside the window. Exported so a
+ * caller that must not be silently moved to SIA - an explicit StartFrame -
+ * can ask the same question before submitting. Any IRQL.
+ *
+ * A block XhciXferBuildIso would refuse before reading a packet - no
+ * signature, no packets, more than XHCI_XFER_MAX_ISO_PACKETS - is answered
+ * 0 here before reading one too: exported, this is reached without the
+ * build's own checks in front of it, and an empty block otherwise passed
+ * both loops vacuously and answered 1 (test\test_td.c, task 26-A.9).
+ */
+ULONG XhciXferIsoUsesFrameIds(const XHCI_ISO_REQUEST *request)
+{
+    const USBPORT_ISO_TRANSFER *iso;
+    ULONG frameId;
+    ULONG i;
+
+    if (request == NULL || request->Iso == NULL || !request->Frames.Allowed) {
+        return 0;
+    }
+    iso = request->Iso;
+    if (iso->Signature != USBPORT_ISO_SIGNATURE ||
+        iso->NumberOfPackets == 0 ||
+        iso->NumberOfPackets > XHCI_XFER_MAX_ISO_PACKETS) {
+        return 0;
+    }
+    if (!xhciXferIsoCadenceAgrees(iso, iso->NumberOfPackets,
+                                  request->PacketsPerFrame)) {
+        return 0;
+    }
+    for (i = 0; i < iso->NumberOfPackets; i++) {
+        if (!XhciXferFrameIdUsable(&request->Frames,
+                                   iso->Packet[i].FrameNumber, &frameId)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 ULONG XhciXferBuildIso(const XHCI_ISO_REQUEST *request,
                        ULONG transferFlagsIn,
                        XHCI_TRB *out,
@@ -3112,7 +3162,6 @@ ULONG XhciXferBuildIso(const XHCI_ISO_REQUEST *request,
     const USBPORT_ISO_TRANSFER *iso;
     ULONG packets;
     ULONG useFrameId;
-    ULONG frameId;
     ULONG status;
     ULONG i;
 
@@ -3202,14 +3251,7 @@ ULONG XhciXferBuildIso(const XHCI_ISO_REQUEST *request,
         xhciXferIsoCadenceAgrees(iso, packets, request->PacketsPerFrame)
             ? 0UL : 1UL;
 
-    useFrameId = (request->Frames.Allowed && !layout->CadenceMismatch)
-                     ? 1UL : 0UL;
-    for (i = 0; useFrameId && i < packets; i++) {
-        if (!XhciXferFrameIdUsable(&request->Frames,
-                                   iso->Packet[i].FrameNumber, &frameId)) {
-            useFrameId = 0;
-        }
-    }
+    useFrameId = XhciXferIsoUsesFrameIds(request);
 
     state.Out = out;
     state.Capacity = capacity;

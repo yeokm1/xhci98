@@ -8,20 +8,36 @@ owns its subject.
 
 ## Project Purpose
 
-A WDM kernel-mode USB host controller driver for the xHCI (USB 3.0) hardware
+A WDM kernel-mode USB host controller driver for the xHCI (USB 3.x) hardware
 spec, so that modern machines, whose USB chipsets are xHCI-only, can run
 Windows 98 SE and Windows 2000 SP4 with working USB devices. Both operating
-systems are first-class targets: a single `xhci98.sys` binary must install and
-work on either, and a phase is not done until its checkpoint has been observed
-on both. **"One binary" is a claim about the 32-bit targets**, and it also
+systems are first-class targets: a single 32-bit build of each driver must
+install and work on either, and a phase is not done until its checkpoint has
+been observed on both.
+
+**There are two drivers, and there were two generations.** Since `2.0.0.0`
+the product is a monolithic host controller driver (HCD), `xhci98.sys`, that
+replaces `usbport.sys`, the hub driver and the composite parent, and so
+drives SuperSpeed devices and hubs; beside it in the same package is
+`xhciuas.sys`, a UAS class driver of this project's own, with its own INFs.
+Up to `1.2.0.0` the product was a `usbport.sys` miniport of the same file
+name, USB 2.0 only. **The miniport is frozen** (owner, 2026-10-02): `1.2.0.0`
+is its last release, its sources are on branch `1.2.0.0` and its binaries in
+`releases\1.2.0.0`, and nothing in `src\` builds it. `docs/contributing/roadmap-hcd.md`
+and design record 13 (`docs/contributing/design/13-superspeed-hcd.md`) are
+the HCD's record; the older roadmap files and design records describe the
+miniport unless they say otherwise.
+
+**"One binary" is a claim about the 32-bit targets, per driver**, and it also
 covers the VM-supported 32-bit ones below; the 64-bit targets added in
 roadmap Phases 21 and 22 are a second build from a second toolchain in a
 second package, so no statement about a single binary anywhere in this
 repository reaches them (design record 11 section 11).
 
 The two targets fail in different directions, so one is not a proxy for the
-other. Win98 is where the loader gate, the back-ported NUSB `usbport.sys`, and
-the 16-bit setup engine bite. Win2000 is where SMP races, Driver Verifier, and
+other. Win98 is where the loader gate, NUSB's mass-storage component (the
+miniport's was NUSB's back-ported `usbport.sys`), and the 16-bit setup engine
+bite. Win2000 is where SMP races, Driver Verifier, and
 the strictly enforced power/IRQL rules bite. A green run on one says nothing
 about the other.
 
@@ -36,6 +52,12 @@ VM, the SMP stress environment, the device matrix), not by metal. Do not write
 "validated on both targets" without that qualification, and do not read a
 bare-metal Windows 98 result as covering Windows 2000.
 `docs/using/release-notes.md` states it under "What this is".
+
+The tier paragraphs below record how each further target was admitted and
+what the miniport was observed doing there. What the HCD has been observed
+doing on each is `docs/using/release-notes.md`, "Targets and their standing",
+and `roadmap-hcd.md` Phase 28; for `2.0.0.0` every target but Windows 98 SE
+is virtual-machine only, 32-bit Windows 7 included (owner, 2026-10-04).
 
 Windows ME is a third target of that same standing, supported in virtual
 machines, since the owner's decision of 2026-09-02: one QEMU guest, under
@@ -141,10 +163,14 @@ target VMs", are the record.
 
 Neither OS has xHCI support. Windows 98 shipped with UHCI/OHCI (USB 1.1) and
 got EHCI (USB 2.0) only through later back-ports: the Win2000-derived stack in
-NUSB, which is what the project tests against, and SweetLow's XP-derived
-rebuild of the same stack that Windows 98 QuickInstall bundles, which the
-driver has also been observed running under; Windows 2000 got the Win2000
-stack natively in SP4. This driver fills the gap for both.
+NUSB and SweetLow's XP-derived rebuild of the same stack that Windows 98
+QuickInstall bundles; Windows 2000 got the Win2000 stack natively in SP4. The
+miniport needed one of those stacks underneath it. The HCD needs none: on a
+stock Windows 98 SE it drives the controller, hubs, HID and audio by itself,
+and what it still needs from NUSB on Windows 98 SE is mass storage -
+`usbstor.sys` and the `USBNTMAP` mapping layer that gives a USB disk a drive
+letter, for Bulk-Only and UAS alike (`roadmap-hcd.md`, decisions table). This
+driver fills the gap for both.
 
 ---
 
@@ -153,9 +179,9 @@ stack natively in SP4. This driver fills the gap for both.
 | Item | Value |
 |---|---|
 | Primary targets | Windows 98 SE (4.10.2222) and Windows 2000 SP4 - one binary, both required |
-| Supported in VM | Windows ME (4.90.3000), under SweetLow's USB 2.0 stack only - observed in one QEMU guest on 2026-09-02, never on metal, no checkpoint tax. Same 16-bit setup engine and undecorated INF half as Windows 98 SE; see `docs/contributing/build-and-test.md`, "Windows ME target VM". 32-bit Windows XP (SP3) - observed in one QEMU guest on 2026-09-03 (xHCI-only package install, HID, mass storage, composite audio, the disable/enable/remove/rescan sequence), never on metal, no checkpoint tax; the `.NTx86` INF half under XP's own `usbport.sys`. Accommodate it where the change is small and low-risk, never at a primary target's expense; see `docs/contributing/build-and-test.md`, "Windows XP target VM", and `docs/usb-xhci-info/win98-wdm.md`, "What about Windows XP?" Windows XP x64 / Server 2003 x64 (NT 5.2.3790) - observed in one QEMU guest on 2026-09-09 (the same clauses, on the `qemu` build and then the `release` flavour; `debug-x64` has never been read in a guest), never on metal, no checkpoint tax; the `.NTamd64` half of the *second* INF, and **a second binary, not this one** - see "Windows XP x64 target VM" and `docs/contributing/design/11-x64-targets.md`. Windows Vista (SP2) and Windows 7 (SP1), 32-bit and x64 - observed in four QEMU guests on 2026-09-13 (the same clauses plus five disable/enable cycles each, on the `qemu` build; the published `release` package was then installed on all four on 2026-09-18, roadmap task 22.10), never on metal except one 32-bit Windows 7 session on the E460 (2026-09-19), no checkpoint tax; the `Xhci.Dev6` install path of both INFs and the Version 300 registration path of both binaries. **The x64 half loads only on an F8 boot with signature enforcement disabled, every boot**; see "Windows Vista and Windows 7 target VMs" and "Vista x64 and Windows 7 x64 target VMs" |
-| USB scope | USB 2.0 (HS/FS/LS) only; HID, mass storage, USB Ethernet, and USB Audio validation targets. USB 3.0 SuperSpeed is out of scope (see `docs/usb-xhci-info/xhci-programming.md`, "What SuperSpeed Support Would Require") |
-| Integration model | `usbport.sys` miniport (Option A) - reuse the USB 2.0 stack already on the target (NUSB's Win2000-derived build, SP4's native one, or SweetLow's XP-derived rebuild on Windows 98); do not re-implement the USB stack |
+| Supported in VM | How each target was admitted, under the miniport; the HCD's standing on each is the release notes' "Targets and their standing", every one virtual-machine only for `2.0.0.0`. Windows ME (4.90.3000), under SweetLow's USB 2.0 stack only - observed in one QEMU guest on 2026-09-02, never on metal, no checkpoint tax. Same 16-bit setup engine and undecorated INF half as Windows 98 SE; see `docs/contributing/build-and-test.md`, "Windows ME target VM". 32-bit Windows XP (SP3) - observed in one QEMU guest on 2026-09-03 (xHCI-only package install, HID, mass storage, composite audio, the disable/enable/remove/rescan sequence), never on metal, no checkpoint tax; the `.NTx86` INF half under XP's own `usbport.sys`. Accommodate it where the change is small and low-risk, never at a primary target's expense; see `docs/contributing/build-and-test.md`, "Windows XP target VM", and `docs/usb-xhci-info/win98-wdm.md`, "What about Windows XP?" Windows XP x64 / Server 2003 x64 (NT 5.2.3790) - observed in one QEMU guest on 2026-09-09 (the same clauses, on the `qemu` build and then the `release` flavour; `debug-x64` has never been read in a guest), never on metal, no checkpoint tax; the `.NTamd64` half of the *second* INF, and **a second binary, not this one** - see "Windows XP x64 target VM" and `docs/contributing/design/11-x64-targets.md`. Windows Vista (SP2) and Windows 7 (SP1), 32-bit and x64 - observed in four QEMU guests on 2026-09-13 (the same clauses plus five disable/enable cycles each, on the `qemu` build; the published `release` package was then installed on all four on 2026-09-18, roadmap task 22.10), never on metal except one 32-bit Windows 7 session on the E460 (2026-09-19), no checkpoint tax; the `Xhci.Dev6` install path of both INFs and the Version 300 registration path of both binaries. **The x64 half loads only on an F8 boot with signature enforcement disabled, every boot**; see "Windows Vista and Windows 7 target VMs" and "Vista x64 and Windows 7 x64 target VMs" |
+| USB scope | SuperSpeed (5 Gbit/s) and USB 2.0 (HS/FS/LS) devices and hubs, and UAS; HID, mass storage, USB Ethernet, and USB Audio validation targets. SuperSpeedPlus links are accepted at their trained rate and are untested ground, as is SuperSpeed isochronous (`roadmap-hcd.md`, decisions table; the release notes, "Untested ground"). The frozen miniport was USB 2.0 only |
+| Integration model | A monolithic bus driver (design record 13): `xhci98.sys` is the controller's FDO and its root hub's FDO, runs hubs and composite splitting inside the bus, and presents device PDOs to each target's own class drivers. It replaces `usbport.sys`, `usbhub.sys`, `usbhub20.sys` and `usbccgp.sys`; `xhciuas.sys` is the UAS class driver above it. The miniport's model, a `usbport.sys` miniport (Option A), is the `1.2.0.0` branch's |
 | Compiler | MSVC 6.0, run in place from `tools/MSVC600` (unpacked from `tools/MSVC600.zip`). The amd64 build is the exception and cannot be otherwise: it is WDK 7.1's `cl` 15.00 from `tools/WinDDK71`, reached by `build-driver.cmd <flavour> -amd64`, because no compiler here older than that can target x64 |
 | DDK | Windows 2000 DDK, unpacked into `tools/ntddk` (from `tools/WIN2KDDK.EXE`), for every 32-bit build; WDK 7.1 in `tools/WinDDK71` (`x64 WNET`) for the amd64 one, whether it stays being design record 11's decision 3. All of them live in the repo and install nothing machine-wide; every script finds them relative to itself. `DDKROOT` overrides where the DDK is found and reaches its `setenv.bat`, so it does redirect the compiler the driver is built with. `MSVC6` does NOT: the DDK build takes its compiler from the generated environment script, and `MSVC6` only redirects the host-side tools that need `dumpbin` and `cl` of their own - the import gate and `scripts\vm-matrix\gen-offsets.ps1` |
 | Language | C (C89/C90 compatible with MSVC 6.0) |
@@ -168,7 +194,11 @@ stack natively in SP4. This driver fills the gap for both.
 ## Repository Layout
 
 ```
-src/            Driver source code (C)
+src/            Driver source code (C): the HCD, xhci98.sys (roadmap Phases
+                25 onward, design record 13), its two INFs, and under
+                src/uas/ the UAS class driver xhciuas.sys and its two INFs.
+                The miniport left the tree on 2026-10-02; its last sources
+                are on branch 1.2.0.0
 test/           Host-side unit tests for the DDK-free core (test\run-host-tests.cmd)
 scripts/        The build wrapper, host setup helpers, and the import/INF/
                 packaging gates. `scripts/local/` is git-ignored per-host
@@ -230,10 +260,21 @@ but not every input; see
 ### Where to start
 
 Read `docs/contributing/roadmap.md` for the current phase and its checkpoint.
-The roadmap is two files: that one has the status, the conventions and Phases
-0-16 (the initial release), and `docs/contributing/roadmap-phases-17-on.md`
-has the entry of every later phase, the open one included.
+The roadmap is three files: that one has the status, the conventions and
+Phases 0-16 (the initial release); `docs/contributing/roadmap-phases-17-on.md`
+has Phases 17-24, the rest of the miniport's life, closed with the `1.2.0.0`
+cut that froze it; and `docs/contributing/roadmap-hcd.md` has Phases 25
+onward, the host controller driver, the open phase included. The miniport is
+frozen (owner, 2026-10-02): `1.2.0.0` is its last release, and its sources
+are on branch `1.2.0.0`. The build constraints - C89, the arithmetic rules,
+ASCII and CRLF, the three flavours, the import and INF gates - bind the HCD
+and `xhciuas.sys` as they bound the miniport; where the HCD departs from the
+miniport's rules (pool, the INFs' file set, SuperSpeed), the sections below
+say so, and `roadmap-hcd.md`'s decisions table and design record 13 are the
+authority.
 **Do not advance past a phase whose checkpoint has not been observed to pass.**
+The one exception is the E.1 bench clauses of Phases 28 to 31, read in one
+session before the `2.0.0.0` cut (`roadmap-hcd.md`, decisions table).
 Then use the "What to read for each phase" table in `docs/README.md` for the
 documents that phase needs.
 
@@ -245,39 +286,46 @@ evidence is not rediscovered or contradicted.
 
 ## Architecture Overview
 
-`xhci98.sys` is a `usbport.sys` miniport (Option A), not a standalone HCD. It
-plugs in below Microsoft's `usbport.sys` in the same way `usbehci.sys` and
-`usbuhci.sys` do, reusing the USB 2.0 stack already on the target: on Windows
-98 the Win2000-derived one NUSB ships (or SweetLow's XP-derived rebuild), on
-Windows 2000 SP4's own.
+`xhci98.sys` is a monolithic bus driver, not a miniport: one binary in two
+roles. As the xHCI controller's FDO it owns the hardware and creates one
+child, the root-hub PDO, under a **project-owned** hardware id (never
+`USB\ROOT_HUB`, which the OS's own `usbhub.sys` would claim); bound to that
+PDO by its own INF, it is the root hub's FDO too, enumerates every device on
+the bus and creates a PDO per device, or per function of a composite device,
+with the id strings each target's class INFs match. External hubs are
+objects inside the bus and get no PDO.
 
 ```
-  [usbhub.sys]  <- OS hub driver (REUSED, unchanged)
-       |  (root hub PDO created by usbport.sys)
-  [usbport.sys] <- USB port driver: root hub PDO, IOCTL_INTERNAL_USB,
-       |           URB parsing, enumeration, bandwidth (REUSED, from NUSB)
-       |  (private USBPORT_REGISTRATION_PACKET miniport interface)
-  [xhci98.sys]    <- THIS DRIVER: xHCI miniport registered with usbport.sys
-       |
+  [hidusb.sys, usbstor.sys, usbaudio.sys, vendor drivers, xhciuas.sys]
+       |  (IOCTL_INTERNAL_USB_SUBMIT_URB and its siblings, per target)
+  [device / function PDOs]   <- created by xhci98.sys as the root hub's FDO
+  [root-hub PDO]             <- created by xhci98.sys as the controller's FDO
+  [xhci98.sys]               <- THIS DRIVER: controller, root hub, hubs,
+       |                        composite splitting, URB dispatch, the door
   [XHCI PCI Device]
 ```
 
-`usbport.sys` owns the root hub PDO, all `IOCTL_INTERNAL_USB_*`, URB parsing,
-enumeration, and bandwidth. The miniport never parses URBs or handles those
-IOCTLs. `xhci98.sys` deals with the xHCI hardware only:
+Reused unchanged on every target: the leaf class drivers, the helper exports
+of `usbd.sys`, and the OS INFs that bind by class id. Replaced: `usbport.sys`,
+`usbhub.sys`, `usbhub20.sys`, and the composite parent (`usbhub.sys` on
+Windows 98, `usbccgp.sys` elsewhere). The function-driver contract each
+target's class drivers expect of a USB PDO is read per target and is design
+record 13 section 6; the object model, the enumeration state machine and the
+lock model are its section 5; hubs and composite devices are section 10. The
+controller's Advanced tab and the root hub's Power tab are answered by the
+driver itself (the `USBUSER` door, section 8), which is also how `XHCISNAP`
+reaches it. `xhciuas.sys` is a class driver of this project's own above a
+device PDO, for UAS, with streams the bus provides (`roadmap-hcd.md` Phase
+31).
 
-1. Register with `usbport.sys` (`USBPORT_RegisterUSBPortDriver`); respond to start/stop/suspend controller callbacks
-2. Controller init: reset, set up event ring, command ring, scratchpad
-3. Root-hub callbacks: report port status, handle port power/reset (usbport builds the PDO and hub descriptor)
-4. Transfer processing: translate usbport transfer requests into xHCI TRBs, ring doorbells
-5. Event processing: miniport ISR and DPC callbacks drain the event ring and complete transfers back to usbport
-
-The `USBPORT_REGISTRATION_PACKET` miniport ABI is undocumented by Microsoft;
-ReactOS is the reference, validated against NUSB's shipping `usbport.sys`. See
-`docs/contributing/architecture.md` for the full breakdown, the integration
-decision, and the Option B monolithic-HCD fallback, and
-`docs/usb-xhci-info/win98-wdm.md` for the `IOCTL_INTERNAL_USB_*` and
-URB-function lists that describe what `usbport.sys` does for us.
+The pure, DDK-free core (rings, contexts, capabilities, ports, topology,
+descriptors, the log, the enumeration and hub state machines) is shared code
+under `src/` with host suites in `test/`; `docs/contributing/source-files.md`
+says what each file is. The miniport's architecture - a
+`USBPORT_REGISTRATION_PACKET` miniport under Microsoft's `usbport.sys`,
+ReactOS-derived and validated against NUSB's binary - is
+`docs/contributing/architecture.md` and the `usbport-miniport-*` documents,
+on the `1.2.0.0` branch's terms.
 
 ---
 
@@ -285,20 +333,25 @@ URB-function lists that describe what `usbport.sys` does for us.
 
 Every standard USB 3.x physical connector carries both USB 2.0 D+/D- wires
 and SuperSpeed pairs, and the xHCI controller exposes one logical port per
-protocol for it. The rule: manage only USB 2.0 protocol ports, and leave USB
-3.x logical ports unpowered and unmanaged, since USB 3.0 is out of scope.
-USB 3.x capable devices then fall back to their USB 2.0 path and connect at
-High-Speed, so a laptop with only USB 3.x physical connectors still works.
+protocol for it. The HCD manages both: a SuperSpeed device trains on the USB
+3.x logical port and is driven there, and a USB 2.0 device on the same
+connector appears on the USB 2.0 logical port as it always did. The two
+ports of one connector are paired by convention only, and the pairing
+matters where the bus sends a device back to USB 2.0 on purpose (a
+UAS-only device at SuperSpeed on a controller that cannot stream): that
+means disabling the SuperSpeed port and holding it, under the release rules
+of `roadmap-hcd.md` task 29-A.5. The frozen miniport managed only the USB 2.0
+ports and left the USB 3.x ones unpowered.
 
 **You cannot negotiate USB 2.0 speed on a USB 3.x logical port.** The SS and
 D+/D- paths are electrically unrelated; no register or command converts one
 to the other.
 
-See `docs/usb-xhci-info/xhci-programming.md`: "Port Topology Classification"
+See `docs/usb-xhci-info/xhci-programming.md`, "Port Topology Classification",
 for the classification algorithm and the companion-pairing convention, and
-"What SuperSpeed Support Would Require" for why an all-SuperSpeed controller
-is refused (`XHCI_CAPS_NO_MANAGED_PORTS`) without that making any
-USB4/Thunderbolt connector unservable.
+`docs/usb-xhci-info/xhci-data-structures.md` sections 10 and 11 for the
+SuperSpeed and USB 3 hub material, checked against xHCI 1.2c and USB 3.2
+(roadmap-hcd tasks 29-0 and 30-0).
 
 ---
 
@@ -328,15 +381,16 @@ what Win2000 enforces; power/PnP/locking behaviour that "works" on Win98 is
 frequently just unexercised there. Never close a phase on a Win98-only
 observation.
 
-Allocate no pool at all. The import allowlist has no row for
-`ExAllocatePool` or for either tagged name, so a call to any of them fails the
-import gate as "not in the allowlist", and a row would need Windows 98
-evidence that none is intended to supply. This is policy rather than a
-missing export: Option A needs no private pool, so fixed software metadata is
-embedded in the usbport-allocated miniport/common-buffer extensions. (The
-DDK's `POOL_TAGGING` rewrite of `ExAllocatePool` is undone in the
-compatibility header so the untagged name is what a stray call would resolve
-to and be refused on.)
+Pool is allocated at named sites only. The HCD's pair is
+`ExAllocatePoolWithTag` + `ExFreePool`, `NonPagedPool` only, at
+lifetime-scoped sites and never per transfer, and the allowlist admits the
+pair in `hcd_pool.obj` alone (`SITES=hcd_pool.obj`); design record 13 section
+7.5 is the rule. The untagged `ExAllocatePool` and `ExFreePoolWithTag` have no
+Windows 98 evidence and no row, and the compatibility header still undoes the
+DDK's `POOL_TAGGING` rewrite so a stray untagged call resolves to the name the
+gate refuses. (The miniport allocated no pool at all, under Option A's
+usbport-allocated extensions; that rule stays with the `1.2.0.0` sources.)
+`xhciuas.sys` has its own allowlists, `xhciuas-imports*.allow`.
 
 See `docs/usb-xhci-info/win98-wdm.md` ("Imports are a silent load-time gate"
 and "Windows 2000 as a co-primary target") and
@@ -365,18 +419,18 @@ requires them; `build-driver.cmd` makes that mapping in one place
 
 ### DMA memory
 
-Ring memory is DMA common-buffer memory supplied by `usbport.sys` under
-Option A: physically contiguous, DMA-accessible below 4 GB, and cached, not
-uncached (both shipping builds pass `CacheEnabled = TRUE`). Ordering rests on
-`volatile` accesses, publishing each TRB's Cycle Bit last, and the
-`WRITE_REGISTER_*` accessors, never on an uncached mapping.
+Ring memory is DMA common-buffer memory the HCD allocates itself, through the
+adapter `IoGetDmaAdapter` returns: physically contiguous, DMA-accessible below
+4 GB (a common buffer above 4 GB is refused), and cached, not uncached
+(`CacheEnabled = TRUE`). Ordering rests on `volatile` accesses, publishing
+each TRB's Cycle Bit last, and the `WRITE_REGISTER_*` accessors, never on an
+uncached mapping.
 
-The controller common buffer is one fixed, worst-case block, committed in
-`DriverEntry` before any register can be read, so the slot and scratchpad
-limits are declared policy with an explicit refusal path above them. Objects
-a slot owns (device contexts, EP0 transfer rings) must live in that block:
-usbport frees the endpoint common buffer and zeroes the miniport endpoint
-extension on every `ReopenPipe`, which happens to EP0 mid-enumeration.
+The controller common buffer keeps design record 04's fixed, worst-case
+layout, carved by the same code under the same policy limits (slots,
+scratchpad pages, pooled transfer rings) and the same refusal above them;
+transfer buffers reach the controller through the adapter's map registers.
+Design record 13 section 11 is the transfer-buffer policy, and
 `docs/contributing/design/04-controller-common-buffer.md` has the
 derivations.
 
@@ -415,20 +469,25 @@ Neither file may grow the other's sections: an undecorated section in the
 binary on a 32-bit machine, and the gate refuses it by name (`PATH-NO9X`,
 `PATH-MFGDEC`).
 
-The media carries no Microsoft file. `usbd.sys` and `usbhub.sys` (both
-targets), `usbport.sys` (the NT targets; on Windows 98 the USB 2.0 stack
-places it) and, since 1.0.2.0, `usbui.dll` (every target: the root hub's
-property-page provider, since task 23.2 the controller's on NT too, and on 9x
-the drawer of the controller tab's dialogs) are the OS's own, and nothing on an xHCI-only machine
-ever placed them, so the INF has the setup engine copy them from the OS's own
-install source through `LayoutFile=layout.inf`, never overwriting a file
-already there; on an xHCI-only Windows 98 machine that means the Windows 98 CD
-may be asked for, and the NT targets take them from `Driver Cache\i386` with no
-prompt - `Driver Cache\amd64` on Windows XP x64, where the same route was
-measured to work and to ask for nothing, and where `usbd.sys` and `usbui.dll`
-come from `driver.cab` while `usbport.sys` and `usbhub.sys` come from
-`sp2.cab`. The three drivers go to dirid 10 (`System32\Drivers`) and `usbui.dll`
-alone to dirid 11 (`System32`), which the INF gate holds it to. `usbhub20.sys` is on no path: the OS places it itself. Do not put
+`xhciuas.sys` has the same pair of its own, `src/uas/xhciuas.inf` and
+`src/uas/xhciuas-amd64.inf`, gated on every build by
+`scripts\inf-gate\check-uas-inf.ps1`, and every flavour directory of a
+package carries both drivers with their INFs.
+
+The media carries no Microsoft file. The HCD's INFs have the setup engine
+copy two of the OS's own files, `usbd.sys` (whose helper exports the class
+drivers above the HCD's PDOs import) to dirid 10 (`System32\Drivers`) and
+`usbui.dll` (the property-page provider, and on 9x the drawer of the tabs'
+dialogs) alone to dirid 11 (`System32`), from the OS's own install source
+through `LayoutFile=layout.inf`, never overwriting a file already there,
+because nothing on an xHCI-only machine ever placed them. On an xHCI-only
+Windows 98 machine that means the Windows 98 CD may be asked for; the NT
+targets take them from their driver cache with no prompt; and Vista's and 7's
+`Xhci.Dev6` path copies `xhci98.sys` alone, since every install of those
+systems has both. The HCD needs no `usbport.sys` and no `usbhub.sys`, and its
+INFs copy neither (the miniport's INFs fetched both as well). On Windows 98
+SE, `xhciuas.inf` names NUSB's `USBNTMAP.SYS` as an upper filter by name and
+never ships it. `usbhub20.sys` is on no path. Do not put
 any of them on the media: the INF gate's `OS-*` rules refuse an INF that names
 one, and `PKG-MSFILE` refuses a staged package holding one - by name, which
 covers the four, the three retired 1.0.0.0 media names and `usbhub20.sys`. A
@@ -437,10 +496,10 @@ that is the packager refusing to publish anything it did not itself stage.
 `legal-provenance.md` section 5 records why. Build install media with `scripts\package\make-package.ps1`, never by
 hand-copying the `.sys` and `.inf`. Its `-Arch` moves three things together
 and they are not separable: the obj subdirectory, which of the two INFs is
-staged, and the architecture both gates run under. A published release
+staged for each driver, and the architecture both gates run under. A published release
 directory is a flavour AND an architecture - `release-x86`, `debug-x86`,
 `release-x64`, `debug-x64` - because both architectures' binaries are called
-`xhci98.sys`; `make-release.ps1 -Arch` defaults to **both** since 2026-09-09,
+`xhci98.sys` and `xhciuas.sys`; `make-release.ps1 -Arch` defaults to **both** since 2026-09-09,
 so an ordinary cut publishes four directories. It defaulted to `x86` alone
 until roadmap task 21.5 passed - an amd64 binary installing and running
 through every checkpoint clause on a Windows XP x64 guest, and then the
@@ -463,21 +522,23 @@ compatibility table and the "MSVC 6.0 / C89 Language Pitfalls" list.
 
 ## Reference Implementations
 
-Split the references by layer. ReactOS (`drivers/usb/usbport`, plus the
-`usbehci`/`usbohci` miniports) documents the upward usbport miniport
-interface this driver plugs into, including the otherwise undocumented
-`USBPORT_REGISTRATION_PACKET`. Linux (`drivers/usb/host/xhci*.c`) documents
+Split the references by layer. Linux (`drivers/usb/host/xhci*.c`) documents
 the downward xHCI hardware programming: rings, TRB encoding, events,
-slot/endpoint lifecycle. Haiku and FreeBSD are occasional second opinions,
-with nothing resting on them. `external/README.md` has the per-tree table and
-how to fetch the local mirrors.
+slot/endpoint lifecycle, streams. The upward contract the HCD presents - what
+each target's class drivers send a USB PDO, the `USB_BUS_INTERFACE_USBDI`
+versions, the `USBUSER` door and the hub IOCTLs the property pages send - is
+read per target from the shipping binaries and recorded in design record 13
+sections 6 and 8, each fact tagged and given a `legal-provenance.md` row;
+ReactOS (`drivers/usb/usbport`, `usbhub`, `usbccgp`) is interface
+documentation beside those readings, never the authority over them. Haiku
+and FreeBSD are occasional second opinions, with nothing resting on them.
+`external/README.md` has the per-tree table and how to fetch the local
+mirrors.
 
-For the upward interface, start with
-`docs/usb-xhci-info/usbport-miniport-interface.md`: it names the exact
-ReactOS files and symbols, maps every miniport callback family onto its xHCI
-implementation, and gives the procedure for validating the ABI against the
-NUSB-installed `usbport.sys` binary. Its bit-exact companion is
-`docs/usb-xhci-info/usbport-miniport-abi.md`.
+The miniport's upward interface, the undocumented
+`USBPORT_REGISTRATION_PACKET`, is `docs/usb-xhci-info/usbport-miniport-interface.md`
+and its bit-exact companion `docs/usb-xhci-info/usbport-miniport-abi.md`;
+they describe the `1.2.0.0` sources and bind nothing in `src/`.
 
 ---
 
@@ -546,15 +607,19 @@ tag that has drifted onto its neighbour is worse than no tag.
 
 Never use `DbgPrint` outside `#if DBG` guards, with one exception, which is a
 switch a user sets rather than a trace site: the `XhciLogDebugView` sink in
-`src/xhci_dispatch.c` emits the bounded log ring through `DbgPrint` from the
-PASSIVE-level flush in every build flavour, so `ntoskrnl.exe!DbgPrint` is an
-`all` row in the import allowlist. **Do not widen it to a second call site.**
-Per-line printing from DPC and ISR contexts at real interrupt rates is what
-bugchecks Windows 98 on bare metal, and a second emit site would have to be
-PASSIVE_LEVEL, which a Windows 98 machine running this package never reaches
-between `StartController` and shutdown. See
-`docs/contributing/build-and-test.md`, "Getting a trace off a bare-metal
-machine".
+`src/hcd_log.c` emits the bounded log ring through `DbgPrint` in every build
+flavour, from the controller thread at PASSIVE_LEVEL only - continuously, on
+every wake, and once more with the counter block at each stop (task 26-A.8) -
+so `ntoskrnl.exe!DbgPrint` is an `all` row in the import allowlist whose
+`SITES` admits `hcd_log.obj` and the qemu trace's `xhci_dbg.obj` and nothing
+else. **Do not widen it to a third call site.** Per-line printing from DPC
+and ISR contexts at real interrupt rates is what bugchecks Windows 98 on bare
+metal (design record 08), and owning the driver object does not change that:
+producers record from any IRQL and only the thread emits. (Until 1.2.0.0 the
+miniport's sink was in `src/xhci_dispatch.c` and could flush only at
+`StopController`, the one PASSIVE context a Windows 98 machine reached before
+shutdown.) See `docs/contributing/build-and-test.md`, "Getting a trace off a
+bare-metal machine".
 
 **Source is ASCII with CRLF endings, and a gate now says so.** Every source
 edit in this repository passes through a PowerShell string layer, because the
@@ -580,11 +645,11 @@ UTF-8.
 - Do not introduce EHCI, OHCI, or UHCI concepts; xHCI is a completely different hardware model.
 - Do not assume physical addresses above 4 GB.
 - Do not use C++ syntax, STL, or runtime library functions.
-- Do not implement USB 3.0 SuperSpeed paths. USB 3.0 is out of scope (the reused USB 2.0-era `usbport.sys` cannot carry SuperSpeed).
+- Do not take a SuperSpeed or SuperSpeedPlus field, encoding or state transition from memory. Take it from `docs/usb-xhci-info/xhci-data-structures.md` sections 10 and 11, checked against xHCI 1.2c and USB 3.2 (roadmap-hcd tasks 29-0 and 30-0), and say in the release notes what no vehicle has read.
 - Do not attempt to make a USB 3.x logical port operate at USB 2.0 speeds; it is electrically impossible.
-- Do not re-implement the USB stack (root hub PDO, `IOCTL_INTERNAL_USB`, URB parsing, enumeration) under Option A; that is `usbport.sys`'s job. Only do so if the Phase 3 spike forces the Option B fallback.
-- Do not invent `usbport.sys` miniport ABI details from memory. Derive them from ReactOS via the procedure in `docs/usb-xhci-info/usbport-miniport-interface.md`, and validate against the NUSB-installed `usbport.sys` binary.
-- Do not place a SET_ADDRESS setup packet on a transfer ring. xHCI forbids software-issued SET_ADDRESS (spec section 4.5.4.1: the xHC blocks it and completes the TRB with TRB Error). Intercept usbport's SET_ADDRESS control transfer and emulate it with the Address Device command (see `docs/contributing/architecture.md`, enumeration data flow).
+- Do not write against a guessed function-driver contract. What a target's class drivers send a USB PDO, and what the property pages and `XHCISNAP` send the door, is read per target and recorded in design record 13 sections 6 and 8; a contract taken from the DDK headers alone, or one target's assumed for another's, is what Phase 25 exists to prevent.
+- Do not bring `usbport.sys`, `usbhub.sys` or a composite parent back underneath or beside the HCD, and do not bind the root hub to `USB\ROOT_HUB`: the bus owns the root hub, hubs and composite splitting (`roadmap-hcd.md`, decisions table).
+- Do not place a SET_ADDRESS setup packet on a transfer ring. xHCI forbids software-issued SET_ADDRESS (spec section 4.5.4.1: the xHC blocks it and completes the TRB with TRB Error). The bus addresses a device with the Address Device command in its own enumeration state machine (design record 13 section 5.3), and a SET_ADDRESS a client sends is never put on a ring.
 - Do not use undocumented Win98 kernel internals without documenting why there is no other option.
 - Do not commit a third-party document, binary, or disassembly listing. Record where to fetch it and what it hashes to instead. See "Third-Party Material and Provenance".
 - Do not describe a fact as runtime-observed when it was read out of a disassembly. Tag the method you actually used.

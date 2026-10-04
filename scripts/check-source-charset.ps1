@@ -77,6 +77,7 @@ $otherExt = @(".ps1", ".psd1", ".md", ".txt", ".list", ".expected", ".allow")
 # in this build shells out to git and this one does not start.
 $skip = @(
     '^src\\obj',                                  # build.exe output: obj, objchk, objchk_qemu, objfre
+    '^src\\uas\\obj',                             # the same under src\uas, xhciuas.sys (task 31-A.2)
     '^scripts\\local\\',                          # per-operator bench tooling
     '^xhciqual\\test\\(win98hdd|hdd)\\',          # generated guest disks
     '^scripts\\vm-matrix\\matrix\.config\.psd1$'  # per-host device matrix, a copy of the tracked sample

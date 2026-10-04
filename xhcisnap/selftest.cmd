@@ -24,7 +24,31 @@ if not exist XHCISNAP.EXE (
     exit /b 1
 )
 
-set "BASE=%TEMP%\xhcisnap-selftest-%RANDOM%"
+rem A directory of this run's own under xhcisnap\out\ (ignored), not a name
+rem in %TEMP%: two builds started in the same second draw the same %RANDOM%,
+rem so a shared %TEMP% name is one name, and mkdir is the claim on it. Only a
+rem name that exists is a collision: any other mkdir failure fails at once,
+rem and twenty collisions in a row fail too.
+if not exist out mkdir out
+if not exist out\ (
+    echo ERROR: could not create %~dp0out
+    exit /b 1
+)
+set CLAIMTRIES=0
+:claimrundir
+set /a CLAIMTRIES+=1
+if %CLAIMTRIES% GTR 20 (
+    echo ERROR: 20 run directory names under %~dp0out were already taken
+    exit /b 1
+)
+set "RUNDIR=%~dp0out\s%RANDOM%%RANDOM%"
+mkdir "%RUNDIR%" 2>nul && goto claimedrundir
+if exist "%RUNDIR%" goto claimrundir
+echo ERROR: could not create %RUNDIR% (not a name collision: check the
+echo directory's permissions and free space)
+exit /b 1
+:claimedrundir
+set "BASE=%RUNDIR%\report"
 set FAILED=0
 
 set "XHCISNAP_FAULT="
@@ -100,11 +124,28 @@ if exist "%BASE%-probe.TXT" (
     set FAILED=1
 )
 
-del /q "%BASE%.TXT" "%BASE%.no-fault.log" "%BASE%.write-fault.log" "%BASE%.close-fault.log" "%BASE%.readonly.log" "%BASE%.probe-dump.log" 2> nul
+rem The slots region's decode (2.0.0.0): the Slot Context Speed in words over
+rem canned records - SuperSpeed with its rate and lanes, SuperSpeedPlus by its
+rem rate, High and Low Speed, and a slot whose context could not be read.
+"%~dp0XHCISNAP.EXE" -selftest-slots > "%BASE%.slots.log"
+if errorlevel 1 (
+    echo FAIL: -selftest-slots exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("SuperSpeed, 5 Gbit/s, Gen 1x1" "SuperSpeedPlus, 10 Gbit/s, Gen 2x1" "configured     3  High Speed" "addressed      2  Low Speed" "(controller not started)" "5 device(s) hold a slot") do (
+    findstr /C:%%S "%BASE%.slots.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the slot decode does not say %%S
+        set FAILED=1
+    )
+)
+
+rd /s /q "%RUNDIR%" 2> nul
+rd out 2> nul
 
 if "%FAILED%"=="1" (
     echo xhcisnap selftest FAILED
     exit /b 1
 )
-echo xhcisnap selftest: 5 cases, all passed
+echo xhcisnap selftest: 6 cases, all passed
 exit /b 0

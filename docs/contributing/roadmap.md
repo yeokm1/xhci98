@@ -4,11 +4,15 @@ This roadmap is the project-status index: the phase sequence, what each phase
 was for and what it delivered, the basis on which each closed, the task and
 batch ids that other documents, scripts and source comments cite, and the two
 acts that sit outside the phases (the upload and the hand-run acceptance).
-It is meant to orient a contributor. It is two files. This one carries the
+It is meant to orient a contributor. It is three files. This one carries the
 status, the conventions, the phase sequence, Phases 0-16 (the initial release)
 and the acceptance reminder;
 [`roadmap-phases-17-on.md`](roadmap-phases-17-on.md) carries the entries of
-Phase 17 and every phase after it, the open one included. The detail lives in
+Phases 17-24, the rest of the miniport's life, closed with the `1.2.0.0` cut;
+and [`roadmap-hcd.md`](roadmap-hcd.md), opened on 2026-10-02, carries Phases
+25 onward, the miniport's successor - the monolithic host controller driver,
+which took over `src\` and the name `xhci98.sys` on 2026-10-02 - including the
+open phase. The detail lives in
 the other documents:
 
 - Build, VMs, install, packaging and the bench rig:
@@ -104,6 +108,22 @@ changed the shipping 32-bit binary as well as the amd64 one. Vista and
 Windows 7 are a VM-supported tier in both architectures, and 32-bit Windows 7
 has run once on real hardware. It cut `1.1.0.0`, the first release with a
 64-bit package, which the owner uploaded on 2026-09-20.
+
+**The miniport is frozen at `1.2.0.0`; Phase 25 closed on 2026-10-03;
+Phase 26 opened on the owner's go the same day** (owner,
+2026-10-02, the day Phase 24 closed). `1.2.0.0` is the last release of
+`xhci98.sys`: no further miniport cut, and a defect reported against it is
+answered by the successor. That successor is a monolithic USB host controller
+driver, now `xhci98.sys` itself, which replaces `usbport.sys`, the hub driver and the
+composite parent with code of this project's own so that it can drive
+SuperSpeed devices, SuperSpeed hubs and UAS storage on the same targets. It
+is a second binary chosen at install time, never a switch inside the
+miniport; the miniport left the tree on the same day (its last sources are
+on branch `1.2.0.0`), and the successor's one cut is `2.0.0.0` after Phase 31. Its phases, 25 to
+32, and the decisions they rest on are in
+[`roadmap-hcd.md`](roadmap-hcd.md); its design record is
+`design/13-superspeed-hcd.md`, grown from the future-plans page that moved
+there the same day.
 
 ---
 
@@ -202,7 +222,12 @@ with the `1.2.0.0` cut. Phase
 14 waited on Phase 13's bench batches reporting. Accepting the published release, from the download on a
 freshly installed VM and on a physical machine, is not a phase and has no
 task: it is a hand-run procedure the project owner takes before the upload,
-and the end of this file says so.
+and the end of this file says so. Phases 25 onward are the successor's and
+live in [`roadmap-hcd.md`](roadmap-hcd.md): 25 the design record and the
+contract capture, 26 the USB 2.0 bus driver on root ports, 27 USB 2.0 hubs
+inside the bus, 28 the seven other guests, the amd64 build and the bench, 29
+SuperSpeed on root ports, 30 SuperSpeed hubs, 31 streams and UAS, and 32 the
+`2.0.0.0` cut.
 
 ---
 
@@ -1304,10 +1329,13 @@ and notes 14 and 15 for what the first run corrected).
 
 Phases 0-16 above are the initial release: everything up to the `1.0.0.0` cut,
 the specification revision it was moved to afterwards, and the unattended run
-made against it. Every later phase, from Phase 17 to the one now open, is in
+made against it. Phases 17 to 24, the rest of the miniport's life up to the
+`1.2.0.0` cut that froze it, are in
 [`roadmap-phases-17-on.md`](roadmap-phases-17-on.md), split out so that neither
-file grows without bound. The status paragraph and the phase sequence at the
-head of this file cover both halves.
+file grows without bound; Phases 25 onward, the successor host controller
+driver's, the open one included, are in [`roadmap-hcd.md`](roadmap-hcd.md).
+The status paragraph and the phase sequence at the head of this file cover
+all three.
 
 ## Post-Release - Run the Acceptance Test by Hand
 
