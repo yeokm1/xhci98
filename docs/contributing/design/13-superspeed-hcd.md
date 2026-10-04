@@ -2728,7 +2728,7 @@ IOCTLs are independent, for a cosmetic gain. Decided: two.
 | `BusQueryDeviceID` | `XHCI98\HUB&VID_vvvv&PID_pppp` | `XHCI98\HUB30&VID_vvvv&PID_pppp` |
 | `BusQueryHardwareIDs` | `XHCI98\HUB&VID_vvvv&PID_pppp&REV_rrrr`, `XHCI98\HUB&VID_vvvv&PID_pppp`, `XHCI98\HUB` | the same with `HUB30` |
 | `BusQueryCompatibleIDs` | none | none |
-| `BusQueryInstanceID` | the instance key in decimal (10.7's device rule, unchanged) | the same |
+| `BusQueryInstanceID` | any PDO's rule (`hcdInstanceQueryId`, task 33.2): the hub's serial id when it has a usable one, else the instance key in decimal | the same |
 | Device text | `xHCI98 USB Hub` | `xHCI98 USB 3.x Hub` |
 
 Never `USB\Class_09...`, `USB\HubClass`, `USB\USB20_HUB` / `USB30_HUB` or
@@ -2744,16 +2744,25 @@ forms; NUSB's and SweetLow's `USB2.INF` `USB\HUBCLASS` and
 emitted. None of the files names an `XHCI98\` id. The hardware-id form,
 not a compatible id, is what the INF binds, so the match ranks as a
 hardware-id match on every engine. The instance key keeps the location rule
-of 10.7 (task 33.2's serial-number instance ids, on their own branch, decide
-devices; a hub is a location device either way). On the NT targets a device
-PDO reports `UniqueID` FALSE, so the PnP manager prefixes its instance id
-with its parent's `ParentIdPrefix`: **a device that was behind a hub under
-`2.0.0.0` is a new devnode once under `2.1.0.0`**, re-installed silently from
-the same class INF; Windows 98's configuration manager uses the instance id
-as given (unread; the guest legs below record what it does).
+of 10.7 as task 33.2 left it, for a hub as for any device: the serial id
+with `UniqueID` TRUE when the hub has a usable serial number, else the
+place with `UniqueID` FALSE (merged from `p33-serial`, 2026-10-04). On the
+NT targets a PDO with `UniqueID` FALSE has its instance id prefixed with
+its parent's `ParentIdPrefix`: **a serial-less device that was behind a hub
+under `2.0.0.0` is a new devnode once under `2.1.0.0`**, re-installed
+silently from the same class INF; Windows 98's configuration manager uses
+the instance id as given (unread; the guest legs below record what it
+does). Because a serial id names one devnode wherever its parent is, and
+two parents' relations answers are not one answer, a serial id is not
+reused while PnP may still see it present under **another** parent: a gone
+PDO there not yet reported missing, or a dormant one there that this
+device cannot revive, holds it, and the newcomer takes the place form for
+that plug (`hcdSerialTakenLocked`; Codex review of 33.4, final round,
+finding 1). Under the same parent one answer omits the old and carries
+the new, as 33.2's move between root ports relies on.
 
 **Capabilities.** `Removable` TRUE, `SurpriseRemovalOK` TRUE, `UniqueID`
-FALSE, `Address` and `UINumber` the instance key. `SurpriseRemovalOK` TRUE so
+TRUE exactly when the instance id is a serial id (as any PDO's), `Address` and `UINumber` the instance key. `SurpriseRemovalOK` TRUE so
 the XP-onward hot-plug applet does not offer the hub itself for safe removal
 while a storage device behind it keeps its own entry; the applet's rule was
 not read (an open item, read on the XP guest).
@@ -2822,10 +2831,11 @@ ancestor rule above. The hub PDO is referenced across the call.
    residue: a disabled device unplugged while the controller is off stays
    listed, disabled, until a device enumerates at its place or its hub's
    dormant group is retired. At the restart the hub re-enumerates first and revives
-   its dormant PDO at the same instance key, keeping its `Serial`, so the
+   its dormant PDO by 33.2's serial-or-place match, keeping its `Serial`,
+   so the
    children enumerated behind it compute the same `ParentSerial` and revive
-   theirs; `ParentSerial` and `Hub` join the descriptors in the sameness
-   test. A dormant group retired (not revived) takes the dormant groups
+   theirs; `ParentSerial`, `Hub` and `HubUsb3` join the descriptors in the
+   sameness test, so no group is revived under another parent. A dormant group retired (not revived) takes the dormant groups
    below it with it.
 
 **The hub FDO** (`hcd_hubfdo.c`): `AddDevice` for a hub PDO; PnP passed down

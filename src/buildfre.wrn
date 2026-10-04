@@ -1,0 +1,118 @@
+hcd_ctl.c(264) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_ctl.c(264) : warning C4024: 'InterlockedIncrement' : different types for formal and actual parameter 1
+hcd_ctl.c(266) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_ctl.c(266) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_ctl.c(293) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_ctl.c(293) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_dma.c(246) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_dma.c(246) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_dma.c(258) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_dma.c(258) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_dma.c(265) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_dma.c(265) : warning C4024: 'InterlockedIncrement' : different types for formal and actual parameter 1
+hcd_dma.c(267) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_dma.c(267) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_dma.c(347) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_dma.c(347) : warning C4024: 'InterlockedIncrement' : different types for formal and actual parameter 1
+hcd_dma.c(349) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_dma.c(349) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_hubfdo.c(62) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_hubfdo.c(62) : warning C4024: 'InterlockedIncrement' : different types for formal and actual parameter 1
+hcd_hubfdo.c(65) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_hubfdo.c(65) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_hubfdo.c(74) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_hubfdo.c(74) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_pdo.c(1976) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_pdo.c(1976) : warning C4024: 'InterlockedIncrement' : different types for formal and actual parameter 1
+hcd_pdo.c(1994) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_pdo.c(1994) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_urb.c(268) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_urb.c(268) : warning C4024: 'InterlockedIncrement' : different types for formal and actual parameter 1
+hcd_urb.c(876) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_urb.c(876) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_urb.c(916) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_urb.c(916) : warning C4024: 'InterlockedIncrement' : different types for formal and actual parameter 1
+hcd_urb.c(950) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_urb.c(950) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_urb.c(1100) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_urb.c(1100) : warning C4024: 'InterlockedExchange' : different types for formal and actual parameter 1
+hcd_urb.c(1120) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_urb.c(1120) : warning C4024: 'InterlockedExchange' : different types for formal and actual parameter 1
+hcd_urb.c(1142) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_urb.c(1142) : warning C4024: 'InterlockedIncrement' : different types for formal and actual parameter 1
+hcd_urb.c(1150) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_urb.c(1150) : warning C4024: 'InterlockedIncrement' : different types for formal and actual parameter 1
+hcd_urb.c(1158) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_urb.c(1158) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_urb.c(1160) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_urb.c(1160) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_urb.c(1165) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_urb.c(1165) : warning C4024: 'InterlockedIncrement' : different types for formal and actual parameter 1
+hcd_urb.c(1170) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_urb.c(1170) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_urb.c(1496) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_urb.c(1496) : warning C4024: 'InterlockedIncrement' : different types for formal and actual parameter 1
+hcd_urb.c(1514) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_urb.c(1514) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_urb.c(1597) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_urb.c(1597) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_io.c(156) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_io.c(156) : warning C4024: 'InterlockedIncrement' : different types for formal and actual parameter 1
+hcd_io.c(171) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_io.c(171) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_io.c(267) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_io.c(267) : warning C4024: 'InterlockedIncrement' : different types for formal and actual parameter 1
+hcd_io.c(285) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_io.c(285) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_io.c(286) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_io.c(286) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_io.c(287) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_io.c(287) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_io.c(305) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_io.c(305) : warning C4024: 'InterlockedIncrement' : different types for formal and actual parameter 1
+hcd_io.c(369) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_io.c(369) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_io.c(371) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_io.c(371) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_io.c(467) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_io.c(467) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_io.c(1024) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_io.c(1024) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_io.c(1027) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_io.c(1027) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_io.c(1094) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_io.c(1094) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_io.c(1111) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_io.c(1111) : warning C4024: 'InterlockedIncrement' : different types for formal and actual parameter 1
+hcd_io.c(1750) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_io.c(1750) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_io.c(1752) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_io.c(1752) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_io.c(2136) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_io.c(2136) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_io.c(2237) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_io.c(2237) : warning C4024: 'InterlockedIncrement' : different types for formal and actual parameter 1
+hcd_io.c(2244) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_io.c(2244) : warning C4024: 'InterlockedIncrement' : different types for formal and actual parameter 1
+hcd_io.c(2269) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_io.c(2269) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_io.c(2329) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_io.c(2329) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_io.c(2332) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_io.c(2332) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_cfg.c(110) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_cfg.c(110) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_cfg.c(120) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_cfg.c(120) : warning C4024: 'InterlockedIncrement' : different types for formal and actual parameter 1
+hcd_cfg.c(149) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_cfg.c(149) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_cfg.c(150) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_cfg.c(150) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_cfg.c(3388) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_cfg.c(3388) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_cfg.c(3389) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_cfg.c(3389) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1
+hcd_door.c(1135) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_door.c(1135) : warning C4024: 'InterlockedIncrement' : different types for formal and actual parameter 1
+hcd_door.c(1157) : warning C4090: 'function' : different 'volatile' qualifiers
+hcd_door.c(1157) : warning C4024: 'InterlockedDecrement' : different types for formal and actual parameter 1

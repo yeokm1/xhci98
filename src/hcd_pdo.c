@@ -1070,7 +1070,27 @@ static ULONG hcdSerialTakenLocked(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo,
     PHCD_DEVICE_PDO other;
 
     for (other = hc->DevicePdos; other != NULL; other = other->Next) {
-        if ((dormantToo || !other->Dormant) && hcdSameVidPid(other, pdo) &&
+        if (!hcdSameVidPid(other, pdo) ||
+            !XhciFuncSerialSame(other->SerialId, pdo->SerialId)) {
+            continue;
+        }
+        /* A dormant PDO under another parent can never be revived by this
+         * device (hcdDormantSame), and PnP holds it present (task 33.4). */
+        if (dormantToo || !other->Dormant ||
+            other->ParentSerial != pdo->ParentSerial) {
+            return 1;
+        }
+    }
+    /* Under another parent (task 33.4), a gone PDO PnP has not yet been
+     * told is missing holds the id too: the parent that will report it
+     * absent is not the one that reports the newcomer, so the two answers
+     * could present one instance id twice (Codex review of 33.4, final
+     * round, finding 1). Under the same parent one answer does both, as
+     * the move between root ports above relies on. */
+    for (other = hc->GonePdos; other != NULL; other = other->Next) {
+        if (!other->MissingReported &&
+            other->ParentSerial != pdo->ParentSerial &&
+            hcdSameVidPid(other, pdo) &&
             XhciFuncSerialSame(other->SerialId, pdo->SerialId)) {
             return 1;
         }
