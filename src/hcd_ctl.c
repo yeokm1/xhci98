@@ -41,6 +41,10 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
 #define HCD_VALUE_LOG_DEBUGVIEW L"XhciLogDebugView"
 #define HCD_VALUE_IMOD          L"XhciImodInterval250ns"
 #define HCD_VALUE_FORCE_BOT     L"XhciForceBulkOnly"
+/* Task 33.3: the first answer's settle, in ms (xhci_enum.h). No INF writes
+ * either; absent, the defaults stand, which is what text-mode Setup gets. */
+#define HCD_VALUE_SETTLE_TOTAL  L"XhciFirstEnumWaitMs"
+#define HCD_VALUE_SETTLE_PORT   L"XhciFirstEnumPortMs"
 
 /* The health poll's period. usbport's CheckController was nominally 500 ms
  * and measured at 36-80 ms on the E460 (run-13e, Finding V); the poll's
@@ -130,6 +134,7 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     ULONG verbosity;
     ULONG debugView;
     ULONG imod;
+    ULONG value;
     NTSTATUS status;
 
     ext = &hc->Hc;
@@ -158,6 +163,17 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     ext->ImodRequested = NT_SUCCESS(status) ? imod : 0;
     XhciLogNote(ext, "imod.status", ext->ImodStatus);
     XhciLogNote(ext, "imod.requested", ext->ImodRequested);
+
+    /* Outside Hc, read at every start: a change takes effect at the next. */
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_SETTLE_TOTAL, &value);
+    hc->SettleCapMs = XhciEnumSettleCap(NT_SUCCESS(status), value);
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_SETTLE_PORT, &value);
+    hc->SettlePortMs = XhciEnumSettlePortCap(NT_SUCCESS(status), value,
+                                             hc->SettleCapMs);
+    XhciLogNote(ext, "settle.total.ms", hc->SettleCapMs);
+    XhciLogNote(ext, "settle.port.ms", hc->SettlePortMs);
 }
 
 /*

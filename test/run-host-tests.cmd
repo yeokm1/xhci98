@@ -29,7 +29,8 @@ rem                  26-A.9): a model of hcd_io.c's chunk plan, hcd_dma.c's
 rem                  page-cut SG list and hcdIsoFill's block, swept over buffer
 rem                  offsets, lengths, packet sizes, map-register grants and
 rem                  physical layouts, every TRB checked against the page table
-rem   test_enum    - the enumeration state machine (src\xhci_enum.c)
+rem   test_enum    - the enumeration state machine (src\xhci_enum.c) and the
+rem                  first answer's settle rules (task 33.3)
 rem   test_link    - the SuperSpeed link of a USB3 root port and 29-A.5's
 rem                  hold (src\xhci_link.c): PORTSC to link state, the
 rem                  bounded warm-reset recovery and its give-up, the hot or

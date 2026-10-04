@@ -381,3 +381,71 @@ ULONG XhciEnumRetry(PXHCI_ENUM_PORT port, PXHCI_ENUM_ACTION action)
 {
     return XhciEnumRetryUpTo(port, XHCI_ENUM_RETRIES, action);
 }
+
+/* The first answer's settle (task 33.3; xhci_enum.h). */
+ULONG XhciEnumAtRest(ULONG state)
+{
+    switch (state) {
+    case XHCI_ENUM_EMPTY:
+    case XHCI_ENUM_PRESENT:
+    case XHCI_ENUM_BOUND:
+    case XHCI_ENUM_GONE:
+    case XHCI_ENUM_FAILED:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+ULONG XhciEnumSettleCap(ULONG found, ULONG value)
+{
+    if (!found) {
+        return XHCI_ENUM_SETTLE_DEFAULT_MS;
+    }
+    return (value > XHCI_ENUM_SETTLE_MAX_MS) ? XHCI_ENUM_SETTLE_MAX_MS : value;
+}
+
+ULONG XhciEnumSettlePortCap(ULONG found, ULONG value, ULONG total)
+{
+    if (!found) {
+        value = XHCI_ENUM_SETTLE_PORT_MS;
+    }
+    return (value > total) ? total : value;
+}
+
+ULONG XhciEnumElapsedMs(ULONG startLow, ULONG nowLow)
+{
+    return (nowLow - startLow) / 10000UL;
+}
+
+ULONG XhciEnumHoldInFlight(ULONG pending, ULONG kind, ULONG companion,
+                           ULONG connectSeen)
+{
+    if (pending) {
+        return 1;
+    }
+    return (kind != 0 && companion != 0 && !connectSeen) ? 1UL : 0UL;
+}
+
+ULONG XhciEnumSettleQuiet(ULONG enumerated, ULONG rootPending,
+                          ULONG hubPending, ULONG inFlight)
+{
+    return (enumerated && !rootPending && !hubPending && !inFlight) ? 1UL
+                                                                     : 0UL;
+}
+
+ULONG XhciEnumSettleReached(ULONG done, ULONG target)
+{
+    return ((done - target) < 0x80000000UL) ? 1UL : 0UL;
+}
+
+ULONG XhciEnumSettleNextWait(ULONG waitedMs, ULONG capMs, ULONG stepMs)
+{
+    if (waitedMs >= capMs || stepMs == 0) {
+        return 0;
+    }
+    if (capMs - waitedMs < stepMs) {
+        return capMs - waitedMs;
+    }
+    return stepMs;
+}

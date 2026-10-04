@@ -639,6 +639,11 @@ typedef struct _HCD_PORT {
     ULONG ResumePending;    /* a hub port: a resume to try again at its
                              * next look, even if that look's GET_STATUS
                              * fails; thread only                        */
+    /* Task 33.3: an enumeration that ended in a halt (a command or EP0
+     * transfer that never completed) while a first answer waited, so the
+     * port is not looked at again until no first answer waits and does
+     * not hold the ports after it back. Thread only. */
+    ULONG SettleDeferred;
 } HCD_PORT, *PHCD_PORT;
 
 /*
@@ -716,6 +721,7 @@ typedef struct _HCD_HOLD {
     ULONG Unreadable;       /* passes its PORTSC read all ones while the
                              * request was pending                       */
     XHCI_LINK_HOLD Hold;    /* the pure state, xhci_link.c               */
+    ULONG SettleGen;        /* SettleAsked when asked for (task 33.3)    */
 } HCD_HOLD, *PHCD_HOLD;
 
 /* A hub's port object, n from 1. */
@@ -1000,6 +1006,26 @@ typedef struct _HCD_CONTROLLER {
 
     /* The kept controller sequence's state, as the miniport's extension. */
     XHCI_EXTENSION Hc;
+
+    /* The first answer's settle (task 33.3; hcd_enum.c, design record 13
+     * section 5.7), after Hc so no offset the harness reads moves. A hub
+     * FDO's start asks (SettleAsked, a generation); the thread settles a
+     * generation at the end of a pass begun after it with nothing in
+     * flight (SettleDone); a waiter whose deadline passes settles its own
+     * (SettleDone only moves forward). Both under the controller lock.
+     * SettleCapMs is the deadline and SettlePortMs the per-port budget,
+     * from XhciFirstEnumWaitMs and XhciFirstEnumPortMs at each start.
+     * The rest are counts, never zeroed: answers that waited, answers
+     * whose deadline passed, ports deferred, and the last wait in ms. */
+    ULONG SettleAsked;
+    ULONG SettleDone;
+    ULONG SettleCapMs;
+    ULONG SettlePortMs;
+    ULONG SettleWaits;
+    ULONG SettleTimeouts;
+    ULONG SettleDeferrals;
+    ULONG SettleLastMs;
+    ULONG SettleDeferredNow;        /* a port deferred; thread only       */
 } HCD_CONTROLLER, *PHCD_CONTROLLER;
 
 /* The root hub's PDO, created by the controller FDO (hcd_rh.c; design record
@@ -1030,6 +1056,10 @@ typedef struct _HCD_ROOTHUB_FDO {
     ULONG LinkMade;
     UNICODE_STRING Interface;
     ULONG InterfaceOn;
+    /* Task 33.3: the first BusRelations answer since the start waits for
+     * the settle generation the start asked for. */
+    ULONG SettlePending;
+    ULONG SettleTarget;
 } HCD_ROOTHUB_FDO, *PHCD_ROOTHUB_FDO;
 
 /* An external hub's FDO, this driver's third role (task 33.4; design record
@@ -1051,6 +1081,10 @@ typedef struct _HCD_HUB_FDO {
      * before a STOP or SURPRISE_REMOVAL goes down, so none can keep the
      * PDO's Busy raised while its quiesce waits for it. */
     volatile LONG DoorOpen;
+    /* Task 33.3: the first BusRelations answer since the start waits for
+     * the settle generation the start asked for. */
+    ULONG SettlePending;
+    ULONG SettleTarget;
 } HCD_HUB_FDO, *PHCD_HUB_FDO;
 
 #define HcdControllerFromExt(ext) \
@@ -1106,7 +1140,11 @@ ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc);
 /* hcd_enum.c */
 VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered);
 VOID HcdEnumDetach(PHCD_CONTROLLER hc);
-VOID HcdEnumAttach(PHCD_CONTROLLER hc);
+ULONG HcdEnumAttach(PHCD_CONTROLLER hc);
+ULONG HcdEnumSettleAsk(PHCD_CONTROLLER hc);
+ULONG HcdEnumSettleClock(VOID);
+ULONG HcdEnumSettleStep(PHCD_CONTROLLER hc, ULONG target, ULONG startLow);
+VOID HcdEnumSettleEnd(PHCD_CONTROLLER hc, ULONG target, ULONG startLow);
 VOID HcdEnumInit(PHCD_CONTROLLER hc);
 VOID HcdEnumDrop(PHCD_CONTROLLER hc);
 ULONG HcdThreadCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb, PULONG control);
