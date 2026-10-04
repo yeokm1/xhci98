@@ -504,6 +504,59 @@ static NTSTATUS NTAPI hcdRhSignal(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
+/*
+ * The first BusRelations answer since a start waits for the devices already
+ * connected then (task 33.3; design record 13 section 5.7): Windows 2000's
+ * text-mode Setup starts only what that answer carries. Each look enters
+ * the controller and leaves it before the sleep, so nothing the controller's
+ * remove waits for (RootHubUsers) is held across one, and no lock is; the
+ * controller thread it waits for needs nothing this IRP holds. Bounded by
+ * the controller's deadline, a relative timer on this stack frame (task
+ * 33.3; Codex review of 33.3, round 1, finding 4). IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdRhSettle(PHCD_ROOTHUB_FDO fdo, ULONG target)
+{
+    PHCD_CONTROLLER hc;
+    LARGE_INTEGER due;
+    KTIMER deadline;
+    ULONG armed;
+    ULONG start;
+    ULONG next;
+    ULONG why;
+
+    start = HcdEnumSettleClock();
+    armed = 0;
+    for (;;) {
+        hc = hcdRhControllerEnter(fdo);
+        why = HCD_SETTLE_TORNDOWN;
+        next = 0;
+        if (hc != NULL) {
+            if (!armed) {
+                /* No deadline is no wait. */
+                armed = HcdEnumSettleArm(hc, &deadline) ? 1UL : 2UL;
+            }
+            if (armed == 1) {
+                next = HcdEnumSettleStep(hc, target, &deadline, &why);
+            } else {
+                why = HCD_SETTLE_DEADLINE;
+            }
+        }
+        if (next == 0) {
+            if (hc != NULL) {
+                HcdEnumSettleEnd(hc, target, start, why);
+            }
+            hcdRhControllerLeave(hc);
+            break;
+        }
+        hcdRhControllerLeave(hc);
+        HcdRelativeMs(&due, next);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
+    if (armed == 1) {
+        (VOID)KeCancelTimer(&deadline);
+    }
+}
+
 /* AddDevice for a PDO this driver created: the root hub's FDO. */
 NTSTATUS HcdRootHubAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
 {
@@ -598,10 +651,14 @@ NTSTATUS HcdRootHubFdoPnp(PHCD_ROOTHUB_FDO fdo, PIRP irp)
             fdo->Common.PnpState = HCD_PNP_STARTED;
             hc = hcdRhControllerEnter(fdo);
             HcdDoorRootHubStart(fdo, hc);
+            fdo->SettleTarget = 0;
             if (hc != NULL) {
-                /* PDOs may be created now, and every port is looked at. */
-                HcdEnumAttach(hc);
+                /* PDOs may be created now, and every port is looked at;
+                 * the first answer after this start waits for that look
+                 * (task 33.3). */
+                fdo->SettleTarget = HcdEnumAttach(hc);
             }
+            fdo->SettlePending = fdo->SettleTarget != 0;
             hcdRhControllerLeave(hc);
         }
         status = HcdCompleteIrp(irp, status, 0);
@@ -612,11 +669,13 @@ NTSTATUS HcdRootHubFdoPnp(PHCD_ROOTHUB_FDO fdo, PIRP irp)
     switch (stack->MinorFunction) {
     case IRP_MN_STOP_DEVICE:
         fdo->Common.PnpState = HCD_PNP_STOPPED;
+        fdo->SettlePending = 0;
         HcdDoorRootHubStop(fdo);
         irp->IoStatus.Status = STATUS_SUCCESS;
         break;
     case IRP_MN_SURPRISE_REMOVAL:
         fdo->Common.PnpState = HCD_PNP_SURPRISE_REMOVED;
+        fdo->SettlePending = 0;
         HcdDoorRootHubStop(fdo);
         irp->IoStatus.Status = STATUS_SUCCESS;
         break;
@@ -631,6 +690,11 @@ NTSTATUS HcdRootHubFdoPnp(PHCD_ROOTHUB_FDO fdo, PIRP irp)
             PDEVICE_RELATIONS old;
             PDEVICE_RELATIONS rel;
 
+            if (fdo->SettlePending) {
+                /* Cleared first: one answer waits, whatever it returns. */
+                fdo->SettlePending = 0;
+                hcdRhSettle(fdo, fdo->SettleTarget);
+            }
             old = (PDEVICE_RELATIONS)irp->IoStatus.Information;
             hc = hcdRhControllerEnter(fdo);
             rel = (hc != NULL) ? HcdDevicePdoRelations(hc, old, 0) : NULL;

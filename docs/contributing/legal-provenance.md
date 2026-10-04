@@ -343,6 +343,16 @@ else's silicon is cheap to keep.
 Demoting a reference does not narrow the audit above, which swept `src/`
 against all four mirrors.
 
+One later reading of source rather than binaries: for roadmap task 33.3
+(2026-10-04), ReactOS's `drivers/usb/usbhub/pnp.c`
+(`USBH_FdoQueryBusRelations`) and Linux's `drivers/usb/core/hub.c`, both
+from their master branches as fetched that day into a scratch directory
+(not the pinned mirrors, and not kept), were read for the shape and the
+timing constants of a hub driver's first enumeration. Only those facts are
+recorded (design record 13 section 5.7); nothing of either was taken into
+`src/`. The same section cites Microsoft's USB blog post "How does USB
+stack enumerate a device?" and USB 2.0 section 9.2.6.4, which are
+documentation, not binaries, so no section 4 row records them.
 ---
 
 ## 4. Facts read out of shipping binaries: a source-method inventory

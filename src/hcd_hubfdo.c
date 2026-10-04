@@ -130,14 +130,70 @@ NTSTATUS HcdHubAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
     return STATUS_SUCCESS;
 }
 
-/* The door's names, at a start that succeeded below. */
+/* The door's names, at a start that succeeded below, and the settle the
+ * first answer after it waits for (task 33.3). */
 static VOID hcdHubStarted(PHCD_HUB_FDO fdo)
 {
     PHCD_CONTROLLER hc;
 
     hc = hcdHubControllerEnter(fdo);
     HcdDoorHubStart(fdo, hc);
+    fdo->SettleTarget = (hc != NULL) ? HcdEnumSettleAsk(hc) : 0;
+    fdo->SettlePending = fdo->SettleTarget != 0;
     hcdHubControllerLeave(fdo, hc);
+}
+
+/*
+ * The first BusRelations answer since a start waits for the devices behind
+ * this hub that were connected when its ports were first looked at (task
+ * 33.3; design record 13 section 5.7) - in practice already enumerated, the
+ * hub's bring-up having looked at its ports before its PDO was made, so the
+ * wait is one look unless the bus is busy elsewhere. Each look raises the
+ * PDO's Busy and drops it before the sleep, so the parent's release, which
+ * waits Busy out, never waits on a sleep; no lock is held. Bounded by the
+ * controller's deadline. IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdHubSettle(PHCD_HUB_FDO fdo, ULONG target)
+{
+    PHCD_CONTROLLER hc;
+    LARGE_INTEGER due;
+    KTIMER deadline;
+    ULONG armed;
+    ULONG start;
+    ULONG next;
+    ULONG why;
+
+    start = HcdEnumSettleClock();
+    armed = 0;
+    for (;;) {
+        hc = hcdHubControllerEnter(fdo);
+        why = HCD_SETTLE_TORNDOWN;
+        next = 0;
+        if (hc != NULL) {
+            if (!armed) {
+                /* No deadline is no wait. */
+                armed = HcdEnumSettleArm(hc, &deadline) ? 1UL : 2UL;
+            }
+            if (armed == 1) {
+                next = HcdEnumSettleStep(hc, target, &deadline, &why);
+            } else {
+                why = HCD_SETTLE_DEADLINE;
+            }
+        }
+        if (next == 0) {
+            if (hc != NULL) {
+                HcdEnumSettleEnd(hc, target, start, why);
+            }
+            hcdHubControllerLeave(fdo, hc);
+            break;
+        }
+        hcdHubControllerLeave(fdo, hc);
+        HcdRelativeMs(&due, next);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
+    if (armed == 1) {
+        (VOID)KeCancelTimer(&deadline);
+    }
 }
 
 NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
@@ -198,12 +254,14 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
     case IRP_MN_STOP_DEVICE:
         (VOID)InterlockedExchange((PLONG)&fdo->DoorOpen, 0);
         fdo->Common.PnpState = HCD_PNP_STOPPED;
+        fdo->SettlePending = 0;
         HcdDoorHubStop(fdo);
         irp->IoStatus.Status = STATUS_SUCCESS;
         break;
     case IRP_MN_SURPRISE_REMOVAL:
         (VOID)InterlockedExchange((PLONG)&fdo->DoorOpen, 0);
         fdo->Common.PnpState = HCD_PNP_SURPRISE_REMOVED;
+        fdo->SettlePending = 0;
         HcdDoorHubStop(fdo);
         irp->IoStatus.Status = STATUS_SUCCESS;
         break;
@@ -215,6 +273,10 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
         break;
     case IRP_MN_QUERY_DEVICE_RELATIONS:
         if (stack->Parameters.QueryDeviceRelations.Type == BusRelations) {
+            if (fdo->SettlePending) {
+                fdo->SettlePending = 0;
+                hcdHubSettle(fdo, fdo->SettleTarget);
+            }
             old = (PDEVICE_RELATIONS)irp->IoStatus.Information;
             hc = hcdHubControllerEnter(fdo);
             rel = (hc != NULL)

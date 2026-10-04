@@ -1683,6 +1683,11 @@ ULONG HcdHubStart(PHCD_CONTROLLER hc, PHCD_PORT p, PHCD_USB_DEVICE dev)
         q->AwaitHub = NULL;
         q->ResumeTries = 0;
         q->ResumePending = 0;
+        /* Kept deferred across the recovery that rebuilt this hub (task
+        * 33.3). */
+        q->SettleDeferred = HcdEnumSettleDeferredAt(hc, dev->Port, dev->Route,
+                                                    n);
+        q->LookFails = 0;
         q->Hub = hub;
         q->Number = n;
         if (!hcdHubFeature(hc, hub, n, 1, XHCI_HUB_FEAT_PORT_POWER)) {
