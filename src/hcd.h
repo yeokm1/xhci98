@@ -1137,6 +1137,9 @@ ULONG HcdDevicePdoExists(PHCD_CONTROLLER hc, ULONG serial);
 PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
                                         PDEVICE_RELATIONS old);
 VOID HcdDevicePdoReleaseAll(PHCD_CONTROLLER hc);
+VOID HcdPdoRetireInit(VOID);
+ULONG HcdPdoRetire(PDEVICE_OBJECT obj);
+VOID HcdPdoReapRetired(VOID);
 NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp);
 NTSTATUS HcdDevicePdoPower(PHCD_DEVICE_PDO pdo, PIRP irp);
 

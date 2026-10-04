@@ -340,7 +340,10 @@ static NTSTATUS hcdDeviceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
  *               already removed it;
  *   orphaned  - when its parent goes first while it still awaits a REMOVE
  *               (a surprise removal with handles open): it leaves both lists,
- *               forgets the controller, and deletes itself at that REMOVE.
+ *               forgets the controller, and is deleted after that REMOVE:
+ *               at once on Windows 2000 and later, at the next relations
+ *               answer of any of this driver's buses on Windows 98
+ *               (HcdPdoRetire, below).
  *
  * Why not at the REMOVE: Windows 98 SE's configuration manager sends the
  * removed PDO more IRPs after its REMOVE has completed - a
@@ -843,6 +846,88 @@ static VOID hcdDeleteChain(PHCD_DEVICE_PDO pdo)
 }
 
 /*
+ * ORPHANS ON WINDOWS 98 (the Phase 28-31 integration's Codex review, finding
+ * 2). An orphan - a device PDO, or the root-hub PDO, whose parent went
+ * first while it still awaited its REMOVE - has no controller left to hold
+ * it for the next relations answer, so it was deleted inside its REMOVE,
+ * exactly the use after free c038326 removed for the attached case. On a
+ * system whose configuration manager may send a removed PDO more IRPs (a
+ * WDM below 1.10: Windows 98 SE and ME) it is retired to this driver-wide
+ * list instead and deleted at the next BusRelations answer of any of this
+ * driver's controllers or root hubs - a later pass, as c038326's rule has
+ * it - or kept for good, a bounded leak, when none comes. Windows 2000 and
+ * later send nothing after a REMOVE, and there it is deleted at once, as
+ * before, so the image can still unload. A full list deletes at once too.
+ */
+#define HCD_RETIRED_MAX 32
+
+static KSPIN_LOCK hcdRetiredLock;
+static PDEVICE_OBJECT hcdRetired[HCD_RETIRED_MAX];
+static ULONG hcdRetireDefers;
+
+/* IRQL: PASSIVE_LEVEL (DriverEntry). */
+VOID HcdPdoRetireInit(VOID)
+{
+    ULONG i;
+
+    KeInitializeSpinLock(&hcdRetiredLock);
+    for (i = 0; i < HCD_RETIRED_MAX; i++) {
+        hcdRetired[i] = NULL;
+    }
+    hcdRetireDefers = !IoIsWdmVersionAvailable(1, 0x10);
+}
+
+/* An orphan's REMOVE, already completed: 1 when it is kept for a later
+ * relations answer to delete, 0 when the caller deletes it now. IRQL:
+ * PASSIVE_LEVEL. */
+ULONG HcdPdoRetire(PDEVICE_OBJECT obj)
+{
+    KIRQL oldIrql;
+    ULONG i;
+
+    if (!hcdRetireDefers) {
+        return 0;
+    }
+    KeAcquireSpinLock(&hcdRetiredLock, &oldIrql);
+    for (i = 0; i < HCD_RETIRED_MAX; i++) {
+        if (hcdRetired[i] == NULL) {
+            hcdRetired[i] = obj;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&hcdRetiredLock, oldIrql);
+    return i < HCD_RETIRED_MAX;
+}
+
+/* Every retired orphan deleted. IRQL: PASSIVE_LEVEL. */
+VOID HcdPdoReapRetired(VOID)
+{
+    PDEVICE_OBJECT taken[HCD_RETIRED_MAX];
+    PHCD_COMMON common;
+    KIRQL oldIrql;
+    ULONG i;
+
+    KeAcquireSpinLock(&hcdRetiredLock, &oldIrql);
+    for (i = 0; i < HCD_RETIRED_MAX; i++) {
+        taken[i] = hcdRetired[i];
+        hcdRetired[i] = NULL;
+    }
+    KeReleaseSpinLock(&hcdRetiredLock, oldIrql);
+    for (i = 0; i < HCD_RETIRED_MAX; i++) {
+        if (taken[i] == NULL) {
+            continue;
+        }
+        common = (PHCD_COMMON)taken[i]->DeviceExtension;
+        if (common->Kind == HCD_KIND_DEVICE_PDO) {
+            hcdWaitBusy((PHCD_DEVICE_PDO)common);
+            hcdDeletePdo((PHCD_DEVICE_PDO)common);
+        } else {
+            IoDeleteDevice(taken[i]);
+        }
+    }
+}
+
+/*
  * The root hub's BusRelations: whatever the list already held, then every
  * listed PDO, referenced and marked Reported; every gone PDO is marked
  * MissingReported, since this answer omits it, and a gone PDO whose REMOVE
@@ -910,6 +995,7 @@ PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
     }
     KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
     hcdDeleteChain(reap);
+    HcdPdoReapRetired();
     for (i = 0; i < HCD_PORT_COUNT; i++) {
         if ((ports[i / 32UL] & (1UL << (i % 32UL))) != 0) {
             hcdPortNotify(hc, hc->PortPdoRemoved, i + 1);
@@ -1127,6 +1213,17 @@ static VOID hcdPdoStarted(PHCD_DEVICE_PDO pdo)
  * relations answer on another thread may delete it from then on. IRQL:
  * PASSIVE_LEVEL.
  */
+/* An orphan's REMOVE: retired on Windows 98 (above), deleted now
+ * elsewhere. DeletePending makes a REMOVE again a no-op either way. IRQL:
+ * PASSIVE_LEVEL. */
+static VOID hcdPdoOrphanRemoved(PHCD_DEVICE_PDO pdo)
+{
+    pdo->DeletePending = 1;
+    if (!HcdPdoRetire(pdo->Common.Self)) {
+        hcdDeletePdo(pdo);
+    }
+}
+
 static VOID hcdPdoRemoved(PHCD_DEVICE_PDO pdo)
 {
     PHCD_CONTROLLER hc;
@@ -1141,7 +1238,7 @@ static VOID hcdPdoRemoved(PHCD_DEVICE_PDO pdo)
     }
     hc = pdo->Controller;
     if (hc == NULL) {
-        hcdDeletePdo(pdo);
+        hcdPdoOrphanRemoved(pdo);
         return;
     }
     deleteIt = 0;
@@ -1164,7 +1261,7 @@ static VOID hcdPdoRemoved(PHCD_DEVICE_PDO pdo)
     }
     KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
     if (deleteIt == 2) {
-        hcdDeletePdo(pdo);
+        hcdPdoOrphanRemoved(pdo);
     } else if (deleteIt == 1) {
         hcdPortNotify(hc, hc->PortPdoRemoved, port);
     }

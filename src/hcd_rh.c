@@ -201,6 +201,7 @@ NTSTATUS HcdControllerBusRelations(PHCD_CONTROLLER hc, PIRP irp)
     ULONG count;
     ULONG i;
 
+    HcdPdoReapRetired();
     if (hc->RootHubPdo == NULL) {
         return HcdPassDown(hc, irp);
     }
@@ -350,7 +351,11 @@ NTSTATUS HcdRootHubPdoPnp(PHCD_ROOTHUB_PDO pdo, PIRP irp)
             hcdRhOrphan(pdo);
             pdo->Deleted = 1;
             HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
-            IoDeleteDevice(pdo->Common.Self);
+            /* On Windows 98 kept for a later relations answer: more IRPs
+             * may follow this REMOVE (hcd_pdo.c, HcdPdoRetire). */
+            if (!HcdPdoRetire(pdo->Common.Self)) {
+                IoDeleteDevice(pdo->Common.Self);
+            }
             return STATUS_SUCCESS;
         }
         return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
