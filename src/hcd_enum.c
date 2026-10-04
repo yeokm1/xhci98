@@ -1391,6 +1391,94 @@ static VOID hcdReadIdentity(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 }
 
 /*
+ * The serial number string as an instance id (roadmap-hcd.md task 33.2;
+ * design record 13 section 10.7), once per enumeration, before the
+ * device's first PDO is built: dev->SerialState and dev->SerialId. No
+ * iSerialNumber is NONE, with no request sent. Otherwise each try reads
+ * string descriptor 0 for the first language id (0409h when the device
+ * STALLs it or lists none) and then the serial string; a serial string
+ * that arrives is OK when XhciFuncSerialId takes it and REFUSED when it
+ * does not - both the device's own answer, the same at every plug. A try
+ * that does not get the string (a STALL, an error, a request not sent) is
+ * made again, HCD_SERIAL_READ_TRIES in all, and only when every try failed
+ * is the device FAILED - counted and traced, never silent - and named by
+ * its location: a device whose read fails at one plug and not at the next
+ * changes devnode, and three fails in a row is what it takes. (The other
+ * way is a duplicate: a serial id a present PDO already carries leaves
+ * the newcomer on the location form, hcd_pdo.c.) A timeout is not retried: it left EP0's record queued
+ * (dev->Ep0Stuck) and requested the controller reset, which takes the
+ * device; 0 is returned and no PDO is made from it, so no location id is
+ * ever given for want of a read the reset will repeat. Every other return
+ * is 1. The reads use the scratch, which the caller has done with. Thread
+ * only, powered.
+ */
+#define HCD_SERIAL_READ_TRIES 3UL
+
+ULONG HcdDeviceReadSerial(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    PUCHAR s;
+    ULONG langid;
+    ULONG outcome;
+    ULONG bytes;
+    ULONG index;
+    ULONG tries;
+
+    if (dev->SerialState != HCD_SERIAL_UNREAD) {
+        return 1;
+    }
+    dev->SerialId[0] = 0;
+    index = (ULONG)dev->DeviceDesc[16];
+    if (index == 0) {
+        dev->SerialState = HCD_SERIAL_NONE;
+        return 1;
+    }
+    s = (PUCHAR)hc->ScratchVa;
+    for (tries = 0; tries < HCD_SERIAL_READ_TRIES; tries++) {
+        langid = 0x0409UL;
+        bytes = 0;
+        outcome = HcdThreadControlOutcome(hc, dev, 0x80, 6, (USHORT)0x0300,
+                                          0, 4, &bytes);
+        if (dev->Ep0Stuck) {
+            return 0;
+        }
+        if (outcome == HCD_CTL_DONE) {
+            if (bytes >= 4 && s[1] == 3 && s[0] >= 4) {
+                langid = (ULONG)s[2] | ((ULONG)s[3] << 8);
+            }
+        } else if (outcome != HCD_CTL_STALLED) {
+            continue;
+        }
+        bytes = 0;
+        outcome = HcdThreadControlOutcome(hc, dev, 0x80, 6,
+                                          (USHORT)(0x0300UL | index),
+                                          (USHORT)langid, 255, &bytes);
+        if (dev->Ep0Stuck) {
+            return 0;
+        }
+        if (outcome != HCD_CTL_DONE) {
+            continue;
+        }
+        if (XhciFuncSerialId(s, bytes, dev->SerialId,
+                             sizeof(dev->SerialId)) == XHCI_FUNC_OK) {
+            dev->SerialState = HCD_SERIAL_OK;
+            hc->SerialIdsTaken++;
+        } else {
+            dev->SerialId[0] = 0;
+            dev->SerialState = HCD_SERIAL_REFUSED;
+            hc->SerialIdsRefused++;
+            XHCI_DBG_VALUE("hcd: serial string is no instance id, port",
+                           dev->Port);
+        }
+        return 1;
+    }
+    dev->SerialState = HCD_SERIAL_FAILED;
+    hc->SerialReadsFailed++;
+    XHCI_DBG_VALUE("hcd: serial string not read, location id, port",
+                   dev->Port);
+    return 1;
+}
+
+/*
  * A device enumerating on the USB 2.0 companion of a held port, its device
  * descriptor just read: told to the hold, which matches it against the held
  * identity. Only an identified hold that has seen a companion connect asks,

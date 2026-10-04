@@ -102,6 +102,8 @@ static NTSTATUS hcdRemove(PHCD_CONTROLLER hc, PIRP irp)
     irp->IoStatus.Status = STATUS_SUCCESS;
     status = HcdPassDown(hc, irp);
 
+    /* Off the serial ids' list before any of its PDOs can go (hcd_pdo.c). */
+    HcdSerialControllerRemove(hc);
     HcdRootHubDeletePdo(hc);
     IoDetachDevice(hc->LowerDevice);
     IoDeleteDevice(hc->Common.Self);

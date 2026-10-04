@@ -394,7 +394,15 @@ What it does not do, by design and stated in the code:
   in `2.0.0.0` is location-only (`UniqueID` FALSE), which is the release
   notes' known difference and roadmap task 33.2's subject; design record 13
   section 10.7's id table says the serial string where a device has one,
-  which is not what `2.0.0.0` built.
+  which is not what `2.0.0.0` built. *(Since task 33.2, branch
+  `p33-serial`: a device with a usable serial answers it as its instance
+  id, and the revive matches a dormant group by the instance id it
+  answers - first a group named by the device's place, then one named by
+  its serial id wherever the device comes back - with the same descriptor
+  comparison; a revived PDO keeps the id it had. Identical units without a
+  serial id, or sharing one, swapped while disabled are still taken for
+  each other. Design record 13 section 10.7, "Instance ids from the serial
+  number".)*
 - **A PnP stop of the controller alone** - a resource rebalance, with its
   children still started - finds no device whose PDOs are all stopped, so
   every device is dropped and reported gone as before. That path was not
