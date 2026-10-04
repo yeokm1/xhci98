@@ -292,6 +292,13 @@ static LONG hcdCfgSelectAnswer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * racing an unplug, the slot's Context State or a Transaction Error - is an
  * ordinary failure of that device, which its departure tears down (the
  * thread's next port pass disables the slot and drains every request).
+ * That teardown is made certain, not assumed: a record already gone or
+ * replaced is being torn down; otherwise the device's port is cycled
+ * (HcdEnumCycle, an unplug as the port's machine sees one), since a hub
+ * port's latched enable change can read as a departure that the hub
+ * service then finds enabled and leaves alone, which would strand the
+ * paused pipe (Codex review of e99f8ea). A device with no PDO yet has no
+ * group to cycle by and keeps the reset.
  * A reset for it dropped every device on the controller, and the devices
  * re-enumerated on the other ports got no PnP from Windows ME afterwards
  * (2026-10-04, r3 t2: a mouse pulled during its SELECT_CONFIGURATION).
@@ -301,9 +308,17 @@ static LONG hcdCfgSelectAnswer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  */
 static ULONG hcdCfgFault(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
-    if (hcdCfgDeviceLeft(hc, dev)) {
+    if (dev->Gone || dev->Location == 0 || dev->Location > HCD_PORT_COUNT ||
+        hc->Ports[dev->Location - 1].Device != dev) {
         XHCI_DBG_VALUE("hcd: command failed on a departed device, slot",
                        dev->SlotId);
+        return 0;
+    }
+    if (dev->Pdo != NULL &&
+        !HcdHubPathPresent(hc, &hc->Ports[dev->Location - 1])) {
+        XHCI_DBG_VALUE("hcd: command failed on a departing device, "
+                       "cycling location", dev->Location);
+        HcdEnumCycle(hc, dev->Location, dev->PdoGroup);
         return 0;
     }
     HcdSvcRequestReset(&hc->Hc);
