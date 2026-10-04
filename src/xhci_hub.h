@@ -172,10 +172,97 @@ typedef struct _XHCI_HUB_PORT_DECISION {
     ULONG OverCurrent;
     ULONG Repower;
     ULONG Suspended;        /* C_PORT_SUSPEND: a resume finished          */
+    ULONG Resume;           /* connected and suspended: resume it         */
+    ULONG Retry;            /* a resume did not finish: look again later  */
+    ULONG GaveUp;           /* XHCI_HUB_RESUME_TRIES resumes did not
+                             * finish: the port is enumerated afresh     */
 } XHCI_HUB_PORT_DECISION, *PXHCI_HUB_PORT_DECISION;
 
 VOID XhciHubPortDecide(ULONG state, ULONG status, ULONG change,
                        PXHCI_HUB_PORT_DECISION out);
+
+/*
+ * Suspend and resume, handled and never initiated (the owner's decision of
+ * 2026-10-04; selective suspend waits for 28.3's idle policy): the bus
+ * starts no suspend, but a hub may report a port suspended - its device
+ * suspended by something else, or left so across the hub's own reset - or
+ * a resume finished (C_PORT_SUSPEND, a device's remote wake among them).
+ * XhciHubPortDecide sets Resume for a connected port whose wPortStatus shows
+ * PORT_SUSPEND, so the bus resumes it before anything else is asked of the
+ * device; a C_PORT_SUSPEND on a connected, enabled port is a finished resume
+ * and needs no re-enumeration (Suspended, and neither Disconnect nor
+ * Connect). XhciHubResumeBeforeReset says the same before a reset.
+ *
+ * The bus resumes a port with ClearPortFeature(PORT_SUSPEND); the hub then
+ * drives resume signalling for at least TDRSMDN, 20 ms (USB 2.0 7.1.7.7,
+ * quoted by xHCI p.256; to transcribe), and ends it with C_PORT_SUSPEND and
+ * the suspend bit clear. Then the resume recovery, TRSMRCY 10 ms (USB 2.0
+ * 7.1.7.7, to transcribe), before the device is addressed.
+ */
+#define XHCI_HUB_RESUME_FIRST_MS    20UL    /* TDRSMDN, to transcribe   */
+#define XHCI_HUB_RESUME_WAIT_MS     100UL   /* bus policy               */
+#define XHCI_HUB_RESUME_RECOVERY_MS 10UL    /* TRSMRCY, to transcribe   */
+
+/* Whether a port must be resumed before it is reset: connected and
+ * suspended. */
+ULONG XhciHubResumeBeforeReset(ULONG status);
+
+/*
+ * A resume's outcome, from one GET_STATUS answer (XhciHubResumeProgress):
+ * PENDING while the suspend bit is still set; DONE once it is clear on a
+ * connected, enabled port; DISABLED when it cleared with the enable bit -
+ * a port error during the resume, which USB 2.0 11.24.2.7.1.3 allows (to
+ * transcribe) - the device to be enumerated afresh; GONE when the device
+ * left. STUCK is the caller's: the request failed or the resume did not
+ * end by its deadline.
+ */
+#define XHCI_HUB_RESUME_PENDING     0UL
+#define XHCI_HUB_RESUME_DONE        1UL
+#define XHCI_HUB_RESUME_DISABLED    2UL
+#define XHCI_HUB_RESUME_GONE        3UL
+#define XHCI_HUB_RESUME_STUCK       4UL
+
+/* Resumes of one port that may fail in a row before the bus gives up and
+ * enumerates the port afresh (a bus policy number). */
+#define XHCI_HUB_RESUME_TRIES       3UL
+
+ULONG XhciHubResumeProgress(ULONG status);
+
+/*
+ * A resume's outcome settled against the change bits its last GET_STATUS
+ * read: DONE with C_PORT_CONNECTION raised is DISABLED - the device was
+ * replaced during the resume, so the held devices are not let go and the
+ * port is enumerated afresh (Codex review of the Phase 28-31 merge,
+ * finding 1). C_PORT_CONNECTION is bit 0 at USB 2.0 and SuperSpeed alike
+ * (xhci_sshub.h), so one rule serves both. Every other outcome stands.
+ */
+ULONG XhciHubResumeSettle(ULONG progress, ULONG change);
+
+/*
+ * What a resume's outcome makes of the port's decision *d, the port's
+ * enumeration machine in `state`, whether the resume held devices (`held`:
+ * the device on the port, and below it if it is a hub, quiesced for the
+ * resume) and the port's failures in a row in *tries:
+ *
+ *   DONE      the decision stands (an Empty port goes on to Connect), and
+ *             the count restarts; only now are the held devices let go;
+ *   DISABLED  the device is enumerated afresh: Disconnect if the machine
+ *             holds one, then Connect;
+ *   GONE      Disconnect if the machine holds one, no Connect;
+ *   STUCK     with devices held: they stay held and are torn down at once
+ *             (GaveUp, Disconnect, then Connect) - a resume that may yet
+ *             finish must never meet their traffic before its recovery
+ *             (Codex review of the Phase 27 integration, round 5, finding
+ *             1); the port's reset tries the resume once more first. With
+ *             nothing held: nothing now - the port is looked at again
+ *             (Retry) - until XHCI_HUB_RESUME_TRIES have failed in a row,
+ *             when the port is enumerated afresh (GaveUp, Connect).
+ *
+ * A held device is never let go on any outcome but DONE: the teardown the
+ * others ask for frees it with its pipes still paused.
+ */
+VOID XhciHubResumeOutcome(ULONG state, ULONG outcome, ULONG held,
+                          PULONG tries, PXHCI_HUB_PORT_DECISION d);
 
 /* The C_PORT_ feature selector that clears one wPortChange bit (bit 0 to
  * 4), or 0 for any other bit. */

@@ -90,7 +90,7 @@ LoadOrderGroup=Base
 [Xhci.AddReg.NT]
 HKR,,XhciLogVerbosity,0x00010001,0
 HKR,,XhciLogDebugView,0x00010001,0
-HKR,,XhciImodInterval250ns,0x00010001,500
+HKR,,XhciImodInterval250ns,0x00010001,160
 HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"
 HKR,,Controller,1,01
 

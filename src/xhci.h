@@ -375,9 +375,10 @@ XHCI_C_ASSERT(event_type_range_is_eight_wide, XHCI_EVENT_TYPE_COUNT == 8);
  * driver has no need to make now that it reads the bit.
  */
 #define XHCI_HCCPARAMS2_FSC(v)  ((((ULONG)(v)) >> 2) & 0x1UL)
-/* Large ESIT Payload Capability, HCCPARAMS2 bit 4 (Table 5-16; to verify).
- * With it set the Endpoint Context's Max ESIT Payload Hi is defined and its
- * Mult field is reserved (6.2.3.8; xhci-data-structures.md section 10.6). */
+/* Large ESIT Payload Capability, HCCPARAMS2 bit 4 (Table 5-16, p.356;
+ * verified). With it set the Endpoint Context's Max ESIT Payload Hi is
+ * defined and its Mult field is RsvdZ (Table 6-8, p.414; 6.2.3.8, p.420;
+ * xhci-data-structures.md section 10.6). */
 #define XHCI_HCCPARAMS2_LEC(v)  ((((ULONG)(v)) >> 4) & 0x1UL)
 
 /* Operational registers, BAR0 + CAPLENGTH (spec 5.4). */
@@ -395,9 +396,10 @@ XHCI_C_ASSERT(event_type_range_is_eight_wide, XHCI_EVENT_TYPE_COUNT == 8);
 #define XHCI_OP_PORTSC(n) \
     (XHCI_OP_PORTSC_BASE + ((((ULONG)(n)) - 1UL) * XHCI_OP_PORT_STRIDE))
 /* PORTLI of port n, 8 bytes past its PORTSC (5.4.10). On a USB3 protocol
- * port: Link Error Count 15:0, and from xHCI 1.1 the Rx Lane Count 19:16
- * and Tx Lane Count 23:20, each the count minus one (5.4.10.1; to verify).
- * A PSI rate alone cannot tell Gen 2x1 from Gen 1x2; these can (29-A.6). */
+ * port: Link Error Count 15:0, the Rx Lane Count 19:16 and the Tx Lane
+ * Count 23:20, each zero-based (the count minus one) and valid only while
+ * CCS = 1 (Table 5-31, p.385; verified). A PSI rate alone cannot tell Gen
+ * 2x1 from Gen 1x2; these can (29-A.6). */
 #define XHCI_OP_PORTLI(n)       (XHCI_OP_PORTSC(n) + 0x8UL)
 #define XHCI_PORTLI_RLC(v)      ((((ULONG)(v)) >> 16) & 0xFUL)
 #define XHCI_PORTLI_TLC(v)      ((((ULONG)(v)) >> 20) & 0xFUL)
@@ -578,10 +580,14 @@ XHCI_C_ASSERT(config_maxslotsen_is_defined,
  *
  * The default is the hardware's own reset value, 4000 (1 ms), so a machine
  * whose value is absent runs exactly as every release before 23.4 did. The
- * INFs write 500 (125 us) on every install path: 23.5's silent pass there,
- * which fills the rung 23.3's ladder lacked, read at 98% of the read plateau
- * 23.3 measured, and 23.5 played a Full-Speed audio stream through it
- * (docs/contributing/runs/run-23.md).
+ * HCD's INFs write 160 (40 us, Linux's long-standing value) on every install
+ * path, both architectures: the owner's ruling of 2026-10-04 (roadmap-hcd.md,
+ * decisions table), on an ATTO QD1 reading of a UAS drive at SuperSpeed under
+ * Windows 98 SE on the P14s Gen 1, where 500 (125 us) cost 15 to 22% of bulk
+ * throughput, 160 took almost all of it back and 40 added only 1 to 3% for
+ * up to four times the interrupt rate. The miniport shipped 500 from 1.1.1.0
+ * (23.5's reading, docs/contributing/runs/run-23.md); a Full-Speed audio
+ * stream was read again at 160 on Windows 2000 before the change.
  *
  * 10 is the floor so a user can go no lower than 2.5 us; nothing above 4000 is
  * accepted because a longer interval only adds latency. **Anything outside the
@@ -711,8 +717,11 @@ XHCI_C_ASSERT(portsc_change_mask_is_within_rw1c_range,
 #define XHCI_PLS_RESUME         15
 /*
  * The rest of Table 5-27's PLS encodings, which a USB3 protocol port passes
- * through (task 29-A.2; xhci-data-structures.md section 10.3, where each value
- * is marked for verification against the PDF).
+ * through (task 29-A.2; Table 5-27, p.374, and xhci-data-structures.md
+ * section 10.3, verified). Of these only RX_DETECT (from Disabled) and
+ * COMPLIANCE (which only enables the transition) are writes a USB3 port
+ * honours; 1, 4, 6-9 and 11 are ignored when written. TEST_MODE read on a
+ * USB3 port is the Loopback link state (footnote 89).
  */
 #define XHCI_PLS_U1             1
 #define XHCI_PLS_U2             2
@@ -731,8 +740,12 @@ XHCI_C_ASSERT(portsc_change_mask_is_within_rw1c_range,
 #define XHCI_PSIV_HS            3
 #define XHCI_PSIV_SS            4
 /* The SuperSpeedPlus defaults of a USB 3.x protocol group with PSIC = 0:
- * Gen 2x1, Gen 1x2 and Gen 2x2 (xhci-data-structures.md section 10.1, to
- * verify against the PDF). Decoded only on a USB 3.x group. */
+ * Gen 2x1, Gen 1x2 and Gen 2x2 at 10, 10 and 20 Gb/s (Table 7-13's PSIM
+ * column, p.485; xhci-data-structures.md section 10.1, verified). 7.2.2.1.2
+ * (p.485-486) defines 5 only for a USB 3.1 or 3.2 group and 6 and 7 only
+ * for a USB 3.2 group; this driver decodes all three on any USB 3.x group
+ * (xhci_caps.c, xhciDefaultKilobits), a leniency a conforming controller
+ * never exercises, and never on a USB 2.0 group. */
 #define XHCI_PSIV_SSP_GEN2X1    5
 #define XHCI_PSIV_SSP_GEN1X2    6
 #define XHCI_PSIV_SSP_GEN2X2    7
@@ -1774,8 +1787,8 @@ typedef struct _XHCI_HC_INFO {
      */
     ULONG Fsc;
     /*
-     * Large ESIT Payload Capability, HCCPARAMS2 bit 4 (task 29-A.6; to verify
-     * against Table 5-16). Read under the same two gates as Fsc, and zero
+     * Large ESIT Payload Capability, HCCPARAMS2 bit 4 (task 29-A.6; Table
+     * 5-16, p.356, verified). Read under the same two gates as Fsc, and zero
      * when the register is not there: zero is the direction that refuses a
      * SuperSpeedPlus isochronous endpoint above 48 KiB per interval rather
      * than programming Max ESIT Payload Hi on a controller that reserves it.
@@ -1888,14 +1901,14 @@ ULONG XhciHcInfoEqual(const XHCI_HC_INFO *a, const XHCI_HC_INFO *b);
 #define XHCI_PROTOCOL_PSIC(dw2)        ((((ULONG)(dw2)) >> 28) & 0xFUL)
 #define XHCI_PROTOCOL_SLOT_TYPE(dw3)   (((ULONG)(dw3)) & 0x1FUL)
 
-/* Protocol Speed ID DWORD (spec 7.2.2.1.2). */
+/* Protocol Speed ID DWORD (spec 7.2.1, Table 7-10, p.482). */
 #define XHCI_PSI_PSIV(dw)            (((ULONG)(dw)) & 0xFUL)
 #define XHCI_PSI_PSIE(dw)            ((((ULONG)(dw)) >> 4) & 0x3UL)
 #define XHCI_PSI_PSIM(dw)            ((((ULONG)(dw)) >> 16) & 0xFFFFUL)
-/* The rest of the PSI DWORD (7.2.1; xhci-data-structures.md section 10.1,
- * to verify): PSI Type 7:6 (0 symmetric, 2 asymmetric Rx, 3 asymmetric Tx),
- * PSI Full-duplex 8, and Link Protocol 15:14 (0 SuperSpeed, 1
- * SuperSpeedPlus) on a USB3 protocol group. */
+/* The rest of the PSI DWORD (Table 7-10, p.482; xhci-data-structures.md
+ * section 10.1, verified): PSI Type 7:6 (0 symmetric, 1 reserved, 2
+ * asymmetric Rx, 3 asymmetric Tx), PSI Full-duplex 8, and Link Protocol
+ * 15:14 (0 SuperSpeed, 1 SuperSpeedPlus) on a Major Revision 03h group. */
 #define XHCI_PSI_PLT(dw)             ((((ULONG)(dw)) >> 6) & 0x3UL)
 #define XHCI_PSI_PFD(dw)             ((((ULONG)(dw)) >> 8) & 0x1UL)
 #define XHCI_PSI_LP(dw)              ((((ULONG)(dw)) >> 14) & 0x3UL)
@@ -8380,6 +8393,33 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 /* Which region a window is cut from. */
 #define XHCI_SNAPSHOT_REGION_EXTENSION  0UL
 #define XHCI_SNAPSHOT_REGION_PORTSC     1UL
+/*
+ * The HCD's enabled slots (xhci98.sys from 2.0.0.0, hcd_door.c): one record of
+ * XHCI_SNAPSHOT_SLOT_WORDS ULONGs per device the bus holds a slot for, in Slot
+ * ID order, so that XHCISNAP can witness the speed a device's Slot Context
+ * actually carries (roadmap-hcd.md 29-E.1). A new region and not a header
+ * change, so the schema stays 5: an older driver answers it with
+ * XHCI_SNAPSHOT_S_BAD_REGION, which the tool reports as "not served by this
+ * driver", and an older tool never asks. Offset is in bytes and must be a
+ * multiple of one record.
+ */
+#define XHCI_SNAPSHOT_REGION_SLOTS      2UL
+
+#define XHCI_SNAPSHOT_SLOT_ID           0   /* Slot ID                      */
+#define XHCI_SNAPSHOT_SLOT_PORT         1   /* root port, 1-based           */
+#define XHCI_SNAPSHOT_SLOT_ROUTE        2   /* Route String                 */
+#define XHCI_SNAPSHOT_SLOT_TIER         3   /* hubs above it                */
+#define XHCI_SNAPSHOT_SLOT_STATE        4   /* Output Slot Context state, or
+                                             * 0xFFFFFFFF when not readable */
+#define XHCI_SNAPSHOT_SLOT_CTX_SPEED    5   /* Output Slot Context Speed
+                                             * (PSIV, xHCI Table 6-4), or
+                                             * 0xFFFFFFFF when not readable */
+#define XHCI_SNAPSHOT_SLOT_CLASS        6   /* that PSIV decoded on the root
+                                             * port's protocol: XHCI_SPEED_* */
+#define XHCI_SNAPSHOT_SLOT_PLUS         7   /* SuperSpeedPlus by its rate   */
+#define XHCI_SNAPSHOT_SLOT_RATE_KBPS    8   /* trained rate, 0 unknown      */
+#define XHCI_SNAPSHOT_SLOT_RANK         9   /* XHCI_SS_RANK_*: Gen and lanes */
+#define XHCI_SNAPSHOT_SLOT_WORDS        10UL
 
 /* Header Status bits. A window always comes back with a truthful header, so
  * every refusal below is reported here rather than through an MPSTATUS the

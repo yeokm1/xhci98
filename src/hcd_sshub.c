@@ -29,7 +29,9 @@
  *     in SS.Inactive or Compliance Mode is marked for recovery, and the
  *     warm reset (HcdSsHubPortRecover) goes on the wire only after
  *     hcd_enum.c has fed the disconnect and the old device and its subtree
- *     are torn down;
+ *     are torn down; a link found in U3 under a held device, or a finished
+ *     U3 exit, is resumed or held through its recovery by hcd_hub.c's
+ *     USB 2.0 hub-port resume (suspend handled, never initiated);
  *   the Protocol Speed ID of a device behind it (HcdSsHubPsiv), for
  *     HcdHubPlace: SuperSpeed's, or a SuperSpeedPlus rate's from the
  *     extended status - and after Address Device the controller's own
@@ -53,7 +55,11 @@
 
 /* The hub times the reset; polled from 20 ms on and given up at 500 ms for
  * a hot reset, 1000 ms for a warm one - as hcd_enum.c's root port, a bus
- * policy and not a specification number; reset recovery 10 ms. */
+ * policy and not a specification number (the hub itself gives a warm reset
+ * up after tTimeForResetError, 100-200 ms in Rx.Detect, Table 10-19, USB
+ * 3.2 p.460, and reports it as a disconnect). Reset recovery 10 ms is
+ * USB 2.0's TRSTRCY kept as margin: USB 3.2 has the device usable at once
+ * after a reset (9.2.6.2, USB 3.2 p.327; verified). */
 #define HCD_SSHUB_RESET_FIRST_MS    20UL
 #define HCD_SSHUB_HOT_WAIT_MS       500UL
 #define HCD_SSHUB_WARM_WAIT_MS      1000UL
@@ -223,9 +229,14 @@ ULONG HcdSsHubConfigure(PHCD_CONTROLLER hc, PHCD_HUB hub)
     hub->Alternate = 0;
     dev->Alternate[number] = 0;
 
-    /* The depth is the hub's tier: 0 on a root port (USB 3.2 10.16.2.9, to
-     * verify), so the hub routes by Route String nibble `tier`. A hub that
-     * refuses it would route by a nibble nobody chose: not served. */
+    /* The depth is the hub's tier: 0 on a root port, so the hub routes by
+     * Route String nibble `tier` ("the Hub Depth left shifted by two is the
+     * offset into the Route String", USB 3.2 10.16.2.9, p.451, and Figure
+     * 10-5, p.377; verified). Sent after SET_CONFIGURATION because an
+     * unconfigured hub's answer is undefined (p.452), and before any port
+     * is used because until then the hub ignores the Route String
+     * (10.1.3.1, p.376). A hub that refuses it would route by a nibble
+     * nobody chose: not served. */
     if (!HcdThreadControl(hc, dev, XHCI_HUB_RT_HUB_OUT,
                           XHCI_SSHUB_REQ_SET_HUB_DEPTH, (USHORT)hub->Tier, 0,
                           0, &bytes)) {
@@ -452,8 +463,12 @@ ULONG HcdSsHubPortReset(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
  * for the disconnect of whatever it held, so hcd_enum.c tears the old
  * device and its subtree down - frozen, its transfers ended, its slot
  * disabled - before HcdSsHubPortRecover puts the warm reset on the wire
- * (Codex review of 034a119, finding 1). Returns 0 when the hub did not
- * answer.
+ * (Codex review of 034a119, finding 1). A link in U3 under a held device
+ * is named in d->Resume and a finished U3 exit in d->Suspended, which
+ * hcd_hub.c's HcdHubPortLook carries out as for a USB 2.0 hub port: the
+ * devices quiesced, the link brought to U0 or the recovery waited, and the
+ * outcome decided by the same rules (the Phase 27 and Phase 30 merge).
+ * Returns 0 when the hub did not answer.
  */
 ULONG HcdSsHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
                        ULONG state, PXHCI_HUB_PORT_DECISION d)
@@ -469,6 +484,9 @@ ULONG HcdSsHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     d->OverCurrent = 0;
     d->Repower = 0;
     d->Suspended = 0;
+    d->Resume = 0;
+    d->Retry = 0;
+    d->GaveUp = 0;
     if (!HcdHubPortStatus(hc, hub, n, &status, &change)) {
         return 0;
     }
@@ -514,6 +532,8 @@ ULONG HcdSsHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     d->Connect = sd.Connect;
     d->OverCurrent = sd.OverCurrent;
     d->Repower = sd.Repower;
+    d->Resume = sd.Resume;
+    d->Suspended = sd.Resumed;
     q->HubSsRecover = sd.WarmReset;
     if (sd.WarmReset) {
         XHCI_DBG_VALUE("hcd: SS hub port link error, port/link",

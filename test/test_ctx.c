@@ -513,6 +513,26 @@ static void test_endpoint_field_ranges(void)
     ep.MaxPacketSize = 0;
     CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_BAD_PARAM,
              "and 0 refused, which would divide TD Size by zero");
+    /* ...except on an isochronous endpoint, where 0 is a zero-bandwidth
+     * endpoint whose pipe never builds a TD (xhci_pipe.c,
+     * XhciPipeZeroBandwidth; USB 3.2 Table 9-26). CErr 0 as isoch needs. */
+    ep.EpType = XHCI_EP_TYPE_ISOCH_IN;
+    ep.ErrorCount = 0;
+    CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_OK,
+             "isoch IN with Max Packet Size 0 builds");
+    CHECK_EQ(block[1] & 0xFFFF0000UL, 0UL, "with 0 at 31:16");
+    CHECK_EQ(block[4] & 0xFFFF0000UL, 0UL, "and Max ESIT Payload 0");
+    ep.EpType = XHCI_EP_TYPE_ISOCH_OUT;
+    CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_OK,
+             "isoch OUT with Max Packet Size 0 builds");
+    ep.EpType = XHCI_EP_TYPE_INTERRUPT_IN;
+    ep.ErrorCount = XHCI_EP_CERR_DEFAULT;
+    CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_BAD_PARAM,
+             "interrupt IN with Max Packet Size 0 still refused");
+    ep.EpType = XHCI_EP_TYPE_BULK_OUT;
+    CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_BAD_PARAM,
+             "bulk OUT with Max Packet Size 0 still refused");
+    ep.EpType = XHCI_EP_TYPE_CONTROL;
     ep.MaxPacketSize = 64UL;
 
     /* Nothing is left broken behind. */

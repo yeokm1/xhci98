@@ -2,7 +2,7 @@
  * xhci_link.h - the SuperSpeed link of a USB3 protocol root port, its pure
  * half (roadmap-hcd.md tasks 29-A.2 and 29-A.5; design record 13 section 2;
  * xhci-data-structures.md section 10, where every PORTSC fact this file
- * rests on is transcribed and marked for verification against the PDF).
+ * rests on is transcribed and verified against xHCI 1.2c and USB 3.2).
  *
  * Two things, both decisions over values with no register behind them, so
  * the host suite drives them with no controller (test\test_link.c):
@@ -23,7 +23,10 @@
  *     companion's disconnect, after a companion connect seen since the hold
  *     began, of the very device held (vendor id, product id and serial
  *     string). A hold with no identity, and an orphan's, last until the
- *     controller's next start.
+ *     controller's next start. That is the specified behaviour, not a
+ *     guess: a Disabled port is not left by a disconnect and has CCS = 0
+ *     throughout, so it raises no CSC when the device goes (Figure 4-27,
+ *     p.279; 4.19.1.2.3, p.280; xhci-data-structures.md section 10.4).
  *
  * The executor is hcd_enum.c: it reads PORTSC, asks here, performs the one
  * write asked for and feeds the outcome back. Nothing here touches a

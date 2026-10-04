@@ -81,6 +81,8 @@ VOID XhciSsHubPortDecide(ULONG state, ULONG status, ULONG change,
     out->WarmReset = 0;
     out->ConfigError = (change & XHCI_SSHUB_C_PORT_CONFIG_ERROR) != 0;
     out->LinkChange = (change & XHCI_SSHUB_C_PORT_LINK_STATE) != 0;
+    out->Resume = 0;
+    out->Resumed = 0;
     connected = (status & XHCI_SSHUB_PORT_CONNECTION) != 0;
     link = XhciSsHubLinkState(status);
 
@@ -90,9 +92,14 @@ VOID XhciSsHubPortDecide(ULONG state, ULONG status, ULONG change,
     }
     if (link == XHCI_SSHUB_LINK_INACTIVE ||
         link == XHCI_SSHUB_LINK_COMPLIANCE) {
-        /* Only a warm reset leaves these states (USB 3.2 7.5.2 and 7.5.3,
-         * to verify): whatever the port held goes first, and what the
-         * reset leaves is decided afresh by the executor. */
+        /* A warm reset is the only reset that leaves these states: a
+         * downstream port leaves eSS.Inactive when directed, on a
+         * detected disconnect or on a warm reset, and Compliance Mode on a
+         * warm reset or when directed to eSS.Disabled (USB 3.2 7.5.2 and
+         * 7.5.5.2, USB 3.2 p.163-164 and p.188), and a PORT_RESET in
+         * either is sent as a warm reset anyway (7.4.2, p.158); verified.
+         * Whatever the port held goes first, and what the reset leaves is
+         * decided afresh by the executor. */
         out->WarmReset = 1;
         out->Disconnect = xhciSsHubHolds(state);
         return;
@@ -122,8 +129,40 @@ VOID XhciSsHubPortDecide(ULONG state, ULONG status, ULONG change,
         out->Connect = 1;
         return;
     }
+    if (xhciSsHubHolds(state) && (status & XHCI_SSHUB_PORT_ENABLE) != 0) {
+        if (link == XHCI_SSHUB_LINK_U3) {
+            out->Resume = 1;
+        } else if (out->LinkChange && link == XHCI_SSHUB_LINK_U0) {
+            out->Resumed = 1;
+        }
+    }
     if (state == XHCI_ENUM_EMPTY) {
         out->Connect = 1;
+    }
+}
+
+/* IRQL: any. */
+ULONG XhciSsHubResumeProgress(ULONG status)
+{
+    ULONG link;
+
+    if ((status & XHCI_SSHUB_PORT_CONNECTION) == 0) {
+        return XHCI_HUB_RESUME_GONE;
+    }
+    link = XhciSsHubLinkState(status);
+    switch (link) {
+    case XHCI_SSHUB_LINK_U3:
+    case XHCI_SSHUB_LINK_RECOVERY:
+        return XHCI_HUB_RESUME_PENDING;
+    case XHCI_SSHUB_LINK_U0:
+    case XHCI_SSHUB_LINK_U1:
+    case XHCI_SSHUB_LINK_U2:
+        if ((status & XHCI_SSHUB_PORT_ENABLE) != 0) {
+            return XHCI_HUB_RESUME_DONE;
+        }
+        return XHCI_HUB_RESUME_DISABLED;
+    default:
+        return XHCI_HUB_RESUME_DISABLED;
     }
 }
 
@@ -170,8 +209,12 @@ ULONG XhciSsHubResetKind(ULONG status, PULONG converted)
             break;
         default:
             /* U3, a stuck Polling or Hot Reset, Loopback, or a connection
-             * the link state does not account for: a hot reset cannot
-             * start there (USB 3.2 7.4.2, to verify). */
+             * the link state does not account for: BH_PORT_RESET, valid in
+             * every link state but eSS.Disabled (USB 3.2 7.4.2, USB 3.2
+             * p.158-159; verified). For U3 and Loopback that is what the
+             * hub would send for PORT_RESET too; for Polling and Hot Reset
+             * the hub would try a hot reset first, so the warm one there
+             * is this driver's policy, not the specification's rule. */
             kind = XHCI_SSHUB_RESET_WARM;
             break;
         }
@@ -320,6 +363,97 @@ ULONG XhciSsHubDownstream(const XHCI_PIPE_BOS *bos, ULONG extStatus,
     out->Plus = (plus || lanes > 1 || out->Kbps > XHCI_RATE_GEN1_KBPS)
                     ? 1UL : 0UL;
     return XHCI_SSHUB_OK;
+}
+
+/* ----------------------------------------------------------------------- */
+/* Link rank and the SuperSpeed parent hub (xHCI Table 6-6)                 */
+/* ----------------------------------------------------------------------- */
+
+/* IRQL: any. */
+ULONG XhciSsLinkRank(ULONG laneKbps, ULONG lanes)
+{
+    if (laneKbps == 0 || (lanes != 1UL && lanes != 2UL)) {
+        return XHCI_SS_RANK_UNKNOWN;
+    }
+    if (laneKbps <= XHCI_SS_GEN1_LANE_KBPS) {
+        return lanes == 1UL ? XHCI_SS_RANK_GEN1X1 : XHCI_SS_RANK_GEN1X2;
+    }
+    return lanes == 1UL ? XHCI_SS_RANK_GEN2X1 : XHCI_SS_RANK_GEN2X2;
+}
+
+/* IRQL: any. */
+ULONG XhciSsRootRank(ULONG aggregateKbps, ULONG portli)
+{
+    ULONG lanes;
+
+    lanes = XHCI_PORTLI_RLC(portli) + 1UL;
+    if (lanes != 1UL && lanes != 2UL) {
+        return XHCI_SS_RANK_UNKNOWN;
+    }
+    return XhciSsLinkRank(aggregateKbps / lanes, lanes);
+}
+
+/* IRQL: any. */
+ULONG XhciSsHubChildRank(ULONG hubSsp, const XHCI_SSHUB_LINK *link)
+{
+    if (!hubSsp) {
+        return XHCI_SS_RANK_GEN1X1;
+    }
+    if (link == NULL || link->Kbps == 0) {
+        return XHCI_SS_RANK_UNKNOWN;
+    }
+    return XhciSsLinkRank(link->LaneKbps, link->Lanes);
+}
+
+/* IRQL: any. */
+ULONG XhciSsParentNeeded(ULONG hubRank, ULONG childRank)
+{
+    return hubRank != XHCI_SS_RANK_UNKNOWN &&
+           childRank != XHCI_SS_RANK_UNKNOWN && hubRank > childRank;
+}
+
+/* IRQL: any. */
+ULONG XhciSsHubParentOf(ULONG hubUsb3, ULONG hubSsp, ULONG hubRank,
+                        ULONG hubParentSlot, ULONG hubParentPort,
+                        const XHCI_SSHUB_LINK *link, ULONG hubSlot,
+                        ULONG hubPort, PULONG childRank, PULONG parentSlot,
+                        PULONG parentPort)
+{
+    ULONG rank;
+
+    rank = XHCI_SS_RANK_UNKNOWN;
+    if (parentSlot != NULL) {
+        *parentSlot = 0;
+    }
+    if (parentPort != NULL) {
+        *parentPort = 0;
+    }
+    if (hubUsb3) {
+        rank = XhciSsHubChildRank(hubSsp, link);
+    }
+    if (childRank != NULL) {
+        *childRank = rank;
+    }
+    if (!hubUsb3 || parentSlot == NULL || parentPort == NULL) {
+        return 0;
+    }
+    if (XhciSsParentNeeded(hubRank, rank)) {
+        if (hubSlot == 0 || hubPort == 0) {
+            return 0;
+        }
+        /* This hub is the boundary. */
+        *parentSlot = hubSlot;
+        *parentPort = hubPort;
+        return 1;
+    }
+    if (rank != XHCI_SS_RANK_UNKNOWN && rank == hubRank &&
+        hubParentSlot != 0 && hubParentPort != 0) {
+        /* The same rank as the hub: behind the hub's own boundary. */
+        *parentSlot = hubParentSlot;
+        *parentPort = hubParentPort;
+        return 1;
+    }
+    return 0;
 }
 
 /* The SuperSpeedPlus ID at exactly `kbps` among the root port protocol's

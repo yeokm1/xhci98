@@ -10,16 +10,17 @@ rem   IMOD98 CLEAR NNNN             delete the value - the driver's 4000
 rem   IMOD98 HEX xxxxxxxx NNNN      set any value, as eight hex digits
 rem
 rem   step is one of the ladder steps, by its DECIMAL name:
-rem       10   40   100   200   500   1000   2000   4000
+rem       10   40   100   160   200   500   1000   2000   4000
 rem   NNNN is the instance under ...\Services\Class\USB.  Run FIND to get it.
 rem
 rem WHY THE STEPS ARE A FIXED LIST AND NOT ANY NUMBER.  Windows 98's shell is
 rem COMMAND.COM, which has no reg.exe, no `for /f` and no `set /a`, so the only
 rem route to the registry is to write a REGEDIT4 file and import it - and a
 rem REGEDIT4 dword is written in HEX.  Nothing here can convert 4000 into 0fa0.
-rem The ladder task 23.3 swept is eight values here, so they are tabulated
-rem below, and HEX takes the digits as their own argument because COMMAND.COM
-rem has no substring syntax either and so cannot strip a prefix off one.
+rem The ladder task 23.3 swept is eight values, plus 160, the package's own
+rem setting since 2026-10-04, so nine are tabulated below, and HEX takes the
+rem digits as their own argument because COMMAND.COM has no substring syntax
+rem either and so cannot strip a prefix off one.
 rem
 rem THREE MORE COMMAND.COM LIMITS ARE WRITTEN INTO THE SHAPE OF THIS FILE, and
 rem each of them is a thing that fails SILENTLY or WEIRDLY rather than loudly:
@@ -67,12 +68,12 @@ rem reads this value at every start and writes the result to IMOD: 10 to 4000
 rem is used as given, and anything else - absent, 0, 5000 - is REPLACED by
 rem 4000, the hardware reset value and what every release before 1.1.1.0 ran
 rem at.  Not clamped, so 0 is not moderation off and 5000 is not 4000 by
-rem rounding.  An INF install writes 500.
+rem rounding.  An INF install writes 160 (500 up to 1.2.0.0).
 rem
 rem SO CLEAR IS NOT "PUT THE PACKAGE BACK".  It deletes the value, and the
 rem driver then runs at 4000 - the control arm of a sweep, and NOT what the
-rem package installs.  To go back to the package's own setting, set 500.
-rem Leave a bench machine at 500 when the session ends, or say in the run
+rem package installs.  To go back to the package's own setting, set 160.
+rem Leave a bench machine at 160 when the session ends, or say in the run
 rem sheet that it was not.
 rem
 rem 0 IS NOT ON THE LADDER ANY MORE.  Task 23.3's experimental build took 0 as
@@ -118,6 +119,7 @@ set IMODHEX=
 if "%1"=="10" set IMODHEX=0000000a
 if "%1"=="40" set IMODHEX=00000028
 if "%1"=="100" set IMODHEX=00000064
+if "%1"=="160" set IMODHEX=000000a0
 if "%1"=="200" set IMODHEX=000000c8
 if "%1"=="500" set IMODHEX=000001f4
 if "%1"=="1000" set IMODHEX=000003e8
@@ -134,7 +136,7 @@ regedit /s C:\IMODSET.REG
 echo.
 echo Set XhciImodInterval250ns = %1  (250 ns units, written as dword:%IMODHEX%)
 echo   under ...\Services\Class\USB\%2
-if "%1"=="500" echo   500 is what the package's INF installs.
+if "%1"=="160" echo   160 is what the package's INF installs.
 goto restart
 
 :hex
@@ -168,7 +170,7 @@ regedit /s C:\IMODSET.REG
 echo.
 echo Cleared XhciImodInterval250ns under ...\Services\Class\USB\%2
 echo The driver will run at its own default, 4000 - the CONTROL arm of a
-echo sweep.  That is NOT the package's setting: the INF installs 500.
+echo sweep.  That is NOT the package's setting: the INF installs 160.
 goto restart
 
 :restart
@@ -213,7 +215,7 @@ echo.
 echo     edit C:\USBCLASS.REG
 echo.
 echo Then use that NNNN in every later call, for example:
-echo     IMOD98 500 0002
+echo     IMOD98 160 0002
 echo.
 echo The number is not fixed by anything - it was 0002 on the 2a machine - so
 echo read it once per machine rather than assuming it.

@@ -1267,6 +1267,8 @@ Assert "a row with no ClaimLabel reads endpoints opened" "endpoints opened" (Get
 $hubOk = @{ 'devices addressed' = 1; 'slots enabled' = 1; 'hubs started by the bus' = 1; 'port speed decoded - full speed' = 1; 'slot context speed - full speed' = 1
             'topology: hub descriptors folded' = 1; 'topology: hub slots marked' = 1 }
 Assert "hub served by the bus: PASS"                 "PASS" (Get-HcdOutcome $hubFs (New-HcdDelta $hubOk))
+$hubTt = $hubOk.Clone(); $hubTt['topology: TT pairs programmed'] = 1
+Assert "an FS hub on a root port with a TT programmed: FAIL" "FAIL" (Get-HcdOutcome $hubFs (New-HcdDelta $hubTt))
 $hub26 = @{ 'devices addressed' = 1; 'slots enabled' = 1; 'port speed decoded - full speed' = 1; 'slot context speed - full speed' = 1 }
 Assert "Phase 26's hub, offered with no driver: NODRIVER" "NODRIVER" (Get-HcdOutcome $hubFs (New-HcdDelta $hub26))
 $hubNoFold = $hubOk.Clone(); $hubNoFold['topology: hub descriptors folded'] = 0
@@ -1276,8 +1278,13 @@ Assert "...which the default claim would misread as NODRIVER" "NODRIVER" (Get-Hc
 $churnH = Get-HcdRow $mxHcd 'usb-hub/churn'
 $churn27 = @{ 'devices addressed' = 11; 'slots enabled' = 11; 'hubs started by the bus' = 6
               'port speed decoded - full speed' = 11; 'slot context speed - full speed' = 11
-              'topology: hub descriptors folded' = 6; 'topology: behind-hub opens' = 5; 'topology: behind-hub devices addressed' = 10 }
+              'topology: hub descriptors folded' = 6; 'topology: hub slots marked' = 6; 'topology: behind-hub opens' = 10; 'topology: behind-hub devices addressed' = 10
+              'endpoints opened' = 5; 'select endpoints requested' = 5 }
 Assert "churn, five tiers deep and the tier-5 mouse addressed: PASS" "PASS" (Get-HcdOutcome $churnH (New-HcdDelta $churn27))
+$churnUnbound = $churn27.Clone(); $churnUnbound['topology: behind-hub opens'] = 9; $churnUnbound['endpoints opened'] = 4; $churnUnbound['select endpoints requested'] = 4
+Assert "churn with the tier-5 mouse addressed but not bound: FAIL" "FAIL" (Get-HcdOutcome $churnH (New-HcdDelta $churnUnbound))
+$churnHubShort = $churn27.Clone(); $churnHubShort['hubs started by the bus'] = 5
+Assert "churn with a hub of the chain never started: FAIL" "FAIL" (Get-HcdOutcome $churnH (New-HcdDelta $churnHubShort))
 $churnVhub = $churn27.Clone(); $churnVhub['devices addressed'] = 10; $churnVhub['slots enabled'] = 10
 $churnVhub['port speed decoded - full speed'] = 10; $churnVhub['slot context speed - full speed'] = 10; $churnVhub['topology: behind-hub devices addressed'] = 9
 Assert "churn stopping at the virtual hub's tier: FAIL" "FAIL" (Get-HcdOutcome $churnH (New-HcdDelta $churnVhub))
@@ -1385,6 +1392,21 @@ $threw = ""
 try { Assert-OffsetsFresh -OffsetsFile $tmpOffHcd -ExtensionSizeFromTrace 1128 -SizeName 'counters size' | Out-Null } catch { $threw = $_.Exception.Message }
 Remove-Item -LiteralPath $tmpOffHcd -Force -ErrorAction SilentlyContinue
 Assert "stale HCD offsets are refused by name"       $true ($threw -match 'STALE OFFSETS.*counters size=1128')
+
+Write-Host "--- an empty bus is an answer, not a missing reply (28-V.1 pre-read) ---"
+& {
+    function Send-Mon { param($Port, $Command, [switch]$Reply, [switch]$Quiet) return $script:fakeReply }
+    $script:fakeReply = "info usb`r`n(qemu) "
+    $r = Get-MonitorText -Port 1 -Command "info usb"
+    Assert "a complete empty info usb is not null"        $false ($null -eq $r)
+    Assert "...and holds no lines"                        0 (@($r).Count)
+    Assert "...so a pulled device reads as gone"          $false (Test-UsbDeviceListed -Port 1 -Id "dut1")
+    $script:fakeReply = "info usb`r`n  Device 0.1, Port 2, Speed 480 Mb/s, Product QEMU USB MSD, ID: dut1`r`n(qemu) "
+    Assert "a listed device reads as present"             $true (Test-UsbDeviceListed -Port 1 -Id "dut1")
+    $script:fakeReply = $null
+    Assert "no reply at all is still null"                $null (Get-MonitorText -Port 1 -Command "info usb")
+    Assert "...and leaves the departure unknown"          $null (Test-UsbDeviceListed -Port 1 -Id "dut1")
+}
 
 Write-Host ""
 if ($failures -eq 0) {

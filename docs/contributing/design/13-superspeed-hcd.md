@@ -458,7 +458,7 @@ task. The miniport reads six values from its device key (`src\*.c`, the six
 |---|---|
 | `XhciLogVerbosity` | Carried over, same meaning, same shipping default 0, controller only |
 | `XhciLogDebugView` | Carried over, same meaning; under the HCD it also selects 26-A.8's continuous PASSIVE flusher |
-| `XhciImodInterval250ns` | Carried over, same meaning and default 500 |
+| `XhciImodInterval250ns` | Carried over, same meaning and code default 4000; both INFs write 160 (40 us) on every install path since the owner's ruling of 2026-10-04 (`roadmap-hcd.md`, decisions table), 500 until then |
 | `XhciVirtualHSHub`, `XhciVirtualHSHubVid`, `XhciVirtualHSHubPid` | Not read and not written (owner, 2026-10-02); the INF gate refuses them in an HCD INF (`VAL-HCDVHUB`) |
 
 The root-hub sections write no value of the controller's: they carry the
@@ -1963,6 +1963,35 @@ ms before resuming it (xHCI p.454). Resume recovery (`TRSMRCY`, 10 ms) is to
 transcribe. Through an external hub: SET_FEATURE(PORT_SUSPEND) /
 CLEAR_FEATURE(PORT_SUSPEND), then C_PORT_SUSPEND.
 
+**At a SuperSpeed hub's port** (decided when Phase 27's hub-port resume met
+Phase 30's SuperSpeed hub on `p28-31-int`, 2026-10-04): the same rule,
+handled and never initiated, through the same code. Phase 30 had no suspend
+or resume of its own - a link found in U3 under a held device was left as
+it was, and only a reset noticed it (a warm one, since a hot reset cannot
+start from U3) - so there was nothing to reconcile, only a gap to close.
+`XhciSsHubPortDecide` now names a connected, enabled port whose link reads
+U3 under a device the machine holds (`Resume`), and a `C_PORT_LINK_STATE`
+with the link back in U0 under one (`Resumed`, a finished host-requested U3
+exit; a remote-wake U3 exit sets no `C_PORT_LINK_STATE`, USB 3.2
+10.16.2.6.2, printed p.449), after every other rule; `HcdHubPortLook` carries both out
+exactly as for a USB 2.0 port - the devices below quiesced, the link asked
+to U0 with SET_FEATURE(PORT_LINK_STATE) and U0 in `wIndex` 15:8, progress
+read by `XhciSsHubResumeProgress` (U3 or Recovery pending; U0, U1 or U2
+enabled done; anything else, the reserved link states 0xC to 0xF included,
+re-enumerated; disconnected gone),
+`C_PORT_LINK_STATE` cleared, the 10 ms recovery waited, and the same
+outcome, retry and give-up rules - a resume whose last reading carries
+`C_PORT_CONNECTION` is a replaced device and is enumerated afresh, at
+either speed (`XhciHubResumeSettle`). No SuperSpeed port is resumed before a
+reset: a warm reset may start from U3 (`XhciSsHubResetKind`). The quiesce
+reaches streams: an endpoint with streams open is stopped when any stream
+has work, and rung again per stream by its Stream ID. The request's
+encoding, `C_PORT_LINK_STATE` on a host-directed U3 exit and `PORT_ENABLE`
+staying set in U3 were read from USB 3.2 r1.1 10.16.2.6 and 10.16.2.10
+(Codex review of the merge, printed pp.446-454); no QEMU model has a SuperSpeed
+hub, so `test_sshub`'s `test_resume` vectors are the only evidence until
+the bench (30-E.1).
+
 ### 10.3 The hub inside the bus
 
 **Bring-up, in this order.** A device whose device descriptor says class
@@ -2049,30 +2078,73 @@ after an Address Device transaction error behind a TT (10.2).
 Triggers: the hub's upstream port reports a disconnect (a root `PORTSC` CSC
 with `CCS` 0, or the parent hub's C_PORT_CONNECTION with connect 0), the
 status-change pipe fails twice (10.1), or the parent disables the hub
-(C_PORT_ENABLE with enable 0). For the subtree rooted at the departing hub:
+(C_PORT_ENABLE with enable 0). The same walk serves every way a device
+leaves - a root port or a parent hub reporting a disconnect, an enumeration
+that fails, a CYCLE_PORT, an HCRST that took every slot, the root hub's
+removal - as one teardown (`hcdSubtreeGo`, `src\hcd_enum.c`). For the
+subtree rooted at the departing device, the hubs taken deepest first
+(`XhciHubReleaseOrder`, checked by the host suite):
 
-1. **Freeze the subtree.** A post-order walk of the graph: every hub node
-   below and including the departing one stops re-arming its status-change
-   pipe and accepts no new port work; an enumeration in flight in the subtree
-   is abandoned, and the serialisation lock of 10.2 released.
-2. **Fail I/O at the edge.** Every device and function PDO in the subtree is
-   marked gone: new URBs complete at once with `STATUS_DEVICE_NOT_CONNECTED`
-   / `USBD_STATUS_DEVICE_GONE`; queued and in-flight transfers are stopped
-   (Stop Endpoint per running endpoint) and completed as cancelled.
-3. **Tell PnP.** `IoInvalidateDeviceRelations(BusRelations)` on the root-hub
-   PDO's stack (every device PDO is a child of the root hub); the next
+1. **Freeze the subtree.** Every hub node below and including the departing
+   one stops re-arming its status-change pipe and accepts no new port work
+   (Draining); an enumeration in flight in the subtree is abandoned, and the
+   serialisation lock of 10.2 released. Every device in it is marked gone and
+   rings no doorbell from here on: a URB submitted to it is refused
+   `STATUS_DEVICE_NOT_CONNECTED` / `USBD_STATUS_DEVICE_GONE` at the next tick
+   (`HcdIoRefuseLater`).
+2. **Report the PDOs missing first** (`hcdReportGone`), as each device is
+   frozen and before any of its URBs leaves the ring:
+   `IoInvalidateDeviceRelations(BusRelations)` on the root-hub PDO's stack
+   (every device PDO is a child of the root hub); the next
    `IRP_MN_QUERY_DEVICE_RELATIONS` omits the subtree's PDOs, so NT sends
    `IRP_MN_SURPRISE_REMOVAL` then `IRP_MN_REMOVE_DEVICE`, and Windows 98 sends
    `IRP_MN_REMOVE_DEVICE` alone (its out-of-sequence remove, 26-A.2). A PDO
    reported missing is deleted at its `REMOVE_DEVICE`, never before.
+3. **Stop the endpoints and park the URBs - not complete them.** Leaf first,
+   with the slots still enabled, each device's running endpoints are stopped
+   (Stop Endpoint) and every URB IRP of the departed device - queued, on the
+   ring, or waiting for a transfer record - is released from the hardware
+   and **held on its PDO**, cancellable (`HcdIoPark`, `src\hcd_io.c`). A held
+   IRP is completed `STATUS_CANCELLED` / `USBD_STATUS_CANCELED` only at one
+   of three events (`HcdIoParkedRelease`):
+   - the client cancels it;
+   - the client's ABORT_PIPE covers it. Every URB IRP is stamped at dispatch
+     with its PDO's 64-bit submission sequence (`HcdIoStamp`), and an
+     ABORT_PIPE records its own stamp as its pipe's horizon
+     (`HcdIoAbortMark`). An ABORT_PIPE on a departed PDO is answered without
+     a device record. A request at or below its pipe's horizon is completed
+     at once rather than held, so a request the teardown reaches after the
+     abort is not stranded;
+   - the PDO's stop, surprise removal or removal.
+   An HCRST that took the slots stops nothing; its URBs are drained as each
+   record is freed.
 4. **Release the hardware leaf-first.** Disable Slot for each device in
    post-order - children before the hub they hang off, the departing hub
-   last - so no live slot's Parent Hub Slot ID ever names a disabled slot.
-   This does not wait for step 3's IRPs: after step 2 no PDO touches its
+   last - so no live slot's Parent Hub Slot ID or TT ever names a disabled
+   slot. This does not wait for step 2's IRPs: after step 1 no PDO touches its
    slot. The Disable Slot comes once the endpoints are stopped (xHCI 3.3.3:
    "issued when a device is detached from the USB").
-5. **Prune the graph** (`XhciTopoDetach` per node, post-order) and count
-   `topology: behind-hub devices gone` and `topology: nodes pruned`.
+5. **Prune the graph deepest-first** (`XhciTopoDetach` per hub as it goes,
+   with whatever is left below it) and count `topology: behind-hub devices
+   gone` and `topology: nodes pruned`. A departed hub's object is freed once
+   every port of it has settled, and until then the port it sat on waits for
+   it.
+
+**Why report first and park (Windows 98 SE, 27-V.1, 2026-10-04;
+`runs/run-27.md`, "The Windows 98 SE HID-unplug stall").** This order
+replaces the one this section first gave, in which the URBs were completed
+DEVICE_GONE before PnP was told. Windows 98 SE's `hidclass.sys` answers a
+read failing `STATUS_DEVICE_NOT_CONNECTED`, while its device is still
+started, by failing every client read and resubmitting at once (`0x110A7`,
+static; `run-26.md`, "The REMOVE that never ended"). Each resubmission is
+refused at the next tick, and the retries kept the guest so busy that its
+configuration manager sent the REMOVE that ends the started state only 129 s
+to 11 minutes after a keyboard's unplug. Reporting the PDO first did not cure
+it (`26e7cb6`); a read that never fails does (`f99f184`), and the REMOVE then
+came within about a second on each unplug read. A request held for a device
+that stopped answering is also what the hub drivers this bus stands in for
+do. Windows 2000 reads the same order cleanly (SURPRISE_REMOVAL and REMOVE
+within about a second, a stick pulled mid-copy included).
 
 A root port going down sweeps everything behind it by the same walk; a device
 pulled mid-transfer behind a live hub is the one-node case. A reconnect on

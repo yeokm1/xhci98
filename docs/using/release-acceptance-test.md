@@ -593,7 +593,10 @@ fresh guest is the first thing that could, so the step asks.
 `XhciImodInterval250ns` is the one of the three whose installed data the
 report can confirm on its own: the driver prints what it read and what it
 programmed, so a `500` in the key and a `500` in force say the installer's
-value reached the controller. A missing value reads `NOT read, value 0` with
+value reached the controller. (That is `1.2.0.0`'s number. The successor
+driver, from `2.0.0.0`, writes `160` on every install path, 40 us, by the
+owner's ruling of 2026-10-04; task 32.2 adapts this step to it.) A missing
+value reads `NOT read, value 0` with
 an interval of `4000` and a line saying the default was used, which is what
 an upgrade over a running driver on Windows 98 with NUSB leaves behind
 (`docs/using/release-notes.md`, "Known limitations"), so record which kind of

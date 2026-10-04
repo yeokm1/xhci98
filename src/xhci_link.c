@@ -2,22 +2,34 @@
  * xhci_link.c - the SuperSpeed link of a USB3 protocol root port (xhci_link.h;
  * roadmap-hcd.md tasks 29-A.2 and 29-A.5).
  *
- * The states, as xHCI Figure 4-27 draws a USB3 root port and as PORTSC
- * shows them (xhci-data-structures.md section 10.4; every encoding to verify
- * against the PDF):
+ * The states, as xHCI 1.2c Figure 4-27 (p.279) draws a USB3 root port and
+ * as PORTSC shows them (xhci-data-structures.md section 10.4, verified
+ * against the figure and 4.19.1.2, p.279-286). The figure forces (PP, CCS,
+ * PED, PR) on entry to each state:
  *
- *   Powered-off   PP = 0
- *   Disconnected  PLS = RxDetect, CCS = 0
+ *   Powered-off   PP = 0                       (0,0,0,0)
+ *   Disconnected  PLS = RxDetect, CCS = 0      (1,0,0,0)
  *   Polling       PLS = Polling: link training, which on success takes the
  *                 port straight to Enabled with CCS, PED and CSC set - a
- *                 USB3 port needs no reset to be enabled, unlike a USB2 one
- *   Enabled       CCS = 1, PED = 1, PLS = U0, U1, U2, U3 or Recovery
- *   Reset         PR = 1 (a hot reset, PLS = Hot Reset) or a warm reset
- *   Error         PLS = Inactive (SS.Inactive): only a warm reset, or a
- *                 disconnect, leaves it
- *   Compliance    PLS = Compliance Mode: likewise
+ *                 USB3 port needs no reset to be enabled, unlike a USB2 one;
+ *                 a training failure goes to Disconnected, a configuration
+ *                 failure to Error with CEC        (1,0,0,0)
+ *   Enabled       CCS = 1, PED = 1, PLS = U0, U1, U2, U3, Resume or
+ *                 Recovery                     (1,1,1,0)
+ *   Reset         PR = 1 (a hot reset, PLS = Hot Reset) or a warm reset;
+ *                 success to Enabled, failure to Disconnected with PRC set
+ *                 either way                   (1,1,0,1)
+ *   Error         PLS = Inactive (SS.Inactive), CCS = 0: left by PR or WPR
+ *                 (to Reset), a disconnect, PED = 1 (to Disabled), PP = 0
+ *                 or HCRST (1,0,0,0)
+ *   Compliance    PLS = Compliance Mode: left by WPR or HCRST (to Reset),
+ *                 PED = 1, PP = 0              (1,0,0,0)
  *   Disabled      PLS = Disabled after software wrote PED = 1 (SS.Disabled):
- *                 left by a PLS = RxDetect write, to Disconnected
+ *                 left only by a PLS = RxDetect write or HCRST, to
+ *                 Disconnected, or by PP = 0; a disconnect does not leave
+ *                 it and raises no CSC (4.19.1.2.3, p.280)   (1,0,0,0)
+ *
+ * PEC is never set on a USB3 port (Table 5-27, p.377).
  *
  * The bus's policy over them:
  *
@@ -32,7 +44,9 @@
  *   - Error and Compliance are recovered with a warm reset when they are
  *     seen, at most XHCI_LINK_MAX_WARM_RESETS times for one connection, and
  *     then given up: the device, finding no SuperSpeed partner, connects on
- *     its USB 2.0 path (USB 3.2 section 10, to verify), and 29-A.5 counts it;
+ *     its USB 2.0 path (USB 3.2 7.5.1.2 and 10.18.1, USB 3.2 p.162-163 and
+ *     p.456, verified: a peripheral's upstream port that cannot train
+ *     reaches eSS.Disabled and connects on USB 2.0), and 29-A.5 counts it;
  *   - a resume from U3 is one PLS = U0 write, not USB2's Resume-then-U0;
  *   - a hold writes PED = 1 on a trained link; a release writes PLS =
  *     RxDetect on a Disabled one, and never a warm reset, which does not act
@@ -165,9 +179,12 @@ ULONG XhciLinkDecide(PXHCI_LINK_PORT link, ULONG portsc, ULONG want,
         case XHCI_LINK_RESETTING:
             return xhciLinkAct(action, XHCI_LINK_ACT_WAIT, 0);
         case XHCI_LINK_DISCONNECTED:
-            /* Cold Attach Status: far-end terminations seen that the link
-             * could not train with, which Table 5-27 has software clear
-             * with a warm reset (to verify). */
+            /* Cold Attach Status: far-end terminations seen in
+             * Disconnected that the port could not take to Enabled
+             * (asserted around D3, 4.19.8). "Software shall clear this bit
+             * by writing a '1' to WPR" (Table 5-27, p.379), and 4.19.8
+             * (p.304) has software "issue a Warm Port Reset (WPR) to any
+             * port if it is asserted"; verified. */
             if ((portsc & XHCI_PORTSC_CAS) != 0) {
                 return xhciLinkWarm(link, action, 0);
             }

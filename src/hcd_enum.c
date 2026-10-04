@@ -45,11 +45,11 @@
  * that place in the Slot Context, and a hub that reaches Present is brought
  * up by the bus and gets no PDO. A device that leaves goes by one teardown
  * whatever the cause (hcdSubtreeGo; section 10.5): a hub takes its subtree
- * with it, every device below frozen, its running endpoints stopped and its
- * URBs completed while its slot is still enabled, then its PDOs reported
- * missing and its slot disabled before the hub's own (leaf first), and the
- * port the hub sat on waits until PnP has deleted every PDO of the subtree
- * (hcdPortQuiet).
+ * with it, every device below frozen and its PDOs reported missing, its
+ * running endpoints stopped and its URBs taken off the rings and held on its
+ * PDO while its slot is still enabled, then its slot disabled before the
+ * hub's own (leaf first), and the port the hub sat on waits until PnP has
+ * deleted every PDO of the subtree (hcdPortQuiet).
  *
  * IRQL: PASSIVE_LEVEL (the controller thread), except where a function says
  * otherwise.
@@ -69,9 +69,11 @@
 #define HCD_PORT_UNREADABLE_PASSES 50UL
 #define HCD_HOLD_UNREADABLE_PASSES HCD_PORT_UNREADABLE_PASSES
 #define HCD_RESET_WAIT_MS      500UL
-/* A warm reset is LFPS for tens of milliseconds and then link training
- * (USB 3.2 7.5, to verify); twice the hot reset's wait is this driver's
- * margin, not a specification number. */
+/* A warm reset is LFPS for tReset, 80 to 120 ms (USB 3.2 Table 6-30, USB
+ * 3.2 p.100; verified), then Rx.Detect and link training (7.4.2, p.158); a
+ * hub gives one up after 100 to 200 ms in Rx.Detect (tTimeForResetError,
+ * Table 10-19, p.460). Twice the hot reset's wait covers both, and is this
+ * driver's margin, not a specification number. */
 #define HCD_WARM_RESET_WAIT_MS 1000UL
 #define HCD_RESET_RECOVERY_MS  10UL
 #define HCD_SETADDRESS_MS      2UL
@@ -437,19 +439,45 @@ static ULONG hcdResetEp0(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
  * The records an unpowered root-hub detach left Abandoned - off their
  * ports, their slots still enabled - get their Disable Slot at the first
  * powered pass, so a restore that kept the slots does not strand them
- * (Codex review of batch (b), round 2, finding 3). A failure quarantines the
- * record as a departing device's does. Thread only, powered.
+ * (Codex review of batch (b), round 2, finding 3). Deepest tier first, as
+ * every other teardown goes (hcdSubtreeGo), never by slot ID: a hub may
+ * hold a higher or lower slot than the devices behind it, and a device's
+ * Parent Hub Slot ID - a TT's, or since 29-0 a higher-rank SuperSpeed
+ * hub's (xHCI Table 6-6) - must not name a slot already disabled. A
+ * failure quarantines the record as a departing device's does, and ends
+ * the sweep: the reset that failure requested invalidates every slot left,
+ * so no hub is disabled under a child the controller still holds (Codex
+ * review of b6e569e, finding 2). Thread only, powered.
  */
 static VOID hcdSweepAbandoned(PHCD_CONTROLLER hc)
 {
     PHCD_USB_DEVICE dev;
+    ULONG tier;
+    ULONG at;
     ULONG i;
 
     hc->SlotSweep = 0;
-    for (i = 1; i <= XHCI_MAX_SLOTS && !hcdHalted(hc); i++) {
-        dev = hc->SlotDevice[i];
-        if (dev != NULL && dev->Abandoned) {
+    tier = XHCI_TOPO_MAX_TIER + 1UL;
+    while (tier-- != 0) {
+        for (i = 1; i <= XHCI_MAX_SLOTS; i++) {
+            if (hcdHalted(hc)) {
+                return;
+            }
+            dev = hc->SlotDevice[i];
+            if (dev == NULL || !dev->Abandoned) {
+                continue;
+            }
+            at = dev->Tier < XHCI_TOPO_MAX_TIER ? dev->Tier
+                                                : XHCI_TOPO_MAX_TIER;
+            if (at != tier) {
+                continue;
+            }
             hcdDisableRecord(hc, dev);
+            if (hc->SlotDevice[i] == dev) {
+                /* Not confirmed: quarantined, and the reset it requested
+                 * owns every slot left. */
+                return;
+            }
         }
     }
 }
@@ -578,6 +606,21 @@ static VOID hcdCountAddressed(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
                        &dev->Plus);
     if (portClass == XHCI_SPEED_SUPER && dev->Plus) {
         c->PortSpeedSuperPlus++;
+    }
+    /* A root port device's own link rank, from that rate and the port's
+     * PORTLI lane count, read now while CCS = 1 as RLC needs (Table 5-31,
+     * p.385). What a SuperSpeed hub on this port is ranked by when a device
+     * is placed behind it (HcdHubPlace, xHCI Table 6-6). A device behind a
+     * hub was ranked when it was placed, and is not touched here. */
+    if (dev->Tier == 0) {
+        dev->SsLinkRank = XHCI_SS_RANK_UNKNOWN;
+        if (portClass == XHCI_SPEED_SUPER &&
+            XhciPortIsUsb3(&ext->PortMap, dev->Port)) {
+            dev->SsLinkRank = XhciSsRootRank(
+                dev->RateKbps, XhciReadOp(ext, XHCI_OP_PORTLI(dev->Port)));
+            XHCI_DBG_VALUE("hcd: root port SS link rank, port/rank",
+                           (dev->Port << 8) | dev->SsLinkRank);
+        }
     }
 }
 
@@ -1060,6 +1103,51 @@ static ULONG hcdPortReset(PHCD_CONTROLLER hc, PHCD_PORT p,
 }
 
 /*
+ * A SuperSpeed device's link rank as the port's latest reset left it: on a
+ * root port from PORTSC's speed, its PSI rate and PORTLI (XhciSsRootRank),
+ * behind a SuperSpeed hub from the extended status that reset re-read
+ * (XhciSsHubChildRank); XHCI_SS_RANK_UNKNOWN for a USB 2.0 device or path.
+ * Thread only, powered.
+ */
+static ULONG hcdLinkRankNow(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    PXHCI_EXTENSION ext;
+    PHCD_PORT p;
+    ULONG psiv;
+    ULONG cls;
+    ULONG kbps;
+    ULONG plus;
+
+    ext = &hc->Hc;
+    if (dev->Location == 0 || dev->Location > HCD_PORT_COUNT) {
+        return XHCI_SS_RANK_UNKNOWN;
+    }
+    p = &hc->Ports[dev->Location - 1];
+    if (p->Hub != NULL) {
+        if (!p->Hub->Usb3 || p->Hub->Device == NULL) {
+            return XHCI_SS_RANK_UNKNOWN;
+        }
+        return XhciSsHubChildRank(p->Hub->Device->BosInfo.HasSuperSpeedPlus,
+                                  &p->HubSsLink);
+    }
+    if (!XhciPortIsUsb3(&ext->PortMap, dev->Port)) {
+        return XHCI_SS_RANK_UNKNOWN;
+    }
+    psiv = XHCI_PORTSC_GET_SPEED(XhciReadPortsc(ext, dev->Port));
+    cls = XHCI_SPEED_UNKNOWN;
+    kbps = 0;
+    plus = 0;
+    if (XhciPortSpeedClass(&ext->PortMap, dev->Port, psiv, &cls) !=
+            XHCI_CAPS_OK ||
+        cls != XHCI_SPEED_SUPER ||
+        XhciPortRate(&ext->PortMap, dev->Port, psiv, &kbps, &plus) !=
+            XHCI_CAPS_OK) {
+        return XHCI_SS_RANK_UNKNOWN;
+    }
+    return XhciSsRootRank(kbps, XhciReadOp(ext, XHCI_OP_PORTLI(dev->Port)));
+}
+
+/*
  * RESET_PORT's hardware half (hcd_cfg.c), on a slot that is kept. The order
  * is the spec's: the Reset Device Command "is used by software to inform the
  * xHC that the USB Device associated with a Device Slot has been Reset (by
@@ -1103,6 +1191,20 @@ ULONG HcdThreadReaddress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         speed != was) {
         XHCI_DBG_VALUE("hcd: reset port, port reset failed, speed", speed);
         return 0;
+    }
+    /* A SuperSpeed link can retrain to another rank on this reset - a warm
+     * one above all - and the slot's Speed, Parent Hub Slot ID and Parent
+     * Port Number (xHCI Table 6-6; HcdHubPlace) were placed for the old
+     * one. Readdressing would carry them over stale, so a changed rank
+     * fails the RESET_PORT, which drops the device to be enumerated afresh
+     * at the link it now has (Codex review of b6e569e, finding 3). */
+    if (was == XHCI_SPEED_SUPER) {
+        speed = hcdLinkRankNow(hc, dev);
+        if (speed != dev->SsLinkRank) {
+            XHCI_DBG_VALUE("hcd: reset port, SS link rank changed, was/now",
+                           (dev->SsLinkRank << 8) | speed);
+            return 0;
+        }
     }
     code = 0;
     if (XhciTrbResetDevice(&trb, dev->SlotId) == XHCI_RING_OK) {
@@ -2111,13 +2213,16 @@ static VOID hcdHoldsForget(PHCD_CONTROLLER hc, ULONG count)
 static ULONG hcdHubQuiet(PHCD_CONTROLLER hc, PHCD_HUB hub);
 
 /*
- * Whether a port in Gone may leave it: the PDO group it reported is deleted -
- * that group, by serial, not whichever PDO last named its location (Codex
- * review of batch (b), round 2, finding 2) - and, where a hub left from it,
- * every port of that hub's subtree has settled the same way, the departed
- * hub object then freed. Until then nothing is enumerated at the place, so
- * no device PDO is created beside one PnP still holds under the same
- * instance id. Thread, or the start and stop with the thread not running.
+ * Whether a port in Gone may leave it: the PDO group it reported has been
+ * reported missing to PnP (or deleted) - that group, by serial, not
+ * whichever PDO last named its location (Codex review of batch (b), round
+ * 2, finding 2) - and, where a hub left from it, every port of that hub's
+ * subtree has settled the same way, the departed hub object then freed. A
+ * PDO reported missing no longer holds the place: its REMOVE may never
+ * come on Windows ME (hcd_pdo.c, the lifecycle), and a new device there
+ * gets a new PDO, with the same location instance id, while the old one
+ * waits for it apart, as usbport's children do (the owner's ruling,
+ * 2026-10-04). Thread, or the start and stop with the thread not running.
  */
 static ULONG hcdPortQuiet(PHCD_CONTROLLER hc, PHCD_PORT p)
 {
@@ -2229,7 +2334,7 @@ static VOID hcdSettleWaiting(PHCD_CONTROLLER hc, PULONG changed)
 /* ----------------------------------------------------------------------- */
 
 /* Step 1 for one device: from here on its URBs are refused and a mapped
- * record completes DEVICE_GONE rather than reach the ring (hcd_io.c), a
+ * record is held on its PDO rather than reach the ring (hcd_io.c), a
  * hub's status-change transfer is not armed again (HcdHubRearm), and no
  * doorbell is rung for it - every doorbell of a device's endpoint tests
  * Gone under this same lock: a publish (HcdIoMapped, HcdHubRearm, the
@@ -2247,12 +2352,13 @@ static VOID hcdDeviceFreeze(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 }
 
 /*
- * Step 2 for one device, its slot still enabled (section 10.5): every
+ * Step 3 for one device, its slot still enabled (section 10.5): every
  * endpoint with a TD on its ring that is Running is stopped (Stop Endpoint),
  * so the controller owns none of its TRBs - an endpoint Stopped, Halted or
  * in Error runs nothing already - and everything the device holds, bulk,
- * interrupt, isochronous and control alike, then completes DEVICE_GONE
- * (HcdIoDeviceDrain). So no URB is left on a ring whose slot is about to go.
+ * interrupt, isochronous and control alike, is then taken off the rings
+ * (HcdIoDeviceDrain) and held on its PDO rather than completed (hcd_io.c,
+ * HcdIoPark). So no URB is left on a ring whose slot is about to go.
  * Nothing reaches a ring after the freeze, so an endpoint with an empty
  * queue needs no command. A Stop Endpoint that fails requests the reset and
  * leaves the URBs where they are: the invalidation drains them once HCRST
@@ -2340,9 +2446,9 @@ static ULONG hcdDeviceGo(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG how,
 }
 
 /*
- * Step 3, taken with the freeze: the device's PDOs reported missing, and the
+ * Step 2, taken with the freeze: the device's PDOs reported missing, and the
  * group serial its port will wait for kept on the port, before any of its
- * URBs completes. Windows 98 SE's hidclass.sys answers a read completing
+ * URBs leaves the ring. Windows 98 SE's hidclass.sys answers a read completing
  * DEVICE_NOT_CONNECTED by failing every client read and resubmitting at
  * once while its device is still started (hcd_io.c, hcdRefusedDpc), and its
  * clients' retries then keep the processor busy enough that the
@@ -2351,10 +2457,11 @@ static ULONG hcdDeviceGo(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG how,
  * a root port, 2026-10-04; Phase 26, which reported the PDO first and
  * completed the URBs at the Disable Slot after it, did not stall). So the
  * relations change goes first, as it did there, and GET_PORT_STATUS reads
- * the device disconnected by the time its first URB fails (hcd_urb.c,
- * hcdPortStatus). Design record 13 section 10.5 lists steps 2 and 3 the
- * other way round; the hardware order, URBs completed before the Disable
- * Slot, is kept.
+ * the device disconnected by the time any URB of it is touched (hcd_urb.c,
+ * hcdPortStatus) - design record 13 section 10.5's step 2. Reporting first
+ * did not by itself end the stall; holding the URBs instead of failing them
+ * did (step 3, hcd_io.c, HcdIoPark). The hardware order, the URBs off the
+ * rings before the Disable Slot, is kept.
  */
 static VOID hcdReportGone(PHCD_CONTROLLER hc, PHCD_PORT q)
 {
@@ -2461,12 +2568,15 @@ static VOID hcdHubGo(PHCD_CONTROLLER hc, PHCD_HUB hub, PHCD_PORT top,
  *
  *   1 freeze: every hub of the subtree stops serving its ports and
  *     re-arming its status-change pipe (Draining), and every device refuses
- *     new work - and, with it, has its PDOs reported missing (step 3,
- *     taken before any URB fails; hcdReportGone has the Windows 98 reason);
- *   2 fail I/O at the edge, with the slots still enabled: each device's
- *     running endpoints stopped and every URB of it completed DEVICE_GONE,
- *     leaf first (HCD_GO_UNPLUG only - a taken slot runs nothing, and its
- *     URBs are drained as its record is freed);
+ *     new work and rings no doorbell;
+ *   2 with it, each device's PDOs reported missing, before any URB of it
+ *     leaves the ring (hcdReportGone has the Windows 98 reason);
+ *   3 with the slots still enabled, leaf first, each device's running
+ *     endpoints stopped and its URBs taken off the rings and held on its
+ *     PDO - not completed - until the client cancels them or aborts their
+ *     pipe, or the PDO is stopped or removed (hcd_io.c, HcdIoPark;
+ *     HCD_GO_UNPLUG only - a taken slot runs nothing, and its URBs are
+ *     drained as its record is freed, and held the same way);
  *   4 leaf first: each device's slot given back, the devices on a hub's
  *     ports before the hub's own, so no enabled slot's Parent Hub Slot ID
  *     or TT names a disabled one;

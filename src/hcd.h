@@ -56,6 +56,8 @@ typedef struct _HCD_COMMON {
     ULONG PnpStateBeforeQuery;
     DEVICE_POWER_STATE DevicePower;
     SYSTEM_POWER_STATE SystemPower;
+    PDEVICE_OBJECT RetiredNext;     /* an orphaned PDO on Windows 98's
+                                     * retired list (hcd_pdo.c)          */
 } HCD_COMMON, *PHCD_COMMON;
 
 /* The one-shot timer service's slots (hcd_svc.c). Four: the command
@@ -341,6 +343,17 @@ typedef struct _HCD_USB_DEVICE {
      * made of it - for the endpoint rules and XHCISNAP (29-A.6). */
     ULONG RateKbps;
     ULONG Plus;
+    /* Its own SuperSpeed link's rank (XHCI_SS_RANK_*, xhci_sshub.h): on a
+     * root port from the PSI rate and PORTLI at Address Device
+     * (hcd_enum.c), behind a SuperSpeed hub from that hub's extended port
+     * status (HcdHubPlace); 0 unknown, and 0 for a USB 2.0 device. And,
+     * for an SS/SSP device behind a hub that outranks its link, that hub's
+     * Slot ID and port for the Slot Context's Parent Hub Slot ID and Parent
+     * Port Number (xHCI Table 6-6) - kept apart from TtSlot/TtPort, which
+     * name a transaction translator that CLEAR_TT_BUFFER is sent to. */
+    ULONG SsLinkRank;
+    ULONG SsParentSlot;
+    ULONG SsParentPort;
     PUCHAR Bos;
     ULONG BosLength;
     XHCI_PIPE_BOS BosInfo;
@@ -427,6 +440,8 @@ typedef struct _HCD_DEVICE_PDO {
     ULONG Reported;                 /* returned in a BusRelations answer    */
     ULONG MissingReported;          /* omitted from one since it was gone   */
     ULONG RemoveReceived;           /* PnP's IRP_MN_REMOVE_DEVICE seen      */
+    ULONG DeletePending;            /* on RemovedPdos, deleted at the next
+                                     * relations answer (hcd_pdo.c)       */
     ULONG Deleted;                  /* IoDeleteDevice called: once only     */
     ULONG Serial;                   /* the name's number; a port waits on it */
     ULONG Closing;                  /* stopping or removed: URBs refused  */
@@ -572,6 +587,11 @@ typedef struct _HCD_PORT {
     ULONG HubSsSeen;        /* a connection read since its last re-arm:
                              * an empty port after that is a departure of
                              * the device's own, which restarts the waits */
+    ULONG ResumeTries;      /* a hub port: resumes failed in a row
+                             * (XhciHubResumeOutcome); thread only       */
+    ULONG ResumePending;    /* a hub port: a resume to try again at its
+                             * next look, even if that look's GET_STATUS
+                             * fails; thread only                        */
 } HCD_PORT, *PHCD_PORT;
 
 /*
@@ -747,6 +767,8 @@ typedef struct _HCD_CONTROLLER {
     KSPIN_LOCK PdoListLock;
     PHCD_DEVICE_PDO DevicePdos;     /* listed: present, in the relations */
     PHCD_DEVICE_PDO GonePdos;       /* unlisted, awaiting their deletion */
+    PHCD_DEVICE_PDO RemovedPdos;    /* removed by PnP, deleted at the next
+                                     * BusRelations answer (hcd_pdo.c)    */
     ULONG RootHubStarted;           /* enumeration creates PDOs only then */
     volatile ULONG ThreadRunning;
     ULONG ThreadReferenceFailures;
@@ -825,6 +847,8 @@ typedef struct _HCD_CONTROLLER {
                                      * or their re-enumeration, refused in
                                      * place, failing for good
                                      * (hcd_enum.c)                       */
+    ULONG HubResumes;               /* hub ports resumed by the bus       */
+    ULONG HubResumesFailed;         /* ... given up after their tries     */
     ULONG TtBufferClears;
     ULONG TtBufferClearFailures;
 
@@ -1126,6 +1150,9 @@ ULONG HcdDevicePdoExists(PHCD_CONTROLLER hc, ULONG serial);
 PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
                                         PDEVICE_RELATIONS old);
 VOID HcdDevicePdoReleaseAll(PHCD_CONTROLLER hc);
+VOID HcdPdoRetireInit(VOID);
+ULONG HcdPdoRetire(PDEVICE_OBJECT obj);
+VOID HcdPdoReapRetired(VOID);
 NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp);
 NTSTATUS HcdDevicePdoPower(PHCD_DEVICE_PDO pdo, PIRP irp);
 

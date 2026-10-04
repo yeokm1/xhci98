@@ -129,6 +129,11 @@ VOID XhciHubPortDecide(ULONG state, ULONG status, ULONG change,
     out->Repower = 0;
     out->Suspended = (change & XHCI_HUB_C_PORT_SUSPEND) != 0;
     connected = (status & XHCI_HUB_PORT_CONNECTION) != 0;
+    /* Handled, not initiated (xhci_hub.h): a connected port the hub reports
+     * suspended is resumed before anything else is asked of it. */
+    out->Resume = connected && (status & XHCI_HUB_PORT_SUSPEND) != 0;
+    out->Retry = 0;
+    out->GaveUp = 0;
 
     if ((change & XHCI_HUB_C_PORT_OVER_CURRENT) != 0) {
         out->OverCurrent = 1;
@@ -154,6 +159,84 @@ VOID XhciHubPortDecide(ULONG state, ULONG status, ULONG change,
     }
     if (state == XHCI_ENUM_EMPTY) {
         out->Connect = 1;
+    }
+}
+
+/* IRQL: any. */
+ULONG XhciHubResumeBeforeReset(ULONG status)
+{
+    return (status & XHCI_HUB_PORT_CONNECTION) != 0 &&
+           (status & XHCI_HUB_PORT_SUSPEND) != 0;
+}
+
+/* IRQL: any. */
+ULONG XhciHubResumeProgress(ULONG status)
+{
+    if ((status & XHCI_HUB_PORT_CONNECTION) == 0) {
+        return XHCI_HUB_RESUME_GONE;
+    }
+    if ((status & XHCI_HUB_PORT_SUSPEND) != 0) {
+        return XHCI_HUB_RESUME_PENDING;
+    }
+    /* A clear suspend bit alone is not a resume: the port must be enabled
+     * (Codex review of the Phase 27 integration, round 4, finding 3). */
+    return ((status & XHCI_HUB_PORT_ENABLE) != 0) ? XHCI_HUB_RESUME_DONE
+                                                  : XHCI_HUB_RESUME_DISABLED;
+}
+
+/* IRQL: any. */
+ULONG XhciHubResumeSettle(ULONG progress, ULONG change)
+{
+    if (progress == XHCI_HUB_RESUME_DONE &&
+        (change & XHCI_HUB_C_PORT_CONNECTION) != 0) {
+        return XHCI_HUB_RESUME_DISABLED;
+    }
+    return progress;
+}
+
+/* IRQL: any. */
+VOID XhciHubResumeOutcome(ULONG state, ULONG outcome, ULONG held,
+                          PULONG tries, PXHCI_HUB_PORT_DECISION d)
+{
+    if (tries == NULL || d == NULL) {
+        return;
+    }
+    d->Retry = 0;
+    d->GaveUp = 0;
+    switch (outcome) {
+    case XHCI_HUB_RESUME_DONE:
+        *tries = 0;
+        break;
+    case XHCI_HUB_RESUME_DISABLED:
+        *tries = 0;
+        d->Disconnect = xhciHubHolds(state);
+        d->Connect = 1;
+        break;
+    case XHCI_HUB_RESUME_GONE:
+        *tries = 0;
+        d->Disconnect = xhciHubHolds(state);
+        d->Connect = 0;
+        break;
+    default:
+        if (held) {
+            *tries = 0;
+            d->GaveUp = 1;
+            d->Disconnect = 1;
+            d->Connect = 1;
+            break;
+        }
+        (*tries)++;
+        if (*tries < XHCI_HUB_RESUME_TRIES) {
+            d->Retry = 1;
+            d->Disconnect = 0;
+            d->Connect = 0;
+        } else {
+            *tries = 0;
+            d->GaveUp = 1;
+            d->Disconnect = xhciHubHolds(state);
+            d->Connect = 1;
+        }
+        break;
     }
 }
 
