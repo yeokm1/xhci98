@@ -588,7 +588,7 @@ reboot an xHCI-only machine has `hidusb.sys` and `usbstor.sys` but not
 what they import, and USB input is dead in GUI mode until "Installing
 Devices" - behind XP's unsigned-driver prompts for this driver (runtime,
 2026-10-04, XP SP3 and XP x64 SP2 target disks read offline,
-`out\phase336\`; the release notes carry it as a limitation, and no
+`out\phase33\f6\`; the release notes carry it as a limitation, and no
 `txtsetup.oem` mechanism reaches the Windows source: `[Disks]` names an
 OEM disk and `[Files]` reads from it). Where a machine also has EHCI controllers, XP's text
 mode drives those with its own stack beside this one; this driver does no
