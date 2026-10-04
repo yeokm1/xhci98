@@ -50,9 +50,14 @@ Opened: TBD (the roadmap's status line is the record).
   fix below ("USBNTMAP.SYS: what is known and how").
 - **Whether the 98 SE CD's `layout.inf` carries any of the mapping files**:
   stock Windows 98 SE has an `ntmap.sys` 4.10.2222 (the stock-98 SE import
-  evidence in `legal-provenance.md`, e.g. its `KeGetCurrentThread` row);
-  whether the CD's `layout.inf` names `USBMPHLP.PDR`, `USBNTMAP.SYS` or
-  `usbntmap.inf`: TBD.
+  evidence in `legal-provenance.md`, e.g. its `KeGetCurrentThread` row). The
+  CD's `layout.inf`, `layout1.inf` and `layout2.inf` (in `win98\PRECOPY1.CAB`
+  and `PRECOPY2.CAB`) name none of `usbntmap.sys`, `usbmphlp.pdr` and
+  `usbstor.sys`, and no `win98\*.CAB` holds them; Windows ME's `layout.inf`
+  names all three, on its disk 2, `BASE2.CAB` (static: the discs' text read
+  with 7-Zip, nothing executed; `out\phase31\meuas\report.md`, 2026-10-04;
+  "Windows ME: a UAS drive first" below). Whether it names `usbntmap.inf`
+  was not recorded: TBD.
 - **How `usbstor.sys` presents its disks on the NT targets**: NT's
   `disk.inf` binding of `GenDisk` was not read (no `disk.inf` is extracted
   under `tools\`; `legal-provenance.md`, the NUSB `usbstor.sys` id-vocabulary
@@ -195,9 +200,14 @@ screenshots `out\phase31\uas98\shots\`:
 - The `.NTx86` path's shared `[Uas.CopyFiles]` edit was not re-read through
   an INF install on NT; the Windows 2000 leg copied the files by hand.
 - What NTKERN does with a named upper filter whose file is missing was not
-  measured. NUSB 3.3's and 3.6's own installers place `USBNTMAP.SYS`,
+  measured here. NUSB 3.3's and 3.6's own installers place `USBNTMAP.SYS`,
   `USBMPHLP.PDR` and `usbntmap.inf` unconditionally; SweetLow's package has
-  no storage half.
+  no storage half. Measured afterwards on a SweetLow-only Windows 98 SE
+  guest (`runs/run-28.md`, "Windows 98 SE with no USB 2.0 stack, and with
+  SweetLow's alone"): NTKERN fails the whole devnode, Code 2, and sends the
+  PDO a REMOVE while the device is present; a restart does not help;
+  installing NUSB's storage files cures it with no change to
+  `xhciuas.inf`.
 - The release-note line that Windows 98 SE and ME UAS needs NUSB's
   mass-storage component: TBD (not written yet).
 
@@ -340,26 +350,119 @@ and its logs and screenshots are in the `p31-v2` worktree's
   the Windows 98 leg; cause unconfirmed.
 - Data: every write was `F:\XHCI98RT.BIN`, checked with `fc /b` and deleted.
 
-### The reading on the merged build
+### The reading on Package A
 
-Build: TBD. Evidence directory: TBD.
+Taken on development host A, 2026-10-04, on Package A, `p28-31-int` at
+`2f6030a` (`out\merged\pkg-2f6030a\qemu\x86`, checked against its
+`SHA256SUMS.txt`: `xhci98.sys` `8736aaa3...9d00`, 188,038 bytes;
+`xhciuas.sys` `2d0d5b49...3a38`; `xhciuas.inf` `8b8c0ebd...a355`). The
+StoreJet (`174C:5106`, WinUSB on the host) at 480 Mb/s, passed through by
+`hostbus` and `hostaddr` only, resolved from `info usbhost` in a guestless
+QEMU before every attach, since the host address changes on a replug;
+`qemu-xhci,p2=8,p3=0`, port 1. Overlays `vm\t26\pvA98`, `pvA2k` and `pvB2k`.
+Evidence: `out\phase31\v2-merged\notes.md` (the subagent's working notes),
+the traces `v2-98-a-debugcon.log`, `v2-2k-b-debugcon.log`,
+`v2c-2k-debugcon.log` and `v2c-2k-usbhost-trace.log`, screenshots
+`shots\v2-98-*`, `v2-2k-*`, `v2c-2k-*`. Only `F:\XHCI98RT.BIN` was written,
+compared with `fc /b` and deleted; F: was left empty each time, and Windows
+2000's G: (a `WINNT` tree) was not touched.
+
+The order it ran in matters, because the bridge keeps its alternate setting
+across a virtual replug:
+1. Windows 98 SE (`pvA98`): (a) UAS, then the value set, Device Manager
+   Remove and a re-attach, (b) Bulk-Only selected and failing, then the value
+   cleared, (c) UAS again.
+2. Windows 2000 (`pvA2k`), the value set before any attach - **not a clean
+   test**, since the bridge had been left in UAS by step 1: Bulk-Only chosen
+   and the same failure, then (c) back to UAS.
+3. **The owner physically replugged the StoreJet** (its host address moved
+   from 1/8 to 1/9).
+4. Windows 2000, **the clean test** (`pvB2k`, fresh; `XhciForceBulkOnly`
+   `dword 1` verified by a `regedit` export before any attach): Bulk-Only
+   first, then the value cleared and back to UAS.
 
 | Clause | Windows 2000 SP4 | Windows 98 SE + NUSB (control) |
 |---|---|---|
-| Fresh install: UAS chosen (`Prot_62` ids), `xhciuas.sys` bound | TBD(merged build) | TBD(merged build) |
-| UAS round trip, `fc /b` | TBD(merged build) | TBD(merged build) |
-| Value set, uninstall and re-plug: Bulk-Only chosen (`Prot_50` ids), `usbstor.sys` bound | TBD(merged build) | TBD(merged build) |
-| Bulk-Only round trip, `fc /b` | TBD(merged build) | TBD(merged build) |
-| Value cleared, uninstall and re-plug: back to UAS | TBD(merged build) | TBD(merged build) |
-| UAS round trip after the switch back | TBD(merged build) | TBD(merged build) |
-| Finding 1 settled (vehicle or driver) | TBD(merged build) | n/a |
-| Finding 2 settled (port re-enumerates after Remove and replug) | n/a | TBD(merged build) |
+| Fresh install: UAS chosen (`Prot_62` ids), `xhciuas.sys` bound | PASS (steps 2 and 4: the transport line's why 1, the Found New Hardware wizard or Reinstall Driver to `e:\xhciuas.inf`, "xHCI98 USB Attached SCSI Storage" started) | PASS (step 1 (a): `00012101`, `PROT_62` compatible ids, upper filter `USBNTMAP.SYS`, the wizard to `D:\XHCIUAS.INF`) |
+| UAS round trip, `fc /b` | PASS | PASS |
+| Value set, uninstall and re-plug: Bulk-Only chosen (`Prot_50` ids), `usbstor.sys` bound | PASS (step 4: `00011400`, why 4, alternate 0; service `USBSTOR`, the `Prot_50` triple, no `Prot_62`) | PASS for the choice (`00011400`, NUSB's `USBSTOR.INF` bound); the port re-enumerated after the Remove, which is finding 2 below |
+| Bulk-Only round trip, `fc /b` | PASS (step 4: `USBSTOR\DISK&VEN_STOREJET&PROD_TRANSCEND` started, F:, `fc /b` "no differences", no port reset, no stall) | Code 10 in step 1, before the physical replug: GET_MAX_LUN done, the first bulk URB timed out, three port resets, the guest's interface frozen for about 5 minutes then back. The vehicle, as the clean Windows 2000 test shows; not retaken after a physical replug: TBD |
+| Value cleared, uninstall and re-plug: back to UAS | PASS (steps 2 and 4) | PASS (step 3: the value 0 and a re-attach chose UAS, why 1, but the existing devnode kept `USBSTOR` and read Code 10, as expected of a devnode not re-matched; Device Manager Remove, unplug, replug, the wizard to `xhciuas` - "xHCI98 USB Attached SCSI Storage") |
+| UAS round trip after the switch back | PASS (in step 2 the LUN's volumes had no drive letter until a guest restart; in step 4 F: at once) | PASS |
+| Finding 1 settled (vehicle or driver) | **The vehicle.** With the bridge physically replugged and Bulk-Only its first setting, Bulk-Only passed; the earlier Code 10s followed a UAS session the virtual replug did not reset | n/a |
+| Finding 2 settled (port re-enumerates after Remove and replug) | n/a | **Settled**: after Device Manager Remove, `device_del` and a re-attach, the device re-enumerated at location 1 at once (`cc9da33`'s fix, in Package A) |
+
+Verdict on Package A: **31-V.2 passes on Windows 2000**, every clause, on the
+clean test after the physical replug, and Windows 98 SE's control passes
+every clause but the Bulk-Only round trip, whose Code 10 was taken before the
+replug and is the vehicle's by the Windows 2000 reading. Package B:
+TBD(Package B), if the coordinator re-reads it there.
+
+---
+
+## Windows ME: a UAS drive first
+
+**What fails.** On a fresh Windows ME install whose first USB storage
+device is a UAS drive, `xhciuas.inf` installs and the drive shows Code 2.
+ME ships `USBSTOR.INF` and `USBNTMAP.INF`, but copies `USBSTOR.SYS`,
+`USBNTMAP.SYS` and `USBMPHLP.PDR` from its own cabinets only when its first
+Bulk-Only device installs; `xhciuas.inf` names `USBNTMAP.SYS` as its upper
+filter, and NTKERN fails a devnode whose named filter is missing (read on a
+SweetLow-only Windows 98 SE guest, `runs/run-28.md`, "Windows 98 SE with no
+USB 2.0 stack, and with SweetLow's alone"). After one ordinary stick, UAS
+works at SuperSpeed and at High Speed (`out\phase28\pre\me\report-rerun.md`,
+"Storage and UAS", on `1ed1ba6`).
+
+**What was tried, and parked.** Branch `p31-meuas` let `xhciuas.inf` copy
+the two files from the OS's own source (`LayoutFile=layout.inf`,
+`usbntmap.sys` to `10,System32\Drivers` and `usbmphlp.pdr` to dirid 12, each
+`COPYFLG_NO_OVERWRITE`), read on development host A, 2026-10-04
+(`out\phase31\meuas\report.md`, traces `debugcon-me-a.log` and
+`debugcon-n98-a.log`, screenshots `shots\`):
+- **Windows ME**: no prompt of any kind, no restart; the two files placed
+  (7,136 and 4,861 bytes, 06-08-00); 16 streams on each of three endpoints,
+  F:, `fc /b` clean both ways. The fix works there.
+- **Windows 98 SE under NUSB**: **two "Copying Files..." prompts** naming the
+  `xhci98` disk - "The file 'usbmphlp.pdr' on xhci98 xHCI Host Controller
+  Disk cannot be found." and then the same for `usbntmap.sys` - although
+  both files were already in place; Skip on both left them unchanged and
+  the drive working. A regression for the primary target.
+- **Why** (static, the discs' text read with 7-Zip, nothing executed): the 98
+  SE CD's `layout.inf`, `layout1.inf` and `layout2.inf` (in
+  `win98\PRECOPY1.CAB` and `PRECOPY2.CAB`) name none of `usbntmap.sys`,
+  `usbmphlp.pdr` and `usbstor.sys`, and no 98 SE cabinet holds them, so the
+  9x engine attributes the files to the INF's own disk and asks before
+  `COPYFLG_NO_OVERWRITE` can skip; ME's `layout.inf` names all three on disk
+  2 (`BASE2.CAB`). This also answers 31-0's question about the 98 SE CD.
+- The SweetLow-only Windows 98 SE leg was not run: the same engine and
+  `layout.inf` predict the same prompts.
+
+**The ruling: option C**, carry it as a limitation of `2.0.0.0` (owner,
+2026-10-04, about 15:20, on the coordinator's suggestion). The copy is
+parked unmerged on branch `p31-meuas-copy` (`dc5251f`); option B, an
+ME-only compatible id from `xhci98.sys` to gate the copy, is for a later
+release. What merged from `p31-meuas` is the UAS INF gate's `PKG-MSFILE`
+rule, which also sees hidden files (`37bb629`, `eb14b23`; `e0cc62f`, Codex
+clean).
+
+**The limitation's text** (the README and release notes carry it): "On a
+fresh Windows ME installation whose first USB storage device is a UAS
+drive, the drive shows Code 2 (NTKERN.VXD device loader(s) could not load).
+ME has not yet copied its own USBNTMAP.SYS and USBMPHLP.PDR, which it
+installs only when its first ordinary USB stick is plugged in. To recover,
+plug in any ordinary USB stick once, then unplug the UAS drive and plug it
+back in." **The recovery is unmeasured**: Code 2, then an ordinary stick,
+then the UAS drive replugged and working, is the ME leg's on Package B -
+TODO(28-V.1, ME on Package B).
 
 ---
 
 ## 31-E.1 - the bench
 
-**Waits for the combined bench session (owner, 2026-10-03).** On Windows 98
+**Waits for the combined bench session (owner, 2026-10-03).** Windows 7 is
+not benched (owner, 2026-10-04; `roadmap-hcd.md`, decisions table), so the
+32-bit Windows 7 half below is dropped and the session reads Windows 98 SE
+alone. On Windows 98
 SE and 32-bit Windows 7: the ASMedia bridge under UAS at SuperSpeed and,
 behind a USB 2.0 hub, under UAS at High Speed; the MSSU10 under UAS at
 SuperSpeed, and behind a USB 2.0 hub under Bulk-Only, which is all it offers

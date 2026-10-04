@@ -1569,6 +1569,19 @@ The harness side: `prepare-image.ps1 -Target 2b-fresh -Clone` reads
 `1.0.2.0` post-release run's Windows 2000 leg is itself an xHCI-only install
 of the asset (`runs/run-20.md`, "The re-stamp").
 
+### The HCD's per-guest procedure (28-V.1)
+
+The sections below describe the guests as the miniport used them. For the
+successor HCD, the procedure every guest leg of roadmap task 28-V.1 follows -
+the kit, the 15 clauses (install, HID, storage, unplug and replug, hubs,
+audio, root hub and controller disable and enable, the tabs, `XHCISNAP`,
+restart and shutdown, the soak, UAS at High Speed, SuperSpeed storage and
+UAS at SuperSpeed), what to do on a defect, and the vehicle notes the legs
+added (the soak first in a fresh launch, F8 at every boot of Vista x64 and 7
+x64, Windows 7's `usb-uas` signature collision, the same-`DriverVer` update
+that leaves the old binary on Vista and 7) - is written down in
+`docs/contributing/runs/run-28.md`, "The per-guest procedure".
+
 ### Windows ME target VM (`2e`)
 
 Windows ME support was asked for by the project owner on 2026-09-02, after
