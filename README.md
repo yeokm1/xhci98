@@ -210,7 +210,7 @@ It is read each time a device enumerates, so unplug and replug the drive after c
 
 `XhciFastPollFsLs`, new in `2.1.0.0`, is off by default and not written by the install. With SweetLow's hidusbf setting a mouse on a **root port** to its "31 Hz" or "62 Hz" rate, `2` turns those into 2000 and 4000 Hz, and `3` into 4000 and 8000 Hz. A device behind a hub keeps its normal rate. This is outside the xHCI specification: a controller that refuses it is caught, the device runs at its normal rate and `XHCISNAP` counts it as `fastpoll.fallbacks`, but a controller that accepts it and then misbehaves cannot be caught. While it is set, any root-port Low- or Full-Speed device that asks for 16 to 63 ms is polled faster too. It is read when the controller starts, so restart after changing it. It has not been read on any real controller yet, so it is untested ground (`TODO(33.8 legs)`).
 
-hidusbf does not load on a stock Windows 98 SE: Windows 98 SE's own `usbd.sys` lacks a routine `hidusbf.sys` needs, and the device shows Code 2. The Windows 98 SE readings use NUSB 3.6's `usbd.sys` (`TODO(33.7 legs)`: hidusbf read under this driver on Windows 98 SE with NUSB 3.6, ME and XP).
+hidusbf works on a stock Windows 98 SE as well as under NUSB. The Windows 98 SE readings were taken under NUSB 3.6 and on a stock install (`TODO(33.7 legs)`: hidusbf read under this driver on Windows 98 SE with NUSB 3.6, ME and XP).
 
 ### The first report's wait
 

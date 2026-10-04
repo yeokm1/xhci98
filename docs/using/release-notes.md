@@ -434,10 +434,11 @@ and behind a hub, on Windows 98 SE under NUSB 3.6, on Windows ME and on
 - **1000 Hz is the ceiling** for a Low- or Full-Speed device, as the xHCI
   specification sets it, unless `XhciFastPollFsLs` is set (under "Registry
   settings").
-- **Not on a stock Windows 98 SE.** There `hidusbf.sys` does not load and
-  the device shows Code 2: Windows 98 SE's own `usbd.sys` (4.10.2222) lacks
-  `USBD_ParseDescriptors`, which `hidusbf.sys` needs (read from the files,
-  `TODO(33.7 legs)`: the Code 2 itself).
+- **On Windows 98 SE and ME, set it on both keys.** The filter took effect
+  only with its `LowerFilters` entry and `bInterval` value on both the
+  device's hardware key and its `Class\HID` driver key; hidusbf's Setup
+  writes them. It works on a stock Windows 98 SE as well as under NUSB:
+  Windows 98 SE's own `usbd.sys` has the routine `hidusbf.sys` needs.
 - **Apply the setting again after an upgrade from `1.x.x.x`**: each device
   is a new Device Manager entry under `2.x`, and the setting is kept on the
   entry. The same holds for a device found again once after an update from
