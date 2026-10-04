@@ -1922,6 +1922,10 @@ static VOID hcdSettleRememberHubPort(PHCD_CONTROLLER hc, PHCD_PORT p)
             return;
         }
     }
+    /* The table is full: every hub port a rebuild numbers is taken as
+     * deferred until the settle, rather than this one forgotten (round 2,
+     * finding 2). */
+    hc->SettleDeferHubFull = 1;
 }
 
 /* Whether the hub port at that path is deferred for the first answer. A
@@ -1932,6 +1936,9 @@ ULONG HcdEnumSettleDeferredAt(PHCD_CONTROLLER hc, ULONG rootPort, ULONG route,
 {
     ULONG i;
 
+    if (hc->SettleDeferHubFull) {
+        return 1;
+    }
     for (i = 0; i < HCD_SETTLE_DEFER_HUB; i++) {
         if (hc->SettleDeferHub[i].RootPort != 0 &&
             hc->SettleDeferHub[i].RootPort == rootPort &&
@@ -2169,7 +2176,19 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
         hcdPortUnreadable(hc, p);
         return;
     }
-    /* A warm reset's outcome read (below may start another). */
+    /* A warm reset this driver began (task 33.3) is in flight while the
+     * port still reads it in progress: the inspection is owed again and
+     * nothing is acknowledged or fed until it reads otherwise, so neither a
+     * first answer nor the machine takes a link still training for settled
+     * (Codex review of 33.3, round 2, finding 1). Bounded as an unreadable
+     * port is; past it the inspection goes on as before. Below may start
+     * another. */
+    if (p->LinkRecovering != 0 && (portsc & XHCI_PORTSC_PR) != 0 &&
+        p->LinkRecovering < HCD_PORT_UNREADABLE_PASSES) {
+        p->LinkRecovering++;
+        hcdPortInspectAgain(hc, p);
+        return;
+    }
     p->LinkRecovering = 0;
     changes = portsc & XHCI_PORTSC_CHANGE_MASK;
     if (changes != 0) {
@@ -2215,7 +2234,7 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
     /* Its outcome is read at the next inspection, which the reset's own
      * change brings; until then the first answer counts it in flight
      * (task 33.3; Codex review of 33.3, round 1, finding 2). */
-    p->LinkRecovering = act.Kind == XHCI_LINK_ACT_WARM_RESET;
+    p->LinkRecovering = (act.Kind == XHCI_LINK_ACT_WARM_RESET) ? 1UL : 0UL;
     switch (act.Kind) {
     case XHCI_LINK_ACT_WARM_RESET:
         hc->Counters.SsWarmResets++;
@@ -3307,6 +3326,7 @@ static VOID hcdSettleUndefer(PHCD_CONTROLLER hc)
     for (i = 0; i < HCD_SETTLE_DEFER_HUB; i++) {
         hc->SettleDeferHub[i].RootPort = 0;
     }
+    hc->SettleDeferHubFull = 0;
     HcdThreadWake(hc);
 }
 /*
@@ -3725,6 +3745,7 @@ VOID HcdEnumInit(PHCD_CONTROLLER hc)
     for (i = 0; i < HCD_SETTLE_DEFER_HUB; i++) {
         hc->SettleDeferHub[i].RootPort = 0;
     }
+    hc->SettleDeferHubFull = 0;
     for (i = 0; i <= XHCI_MAX_SLOTS; i++) {
         hc->SlotDevice[i] = NULL;
     }

@@ -644,8 +644,9 @@ typedef struct _HCD_PORT {
      * port is not looked at again until no first answer waits and does
      * not hold the ports after it back. Thread only. */
     ULONG SettleDeferred;
-    /* Task 33.3: a root port's SuperSpeed link warm-reset by its last
-     * inspection, its outcome not yet read; and a hub port's GET_STATUS
+    /* Task 33.3: a root port's SuperSpeed link warm-reset by an
+     * inspection, its outcome not yet read (nonzero; counts the
+     * inspections that found it still in reset); and a hub port's GET_STATUS
      * failures in a row, its look owed again up to HCD_HUB_LOOK_TRIES.
      * Thread only. */
     ULONG LinkRecovering;
@@ -751,7 +752,7 @@ typedef struct _HCD_HOLD {
     (HCD_SCRATCH_CONTROL_BYTES + HCD_MAX_HUBS * HCD_HUB_STATUS_BYTES)
 
 /* Hub ports remembered as deferred for the first answer (task 33.3). */
-#define HCD_SETTLE_DEFER_HUB 8UL
+#define HCD_SETTLE_DEFER_HUB 16UL
 
 typedef struct _HCD_CONTROLLER {
     HCD_COMMON Common;
@@ -1052,6 +1053,8 @@ typedef struct _HCD_CONTROLLER {
         ULONG Route;                /* the hub's own Route String         */
         ULONG Number;               /* the port on that hub               */
     } SettleDeferHub[HCD_SETTLE_DEFER_HUB];
+    ULONG SettleDeferHubFull;       /* a deferral did not fit: every hub
+                                     * port rebuilt is taken as deferred */
 } HCD_CONTROLLER, *PHCD_CONTROLLER;
 
 /* The root hub's PDO, created by the controller FDO (hcd_rh.c; design record

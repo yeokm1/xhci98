@@ -717,7 +717,9 @@ invalidation its PDO's creation makes.
   owed or in flight: no root port change bit (the reset's own change
   included, so one more pass looks), no hub `Changed` bit, every managed
   port's machine at rest (`XhciEnumAtRest`), no SuperSpeed root link whose
-  warm reset (29-A.2) has not yet been read back (`LinkRecovering`), no
+  warm reset (29-A.2) is still read in progress (`PORTSC.PR`; the port's
+  inspection is owed again meanwhile and feeds nothing, within the
+  unreadable-port bound; `LinkRecovering`, round 2), no
   send-back of the window in flight (`XhciEnumHoldInFlight`). A hub port
   whose `GET_STATUS` failed is owed its look again up to three times in a
   row (`HCD_HUB_LOOK_TRIES`) rather than taken as looked at (Codex review of
@@ -759,7 +761,9 @@ invalidation its PDO's creation makes.
   when the port is enumerated afresh. A deferred hub port is also
   remembered by its physical path (the hub's root port and Route String and
   the port's number), so the recovery that frees the hub object and builds
-  it again keeps it deferred (`SettleDeferHub`; finding 1). A port whose
+  it again keeps it deferred (`SettleDeferHub`, sixteen paths; when it is
+  full every hub port rebuilt before the settle is taken as deferred rather
+  than one forgotten; finding 1 and round 2). A port whose
   enumeration halted the
   controller (a command or an EP0 transfer that never completed: a 5 s
   wait and a recovery) is deferred the same way, so the rescan does not
