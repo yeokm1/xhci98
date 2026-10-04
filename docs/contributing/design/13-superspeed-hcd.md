@@ -2984,15 +2984,18 @@ the P14s Gen 1, on a build of this branch:
    DWORD on the instance and on its `Class\HID` driver key; on XP,
    hidusbf's `Setup.exe` (the `NOPATCH` build: there is no `usbport.sys`
    or `usbxhci.sys` under the HCD to patch).
-2. `bInterval` 16 (hidusbf's "62 Hz"), `XhciFastPollFsLs` absent: replug,
-   read the rate with a mouse rate tool (about 62 Hz) and the driver's log.
-   The install writes `XhciLogVerbosity` and `XhciLogDebugView` 0, which
-   records nothing: set `XhciLogVerbosity` to 2 or more (the ring records
-   the `fastpoll.value`/`.mode` notes of each start and the
-   `fastpoll.open`/`.fallback` records, read with `XHCISNAP`) and
-   `XhciLogDebugView` to 1 with DebugView running (the only route to the
-   counter block, which a controller stop - a disable or a shutdown -
-   appends: `fastpoll.mode` 0, `fastpoll.opened` 0 here).
+2. Turn the log on first, then restart (both switches are read at
+   controller start; the install writes them 0, which records nothing):
+   `XhciLogVerbosity` 2 or more, so the ring records the
+   `fastpoll.value`/`.mode` notes of each start and the
+   `fastpoll.open`/`.fallback` records. Read them either with DebugView
+   and `XhciLogDebugView` 1 - which also delivers the counter block a
+   controller stop (a disable or a shutdown) appends, its only route, but
+   drains the ring continuously - or with `XHCISNAP` and
+   `XhciLogDebugView` 0, which keeps the records in the ring for it but
+   shows no counter block. Then `bInterval` 16 (hidusbf's "62 Hz"),
+   `XhciFastPollFsLs` absent: replug, and read about 62 Hz with a mouse
+   rate tool, `fastpoll.mode` 0 and no `fastpoll.open` record.
 3. `XhciFastPollFsLs` = 3 (REG_DWORD) on the controller's driver key (the
    `Class\USB\nnnn` key the other `Xhci*` values are in), restart (it is
    read at controller start), replug: expect `fastpoll.mode` 3,
