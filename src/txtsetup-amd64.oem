@@ -5,9 +5,10 @@
 # At the start of text-mode Setup, press F6, then S at the "Setup could not
 # determine the type of one or more mass storage devices" screen, and give
 # Setup this disk in drive A:. Setup loads xhci98.sys as a "scsi" component,
-# the one class F6 offers, and binds it by the two ids below: the xHCI
-# controller's PCI class code, and the root hub the driver creates under a
-# project-owned id. The devices behind the root hub are then bound by Setup's
+# the one class F6 offers, and binds it by the ids below: the xHCI
+# controller's PCI class code, the root hub the driver creates under a
+# project-owned id, and the external hubs it presents under two more
+# (XHCI98\HUB, XHCI98\HUB30; task 33.4). The devices behind the root hub are then bound by Setup's
 # own HID and storage drivers (hidusb, kbdhid, mouhid, usbstor) through
 # txtsetup.sif's own hardware-id table, with usbd.sys, hidclass.sys and
 # hidparse.sys loaded from Setup's own source; none of them is on this disk.
@@ -34,3 +35,5 @@ inf    = d1, xhci98.inf
 [HardwareIds.scsi.XHCI98]
 id = "PCI\CC_0C0330", "xhci98"
 id = "XHCI98\ROOT_HUB", "xhci98"
+id = "XHCI98\HUB", "xhci98"
+id = "XHCI98\HUB30", "xhci98"

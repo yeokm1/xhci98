@@ -122,6 +122,10 @@ static NTSTATUS NTAPI hcdAddDevice(PDRIVER_OBJECT DriverObject,
     /* A PDO of this driver's own is the root hub's: the second role
      * (design record 13 section 5.2). */
     if (Pdo->DriverObject == DriverObject) {
+        /* Or an external hub's (task 33.4): the third role. */
+        if (((PHCD_COMMON)Pdo->DeviceExtension)->Kind == HCD_KIND_DEVICE_PDO) {
+            return HcdHubAddDevice(DriverObject, Pdo);
+        }
         return HcdRootHubAddDevice(DriverObject, Pdo);
     }
 
@@ -191,6 +195,9 @@ static NTSTATUS NTAPI hcdDispatchPnp(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     if (common->Kind == HCD_KIND_DEVICE_PDO) {
         return HcdDevicePdoPnp((PHCD_DEVICE_PDO)common, Irp);
     }
+    if (common->Kind == HCD_KIND_HUB_FDO) {
+        return HcdHubFdoPnp((PHCD_HUB_FDO)common, Irp);
+    }
     return HcdCompleteIrp(Irp, Irp->IoStatus.Status, Irp->IoStatus.Information);
 }
 
@@ -211,6 +218,9 @@ static NTSTATUS NTAPI hcdDispatchPower(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     if (common->Kind == HCD_KIND_DEVICE_PDO) {
         return HcdDevicePdoPower((PHCD_DEVICE_PDO)common, Irp);
     }
+    if (common->Kind == HCD_KIND_HUB_FDO) {
+        return HcdHubFdoPower((PHCD_HUB_FDO)common, Irp);
+    }
     PoStartNextPowerIrp(Irp);
     return HcdCompleteIrp(Irp, Irp->IoStatus.Status, Irp->IoStatus.Information);
 }
@@ -230,11 +240,17 @@ static NTSTATUS NTAPI hcdDispatchOther(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     major = IoGetCurrentIrpStackLocation(Irp)->MajorFunction;
     if (common->Kind == HCD_KIND_DEVICE_PDO &&
         major == IRP_MJ_INTERNAL_DEVICE_CONTROL) {
+        /* A hub's PDO takes no URB: the bus owns the hub, and nothing
+         * above its FDO sends one (task 33.4). */
+        if (((PHCD_DEVICE_PDO)common)->Hub) {
+            return HcdCompleteIrp(Irp, STATUS_NOT_SUPPORTED, 0);
+        }
         /* The function-driver contract (hcd_urb.c, 26-A.5). */
         return HcdDevicePdoInternalIoctl((PHCD_DEVICE_PDO)common, Irp);
     }
     if ((common->Kind == HCD_KIND_CONTROLLER_FDO ||
-         common->Kind == HCD_KIND_ROOTHUB_FDO) &&
+         common->Kind == HCD_KIND_ROOTHUB_FDO ||
+         common->Kind == HCD_KIND_HUB_FDO) &&
         (major == IRP_MJ_CREATE || major == IRP_MJ_CLOSE ||
          major == IRP_MJ_CLEANUP)) {
         return HcdDoorCreateClose(Irp);
@@ -242,6 +258,10 @@ static NTSTATUS NTAPI hcdDispatchOther(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     if (common->Kind == HCD_KIND_ROOTHUB_FDO &&
         major == IRP_MJ_DEVICE_CONTROL) {
         return HcdRootHubFdoDeviceControl((PHCD_ROOTHUB_FDO)common, Irp);
+    }
+    if (common->Kind == HCD_KIND_HUB_FDO &&
+        major == IRP_MJ_DEVICE_CONTROL) {
+        return HcdHubFdoDeviceControl((PHCD_HUB_FDO)common, Irp);
     }
     if (common->Kind != HCD_KIND_CONTROLLER_FDO) {
         return HcdCompleteIrp(Irp, STATUS_NOT_SUPPORTED, 0);

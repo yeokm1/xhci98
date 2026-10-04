@@ -33,10 +33,14 @@ DriverVer=10/04/2026,2.0.0.0
 [XhciModels.NTamd64]
 %XhciDesc%=Xhci.Dev,PCI\CC_0C0330
 %RootHubDesc%=RootHub.Dev,XHCI98\ROOT_HUB
+%HubDesc%=Hub.Dev,XHCI98\HUB
+%Hub30Desc%=Hub.Dev,XHCI98\HUB30
 
 [XhciModels.NTamd64.6.0]
 %XhciDesc%=Xhci.Dev6,PCI\CC_0C0330
 %RootHubDesc%=RootHub.Dev6,XHCI98\ROOT_HUB
+%HubDesc%=Hub.Dev6,XHCI98\HUB
+%Hub30Desc%=Hub.Dev6,XHCI98\HUB30
 
 [SourceDisksNames]
 1=%DiskName%,xhci98.sys,,
@@ -79,6 +83,23 @@ CopyFiles=Xhci.CopyFiles
 [RootHub.Dev6.NTamd64.Services]
 AddService=xhci98,0x00000002,Xhci.AddService
 
+; An external hub (task 33.4; design record 13, section 10.11): presented by
+; the bus under XHCI98\HUB or XHCI98\HUB30 and bound to xhci98.sys again.
+; Its sections copy NOTHING - the devnode exists only under a running
+; xhci98.sys - so a hub plugged in long after the install never asks for the
+; original media (HCD-HUBCOPY).
+[Hub.Dev.NTamd64]
+AddReg=RootHub.AddReg.NT
+
+[Hub.Dev.NTamd64.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
+[Hub.Dev6.NTamd64]
+AddReg=RootHub.AddReg.NT
+
+[Hub.Dev6.NTamd64.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
 [Xhci.AddService]
 DisplayName=%XhciSvcDesc%
 ServiceType=1                       ; SERVICE_KERNEL_DRIVER
@@ -116,4 +137,6 @@ Mfg="xHCI98 Project"
 DiskName="xhci98 xHCI Host Controller Disk"
 XhciDesc="xHCI98 USB 3.x eXtensible Host Controller"
 RootHubDesc="xHCI98 USB 3.x Root Hub"
+HubDesc="xHCI98 USB Hub"
+Hub30Desc="xHCI98 USB 3.x Hub"
 XhciSvcDesc="xHCI98 USB 3.x eXtensible Host Controller Driver (xhci98)"

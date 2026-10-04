@@ -37,6 +37,7 @@
 #define HCD_KIND_ROOTHUB_PDO    0x50524448UL /* 'HDRP' */
 #define HCD_KIND_ROOTHUB_FDO    0x46524448UL /* 'HDRF' */
 #define HCD_KIND_DEVICE_PDO     0x50444448UL /* 'HDDP' */
+#define HCD_KIND_HUB_FDO        0x46484448UL /* 'HDHF' (task 33.4)  */
 
 /* The PnP state the dispatch routines gate on. Windows 98 can deliver a
  * REMOVE as the first PnP IRP after START (no SURPRISE_REMOVAL before it;
@@ -553,6 +554,26 @@ typedef struct _HCD_DEVICE_PDO {
     ULONG PciBus;
     ULONG PciAddress;
     volatile ULONG PciRead;
+    /* Where it is presented (task 33.4; design record 13 section 10.11):
+     * the Serial of the hub PDO whose FDO's BusRelations carry it, 0 for
+     * the root hub's - the nearest hub above it that has a PDO
+     * (XhciHubPresentedParent). Fixed at creation. */
+    ULONG ParentSerial;
+    /* A hub's own PDO (task 33.4): bound to this driver as a hub FDO, which
+     * the bus still serves. What the hub FDO's door answers is copied here
+     * at creation, so it never reads the thread's hub object: the hub
+     * object's index (its ports' locations), its descriptor, whether it is
+     * bus-powered, its multi-TT capability and state, and whether it is a
+     * USB 3 hub's SuperSpeed half. HubLinked: the hub FDO's door name
+     * exists (\DosDevices\XHCI98HUB<Serial>), under PdoListLock. */
+    ULONG Hub;
+    ULONG HubUsb3;
+    ULONG HubIndex;
+    XHCI_HUB_DESC HubDesc;
+    ULONG HubBusPowered;
+    ULONG HubMttCapable;
+    ULONG HubMttOn;
+    ULONG HubLinked;
 } HCD_DEVICE_PDO, *PHCD_DEVICE_PDO;
 
 /* Whether a PDO may use a pipe of its device: a device PDO any, a function
@@ -1011,6 +1032,27 @@ typedef struct _HCD_ROOTHUB_FDO {
     ULONG InterfaceOn;
 } HCD_ROOTHUB_FDO, *PHCD_ROOTHUB_FDO;
 
+/* An external hub's FDO, this driver's third role (task 33.4; design record
+ * 13 section 10.11), attached over a hub's device PDO by AddDevice. Its
+ * BusRelations are the PDOs presented under that hub; it reaches the
+ * controller only through the PDO (HcdHubFdoController), never by a copy. */
+typedef struct _HCD_HUB_FDO {
+    HCD_COMMON Common;
+    PDEVICE_OBJECT Pdo;
+    PDEVICE_OBJECT LowerDevice;
+    LONG OutstandingIo;
+    KEVENT RemoveEvent;
+    /* The door (hcd_door.c): \DosDevices\XHCI98HUB<serial> and the hub
+     * interface. */
+    ULONG LinkMade;
+    UNICODE_STRING Interface;
+    ULONG InterfaceOn;
+    /* Hub IOCTLs admitted: opened by a START that succeeded, closed
+     * before a STOP or SURPRISE_REMOVAL goes down, so none can keep the
+     * PDO's Busy raised while its quiesce waits for it. */
+    volatile LONG DoorOpen;
+} HCD_HUB_FDO, *PHCD_HUB_FDO;
+
 #define HcdControllerFromExt(ext) \
     CONTAINING_RECORD((ext), HCD_CONTROLLER, Hc)
 
@@ -1208,7 +1250,7 @@ ULONG HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 VOID HcdDevicePdoDormantAll(PHCD_CONTROLLER hc);
 ULONG HcdDevicePdoExists(PHCD_CONTROLLER hc, ULONG serial);
 PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
-                                        PDEVICE_RELATIONS old);
+                                        PDEVICE_RELATIONS old, ULONG parent);
 VOID HcdDevicePdoReleaseAll(PHCD_CONTROLLER hc);
 VOID HcdPdoRetireInit(VOID);
 VOID HcdSerialInit(VOID);
@@ -1293,7 +1335,16 @@ VOID HcdDoorRootHubRemove(PHCD_ROOTHUB_FDO fdo, PHCD_CONTROLLER hc);
 NTSTATUS HcdDoorCreateClose(PIRP irp);
 NTSTATUS HcdDoorControllerIoctl(PHCD_CONTROLLER hc, PIRP irp);
 NTSTATUS HcdDoorRootHubIoctl(PHCD_CONTROLLER hc, PIRP irp);
+VOID HcdDoorHubStart(PHCD_HUB_FDO fdo, PHCD_CONTROLLER hc);
+VOID HcdDoorHubStop(PHCD_HUB_FDO fdo);
+VOID HcdDoorHubRemove(PHCD_HUB_FDO fdo, PHCD_CONTROLLER hc);
+NTSTATUS HcdDoorHubIoctl(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO hub, PIRP irp);
 
+/* hcd_hubfdo.c (task 33.4) */
+NTSTATUS HcdHubAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo);
+NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp);
+NTSTATUS HcdHubFdoPower(PHCD_HUB_FDO fdo, PIRP irp);
+NTSTATUS HcdHubFdoDeviceControl(PHCD_HUB_FDO fdo, PIRP irp);
 /* hcd_log.c */
 VOID HcdLogFlush(PHCD_CONTROLLER hc, ULONG reason, ULONG counters);
 VOID HcdCountersStart(PHCD_CONTROLLER hc);

@@ -6,7 +6,9 @@
 ; controller, and as the function driver of the root hub the controller
 ; creates under a project-owned hardware id, never USB\ROOT_HUB, which the
 ; OS's own usbhub.sys claims on every NT target (roadmap-hcd.md, decisions
-; table). Device PDOs are children of that root hub.
+; table). Device PDOs are children of that root hub, or of the external hub
+; they sit behind, which the bus presents as a third role of the same binary
+; under XHCI98\HUB or XHCI98\HUB30 (task 33.4).
 ;
 ; Written as task 25.8's scaffold INF and stageable since 26-A.1 removed the
 ; scaffold marker from the image; the root hub's id is the one task 25.4
@@ -40,10 +42,14 @@ DriverVer=10/04/2026,2.0.0.0
 [XhciModels]
 %XhciDesc%=Xhci.Dev,PCI\CC_0C0330
 %RootHubDesc%=RootHub.Dev,XHCI98\ROOT_HUB
+%HubDesc%=Hub.Dev,XHCI98\HUB
+%Hub30Desc%=Hub.Dev,XHCI98\HUB30
 
 [XhciModels.NTx86.6.0]
 %XhciDesc%=Xhci.Dev6,PCI\CC_0C0330
 %RootHubDesc%=RootHub.Dev6,XHCI98\ROOT_HUB
+%HubDesc%=Hub.Dev6,XHCI98\HUB
+%Hub30Desc%=Hub.Dev6,XHCI98\HUB30
 
 [SourceDisksNames]
 1=%DiskName%,xhci98.sys,,
@@ -84,6 +90,20 @@ HKR,,NTMPDriver,,xhci98.sys
 ; for their root hubs (design record 13, section 8).
 HKR,,EnumPropPages,,"sysclass.dll,USBHubPropPage"
 
+; An external hub (task 33.4; design record 13, section 10.11): the bus
+; serves it and presents it as a devnode under XHCI98\HUB or XHCI98\HUB30,
+; bound to xhci98.sys again. Its sections copy NOTHING: the devnode exists
+; only under a running xhci98.sys, so the binary is on disk and loaded, and
+; a hub plugged in long after the install must not send the setup engine
+; looking for the original media. The gate holds that (HCD-HUBCOPY).
+[Hub.Dev]
+AddReg=Hub.AddReg
+
+[Hub.AddReg]
+HKR,,DevLoader,,*NTKERN
+HKR,,NTMPDriver,,xhci98.sys
+HKR,,EnumPropPages,,"sysclass.dll,USBHubPropPage"
+
 ; --- Windows 2000 and 32-bit XP ---------------------------------------------
 
 [Xhci.Dev.NTx86]
@@ -112,6 +132,12 @@ AddService=xhci98,0x00000002,Xhci.AddService
 [RootHub.AddReg.NT]
 HKR,,EnumPropPages32,,"usbui.dll,USBHubPropPageProvider"
 
+[Hub.Dev.NTx86]
+AddReg=RootHub.AddReg.NT
+
+[Hub.Dev.NTx86.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
 ; --- 32-bit Vista and Windows 7 ---------------------------------------------
 
 [Xhci.Dev6.NTx86]
@@ -126,6 +152,12 @@ AddReg=RootHub.AddReg.NT
 CopyFiles=Xhci.CopyFiles
 
 [RootHub.Dev6.NTx86.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
+[Hub.Dev6.NTx86]
+AddReg=RootHub.AddReg.NT
+
+[Hub.Dev6.NTx86.Services]
 AddService=xhci98,0x00000002,Xhci.AddService
 
 [Xhci.AddService]
@@ -160,4 +192,6 @@ Mfg="xHCI98 Project"
 DiskName="xhci98 xHCI Host Controller Disk"
 XhciDesc="xHCI98 USB 3.x eXtensible Host Controller"
 RootHubDesc="xHCI98 USB 3.x Root Hub"
+HubDesc="xHCI98 USB Hub"
+Hub30Desc="xHCI98 USB 3.x Hub"
 XhciSvcDesc="xHCI98 USB 3.x eXtensible Host Controller Driver (xhci98)"

@@ -633,7 +633,7 @@ NTSTATUS HcdRootHubFdoPnp(PHCD_ROOTHUB_FDO fdo, PIRP irp)
 
             old = (PDEVICE_RELATIONS)irp->IoStatus.Information;
             hc = hcdRhControllerEnter(fdo);
-            rel = (hc != NULL) ? HcdDevicePdoRelations(hc, old) : NULL;
+            rel = (hc != NULL) ? HcdDevicePdoRelations(hc, old, 0) : NULL;
             hcdRhControllerLeave(hc);
             if (rel != NULL) {
                 if (old != NULL) {
