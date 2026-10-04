@@ -1164,29 +1164,42 @@ static VOID hcdPdoFunctionRelease(PHCD_DEVICE_PDO pdo)
     }
 }
 
-/* A start after a remove (an enable after a disable) makes the PDO PnP's
+/*
+ * A start after a remove (an enable after a disable) makes the PDO PnP's
  * again, so the remove it received no longer lets a parent's release delete
- * it. Then PDO_STARTED for the port's machine; an orphan or a gone PDO has
- * no port left to tell. IRQL: PASSIVE_LEVEL. */
-static VOID hcdPdoStarted(PHCD_DEVICE_PDO pdo)
+ * it. Then PDO_STARTED for the port's machine. Returns 0, and changes
+ * nothing, for an orphan or a PDO whose device has left: its START is
+ * failed STATUS_UNSUCCESSFUL, the status Windows 2000's hub driver fails
+ * a departed device's START with (USBHUB20.SYS 5.00.2195.6655, 0x142E8,
+ * static; it fails only one already removed, and lets a START with no
+ * prior REMOVE succeed, which is the case refused here). Windows ME
+ * started a mouse PDO whose slot had gone during its install, stopped it,
+ * and never removed it: its port waited on it for good and the shell
+ * wedged (2026-10-04, r3 t5); a start that fails is one the configuration
+ * manager tears down. IRQL: PASSIVE_LEVEL.
+ */
+static ULONG hcdPdoStarted(PHCD_DEVICE_PDO pdo)
 {
     PHCD_CONTROLLER hc;
     KIRQL oldIrql;
     ULONG listed;
 
-    pdo->Closing = 0;
     hc = pdo->Controller;
     if (hc == NULL) {
-        pdo->RemoveReceived = 0;
-        return;
+        return 0;
     }
     KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
-    pdo->RemoveReceived = 0;
     listed = pdo->Listed;
-    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
     if (listed) {
-        hcdPortNotify(hc, hc->PortPdoStarted, pdo->Port);
+        pdo->RemoveReceived = 0;
     }
+    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    if (!listed) {
+        return 0;
+    }
+    pdo->Closing = 0;
+    hcdPortNotify(hc, hc->PortPdoStarted, pdo->Port);
+    return 1;
 }
 
 /*
@@ -1367,8 +1380,12 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
 
     switch (stack->MinorFunction) {
     case IRP_MN_START_DEVICE:
+        if (!hcdPdoStarted(pdo)) {
+            XHCI_DBG_VALUE("hcd: START refused, device gone, port",
+                           pdo->Port);
+            return HcdCompleteIrp(irp, STATUS_UNSUCCESSFUL, 0);
+        }
         pdo->Common.PnpState = HCD_PNP_STARTED;
-        hcdPdoStarted(pdo);
         return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
 
     case IRP_MN_QUERY_STOP_DEVICE:

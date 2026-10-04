@@ -257,23 +257,57 @@ static LONG hcdCfgCountEnd(PHCD_CONTROLLER hc, ULONG asked, LONG usbd)
  * on its port that refuses - SET_CONFIGURATION(0) among them - is counted
  * (Codex review round 24, finding 1). IRQL: PASSIVE_LEVEL (the thread,
  * which owns the port records). */
-static VOID hcdCfgCountSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
-                              LONG usbd)
+static ULONG hcdCfgDeviceLeft(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
-    if (usbd == XHCI_USBD_STATUS_SUCCESS ||
-        usbd == HCD_USBD_BUFFER_TOO_SMALL) {
-        return;
-    }
     if (dev->Gone || dev->Location == 0 || dev->Location > HCD_PORT_COUNT ||
         hc->Ports[dev->Location - 1].Device != dev) {
-        return;
+        return 1;
     }
     /* Behind hubs, every port on the path is asked as well (Codex review
      * of 23e7715, finding 6). */
-    if (!HcdHubPathPresent(hc, &hc->Ports[dev->Location - 1])) {
-        return;
+    return !HcdHubPathPresent(hc, &hc->Ports[dev->Location - 1]);
+}
+
+/* A select's answer: counted (above), and a failure of a device that has
+ * left answered DEVICE_GONE, whatever step failed. Thread only. */
+static LONG hcdCfgSelectAnswer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                               LONG usbd)
+{
+    if (usbd == XHCI_USBD_STATUS_SUCCESS ||
+        usbd == HCD_USBD_BUFFER_TOO_SMALL) {
+        return usbd;
+    }
+    if (hcdCfgDeviceLeft(hc, dev)) {
+        return HCD_USBD_DEVICE_GONE;
     }
     hc->Counters.SelectsFailed++;
+    return usbd;
+}
+
+/*
+ * A command on the device's slot failed. A controller reset is requested
+ * only while the device is still proven present (hcdCfgDeviceLeft, as the
+ * select count above reads it): a command that fails because the device
+ * has just left - a Configure Endpoint, Stop Endpoint or Set TR Dequeue
+ * racing an unplug, the slot's Context State or a Transaction Error - is an
+ * ordinary failure of that device, which its departure tears down (the
+ * thread's next port pass disables the slot and drains every request).
+ * A reset for it dropped every device on the controller, and the devices
+ * re-enumerated on the other ports got no PnP from Windows ME afterwards
+ * (2026-10-04, r3 t2: a mouse pulled during its SELECT_CONFIGURATION).
+ * A command that timed out is the engine's to recover, whatever the
+ * device (xhci_cmd.c). Returns 1 when a reset was requested. Thread only,
+ * powered.
+ */
+static ULONG hcdCfgFault(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    if (hcdCfgDeviceLeft(hc, dev)) {
+        XHCI_DBG_VALUE("hcd: command failed on a departed device, slot",
+                       dev->SlotId);
+        return 0;
+    }
+    HcdSvcRequestReset(&hc->Hc);
+    return 1;
 }
 
 /* ----------------------------------------------------------------------- */
@@ -2070,7 +2104,8 @@ static ULONG hcdCfgDeviceClearHalt(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * Stopped needs nothing, and Error is left for the Set TR Dequeue that every
  * caller then issues, which is what moves it to Stopped (4.8.3). Returns
  * the state reached, or XHCI_EP_STATE_RUNNING when a command failed - the
- * controller reset is then already requested.
+ * controller reset is then already requested, unless the device has left
+ * (hcdCfgFault), whose departure then settles it.
  */
 static ULONG hcdCfgQuiesce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                            PHCD_PIPE pipe)
@@ -2088,7 +2123,7 @@ static ULONG hcdCfgQuiesce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             code = hcdCfgCommand(hc, dev, &trb, &control);
         }
         if (code != XHCI_CC_SUCCESS && code != XHCI_CC_CONTEXT_STATE_ERROR) {
-            HcdSvcRequestReset(&hc->Hc);
+            (VOID)hcdCfgFault(hc, dev);
             return XHCI_EP_STATE_RUNNING;
         }
         state = hcdCfgEpState(hc, dev, pipe->Dci);
@@ -2118,7 +2153,7 @@ static ULONG hcdCfgQuiesce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
          * record 13, not yet transcribed). */
         if (!hcdCfgResetEndpoint(hc, dev, pipe, 1) ||
             !hcdCfgRecoverDequeue(hc, dev, pipe, 0)) {
-            HcdSvcRequestReset(&hc->Hc);
+            (VOID)hcdCfgFault(hc, dev);
             return XHCI_EP_STATE_RUNNING;
         }
         /* Behind a TT, a control or bulk endpoint's TT buffer may still
@@ -2132,7 +2167,7 @@ static ULONG hcdCfgQuiesce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
          * batch (c), round 3, findings 5 and 6). For a streams endpoint,
          * the failed streams alone (hcdCfgRecoverDequeue). */
         if (!hcdCfgRecoverDequeue(hc, dev, pipe, 1)) {
-            HcdSvcRequestReset(&hc->Hc);
+            (VOID)hcdCfgFault(hc, dev);
             return XHCI_EP_STATE_RUNNING;
         }
         state = XHCI_EP_STATE_STOPPED;
@@ -2199,7 +2234,7 @@ static ULONG hcdCfgDeconfigure(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     }
     if (XhciTrbConfigureEndpoint(&trb, dev->SlotId, 0, 1) != XHCI_RING_OK ||
         hcdCfgCommand(hc, dev, &trb, &control) != XHCI_CC_SUCCESS) {
-        HcdSvcRequestReset(&hc->Hc);
+        (VOID)hcdCfgFault(hc, dev);
         return 0;
     }
     dev->Stale = 0;
@@ -2322,7 +2357,7 @@ static LONG hcdCfgAbortPaused(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     hcdCfgRingsEmpty(pipe);
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     if (state != XHCI_EP_STATE_DISABLED && !hcdCfgSetDequeue(hc, dev, pipe)) {
-        HcdSvcRequestReset(&hc->Hc);
+        (VOID)hcdCfgFault(hc, dev);
         return HCD_USBD_INTERNAL_HC_ERROR;
     }
     HcdIoPipeWaitCancelled(hc, pipe);
@@ -2460,7 +2495,7 @@ static LONG hcdCfgResetHost(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         ok = hcdCfgSetDequeue(hc, dev, pipe);
     }
     if (!ok) {
-        HcdSvcRequestReset(&hc->Hc);
+        (VOID)hcdCfgFault(hc, dev);
         return HCD_USBD_INTERNAL_HC_ERROR;
     }
     pipe->Halted = 0;
@@ -2548,7 +2583,7 @@ static LONG hcdCfgReset(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
              hcdCfgRecycle(hc, dev, pipe);
     }
     if (!ok) {
-        HcdSvcRequestReset(&hc->Hc);
+        (VOID)hcdCfgFault(hc, dev);
         result = HCD_USBD_INTERNAL_HC_ERROR;
         return result;          /* left paused, as hcdCfgAbort */
     }
@@ -2656,7 +2691,7 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 
     if (move && state != XHCI_EP_STATE_DISABLED &&
         !hcdCfgSetDequeue(hc, dev, pipe)) {
-        HcdSvcRequestReset(&hc->Hc);
+        (VOID)hcdCfgFault(hc, dev);
         HcdIoDeferred(hc);
         return;                 /* left paused, as hcdCfgAbort */
     }
@@ -2708,7 +2743,7 @@ static ULONG hcdCfgResetQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             code = hcdCfgCommand(hc, dev, &trb, &control);
         }
         if (code != XHCI_CC_SUCCESS && code != XHCI_CC_CONTEXT_STATE_ERROR) {
-            HcdSvcRequestReset(&hc->Hc);
+            (VOID)hcdCfgFault(hc, dev);
             return 0;
         }
     }
@@ -3190,7 +3225,7 @@ static ULONG hcdCfgStreamsOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         if (cleared && hcdCfgRecycleCode(hc, dev, pipe) != XHCI_CC_SUCCESS) {
             XHCI_DBG_VALUE("hcd: streams open failed, host sequence not "
                            "restarted, endpoint", pipe->EndpointAddress);
-            HcdSvcRequestReset(&hc->Hc);
+            (VOID)hcdCfgFault(hc, dev);
             return XHCI98_STREAMS_FAILED;
         }
         HcdIoPipeResume(hc, pipe);
@@ -3267,7 +3302,7 @@ static ULONG hcdCfgStreamsClose(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
         pipe->Streams = st;
         XhciControllerLockRelease(&hc->Hc, oldIrql);
-        HcdSvcRequestReset(&hc->Hc);
+        (VOID)hcdCfgFault(hc, dev);
         return XHCI98_STREAMS_FAILED;   /* left paused */
     }
     hcdCfgStreamsFree(hc, st);
@@ -3508,7 +3543,7 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
             usbd = pdo->Function
                        ? hcdCfgSelectFunction(hc, dev, pdo, urb, &held)
                        : hcdCfgSelect(hc, dev, urb);
-            hcdCfgCountSelect(hc, dev, usbd);
+            usbd = hcdCfgSelectAnswer(hc, dev, usbd);
             break;
         case HCD_URB_SELECT_INTERFACE:
             usbd = hcdCfgSelectInterface(hc, dev, pdo, urb);
@@ -3517,7 +3552,7 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
                 held &= ~(1UL << number);
                 hcdCfgReleaseSettled(dev, 1UL << number);
             }
-            hcdCfgCountSelect(hc, dev, usbd);
+            usbd = hcdCfgSelectAnswer(hc, dev, usbd);
             break;
         case HCD_URB_ABORT_PIPE:
         case HCD_URB_RESET_PIPE:
