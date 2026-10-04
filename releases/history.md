@@ -47,15 +47,21 @@ four directories, each now holding both drivers.
   Controller" and the root hub "xHCI98 USB 3.x Root Hub", with every device
   beneath it; external hubs no longer appear as entries of their own.
 - Gone under `2.0.0.0`: the Windows 2000 audio device unplugged during
-  playback that was never fully removed, and the Windows 7 controller disable
-  that hung. `TODO(28.3)`: the Windows 98 crash under NUSB when the
-  controller was stopped, and the Windows 98 freeze on fast repeated
-  plugging.
-- Upgrading from `1.2.0.0`: `TODO(upgrade)`.
+  playback that was never fully removed, the Windows 7 controller disable
+  that hung, the Windows 98 freeze on fast repeated plugging, and the Windows
+  98 crash under NUSB when the controller was stopped - except on one path:
+  updating in place over a running `1.2.0.0` under NUSB still crashes,
+  because NUSB stops the old driver before the new one runs.
+- Upgrading from `1.2.0.0`: on Windows 98 SE with NUSB, rename the old
+  `XHCI98.SYS` and cold-boot before updating; on every system, pick the
+  driver from a list with Have Disk rather than let Windows search. The
+  readme's section 4 has the steps for each system.
 - Known limitations: the driver never puts an idle device or hub port to
   sleep; Windows 98 SE can wedge when a USB audio device is plugged in soon
-  after a cold boot, as it could under `1.2.0.0`. The release notes have the
-  full list and the untested ground.
+  after a cold boot, as it could under `1.2.0.0`; on Windows ME, re-enabling
+  the controller with a device attached can hang the machine; a device moved
+  to a different port is found again as new hardware. The release notes have
+  the full list and the untested ground.
 
 ## 1.2.0.0 - 2026-10-02
 

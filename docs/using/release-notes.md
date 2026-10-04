@@ -94,19 +94,20 @@ x64, do not refuse unsigned drivers.
 
 Each row says what the `2.0.0.0` drivers were observed doing on that system,
 and where. "The integration build" is the merged build of the release's code
-before the cut, in the never-published `qemu` flavour; the cut reads the ten
-install legs again from the release asset itself (`TODO(32.3)`).
+before the cut, in the never-published `qemu` flavour. The ten install legs
+were also read on the `release` flavour of that build, and are read again
+from the release asset itself after the cut.
 
 | Target | Standing | What it rests on |
 |---|---|---|
 | Windows 98 SE | Primary | Virtual machines, under NUSB 3.3 and under SweetLow's stack: the install, mouse, keyboard, storage with a verified file compare, a composite audio device split into its functions and played to its end (unheard: the guest has no audio out), the ASIX Ethernet adapter passed through, the controller's Advanced tab and the root hub's Power tab, and disable, enable, remove and rescan. Hubs behind QEMU's Full-Speed hub to five tiers, 25 plug cycles per device class, and a 120-hub churn with the guest responsive. A stock install with no USB 2.0 stack: the controller, hubs, a HID mouse and a composite audio device work (next section). SuperSpeed storage and UAS at SuperSpeed (16 streams) and at High Speed, each with a verified round trip, on the integration build. UAS and forced Bulk-Only on a passed-through dual-transport bridge, each with a verified round trip. Real hardware, on a ThinkPad E460 and a ThinkPad P14s Gen 1: the install, HID, storage, the ASIX Ethernet adapter, and a Full-Speed audio device played and heard at a root port and behind a hub; High-Speed hubs, single- and multi-TT, with Low- and Full-Speed devices behind them, and a Full-Speed hub behind a High-Speed hub (a USB 2.0 hub held at Full Speed by a full/low-speed isolator); a Low-Speed mouse polled every 8 ms at a root port and behind a hub; two SuperSpeed drives on a root port, the link read as SuperSpeed in `XHCISNAP`'s slot table, with round trips and throughput against the same drive behind a USB 2.0 hub; a SuperSpeed hub with a SuperSpeed drive behind its SuperSpeed half and a High-Speed device behind its USB 2.0 half, plugged, unplugged and plugged in again; and UAS on a dual-transport bridge at SuperSpeed and, behind a USB 2.0 hub, at High Speed, UAS on a UAS flash drive at SuperSpeed with Bulk-Only behind a USB 2.0 hub, and the forced-Bulk-Only value on both at SuperSpeed, each with a round trip and throughput against Bulk-Only |
-| Windows 2000 SP4 | Primary, virtual machines only | The same device, hub and Device Manager rows as Windows 98 SE, under Driver Verifier, plus a multiprocessor guest. SuperSpeed storage, and UAS at SuperSpeed and at High Speed, on the integration build. UAS, forced Bulk-Only and the switch between them on a passed-through dual-transport bridge, each with a verified round trip. SuperSpeed hubs: no virtual machine models one, `TODO(30)`. Never run on real hardware |
-| Windows ME | Virtual machines only | `TODO(28-V.1)`. Bulk-Only storage works on Windows ME's own mass-storage files (next section); UAS on Windows ME: `TODO(ME)` |
-| 32-bit Windows XP SP3 | Virtual machines only | On the integration build: install, HID, storage with a verified file compare, unplug and replug, a hub with devices behind it, composite audio bound, the root hub's and the controller's disable and enable, shutdown; SuperSpeed storage, and UAS at SuperSpeed and at High Speed. The soak: `TODO(28-V.1)` |
-| Windows XP x64 SP2 | Virtual machines only; the 64-bit drivers | The same clauses as 32-bit XP, with the 64-bit `xhciuas.sys` at SuperSpeed and at High Speed. The soak: `TODO(28-V.1)` |
-| Windows Vista SP2, 32-bit and x64 | Virtual machines only | The same clauses, at four virtual processors; x64 on starts with driver signature enforcement disabled. The soak: `TODO(28-V.1)` |
-| Windows 7 SP1, 32-bit and x64 | Virtual machines only | The same clauses, at four virtual processors; x64 on starts with driver signature enforcement disabled; five controller disable and enable cycles on each. The soak: `TODO(28-V.1)`. Windows 7 is not read on real hardware for `2.0.0.0` |
-| Every target, from the release package | | `TODO(32.3)`: the ten install legs from the release asset, each with SuperSpeed storage and UAS at SuperSpeed and at High Speed, the `release` flavour |
+| Windows 2000 SP4 | Primary, virtual machines only | The same device, hub and Device Manager rows as Windows 98 SE, under Driver Verifier, plus a multiprocessor guest. SuperSpeed storage, and UAS at SuperSpeed and at High Speed, on the integration build. UAS, forced Bulk-Only and the switch between them on a passed-through dual-transport bridge, each with a verified round trip. SuperSpeed hubs: untested, as no virtual machine models one; built from the specification. Never run on real hardware |
+| Windows ME | Virtual machines only | Under SweetLow's stack, on the integration build: the install, HID, storage with a verified file compare, unplug and replug, a hub with a mouse and a stick behind it, a composite audio device bound at a root port and behind a hub, the root hub's disable and enable, a 10-cycle soak per device class, SuperSpeed storage, and UAS at SuperSpeed (streams) and at High Speed. Bulk-Only storage works on Windows ME's own mass-storage files, and UAS once those are present (next section). Re-enabling the controller with a device attached hangs Windows ME ("Known limitations") |
+| 32-bit Windows XP SP3 | Virtual machines only | On the integration build: install, HID, storage with a verified file compare, unplug and replug, a hub with devices behind it, composite audio bound, the root hub's and the controller's disable and enable, shutdown; SuperSpeed storage, and UAS at SuperSpeed and at High Speed. A 10-cycle soak per device class (HID, a hub with a mouse, storage) |
+| Windows XP x64 SP2 | Virtual machines only; the 64-bit drivers | The same clauses as 32-bit XP, with the 64-bit `xhciuas.sys` at SuperSpeed and at High Speed, and the same soak |
+| Windows Vista SP2, 32-bit and x64 | Virtual machines only | The same clauses, at four virtual processors; x64 on starts with driver signature enforcement disabled. The same soak |
+| Windows 7 SP1, 32-bit and x64 | Virtual machines only | The same clauses, at four virtual processors; x64 on starts with driver signature enforcement disabled; five controller disable and enable cycles on each. The same soak. Windows 7 is not read on real hardware for `2.0.0.0` |
+| Every target, from the release package | | The `release` flavour of the integration build, on the ten install legs (Windows 98 SE under NUSB and under SweetLow's stack, ME, 2000, XP, XP x64, and Vista and 7 in both architectures): installed, controller and root hub started, HID, storage with a verified file compare, composite audio bound, the controller's disable and enable, and shutdown, with SuperSpeed storage and UAS at SuperSpeed and at High Speed on most legs. The one defect is Windows ME's controller re-enable ("Known limitations"). The legs are read again from the release asset after the cut |
 
 The virtual machines are QEMU's `qemu-xhci`, which models no SuperSpeed hub,
 no link faster than 5 Gbit/s, no Low-Speed device and no High-Speed hub; what
@@ -117,8 +118,8 @@ those need is the bench's, or is untested ground.
 | | |
 |---|---|
 | Operating system | Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows ME (4.90.3000), 32-bit Windows XP (SP3), Windows XP x64 (SP2), and Windows Vista (SP2) and Windows 7 (SP1) in both architectures, in virtual machines only. Vista x64 and Windows 7 x64 load the drivers only while driver signature enforcement is disabled. Nothing after Windows 7 |
-| USB stack | None. The driver replaces the port and hub drivers on every target. Windows 98 SE needs no USB 2.0 stack for the controller, hubs, HID or audio; **storage needs NUSB's mass-storage component** (next section). Windows ME: `TODO(28-V.1)`, whether SweetLow's stack is still wanted there. Do not install NUSB on Windows ME, 2000, XP, Vista or 7 |
-| Controller | An xHCI controller presenting PCI class code `0C0330`, with a BAR0 mapped below 4 GB and a legacy interrupt pin: the driver has no MSI path, so a controller reporting `Interrupt Pin = 0` cannot be driven at all. Whether a controller with no USB 2.0 protocol port at all is accepted: `TODO(29-A.1)` |
+| USB stack | None. The driver replaces the port and hub drivers on every target. Windows 98 SE needs no USB 2.0 stack for the controller, hubs, HID or audio; **storage needs NUSB's mass-storage component** (next section). Windows ME: every Windows ME reading was taken under SweetLow's USB 2.0 stack; Windows ME without it has not been tested under `2.0.0.0`. Do not install NUSB on Windows ME, 2000, XP, Vista or 7 |
+| Controller | An xHCI controller presenting PCI class code `0C0330`, with a BAR0 mapped below 4 GB and a legacy interrupt pin: the driver has no MSI path, so a controller reporting `Interrupt Pin = 0` cannot be driven at all. A controller with no USB 2.0 protocol port at all is accepted, built from the specification and untested: no such controller has been held |
 | Install media | Windows 98 SE on an xHCI-only machine: the Windows 98 SE installation CD at hand, or the Windows CABs on the hard disk. Windows ME: the same, from the Windows ME CD or the CABs its Setup leaves on the disk. The NT targets take what they need from their own driver cache and ask for nothing |
 
 Run the qualifier before installing anything; it answers the controller
@@ -166,8 +167,10 @@ alone has no storage part.
 
 **Windows ME ships its own mass-storage files.** Windows ME carries its own
 `USBSTOR` and `USBNTMAP` INFs, and the files are copied from Windows ME's
-CABs when the first stick installs. Bulk-Only storage works on them. UAS on
-Windows ME: `TODO(ME)`.
+CABs when the first stick installs. Bulk-Only storage works on them, and so
+does UAS once they are there. A UAS drive plugged in before any ordinary
+stick shows Code 2 until they are: plug in any ordinary USB stick once, then
+unplug the UAS drive and plug it back in ("Known limitations").
 
 **The UAS driver on Windows 98 SE installs with no restart.** Its INF
 copies no file in use, so the first UAS device installs and works at once.
@@ -249,10 +252,39 @@ second Update Driver filled it.
 the install overwrites the file. Going back is a reinstall of the `1.2.0.0`
 package from its own download.
 
-`TODO(upgrade)`: the measured upgrade route from `1.2.0.0` on each target -
-on Windows 98 SE under NUSB, under SweetLow's stack, on Windows ME, and on the
-NT targets - and whether `1.2.0.0`'s unload-first route is still needed under
-NUSB, where stopping `1.2.0.0` crashed the machine.
+Update the "USB 2.0 eXtensible Host Controller (xhci98)" entry in Device
+Manager and always pick the driver from a list (Have Disk) rather than let
+Windows search: a search can reinstall the old driver from Windows' own copy.
+Measured in virtual machines on each system below except Windows ME:
+
+- **Windows 98 SE with NUSB: never update in place.** NUSB's `usbport.sys`
+  crashes the machine (fatal exception 0E at `0028:C00312EE`) as it stops
+  the running `1.2.0.0`, before `2.0.0.0` runs. Instead open an MS-DOS
+  Prompt and type `ren C:\WINDOWS\SYSTEM32\DRIVERS\XHCI98.SYS XHCI98.SAV`,
+  shut down and switch on again (the controller shows a yellow mark), then
+  Update Driver, "Display a list of all the drivers in a specific location",
+  Have Disk, the `release-x86\` directory, "xHCI98 USB 3.x eXtensible Host
+  Controller"; give it the Windows 98 SE CD for `usbd.sys` and restart. Each
+  USB device is then found once more as new hardware. If you already updated
+  in place and got the blue screen, restart: `2.0.0.0` comes up on its own.
+- **Windows 98 SE with SweetLow's stack**: the same Update Driver route, in
+  place. Windows does not ask for a restart, but shut down and switch on
+  again straight away: until then USB devices stop working.
+- **Windows ME**: not tested; follow the SweetLow route.
+- **Windows 2000**: Update Driver, "Display a list of the known drivers",
+  Have Disk; pick "xHCI98 USB 3.x eXtensible Host Controller", the first of
+  three models. It starts at once; at the next restart Windows may ask for
+  one more.
+- **Windows XP**: Update Driver, "Install from a list or specific location",
+  "Don't search. I will choose the driver to install", Have Disk, Continue
+  Anyway; a second wizard follows for the root hub. No restart.
+- **Windows Vista and 7**: Update Driver Software, "Browse my computer",
+  "Let me pick from a list of device drivers on my computer", Have Disk.
+  Typing the folder into the search box keeps the old driver. No restart.
+
+The steps were tested on Windows 98 SE (NUSB and SweetLow), 2000, XP and
+32-bit Windows 7; on XP x64, Vista and 7 x64 the same steps apply, pointed
+at `release-x64\` on the 64-bit systems.
 
 The three `1.2.0.0` virtual-hub values have no effect under `2.0.0.0`; see
 "Registry settings".
@@ -445,8 +477,24 @@ Each was measured, in a virtual machine unless it names a physical machine.
 - **The power handlers have not run.** No test machine has been put into
   standby or hibernation with this driver; see "Untested ground".
 - **Windows 98 shows no driver version on the Driver tab**, only the file
-  date; the four-part version is under Driver File Details.
-  `TODO(32.3)`: confirmed on the release asset.
+  date; the four-part version is under Driver File Details, which also lists
+  `xhci98.tmp`, a leftover of the install's temporary copy (cosmetic).
+- **Windows ME: re-enabling the controller with a device attached can make
+  Windows ME stop responding.** Unplug USB devices before re-enabling the
+  controller in Device Manager. If ME stops responding, restart it and
+  re-enable the controller with nothing attached. Being fixed.
+- **Windows ME: do not unplug a device while Windows is installing it.**
+  ME's own device manager stops responding; it does the same on Microsoft's
+  own USB stack.
+- **Windows ME: a UAS drive as the first USB storage device shows Code 2.**
+  On a fresh Windows ME, ME has not yet copied its own `USBNTMAP.SYS` and
+  `USBMPHLP.PDR`, which it installs when its first ordinary USB stick is
+  plugged in. Plug in any ordinary USB stick once, then unplug the UAS drive
+  and plug it back in; no Remove and no restart are needed.
+- **A device moved to a different port is found again as new hardware.**
+  This is a known difference from Microsoft's hub driver: this driver names
+  a device by its port, and Microsoft's uses the device's serial number. A
+  later release may do the same.
 
 The `1.2.0.0` limitations, and what each is under `2.0.0.0`, are in the
 next section.
@@ -458,15 +506,15 @@ re-measured, or answered by the design, under `2.0.0.0`:
 
 | `1.2.0.0` limitation | Under `2.0.0.0` |
 |---|---|
-| Windows 98 under NUSB: stopping the controller (disable, uninstall, upgrade) crashed the machine, in NUSB's `usbport.sys` | `2.0.0.0` does not use `usbport.sys`. Disable, enable, remove and rescan of the `2.0.0.0` controller completed under NUSB 3.3 and under SweetLow's stack in Windows 98 SE virtual machines. `TODO(28.3)`: recorded as gone or carried once the upgrade from `1.2.0.0` is measured (`TODO(upgrade)`) |
-| Windows 98: fast, repeated plug and unplug could freeze the machine | The hub churn that froze Windows 98 under `1.2.0.0` at 12 to 18 hubs ran 120 of 120 with the guest responsive. `TODO(28.3)`: recorded as gone or carried |
+| Windows 98 under NUSB: stopping the controller (disable, uninstall, upgrade) crashed the machine, in NUSB's `usbport.sys` | `2.0.0.0` does not use `usbport.sys`. Disable, enable, remove and rescan of the `2.0.0.0` controller completed under NUSB 3.3 and under SweetLow's stack in Windows 98 SE virtual machines. Carried on one path only: updating in place over a running `1.2.0.0` under NUSB still crashes, because NUSB stops `1.2.0.0` before `2.0.0.0` runs. "Upgrading from 1.2.0.0" has the route around it |
+| Windows 98: fast, repeated plug and unplug could freeze the machine | Gone in every reading: the hub churn that froze Windows 98 under `1.2.0.0` at 12 to 18 hubs ran 120 of 120 with the guest responsive, and the device matrix's hub churn passed on Windows 98 SE and 2000 on the final build |
 | Windows 7 (32-bit, on a ThinkPad E460): disabling the controller hung | Gone under `2.0.0.0`. It belonged to the miniport under Microsoft's `usbport.sys`; under `2.0.0.0` it did not occur in five disable and enable cycles each on Windows 7 x86 and x64 |
 | Windows 2000: a USB audio device unplugged during playback was never fully removed | Gone: the removal arrived within about a second, 7 times out of 7 |
 | The controller never went to sleep | The driver idles nothing it is not asked to; see the selective-suspend entry in "Known limitations" |
-| Every root-port device reported to Windows as High Speed, and its consequences: root-port polling in 1, 2 and 4 ms bands, a Full-Speed audio device on a root port silent from Windows XP on, a USB 1.1 hub on a root port crashing Vista and 7, and the Advanced tab's bandwidth figures | The cause is gone: there is no `usbport.sys` to report to, and every device is given its true speed, read on every device row of the virtual-machine matrix on both primary targets. A Low-Speed mouse is polled every 8 ms at a root port and behind a hub, on real hardware under Windows 98 SE. A Full-Speed hub on Vista and 7, and Full-Speed audio on a root port from Windows XP on: `TODO(28-V.1)` |
+| Every root-port device reported to Windows as High Speed, and its consequences: root-port polling in 1, 2 and 4 ms bands, a Full-Speed audio device on a root port silent from Windows XP on, a USB 1.1 hub on a root port crashing Vista and 7, and the Advanced tab's bandwidth figures | The cause is gone: there is no `usbport.sys` to report to, and every device is given its true speed, read on every device row of the virtual-machine matrix on both primary targets. A Low-Speed mouse is polled every 8 ms at a root port and behind a hub, on real hardware under Windows 98 SE. A Full-Speed hub on Vista and 7 enumerated with devices behind it, and a Full-Speed audio device on a root port bound on XP, Vista and 7 and played in real time on XP x64, in virtual machines |
 | Windows 98 SE: USB audio could stutter while a drive was read at full speed | Not seen under `2.0.0.0`: on real hardware under Windows 98 SE, Full-Speed audio played without stutter at the new interrupt moderation value `160` while a drive was read at full speed |
-| Windows 2000: a newer package over an older one was refused; disabling the controller with an audio device attached asked for a restart | `TODO(upgrade)` and `TODO(28.3)` |
-| Windows 98: a driver that failed while starting the controller stopped the machine with a protection error | `TODO(28.3)`: not re-measured |
+| Windows 2000: a newer package over an older one was refused; disabling the controller with an audio device attached asked for a restart | The upgrade from `1.2.0.0` installs in place on Windows 2000. The disable with an audio device attached was not re-measured |
+| Windows 98: a driver that failed while starting the controller stopped the machine with a protection error | Not re-measured: no failing start was provoked under `2.0.0.0` |
 | On a controller without Force Save Context, a wake from standby rebuilt the bus | Untested: the power handlers have not run |
 | The virtual High-Speed hub switch and its costs | No switch: the values have no effect (see "Registry settings") |
 
@@ -481,7 +529,7 @@ information.
 | SuperSpeedPlus links, by mode | Accepted at the trained rate, built from the specification against host tests. Each mode is untested: Gen 2x1 (10 Gbit/s on one lane), Gen 1x2 (10 Gbit/s on two lanes, the same rate as Gen 2x1 and a different mode), and Gen 2x2 (20 Gbit/s). No Gen 2 device was read on any hardware; no 20 Gbit/s port is held |
 | SuperSpeedPlus isochronous transfers | Built from the specification against host tests; no vehicle |
 | SuperSpeedPlus hubs | Built from the specification against host tests; no vehicle |
-| SuperSpeed hubs, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only; no virtual machine models one. On Windows 2000, which has no bench: `TODO(30)` |
+| SuperSpeed hubs, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only; no virtual machine models one. On Windows 2000, which has no bench, built from the specification and untested |
 | High-Speed hubs, single- and multi-TT, and Full and Low Speed devices behind them, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only. Virtual machines model only a Full-Speed hub, so on every other target the High-Speed paths rest on host tests |
 | A UAS-only device at SuperSpeed on a controller that cannot stream | Built from the specification against host tests; no such controller held |
 | Standby and hibernation | The power handlers have not run: no test machine sleeps |

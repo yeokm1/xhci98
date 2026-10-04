@@ -2886,8 +2886,9 @@ interrupt pin and has no path for the newer mechanism (MSI) that such a
 controller would require.
 
 The checker's last criterion, "no USB 2.0 ports", dates from the earlier,
-USB 2.0-only releases. TODO(29-A.1): whether this driver accepts a
-controller with no USB 2.0 port at all.
+USB 2.0-only releases. This driver accepts a controller with no USB 2.0
+port at all, built from the specification; no such controller has been
+tested.
 
 
 ==============================================================================
@@ -2905,8 +2906,9 @@ controller with no USB 2.0 port at all.
                      (section 3). SweetLow's USB 2.0 stack alone has no
                      storage part.
 
-  On Windows ME      TODO(28-V.1): whether anything is needed first.
-                     Windows ME carries its own USB storage files. DO NOT
+  On Windows ME      SweetLow's USB 2.0 stack: every Windows ME test ran
+                     under it. Windows ME carries its own USB storage
+                     files. DO NOT
                      install NUSB on Windows ME: it is a Windows 98 SE
                      package.
 
@@ -2996,8 +2998,10 @@ They are Microsoft's, and this package does not carry them.
   extra step.
 
 On Windows ME, Windows' own storage files serve USB sticks: they are copied
-from the Windows ME CABs when the first stick installs. TODO(ME): UAS disks
-on Windows ME.
+from the Windows ME CABs when the first stick installs. UAS disks need the
+same files: a UAS disk plugged in before any ordinary stick shows Code 2.
+Plug in any ordinary USB stick once, then unplug the UAS disk and plug it
+back in.
 
 
 ==============================================================================
@@ -3034,9 +3038,10 @@ CD, a shared folder - then:
       Wizard asks the same question - give it the same directory.)
 
   WINDOWS ME
-      TODO(28-V.1): the Windows ME prerequisites. Then the same Device
+      SweetLow's USB 2.0 stack first (section 2). Then the same Device
       Manager route as Windows 98 SE, pointed at the RELEASE-X86\
-      directory. Windows ME has only been run in a virtual machine.
+      directory, and restart when asked. Windows ME has only been run in a
+      virtual machine.
 
   WINDOWS 2000 SP4 AND WINDOWS XP (32-BIT)
       Open Device Manager and find the unrecognised xHCI controller, then
@@ -3067,9 +3072,44 @@ This driver replaces the 1.x driver, which has the same file name,
 xhci98.sys. Going back is a reinstall of a 1.x package from its own
 download.
 
-  TODO(upgrade): the measured upgrade route from the last 1.x release on
-  each system, and whether the 1.x crash on Windows 98 with NUSB when the
-  running driver is stopped still has to be worked around.
+  On every system, update the "USB 2.0 eXtensible Host Controller
+  (xhci98)" entry in Device Manager and pick the driver from a list with
+  Have Disk. Do not let Windows search: it can reinstall the old driver
+  from its own copy.
+
+  WINDOWS 98 SE WITH NUSB: DO NOT UPDATE WHILE THE 1.x DRIVER IS RUNNING.
+  NUSB's usbport.sys crashes the machine with a blue screen as it stops the
+  old driver. Instead:
+    1. Open an MS-DOS Prompt and type
+           ren C:\WINDOWS\SYSTEM32\DRIVERS\XHCI98.SYS XHCI98.SAV
+    2. Shut the machine down and switch it on again. The controller now
+       shows a yellow mark.
+    3. Device Manager -> the controller -> Update Driver -> "Display a list
+       of all the drivers in a specific location" -> Have Disk -> the
+       RELEASE-X86\ directory.
+    4. Pick "xHCI98 USB 3.x eXtensible Host Controller", give it the
+       Windows 98 SE CD when it asks for usbd.sys, and restart when asked.
+    5. Each USB device is found once more as new hardware.
+  If you already updated in place and got the blue screen, restart: this
+  driver comes up on its own.
+
+  WINDOWS 98 SE WITH SWEETLOW'S STACK, AND WINDOWS ME: the same Update
+  Driver route, in place. Windows does not ask you to restart, but you
+  must: shut down and switch on again straight away. Until then USB
+  devices stop working. (Windows ME has not been tested as an upgrade.)
+
+  WINDOWS 2000: Update Driver -> "Display a list of the known drivers" ->
+  Have Disk. Pick "xHCI98 USB 3.x eXtensible Host Controller", the first
+  of three. It starts at once; at the next restart Windows may ask for
+  one more.
+
+  WINDOWS XP: Update Driver -> "Install from a list or specific location"
+  -> "Don't search. I will choose the driver to install" -> Have Disk ->
+  Continue Anyway. A second wizard follows for the root hub. No restart.
+
+  WINDOWS VISTA AND 7: Update Driver Software -> "Browse my computer" ->
+  "Let me pick from a list of device drivers on my computer" -> Have
+  Disk. Typing the folder into the search box keeps the old driver.
 
 
 ==============================================================================
@@ -3209,6 +3249,19 @@ The ones you are most likely to meet:
     them, built from the specification. A report from one is welcome.
 
   * STANDBY AND HIBERNATION HAVE NOT BEEN TESTED.
+
+  * WINDOWS ME: RE-ENABLING THE CONTROLLER WITH A USB DEVICE ATTACHED CAN
+    MAKE WINDOWS ME STOP RESPONDING. Unplug USB devices before re-enabling
+    it. If ME stops responding, restart it and re-enable the controller
+    with nothing attached. Being fixed.
+
+  * WINDOWS ME: DO NOT UNPLUG A DEVICE WHILE WINDOWS IS INSTALLING IT. ME's
+    own device manager stops responding; it does the same on Microsoft's
+    own USB stack.
+
+  * A DEVICE MOVED TO A DIFFERENT PORT IS FOUND AGAIN AS NEW HARDWARE. This
+    driver names a device by its port; Microsoft's hub driver uses the
+    device's serial number.
 
 
 ==============================================================================

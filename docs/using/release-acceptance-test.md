@@ -28,16 +28,16 @@ on: a defect, as an issue, and a correction to this document when the procedure
 itself was what was wrong. A SKIP with a reason is a result; a blank is not,
 and so is a verdict with no reading beside it.
 
-Every `TODO(...)` below is an expectation this project has not yet observed on
-the `2.0.0.0` driver. Until it is settled, the clause it sits in is "record
-only": write down what is seen, and do not fail the step on it.
+A clause marked "record only" is an expectation this project has not
+observed on the `2.0.0.0` driver: write down what is seen, and do not fail
+the step on it.
 
-Two cautions for Windows 98 SE, both carried from the `1.x` releases and not
-yet settled for `2.0.0.0` (`TODO(28.3)`). Do not install `2.0.0.0` over a
-running `1.x` driver under NUSB unless the upgrade route of `readme.txt`
-section 4 says how (`TODO(upgrade)`): stopping the `1.x` driver under NUSB's
-stack blue-screened that system. And do not cycle one device rapidly in and
-out of a port: under `1.x` that could freeze the machine.
+One caution for Windows 98 SE, carried from the `1.x` releases. Do not
+update to `2.0.0.0` in place over a running `1.x` driver under NUSB: NUSB's
+stack blue-screens as it stops the `1.x` driver. Follow the upgrade route of
+`readme.txt` section 4 (rename the old file and cold-boot first). The `1.x`
+freeze on cycling a device rapidly in and out of a port was not seen under
+`2.0.0.0`.
 
 ---
 
@@ -101,8 +101,8 @@ is required, and a device that satisfies the property is as good.
 
 Nine steps, in order. Each gives what to do, the expected reading, what to do
 when that reading does not appear, and where the expectation was observed. An
-expectation that has never been observed anywhere is marked "record only" or
-`TODO(...)` and is not a pass criterion.
+expectation that has never been observed anywhere is marked "record only" and
+is not a pass criterion.
 
 The longer steps open with a checklist table of numbered substeps: what to do,
 on which device where that matters, and the reading that counts. The table is
@@ -165,8 +165,9 @@ Observed: the layout and the assertion that protects it are
 `scripts/package/make-release.ps1`, `New-UploadSet`; the directory names, and
 why a wrong pick is safe, are `releases/README.md`;
 `docs/contributing/legal-provenance.md` section 5 records why the asset
-carries no Microsoft file. The four-file directory is `TODO(32.3)`: first
-read from the `2.0.0.0` asset.
+carries no Microsoft file. The four-file directory (two drivers, two INFs)
+was staged for the `release` legs of the integration build and is read
+again from the `2.0.0.0` asset.
 
 ### Step 3. The DOS pass
 
@@ -190,8 +191,8 @@ record from `DISQUALIFIED`; say which one this was.
 `DISQUALIFIED` on the interrupt pin is a stop: the driver has no MSI path, and
 there is no software workaround. Record the verdict, complete the record, and
 stop. `DISQUALIFIED` on "no USB 2.0 ports" is the qualifier's criterion from
-the `1.x` releases; record it and continue to step 4 (`TODO(29-A.1)`: whether
-the `2.0.0.0` driver accepts such a controller).
+the `1.x` releases; record it and continue to step 4 (the `2.0.0.0` driver
+accepts such a controller, built from the specification and untested).
 
 `CANNOT SAY` sends the tester to the BIOS, not to the driver. Change the
 setting, cold-boot, and re-run.
@@ -214,13 +215,13 @@ run sheets cite them.
 |---|---|---|---|
 | 4.1 | Windows 98 SE | NUSB 3.3 or 3.6 first if the storage clauses are to be taken (none is needed for the controller, hubs, HID or audio), then Device Manager, the unclaimed xHCI controller, Properties -> Driver -> Update Driver -> Specify a location -> `RELEASE-X86\` | On an xHCI-only machine, "Insert Disk" asks for the Windows 98 Second Edition CD-ROM, then reports that `usbd.sys` cannot be found and asks where to copy from; give it the CD's `WIN98` folder. Then a request to restart. A machine that already has the file is not asked. Record which it was |
 | 4.2 | Windows 2000 SP4 | Device Manager, the controller, Properties -> Driver -> Update Driver -> Have Disk -> `RELEASE-X86\` | Completes with no prompt |
-| 4.5 | Windows ME | `TODO(28-V.1)`: the prerequisite, if any; then the Windows 98 SE route of 4.1 | Completes. The CD prompt of 4.1 may appear for the Windows ME CD. This target is supported in virtual machines only |
+| 4.5 | Windows ME | SweetLow's USB 2.0 stack first (every Windows ME reading was taken under it); then the Windows 98 SE route of 4.1 | Completes, with a request to restart. In the virtual machines no CD was asked for. This target is supported in virtual machines only |
 | 4.6 | Windows XP | Device Manager, the controller, Properties -> Driver -> Update Driver -> Have Disk -> `RELEASE-X86\`; Continue Anyway at the unsigned-driver warning | Completes with no file prompt. This target is supported in virtual machines only |
 | 4.8 | Windows XP x64 | The Windows 2000 route of 4.2, pointed at `RELEASE-X64\`; Continue Anyway at the unsigned-driver warning | Completes with Windows' signature and Logo prompts only, no file prompt and no restart. `RELEASE-X86\` offers this machine no driver at all, which is what a wrong pick looks like. This target is supported in virtual machines only |
 | 4.9 | Windows Vista, Windows 7 (32-bit) | Device Manager, the unrecognised xHCI device, Update Driver Software -> Browse my computer for driver software -> `RELEASE-X86\`. Use Device Manager rather than right-clicking an INF. If Windows warns that the driver is not signed or its publisher cannot be verified, choose to install it anyway, and write down the prompt's wording | Completes with no file prompt: the INF's `Xhci.Dev6` path copies `xhci98.sys` alone. 32-bit Vista and Windows 7 do not enforce kernel-mode signing, so the driver starts on the ordinary boot. This target is supported in virtual machines only |
 | 4.10 | Windows Vista x64, Windows 7 x64 | The route of 4.9, pointed at `RELEASE-X64\`. Then restart with driver signature enforcement disabled (the Advanced Boot Options menu); that lasts one boot, and every later boot that is to have working USB needs it again | Completes with no file prompt. The drivers start only on a boot with enforcement disabled; on any other boot Device Manager shows Code 39 on the controller and nothing on it works. This target is supported in virtual machines only, and the package is not signed |
 | 4.3 | All seven | Look at Device Manager when the install is done | The two nodes below, and neither carries a warning mark. On Vista x64 and Windows 7 x64, on the boot of 4.10 |
-| 4.4 | Windows 98 SE | Record only: open the controller's Driver File Details and the Driver tab | `TODO(32.3)`. Under `1.x`, `xhci98.tmp` was left in `System32\Drivers` and listed there (cosmetic), and the Driver tab showed a date but no version; the `2.0.0.0` INF keeps the same temporary-copy line |
+| 4.4 | Windows 98 SE | Record only: open the controller's Driver File Details and the Driver tab | Driver File Details lists `xhci98.tmp` (the `release` legs, under NUSB and under SweetLow's stack). Under `1.x`, `xhci98.tmp` was left in `System32\Drivers` and listed there (cosmetic), and the Driver tab showed a date but no version; the `2.0.0.0` INF keeps the same temporary-copy line |
 | 4.7 | Every target | The root hub of 4.3, Properties; then the controller's Properties | A **Power** tab on the root hub and an **Advanced** tab on the controller. Record what each shows. These are Windows' own pages, drawn with `usbui.dll` (on Windows 98 SE and ME through `sysclass.dll`), which the install has Windows copy; their absence is a missing file rather than a driver fault, and is recorded |
 
 The two nodes of 4.3, as Device Manager shows them:
@@ -251,8 +252,8 @@ Windows 98 SE in virtual machines under NUSB 3.3, under SweetLow's stack and
 on a stock install (roadmap-hcd 26-V.0 and 26-V.1, and the stock and
 SweetLow-only readings of Phase 28). 4.2 is 26-V.0's and 26-V.2's. 4.8 is
 28-A.2's, on Windows XP x64 in a virtual machine. 4.6, 4.9 and 4.10 are the
-Phase 28 guest legs on the integration build; `TODO(32.3)`: each read from
-the release asset. 4.7's two tabs were read on Windows 98 SE under both
+Phase 28 guest legs on the integration build, read again on its `release`
+flavour, and read once more from the release asset after the cut. 4.7's two tabs were read on Windows 98 SE under both
 stacks and on Windows 2000 (26-A.8).
 
 ### Step 5. Devices, one at a time, then a hub
@@ -320,8 +321,9 @@ If a device does not come back: try one replug and record whether that
 recovers it. A device that returns on a replug but not on a boot is a different
 result from one that returns on neither, and the record should say which.
 
-Observed: `TODO(32.3)` for `2.0.0.0`. Under `1.x` this was batch 11-V's, on
-both primary targets.
+Observed: record only for `2.0.0.0`; the guest legs restarted with devices
+attached but did not read this step as a clause. Under `1.x` this was batch
+11-V's, on both primary targets.
 
 ### Step 7. The target-specific clauses
 
@@ -332,7 +334,7 @@ Windows 98 SE
 
 | # | Do | Expected reading |
 |---|---|---|
-| 7.1 | Disable the controller in Device Manager, enable it, then remove it and refresh | It goes and comes back each time, with no crash. `TODO(28.3)`: under `1.x` with NUSB this blue-screened the machine at `0028:C00312EE`, in NUSB's `usbport.sys`, which `2.0.0.0` does not use; until 28.3 records the result, take this clause last, with nothing unsaved |
+| 7.1 | Disable the controller in Device Manager, enable it, then remove it and refresh | It goes and comes back each time, with no crash. Under `1.x` with NUSB this blue-screened the machine at `0028:C00312EE`, in NUSB's `usbport.sys`, which `2.0.0.0` does not use |
 | 7.2 | Unplug everything from the machine's USB ports, leave it a full minute, then plug in a mouse | It enumerates on its own, with no Refresh in Device Manager |
 | 7.3 | Plug in one composite device, something that is more than one thing at once | It enumerates and each of its functions loads under the root hub, rather than one entry with a warning mark |
 
@@ -356,7 +358,7 @@ Windows 2000 SP4
 | # | Do | Expected reading |
 |---|---|---|
 | 7.4 | Unplug everything from the machine's USB ports, leave it a full minute, then plug in a mouse | It enumerates on its own, with no Refresh |
-| 7.5 | Record only: look at the Driver tab | `TODO(32.3)`. Under `1.x` the version was present and the date read `Not available` |
+| 7.5 | Record only: look at the Driver tab | Write down the date and version shown. Under `1.x` the version was present and the date read `Not available` |
 | 7.6 | Disable the controller in Device Manager, then re-enable it once | It goes and comes back, with no crash |
 
 7.6 was read under `2.0.0.0` in the Windows 2000 virtual machine, under Driver
@@ -367,8 +369,9 @@ Windows ME (virtual machines only)
 
 | # | Do | Expected reading |
 |---|---|---|
-| 7.7 | Record the USB stack installed, if any | `TODO(28-V.1)`: whether Windows ME needs anything first under `2.0.0.0` |
-| 7.8 | Plug in one composite device, as 7.3 | Each function loads under the root hub, as 7.3. `TODO(28-V.1)` |
+| 7.7 | Record the USB stack installed, if any | SweetLow's USB 2.0 stack, under which every Windows ME reading was taken |
+| 7.8 | Plug in one composite device, as 7.3 | Each function loads under the root hub, as 7.3; read on the integration build with QEMU's `usb-audio` at a root port and behind a hub |
+| 7.9 | Do not re-enable the controller in Device Manager with a USB device attached | Known limitation: it can hang Windows ME. Unplug USB devices before re-enabling |
 
 Windows XP (virtual machines only)
 
@@ -431,7 +434,7 @@ a 32-bit program, runs under WOW64 against the 64-bit driver; `XHCISNAP
 | 8.4 | `XHCISNAP -o C:\MYDUMP` | It writes `C:\MYDUMP.TXT` and prints the resolved absolute path it wrote it to |
 | 8.5 | Read that file's header | The tool's version and build stamp, the driver's counters, and at level 2 the driver's own note ring below them. A report whose version is not this release's is a report from the wrong build |
 | 8.6 | `XHCISNAP -disable` | It reports the channel off again. A machine left with the channel on is a machine whose diagnostic state anyone using it can read |
-| 8.7 | Record only: look at the driver's own key for `XhciLogVerbosity`, `XhciLogDebugView`, `XhciImodInterval250ns` and `XhciForceBulkOnly`, then read the 8.4 report's "registry values" block | Write down whether each value is there and what its data is. On a fresh install `XhciImodInterval250ns` holds `160`, written by the INF, and the report shows it read and in force; the other three are absent unless set. `TODO(32.3)`: the report's exact lines for the value read and the interval in force |
+| 8.7 | Record only: look at the driver's own key for `XhciLogVerbosity`, `XhciLogDebugView`, `XhciImodInterval250ns` and `XhciForceBulkOnly`, then read the 8.4 report's "registry values" block | Write down whether each value is there and what its data is. On a fresh install `XhciImodInterval250ns` holds `160`, written by the INF, and the report shows it read and in force; the other three are absent unless set. Write down the report's lines for the value read and the interval in force |
 | 8.8 | The SuperSpeed witness: in the 8.4 report, find 5.8's device | The speed the driver decoded from its port, SuperSpeed, and the speed it programmed into the device's slot, SuperSpeed, agreeing. The slot's speed is the report's slot table: `PSIV` is the Speed field of the controller's own Slot Context for the device, and `speed` is that value decoded, `SuperSpeed, 5 Gbit/s, Gen 1x1` for a 5 Gbit/s link. A SuperSpeed device that reads High Speed here ran on the USB 2.0 port of its connector; record which connector it was in |
 
 If nothing comes back (8.4): run `XHCISNAP -probe`, which answers whether the
@@ -475,7 +478,7 @@ how far the shutdown got. Cut the power only after writing that down.
 
 Observed: a clean shutdown with devices attached closed every guest leg of
 roadmap-hcd Phases 26 to 28 in virtual machines; with traffic moving at the
-shutdown, `TODO(32.3)`.
+shutdown, record only.
 
 ---
 
