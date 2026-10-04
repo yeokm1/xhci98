@@ -683,25 +683,13 @@ static ULONG hcdSerialEqual(const char *a, const char *b)
     return 1;
 }
 
-/* Whether `old` and `nu` would answer one instance id (task 33.2): the
- * same serial id, or - neither having one - the same place. PdoListLock
- * held. */
-static ULONG hcdSameIdentity(PHCD_DEVICE_PDO old, PHCD_DEVICE_PDO nu)
-{
-    if (old->SerialId[0] != 0 || nu->SerialId[0] != 0) {
-        return hcdSerialEqual(old->SerialId, nu->SerialId);
-    }
-    return old->InstanceKey == nu->InstanceKey;
-}
-
-/* Whether PDO `old` stands for the same thing as the freshly built `nu`:
- * the instance id (the serial id, or the place without one), the device
- * descriptor, the (filtered) configuration, the function and the
- * transport decision. PdoListLock held. */
+/* Whether PDO `old` stands for the same device as the freshly built `nu`,
+ * its instance id aside (hcdDormantFindLocked weighs that): the device
+ * descriptor, the (filtered) configuration, the function, the speed and
+ * the transport decision. PdoListLock held. */
 static ULONG hcdDormantSame(PHCD_DEVICE_PDO old, PHCD_DEVICE_PDO nu)
 {
-    return hcdSameIdentity(old, nu) &&
-           old->Function == nu->Function &&
+    return old->Function == nu->Function &&
            old->InterfaceMask == nu->InterfaceMask &&
            old->ConfigLength == nu->ConfigLength &&
            old->Speed == nu->Speed &&
@@ -721,11 +709,12 @@ static ULONG hcdDormantSame(PHCD_DEVICE_PDO old, PHCD_DEVICE_PDO nu)
  * orderly PnP STOP (StopPreserve). Windows 2000 onward remove the children
  * before a controller disable, so nothing goes dormant there, and a PnP
  * stop of the controller alone (a rebalance) leaves the children started,
- * which are dropped and reported gone as before. Matched by instance id
- * and descriptors (hcdDormantSame): a device with a serial id by that id,
- * wherever it comes back, and keeps it; one without by its place, so two
- * identical serial-less units swapped while disabled are taken for each
- * other. IRQL: PASSIVE_LEVEL.
+ * which are dropped and reported gone as before. Matched by the instance
+ * id the dormant PDOs answer, and descriptors (hcdDormantFindLocked): a
+ * group named by its place by a device at that place, one named by its
+ * serial id by a device with that id wherever it comes back; so two
+ * identical units without a serial id swapped while disabled are taken for
+ * each other. IRQL: PASSIVE_LEVEL.
  */
 VOID HcdDevicePdoDormantAll(PHCD_CONTROLLER hc)
 {
@@ -764,9 +753,11 @@ VOID HcdDevicePdoDormantAll(PHCD_CONTROLLER hc)
     }
 }
 
-/* Every dormant PDO of the group at `instanceKey` (or of `group` when it is
- * not 0) unlisted onto GonePdos, its siblings with it, for the next
- * relations answer to report missing. Returns how many. PdoListLock held. */
+/* Every dormant PDO of the group named by its place `instanceKey` - a group
+ * named by a serial id is not its place's (task 33.2) - or of `group` when
+ * that is not 0, unlisted onto GonePdos, its siblings with it, for the
+ * next relations answer to report missing. Returns how many. PdoListLock
+ * held. */
 static ULONG hcdDormantRetireLocked(PHCD_CONTROLLER hc, ULONG instanceKey,
                                    ULONG group)
 {
@@ -780,7 +771,8 @@ static ULONG hcdDormantRetireLocked(PHCD_CONTROLLER hc, ULONG instanceKey,
         pdo = *at;
         if (!pdo->Dormant ||
             (group != 0 ? pdo->Group != group
-                        : pdo->InstanceKey != instanceKey)) {
+                        : (pdo->InstanceKey != instanceKey ||
+                           pdo->SerialId[0] != 0))) {
             at = &pdo->Next;
             continue;
         }
@@ -800,23 +792,106 @@ static ULONG hcdSameVidPid(PHCD_DEVICE_PDO a, PHCD_DEVICE_PDO b)
     return hcdBytesEqual(a->DeviceDesc + 8, b->DeviceDesc + 8, 4);
 }
 
-/* Whether a listed PDO - present or dormant - of `pdo`'s vendor and
- * product id carries its serial id, case aside (XhciFuncSerialSame). One
- * already unlisted - gone, its missing report or its REMOVE pending - does
- * not count, as usbhub's check counts only its ports' present devices: a
- * device moved from one port to another keeps its id even when the move
- * beats PnP's next relations query. PdoListLock held. */
-static ULONG hcdSerialTakenLocked(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
+/* Whether a listed PDO of `hc` of `pdo`'s vendor and product id carries
+ * its serial id, case aside (XhciFuncSerialSame) - a dormant one only when
+ * `dormantToo`. One already unlisted - gone, its missing report or its
+ * REMOVE pending - does not count, as usbhub's check counts only its
+ * ports' present devices: a device moved from one port to another keeps
+ * its id even when the move beats PnP's next relations query. `hc`'s
+ * PdoListLock held. */
+static ULONG hcdSerialTakenLocked(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo,
+                                  ULONG dormantToo)
 {
     PHCD_DEVICE_PDO other;
 
     for (other = hc->DevicePdos; other != NULL; other = other->Next) {
-        if (hcdSameVidPid(other, pdo) &&
+        if ((dormantToo || !other->Dormant) && hcdSameVidPid(other, pdo) &&
             XhciFuncSerialSame(other->SerialId, pdo->SerialId)) {
             return 1;
         }
     }
     return 0;
+}
+
+/*
+ * The serial ids' reach is the machine, not one root hub: an instance id
+ * with UniqueID TRUE names one devnode wherever its parent is. Every
+ * controller of this driver is linked here, from AddDevice to its remove,
+ * through SerialNext under hcdSerialLock - which is taken before any
+ * PdoListLock and never inside one, so the one path that holds a
+ * controller's PdoListLock and then another's (hcdSerialTakenElsewhere,
+ * under hcdSerialLock) cannot meet itself the other way round.
+ */
+static KSPIN_LOCK hcdSerialLock;
+static PHCD_CONTROLLER hcdSerialControllers;
+
+/* IRQL: PASSIVE_LEVEL (DriverEntry). */
+VOID HcdSerialInit(VOID)
+{
+    KeInitializeSpinLock(&hcdSerialLock);
+    hcdSerialControllers = NULL;
+}
+
+/* IRQL: PASSIVE_LEVEL (AddDevice), its PdoListLock initialised. */
+VOID HcdSerialControllerAdd(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+
+    KeAcquireSpinLock(&hcdSerialLock, &oldIrql);
+    hc->SerialNext = hcdSerialControllers;
+    hcdSerialControllers = hc;
+    KeReleaseSpinLock(&hcdSerialLock, oldIrql);
+}
+
+/* IRQL: PASSIVE_LEVEL (the controller's remove, before its deletion). */
+VOID HcdSerialControllerRemove(PHCD_CONTROLLER hc)
+{
+    PHCD_CONTROLLER *at;
+    KIRQL oldIrql;
+
+    KeAcquireSpinLock(&hcdSerialLock, &oldIrql);
+    for (at = &hcdSerialControllers; *at != NULL; at = &(*at)->SerialNext) {
+        if (*at == hc) {
+            *at = hc->SerialNext;
+            break;
+        }
+    }
+    hc->SerialNext = NULL;
+    KeReleaseSpinLock(&hcdSerialLock, oldIrql);
+}
+
+/* Whether a listed PDO of another controller - present or dormant -
+ * carries `pdo`'s serial id for its vendor and product id. hcdSerialLock
+ * held, no PdoListLock. */
+static ULONG hcdSerialTakenElsewhere(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
+{
+    PHCD_CONTROLLER other;
+    KIRQL oldIrql;
+    ULONG taken;
+
+    taken = 0;
+    for (other = hcdSerialControllers; other != NULL && !taken;
+         other = other->SerialNext) {
+        if (other == hc) {
+            continue;
+        }
+        KeAcquireSpinLock(&other->PdoListLock, &oldIrql);
+        taken = hcdSerialTakenLocked(other, pdo, 1);
+        KeReleaseSpinLock(&other->PdoListLock, oldIrql);
+    }
+    return taken;
+}
+
+/* A device left on the location form because its serial id was taken:
+ * counted and traced once the locks are let go. */
+static VOID hcdSerialDuplicateCount(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                    ULONG duplicate)
+{
+    if (duplicate) {
+        hc->SerialIdsDuplicate++;
+        XHCI_DBG_VALUE("hcd: serial already in use, location id, port",
+                       dev->Port);
+    }
 }
 
 /* Every dormant group of `first`'s vendor and product id and serial id,
@@ -843,29 +918,27 @@ static VOID hcdDormantRetireSerialLocked(PHCD_CONTROLLER hc,
     } while (old != NULL);
 }
 
-/*
- * A device enumerated with the instance id of a dormant group (its serial
- * id, or without one its place), built as `first` (its PDOs not listed):
- * when every PDO matches the dormant one in the same position, the dormant
- * group gets the device back - dev->Pdo names it, each PDO names the
- * record, its new port object and its place - and 1 is returned for the
- * caller to delete the new ones. The instance id each answers is unchanged.
- * PdoListLock taken. Thread only.
- */
-static ULONG hcdDormantRevive(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
-                              PHCD_DEVICE_PDO first)
+/* The dormant group, by its first PDO, that the device built as `first`
+ * revives: every PDO matching the dormant one in the same position, and
+ * the group named by `first`'s place (`byPlace`, a group without a serial
+ * id) or by `first`'s serial id, exactly. NULL for none. PdoListLock held. */
+static PHCD_DEVICE_PDO hcdDormantFindLocked(PHCD_CONTROLLER hc,
+                                            PHCD_DEVICE_PDO first,
+                                            ULONG byPlace)
 {
     PHCD_DEVICE_PDO old;
     PHCD_DEVICE_PDO a;
     PHCD_DEVICE_PDO b;
-    KIRQL oldIrql;
     ULONG same;
 
-    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
-    same = 0;
     for (old = hc->DevicePdos; old != NULL; old = old->Next) {
-        if (!old->Dormant || old->Group != old->Serial ||
-            !hcdSameIdentity(old, first)) {
+        if (!old->Dormant || old->Group != old->Serial) {
+            continue;
+        }
+        if (byPlace ? (old->SerialId[0] != 0 ||
+                       old->InstanceKey != first->InstanceKey)
+                    : (first->SerialId[0] == 0 ||
+                       !hcdSerialEqual(old->SerialId, first->SerialId))) {
             continue;
         }
         same = 1;
@@ -878,9 +951,52 @@ static ULONG hcdDormantRevive(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             }
         }
         if (same) {
-            break;
+            return old;
         }
     }
+    return NULL;
+}
+
+/*
+ * The instance id a device built as `first` (its PDOs not listed) will
+ * answer, and the dormant group it revives, decided in one hold of
+ * PdoListLock under hcdSerialLock (task 33.2). A dormant group named by
+ * this place comes first - it is what PnP kept here, and a group a
+ * duplicate or a failed read left on the location form keeps that form -
+ * then one named by this device's serial id, wherever it was; the serial
+ * id is not looked for when another controller carries it
+ * (`takenElsewhere`). With no revival, a serial id another controller or
+ * a present PDO of this one carries is cleared from every new PDO, which
+ * then answer the location form (*duplicate set); a dormant group with it
+ * is not a holder, and is retired at the listing. When a group is found,
+ * it gets the device back - dev->Pdo names it, each PDO names the record,
+ * its new port object and its place - and 1 is returned for the caller to
+ * delete the new ones; the instance id each answers is unchanged. Thread
+ * only, hcdSerialLock held.
+ */
+static ULONG hcdDormantRevive(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                              PHCD_DEVICE_PDO first, ULONG takenElsewhere,
+                              PULONG duplicate)
+{
+    PHCD_DEVICE_PDO old;
+    PHCD_DEVICE_PDO a;
+    PHCD_DEVICE_PDO b;
+    KIRQL oldIrql;
+    ULONG same;
+
+    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    old = hcdDormantFindLocked(hc, first, 1);
+    if (old == NULL && !takenElsewhere) {
+        old = hcdDormantFindLocked(hc, first, 0);
+    }
+    if (old == NULL && first->SerialId[0] != 0 &&
+        (takenElsewhere || hcdSerialTakenLocked(hc, first, 0))) {
+        for (a = first; a != NULL; a = a->Sibling) {
+            a->SerialId[0] = 0;
+        }
+        *duplicate = 1;
+    }
+    same = (old != NULL);
     if (same) {
         for (a = old, b = first; a != NULL; a = a->Sibling, b = b->Sibling) {
             a->Device = dev;
@@ -979,8 +1095,10 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     PHCD_DEVICE_PDO last;
     PHCD_DEVICE_PDO pdo;
     KIRQL oldIrql;
+    KIRQL serialIrql;
     NTSTATUS status;
     ULONG xportFlags;
+    ULONG elsewhere;
     ULONG duplicate;
     ULONG count;
     ULONG i;
@@ -1031,7 +1149,14 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         }
         last = pdo;
     }
-    if (hcdDormantRevive(hc, dev, first)) {
+    /* One hold of hcdSerialLock from the identity's choice to the listing,
+     * so no other controller lists the same serial id in between. */
+    duplicate = 0;
+    KeAcquireSpinLock(&hcdSerialLock, &serialIrql);
+    elsewhere = first->SerialId[0] != 0 && hcdSerialTakenElsewhere(hc, first);
+    if (hcdDormantRevive(hc, dev, first, elsewhere, &duplicate)) {
+        KeReleaseSpinLock(&hcdSerialLock, serialIrql);
+        hcdSerialDuplicateCount(hc, dev, duplicate);
         /* The device came back to the PDOs PnP kept across the controller
          * stop: they are its own again, and the new ones, never listed,
          * go. Nothing changes in the relations. */
@@ -1044,6 +1169,7 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         return STATUS_SUCCESS;
     }
     if (hcdXportRefusal(hc, dev, first)) {
+        KeReleaseSpinLock(&hcdSerialLock, serialIrql);
         /* The hold is queued (29-A.5): the device stays enumerated, with
          * no PDO, until the hold service's PED write and disconnect on the
          * thread's next pass, whose identity read still finds it on its
@@ -1062,33 +1188,23 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     dev->PdoGroup = first->Group;
 
     KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
-    /* A dormant group at the same place, or with the same serial id, that
-     * this device did not revive (different descriptors) is reported gone
-     * in the same hold, so the relations answer that brings the new PDOs
-     * omits it. */
+    /* A dormant group this device did not revive is reported gone in the
+     * same hold, so the relations answer that brings the new PDOs omits
+     * it: one named by this place, or one with the serial id these PDOs
+     * keep (hcdDormantRevive left it only if no present PDO carries it).
+     * A dormant group named by its serial is not retired for its old
+     * place: its device may come back elsewhere, and if it does not, its
+     * START's wait retires it (hcdDormantWait). */
     hcdDormantRetireLocked(hc, first->InstanceKey, 0);
     hcdDormantRetireSerialLocked(hc, first);
-    /* Two PDOs of one VID and PID may not answer one unique instance id:
-     * a serial a listed one already carries leaves this device on the
-     * location form, as usbhub's own check does. */
-    duplicate = 0;
-    if (first->SerialId[0] != 0 && hcdSerialTakenLocked(hc, first)) {
-        duplicate = 1;
-        for (pdo = first; pdo != NULL; pdo = pdo->Sibling) {
-            pdo->SerialId[0] = 0;
-        }
-    }
     for (pdo = first; pdo != NULL; pdo = pdo->Sibling) {
         pdo->Next = hc->DevicePdos;
         hc->DevicePdos = pdo;
         pdo->Listed = 1;
     }
     KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
-    if (duplicate) {
-        hc->SerialIdsDuplicate++;
-        XHCI_DBG_VALUE("hcd: serial already in use, location id, port",
-                       dev->Port);
-    }
+    KeReleaseSpinLock(&hcdSerialLock, serialIrql);
+    hcdSerialDuplicateCount(hc, dev, duplicate);
 
     XHCI_DBG_VALUE("hcd: device PDOs created, port/count",
                    (dev->Port << 16) | count);

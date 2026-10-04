@@ -1403,8 +1403,9 @@ static VOID hcdReadIdentity(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * made again, HCD_SERIAL_READ_TRIES in all, and only when every try failed
  * is the device FAILED - counted and traced, never silent - and named by
  * its location: a device whose read fails at one plug and not at the next
- * is the one case its devnode can change, and three fails in a row is
- * what it takes. A timeout is not retried: it left EP0's record queued
+ * changes devnode, and three fails in a row is what it takes. (The other
+ * way is a duplicate: a serial id a present PDO already carries leaves
+ * the newcomer on the location form, hcd_pdo.c.) A timeout is not retried: it left EP0's record queued
  * (dev->Ep0Stuck) and requested the controller reset, which takes the
  * device; 0 is returned and no PDO is made from it, so no location id is
  * ever given for want of a read the reset will repeat. Every other return

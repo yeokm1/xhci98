@@ -962,6 +962,9 @@ typedef struct _HCD_CONTROLLER {
     ULONG SerialIdsRefused;
     ULONG SerialReadsFailed;
     ULONG SerialIdsDuplicate;
+    /* The driver's controllers, for the machine-wide serial check
+     * (hcd_pdo.c, hcdSerialLock). */
+    struct _HCD_CONTROLLER *SerialNext;
 
     /* The kept controller sequence's state, as the miniport's extension. */
     XHCI_EXTENSION Hc;
@@ -1187,6 +1190,9 @@ PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
                                         PDEVICE_RELATIONS old);
 VOID HcdDevicePdoReleaseAll(PHCD_CONTROLLER hc);
 VOID HcdPdoRetireInit(VOID);
+VOID HcdSerialInit(VOID);
+VOID HcdSerialControllerAdd(PHCD_CONTROLLER hc);
+VOID HcdSerialControllerRemove(PHCD_CONTROLLER hc);
 ULONG HcdPdoRetire(PDEVICE_OBJECT obj);
 VOID HcdPdoReapRetired(VOID);
 NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp);

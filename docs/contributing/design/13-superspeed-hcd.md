@@ -2258,27 +2258,38 @@ device keeps the location form and `UniqueID` FALSE.
 - **Read failed** is not "no serial": a try that does not bring the string
   (a STALL, an error, a request not sent) is repeated, three tries in all,
   and only then is the device given the location form, counted
-  (`serial.readfailed`) and traced. That is the one way a device's
-  instance id can change between plugs, and it takes three failed reads in
+  (`serial.readfailed`) and traced. A device whose read fails at one plug
+  and not at the next changes devnode, and it takes three failed reads in
   a row. A **timed-out** read is not retried and gives no id at all: it
   requested the controller reset, the PDO is not created, and the device is
   enumerated afresh after the reset.
-- **Duplicates**: a serial id that a listed PDO of the same VID and PID
-  already carries - present or dormant, compared ignoring case, since the
-  registry key does not tell case apart - leaves the newcomer on the
-  location form (`serial.duplicate`). `usbhub` checks only its own hub's
-  ports; the bus checks every PDO under its root hub. A PDO already
-  unlisted (gone, its missing report pending) does not count, so a device
-  moved quickly from one port to another keeps its id.
+- **Duplicates**: a serial id that a present PDO of the same VID and PID
+  already carries, on any of this driver's controllers (a listed PDO of
+  another controller, present or dormant, also counts) - compared ignoring
+  case, since the registry key does not tell case apart - leaves the
+  newcomer on the location form (`serial.duplicate`); an instance id with
+  `UniqueID` TRUE names one devnode on the whole machine. `usbhub` checks
+  only its own hub's ports. A PDO already unlisted (gone, its missing
+  report pending) does not count, so a device moved quickly from one port
+  to another keeps its id, as under `usbhub`. This is the other way a
+  device's instance id can change between plugs: of two units sharing a
+  serial, the one enumerated second takes the location form, and which one
+  that is can differ from plug to plug.
 - **Composite functions** keep their `MI_nn` in the device id and add `&nn`
   to the serial id; the location form keeps its `nn` suffix. Both forms
   stay unique: two functions of one device differ in `MI_nn`, and two
   devices behind hubs differ in route or serial.
 - **Dormant PDOs** (Windows 98 SE and ME, task 33.1) are matched by the
-  instance id they answer: a serial id wherever the device comes back,
-  else the place. A revived PDO answers the id it had; a dormant group
-  with the newcomer's serial that it did not revive is retired in the same
-  hold that lists the new PDOs, as one at the same place is.
+  instance id they answer, before the duplicate check: first a group named
+  by the device's place (so a unit a duplicate or a failed read left on
+  the location form revives its own PDOs), then a group named by its
+  serial id, wherever the device comes back. A revived PDO answers the id
+  it had. A dormant group the newcomer did not revive is retired in the
+  hold that lists the new PDOs when it is named by the newcomer's place or
+  carries the serial id the newcomer keeps; one named by a serial id is
+  not retired for its old place, and goes at its START's wait if its
+  device does not come back. Two identical units swapped while disabled
+  are taken for each other, as before.
 - **Upgrading** from `2.0.0.0` gives every device with a usable serial one
   new devnode, at its first plug, because its instance id changed once.
 
