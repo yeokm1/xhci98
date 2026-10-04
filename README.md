@@ -61,12 +61,12 @@ Some things to know:
 
 The prerequisites per OS:
 
-- **Windows 98 SE**: Install [NUSB 3.3 or 3.6](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) if you want USB storage, UAS included. [SweetLow's stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip) also works but has no storage half: unzip, right-click the `USB2.INF` at its root then install. With neither, HID and audio devices work but storage has no driver. Reboot if requested after installing either.
-- **Windows ME**: Use [SweetLow's stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip). `TODO(28-V.1): confirm the ME prerequisites, and which mass-storage files serve xhciuas there.`
+- **Windows 98 SE**: Install [NUSB 3.3 or 3.6](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) if you want USB storage, UAS included. [SweetLow's stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip) also works but has no storage half: unzip, right-click the `USB2.INF` at its root then install. With SweetLow's stack alone, a USB stick shows Code 28 and a UAS drive Code 2, so storage still needs NUSB's storage files (below). With neither, HID and audio devices work but storage has no driver. Reboot if requested after installing either.
+- **Windows ME**: Use [SweetLow's stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip). ME uses its own storage files, not NUSB's: it copies them from its own installation files, with no prompt, the first time an ordinary USB stick is installed. Until then a UAS drive shows Code 2 (see "Known limitations/issues").
 - **Windows 2000 SP4, XP SP3 x86**: Nothing to install.
 - **Windows XP SP2 x64, Vista SP2 and 7 SP1 (x86/x64)**: Nothing to install either. On **Vista x64 and 7 x64**, driver signature enforcement has to be disabled as this driver is not signed.
 
-On Windows 98 SE and ME, UAS storage needs NUSB's mass-storage component: `USBSTOR.INF`, `USBNTMAP.INF`/`USBNTMAP.SYS` and `USBMPHLP.PDR`, which NUSB 3.3 and 3.6 install. SweetLow's stack alone has no storage half.
+On Windows 98 SE, storage of any kind, UAS included, needs NUSB's mass-storage component: `USBSTOR.INF`/`USBSTOR.SYS`, `USBNTMAP.INF`/`USBNTMAP.SYS` and `USBMPHLP.PDR`, which NUSB 3.3 and 3.6 install. SweetLow's stack alone has no storage half. On Windows ME those files are ME's own.
 
 On an xHCI-only Windows 98 SE or ME machine, **have the Windows installation CD at hand** or its contents on disk. Windows may ask for files from it while installing the driver or the USB devices plugged in afterwards.
 
@@ -122,8 +122,23 @@ readme.txt     the release notes in plain text
 
 `2.0.0.0` replaces the `1.2.0.0` driver file, which has the same name. Going back is a reinstall of the `1.2.0.0` package.
 
-- **Windows 2000 to 7**: Update Driver on the "USB 2.0 eXtensible Host Controller (xhci98)" entry, choose to pick the driver from a list rather than search, then Have Disk -> the `release-x86\` or `release-x64\` directory. Searching can reinstall the old driver from Windows' own copy instead.
-- **Windows 98 SE and ME**: `TODO(28.3): the upgrade steps over 1.2.0.0. Under NUSB, stopping 1.2.0.0 crashes the machine (NUSB's usbport.sys); whether 1.2.0.0's rename-and-reboot route is still needed is not decided.`
+On every system, update the "USB 2.0 eXtensible Host Controller (xhci98)" entry in Device Manager, and always pick the driver from a list rather than let Windows search: searching can reinstall the old driver from Windows' own copy instead.
+
+- **Windows 98 SE with NUSB**: do not use Update Driver while `1.2.0.0` is running: NUSB's `usbport.sys` crashes the machine with a blue screen as it stops the old driver. Instead:
+  1. Open an MS-DOS Prompt and type `ren C:\WINDOWS\SYSTEM32\DRIVERS\XHCI98.SYS XHCI98.SAV`.
+  2. Shut the machine down and switch it on again. The controller now shows a yellow mark.
+  3. In Device Manager open the controller, Update Driver, "Display a list of all the drivers in a specific location", Have Disk -> the `release-x86\` directory.
+  4. Pick "xHCI98 USB 3.x eXtensible Host Controller", give it the Windows 98 SE CD when it asks for `usbd.sys`, and restart when asked.
+  5. Each USB device is found once more as new hardware; let Windows install it. It may ask for the CD again.
+
+  If you already updated in place and got the blue screen, restart: `2.0.0.0` comes up on its own.
+- **Windows 98 SE with SweetLow's stack**: Update Driver, "Display a list of all the drivers in a specific location", Have Disk -> the `release-x86\` directory, pick "xHCI98 USB 3.x eXtensible Host Controller". Windows does not ask you to restart, but you must: shut down and switch on again straight away. Until you do, USB devices stop working and Windows may respond slowly. After the restart each USB device is found once more as new hardware.
+- **Windows ME**: `TODO(28-V.1): the upgrade over 1.2.0.0 has not been measured on ME; SweetLow's route above is the one expected to apply.`
+- **Windows 2000**: Driver -> Update Driver -> "Display a list of the known drivers" -> Have Disk -> the `release-x86\` directory. Windows lists three models: pick "xHCI98 USB 3.x eXtensible Host Controller", the first, not the Root Hub or the storage entry. It starts at once with no restart; at your next restart Windows may ask for one more, say Yes.
+- **Windows XP**: Driver -> Update Driver: "No, not this time", "Install from a list or specific location", "Don't search. I will choose the driver to install", Have Disk -> the package directory, "xHCI98 USB 3.x eXtensible Host Controller", Continue Anyway. A second wizard follows for "xHCI98 USB 3.x Root Hub": "No, not this time", "Install the software automatically", Continue Anyway, Finish. No restart.
+- **Windows Vista and 7**: Update Driver Software -> "Browse my computer for driver software" -> "Let me pick from a list of device drivers on my computer" -> Have Disk -> the package directory -> "xHCI98 USB 3.x eXtensible Host Controller" -> "Install this driver software anyway". Do not just type the folder into the search box: Windows answers that the best driver is already installed and keeps the old one. No restart.
+
+`TODO(cut): these steps were read on Windows 98 SE (NUSB and SweetLow), 2000, XP SP3 and 32-bit 7; ME, XP x64, Vista and 7 x64 not yet.`
 
 The `1.2.0.0` virtual-hub values left in the registry have no effect under `2.0.0.0`.
 
@@ -216,12 +231,13 @@ The `1.2.0.0` results are in its [README](https://github.com/yeokm1/xhci98/blob/
 | Limitation | Detail |
 |---|---|
 | The driver never starts selective suspend | Idle devices and hub ports are never suspended to save power. A suspend or resume a hub reports is handled. |
-| Disabling, uninstalling or upgrading under NUSB crashed `1.2.0.0` | That was a defect in NUSB's `usbport.sys`, which `2.0.0.0` no longer uses. Disable, enable, remove and rescan survive under NUSB 3.3 and SweetLow's stack in a Windows 98 SE virtual machine. `TODO(28.3): gone, carried or new.` |
+| Disabling, uninstalling or upgrading under NUSB crashed `1.2.0.0` | That was a defect in NUSB's `usbport.sys`, which `2.0.0.0` no longer uses. Disabling, enabling, removing and rescanning `2.0.0.0` survive under NUSB 3.3 and SweetLow's stack in a Windows 98 SE virtual machine. One case remains: upgrading in place over a running `1.2.0.0` under NUSB still crashes, because NUSB's `usbport.sys` stops `1.2.0.0` before `2.0.0.0` runs. Follow "Upgrading from 1.2.0.0" above. |
 | Fast, repeated plug and unplug froze Windows 98 under `1.2.0.0` | The hub churn soak that wedged `1.2.0.0` at 12 to 18 hubs ran 120 of 120 with the guest responsive in a Windows 98 SE virtual machine. `TODO(28.3): gone, carried or new.` |
 | USB storage on Windows 98 is slower than the drive | An observation, not a defect found: Windows 98 sends one command at a time. On the P14s with the MSSU10 at 64 KB, about 208 MB/s on Windows 98 against 277 MB/s on Windows 11 at the same queue depth of one. |
 | A UAS-only drive at SuperSpeed on a controller without streams | It is sent back to its USB 2.0 port and runs UAS at High Speed, or is refused if it has no USB 2.0 port. Built from the specification; no such controller has been held. |
 | Vista x64 and 7 x64 need driver signature enforcement disabled | The driver is not signed. Driver signature enforcement must be disabled at every start, or the controller sits at Code 39. |
 | No USB storage on a stock Windows 98 SE | With no NUSB installed there is no mass-storage driver at all. HID and audio still work. |
+| A UAS drive as the first USB storage device on Windows ME | On a fresh Windows ME installation whose first USB storage device is a UAS drive, the drive shows Code 2 (NTKERN.VXD device loader(s) could not load). ME has not yet copied its own `USBNTMAP.SYS` and `USBMPHLP.PDR`, which it installs only when its first ordinary USB stick is plugged in. To recover, plug in any ordinary USB stick once, then unplug the UAS drive and plug it back in. `TODO(28-V.1): the recovery is not yet measured.` |
 
 ### Untested ground
 
