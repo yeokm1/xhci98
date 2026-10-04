@@ -2514,7 +2514,8 @@ Add New Hardware wizard showed for every device (owner report).
   serial read, in the device's first language id from string descriptor
   0 (`0409h` when it STALLs or lists none) - read once per enumeration and
   kept for the device's other PDOs. A STALL, or a string with nothing to
-  show, is final; any other failure is tried twice in all; an index that
+  show, is final; any other failure - an error, or a descriptor that did
+  not arrive whole - is tried twice in all; an index that
   gave nothing is not asked again for the next function. A read that
   times out is the serial read's case: no PDO, the device left to the
   controller reset it requested. Nothing is counted; the debug trace

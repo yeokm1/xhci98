@@ -1500,6 +1500,7 @@ ULONG HcdDeviceReadText(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 {
     PUCHAR s;
     ULONG outcome;
+    ULONG answer;
     ULONG bytes;
     ULONG chars;
     ULONG index;
@@ -1536,8 +1537,6 @@ ULONG HcdDeviceReadText(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             }
             state->LangidRead = 1;
         }
-        outcome = HCD_CTL_FAILED;
-        bytes = 0;
         for (tries = 0; tries < HCD_TEXT_READ_TRIES; tries++) {
             bytes = 0;
             outcome = HcdThreadControlOutcome(hc, dev, 0x80, 6,
@@ -1547,14 +1546,23 @@ ULONG HcdDeviceReadText(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             if (dev->Ep0Stuck) {
                 return 0;
             }
-            if (outcome == HCD_CTL_DONE || outcome == HCD_CTL_STALLED) {
+            if (outcome == HCD_CTL_STALLED) {
                 break;
             }
-        }
-        if (outcome == HCD_CTL_DONE &&
-            XhciFuncText(s, bytes, flags, out, XHCI_TEXT_WCHARS, &chars) ==
-                XHCI_FUNC_OK) {
-            return 1;
+            if (outcome != HCD_CTL_DONE) {
+                continue;
+            }
+            /* A descriptor that did not arrive whole is a failed read and
+             * tried again; one with nothing to show is the device's own
+             * answer. */
+            answer = XhciFuncText(s, bytes, flags, out, XHCI_TEXT_WCHARS,
+                                  &chars);
+            if (answer == XHCI_FUNC_OK) {
+                return 1;
+            }
+            if (answer != XHCI_FUNC_MALFORMED) {
+                break;
+            }
         }
         state->Failed[index >> 5] |= 1UL << (index & 31UL);
         XHCI_DBG_VALUE("hcd: no device text from string, port/index",
