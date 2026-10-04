@@ -341,6 +341,17 @@ typedef struct _HCD_USB_DEVICE {
      * made of it - for the endpoint rules and XHCISNAP (29-A.6). */
     ULONG RateKbps;
     ULONG Plus;
+    /* Its own SuperSpeed link's rank (XHCI_SS_RANK_*, xhci_sshub.h): on a
+     * root port from the PSI rate and PORTLI at Address Device
+     * (hcd_enum.c), behind a SuperSpeed hub from that hub's extended port
+     * status (HcdHubPlace); 0 unknown, and 0 for a USB 2.0 device. And,
+     * for an SS/SSP device behind a hub that outranks its link, that hub's
+     * Slot ID and port for the Slot Context's Parent Hub Slot ID and Parent
+     * Port Number (xHCI Table 6-6) - kept apart from TtSlot/TtPort, which
+     * name a transaction translator that CLEAR_TT_BUFFER is sent to. */
+    ULONG SsLinkRank;
+    ULONG SsParentSlot;
+    ULONG SsParentPort;
     PUCHAR Bos;
     ULONG BosLength;
     XHCI_PIPE_BOS BosInfo;

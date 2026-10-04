@@ -677,6 +677,140 @@ static void test_pairing(void)
           "another tier");
 }
 
+/* A link as XhciSsHubDownstream leaves it after an extended status read. */
+static XHCI_SSHUB_LINK ss_link(ULONG laneKbps, ULONG lanes)
+{
+    XHCI_SSHUB_LINK l;
+
+    l.LaneKbps = laneKbps;
+    l.Lanes = lanes;
+    l.Kbps = laneKbps * lanes;
+    l.Plus = (lanes > 1 || laneKbps > 5000000UL) ? 1UL : 0UL;
+    return l;
+}
+
+/*
+ * Link rank (USB 3.2 7.5.4.5: Gen 2x2 > Gen 2x1 > Gen 1x2 > Gen 1x1) and
+ * xHCI Table 6-6's Parent Hub Slot ID / Parent Port Number for an SS/SSP
+ * device behind a higher-rank hub.
+ */
+static void test_parent_rank(void)
+{
+    XHCI_SSHUB_LINK l;
+    ULONG rank;
+    ULONG slot;
+    ULONG port;
+
+    /* Ranks from lane rate and count. */
+    CHECK_EQ(XhciSsLinkRank(5000000UL, 1), XHCI_SS_RANK_GEN1X1, "Gen 1x1");
+    CHECK_EQ(XhciSsLinkRank(5000000UL, 2), XHCI_SS_RANK_GEN1X2, "Gen 1x2");
+    CHECK_EQ(XhciSsLinkRank(10000000UL, 1), XHCI_SS_RANK_GEN2X1, "Gen 2x1");
+    CHECK_EQ(XhciSsLinkRank(10000000UL, 2), XHCI_SS_RANK_GEN2X2, "Gen 2x2");
+    CHECK(XhciSsLinkRank(10000000UL, 1) > XhciSsLinkRank(5000000UL, 2),
+          "Gen 2x1 outranks Gen 1x2 at the same 10 Gbit/s");
+    CHECK_EQ(XhciSsLinkRank(0, 1), XHCI_SS_RANK_UNKNOWN, "no rate");
+    CHECK_EQ(XhciSsLinkRank(5000000UL, 0), XHCI_SS_RANK_UNKNOWN, "no lanes");
+    CHECK_EQ(XhciSsLinkRank(5000000UL, 4), XHCI_SS_RANK_UNKNOWN,
+             "four lanes: USB 3.2 defines none");
+
+    /* PORTLI's RLC (19:16) is zero-based: 0 is one lane, 1 two (Table
+     * 5-31). TLC (23:20) and the Link Error Count (15:0) are not read. */
+    CHECK_EQ(XHCI_PORTLI_RLC(0x00000000UL), 0, "RLC 0");
+    CHECK_EQ(XHCI_PORTLI_RLC(0x00010000UL), 1, "RLC 1");
+    CHECK_EQ(XHCI_PORTLI_TLC(0x00100000UL), 1, "TLC 1");
+    CHECK_EQ(XhciSsRootRank(5000000UL, 0x00000000UL), XHCI_SS_RANK_GEN1X1,
+             "5 Gbit/s, RLC 0: one lane, Gen 1x1");
+    CHECK_EQ(XhciSsRootRank(10000000UL, 0x00110000UL), XHCI_SS_RANK_GEN1X2,
+             "10 Gbit/s, RLC 1: two 5 Gbit/s lanes, Gen 1x2");
+    CHECK_EQ(XhciSsRootRank(10000000UL, 0x0000FFFFUL), XHCI_SS_RANK_GEN2X1,
+             "10 Gbit/s, RLC 0, errors counted: Gen 2x1");
+    CHECK_EQ(XhciSsRootRank(20000000UL, 0x00110000UL), XHCI_SS_RANK_GEN2X2,
+             "20 Gbit/s, RLC 1: Gen 2x2");
+    CHECK_EQ(XhciSsRootRank(5000000UL, 0xFFFFFFFFUL), XHCI_SS_RANK_UNKNOWN,
+             "an all-ones read is sixteen lanes: unknown");
+    CHECK_EQ(XhciSsRootRank(0, 0), XHCI_SS_RANK_UNKNOWN, "no rate: unknown");
+
+    /* A hub without the SuperSpeedPlus capability has Gen 1x1 links. */
+    l = ss_link(0, 0);
+    l.Kbps = 0;
+    CHECK_EQ(XhciSsHubChildRank(0, &l), XHCI_SS_RANK_GEN1X1,
+             "a SuperSpeed hub's port is Gen 1x1");
+    CHECK_EQ(XhciSsHubChildRank(1, &l), XHCI_SS_RANK_UNKNOWN,
+             "an SSP hub whose extended status was not read: unknown");
+    CHECK_EQ(XhciSsHubChildRank(1, NULL), XHCI_SS_RANK_UNKNOWN, "NULL");
+
+    /* A Gen 1x1 device behind a Gen 1x2 hub: Table 6-6's own example. */
+    l = ss_link(5000000UL, 1);
+    CHECK_EQ(XhciSsHubParentOf(1, 1, XHCI_SS_RANK_GEN1X2, &l, 7, 3, &rank,
+                               &slot, &port), 1,
+             "Gen 1x1 behind Gen 1x2: parent fields");
+    CHECK_EQ(rank, XHCI_SS_RANK_GEN1X1, "device ranked Gen 1x1");
+    CHECK_EQ(slot, 7, "the hub's Slot ID");
+    CHECK_EQ(port, 3, "the hub's port");
+    /* The same behind a Gen 2x1 hub. */
+    CHECK_EQ(XhciSsHubParentOf(1, 1, XHCI_SS_RANK_GEN2X1, &l, 7, 3, &rank,
+                               &slot, &port), 1,
+             "Gen 1x1 behind Gen 2x1: parent fields");
+    CHECK(slot == 7 && port == 3, "the hub's slot and port");
+    /* Table 6-6's second example: Gen 1x2 behind Gen 2x2. */
+    l = ss_link(5000000UL, 2);
+    CHECK_EQ(XhciSsHubParentOf(1, 1, XHCI_SS_RANK_GEN2X2, &l, 9, 1, &rank,
+                               &slot, &port), 1, "Gen 1x2 behind Gen 2x2");
+    CHECK(rank == XHCI_SS_RANK_GEN1X2 && slot == 9 && port == 1,
+          "Gen 1x2, slot 9 port 1");
+    /* Gen 1x2 behind Gen 2x1 is lower-rank too, though both are 10G. */
+    CHECK_EQ(XhciSsHubParentOf(1, 1, XHCI_SS_RANK_GEN2X1, &l, 9, 1, &rank,
+                               &slot, &port), 1, "Gen 1x2 behind Gen 2x1");
+
+    /* Equal ranks: nothing isolated, both fields 0. */
+    l = ss_link(10000000UL, 1);
+    slot = 0xEE;
+    port = 0xEE;
+    CHECK_EQ(XhciSsHubParentOf(1, 1, XHCI_SS_RANK_GEN2X1, &l, 7, 3, &rank,
+                               &slot, &port), 0, "Gen 2x1 behind Gen 2x1");
+    CHECK(slot == 0 && port == 0, "both 0");
+    l = ss_link(0, 0);
+    l.Kbps = 0;
+    CHECK_EQ(XhciSsHubParentOf(1, 0, XHCI_SS_RANK_GEN1X1, &l, 7, 3, &rank,
+                               &slot, &port), 0,
+             "a Gen 1x1 device behind a Gen 1x1 SuperSpeed hub");
+    CHECK(rank == XHCI_SS_RANK_GEN1X1 && slot == 0 && port == 0,
+          "ranked Gen 1x1, both 0");
+    /* A device outranking its hub's upstream link: 0. */
+    l = ss_link(10000000UL, 2);
+    CHECK_EQ(XhciSsHubParentOf(1, 1, XHCI_SS_RANK_GEN1X1, &l, 7, 3, &rank,
+                               &slot, &port), 0,
+             "a Gen 2x2 link behind a hub on a Gen 1x1 upstream link");
+
+    /* Unknown ranks: the spec-safe default, both 0. */
+    l = ss_link(5000000UL, 1);
+    CHECK_EQ(XhciSsHubParentOf(1, 1, XHCI_SS_RANK_UNKNOWN, &l, 7, 3, &rank,
+                               &slot, &port), 0, "the hub's rank unknown");
+    CHECK(slot == 0 && port == 0, "both 0");
+    l.Kbps = 0;
+    CHECK_EQ(XhciSsHubParentOf(1, 1, XHCI_SS_RANK_GEN2X2, &l, 7, 3, &rank,
+                               &slot, &port), 0,
+             "the device's rank unknown (no extended status)");
+    CHECK(rank == XHCI_SS_RANK_UNKNOWN && slot == 0 && port == 0,
+          "unknown, both 0");
+    CHECK(!XhciSsParentNeeded(XHCI_SS_RANK_UNKNOWN, XHCI_SS_RANK_UNKNOWN),
+          "both unknown");
+
+    /* A USB 2.0 hub (a USB 3 hub's USB 2.0 half with its TT): this rule
+     * decides nothing - the TT fields are xhci_topo.c's, unchanged. */
+    l = ss_link(5000000UL, 1);
+    rank = 0xEE;
+    slot = 0xEE;
+    port = 0xEE;
+    CHECK_EQ(XhciSsHubParentOf(0, 1, XHCI_SS_RANK_GEN2X2, &l, 7, 3, &rank,
+                               &slot, &port), 0,
+             "a USB 2.0 hub: no SuperSpeed parent");
+    CHECK(rank == XHCI_SS_RANK_UNKNOWN && slot == 0 && port == 0,
+          "rank and both fields 0");
+    CHECK_EQ(XhciSsHubParentOf(1, 1, XHCI_SS_RANK_GEN2X2, &l, 0, 3, &rank,
+                               &slot, &port), 0, "no hub slot: nothing");
+}
+
 int main(void)
 {
     test_descriptor();
@@ -688,6 +822,7 @@ int main(void)
     test_ext_status();
     test_psiv();
     test_pairing();
+    test_parent_rank();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

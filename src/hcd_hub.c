@@ -125,8 +125,12 @@ VOID HcdDeviceSlotParams(PHCD_USB_DEVICE dev, ULONG withHub,
     sp->Psiv = dev->Speed;
     sp->RootHubPort = dev->Port;
     sp->ContextEntries = 1;
-    sp->ParentSlotId = dev->TtSlot;
-    sp->ParentPortNumber = dev->TtPort;
+    /* Table 6-6's two fields: a TT's for an LS/FS device behind a
+     * High-Speed hub, or a higher-rank SuperSpeed hub's for an SS/SSP
+     * device (HcdHubPlace); never both, since one device is of one kind. */
+    sp->ParentSlotId = dev->TtSlot != 0 ? dev->TtSlot : dev->SsParentSlot;
+    sp->ParentPortNumber = dev->TtSlot != 0 ? dev->TtPort
+                                            : dev->SsParentPort;
     sp->MultiTt = dev->TtMulti;
     if (withHub && dev->HubMarked) {
         sp->Hub = 1;
@@ -212,11 +216,26 @@ ULONG HcdHubPlace(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG speedClass,
     dev->Route = child.Route;
     dev->Tier = child.Tier;
     dev->Speed = psiv;
-    /* Behind a SuperSpeed hub both parent fields stay 0. Open deviation:
-     * xHCI Table 6-6 (p.409-410) wants the hub's Slot ID and port for an
-     * SS/SSP device behind a higher-rank hub (a Gen 1x1 device behind a
-     * Gen 1x2 hub); this driver does not yet know a hub's own link rank
-     * (xhci-data-structures.md sections 10.5 and 11.8). */
+    /* Behind a SuperSpeed hub: the device's link rank from the hub's
+     * extended port status (read at the port's reset, hcd_sshub.c), and
+     * xHCI Table 6-6's Parent Hub Slot ID and Parent Port Number when the
+     * hub's own upstream link (hub->Device->SsLinkRank) outranks it - a
+     * Gen 1x1 device behind a Gen 1x2 hub. Either rank unknown leaves both
+     * 0, the spec-safe default (XhciSsParentNeeded says why). Implemented,
+     * host vectors only: no SuperSpeedPlus hub is held
+     * (xhci-data-structures.md sections 10.5 and 11.8). A USB 2.0 hub
+     * decides nothing here; its TT is below. */
+    dev->SsLinkRank = 0;
+    dev->SsParentSlot = 0;
+    dev->SsParentPort = 0;
+    (VOID)XhciSsHubParentOf(hub->Usb3,
+                            hub->Device->BosInfo.HasSuperSpeedPlus,
+                            hub->Device->SsLinkRank, &p->HubSsLink,
+                            hub->SlotId, p->Number, &dev->SsLinkRank,
+                            &dev->SsParentSlot, &dev->SsParentPort);
+    XHCI_DBG_VALUE("hcd: behind hub, SS rank hub/device, parent slot/port",
+                   (hub->Device->SsLinkRank << 24) | (dev->SsLinkRank << 16) |
+                       (dev->SsParentSlot << 8) | dev->SsParentPort);
     dev->TtSlot = 0;
     dev->TtPort = 0;
     dev->TtMulti = 0;

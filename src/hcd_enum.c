@@ -581,6 +581,21 @@ static VOID hcdCountAddressed(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     if (portClass == XHCI_SPEED_SUPER && dev->Plus) {
         c->PortSpeedSuperPlus++;
     }
+    /* A root port device's own link rank, from that rate and the port's
+     * PORTLI lane count, read now while CCS = 1 as RLC needs (Table 5-31,
+     * p.385). What a SuperSpeed hub on this port is ranked by when a device
+     * is placed behind it (HcdHubPlace, xHCI Table 6-6). A device behind a
+     * hub was ranked when it was placed, and is not touched here. */
+    if (dev->Tier == 0) {
+        dev->SsLinkRank = XHCI_SS_RANK_UNKNOWN;
+        if (portClass == XHCI_SPEED_SUPER &&
+            XhciPortIsUsb3(&ext->PortMap, dev->Port)) {
+            dev->SsLinkRank = XhciSsRootRank(
+                dev->RateKbps, XhciReadOp(ext, XHCI_OP_PORTLI(dev->Port)));
+            XHCI_DBG_VALUE("hcd: root port SS link rank, port/rank",
+                           (dev->Port << 8) | dev->SsLinkRank);
+        }
+    }
 }
 
 /* Address Device with BSR = 0 for the slot the port just enabled: the EP0

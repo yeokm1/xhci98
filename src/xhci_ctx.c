@@ -218,7 +218,9 @@ ULONG XhciBuildSlotContext(volatile ULONG *context,
      * resolved half the answer. Refused rather than programmed, because either
      * half alone describes a split-transaction path the xHC cannot use: a Slot
      * ID with no port names no downstream port, and a port with no Slot ID names
-     * no hub. Hub ports are 1-based, so 0 is unambiguous for both.
+     * no hub. Hub ports are 1-based, so 0 is unambiguous for both. The same
+     * holds for the pair's second use, an SS/SSP device behind a higher-rank
+     * SuperSpeed hub (Table 6-6, p.409-410; hcd_hub.c, HcdHubPlace).
      */
     if ((params->ParentSlotId == 0) != (params->ParentPortNumber == 0)) {
         return XHCI_CTX_BAD_PARAM;

@@ -1767,16 +1767,27 @@ the controller's next start.
   Gen1 x2 device connected behind Gen2 x2 hub" - where footnote 110 makes a
   higher rank hub one whose downstream port isolates the signalling between
   its upstream and downstream ports, ranks as USB 3.2 Polling.PortMatch
-  orders them: Gen 2x2, Gen 2x1, Gen 1x2, Gen 1x1 (USB 3.2 7.5.4.5, USB 3.2 p.176).
-  Both stay 0 for a device on a root port, a High-Speed device, and the
-  highest-rank SS/SSP device the xHC supports. **This driver does not
-  implement the higher-rank case** (section 11.8): every SS/SSP device behind
-  a SuperSpeed hub gets 0 in both, which is right whenever the device's link
-  ranks with the hub's own - always on a Gen 1x1 hub - and wrong for a
-  lower-rank device behind a SuperSpeedPlus hub, untested ground (no
-  SuperSpeedPlus hub is held). Doing it needs each hub's own link rank,
-  which for a hub on a root port needs PORTLI's lane counts, read nowhere
-  today.
+  orders them: Gen 2x2, Gen 2x1, Gen 1x2, Gen 1x1 (USB 3.2 7.5.4.5, USB 3.2
+  p.176). Both stay 0 for a device on a root port, a High-Speed device, and
+  the highest-rank SS/SSP device the xHC supports. **Implemented, host vectors
+  only** (no SuperSpeedPlus hub is held; section 11.8):
+  - every SS device's own link rank is kept in its record. On a root port it
+    comes at Address Device from the PSI rate (XhciPortRate, the aggregate)
+    and PORTLI's RLC, zero-based: the lane rate is the aggregate over RLC + 1
+    (`XhciSsRootRank`). Behind a SuperSpeed hub it comes from the hub's
+    extended port status, read at the port's reset when the hub qualifies
+    (11.6); a hub with no SuperSpeedPlus capability has Gen 1x1 links
+    (`XhciSsHubChildRank`);
+  - `HcdHubPlace` fills Parent Hub Slot ID and Parent Port Number with the
+    hub's slot and port when the hub's own upstream link outranks the
+    device's (`XhciSsHubParentOf`, `XhciSsParentNeeded`). Kept apart from
+    the TT fields, which CLEAR_TT_BUFFER is sent through;
+  - when either rank is unknown - PORTLI unreadable, or an SSP hub whose
+    extended status was not read - both stay 0, the spec-safe default: 0 is
+    right on every path whose links rank alike, which every Gen 1x1 hub's
+    do, and a nonzero pair would claim an isolation that may not exist;
+  - a USB 2.0 device behind a USB 3 hub's USB 2.0 half is unchanged: its TT
+    fields are the topology graph's.
 - Max Exit Latency 0: "a Max Exit Latency value of '0' indicates to the xHC
   that no links in the path to the device are being power managed" (4.23.5.2,
   p.326; verified). That holds here because the driver enables neither U1 nor
@@ -2294,10 +2305,9 @@ the values are transcribed so a later phase starts from them.
   its companion at SuperSpeed.
 - A device behind it has the Route String and root port the topology graph
   gives (design record 02), Speed its PSIV (11.6), and Parent Hub Slot ID
-  and Port Number 0. That is right for a device whose link ranks with the
-  hub's own, and an **open deviation** for a lower-rank device behind a
-  SuperSpeedPlus hub, where xHCI Table 6-6 requires the hub's Slot ID and
-  port (section 10.5 has the rule and what implementing it needs).
+  and Port Number 0 - except a lower-rank device behind a hub whose own
+  upstream link outranks it, which gets the hub's Slot ID and port as xHCI
+  Table 6-6 requires (section 10.5; implemented, host vectors only).
 - Its two halves are two hubs of the bus. Nothing passes between them; a
   counter (`superspeed hubs: halves paired`) records that a SuperSpeed hub
   and a USB 2.0 hub of the same vendor sit at the same tier and route on a

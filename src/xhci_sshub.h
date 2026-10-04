@@ -321,6 +321,84 @@ typedef struct _XHCI_SSHUB_LINK {
 ULONG XhciSsHubDownstream(const struct _XHCI_PIPE_BOS *bos, ULONG extStatus,
                           PXHCI_SSHUB_LINK out);
 
+/* ----------------------------------------------------------------------- */
+/* Link rank and the SuperSpeed parent hub (xHCI Table 6-6)                 */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * An Enhanced SuperSpeed link's rank, in USB 3.2's order: "The port shall
+ * rank its PHY capability in the order of Gen 2x2, Gen 2x1, Gen 1x2, and
+ * Gen 1x1" (7.5.4.5, USB 3.2 p.176). Not the aggregate rate: Gen 2x1 and
+ * Gen 1x2 both carry 10 Gbit/s and Gen 2x1 ranks higher. 0 is unknown.
+ */
+#define XHCI_SS_RANK_UNKNOWN    0UL
+#define XHCI_SS_RANK_GEN1X1     1UL
+#define XHCI_SS_RANK_GEN1X2     2UL
+#define XHCI_SS_RANK_GEN2X1     3UL
+#define XHCI_SS_RANK_GEN2X2     4UL
+
+/* A lane above Gen 1's 5 Gbit/s is a Gen 2 lane. */
+#define XHCI_SS_GEN1_LANE_KBPS  5000000UL
+
+/*
+ * The rank of a link of `lanes` lanes each at `laneKbps` kbit/s: Gen 1 for
+ * a lane rate of at most 5 Gbit/s, Gen 2 above it, x1 or x2.
+ * XHCI_SS_RANK_UNKNOWN for a rate of 0 or a lane count other than 1 or 2
+ * (USB 3.2 defines no other).
+ */
+ULONG XhciSsLinkRank(ULONG laneKbps, ULONG lanes);
+
+/*
+ * A root port's link rank from its PSI rate - `aggregateKbps`, what
+ * XhciPortRate gives, the whole link's rate (xHCI Table 7-13's PSIM column,
+ * p.485) - and its PORTLI: the Rx Lane Count, bits 19:16, is zero-based,
+ * "0 to 15 represents Lane Counts of 1 to 16" (Table 5-31, p.385), so the
+ * lane rate is the aggregate over RLC + 1. An all-ones read (a window that
+ * stopped decoding) is 16 lanes, which ranks UNKNOWN.
+ */
+ULONG XhciSsRootRank(ULONG aggregateKbps, ULONG portli);
+
+/*
+ * The rank of the link between a SuperSpeed hub's port and the device on
+ * it. A hub with no SuperSpeedPlus capability (`hubSsp` 0) is a SuperSpeed
+ * hub - every SuperSpeedPlus device "shall" carry that capability (USB 3.2
+ * 9.6.2.5, p.357) - so its links are Gen 1x1. A SuperSpeedPlus hub's link
+ * is the one its extended port status named (`link`, Kbps nonzero once
+ * read, XhciSsHubDownstream); not read, it is UNKNOWN.
+ */
+ULONG XhciSsHubChildRank(ULONG hubSsp, const XHCI_SSHUB_LINK *link);
+
+/*
+ * Whether xHCI Table 6-6 (p.409-410) wants the Parent Hub Slot ID and
+ * Parent Port Number of an SS/SSP device behind a hub: the device is
+ * "connected through a higher rank hub" - "a Gen1 x1 connected behind a
+ * Gen1 x2 hub, or Gen1 x2 device connected behind Gen2 x2 hub", footnote
+ * 110's hub whose downstream port isolates the signalling between its
+ * upstream and downstream ports. `hubRank` is the hub's own upstream link,
+ * `childRank` the device's. 1 when both are known and the hub's ranks
+ * higher; 0 otherwise, which leaves both fields 0. That is the spec-safe
+ * default when either rank is unknown: 0 is right for every path whose
+ * links rank alike, which every Gen 1x1 hub's do, while a nonzero pair
+ * tells the xHC the hub isolates a link it may not; the device that would
+ * have needed the pair is left exactly as before this rule existed.
+ */
+ULONG XhciSsParentNeeded(ULONG hubRank, ULONG childRank);
+
+/*
+ * What HcdHubPlace writes for a device placed on port `hubPort` of the hub
+ * in slot `hubSlot`. Only a SuperSpeed hub (`hubUsb3`) is decided here:
+ * *childRank is the device's link rank (XhciSsHubChildRank, from `hubSsp`
+ * and `link`), and *parentSlot / *parentPort are the hub's slot and port
+ * when XhciSsParentNeeded(hubRank, *childRank), 0 otherwise. A USB 2.0 hub
+ * - including a USB 3 hub's USB 2.0 half, whose TT is xhci_topo.c's
+ * (XhciTopoTtFor) - gets 0 in all three: the TT fields are not this
+ * rule's. Returns *parentSlot != 0.
+ */
+ULONG XhciSsHubParentOf(ULONG hubUsb3, ULONG hubSsp, ULONG hubRank,
+                        const XHCI_SSHUB_LINK *link, ULONG hubSlot,
+                        ULONG hubPort, PULONG childRank, PULONG parentSlot,
+                        PULONG parentPort);
+
 /*
  * The Protocol Speed ID to write into the Slot Context of a device behind a
  * SuperSpeed hub on root port `rootPort`: for a Gen 1x1 link (link NULL or

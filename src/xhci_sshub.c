@@ -331,6 +331,83 @@ ULONG XhciSsHubDownstream(const XHCI_PIPE_BOS *bos, ULONG extStatus,
     return XHCI_SSHUB_OK;
 }
 
+/* ----------------------------------------------------------------------- */
+/* Link rank and the SuperSpeed parent hub (xHCI Table 6-6)                 */
+/* ----------------------------------------------------------------------- */
+
+/* IRQL: any. */
+ULONG XhciSsLinkRank(ULONG laneKbps, ULONG lanes)
+{
+    if (laneKbps == 0 || (lanes != 1UL && lanes != 2UL)) {
+        return XHCI_SS_RANK_UNKNOWN;
+    }
+    if (laneKbps <= XHCI_SS_GEN1_LANE_KBPS) {
+        return lanes == 1UL ? XHCI_SS_RANK_GEN1X1 : XHCI_SS_RANK_GEN1X2;
+    }
+    return lanes == 1UL ? XHCI_SS_RANK_GEN2X1 : XHCI_SS_RANK_GEN2X2;
+}
+
+/* IRQL: any. */
+ULONG XhciSsRootRank(ULONG aggregateKbps, ULONG portli)
+{
+    ULONG lanes;
+
+    lanes = XHCI_PORTLI_RLC(portli) + 1UL;
+    if (lanes != 1UL && lanes != 2UL) {
+        return XHCI_SS_RANK_UNKNOWN;
+    }
+    return XhciSsLinkRank(aggregateKbps / lanes, lanes);
+}
+
+/* IRQL: any. */
+ULONG XhciSsHubChildRank(ULONG hubSsp, const XHCI_SSHUB_LINK *link)
+{
+    if (!hubSsp) {
+        return XHCI_SS_RANK_GEN1X1;
+    }
+    if (link == NULL || link->Kbps == 0) {
+        return XHCI_SS_RANK_UNKNOWN;
+    }
+    return XhciSsLinkRank(link->LaneKbps, link->Lanes);
+}
+
+/* IRQL: any. */
+ULONG XhciSsParentNeeded(ULONG hubRank, ULONG childRank)
+{
+    return hubRank != XHCI_SS_RANK_UNKNOWN &&
+           childRank != XHCI_SS_RANK_UNKNOWN && hubRank > childRank;
+}
+
+/* IRQL: any. */
+ULONG XhciSsHubParentOf(ULONG hubUsb3, ULONG hubSsp, ULONG hubRank,
+                        const XHCI_SSHUB_LINK *link, ULONG hubSlot,
+                        ULONG hubPort, PULONG childRank, PULONG parentSlot,
+                        PULONG parentPort)
+{
+    ULONG rank;
+
+    rank = XHCI_SS_RANK_UNKNOWN;
+    if (parentSlot != NULL) {
+        *parentSlot = 0;
+    }
+    if (parentPort != NULL) {
+        *parentPort = 0;
+    }
+    if (hubUsb3) {
+        rank = XhciSsHubChildRank(hubSsp, link);
+    }
+    if (childRank != NULL) {
+        *childRank = rank;
+    }
+    if (!hubUsb3 || !XhciSsParentNeeded(hubRank, rank) || hubSlot == 0 ||
+        hubPort == 0 || parentSlot == NULL || parentPort == NULL) {
+        return 0;
+    }
+    *parentSlot = hubSlot;
+    *parentPort = hubPort;
+    return 1;
+}
+
 /* The SuperSpeedPlus ID at exactly `kbps` among the root port protocol's
  * named IDs, or 0. */
 static ULONG xhciSsHubPsivAt(const XHCI_PORT_MAP *map, ULONG rootPort,
