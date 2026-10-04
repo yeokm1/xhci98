@@ -899,6 +899,28 @@ static void test_revive(void)
     CHECK_EQ(XhciFuncReviveBySerial("S1", ""), 0, "no serial now");
     CHECK_EQ(XhciFuncReviveBySerial("", "S1"), 0, "a location group");
     CHECK_EQ(XhciFuncReviveBySerial(NULL, "S1"), 0, "NULL");
+
+    /* Retired for a newcomer's place: the same key under the same parent.
+     * Keys are (route << 8) | root port; parents are a hub PDO's serial,
+     * 0 for the root hub. */
+    CHECK_EQ(XhciFuncRetireByPlace("", 0x101, 7, 0x101, 7), 1,
+             "same hub, same port: the place's group");
+    /* A serial-less hub X replaced by hub Y at root port 1: X goes, and
+     * its children with it (the cascade below the retire). */
+    CHECK_EQ(XhciFuncRetireByPlace("", 0x001, 0, 0x001, 0), 1,
+             "a root port's group, another device there now");
+    /* Hub A moved to root port 2 and revived by its serial; dormant C at
+     * A's port 1 (0x101 under A) is not retired by D at B's port 1 (0x101
+     * under B) on root port 1. */
+    CHECK_EQ(XhciFuncRetireByPlace("", 0x101, 7, 0x101, 9), 0,
+             "the same key under another hub");
+    CHECK_EQ(XhciFuncRetireByPlace("", 0x101, 7, 0x101, 0), 0,
+             "the same key, one parent the root hub");
+    CHECK_EQ(XhciFuncRetireByPlace("", 0x201, 7, 0x101, 7), 0,
+             "another port of the same hub");
+    CHECK_EQ(XhciFuncRetireByPlace("S1", 0x101, 7, 0x101, 7), 0,
+             "a serial-named group is never its place's");
+    CHECK_EQ(XhciFuncRetireByPlace(NULL, 0x101, 7, 0x101, 7), 0, "NULL");
 }
 
 /* Device text (task 33.6): the indexes a PDO is named from, in order. */
