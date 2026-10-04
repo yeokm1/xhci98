@@ -171,7 +171,7 @@ A value outside `10`-`4000` is replaced by `4000`, not rounded to the nearest li
 
 `160` is the value Linux uses, and every install path writes it. On my P14s with the MSSU10 over UAS (Windows 98 SE, one command at a time), `500`, the value `1.2.0.0` shipped, gave about 181 MB/s at 8 MB transfers, `160` gave 211 MB/s write and 221 MB/s read, and `40` added only 1 to 3% more.
 
-Feel free to tune it. Raise it towards `4000` (or delete it) if you get audio stutter or instability under load. `TODO(bench): Full-Speed audio playback while a drive is read at full speed, at 160.`
+Feel free to tune it. Raise it towards `4000` (or delete it) if you get audio stutter or instability under load. At `160`, Full-Speed audio played without stutter on real hardware under Windows 98 SE while a drive was read at full speed.
 
 ### Forcing Bulk-Only instead of UAS
 
@@ -185,44 +185,44 @@ It is read each time a device enumerates, so unplug and replug the drive after c
 
 ## What is tested, and what is not
 
-Windows 98 SE and Windows 2000 SP4 are the primary targets, and both are validated in QEMU virtual machines. Windows 98 SE on real hardware is the bench session below. Windows 2000 has never run on real hardware. The other targets, 32-bit Windows 7 included, are virtual machines only.
+Windows 98 SE and Windows 2000 SP4 are the primary targets, and both are validated in QEMU virtual machines. Windows 98 SE is also validated on real hardware, below. Windows 2000 has never run on real hardware. The other targets, 32-bit Windows 7 included, are virtual machines only.
 
-`TODO(bench): the combined bench session before the cut - 28-E.1, 29-E.1, 30-E.1 and 31-E.1 - on the E460 and the second Windows 98 SE machine, both under Windows 98 SE.`
+Windows 98 SE was validated on real hardware in one bench session before the release, on the ThinkPad E460 and the ThinkPad P14s Gen 1: install, mouse, keyboard, storage, Ethernet, and audio played and heard at a root port and behind a hub; High-Speed hubs, single- and multi-TT, with Low- and Full-Speed devices behind them, and a Full-Speed hub behind a High-Speed hub; a Low-Speed mouse polled every 8 ms; SuperSpeed storage on a root port; a SuperSpeed hub; and UAS at SuperSpeed and High Speed, with forced Bulk-Only. Windows 7 was not tested on real hardware for `2.0.0.0`.
 
 | Target | 2.0.0.0 state |
 |---|---|
-| Windows 98 SE | Virtual machines, under NUSB 3.3 and under SweetLow's stack: install, mouse, keyboard, storage with a verified file compare, a composite audio device split and played to its end (unheard, as the guest has no audio out), the ASIX Ethernet adapter (passed through), the Advanced and Power tabs, and disable, enable, remove and rescan in Device Manager. Hubs behind QEMU's Full-Speed hub to five tiers, 25 plug cycles per device class, and a 120-hub churn soak with the guest responsive. A stock install with no USB 2.0 stack: HID and audio bound, storage with no driver. SuperSpeed storage: `TODO(29-V.1)`. UAS at SuperSpeed and High Speed: `TODO(31-V.1)`. Real hardware: the P14s UAS run above (informal), and `TODO(bench)`. |
-| Windows 2000 SP4 | Virtual machines only: the same device, hub and Device Manager rows as Windows 98 SE, under Driver Verifier, plus an SMP guest, installed there over a 1.x miniport. SuperSpeed storage: `TODO(29-V.1)`. UAS at SuperSpeed and High Speed: `TODO(31-V.1)`. UAS and forced Bulk-Only on the ASMedia bridge passed through: `TODO(31-V.2)`. SuperSpeed hubs: `TODO(30): no virtual machine models one; the Phase 30 decision on a Windows 2000 vehicle.` Never run on real hardware. |
+| Windows 98 SE | Virtual machines, under NUSB 3.3 and under SweetLow's stack: install, mouse, keyboard, storage with a verified file compare, a composite audio device split and played to its end (unheard, as the guest has no audio out), the ASIX Ethernet adapter (passed through), the Advanced and Power tabs, and disable, enable, remove and rescan in Device Manager. Hubs behind QEMU's Full-Speed hub to five tiers, 25 plug cycles per device class, and a 120-hub churn soak with the guest responsive. A stock install with no USB 2.0 stack: HID and audio bound, storage with no driver. SuperSpeed storage, and UAS at SuperSpeed (16 streams) and at High Speed, each with a verified round trip. UAS and forced Bulk-Only on the ASMedia bridge passed through. Real hardware: the bench session above, on the E460 and the P14s Gen 1. |
+| Windows 2000 SP4 | Virtual machines only: the same device, hub and Device Manager rows as Windows 98 SE, under Driver Verifier, plus an SMP guest, installed there over a 1.x miniport. SuperSpeed storage, and UAS at SuperSpeed and High Speed. UAS, forced Bulk-Only and the switch between them on the ASMedia bridge passed through. SuperSpeed hubs: `TODO(30): no virtual machine models one; the Phase 30 decision on a Windows 2000 vehicle.` Never run on real hardware. |
 | Windows ME | `TODO(28-V.1)` |
-| 32-bit Windows XP | `TODO(28-V.1)` |
-| Windows XP x64 | The amd64 build installed with the mouse and storage working on the `qemu` build (Phase 27). `TODO(28-V.1)` for the full leg. |
-| Windows Vista SP2 and Windows 7 SP1, 32-bit and x64 | `TODO(28-V.1)`. On Vista x64 and 7 x64, driver signature enforcement has to be disabled as this driver is not signed. |
+| 32-bit Windows XP | Virtual machines only: install, HID, storage with a verified file compare, unplug and replug, a hub with devices behind it, composite audio bound, the root hub's and the controller's disable and enable, shutdown; SuperSpeed storage, and UAS at SuperSpeed and High Speed. The soak: `TODO(28-V.1)` |
+| Windows XP x64 | Virtual machines only: the same as 32-bit XP, with the 64-bit `xhciuas.sys` at SuperSpeed and High Speed. The soak: `TODO(28-V.1)` |
+| Windows Vista SP2 and Windows 7 SP1, 32-bit and x64 | Virtual machines only: the same, at four virtual processors, and on Windows 7 five controller disable and enable cycles. The soak: `TODO(28-V.1)`. On Vista x64 and 7 x64, driver signature enforcement has to be disabled as this driver is not signed. |
 | Every target, from the release package | `TODO(32.3): the ten install legs read from the release asset, each with SuperSpeed storage and UAS at SuperSpeed and High Speed.` |
 
 | Machine | Controller | 2.0.0.0 result | Tested by |
 |---|---|---|---|
-| 2016 ThinkPad E460 | Intel Skylake, Sunrise Point-LP (100-series) PCH. xHCI 1.0. | `TODO(bench)` | Me |
-| 2020 ThinkPad P14s Gen 1 | Intel Comet Lake PCH-LP (400-series). xHCI 1.1. | UAS at SuperSpeed on Windows 98 SE with NUSB (informal, above). `TODO(bench)` | Me |
+| 2016 ThinkPad E460 | Intel Skylake, Sunrise Point-LP (100-series) PCH. xHCI 1.0. | Works on Windows 98 SE: the bench session above. Windows 7 not tested on it for `2.0.0.0`. | Me |
+| 2020 ThinkPad P14s Gen 1 | Intel Comet Lake PCH-LP (400-series). xHCI 1.1. | Works on Windows 98 SE: the bench session above, and UAS at SuperSpeed with NUSB (throughput above). | Me |
 | Omores' Intel and AMD desktops | H110, B360, B550, X570, X670 | `TODO(cut): no 2.0.0.0 report yet.` | [Omores](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) (1.x) |
 
 The devices, each characterised in [test-equipment.md](docs/contributing/test-equipment.md):
 
 | Device | VID:PID | Speed | 2.0.0.0 result |
 |---|---|---|---|
-| Terminus 7-port hub, multi-TT | `1A40:0201` | High | `TODO(bench)` |
-| Terminus 4-port hub, single-TT | `1A40:0101` | High | `TODO(bench)` |
-| Genesys 7-port hub (two cascaded chips), single-TT | `05E3:0608` | High | `TODO(bench)` |
-| Genesys USB 3.0 hub | `05E3:0610`, `05E3:0612` | SuperSpeed and High | `TODO(bench): 30-E.1, a SuperSpeed drive behind its SuperSpeed half and a High-Speed device behind the other.` |
-| A Full-Speed hub behind a High-Speed hub | | Full | `TODO(bench): the Full-Speed hub clause of 28-E.1, a USB 2.0 hub held at Full Speed by an ADuM full/low-speed isolator in front of it.` |
-| Logitech USB Optical Mouse | `046D:C077` | Low | `TODO(bench): at a root port and behind a hub, polled every 8 ms.` |
-| Microsoft Wired Keyboard 600 (composite) | `045E:0750` | Low | `TODO(bench)` |
-| SanDisk U3 Titanium flash drive | `0781:5408` | High | `TODO(bench)` |
-| MSSU10-128GSR flash drive | `090C:2320` | SuperSpeed, UAS | UAS at SuperSpeed on the P14s, Windows 98 SE with NUSB (informal, above). `TODO(bench): 29-E.1 and 31-E.1, and Bulk-Only behind a USB 2.0 hub.` |
-| SanDisk 3.2Gen1 flash drive | `0781:55AB` | SuperSpeed, Bulk-Only | `TODO(bench): 29-E.1` |
-| StoreJet Transcend USB-to-SATA bridge (ASMedia) | `174C:5106` | SuperSpeed, UAS and Bulk-Only | `TODO(bench): 31-E.1, UAS at SuperSpeed and at High Speed, and forced Bulk-Only.` |
-| ASIX AX88772A USB Ethernet | `0B95:7720` | High | Installs and starts with ASIX's own drivers on Windows 98 SE and 2000, passed through to a virtual machine. `TODO(bench)` on real hardware. |
-| Sound Blaster Play! 2 (UAC 1.0 composite) | `041E:323D` | Full | `TODO(bench): played and heard at a root port and behind a hub.` |
-| C-Media USB Audio Device (UAC 1.0 composite) | `0D8C:0014` | Full | Split into its audio and HID functions and played (unheard) on Windows 98 SE and 2000, passed through to a virtual machine. `TODO(bench)` on real hardware. |
+| Terminus 7-port hub, multi-TT | `1A40:0201` | High | Works on Windows 98 SE on real hardware, with Low- and Full-Speed devices behind it. |
+| Terminus 4-port hub, single-TT | `1A40:0101` | High | Works on Windows 98 SE on real hardware, with Low- and Full-Speed devices behind it. |
+| Genesys 7-port hub (two cascaded chips), single-TT | `05E3:0608` | High | Works on Windows 98 SE on real hardware, with Low- and Full-Speed devices behind it. |
+| Genesys USB 3.0 hub | `05E3:0610`, `05E3:0612` | SuperSpeed and High | Works on Windows 98 SE on real hardware: a SuperSpeed drive behind its SuperSpeed half and a High-Speed device behind its USB 2.0 half, plugged, unplugged and plugged in again. |
+| A Full-Speed hub behind a High-Speed hub | | Full | Works on Windows 98 SE on real hardware: a USB 2.0 hub held at Full Speed by an ADuM full/low-speed isolator in front of it, behind a High-Speed hub, with devices behind it. |
+| Logitech USB Optical Mouse | `046D:C077` | Low | Works on Windows 98 SE on real hardware, at a root port and behind a hub, polled every 8 ms. |
+| Microsoft Wired Keyboard 600 (composite) | `045E:0750` | Low | Works on Windows 98 SE on real hardware. |
+| SanDisk U3 Titanium flash drive | `0781:5408` | High | Works on Windows 98 SE on real hardware, with a verified round trip. |
+| MSSU10-128GSR flash drive | `090C:2320` | SuperSpeed, UAS | Works on Windows 98 SE on real hardware: UAS at SuperSpeed (throughput above), forced Bulk-Only at SuperSpeed, and Bulk-Only behind a USB 2.0 hub, which is all it offers there. |
+| SanDisk 3.2Gen1 flash drive | `0781:55AB` | SuperSpeed, Bulk-Only | Works on Windows 98 SE on real hardware at SuperSpeed, confirmed by `XHCISNAP`'s slot speed, with round trips and throughput against the same drive behind a USB 2.0 hub. |
+| StoreJet Transcend USB-to-SATA bridge (ASMedia) | `174C:5106` | SuperSpeed, UAS and Bulk-Only | Works on Windows 98 SE on real hardware: UAS at SuperSpeed and, behind a USB 2.0 hub, at High Speed, and forced Bulk-Only at SuperSpeed, each with a round trip. |
+| ASIX AX88772A USB Ethernet | `0B95:7720` | High | Installs and starts with ASIX's own drivers on Windows 98 SE and 2000, passed through to a virtual machine, and works on Windows 98 SE on real hardware. |
+| Sound Blaster Play! 2 (UAC 1.0 composite) | `041E:323D` | Full | Works on Windows 98 SE on real hardware: played and heard at a root port and behind a hub. |
+| C-Media USB Audio Device (UAC 1.0 composite) | `0D8C:0014` | Full | Split into its audio and HID functions and played (unheard) on Windows 98 SE and 2000, passed through to a virtual machine, and played and heard on Windows 98 SE on real hardware. |
 
 The `1.2.0.0` results are in its [README](https://github.com/yeokm1/xhci98/blob/1.2.0.0/README.md) and [release notes](https://github.com/yeokm1/xhci98/blob/1.2.0.0/docs/using/release-notes.md).
 
@@ -244,8 +244,8 @@ The `1.2.0.0` results are in its [README](https://github.com/yeokm1/xhci98/blob/
 | Area | State |
 |---|---|
 | SuperSpeed isochronous transfers | Built from the specification. No SuperSpeed isochronous device has been held and QEMU models none. |
-| SuperSpeedPlus (USB 3.1 Gen 2, USB 3.2 Gen 1x2 and Gen 2x2) | Accepted at its trained rate, built from the specification. `TODO(29-E.2): whether a Gen 2 link was read on the P14s; every mode not read stays untested.` |
-| Standby and resume | The power handlers have not run: no test guest sleeps. `TODO(bench)` |
+| SuperSpeedPlus (USB 3.1 Gen 2, USB 3.2 Gen 1x2 and Gen 2x2) | Accepted at its trained rate, built from the specification. Not read on any hardware: no Gen 2 device has been tested, so every mode is untested. |
+| Standby and resume | The power handlers have not run: no test machine has been put into standby or hibernation with this driver. |
 
 ## Toolchain and building
 

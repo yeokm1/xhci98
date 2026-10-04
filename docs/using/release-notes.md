@@ -1,9 +1,8 @@
 # xhci98 - Release Notes
 
 This file describes package version `2.0.0.0`, the eighth release and the
-first of the host controller driver (`DriverVer` `TODO(32.3)`). It is a draft
-until the cut: every `TODO(...)` below is a reading still to be taken, and
-none of them is a claim. Where this file and
+first of the host controller driver (`DriverVer` `10/04/2026,2.0.0.0`).
+Where this file and
 `docs/contributing/roadmap-hcd.md`, `docs/contributing/build-and-test.md` or
 `xhciqual/README.md` disagree, the other document wins and this one is the
 copy to fix.
@@ -72,8 +71,9 @@ x64, do not refuse unsigned drivers.
   project tried, so the driver has never run on Windows 2000 on real silicon.
   Windows ME, both Windows XP builds, Windows Vista and Windows 7 are
   supported in virtual machines only for `2.0.0.0`. Windows 98 SE is the one
-  target read on real hardware, at the bench session before the cut
-  (`TODO(bench)`). "Targets and their standing" says what each one rests on.
+  target read on real hardware, at a bench session before the release, on a
+  ThinkPad E460 and a ThinkPad P14s Gen 1. "Targets and their standing" says
+  what each one rests on.
 - It is not a mass-storage driver for Windows 98 SE. Storage on Windows 98
   SE, Bulk-Only and UAS alike, needs NUSB's mass-storage component; see
   "Windows 98 SE and ME: the stock install, and storage".
@@ -99,8 +99,8 @@ install legs again from the release asset itself (`TODO(32.3)`).
 
 | Target | Standing | What it rests on |
 |---|---|---|
-| Windows 98 SE | Primary | Virtual machines, under NUSB 3.3 and under SweetLow's stack: the install, mouse, keyboard, storage with a verified file compare, a composite audio device split into its functions and played to its end (unheard: the guest has no audio out), the ASIX Ethernet adapter passed through, the controller's Advanced tab and the root hub's Power tab, and disable, enable, remove and rescan. Hubs behind QEMU's Full-Speed hub to five tiers, 25 plug cycles per device class, and a 120-hub churn with the guest responsive. A stock install with no USB 2.0 stack: the controller, hubs, a HID mouse and a composite audio device work (next section). SuperSpeed storage and UAS at SuperSpeed (16 streams) and at High Speed, each with a verified round trip, on the integration build. UAS and forced Bulk-Only on a passed-through dual-transport bridge: `TODO(31-V.2)`. Real hardware: `TODO(bench)`, on the ThinkPad E460 and a second Windows 98 SE machine |
-| Windows 2000 SP4 | Primary, virtual machines only | The same device, hub and Device Manager rows as Windows 98 SE, under Driver Verifier, plus a multiprocessor guest. SuperSpeed storage, and UAS at SuperSpeed and at High Speed, on the integration build. UAS, forced Bulk-Only and the switch between them on a passed-through dual-transport bridge: `TODO(31-V.2)`. SuperSpeed hubs: no virtual machine models one, `TODO(30)`. Never run on real hardware |
+| Windows 98 SE | Primary | Virtual machines, under NUSB 3.3 and under SweetLow's stack: the install, mouse, keyboard, storage with a verified file compare, a composite audio device split into its functions and played to its end (unheard: the guest has no audio out), the ASIX Ethernet adapter passed through, the controller's Advanced tab and the root hub's Power tab, and disable, enable, remove and rescan. Hubs behind QEMU's Full-Speed hub to five tiers, 25 plug cycles per device class, and a 120-hub churn with the guest responsive. A stock install with no USB 2.0 stack: the controller, hubs, a HID mouse and a composite audio device work (next section). SuperSpeed storage and UAS at SuperSpeed (16 streams) and at High Speed, each with a verified round trip, on the integration build. UAS and forced Bulk-Only on a passed-through dual-transport bridge, each with a verified round trip. Real hardware, on a ThinkPad E460 and a ThinkPad P14s Gen 1: the install, HID, storage, the ASIX Ethernet adapter, and a Full-Speed audio device played and heard at a root port and behind a hub; High-Speed hubs, single- and multi-TT, with Low- and Full-Speed devices behind them, and a Full-Speed hub behind a High-Speed hub (a USB 2.0 hub held at Full Speed by a full/low-speed isolator); a Low-Speed mouse polled every 8 ms at a root port and behind a hub; two SuperSpeed drives on a root port, the link read as SuperSpeed in `XHCISNAP`'s slot table, with round trips and throughput against the same drive behind a USB 2.0 hub; a SuperSpeed hub with a SuperSpeed drive behind its SuperSpeed half and a High-Speed device behind its USB 2.0 half, plugged, unplugged and plugged in again; and UAS on a dual-transport bridge at SuperSpeed and, behind a USB 2.0 hub, at High Speed, UAS on a UAS flash drive at SuperSpeed with Bulk-Only behind a USB 2.0 hub, and the forced-Bulk-Only value on both at SuperSpeed, each with a round trip and throughput against Bulk-Only |
+| Windows 2000 SP4 | Primary, virtual machines only | The same device, hub and Device Manager rows as Windows 98 SE, under Driver Verifier, plus a multiprocessor guest. SuperSpeed storage, and UAS at SuperSpeed and at High Speed, on the integration build. UAS, forced Bulk-Only and the switch between them on a passed-through dual-transport bridge, each with a verified round trip. SuperSpeed hubs: no virtual machine models one, `TODO(30)`. Never run on real hardware |
 | Windows ME | Virtual machines only | `TODO(28-V.1)`. Bulk-Only storage works on Windows ME's own mass-storage files (next section); UAS on Windows ME: `TODO(ME)` |
 | 32-bit Windows XP SP3 | Virtual machines only | On the integration build: install, HID, storage with a verified file compare, unplug and replug, a hub with devices behind it, composite audio bound, the root hub's and the controller's disable and enable, shutdown; SuperSpeed storage, and UAS at SuperSpeed and at High Speed. The soak: `TODO(28-V.1)` |
 | Windows XP x64 SP2 | Virtual machines only; the 64-bit drivers | The same clauses as 32-bit XP, with the 64-bit `xhciuas.sys` at SuperSpeed and at High Speed. The soak: `TODO(28-V.1)` |
@@ -280,8 +280,10 @@ Disk, and point it at the package directory.
   Windows tools on these systems show a SuperSpeed device as High Speed at
   most: the interface they read predates SuperSpeed. That display says
   nothing about the real link. `XHCISNAP`'s report shows the speed the driver
-  decoded from the port and the speed it gave the device's slot
-  (`TODO(xhcisnap)`: the slot-speed field's name in the report).
+  decoded from the port and the speed it gave the device's slot: in the
+  report's slot table, `PSIV` is the Speed field of the controller's own Slot
+  Context for the device and `speed` is that value decoded, for example
+  `SuperSpeed, 5 Gbit/s, Gen 1x1`.
 - **Throughput, for scale.** On a ThinkPad P14s Gen 1 under Windows 98 SE, an
   MSSU10 flash drive under the UAS driver at SuperSpeed read about 198 to
   224 MB/s and wrote about 205 to 217 MB/s from 512 KB transfers up (ATTO
@@ -331,9 +333,10 @@ and 221 MB/s read at `160`; `40` added only 1 to 3% more for up to four times
 the interrupt rate. A Full-Speed audio stream ran at `160` in a Windows 2000
 virtual machine with no missed-service or packet error, which shows the value
 reaches the controller and the stream runs, not what it costs audio on real
-hardware. Full-Speed audio while a drive is read at full speed, at `160`, on
-real hardware: `TODO(bench)`. If audio stutters under storage load, raise
-the value towards `4000` or delete it.
+hardware. On real hardware under Windows 98 SE, Full-Speed audio played
+without stutter at `160` while a drive was read at full speed. If audio
+stutters under storage load on your machine, raise the value towards `4000`
+or delete it.
 
 ### XhciForceBulkOnly: Bulk-Only instead of UAS
 
@@ -434,7 +437,7 @@ Each was measured, in a virtual machine unless it names a physical machine.
 - **Windows 98 SE in a virtual machine cannot play USB audio** through
   Windows 98's own `USBAUDIO.VXD`; that is QEMU's emulated device and the
   VxD, through this driver and through a UHCI controller alike. On real
-  hardware: `TODO(bench)`, audio played and heard at a root port and behind a
+  hardware it plays: audio was played and heard at a root port and behind a
   hub.
 - **Windows 98 SE: a device at a location the system has not seen before
   raises the Add New Hardware Wizard, and holds that port until it is
@@ -460,8 +463,8 @@ re-measured, or answered by the design, under `2.0.0.0`:
 | Windows 7 (32-bit, on a ThinkPad E460): disabling the controller hung | Gone under `2.0.0.0`. It belonged to the miniport under Microsoft's `usbport.sys`; under `2.0.0.0` it did not occur in five disable and enable cycles each on Windows 7 x86 and x64 |
 | Windows 2000: a USB audio device unplugged during playback was never fully removed | Gone: the removal arrived within about a second, 7 times out of 7 |
 | The controller never went to sleep | The driver idles nothing it is not asked to; see the selective-suspend entry in "Known limitations" |
-| Every root-port device reported to Windows as High Speed, and its consequences: root-port polling in 1, 2 and 4 ms bands, a Full-Speed audio device on a root port silent from Windows XP on, a USB 1.1 hub on a root port crashing Vista and 7, and the Advanced tab's bandwidth figures | The cause is gone: there is no `usbport.sys` to report to, and every device is given its true speed, read on every device row of the virtual-machine matrix on both primary targets. A Low-Speed mouse polled every 8 ms at a root port and behind a hub: `TODO(bench)`. A Full-Speed hub on Vista and 7, and Full-Speed audio on a root port from Windows XP on: `TODO(28-V.1)` |
-| Windows 98 SE: USB audio could stutter while a drive was read at full speed | `TODO(bench)`, at the new interrupt moderation value `160` |
+| Every root-port device reported to Windows as High Speed, and its consequences: root-port polling in 1, 2 and 4 ms bands, a Full-Speed audio device on a root port silent from Windows XP on, a USB 1.1 hub on a root port crashing Vista and 7, and the Advanced tab's bandwidth figures | The cause is gone: there is no `usbport.sys` to report to, and every device is given its true speed, read on every device row of the virtual-machine matrix on both primary targets. A Low-Speed mouse is polled every 8 ms at a root port and behind a hub, on real hardware under Windows 98 SE. A Full-Speed hub on Vista and 7, and Full-Speed audio on a root port from Windows XP on: `TODO(28-V.1)` |
+| Windows 98 SE: USB audio could stutter while a drive was read at full speed | Not seen under `2.0.0.0`: on real hardware under Windows 98 SE, Full-Speed audio played without stutter at the new interrupt moderation value `160` while a drive was read at full speed |
 | Windows 2000: a newer package over an older one was refused; disabling the controller with an audio device attached asked for a restart | `TODO(upgrade)` and `TODO(28.3)` |
 | Windows 98: a driver that failed while starting the controller stopped the machine with a protection error | `TODO(28.3)`: not re-measured |
 | On a controller without Force Save Context, a wake from standby rebuilt the bus | Untested: the power handlers have not run |
@@ -475,11 +478,11 @@ information.
 | Area | State |
 |---|---|
 | SuperSpeed isochronous transfers | Built from the specification against host tests. No SuperSpeed isochronous device has been held and QEMU models none |
-| SuperSpeedPlus links, by mode | Accepted at the trained rate, built from the specification against host tests. Each mode is untested until read: Gen 2x1 (10 Gbit/s on one lane), Gen 1x2 (10 Gbit/s on two lanes, the same rate as Gen 2x1 and a different mode), and Gen 2x2 (20 Gbit/s). `TODO(29-E.2)`: whether a Gen 2x1 link was read at the bench; no 20 Gbit/s port is held |
+| SuperSpeedPlus links, by mode | Accepted at the trained rate, built from the specification against host tests. Each mode is untested: Gen 2x1 (10 Gbit/s on one lane), Gen 1x2 (10 Gbit/s on two lanes, the same rate as Gen 2x1 and a different mode), and Gen 2x2 (20 Gbit/s). No Gen 2 device was read on any hardware; no 20 Gbit/s port is held |
 | SuperSpeedPlus isochronous transfers | Built from the specification against host tests; no vehicle |
 | SuperSpeedPlus hubs | Built from the specification against host tests; no vehicle |
-| SuperSpeed hubs | `TODO(bench)`: untested until the bench reads one; no virtual machine models one. On Windows 2000, which has no bench: `TODO(30)` |
-| High-Speed hubs, single- and multi-TT, and Full and Low Speed devices behind them | `TODO(bench)`. Virtual machines model only a Full-Speed hub; the High-Speed paths rest on host tests until the bench |
+| SuperSpeed hubs, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only; no virtual machine models one. On Windows 2000, which has no bench: `TODO(30)` |
+| High-Speed hubs, single- and multi-TT, and Full and Low Speed devices behind them, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only. Virtual machines model only a Full-Speed hub, so on every other target the High-Speed paths rest on host tests |
 | A UAS-only device at SuperSpeed on a controller that cannot stream | Built from the specification against host tests; no such controller held |
 | Standby and hibernation | The power handlers have not run: no test machine sleeps |
 

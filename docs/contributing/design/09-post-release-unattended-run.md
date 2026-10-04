@@ -793,12 +793,12 @@ A SuperSpeed row needs three things the harness does not have today:
 **The witness.** In this run the SuperSpeed witness is those two counters,
 because section 2.3 keeps `XHCISNAP` out of the run. The hand run's witness is
 `XHCISNAP`'s report: the decoded port speed and the slot-speed field
-`XHCISNAP` gains for task 32.2 (`docs/using/release-acceptance-test.md`, 8.8;
-`TODO(xhcisnap)`: the field's name). The two are the same fact read through
-two routes - the counters from the debug console of the `qemu` build, the
-report through the door - so the run and the hand acceptance can be compared
-row for row. Device Manager is a witness for neither (design record 13
-section 8.4).
+`XHCISNAP` gained for task 32.2, the slot table's `PSIV` and `speed` columns
+(`a60f6e5`; `docs/using/release-acceptance-test.md`, 8.8). The two are the
+same fact read through two routes - the counters from the debug console of
+the `qemu` build, the report through the door - so the run and the hand
+acceptance can be compared row for row. Device Manager is a witness for
+neither (design record 13 section 8.4).
 
 Like section 4.3's storage row, neither SuperSpeed row round-trips a file;
 29-V.1 and 31-V.1 did, by hand, and task 32.3's ten install legs read a round

@@ -299,9 +299,15 @@ and 28-V.1's legs on the integration build); UAS at SuperSpeed and at High
 Speed with a round trip and no restart (31-V.1, and the Windows 98 SE storage
 readings of Phase 31); SuperSpeed storage (29-V.1). The Windows 98 SE storage
 prerequisite and the "Disk drive" step are the SweetLow-only reading of
-Phase 28. On real hardware: `TODO(bench)`, the combined bench session's
-28-E.1, 29-E.1, 30-E.1 and 31-E.1. The Low-Speed clause (5.1) has no
-virtual-machine vehicle and rests on the bench.
+Phase 28. On real hardware, every clause of this step was observed on
+Windows 98 SE on a ThinkPad E460 and a ThinkPad P14s Gen 1, at the bench
+session before the release (roadmap-hcd 28-E.1, 29-E.1, 30-E.1 and 31-E.1):
+High-Speed hubs, single- and multi-TT, with Low- and Full-Speed devices
+behind them and a Full-Speed hub behind a High-Speed one, a Low-Speed mouse
+polled every 8 ms at a root port and behind a hub, audio played and heard at
+a root port and behind a hub, SuperSpeed storage, a SuperSpeed hub, and UAS
+at SuperSpeed and High Speed with forced Bulk-Only. The Low-Speed clause
+(5.1) has no virtual-machine vehicle and rests on that bench reading.
 
 ### Step 6. Reboot with devices attached
 
@@ -426,7 +432,7 @@ a 32-bit program, runs under WOW64 against the 64-bit driver; `XHCISNAP
 | 8.5 | Read that file's header | The tool's version and build stamp, the driver's counters, and at level 2 the driver's own note ring below them. A report whose version is not this release's is a report from the wrong build |
 | 8.6 | `XHCISNAP -disable` | It reports the channel off again. A machine left with the channel on is a machine whose diagnostic state anyone using it can read |
 | 8.7 | Record only: look at the driver's own key for `XhciLogVerbosity`, `XhciLogDebugView`, `XhciImodInterval250ns` and `XhciForceBulkOnly`, then read the 8.4 report's "registry values" block | Write down whether each value is there and what its data is. On a fresh install `XhciImodInterval250ns` holds `160`, written by the INF, and the report shows it read and in force; the other three are absent unless set. `TODO(32.3)`: the report's exact lines for the value read and the interval in force |
-| 8.8 | The SuperSpeed witness: in the 8.4 report, find 5.8's device | The speed the driver decoded from its port, SuperSpeed, and the speed it programmed into the device's slot, SuperSpeed, agreeing. `TODO(xhcisnap)`: the slot-speed field's name in the report. A SuperSpeed device that reads High Speed here ran on the USB 2.0 port of its connector; record which connector it was in |
+| 8.8 | The SuperSpeed witness: in the 8.4 report, find 5.8's device | The speed the driver decoded from its port, SuperSpeed, and the speed it programmed into the device's slot, SuperSpeed, agreeing. The slot's speed is the report's slot table: `PSIV` is the Speed field of the controller's own Slot Context for the device, and `speed` is that value decoded, `SuperSpeed, 5 Gbit/s, Gen 1x1` for a 5 Gbit/s link. A SuperSpeed device that reads High Speed here ran on the USB 2.0 port of its connector; record which connector it was in |
 
 If nothing comes back (8.4): run `XHCISNAP -probe`, which answers whether the
 route to a driver exists at all separately from whether this driver answered on
@@ -446,9 +452,10 @@ crashed the `1.x` driver's machines and has not been read on `2.0.0.0` there.
 Observed: under `2.0.0.0`, `XHCISNAP -probe` answered "the channel is live"
 with the channel on and a full `-o` report was read on Windows 98 SE under NUSB
 3.3 and under SweetLow's stack and on Windows 2000 (roadmap-hcd 26-A.8, in
-virtual machines). The SuperSpeed port speed was read in `XHCISNAP` on both
-primary targets in 29-V.1; the slot-speed field is new for 32.2's witness and
-`TODO(xhcisnap)`.
+virtual machines). In 29-V.1 the decoded port speed and the slot speed were
+read from the driver's trace on both primary targets, in virtual machines;
+the report's slot table, added for this witness, read a SuperSpeed drive as
+SuperSpeed on real hardware under Windows 98 SE at the bench (29-E.1).
 
 ### Step 9. Shut down with devices attached
 
