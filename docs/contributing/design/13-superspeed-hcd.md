@@ -580,7 +580,17 @@ with `USB\Class_` compatible ids (section 10.7), so `USB\COMPOSITE` never
 reaches `usbhub` (2000) or `usbccgp` (XP). The device PDOs' class ids then
 meet Setup's `hidusb`, `kbdhid`, `mouhid` and `usbstor` rows, whose files -
 and `usbd.sys`, `hidclass.sys` and `hidparse.sys` with them - come from
-Setup's own source. Where a machine also has EHCI controllers, XP's text
+Setup's own source **in text mode only**. Loaded there is not copied: XP's
+`TXTSETUP.SIF` copies `hidclass.sys`, `hidparse.sys` and `usbd.sys` to the
+target disk only in its own host controllers' `[files.usbohci]`,
+`[files.usbuhci]` and `[files.usbehci]` sections, so after the text-mode
+reboot an xHCI-only machine has `hidusb.sys` and `usbstor.sys` but not
+what they import, and USB input is dead in GUI mode until "Installing
+Devices" - behind XP's unsigned-driver prompts for this driver (runtime,
+2026-10-04, XP SP3 and XP x64 SP2 target disks read offline,
+`out\phase336\`; the release notes carry it as a limitation, and no
+`txtsetup.oem` mechanism reaches the Windows source: `[Disks]` names an
+OEM disk and `[Files]` reads from it). Where a machine also has EHCI controllers, XP's text
 mode drives those with its own stack beside this one; this driver does no
 vendor port routing, so a port routed to an EHCI controller stays there.
 
