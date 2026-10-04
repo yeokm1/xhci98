@@ -9691,3 +9691,42 @@ Rules:
   and later and fatal in Windows 2000 text mode.
 - **Run the F6 legs with the PS/2 controller present.**
 - **Hold F6 down; do not tap it.**
+
+## Driving NT5 Setup in QEMU for the F6 legs: five traps that each cost a run
+
+Roadmap task 33.3's legs, 2026-10-04 (`out\phase33\f6\`, git-ignored; QEMU
+11.1.0, TCG, development host A). Two more traps from the same legs, the
+PS/2 controller and holding F6, are in the lesson above on Windows 2000's
+first enumeration.
+
+- **A `WINNT.SIF` on the F6 floppy disables F6.** With any answer file on
+  A: (`[Data] MsDosInitiated=0` and `[Unattended] DriverSigningPolicy=Ignore`
+  were tried, to silence XP's unsigned-driver prompts), `setupldr` never
+  offers F6, Setup skips Welcome and the licence, and no OEM driver loads
+  (`xp32s\`). The floppy carries `txtsetup.oem` and the drivers only.
+- **Windows 2000's ACPI HAL loops GUI-mode Setup under TCG.** Setup restarts
+  itself after "Installing Components" and comes back to Regional Settings,
+  with no stop screen, every time; a control with no xhci98 on the same
+  machine loops the same (`w2kc\`). Use `scripts\setup-qemu-win2k.ps1`'s
+  machine (`acpi=off`, `pentium3,-apic`, 256 MB, Cirrus VGA, the IDE install
+  hack), as `build-and-test.md`'s F6 procedure now says.
+- **Two keyboards, two routes.** HMP `sendkey` reaches the PS/2 keyboard;
+  QMP `input-send-event` naming the display console (`"device": "vga0"`,
+  the USB keyboard bound to it by `display=vga0`) reaches the USB keyboard.
+  That gives a per-keystroke negative control, and it is how a dead USB
+  keyboard was told from a dead guest.
+- **A paused reboot resumes in four steps.** Under `-action
+  reboot=shutdown`, QMP `system_reset` is a shutdown too. Resume with
+  `set-action reboot=reset`, `system_reset`, `cont`, then set the action
+  back.
+- **A packager self-test failed on a long checkout path.** Windows
+  PowerShell wraps a native command's stderr ErrorRecord at the console
+  width, so with a 41-character worktree path the refusal "volume or
+  repository root" reached `test-package.ps1` split across two lines and
+  its phrase match failed; a 27-character junction passed. The helpers now
+  collapse whitespace before matching (`e54b87a`).
+
+Rules. **Keep answer files off an F6 floppy. Install Windows 2000 guests on
+its own recipe's machine. Prove a USB keystroke with `input-send-event` and
+the xHCI trace, never with `sendkey`. Match a native command's captured
+output with whitespace collapsed.**
