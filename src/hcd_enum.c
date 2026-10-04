@@ -1525,13 +1525,20 @@ ULONG HcdDeviceReadText(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                 if (dev->Ep0Stuck) {
                     return 0;
                 }
-                if (outcome == HCD_CTL_DONE) {
-                    if (bytes >= 4 && s[1] == 3 && s[0] >= 4) {
-                        state->Langid = (ULONG)s[2] | ((ULONG)s[3] << 8);
-                    }
+                if (outcome == HCD_CTL_STALLED) {
                     break;
                 }
-                if (outcome == HCD_CTL_STALLED) {
+                if (outcome != HCD_CTL_DONE || bytes < 2 || s[1] != 3 ||
+                    s[0] < 2) {
+                    continue;
+                }
+                /* An empty list is the device's answer; a first id that
+                 * did not arrive is a failed read and tried again. */
+                if (s[0] < 4) {
+                    break;
+                }
+                if (bytes >= 4) {
+                    state->Langid = (ULONG)s[2] | ((ULONG)s[3] << 8);
                     break;
                 }
             }

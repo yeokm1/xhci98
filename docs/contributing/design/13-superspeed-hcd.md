@@ -2512,8 +2512,8 @@ Add New Hardware wizard showed for every device (owner report).
   answers `USB Device` as before.
 - **Read** on the controller thread when the PDOs are built, after 33.2's
   serial read, in the device's first language id from string descriptor
-  0 (`0409h` when it STALLs or lists none) - read once per enumeration and
-  kept for the device's other PDOs. A STALL, or a string with nothing to
+  0 (`0409h` when it STALLs, lists none, or is not read whole in two
+  tries) - read once per enumeration and kept for the device's other PDOs. A STALL, or a string with nothing to
   show, is final; any other failure - an error, or a descriptor that did
   not arrive whole - is tried twice in all; an index that
   gave nothing is not asked again for the next function. A read that
