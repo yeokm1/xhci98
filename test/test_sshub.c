@@ -818,7 +818,7 @@ static void test_parent_rank(void)
              "an unknown rank behind B: nothing inherited");
     CHECK(po_slot == 0 && po_port == 0, "both 0");
 
-    /* Unknown ranks: the spec-safe default, both 0. */
+    /* Unknown ranks: the best-effort fallback, both 0. */
     l = ss_link(5000000UL, 1);
     CHECK_EQ(po(1, 1, XHCI_SS_RANK_UNKNOWN, 0, 0, &l, 7, 3), 0,
              "the hub's rank unknown");
