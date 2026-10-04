@@ -2835,8 +2835,9 @@ Add New Hardware wizard showed for every device (owner report).
   (task 33.1) answers the text it had, and the PDOs built for the
   re-enumeration that revived it are deleted with theirs.
 - `DeviceTextLocationInformation` is unchanged: not answered, the IRP's
-  status passed through. This record has no reading of what `usbhub`
-  answers for it.
+  status passed through. XP SP3's `usbhub` answers it with the same
+  `iProduct` string as the description (static, read 2026-10-05; section
+  10.11, "Address"); no other target's was read.
 
 **The bus never emits `USB\COMPOSITE`.** In Microsoft's stacks the composite
 device's own PDO carries it as a compatible id, and that is what brings the
@@ -3085,11 +3086,62 @@ finding 1). Under the same parent one answer omits the old and carries
 the new, as 33.2's move between root ports relies on.
 
 **Capabilities.** `Removable` TRUE, `SurpriseRemovalOK` TRUE, `UniqueID`
-TRUE exactly when the instance id is a serial id (as any PDO's), `Address` and `UINumber` the instance key. `SurpriseRemovalOK` TRUE so
+TRUE exactly when the instance id is a serial id (as any PDO's), `Address` and `UINumber` its port on its parent (as any PDO's, "Address" below). `SurpriseRemovalOK` TRUE so
 the XP-onward hot-plug applet does not offer the hub itself for safe removal
 while a storage device behind it keeps its own entry; the applet's rule was
 not read (an open item, read on the XP guest).
 
+**Address** (2026-10-05, branch `p33-addr`; a defect of `2.1.0.0` found on
+its VM leg 2c, Windows XP SP3). Every PDO answered `Address` and `UINumber`
+with its instance key, `(route << 8) | root port`, which was the port only
+for a device on a root port. Since 33.4 a device behind a hub is that hub's
+devnode's child, and Microsoft's hub driver answers `Address` with the
+device's port **on its parent hub**: XP SP3's `usbhub.sys` copies the port
+number `USBH_CreateDevice` stored in the PDO extension, Windows 7's a word
+of its PDO extension (static, `legal-provenance.md` section 4). A tool may
+take `Address` as the connection index to ask the parent for, and hidusbf's
+`Setup.exe` (2026-10-03 build) does: it reads the device's
+`SPDRP_ADDRESS`, and when that is not 0 it sends the parent hub
+`IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX` with it as
+`ConnectionIndex` (followed by `_EX_V2` when it succeeds, replaced by the plain
+form when it fails); only an `Address` of 0 makes it walk
+the hub's ports by `GET_NODE_CONNECTION_DRIVERKEY_NAME` instead (static,
+`legal-provenance.md` section 4). On leg 2c (XP SP3, runtime) its "Copy IDs"
+showed no `BusSpeed` or `bInterval` for a Full-Speed mouse on port 1 of a hub
+at root port 3, which answered 259, and it wrote High-Speed values for it;
+at a root port it showed both (on Windows 98 SE and ME it found the device
+another way). **The rule** (`XhciHubPdoAddress`,
+`xhci_hub.c`, host vectors in `test_hub`; fixed at creation, kept by a
+revived PDO with its other place fields): a device on a root port answers
+the root port, unchanged; a device whose own hub has a PDO - so is the
+parent it is presented under - answers the last tier of its Route String,
+the downstream port of that hub, which is the connection index that hub
+FDO's door serves it at (`hcdDoorConnection` matches the PDO's port
+location under that parent); every function PDO of a split device answers
+its device's. **A device whose own hub has no PDO** (re-parented to the
+next hub up, or to the root hub) has no connection index under its
+presented parent - that parent's door serves the PDO-less hub's own record
+at the ancestor port, or nothing - so it keeps the instance key, a value
+above any port, rather than name a port whose answer is another device.
+`UINumber` answers the same number. That is a departure: XP's `usbhub`
+leaves `UINumber` 0 (zeroed at creation and, as far as the static\r
+reading reaches, never written) and Windows 7's sets -1. It is kept a
+port because, with `DeviceTextLocationInformation` unanswered (section
+10.7), `UINumber` is what NT's Device Manager shows on the Location line,
+and a port reads truer than 0 or 259 there. XP's `usbhub` answers
+`DeviceTextLocationInformation` with the `iProduct` string (static, the
+same row); answering it is not taken here. The instance key itself, the
+instance ids of 33.2 and the dormant matching of 33.1 are unchanged. The
+helper's loop is written around an MSVC 6.0 code-generation fault that
+made its first form answer the instance key on the guest while its host
+vectors passed (`lessons.md`, the last entry). **Read on the XP SP3 guest**
+(runtime, 2026-10-05, development host A, the `qemu` build of `a9dd367`,
+a QEMU `usb-hub` at root port 3 and a mouse on its port 1): the bus's trace
+read the mouse's answer as `Address` 1 under the hub PDO; `Setup.exe`'s
+"Copy IDs" showed `BusSpeed: 1 (Full)` and `bInterval: 10`; 1000, 500 and
+250 Hz set through it gave the Output Endpoint Context `Interval` 3, 4 and
+5 (HMP `xp` of the controller's device context); and Device Manager's
+Location line read "Location 1". Windows 7's Location text was not read.
 **Relations.** The root hub FDO's `BusRelations` carry the listed PDOs whose
 `ParentSerial` is 0; a hub FDO's carry those whose `ParentSerial` is its hub
 PDO's `Serial` (`HcdDevicePdoRelations(hc, old, parent)`). The marking rules
