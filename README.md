@@ -228,16 +228,25 @@ The `1.2.0.0` results are in its [README](https://github.com/yeokm1/xhci98/blob/
 
 ## Known limitations/issues
 
+### Outside this driver's control
+
+These come from Windows, NUSB or the driver being unsigned, and no change to this driver can remove them.
+
+| Limitation | Detail |
+|---|---|
+| Upgrading in place over a running `1.2.0.0` under NUSB blue-screens | NUSB's `usbport.sys` crashes the machine as it stops `1.2.0.0`, before `2.0.0.0` runs. Follow "Upgrading from 1.2.0.0" above, which avoids it. |
+| Vista x64 and 7 x64 need driver signature enforcement disabled | The driver is not signed. Driver signature enforcement must be disabled at every start, or the controller sits at Code 39. |
+| No USB storage on a stock Windows 98 SE | With no NUSB installed there is no mass-storage driver at all. HID and audio still work. |
+| Windows ME: unplugging a device while Windows installs it | ME's own device manager stops responding if a device is unplugged while Windows is still installing its driver. ME does the same on Microsoft's own USB stack. Wait for the install to finish before unplugging. |
+
+### May be addressed in a later release
+
 | Limitation | Detail |
 |---|---|
 | The driver never starts selective suspend | Idle devices and hub ports are never suspended to save power. A suspend or resume a hub reports is handled. |
-| Upgrading in place over a running `1.2.0.0` under NUSB blue-screens | NUSB's `usbport.sys` crashes the machine as it stops `1.2.0.0`, before `2.0.0.0` runs. Follow "Upgrading from 1.2.0.0" above, which avoids it. |
 | USB storage on Windows 98 is slower than the drive | An observation, not a defect found: Windows 98 sends one command at a time. On the P14s with the MSSU10 at 64 KB, about 208 MB/s on Windows 98 against 277 MB/s on Windows 11 at the same queue depth of one. This may be looked into in a later release. |
-| Vista x64 and 7 x64 need driver signature enforcement disabled | The driver is not signed. Driver signature enforcement must be disabled at every start, or the controller sits at Code 39. |
-| No USB storage on a stock Windows 98 SE | With no NUSB installed there is no mass-storage driver at all. HID and audio still work. |
 | A UAS drive as the first USB storage device on Windows ME | On a fresh Windows ME installation whose first USB storage device is a UAS drive, the drive shows Code 2 (NTKERN.VXD device loader(s) could not load). ME has not yet copied its own `USBNTMAP.SYS` and `USBMPHLP.PDR`, which it installs only when its first ordinary USB stick is plugged in. To recover, plug in any ordinary USB stick once, then unplug the UAS drive and plug it back in. No Remove and no restart are needed. |
 | Windows ME: re-enabling the controller with a USB mouse or keyboard attached | Re-enabling the controller in Device Manager while a USB mouse or keyboard is plugged in makes Windows ME stop responding. A USB storage device alone is fine. Unplug the mouse or keyboard before re-enabling the controller. If ME stops responding, restart it and re-enable the controller with nothing attached. Being fixed. |
-| Windows ME: unplugging a device while Windows installs it | ME's own device manager stops responding if a device is unplugged while Windows is still installing its driver. ME does the same on Microsoft's own USB stack. Wait for the install to finish before unplugging. |
 | A device moved to a different port is found again as new hardware | The driver names a device by the port it is plugged into. Microsoft's hub driver uses the device's serial number instead, so there a device keeps its identity across ports. A later release may do the same. |
 
 ### Untested ground
