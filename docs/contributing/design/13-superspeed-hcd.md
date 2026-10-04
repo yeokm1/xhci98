@@ -1316,7 +1316,7 @@ three are Windows 98 exports with stock precedents in section 7.4.
 |---|---|---|---|---|---|---|---|---|---|
 | `GET_NODE_INFORMATION` | `0x220408` | yes | yes | yes | yes | yes | yes | yes | `UsbItem::GetHubInfo` (in = out = 0x4C) |
 | `GET_NODE_CONNECTION_INFORMATION` | `0x22040C` | yes | yes | yes | yes | yes | popups only | popups only | `GetConnectionInformation` (98 to XP x64); `UsbPopup::QueryContinue` (NT 5.1 on) |
-| `GET_DESCRIPTOR_FROM_NODE_CONNECTION` | `0x220410` | yes | yes | yes | yes | yes | yes | yes | `GetConfigDescriptor` (0x15 bytes - a 12-byte request and the 9-byte configuration descriptor - then up to `wTotalLength`, buffer cap 0x200) |
+| `GET_DESCRIPTOR_FROM_NODE_CONNECTION` | `0x220410` | yes | yes | yes | yes | yes | yes | yes | `GetConfigDescriptor`: one call, in = out = 0x15 bytes (a 12-byte request and the 9-byte configuration header), on a zero-filled buffer of which only `ConnectionIndex`, `wValue` 0x0200 and `wLength` 9 are written, so **`bmRequestType` and `bRequest` are 0**; anything but success with exactly 0x15 bytes returned leaves the device's power "unknown" (static, every target: one `0x220410` site per build; 98 SE 7700B590/B596, 2000 666B4696/469C, XP SP3 5AF63BD6/BDC, 7 x86 10004F03/F0A; corrected 2026-10-04 - this row said "then up to `wTotalLength`" before) |
 | `GET_NODE_CONNECTION_NAME` | `0x220414` | yes | yes | yes | yes | yes | yes | yes | `GetExternalHubName` (for a connection with `DeviceIsHub`) |
 | `GET_NODE_CONNECTION_DRIVERKEY_NAME` | `0x220420` | yes | yes | yes | yes | yes | yes | yes | `GetDriverKeyName` |
 | `GET_HUB_CAPABILITIES` | `0x22043C` | - | - | - | yes | yes | - | - | `GetHubInfo`, after node information (4 bytes) |

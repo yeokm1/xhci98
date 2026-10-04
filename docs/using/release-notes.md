@@ -406,6 +406,22 @@ answers the requests they send. The Power tab reports the power budget the
 driver itself keeps, since external hubs are the driver's own. Read on Windows 98 SE under both stacks and on Windows
 2000, in virtual machines.
 
+Up to `2.0.0.0` the Power tab showed every device's power as unknown, on
+every target: the driver refused the descriptor request the page sends,
+whose request code Windows leaves at zero. `2.1.0.0` answers it
+(`TODO(33.5)`: read on the `2.1.0.0` package). Two things the pages show
+are Windows' own arithmetic, not the driver's:
+
+- **Bandwidth counts isochronous pipes in use, and nothing else.** On
+  Windows 98 SE to XP the Advanced tab adds up only the isochronous pipes
+  a device has open, as it does over Microsoft's own stack, so a mouse, a
+  keyboard or a drive adds nothing, and an audio device adds its share only
+  while it plays or records. On Vista and 7 the figure comes from a WMI
+  query the driver does not answer, and stays at zero.
+- **A SuperSpeed device's power reads a quarter of its draw.** The page
+  doubles the configuration descriptor's `bMaxPower`, which is in 2 mA units
+  at USB 2.0 and in 8 mA units at SuperSpeed.
+
 ## The log, and how to send one
 
 The driver keeps a small log of what happened on the bus, inside itself, and
