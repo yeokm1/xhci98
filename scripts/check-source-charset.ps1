@@ -63,7 +63,8 @@ $repo = Split-Path -Parent $scriptDir
 $trees = @("src", "test", "scripts", "xhcisnap", "xhciqual")
 
 # File kinds the 1998-era toolchain reads. All three rules apply to these.
-$toolchainExt = @(".c", ".h", ".asm", ".rc", ".def", ".inf", ".bat", ".cmd")
+# `.oem` is txtsetup.oem, which text-mode Setup reads (task 33.3).
+$toolchainExt = @(".c", ".h", ".asm", ".rc", ".def", ".inf", ".bat", ".cmd", ".oem")
 $toolchainName = @("makefile", "sources")
 
 # Everything else that is source in this tree. Rules 1 and 2 only - see above.

@@ -470,6 +470,168 @@ The package is `xhci98-<version>.zip`, as the miniport's was - the published
 `make-release.ps1` from 32.3. Until 26-A.1 the packager refuses the scaffold
 image by its marker (section 9).
 
+### 5.6 Text-mode Setup: `txtsetup.oem` (task 33.3)
+
+The question: can a machine whose keyboard or install medium sits on an xHCI
+controller load `xhci98.sys` at text-mode Setup's F6 prompt of Windows 2000,
+32-bit XP and XP x64, and what does Setup have to bring for it. Every reading
+below is `static` unless it says otherwise; nothing here has run. The
+install legs that would make any of it `runtime` are owed (the end of this
+section).
+
+**What Setup loads by itself.** Each medium's `TXTSETUP.SIF` was extracted
+with 7-Zip into a scratch directory (never tracked) and read as text:
+
+| Medium | `TXTSETUP.SIF` | `[InputDevicesSupport.Load]` | Files those entries pull in (`[files.*]`) |
+|---|---|---|---|
+| `win2ksp4.ISO` `I386\` | 335,081 B, SHA-256 `ECA9CDFBB5C7B455F908BF53CDBE72CADA87A2615B1E933F9559C49763CB6BF2` | `openhci`, `uhcd`, `usbhub`, `hidusb`, `serial`, `serenum`, `usbstor` | `hidclass.sys`, `hidparse.sys` and `usbd.sys` with `openhci.sys` and with `uhcd.sys`; `kbdhid` is in `[Keyboard.Load]`, `mouhid` in `[Mouse]` |
+| `en_windows_xp_professional_with_service_pack_3_x86_cd_vl_x14-73974.iso` `I386\` | 480,367 B, `5F754EA59F3735CF9524E076869C2414BF39D66387A33F371CA00775F77F63D8` | `usbehci`, `usbohci`, `usbuhci`, `usbhub`, `usbccgp`, `hidusb`, `serial`, `serenum`, `usbstor` | `hid.dll`, `hidclass.sys`, `hidparse.sys`, `usbd.sys` and `usbport.sys` with each of the three host controller drivers; `kbdhid` in `[Keyboard.Load]`, `mouhid` in `[MouseDrivers.Load]` |
+| `Win XP SP2 VL x64.iso` `AMD64\` | 512,828 B, `77B96776DE4DBA09A071973A661794CE98DCE5496215EF81D9193AD2BDDEAA65` | the XP list, plus `wd` | as XP |
+
+The Windows 2000 file lists `usbport.sys` and `usbehci.sys` in
+`[SourceDisksFiles]` but names neither in `[InputDevicesSupport]` or
+`[HardwareIdsDatabase]`, so its text mode has no EHCI support and no
+`usbport.sys` at all.
+
+**Setup's hardware-id table.** `[HardwareIdsDatabase]` on all three binds
+`PCI\CC_0C0300`, `PCI\CC_0C0310` (and on XP and XP x64 `PCI\CC_0C0320`) to
+Setup's own host controller drivers, `USB\ROOT_HUB` (and `USB\ROOT_HUB20` on
+XP) and `USB\CLASS_09` to `usbhub`, `USB\COMPOSITE` to `usbhub` on Windows
+2000 and `usbccgp` on XP, `USB\Class_03`, `USB\Class_03&SubClass_01` and
+`...&Prot_02` to `hidusb`, `HID_DEVICE_SYSTEM_KEYBOARD` to `kbdhid`,
+`HID_DEVICE_SYSTEM_MOUSE` to `mouhid`, and
+`USB\Class_08&SubClass_{02,05,06}&Prot_50` plus a VID/PID list to `usbstor`.
+**None of them binds `PCI\CC_0C0330`**, so nothing of Setup's claims an xHCI
+controller, and the table is keyed on class (compatible) ids as well as
+hardware ids - Setup's own EHCI row is one.
+
+**The `txtsetup.oem` format.** The Windows 2000 DDK's sample,
+`tools\ntddk\src\setup\inf\scsi\txtsetup.oem` (1,472 B, SHA-256
+`62736CB3671D26BCE67B292CA257AC6BB15A09A56AB3A0BA59F869F16A165C01`, dated
+2000-07-26, not tracked), is the format reference read here: `[Disks]`
+(`diskN = "description", tagfile, directory`), `[Defaults]`
+(`component = ID`, its one component `scsi`), `[scsi]` (`ID =
+"description"`), `[Files.scsi.ID]` (`filetype = diskN, filename[,
+DriverKey]`, with the file types `driver`, `inf` and `catalog`),
+`[Config.ID]` (values under the service key) and `[HardwareIds.scsi.ID]`
+(`id = "deviceID", "service"`). The DDK's own format reference (the help
+topic) is not in the local DDK tree; the sample's comments are what was
+read. Other components (`computer`, `display`, `keyboard`, `mouse`) exist in
+the format but are chosen elsewhere in Setup; F6 offers the `scsi` component,
+and an F6 driver is loaded with Setup's own boot drivers, before the kernel
+starts - which is early enough for a bus driver, since Setup's USB stack is
+loaded the same way.
+
+**What `xhci98.sys` needs that an INF would normally give it.** Read from
+this repository's own sources: its imports are `ntoskrnl.exe` and `HAL.dll`
+only (`scripts\import-gate\xhci98-imports.allow`), so it needs no file from
+Setup to load; the root-hub role is decided at `AddDevice` by the PDO's
+driver object, not by any INF value (`src\hcd_rh.c` header); the registry
+values the INFs write (`XhciLogVerbosity`, `XhciLogDebugView`,
+`XhciImodInterval250ns`) are read from the driver key with the code
+defaults standing when the key or value is absent (`src\hcd_ctl.c`
+`hcdReadValues`), so in text mode the log is off and the interrupt
+moderation interval is the code default 4000 (1 ms) rather than the INFs'
+160 - `[Config.ID]` writes under the service key, which the driver does not
+read, so it cannot supply them; and the door's `SymbolicName` and device
+interfaces are best effort (`src\hcd_door.c`).
+
+**Conflicts with Setup's own USB support: none found in the reading.** The
+controller id is in no Setup row. The root hub answers `XHCI98\ROOT_HUB`
+and no compatible id (section 8.6), so `usbhub` cannot bind it; the
+`txtsetup.oem` maps that id to `xhci98`, the same mechanism that maps
+`USB\ROOT_HUB` to `usbhub` for Setup's own stack, which is what gives the
+root-hub PDO its second `AddDevice` into this driver with no INF. External
+hubs get no PDO (section 10.3), so `USB\CLASS_09` never reaches `usbhub`.
+Roadmap task 33.4 would give each external hub a PDO under a project-owned
+id bound by `xhci98.inf`; that id must then be mapped here too, and the
+gate's `OEM-IDS` rule refuses this file the moment the INF binds an id it
+does not map, so the two cannot ship out of step. Meanwhile
+the bus splits composite devices itself and presents `&MI_nn` functions
+with `USB\Class_` compatible ids (section 10.7), so `USB\COMPOSITE` never
+reaches `usbhub` (2000) or `usbccgp` (XP). The device PDOs' class ids then
+meet Setup's `hidusb`, `kbdhid`, `mouhid` and `usbstor` rows, whose files -
+and `usbd.sys`, `hidclass.sys` and `hidparse.sys` with them - come from
+Setup's own source. Where a machine also has EHCI controllers, XP's text
+mode drives those with its own stack beside this one; this driver does no
+vendor port routing, so a port routed to an EHCI controller stays there.
+
+**GUI-mode Setup.** The `inf` line makes text-mode Setup carry
+`xhci98.inf` into the installed system, so GUI-mode Setup can install the
+controller and root hub through it as for any other device, through the
+same `xhci98` service the `driver` line names (the gate's `OEM-SERVICE`
+rule); the INF's `StartType=3` then replaces the boot start text mode gave
+the service. Whether GUI mode finds `xhci98.sys` without asking for the
+floppy, and whether 32-bit XP's unsigned-driver policy during GUI mode
+installs it silently, warns or skips it, is not readable from these files
+and is owed to the install leg.
+
+**`xhciuas.sys` is not on the text-mode disk, so a disk the bus selects
+for UAS is lost in text mode.** The bus selects UAS whenever a device
+offers a UAS alternate setting the controller can run - at SuperSpeed that
+means stream support; below it, always - even beside a Bulk-Only one
+(`src\xhci_xport.c`), and the one override, `XhciForceBulkOnly` in the
+controller's driver key (`src\hcd_ctl.c` `HcdCtlForceBulkOnly`), is a value
+text mode never writes. A dual-mode SuperSpeed device on a controller
+without streams falls back to Bulk-Only and is usable. A device selected
+for UAS presents the UAS class id, which no Setup row binds, so it is not
+usable until GUI mode; a Bulk-Only-only device (most USB flash sticks;
+QEMU's `usb-storage`) always meets Setup's own `usbstor`, and is the one
+to use for a predictable result.
+Carrying `xhciuas.sys` as a second `scsi` option would need its own
+hardware ids and a text-mode reading of its own, and is left out. GUI-mode
+Setup and the installed system install it from the package as before.
+
+**XP x64.** The format is the same; the x64 directory carries its own file
+(`src\txtsetup-amd64.oem`, staged as `txtsetup.oem`) naming the amd64
+build, and NT 5.2 does not enforce kernel-mode signing, so nothing in the
+reading stands between the amd64 binary and its text mode.
+
+**Verdict, per target**, on the static evidence above:
+
+| Target | Verdict | Why, and the limits |
+|---|---|---|
+| Windows 2000 SP4 | Feasible with limits | Setup carries `hidusb`, `kbdhid`, `mouhid`, `usbstor`, `usbd`, `hidclass` and `hidparse`; no Setup row claims the controller or the root hub; no `usbccgp` is needed because the bus splits composites |
+| Windows XP SP3 (32-bit) | Feasible with limits | As 2000; Setup's own EHCI stack coexists on a machine that has EHCI |
+| Windows XP x64 SP2 | Feasible with limits | As XP, with the amd64 build and its own file |
+
+The limits, all of them the user's to know:
+
+1. Pressing F6 and answering Setup's driver screens happens before any
+   Windows driver runs, so the keyboard must work through the firmware's own
+   USB support (legacy USB emulation or a CSM) at that point.
+2. The driver disk is read as drive A: through the firmware, as text-mode
+   Setup reads every F6 disk.
+3. Installing Windows onto a USB disk is not supported: nothing here makes
+   the installed system boot from one.
+4. A disk the bus selects for UAS is not usable in text mode, even if it
+   also offers Bulk-Only, since no UAS driver is loaded (above); a
+   Bulk-Only-only device always is.
+5. Text mode runs with interrupt moderation at the code default and the log
+   off, since no INF value is written until GUI mode.
+6. If the target disk needs one of Setup's own `[SCSI]` miniports, the user
+   may have to add it at the same screen; whether pressing S suppresses
+   Setup's own detection on these systems was not read.
+
+**What the gate holds.** `scripts\inf-gate\check-txtsetup-oem.ps1` (run by
+`build-driver.cmd` on every build, self-tested by mutation first, and by
+`make-package.ps1` and `make-release.ps1` against each staged and published
+directory) holds the two files to exactly the shape above: the five
+sections and nothing else, balanced quotes, the `scsi` component alone, the driver at the
+disk root as both the tag file and the `driver` line, the `inf` line, no
+catalog and no second driver, the service the INF adds, the INF's model ids
+and no `USB\` id, no Microsoft file, 8.3 names, an architecture word in each
+description, the two files equal outside those descriptions, and in a
+package the file at the root with every file it names beside it.
+
+**Owed: one install leg per target**, from a floppy image in a virtual
+machine with no USB host controller but `qemu-xhci`, a `usb-kbd` and a
+`usb-storage` on it and the floppy on the emulated FDC: F6, S, the driver
+picked, the keyboard working past the kernel start, the USB disk listed as a
+target or source where the leg uses one, GUI mode completing, and the
+installed system's controller and root hub on this INF. Until those pass,
+every clause above stays `static` and the release notes say so.
+
 ## 6. The function-driver contract (task 25.2)
 
 What each target's class drivers send a USB device PDO, read out of the
