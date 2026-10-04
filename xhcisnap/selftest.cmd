@@ -124,6 +124,22 @@ if exist "%BASE%-probe.TXT" (
     set FAILED=1
 )
 
+rem The slots region's decode (2.0.0.0): the Slot Context Speed in words over
+rem canned records - SuperSpeed with its rate and lanes, SuperSpeedPlus by its
+rem rate, High and Low Speed, and a slot whose context could not be read.
+"%~dp0XHCISNAP.EXE" -selftest-slots > "%BASE%.slots.log"
+if errorlevel 1 (
+    echo FAIL: -selftest-slots exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("SuperSpeed, 5 Gbit/s, Gen 1x1" "SuperSpeedPlus, 10 Gbit/s, Gen 2x1" "configured     3  High Speed" "addressed      2  Low Speed" "(controller not started)" "5 device(s) hold a slot") do (
+    findstr /C:%%S "%BASE%.slots.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the slot decode does not say %%S
+        set FAILED=1
+    )
+)
+
 rd /s /q "%RUNDIR%" 2> nul
 rd out 2> nul
 
@@ -131,5 +147,5 @@ if "%FAILED%"=="1" (
     echo xhcisnap selftest FAILED
     exit /b 1
 )
-echo xhcisnap selftest: 5 cases, all passed
+echo xhcisnap selftest: 6 cases, all passed
 exit /b 0

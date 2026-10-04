@@ -8393,6 +8393,33 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 /* Which region a window is cut from. */
 #define XHCI_SNAPSHOT_REGION_EXTENSION  0UL
 #define XHCI_SNAPSHOT_REGION_PORTSC     1UL
+/*
+ * The HCD's enabled slots (xhci98.sys from 2.0.0.0, hcd_door.c): one record of
+ * XHCI_SNAPSHOT_SLOT_WORDS ULONGs per device the bus holds a slot for, in Slot
+ * ID order, so that XHCISNAP can witness the speed a device's Slot Context
+ * actually carries (roadmap-hcd.md 29-E.1). A new region and not a header
+ * change, so the schema stays 5: an older driver answers it with
+ * XHCI_SNAPSHOT_S_BAD_REGION, which the tool reports as "not served by this
+ * driver", and an older tool never asks. Offset is in bytes and must be a
+ * multiple of one record.
+ */
+#define XHCI_SNAPSHOT_REGION_SLOTS      2UL
+
+#define XHCI_SNAPSHOT_SLOT_ID           0   /* Slot ID                      */
+#define XHCI_SNAPSHOT_SLOT_PORT         1   /* root port, 1-based           */
+#define XHCI_SNAPSHOT_SLOT_ROUTE        2   /* Route String                 */
+#define XHCI_SNAPSHOT_SLOT_TIER         3   /* hubs above it                */
+#define XHCI_SNAPSHOT_SLOT_STATE        4   /* Output Slot Context state, or
+                                             * 0xFFFFFFFF when not readable */
+#define XHCI_SNAPSHOT_SLOT_CTX_SPEED    5   /* Output Slot Context Speed
+                                             * (PSIV, xHCI Table 6-4), or
+                                             * 0xFFFFFFFF when not readable */
+#define XHCI_SNAPSHOT_SLOT_CLASS        6   /* that PSIV decoded on the root
+                                             * port's protocol: XHCI_SPEED_* */
+#define XHCI_SNAPSHOT_SLOT_PLUS         7   /* SuperSpeedPlus by its rate   */
+#define XHCI_SNAPSHOT_SLOT_RATE_KBPS    8   /* trained rate, 0 unknown      */
+#define XHCI_SNAPSHOT_SLOT_RANK         9   /* XHCI_SS_RANK_*: Gen and lanes */
+#define XHCI_SNAPSHOT_SLOT_WORDS        10UL
 
 /* Header Status bits. A window always comes back with a truthful header, so
  * every refusal below is reported here rather than through an MPSTATUS the
