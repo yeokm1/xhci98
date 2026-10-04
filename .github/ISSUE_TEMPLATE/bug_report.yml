@@ -107,8 +107,8 @@ body:
       description: |
         The driver does not need these: it replaces their port and hub drivers.
         What still matters is storage on Windows 98 SE, which needs NUSB's
-        mass-storage files (the release notes say why). Other systems: pick the
-        last but one.
+        mass-storage files (the release notes say why). On Windows 2000, XP,
+        Vista or 7, pick "Windows 2000, XP, Vista or 7: nothing applies".
       options:
         - "Windows 98 SE: nothing extra (a stock install)"
         - "Windows 98 SE: NUSB 3.3"
