@@ -11,6 +11,7 @@
  * C89, pure: IRQL any.
  */
 
+#include "xhci.h"
 #include "xhci_pipe.h"
 
 /* bmRequestType (USB 2.0 9.3, Table 9-2): direction 7, type 6:5,
@@ -835,5 +836,82 @@ ULONG XhciPipeConfigureUsbdStatus(ULONG completionCode)
         return XHCI_PIPE_USBD_NO_BANDWIDTH;
     default:
         return XHCI_PIPE_USBD_INTERNAL_HC_ERROR;
+    }
+}
+
+/* IRQL: any. A low word of 0 is skipped, so a lap is 2^32 - 1 values: the
+ * reconstruction's bound (xhci_pipe.h). */
+VOID XhciSeqNext(PXHCI_SEQ64 seq)
+{
+    seq->Lo++;
+    if (seq->Lo == 0) {
+        seq->Hi++;
+        seq->Lo = 1;
+    }
+}
+
+/* IRQL: any. */
+VOID XhciSeqFromStamp(const XHCI_SEQ64 *current, ULONG stamp,
+                      PXHCI_SEQ64 out)
+{
+    ULONG age;
+
+    /* current - age, with age = (current.Lo - stamp) mod 2^32: the low
+     * word comes back as the stamp, and the high word borrows when the
+     * subtraction crossed a lap. Exact while fewer than 2^32 - 1
+     * submissions followed the stamp (xhci_pipe.h). */
+    age = current->Lo - stamp;
+    out->Lo = stamp;
+    out->Hi = current->Hi - ((age > current->Lo) ? 1UL : 0UL);
+}
+
+/* IRQL: any. */
+ULONG XhciSeqLessEq(const XHCI_SEQ64 *a, const XHCI_SEQ64 *b)
+{
+    return a->Hi < b->Hi || (a->Hi == b->Hi && a->Lo <= b->Lo);
+}
+
+/* IRQL: any. */
+ULONG XhciSeqIsNone(const XHCI_SEQ64 *a)
+{
+    return a->Lo == 0 && a->Hi == 0;
+}
+
+/* IRQL: any. */
+ULONG XhciSeqCovers(const XHCI_SEQ64 *horizon, ULONG stamp,
+                    const XHCI_SEQ64 *current)
+{
+    XHCI_SEQ64 full;
+
+    if (XhciSeqIsNone(horizon) || stamp == 0) {
+        return 0;
+    }
+    XhciSeqFromStamp(current, stamp, &full);
+    return XhciSeqLessEq(&full, horizon);
+}
+
+/* IRQL: any. */
+VOID XhciSeqLatest(PXHCI_SEQ64 into, const XHCI_SEQ64 *with)
+{
+    if (XhciSeqIsNone(with)) {
+        return;
+    }
+    if (XhciSeqIsNone(into) || XhciSeqLessEq(into, with)) {
+        *into = *with;
+    }
+}
+
+/* IRQL: any. */
+ULONG XhciPipeSpeedFromClass(ULONG speedClass)
+{
+    switch (speedClass) {
+    case XHCI_SPEED_LOW:
+        return XHCI_PIPE_SPEED_LOW;
+    case XHCI_SPEED_FULL:
+        return XHCI_PIPE_SPEED_FULL;
+    case XHCI_SPEED_HIGH:
+        return XHCI_PIPE_SPEED_HIGH;
+    default:
+        return 0;
     }
 }

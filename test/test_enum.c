@@ -11,6 +11,7 @@
 
 #include <stdio.h>
 #include "../src/xhci_enum.h"
+#include "../src/xhci_hub.h"
 #include "test_harness.h"
 
 static XHCI_ENUM_EVENT ev(ULONG kind, ULONG ok)
@@ -569,6 +570,37 @@ static void test_retry_to_bound(void)
     CHECK_EQ(a.Kind, XHCI_ENUM_ACT_NONE, "the slot was already given back");
 }
 
+/* A hub's port is given XHCI_HUB_PORT_ATTEMPTS attempts in all (27-A.3;
+ * design record 13 section 10.2 step 7), a root port the machine's own one
+ * retry: the limit is the caller's, the count the port's. */
+static void test_hub_port_attempts(void)
+{
+    XHCI_ENUM_PORT p;
+    XHCI_ENUM_ACTION a;
+    ULONG limit;
+
+    limit = XHCI_HUB_PORT_ATTEMPTS - 1UL;
+    drive_full(&p, 7, &a);
+    step(&p, full_event(7, 0), &a);
+    CHECK_EQ(p.State, XHCI_ENUM_FAILED, "first attempt failed");
+    XhciEnumRetryUpTo(&p, limit, &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_RESET, "second attempt");
+    step(&p, ev(XHCI_ENUM_EV_RESET_DONE, 0), &a);
+    CHECK_EQ(p.FailCause, XHCI_ENUM_FAIL_RESET, "its reset failed");
+    XhciEnumRetry(&p, &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_NONE, "a root port would stop here");
+    XhciEnumRetryUpTo(&p, limit, &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_RESET, "a hub port tries a third time");
+    CHECK_EQ(p.Retries, 2, "two retries counted");
+    step(&p, ev(XHCI_ENUM_EV_RESET_DONE, 0), &a);
+    XhciEnumRetryUpTo(&p, limit, &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_NONE, "given up after the third");
+    CHECK_EQ(p.State, XHCI_ENUM_FAILED, "Failed until a new connect");
+    step(&p, ev(XHCI_ENUM_EV_CONNECT, 1), &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_DEBOUNCE, "a connect starts afresh");
+    CHECK_EQ(p.Retries, 0, "with its attempts restored");
+}
+
 int main(void)
 {
     test_clean_paths();
@@ -581,6 +613,7 @@ int main(void)
     test_sizes_and_nulls();
     test_out_of_place_everywhere();
     test_retry_to_bound();
+    test_hub_port_attempts();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

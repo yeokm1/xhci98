@@ -1003,7 +1003,8 @@ VOID XhciTopoApplySetInterface(PXHCI_TOPOLOGY topo,
         return;
     }
     node = xhciTopoNodeFor(topo, address);
-    if (node == NULL || (node->Flags & XHCI_TOPO_F_HUB) == 0) {
+    if (node == NULL ||
+        ((node->Flags & XHCI_TOPO_F_HUB) == 0 && node->RootPort == 0)) {
         return;
     }
 
@@ -1124,6 +1125,29 @@ static ULONG xhciTopoFoldPortStatus(PXHCI_TOPOLOGY topo,
          * gone, so the second teardown finds nothing - and counted evidence
          * beats a silent reuse.
          */
+        /*
+         * **So is a port the hub disabled under a device it still sees**
+         * (design record 13 section 10.5: "the parent disables the hub
+         * (C_PORT_ENABLE with enable 0)"; 27-A.4's gap G3). The device on it
+         * is unreachable until it is reset and enumerated again, which is a
+         * new tenancy of the port; counted in `Disconnects`, not in
+         * `Reconnects`, which stays the connect-change reading alone.
+         */
+        if ((node->Connected & mask) != 0 &&
+            (change & XHCI_HUB_C_PORT_CONNECTION) == 0 &&
+            (change & XHCI_HUB_C_PORT_ENABLE) != 0 &&
+            (status & XHCI_HUB_PORT_ENABLE) == 0) {
+            node->Disconnects++;
+            topo->Disconnects++;
+            hubAddress = node->Address;
+            if (gone != NULL) {
+                gone->Disconnected = 1;
+                gone->HubAddress = hubAddress;
+                gone->HubPort = port;
+            }
+            xhciTopoPruneChildAt(topo, hubAddress, port);
+            return 1;
+        }
         if ((node->Connected & mask) != 0 &&
             (change & XHCI_HUB_C_PORT_CONNECTION) != 0) {
             node->Disconnects++;

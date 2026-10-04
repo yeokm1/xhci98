@@ -145,6 +145,12 @@ static ULONG hcdPipeResult(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
     }
     if (result->Action == XHCI_XFER_ACTION_COMPLETE) {
         for (t = result->Completed; t != NULL; t = t->Next) {
+            if (t == &pipe->Device->HubXfer) {
+                /* A hub's status-change report: the thread's, not a URB's
+                 * (hcd_hub.c). */
+                HcdHubXferRetired(hc, pipe->Device);
+                continue;
+            }
             hc->Counters.TransfersCompleted++;
             HcdIoRetired(hc, t);
         }
@@ -156,8 +162,9 @@ static ULONG hcdPipeResult(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
  * A Transfer Event on an isochronous pipe. Ring Underrun and Overrun name
  * no TD (4.10.3.1 p.185) and never reach the engine: the endpoint left the
  * schedule and a doorbell puts it back (4.14.2.1 p.239) - withheld while
- * the thread has the pipe paused or owes it a stop, since a doorbell then
- * would restart the endpoint under the thread's edit. Everything else is
+ * the thread has the pipe paused or owes it a stop, or the device is being
+ * torn down (Gone), since a doorbell then would restart the endpoint under
+ * the thread's edit or its teardown. Everything else is
  * the engine's per-packet match; a TRB Error leaves the endpoint in Error,
  * not Halted (p.177), and the thread stops and drains it as it does a
  * refused retire (hcdPipeResult). Returns nonzero for a fatal event. IRQL:
@@ -182,7 +189,12 @@ static ULONG hcdIsoEvent(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG slotId,
         if (pipe->Queue->Count == 0) {
             hc->Hc.IsoEventsUnattributed++;
         } else if (pipe->Paused || pipe->Closed || pipe->DrainPending ||
-                   pipe->CancelPending) {
+                   pipe->CancelPending || pipe->Device->Gone) {
+            /* Gone: the device's teardown froze it and may already have
+             * stopped this endpoint to complete its requests before the
+             * Disable Slot; a late underrun's doorbell would restart it
+             * under buffers about to go back (Codex review of d54eef0,
+             * finding 1). */
             hc->Hc.IsoDoorbellsSuppressed++;
         } else {
             XhciWriteDoorbell(&hc->Hc, slotId, dci);

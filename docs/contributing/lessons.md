@@ -9441,3 +9441,143 @@ a new tag**; the trace of the boot that failed is the one a relaunch to
 investigate it destroys. QEMU's `append=on` on the chardev keeps every boot
 in one file instead, at the cost of telling the boots apart by the driver's
 start lines.
+
+## Windows 98 SE's hidclass resubmits at once on STATUS_DEVICE_NOT_CONNECTED while its device is started: park a departed device's reads, do not fail them
+
+Roadmap tasks 27-A.3 and 27-V.1, 2026-10-04, Windows 98 SE in QEMU
+(`docs/contributing/runs/run-27.md`, "The Windows 98 SE HID-unplug stall").
+27-A.3's teardown stopped a departing device's endpoints and completed its
+pending interrupt reads `STATUS_DEVICE_NOT_CONNECTED` /
+`USBD_STATUS_DEVICE_GONE`, the obvious answer for a device that has gone. On
+Windows 98 SE every root-port HID unplug then stalled the guest. The REMOVE
+came 129 s to 11 minutes later; a timed trace of a keyboard's unplug reads
+`+660s xhci98: hcd: device PDO PnP minor=00000002`.
+
+`hidclass.sys` (98 SE) answers that status, while its device is still
+started, by failing every client read and resubmitting at once (`0x110A7`,
+static; `run-26.md`, "The REMOVE that never ended"). Each resubmission was
+refused at the next tick. The loop kept the guest busy enough that its
+configuration manager did not act on the relations change for minutes, and
+only the REMOVE ends the started state. Phase 26 had already met the same
+loop and paced it to one retry per tick, which was harmless while a PDO was
+reported missing before any read failed.
+
+The first fix restored that order, the PDOs reported missing at the freeze
+(`26e7cb6`). **It did not cure the stall.** The fix that did (`f99f184`):
+- A departed device's URB IRPs are **held on the PDO**, cancellable
+  (`HcdIoPark`).
+- They complete CANCELLED only when the client cancels them or aborts the
+  pipe, or the PDO is stopped, surprise-removed or removed.
+- With no failed read, `hidclass.sys` never enters its retry state. The
+  REMOVE came within about a second on every unplug read, on both
+  primaries.
+
+Holding a request for a device that stopped answering is what the hub
+drivers this bus stands in for do.
+
+The abort then needed four Codex rounds (`6dae92b` to `53b43c0`):
+- An ABORT_PIPE must release what it covers, including requests the
+  teardown parks after the abort, and a later submission must not revoke
+  that.
+- So every IRP is stamped at dispatch with a per-PDO submission sequence,
+  and an abort records its stamp as its pipe's horizon.
+- The sequence is 64-bit, since a 32-bit one wraps.
+
+Rules. **Do not fail a departed device's I/O while its PDO is still started
+on Windows 98 SE: park it until the client aborts or cancels, or PnP stops
+or removes the PDO.** A completion status is an instruction to the class
+driver above, and `hidclass.sys` reads this one as "retry now". And **report
+the PDO missing before anything of the departed device completes**, so PnP's
+REMOVE is already on its way when a client looks.
+
+## Prepare a Windows 98 SE image location by location, with Setup's SourcePath where the CD files are: a modal Insert Disk stops all PnP and looks like a driver wedge
+
+Roadmap task 27-V.1, 2026-10-04, the Windows 98 SE golden image for the hub
+rows (`docs/contributing/runs/run-27.md`, "The behind-hub replug that made a
+new devnode" and "27-V.1").
+
+The HCD gives each location its own instance id, `(route << 8) | root port`.
+Windows 98 SE therefore makes one devnode per location, and the first device
+at a location the image has not seen raises the Add New Hardware Wizard. On
+the first images, three readings looked like the HCD's:
+- a mouse replugged behind a hub made a new devnode;
+- the five-tier hub churn enumerated 2 of its 6 hubs (`h98fh-hub`,
+  `h98hh-hub`);
+- a soak's classes after the hub class addressed nothing (hubmouse +1, u2f,
+  ccid and audio +0 on `soak-h98f`).
+
+All three were the image's:
+- The prep had unplugged devices before every location's HID child had
+  installed.
+- A modal "Insert Disk" for the Windows 98 CD, the install source pointing
+  where the CD files were not, stopped every PnP action behind it.
+- A port whose last PDO PnP has not deleted holds its next device, so the
+  enumeration waited on the dialog, per port, as designed.
+
+The image prepared again was used for `h98jh` and `soak-h98j`, and on it the
+churn passed with its tier-5 mouse bound. It had
+`"SourcePath"="E:\\WIN98\\"` under
+`HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Setup`, and
+each location's HID child had installed before that location's unplug.
+
+Rules. **When preparing a Windows 98 SE image, set Setup's `SourcePath` to
+where the CD's files really are, and let every location's HID child finish
+installing before its device is unplugged.** And **before reading a stalled
+Windows 98 SE enumeration as the driver's, look at the screen for a modal
+dialog**: an Insert Disk or a wizard waiting on Next halts PnP as completely
+as a wedge, while the driver's own counters keep moving on every other port.
+
+## The agent harness stops a background QEMU after 30 minutes unless the task is given longer: launch guests with the 2-hour limit
+
+Phases 26 and 27, 2026-10-04 (`runs/run-26.md`, "26-V.1", "The overlay the
+tooling broke"; `runs/run-27.md`, "How the guests were driven"). A QEMU
+process started as a background shell task inherits that task's time limit,
+30 minutes by default. At the limit the harness stops the task, and QEMU
+with it, whatever the guest is doing.
+- **26-V.1.** It ended a Windows 98 SE guest in the middle of its second
+  boot. The next boot gave "Warning: Windows has detected a
+  registry/configuration error.", ScanDisk, and "Invalid VxD dynamic link
+  call from VWIN32(01) + 00000714 to device "0009", service 1." The overlay
+  was lost, and the rest of that leg moved to fresh overlays.
+- **28-A.2's XP x64 leg.** It shut its first boot down early on the
+  coordinator's warning that the launch carried the 30-minute limit, then
+  relaunched with 2 hours.
+
+Rules. **Launch every QEMU guest as a background task with the 2-hour limit
+(7,200,000 ms), not the default.** **Shut the guest down from inside before
+any limit can fire.** A guest killed mid-run is not a reading: a Windows 98
+SE registry damaged that way says nothing about the driver.
+
+## Windows 98 SE sends a removed PDO more IRPs after its REMOVE: a bus driver must not delete a gone PDO inside the REMOVE
+
+Roadmap Phase 27's closing legs, 2026-10-04, Windows 98 SE under NUSB 3.3 in
+QEMU (`docs/contributing/runs/run-27.md`, "The closing legs"). A `usb-audio`
+whose devnode existed from an earlier boot, bound and then unplugged, gave "A
+fatal exception 0E has occurred at 0028:C002A3A7", the trace ending at the
+device PDO's REMOVE. The HCD deleted a gone PDO inside its
+`IRP_MN_REMOVE_DEVICE`.
+
+**The configuration manager is not finished with the PDO when its REMOVE
+completes.** In the same removal pass it sends the PDO
+`IRP_MN_QUERY_DEVICE_RELATIONS` (minor 0x07, BusRelations) and then minor
+0x13, `IRP_MN_QUERY_ID`. With the PDO kept alive, every unplug reads REMOVE,
+0x07, 0x13: 10 of 10 on each of two audio guests, and the same in the HID
+and behind-hub mouse legs. Only audio faulted: with an existing devnode its
+stack had the device open, and the freed memory was reused before those IRPs
+arrived. Windows 2000 sends nothing after a REMOVE.
+
+The delete dated from Phase 26 (`27063e1`), and the composite split
+(`38635f6`) exposed it. `c038326` moves a removed gone PDO to a list and
+deletes it at the next root-hub BusRelations answer, or when the parent
+releases its PDOs: 20 of 20 audio unplug cycles then passed, where the
+baseline faulted on the first.
+
+`c038326`'s message and its source comment name the second IRP
+QUERY_PNP_DEVICE_STATE. The trace prints the minor in hex, and the DDK's
+`wdm.h` has `IRP_MN_QUERY_ID` at 0x13 and `IRP_MN_QUERY_PNP_DEVICE_STATE` at
+0x14; no 0x14 follows a REMOVE in the traces read.
+
+Rules. **On Windows 98 SE, do not `IoDeleteDevice` a gone PDO inside its
+REMOVE: defer the delete to the next BusRelations answer**, which comes from
+a later pass. And **read a trace's minor codes in hex against `wdm.h`**, not
+from memory: 0x13 and 0x14 are neighbours.
