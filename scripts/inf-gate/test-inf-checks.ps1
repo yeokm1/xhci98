@@ -574,28 +574,40 @@ try {
     # On 9x the interval is the last line of [Xhci.AddReg], so the anchor is
     # the blank line and the root hub's section header after it.
     Assert-RuleFires "imod-no-9x" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,XhciLogDebugView,0x00010001,0`r`nHKR,,XhciImodInterval250ns,0x00010001,500`r`n`r`n[RootHub.Dev]",
+        param($t) $t.Replace("HKR,,XhciLogDebugView,0x00010001,0`r`nHKR,,XhciImodInterval250ns,0x00010001,160`r`n`r`n[RootHub.Dev]",
                              "HKR,,XhciLogDebugView,0x00010001,0`r`n`r`n[RootHub.Dev]")
     }
     Assert-RuleFires "imod-no-nt" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500`r`nHKR,,EnumPropPages32",
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,160`r`nHKR,,EnumPropPages32",
                              "HKR,,EnumPropPages32")
     }
     # **The default is the driver's fallback, not the shipped value**, and
     # this is the edit that looks harmless: 4000 is what every release before
-    # 1.1.1.0 ran at, and it is a VAL-DEFAULT because the owner's number is 500.
+    # 1.1.1.0 ran at, and it is a VAL-DEFAULT because the owner's number is 160.
     Assert-RuleFires "imod-default-is-fallback" "VAL-DEFAULT" {
-        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500`r`nHKR,,EnumPropPages32",
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,160`r`nHKR,,EnumPropPages32",
                              "HKR,,XhciImodInterval250ns,0x00010001,4000`r`nHKR,,EnumPropPages32")
+    }
+    # **The superseded value is refused too.** 500 is what the miniport shipped
+    # from 1.1.1.0 and the HCD until the owner's ruling of 2026-10-04 moved it
+    # to 160, so it is the number a restored line or an old INF would carry -
+    # on either path.
+    Assert-RuleFires "imod-default-old-9x" "VAL-DEFAULT" {
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,160`r`n`r`n[RootHub.Dev]",
+                             "HKR,,XhciImodInterval250ns,0x00010001,500`r`n`r`n[RootHub.Dev]")
+    }
+    Assert-RuleFires "imod-default-old-nt" "VAL-DEFAULT" {
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,160`r`nHKR,,EnumPropPages32",
+                             "HKR,,XhciImodInterval250ns,0x00010001,500`r`nHKR,,EnumPropPages32")
     }
     # Hex spells the same number and is still refused: the gate compares text,
     # and one spelling on every path is what the install legs have read.
     Assert-RuleFires "imod-default-hex-9x" "VAL-DEFAULT" {
-        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500`r`n`r`n[RootHub.Dev]",
-                             "HKR,,XhciImodInterval250ns,0x00010001,0x000001f4`r`n`r`n[RootHub.Dev]")
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,160`r`n`r`n[RootHub.Dev]",
+                             "HKR,,XhciImodInterval250ns,0x00010001,0x000000a0`r`n`r`n[RootHub.Dev]")
     }
     Assert-RuleFires "imod-type" "VAL-TYPE" {
-        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500`r`nHKR,,EnumPropPages32",
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,160`r`nHKR,,EnumPropPages32",
                              "HKR,,XhciImodInterval250ns,,500`r`nHKR,,EnumPropPages32")
     }
 
@@ -607,8 +619,8 @@ try {
     # switches nothing whatever it says.
     Write-Step "the virtual hub's values, refused on every path"
     Assert-RuleFires "vhub-written-9x" "VAL-HCDVHUB" {
-        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500`r`n`r`n[RootHub.Dev]",
-                             "HKR,,XhciImodInterval250ns,0x00010001,500`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`n`r`n[RootHub.Dev]")
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,160`r`n`r`n[RootHub.Dev]",
+                             "HKR,,XhciImodInterval250ns,0x00010001,160`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`n`r`n[RootHub.Dev]")
     }
     Assert-RuleFires "vhub-written-nt" "VAL-HCDVHUB" {
         param($t) $t.Replace("HKR,,Controller,1,01`r`n",
@@ -1737,10 +1749,15 @@ try {
         param($t) $t.Replace("HKR,,XhciLogVerbosity,0x00010001,0", "HKR,,XhciLogVerbosity,0x00010001,1")
     } -Source $prodInfAmd64 -Arch amd64
     Assert-RuleFires "amd64-imod-missing" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500`r`n", "")
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,160`r`n", "")
     } -Source $prodInfAmd64 -Arch amd64
     Assert-RuleFires "amd64-imod-default" "VAL-DEFAULT" {
-        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500", "HKR,,XhciImodInterval250ns,0x00010001,4000")
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,160", "HKR,,XhciImodInterval250ns,0x00010001,4000")
+    } -Source $prodInfAmd64 -Arch amd64
+    # 500, the value before the owner's ruling of 2026-10-04, refused here as
+    # on the 32-bit file: the 64-bit package ships 160 too.
+    Assert-RuleFires "amd64-imod-default-old" "VAL-DEFAULT" {
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,160", "HKR,,XhciImodInterval250ns,0x00010001,500")
     } -Source $prodInfAmd64 -Arch amd64
     #
     # **The version tie reaches the 64-bit file too**, and proving that needs

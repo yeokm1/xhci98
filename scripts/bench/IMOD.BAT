@@ -13,13 +13,13 @@ rem reads this value at every start and writes the result to IMOD: 10 to 4000
 rem is used as given, and anything else - absent, 0, 5000 - is REPLACED by
 rem 4000, the hardware reset value (1 ms) and what every release before 1.1.1.0
 rem ran at.  Not clamped, so 0 is not moderation off.  An INF install writes
-rem 500.  This file still accepts 0 to 65535, so the fallback can be set on
-rem purpose and read back.
+rem 160 (500 up to 1.2.0.0).  This file still accepts 0 to 65535, so the
+rem fallback can be set on purpose and read back.
 rem
 rem SO CLEAR IS NOT "PUT THE PACKAGE BACK".  It deletes the value, and the
 rem driver then runs at 4000 - the control arm of a sweep, and NOT what the
-rem package installs.  To go back to the package's own setting, set 500.
-rem Leave a bench machine at 500 when the session ends, or say in the run
+rem package installs.  To go back to the package's own setting, set 160.
+rem Leave a bench machine at 160 when the session ends, or say in the run
 rem sheet that it was not.  (Until 2026-09-21 the experiment read
 rem XhciImodExperiment.  That name is not read by anything.)
 rem
@@ -84,7 +84,7 @@ echo.
 echo Set %VALNAME% = %1  (250 ns units)
 if %1 LSS 10 echo   NOTE: below 10, so the driver will use 4000 instead - not 10.
 if %1 GTR 4000 echo   NOTE: above 4000, so the driver will use 4000.
-if "%1"=="500" echo   500 is what the package's INF installs.
+if "%1"=="160" echo   160 is what the package's INF installs.
 goto restart
 
 :clear
@@ -92,7 +92,7 @@ reg delete "%DEVKEY%" /v %VALNAME% /f >nul 2>&1
 echo.
 echo Cleared %VALNAME% - the driver will run at its own default, 4000.
 echo That is the CONTROL arm of a sweep, NOT the package's setting: the INF
-echo installs 500.
+echo installs 160.
 goto restart
 
 :show
@@ -169,7 +169,7 @@ echo.
 echo        %CLASSKEY%\NNNN
 echo.
 echo        The value is %VALNAME%, REG_DWORD, in 250 ns units - enter it
-echo        with Base set to Decimal.  The INF installs 500.
+echo        with Base set to Decimal.  The INF installs 160.
 echo.
 echo        Do NOT use IMOD98.BAT here: it writes the Windows 98 key,
 echo        ...\Services\Class\USB\NNNN, which this system does not read.
@@ -202,7 +202,7 @@ echo.
 echo Usage:  IMOD SHOW ^| IMOD ^<0-65535^> ^| IMOD CLEAR
 echo.
 echo   Units are 250 ns, so 4000 = 1 ms = the hardware reset default.
-echo   The INF installs 500.  CLEAR deletes the value, and the driver then runs
+echo   The INF installs 160.  CLEAR deletes the value, and the driver then runs
 echo   at 4000.  Outside 10 to 4000 the driver uses 4000 instead, not clamped.
 echo.
 echo   Windows 98 and ME: use IMOD98.BAT instead.

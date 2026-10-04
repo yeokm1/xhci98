@@ -458,7 +458,7 @@ task. The miniport reads six values from its device key (`src\*.c`, the six
 |---|---|
 | `XhciLogVerbosity` | Carried over, same meaning, same shipping default 0, controller only |
 | `XhciLogDebugView` | Carried over, same meaning; under the HCD it also selects 26-A.8's continuous PASSIVE flusher |
-| `XhciImodInterval250ns` | Carried over, same meaning and default 500 |
+| `XhciImodInterval250ns` | Carried over, same meaning and code default 4000; both INFs write 160 (40 us) on every install path since the owner's ruling of 2026-10-04 (`roadmap-hcd.md`, decisions table), 500 until then |
 | `XhciVirtualHSHub`, `XhciVirtualHSHubVid`, `XhciVirtualHSHubPid` | Not read and not written (owner, 2026-10-02); the INF gate refuses them in an HCD INF (`VAL-HCDVHUB`) |
 
 The root-hub sections write no value of the controller's: they carry the

@@ -72,7 +72,8 @@ What it checks, grouped by the failure each rule prevents:
            and 13-L.2). There are three and all are DWORDs: the two log
            switches, which ship at 0 (three until the snapshot-value merge,
            when XhciLogSnapshot joined the ladder), and since roadmap task 23.4
-           XhciImodInterval250ns, the moderation interval, which ships at 500.
+           XhciImodInterval250ns, the moderation interval, which ships at 160
+           on every path of both INFs (owner, 2026-10-04; 500 until then).
            (**VAL-SZ was removed with XhciLogFile.** It was the
            string half - a REG_SZ's data is text two setup engines may quote,
            trim or tokenise differently, which a DWORD's is not - and with no
@@ -1046,7 +1047,7 @@ foreach ($m in $models) {
 #
 # **Roadmap task 23.4 added a third, and the first whose default is not 0.**
 # `XhciImodInterval250ns` is not a switch: it is the interval the driver writes
-# to IMOD, and the INF ships 500 where the driver's own fallback is 4000. The
+# to IMOD, and the INFs ship 160 where the driver's own fallback is 4000. The
 # risk is the same shape, a path that lacks it silently running another
 # interval, and so is the default check - the number is an owner's decision on
 # bare-metal readings, and `DefaultWhy` says so where "must ship off" would be
@@ -1078,9 +1079,9 @@ $requiredValues = @(
     @{
         Name    = "XhciImodInterval250ns"
         Type    = "0x00010001"
-        Default = "500"
+        Default = "160"
         Why     = "task 23.4's interrupt moderation interval, in 250 ns units, written to IR0's IMOD at every start. Absent, the driver runs at its own default of 4000 (1 ms), so a path missing it runs a different interval from the other paths and nothing says so"
-        DefaultWhy = "The owner set the shipped interval to 500 on 2026-09-22 from roadmap tasks 23.3 and 23.5's bare-metal readings; any other number is a new decision and needs a new reading, not an INF edit"
+        DefaultWhy = "The owner set the shipped interval to 160 (40 us) on 2026-10-04 from an ATTO QD1 reading of a UAS drive at SuperSpeed under Windows 98 SE on the P14s Gen 1, where 500 cost 15 to 22% of bulk throughput (roadmap-hcd.md, decisions table); it was 500 from 2026-09-22 (tasks 23.3 and 23.5). Any other number is a new decision and needs a new reading, not an INF edit"
     },
     @{
         Name    = "XhciVirtualHSHub"

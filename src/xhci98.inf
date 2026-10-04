@@ -71,7 +71,7 @@ HKR,,NTMPDriver,,xhci98.sys
 HKR,,EnumPropPages,,"sysclass.dll,USBControllerPropPage"
 HKR,,XhciLogVerbosity,0x00010001,0
 HKR,,XhciLogDebugView,0x00010001,0
-HKR,,XhciImodInterval250ns,0x00010001,500
+HKR,,XhciImodInterval250ns,0x00010001,160
 
 [RootHub.Dev]
 AddReg=RootHub.AddReg
@@ -96,7 +96,7 @@ AddService=xhci98,0x00000002,Xhci.AddService
 [Xhci.AddReg.NT]
 HKR,,XhciLogVerbosity,0x00010001,0
 HKR,,XhciLogDebugView,0x00010001,0
-HKR,,XhciImodInterval250ns,0x00010001,500
+HKR,,XhciImodInterval250ns,0x00010001,160
 HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"
 HKR,,Controller,1,01
 
