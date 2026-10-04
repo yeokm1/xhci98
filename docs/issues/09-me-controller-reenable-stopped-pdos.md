@@ -1,16 +1,24 @@
 # Issue 9 - Re-enabling the controller on Windows ME with a USB mouse attached stops the shell: the HCD reported the stopped devices gone and replaced them, where Microsoft's hub driver keeps them
 
-Status: **a known limitation of `2.0.0.0`; fixed in source for `2.1.0.0`
-and not yet read on that release.** The fix is roadmap task 33.1, commit
+Status: **a known limitation of `2.0.0.0`; fixed for `2.1.0.0`, and read
+on the `2.1.0.0` code before its cut.** The fix is roadmap task 33.1, commit
 `fa2af9b` on branch `p28-reenable`, merged at `a9a7577` (2026-10-04 20:08).
 Its legs passed on the `qemu` package `out\phase28\pkg-reenable1` the same
 evening (section 8): the Windows ME re-enable with a mouse attached 3 of 3,
 the re-enable with a mouse and a stick, and the controller disable and
-enable with a soak on Windows 98 SE and on Windows 2000. **The same legs on
-the `2.1.0.0` package are owed** (section 9), and until they are read the
-README's and the release notes' `TODO(33.1 legs)` markers stand and
-`make-release.ps1` refuses the cut. Nothing on this page says the fix is
-verified on a release.
+enable with a soak on Windows 98 SE and on Windows 2000. The same legs then
+passed on the `2.1.0.0` integration build (2026-10-05, development host A,
+QEMU; `out\phase33\legs\results.md`, legs 1a, 1d and 1f, on the `qemu`
+flavour of `07ac963`): the ME re-enable with a mouse 3 of 3, with a mouse
+and a stick, with a USB keyboard alone (which typed afterwards), and with a
+hub holding a mouse and a stick, every device kept dormant and revived with
+no START refused; and the Windows 98 SE and Windows 2000 disable and enable
+with a stick behind a hub, a clean file compare and a 10-cycle soak each.
+The `release` flavour at `4c9f65f` passed the ME re-enable with a mouse
+once more after the update from `2.0.0.0` (leg 3d). The README's and the
+release notes' 33.1 markers are filled from these readings. The reading on
+the published `2.1.0.0` asset, the release-acceptance test's step 7.9, is
+taken after the cut (section 9).
 
 Target affected: Windows ME, a target supported in virtual machines only,
 under SweetLow's USB 2.0 stack (`AGENTS.md`, "Project Purpose"). Every
@@ -494,17 +502,13 @@ XP, XP x64, Vista and 7; the `release` flavour; and the amd64 build.
 
 ## 9. What is still owed
 
-- **The same legs on the `2.1.0.0` package** (roadmap task 33.1): the ME
-  re-enable with a mouse, three cycles, and with a mouse and a stick; the
-  Windows 98 SE and Windows 2000 disable and enable with a soak each. Until
-  they are read, `2.1.0.0`'s README and release notes keep their
-  `TODO(33.1 legs)` markers, and the release-acceptance test's step 7.9 (the
-  re-enable with a mouse attached) has not been run against a release.
-  Task 33.4 adds the same re-enable legs with a device behind a hub, once
-  hubs are devnodes of their own.
-- **The keyboard.** No run attached one. The `2.0.0.0` wording ("a USB
-  mouse or keyboard") is untested on the keyboard side in both directions:
-  that `2.0.0.0` hangs with one, and that the fix holds with one.
+- **The published asset.** The legs above passed on the `2.1.0.0`
+  integration build, with a device behind a hub (task 33.4) among them (see
+  "Status"); the release-acceptance test's step 7.9 (the re-enable with a
+  mouse attached) is still to be run against the published `2.1.0.0`
+  asset.
+- **The keyboard on `2.0.0.0`.** The fix holds with a USB keyboard alone
+  (leg 1f, 2026-10-05). Whether `2.0.0.0` hangs with one was never run.
 - **The cases section 8 lists as not taken**, the unplug-while-disabled
   path first, since it is the one that makes a START wait 10 s.
 - **ME's side of the mechanism** (section 4.2): unread. The fix does not
