@@ -857,9 +857,23 @@ foreach ($m in @($models | Where-Object { $_.Role -eq "hub" })) {
     foreach ($ap in @(Get-ModelPaths $m)) {
         $install = $m.Section + $ap.Suffix
         if (-not (Test-SectionExists $inf $install)) { continue }  # PATH-* said so
-        $hubCopy = @(Get-Directive $inf $install "CopyFiles")
-        if ($hubCopy.Count -gt 0) {
-            Add-Failure "HCD-HUBCOPY" ("the {0} hub install [{1}] has CopyFiles={2}. A hub section copies nothing: its devnode exists only under a running {3}, and a copy would ask a user who plugs a hub in later for the original media." -f $ap.Os, $install, ($hubCopy -join ','), $prod.Binary)
+        # The install section and every section the engine runs beside it
+        # by name - [<install>.CoInstallers], .HW, .Services, .Interfaces and
+        # the rest - copy nothing either, and none of them may pull another
+        # INF's sections in by Include/Needs, which this gate cannot follow
+        # (Codex review of 33.4, round 1, finding 3).
+        $hubSections = @($install) + @($inf.SectionOrder | Where-Object { $_.ToLowerInvariant().StartsWith(($install + ".").ToLowerInvariant()) })
+        foreach ($hs in $hubSections) {
+            $hubCopy = @(Get-Directive $inf $hs "CopyFiles")
+            if ($hubCopy.Count -gt 0) {
+                Add-Failure "HCD-HUBCOPY" ("the {0} hub install's [{1}] has CopyFiles={2}. A hub section copies nothing: its devnode exists only under a running {3}, and a copy would ask a user who plugs a hub in later for the original media." -f $ap.Os, $hs, ($hubCopy -join ','), $prod.Binary)
+            }
+            foreach ($ind in @("Include", "Needs")) {
+                $hubInd = @(Get-Directive $inf $hs $ind)
+                if ($hubInd.Count -gt 0) {
+                    Add-Failure "HCD-HUBCOPY" ("the {0} hub install's [{1}] has {2}={3}. A hub install is this INF's sections alone, so this gate can hold it to copying nothing." -f $ap.Os, $hs, $ind, ($hubInd -join ','))
+                }
+            }
         }
     }
 }

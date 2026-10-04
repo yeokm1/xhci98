@@ -1012,6 +1012,10 @@ typedef struct _HCD_HUB_FDO {
     ULONG LinkMade;
     UNICODE_STRING Interface;
     ULONG InterfaceOn;
+    /* Hub IOCTLs admitted: opened by a START that succeeded, closed
+     * before a STOP or SURPRISE_REMOVAL goes down, so none can keep the
+     * PDO's Busy raised while its quiesce waits for it. */
+    volatile LONG DoorOpen;
 } HCD_HUB_FDO, *PHCD_HUB_FDO;
 
 #define HcdControllerFromExt(ext) \

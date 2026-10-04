@@ -153,6 +153,7 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
     XHCI_DBG_VALUE("hcd: hub FDO PnP minor", stack->MinorFunction);
 
     if (stack->MinorFunction == IRP_MN_REMOVE_DEVICE) {
+        (VOID)InterlockedExchange((PLONG)&fdo->DoorOpen, 0);
         fdo->Common.PnpState = HCD_PNP_REMOVED;
         hcdHubIoLeave(fdo);
         (VOID)KeWaitForSingleObject(&fdo->RemoveEvent, Executive, KernelMode,
@@ -186,6 +187,7 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
         if (NT_SUCCESS(status)) {
             fdo->Common.PnpState = HCD_PNP_STARTED;
             hcdHubStarted(fdo);
+            (VOID)InterlockedExchange((PLONG)&fdo->DoorOpen, 1);
         }
         status = HcdCompleteIrp(irp, status, 0);
         hcdHubIoLeave(fdo);
@@ -194,11 +196,13 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
 
     switch (stack->MinorFunction) {
     case IRP_MN_STOP_DEVICE:
+        (VOID)InterlockedExchange((PLONG)&fdo->DoorOpen, 0);
         fdo->Common.PnpState = HCD_PNP_STOPPED;
         HcdDoorHubStop(fdo);
         irp->IoStatus.Status = STATUS_SUCCESS;
         break;
     case IRP_MN_SURPRISE_REMOVAL:
+        (VOID)InterlockedExchange((PLONG)&fdo->DoorOpen, 0);
         fdo->Common.PnpState = HCD_PNP_SURPRISE_REMOVED;
         HcdDoorHubStop(fdo);
         irp->IoStatus.Status = STATUS_SUCCESS;
@@ -260,6 +264,14 @@ NTSTATUS HcdHubFdoDeviceControl(PHCD_HUB_FDO fdo, PIRP irp)
 
     if (!hcdHubIoEnter(fdo)) {
         return HcdCompleteIrp(irp, STATUS_DELETE_PENDING, 0);
+    }
+    /* Refused before the PDO's Busy is raised once a STOP or a removal has
+     * begun (Codex review of 33.4, round 1, finding 2): the PDO's quiesce
+     * waits for Busy, and handles already open would otherwise hold it. A
+     * request admitted just before the close is one bounded IOCTL. */
+    if (fdo->DoorOpen == 0) {
+        hcdHubIoLeave(fdo);
+        return HcdCompleteIrp(irp, STATUS_DEVICE_NOT_CONNECTED, 0);
     }
     hc = hcdHubControllerEnter(fdo);
     status = HcdDoorHubIoctl(hc, hcdHubPdoOf(fdo), irp);

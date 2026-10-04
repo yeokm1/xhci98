@@ -2700,6 +2700,12 @@ means each child has had its own REMOVE). Every relations answer applies
 that rule to every gone PDO, whichever parent it answers for, so the ports
 behind a departed hub stop waiting and a gone PDO whose REMOVE has come
 reaches `RemovedPdos` and its deletion at the next answer, as any other.
+The rule is applied at the departure too (`HcdDevicePdoGone`), so a port
+never waits for an answer no FDO can give, and it has one more case: a PDO
+PnP has removed already (a disabled device) under a hub kept dormant across
+a controller stop is missing at once - its hub's FDO answers nothing until
+the hub is enumerated again, which its port's wait would otherwise prevent
+(Codex review of 33.4, round 1, finding 1).
 
 **Invalidation.** `IoInvalidateDeviceRelations` goes to the PDO a change
 belongs under: the root-hub PDO for `ParentSerial` 0, otherwise the hub PDO,
@@ -2748,7 +2754,10 @@ ancestor rule above. The hub PDO is referenced across the call.
 
 **The hub FDO** (`hcd_hubfdo.c`): `AddDevice` for a hub PDO; PnP passed down
 like the root hub FDO's, with `BusRelations` answered as above and
-`START`'s success making the door; a `REMOVE` that only tears down the
+`START`'s success making the door and opening its IOCTLs, which a `STOP`,
+`SURPRISE_REMOVAL` or `REMOVE` closes before going down, so no open handle
+keeps the PDO's `Busy` raised while its quiesce waits (round 1, finding 2);
+a `REMOVE` that only tears down the
 door and itself - it never detaches the bus. Power is passed down; the hub
 PDO answers it as a device PDO does. A hub PDO answers no internal IOCTL
 (the bus owns the hub; nothing above the hub FDO sends URBs).
@@ -2785,7 +2794,9 @@ only under a running `xhci98.sys`, so the binary is on disk and loaded, and
 a hub plugged in months after the install must not send the setup engine
 looking for the original media (Windows 98's engine and NT 5.x's both look
 for a copy's source and ask for it when it is gone). The INF gate holds that
-(`HCD-HUBCOPY`), keeps both hub models in every models section and every hub
+(`HCD-HUBCOPY`, over the install section and every `<install>.*` section
+the engine runs beside it, with no `Include` or `Needs`; round 1, finding
+3), keeps both hub models in every models section and every hub
 id under `XHCI98\` (`HCD-HUB`), refuses a Microsoft hub-class id on any line,
 and holds the hub sections to the hub page (`HCD-HUBPAGE`).
 
