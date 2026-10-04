@@ -271,7 +271,9 @@ Every device PDO and every function PDO is a child of the root hub, not of the
 hub it is plugged into: external hubs are objects of the bus (the decisions
 table), so a device behind a hub appears directly under `xHCI98 USB 3.x Root
 Hub` in Device Manager, and the Power tab reports the budget the bus itself
-keeps (section 8).
+keeps (section 8). **Superseded 2026-10-04 by task 33.4 (section 10.11):**
+each hub the bus serves also has a PDO, bound to this driver as a hub FDO,
+and the devices behind it are its children; the bus still runs the hub.
 
 The driver's role at `AddDevice` is decided by whether the PDO handed in was
 created by this driver object (`Pdo->DriverObject == DriverObject`), and
@@ -1555,7 +1557,7 @@ creates its PDOs.
 |---|---|
 | Device Manager's view by connection on 98 and NT: that it uses only `CM_Get_Child` / `Sibling` is expected, not read. | 26-A.8 (or a guest reading in 26-V.1 / 26-V.2) |
 | A sweep of each target's whole `%windir%\inf` (and NUSB's and SweetLow's full file sets) for any row matching `XHCI98\ROOT_HUB`: impossible by construction, unchecked. | 26-A.4 |
-| **External hubs inside the bus against `DeviceIsHub`.** `usbui.dll` recurses into a connection with `DeviceIsHub` TRUE through `GET_NODE_CONNECTION_NAME` and `CreateFile("\\.\" + name)`. With no hub devnode the HCD either reports the devices behind a hub flat under the root hub's ports, or answers `DeviceIsHub` and serves a per-hub node through the root-hub interface link plus a suffix (`FileObject->FileName`). A design decision. | 26-A.8 |
+| **External hubs inside the bus against `DeviceIsHub`.** `usbui.dll` recurses into a connection with `DeviceIsHub` TRUE through `GET_NODE_CONNECTION_NAME` and `CreateFile("\\.\" + name)`. With no hub devnode the HCD either reports the devices behind a hub flat under the root hub's ports, or answers `DeviceIsHub` and serves a per-hub node through the root-hub interface link plus a suffix (`FileObject->FileName`). A design decision. **Closed 2026-10-04 by task 33.4 (10.11)**: each hub is a devnode with a door of its own, `DeviceIsHub` TRUE and its name returned | 26-A.8; 33.4 |
 | **Split composite devices**: `usbui.dll` maps a connection to one devnode through `GET_NODE_CONNECTION_DRIVERKEY_NAME`. With the bus splitting a composite into per-function PDOs there is no single connection devnode; which key to return (the first function's, or a failure) and what `usbui` then shows is unread. | 26-A.8, with 26-A.7 |
 | How Windows 98's engine treats a root-hub section whose `NTMPDriver` is the already-loaded controller driver, and NTKERN calling `AddDevice` a second time on that driver object (98's own `usbhub.sys` serves several devnodes, so it is expected to work). | 26-V.0 / 26-V.1 (a guest reading) |
 | The `ControllerFlavor` to report on Vista and 7 (1000 or above for USB 2.0 arithmetic; nothing in WDK 7.1 names xHCI). What usbport reported for the miniport was not read. | 26-A.8 |
@@ -2420,6 +2422,190 @@ counts endpoints added at a function's `SELECT_CONFIGURATION` or
 | Windows 2000's and stock Windows 98's own composite parent (`usbhub.sys`) grouping rule is unread. The INF evidence (audio at `MI_00`, HID at `MI_02`) agrees with the `usbccgp` rule, and since the bus does the splitting, what matters is what those targets' audio drivers accept. | 26-V.1, 26-V.2 |
 | Whether `IoInvalidateDeviceRelations` may be called at `DISPATCH_LEVEL` on Windows 98 (section 7.7), which decides whether 10.1's state machine hands that one call to the PASSIVE worker. | 27-A.1 |
 | Under what condition Windows 7's `usbccgp.sys` takes its CDC grouping path. | none in 2.0.0.0; recorded for a later CDC need |
+
+### 10.11 External hubs as devnodes (task 33.4, 2026-10-04)
+
+**The decision.** The owner, 2026-10-04: external hubs appear in Device
+Manager as devnodes from release `2.1.0.0`, with the devices behind each
+nested beneath it, as on every Microsoft stack. This supersedes "the hub
+itself is never a PDO" wherever this record says it (5.2's object table and
+the paragraph after it, 5.3's `Hub` row, 10's introduction, 10.3's
+bring-up, 10.7's last paragraph) and closes 8.10's row "External hubs inside
+the bus against `DeviceIsHub`". **Only the PnP presentation changes**: the
+bus still runs every hub - its class requests, status-change pipe, TT
+assignment, teardown and the SuperSpeed half of Phase 30 are untouched -
+and no hub-class driver of any target binds anything. Written before the
+code, on branch `p33-hubs`.
+
+**Object model.** A hub's PDO is an `HCD_DEVICE_PDO` with `Hub` set, created
+by the controller thread once `HcdHubStart` has brought the hub up (a hub
+refused as too deep, 10.3, gets one too, with no ports to answer for). It is
+bound to `xhci98.sys` by the INF (below), and `AddDevice`, decided as before
+by the PDO's driver object, attaches a **hub FDO** (`HCD_HUB_FDO`, a fifth
+kind) over it - the root hub's pattern again. Every PDO carries
+`ParentSerial`: 0 for a child of the root hub, otherwise the `Serial` of the
+hub PDO it is presented under - the nearest hub above it **that has a PDO**
+(a hub whose PDO could not be created presents its devices under the next
+one up, ultimately the root hub; pure rule `XhciHubPresentedParent`, host
+vectors in `test_hub`). A serial rather than a pointer, so no PDO ever
+dangles on its parent's deletion. The PDO lists, the lock (`PdoListLock`),
+the single-writer thread and every lifecycle state of 5.2 and `hcd_pdo.c`
+(listed, gone, removed, deleted, dormant, orphaned) are reused unchanged for
+hub PDOs; only which relations answer carries a PDO is new.
+
+**One devnode per half: a USB 3 hub shows as two.** The bus already models a
+USB 3 hub as two hubs - the SuperSpeed half on a SuperSpeed port and the USB
+2.0 half on the companion, each its own device record, slot, hub object and
+ports (30-A.1) - and the devices behind each half are on that half's ports.
+Two devnodes is that truth, and it is what Microsoft's own stack shows (a
+"Generic SuperSpeed USB Hub" and a "Generic USB Hub" for one box); one
+devnode would have to merge two hub objects whose ports, removals and node
+IOCTLs are independent, for a cosmetic gain. Decided: two.
+
+**Ids** (project-owned; `XhciHubPdoId`, `xhci_hub.c`, host vectors in
+`test_hub`):
+
+| Query | USB 2.0 / 1.1 hub, and a USB 3 hub's USB 2.0 half | A USB 3 hub's SuperSpeed half |
+|---|---|---|
+| `BusQueryDeviceID` | `XHCI98\HUB&VID_vvvv&PID_pppp` | `XHCI98\HUB30&VID_vvvv&PID_pppp` |
+| `BusQueryHardwareIDs` | `XHCI98\HUB&VID_vvvv&PID_pppp&REV_rrrr`, `XHCI98\HUB&VID_vvvv&PID_pppp`, `XHCI98\HUB` | the same with `HUB30` |
+| `BusQueryCompatibleIDs` | none | none |
+| `BusQueryInstanceID` | the instance key in decimal (10.7's device rule, unchanged) | the same |
+| Device text | `xHCI98 USB Hub` | `xHCI98 USB 3.x Hub` |
+
+Never `USB\Class_09...`, `USB\HubClass`, `USB\USB20_HUB` / `USB30_HUB` or
+`USB\VID_...&PID_...`. The hub-class matches every target's INFs carry were
+swept again for this decision (2026-10-04, static, a text read of the INFs
+section 10.6 hashes plus NUSB 3.3's and 3.6's `USB2.INF` and SweetLow's):
+98 SE and ME `usb.inf` match `USB\CLASS_09`, `USB\CLASS_09&SUBCLASS_01`,
+`USB\ROOT_HUB` and `USB\ROOT_HUB_DBC`; 2000 SP4 adds `USB\HUBCLASS` and
+`USB\ROOT_HUB20`; XP, XP x64, Vista and 7 `usb.inf` the two `CLASS_09`
+forms; NUSB's and SweetLow's `USB2.INF` `USB\HUBCLASS` and
+`USB\ROOT_HUB20`; and XP's and later `usb.inf` also list vendor hubs by
+`USB\VID_&PID_`, which is why no VID/PID id under the `USB\` enumerator is
+emitted. None of the files names an `XHCI98\` id. The hardware-id form,
+not a compatible id, is what the INF binds, so the match ranks as a
+hardware-id match on every engine. The instance key keeps the location rule
+of 10.7 (task 33.2's serial-number instance ids, on their own branch, decide
+devices; a hub is a location device either way). On the NT targets a device
+PDO reports `UniqueID` FALSE, so the PnP manager prefixes its instance id
+with its parent's `ParentIdPrefix`: **a device that was behind a hub under
+`2.0.0.0` is a new devnode once under `2.1.0.0`**, re-installed silently from
+the same class INF; Windows 98's configuration manager uses the instance id
+as given (unread; the guest legs below record what it does).
+
+**Capabilities.** `Removable` TRUE, `SurpriseRemovalOK` TRUE, `UniqueID`
+FALSE, `Address` and `UINumber` the instance key. `SurpriseRemovalOK` TRUE so
+the XP-onward hot-plug applet does not offer the hub itself for safe removal
+while a storage device behind it keeps its own entry; the applet's rule was
+not read (an open item, read on the XP guest).
+
+**Relations.** The root hub FDO's `BusRelations` carry the listed PDOs whose
+`ParentSerial` is 0; a hub FDO's carry those whose `ParentSerial` is its hub
+PDO's `Serial` (`HcdDevicePdoRelations(hc, old, parent)`). The marking rules
+of 5.2 apply per answer: a listed PDO carried is `Reported`; a gone PDO whose
+parent is this answer's is omitted and so `MissingReported`. One rule is
+added, because a hub that leaves takes its whole subtree from PnP's view at
+once and its FDO answers nothing more: **a gone PDO is missing as soon as
+any hub PDO above it is** - reported missing, deleted, or removed by PnP
+(PnP removes a devnode's children before the devnode, so a removed parent
+means each child has had its own REMOVE). Every relations answer applies
+that rule to every gone PDO, whichever parent it answers for, so the ports
+behind a departed hub stop waiting and a gone PDO whose REMOVE has come
+reaches `RemovedPdos` and its deletion at the next answer, as any other.
+
+**Invalidation.** `IoInvalidateDeviceRelations` goes to the PDO a change
+belongs under: the root-hub PDO for `ParentSerial` 0, otherwise the hub PDO,
+**only when that PDO has been started by PnP** (`START` seen, no `STOP` or
+`REMOVE` since). A hub PDO PnP has not started may have no devnode yet, and
+invalidating it would be a fatal PnP error on NT; it needs no invalidation,
+since PnP asks a hub FDO for its relations after it starts. When the parent
+is not started the root hub is invalidated instead, which runs the
+ancestor rule above. The hub PDO is referenced across the call.
+
+**Ordering and lifetime.**
+
+1. The hub PDO is created and listed after the hub's own bring-up
+   (`HcdHubStart`), and the root hub (or its own parent hub) invalidated.
+   Its port's machine is told it exists and has started at once, as before:
+   the bus does not wait for PnP to serve a hub.
+2. Devices behind it are created whenever their enumeration finishes,
+   listed under the hub PDO's serial, and reported only when PnP asks the
+   hub FDO - after that FDO has started.
+3. A hub unplugged: section 10.5's teardown already reports the leaf PDOs
+   first and the hub's own last, so children are gone before their parent.
+   The hub PDO is reported missing to its parent; NT then surprise-removes
+   the whole subtree and removes it leaf first, Windows 98 removes it. Each
+   port below waits for its own group until the ancestor rule marks it, and
+   the hub's upstream port waits for the hub PDO and for the hub object
+   (`AwaitHub`), as before.
+4. A hub disabled in Device Manager: presentation only. PnP removes the hub
+   FDO and its children's stacks; the PDOs stay listed (the WDM rule); the
+   bus keeps the hub and the devices behind it running with no client.
+   Enabling it re-adds the FDO and re-reports them.
+5. The controller's stop and remove, and the root hub's: unchanged.
+   `HcdDevicePdoReleaseAll` settles hub PDOs and their children with the
+   rest. A hub FDO reaches the controller through its PDO's `Controller`,
+   inside the PDO's `Busy` count, which the release waits out before it
+   orphans the PDO - the device PDOs' own guard, reused.
+6. **Windows 98 SE and ME, the dormant path of task 33.1.** A hub PDO
+   stopped by PnP across an orderly controller stop is kept dormant like any
+   device PDO, and its children with it - but a child is kept only when its
+   hub PDO is (`HcdDevicePdoDormantAll` now takes the devices tier by tier,
+   root ports first). At the restart the hub re-enumerates first and revives
+   its dormant PDO at the same instance key, keeping its `Serial`, so the
+   children enumerated behind it compute the same `ParentSerial` and revive
+   theirs; `ParentSerial` and `Hub` join the descriptors in the sameness
+   test. A dormant group retired (not revived) takes the dormant groups
+   below it with it.
+
+**The hub FDO** (`hcd_hubfdo.c`): `AddDevice` for a hub PDO; PnP passed down
+like the root hub FDO's, with `BusRelations` answered as above and
+`START`'s success making the door; a `REMOVE` that only tears down the
+door and itself - it never detaches the bus. Power is passed down; the hub
+PDO answers it as a device PDO does. A hub PDO answers no internal IOCTL
+(the bus owns the hub; nothing above the hub FDO sends URBs).
+
+**The door on a hub FDO** (section 8's table, per hub): at its start
+`\DosDevices\XHCI98HUB<serial>` on the hub PDO's own name
+(`\Device\XHCI98DEV<serial>`), `SymbolicName` on the hub devnode's hardware
+key (the 98-to-XP x64 pages), and an enabled `GUID_DEVINTERFACE_USB_HUB` (the
+Vista and 7 pages). Its `DEVICE_CONTROL` answers 8.3's set for the hub's own
+ports: `GET_NODE_INFORMATION` from the hub descriptor the bus read
+(`bNbrPorts`, `wHubCharacteristics`, `bPwrOn2PwrGood`, `bHubContrCurrent`;
+`HubIsBusPowered` from the configuration's `bmAttributes` self-powered bit,
+since the bus does not keep the hub's GET_STATUS - a SuperSpeed half's
+descriptor in the same 0x29 shape, the only one the structure has), the
+connection information and its `_EX` form, the descriptors, the connection's
+driver key, attributes, and `GET_HUB_CAPABILITIES(_EX)` from the hub's speed
+and TT (`HubIs2xCapable`, High Speed, multi-TT capable and on, never root);
+`RESET_HUB` refused as on the root hub. A connection whose device is a hub
+with a PDO now answers `DeviceIsHub` TRUE - on the root hub's ports and a
+hub's alike - and `GET_NODE_CONNECTION_NAME` returns that hub's
+`XHCI98HUB<serial>`, which `usbui.dll` opens as `\\.\` plus the name (8.3,
+`GetExternalHubName`); a connection whose hub has no PDO answers as before.
+**Unread**: whether Windows 98's `sysclass.dll` `USBHubPropPage` or any
+`usbui.dll` sends a non-root hub anything 8.3 does not list, and whether the
+Vista and 7 hub Advanced tab offers `RESET_HUB` on an external hub (refused
+either way); the guest legs read the tabs.
+
+**The INFs.** Each models section of both files carries two more models,
+`%HubDesc%` under `XHCI98\HUB` and `%Hub30Desc%` under `XHCI98\HUB30`,
+installed by `Hub.Dev` (98/ME: `DevLoader=*NTKERN`, `NTMPDriver=xhci98.sys`,
+the hub page), `Hub.Dev.NTx86` / `Hub.Dev.NTamd64` and `Hub.Dev6.*` (the
+service, the hub page). **A hub section copies nothing**: the devnode exists
+only under a running `xhci98.sys`, so the binary is on disk and loaded, and
+a hub plugged in months after the install must not send the setup engine
+looking for the original media (Windows 98's engine and NT 5.x's both look
+for a copy's source and ask for it when it is gone). The INF gate holds that
+(`HCD-HUBCOPY`), keeps both hub models in every models section and every hub
+id under `XHCI98\` (`HCD-HUB`), refuses a Microsoft hub-class id on any line,
+and holds the hub sections to the hub page (`HCD-HUBPAGE`).
+
+**What 33.4 leaves open**: the hot-plug applet's listing rule; Windows 98's
+instance handling of a device re-parented under a hub; the 98 and ME
+"found new hardware" behaviour for the new devnode (read on the guests);
+what each page sends a non-root hub. The guest legs of 33.4 read them.
 
 ## 11. The transfer-buffer policy (task 25.7)
 
