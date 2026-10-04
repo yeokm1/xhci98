@@ -15,7 +15,7 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 ## 2.1.0.0 - TBD
 
 Drafted, not cut: the date and every `TODO(...)` below are the cut's to
-settle (`TODO(33.5)`).
+settle (`TODO(33.6)`).
 
 The first update of the host controller driver. It adds two things
 `2.0.0.0` did not have, external hubs in Device Manager and devices named by
@@ -43,6 +43,13 @@ same four directories.
   Microsoft's own hub driver, instead of being removed and found again
   (`TODO(33.1 legs)`: read on the `2.1.0.0` package, on Windows ME, 98 SE
   and 2000).
+- Fixed: the root hub's Power page in Device Manager showed every device's
+  power as unknown, on every system, because the driver refused the request
+  Windows sends for it (`TODO(33.5)`: read on the `2.1.0.0` package on
+  Windows 98 SE and 2000). The Advanced page's bandwidth figure counts only
+  isochronous pipes in use, as Microsoft's own stack does, so a mouse, a
+  keyboard or a drive adds nothing to it; on Windows Vista and 7 it stays at
+  zero, a known limitation.
 - `txtsetup.oem`, so that Windows 2000 and XP text-mode Setup can load the
   driver: `TODO(33.3)`, the file and its install legs, or the feasibility
   decision and this line removed.

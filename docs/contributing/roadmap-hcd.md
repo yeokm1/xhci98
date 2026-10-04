@@ -499,8 +499,9 @@ Records: `releases/history.md`; `releases/2.0.0.0/`;
 
 Goal: the first update of the HCD generation: the Windows ME controller
 re-enable fix, a device named by its serial number, a `txtsetup.oem` so
-text-mode Setup of Windows 2000 and XP can load the driver, and external hubs
-shown in Device Manager as devnodes of their own.
+text-mode Setup of Windows 2000 and XP can load the driver, external hubs
+shown in Device Manager as devnodes of their own, and the root hub's Power
+tab and the controller's Advanced tab showing what Windows' own stack shows.
 
 Status: opened 2026-10-04 on branch `2.0.1.0`, from `main` at `3eb2d2b`
 (the closed roadmap after the `2.0.0.0` release), and renamed `2.1.0.0` by
@@ -513,10 +514,11 @@ adds an install path the project has never had.
 - [ ] 33.2 a device's instance id from its serial number: answer `UniqueID` TRUE and an instance id built from the serial number string for a device with a valid one, as `usbhub` does, and keep the location for a device without one, on every target. A device moved to another port keeps its devnode, and two devices with the same VID and PID on one port no longer share one (the `2.0.0.0` difference recorded in the release notes; `out\phase28\w2k-disable\`). The serial read must tell "no serial" from "read failed"; composite functions and devices behind hubs keep their own suffixes; host vectors for the id rules; legs on both primaries and the NT guests, moving a stick between ports and checking no new hardware is found
 - [ ] 33.3 `txtsetup.oem`: a text-mode Setup driver description for Windows 2000 and XP (and XP x64 from the x64 directory), so a machine whose keyboard or install medium sits on an xHCI controller can load `xhci98.sys` at Setup's driver prompt. First the feasibility: which files text-mode Setup must load with a bus driver that replaces `usbport.sys` and `usbhub.sys` (`usbd.sys`, the HID and storage class drivers), and whether Setup's own USB support conflicts with it; then the file, its INF gate, the packaging (`make-package.ps1`, `make-release.ps1`) and an install leg per target from a floppy image in a virtual machine
 - [ ] 33.4 external hubs as devnodes: a PDO per external hub under a project-owned hardware id (never `USB\Class_09` or a VID/PID id that the OS's `usbhub.inf` would claim), bound by `xhci98.inf` with `xhci98.sys` as its FDO as the root hub is, the devices behind it re-parented under it, the door's `DeviceIsHub` recursion answered so `usbui` and USBView walk into it, on every target (owner, 2026-10-04: standard Windows practice, every Microsoft stack shows its hubs). Legs: a hub with a mouse and a stick behind it, the tree by connection on both primaries and the NT guests, hub unplug and replug, a two-tier hub chain, and the 33.1 re-enable legs with a device behind a hub
-- [ ] 33.5 the cut: `xhci_version.h` and the four INFs' `DriverVer` at `2.1.0.0`, `releases/history.md`, the release notes and the README for 33.1 to 33.4, `make-release.ps1`, and the ten install legs read from the asset
+- [ ] 33.5 the Device Manager pages (owner, 2026-10-04, on the P14s Gen 1 and the E460 under Windows 98 SE, every device): the root hub's Power tab showed every device's power as unknown, and the controller's Advanced tab's bandwidth did not rise as devices were added. Power: `hcdDoorDescriptor` refused `IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION` unless `bRequest` was 6, and every target's `usbui.dll` sends it zero-filled with only `ConnectionIndex`, `wValue` 0x0200 and `wLength` 9 written, one call of 0x15 bytes that must return exactly 0x15 (static, the nine listings; design record 13 section 8.3); fixed on `p33-door` by taking `bRequest` 0 as GET_DESCRIPTOR. Bandwidth: on 98 SE to XP `usbui` counts only open isochronous pipes, as over Microsoft's stack, so a mouse, a keyboard or a drive adds nothing and is not a defect; on Vista and 7 it comes from the `GUID_USB_WMI_DEVICE_PERF_INFO` WMI query the HCD does not serve and stays at zero, and a SuperSpeed device's power reads a quarter of its draw (the page doubles `bMaxPower`, which is in 8 mA units at SuperSpeed): both recorded as limitations in the release notes. Legs: the Power tab showing mA values for a mouse, a keyboard and a stick on both primaries and an NT guest, the same behind a hub with 33.4, an audio device playing raising the Advanced tab's figure on 98 SE, and `scripts\hub-characterise.ps1` taught the `usbui`-shaped request (`bRequest` 0, in = out = 0x15) so the probe that masked this cannot again
+- [ ] 33.6 the cut: `xhci_version.h` and the four INFs' `DriverVer` at `2.1.0.0`, `releases/history.md`, the release notes and the README for 33.1 to 33.5, `make-release.ps1`, and the ten install legs read from the asset
 
-Checkpoint: 33.1's legs, 33.2's port-move legs and 33.4's hub legs passing
-on the `2.1.0.0` package on every target, 33.3's Setup leg on Windows 2000 and
+Checkpoint: 33.1's legs, 33.2's port-move legs, 33.4's hub legs and 33.5's
+Power and Advanced tab legs passing on the `2.1.0.0` package on every target, 33.3's Setup leg on Windows 2000 and
 XP or its feasibility recorded as a decision, and the ten install legs read
 from the asset.
 
