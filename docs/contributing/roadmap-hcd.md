@@ -482,3 +482,13 @@ Records: `releases/history.md`; `docs/using/release-notes.md`;
   (`future-plans/superspeed-storage-behind-a-switch.md`). It was the way to
   SuperSpeed storage without leaving the miniport; with the miniport frozen it
   stays a record of what that would have taken.
+- **A device's instance id from its serial number.** `2.0.0.0` builds a
+  device PDO's instance id from its location alone (`UniqueID` FALSE, no
+  serial), where Microsoft's `usbhub` uses the serial number string when the
+  device has a valid one. So a device moved to another port is found again as
+  new hardware, and two devices with the same VID and PID on the same port
+  share one devnode (on 2026-10-04 a QEMU `usb-mouse` reused a stale keyboard
+  devnode on Windows 2000; `out\phase28\w2k-disable\`). The owner placed the
+  fix after `2.0.0.0` (2026-10-04): answer `UniqueID` TRUE and an instance id
+  from the serial for a device with a valid serial string, keep the location
+  for one without, on every target. The release notes carry the difference.
