@@ -2498,6 +2498,51 @@ template in `usbccgp.sys`); that is an inference from strings. Device text:
 `iProduct` for a device PDO; `iInterface` (or an IAD's `iFunction`) for a
 function PDO, falling back to the device's `iProduct`.
 
+**Device text, as implemented** (roadmap task 33.6, 2026-10-04, `2.1.0.0`;
+`XhciFuncTextIndexes` and `XhciFuncText` in `xhci_func.c`, host vectors in
+`test\test_func.c`; `HcdDeviceReadText` in `hcd_enum.c`; the answer in
+`hcd_pdo.c`). Until `2.1.0.0` every device and function PDO answered
+`DeviceTextDescription` with a fixed `USB Device`, which Windows 98 SE's
+Add New Hardware wizard showed for every device (owner report).
+
+- **Which string**: a device PDO is named by `iProduct`. A function PDO
+  tries its IAD's `iFunction`, then its first interface's `iInterface`
+  (alternate 0), then the device's `iProduct`, each index once; the first
+  that gives a string with something to show wins. None, and the PDO
+  answers `USB Device` as before.
+- **Read** on the controller thread when the PDOs are built, after 33.2's
+  serial read, in the device's first language id from string descriptor
+  0 (`0409h` when it STALLs or lists none) - read once per enumeration and
+  kept for the device's other PDOs. A STALL, or a string with nothing to
+  show, is final; any other failure is tried twice in all; an index that
+  gave nothing is not asked again for the next function. A read that
+  times out is the serial read's case: no PDO, the device left to the
+  controller reset it requested. Nothing is counted; the debug trace
+  names the port and index.
+- **Made fit to show**: the string ends at its first NUL unit; C0 and C1
+  controls and DEL become spaces, runs of spaces one, leading and trailing
+  spaces go; a surrogate that is not half of a pair, U+FFFE and U+FFFF
+  become `?`; a string with nothing but `?` and spaces is refused, so the
+  next index is tried. 126 characters, the descriptor's own limit, fit
+  whole.
+- **Windows 98 and ME fold to ASCII**: every character above U+007E, a
+  surrogate pair included, becomes `?` there (decided at run time, as for
+  the retire rule, by `IoIsWdmVersionAvailable(1, 0x10)` answering FALSE).
+  The configuration manager keeps the description as an ANSI string made
+  from the bus driver's Unicode answer, and how `ntkern` converts it - the
+  system code page, or a narrowing that would turn U+0100 into a NUL and
+  others into control or DBCS lead bytes - has not been read here; ASCII
+  passes either unchanged. The cost is an accented or non-Latin product
+  name shown with `?` on those systems. NT keeps the string as the device
+  sent it.
+- **Kept** in the PDO's extension (127 WCHARs, 254 bytes a PDO; no pool
+  site), fixed at creation: a dormant PDO revived on Windows 98 SE or ME
+  (task 33.1) answers the text it had, and the PDOs built for the
+  re-enumeration that revived it are deleted with theirs.
+- `DeviceTextLocationInformation` is unchanged: not answered, the IRP's
+  status passed through. This record has no reading of what `usbhub`
+  answers for it.
+
 **The bus never emits `USB\COMPOSITE`.** In Microsoft's stacks the composite
 device's own PDO carries it as a compatible id, and that is what brings the
 parent driver: `usbhub.sys` on 98 SE and 2000, `usbccgp.sys` from XP on and on

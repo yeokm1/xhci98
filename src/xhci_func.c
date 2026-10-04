@@ -555,3 +555,134 @@ ULONG XhciFuncInstanceId(const char *serial, ULONG location, ULONG mi,
     *used = t.Used;
     return (t.Used > capacity) ? XHCI_FUNC_TOO_SMALL : XHCI_FUNC_OK;
 }
+
+/* ----------------------------------------------------------------------- */
+/* Device text (task 33.6)                                                  */
+/* ----------------------------------------------------------------------- */
+
+static VOID xhciFuncPick(PULONG indexes, PULONG n, ULONG index)
+{
+    ULONG i;
+
+    if (index == 0) {
+        return;
+    }
+    for (i = 0; i < *n; i++) {
+        if (indexes[i] == index) {
+            return;
+        }
+    }
+    if (*n < XHCI_TEXT_PICKS) {
+        indexes[(*n)++] = index;
+    }
+}
+
+ULONG XhciFuncTextIndexes(const UCHAR *device, const XHCI_FUNC *func,
+                          const UCHAR *config, ULONG length, PULONG indexes)
+{
+    ULONG total;
+    ULONG iad;
+    ULONG at;
+    ULONG n;
+
+    if (device == NULL || indexes == NULL) {
+        return 0;
+    }
+    n = 0;
+    if (func != NULL && config != NULL) {
+        total = xhciFuncTotal(config, length);
+        if (total != 0 && xhciFuncSound(config, total)) {
+            iad = func->IadOffset;
+            if (iad != 0 && iad + XHCI_FUNC_IAD_BYTES <= total &&
+                (ULONG)config[iad + 1] == XHCI_FUNC_DT_IAD &&
+                (ULONG)config[iad] >= XHCI_FUNC_IAD_BYTES) {
+                xhciFuncPick(indexes, &n, (ULONG)config[iad + 7]);
+            }
+            /* xhciFuncSound has checked every bLength, and an interface
+             * descriptor's 9 bytes. */
+            for (at = (ULONG)config[0]; at < total; at += (ULONG)config[at]) {
+                if ((ULONG)config[at + 1] == XHCI_FUNC_DT_INTERFACE &&
+                    (ULONG)config[at + 2] == func->FirstInterface &&
+                    config[at + 3] == 0) {
+                    xhciFuncPick(indexes, &n, (ULONG)config[at + 8]);
+                    break;
+                }
+            }
+        }
+    }
+    xhciFuncPick(indexes, &n, (ULONG)device[15]);
+    return n;
+}
+
+ULONG XhciFuncText(const UCHAR *desc, ULONG bytes, ULONG flags, WCHAR *out,
+                   ULONG capacity, PULONG chars)
+{
+    ULONG length;
+    ULONG count;
+    ULONG shown;
+    ULONG next;
+    ULONG c;
+    ULONG i;
+    ULONG n;
+
+    if (desc == NULL || out == NULL || chars == NULL ||
+        capacity < XHCI_TEXT_WCHARS) {
+        return XHCI_FUNC_BAD_PARAM;
+    }
+    out[0] = 0;
+    *chars = 0;
+    if (bytes < 2 || desc[1] != 3) {
+        return XHCI_FUNC_MALFORMED;
+    }
+    length = desc[0];
+    if (length < 2 || length > bytes) {
+        return XHCI_FUNC_MALFORMED;
+    }
+    /* At most 126 units in, so never more than 126 out. */
+    count = (length - 2UL) / 2UL;
+    n = 0;
+    shown = 0;
+    for (i = 0; i < count; i++) {
+        c = (ULONG)desc[2 + i * 2] | ((ULONG)desc[3 + i * 2] << 8);
+        if (c == 0) {
+            break;
+        }
+        if (c >= 0xD800UL && c <= 0xDBFFUL && i + 1 < count) {
+            next = (ULONG)desc[4 + i * 2] | ((ULONG)desc[5 + i * 2] << 8);
+            if (next >= 0xDC00UL && next <= 0xDFFFUL) {
+                i++;
+                if (flags & XHCI_TEXT_FOLD_ASCII) {
+                    out[n++] = (WCHAR)'?';
+                } else {
+                    out[n++] = (WCHAR)c;
+                    out[n++] = (WCHAR)next;
+                    shown = 1;
+                }
+                continue;
+            }
+        }
+        if (c < 0x20UL || (c >= 0x7FUL && c <= 0x9FUL)) {
+            c = (ULONG)' ';
+        } else if ((c >= 0xD800UL && c <= 0xDFFFUL) || c >= 0xFFFEUL ||
+                   ((flags & XHCI_TEXT_FOLD_ASCII) && c > 0x7EUL)) {
+            c = (ULONG)'?';
+        }
+        if (c == (ULONG)' ' && (n == 0 || out[n - 1] == (WCHAR)' ')) {
+            continue;
+        }
+        if (c != (ULONG)'?' && c != (ULONG)' ') {
+            shown = 1;
+        }
+        out[n++] = (WCHAR)c;
+    }
+    while (n > 0 && out[n - 1] == (WCHAR)' ') {
+        n--;
+    }
+    if (!shown) {
+        out[0] = 0;
+        return XHCI_FUNC_BAD_TEXT;
+    }
+    out[n] = 0;
+    *chars = n;
+    return XHCI_FUNC_OK;
+}
