@@ -9581,3 +9581,27 @@ Rules. **On Windows 98 SE, do not `IoDeleteDevice` a gone PDO inside its
 REMOVE: defer the delete to the next BusRelations answer**, which comes from
 a later pass. And **read a trace's minor codes in hex against `wdm.h`**, not
 from memory: 0x13 and 0x14 are neighbours.
+
+## A capped trace line is not evidence of absence, and a port the controller lacks fails silently: two harness traps behind a withdrawn Windows 98 idle defect
+
+Phase 28, 2026-10-04 (`run-28.md`, "A Windows 98 port change 'lost after
+idle': withdrawn"). Windows 98 guests appeared to stop seeing port changes
+after a few minutes idle. Fifteen idle tries across five builds then
+detected every attach and pull in under 25 s with the registers clean; the
+reading had been made of two traps.
+
+- **The `event: port status change` trace line is capped.** It is printed
+  through `XHCI_DBG_VALUE_LIMITED` (`src\xhci_evt.c`, line 170;
+  `src\xhci_dbg.h`), which prints at most 32 lines a driver load. In a long
+  trace every port event after the 32nd is silent, so a missing line late in
+  a log says nothing about whether the event arrived. Windows 98 holding a
+  gone PDO's port while a modal Add New Hardware wizard is open (no
+  relations query until it is dismissed) completed the false picture.
+- **The matrix's `qemu-xhci` has four root ports.** The vm-matrix launches
+  the default controller, 4 USB 2 and 4 USB 3 ports; a `device_add` at port
+  5 does not attach anything, and nothing in the guest or the trace says so.
+
+Rules. **Do not read port events out of a long debugcon log**: use the event
+counters, `XHCISNAP` or a fresh launch. And **check the controller's port
+count (`p2`, `p3`) before choosing a port**, and `info usb` after every
+attach.

@@ -720,7 +720,6 @@ block the cut (`roadmap-hcd.md`, decisions table). The list as read on
 | The Windows 98 audio-load wedge | The miniport had it: an intermittent wedge on an audio replug after a cold boot (`1.1.0.0` 2 of 10, `1.1.1.0` 5 of 10; `lessons.md`) | Seen on every HCD build tried, timing-dependent (5 of 6 at about 40 s after boot, 0 of 20 after 120 s), every IRP to the function PDO completed and nothing outstanding at the HCD (`runs/run-27.md`, "The Windows 98 SE audio-load wedge") | Carried: pre-existing, above the HCD |
 | Windows 2000: an audio device unplugged during playback gets no REMOVE | Not on the `1.2.0.0` list | Phase 27: SURPRISE_REMOVAL and ABORT_PIPE, then no REMOVE within minutes, on `ed025d2`, `26e7cb6` and Phase 26's `a7ddbfa` (`runs/run-27.md`). On `1ed1ba6`: 7 of 7 unplugs during playback got REMOVE within about 1 s, root port, behind a hub and with the hub pulled, with Sound Recorder and Media Player (`out\phase28\w2k-audio-unplug\report.md`; "The Windows 2000 audio unplug during playback" above) | **Gone** |
 | Windows ME: a UAS drive as the first USB storage device | Not on the `1.2.0.0` list (`1.2.0.0` had no UAS driver) | On a fresh ME install whose first storage device is a UAS drive, the drive shows Code 2: ME copies its own `USBNTMAP.SYS` and `USBMPHLP.PDR` only when its first ordinary stick installs, and `xhciuas.inf` names `USBNTMAP.SYS` as its upper filter (`out\phase28\pre\me\report-rerun.md`; `runs/run-31.md`, "Windows ME: a UAS drive first") | **New, carried** (owner, 2026-10-04, option C). The recovery - an ordinary stick once, then the UAS drive replugged - is unmeasured: TODO(28-V.1, ME on Package B) |
-| Windows 98: a port change lost after a few minutes idle | Not on the `1.2.0.0` list | Seen in Windows 98 guests on 2026-10-04: after about 2 to 3 minutes idle, a plug was not reported (`PORTSC` `0xEE1`, IRQ 11 quiet); under investigation in parallel when this was written, evidence collecting in `out\phase28\idle` | TODO(98-idle-port): gone, carried or a defect fixed, from that investigation |
 
 ---
 
@@ -791,6 +790,29 @@ controller re-enable that left a stale PDO (`report-rerun.md`, "Other
 clauses") was sent to the same branch. Every one of these is read again on
 Package B: the Windows 98 and ME pulls and replugs, the Windows 2000 icon,
 and the ME controller disable and enable - TBD(Package B).
+
+
+### A Windows 98 port change "lost after idle": withdrawn
+
+A reading during the day suggested that Windows 98 guests stopped seeing
+port changes after 2 to 3 minutes idle (`PORTSC` `0xEE1`, IRQ 11 quiet). It
+was investigated on 2026-10-04 and withdrawn; it is not a defect and not a
+28.3 item. Fifteen idle tries across five builds - the final `8993884` with
+`XhciImodInterval250ns` at 500 and at 4000, Package A, `c038326`, and
+Windows 2000 - all detected the attach and the pull in under 25 s, with the
+registers clean (`USBSTS` 0, `IMAN` `0x2`, `ERDP`'s EHB clear). The earlier
+reading had two causes, neither the driver's:
+- the trace's `event: port status change` line is printed by
+  `XHCI_DBG_VALUE_LIMITED` (`src\xhci_evt.c`, line 170), which stops after 32
+  lines a driver load, so in a long trace later port events are silent
+  however many occur;
+- Windows 98 holds a gone PDO's port while its modal Add New Hardware wizard
+  is open, by design: the configuration manager sends no relations query
+  until the wizard is dismissed, so nothing re-enumerates there in the
+  meantime.
+
+Evidence: `out\phase28\idle\` and `out\phase27\audio98\<tag>-debugcon.log`.
+`lessons.md` carries the two harness traps the investigation met.
 
 ---
 
