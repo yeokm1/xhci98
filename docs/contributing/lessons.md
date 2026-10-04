@@ -9547,3 +9547,37 @@ Rules. **Launch every QEMU guest as a background task with the 2-hour limit
 (7,200,000 ms), not the default.** **Shut the guest down from inside before
 any limit can fire.** A guest killed mid-run is not a reading: a Windows 98
 SE registry damaged that way says nothing about the driver.
+
+## Windows 98 SE sends a removed PDO more IRPs after its REMOVE: a bus driver must not delete a gone PDO inside the REMOVE
+
+Roadmap Phase 27's closing legs, 2026-10-04, Windows 98 SE under NUSB 3.3 in
+QEMU (`docs/contributing/runs/run-27.md`, "The closing legs"). A `usb-audio`
+whose devnode existed from an earlier boot, bound and then unplugged, gave "A
+fatal exception 0E has occurred at 0028:C002A3A7", the trace ending at the
+device PDO's REMOVE. The HCD deleted a gone PDO inside its
+`IRP_MN_REMOVE_DEVICE`.
+
+**The configuration manager is not finished with the PDO when its REMOVE
+completes.** In the same removal pass it sends the PDO
+`IRP_MN_QUERY_DEVICE_RELATIONS` (minor 0x07, BusRelations) and then minor
+0x13, `IRP_MN_QUERY_ID`. With the PDO kept alive, every unplug reads REMOVE,
+0x07, 0x13: 10 of 10 on each of two audio guests, and the same in the HID
+and behind-hub mouse legs. Only audio faulted: with an existing devnode its
+stack had the device open, and the freed memory was reused before those IRPs
+arrived. Windows 2000 sends nothing after a REMOVE.
+
+The delete dated from Phase 26 (`27063e1`), and the composite split
+(`38635f6`) exposed it. `c038326` moves a removed gone PDO to a list and
+deletes it at the next root-hub BusRelations answer, or when the parent
+releases its PDOs: 20 of 20 audio unplug cycles then passed, where the
+baseline faulted on the first.
+
+`c038326`'s message and its source comment name the second IRP
+QUERY_PNP_DEVICE_STATE. The trace prints the minor in hex, and the DDK's
+`wdm.h` has `IRP_MN_QUERY_ID` at 0x13 and `IRP_MN_QUERY_PNP_DEVICE_STATE` at
+0x14; no 0x14 follows a REMOVE in the traces read.
+
+Rules. **On Windows 98 SE, do not `IoDeleteDevice` a gone PDO inside its
+REMOVE: defer the delete to the next BusRelations answer**, which comes from
+a later pass. And **read a trace's minor codes in hex against `wdm.h`**, not
+from memory: 0x13 and 0x14 are neighbours.

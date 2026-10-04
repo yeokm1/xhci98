@@ -520,3 +520,168 @@ vectors to `selftest.ps1` (467 checks), and the later runs read it.
 The soak's IRQ 14 clause and the hub-churn phase with resident storage are
 `cd38a98`'s, with the soak's new classes (`kbd`, `tablet`, `wacom`, `ccid`,
 `u2f`, `hub`, `hubmouse`) and `-Driver hcd`.
+
+---
+
+## The closing legs
+
+Taken on development host A on 2026-10-04, after `774c194` wrote the
+sections above, on the builds each part names. A GUI subagent per guest drove
+the legs and a matrix subagent the soak, as before; the coordinator relayed
+their reports. The docs subagent that wrote this section checked the counter
+dumps, the package hashes and the REMOVE sequences it quotes against the files
+named; the rest is the subagents' reading, not re-read line by line.
+
+**The packages behind the fix rounds and the close**, extending the matrix
+table above (the commit is the one each was built for):
+
+| Package | `xhci98.sys` | Built for |
+|---|---|---|
+| `out\phase27\fix\pkg-final` | `cd564373...03e8` | `f99f184`, parking |
+| `out\phase27\fix\pkg-final2` | `4674287b...da44` | `6dae92b`, ABORT_PIPE on a departed PDO |
+| `out\phase27\fix\pkg-final3` | `a8792491...275c` | `ed025d2`, horizons by sequence |
+| `out\phase27\fix\pkg-final4` | `9a3af916...7ca4` | `09ed9d1`, wrap-safe order |
+| `out\phase27\fix\pkg-final5` | `73710569...a541` | `612f05a`, 64-bit count and horizons |
+| `out\phase27\pkg-close` | 150,715 bytes, `8c555a8a...1020` | `981f56b`, hub-port suspend handled, not initiated |
+| `out\phase27\pkg-close3` | 152,107 bytes, `2c3297f0...c529` | `6f2e1ce`, the hub-port resume |
+| `out\phase27\pkg-audio98` | 152,255 bytes, `d276dfef4e1430d7089ea383de68cc38d5d2b139fdfffc54c8a07a724512c2be` | `c038326`, the removed-PDO fix |
+
+### Full-Speed audio bound, at a root port and behind the hub
+
+On `pkg-close` (`981f56b`). Binding, not playback, as the checkpoint clause
+reads. Evidence: the counter dumps `out\mx27\k-2k-base.txt`,
+`k-2k-audio-root.txt`, `k-2k-audio-hub.txt`, `k-98-audio-root.txt` and
+`k-98-audio-hub.txt` (each the counter block before and after the leg's
+action); the traces `k-2k-legs-debugcon.log`, `k-98-legs-debugcon.log`,
+`k-98-audio-fault-debugcon.log` and `k-98-audio-hub-wedge-debugcon.log`; the
+screenshot `k-98-audio-fault.png`.
+
+- **Windows 2000 SP4, root port 2.** The composite device split as in Phase
+  26; the AudioStreaming interface selected at alternate 0, then alternate 1
+  when Sound Recorder (`sndrec32`) played. `endpoints opened` read 1 with the
+  keep-alive mouse alone, 2 with the audio function bound and 3 after
+  alternate 1; `iso packets answered` 660; the isochronous missed-service and
+  packet-error counters 0.
+- **Windows 2000 SP4, behind the hub** (`usb-hub` on root port 2, the audio
+  device at `2.1`). The same, with `iso packets answered` 660 to 1320 (+660)
+  and the isochronous error counters 0. Topology: `hubs started by the bus`
+  1, `hub descriptors folded` 1, `hub slots marked` 1, `behind-hub devices
+  addressed` 1, `behind-hub opens` 1; no TT pairs programmed (a Full-Speed
+  hub has no TT).
+- **Windows 98 SE, root port.** Bound: the function PDO at class, subclass
+  and protocol 01/01/00, the AudioStreaming interface at alternate 0, and
+  the volume icon in the tray. The first unplug then gave "A fatal exception
+  0E has occurred at 0028:C002A3A7", the trace ending at the device PDO's
+  REMOVE: the use after free below, fixed in `c038326`.
+- **Windows 98 SE, behind the hub.** Installed and bound (`behind-hub devices
+  addressed` 1, `endpoints opened` 1 to 2), then wedged within a minute: the
+  pre-existing audio-load wedge below.
+
+### The orderly path with a hub subtree beneath it
+
+On `pkg-close`. A `usb-hub` on root port 2, a mouse at `2.2` and a stick at
+`2.3` (`out\mx27\k-2k-sub-before.txt`, `k-98-sub-before.txt`); the `-mark`
+files hold the trace's line count at each leg's start; the traces as above
+and `m-2k-debugcon.log`, `m-98-debugcon.log`. The transfer identity is
+submitted = completed + cancelled.
+
+- **Windows 2000, the root hub's Disable.** QUERY_REMOVE then REMOVE for
+  every device beneath it; the identity 575 = 569 + 6; Enable brought every
+  device back.
+- **Windows 2000, the controller's Disable and Enable.** Clean; then a 4 MB
+  copy to the stick and `fc /b` clean.
+- **Windows 2000, the controller's Uninstall, then Scan for hardware
+  changes.** Clean; `fc /b` clean.
+- **Windows 98 SE, the root hub's "Disable in this hardware profile".** STOP,
+  not REMOVE; the identity 68 = 64 + 4; re-enabled, START.
+- **Windows 98 SE, the controller's disable and enable.** Clean; `fc /b`
+  clean.
+
+This is 27-A.3's orderly path with a hub beneath it, which the sections above
+recorded as not read.
+
+### The Windows 98 SE audio-unplug fatal 0E, and its fix
+
+**The cause: the device PDO used after it was freed.** `hcdPdoRemoved`
+deleted a gone PDO inside its `IRP_MN_REMOVE_DEVICE`. Windows 98 SE's
+configuration manager then sends that PDO two more IRPs in the same removal
+pass. With a devnode that already existed, the audio stack opens the device,
+the freed memory is reused before those IRPs arrive, and the guest faults.
+
+- **The IRPs after the REMOVE.** `c038326`'s message records diagnostic
+  builds that kept the PDO reading "REMOVE -> minor 7 type 0 -> minor 13" on
+  every unplug and surviving 6 of 6: minor 7 is QUERY_DEVICE_RELATIONS, type
+  0 BusRelations. **Minor `0x13` is `IRP_MN_QUERY_ID`**: the trace prints the
+  minor in hex (SURPRISE_REMOVAL reads `00000017`), and the Windows 2000
+  DDK's `wdm.h` defines `IRP_MN_QUERY_ID` as 0x13 and
+  `IRP_MN_QUERY_PNP_DEVICE_STATE` as 0x14. `c038326`'s message and its
+  comment in `src\hcd_pdo.c` call the second IRP QUERY_PNP_DEVICE_STATE; the
+  traces read here do not bear that out, and no minor `0x14` follows a
+  REMOVE in them.
+- **Every removed PDO gets them**, not only audio's: the HID and hub-mouse
+  legs below read REMOVE, `0x07`, `0x13` on every unplug too. Only audio
+  faulted, because only there was the memory reused first.
+- **Not a Phase 27 regression.** The delete inside the REMOVE is `27063e1`
+  (Phase 26 batch (b)); `38635f6`'s composite split is what exposed it.
+  `pkg-close`, `pkg-close3` and `pkg-final` (`f99f184`) all fault at
+  0028:C002A3A7.
+
+**The fix, `c038326`.** A gone PDO's REMOVE moves it to `hc->RemovedPdos`; it
+is deleted at the next root-hub BusRelations answer (`hcdReapRemoved`) or by
+`HcdDevicePdoReleaseAll`. Windows 2000 sends nothing after a REMOVE, so there
+the object is only held a little longer. Codex reviewed it with no findings.
+Package `out\phase27\pkg-audio98` (above).
+
+**Verification**, Windows 98 SE under NUSB 3.3 except the Windows 2000 row,
+TCG; per-leg traces, drive logs and screenshots `out\phase27\audio98\<leg>-*`:
+
+| Leg | Result |
+|---|---|
+| An audio device with an existing devnode unplugged and replugged, 10 cycles on each of two guests (`fixa`, `fixb`) | 20 of 20 PASS; on each guest 10 REMOVEs, each followed by minors `0x07` and `0x13`, the PDO deleted at the next relations answer |
+| The baseline, `pkg-close3`, the same leg (`close3`) | fatal 0E on cycle 1 (`close3-drive.txt`: "cycle 1 : REMOVE at line 253, lines after it 0, screen BLUESCREEN") |
+| HID, 5 cycles (`fhid`) | PASS |
+| A mouse behind the hub, 5 cycles on `win98-mxj` (`fhmj`) | PASS |
+| Windows 2000 audio, 4 unplugs (`w2k`) | PASS: SURPRISE_REMOVAL then REMOVE, every replug started |
+| A fresh install (`ffresh`), and a first install behind a hub with an idle minute (`fhub`) | Inconclusive: both met the audio-load wedge below before any unplug |
+| Audio playing during an unplug | Not run: Windows 98 SE plays no USB audio in QEMU (`lessons.md`, "Windows 98 SE cannot play USB audio here, and the control is what says so") |
+
+### The Windows 98 SE audio-load wedge
+
+Pre-existing and above the HCD; carried to 28.3 as a limitation.
+- **Symptom.** SELECT_INTERFACE to alternate 0, then QUERY_CAPABILITIES, then
+  the configuration manager makes no further progress and the taskbar clock
+  stops.
+- **Not the HCD's.** Every IRP sent to the function PDO completed, and
+  nothing was outstanding at the HCD.
+- **Seen on every build tried**: Phase 26's `pkg-v` (`40efd31`), `pkg-c16`,
+  `pkg-h1`, `pkg-final` and the fix build.
+- **Timing-dependent.** Attaching about 40 s after boot wedged 5 of 6; a
+  120 s wait after boot gave 0 of 20.
+- **The miniport had it too.** The same intermittent wedge on an audio
+  replug after a cold boot: `1.1.0.0` 2 of 10, `1.1.1.0` 5 of 10 over its
+  three settings (`lessons.md`, "Windows 98 wedges when a USB audio device is
+  replugged after a cold boot, and it is not this release's doing").
+
+### `pkg-close3`: the regression legs for the hub-port resume
+
+On `6f2e1ce`.
+- **Windows 2000.** Hubmouse 10 of 10 PASS; a mouse and a stick behind the
+  hub, `fc /b` clean.
+- **Windows 98 SE.** Hubmouse PASS, but 5 of 10 replugs were missed in the
+  early cycles, about 40 s after boot; a controlled rerun read 12 of 12, so
+  this reads as a boot-time artefact. A mouse and a stick behind the hub,
+  `fc /b` clean.
+
+### The hub-port resume
+
+`e0c7617` and `6f2e1ce` are read on host vectors only, Codex rounds 5 and 6
+clean. No guest has exercised a hub-port resume, because the bus initiates no
+suspend (the owner's ruling, 27-A.1).
+
+### The soak, on `pkg-final4`
+
+`soak-h98j` (hubmouse 25 of 25, hid 25 of 25, the 120-hub churn 120 of 120)
+and the `h98jh` churn row PASS, as in 27-V.1 above. The IDE IRQ 14 clause is
+a NOTE since `cd38a98`, because the disk is idle during the churn.
+
+Closed 2026-10-04.
