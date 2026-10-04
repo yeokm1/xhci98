@@ -9738,3 +9738,29 @@ Rules. **Keep answer files off an F6 floppy. Install Windows 2000 guests on
 its own recipe's machine. Prove a USB keystroke with `input-send-event` and
 the xHCI trace, never with `sendkey`. Match a native command's captured
 output with whitespace collapsed.**
+
+## MSVC 6.0 compiled a count-down loop over a shifted unsigned to exit after one pass: a host vector that passes is not the driver's code
+
+Task 33.4 follow-up (branch `p33-addr`), 2026-10-05, development host A,
+Windows XP SP3 guest, `qemu` flavour. `XhciHubPdoAddress` (`src\xhci_hub.c`)
+first found a route's last tier with `for (tier = 5; tier > 0; tier--)`,
+testing `(route >> (4UL * (tier - 1UL))) & 0xF`. Its host vectors passed,
+and on the guest a mouse on port 1 of a hub at root port 3 still answered
+`Address` 259: the driver's own trace read `capabilities, address/parent
+serial=01030001`, the parent the hub's PDO and the address the instance key.
+The i386 build's code (`kd -z` over `objchk_qemu\i386\xhci98.sys` with its
+PDB, `uf xhci98!XhciHubPdoAddress`) had turned the loop into a shift count
+starting at 16, stepped by `sub ecx,4` and continued only while
+`cmp ecx,0FFFFFFFCh` / `ja` held - false for 12 - so it tested the fifth
+tier alone and fell through to the instance key for every shallower route.
+
+Proven: that listing, and the same loop rewritten (shift the route down until
+it is 0, keeping the last non-zero nibble) compiling to a correct loop in the
+`qemu` and `release` i386 builds. Not established: which optimisation does it,
+whether the host-test build passed because it compiles without it, and
+whether any other loop in `src\` has the shape.
+
+Rule. **When a pure helper's host vectors pass and the guest disagrees, read
+the driver build's disassembly of that helper before anything else**; and
+prefer a loop whose control variable is the shifted value itself over a
+count-down whose bound the compiler derives.

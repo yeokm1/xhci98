@@ -3089,12 +3089,17 @@ devnode's child, and Microsoft's hub driver answers `Address` with the
 device's port **on its parent hub**: XP SP3's `usbhub.sys` copies the port
 number `USBH_CreateDevice` stored in the PDO extension, Windows 7's a word
 of its PDO extension (static, `legal-provenance.md` section 4). A tool may
-take `Address` as the connection index to ask the parent for: hidusbf's
-`Setup.exe` on XP asks the parent hub for
-`IOCTL_USB_GET_NODE_CONNECTION_INFORMATION(_EX)` there, and for a mouse on
-port 1 of a hub at root port 3 it asked port 259, found nothing, and wrote
-High-Speed `bInterval` values for a Full-Speed mouse (on Windows 98 SE and
-ME it found the device another way). **The rule** (`XhciHubPdoAddress`,
+take `Address` as the connection index to ask the parent for, and hidusbf's
+`Setup.exe` (2026-10-03 build) does: it reads the device's
+`SPDRP_ADDRESS`, and when that is not 0 it sends the parent hub
+`IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX` (then the plain form, then
+`_EX_V2`) with it as `ConnectionIndex`; only an `Address` of 0 makes it walk
+the hub's ports by `GET_NODE_CONNECTION_DRIVERKEY_NAME` instead (static,
+`legal-provenance.md` section 4). On leg 2c (XP SP3, runtime) its "Copy IDs"
+showed no `BusSpeed` or `bInterval` for a Full-Speed mouse on port 1 of a hub
+at root port 3, which answered 259, and it wrote High-Speed values for it;
+at a root port it showed both (on Windows 98 SE and ME it found the device
+another way). **The rule** (`XhciHubPdoAddress`,
 `xhci_hub.c`, host vectors in `test_hub`; fixed at creation, kept by a
 revived PDO with its other place fields): a device on a root port answers
 the root port, unchanged; a device whose own hub has a PDO - so is the
@@ -3108,7 +3113,8 @@ presented parent - that parent's door serves the PDO-less hub's own record
 at the ancestor port, or nothing - so it keeps the instance key, a value
 above any port, rather than name a port whose answer is another device.
 `UINumber` answers the same number. That is a departure: XP's `usbhub`
-leaves `UINumber` 0 (never written) and Windows 7's sets -1. It is kept a
+leaves `UINumber` 0 (zeroed at creation and, as far as the static\r
+reading reaches, never written) and Windows 7's sets -1. It is kept a
 port because, with `DeviceTextLocationInformation` unanswered (section
 10.7), `UINumber` is what NT's Device Manager shows on the Location line,
 and a port reads truer than 0 or 259 there. XP's `usbhub` answers

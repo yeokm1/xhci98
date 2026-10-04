@@ -310,7 +310,7 @@ ULONG XhciHubInstanceKey(ULONG rootPort, ULONG route)
 /* IRQL: any. */
 ULONG XhciHubPdoAddress(ULONG rootPort, ULONG route, ULONG onParentHub)
 {
-    ULONG tier;
+    ULONG rest;
     ULONG port;
 
     route &= 0xFFFFFUL;
@@ -320,13 +320,18 @@ ULONG XhciHubPdoAddress(ULONG rootPort, ULONG route, ULONG onParentHub)
     if (!onParentHub) {
         return XhciHubInstanceKey(rootPort, route);
     }
-    for (tier = 5; tier > 0; tier--) {
-        port = (route >> (4UL * (tier - 1UL))) & 0xFUL;
-        if (port != 0) {
-            return port;
+    /* The highest non-zero tier, walked upward by shifting the route
+     * down. Not a count-down over 4 * (tier - 1): MSVC 6.0 compiled that
+     * loop, in the i386 qemu build, to exit after its first pass (the
+     * induction variable stepped by -4 and tested unsigned against -4),
+     * so a one-tier device answered its instance key. */
+    port = 0;
+    for (rest = route; rest != 0; rest >>= 4) {
+        if ((rest & 0xFUL) != 0) {
+            port = rest & 0xFUL;
         }
     }
-    return XhciHubInstanceKey(rootPort, route);
+    return port;
 }
 
 /* IRQL: any. */

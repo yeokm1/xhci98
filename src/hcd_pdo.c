@@ -2315,6 +2315,8 @@ static NTSTATUS hcdDeviceCapabilities(PHCD_DEVICE_PDO pdo, PIRP irp)
      * usbhub's is 0 on XP and -1 on 7 (section 10.11, "Address"). */
     caps->Address = pdo->Address;
     caps->UINumber = pdo->Address;
+    XHCI_DBG_VALUE("hcd: capabilities, address/parent serial",
+                   (pdo->Address << 16) | (pdo->ParentSerial & 0xFFFFUL));
     caps->DeviceState[PowerSystemWorking] = PowerDeviceD0;
     for (i = PowerSystemSleeping1; i < PowerSystemMaximum; i++) {
         caps->DeviceState[i] = PowerDeviceD3;
