@@ -118,7 +118,7 @@ readme.txt     the release notes in plain text
 
 <img src="images/xhci98-driver-info.jpg" width="800">
 
-The `2.0.0.0` controller in Device Manager on the P14s Gen 1 under Windows 98 SE: Driver File Details shows `xhci98.sys` at file version `2.0.0.0`.
+The `2.0.0.0` controller in Device Manager on the P14s Gen 1 under Windows 98 SE.
 
 ### Upgrading from 1.x.x.x to 2.y.y.y
 
