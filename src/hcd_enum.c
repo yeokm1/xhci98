@@ -2213,13 +2213,16 @@ static VOID hcdHoldsForget(PHCD_CONTROLLER hc, ULONG count)
 static ULONG hcdHubQuiet(PHCD_CONTROLLER hc, PHCD_HUB hub);
 
 /*
- * Whether a port in Gone may leave it: the PDO group it reported is deleted -
- * that group, by serial, not whichever PDO last named its location (Codex
- * review of batch (b), round 2, finding 2) - and, where a hub left from it,
- * every port of that hub's subtree has settled the same way, the departed
- * hub object then freed. Until then nothing is enumerated at the place, so
- * no device PDO is created beside one PnP still holds under the same
- * instance id. Thread, or the start and stop with the thread not running.
+ * Whether a port in Gone may leave it: the PDO group it reported has been
+ * reported missing to PnP (or deleted) - that group, by serial, not
+ * whichever PDO last named its location (Codex review of batch (b), round
+ * 2, finding 2) - and, where a hub left from it, every port of that hub's
+ * subtree has settled the same way, the departed hub object then freed. A
+ * PDO reported missing no longer holds the place: its REMOVE may never
+ * come on Windows ME (hcd_pdo.c, the lifecycle), and a new device there
+ * gets a new PDO, with the same location instance id, while the old one
+ * waits for it apart, as usbport's children do (the owner's ruling,
+ * 2026-10-04). Thread, or the start and stop with the thread not running.
  */
 static ULONG hcdPortQuiet(PHCD_CONTROLLER hc, PHCD_PORT p)
 {

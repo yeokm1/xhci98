@@ -327,7 +327,14 @@ static NTSTATUS hcdDeviceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
  *   listed    - on DevicePdos while its device is present; every relations
  *               answer carries it and sets Reported;
  *   gone      - on GonePdos once its device left; the next relations answer
- *               omits it and sets MissingReported;
+ *               omits it and sets MissingReported, and from then on its
+ *               port waits for it no longer (HcdDevicePdoExists): the
+ *               place re-enumerates a new device with a new PDO while
+ *               this one waits for its REMOVE apart, as usbport's children
+ *               do. Windows ME may never send that REMOVE - a device pulled
+ *               while its install was under way was started (refused,
+ *               below), stopped and left (2026-10-04, r3 t5) - and a port
+ *               held until it came was dead for good;
  *   removed   - its own IRP_MN_REMOVE_DEVICE came once it was gone and
  *               either reported missing or never reported at all - or came
  *               first, and the relations answer that omits it follows
@@ -735,7 +742,7 @@ static VOID hcdUnlinkLocked(PHCD_DEVICE_PDO *head, PHCD_DEVICE_PDO pdo)
  * 10.5 step 3 and 10.9, CYCLE_PORT); a PDO PnP never saw is deleted here and
  * now. Returns 0 when nothing remains for the port to wait for (no PDO, or
  * every one deleted at once), otherwise the group serial the port must wait
- * on until the last of them is deleted (HcdDevicePdoExists; the
+ * on until the relations answer that omits them (HcdDevicePdoExists; the
  * PortPdoRemoved bit only says when to look - round 2, finding 2). The
  * device record goes with the slot; the PDOs keep nothing of it. Thread, or
  * the stop.
@@ -794,9 +801,11 @@ ULONG HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     return group;
 }
 
-/* Whether any PDO of that group is still on either list - not yet deleted
- * nor released. A lone device PDO's group is its own serial. 0 for serial
- * 0. IRQL: <= DISPATCH_LEVEL. */
+/* Whether any PDO of that group still holds its port: listed, or gone and
+ * not yet reported missing (the lifecycle above; one reported missing, on
+ * GonePdos or RemovedPdos, waits for its REMOVE without its port). A lone
+ * device PDO's group is its own serial. 0 for serial 0. IRQL: <=
+ * DISPATCH_LEVEL. */
 ULONG HcdDevicePdoExists(PHCD_CONTROLLER hc, ULONG serial)
 {
     PHCD_DEVICE_PDO pdo;
@@ -809,7 +818,7 @@ ULONG HcdDevicePdoExists(PHCD_CONTROLLER hc, ULONG serial)
     found = 0;
     KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
     for (pdo = hc->GonePdos; pdo != NULL && !found; pdo = pdo->Next) {
-        found = pdo->Group == serial;
+        found = pdo->Group == serial && !pdo->MissingReported;
     }
     for (pdo = hc->DevicePdos; pdo != NULL && !found; pdo = pdo->Next) {
         found = pdo->Group == serial;
@@ -967,6 +976,13 @@ PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
         at = &hc->GonePdos;
         while (*at != NULL) {
             pdo = *at;
+            if (!pdo->MissingReported && pdo->Port != 0 &&
+                pdo->Port <= HCD_PORT_COUNT) {
+                /* Reported missing now: its port waits for it no longer
+                 * (HcdDevicePdoExists). */
+                ports[(pdo->Port - 1) / 32UL] |=
+                    1UL << ((pdo->Port - 1) % 32UL);
+            }
             pdo->MissingReported = 1;
             if (!pdo->RemoveReceived) {
                 at = &pdo->Next;
@@ -1164,29 +1180,42 @@ static VOID hcdPdoFunctionRelease(PHCD_DEVICE_PDO pdo)
     }
 }
 
-/* A start after a remove (an enable after a disable) makes the PDO PnP's
+/*
+ * A start after a remove (an enable after a disable) makes the PDO PnP's
  * again, so the remove it received no longer lets a parent's release delete
- * it. Then PDO_STARTED for the port's machine; an orphan or a gone PDO has
- * no port left to tell. IRQL: PASSIVE_LEVEL. */
-static VOID hcdPdoStarted(PHCD_DEVICE_PDO pdo)
+ * it. Then PDO_STARTED for the port's machine. Returns 0, and changes
+ * nothing, for an orphan or a PDO whose device has left: its START is
+ * failed STATUS_UNSUCCESSFUL, the status Windows 2000's hub driver fails
+ * a departed device's START with (USBHUB20.SYS 5.00.2195.6655, 0x142E8,
+ * static; it fails only one already removed, and lets a START with no
+ * prior REMOVE succeed, which is the case refused here). Windows ME
+ * started a mouse PDO whose slot had gone during its install, stopped it,
+ * and never removed it: its port waited on it for good and the shell
+ * wedged (2026-10-04, r3 t5); a start that fails is one the configuration
+ * manager tears down. IRQL: PASSIVE_LEVEL.
+ */
+static ULONG hcdPdoStarted(PHCD_DEVICE_PDO pdo)
 {
     PHCD_CONTROLLER hc;
     KIRQL oldIrql;
     ULONG listed;
 
-    pdo->Closing = 0;
     hc = pdo->Controller;
     if (hc == NULL) {
-        pdo->RemoveReceived = 0;
-        return;
+        return 0;
     }
     KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
-    pdo->RemoveReceived = 0;
     listed = pdo->Listed;
-    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
     if (listed) {
-        hcdPortNotify(hc, hc->PortPdoStarted, pdo->Port);
+        pdo->RemoveReceived = 0;
     }
+    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    if (!listed) {
+        return 0;
+    }
+    pdo->Closing = 0;
+    hcdPortNotify(hc, hc->PortPdoStarted, pdo->Port);
+    return 1;
 }
 
 /*
@@ -1294,7 +1323,12 @@ static NTSTATUS hcdDeviceCapabilities(PHCD_DEVICE_PDO pdo, PIRP irp)
     caps->UniqueID = FALSE;
     caps->SilentInstall = FALSE;
     caps->RawDeviceOK = FALSE;
-    caps->SurpriseRemovalOK = TRUE;
+    /* FALSE, as Windows 2000's usbhub reports a device PDO: the hot-plug
+     * applet lists a removable device only when it is FALSE. A split
+     * function keeps TRUE: stopping one function does not make the shared
+     * connector safe to pull while its siblings run, and no relations tie
+     * them for the applet (Codex review of 9001ebd). */
+    caps->SurpriseRemovalOK = pdo->Function ? TRUE : FALSE;
     caps->Address = pdo->InstanceKey;
     caps->UINumber = pdo->InstanceKey;
     caps->DeviceState[PowerSystemWorking] = PowerDeviceD0;
@@ -1367,8 +1401,12 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
 
     switch (stack->MinorFunction) {
     case IRP_MN_START_DEVICE:
+        if (!hcdPdoStarted(pdo)) {
+            XHCI_DBG_VALUE("hcd: START refused, device gone, port",
+                           pdo->Port);
+            return HcdCompleteIrp(irp, STATUS_UNSUCCESSFUL, 0);
+        }
         pdo->Common.PnpState = HCD_PNP_STARTED;
-        hcdPdoStarted(pdo);
         return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
 
     case IRP_MN_QUERY_STOP_DEVICE:
