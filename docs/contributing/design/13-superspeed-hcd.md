@@ -2411,7 +2411,7 @@ case-insensitive matching above, and the form most INF lines use.
 | `BusQueryDeviceID` | `USB\VID_vvvv&PID_pppp` |
 | `BusQueryHardwareIDs` | `USB\VID_vvvv&PID_pppp&REV_rrrr`, `USB\VID_vvvv&PID_pppp` |
 | `BusQueryCompatibleIDs` | `USB\Class_cc&SubClass_ss&Prot_pp`, `USB\Class_cc&SubClass_ss`, `USB\Class_cc`: from the interface when `bDeviceClass` is 0 and the configuration has exactly one interface, from the device descriptor otherwise - so a multi-interface device the bus does not split (10.8) reports its own triple, `00/00/00` when its class is 0, never its first interface's, which would bind a class driver to the whole device (corrected 2026-10-03 by 26-A.7 from "from the interface when `bDeviceClass` is 0"; Windows 2000's `usbaudio.sys` bound to a whole composite device bugchecks, guest leg c14, `runs/run-26.md`). Whether to add the `USB\DevClass_cc...` forms XP's `usbhub.sys` carries templates for (and Vista's and 7's `USB\DevClass_00&SubClass_00&Prot_00`) is open (10.9); no stock INF in the table above matches a `DevClass` id |
-| `BusQueryInstanceID` | the serial string when the device has one (and `UniqueID` set in its capabilities), else a bus-unique location string built from the root port and the route, in characters Windows 98's configuration manager accepts in an instance id (to check, 10.9) |
+| `BusQueryInstanceID` | the serial id when the device has a usable one that no present PDO of the same VID and PID carries already, with `UniqueID` TRUE in its capabilities: the NT instance path `USB\VID_0781&PID_5567\4C530001230920108174` (what Windows 98 SE and ME make of it is for task 33.2's guest legs to read); else the location key in decimal, `UniqueID` FALSE - root port 3 is `3`, and behind hubs the Route String sits above the port (`XhciHubInstanceKey`, route `0x31` over port 2 is `12546`). The rule is "Instance ids from the serial number" below (task 33.2; until `2.1.0.0` every device had the location form) |
 
 **A function PDO** (one per function of a split device):
 
@@ -2420,7 +2420,78 @@ case-insensitive matching above, and the form most INF lines use.
 | `BusQueryDeviceID` | `USB\VID_vvvv&PID_pppp&MI_nn` |
 | `BusQueryHardwareIDs` | `USB\VID_vvvv&PID_pppp&REV_rrrr&MI_nn`, `USB\VID_vvvv&PID_pppp&MI_nn` |
 | `BusQueryCompatibleIDs` | `USB\Class_cc&SubClass_ss&Prot_pp`, `USB\Class_cc&SubClass_ss`, `USB\Class_cc`: for an IAD function from the IAD's `bFunctionClass` / `bFunctionSubClass` / `bFunctionProtocol`, as Microsoft's "Support for interface collections" gives them; for any other function, a legacy audio group included, from its first interface (alternate 0). Decided 2026-10-03 (Codex review of batch (c), round 19, finding 5); it was open (10.10) |
-| `BusQueryInstanceID` | the port number in decimal, then `nn`: port 3's `MI_03` is `303`. Digits and `A`-`F` only, since Windows 98's instance-id character set is unread (10.10) (corrected 2026-10-03 by 26-A.7 from "the parent device's instance string plus the function number") |
+| `BusQueryInstanceID` | with the device's serial id, that id, `&` and `nn`, `UniqueID` TRUE: `ABC123&03`; without, the location key in decimal, then `nn`: port 3's `MI_03` is `303`, `UniqueID` FALSE (task 33.2; the location form was corrected 2026-10-03 by 26-A.7 from "the parent device's instance string plus the function number") |
+
+**Instance ids from the serial number** (roadmap task 33.2, `2.1.0.0`;
+`XhciFuncSerialId`, `XhciFuncInstanceId` in `xhci_func.c`, host vectors in
+`test\test_func.c`; `HcdDeviceReadSerial` in `hcd_enum.c`; the duplicate
+and dormant rules in `hcd_pdo.c`). As `usbhub` does (`legal-provenance.md`
+section 4, the ReactOS row; Microsoft's binary was not read for it), a
+device whose serial string is usable is named by it and answers `UniqueID`
+TRUE, so it keeps its devnode on any port, behind any hub; every other
+device keeps the location form and `UniqueID` FALSE.
+
+- **Read** once per enumeration, on the controller thread before the
+  device's first PDO is built, into the device record (no pool site of its
+  own): string descriptor 0 for the first language id (`0409h` when it
+  STALLs or lists none), then string `iSerialNumber`.
+- **No serial** (`iSerialNumber` 0): no request; the location form.
+- **Refused**: the string arrived but is not an instance id - malformed, empty,
+  or a UTF-16 unit outside `0x21`-`0x7E`, or `,` or `\`. `usbhub` refuses
+  below `0x20`, above `0x7F` and `,`; this rule also refuses the space, DEL
+  and the backslash, the separator of a device instance path. The location
+  form, at every plug, since it is the device's own answer. No other length
+  limit: 126 characters is the descriptor's own, and the longest instance
+  path, `USB\VID_vvvv&PID_pppp&MI_nn\` and 126 characters and `&nn`, is 157,
+  under `MAX_DEVICE_ID_LEN` (200).
+- **Read failed** is not "no serial": a try that does not bring the string
+  (a STALL, an error, a request not sent) is repeated, three tries in all,
+  and only then is the device given the location form, counted
+  (`serial.readfailed`) and traced. A device whose read fails at one plug
+  and not at the next changes devnode, and it takes three failed reads in
+  a row. A **timed-out** read is not retried and gives no id at all: it
+  requested the controller reset, the PDO is not created, and the device is
+  enumerated afresh after the reset.
+- **Duplicates**: a serial id that a present PDO of the same VID and PID
+  already carries, on any of this driver's controllers (on another
+  controller a dormant PDO counts too, and so does a gone one its root hub
+  has not yet omitted from a relations answer, since that answer is not
+  ordered with this root hub's) - compared ignoring
+  case, since the registry key does not tell case apart - leaves the
+  newcomer on the location form (`serial.duplicate`); an instance id with
+  `UniqueID` TRUE names one devnode on the whole machine. `usbhub` checks
+  only its own hub's ports. A PDO already unlisted (gone, its missing
+  report pending) on the same controller does not count - one relations
+  answer omits it and brings the newcomer - so a device moved quickly from
+  one port to another keeps its id, as under `usbhub`; moved between
+  controllers faster than the old root hub's next answer, it takes the
+  location form for that plug. This is the other way a
+  device's instance id can change between plugs: of two units sharing a
+  serial, the one enumerated second takes the location form, and which one
+  that is can differ from plug to plug.
+- **Composite functions** keep their `MI_nn` in the device id and add `&nn`
+  to the serial id; the location form keeps its `nn` suffix. Both forms
+  stay unique: two functions of one device differ in `MI_nn`, and two
+  devices behind hubs differ in route or serial.
+- **Dormant PDOs** (Windows 98 SE and ME, task 33.1) are matched by the
+  instance id they answer, before the duplicate check: first a group named
+  by the device's place whose device read the same serial id, or none (so
+  a unit a duplicate left on the location form revives its own PDOs, and
+  a serial-named unit never takes another unit's location group; a device
+  whose every read failed this time counts as unknown, not different, and
+  a group whose device's reads all failed is revived by a device that
+  answers the location form at that place, since the id is the same),
+  then a group named by its serial id, wherever the device comes back
+  (`XhciFuncReviveByPlace`, `XhciFuncReviveBySerial`, host vectors in
+  `test_func`). A revived PDO answers the id
+  it had. A dormant group the newcomer did not revive is retired in the
+  hold that lists the new PDOs when it is named by the newcomer's place or
+  carries the serial id the newcomer keeps; one named by a serial id is
+  not retired for its old place, and goes at its START's wait if its
+  device does not come back. Two identical units swapped while disabled
+  are taken for each other, as before.
+- **Upgrading** from `2.0.0.0` gives every device with a usable serial one
+  new devnode, at its first plug, because its instance id changed once.
 
 **A storage interface that offers UAS** (roadmap task 31-A.3, `xhci_xport.c`;
 a device PDO's one interface, or a function's when no IAD groups it) gets
@@ -2603,7 +2674,7 @@ counts endpoints added at a function's `SELECT_CONFIGURATION` or
 | Open item | Binds |
 |---|---|
 | Every **(to transcribe)** USB 2.0 number above: 4.1.1 tiers; 7.1.7.3 `TATTDB`; 7.1.7.5 `TDRST`, `TRSTRCY`; 7.1.7.7 `TRSMRCY`; 9.2.6.3 `TDSETADDR`; 11.12.4 the bitmap; 11.23.1-2 the hub descriptor fields and the status endpoint's `bInterval`; 11.24.2 the TT requests' `wValue`; Tables 11-13, 11-16, 11-17, 11-21 and 11-22. The specification is added to `docs/references/` with its hash first. | 27-A.1 (one transcription batch) |
-| `BusQueryCompatibleIDs` for a device-class device (the `DevClass` forms, read from the hub drivers' id order statically), and the instance-id character set on Windows 98. | 26-A.4 |
+| `BusQueryCompatibleIDs` for a device-class device (the `DevClass` forms, read from the hub drivers' id order statically), and the instance-id character set on Windows 98. Since task 33.2 a serial id brings any of `0x21`-`0x7E` but `,` and `\` into a Windows 98 instance id (10.7); its guest legs on Windows 98 SE and ME are where that set is first observed. | 26-A.4; 33.2 |
 | **Closed 2026-10-03 by decision, not by a static read** (owner and coordinator, Codex review of batch (c), round 19, findings 3 and 5): the IAD function's compatible ids come from the IAD (10.7), and the split follows Microsoft's composite-parent rule - one configuration, two or more interfaces, device class 0 or `EF/02/01` - so no other device class and no multi-configuration device is split (10.8). It read: the IAD function's compatible ids (from the IAD or the first interface: `ParseUSBInterfaceAssociationDescriptors` / the id builders), the device-class values Microsoft splits besides 0, and the multi-configuration rule - static reads of `usbccgp.sys` and the hub drivers. The X4's IAD fields have still not been read. | 26-A.7 |
 | The interface numbering and order of each UAC 1.0 unit in `test-equipment.md`, read off the units' descriptors. The bus logs each function's port and `MI_`, interface mask and class triple as it creates the PDOs (`HcdDevicePdoCreate`) for that reading. | 26-A.7 |
 | Windows 2000's and stock Windows 98's own composite parent (`usbhub.sys`) grouping rule is unread. The INF evidence (audio at `MI_00`, HID at `MI_02`) agrees with the `usbccgp` rule, and since the bus does the splitting, what matters is what those targets' audio drivers accept. | 26-V.1, 26-V.2 |

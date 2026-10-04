@@ -39,8 +39,9 @@ rem   test_pipe    - the URB-side computations (src\xhci_pipe.c): SETUP
 rem                  building, interface and endpoint parsing, the configure
 rem                  plan, the buffer split and the isochronous URB checks
 rem   test_func    - the composite split with and without an IAD, the filtered
-rem                  configuration descriptor and the function ids
-rem                  (src\xhci_func.c)
+rem                  configuration descriptor, the function ids, and the
+rem                  instance ids from the serial number or the location
+rem                  (src\xhci_func.c, task 33.2)
 rem   test_stream  - bulk streams' pure half (src\xhci_stream.c, task 31-A.1):
 rem                  MaxPSASize, the companion's MaxStreams, the grant and the
 rem                  array size, the block layout, the Stream Context, the
@@ -233,8 +234,8 @@ rem and xhci_enum.c so the port-change feed is checked against a real machine.
 call :run test_link "test_link.c ..\src\xhci_link.c ..\src\xhci_port.c ..\src\xhci_caps.c ..\src\xhci_enum.c"
 call :run test_pipe "test_pipe.c ..\src\xhci_pipe.c"
 rem test_func links nothing else: the composite split, the filtered
-rem configuration descriptor and the function ids are pure computations over
-rem descriptor bytes (task 26-A.7).
+rem configuration descriptor, the function ids and the instance ids are pure
+rem computations over descriptor bytes (tasks 26-A.7 and 33.2).
 call :run test_func "test_func.c ..\src\xhci_func.c"
 rem test_hub links the pipe policy beside the hub class (task 27-A.1): the
 rem hub class's decisions are pure computations over descriptor and status
