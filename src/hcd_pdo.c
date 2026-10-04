@@ -1324,8 +1324,11 @@ static NTSTATUS hcdDeviceCapabilities(PHCD_DEVICE_PDO pdo, PIRP irp)
     caps->SilentInstall = FALSE;
     caps->RawDeviceOK = FALSE;
     /* FALSE, as Windows 2000's usbhub reports a device PDO: the hot-plug
-     * applet lists a removable device only when it is FALSE. */
-    caps->SurpriseRemovalOK = FALSE;
+     * applet lists a removable device only when it is FALSE. A split
+     * function keeps TRUE: stopping one function does not make the shared
+     * connector safe to pull while its siblings run, and no relations tie
+     * them for the applet (Codex review of 9001ebd). */
+    caps->SurpriseRemovalOK = pdo->Function ? TRUE : FALSE;
     caps->Address = pdo->InstanceKey;
     caps->UINumber = pdo->InstanceKey;
     caps->DeviceState[PowerSystemWorking] = PowerDeviceD0;
