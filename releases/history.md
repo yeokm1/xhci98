@@ -12,59 +12,91 @@ every published directory carries the history up to and including itself.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
-## 2.1.0.0 - TBD
+## 2.1.0.0 - 2026-10-05
 
-Drafted, not cut: the date and every `TODO(...)` below are the cut's to
-settle (`TODO(33.9)`).
+Drafted, not cut: every `TODO(...)` below is a reading the cut waits for
+(`TODO(33.9)`: this line removed at the cut).
 
-The first update of the host controller driver. It adds two things
-`2.0.0.0` did not have, external hubs in Device Manager and devices named by
-their serial numbers, and fixes the Windows ME controller re-enable. Every
-system `2.0.0.0` supports is supported, from the
-same four directories.
+The first update of the host controller driver, a minor version because it
+adds features: external hubs in Device Manager, devices known by their
+serial numbers and named by their product names, a floppy for Windows 2000
+and XP Setup, and an opt-in for polling Low- and Full-Speed mice above
+1000 Hz. It also fixes the Windows ME controller re-enable and the root
+hub's Power page. Every system `2.0.0.0` supports is supported, from the
+same four directories, each now holding `txtsetup.oem` beside the two
+drivers.
 
 ### What changed
 
-- External hubs appear in Device Manager as entries of their own, with the
-  devices behind them beneath them, as on Microsoft's own USB stacks, and
-  USBView and the hub pages of Device Manager can walk into them. The driver
-  still runs every hub itself (`TODO(33.4)`: the hub legs, and whether a
-  device behind a hub is found again once after the update).
-- A device with a serial number is named by it, as Microsoft's hub driver
-  names it: moved to another port, it keeps its Device Manager entry and is
-  not found again as new hardware, and two identical devices plugged into the
-  same port in turn no longer share one entry. A device without a serial
-  number is still named by its port (`TODO(33.2)`: the port-move legs, and
-  whether a device with a serial is found again once after the update).
-- Fixed: a newly plugged device is named by its own product string again, in
-  Windows 98's Add New Hardware wizard and in Device Manager, instead of
-  "USB Device" (`TODO(33.6)`).
+- External hubs appear in Device Manager as entries of their own, "xHCI98
+  USB Hub", with the devices behind them beneath them, as on Microsoft's own
+  USB stacks; a USB 3 hub appears twice, its SuperSpeed half as "xHCI98 USB
+  3.x Hub". Each hub has a Power page, and USBView and Device Manager's view
+  by connection can walk into it. A hub installs with no file copied and no
+  disk asked for. The driver still runs every hub itself
+  (`TODO(33.4 legs)`: the hub legs on both primaries and the NT guests).
+- A device with a serial number is known by it, as Microsoft's hub driver
+  knows it: moved to another port, it keeps its Device Manager entry and is
+  not found again as new hardware, and two identical devices plugged into
+  the same port in turn no longer share one entry. A device without a serial
+  number is still known by its port (`TODO(33.2 legs)`: the port-move legs).
+- A device is named by its own product name in Windows 98's Add New
+  Hardware wizard and in Device Manager, instead of "USB Device" for every
+  device. On Windows 98 SE and ME a character outside plain ASCII shows as
+  `?` (`TODO(33.6 legs)`).
 - Fixed on Windows ME: re-enabling the controller in Device Manager with a
   USB mouse attached no longer makes Windows ME stop responding.
   The devices on the controller are now kept while it is disabled and come
   back as the same Device Manager entries when it is enabled again, as under
   Microsoft's own hub driver, instead of being removed and found again
   (`TODO(33.1 legs)`: read on the `2.1.0.0` package, on Windows ME, 98 SE
-  and 2000).
+  and 2000, with a USB keyboard alone and with a device behind a hub).
 - Fixed: the root hub's Power page in Device Manager showed every device's
   power as unknown, on every system, because the driver refused the request
-  Windows sends for it (`TODO(33.5)`: read on the `2.1.0.0` package on
-  Windows 98 SE and 2000). The Advanced page's bandwidth figure counts only
-  isochronous pipes in use, as Microsoft's own stack does, so a mouse, a
-  keyboard or a drive adds nothing to it; on Windows Vista and 7 it stays at
-  zero, a known limitation.
+  Windows sends for it (`TODO(33.5 legs)`: read on the `2.1.0.0` package on
+  both primaries and an NT guest, and behind a hub). The Advanced page's
+  bandwidth figure counts only isochronous pipes in use, as Microsoft's own
+  stack does, so a mouse, a keyboard or a drive adds nothing to it; on
+  Windows Vista and 7 it stays at zero, and a SuperSpeed device's power
+  reads a quarter of its draw, both known limitations.
 - `txtsetup.oem` in every flavour directory, so that Windows 2000, XP and
   XP x64 text-mode Setup can load the driver from a floppy at its F6 prompt
   on a machine whose keyboard or install medium is on an xHCI controller.
   Setup's own HID and storage drivers then run above this one. Limits:
   pressing F6 needs the firmware's own USB keyboard support, the floppy
   must be drive A:, a disk the driver runs as UAS is not usable until
-  GUI-mode Setup, and installing Windows onto a USB disk is not supported
-  (`TODO(33.3)`: the F6 install legs on Windows 2000 and XP; until then it
-  is untested ground, read from Setup's own files only).
+  GUI-mode Setup, installing Windows onto a USB disk is not supported, and
+  a USB drive left plugged in at the partition screen takes `C:`. On
+  Windows XP and XP x64, GUI-mode Setup asks about the unsigned driver
+  before the USB keyboard works, so a PS/2 keyboard or a laptop's built-in
+  one is needed to answer it. In virtual machines XP and XP x64 installed
+  this way to the desktop (`TODO(33.3 legs)`: Windows 2000).
+- The root hub's, and each hub's, first report of its devices waits up to
+  5 seconds for the devices plugged in at start, because Windows 2000's
+  text-mode Setup uses only the devices in that first report. Two new
+  values, `XhciFirstEnumWaitMs` (default `5000`, `0` off, at most `30000`)
+  and `XhciFirstEnumPortMs` (default `2000`), set it (`TODO(33.3 legs)`:
+  merged, its names and defaults confirmed, and read on Windows 2000).
+- SweetLow's hidusbf sets a mouse's polling rate under this driver, up to
+  1000 Hz for a Low- or Full-Speed device; on a stock Windows 98 SE it shows
+  Code 2, since Windows 98 SE's own `usbd.sys` lacks a routine it needs.
+  Its setting must be applied again after an upgrade from `1.x.x.x`
+  (`TODO(33.7 legs)`: 1000, 500 and 250 Hz at a root port and behind a hub
+  on Windows 98 SE, ME and XP).
+- `XhciFastPollFsLs`, a new value, off by default: at `2` or `3` a Low- or
+  Full-Speed device on a root port that hidusbf sets to "31 Hz" or "62 Hz"
+  is polled at 2000 and 4000 Hz, or 4000 and 8000 Hz. It is outside the
+  xHCI specification and untested ground; a controller that refuses it is
+  caught and counted (`TODO(33.8 legs)`: the bench).
+- Updating from `2.0.0.0`: install over it as before. A device with a serial
+  number, and on Windows 2000 and later a device without one behind an
+  external hub, is found once more as new hardware, one time each
+  (`TODO(33.2 legs)`, `TODO(33.4 legs)`).
 - Known limitations: those of `2.0.0.0`, less the Windows ME controller
-  re-enable and (`TODO(33.2)`) the device moved to another port. The release
-  notes have the full list.
+  re-enable and (`TODO(33.2 legs)`) the device moved to another port, plus
+  the XP F6 GUI-mode prompt that needs a PS/2 or built-in keyboard and the
+  `?` in a non-ASCII name on Windows 98
+  SE and ME. The release notes have the full list.
 
 ## 2.0.0.0 - 2026-10-04
 
