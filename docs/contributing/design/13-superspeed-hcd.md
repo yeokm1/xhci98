@@ -2576,21 +2576,22 @@ Add New Hardware wizard showed for every device (owner report).
   revival is tried - for a hub, the revived hub reported gone and its
   replacement given a new `Serial` that its dormant children can never
   match (Codex review of the 33.1-33.6 integration, findings 1 and 2).
-  "Looks set to" is a hint taken under `PdoListLock` alone after the
-  group is built, `hcdDormantFindLocked` by place and then by serial id,
-  and the reads run, outside every lock, only when it finds nothing. The
-  decision that counts is still `hcdDormantRevive`'s, under
-  `hcdSerialLock`, after the reads; where the two differ - a serial id
-  another controller carries, so the decision does not look by serial;
-  a duplicate whose location form revives a group whose reads failed; a
-  group retired between the two - the new PDOs answer `USB Device` for
-  that plug, or the reads run as they did before, and the identity is the
-  decision's either way. A more exact preview (`hcdSerialLock` taken for
-  the hint too, and a parameter to `hcdDormantFindLocked` for the
-  location form a duplicate would take) was weighed and not taken: the
-  locks are let go for the reads, so it would still be a hint, and it
-  would widen the matcher every revival goes through to narrow two cases
-  that each need a serial id on two units at once.
+  "Looks set to" is a preview taken once the group is built: the
+  revival's own choice (`hcdDormantChooseLocked`, which `hcdDormantRevive`
+  now calls too) under `hcdSerialLock` and `PdoListLock`, changing
+  nothing - by place, by serial id unless another controller carries it,
+  and on the location form when the serial id is a duplicate - and the
+  reads run, outside every lock, only when it finds nothing. A plain
+  hint under `PdoListLock` alone (by place and by serial) was tried first
+  and dropped at review: it missed a device whose earlier reads failed
+  and whose serial id is now a duplicate, which revives its location
+  group only after the duplicate check, so its text reads, and a timeout
+  in them, still came first (Codex review of this fix, round 1). The
+  preview is still not the decision, because the locks are let go for
+  the reads: the decision that counts is `hcdDormantRevive`'s, after
+  them, and should a dormant group come or go in between, the new PDOs
+  answer `USB Device` for that plug or the reads ran for nothing; the
+  identity is the decision's either way.
 - **Made fit to show**: the string ends at its first NUL unit; C0 and C1
   controls and DEL become spaces, runs of spaces one, leading and trailing
   spaces go; a surrogate that is not half of a pair, U+FFFE and U+FFFF
@@ -2917,8 +2918,9 @@ ancestor rule above. The hub PDO is referenced across the call.
    sameness test, so no group is revived under another parent. A dormant group retired (not revived) takes the dormant groups
    below it with it. A newcomer retires a serial-less dormant group for its
    place only under its own parent (section 10.7), and a hub's PDO reads no
-   device text, so a hub's revival is never preceded by a string read whose
-   timeout could reset the controller first.
+   device text, so no `iProduct` read whose timeout could reset the
+   controller comes before a hub's revival (33.2's serial-number read
+   still does, for a hub with `iSerialNumber` set, as for any device).
 
 **The hub FDO** (`hcd_hubfdo.c`): `AddDevice` for a hub PDO; PnP passed down
 like the root hub FDO's, with `BusRelations` answered as above and

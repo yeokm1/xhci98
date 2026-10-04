@@ -1109,7 +1109,8 @@ static ULONG hcdSerialTakenLocked(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo,
  * through SerialNext under hcdSerialLock. The order is hcdSerialLock, then
  * one PdoListLock at a time (another controller's in
  * hcdSerialTakenElsewhere, released before this controller's is taken in
- * hcdDormantRevive and at the listing), or the controller lock inside
+ * hcdDormantRevive, at the listing and at the text reads' preview), or
+ * the controller lock inside
  * hcdXportRefusal; hcdSerialLock is never taken under either.
  */
 static KSPIN_LOCK hcdSerialLock;
@@ -1232,10 +1233,12 @@ static VOID hcdDormantRetireSerialLocked(PHCD_CONTROLLER hc,
  * place and descriptors decide - round 3; likewise when every read of the
  * group's failed and `first` answers the location form too - round 4;
  * XhciFuncReviveByPlace) or by
- * `first`'s serial id, exactly. NULL for none. PdoListLock held. */
+ * `first`'s serial id, exactly. `asLocation`: by place as if `first`
+ * answered the location form, as it does once a duplicate's serial id is
+ * cleared. NULL for none. PdoListLock held. */
 static PHCD_DEVICE_PDO hcdDormantFindLocked(PHCD_CONTROLLER hc,
                                             PHCD_DEVICE_PDO first,
-                                            ULONG byPlace)
+                                            ULONG byPlace, ULONG asLocation)
 {
     PHCD_DEVICE_PDO old;
     PHCD_DEVICE_PDO a;
@@ -1252,7 +1255,8 @@ static PHCD_DEVICE_PDO hcdDormantFindLocked(PHCD_CONTROLLER hc,
                                               old->SerialUnread,
                                               first->ReadSerialId,
                                               first->SerialUnread,
-                                              first->SerialId[0] == 0))
+                                              asLocation ||
+                                                  first->SerialId[0] == 0))
                     : !XhciFuncReviveBySerial(old->SerialId,
                                               first->SerialId)) {
             continue;
@@ -1271,6 +1275,34 @@ static PHCD_DEVICE_PDO hcdDormantFindLocked(PHCD_CONTROLLER hc,
         }
     }
     return NULL;
+}
+
+/* hcdDormantRevive's choice, changing nothing: the dormant group `first`
+ * revives, or NULL; *clear set when `first`'s serial id is a duplicate
+ * (`takenElsewhere`, or a present PDO of this controller carries it) and
+ * is to be cleared, whether or not a group is then found on the location
+ * form. Also the preview HcdDevicePdoCreate takes before its text reads.
+ * PdoListLock held, under hcdSerialLock for `takenElsewhere` to hold. */
+static PHCD_DEVICE_PDO hcdDormantChooseLocked(PHCD_CONTROLLER hc,
+                                              PHCD_DEVICE_PDO first,
+                                              ULONG takenElsewhere,
+                                              PULONG clear)
+{
+    PHCD_DEVICE_PDO old;
+
+    *clear = 0;
+    old = hcdDormantFindLocked(hc, first, 1, 0);
+    if (old == NULL && !takenElsewhere) {
+        old = hcdDormantFindLocked(hc, first, 0, 0);
+    }
+    if (old == NULL && first->SerialId[0] != 0 &&
+        (takenElsewhere || hcdSerialTakenLocked(hc, first, 0))) {
+        *clear = 1;
+        /* On the location form: a group at this place whose own reads
+         * failed answers the same id (Codex review of 33.2, round 4). */
+        old = hcdDormantFindLocked(hc, first, 1, 1);
+    }
+    return old;
 }
 
 /*
@@ -1298,22 +1330,16 @@ static ULONG hcdDormantRevive(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     PHCD_DEVICE_PDO a;
     PHCD_DEVICE_PDO b;
     KIRQL oldIrql;
+    ULONG clear;
     ULONG same;
 
     KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
-    old = hcdDormantFindLocked(hc, first, 1);
-    if (old == NULL && !takenElsewhere) {
-        old = hcdDormantFindLocked(hc, first, 0);
-    }
-    if (old == NULL && first->SerialId[0] != 0 &&
-        (takenElsewhere || hcdSerialTakenLocked(hc, first, 0))) {
+    old = hcdDormantChooseLocked(hc, first, takenElsewhere, &clear);
+    if (clear) {
         for (a = first; a != NULL; a = a->Sibling) {
             a->SerialId[0] = 0;
         }
         *duplicate = 1;
-        /* Now on the location form: a group at this place whose own reads
-         * failed answers the same id (Codex review of 33.2, round 4). */
-        old = hcdDormantFindLocked(hc, first, 1);
     }
     same = (old != NULL);
     if (same) {
@@ -1430,6 +1456,7 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     ULONG elsewhere;
     ULONG duplicate;
     ULONG skipText;
+    ULONG clear;
     ULONG count;
     ULONG i;
 
@@ -1490,19 +1517,27 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     }
     /* Their names (33.6), read now, while the device is here - but not
      * for a hub, whose PDO answers a fixed name (task 33.4), nor for a
-     * group that looks set to revive a dormant one on Windows 98 SE or ME,
-     * which keeps the name it had and deletes these: a read there costs
-     * time against the dormant START's wait, and a timeout's reset would
-     * report the device gone before its revival is tried. A hint, taken
-     * without hcdSerialLock and so before the duplicate check: the
-     * decision below stays the one that counts, and when the two differ
-     * the new PDOs answer "USB Device" for this plug, or the reads run as
-     * before; the identity is the decision's either way (Codex review of
-     * the 33.1-33.6 integration, findings 1 and 2). */
-    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
-    skipText = first->Hub || hcdDormantFindLocked(hc, first, 1) != NULL ||
-               hcdDormantFindLocked(hc, first, 0) != NULL;
-    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+     * group set to revive a dormant one on Windows 98 SE or ME, which
+     * keeps the name it had and deletes these: a read there costs time
+     * against the dormant START's wait, and a timeout's reset would report
+     * the device gone before its revival is tried. The revival's own
+     * choice, taken now under the same locks and changing nothing, is a
+     * preview only - the locks are let go for the reads - so the decision
+     * below stays the one that counts: should a dormant group come or go
+     * in between, the new PDOs answer "USB Device" for this plug, or the
+     * reads ran for nothing; the identity is the decision's either way
+     * (Codex review of the 33.1-33.6 integration, findings 1 and 2). */
+    skipText = first->Hub;
+    if (!skipText) {
+        KeAcquireSpinLock(&hcdSerialLock, &serialIrql);
+        elsewhere = first->SerialId[0] != 0 &&
+                    hcdSerialTakenElsewhere(hc, first);
+        KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+        skipText = hcdDormantChooseLocked(hc, first, elsewhere,
+                                          &clear) != NULL;
+        KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+        KeReleaseSpinLock(&hcdSerialLock, serialIrql);
+    }
     for (pdo = first, i = 0; pdo != NULL && !skipText;
          pdo = pdo->Sibling, i++) {
         picks = XhciFuncTextIndexes(dev->DeviceDesc,
