@@ -445,8 +445,8 @@ ULONG XhciFuncId(const UCHAR *device, const XHCI_FUNC *func, ULONG port,
         xhciFuncChar(&t, 0);
         break;
     case XHCI_FUNC_ID_INSTANCE:
-        /* Digits and A-F only: Windows 98's instance-id character set is
-         * unread (design record 13 section 10.10). */
+        /* The location form: digits and A-F only (design record 13
+         * section 10.10). */
         xhciFuncDec(&t, port);
         xhciFuncHexN(&t, func->FirstInterface, 2);
         xhciFuncChar(&t, 0);
@@ -454,6 +454,104 @@ ULONG XhciFuncId(const UCHAR *device, const XHCI_FUNC *func, ULONG port,
     default:
         return XHCI_FUNC_BAD_PARAM;
     }
+    *used = t.Used;
+    return (t.Used > capacity) ? XHCI_FUNC_TOO_SMALL : XHCI_FUNC_OK;
+}
+
+/* ----------------------------------------------------------------------- */
+/* Instance ids (task 33.2)                                                 */
+/* ----------------------------------------------------------------------- */
+
+static ULONG xhciFuncSerialChar(ULONG c)
+{
+    return c >= 0x21UL && c <= 0x7EUL && c != (ULONG)',' &&
+           c != (ULONG)'\\';
+}
+
+ULONG XhciFuncSerialId(const UCHAR *desc, ULONG bytes, char *out,
+                       ULONG capacity)
+{
+    ULONG length;
+    ULONG count;
+    ULONG c;
+    ULONG i;
+
+    if (desc == NULL || out == NULL || capacity < XHCI_SERIAL_ID_BYTES) {
+        return XHCI_FUNC_BAD_PARAM;
+    }
+    out[0] = 0;
+    if (bytes < 2 || desc[1] != 3) {
+        return XHCI_FUNC_MALFORMED;
+    }
+    length = desc[0];
+    if (length < 2 || length > bytes) {
+        return XHCI_FUNC_MALFORMED;
+    }
+    count = (length - 2UL) / 2UL;
+    if (count == 0) {
+        return XHCI_FUNC_BAD_SERIAL;
+    }
+    for (i = 0; i < count; i++) {
+        c = (ULONG)desc[2 + i * 2] | ((ULONG)desc[3 + i * 2] << 8);
+        if (!xhciFuncSerialChar(c)) {
+            out[0] = 0;
+            return XHCI_FUNC_BAD_SERIAL;
+        }
+        out[i] = (char)c;
+    }
+    out[count] = 0;
+    return XHCI_FUNC_OK;
+}
+
+static ULONG xhciFuncUpper(ULONG c)
+{
+    return (c >= (ULONG)'a' && c <= (ULONG)'z') ? c - 0x20UL : c;
+}
+
+ULONG XhciFuncSerialSame(const char *a, const char *b)
+{
+    ULONG i;
+
+    if (a == NULL || b == NULL || a[0] == 0 || b[0] == 0) {
+        return 0;
+    }
+    for (i = 0; a[i] != 0 || b[i] != 0; i++) {
+        if (xhciFuncUpper((ULONG)(UCHAR)a[i]) !=
+            xhciFuncUpper((ULONG)(UCHAR)b[i])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+ULONG XhciFuncInstanceId(const char *serial, ULONG location, ULONG mi,
+                         char *out, ULONG capacity, PULONG used)
+{
+    XHCI_FUNC_TEXT t;
+    ULONG i;
+
+    if (used == NULL || (out == NULL && capacity != 0) ||
+        (mi != XHCI_INSTANCE_NO_MI && mi > 0xFFUL)) {
+        return XHCI_FUNC_BAD_PARAM;
+    }
+    t.Out = out;
+    t.Capacity = capacity;
+    t.Used = 0;
+    if (serial != NULL && serial[0] != 0) {
+        for (i = 0; serial[i] != 0 && i < XHCI_SERIAL_ID_CHARS; i++) {
+            xhciFuncChar(&t, serial[i]);
+        }
+        if (mi != XHCI_INSTANCE_NO_MI) {
+            xhciFuncChar(&t, '&');
+            xhciFuncHexN(&t, mi, 2);
+        }
+    } else {
+        xhciFuncDec(&t, location);
+        if (mi != XHCI_INSTANCE_NO_MI) {
+            xhciFuncHexN(&t, mi, 2);
+        }
+    }
+    xhciFuncChar(&t, 0);
     *used = t.Used;
     return (t.Used > capacity) ? XHCI_FUNC_TOO_SMALL : XHCI_FUNC_OK;
 }

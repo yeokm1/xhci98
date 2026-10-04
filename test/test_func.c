@@ -665,6 +665,191 @@ static void test_id_edges(void)
              XHCI_FUNC_BAD_PARAM, "nowhere to say the size");
 }
 
+/* A string descriptor of `chars` UTF-16 characters from `text` (ASCII, or
+ * the 16-bit values in `wide` when it is not NULL). */
+static ULONG make_string(UCHAR *d, const char *text, const USHORT *wide,
+                         ULONG chars)
+{
+    ULONG i;
+    ULONG c;
+
+    d[0] = (UCHAR)(2 + chars * 2);
+    d[1] = 3;
+    for (i = 0; i < chars; i++) {
+        c = (wide != NULL) ? wide[i] : (ULONG)(UCHAR)text[i];
+        d[2 + i * 2] = (UCHAR)(c & 0xFF);
+        d[3 + i * 2] = (UCHAR)(c >> 8);
+    }
+    return 2 + chars * 2;
+}
+
+static void check_serial(const char *text, ULONG expect, const char *what)
+{
+    UCHAR d[256];
+    char out[XHCI_SERIAL_ID_BYTES];
+    ULONG bytes;
+
+    memset(out, 'x', sizeof(out));
+    bytes = make_string(d, text, NULL, (ULONG)strlen(text));
+    CHECK_EQ(XhciFuncSerialId(d, bytes, out, sizeof(out)), expect, what);
+    if (expect == XHCI_FUNC_OK) {
+        CHECK_EQ(strcmp(out, text), 0, what);
+    } else {
+        CHECK_EQ(out[0], 0, what);
+    }
+}
+
+static void check_instance(const char *serial, ULONG location, ULONG mi,
+                           const char *want, const char *what)
+{
+    char out[160];
+    ULONG used;
+
+    memset(out, 'x', sizeof(out));
+    used = 0;
+    CHECK_EQ(XhciFuncInstanceId(serial, location, mi, out, sizeof(out),
+                                &used),
+             XHCI_FUNC_OK, what);
+    CHECK_EQ(used, (ULONG)strlen(want) + 1, what);
+    CHECK_EQ(strcmp(out, want), 0, what);
+}
+
+static void test_serial_ids(void)
+{
+    static const USHORT nonAscii[] = { 'A', 0x00E9, 'B' };
+    static const USHORT highByte[] = { 'A', 0x0141 };
+    static const USHORT nul[] = { 'A', 0x0000, 'B' };
+    UCHAR d[256];
+    char out[XHCI_SERIAL_ID_BYTES];
+    char longest[XHCI_SERIAL_ID_BYTES];
+    ULONG bytes;
+    ULONG i;
+
+    /* Accepted: printable ASCII 0x21-0x7E, case kept. */
+    check_serial("0123456789AB", XHCI_FUNC_OK, "a hex serial");
+    check_serial("abcXYZ", XHCI_FUNC_OK, "case is kept");
+    check_serial("A!~&#./:_-", XHCI_FUNC_OK, "punctuation, & and ~ pass");
+    check_serial("Z", XHCI_FUNC_OK, "one character");
+
+    /* Refused: what an instance id may not carry, so the location. */
+    check_serial("", XHCI_FUNC_BAD_SERIAL, "empty string");
+    check_serial("AB CD", XHCI_FUNC_BAD_SERIAL, "a space");
+    check_serial("AB,CD", XHCI_FUNC_BAD_SERIAL, "a comma");
+    check_serial("AB\\CD", XHCI_FUNC_BAD_SERIAL, "a backslash");
+    check_serial("AB\x7F", XHCI_FUNC_BAD_SERIAL, "DEL");
+    check_serial("AB\x1F", XHCI_FUNC_BAD_SERIAL, "a control character");
+    check_serial("AB\t", XHCI_FUNC_BAD_SERIAL, "a tab");
+    bytes = make_string(d, NULL, nonAscii, 3);
+    CHECK_EQ(XhciFuncSerialId(d, bytes, out, sizeof(out)),
+             XHCI_FUNC_BAD_SERIAL, "U+00E9");
+    CHECK_EQ(out[0], 0, "U+00E9: nothing left behind");
+    bytes = make_string(d, NULL, highByte, 2);
+    CHECK_EQ(XhciFuncSerialId(d, bytes, out, sizeof(out)),
+             XHCI_FUNC_BAD_SERIAL, "U+0141: a high byte");
+    bytes = make_string(d, NULL, nul, 3);
+    CHECK_EQ(XhciFuncSerialId(d, bytes, out, sizeof(out)),
+             XHCI_FUNC_BAD_SERIAL, "an embedded NUL");
+
+    /* Not a string descriptor. */
+    bytes = make_string(d, "ABCD", NULL, 4);
+    d[1] = 2;
+    CHECK_EQ(XhciFuncSerialId(d, bytes, out, sizeof(out)),
+             XHCI_FUNC_MALFORMED, "bDescriptorType 2");
+    d[1] = 3;
+    CHECK_EQ(XhciFuncSerialId(d, bytes - 1, out, sizeof(out)),
+             XHCI_FUNC_MALFORMED, "bLength past the bytes read");
+    CHECK_EQ(XhciFuncSerialId(d, 1, out, sizeof(out)),
+             XHCI_FUNC_MALFORMED, "one byte read");
+    d[0] = 1;
+    CHECK_EQ(XhciFuncSerialId(d, bytes, out, sizeof(out)),
+             XHCI_FUNC_MALFORMED, "bLength 1");
+    d[0] = 7;
+    CHECK_EQ(XhciFuncSerialId(d, bytes, out, sizeof(out)), XHCI_FUNC_OK,
+             "odd bLength 7");
+    CHECK_EQ(strcmp(out, "AB"), 0, "odd bLength: its last byte ignored");
+
+    /* The longest: bLength 254 and 255 both hold 126 characters. */
+    for (i = 0; i < XHCI_SERIAL_ID_CHARS; i++) {
+        longest[i] = (char)('A' + (i % 26));
+    }
+    longest[XHCI_SERIAL_ID_CHARS] = 0;
+    bytes = make_string(d, longest, NULL, XHCI_SERIAL_ID_CHARS);
+    CHECK_EQ(bytes, 254, "126 characters: bLength 254");
+    CHECK_EQ(XhciFuncSerialId(d, bytes, out, sizeof(out)), XHCI_FUNC_OK,
+             "126 characters");
+    CHECK_EQ(strcmp(out, longest), 0, "126 characters, all of them");
+    d[0] = 255;
+    d[254] = 'Q';
+    CHECK_EQ(XhciFuncSerialId(d, 255, out, sizeof(out)), XHCI_FUNC_OK,
+             "bLength 255");
+    CHECK_EQ(strlen(out), XHCI_SERIAL_ID_CHARS, "bLength 255: 126");
+    CHECK_EQ(XhciFuncSerialId(d, 255, out, XHCI_SERIAL_ID_BYTES - 1),
+             XHCI_FUNC_BAD_PARAM, "a buffer short of 127");
+    CHECK_EQ(XhciFuncSerialId(NULL, 255, out, sizeof(out)),
+             XHCI_FUNC_BAD_PARAM, "no descriptor");
+
+    /* Duplicates are found ignoring case; empty is never a duplicate. */
+    CHECK_EQ(XhciFuncSerialSame("abc123", "ABC123"), 1, "case ignored");
+    CHECK_EQ(XhciFuncSerialSame("ABC123", "ABC123"), 1, "equal");
+    CHECK_EQ(XhciFuncSerialSame("ABC123", "ABC1234"), 0, "a prefix");
+    CHECK_EQ(XhciFuncSerialSame("ABC1234", "ABC123"), 0, "longer");
+    CHECK_EQ(XhciFuncSerialSame("A[", "A{"), 0, "only letters fold");
+    CHECK_EQ(XhciFuncSerialSame("", ""), 0, "two empty: no serial");
+    CHECK_EQ(XhciFuncSerialSame(NULL, "A"), 0, "NULL");
+}
+
+static void test_instance_ids(void)
+{
+    char longest[XHCI_SERIAL_ID_BYTES];
+    char want[XHCI_SERIAL_ID_BYTES + 3];
+    char out[8];
+    ULONG used;
+    ULONG i;
+
+    /* With a serial: the device's own id is the serial alone, as usbhub's;
+     * a function keeps its MI_nn after '&'. */
+    check_instance("0123456789AB", 3, XHCI_INSTANCE_NO_MI, "0123456789AB",
+                   "device, serial");
+    check_instance("0123456789AB", 3, 0, "0123456789AB&00",
+                   "function MI_00, serial");
+    check_instance("0123456789AB", 3, 3, "0123456789AB&03",
+                   "function MI_03, serial");
+    check_instance("abc", 3, 0x1F, "abc&1F", "function MI_1F, case kept");
+    check_instance("0123456789AB", 0x3102, 2, "0123456789AB&02",
+                   "behind hubs: the place is not in it");
+
+    /* Without one: section 10.7's location form, unchanged. */
+    check_instance(NULL, 3, XHCI_INSTANCE_NO_MI, "3", "device, port 3");
+    check_instance("", 3, XHCI_INSTANCE_NO_MI, "3", "empty serial: port 3");
+    check_instance(NULL, 3, 3, "303", "function MI_03, port 3");
+    check_instance(NULL, 12, 3, "1203", "function MI_03, port 12");
+    check_instance(NULL, (0x31UL << 8) | 2UL, XHCI_INSTANCE_NO_MI,
+                   "12546", "behind two hubs: route 0x31 over port 2");
+    check_instance(NULL, (0x31UL << 8) | 2UL, 1, "1254601",
+                   "a function behind two hubs");
+
+    /* The longest serial and a function suffix: 130 with the NUL. */
+    for (i = 0; i < XHCI_SERIAL_ID_CHARS; i++) {
+        longest[i] = (char)('0' + (i % 10));
+    }
+    longest[XHCI_SERIAL_ID_CHARS] = 0;
+    memcpy(want, longest, XHCI_SERIAL_ID_CHARS);
+    memcpy(want + XHCI_SERIAL_ID_CHARS, "&7F", 4);
+    check_instance(longest, 1, 0x7F, want, "126 characters and &7F");
+
+    used = 0;
+    CHECK_EQ(XhciFuncInstanceId("ABCDEFGH", 1, XHCI_INSTANCE_NO_MI, out,
+                                sizeof(out), &used),
+             XHCI_FUNC_TOO_SMALL, "nine bytes in eight");
+    CHECK_EQ(used, 9, "the size it needs");
+    CHECK_EQ(XhciFuncInstanceId(NULL, 1, 0x100, out, sizeof(out), &used),
+             XHCI_FUNC_BAD_PARAM, "MI past 0xFF");
+    CHECK_EQ(XhciFuncInstanceId(NULL, 1, 0, NULL, 4, &used),
+             XHCI_FUNC_BAD_PARAM, "a capacity with no buffer");
+    CHECK_EQ(XhciFuncInstanceId(NULL, 1, 0, out, sizeof(out), NULL),
+             XHCI_FUNC_BAD_PARAM, "nowhere to say the size");
+}
+
 int main(void)
 {
     test_cmedia();
@@ -678,6 +863,8 @@ int main(void)
     test_setup();
     test_ids();
     test_id_edges();
+    test_serial_ids();
+    test_instance_ids();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

@@ -2,7 +2,7 @@
  * xhci_func.h - the pure half of composite splitting in xhci98.sys
  * (roadmap-hcd.md task 26-A.7; design record 13 sections 10.7 to 10.9).
  *
- * Four computations, none touching a register, a lock or a kernel service,
+ * Five computations, none touching a register, a lock or a kernel service,
  * so the host suite drives each (test\test_func.c):
  *
  *   - whether a device is split, and its functions: IADs first, then the
@@ -12,7 +12,9 @@
  *     GET_DESCRIPTOR(CONFIGURATION) (section 10.9);
  *   - whether a SETUP packet may leave a function PDO (an interface
  *     recipient must be one of its interfaces);
- *   - the function PDO's ids (section 10.7), as ASCII multi-strings.
+ *   - the function PDO's ids (section 10.7), as ASCII multi-strings;
+ *   - and every PDO's instance id: the serial number string when it is
+ *     usable, else the location (task 33.2).
  *
  * DDK-free: part of the pure core.
  */
@@ -106,5 +108,48 @@ ULONG XhciFuncSetupAllowed(const UCHAR *setup, ULONG interfaceMask,
  * whole answer's length, NULs included, even when it did not fit. */
 ULONG XhciFuncId(const UCHAR *device, const XHCI_FUNC *func, ULONG port,
                  ULONG which, char *out, ULONG capacity, PULONG used);
+
+/*
+ * Instance ids from the serial number (roadmap-hcd.md task 33.2; design
+ * record 13 section 10.7). A string descriptor holds at most 126 UTF-16
+ * characters ((255 - 2) / 2), so a serial id is at most 126 ASCII
+ * characters and its NUL.
+ */
+#define XHCI_SERIAL_ID_CHARS    126UL
+#define XHCI_SERIAL_ID_BYTES    127UL
+#define XHCI_FUNC_BAD_SERIAL    5UL /* a string, but no usable instance id */
+#define XHCI_INSTANCE_NO_MI     0xFFFFFFFFUL
+
+/*
+ * The serial id of the string descriptor `desc`, `bytes` of it read, into
+ * `out` (at least XHCI_SERIAL_ID_BYTES), NUL-terminated. XHCI_FUNC_OK with
+ * the characters copied; XHCI_FUNC_MALFORMED (out empty) when it is not a
+ * string descriptor: fewer than 2 bytes, bDescriptorType not 3, or a
+ * bLength below 2 or past `bytes`; XHCI_FUNC_BAD_SERIAL (out empty) for an
+ * empty string, or any character an instance id may not carry - only 0x21
+ * to 0x7E pass, less ',' and '\' (Microsoft's usbhub refuses below 0x20,
+ * above 0x7F and ','; this rule is narrower by the space, DEL and the
+ * backslash, which separates the parts of a device instance path). An odd
+ * bLength's last byte is ignored. Nothing is truncated: a valid descriptor
+ * always fits.
+ */
+ULONG XhciFuncSerialId(const UCHAR *desc, ULONG bytes, char *out,
+                       ULONG capacity);
+
+/* 1 when serial ids `a` and `b` are both non-empty and equal ignoring
+ * ASCII case - the registry, where an instance id becomes a key name,
+ * does not tell case apart. */
+ULONG XhciFuncSerialSame(const char *a, const char *b);
+
+/*
+ * A device or function PDO's instance id, NUL-terminated ASCII. With a
+ * non-empty `serial`: the serial id, then for a function (`mi` its
+ * MI_nn, not XHCI_INSTANCE_NO_MI) '&' and nn. Without: the location key
+ * (XhciHubInstanceKey) in decimal, then for a function nn - section 10.7's
+ * location form. nn is two upper-case hex digits. *used is the whole
+ * length, the NUL included, even when it did not fit.
+ */
+ULONG XhciFuncInstanceId(const char *serial, ULONG location, ULONG mi,
+                         char *out, ULONG capacity, PULONG used);
 
 #endif /* XHCI_FUNC_H */

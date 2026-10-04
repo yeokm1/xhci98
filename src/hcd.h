@@ -374,6 +374,11 @@ typedef struct _HCD_USB_DEVICE {
                              * the hold service disconnects or refuses it */
     ULONG HoldRefused;      /* that request was refused late: refused in
                              * place, never asked again (hcd_pdo.c)      */
+    /* The serial number string as an instance id (33.2; hcd_enum.c,
+     * HcdDeviceReadSerial), read once per enumeration before its first
+     * PDO: HCD_SERIAL_*, and SerialId non-empty only when HCD_SERIAL_OK. */
+    ULONG SerialState;
+    char SerialId[XHCI_SERIAL_ID_BYTES];
     /* The URB path (hcd_io.c). Refs counts URB IRPs that hold the record,
      * taken under PdoListLock while the PDO still names it; Gone, under
      * the controller lock, refuses new submissions once the thread has
@@ -485,9 +490,15 @@ typedef struct _HCD_DEVICE_PDO {
                                      * parent's release waits it out      */
     ULONG Port;                     /* its device's Location: the port
                                      * handshake (hcdPortNotify) names it */
-    ULONG InstanceKey;              /* the instance id and the address
+    ULONG InstanceKey;              /* the address, and the instance id
+                                     * without a serial id
                                      * (XhciHubInstanceKey): the root port,
                                      * with the route above it behind hubs */
+    char SerialId[XHCI_SERIAL_ID_BYTES]; /* the instance id's serial (33.2,
+                                     * XhciFuncInstanceId) and UniqueID
+                                     * TRUE; empty for the location form.
+                                     * Fixed at creation, and under
+                                     * PdoListLock until listed          */
     ULONG RootPort;                 /* its device's Port and Route, fixed */
     ULONG Route;                    /* at creation (GET_TOPOLOGY_ADDRESS) */
     ULONG Speed;
@@ -941,6 +952,16 @@ typedef struct _HCD_CONTROLLER {
      * did not take - all of them until its executor is wired. */
     ULONG XportRefusedAt[XHCI_XPORT_AT_COUNT];
     ULONG XportHoldsNotTaken;
+    /* The serial-number instance ids (33.2; hcd_enum.c, hcd_pdo.c), by
+     * the controller thread: devices named by their serial, devices whose
+     * serial string was read but is no instance id, devices whose read
+     * failed every try, and devices whose serial a listed PDO of the same
+     * VID and PID already carried - each of the last three on the
+     * location form. Never zeroed. */
+    ULONG SerialIdsTaken;
+    ULONG SerialIdsRefused;
+    ULONG SerialReadsFailed;
+    ULONG SerialIdsDuplicate;
 
     /* The kept controller sequence's state, as the miniport's extension. */
     XHCI_EXTENSION Hc;
@@ -1073,6 +1094,14 @@ ULONG HcdThreadControlOutcome(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                               USHORT value, USHORT index, ULONG length,
                               PULONG bytes);
 ULONG HcdThreadReaddress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+/* dev->SerialState (33.2): not read yet, no iSerialNumber, a usable serial
+ * id, a string read that is no instance id, every read try failed. */
+#define HCD_SERIAL_UNREAD   0UL
+#define HCD_SERIAL_NONE     1UL
+#define HCD_SERIAL_OK       2UL
+#define HCD_SERIAL_REFUSED  3UL
+#define HCD_SERIAL_FAILED   4UL
+ULONG HcdDeviceReadSerial(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 VOID HcdEnumCycle(PHCD_CONTROLLER hc, ULONG port, ULONG serial);
 
 /* hcd_hub.c */
