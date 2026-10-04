@@ -845,8 +845,9 @@ specification's and stay unconfigurable.
 `release`, 2026-10-04 and 05, development host A, QEMU TCG;
 `out\phase33\initenum\`, git-ignored). The first rows were taken on
 `89a8025`, the rows marked "final" on `59e1897` (Codex rounds 1 and 2 in);
-round 3's change after it touches only a SuperSpeed root link still in
-reset, which none of these legs has.
+rounds 3 and 4 after it touch only a SuperSpeed root link still in reset,
+which none of these legs has, and the keyboard-behind-a-hub F6 leg passed
+again on `82902e8` (the branch's last code; 562 ms and 31 ms).
 
 | Leg | Devices at start | Root hub's first answer | Hub FDO's first answer | Result |
 |---|---|---|---|---|
