@@ -491,10 +491,13 @@ typedef struct _HCD_DEVICE_PDO {
                                      * parent's release waits it out      */
     ULONG Port;                     /* its device's Location: the port
                                      * handshake (hcdPortNotify) names it */
-    ULONG InstanceKey;              /* the address, and the instance id
-                                     * without a serial id
+    ULONG InstanceKey;              /* the instance id without a serial id
                                      * (XhciHubInstanceKey): the root port,
                                      * with the route above it behind hubs */
+    ULONG Address;                  /* DEVICE_CAPABILITIES Address and
+                                     * UINumber: the port on the parent it
+                                     * is presented under (XhciHubPdoAddress,
+                                     * section 10.11). Fixed at creation  */
     char SerialId[XHCI_SERIAL_ID_BYTES]; /* the instance id's serial (33.2,
                                      * XhciFuncInstanceId) and UniqueID
                                      * TRUE; empty for the location form.

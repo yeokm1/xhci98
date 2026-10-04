@@ -316,6 +316,20 @@ ULONG XhciHubWantsMultiTt(ULONG speedClass, ULONG deviceProtocol,
  */
 ULONG XhciHubInstanceKey(ULONG rootPort, ULONG route);
 
+/*
+ * DEVICE_CAPABILITIES Address and UINumber for a device PDO (design record
+ * 13 section 10.11, "Address"): its port number on the parent it is
+ * presented under, as Microsoft's hub driver reports Address, so a tool
+ * that asks the parent's door for that connection index finds the device.
+ * The root port for a device on a root port (route 0); the last tier of
+ * the Route String - the downstream port of the hub it is attached to -
+ * when `onParentHub`, that hub being the parent it is presented under; and
+ * otherwise, a device whose own hub has no PDO and which is presented under
+ * a hub further up or the root hub, whose door has no connection index for
+ * it, the instance key (XhciHubInstanceKey), as before task 33.4.
+ */
+ULONG XhciHubPdoAddress(ULONG rootPort, ULONG route, ULONG onParentHub);
+
 /* Milliseconds to wait after powering a hub's ports before reading any
  * (section 10.2 step 1: bPwrOn2PwrGood x 2), bounded below by 20 - the root
  * port's own (xHCI 5.4.8) - and above by 1000. */

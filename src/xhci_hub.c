@@ -308,6 +308,28 @@ ULONG XhciHubInstanceKey(ULONG rootPort, ULONG route)
 }
 
 /* IRQL: any. */
+ULONG XhciHubPdoAddress(ULONG rootPort, ULONG route, ULONG onParentHub)
+{
+    ULONG tier;
+    ULONG port;
+
+    route &= 0xFFFFFUL;
+    if (route == 0) {
+        return rootPort & 0xFFUL;
+    }
+    if (!onParentHub) {
+        return XhciHubInstanceKey(rootPort, route);
+    }
+    for (tier = 5; tier > 0; tier--) {
+        port = (route >> (4UL * (tier - 1UL))) & 0xFUL;
+        if (port != 0) {
+            return port;
+        }
+    }
+    return XhciHubInstanceKey(rootPort, route);
+}
+
+/* IRQL: any. */
 ULONG XhciHubPowerWaitMs(ULONG powerGoodMs)
 {
     if (powerGoodMs < 20UL) {

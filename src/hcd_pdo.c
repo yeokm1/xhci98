@@ -615,10 +615,13 @@ static ULONG hcdXportRefusal(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * The hub PDO a new PDO of `dev` is presented under (task 33.4; design
  * record 13 section 10.11): the nearest hub above the device's port that has
  * a PDO, by that PDO's Serial, or 0 for the root hub (XhciHubPresentedParent
- * over the live hub objects). Thread only: the hub objects and dev->Pdo are
- * its own. PASSIVE_LEVEL.
+ * over the live hub objects). *onParentHub is 1 when that parent is the hub
+ * whose port the device is on, so its door serves the device at that port
+ * (XhciHubPdoAddress). Thread only: the hub objects and dev->Pdo are its
+ * own. PASSIVE_LEVEL.
  */
-static ULONG hcdPresentedParent(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+static ULONG hcdPresentedParent(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                PULONG onParentHub)
 {
     ULONG parent[HCD_MAX_HUBS];
     ULONG serial[HCD_MAX_HUBS];
@@ -641,10 +644,15 @@ static ULONG hcdPresentedParent(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
                 ((PHCD_DEVICE_PDO)hub->Device->Pdo->DeviceExtension)->Serial;
         }
     }
+    *onParentHub = 0;
     if (dev->Location == 0 || dev->Location > HCD_PORT_COUNT) {
         return 0;
     }
     q = &hc->Ports[dev->Location - 1];
+    if (q->Hub != NULL && q->Hub->Index < HCD_MAX_HUBS &&
+        serial[q->Hub->Index] != 0) {
+        *onParentHub = 1;
+    }
     return XhciHubPresentedParent(parent, serial, HCD_MAX_HUBS,
                                   (q->Hub == NULL) ? XHCI_HUB_NO_PARENT
                                                    : q->Hub->Index);
@@ -665,6 +673,7 @@ static NTSTATUS hcdPdoNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     NTSTATUS status;
     ULONG serial;
     ULONG length;
+    ULONG onParentHub;
     ULONG n;
     ULONG i;
 
@@ -741,7 +750,8 @@ static NTSTATUS hcdPdoNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         }
     }
     pdo->Group = serial;
-    pdo->ParentSerial = hcdPresentedParent(hc, dev);
+    pdo->ParentSerial = hcdPresentedParent(hc, dev, &onParentHub);
+    pdo->Address = XhciHubPdoAddress(dev->Port, dev->Route, onParentHub);
     if (dev->Hub != NULL) {
         /* What the hub FDO's door answers, copied now so it never reads
          * the thread's hub object (task 33.4). A hub refused as too deep
@@ -1350,6 +1360,7 @@ static ULONG hcdDormantRevive(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             a->RootPort = dev->Port;
             a->Route = dev->Route;
             a->InstanceKey = b->InstanceKey;
+            a->Address = b->Address;
             /* A revived hub's object may sit at another index now, its
              * ports at other locations (task 33.4). */
             a->HubIndex = b->HubIndex;
@@ -2297,8 +2308,13 @@ static NTSTATUS hcdDeviceCapabilities(PHCD_DEVICE_PDO pdo, PIRP irp)
     if (pdo->Hub) {
         caps->SurpriseRemovalOK = TRUE;
     }
-    caps->Address = pdo->InstanceKey;
-    caps->UINumber = pdo->InstanceKey;
+    /* The port on the parent it is presented under, as usbhub reports
+     * Address: a tool that asks that parent's door for this connection
+     * index (hidusbf's Setup.exe on XP) finds the device there. UINumber
+     * alike, for the Location line NT's Device Manager builds from it;
+     * usbhub's is 0 on XP and -1 on 7 (section 10.11, "Address"). */
+    caps->Address = pdo->Address;
+    caps->UINumber = pdo->Address;
     caps->DeviceState[PowerSystemWorking] = PowerDeviceD0;
     for (i = PowerSystemSleeping1; i < PowerSystemMaximum; i++) {
         caps->DeviceState[i] = PowerDeviceD3;

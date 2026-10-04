@@ -171,6 +171,20 @@ static void test_rules(void)
     CHECK(!XhciHubWantsMultiTt(XHCI_SPEED_HIGH, 2, 0), "no alternate 1");
     CHECK_EQ(XhciHubInstanceKey(3, 0), 3, "root port device unchanged");
     CHECK_EQ(XhciHubInstanceKey(1, 0x21), 0x2101, "behind two hubs");
+    CHECK_EQ(XhciHubPdoAddress(3, 0, 0), 3, "address: root port");
+    CHECK_EQ(XhciHubPdoAddress(3, 0, 1), 3, "address: root port, flag moot");
+    CHECK_EQ(XhciHubPdoAddress(3, 0x1, 1), 1,
+             "address: port 1 of a hub on root port 3, not 0x103");
+    CHECK_EQ(XhciHubPdoAddress(1, 0x2E, 1), 2,
+             "address: two tiers, the nearer hub's port");
+    CHECK_EQ(XhciHubPdoAddress(2, 0x3E4, 1), 3, "address: three tiers");
+    CHECK_EQ(XhciHubPdoAddress(1, 0xE4321, 1), 0xE, "address: five tiers");
+    CHECK_EQ(XhciHubPdoAddress(3, 0x1, 0), 0x103,
+             "address: own hub has no PDO, no connection index: instance key");
+    CHECK_EQ(XhciHubPdoAddress(1, 0x21, 0), 0x2101,
+             "address: re-parented two tiers up: instance key");
+    CHECK_EQ(XhciHubPdoAddress(0x103, 0x100001, 1), 1,
+             "address: only the route's five tiers and the root port's byte");
     CHECK_EQ(XhciHubPowerWaitMs(0), 20, "lower bound");
     CHECK_EQ(XhciHubPowerWaitMs(100), 100, "bPwrOn2PwrGood x 2");
     CHECK_EQ(XhciHubPowerWaitMs(510), 510, "inside the bounds");
