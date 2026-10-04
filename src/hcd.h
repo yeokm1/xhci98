@@ -499,6 +499,10 @@ typedef struct _HCD_DEVICE_PDO {
                                      * TRUE; empty for the location form.
                                      * Fixed at creation, and under
                                      * PdoListLock until listed          */
+    char ReadSerialId[XHCI_SERIAL_ID_BYTES]; /* the serial id as read,
+                                     * kept when a duplicate empties
+                                     * SerialId: what a dormant group
+                                     * named by its place is matched on  */
     ULONG RootPort;                 /* its device's Port and Route, fixed */
     ULONG Route;                    /* at creation (GET_TOPOLOGY_ADDRESS) */
     ULONG Speed;

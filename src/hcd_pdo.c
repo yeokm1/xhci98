@@ -512,7 +512,9 @@ static VOID hcdXportDecide(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo,
  * its hub port and siblings untouched. Each place is counted. Returns
  * nonzero when the hold request was accepted - queued for the thread's next
  * pass, which reads the device's identity on the SuperSpeed port, writes PED
- * and feeds the port a disconnect. Thread only, PASSIVE_LEVEL.
+ * and feeds the port a disconnect. Thread only, at DISPATCH_LEVEL under
+ * hcdSerialLock (HcdDevicePdoCreate); it takes the controller lock inside
+ * HcdHoldRequestUsb2 and nothing that waits.
  */
 static ULONG hcdXportRefusal(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                              PHCD_DEVICE_PDO first)
@@ -638,9 +640,11 @@ static NTSTATUS hcdPdoNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         pdo->DeviceDesc[i] = dev->DeviceDesc[i];
     }
     pdo->SerialId[0] = 0;
+    pdo->ReadSerialId[0] = 0;
     if (dev->SerialState == HCD_SERIAL_OK) {
         for (i = 0; i < sizeof(pdo->SerialId); i++) {
             pdo->SerialId[i] = dev->SerialId[i];
+            pdo->ReadSerialId[i] = dev->SerialId[i];
         }
     }
     pdo->Group = serial;
@@ -817,10 +821,11 @@ static ULONG hcdSerialTakenLocked(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo,
  * The serial ids' reach is the machine, not one root hub: an instance id
  * with UniqueID TRUE names one devnode wherever its parent is. Every
  * controller of this driver is linked here, from AddDevice to its remove,
- * through SerialNext under hcdSerialLock - which is taken before any
- * PdoListLock and never inside one, so the one path that holds a
- * controller's PdoListLock and then another's (hcdSerialTakenElsewhere,
- * under hcdSerialLock) cannot meet itself the other way round.
+ * through SerialNext under hcdSerialLock. The order is hcdSerialLock, then
+ * one PdoListLock at a time (another controller's in
+ * hcdSerialTakenElsewhere, released before this controller's is taken in
+ * hcdDormantRevive and at the listing), or the controller lock inside
+ * hcdXportRefusal; hcdSerialLock is never taken under either.
  */
 static KSPIN_LOCK hcdSerialLock;
 static PHCD_CONTROLLER hcdSerialControllers;
@@ -860,12 +865,18 @@ VOID HcdSerialControllerRemove(PHCD_CONTROLLER hc)
     KeReleaseSpinLock(&hcdSerialLock, oldIrql);
 }
 
-/* Whether a listed PDO of another controller - present or dormant -
- * carries `pdo`'s serial id for its vendor and product id. hcdSerialLock
+/* Whether a PDO of another controller carries `pdo`'s serial id for its
+ * vendor and product id while PnP still holds it as present: listed,
+ * present or dormant, or gone and not yet omitted from a relations answer
+ * (Codex review of 33.2, round 2, finding 1). Another root hub's answer is
+ * not ordered with this one's, so a device moved between controllers
+ * faster than that answer takes the location form for that plug rather
+ * than reuse an instance id PnP may still see present. hcdSerialLock
  * held, no PdoListLock. */
 static ULONG hcdSerialTakenElsewhere(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
 {
     PHCD_CONTROLLER other;
+    PHCD_DEVICE_PDO gone;
     KIRQL oldIrql;
     ULONG taken;
 
@@ -877,6 +888,14 @@ static ULONG hcdSerialTakenElsewhere(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
         }
         KeAcquireSpinLock(&other->PdoListLock, &oldIrql);
         taken = hcdSerialTakenLocked(other, pdo, 1);
+        for (gone = other->GonePdos; gone != NULL && !taken;
+             gone = gone->Next) {
+            if (gone->Reported && !gone->MissingReported &&
+                hcdSameVidPid(gone, pdo) &&
+                XhciFuncSerialSame(gone->SerialId, pdo->SerialId)) {
+                taken = 1;
+            }
+        }
         KeReleaseSpinLock(&other->PdoListLock, oldIrql);
     }
     return taken;
@@ -920,8 +939,11 @@ static VOID hcdDormantRetireSerialLocked(PHCD_CONTROLLER hc,
 
 /* The dormant group, by its first PDO, that the device built as `first`
  * revives: every PDO matching the dormant one in the same position, and
- * the group named by `first`'s place (`byPlace`, a group without a serial
- * id) or by `first`'s serial id, exactly. NULL for none. PdoListLock held. */
+ * the group named by `first`'s place (`byPlace`: a group without a serial
+ * id whose device read the same serial id as `first`, or none, so a unit
+ * on the location form for a duplicate keeps its own and never takes a
+ * different unit's - Codex review of 33.2, round 2, finding 2) or by
+ * `first`'s serial id, exactly. NULL for none. PdoListLock held. */
 static PHCD_DEVICE_PDO hcdDormantFindLocked(PHCD_CONTROLLER hc,
                                             PHCD_DEVICE_PDO first,
                                             ULONG byPlace)
@@ -936,7 +958,8 @@ static PHCD_DEVICE_PDO hcdDormantFindLocked(PHCD_CONTROLLER hc,
             continue;
         }
         if (byPlace ? (old->SerialId[0] != 0 ||
-                       old->InstanceKey != first->InstanceKey)
+                       old->InstanceKey != first->InstanceKey ||
+                       !hcdSerialEqual(old->ReadSerialId, first->ReadSerialId))
                     : (first->SerialId[0] == 0 ||
                        !hcdSerialEqual(old->SerialId, first->SerialId))) {
             continue;

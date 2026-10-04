@@ -2426,14 +2426,19 @@ device keeps the location form and `UniqueID` FALSE.
   requested the controller reset, the PDO is not created, and the device is
   enumerated afresh after the reset.
 - **Duplicates**: a serial id that a present PDO of the same VID and PID
-  already carries, on any of this driver's controllers (a listed PDO of
-  another controller, present or dormant, also counts) - compared ignoring
+  already carries, on any of this driver's controllers (on another
+  controller a dormant PDO counts too, and so does a gone one its root hub
+  has not yet omitted from a relations answer, since that answer is not
+  ordered with this root hub's) - compared ignoring
   case, since the registry key does not tell case apart - leaves the
   newcomer on the location form (`serial.duplicate`); an instance id with
   `UniqueID` TRUE names one devnode on the whole machine. `usbhub` checks
   only its own hub's ports. A PDO already unlisted (gone, its missing
-  report pending) does not count, so a device moved quickly from one port
-  to another keeps its id, as under `usbhub`. This is the other way a
+  report pending) on the same controller does not count - one relations
+  answer omits it and brings the newcomer - so a device moved quickly from
+  one port to another keeps its id, as under `usbhub`; moved between
+  controllers faster than the old root hub's next answer, it takes the
+  location form for that plug. This is the other way a
   device's instance id can change between plugs: of two units sharing a
   serial, the one enumerated second takes the location form, and which one
   that is can differ from plug to plug.
@@ -2443,9 +2448,10 @@ device keeps the location form and `UniqueID` FALSE.
   devices behind hubs differ in route or serial.
 - **Dormant PDOs** (Windows 98 SE and ME, task 33.1) are matched by the
   instance id they answer, before the duplicate check: first a group named
-  by the device's place (so a unit a duplicate or a failed read left on
-  the location form revives its own PDOs), then a group named by its
-  serial id, wherever the device comes back. A revived PDO answers the id
+  by the device's place whose device read the same serial id, or none (so
+  a unit a duplicate left on the location form revives its own PDOs, and
+  a serial-named unit never takes another unit's location group), then a
+  group named by its serial id, wherever the device comes back. A revived PDO answers the id
   it had. A dormant group the newcomer did not revive is retired in the
   hold that lists the new PDOs when it is named by the newcomer's place or
   carries the serial id the newcomer keeps; one named by a serial id is
