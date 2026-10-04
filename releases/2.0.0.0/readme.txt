@@ -558,21 +558,12 @@ it anyway if it is not there - the reports are what fix it:
 
       https://github.com/yeokm1/xhci98/issues
 
-Known limitations:
-
-  * THE DRIVER NEVER STARTS SELECTIVE SUSPEND (section 5). Idle devices and
-    hub ports are never suspended to save power. A suspend or resume a hub
-    reports is handled.
+Outside this driver's control - these come from Windows, NUSB or the driver
+being unsigned, and no change to this driver can remove them:
 
   * UPGRADING IN PLACE OVER A RUNNING 1.X DRIVER UNDER NUSB BLUE-SCREENS.
     NUSB's usbport.sys crashes the machine as it stops the old driver,
     before this release runs. Follow section 4, which avoids it.
-
-  * USB STORAGE ON WINDOWS 98 IS SLOWER THAN THE DRIVE. An observation, not
-    a defect found: Windows 98 sends one command at a time. On a ThinkPad
-    P14s Gen 1 with an MSSU10 drive at 64 KB, about 208 MB/s on Windows 98
-    against 277 MB/s on Windows 11 at the same queue depth of one. This may
-    be looked into in a later release.
 
   * WINDOWS VISTA X64 AND 7 X64 NEED DRIVER SIGNATURE ENFORCEMENT DISABLED.
     The driver is not signed. Driver signature enforcement must be disabled
@@ -581,6 +572,22 @@ Known limitations:
   * NO USB STORAGE ON A STOCK WINDOWS 98 SE (section 3). With no NUSB
     installed there is no mass-storage driver at all. HID and audio still
     work.
+
+  * WINDOWS ME: DO NOT UNPLUG A DEVICE WHILE WINDOWS IS INSTALLING IT. ME's
+    own device manager stops responding; it does the same on Microsoft's
+    own USB stack. Wait for the install to finish before unplugging.
+
+May be addressed in a later release:
+
+  * THE DRIVER NEVER STARTS SELECTIVE SUSPEND (section 5). Idle devices and
+    hub ports are never suspended to save power. A suspend or resume a hub
+    reports is handled.
+
+  * USB STORAGE ON WINDOWS 98 IS SLOWER THAN THE DRIVE. An observation, not
+    a defect found: Windows 98 sends one command at a time. On a ThinkPad
+    P14s Gen 1 with an MSSU10 drive at 64 KB, about 208 MB/s on Windows 98
+    against 277 MB/s on Windows 11 at the same queue depth of one. This may
+    be looked into in a later release.
 
   * WINDOWS ME: A UAS DRIVE AS THE FIRST USB STORAGE DEVICE SHOWS CODE 2.
     ME has not yet copied its own USBNTMAP.SYS and USBMPHLP.PDR, which it
@@ -593,10 +600,6 @@ Known limitations:
     fine. Unplug the mouse or keyboard before re-enabling the controller. If
     ME stops responding, restart it and re-enable the controller with
     nothing attached. Being fixed.
-
-  * WINDOWS ME: DO NOT UNPLUG A DEVICE WHILE WINDOWS IS INSTALLING IT. ME's
-    own device manager stops responding; it does the same on Microsoft's
-    own USB stack. Wait for the install to finish before unplugging.
 
   * A DEVICE MOVED TO A DIFFERENT PORT IS FOUND AGAIN AS NEW HARDWARE. This
     driver names a device by its port; Microsoft's hub driver uses the
