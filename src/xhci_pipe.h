@@ -234,6 +234,25 @@ ULONG XhciPipeEndpointParamsAt(const UCHAR *config, ULONG length,
                                PXHCI_PIPE_EP ep);
 
 /*
+ * The bInterval a client's configuration descriptor `caller` (`callerLength`
+ * bytes) gives the endpoint at `offset` of the device's own `config`, which
+ * belongs to interface `interfaceNumber` at `alternate`: a composite
+ * function's SELECT_CONFIGURATION carries the function's configuration as
+ * its class driver read it, which a filter below that driver may have
+ * rewritten (hidusbf; whole-branch review of 2.1.0.0). Taken only from an
+ * endpoint of the caller's copy of that interface whose first six bytes -
+ * bLength, bDescriptorType, bEndpointAddress, bmAttributes, wMaxPacketSize -
+ * equal the device's. XHCI_PIPE_OK and *bInterval; XHCI_PIPE_NOT_FOUND when
+ * the caller's copy has no such endpoint; XHCI_PIPE_MALFORMED for a caller
+ * configuration XhciPipeFindInterface refuses; XHCI_PIPE_BAD_PARAM for NULL
+ * or an `offset` whose 7 bytes are not inside `length`.
+ */
+ULONG XhciPipeCallerInterval(const UCHAR *config, ULONG length, ULONG offset,
+                             const UCHAR *caller, ULONG callerLength,
+                             ULONG interfaceNumber, ULONG alternate,
+                             PULONG bInterval);
+
+/*
  * Nonzero for a zero-bandwidth endpoint: isochronous with Max Packet Size 0.
  * Its Endpoint Context is configured as any other (Max Packet Size 0, Max
  * ESIT Payload 0, so no periodic bandwidth is reserved), its pipe handle is

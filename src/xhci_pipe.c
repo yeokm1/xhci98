@@ -694,6 +694,47 @@ ULONG XhciPipeEndpointParamsAt(const UCHAR *config, ULONG length,
     return xhciPipeSuperSpeed(config, total, offset, speed, lec, ep);
 }
 
+ULONG XhciPipeCallerInterval(const UCHAR *config, ULONG length, ULONG offset,
+                             const UCHAR *caller, ULONG callerLength,
+                             ULONG interfaceNumber, ULONG alternate,
+                             PULONG bInterval)
+{
+    XHCI_PIPE_IFACE iface;
+    ULONG total;
+    ULONG answer;
+    ULONG at;
+    ULONG e;
+    ULONG i;
+
+    if (config == NULL || caller == NULL || bInterval == NULL) {
+        return XHCI_PIPE_BAD_PARAM;
+    }
+    total = xhciPipeTotal(config, length);
+    if (offset >= total || total - offset < XHCI_PIPE_ENDPOINT_BYTES) {
+        return XHCI_PIPE_BAD_PARAM;
+    }
+    answer = XhciPipeFindInterface(caller, callerLength, interfaceNumber,
+                                   alternate, &iface);
+    if (answer != XHCI_PIPE_OK) {
+        return answer == XHCI_PIPE_NOT_FOUND ? XHCI_PIPE_NOT_FOUND
+                                             : XHCI_PIPE_MALFORMED;
+    }
+    /* Every EndpointOffset holds a whole 7-byte descriptor (the walk). */
+    for (e = 0; e < iface.EndpointCount; e++) {
+        at = iface.EndpointOffset[e];
+        for (i = 0; i < 6UL; i++) {
+            if (caller[at + i] != config[offset + i]) {
+                break;
+            }
+        }
+        if (i == 6UL) {
+            *bInterval = (ULONG)caller[at + 6];
+            return XHCI_PIPE_OK;
+        }
+    }
+    return XHCI_PIPE_NOT_FOUND;
+}
+
 /*
  * Fast polling (33.8; design record 13 section 13 has the research). Table
  * 6-12 (xHCI 1.2c p.420) gives a FS/LS interrupt endpoint the Interval

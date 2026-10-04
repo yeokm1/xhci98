@@ -2131,6 +2131,96 @@ static void test_fast_poll(void)
     CHECK_EQ(XhciPipeFastRetry(0), 0, "no code does not");
 }
 
+/* A composite function's select whose descriptor a filter rewrote
+ * (XhciPipeCallerInterval; whole-branch review of 2.1.0.0): the caller's
+ * bInterval is taken for an endpoint whose first six bytes equal the
+ * device's, in the caller's copy of the same interface and alternate. */
+static void test_caller_interval(void)
+{
+    /* The audio composite's HID function as its PDO presents it: the
+     * header and interface 2 with its HID and two endpoint descriptors. */
+    static const UCHAR hidFunc[] = {
+        0x09, 0x02, 0x29, 0x00, 0x01, 0x01, 0x00, 0x80, 0x32,
+        0x09, 0x04, 0x02, 0x00, 0x02, 0x03, 0x00, 0x00, 0x00,
+        0x09, 0x21, 0x10, 0x01, 0x00, 0x01, 0x22, 0x20, 0x00,
+        0x07, 0x05, 0x83, 0x03, 0x08, 0x00, 0x0A,
+        0x07, 0x05, 0x04, 0x03, 0x08, 0x00, 0x0A
+    };
+    XHCI_PIPE_IFACE f;
+    UCHAR dev[sizeof(audio)];
+    UCHAR c[sizeof(hidFunc)];
+    ULONG b;
+
+    copy_bytes(dev, audio, sizeof(audio));
+    set_total(dev, sizeof(audio));
+    CHECK_EQ(XhciPipeFindInterface(dev, sizeof(dev), 2, 0, &f), XHCI_PIPE_OK,
+             "the device's HID interface");
+    CHECK_EQ(f.EndpointCount, 2, "two endpoints");
+
+    b = 99;
+    CHECK_EQ(XhciPipeCallerInterval(dev, sizeof(dev), f.EndpointOffset[0],
+                                    hidFunc, sizeof(hidFunc), 2, 0, &b),
+             XHCI_PIPE_OK, "the function's own copy");
+    CHECK_EQ(b, 10, "unchanged, the device's bInterval");
+
+    copy_bytes(c, hidFunc, sizeof(c));
+    c[33] = 1;                          /* 0x83's bInterval, hidusbf-style */
+    c[40] = 2;                          /* 0x04's                          */
+    CHECK_EQ(XhciPipeCallerInterval(dev, sizeof(dev), f.EndpointOffset[0],
+                                    c, sizeof(c), 2, 0, &b),
+             XHCI_PIPE_OK, "a rewritten IN endpoint");
+    CHECK_EQ(b, 1, "the caller's bInterval");
+    CHECK_EQ(XhciPipeCallerInterval(dev, sizeof(dev), f.EndpointOffset[1],
+                                    c, sizeof(c), 2, 0, &b),
+             XHCI_PIPE_OK, "the second endpoint, matched by its bytes");
+    CHECK_EQ(b, 2, "its own bInterval, not the first's");
+
+    copy_bytes(c, hidFunc, sizeof(c));
+    c[33] = 1;
+    c[31] = 0x10;                       /* 0x83's wMaxPacketSize changed  */
+    b = 99;
+    CHECK_EQ(XhciPipeCallerInterval(dev, sizeof(dev), f.EndpointOffset[0],
+                                    c, sizeof(c), 2, 0, &b),
+             XHCI_PIPE_NOT_FOUND, "an endpoint that differs past bInterval");
+    CHECK_EQ(b, 99, "nothing written");
+    c[31] = 0x08;
+    c[30] = 0x02;                       /* bmAttributes: bulk             */
+    CHECK_EQ(XhciPipeCallerInterval(dev, sizeof(dev), f.EndpointOffset[0],
+                                    c, sizeof(c), 2, 0, &b),
+             XHCI_PIPE_NOT_FOUND, "a changed transfer type");
+
+    CHECK_EQ(XhciPipeCallerInterval(dev, sizeof(dev), f.EndpointOffset[0],
+                                    hidFunc, sizeof(hidFunc), 0, 0, &b),
+             XHCI_PIPE_NOT_FOUND, "an interface the caller's copy lacks");
+    CHECK_EQ(XhciPipeCallerInterval(dev, sizeof(dev), f.EndpointOffset[0],
+                                    hidFunc, sizeof(hidFunc), 2, 1, &b),
+             XHCI_PIPE_NOT_FOUND, "an alternate the caller's copy lacks");
+
+    copy_bytes(c, hidFunc, sizeof(c));
+    set_total(c, sizeof(c) + 1);
+    CHECK_EQ(XhciPipeCallerInterval(dev, sizeof(dev), f.EndpointOffset[0],
+                                    c, sizeof(c), 2, 0, &b),
+             XHCI_PIPE_MALFORMED, "a wTotalLength past the caller's bytes");
+    copy_bytes(c, hidFunc, sizeof(c));
+    c[34] = 0x06;                       /* 0x04's bLength below 7         */
+    CHECK_EQ(XhciPipeCallerInterval(dev, sizeof(dev), f.EndpointOffset[0],
+                                    c, sizeof(c), 2, 0, &b),
+             XHCI_PIPE_MALFORMED, "a short endpoint in the caller's copy");
+
+    CHECK_EQ(XhciPipeCallerInterval(dev, sizeof(dev), sizeof(dev) - 6,
+                                    hidFunc, sizeof(hidFunc), 2, 0, &b),
+             XHCI_PIPE_BAD_PARAM, "an offset with no 7 bytes behind it");
+    CHECK_EQ(XhciPipeCallerInterval(dev, sizeof(dev), f.EndpointOffset[0],
+                                    NULL, 0, 2, 0, &b),
+             XHCI_PIPE_BAD_PARAM, "no caller descriptor");
+    CHECK_EQ(XhciPipeCallerInterval(NULL, 0, 0, hidFunc, sizeof(hidFunc), 2,
+                                    0, &b),
+             XHCI_PIPE_BAD_PARAM, "no device descriptor");
+    CHECK_EQ(XhciPipeCallerInterval(dev, sizeof(dev), f.EndpointOffset[0],
+                                    hidFunc, sizeof(hidFunc), 2, 0, NULL),
+             XHCI_PIPE_BAD_PARAM, "no answer");
+}
+
 int main(void)
 {
     test_seq();
@@ -2158,6 +2248,7 @@ int main(void)
     test_bos();
     test_zero_bandwidth();
     test_fast_poll();
+    test_caller_interval();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

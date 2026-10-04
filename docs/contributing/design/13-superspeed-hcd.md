@@ -2756,6 +2756,27 @@ same shape going by its public symbol names alone
 | `IOCTL_INTERNAL_USB_GET_PORT_STATUS`, `QUERY_INTERFACE` (`USB_BUS_INTERFACE_USBDI`) | the device's answers, identical for every function (section 6; 26-A.6) |
 | power | a function's D-state is its own; the device stays D0 while any function is D0 (selective suspend is outside the roadmap, 28.3) |
 
+**A function's polling interval is the caller's** (2026-10-05, whole-branch
+Codex review of `2.1.0.0`, area B, incidental 2). A function's
+`SELECT_CONFIGURATION` builds each endpoint from the device's own
+configuration (the one 10.8's SET_CONFIGURATION selected), but takes the
+`bInterval` of the descriptor the caller passed in when that descriptor's copy
+of the same interface and alternate carries an endpoint whose first six
+bytes (`bLength`, `bDescriptorType`, `bEndpointAddress`, `bmAttributes`,
+`wMaxPacketSize`) equal the device's (`XhciPipeCallerInterval`,
+`hcdCfgFunctionEndpoint`). That is the descriptor the synthesised
+GET_DESCRIPTOR above returned, as the class driver received it, so a filter
+below the class driver that rewrites `bInterval` (hidusbf) reaches a function
+as it already reached a whole device, whose select parses the caller's
+descriptor. Before this, a composite mouse's function ignored hidusbf's rate
+and `XhciFastPollFsLs` (section 13.5) saw the device's own `bInterval`.
+**Still the device's**: a SuperSpeed function's endpoints (their companion
+descriptors are read from the device's configuration), and a later
+`SELECT_INTERFACE` on a function, which reads the device's configuration -
+so a client that selects an interface after its configuration loses a
+rewritten interval (no HID class driver of any target does). Host vectors:
+`test\test_pipe.c`, `test_caller_interval`.
+
 Section 9.5's harness definition follows from this table: `endpoints opened`
 counts endpoints added at a function's `SELECT_CONFIGURATION` or
 `SELECT_INTERFACE`, and nothing the bus opens for itself.
@@ -3271,7 +3292,10 @@ no QEMU run can rule out.
   behind a hub** (Route String nonzero), whose Full- or Low-Speed periodic
   traffic a transaction translator or a Full-Speed hub carries one frame at
   a time. The bound is the table: no Interval below 0, none from any other
-  input. The client is told the `bInterval` it gave, as before. The cost
+  input. The client is told the `bInterval` it gave, as before; a composite
+  device's function is mapped from the `bInterval` its caller's descriptor
+  gives too (section 10.9, 2026-10-05), except at a later
+  `SELECT_INTERFACE`, which reads the device's own. The cost
   is that a device that itself declares 16-63 ms on a root port is sped up
   too while the value is set, which is why it is a controller value a user
   sets for a purpose and not a default.

@@ -507,6 +507,44 @@ static ULONG hcdCfgBuildInput(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     return 1;
 }
 
+/*
+ * An endpoint of a composite function's select (hcdCfgSelectFunction),
+ * from the device's own configuration (dev->Selected) at the offset given,
+ * but at the bInterval the caller's descriptor `caller` gives it when that
+ * differs (XhciPipeCallerInterval): a filter's rewritten polling interval
+ * (hidusbf), which a whole device's select already takes from the
+ * descriptor it is handed, and which XhciFastPollFsLs keys on. Not at
+ * SuperSpeed, whose endpoint reads its companion from the device's own.
+ * Thread only.
+ */
+static ULONG hcdCfgFunctionEndpoint(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                    const UCHAR *caller, ULONG offset,
+                                    ULONG number, ULONG alternate,
+                                    PXHCI_PIPE_EP ep)
+{
+    UCHAR copy[XHCI_PIPE_ENDPOINT_BYTES];
+    ULONG speed;
+    ULONG b;
+    ULONG i;
+
+    speed = HcdDevicePipeSpeed(hc, dev);
+    if (caller != NULL && speed != XHCI_PIPE_SPEED_SUPER &&
+        speed != XHCI_PIPE_SPEED_SUPER_PLUS &&
+        XhciPipeCallerInterval(dev->Selected, dev->SelectedLength, offset,
+                               caller,
+                               (ULONG)caller[2] | ((ULONG)caller[3] << 8),
+                               number, alternate, &b) == XHCI_PIPE_OK &&
+        b != (ULONG)dev->Selected[offset + 6]) {
+        for (i = 0; i < XHCI_PIPE_ENDPOINT_BYTES; i++) {
+            copy[i] = dev->Selected[offset + i];
+        }
+        copy[6] = (UCHAR)b;
+        return XhciPipeEndpointParams(copy, speed, ep);
+    }
+    return XhciPipeEndpointParamsAt(dev->Selected, dev->SelectedLength, offset,
+                                    speed, hc->Hc.HcInfo.Lec, ep);
+}
+
 /* Fast polling (33.8): the controller's XhciFastPollFsLs mode applied to an
  * endpoint a client's select names, never to a hub's own (HcdCfgHubOpen).
  * Thread only. */
@@ -1882,11 +1920,12 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             opened |= 1UL << ii->InterfaceNumber;
         }
         for (e = 0; e < iface.EndpointCount; e++) {
-            answer = XhciPipeEndpointParamsAt(dev->Selected,
-                                              dev->SelectedLength,
-                                              iface.EndpointOffset[e],
-                                              HcdDevicePipeSpeed(hc, dev),
-                                              hc->Hc.HcInfo.Lec, &ep);
+            answer = hcdCfgFunctionEndpoint(hc, dev,
+                                            (const UCHAR *)
+                                                sc->ConfigurationDescriptor,
+                                            iface.EndpointOffset[e],
+                                            ii->InterfaceNumber,
+                                            ii->AlternateSetting, &ep);
             if (answer != XHCI_PIPE_OK || add[ep.Dci] != NULL ||
                 (keep & (1UL << ep.Dci)) != 0) {
                 XHCI_DBG_VALUE("hcd: function select refused, endpoint/speed",
