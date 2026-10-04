@@ -3885,9 +3885,14 @@ qemu-system-i386 -machine pc -m 512 -smp 2 \
    it (`qemu-system-i386 -machine pc,help` lists `i8042`), launch with
    `-machine pc,i8042=off` instead, and the USB keyboard is the guest's
    only keyboard once Windows has started. Otherwise read the path off the
-   controller: launch with `-trace usb_xhci_xfer_success` (the hardware
-   oracle of "QEMU xHCI trace events") and confirm each keystroke sent in
-   step 5 completes transfers on the keyboard's slot.
+   controller (the hardware oracle of "QEMU xHCI trace events", one events
+   file): trace `usb_xhci_slot_address`, `usb_xhci_xfer_start` and
+   `usb_xhci_xfer_success`. `usb_xhci_slot_address` names the slot the
+   keyboard's port was given, `usb_xhci_xfer_start` carries the slot and
+   endpoint of each transfer and its pointer, and `usb_xhci_xfer_success`
+   only the pointer - so match completions to starts by pointer, and confirm
+   each keystroke sent in step 5 completes a transfer on the keyboard's
+   slot's interrupt-IN endpoint.
 4. At "Press F6 if you need to install a third party SCSI or RAID driver",
    press F6 (SeaBIOS's own xHCI keyboard support answers it; nothing of this
    driver runs yet). At the screen that follows, press S, then Enter at the
