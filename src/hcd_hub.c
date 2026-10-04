@@ -624,6 +624,14 @@ static ULONG hcdHubPortResume(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     } else if ((change & XHCI_HUB_C_PORT_SUSPEND) != 0) {
         (VOID)hcdHubFeature(hc, hub, n, 0, XHCI_HUB_FEAT_C_PORT_SUSPEND);
     }
+    /* A connect change seen during the resume is a replaced device: it is
+     * enumerated afresh through this outcome (DISABLED), and its change is
+     * cleared here so the next look does not do it twice. */
+    if (progress != XHCI_HUB_RESUME_STUCK &&
+        (change & XHCI_HUB_C_PORT_CONNECTION) != 0) {
+        (VOID)hcdHubFeature(hc, hub, n, 0, XHCI_HUB_FEAT_C_PORT_CONNECTION);
+    }
+    progress = XhciHubResumeSettle(progress, change);
     if (progress == XHCI_HUB_RESUME_DONE) {
         hcdHubDelay(XHCI_HUB_RESUME_RECOVERY_MS);
     }
@@ -799,7 +807,8 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
         XhciHubResumeOutcome(state, outcome, held, &q->ResumeTries, d);
         goto resumed;
     } else if (d->Suspended) {
-        /* A resume finished - a device's remote wake among them: the
+        /* A resume finished - at USB 2.0 a device's remote wake among them
+         * (at SuperSpeed a remote wake raises no change bit): the
          * device stays as it is, untouched until the resume recovery has
          * passed, and not let go at all once the controller needs its
          * recovery (the invalidation settles it). */

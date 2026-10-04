@@ -229,6 +229,16 @@ ULONG XhciHubResumeBeforeReset(ULONG status);
 ULONG XhciHubResumeProgress(ULONG status);
 
 /*
+ * A resume's outcome settled against the change bits its last GET_STATUS
+ * read: DONE with C_PORT_CONNECTION raised is DISABLED - the device was
+ * replaced during the resume, so the held devices are not let go and the
+ * port is enumerated afresh (Codex review of the Phase 28-31 merge,
+ * finding 1). C_PORT_CONNECTION is bit 0 at USB 2.0 and SuperSpeed alike
+ * (xhci_sshub.h), so one rule serves both. Every other outcome stands.
+ */
+ULONG XhciHubResumeSettle(ULONG progress, ULONG change);
+
+/*
  * What a resume's outcome makes of the port's decision *d, the port's
  * enumeration machine in `state`, whether the resume held devices (`held`:
  * the device on the port, and below it if it is a hub, quiesced for the

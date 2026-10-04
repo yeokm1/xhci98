@@ -338,6 +338,34 @@ static void test_resume_outcome(void)
          XHCI_HUB_PORT_ENABLE | XHCI_HUB_PORT_SUSPEND;
     tries = 0;
 
+    /* A device replaced during the resume (Codex review of the Phase 28-31
+     * merge, finding 1): its last reading DONE with C_PORT_CONNECTION is
+     * re-enumerated, never let go; at SuperSpeed the bit is the same. */
+    CHECK_EQ(XhciHubResumeSettle(XHCI_HUB_RESUME_DONE,
+                                 XHCI_HUB_C_PORT_CONNECTION),
+             XHCI_HUB_RESUME_DISABLED, "resumed, but a connect change: afresh");
+    CHECK_EQ(XhciHubResumeSettle(XHCI_HUB_RESUME_DONE,
+                                 XHCI_HUB_C_PORT_SUSPEND),
+             XHCI_HUB_RESUME_DONE, "resumed with C_PORT_SUSPEND: done");
+    CHECK_EQ(XhciHubResumeSettle(XHCI_HUB_RESUME_DONE, 0x0040UL),
+             XHCI_HUB_RESUME_DONE, "SuperSpeed C_PORT_LINK_STATE: done");
+    CHECK_EQ(XhciHubResumeSettle(XHCI_HUB_RESUME_DONE, 0x0041UL),
+             XHCI_HUB_RESUME_DISABLED,
+             "SuperSpeed U0 with C_PORT_CONNECTION: afresh");
+    CHECK_EQ(XhciHubResumeSettle(XHCI_HUB_RESUME_GONE,
+                                 XHCI_HUB_C_PORT_CONNECTION),
+             XHCI_HUB_RESUME_GONE, "gone stays gone");
+    CHECK_EQ(XhciHubResumeSettle(XHCI_HUB_RESUME_STUCK,
+                                 XHCI_HUB_C_PORT_CONNECTION),
+             XHCI_HUB_RESUME_STUCK, "stuck stays stuck");
+    XhciHubPortDecide(XHCI_ENUM_BOUND, on, 0, &d);
+    XhciHubResumeOutcome(XHCI_ENUM_BOUND,
+                         XhciHubResumeSettle(XHCI_HUB_RESUME_DONE,
+                                             XHCI_HUB_C_PORT_CONNECTION),
+                         1, &tries, &d);
+    CHECK(d.Disconnect && d.Connect && !d.Retry,
+          "a held device replaced mid-resume is torn down and re-enumerated");
+
     XhciHubPortDecide(XHCI_ENUM_BOUND, on, 0, &d);
     XhciHubResumeOutcome(XHCI_ENUM_BOUND, XHCI_HUB_RESUME_DONE, 1, &tries, &d);
     CHECK(!d.Disconnect && !d.Connect && !d.Retry && !d.GaveUp,

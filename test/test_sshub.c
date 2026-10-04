@@ -453,8 +453,10 @@ typedef struct _RPROGRESS_ROW {
 static const RPROGRESS_ROW rprogressRows[] = {
     { "still in U3", PWR | CONN | ENA | LINK(XHCI_SSHUB_LINK_U3),
       XHCI_HUB_RESUME_PENDING },
-    { "in Resume", PWR | CONN | ENA | LINK(XHCI_SSHUB_LINK_RESUME),
-      XHCI_HUB_RESUME_PENDING },
+    { "reserved 0xF is no Resume state on a hub port",
+      PWR | CONN | ENA | LINK(0xF), XHCI_HUB_RESUME_DISABLED },
+    { "reserved 0xC", PWR | CONN | ENA | LINK(0xC),
+      XHCI_HUB_RESUME_DISABLED },
     { "in Recovery", PWR | CONN | ENA | LINK(XHCI_SSHUB_LINK_RECOVERY),
       XHCI_HUB_RESUME_PENDING },
     { "back in U0", UP, XHCI_HUB_RESUME_DONE },
@@ -496,8 +498,6 @@ static void test_resume(void)
                       rprogressRows[i].progress, rprogressRows[i].what,
                       __FILE__, __LINE__);
     }
-    CHECK_EQ(XhciSsHubLinkState(LINK(XHCI_SSHUB_LINK_RESUME)), 0xF,
-             "the Resume link state is 0xF");
 }
 
 /* ----------------------------------------------------------------------- */

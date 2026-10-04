@@ -1971,19 +1971,24 @@ it was, and only a reset noticed it (a warm one, since a hot reset cannot
 start from U3) - so there was nothing to reconcile, only a gap to close.
 `XhciSsHubPortDecide` now names a connected, enabled port whose link reads
 U3 under a device the machine holds (`Resume`), and a `C_PORT_LINK_STATE`
-with the link back in U0 under one (`Resumed`, a finished U3 exit, a remote
-wake among them), after every other rule; `HcdHubPortLook` carries both out
+with the link back in U0 under one (`Resumed`, a finished host-requested U3
+exit; a remote-wake U3 exit sets no `C_PORT_LINK_STATE`, USB 3.2
+10.16.2.6.2, printed p.449), after every other rule; `HcdHubPortLook` carries both out
 exactly as for a USB 2.0 port - the devices below quiesced, the link asked
 to U0 with SET_FEATURE(PORT_LINK_STATE) and U0 in `wIndex` 15:8, progress
-read by `XhciSsHubResumeProgress` (U3, Resume or Recovery pending; U0, U1
-or U2 enabled done; anything else re-enumerated; disconnected gone),
+read by `XhciSsHubResumeProgress` (U3 or Recovery pending; U0, U1 or U2
+enabled done; anything else, the reserved link states 0xC to 0xF included,
+re-enumerated; disconnected gone),
 `C_PORT_LINK_STATE` cleared, the 10 ms recovery waited, and the same
-outcome, retry and give-up rules. No SuperSpeed port is resumed before a
+outcome, retry and give-up rules - a resume whose last reading carries
+`C_PORT_CONNECTION` is a replaced device and is enumerated afresh, at
+either speed (`XhciHubResumeSettle`). No SuperSpeed port is resumed before a
 reset: a warm reset may start from U3 (`XhciSsHubResetKind`). The quiesce
 reaches streams: an endpoint with streams open is stopped when any stream
-has work, and rung again per stream by its Stream ID. The U3 exit's
-timings and `C_PORT_LINK_STATE`'s meaning on a host-directed exit are USB
-3.2 section 10.16.2 readings, to verify; no QEMU model has a SuperSpeed
+has work, and rung again per stream by its Stream ID. The request's
+encoding, `C_PORT_LINK_STATE` on a host-directed U3 exit and `PORT_ENABLE`
+staying set in U3 were read from USB 3.2 r1.1 10.16.2.6 and 10.16.2.10
+(Codex review of the merge, printed pp.446-454); no QEMU model has a SuperSpeed
 hub, so `test_sshub`'s `test_resume` vectors are the only evidence until
 the bench (30-E.1).
 

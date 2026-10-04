@@ -147,7 +147,6 @@ ULONG XhciSsHubResumeProgress(ULONG status)
     link = XhciSsHubLinkState(status);
     switch (link) {
     case XHCI_SSHUB_LINK_U3:
-    case XHCI_SSHUB_LINK_RESUME:
     case XHCI_SSHUB_LINK_RECOVERY:
         return XHCI_HUB_RESUME_PENDING;
     case XHCI_SSHUB_LINK_U0:
