@@ -346,9 +346,15 @@ static VOID hcdPswStart(PHCD_CONTROLLER hc)
         return;
     }
 
+    /* The exemption holds only on a reading: a subsystem id that could not
+     * be read is no evidence the board is not the one that cannot switch
+     * (Codex review of 34.4, round 1). */
     subsystem = 0;
-    if (hcdPswRead(ext, XHCI_PSW_PCI_SUBSYSTEM, &subsystem) &&
-        XhciPswBoardRefused(subsystem)) {
+    if (!hcdPswRead(ext, XHCI_PSW_PCI_SUBSYSTEM, &subsystem)) {
+        XhciLogNote(ext, "psw.board.unread", 1);
+        return;
+    }
+    if (XhciPswBoardRefused(subsystem)) {
         XhciLogNote(ext, "psw.board.refused", subsystem);
         return;
     }
