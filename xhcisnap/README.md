@@ -1,8 +1,17 @@
 # xhcisnap - reading this driver's own log off a running machine
 
-`XHCISNAP.EXE` reads `xhci98.sys`'s miniport extension and its raw PORTSC array
-from user mode, through usbport's `PassThru` vendor escape, and writes a report
-a user can send back.
+`XHCISNAP.EXE` reads `xhci98.sys`'s extension, its raw PORTSC array and (from
+2.0.0.0) its enabled slots from user mode, and writes a report a user can send
+back.
+
+Two drivers answer it. From 2.0.0.0 `xhci98.sys` is the successor host
+controller driver (`docs/contributing/roadmap-hcd.md`, design record 13): it
+owns its driver object, creates `\DosDevices\HCD<n>` itself and answers the
+same USBUSER `PassThru` request through its own door (`src/hcd_door.c`, schema
+5 unchanged, the slots region added). The 1.x miniport ran under usbport and
+was reached through usbport's `PassThru` vendor escape. Most of this document
+is the 1.x history; where it says usbport or the miniport, that is the 1.x
+route, which the tool still reads.
 
 It ships. The kernel side is in every build flavour of the driver and this tool
 is published in `releases/<version>/xhcisnap/`. It began as a bench companion
