@@ -589,8 +589,10 @@ controller needs polling rather than disqualifying it.
 
 Status: not opened; follows Phase 34 on branch `2.2.0.0`, the work on
 `p35-poll`. Design record 15 (`design/15-polled-event-delivery.md`) is the
-design: revision 3, Codex's findings on revisions 1 and 2 taken,
-convergence pending (35.0).
+design: revision 4, Codex's findings on revisions 1 to 3 taken (10, 8
+and 5), and Codex's review converged at round 4 the same day, its one
+wording finding taken. 35.0 still owes the section 4.1 check against
+`xhci-data-structures.md`.
 
 Why a phase: it changes how every event reaches the driver when it polls,
 adds three install values, lifts a disqualification `XHCIQUAL` has made

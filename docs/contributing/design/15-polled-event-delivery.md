@@ -6,7 +6,7 @@ a controller that delivers no legacy interrupt - an MSI- or MSI-X-only xHCI
 controller, which neither primary target can serve today - by polling the
 event ring, adaptively, instead of waiting for an interrupt. Codex reviewed
 revisions 1 to 3 the same day (10, 8 and 5 findings, all taken; section 13
-maps each). Nothing is built.
+maps each) and converged at round 4, on revision 4. Nothing is built.
 
 ## 1. What is asked, and what is not
 
@@ -624,6 +624,12 @@ Taken by the owner on 2026-10-05, each from options with a recommendation:
 | 3 | Phase 35's legs still waited on Phase 36's standby | Roadmap 35-V, as section 11 already had it |
 | 4 | Phase 36's checkpoint asked a `qemu`-only leg of the release package | Roadmap Phase 36 checkpoint |
 | 5 | Record 14's `34-V`, its baseline and run sheet; the roadmap's docs task citing a list this record had lost | Record 14; section 14 below; roadmap 36.3 |
+
+### 13.4 Revision 4
+
+Converged (Codex, round 4, 2026-10-05): one wording finding, the roadmap's
+Phase 35 status still naming revision 3, taken. No finding in the reopen,
+the deadline conversion, the phase split or the cross-references.
 
 ## 14. What changes in the documents
 
