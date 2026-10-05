@@ -212,7 +212,7 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | `XhciFastPollFsLs` | A root-port Low- or Full-Speed mouse polled above 1000 Hz | `0` | `0` |
 | `XhciFirstEnumWaitMs` | The longest wait for a hub's first report | `5000` | `5000` |
 | `XhciFirstEnumPortMs` | The longest one port may hold that wait | `2000` | `2000` |
-| `XhciIntelPortSwitch` | The Intel 7/8/9-series port switchover; `0` turns it off | `1` | on |
+| `XhciIntelPortSwitch` | The Intel 7/8/9-series port switchover; `0` turns it off | `1` | `1` |
 | `XhciLogVerbosity` | The driver's log, read by `XHCISNAP` | `0` | `0` |
 | `XhciLogDebugView` | The log sent to DebugView as well | `0` | `0` |
 
