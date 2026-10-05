@@ -465,7 +465,7 @@ The checkpoint **closed on 2026-10-04**: 31-V.1 and 31-V.2 on the VMs, and
 
 Records: `design/13-superspeed-hcd.md`; `runs/run-31.md`.
 
-## Phase 32 - Release `2.0.0.0`
+## Phase 32 - Release `2.0.0.0`: The Bus Driver, SuperSpeed, Hubs and UAS
 
 Goal: the first release of the successor, both architectures, with the
 release notes, the acceptance test and the post-release run rewritten for a
@@ -497,7 +497,7 @@ as above, and the owner's acceptance in the bench verdict and the merge to
 Records: `releases/history.md`; `releases/2.0.0.0/`;
 `docs/using/release-notes.md`; `docs/using/release-acceptance-test.md`.
 
-## Phase 33 - Release `2.1.0.0`
+## Phase 33 - Release `2.1.0.0`: Hubs in Device Manager, Serial Instance IDs, F6 Setup and Faster Polling
 
 Goal: the first update of the HCD generation: the Windows ME controller
 re-enable fix, instance ids from serial numbers, device names from product
