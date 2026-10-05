@@ -302,7 +302,6 @@ Since `2.1.1.0` the driver moves them to the xHCI controller at each start and r
 
 - A device on a switchable connector under a running USB 2.0 driver (NUSB's, for example) is disconnected there when this driver starts and comes back under it. Do not have a drive busy on a blue connector at that moment.
 - `XhciIntelPortSwitch` set to `0` turns it off. Only `0` does; absent or any other number is on. It is read when the controller starts, so restart after changing it.
-- Tested on my Lenovo B490 (`1E31`) under Windows 98 SE with NUSB, on Auto and Smart Auto: SuperSpeed at 5 Gbit/s and USB 2.0 devices on the blue connectors, the black one left on EHCI, disable and enable, `XhciIntelPortSwitch` `0`, and shutdown. Standby, the other five ids and the other systems are untested.
 
 ### The 1.2.0.0 virtual-hub values
 
