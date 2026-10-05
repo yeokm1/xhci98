@@ -617,7 +617,7 @@ try {
                              "HKR,,XhciImodInterval250ns,,500`r`nHKR,,EnumPropPages32")
     }
 
-    # Roadmap-hcd task 34.4's opt-out, anchored on the interval after it on
+    # Roadmap-hcd task 34.3's opt-out, anchored on the interval after it on
     # each path. **Its default is 1, not 0**: shipping 0 would be an INF edit
     # that turns the switchover off on every machine it exists for, and the
     # unconditional DWORD would write a user's 0 back to 1 at an update.

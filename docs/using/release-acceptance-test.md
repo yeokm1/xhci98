@@ -138,8 +138,8 @@ Observed: the record format is `xhciqual/hardware-testing.md`'s, with
 behaviour is derived from the Intel datasheet and from Linux, and has been
 read on one machine: a Lenovo B490 (1E31) under Windows 98 SE, whose
 firmware on Auto and on Smart Auto left the switchable ports on EHCI and
-whose ports the driver then routed (roadmap-hcd task 34.4,
-`docs/contributing/runs/run-34.md` 34.4-H2); see
+whose ports the driver then routed (roadmap-hcd task 34.3,
+`docs/contributing/runs/run-34.md` 34.3-H2); see
 `docs/usb-xhci-info/xhci-programming.md`, "Firmware Handoff, and the
 Controller Deviations This Driver Acts On".
 

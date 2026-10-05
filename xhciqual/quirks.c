@@ -58,7 +58,7 @@ static const QUIRK quirk_table[] = {
       "Intel Panther Point (7-series PCH)" },
     { 0x8086, 0x8C31, QF_XUSB2PR | QF_BEI,
       "Intel Lynx Point (8-series PCH)" },
-    /* The -LP parts (roadmap-hcd task 34.4): xhci-pci.c:44-45 names them,
+    /* The -LP parts (roadmap-hcd task 34.3): xhci-pci.c:44-45 names them,
      * and gives them XHCI_SPURIOUS_REBOOT and XHCI_SPURIOUS_WAKEUP
      * (xhci-pci.c:365-370), for which this table has no flag. */
     { 0x8086, 0x9C31, QF_XUSB2PR | QF_BEI,

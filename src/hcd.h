@@ -1070,7 +1070,7 @@ typedef struct _HCD_CONTROLLER {
     } SettleDeferHub[HCD_SETTLE_DEFER_HUB];
     ULONG SettleDeferHubFull;       /* a deferral did not fit: every hub
                                      * port rebuilt is taken as deferred */
-    /* The Intel port switchover (task 34.4; hcd_ctl.c, xhci_psw.h), at
+    /* The Intel port switchover (task 34.3; hcd_ctl.c, xhci_psw.h), at
      * the end so no offset the harness reads moves. PswOn is set by a start
      * that routed the switchable connectors to xHCI (the gate passed and
      * XhciIntelPortSwitch is not 0), so each return to D0 routes them again

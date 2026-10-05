@@ -276,7 +276,7 @@ each hub the bus serves also has a PDO, bound to this driver as a hub FDO,
 and the devices behind it are its children; the bus still runs the hub.
 
 **The controller FDO's start and stop on an Intel 7-, 8- or 9-series PCH or
-C610/X99 also move the switchable connectors** (task 34.4, 2026-10-05): on
+C610/X99 also move the switchable connectors** (task 34.3, 2026-10-05): on
 Intel device ids 1E31, 8C31, 9C31, 8CB1, 9CB1 and 8D31 the start routes them
 from EHCI to the xHCI through four configuration registers above the PCI
 header, before `XhciInitController`, each return to D0 routes them again,
@@ -495,7 +495,7 @@ task. The miniport reads six values from its device key (`src\*.c`, the six
 | `XhciImodInterval250ns` | Carried over, same meaning and code default 4000; both INFs write 160 (40 us) on every install path since the owner's ruling of 2026-10-04 (`roadmap-hcd.md`, decisions table), 500 until then |
 | `XhciVirtualHSHub`, `XhciVirtualHSHubVid`, `XhciVirtualHSHubPid` | Not read and not written (owner, 2026-10-02); the INF gate refuses them in an HCD INF (`VAL-HCDVHUB`) |
 | `XhciFastPollFsLs` | New in `2.1.0.0` (task 33.8), the HCD's own: read at each controller start, written by no INF until task 34.1 and as 0 since, absent or 0 is off. Lets a Low- or Full-Speed interrupt endpoint on a root port be polled faster than 1 ms; section 13 |
-| `XhciIntelPortSwitch` | New in `2.1.1.0` (task 34.4), the HCD's own: read at each start of a controller the switchover's gate passes, and on no other; written as 1 by every controller install path under task 34.1's rule; only an explicit 0 turns the switchover off. Design record 16 section 5 |
+| `XhciIntelPortSwitch` | New in `2.1.1.0` (task 34.3), the HCD's own: read at each start of a controller the switchover's gate passes, and on no other; written as 1 by every controller install path under task 34.1's rule; only an explicit 0 turns the switchover off. Design record 16 section 5 |
 
 The root-hub sections write no value of the controller's: they carry the
 loader values on Windows 98 and the hub property-page registration on every
@@ -509,7 +509,7 @@ interval. Each is written with FLG_ADDREG_NOCLOBBER (`0x00010003`), so an
 install or update writes only a missing value and keeps one the user set; a
 later release therefore cannot change a default on a machine that already
 holds the old one. The gate's `VAL-*` rules hold all seven, flags included,
-and since task 34.4 an eighth, `XhciIntelPortSwitch` at 1, under the same
+and since task 34.3 an eighth, `XhciIntelPortSwitch` at 1, under the same
 flag.
 
 The package is `xhci98-<version>.zip`, as the miniport's was - the published

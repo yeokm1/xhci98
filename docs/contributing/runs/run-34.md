@@ -11,11 +11,11 @@ they only need filling in. A cell reading `TBD` is a clause still to be read.
 **On `out\...` and `vm\...` paths in this file.** They say where a reading
 was taken on the host that ran it; they are not files a clone has.
 
-**Hardware, not VM (owner, 2026-10-05).** Tasks 34.2 and 34.4 are ticked on
-real hardware. 34.4's switchover is read on the owner's Lenovo B490 (Ivy
+**Hardware, not VM (owner, 2026-10-05).** Tasks 34.2 and 34.3 are ticked on
+real hardware. 34.3's switchover is read on the owner's Lenovo B490 (Ivy
 Bridge), and its gate staying closed on the P14s Gen 1 (Comet Lake, 02ED).
 Design record 16 is the switchover's design; its section 10 is the list this
-file's 34.4 legs follow.
+file's 34.3 legs follow.
 
 Opened: 2026-10-05.
 
@@ -26,7 +26,7 @@ the roadmap's 34.1 and 34.1-V entries carry the readings.
 
 ## The package for the hardware legs
 
-One `release` x86 package built at `f393bb6` (34.2 on top of 34.4), staged
+One `release` x86 package built at `f393bb6` (34.2 on top of 34.3), staged
 2026-10-05 on development host A as `out\t342-344\release-x86\` with
 `XHCISNAP.EXE` beside it: `xhci98.sys` 171099 bytes, SHA-256
 `24F2A49BAE9182A0861D94216C17A520D2C67090F9FB8174CC003AC4386096C4`. Every
@@ -59,7 +59,7 @@ as (ports + 1) x 100 mA, capped at 500, whatever its descriptor says
 | 3 | A USB 2.0 device | Unchanged from `2.1.0.0`: UsbTreeView's mA | **Pass** (owner, 2026-10-05): unchanged |
 | 4 | The `XHCISNAP` report | `dev.ss.vidpid` and `dev.ss.maxpower.ma` for each SuperSpeed device; for the 896 mA device `dev.ss.maxpower.ma=00000380` | **Pass** (2026-10-05, report `P14S.TXT`, `XhciLogVerbosity` 2, the release build of `f393bb6`, its `psw.` and `dev.ss.` records being that build's): `dev.ss.vidpid=090C2320`, `dev.ss.maxpower.ma=00000380` (896 mA), the device in slot 5 on root port 16 at "SuperSpeed, 5 Gbit/s, Gen 1x1" |
 
-## 34.4-Q - QEMU (passed)
+## 34.3-Q - QEMU (passed)
 
 Read 2026-10-05 on development host A, QEMU 11.1.0 TCG, a Windows 98 SE +
 NUSB 3.3 guest on the `qemu` flavour (`xhci98.sys` SHA-256
@@ -79,7 +79,7 @@ An "Unknown Device" at Code 28 under Other devices, with no USB device
 attached and none addressed, is taken as the base image's; it was not
 checked.
 
-## 34.4-H1 - the gate closed on the P14s Gen 1
+## 34.3-H1 - the gate closed on the P14s Gen 1
 
 Same session as 34.2-H.
 
@@ -88,7 +88,7 @@ Same session as 34.2-H.
 | 1 | The `XHCISNAP` report | `psw.gate=00000000`; no other `psw.` record | **Pass** (2026-10-05, the same `P14S.TXT`): `hc.pci=02ED8086`, `psw.gate=00000000` before the start's gates, no other `psw.` record; the controller started (`imod.readback`, `door.interface=00000001`) with all 18 ports managed |
 | 2 | Every external connector, a USB 2.0 and a SuperSpeed device on each | Works as under `2.1.0.0` | **Pass** (owner, 2026-10-05) |
 
-## 34.4-H2 - the switchover on the Lenovo B490
+## 34.3-H2 - the switchover on the Lenovo B490
 
 The B490's firmware offers Disabled, Enabled, Auto and Smart Auto for USB 3.0
 (owner, 2026-10-05). The leg runs on **Auto**, the setting under which
@@ -135,4 +135,4 @@ Enabled, the control, was not needed: Auto showed no fault.
 
 ## Codex
 
-The review rounds of 34.4 are listed in the roadmap's 34.4 entry.
+The review rounds of 34.3 are listed in the roadmap's 34.3 entry.

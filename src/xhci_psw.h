@@ -1,6 +1,6 @@
 /*
  * xhci_psw.h - the Intel EHCI-to-xHCI port switchover, its pure half
- * (roadmap-hcd.md task 34.4).
+ * (roadmap-hcd.md task 34.3).
  *
  * On the 7-, 8- and 9-series PCH (Panther Point, Lynx Point, Wildcat Point,
  * and the -LP parts of the last two), and on Wellsburg (C610/X99), each

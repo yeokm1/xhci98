@@ -1,6 +1,6 @@
 /*
  * xhci_psw.c - the Intel EHCI-to-xHCI port switchover, the pure half
- * (xhci_psw.h; roadmap-hcd.md task 34.4).
+ * (xhci_psw.h; roadmap-hcd.md task 34.3).
  *
  * DDK-free: part of the pure core. C89. IRQL: any.
  */

@@ -682,7 +682,7 @@ There is no per-controller quirk table in this driver, and there is not going to
 | BIOS handoff | Spec-mandated on every controller (4.22.1), so not a quirk at all. Implemented in `src/xhci_init.c` |
 | Never set BEI | Applied unconditionally, so no controller has to be identified for it to be applied |
 | Residual-length computation | The correct rule for every controller; the spurious-success silicon is only why it is never short-circuited |
-| `XUSB2PR` routing | Handled since `2.1.1.0` (roadmap-hcd task 34.4, design record 16): on Intel 1E31, 8C31, 9C31, 8CB1, 9CB1 and 8D31 the driver routes the switchable ports to xHCI at each start and resume and hands them back at each stop, unless `XhciIntelPortSwitch` is 0. One mechanism with its own six-id gate, not a quirk table; and still a diagnosis, because when it does not run its symptom is a controller that looks dead |
+| `XUSB2PR` routing | Handled since `2.1.1.0` (roadmap-hcd task 34.3, design record 16): on Intel 1E31, 8C31, 9C31, 8CB1, 9CB1 and 8D31 the driver routes the switchable ports to xHCI at each start and resume and hands them back at each stop, unless `XhciIntelPortSwitch` is 0. One mechanism with its own six-id gate, not a quirk table; and still a diagnosis, because when it does not run its symptom is a controller that looks dead |
 
 Where to look when a real controller misbehaves anyway: Linux `drivers/usb/host/xhci.h` (the `XHCI_*` quirk flags, with the comments explaining what broke), `xhci-pci.c` (VID/DID -> flag for every known controller), and `pci-quirks.c` (`quirk_usb_handoff_xhci`, `usb_enable_intel_xhci_ports`). Those are years of field evidence, and per `docs/contributing/failure-diagnosis.md`'s trust order they outrank anything this repository would write down about someone else's silicon. Individual Intel/AMD chipset datasheets are largely under NDA; the Linux source has already extracted what matters from them.
 
@@ -727,10 +727,10 @@ The rule is therefore universal rather than conditional, and it is the one state
 
 > **One machine has been read.** Until `2.1.1.0` this section was "the Intel
 > 7/8-series port mux this driver leaves alone", and nothing in it had been
-> read off silicon. Roadmap-hcd task 34.4 superseded the decision it recorded
+> read off silicon. Roadmap-hcd task 34.3 superseded the decision it recorded
 > (owner, 2026-10-05; design record 16 is the design), and the owner read the
 > switchover on a Lenovo B490 (Panther Point, 1E31) under Windows 98 SE with
-> NUSB on 2026-10-05 (`docs/contributing/runs/run-34.md`, 34.4-H2). What that
+> NUSB on 2026-10-05 (`docs/contributing/runs/run-34.md`, 34.3-H2). What that
 > reading settles is said where it applies below; the four register values
 > themselves were not transcribed, and everything else here - the other five
 > parts, the register meanings beyond what that reading shows, other
@@ -738,7 +738,7 @@ The rule is therefore universal rather than conditional, and it is the one state
 
 Phase 13 owned the miniport's driver-side observation and Phase 4 task 10 the
 register reading; both were published as unreachable limitations, for want
-of a machine, and the B490 reading is the HCD's (task 34.4).
+of a machine, and the B490 reading is the HCD's (task 34.3).
 
 Applies to the 7-, 8- and 9-series PCH and to Wellsburg (C610/X99), the generations carrying both EHCI and xHCI. Skylake and later Intel have no EHCI, the ports are hardwired to xHCI, and these registers do not exist; nor do they on modern AMD. Source: Linux `pci-quirks.c` `usb_enable_intel_xhci_ports()`; Intel 7-series PCH datasheet vol. 2 (xHCI config registers).
 
@@ -763,7 +763,7 @@ Expected register values, by firmware mode (a prediction, not a reading). Firmwa
 
 So `Auto` means "the OS driver does the switchover", and a driver that never writes the register (every release up to `2.1.0.0`) gets the deceptive symptom: ports power, xhciqual C1-C4 pass, and no connect event ever arrives. On the B490 the Auto row held: `XHCIQUAL` read `XUSB2PR` and `USB3_PSSEN` at 0 and both masks nonzero before Windows started. Its firmware's Smart Auto read the same, but only after a shutdown at which the driver had handed the routing back, so that reading does not separate Smart Auto's restore from Auto's default. The B490 also has one connector outside the switchable set, which stayed on EHCI throughout. Whether any other firmware behaves this way, and which connectors are switchable on any other machine, is still a per-machine fact.
 
-What Linux does at probe is `USB3_PSSEN = USB3PRM; XUSB2PR = XUSB2PRM`: claim every switchable port, terminations first. **Since `2.1.1.0` this driver does the same** (roadmap-hcd task 34.4, superseding the Phase 4 decision recorded at the end of Phase 4 in `docs/contributing/roadmap.md`):
+What Linux does at probe is `USB3_PSSEN = USB3PRM; XUSB2PR = XUSB2PRM`: claim every switchable port, terminations first. **Since `2.1.1.0` this driver does the same** (roadmap-hcd task 34.3, superseding the Phase 4 decision recorded at the end of Phase 4 in `docs/contributing/roadmap.md`):
 
 - **The gate.** Intel `8086` and device id 1E31, 8C31, 9C31, 8CB1, 9CB1 or 8D31, not the Sony board `104D:90A8` that Linux exempts, and a subsystem id that could be read. On any other controller the switchover reads PCI offset 0 and nothing else.
 - **The switch.** `XhciIntelPortSwitch` in the controller's driver key; only an explicit 0 turns it off, and both INFs write it at 1 under FLG_ADDREG_NOCLOBBER.
@@ -774,4 +774,4 @@ On the B490 (firmware on Auto, then Smart Auto) the route ran at step 0 with eac
 
 Moving a connector disconnects whatever the other controller had on it. Linux routes from an early PCI quirk, before any USB driver has started; a Windows driver cannot, so a device under a running EHCI driver on a switchable connector when this driver starts is disconnected there and reappears here, and the reverse at a stop. The Phase 4 decision's two reasons - the miniport drove no SuperSpeed port, and EHCI was the Windows 98 file-transfer safety net - and why neither holds for the HCD are design record 16 section 3.
 
-What C7 is (Phase 4 task 10, withdrawn as unreachable with the machine that could have run it): `xhciqual/bringup.c` reads all four registers, gated on `QF_XUSB2PR` in `xhciqual/quirks.c` for device IDs 1E31, 8C31, 9C31, 8CB1, 9CB1 and 8D31 (9C31 and 9CB1 added with task 34.4), and under `--set-intel-ports` writes `XUSB2PR = XUSB2PRM`. It leaves that write in place on exit, since the routing is what the test is for, so expect to restore the previous state by cold boot. Its reads have run on one machine, the B490, before and after the driver's readings (`runs/run-34.md` 34.4-H2, clauses 1 and 8); `--set-intel-ports` has executed only against `xhciqual/test/test_mmiodiag.c`.
+What C7 is (Phase 4 task 10, withdrawn as unreachable with the machine that could have run it): `xhciqual/bringup.c` reads all four registers, gated on `QF_XUSB2PR` in `xhciqual/quirks.c` for device IDs 1E31, 8C31, 9C31, 8CB1, 9CB1 and 8D31 (9C31 and 9CB1 added with task 34.3), and under `--set-intel-ports` writes `XUSB2PR = XUSB2PRM`. It leaves that write in place on exit, since the routing is what the test is for, so expect to restore the previous state by cold boot. Its reads have run on one machine, the B490, before and after the driver's readings (`runs/run-34.md` 34.3-H2, clauses 1 and 8); `--set-intel-ports` has executed only against `xhciqual/test/test_mmiodiag.c`.

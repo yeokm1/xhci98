@@ -682,7 +682,7 @@ subsection when a machine turns out to need one.
 > **Observed on one machine, and not through this run sheet.** On 2026-10-05
 > the owner ran this tool on a Lenovo B490 (Panther Point, `8086:1E31`) before
 > Windows 98 SE, around the driver's own switchover reading
-> (`docs/contributing/runs/run-34.md`, 34.4-H2): with the firmware's USB 3.0
+> (`docs/contributing/runs/run-34.md`, 34.3-H2): with the firmware's USB 3.0
 > setting on Auto and on Smart Auto it found `XUSB2PR` and `USB3_PSSEN` at 0
 > and both masks nonzero, as predicted below, and found them at 0 again on
 > the boot after a shutdown under the driver. The logs stayed on the B490
@@ -698,7 +698,7 @@ follow. The same caution applies to the `XUSB2PR` section of
 whose register table and BIOS-mode behaviour come from the same two sources.
 
 **Since `2.1.1.0` the driver routes the ports itself** on Intel 1E31, 8C31,
-9C31, 8CB1, 9CB1 and 8D31 (roadmap-hcd task 34.4, design record 16), unless
+9C31, 8CB1, 9CB1 and 8D31 (roadmap-hcd task 34.3, design record 16), unless
 `XhciIntelPortSwitch` is 0, and hands them back to EHCI when it stops and at
 shutdown. So on such a machine this tool, run from DOS before Windows, shows
 firmware's routing, not the driver's: a report from a cold boot says what

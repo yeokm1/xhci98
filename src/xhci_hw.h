@@ -127,7 +127,7 @@ MPSTATUS XhciReadPciConfig(PXHCI_EXTENSION ext,
  * "DMA Teardown" already names.
  *
  * The HCD has one more writer, which does not come through here: the Intel
- * port switchover's USB3_PSSEN and XUSB2PR (task 34.4), written through
+ * port switchover's USB3_PSSEN and XUSB2PR (task 34.3), written through
  * HcdSvcConfigSpace by hcd_ctl.c on the six controllers xhci_psw.h gates,
  * above the PCI header and never in it.
  *

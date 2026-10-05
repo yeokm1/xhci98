@@ -49,7 +49,7 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * they are absent and the same defaults stand. */
 #define HCD_VALUE_SETTLE_TOTAL  L"XhciFirstEnumWaitMs"
 #define HCD_VALUE_SETTLE_PORT   L"XhciFirstEnumPortMs"
-/* Task 34.4: the Intel port switchover, on unless the value is 0 (absent
+/* Task 34.3: the Intel port switchover, on unless the value is 0 (absent
  * is on: txtsetup.oem writes none). Read at start, on a gated controller
  * only. */
 #define HCD_VALUE_PORT_SWITCH   L"XhciIntelPortSwitch"
@@ -215,7 +215,7 @@ ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc)
 }
 
 /* --------------------------------------------------------------------- */
-/* The Intel port switchover (task 34.4)                                  */
+/* The Intel port switchover (task 34.3)                                  */
 /* --------------------------------------------------------------------- */
 
 /*
@@ -348,7 +348,7 @@ static VOID hcdPswStart(PHCD_CONTROLLER hc)
 
     /* The exemption holds only on a reading: a subsystem id that could not
      * be read is no evidence the board is not the one that cannot switch
-     * (Codex review of 34.4, round 1). */
+     * (Codex review of 34.3, round 1). */
     subsystem = 0;
     if (!hcdPswRead(ext, XHCI_PSW_PCI_SUBSYSTEM, &subsystem)) {
         XhciLogNote(ext, "psw.board.unread", 1);
@@ -900,7 +900,7 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
         return status;
     }
 
-    /* Task 34.4: before the reset XhciInitController performs, so the
+    /* Task 34.3: before the reset XhciInitController performs, so the
      * connectors are the xHCI's when it powers its ports and the root hub
      * first enumerates them. */
     hcdPswStart(hc);
@@ -973,7 +973,7 @@ static VOID hcdStopBody(PHCD_CONTROLLER hc)
             XhciFailClosedDma(ext);
         }
     }
-    /* Task 34.4: once the controller has halted, so the disconnects the
+    /* Task 34.3: once the controller has halted, so the disconnects the
      * hand-back makes are seen by no running xHCI. */
     HcdPswRelease(hc);
     hc->PswOn = 0;

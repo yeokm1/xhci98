@@ -1,6 +1,6 @@
 # The Intel EHCI-to-xHCI port switchover
 
-Design record for roadmap-hcd task 34.4 (Phase 34, release `2.1.1.0`).
+Design record for roadmap-hcd task 34.3 (Phase 34, release `2.1.1.0`).
 Revision 1, 2026-10-05: written at the owner's request after the code, to
 explain it. Built in `0def9a3`, `ea707a6` and the commit that adds this
 record. **Nothing in it has run on a
@@ -207,7 +207,7 @@ switchable connector under EHCI when the HCD starts is disconnected there and
 reappears under the HCD. A USB drive mounted under EHCI loses its volume
 mid-session, and writes in flight are at risk; Linux avoids this by running
 first, which a Windows driver cannot. The reverse happens at the HCD's stop.
-The release notes must say so (34.5).
+The release notes must say so (34.4).
 
 ## 7. The sequence (pure core, `src/xhci_psw.c`)
 
@@ -286,7 +286,7 @@ reading (section 10) is to show the gate closed.
 
 ## 10. Readings
 
-- **QEMU** (owed before 34.4 is ticked): on `1B36:000D`, `psw.gate 0` in the
+- **QEMU** (owed before 34.3 is ticked): on `1B36:000D`, `psw.gate 0` in the
   log or the trace, and no switchover access past offset 0 (no route or
   release record, no read-back line). A Windows 98 SE
   guest on the `qemu` flavour (owner, 2026-10-05).
@@ -316,7 +316,7 @@ Taken in the building, not separately decided: Linux's Sony exemption; the
 release at every stop and on all gated parts rather than Linux's three at
 shutdown; a sleep keeping the routing.
 
-## 12. What changes in the documents (task 34.5)
+## 12. What changes in the documents (task 34.4)
 
 - `xhci-programming.md`: the `XUSB2PR` section, which says the driver leaves
   the registers alone, and its row in the deviations table ("Not handled").

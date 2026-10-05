@@ -1,6 +1,6 @@
 /*
  * test_psw.c - host vectors for the Intel port switchover's pure half
- * (src\xhci_psw.c; roadmap-hcd.md task 34.4): the device-id gate, the
+ * (src\xhci_psw.c; roadmap-hcd.md task 34.3): the device-id gate, the
  * board exemption, the XhciIntelPortSwitch rule, and the route and release
  * over a modelled configuration space - the order of the writes, what is
  * written, and where each refusal stops.
