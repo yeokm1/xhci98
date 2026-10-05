@@ -1,11 +1,11 @@
 # Polled event delivery for the HCD
 
 Design record for roadmap-hcd Phase 35 (tasks 35.*). DRAFT,
-revision 3, 2026-10-05: written at the owner's request so the driver can run
+revision 4, 2026-10-05: written at the owner's request so the driver can run
 a controller that delivers no legacy interrupt - an MSI- or MSI-X-only xHCI
 controller, which neither primary target can serve today - by polling the
 event ring, adaptively, instead of waiting for an interrupt. Codex reviewed
-revisions 1 and 2 the same day (10 and 8 findings, all taken; section 13
+revisions 1 to 3 the same day (10, 8 and 5 findings, all taken; section 13
 maps each). Nothing is built.
 
 ## 1. What is asked, and what is not
@@ -220,8 +220,24 @@ under `PollLock`:
 | ARMED | the timer | `KeSetTimer` has been called and the DPC has not yet taken ownership |
 | FIRING | the DPC | the DPC has taken ownership and is draining or deciding |
 | CLOSING | the DPC | as FIRING, but close has been asked; the DPC ends it |
-| CLOSED | nobody | closed; nothing will touch the poller again |
+| CLOSED | nobody | closed; nothing touches the poller until a start reopens it |
 
+- **Initial state, and reopening.** The controller object outlives a stop:
+  its synchronisation objects are initialised once
+  (`HcdControllerInitObjects`, `hcd_ctl.c:330`), every start reopens the
+  timer service and the DPC admission (`hcd_ctl.c:734-735`), and the start's
+  zeroing of the core's extension (`hcd_ctl.c:667`) does not reach fields
+  held in `hc`. So `PollTimer`, `PollTimerDpc` and `PollLock` are
+  initialised there with the other objects, and the state starts CLOSED. A
+  start under a poll delivery **opens** the poller beside
+  `HcdTimersOpen`: under `PollLock`, CLOSED becomes PARKED and `PollDue` and
+  `PollOwed` are marked invalid; it is the only way out of CLOSED, and it is
+  taken only after the previous release has seen CLOSED (the close below),
+  so a disable and enable, or a start that failed and is retried,
+  begins from a drained poller. The kick at the end of a successful start
+  (section 5.3) then arms it. A start under a line delivery leaves it
+  CLOSED. A failed start runs the same release as a stop, which closes it
+  from whatever state it reached.
 - **The DPC takes ownership** as it starts: under `PollLock`, ARMED becomes
   FIRING (CLOSING stays CLOSING), and `PollOwed` is cleared.
 - **The DPC gives it up** as it ends, under `PollLock` (section 5.3 for the
@@ -323,8 +339,9 @@ earlier, and never later. Deadlines, not periods, are compared.
 - A control, bulk or isochronous TD, or a command, needs the active period;
   an interrupt TD needs its endpoint's interval. Its deadline is now plus
   the need, in the low word of `KeQuerySystemTime`, compared by signed
-  difference (no 64-bit arithmetic; every deadline is within 5 s, far
-  inside the word's lap).
+  difference (no 64-bit arithmetic; a deadline the poller makes is within
+  5 s, far inside the word's lap of about 429 s, and one a clock step has
+  displaced is caught where it is turned into an arm, below).
 - Under `PollLock` (taken inside the submission's controller-lock hold,
   which the lock order allows): in ARMED, if the new deadline is earlier
   than `PollDue`, take the arm back (section 5.2) and set the new deadline;
@@ -341,9 +358,29 @@ PERIODIC to ACTIVE is a promotion like IDLE to ACTIVE: a bulk transfer on a
 machine with a mouse attached gets an earlier poll, not the mouse's
 interval.
 
-A clock adjustment can make a deadline comparison wrong in either
-direction. The cost is bounded: the poll then runs at the deadline already
-armed, at most the idle period away.
+**Turning a deadline into an arm.** `KeSetTimer` is given a relative time,
+which a change of the system time does not move; only the stored deadlines
+are wall-clock, so every conversion of one into an arm is checked, in one
+pure function in `xhci_poll.c`:
+
+- the remaining time is the deadline less now, by signed difference of the
+  low words;
+- remaining time at or below zero - an expired deadline, including a
+  `PollOwed` that fell due while the DPC ran - is served at once, as an arm
+  of the active period;
+- remaining time above the idle period, or a difference whose magnitude is
+  beyond any deadline the poller can make (more than twice the idle bound),
+  is a displaced deadline - a clock step - and is replaced by an arm of the
+  active period, counted;
+- otherwise the arm is the remaining time, held between the active and idle
+  periods.
+
+So every arm the poller makes, whatever the clock did, is at least the
+active period and at most the idle period away, and the bound on how long
+an event waits for a poll is the idle period. A clock step can make a
+comparison in a promotion wrong: it then either skips the promotion, which
+leaves the armed timer at most the idle period away, or arms early, which
+costs one poll. Neither is a defect.
 
 ## 7. What the periods mean on these kernels
 
@@ -512,7 +549,10 @@ and that flavour is never published.
   then a promotion, then close; a running DPC, then a promotion, then close;
   `KeCancelTimer` returning TRUE and FALSE at each state; park against kick
   in both orders; a promotion just before expiry and during a long drain;
-  and the deadline comparison across the word's wrap.
+  the deadline comparison across the word's wrap; the conversion with the
+  clock stepped forward and back, with a `PollOwed` already expired, and
+  across the wrap; and stop and start, and a failed start retried, reopening
+  from CLOSED.
 - **The pin's read failing**, by a `qemu`-flavour switch beside the
   no-interrupt one: with a resource present, modes 0 and 1 run the line
   interrupt as today, with the reason "pin unreadable".
@@ -574,3 +614,25 @@ Taken by the owner on 2026-10-05, each from options with a recommendation:
 | 6 | The capture routes overstated | Section 8: counter block, stop dump, start note, each with its limits |
 | 7 | The `qemu`-flavour legs cannot run on the release package | Section 11; the roadmap's checkpoint |
 | 8 | The roadmap called the record unreviewed | The roadmap's Phase 35 status |
+
+### 13.3 Revision 3
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | CLOSED was terminal; a stop and start never reopened the poller | Section 5.2: initial state CLOSED, opened at each poll-delivery start |
+| 2 | A clock step breaks the deadline bound | Section 6.2: every deadline checked where it becomes an arm, every arm between the active and idle periods |
+| 3 | Phase 35's legs still waited on Phase 36's standby | Roadmap 35-V, as section 11 already had it |
+| 4 | Phase 36's checkpoint asked a `qemu`-only leg of the release package | Roadmap Phase 36 checkpoint |
+| 5 | Record 14's `34-V`, its baseline and run sheet; the roadmap's docs task citing a list this record had lost | Record 14; section 14 below; roadmap 36.3 |
+
+## 14. What changes in the documents
+
+Task 36.3, the docs of Phases 34 to 36: `implementation-invariants.md`,
+"Interrupt Delivery" (a pin-0 controller polled, not refused);
+`architecture.md`'s statement of line-based delivery; the release notes'
+"Controller" row and a row for the switch; the acceptance test's step 3 and
+its stop on the pin; `xhciqual/hardware-testing.md` and record 01's C4
+note; record 13 where it describes the ISR; `source-files.md` for
+`xhci_poll.c`; the locking record for `PollLock`, `PollService` and the
+lock order; `xhcisnap/README.md` for the new companion lines; and
+`runs/run-35.md`.

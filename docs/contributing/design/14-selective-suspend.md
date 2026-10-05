@@ -495,7 +495,7 @@ Teardown completes it `STATUS_NO_SUCH_DEVICE` (removal, GONE) or
 ### 5.5 Windows 98 SE and ME
 
 Intel's WDM power paper (wdm_pm11.pdf p.19) reports a 9x defect where a
-WAIT_WAKE requester's completion callback is not called. The 34-V test
+WAIT_WAKE requester's completion callback is not called. The 36a-V test
 client reads it on both. If it holds, wake is **disabled on 9x**:
 capabilities report no wake there and WAIT_WAKE is refused, so no class
 driver suspends expecting a wake that cannot reach it; suspend on an explicit
@@ -734,7 +734,7 @@ Revision 9's review found 1; revision 10 takes it:
   the VM legs only, never shipped) that drives Dx/D0, WAIT_WAKE and idle
   submit/cancel on demand, because no stock class driver on 98 SE or 2000
   idles in S0 - without it the primaries would read only "no regression".
-- 34-V on QEMU (version pinned in the run sheet): every step read separately
+- 36a-V on QEMU (version pinned in the run sheet): every step read separately
   - arm request, U3 held for a sustained interval (PORTSC read in XHCISNAP),
   wake event, WAIT_WAKE completion, D0, transfers resumed - because QEMU
   changes U3/U0 at once and wakes an endpoint whether or not remote wake was
@@ -743,7 +743,7 @@ Revision 9's review found 1; revision 10 takes it:
   own idle on XP, Vista and 7 with each target's HID selective-suspend
   setting found and recorded per target; behind QEMU's usb-hub; composite
   audio interleavings; unplug at each state; controller disable/enable, D3
-  and restart mid-transition; the switch at 0 reading as today; the matrix
+  and restart mid-transition; the switch at 0 reading as the Phase 35 build; the matrix
   unchanged; x86 and amd64 builds and every gate.
 - Fault injection (the `qemu` flavour only): the DMA-halt proof forced to fail while a test-client idle callback waits on cancelled I/O, then the controller's STOP, REMOVE and a restart, with the callback's return raced against the teardown's handoff, a claim raced against EXITING, and other PDOs' entries queued behind it; the quarantine holds, nothing hangs, and on 98 SE the driver stays loaded while the quarantined device object exists.
 - Bench: a real HID device with remote wake on a 98 SE machine and the
@@ -753,7 +753,7 @@ Revision 9's review found 1; revision 10 takes it:
 - Docs: record 13 sections 5, 6.5, 10.2, 10.9; release notes (limitation
   replaced; what is still not done: SS until 36b, hub and controller idle);
   roadmap-hcd Phase 36 and the 28.3 row; `source-files.md`; the locking
-  record for the gate and the slot; run-34.md.
+  record for the gate and the slot; run-36.md.
 
 ## 11. Decisions
 
