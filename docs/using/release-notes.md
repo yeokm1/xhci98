@@ -65,8 +65,11 @@ disabled for the drivers to load, at every start.** Those systems refuse an
 unsigned kernel-mode driver, and these are not signed. On a start where
 enforcement is in force the controller shows Code 39 and nothing plugged into
 it works inside Windows, a USB keyboard or mouse included. The install itself
-can be done on an ordinary start. 32-bit Vista and Windows 7, and Windows XP
-x64, do not refuse unsigned drivers.
+can be done on an ordinary start. After each install, the Program
+Compatibility Assistant may say "Windows requires a digitally signed
+driver"; the driver still loads on a start with enforcement disabled (read
+on both systems for the `2.1.1.0` package). 32-bit Vista and Windows 7, and
+Windows XP x64, do not refuse unsigned drivers.
 
 ## What this is not
 
@@ -485,7 +488,10 @@ under "Targets and their standing" lists them per system.
   Windows XP with the Found New Hardware wizard and the unsigned-driver
   warning for each newly plugged hub (see "Installing"). Disabling and
   enabling an external hub in Device Manager brings back the devices behind
-  it (read twice each on Windows 98 SE, 2000 and XP in QEMU). QEMU's only hub is a USB 1.1 Full-Speed
+  it (read twice each on Windows 98 SE, 2000 and XP in QEMU). While a drive
+  behind the hub is open in Explorer, Windows refuses the disable, asks for
+  a restart and leaves the hub running; close the window first (read on
+  Vista in both architectures). QEMU's only hub is a USB 1.1 Full-Speed
   hub, so a High-Speed hub's entry and a USB 3 hub's "xHCI98 USB 3.x Hub"
   were read in no virtual machine; the owner read both on real hardware
   after the cut, and they work.
