@@ -285,24 +285,21 @@ With the defaults, the root hub's first report typically comes 20 to 30 ms after
 
 ## What is tested, and what is not
 
-Windows 98 SE and Windows 2000 SP4 are the primary targets, and both are validated in QEMU virtual machines. Windows 98 SE has also run on real hardware, the ThinkPad E460 and the ThinkPad P14s Gen 1. Windows 2000 has never run on real hardware. The other targets, 32-bit Windows 7 included, are virtual machines only.
-
-The rows below are what `2.0.0.0` was observed doing; `2.1.0.0` carries the same code with the changes above. Its changes were read in QEMU virtual machines on the `2.1.0.0` code before the cut, as "What's new in 2.1.0.0" says, and the release notes' "Targets and their standing" has them per system.
+Windows 98 SE and Windows 2000 SP4 are the primary targets. Windows 98 SE has also run on real hardware, the ThinkPad E460 and the ThinkPad P14s Gen 1; every other target, Windows 2000 included, has run in QEMU virtual machines only. The [release notes](docs/using/release-notes.md)' "Targets and their standing" has the full detail per system.
 
 | Target | State |
 |---|---|
-| Windows 98 SE | Virtual machines, under NUSB 3.3 and under SweetLow's stack: install, mouse, keyboard, storage with a verified file compare, a composite audio device split and played to its end (unheard, as the guest has no audio out), the ASIX Ethernet adapter (passed through), the Advanced and Power tabs, and disable, enable, remove and rescan in Device Manager. Hubs behind QEMU's Full-Speed hub to five tiers, 25 plug cycles per device class, and a 120-hub churn soak with the guest responsive. A stock install with no USB 2.0 stack: HID and audio bound, storage with no driver. SuperSpeed storage, and UAS at SuperSpeed (16 streams) and at High Speed, each with a verified round trip. UAS and forced Bulk-Only on the ASMedia bridge passed through. Real hardware: the bench session above, on the E460 and the P14s Gen 1. |
-| Windows 2000 SP4 | Virtual machines only: the same device, hub and Device Manager rows as Windows 98 SE, under Driver Verifier, plus an SMP guest, installed there over a 1.x miniport. SuperSpeed storage, and UAS at SuperSpeed and High Speed. UAS, forced Bulk-Only and the switch between them on the ASMedia bridge passed through. SuperSpeed hubs: untested, as no virtual machine models one; built from the specification. Never run on real hardware. |
-| Windows ME | Virtual machines only, under SweetLow's stack: install, mouse, storage with a verified file compare, unplug and replug, a hub with a mouse and a stick behind it, a composite audio device bound at a root port and behind a hub, the root hub's disable and enable, a 10-cycle soak per device class, SuperSpeed storage, and UAS at SuperSpeed (streams) and High Speed. Re-enabling the controller with a USB mouse attached hung ME (a keyboard was never tried; see `docs/issues/09-me-controller-reenable-stopped-pdos.md`) under `2.0.0.0`; `2.1.0.0` fixes it: on its code the re-enable passed with a mouse three times of three, with a mouse and a stick, with a USB keyboard alone, and with a hub holding a mouse and a stick. |
-| 32-bit Windows XP | Virtual machines only: install, HID, storage with a verified file compare, unplug and replug, a hub with devices behind it, composite audio bound, the root hub's and the controller's disable and enable, shutdown; SuperSpeed storage, and UAS at SuperSpeed and High Speed. A 10-cycle soak per device class. |
-| Windows XP x64 | Virtual machines only: the same as 32-bit XP, with the 64-bit `xhciuas.sys` at SuperSpeed and High Speed, and the same soak. |
-| Windows Vista SP2 and Windows 7 SP1, 32-bit and x64 | Virtual machines only: the same, at four virtual processors, and on Windows 7 five controller disable and enable cycles. The same 10-cycle soak. On Vista x64 and 7 x64, driver signature enforcement has to be disabled as this driver is not signed. |
-| Every target, from the release package | The `release` build, on ten virtual-machine installs (Windows 98 SE under NUSB and under SweetLow's stack, ME, 2000, XP, XP x64, and Vista and 7 in both architectures): installed, with HID, storage with a verified file compare, composite audio bound, the controller's disable and enable, and shutdown; SuperSpeed storage and UAS at SuperSpeed and High Speed on most of them. The one defect found was ME's controller re-enable, which `2.1.0.0` fixes (the Windows ME row). For `2.1.0.0`, its `release` build installed over `2.0.0.0` on the same ten systems and a stock Windows 98 SE passed the same clauses less SuperSpeed storage and UAS; and the `2.1.0.0` release package itself passed on the same ten systems, with a hub disabled and enabled with devices behind it on the seven NT systems and hidusbf behind a hub on XP. |
+| Windows 98 SE | VMs under NUSB and SweetLow's stack: HID, storage, composite audio, the ASIX Ethernet adapter, hubs to five tiers, plug soaks, SuperSpeed storage and UAS. A stock install runs HID and audio, with no storage driver. Real hardware: the E460 and the P14s Gen 1. |
+| Windows 2000 SP4 | VMs only, under Driver Verifier and on a multiprocessor guest: the same as Windows 98 SE, including UAS and forced Bulk-Only. SuperSpeed hubs untested. |
+| Windows ME | VMs only, under SweetLow's stack: HID, storage, hubs, composite audio, soaks, SuperSpeed storage and UAS. The `2.0.0.0` hang on re-enabling the controller with a mouse attached is fixed in `2.1.0.0`. |
+| Windows XP, 32-bit and x64 | VMs only: HID, storage, hubs, composite audio, disable and enable, soaks, SuperSpeed storage and UAS. |
+| Windows Vista SP2 and 7 SP1, 32-bit and x64 | VMs only: the same, on four virtual processors. On the x64 systems, driver signature enforcement must be disabled. |
+| The release package | `2.0.0.0` and `2.1.0.0` each installed from the release download on all ten systems and passed. `2.1.0.0` also installed over `2.0.0.0` on each. |
 
 | Machine | Controller | 2.0.0.0 result | Tested by |
 |---|---|---|---|
-| 2016 ThinkPad E460 | Intel Skylake, Sunrise Point-LP (100-series) PCH. xHCI 1.0. | Works on Windows 98 SE: the bench session above. Windows 7 not tested on it for `2.0.0.0`. | Me |
-| 2020 ThinkPad P14s Gen 1 | Intel Comet Lake PCH-LP (400-series). xHCI 1.1. | Works on Windows 98 SE: the bench session above, and UAS at SuperSpeed with NUSB (throughput above). | Me |
+| 2016 ThinkPad E460 | Intel Skylake, Sunrise Point-LP (100-series) PCH. xHCI 1.0. | Works on Windows 98 SE. | Me |
+| 2020 ThinkPad P14s Gen 1 | Intel Comet Lake PCH-LP (400-series). xHCI 1.1. | Works on Windows 98 SE, including UAS at SuperSpeed. | Me |
 | Omores' Intel and AMD desktops | H110, B360, B550, X570, X670 | No `2.0.0.0` report yet. | [Omores](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) (1.x) |
 
 The devices, each characterised in [test-equipment.md](docs/contributing/test-equipment.md):
@@ -312,17 +309,17 @@ The devices, each characterised in [test-equipment.md](docs/contributing/test-eq
 | Terminus 7-port hub, multi-TT | `1A40:0201` | High | Works on Windows 98 SE on real hardware, with Low- and Full-Speed devices behind it. |
 | Terminus 4-port hub, single-TT | `1A40:0101` | High | Works on Windows 98 SE on real hardware, with Low- and Full-Speed devices behind it. |
 | Genesys 7-port hub (two cascaded chips), single-TT | `05E3:0608` | High | Works on Windows 98 SE on real hardware, with Low- and Full-Speed devices behind it. |
-| Genesys USB 3.0 hub | `05E3:0610`, `05E3:0612` | SuperSpeed and High | Works on Windows 98 SE on real hardware: a SuperSpeed drive behind its SuperSpeed half and a High-Speed device behind its USB 2.0 half, plugged, unplugged and plugged in again. |
-| A Full-Speed hub behind a High-Speed hub | | Full | Works on Windows 98 SE on real hardware: a USB 2.0 hub held at Full Speed by an ADuM full/low-speed isolator in front of it, behind a High-Speed hub, with devices behind it. |
+| Genesys USB 3.0 hub | `05E3:0610`, `05E3:0612` | SuperSpeed and High | Works on Windows 98 SE on real hardware, with devices behind both halves. |
+| A Full-Speed hub behind a High-Speed hub | | Full | Works on Windows 98 SE on real hardware (a USB 2.0 hub held at Full Speed by an isolator). |
 | Logitech USB Optical Mouse | `046D:C077` | Low | Works on Windows 98 SE on real hardware, at a root port and behind a hub, polled every 8 ms. |
 | Microsoft Wired Keyboard 600 (composite) | `045E:0750` | Low | Works on Windows 98 SE on real hardware. |
 | SanDisk U3 Titanium flash drive | `0781:5408` | High | Works on Windows 98 SE on real hardware, with a verified round trip. |
-| MSSU10-128GSR flash drive | `090C:2320` | SuperSpeed, UAS | Works on Windows 98 SE on real hardware: UAS at SuperSpeed (throughput above), forced Bulk-Only at SuperSpeed, and Bulk-Only behind a USB 2.0 hub, which is all it offers there. |
-| SanDisk 3.2Gen1 flash drive | `0781:55AB` | SuperSpeed, Bulk-Only | Works on Windows 98 SE on real hardware at SuperSpeed, confirmed by `XHCISNAP`'s slot speed, with round trips and throughput against the same drive behind a USB 2.0 hub. |
-| StoreJet Transcend USB-to-SATA bridge (ASMedia) | `174C:5106` | SuperSpeed, UAS and Bulk-Only | Works on Windows 98 SE on real hardware: UAS at SuperSpeed and, behind a USB 2.0 hub, at High Speed, and forced Bulk-Only at SuperSpeed, each with a round trip. |
-| ASIX AX88772A USB Ethernet | `0B95:7720` | High | Installs and starts with ASIX's own drivers on Windows 98 SE and 2000, passed through to a virtual machine, and works on Windows 98 SE on real hardware. |
+| MSSU10-128GSR flash drive | `090C:2320` | SuperSpeed, UAS | Works on Windows 98 SE on real hardware: UAS at SuperSpeed, forced Bulk-Only, and Bulk-Only behind a USB 2.0 hub. |
+| SanDisk 3.2Gen1 flash drive | `0781:55AB` | SuperSpeed, Bulk-Only | Works on Windows 98 SE on real hardware at SuperSpeed and behind a USB 2.0 hub. |
+| StoreJet Transcend USB-to-SATA bridge (ASMedia) | `174C:5106` | SuperSpeed, UAS and Bulk-Only | Works on Windows 98 SE on real hardware: UAS at SuperSpeed and High Speed, and forced Bulk-Only. |
+| ASIX AX88772A USB Ethernet | `0B95:7720` | High | Works with ASIX's own drivers on Windows 98 SE on real hardware, and on 98 SE and 2000 in VMs. |
 | Sound Blaster Play! 2 (UAC 1.0 composite) | `041E:323D` | Full | Works on Windows 98 SE on real hardware: played and heard at a root port and behind a hub. |
-| C-Media USB Audio Device (UAC 1.0 composite) | `0D8C:0014` | Full | Split into its audio and HID functions and played (unheard) on Windows 98 SE and 2000, passed through to a virtual machine, and played and heard on Windows 98 SE on real hardware. |
+| C-Media USB Audio Device (UAC 1.0 composite) | `0D8C:0014` | Full | Works on Windows 98 SE on real hardware, and on 98 SE and 2000 in VMs. |
 
 The `1.2.0.0` results are in its [README](https://github.com/yeokm1/xhci98/blob/1.2.0.0/README.md) and [release notes](https://github.com/yeokm1/xhci98/blob/1.2.0.0/docs/using/release-notes.md).
 
