@@ -310,28 +310,28 @@ Windows 98 SE and Windows 2000 SP4 are the primary targets. Windows 98 SE has al
 
 | Machine | Controller | 2.0.0.0 result | Tested by |
 |---|---|---|---|
-| 2016 ThinkPad E460 | Intel Skylake, Sunrise Point-LP (100-series) PCH. xHCI 1.0. | Works on Windows 98 SE. | Me |
-| 2020 ThinkPad P14s Gen 1 | Intel Comet Lake PCH-LP (400-series). xHCI 1.1. | Works on Windows 98 SE, including UAS at SuperSpeed. | Me |
+| 2016 ThinkPad E460 | Intel Skylake, Sunrise Point-LP (100-series) PCH. xHCI 1.0. | Yes | Me |
+| 2020 ThinkPad P14s Gen 1 | Intel Comet Lake PCH-LP (400-series). xHCI 1.1. | Yes | Me |
 | Omores' Intel and AMD desktops | H110, B360, B550, X570, X670 | No `2.0.0.0` report yet. | [Omores](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) (1.x) |
 
 The devices, each characterised in [test-equipment.md](docs/contributing/test-equipment.md):
 
 | Device | VID:PID | Speed | 2.0.0.0 result |
 |---|---|---|---|
-| Terminus 7-port hub, multi-TT | `1A40:0201` | High | Works on Windows 98 SE on real hardware, with Low- and Full-Speed devices behind it. |
-| Terminus 4-port hub, single-TT | `1A40:0101` | High | Works on Windows 98 SE on real hardware, with Low- and Full-Speed devices behind it. |
-| Genesys 7-port hub (two cascaded chips), single-TT | `05E3:0608` | High | Works on Windows 98 SE on real hardware, with Low- and Full-Speed devices behind it. |
-| Genesys USB 3.0 hub | `05E3:0610`, `05E3:0612` | SuperSpeed and High | Works on Windows 98 SE on real hardware, with devices behind both halves. |
-| A Full-Speed hub behind a High-Speed hub | | Full | Works on Windows 98 SE on real hardware (a USB 2.0 hub held at Full Speed by an isolator). |
-| Logitech USB Optical Mouse | `046D:C077` | Low | Works on Windows 98 SE on real hardware, at a root port and behind a hub, polled every 8 ms. |
-| Microsoft Wired Keyboard 600 (composite) | `045E:0750` | Low | Works on Windows 98 SE on real hardware. |
-| SanDisk U3 Titanium flash drive | `0781:5408` | High | Works on Windows 98 SE on real hardware, with a verified round trip. |
-| MSSU10-128GSR flash drive | `090C:2320` | SuperSpeed, UAS | Works on Windows 98 SE on real hardware: UAS at SuperSpeed, forced Bulk-Only, and Bulk-Only behind a USB 2.0 hub. |
-| SanDisk 3.2Gen1 flash drive | `0781:55AB` | SuperSpeed, Bulk-Only | Works on Windows 98 SE on real hardware at SuperSpeed and behind a USB 2.0 hub. |
-| StoreJet Transcend USB-to-SATA bridge (ASMedia) | `174C:5106` | SuperSpeed, UAS and Bulk-Only | Works on Windows 98 SE on real hardware: UAS at SuperSpeed and High Speed, and forced Bulk-Only. |
-| ASIX AX88772A USB Ethernet | `0B95:7720` | High | Works with ASIX's own drivers on Windows 98 SE on real hardware, and on 98 SE and 2000 in VMs. |
-| Sound Blaster Play! 2 (UAC 1.0 composite) | `041E:323D` | Full | Works on Windows 98 SE on real hardware: played and heard at a root port and behind a hub. |
-| C-Media USB Audio Device (UAC 1.0 composite) | `0D8C:0014` | Full | Works on Windows 98 SE on real hardware, and on 98 SE and 2000 in VMs. |
+| Terminus 7-port hub, multi-TT | `1A40:0201` | High | Works, with Low- and Full-Speed devices behind it. |
+| Terminus 4-port hub, single-TT | `1A40:0101` | High | Works, with Low- and Full-Speed devices behind it. |
+| Genesys 7-port hub (two cascaded chips), single-TT | `05E3:0608` | High | Works, with Low- and Full-Speed devices behind it. |
+| Genesys USB 3.0 hub | `05E3:0610`, `05E3:0612` | SuperSpeed and High | Works, with devices behind both halves. |
+| A Full-Speed hub behind a High-Speed hub | | Full | Works (a USB 2.0 hub held at Full Speed by an isolator). |
+| Logitech USB Optical Mouse | `046D:C077` | Low | Works at a root port and behind a hub, polled every 8 ms. |
+| Microsoft Wired Keyboard 600 (composite) | `045E:0750` | Low | Works. |
+| SanDisk U3 Titanium flash drive | `0781:5408` | High | Works, with a verified round trip. |
+| MSSU10-128GSR flash drive | `090C:2320` | SuperSpeed, UAS | Works: UAS at SuperSpeed, forced Bulk-Only, and Bulk-Only behind a USB 2.0 hub. |
+| SanDisk 3.2Gen1 flash drive | `0781:55AB` | SuperSpeed, Bulk-Only | Works at SuperSpeed and behind a USB 2.0 hub. |
+| StoreJet Transcend USB-to-SATA bridge (ASMedia) | `174C:5106` | SuperSpeed, UAS and Bulk-Only | Works: UAS at SuperSpeed and High Speed, and forced Bulk-Only. |
+| ASIX AX88772A USB Ethernet | `0B95:7720` | High | Works with ASIX's own drivers, and on 98 SE and 2000 in VMs. |
+| Sound Blaster Play! 2 (UAC 1.0 composite) | `041E:323D` | Full | Works: played and heard at a root port and behind a hub. |
+| C-Media USB Audio Device (UAC 1.0 composite) | `0D8C:0014` | Full | Works, and on 98 SE and 2000 in VMs. |
 
 The `1.2.0.0` results are in its [README](https://github.com/yeokm1/xhci98/blob/1.2.0.0/README.md) and [release notes](https://github.com/yeokm1/xhci98/blob/1.2.0.0/docs/using/release-notes.md).
 
