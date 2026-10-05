@@ -130,7 +130,7 @@ A REG_DWORD in the controller's driver key (owner, 2026-10-05):
 | Value | Effect |
 |---|---|
 | absent, or not a DWORD | on: the default |
-| 0 | off: this start makes no switchover access, as every release to `2.1.0.0` made none |
+| 0 | off: this start reads PCI offset 0 and the value, and makes no switchover write, as every release to `2.1.0.0` made none |
 | 1, or any other number | on |
 
 Only an explicit 0 turns it off, so a mistyped value cannot disable the
