@@ -4149,10 +4149,9 @@ If USB is not working properly with this driver, this is what to run. It reads
 the driver's own log straight out of the running machine and writes a report
 you can paste into a bug report.
 
-On Windows 98 it is the ONLY way to get anything out. That is not a gap in
-this driver - it is the price of how it plugs into Windows. The usual ways
-a driver writes a log are closed to it, and this route goes through the
-Microsoft USB driver it sits underneath, which does have them.
+It talks to the driver directly, through the controller's own device, on
+every Windows version this driver supports. Nothing else needs installing,
+and no log file is written unless you ask for one.
 
 It changes nothing about how the driver behaves on the bus, and writes no file
 it was not asked to. It does READ the controller's port registers, which is a
@@ -4164,7 +4163,7 @@ What step 1 DOES change is ONE of this driver's own settings - that is the
 point of it, and it is why step 2 is a restart. It prints it as it writes it,
 and XHCISNAP -disable puts it back. Run that once you have sent the capture:
 while it is on, anyone using this machine can read the driver's diagnostic
-state. See the registry section for what that does and does not mean.
+state.
 
 
  THE FOUR STEPS
