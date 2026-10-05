@@ -204,16 +204,16 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 
 `NNNN` is the subkey whose `DriverDesc` is "xHCI98 USB 3.x eXtensible Host Controller". The number varies from machine to machine.
 
-| Value | What it sets | Written by the install | Default when absent |
-|---|---|---|---|
-| `XhciImodInterval250ns` | The interrupt moderation interval | `160` | `4000` |
-| `XhciForceBulkOnly` | Bulk-Only instead of UAS | `0` | `0` |
-| `XhciFastPollFsLs` | A root-port Low- or Full-Speed mouse polled above 1000 Hz | `0` | `0` |
-| `XhciFirstEnumWaitMs` | The longest wait for a hub's first report | `5000` | `5000` |
-| `XhciFirstEnumPortMs` | The longest one port may hold that wait | `2000` | `2000` |
-| `XhciIntelPortSwitch` | The Intel 7/8/9-series port switchover; `0` turns it off | `1` | `1` |
-| `XhciLogVerbosity` | The driver's log, read by `XHCISNAP` | `0` | `0` |
-| `XhciLogDebugView` | The log sent to DebugView as well | `0` | `0` |
+| Value | What it sets | Allowed | Written by the install | Default when absent |
+|---|---|---|---|---|
+| `XhciImodInterval250ns` | The interrupt moderation interval | `10` to `4000`; outside it, `4000` | `160` | `4000` |
+| `XhciForceBulkOnly` | Bulk-Only instead of UAS | `0` or `1`; any other non-zero value is `1` | `0` | `0` |
+| `XhciFastPollFsLs` | A root-port Low- or Full-Speed mouse polled above 1000 Hz | `0` to `3`; any other value is `0` | `0` | `0` |
+| `XhciFirstEnumWaitMs` | The longest wait for a hub's first report | `0` to `30000`; above it, `30000` | `5000` | `5000` |
+| `XhciFirstEnumPortMs` | The longest one port may hold that wait | `0` to `XhciFirstEnumWaitMs`; above it, `XhciFirstEnumWaitMs` | `2000` | `2000` |
+| `XhciIntelPortSwitch` | The Intel 7/8/9-series port switchover; `0` turns it off | `0` or `1`; any other non-zero value is `1` | `1` | `1` |
+| `XhciLogVerbosity` | The driver's log, read by `XHCISNAP` | `0` to `4`; above it, `0` | `0` | `0` |
+| `XhciLogDebugView` | The log sent to DebugView as well | `0` or `1`; any other non-zero value is `1` | `0` | `0` |
 
 An install or update writes a value only where it is missing, so a value you changed stays as you set it. To go back to the table's value, set it by hand, or delete the value and update the driver. A machine updated straight from `1.2.0.0` keeps that release's `XhciImodInterval250ns` of `500`; set it to `160` by hand.
 
