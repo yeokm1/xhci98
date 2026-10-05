@@ -1,12 +1,12 @@
 # Polled event delivery for the HCD
 
-Design record for roadmap-hcd Phase 34, stage C (tasks 34c.*). DRAFT,
-revision 2, 2026-10-05: written at the owner's request so the driver can run
+Design record for roadmap-hcd Phase 35 (tasks 35.*). DRAFT,
+revision 3, 2026-10-05: written at the owner's request so the driver can run
 a controller that delivers no legacy interrupt - an MSI- or MSI-X-only xHCI
 controller, which neither primary target can serve today - by polling the
 event ring, adaptively, instead of waiting for an interrupt. Codex reviewed
-revision 1 the same day (10 findings, all taken; section 13 maps each).
-Nothing is built.
+revisions 1 and 2 the same day (10 and 8 findings, all taken; section 13
+maps each). Nothing is built.
 
 ## 1. What is asked, and what is not
 
@@ -20,7 +20,7 @@ where the controller has one and polls where it has none.
 Not in this design: MSI or MSI-X (a value of 3 or above is reserved, and
 "What is not on this roadmap" carries it), interrupters other than
 Interrupter 0, and any change to the line-interrupt path. On a controller
-with a line interrupt, the default must read as `2.2.0.0` without stage C.
+with a line interrupt, the default must read as the Phase 34 build does.
 
 ## 2. State today (read 2026-10-05, and by Codex on revision 1)
 
@@ -136,13 +136,20 @@ to" form `XhciFirstEnumWaitMs` uses (held to 30 s).
 The start reads the values (section 3) and the resource list, then settles
 the **delivery** - line or poll - and its **reason**, once:
 
-| `XhciInterruptMode` | Interrupt resource and pin | Delivery | Reason |
-|---|---|---|---|
-| 0, or 3 and above | resource present, pin not 0 | line | automatic |
-| 0, or 3 and above | no resource, or pin 0 | poll | automatic: no interrupt resource / interrupt pin 0 |
-| 1 | resource present, pin not 0 | line | forced |
-| 1 | no resource, or pin 0 | none: the start fails as today | forced, no interrupt |
-| 2 | either | poll | forced |
+The pin is read once, and its read status is kept apart from its value:
+today a failed read with an interrupt resource present is accepted, the pin
+recorded as `0xFFFFFFFF` and the resource trusted (`xhci_init.c:4605-4617`),
+and that stays.
+
+| `XhciInterruptMode` | Interrupt resource | Pin | Delivery | Reason |
+|---|---|---|---|---|
+| 0, or 3 and above | present | not 0 | line | automatic |
+| 0, or 3 and above | present | unreadable | line, as today | automatic, pin unreadable |
+| 0, or 3 and above | present | 0 | poll | automatic: interrupt pin 0 |
+| 0, or 3 and above | absent | any | poll | automatic: no interrupt resource |
+| 1 | present | not 0, or unreadable | line, as today | forced (pin unreadable, if so) |
+| 1 | present and pin 0, or absent | | none: the start fails as today | forced, no interrupt |
+| 2 | any | any | poll | forced |
 
 A value of 3 and above also records "reserved value N, run as automatic".
 
@@ -177,7 +184,7 @@ acknowledges them, it keeps `EINT` before `IP`, as the ISR does, and it keeps
 the drain's final `EHB`-clearing write. The "no interrupt, no DPC" chain in
 the comment near `xhci_evt.c:990` describes interrupt-driven progress; an
 independently scheduled poll does not depend on it. Each statement is
-checked against `docs/usb-xhci-info/xhci-data-structures.md` in task 34c.0
+checked against `docs/usb-xhci-info/xhci-data-structures.md` in task 35.0
 before code.
 
 ## 5. The poller's lifecycle
@@ -185,55 +192,104 @@ before code.
 ### 5.1 The objects
 
 - `PollTimer` and `PollTimerDpc`: a `KTIMER` and the `KDPC` given only to
-  `KeSetTimer`. The timer's DPC drains, decides the next period and re-arms.
+  `KeSetTimer`. The timer's DPC drains, decides the next deadline and
+  re-arms.
 - `IsrDpc`, which no ISR queues under a poll delivery, is the DPC the
   opportunistic checks queue explicitly, with `DpcsInFlight` counted before
   the queue as `hcdIsr` does. One `KDPC` is never handed to both the timer
   and `KeInsertQueueDpc` (Microsoft's `CustomTimerDpc` guidance).
-- `PollLock`, a spin lock, guarding `PollOpen` (admission),
-  `PollArmed` (the timer is set or its DPC is queued or running),
-  `PollPeriod` (the period it was set for) and `PollPromote` (a count bumped
-  by each promotion, section 6.2).
+- `PollLock`, a spin lock, guarding the poller's state (section 5.2), its
+  deadline `PollDue`, and `PollOwed`, the earliest deadline asked for while
+  the timer's DPC owned the poller.
+- `PollService`, in the core's extension and written only under the
+  controller lock: 1 while the controller is running and its event ring may
+  be drained by a poll, 0 otherwise (section 5.3).
 
-### 5.2 Admission and retirement
+**Lock order: the controller lock, then `PollLock`; never the reverse.**
+Neither is held across a drain, and `TimerLock` is never taken with
+`PollLock` held.
 
-- **Arming** - by the start, a re-arm at the end of the timer DPC, a
-  promotion, a kick after resume or recovery - happens only under `PollLock`
-  while `PollOpen`, and sets `PollArmed`.
-- **The timer DPC retires itself.** It clears `PollArmed` under `PollLock`
-  as it ends, unless it re-armed.
-- **A peek's queueing of `IsrDpc`** increments `DpcsInFlight` under
-  `PollLock` while `PollOpen`, before `KeInsertQueueDpc`, and undoes the
-  count if the DPC was already queued.
+### 5.2 One owner at a time
+
+Exactly one party owns the timer at any moment, recorded in `PollState`
+under `PollLock`:
+
+| State | Owner | Meaning |
+|---|---|---|
+| PARKED | nobody | no arm, no DPC; the controller is not in service, or the poller has not started |
+| ARMED | the timer | `KeSetTimer` has been called and the DPC has not yet taken ownership |
+| FIRING | the DPC | the DPC has taken ownership and is draining or deciding |
+| CLOSING | the DPC | as FIRING, but close has been asked; the DPC ends it |
+| CLOSED | nobody | closed; nothing will touch the poller again |
+
+- **The DPC takes ownership** as it starts: under `PollLock`, ARMED becomes
+  FIRING (CLOSING stays CLOSING), and `PollOwed` is cleared.
+- **The DPC gives it up** as it ends, under `PollLock` (section 5.3 for the
+  park): CLOSING becomes CLOSED; otherwise it arms at the earlier of its own
+  decision and `PollOwed` and the state becomes ARMED.
+- **Only the owner, or a party that has taken the arm back, calls
+  `KeSetTimer`.** A promotion (section 6.2) in ARMED takes the arm back with
+  `KeCancelTimer`: TRUE means the timer was still queued and no DPC will
+  run, so the promotion may set the new deadline; FALSE means the timer has
+  expired and its DPC is queued or running and is about to take ownership,
+  so the promotion records its deadline in `PollOwed` instead. In FIRING it
+  records in `PollOwed`. No external `KeSetTimer` ever runs while a DPC owns
+  the poller, so there is never a second callback.
 - **Close** (release, at PASSIVE_LEVEL, where the interrupt disconnect is
-  today): under `PollLock`, `PollOpen` = 0, then `KeCancelTimer`; a TRUE
-  return means the DPC will not run, and `PollArmed` is cleared there. A
-  FALSE return means the timer expired and its DPC is queued or running and
-  will clear `PollArmed` itself, finding `PollOpen` 0 and not re-arming.
-  Then `DpcClosed` is set and, as today, `DpcsInFlight` waited to zero, and
-  `PollArmed` waited to zero beside it, before the timers and DMA are
-  drained. After `PollOpen` = 0 there is no producer left: no ISR, no timer
-  re-arm, no peek.
+  today), under `PollLock`: PARKED becomes CLOSED; ARMED with `KeCancelTimer`
+  TRUE becomes CLOSED; ARMED with FALSE, and FIRING, become CLOSING, and the
+  DPC finishes the close. Release then waits for CLOSED, acquires and
+  releases `PollLock` once more so the DPC's last release of it has
+  happened, and only then goes on to `DpcClosed`, the `DpcsInFlight` wait
+  and the timer and DMA drains. What the DPC does after that last release is
+  return - the same residual the `DpcsInFlight` decrement already accepts.
+- **A peek's queueing of `IsrDpc`** increments `DpcsInFlight` under
+  `PollLock` only while the state is neither CLOSING nor CLOSED, before
+  `KeInsertQueueDpc`, and undoes the count if the DPC was already queued.
 
-### 5.3 Recovery and D3: park and kick
+`KeCancelTimer` is taken on its documented contract only - it removes a
+timer still queued, and it does not stop a DPC already queued or running.
+No stronger behaviour of Windows 98's NTKERN is assumed; there is no
+evidence here for one.
 
-Recovery and D3 do not close admission; nothing blocking can run in them,
-and the recovery runs at DISPATCH_LEVEL. Instead:
+### 5.3 In service, parked and kicked
 
-- **The timer DPC parks.** Under the controller lock it asks the core
-  whether the controller is running (`INITIALIZED`, not `ControllerFailed`,
-  not suspended). If not, it drains nothing and does not re-arm: `PollArmed`
-  is cleared and the poller is parked. A drain the core keeps out is not
-  attempted.
-- **A peek** is likewise taken only under the controller lock with the same
-  test (section 7.1).
-- **Kick** where interrupts are restored today: after a successful resume
-  and a successful in-place recovery, the caller re-arms the poller at the
-  active period if it is open and parked. `KeSetTimer` is callable at
-  DISPATCH_LEVEL, so the recovery path can kick.
-- The timer service's own close (`TimersClosed`) is not used for any of
-  this: the controller's initialisation needs the timer service during
-  recovery.
+`PollService` is the poller's admission to the hardware, separate from the
+core's own flags. `INITIALIZED` is published before the controller is run
+(`xhci_init.c:4999`, then `xhciRunController` at `:5004`), and `RUNNING`
+before the run bit is written (`:1362-1363`), so neither proves the
+controller runs.
+
+- **Set** under the controller lock after the controller is running: at the
+  end of a successful start, of the restoring resume (near
+  `xhci_init.c:3805`), of the reinitialising resume (near `:3911`) and of a
+  successful in-place recovery (near `:4162`) - outside the
+  `XHCI_EXT_FLAG_INTERRUPTS` branches at those sites, since that flag is
+  clear under a poll delivery.
+- **Cleared** under the controller lock before anything quiesces, resets,
+  suspends or stops the controller.
+- **Checked inside the drain's own locked admission**, under a poll delivery
+  only: `XhciEventDpc` refuses a poll drain while it is 0, under the same
+  controller-lock hold in which it would drain, not in a wrapper that drops
+  the lock first. The peek checks it the same way (section 7.1).
+
+**Park and kick are serialised by the controller lock.**
+
+- The timer DPC, finding `PollService` 0 under the controller lock, takes
+  `PollLock` inside that hold and parks: FIRING becomes PARKED. It drains
+  nothing.
+- Each `PollService` set site, in the same controller-lock hold that sets
+  it, takes `PollLock` and **kicks**: PARKED becomes ARMED at the active
+  period. In ARMED or FIRING the kick does nothing, since the owner will see
+  `PollService` 1.
+
+Both decisions are taken inside one hold of the controller lock, so either
+the DPC parks first and the kick finds PARKED and arms, or the kick sets
+`PollService` first and the DPC does not park. A restart cannot be lost.
+`KeSetTimer` is callable at DISPATCH_LEVEL, so the recovery path can kick.
+The timer service's own close (`TimersClosed`) is not used for any of
+this: the controller's initialisation needs the timer service during
+recovery.
 
 ## 6. The adaptive period (pure core, `xhci_poll.c`)
 
@@ -261,24 +317,33 @@ poll comes at the active period.
 
 ### 6.2 Promotion
 
-A submission whose need is shorter than the period armed re-arms the timer
-earlier:
+A submission whose need would bring the next poll earlier brings it
+earlier, and never later. Deadlines, not periods, are compared.
 
-- a control, bulk or isochronous TD, or a command, needs the active period;
-  an interrupt TD needs its endpoint's interval;
-- under `PollLock`, if `PollOpen` and the need is shorter than `PollPeriod`,
-  `KeSetTimer` at the need, `PollPeriod` = the need, `PollPromote` bumped;
-  if not shorter, nothing - so a stream of submissions never pushes the
-  deadline later;
-- the timer DPC reads `PollPromote` as it starts and again under `PollLock`
-  as it re-arms; if it changed, its own decision is stale and is replaced by
-  the shorter of it and the promotion's need. A stale idle decision can
-  therefore never overwrite an earlier deadline a submission set on another
-  processor.
+- A control, bulk or isochronous TD, or a command, needs the active period;
+  an interrupt TD needs its endpoint's interval. Its deadline is now plus
+  the need, in the low word of `KeQuerySystemTime`, compared by signed
+  difference (no 64-bit arithmetic; every deadline is within 5 s, far
+  inside the word's lap).
+- Under `PollLock` (taken inside the submission's controller-lock hold,
+  which the lock order allows): in ARMED, if the new deadline is earlier
+  than `PollDue`, take the arm back (section 5.2) and set the new deadline;
+  if not earlier, nothing - so a stream of submissions never pushes the
+  deadline later, and a short need near an armed deadline that is sooner
+  leaves it alone. In FIRING, `PollOwed` becomes the earlier of itself and
+  the new deadline. In PARKED, CLOSING or CLOSED, nothing: a parked poller
+  is restarted by its kick.
+- The DPC's own re-arm takes the earlier of its decision's deadline and
+  `PollOwed`, so a promotion made while it ran is never postponed by a stale
+  decision.
 
 PERIODIC to ACTIVE is a promotion like IDLE to ACTIVE: a bulk transfer on a
-machine with a mouse attached is re-armed at the active period, not left to
-the mouse's interval.
+machine with a mouse attached gets an earlier poll, not the mouse's
+interval.
+
+A clock adjustment can make a deadline comparison wrong in either
+direction. The cost is bounded: the poll then runs at the deadline already
+armed, at most the idle period away.
 
 ## 7. What the periods mean on these kernels
 
@@ -318,9 +383,9 @@ Whenever the driver is entered anyway, it looks at the event ring for an
 event not yet drained.
 
 - **Under the controller lock, never without it.** The peek is
-  `XhciEventRingPending` taken under the controller lock, after the core's
-  running test (section 5.3), so it reads a consistent `Dequeue` and cycle
-  state and a ring that exists. A peek without the lock was rejected: the
+  `XhciEventRingPending` taken under the controller lock and only while
+  `PollService` is 1 (section 5.3), so it reads a consistent `Dequeue` and
+  cycle state of a ring that exists and a controller that runs. A peek without the lock was rejected: the
   dequeue index can be seen unwrapped (`xhci_ring.c:1373`), and the ring's
   lifetime across a reset is not otherwise guaranteed.
 - **Where**: on the URB submission path while the controller lock is still
@@ -339,8 +404,9 @@ today's code.
 ## 8. Counters and log
 
 In the counter block: the value of `XhciInterruptMode` as read, the
-delivery in effect and its reason (section 4), the two periods as read and
-in effect, the period last armed and the state that chose it, poll runs,
+delivery in effect and its reason (section 4), the pin and its read status,
+the two periods as read and in effect, the period last armed and the state
+that chose it, poll runs,
 poll runs that found an event, peeks and peek hits, promotions, parks and
 kicks, and the shortest and longest interval observed between two poll runs
 with the count of discarded intervals (section 7). One bounded log line at
@@ -348,20 +414,34 @@ start with the delivery and its reason; nothing per poll.
 
 **The delivery in effect must be capturable** (owner, 2026-10-05): a user
 on a machine that polls automatically and one forced to poll must be told
-apart, by `XHCISNAP` and by the DebugView log. By `XhciLogVerbosity`
-(`src/xhci_log.h`, the ladder): at 0 the channel is off and nothing is
-captured, as for every other diagnostic; from 1 the counter block - the
-delivery, its reason and the values in effect - is read by `XHCISNAP`; from
-2 the start line is in the log ring, so `XHCISNAP`'s log read has it and,
-with `XhciLogDebugView` set, the DebugView sink emits it from the controller
-thread at PASSIVE_LEVEL with the rest of the ring, adding no `DbgPrint`
-site. The counter block's dump at each stop, which the DebugView sink also
-emits, carries the same fields.
+apart, by `XHCISNAP` and by the DebugView log. Three routes, each with what
+it does and does not guarantee:
+
+- **The counter block, through `XHCISNAP`** - the reliable route. The
+  delivery, its reason, the pin's read status and the values in effect are
+  persistent fields, set once at start; `XHCISNAP` reads them whenever the
+  log channel is on (`XhciLogVerbosity` 1 and above; `src/xhci_log.h`, the
+  ladder).
+- **The counter dump at each stop, through DebugView.** The fields are
+  added to `hcdLogCountersLocked` (`src/hcd_log.c`). `HcdLogFlush` is gated
+  on `XhciLogDebugView` and publishes past the verbosity's recording
+  suppression (`hcd_log.c:142-162`, `xhci_log.c:167`), so with
+  `XhciLogDebugView` set the dump carries them at every verbosity, 0
+  included.
+- **The start note in the log ring.** Recorded from verbosity 2; the
+  DebugView sink, when set, emits it from the controller thread at
+  PASSIVE_LEVEL with the rest of the ring, adding no `DbgPrint` site. It is
+  available to `XHCISNAP`'s log read only until the DebugView sink drains it
+  (`XhciLogDrain`, `hcd_log.c:172`) or the bounded ring overwrites it, so it
+  is a convenience, not the capture.
+
+With the log channel off and `XhciLogDebugView` clear, nothing is captured,
+as for every other diagnostic.
 
 The tear detector (`hcd_door.c:836`) needs no change: `DpcCount` counts
 every drain, polled or not (`xhci_evt.c:774`).
 
-## 9. `XHCISNAP` (task 34c.4)
+## 9. `XHCISNAP` (task 35.4)
 
 - The companion reports the three values as it does `XhciImodInterval250ns`
   (`write_companion_imod`): status, value as read, value in effect, and the
@@ -375,7 +455,7 @@ every drain, polled or not (`xhci_evt.c:774`).
 - The header grows under the snapshot's existing schema rule, and the tool
   still reads a `2.1.0.0` or earlier header.
 
-## 10. `XHCIQUAL` (task 34c.5)
+## 10. `XHCIQUAL` (task 35.5)
 
 A controller is no longer disqualified for `Interrupt Pin = 0`:
 `quick_classify` and `quick_reason` (`mmiodiag.c:342`, `361`) report it as
@@ -397,34 +477,52 @@ runs C6 and C8 and gets a definite verdict, with the exit code to match.
 Vectors at the classification level (`test_mmiodiag`) and for each C4
 outcome through the verdict, which `test_mmiodiag` alone cannot reach.
 
-## 11. Readings (task 34c-V)
+## 11. Readings (task 35-V)
+
+Two kinds of evidence, both required, kept apart. The functional and
+regression legs - every target in mode 2, line against poll, the defaults on
+a pin, the races - run on the `release` package. The fault-injection legs -
+no interrupt, the pin's read failing, a forced recovery where it needs a
+switch - run on the `qemu` flavour, because the switches exist only there,
+and that flavour is never published.
 
 - **Every target, mode 2** (QEMU's `qemu-xhci` has a pin, so polling is
   forced): 98 SE and 2000 (the SMP guest, Driver Verifier) first, then ME,
   XP, Vista and 7, x86 and x64 - a HID mouse, Bulk-Only and UAS storage, a
   composite audio device playing, devices behind QEMU's hub, hot-plug,
-  disable and enable, remove and rescan, and D3 where 34.4 makes a guest
-  sleep.
+  disable and enable, remove and rescan.
 - **No interrupt, deterministically.** No guest presents `Interrupt Pin = 0`
   that has been found, so the `qemu` flavour gets a test switch that drops
   the interrupt resource and reports pin 0 at the start, and mode 0 is read
   polling with the reason "automatic", and mode 1 failing as today.
 - **Recovery and D3 under a poll delivery**: a forced in-place recovery
   (the `qemu` flavour's existing way to provoke one, or a new switch) with
-  devices working after it, and a D3 and back where a guest sleeps: the park
-  and kick read in the counters.
+  devices working after it, and the controller's D3 and back where a guest
+  offers one without system standby: the park and kick read in the
+  counters. Where no guest does, the recovery alone reads park and kick, and
+  a Device Manager disable and enable reads the close (section 5.2). System
+  standby and hibernate under a poll delivery are read in Phase 36, with
+  task 36.1.
 - **The races, on the Windows 2000 SMP guest under Driver Verifier**: a
   submission storm against the timer's re-arm (promotion never lost, never
   pushed later), close during a peek storm and a timer expiry (no DPC after
-  release), and a drain stopped at its bound continued by the next poll. The
-  pure decisions also in `test_poll`.
+  release), and a drain stopped at its bound continued by the next poll.
+- **The ownership vectors in `test_poll`**, driving section 5.2's state
+  machine and section 6.2's deadlines with the kernel calls stubbed: expiry,
+  then a promotion, then close; a running DPC, then a promotion, then close;
+  `KeCancelTimer` returning TRUE and FALSE at each state; park against kick
+  in both orders; a promotion just before expiry and during a long drain;
+  and the deadline comparison across the word's wrap.
+- **The pin's read failing**, by a `qemu`-flavour switch beside the
+  no-interrupt one: with a resource present, modes 0 and 1 run the line
+  interrupt as today, with the reason "pin unreadable".
 - **The period observed** per target, from the counters.
 - **Line against poll** on the same guest: a storage copy rate, audio
   continuity, and the guest's idle CPU load.
-- **The default on a pin**: mode 0 reading as `2.2.0.0` without stage C
+- **The default on a pin**: mode 0 reading as the Phase 34 build
   (the matrix unchanged), and mode 1 the same.
 
-Bench (34c-E, owner): mode 2 on the E460 and the P14s Gen 1 under Windows 98
+Bench (35-E, owner): mode 2 on the E460 and the P14s Gen 1 under Windows 98
 SE, and an MSI-only controller if one is at hand. The synthetic no-interrupt
 leg above does not depend on one.
 
@@ -447,7 +545,9 @@ Taken by the owner on 2026-10-05, each from options with a recommendation:
 5. The value names: `XhciInterruptMode`, `XhciPollIdleMs` and
    `XhciPollActiveMs`, as recommended.
 
-## 13. Codex's review of revision 1
+## 13. Codex's reviews
+
+### 13.1 Revision 1
 
 | # | Finding | Where answered |
 |---|---|---|
@@ -460,4 +560,17 @@ Taken by the owner on 2026-10-05, each from options with a recommendation:
 | 7 | The tear detector already counts polled drains | Sections 2, 8 and 9 |
 | 8 | C4 fails for several causes; main and report paths | Section 10 |
 | 9 | Legs do not exercise the lifecycle | Section 11 |
-| 10 | Wrong `XHCIQUAL` function; an unread Code 10; 5.1's review owner; the checkpoint's switch | Sections 2, 4.1 and 10; roadmap 34c.0 and the checkpoint |
+| 10 | Wrong `XHCIQUAL` function; an unread Code 10; 5.1's review owner; the checkpoint's switch | Sections 2, 4.1 and 10; roadmap 35.0 and the checkpoint |
+
+### 13.2 Revision 2
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | `KeCancelTimer` TRUE does not prove retirement when a promotion re-arms under a running DPC | Section 5.2: one owner at a time, `PollOwed`, close through CLOSING |
+| 2 | Park and kick can lose the restart | Section 5.3: both inside one controller-lock hold; the kick sites named |
+| 3 | `INITIALIZED` and `RUNNING` are published before the controller runs | Section 5.3: `PollService`, checked in the drain's own locked admission |
+| 4 | Comparing periods can postpone a deadline | Section 6.2: deadlines compared; `PollOwed` preserved |
+| 5 | An unreadable pin | Section 4: its own rows, today's behaviour kept |
+| 6 | The capture routes overstated | Section 8: counter block, stop dump, start note, each with its limits |
+| 7 | The `qemu`-flavour legs cannot run on the release package | Section 11; the roadmap's checkpoint |
+| 8 | The roadmap called the record unreviewed | The roadmap's Phase 35 status |

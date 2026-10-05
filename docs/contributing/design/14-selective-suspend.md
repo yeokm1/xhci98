@@ -1,6 +1,6 @@
 # Selective suspend for the HCD
 
-Design record for roadmap-hcd Phase 34 (proposed). DRAFT, revision 10,
+Design record for roadmap-hcd Phase 36 (proposed). DRAFT, revision 10,
 2026-10-05: written at the owner's request to solve the known limitation "the
 driver never initiates selective suspend" (roadmap-hcd decisions table, row
 "The idle power policy (28.3)"; release notes, "Known limitations"). Codex
@@ -24,10 +24,10 @@ The work is split in two stages, because SuperSpeed wake is a different
 mechanism (section 8). Both ship in one release (owner, 2026-10-05); stage A
 is designed and built first.
 
-- **Stage A (34a): USB 2.0 devices** - High, Full and Low Speed, on a root
+- **Stage A (36a): USB 2.0 devices** - High, Full and Low Speed, on a root
   port or behind a USB 2.0 hub (a USB 3 hub's USB 2.0 half included).
-- **Stage B (34b): SuperSpeed devices** - Function Suspend, Function Wake
-  Device Notifications, SS hub ports. Until 34b is built, a SuperSpeed
+- **Stage B (36b): SuperSpeed devices** - Function Suspend, Function Wake
+  Device Notifications, SS hub ports. Until 36b is built, a SuperSpeed
   device's PDO reports no D1/D2 and no wake, and its Dx is recorded only
   (today's behaviour).
 
@@ -610,7 +610,7 @@ Notification, which needs DNCTRL bit 1 and Device Notification event handling
 with interface-to-function ownership; behind an SS hub the exit sets no
 C_PORT_LINK_STATE (record 13 section 10.2), so the notification is the only
 signal. `xhci_link.c`'s Resume classification and `WANT_RESUME` are fixed
-there. QEMU has no SS hub, so 34b's hub half is bench-only.
+there. QEMU has no SS hub, so 36b's hub half is bench-only.
 
 ## 9. Codex review of revision 1 (2026-10-05), where each finding is taken
 
@@ -715,22 +715,22 @@ Revision 9's review found 1; revision 10 takes it:
 
 ## 10. Tasks and verification (stage A)
 
-- 34a.1 `xhci_susp.c` machine + `test_susp` (states, rollback at each step,
+- 36a.1 `xhci_susp.c` machine + `test_susp` (states, rollback at each step,
   composite last-Dx, D0 during SUSPENDING, epoch-stamped Dx, cancel before publication, QUEUED and RUNNING cancel followed by teardown, unlink with outstanding URBs, rundown after the enum thread exits, D3 and system transitions with an idle IRP still HELD, wake
   classification vectors); `xhci_link.c`/`xhci_port.c` vectors as needed.
-- 34a.2 the gate on `Paused` and `hcd_cfg.c`'s survivor restart; `hcd_enum.c`
+- 36a.2 the gate on `Paused` and `hcd_cfg.c`'s survivor restart; `hcd_enum.c`
   thread requests (per-PDO slots, not a bitmap), root-port execution and the
   PLS handed over at acknowledgement; `hcd_hub.c` USB 2.0 hub port suspend
   and both branches of the look (827, 837) routed to the machine.
-- 34a.3 `hcd_pdo.c` power: D-IRP slot, composite rule, capabilities,
+- 36a.3 `hcd_pdo.c` power: D-IRP slot, composite rule, capabilities,
   WAIT_WAKE, controller-transition settlement (`hcd_power.c`).
-- 34a.4 `hcd_urb.c` idle callbacks on the bus's callback thread, with
+- 36a.4 `hcd_urb.c` idle callbacks on the bus's callback thread, with
   composite readiness and the ownership of section 6.
-- 34a.5 The switch; counters (requests, completions, rollbacks and reason,
+- 36a.5 The switch; counters (requests, completions, rollbacks and reason,
   stale generations, wake armed/disarmed/events, callback entry/exit/cancel,
   drained IRPs, held transfers) in the counter block and XHCISNAP; bounded
   log lines naming group/function, epoch, old/new state, reason.
-- 34a.6 A test client (`test\pmclient`, a tiny filter or function driver for
+- 36a.6 A test client (`test\pmclient`, a tiny filter or function driver for
   the VM legs only, never shipped) that drives Dx/D0, WAIT_WAKE and idle
   submit/cancel on demand, because no stock class driver on 98 SE or 2000
   idles in S0 - without it the primaries would read only "no regression".
@@ -747,12 +747,12 @@ Revision 9's review found 1; revision 10 takes it:
   unchanged; x86 and amd64 builds and every gate.
 - Fault injection (the `qemu` flavour only): the DMA-halt proof forced to fail while a test-client idle callback waits on cancelled I/O, then the controller's STOP, REMOVE and a restart, with the callback's return raced against the teardown's handoff, a claim raced against EXITING, and other PDOs' entries queued behind it; the quarantine holds, nothing hangs, and on 98 SE the driver stays loaded while the quarantined device object exists.
 - Bench: a real HID device with remote wake on a 98 SE machine and the
-  E460's Windows 7, by the owner. Phase 34's checkpoint includes it unless
+  E460's Windows 7, by the owner. Phase 36's checkpoint includes it unless
   the owner rules otherwise (the Phases 28-31 bench exception does not carry
   over by itself).
 - Docs: record 13 sections 5, 6.5, 10.2, 10.9; release notes (limitation
-  replaced; what is still not done: SS until 34b, hub and controller idle);
-  roadmap-hcd Phase 34 and the 28.3 row; `source-files.md`; the locking
+  replaced; what is still not done: SS until 36b, hub and controller idle);
+  roadmap-hcd Phase 36 and the 28.3 row; `source-files.md`; the locking
   record for the gate and the slot; run-34.md.
 
 ## 11. Decisions
@@ -761,7 +761,7 @@ Revision 9's review found 1; revision 10 takes it:
 - Stage A's checkpoint includes the owner's bench reading (owner,
   2026-10-05): a real remote-wake HID device on a 98 SE machine and on the
   E460's Windows 7.
-- The test client (34a.6) is tracked under `test\`, never shipped, and the
+- The test client (36a.6) is tracked under `test\`, never shipped, and the
   packaging gate refuses it in a release (owner, 2026-10-05).
 - Stage B ships in the same release as stage A (owner, 2026-10-05): the
   release is cut only after stage B is designed (section 8 grown into the
