@@ -494,7 +494,10 @@ Since task 34.1 (owner, 2026-10-05) both INFs write every value the HCD
 reads, on every install path: the three above, `XhciFastPollFsLs`, and
 `XhciForceBulkOnly` (31-A.3), `XhciFirstEnumWaitMs` and
 `XhciFirstEnumPortMs` (33.3), each at the driver's own default but the
-interval. The gate's `VAL-*` rules hold all seven.
+interval. Each is written with FLG_ADDREG_NOCLOBBER (`0x00010003`), so an
+install or update writes only a missing value and keeps one the user set; a
+later release therefore cannot change a default on a machine that already
+holds the old one. The gate's `VAL-*` rules hold all seven, flags included.
 
 The package is `xhci98-<version>.zip`, as the miniport's was - the published
 `releases\1.2.0.0` directory is never edited (`releases/README.md`) - staged by `make-package.ps1` from 26-A.1 and published by

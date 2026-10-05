@@ -75,13 +75,13 @@ CopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI
 HKR,,DevLoader,,*NTKERN
 HKR,,NTMPDriver,,xhci98.sys
 HKR,,EnumPropPages,,"sysclass.dll,USBControllerPropPage"
-HKR,,XhciLogVerbosity,0x00010001,0
-HKR,,XhciLogDebugView,0x00010001,0
-HKR,,XhciForceBulkOnly,0x00010001,0
-HKR,,XhciFastPollFsLs,0x00010001,0
-HKR,,XhciFirstEnumWaitMs,0x00010001,5000
-HKR,,XhciFirstEnumPortMs,0x00010001,2000
-HKR,,XhciImodInterval250ns,0x00010001,160
+HKR,,XhciLogVerbosity,0x00010003,0
+HKR,,XhciLogDebugView,0x00010003,0
+HKR,,XhciForceBulkOnly,0x00010003,0
+HKR,,XhciFastPollFsLs,0x00010003,0
+HKR,,XhciFirstEnumWaitMs,0x00010003,5000
+HKR,,XhciFirstEnumPortMs,0x00010003,2000
+HKR,,XhciImodInterval250ns,0x00010003,160
 
 [RootHub.Dev]
 AddReg=RootHub.AddReg
@@ -118,13 +118,13 @@ CopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI
 AddService=xhci98,0x00000002,Xhci.AddService
 
 [Xhci.AddReg.NT]
-HKR,,XhciLogVerbosity,0x00010001,0
-HKR,,XhciLogDebugView,0x00010001,0
-HKR,,XhciForceBulkOnly,0x00010001,0
-HKR,,XhciFastPollFsLs,0x00010001,0
-HKR,,XhciFirstEnumWaitMs,0x00010001,5000
-HKR,,XhciFirstEnumPortMs,0x00010001,2000
-HKR,,XhciImodInterval250ns,0x00010001,160
+HKR,,XhciLogVerbosity,0x00010003,0
+HKR,,XhciLogDebugView,0x00010003,0
+HKR,,XhciForceBulkOnly,0x00010003,0
+HKR,,XhciFastPollFsLs,0x00010003,0
+HKR,,XhciFirstEnumWaitMs,0x00010003,5000
+HKR,,XhciFirstEnumPortMs,0x00010003,2000
+HKR,,XhciImodInterval250ns,0x00010003,160
 HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"
 HKR,,Controller,1,01
 

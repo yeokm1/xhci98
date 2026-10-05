@@ -568,9 +568,13 @@ such key: the device's own `Driver` value, under `Enum\PCI`, names the one in
 use. `XHCISNAP -verbosity` finds it for you.
 
 Since `2.2.0.0` the install writes all seven: each at the driver's own
-default, except `XhciImodInterval250ns` at `160`. Every install and update
-writes them again, so a value you changed goes back to that, and has to be
-set again afterwards.
+default, except `XhciImodInterval250ns` at `160`. Each is written only where
+it is missing, so a value you changed survives an install or update; to go
+back to the default, set it by hand, or delete the value and update the
+driver. Until `2.2.0.0` every install wrote all of them again. A machine
+updated straight from `1.2.0.0` keeps that release's `XhciImodInterval250ns`
+of `500`, not `160`; set it by hand. One that went through `2.0.0.0` or
+`2.1.0.0` already holds `160`.
 
 ### XhciImodInterval250ns: the interrupt moderation interval
 

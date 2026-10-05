@@ -83,13 +83,13 @@ path|Windows XP x64|device install|Xhci.Dev.NTamd64
 file|Windows XP x64|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys||0|remove
 file|Windows XP x64|Xhci.CopyOS|10|System32\Drivers|usbd.sys|usbd.sys||16|keep
 file|Windows XP x64|Xhci.CopyUI|11||usbui.dll|usbui.dll||16|keep
-reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciLogVerbosity|0x00010001|0|remove
-reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciLogDebugView|0x00010001|0|remove
-reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciForceBulkOnly|0x00010001|0|remove
-reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciFastPollFsLs|0x00010001|0|remove
-reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciFirstEnumWaitMs|0x00010001|5000|remove
-reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciFirstEnumPortMs|0x00010001|2000|remove
-reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciImodInterval250ns|0x00010001|160|remove
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciLogVerbosity|0x00010003|0|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciLogDebugView|0x00010003|0|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciForceBulkOnly|0x00010003|0|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciFastPollFsLs|0x00010003|0|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciFirstEnumWaitMs|0x00010003|5000|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciFirstEnumPortMs|0x00010003|2000|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciImodInterval250ns|0x00010003|160|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBControllerPropPageProvider"|remove
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||Controller|1|01|remove
 service|Windows XP x64|xhci98|Xhci.AddService|0x00000002|remove
@@ -129,13 +129,13 @@ servicevalue|Windows XP x64|xhci98|Xhci.AddService|ServiceBinary|%12%\xhci98.sys
 servicevalue|Windows XP x64|xhci98|Xhci.AddService|LoadOrderGroup|Base
 path|Windows Vista and 7 x64|device install|Xhci.Dev6.NTamd64
 file|Windows Vista and 7 x64|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys||0|remove
-reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciLogVerbosity|0x00010001|0|remove
-reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciLogDebugView|0x00010001|0|remove
-reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciForceBulkOnly|0x00010001|0|remove
-reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciFastPollFsLs|0x00010001|0|remove
-reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciFirstEnumWaitMs|0x00010001|5000|remove
-reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciFirstEnumPortMs|0x00010001|2000|remove
-reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciImodInterval250ns|0x00010001|160|remove
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciLogVerbosity|0x00010003|0|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciLogDebugView|0x00010003|0|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciForceBulkOnly|0x00010003|0|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciFastPollFsLs|0x00010003|0|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciFirstEnumWaitMs|0x00010003|5000|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciFirstEnumPortMs|0x00010003|2000|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciImodInterval250ns|0x00010003|160|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBControllerPropPageProvider"|remove
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||Controller|1|01|remove
 service|Windows Vista and 7 x64|xhci98|Xhci.AddService|0x00000002|remove

@@ -237,7 +237,7 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | `XhciLogVerbosity` | The driver's log, read by `XHCISNAP` | `0` | `0` |
 | `XhciLogDebugView` | The log sent to DebugView as well | `0` | `0` |
 
-Every install and update writes all seven again, so a value you changed goes back to what the table says; set it again afterwards.
+An install or update writes a value only where it is missing, so a value you changed stays as you set it. To go back to the table's value, set it by hand, or delete the value and update the driver. A machine updated straight from `1.2.0.0` keeps that release's `XhciImodInterval250ns` of `500`; set it to `160` by hand.
 
 The two log values are described in the [release notes](docs/using/release-notes.md), "The log, and how to send one". The others are described below.
 

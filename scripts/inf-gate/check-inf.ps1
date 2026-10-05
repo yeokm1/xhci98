@@ -1162,47 +1162,47 @@ foreach ($m in $models) {
 $requiredValues = @(
     @{
         Name    = "XhciLogVerbosity"
-        Type    = "0x00010001"
+        Type    = "0x00010003"
         Default = "0"
         Why     = "task 13-L.2's 0-4 ladder, and since `0.0.0.6` the WHOLE switch: 0 shuts the PassThru read channel (the miniport answers exactly MP_STATUS_NOT_SUPPORTED, the same as a binary built without it - and that channel is how a dump leaves the machine at all, the only route this driver has on Windows 98), 1 engages it with the note ring still off, and 2 is the recording switch. It ships at 0 because what the append sites cost at real interrupt rates on Windows 98 metal is unmeasured, and because a diagnostic nobody asked for should not be reachable"
     },
     @{
         Name    = "XhciLogDebugView"
-        Type    = "0x00010001"
+        Type    = "0x00010003"
         Default = "0"
         Why     = "task 11-V.9's DebugView sink, read from the same key, and an EMISSION switch only since task 13-L.2. It hands the ring over from the PASSIVE flush - never live mirroring, which is what bugchecks Windows 98 on metal"
     },
     @{
         Name    = "XhciImodInterval250ns"
-        Type    = "0x00010001"
+        Type    = "0x00010003"
         Default = "160"
         Why     = "task 23.4's interrupt moderation interval, in 250 ns units, written to IR0's IMOD at every start. Absent, the driver runs at its own default of 4000 (1 ms), so a path missing it runs a different interval from the other paths and nothing says so"
         DefaultWhy = "The owner set the shipped interval to 160 (40 us) on 2026-10-04 from an ATTO QD1 reading of a UAS drive at SuperSpeed under Windows 98 SE on the P14s Gen 1, where 500 cost 15 to 22% of bulk throughput (roadmap-hcd.md, decisions table); it was 500 from 2026-09-22 (tasks 23.3 and 23.5). Any other number is a new decision and needs a new reading, not an INF edit"
     },
     @{
         Name    = "XhciForceBulkOnly"
-        Type    = "0x00010001"
+        Type    = "0x00010003"
         Default = "0"
         Why     = "roadmap-hcd task 31-A.3's switch to Bulk-Only where a device offers UAS too, read at every enumeration. The INF writes the 0 so the value is where a user looks for it (owner, 2026-10-05; roadmap-hcd task 34.1)"
         DefaultWhy = "0 is the driver's own default, UAS wherever the device offers it; the INF writes the default and nothing else"
     },
     @{
         Name    = "XhciFastPollFsLs"
-        Type    = "0x00010001"
+        Type    = "0x00010003"
         Default = "0"
         Why     = "roadmap-hcd task 33.8's root-port Low- and Full-Speed polling above 1000 Hz, read at start. The INF writes the 0 so the value is where a user looks for it (owner, 2026-10-05; roadmap-hcd task 34.1)"
         DefaultWhy = "0 is off, the driver's own default, and the feature is untested ground; turning it on by default would be a new decision"
     },
     @{
         Name    = "XhciFirstEnumWaitMs"
-        Type    = "0x00010001"
+        Type    = "0x00010003"
         Default = "5000"
         Why     = "roadmap-hcd task 33.3's longest wait, in ms, for a hub's first report. The INF writes the default so the value is where a user looks for it (owner, 2026-10-05; roadmap-hcd task 34.1)"
         DefaultWhy = "5000 is the driver's own default (xhci_enum.h); the INF writes the default and nothing else"
     },
     @{
         Name    = "XhciFirstEnumPortMs"
-        Type    = "0x00010001"
+        Type    = "0x00010003"
         Default = "2000"
         Why     = "roadmap-hcd task 33.3's longest hold, in ms, one port may put on that wait. The INF writes the default so the value is where a user looks for it (owner, 2026-10-05; roadmap-hcd task 34.1)"
         DefaultWhy = "2000 is the driver's own default (xhci_enum.h); the INF writes the default and nothing else"
@@ -1310,6 +1310,8 @@ foreach ($m in $models) {
             if ($hit.Flags.ToLowerInvariant() -ne $req.Type.ToLowerInvariant()) {
                 if ($req.Type -eq "") {
                     Add-Failure "VAL-TYPE" ("[{0}] line {1} writes '{2}' with flags '{3}', not an empty flags field (FLG_ADDREG_TYPE_SZ). The miniport parses the value's characters; a DWORD's bytes are not hexadecimal digits, so the feature would be off." -f $hit.Section, $hit.Line, $req.Name, $hit.Flags)
+                } elseif ($req.Type -eq "0x00010003") {
+                    Add-Failure "VAL-TYPE" ("[{0}] line {1} writes '{2}' with flags '{3}', not {4} (FLG_ADDREG_TYPE_DWORD with FLG_ADDREG_NOCLOBBER). The driver reads four bytes, and an install or update must keep a value the user set rather than write the default over it (owner, 2026-10-05; roadmap-hcd task 34.1)." -f $hit.Section, $hit.Line, $req.Name, $hit.Flags, $req.Type)
                 } else {
                     Add-Failure "VAL-TYPE" ("[{0}] line {1} writes '{2}' with flags '{3}', not {4} (FLG_ADDREG_TYPE_DWORD). The miniport asks usbport for four bytes; a string would be handed over as its characters." -f $hit.Section, $hit.Line, $req.Name, $hit.Flags, $req.Type)
                 }
