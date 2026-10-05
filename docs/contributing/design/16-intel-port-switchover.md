@@ -4,8 +4,9 @@ Design record for roadmap-hcd task 34.4 (Phase 34, release `2.1.1.0`).
 Revision 1, 2026-10-05: written at the owner's request after the code, to
 explain it. Built in `0def9a3`, `ea707a6` and the commit that adds this
 record. **Nothing in it has run on a
-machine with the mux**: no machine this project has ever had carries one, so
-every hardware statement below is taken from Linux and from
+machine with the mux**: the project's only 7/8-series machine left before
+its `XUSB2PR` reading was taken (`roadmap.md`, Phase 4 task 10), so every
+hardware statement below is taken from Linux and from
 `docs/usb-xhci-info/xhci-programming.md`'s `XUSB2PR` section, which is itself
 a prediction, and the hardware reading is a tester's (section 10).
 
@@ -15,10 +16,13 @@ A tester reported Ivy Bridge machines on which `xhci98.sys` started cleanly
 and then saw nothing on the blue ports, while a SuperSpeed stick ran at High
 Speed under the USB 2.0 controller. On the Intel 7-, 8- and 9-series PCH and
 on C610/X99, each switchable connector is wired to two controllers, EHCI and
-xHCI, and four registers choose which one has it. Firmware set to "Auto",
-or offering no setting, leaves every switchable connector on EHCI and expects
-the operating system's xHCI driver to move them; Windows 7 does it through
-Intel's own USB 3.0 package, and Linux at probe. The HCD now does it too.
+xHCI, and four registers choose which one has it. Firmware that hands the
+choice to the operating system - typically a setting of "Auto", and
+apparently the tester's machines, which offered none - leaves the switchable
+connectors on EHCI and expects the OS's xHCI driver to move them; Windows 7
+does it through Intel's own USB 3.0 package, and Linux at probe. Which
+firmware does this, and with what initial values, is a per-machine fact
+(`xhci-programming.md` gives it as a prediction). The HCD now moves them too.
 
 Not in this design: Panther Point's 64-active-endpoint limit (Linux
 `XHCI_EP_LIMIT_QUIRK`), which the same machines carry; any other vendor's
@@ -88,8 +92,14 @@ were weighed (owner, 2026-10-05):
    | 8D31 | Wellsburg, C610/X99 |
 
    The first five were proposed with the task. 8D31 was added the same day,
-   because `xhciqual`'s `quirks.c` already marks it `QF_XUSB2PR`. Every
-   entry is a part with Linux or `xhciqual` evidence. It is the driver's
+   because `xhciqual`'s `quirks.c` already marks it `QF_XUSB2PR`. The
+   evidence is not even across the list. The local Linux mirror defines
+   8C31, 9C31 and 9CB1 by number (`xhci-pci.c`) and uses Panther Point's id
+   by name; the register meanings are the 7-series datasheet's as
+   `xhci-programming.md` gives them. For 8CB1 and 8D31 the support is only
+   that Linux applies the same sequence to every Intel xHCI with an EHCI
+   beside it and that `xhciqual` reads both as such parts. No datasheet or
+   reading specific to Wildcat Point or Wellsburg is held. It is the driver's
    first device-id row, against `xhci-programming.md`'s "no per-controller
    quirk table"; that is accepted for this one mechanism.
 2. **Linux's rule (not taken).** Linux tries every Intel xHCI, but first scans
@@ -105,10 +115,13 @@ were weighed (owner, 2026-10-05):
 One board is exempt: Linux skips a Sony VAIO T-series, subsystem
 `104D:90A8`, which "is not capable of switching ports from EHCI to xHCI".
 The HCD reads the subsystem dword (offset 0x2C) and skips that board. **A
-subsystem id that cannot be read also skips the switchover**: an unread id is no evidence that the board is not that one.
+subsystem id that cannot be read also skips the switchover**: an unread id
+is no evidence that the board is not that one.
 
-On every other controller (QEMU's `1B36:000D` among them) the HCD reads PCI
-offset 0 and nothing else of this design, and writes nothing.
+On every other controller (QEMU's `1B36:000D` among them) the switchover
+reads PCI offset 0 and nothing else, and writes nothing; the start's own
+configuration reads (the command register, the interrupt pin) are not this
+design's and are unchanged.
 
 ## 5. The switch: `XhciIntelPortSwitch`
 
@@ -117,7 +130,7 @@ A REG_DWORD in the controller's driver key (owner, 2026-10-05):
 | Value | Effect |
 |---|---|
 | absent, or not a DWORD | on: the default |
-| 0 | off: the routing is left as firmware set it, as every release to `2.1.0.0` did |
+| 0 | off: this start makes no switchover access, as every release to `2.1.0.0` made none |
 | 1, or any other number | on |
 
 Only an explicit 0 turns it off, so a mistyped value cannot disable the
@@ -133,6 +146,11 @@ effect at the next start (a disable and enable in Device Manager, or a
 restart). It exists for a machine whose switchable connectors must stay
 EHCI's: a device that works better under that machine's EHCI driver, or
 another system on the same disk that expects firmware's routing.
+
+Setting 0 does not restore firmware's routing; it only stops this driver
+writing. After a restart firmware sets the routing again. But a disable and
+enable in Device Manager after setting 0 leaves the connectors where the
+disable's release put them, on EHCI, whatever firmware had chosen at boot.
 
 ## 6. When
 
@@ -157,14 +175,26 @@ may put the connectors back on EHCI across the sleep. Routing twice writes
 the same values, so a resume on which firmware kept the routing costs four
 config reads and two writes.
 
-**The release is broader than Linux's.** Linux hands the connectors back to
-EHCI only at shutdown, and only on Panther Point, Lynx Point-LP and Wildcat
-Point-LP, against boards that power back on a few seconds after shutdown
-(`XHCI_SPURIOUS_REBOOT`). The HCD releases on every gated controller and at
-every stop too, so a disabled, removed or refused driver never leaves the
-connectors on an xHCI nothing drives: back on EHCI, they work again if an
-EHCI driver is loaded. The release comes after the halt so that the
-disconnects it makes are seen by no running controller.
+**The release is broader than Linux's.** Linux's xHCI driver hands the
+connectors back to EHCI only in `xhci_shutdown`, and only on Panther Point,
+Lynx Point-LP and Wildcat Point-LP, against boards that power back on a few
+seconds after shutdown (`XHCI_SPURIOUS_REBOOT`); its early PCI quirk also
+releases them when the kernel is built without an xHCI driver. The HCD
+releases on every gated controller and at every stop too, so a disabled,
+removed or refused driver does not leave the connectors on an xHCI nothing
+drives: back on EHCI, they work again if an EHCI driver is loaded. The
+release comes after the halt so that the disconnects it makes are seen by no
+running controller.
+
+**Every access is best effort.** A route or release that fails part-way is
+logged (its step) and counted (`PswFailures`), and nothing else follows: a
+failed route does not refuse the start or undo the writes already made, and
+`PswOn` stays set, so the stop still releases; a failed release does not
+hold up the stop, which clears `PswOn` all the same, so a refused
+`XUSB2PR = 0` leaves those connectors on xHCI. The read-backs are logged
+but not compared with what was written, so step 0 says every access was
+accepted, not that the routing changed; the tester's capture is what
+compares them.
 
 **What is not touched.** The in-place recovery (design record 07) re-runs the
 controller sequence at DISPATCH_LEVEL, where configuration space cannot be
@@ -194,8 +224,9 @@ The route, as Linux's `usb_enable_intel_xhci_ports`:
 6. Read `XUSB2PR` back.
 
 The release, as Linux's `usb_disable_xhci_ports`: write `USB3_PSSEN` = 0
-then `XUSB2PR` = 0, each read back; both writes are attempted whatever the
-first did, and the first failure is the one reported. The masks are written
+then `XUSB2PR` = 0. Linux makes the two writes only; the HCD reads each
+back for the log. Both writes are attempted whatever the first did, and the
+first failure is the one reported. The masks are written
 whole, as Linux writes them, not merged with the register's previous value.
 
 Each returns a step code (`XHCI_PSW_STEP_*`, 0 when every access was made)
@@ -251,12 +282,13 @@ any one on request:
 The model shares the register offsets with the code under test, so it proves
 the order and the logic, not the offsets; those rest on section 2's sources.
 The executor's lifecycle is not host-tested; it was reviewed, and the QEMU
-reading (section 10) shows the gate closed.
+reading (section 10) is to show the gate closed.
 
 ## 10. Readings
 
 - **QEMU** (owed before 34.4 is ticked): on `1B36:000D`, `psw.gate 0` in the
-  log or the trace, and no configuration access past offset 0. A Windows 98 SE
+  log or the trace, and no switchover access past offset 0 (no route or
+  release record, no read-back line). A Windows 98 SE
   guest on the `qemu` flavour (owner, 2026-10-05).
 - **Hardware** (a tester's; until read, the release notes call this untested
   ground, as 33.8's polling was):
@@ -288,8 +320,10 @@ shutdown; a sleep keeping the routing.
 
 - `xhci-programming.md`: the `XUSB2PR` section, which says the driver leaves
   the registers alone, and its row in the deviations table ("Not handled").
-- `implementation-invariants.md`, "PnP Resources": configuration space is no
-  longer read for identification only.
+- `implementation-invariants.md`, "PnP Resources": it admits configuration
+  reads for identification and quirk selection and refuses BAR rediscovery;
+  the switchover's writes above the header are a new kind of access to name
+  there, and the BAR rule stands as it is.
 - `failure-diagnosis.md`, row 7: the dead-looking controller now has the
   switch and its log as the first check.
 - The release notes: the switchover, its untested standing, the opt-out, the

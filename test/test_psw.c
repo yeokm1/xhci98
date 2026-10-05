@@ -321,6 +321,17 @@ static void test_release(void)
              "XUSB2PR refused");
     CHECK_EQ(f.Usb3Enable, 0, "terminations off regardless");
 
+    fakeInit(&f, &io);
+    (VOID)XhciPswRoute(&io, &st);
+    f.Count = 0;
+    f.FailKind = 'r';
+    f.FailOffset = XHCI_PSW_XUSB2PR;
+    CHECK_EQ(XhciPswRelease(&io, &st), XHCI_PSW_STEP_XUSB2PR_READ,
+             "XUSB2PR's read-back failed");
+    CHECK_EQ(f.Count, 4, "every access was made");
+    CHECK_EQ(st.Usb2Now, 0xFFFFFFFFUL, "reported unread");
+    CHECK_EQ(f.Usb2Route, 0, "pairs back on EHCI");
+
     CHECK_EQ(XhciPswRelease(NULL, &st), XHCI_PSW_STEP_BAD_PARAM, "no io");
     CHECK_EQ(XhciPswRelease(&io, NULL), XHCI_PSW_STEP_BAD_PARAM,
              "no state");
