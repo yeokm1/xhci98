@@ -1099,6 +1099,9 @@ typedef BOOL  (WINAPI *PFN_W64REV)(PVOID);
 
 static const char *driver_file_version(void)
 {
+    /* Static, so zeroed: every _snprintf below is given one byte less than
+     * the buffer, and that last byte is the terminator MSVC 6 does not write
+     * when it truncates. */
     static char text[MAX_PATH + 64];
     static int done;
     char path[MAX_PATH];
@@ -1154,18 +1157,18 @@ static const char *driver_file_version(void)
     size = gfvis(path, &dummy);
     block = (size != 0) ? malloc(size) : NULL;
     if (block == NULL) {
-        sprintf(text, "not read (%s, error %lu)", path,
+        _snprintf(text, sizeof(text) - 1, "not read (%s, error %lu)", path,
                   (size == 0) ? GetLastError() : 0UL);
     } else if (gfvi(path, 0, size, block) &&
                vqv(block, "\\", (LPVOID *)&ffi, &len) &&
                len >= sizeof(VS_FIXEDFILEINFO)) {
-        sprintf(text, "%u.%u.%u.%u (file %s)",
+        _snprintf(text, sizeof(text) - 1, "%u.%u.%u.%u (file %s)",
                   (unsigned)HIWORD(ffi->dwFileVersionMS),
                   (unsigned)LOWORD(ffi->dwFileVersionMS),
                   (unsigned)HIWORD(ffi->dwFileVersionLS),
                   (unsigned)LOWORD(ffi->dwFileVersionLS), path);
     } else {
-        sprintf(text, "not read (%s has no version resource)", path);
+        _snprintf(text, sizeof(text) - 1, "not read (%s has no version resource)", path);
     }
     free(block);
 
@@ -1187,7 +1190,11 @@ static void write_companion_header(const SNAP_HEADER *h)
      * carries what the version cannot between cuts: which build. */
     comp("  tool               xhcisnap %s, built %s\n",
          XHCISNAP_VERSION, XHCISNAP_BUILT);
-    comp("  driver file        %s\n", driver_file_version());
+    /* Wrapped under its own column: the path is the machine's, and the
+     * failure texts alone pass 79 columns on a default C:\WINDOWS. */
+    put_wrapped_to((companion != NULL) ? companion : stdout,
+                   "  driver file        ", "                     ",
+                   driver_file_version());
     comp("  schema             %lu, %lu-byte header\n",
          h->SchemaVersion, h->HeaderBytes);
     comp("  build flavour      %s\n", flavour_text(h->Flavour));
@@ -3667,7 +3674,7 @@ int main(int argc, char **argv)
     printf("\n--- summary ------------------------------------------------\n");
     printf("  tool       xhcisnap %s, built %s\n",
            XHCISNAP_VERSION, XHCISNAP_BUILT);
-    printf("  drv file   %s\n", driver_file_version());
+    say_hang("  drv file   ", "             ", "%s", driver_file_version());
     printf("  driver     %s, extension %lu bytes, schema %lu\n",
            flavour_text(extLast.Flavour), extLast.ExtensionBytes,
            extLast.SchemaVersion);
