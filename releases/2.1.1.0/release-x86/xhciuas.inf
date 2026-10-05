@@ -1,0 +1,115 @@
+; xhciuas.inf - the project's USB Attached SCSI class driver, xhciuas.sys
+; (roadmap-hcd.md task 31-A.2), the second INF of the 32-bit package.
+;
+; It binds the driver to a USB device or function whose interface is Mass
+; Storage / SCSI / UAS - the compatible id USB\Class_08&SubClass_06&Prot_62
+; the bus (xhci98.sys) exposes when it chooses UAS for the device (task
+; 31-A.3). The driver is the FDO on that PDO and creates one PDO per logical
+; unit, which the OS's own storage INFs bind: disk.inf on Windows 2000 and
+; later, NUSB's usbntmap.inf on Windows 98 SE. Nothing here installs those.
+;
+; One Windows 98 dependency is named, never shipped: usbntmap.inf's port
+; driver USBMPHLP.PDR hands each unit to NUSB's USBNTMAP.SYS, which serves
+; only a unit carrying a filter object of its own, and it creates that filter
+; on each child PDO from its BusRelations completion when it is an upper
+; filter on the parent. NUSB's USBSTOR.INF installs it that way on its own
+; mass-storage devnodes ([*.HW] AddReg upperfilters USBNTMAP.SYS), and so does
+; [Uas.Dev.HW] here, by name only: the file is Microsoft's and NUSB's mass
+; storage install places it. Without NUSB's mass storage installed there is no
+; USBNTMAP.SYS and no driver for the units either; NUSB is a prerequisite of
+; this driver on Windows 98 as it is of xhci98.sys. The NT path has no .HW
+; section: disk.sys binds the units there with no filter.
+;
+; Two install paths, as xhci98.inf: Windows 98 SE and ME read the undecorated
+; sections and load the driver through *NTKERN/NTMPDriver; every NT target
+; reads the .NTx86 sections and installs a kernel service. The driver needs
+; no OS-supplied file, so there is no LayoutFile and no NT 6.x models
+; section: the .NTx86 path copies the driver alone on every NT target.
+;
+; scripts\inf-gate\check-uas-inf.ps1 gates this file on every build.
+;
+; ASCII only, CRLF line endings.
+
+[Version]
+Signature="$CHICAGO$"
+Class=USB
+ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
+Provider=%Provider%
+; Must equal src\xhci_version.h.
+DriverVer=10/06/2026,2.1.1.0
+
+[Manufacturer]
+%Mfg%=UasModels
+
+[UasModels]
+%UasDesc%=Uas.Dev,USB\Class_08&SubClass_06&Prot_62
+
+[SourceDisksNames]
+1=%DiskName%,xhciuas.sys,,
+
+[SourceDisksFiles]
+xhciuas.sys=1
+xhciuas.inf=1
+
+[DestinationDirs]
+DefaultDestDir=10
+Uas.CopyFiles=10,System32\Drivers
+Inf.CopyFiles=17
+
+; --- Windows 98 SE and ME ---------------------------------------------------
+
+[Uas.Dev]
+AddReg=Uas.AddReg
+CopyFiles=Uas.CopyFiles
+
+[Uas.AddReg]
+HKR,,DevLoader,,*NTKERN
+HKR,,NTMPDriver,,xhciuas.sys
+
+; The device's hardware key (Enum\USB\...): NUSB's own value, REG_SZ.
+[Uas.Dev.HW]
+AddReg=Uas.HW.AddReg
+
+[Uas.HW.AddReg]
+HKR,,upperfilters,0,"USBNTMAP.SYS"
+
+; --- Windows 2000 and every later NT target ---------------------------------
+
+[Uas.Dev.NTx86]
+CopyFiles=Uas.CopyFiles
+
+[Uas.Dev.NTx86.Services]
+AddService=xhciuas,0x00000002,Uas.AddService
+
+[Uas.AddService]
+DisplayName=%UasSvcDesc%
+ServiceType=1                       ; SERVICE_KERNEL_DRIVER
+StartType=3                         ; SERVICE_DEMAND_START
+ErrorControl=1                      ; SERVICE_ERROR_NORMAL
+ServiceBinary=%12%\xhciuas.sys
+LoadOrderGroup=Base
+
+; --- Files ------------------------------------------------------------------
+
+; No temporary-file field (xhci98.inf's xhci98.tmp): that is the 9x engine's
+; replace-a-loaded-file route, through WININIT.INI and a restart, and at a
+; first install this driver is not loaded, so it would only cost a restart.
+[Uas.CopyFiles]
+xhciuas.sys
+
+[Inf.CopyFiles]
+xhciuas.inf
+
+; Right-click Install pre-stages the driver with no device present.
+[DefaultInstall]
+CopyFiles=Inf.CopyFiles,Uas.CopyFiles
+
+[DefaultInstall.NTx86]
+CopyFiles=Uas.CopyFiles
+
+[Strings]
+Provider="Yeo Kheng Meng"
+Mfg="xHCI98 Project"
+DiskName="xhci98 xHCI Host Controller Disk"
+UasDesc="xHCI98 USB Attached SCSI Storage"
+UasSvcDesc="xHCI98 USB Attached SCSI Class Driver (xhciuas)"
