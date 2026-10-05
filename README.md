@@ -259,7 +259,7 @@ A value outside `10`-`4000` is replaced by `4000`, not rounded to the nearest li
 - `160` gave 211 MB/s write and 221 MB/s read.
 - `40` added only 1 to 3% more.
 
-Feel free to tune it. Raise it towards `4000` (or delete it) if you get audio stutter or instability under load. At `160`, Full-Speed audio played without stutter on real hardware under Windows 98 SE while a drive was read at full speed.
+Feel free to tune it. Raise it towards `4000` (or delete it) if you get audio stutter or instability under load.
 
 ### Forcing Bulk-Only instead of UAS
 
