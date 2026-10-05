@@ -633,7 +633,7 @@ the deadline conversion, the phase split or the cross-references.
 
 ## 14. What changes in the documents
 
-Task 36.3, the docs of Phases 34 to 36: `implementation-invariants.md`,
+Task 36.3, the docs of Phases 35 and 36: `implementation-invariants.md`,
 "Interrupt Delivery" (a pin-0 controller polled, not refused);
 `architecture.md`'s statement of line-based delivery; the release notes'
 "Controller" row and a row for the switch; the acceptance test's step 3 and

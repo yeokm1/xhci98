@@ -567,11 +567,11 @@ controller was ever enumerated at another PCI slot can have more than one
 such key: the device's own `Driver` value, under `Enum\PCI`, names the one in
 use. `XHCISNAP -verbosity` finds it for you.
 
-Since `2.2.0.0` the install writes all seven: each at the driver's own
+Since `2.1.1.0` the install writes all seven: each at the driver's own
 default, except `XhciImodInterval250ns` at `160`. Each is written only where
 it is missing, so a value you changed survives an install or update; to go
 back to the default, set it by hand, or delete the value and update the
-driver. Until `2.2.0.0` every install wrote all of them again. A machine
+driver. Until `2.1.1.0` every install wrote all of them again. A machine
 updated straight from `1.2.0.0` keeps that release's `XhciImodInterval250ns`
 of `500`, not `160`; set it by hand. One that went through `2.0.0.0` or
 `2.1.0.0` already holds `160`.
@@ -613,7 +613,7 @@ or delete it.
 `1` makes every storage device on that controller that offers both
 transports use Bulk-Only (Windows' own `usbstor.sys`) instead of UAS. `0` or
 absent, the default, means UAS wherever the device offers it. Since
-`2.2.0.0` the install writes `0`.
+`2.1.1.0` the install writes `0`.
 
 It is read each time a device enumerates, so unplug and replug the device
 after changing it. On Windows 2000 and later, a device already installed
@@ -624,7 +624,7 @@ the NT targets.
 
 ### XhciFastPollFsLs: Low- and Full-Speed polling above 1000 Hz
 
-New in `2.1.0.0` and off by default; since `2.2.0.0` the install writes `0`. It lets a Low-
+New in `2.1.0.0` and off by default; since `2.1.1.0` the install writes `0`. It lets a Low-
 or Full-Speed mouse on a root port be polled faster than 1000 Hz, at the
 rates hidusbf offers for that under Windows 8 and later, using hidusbf's own
 numbers: the device is set in hidusbf to "31 Hz" or "62 Hz", and this value
@@ -660,7 +660,7 @@ New in `2.1.0.0`. When the root hub, or an external hub, first reports its
 devices to Windows after it starts, the driver first waits for the devices
 already plugged in to be ready, so that they are in that first report.
 Windows 2000's text-mode Setup uses only the devices in it. The wait ends as
-soon as the devices are ready. Since `2.2.0.0` the install writes both at
+soon as the devices are ready. Since `2.1.1.0` the install writes both at
 their defaults.
 
 | Value | Default | Meaning |
