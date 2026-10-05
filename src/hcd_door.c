@@ -1384,6 +1384,16 @@ static NTSTATUS hcdDoorDescriptor(PHCD_CONTROLLER hc,
             return STATUS_INVALID_PARAMETER;
         }
         n = c.ConfigBytes;
+        /* Task 34.2: usbui.dll's Power tab (request code 0) shows bMaxPower
+         * times 2 at every speed, so a SuperSpeed device read a quarter of
+         * its current. Its copy alone is rewritten; GET_DESCRIPTOR (6), the
+         * cached descriptor and the length returned are the device's own. */
+        if (request == 0 && n > XHCI_DESC_OFF_MAX_POWER) {
+            buf[HCD_DESC_REQUEST_BYTES + XHCI_DESC_OFF_MAX_POWER] =
+                (UCHAR)XhciDescPowerTabByte(
+                    buf[HCD_DESC_REQUEST_BYTES + XHCI_DESC_OFF_MAX_POWER],
+                    c.SpeedClass);
+        }
     } else if (value == 0x0100UL) {
         hcdDoorConnection(hc, node->Parent, hcdDoorLocation(node, port), &c,
                           NULL, 0, 0);

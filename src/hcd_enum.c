@@ -1796,6 +1796,23 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
             hcdCopy(p->Device->Config, s, bytes);
             p->Device->ConfigLength = bytes;
             XHCI_DBG_VALUE("hcd: configuration descriptor, bytes", bytes);
+            /* Task 34.2: the Power tab cannot show a SuperSpeed device's
+             * current above 510 mA, so XHCISNAP's log carries the exact
+             * one, after the device's ids. */
+            speedClass = XHCI_SPEED_UNKNOWN;
+            (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, p->Device->Port,
+                                     p->Device->Speed, &speedClass);
+            if (speedClass == XHCI_SPEED_SUPER &&
+                bytes > XHCI_DESC_OFF_MAX_POWER) {
+                XhciLogNote(&hc->Hc, "dev.ss.vidpid",
+                            ((ULONG)p->Device->DeviceDesc[9] << 24) |
+                                ((ULONG)p->Device->DeviceDesc[8] << 16) |
+                                ((ULONG)p->Device->DeviceDesc[11] << 8) |
+                                (ULONG)p->Device->DeviceDesc[10]);
+                XhciLogNote(&hc->Hc, "dev.ss.maxpower.ma",
+                            XhciDescMaxPowerMa(s[XHCI_DESC_OFF_MAX_POWER],
+                                               speedClass));
+            }
         }
         return 1;
 

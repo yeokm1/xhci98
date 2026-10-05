@@ -1769,7 +1769,18 @@ against the `#pragma pack(1)` structures of `usbioctl.h`):
   guests show.
 - `UsbItem::ComputePower`: a bus-powered hub costs `(ports + 1) * 100` mA,
   capped at 500 above four ports; any other device costs `bMaxPower * 2` from
-  the configuration descriptor fetched with `0x220410`.
+  the configuration descriptor fetched with `0x220410`. At SuperSpeed
+  bMaxPower is in 8 mA units (USB 3.2 Table 9-23; `xhci-data-structures.md`
+  section 10.7), so the page showed a quarter of the current: 224 mA for a
+  device UsbTreeView reads at 896 mA under Windows 11 (owner, P14s Gen 1,
+  2026-10-05; roadmap-hcd task 34.2). Since then the door rewrites the byte
+  in usbui's copy alone - request code 0, configuration 0, a SuperSpeed
+  connection - to the current in 2 mA units held to 0FFh
+  (`XhciDescPowerTabByte`), so the page shows the true current up to 510 mA
+  and 510 mA above it. GET_DESCRIPTOR (code 6), the cached descriptor and
+  the length returned are the device's own, and the bus logs each
+  SuperSpeed device's exact current at enumeration (`dev.ss.vidpid`,
+  `dev.ss.maxpower.ma`), which `XHCISNAP` prints.
 - Per connection: `ConnectionStatus`, `DeviceDescriptor`, `DeviceIsHub`
   (+0x18), and on Vista and 7 `Speed` (+0x17; `IsHighSpeed` tests `== 2`).
 - The driver key per connection (`0x220420`), mapped to a devnode by

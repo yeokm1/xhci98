@@ -527,4 +527,23 @@ XHCI_C_ASSERT(desc_interface_head_fits,
 XHCI_C_ASSERT(desc_config_value_fits,
               XHCI_DESC_OFF_CONFIG_VALUE < XHCI_DESC_HEAD_BYTES);
 
+/*
+ * bMaxPower, the configuration descriptor's byte at offset 8: 2 mA units
+ * below SuperSpeed and 8 mA units at it (xhci-data-structures.md section
+ * 10.7; roadmap-hcd task 34.2). `speedClass` is an XHCI_SPEED_* value.
+ */
+#define XHCI_DESC_OFF_MAX_POWER     8U
+#define XHCI_DESC_POWER_TAB_MAX     0xFFUL
+
+/* The current bMaxPower declares, in mA, at the speed the device runs at. */
+ULONG XhciDescMaxPowerMa(ULONG bMaxPower, ULONG speedClass);
+
+/*
+ * The bMaxPower to hand usbui.dll's Power tab, which shows the byte times 2
+ * at every speed (design record 13 section 8.3): the device's own below
+ * SuperSpeed; at it, the current in 2 mA units held to 0FFh, so the tab
+ * reads the true current up to 510 mA and 510 mA for anything above.
+ */
+ULONG XhciDescPowerTabByte(ULONG bMaxPower, ULONG speedClass);
+
 #endif /* XHCI_DESC_H */

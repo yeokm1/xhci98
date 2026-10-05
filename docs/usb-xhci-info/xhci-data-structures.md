@@ -1955,6 +1955,14 @@ Table 9-29, USB 3.2 p.369-370; verified): wReserved at 2, dwBytesPerInterval
 at 4. Returned only above Gen 1 speed, for each isochronous endpoint that
 needs more than 48K bytes per service interval.
 
+Configuration descriptor, bMaxPower at offset 8 (9.6.3, Table 9-23, USB 3.2
+p.360-361; verified 2026-10-05, roadmap-hcd task 34.2): "Expressed in 2 mA
+units when the device is operating in high-speed mode and in 8 mA units when
+operating at Gen X speed (i.e., 50 = 100 mA when operating at highspeed and
+50 = 400 mA when operating at Gen X speed)". So 0FFh is 510 mA below
+SuperSpeed and 2040 mA at it; a device reports one value per speed it runs
+at, so the unit follows the speed the device is running at now.
+
 ### 10.8 Link states and the fallen-back upstream port (USB 3.2 7.5, 7.5.1, 10.18.1)
 
 USB 3.2 link states (7.5, USB 3.2 p.159; verified): U0, U1, U2, U3, Rx.Detect,

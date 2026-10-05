@@ -1318,8 +1318,46 @@ static void testEndToEnd(void)
 
 /* ------------------------------------------------------------------ */
 
+/* Task 34.2: bMaxPower's unit by speed (USB 3.2 Table 9-23), and the byte
+ * the Power tab is handed, which it shows times 2. */
+static void testMaxPower(void)
+{
+    CHECK_EQ(XhciDescMaxPowerMa(0x32, XHCI_SPEED_HIGH), 100,
+             "50 is 100 mA at High Speed (Table 9-23's own example)");
+    CHECK_EQ(XhciDescMaxPowerMa(0x32, XHCI_SPEED_SUPER), 400,
+             "50 is 400 mA at Gen X speed");
+    CHECK_EQ(XhciDescMaxPowerMa(0x70, XHCI_SPEED_SUPER), 896,
+             "the owner's stick, 896 mA under Windows 11");
+    CHECK_EQ(XhciDescMaxPowerMa(0xFA, XHCI_SPEED_FULL), 500,
+             "Full Speed is in 2 mA units");
+    CHECK_EQ(XhciDescMaxPowerMa(0xFF, XHCI_SPEED_SUPER), 2040,
+             "the largest SuperSpeed value");
+    CHECK_EQ(XhciDescMaxPowerMa(0x132, XHCI_SPEED_SUPER), 400,
+             "only the byte is read");
+
+    CHECK_EQ(XhciDescPowerTabByte(0x32, XHCI_SPEED_HIGH), 0x32,
+             "below SuperSpeed the byte is the device's own");
+    CHECK_EQ(XhciDescPowerTabByte(0xFA, XHCI_SPEED_LOW), 0xFA,
+             "Low Speed untouched");
+    CHECK_EQ(XhciDescPowerTabByte(0x00, XHCI_SPEED_SUPER), 0,
+             "a self-powered device's 0 stays 0");
+    CHECK_EQ(XhciDescPowerTabByte(0x0C, XHCI_SPEED_SUPER), 0x30,
+             "96 mA reads 96 mA");
+    CHECK_EQ(XhciDescPowerTabByte(0x3F, XHCI_SPEED_SUPER), 0xFC,
+             "504 mA, the last exact value, reads 504 mA");
+    CHECK_EQ(XhciDescPowerTabByte(0x40, XHCI_SPEED_SUPER), 0xFF,
+             "512 mA saturates at 510 mA");
+    CHECK_EQ(XhciDescPowerTabByte(0x70, XHCI_SPEED_SUPER), 0xFF,
+             "the owner's 896 mA stick reads 510 mA");
+    CHECK_EQ(XhciDescPowerTabByte(0xFF, XHCI_SPEED_SUPER), 0xFF,
+             "the largest value saturates");
+    CHECK_EQ(XhciDescPowerTabByte(0x70, XHCI_SPEED_UNKNOWN), 0x70,
+             "an unknown speed is left as the device gave it");
+}
+
 int main(void)
 {
+    testMaxPower();
     testSnoopSelection();
     testAudioConfiguration();
     testOnlyIsochronousIsKept();
