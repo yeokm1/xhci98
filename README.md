@@ -204,9 +204,9 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 
 `NNNN` is the subkey whose `DriverDesc` is "xHCI98 USB 3.x eXtensible Host Controller". The number varies from machine to machine.
 
-| Value | What it sets | Minimum | Maximum | Written by the install | Default when absent |
+| Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
 |---|---|---|---|---|---|
-| `XhciImodInterval250ns` | The interrupt moderation interval | `10` | `4000` | `160` | `4000` |
+| `XhciImodInterval250ns` | The interrupt moderation interval | `10` | `4000` | `4000` | `160` |
 | `XhciForceBulkOnly` | Bulk-Only instead of UAS | `0` | `1` | `0` | `0` |
 | `XhciFastPollFsLs` | A root-port Low- or Full-Speed mouse polled above 1000 Hz | `0` | `3` | `0` | `0` |
 | `XhciFirstEnumWaitMs` | The longest wait for a hub's first report | `0` | `30000` | `5000` | `5000` |
