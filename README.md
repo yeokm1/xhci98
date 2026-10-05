@@ -171,20 +171,19 @@ After upgrading you can delete the `1.2.0.0` virtual-hub values `XhciVirtualHSHu
 
 After the upgrade every device is a new Device Manager entry, so a setting kept on a device's own entry, such as SweetLow's hidusbf polling rate, has to be applied again.
 
-### Updating from 2.0.0.0
+### Updating from 2.y.y.y
+Install the new version over the old one with Update Driver on "xHCI98 USB 3.x eXtensible Host Controller", pointed at the `release-x86\` or `release-x64\` directory. No file needs renaming, since neither `2.x` release uses NUSB's `usbport.sys`.
 
-Install over it with Update Driver on "xHCI98 USB 3.x eXtensible Host Controller", pointed at the `release-x86\` or `release-x64\` directory. No file needs renaming, since neither `2.x` release uses NUSB's `usbport.sys`.
-
-- **Windows 98 SE and ME: restart afterwards, although Windows does not ask.** The new file waits to replace the old one at the next start, and until then `2.0.0.0` keeps running. Under SweetLow's stack the controller may show a problem for a minute or two after Finish. On ME it shows one until the restart, while the devices keep working.
-- **Windows 2000: use Have Disk.** Letting Windows search answers that a suitable driver is already installed and keeps `2.0.0.0`. Use "Display a list of the known drivers" -> Have Disk, as in the steps above.
+- **Windows 98 SE and ME: restart afterwards, although Windows does not ask.** The new file waits to replace the old one at the next start, and until then the old driver keeps running. Under SweetLow's stack the controller may show a problem for a minute or two after Finish. On ME it shows one until the restart, while the devices keep working.
+- **Windows 2000: use Have Disk.** Letting Windows search answers that a suitable driver is already installed and keeps the old one. Use "Display a list of the known drivers" -> Have Disk, as in the steps above.
 - **XP, XP x64, Vista and 7**: the update takes effect at once with no restart, after one unsigned-driver warning.
 
-Afterwards the root hub's Driver tab still shows `2.0.0.0` (on 98 SE and ME, its date), although it runs the new file. To change it, run Update Driver on "xHCI98 USB 3.x Root Hub" too:
+Afterwards the root hub's Driver tab still shows the old version (on 98 SE and ME, its date), although it runs the new file. To change it, run Update Driver on "xHCI98 USB 3.x Root Hub" too:
 
-- On Vista and 7, "Let me pick from a list of device drivers on my computer" and the `2.1.0.0` entry. Searching does not always find it.
+- On Vista and 7, "Let me pick from a list of device drivers on my computer" and the new version's entry. Searching does not always find it.
 - Elsewhere, Have Disk.
 
-Each device is found once more as new hardware, exactly once: a stick under its serial number, the other devices under a new id. Let Windows install them.
+From `2.0.0.0` only, each device is found once more as new hardware, exactly once: a stick under its serial number, the other devices under a new id. Let Windows install them.
 
 - On the NT systems this needs no answer.
 - On Windows 98 SE the wizard runs for each and may ask for the CD for `hidclass.sys`.

@@ -3403,9 +3403,10 @@ being unsigned, and no change to this driver can remove them:
     own USB stack. Wait for the install to finish before unplugging.
 
   * A SUPERSPEED DEVICE DECLARING MORE THAN 510 mA READS 510 mA on the
-    Power tab: the value the page reads cannot count past 510 mA. With
+    Power tab (a bus-powered hub is charged (ports + 1) x 100 mA, at most
+    500 mA, instead): the value the page reads cannot count past 510 mA. With
     XhciLogVerbosity at 2, XHCISNAP's report gives the exact figure as
-    dev.ss.maxpower.ma, in hexadecimal mA. (Up to 2.1.0.0 every SuperSpeed
+    dev.ss.maxpower.ma, in hexadecimal mA. (Under 2.1.0.0 every SuperSpeed
     device read a quarter of its draw there.)
 
   * INTEL 7-, 8- AND 9-SERIES CHIPSETS: A DEVICE ON A BLUE CONNECTOR MOVES

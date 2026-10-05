@@ -244,9 +244,11 @@ nothing itself.
   `IRP_MN_READ_CONFIG` / `IRP_MN_WRITE_CONFIG` service the start's own reads
   use, so **no new import**. It is the HCD's second configuration-space writer
   after the quiesce path's Bus Master Enable, and `xhci_hw.h`'s contract says
-  so. Whether Windows 98's PCI bus driver honours `IRP_MN_WRITE_CONFIG` above
-  the header is unread; the read-backs in the log are how a tester's capture
-  answers it.
+  so. Windows 98's PCI bus driver honours `IRP_MN_WRITE_CONFIG` above the
+  header on one machine: on the B490 under Windows 98 SE with NUSB every write
+  was accepted and each read-back equalled its mask (section 10). Other
+  systems and chipsets are unread, and the read-backs in the log are how a
+  capture answers it there.
 - **IRQL and locks.** That service sends an IRP and waits, so every call is
   at PASSIVE_LEVEL and under no spin lock: the start and stop hold the door
   gate, and the D0 paths the power gate, both waitable events.

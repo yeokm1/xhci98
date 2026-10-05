@@ -47,6 +47,8 @@ On each machine, before the leg:
 Reading taken before the fix (owner, 2026-10-05): a SuperSpeed bus-powered
 device that UsbTreeView reads at 896 mA under Windows 11 (bMaxPower 0x70)
 read 224 mA on the Power tab under `2.1.0.0` on Windows 98 SE, a quarter.
+The reading after the fix below was also on Windows 98 SE (owner,
+2026-10-05).
 
 Use devices, not hubs, for clauses 1 to 3: the page costs a bus-powered hub
 as (ports + 1) x 100 mA, capped at 500, whatever its descriptor says

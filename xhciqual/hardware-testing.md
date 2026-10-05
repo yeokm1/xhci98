@@ -709,8 +709,9 @@ Why this class gets its own note: the 7-, 8- and 9-series PCH and Wellsburg
 (C610/X99) are the last Intel parts carrying both EHCI and xHCI, so they are
 the only parts with the `XUSB2PR` EHCI-to-xHCI port mux; `quirks.c` marks the
 six device ids above `QF_XUSB2PR`. Skylake (100-series) and later Intel have no
-EHCI, the ports are hardwired to xHCI, and these registers do not exist; nor
-do they on modern AMD. So this is the only class of machine where the routing
+EHCI and the ports are wired to xHCI alone, so there is nothing to route;
+what offsets 0xD0 to 0xDC do on those parts, and on modern AMD, is unread
+here. So this is the only class of machine where the routing
 questions in the programming guide can be observed at all.
 
 Two safety rules from "Safety and preparation" are usually already satisfied
