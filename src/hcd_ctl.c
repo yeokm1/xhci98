@@ -221,7 +221,7 @@ ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc)
 /*
  * The second writer of configuration space beside the quiesce path's Bus
  * Master Enable (xhci_hw.h): four Intel-specific registers above the PCI
- * header, on the five controllers xhci_psw.h gates, through the same IRP
+ * header, on the controllers xhci_psw.h gates, through the same IRP
  * the reads take. IRQL: PASSIVE_LEVEL, as HcdSvcConfigSpace.
  */
 static ULONG hcdPswRead(PVOID context, ULONG offset, PULONG value)
@@ -282,8 +282,8 @@ VOID HcdPswRoute(PHCD_CONTROLLER hc)
  * Every connector back to EHCI, as Linux's usb_disable_xhci_ports: at the
  * stop once the controller has halted, at a refused start, and at the D3 of
  * a system shutdown, where Linux does it against a Panther Point, Lynx
- * Point-LP or Wildcat Point-LP machine powering itself back on. Done on all
- * five here, so a stopped or removed driver never leaves the connectors on
+ * Point-LP or Wildcat Point-LP machine powering itself back on. Done on
+ * every gated controller here, so a stopped or removed driver never leaves the connectors on
  * an xHCI nothing drives. IRQL: PASSIVE_LEVEL.
  */
 VOID HcdPswRelease(PHCD_CONTROLLER hc)

@@ -14,9 +14,13 @@
 
 /* Panther Point, Lynx Point, Lynx Point-LP, Wildcat Point, Wildcat
  * Point-LP: the 7-, 8- and 9-series PCH xHCI (Linux xhci-pci.c's
- * PCI_DEVICE_ID_INTEL_* for the -LP parts; xhciqual's quirks.c rows). */
+ * PCI_DEVICE_ID_INTEL_* for the -LP parts; xhciqual's quirks.c rows); and
+ * Wellsburg, the C610/X99 PCH, which ships the same EHCI beside its xHCI
+ * (xhciqual's QF_XUSB2PR row; owner, 2026-10-05). Linux's rule would also
+ * reach any other Intel part with an EHCI; none is listed without a
+ * reading of its own. */
 static const USHORT xhciPswDevices[] = {
-    0x1E31, 0x8C31, 0x9C31, 0x8CB1, 0x9CB1
+    0x1E31, 0x8C31, 0x9C31, 0x8CB1, 0x9CB1, 0x8D31
 };
 
 ULONG XhciPswGate(ULONG vendorDevice)

@@ -3,7 +3,8 @@
  * (roadmap-hcd.md task 34.4).
  *
  * On the 7-, 8- and 9-series PCH (Panther Point, Lynx Point, Wildcat Point,
- * and the -LP parts of the last two) each switchable connector is wired to
+ * and the -LP parts of the last two), and on Wellsburg (C610/X99), each
+ * switchable connector is wired to
  * both the EHCI and the xHCI controller, and four registers in the xHCI's
  * own PCI configuration space choose which one has it: USB3_PSSEN turns on
  * the connector's SuperSpeed terminations under xHCI, XUSB2PR routes its USB
@@ -19,7 +20,8 @@
  *
  * The gate is the device-id list, not Linux's rule (any Intel xHCI with an
  * Intel EHCI on the bus), which needs a PCI scan the HCD does not have
- * (owner, 2026-10-05). The one board Linux exempts by subsystem id, a Sony
+ * (owner, 2026-10-05). Nor every Intel xHCI: from the 100-series on there is
+ * no EHCI, and what these offsets do there is unread. The one board Linux exempts by subsystem id, a Sony
  * VAIO T-series that "is not capable of switching ports", is exempted here
  * too. The switch is the XhciIntelPortSwitch value: only an explicit 0 turns
  * it off; absent, of another type or any other number, it is on (owner,
@@ -79,7 +81,7 @@ typedef struct _XHCI_PSW_STATE {
 } XHCI_PSW_STATE, *PXHCI_PSW_STATE;
 
 /* 1 when PCI offset 0's vendor/device dword names a controller with the
- * mux: Intel 1E31, 8C31, 9C31, 8CB1 or 9CB1. */
+ * mux: Intel 1E31, 8C31, 9C31, 8CB1, 9CB1 or 8D31. */
 ULONG XhciPswGate(ULONG vendorDevice);
 
 /* 1 when PCI offset 0x2C's subsystem dword names a board that cannot

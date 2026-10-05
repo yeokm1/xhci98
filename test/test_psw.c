@@ -127,8 +127,9 @@ static void test_gate(void)
     CHECK_EQ(XhciPswGate(0x9CB18086UL), 1, "Wildcat Point-LP");
 
     CHECK_EQ(XhciPswGate(0x000D1B36UL), 0, "QEMU's xHCI writes nothing");
-    CHECK_EQ(XhciPswGate(0x8D318086UL), 0,
-             "Wellsburg is not on the owner's list");
+    CHECK_EQ(XhciPswGate(0x8D318086UL), 1, "Wellsburg (C610/X99)");
+    CHECK_EQ(XhciPswGate(0x02ED8086UL), 0,
+             "Comet Lake-LP has no EHCI to switch from");
     CHECK_EQ(XhciPswGate(0x9D2F8086UL), 0,
              "Sunrise Point-LP has no EHCI to switch from");
     CHECK_EQ(XhciPswGate(0xA12F8086UL), 0, "Sunrise Point-H");
