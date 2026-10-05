@@ -112,7 +112,8 @@ on both primary targets. Phase 27 brings external USB 2.0 hubs inside the
 bus. Phase 28 takes the seven other guests, the amd64 build and the bench.
 Phase 29 is SuperSpeed on root ports, Phase 30 SuperSpeed hubs, Phase 31
 streams and UAS, and Phase 32 the `2.0.0.0` cut; Phase 33 is the first
-update, `2.1.0.0`, and Phase 34 selective suspend. The order is deliberate:
+update, `2.1.0.0`, and Phase 34 the second, `2.2.0.0`, with selective suspend.
+The order is deliberate:
 parity first, because round 12's device matrix and the acceptance test are a
 free oracle for everything USB 2.0; SuperSpeed before hubs, because root-port
 storage is what a user plugs in first; UAS last, because it needs streams and
@@ -539,20 +540,23 @@ Records: `releases/history.md`; `releases/2.1.0.0/`;
 
 ---
 
-## Phase 34 - Selective Suspend
+## Phase 34 - Release `2.2.0.0`: Selective Suspend, Standby Resume and Device Manager Fixes
 
 Goal: the bus suspends a device when Windows asks for it - a function's
 D-state in S0, or the idle notification on XP onward - and wakes it on D0 or
 on the device's remote wake, never on a timer of its own; USB 2.0 devices
 (stage A) and SuperSpeed devices (stage B), in one release. With them, the
 first standby and hibernate resume readings under the HCD (34.9), which the
-suspend design rests on, and two Device Manager figures (34.8, 34.10).
+suspend design rests on, two Device Manager figures (34.8, 34.10), and the
+Windows 98 SE audio-load wedge re-measured against the new capabilities
+(34.11).
 
-Status: open since 2026-10-05, on branch `2.1.1.0` (the release number is
-the owner's at the cut). Design record 14 (`design/14-selective-suspend.md`)
-is the design; stage A's half converged with Codex over ten review rounds
-(`b2d03d5`). Stage A is built on `p34-ss`, stage B on `p34-ss3`, both merged
-into `2.1.1.0`.
+Status: open since 2026-10-05, on branch `2.2.0.0` (opened as `2.1.1.0`,
+renamed by the owner the same day: a default-on feature for every user is a
+second-digit release, as `2.1.0.0` was for hubs). Design record 14
+(`design/14-selective-suspend.md`) is the design; stage A's half converged
+with Codex over ten review rounds (`b2d03d5`). Stage A is built on `p34-ss`, stage B on `p34-ss3`, both merged
+into `2.2.0.0`.
 
 Why a phase: it lifts the idle-policy limitation carried since `2.0.0.0`
 (decisions table, "The idle power policy (28.3)"), turns on code paths no
