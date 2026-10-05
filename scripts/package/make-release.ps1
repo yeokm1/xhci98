@@ -1547,6 +1547,27 @@ $gateOut
         }
     }
 
+    # **Every file is dated the release's date, at noon.** Windows 98 SE's
+    # Driver tab shows the driver file's own date, not the INF's DriverVer
+    # (the 2.1.1.0 asset legs: 10-5-2026 from a build at 23:23 the evening
+    # before a cut dated 10/06/2026, where ME and every NT system read the
+    # INF), and the archive carries each file's modification time to whoever
+    # unpacks it. The date is the upload set's own INFs' DriverVer, which
+    # every published release declares once, so -UploadSetOnly dates an old
+    # release by that release; noon keeps the day whatever an unpacker makes
+    # of the archive's zoneless times. The bytes are untouched.
+    $infDates = @(Get-ChildItem -LiteralPath $uploadRoot -Filter '*.inf' -File -Recurse |
+                  ForEach-Object { Get-InfDriverDate -Path $_.FullName } | Sort-Object -Unique)
+    if ($infDates.Count -ne 1) {
+        throw "the assembled upload set's INFs declare $($infDates.Count) DriverVer dates ($($infDates -join ', ')), not one: the release has no single date to give its files."
+    }
+    $fileStamp = [datetime]::ParseExact($infDates[0], 'yyyy-MM-dd',
+        [Globalization.CultureInfo]::InvariantCulture).AddHours(12)
+    foreach ($item in (Get-ChildItem -LiteralPath $uploadRoot -File -Recurse)) {
+        $item.LastWriteTime = $fileStamp
+    }
+    Write-Ok ("every file dated {0:yyyy-MM-dd HH:mm}, the INFs' DriverVer date" -f $fileStamp)
+
     if (Test-Path -LiteralPath $uploadZip) {
         Remove-Item -LiteralPath $uploadZip -Force
     }
@@ -2710,7 +2731,10 @@ other.
       on an ordinary start, but the drivers run only while driver signature
       enforcement is disabled, at every start, as they are unsigned;
       otherwise the controller shows Code 39 and nothing on it works.
-      Windows XP x64 needs none of that.
+      After each install the Program Compatibility Assistant may say
+      "Windows requires a digitally signed driver"; the driver still loads
+      on a start with enforcement disabled. Windows XP x64 needs none of
+      that.
 "@
         $readmeArchFiles = @"
 
@@ -3267,8 +3291,10 @@ Things specific to this driver, worth knowing in advance:
     answer, on Windows XP with the Found New Hardware wizard and the
     unsigned-driver warning (Continue Anyway) for each newly plugged hub.
     Disabling and enabling a hub in Device Manager brings back the devices
-    behind it (read on 98 SE, 2000, XP). The driver still runs every hub
-    itself.
+    behind it (read on 98 SE, 2000, XP). While a drive behind the hub is
+    open in Explorer, Windows refuses the disable, asks for a restart and
+    leaves the hub running; close the window first (read on Vista). The
+    driver still runs every hub itself.
 
   * A DEVICE WITH A SERIAL NUMBER KEEPS ITS ENTRY ON ANY PORT. Moved to
     another port or behind a hub, it is not found again as new hardware.

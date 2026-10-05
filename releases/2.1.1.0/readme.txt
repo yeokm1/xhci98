@@ -388,7 +388,10 @@ CD, a shared folder - then:
       on an ordinary start, but the drivers run only while driver signature
       enforcement is disabled, at every start, as they are unsigned;
       otherwise the controller shows Code 39 and nothing on it works.
-      Windows XP x64 needs none of that.
+      After each install the Program Compatibility Assistant may say
+      "Windows requires a digitally signed driver"; the driver still loads
+      on a start with enforcement disabled. Windows XP x64 needs none of
+      that.
 
 It installs as "xHCI98 USB 3.x eXtensible Host Controller", with "xHCI98
 USB 3.x Root Hub" underneath it. Neither should carry a warning mark.
@@ -563,8 +566,10 @@ Things specific to this driver, worth knowing in advance:
     answer, on Windows XP with the Found New Hardware wizard and the
     unsigned-driver warning (Continue Anyway) for each newly plugged hub.
     Disabling and enabling a hub in Device Manager brings back the devices
-    behind it (read on 98 SE, 2000, XP). The driver still runs every hub
-    itself.
+    behind it (read on 98 SE, 2000, XP). While a drive behind the hub is
+    open in Explorer, Windows refuses the disable, asks for a restart and
+    leaves the hub running; close the window first (read on Vista). The
+    driver still runs every hub itself.
 
   * A DEVICE WITH A SERIAL NUMBER KEEPS ITS ENTRY ON ANY PORT. Moved to
     another port or behind a hub, it is not found again as new hardware.
