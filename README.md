@@ -227,6 +227,18 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 
 `NNNN` is the subkey whose `DriverDesc` is "xHCI98 USB 3.x eXtensible Host Controller". The number varies from machine to machine.
 
+| Value | What it sets | Written by the install | Default when absent |
+|---|---|---|---|
+| `XhciImodInterval250ns` | The interrupt moderation interval | Yes, `160` | `4000` |
+| `XhciForceBulkOnly` | Bulk-Only instead of UAS | No | `0`, UAS where offered |
+| `XhciFastPollFsLs` | A root-port Low- or Full-Speed mouse polled above 1000 Hz | No | Off |
+| `XhciFirstEnumWaitMs` | The longest wait for a hub's first report | No | `5000` |
+| `XhciFirstEnumPortMs` | The longest one port may hold that wait | No | `2000` |
+| `XhciLogVerbosity` | The driver's log, read by `XHCISNAP` | Yes, `0` | `0`, off |
+| `XhciLogDebugView` | The log sent to DebugView as well | Yes, `0` | `0`, off |
+
+The two log values are described in the [release notes](docs/using/release-notes.md), "The log, and how to send one". The others are described below.
+
 ### The interrupt moderation interval
 
 `XhciImodInterval250ns` is in **units of 250 ns**. It sets how long the controller waits after one interrupt before raising the next. A shorter interval makes USB storage faster at the cost of more interrupts.
