@@ -35,28 +35,6 @@ Neither has native xHCI support at all so even basic devices like keyboards, mic
 
 This project attempts to fill that gap.
 
-## What's new in 2.1.0.0
-
-`2.1.0.0`, released on 2026-10-05, is the first update of the `2.x` driver. [releases/history.md](releases/history.md) has the full list and the [release notes](docs/using/release-notes.md) the details.
-
-- External hubs appear in Device Manager as "xHCI98 USB Hub", with the devices behind them nested beneath. A USB 3 hub appears twice, the second time as "xHCI98 USB 3.x Hub" for its SuperSpeed half. Each hub has a Power tab.
-- A device with a serial number keeps its Device Manager entry when moved to another port, as under Microsoft's own hub driver.
-- A device that none of Windows' own INFs names is listed under its own product name instead of "USB Device", in Windows 98's Add New Hardware wizard and in Device Manager. Where a Windows INF names the device, its name shows, as over Microsoft's own stack. On Windows 98 SE and ME, characters outside plain ASCII show as `?`.
-- Fixed: on Windows ME, re-enabling the controller with a USB mouse attached hung the machine.
-- Fixed: the root hub's Power tab showed every device's power as unknown.
-- `txtsetup.oem`, so Windows 2000 and XP Setup, and their Recovery Console, can load the driver from a floppy at the F6 prompt (see "Installing Windows 2000 or XP, or using the Recovery Console" below).
-- `XhciFastPollFsLs`, an opt-in registry value for polling a Low- or Full-Speed mouse above 1000 Hz with SweetLow's hidusbf (see "Tuning" below). Untested ground.
-
-## From 1.2.0.0 to 2.0.0.0
-
-Up to `1.2.0.0`, `xhci98.sys` was a miniport underneath Windows' own `usbport.sys`. That stack predates USB 3.0, so the driver ran the controller's USB 2.0 ports only and a USB 3.0 device fell back to High Speed.
-
-`2.0.0.0` is a rewrite as a complete host controller driver. The same `xhci98.sys` file name now owns the controller, the root hub, every hub behind it and the splitting of composite devices, with no `usbport.sys`, `usbhub.sys` or `usbccgp.sys` involved. Windows' own class drivers (HID, `usbstor.sys`, USB audio, vendor drivers such as the ASIX Ethernet one) sit on top of it unchanged. UAS storage needs a class driver Windows 98 to 7 never had, so that is `xhciuas.sys`, shipped in the same package.
-
-In Device Manager the controller is "xHCI98 USB 3.x eXtensible Host Controller", with "xHCI98 USB 3.x Root Hub" beneath it and every USB device beneath that.
-
-The [roadmap](docs/contributing/roadmap-hcd.md) has the phases this took and [design record 13](docs/contributing/design/13-superspeed-hcd.md) the design.
-
 ## SuperSpeed and UAS
 
 <img src="images/xhci98-flash-speed-test.jpg" width="800">
