@@ -3446,11 +3446,6 @@ Untested ground:
     if it has no USB 2.0 port. Built from the specification; no such
     controller has been held.
 
-  * A USB 3 HUB'S SECOND ENTRY, "xHCI98 USB 3.x Hub", AND A HIGH-SPEED
-    HUB'S OWN ENTRY. Hub entries were read in virtual machines on QEMU's
-    USB 1.1 Full-Speed hub only; no virtual machine models a SuperSpeed or
-    a High-Speed hub, and neither entry was read on real hardware.
-
   * POLLING ABOVE 1000 HZ (XhciFastPollFsLs, section 9). Outside the xHCI
     specification, and read on no real controller and in no virtual
     machine.

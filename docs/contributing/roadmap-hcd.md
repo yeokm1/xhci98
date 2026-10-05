@@ -17,8 +17,7 @@ phase advances past an unobserved checkpoint.
 cut on 2026-10-04 and squash-merged to `main` as `4038447` ("2.0.0.0
 (#13)"); the owner benched it after the cut and reports no issue beyond the
 known limitations (Phase 28, 28-E.1). `2.1.0.0`, the first update, was cut
-on 2026-10-05 (Phase 33), with its polling-rate and USB 2.0 and 3.x hub
-readings owed to the bench. What comes next is "What is not on this
+on 2026-10-05 (Phase 33), with its polling-rate reading owed to the bench. What comes next is "What is not on this
 roadmap" below.
 
 **The miniport is frozen.** `1.2.0.0` is the last release of the miniport
@@ -518,7 +517,7 @@ user-facing statement.
 - [x] 33.1 the Windows ME controller re-enable fix: device PDOs stopped by an orderly controller stop kept dormant and revived at the same instance key, as `usbhub` does. Done 2026-10-05 (`a9a7577`; `docs/issues/09-me-controller-reenable-stopped-pdos.md`): ME re-enable 3 of 3 with a mouse, with a mouse and a stick, with a keyboard alone and with devices behind a hub; Windows 98 SE and 2000 disable and enable soaks 10 of 10 (`out\phase33\legs\results.md`)
 - [x] 33.2 a device's instance id from its serial number, `UniqueID` TRUE, the location form kept for a device with no valid serial. Done 2026-10-05 (`5ba775a`; design record 13 section 10.7; host vectors in `test_func`): a serial stick keeps one devnode across root ports, behind a hub and on a SuperSpeed port with no new hardware found; two sticks get two devnodes; a duplicate serial takes the location form
 - [x] 33.3 `txtsetup.oem` for Windows 2000, XP and XP x64. Done 2026-10-05 (`21c9e5f`, the first-enumeration wait `07ac963`; design record 13 sections 5.6 and 5.7): text mode and the Recovery Console pass on Windows 2000 and XP from the `release` package, with `XhciFirstEnumWaitMs` (5 s) and `XhciFirstEnumPortMs` (2 s per port) bounding the root hub's first answer; XP's GUI-mode prompts with a USB-only keyboard are a limitation (`docs/issues/10-xp-f6-gui-mode-usb-input.md`)
-- [x] 33.4 external hubs as devnodes under project-owned ids (`XHCI98\HUB`, `XHCI98\HUB30`), the devices behind them re-parented, the door's hub recursion answered. Done 2026-10-05 (`f4cf324`, the NT hub re-enable fix `862c108`, the Address fix `f8226d9`): hub devnodes, the tree by connection, a two-tier chain, hub unplug and replug, and hub disable and enable on 98 SE, 2000 and XP. High-Speed and SuperSpeed hubs are bench-only: QEMU's hub is USB 1.1
+- [x] 33.4 external hubs as devnodes under project-owned ids (`XHCI98\HUB`, `XHCI98\HUB30`), the devices behind them re-parented, the door's hub recursion answered. Done 2026-10-05 (`f4cf324`, the NT hub re-enable fix `862c108`, the Address fix `f8226d9`): hub devnodes, the tree by connection, a two-tier chain, hub unplug and replug, and hub disable and enable on 98 SE, 2000 and XP. QEMU's hub is USB 1.1, so a High-Speed hub's entry and a USB 3 hub's "xHCI98 USB 3.x Hub" were read by the owner on real hardware after the cut, and work
 - [x] 33.5 the Device Manager pages: the Power tab's descriptor request taken with `bRequest` 0, as every target's `usbui.dll` sends it. Done 2026-10-05 (`5586ed7`; design record 13 section 8.3): the Power tab shows mA on every target read. The Advanced tab's bandwidth counts only open isochronous pipes (98 SE to XP) or a WMI query the HCD does not serve (Vista and 7); both are in the release notes, and the audio reading was not taken
 - [x] 33.6 a device's name from its product, function or interface string, "USB Device" when there is none. Done 2026-10-05 (`9be8bbb`): the string is answered on driverless devices, in 98 SE's New Hardware Found and in Windows 7's bus-reported description; a class INF's name still wins, as under Microsoft's hub driver
 - [x] 33.7 SweetLow's hidusbf under the HCD. Done 2026-10-05 (the composite fix in `4b6fa60`, the Address fix `f8226d9`): the 1000, 500 and 250 Hz ladder programs Interval 3, 4 and 5 at a root port and behind a hub on 98 SE (NUSB 3.6 and stock), ME and XP; stock 98 SE's `usbd.sys` exports `USBD_ParseDescriptors` (`legal-provenance.md` section 4, corrected)
@@ -531,7 +530,7 @@ Checkpoint: 33.1's re-enable legs, 33.2's port moves, 33.4's hub legs,
 reviewed and off by default; the ten install legs read from the asset.
 
 The checkpoint **closed on 2026-10-05**. Owed to the bench: 33.8's polling
-rate and the High-Speed and SuperSpeed hub halves of 33.4.
+rate.
 
 Records: `releases/history.md`; `releases/2.1.0.0/`;
 `docs/using/release-notes.md`; `design/13-superspeed-hcd.md`;

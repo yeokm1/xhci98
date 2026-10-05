@@ -57,7 +57,7 @@ The [roadmap](docs/contributing/roadmap-hcd.md) has the phases this took and [de
 - `txtsetup.oem`, so Windows 2000 and XP Setup, and their Recovery Console, can load the driver from a floppy at the F6 prompt (see "Installing Windows 2000 or XP, or using the Recovery Console" below).
 - `XhciFastPollFsLs`, an opt-in registry value for polling a Low- or Full-Speed mouse above 1000 Hz with SweetLow's hidusbf (see "Tuning" below). Untested ground.
 
-Each item above except `XhciFastPollFsLs` was read in QEMU virtual machines, on the `2.1.0.0` code before the cut; the [release notes](docs/using/release-notes.md)' "Targets and their standing" says on which systems. The hub entries were read on QEMU's USB 1.1 Full-Speed hub only, so a High-Speed hub's entry and a USB 3 hub's "xHCI98 USB 3.x Hub" are untested ground. None of the changes has been read on real hardware.
+Each item above except `XhciFastPollFsLs` was read in QEMU virtual machines, on the `2.1.0.0` code before the cut; the [release notes](docs/using/release-notes.md)' "Targets and their standing" says on which systems. QEMU models only a USB 1.1 Full-Speed hub, so a High-Speed hub's entry and a USB 3 hub's "xHCI98 USB 3.x Hub" were read by the owner on real hardware after the cut, and work.
 
 ## SuperSpeed and UAS
 
@@ -300,8 +300,6 @@ These come from Windows, NUSB or the driver being unsigned, and no change to thi
 | SuperSpeed isochronous transfers | Built from the specification. No SuperSpeed isochronous device has been held and QEMU models none. |
 | SuperSpeedPlus (USB 3.1 Gen 2, USB 3.2 Gen 1x2 and Gen 2x2) | Accepted at its trained rate, built from the specification. Not read on any hardware: no Gen 2 device has been tested, so every mode is untested. |
 | A UAS-only drive at SuperSpeed on a controller without streams | It is sent back to its USB 2.0 port and runs UAS at High Speed, or is refused if it has no USB 2.0 port. Built from the specification; no such controller has been held. |
-| A USB 3 hub's second entry, "xHCI98 USB 3.x Hub" | No virtual machine models a SuperSpeed hub, so only real hardware can show it, and it was not read there for `2.1.0.0`. |
-| A High-Speed hub's own entry | Hub entries were read in virtual machines on QEMU's USB 1.1 Full-Speed hub only; a High-Speed hub, with its transaction translators, was not read as an entry of its own. |
 | Polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification. Not read on any real controller or in any virtual machine. |
 
 ## Toolchain and building

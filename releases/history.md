@@ -36,9 +36,9 @@ notes say what was read on which system.
   with the Found New Hardware wizard and the unsigned-driver warning for
   each newly plugged hub. Disabling and enabling an external hub in Device
   Manager brings back the devices behind it (read on 98 SE, 2000 and XP). The
-  driver still runs every hub itself. Read on QEMU's USB 1.1 Full-Speed hub
-  only: a High-Speed hub's entry and the "xHCI98 USB 3.x Hub" are untested
-  ground.
+  driver still runs every hub itself. Read in QEMU on its USB 1.1
+  Full-Speed hub; a High-Speed hub's entry and the "xHCI98 USB 3.x Hub"
+  were read by the owner on real hardware after the cut, and work.
 - A device with a serial number is known by it, as Microsoft's hub driver
   knows it: moved to another port, it keeps its Device Manager entry and is
   not found again as new hardware, and two identical devices plugged into
