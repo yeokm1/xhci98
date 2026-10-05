@@ -3181,11 +3181,12 @@ renaming first. As read in virtual machines:
   from a list of device drivers on my computer" and the new entry;
   elsewhere Have Disk.
 
-  Afterwards each device is found once more as new hardware, exactly once:
-  a stick under its serial number, the other devices under a new id. On
-  the NT systems this needs no answer; on Windows 98 SE the wizard runs for
-  each and may ask for the CD for hidclass.sys. Let Windows install them.
-  A hidusbf setting on such a device has to be applied again (section 5).
+  From the first 2.x release only, each device is then found once more as
+  new hardware, exactly once: a stick under its serial number, the other
+  devices under a new id. On the NT systems this needs no answer; on
+  Windows 98 SE the wizard runs for each and may ask for the CD for
+  hidclass.sys. Let Windows install them. A hidusbf setting on such a
+  device has to be applied again (section 5).
 
 UPGRADING FROM THE EARLIER, USB 2.0-ONLY RELEASES (1.x)
 .......................................................
@@ -3406,8 +3407,7 @@ being unsigned, and no change to this driver can remove them:
     Power tab (a bus-powered hub is charged (ports + 1) x 100 mA, at most
     500 mA, instead): the value the page reads cannot count past 510 mA. With
     XhciLogVerbosity at 2, XHCISNAP's report gives the exact figure as
-    dev.ss.maxpower.ma, in hexadecimal mA. (Under 2.1.0.0 every SuperSpeed
-    device read a quarter of its draw there.)
+    dev.ss.maxpower.ma, in hexadecimal mA.
 
   * INTEL 7-, 8- AND 9-SERIES CHIPSETS: A DEVICE ON A BLUE CONNECTOR MOVES
     BETWEEN THE USB 2.0 CONTROLLER AND THIS DRIVER when this driver's
@@ -3484,7 +3484,7 @@ install writes all eight, each at the default it states below except
 XhciImodInterval250ns, which it writes as 160. It writes each only where it is
 missing, so a value you changed survives an install or update; to go back to
 the default, set it by hand, or delete the value and update the driver. A
-machine updated straight from 1.2.0.0 keeps that release's
+machine updated straight from the USB 2.0-only 1.x driver keeps its
 XhciImodInterval250ns of 500; set it to 160 by hand. A value that is absent
 means the default each one states.
 
@@ -3542,10 +3542,10 @@ means the default each one states.
   wrote. 40 added only 1 to 3% more.
 
   FEEL FREE TO TUNE IT. Raise it towards 4000 (or delete it) if you get
-  audio stutter or instability under load. Enter it as a decimal DWORD. The driver
-  reads it when it starts, so a change takes effect after a restart;
-  XHCISNAP's report then shows under "registry values" the value it read,
-  the interval in force, and what the controller took.
+  audio stutter or instability under load. Enter it as a decimal DWORD.
+  The driver reads it when it starts, so a change takes effect after a
+  restart; XHCISNAP's report then shows under "registry values" the value
+  it read, the interval in force, and what the controller took.
 
   XhciForceBulkOnly  -  keep storage on Bulk-Only instead of UAS
   ..............................................................

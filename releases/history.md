@@ -30,18 +30,19 @@ was read on which system.
   looks for it, and writes each only where it is missing: a value you set
   survives an install or update. `2.1.0.0` wrote three, and wrote them over
   a value you had changed. A machine updated straight from `1.2.0.0` keeps
-  that release's `XhciImodInterval250ns` of `500`; set it by hand. Read on
-  Windows 98 SE and 2000 (a fresh install and an update) and 32-bit Windows
-  7 (an update) in virtual machines.
+  that release's `XhciImodInterval250ns` of `500`; set it by hand. Read,
+  before the eighth value was added, on Windows 98 SE and 2000 (a fresh
+  install and an update) and 32-bit Windows 7 (an update) in virtual
+  machines.
 - Fixed: under `2.1.0.0` the Power page showed a SuperSpeed device's
-  current as a quarter of its draw, on every system. It now shows
-  the device's own figure up to 510 mA, and 510 mA for anything above;
-  every other reader of the device's descriptor still gets the device's own
+  current as a quarter of its draw, on every system. It now shows the
+  device's own figure up to 510 mA, and 510 mA for anything above; every
+  other reader of the device's descriptor still gets the device's own
   bytes. A bus-powered hub is still charged (ports + 1) x 100 mA, at most
-  500 mA, by the page itself. `XHCISNAP`'s report gives each SuperSpeed device's exact declared
-  current (`dev.ss.maxpower.ma`, with `XhciLogVerbosity` raised). Read on a
-  ThinkPad P14s Gen 1 under Windows 98 SE: a drive declaring 896 mA, which
-  read 224 mA, reads 510 mA.
+  500 mA, by the page itself. `XHCISNAP`'s report gives each SuperSpeed
+  device's exact declared current (`dev.ss.maxpower.ma`, with
+  `XhciLogVerbosity` raised). Read on a ThinkPad P14s Gen 1 under Windows
+  98 SE: a drive declaring 896 mA, which read 224 mA, reads 510 mA.
 - On Intel 7-, 8- and 9-series chipsets (Ivy Bridge to Broadwell) and
   C610/X99 - xHCI device ids `1E31`, `8C31`, `9C31`, `8CB1`, `9CB1` and
   `8D31` - the driver moves the switchable connectors, usually the blue
