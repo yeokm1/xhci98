@@ -141,7 +141,7 @@ The `2.0.0.0` controller in Device Manager on the P14s Gen 1 under Windows 98 SE
 
 ### Upgrading from 1.x.x.x to 2.y.y.y
 
-A `2.y.y.y` release replaces the `1.x.x.x` driver file, which has the same name; `1.2.0.0` was the last `1.x.x.x` release. Going back is a reinstall of the `1.x.x.x` package.
+A `2.y.y.y` release replaces the `1.x.x.x` driver file, which has the same name; `1.2.0.0` was the last `1.x.x.x` release.
 
 On every system, update the "USB 2.0 eXtensible Host Controller (xhci98)" entry in Device Manager, and always pick the driver from a list rather than let Windows search: searching can reinstall the old driver from Windows' own copy instead.
 
