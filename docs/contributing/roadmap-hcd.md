@@ -7,8 +7,8 @@ that replaces `usbport.sys`, the hub driver and the composite parent with code
 of this project's own and so can drive USB 3.x SuperSpeed devices, hubs and
 UAS storage on the same targets the miniport serves. The first two files are
 unchanged by it: [`roadmap.md`](roadmap.md) keeps the status, the conventions
-and Phases 0-16, and [`roadmap-phases-17-on.md`](roadmap-phases-17-on.md)
-keeps Phases 17-24, the whole of the miniport's life after `1.0.0.0`. Every
+and Phases 0-16, and
+[`roadmap-miniport-updates.md`](roadmap-miniport-updates.md) keeps Phases 17-24, the whole of the miniport's life after `1.0.0.0`. Every
 convention of theirs holds here: the batching convention and the task-id
 rules, "observed on both" as `AGENTS.md` qualifies it, and the rule that no
 phase advances past an unobserved checkpoint.

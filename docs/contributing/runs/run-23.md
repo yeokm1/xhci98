@@ -1,6 +1,6 @@
 # Phase 23 Record - GitHub issue 4's open requests, and the moderation experiment
 
-The detail behind `docs/contributing/roadmap-phases-17-on.md`, "Phase 23 -
+The detail behind `docs/contributing/roadmap-miniport-updates.md`, "Phase 23 -
 Controller Property Page and Interrupt Moderation" (titled "GitHub Issue 4's
 Open Requests, and the Interrupt Moderation Experiment" until the owner moved
 the issue's polling rates and true speeds to Phase 24 on 2026-09-22). The
@@ -2697,7 +2697,7 @@ cannot. `build-and-test.md`'s unpadded-date example follows the new date.
 ### Phase 24 removed
 
 The owner removed roadmap Phase 24 on 2026-09-22, while this task ran.
-Its section is gone from `roadmap-phases-17-on.md`, its row from
+Its section is gone from `roadmap-miniport-updates.md`, its row from
 `docs/README.md`'s phase table, and every current-state sentence that
 named it - Phase 23's goal, status and checkpoint, `roadmap.md`'s status
 and the renumbering note, `docs/issues/06` (status and section 9),

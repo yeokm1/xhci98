@@ -1,6 +1,6 @@
 # Phase 24 Record - GitHub issue 4's remaining requests: polling rates and true speeds
 
-The detail behind `docs/contributing/roadmap-phases-17-on.md`, "Phase 24 -
+The detail behind `docs/contributing/roadmap-miniport-updates.md`, "Phase 24 -
 Release `1.2.0.0`: Polling Rates and True Speeds" (titled "GitHub Issue 4's
 Remaining Requests: Polling Rates and True Speeds" until the phase closed on
 2026-10-02). The roadmap entry carries the goal, the status, the task table

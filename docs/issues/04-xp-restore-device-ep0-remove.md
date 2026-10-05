@@ -299,7 +299,7 @@ primary targets on the same binary with the reading that nothing changed.
 
 - `docs/contributing/build-and-test.md`, "Windows XP target VM": the run
   and the recipe.
-- `docs/contributing/roadmap-phases-17-on.md`, Phase 19, task 19.3.
+- `docs/contributing/roadmap-miniport-updates.md`, Phase 19, task 19.3.
 - `src/xhci_slot.c`: `xhciSlotOpenControl`, `xhciDevOpenOnRootPort`,
   `XhciSlotSetEndpointState` (the REMOVE branch), `XhciSlotSubmitTransfer`
   (the EP0 gate), the progress detector.
