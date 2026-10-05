@@ -103,17 +103,35 @@ Intel's documented intent, not a reading.
 
 | # | Clause | Expected | Read |
 |---|---|---|---|
-| 0 | The machine has the mux | Device Manager under any modern OS, or `XHCIQUAL`, shows `8086:1E31` (the HM77 variant); a B490 with the HM70 has no USB 3.0 and cannot read this leg. Note which connectors are blue | Owner, 2026-10-05: its USB connectors carry the SuperSpeed logo, so the USB 3.0 variant; the id `TBD` |
-| 1 | Firmware's routing before the driver, with the USB 3.0 setting on Auto | `XHCIQUAL`'s report of `XUSB2PR`, `XUSB2PRM`, `USB3_PSSEN` and `USB3PRM`; predicted on Auto (`xhci-programming.md`): `XUSB2PR` and `USB3_PSSEN` 0, the masks nonzero | `TBD` |
-| 2 | The `XHCISNAP` report after the driver starts | `psw.gate=00000001`, `psw.value=00000001`, `psw.route.step=00000000`, and `psw.usb3pssen` equal to `psw.usb3prm`, `psw.xusb2pr` equal to `psw.xusb2prm` | `TBD` |
-| 3 | A SuperSpeed stick on a blue (switchable) connector | Under the xHCI controller, at SuperSpeed in the `XHCISNAP` report; a file round-trips | `TBD` |
-| 4 | A USB 2.0 device on a switchable connector | Under the xHCI controller, working | `TBD` |
-| 5 | A connector outside the masks, if the machine has one | Stays on EHCI | `TBD` |
-| 6 | Device Manager: disable the xHCI controller, then enable it | Disabled: the switchable connectors work again under EHCI if an EHCI driver is loaded. Enabled: back under xHCI | `TBD` |
-| 7 | `XhciIntelPortSwitch` set to 0, then a restart | `psw.value=00000000`, no route record; the connectors stay where firmware put them | `TBD` |
-| 8 | The value back at 1, then a restart (the value is read only at start, so without it the driver would not hold the routing and the shutdown would release nothing), the report showing a route record with `psw.route.step=00000000`; then shut down | The machine stays off. On the next boot, `XHCIQUAL` (before Windows) shows the routing back at firmware's values | `TBD` |
-| 9 | Standby and resume, if the OS offers it | The connectors work after the resume; a second route record in the report | `TBD` |
-| 10 | A device attached under EHCI when the driver starts (with an EHCI driver loaded) | It disconnects from EHCI and reappears under xHCI. Not a storage device with writes in flight | `TBD` |
+| 0 | The machine has the mux | Device Manager under any modern OS, or `XHCIQUAL`, shows `8086:1E31` (the HM77 variant); a B490 with the HM70 has no USB 3.0 and cannot read this leg. Note which connectors are blue | Owner, 2026-10-05: its USB connectors carry the SuperSpeed logo; **Pass**: `XHCIQUAL` shows `8086:1E31` |
+| 1 | Firmware's routing before the driver, with the USB 3.0 setting on Auto | `XHCIQUAL`'s report of `XUSB2PR`, `XUSB2PRM`, `USB3_PSSEN` and `USB3PRM`; predicted on Auto (`xhci-programming.md`): `XUSB2PR` and `USB3_PSSEN` 0, the masks nonzero | **Pass** (`B490A.LOG`): `XUSB2PR` and `USB3_PSSEN` 0, the masks nonzero, as predicted |
+| 2 | The `XHCISNAP` report after the driver starts | `psw.gate=00000001`, `psw.value=00000001`, `psw.route.step=00000000`, and `psw.usb3pssen` equal to `psw.usb3prm`, `psw.xusb2pr` equal to `psw.xusb2prm` | **Pass** (`C:\B490B.TXT`): `psw.gate`, `psw.value` 1, `psw.route.step` 0, each read-back equal to its mask |
+| 3 | A SuperSpeed stick on a blue (switchable) connector | Under the xHCI controller, at SuperSpeed in the `XHCISNAP` report; a file round-trips | **Pass**: the owner's MSSU, whose own display reported a 5 Gbit/s link; a file round-tripped |
+| 4 | A USB 2.0 device on a switchable connector | Under the xHCI controller, working | **Pass**: under the xHCI controller, in the slot table, working |
+| 5 | A connector outside the masks, if the machine has one | Stays on EHCI | **Pass**: the B490 has one; a device there stays with NUSB's EHCI driver |
+| 6 | Device Manager: disable the xHCI controller, then enable it | Disabled: the switchable connectors work again under EHCI if an EHCI driver is loaded. Enabled: back under xHCI | **Pass**: disabled, the device on a blue connector worked under NUSB's EHCI driver; enabled, back under `xhci98.sys` |
+| 7 | `XhciIntelPortSwitch` set to 0, then a restart | `psw.value=00000000`, no route record; the connectors stay where firmware put them | **Pass** (`C:\B490C.TXT`): `psw.value` 0, no route record; the device on a blue connector stayed with EHCI |
+| 8 | The value back at 1, then a restart (the value is read only at start, so without it the driver would not hold the routing and the shutdown would release nothing), the report showing a route record with `psw.route.step=00000000`; then shut down | The machine stays off. On the next boot, `XHCIQUAL` (before Windows) shows the routing back at firmware's values | **Pass**: `C:\B490D.TXT` showed the route again (step 0, read-backs equal to masks); the machine stayed off after Shut Down; `B490E.LOG` on the next boot showed `XUSB2PR` and `USB3_PSSEN` at 0 |
+| 9 | Standby and resume, if the OS offers it | The connectors work after the resume; a second route record in the report | **Not read**: Windows 98 SE offers no Standby on this machine |
+| 10 | A device attached under EHCI when the driver starts (with an EHCI driver loaded) | It disconnects from EHCI and reappears under xHCI. Not a storage device with writes in flight | **Pass**: a USB 2.0 mouse on a blue connector at boot worked under `xhci98.sys` once Windows was up |
+
+Read 2026-10-05 by the owner on the B490 under Windows 98 SE with NUSB
+(its EHCI driver loaded), the release package at `f393bb6` (`xhci98.sys`
+`24F2A49B...96C4`) installed through the Add New Hardware Wizard; the table
+above is the **Auto** run, `XHCISNAP` at verbosity 2. The results are the
+owner's report, clause by clause; the `.LOG` and `.TXT` files named are on
+the B490 and were not transcribed here, so the four register values
+themselves are not recorded.
+
+**Smart Auto**, the same day, clauses 1, 2, 3 and 8 again:
+
+| Clause | Read |
+|---|---|
+| 1 | **Pass** (`B490F.LOG`): `XUSB2PR` and `USB3_PSSEN` 0 before Windows. The previous shutdown's hand-back had left them at 0, so this does not separate Smart Auto's restore from Auto's default |
+| 2, 3 | **Pass** (`C:\B490G.TXT`): routed, step 0, read-backs equal to masks; the SuperSpeed stick at 5 Gbit/s |
+| 8 | **Pass** (`B490H.LOG`): the machine stayed off after Shut Down, and `XUSB2PR` and `USB3_PSSEN` were 0 on the next boot |
+
+Enabled, the control, was not needed: Auto showed no fault.
 
 ## Codex
 
