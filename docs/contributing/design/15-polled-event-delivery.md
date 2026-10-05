@@ -17,8 +17,8 @@ long when the bus is idle, short when it is busy - with the ring also looked
 at whenever the driver is entered anyway. Automatic takes the line interrupt
 where the controller has one and polls where it has none.
 
-Not in this design: MSI or MSI-X (a value of 3 or above is reserved, and
-"What is not on this roadmap" carries it), interrupters other than
+Not in this design: MSI or MSI-X (a value of 3 or above is reserved, and no
+phase schedules it), interrupters other than
 Interrupter 0, and any change to the line-interrupt path. On a controller
 with a line interrupt, the default must read as the Phase 34 build does.
 
