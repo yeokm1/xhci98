@@ -54,10 +54,10 @@ as (ports + 1) x 100 mA, capped at 500, whatever its descriptor says
 
 | # | Clause | Expected | Read |
 |---|---|---|---|
-| 1 | The same 896 mA device, same connector, at SuperSpeed (the `XHCISNAP` report shows it at SuperSpeed) | The root hub's Power tab shows 510 mA | `TBD` |
-| 2 | A SuperSpeed device declaring under 510 mA (UsbTreeView under Windows 11 gives its MaxPower first) | The Power tab shows exactly UsbTreeView's mA | `TBD` |
-| 3 | A USB 2.0 device | Unchanged from `2.1.0.0`: UsbTreeView's mA | `TBD` |
-| 4 | The `XHCISNAP` report | `dev.ss.vidpid` and `dev.ss.maxpower.ma` for each SuperSpeed device; for the 896 mA device `dev.ss.maxpower.ma=00000380` | `TBD` |
+| 1 | The same 896 mA device, same connector, at SuperSpeed (the `XHCISNAP` report shows it at SuperSpeed) | The root hub's Power tab shows 510 mA | **Pass** (owner, 2026-10-05): 510 mA, where `2.1.0.0` showed 224 mA |
+| 2 | A SuperSpeed device declaring under 510 mA (UsbTreeView under Windows 11 gives its MaxPower first) | The Power tab shows exactly UsbTreeView's mA | **Not read**: the owner has no such device. The path is `test_desc`'s vectors (96 mA and 504 mA exact) |
+| 3 | A USB 2.0 device | Unchanged from `2.1.0.0`: UsbTreeView's mA | **Pass** (owner, 2026-10-05): unchanged |
+| 4 | The `XHCISNAP` report | `dev.ss.vidpid` and `dev.ss.maxpower.ma` for each SuperSpeed device; for the 896 mA device `dev.ss.maxpower.ma=00000380` | **Pass** (2026-10-05, report `P14S.TXT`, `XhciLogVerbosity` 2, the release build of `f393bb6`, its `psw.` and `dev.ss.` records being that build's): `dev.ss.vidpid=090C2320`, `dev.ss.maxpower.ma=00000380` (896 mA), the device in slot 5 on root port 16 at "SuperSpeed, 5 Gbit/s, Gen 1x1" |
 
 ## 34.4-Q - QEMU (passed)
 
@@ -85,8 +85,8 @@ Same session as 34.2-H.
 
 | # | Clause | Expected | Read |
 |---|---|---|---|
-| 1 | The `XHCISNAP` report | `psw.gate=00000000`; no other `psw.` record | `TBD` |
-| 2 | Every external connector, a USB 2.0 and a SuperSpeed device on each | Works as under `2.1.0.0` | `TBD` |
+| 1 | The `XHCISNAP` report | `psw.gate=00000000`; no other `psw.` record | **Pass** (2026-10-05, the same `P14S.TXT`): `hc.pci=02ED8086`, `psw.gate=00000000` before the start's gates, no other `psw.` record; the controller started (`imod.readback`, `door.interface=00000001`) with all 18 ports managed |
+| 2 | Every external connector, a USB 2.0 and a SuperSpeed device on each | Works as under `2.1.0.0` | **Pass** (owner, 2026-10-05) |
 
 ## 34.4-H2 - the switchover on the Lenovo B490
 
