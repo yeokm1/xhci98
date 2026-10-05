@@ -742,11 +742,6 @@ Untested ground:
     if it has no USB 2.0 port. Built from the specification; no such
     controller has been held.
 
-  * A USB 3 HUB'S SECOND ENTRY, "xHCI98 USB 3.x Hub", AND A HIGH-SPEED
-    HUB'S OWN ENTRY. Hub entries were read in virtual machines on QEMU's
-    USB 1.1 Full-Speed hub only; no virtual machine models a SuperSpeed or
-    a High-Speed hub, and neither entry was read on real hardware.
-
   * POLLING ABOVE 1000 HZ (XhciFastPollFsLs, section 9). Outside the xHCI
     specification, and read on no real controller and in no virtual
     machine.
@@ -1070,8 +1065,9 @@ until you set them, and absent means the default each one states.
       unsigned-driver warning for each newly plugged hub. Disabling and
       enabling an external hub in Device Manager brings back the devices
       behind it (read on 98 SE, 2000 and XP). The driver still runs every hub
-      itself. Read on QEMU's USB 1.1 Full-Speed hub only: a High-Speed hub's
-      entry and the "xHCI98 USB 3.x Hub" are untested ground.
+      itself. Read in QEMU on its USB 1.1 Full-Speed hub; a High-Speed hub's
+      entry and the "xHCI98 USB 3.x Hub" were read by the owner on real
+      hardware after the cut, and work.
     * A device with a serial number is known by it, as Microsoft's hub driver
       knows it: moved to another port, it keeps its Device Manager entry and
       is not found again as new hardware, and two identical devices plugged
