@@ -3533,9 +3533,7 @@ means the default each one states.
   wrote. 40 added only 1 to 3% more.
 
   FEEL FREE TO TUNE IT. Raise it towards 4000 (or delete it) if you get
-  audio stutter or instability under load; on real hardware under Windows
-  98 SE, Full-Speed audio played without stutter at 160 while a drive was
-  read at full speed. Enter it as a decimal DWORD. The driver
+  audio stutter or instability under load. Enter it as a decimal DWORD. The driver
   reads it when it starts, so a change takes effect after a restart;
   XHCISNAP's report then shows under "registry values" the value it read,
   the interval in force, and what the controller took.

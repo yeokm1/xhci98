@@ -603,10 +603,8 @@ and 221 MB/s read at `160`; `40` added only 1 to 3% more for up to four times
 the interrupt rate. A Full-Speed audio stream ran at `160` in a Windows 2000
 virtual machine with no missed-service or packet error, which shows the value
 reaches the controller and the stream runs, not what it costs audio on real
-hardware. On real hardware under Windows 98 SE, Full-Speed audio played
-without stutter at `160` while a drive was read at full speed. If audio
-stutters under storage load on your machine, raise the value towards `4000`
-or delete it.
+hardware. If audio stutters under storage load on your machine, raise the
+value towards `4000` or delete it.
 
 ### XhciForceBulkOnly: Bulk-Only instead of UAS
 
@@ -857,7 +855,7 @@ re-measured, or answered by the design, under `2.0.0.0`. No change in
 | Windows 2000: a USB audio device unplugged during playback was never fully removed | Gone: the removal arrived within about a second, 7 times out of 7 |
 | The controller never went to sleep | The driver idles nothing it is not asked to; see the selective-suspend entry in "Known limitations" |
 | Every root-port device reported to Windows as High Speed, and its consequences: root-port polling in 1, 2 and 4 ms bands, a Full-Speed audio device on a root port silent from Windows XP on, a USB 1.1 hub on a root port crashing Vista and 7, and the Advanced tab's bandwidth figures | The cause is gone: there is no `usbport.sys` to report to, and every device is given its true speed, read on every device row of the virtual-machine matrix on both primary targets. A Low-Speed mouse is polled every 8 ms at a root port and behind a hub, on real hardware under Windows 98 SE. A Full-Speed hub on Vista and 7 enumerated with devices behind it, and a Full-Speed audio device on a root port bound on XP, Vista and 7 and played in real time on XP x64, in virtual machines |
-| Windows 98 SE: USB audio could stutter while a drive was read at full speed | Not seen under `2.0.0.0`: on real hardware under Windows 98 SE, Full-Speed audio played without stutter at the new interrupt moderation value `160` while a drive was read at full speed |
+| Windows 98 SE: USB audio could stutter while a drive was read at full speed | Not re-measured under `2.0.0.0` |
 | Windows 2000: a newer package over an older one was refused; disabling the controller with an audio device attached asked for a restart | The upgrade from `1.2.0.0` installs in place on Windows 2000. The disable with an audio device attached was not re-measured |
 | Windows 98: a driver that failed while starting the controller stopped the machine with a protection error | Not re-measured: no failing start was provoked under `2.0.0.0` |
 | On a controller without Force Save Context, a wake from standby rebuilt the bus | Untested: the power handlers have not run |
