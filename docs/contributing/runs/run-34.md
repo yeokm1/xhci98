@@ -26,9 +26,11 @@ the roadmap's 34.1 and 34.1-V entries carry the readings.
 
 ## The package for the hardware legs
 
-`TBD`: one `release` x86 package built from the commit that carries 34.2,
-on top of 34.4's. Its path and `xhci98.sys` SHA-256 are written here when it
-is staged, and every hardware leg below names the hash it ran.
+One `release` x86 package built at `f393bb6` (34.2 on top of 34.4), staged
+2026-10-05 on development host A as `out\t342-344\release-x86\` with
+`XHCISNAP.EXE` beside it: `xhci98.sys` 171099 bytes, SHA-256
+`24F2A49BAE9182A0861D94216C17A520D2C67090F9FB8174CC003AC4386096C4`. Every
+hardware leg below names the hash it ran.
 
 On each machine, before the leg:
 
@@ -45,6 +47,10 @@ On each machine, before the leg:
 Reading taken before the fix (owner, 2026-10-05): a SuperSpeed bus-powered
 device that UsbTreeView reads at 896 mA under Windows 11 (bMaxPower 0x70)
 read 224 mA on the Power tab under `2.1.0.0` on Windows 98 SE, a quarter.
+
+Use devices, not hubs, for clauses 1 to 3: the page costs a bus-powered hub
+as (ports + 1) x 100 mA, capped at 500, whatever its descriptor says
+(design record 13 section 8.3).
 
 | # | Clause | Expected | Read |
 |---|---|---|---|
@@ -105,7 +111,7 @@ Intel's documented intent, not a reading.
 | 5 | A connector outside the masks, if the machine has one | Stays on EHCI | `TBD` |
 | 6 | Device Manager: disable the xHCI controller, then enable it | Disabled: the switchable connectors work again under EHCI if an EHCI driver is loaded. Enabled: back under xHCI | `TBD` |
 | 7 | `XhciIntelPortSwitch` set to 0, then a restart | `psw.value=00000000`, no route record; the connectors stay where firmware put them | `TBD` |
-| 8 | With the value back at 1: shut down | The machine stays off. On the next boot, `XHCIQUAL` (before Windows) shows the routing back at firmware's values | `TBD` |
+| 8 | The value back at 1, then a restart (the value is read only at start, so without it the driver would not hold the routing and the shutdown would release nothing), the report showing a route record with `psw.route.step=00000000`; then shut down | The machine stays off. On the next boot, `XHCIQUAL` (before Windows) shows the routing back at firmware's values | `TBD` |
 | 9 | Standby and resume, if the OS offers it | The connectors work after the resume; a second route record in the report | `TBD` |
 | 10 | A device attached under EHCI when the driver starts (with an EHCI driver loaded) | It disconnects from EHCI and reappears under xHCI. Not a storage device with writes in flight | `TBD` |
 

@@ -586,8 +586,10 @@ never read on any machine, and the phase ends in a release.
 Checkpoint: 34.1's values read at their defaults, and 34.1-V's Windows 7
 x86 update leg; 34.2 read on real
 hardware and, if it is the bug, fixed; 34.3 read on Vista and 7; 34.4 built,
-reviewed, its host vectors passing and no config write on QEMU, its hardware
-reading owed to a tester; the ten install legs read from the `2.1.1.0`
+reviewed, its host vectors passing and no config write on QEMU, then read on
+the owner's hardware - the switchover on the Lenovo B490 and the gate closed
+on the P14s Gen 1 (owner, 2026-10-05, replacing "its hardware reading owed
+to a tester"); the ten install legs read from the `2.1.1.0`
 asset.
 
 Records: `runs/run-34.md` (opened 2026-10-05 with the hardware legs); `releases/history.md`;
