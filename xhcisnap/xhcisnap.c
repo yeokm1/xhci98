@@ -1188,7 +1188,7 @@ static void write_companion_header(const SNAP_HEADER *h)
     comp("  tool               xhcisnap %s, built %s\n",
          XHCISNAP_VERSION, XHCISNAP_BUILT);
     comp("  driver file        %s\n", driver_file_version());
-    comp("  schema          %lu, %lu-byte header\n",
+    comp("  schema             %lu, %lu-byte header\n",
          h->SchemaVersion, h->HeaderBytes);
     comp("  build flavour      %s\n", flavour_text(h->Flavour));
     comp("  build flags        %08lX%s%s\n", h->BuildFlags,
