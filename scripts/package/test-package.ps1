@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
 Regression tests for the install-media packager (roadmap Phase 3 task 7).
 
@@ -70,7 +70,11 @@ function Invoke-Packager {
     } finally {
         $ErrorActionPreference = $saved
     }
-    return @{ Output = $out; ExitCode = $LASTEXITCODE }
+    # Whitespace collapsed: Windows PowerShell wraps a native command's stderr
+    # ErrorRecord at the console width, so on a long repository path a refusal
+    # such as "volume or repository root" arrived split across lines and its
+    # phrase match failed (F6 legs, 2026-10-04: a 41-character worktree path).
+    return @{ Output = ($out -replace '\s+', ' '); ExitCode = $LASTEXITCODE }
 }
 
 function Invoke-Releaser {
@@ -85,7 +89,11 @@ function Invoke-Releaser {
     } finally {
         $ErrorActionPreference = $saved
     }
-    return @{ Output = $out; ExitCode = $LASTEXITCODE }
+    # Whitespace collapsed: Windows PowerShell wraps a native command's stderr
+    # ErrorRecord at the console width, so on a long repository path a refusal
+    # such as "volume or repository root" arrived split across lines and its
+    # phrase match failed (F6 legs, 2026-10-04: a 41-character worktree path).
+    return @{ Output = ($out -replace '\s+', ' '); ExitCode = $LASTEXITCODE }
 }
 
 $tempBase = [System.IO.Path]::GetFullPath($env:TEMP)
@@ -126,6 +134,32 @@ try {
     foreach ($f in @("xhci98.inf", "xhci98.sys")) {
         Assert-True (Test-Path -LiteralPath (Join-Path $flatOut $f)) "'$f' is missing from the flat package."
     }
+
+    # --- txtsetup.oem (roadmap task 33.3) -----------------------------------
+    #
+    # Staged at the package root when named, and gated there against the
+    # staged INF: a file whose ids the INF does not bind is refused before
+    # the package is published to -OutDir.
+    Write-Step "txtsetup.oem is staged at the root and gated against the staged INF"
+    $oemOut = Join-Path $script:work "pkg-oem"
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
+        "-OemPath", (Join-Path $repo "src\txtsetup.oem"), "-OutDir", $oemOut)
+    Assert-True ($r.ExitCode -eq 0) ("a package with txtsetup.oem was rejected:`n" + $r.Output)
+    Assert-True (Test-Path -LiteralPath (Join-Path $oemOut "txtsetup.oem")) "txtsetup.oem is not at the package root."
+    $badOem = Join-Path $script:work "bad-txtsetup.oem"
+    [System.IO.File]::WriteAllText($badOem,
+        [System.IO.File]::ReadAllText((Join-Path $repo "src\txtsetup.oem")).Replace('"XHCI98\ROOT_HUB"', '"USB\ROOT_HUB"'),
+        (New-Object System.Text.ASCIIEncoding))
+    $badOemOut = Join-Path $script:work "pkg-oem-bad"
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
+        "-OemPath", $badOem, "-OutDir", $badOemOut)
+    Assert-True ($r.ExitCode -ne 0) "a txtsetup.oem mapping USB\ROOT_HUB was staged."
+    Assert-True ($r.Output -match "check-txtsetup-oem") `
+        ("expected the refusal to name the txtsetup.oem gate. Output:`n" + $r.Output)
+    Assert-True (-not (Test-Path -LiteralPath $badOemOut)) "a refused package left an output directory."
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
+        "-OemPath", (Join-Path $repo "src\txtsetup-amd64.oem"), "-OutDir", (Join-Path $script:work "pkg-oem-arch"))
+    Assert-True ($r.ExitCode -ne 0) "the amd64 txtsetup.oem was staged into an x86 package."
 
     # --- a diagnostic probe driver must never become install media ----------
     Write-Step "a diagnostic probe driver is refused"
@@ -912,6 +946,43 @@ try {
         $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
                                "-PackageRoot", $noOut, "-UploadDir", $upRoot)
         Assert-True ($r.ExitCode -eq 0) ("the upload set did not assemble again once the UAS pair was removed:`n" + $r.Output)
+
+        # --- txtsetup.oem (roadmap task 33.3) --------------------------------
+        #
+        # Gated in place against the INF beside it where present, carried into
+        # the asset, and not required in this mode (no version before 2.1.0.0
+        # has one).
+        Write-Step "the upload set gates txtsetup.oem by its own gate"
+        $oemSrc = Join-Path $repo "src\txtsetup.oem"
+        foreach ($fl in @("release", "debug")) {
+            Copy-Item -LiteralPath $oemSrc -Destination (Join-Path $pubRoot "$fl\txtsetup.oem") -Force
+        }
+        Remove-Item -LiteralPath $uploadDir -Recurse -Force
+        Remove-Item -LiteralPath $uploadZip -Force
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
+                               "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -eq 0) ("the upload set was not assembled with txtsetup.oem present:`n" + $r.Output)
+        Assert-True ($r.Output -match "carries the text-mode Setup description") `
+            ("expected txtsetup.oem to be gated. Output:`n" + $r.Output)
+        foreach ($fl in @("release", "debug")) {
+            Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\txtsetup.oem")) `
+                "txtsetup.oem is missing from the upload set's $fl\ directory though the published one carries it."
+        }
+        [System.IO.File]::WriteAllBytes((Join-Path $pubRoot "release\txtsetup.oem"),
+            [System.Text.Encoding]::ASCII.GetBytes([System.IO.File]::ReadAllText($oemSrc).Replace("PCI\CC_0C0330", "PCI\CC_0C0320")))
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
+                               "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -ne 0) "a published txtsetup.oem binding an EHCI class id was assembled into the asset."
+        Assert-True ($r.Output -match "check-txtsetup-oem") `
+            ("expected the refusal to name the txtsetup.oem gate. Output:`n" + $r.Output)
+        foreach ($fl in @("release", "debug")) {
+            Remove-Item -LiteralPath (Join-Path $pubRoot "$fl\txtsetup.oem") -Force
+        }
+        if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
+        if (Test-Path -LiteralPath $uploadZip) { Remove-Item -LiteralPath $uploadZip -Force }
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
+                               "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -eq 0) ("the upload set did not assemble again once txtsetup.oem was removed:`n" + $r.Output)
 
         # --- and only the current cut's asset -------------------------------
         #

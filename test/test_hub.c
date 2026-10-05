@@ -171,6 +171,20 @@ static void test_rules(void)
     CHECK(!XhciHubWantsMultiTt(XHCI_SPEED_HIGH, 2, 0), "no alternate 1");
     CHECK_EQ(XhciHubInstanceKey(3, 0), 3, "root port device unchanged");
     CHECK_EQ(XhciHubInstanceKey(1, 0x21), 0x2101, "behind two hubs");
+    CHECK_EQ(XhciHubPdoAddress(3, 0, 0), 3, "address: root port");
+    CHECK_EQ(XhciHubPdoAddress(3, 0, 1), 3, "address: root port, flag moot");
+    CHECK_EQ(XhciHubPdoAddress(3, 0x1, 1), 1,
+             "address: port 1 of a hub on root port 3, not 0x103");
+    CHECK_EQ(XhciHubPdoAddress(1, 0x2E, 1), 2,
+             "address: two tiers, the nearer hub's port");
+    CHECK_EQ(XhciHubPdoAddress(2, 0x3E4, 1), 3, "address: three tiers");
+    CHECK_EQ(XhciHubPdoAddress(1, 0xE4321, 1), 0xE, "address: five tiers");
+    CHECK_EQ(XhciHubPdoAddress(3, 0x1, 0), 0x103,
+             "address: own hub has no PDO, no connection index: instance key");
+    CHECK_EQ(XhciHubPdoAddress(1, 0x21, 0), 0x2101,
+             "address: re-parented two tiers up: instance key");
+    CHECK_EQ(XhciHubPdoAddress(0x103, 0x100001, 1), 1,
+             "address: only the route's five tiers and the root port's byte");
     CHECK_EQ(XhciHubPowerWaitMs(0), 20, "lower bound");
     CHECK_EQ(XhciHubPowerWaitMs(100), 100, "bPwrOn2PwrGood x 2");
     CHECK_EQ(XhciHubPowerWaitMs(510), 510, "inside the bounds");
@@ -462,8 +476,176 @@ static void test_low_speed_mouse(void)
              "an unknown class gives no speed");
 }
 
+
+/* ---- task 33.4: a hub as a devnode (design record 13 section 10.11) ---- */
+
+static int same_text(const char *got, ULONG used, const char *want,
+                     ULONG wantLen)
+{
+    ULONG i;
+
+    if (used != wantLen) {
+        return 0;
+    }
+    for (i = 0; i < used; i++) {
+        if (got[i] != want[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void test_hub_pdo_ids(void)
+{
+    /* A VIA VL813-style USB 2.0 half 2109:2813 rev 0x9093, and its
+     * SuperSpeed half 2109:0813 rev 0x9093. */
+    UCHAR hs[18] = { 18, 1, 0x00, 0x02, 9, 0, 1, 64,
+                     0x09, 0x21, 0x13, 0x28, 0x93, 0x90, 0, 0, 0, 1 };
+    UCHAR ss[18] = { 18, 1, 0x00, 0x03, 9, 0, 3, 9,
+                     0x09, 0x21, 0x13, 0x08, 0x93, 0x90, 0, 0, 0, 1 };
+    static const char devHs[] = "XHCI98\\HUB&VID_2109&PID_2813";
+    static const char hwHs[] = "XHCI98\\HUB&VID_2109&PID_2813&REV_9093\0"
+                               "XHCI98\\HUB&VID_2109&PID_2813\0"
+                               "XHCI98\\HUB\0";
+    static const char devSs[] = "XHCI98\\HUB30&VID_2109&PID_0813";
+    static const char hwSs[] = "XHCI98\\HUB30&VID_2109&PID_0813&REV_9093\0"
+                               "XHCI98\\HUB30&VID_2109&PID_0813\0"
+                               "XHCI98\\HUB30\0";
+    char out[160];
+    ULONG used;
+    ULONG i;
+
+    CHECK_EQ(XhciHubPdoId(hs, 0, 0, XHCI_HUBPDO_ID_DEVICE, out, sizeof(out),
+                          &used), XHCI_HUBPDO_OK, "hub device id");
+    CHECK(same_text(out, used, devHs, sizeof(devHs)), "hub device id text");
+    CHECK_EQ(XhciHubPdoId(hs, 0, 0, XHCI_HUBPDO_ID_HARDWARE, out,
+                          sizeof(out), &used), XHCI_HUBPDO_OK, "hub hw ids");
+    CHECK(same_text(out, used, hwHs, sizeof(hwHs)),
+          "hub hardware ids: REV, VID/PID, bare, double NUL");
+    CHECK_EQ(XhciHubPdoId(ss, 1, 0, XHCI_HUBPDO_ID_DEVICE, out, sizeof(out),
+                          &used), XHCI_HUBPDO_OK, "SS hub device id");
+    CHECK(same_text(out, used, devSs, sizeof(devSs)), "SS device id text");
+    CHECK_EQ(XhciHubPdoId(ss, 1, 0, XHCI_HUBPDO_ID_HARDWARE, out,
+                          sizeof(out), &used), XHCI_HUBPDO_OK, "SS hw ids");
+    CHECK(same_text(out, used, hwSs, sizeof(hwSs)), "SS hardware ids");
+
+    /* Nothing under the USB\ enumerator, ever: no OS hub INF may match. */
+    for (i = 0; i + 4 <= used; i++) {
+        CHECK(!(out[i] == 'U' && out[i + 1] == 'S' && out[i + 2] == 'B' &&
+                out[i + 3] == '\\'),
+              "no USB\\ id on a hub");
+    }
+
+    CHECK_EQ(XhciHubPdoId(hs, 0, 0x0102UL, XHCI_HUBPDO_ID_INSTANCE, out,
+                          sizeof(out), &used), XHCI_HUBPDO_OK, "instance");
+    CHECK(same_text(out, used, "258", 4), "instance key in decimal");
+    CHECK_EQ(XhciHubPdoId(hs, 0, 0, XHCI_HUBPDO_ID_COMPATIBLE, out,
+                          sizeof(out), &used), XHCI_HUBPDO_BAD_PARAM,
+             "no compatible id");
+    CHECK_EQ(used, 0, "no compatible id: nothing used");
+
+    /* The two-call size answer: too small reports the whole length. */
+    CHECK_EQ(XhciHubPdoId(hs, 0, 0, XHCI_HUBPDO_ID_HARDWARE, out, 10, &used),
+             XHCI_HUBPDO_TOO_SMALL, "short buffer");
+    CHECK_EQ(used, sizeof(hwHs), "short buffer: whole length");
+    CHECK_EQ(XhciHubPdoId(hs, 0, 0, XHCI_HUBPDO_ID_HARDWARE, NULL, 0, &used),
+             XHCI_HUBPDO_TOO_SMALL, "size query");
+    CHECK_EQ(XhciHubPdoId(NULL, 0, 0, XHCI_HUBPDO_ID_DEVICE, out, 10, &used),
+             XHCI_HUBPDO_BAD_PARAM, "no descriptor");
+    CHECK_EQ(XhciHubPdoId(hs, 0, 0, 9, out, 10, &used),
+             XHCI_HUBPDO_BAD_PARAM, "unknown query");
+}
+
+static void test_hub_presented_parent(void)
+{
+    /* Hub 0 on a root port (serial 40), hub 1 on hub 0 with no PDO, hub 2
+     * on hub 1 (serial 42), hub 3 on a root port with no PDO, hub 4 a
+     * loop with hub 5, hub 6 detached. */
+    ULONG parent[7] = { XHCI_HUB_NO_PARENT, 0, 1, XHCI_HUB_NO_PARENT,
+                        5, 4, XHCI_HUB_DETACHED };
+    ULONG serial[7] = { 40, 0, 42, 0, 0, 0, 0 };
+
+    CHECK_EQ(XhciHubPresentedParent(parent, serial, 7, XHCI_HUB_NO_PARENT), 0,
+             "root port: the root hub");
+    CHECK_EQ(XhciHubPresentedParent(parent, serial, 7, 0), 40,
+             "behind hub 0: hub 0");
+    CHECK_EQ(XhciHubPresentedParent(parent, serial, 7, 2), 42,
+             "two-tier: the nearer hub");
+    CHECK_EQ(XhciHubPresentedParent(parent, serial, 7, 1), 40,
+             "behind a hub with no PDO: the next one up");
+    CHECK_EQ(XhciHubPresentedParent(parent, serial, 7, 3), 0,
+             "no PDO anywhere above: the root hub");
+    CHECK_EQ(XhciHubPresentedParent(parent, serial, 7, 4), 0,
+             "a loop ends at the root hub");
+    CHECK_EQ(XhciHubPresentedParent(parent, serial, 7, 6), 0,
+             "detached: the root hub");
+    CHECK_EQ(XhciHubPresentedParent(NULL, serial, 7, 0), 0, "no table");
+}
+
+static void test_hub_port_location(void)
+{
+    /* hcd.h: XHCI_MAX_ROOT_PORTS root ports, then 14 locations a hub. */
+    CHECK_EQ(XhciHubPortLocation(255, 14, 0, 1), 256, "hub 0 port 1");
+    CHECK_EQ(XhciHubPortLocation(255, 14, 2, 14), 255 + 28 + 14,
+             "hub 2 port 14");
+    CHECK_EQ(XhciHubPortLocation(255, 14, 0, 0), 0, "port 0");
+    CHECK_EQ(XhciHubPortLocation(255, 14, 0, 15), 0, "past the hub");
+}
+
+static void test_hub_node_info(void)
+{
+    UCHAR good[9] = { 9, 0x29, 4, 0x89, 0x00, 50, 100, 0x00, 0xFF };
+    XHCI_HUB_DESC d;
+    UCHAR out[XHCI_HUB_NODE_INFO_BYTES];
+    ULONG i;
+    ULONG zero;
+
+    CHECK_EQ(XhciHubParseDescriptor(good, 9, &d), XHCI_HUB_OK, "parsed");
+    for (i = 0; i < sizeof(out); i++) {
+        out[i] = 0xAA;
+    }
+    XhciHubNodeInfo(&d, 1, out);
+    CHECK_EQ(out[0] | out[1] | out[2] | out[3], 0, "NodeType UsbHub");
+    CHECK_EQ(out[4], 9, "bDescriptorLength for 4 ports");
+    CHECK_EQ(out[5], 0x29, "hub descriptor type");
+    CHECK_EQ(out[6], 4, "bNumberOfPorts");
+    CHECK_EQ(out[7], 0x89, "wHubCharacteristics low");
+    CHECK_EQ(out[8], 0x00, "wHubCharacteristics high");
+    CHECK_EQ(out[9], 50, "bPowerOnToPowerGood, 2 ms units");
+    CHECK_EQ(out[10], 100, "bHubControlCurrent");
+    zero = 0;
+    for (i = 11; i < 75; i++) {
+        zero |= out[i];
+    }
+    CHECK_EQ(zero, 0, "masks clear");
+    CHECK_EQ(out[75], 1, "HubIsBusPowered");
+
+    d.Ports = 14;
+    XhciHubNodeInfo(&d, 0, out);
+    CHECK_EQ(out[4], 11, "bDescriptorLength for 14 ports");
+    CHECK_EQ(out[75], 0, "self-powered");
+
+    XhciHubNodeInfo(NULL, 0, out);
+    CHECK_EQ(out[6], 0, "an undescribed hub: no ports");
+    CHECK_EQ(out[4], 9, "an undescribed hub: the shortest descriptor");
+}
+
+static void test_hub_caps_ex(void)
+{
+    CHECK_EQ(XhciHubCapsEx(XHCI_SPEED_HIGH, 0, 0), 0x3, "single-TT HS");
+    CHECK_EQ(XhciHubCapsEx(XHCI_SPEED_HIGH, 1, 0), 0x7, "MTT capable");
+    CHECK_EQ(XhciHubCapsEx(XHCI_SPEED_HIGH, 1, 1), 0xF, "MTT on");
+    CHECK_EQ(XhciHubCapsEx(XHCI_SPEED_FULL, 1, 1), 0, "a FS hub");
+    CHECK_EQ(XhciHubCapsEx(XHCI_SPEED_SUPER, 0, 0), 0,
+             "a SuperSpeed half: never HubIsRoot");
+}
 int main(void)
 {
+    test_hub_pdo_ids();
+    test_hub_presented_parent();
+    test_hub_port_location();
+    test_hub_node_info();
+    test_hub_caps_ex();
     test_suspend();
     test_resume_outcome();
     test_low_speed_mouse();

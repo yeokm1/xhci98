@@ -1,8 +1,10 @@
 # xhci98 - Release Notes
 
-This file describes package version `2.0.0.0`, the eighth release and the
-first of the host controller driver (`DriverVer` `10/04/2026,2.0.0.0`).
-Where this file and
+This file describes package version `2.1.0.0`, the ninth release and the
+second of the host controller driver, released on 2026-10-05 (`DriverVer`
+`10/05/2026,2.1.0.0`, in all four INFs). What `2.1.0.0` changed from `2.0.0.0` is its entry in
+`releases/history.md`, and the sections below say where each change was
+read. Where this file and
 `docs/contributing/roadmap-hcd.md`, `docs/contributing/build-and-test.md` or
 `xhciqual/README.md` disagree, the other document wins and this one is the
 copy to fix.
@@ -45,10 +47,11 @@ Gen 1x2 and Gen 2x2) is accepted at its trained rate. That ground is
 untested; see "Untested ground".
 
 In Device Manager the controller is "xHCI98 USB 3.x eXtensible Host
-Controller", with "xHCI98 USB 3.x Root Hub" beneath it and every USB device
-beneath that, hubs and devices behind hubs included: an external hub is
-driven inside the driver and gets no entry of its own. A UAS device appears
-as "xHCI98 USB Attached SCSI Storage".
+Controller", with "xHCI98 USB 3.x Root Hub" beneath it and the USB devices
+beneath that. Since `2.1.0.0` an external hub has an entry of its own,
+"xHCI98 USB Hub", with the devices behind it beneath it, and a device that
+none of Windows' own INFs names is listed under its own product name; see "Devices and hubs in Device
+Manager". A UAS device appears as "xHCI98 USB Attached SCSI Storage".
 
 The package carries two architectures. The 32-bit drivers serve Windows 98
 SE, ME, 2000, 32-bit XP and 32-bit Vista and 7; the 64-bit ones are a
@@ -70,10 +73,11 @@ x64, do not refuse unsigned drivers.
   machines: Windows 2000 Setup bugchecked on both physical machines this
   project tried, so the driver has never run on Windows 2000 on real silicon.
   Windows ME, both Windows XP builds, Windows Vista and Windows 7 are
-  supported in virtual machines only for `2.0.0.0`. Windows 98 SE is the one
-  target read on real hardware, at a bench session before the release, on a
-  ThinkPad E460 and a ThinkPad P14s Gen 1. "Targets and their standing" says
-  what each one rests on.
+  supported in virtual machines only for `2.1.0.0`. Windows 98 SE is the one
+  target read on real hardware, at a bench session before the `2.0.0.0`
+  release, on a ThinkPad E460 and a ThinkPad P14s Gen 1. `2.1.0.0`'s own
+  changes were read in virtual machines only. "Targets and their standing"
+  says what each one rests on.
 - It is not a mass-storage driver for Windows 98 SE. Storage on Windows 98
   SE, Bulk-Only and UAS alike, needs NUSB's mass-storage component; see
   "Windows 98 SE and ME: the stock install, and storage".
@@ -87,27 +91,30 @@ x64, do not refuse unsigned drivers.
   out of the running driver by `XHCISNAP.EXE` when you ask for a report; see
   "The log, and how to send one".
 - It is not the miniport. `1.2.0.0` is frozen and stays available; nothing
-  of it is in this package. A `2.0.0.0` install replaces it, because both are
+  of it is in this package. A `2.1.0.0` install replaces it, because both are
   called `xhci98.sys` (see "Upgrading from 1.2.0.0").
 
 ## Targets and their standing
 
-Each row says what the `2.0.0.0` drivers were observed doing on that system,
-and where. "The integration build" is the merged build of the release's code
-before the cut, in the never-published `qemu` flavour. The ten install legs
-were also read on the `release` flavour of that build, and are read again
-from the release asset itself after the cut.
+Each target's row says what the `2.0.0.0` drivers were observed doing on
+that system, and where; `2.1.0.0` carries that code with the changes its
+history entry lists, and the row "What `2.1.0.0` changed" says where each
+change was read. "The integration build" is the merged build of a release's
+code before its cut, in the never-published `qemu` flavour. The ten install
+legs are read on the `release` flavour of that build, and again from the
+release asset itself after the cut.
 
 | Target | Standing | What it rests on |
 |---|---|---|
 | Windows 98 SE | Primary | Virtual machines, under NUSB 3.3 and under SweetLow's stack: the install, mouse, keyboard, storage with a verified file compare, a composite audio device split into its functions and played to its end (unheard: the guest has no audio out), the ASIX Ethernet adapter passed through, the controller's Advanced tab and the root hub's Power tab, and disable, enable, remove and rescan. Hubs behind QEMU's Full-Speed hub to five tiers, 25 plug cycles per device class, and a 120-hub churn with the guest responsive. A stock install with no USB 2.0 stack: the controller, hubs, a HID mouse and a composite audio device work (next section). SuperSpeed storage and UAS at SuperSpeed (16 streams) and at High Speed, each with a verified round trip, on the integration build. UAS and forced Bulk-Only on a passed-through dual-transport bridge, each with a verified round trip. Real hardware, on a ThinkPad E460 and a ThinkPad P14s Gen 1: the install, HID, storage, the ASIX Ethernet adapter, and a Full-Speed audio device played and heard at a root port and behind a hub; High-Speed hubs, single- and multi-TT, with Low- and Full-Speed devices behind them, and a Full-Speed hub behind a High-Speed hub (a USB 2.0 hub held at Full Speed by a full/low-speed isolator); a Low-Speed mouse polled every 8 ms at a root port and behind a hub; two SuperSpeed drives on a root port, the link read as SuperSpeed in `XHCISNAP`'s slot table, with round trips and throughput against the same drive behind a USB 2.0 hub; a SuperSpeed hub with a SuperSpeed drive behind its SuperSpeed half and a High-Speed device behind its USB 2.0 half, plugged, unplugged and plugged in again; and UAS on a dual-transport bridge at SuperSpeed and, behind a USB 2.0 hub, at High Speed, UAS on a UAS flash drive at SuperSpeed with Bulk-Only behind a USB 2.0 hub, and the forced-Bulk-Only value on both at SuperSpeed, each with a round trip and throughput against Bulk-Only |
 | Windows 2000 SP4 | Primary, virtual machines only | The same device, hub and Device Manager rows as Windows 98 SE, under Driver Verifier, plus a multiprocessor guest. SuperSpeed storage, and UAS at SuperSpeed and at High Speed, on the integration build. UAS, forced Bulk-Only and the switch between them on a passed-through dual-transport bridge, each with a verified round trip. SuperSpeed hubs: untested, as no virtual machine models one; built from the specification. Never run on real hardware |
-| Windows ME | Virtual machines only | Under SweetLow's stack, on the integration build: the install, HID, storage with a verified file compare, unplug and replug, a hub with a mouse and a stick behind it, a composite audio device bound at a root port and behind a hub, the root hub's disable and enable, a 10-cycle soak per device class, SuperSpeed storage, and UAS at SuperSpeed (streams) and at High Speed. Bulk-Only storage works on Windows ME's own mass-storage files, and UAS once those are present (next section). Re-enabling the controller with a device attached hangs Windows ME ("Known limitations") |
+| Windows ME | Virtual machines only | Under SweetLow's stack, on the integration build: the install, HID, storage with a verified file compare, unplug and replug, a hub with a mouse and a stick behind it, a composite audio device bound at a root port and behind a hub, the root hub's disable and enable, a 10-cycle soak per device class, SuperSpeed storage, and UAS at SuperSpeed (streams) and at High Speed. Bulk-Only storage works on Windows ME's own mass-storage files, and UAS once those are present (next section). Re-enabling the controller with a USB mouse attached hung Windows ME under `2.0.0.0` (a keyboard was never tried); `2.1.0.0` fixes it: the devices are kept across the controller's stop and revived on the re-enable, as Microsoft's hub driver does. Read on the `2.1.0.0` integration build: the re-enable with a mouse three times of three, with a mouse and a stick, with a USB keyboard alone, and with a hub holding a mouse and a stick, every device back and working; and on the `release` flavour once more after the update from `2.0.0.0` |
 | 32-bit Windows XP SP3 | Virtual machines only | On the integration build: install, HID, storage with a verified file compare, unplug and replug, a hub with devices behind it, composite audio bound, the root hub's and the controller's disable and enable, shutdown; SuperSpeed storage, and UAS at SuperSpeed and at High Speed. A 10-cycle soak per device class (HID, a hub with a mouse, storage) |
 | Windows XP x64 SP2 | Virtual machines only; the 64-bit drivers | The same clauses as 32-bit XP, with the 64-bit `xhciuas.sys` at SuperSpeed and at High Speed, and the same soak |
 | Windows Vista SP2, 32-bit and x64 | Virtual machines only | The same clauses, at four virtual processors; x64 on starts with driver signature enforcement disabled. The same soak |
 | Windows 7 SP1, 32-bit and x64 | Virtual machines only | The same clauses, at four virtual processors; x64 on starts with driver signature enforcement disabled; five controller disable and enable cycles on each. The same soak. Windows 7 is not read on real hardware for `2.0.0.0` |
-| Every target, from the release package | | The `release` flavour of the integration build, on the ten install legs (Windows 98 SE under NUSB and under SweetLow's stack, ME, 2000, XP, XP x64, and Vista and 7 in both architectures): installed, controller and root hub started, HID, storage with a verified file compare, composite audio bound, the controller's disable and enable, and shutdown, with SuperSpeed storage and UAS at SuperSpeed and at High Speed on most legs. The one defect is Windows ME's controller re-enable ("Known limitations"). The legs are read again from the release asset after the cut |
+| Every target, from the release package | | For `2.0.0.0`: the `release` flavour of the integration build, on the ten install legs (Windows 98 SE under NUSB and under SweetLow's stack, ME, 2000, XP, XP x64, and Vista and 7 in both architectures): installed, controller and root hub started, HID, storage with a verified file compare, composite audio bound, the controller's disable and enable, and shutdown, with SuperSpeed storage and UAS at SuperSpeed and at High Speed on most legs. The one defect was Windows ME's controller re-enable, which `2.1.0.0` fixes (the Windows ME row). For `2.1.0.0`: the `release` flavour of its integration build, installed over `2.0.0.0` on eleven virtual machines (the ten legs' systems and a stock Windows 98 SE) and read on the same clauses less SuperSpeed storage and UAS, all passing, the file compare skipped on the stock Windows 98 SE, which has no storage driver (see "Updating from 2.0.0.0"); and the ten install legs from the `2.1.0.0` release package, read after the cut, all passed: the same clauses with SuperSpeed storage and UAS at SuperSpeed and at High Speed, Windows ME's controller re-enable with a mouse attached, a hub disabled and enabled with a mouse and a stick behind it on the seven NT systems, and hidusbf Setup reading the mouse behind a hub on 32-bit XP |
+| What `2.1.0.0` changed | | All in QEMU on development host A, on the `2.1.0.0` integration build unless the `release` flavour is named. The controller re-enable with devices kept: Windows ME with a mouse (three of three), with a mouse and a stick, with a USB keyboard alone, and with a hub holding a mouse and a stick, every device back and working; Windows 98 SE and 2000 disable and enable with a stick behind a hub and a file compare after, and a 10-cycle soak on each; 32-bit XP disable and enable with no USB keyboard attached (XP refuses the disable while one is). Instance ids from the serial number: a stick moved between root ports kept its one entry and was not found again as new hardware on Windows 98 SE, ME, 2000 and 32-bit XP, and on Vista and 7 in both architectures; moved behind a hub as well on Windows 98 SE, 2000, 32-bit XP and 32-bit Vista, and to a SuperSpeed port on Windows 98 SE. Two sticks with different serial numbers had two entries, and of two with the same one the second was known by its port (Windows 98 SE, 2000 and XP). External hubs as entries of their own, on QEMU's hub, which is a USB 1.1 Full-Speed hub: a mouse and a stick behind it, the tree by connection, the hub unplugged and plugged in again, a device unplugged behind it, and a two-tier chain, on Windows 98 SE, 2000 and 32-bit XP; the tree and the hub unplugged and plugged in again on Vista and 7 in both architectures, the tree on ME and XP x64, and USBView walking into the hub on XP, XP x64, Vista and 7; the hub disabled and enabled in Device Manager with the devices behind it coming back, on Windows 98 SE, and on Windows 2000 and XP with the fix for the defect the first reading found (two disable and enable cycles each in QEMU, the same instance ids and the stick's files intact). A High-Speed hub, its transaction translators, and a USB 3 hub's SuperSpeed half were read in no virtual machine; the owner read a High-Speed hub's entry and a USB 3 hub's "xHCI98 USB 3.x Hub" on real hardware after the cut, and both work. The Power tab: figures in mA on the root hub's and the hub's Power tabs on Windows 98 SE and 2000 (a mouse, a keyboard and an audio device 100 mA, a stick 0 mA), on 32-bit XP, and on XP x64 (a mouse and a keyboard 100 mA, a stick and the hub 0 mA; QEMU's stick and hub ask for 0 mA in their own descriptors), and a hub's Power tab on 32-bit 7. The Advanced tab's figure while audio plays was not read: Windows 98 SE's `USBAUDIO.VXD` fails on playing in QEMU ("Known limitations"). Device names: where a Windows class INF names the device, its name is shown, on every system read; the device's own product name was read in Windows 98 SE's "New Hardware Found" box, for devices no INF names on Windows 98 SE, 2000 and XP, and as Windows 7's "Bus reported device description" in both architectures. hidusbf: 1000, 500 and 250 Hz at a root port and behind a hub on Windows 98 SE under NUSB 3.6 and on ME, at a root port on 32-bit XP, the filter loaded and its setting reaching the controller on a stock Windows 98 SE (`release`), and behind a hub on 32-bit XP with the fix for the defect the first reading found (Setup read the mouse's speed, and 1000, 500 and 250 Hz programmed Interval 3, 4 and 5). Fast polling: not read. The F6 floppy, on the `release` flavour: Windows 2000 SP4 and 32-bit XP SP3 text-mode Setup with a USB keyboard and a USB stick, and the Recovery Console on both; see that section |
 
 The virtual machines are QEMU's `qemu-xhci`, which models no SuperSpeed hub,
 no link faster than 5 Gbit/s, no Low-Speed device and no High-Speed hub; what
@@ -118,7 +125,7 @@ those need is the bench's, or is untested ground.
 | | |
 |---|---|
 | Operating system | Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows ME (4.90.3000), 32-bit Windows XP (SP3), Windows XP x64 (SP2), and Windows Vista (SP2) and Windows 7 (SP1) in both architectures, in virtual machines only. Vista x64 and Windows 7 x64 load the drivers only while driver signature enforcement is disabled. Nothing after Windows 7 |
-| USB stack | None. The driver replaces the port and hub drivers on every target. Windows 98 SE needs no USB 2.0 stack for the controller, hubs, HID or audio; **storage needs NUSB's mass-storage component** (next section). Windows ME: every Windows ME reading was taken under SweetLow's USB 2.0 stack; Windows ME without it has not been tested under `2.0.0.0`. Do not install NUSB on Windows ME, 2000, XP, Vista or 7 |
+| USB stack | None. The driver replaces the port and hub drivers on every target. Windows 98 SE needs no USB 2.0 stack for the controller, hubs, HID or audio; **storage needs NUSB's mass-storage component** (next section). Windows ME: every Windows ME reading was taken under SweetLow's USB 2.0 stack; Windows ME without it has not been tested under the host controller driver. Do not install NUSB on Windows ME, 2000, XP, Vista or 7 |
 | Controller | An xHCI controller presenting PCI class code `0C0330`, with a BAR0 mapped below 4 GB and a legacy interrupt pin: the driver has no MSI path, so a controller reporting `Interrupt Pin = 0` cannot be driven at all. A controller with no USB 2.0 protocol port at all is accepted, built from the specification and untested: no such controller has been held |
 | Install media | Windows 98 SE on an xHCI-only machine: the Windows 98 SE installation CD at hand, or the Windows CABs on the hard disk. Windows ME: the same, from the Windows ME CD or the CABs its Setup leaves on the disk. The NT targets take what they need from their own driver cache and ask for nothing |
 
@@ -202,9 +209,10 @@ the safety notes, and how to read each result.
 
 ## Installing
 
-Each flavour directory of the package holds four files: `xhci98.inf` and
-`xhci98.sys`, the host controller driver, and `xhciuas.inf` and
-`xhciuas.sys`, the UAS driver. `release-x86\` is the one to install on 32-bit
+Each flavour directory of the package holds five files: `xhci98.inf` and
+`xhci98.sys`, the host controller driver, `xhciuas.inf` and `xhciuas.sys`,
+the UAS driver, and `txtsetup.oem`, which only Windows 2000 and XP Setup read
+(below). `release-x86\` is the one to install on 32-bit
 Windows and `release-x64\` on 64-bit Windows; the `debug-` directories are the
 same drivers built for troubleshooting. No Microsoft file is in the package.
 
@@ -227,6 +235,13 @@ same drivers built for troubleshooting. No Microsoft file is in the package.
    Restart if asked: Windows 98 SE asks once, after the controller's install.
 4. The first UAS device brings the Found New Hardware wizard for "xHCI98 USB
    Attached SCSI Storage"; point it at the same directory.
+5. An external hub installs as "xHCI98 USB Hub" from the driver already
+   installed. On Windows 98 SE and 2000 it installed with nothing to answer
+   (Windows 98 SE shows its "New Hardware Found" box briefly). On Windows XP
+   every newly plugged hub brings the Found New Hardware wizard and the
+   unsigned-driver warning, as the controller's install did; choose
+   Continue Anyway. Read in virtual machines; on
+   the other systems how a hub installs was not recorded.
 
 **The files Windows supplies.** Two files the install needs are Windows' own
 and are not in the package: `usbd.sys`, whose helper routines the class
@@ -246,11 +261,89 @@ Windows 2000 note: the first Update Driver after a cancelled Found New
 Hardware Wizard was once seen to leave the controller with no driver; a
 second Update Driver filled it.
 
+### Installing Windows 2000 or XP, or using the Recovery Console: the F6 floppy
+
+From `2.1.0.0` every flavour directory carries `txtsetup.oem`, for a machine
+whose keyboard or install medium is on an xHCI controller. Copy the files of
+`release-x86\` (`release-x64\` for Windows XP x64) to the root of a floppy,
+press F6 when text-mode Setup offers it, press S, and pick "xHCI98 USB 3.x
+Host Controller". Setup then drives a USB keyboard, mouse and USB stick
+through its own drivers above this one. The same floppy serves everything
+that starts from the Windows CD's text mode:
+
+- **Installing Windows 2000 or XP.** GUI-mode Setup then installs the
+  driver from `xhci98.inf` as usual.
+- **The Recovery Console.** Press F6 as for an install, then R at Setup's
+  Welcome screen (on Windows 2000, then C for the console). The USB
+  keyboard logs in and types commands; the console runs in text mode
+  throughout, so Windows XP's GUI-mode restriction below does not touch it.
+
+Read on neither, and untested ground: a repair install, Windows 2000's
+Emergency Repair Disk and Windows XP's Automated System Recovery, which run
+the same text mode.
+
+Limits:
+
+- Pressing F6 needs the firmware's own USB keyboard support.
+- The floppy must be drive A: as the firmware sees it.
+- A disk the driver runs as UAS (most USB 3 enclosures and SSDs) is not
+  usable until GUI-mode Setup; Bulk-Only flash sticks are.
+- Installing Windows onto a USB disk is not supported.
+- A USB drive present at the partition screen takes the letter C:. Unplug
+  the USB drives you do not need, or Windows installs to the next letter
+  (Windows XP x64 went to E: in a test).
+- **Installing Windows XP and XP x64: have a PS/2 keyboard, or a laptop's
+  built-in keyboard, to answer GUI-mode Setup's prompts.** Text-mode Setup
+  drives the USB keyboard, mouse and stick, but it copies Windows' own
+  `hidclass.sys`, `hidparse.sys` and `usbd.sys` to the new system only
+  together with Microsoft's own USB controller drivers, which an xHCI-only
+  machine does not use. So in GUI-mode Setup the USB keyboard and mouse do
+  nothing until its "Installing Devices" step installs those files from
+  the CD, and that step first shows Windows XP's unsigned-driver prompt for
+  the xHCI98 controller and root hub, whose default button is No. A machine
+  whose only keyboard is USB cannot answer it, and Setup stops there. A
+  laptop's built-in keyboard (connected inside as PS/2, as on the ThinkPad
+  E460 and P14s) or any PS/2 keyboard answers it, and after that step the
+  USB keyboard and mouse work. Windows 2000 shows no such prompt. The
+  package cannot carry those Microsoft files, `txtsetup.oem` can copy only
+  from its own floppy, and only a signed driver or a remastered Windows CD
+  would silence the prompt, so this is a limitation of this route.
+- On Windows 2000, plug the USB keyboard and the USB stick in before Setup
+  starts. Windows 2000's text-mode Setup uses only the USB devices present
+  when the driver first reports them, as it does on its own USB stack; a
+  device plugged in during text mode stays unused there. The driver waits,
+  up to 5 seconds, for the devices plugged in at start before that first
+  report (`XhciFirstEnumWaitMs`, under "Registry settings"; text-mode Setup
+  always gets the defaults).
+- GUI-mode Setup may ask for the floppy or the Windows CD.
+
+What has run, in QEMU virtual machines on development host A only; no
+install from the floppy and no Recovery Console has been run on real
+hardware:
+
+- **Text mode, on the `2.1.0.0` integration build's `release` flavour**:
+  on Windows 2000 SP4 and 32-bit XP SP3, with a USB keyboard and a USB
+  stick at root ports, the keyboard answered in text mode and the stick
+  was listed at the partition screen. On Windows 2000 a keyboard behind a
+  hub answered too (on the `qemu` flavour). Before the first-report wait
+  neither the keyboard nor the stick worked in Windows 2000's text mode.
+- **The Recovery Console, on the same build**: on Windows 2000 SP4 and
+  32-bit XP SP3, with only the USB keyboard, the console logged in to the
+  installed Windows, ran `dir` and exited.
+- **Installs to the desktop, on the build of 2026-10-04 before the
+  first-report wait**: on 32-bit XP SP3 and XP x64 SP2, Setup completed
+  with the controller, the root hub and USB storage working, once GUI-mode
+  Setup's prompts were answered from a PS/2 keyboard. Windows 2000's
+  GUI-mode Setup showed no prompt and completed on that build. XP x64's
+  text mode was not read again on the `2.1.0.0` build, and its Recovery
+  Console not at all.
+
 ### Upgrading from 1.2.0.0
 
-`2.0.0.0` replaces the `1.2.0.0` driver: both are called `xhci98.sys`, and
-the install overwrites the file. Going back is a reinstall of the `1.2.0.0`
-package from its own download.
+`2.1.0.0`, like `2.0.0.0` before it, replaces the `1.2.0.0` driver: both
+are called `xhci98.sys`, and the install overwrites the file. Going back is
+a reinstall of the `1.2.0.0` package from its own download. The steps below
+were measured with `2.0.0.0`; nothing `2.1.0.0` changed touches them.
 
 Update the "USB 2.0 eXtensible Host Controller (xhci98)" entry in Device
 Manager and always pick the driver from a list (Have Disk) rather than let
@@ -286,8 +379,60 @@ The steps were tested on Windows 98 SE (NUSB and SweetLow), 2000, XP and
 32-bit Windows 7; on XP x64, Vista and 7 x64 the same steps apply, pointed
 at `release-x64\` on the 64-bit systems.
 
-The three `1.2.0.0` virtual-hub values have no effect under `2.0.0.0`; see
-"Registry settings".
+The three `1.2.0.0` virtual-hub values have no effect under `2.x`; see
+"Registry settings". Every device is a new Device Manager entry after the
+upgrade, so a setting kept on a device's own entry, such as SweetLow's
+hidusbf's polling rate, has to be applied again (see "SweetLow's hidusbf").
+
+### Updating from 2.0.0.0
+
+Install `2.1.0.0` over `2.0.0.0` with Update Driver on "xHCI98 USB 3.x
+eXtensible Host Controller", pointed at the `release-` directory. Neither
+release uses NUSB's or SweetLow's port driver, so nothing needs renaming
+first. Read in QEMU virtual machines on development host A, on the `release`
+flavour of the `2.1.0.0` integration build installed over the published
+`2.0.0.0`, on all ten install legs' systems and a stock Windows 98 SE:
+
+- **Windows 98 SE (under NUSB, under SweetLow's stack, or stock) and ME:
+  restart after the update, although Windows does not ask.** Update Driver
+  offers `2.1.0.0` as a better driver, and Windows 98 SE may ask for its CD
+  for `usbd.sys`. The new `xhci98.sys` cannot replace the running one, so
+  Windows sets it to replace it at the next start; until then `2.0.0.0`
+  keeps running. Under SweetLow's stack the controller showed a problem and
+  the mouse stopped for a minute or two after Finish, then both recovered
+  by themselves; on Windows ME the controller shows a problem until the
+  restart, while the devices keep working.
+- **Windows 2000: use Have Disk.** Update Driver letting Windows search
+  answers that a suitable driver is already installed and keeps `2.0.0.0`.
+  Use "Display a list of the known drivers", Have Disk, the `release-x86\`
+  directory, "xHCI98 USB 3.x eXtensible Host Controller", as in the steps
+  above. It runs at once, with no restart.
+- **Windows XP, XP x64, Vista and 7**: read with a command-line driver
+  update in place of Device Manager, so the dialogs on Device Manager's route
+  (the steps above) were not read for this update. XP, XP x64 and 32-bit
+  Vista showed their unsigned-driver warning once; on every one the update
+  took effect at once, and no restart was asked for.
+
+**The root hub's Driver tab keeps showing `2.0.0.0`** (on Windows 98 SE and
+ME, its date) after the update, although the root hub runs the same new
+`xhci98.sys` as the controller. To have it show `2.1.0.0`, run Update Driver
+on "xHCI98 USB 3.x Root Hub" too, pointed at the same directory. On 32-bit
+Vista and on Windows 7 x64 letting Windows search found it; on 32-bit
+Windows 7 the search answered that the best driver was already installed,
+and "Let me pick from a list of device drivers on my computer" with the
+`2.1.0.0` entry did it; on Vista x64 a command-line update of the root hub
+did it. On the other systems use Have Disk; the root hub's update was not
+read there.
+
+After the update each device is found once more as new hardware, exactly
+once, and Windows installs it again from the same drivers: a stick under its
+serial number, which Windows now knows it by instead of its port, and the
+other devices under a new id. On the NT systems this happened with nothing
+to answer; on Windows 98 SE the Add New Hardware wizard ran for each and
+asked for the Windows 98 SE CD again for `hidclass.sys`, and Windows ME
+found each once as well. Nothing was
+found again after that. A setting kept on such a device's own entry, such as
+hidusbf's polling rate, has to be applied again on the new entry.
 
 ### Updating xhciuas.sys over an older one
 
@@ -296,6 +441,90 @@ installed, Windows 98 SE's "Search for a better driver" keeps the copy it
 already has. Instead, Update Driver on "xHCI98 USB Attached SCSI Storage",
 choose "Display a list of all the drivers in a specific location", then Have
 Disk, and point it at the package directory.
+
+## Devices and hubs in Device Manager
+
+New in `2.1.0.0`. Every reading below is a QEMU reading on development host
+A, on the `2.1.0.0` integration build; the row "What `2.1.0.0` changed"
+under "Targets and their standing" lists them per system.
+
+- **A device keeps its entry when it moves.** A device with a usable serial
+  number is known to Windows by it, as under Microsoft's own hub driver: moved
+  to another port, or behind a hub, it keeps its Device Manager entry and is
+  not found again as new hardware. Read with a stick moved between root ports
+  on every system but XP x64, behind a hub on Windows 98 SE, 2000, XP and
+  32-bit Vista, and to a SuperSpeed port on Windows 98 SE. Two identical
+  devices plugged into the same port in turn no longer share one entry. A
+  device without a serial number, or whose serial number is not usable as a
+  name, is still known by its port, as under Microsoft's hub driver, so moved
+  to another port it is found again as new hardware; so is the second of two
+  devices that report the same serial number while both are plugged in (read
+  on Windows 98 SE, 2000 and XP). `XHCISNAP` counts that case as
+  `serial.duplicate`, a counter the driver writes only when the controller
+  stops, so a report taken while it runs does not show it.
+- **External hubs have entries of their own.** A USB 2.0 or 1.1 hub appears
+  as "xHCI98 USB Hub" beneath the port it is plugged into, with the devices
+  behind it beneath it, as on Microsoft's own USB stacks. A USB 3 hub
+  appears twice, once as "xHCI98 USB Hub" for its USB 2.0 half and once as
+  "xHCI98 USB 3.x Hub" for its SuperSpeed half, each with the devices on
+  that half beneath it, as Microsoft's own stack also shows two entries for
+  one USB 3 hub. Each hub entry has a Power tab, and Device Manager's view by
+  connection and USBView walk into it. The driver still runs every hub
+  itself; Windows' own hub driver is not used. A hub installs from the driver
+  already installed: on Windows 98 SE and 2000 with nothing to answer, and on
+  Windows XP with the Found New Hardware wizard and the unsigned-driver
+  warning for each newly plugged hub (see "Installing"). Disabling and
+  enabling an external hub in Device Manager brings back the devices behind
+  it (read twice each on Windows 98 SE, 2000 and XP in QEMU). QEMU's only hub is a USB 1.1 Full-Speed
+  hub, so a High-Speed hub's entry and a USB 3 hub's "xHCI98 USB 3.x Hub"
+  were read in no virtual machine; the owner read both on real hardware
+  after the cut, and they work.
+- **Devices are named by their product name where Windows has no name for
+  them.** Where one of Windows' own class INFs names a device (a mouse, a
+  keyboard, a USB stick on most systems), Device Manager and the Add New
+  Hardware wizard show the INF's name, as they do over Microsoft's own
+  stack. The name the device reports for itself (for a part of a composite
+  device, the name of that part where the device gives one) shows for a
+  device no INF names, such as "QEMU USB SERIAL" on Windows 98 SE and
+  "QEMU USB CCID" on Windows 2000 and XP, in Windows 98's "New Hardware
+  Found" box, and as Windows 7's "Bus reported device description" on the
+  Details tab. Under `2.0.0.0` each of those showed "USB Device". A device
+  that reports no name is still "USB Device". On Windows 98 SE and ME
+  every character outside plain ASCII is shown as `?`, since how those
+  systems would convert it has not been read; the NT systems show the name
+  as the device sends it. A name with characters outside plain ASCII was
+  not read on any system.
+
+## SweetLow's hidusbf: a mouse's polling rate
+
+hidusbf, SweetLow's filter driver, now maintained by LordOfMice, sets the
+polling rate Windows asks of a mouse or another HID device. It does so by
+rewriting the polling interval in the configuration Windows selects for the
+device, and this driver programs the controller from that configuration, so
+the filter's setting reaches the controller.
+
+Read in QEMU virtual machines on development host A, with hidusbf's release
+of 2026-10-03 and the interval the driver programmed read back from the
+controller's own endpoint context: a mouse set to 1000, 500 and 250 Hz was
+polled every 1, 2 and 4 ms, and at its own rate with the setting off, at a
+root port and behind a hub on Windows 98 SE under NUSB 3.6 and on Windows
+ME, and at a root port on 32-bit XP (QEMU's mouse runs at High Speed on a
+root port and at Full Speed behind QEMU's hub). On a stock Windows 98 SE,
+on the `release` flavour, the filter loaded and its setting reached the
+controller. hidusbf works behind a hub on XP too: its Setup reads the mouse's speed there, and 1000, 500 and 250 Hz programmed Interval 3, 4 and 5.
+
+- **1000 Hz is the ceiling** for a Low- or Full-Speed device, as the xHCI
+  specification sets it, unless `XhciFastPollFsLs` is set (under "Registry
+  settings").
+- **On Windows 98 SE and ME, set it on both keys.** The filter took effect
+  only with its `LowerFilters` entry and `bInterval` value on both the
+  device's hardware key and its `Class\HID` driver key; hidusbf's Setup
+  writes them. It works on a stock Windows 98 SE as well as under NUSB:
+  Windows 98 SE's own `usbd.sys` has the routine `hidusbf.sys` needs.
+- **Apply the setting again after an upgrade from `1.x.x.x`**: each device
+  is a new Device Manager entry under `2.x`, and the setting is kept on the
+  entry. The same holds for a device found again once after an update from
+  `2.0.0.0` (see "Updating from 2.0.0.0").
 
 ## SuperSpeed and UAS
 
@@ -325,7 +554,7 @@ Disk, and point it at the package directory.
 
 ## Registry settings
 
-Four values, each a `DWORD` in the controller's driver (software) key:
+Seven values, each a `DWORD` in the controller's driver (software) key:
 
 | Windows | Key |
 |---|---|
@@ -384,6 +613,61 @@ UAS-only device stays on UAS whatever the value says. A device whose vendor
 id Windows' own `usbstor.inf` lists by hand can still get `usbstor.sys` on
 the NT targets.
 
+### XhciFastPollFsLs: Low- and Full-Speed polling above 1000 Hz
+
+New in `2.1.0.0`, off by default, and written by no install. It lets a Low-
+or Full-Speed mouse on a root port be polled faster than 1000 Hz, at the
+rates hidusbf offers for that under Windows 8 and later, using hidusbf's own
+numbers: the device is set in hidusbf to "31 Hz" or "62 Hz", and this value
+turns those two settings into fast ones.
+
+| Value | hidusbf "31 Hz" | hidusbf "62 Hz" |
+|---|---|---|
+| absent, `0`, `1` or anything else | 31 Hz | 62 Hz |
+| `2` | 2000 Hz | 4000 Hz |
+| `3` | 4000 Hz | 8000 Hz |
+
+- **Root ports only.** A device behind a hub keeps its ordinary rate.
+- **Outside the xHCI specification.** The specification's shortest interval
+  for a Low- or Full-Speed device is 1 ms. A controller that refuses the
+  shorter one is caught: the device is set up again at its ordinary rate,
+  and the refusal is counted in `XHCISNAP`'s report as
+  `fastpoll.fallbacks`. A controller that accepts it and then misbehaves -
+  polls at its own rate, or starves other devices - cannot be caught. If
+  anything misbehaves, delete the value and restart.
+- **It applies to every device that asks for 16 to 63 ms.** While it is set,
+  any Low- or Full-Speed device on a root port whose own polling interval is
+  16 to 63 ms is polled faster too, hidusbf or not.
+- It is read when the controller starts, so a change takes effect after a
+  restart.
+
+**Untested ground**: it has been read on no real controller and in no
+virtual machine. The bench reading on the ThinkPad E460 and P14s Gen 1 was
+not taken for this release.
+
+### XhciFirstEnumWaitMs and XhciFirstEnumPortMs: the first report's wait
+
+New in `2.1.0.0`. When the root hub, or an external hub, first reports its
+devices to Windows after it starts, the driver first waits for the devices
+already plugged in to be ready, so that they are in that first report.
+Windows 2000's text-mode Setup uses only the devices in it. The wait ends as
+soon as the devices are ready. Neither value is written by the install.
+
+| Value | Default | Meaning |
+|---|---|---|
+| `XhciFirstEnumWaitMs` | `5000` | The longest the first report waits, in milliseconds. `0` turns the wait off; a value above `30000` is held to `30000` |
+| `XhciFirstEnumPortMs` | `2000` | The longest one port may hold it, in milliseconds; a slower device is reported later instead. Held to the total; `0` sets no limit per port |
+
+Read with the defaults in QEMU virtual machines on development host A, on
+Windows 98 SE and 2000: the root hub's first report went 20 to 30 ms after
+its start with nothing plugged in, and 0.3 to 0.9 s after it with a mouse
+and a stick plugged in at root ports or behind a hub; a hub's own first
+report waited 0 to 31 ms. Windows 98 SE's reading at boot with a USB mouse
+plugged in was taken with the virtual machine's SMM turned off (QEMU's
+`-machine pc,smm=off`), because the virtual machine's firmware stopped in
+SMM at boot with a USB mouse attached; that is the virtual machine's, not
+the driver's. Neither value was read set to anything but its default.
+
 ### XhciLogVerbosity and XhciLogDebugView: the log
 
 See "The log, and how to send one". Both default to `0`.
@@ -391,8 +675,8 @@ See "The log, and how to send one". Both default to `0`.
 ### The 1.2.0.0 virtual-hub values have no effect
 
 `XhciVirtualHSHub`, `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid`, which a
-`1.2.0.0` install wrote, are not read by `2.0.0.0` and its INFs write none of
-them. A value left behind by a `1.2.0.0` install has no effect. The driver
+`1.2.0.0` install wrote, are not read by any `2.x` release and its INFs
+write none of them. A value left behind by a `1.2.0.0` install has no effect. The driver
 reports every device at its true speed with no virtual hub in the way, so
 there is nothing for them to switch. Delete them if you want them gone.
 
@@ -404,7 +688,33 @@ are Windows' own (`sysclass.dll` on Windows 98 SE and ME, `usbui.dll` on the
 NT targets, with `usbui.dll` drawing the Windows 98 dialogs), and the driver
 answers the requests they send. The Power tab reports the power budget the
 driver itself keeps, since external hubs are the driver's own. Read on Windows 98 SE under both stacks and on Windows
-2000, in virtual machines.
+2000, in virtual machines. Since `2.1.0.0` each external hub's entry has a
+Power tab of its own, for the devices behind it, read on Windows 98 SE,
+2000 and 32-bit Windows 7 in virtual machines.
+
+Up to `2.0.0.0` the Power tab showed every device's power as unknown, on
+every target: the driver refused the descriptor request the page sends,
+whose request code Windows leaves at zero. `2.1.0.0` answers it. Read in
+QEMU virtual machines on development host A, on the `2.1.0.0` integration
+build: the root hub's and the hub's Power tabs list each device's power in
+mA on Windows 98 SE and 2000 (a mouse, a keyboard and an audio device
+100 mA, a stick 0 mA), on 32-bit XP, and on XP x64 (a mouse and a keyboard
+100 mA, a stick and the hub 0 mA). The 0 mA is what QEMU's stick and hub
+ask for in their own descriptors. Two things the pages show are Windows'
+own arithmetic, not the driver's:
+
+- **Bandwidth counts isochronous pipes in use, and nothing else.** On
+  Windows 98 SE to XP the Advanced tab adds up only the isochronous pipes
+  a device has open, as it does over Microsoft's own stack, so a mouse, a
+  keyboard or a drive adds nothing, and an audio device adds its share only
+  while it plays or records. That is read from Windows' own page, not on a
+  running system: the figure while audio plays was not read, since Windows
+  98 SE's `USBAUDIO.VXD` fails on playing in a virtual machine ("Known
+  limitations"). On Vista and 7 the figure comes from a WMI query the driver
+  does not answer, and stays at zero.
+- **A SuperSpeed device's power reads a quarter of its draw.** The page
+  doubles the configuration descriptor's `bMaxPower`, which is in 2 mA units
+  at USB 2.0 and in 8 mA units at SuperSpeed.
 
 ## The log, and how to send one
 
@@ -441,7 +751,7 @@ for anything to read.
 
 > **Do not run DebugView on Windows 98 on real hardware.** Under the `1.x`
 > miniport, plugging in a device while it captured crashed a ThinkPad E460
-> three times over. `2.0.0.0` prints only from its own thread rather than
+> three times over. The `2.x` driver prints only from its own thread rather than
 > from interrupt context, which is what that crash was traced to, but no
 > build of it has been run under DebugView on Windows 98 hardware.
 
@@ -477,11 +787,6 @@ Each was measured, in a virtual machine unless it names a physical machine.
 - **Windows 98 shows no driver version on the Driver tab**, only the file
   date; the four-part version is under Driver File Details, which also lists
   `xhci98.tmp`, a leftover of the install's temporary copy (cosmetic).
-- **Windows ME: re-enabling the controller with a USB mouse or keyboard
-  attached makes Windows ME stop responding.** A USB storage device alone
-  is fine. Unplug the mouse or keyboard before re-enabling the controller in
-  Device Manager. If ME stops responding, restart it and re-enable the
-  controller with nothing attached. Being fixed.
 - **USB storage on Windows 98 is slower than the drive.** An observation,
   not a defect found: Windows 98 sends one command at a time. On the P14s
   with the MSSU10 at 64 KB, about 208 MB/s on Windows 98 against 277 MB/s
@@ -495,10 +800,35 @@ Each was measured, in a virtual machine unless it names a physical machine.
   `USBMPHLP.PDR`, which it installs when its first ordinary USB stick is
   plugged in. Plug in any ordinary USB stick once, then unplug the UAS drive
   and plug it back in; no Remove and no restart are needed.
-- **A device moved to a different port is found again as new hardware.**
-  This is a known difference from Microsoft's hub driver: this driver names
-  a device by its port, and Microsoft's uses the device's serial number. A
-  later release may do the same.
+- **Windows Vista and 7: the controller's Advanced tab shows no bandwidth.**
+  The figure comes from a query the driver does not answer, and stays at
+  zero. See "The controller's Advanced tab and the root hub's Power tab".
+- **A SuperSpeed device's power reads a quarter of its draw** on the Power
+  tab, on every system: the page doubles a value that is in 8 mA units at
+  SuperSpeed. Same section.
+- **Windows 98 SE and ME: a device name with characters outside plain ASCII
+  shows them as `?`.** See "Devices and hubs in Device Manager".
+- **Windows XP and XP x64 installed with the F6 floppy: GUI-mode Setup asks
+  about the unsigned driver before the USB keyboard works.** Setup copies
+  Windows' own HID and USB helper files only with Microsoft's own USB
+  controller drivers, so the USB keyboard and mouse wait for GUI-mode
+  Setup's device install, which first shows the unsigned-driver prompt. A
+  machine whose only keyboard is USB cannot answer it and Setup stops; a
+  laptop's built-in keyboard or any PS/2 keyboard answers it. Windows 2000
+  shows no such prompt, and the Recovery Console is not affected. See
+  "Installing Windows 2000 or XP, or using the Recovery Console: the F6
+  floppy".
+- **After an update from `2.0.0.0`, some devices are found once more as new
+  hardware**, one time each. See "Updating from 2.0.0.0".
+- **After an update from `2.0.0.0`, the root hub's Driver tab still shows
+  `2.0.0.0`** until the root hub is updated too, although it runs the new
+  file; and Windows 98 SE and ME keep running `2.0.0.0` until the next
+  restart, which they do not ask for. Same section.
+
+`2.0.0.0`'s list also had "a device moved to a different port is found
+again as new hardware", which `2.1.0.0` answers for every device with a
+usable serial number, and Windows ME's controller re-enable hang, which
+`2.1.0.0` fixes ("Targets and their standing").
 
 The `1.2.0.0` limitations, and what each is under `2.0.0.0`, are in the
 next section.
@@ -506,7 +836,8 @@ next section.
 ## The 1.2.0.0 known limitations, under 2.0.0.0
 
 `1.2.0.0`'s own notes (linked at the top) list its limitations. Each was
-re-measured, or answered by the design, under `2.0.0.0`:
+re-measured, or answered by the design, under `2.0.0.0`. No change in
+`2.1.0.0` answers a row differently:
 
 | `1.2.0.0` limitation | Under `2.0.0.0` |
 |---|---|
@@ -520,7 +851,7 @@ re-measured, or answered by the design, under `2.0.0.0`:
 | Windows 2000: a newer package over an older one was refused; disabling the controller with an audio device attached asked for a restart | The upgrade from `1.2.0.0` installs in place on Windows 2000. The disable with an audio device attached was not re-measured |
 | Windows 98: a driver that failed while starting the controller stopped the machine with a protection error | Not re-measured: no failing start was provoked under `2.0.0.0` |
 | On a controller without Force Save Context, a wake from standby rebuilt the bus | Untested: the power handlers have not run |
-| The virtual High-Speed hub switch and its costs | No switch: the values have no effect (see "Registry settings") |
+| The virtual High-Speed hub switch and its costs. It also did nothing unless `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid` were set beside `XhciVirtualHSHub`, since `1.2.0.0` has no default for either (reported on GitHub issue 4, 2026-10-03) | No switch: all three values have no effect (see "Registry settings") |
 
 ## Untested ground
 
@@ -536,6 +867,8 @@ information.
 | SuperSpeed hubs, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only; no virtual machine models one. On Windows 2000, which has no bench, built from the specification and untested |
 | High-Speed hubs, single- and multi-TT, and Full and Low Speed devices behind them, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only. Virtual machines model only a Full-Speed hub, so on every other target the High-Speed paths rest on host tests |
 | A UAS-only device at SuperSpeed on a controller that cannot stream | Built from the specification against host tests; no such controller held |
+| Low- and Full-Speed polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification, built against host tests; read on no real controller and in no virtual machine |
+| Installing Windows 2000 or XP, or the Recovery Console, from the F6 floppy on real hardware | Read in virtual machines only: text mode on Windows 2000 and 32-bit XP, the Recovery Console on both, and installs to the desktop on 32-bit XP and XP x64. Never on real hardware; a repair install, Windows 2000's Emergency Repair Disk and Windows XP's Automated System Recovery on no vehicle |
 
 ## Licensing
 

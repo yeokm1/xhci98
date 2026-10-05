@@ -371,7 +371,7 @@ Windows ME (virtual machines only)
 |---|---|---|
 | 7.7 | Record the USB stack installed, if any | SweetLow's USB 2.0 stack, under which every Windows ME reading was taken |
 | 7.8 | Plug in one composite device, as 7.3 | Each function loads under the root hub, as 7.3; read on the integration build with QEMU's `usb-audio` at a root port and behind a hub |
-| 7.9 | Do not re-enable the controller in Device Manager with a USB device attached | Known limitation: it can hang Windows ME. Unplug USB devices before re-enabling |
+| 7.9 | With a USB mouse attached, disable the controller in Device Manager, then re-enable it | It goes and comes back with no hang, and the mouse moves. Against `2.0.0.0` do not run it: re-enabling with a mouse or keyboard attached hangs Windows ME there, a known limitation fixed in `2.1.0.0` |
 
 Windows XP (virtual machines only)
 

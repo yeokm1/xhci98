@@ -717,6 +717,93 @@ static void test_superspeed(void)
              "High Speed: no BOS");
 }
 
+/* Task 33.3: the first answer's settle, its pure half. */
+static void test_settle(void)
+{
+    ULONG s;
+    ULONG rest;
+
+    /* At rest: exactly the states with nothing in flight. */
+    rest = 0;
+    for (s = 0; s < XHCI_ENUM_STATE_COUNT; s++) {
+        rest += XhciEnumAtRest(s);
+    }
+    CHECK_EQ(rest, 5, "five states are at rest");
+    CHECK(XhciEnumAtRest(XHCI_ENUM_EMPTY), "Empty is at rest");
+    CHECK(XhciEnumAtRest(XHCI_ENUM_PRESENT), "Present is at rest");
+    CHECK(XhciEnumAtRest(XHCI_ENUM_BOUND), "Bound is at rest");
+    CHECK(XhciEnumAtRest(XHCI_ENUM_GONE), "Gone is at rest");
+    CHECK(XhciEnumAtRest(XHCI_ENUM_FAILED), "Failed is at rest");
+    CHECK(!XhciEnumAtRest(XHCI_ENUM_DEBOUNCE), "Debounce is in flight");
+    CHECK(!XhciEnumAtRest(XHCI_ENUM_RESET), "Reset is in flight");
+    CHECK(!XhciEnumAtRest(XHCI_ENUM_ADDRESS), "Address is in flight");
+    CHECK(!XhciEnumAtRest(XHCI_ENUM_CONFIG_FULL), "Config is in flight");
+    CHECK(!XhciEnumAtRest(XHCI_ENUM_BOS_FULL), "BOS is in flight");
+    CHECK(!XhciEnumAtRest(XHCI_ENUM_STATE_COUNT), "no state past the last");
+
+    /* Quiet: a pass that enumerated with nothing owed or in flight. */
+    CHECK(XhciEnumSettleQuiet(1, 0, 0, 0), "all clear settles");
+    CHECK(!XhciEnumSettleQuiet(0, 0, 0, 0), "a pass that did not enumerate");
+    CHECK(!XhciEnumSettleQuiet(1, 1, 0, 0), "a root port change owed");
+    CHECK(!XhciEnumSettleQuiet(1, 0, 1, 0), "a hub port look owed");
+    CHECK(!XhciEnumSettleQuiet(1, 0, 0, 1), "a machine in flight");
+
+    /* A send-back: pending, or begun and the companion not yet connected. */
+    CHECK(XhciEnumHoldInFlight(1, 0, 0, 0), "a pending send-back");
+    CHECK(XhciEnumHoldInFlight(0, 1, 5, 0), "held, companion not seen");
+    CHECK(!XhciEnumHoldInFlight(0, 1, 5, 1), "held, companion connected");
+    CHECK(!XhciEnumHoldInFlight(0, 3, 0, 0), "no companion: the end there");
+    CHECK(!XhciEnumHoldInFlight(0, 0, 5, 0), "no hold");
+
+    /* Generations, across the wrap. */
+    CHECK(XhciEnumSettleReached(5, 5), "equal is reached");
+    CHECK(XhciEnumSettleReached(6, 5), "past is reached");
+    CHECK(!XhciEnumSettleReached(4, 5), "behind is not");
+    CHECK(XhciEnumSettleReached(1, 0xFFFFFFFFUL), "past across the wrap");
+    CHECK(!XhciEnumSettleReached(0xFFFFFFFFUL, 1), "behind across the wrap");
+    CHECK(!XhciEnumSettleReached(0, 0x80000000UL), "half the range behind");
+
+    /* The deadline from the driver key. */
+    CHECK_EQ(XhciEnumSettleCap(0, 0), 5000, "absent: 5 s");
+    CHECK_EQ(XhciEnumSettleCap(0, 123), 5000, "absent ignores the value");
+    CHECK_EQ(XhciEnumSettleCap(1, 0), 0, "0 turns it off");
+    CHECK_EQ(XhciEnumSettleCap(1, 8000), 8000, "a value is taken");
+    CHECK_EQ(XhciEnumSettleCap(1, 30000), 30000, "the maximum is taken");
+    CHECK_EQ(XhciEnumSettleCap(1, 30001), 30000, "held to the maximum");
+    CHECK_EQ(XhciEnumSettleCap(1, 0xFFFFFFFFUL), 30000, "all ones held");
+    CHECK_EQ(XhciEnumSettlePortCap(0, 0, 5000), 2000, "absent: 2 s");
+    CHECK_EQ(XhciEnumSettlePortCap(0, 0, 1500), 1500, "default held to total");
+    CHECK_EQ(XhciEnumSettlePortCap(1, 0, 5000), 0, "0: no per-port budget");
+    CHECK_EQ(XhciEnumSettlePortCap(1, 900, 5000), 900, "a value is taken");
+    CHECK_EQ(XhciEnumSettlePortCap(1, 9000, 5000), 5000, "held to the total");
+    CHECK_EQ(XhciEnumSettlePortCap(1, 900, 0), 0, "off total: nothing");
+
+    /* The clock's low word, across its wrap. */
+    CHECK_EQ(XhciEnumElapsedMs(0, 10000), 1, "1 ms in 100 ns units");
+    CHECK_EQ(XhciEnumElapsedMs(100, 50000100UL), 5000, "5 s");
+    CHECK_EQ(XhciEnumElapsedMs(0xFFFFFFF0UL, 9990), 1, "across the wrap");
+}
+
+/* A hub's devnode disabled and enabled again (task 33.4, the 2.1.0.0
+ * leg 1e defect): which children PnP let go of, and which an answer
+ * carries. */
+static void test_hub_let_go(void)
+{
+    CHECK(XhciEnumLetGo(1, 1, 1), "listed, shown, removed: let go");
+    CHECK(!XhciEnumLetGo(1, 0, 1), "never shown: the new FDO shows it");
+    CHECK(!XhciEnumLetGo(1, 0, 0), "never shown, never removed");
+    CHECK(!XhciEnumLetGo(1, 1, 0), "shown, not removed: PnP still holds it");
+    CHECK(!XhciEnumLetGo(0, 1, 1), "gone already: its own path");
+    CHECK(!XhciEnumLetGo(0, 0, 0), "nothing");
+
+    CHECK(XhciEnumAnswerCarries(0, 0, 0), "a root hub child, root answer");
+    CHECK(XhciEnumAnswerCarries(17, 17, 0), "a hub child, its hub's answer");
+    CHECK(!XhciEnumAnswerCarries(17, 0, 0), "a hub child, root answer");
+    CHECK(!XhciEnumAnswerCarries(0, 17, 0), "a root child, a hub's answer");
+    CHECK(!XhciEnumAnswerCarries(17, 17, 1), "let go: never carried again");
+    CHECK(!XhciEnumAnswerCarries(18, 17, 0), "another hub's child");
+}
+
 int main(void)
 {
     test_clean_paths();
@@ -731,6 +818,8 @@ int main(void)
     test_retry_to_bound();
     test_hub_port_attempts();
     test_superspeed();
+    test_settle();
+    test_hub_let_go();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

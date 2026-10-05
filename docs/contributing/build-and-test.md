@@ -473,7 +473,9 @@ generate `src\usbport.lib` if it is missing, run the import gate's
 authenticated-baseline regression tests and its flavour-rules tests, run the
 INF gate's self-tests and then the gate on **both** INFs - `src\xhci98.inf`
 under `-Arch x86` and `src\xhci98-amd64.inf` under `-Arch amd64`, two runs
-whatever architecture is being built - run the packager
+whatever architecture is being built - then the UAS INF gate and the
+`txtsetup.oem` gate (`scripts\inf-gate\check-txtsetup-oem.ps1`, task 33.3),
+each self-tested first and run over both architectures' files, run the packager
 self-tests, the QEMU launcher self-tests, the vm-matrix verdict self-tests,
 the tracked batch files' line-ending check and the source charset check, run
 the XHCISNAP report self-test
@@ -3837,6 +3839,97 @@ composite device has ever been seen binding on NUSB alone, in any batch,
 because every other QEMU device model is single-interface. That confound is
 why the missing file could not be isolated from this guest: the whole stack
 went in at once.
+
+### Text-mode Setup from an F6 floppy (roadmap task 33.3)
+
+Since task 33.3 every flavour directory of a package carries `txtsetup.oem`
+at its root beside `xhci98.sys` and `xhci98.inf` (design record 13 section
+5.6), so Windows 2000, 32-bit XP and XP x64 text-mode Setup can load the
+driver at the F6 prompt. The install leg per target, in a virtual machine:
+
+1. Stage the package: `scripts\package\make-package.ps1 -Flavor release`
+   (add `-Arch amd64` for XP x64). The directory is 8.3-clean and fits a
+   1.44 MB floppy, so QEMU can serve it as one directly.
+2. A blank disk for the install: `qemu-img create -f qcow2 <disk> 8G`. The
+   USB stick is a host directory served read-only through VVFAT, which QEMU
+   presents as a partitioned FAT disk, so it needs no preparation and has a
+   volume for step 7 to find; put a small file in it to look for.
+3. Launch with the install CD on IDE, the floppy on the emulated FDC, and no
+   USB controller but `qemu-xhci`. The `fat:` backends are read-only, so
+   both drives carry `readonly=on` (QEMU refuses them with "Block node is
+   read-only" otherwise). QEMU's `usb-storage` is Bulk-Only, so the bus
+   never chooses UAS for it:
+
+```
+qemu-system-i386 -machine pc -m 512 -smp 2 \
+  -drive file=<disk>,format=qcow2,if=ide \
+  -cdrom <install iso> -boot d \
+  -drive if=floppy,format=raw,readonly=on,file=fat:floppy:out\pkg-release-x86 \
+  -vga none -device VGA,id=vga0 \
+  -device qemu-xhci,id=xhci \
+  -device usb-kbd,bus=xhci.0,id=ukbd,display=vga0 \
+  -drive if=none,id=stick,format=raw,readonly=on,file=fat:<stick dir> \
+  -device usb-storage,bus=xhci.0,drive=stick \
+  -qmp tcp:127.0.0.1:<port>,server,nowait
+```
+
+   (`qemu-system-x86_64` and `out\pkg-release-amd64` for XP x64.) **Windows
+   2000 takes its own target VM's machine**, `scripts\setup-qemu-win2k.ps1`'s
+   recipe: `-machine pc,acpi=off`, `-cpu pentium3,-apic`, `-m 256`, Cirrus
+   VGA, and its IDE install hack, at `-smp 1`. Under the ACPI HAL with TCG
+   on QEMU 11.1, its GUI-mode Setup restarts itself after "Installing
+   Components" and loops back to Regional Settings, with no xhci98 present
+   as with it (2026-10-04, a no-driver control, `out\phase33\f6\w2kc\`).
+   A paused reboot (`-action reboot=shutdown`) resumes with QMP
+   `set-action reboot=reset`, `system_reset`, `cont`, then the action set
+   back: under that action `system_reset` is a shutdown too. The `pc` machine
+   always has an i8042 PS/2 keyboard as well. QMP `input-send-event` names a
+   display console, not an input device, so the USB keyboard is bound to the
+   display `vga0` by its `display=` property and the leg's keystrokes are
+   sent with `"device": "vga0"`; an input device bound to a console takes
+   that console's events ahead of the unbound PS/2 one - but only while it
+   exists: remove it and QEMU falls back to the PS/2 keyboard, so a
+   `device_del` is no negative control here. **Do not launch with
+   `-machine pc,i8042=off`**: NTDETECT ("Setup is inspecting your
+   computer's hardware configuration") then spins on port 0x60 for ever,
+   on Windows 2000, XP and XP x64 alike (2026-10-04, `lessons.md`). Keep
+   the PS/2 controller and read the path off the
+   controller (the hardware oracle of "QEMU xHCI trace events", one events
+   file): trace `usb_xhci_slot_address`, `usb_xhci_xfer_start` and
+   `usb_xhci_xfer_success`. `usb_xhci_slot_address` names the slot the
+   keyboard's port was given, `usb_xhci_xfer_start` carries the slot and
+   endpoint of each transfer and its pointer, and `usb_xhci_xfer_success`
+   only the pointer - so match completions to starts by pointer, and confirm
+   each keystroke sent in step 5 completes a transfer on the keyboard's
+   slot's interrupt-IN endpoint.
+4. At "Press F6 if you need to install a third party SCSI or RAID driver",
+   press F6 (SeaBIOS's own xHCI keyboard support answers it; nothing of this
+   driver runs yet). Under TCG the window is short: hold F6 down for
+   200 ms every 350 ms rather than tapping it, or Setup goes straight on
+   to Welcome. At the screen that follows, press S, then Enter at the
+   prompt for the disk in drive A:. Expect the list to offer "xHCI98 USB
+   3.x Host Controller (32-bit Windows 2000/XP)" (or "... (Windows XP
+   x64)"); choose it with Enter, and press Enter again at the screen that
+   lists it as the device Setup will load.
+5. Setup loads its files and starts the kernel. Expect: the Welcome screen
+   answers keystrokes sent to `ukbd` (the BIOS has handed the controller to
+   the driver by then); the partition screen lists the USB disk beside the
+   IDE disk (the bus's device PDO, Setup's `usbstor` and `disk` above it);
+   no stop screen. Install onto the IDE disk.
+6. Text mode copies `xhci98.sys` from A: and restarts. Leave the floppy in
+   until GUI mode is finished: it may be asked for when GUI mode installs the
+   controller and root hub from `xhci98.inf`, and so may the CD, for
+   `usbd.sys` and `usbui.dll`. Record any prompt and any unsigned-driver
+   dialog (32-bit XP) as the leg's reading.
+7. In the installed system: Device Manager shows "xHCI98 USB 3.x eXtensible
+   Host Controller" and "xHCI98 USB 3.x Root Hub" with no warning mark, the
+   service `xhci98` is the INF's (`Start` 3, not the boot start text mode
+   gave it), the USB keyboard types, and the stick has a drive letter with
+   the file put in it in step 2.
+
+The leg passes on steps 4, 5 and 7; step 6's prompts are recorded, not
+failed. Until it has passed on a target, design record 13 section 5.6 stays
+`static` for that target and the release notes say so.
 
 ### Recommended USB Host Chips for Comprehensive Testing
 

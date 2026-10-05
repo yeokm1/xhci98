@@ -503,6 +503,14 @@ $publishable = @("xhci98.inf", "xhci98.sys")
 # it is present and does not require it.
 $uasPublishable = @("xhciuas.inf", "xhciuas.sys")
 
+# The text-mode Setup driver description (roadmap task 33.3), published at the
+# root of every flavour directory a cut writes, where text-mode Setup of
+# Windows 2000 and XP reads it from A:\. Not an INF-declared file either: its
+# own gate (scripts\inf-gate\check-txtsetup-oem.ps1) checks it in place against
+# the INF beside it. A version published before 2.1.0.0 has none, so
+# -UploadSetOnly gates it where it is present and does not require it.
+$oemPublishable = @("txtsetup.oem")
+
 # The DDK's obj directory is the one place its vocabulary is still read; the
 # published directory name is built from the flavour and the architecture
 # together by New-ReleaseLegs below, so the flavour word is no longer a
@@ -1394,7 +1402,7 @@ their defaults.
             Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $expected `
                                                -PublishedPaths $publishedPaths `
                                                -InfName $infName -Flavor $f `
-                                               -Also $uasPublishable
+                                               -Also ($uasPublishable + $oemPublishable)
 
             # Copied at the path the INF declares, which is where the check
             # below will look for it. Taking the layout from the gate's parse
@@ -1505,6 +1513,37 @@ $gateOut
             Write-Ok ("{0}\ carries the UAS class driver, by its own INF" -f $f)
         } elseif ($null -ne $pkgDir) {
             throw "the assembled upload set's $f\ directory has no xhciuas.inf, and this cut built it with one."
+        }
+
+        # The text-mode Setup description, by its own gate against the INF
+        # beside it. Required of a directory this cut built; gated where
+        # present in one -UploadSetOnly reads, since a version published
+        # before 2.1.0.0 has none.
+        $oemFile = Join-Path $uploadFlavorDir "txtsetup.oem"
+        if (Test-Path -LiteralPath $oemFile) {
+            $oemGate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-txtsetup-oem.ps1"
+            $oemArch = if ($LegArches[$f] -eq "amd64") { "amd64" } else { "x86" }
+            $savedEap = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                $gateOut = & powershell.exe @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $oemGate,
+                                              "-OemPath", $oemFile, "-InfPath", $flavorInf, "-Arch", $oemArch,
+                                              "-PackageDir", $uploadFlavorDir) 2>&1 | Out-String
+            } finally {
+                $ErrorActionPreference = $savedEap
+            }
+            if ($LASTEXITCODE -ne 0) {
+                throw @"
+the assembled upload set's $f\ directory failed scripts\inf-gate\check-txtsetup-oem.ps1.
+Do not upload it: the text-mode Setup description does not match the driver and
+INF beside it.
+
+$gateOut
+"@
+            }
+            Write-Ok ("{0}\ carries the text-mode Setup description, by its own gate" -f $f)
+        } elseif ($null -ne $pkgDir) {
+            throw "the assembled upload set's $f\ directory has no txtsetup.oem, and this cut built it with one."
         }
     }
 
@@ -2025,7 +2064,7 @@ runs are what stand between a broken binary and a guest that cannot boot.
         Ensure-Directory $destRoot
         Ensure-Directory $destDir
 
-        foreach ($name in ($publishable + $uasPublishable)) {
+        foreach ($name in ($publishable + $uasPublishable + $oemPublishable)) {
             $src = Join-Path $pkgDir $name
             if (-not (Test-Path -LiteralPath $src)) {
                 throw "make-package.ps1 produced no '$name' in '$pkgDir'."
@@ -2042,7 +2081,7 @@ runs are what stand between a broken binary and a guest that cannot boot.
         Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected[$leg.Arch] `
                                            -PublishedPaths $declaredPublished[$leg.Arch] `
                                            -InfName "xhci98.inf" -Flavor $leg.Id `
-                                           -Also $uasPublishable
+                                           -Also ($uasPublishable + $oemPublishable)
 
         $sys = Join-Path $destDir "xhci98.sys"
         $info = (Get-Item -LiteralPath $sys).VersionInfo
@@ -2544,6 +2583,7 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $contents += ("      xhciuas.sys  {0:N0} bytes" -f $s.UasLength)
         $contents += "      SHA-256"
         $contents += ("      {0}" -f $s.UasSha256)
+        $contents += "      txtsetup.oem (for Windows 2000 and XP Setup's F6 prompt)"
         $contents += ""
     }
     if ($multiArch) {
@@ -2917,12 +2957,14 @@ tested.
  3. THE FILES WINDOWS SUPPLIES, AND USB STORAGE ON WINDOWS 98 SE
 ==============================================================================
 
-The package's own files are four, and they are in:
+The package's own files are five, and they are in:
 
       {DIRLIST}
 
   xhci98.inf, xhci98.sys     the USB host controller driver
   xhciuas.inf, xhciuas.sys   the UAS storage driver
+  txtsetup.oem               the driver description Windows 2000 and XP
+                             Setup read when F6 is pressed (section 4)
 
 Nothing else is in the package, and there is nothing to complete.
 
@@ -3059,6 +3101,92 @@ THE UAS DRIVER installs the first time a UAS disk is plugged in: the Found
 New Hardware wizard asks for a driver for "xHCI98 USB Attached SCSI
 Storage". Point it at the same directory. No restart is needed.
 
+WINDOWS 2000 OR XP SETUP, OR THE RECOVERY CONSOLE, ON AN xHCI-ONLY MACHINE
+..........................................................................
+
+When the keyboard or the install medium is on the xHCI controller, Setup
+can load this driver at its F6 prompt. Copy the files of RELEASE-X86\ (or
+RELEASE-X64\ for Windows XP x64) to the root of a floppy disk - it holds
+txtsetup.oem, xhci98.sys and xhci98.inf, which is all F6 reads. Start
+Setup, press F6 when "Press F6 if you need to install a third party SCSI
+or RAID driver" shows, press S at the next screen, insert the floppy, and
+pick "xHCI98 USB 3.x Host Controller". Setup then uses its own keyboard,
+mouse and USB storage drivers above it.
+
+The same floppy serves the RECOVERY CONSOLE of Windows 2000 and XP: press
+F6 as for an install, then R at Setup's Welcome screen (on Windows 2000,
+then C for the console). The USB keyboard logs in and types commands. The
+console runs in text mode throughout, so the Windows XP restriction below
+does not touch it.
+
+  - Pressing F6 itself needs the firmware's own USB keyboard support.
+  - The floppy must be drive A: as the firmware sees it.
+  - A USB disk that supports UAS (most USB 3 enclosures and SSDs) is
+    usually not usable during Setup, even if it also supports the older
+    Bulk-Only mode. Most USB flash sticks are Bulk-Only only and always
+    work; use one of those.
+  - Installing Windows ONTO a USB disk is not supported.
+  - A USB DRIVE PRESENT AT THE PARTITION SCREEN TAKES THE LETTER C:.
+    Unplug the USB drives you do not need, or Windows installs to the next
+    letter.
+  - On Windows 2000, plug the USB keyboard and the USB stick in BEFORE
+    Setup starts. Its text-mode Setup uses only the USB devices present
+    when the driver first reports them; one plugged in later stays unused
+    there. The driver waits up to 5 seconds for them (section 9,
+    XhciFirstEnumWaitMs).
+  - Later in Setup, Windows installs the driver again from xhci98.inf and
+    may ask for the floppy or the Windows CD.
+  - INSTALLING WINDOWS XP NEEDS A PS/2 KEYBOARD, OR A LAPTOP'S BUILT-IN
+    ONE, LATER IN SETUP. Setup copies Windows' own HID and USB helper files
+    only with Microsoft's own USB controller drivers, so the USB keyboard
+    and mouse do nothing until the "Installing Devices" step installs them
+    from the CD - and that step first asks about this unsigned driver,
+    default No. A machine whose only keyboard is USB cannot answer, and
+    Setup stops. A laptop's built-in keyboard (connected inside as PS/2) or
+    any PS/2 keyboard answers it; afterwards the USB keyboard and mouse
+    work. This package cannot carry those files. Windows 2000 does not ask.
+
+  What has run, in virtual machines only: text mode with a USB keyboard
+  and a USB stick on Windows 2000 and XP, and the Recovery Console on both,
+  logged in and running commands with the USB keyboard alone, on this
+  release's code; and Windows XP and XP x64 installed to the desktop this
+  way on the build before it. Nothing of this has run on real hardware. A
+  repair install, Windows 2000's Emergency Repair Disk and Windows XP's
+  Automated System Recovery were not tried.
+
+UPDATING FROM AN EARLIER 2.x RELEASE
+....................................
+
+Install over it with Update Driver on "xHCI98 USB 3.x eXtensible Host
+Controller", pointed at the same directory as a new install. Nothing needs
+renaming first. As read in virtual machines:
+
+  WINDOWS 98 SE AND ME: RESTART AFTERWARDS, ALTHOUGH WINDOWS DOES NOT ASK.
+  The new file waits to replace the old one at the next start, and until
+  then the earlier release keeps running. Under SweetLow's stack the
+  controller showed a problem for a minute or two after Finish; on ME it
+  shows one until the restart, while the devices keep working.
+
+  WINDOWS 2000: USE HAVE DISK. Letting Windows search answers that a
+  suitable driver is already installed and keeps the earlier release. Use
+  "Display a list of the known drivers" -> Have Disk, as below.
+
+  WINDOWS XP, XP X64, VISTA AND 7: the update took effect at once, with no
+  restart. (Read with a command-line driver update rather than Device
+  Manager.)
+
+  THE ROOT HUB'S DRIVER TAB STILL SHOWS THE EARLIER VERSION (on 98 SE and
+  ME, its date), although it runs the new file. To change it, run Update
+  Driver on "xHCI98 USB 3.x Root Hub" too: on Vista and 7, "Let me pick
+  from a list of device drivers on my computer" and the new entry;
+  elsewhere Have Disk.
+
+  Afterwards each device is found once more as new hardware, exactly once:
+  a stick under its serial number, the other devices under a new id. On
+  the NT systems this needs no answer; on Windows 98 SE the wizard runs for
+  each and may ask for the CD for hidclass.sys. Let Windows install them.
+  A hidusbf setting on such a device has to be applied again (section 5).
+
 UPGRADING FROM THE EARLIER, USB 2.0-ONLY RELEASES (1.x)
 .......................................................
 
@@ -3086,6 +3214,10 @@ download.
     5. Each USB device is found once more as new hardware.
   If you already updated in place and got the blue screen, restart: this
   driver comes up on its own.
+
+  On every system each USB device is a new entry in Device Manager after
+  the upgrade, so a hidusbf polling rate set under 1.x has to be set again
+  (section 5).
 
   WINDOWS 98 SE WITH SWEETLOW'S STACK, AND WINDOWS ME: the same Update
   Driver route, in place. Windows does not ask you to restart, but you
@@ -3126,8 +3258,37 @@ Things specific to this driver, worth knowing in advance:
     says nothing about the real link. XHCISNAP's report (section 6) shows the
     speed the driver actually uses.
 
-  * HUBS DO NOT APPEAR IN DEVICE MANAGER. The driver runs every hub itself,
-    so a device behind a hub appears under the root hub like any other.
+  * HUBS HAVE ENTRIES OF THEIR OWN IN DEVICE MANAGER. A hub appears as
+    "xHCI98 USB Hub", with the devices behind it beneath it. A USB 3 hub
+    appears twice, the second time as "xHCI98 USB 3.x Hub" for its
+    SuperSpeed half. Each hub has a Power tab. A hub installs from the
+    driver already installed: on Windows 98 SE and 2000 with nothing to
+    answer, on Windows XP with the Found New Hardware wizard and the
+    unsigned-driver warning (Continue Anyway) for each newly plugged hub.
+    Disabling and enabling a hub in Device Manager brings back the devices
+    behind it (read on 98 SE, 2000, XP). The driver still runs every hub
+    itself.
+
+  * A DEVICE WITH A SERIAL NUMBER KEEPS ITS ENTRY ON ANY PORT. Moved to
+    another port or behind a hub, it is not found again as new hardware.
+    A device without a serial number is known by its port, as under
+    Microsoft's own hub driver, and moved elsewhere it is found again.
+
+  * DEVICES NO WINDOWS INF NAMES ARE LISTED UNDER THEIR OWN PRODUCT NAMES,
+    in the Add New Hardware wizard and in Device Manager, instead of "USB
+    Device". Where one of Windows' own INFs names a device (a mouse, a
+    keyboard, a USB stick), that name shows, as over Microsoft's own
+    stack. On Windows 98 SE and ME a character outside plain ASCII shows
+    as '?'.
+
+  * SWEETLOW'S HIDUSBF sets a mouse's polling rate, and this driver
+    programs the rate it sets, up to 1000 Hz for a Low- or Full-Speed
+    device (more only with XhciFastPollFsLs, section 9). Read in virtual
+    machines at a root port and behind a hub on Windows 98 SE under NUSB
+    and on ME, and at a root port on XP and on a stock Windows 98 SE. It
+    works behind a hub on XP too (read). Its setting is
+    kept on the device's Device Manager entry, so it has to be applied
+    again whenever the device is found as new hardware.
 
   * IDLE DEVICES ARE NEVER PUT TO SLEEP. The driver never starts selective
     suspend, of a device or of a hub port, so an idle device draws its
@@ -3241,6 +3402,13 @@ being unsigned, and no change to this driver can remove them:
     own device manager stops responding; it does the same on Microsoft's
     own USB stack. Wait for the install to finish before unplugging.
 
+  * A SUPERSPEED DEVICE'S POWER READS A QUARTER OF ITS DRAW on the Power
+    tab: the page doubles a value that is in 8 mA units at SuperSpeed.
+
+  * WINDOWS XP FROM THE F6 FLOPPY: GUI-MODE SETUP ASKS ABOUT THE UNSIGNED
+    DRIVER BEFORE THE USB KEYBOARD WORKS. A PS/2 or built-in laptop
+    keyboard answers it (section 4).
+
 May be addressed in a later release:
 
   * THE DRIVER NEVER STARTS SELECTIVE SUSPEND (section 5). Idle devices and
@@ -3259,15 +3427,10 @@ May be addressed in a later release:
     any ordinary USB stick once, then unplug the UAS drive and plug it back
     in. No Remove and no restart are needed.
 
-  * WINDOWS ME: RE-ENABLING THE CONTROLLER WITH A USB MOUSE OR KEYBOARD
-    ATTACHED MAKES WINDOWS ME STOP RESPONDING. A USB storage device alone is
-    fine. Unplug the mouse or keyboard before re-enabling the controller. If
-    ME stops responding, restart it and re-enable the controller with
-    nothing attached. Being fixed.
+  * WINDOWS VISTA AND 7: THE CONTROLLER'S ADVANCED TAB SHOWS NO BANDWIDTH.
+    The figure comes from a query this driver does not answer.
 
-  * A DEVICE MOVED TO A DIFFERENT PORT IS FOUND AGAIN AS NEW HARDWARE. This
-    driver names a device by its port; Microsoft's hub driver uses the
-    device's serial number. A later release may do the same.
+  * WINDOWS 98 SE AND ME SHOW A DEVICE NAME'S NON-ASCII CHARACTERS AS '?'.
 
 Untested ground:
 
@@ -3282,6 +3445,10 @@ Untested ground:
     sent back to its USB 2.0 port and runs UAS at High Speed, or is refused
     if it has no USB 2.0 port. Built from the specification; no such
     controller has been held.
+
+  * POLLING ABOVE 1000 HZ (XhciFastPollFsLs, section 9). Outside the xHCI
+    specification, and read on no real controller and in no virtual
+    machine.
 
 
 ==============================================================================
@@ -3303,9 +3470,9 @@ debug throughout, in its build scripts and its documentation alike.)
  9. REGISTRY SETTINGS
 ==============================================================================
 
-Every registry value this driver reads. There are four, all DWORDs. The
-install writes one of them, XhciImodInterval250ns; the other three are
-absent until you set them, and absent means 0.
+Every registry value this driver reads. There are seven, all DWORDs. The
+install writes one of them, XhciImodInterval250ns; the other six are absent
+until you set them, and absent means the default each one states.
 
   YOU SHOULD NOT NEED THIS SECTION FOR A LOG. If the maintainer asks for one,
   XHCISNAP -verbosity 2 sets the value that matters, on every controller, and
@@ -3381,7 +3548,48 @@ absent until you set them, and absent means 0.
   installed keeps its driver until you uninstall it in Device Manager and
   plug it back in.
 
-  THOSE FOUR ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
+  XhciFastPollFsLs  -  Low- and Full-Speed polling above 1000 Hz
+  ..............................................................
+
+  Default 0 (absent): off. For a mouse on a ROOT PORT that hidusbf has set
+  to its "31 Hz" or "62 Hz" rate:
+
+      2      "31 Hz" becomes 2000 Hz, "62 Hz" becomes 4000 Hz
+      3      "31 Hz" becomes 4000 Hz, "62 Hz" becomes 8000 Hz
+
+  Any other value is off. A device behind a hub keeps its normal rate.
+
+  THIS IS OUTSIDE THE xHCI SPECIFICATION, which sets 1 ms as the shortest
+  interval for these devices. A controller that refuses it is caught: the
+  device runs at its normal rate, and XHCISNAP's report counts it as
+  fastpoll.fallbacks. A controller that accepts it and then misbehaves
+  cannot be caught; if anything misbehaves, delete the value and restart.
+  While it is set, ANY Low- or Full-Speed device on a root port that asks
+  for 16 to 63 ms is polled faster too. Read when the controller starts, so
+  restart after changing it. It has been read on no real controller and
+  in no virtual machine yet.
+
+  XhciFirstEnumWaitMs, XhciFirstEnumPortMs  -  the first report's wait
+  ....................................................................
+
+  When the root hub or a hub first reports its devices after it starts,
+  the driver waits for the devices already plugged in to be ready, so
+  that they are in that first report (Windows 2000's Setup uses only
+  those, section 4). The wait ends as soon as they are ready.
+
+      XhciFirstEnumWaitMs   the longest wait, in milliseconds. Default
+                            5000; 0 turns the wait off; above 30000 is
+                            held to 30000.
+      XhciFirstEnumPortMs   the longest one port may hold it. Default
+                            2000, held to the total; a slower device is
+                            reported later instead. 0 sets no limit
+                            per port.
+
+  In virtual machines, with the defaults, the first report went 20 to 30
+  ms after the start with nothing plugged in, and 0.3 to 0.9 s after it
+  with a mouse and a stick plugged in.
+
+  THOSE SEVEN ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
   XhciVirtualHSHubVid and XhciVirtualHSHubPid are not read: a copy left in
   the key by an earlier install has no effect, because this driver reports
   every device at its true speed with no virtual hub in the way. Delete

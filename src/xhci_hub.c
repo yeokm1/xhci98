@@ -308,6 +308,33 @@ ULONG XhciHubInstanceKey(ULONG rootPort, ULONG route)
 }
 
 /* IRQL: any. */
+ULONG XhciHubPdoAddress(ULONG rootPort, ULONG route, ULONG onParentHub)
+{
+    ULONG rest;
+    ULONG port;
+
+    route &= 0xFFFFFUL;
+    if (route == 0) {
+        return rootPort & 0xFFUL;
+    }
+    if (!onParentHub) {
+        return XhciHubInstanceKey(rootPort, route);
+    }
+    /* The highest non-zero tier, walked upward by shifting the route
+     * down. Not a count-down over 4 * (tier - 1): MSVC 6.0 compiled that
+     * loop, in the i386 qemu build, to exit after its first pass (the
+     * induction variable stepped by -4 and tested unsigned against -4),
+     * so a one-tier device answered its instance key. */
+    port = 0;
+    for (rest = route; rest != 0; rest >>= 4) {
+        if ((rest & 0xFUL) != 0) {
+            port = rest & 0xFUL;
+        }
+    }
+    return port;
+}
+
+/* IRQL: any. */
 ULONG XhciHubPowerWaitMs(ULONG powerGoodMs)
 {
     if (powerGoodMs < 20UL) {
@@ -395,4 +422,193 @@ ULONG XhciHubReportHas(const UCHAR *data, ULONG bytes, ULONG bit)
         return 0;
     }
     return (data[bit / 8UL] & (1U << (bit % 8UL))) != 0;
+}
+
+/* ----------------------------------------------------------------------- */
+/* A hub as a devnode (task 33.4; design record 13 section 10.11)            */
+/* ----------------------------------------------------------------------- */
+
+typedef struct _XHCI_HUBPDO_TEXT {
+    char *Out;
+    ULONG Capacity;
+    ULONG Used;
+} XHCI_HUBPDO_TEXT;
+
+static VOID xhciHubPdoChar(XHCI_HUBPDO_TEXT *t, char c)
+{
+    if (t->Used < t->Capacity) {
+        t->Out[t->Used] = c;
+    }
+    t->Used++;
+}
+
+static VOID xhciHubPdoStr(XHCI_HUBPDO_TEXT *t, const char *s)
+{
+    while (*s != 0) {
+        xhciHubPdoChar(t, *s++);
+    }
+}
+
+static VOID xhciHubPdoHex(XHCI_HUBPDO_TEXT *t, ULONG value, ULONG digits)
+{
+    static const char hex[] = "0123456789ABCDEF";
+
+    while (digits > 0) {
+        digits--;
+        xhciHubPdoChar(t, hex[(value >> (digits * 4UL)) & 0xFUL]);
+    }
+}
+
+static VOID xhciHubPdoDec(XHCI_HUBPDO_TEXT *t, ULONG value)
+{
+    char digits[11];
+    ULONG d;
+
+    d = 0;
+    do {
+        digits[d++] = (char)('0' + (value % 10UL));
+        value /= 10UL;
+    } while (value != 0 && d < 11UL);
+    while (d > 0) {
+        xhciHubPdoChar(t, digits[--d]);
+    }
+}
+
+static VOID xhciHubPdoBase(XHCI_HUBPDO_TEXT *t, ULONG usb3)
+{
+    xhciHubPdoStr(t, usb3 ? "XHCI98\\HUB30" : "XHCI98\\HUB");
+}
+
+static VOID xhciHubPdoVidPid(XHCI_HUBPDO_TEXT *t, const UCHAR *device,
+                             ULONG usb3)
+{
+    xhciHubPdoBase(t, usb3);
+    xhciHubPdoStr(t, "&VID_");
+    xhciHubPdoHex(t, (ULONG)device[8] | ((ULONG)device[9] << 8), 4);
+    xhciHubPdoStr(t, "&PID_");
+    xhciHubPdoHex(t, (ULONG)device[10] | ((ULONG)device[11] << 8), 4);
+}
+
+/* IRQL: any. */
+ULONG XhciHubPdoId(const UCHAR *device, ULONG usb3, ULONG instanceKey,
+                   ULONG which, char *out, ULONG capacity, PULONG used)
+{
+    XHCI_HUBPDO_TEXT t;
+
+    if (device == NULL || used == NULL || (out == NULL && capacity != 0)) {
+        return XHCI_HUBPDO_BAD_PARAM;
+    }
+    t.Out = out;
+    t.Capacity = capacity;
+    t.Used = 0;
+    switch (which) {
+    case XHCI_HUBPDO_ID_DEVICE:
+        xhciHubPdoVidPid(&t, device, usb3);
+        xhciHubPdoChar(&t, 0);
+        break;
+    case XHCI_HUBPDO_ID_HARDWARE:
+        xhciHubPdoVidPid(&t, device, usb3);
+        xhciHubPdoStr(&t, "&REV_");
+        xhciHubPdoHex(&t, (ULONG)device[12] | ((ULONG)device[13] << 8), 4);
+        xhciHubPdoChar(&t, 0);
+        xhciHubPdoVidPid(&t, device, usb3);
+        xhciHubPdoChar(&t, 0);
+        xhciHubPdoBase(&t, usb3);
+        xhciHubPdoChar(&t, 0);
+        xhciHubPdoChar(&t, 0);
+        break;
+    case XHCI_HUBPDO_ID_INSTANCE:
+        xhciHubPdoDec(&t, instanceKey);
+        xhciHubPdoChar(&t, 0);
+        break;
+    default:
+        /* No compatible id, by design (section 10.11). */
+        *used = 0;
+        return XHCI_HUBPDO_BAD_PARAM;
+    }
+    *used = t.Used;
+    return (t.Used > capacity) ? XHCI_HUBPDO_TOO_SMALL : XHCI_HUBPDO_OK;
+}
+
+/* IRQL: any. */
+ULONG XhciHubPresentedParent(const ULONG *parent, const ULONG *serial,
+                             ULONG count, ULONG start)
+{
+    ULONG at;
+    ULONG steps;
+
+    if (parent == NULL || serial == NULL) {
+        return 0;
+    }
+    at = start;
+    for (steps = 0; steps < count; steps++) {
+        if (at >= count) {
+            return 0;
+        }
+        if (serial[at] != 0) {
+            return serial[at];
+        }
+        at = parent[at];
+    }
+    return 0;
+}
+
+/* IRQL: any. */
+ULONG XhciHubPortLocation(ULONG rootPorts, ULONG perHub, ULONG index,
+                          ULONG n)
+{
+    if (n == 0 || n > perHub) {
+        return 0;
+    }
+    return rootPorts + index * perHub + n;
+}
+
+/* IRQL: any. */
+VOID XhciHubNodeInfo(const XHCI_HUB_DESC *desc, ULONG busPowered,
+                     UCHAR *out)
+{
+    ULONG ports;
+    ULONG maskBytes;
+    ULONG chars;
+    ULONG i;
+
+    if (out == NULL) {
+        return;
+    }
+    for (i = 0; i < XHCI_HUB_NODE_INFO_BYTES; i++) {
+        out[i] = 0;
+    }
+    ports = (desc != NULL) ? desc->Ports : 0;
+    if (ports > 255UL) {
+        ports = 255UL;
+    }
+    chars = (desc != NULL) ? desc->Characteristics : 0;
+    maskBytes = (ports + 1UL + 7UL) / 8UL;
+    /* NodeType UsbHub (0) in bytes 0 to 3, then USB_HUB_DESCRIPTOR. */
+    out[4] = (UCHAR)(7UL + 2UL * maskBytes);
+    out[5] = (UCHAR)XHCI_HUB_DESC_TYPE;
+    out[6] = (UCHAR)ports;
+    out[7] = (UCHAR)(chars & 0xFFUL);
+    out[8] = (UCHAR)((chars >> 8) & 0xFFUL);
+    out[9] = (UCHAR)(((desc != NULL) ? desc->PowerGoodMs / 2UL : 0) & 0xFFUL);
+    out[10] = (UCHAR)(((desc != NULL) ? desc->ControllerCurrent : 0) & 0xFFUL);
+    out[75] = (UCHAR)(busPowered ? 1 : 0);
+}
+
+/* IRQL: any. */
+ULONG XhciHubCapsEx(ULONG speedClass, ULONG multiTtCapable, ULONG multiTtOn)
+{
+    ULONG flags;
+
+    flags = 0;
+    if (speedClass == XHCI_SPEED_HIGH) {
+        flags |= 0x3UL;
+        if (multiTtCapable) {
+            flags |= 0x4UL;
+            if (multiTtOn) {
+                flags |= 0x8UL;
+            }
+        }
+    }
+    return flags;
 }

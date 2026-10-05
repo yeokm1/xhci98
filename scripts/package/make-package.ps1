@@ -12,6 +12,10 @@ is this project's two files and nothing else:
     xhciuas.inf    the UAS class driver's INF (roadmap task 31-A.2;
                    src\uas\xhciuas-amd64.inf under this name for amd64)
     xhciuas.sys    the UAS class driver, the same flavour
+    txtsetup.oem   the text-mode Setup driver description (roadmap task
+                   33.3; src\txtsetup-amd64.oem under this name for amd64),
+                   read from A:\ when F6 is pressed in Windows 2000 and XP
+                   text-mode Setup, so it sits at the root with xhci98.sys
 
 The Microsoft files the driver depends on, usbd.sys and usbhub.sys (both
 targets), usbport.sys (the NT targets; on Windows 98 the USB 2.0 stack
@@ -88,6 +92,15 @@ is then a refusal, not an omission. A caller that names -DriverPath (the
 self-tests' stand-ins) stages the UAS pair only when it names -UasDriverPath
 too, so a stand-in package is not filled from whatever the last build left
 in src\uas.
+
+.PARAMETER OemPath
+The text-mode Setup driver description to stage (task 33.3), overriding
+`src\txtsetup.oem` (x86) or `src\txtsetup-amd64.oem` (amd64). Staged as
+`txtsetup.oem` at the package root either way and gated by
+scripts\inf-gate\check-txtsetup-oem.ps1 against the staged INF and package.
+Staged whenever the package is built from the default paths; a caller that
+names -DriverPath (the self-tests' stand-ins) stages it only when it names
+-OemPath too, as for the UAS pair.
 
 .PARAMETER SkipPackageGate
 Skip the post-staging check-inf.ps1 -PackageDir run only. The INF is gated
@@ -188,6 +201,7 @@ param(
     [string]$DriverPath = "",
     [string]$UasInfPath = "",
     [string]$UasDriverPath = "",
+    [string]$OemPath = "",
     [switch]$SkipPackageGate,
     [switch]$SkipBinaryGates,
     [switch]$NoTargetEvidence,
@@ -215,6 +229,11 @@ if ($InfPath -eq "") { $InfPath = Join-Path $repo $archInf }
 # question: see the -UasDriverPath help.
 #
 $stageUas = ($DriverPath -eq "") -or ($UasDriverPath -ne "")
+# The text-mode Setup description (task 33.3), decided the same way.
+$stageOem = ($DriverPath -eq "") -or ($OemPath -ne "")
+if ($OemPath -eq "") {
+    $OemPath = Join-Path $repo $(if ($Arch -eq "amd64") { "src\txtsetup-amd64.oem" } else { "src\txtsetup.oem" })
+}
 $uasInfName = if ($Arch -eq "amd64") { "xhciuas-amd64.inf" } else { "xhciuas.inf" }
 $uasAllow = if ($Arch -eq "amd64") { "xhciuas-imports-amd64.allow" } else { "xhciuas-imports.allow" }
 if ($UasInfPath -eq "") { $UasInfPath = Join-Path $repo "src\uas\$uasInfName" }
@@ -714,6 +733,14 @@ usbhub.sys through the INF's LayoutFile, and the gate refuses them here.
         Copy-Item -LiteralPath $UasInfPath -Destination (Join-Path $stageDir "xhciuas.inf") -Force
         Copy-Item -LiteralPath $UasDriverPath -Destination (Join-Path $stageDir "xhciuas.sys") -Force
     }
+    # txtsetup.oem at the root: text-mode Setup reads it from A:\ and its
+    # [Disks] entry finds xhci98.sys and xhci98.inf beside it.
+    if ($stageOem) {
+        if (-not (Test-Path -LiteralPath $OemPath)) {
+            throw "no text-mode Setup description at '$OemPath'."
+        }
+        Copy-Item -LiteralPath $OemPath -Destination (Join-Path $stageDir "txtsetup.oem") -Force
+    }
     $rootInf = Join-Path $stageDir "xhci98.inf"
     if (-not (Test-Path -LiteralPath $rootInf)) {
         Copy-Item -LiteralPath $InfPath -Destination $rootInf -Force
@@ -820,6 +847,20 @@ a build that was never made.
             }
             if ($LASTEXITCODE -ne 0) {
                 throw "the staged package failed scripts\inf-gate\check-uas-inf.ps1 - do not install it."
+            }
+        }
+        if ($stageOem) {
+            $savedEap = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                & powershell -NoProfile -ExecutionPolicy Bypass -File `
+                    (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-txtsetup-oem.ps1") `
+                    -OemPath (Join-Path $stageDir "txtsetup.oem") -InfPath $rootInf -PackageDir $stageDir -Arch $Arch
+            } finally {
+                $ErrorActionPreference = $savedEap
+            }
+            if ($LASTEXITCODE -ne 0) {
+                throw "the staged package failed scripts\inf-gate\check-txtsetup-oem.ps1 - do not install it."
             }
         }
     }

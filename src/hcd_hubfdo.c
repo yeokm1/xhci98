@@ -1,0 +1,359 @@
+/*
+ * hcd_hubfdo.c - an external hub's FDO: xhci98.sys's third PnP role
+ * (roadmap-hcd.md task 33.4; design record 13 section 10.11).
+ *
+ * The bus serves every hub itself (hcd_hub.c, hcd_sshub.c); what changes in
+ * 33.4 is only the presentation. A hub's PDO (hcd_pdo.c, an HCD_DEVICE_PDO
+ * with Hub set, under the project-owned ids XHCI98\HUB or XHCI98\HUB30) is
+ * bound by this driver's own INF, and AddDevice - decided as for the root
+ * hub by the PDO's driver object - attaches this FDO over it. Its
+ * BusRelations are the PDOs presented under that hub (ParentSerial), its
+ * door the hub IOCTLs of the Power tab for the hub's own ports
+ * (hcd_door.c). Its remove tears down only itself: the bus, the hub and
+ * the devices behind it keep running, and the PDOs stay listed (the WDM
+ * rule) - but those PnP had and removed are let go of, PnP having
+ * forgotten them with this devnode, and when PnP adds and starts an FDO
+ * again their ports are cycled so the devices come back as new PDOs under
+ * the same instance ids, inside the first answer's settle
+ * (HcdDevicePdoLetGo, HcdDevicePdoRepresent; 2.1.0.0 leg 1e).
+ *
+ * The controller is reached only through the hub PDO's Controller, inside
+ * that PDO's Busy count - the guard a device PDO's own dispatch takes, and
+ * which the parent's release (HcdDevicePdoReleaseAll) waits out before it
+ * orphans the PDO. Busy is never held across a call down the stack: the
+ * PDO's own STOP and REMOVE wait for it (hcd_pdo.c, hcdPdoQuiesce).
+ *
+ * IRQL: PASSIVE_LEVEL throughout (PnP, power on DO_POWER_PAGABLE objects,
+ * and IRP_MJ_DEVICE_CONTROL from user mode), except where a function says
+ * otherwise.
+ */
+
+#include "hcd.h"
+#include "xhci_dbg.h"
+
+/* The hub PDO under this FDO. */
+#define hcdHubPdoOf(fdo) ((PHCD_DEVICE_PDO)(fdo)->Pdo->DeviceExtension)
+
+static ULONG hcdHubIoEnter(PHCD_HUB_FDO fdo)
+{
+    (VOID)InterlockedIncrement(&fdo->OutstandingIo);
+    if (fdo->Common.PnpState == HCD_PNP_REMOVED) {
+        if (InterlockedDecrement(&fdo->OutstandingIo) == 0) {
+            (VOID)KeSetEvent(&fdo->RemoveEvent, IO_NO_INCREMENT, FALSE);
+        }
+        return 0;
+    }
+    return 1;
+}
+
+static VOID hcdHubIoLeave(PHCD_HUB_FDO fdo)
+{
+    if (InterlockedDecrement(&fdo->OutstandingIo) == 0) {
+        (VOID)KeSetEvent(&fdo->RemoveEvent, IO_NO_INCREMENT, FALSE);
+    }
+}
+
+/* The controller, through the hub PDO, with that PDO's Busy raised before
+ * Controller is read, as hcd_urb.c's dispatch does; NULL (and nothing
+ * raised) once the parent's release has orphaned the PDO. IRQL: <=
+ * DISPATCH_LEVEL. */
+static PHCD_CONTROLLER hcdHubControllerEnter(PHCD_HUB_FDO fdo)
+{
+    PHCD_DEVICE_PDO pdo;
+    PHCD_CONTROLLER hc;
+
+    pdo = hcdHubPdoOf(fdo);
+    (VOID)InterlockedIncrement(&pdo->Busy);
+    hc = pdo->Controller;
+    if (hc == NULL) {
+        (VOID)InterlockedDecrement(&pdo->Busy);
+    }
+    return hc;
+}
+
+/* IRQL: <= DISPATCH_LEVEL. */
+static VOID hcdHubControllerLeave(PHCD_HUB_FDO fdo, PHCD_CONTROLLER hc)
+{
+    if (hc != NULL) {
+        (VOID)InterlockedDecrement(&hcdHubPdoOf(fdo)->Busy);
+    }
+}
+
+static NTSTATUS hcdHubPassDown(PHCD_HUB_FDO fdo, PIRP irp)
+{
+    IoSkipCurrentIrpStackLocation(irp);
+    return IoCallDriver(fdo->LowerDevice, irp);
+}
+
+static NTSTATUS NTAPI hcdHubSignal(PDEVICE_OBJECT DeviceObject, PIRP Irp,
+                                   PVOID Context)
+{
+    UNREFERENCED_PARAMETER(DeviceObject);
+    UNREFERENCED_PARAMETER(Irp);
+
+    (VOID)KeSetEvent((PKEVENT)Context, IO_NO_INCREMENT, FALSE);
+    return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+/* AddDevice for a hub's PDO. Anything else of this driver's own that is not
+ * the root hub's is refused. */
+NTSTATUS HcdHubAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
+{
+    PHCD_DEVICE_PDO pdoExt;
+    PDEVICE_OBJECT fdo;
+    PHCD_HUB_FDO ext;
+    NTSTATUS status;
+
+    pdoExt = (PHCD_DEVICE_PDO)pdo->DeviceExtension;
+    if (pdoExt->Common.Kind != HCD_KIND_DEVICE_PDO || !pdoExt->Hub) {
+        return STATUS_NOT_SUPPORTED;
+    }
+    status = IoCreateDevice(driver, sizeof(HCD_HUB_FDO), NULL,
+                            FILE_DEVICE_BUS_EXTENDER, 0, FALSE, &fdo);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+    ext = (PHCD_HUB_FDO)fdo->DeviceExtension;
+    ext->Common.Kind = HCD_KIND_HUB_FDO;
+    ext->Common.Self = fdo;
+    ext->Common.PnpState = HCD_PNP_ADDED;
+    ext->Common.DevicePower = PowerDeviceD0;
+    ext->Common.SystemPower = PowerSystemWorking;
+    ext->Pdo = pdo;
+    ext->OutstandingIo = 1;
+    KeInitializeEvent(&ext->RemoveEvent, NotificationEvent, FALSE);
+
+    ext->LowerDevice = IoAttachDeviceToDeviceStack(fdo, pdo);
+    if (ext->LowerDevice == NULL) {
+        IoDeleteDevice(fdo);
+        return STATUS_NO_SUCH_DEVICE;
+    }
+    fdo->Flags |= DO_POWER_PAGABLE;
+    fdo->Flags &= ~DO_DEVICE_INITIALIZING;
+    XHCI_DBG_VALUE("hcd: hub FDO attached, hub PDO serial", pdoExt->Serial);
+    return STATUS_SUCCESS;
+}
+
+/* The door's names, at a start that succeeded below, and the settle the
+ * first answer after it waits for (task 33.3). */
+static VOID hcdHubStarted(PHCD_HUB_FDO fdo)
+{
+    PHCD_CONTROLLER hc;
+
+    hc = hcdHubControllerEnter(fdo);
+    HcdDoorHubStart(fdo, hc);
+    if (hc != NULL) {
+        /* Before the settle is asked, so the pass that settles it has
+         * re-enumerated what an earlier FDO's removal let go of. */
+        (VOID)HcdDevicePdoRepresent(hc, hcdHubPdoOf(fdo)->Serial);
+    }
+    fdo->SettleTarget = (hc != NULL) ? HcdEnumSettleAsk(hc) : 0;
+    fdo->SettlePending = fdo->SettleTarget != 0;
+    hcdHubControllerLeave(fdo, hc);
+}
+
+/*
+ * The first BusRelations answer since a start waits for the devices behind
+ * this hub that were connected when its ports were first looked at (task
+ * 33.3; design record 13 section 5.7) - in practice already enumerated, the
+ * hub's bring-up having looked at its ports before its PDO was made, so the
+ * wait is one look unless the bus is busy elsewhere. Each look raises the
+ * PDO's Busy and drops it before the sleep, so the parent's release, which
+ * waits Busy out, never waits on a sleep; no lock is held. Bounded by the
+ * controller's deadline. IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdHubSettle(PHCD_HUB_FDO fdo, ULONG target)
+{
+    PHCD_CONTROLLER hc;
+    LARGE_INTEGER due;
+    KTIMER deadline;
+    ULONG armed;
+    ULONG start;
+    ULONG next;
+    ULONG why;
+
+    start = HcdEnumSettleClock();
+    armed = 0;
+    for (;;) {
+        hc = hcdHubControllerEnter(fdo);
+        why = HCD_SETTLE_TORNDOWN;
+        next = 0;
+        if (hc != NULL) {
+            if (!armed) {
+                /* No deadline is no wait. */
+                armed = HcdEnumSettleArm(hc, &deadline) ? 1UL : 2UL;
+            }
+            if (armed == 1) {
+                next = HcdEnumSettleStep(hc, target, &deadline, &why);
+            } else {
+                why = HCD_SETTLE_DEADLINE;
+            }
+        }
+        if (next == 0) {
+            if (hc != NULL) {
+                HcdEnumSettleEnd(hc, target, start, why);
+            }
+            hcdHubControllerLeave(fdo, hc);
+            break;
+        }
+        hcdHubControllerLeave(fdo, hc);
+        HcdRelativeMs(&due, next);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
+    if (armed == 1) {
+        (VOID)KeCancelTimer(&deadline);
+    }
+}
+
+NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
+{
+    PIO_STACK_LOCATION stack;
+    PHCD_CONTROLLER hc;
+    PDEVICE_RELATIONS old;
+    PDEVICE_RELATIONS rel;
+    KEVENT done;
+    NTSTATUS status;
+
+    stack = IoGetCurrentIrpStackLocation(irp);
+    XHCI_DBG_VALUE("hcd: hub FDO PnP minor", stack->MinorFunction);
+
+    if (stack->MinorFunction == IRP_MN_REMOVE_DEVICE) {
+        (VOID)InterlockedExchange((PLONG)&fdo->DoorOpen, 0);
+        fdo->Common.PnpState = HCD_PNP_REMOVED;
+        hcdHubIoLeave(fdo);
+        (VOID)KeWaitForSingleObject(&fdo->RemoveEvent, Executive, KernelMode,
+                                    FALSE, NULL);
+        /* Only the door goes; the bus keeps the hub and the devices behind
+         * it, whose PDOs PnP has removed already and which stay listed -
+         * let go of, since PnP forgets them with this devnode: the next
+         * FDO's start presents those devices again as new PDOs (2.1.0.0
+         * leg 1e; design record 13 section 10.11). */
+        hc = hcdHubControllerEnter(fdo);
+        if (hc != NULL) {
+            (VOID)HcdDevicePdoLetGo(hc, hcdHubPdoOf(fdo)->Serial);
+        }
+        HcdDoorHubRemove(fdo, hc);
+        hcdHubControllerLeave(fdo, hc);
+        irp->IoStatus.Status = STATUS_SUCCESS;
+        status = hcdHubPassDown(fdo, irp);
+        IoDetachDevice(fdo->LowerDevice);
+        IoDeleteDevice(fdo->Common.Self);
+        return status;
+    }
+
+    if (!hcdHubIoEnter(fdo)) {
+        return HcdCompleteIrp(irp, STATUS_DELETE_PENDING, 0);
+    }
+
+    if (stack->MinorFunction == IRP_MN_START_DEVICE) {
+        KeInitializeEvent(&done, NotificationEvent, FALSE);
+        IoCopyCurrentIrpStackLocationToNext(irp);
+        HCD_SET_COMPLETION_ALWAYS(irp, hcdHubSignal, &done);
+        status = IoCallDriver(fdo->LowerDevice, irp);
+        if (status == STATUS_PENDING) {
+            (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE,
+                                        NULL);
+        }
+        status = irp->IoStatus.Status;
+        if (NT_SUCCESS(status)) {
+            fdo->Common.PnpState = HCD_PNP_STARTED;
+            hcdHubStarted(fdo);
+            (VOID)InterlockedExchange((PLONG)&fdo->DoorOpen, 1);
+        }
+        status = HcdCompleteIrp(irp, status, 0);
+        hcdHubIoLeave(fdo);
+        return status;
+    }
+
+    switch (stack->MinorFunction) {
+    case IRP_MN_STOP_DEVICE:
+        (VOID)InterlockedExchange((PLONG)&fdo->DoorOpen, 0);
+        fdo->Common.PnpState = HCD_PNP_STOPPED;
+        fdo->SettlePending = 0;
+        HcdDoorHubStop(fdo);
+        irp->IoStatus.Status = STATUS_SUCCESS;
+        break;
+    case IRP_MN_SURPRISE_REMOVAL:
+        (VOID)InterlockedExchange((PLONG)&fdo->DoorOpen, 0);
+        fdo->Common.PnpState = HCD_PNP_SURPRISE_REMOVED;
+        fdo->SettlePending = 0;
+        HcdDoorHubStop(fdo);
+        irp->IoStatus.Status = STATUS_SUCCESS;
+        break;
+    case IRP_MN_QUERY_STOP_DEVICE:
+    case IRP_MN_QUERY_REMOVE_DEVICE:
+    case IRP_MN_CANCEL_STOP_DEVICE:
+    case IRP_MN_CANCEL_REMOVE_DEVICE:
+        irp->IoStatus.Status = STATUS_SUCCESS;
+        break;
+    case IRP_MN_QUERY_DEVICE_RELATIONS:
+        if (stack->Parameters.QueryDeviceRelations.Type == BusRelations) {
+            if (fdo->SettlePending) {
+                fdo->SettlePending = 0;
+                hcdHubSettle(fdo, fdo->SettleTarget);
+            }
+            old = (PDEVICE_RELATIONS)irp->IoStatus.Information;
+            hc = hcdHubControllerEnter(fdo);
+            rel = (hc != NULL)
+                      ? HcdDevicePdoRelations(hc, old,
+                                              hcdHubPdoOf(fdo)->Serial)
+                      : NULL;
+            hcdHubControllerLeave(fdo, hc);
+            if (rel != NULL) {
+                XHCI_DBG_VALUE("hcd: hub FDO relations, count", rel->Count);
+                if (old != NULL) {
+                    HcdPoolFreeForeign(old);
+                }
+                irp->IoStatus.Information = (ULONG_PTR)rel;
+                irp->IoStatus.Status = STATUS_SUCCESS;
+            }
+        }
+        break;
+    default:
+        break;
+    }
+    status = hcdHubPassDown(fdo, irp);
+    hcdHubIoLeave(fdo);
+    return status;
+}
+
+NTSTATUS HcdHubFdoPower(PHCD_HUB_FDO fdo, PIRP irp)
+{
+    NTSTATUS status;
+
+    if (!hcdHubIoEnter(fdo)) {
+        PoStartNextPowerIrp(irp);
+        return HcdCompleteIrp(irp, STATUS_DELETE_PENDING, 0);
+    }
+    PoStartNextPowerIrp(irp);
+    IoSkipCurrentIrpStackLocation(irp);
+    status = PoCallDriver(fdo->LowerDevice, irp);
+    hcdHubIoLeave(fdo);
+    return status;
+}
+
+/* IRP_MJ_DEVICE_CONTROL on a hub FDO: the hub IOCTLs of the Power tab for
+ * this hub's own ports (hcd_door.c), inside the FDO's I/O count and the
+ * PDO's Busy. */
+NTSTATUS HcdHubFdoDeviceControl(PHCD_HUB_FDO fdo, PIRP irp)
+{
+    PHCD_CONTROLLER hc;
+    NTSTATUS status;
+
+    if (!hcdHubIoEnter(fdo)) {
+        return HcdCompleteIrp(irp, STATUS_DELETE_PENDING, 0);
+    }
+    /* Refused before the PDO's Busy is raised once a STOP or a removal has
+     * begun (Codex review of 33.4, round 1, finding 2): the PDO's quiesce
+     * waits for Busy, and handles already open would otherwise hold it. A
+     * request admitted just before the close is one bounded IOCTL. */
+    if (fdo->DoorOpen == 0) {
+        hcdHubIoLeave(fdo);
+        return HcdCompleteIrp(irp, STATUS_DEVICE_NOT_CONNECTED, 0);
+    }
+    hc = hcdHubControllerEnter(fdo);
+    status = HcdDoorHubIoctl(hc, hcdHubPdoOf(fdo), irp);
+    hcdHubControllerLeave(fdo, hc);
+    hcdHubIoLeave(fdo);
+    return status;
+}

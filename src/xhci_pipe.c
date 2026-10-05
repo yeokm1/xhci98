@@ -405,6 +405,9 @@ ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
         out.Interval = 0;
     }
 
+    out.FastPoll = 0;
+    out.SpecInterval = out.Interval;
+
     out.ErrorCount = out.TransferType == XHCI_PIPE_XFER_ISOCH
                          ? 0UL : XHCI_PIPE_CERR;
 
@@ -660,6 +663,8 @@ static ULONG xhciPipeSuperSpeed(const UCHAR *config, ULONG total,
         }
     }
 
+    out.FastPoll = 0;
+    out.SpecInterval = out.Interval;
     *ep = out;
     return XHCI_PIPE_OK;
 }
@@ -687,6 +692,107 @@ ULONG XhciPipeEndpointParamsAt(const UCHAR *config, ULONG length,
         return XHCI_PIPE_MALFORMED;
     }
     return xhciPipeSuperSpeed(config, total, offset, speed, lec, ep);
+}
+
+ULONG XhciPipeCallerInterval(const UCHAR *config, ULONG length, ULONG offset,
+                             const UCHAR *caller, ULONG callerLength,
+                             ULONG interfaceNumber, ULONG alternate,
+                             PULONG bInterval)
+{
+    XHCI_PIPE_IFACE iface;
+    ULONG total;
+    ULONG answer;
+    ULONG at;
+    ULONG e;
+    ULONG i;
+
+    if (config == NULL || caller == NULL || bInterval == NULL) {
+        return XHCI_PIPE_BAD_PARAM;
+    }
+    total = xhciPipeTotal(config, length);
+    if (offset >= total || total - offset < XHCI_PIPE_ENDPOINT_BYTES) {
+        return XHCI_PIPE_BAD_PARAM;
+    }
+    answer = XhciPipeFindInterface(caller, callerLength, interfaceNumber,
+                                   alternate, &iface);
+    if (answer != XHCI_PIPE_OK) {
+        return answer == XHCI_PIPE_NOT_FOUND ? XHCI_PIPE_NOT_FOUND
+                                             : XHCI_PIPE_MALFORMED;
+    }
+    /* Every EndpointOffset holds a whole 7-byte descriptor (the walk). */
+    for (e = 0; e < iface.EndpointCount; e++) {
+        at = iface.EndpointOffset[e];
+        for (i = 0; i < 6UL; i++) {
+            if (caller[at + i] != config[offset + i]) {
+                break;
+            }
+        }
+        if (i == 6UL) {
+            *bInterval = (ULONG)caller[at + 6];
+            return XHCI_PIPE_OK;
+        }
+    }
+    return XHCI_PIPE_NOT_FOUND;
+}
+
+/*
+ * Fast polling (33.8; design record 13 section 13 has the research). Table
+ * 6-12 (xHCI 1.2c p.420) gives a FS/LS interrupt endpoint the Interval
+ * range 3-10, and 6.2.3.6 has system software translate bInterval into it;
+ * an Interval below 3 is outside the range, which a controller may refuse
+ * at Configure Endpoint ("Not all Input Endpoint Contexts identified by Add
+ * Context flag fields = '1' are valid", p.112: Parameter Error) or run.
+ * Opt-in only (XhciFastPollFsLs), and the caller retries at the Table 6-12
+ * Interval on a refusal (XhciPipeFastRetry).
+ */
+ULONG XhciPipeFastMode(ULONG value)
+{
+    if (value == XHCI_PIPE_FAST_1K || value == XHCI_PIPE_FAST_2K4K ||
+        value == XHCI_PIPE_FAST_4K8K) {
+        return value;
+    }
+    return XHCI_PIPE_FAST_OFF;
+}
+
+ULONG XhciPipeFastPoll(ULONG mode, ULONG speed, ULONG route,
+                       PXHCI_PIPE_EP ep)
+{
+    ULONG fast;
+
+    if (ep == NULL || ep->FastPoll ||
+        (mode != XHCI_PIPE_FAST_2K4K && mode != XHCI_PIPE_FAST_4K8K) ||
+        (speed != XHCI_PIPE_SPEED_LOW && speed != XHCI_PIPE_SPEED_FULL) ||
+        route != 0 || ep->TransferType != XHCI_PIPE_XFER_INTERRUPT) {
+        return 0;
+    }
+    if (ep->Interval == 8UL) {
+        fast = mode == XHCI_PIPE_FAST_2K4K ? 2UL : 1UL;
+    } else if (ep->Interval == 7UL) {
+        fast = mode == XHCI_PIPE_FAST_2K4K ? 1UL : 0UL;
+    } else {
+        return 0;
+    }
+    ep->SpecInterval = ep->Interval;
+    ep->Interval = fast;
+    ep->FastPoll = 1;
+    return 1;
+}
+
+ULONG XhciPipeFastRevert(PXHCI_PIPE_EP ep)
+{
+    if (ep == NULL || !ep->FastPoll) {
+        return 0;
+    }
+    ep->Interval = ep->SpecInterval;
+    ep->FastPoll = 0;
+    return 1;
+}
+
+ULONG XhciPipeFastRetry(ULONG completionCode)
+{
+    return completionCode == XHCI_CC_PARAMETER_ERROR ||
+           completionCode == XHCI_CC_BANDWIDTH_ERROR ||
+           completionCode == XHCI_CC_SECONDARY_BANDWIDTH;
 }
 
 ULONG XhciPipeParseBos(const UCHAR *data, ULONG length, PXHCI_PIPE_BOS bos)

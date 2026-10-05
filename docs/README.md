@@ -109,7 +109,10 @@ source comments, scripts, and other docs use these same locations.
   two mechanisms that have stopped it, the Full-Speed root-port bugcheck, the NT 6.x
   enable arrest inside usbport's own DPC state machine, and the SMP list-head
   corruption that came out of completing without the transfer's endpoint
-  lock), with a list of the next candidates. Narratives distilled from `lessons.md` and the run sheets;
+  lock, and Windows ME's controller re-enable stopping on PDOs the HCD had
+  replaced rather than kept across the stop, and Windows XP's GUI-mode
+  Setup leaving the USB keyboard dead after an F6 install because Setup
+  copies Windows' own HID files only with its own host controllers), with a list of the next candidates. Narratives distilled from `lessons.md` and the run sheets;
   those remain the evidence.
 
 ## Future plans

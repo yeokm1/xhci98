@@ -2,7 +2,7 @@
  * xhci_func.h - the pure half of composite splitting in xhci98.sys
  * (roadmap-hcd.md task 26-A.7; design record 13 sections 10.7 to 10.9).
  *
- * Four computations, none touching a register, a lock or a kernel service,
+ * Six computations, none touching a register, a lock or a kernel service,
  * so the host suite drives each (test\test_func.c):
  *
  *   - whether a device is split, and its functions: IADs first, then the
@@ -12,7 +12,11 @@
  *     GET_DESCRIPTOR(CONFIGURATION) (section 10.9);
  *   - whether a SETUP packet may leave a function PDO (an interface
  *     recipient must be one of its interfaces);
- *   - the function PDO's ids (section 10.7), as ASCII multi-strings.
+ *   - the function PDO's ids (section 10.7), as ASCII multi-strings;
+ *   - every PDO's instance id: the serial number string when it is
+ *     usable, else the location (task 33.2);
+ *   - and every PDO's device text: which string it is named by, and that
+ *     string made fit to show (task 33.6).
  *
  * DDK-free: part of the pure core.
  */
@@ -106,5 +110,118 @@ ULONG XhciFuncSetupAllowed(const UCHAR *setup, ULONG interfaceMask,
  * whole answer's length, NULs included, even when it did not fit. */
 ULONG XhciFuncId(const UCHAR *device, const XHCI_FUNC *func, ULONG port,
                  ULONG which, char *out, ULONG capacity, PULONG used);
+
+/*
+ * Instance ids from the serial number (roadmap-hcd.md task 33.2; design
+ * record 13 section 10.7). A string descriptor holds at most 126 UTF-16
+ * characters ((255 - 2) / 2), so a serial id is at most 126 ASCII
+ * characters and its NUL.
+ */
+#define XHCI_SERIAL_ID_CHARS    126UL
+#define XHCI_SERIAL_ID_BYTES    127UL
+#define XHCI_FUNC_BAD_SERIAL    5UL /* a string, but no usable instance id */
+#define XHCI_INSTANCE_NO_MI     0xFFFFFFFFUL
+
+/*
+ * The serial id of the string descriptor `desc`, `bytes` of it read, into
+ * `out` (at least XHCI_SERIAL_ID_BYTES), NUL-terminated. XHCI_FUNC_OK with
+ * the characters copied; XHCI_FUNC_MALFORMED (out empty) when it is not a
+ * string descriptor: fewer than 2 bytes, bDescriptorType not 3, or a
+ * bLength below 2 or past `bytes`; XHCI_FUNC_BAD_SERIAL (out empty) for an
+ * empty string, or any character an instance id may not carry - only 0x21
+ * to 0x7E pass, less ',' and '\' (Microsoft's usbhub refuses below 0x20,
+ * above 0x7F and ','; this rule is narrower by the space, DEL and the
+ * backslash, which separates the parts of a device instance path). An odd
+ * bLength's last byte is ignored. Nothing is truncated: a valid descriptor
+ * always fits.
+ */
+ULONG XhciFuncSerialId(const UCHAR *desc, ULONG bytes, char *out,
+                       ULONG capacity);
+
+/* 1 when serial ids `a` and `b` are both non-empty and equal ignoring
+ * ASCII case - the registry, where an instance id becomes a key name,
+ * does not tell case apart. */
+ULONG XhciFuncSerialSame(const char *a, const char *b);
+
+/*
+ * A device or function PDO's instance id, NUL-terminated ASCII. With a
+ * non-empty `serial`: the serial id, then for a function (`mi` its
+ * MI_nn, not XHCI_INSTANCE_NO_MI) '&' and nn. Without: the location key
+ * (XhciHubInstanceKey) in decimal, then for a function nn - section 10.7's
+ * location form. nn is two upper-case hex digits. *used is the whole
+ * length, the NUL included, even when it did not fit.
+ */
+ULONG XhciFuncInstanceId(const char *serial, ULONG location, ULONG mi,
+                         char *out, ULONG capacity, PULONG used);
+
+/*
+ * Which dormant group a re-enumerated device may revive on Windows 98 SE
+ * and ME (task 33.2 on 33.1's dormant PDOs), by the ids alone - the caller
+ * compares place and descriptors. A group named by its place (its
+ * `oldSerial` empty) at the device's place: when the device read the same
+ * serial id the group's did (`oldRead`, `newRead`, exact, both empty for
+ * no serial); or every read of the device's failed (`newUnread`: not known
+ * to differ); or every read of the group's device failed (`oldUnread`)
+ * and the device answers the location form itself (`newLocation`: no
+ * serial id, or one a duplicate emptied) - the same id either way. A
+ * group named by its serial id: only by a device with exactly that serial
+ * id (`newSerial`). 1 when it may.
+ */
+ULONG XhciFuncReviveByPlace(const char *oldSerial, const char *oldRead,
+                            ULONG oldUnread, const char *newRead,
+                            ULONG newUnread, ULONG newLocation);
+ULONG XhciFuncReviveBySerial(const char *oldSerial, const char *newSerial);
+
+/*
+ * Whether a dormant group the device just listed did not revive is retired
+ * for that device's place (Windows 98 SE and ME): named by its place (its
+ * `oldSerial` empty), at the same instance key (XhciHubInstanceKey) and
+ * under the same parent (`oldParent`, `newParent`: the presented parent's
+ * serial, 0 for the root hub). The instance key carries no hub identity,
+ * so a group under another hub at the same route and root port is not
+ * this place's - its own parent's re-enumeration, or its START's wait,
+ * settles it (Codex review of the 33.1-33.6 integration, finding 3).
+ * 1 when it is retired.
+ */
+ULONG XhciFuncRetireByPlace(const char *oldSerial, ULONG oldKey,
+                            ULONG oldParent, ULONG newKey, ULONG newParent);
+
+/*
+ * Device text (roadmap-hcd.md task 33.6; design record 13 section 10.7):
+ * the DeviceTextDescription a PDO answers, from a string descriptor. At
+ * most 126 UTF-16 units, as for a serial, and the NUL.
+ */
+#define XHCI_TEXT_CHARS         126UL
+#define XHCI_TEXT_WCHARS        127UL
+#define XHCI_TEXT_PICKS         3UL
+#define XHCI_FUNC_BAD_TEXT      6UL /* a string, but nothing to show       */
+#define XHCI_TEXT_FOLD_ASCII    1UL /* XhciFuncText flag: see below        */
+
+/*
+ * The string indexes a PDO's text is tried from, in order, into
+ * `indexes` (XHCI_TEXT_PICKS of them); returns how many, zeros and
+ * repeats left out. A device PDO (`func` NULL): iProduct. A function PDO:
+ * its IAD's iFunction, then its first interface's iInterface (alternate
+ * 0, found in the device's whole configuration `config` of `length`
+ * bytes), then the device's iProduct. 0 when there is none: the caller's
+ * "USB Device".
+ */
+ULONG XhciFuncTextIndexes(const UCHAR *device, const XHCI_FUNC *func,
+                          const UCHAR *config, ULONG length, PULONG indexes);
+
+/*
+ * The text of the string descriptor `desc`, `bytes` of it read, into
+ * `out` (at least XHCI_TEXT_WCHARS), NUL-terminated, *chars its length.
+ * The string ends at its first NUL unit. A C0 or C1 control or DEL is a
+ * space; a run of spaces is one; leading and trailing spaces go. A
+ * surrogate that is not half of a pair, U+FFFE and U+FFFF are '?'. With
+ * XHCI_TEXT_FOLD_ASCII every character above U+007E, a pair included, is
+ * '?' too (Windows 98 and ME: see design record 13 section 10.7).
+ * XHCI_FUNC_OK; XHCI_FUNC_MALFORMED (out empty) as XhciFuncSerialId's;
+ * XHCI_FUNC_BAD_TEXT (out empty) when nothing but '?' and spaces would
+ * remain, an empty string included.
+ */
+ULONG XhciFuncText(const UCHAR *desc, ULONG bytes, ULONG flags, WCHAR *out,
+                   ULONG capacity, PULONG chars);
 
 #endif /* XHCI_FUNC_H */

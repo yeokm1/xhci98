@@ -314,7 +314,9 @@ static ULONG hcdCfgFault(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
                        dev->SlotId);
         return 0;
     }
-    if (dev->Pdo != NULL &&
+    /* A hub's own PDO (task 33.4) is presentation only: a hub's failed
+     * command keeps the reset it always requested. */
+    if (dev->Pdo != NULL && dev->Hub == NULL &&
         !HcdHubPathPresent(hc, &hc->Ports[dev->Location - 1])) {
         XHCI_DBG_VALUE("hcd: command failed on a departing device, "
                        "cycling location", dev->Location);
@@ -503,6 +505,117 @@ static ULONG hcdCfgBuildInput(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         }
     }
     return 1;
+}
+
+/*
+ * An endpoint of a composite function's select (hcdCfgSelectFunction),
+ * from the device's own configuration (dev->Selected) at the offset given,
+ * but at the bInterval the caller's descriptor `caller` gives it when that
+ * differs (XhciPipeCallerInterval): a filter's rewritten polling interval
+ * (hidusbf), which a whole device's select already takes from the
+ * descriptor it is handed, and which XhciFastPollFsLs keys on. Not at
+ * SuperSpeed, whose endpoint reads its companion from the device's own.
+ * Thread only.
+ */
+static ULONG hcdCfgFunctionEndpoint(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                    const UCHAR *caller, ULONG offset,
+                                    ULONG number, ULONG alternate,
+                                    PXHCI_PIPE_EP ep)
+{
+    UCHAR copy[XHCI_PIPE_ENDPOINT_BYTES];
+    ULONG speed;
+    ULONG b;
+    ULONG i;
+
+    speed = HcdDevicePipeSpeed(hc, dev);
+    if (caller != NULL && speed != XHCI_PIPE_SPEED_SUPER &&
+        speed != XHCI_PIPE_SPEED_SUPER_PLUS &&
+        XhciPipeCallerInterval(dev->Selected, dev->SelectedLength, offset,
+                               caller,
+                               (ULONG)caller[2] | ((ULONG)caller[3] << 8),
+                               number, alternate, &b) == XHCI_PIPE_OK &&
+        b != (ULONG)dev->Selected[offset + 6]) {
+        for (i = 0; i < XHCI_PIPE_ENDPOINT_BYTES; i++) {
+            copy[i] = dev->Selected[offset + i];
+        }
+        copy[6] = (UCHAR)b;
+        return XhciPipeEndpointParams(copy, speed, ep);
+    }
+    return XhciPipeEndpointParamsAt(dev->Selected, dev->SelectedLength, offset,
+                                    speed, hc->Hc.HcInfo.Lec, ep);
+}
+
+/* Fast polling (33.8): the controller's XhciFastPollFsLs mode applied to an
+ * endpoint a client's select names, never to a hub's own (HcdCfgHubOpen).
+ * Thread only. */
+static VOID hcdCfgFastPoll(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                           PXHCI_PIPE_EP ep)
+{
+    (VOID)XhciPipeFastPoll(hc->FastPollMode, HcdDevicePipeSpeed(hc, dev),
+                           dev->Route, ep);
+}
+
+/*
+ * One Configure Endpoint for `plan`, adding `add`'s pipes: built, issued,
+ * and - when it fails with a code XhciPipeFastRetry names while a pipe it
+ * adds was set below Table 6-12's range - those pipes put back at their
+ * Table 6-12 Interval, counted, and the command built and issued once more.
+ * A refused command leaves the Output Device Context as it was (xHCI 1.2c
+ * 4.6.6, p.112), so the second is the command the select would have issued
+ * with the value off. `opening` counts the fast pipes a success opens: a
+ * select's, not a replay of pipes already open. Returns the completion
+ * code, or HCD_CFG_NOT_ISSUED when nothing was issued. Thread only,
+ * powered.
+ */
+static ULONG hcdCfgConfigureAdd(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                const XHCI_PIPE_PLAN *plan, PHCD_PIPE *add,
+                                ULONG opening)
+{
+    PXHCI_EXTENSION ext;
+    XHCI_TRB trb;
+    ULONG control;
+    ULONG code;
+    ULONG fast;
+    ULONG pass;
+    ULONG dci;
+
+    ext = &hc->Hc;
+    code = HCD_CFG_NOT_ISSUED;
+    for (pass = 0; pass < 2; pass++) {
+        if (!hcdCfgBuildInput(hc, dev, plan, add) ||
+            XhciTrbConfigureEndpoint(&trb, dev->SlotId,
+                                     XhciCommonPA(ext,
+                                         ext->Layout.InputContextOffset),
+                                     0) != XHCI_RING_OK) {
+            return HCD_CFG_NOT_ISSUED;
+        }
+        code = hcdCfgCommand(hc, dev, &trb, &control);
+        fast = 0;
+        for (dci = 2; dci < 32; dci++) {
+            if (add[dci] == NULL || !add[dci]->Ep.FastPoll) {
+                continue;
+            }
+            if (code == XHCI_CC_SUCCESS) {
+                if (opening) {
+                    hc->FastPollOpened++;
+                    XhciLogNote(ext, "fastpoll.open",
+                                (dev->SlotId << 24) | (dci << 16) |
+                                    (add[dci]->Ep.SpecInterval << 8) |
+                                    add[dci]->Ep.Interval);
+                }
+            } else if (XhciPipeFastRetry(code) &&
+                       XhciPipeFastRevert(&add[dci]->Ep)) {
+                fast++;
+            }
+        }
+        if (fast == 0) {
+            break;
+        }
+        hc->FastPollFallbacks++;
+        XhciLogNote(ext, "fastpoll.fallback",
+                    (dev->SlotId << 24) | (fast << 8) | code);
+    }
+    return code;
 }
 
 /* ----------------------------------------------------------------------- */
@@ -906,15 +1019,12 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
     XHCI_PIPE_IFACE iface;
     XHCI_PIPE_EP ep;
     XHCI_PIPE_PLAN plan;
-    PXHCI_EXTENSION ext;
-    XHCI_TRB trb;
     KIRQL oldIrql;
     PUCHAR p;
     PUCHAR end;
     ULONG fixed;
     ULONG total;
     ULONG mask;
-    ULONG control;
     ULONG code;
     ULONG bytes;
     ULONG asked;
@@ -923,7 +1033,6 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
     ULONG e;
     LONG usbd;
 
-    ext = &hc->Hc;
     asked = 0;
     sc = &urb->UrbSelectConfiguration;
     cd = sc->ConfigurationDescriptor;
@@ -1036,6 +1145,7 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
                 usbd = HCD_USBD_INVALID_PARAMETER;
                 break;
             }
+            hcdCfgFastPoll(hc, dev, &ep);
             add[ep.Dci] = hcdCfgPipeNew(hc, dev, &ep, &usbd);
             if (add[ep.Dci] == NULL) {
                 hc->Counters.EndpointRefusalsPool++;
@@ -1053,21 +1163,17 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
     }
 
     if (usbd == XHCI_USBD_STATUS_SUCCESS && mask != 0) {
-        if (XhciPipeConfigurePlan(0, 0, mask, &plan) != XHCI_PIPE_OK ||
-            !hcdCfgBuildInput(hc, dev, &plan, add) ||
-            XhciTrbConfigureEndpoint(&trb, dev->SlotId,
-                                     XhciCommonPA(ext,
-                                                  ext->Layout.InputContextOffset),
-                                     0) != XHCI_RING_OK) {
+        code = HCD_CFG_NOT_ISSUED;
+        if (XhciPipeConfigurePlan(0, 0, mask, &plan) == XHCI_PIPE_OK) {
+            code = hcdCfgConfigureAdd(hc, dev, &plan, add, 1);
+        }
+        if (code == HCD_CFG_NOT_ISSUED) {
             hcdCfgCountConfigure(hc, 0, mask);
             usbd = HCD_USBD_INTERNAL_HC_ERROR;
-        } else {
-            code = hcdCfgCommand(hc, dev, &trb, &control);
-            if (code != XHCI_CC_SUCCESS) {
-                hcdCfgCountConfigure(hc, code, mask);
-                usbd = (LONG)XhciPipeConfigureUsbdStatus(code);
-                mask = 0;   /* nothing was enabled */
-            }
+        } else if (code != XHCI_CC_SUCCESS) {
+            hcdCfgCountConfigure(hc, code, mask);
+            usbd = (LONG)XhciPipeConfigureUsbdStatus(code);
+            mask = 0;   /* nothing was enabled */
         }
     }
     if (usbd == XHCI_USBD_STATUS_SUCCESS &&
@@ -1175,14 +1281,11 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     XHCI_PIPE_IFACE iface;
     XHCI_PIPE_EP ep;
     XHCI_PIPE_PLAN plan;
-    PXHCI_EXTENSION ext;
-    XHCI_TRB trb;
     KIRQL oldIrql;
     ULONG fixed;
     ULONG keep;
     ULONG old;
     ULONG mask;
-    ULONG control;
     ULONG code;
     ULONG bytes;
     ULONG stalled;
@@ -1192,7 +1295,6 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG e;
     LONG usbd;
 
-    ext = &hc->Hc;
     asked = 0;
     si = &urb->UrbSelectInterface;
     ii = &si->Interface;
@@ -1282,6 +1384,7 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             usbd = HCD_USBD_INVALID_PARAMETER;
             break;
         }
+        hcdCfgFastPoll(hc, dev, &ep);
         add[ep.Dci] = hcdCfgPipeNew(hc, dev, &ep, &usbd);
         if (add[ep.Dci] == NULL) {
             hc->Counters.EndpointRefusalsPool++;
@@ -1297,17 +1400,15 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     }
 
     if (usbd == XHCI_USBD_STATUS_SUCCESS && (old | mask) != 0) {
-        if (XhciPipeConfigurePlan(keep, old, mask, &plan) != XHCI_PIPE_OK ||
-            !hcdCfgBuildInput(hc, dev, &plan, add) ||
-            XhciTrbConfigureEndpoint(&trb, dev->SlotId,
-                                     XhciCommonPA(ext,
-                                                  ext->Layout.InputContextOffset),
-                                     0) != XHCI_RING_OK) {
+        code = HCD_CFG_NOT_ISSUED;
+        if (XhciPipeConfigurePlan(keep, old, mask, &plan) == XHCI_PIPE_OK) {
+            code = hcdCfgConfigureAdd(hc, dev, &plan, add, 1);
+        }
+        if (code == HCD_CFG_NOT_ISSUED) {
             hcdCfgCountConfigure(hc, 0, mask);
             usbd = HCD_USBD_INTERNAL_HC_ERROR;
             dev->Stale = old;
         } else {
-            code = hcdCfgCommand(hc, dev, &trb, &control);
             if (code != XHCI_CC_SUCCESS) {
                 /* Nothing changed: the old endpoints stay enabled with no
                  * pipe, to be dropped by the next command. */
@@ -1418,25 +1519,21 @@ static ULONG hcdCfgCloseFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 static ULONG hcdCfgReplace(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                            ULONG keep, ULONG old, ULONG mask, PHCD_PIPE *add)
 {
-    PXHCI_EXTENSION ext;
     XHCI_PIPE_PLAN plan;
-    XHCI_TRB trb;
-    ULONG control;
     ULONG code;
 
-    ext = &hc->Hc;
     old |= dev->Stale;
     if ((old | mask) == 0) {
         return 1;
     }
-    code = 0;
-    if (XhciPipeConfigurePlan(keep, old, mask, &plan) != XHCI_PIPE_OK ||
-        !hcdCfgBuildInput(hc, dev, &plan, add) ||
-        XhciTrbConfigureEndpoint(&trb, dev->SlotId,
-                                 XhciCommonPA(ext,
-                                              ext->Layout.InputContextOffset),
-                                 0) != XHCI_RING_OK ||
-        (code = hcdCfgCommand(hc, dev, &trb, &control)) != XHCI_CC_SUCCESS) {
+    code = HCD_CFG_NOT_ISSUED;
+    if (XhciPipeConfigurePlan(keep, old, mask, &plan) == XHCI_PIPE_OK) {
+        code = hcdCfgConfigureAdd(hc, dev, &plan, add, 1);
+    }
+    if (code != XHCI_CC_SUCCESS) {
+        if (code == HCD_CFG_NOT_ISSUED) {
+            code = 0;
+        }
         /* A release adds nothing, and refuses no endpoint a client asked
          * for. */
         if (mask != 0) {
@@ -1823,11 +1920,12 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             opened |= 1UL << ii->InterfaceNumber;
         }
         for (e = 0; e < iface.EndpointCount; e++) {
-            answer = XhciPipeEndpointParamsAt(dev->Selected,
-                                              dev->SelectedLength,
-                                              iface.EndpointOffset[e],
-                                              HcdDevicePipeSpeed(hc, dev),
-                                              hc->Hc.HcInfo.Lec, &ep);
+            answer = hcdCfgFunctionEndpoint(hc, dev,
+                                            (const UCHAR *)
+                                                sc->ConfigurationDescriptor,
+                                            iface.EndpointOffset[e],
+                                            ii->InterfaceNumber,
+                                            ii->AlternateSetting, &ep);
             if (answer != XHCI_PIPE_OK || add[ep.Dci] != NULL ||
                 (keep & (1UL << ep.Dci)) != 0) {
                 XHCI_DBG_VALUE("hcd: function select refused, endpoint/speed",
@@ -1836,6 +1934,7 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                 usbd = HCD_USBD_INVALID_PARAMETER;
                 break;
             }
+            hcdCfgFastPoll(hc, dev, &ep);
             add[ep.Dci] = hcdCfgPipeNew(hc, dev, &ep, &usbd);
             if (add[ep.Dci] == NULL) {
                 hc->Counters.EndpointRefusalsPool++;
@@ -2266,15 +2365,11 @@ static ULONG hcdCfgDeconfigure(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 static ULONG hcdCfgRecycleCode(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                PHCD_PIPE pipe)
 {
-    PXHCI_EXTENSION ext;
     PHCD_PIPE add[32];
     XHCI_PIPE_PLAN plan;
-    XHCI_TRB trb;
     KIRQL oldIrql;
-    ULONG control;
     ULONG dci;
 
-    ext = &hc->Hc;
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     hcdCfgRingsEmpty(pipe);
     XhciControllerLockRelease(&hc->Hc, oldIrql);
@@ -2291,14 +2386,7 @@ static ULONG hcdCfgRecycleCode(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         }
     }
     plan.Enabled = 0;
-    if (!hcdCfgBuildInput(hc, dev, &plan, add) ||
-        XhciTrbConfigureEndpoint(&trb, dev->SlotId,
-                                 XhciCommonPA(ext,
-                                              ext->Layout.InputContextOffset),
-                                 0) != XHCI_RING_OK) {
-        return HCD_CFG_NOT_ISSUED;
-    }
-    return hcdCfgCommand(hc, dev, &trb, &control);
+    return hcdCfgConfigureAdd(hc, dev, &plan, add, 0);
 }
 
 /* The same, as success or failure. An endpoint with streams open is added
@@ -2796,20 +2884,16 @@ static ULONG hcdCfgResetQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  */
 static LONG hcdCfgResetPort(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
-    PXHCI_EXTENSION ext;
     PHCD_PIPE add[32];
     XHCI_PIPE_PLAN plan;
-    XHCI_TRB trb;
     KIRQL oldIrql;
     PUCHAR s;
-    ULONG control;
     ULONG bytes;
     ULONG mask;
     ULONG dci;
     ULONG id;
     ULONG ok;
 
-    ext = &hc->Hc;
     if (dev->Location == 0 || dev->Location > HCD_PORT_COUNT ||
         hc->Ports[dev->Location - 1].Device != dev) {
         return HCD_USBD_DEVICE_GONE;
@@ -2861,12 +2945,8 @@ static LONG hcdCfgResetPort(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     } else {
         if (mask != 0 &&
             (XhciPipeConfigurePlan(0, 0, mask, &plan) != XHCI_PIPE_OK ||
-             !hcdCfgBuildInput(hc, dev, &plan, add) ||
-             XhciTrbConfigureEndpoint(&trb, dev->SlotId,
-                                      XhciCommonPA(ext,
-                                          ext->Layout.InputContextOffset),
-                                      0) != XHCI_RING_OK ||
-             hcdCfgCommand(hc, dev, &trb, &control) != XHCI_CC_SUCCESS)) {
+             hcdCfgConfigureAdd(hc, dev, &plan, add, 0) !=
+                 XHCI_CC_SUCCESS)) {
             goto cleanup;
         }
         if (!HcdThreadControl(hc, dev, 0x00, 9, (USHORT)dev->ConfigValue, 0,

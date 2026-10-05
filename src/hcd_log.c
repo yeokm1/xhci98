@@ -102,6 +102,13 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
     XhciLogAppend(log, "ioctl.unknown", hc->IoctlUnknown, 1);
     XhciLogAppend(log, "enum.cmd.timedout", hc->EnumCommandsTimedOut, 1);
     XhciLogAppend(log, "enum.xfer.timedout", hc->EnumTransfersTimedOut, 1);
+    XhciLogAppend(log, "serial.ids", hc->SerialIdsTaken, 1);
+    XhciLogAppend(log, "serial.refused", hc->SerialIdsRefused, 1);
+    XhciLogAppend(log, "serial.readfailed", hc->SerialReadsFailed, 1);
+    XhciLogAppend(log, "serial.duplicate", hc->SerialIdsDuplicate, 1);
+    XhciLogAppend(log, "fastpoll.mode", hc->FastPollMode, 1);
+    XhciLogAppend(log, "fastpoll.opened", hc->FastPollOpened, 1);
+    XhciLogAppend(log, "fastpoll.fallbacks", hc->FastPollFallbacks, 1);
     XhciLogAppend(log, "door.requests", hc->DoorRequests, 1);
     XhciLogAppend(log, "pool.outstanding", HcdPoolOutstandingCount(), 1);
     XhciLogAppend(log, "log.dropped", log->BytesDropped, 1);

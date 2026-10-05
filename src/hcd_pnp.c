@@ -102,6 +102,8 @@ static NTSTATUS hcdRemove(PHCD_CONTROLLER hc, PIRP irp)
     irp->IoStatus.Status = STATUS_SUCCESS;
     status = HcdPassDown(hc, irp);
 
+    /* Off the serial ids' list before any of its PDOs can go (hcd_pdo.c). */
+    HcdSerialControllerRemove(hc);
     HcdRootHubDeletePdo(hc);
     IoDetachDevice(hc->LowerDevice);
     IoDeleteDevice(hc->Common.Self);
@@ -151,7 +153,12 @@ NTSTATUS HcdControllerPnp(PHCD_CONTROLLER hc, PIRP irp)
 
     case IRP_MN_STOP_DEVICE:
         HcdDoorControllerStop(hc);
+        /* An orderly stop keeps the children PnP stopped first (hcd_pdo.c,
+         * HcdDevicePdoDormantAll); a removal, a surprise removal, a reset's
+         * invalidation or a failed start drops them as departed. */
+        hc->StopPreserve = 1;
         HcdStopController(hc);
+        hc->StopPreserve = 0;
         hc->Common.PnpState = HCD_PNP_STOPPED;
         irp->IoStatus.Status = STATUS_SUCCESS;
         status = HcdPassDown(hc, irp);

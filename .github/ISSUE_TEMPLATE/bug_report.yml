@@ -13,14 +13,20 @@ body:
 
         **Please check the known limitations first:**
         [docs/using/release-notes.md](https://github.com/yeokm1/xhci98/blob/main/docs/using/release-notes.md).
-        Several known problems are in the USB stack this driver plugs into rather
-        than in the driver, and they are listed there with what was measured.
+        Each one says what was measured, and whether on real hardware or in a
+        virtual machine.
 
-        **One thing is already known and is not a bug in this driver:**
-        disabling, removing or upgrading the driver in Device Manager blue-screens
-        Windows 98 when NUSB's USB 2.0 stack is installed (Microsoft's own USB
-        drivers do the same on the same machine; under SweetLow's stack the
-        three complete).
+        **From `2.0.0.0` the driver is the whole USB stack**: it replaces
+        Windows' own USB port and hub drivers on every system, and only the
+        device drivers above it (keyboard, mouse, storage, audio) are Windows'
+        own. The `1.x.x.x` releases were a different driver, a plug-in under
+        Windows' or NUSB's USB 2.0 stack; `1.2.0.0` was the last, and it gets
+        no more fixes. If you are on `1.x.x.x`, please try the latest `2.x.x.x`
+        release before reporting.
+
+        **One thing is already known:** upgrading in place over a running
+        `1.x.x.x` on Windows 98 with NUSB blue-screens the machine, in NUSB's
+        `usbport.sys`. The README's "Upgrading from 1.x.x.x to 2.y.y.y" avoids it.
 
   - type: dropdown
     id: os
@@ -46,18 +52,32 @@ body:
     attributes:
       label: Driver version
       description: The version of the release you downloaded - it is at the top of its readme.txt, and in the driver's properties in Device Manager.
-      placeholder: "the four-part number from readme.txt, e.g. 1.2.0.0"
+      placeholder: "the four-part number from readme.txt, e.g. 2.0.0.0"
     validations:
       required: true
 
   - type: dropdown
     id: build
     attributes:
-      label: Which build is installed
-      description: RELEASE unless a maintainer asked you for the other one. If you are not sure, the Version tab of xhci98.sys shows a "debug" flag on the debug build.
+      label: Which directory of the download you installed from
+      description: release-x86 (or release-x64 on a 64-bit Windows) unless a maintainer asked you for a debug one. If you are not sure, the Version tab of xhci98.sys shows a "debug" flag on the debug build.
       options:
-        - release
-        - debug
+        - release-x86
+        - release-x64
+        - debug-x86
+        - debug-x64
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How the driver got there
+      options:
+        - A fresh install, no earlier xhci98 driver on this Windows
+        - An upgrade over a 1.x.x.x release
+        - An update over an earlier 2.x.x.x release
         - Not sure
     validations:
       required: true
@@ -81,23 +101,24 @@ body:
       required: false
 
   - type: dropdown
-    id: usb-stack
+    id: usb-extras
     attributes:
-      label: The USB stack underneath
-      description: This driver is only the controller layer; it needs the USB 2.0 stack already installed.
+      label: Other USB software on Windows 98 SE or ME
+      description: |
+        The driver does not need these: it replaces their port and hub drivers.
+        What still matters is storage on Windows 98 SE, which needs NUSB's
+        mass-storage files (the release notes say why). On Windows 2000, XP,
+        Vista or 7, pick "Windows 2000, XP, Vista or 7: nothing extra".
       options:
-        - "Windows 98: NUSB 3.3 installed"
-        - "Windows 98: NUSB 3.6 installed"
-        - "Windows 98: NUSB, some other version"
-        - "Windows 98: SweetLow's USB 2.0 stack (Windows 98 QuickInstall 1.0.1 or later)"
-        - "Windows 98: no NUSB / not sure"
-        - "Windows ME: SweetLow's USB 2.0 stack (the only one this driver has run under on ME)"
-        - "Windows ME: something else / not sure"
-        - "Windows 2000: SP4's own stack"
-        - "Windows 2000: the standalone KB319973 update"
-        - "Windows XP: its own stack"
-        - "Windows Vista: its own stack"
-        - "Windows 7: its own stack"
+        - "Windows 98 SE: nothing extra (a stock install)"
+        - "Windows 98 SE: NUSB 3.3"
+        - "Windows 98 SE: NUSB 3.6"
+        - "Windows 98 SE: NUSB, some other version"
+        - "Windows 98 SE: only NUSB's mass-storage files"
+        - "Windows 98 SE: SweetLow's USB 2.0 stack (Windows 98 QuickInstall)"
+        - "Windows ME: SweetLow's USB 2.0 stack"
+        - "Windows ME: nothing extra (a stock install)"
+        - "Windows 2000, XP, Vista or 7: nothing extra"
         - Not sure
     validations:
       required: true
@@ -106,7 +127,13 @@ body:
     id: what-happened
     attributes:
       label: What happened
-      description: What you did, what you expected, and what the machine did instead. If a specific device is involved, say what it is and what speed it should run at.
+      description: |
+        What you did, what you expected, and what the machine did instead. If a
+        specific device is involved, say what it is, what speed it should run at
+        (SuperSpeed, High, Full or Low), whether it is plugged into the machine
+        directly or through a hub (and which hub), and for a storage device
+        whether Device Manager shows it as "xHCI98 USB Attached SCSI Storage"
+        (UAS) or as an ordinary USB disk.
     validations:
       required: true
 
@@ -126,8 +153,30 @@ body:
         Drag images in here. **A photo of the screen taken with a phone is fine and is
         often the only thing possible** - a machine that has crashed cannot take a
         screenshot. Useful shots: the crash or blue screen in full, the device's
-        Properties page in Device Manager (including any error code), and the xHCI
-        controller's entry in the device tree.
+        Properties page in Device Manager (including any error code), and the
+        device tree with the xHCI98 controller and its root hub expanded (View,
+        Devices by connection).
+    validations:
+      required: false
+
+  - type: textarea
+    id: xhcisnap
+    attributes:
+      label: XHCISNAP report (the driver's log)
+      description: |
+        If the machine keeps running, the driver's own log is the most useful
+        thing you can send. XHCISNAP.EXE is in the download; use the one from
+        the release you installed, not a copy from a 1.x.x.x release:
+
+            XHCISNAP -verbosity 2
+            (restart the machine)
+            (make the problem happen again)
+            XHCISNAP -o C:\MYDUMP
+
+        Attach C:\MYDUMP.TXT here (plain text, no internal addresses). Keep
+        C:\MYDUMP.BIN and attach it only if a maintainer asks. Afterwards run
+        XHCISNAP -disable. The log cannot capture a crash; for a crash, the
+        photo above and the XHCIQUAL report below are what helps.
     validations:
       required: false
 
@@ -167,6 +216,5 @@ body:
         Attach whichever of PROBE.LOG, XPOLL.LOG, XIRQ.LOG, XEMPTY.LOG and
         XDEV.LOG you got to this report, or paste them here. Getting only the
         first one or two is still worth reporting.
-      render: text
     validations:
       required: false

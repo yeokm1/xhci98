@@ -37,7 +37,15 @@
 > in `hcd_cfg.c` and reach every stream's pipe through `hcd_io.c`. Task 31-A.3
 > adds the pure `xhci_xport.c` / `xhci_xport.h` (the storage transport policy:
 > Bulk-Only or UAS for an interface offering either, and the ids that follow;
-> host suite `test_xport`), applied in `hcd_pdo.c`. The tables below are the
+> host suite `test_xport`), applied in `hcd_pdo.c`. Task 33.2 adds the
+> instance-id rules to the pure `xhci_func.c` (`XhciFuncSerialId`,
+> `XhciFuncSerialSame`, `XhciFuncInstanceId`; host suite `test_func`), the
+> serial read to `hcd_enum.c` (`HcdDeviceReadSerial`) and the duplicate and
+> dormant matching to `hcd_pdo.c`. Task 33.4 adds `hcd_hubfdo.c`
+> (an external hub's FDO, the third PnP role: each hub the bus serves is a
+> devnode under `XHCI98\HUB` or `XHCI98\HUB30`, design record 13 section 10.11)
+> and the hub PDO's pure half in `xhci_hub.c` (its ids, the presented parent,
+> node information; host suite `test_hub`). The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name
@@ -109,6 +117,7 @@ These need `ntddk.h` or a usbport service, take the controller lock, or derefere
 | `xhci98.rc` | The file version resource (task 8-A.4), so a binary recovered from a user's machine can be identified. Takes its fields from `xhci_version.h`; adds no import. |
 | `xhci98.inf` | The **32-bit** INF: one file for two setup engines. Windows 98 SE reads the undecorated sections and loads the driver through `NTKERN`; Windows 2000 SP4 reads the `.NTx86` sections and loads it as a kernel service. Both install sections copy the project's two files through the shared `Xhci.CopyFiles`, and each adds its own OS-supplied list (`Xhci.CopyW98`: `usbd.sys` and `usbhub.sys`; `Xhci.CopyNT`: those plus `usbport.sys`) that `LayoutFile` has the OS fetch from its own install source. Both also copy `usbui.dll` through `Xhci.CopyUI`, to dirid 11 rather than 10, since 1.0.2.0. Since 1.1.0.0 it carries a third install path for Windows Vista and Windows 7: `%Mfg%=XhciModels,NTx86.6.0` in `[Manufacturer]` leads NT 6.x to `[XhciModels.NTx86.6.0]` and `[Xhci.Dev6.NTx86]`, which copies `xhci98.sys` alone (those systems already carry the four OS-supplied files, and their file queue aborts on a `LayoutFile` copy). |
 | `xhci98-amd64.inf` | The **64-bit package's** INF, and it is a second file rather than a third path in the first (design record 11 section 12, decision 2): no Windows 98 path, a `[Manufacturer]` line decorated `NTamd64,NTamd64.6.0`, and two install paths - `[Xhci.Dev.NTamd64]` for Windows XP x64 and Server 2003 x64, which fetches the OS-supplied files from `Driver Cache\amd64`, and `[Xhci.Dev6.NTamd64]` for Vista x64 and Windows 7 x64, which copies `xhci98.sys` alone. Neither file may grow the other's sections - an undecorated or `.NT*` section here is one a 32-bit engine reaches, which would put an amd64 binary on a 32-bit machine, and the gate refuses it by name (`PATH-NO9X`, `PATH-MFGDEC`, `OS-DEFAULT`). The two are checked against each other by `scripts\inf-gate\test-inf-checks.ps1`, because the accepted cost of two files is that they can drift. |
+| `txtsetup.oem`, `txtsetup-amd64.oem` | The text-mode Setup driver descriptions (roadmap task 33.3, design record 13 section 5.6): what Windows 2000 and 32-bit XP (the first) and XP x64 (the second, staged under the first's name) read from drive A: when F6 is pressed, loading `xhci98.sys` as a `scsi` component and binding it to `PCI\CC_0C0330` and `XHCI98\ROOT_HUB`. Gated by `scripts\inf-gate\check-txtsetup-oem.ps1`, which holds both to the INF beside them and to each other. |
 
 ## Generated, not tracked
 

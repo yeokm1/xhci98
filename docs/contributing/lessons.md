@@ -9605,3 +9605,162 @@ Rules. **Do not read port events out of a long debugcon log**: use the event
 counters, `XHCISNAP` or a fresh launch. And **check the controller's port
 count (`p2`, `p3`) before choosing a port**, and `info usb` after every
 attach.
+
+## Windows 2000 text-mode Setup binds only the USB devices of the first enumeration: a bus driver must report the devices present at start in its first BusRelations
+
+Roadmap task 33.3, 2026-10-04 (`out\phase33\f6\`, git-ignored; QEMU 11 on
+development host A, TCG). `xhci98.sys` loaded from an F6 floppy through
+`txtsetup.oem` started the controller and the root hub on Windows 2000 SP4,
+XP SP3 and XP x64 SP2 alike. On both XPs the USB keyboard answered at
+Welcome and the USB stick was listed at the partition screen. On Windows
+2000 neither worked, and no stop screen came.
+
+**What the trace showed.** The qemu flavour's debugcon on Windows 2000: the
+root hub FDO's first `IRP_MN_QUERY_DEVICE_RELATIONS` (BusRelations) answered
+**zero devices**, because port enumeration runs on the controller thread and
+had not finished. The device PDOs came afterwards, after the port-change
+events, and were then queried (ids, capabilities, text, resources), but none
+was ever sent `IRP_MN_START_DEVICE`.
+
+**The control.** The same Windows 2000 Setup on its own UHCI stack, without
+`xhci98.sys`, bound a USB keyboard and a stick present at boot. A keyboard
+hot-plugged during text mode stayed dead there too, and on `xhci98.sys` the
+same. **Windows 2000 text mode binds only what the first enumeration
+reports; XP binds late arrivals**, which is why XP passed with the same
+driver.
+
+**How long a first answer may wait.** Microsoft's hub driver enumerates the
+ports that are connected at start before it answers. The figures come from
+documentation and source, not from this driver:
+
+- The Microsoft USB core team's account of the Windows hub driver ("How
+  does USB stack enumerate a device?", techcommunity.microsoft.com, the
+  Microsoft USB blog):
+  - debounce: 100 ms with no connect change, port disabled if it is not
+    stable after 200 ms;
+  - a 5 second timeout on each port reset;
+  - up to 3 enumeration retries, 500 ms apart, then "Unknown Device";
+  - 10 ms reset recovery, and 10 ms after SET_ADDRESS.
+- USB 2.0, 9.2.6.4: a request without a data stage completes within 50 ms;
+  a data stage starts within 500 ms; after SET_ADDRESS the device has 2 ms.
+- ReactOS `usbhub` (`USBH_FdoQueryBusRelations`) enumerates synchronously
+  inside the BusRelations handler with no overall cap. Linux enumerates
+  asynchronously and never holds a first answer. Both are read as interface
+  documentation only.
+
+A normal device is ready in about 0.15 to 0.3 s, and one that needs a retry
+in about 1 to 2 s. Only a dead device whose every reset times out takes
+about 16 s, and it ends as an Unknown Device anyway. Ports are enumerated
+one at a time on the controller thread, so one dead port can use up a
+shared budget before a keyboard behind it gets its turn.
+
+The fix is on branch `p33-initenum` (design record 13 section 5.7), and
+its reading passed (2026-10-04 and 05, `out\phase33\initenum\`):
+
+- Each hub FDO's first BusRelations after a start (the root hub's, and
+  each external hub's) waits until the ports connected at start have
+  settled: their PDOs created, or the port failed or was refused. The
+  controller thread declares it at the end of a pass with nothing owed or
+  in flight; the waiter polls every 20 ms holding no lock.
+- Bounds, both relative timers and both REG_DWORDs in milliseconds on the
+  controller's driver key: `XhciFirstEnumWaitMs`, the whole answer, default
+  5000 (0 turns the wait off, held to 30000); `XhciFirstEnumPortMs`, per
+  port, default 2000 (0 for none, held to the total). A port past its
+  budget is deferred and reported late, not allowed to starve the others.
+  A 15 s cap was proposed and rejected as too long (owner, 2026-10-04).
+- Text-mode Setup has no INF-written registry values, so the built-in
+  defaults are what F6 gets.
+- **Result: Windows 2000 SP4 text mode now passes**, `release` and `qemu`
+  flavours, keyboard at a root port and behind a `usb-hub`: the keyboard
+  answers at Welcome and the stick is listed at the partition screen. XP
+  SP3 still passes. Measured first answers: 343 ms (keyboard and stick at
+  root ports), 562 ms (keyboard behind a hub) with the hub FDO's own 31 ms;
+  on an installed Windows 98 SE 625 to 650 ms, on an installed Windows 2000
+  961 to 1,081 ms with five devices, and **20 ms with nothing attached**
+  (one step of the waiter). No answer reached its deadline.
+Two harness traps from the same legs:
+
+- **`-machine pc,i8042=off` hangs NT5 Setup.** NTDETECT ("Setup is
+  inspecting your computer's hardware configuration") spins in real mode
+  reading port 0x60 for ever, on all three targets. Keep the PS/2
+  controller, and prove the USB keyboard's keystrokes from the controller
+  trace: its slot's interrupt-IN completions.
+- **Setup's F6 window is short under TCG.** One F6 press every 1.3 s
+  through QMP missed it. Holding F6 down for 200 ms every 350 ms catches
+  it.
+
+Also seen: a USB stick present at the partition screen takes `C:`, and
+Windows installs to the next letter.
+
+Rules:
+
+- **Report the devices present at start in a bus driver's first
+  BusRelations answer, bounded.** An empty first answer is invisible on XP
+  and later and fatal in Windows 2000 text mode.
+- **Run the F6 legs with the PS/2 controller present.**
+- **Hold F6 down; do not tap it.**
+
+## Driving NT5 Setup in QEMU for the F6 legs: five traps that each cost a run
+
+Roadmap task 33.3's legs, 2026-10-04 (`out\phase33\f6\`, git-ignored; QEMU
+11.1.0, TCG, development host A). Two more traps from the same legs, the
+PS/2 controller and holding F6, are in the lesson above on Windows 2000's
+first enumeration.
+
+- **A `WINNT.SIF` on the F6 floppy disables F6.** With any answer file on
+  A: (`[Data] MsDosInitiated=0` and `[Unattended] DriverSigningPolicy=Ignore`
+  were tried, to silence XP's unsigned-driver prompts), `setupldr` never
+  offers F6, Setup skips Welcome and the licence, and no OEM driver loads
+  (`xp32s\`). The floppy carries `txtsetup.oem` and the drivers only.
+- **Windows 2000's ACPI HAL loops GUI-mode Setup under TCG.** Setup restarts
+  itself after "Installing Components" and comes back to Regional Settings,
+  with no stop screen, every time; a control with no xhci98 on the same
+  machine loops the same (`w2kc\`). Use `scripts\setup-qemu-win2k.ps1`'s
+  machine (`acpi=off`, `pentium3,-apic`, 256 MB, Cirrus VGA, the IDE install
+  hack), as `build-and-test.md`'s F6 procedure now says.
+- **Two keyboards, two routes.** HMP `sendkey` reaches the PS/2 keyboard;
+  QMP `input-send-event` naming the display console (`"device": "vga0"`,
+  the USB keyboard bound to it by `display=vga0`) reaches the USB keyboard.
+  That gives a per-keystroke negative control, and it is how a dead USB
+  keyboard was told from a dead guest.
+- **A paused reboot resumes in four steps.** Under `-action
+  reboot=shutdown`, QMP `system_reset` is a shutdown too. Resume with
+  `set-action reboot=reset`, `system_reset`, `cont`, then set the action
+  back.
+- **A packager self-test failed on a long checkout path.** Windows
+  PowerShell wraps a native command's stderr ErrorRecord at the console
+  width, so with a 41-character worktree path the refusal "volume or
+  repository root" reached `test-package.ps1` split across two lines and
+  its phrase match failed; a 27-character junction passed. The helpers now
+  collapse whitespace before matching (`e54b87a`).
+
+Rules. **Keep answer files off an F6 floppy. Install Windows 2000 guests on
+its own recipe's machine. Prove a USB keystroke with `input-send-event` and
+the xHCI trace, never with `sendkey`. Match a native command's captured
+output with whitespace collapsed.**
+
+## MSVC 6.0 compiled a count-down loop over a shifted unsigned to exit after one pass: a host vector that passes is not the driver's code
+
+Task 33.4 follow-up (branch `p33-addr`), 2026-10-05, development host A,
+Windows XP SP3 guest, `qemu` flavour. `XhciHubPdoAddress` (`src\xhci_hub.c`)
+first found a route's last tier with `for (tier = 5; tier > 0; tier--)`,
+testing `(route >> (4UL * (tier - 1UL))) & 0xF`. Its host vectors passed,
+and on the guest a mouse on port 1 of a hub at root port 3 still answered
+`Address` 259: the driver's own trace read `capabilities, address/parent
+serial=01030001`, the parent the hub's PDO and the address the instance key.
+The i386 build's code (`kd -z` over `objchk_qemu\i386\xhci98.sys` with its
+PDB, `uf xhci98!XhciHubPdoAddress`) had turned the loop into a shift count
+starting at 16, stepped by `sub ecx,4` and continued only while
+`cmp ecx,0FFFFFFFCh` / `ja` held - false for 12 - so it tested the fifth
+tier alone and fell through to the instance key for every shallower route.
+
+Proven: that listing, and the same loop rewritten (shift the route down until
+it is 0, keeping the last non-zero nibble) compiling to a correct loop in the
+`qemu` and `release` i386 builds. Not established: which optimisation does it,
+whether the host-test build passed because it compiles without it, and
+whether any other loop in `src\` has the shape.
+
+Rule. **When a pure helper's host vectors pass and the guest disagrees, read
+the driver build's disassembly of that helper before anything else**; and
+prefer a loop whose control variable is the shifted value itself over a
+count-down whose bound the compiler derives.

@@ -37,6 +37,7 @@
 #define HCD_KIND_ROOTHUB_PDO    0x50524448UL /* 'HDRP' */
 #define HCD_KIND_ROOTHUB_FDO    0x46524448UL /* 'HDRF' */
 #define HCD_KIND_DEVICE_PDO     0x50444448UL /* 'HDDP' */
+#define HCD_KIND_HUB_FDO        0x46484448UL /* 'HDHF' (task 33.4)  */
 
 /* The PnP state the dispatch routines gate on. Windows 98 can deliver a
  * REMOVE as the first PnP IRP after START (no SURPRISE_REMOVAL before it;
@@ -374,6 +375,11 @@ typedef struct _HCD_USB_DEVICE {
                              * the hold service disconnects or refuses it */
     ULONG HoldRefused;      /* that request was refused late: refused in
                              * place, never asked again (hcd_pdo.c)      */
+    /* The serial number string as an instance id (33.2; hcd_enum.c,
+     * HcdDeviceReadSerial), read once per enumeration before its first
+     * PDO: HCD_SERIAL_*, and SerialId non-empty only when HCD_SERIAL_OK. */
+    ULONG SerialState;
+    char SerialId[XHCI_SERIAL_ID_BYTES];
     /* The URB path (hcd_io.c). Refs counts URB IRPs that hold the record,
      * taken under PdoListLock while the PDO still names it; Gone, under
      * the controller lock, refuses new submissions once the thread has
@@ -442,7 +448,18 @@ typedef struct _HCD_DEVICE_PDO {
     ULONG RemoveReceived;           /* PnP's IRP_MN_REMOVE_DEVICE seen      */
     ULONG DeletePending;            /* on RemovedPdos, deleted at the next
                                      * relations answer (hcd_pdo.c)       */
-    ULONG Deleted;                  /* IoDeleteDevice called: once only     */
+    ULONG Dormant;                  /* listed with no device: stopped by PnP
+                                     * across a controller stop, revived by
+                                     * its device's re-enumeration        */
+    ULONG Surprised;                /* IRP_MN_SURPRISE_REMOVAL seen        */
+    ULONG ParentLetGo;              /* removed by PnP, then its hub's FDO
+                                     * removed too: PnP has forgotten it,
+                                     * no answer carries it again, and the
+                                     * next hub FDO start cycles its port
+                                     * (HcdDevicePdoLetGo, task 33.4)     */
+    ULONG RepresentAsked;           /* its cycle asked in this start's
+                                     * batch (HcdDevicePdoRepresent)      */
+    ULONG Deleted;                 /* IoDeleteDevice called: once only     */
     ULONG Serial;                   /* the name's number; a port waits on it */
     ULONG Closing;                  /* stopping or removed: URBs refused  */
     volatile LONG UrbsPending;      /* URB IRPs pended here and not yet
@@ -481,9 +498,29 @@ typedef struct _HCD_DEVICE_PDO {
                                      * parent's release waits it out      */
     ULONG Port;                     /* its device's Location: the port
                                      * handshake (hcdPortNotify) names it */
-    ULONG InstanceKey;              /* the instance id and the address
+    ULONG InstanceKey;              /* the instance id without a serial id
                                      * (XhciHubInstanceKey): the root port,
                                      * with the route above it behind hubs */
+    ULONG Address;                  /* DEVICE_CAPABILITIES Address and
+                                     * UINumber: the port on the parent it
+                                     * is presented under (XhciHubPdoAddress,
+                                     * section 10.11). Fixed at creation  */
+    char SerialId[XHCI_SERIAL_ID_BYTES]; /* the instance id's serial (33.2,
+                                     * XhciFuncInstanceId) and UniqueID
+                                     * TRUE; empty for the location form.
+                                     * Fixed at creation, and under
+                                     * PdoListLock until listed          */
+    char ReadSerialId[XHCI_SERIAL_ID_BYTES]; /* the serial id as read,
+                                     * kept when a duplicate empties
+                                     * SerialId: what a dormant group
+                                     * named by its place is matched on  */
+    ULONG SerialUnread;             /* every serial read failed
+                                     * (HCD_SERIAL_FAILED): ReadSerialId
+                                     * is unknown, not empty              */
+    WCHAR Text[XHCI_TEXT_WCHARS];   /* DeviceTextDescription (33.6,
+                                     * HcdDeviceReadText), NUL-terminated;
+                                     * empty for "USB Device". Fixed at
+                                     * creation, kept by a revived PDO   */
     ULONG RootPort;                 /* its device's Port and Route, fixed */
     ULONG Route;                    /* at creation (GET_TOPOLOGY_ADDRESS) */
     ULONG Speed;
@@ -527,6 +564,26 @@ typedef struct _HCD_DEVICE_PDO {
     ULONG PciBus;
     ULONG PciAddress;
     volatile ULONG PciRead;
+    /* Where it is presented (task 33.4; design record 13 section 10.11):
+     * the Serial of the hub PDO whose FDO's BusRelations carry it, 0 for
+     * the root hub's - the nearest hub above it that has a PDO
+     * (XhciHubPresentedParent). Fixed at creation. */
+    ULONG ParentSerial;
+    /* A hub's own PDO (task 33.4): bound to this driver as a hub FDO, which
+     * the bus still serves. What the hub FDO's door answers is copied here
+     * at creation, so it never reads the thread's hub object: the hub
+     * object's index (its ports' locations), its descriptor, whether it is
+     * bus-powered, its multi-TT capability and state, and whether it is a
+     * USB 3 hub's SuperSpeed half. HubLinked: the hub FDO's door name
+     * exists (\DosDevices\XHCI98HUB<Serial>), under PdoListLock. */
+    ULONG Hub;
+    ULONG HubUsb3;
+    ULONG HubIndex;
+    XHCI_HUB_DESC HubDesc;
+    ULONG HubBusPowered;
+    ULONG HubMttCapable;
+    ULONG HubMttOn;
+    ULONG HubLinked;
 } HCD_DEVICE_PDO, *PHCD_DEVICE_PDO;
 
 /* Whether a PDO may use a pipe of its device: a device PDO any, a function
@@ -592,6 +649,18 @@ typedef struct _HCD_PORT {
     ULONG ResumePending;    /* a hub port: a resume to try again at its
                              * next look, even if that look's GET_STATUS
                              * fails; thread only                        */
+    /* Task 33.3: an enumeration that ended in a halt (a command or EP0
+     * transfer that never completed) while a first answer waited, so the
+     * port is not looked at again until no first answer waits and does
+     * not hold the ports after it back. Thread only. */
+    ULONG SettleDeferred;
+    /* Task 33.3: a root port's SuperSpeed link warm-reset by an
+     * inspection, its outcome not yet read (nonzero; counts the
+     * inspections that found it still in reset); and a hub port's GET_STATUS
+     * failures in a row, its look owed again up to HCD_HUB_LOOK_TRIES.
+     * Thread only. */
+    ULONG LinkRecovering;
+    ULONG LookFails;
 } HCD_PORT, *PHCD_PORT;
 
 /*
@@ -669,6 +738,7 @@ typedef struct _HCD_HOLD {
     ULONG Unreadable;       /* passes its PORTSC read all ones while the
                              * request was pending                       */
     XHCI_LINK_HOLD Hold;    /* the pure state, xhci_link.c               */
+    ULONG SettleGen;        /* SettleAsked when asked for (task 33.3)    */
 } HCD_HOLD, *PHCD_HOLD;
 
 /* A hub's port object, n from 1. */
@@ -690,6 +760,9 @@ typedef struct _HCD_HOLD {
 #define HCD_HUB_STATUS_BYTES    XHCI_HUB_STATUS_MAX_BYTES
 #define HCD_SCRATCH_BYTES                                                    \
     (HCD_SCRATCH_CONTROL_BYTES + HCD_MAX_HUBS * HCD_HUB_STATUS_BYTES)
+
+/* Hub ports remembered as deferred for the first answer (task 33.3). */
+#define HCD_SETTLE_DEFER_HUB 16UL
 
 typedef struct _HCD_CONTROLLER {
     HCD_COMMON Common;
@@ -769,6 +842,8 @@ typedef struct _HCD_CONTROLLER {
     PHCD_DEVICE_PDO GonePdos;       /* unlisted, awaiting their deletion */
     PHCD_DEVICE_PDO RemovedPdos;    /* removed by PnP, deleted at the next
                                      * BusRelations answer (hcd_pdo.c)    */
+    ULONG StopPreserve;             /* an orderly PnP STOP is under way: the
+                                     * drop keeps stopped PDOs dormant    */
     ULONG RootHubStarted;           /* enumeration creates PDOs only then */
     volatile ULONG ThreadRunning;
     ULONG ThreadReferenceFailures;
@@ -935,9 +1010,65 @@ typedef struct _HCD_CONTROLLER {
      * did not take - all of them until its executor is wired. */
     ULONG XportRefusedAt[XHCI_XPORT_AT_COUNT];
     ULONG XportHoldsNotTaken;
+    /* The serial-number instance ids (33.2; hcd_enum.c, hcd_pdo.c), by
+     * the controller thread: devices named by their serial, devices whose
+     * serial string was read but is no instance id, devices whose read
+     * failed every try, and devices whose serial a listed PDO of the same
+     * VID and PID already carried - each of the last three on the
+     * location form. Never zeroed. */
+    ULONG SerialIdsTaken;
+    ULONG SerialIdsRefused;
+    ULONG SerialReadsFailed;
+    ULONG SerialIdsDuplicate;
+    /* Fast polling (33.8; hcd_cfg.c, XhciPipeFastPoll): the
+     * XhciFastPollFsLs mode read at each start (XHCI_PIPE_FAST_*), the
+     * endpoints a select opened below Table 6-12's FS/LS range, and the
+     * Configure Endpoint commands that refused one and were issued again at
+     * the Table 6-12 Interval. The two counts are never zeroed. */
+    ULONG FastPollMode;
+    ULONG FastPollOpened;
+    ULONG FastPollFallbacks;
+    /* The driver's controllers, for the machine-wide serial check
+     * (hcd_pdo.c, hcdSerialLock). */
+    struct _HCD_CONTROLLER *SerialNext;
 
     /* The kept controller sequence's state, as the miniport's extension. */
     XHCI_EXTENSION Hc;
+
+    /* The first answer's settle (task 33.3; hcd_enum.c, design record 13
+     * section 5.7), after Hc so no offset the harness reads moves. A hub
+     * FDO's start asks (SettleAsked, a generation); the thread settles a
+     * generation at the end of a pass begun after it with nothing in
+     * flight (SettleDone); a waiter whose deadline passes settles its own
+     * (SettleDone only moves forward). Both under the controller lock.
+     * SettleCapMs is the deadline and SettlePortMs the per-port budget,
+     * from XhciFirstEnumWaitMs and XhciFirstEnumPortMs at each start.
+     * The rest are counts, never zeroed: answers that waited, answers
+     * whose deadline passed, answers cut short by a teardown, ports
+     * deferred, and the last wait in ms. SettleDeferHub holds the hub ports
+     * deferred, by physical path, so a recovery that rebuilds their hub
+     * keeps them deferred (thread only). */
+    ULONG SettleAsked;
+    ULONG SettleDone;
+    ULONG SettleCapMs;
+    ULONG SettlePortMs;
+    ULONG SettleWaits;
+    ULONG SettleTimeouts;
+    ULONG SettleAborts;
+    ULONG SettleDeferrals;
+    ULONG SettleLastMs;
+    ULONG SettleDeferredNow;        /* a port deferred; thread only       */
+    /* A root link's warm reset still in progress past this is the
+     * controller's failure (hcd_enum.c): armed by the thread alone and
+     * cancelled as it leaves (hcd_ctl.c). Initialised at AddDevice. */
+    KTIMER LinkRecoverTimer;
+    struct {
+        ULONG RootPort;             /* 0: the entry is free               */
+        ULONG Route;                /* the hub's own Route String         */
+        ULONG Number;               /* the port on that hub               */
+    } SettleDeferHub[HCD_SETTLE_DEFER_HUB];
+    ULONG SettleDeferHubFull;       /* a deferral did not fit: every hub
+                                     * port rebuilt is taken as deferred */
 } HCD_CONTROLLER, *PHCD_CONTROLLER;
 
 /* The root hub's PDO, created by the controller FDO (hcd_rh.c; design record
@@ -968,7 +1099,36 @@ typedef struct _HCD_ROOTHUB_FDO {
     ULONG LinkMade;
     UNICODE_STRING Interface;
     ULONG InterfaceOn;
+    /* Task 33.3: the first BusRelations answer since the start waits for
+     * the settle generation the start asked for. */
+    ULONG SettlePending;
+    ULONG SettleTarget;
 } HCD_ROOTHUB_FDO, *PHCD_ROOTHUB_FDO;
+
+/* An external hub's FDO, this driver's third role (task 33.4; design record
+ * 13 section 10.11), attached over a hub's device PDO by AddDevice. Its
+ * BusRelations are the PDOs presented under that hub; it reaches the
+ * controller only through the PDO (HcdHubFdoController), never by a copy. */
+typedef struct _HCD_HUB_FDO {
+    HCD_COMMON Common;
+    PDEVICE_OBJECT Pdo;
+    PDEVICE_OBJECT LowerDevice;
+    LONG OutstandingIo;
+    KEVENT RemoveEvent;
+    /* The door (hcd_door.c): \DosDevices\XHCI98HUB<serial> and the hub
+     * interface. */
+    ULONG LinkMade;
+    UNICODE_STRING Interface;
+    ULONG InterfaceOn;
+    /* Hub IOCTLs admitted: opened by a START that succeeded, closed
+     * before a STOP or SURPRISE_REMOVAL goes down, so none can keep the
+     * PDO's Busy raised while its quiesce waits for it. */
+    volatile LONG DoorOpen;
+    /* Task 33.3: the first BusRelations answer since the start waits for
+     * the settle generation the start asked for. */
+    ULONG SettlePending;
+    ULONG SettleTarget;
+} HCD_HUB_FDO, *PHCD_HUB_FDO;
 
 #define HcdControllerFromExt(ext) \
     CONTAINING_RECORD((ext), HCD_CONTROLLER, Hc)
@@ -1023,7 +1183,20 @@ ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc);
 /* hcd_enum.c */
 VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered);
 VOID HcdEnumDetach(PHCD_CONTROLLER hc);
-VOID HcdEnumAttach(PHCD_CONTROLLER hc);
+ULONG HcdEnumAttach(PHCD_CONTROLLER hc);
+ULONG HcdEnumSettleAsk(PHCD_CONTROLLER hc);
+ULONG HcdEnumSettleClock(VOID);
+ULONG HcdEnumSettleArm(PHCD_CONTROLLER hc, PKTIMER deadline);
+/* Why a first answer stopped waiting (HcdEnumSettleStep). */
+#define HCD_SETTLE_DONE      0UL
+#define HCD_SETTLE_TORNDOWN  1UL
+#define HCD_SETTLE_DEADLINE  2UL
+ULONG HcdEnumSettleStep(PHCD_CONTROLLER hc, ULONG target, PKTIMER deadline,
+                        PULONG why);
+VOID HcdEnumSettleEnd(PHCD_CONTROLLER hc, ULONG target, ULONG startLow,
+                      ULONG why);
+ULONG HcdEnumSettleDeferredAt(PHCD_CONTROLLER hc, ULONG rootPort,
+                              ULONG route, ULONG number);
 VOID HcdEnumInit(PHCD_CONTROLLER hc);
 VOID HcdEnumDrop(PHCD_CONTROLLER hc);
 ULONG HcdThreadCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb, PULONG control);
@@ -1067,6 +1240,24 @@ ULONG HcdThreadControlOutcome(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                               USHORT value, USHORT index, ULONG length,
                               PULONG bytes);
 ULONG HcdThreadReaddress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+/* dev->SerialState (33.2): not read yet, no iSerialNumber, a usable serial
+ * id, a string read that is no instance id, every read try failed. */
+#define HCD_SERIAL_UNREAD   0UL
+#define HCD_SERIAL_NONE     1UL
+#define HCD_SERIAL_OK       2UL
+#define HCD_SERIAL_REFUSED  3UL
+#define HCD_SERIAL_FAILED   4UL
+ULONG HcdDeviceReadSerial(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+/* What one enumeration's text reads (33.6) carry from PDO to PDO: the
+ * language id, once read, and the string indexes that gave nothing. */
+typedef struct _HCD_TEXT_READ {
+    ULONG LangidRead;
+    ULONG Langid;
+    ULONG Failed[8];            /* bit (index & 31) of word index >> 5 */
+} HCD_TEXT_READ, *PHCD_TEXT_READ;
+ULONG HcdDeviceReadText(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                        const ULONG *indexes, ULONG count, ULONG flags,
+                        PHCD_TEXT_READ state, WCHAR *out);
 VOID HcdEnumCycle(PHCD_CONTROLLER hc, ULONG port, ULONG serial);
 
 /* hcd_hub.c */
@@ -1146,11 +1337,17 @@ struct _HCD_PIPE *HcdCfgHubOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 /* hcd_pdo.c */
 NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 ULONG HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+VOID HcdDevicePdoDormantAll(PHCD_CONTROLLER hc);
 ULONG HcdDevicePdoExists(PHCD_CONTROLLER hc, ULONG serial);
 PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
-                                        PDEVICE_RELATIONS old);
+                                        PDEVICE_RELATIONS old, ULONG parent);
 VOID HcdDevicePdoReleaseAll(PHCD_CONTROLLER hc);
+ULONG HcdDevicePdoLetGo(PHCD_CONTROLLER hc, ULONG hubSerial);
+ULONG HcdDevicePdoRepresent(PHCD_CONTROLLER hc, ULONG hubSerial);
 VOID HcdPdoRetireInit(VOID);
+VOID HcdSerialInit(VOID);
+VOID HcdSerialControllerAdd(PHCD_CONTROLLER hc);
+VOID HcdSerialControllerRemove(PHCD_CONTROLLER hc);
 ULONG HcdPdoRetire(PDEVICE_OBJECT obj);
 VOID HcdPdoReapRetired(VOID);
 NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp);
@@ -1230,7 +1427,16 @@ VOID HcdDoorRootHubRemove(PHCD_ROOTHUB_FDO fdo, PHCD_CONTROLLER hc);
 NTSTATUS HcdDoorCreateClose(PIRP irp);
 NTSTATUS HcdDoorControllerIoctl(PHCD_CONTROLLER hc, PIRP irp);
 NTSTATUS HcdDoorRootHubIoctl(PHCD_CONTROLLER hc, PIRP irp);
+VOID HcdDoorHubStart(PHCD_HUB_FDO fdo, PHCD_CONTROLLER hc);
+VOID HcdDoorHubStop(PHCD_HUB_FDO fdo);
+VOID HcdDoorHubRemove(PHCD_HUB_FDO fdo, PHCD_CONTROLLER hc);
+NTSTATUS HcdDoorHubIoctl(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO hub, PIRP irp);
 
+/* hcd_hubfdo.c (task 33.4) */
+NTSTATUS HcdHubAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo);
+NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp);
+NTSTATUS HcdHubFdoPower(PHCD_HUB_FDO fdo, PIRP irp);
+NTSTATUS HcdHubFdoDeviceControl(PHCD_HUB_FDO fdo, PIRP irp);
 /* hcd_log.c */
 VOID HcdLogFlush(PHCD_CONTROLLER hc, ULONG reason, ULONG counters);
 VOID HcdCountersStart(PHCD_CONTROLLER hc);

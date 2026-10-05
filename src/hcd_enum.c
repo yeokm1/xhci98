@@ -80,6 +80,14 @@
 #define HCD_COMMAND_WAIT_MS    5000UL
 #define HCD_TRANSFER_WAIT_MS   5000UL
 #define HCD_POLL_STEP_MS       10UL
+/* Looks at a hub port whose GET_STATUS failed, in a row, before its look
+ * is no longer owed (task 33.3): a bus policy number. */
+#define HCD_HUB_LOOK_TRIES     3UL
+/* A warm reset read still in progress (task 33.3): the passes after which,
+ * whatever the clock says, it is the controller's failure, and the mark that
+ * its recovery has been asked for. */
+#define HCD_LINK_RECOVERY_PASSES 600UL
+#define HCD_LINK_RECOVERY_FAILED 0xFFFFFFFFUL
 
 #define HCD_DESC_DEVICE        1
 #define HCD_DESC_CONFIGURATION 2
@@ -1391,6 +1399,194 @@ static VOID hcdReadIdentity(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 }
 
 /*
+ * The serial number string as an instance id (roadmap-hcd.md task 33.2;
+ * design record 13 section 10.7), once per enumeration, before the
+ * device's first PDO is built: dev->SerialState and dev->SerialId. No
+ * iSerialNumber is NONE, with no request sent. Otherwise each try reads
+ * string descriptor 0 for the first language id (0409h when the device
+ * STALLs it or lists none) and then the serial string; a serial string
+ * that arrives is OK when XhciFuncSerialId takes it and REFUSED when it
+ * does not - both the device's own answer, the same at every plug. A try
+ * that does not get the string (a STALL, an error, a request not sent) is
+ * made again, HCD_SERIAL_READ_TRIES in all, and only when every try failed
+ * is the device FAILED - counted and traced, never silent - and named by
+ * its location: a device whose read fails at one plug and not at the next
+ * changes devnode, and three fails in a row is what it takes. (The other
+ * way is a duplicate: a serial id a present PDO already carries leaves
+ * the newcomer on the location form, hcd_pdo.c.) A timeout is not retried: it left EP0's record queued
+ * (dev->Ep0Stuck) and requested the controller reset, which takes the
+ * device; 0 is returned and no PDO is made from it, so no location id is
+ * ever given for want of a read the reset will repeat. Every other return
+ * is 1. The reads use the scratch, which the caller has done with. Thread
+ * only, powered.
+ */
+#define HCD_SERIAL_READ_TRIES 3UL
+
+ULONG HcdDeviceReadSerial(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    PUCHAR s;
+    ULONG langid;
+    ULONG outcome;
+    ULONG bytes;
+    ULONG index;
+    ULONG tries;
+
+    if (dev->SerialState != HCD_SERIAL_UNREAD) {
+        return 1;
+    }
+    dev->SerialId[0] = 0;
+    index = (ULONG)dev->DeviceDesc[16];
+    if (index == 0) {
+        dev->SerialState = HCD_SERIAL_NONE;
+        return 1;
+    }
+    s = (PUCHAR)hc->ScratchVa;
+    for (tries = 0; tries < HCD_SERIAL_READ_TRIES; tries++) {
+        langid = 0x0409UL;
+        bytes = 0;
+        outcome = HcdThreadControlOutcome(hc, dev, 0x80, 6, (USHORT)0x0300,
+                                          0, 4, &bytes);
+        if (dev->Ep0Stuck) {
+            return 0;
+        }
+        if (outcome == HCD_CTL_DONE) {
+            if (bytes >= 4 && s[1] == 3 && s[0] >= 4) {
+                langid = (ULONG)s[2] | ((ULONG)s[3] << 8);
+            }
+        } else if (outcome != HCD_CTL_STALLED) {
+            continue;
+        }
+        bytes = 0;
+        outcome = HcdThreadControlOutcome(hc, dev, 0x80, 6,
+                                          (USHORT)(0x0300UL | index),
+                                          (USHORT)langid, 255, &bytes);
+        if (dev->Ep0Stuck) {
+            return 0;
+        }
+        if (outcome != HCD_CTL_DONE) {
+            continue;
+        }
+        if (XhciFuncSerialId(s, bytes, dev->SerialId,
+                             sizeof(dev->SerialId)) == XHCI_FUNC_OK) {
+            dev->SerialState = HCD_SERIAL_OK;
+            hc->SerialIdsTaken++;
+        } else {
+            dev->SerialId[0] = 0;
+            dev->SerialState = HCD_SERIAL_REFUSED;
+            hc->SerialIdsRefused++;
+            XHCI_DBG_VALUE("hcd: serial string is no instance id, port",
+                           dev->Port);
+        }
+        return 1;
+    }
+    dev->SerialState = HCD_SERIAL_FAILED;
+    hc->SerialReadsFailed++;
+    XHCI_DBG_VALUE("hcd: serial string not read, location id, port",
+                   dev->Port);
+    return 1;
+}
+
+/*
+ * A PDO's device text (roadmap-hcd.md task 33.6; design record 13 section
+ * 10.7) into `out` (XHCI_TEXT_WCHARS): the first of the `count` string
+ * indexes (XhciFuncTextIndexes) whose string XhciFuncText takes, in the
+ * device's first language id, as the serial read takes it (0409h when
+ * string descriptor 0 STALLs, lists none or is not read); `out` empty when
+ * none does, which is "USB Device". A name is not worth a slow enumeration:
+ * a STALL or a string with nothing to show is final, any other failure is
+ * tried HCD_TEXT_READ_TRIES times in all, and an index that gave nothing
+ * is not asked again for the device's other PDOs (`state`, zeroed by the
+ * caller once per enumeration). A timeout returns 0, as the serial read's
+ * does: the reset it requested takes the device. Every other return is 1.
+ * The reads use the scratch. Thread only, powered.
+ */
+#define HCD_TEXT_READ_TRIES 2UL
+
+ULONG HcdDeviceReadText(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                        const ULONG *indexes, ULONG count, ULONG flags,
+                        PHCD_TEXT_READ state, WCHAR *out)
+{
+    PUCHAR s;
+    ULONG outcome;
+    ULONG answer;
+    ULONG bytes;
+    ULONG chars;
+    ULONG index;
+    ULONG tries;
+    ULONG k;
+
+    out[0] = 0;
+    s = (PUCHAR)hc->ScratchVa;
+    for (k = 0; k < count; k++) {
+        index = indexes[k];
+        if (index == 0 || index > 0xFFUL ||
+            (state->Failed[index >> 5] & (1UL << (index & 31UL))) != 0) {
+            continue;
+        }
+        if (!state->LangidRead) {
+            state->Langid = 0x0409UL;
+            for (tries = 0; tries < HCD_TEXT_READ_TRIES; tries++) {
+                bytes = 0;
+                outcome = HcdThreadControlOutcome(hc, dev, 0x80, 6,
+                                                  (USHORT)0x0300, 0, 4,
+                                                  &bytes);
+                if (dev->Ep0Stuck) {
+                    return 0;
+                }
+                if (outcome == HCD_CTL_STALLED) {
+                    break;
+                }
+                if (outcome != HCD_CTL_DONE || bytes < 2 || s[1] != 3 ||
+                    s[0] < 2) {
+                    continue;
+                }
+                /* An empty list is the device's answer; a first id that
+                 * did not arrive is a failed read and tried again. */
+                if (s[0] < 4) {
+                    break;
+                }
+                if (bytes >= 4) {
+                    state->Langid = (ULONG)s[2] | ((ULONG)s[3] << 8);
+                    break;
+                }
+            }
+            state->LangidRead = 1;
+        }
+        for (tries = 0; tries < HCD_TEXT_READ_TRIES; tries++) {
+            bytes = 0;
+            outcome = HcdThreadControlOutcome(hc, dev, 0x80, 6,
+                                              (USHORT)(0x0300UL | index),
+                                              (USHORT)state->Langid, 255,
+                                              &bytes);
+            if (dev->Ep0Stuck) {
+                return 0;
+            }
+            if (outcome == HCD_CTL_STALLED) {
+                break;
+            }
+            if (outcome != HCD_CTL_DONE) {
+                continue;
+            }
+            /* A descriptor that did not arrive whole is a failed read and
+             * tried again; one with nothing to show is the device's own
+             * answer. */
+            answer = XhciFuncText(s, bytes, flags, out, XHCI_TEXT_WCHARS,
+                                  &chars);
+            if (answer == XHCI_FUNC_OK) {
+                return 1;
+            }
+            if (answer != XHCI_FUNC_MALFORMED) {
+                break;
+            }
+        }
+        state->Failed[index >> 5] |= 1UL << (index & 31UL);
+        XHCI_DBG_VALUE("hcd: no device text from string, port/index",
+                       (dev->Port << 16) | index);
+    }
+    return 1;
+}
+
+/*
  * A device enumerating on the USB 2.0 companion of a held port, its device
  * descriptor just read: told to the hold, which matches it against the held
  * identity. Only an identified hold that has seen a companion connect asks,
@@ -1641,15 +1837,25 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
 
     case XHCI_ENUM_ACT_CREATE_PDO:
         if (p->Device->DeviceDesc[4] == XHCI_HUB_CLASS) {
-            /* A hub is the bus's and never a PDO (section 10.3): brought
-             * up here, it is Present with nothing for PnP to start, so the
-             * machine is told its PDO exists and has started at once. A
-             * SuperSpeed hub is one too (30-A.1); its USB 2.0 half is a
-             * separate hub on the companion port. */
+            /* A hub is the bus's (section 10.3): brought up here, it is
+             * Present with nothing PnP must start before the bus serves
+             * it, so the machine is told its PDO exists and has started at
+             * once. A SuperSpeed hub is one too (30-A.1); its USB 2.0 half
+             * is a separate hub on the companion port. Since task 33.4
+             * (section 10.11) each half is also presented as a devnode, a
+             * PDO bound to this driver as a hub FDO, created now - after
+             * the hub's own bring-up and before any port of it is looked
+             * at, so every device behind it names it as its parent. A PDO
+             * that cannot be created costs only the presentation: the
+             * devices behind it are presented under the next hub up. */
             ok = HcdHubStart(hc, p, p->Device);
             hcdEventInit(next, XHCI_ENUM_EV_PDO_CREATED, ok);
             if (!ok) {
                 return 1;
+            }
+            if (!NT_SUCCESS(HcdDevicePdoCreate(hc, p->Device))) {
+                XHCI_DBG_VALUE("hcd: hub PDO not created, location",
+                               p->PortId);
             }
             /* The port enumerated: a later give-up of it starts its re-arm
              * waits from the first (hcd_hub.c; Codex review of the Phase
@@ -1693,6 +1899,75 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
     }
 }
 
+static VOID hcdPortInspectAgain(PHCD_CONTROLLER hc, PHCD_PORT p);
+static ULONG hcdTimerFired(PKTIMER t);
+
+/* A hub port deferred for the first answer, remembered by its physical
+ * path - the hub's root port and Route String and the port's number - so
+ * the recovery a halt brings, which frees the hub object and builds it
+ * again, keeps it deferred (HcdHubStart; Codex review of 33.3, round 1,
+ * finding 1). A full table defers nothing more by path. Thread only. */
+static VOID hcdSettleRememberHubPort(PHCD_CONTROLLER hc, PHCD_PORT p)
+{
+    PHCD_USB_DEVICE hubDev;
+    ULONG i;
+
+    if (p->Hub == NULL || p->Hub->Device == NULL) {
+        return;
+    }
+    hubDev = p->Hub->Device;
+    if (HcdEnumSettleDeferredAt(hc, hubDev->Port, hubDev->Route, p->Number)) {
+        return;
+    }
+    for (i = 0; i < HCD_SETTLE_DEFER_HUB; i++) {
+        if (hc->SettleDeferHub[i].RootPort == 0) {
+            hc->SettleDeferHub[i].RootPort = hubDev->Port;
+            hc->SettleDeferHub[i].Route = hubDev->Route;
+            hc->SettleDeferHub[i].Number = p->Number;
+            return;
+        }
+    }
+    /* The table is full: every hub port a rebuild numbers is taken as
+     * deferred until the settle, rather than this one forgotten (round 2,
+     * finding 2). */
+    hc->SettleDeferHubFull = 1;
+}
+
+/* Whether the hub port at that path is deferred for the first answer. A
+ * hub's bring-up asks it of each port it numbers (HcdHubStart). Thread
+ * only. */
+ULONG HcdEnumSettleDeferredAt(PHCD_CONTROLLER hc, ULONG rootPort, ULONG route,
+                              ULONG number)
+{
+    ULONG i;
+
+    if (hc->SettleDeferHubFull) {
+        return 1;
+    }
+    for (i = 0; i < HCD_SETTLE_DEFER_HUB; i++) {
+        if (hc->SettleDeferHub[i].RootPort != 0 &&
+            hc->SettleDeferHub[i].RootPort == rootPort &&
+            hc->SettleDeferHub[i].Route == route &&
+            hc->SettleDeferHub[i].Number == number) {
+            return 1;
+        }
+    }
+    return 0;
+}
+/* Whether a first answer waits for the settle (task 33.3): a generation
+ * asked for and not yet settled. IRQL: <= DISPATCH_LEVEL, controller lock
+ * released. */
+static ULONG hcdSettleOutstanding(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+    ULONG outstanding;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    outstanding = !XhciEnumSettleReached(hc->SettleDone, hc->SettleAsked);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    return outstanding;
+}
+
 /* Run the machine from one event until it asks for nothing, retrying from
  * Reset after a failure while the port still reads connected - once on a
  * root port, and on a hub's port until XHCI_HUB_PORT_ATTEMPTS attempts have
@@ -1704,10 +1979,24 @@ static VOID hcdRun(PHCD_CONTROLLER hc, PHCD_PORT p, XHCI_ENUM_EVENT event)
 {
     XHCI_ENUM_ACTION act;
     ULONG retries;
+    KTIMER budget;
+    LARGE_INTEGER due;
     ULONG guard;
+    ULONG armed;
+    ULONG deferring;
 
     retries = (p->Hub != NULL) ? XHCI_HUB_PORT_ATTEMPTS - 1UL
                                : XHCI_ENUM_RETRIES;
+    /* The per-port budget (task 33.3): a relative timer, as the answer's
+     * deadline, unaffected by a change of the system time. */
+    armed = 0;
+    if (hc->SettlePortMs != 0) {
+        KeInitializeTimer(&budget);
+        HcdRelativeMs(&due, hc->SettlePortMs);
+        (VOID)KeSetTimer(&budget, due, NULL);
+        armed = 1;
+    }
+    deferring = 0;
 
     for (guard = 0; guard < 64; guard++) {
         /* An outcome is always fed back before the run can stop: a halt is
@@ -1718,6 +2007,22 @@ static VOID hcdRun(PHCD_CONTROLLER hc, PHCD_PORT p, XHCI_ENUM_EVENT event)
         (VOID)XhciEnumStep(&p->Enum, &event, &act);
         if (act.Kind != XHCI_ENUM_ACT_NONE && hcdHalted(hc)) {
             break;
+        }
+        if (!deferring && act.Kind != XHCI_ENUM_ACT_NONE &&
+            act.Kind != XHCI_ENUM_ACT_CREATE_PDO &&
+            act.Kind != XHCI_ENUM_ACT_DISABLE_SLOT &&
+            act.Kind != XHCI_ENUM_ACT_REPORT_GONE &&
+            armed && hcdTimerFired(&budget) && hcdSettleOutstanding(hc)) {
+            /* Past its budget while a first answer waits (task 33.3): the
+             * attempt is given up as an unplug gives it up - the slot
+             * back, the machine to Empty - and the port looked at again
+             * once no first answer waits. Checked between steps only, so
+             * one step's own timeout can carry a port past it. */
+            XHCI_DBG_VALUE("hcd: settle, port over its budget, location",
+                           p->PortId);
+            deferring = 1;
+            hcdEventInit(&event, XHCI_ENUM_EV_DISCONNECT, 1);
+            continue;
         }
         if (act.Kind == XHCI_ENUM_ACT_NONE ||
             !hcdPerform(hc, p, &act, &event)) {
@@ -1744,6 +2049,31 @@ static VOID hcdRun(PHCD_CONTROLLER hc, PHCD_PORT p, XHCI_ENUM_EVENT event)
                 break;
             }
         }
+    }
+    if (deferring || (hcdHalted(hc) && !p->SettleDeferred &&
+                      hcdSettleOutstanding(hc))) {
+        /* Fairness for the first answer (task 33.3): a port past its
+         * budget, or one whose command or transfer never completed - a 5 s
+         * wait and a recovery already, which looked at first again after
+         * the rescan would cost them again before any port after it - waits
+         * until no first answer does (HcdEnumService). Its look is owed
+         * meanwhile: a root port's in PortChange (the recovery's
+         * invalidation owes every one), a hub port's in its hub's Changed. */
+        if (deferring) {
+            if (p->Hub == NULL) {
+                hcdPortInspectAgain(hc, p);
+            } else {
+                p->Hub->Changed |= 1UL << p->Number;
+            }
+        }
+        hcdSettleRememberHubPort(hc, p);
+        p->SettleDeferred = 1;
+        hc->SettleDeferredNow = 1;
+        hc->SettleDeferrals++;
+        XHCI_DBG_VALUE("hcd: settle, port deferred, location", p->PortId);
+    }
+    if (armed) {
+        (VOID)KeCancelTimer(&budget);
     }
 }
 
@@ -1838,6 +2168,7 @@ static VOID hcdHoldRelease(PHCD_CONTROLLER hc, PHCD_HOLD h)
  */
 static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
 {
+    LARGE_INTEGER due;
     PXHCI_EXTENSION ext;
     XHCI_LINK_ACTION act;
     PHCD_HOLD h;
@@ -1851,6 +2182,30 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
         hcdPortUnreadable(hc, p);
         return;
     }
+    /* A warm reset this driver began (task 33.3) is in flight while the
+     * port still reads it in progress: the inspection is owed again and
+     * nothing is acknowledged or fed until it reads otherwise, so neither a
+     * first answer nor the machine takes a link still training for settled
+     * (Codex review of 33.3, round 2, finding 1). A reset still in progress
+     * past twice its own wait (HCD_WARM_RESET_WAIT_MS, by a relative timer,
+     * and by passes as a fallback) is the controller's
+     * failure, as an unreadable port is: its recovery is asked for once and
+     * the inspection stays owed - never an ordinary inspection of a port
+     * still in reset (round 3). */
+    if (p->LinkRecovering != 0 && (portsc & XHCI_PORTSC_PR) != 0) {
+        if (p->LinkRecovering != HCD_LINK_RECOVERY_FAILED) {
+            p->LinkRecovering++;
+            if (hcdTimerFired(&hc->LinkRecoverTimer) ||
+                p->LinkRecovering >= HCD_LINK_RECOVERY_PASSES) {
+                p->LinkRecovering = HCD_LINK_RECOVERY_FAILED;
+                XHCI_DBG_VALUE("hcd: warm reset never ended, recovery, port",
+                               p->PortId);
+                HcdSvcRequestReset(&hc->Hc);
+            }
+        }
+        hcdPortInspectAgain(hc, p);
+        return;
+    }    p->LinkRecovering = 0;
     changes = portsc & XHCI_PORTSC_CHANGE_MASK;
     if (changes != 0) {
         XhciWritePortsc(ext, p->PortId,
@@ -1891,6 +2246,18 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
      * the Phase 28-31 integration, finding 4). */
     if (hcdHalted(hc)) {
         return;
+    }
+    /* Its outcome is read at the next inspection, which the reset's own
+     * change brings; until then the first answer counts it in flight
+     * (task 33.3; Codex review of 33.3, round 1, finding 2). */
+    p->LinkRecovering = (act.Kind == XHCI_LINK_ACT_WARM_RESET) ? 1UL : 0UL;
+    if (p->LinkRecovering) {
+        /* One relative timer for every root link in recovery, re-armed by
+         * each warm reset (a later one extends the others' bound), armed
+         * only here and cancelled when the thread leaves (hcd_ctl.c), so
+         * none outlives the controller's storage (round 4). */
+        HcdRelativeMs(&due, 2UL * HCD_WARM_RESET_WAIT_MS);
+        (VOID)KeSetTimer(&hc->LinkRecoverTimer, due, NULL);
     }
     switch (act.Kind) {
     case XHCI_LINK_ACT_WARM_RESET:
@@ -1961,6 +2328,7 @@ BOOLEAN HcdHoldRequestUsb2(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         slot->Port = port;
         slot->Unreadable = 0;
         slot->Hold.Kind = XHCI_HOLD_NONE;
+        slot->SettleGen = hc->SettleAsked;
         /* The request is this device's: the service acts only while the
          * port still holds it (hcdHoldService). */
         dev->HoldAsked = 1;
@@ -2816,8 +3184,15 @@ static VOID hcdHubPortChanged(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
 
     q = HcdHubPort(hc, hub, n);
     if (!HcdHubPortLook(hc, hub, n, q->Enum.State, &d)) {
+        /* A look that read nothing is owed again, a bounded number of
+         * times, so a first answer does not take the port as looked at
+         * (task 33.3; Codex review of 33.3, round 1, finding 3). */
+        if (++q->LookFails < HCD_HUB_LOOK_TRIES) {
+            hub->Changed |= 1UL << n;
+        }
         return;
     }
+    q->LookFails = 0;
     if (d.Disconnect) {
         hcdFeed(hc, q, XHCI_ENUM_EV_DISCONNECT);
     }
@@ -2838,7 +3213,7 @@ static VOID hcdHubPortChanged(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
  * looked at, and its status-change pipe re-armed only after them (section
  * 10.1). A hub brought up during the pass is served in it if its object
  * comes later, at the next pass otherwise. */
-static VOID hcdHubService(PHCD_CONTROLLER hc)
+static VOID hcdHubService(PHCD_CONTROLLER hc, ULONG outstanding)
 {
     PHCD_HUB hub;
     ULONG i;
@@ -2858,6 +3233,10 @@ static VOID hcdHubService(PHCD_CONTROLLER hc)
             if ((hub->Changed & (1UL << n)) == 0) {
                 continue;
             }
+            if (outstanding && HcdHubPort(hc, hub, n)->SettleDeferred) {
+                /* Kept for when no first answer waits (task 33.3). */
+                continue;
+            }
             hub->Changed &= ~(1UL << n);
             hcdHubPortChanged(hc, hub, n);
         }
@@ -2867,6 +3246,113 @@ static VOID hcdHubService(PHCD_CONTROLLER hc)
     }
 }
 
+/*
+ * The first answer's settle (task 33.3; design record 13 section 5.7), at
+ * the end of a pass that enumerated: when nothing is owed and nothing is in
+ * flight - no root port change (the reset's own change included, so one
+ * more pass looks), no hub port look, no machine between Empty and its rest,
+ * no send-back asked for in the window still on its way to the companion -
+ * the generation the pass began under is settled. A deferred port's owed
+ * look does not count: it waits for the settle. Thread only, powered.
+ */
+static VOID hcdSettleCheck(PHCD_CONTROLLER hc, ULONG asked)
+{
+    PXHCI_EXTENSION ext;
+    PHCD_HUB hub;
+    PHCD_PORT q;
+    PHCD_HOLD h;
+    KIRQL oldIrql;
+    ULONG rootPending;
+    ULONG hubPending;
+    ULONG inFlight;
+    ULONG settled;
+    ULONG port;
+    ULONG i;
+    ULONG n;
+
+    ext = &hc->Hc;
+    rootPending = 0;
+    hubPending = 0;
+    inFlight = 0;
+    for (port = 1; port <= ext->PortMap.PortCount &&
+                   port <= XHCI_MAX_ROOT_PORTS; port++) {
+        if (!XhciPortIsManaged(&ext->PortMap, port)) {
+            continue;
+        }
+        q = &hc->Ports[port - 1];
+        if (!XhciEnumAtRest(q->Enum.State) ||
+            (q->LinkRecovering && !q->SettleDeferred)) {
+            inFlight = 1;
+        }
+    }
+    for (i = 0; i < HCD_MAX_HUBS; i++) {
+        hub = &hc->Hubs[i];
+        if (!hub->Used || hub->Draining || hub->Device == NULL ||
+            hub->Refused) {
+            continue;
+        }
+        for (n = 1; n <= hub->Ports; n++) {
+            q = HcdHubPort(hc, hub, n);
+            if ((hub->Changed & (1UL << n)) != 0 && !q->SettleDeferred) {
+                hubPending = 1;
+            }
+            if (!XhciEnumAtRest(q->Enum.State)) {
+                inFlight = 1;
+            }
+        }
+    }
+
+    settled = 0;
+    XhciControllerLockAcquire(ext, &oldIrql);
+    for (port = 1; port <= ext->PortMap.PortCount &&
+                   port <= XHCI_MAX_ROOT_PORTS; port++) {
+        if ((hc->PortChange[(port - 1) / 32UL] &
+             (1UL << ((port - 1) % 32UL))) != 0 &&
+            XhciPortIsManaged(&ext->PortMap, port) &&
+            !hc->Ports[port - 1].SettleDeferred) {
+            rootPending = 1;
+        }
+    }
+    for (i = 0; i < HCD_MAX_HOLDS; i++) {
+        h = &hc->Holds[i];
+        if (h->Used && !XhciEnumSettleReached(hc->SettleDone, h->SettleGen) &&
+            XhciEnumHoldInFlight(h->Pending, h->Hold.Kind, h->Hold.Companion,
+                                 h->Hold.ConnectSeen)) {
+            inFlight = 1;
+        }
+    }
+    if (XhciEnumSettleQuiet(1, rootPending, hubPending, inFlight) &&
+        !XhciEnumSettleReached(hc->SettleDone, asked)) {
+        hc->SettleDone = asked;
+        settled = 1;
+    }
+    XhciControllerLockRelease(ext, oldIrql);
+    if (settled) {
+        XHCI_DBG_VALUE("hcd: settle, generation settled", asked);
+    }
+}
+
+/* Every deferred port given back to its ordinary service once no first
+ * answer waits: a root port's look was kept owed in PortChange and a hub
+ * port's in its hub's Changed, so the pass that follows takes them. Thread
+ * only. */
+static VOID hcdSettleUndefer(PHCD_CONTROLLER hc)
+{
+    ULONG i;
+
+    if (!hc->SettleDeferredNow) {
+        return;
+    }
+    hc->SettleDeferredNow = 0;
+    for (i = 0; i < HCD_PORT_COUNT; i++) {
+        hc->Ports[i].SettleDeferred = 0;
+    }
+    for (i = 0; i < HCD_SETTLE_DEFER_HUB; i++) {
+        hc->SettleDeferHub[i].RootPort = 0;
+    }
+    hc->SettleDeferHubFull = 0;
+    HcdThreadWake(hc);
+}
 /*
  * The thread's port service, under the power gate; `powered` is the
  * controller's state read under it (Codex review of batch (b), round 1,
@@ -2889,6 +3375,8 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
     ULONG serial;
     ULONG invalidated;
     ULONG detach;
+    ULONG asked;
+    ULONG outstanding;
     ULONG anyRemoved;
     ULONG word;
     ULONG bit;
@@ -2899,6 +3387,11 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
     ext = &hc->Hc;
     XhciControllerLockAcquire(ext, &oldIrql);
     detach = hc->EnumDetachRequested;
+    /* The settle generation this pass may settle (task 33.3), read before
+     * the ports' change bits below, so a pass that reads it has the bits a
+     * root hub's start set with it. */
+    asked = hc->SettleAsked;
+    outstanding = !XhciEnumSettleReached(hc->SettleDone, asked);
     invalidated = 0;
     if (powered) {
         invalidated = hc->SlotsInvalidated;
@@ -2917,6 +3410,9 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
     }
     if (!powered) {
         return;
+    }
+    if (!outstanding) {
+        hcdSettleUndefer(hc);
     }
     if (hc->SlotSweep && !hcdHalted(hc)) {
         hcdSweepAbandoned(hc);
@@ -3002,12 +3498,20 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
             !XhciPortIsManaged(&ext->PortMap, port)) {
             continue;
         }
+        if (outstanding && hc->Ports[port - 1].SettleDeferred) {
+            /* Owed again, for when no first answer waits (task 33.3). */
+            hcdPortInspectAgain(hc, &hc->Ports[port - 1]);
+            continue;
+        }
         hcdPortChanged(hc, &hc->Ports[port - 1]);
         if (hcdHalted(hc)) {
             return;
         }
     }
-    hcdHubService(hc);
+    hcdHubService(hc, outstanding);
+    if (outstanding && !hcdHalted(hc)) {
+        hcdSettleCheck(hc, asked);
+    }
 }
 
 /*
@@ -3038,13 +3542,17 @@ VOID HcdEnumDetach(PHCD_CONTROLLER hc)
                                 FALSE, NULL);
 }
 
+static ULONG hcdSettleAskLocked(PHCD_CONTROLLER hc);
+
 /*
  * The root hub's start (hcd_rh.c): PDOs may be created, and every port is
- * looked at. IRQL: PASSIVE_LEVEL.
+ * looked at; returns the settle generation its first answer waits for
+ * (task 33.3), 0 for none. IRQL: PASSIVE_LEVEL.
  */
-VOID HcdEnumAttach(PHCD_CONTROLLER hc)
+ULONG HcdEnumAttach(PHCD_CONTROLLER hc)
 {
     KIRQL oldIrql;
+    ULONG target;
     ULONG i;
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
@@ -3052,10 +3560,172 @@ VOID HcdEnumAttach(PHCD_CONTROLLER hc)
     for (i = 0; i < HCD_PORT_WORDS; i++) {
         hc->PortChange[i] = 0xFFFFFFFFUL;
     }
+    /* The settle the root hub's first answer waits for (task 33.3), asked
+     * in the same hold as the ports are marked, so the pass that reads it
+     * looks at every port. */
+    target = hcdSettleAskLocked(hc);
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     HcdThreadWake(hc);
+    return target;
 }
 
+/* ----------------------------------------------------------------------- */
+/* The first answer's settle (task 33.3)                                    */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * The waiter's half, design record 13 section 5.7. A hub FDO's start asks
+ * for a settle generation (HcdEnumAttach for the root hub, HcdEnumSettleAsk
+ * for an external hub's FDO); its first BusRelations answer then looks
+ * (HcdEnumSettleStep) and sleeps, outside every lock and outside the
+ * controller - which it re-enters for each look - until the thread has
+ * settled that generation, the root hub or the thread has gone, or its
+ * deadline has passed. It never waits on PnP: the thread it waits for
+ * creates PDOs and invalidates relations but waits on no IRP of PnP's.
+ * IRQL: PASSIVE_LEVEL for the sleeps; the functions below say their own.
+ */
+
+/* The low word of the system time, in 100 ns units. IRQL: <= DISPATCH. */
+ULONG HcdEnumSettleClock(VOID)
+{
+    LARGE_INTEGER now;
+
+    KeQuerySystemTime(&now);
+    return now.LowPart;
+}
+
+/* A new generation, 0 when the wait is off. Never 0 otherwise, so 0 can
+ * mean "nothing asked". Controller lock held. */
+static ULONG hcdSettleAskLocked(PHCD_CONTROLLER hc)
+{
+    if (hc->SettleCapMs == 0) {
+        return 0;
+    }
+    hc->SettleAsked++;
+    if (hc->SettleAsked == 0) {
+        hc->SettleAsked++;
+    }
+    return hc->SettleAsked;
+}
+
+/* An external hub FDO's start (hcd_hubfdo.c): a generation its first
+ * answer waits for, 0 for none. IRQL: <= DISPATCH_LEVEL. */
+ULONG HcdEnumSettleAsk(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+    ULONG target;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    target = hcdSettleAskLocked(hc);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (target != 0) {
+        HcdThreadWake(hc);
+    }
+    return target;
+}
+
+/* The answer's deadline: a relative timer, unaffected by a change of the
+ * system time, polled with a zero wait as HcdHubPortDebounce polls its own;
+ * the waiter cancels it before its stack frame goes. 0 when the wait is
+ * off. IRQL: <= DISPATCH_LEVEL. */
+ULONG HcdEnumSettleArm(PHCD_CONTROLLER hc, PKTIMER deadline)
+{
+    LARGE_INTEGER due;
+
+    if (hc->SettleCapMs == 0) {
+        return 0;
+    }
+    KeInitializeTimer(deadline);
+    HcdRelativeMs(&due, hc->SettleCapMs);
+    (VOID)KeSetTimer(deadline, due, NULL);
+    return 1;
+}
+
+/* Whether a relative timer has expired. IRQL: <= DISPATCH_LEVEL. */
+static ULONG hcdTimerFired(PKTIMER t)
+{
+    LARGE_INTEGER zero;
+
+    zero.QuadPart = 0;
+    return KeWaitForSingleObject(t, Executive, KernelMode, FALSE, &zero) ==
+           STATUS_SUCCESS;
+}
+
+/*
+ * One look: how long to sleep before the next, or 0 to answer now, with
+ * *why saying which - the generation settled (HCD_SETTLE_DONE), nothing
+ * left that could settle it: the root hub not started or detaching, the
+ * thread not running (HCD_SETTLE_TORNDOWN), or the deadline passed
+ * (HCD_SETTLE_DEADLINE). IRQL: <= DISPATCH_LEVEL.
+ */
+ULONG HcdEnumSettleStep(PHCD_CONTROLLER hc, ULONG target, PKTIMER deadline,
+                        PULONG why)
+{
+    KIRQL oldIrql;
+    ULONG done;
+    ULONG gone;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    done = target == 0 || XhciEnumSettleReached(hc->SettleDone, target);
+    gone = !hc->RootHubStarted || hc->EnumDetachRequested ||
+           !hc->ThreadRunning;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (done) {
+        *why = HCD_SETTLE_DONE;
+        return 0;
+    }
+    if (gone) {
+        *why = HCD_SETTLE_TORNDOWN;
+        return 0;
+    }
+    if (hcdTimerFired(deadline)) {
+        *why = HCD_SETTLE_DEADLINE;
+        return 0;
+    }
+    return XHCI_ENUM_SETTLE_STEP_MS;
+}
+
+/*
+ * The answer is going. A generation not settled is retired now by the
+ * waiter - SettleDone only moves forward - so the ports deferred for it are
+ * given back and a send-back still on its way no longer holds a later
+ * answer; what is still enumerating finishes after the answer and is
+ * reported by the invalidation its PDO's creation makes, as before 33.3.
+ * A deadline is counted apart from a teardown, and the time waited, read
+ * off the system clock for the trace alone, is traced. IRQL: <=
+ * DISPATCH_LEVEL.
+ */
+VOID HcdEnumSettleEnd(PHCD_CONTROLLER hc, ULONG target, ULONG startLow,
+                      ULONG why)
+{
+    KIRQL oldIrql;
+    ULONG waited;
+    ULONG retired;
+
+    if (target == 0) {
+        return;
+    }
+    waited = XhciEnumElapsedMs(startLow, HcdEnumSettleClock());
+    retired = 0;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (!XhciEnumSettleReached(hc->SettleDone, target)) {
+        hc->SettleDone = target;
+        retired = 1;
+    }
+    if (why == HCD_SETTLE_DEADLINE) {
+        hc->SettleTimeouts++;
+    } else if (why == HCD_SETTLE_TORNDOWN) {
+        hc->SettleAborts++;
+    }
+    hc->SettleWaits++;
+    hc->SettleLastMs = waited;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    XHCI_DBG_VALUE("hcd: settle, first answer after ms (bits 30-31: why)",
+                   (waited & 0x3FFFFFFFUL) | (why << 30));
+    if (retired) {
+        HcdThreadWake(hc);
+    }
+}
 /* At a start: every port empty, every port numbered, the topology graph
  * empty, no request pending - except a port still waiting in Gone for a PDO
  * PnP holds across the controller's stop, or for a departed hub's subtree,
@@ -3083,6 +3753,7 @@ VOID HcdEnumInit(PHCD_CONTROLLER hc)
         p->Device = NULL;
         p->LinkPsiv = 0;
         p->Unreadable = 0;
+        p->LinkRecovering = 0;
         XhciLinkInit(&p->Link);
         if (p->Enum.State == XHCI_ENUM_GONE && !hcdPortQuiet(hc, p)) {
             continue;
@@ -3091,6 +3762,14 @@ VOID HcdEnumInit(PHCD_CONTROLLER hc)
         p->AwaitSerial = 0;
         p->AwaitHub = NULL;
     }
+    for (i = 0; i < HCD_PORT_COUNT; i++) {
+        hc->Ports[i].SettleDeferred = 0;
+    }
+    hc->SettleDeferredNow = 0;
+    for (i = 0; i < HCD_SETTLE_DEFER_HUB; i++) {
+        hc->SettleDeferHub[i].RootPort = 0;
+    }
+    hc->SettleDeferHubFull = 0;
     for (i = 0; i <= XHCI_MAX_SLOTS; i++) {
         hc->SlotDevice[i] = NULL;
     }
@@ -3115,5 +3794,12 @@ VOID HcdEnumInit(PHCD_CONTROLLER hc)
  * PASSIVE_LEVEL, the thread stopped. */
 VOID HcdEnumDrop(PHCD_CONTROLLER hc)
 {
+    /* PDOs PnP itself stopped first - Windows 98 SE's and ME's disable of
+     * the controller - stay listed for their devices to come back to
+     * (hcd_pdo.c, HcdDevicePdoDormantAll); the drop then finds them
+     * detached and leaves their ports Empty, not waiting in Gone. */
+    if (hc->StopPreserve) {
+        HcdDevicePdoDormantAll(hc);
+    }
     hcdDropAll(hc);
 }

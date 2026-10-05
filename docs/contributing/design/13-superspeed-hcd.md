@@ -271,7 +271,9 @@ Every device PDO and every function PDO is a child of the root hub, not of the
 hub it is plugged into: external hubs are objects of the bus (the decisions
 table), so a device behind a hub appears directly under `xHCI98 USB 3.x Root
 Hub` in Device Manager, and the Power tab reports the budget the bus itself
-keeps (section 8).
+keeps (section 8). **Superseded 2026-10-04 by task 33.4 (section 10.11):**
+each hub the bus serves also has a PDO, bound to this driver as a hub FDO,
+and the devices behind it are its children; the bus still runs the hub.
 
 The driver's role at `AddDevice` is decided by whether the PDO handed in was
 created by this driver object (`Pdo->DriverObject == DriverObject`), and
@@ -317,6 +319,28 @@ Windows 98 arrives as an out-of-sequence `IRP_MN_REMOVE_DEVICE` with no
 `SURPRISE_REMOVAL` before it (`docs/usb-xhci-info/win98-wdm.md`), so every
 remove handler is written to be the first PnP IRP the object sees after
 start.
+
+**The controller's orderly stop is the exception to "the controller stops,
+the PDOs are reported missing"** (corrected 2026-10-04; roadmap task 33.1,
+merge `a9a7577`; `docs/issues/09-me-controller-reenable-stopped-pdos.md`).
+Windows 98 SE and ME disable a controller by STOPping its whole tree and
+STARTing it again at the enable, expecting the same devnodes back; a new PDO
+at the instance id of a stopped one wedged ME's configuration manager. So on
+an orderly PnP `STOP` of the controller (`StopPreserve`), every device whose
+PDOs PnP has all stopped - listed, not removed, not surprise-removed, no URB
+pending - keeps them listed with no device record, **dormant**
+(`HcdDevicePdoDormantAll`), and the drop that follows reports nothing gone
+for it. At the restart the device's re-enumeration at the same place with
+the same descriptors revives the dormant group (`hcdDormantRevive`), whose
+`START` waits for that (up to 10 s, `hcdDormantWait`); a device that does
+not come back, or a different one there, has the dormant group reported
+missing then. Windows 2000 onward remove the children before a controller
+disable, so nothing goes dormant there, and a stop of the controller alone
+(a rebalance) leaves the children started, which are dropped and reported
+missing as above. Hub PDOs (task 33.4, section 10.11) follow the same model:
+a hub's dormant PDO is revived by the hub's re-enumeration with its serial
+kept, a device behind a hub is kept dormant only when that hub's PDO is, and
+a dormant group retired takes the dormant groups below it with it.
 
 ### 5.3 The enumeration state machine
 
@@ -460,6 +484,7 @@ task. The miniport reads six values from its device key (`src\*.c`, the six
 | `XhciLogDebugView` | Carried over, same meaning; under the HCD it also selects 26-A.8's continuous PASSIVE flusher |
 | `XhciImodInterval250ns` | Carried over, same meaning and code default 4000; both INFs write 160 (40 us) on every install path since the owner's ruling of 2026-10-04 (`roadmap-hcd.md`, decisions table), 500 until then |
 | `XhciVirtualHSHub`, `XhciVirtualHSHubVid`, `XhciVirtualHSHubPid` | Not read and not written (owner, 2026-10-02); the INF gate refuses them in an HCD INF (`VAL-HCDVHUB`) |
+| `XhciFastPollFsLs` | New in `2.1.0.0` (task 33.8), the HCD's own: read at each controller start, written by no INF, absent or 0 is off. Lets a Low- or Full-Speed interrupt endpoint on a root port be polled faster than 1 ms; section 13 |
 
 The root-hub sections write no value of the controller's: they carry the
 loader values on Windows 98 and the hub property-page registration on every
@@ -470,6 +495,392 @@ The package is `xhci98-<version>.zip`, as the miniport's was - the published
 `make-release.ps1` from 32.3. Until 26-A.1 the packager refuses the scaffold
 image by its marker (section 9).
 
+### 5.6 Text-mode Setup: `txtsetup.oem` (task 33.3)
+
+The question: can a machine whose keyboard or install medium sits on an xHCI
+controller load `xhci98.sys` at text-mode Setup's F6 prompt of Windows 2000,
+32-bit XP and XP x64, and what does Setup have to bring for it. Every reading
+below is `static` unless it says otherwise; nothing here has run. The
+install legs that would make any of it `runtime` are owed (the end of this
+section).
+
+**What Setup loads by itself.** Each medium's `TXTSETUP.SIF` was extracted
+with 7-Zip into a scratch directory (never tracked) and read as text:
+
+| Medium | `TXTSETUP.SIF` | `[InputDevicesSupport.Load]` | Files those entries pull in (`[files.*]`) |
+|---|---|---|---|
+| `win2ksp4.ISO` `I386\` | 335,081 B, SHA-256 `ECA9CDFBB5C7B455F908BF53CDBE72CADA87A2615B1E933F9559C49763CB6BF2` | `openhci`, `uhcd`, `usbhub`, `hidusb`, `serial`, `serenum`, `usbstor` | `hidclass.sys`, `hidparse.sys` and `usbd.sys` with `openhci.sys` and with `uhcd.sys`; `kbdhid` is in `[Keyboard.Load]`, `mouhid` in `[Mouse]` |
+| `en_windows_xp_professional_with_service_pack_3_x86_cd_vl_x14-73974.iso` `I386\` | 480,367 B, `5F754EA59F3735CF9524E076869C2414BF39D66387A33F371CA00775F77F63D8` | `usbehci`, `usbohci`, `usbuhci`, `usbhub`, `usbccgp`, `hidusb`, `serial`, `serenum`, `usbstor` | `hid.dll`, `hidclass.sys`, `hidparse.sys`, `usbd.sys` and `usbport.sys` with each of the three host controller drivers; `kbdhid` in `[Keyboard.Load]`, `mouhid` in `[MouseDrivers.Load]` |
+| `Win XP SP2 VL x64.iso` `AMD64\` | 512,828 B, `77B96776DE4DBA09A071973A661794CE98DCE5496215EF81D9193AD2BDDEAA65` | the XP list, plus `wd` | as XP |
+
+The Windows 2000 file lists `usbport.sys` and `usbehci.sys` in
+`[SourceDisksFiles]` but names neither in `[InputDevicesSupport]` or
+`[HardwareIdsDatabase]`, so its text mode has no EHCI support and no
+`usbport.sys` at all.
+
+**Setup's hardware-id table.** `[HardwareIdsDatabase]` on all three binds
+`PCI\CC_0C0300`, `PCI\CC_0C0310` (and on XP and XP x64 `PCI\CC_0C0320`) to
+Setup's own host controller drivers, `USB\ROOT_HUB` (and `USB\ROOT_HUB20` on
+XP) and `USB\CLASS_09` to `usbhub`, `USB\COMPOSITE` to `usbhub` on Windows
+2000 and `usbccgp` on XP, `USB\Class_03`, `USB\Class_03&SubClass_01` and
+`...&Prot_02` to `hidusb`, `HID_DEVICE_SYSTEM_KEYBOARD` to `kbdhid`,
+`HID_DEVICE_SYSTEM_MOUSE` to `mouhid`, and
+`USB\Class_08&SubClass_{02,05,06}&Prot_50` plus a VID/PID list to `usbstor`.
+**None of them binds `PCI\CC_0C0330`**, so nothing of Setup's claims an xHCI
+controller, and the table is keyed on class (compatible) ids as well as
+hardware ids - Setup's own EHCI row is one.
+
+**The `txtsetup.oem` format.** The Windows 2000 DDK's sample,
+`tools\ntddk\src\setup\inf\scsi\txtsetup.oem` (1,472 B, SHA-256
+`62736CB3671D26BCE67B292CA257AC6BB15A09A56AB3A0BA59F869F16A165C01`, dated
+2000-07-26, not tracked), is the format reference read here: `[Disks]`
+(`diskN = "description", tagfile, directory`), `[Defaults]`
+(`component = ID`, its one component `scsi`), `[scsi]` (`ID =
+"description"`), `[Files.scsi.ID]` (`filetype = diskN, filename[,
+DriverKey]`, with the file types `driver`, `inf` and `catalog`),
+`[Config.ID]` (values under the service key) and `[HardwareIds.scsi.ID]`
+(`id = "deviceID", "service"`). The DDK's own format reference (the help
+topic) is not in the local DDK tree; the sample's comments are what was
+read. Other components (`computer`, `display`, `keyboard`, `mouse`) exist in
+the format but are chosen elsewhere in Setup; F6 offers the `scsi` component,
+and an F6 driver is loaded with Setup's own boot drivers, before the kernel
+starts - which is early enough for a bus driver, since Setup's USB stack is
+loaded the same way.
+
+**What `xhci98.sys` needs that an INF would normally give it.** Read from
+this repository's own sources: its imports are `ntoskrnl.exe` and `HAL.dll`
+only (`scripts\import-gate\xhci98-imports.allow`), so it needs no file from
+Setup to load; the root-hub role is decided at `AddDevice` by the PDO's
+driver object, not by any INF value (`src\hcd_rh.c` header); the registry
+values the INFs write (`XhciLogVerbosity`, `XhciLogDebugView`,
+`XhciImodInterval250ns`) are read from the driver key with the code
+defaults standing when the key or value is absent (`src\hcd_ctl.c`
+`hcdReadValues`), so in text mode the log is off and the interrupt
+moderation interval is the code default 4000 (1 ms) rather than the INFs'
+160 - `[Config.ID]` writes under the service key, which the driver does not
+read, so it cannot supply them; and the door's `SymbolicName` and device
+interfaces are best effort (`src\hcd_door.c`).
+
+**Conflicts with Setup's own USB support: none found in the reading.** The
+controller id is in no Setup row. The root hub answers `XHCI98\ROOT_HUB`
+and no compatible id (section 8.6), so `usbhub` cannot bind it; the
+`txtsetup.oem` maps that id to `xhci98`, the same mechanism that maps
+`USB\ROOT_HUB` to `usbhub` for Setup's own stack, which is what gives the
+root-hub PDO its second `AddDevice` into this driver with no INF. External
+hubs present no `USB\` id, so `USB\CLASS_09` never reaches `usbhub`: since
+task 33.4 (section 10.11) each has a PDO under `XHCI98\HUB` or
+`XHCI98\HUB30`, bound by `xhci98.inf`, and both ids are mapped here to
+`xhci98` too (2026-10-04), so text mode gives a hub PDO the same second
+`AddDevice` as the root hub's; the gate's `OEM-IDS` rule refuses this file
+the moment the INF binds an id it does not map, so the two cannot ship out
+of step. Whether text-mode Setup on Windows 2000 and XP actually starts a
+hub PDO this way is unread until the F6 leg is taken with a hub. Meanwhile
+the bus splits composite devices itself and presents `&MI_nn` functions
+with `USB\Class_` compatible ids (section 10.7), so `USB\COMPOSITE` never
+reaches `usbhub` (2000) or `usbccgp` (XP). The device PDOs' class ids then
+meet Setup's `hidusb`, `kbdhid`, `mouhid` and `usbstor` rows, whose files -
+and `usbd.sys`, `hidclass.sys` and `hidparse.sys` with them - come from
+Setup's own source **in text mode only**. Loaded there is not copied: XP's
+`TXTSETUP.SIF` copies `hidclass.sys`, `hidparse.sys` and `usbd.sys` to the
+target disk only in its own host controllers' `[files.usbohci]`,
+`[files.usbuhci]` and `[files.usbehci]` sections, so after the text-mode
+reboot an xHCI-only machine has `hidusb.sys` and `usbstor.sys` but not
+what they import, and USB input is dead in GUI mode until "Installing
+Devices" - behind XP's unsigned-driver prompts for this driver (runtime,
+2026-10-04, XP SP3 and XP x64 SP2 target disks read offline,
+`out\phase33\f6\`; the release notes carry it as a limitation, and no
+`txtsetup.oem` mechanism reaches the Windows source: `[Disks]` names an
+OEM disk and `[Files]` reads from it). Where a machine also has EHCI controllers, XP's text
+mode drives those with its own stack beside this one; this driver does no
+vendor port routing, so a port routed to an EHCI controller stays there.
+
+**GUI-mode Setup.** The `inf` line makes text-mode Setup carry
+`xhci98.inf` into the installed system, so GUI-mode Setup can install the
+controller and root hub through it as for any other device, through the
+same `xhci98` service the `driver` line names (the gate's `OEM-SERVICE`
+rule); the INF's `StartType=3` then replaces the boot start text mode gave
+the service. Whether GUI mode finds `xhci98.sys` without asking for the
+floppy, and whether 32-bit XP's unsigned-driver policy during GUI mode
+installs it silently, warns or skips it, is not readable from these files
+and is owed to the install leg.
+
+**`xhciuas.sys` is not on the text-mode disk, so a disk the bus selects
+for UAS is lost in text mode.** The bus selects UAS whenever a device
+offers a UAS alternate setting the controller can run - at SuperSpeed that
+means stream support; below it, always - even beside a Bulk-Only one
+(`src\xhci_xport.c`), and the one override, `XhciForceBulkOnly` in the
+controller's driver key (`src\hcd_ctl.c` `HcdCtlForceBulkOnly`), is a value
+text mode never writes. A dual-mode SuperSpeed device on a controller
+without streams falls back to Bulk-Only and is usable. A device selected
+for UAS presents the UAS class id, which no Setup row binds, so it is not
+usable until GUI mode; a Bulk-Only-only device (most USB flash sticks;
+QEMU's `usb-storage`) always meets Setup's own `usbstor`, and is the one
+to use for a predictable result.
+Carrying `xhciuas.sys` as a second `scsi` option would need its own
+hardware ids and a text-mode reading of its own, and is left out. GUI-mode
+Setup and the installed system install it from the package as before.
+
+**XP x64.** The format is the same; the x64 directory carries its own file
+(`src\txtsetup-amd64.oem`, staged as `txtsetup.oem`) naming the amd64
+build, and NT 5.2 does not enforce kernel-mode signing, so nothing in the
+reading stands between the amd64 binary and its text mode.
+
+**Verdict, per target**, on the static evidence above:
+
+| Target | Verdict | Why, and the limits |
+|---|---|---|
+| Windows 2000 SP4 | Feasible with limits | Setup carries `hidusb`, `kbdhid`, `mouhid`, `usbstor`, `usbd`, `hidclass` and `hidparse`; no Setup row claims the controller or the root hub; no `usbccgp` is needed because the bus splits composites |
+| Windows XP SP3 (32-bit) | Feasible with limits | As 2000; Setup's own EHCI stack coexists on a machine that has EHCI |
+| Windows XP x64 SP2 | Feasible with limits | As XP, with the amd64 build and its own file |
+
+The limits, all of them the user's to know:
+
+1. Pressing F6 and answering Setup's driver screens happens before any
+   Windows driver runs, so the keyboard must work through the firmware's own
+   USB support (legacy USB emulation or a CSM) at that point.
+2. The driver disk is read as drive A: through the firmware, as text-mode
+   Setup reads every F6 disk.
+3. Installing Windows onto a USB disk is not supported: nothing here makes
+   the installed system boot from one.
+4. A disk the bus selects for UAS is not usable in text mode, even if it
+   also offers Bulk-Only, since no UAS driver is loaded (above); a
+   Bulk-Only-only device always is.
+5. Text mode runs with interrupt moderation at the code default and the log
+   off, since no INF value is written until GUI mode.
+6. If the target disk needs one of Setup's own `[SCSI]` miniports, the user
+   may have to add it at the same screen; whether pressing S suppresses
+   Setup's own detection on these systems was not read.
+
+**What the gate holds.** `scripts\inf-gate\check-txtsetup-oem.ps1` (run by
+`build-driver.cmd` on every build, self-tested by mutation first, and by
+`make-package.ps1` and `make-release.ps1` against each staged and published
+directory) holds the two files to exactly the shape above: the five
+sections and nothing else, balanced quotes, the `scsi` component alone, the driver at the
+disk root as both the tag file and the `driver` line, the `inf` line, no
+catalog and no second driver, the service the INF adds, the INF's model ids
+and no `USB\` id, no Microsoft file, 8.3 names, an architecture word in each
+description, the two files equal outside those descriptions, and in a
+package the file at the root with every file it names beside it.
+
+**Owed: one install leg per target**, from a floppy image in a virtual
+machine with no USB host controller but `qemu-xhci`, a `usb-kbd` and a
+`usb-storage` on it and the floppy on the emulated FDC: F6, S, the driver
+picked, the keyboard working past the kernel start, the USB disk listed as a
+target or source where the leg uses one, GUI mode completing, and the
+installed system's controller and root hub on this INF. Until those pass,
+every clause above stays `static` and the release notes say so.
+
+### 5.7 The first relations answer waits for the devices present at start (task 33.3, 2026-10-04)
+
+**The reading that asked for it** (runtime, 2026-10-04, development host A,
+QEMU; `out\phase33\f6\w2k*`, not tracked). At Windows 2000 SP4's text-mode
+Setup, F6-loaded `xhci98.sys` started the controller and the root hub, and
+no USB device was ever started: the keyboard was dead and the stick absent
+from the partition screen. The qemu flavour's trace showed the root-hub
+FDO's first `IRP_MN_QUERY_DEVICE_RELATIONS` (`BusRelations`) answered with
+no device, because the controller thread had not yet enumerated any port;
+the device PDOs came later, after the ports' change events, were queried
+for their ids, capabilities, text and resources, and were never started. A
+control guest on Windows 2000's own UHCI stack bound a USB keyboard and
+stick in text mode, and a keyboard hot-plugged during text mode stayed dead
+there too: **Windows 2000's text mode starts only what a hub's first answer
+carries.** 32-bit XP and XP x64 start late PDOs, which is why their F6 legs
+passed without this.
+
+**The rule.** The first `BusRelations` answer of a hub FDO after its
+`START_DEVICE` - the root hub's (`hcd_rh.c`) and each external hub's
+(`hcd_hubfdo.c`, section 10.11) - waits, bounded, until the devices
+connected when the bus first looked at the ports have settled, then
+answers with what is listed. Settled means: every port that read connected
+when the thread looked at it has its PDOs created (Present or Bound), or
+has failed or been refused (Failed, a hub refused as too deep, a UAS device
+refused in place with its PDOs); every hub brought up has had its ports
+looked at once (its `Changed` bitmap empty); and a send-back to the USB 2.0
+companion (29-A.5) asked for in the window has reached the companion's
+connect, which the companion's own enumeration then settles. Addressed
+alone is not settled. Every later answer is as before; a device that
+misses the first answer is reported later, as before, through the
+invalidation its PDO's creation makes.
+
+**The mechanism**, against 5.3 and 5.4:
+
+- **A generation.** `HcdEnumAttach` (the root hub's start) marks every root
+  port changed and, in the same hold of the controller lock, increments
+  `SettleAsked`; an external hub FDO's start asks the same way
+  (`HcdEnumSettleAsk`). The FDO keeps the generation (`SettleTarget`,
+  `SettlePending`).
+- **The thread settles it.** `HcdEnumService` reads `SettleAsked` before the
+  ports' change bits, so a pass that reads a generation has the bits the
+  start set with it; the ports' machines run to rest inside the pass (5.3).
+  At the end of a pass that enumerated (powered, root hub started, not
+  halted), `hcdSettleCheck` declares the generation settled when nothing is
+  owed or in flight: no root port change bit (the reset's own change
+  included, so one more pass looks), no hub `Changed` bit, every managed
+  port's machine at rest (`XhciEnumAtRest`), no SuperSpeed root link whose
+  warm reset (29-A.2) is still read in progress (`PORTSC.PR`; the port's
+  inspection is owed again meanwhile and feeds nothing; a reset still in
+  progress past twice its own 1 s wait (a relative timer the thread alone
+  arms and cancels as it leaves) is the controller's failure, its
+  recovery asked for as for an unreadable port; `LinkRecovering`, rounds 2
+  and 3), no
+  send-back of the window in flight (`XhciEnumHoldInFlight`). A hub port
+  whose `GET_STATUS` failed is owed its look again up to three times in a
+  row (`HCD_HUB_LOOK_TRIES`) rather than taken as looked at (Codex review of
+  33.3, round 1, findings 2 and 3). `SettleDone` only moves forward. With
+  nothing attached, the first pass after the start finds nothing in flight.
+- **The waiter never holds what the thread needs.** The first answer looks
+  (`HcdEnumSettleStep`) and sleeps 20 ms (`KeDelayExecutionThread`) between
+  looks at PASSIVE_LEVEL, holding no spin lock, not the power gate (the
+  thread takes it for every pass, `hcd_ctl.c`), and not the controller: it
+  enters for each look (the root hub through `RootHubUsers`, a hub FDO
+  through its PDO's `Busy`) and leaves before the sleep, so the
+  controller's remove and the parent's release, which wait those counts
+  out, never wait on a sleep. The thread it waits for creates PDOs and calls
+  `IoInvalidateDeviceRelations` but waits on no PnP IRP, a child's start or
+  removal included, so the two cannot deadlock; an invalidation of the
+  same devnode during the answer is legal and only asks once more. The
+  wait ends on the settle, on the root hub not started or detaching or the
+  thread not running (teardown), or at the deadline.
+- **The deadline is one per answer**, not renewed per port: a relative
+  `KTIMER` on the waiter's stack, armed at its first look and polled with a
+  zero wait, the pattern `HcdHubPortDebounce` already uses on every target,
+  so a change of the system time moves no bound (Codex review of 33.3, round
+  1, finding 4). At the deadline the waiter retires its own generation,
+  counts it (`SettleTimeouts`; a teardown is counted apart, `SettleAborts`,
+  finding 5) and answers; the thread finishes what it was doing, and those
+  devices are reported late. The time waited is traced from
+  `KeQuerySystemTime` (its low word, in 100 ns units; no 64-bit arithmetic;
+  task 25.3's evidenced pair, `uhcd.sys` among ten stock Windows 98 SE
+  precedents, and on amd64 a macro with no import), for the trace alone.
+- **A per-port budget, for fairness.** The thread enumerates the ports one
+  after another, so a slow device on a lower-numbered port would spend the
+  deadline of every port after it. `hcdRun` checks, between the machine's
+  steps, whether its own relative timer has fired; past the budget while a
+  first answer
+  waits, the attempt is given up as an unplug gives it up (the slot back,
+  the machine to Empty) and the port **deferred**: its look kept owed (a
+  root port's in `PortChange`, a hub port's in its hub's `Changed`) and not
+  taken, and not counted against the settle, until no first answer waits,
+  when the port is enumerated afresh. A deferred hub port is also
+  remembered by its physical path (the hub's root port and Route String and
+  the port's number), so the recovery that frees the hub object and builds
+  it again keeps it deferred (`SettleDeferHub`, sixteen paths; when it is
+  full every hub port rebuilt before the settle is taken as deferred rather
+  than one forgotten; finding 1 and round 2). A port whose
+  enumeration halted the
+  controller (a command or an EP0 transfer that never completed: a 5 s
+  wait and a recovery) is deferred the same way, so the rescan does not
+  meet it first again. Counted (`SettleDeferrals`), traced. The check sits
+  between steps, so one step's own timeout (a command or a transfer, 5 s,
+  `hcd_enum.c`) can carry a port past its budget: **a device that never
+  answers one request costs that request's 5 s**, which is the whole
+  default deadline, and a keyboard on a later port is then reported late.
+  No QEMU device models a device that never answers, so that case is
+  argued, not read.
+
+**The bounds** (owner, 2026-10-04): **5 s total** per FDO's first answer
+and **2 s per port**, both on the controller's driver key as REG_DWORDs in
+milliseconds read at every start: `XhciFirstEnumWaitMs` (0 turns the wait
+off; held to 30,000) and `XhciFirstEnumPortMs` (0 for no per-port budget;
+held to the total). No INF writes either. **Text-mode Setup writes no
+driver-key value, so the defaults are what F6 Setup gets**, and they are
+chosen to be right on their own. Their scale is documentation, not a
+binary reading: Microsoft's account of its own hub driver's enumeration
+(the Microsoft USB blog, "How does USB stack enumerate a device?",
+techcommunity.microsoft.com, read 2026-10-04: a 100 ms stable debounce, the
+port given up if not stable within 200 ms, a 5 s timeout on each port
+reset, up to three enumeration tries 500 ms apart, 10 ms reset recovery and
+10 ms after SET_ADDRESS) and USB 2.0 section 9.2.6.4 (a request with no
+data stage done within 50 ms, a data stage begun within 500 ms, 2 ms after
+SET_ADDRESS): a normal device is ready in 0.15 to 0.3 s, one retry takes 1
+to 2 s, and only a device that times out every try takes longer. Two
+reference hub drivers were read for the shape, as interface documentation
+only (section 3 of `legal-provenance.md`; nothing taken into `src\`):
+ReactOS's `usbhub` (`drivers/usb/usbhub/pnp.c`, `USBH_FdoQueryBusRelations`,
+master as fetched 2026-10-04) enumerates synchronously inside its
+`BusRelations` handler, port by port, with a 5 s timeout per reset
+(`USBH_SyncResetPort`), up to three device-creation tries 500 ms apart and
+no overall cap; Linux's `hub.c` (`drivers/usb/core/hub.c`, the same day)
+enumerates asynchronously and blocks no first report, with a 100 ms stable
+debounce (in 25 ms steps, given up at 2 s) and resets of 10 to 200 ms. The
+debounce, reset and recovery timings of 10.2 are the USB 2.0
+specification's and stay unconfigurable.
+
+**Decisions.**
+
+1. **Always, not gated to NT 5.0 text mode.** Nothing in the driver can
+   tell text mode from a running system before the answer, and the wait is
+   what Microsoft's own hub driver does on every system; it costs one look
+   when nothing is attached (20 ms measured, one step of the waiter) and
+   the devices' own enumeration time when something is, which they then do
+   not spend being found afterwards. Measured (below): 20 ms to 1.1 s.
+2. **Every start, not only the first.** A `STOP` and `START` of a hub FDO is
+   a fresh start: Windows 98 SE's and ME's controller re-enable (task 33.1)
+   stops and starts the root hub, and the first answer after it waits for
+   the re-enumeration that revives the dormant PDOs (5.2). The revived PDOs
+   stay listed throughout and are in the answer whether revived or not,
+   and a dormant PDO's own `START` wait (`hcdDormantWait`) is on another
+   devnode's IRP after the answer, so the two waits never nest. `STOP` and
+   `SURPRISE_REMOVAL` clear a pending wait.
+3. **Only the first answer after a start.** The flag is cleared before the
+   wait, so an answer that fails (pool) does not wait again, and two
+   concurrent first queries, should two ever run at once, each wait
+   on their own FDO's generation.
+4. **A hub FDO waits on the whole bus's settle**, not only its own ports.
+   The thread can state "nothing in flight anywhere" cheaply and exactly;
+   a per-hub cohort would need a second bookkeeping of the same machines.
+   A hub's ports are seeded for their first look in its bring-up (10.3) and
+   looked at in the same pass, after its PDO is made and before PnP can
+   start it (corrected after Codex review of 33.3, round 1), so its FDO's
+   first answer is one look unless the bus is busy elsewhere (0 to 31 ms
+   measured). It never waits on a descendant hub FDO's
+   start. Tiers add up at boot: a hub FDO starts only after its parent's
+   answer, so a chain of hubs pays each tier's own settle in turn, each
+   bounded by its own deadline.
+5. **Devices behind a hub whose PDO could not be created** are presented
+   under the next hub up (10.11) and are in that hub's answer; the
+   bus-wide settle covers them whichever FDO answers.
+6. **A hub FDO started after its devnode was disabled** (added 2026-10-05;
+   10.11, ordering item 4) asks for the cycles of the children PnP let go
+   of with the removed FDO before it asks its generation. The pass that
+   reads the generation has therefore taken the cycles, in that pass or an
+   earlier one. A let-go PDO is missing at once, so its port leaves Gone
+   in the same pass, is marked for a look, and is enumerated before the
+   pass's `hcdSettleCheck`. The first answer then carries the devices
+   again, as at a fresh start, and the bounds above are unchanged: a
+   device that misses the deadline is reported late through its PDO's
+   invalidation, as before.
+
+**Measured** (runtime, the `qemu` flavour's trace unless a row says
+`release`, 2026-10-04 and 05, development host A, QEMU TCG;
+`out\phase33\initenum\`, git-ignored). The first rows were taken on
+`89a8025`, the rows marked "final" on `59e1897` (Codex rounds 1 and 2 in);
+rounds 3 and 4 after it touch only a SuperSpeed root link still in reset,
+which none of these legs has, and the keyboard-behind-a-hub F6 leg passed
+again on `82902e8` (the branch's last code; 562 ms and 31 ms).
+
+| Leg | Devices at start | Root hub's first answer | Hub FDO's first answer | Result |
+|---|---|---|---|---|
+| Windows 2000 SP4 text mode, F6 | keyboard, stick at root ports | 343 ms, both PDOs | - | keyboard answers at Welcome and the licence; stick listed at the partition screen |
+| the same, `release`, and again final | the same | (no trace) | - | the same |
+| the same, keyboard behind a `usb-hub`, and again final | keyboard behind the hub, stick at a root port | 562 ms | 31 ms | the same |
+| 32-bit XP SP3 text mode, F6, `release`, two processors | keyboard, stick at root ports | (no trace) | - | the same |
+| Windows 98 SE, installed (`win98-gold` overlay), cold boots | mouse, stick at root ports; mouse behind a `usb-hub` | 625 to 650 ms | 0 ms | all started, no wizard at the second cold boot |
+| the same, controller disabled and enabled in Device Manager (task 33.1) | the same | 0 ms | 0 ms | every PDO kept dormant and revived; the hub FDO started before the root hub's answer was asked |
+| Windows 2000 SP4, installed (`win2k-au28a` overlay), and again final | mouse, stick at root ports; mouse and stick behind a `usb-hub` | 961 to 1,081 ms | 20 ms | all started, both sticks with drive letters |
+| the same guest, every device unplugged, restart | nothing | 20 ms | - | - |
+
+No answer reached its deadline and no port was deferred. Windows 98 SE's
+NTKERN took the waits with no stall: the root hub's first answer is
+asked for while the controller thread enumerates and calls
+`IoInvalidateDeviceRelations`, and it ended at the settle each time.
+Windows 98 SE asks a hub FDO for its relations well after its start, so
+its wait is nothing. One Windows 98 SE restart (Start, Shut Down,
+Restart) hung after the controller's D3 with the guest in real mode, and a
+`system_reset` met the same hang; a Shut Down and a cold boot were clean.
+It is outside this wait (no relations answer is involved after the D3)
+and was not bisected. Not read here: Windows ME, Driver Verifier, a
+SuperSpeed device, and a device that never answers (QEMU models none).
 ## 6. The function-driver contract (task 25.2)
 
 What each target's class drivers send a USB device PDO, read out of the
@@ -1316,7 +1727,7 @@ three are Windows 98 exports with stock precedents in section 7.4.
 |---|---|---|---|---|---|---|---|---|---|
 | `GET_NODE_INFORMATION` | `0x220408` | yes | yes | yes | yes | yes | yes | yes | `UsbItem::GetHubInfo` (in = out = 0x4C) |
 | `GET_NODE_CONNECTION_INFORMATION` | `0x22040C` | yes | yes | yes | yes | yes | popups only | popups only | `GetConnectionInformation` (98 to XP x64); `UsbPopup::QueryContinue` (NT 5.1 on) |
-| `GET_DESCRIPTOR_FROM_NODE_CONNECTION` | `0x220410` | yes | yes | yes | yes | yes | yes | yes | `GetConfigDescriptor` (0x15 bytes - a 12-byte request and the 9-byte configuration descriptor - then up to `wTotalLength`, buffer cap 0x200) |
+| `GET_DESCRIPTOR_FROM_NODE_CONNECTION` | `0x220410` | yes | yes | yes | yes | yes | yes | yes | `GetConfigDescriptor`: one call, in = out = 0x15 bytes (a 12-byte request and the 9-byte configuration header), on a zero-filled buffer of which only `ConnectionIndex`, `wValue` 0x0200 and `wLength` 9 are written, so **`bmRequestType` and `bRequest` are 0**; anything but success with exactly 0x15 bytes returned leaves the device's power "unknown" (static, every target: one `0x220410` site per build; 98 SE 7700B590/B596, 2000 666B4696/469C, XP SP3 5AF63BD6/BDC, 7 x86 10004F03/F0A; corrected 2026-10-04 - this row said "then up to `wTotalLength`" before) |
 | `GET_NODE_CONNECTION_NAME` | `0x220414` | yes | yes | yes | yes | yes | yes | yes | `GetExternalHubName` (for a connection with `DeviceIsHub`) |
 | `GET_NODE_CONNECTION_DRIVERKEY_NAME` | `0x220420` | yes | yes | yes | yes | yes | yes | yes | `GetDriverKeyName` |
 | `GET_HUB_CAPABILITIES` | `0x22043C` | - | - | - | yes | yes | - | - | `GetHubInfo`, after node information (4 bytes) |
@@ -1555,7 +1966,7 @@ creates its PDOs.
 |---|---|
 | Device Manager's view by connection on 98 and NT: that it uses only `CM_Get_Child` / `Sibling` is expected, not read. | 26-A.8 (or a guest reading in 26-V.1 / 26-V.2) |
 | A sweep of each target's whole `%windir%\inf` (and NUSB's and SweetLow's full file sets) for any row matching `XHCI98\ROOT_HUB`: impossible by construction, unchecked. | 26-A.4 |
-| **External hubs inside the bus against `DeviceIsHub`.** `usbui.dll` recurses into a connection with `DeviceIsHub` TRUE through `GET_NODE_CONNECTION_NAME` and `CreateFile("\\.\" + name)`. With no hub devnode the HCD either reports the devices behind a hub flat under the root hub's ports, or answers `DeviceIsHub` and serves a per-hub node through the root-hub interface link plus a suffix (`FileObject->FileName`). A design decision. | 26-A.8 |
+| **External hubs inside the bus against `DeviceIsHub`.** `usbui.dll` recurses into a connection with `DeviceIsHub` TRUE through `GET_NODE_CONNECTION_NAME` and `CreateFile("\\.\" + name)`. With no hub devnode the HCD either reports the devices behind a hub flat under the root hub's ports, or answers `DeviceIsHub` and serves a per-hub node through the root-hub interface link plus a suffix (`FileObject->FileName`). A design decision. **Closed 2026-10-04 by task 33.4 (10.11)**: each hub is a devnode with a door of its own, `DeviceIsHub` TRUE and its name returned | 26-A.8; 33.4 |
 | **Split composite devices**: `usbui.dll` maps a connection to one devnode through `GET_NODE_CONNECTION_DRIVERKEY_NAME`. With the bus splitting a composite into per-function PDOs there is no single connection devnode; which key to return (the first function's, or a failure) and what `usbui` then shows is unread. | 26-A.8, with 26-A.7 |
 | How Windows 98's engine treats a root-hub section whose `NTMPDriver` is the already-loaded controller driver, and NTKERN calling `AddDevice` a second time on that driver object (98's own `usbhub.sys` serves several devnodes, so it is expected to work). | 26-V.0 / 26-V.1 (a guest reading) |
 | The `ControllerFlavor` to report on Vista and 7 (1000 or above for USB 2.0 arithmetic; nothing in WDK 7.1 names xHCI). What usbport reported for the miniport was not read. | 26-A.8 |
@@ -2222,7 +2633,7 @@ case-insensitive matching above, and the form most INF lines use.
 | `BusQueryDeviceID` | `USB\VID_vvvv&PID_pppp` |
 | `BusQueryHardwareIDs` | `USB\VID_vvvv&PID_pppp&REV_rrrr`, `USB\VID_vvvv&PID_pppp` |
 | `BusQueryCompatibleIDs` | `USB\Class_cc&SubClass_ss&Prot_pp`, `USB\Class_cc&SubClass_ss`, `USB\Class_cc`: from the interface when `bDeviceClass` is 0 and the configuration has exactly one interface, from the device descriptor otherwise - so a multi-interface device the bus does not split (10.8) reports its own triple, `00/00/00` when its class is 0, never its first interface's, which would bind a class driver to the whole device (corrected 2026-10-03 by 26-A.7 from "from the interface when `bDeviceClass` is 0"; Windows 2000's `usbaudio.sys` bound to a whole composite device bugchecks, guest leg c14, `runs/run-26.md`). Whether to add the `USB\DevClass_cc...` forms XP's `usbhub.sys` carries templates for (and Vista's and 7's `USB\DevClass_00&SubClass_00&Prot_00`) is open (10.9); no stock INF in the table above matches a `DevClass` id |
-| `BusQueryInstanceID` | the serial string when the device has one (and `UniqueID` set in its capabilities), else a bus-unique location string built from the root port and the route, in characters Windows 98's configuration manager accepts in an instance id (to check, 10.9) |
+| `BusQueryInstanceID` | the serial id when the device has a usable one that no present PDO of the same VID and PID carries already, with `UniqueID` TRUE in its capabilities: the NT instance path `USB\VID_0781&PID_5567\4C530001230920108174` (what Windows 98 SE and ME make of it is for task 33.2's guest legs to read); else the location key in decimal, `UniqueID` FALSE - root port 3 is `3`, and behind hubs the Route String sits above the port (`XhciHubInstanceKey`, route `0x31` over port 2 is `12546`). The rule is "Instance ids from the serial number" below (task 33.2; until `2.1.0.0` every device had the location form) |
 
 **A function PDO** (one per function of a split device):
 
@@ -2231,7 +2642,89 @@ case-insensitive matching above, and the form most INF lines use.
 | `BusQueryDeviceID` | `USB\VID_vvvv&PID_pppp&MI_nn` |
 | `BusQueryHardwareIDs` | `USB\VID_vvvv&PID_pppp&REV_rrrr&MI_nn`, `USB\VID_vvvv&PID_pppp&MI_nn` |
 | `BusQueryCompatibleIDs` | `USB\Class_cc&SubClass_ss&Prot_pp`, `USB\Class_cc&SubClass_ss`, `USB\Class_cc`: for an IAD function from the IAD's `bFunctionClass` / `bFunctionSubClass` / `bFunctionProtocol`, as Microsoft's "Support for interface collections" gives them; for any other function, a legacy audio group included, from its first interface (alternate 0). Decided 2026-10-03 (Codex review of batch (c), round 19, finding 5); it was open (10.10) |
-| `BusQueryInstanceID` | the port number in decimal, then `nn`: port 3's `MI_03` is `303`. Digits and `A`-`F` only, since Windows 98's instance-id character set is unread (10.10) (corrected 2026-10-03 by 26-A.7 from "the parent device's instance string plus the function number") |
+| `BusQueryInstanceID` | with the device's serial id, that id, `&` and `nn`, `UniqueID` TRUE: `ABC123&03`; without, the location key in decimal, then `nn`: port 3's `MI_03` is `303`, `UniqueID` FALSE (task 33.2; the location form was corrected 2026-10-03 by 26-A.7 from "the parent device's instance string plus the function number") |
+
+**Instance ids from the serial number** (roadmap task 33.2, `2.1.0.0`;
+`XhciFuncSerialId`, `XhciFuncInstanceId` in `xhci_func.c`, host vectors in
+`test\test_func.c`; `HcdDeviceReadSerial` in `hcd_enum.c`; the duplicate
+and dormant rules in `hcd_pdo.c`). As `usbhub` does (`legal-provenance.md`
+section 4, the ReactOS row; Microsoft's binary was not read for it), a
+device whose serial string is usable is named by it and answers `UniqueID`
+TRUE, so it keeps its devnode on any port, behind any hub; every other
+device keeps the location form and `UniqueID` FALSE.
+
+- **Read** once per enumeration, on the controller thread before the
+  device's first PDO is built, into the device record (no pool site of its
+  own): string descriptor 0 for the first language id (`0409h` when it
+  STALLs or lists none), then string `iSerialNumber`.
+- **No serial** (`iSerialNumber` 0): no request; the location form.
+- **Refused**: the string arrived but is not an instance id - malformed, empty,
+  or a UTF-16 unit outside `0x21`-`0x7E`, or `,` or `\`. `usbhub` refuses
+  below `0x20`, above `0x7F` and `,`; this rule also refuses the space, DEL
+  and the backslash, the separator of a device instance path. The location
+  form, at every plug, since it is the device's own answer. No other length
+  limit: 126 characters is the descriptor's own, and the longest instance
+  path, `USB\VID_vvvv&PID_pppp&MI_nn\` and 126 characters and `&nn`, is 157,
+  under `MAX_DEVICE_ID_LEN` (200).
+- **Read failed** is not "no serial": a try that does not bring the string
+  (a STALL, an error, a request not sent) is repeated, three tries in all,
+  and only then is the device given the location form, counted
+  (`serial.readfailed`) and traced. A device whose read fails at one plug
+  and not at the next changes devnode, and it takes three failed reads in
+  a row. A **timed-out** read is not retried and gives no id at all: it
+  requested the controller reset, the PDO is not created, and the device is
+  enumerated afresh after the reset.
+- **Duplicates**: a serial id that a present PDO of the same VID and PID
+  already carries, on any of this driver's controllers (on another
+  controller a dormant PDO counts too, and so does a gone one its root hub
+  has not yet omitted from a relations answer, since that answer is not
+  ordered with this root hub's) - compared ignoring
+  case, since the registry key does not tell case apart - leaves the
+  newcomer on the location form (`serial.duplicate`); an instance id with
+  `UniqueID` TRUE names one devnode on the whole machine. `usbhub` checks
+  only its own hub's ports. A PDO already unlisted (gone, its missing
+  report pending) on the same controller does not count - one relations
+  answer omits it and brings the newcomer - so a device moved quickly from
+  one port to another keeps its id, as under `usbhub`; moved between
+  controllers faster than the old root hub's next answer, it takes the
+  location form for that plug. This is the other way a
+  device's instance id can change between plugs: of two units sharing a
+  serial, the one enumerated second takes the location form, and which one
+  that is can differ from plug to plug.
+- **Composite functions** keep their `MI_nn` in the device id and add `&nn`
+  to the serial id; the location form keeps its `nn` suffix. Both forms
+  stay unique: two functions of one device differ in `MI_nn`, and two
+  devices behind hubs differ in route or serial.
+- **Dormant PDOs** (Windows 98 SE and ME, task 33.1) are matched by the
+  instance id they answer, before the duplicate check: first a group named
+  by the device's place whose device read the same serial id, or none (so
+  a unit a duplicate left on the location form revives its own PDOs, and
+  a serial-named unit never takes another unit's location group; a device
+  whose every read failed this time counts as unknown, not different, and
+  a group whose device's reads all failed is revived by a device that
+  answers the location form at that place, since the id is the same),
+  then a group named by its serial id, wherever the device comes back
+  (`XhciFuncReviveByPlace`, `XhciFuncReviveBySerial`, host vectors in
+  `test_func`). A revived PDO answers the id
+  it had. A dormant group the newcomer did not revive is retired in the
+  hold that lists the new PDOs when it is named by the newcomer's place or
+  carries the serial id the newcomer keeps; one named by a serial id is
+  not retired for its old place, and goes at its START's wait if its
+  device does not come back. The place is the instance key **under the
+  same parent** (`XhciFuncRetireByPlace`, host vectors in `test_func`):
+  the key, `(route << 8) | root port`, names no hub, so before this rule a
+  serial-less device C dormant at port 1 of a serial-named hub A, with A
+  moved to another root port and a hub B carrying a device D put where A
+  was, was retired by D's listing although A revived and still reported
+  it, and only B's side was invalidated - C's START failed and C sat as a
+  failed devnode under A (Codex review of the 33.1-33.6 integration,
+  finding 3). Now C waits out its START and goes then, its own parent
+  invalidated. A serial-less hub replaced by a different hub at the same
+  root port still retires the old hub's group, and its children with it.
+  Two identical units swapped while disabled are taken for each other, as
+  before.
+- **Upgrading** from `2.0.0.0` gives every device with a usable serial one
+  new devnode, at its first plug, because its instance id changed once.
 
 **A storage interface that offers UAS** (roadmap task 31-A.3, `xhci_xport.c`;
 a device PDO's one interface, or a function's when no IAD groups it) gets
@@ -2275,6 +2768,76 @@ takes the parent's hardware ids and appends that suffix (there is no VID/PID
 template in `usbccgp.sys`); that is an inference from strings. Device text:
 `iProduct` for a device PDO; `iInterface` (or an IAD's `iFunction`) for a
 function PDO, falling back to the device's `iProduct`.
+
+**Device text, as implemented** (roadmap task 33.6, 2026-10-04, `2.1.0.0`;
+`XhciFuncTextIndexes` and `XhciFuncText` in `xhci_func.c`, host vectors in
+`test\test_func.c`; `HcdDeviceReadText` in `hcd_enum.c`; the answer in
+`hcd_pdo.c`). Until `2.1.0.0` every device and function PDO answered
+`DeviceTextDescription` with a fixed `USB Device`, which Windows 98 SE's
+Add New Hardware wizard showed for every device (owner report).
+
+- **Which string**: a device PDO is named by `iProduct`. A function PDO
+  tries its IAD's `iFunction`, then its first interface's `iInterface`
+  (alternate 0), then the device's `iProduct`, each index once; the first
+  that gives a string with something to show wins. None, and the PDO
+  answers `USB Device` as before.
+- **Read** on the controller thread when the PDOs are built, after 33.2's
+  serial read, in the device's first language id from string descriptor
+  0 (`0409h` when it STALLs, lists none, or is not read whole in two
+  tries) - read once per enumeration and kept for the device's other PDOs. A STALL, or a string with nothing to
+  show, is final; any other failure - an error, or a descriptor that did
+  not arrive whole - is tried twice in all; an index that
+  gave nothing is not asked again for the next function. A read that
+  times out is the serial read's case: no PDO, the device left to the
+  controller reset it requested. Nothing is counted; the debug trace
+  names the port and index. **Not read** for a hub, whose PDO answers its
+  fixed name (section 10.11), nor for a group that looks set to revive a
+  dormant one on Windows 98 SE or ME ("Kept" below): read there,
+  the text is thrown away, its time counts against the dormant `START`'s
+  10 s wait, and a timeout's reset reports the device gone before its
+  revival is tried - for a hub, the revived hub reported gone and its
+  replacement given a new `Serial` that its dormant children can never
+  match (Codex review of the 33.1-33.6 integration, findings 1 and 2).
+  "Looks set to" is a preview taken once the group is built: the
+  revival's own choice (`hcdDormantChooseLocked`, which `hcdDormantRevive`
+  now calls too) under `hcdSerialLock` and `PdoListLock`, changing
+  nothing - by place, by serial id unless another controller carries it,
+  and on the location form when the serial id is a duplicate - and the
+  reads run, outside every lock, only when it finds nothing. A plain
+  hint under `PdoListLock` alone (by place and by serial) was tried first
+  and dropped at review: it missed a device whose earlier reads failed
+  and whose serial id is now a duplicate, which revives its location
+  group only after the duplicate check, so its text reads, and a timeout
+  in them, still came first (Codex review of this fix, round 1). The
+  preview is still not the decision, because the locks are let go for
+  the reads: the decision that counts is `hcdDormantRevive`'s, after
+  them, and should a dormant group come or go in between, the new PDOs
+  answer `USB Device` for that plug or the reads ran for nothing; the
+  identity is the decision's either way.
+- **Made fit to show**: the string ends at its first NUL unit; C0 and C1
+  controls and DEL become spaces, runs of spaces one, leading and trailing
+  spaces go; a surrogate that is not half of a pair, U+FFFE and U+FFFF
+  become `?`; a string with nothing but `?` and spaces is refused, so the
+  next index is tried. 126 characters, the descriptor's own limit, fit
+  whole.
+- **Windows 98 and ME fold to ASCII**: every character above U+007E, a
+  surrogate pair included, becomes `?` there (decided at run time, as for
+  the retire rule, by `IoIsWdmVersionAvailable(1, 0x10)` answering FALSE).
+  The configuration manager keeps the description as an ANSI string made
+  from the bus driver's Unicode answer, and how `ntkern` converts it - the
+  system code page, or a narrowing that would turn U+0100 into a NUL and
+  others into control or DBCS lead bytes - has not been read here; ASCII
+  passes either unchanged. The cost is an accented or non-Latin product
+  name shown with `?` on those systems. NT keeps the string as the device
+  sent it.
+- **Kept** in the PDO's extension (127 WCHARs, 254 bytes a PDO; no pool
+  site), fixed at creation: a dormant PDO revived on Windows 98 SE or ME
+  (task 33.1) answers the text it had, and the PDOs built for the
+  re-enumeration that revived it are deleted with theirs.
+- `DeviceTextLocationInformation` is unchanged: not answered, the IRP's
+  status passed through. XP SP3's `usbhub` answers it with the same
+  `iProduct` string as the description (static, read 2026-10-05; section
+  10.11, "Address"); no other target's was read.
 
 **The bus never emits `USB\COMPOSITE`.** In Microsoft's stacks the composite
 device's own PDO carries it as a compatible id, and that is what brings the
@@ -2405,6 +2968,27 @@ same shape going by its public symbol names alone
 | `IOCTL_INTERNAL_USB_GET_PORT_STATUS`, `QUERY_INTERFACE` (`USB_BUS_INTERFACE_USBDI`) | the device's answers, identical for every function (section 6; 26-A.6) |
 | power | a function's D-state is its own; the device stays D0 while any function is D0 (selective suspend is outside the roadmap, 28.3) |
 
+**A function's polling interval is the caller's** (2026-10-05, whole-branch
+Codex review of `2.1.0.0`, area B, incidental 2). A function's
+`SELECT_CONFIGURATION` builds each endpoint from the device's own
+configuration (the one 10.8's SET_CONFIGURATION selected), but takes the
+`bInterval` of the descriptor the caller passed in when that descriptor's copy
+of the same interface and alternate carries an endpoint whose first six
+bytes (`bLength`, `bDescriptorType`, `bEndpointAddress`, `bmAttributes`,
+`wMaxPacketSize`) equal the device's (`XhciPipeCallerInterval`,
+`hcdCfgFunctionEndpoint`). That is the descriptor the synthesised
+GET_DESCRIPTOR above returned, as the class driver received it, so a filter
+below the class driver that rewrites `bInterval` (hidusbf) reaches a function
+as it already reached a whole device, whose select parses the caller's
+descriptor. Before this, a composite mouse's function ignored hidusbf's rate
+and `XhciFastPollFsLs` (section 13.5) saw the device's own `bInterval`.
+**Still the device's**: a SuperSpeed function's endpoints (their companion
+descriptors are read from the device's configuration), and a later
+`SELECT_INTERFACE` on a function, which reads the device's configuration -
+so a client that selects an interface after its configuration loses a
+rewritten interval (no HID class driver of any target does). Host vectors:
+`test\test_pipe.c`, `test_caller_interval`.
+
 Section 9.5's harness definition follows from this table: `endpoints opened`
 counts endpoints added at a function's `SELECT_CONFIGURATION` or
 `SELECT_INTERFACE`, and nothing the bus opens for itself.
@@ -2414,12 +2998,307 @@ counts endpoints added at a function's `SELECT_CONFIGURATION` or
 | Open item | Binds |
 |---|---|
 | Every **(to transcribe)** USB 2.0 number above: 4.1.1 tiers; 7.1.7.3 `TATTDB`; 7.1.7.5 `TDRST`, `TRSTRCY`; 7.1.7.7 `TRSMRCY`; 9.2.6.3 `TDSETADDR`; 11.12.4 the bitmap; 11.23.1-2 the hub descriptor fields and the status endpoint's `bInterval`; 11.24.2 the TT requests' `wValue`; Tables 11-13, 11-16, 11-17, 11-21 and 11-22. The specification is added to `docs/references/` with its hash first. | 27-A.1 (one transcription batch) |
-| `BusQueryCompatibleIDs` for a device-class device (the `DevClass` forms, read from the hub drivers' id order statically), and the instance-id character set on Windows 98. | 26-A.4 |
+| `BusQueryCompatibleIDs` for a device-class device (the `DevClass` forms, read from the hub drivers' id order statically), and the instance-id character set on Windows 98. Since task 33.2 a serial id brings any of `0x21`-`0x7E` but `,` and `\` into a Windows 98 instance id (10.7); its guest legs on Windows 98 SE and ME are where that set is first observed. | 26-A.4; 33.2 |
 | **Closed 2026-10-03 by decision, not by a static read** (owner and coordinator, Codex review of batch (c), round 19, findings 3 and 5): the IAD function's compatible ids come from the IAD (10.7), and the split follows Microsoft's composite-parent rule - one configuration, two or more interfaces, device class 0 or `EF/02/01` - so no other device class and no multi-configuration device is split (10.8). It read: the IAD function's compatible ids (from the IAD or the first interface: `ParseUSBInterfaceAssociationDescriptors` / the id builders), the device-class values Microsoft splits besides 0, and the multi-configuration rule - static reads of `usbccgp.sys` and the hub drivers. The X4's IAD fields have still not been read. | 26-A.7 |
 | The interface numbering and order of each UAC 1.0 unit in `test-equipment.md`, read off the units' descriptors. The bus logs each function's port and `MI_`, interface mask and class triple as it creates the PDOs (`HcdDevicePdoCreate`) for that reading. | 26-A.7 |
 | Windows 2000's and stock Windows 98's own composite parent (`usbhub.sys`) grouping rule is unread. The INF evidence (audio at `MI_00`, HID at `MI_02`) agrees with the `usbccgp` rule, and since the bus does the splitting, what matters is what those targets' audio drivers accept. | 26-V.1, 26-V.2 |
 | Whether `IoInvalidateDeviceRelations` may be called at `DISPATCH_LEVEL` on Windows 98 (section 7.7), which decides whether 10.1's state machine hands that one call to the PASSIVE worker. | 27-A.1 |
 | Under what condition Windows 7's `usbccgp.sys` takes its CDC grouping path. | none in 2.0.0.0; recorded for a later CDC need |
+
+### 10.11 External hubs as devnodes (task 33.4, 2026-10-04)
+
+**The decision.** The owner, 2026-10-04: external hubs appear in Device
+Manager as devnodes from release `2.1.0.0`, with the devices behind each
+nested beneath it, as on every Microsoft stack. This supersedes "the hub
+itself is never a PDO" wherever this record says it (5.2's object table and
+the paragraph after it, 5.3's `Hub` row, 10's introduction, 10.3's
+bring-up, 10.7's last paragraph) and closes 8.10's row "External hubs inside
+the bus against `DeviceIsHub`". **Only the PnP presentation changes**: the
+bus still runs every hub - its class requests, status-change pipe, TT
+assignment, teardown and the SuperSpeed half of Phase 30 are untouched -
+and no hub-class driver of any target binds anything. Written before the
+code, on branch `p33-hubs`.
+
+**Object model.** A hub's PDO is an `HCD_DEVICE_PDO` with `Hub` set, created
+by the controller thread once `HcdHubStart` has brought the hub up (a hub
+refused as too deep, 10.3, gets one too, with no ports to answer for). It is
+bound to `xhci98.sys` by the INF (below), and `AddDevice`, decided as before
+by the PDO's driver object, attaches a **hub FDO** (`HCD_HUB_FDO`, a fifth
+kind) over it - the root hub's pattern again. Every PDO carries
+`ParentSerial`: 0 for a child of the root hub, otherwise the `Serial` of the
+hub PDO it is presented under - the nearest hub above it **that has a PDO**
+(a hub whose PDO could not be created presents its devices under the next
+one up, ultimately the root hub; pure rule `XhciHubPresentedParent`, host
+vectors in `test_hub`). A serial rather than a pointer, so no PDO ever
+dangles on its parent's deletion. The PDO lists, the lock (`PdoListLock`),
+the single-writer thread and every lifecycle state of 5.2 and `hcd_pdo.c`
+(listed, gone, removed, deleted, dormant, orphaned) are reused unchanged for
+hub PDOs; only which relations answer carries a PDO is new.
+
+**One devnode per half: a USB 3 hub shows as two.** The bus already models a
+USB 3 hub as two hubs - the SuperSpeed half on a SuperSpeed port and the USB
+2.0 half on the companion, each its own device record, slot, hub object and
+ports (30-A.1) - and the devices behind each half are on that half's ports.
+Two devnodes is that truth, and it is what Microsoft's own stack shows (a
+"Generic SuperSpeed USB Hub" and a "Generic USB Hub" for one box); one
+devnode would have to merge two hub objects whose ports, removals and node
+IOCTLs are independent, for a cosmetic gain. Decided: two.
+
+**Ids** (project-owned; `XhciHubPdoId`, `xhci_hub.c`, host vectors in
+`test_hub`):
+
+| Query | USB 2.0 / 1.1 hub, and a USB 3 hub's USB 2.0 half | A USB 3 hub's SuperSpeed half |
+|---|---|---|
+| `BusQueryDeviceID` | `XHCI98\HUB&VID_vvvv&PID_pppp` | `XHCI98\HUB30&VID_vvvv&PID_pppp` |
+| `BusQueryHardwareIDs` | `XHCI98\HUB&VID_vvvv&PID_pppp&REV_rrrr`, `XHCI98\HUB&VID_vvvv&PID_pppp`, `XHCI98\HUB` | the same with `HUB30` |
+| `BusQueryCompatibleIDs` | none | none |
+| `BusQueryInstanceID` | any PDO's rule (`hcdInstanceQueryId`, task 33.2): the hub's serial id when it has a usable one, else the instance key in decimal | the same |
+| Device text | `xHCI98 USB Hub` | `xHCI98 USB 3.x Hub` |
+
+Never `USB\Class_09...`, `USB\HubClass`, `USB\USB20_HUB` / `USB30_HUB` or
+`USB\VID_...&PID_...`. The hub-class matches every target's INFs carry were
+swept again for this decision (2026-10-04, static, a text read of the INFs
+section 10.6 hashes plus NUSB 3.3's and 3.6's `USB2.INF` and SweetLow's):
+98 SE and ME `usb.inf` match `USB\CLASS_09`, `USB\CLASS_09&SUBCLASS_01`,
+`USB\ROOT_HUB` and `USB\ROOT_HUB_DBC`; 2000 SP4 adds `USB\HUBCLASS` and
+`USB\ROOT_HUB20`; XP, XP x64, Vista and 7 `usb.inf` the two `CLASS_09`
+forms; NUSB's and SweetLow's `USB2.INF` `USB\HUBCLASS` and
+`USB\ROOT_HUB20`; and XP's and later `usb.inf` also list vendor hubs by
+`USB\VID_&PID_`, which is why no VID/PID id under the `USB\` enumerator is
+emitted. None of the files names an `XHCI98\` id. The hardware-id form,
+not a compatible id, is what the INF binds, so the match ranks as a
+hardware-id match on every engine. The instance key keeps the location rule
+of 10.7 as task 33.2 left it, for a hub as for any device: the serial id
+with `UniqueID` TRUE when the hub has a usable serial number, else the
+place with `UniqueID` FALSE (merged from `p33-serial`, 2026-10-04). On the
+NT targets a PDO with `UniqueID` FALSE has its instance id prefixed with
+its parent's `ParentIdPrefix`: **a serial-less device that was behind a hub
+under `2.0.0.0` is a new devnode once under `2.1.0.0`**, re-installed
+silently from the same class INF; Windows 98's configuration manager uses
+the instance id as given (unread; the guest legs below record what it
+does). Because a serial id names one devnode wherever its parent is, and
+two parents' relations answers are not one answer, a serial id is not
+reused while PnP may still see it present under **another** parent: a gone
+PDO there not yet reported missing, or a dormant one there that this
+device cannot revive, holds it, and the newcomer takes the place form for
+that plug (`hcdSerialTakenLocked`; Codex review of 33.4, final round,
+finding 1). Under the same parent one answer omits the old and carries
+the new, as 33.2's move between root ports relies on.
+
+**Capabilities.** `Removable` TRUE, `SurpriseRemovalOK` TRUE, `UniqueID`
+TRUE exactly when the instance id is a serial id (as any PDO's), `Address` and `UINumber` its port on its parent (as any PDO's, "Address" below). `SurpriseRemovalOK` TRUE so
+the XP-onward hot-plug applet does not offer the hub itself for safe removal
+while a storage device behind it keeps its own entry; the applet's rule was
+not read (an open item, read on the XP guest).
+
+**Address** (2026-10-05, branch `p33-addr`; a defect of `2.1.0.0` found on
+its VM leg 2c, Windows XP SP3). Every PDO answered `Address` and `UINumber`
+with its instance key, `(route << 8) | root port`, which was the port only
+for a device on a root port. Since 33.4 a device behind a hub is that hub's
+devnode's child, and Microsoft's hub driver answers `Address` with the
+device's port **on its parent hub**: XP SP3's `usbhub.sys` copies the port
+number `USBH_CreateDevice` stored in the PDO extension, Windows 7's a word
+of its PDO extension (static, `legal-provenance.md` section 4). A tool may
+take `Address` as the connection index to ask the parent for, and hidusbf's
+`Setup.exe` (2026-10-03 build) does: it reads the device's
+`SPDRP_ADDRESS`, and when that is not 0 it sends the parent hub
+`IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX` with it as
+`ConnectionIndex` (followed by `_EX_V2` when it succeeds, replaced by the plain
+form when it fails); only an `Address` of 0 makes it walk
+the hub's ports by `GET_NODE_CONNECTION_DRIVERKEY_NAME` instead (static,
+`legal-provenance.md` section 4). On leg 2c (XP SP3, runtime) its "Copy IDs"
+showed no `BusSpeed` or `bInterval` for a Full-Speed mouse on port 1 of a hub
+at root port 3, which answered 259, and it wrote High-Speed values for it;
+at a root port it showed both (on Windows 98 SE and ME it found the device
+another way). **The rule** (`XhciHubPdoAddress`,
+`xhci_hub.c`, host vectors in `test_hub`; fixed at creation, kept by a
+revived PDO with its other place fields): a device on a root port answers
+the root port, unchanged; a device whose own hub has a PDO - so is the
+parent it is presented under - answers the last tier of its Route String,
+the downstream port of that hub, which is the connection index that hub
+FDO's door serves it at (`hcdDoorConnection` matches the PDO's port
+location under that parent); every function PDO of a split device answers
+its device's. **A device whose own hub has no PDO** (re-parented to the
+next hub up, or to the root hub) has no connection index under its
+presented parent - that parent's door serves the PDO-less hub's own record
+at the ancestor port, or nothing - so it keeps the instance key, a value
+above any port, rather than name a port whose answer is another device.
+`UINumber` answers the same number. That is a departure: XP's `usbhub`
+leaves `UINumber` 0 (zeroed at creation and, as far as the static\r
+reading reaches, never written) and Windows 7's sets -1. It is kept a
+port because, with `DeviceTextLocationInformation` unanswered (section
+10.7), `UINumber` is what NT's Device Manager shows on the Location line,
+and a port reads truer than 0 or 259 there. XP's `usbhub` answers
+`DeviceTextLocationInformation` with the `iProduct` string (static, the
+same row); answering it is not taken here. The instance key itself, the
+instance ids of 33.2 and the dormant matching of 33.1 are unchanged. The
+helper's loop is written around an MSVC 6.0 code-generation fault that
+made its first form answer the instance key on the guest while its host
+vectors passed (`lessons.md`, the last entry). **Read on the XP SP3 guest**
+(runtime, 2026-10-05, development host A, the `qemu` build of `a9dd367`,
+a QEMU `usb-hub` at root port 3 and a mouse on its port 1): the bus's trace
+read the mouse's answer as `Address` 1 under the hub PDO; `Setup.exe`'s
+"Copy IDs" showed `BusSpeed: 1 (Full)` and `bInterval: 10`; 1000, 500 and
+250 Hz set through it gave the Output Endpoint Context `Interval` 3, 4 and
+5 (HMP `xp` of the controller's device context); and Device Manager's
+Location line read "Location 1". Windows 7's Location text was not read.
+**Relations.** The root hub FDO's `BusRelations` carry the listed PDOs whose
+`ParentSerial` is 0; a hub FDO's carry those whose `ParentSerial` is its hub
+PDO's `Serial` (`HcdDevicePdoRelations(hc, old, parent)`). The marking rules
+of 5.2 apply per answer: a listed PDO carried is `Reported`; a gone PDO whose
+parent is this answer's is omitted and so `MissingReported`. One rule is
+added, because a hub that leaves takes its whole subtree from PnP's view at
+once and its FDO answers nothing more: **a gone PDO is missing as soon as
+any hub PDO above it is** - reported missing, deleted, or removed by PnP
+(PnP removes a devnode's children before the devnode, so a removed parent
+means each child has had its own REMOVE). Every relations answer applies
+that rule to every gone PDO, whichever parent it answers for, so the ports
+behind a departed hub stop waiting and a gone PDO whose REMOVE has come
+reaches `RemovedPdos` and its deletion at the next answer, as any other.
+The rule is applied at the departure too (`HcdDevicePdoGone`), so a port
+never waits for an answer no FDO can give (Codex review of 33.4, round 1).
+
+**Invalidation.** `IoInvalidateDeviceRelations` goes to the PDO a change
+belongs under: the root-hub PDO for `ParentSerial` 0, otherwise the hub PDO,
+**only when that PDO has been started by PnP** (`START` seen, no `STOP` or
+`REMOVE` since). A hub PDO PnP has not started may have no devnode yet, and
+invalidating it would be a fatal PnP error on NT; it needs no invalidation,
+since PnP asks a hub FDO for its relations after it starts. When the parent
+is not started the root hub is invalidated instead, which runs the
+ancestor rule above. The hub PDO is referenced across the call.
+
+**Ordering and lifetime.**
+
+1. The hub PDO is created and listed after the hub's own bring-up
+   (`HcdHubStart`), and the root hub (or its own parent hub) invalidated.
+   Its port's machine is told it exists and has started at once, as before:
+   the bus does not wait for PnP to serve a hub.
+2. Devices behind it are created whenever their enumeration finishes,
+   listed under the hub PDO's serial, and reported only when PnP asks the
+   hub FDO - after that FDO has started.
+3. A hub unplugged: section 10.5's teardown already reports the leaf PDOs
+   first and the hub's own last, so children are gone before their parent.
+   The hub PDO is reported missing to its parent; NT then surprise-removes
+   the whole subtree and removes it leaf first, Windows 98 removes it. Each
+   port below waits for its own group until the ancestor rule marks it, and
+   the hub's upstream port waits for the hub PDO and for the hub object
+   (`AwaitHub`), as before.
+4. A hub disabled in Device Manager: presentation only. PnP removes the hub
+   FDO and its children's stacks; the PDOs stay listed (the WDM rule); the
+   bus keeps the hub and the devices behind it running with no client.
+   **Corrected 2026-10-05** (roadmap-hcd 33.4; the 2.1.0.0 legs 1e on
+   Windows 2000 and 1g on XP, runtime, development host A, QEMU): enabling
+   it re-adds the FDO, but re-reporting the same PDOs brings nothing back.
+   With the hub's devnode, NT forgets its children's devnodes, and the PDO
+   objects reported again to the new FDO were never queried or started; no
+   port changed, so nothing re-enumerated, and only a replug recovered. So
+   the hub FDO's `REMOVE` **lets go** of every child that PnP was shown and
+   has removed, still listed (`HcdDevicePdoLetGo`, `ParentLetGo`, pure rule
+   `XhciEnumLetGo`, host vectors in `test_enum`). No relations answer
+   carries a let-go PDO again (`XhciEnumAnswerCarries`), and once its
+   device leaves it is missing at once, like a PDO under a hub PDO that
+   PnP has let go of. The device keeps running. The next `START` of a hub
+   FDO on that PDO cycles each let-go child's port (`HcdDevicePdoRepresent`,
+   `CYCLE_PORT`'s path, `HcdEnumCycle`) before it asks its settle
+   generation (5.7). The old PDOs leave, missing at once, and are deleted
+   by the next relations answer before any answer carries their
+   successors. The devices enumerate afresh, behind a second-tier hub too,
+   as new PDOs at the same instance ids: the serial id, or the place under
+   the same hub devnode. PnP finds the devnodes it had, so no new devnode
+   and no wizard, and the first answer carries them. A child that PnP
+   never saw is not let go: the new FDO's first answer reports it. A let-go
+   PDO that PnP starts again is PnP's again. Windows 98 SE `STOP`s the hub
+   instead of removing it (the 33.4 leg 1c and this fix's 98 leg). That
+   leaves nothing let go and changes nothing there. A controller stop never
+   keeps a let-go group dormant, unlike a user-disabled PDO (item 6). PnP
+   has no devnode to revive it into, and a revival could come after the
+   hub's start had already asked for its cycle, and lost it. So the stop
+   drops the group, missing at once, and the device comes back as new PDOs
+   (Codex review of this fix, round 1). The root hub needs nothing of this: its `REMOVE` detaches the bus,
+   and its `START` marks every port changed (`HcdEnumDetach`,
+   `HcdEnumAttach`).
+5. The controller's stop and remove, and the root hub's: unchanged.
+   `HcdDevicePdoReleaseAll` settles hub PDOs and their children with the
+   rest. A hub FDO reaches the controller through its PDO's `Controller`,
+   inside the PDO's `Busy` count, which the release waits out before it
+   orphans the PDO - the device PDOs' own guard, reused.
+6. **Windows 98 SE and ME, the dormant path of task 33.1.** A hub PDO
+   stopped by PnP across an orderly controller stop is kept dormant like any
+   device PDO, and its children with it - but a child is kept only when its
+   hub PDO is (`HcdDevicePdoDormantAll` now takes the devices tier by tier,
+   root ports first). Behind a hub, a PDO the user disabled (removed by PnP
+   while present, so still listed) is kept with its group and revived still
+   disabled: dropped, it would be gone and waiting for an answer only its
+   dormant hub's FDO could give, and its port's wait would keep that hub
+   from being enumerated again; nor may it be taken for absent, since PnP
+   still holds it present (Codex review of 33.4, rounds 1 and 2). A
+   composite with one function disabled is kept whole the same way. The
+   residue: a disabled device unplugged while the controller is off stays
+   listed, disabled, until a device enumerates at its place or its hub's
+   dormant group is retired. At the restart the hub re-enumerates first and revives
+   its dormant PDO by 33.2's serial-or-place match, keeping its `Serial`,
+   so the
+   children enumerated behind it compute the same `ParentSerial` and revive
+   theirs; `ParentSerial`, `Hub` and `HubUsb3` join the descriptors in the
+   sameness test, so no group is revived under another parent. A dormant group retired (not revived) takes the dormant groups
+   below it with it. A newcomer retires a serial-less dormant group for its
+   place only under its own parent (section 10.7), and a hub's PDO reads no
+   device text, so no `iProduct` read whose timeout could reset the
+   controller comes before a hub's revival (33.2's serial-number read
+   still does, for a hub with `iSerialNumber` set, as for any device).
+
+**The hub FDO** (`hcd_hubfdo.c`): `AddDevice` for a hub PDO; PnP passed down
+like the root hub FDO's, with `BusRelations` answered as above and
+`START`'s success making the door and opening its IOCTLs, which a `STOP`,
+`SURPRISE_REMOVAL` or `REMOVE` closes before going down, so no open handle
+keeps the PDO's `Busy` raised while its quiesce waits (round 1, finding 2);
+a `REMOVE` that only tears down the
+door and itself - it never detaches the bus. Power is passed down; the hub
+PDO answers it as a device PDO does. A hub PDO answers no internal IOCTL
+(the bus owns the hub; nothing above the hub FDO sends URBs).
+
+**The door on a hub FDO** (section 8's table, per hub): at its start
+`\DosDevices\XHCI98HUB<serial>` on the hub PDO's own name
+(`\Device\XHCI98DEV<serial>`), `SymbolicName` on the hub devnode's hardware
+key (the 98-to-XP x64 pages), and an enabled `GUID_DEVINTERFACE_USB_HUB` (the
+Vista and 7 pages). Its `DEVICE_CONTROL` answers 8.3's set for the hub's own
+ports: `GET_NODE_INFORMATION` from the hub descriptor the bus read
+(`bNbrPorts`, `wHubCharacteristics`, `bPwrOn2PwrGood`, `bHubContrCurrent`;
+`HubIsBusPowered` from the configuration's `bmAttributes` self-powered bit,
+since the bus does not keep the hub's GET_STATUS - a SuperSpeed half's
+descriptor in the same 0x29 shape, the only one the structure has), the
+connection information and its `_EX` form, the descriptors, the connection's
+driver key, attributes, and `GET_HUB_CAPABILITIES(_EX)` from the hub's speed
+and TT (`HubIs2xCapable`, High Speed, multi-TT capable and on, never root);
+`RESET_HUB` refused as on the root hub. A connection whose device is a hub
+with a PDO now answers `DeviceIsHub` TRUE - on the root hub's ports and a
+hub's alike - and `GET_NODE_CONNECTION_NAME` returns that hub's
+`XHCI98HUB<serial>`, which `usbui.dll` opens as `\\.\` plus the name (8.3,
+`GetExternalHubName`); a connection whose hub has no PDO answers as before.
+**Unread**: whether Windows 98's `sysclass.dll` `USBHubPropPage` or any
+`usbui.dll` sends a non-root hub anything 8.3 does not list, and whether the
+Vista and 7 hub Advanced tab offers `RESET_HUB` on an external hub (refused
+either way); the guest legs read the tabs.
+
+**The INFs.** Each models section of both files carries two more models,
+`%HubDesc%` under `XHCI98\HUB` and `%Hub30Desc%` under `XHCI98\HUB30`,
+installed by `Hub.Dev` (98/ME: `DevLoader=*NTKERN`, `NTMPDriver=xhci98.sys`,
+the hub page), `Hub.Dev.NTx86` / `Hub.Dev.NTamd64` and `Hub.Dev6.*` (the
+service, the hub page). **A hub section copies nothing**: the devnode exists
+only under a running `xhci98.sys`, so the binary is on disk and loaded, and
+a hub plugged in months after the install must not send the setup engine
+looking for the original media (Windows 98's engine and NT 5.x's both look
+for a copy's source and ask for it when it is gone). The INF gate holds that
+(`HCD-HUBCOPY`, over the install section and every `<install>.*` section
+the engine runs beside it, with no `Include` or `Needs`; round 1, finding
+3), keeps both hub models in every models section and every hub
+id under `XHCI98\` (`HCD-HUB`), refuses a Microsoft hub-class id on any line,
+and holds the hub sections to the hub page (`HCD-HUBPAGE`).
+
+**What 33.4 leaves open**: the hot-plug applet's listing rule; Windows 98's
+instance handling of a device re-parented under a hub; the 98 and ME
+"found new hardware" behaviour for the new devnode (read on the guests);
+what each page sends a non-root hub. The guest legs of 33.4 read them.
 
 ## 11. The transfer-buffer policy (task 25.7)
 
@@ -2583,6 +3462,208 @@ the detail; this is the index.
 | The USB 2.0 hub and reset timings marked "to transcribe" | 10 | 27-A.1's transcription, before the hub class is written |
 | Common-buffer growth beyond design record 04's limits | 11.2 | the phase that first hits a limit (27 for slots, 31 for streams) |
 | The `win98-evidence.list` rows for the new precedent binaries | 7, Appendix A | added with this record; the gate re-derives the HCD's rows from them when 26-A.1 adds the rows themselves |
+
+## 13. Polling a Low- or Full-Speed interrupt endpoint faster than 1 ms (task 33.8, 2026-10-04)
+
+The request is issue 4's: LordOfMice, who maintains SweetLow's hidusbf,
+asked on 2026-10-03 for "8000 Hz on Low Speed device as under modern Windows
+NT OSes". Under the `1.x.x.x` miniport's virtual High-Speed hub his device
+looked High Speed, hidusbf offered its High-Speed values 1 to 3 (8000 to
+2000 Hz), and the driver gave 1000 Hz. The owner's decision of 2026-10-04
+for `2.1.0.0`: see whether it can be set higher. Every fact below is tagged
+with how it was obtained; nothing in this section was read out of a binary,
+so it adds no `legal-provenance.md` row.
+
+### 13.1 How hidusbf asks for more than 1000 Hz (documentation)
+
+A Low- or Full-Speed `bInterval` is in milliseconds, 1 to 255 (Table 6-12),
+so no descriptor value says "faster than 1 ms", and hidusbf does not write
+one. Its own documentation, in `tools\hidusbf-extracted` (`hidusbf.zip`,
+SHA-256 `bd8d1fb0...f797`, not tracked), says how it gets there:
+
+- `README.2kHz-8kHz.ENG.TXT`: the 2-8 kHz rates need "usb 3.x", "the
+  microsoft usb 3.x driver" and Windows 8, 8.1 or 10, and they **reuse the
+  two slowest rates of the list**: "2kHz-4kHz driver 31 = 2000Hz 62 =
+  4000Hz", "4kHz-8kHz driver 31 = 4000Hz 62 = 8000Hz".
+- `README.ENG.TXT`, the entry of 2025/11/05: the variants differ only by a
+  registry value, `PatchUSBXHCI`, "0 - disable patching, 1 - 1k patching,
+  2 - 2k-4k patching, 3 - 4k-8k patching"; and its warnings: overclocking
+  "may not work for Low Speed USB devices which controlled by non Microsoft
+  USB stack", and the patching builds must not run under Memory Integrity.
+  The entry of 2005/12/26 names the method: "patching the code of
+  USBPORT.SYS on the fly".
+
+So (documentation, plus one inference marked as such): the filter keeps
+writing an ordinary millisecond `bInterval` into the configuration
+descriptor of `URB_FUNCTION_SELECT_CONFIGURATION` - the Windows 9x filter
+was read doing exactly that (static, `legal-provenance.md` section 4,
+hidusbf row) - and the rate above 1000 Hz comes from **patching Microsoft's
+`usbxhci.sys` in memory** so that it programs a smaller Interval for the
+"31 Hz" and "62 Hz" settings. That those are `bInterval` 32 and 16 (Interval
+8 and 7 by footnote 113) is inferred from the labels (1000/32 and 1000/16),
+not read. How the patch computes its Interval, and whether it touches
+devices the filter is not on, is not documented and was not read; this
+project reads no patch code and patches nothing. Under the HCD there is no
+`usbxhci.sys` and no `usbport.sys` to patch, so the HCD is the only place
+the rate can come from.
+
+### 13.2 What Linux programs (reference source)
+
+`external/linux/xhci-mem.c` (torvalds/linux `c6859eed`), function
+`xhci_get_endpoint_interval`: a Low- or Full-Speed interrupt endpoint goes
+through `xhci_parse_frame_interval`, which is
+`xhci_microframes_to_exponent(udev, ep, bInterval * 8, 3, 10)` - the
+exponent clamped to **3..10**. The two interval quirks only lower large
+values (`XHCI_LIMIT_ENDPOINT_INTERVAL_9`, AMD and one ATI part: 9 and up
+become 8; `_7`, TI 0x8241, High Speed and up only: 7 and up become 6).
+No path in the mirror programs a Full- or Low-Speed interrupt Interval
+below 3.
+
+### 13.3 What xHCI 1.2c says about an Interval below 3 (specification)
+
+- Table 6-12 (p.420), FS/LS Interrupt row: bInterval 1-255, "bInterval *
+  1ms", **"Endpoint Context Valid Interval range 3-10"**; footnote 113:
+  "round the computed value ... down to the nearest base 2 multiple of
+  bInterval * 8".
+- 6.2.3.6 (p.419): "system software shall translate the bInterval field in
+  the USB Endpoint Descriptor to the appropriate value for this field" and
+  "Refer to Table 6-12 for the range of valid Interval values".
+- Configure Endpoint, 4.6.6 (p.112): "Not all Input Endpoint Contexts
+  identified by Add Context flag fields = '1' are valid" gives
+  **Parameter Error**; Table 6-90 (p.467): Parameter Error is "Asserted by
+  a command if a Context parameter is invalid", Bandwidth Error (8) when
+  the periodic endpoints declared do not fit.
+- 4.14.3 (p.244): the Interval is "treated as a throttling parameter or a
+  deadline by the xHC for Interrupt endpoints"; "the xHC should consume no
+  more than one TD per ESIT".
+
+So an Interval of 0 to 2 on a FS/LS interrupt endpoint is **outside the
+valid range**: a controller may refuse it with Parameter Error (it "should
+check"; nothing says it must), may refuse it on bandwidth, or may accept
+it and run it, and what a controller that accepts it does on the wire is
+not specified. That hidusbf's 2-8 kHz rates work under Microsoft's
+`usbxhci.sys` (documentation and its users' reports, not this project's
+measurement) says that at least the controllers its users own accept and
+run it at a root port.
+
+### 13.4 What QEMU's xHCI does with the field (emulator source)
+
+`external/qemu/hcd-xhci.c`, tag `v11.1.0` (fetched 2026-10-04, SHA-256
+`561518AE...65CD8`): `xhci_init_epctx` takes `interval = 1u << MIN(Interval,
+18)` with no check against speed or type, `xhci_configure_slot` returns no
+Parameter Error for any Endpoint Context field, and `xhci_calc_intr_kick`
+schedules an interrupt TD at `MAX(asap, mfindex_last + interval)`
+microframes. So QEMU accepts Interval 0 on a Full-Speed endpoint and paces
+it at 125 us. A QEMU reading can show that the HCD programmed the Interval
+and that the emulator paces by it; it **cannot** show that a real
+controller accepts it, and it can never exercise the fallback below.
+
+### 13.5 The verdict and the design
+
+**Feasible on some controllers only, and off by default.** Out of
+specification by Table 6-12; the Configure Endpoint refusal is the
+specification's own failure mode, so it can be caught and undone; whether a
+given controller accepts and honours it is for the bench to read
+(13.6). The risk with it off is none: nothing changes. With it on: a
+controller that accepts an out-of-range Interval and then misbehaves -
+polls at its own rate, starves other periodic traffic, or worse - which
+no QEMU run can rule out.
+
+- **The value**: `XhciFastPollFsLs`, a REG_DWORD on the controller's driver
+  key, read at each controller start (`hcd_ctl.c`), written by no INF.
+  `XhciPipeFastMode`: 1, 2 and 3 are themselves, anything else - absent, 0,
+  a value of another type, 4 and up - is off. Logged as `fastpoll.value`
+  and `fastpoll.mode`.
+- **The mapping** (`XhciPipeFastPoll`, `xhci_pipe.c`), hidusbf's own numbers
+  so a user picks the rate in the terms its Setup already uses: 1 changes
+  nothing (Table 6-12 already gives a Low-Speed endpoint 1 ms); 2 maps
+  Interval 8 (`bInterval` 32-63, its "31 Hz") to 2 (500 us, 2000 Hz) and
+  Interval 7 (16-31, "62 Hz") to 1 (250 us, 4000 Hz); 3 maps them to 1
+  (4000 Hz) and 0 (125 us, 8000 Hz). Nothing else changes: not another
+  `bInterval`, not High Speed or SuperSpeed, not isochronous, not a hub's
+  own status endpoint (`HcdCfgHubOpen` never asks), and **not a device
+  behind a hub** (Route String nonzero), whose Full- or Low-Speed periodic
+  traffic a transaction translator or a Full-Speed hub carries one frame at
+  a time. The bound is the table: no Interval below 0, none from any other
+  input. The client is told the `bInterval` it gave, as before; a composite
+  device's function is mapped from the `bInterval` its caller's descriptor
+  gives too (section 10.9, 2026-10-05), except at a later
+  `SELECT_INTERFACE`, which reads the device's own. The cost
+  is that a device that itself declares 16-63 ms on a root port is sped up
+  too while the value is set, which is why it is a controller value a user
+  sets for a purpose and not a default.
+- **The refusal path** (`hcdCfgConfigureAdd`, `hcd_cfg.c`): every Configure
+  Endpoint that adds pipes - `SELECT_CONFIGURATION`, `SELECT_INTERFACE`, a
+  function's select, and the replays (`RESET_PORT`, the endpoint recycle) -
+  goes through one helper. If it fails with Parameter, Bandwidth or
+  Secondary Bandwidth Error (`XhciPipeFastRetry`) while adding a pipe the
+  mapping changed, every such pipe goes back to its Table 6-12 Interval
+  (`XhciPipeFastRevert`) and the command is built and issued once more - a
+  refused command leaves the Output Device Context as it was (4.6.6), so the
+  second command is the one the select would have issued with the value
+  off. Counted in `fastpoll.fallbacks` (with a `fastpoll.fallback` record:
+  slot, how many pipes, the code); an endpoint opened fast is
+  `fastpoll.opened` and a `fastpoll.open` record (slot, DCI, the Table 6-12
+  Interval, the one programmed). Both counts are in the counter block.
+- **Host vectors**: `test\test_pipe.c`, `test_fast_poll`: the mode
+  sanitising, the table at both speeds, the whole 16-63 band and its edges
+  (15, 64, 1), off/1/unknown modes, behind a hub, High Speed, isochronous,
+  no double application, the revert and the retry codes.
+
+### 13.6 What is still owed, and the bench procedure
+
+Nothing here has run on a guest or on metal. A QEMU leg was tried on
+2026-10-04 (Windows ME, `winme-sl-base` overlay, `qemu` build of the
+branch, harness `out\phase33\fastpoll\`, git-ignored): the controller
+installed from `xhci98.inf`, and every boot after the install's restart
+stopped in real mode before Windows entered protected mode (CR0 = 0x10, CS
+= 0x933B, EIP fixed at 0x6173, an empty debug console - no driver code
+ran), a hard reset included; not investigated further. By 13.4 a QEMU
+reading could in any case show only that the Interval was programmed and
+paced, never a controller's acceptance or the fallback.
+
+The reading that matters is the owner's hardware, the ThinkPad E460 and
+the P14s Gen 1, on a build of this branch:
+
+1. A Low-Speed (or Full-Speed) mouse **on a root port**, no hub. hidusbf on
+   it as 33.7 installs it: on Windows 98 SE (with NUSB 3.6's `usbd.sys`)
+   or ME, `hidusbf.sys` in `SYSTEM32\DRIVERS`, `LowerFilters` =
+   `"hidusbf.sys"` on the mouse's `Enum\USB` instance and a `bInterval`
+   DWORD on the instance and on its `Class\HID` driver key; on XP,
+   hidusbf's `Setup.exe` (the `NOPATCH` build: there is no `usbport.sys`
+   or `usbxhci.sys` under the HCD to patch).
+2. Turn the log on first, then restart (both switches are read at
+   controller start; the install writes them 0, which records nothing):
+   `XhciLogVerbosity` 2 or more, so the ring records the
+   `fastpoll.value`/`.mode` notes of each start and the
+   `fastpoll.open`/`.fallback` records. Read them either with DebugView
+   and `XhciLogDebugView` 1 - which also delivers the counter block a
+   controller stop (a disable or a shutdown) appends, its only route, but
+   drains the ring continuously - or with `XHCISNAP` and
+   `XhciLogDebugView` 0, which keeps the records in the ring for it but
+   shows no counter block. Then `bInterval` 16 (hidusbf's "62 Hz"),
+   `XhciFastPollFsLs` absent: replug, and read about 62 Hz with a mouse
+   rate tool, `fastpoll.mode` 0 and no `fastpoll.open` record.
+3. `XhciFastPollFsLs` = 3 (REG_DWORD) on the controller's driver key (the
+   `Class\USB\nnnn` key the other `Xhci*` values are in), restart (it is
+   read at controller start), replug: expect `fastpoll.mode` 3,
+   `fastpoll.opened` up by one per configuration of the mouse (the counts
+   are never zeroed, and a mouse attached across the restart is configured
+   once at start and again at the replug, so compare before and after one
+   attachment), a `fastpoll.open` record ending `0700` (Interval 7
+   to 0), `fastpoll.fallbacks` unchanged, and the tool reading toward
+   8000 Hz - or `fastpoll.fallbacks` up by one and 62 Hz again on a
+   controller that refuses, which is itself the reading.
+4. `bInterval` 32 ("31 Hz") at 3 (4000 Hz expected, record `0801`), and
+   both at 2 (2000 and 4000 Hz).
+5. With the value at 3, ten minutes of use: the mouse never stalls, a
+   keyboard and a stick on the other ports keep working, and the same mouse
+   behind a hub stays at its Table 6-12 rate (no `fastpoll.open` record).
+   Then delete the value, restart, and confirm 62 Hz again.
+
+A machine whose Windows mouse path cannot report more than it is given
+(Windows 98's mouse stack may coalesce) still shows the programmed rate in
+the counters; the rate tool is the second reading, not the first.
 
 ## Appendix A. The Windows 98 export evidence, pair by pair (task 25.3)
 

@@ -13,11 +13,12 @@ convention of theirs holds here: the batching convention and the task-id
 rules, "observed on both" as `AGENTS.md` qualifies it, and the rule that no
 phase advances past an unobserved checkpoint.
 
-**Status: `2.0.0.0` is released.** Phases 25 to 32 are closed. The cut was
-taken on 2026-10-04 and the owner squash-merged it to `main` as `4038447`
-("2.0.0.0 (#13)"); the owner benched it after the cut and reports no issue
-beyond the known limitations (Phase 28, 28-E.1). What comes next is under
-"What is not on this roadmap" below.
+**Status: `2.1.0.0` is cut.** Phases 25 to 33 are closed. `2.0.0.0` was
+cut on 2026-10-04 and squash-merged to `main` as `4038447` ("2.0.0.0
+(#13)"); the owner benched it after the cut and reports no issue beyond the
+known limitations (Phase 28, 28-E.1). `2.1.0.0`, the first update, was cut
+on 2026-10-05 (Phase 33), with its polling-rate reading owed to the bench. What comes next is "What is not on this
+roadmap" below.
 
 **The miniport is frozen.** `1.2.0.0` is the last release of the miniport
 (owner, 2026-10-02): no further miniport cut, and a defect reported against
@@ -40,12 +41,12 @@ table is the index.
 | Binary and package name | `xhci98.sys`, `xhci98.inf` and `xhci98-amd64.inf`, package `xhci98-<version>.zip`, built from `src\` (owner, 2026-10-02, the third decision of the day on it: `xhci98h`, then `xhci98hc` coexisting on disk with the miniport, then - once task 25.8 had built the scaffold as `xhci98hc.sys` in `src\hcd\` - the miniport's removal from the tree and this name). A `2.0.0.0` install replaces the miniport's file; going back is a reinstall of the `1.2.0.0` package |
 | Version and cut point | One cut, `2.0.0.0`, after Phase 31: USB 2.0 parity on every target, SuperSpeed on root ports and behind SuperSpeed hubs, and UAS. No intermediate release |
 | The miniport | Frozen at `1.2.0.0`, no further cuts, and removed from the tree (above) |
-| Hub class and composite splitting | Inside the bus driver. External hubs are objects of the bus, not PDOs; a composite device is split by the bus into per-function PDOs. No hub-to-port contract to design, no INF binding path for an external hub or a composite parent (the root hub's own project-owned binding, in the root-hub row below, is the one hub binding the package carries), no per-target matching of `usbccgp.sys` or Windows 98's composite parent |
+| Hub class and composite splitting | Inside the bus driver. External hubs are objects of the bus, not PDOs; a composite device is split by the bus into per-function PDOs. No hub-to-port contract to design, no INF binding path for an external hub or a composite parent (the root hub's own project-owned binding, in the root-hub row below, is the one hub binding the package carries), no per-target matching of `usbccgp.sys` or Windows 98's composite parent. From `2.1.0.0` an external hub also gets a devnode of its own, as every Microsoft stack shows its hubs (owner, 2026-10-04; task 33.4): the bus still runs the hub, and only its PnP presentation changes - each hub it serves is presented under a project-owned id (`XHCI98\HUB`, `XHCI98\HUB30` for a USB 3 hub's SuperSpeed half, so a USB 3 hub is two devnodes), bound by this package's own INFs to `xhci98.sys` as a hub FDO, with the devices behind it as its children; still no binding path for any OS hub driver (design record 13 section 10.11) |
 | Stock Windows 98 SE | A goal: the HCD loads, starts and binds devices on a Windows 98 SE install with no USB 2.0 stack. NUSB's and SweetLow's host-stack halves become inert under it. What a stock install still lacks is a mass-storage class driver, which NUSB's `usbstor.sys` and its `ntmap` layer supply and Windows ME ships; the HCD does not replace that. Phase 26 takes the reading (26-V.3), a checkpoint clause by the owner's decision of 2026-10-03 |
 | Mass storage on Windows 98 SE | NUSB's, kept (owner, 2026-10-02, choosing this over an own storage driver). A drive letter on 9x comes from the IOS layer, and NUSB's `usbntmap.inf` binds `usbstor.sys`'s disk objects (`USBSTOR\GenDisk` and its siblings) to `DevLoader=*IOS` with `PortDriver=USBMPHLP.PDR`, the USB mapping port driver, with `NTMAP.SYS` and `USBNTMAP.SYS` beside it; NUSB's own install INF stamps `NTMAP.SYS` as `4.10.0.2227` and annotates it with hotfixes 242975 and 267304, a Windows 98 SE line, and annotates `USBMPHLP.PDR` and `USBNTMAP.SYS` as `WinMe` in its file list - the package author's notes, not a reading of the files, which were not examined (`legal-provenance.md` section 4, the NUSB 3.6 INF row; method static, text read, nothing executed). They are Microsoft's and this project does not redistribute them. An own BOT driver would still sit under that mapping, and an own IOS port driver is a VxD project with no use elsewhere. So `usbstor.sys` stays the BOT driver on every target, and on Windows 98 SE mass storage, UAS included, needs NUSB installed; on a stock install it cannot work and the release notes say so. Whether the 98 SE CD carries any of the mapping files is task 31-0's to read from the disc |
 | Pool and DMA | The HCD allocates pool and its own common buffer. The miniport's "allocate no pool" rule stands for `src/`; for the HCD it is replaced by import-allowlist rows with Windows 98 export evidence, read in task 25.3, and a rule naming the sites that may allocate |
 | Device names | `xHCI98 USB 3.x eXtensible Host Controller` for the controller and `xHCI98 USB 3.x Root Hub` for the root hub (owner, 2026-10-02; spelled xHCI98 by the owner 2026-10-03), as the INFs' device descriptions on every path |
-| The root hub and both property tabs | Kept, all of it (owner, 2026-10-02, reversing a narrower answer given on the Codex review earlier that day). The controller FDO creates a root-hub PDO under a **project-owned** hardware id, never `USB\ROOT_HUB` - which the OS's own `usbhub.sys` claims on every NT target and which would put Microsoft's hub driver back on top of this bus - and `xhci98.inf` binds that id to `xhci98.sys` itself, so one binary is both the controller's function driver and the root hub's, and every device PDO is a child of the root hub, where Device Manager users expect it. The controller's Advanced tab: the HCD answers the `USBUSER` request set `usbui.dll` sends to the controller devnode, and the INFs carry the two registrations the miniport's do - `EnumPropPages` to `sysclass.dll` on Windows 98, `EnumPropPages32` to `usbui.dll` on the NT paths. The root hub's Power tab: the root-hub devnode registers the hub property-page provider the OS INFs register for their own root hub, and answers the hub IOCTLs that page sends, read per target in task 25.4. `XHCISNAP` reaches the HCD through the controller's door. External hubs stay objects inside the bus (the hub decision above), so a device behind one appears under the root hub devnode, and the Power tab reports the budget the bus itself keeps |
+| The root hub and both property tabs | Kept, all of it (owner, 2026-10-02, reversing a narrower answer given on the Codex review earlier that day). The controller FDO creates a root-hub PDO under a **project-owned** hardware id, never `USB\ROOT_HUB` - which the OS's own `usbhub.sys` claims on every NT target and which would put Microsoft's hub driver back on top of this bus - and `xhci98.inf` binds that id to `xhci98.sys` itself, so one binary is both the controller's function driver and the root hub's, and every device PDO is a child of the root hub, where Device Manager users expect it. The controller's Advanced tab: the HCD answers the `USBUSER` request set `usbui.dll` sends to the controller devnode, and the INFs carry the two registrations the miniport's do - `EnumPropPages` to `sysclass.dll` on Windows 98, `EnumPropPages32` to `usbui.dll` on the NT paths. The root hub's Power tab: the root-hub devnode registers the hub property-page provider the OS INFs register for their own root hub, and answers the hub IOCTLs that page sends, read per target in task 25.4. `XHCISNAP` reaches the HCD through the controller's door. External hubs stay objects inside the bus (the hub decision above), so a device behind one appears under the root hub devnode, and the Power tab reports the budget the bus itself keeps. **Amended 2026-10-04 (task 33.4)**: each external hub is its own devnode with its own Power tab and door, and a device behind it appears under it (design record 13 section 10.11) |
 | The miniport's virtual-hub values | Not supported (owner, 2026-10-02). `XhciVirtualHSHub`, `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid` exist to make usbport tell the truth about a root-port device's speed; the HCD has no usbport to lie to and reports every device at its true speed with no hub in the way, so there is nothing for them to switch. The HCD reads none of the three, its INFs write none, a value left behind by a miniport install has no effect, and the release notes say so (32.1). Which of the miniport's other values carry over - the log switches, the interrupt moderation value - is 25.1's list |
 | SuperSpeed hubs on Windows 2000 | A vehicle is required, for now (owner, 2026-10-02, on the same review). Windows 2000 is a VM-only target and no QEMU device models a SuperSpeed hub, so Phase 30's "observed on both" has no vehicle today; the owner did not record an exception and revisits the question when Phase 30 opens. Until then Phase 30 cannot close, and Phases 31 and 32 wait on it. Revisited on 2026-10-04 ("SuperSpeed hubs on Windows 2000, revisited", below) |
 | SuperSpeedPlus: USB 3.1 Gen 2 and USB 3.2 Gen 1x2 and Gen 2x2, to 20 Gbit/s | In `2.0.0.0`, untested if need be (owner, 2026-10-02, later the same day, reversing the line in "What is not on this roadmap" that left it unassessed): the driver runs on every target to Windows 7, which has no USB 3 stack of its own, and newer chipsets with 10 and 20 Gbit/s ports often have no Windows 7 vendor driver either. A link that trains above 5 Gbit/s is accepted at its trained rate rather than sent back to USB 2.0. From the driver's side the step is small once Phase 29's Gen 1 path exists: the rate comes from the protocol capability's PSI dwords rather than a fixed table, bulk and interrupt framing are Gen 1's (1024-byte packets, burst to 16), and the new work is the SuperSpeedPlus isochronous companion with its 32-bit bytes-per-interval and the Endpoint Context's Max ESIT Payload Hi (task 29-A.6). Vehicles: QEMU models nothing above 5 Gbit/s; the P14s Gen 1's chipset controller (`8086:02ED`) advertises a USB 3.1 protocol with eight PSI dwords on ports 13-18 (`xhciqual/results/p14s-gen1-2026-07-25/PROBE.LOG`), but its published 10 Gbit/s connectors are the two USB-C 3.1 Gen 2 / Thunderbolt 3 ports, and neither source says which controller those reach - the chipset's ports or the Thunderbolt controller's own xHCI - so whether any P14s connector reaches 10 Gbit/s under this driver is 29-0's question and 29-E.2's reading; no 20 Gbit/s port is held (the B650M, whose chipset has one, is gone). What no vehicle reads is untested ground in the release notes (32.1) |
@@ -66,7 +67,7 @@ table is the index.
 | Windows 7 on the bench | Not benched (owner, 2026-10-04, about 14:05: "We won't bench Win 7"). The E460's 32-bit Windows 7 halves of 28-E.1, 29-E.1, 30-E.1 and 31-E.1 are dropped; Windows 7, both architectures, is a virtual-machine target only for `2.0.0.0` |
 | The Windows 7 disable hang (28.3) | Removed from the `2.0.0.0` limitations, recorded as gone with no metal caveat (owner, 2026-10-04, about 14:10): a `1.2.0.0` miniport and usbport issue, not reproduced under the HCD in QEMU, five controller disable and enable cycles on Windows 7 x86 and x64 (`runs/run-28.md`, 28.3) |
 | Windows ME, a UAS drive as the first storage device | Option C, carried as a limitation of `2.0.0.0` (owner, 2026-10-04, about 15:20): on a fresh ME install the drive shows Code 2 until ME has copied its own `USBNTMAP.SYS` and `USBMPHLP.PDR`, which it does when its first ordinary stick installs. An `xhciuas.inf` copy of the two files through `LayoutFile` cured ME but made Windows 98 SE prompt twice, since the 98 SE CD's `layout.inf` names neither file; it was parked on branch `p31-meuas-copy` (`dc5251f`, deleted after the cut by the owner's decision), and option B, an ME-only compatible id to gate it, is for a later release (`runs/run-31.md`, "Windows ME: a UAS drive first") |
-| Windows ME: the controller re-enable, and a pull during an install | Carried as limitations of `2.0.0.0` (owner, 2026-10-04): re-enabling the controller with a device attached may hang ME, the HCD's own (ME's Microsoft UHCI stack re-enables with devices attached), so the release notes say to unplug first; the fix is for `2.0.0.1` ("What is not on this roadmap"). A pull while ME is installing the device freezes ME under its own UHCI stack too, so it is ME's behaviour, not the HCD's (`runs/run-28.md`) |
+| Windows ME: the controller re-enable, and a pull during an install | Carried as limitations of `2.0.0.0` (owner, 2026-10-04): re-enabling the controller with a device attached may hang ME, the HCD's own (ME's Microsoft UHCI stack re-enables with devices attached), so the release notes say to unplug first; the fix, first planned as `2.0.0.1`, is task 33.1 of `2.1.0.0` (`docs/issues/09-me-controller-reenable-stopped-pdos.md`). A pull while ME is installing the device freezes ME under its own UHCI stack too, so it is ME's behaviour, not the HCD's (`runs/run-28.md`) |
 | Cut before the bench | The `2.0.0.0` cut was taken before the combined bench session, not after it (owner, 2026-10-04, about 16:40: "I will do the bench session after the cut; if it works we release that, otherwise change and recut"); supersedes "One bench session before the cut" (above). The documents were written as if the bench passes, and 28-E.1, 29-E.1, 30-E.1 and 31-E.1 were read by the owner on real hardware after the cut, on the ThinkPad E460 and the ThinkPad P14s Gen 1 under Windows 98 SE (the README's photos are the P14s); the owner reports no issue beyond the known limitations. Windows 7 was not benched ("Windows 7 on the bench", above) |
 | SuperSpeed hubs on Windows 2000, revisited | Released untested (owner, 2026-10-04, with the cut), revisiting the 2026-10-02 row that required a vehicle: no vehicle exists, so the Windows 2000 half of Phase 30's checkpoint is untested ground, built from the specification, and the release notes say so |
 | Gaps dropped from `2.0.0.0` | Two task gaps ticked with the gap recorded rather than closed (owner, 2026-10-04): 29-A.1's registry value restoring the SuperSpeedPlus refusal (SuperSpeedPlus is accepted at its trained rate; `HCD_HOLD_REASON_SSP_REFUSED` in `src\hcd.h` is unused), and 31-0's unread sources - the xHCI 4.12 streams rows marked "to verify", NT `disk.inf`'s `GenDisk` binding and QEMU's `hw/usb/dev-uas.c` - not needed for `2.0.0.0` since UAS passed on every target. Both are listed under "What is not on this roadmap" |
@@ -110,7 +111,8 @@ Phase 26 is the USB 2.0 bus driver on root ports, at parity with the miniport
 on both primary targets. Phase 27 brings external USB 2.0 hubs inside the
 bus. Phase 28 takes the seven other guests, the amd64 build and the bench.
 Phase 29 is SuperSpeed on root ports, Phase 30 SuperSpeed hubs, Phase 31
-streams and UAS, and Phase 32 the `2.0.0.0` cut. The order is deliberate:
+streams and UAS, and Phase 32 the `2.0.0.0` cut; Phase 33 is the first
+update, `2.1.0.0`. The order is deliberate:
 parity first, because round 12's device matrix and the acceptance test are a
 free oracle for everything USB 2.0; SuperSpeed before hubs, because root-port
 storage is what a user plugs in first; UAS last, because it needs streams and
@@ -494,6 +496,47 @@ as above, and the owner's acceptance in the bench verdict and the merge to
 Records: `releases/history.md`; `releases/2.0.0.0/`;
 `docs/using/release-notes.md`; `docs/using/release-acceptance-test.md`.
 
+## Phase 33 - Release `2.1.0.0`
+
+Goal: the first update of the HCD generation: the Windows ME controller
+re-enable fix, instance ids from serial numbers, device names from product
+strings, a `txtsetup.oem` for Windows 2000 and XP text-mode Setup, external
+hubs as devnodes, the Device Manager pages, hidusbf under the HCD, and
+Low- and Full-Speed polling above 1000 Hz.
+
+Status: closed 2026-10-05 on the cut. Opened 2026-10-04 on branch
+`2.0.1.0` from `main` at `3eb2d2b`, renamed `2.1.0.0` by the owner the same
+day when external hubs joined the release; worked on `p33-*` branches merged
+into `2.1.0.0`, with a whole-branch Codex review (`4b6fa60`) and the legs in
+`out\phase33\`.
+
+Why a phase: four of these change how Windows sees devices, one adds an
+install path the project has never had, and the cut changes every
+user-facing statement.
+
+- [x] 33.1 the Windows ME controller re-enable fix: device PDOs stopped by an orderly controller stop kept dormant and revived at the same instance key, as `usbhub` does. Done 2026-10-05 (`a9a7577`; `docs/issues/09-me-controller-reenable-stopped-pdos.md`): ME re-enable 3 of 3 with a mouse, with a mouse and a stick, with a keyboard alone and with devices behind a hub; Windows 98 SE and 2000 disable and enable soaks 10 of 10 (`out\phase33\legs\results.md`)
+- [x] 33.2 a device's instance id from its serial number, `UniqueID` TRUE, the location form kept for a device with no valid serial. Done 2026-10-05 (`5ba775a`; design record 13 section 10.7; host vectors in `test_func`): a serial stick keeps one devnode across root ports, behind a hub and on a SuperSpeed port with no new hardware found; two sticks get two devnodes; a duplicate serial takes the location form
+- [x] 33.3 `txtsetup.oem` for Windows 2000, XP and XP x64. Done 2026-10-05 (`21c9e5f`, the first-enumeration wait `07ac963`; design record 13 sections 5.6 and 5.7): text mode and the Recovery Console pass on Windows 2000 and XP from the `release` package, with `XhciFirstEnumWaitMs` (5 s) and `XhciFirstEnumPortMs` (2 s per port) bounding the root hub's first answer; XP's GUI-mode prompts with a USB-only keyboard are a limitation (`docs/issues/10-xp-f6-gui-mode-usb-input.md`)
+- [x] 33.4 external hubs as devnodes under project-owned ids (`XHCI98\HUB`, `XHCI98\HUB30`), the devices behind them re-parented, the door's hub recursion answered. Done 2026-10-05 (`f4cf324`, the NT hub re-enable fix `862c108`, the Address fix `f8226d9`): hub devnodes, the tree by connection, a two-tier chain, hub unplug and replug, and hub disable and enable on 98 SE, 2000 and XP. QEMU's hub is USB 1.1, so a High-Speed hub's entry and a USB 3 hub's "xHCI98 USB 3.x Hub" were read by the owner on real hardware after the cut, and work
+- [x] 33.5 the Device Manager pages: the Power tab's descriptor request taken with `bRequest` 0, as every target's `usbui.dll` sends it. Done 2026-10-05 (`5586ed7`; design record 13 section 8.3): the Power tab shows mA on every target read. The Advanced tab's bandwidth counts only open isochronous pipes (98 SE to XP) or a WMI query the HCD does not serve (Vista and 7); both are in the release notes, and the audio reading was not taken
+- [x] 33.6 a device's name from its product, function or interface string, "USB Device" when there is none. Done 2026-10-05 (`9be8bbb`): the string is answered on driverless devices, in 98 SE's New Hardware Found and in Windows 7's bus-reported description; a class INF's name still wins, as under Microsoft's hub driver
+- [x] 33.7 SweetLow's hidusbf under the HCD. Done 2026-10-05 (the composite fix in `4b6fa60`, the Address fix `f8226d9`): the 1000, 500 and 250 Hz ladder programs Interval 3, 4 and 5 at a root port and behind a hub on 98 SE (NUSB 3.6 and stock), ME and XP; stock 98 SE's `usbd.sys` exports `USBD_ParseDescriptors` (`legal-provenance.md` section 4, corrected)
+- [x] 33.8 Low- and Full-Speed interrupt polling above 1000 Hz (GitHub issue 4), opt-in under `XhciFastPollFsLs`, falling back to Interval 3 when refused. Done 2026-10-05 (`e83e476`; design record 13 section 13.6): built and reviewed, off by default; QEMU paces any Interval, so the release notes call it untested ground until the bench reading on the E460 and the P14s Gen 1
+- [x] 33.9 the cut: `xhci_version.h` and the four INFs' `DriverVer` at `2.1.0.0`, `releases/history.md`, the release notes, the README and `make-release.ps1`, and the ten install legs read from the asset. Done 2026-10-05 (`4c9f65f`, `d1673ab`, `releases\2.1.0.0`, cut from `53f895a`): then a readme-only `-Force` re-cut (`369e9f8`) for the owner's hub reading, the binaries unchanged; asset `xhci98-2.1.0.0.zip`, 684,007 bytes; the ten release-asset install legs passed (`out\phase33\asset\`). An MSVC 6.0 miscompile of a count-down loop, found on the way, is fixed in `a9dd367` and recorded in `lessons.md`
+
+Checkpoint: 33.1's re-enable legs, 33.2's port moves, 33.4's hub legs,
+33.5's Power tab, 33.6's names and 33.7's hidusbf ladder passing on the
+`2.1.0.0` package; 33.3's Setup legs on Windows 2000 and XP; 33.8 built,
+reviewed and off by default; the ten install legs read from the asset.
+
+The checkpoint **closed on 2026-10-05**. Owed to the bench: 33.8's polling
+rate.
+
+Records: `releases/history.md`; `releases/2.1.0.0/`;
+`docs/using/release-notes.md`; `design/13-superspeed-hcd.md`;
+`docs/issues/09-me-controller-reenable-stopped-pdos.md`;
+`docs/issues/10-xp-f6-gui-mode-usb-input.md`.
+
 ---
 
 ## What is not on this roadmap
@@ -511,21 +554,6 @@ Records: `releases/history.md`; `releases/2.0.0.0/`;
   (`future-plans/superspeed-storage-behind-a-switch.md`). It was the way to
   SuperSpeed storage without leaving the miniport; with the miniport frozen it
   stays a record of what that would have taken.
-- **A device's instance id from its serial number.** `2.0.0.0` builds a
-  device PDO's instance id from its location alone (`UniqueID` FALSE, no
-  serial), where Microsoft's `usbhub` uses the serial number string when the
-  device has a valid one. So a device moved to another port is found again as
-  new hardware, and two devices with the same VID and PID on the same port
-  share one devnode (on 2026-10-04 a QEMU `usb-mouse` reused a stale keyboard
-  devnode on Windows 2000; `out\phase28\w2k-disable\`). The owner placed the
-  fix after `2.0.0.0` (2026-10-04): answer `UniqueID` TRUE and an instance id
-  from the serial for a device with a valid serial string, keep the location
-  for one without, on every target. The release notes carry the difference.
-- **The Windows ME controller re-enable fix.** Branch `p28-reenable` at
-  `fa2af9b` (rebased onto `main`; the source tested as `5b554f4`): STOPPED
-  device PDOs kept dormant on an orderly controller stop and revived at the
-  same instance key on re-enable, as `usbhub` does. Its legs passed on
-  Windows ME, Windows 98 SE and Windows 2000; it is for `2.0.0.1`.
 - **The SuperSpeedPlus refusal value (29-A.1).** Dropped from `2.0.0.0`:
   no registry value sends a SuperSpeedPlus link back to USB 2.0, and
   `HCD_HOLD_REASON_SSP_REFUSED` in `src\hcd.h` is unused.

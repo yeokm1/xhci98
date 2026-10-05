@@ -160,4 +160,91 @@ ULONG XhciEnumRetry(PXHCI_ENUM_PORT port, PXHCI_ENUM_ACTION action);
 ULONG XhciEnumRetryUpTo(PXHCI_ENUM_PORT port, ULONG retries,
                         PXHCI_ENUM_ACTION action);
 
+/*
+ * The first answer's settle (task 33.3; design record 13 section 5.7). A
+ * hub FDO's first BusRelations answer after its start waits, bounded, until
+ * the controller thread has finished a pass begun after that start with
+ * nothing left in flight: every port that read connected when it was looked
+ * at enumerated to its PDOs or failed, every hub's first look at its ports
+ * done, and every send-back to a USB 2.0 companion (29-A.5) asked for in the
+ * window followed until the device showed there. Windows 2000's text-mode
+ * Setup binds only what that first answer carries.
+ *
+ * Two bounds, both this driver's numbers (owner, 2026-10-04), scaled from
+ * Microsoft's account of its own hub driver (the Microsoft USB blog, "How
+ * does USB stack enumerate a device?": a 100 ms stable debounce given up
+ * after 200 ms, a 5 s timeout per port reset, up to three tries 500 ms
+ * apart, 10 ms reset recovery) and USB 2.0 9.2.6.4 (a request without data
+ * done within 50 ms, a data stage begun within 500 ms): a normal device is
+ * ready in 0.15 to 0.3 s and one retry takes 1 to 2 s. The total, one
+ * deadline per FDO's first answer and not renewed per port, defaults to
+ * 5 s; the answer goes as soon as the bus settles, so with nothing attached
+ * it costs one look. The per-port budget, 2 s, covers the debounce limit,
+ * one retry with its pause and the descriptor reads: a port still
+ * enumerating past it, looked at between steps, is set aside until the
+ * answer has gone (deferred, counted) so a slow device cannot hold back the
+ * ports after it. The controller's driver key may set either, in ms, as a
+ * REG_DWORD: XhciFirstEnumWaitMs (0 turns the wait off, held to 30 s) and
+ * XhciFirstEnumPortMs (0 for no per-port budget, held to the total).
+ * Text-mode Setup writes no driver-key value, so the defaults are what F6
+ * Setup gets. The step is how often the waiter looks.
+ */
+#define XHCI_ENUM_SETTLE_DEFAULT_MS 5000UL
+#define XHCI_ENUM_SETTLE_MAX_MS     30000UL
+#define XHCI_ENUM_SETTLE_PORT_MS    2000UL
+#define XHCI_ENUM_SETTLE_STEP_MS    20UL
+
+/* The total deadline in ms from the driver-key value: the default when no
+ * value was read (`found` 0), else the value held to the maximum; 0 means
+ * no wait. */
+ULONG XhciEnumSettleCap(ULONG found, ULONG value);
+
+/* The per-port budget in ms from its driver-key value and the total: the
+ * default when none was read, else the value; either held to the total. 0
+ * means no per-port budget. */
+ULONG XhciEnumSettlePortCap(ULONG found, ULONG value, ULONG total);
+
+/* Milliseconds between two readings of the low 32 bits of the system time
+ * (100 ns units), across one wrap of that word (429 s): the trace's figure
+ * for a wait, never its bound - both bounds are relative timers, which a
+ * change of the system time does not move (hcd_enum.c). */
+ULONG XhciEnumElapsedMs(ULONG startLow, ULONG nowLow);
+/* 1 when a port's machine is at rest - nothing in flight: Empty, Present
+ * (its PDOs created, or a send-back pending, which XhciEnumHoldInFlight
+ * covers), Bound, Gone or Failed. */
+ULONG XhciEnumAtRest(ULONG state);
+
+/* 1 while a send-back is in flight for the settle: asked for and not yet
+ * acted on, or begun with a companion port that has not yet reported the
+ * device's connect. A hold with no companion is the device's end there. */
+ULONG XhciEnumHoldInFlight(ULONG pending, ULONG kind, ULONG companion,
+                           ULONG connectSeen);
+
+/* 1 when a pass may declare the bus settled: it enumerated (the root hub
+ * started, the controller powered and not halted), and at its end no root
+ * port change is owed, no hub port look is owed, and nothing is in
+ * flight. Owed work on a port deferred for the settle does not count. */
+ULONG XhciEnumSettleQuiet(ULONG enumerated, ULONG rootPending,
+                          ULONG hubPending, ULONG inFlight);
+
+/* 1 when the settled generation `done` has reached `target`, across the
+ * counter's wrap (a generation more than half the range behind is not
+ * reached). */
+ULONG XhciEnumSettleReached(ULONG done, ULONG target);
+
+/* A hub's devnode disabled (task 33.4; design record 13 sections 5.7 and
+ * 10.11): when its FDO is removed, a child PDO still listed that PnP was
+ * shown and has since removed is one PnP has forgotten with the hub's
+ * subtree - 1 when the PDO's flags say so. Such a PDO is never carried
+ * again: a hub FDO started on that PDO later cycles its port, so the
+ * device comes back as a new PDO at the same instance id. */
+ULONG XhciEnumLetGo(ULONG listed, ULONG reported, ULONG removeReceived);
+
+/* 1 when a relations answer for the parent `answering` (0 the root hub,
+ * else the hub PDO's serial) carries a listed PDO presented under
+ * `parentSerial`: its own children, never one PnP let go of. */
+ULONG XhciEnumAnswerCarries(ULONG parentSerial, ULONG answering,
+                            ULONG letGo);
+
+
 #endif /* XHCI_ENUM_H */

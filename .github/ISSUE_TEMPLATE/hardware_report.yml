@@ -58,9 +58,26 @@ body:
     id: driver-version
     attributes:
       label: Driver version
-      placeholder: "the four-part number from readme.txt, e.g. 1.2.0.0"
+      placeholder: "the four-part number from readme.txt, e.g. 2.0.0.0"
     validations:
       required: true
+
+  - type: dropdown
+    id: usb-extras
+    attributes:
+      label: Other USB software on Windows 98 SE or ME
+      description: From 2.0.0.0 the driver replaces Windows' own USB port and hub drivers and needs no USB 2.0 stack; on Windows 98 SE, storage still needs NUSB's mass-storage files.
+      options:
+        - "Windows 98 SE: nothing extra (a stock install)"
+        - "Windows 98 SE: NUSB (any version)"
+        - "Windows 98 SE: only NUSB's mass-storage files"
+        - "Windows 98 SE: SweetLow's USB 2.0 stack (Windows 98 QuickInstall)"
+        - "Windows ME: SweetLow's USB 2.0 stack"
+        - "Windows ME: nothing extra (a stock install)"
+        - "Windows 2000, XP, Vista or 7: nothing extra"
+        - Not sure
+    validations:
+      required: false
 
   - type: textarea
     id: qualifier
@@ -101,7 +118,6 @@ body:
         two is still worth reporting. They identify the controller, its
         capabilities, its interrupt pin and its ports - which is most of what
         makes one machine's result transferable to another.
-      render: text
     validations:
       required: false
 
@@ -111,8 +127,11 @@ body:
       label: What you plugged in, and what it did
       description: |
         Devices and speeds, hubs and how deep, anything that behaved oddly. Worth
-        naming: keyboards and mice (Low Speed), flash drives (High Speed), USB
-        Ethernet adapters, audio devices, and any hub between them and the machine.
+        naming: keyboards and mice (Low Speed), flash drives (High Speed),
+        SuperSpeed (USB 3) drives and SSD enclosures - and whether Device Manager
+        shows them as "xHCI98 USB Attached SCSI Storage" (UAS) - USB Ethernet
+        adapters, audio devices, and any hub between them and the machine,
+        USB 2.0 or USB 3.
     validations:
       required: false
 

@@ -28,12 +28,13 @@
  *
  * The hub answers are the bus's truth within what the structures can carry:
  * a SuperSpeed device's Speed reads High Speed in the _EX form, the ceiling
- * that interface has (section 8.4). External hubs are objects inside the bus
- * (Phase 27) with no devnode and no door of their own, so DeviceIsHub is
- * FALSE everywhere - a served hub on a root port reads as a connected
- * device until hub traversal exists - and a composite the bus
+ * that interface has (section 8.4). Since task 33.4 (section 10.11) every
+ * external hub with a PDO is a devnode with a door of its own - its FDO
+ * answers the same set for its own ports, \DosDevices\XHCI98HUB<serial> -
+ * and a connection to it reads DeviceIsHub TRUE with that name; a hub that
+ * has no PDO reads as a connected device, as before. A composite the bus
  * splits is one connection whose driver key is its first function's (section
- * 8.10, the two rows bound to this task).
+ * 8.10, the two rows bound to task 26-A.8).
  *
  * Every structure is written byte by byte at the offsets of usbioctl.h's
  * #pragma pack(1) layouts and usbuser.h's, because the Windows 2000 DDK the
@@ -148,7 +149,27 @@ typedef struct _HCD_DOOR_CONN {
     PDEVICE_OBJECT Pdo;             /* referenced, when asked for          */
     ULONG ConfigBytes;              /* copied, when asked for              */
     ULONG ConfigTotal;
+    ULONG IsHub;                    /* a hub whose door exists: its name
+                                     * is XHCI98HUB<HubSerial> (33.4)     */
+    ULONG HubSerial;
 } HCD_DOOR_CONN, *PHCD_DOOR_CONN;
+
+/* The node a hub IOCTL is answered for (task 33.4): the root hub (Root,
+ * Parent 0, the controller's ports), or an external hub's FDO - its PDO's
+ * Serial as Parent, its declared port count, and its hub object's index,
+ * which places its ports (XhciHubPortLocation). Copied under PdoListLock
+ * at the request's start: a dormant hub's revival rewrites them. */
+typedef struct _HCD_DOOR_NODE {
+    ULONG Root;
+    ULONG Parent;
+    ULONG Ports;
+    ULONG HubIndex;
+    XHCI_HUB_DESC Desc;             /* an external hub's, as below      */
+    ULONG BusPowered;
+    ULONG SpeedClass;
+    ULONG MttCapable;
+    ULONG MttOn;
+} HCD_DOOR_NODE, *PHCD_DOOR_NODE;
 
 /* ----------------------------------------------------------------------- */
 /* Bytes and names                                                          */
@@ -505,6 +526,77 @@ VOID HcdDoorRootHubRemove(PHCD_ROOTHUB_FDO fdo, PHCD_CONTROLLER hc)
         hc->RootHubName[0] = 0;
         KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
     }
+}
+
+/*
+ * An external hub's names, at its FDO's start (task 33.4; design record 13
+ * section 10.11): \DosDevices\XHCI98HUB<serial> on the hub PDO's own name
+ * (\Device\XHCI98DEV<serial>, hcd_pdo.c), the hub interface, SymbolicName -
+ * what the root hub's are, for one hub - and HubLinked, which lets the
+ * parent's GET_NODE_CONNECTION_NAME return the name and report the
+ * connection a hub. `hc` may be NULL (an orphaned hub PDO). IRQL:
+ * PASSIVE_LEVEL.
+ */
+VOID HcdDoorHubStart(PHCD_HUB_FDO fdo, PHCD_CONTROLLER hc)
+{
+    PHCD_DEVICE_PDO pdo;
+    WCHAR target[40];
+    WCHAR link[40];
+    KIRQL oldIrql;
+    ULONG chars;
+
+    pdo = (PHCD_DEVICE_PDO)fdo->Pdo->DeviceExtension;
+    chars = hcdFormatName(link, 40, hcdDosDevices, L"XHCI98HUB", pdo->Serial);
+    if (chars == 0 ||
+        hcdFormatName(target, 40, hcdDevice, L"XHCI98DEV", pdo->Serial) ==
+            0) {
+        return;
+    }
+    if (!fdo->LinkMade && NT_SUCCESS(hcdLink(link, target, 1))) {
+        fdo->LinkMade = 1;
+    }
+    hcdInterfaceOn(fdo->Pdo, &hcdGuidHub, &fdo->Interface,
+                   &fdo->InterfaceOn);
+    if (!fdo->LinkMade) {
+        return;
+    }
+    hcdWriteSymbolicName(fdo->Pdo, link, chars);
+    if (hc == NULL) {
+        return;
+    }
+    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    pdo->HubLinked = 1;
+    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+}
+
+/* IRQL: PASSIVE_LEVEL. */
+VOID HcdDoorHubStop(PHCD_HUB_FDO fdo)
+{
+    hcdInterfaceOff(&fdo->Interface, &fdo->InterfaceOn, 0);
+}
+
+/* At the hub FDO's remove; `hc` may be NULL. IRQL: PASSIVE_LEVEL. */
+VOID HcdDoorHubRemove(PHCD_HUB_FDO fdo, PHCD_CONTROLLER hc)
+{
+    PHCD_DEVICE_PDO pdo;
+    WCHAR link[40];
+    KIRQL oldIrql;
+
+    pdo = (PHCD_DEVICE_PDO)fdo->Pdo->DeviceExtension;
+    if (hc != NULL) {
+        KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+        pdo->HubLinked = 0;
+        KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    } else {
+        pdo->HubLinked = 0;
+    }
+    hcdInterfaceOff(&fdo->Interface, &fdo->InterfaceOn, 1);
+    if (fdo->LinkMade &&
+        hcdFormatName(link, 40, hcdDosDevices, L"XHCI98HUB", pdo->Serial) !=
+            0) {
+        (VOID)hcdLink(link, NULL, 0);
+    }
+    fdo->LinkMade = 0;
 }
 
 /* IRP_MJ_CREATE, CLOSE and CLEANUP on either FDO: no work and no access
@@ -1009,8 +1101,9 @@ static VOID hcdDoorDeviceLocked(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 }
 
 /*
- * A root port whose device is a hub the bus serves: no PDO stands for it
- * (design record 13 section 10.3), so the device record answers (Codex
+ * A root port whose device is a hub the bus serves with no PDO standing for
+ * it (its creation failed; task 33.4 gives every other hub one), so the
+ * device record answers (Codex
  * review of 23e7715, finding 9). It is read under the controller lock and
  * referenced there unless already Gone - the teardown sets Gone under that
  * lock before the record leaves the port, and the record's freeing waits
@@ -1066,17 +1159,19 @@ static ULONG hcdDoorHubConnection(PHCD_CONTROLLER hc, ULONG port,
 }
 
 /*
- * What the bus knows about root port `port`: the PDO standing for its device
- * (a lone device PDO, or a split device's first function, whose Group is its
- * own Serial), copied under PdoListLock and, for the open pipes, the
- * controller lock inside it - the order of design record 13 section 5.4.
- * `config`, when not NULL, receives up to `configCap` bytes of the whole
- * configuration descriptor. `wantPdo` returns the PDO referenced. IRQL:
- * <= DISPATCH_LEVEL.
+ * What the bus knows about the device at port location `location` presented
+ * under `parent` (0 the root hub, else a hub PDO's Serial; task 33.4): the
+ * PDO standing for it (a lone device PDO, a hub's PDO, or a split device's
+ * first function, whose Group is its own Serial), copied under PdoListLock
+ * and, for the open pipes, the controller lock inside it - the order of
+ * design record 13 section 5.4. `config`, when not NULL, receives up to
+ * `configCap` bytes of the whole configuration descriptor. `wantPdo`
+ * returns the PDO referenced. A root port whose hub has no PDO falls back
+ * to the device record (hcdDoorHubConnection). IRQL: <= DISPATCH_LEVEL.
  */
-static VOID hcdDoorConnection(PHCD_CONTROLLER hc, ULONG port,
-                              PHCD_DOOR_CONN c, PUCHAR config,
-                              ULONG configCap, ULONG wantPdo)
+static VOID hcdDoorConnection(PHCD_CONTROLLER hc, ULONG parent,
+                              ULONG location, PHCD_DOOR_CONN c,
+                              PUCHAR config, ULONG configCap, ULONG wantPdo)
 {
     PHCD_DEVICE_PDO pdo;
     PHCD_USB_DEVICE dev;
@@ -1086,19 +1181,26 @@ static VOID hcdDoorConnection(PHCD_CONTROLLER hc, ULONG port,
     KIRQL lockIrql;
 
     hcdZero((PUCHAR)c, sizeof(*c));
+    if (location == 0) {
+        return;
+    }
     KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
     for (pdo = hc->DevicePdos; pdo != NULL; pdo = pdo->Next) {
-        if (pdo->Port == port && pdo->Group == pdo->Serial) {
+        if (pdo->Port == location && pdo->Group == pdo->Serial &&
+            pdo->ParentSerial == parent) {
             break;
         }
     }
     if (pdo == NULL) {
         KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
-        if (hcdDoorHubConnection(hc, port, c, config, configCap)) {
+        if (parent != 0) {
             return;
         }
-        if (port >= 1 && port <= XHCI_MAX_ROOT_PORTS &&
-            hc->Ports[port - 1].Enum.State == XHCI_ENUM_FAILED) {
+        if (hcdDoorHubConnection(hc, location, c, config, configCap)) {
+            return;
+        }
+        if (location <= XHCI_MAX_ROOT_PORTS &&
+            hc->Ports[location - 1].Enum.State == XHCI_ENUM_FAILED) {
             c->Status = HCD_CONN_FAILED_ENUM;
         }
         return;
@@ -1107,6 +1209,8 @@ static VOID hcdDoorConnection(PHCD_CONTROLLER hc, ULONG port,
     c->Status = HCD_CONN_CONNECTED;
     hcdCopy(c->DeviceDesc, pdo->DeviceDesc, sizeof(c->DeviceDesc));
     c->SpeedClass = pdo->SpeedClass;
+    c->IsHub = (pdo->Hub && pdo->HubLinked) ? 1UL : 0UL;
+    c->HubSerial = pdo->Serial;
     dev = pdo->Device;
     source = NULL;
     sourceBytes = 0;
@@ -1133,6 +1237,24 @@ static VOID hcdDoorConnection(PHCD_CONTROLLER hc, ULONG port,
         ObReferenceObject(c->Pdo);
     }
     KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+}
+
+/* Connection `port` (1-based) of `node`: 0 for a port the node does not
+ * have, else its location - which is 0 for a hub port the bus does not
+ * manage (past XHCI_HUB_MAX_PORTS), answered as an empty connection. IRQL:
+ * any. */
+static ULONG hcdDoorPortValid(const HCD_DOOR_NODE *node, ULONG port)
+{
+    return port != 0 && port <= node->Ports;
+}
+
+static ULONG hcdDoorLocation(const HCD_DOOR_NODE *node, ULONG port)
+{
+    if (node->Root) {
+        return port;
+    }
+    return XhciHubPortLocation(XHCI_MAX_ROOT_PORTS, HCD_HUB_MAX_PORTS,
+                               node->HubIndex, port);
 }
 
 /* USB_NODE_INFORMATION: a self-powered hub of MaxPorts ports, which the
@@ -1165,9 +1287,13 @@ static NTSTATUS hcdDoorNodeInfo(PHCD_CONTROLLER hc, PUCHAR buf, ULONG outLen,
 
 /* USB_NODE_CONNECTION_INFORMATION and its _EX form, which differ in byte 23:
  * BOOLEAN LowSpeed, or the UCHAR Speed of usb200.h (0 low, 1 full, 2 high -
- * the ceiling). IRQL: <= DISPATCH_LEVEL. */
-static NTSTATUS hcdDoorConnInfo(PHCD_CONTROLLER hc, PUCHAR buf, ULONG inLen,
-                                ULONG outLen, ULONG ex, PULONG_PTR info)
+ * the ceiling). DeviceIsHub is TRUE for a hub whose door exists, whose name
+ * GET_NODE_CONNECTION_NAME then returns (task 33.4). IRQL: <=
+ * DISPATCH_LEVEL. */
+static NTSTATUS hcdDoorConnInfo(PHCD_CONTROLLER hc,
+                                const HCD_DOOR_NODE *node, PUCHAR buf,
+                                ULONG inLen, ULONG outLen, ULONG ex,
+                                PULONG_PTR info)
 {
     HCD_DOOR_CONN c;
     ULONG port;
@@ -1180,10 +1306,11 @@ static NTSTATUS hcdDoorConnInfo(PHCD_CONTROLLER hc, PUCHAR buf, ULONG inLen,
         return STATUS_BUFFER_TOO_SMALL;
     }
     port = hcdGet32(buf, 0);
-    if (port == 0 || port > hcdDoorPorts(hc)) {
+    if (!hcdDoorPortValid(node, port)) {
         return STATUS_INVALID_PARAMETER;
     }
-    hcdDoorConnection(hc, port, &c, NULL, 0, 0);
+    hcdDoorConnection(hc, node->Parent, hcdDoorLocation(node, port), &c,
+                      NULL, 0, 0);
 
     hcdZero(buf + 4, HCD_CONN_INFO_BYTES - 4);
     hcdCopy(buf + 4, c.DeviceDesc, 18);
@@ -1196,7 +1323,7 @@ static NTSTATUS hcdDoorConnInfo(PHCD_CONTROLLER hc, PUCHAR buf, ULONG inLen,
     } else {
         buf[23] = (c.SpeedClass == XHCI_SPEED_LOW) ? 1 : 0;
     }
-    buf[24] = 0;                            /* DeviceIsHub                  */
+    buf[24] = (UCHAR)c.IsHub;               /* DeviceIsHub                  */
     hcdPut16(buf, 25, c.Address);
     /* NumberOfOpenPipes is the device's count however few records fit, so
      * a caller can size its next request from it. */
@@ -1218,9 +1345,14 @@ static NTSTATUS hcdDoorConnInfo(PHCD_CONTROLLER hc, PUCHAR buf, ULONG inLen,
  * enumeration: the device descriptor, and configuration 0 (the one the bus
  * reads, and the one usbui.dll takes bMaxPower from). Anything else - a
  * string above all - would be a control transfer on the device's EP0, which
- * this door does not issue. IRQL: <= DISPATCH_LEVEL.
+ * this door does not issue. bRequest 0 is taken as GET_DESCRIPTOR: every
+ * target's usbui.dll zero-fills the request and sets only ConnectionIndex,
+ * wValue and wLength (UsbItem::GetConfigDescriptor, static, section 8.3),
+ * and refusing it left every device's power "unknown".
+ * IRQL: <= DISPATCH_LEVEL.
  */
-static NTSTATUS hcdDoorDescriptor(PHCD_CONTROLLER hc, PUCHAR buf,
+static NTSTATUS hcdDoorDescriptor(PHCD_CONTROLLER hc,
+                                  const HCD_DOOR_NODE *node, PUCHAR buf,
                                   ULONG inLen, ULONG outLen, PULONG_PTR info)
 {
     HCD_DOOR_CONN c;
@@ -1238,7 +1370,7 @@ static NTSTATUS hcdDoorDescriptor(PHCD_CONTROLLER hc, PUCHAR buf,
     request = buf[5];
     value = (ULONG)buf[6] | ((ULONG)buf[7] << 8);
     length = (ULONG)buf[10] | ((ULONG)buf[11] << 8);
-    if (port == 0 || port > hcdDoorPorts(hc) || request != 6) {
+    if (!hcdDoorPortValid(node, port) || (request != 0 && request != 6)) {
         return STATUS_INVALID_PARAMETER;
     }
     room = outLen - HCD_DESC_REQUEST_BYTES;
@@ -1246,14 +1378,15 @@ static NTSTATUS hcdDoorDescriptor(PHCD_CONTROLLER hc, PUCHAR buf,
         room = length;
     }
     if ((value >> 8) == 2 && (value & 0xFFUL) == 0) {
-        hcdDoorConnection(hc, port, &c, buf + HCD_DESC_REQUEST_BYTES, room,
-                          0);
+        hcdDoorConnection(hc, node->Parent, hcdDoorLocation(node, port), &c,
+                          buf + HCD_DESC_REQUEST_BYTES, room, 0);
         if (c.Status != HCD_CONN_CONNECTED || c.ConfigTotal == 0) {
             return STATUS_INVALID_PARAMETER;
         }
         n = c.ConfigBytes;
     } else if (value == 0x0100UL) {
-        hcdDoorConnection(hc, port, &c, NULL, 0, 0);
+        hcdDoorConnection(hc, node->Parent, hcdDoorLocation(node, port), &c,
+                          NULL, 0, 0);
         if (c.Status != HCD_CONN_CONNECTED) {
             return STATUS_INVALID_PARAMETER;
         }
@@ -1269,7 +1402,8 @@ static NTSTATUS hcdDoorDescriptor(PHCD_CONTROLLER hc, PUCHAR buf,
 /* USB_NODE_CONNECTION_DRIVERKEY_NAME: the connection's devnode's driver
  * key, exactly, for usbui.dll's CM_DRP_DRIVER match (section 8.7 item 5).
  * IRQL: PASSIVE_LEVEL. */
-static NTSTATUS hcdDoorConnDriverKey(PHCD_CONTROLLER hc, PUCHAR buf,
+static NTSTATUS hcdDoorConnDriverKey(PHCD_CONTROLLER hc,
+                                     const HCD_DOOR_NODE *node, PUCHAR buf,
                                      ULONG inLen, ULONG outLen,
                                      PULONG_PTR info)
 {
@@ -1283,10 +1417,11 @@ static NTSTATUS hcdDoorConnDriverKey(PHCD_CONTROLLER hc, PUCHAR buf,
         return STATUS_BUFFER_TOO_SMALL;
     }
     port = hcdGet32(buf, 0);
-    if (port == 0 || port > hcdDoorPorts(hc)) {
+    if (!hcdDoorPortValid(node, port)) {
         return STATUS_INVALID_PARAMETER;
     }
-    hcdDoorConnection(hc, port, &c, NULL, 0, 1);
+    hcdDoorConnection(hc, node->Parent, hcdDoorLocation(node, port), &c, NULL,
+                      0, 1);
     if (c.Pdo == NULL) {
         return STATUS_INVALID_PARAMETER;
     }
@@ -1298,13 +1433,45 @@ static NTSTATUS hcdDoorConnDriverKey(PHCD_CONTROLLER hc, PUCHAR buf,
     return hcdAnswerName(buf, outLen, 8, name, chars, info);
 }
 
+/* USB_NODE_CONNECTION_NAME: a hub's door name, XHCI98HUB<serial>, which
+ * usbui.dll opens as \\.\ plus the name (section 8.3, GetExternalHubName);
+ * the empty name usbhub gives a connection that is not a hub, or a hub with
+ * no door (task 33.4). IRQL: <= DISPATCH_LEVEL. */
+static NTSTATUS hcdDoorConnName(PHCD_CONTROLLER hc,
+                                const HCD_DOOR_NODE *node, PUCHAR buf,
+                                ULONG inLen, ULONG outLen, PULONG_PTR info)
+{
+    HCD_DOOR_CONN c;
+    WCHAR name[24];
+    ULONG port;
+    ULONG chars;
+
+    if (inLen < 4) {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    port = hcdGet32(buf, 0);
+    chars = 0;
+    if (hcdDoorPortValid(node, port)) {
+        hcdDoorConnection(hc, node->Parent, hcdDoorLocation(node, port), &c,
+                          NULL, 0, 0);
+        if (c.IsHub) {
+            chars = hcdFormatName(name, 24, L"", L"XHCI98HUB", c.HubSerial);
+        }
+    }
+    if (chars == 0) {
+        return hcdAnswerName(buf, outLen, 8, L"", 0, info);
+    }
+    return hcdAnswerName(buf, outLen, 8, name, chars, info);
+}
+
 /*
- * IRP_MJ_DEVICE_CONTROL on the root-hub FDO (section 8.3). `hc` is NULL on
- * an orphaned root hub, which answers nothing. RESET_HUB is refused, as
- * section 8.7 allows. IRQL: PASSIVE_LEVEL, the caller inside the root-hub
- * FDO's I/O count.
+ * The hub IOCTLs of section 8.3 for one node, the root hub's or an external
+ * hub's (task 33.4), as `node` describes it: node information, the capabilities and the meaning of 0x220408 are
+ * the node's own; the connection requests are answered alike. RESET_HUB is
+ * refused, as section 8.7 allows. IRQL: PASSIVE_LEVEL.
  */
-NTSTATUS HcdDoorRootHubIoctl(PHCD_CONTROLLER hc, PIRP irp)
+static NTSTATUS hcdDoorNodeIoctl(PHCD_CONTROLLER hc,
+                                 const HCD_DOOR_NODE *node, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
     PUCHAR buf;
@@ -1320,9 +1487,6 @@ NTSTATUS HcdDoorRootHubIoctl(PHCD_CONTROLLER hc, PIRP irp)
     inLen = stack->Parameters.DeviceIoControl.InputBufferLength;
     outLen = stack->Parameters.DeviceIoControl.OutputBufferLength;
     info = 0;
-    if (hc == NULL) {
-        return HcdCompleteIrp(irp, STATUS_DEVICE_NOT_CONNECTED, 0);
-    }
     hc->DoorRequests++;
     if (buf == NULL) {
         return HcdCompleteIrp(irp, STATUS_BUFFER_TOO_SMALL, 0);
@@ -1330,35 +1494,35 @@ NTSTATUS HcdDoorRootHubIoctl(PHCD_CONTROLLER hc, PIRP irp)
 
     switch (stack->Parameters.DeviceIoControl.IoControlCode) {
     case HCD_IOCTL_NODE_INFO:
-        status = hcdDoorNodeInfo(hc, buf, outLen, &info);
+        if (node->Root) {
+            status = hcdDoorNodeInfo(hc, buf, outLen, &info);
+        } else if (outLen < XHCI_HUB_NODE_INFO_BYTES) {
+            status = STATUS_BUFFER_TOO_SMALL;
+        } else {
+            XhciHubNodeInfo(&node->Desc, node->BusPowered, buf);
+            info = XHCI_HUB_NODE_INFO_BYTES;
+            status = STATUS_SUCCESS;
+        }
         break;
 
     case HCD_IOCTL_CONN_INFO:
-        status = hcdDoorConnInfo(hc, buf, inLen, outLen, 0, &info);
+        status = hcdDoorConnInfo(hc, node, buf, inLen, outLen, 0, &info);
         break;
 
     case HCD_IOCTL_CONN_INFO_EX:
-        status = hcdDoorConnInfo(hc, buf, inLen, outLen, 1, &info);
+        status = hcdDoorConnInfo(hc, node, buf, inLen, outLen, 1, &info);
         break;
 
     case HCD_IOCTL_CONN_DESCRIPTOR:
-        status = hcdDoorDescriptor(hc, buf, inLen, outLen, &info);
+        status = hcdDoorDescriptor(hc, node, buf, inLen, outLen, &info);
         break;
 
     case HCD_IOCTL_CONN_NAME:
-        /* No connection reports itself a hub (DeviceIsHub is FALSE, a
-         * served hub included: it has no devnode and no door a caller
-         * could open by name - Codex review of d54eef0, finding 3): the
-         * empty name usbhub gives a connection that is not a hub. */
-        if (inLen < 4) {
-            status = STATUS_BUFFER_TOO_SMALL;
-            break;
-        }
-        status = hcdAnswerName(buf, outLen, 8, L"", 0, &info);
+        status = hcdDoorConnName(hc, node, buf, inLen, outLen, &info);
         break;
 
     case HCD_IOCTL_CONN_DRIVERKEY:
-        status = hcdDoorConnDriverKey(hc, buf, inLen, outLen, &info);
+        status = hcdDoorConnDriverKey(hc, node, buf, inLen, outLen, &info);
         break;
 
     case HCD_IOCTL_CONN_ATTRIBUTES:
@@ -1367,11 +1531,12 @@ NTSTATUS HcdDoorRootHubIoctl(PHCD_CONTROLLER hc, PIRP irp)
             break;
         }
         port = hcdGet32(buf, 0);
-        if (port == 0 || port > hcdDoorPorts(hc)) {
+        if (!hcdDoorPortValid(node, port)) {
             status = STATUS_INVALID_PARAMETER;
             break;
         }
-        hcdDoorConnection(hc, port, &c, NULL, 0, 0);
+        hcdDoorConnection(hc, node->Parent, hcdDoorLocation(node, port), &c,
+                          NULL, 0, 0);
         hcdPut32(buf, 4, c.Status);
         hcdPut32(buf, 8, 0);                /* PortAttributes               */
         info = HCD_CONN_ATTR_BYTES;
@@ -1383,7 +1548,10 @@ NTSTATUS HcdDoorRootHubIoctl(PHCD_CONTROLLER hc, PIRP irp)
             status = STATUS_BUFFER_TOO_SMALL;
             break;
         }
-        hcdPut32(buf, 0, 1);                /* HubIs2xCapable               */
+        /* HubIs2xCapable: the root hub, or a High-Speed hub. */
+        hcdPut32(buf, 0,
+                 (node->Root || node->SpeedClass == XHCI_SPEED_HIGH) ? 1UL
+                                                                     : 0UL);
         info = 4;
         status = STATUS_SUCCESS;
         break;
@@ -1393,7 +1561,10 @@ NTSTATUS HcdDoorRootHubIoctl(PHCD_CONTROLLER hc, PIRP irp)
             status = STATUS_BUFFER_TOO_SMALL;
             break;
         }
-        hcdPut32(buf, 0, HCD_HUB_CAPS_EX_ROOT_HS);
+        hcdPut32(buf, 0,
+                 node->Root ? HCD_HUB_CAPS_EX_ROOT_HS
+                            : XhciHubCapsEx(node->SpeedClass, node->MttCapable,
+                                            node->MttOn));
         info = 4;
         status = STATUS_SUCCESS;
         break;
@@ -1404,4 +1575,57 @@ NTSTATUS HcdDoorRootHubIoctl(PHCD_CONTROLLER hc, PIRP irp)
         break;
     }
     return HcdCompleteIrp(irp, status, NT_SUCCESS(status) ? info : 0);
+}
+
+/*
+ * IRP_MJ_DEVICE_CONTROL on the root-hub FDO (section 8.3). `hc` is NULL on
+ * an orphaned root hub, which answers nothing. IRQL: PASSIVE_LEVEL, the
+ * caller inside the root-hub FDO's I/O count.
+ */
+NTSTATUS HcdDoorRootHubIoctl(PHCD_CONTROLLER hc, PIRP irp)
+{
+    HCD_DOOR_NODE node;
+
+    if (hc == NULL) {
+        return HcdCompleteIrp(irp, STATUS_DEVICE_NOT_CONNECTED, 0);
+    }
+    node.Root = 1;
+    node.Parent = 0;
+    node.Ports = hcdDoorPorts(hc);
+    node.HubIndex = 0;
+    hcdZero((PUCHAR)&node.Desc, sizeof(node.Desc));
+    node.BusPowered = 0;
+    node.SpeedClass = XHCI_SPEED_HIGH;
+    node.MttCapable = 1;
+    node.MttOn = 1;
+    return hcdDoorNodeIoctl(hc, &node, irp);
+}
+
+/*
+ * IRP_MJ_DEVICE_CONTROL on an external hub's FDO (task 33.4; design record
+ * 13 section 10.11): the same set for the hub's own ports, answered from
+ * the PDOs presented under it. `hc` is NULL on an orphaned hub PDO, which
+ * answers nothing. IRQL: PASSIVE_LEVEL, the caller inside the hub FDO's
+ * I/O count and its PDO's Busy.
+ */
+NTSTATUS HcdDoorHubIoctl(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO hub, PIRP irp)
+{
+    HCD_DOOR_NODE node;
+    KIRQL oldIrql;
+
+    if (hc == NULL) {
+        return HcdCompleteIrp(irp, STATUS_DEVICE_NOT_CONNECTED, 0);
+    }
+    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    node.Root = 0;
+    node.Parent = hub->Serial;
+    node.Ports = hub->HubDesc.Ports;
+    node.HubIndex = hub->HubIndex;
+    node.Desc = hub->HubDesc;
+    node.BusPowered = hub->HubBusPowered;
+    node.SpeedClass = hub->SpeedClass;
+    node.MttCapable = hub->HubMttCapable;
+    node.MttOn = hub->HubMttOn;
+    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    return hcdDoorNodeIoctl(hc, &node, irp);
 }
