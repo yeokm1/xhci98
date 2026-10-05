@@ -35,6 +35,18 @@ Neither has native xHCI support at all so even basic devices like keyboards, mic
 
 This project attempts to fill that gap.
 
+## What's new in 2.1.0.0
+
+`2.1.0.0`, released on 2026-10-05, is the first update of the `2.x` driver. [releases/history.md](releases/history.md) has the full list and the [release notes](docs/using/release-notes.md) the details.
+
+- External hubs appear in Device Manager as "xHCI98 USB Hub", with the devices behind them nested beneath. A USB 3 hub appears twice, the second time as "xHCI98 USB 3.x Hub" for its SuperSpeed half. Each hub has a Power tab.
+- A device with a serial number keeps its Device Manager entry when moved to another port, as under Microsoft's own hub driver.
+- A device that none of Windows' own INFs names is listed under its own product name instead of "USB Device", in Windows 98's Add New Hardware wizard and in Device Manager. Where a Windows INF names the device, its name shows, as over Microsoft's own stack. On Windows 98 SE and ME, characters outside plain ASCII show as `?`.
+- Fixed: on Windows ME, re-enabling the controller with a USB mouse attached hung the machine.
+- Fixed: the root hub's Power tab showed every device's power as unknown.
+- `txtsetup.oem`, so Windows 2000 and XP Setup, and their Recovery Console, can load the driver from a floppy at the F6 prompt (see "Installing Windows 2000 or XP, or using the Recovery Console" below).
+- `XhciFastPollFsLs`, an opt-in registry value for polling a Low- or Full-Speed mouse above 1000 Hz with SweetLow's hidusbf (see "Tuning" below). Untested ground.
+
 ## From 1.2.0.0 to 2.0.0.0
 
 Up to `1.2.0.0`, `xhci98.sys` was a miniport underneath Windows' own `usbport.sys`. That stack predates USB 3.0, so the driver ran the controller's USB 2.0 ports only and a USB 3.0 device fell back to High Speed.
@@ -45,25 +57,13 @@ In Device Manager the controller is "xHCI98 USB 3.x eXtensible Host Controller",
 
 The [roadmap](docs/contributing/roadmap-hcd.md) has the phases this took and [design record 13](docs/contributing/design/13-superspeed-hcd.md) the design.
 
-## What's new in 2.1.0.0
-
-`2.1.0.0`, released on 2026-10-05, is the first update of the `2.x` driver. [releases/history.md](releases/history.md) has the full list and the [release notes](docs/using/release-notes.md) the details.
-
-- External hubs appear in Device Manager as "xHCI98 USB Hub", with the devices behind them nested beneath. A USB 3 hub appears twice, the second time as "xHCI98 USB 3.x Hub" for its SuperSpeed half. Each hub has a Power tab.
-- A device with a serial number keeps its Device Manager entry when moved to another port, as under Microsoft's own hub driver.
-- A device that none of Windows' own INFs names is listed under its own product name instead of "USB Device", in Windows 98's Add New Hardware wizard and in Device Manager; where a Windows INF names the device, its name shows, as over Microsoft's own stack. On Windows 98 SE and ME, characters outside plain ASCII show as `?`.
-- Fixed: on Windows ME, re-enabling the controller with a USB mouse attached hung the machine.
-- Fixed: the root hub's Power tab showed every device's power as unknown.
-- `txtsetup.oem`, so Windows 2000 and XP Setup, and their Recovery Console, can load the driver from a floppy at the F6 prompt (see "Installing Windows 2000 or XP, or using the Recovery Console" below).
-- `XhciFastPollFsLs`, an opt-in registry value for polling a Low- or Full-Speed mouse above 1000 Hz with SweetLow's hidusbf (see "Tuning" below). Untested ground.
-
-Each item above except `XhciFastPollFsLs` was read in QEMU virtual machines, on the `2.1.0.0` code before the cut; the [release notes](docs/using/release-notes.md)' "Targets and their standing" says on which systems. QEMU models only a USB 1.1 Full-Speed hub, so a High-Speed hub's entry and a USB 3 hub's "xHCI98 USB 3.x Hub" were read by the owner on real hardware after the cut, and work.
-
 ## SuperSpeed and UAS
 
 <img src="images/xhci98-flash-speed-test.jpg" width="800">
 
-My ThinkPad P14s Gen 1 under Windows 98 SE with NUSB, on `2.0.0.0`: the MSSU10-128GSR flash drive at SuperSpeed through `xhciuas.sys`, with Device Manager showing the controller, its root hub and the UAS storage device, and the drive listed under Unplug or Eject Hardware. ATTO Disk Benchmark (Direct I/O) reads about 201 to 215 MB/s write and 196 to 221 MB/s read from 512 KB transfers upward, against about 34 MB/s for `1.2.0.0` at High Speed on the same drive.
+My ThinkPad P14s Gen 1 under Windows 98 SE with NUSB, on `2.0.0.0`: the MSSU10-128GSR flash drive at SuperSpeed through `xhciuas.sys`. Device Manager shows the controller, its root hub and the UAS storage device, and the drive is listed under Unplug or Eject Hardware.
+
+ATTO Disk Benchmark (Direct I/O) reads about 201 to 215 MB/s write and 196 to 221 MB/s read from 512 KB transfers upward. `1.2.0.0` managed about 34 MB/s at High Speed on the same drive.
 
 Some things to know:
 
@@ -75,8 +75,12 @@ Some things to know:
 
 The prerequisites per OS:
 
-- **Windows 98 SE**: Install [NUSB 3.3 or 3.6](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) if you want USB storage, UAS included. [SweetLow's stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip) also works but has no storage half: unzip, right-click the `USB2.INF` at its root then install. With SweetLow's stack alone, a USB stick shows Code 28 and a UAS drive Code 2, so storage still needs NUSB's storage files (below). With neither, HID and audio devices work but storage has no driver. Reboot if requested after installing either.
-- **Windows ME**: Use [SweetLow's stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip). ME uses its own storage files, not NUSB's: it copies them from its own installation files, with no prompt, the first time an ordinary USB stick is installed. Until then a UAS drive shows Code 2 (see "Known limitations/issues").
+- **Windows 98 SE**:
+  - Install [NUSB 3.3 or 3.6](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) if you want USB storage, UAS included.
+  - [SweetLow's stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip) also works but has no storage half: unzip, right-click the `USB2.INF` at its root then install. With it alone, a USB stick shows Code 28 and a UAS drive Code 2, so storage still needs NUSB's storage files (below).
+  - With neither, HID and audio devices work but storage has no driver.
+  - Reboot if requested after installing either.
+- **Windows ME**: Use [SweetLow's stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip). ME uses its own storage files, not NUSB's. It copies them from its own installation files, with no prompt, the first time an ordinary USB stick is installed. Until then a UAS drive shows Code 2 (see "Known limitations/issues").
 - **Windows 2000 SP4, XP SP3 x86**: Nothing to install.
 - **Windows XP SP2 x64, Vista SP2 and 7 SP1 (x86/x64)**: Nothing to install either. On **Vista x64 and 7 x64**, driver signature enforcement has to be disabled as this driver is not signed.
 
@@ -129,11 +133,27 @@ readme.txt     the release notes in plain text
 5. It installs as "xHCI98 USB 3.x eXtensible Host Controller" with "xHCI98 USB 3.x Root Hub" underneath it, and neither should carry a warning mark. Windows 98 SE may ask for its CD for `usbd.sys`.
 6. Reboot if requested.
 7. Plug in a UAS disk, and when the wizard asks for "xHCI98 USB Attached SCSI Storage", point it at the same directory. No restart is needed for `xhciuas.sys`.
-8. An external hub installs as "xHCI98 USB Hub" from the driver already installed. On Windows 98 SE and 2000 it installed with nothing to answer; on Windows XP every newly plugged hub brings the Found New Hardware wizard and the unsigned-driver warning (Continue Anyway).
+8. An external hub installs as "xHCI98 USB Hub" from the driver already installed. On Windows 98 SE and 2000 it installs with nothing to answer. On Windows XP every newly plugged hub brings the Found New Hardware wizard and the unsigned-driver warning (Continue Anyway).
 
 ### Installing Windows 2000 or XP, or using the Recovery Console
 
-On a machine whose keyboard or install medium is on the xHCI controller, copy the files of `release-x86\` (`release-x64\` for XP x64) to the root of a floppy, press F6 when text-mode Setup offers it, press S and pick "xHCI98 USB 3.x Host Controller". The same floppy serves the Recovery Console of Windows 2000 and XP: press F6 as for an install, then R at Setup's Welcome screen (on Windows 2000, then C for the console), and the USB keyboard logs in and types commands. Pressing F6 needs the BIOS's own USB keyboard support, and a UAS disk is not usable until GUI-mode Setup; a plain USB flash stick is. A USB drive present at the partition screen takes `C:`; unplug the USB drives you do not need, or Windows installs to the next letter (XP x64 went to `E:` in a test). On Windows 2000, plug the USB keyboard and stick in before Setup starts. To install Windows XP and XP x64, have a PS/2 keyboard or a laptop's built-in keyboard at hand: later in Setup the USB keyboard does not work until a step that first asks about this unsigned driver (see "Known limitations/issues"); the Recovery Console runs in text mode throughout and is not affected. Read in QEMU virtual machines only: text mode with a USB keyboard and stick on Windows 2000 and XP SP3, and the Recovery Console on both, logged in and `dir` run with the USB keyboard alone, on the `2.1.0.0` code; XP SP3 and XP x64 SP2 installed to the desktop this way on the build before it. A repair install, Windows 2000's Emergency Repair Disk and XP's Automated System Recovery were not tried. The [release notes](docs/using/release-notes.md) have the limits.
+This is for a machine whose keyboard or install medium is on the xHCI controller.
+
+1. Copy the files of `release-x86\` (`release-x64\` for XP x64) to the root of a floppy.
+2. Press F6 when text-mode Setup offers it.
+3. Press S and pick "xHCI98 USB 3.x Host Controller".
+
+The same floppy serves the Recovery Console of Windows 2000 and XP. Press F6 as for an install, then R at Setup's Welcome screen (on Windows 2000, then C for the console). The USB keyboard logs in and types commands.
+
+Things to know:
+
+- Pressing F6 needs the BIOS's own USB keyboard support.
+- A UAS disk is not usable until GUI-mode Setup; a plain USB flash stick is.
+- A USB drive present at the partition screen takes `C:`. Unplug the USB drives you do not need, or Windows installs to the next letter.
+- On Windows 2000, plug the USB keyboard and stick in before Setup starts.
+- To install Windows XP and XP x64, have a PS/2 keyboard or a laptop's built-in keyboard at hand. Later in Setup the USB keyboard does not work until a step that first asks about this unsigned driver (see "Known limitations/issues"). The Recovery Console runs in text mode throughout and is not affected.
+
+The [release notes](docs/using/release-notes.md) have the limits.
 
 <img src="images/xhci98-driver-info.jpg" width="800">
 
@@ -153,13 +173,21 @@ On every system, update the "USB 2.0 eXtensible Host Controller (xhci98)" entry 
   5. Each USB device is found once more as new hardware; let Windows install it. It may ask for the CD again.
 
   If you already updated in place and got the blue screen, restart: the `2.y.y.y` driver comes up on its own.
-- **Windows 98 SE with SweetLow's stack**: Update Driver, "Display a list of all the drivers in a specific location", Have Disk -> the `release-x86\` directory, pick "xHCI98 USB 3.x eXtensible Host Controller". Windows does not ask you to restart, but you must: shut down and switch on again straight away. Until you do, USB devices stop working and Windows may respond slowly. After the restart each USB device is found once more as new hardware.
-- **Windows ME**: not tested. ME runs the same USB 2.0 stack as Windows 98 SE with SweetLow's, so follow that route above, restart included.
-- **Windows 2000**: Driver -> Update Driver -> "Display a list of the known drivers" -> Have Disk -> the `release-x86\` directory. Windows lists three models: pick "xHCI98 USB 3.x eXtensible Host Controller", the first, not the Root Hub or the storage entry. It starts at once with no restart; at your next restart Windows may ask for one more, say Yes.
-- **Windows XP**: Driver -> Update Driver: "No, not this time", "Install from a list or specific location", "Don't search. I will choose the driver to install", Have Disk -> the package directory, "xHCI98 USB 3.x eXtensible Host Controller", Continue Anyway. A second wizard follows for "xHCI98 USB 3.x Root Hub": "No, not this time", "Install the software automatically", Continue Anyway, Finish. No restart.
-- **Windows Vista and 7**: Update Driver Software -> "Browse my computer for driver software" -> "Let me pick from a list of device drivers on my computer" -> Have Disk -> the package directory -> "xHCI98 USB 3.x eXtensible Host Controller" -> "Install this driver software anyway". Do not just type the folder into the search box: Windows answers that the best driver is already installed and keeps the old one. No restart.
+- **Windows 98 SE with SweetLow's stack**: Update Driver, "Display a list of all the drivers in a specific location", Have Disk -> the `release-x86\` directory, pick "xHCI98 USB 3.x eXtensible Host Controller".
 
-These steps were tested on Windows 98 SE (NUSB and SweetLow), 2000, XP SP3 and 32-bit 7, in virtual machines. On XP x64, Vista and 7 x64 the same steps apply, pointed at `release-x64\` on the 64-bit systems; they have not been tested as an upgrade there.
+  Windows does not ask you to restart, but you must: shut down and switch on again straight away. Until you do, USB devices stop working and Windows may respond slowly. After the restart each USB device is found once more as new hardware.
+- **Windows ME**: ME runs the same USB 2.0 stack as Windows 98 SE with SweetLow's, so follow that route above, restart included.
+- **Windows 2000**: Driver -> Update Driver -> "Display a list of the known drivers" -> Have Disk -> the `release-x86\` directory.
+
+  Windows lists three models: pick "xHCI98 USB 3.x eXtensible Host Controller", the first, not the Root Hub or the storage entry. It starts at once with no restart. At your next restart Windows may ask for one more; say Yes.
+- **Windows XP**: Driver -> Update Driver: "No, not this time", "Install from a list or specific location", "Don't search. I will choose the driver to install", Have Disk -> the package directory, "xHCI98 USB 3.x eXtensible Host Controller", Continue Anyway.
+
+  A second wizard follows for "xHCI98 USB 3.x Root Hub": "No, not this time", "Install the software automatically", Continue Anyway, Finish. No restart.
+- **Windows Vista and 7**: Update Driver Software -> "Browse my computer for driver software" -> "Let me pick from a list of device drivers on my computer" -> Have Disk -> the package directory -> "xHCI98 USB 3.x eXtensible Host Controller" -> "Install this driver software anyway". No restart.
+
+  Do not just type the folder into the search box: Windows answers that the best driver is already installed and keeps the old one.
+
+On XP x64, Vista x64 and 7 x64 the same steps apply, pointed at `release-x64\`.
 
 After upgrading you can delete the `1.2.0.0` virtual-hub values `XhciVirtualHSHub`, `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid` from the controller's driver key (see "Tuning" below for where it is). They have no effect under `2.y.y.y`, so leaving them is harmless too.
 
@@ -167,15 +195,22 @@ After the upgrade every device is a new Device Manager entry, so a setting kept 
 
 ### Updating from 2.0.0.0
 
-Install over it with Update Driver on "xHCI98 USB 3.x eXtensible Host Controller", pointed at the `release-x86\` or `release-x64\` directory. No file needs renaming, since neither `2.x` release uses NUSB's `usbport.sys`. Read in QEMU virtual machines on every system:
+Install over it with Update Driver on "xHCI98 USB 3.x eXtensible Host Controller", pointed at the `release-x86\` or `release-x64\` directory. No file needs renaming, since neither `2.x` release uses NUSB's `usbport.sys`.
 
-- **Windows 98 SE and ME: restart afterwards, although Windows does not ask.** The new file waits to replace the old one at the next start, and until then `2.0.0.0` keeps running. Under SweetLow's stack the controller showed a problem for a minute or two after Finish; on ME it shows one until the restart, while the devices keep working.
+- **Windows 98 SE and ME: restart afterwards, although Windows does not ask.** The new file waits to replace the old one at the next start, and until then `2.0.0.0` keeps running. Under SweetLow's stack the controller may show a problem for a minute or two after Finish. On ME it shows one until the restart, while the devices keep working.
 - **Windows 2000: use Have Disk.** Letting Windows search answers that a suitable driver is already installed and keeps `2.0.0.0`. Use "Display a list of the known drivers" -> Have Disk, as in the steps above.
-- **XP, XP x64, Vista and 7**: read with a command-line driver update rather than Device Manager. The update took effect at once with no restart, after one unsigned-driver warning on XP, XP x64 and 32-bit Vista.
+- **XP, XP x64, Vista and 7**: the update takes effect at once with no restart, after one unsigned-driver warning.
 
-Afterwards the root hub's Driver tab still shows `2.0.0.0` (on 98 SE and ME, its date), although it runs the new file. To change it, run Update Driver on "xHCI98 USB 3.x Root Hub" too: on Vista and 7, "Let me pick from a list of device drivers on my computer" and the `2.1.0.0` entry (searching found it on 32-bit Vista and 7 x64, not on 32-bit 7); elsewhere Have Disk.
+Afterwards the root hub's Driver tab still shows `2.0.0.0` (on 98 SE and ME, its date), although it runs the new file. To change it, run Update Driver on "xHCI98 USB 3.x Root Hub" too:
 
-Each device is found once more as new hardware, exactly once: a stick under its serial number, the other devices under a new id. On the NT systems this needs no answer; on Windows 98 SE the wizard runs for each and may ask for the CD for `hidclass.sys`. Let Windows install them. A hidusbf setting on such a device has to be applied again.
+- On Vista and 7, "Let me pick from a list of device drivers on my computer" and the `2.1.0.0` entry. Searching does not always find it.
+- Elsewhere, Have Disk.
+
+Each device is found once more as new hardware, exactly once: a stick under its serial number, the other devices under a new id. Let Windows install them.
+
+- On the NT systems this needs no answer.
+- On Windows 98 SE the wizard runs for each and may ask for the CD for `hidclass.sys`.
+- A hidusbf setting on such a device has to be applied again.
 
 ### Updating xhciuas.sys over an older one
 
@@ -204,7 +239,11 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 
 A value outside `10`-`4000` is replaced by `4000`, not rounded to the nearest limit, so a mistyped `0` cannot turn moderation off. `4000` is the controller's own power-on value.
 
-`160` is the value Linux uses, and every install path writes it. On my P14s with the MSSU10 over UAS (Windows 98 SE, one command at a time), `500`, the value `1.2.0.0` shipped, gave about 181 MB/s at 8 MB transfers, `160` gave 211 MB/s write and 221 MB/s read, and `40` added only 1 to 3% more.
+`160` is the value Linux uses, and every install path writes it. On my P14s with the MSSU10 over UAS (Windows 98 SE, one command at a time), at 8 MB transfers:
+
+- `500`, the value `1.2.0.0` shipped, gave about 181 MB/s.
+- `160` gave 211 MB/s write and 221 MB/s read.
+- `40` added only 1 to 3% more.
 
 Feel free to tune it. Raise it towards `4000` (or delete it) if you get audio stutter or instability under load. At `160`, Full-Speed audio played without stutter on real hardware under Windows 98 SE while a drive was read at full speed.
 
@@ -216,11 +255,29 @@ It is read each time a device enumerates, so unplug and replug the drive after c
 
 ### Polling a Low- or Full-Speed mouse above 1000 Hz
 
-`XhciFastPollFsLs`, new in `2.1.0.0`, is off by default and not written by the install. With SweetLow's hidusbf setting a mouse on a **root port** to its "31 Hz" or "62 Hz" rate, `2` turns those into 2000 and 4000 Hz, and `3` into 4000 and 8000 Hz. A device behind a hub keeps its normal rate. This is outside the xHCI specification: a controller that refuses it is caught, the device runs at its normal rate and `XHCISNAP` counts it as `fastpoll.fallbacks`, but a controller that accepts it and then misbehaves cannot be caught. While it is set, any root-port Low- or Full-Speed device that asks for 16 to 63 ms is polled faster too. It is read when the controller starts, so restart after changing it. It has not been read on any real controller or in any virtual machine yet, so it is untested ground.
+`XhciFastPollFsLs`, new in `2.1.0.0`, is off by default and not written by the install. It works with SweetLow's hidusbf setting a mouse on a **root port** to its "31 Hz" or "62 Hz" rate:
+
+| Value | "31 Hz" becomes | "62 Hz" becomes |
+|---|---|---|
+| `2` | 2000 Hz | 4000 Hz |
+| `3` | 4000 Hz | 8000 Hz |
+
+- A device behind a hub keeps its normal rate.
+- While it is set, any root-port Low- or Full-Speed device that asks for 16 to 63 ms is polled faster too.
+- It is read when the controller starts, so restart after changing it.
+
+This is outside the xHCI specification. A controller that refuses it is caught: the device runs at its normal rate and `XHCISNAP` counts it as `fastpoll.fallbacks`. A controller that accepts it and then misbehaves cannot be caught. It is untested ground.
 
 ### The first report's wait
 
-When the root hub or an external hub first reports its devices after it starts, the driver waits for the devices already plugged in to be ready, so Windows 2000's text-mode Setup sees them. `XhciFirstEnumWaitMs` is the longest wait in milliseconds (default `5000`, `0` turns it off, at most `30000`), and `XhciFirstEnumPortMs` the longest one port may hold it (default `2000`, held to the total). Neither is written by the install. In QEMU virtual machines on Windows 98 SE and 2000, with the defaults, the root hub's first report went 20 to 30 ms after its start with nothing plugged in and 0.3 to 0.9 s after it with a mouse and a stick plugged in.
+When the root hub or an external hub first reports its devices after it starts, the driver waits for the devices already plugged in to be ready, so Windows 2000's text-mode Setup sees them. Neither value is written by the install.
+
+| Value | Meaning | Default |
+|---|---|---|
+| `XhciFirstEnumWaitMs` | The longest wait in milliseconds. `0` turns it off; at most `30000` | `5000` |
+| `XhciFirstEnumPortMs` | The longest one port may hold it, held to the total | `2000` |
+
+With the defaults, the root hub's first report typically comes 20 to 30 ms after its start with nothing plugged in, and 0.3 to 0.9 s after it with a mouse and a stick plugged in.
 
 ### The 1.2.0.0 virtual-hub values
 
