@@ -1,7 +1,10 @@
 # The Advanced tab's bandwidth on Windows Vista and 7
 
 Design record for roadmap-hcd task 34.3 (Phase 34, release `2.1.1.0`).
-Revision 1, 2026-10-05: written before the code, for review. Every fact
+Revision 2, 2026-10-05: written before the code, for review; revision 2
+adds the WMI buffer and status rules, the registration ordering, the
+service key path's copy, zero-bandwidth endpoints and the composite
+limitation. Every fact
 about the stock binaries below is **static** (`legal-provenance.md` section
 4, the rows dated 2026-10-05); nothing in this record has run.
 
@@ -144,6 +147,28 @@ PDOs. Every caller of `hcdDeletePdo` runs at PASSIVE_LEVEL, as
 A registration that fails is logged and counted and the START still
 succeeds: the page loses one row, not the device.
 
+**The ordering.** WMI may send `IRP_MN_REGINFO(_EX)` from inside the
+`REGISTER` call, so the PDO is marked a provider (`WmiRegistered` set)
+**before** `IoWMIRegistrationControl(REGISTER)` is called, and the flag is
+cleared again if the call fails. Deregistration is the reverse:
+`IoWMIRegistrationControl(DEREGISTER)` first, at PASSIVE_LEVEL and under no
+spin lock, then the flag cleared, then whatever the PDO releases. Microsoft
+documents that `DEREGISTER` does not return until the system-control
+requests already sent to the device have completed
+(`IoWMIRegistrationControl`, WDK reference), so no WMI request is inside
+the PDO when its storage goes. Section 7's `Busy` covers the controller
+reads inside one request, not the PDO's lifetime.
+
+**A limitation, for split composite devices.** One registration answers for
+the whole connection, and it lives and dies with the first function's
+devnode. If that function alone is disabled, fails to start or has no
+driver, the connection has no provider and its row is gone from the page,
+although the other functions' pipes may still be open. Moving the provider
+to another started function would also mean moving the door's driver key
+for the connection (`hcdDoorConnection`), which the 98 SE to XP pages read
+too; that is not worth its risk for a figure the page shows. The release
+notes say so.
+
 ## 6. The figure (pure core, `src/xhci_pipe.c`)
 
 `XhciPipePerfInfo` takes the device's speed class, whether it sits behind a
@@ -177,18 +202,26 @@ Per pipe, bits per 32 ms:
   7/6 is the worst-case bit-stuffing factor of USB 2.0, which ReactOS's own
   budget applies too. SuperSpeed has no bit stuffing, and its protocol
   overhead is not modelled.
+- **A zero-bandwidth endpoint counts 0.** An isochronous endpoint with a
+  Max ESIT Payload of 0, which the driver accepts
+  (`XhciPipeZeroBandwidth`), moves no data and is skipped before any
+  overhead is added, at every speed; otherwise an alternate setting with a
+  zero-size endpoint would read 1% on the page.
 - **Where it goes**: isochronous to `AllocedIso`; interrupt to
-  `AllocedInterrupt[n]` with n = min(5, max(0, Interval - 3)), the period in
-  milliseconds as a power of two.
+  `AllocedInterrupt[n]` with n = `Interval` - 3 when `Interval` is 3 or
+  more (compared before the unsigned subtraction) and 0 below, at most 5:
+  the period in milliseconds as a power of two.
 
 The totals: `Total32secBandwidth` 384,000 for a full- or low-speed device and
 12,800,000 for a high-speed or SuperSpeed one; `TotalTtBandwidth` 384,000
 for a full- or low-speed device behind a high-speed hub, else 0.
 
 **Arithmetic.** 32-bit unsigned only (AGENTS.md: no 64-bit). The largest
-single product, a SuperSpeed isochronous ESIT of 49,152 bytes at
-`Interval` 0, is 49,152 * 8 * 256 = 100,663,296 before the shift, inside
-32 bits; a high-speed one is smaller still. Each addition into a field
+single product the specification allows, a SuperSpeed isochronous ESIT of
+49,152 bytes at `Interval` 0, is 49,152 * 8 * 256 = 100,663,296 before the
+shift, inside 32 bits; a high-speed one is smaller still. The driver admits
+SuperSpeed isochronous payloads of at most 4 KiB today, so that bound is a
+margin, not a case that occurs. Each addition into a field
 saturates, and the **sum of all seven** is clamped to
 `Total32secBandwidth` by adding at most the headroom left, so the page's
 `* 100` (at most 1,280,000,000) cannot overflow and no row reads above
@@ -223,33 +256,86 @@ isochronous OUT endpoint of 192 bytes at `bInterval` 1 (`Interval` 3):
 
 ## 7. The WMI requests (executor, `src/hcd_wmi.c`, new)
 
-`IRP_MJ_SYSTEM_CONTROL` on a device PDO, at PASSIVE_LEVEL:
+`IRP_MJ_SYSTEM_CONTROL` on a device PDO, at PASSIVE_LEVEL.
 
-- **Not ours** (`Parameters.WMI.ProviderId` is not this PDO, or the PDO
-  never registered): complete with the IRP's current status and
-  information, untouched. A PDO is the bottom of its stack and has no one
-  to pass it to.
-- **`IRP_MN_REGINFO` (0x08) and `IRP_MN_REGINFO_EX` (0x0B)**: a
-  `WMIREGINFO` with one `WMIREGGUID` (`GUID_USB_WMI_DEVICE_PERF_INFO`,
-  `WMIREG_FLAG_INSTANCE_PDO`, `InstanceCount` 1, `InstanceInfo` the PDO),
-  `RegistryPath` the offset of a counted copy of the service key path
-  `DriverEntry` was given, and no MOF. For `_EX` the PDO is referenced
-  (`ObReferenceObject`) and WMI releases it; for the older form it is not.
-  The Windows 2000 DDK has no `IRP_MN_REGINFO_EX`; the file defines it. A
-  buffer too small for the answer gets the needed size as its first ULONG
-  and `STATUS_BUFFER_TOO_SMALL`. `WMIREGGUID` is 0x1C bytes on x86 and 0x20
-  on amd64 (`InstanceInfo` is a `ULONG_PTR`); the DDK's types are used and
-  their sizes asserted (`C_ASSERT`).
-- **`IRP_MN_QUERY_SINGLE_INSTANCE` and `IRP_MN_QUERY_ALL_DATA`** for this
-  GUID: a `WNODE_SINGLE_INSTANCE` or a `WNODE_ALL_DATA` carrying one
-  instance of 0xE4 bytes, filled by section 6 and section 2's table. A
-  buffer too small gets a `WNODE_TOO_SMALL` with the size needed and
-  `STATUS_SUCCESS`, the WMI convention. Another GUID:
-  `STATUS_WMI_GUID_NOT_FOUND`.
-- **A PDO with no device** (gone, or dormant across a controller stop):
-  `STATUS_NO_SUCH_DEVICE`; the page skips the row.
-- **Every other minor**: `STATUS_INVALID_DEVICE_REQUEST`, as for a block
-  that has no events, no collection control and is read-only.
+**Not ours**: `Parameters.WMI.ProviderId`, compared at pointer width, is
+not this PDO, or `WmiRegistered` is clear (it is set before `REGISTER`, so
+the registration's own `REGINFO` is ours). Complete with the IRP's current
+status and information, untouched; a PDO is the bottom of its stack and has
+no one to pass it to.
+
+**Ours**, minor by minor (`Parameters.WMI.DataPath` is the GUID for the
+data minors; "another GUID" is any other):
+
+| Minor | This GUID | Another GUID |
+|---|---|---|
+| `IRP_MN_QUERY_ALL_DATA` (0x00) | answer, below | `STATUS_WMI_GUID_NOT_FOUND` |
+| `IRP_MN_QUERY_SINGLE_INSTANCE` (0x01) | answer, below | `STATUS_WMI_GUID_NOT_FOUND` |
+| `IRP_MN_CHANGE_SINGLE_INSTANCE` (0x02), `_ITEM` (0x03) | `STATUS_WMI_READ_ONLY` | `STATUS_WMI_GUID_NOT_FOUND` |
+| `IRP_MN_ENABLE_EVENTS` .. `IRP_MN_DISABLE_COLLECTION` (0x04-0x07) | `STATUS_SUCCESS`, nothing done: the block has no events and is not expensive to collect | `STATUS_WMI_GUID_NOT_FOUND` |
+| `IRP_MN_REGINFO` (0x08), `IRP_MN_REGINFO_EX` (0x0B) | answer, below | (no GUID) |
+| `IRP_MN_EXECUTE_METHOD` (0x09) | `STATUS_INVALID_DEVICE_REQUEST`: no methods | `STATUS_WMI_GUID_NOT_FOUND` |
+| any other | `STATUS_INVALID_DEVICE_REQUEST` | |
+
+Each `STATUS_WMI_*` value is checked present in the Windows 2000 DDK's
+`ntstatus.h` when the code is written, and defined locally with its WDK 7.1
+value if not.
+
+**`REGINFO` and `REGINFO_EX`.** A `WMIREGINFO` with one `WMIREGGUID`
+(`GUID_USB_WMI_DEVICE_PERF_INFO`, `WMIREG_FLAG_INSTANCE_PDO`,
+`InstanceCount` 1, `InstanceInfo` the PDO), no MOF, and `RegistryPath` the
+offset of the service key path as a counted string - a USHORT byte count
+followed by the UTF-16 characters - after the `WMIREGGUID`. For `_EX` the
+PDO is referenced (`ObReferenceObject`) and WMI releases it; for the older
+form it is not. The Windows 2000 DDK has no `IRP_MN_REGINFO_EX`; the file
+defines it (0x0B). `WMIREGGUID` is 0x1C bytes on x86 and 0x20 on amd64
+(`InstanceInfo` is a `ULONG_PTR`); the DDK's types are used and their sizes
+asserted (`C_ASSERT`). Buffers: below `sizeof(ULONG)`, `STATUS_BUFFER_TOO_SMALL`
+with `Information` 0 and nothing written; below the whole answer, the size
+needed as its first ULONG, `STATUS_BUFFER_TOO_SMALL`, `Information`
+`sizeof(ULONG)`; otherwise the answer, `STATUS_SUCCESS`, `Information` its
+size.
+
+**The service key path.** `DriverEntry`'s `RegistryPath` is valid only
+during `DriverEntry`, so `DriverEntry` keeps a copy from `HcdPoolAlloc` for
+this alone, freed in the driver's unload, by which time every PDO and so
+every provider is gone. If the copy cannot be allocated, the driver loads
+as before and no PDO registers (`wmi.nopath` in the log): the Advanced tab
+loses its figures, nothing else.
+
+**`QUERY_SINGLE_INSTANCE`.** The buffer holds the request's
+`WNODE_SINGLE_INSTANCE`. Below `sizeof(WNODE_SINGLE_INSTANCE)`, or a buffer
+whose `WnodeHeader.BufferSize` is larger than the IRP's `BufferSize`:
+`STATUS_BUFFER_TOO_SMALL`, `Information` 0, nothing written. An
+`InstanceIndex` other than 0 (static names, one instance):
+`STATUS_WMI_INSTANCE_NOT_FOUND`. The incoming `DataBlockOffset` is kept,
+never moved, and the size needed is `DataBlockOffset` + 0xE4, checked for
+wrap. If the buffer is shorter than that: a `WNODE_TOO_SMALL` over the
+header (`WnodeHeader.BufferSize` = `sizeof(WNODE_TOO_SMALL)`, `Flags` |=
+`WNODE_FLAG_TOO_SMALL`, `SizeNeeded` the size needed), `STATUS_SUCCESS`,
+`Information` `sizeof(WNODE_TOO_SMALL)` - provided the buffer holds a
+`WNODE_TOO_SMALL`, which it does, being at least a `WNODE_SINGLE_INSTANCE`.
+Otherwise the 0xE4 bytes at `DataBlockOffset`, `SizeDataBlock` 0xE4,
+`WnodeHeader.BufferSize` the size needed, `STATUS_SUCCESS`, `Information`
+the size needed.
+
+**`QUERY_ALL_DATA`.** Below `sizeof(WNODE_TOO_SMALL)`:
+`STATUS_BUFFER_TOO_SMALL`, `Information` 0. The answer is one instance:
+`DataBlockOffset` = `sizeof(WNODE_ALL_DATA)` rounded up to 8,
+`InstanceCount` 1, `WNODE_FLAG_FIXED_INSTANCE_SIZE` set and
+`FixedInstanceSize` 0xE4, `OffsetInstanceNameOffsets` 0 (WMI supplies the
+names of a PDO-named block), and the size needed `DataBlockOffset` + 0xE4.
+A shorter buffer gets the `WNODE_TOO_SMALL` as above; otherwise
+`WnodeHeader.BufferSize` and `Information` are the size needed, with
+`STATUS_SUCCESS`. The Advanced tab never sends this minor, so the host
+tests (section 10) are its only check.
+
+The WNODE layouts are the same on x86 and amd64; their fills are written as
+pure functions over a byte buffer beside section 6's, so every rule above
+is host-tested.
+
+**A PDO with no device** (gone, or dormant across a controller stop): the
+two queries return `STATUS_NO_SUCH_DEVICE`; the page skips the row.
 
 **The data's capture** is `hcdDoorConnection`'s order (design record 13
 section 5.4): the PDO's device record taken under `PdoListLock` with its
@@ -259,11 +345,11 @@ reference raised, then the pipes read under the controller lock as
 both locks are released. Streams are bulk and never periodic; they are not
 in `Pipes[]` and are not read.
 
-**The dispatch's own lifetime.** The handler raises the PDO's `Busy` before
-it reads `Controller`, as `hcd_urb.c`'s dispatches do, so every wait that
-covers a URB dispatch before a PDO's release covers a WMI one too. Whether
-`IoWMIRegistrationControl(DEREGISTER)` itself waits for a WMI IRP in flight
-is unread; `Busy` is what this design rests on.
+**The dispatch's own lifetime.** The PDO's storage is covered by section
+5's ordering: `DEREGISTER` returns only once the requests already sent have
+completed. Inside a request, the handler raises the PDO's `Busy` before it
+reads `Controller`, as `hcd_urb.c`'s dispatches do, so the controller's
+release waits the capture out as it waits a URB dispatch.
 
 **Import.** `ntoskrnl.exe!IoWMIRegistrationControl`, new. Called on NT 6.x
 only, but imported by the one 32-bit binary, so it must resolve on Windows
@@ -326,11 +412,22 @@ every target, so the ten install legs of 34.6 cover it.
   to the total with no wrap;
 - low speed, and a full-speed device behind a TT;
 - no pipes: every field 0, the totals set;
+- a zero-bandwidth isochronous endpoint at full, high and SuperSpeed: 0;
 - the serialiser's offsets: each field at section 2's offset, the text
   truncated to 59 characters plus NUL, "USB Device" for an empty text.
 
-The executor (registration lifetime, the IRP handling) is not host-tested;
-it is reviewed and read in the guests.
+A new `test\test_wmi.c` drives the WNODE fills of section 7: for
+`QUERY_SINGLE_INSTANCE`, a buffer one byte short of the header, exactly the
+header, one byte short of the answer (the `WNODE_TOO_SMALL`), exactly the
+answer, a `DataBlockOffset` other than the header's size kept in place, a
+`DataBlockOffset` near 0xFFFFFFFF that would wrap, a nonzero
+`InstanceIndex`, and a header `BufferSize` above the IRP's; for
+`QUERY_ALL_DATA` the same boundaries and the 8-byte data offset; for each,
+the status, `Information` and every byte written, and that nothing is
+written past the buffer (a guard pattern after it).
+
+The rest of the executor (registration lifetime, the minor table,
+`REGINFO`) is not host-tested; it is reviewed and read in the guests.
 
 ## 11. Readings
 
@@ -371,12 +468,16 @@ those systems see.
 Taken in the design, not separately decided: NT 6.x-only registration; one
 registration per connection on its first PDO; SuperSpeed against the
 high-speed total divided by 10; `Ep.Interval` rather than the
-specification's interval for a fast-polled pipe; no `WMILIB.SYS`.
+specification's interval for a fast-polled pipe; no `WMILIB.SYS`; a
+zero-bandwidth endpoint counting 0; and a split composite device's row
+following its first function's devnode, a limitation rather than a moved
+provider (section 5).
 
 ## 13. What changes in the documents (task 34.5)
 
 - The release notes: the Vista/7 Advanced-tab limitation replaced by what
-  the figure is, that it is an estimate, and how SuperSpeed reads.
+  the figure is, that it is an estimate, how SuperSpeed reads, and that a
+  composite device's row goes with its first function's devnode.
 - Design record 13 section 8: a pointer here for the Vista/7 page.
 - `implementation-invariants.md`: the WMI registration lifetime beside the
   PDO's.
