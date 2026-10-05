@@ -1,4 +1,4 @@
-# Phase 34 Record - The Registry Values, the Device Manager Pages and the Intel Port Switchover
+# Phase 34 Record - The Registry Values, the Power Tab and the Intel Port Switchover
 
 The detail behind `docs/contributing/roadmap-hcd.md`, "Phase 34 - Release
 `2.1.1.0`". The roadmap entry carries the goal, the status, the task list and
@@ -21,8 +21,52 @@ Opened: 2026-10-05.
 
 ## 34.1 - the registry values
 
-Read on Windows 98 SE, Windows 2000 and Windows 7 x86 in virtual machines;
-the roadmap's 34.1 and 34.1-V entries carry the readings.
+What the install writes: `XhciForceBulkOnly` 0, `XhciFastPollFsLs` 0,
+`XhciFirstEnumWaitMs` 5000 and `XhciFirstEnumPortMs` 2000 join the two log
+switches at 0 and `XhciImodInterval250ns` at 160 (and, since 34.3,
+`XhciIntelPortSwitch` at 1), on every install path of both INFs, each with
+FLG_ADDREG_NOCLOBBER (`0x00010003`): an install or update writes only a
+missing value. The owner chose the flag the same day over the unconditional
+`0x00010001` first built (`9e6389f`), accepting that the footprint's verdict
+for those rows is `keep`, that a later release can never change a default
+on a machine that already holds the old one, and that a machine updated
+straight from `1.2.0.0` keeps that release's `XhciImodInterval250ns` of 500.
+`XhciSelectiveSuspend` (36a.5) joins the same rule when it lands.
+
+All readings 2026-10-05, `release` flavour, development host A:
+
+- **The unconditional form** (`9e6389f`), on Windows 98 SE and 2000: a fresh
+  install wrote all seven at their defaults, and the update wrote the two
+  set by hand back to them.
+- **The don't-overwrite form**, QEMU 11.1.0-rc2 TCG; Windows 98 SE NUSB 3.3
+  through the Add New Hardware Wizard and Update Driver, Have Disk; 2000 SP4
+  through `pnpctl update`: a fresh install wrote all seven as DWORDs at their
+  defaults, and over `2.1.0.0` with `XhciLogVerbosity` 3 and
+  `XhciFirstEnumWaitMs` 9999 set by hand the update kept both and added
+  `XhciForceBulkOnly` 0, `XhciFastPollFsLs` 0 and `XhciFirstEnumPortMs`
+  2000. So Windows 98's 16-bit engine honours the flag.
+- **34.1-V, Windows 7 x86**, QEMU 11.1.0 TCG, the `win7-clean-autologon`
+  guest, installed and updated through `pnpctl update` from an elevated
+  prompt, one unverified-publisher box each: `2.1.0.0` installed as
+  `oem2.inf` into driver key
+  `...\Class\{36FC9E60-C465-11CF-8056-444553540000}\0000` with its three
+  values; `XhciLogVerbosity` 3 and `XhciFirstEnumWaitMs` 9999 set by hand
+  and still there after a restart; the update installed as `oem3.inf`, a new
+  driver-store package, into the same key `0000`, kept both and added the
+  same three. So the driver store gives an update over `2.1.0.0` no new
+  driver key, and hand-set values survive it. Windows 7 x86 stands for
+  Vista and the x64 half, which install through the same store, and needs
+  no F8 boot.
+
+The other paths are taken as covered by reasoning, not reading (owner,
+2026-10-05, narrowing a leg per install path to one): ME runs 98 SE's
+16-bit setup engine on the same undecorated INF half; 32-bit XP, Vista and 7
+install through `Xhci.Dev.NTx86` and `Xhci.Dev6.NTx86`, which both name
+`Xhci.AddReg.NT`, the lines read on 2000; XP x64 is NT 5.2 SetupAPI, and the
+amd64 INF's own `Xhci.AddReg.NT` is held to the same values and flags by the
+INF gate; and FLG_ADDREG_NOCLOBBER means the same to every SetupAPI from
+2000 on. No fresh-install leg beyond 98 SE and 2000: a fresh install has no
+value for the flag to keep, and the gate holds the defaults.
 
 ## The package for the hardware legs
 
@@ -49,6 +93,21 @@ device that UsbTreeView reads at 896 mA under Windows 11 (bMaxPower 0x70)
 read 224 mA on the Power tab under `2.1.0.0` on Windows 98 SE, a quarter.
 The reading after the fix below was also on Windows 98 SE (owner,
 2026-10-05).
+
+The fix, as chosen (owner, 2026-10-05). Two were weighed: the proposed
+rewrite - `hcdDoorDescriptor` alone, after the configuration copy, sets the
+copied bMaxPower to min(255, b * 4) for request code 0 (usbui's),
+configuration index 0, a SuperSpeed or SuperSpeedPlus connection and at
+least 9 bytes copied, the cached descriptor and returned length untouched,
+saturating at 510 mA - and Codex's alternative, descriptors left raw and the
+exact demand shown in `XHCISNAP`. Since the 896 mA device would read 510 mA
+under the rewrite, the owner chose both. Built the same day: bMaxPower's
+units from USB 3.2 Table 9-23 into `xhci-data-structures.md` section 10.7;
+`XhciDescMaxPowerMa` and `XhciDescPowerTabByte` in `xhci_desc.c` with
+`test_desc`'s vectors; the bus logs `dev.ss.vidpid` and `dev.ss.maxpower.ma`
+for each SuperSpeed device at enumeration, which `XHCISNAP` prints from the
+log ring (no schema change); design record 13 section 8.3 is the design.
+Codex round 5 found no defect in the code (`8820722` took its three P3).
 
 Use devices, not hubs, for clauses 1 to 3: the page costs a bus-powered hub
 as (ports + 1) x 100 mA, capped at 500, whatever its descriptor says
@@ -137,4 +196,12 @@ Enabled, the control, was not needed: Auto showed no fault.
 
 ## Codex
 
-The review rounds of 34.3 are listed in the roadmap's 34.3 entry.
+- 34.2: round 5 found no defect in the code; its three P3 (the run sheet
+  and the checkpoint) were taken in `8820722`.
+- 34.3, on `0def9a3`: round 1 one P2, taken in `ea707a6` (an unread
+  subsystem id skips the switchover rather than lapsing the Sony
+  exemption); round 2 clean; rounds 3 and 4, on the 8D31 change and design
+  record 16, wording only (nine P3, then one), taken in `dfc2b33` and
+  `e591717`.
+- 34.4, on the docs (`874085b`, `8a8514d`, `dc071b3`): round 1 no P1, seven
+  P2 and one P3, taken in `c2e648b` and `5729ada`.
