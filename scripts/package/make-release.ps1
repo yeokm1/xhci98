@@ -3483,9 +3483,9 @@ Every registry value this driver reads. There are eight, all DWORDs. The
 install writes all eight, each at the default it states below except
 XhciImodInterval250ns, which it writes as 160. It writes each only where it is
 missing, so a value you changed survives an install or update; to go back to
-the default, set it by hand, or delete the value and update the driver. A
-machine updated straight from the USB 2.0-only 1.x driver keeps its
-XhciImodInterval250ns of 500; set it to 160 by hand. A value that is absent
+the default, set it by hand, or delete the value and update the driver. If
+an earlier install left XhciImodInterval250ns at 500, the update keeps it;
+set it to 160 by hand. A value that is absent
 means the default each one states.
 
   YOU SHOULD NOT NEED THIS SECTION FOR A LOG. If the maintainer asks for one,

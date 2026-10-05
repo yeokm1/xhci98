@@ -91,6 +91,7 @@ On each machine, before the leg:
 Reading taken before the fix (owner, 2026-10-05): a SuperSpeed bus-powered
 device that UsbTreeView reads at 896 mA under Windows 11 (bMaxPower 0x70)
 read 224 mA on the Power tab under `2.1.0.0` on Windows 98 SE, a quarter.
+QEMU cannot show the bug: its SuperSpeed storage declares 0 mA.
 The reading after the fix below was also on Windows 98 SE (owner,
 2026-10-05).
 
@@ -104,7 +105,8 @@ exact demand shown in `XHCISNAP`. Since the 896 mA device would read 510 mA
 under the rewrite, the owner chose both. Built the same day: bMaxPower's
 units from USB 3.2 Table 9-23 into `xhci-data-structures.md` section 10.7;
 `XhciDescMaxPowerMa` and `XhciDescPowerTabByte` in `xhci_desc.c` with
-`test_desc`'s vectors; the bus logs `dev.ss.vidpid` and `dev.ss.maxpower.ma`
+`test_desc`'s vectors (Table 9-23's own example, the owner's 0x70, 504 mA
+exact, 512 mA and above at 0FFh); the bus logs `dev.ss.vidpid` and `dev.ss.maxpower.ma`
 for each SuperSpeed device at enumeration, which `XHCISNAP` prints from the
 log ring (no schema change); design record 13 section 8.3 is the design.
 Codex round 5 found no defect in the code (`8820722` took its three P3).
@@ -120,13 +122,21 @@ as (ports + 1) x 100 mA, capped at 500, whatever its descriptor says
 | 3 | A USB 2.0 device | Unchanged from `2.1.0.0`: UsbTreeView's mA | **Pass** (owner, 2026-10-05): unchanged |
 | 4 | The `XHCISNAP` report | `dev.ss.vidpid` and `dev.ss.maxpower.ma` for each SuperSpeed device; for the 896 mA device `dev.ss.maxpower.ma=00000380` | **Pass** (2026-10-05, report `P14S.TXT`, `XhciLogVerbosity` 2, the release build of `f393bb6`, its `psw.` and `dev.ss.` records being that build's): `dev.ss.vidpid=090C2320`, `dev.ss.maxpower.ma=00000380` (896 mA), the device in slot 5 on root port 16 at "SuperSpeed, 5 Gbit/s, Gen 1x1" |
 
+## 34.3 - what was built
+
+Beyond design record 16's driver half: `xhciqual`'s `quirks.c` gains the
+`9C31` and `9CB1` rows (`QF_XUSB2PR`), and `XhciIntelPortSwitch` joins
+the INF gate's `VAL-*` table, its self-tests and both footprints at 1 with
+FLG_ADDREG_NOCLOBBER, under 34.1's rule.
+
 ## 34.3-Q - QEMU (passed)
 
 Read 2026-10-05 on development host A, QEMU 11.1.0 TCG, a Windows 98 SE +
 NUSB 3.3 guest on the `qemu` flavour (`xhci98.sys` SHA-256
 `19291E9256912FA8FA905F207E8762216B0F08B2FDF3EE777BE00C1539C9E3C5`, built
 at `bfe8f97`), overlay `vm\t33\w98n-t344.qcow2`, log
-`out\phase33\legs\w98n\t344\debugcon-2.log`:
+`out\phase33\legs\w98n\t344\debugcon-2.log`; the driver installed through
+the Add New Hardware Wizard on the clean guest, then a cold boot:
 
 - line 7, "hcd: port switchover: not an Intel 7/8/9-series xHCI, no config
   write", once, at the one controller start;
