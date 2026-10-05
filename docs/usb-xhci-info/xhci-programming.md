@@ -740,7 +740,7 @@ Phase 13 owned the miniport's driver-side observation and Phase 4 task 10 the
 register reading; both were published as unreachable limitations, for want
 of a machine, and the B490 reading is the HCD's (task 34.3).
 
-Applies to the 7-, 8- and 9-series PCH and to Wellsburg (C610/X99), the generations carrying both EHCI and xHCI. Skylake and later Intel have no EHCI, the ports are hardwired to xHCI, and these registers do not exist; nor do they on modern AMD. Source: Linux `pci-quirks.c` `usb_enable_intel_xhci_ports()`; Intel 7-series PCH datasheet vol. 2 (xHCI config registers).
+Applies to the 7-, 8- and 9-series PCH and to Wellsburg (C610/X99), the generations carrying both EHCI and xHCI. Skylake and later Intel have no EHCI and the ports are wired to xHCI alone, so there is nothing to route; what offsets 0xD0 to 0xDC do on those parts, and on AMD, is unread here, which is why the driver writes them only on the listed ids (design record 16 section 4). Source: Linux `pci-quirks.c` `usb_enable_intel_xhci_ports()`; Intel 7-series PCH datasheet vol. 2 (xHCI config registers).
 
 Every switchable USB2 port is muxed between the EHCI and xHCI controllers by PCI config registers on the xHCI PCI function (typically bus 0, device 20h, function 0):
 

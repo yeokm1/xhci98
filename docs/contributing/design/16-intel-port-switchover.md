@@ -1,14 +1,16 @@
 # The Intel EHCI-to-xHCI port switchover
 
 Design record for roadmap-hcd task 34.3 (Phase 34, release `2.1.1.0`).
-Revision 1, 2026-10-05: written at the owner's request after the code, to
-explain it. Built in `0def9a3`, `ea707a6` and the commit that adds this
-record. **Nothing in it has run on a
-machine with the mux**: the project's only 7/8-series machine left before
-its `XUSB2PR` reading was taken (`roadmap.md`, Phase 4 task 10), so every
-hardware statement below is taken from Linux and from
-`docs/usb-xhci-info/xhci-programming.md`'s `XUSB2PR` section, which is itself
-a prediction, and the hardware reading is a tester's (section 10).
+Revision 2, 2026-10-05. Revision 1 was written at the owner's request
+after the code, to explain it, when nothing in it had run on a machine with
+the mux; built in `0def9a3`, `ea707a6` and the commit that added this
+record. Revision 2 adds the readings (section 10): the owner's Lenovo B490
+(`8086:1E31`) under Windows 98 SE with NUSB, and the gate closed on the
+P14s Gen 1. Statements about the hardware beyond what that machine showed
+are still taken from Linux and from
+`docs/usb-xhci-info/xhci-programming.md`'s `XUSB2PR` section. (The task was
+34.4 until Phase 34 was resequenced; commits before `8a8514d` use that
+number.)
 
 ## 1. What is asked, and what is not
 
@@ -286,22 +288,40 @@ reading (section 10) is to show the gate closed.
 
 ## 10. Readings
 
-- **QEMU** (owed before 34.3 is ticked): on `1B36:000D`, `psw.gate 0` in the
-  log or the trace, and no switchover access past offset 0 (no route or
-  release record, no read-back line). A Windows 98 SE
-  guest on the `qemu` flavour (owner, 2026-10-05).
-- **Hardware** (a tester's; until read, the release notes call this untested
-  ground, as 33.8's polling was):
-  - a 7-, 8- or 9-series machine with firmware on Auto;
-  - an `XHCISNAP` capture with `XhciLogVerbosity` raised, carrying the
-    `psw.*` records: the masks and that each read-back equals its mask;
-  - a SuperSpeed stick on a switchable connector read at SuperSpeed;
-  - a USB 2.0 device on a switchable connector working under the HCD;
-  - EHCI keeping the connectors outside the masks;
-  - with `XhciIntelPortSwitch` 0, the routing left as firmware set it;
-  - a disable in Device Manager returning the connectors to EHCI;
-  - after a shutdown, the routing back on EHCI and the machine staying off;
-  - a standby and resume with the connectors still working.
+All three are recorded clause by clause in `docs/contributing/runs/run-34.md`.
+
+- **QEMU** (34.3-Q, passed 2026-10-05): a Windows 98 SE + NUSB 3.3 guest on
+  the `qemu` flavour, `1B36:000D`: the trace's "not an Intel 7/8/9-series
+  xHCI, no config write" once at the one start, and no route, release or
+  read-back line.
+- **The gate closed on non-mux Intel silicon** (34.3-H1, passed 2026-10-05,
+  the owner's P14s Gen 1, `02ED`): `psw.gate=00000000` and no other `psw.`
+  record; every external connector working.
+- **The switchover** (34.3-H2, passed 2026-10-05, the owner's Lenovo B490,
+  `8086:1E31`, under Windows 98 SE with NUSB's EHCI driver loaded, the
+  release build of `f393bb6`). The hardware reading had been planned as a
+  tester's; the owner took it instead. On Auto:
+  - before Windows, `XHCIQUAL` found `XUSB2PR` and `USB3_PSSEN` at 0 and
+    both masks nonzero, as `xhci-programming.md` predicted;
+  - under the driver, `psw.route.step` 0 and each read-back equal to its
+    mask;
+  - a SuperSpeed stick on a blue connector linked at 5 Gbit/s and a file
+    made the round trip, and a USB 2.0 device worked under the HCD;
+  - the one connector outside the masks stayed with EHCI;
+  - a disable gave the blue connectors back to EHCI, and an enable took
+    them again;
+  - with `XhciIntelPortSwitch` 0 and a restart, no route record, and the
+    connectors stayed on EHCI;
+  - after a shutdown the machine stayed off, and the next boot found both
+    registers at 0;
+  - a mouse attached under EHCI at boot ended up under the HCD.
+
+  Smart Auto repeated the firmware reading, the route, the SuperSpeed link
+  and the shutdown with the same results. The register values themselves
+  are the owner's report; the logs stayed on the B490.
+- **Not read:** a standby and resume (Windows 98 SE offers none on the
+  B490); any system but Windows 98 SE; the five other device ids; and
+  whether an in-place recovery (section 6) leaves the routing alone.
 
 ## 11. Decisions (owner, 2026-10-05)
 
@@ -311,6 +331,8 @@ reading (section 10) is to show the gate closed.
 3. The opt-out `XhciIntelPortSwitch` ships at 1 under the don't-overwrite
    flag; absent or any number but 0 is on.
 4. The QEMU reading is one Windows 98 SE guest.
+5. The task is ticked on real hardware: the switchover on the owner's B490,
+   the gate closed on the P14s Gen 1, replacing the tester's reading.
 
 Taken in the building, not separately decided: Linux's Sony exemption; the
 release at every stop and on all gated parts rather than Linux's three at
