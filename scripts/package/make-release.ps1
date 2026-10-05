@@ -3471,8 +3471,10 @@ debug throughout, in its build scripts and its documentation alike.)
 ==============================================================================
 
 Every registry value this driver reads. There are seven, all DWORDs. The
-install writes one of them, XhciImodInterval250ns; the other six are absent
-until you set them, and absent means the default each one states.
+install writes all seven, each at the default it states below except
+XhciImodInterval250ns, which it writes as 160. Every install and update writes
+them again, so a value you changed goes back to that and has to be set again.
+A value that is absent means the default each one states.
 
   YOU SHOULD NOT NEED THIS SECTION FOR A LOG. If the maintainer asks for one,
   XHCISNAP -verbosity 2 sets the value that matters, on every controller, and

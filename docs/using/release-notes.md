@@ -567,6 +567,11 @@ controller was ever enumerated at another PCI slot can have more than one
 such key: the device's own `Driver` value, under `Enum\PCI`, names the one in
 use. `XHCISNAP -verbosity` finds it for you.
 
+Since `2.2.0.0` the install writes all seven: each at the driver's own
+default, except `XhciImodInterval250ns` at `160`. Every install and update
+writes them again, so a value you changed goes back to that, and has to be
+set again afterwards.
+
 ### XhciImodInterval250ns: the interrupt moderation interval
 
 In **units of 250 ns**: how long the controller waits after one interrupt
@@ -603,8 +608,8 @@ or delete it.
 
 `1` makes every storage device on that controller that offers both
 transports use Bulk-Only (Windows' own `usbstor.sys`) instead of UAS. `0` or
-absent, the default, means UAS wherever the device offers it. The install
-does not write it.
+absent, the default, means UAS wherever the device offers it. Since
+`2.2.0.0` the install writes `0`.
 
 It is read each time a device enumerates, so unplug and replug the device
 after changing it. On Windows 2000 and later, a device already installed
@@ -615,7 +620,7 @@ the NT targets.
 
 ### XhciFastPollFsLs: Low- and Full-Speed polling above 1000 Hz
 
-New in `2.1.0.0`, off by default, and written by no install. It lets a Low-
+New in `2.1.0.0` and off by default; since `2.2.0.0` the install writes `0`. It lets a Low-
 or Full-Speed mouse on a root port be polled faster than 1000 Hz, at the
 rates hidusbf offers for that under Windows 8 and later, using hidusbf's own
 numbers: the device is set in hidusbf to "31 Hz" or "62 Hz", and this value
@@ -651,7 +656,8 @@ New in `2.1.0.0`. When the root hub, or an external hub, first reports its
 devices to Windows after it starts, the driver first waits for the devices
 already plugged in to be ready, so that they are in that first report.
 Windows 2000's text-mode Setup uses only the devices in it. The wait ends as
-soon as the devices are ready. Neither value is written by the install.
+soon as the devices are ready. Since `2.2.0.0` the install writes both at
+their defaults.
 
 | Value | Default | Meaning |
 |---|---|---|

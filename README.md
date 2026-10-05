@@ -229,13 +229,15 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 
 | Value | What it sets | Written by the install | Default when absent |
 |---|---|---|---|
-| `XhciImodInterval250ns` | The interrupt moderation interval | Yes, `160` | `4000` |
-| `XhciForceBulkOnly` | Bulk-Only instead of UAS | No | `0`, UAS where offered |
-| `XhciFastPollFsLs` | A root-port Low- or Full-Speed mouse polled above 1000 Hz | No | Off |
-| `XhciFirstEnumWaitMs` | The longest wait for a hub's first report | No | `5000` |
-| `XhciFirstEnumPortMs` | The longest one port may hold that wait | No | `2000` |
-| `XhciLogVerbosity` | The driver's log, read by `XHCISNAP` | Yes, `0` | `0`, off |
-| `XhciLogDebugView` | The log sent to DebugView as well | Yes, `0` | `0`, off |
+| `XhciImodInterval250ns` | The interrupt moderation interval | `160` | `4000` |
+| `XhciForceBulkOnly` | Bulk-Only instead of UAS | `0` | `0` |
+| `XhciFastPollFsLs` | A root-port Low- or Full-Speed mouse polled above 1000 Hz | `0` | `0` |
+| `XhciFirstEnumWaitMs` | The longest wait for a hub's first report | `5000` | `5000` |
+| `XhciFirstEnumPortMs` | The longest one port may hold that wait | `2000` | `2000` |
+| `XhciLogVerbosity` | The driver's log, read by `XHCISNAP` | `0` | `0` |
+| `XhciLogDebugView` | The log sent to DebugView as well | `0` | `0` |
+
+Every install and update writes all seven again, so a value you changed goes back to what the table says; set it again afterwards.
 
 The two log values are described in the [release notes](docs/using/release-notes.md), "The log, and how to send one". The others are described below.
 
@@ -261,13 +263,13 @@ Feel free to tune it. Raise it towards `4000` (or delete it) if you get audio st
 
 ### Forcing Bulk-Only instead of UAS
 
-`XhciForceBulkOnly` set to `1` makes every storage device on that controller that offers both transports use Bulk-Only (Windows' own `usbstor.sys`) instead of UAS. `0` or absent, the default, means UAS wherever the device offers it. The install does not write it.
+`XhciForceBulkOnly` set to `1` makes every storage device on that controller that offers both transports use Bulk-Only (Windows' own `usbstor.sys`) instead of UAS. `0` or absent, the default, means UAS wherever the device offers it. The install writes `0`.
 
 It is read each time a device enumerates, so unplug and replug the drive after changing it. On Windows 2000 and later, a drive already installed keeps its driver until you uninstall it in Device Manager and replug it. A UAS-only device stays on UAS whatever the value says.
 
 ### Polling a Low- or Full-Speed mouse above 1000 Hz
 
-`XhciFastPollFsLs`, new in `2.1.0.0`, is off by default and not written by the install. It works with SweetLow's hidusbf setting a mouse on a **root port** to its "31 Hz" or "62 Hz" rate:
+`XhciFastPollFsLs`, new in `2.1.0.0`, is off by default; the install writes `0`. It works with SweetLow's hidusbf setting a mouse on a **root port** to its "31 Hz" or "62 Hz" rate:
 
 | Value | "31 Hz" becomes | "62 Hz" becomes |
 |---|---|---|
@@ -282,7 +284,7 @@ This is outside the xHCI specification. A controller that refuses it is caught: 
 
 ### The first report's wait
 
-When the root hub or an external hub first reports its devices after it starts, the driver waits for the devices already plugged in to be ready, so Windows 2000's text-mode Setup sees them. Neither value is written by the install.
+When the root hub or an external hub first reports its devices after it starts, the driver waits for the devices already plugged in to be ready, so Windows 2000's text-mode Setup sees them. The install writes both at their defaults.
 
 | Value | Meaning | Default |
 |---|---|---|

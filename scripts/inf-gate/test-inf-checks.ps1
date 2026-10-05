@@ -574,8 +574,8 @@ try {
     # On 9x the interval is the last line of [Xhci.AddReg], so the anchor is
     # the blank line and the root hub's section header after it.
     Assert-RuleFires "imod-no-9x" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,XhciLogDebugView,0x00010001,0`r`nHKR,,XhciImodInterval250ns,0x00010001,160`r`n`r`n[RootHub.Dev]",
-                             "HKR,,XhciLogDebugView,0x00010001,0`r`n`r`n[RootHub.Dev]")
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,160`r`n`r`n[RootHub.Dev]",
+                             "`r`n[RootHub.Dev]")
     }
     Assert-RuleFires "imod-no-nt" "VAL-MISSING" {
         param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,160`r`nHKR,,EnumPropPages32",

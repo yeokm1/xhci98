@@ -36,16 +36,17 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
 /* The device-key values the HCD reads (design record 13 section 5.5).
  * The miniport's three XhciVirtualHSHub* values are not read. The fourth,
  * XhciForceBulkOnly (31-A.3), is read at every enumeration rather than at
- * start, and no INF writes it: absent is 0, UAS where the device offers it.
- * XhciFastPollFsLs (33.8) is read at start and no INF writes it either:
- * absent is 0, every interval by Table 6-12. */
+ * start: absent is 0, UAS where the device offers it. XhciFastPollFsLs
+ * (33.8) is read at start: absent is 0, every interval by Table 6-12. Since
+ * 34.12 the INFs write both, and the two below, at those defaults. */
 #define HCD_VALUE_LOG_VERBOSITY L"XhciLogVerbosity"
 #define HCD_VALUE_LOG_DEBUGVIEW L"XhciLogDebugView"
 #define HCD_VALUE_IMOD          L"XhciImodInterval250ns"
 #define HCD_VALUE_FORCE_BOT     L"XhciForceBulkOnly"
 #define HCD_VALUE_FAST_POLL     L"XhciFastPollFsLs"
-/* Task 33.3: the first answer's settle, in ms (xhci_enum.h). No INF writes
- * either; absent, the defaults stand, which is what text-mode Setup gets. */
+/* Task 33.3: the first answer's settle, in ms (xhci_enum.h). The INFs write
+ * the defaults (34.12); text-mode Setup's txtsetup.oem writes none, so there
+ * they are absent and the same defaults stand. */
 #define HCD_VALUE_SETTLE_TOTAL  L"XhciFirstEnumWaitMs"
 #define HCD_VALUE_SETTLE_PORT   L"XhciFirstEnumPortMs"
 
