@@ -617,6 +617,28 @@ try {
                              "HKR,,XhciImodInterval250ns,,500`r`nHKR,,EnumPropPages32")
     }
 
+    # Roadmap-hcd task 34.4's opt-out, anchored on the interval after it on
+    # each path. **Its default is 1, not 0**: shipping 0 would be an INF edit
+    # that turns the switchover off on every machine it exists for, and the
+    # unconditional DWORD would write a user's 0 back to 1 at an update.
+    Write-Step "the Intel port switchover's opt-out, on both paths"
+    Assert-RuleFires "portswitch-no-9x" "VAL-MISSING" {
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`nHKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]",
+                             "HKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]")
+    }
+    Assert-RuleFires "portswitch-no-nt" "VAL-MISSING" {
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`nHKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32",
+                             "HKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32")
+    }
+    Assert-RuleFires "portswitch-default-off" "VAL-DEFAULT" {
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`nHKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32",
+                             "HKR,,XhciIntelPortSwitch,0x00010003,0`r`nHKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32")
+    }
+    Assert-RuleFires "portswitch-clobber" "VAL-TYPE" {
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`nHKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]",
+                             "HKR,,XhciIntelPortSwitch,0x00010001,1`r`nHKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]")
+    }
+
     # Roadmap task 24.3's three virtual-hub values, refused since 2026-10-02
     # (VAL-HCDVHUB): the HCD has no usbport to report a speed through and reads
     # none of them. Written on 9x, on NT, and in a root-hub section, because the

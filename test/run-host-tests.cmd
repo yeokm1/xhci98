@@ -51,7 +51,11 @@ rem                  Stream ID, the doorbell value and the event's stream
 rem   test_xport   - the mass-storage transport policy (src\xhci_xport.c, task
 rem                  31-A.3): Bulk-Only or UAS for an interface offering
 rem                  either, and the hardware and compatible ids that follow
-rem   test_hub     - the hub class's pure half (src\xhci_hub.c): the hub
+rem   test_psw     - the Intel port switchover (src\xhci_psw.c, task 34.4):
+rem                  the device-id gate, the board exemption, the
+rem                  XhciIntelPortSwitch rule, and the route and release over
+rem                  a modelled config space - write order, values, refusals
+rem   test_hub    - the hub class's pure half (src\xhci_hub.c): the hub
 rem                  descriptor, the status-change bitmap, the port decision,
 rem                  the reset progress and speed bits, the depth and multi-TT
 rem                  rules and the instance key
@@ -253,6 +257,9 @@ call :run test_stream "test_stream.c ..\src\xhci_stream.c"
 rem test_xport links nothing else: the transport choice and its ids are pure
 rem computations over descriptor bytes and three flags (task 31-A.3).
 call :run test_xport "test_xport.c ..\src\xhci_xport.c"
+rem test_psw links nothing else: the gate, the value rule and the two
+rem sequences are pure, driven over a modelled configuration space (34.4).
+call :run test_psw "test_psw.c ..\src\xhci_psw.c"
 rem test_strict links nothing else: strict mode's command precondition table
 rem (xHCI 1.2 section 4.6) is a pure function, checked here at every cell -
 rem each command type, DW3 bit 9, slot state and EP State.

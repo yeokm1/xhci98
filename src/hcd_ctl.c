@@ -49,6 +49,10 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * they are absent and the same defaults stand. */
 #define HCD_VALUE_SETTLE_TOTAL  L"XhciFirstEnumWaitMs"
 #define HCD_VALUE_SETTLE_PORT   L"XhciFirstEnumPortMs"
+/* Task 34.4: the Intel port switchover, on unless the value is 0 (absent
+ * is on: txtsetup.oem writes none). Read at start, on a gated controller
+ * only. */
+#define HCD_VALUE_PORT_SWITCH   L"XhciIntelPortSwitch"
 
 /* The health poll's period. usbport's CheckController was nominally 500 ms
  * and measured at 36-80 ms on the E460 (run-13e, Finding V); the poll's
@@ -208,6 +212,149 @@ ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc)
         return 0;
     }
     return value != 0;
+}
+
+/* --------------------------------------------------------------------- */
+/* The Intel port switchover (task 34.4)                                  */
+/* --------------------------------------------------------------------- */
+
+/*
+ * The second writer of configuration space beside the quiesce path's Bus
+ * Master Enable (xhci_hw.h): four Intel-specific registers above the PCI
+ * header, on the five controllers xhci_psw.h gates, through the same IRP
+ * the reads take. IRQL: PASSIVE_LEVEL, as HcdSvcConfigSpace.
+ */
+static ULONG hcdPswRead(PVOID context, ULONG offset, PULONG value)
+{
+    return HcdSvcConfigSpace((PXHCI_EXTENSION)context, TRUE, value, offset,
+                             sizeof(ULONG)) == MP_STATUS_SUCCESS;
+}
+
+static ULONG hcdPswWrite(PVOID context, ULONG offset, ULONG value)
+{
+    ULONG data;
+
+    data = value;
+    return HcdSvcConfigSpace((PXHCI_EXTENSION)context, FALSE, &data, offset,
+                             sizeof(ULONG)) == MP_STATUS_SUCCESS;
+}
+
+static VOID hcdPswIo(PHCD_CONTROLLER hc, PXHCI_PSW_IO io)
+{
+    io->Read = hcdPswRead;
+    io->Write = hcdPswWrite;
+    io->Context = &hc->Hc;
+}
+
+/*
+ * Every switchable connector to xHCI, when this start found the mux and
+ * the switch on (PswOn). At each start before XhciInitController, as Linux
+ * routes before the controller's reset, and at each return to D0 before
+ * the resume, since firmware reprograms the routing across standby.
+ * IRQL: PASSIVE_LEVEL.
+ */
+VOID HcdPswRoute(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+    XHCI_PSW_IO io;
+    XHCI_PSW_STATE st;
+
+    if (!hc->PswOn) {
+        return;
+    }
+    ext = &hc->Hc;
+    hcdPswIo(hc, &io);
+    (VOID)XhciPswRoute(&io, &st);
+    hc->PswRoutes++;
+    if (st.Step != XHCI_PSW_DONE) {
+        hc->PswFailures++;
+    }
+    XhciLogNote(ext, "psw.usb3prm", st.Usb3Mask);
+    XhciLogNote(ext, "psw.usb3pssen", st.Usb3Now);
+    XhciLogNote(ext, "psw.xusb2prm", st.Usb2Mask);
+    XhciLogNote(ext, "psw.xusb2pr", st.Usb2Now);
+    XhciLogNote(ext, "psw.route.step", st.Step);
+    XHCI_DBG_VALUE("hcd: port switchover, USB3_PSSEN now", st.Usb3Now);
+    XHCI_DBG_VALUE("hcd: port switchover, XUSB2PR now", st.Usb2Now);
+}
+
+/*
+ * Every connector back to EHCI, as Linux's usb_disable_xhci_ports: at the
+ * stop once the controller has halted, at a refused start, and at the D3 of
+ * a system shutdown, where Linux does it against a Panther Point, Lynx
+ * Point-LP or Wildcat Point-LP machine powering itself back on. Done on all
+ * five here, so a stopped or removed driver never leaves the connectors on
+ * an xHCI nothing drives. IRQL: PASSIVE_LEVEL.
+ */
+VOID HcdPswRelease(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+    XHCI_PSW_IO io;
+    XHCI_PSW_STATE st;
+
+    if (!hc->PswOn) {
+        return;
+    }
+    ext = &hc->Hc;
+    hcdPswIo(hc, &io);
+    (VOID)XhciPswRelease(&io, &st);
+    hc->PswReleases++;
+    if (st.Step != XHCI_PSW_DONE) {
+        hc->PswFailures++;
+    }
+    XhciLogNote(ext, "psw.release.usb3pssen", st.Usb3Now);
+    XhciLogNote(ext, "psw.release.xusb2pr", st.Usb2Now);
+    XhciLogNote(ext, "psw.release.step", st.Step);
+    XHCI_DBG_VALUE("hcd: port switchover released, step", st.Step);
+}
+
+/*
+ * The start's decision, then its route. The gate reads PCI offset 0
+ * itself because XhciInitController, which records it, runs after; on any
+ * other controller (QEMU's 1B36:000D among them) no register past the
+ * header is read or written, and psw.gate 0 says so. IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdPswStart(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+    ULONG id;
+    ULONG subsystem;
+    ULONG value;
+    NTSTATUS status;
+
+    ext = &hc->Hc;
+    hc->PswOn = 0;
+    id = 0;
+    if (!hcdPswRead(ext, XHCI_PCI_VENDOR_DEVICE, &id)) {
+        XhciLogNote(ext, "psw.pci.unread", 1);
+        return;
+    }
+    XhciLogNote(ext, "psw.gate", XhciPswGate(id));
+    if (!XhciPswGate(id)) {
+        XHCI_DBG_TEXT("hcd: port switchover: not an Intel 7/8/9-series "
+                      "xHCI, no config write");
+        return;
+    }
+
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_PORT_SWITCH, &value);
+    XhciLogNote(ext, "psw.value.found", NT_SUCCESS(status) ? 1 : 0);
+    XhciLogNote(ext, "psw.value", NT_SUCCESS(status) ? value : 0);
+    if (!XhciPswEnabled(NT_SUCCESS(status), value)) {
+        XHCI_DBG_TEXT("hcd: port switchover: XhciIntelPortSwitch is 0, "
+                      "routing left as firmware set it");
+        return;
+    }
+
+    subsystem = 0;
+    if (hcdPswRead(ext, XHCI_PSW_PCI_SUBSYSTEM, &subsystem) &&
+        XhciPswBoardRefused(subsystem)) {
+        XhciLogNote(ext, "psw.board.refused", subsystem);
+        return;
+    }
+
+    hc->PswOn = 1;
+    HcdPswRoute(hc);
 }
 
 /* --------------------------------------------------------------------- */
@@ -747,6 +894,11 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
         return status;
     }
 
+    /* Task 34.4: before the reset XhciInitController performs, so the
+     * connectors are the xHCI's when it powers its ports and the root hub
+     * first enumerates them. */
+    hcdPswStart(hc);
+
     mp = XhciInitController(ext, &res);
     XhciLogNote(ext, "pci.cfg.status", hc->ConfigLastStatus);
     XhciLogNote(ext, "pci.cfg.info", hc->ConfigLastInformation);
@@ -756,6 +908,9 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
         if (!XhciStopController(ext)) {
             XhciFailClosedDma(ext);
         }
+        /* A refused controller drives nothing: the connectors go back. */
+        HcdPswRelease(hc);
+        hc->PswOn = 0;
         hcdRelease(hc);
         /* No thread ever ran to poll, and the half-built start's fatal
          * status or its stop's mask failure is the reading a refused start
@@ -812,6 +967,10 @@ static VOID hcdStopBody(PHCD_CONTROLLER hc)
             XhciFailClosedDma(ext);
         }
     }
+    /* Task 34.4: once the controller has halted, so the disconnects the
+     * hand-back makes are seen by no running xHCI. */
+    HcdPswRelease(hc);
+    hc->PswOn = 0;
     /*
      * The devices go once the controller has halted, not before: freeing a
      * record completes its URBs (hcd_io.c, HcdIoDeviceGone), and a client

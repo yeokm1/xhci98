@@ -78,6 +78,8 @@ What it checks, grouped by the failure each rule prevents:
            and XhciFastPollFsLs at 0, XhciFirstEnumWaitMs at 5000 and
            XhciFirstEnumPortMs at 2000, each the driver's own default, written
            so every value the driver reads is where a user looks for it
+           (owner, 2026-10-05). Task 34.4 made it eight:
+           XhciIntelPortSwitch at 1, the Intel port switchover's opt-out
            (owner, 2026-10-05).
            (**VAL-SZ was removed with XhciLogFile.** It was the
            string half - a REG_SZ's data is text two setup engines may quote,
@@ -1206,6 +1208,13 @@ $requiredValues = @(
         Default = "2000"
         Why     = "roadmap-hcd task 33.3's longest hold, in ms, one port may put on that wait. The INF writes the default so the value is where a user looks for it (owner, 2026-10-05; roadmap-hcd task 34.1)"
         DefaultWhy = "2000 is the driver's own default (xhci_enum.h); the INF writes the default and nothing else"
+    },
+    @{
+        Name    = "XhciIntelPortSwitch"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-hcd task 34.4's Intel EHCI-to-xHCI port switchover on the 7-, 8- and 9-series PCH, read at start on those five controllers only; 0 leaves the routing as firmware set it. The INF writes the 1 so the opt-out is where a user looks for it, under 34.1's don't-overwrite rule so a user's 0 survives an update (owner, 2026-10-05)"
+        DefaultWhy = "1 is the driver's own default - absent, of another type or any number but 0 is on (owner, 2026-10-05); shipping 0 would leave the machines the task exists for with nothing on their switchable connectors"
     },
     @{
         Name    = "XhciVirtualHSHub"

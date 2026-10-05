@@ -89,6 +89,7 @@ reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciForceBulkOnly|0x00010003|0|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciFastPollFsLs|0x00010003|0|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciFirstEnumWaitMs|0x00010003|5000|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciFirstEnumPortMs|0x00010003|2000|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciIntelPortSwitch|0x00010003|1|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciImodInterval250ns|0x00010003|160|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBControllerPropPageProvider"|remove
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||Controller|1|01|remove
@@ -135,6 +136,7 @@ reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciForceBulkOnly|0x00010003|0|k
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciFastPollFsLs|0x00010003|0|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciFirstEnumWaitMs|0x00010003|5000|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciFirstEnumPortMs|0x00010003|2000|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciIntelPortSwitch|0x00010003|1|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciImodInterval250ns|0x00010003|160|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBControllerPropPageProvider"|remove
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||Controller|1|01|remove
