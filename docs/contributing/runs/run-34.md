@@ -214,4 +214,6 @@ Enabled, the control, was not needed: Auto showed no fault.
   record 16, wording only (nine P3, then one), taken in `dfc2b33` and
   `e591717`.
 - 34.4, on the docs (`874085b`, `8a8514d`, `dc071b3`): round 1 no P1, seven
-  P2 and one P3, taken in `c2e648b` and `5729ada`.
+  P2 and one P3, taken in `c2e648b` and `5729ada`; round 2, on the
+  `2.1.1.0` release documents too, four P2 and two P3, taken in `6241eb5`;
+  round 3, two P2 and three P3, taken in `e36a05b`; round 4 clean.
