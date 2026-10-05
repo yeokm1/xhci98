@@ -53,7 +53,7 @@ table is the index.
 | USB Audio 2.0 | Not in this repository and not on this roadmap. A class driver of generic design, so that it serves machines on EHCI and vendor stacks as well as this one, built in its own repository; it needs nothing from xHCI, since UAC 2.0 runs at High Speed and binds by class through the standard URB contract |
 | One bench session before the cut | **Superseded** on 2026-10-04 by "Cut before the bench" (below). All bench work moves to one combined bench session immediately before the `2.0.0.0` cut (owner, 2026-10-03). Phases 28, 29, 30 and 31 each close their V clauses and A tasks and stay open on their E.1 clause alone; work proceeds into the next phase while the earlier E.1 clauses wait - an explicit exception to the rule that no phase advances past an unobserved checkpoint, limited to the E.1 clauses. The session reads 28-E.1, 29-E.1, 30-E.1 and 31-E.1; each such phase closes only when its clause passes, and the cut (Phase 32) waits on the session. Supersedes the owner's instruction of 2026-10-02 to continue into Phase 29 while 28-E.1 waits. Accepted costs: Phase 30's SuperSpeed hub work, which no QEMU device models, is first executed on the bench; QEMU's SuperSpeed model is Phase 29's only runtime check until then; real-controller defects surface late and together. Mitigations in VMs: a strict mode in the `qemu` flavour checking xHCI slot and endpoint state preconditions before every command, real devices by `usb-host` passthrough, the SMP Windows 2000 guest with Driver Verifier, and Codex reviews aimed at specification preconditions |
 | Interrupt moderation default | 160 (40 us, Linux's long-standing value), **INF only** (owner, 2026-10-04): both INFs write 160 on every HCD install path, where they wrote 500 (125 us), the miniport's value from `1.1.1.0`; the code default `XHCI_IMOD_INTERVAL_DEFAULT` stays 4000 (1 ms), what an absent, unreadable or out-of-range value runs at, and the INF gate holds both files to 160 (`VAL-DEFAULT`). Evidence, the owner's ATTO runs on the P14s Gen 1 under Windows 98 SE (the MSSU10 over UAS at SuperSpeed, queue depth 1): at 8 MB, 181/181 MB/s write/read at 500, 211/221 at 160, 217/225 at 40. A Full-Speed audio stream was read again at 160 on a Windows 2000 guest before the change. `runs/run-28.md`, "The interrupt moderation default: 160" |
-| The idle power policy (28.3) | Carried as a known limitation of `2.0.0.0` (owner, 2026-10-04): the bus never initiates selective suspend, of a device or of a hub port; it handles a suspend or resume it is asked for, or that a hub reports, the same "handle, don't initiate" ruling 27-A.1 took. A later phase may add selective suspend |
+| The idle power policy (28.3) | Carried as a known limitation of `2.0.0.0` (owner, 2026-10-04): the bus never initiates selective suspend, of a device or of a hub port; it handles a suspend or resume it is asked for, or that a hub reports, the same "handle, don't initiate" ruling 27-A.1 took. Phase 34 adds selective suspend (owner, 2026-10-05; design record 14) |
 | The other `1.2.0.0` limitations (28.3) | The NUSB stop crash, the Windows 98 churn wedge and the Windows 7 disable hang are each re-measured under the HCD and recorded as gone, carried or new (owner, 2026-10-04). A survivor is carried in the release notes and does not block the cut |
 | 28-E.1's Full-Speed hub clause | Taken at the bench, not recorded as untested ground (owner, 2026-10-04): a USB 2.0 hub forced to Full Speed by an ADuM full/low-speed isolator in front of it, in place of a USB 1.1 hub (owner, the same day, superseding the plan to buy one) |
 | Checkpoints of Phases 28 to 31 | Pre-approved (owner, 2026-10-04): each closes once its Codex review is clean, the x86 and amd64 builds, gates and host tests pass, every roadmap VM leg passes with its package hash recorded, and no regression is open on an earlier phase. Scope rulings, waivers, push, tag and the cut stay the owner's |
@@ -112,7 +112,7 @@ on both primary targets. Phase 27 brings external USB 2.0 hubs inside the
 bus. Phase 28 takes the seven other guests, the amd64 build and the bench.
 Phase 29 is SuperSpeed on root ports, Phase 30 SuperSpeed hubs, Phase 31
 streams and UAS, and Phase 32 the `2.0.0.0` cut; Phase 33 is the first
-update, `2.1.0.0`. The order is deliberate:
+update, `2.1.0.0`, and Phase 34 selective suspend. The order is deliberate:
 parity first, because round 12's device matrix and the acceptance test are a
 free oracle for everything USB 2.0; SuperSpeed before hubs, because root-port
 storage is what a user plugs in first; UAS last, because it needs streams and
@@ -539,6 +539,55 @@ Records: `releases/history.md`; `releases/2.1.0.0/`;
 
 ---
 
+## Phase 34 - Selective Suspend
+
+Goal: the bus suspends a device when Windows asks for it - a function's
+D-state in S0, or the idle notification on XP onward - and wakes it on D0 or
+on the device's remote wake, never on a timer of its own; USB 2.0 devices
+(stage A) and SuperSpeed devices (stage B), in one release.
+
+Status: open since 2026-10-05, on branch `2.1.1.0` (the release number is
+the owner's at the cut). Design record 14 (`design/14-selective-suspend.md`)
+is the design; stage A's half converged with Codex over ten review rounds
+(`b2d03d5`). Stage A is built on `p34-ss`, stage B on `p34-ss3`, both merged
+into `2.1.1.0`.
+
+Why a phase: it lifts the idle-policy limitation carried since `2.0.0.0`
+(decisions table, "The idle power policy (28.3)"), turns on code paths no
+release has run - port suspend, the PDO's power IRPs, WAIT_WAKE, the idle
+callback - and is on by default (`XhciSelectiveSuspend` 1, the owner's
+decision of 2026-10-05; record 14 section 7), so every user of the release
+runs it.
+
+Owner's decisions of 2026-10-05 (record 14 section 11): the switch defaults
+to 1; the test client is tracked under `test\`, never shipped, refused by the
+packaging gate; stage A's checkpoint includes the owner's bench reading;
+stage B ships in the same release, so the cut waits for it.
+
+- [ ] 34a.1 the link machine in the pure core, `xhci_susp.c`, with host suite `test_susp`: states and outcomes, the composite last-Dx rule, D0 during SUSPENDING, epoch-stamped Dx, wake classification, the episode's arming and completion by stamp, and the interleavings record 14 section 10 lists
+- [ ] 34a.2 the gate and the thread: one `SuspendPause` per pipe, the survivor restart, per-device slow-IRP deferral, root-port suspend and resume, the full-sample handoff at the port acknowledgement, USB 2.0 hub port suspend and both branches of the hub port look (record 14 section 3)
+- [ ] 34a.3 the PDO's power: slots, claiming, the composite rule, capabilities, WAIT_WAKE, GONE at the unlink, teardown in its order, START reopening, `PowerDown` admission and the controller's transitions (section 4 and 5)
+- [ ] 34a.4 the idle notification on the bus's callback thread: batches, the three-way claim, the context's phases, settlement of every idle IRP, quarantine (section 6 and 4.4)
+- [ ] 34a.5 the switch, the counters in the counter block and `XHCISNAP`, the bounded log lines
+- [ ] 34a.6 the test client under `test\`, and the packaging gate refusing it
+- [ ] 34a-V stage A's legs (record 14 section 10): the test client on 98 SE, 2000 (SMP, Driver Verifier), ME and XP, with the 9x WAIT_WAKE completion read and wake disabled on 9x if the defect holds; hidusb's own idle on XP, Vista and 7; behind QEMU's hub; composite interleavings; unplug at each state; controller disable, enable, D3 and restart mid-transition; the fault-injection leg; the switch at 0 reading as `2.1.0.0`; the matrix unchanged; x86 and amd64 and every gate
+- [ ] 34a-E stage A's bench (owner): a real remote-wake HID device on a 98 SE machine and on the E460's Windows 7
+- [ ] 34b.1 stage B's design: record 14 section 8 grown into the record proper - Function Suspend with wake enable per interface, the function remote-wake capability, Function Wake Device Notifications (DNCTRL, the event, interface-to-function ownership), PLS=Resume on USB 3 root ports and the `xhci_link.c` classification, SuperSpeed hub ports (no C_PORT_LINK_STATE on a wake) - reviewed by Codex to convergence before code
+- [ ] 34b.2 stage B built on stage A's machine, with host vectors
+- [ ] 34b-V stage B's legs on QEMU (root ports only: QEMU has no SuperSpeed hub)
+- [ ] 34b-E stage B's bench (owner): a SuperSpeed device with remote wake on a root port and behind a USB 3 hub
+- [ ] 34.8 the Power tab's current for a SuperSpeed device (from the root `handoff.md` of 2026-10-05): the page computes bMaxPower * 2 mA (design record 13 section 8.3), but bMaxPower is in 8 mA units at SuperSpeed, so a SuperSpeed device should read a quarter of its draw (a known limitation, release notes ~715-717); QEMU cannot show it (its SuperSpeed storage declares 0 mA). First the owner's reading on real hardware - the Power tab's mA against USBView's MaxPower for the same SuperSpeed bus-powered device: a quarter is this bug, equal is no bug, anything else is traced. If it is this bug, the proposed fix (Claude and Codex, 2026-10-05): in `hcdDoorDescriptor` only, after the configuration copy, rewrite the copied bMaxPower to min(255, b * 4) only for request code 0 (usbui's), configuration index 0, a SuperSpeed or SuperSpeedPlus connection and at least 9 bytes copied, the cached descriptor and returned length untouched; saturating at 510 mA, documented. Codex's alternative: descriptors left raw and the scaled demand shown in `XHCISNAP`. Docs with it: record 13 section 8.3 and the release notes
+- [ ] 34.9 the docs: record 13 sections 5, 6.5, 10.2 and 10.9; the release notes (the limitation replaced, the switch and its escape); this table's 28.3 row; `source-files.md`; the locking record; `runs/run-34.md`
+- [ ] 34.10 the cut, and the ten install legs read from the asset
+
+Checkpoint: 34a-V and 34b-V passing on the release package; 34a-E and 34b-E
+read by the owner; 34.8 read and, if it is the bug, fixed; the switch at 0
+reading as `2.1.0.0`; the ten install legs read from the asset.
+
+Records: `design/14-selective-suspend.md`; `runs/run-34.md` (to be opened).
+
+---
+
 ## What is not on this roadmap
 
 - **USB Audio 2.0.** A separate repository, by the owner's decision of
@@ -546,10 +595,10 @@ Records: `releases/history.md`; `releases/2.1.0.0/`;
   machines on EHCI and vendor stacks too. The Sound Blaster X4 in
   `test-equipment.md` is its specimen, and it can be built against the frozen
   `1.2.0.0` miniport today.
-- **Power management beyond what the targets force.** Selective suspend,
-  U1 and U2, S3 resume and remote wake are the bus's own once it owns the
-  power IRPs. Task 28.3 records the decision for `2.0.0.0`; a phase after it
-  may take the rest.
+- **Power management beyond what the targets force.** U1 and U2, S3 resume,
+  hub idle and controller idle are the bus's own once it owns the power
+  IRPs; none is on this roadmap. Selective suspend and remote wake are Phase
+  34's.
 - **The SuperSpeed storage proposal behind a switch**
   (`future-plans/superspeed-storage-behind-a-switch.md`). It was the way to
   SuperSpeed storage without leaving the miniport; with the miniport frozen it
