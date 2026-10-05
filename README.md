@@ -234,6 +234,7 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | `XhciFastPollFsLs` | A root-port Low- or Full-Speed mouse polled above 1000 Hz | `0` | `0` |
 | `XhciFirstEnumWaitMs` | The longest wait for a hub's first report | `5000` | `5000` |
 | `XhciFirstEnumPortMs` | The longest one port may hold that wait | `2000` | `2000` |
+| `XhciIntelPortSwitch` | The Intel 7/8/9-series port switchover; `0` turns it off | `1` | on |
 | `XhciLogVerbosity` | The driver's log, read by `XHCISNAP` | `0` | `0` |
 | `XhciLogDebugView` | The log sent to DebugView as well | `0` | `0` |
 
@@ -292,6 +293,16 @@ When the root hub or an external hub first reports its devices after it starts, 
 | `XhciFirstEnumPortMs` | The longest one port may hold it, held to the total | `2000` |
 
 With the defaults, the root hub's first report typically comes 20 to 30 ms after its start with nothing plugged in, and 0.3 to 0.9 s after it with a mouse and a stick plugged in.
+
+### The Intel 7/8/9-series port switchover
+
+On Intel 7-, 8- and 9-series chipsets (Ivy Bridge to Broadwell) and C610/X99, each switchable connector, usually a blue one, is wired to both the USB 2.0 (EHCI) and the xHCI controller. With the firmware's USB 3.0 setting on Auto, or no setting at all, those connectors typically start on the USB 2.0 controller, so up to `2.1.0.0` this driver saw nothing on them.
+
+Since `2.1.1.0` the driver moves them to the xHCI controller at each start and resume, and hands them back to the USB 2.0 controller when its controller is disabled, removed or the machine shuts down. It does this only on Intel xHCI device ids `1E31`, `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`; every other controller is left alone.
+
+- A device on a switchable connector under a running USB 2.0 driver (NUSB's, for example) is disconnected there when this driver starts and comes back under it. Do not have a drive busy on a blue connector at that moment.
+- `XhciIntelPortSwitch` set to `0` turns it off. Only `0` does; absent or any other number is on. It is read when the controller starts, so restart after changing it.
+- Tested on my Lenovo B490 (`1E31`) under Windows 98 SE with NUSB, on Auto and Smart Auto: SuperSpeed at 5 Gbit/s and USB 2.0 devices on the blue connectors, the black one left on EHCI, disable and enable, `XhciIntelPortSwitch` `0`, and shutdown. Standby, the other five ids and the other systems are untested.
 
 ### The 1.2.0.0 virtual-hub values
 
@@ -367,6 +378,7 @@ These come from Windows, NUSB or the driver being unsigned, and no change to thi
 | SuperSpeedPlus (USB 3.1 Gen 2, USB 3.2 Gen 1x2 and Gen 2x2) | Accepted at its trained rate, built from the specification. Not read on any hardware: no Gen 2 device has been tested, so every mode is untested. |
 | A UAS-only drive at SuperSpeed on a controller without streams | It is sent back to its USB 2.0 port and runs UAS at High Speed, or is refused if it has no USB 2.0 port. Built from the specification; no such controller has been held. |
 | Polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification. Not read on any real controller or in any virtual machine. |
+| The Intel port switchover beyond the B490 | Device ids `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`, systems other than Windows 98 SE, and standby. Built after Linux's handling of the same chipsets. |
 
 ## Toolchain and building
 

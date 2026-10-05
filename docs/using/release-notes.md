@@ -552,9 +552,82 @@ controller. hidusbf works behind a hub on XP too: its Setup reads the mouse's sp
   sends one command at a time, so a drive reads slower there than on a
   modern Windows at higher queue depth.
 
+## Intel 7-, 8- and 9-series chipsets: the port switchover
+
+New in `2.1.1.0`. On a machine with an Intel 7-, 8- or 9-series chipset
+(Ivy Bridge to Broadwell) or a C610/X99 one, each switchable connector,
+usually a blue one, is wired to two USB controllers, the USB 2.0 (EHCI) one
+and the xHCI one, and the chipset decides which of them has it. Firmware set
+to "Auto" or "Smart Auto", or offering no setting at all, typically leaves
+those connectors on the USB 2.0 controller for the operating system to move:
+on Windows 7 Intel's own USB 3.0 drivers do it, and Linux does it as it
+starts. Up to `2.1.0.0` this driver did not, so on such a machine it started
+with no error and saw nothing on those connectors, and a SuperSpeed drive
+there ran at High Speed under the USB 2.0 controller, where a driver for
+that was loaded.
+
+Since `2.1.1.0` the driver moves them itself, in the order Linux does: each
+time the controller starts, and again each time it resumes from standby, it
+turns on the SuperSpeed side of every connector firmware lets it switch,
+then moves the USB 2.0 side of each to the xHCI controller. When the
+controller stops - disabled or removed in Device Manager, a start that
+fails, or the machine shutting down - it hands them back to the USB 2.0
+controller. A standby or hibernate keeps them where they are.
+
+- **Which machines.** Only an Intel xHCI controller with PCI device id
+  `1E31` (7-series), `8C31` or `9C31` (8-series), `8CB1` or `9CB1`
+  (9-series), or `8D31` (C610/X99). On every other controller the driver
+  writes nothing for this. One board is left alone among those: a Sony VAIO
+  with subsystem id `104D:90A8`, which Linux records as unable to switch;
+  and so is any board whose subsystem id cannot be read. A connector that
+  firmware does not let the system switch stays with the USB 2.0 controller
+  whatever the driver does.
+- **A device on the USB 2.0 controller is disconnected when the driver
+  starts.** Where a USB 2.0 driver is running (NUSB's or SweetLow's on
+  Windows 98 SE and ME, Windows' own on 2000 and later) and has a device on
+  a switchable connector when this driver's controller starts, that device
+  is disconnected there and found again under this driver. A USB drive in
+  use there loses its drive letter mid-session, and writes in flight are at
+  risk, so do not copy files on a blue connector while installing this
+  driver or enabling its controller. The reverse happens when the
+  controller stops: the devices on those connectors go back to the USB 2.0
+  controller, and work there if a driver for it is loaded.
+- **Turning it off.** Set `XhciIntelPortSwitch` to `0` ("Registry
+  settings") on a machine whose switchable connectors must stay with the
+  USB 2.0 controller, for example for a device that works better there.
+- **What it logs.** With `XhciLogVerbosity` at `2` or above, `XHCISNAP`'s
+  report carries `psw.` records: `psw.gate` (`1` on a listed controller),
+  `psw.value`, the two masks firmware allows and what each register read
+  back after the write, and `psw.route.step`, `0` when every step was
+  accepted. Send them with any report from one of these machines.
+
+What it rests on. Read on 2026-10-05 by the owner on a Lenovo B490 (device
+id `1E31`) under Windows 98 SE with NUSB, with the firmware's USB 3.0
+setting on Auto: before Windows started, `XHCIQUAL` found the connectors on
+the USB 2.0 controller (both routing registers 0); under the driver every
+step was accepted and each register read back equal to firmware's mask; a
+SuperSpeed drive on a blue connector linked at 5 Gbit/s and a file made the
+round trip, and a USB 2.0 device worked under the driver; the one black
+connector stayed with NUSB's USB 2.0 controller; disabling the controller
+in Device Manager gave a device on a blue connector back to NUSB's driver,
+and enabling it took the device back; with `XhciIntelPortSwitch` at `0` a
+device on a blue connector stayed with the USB 2.0 controller; a mouse
+plugged into a blue connector at boot ended up under the driver; and after a
+shutdown the machine stayed off and the next boot found both registers at 0
+again. On Smart Auto, the registers before Windows, the switchover, the
+SuperSpeed link and the shutdown read the same. On a ThinkPad P14s Gen 1,
+whose controller (`02ED`) has no USB 2.0 controller beside it, the report
+showed `psw.gate` 0 and no other `psw.` record, and every external connector
+worked as before. These are the owner's readings, clause by clause; the
+B490's logs stayed on the B490.
+
+Not read: a standby and resume (Windows 98 SE offers none on the B490); any
+system but Windows 98 SE; and the other five device ids, which rest on
+Linux's handling of the same chipsets (see "Untested ground").
+
 ## Registry settings
 
-Seven values, each a `DWORD` in the controller's driver (software) key:
+Eight values, each a `DWORD` in the controller's driver (software) key:
 
 | Windows | Key |
 |---|---|
@@ -567,14 +640,25 @@ controller was ever enumerated at another PCI slot can have more than one
 such key: the device's own `Driver` value, under `Enum\PCI`, names the one in
 use. `XHCISNAP -verbosity` finds it for you.
 
-Since `2.1.1.0` the install writes all seven: each at the driver's own
+Since `2.1.1.0` the install writes all eight: each at the driver's own
 default, except `XhciImodInterval250ns` at `160`. Each is written only where
 it is missing, so a value you changed survives an install or update; to go
 back to the default, set it by hand, or delete the value and update the
-driver. Until `2.1.1.0` every install wrote all of them again. A machine
+driver. `XhciIntelPortSwitch` is new in `2.1.1.0`. Of the other seven, the
+`2.1.0.0` install wrote three, the two log values and
+`XhciImodInterval250ns`, and wrote them every time, over a value you had
+changed. A machine
 updated straight from `1.2.0.0` keeps that release's `XhciImodInterval250ns`
 of `500`, not `160`; set it by hand. One that went through `2.0.0.0` or
 `2.1.0.0` already holds `160`.
+
+Read in QEMU virtual machines on development host A, on the `release`
+flavour, before `XhciIntelPortSwitch` was added: a fresh install on Windows
+98 SE and 2000 wrote the seven at their defaults, and an update over
+`2.1.0.0` on Windows 98 SE, 2000 and 32-bit Windows 7, with
+`XhciLogVerbosity` and `XhciFirstEnumWaitMs` set by hand first, kept both
+and added the four that were missing. The other systems install through INF
+lines with the same values and the same flag, and were not read for this.
 
 ### XhciImodInterval250ns: the interrupt moderation interval
 
@@ -676,6 +760,26 @@ plugged in was taken with the virtual machine's SMM turned off (QEMU's
 SMM at boot with a USB mouse attached; that is the virtual machine's, not
 the driver's. Neither value was read set to anything but its default.
 
+### XhciIntelPortSwitch: the Intel port switchover
+
+New in `2.1.1.0`; the install writes `1`. It matters only on the Intel
+chipsets listed in "Intel 7-, 8- and 9-series chipsets: the port
+switchover", and is not even read on any other controller.
+
+| Value | Effect |
+|---|---|
+| `0` | Off: the driver leaves the connectors where they are, as every release up to `2.1.0.0` did |
+| `1`, any other number, absent, or not a `DWORD` | On: the driver moves the connectors to itself at each start and hands them back at each stop |
+
+Only an explicit `0` turns it off, so a mistyped value cannot. It is read
+when the controller starts, so a change takes effect at the next restart or
+at a disable and enable of the controller in Device Manager. Setting `0`
+does not give the connectors back by itself: after a restart they are where
+firmware puts them, and after a disable and enable they stay where the
+disable left them, with the USB 2.0 controller. Read on a Lenovo B490 under
+Windows 98 SE: at `0` and after a restart, a device on a blue connector
+stayed with the USB 2.0 controller.
+
 ### XhciLogVerbosity and XhciLogDebugView: the log
 
 See "The log, and how to send one". Both default to `0`.
@@ -708,8 +812,8 @@ build: the root hub's and the hub's Power tabs list each device's power in
 mA on Windows 98 SE and 2000 (a mouse, a keyboard and an audio device
 100 mA, a stick 0 mA), on 32-bit XP, and on XP x64 (a mouse and a keyboard
 100 mA, a stick and the hub 0 mA). The 0 mA is what QEMU's stick and hub
-ask for in their own descriptors. Two things the pages show are Windows'
-own arithmetic, not the driver's:
+ask for in their own descriptors. Two things the pages show rest on Windows'
+own arithmetic:
 
 - **Bandwidth counts isochronous pipes in use, and nothing else.** On
   Windows 98 SE to XP the Advanced tab adds up only the isochronous pipes
@@ -720,9 +824,22 @@ own arithmetic, not the driver's:
   98 SE's `USBAUDIO.VXD` fails on playing in a virtual machine ("Known
   limitations"). On Vista and 7 the figure comes from a WMI query the driver
   does not answer, and stays at zero.
-- **A SuperSpeed device's power reads a quarter of its draw.** The page
+- **A SuperSpeed device's power: 510 mA means 510 mA or more.** The page
   doubles the configuration descriptor's `bMaxPower`, which is in 2 mA units
-  at USB 2.0 and in 8 mA units at SuperSpeed.
+  at USB 2.0 and in 8 mA units at SuperSpeed, so up to `2.1.0.0` a
+  SuperSpeed device read a quarter of its draw. Since `2.1.1.0` the driver
+  hands the page, and only the page, a SuperSpeed device's value converted
+  to 2 mA units. That byte cannot count past 510 mA, so a device declaring
+  up to 510 mA reads its own figure and one declaring more reads 510 mA.
+  Every other reader of the descriptor gets the device's own bytes. The
+  exact figure is in `XHCISNAP`'s report, with `XhciLogVerbosity` at `2` or
+  above ("The log, and how to send one"): `dev.ss.maxpower.ma`, the declared
+  current in hexadecimal mA, after the device's `dev.ss.vidpid`. Read on a
+  ThinkPad P14s Gen 1: a SuperSpeed drive declaring 896 mA, which read
+  224 mA under `2.1.0.0` on Windows 98 SE, reads 510 mA, and the report
+  shows `dev.ss.maxpower.ma=00000380` (896 mA); a USB 2.0 device reads as
+  it did. A SuperSpeed device declaring less than 510 mA has not been read
+  on hardware.
 
 ## The log, and how to send one
 
@@ -811,9 +928,19 @@ Each was measured, in a virtual machine unless it names a physical machine.
 - **Windows Vista and 7: the controller's Advanced tab shows no bandwidth.**
   The figure comes from a query the driver does not answer, and stays at
   zero. See "The controller's Advanced tab and the root hub's Power tab".
-- **A SuperSpeed device's power reads a quarter of its draw** on the Power
-  tab, on every system: the page doubles a value that is in 8 mA units at
-  SuperSpeed. Same section.
+- **A SuperSpeed device declaring more than 510 mA reads 510 mA** on the
+  Power tab, on every system: the value the page reads cannot count past
+  510 mA. `XHCISNAP`'s report gives the exact figure. Same section. (Up to
+  `2.1.0.0` every SuperSpeed device read a quarter of its draw there.)
+- **Intel 7-, 8- and 9-series chipsets: a device on a blue connector moves
+  between the USB 2.0 controller and this driver when the controller starts
+  or stops**: it is disconnected on one side and found again on the other.
+  Read on a Lenovo B490 under Windows 98 SE with NUSB, with a mouse plugged
+  in at boot, and with a device across a disable and enable of the
+  controller. A drive in use is disconnected
+  the same way, so do not have one busy on a blue connector when the
+  controller starts or stops. See "Intel 7-, 8- and 9-series chipsets: the
+  port switchover".
 - **Windows 98 SE and ME: a device name with characters outside plain ASCII
   shows them as `?`.** See "Devices and hubs in Device Manager".
 - **Windows XP and XP x64 installed with the F6 floppy: GUI-mode Setup asks
@@ -876,6 +1003,7 @@ information.
 | High-Speed hubs, single- and multi-TT, and Full and Low Speed devices behind them, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only. Virtual machines model only a Full-Speed hub, so on every other target the High-Speed paths rest on host tests |
 | A UAS-only device at SuperSpeed on a controller that cannot stream | Built from the specification against host tests; no such controller held |
 | Low- and Full-Speed polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification, built against host tests; read on no real controller and in no virtual machine |
+| The Intel port switchover beyond one machine | Read on one `1E31` machine under Windows 98 SE ("Intel 7-, 8- and 9-series chipsets: the port switchover"). Device ids `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`, every other system, and a standby and resume rest on Linux's handling of the same chipsets and on host tests of the sequence |
 | Installing Windows 2000 or XP, or the Recovery Console, from the F6 floppy on real hardware | Read in virtual machines only: text mode on Windows 2000 and 32-bit XP, the Recovery Console on both, and installs to the desktop on 32-bit XP and XP x64. Never on real hardware; a repair install, Windows 2000's Emergency Repair Disk and Windows XP's Automated System Recovery on no vehicle |
 
 ## Licensing

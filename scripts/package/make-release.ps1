@@ -3402,8 +3402,16 @@ being unsigned, and no change to this driver can remove them:
     own device manager stops responding; it does the same on Microsoft's
     own USB stack. Wait for the install to finish before unplugging.
 
-  * A SUPERSPEED DEVICE'S POWER READS A QUARTER OF ITS DRAW on the Power
-    tab: the page doubles a value that is in 8 mA units at SuperSpeed.
+  * A SUPERSPEED DEVICE DECLARING MORE THAN 510 mA READS 510 mA on the
+    Power tab: the value the page reads cannot count past 510 mA. With
+    XhciLogVerbosity at 2, XHCISNAP's report gives the exact figure as
+    dev.ss.maxpower.ma, in hexadecimal mA. (Up to 2.1.0.0 every SuperSpeed
+    device read a quarter of its draw there.)
+
+  * INTEL 7-, 8- AND 9-SERIES CHIPSETS: A DEVICE ON A BLUE CONNECTOR MOVES
+    BETWEEN THE USB 2.0 CONTROLLER AND THIS DRIVER when this driver's
+    controller starts or stops, so a drive busy there is disconnected
+    (XhciIntelPortSwitch, section 9).
 
   * WINDOWS XP FROM THE F6 FLOPPY: GUI-MODE SETUP ASKS ABOUT THE UNSIGNED
     DRIVER BEFORE THE USB KEYBOARD WORKS. A PS/2 or built-in laptop
@@ -3470,8 +3478,8 @@ debug throughout, in its build scripts and its documentation alike.)
  9. REGISTRY SETTINGS
 ==============================================================================
 
-Every registry value this driver reads. There are seven, all DWORDs. The
-install writes all seven, each at the default it states below except
+Every registry value this driver reads. There are eight, all DWORDs. The
+install writes all eight, each at the default it states below except
 XhciImodInterval250ns, which it writes as 160. It writes each only where it is
 missing, so a value you changed survives an install or update; to go back to
 the default, set it by hand, or delete the value and update the driver. A
@@ -3592,7 +3600,28 @@ means the default each one states.
   ms after the start with nothing plugged in, and 0.3 to 0.9 s after it
   with a mouse and a stick plugged in.
 
-  THOSE SEVEN ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
+  XhciIntelPortSwitch  -  the Intel 7/8/9-series port switchover
+  ..............................................................
+
+  Default 1: on. It matters only on an Intel xHCI with PCI device id 1E31,
+  8C31, 9C31, 8CB1, 9CB1 or 8D31 (7-, 8- and 9-series chipsets, Ivy Bridge
+  to Broadwell, and C610/X99), and is not read on any other controller.
+  There each switchable connector, usually a blue one, is wired to both the
+  USB 2.0 (EHCI) and the xHCI controller, and firmware on "Auto", or with
+  no setting, typically leaves it on the USB 2.0 one. This driver moves
+  those connectors to itself at each start and resume, and hands them back
+  when its controller stops and at shutdown.
+
+  A device under a running USB 2.0 driver (NUSB's, for example) on such a
+  connector is disconnected there when this driver starts and comes back
+  under it, and the reverse at a stop: do not have a drive busy there then.
+
+  Set it to 0 to leave the connectors where firmware put them. ONLY 0
+  TURNS IT OFF; absent or any other number is on. Read when the controller
+  starts, so restart after changing it. Read on a Lenovo B490 (1E31) under
+  Windows 98 SE with NUSB; standby and the other five ids are untested.
+
+  THOSE EIGHT ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
   XhciVirtualHSHubVid and XhciVirtualHSHubPid are not read: a copy left in
   the key by an earlier install has no effect, because this driver reports
   every device at its true speed with no virtual hub in the way. Delete
