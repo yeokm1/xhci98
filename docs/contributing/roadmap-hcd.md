@@ -544,7 +544,9 @@ Records: `releases/history.md`; `releases/2.1.0.0/`;
 Goal: the bus suspends a device when Windows asks for it - a function's
 D-state in S0, or the idle notification on XP onward - and wakes it on D0 or
 on the device's remote wake, never on a timer of its own; USB 2.0 devices
-(stage A) and SuperSpeed devices (stage B), in one release.
+(stage A) and SuperSpeed devices (stage B), in one release. With them, the
+first standby and hibernate resume readings under the HCD (34.9), which the
+suspend design rests on, and two Device Manager figures (34.8, 34.10).
 
 Status: open since 2026-10-05, on branch `2.1.1.0` (the release number is
 the owner's at the cut). Design record 14 (`design/14-selective-suspend.md`)
@@ -577,11 +579,14 @@ stage B ships in the same release, so the cut waits for it.
 - [ ] 34b-V stage B's legs on QEMU (root ports only: QEMU has no SuperSpeed hub)
 - [ ] 34b-E stage B's bench (owner): a SuperSpeed device with remote wake on a root port and behind a USB 3 hub
 - [ ] 34.8 the Power tab's current for a SuperSpeed device (from the root `handoff.md` of 2026-10-05): the page computes bMaxPower * 2 mA (design record 13 section 8.3), but bMaxPower is in 8 mA units at SuperSpeed, so a SuperSpeed device should read a quarter of its draw (a known limitation, release notes ~715-717); QEMU cannot show it (its SuperSpeed storage declares 0 mA). First the owner's reading on real hardware - the Power tab's mA against USBView's MaxPower for the same SuperSpeed bus-powered device: a quarter is this bug, equal is no bug, anything else is traced. If it is this bug, the proposed fix (Claude and Codex, 2026-10-05): in `hcdDoorDescriptor` only, after the configuration copy, rewrite the copied bMaxPower to min(255, b * 4) only for request code 0 (usbui's), configuration index 0, a SuperSpeed or SuperSpeedPlus connection and at least 9 bytes copied, the cached descriptor and returned length untouched; saturating at 510 mA, documented. Codex's alternative: descriptors left raw and the scaled demand shown in `XHCISNAP`. Docs with it: record 13 section 8.3 and the release notes
-- [ ] 34.9 the docs: record 13 sections 5, 6.5, 10.2 and 10.9; the release notes (the limitation replaced, the switch and its escape); this table's 28.3 row; `source-files.md`; the locking record; `runs/run-34.md`
-- [ ] 34.10 the cut, and the ten install legs read from the asset
+- [ ] 34.9 system standby (S3) and hibernate (S4) resume, read for the first time under the HCD: the controller's D3 and D0 paths in `hcd_power.c` - the D0 resume, the work-item route and the direct transition - have never run on a guest (its header; neither primary's test guest sleeps, Windows 2000's runs `acpi=off`), and record 14 section 4.4 rests on them (pended D0s across a controller transition, a device's link still in U3 after a restore). Read on guests that sleep - QEMU with S3 enabled, ME (which hibernates on QEMU's power-down), and each target that can be made to - and on the E460 and the P14s Gen 1 (owner): standby and resume, hibernate and resume, with devices idle, devices suspended by 34a, and a D0 pended across it; a controller with and without Force Save Context (QEMU reads FSC 0); what breaks is fixed in this phase. The release notes' "a wake from standby" row moves from untested to read
+- [ ] 34.10 the controller's Advanced tab on Windows Vista and 7 shows no bandwidth: the page reads it from a WMI query the HCD does not answer (task 33.5; release notes, known limitations), so it stays at zero. Find the query the page sends (its class and GUID, from Vista's and 7's `usbui.dll` / the stock `usbport.sys` WMI provider), answer it from the bus's own periodic bandwidth accounting, and read it with a USB audio device playing on Vista and 7; the 98 SE to XP reading (open isochronous pipes only) is left as it is
+- [ ] 34.11 the docs: record 13 sections 5, 6.5, 10.2 and 10.9; the release notes (the limitation replaced, the switch and its escape); this table's 28.3 row; `source-files.md`; the locking record; `runs/run-34.md`
+- [ ] 34.12 the cut, and the ten install legs read from the asset
 
 Checkpoint: 34a-V and 34b-V passing on the release package; 34a-E and 34b-E
-read by the owner; 34.8 read and, if it is the bug, fixed; the switch at 0
+read by the owner; 34.8 read and, if it is the bug, fixed; 34.9's resumes read
+on guests and the bench; 34.10 read on Vista and 7; the switch at 0
 reading as `2.1.0.0`; the ten install legs read from the asset.
 
 Records: `design/14-selective-suspend.md`; `runs/run-34.md` (to be opened).
