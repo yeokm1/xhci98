@@ -38,14 +38,14 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * XhciForceBulkOnly (31-A.3), is read at every enumeration rather than at
  * start: absent is 0, UAS where the device offers it. XhciFastPollFsLs
  * (33.8) is read at start: absent is 0, every interval by Table 6-12. Since
- * 34.12 the INFs write both, and the two below, at those defaults. */
+ * 34.1 the INFs write both, and the two below, at those defaults. */
 #define HCD_VALUE_LOG_VERBOSITY L"XhciLogVerbosity"
 #define HCD_VALUE_LOG_DEBUGVIEW L"XhciLogDebugView"
 #define HCD_VALUE_IMOD          L"XhciImodInterval250ns"
 #define HCD_VALUE_FORCE_BOT     L"XhciForceBulkOnly"
 #define HCD_VALUE_FAST_POLL     L"XhciFastPollFsLs"
 /* Task 33.3: the first answer's settle, in ms (xhci_enum.h). The INFs write
- * the defaults (34.12); text-mode Setup's txtsetup.oem writes none, so there
+ * the defaults (34.1); text-mode Setup's txtsetup.oem writes none, so there
  * they are absent and the same defaults stand. */
 #define HCD_VALUE_SETTLE_TOTAL  L"XhciFirstEnumWaitMs"
 #define HCD_VALUE_SETTLE_PORT   L"XhciFirstEnumPortMs"

@@ -484,13 +484,13 @@ task. The miniport reads six values from its device key (`src\*.c`, the six
 | `XhciLogDebugView` | Carried over, same meaning; under the HCD it also selects 26-A.8's continuous PASSIVE flusher |
 | `XhciImodInterval250ns` | Carried over, same meaning and code default 4000; both INFs write 160 (40 us) on every install path since the owner's ruling of 2026-10-04 (`roadmap-hcd.md`, decisions table), 500 until then |
 | `XhciVirtualHSHub`, `XhciVirtualHSHubVid`, `XhciVirtualHSHubPid` | Not read and not written (owner, 2026-10-02); the INF gate refuses them in an HCD INF (`VAL-HCDVHUB`) |
-| `XhciFastPollFsLs` | New in `2.1.0.0` (task 33.8), the HCD's own: read at each controller start, written by no INF until task 34.12 and as 0 since, absent or 0 is off. Lets a Low- or Full-Speed interrupt endpoint on a root port be polled faster than 1 ms; section 13 |
+| `XhciFastPollFsLs` | New in `2.1.0.0` (task 33.8), the HCD's own: read at each controller start, written by no INF until task 34.1 and as 0 since, absent or 0 is off. Lets a Low- or Full-Speed interrupt endpoint on a root port be polled faster than 1 ms; section 13 |
 
 The root-hub sections write no value of the controller's: they carry the
 loader values on Windows 98 and the hub property-page registration on every
 path (section 8), which the gate's `HCD-HUBPAGE` rule holds them to.
 
-Since task 34.12 (owner, 2026-10-05) both INFs write every value the HCD
+Since task 34.1 (owner, 2026-10-05) both INFs write every value the HCD
 reads, on every install path: the three above, `XhciFastPollFsLs`, and
 `XhciForceBulkOnly` (31-A.3), `XhciFirstEnumWaitMs` and
 `XhciFirstEnumPortMs` (33.3), each at the driver's own default but the
