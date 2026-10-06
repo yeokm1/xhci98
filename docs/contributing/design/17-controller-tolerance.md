@@ -15,7 +15,10 @@ power gate taken explicitly (4.1, 4.6), the soft retry intercepted before
 the engine's terminal mutations and generation-checked (4.2), the cycle
 before a PDO exists (4.3), and containment that drains only after its proof
 (4.6). Section 10 maps every finding of the seven rounds to where it is
-answered. Nothing below is converged.
+answered. **Converged**: review round 8, on revision 7 (`edc7a2a`), found
+every earlier finding resolved and nothing material remaining. Section 9's
+proposed intervals, budgets and value names stand as proposed until the
+owner changes them.
 
 ## 1. What is asked, and what is not
 
