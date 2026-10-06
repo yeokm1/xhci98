@@ -3203,6 +3203,20 @@ static ULONG xhciSaveState(PXHCI_EXTENSION ext)
             return 0;
         }
     }
+    /*
+     * **The table above is the miniport's, and the HCD never fills it**: the
+     * start zeroes the extension, so every entry reads FREE and the loop
+     * passes whatever is queued. The HCD's own queues are the real answer,
+     * and the same rule applies to them - declined while any transfer is
+     * outstanding, so the resume reinitializes and the invalidation that
+     * follows completes it, rather than a restore discarding its completion
+     * (XhciEventDiscardStale) and leaving the request pending. A bus with
+     * nothing queued saves as before.
+     */
+    if (XhciSlotSaveBusy(ext)) {
+        XHCI_DBG_TEXT("save: declined - a transfer is outstanding");
+        return 0;
+    }
 
     /*
      * Step 2 of the same procedure: "Ensure that the Command Ring is in the

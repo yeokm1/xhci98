@@ -1397,6 +1397,16 @@ VOID XhciSlotPoll(PXHCI_EXTENSION ext);
 VOID XhciSlotResumeSweep(PXHCI_EXTENSION ext);
 
 /*
+ * 1 while any device has a transfer outstanding on its rings (the HCD's
+ * queues: every endpoint's, EP0's and each stream's). The save gate
+ * declines on it: step 1 of the save procedure stops Busy endpoints first
+ * (4.23.2, p.313), and a completion the controller writes for one while
+ * halted is discarded at the restore (XhciEventDiscardStale), leaving its
+ * request pending. IRQL: <= DISPATCH_LEVEL, controller lock released.
+ */
+ULONG XhciSlotSaveBusy(PXHCI_EXTENSION ext);
+
+/*
  * Give up every device because the controller's state is gone: a stop, or a
  * resume that had to reinitialise instead of restoring (task 6-B.6).
  *

@@ -664,6 +664,50 @@ VOID XhciSlotDeferredWorkForced(PXHCI_EXTENSION ext, ULONG armMode)
     UNREFERENCED_PARAMETER(armMode);
 }
 
+/* Whether a transfer is outstanding on any device's ring: an endpoint's
+ * queue, EP0's (the thread's own record and the URBs') or a stream's. The
+ * save gate (xhciSaveState) asked the miniport's device table, which the
+ * HCD never fills, so every device passed as idle. IRQL: <= DISPATCH_LEVEL,
+ * controller lock released. */
+ULONG XhciSlotSaveBusy(PXHCI_EXTENSION ext)
+{
+    PHCD_CONTROLLER hc;
+    PHCD_USB_DEVICE dev;
+    PHCD_PIPE pipe;
+    KIRQL oldIrql;
+    ULONG busy;
+    ULONG slot;
+    ULONG dci;
+    ULONG sid;
+
+    hc = HcdControllerFromExt(ext);
+    busy = 0;
+    XhciControllerLockAcquire(ext, &oldIrql);
+    for (slot = 1; slot <= XHCI_MAX_SLOTS && !busy; slot++) {
+        dev = hc->SlotDevice[slot];
+        if (dev == NULL) {
+            continue;
+        }
+        for (dci = 1; dci < 32 && !busy; dci++) {
+            pipe = (dci == 1) ? &dev->Ep0Pipe : dev->Pipes[dci];
+            if (pipe == NULL) {
+                continue;
+            }
+            busy = (pipe->Queue->Count != 0) ? 1UL : 0UL;
+            for (sid = 1; pipe->Streams != NULL &&
+                              sid <= pipe->Streams->Count && !busy;
+                 sid++) {
+                busy = (pipe->Streams->Pipe[sid] != NULL &&
+                        pipe->Streams->Pipe[sid]->Queue->Count != 0)
+                           ? 1UL
+                           : 0UL;
+            }
+        }
+    }
+    XhciControllerLockRelease(ext, oldIrql);
+    return busy;
+}
+
 /* IRQL: <= DISPATCH_LEVEL, controller lock released. */
 VOID XhciSlotResumeSweep(PXHCI_EXTENSION ext)
 {
