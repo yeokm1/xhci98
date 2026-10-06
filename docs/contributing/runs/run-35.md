@@ -1,0 +1,316 @@
+# Phase 35 Record - SuperSpeed on Intel Sunrise Point, the Ungated Port Switchover and Controller Tolerance
+
+The detail behind `docs/contributing/roadmap-hcd.md`, "Phase 35 - Release
+`2.2.0.0`". The roadmap entry carries the goal, the status, the task list and
+the checkpoint; this file carries what each task did and what each reading
+said. Where the two disagree about a clause, the roadmap wins.
+
+**Opened at task 35.6 (2026-10-07), while the phase is still open**, from
+the roadmap's done-notes for the tasks already done. A section reading "To
+be read" is a task or a leg still to be taken, and is filled when it is.
+
+**On `out\...`, `vm\...` and `temp\...` paths in this file.** They say where
+a reading was kept on the host or machine that took it; they are not files
+a clone has.
+
+**Hardware.** The owner's ThinkPad E460 (`8086:9D2F`, Intel Sunrise
+Point-LP), ThinkPad P14s Gen 1 (`8086:02ED`) and Lenovo B490 (`8086:1E31`),
+and a tester's HP EliteBook 850 G5 (`8086:9D2F` and `8086:15DB`). Every
+hardware reading below is Windows 98 SE or DOS; Windows 2000 has never run
+on real hardware in this project, and its legs are virtual-machine legs.
+
+**`2.2.0.0`: cut before the bench** (owner, 2026-10-06; the decisions
+table). 35-E is read on real hardware after 35.7's cut, on the `2.2.0.0`
+asset, and the release documents are written as if it passes; an outcome
+not met is changed and recut before the release is published.
+
+Opened: 2026-10-06 (the phase, on branch `2.2.0.0`, cut from `main` at
+`c6f17ba`).
+
+## 35.0 - the first reading on the E460
+
+Read 2026-10-06 by the owner, the E460 under Windows 98 SE with `2.1.1.0`
+unmodified, `XHCISNAP -verbosity 3` and a restart first, the applied level
+checked in each dump's header; the right rear USB 3 connector, a USB 3 hub
+and a UAS-capable USB 3 stick. Eighteen dumps, each taken twice a few
+seconds apart - every port empty; each device from power-on, right after a
+hot-plug and some 10 s later - kept git-ignored in `temp/e460-cas/` with the
+`2.1.1.0` offset table `offsets-211.txt` (SIZEOF 105192).
+
+- Every dump with a device attached reads USB 3 root port 13 at `00001203`:
+  CCS and PED set, U0, speed ID 4, no change bits. One taken during a
+  hot-plug caught it still in RxDetect.
+- No slot is ever made for it: the hub's USB 2.0 half enumerates on port 1,
+  the stick is never seen. Decoded, port 13's change events arrive and no
+  command follows them.
+- The USB 3 protocol's Supported Protocol capability publishes three PSI
+  entries (IDs 1 to 3 at 1248, 2496 and 4992 Mb/s, Intel's SSIC rates) and
+  none for 4.
+
+The cause is this driver's: `XhciPortSpeedClass` (`xhci_caps.c`) read a
+published table as replacing the default IDs, so speed ID 4 decoded as
+unknown; the enumeration failed on the speed before Enable Slot, retried
+once and was never retried while the device stayed. The Missing-CAS lead
+the phase was planned around (Linux's `XHCI_MISSING_CAS`, a link stuck in
+Polling) is not supported: the link trains. The owner re-planned 35.1 to
+35.4 around the fix the same day (`6e48f94`, review round 1 `fadd358`), the
+`XhciMissingCas` gate dropped. Issue 11 is the write-up.
+
+## 35.1 - the speed-table fix
+
+**First, `XHCIQUAL` reads the tables** (owner, 2026-10-06; `37ab542`).
+`f17b43e`, review round 1 `6df116b`: each Supported Protocol's PSI entries
+decoded (ID, rate, type, lanes) in the read-only scan, a warning when a USB
+3 table lists entries but not ID 4, and the raw extended-capability chain
+in the log; `dfbac0c` made the banner OS-neutral; `887c768`, review rounds
+`e749374` and `35c5723`, keeps protocol tables past the raw dump's bound.
+The probes, `XHCIQUAL --probe-only --no-page --log`, in
+`xhciqual/results/*-2026-10-06/` (`824433b`, `e2536ec`, `8185dc6`):
+
+| Machine | Controller | USB 3 protocol | PSI entries | ID 4 |
+|---|---|---|---|---|
+| E460 | `8086:9D2F` rev 21 | 3.0, PSIC 3 | 1-3: SSIC 1248, 2496, 4992 Mb/s | not listed |
+| P14s Gen 1 | `8086:02ED` rev 00 | 3.1, PSIC 8 | 4: 5 Gb/s; 5: 10 Gb/s; 6-11: SSIC rates | listed |
+| B490 | `8086:1E31` rev 04 | 3.0, PSIC 1 | 4: 5 Gb/s | listed |
+| HP EliteBook 850 G5 | `8086:9D2F` rev 21 | 3.0, PSIC 3 | the E460's words, raw DWORDs included | not listed |
+| HP EliteBook 850 G5 | `8086:15DB` rev 02 | 3.1, PSIC 2 | 4: 5 Gb/s; 5: 10 Gb/s | listed |
+
+The two machines that never failed list ID 4; the P14s's 6 and 7, SSIC
+rates where the defaults would read Gen 1x2 and Gen 2x2, are the vector
+that a listed entry wins. Beside them, the same evening, a probe of an AM5
+board (PRO B650M-CT-CSM, `eec1182`) for the tolerance work: four AMD
+controllers, every USB 3 table listing 4 and 5, so issue 11's decoding does
+not arise there.
+
+**The fix** (`6a22d45`, review round 1 `92659f1`; converged at review
+round 2; 2026-10-06): on a USB 3.x protocol with PSIC > 0, a PORTSC speed ID
+the table does not list falls back to the default meaning of IDs 4 to 7,
+each `XHCI_SPEED_SUPER` for every functional decision with its rate and
+lanes kept apart; a listed ID wins, even one whose rate reads unknown; any
+other unlisted ID stays unknown; USB 2.0 unchanged. The same rule in
+`XhciPortRate` and `XhciPortPsivForSpeed`, which takes 4 for SuperSpeed only
+where the table does not list it, so a device behind a SuperSpeed hub is
+addressed too; a SuperSpeedPlus child of such a table is never given an
+unlisted 5 to 7. The Slot Context keeps the controller's raw ID; a failed
+enumeration stays terminal. Host vectors with the E460's exact 18-port map
+and PSI words (`test_caps`, `test_link`, `test_sshub`), failing against the
+unfixed sources as 35.0 read. Host tests green; x86 debug, release and qemu
+and amd64 release built, every gate green. `implementation-invariants.md`,
+"Port Speed Decoding", carries the exception.
+
+## 35.2 - the E460 reading with 35.1's package
+
+Read 2026-10-06 by the owner, the E460 under Windows 98 SE, the `release`
+flavour built at `7dc9eb5` (35.1 and 35.3 in it), `XhciLogVerbosity` 3; ten
+dumps git-ignored in `temp/e460-352/` and an ATTO screenshot. The
+UAS-capable stick and the USB 3 hub from 35.0, on another USB 3 connector
+than 35.0's (owner).
+
+| # | Clause | Read |
+|---|---|---|
+| 1 | The stick at boot | **Pass**: seen from power-on, at SuperSpeed |
+| 2 | The stick unplugged and replugged | **Pass**: two cycles, seen each time |
+| 3 | A file copied at SuperSpeed | **Pass**: a large file there and back, `FC /B` clean; ATTO 242 MB/s writing and 245 MB/s reading at 8 MB transfers |
+| 4 | The hub's SuperSpeed half, a SuperSpeed device behind it | **Pass**: both halves present after a hot-plug, a replug and a cold boot, the stick behind it each time |
+| 5 | The dumps | **Pass**: on root port 14, `enum.port.speed` "ID 4 is SuperSpeed, by default ID, unlisted on a USB 3 table", 5000 Mbit/s, Enable Slot successful; the Output Slot Contexts speed 4, SuperSpeed 5 Gbit/s Gen 1x1, for the stick direct, the hub and the stick behind it (route 2, tier 1) |
+| 6 | A Bulk-Only SuperSpeed device | **Not read**: none to hand |
+| 7 | `XHCIQUAL`'s probe on the E460, the P14s Gen 1 and the B490 | **Pass**: taken the same day (35.1) |
+| 8 | The connector's USB 2.0 pairing | **Read**: on both connectors USB 3 port n shares the connector with USB 2.0 port n - 12 (13 with 1, 14 with 2), where the driver's convention (`xhciPairCompanions`) pairs 13 with 7; that matters to 29-A.5's send-back and holds, not to this fix |
+
+Not read further: the hub's hot-plug and replug settled only after warm
+resets of its SuperSpeed half (three, then two more, `SsWarmResets`) and two
+failed resets of its USB 2.0 half (`enum.port.fail`, "failed on the
+reset"); the cold boot with the hub attached showed neither. Whether that
+is the hub's or this driver's is not read. Issue 11 section 6 has the
+reading in full.
+
+## 35.3 - the diagnostics the 35.0 reading lacked
+
+Done 2026-10-06; review round 1 `4311819`, converged at review round 2,
+which kept the eight-burst budget; host tests and `XHCISNAP`'s self-test
+green; x86 debug, release and qemu and amd64 release built, every gate
+green.
+
+- **The enumeration notes** (`ed70d62`): bounded shipping `XhciLogNote`
+  records for a root port's enumeration, from `XhciLogVerbosity` 2 -
+  `enum.port.look`, `reset`, `speed`, `rate`, `slot`, `fail`, `end` and
+  `quiet` - packed by pure functions in `xhci_enum.c` with host vectors in
+  `test_enum`, 35.0's port 13 as the worked case; eight bursts a root port
+  between enumerations, refused bursts counted. `XHCISNAP` decodes them
+  after the ring ("root port enumeration notes, decoded").
+- **The HCD region** (`22ffb60`): snapshot region 3,
+  `XHCI_SNAPSHOT_REGION_HCD`, with no schema change - an eight-word header,
+  a 16-word record a root port (its machine state, failure cause, retries,
+  slot, raw speed ID with its class and source, warm resets and give-up,
+  notes charged and refused) and the 63 counters of `XHCIHC_COUNTERS`,
+  which lie outside the extension; laid out by the pure `xhci_snap.c`
+  (`test_snap`) and filled word by word by `hcd_door.c`. An older driver
+  answers the region `BAD_REGION` and `XHCISNAP` says so.
+
+`xhcisnap/README.md`, `source-files.md` and
+`passthru-snapshot-instrument.md` were updated in the same commits.
+
+## 35.4 - the regression on QEMU
+
+To be read: 35.1's change on the QEMU legs of 35-V - SuperSpeed devices
+directly and behind a SuperSpeed hub on Windows 98 SE and the Windows 2000
+SP4 guest, reading as the `2.1.1.0` build, QEMU's controller publishing no
+table - and, if built, the `qemu`-flavour-only override that makes the
+controller's USB 3 protocol read the E460's PSI words.
+
+## 35.5 - `XhciIntelPortSwitch` 2
+
+Done 2026-10-06. Design record 16 revision 3 (`b44d753`, converged
+`0a70121`) before the code; the code `c7b29da`, review rounds `d3bf449` and
+`febf5ab`, converged.
+
+- Value 2 performs the switchover on any Intel controller (vendor `8086`),
+  the six-id gate bypassed; 1 and any other nonzero number keep the gated
+  meaning; the default stays 1 and 0 off; the INFs' value and the `VAL-*`
+  row unchanged. The value is read on every Intel controller.
+- At the user's own risk (owner, 2026-10-06): the README and the release
+  notes carry record 16 section 4a's warning word for word; no
+  register-layout check (the owner chose to inform rather than guard).
+- The Sony exemption and the refusal on an unreadable identity or
+  subsystem kept under 2.
+- At every value, the release writes only the registers a route wrote,
+  tracked per register (`USB3_PSSEN` at `D8h`, `XUSB2PR` at `D0h`) over one
+  started lifetime: the start's decision and the write set moved into the
+  pure core (`XHCI_PSW_LIFE`, record 16 section 7a), `PswLife.On` replacing
+  `PswOn`, with the lifetime vectors in `test_psw` running on the shipped
+  code.
+- `XHCISNAP` shows `psw.mode`, `psw.route.written` and
+  `psw.release.written` by label, with no decoder change.
+
+Host tests (`test_psw`) and every gate pass on debug, release and qemu x86
+and release amd64. Nothing read in a guest or on hardware: that is 35-V
+(value 2 on QEMU, not Intel: no write) and 35-E (value 2 on the B490,
+reading as 1).
+
+## 35-T.0 - the design
+
+Design record 17, revision 7, converged 2026-10-06 at review round 8
+(`edc7a2a`, `869a69f`); its off-switch `XhciTolerance` (owner, the same
+day) converged at review round 11 (`a89b62f`, `0251912`, `d9b39c4`,
+`bd1fdac`). The class-driver reading of record 17 section 4.10, taken the
+same day, static, is design record 13 section 6.7 with its
+`legal-provenance.md` rows (`b8bd0b9`): no class driver sends `CYCLE_PORT`;
+`hidusb` resets the port once per failed read without limit, `usbstor` at
+most three times per episode (once on NUSB), `usbaudio` never. Record 17
+revision 8 (35.6, 2026-10-07) records 35-T.5's departures.
+
+## 35-T foundation, 35-T.1, 35-T.5, 35-T.6 and 35-T.7
+
+Done 2026-10-06, each reviewed to convergence, host tests green and x86
+debug, release and qemu and amd64 release built with every gate green; no
+virtual-machine leg yet (35-V's).
+
+- **The foundation** (`9e8fdbf`, review round 1 `69e62dc`): the pure
+  `xhci_tol.c` / `xhci_tol.h` - the decisions, the tolerance clock's tick
+  arithmetic, the budgets and intervals as named constants, the counters
+  and state in the extension, the three values' rules - with `test_tol`;
+  both INFs write `XhciTolerance` 1, `XhciIntervalCap` 1 and
+  `XhciAvgTrbEsit` 0 under 34.1's rule, with their `VAL-*` rows and the
+  footprints.
+- **35-T.7, the interval cap and the Average TRB Length switch**
+  (`958db76`): the cap after a caller's rewritten bInterval and before fast
+  polling, whose eligibility is the uncapped Interval's and whose fallback
+  restores the capped one (`test_cap_fastpoll`); a hub's status endpoint
+  capped too (owner, option A), never fast-polled.
+- **35-T.1, the lost-interrupt backstop** (`db6d369`; review round 1, no
+  material findings): `hcdBackstop` after `hcdRecover`, under the power
+  gate, peeking the event ring under the controller lock and queueing
+  `IsrDpc` through `hcdIsr`'s admission when the same pending event has
+  stood for 100 ms on the tolerance clock; `BackstopDrains`;
+  `XHCI_FIX_EVT_REARM` retired; records 05 and 15 updated.
+- **35-T.6, the controller halted or unreadable** (`fad9760`): HCH with
+  R/S confirmed requests the in-place recovery; the window of three
+  recoveries in ten minutes; all-ones containment by a step of its own,
+  admission closed and new requests parked, Bus Master Enable cleared and
+  read back as the proof, or the buffer pinned first.
+- **35-T.5, the location the controller gave up on** (`778b730`, review
+  rounds `4a9010d`, `82d87fe`, `64461df`; converged at round 4): the PED
+  reconnect and the over-current episode (`XHCI_TOL_OC`) at root ports, one
+  budget per location (`Tol.HubLoc[]` for hub ports, in the extension so
+  the snapshot carries it, `XHCI_TOL_LOC` at 8 ULONGs and the extension
+  held under `XHCISNAP`'s 128 KB image by a compile-time check), a
+  recovery's own disconnect latched (`RecoveryDisc`), stable progress from
+  validated retirements, an unpowered hold kept off through a
+  reinitialization, `HcdTolLocCharge` the hook 35-T.3/4 charge. Three
+  departures from record 17, which revision 8 takes in section 4.5: an
+  exhausted budget leaves the device disconnected and the location held; a
+  hub's disabling of a port is charged; a hub's port budgets start afresh
+  when the hub object is reused.
+
+## 35-T.2 - the soft retry
+
+To be read.
+
+## 35-T.3 and 35-T.4 - the device cycle
+
+To be read.
+
+## 35-T.8 - the counters a user can send
+
+To be read.
+
+## 35-T.9 - the pure core's vectors and the `qemu`-flavour injection
+
+To be read.
+
+## 35-V - the legs
+
+To be read: host tests and every gate, x86 and amd64; the QEMU legs on
+Windows 98 SE and the Windows 2000 SP4 guest (SMP, Driver Verifier), a
+virtual-machine regression and not a Windows 2000 hardware reading; 35.4's
+regression; 35.3's notes and region read in `XHCISNAP`; `XhciIntelPortSwitch`
+2 on QEMU; 35-T.9's injections against record 17 section 5's outcomes with
+the class drivers as record 13 section 6.7 reads them; the three values
+written by a fresh install and kept by an update; with no fault injected,
+every leg reading as `2.1.1.0`.
+
+## 35.6 - the docs
+
+2026-10-07: the release notes and README (the Sunrise Point fix, value 2's
+warning, the controller-fault handling and the three values, the AMD
+report), the readme template, records 13 (section 6.8), 15 (section 2), 16
+(header, section 13) and 17 (revision 8), `implementation-invariants.md`
+("Fatal Errors" rewritten; "Port Speed Decoding" checked),
+`failure-diagnosis.md`, `xhciqual/hardware-testing.md`, issue 11 closed,
+`source-files.md` and this file. The readings 35-V owes stand in the
+release notes as `TODO(35-V: ...)` markers, which the cut refuses to run
+over. `xhcisnap/README.md` already carried the enumeration notes and the
+HCD region (35.3); its tolerance counters are 35-T.8's.
+
+## 35.7 - the cut
+
+To be read.
+
+## 35-E - the bench
+
+To be read after 35.7's cut, on the `2.2.0.0` asset (decisions table,
+"`2.2.0.0`: cut before the bench").
+
+## Review
+
+- 35.1: round 1 taken in `92659f1`; round 2 converged. `XHCIQUAL`'s PSI
+  tables: round 1 `6df116b`; the protocol-table reserve rounds 1 and 2
+  `e749374` and `35c5723`.
+- 35.3: round 1 taken in `4311819`; round 2 converged, keeping the
+  eight-burst budget.
+- 35.5: record 16 revision 3 converged before code (`0a70121`); the code's
+  rounds 1 and 2 taken in `d3bf449` and `febf5ab`, then converged.
+- 35-T.0: record 17 converged at round 8 on revision 7, its off-switch at
+  round 11; the rounds and where each finding is answered are record 17
+  section 10.
+- 35-T foundation: round 1 taken in `69e62dc`. 35-T.7: round 1 taken in
+  `958db76` (the cap counted only once the Configure Endpoint succeeds),
+  round 2 clean. 35-T.1: round 1, no material findings. 35-T.6: five rounds
+  folded into `fad9760` (round 1: HCH during a resume, the window bypassed
+  by a resume, `Unreadable` tested after Gone, the drop's flush completing
+  queued commands `DEVICE_GONE`; round 2: held commands lost their pipe;
+  round 3: a held stream request lost its endpoint; round 4: a helper
+  re-read the PDO's controller; round 5 clean). 35-T.5: rounds 1 to 3 taken
+  in `4a9010d`, `82d87fe` and `64461df`, converged at round 4.
+- The re-plan and issue 11: round 1 taken in `fadd358`.
+- 35.6: to be read.

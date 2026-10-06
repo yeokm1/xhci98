@@ -719,7 +719,7 @@ the P14s Gen 1 unchanged, value 2 reading as 1 on the B490; value 2's risk
 in the README and release notes; the ten install legs read from the
 `2.2.0.0` asset.
 
-Records: `runs/run-35.md` (to be opened);
+Records: `runs/run-35.md` (opened at 35.6, 2026-10-07);
 `design/17-controller-tolerance.md` (35-T.0);
 `docs/issues/11-sunrise-point-ssic-psi-table.md` (35.0, 35.1).
 
