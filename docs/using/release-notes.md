@@ -756,6 +756,20 @@ than try for ever:
   fail, and once the driver has proved the controller can no longer write to
   memory, its devices are removed; without that proof everything the
   controller might still write into is kept.
+- **A device the controller reports incompatible** (the specification's
+  Incompatible Device Error) is removed and re-enumerated, as the
+  specification asks, and counts against its port's budget like any
+  re-enumeration, so a device that keeps getting that report ends with its
+  port held. Up to `2.1.1.0` the report on a transfer was handled as an
+  ordinary transfer error and the device stayed listed but unusable. This
+  applies whatever `XhciTolerance` says.
+- **A recovery that cannot stop the controller** now needs the same proof
+  before anything the controller might still be writing into is handed
+  back. Without it the controller is closed off as above, stays stopped
+  until it is restarted, and `XHCISNAP`'s report reads "CONTAINED: halt and
+  reset did not complete and Bus Master Enable would not clear; DMA not
+  proven stopped, common buffer pinned". This too applies whatever
+  `XhciTolerance` says.
 
 None of this acts on a healthy controller: the only cost there is one memory
 read and one read of the controller's status register each time the
@@ -770,7 +784,8 @@ ones included, which Linux does not list. **`XhciAvgTrbEsit`** is a
 comparison switch, off by default, that changes one figure the controller is
 told for each interrupt endpoint, for a tester whose machine misbehaves to
 try. And **`XhciTolerance`** set to `0` turns everything in the list above
-off at once, for a machine where it does more harm than good.
+off at once, but for the last two entries, for a machine where it does more
+harm than good.
 
 `XHCISNAP`'s report counts what happened, with `XhciLogVerbosity` at `1`
 or above: the transfer errors, unknown codes and unmatched events, summed
@@ -783,7 +798,8 @@ errors, codes and unmatched events, and the root ports' disables and
 over-currents, are still counted, so a report taken with the behaviours
 off shows the faults they would have answered; the retries,
 re-enumerations, holds, recoveries and the rest count only what the
-behaviours did, and stay at `0`. **If a USB device stops on your
+behaviours did, and stay at `0` but for the two entries that apply at every
+value. **If a USB device stops on your
 machine**, send the controller's id (`XHCIQUAL`'s probe, or Device Manager)
 and two `XHCISNAP` reports at `XhciLogVerbosity` `2`, one while it works and
 one after it stops; and if it still stops, the same with `XhciAvgTrbEsit` at
@@ -967,7 +983,9 @@ stayed with the USB 2.0 controller.
 
 New in `2.2.0.0`; the install writes `1`. It switches everything in
 "Controller faults: what the driver does about them" except the two AMD
-settings below.
+settings below and the last two entries of that list (a device reported
+incompatible, a recovery that cannot stop the controller), which apply at
+every value.
 
 | Value | Effect |
 |---|---|
@@ -1203,10 +1221,12 @@ or says it was found by reading the code.
   surprise removal. After three on one port, the next fault there removes
   the device and holds the port, and the device stays gone until it is
   unplugged, or, on a root port held unpowered after over-currents, until
-  the controller is restarted. `XhciTolerance` `0` turns it off.
+  the controller is restarted. `XhciTolerance` `0` turns it off, except for
+  a device the controller reports incompatible.
 - **After a controller stops answering, disabling or restarting it can
   hang** (since `2.2.0.0`; same section). Only when the controller stopped
-  answering altogether and the driver could not prove it had stopped
+  answering altogether, or a recovery could not stop it, and the driver
+  could not prove it had stopped
   writing to memory, so kept everything it might still write into: if a
   transfer was at that moment waiting for system DMA resources the kept
   transfers hold, a later stop of the controller - disabling it in Device

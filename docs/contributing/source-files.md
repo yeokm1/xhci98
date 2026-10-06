@@ -107,10 +107,22 @@
 > may be aimed at, and every register answer the layer gives; host suite
 > `test_inj`) and the driver half `hcd_inj.c` (the thread's trigger read
 > and executors, the ISR's lost-interrupt window, and the PORTSC hooks in
-> `xhci_pci.c`); task 35.4's `XhciQemuPsiE460` override is
+> `xhci_pci.c`), and its second part's soft-retry and device-cycle faults
+> with their hooks in the drain (`xhci_evt.c`), the context reads, the
+> command path, the doorbells and the service step (`hcd_cfg.c`,
+> `hcd_ctl.c`, `hcd_enum.c`, `hcd_hub.c`); task 35.4's `XhciQemuPsiE460` override is
 > `XhciPortMapOverridePsi` in `xhci_caps.c`, read in `hcd_ctl.c`
 > ([design record 17](design/17-controller-tolerance.md) section 5;
-> `build-and-test.md`, "The qemu flavour's test aids"). The tables below are the
+> `build-and-test.md`, "The qemu flavour's test aids"). The final review of
+> the branch adds, in the same files: the slot-fatal teardown
+> (`hcd_dev.c`'s `hcdSlotFatalMark`, `hcd_enum.c`'s `hcdSlotFatalService`,
+> the pure `XhciXferSlotFatal` in `xhci_xfer.c`; `test_xfer`); the
+> unproven invalidation's proof and containment (`SlotsUnproven`,
+> `HcdCtlProveDmaStopped` in `hcd_ctl.c`, the branch in `hcd_enum.c`'s
+> enumeration service) and `hcd_ctl.c`'s `hcdRestoreBusMaster`; the
+> configuration's charged fallback `hcdCfgCycle` in `hcd_cfg.c`; and in
+> `xhci_tol.c` `XhciTolLocActive`, `XhciTolLocHeld`, the once-per-cycle
+> charge `XhciTolCycleCharge` and the terminal reason 5 (`test_tol`). The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name

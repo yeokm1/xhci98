@@ -35,6 +35,18 @@ taken in the code, accepted in review, and are recorded here rather than
 written back into the text above them, which stays the design as converged.
 One known limitation is recorded in section 4.6.
 
+Revision 10, 2026-10-07, for roadmap-hcd task 35.6, once 35-T.9's second
+part was built and the final review of the whole branch had converged, at
+its round 4 (branch `2.2.0.0` at `2000fcc`): "As built" notes in sections
+4.3 (the slot-fatal teardown; the configuration's fallback cycles; one
+re-enumeration charge per pending cycle), 4.6 (an invalidation no halt or
+reset proved; the Bus Master Enable a proof cleared put back; the
+unproven-DMA containment's own terminal reason), 4.9 (who charges the
+re-enumeration budget, and at which `XhciTolerance` values), 4.11 (what
+acts at 0 that is not a tolerance behaviour) and 5 (the second part), and
+section 7. Two of these are DMA-safety and specification rules rather than
+tolerance behaviours, and apply at every `XhciTolerance` value.
+
 ## 1. What is asked, and what is not
 
 A tester on an AMD AM5 board reports that a USB mouse randomly stops
@@ -498,6 +510,60 @@ The notes `tol.cycle.mark`, `tol.cycle`, `tol.cycle.prepdo`,
 added to `XHCI_TOL_STATS`, whose cycle counters the foundation already
 carried.
 
+**As built: the final review of the branch (revision 10).** Three rules
+beside the cycle, found by the final review of the whole branch and fixed
+on 2026-10-07:
+
+- **An Incompatible Device Error takes its device down** (`f5c458c`,
+  `3cc80ec`). Code 22 "may be returned by any command or transfer, and is
+  fatal as far as the Slot is concerned. Software shall issue a Disable
+  Slot Command to recover" (xHCI 1.2 Table 6-90). The transfer engine
+  already read it so (`XhciXferCodeInfo`'s slot-fatal flag) and the command
+  engine already called `XhciSlotCommandSlotFatal` for a Command Completion
+  carrying it, but the HCD counted only the command's and ignored the
+  transfer's: the endpoint was halted and recovered while the slot stayed
+  enabled. That gap predates this release. Both routes now mark the device
+  on the event's slot (`hcdSlotFatalMark`, from the event DPC under the
+  controller lock; a Transfer Event through the pure `XhciXferSlotFatal`),
+  and the thread (`hcdSlotFatalService`, before the cycle service) takes
+  the mark: a published device leaves through `HcdEnumCycle` - teardown,
+  Disable Slot, PDO reported missing - and its location enumerates afresh,
+  counted in `IncompatibleDeviceTeardowns`, noted `slot.fatal.cycle`. A
+  device not yet published is left to the enumeration, whose failed step
+  already disables the slot before its bounded retries; a departing one to
+  its departure. It is the specification's recovery, not a tolerance
+  behaviour, so it runs at every `XhciTolerance` value; and so that a
+  device whose every Configure Endpoint answers 22 is not re-enumerated for
+  ever, the re-enumeration is charged to the location's budget at every
+  value, 0 included. Spent, the Disable Slot is still issued and the device
+  still removed, and the location held until a stable disconnect or a
+  controller start. At 0 the location machinery therefore runs for a
+  location something charged, which at 0 is only this path
+  (`XhciTolLocActive`: tolerance on, or the location charged or held;
+  `XhciTolLocHeld` for the root port's and the hub port's connect); a
+  location never charged behaves at 0 exactly as before.
+- **The configuration's fallback cycles are charged** (`3459f81`). A
+  RESET_PORT whose recovery failed (`hcdCfgResetPort`) and a departing
+  device's failed command (`hcdCfgFault`) called `HcdEnumCycle` uncharged,
+  so a device that failed the post-reset descriptor read every time but
+  enumerated afresh could loop. Both go through `hcdCfgCycle`, which with
+  tolerance on charges the re-enumeration to the device's location; a
+  refusal still cycles the device and holds the location (`CyclesRefused`).
+  At 0 they charge nothing, as before.
+- **One charge per pending cycle, whoever asked** (`f364849`). One
+  RESET_PORT failure answered with code 22 was charged twice for the one
+  cycle it produced, by the fallback and by the slot-fatal teardown, and
+  with two earlier cycles the second charge refused the third
+  re-enumeration the budget permits. Each port now keeps the charge of the
+  cycle pending at its connect generation (the pure
+  `XHCI_TOL_CYCLE_CHARGE`, `XhciTolCycleCharge`): the first producer's
+  charge is made and its answer recorded, and every later producer at the
+  same generation - the fallbacks, the slot-fatal teardown, the cycle
+  service, the PED and hub-port-disable reconnects - reads that answer and
+  charges nothing. The cycle's own disconnect or connect moves the
+  generation, so the next cycle charges afresh; a controller start and a
+  hub object's start clear it. Repowers are unchanged.
+
 ### 4.4 Submissions to a Halted endpoint
 
 Unchanged: published and rung, the doorbell ignored until a recovery.
@@ -681,6 +747,62 @@ abandoned" teardown - the adapter, the record and the FDO kept,
 refused while the request is still queued. The release notes, the README
 and the package readme list it among the known limitations.
 
+**As built: an invalidation no halt or reset proved (revision 10).** The
+final review of the branch found the containment's proof was needed in a
+second place, a readable controller rather than an unreadable one. Fixed
+on 2026-10-07:
+
+- **An unproven invalidation releases nothing before the proof**
+  (`a113df2`). The in-place recovery and the reinitializing resume raise
+  `XhciSlotInvalidateAll` before their own halt, and the HCD ignored
+  whether the controller had stopped. When that halt timed out (Run/Stop
+  written 0, HCH never read set) or an earlier step refused, no HCRST
+  followed, yet the thread drained every device: transfers completed,
+  client buffers and map registers handed back while the controller could
+  still be executing the TDs that name them. This predates the tolerance
+  work (it was in `2.0.0.0`). The HCD now remembers an invalidation raised
+  without that evidence (`SlotsUnproven`); `XhciSlotInit`, which runs only
+  once HCRST has completed, is the proof that clears it. Meeting an
+  unproven invalidation, the thread first takes this section's proof (Bus
+  Master Enable cleared and read back clear, `HcdCtlProveDmaStopped`); with
+  it the devices are dropped as before; without it the common buffer is
+  pinned (`HcdSvcDmaNotStopped`) and the containment's no-proof branch runs
+  (`HcdEnumContain(hc, 0)`), each device marked Gone and every transfer and
+  mapping kept under the pinned-buffer rule. A DMA safety rule, not a
+  tolerance behaviour: it applies at every `XhciTolerance` value, 0
+  included.
+- **The recovery puts back the Bus Master Enable its proof cleared**
+  (`372dcd4`). The recovery's retry runs at DISPATCH_LEVEL with
+  `InitBelowPassive` set, where `xhciRestoreBusMaster` refuses, so every
+  retry after a successful proof halted and reset the controller and then
+  refused at `XHCI_INIT_STEP_BUS_MASTER_RESTORE`. `hcdRecover`, on the
+  thread at PASSIVE_LEVEL, now sets the bit there after the proven halt and
+  reset (`hcdRestoreBusMaster`: read, set, read back set, under the same
+  power gate) and runs the sequence once more, as the same recovery: the
+  window is not charged again, and a failed restore leaves the attempt
+  failed.
+- **Without the proof, the controller is contained, under a reason of its
+  own** (`b21e59d`, `2000fcc`). The no-proof branch latches the
+  containment's terminal before it pins: `ControllerFailed`, interrupts
+  masked, `Tol.Stats.Contained` the pinned branch, and `Tol.Unreadable`
+  set, so no recovery or resume reinitializes into the pinned allocation,
+  new requests are held on their PDOs as contained, and only a stop and a
+  start, which allocate a fresh buffer, end it. Before, a later recovery
+  could reinitialize into the same allocation with `CommonBufferPinned`
+  still set, and every later drain kept the new transfers too. The latch is
+  shared and its value says which containment set it: 1
+  (`XHCI_TOL_CONTAINED_UNREADABLE`, this section's all-ones step) or 2
+  (`XHCI_TOL_CONTAINED_DMA_UNPROVEN`, the unproven invalidation). The pure
+  `XhciTolTerminal` maps the second to its own reason,
+  `XHCI_TOL_TERMINAL_DMA_UNPROVEN` (5), which outranks the window and the
+  failures in a row as the all-ones containment does, and `XHCISNAP`
+  prints it as "CONTAINED: halt and reset did not complete and Bus Master
+  Enable would not clear; DMA not proven stopped, common buffer pinned",
+  then that it stays failed until a stop and start. No field was added, so
+  `XHCI_TOL_STATE` and the snapshot's layout are unchanged. At
+  `XhciTolerance` 0 this is the only way `Unreadable` is set. The known
+  limitation above applies to this pinned branch as to the all-ones one.
+
 ### 4.7 The interval cap (35-T.7, gated) and the Average TRB Length switch
 
 **The cap.** An interrupt endpoint whose Interval exceeds 8 (32 ms) is
@@ -787,6 +909,21 @@ The intervals, measured on the tolerance clock (section 4.0): stable-progress
 wait 5 s; power-on 100 ms; containment 1 s; and the recovery window 10
 minutes - each a tick count, a named constant in the pure core with a host
 vector at its boundary.
+
+**As built: who charges a location's re-enumerations (revision 10).** The
+budget of three re-enumerations is charged, with tolerance on, by 4.3's
+cycles (before and after the PDO), 4.5's PED and hub-port-disable
+reconnects, and the configuration's two fallback cycles (a failed
+RESET_PORT recovery, a departing device's failed command; `3459f81`); and
+at every `XhciTolerance` value, 0 included, by the slot-fatal teardown of
+section 4.3's revision-10 note (`3cc80ec`), the only charge made at 0. A
+pending cycle is charged once, however many of these asked for it: the
+first producer's answer is kept on the port for its connect generation
+(`XHCI_TOL_CYCLE_CHARGE`, `XhciTolCycleCharge`, `f364849`) and read by the
+rest. Spent, every producer still removes the device and the location is
+held; the re-arm and release are the table's, at 0 as at 1. The unproven
+invalidation of section 4.6's revision-10 note falls under the
+containment row: once, contained pinned, ended by a start.
 
 ### 4.10 What the class drivers see
 
@@ -901,6 +1038,16 @@ retry's, the cycles', `HaltReads`, `Repowers`, `Holds`, `HchRecoveries`,
 producers are gated. So a dump at 0 shows the faults the behaviours would
 have met, not what they would have done about them.
 
+**As built: what acts at 0 that is not a tolerance behaviour (revision
+10).** Two rules found in the final review apply at every value, because
+neither is tolerance: an Incompatible Device Error's Disable Slot and
+charged re-enumeration (section 4.3's revision-10 note), whose location may
+be charged and held at 0 - so `Holds` and a held location can show in a
+dump taken at 0 - and the unproven invalidation's DMA-stop
+proof and containment (section 4.6's revision-10 note), which is the only
+way `Unreadable` and `Contained` are set at 0. Neither changes what
+`2.1.1.0` did for a fault this design added a behaviour for.
+
 ## 5. Injection
 
 QEMU raises none of these faults, and a fabricated event is only useful if
@@ -992,6 +1139,51 @@ the second part, still to be built. Two departures from the table above:
   `qemu.inj.refused` while `ControllerFailed` is set; CLEAR and the
   over-current release are always taken.
 
+**As built, second part (35-T.9, `5044966`, review round 1 `6808ff9`;
+revision 10).** Codes `08` to `12` hex, reserved by the first part, are
+built: the rows of 35-T.2 to 35-T.4 - `08` Transaction Error, `09` the
+soft retry's Reset Endpoint failing, `0A` a refused code, `0B` and `0C` a
+halt with no TD under Halted and Error, `0D` the stale one, `0E` Endpoint
+Not Enabled, `0F` EP0 during the thread's own transfer, `10` EP0 before the
+PDO, `11` and `12` the soft retry's two races - on the target the table
+names, an interrupt-IN TD QEMU is NAKing. The pure decisions are in
+`xhci_inj.c` with host vectors in `test_inj`; the hooks (the drain, the
+context state reads, `hcdCommand`, the doorbell, the thread's EP0 doorbell
+and the service step before the soft retry's) are under
+`XHCI_FLAVOUR_QEMU`. `build-and-test.md`, "The qemu flavour's test aids",
+gives each code's making, argument and transient and persistent outcome,
+and is not repeated here. Where it departs from the text above, or fills
+in what the text left open:
+
+- **QEMU fetches the TD ahead.** On the NAK it keeps the interrupt TD
+  fetched, so its Stop Endpoint writes a dequeue past the TD. The layer
+  recognises exactly that case (a one-TRB TD, Stopped with nothing moved,
+  the dequeue on the next TRB) and puts the dequeue back with a real Set TR
+  Dequeue before it injects; anything else abandons the attempt and counts
+  it, as the text says.
+- **The races' ring is the layer's own.** The HID class driver's reads are
+  already posted, so no submission arrives on cue; the layer rings the
+  endpoint itself, the same doorbell write. The race runs only for the soft
+  retry's own Reset Endpoint - the pipe not paused or closed and its
+  `RetryWanted` naming the deferred TD still at the queue's head; any other
+  reset, and every reset at `XhciTolerance` 0, is answered Success with
+  nothing rung (`6808ff9`).
+- **The answers end only on a command that succeeds.** A Disable Slot,
+  Address Device, Reset Device, a Set TR Dequeue leaving Error, or a
+  Configure Endpoint that deconfigures the slot or whose Drop or Add flags
+  name the endpoint, is sent and ends the emulation only on Success; a
+  Configure Endpoint for another function of a composite device leaves it
+  standing (`6808ff9`).
+- **`09`'s outcome is the controller recovery window's.** `hcdCfgFault`
+  cycles a location only when `HcdHubPathPresent` finds the device gone;
+  the injected device is present, so the failed Reset Endpoint requests
+  the controller recovery, charged to the window: transient, one recovery
+  and the device re-enumerated; persistent, the window's terminal, the
+  controller latched failed. The second table's "`hcdCfgFault`'s outcome,
+  as today" is that.
+- **The refused code is Bandwidth Overrun** (18) for `0A`, and `0C`'s
+  off-ring pointer is the event ring's base, a TRB no transfer ring holds.
+
 Task 35.4's optional override is beside it in the same flavour:
 `XhciQemuPsiE460`, exactly 1, makes `XhciPortMapOverridePsi` replace every
 USB 3 protocol group's PSI table with the E460's (PSIC 3, `04E00121`
@@ -1040,6 +1232,15 @@ the known limitation of section 4.6; record 13 section 6.8,
 4.2, 4.3 and 4.8; `source-files.md` names the files 35-T.2, 35-T.3/4, 35-T.8
 and 35-T.9 changed; `runs/run-35.md` records the four tasks. The
 operator's description of the injection is `build-and-test.md`'s.
+
+Reconciled again at revision 10 (35.6, 2026-10-07, at `2000fcc`): the
+release notes, the README and the package readme template say that a
+device the controller reports incompatible is removed and re-enumerated a
+bounded number of times, and name `XHCISNAP`'s new terminal reason;
+`xhcisnap/README.md` decodes terminal reason 5;
+`implementation-invariants.md`'s "Fatal Errors" says how the HCD answers
+code 22 and an invalidation no halt or reset proved; `runs/run-35.md`
+records 35-T.9's second part and the final review's findings.
 
 ## 8. Decisions taken (owner, 2026-10-06)
 

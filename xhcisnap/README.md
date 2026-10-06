@@ -181,9 +181,15 @@ What the report carries:
   `XhciAvgTrbEsit`.
 - **The controller**: running; failed with an in-place recovery still owed;
   latched failed after three recoveries failed in a row; latched failed
-  because the recovery window refused a fourth inside ten minutes; or
-  contained as unreadable (USBSTS read all ones). The two latched states end
-  only at a stop and start.
+  because the recovery window refused a fourth inside ten minutes;
+  contained as unreadable (USBSTS read all ones); or, terminal reason 5,
+  "CONTAINED: halt and reset did not complete and Bus Master Enable would
+  not clear; DMA not proven stopped, common buffer pinned" - an in-place
+  recovery or a reinitializing resume whose halt and controller reset never
+  completed, on a controller that still reads, and whose Bus Master Enable
+  clear was not proven either (at every `XhciTolerance` value, 0 included;
+  the containment below then reads pinned). The two latched states and
+  reason 5 end only at a stop and start, and the report says so beside them.
 - **The recovery window**: how many of the three recoveries it allows were
   begun inside it, how long ago each began in tolerance-clock ticks (100 ms
   nominal, credited at no more than 45 ms each), and how many it refused.

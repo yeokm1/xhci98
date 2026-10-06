@@ -273,6 +273,27 @@ code:
   `RecoveryFailuresConsecutive`; a fourth is not begun, and the controller
   stays failed until a stop and start: no later request is acted on and no
   resume reinitializes it, as for a contained controller.
+- **An invalidation no halt or HCRST proved releases nothing until DMA is
+  proven stopped** (since `2.2.0.0`, at every `XhciTolerance` value; design
+  record 17 section 4.6, revision 10). The in-place recovery and the
+  reinitializing resume invalidate every slot before their own halt; if
+  that halt times out or an earlier step refuses, no HCRST follows and the
+  controller may still be executing the TDs. Draining the devices then
+  hands client buffers and map registers back under a live bus master; that
+  was the HCD's behaviour from `2.0.0.0` until 2026-10-07. Such an
+  invalidation is remembered (`SlotsUnproven`, cleared only by
+  `XhciSlotInit`, which runs after a completed HCRST), and the thread first
+  takes the containment's proof (`HcdCtlProveDmaStopped`: Bus Master Enable
+  cleared and read back clear). With it the devices drop as before, and
+  `hcdRecover` sets Bus Master Enable again at PASSIVE_LEVEL after the
+  proven halt and reset and runs the sequence once more as the same
+  recovery (`hcdRestoreBusMaster`). Without it the controller is contained:
+  `ControllerFailed`, `Tol.Unreadable` = `XHCI_TOL_CONTAINED_DMA_UNPROVEN`
+  (2; the all-ones containment is 1), the common buffer pinned
+  (`HcdSvcDmaNotStopped`) and the no-proof drain run, every transfer and
+  mapping kept; no recovery or resume reinitializes into the pinned
+  allocation, and only a stop and start end it. `XhciTolTerminal` reports
+  it as terminal reason 5, `XHCI_TOL_TERMINAL_DMA_UNPROVEN`.
 - **A Host Controller Event escalates from the DPC, not from the poll.** Event
   Ring Full and Event Lost set neither HCE nor HSE, so no poll of `USBSTS` will
   ever see them, and a driver that recorded the completion code and waited for
@@ -325,6 +346,29 @@ code:
   `XhciXferCodeInfo` after the ordinary retirement: a slot-fatal code goes to
   `XhciSlotCommandSlotFatal`, selected by the event's own Slot ID, and a fatal
   one takes the engine's existing `XHCI_CMD_ACTION_RESET` route.
+- **In the HCD both families take the device down, and the re-enumeration is
+  bounded** (since `2.2.0.0`; design record 17 section 4.3, revision 10).
+  Until 2026-10-07 the HCD acted on the command's code 22 only and ignored
+  the transfer's, so the endpoint was halted and recovered while the slot
+  stayed enabled. Now a Transfer Event (through the pure
+  `XhciXferSlotFatal`, which answers 1 for 22 alone) and a matched Command
+  Completion (through the engine's `XhciSlotCommandSlotFatal`) both mark the
+  device on the event's slot (`hcdSlotFatalMark`, event DPC, controller lock
+  held), and the thread (`hcdSlotFatalService`) takes a published device
+  down through `HcdEnumCycle` - teardown, Disable Slot, PDO reported
+  missing, the location enumerated afresh - counted in
+  `IncompatibleDeviceTeardowns`, noted `slot.fatal.cycle`. A device not yet
+  published is the enumeration's, whose failed step already disables the
+  slot; a departing one is its departure's. This is the specification's
+  recovery, not a tolerance behaviour, so it runs at every `XhciTolerance`
+  value, and so is the bound on it: the re-enumeration is charged to the
+  location's budget of three at every value, 0 included (`XhciTolLocActive`
+  and `XhciTolLocHeld` run the location machinery at 0 for a location
+  something charged). Spent, the Disable Slot is still issued and the device
+  still removed, and the location is held until a stable disconnect or a
+  controller start. A cycle is charged once per connect generation however
+  many producers asked for it (`XhciTolCycleCharge`), so a RESET_PORT
+  failure answered with 22 costs one re-enumeration, not two.
 - **Endpoint Not Enabled Error (`XHCI_CC_EP_NOT_ENABLED`, 12) is not a command
   result.** Table 6-90 p.467: "Asserted if a doorbell is rung for an endpoint
   that is in the Disabled state. The Slot ID and error Endpoint ID are

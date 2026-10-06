@@ -434,8 +434,39 @@ it, FF clear; 08 and above reserved and refused with a note.
   whatever reads it, and a command that needs a live controller is refused
   on a failed one (`XhciInjNeedsLive`).
 
-To be read: the second part, the soft retry's and the device cycle's faults
-(codes 08 to 18, record 17 section 5's remaining rows).
+**Second part** (2026-10-07): `5044966`, review round 1 taken in `6808ff9`;
+design record 17 section 5, as its revision 10 records. Codes `08` to `12`
+hex, the soft retry's and the device cycle's faults (record 17 section 5's
+remaining rows), are built: `08` Transaction Error, `09` the soft retry's
+Reset Endpoint failing, `0A` a refused code, `0B` to `0D` a halt with no TD
+under Halted, Error and a real stale context, `0E` Endpoint Not Enabled,
+`0F` and `10` EP0 during the thread's own transfer and before the PDO, `11`
+and `12` the soft retry's two races. The target is an interrupt-IN TD QEMU
+is NAKing; QEMU keeps such a TD fetched, so its Stop Endpoint leaves the
+dequeue past it, and the layer puts it back with a real Set TR Dequeue
+before injecting. `build-and-test.md`, "The qemu flavour's test aids",
+documents each code and its outcomes.
+
+- **Round 1** (`6808ff9`): (1) codes 11 and 12 ran their race on any Reset
+  Endpoint to the emulated endpoint, so one from an ABORT_PIPE, a cancel or
+  a client could ring the controller onto a TD whose buffer had gone back;
+  the race now runs only for the soft retry's own reset
+  (`hcdInjRetrySurvives`), and any other, or any at `XhciTolerance` 0, is
+  answered Success with nothing rung. (2) Every Configure Endpoint for the
+  slot ended the emulation, so another function's turned an injected halt
+  stale; only one that deconfigures or whose Drop or Add flags name the
+  endpoint ends it, and every ending command ends it only on Success
+  (`XhciInjCommandSent`). (3) Code 09's stated outcome corrected:
+  `hcdCfgFault` cycles a location only when the device is gone, and the
+  injected device is present, so the failed Reset Endpoint requests the
+  controller recovery, charged to the recovery window - transient, one
+  recovery; persistent, the window's terminal, the controller latched
+  failed.
+- Host vectors in `test_inj` (the races against cancel, abort and
+  tolerance-off resets, the Configure Endpoint flags, failed and successful
+  completions).
+
+To be read: the injections in a guest, which are 35-V's.
 
 ## Review findings on code already in the branch
 
@@ -491,6 +522,66 @@ tasks had left in the branch; each fixed on 2026-10-07 is in design record
   request is queued). A known limitation of `2.2.0.0` in the release notes,
   the README and the package readme; record 17 section 4.6.
 
+**The final review of the whole branch** (2026-10-07, at `2.2.0.0`) found
+these, fixed the same day and taken into design record 17's revision 10;
+it converged at round 4, on `2000fcc`.
+
+- **An unproven invalidation released DMA buffers** (`a113df2`). The
+  in-place recovery and the reinitializing resume invalidate every slot
+  before their own halt; when that halt timed out or an earlier step
+  refused, no HCRST followed, yet the thread drained every device,
+  handing back client buffers and map registers the controller could still
+  be writing. In the HCD since `2.0.0.0`. The invalidation is now
+  remembered as unproven until `XhciSlotInit` (after a completed HCRST),
+  and the thread first takes 35-T.6's proof (`HcdCtlProveDmaStopped`); with
+  it the devices drop as before, without it the common buffer is pinned and
+  the no-proof containment runs. A DMA safety rule, at every
+  `XhciTolerance` value.
+- **The recovery after a proof could never succeed** (`372dcd4`). The proof
+  cleared Bus Master Enable, and the recovery's retry, at DISPATCH_LEVEL
+  with `InitBelowPassive`, refused to set it again, so every attempt failed
+  at `XHCI_INIT_STEP_BUS_MASTER_RESTORE`. `hcdRecover` now sets it at
+  PASSIVE_LEVEL after the proven halt and reset (`hcdRestoreBusMaster`) and
+  runs the sequence once more as the same recovery, the window not charged
+  again.
+- **The no-proof branch latched nothing** (`b21e59d`, `2000fcc`). A later
+  recovery or resume could reinitialize into the pinned allocation, and
+  every later drain kept the new transfers too. The branch now latches
+  35-T.6's containment terminal (`ControllerFailed`, `Tol.Unreadable`,
+  `Contained` pinned), whose value now says which containment set it (1
+  unreadable, 2 DMA unproven); `XhciTolTerminal` reports the second as
+  terminal reason 5, which `XHCISNAP` prints as "CONTAINED: halt and reset
+  did not complete and Bus Master Enable would not clear; DMA not proven
+  stopped, common buffer pinned" rather than as an all-ones controller.
+- **An Incompatible Device Error on a transfer was ignored** (`f5c458c`,
+  `3cc80ec`). Code 22 is fatal to the slot and asks for a Disable Slot
+  (xHCI 1.2 Table 6-90); the HCD acted on a command's and not on a
+  transfer's, so the slot stayed enabled; the gap predates this release.
+  Both
+  now take the device down with a Disable Slot and re-enumerate it
+  (`hcdSlotFatalService`, `HcdEnumCycle`), counted in
+  `IncompatibleDeviceTeardowns`, noted `slot.fatal.cycle`, at every
+  `XhciTolerance` value; the re-enumeration is charged to the location's
+  budget at every value, 0 included (`XhciTolLocActive`, `XhciTolLocHeld`),
+  so a device answering 22 to every Configure Endpoint is removed and its
+  location held after three rather than re-enumerated for ever. Host
+  vectors in `test_xfer` (every code: only 22 is slot-fatal) and `test_tol`
+  (the predicates at 0 and 1, the budget's boundary, the re-arm and the
+  start's release).
+- **The configuration's fallback cycles bypassed the budget** (`3459f81`).
+  A failed RESET_PORT recovery and a departing device's failed command
+  cycled the location uncharged; both go through `hcdCfgCycle`, charged
+  with tolerance on, a refusal still cycling the device and holding the
+  location (`CyclesRefused`).
+- **One cycle could be charged twice** (`f364849`). A RESET_PORT failure
+  answered with code 22 was charged by the fallback and again by the
+  slot-fatal teardown, and with two earlier cycles the second charge
+  refused the third re-enumeration the budget permits. Each port now keeps
+  the charge of the cycle pending at its connect generation
+  (`XHCI_TOL_CYCLE_CHARGE`, `XhciTolCycleCharge`), made once and read by
+  every later producer. Host vectors in `test_tol`
+  (`test_cycle_charge`).
+
 **The extension image grows to 256 KB** (`7e95afa`). Once 35-T.2 added its
 fields, the amd64 extension outgrew the 128 KB image `XHCISNAP` keeps it in,
 and `hcd_door.c`'s compile-time check stopped the amd64 build.
@@ -534,6 +625,15 @@ as a known limitation; record 13 section 6.8, `implementation-invariants.md`,
 `failure-diagnosis.md` and `source-files.md` follow the code; and this file
 records the four tasks.
 
+Again at `2000fcc`, once 35-T.9's second part was built and the final
+review of the branch had converged: design record 17 revision 10; the
+release notes, the README and the readme template (a device the
+controller reports incompatible removed and re-enumerated a bounded number
+of times, and a recovery that cannot stop the controller closing it off,
+both at every `XhciTolerance` value, with `XHCISNAP`'s new terminal text);
+`xhcisnap/README.md` (terminal reason 5); `implementation-invariants.md`'s
+"Fatal Errors"; and this file.
+
 ## 35.7 - the cut
 
 To be read.
@@ -568,7 +668,9 @@ To be read after 35.7's cut, on the `2.2.0.0` asset (decisions table,
   converged. 35-T.3/4: rounds 1 to 3 taken in `18f383f`, `bdc93c0` and
   `adbc4e3`, converged at round 4. 35-T.8: round 1 taken in `39066c0`,
   converged at round 4. 35.4's override and 35-T.9's first part: rounds 1
-  and 2 taken in `cade36c` and `b0dd28c`, converged at round 3. What these
+  and 2 taken in `cade36c` and `b0dd28c`, converged at round 3. 35-T.9's
+  second part: round 1 taken in `6808ff9`. The final review of the whole
+  branch: its fixes `a113df2` to `2000fcc`, converged at round 4. What these
   reviews found in code already in the branch, and its fixes, is "Review
   findings on code already in the branch".
 - The re-plan and issue 11: round 1 taken in `fadd358`.

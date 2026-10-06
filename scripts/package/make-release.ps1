@@ -3475,8 +3475,9 @@ May be addressed in a later release:
     over-currents, until the controller restarts.
 
   * DISABLING OR RESTARTING A CONTROLLER THAT STOPPED ANSWERING CAN HANG.
-    Only after the controller stopped answering altogether and the driver
-    could not prove it had stopped writing to memory, so kept everything it
+    Only after the controller stopped answering altogether, or a recovery
+    could not stop it, and the driver could not prove it had stopped
+    writing to memory, so kept everything it
     might still write into: if a transfer was at that moment waiting for
     system DMA resources the kept transfers hold, a later disable of the
     controller in Device Manager, or an update or removal of its driver,
@@ -3717,6 +3718,15 @@ means the default each one states.
   It does not touch the next two values. At 0 XHCISNAP's report still
   counts the faults it sees, but not what the driver would have done about
   them. Read when the controller starts, so restart after changing it.
+
+  Two things apply at every value, 0 included: a device the controller
+  reports incompatible is removed and re-enumerated, as the xHCI
+  specification asks, at most three times on one port before the port is
+  held; and a recovery that cannot stop the controller, and cannot prove
+  it has stopped writing to memory, closes the controller off until it
+  restarts. XHCISNAP then reports "CONTAINED: halt and reset did not
+  complete and Bus Master Enable would not clear; DMA not proven stopped,
+  common buffer pinned".
 
   XhciIntervalCap  -  the AMD interrupt-interval cap
   ..................................................
