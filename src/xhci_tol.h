@@ -226,7 +226,9 @@ ULONG XhciTolHchRecover(ULONG tolerance, ULONG hch, ULONG runs);
 typedef struct _XHCI_TOL_WINDOW {
     ULONG Count;                            /* stamps held, 0..3            */
     ULONG Stamp[XHCI_TOL_RECOVERIES];       /* oldest first                 */
-    ULONG Refused;                          /* recoveries not begun         */
+    ULONG Refused;                          /* recoveries not begun; nonzero
+                                             * latches the terminal until
+                                             * the next start               */
 } XHCI_TOL_WINDOW, *PXHCI_TOL_WINDOW;
 
 VOID XhciTolWindowInit(PXHCI_TOL_WINDOW win);

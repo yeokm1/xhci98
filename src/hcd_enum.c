@@ -3131,6 +3131,27 @@ static VOID hcdInvalidate(PHCD_CONTROLLER hc)
     hc->ScratchTainted = 0;
 }
 
+/*
+ * 35-T.6's third step (design record 17 section 4.6), once the controller is
+ * latched failed and Unreadable and the thread has read Bus Master Enable
+ * back clear or failed to: with that proof, every device's transfers are
+ * drained before any device is waited out and every device then leaves
+ * through the existing departure (hcdDropAll, as an invalidation drops
+ * them); without it the caller has pinned the common buffer, and the drain
+ * marks each device Gone and keeps every transfer under the pinned-buffer
+ * rule. The slot is not given back either way: no command reaches a failed
+ * controller. Only the controller thread calls it, the power gate held.
+ * IRQL: PASSIVE_LEVEL.
+ */
+VOID HcdEnumContain(PHCD_CONTROLLER hc, ULONG proof)
+{
+    if (proof) {
+        hcdDropAll(hc);
+        return;
+    }
+    hcdDrainAll(hc);
+}
+
 /* One port as the root hub's removal leaves it: its device - a hub's
  * subtree first (hcdSubtreeGo) - off the bus, its slot disabled when powered
  * and otherwise left Abandoned for the first powered pass, its machine in

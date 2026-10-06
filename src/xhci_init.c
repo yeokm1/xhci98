@@ -899,7 +899,8 @@ static ULONG xhciHalt(PXHCI_EXTENSION ext)
     }
     if ((usbsts & XHCI_USBSTS_HCH) != 0) {
         (VOID)XhciControllerUpdateFlags(
-            ext, XHCI_EXT_FLAG_RUNNING | XHCI_EXT_FLAG_HW_RUNNING, 0);
+            ext, XHCI_EXT_FLAG_RUNNING | XHCI_EXT_FLAG_HW_RUNNING |
+                     XHCI_EXT_FLAG_RS_CONFIRMED, 0);
         return 1;
     }
 
@@ -910,6 +911,7 @@ static ULONG xhciHalt(PXHCI_EXTENSION ext)
      * set up by firmware, aimed at memory this driver does not own - has no
      * useful outcome.
      */
+    (VOID)XhciControllerUpdateFlags(ext, XHCI_EXT_FLAG_RS_CONFIRMED, 0);
     if (!xhciWriteUsbCmd(ext, 0)) {
         return 0;
     }
@@ -932,7 +934,8 @@ static ULONG xhciHalt(PXHCI_EXTENSION ext)
          * driver's R/S ownership, which is what xhciUnpowerPorts reads.)
          */
         (VOID)XhciControllerUpdateFlags(
-            ext, XHCI_EXT_FLAG_RUNNING | XHCI_EXT_FLAG_HW_RUNNING, 0);
+            ext, XHCI_EXT_FLAG_RUNNING | XHCI_EXT_FLAG_HW_RUNNING |
+                     XHCI_EXT_FLAG_RS_CONFIRMED, 0);
     }
     return halted;
 }
@@ -981,6 +984,7 @@ static ULONG xhciReset(PXHCI_EXTENSION ext)
      * and the read value came from firmware - but the write still goes through
      * xhciWriteUsbCmd, because RsvdP is a rule about the write rather than
      * about what the register ends up holding. */
+    (VOID)XhciControllerUpdateFlags(ext, XHCI_EXT_FLAG_RS_CONFIRMED, 0);
     if (!xhciWriteUsbCmd(ext, XHCI_USBCMD_HCRST)) {
         return 0;
     }
@@ -1359,6 +1363,7 @@ static ULONG xhciRunController(PXHCI_EXTENSION ext, ULONG *usbstsOut)
      * exception is the refusal immediately below, which is the case where
      * nothing was written at all.
      */
+    (VOID)XhciControllerUpdateFlags(ext, XHCI_EXT_FLAG_RS_CONFIRMED, 0);
     previous = XhciControllerUpdateFlags(ext, 0, XHCI_EXT_FLAG_RUNNING);
     if (!xhciWriteUsbCmd(ext, XHCI_USBCMD_RS)) {
         /*
@@ -1411,6 +1416,9 @@ static ULONG xhciRunController(PXHCI_EXTENSION ext, ULONG *usbstsOut)
         return 0;
     }
 
+    /* Only now may a later HCH read as the controller stopping itself
+     * (XHCI_EXT_FLAG_RS_CONFIRMED). */
+    (VOID)XhciControllerUpdateFlags(ext, 0, XHCI_EXT_FLAG_RS_CONFIRMED);
     return 1;
 }
 
@@ -4278,7 +4286,8 @@ ULONG XhciQuiesceController(PXHCI_EXTENSION ext)
             return 0;
         }
         (VOID)XhciControllerUpdateFlags(
-            ext, XHCI_EXT_FLAG_RUNNING | XHCI_EXT_FLAG_HW_RUNNING, 0);
+            ext, XHCI_EXT_FLAG_RUNNING | XHCI_EXT_FLAG_HW_RUNNING |
+                     XHCI_EXT_FLAG_RS_CONFIRMED, 0);
         return 1;
     }
 
@@ -4295,6 +4304,7 @@ ULONG XhciQuiesceController(PXHCI_EXTENSION ext)
      * is worth nothing if the write then re-reads and takes RsvdP from a window
      * that died in between.
      */
+    (VOID)XhciControllerUpdateFlags(ext, XHCI_EXT_FLAG_RS_CONFIRMED, 0);
     xhciWriteUsbCmdFrom(ext, usbcmd, 0);
 
     if (!XhciWaitForBits(ext, ext->HcInfo.OperationalOffset + XHCI_OP_USBSTS,
@@ -4316,12 +4326,14 @@ ULONG XhciQuiesceController(PXHCI_EXTENSION ext)
             return 0;
         }
         (VOID)XhciControllerUpdateFlags(
-            ext, XHCI_EXT_FLAG_RUNNING | XHCI_EXT_FLAG_HW_RUNNING, 0);
+            ext, XHCI_EXT_FLAG_RUNNING | XHCI_EXT_FLAG_HW_RUNNING |
+                     XHCI_EXT_FLAG_RS_CONFIRMED, 0);
         return 1;
     }
 
     (VOID)XhciControllerUpdateFlags(
-        ext, XHCI_EXT_FLAG_RUNNING | XHCI_EXT_FLAG_HW_RUNNING, 0);
+        ext, XHCI_EXT_FLAG_RUNNING | XHCI_EXT_FLAG_HW_RUNNING |
+                 XHCI_EXT_FLAG_RS_CONFIRMED, 0);
     XHCI_DBG_VALUE("quiesce: halted, USBSTS", usbsts);
     return 1;
 }

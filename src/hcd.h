@@ -1208,6 +1208,7 @@ VOID HcdPswRelease(PHCD_CONTROLLER hc);
 /* hcd_enum.c */
 VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered);
 VOID HcdEnumDetach(PHCD_CONTROLLER hc);
+VOID HcdEnumContain(PHCD_CONTROLLER hc, ULONG proof);
 ULONG HcdEnumAttach(PHCD_CONTROLLER hc);
 ULONG HcdEnumSettleAsk(PHCD_CONTROLLER hc);
 ULONG HcdEnumSettleClock(VOID);
@@ -1414,6 +1415,11 @@ VOID HcdIoRefusedInit(struct _HCD_DEVICE_PDO *pdo);
 ULONG HcdIoPark(struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb,
                 PVOID handle, PVOID endpoint);
 ULONG HcdIoParkedRelease(struct _HCD_DEVICE_PDO *pdo, ULONG aborted);
+/* HcdIoPark's endpoint for a request whose endpoint cannot be named any
+ * more (35-T.6): an abort of any pipe of the PDO covers it. */
+#define HCD_IO_ENDPOINT_ANY ((PVOID)(ULONG_PTR)1)
+NTSTATUS HcdIoHoldUnreadable(struct _HCD_DEVICE_PDO *pdo, PIRP irp,
+                             PVOID urb, PVOID handle, PVOID endpoint);
 VOID HcdIoStamp(struct _HCD_DEVICE_PDO *pdo, PIRP irp);
 VOID HcdIoAbortMark(struct _HCD_DEVICE_PDO *pdo, PIRP abortIrp,
                     PVOID handle, ULONG known);

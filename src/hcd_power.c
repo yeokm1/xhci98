@@ -51,6 +51,30 @@
 #define HCD_POWER_WORK_SYSTEM 2UL
 #define HCD_POWER_WORK_DIRECT 3UL
 
+/*
+ * A controller at a 35-T.6 terminal (design record 17 section 4.6) is not
+ * resumed: a resume reinitializes and would clear the failure latch, and
+ * each terminal holds until a stop and start, where the record revalidates.
+ * Contained (Unreadable): the dropped or kept devices and a pinned buffer
+ * stay. The recovery window exhausted (Window.Refused, cleared only by
+ * XhciTolStart): a fourth recovery was not begun, and a resume would be
+ * one. Neither is set at XhciTolerance 0. The power gate held. IRQL:
+ * PASSIVE_LEVEL.
+ */
+static ULONG hcdResumeContained(PHCD_CONTROLLER hc)
+{
+    if (hc->Hc.Tol.Unreadable) {
+        XhciLogNote(&hc->Hc, "resume.contained", 1);
+        return 1;
+    }
+    if (hc->Hc.Tol.Window.Refused != 0) {
+        XhciLogNote(&hc->Hc, "resume.window.refused",
+                    hc->Hc.Tol.Window.Refused);
+        return 1;
+    }
+    return 0;
+}
+
 /* The resume half of a D0, then the IRP's completion. IRQL: PASSIVE_LEVEL. */
 static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
 {
@@ -65,7 +89,8 @@ static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
          * across the sleep; route them before the ports are resumed. */
         HcdPswRoute(hc);
         hc->TolStartGen++;
-        if (XhciResumeController(&hc->Hc) != MP_STATUS_SUCCESS) {
+        if (!hcdResumeContained(hc) &&
+            XhciResumeController(&hc->Hc) != MP_STATUS_SUCCESS) {
             hc->ResumeFailures++;
             HcdControllerFail(hc);
         }
@@ -123,7 +148,8 @@ static VOID hcdDirectTransitionGated(PHCD_CONTROLLER hc)
         hc->SuspendedInD0 = 0;
         HcdPswRoute(hc);
         hc->TolStartGen++;
-        if (XhciResumeController(&hc->Hc) != MP_STATUS_SUCCESS) {
+        if (!hcdResumeContained(hc) &&
+            XhciResumeController(&hc->Hc) != MP_STATUS_SUCCESS) {
             hc->ResumeFailures++;
             HcdControllerFail(hc);
         }

@@ -644,11 +644,26 @@ static VOID hcdRecover(PHCD_CONTROLLER hc)
     HcdPowerGateEnter(hc);
     XhciControllerLockAcquire(ext, &oldIrql);
     if (ext->RecoveryRequested && ext->ControllerFailed &&
+        !ext->Tol.Unreadable && ext->Tol.Window.Refused == 0 &&
         (ext->Flags & XHCI_EXT_FLAG_SUSPENDED) == 0 &&
         hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0 &&
         ext->RecoveryFailuresConsecutive < XHCI_RECOVERY_MAX_ATTEMPTS) {
         ext->RecoveryRequested = 0;
         go = 1;
+        /* 35-T.6's window (record 17 section 4.6), charged as a recovery
+         * begins, retries included: a fourth inside ten minutes is not
+         * begun, and the request is dropped. Window.Refused, cleared only
+         * by XhciTolStart, is the latch: no later request is acted on and
+         * no resume reinitializes the controller (hcd_power.c), so it
+         * stays failed until a stop and start - today's terminal after
+         * three failures in a row, which keeps its own meaning. */
+        if (!XhciTolWindowAdmit(&ext->Tol.Window, ext->Tol.Stats.Tolerance,
+                                HcdTolNow(hc))) {
+            go = 0;
+            ext->Tol.Stats.WindowRefused++;
+            XhciLogNoteLocked(ext, "ctrl.window.refused",
+                              ext->Tol.Window.Refused);
+        }
     }
     XhciControllerLockRelease(ext, oldIrql);
     if (!go) {
@@ -727,6 +742,137 @@ static VOID hcdBackstop(PHCD_CONTROLLER hc)
 }
 
 /*
+ * 35-T.6's proof that a contained controller masters nothing (design record
+ * 17 section 4.6, step 2): configuration space answers, and Bus Master Enable
+ * reads back clear - cleared here when it was set. Stricter than the
+ * quiesce's own fallback (xhci_init.c, xhciTryClearBusMaster), which takes a
+ * Command register of all ones as a device off the bus: here that is a
+ * function that does not answer, and no proof. A clear this driver made is
+ * recorded, so a later start puts the bit back (xhciRestoreBusMaster).
+ * IRQL: PASSIVE_LEVEL (configuration space goes out to the bus driver).
+ */
+static ULONG hcdContainProve(PXHCI_EXTENSION ext)
+{
+    USHORT command;
+
+    command = 0;
+    if (XhciReadPciConfig(ext, XHCI_PCI_COMMAND, &command, sizeof(USHORT)) !=
+            MP_STATUS_SUCCESS ||
+        command == 0xFFFFU) {
+        return 0;
+    }
+    if ((command & XHCI_PCI_COMMAND_BME) != 0) {
+        command = (USHORT)(command & ~XHCI_PCI_COMMAND_BME);
+        if (XhciWritePciConfig(ext, XHCI_PCI_COMMAND, &command,
+                               sizeof(USHORT)) != MP_STATUS_SUCCESS) {
+            return 0;
+        }
+        ext->BusMasterCleared = 1;
+        command = 0;
+        if (XhciReadPciConfig(ext, XHCI_PCI_COMMAND, &command,
+                              sizeof(USHORT)) != MP_STATUS_SUCCESS ||
+            command == 0xFFFFU) {
+            return 0;
+        }
+    }
+    return (command & XHCI_PCI_COMMAND_BME) == 0 ? 1UL : 0UL;
+}
+
+/*
+ * The all-ones containment (35-T.6, design record 17 section 4.6): a step of
+ * its own after hcdRecover, under the power gate as that is, admitted only on
+ * a started controller in D0, outside a power transition, with PnP saying it
+ * is present - so no power transition or recovery runs beside it - and with
+ * tolerance on. It reads USBSTS itself; the health poll's ungated samples are
+ * not used. XhciTolDeadStep stamps the first all-ones read with the start
+ * generation and clears the stamp on a good read, a refused admission, or a
+ * new generation (a start, a resume, an in-place recovery). Once all-ones has
+ * stood on every admitted pass for the containment interval, in order:
+ *
+ *   1 the controller latched failed and Unreadable, under the controller
+ *     lock: the drain, commands, enumeration and the health poll stop, the
+ *     recovery never acts on it (hcdRecover), and every submission path
+ *     holds a new request on its PDO instead of refusing it. Nothing already
+ *     submitted is completed;
+ *   2 Bus Master Enable cleared and read back clear (hcdContainProve);
+ *   3 with that proof, every device drained and dropped (HcdEnumContain);
+ *     without it, the common buffer pinned first, then every device drained,
+ *     which on a pinned buffer keeps every transfer and mapping.
+ *
+ * Once per lifetime: Unreadable refuses the admission until a start clears
+ * it (XhciTolStart). IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdContain(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+    KIRQL oldIrql;
+    ULONG admitted;
+    ULONG allOnes;
+    ULONG armed;
+    ULONG contain;
+    ULONG proof;
+
+    ext = &hc->Hc;
+    allOnes = 0;
+    HcdPowerGateEnter(hc);
+    XhciControllerLockAcquire(ext, &oldIrql);
+    admitted = (ext->Tol.Stats.Tolerance && !ext->Tol.Unreadable &&
+                ext->HcInfoStatus == XHCI_HC_OK &&
+                (ext->Flags & XHCI_EXT_FLAG_STARTED) != 0 &&
+                (ext->Flags & XHCI_EXT_FLAG_SUSPENDED) == 0 &&
+                hc->Common.DevicePower == PowerDeviceD0 &&
+                !hc->SuspendedInD0 &&
+                hc->Common.PnpState != HCD_PNP_SURPRISE_REMOVED &&
+                hc->Common.PnpState != HCD_PNP_REMOVED)
+                   ? 1UL
+                   : 0UL;
+    if (admitted) {
+        allOnes = (XhciReadOp(ext, XHCI_OP_USBSTS) == 0xFFFFFFFFUL) ? 1UL
+                                                                     : 0UL;
+    }
+    armed = (ext->Tol.Dead.Armed && ext->Tol.Dead.StartGen == hc->TolStartGen)
+                ? 1UL
+                : 0UL;
+    contain = XhciTolDeadStep(&ext->Tol.Dead, ext->Tol.Stats.Tolerance,
+                              admitted, allOnes, hc->TolStartGen,
+                              HcdTolNow(hc));
+    if (!armed && ext->Tol.Dead.Armed) {
+        ext->Tol.Stats.DeadEpisodes++;
+        XhciLogNoteLocked(ext, "tol.dead.stamp", ext->Tol.Dead.Stamp);
+    }
+    if (contain) {
+        /* Step 1. The reason is Unreadable itself: no recovery request is
+         * raised, and one raised elsewhere is never acted on. The enables
+         * are masked as any failure masks them, a write the dead window
+         * may not take. */
+        if (!ext->ControllerFailed &&
+            (ext->Flags & XHCI_EXT_FLAG_INITIALIZED) != 0) {
+            XhciMaskInterrupts(ext);
+        }
+        ext->ControllerFailed = 1;
+        ext->Tol.Unreadable = 1;
+        XhciLogNoteLocked(ext, "ctrl.failed.unreadable", HcdTolNow(hc));
+    }
+    XhciControllerLockRelease(ext, oldIrql);
+    if (!contain) {
+        HcdPowerGateLeave(hc);
+        return;
+    }
+
+    proof = hcdContainProve(ext);
+    if (!proof) {
+        HcdSvcDmaNotStopped(ext);
+    }
+    HcdEnumContain(hc, proof);
+    XhciControllerLockAcquire(ext, &oldIrql);
+    ext->Tol.Stats.Contained = proof ? XHCI_TOL_CONTAIN_RELEASED
+                                     : XHCI_TOL_CONTAIN_PINNED;
+    XhciLogNoteLocked(ext, "tol.contained", ext->Tol.Stats.Contained);
+    XhciControllerLockRelease(ext, oldIrql);
+    HcdPowerGateLeave(hc);
+}
+
+/*
  * Declare the controller failed and ask the thread for the in-place
  * recovery: the HCD's answer to a failed resume, which under usbport ended in
  * the stop/start a failed ResumeController asked usbport for (Codex review of
@@ -774,6 +920,7 @@ static VOID hcdPoll(PHCD_CONTROLLER hc)
      * recovery request on a controller whose flags no longer say it runs. */
     hcdRecover(hc);
     hcdBackstop(hc);
+    hcdContain(hc);
 }
 
 /* IRQL: PASSIVE_LEVEL (a system thread). */

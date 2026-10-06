@@ -1053,14 +1053,20 @@ NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     PHCD_PIPE pipe;
     PHCD_XFER x;
     PHCD_XFER kick;
+    PVOID handle;
+    PVOID endpoint;
     KIRQL oldIrql;
     ULONG gone;
     ULONG parked;
+    ULONG unreadable;
 
     x = NULL;
     kick = NULL;
     parked = 0;
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    /* 35-T.6: read under the lock the containment sets it under, so a
+     * request that passed hcd_urb.c's test as it was set is held too. */
+    unreadable = hc->Hc.Tol.Unreadable;
     gone = dev->Gone;
     pipe = gone ? NULL : hcdPipeFromHandle(dev, req->Handle);
     if (pipe != NULL && pipe->Closed) {
@@ -1069,6 +1075,19 @@ NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     if (pipe != NULL && !HcdPdoOwnsPipe(pdo, dev, pipe)) {
         /* A sibling function's handle (design record 13 section 10.9). */
         pipe = NULL;
+    }
+    if (unreadable) {
+        /* Only compared later, never dereferenced (hcdAbortedLocked). The
+         * handle is resolved even on a Gone device, whose pipes stay
+         * allocated while this reference is held, so a stream's request
+         * keeps its endpoint and an abort of either covers it. */
+        pipe = hcdPipeFromHandle(dev, req->Handle);
+        handle = (pipe == NULL) ? req->Handle
+                 : (pipe == &dev->Ep0Pipe) ? NULL : (PVOID)pipe;
+        endpoint = (pipe != NULL) ? (PVOID)pipe->Parent : NULL;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        (VOID)InterlockedDecrement(&dev->Refs);
+        return HcdIoHoldUnreadable(pdo, irp, urb, handle, endpoint);
     }
     if (pipe != NULL) {
         /* The PDO rides on the IRP from here, under this lock, so a
@@ -1995,7 +2014,11 @@ static ULONG hcdAbortedLocked(PHCD_DEVICE_PDO pdo, PIRP irp, PVOID handle,
         return 1;
     }
     for (i = 0; i < pdo->AbortCount; i++) {
+        /* HCD_IO_ENDPOINT_ANY: a request held with no device record left
+         * to name its endpoint (35-T.6) - any pipe's abort covers it, as
+         * its handle may be a stream of whichever endpoint was aborted. */
         if ((pdo->AbortPipe[i] == handle ||
+             endpoint == HCD_IO_ENDPOINT_ANY ||
              (endpoint != NULL && pdo->AbortPipe[i] == endpoint)) &&
             XhciSeqCovers(&pdo->AbortHorizon[i], stamp, &pdo->SubmitSeq)) {
             return 1;
@@ -2056,6 +2079,33 @@ ULONG HcdIoPark(PHCD_DEVICE_PDO pdo, PIRP irp, PVOID urb, PVOID handle,
     pdo->ParkedCount++;
     IoReleaseCancelSpinLock(cancelIrql);
     return 1;
+}
+
+/*
+ * A new request on a contained controller (35-T.6, design record 17 section
+ * 4.6: Unreadable set): held on its PDO as a departed device's is, so a
+ * class driver's read simply pends, and released as those are. A refusal
+ * would complete DEVICE_GONE, which reads STATUS_DEVICE_NOT_CONNECTED on a
+ * PDO that is not closing - the status Windows 98 SE's hidclass.sys
+ * resubmits on at once (hcdRefusedDpc). Where HcdIoPark declines - the PDO
+ * closing or the IRP cancelled - the deferred refusal completes it
+ * STATUS_DELETE_PENDING or STATUS_CANCELLED, never that status. The IRP is
+ * pending before the hold, since a request an abort already covers is
+ * completed inside it. Counted on the PDO as a held request is. IRQL:
+ * <= DISPATCH_LEVEL, no lock held.
+ */
+NTSTATUS HcdIoHoldUnreadable(PHCD_DEVICE_PDO pdo, PIRP irp, PVOID urb,
+                             PVOID handle, PVOID endpoint)
+{
+    HcdIoIsoRefused(urb, HCD_USBD_DEVICE_GONE);
+    IoMarkIrpPending(irp);
+    (VOID)InterlockedIncrement(&pdo->UrbsPending);
+    if (HcdIoPark(pdo, irp, urb, handle, endpoint)) {
+        return STATUS_PENDING;
+    }
+    (VOID)InterlockedDecrement(&pdo->UrbsPending);
+    HcdIoIsoRefused(urb, HCD_USBD_CANCELED);
+    return HcdIoRefuseLater(pdo, irp, urb, HCD_USBD_CANCELED);
 }
 
 /*

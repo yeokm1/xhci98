@@ -253,7 +253,26 @@ code:
   stopped decoding, and HCE and HSE are two of the thirty-two bits it answers
   with. The same operand rule applies to the interrupt masks; here the cost of
   getting it wrong is a healthy controller marked terminally failed on one bad
-  read.
+  read. It still never requests a reset. Since roadmap-hcd task 35-T.6 it is
+  no longer silent either: with `XhciTolerance` at 1, a step of the
+  controller thread's own, under the power gate, reads `USBSTS` itself and,
+  once all ones has stood for the containment interval, contains the
+  controller - latched failed with `Unreadable` set, which the recovery never
+  acts on, new requests held on their PDOs, Bus Master Enable cleared and
+  read back clear, and only with that proof the devices drained and dropped;
+  without it the common buffer is pinned first (design record 17 section
+  4.6; `hcd_ctl.c`, `hcdContain`). The health poll's own samples are not
+  that evidence.
+- **HCH with the driver's R/S still written 1 is a request too** (35-T.6,
+  with `XhciTolerance` at 1): the health poll, on an admitted controller that
+  is not suspended and whose `XHCI_EXT_FLAG_RS_CONFIRMED` stands - R/S
+  written 1 and HCH since read clear, so a start's or resume's run step,
+  HCH not yet clear, is not read as a halt - asks for the in-place recovery
+  behind the same `ControllerFatal` latch as HCE and HSE. Every recovery
+  begun is charged to a window of three in ten minutes beside
+  `RecoveryFailuresConsecutive`; a fourth is not begun, and the controller
+  stays failed until a stop and start: no later request is acted on and no
+  resume reinitializes it, as for a contained controller.
 - **A Host Controller Event escalates from the DPC, not from the poll.** Event
   Ring Full and Event Lost set neither HCE nor HSE, so no poll of `USBSTS` will
   ever see them, and a driver that recorded the completion code and waited for

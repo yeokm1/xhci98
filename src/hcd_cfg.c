@@ -91,6 +91,36 @@ static PURB hcdCfgUrbOf(PIRP irp)
     return (PURB)stack->Parameters.Others.Argument1;
 }
 
+/* The pipe a held command names (35-T.6), so an abort of that pipe covers
+ * it as it covers the pipe's transfers (HcdIoAbortMark): RESET_PIPE and the
+ * two SYNC requests carry one; a select names none. */
+static PVOID hcdCfgHeldHandle(PURB urb)
+{
+    switch (urb->UrbHeader.Function) {
+    case URB_FUNCTION_RESET_PIPE:
+    case XHCI_PIPE_URB_SYNC_RESET_PIPE:
+    case XHCI_PIPE_URB_SYNC_CLEAR_STALL:
+        return urb->UrbPipeRequest.PipeHandle;
+    default:
+        return NULL;
+    }
+}
+
+/* A held command's endpoint when its handle is a stream's, so an abort of
+ * the endpoint covers it as xhci98_streams.h promises; NULL for an
+ * endpoint's own handle, none, or one the device does not hold. Controller
+ * lock held, the device record referenced or the thread's. */
+static PVOID hcdCfgHeldEndpoint(PHCD_USB_DEVICE dev, PVOID handle)
+{
+    PHCD_PIPE pipe;
+
+    if (handle == NULL) {
+        return NULL;
+    }
+    pipe = HcdCfgPipe(dev, handle);
+    return (pipe != NULL) ? (PVOID)pipe->Parent : NULL;
+}
+
 /* Pend one IRP for the thread - a URB, or RESET_PORT; the caller's device
  * reference passes to it. IRQL: <= DISPATCH_LEVEL. */
 NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
@@ -98,9 +128,32 @@ NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 {
     KIRQL oldIrql;
     PURB urb;
+    PVOID handle;
+    PVOID endpoint;
 
     urb = hcdCfgUrbOf(irp);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (hc->Hc.Tol.Unreadable && urb != NULL) {
+        /* 35-T.6: a URB that passed hcd_urb.c's test as the containment
+         * set it - tested before Gone, which the containment's drain sets
+         * on a device whose PDO stays listed, and whose refusal would
+         * complete STATUS_DEVICE_NOT_CONNECTED. No command runs again in
+         * this lifetime, so an abort is answered as one on a departed PDO,
+         * and anything else is held (HcdIoHoldUnreadable) under the pipe it
+         * names, so that pipe's abort covers it - and, for a stream's,
+         * its endpoint's, resolved here while the record is referenced. */
+        handle = hcdCfgHeldHandle(urb);
+        endpoint = hcdCfgHeldEndpoint(dev, handle);
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        (VOID)InterlockedDecrement(&dev->Refs);
+        if (urb->UrbHeader.Function == URB_FUNCTION_ABORT_PIPE) {
+            HcdIoAbortMark(pdo, irp, urb->UrbPipeRequest.PipeHandle, 0);
+            (VOID)HcdIoParkedRelease(pdo, 1);
+            urb->UrbHeader.Status = USBD_STATUS_SUCCESS;
+            return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+        }
+        return HcdIoHoldUnreadable(pdo, irp, urb, handle, endpoint);
+    }
     if (dev->Gone) {
         /* The thread has begun freeing the device and has flushed its
          * queued URBs already: one queued now would hold a reference
@@ -150,6 +203,48 @@ static VOID hcdCfgComplete(PHCD_USB_DEVICE dev, PIRP irp, PURB urb,
     (VOID)InterlockedDecrement(&dev->Refs);
 }
 
+/*
+ * A queued slow URB of a contained controller's device (35-T.6, design
+ * record 17 section 4.6), as the containment's drain reaches it: completed
+ * DEVICE_GONE it would read STATUS_DEVICE_NOT_CONNECTED while its PDO may
+ * still be listed. An abort succeeds, as one on a departed PDO does, its
+ * horizon released; anything else is held on its PDO (HcdIoPark), keeping
+ * the count in UrbsPending it was queued with, and released as a held
+ * request is - cancel, an abort covering it, or the PDO's stop or removal.
+ * Where the hold declines, the deferred refusal completes it CANCELLED or
+ * DELETE_PENDING. The device reference goes back either way. Thread only.
+ */
+static VOID hcdCfgHoldUnreadable(PHCD_USB_DEVICE dev, PIRP irp, PURB urb)
+{
+    PHCD_DEVICE_PDO pdo;
+    PVOID handle;
+    PVOID endpoint;
+    KIRQL oldIrql;
+
+    pdo = (PHCD_DEVICE_PDO)irp->Tail.Overlay.DriverContext[2];
+    if (urb->UrbHeader.Function == URB_FUNCTION_ABORT_PIPE) {
+        /* Its horizon was marked at dispatch (hcd_urb.c); the stamp that
+         * would mark it again is gone - DriverContext[0] names the device
+         * while queued - so only what that horizon covers is released. */
+        (VOID)HcdIoParkedRelease(pdo, 1);
+        hcdCfgComplete(dev, irp, urb, XHCI_USBD_STATUS_SUCCESS);
+        return;
+    }
+    /* Stamped again, since the queue took DriverContext[0]: an abort
+     * submitted from here on covers it, one already run does not. */
+    HcdIoStamp(pdo, irp);
+    handle = hcdCfgHeldHandle(urb);
+    /* The flush runs before the pipes are freed (HcdCfgDeviceGone). */
+    XhciControllerLockAcquire(&dev->Controller->Hc, &oldIrql);
+    endpoint = hcdCfgHeldEndpoint(dev, handle);
+    XhciControllerLockRelease(&dev->Controller->Hc, oldIrql);
+    if (!HcdIoPark(pdo, irp, urb, handle, endpoint)) {
+        (VOID)HcdIoRefuseLater(pdo, irp, urb, HCD_USBD_CANCELED);
+        (VOID)InterlockedDecrement(&pdo->UrbsPending);
+    }
+    (VOID)InterlockedDecrement(&dev->Refs);
+}
+
 /* A device leaving (hcd_io.c, HcdIoDeviceGone): its queued slow URBs
  * complete as DEVICE_GONE here, since only this thread serves them and it
  * is the one waiting for their references. Thread only. */
@@ -175,6 +270,10 @@ VOID HcdCfgFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     while (!IsListEmpty(&mine)) {
         entry = RemoveHeadList(&mine);
         irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
+        if (hc->Hc.Tol.Unreadable && hcdCfgUrbOf(irp) != NULL) {
+            hcdCfgHoldUnreadable(dev, irp, hcdCfgUrbOf(irp));
+            continue;
+        }
         hcdCfgComplete(dev, irp, hcdCfgUrbOf(irp), HCD_USBD_DEVICE_GONE);
     }
 }

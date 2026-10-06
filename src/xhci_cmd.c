@@ -610,7 +610,9 @@ VOID XhciControllerBeginQuiesce(PXHCI_EXTENSION ext)
     /* A DIRQL ISR may decline only after this controller cannot still be the
      * source of the shared level-triggered interrupt. */
     XhciMaskInterrupts(ext);
-    ext->Flags &= ~XHCI_EXT_FLAG_INITIALIZED;
+    /* RS_CONFIRMED with it: no HCH read from here to the next confirmed
+     * run is a controller stopping itself (35-T.6). */
+    ext->Flags &= ~(XHCI_EXT_FLAG_INITIALIZED | XHCI_EXT_FLAG_RS_CONFIRMED);
     XhciControllerLockRelease(ext, oldIrql);
 }
 
@@ -724,6 +726,31 @@ ULONG XhciControllerHealthPoll(PXHCI_EXTENSION ext)
             ext->FatalStatusDetected++;
             escalate = 1;
             XHCI_DBG_VALUE("check: FATAL controller status, USBSTS", usbsts);
+        }
+    } else if (XhciTolHchRecover(
+                   ext->Tol.Stats.Tolerance,
+                   (usbsts & XHCI_USBSTS_HCH) != 0 ? 1UL : 0UL,
+                   (ext->Flags & (XHCI_EXT_FLAG_RS_CONFIRMED |
+                                  XHCI_EXT_FLAG_SUSPENDED)) ==
+                       XHCI_EXT_FLAG_RS_CONFIRMED ? 1UL : 0UL)) {
+        /*
+         * 35-T.6 (design record 17 section 4.6): HCH on a controller admitted
+         * above (initialized, not failed), not suspended, whose R/S this
+         * driver wrote 1 and then saw HCH clear for (RS_CONFIRMED). Not
+         * RUNNING: that is set before the R/S write, so a resume's run step
+         * - INITIALIZED already up, HCH not yet clear - would read as a
+         * halt. A stop, a suspend and the in-place recovery each take
+         * RS_CONFIRMED down under this lock before they write R/S 0
+         * (XhciControllerBeginQuiesce, and every R/S 0 write), so such a
+         * read is the controller stopping itself. The same request as HCE
+         * and HSE, behind the same latch.
+         */
+        if (!ext->ControllerFatal) {
+            ext->ControllerFatal = 1;
+            ext->Tol.Stats.HchRecoveries++;
+            escalate = 1;
+            XhciLogNoteLocked(ext, "ctrl.hch", usbsts);
+            XHCI_DBG_VALUE("check: controller halted itself, USBSTS", usbsts);
         }
     }
 

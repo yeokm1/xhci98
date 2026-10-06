@@ -3303,6 +3303,16 @@ ULONG XhciEventRingErdpValue(const XHCI_EVENT_RING *ring, ULONG ehb);
  * Set and cleared under the controller lock; read by `xhciRhAdmitted`.
  */
 #define XHCI_EXT_FLAG_RH_CLOSED   0x00000080UL
+/*
+ * "R/S is written 1 and HCHalted has been read clear since" (35-T.6, design
+ * record 17 section 4.6). Narrower than XHCI_EXT_FLAG_RUNNING, which is set
+ * *before* the R/S write so a quiesce knows there may be something to stop:
+ * between that write and HCH clearing, a halted controller is legitimate, and
+ * the health poll's HCH request must not read it as one that stopped itself.
+ * Set by xhciRunController once its wait has seen HCH clear; cleared on entry
+ * to it, by XhciControllerBeginQuiesce, and before every R/S 0 write.
+ */
+#define XHCI_EXT_FLAG_RS_CONFIRMED 0x00000100UL
 
 /*
  * Where the init sequence got to. Recorded in XHCI_EXTENSION.InitStep next to
