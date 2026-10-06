@@ -30,6 +30,7 @@
 #include "xhci_hub.h"
 #include "xhci_sshub.h"
 #include "xhci_link.h"
+#include "xhci_psw.h"
 #include "xhci_stream.h"
 #include "xhci_counters.h"
 
@@ -1069,6 +1070,16 @@ typedef struct _HCD_CONTROLLER {
     } SettleDeferHub[HCD_SETTLE_DEFER_HUB];
     ULONG SettleDeferHubFull;       /* a deferral did not fit: every hub
                                      * port rebuilt is taken as deferred */
+    /* The Intel port switchover (task 34.3; hcd_ctl.c, xhci_psw.h), at
+     * the end so no offset the harness reads moves. PswOn is set by a start
+     * that routed the switchable connectors to xHCI (the gate passed and
+     * XhciIntelPortSwitch is not 0), so each return to D0 routes them again
+     * and the stop, a refused start and a shutdown's D3 hand them back; the
+     * stop clears it. The counts are never zeroed. PASSIVE_LEVEL only. */
+    ULONG PswOn;
+    ULONG PswRoutes;
+    ULONG PswReleases;
+    ULONG PswFailures;
 } HCD_CONTROLLER, *PHCD_CONTROLLER;
 
 /* The root hub's PDO, created by the controller FDO (hcd_rh.c; design record
@@ -1179,6 +1190,8 @@ VOID HcdControllerFail(PHCD_CONTROLLER hc);
 VOID HcdPowerGateEnter(PHCD_CONTROLLER hc);
 VOID HcdPowerGateLeave(PHCD_CONTROLLER hc);
 ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc);
+VOID HcdPswRoute(PHCD_CONTROLLER hc);
+VOID HcdPswRelease(PHCD_CONTROLLER hc);
 
 /* hcd_enum.c */
 VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered);

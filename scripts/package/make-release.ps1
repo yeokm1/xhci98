@@ -1547,6 +1547,27 @@ $gateOut
         }
     }
 
+    # **Every file is dated the release's date, at noon.** Windows 98 SE's
+    # Driver tab shows the driver file's own date, not the INF's DriverVer
+    # (the 2.1.1.0 asset legs: 10-5-2026 from a build at 23:23 the evening
+    # before a cut dated 10/06/2026, where ME and every NT system read the
+    # INF), and the archive carries each file's modification time to whoever
+    # unpacks it. The date is the upload set's own INFs' DriverVer, which
+    # every published release declares once, so -UploadSetOnly dates an old
+    # release by that release; noon keeps the day whatever an unpacker makes
+    # of the archive's zoneless times. The bytes are untouched.
+    $infDates = @(Get-ChildItem -LiteralPath $uploadRoot -Filter '*.inf' -File -Recurse |
+                  ForEach-Object { Get-InfDriverDate -Path $_.FullName } | Sort-Object -Unique)
+    if ($infDates.Count -ne 1) {
+        throw "the assembled upload set's INFs declare $($infDates.Count) DriverVer dates ($($infDates -join ', ')), not one: the release has no single date to give its files."
+    }
+    $fileStamp = [datetime]::ParseExact($infDates[0], 'yyyy-MM-dd',
+        [Globalization.CultureInfo]::InvariantCulture).AddHours(12)
+    foreach ($item in (Get-ChildItem -LiteralPath $uploadRoot -File -Recurse)) {
+        $item.LastWriteTime = $fileStamp
+    }
+    Write-Ok ("every file dated {0:yyyy-MM-dd HH:mm}, the INFs' DriverVer date" -f $fileStamp)
+
     if (Test-Path -LiteralPath $uploadZip) {
         Remove-Item -LiteralPath $uploadZip -Force
     }
@@ -2710,7 +2731,10 @@ other.
       on an ordinary start, but the drivers run only while driver signature
       enforcement is disabled, at every start, as they are unsigned;
       otherwise the controller shows Code 39 and nothing on it works.
-      Windows XP x64 needs none of that.
+      After each install the Program Compatibility Assistant may say
+      "Windows requires a digitally signed driver"; the driver still loads
+      on a start with enforcement disabled. Windows XP x64 needs none of
+      that.
 "@
         $readmeArchFiles = @"
 
@@ -3181,11 +3205,12 @@ renaming first. As read in virtual machines:
   from a list of device drivers on my computer" and the new entry;
   elsewhere Have Disk.
 
-  Afterwards each device is found once more as new hardware, exactly once:
-  a stick under its serial number, the other devices under a new id. On
-  the NT systems this needs no answer; on Windows 98 SE the wizard runs for
-  each and may ask for the CD for hidclass.sys. Let Windows install them.
-  A hidusbf setting on such a device has to be applied again (section 5).
+  From the first 2.x release only, each device is then found once more as
+  new hardware, exactly once: a stick under its serial number, the other
+  devices under a new id. On the NT systems this needs no answer; on
+  Windows 98 SE the wizard runs for each and may ask for the CD for
+  hidclass.sys. Let Windows install them. A hidusbf setting on such a
+  device has to be applied again (section 5).
 
 UPGRADING FROM THE EARLIER, USB 2.0-ONLY RELEASES (1.x)
 .......................................................
@@ -3266,8 +3291,10 @@ Things specific to this driver, worth knowing in advance:
     answer, on Windows XP with the Found New Hardware wizard and the
     unsigned-driver warning (Continue Anyway) for each newly plugged hub.
     Disabling and enabling a hub in Device Manager brings back the devices
-    behind it (read on 98 SE, 2000, XP). The driver still runs every hub
-    itself.
+    behind it (read on 98 SE, 2000, XP). While a drive behind the hub is
+    open in Explorer, Windows refuses the disable, asks for a restart and
+    leaves the hub running; close the window first (read on Vista). The
+    driver still runs every hub itself.
 
   * A DEVICE WITH A SERIAL NUMBER KEEPS ITS ENTRY ON ANY PORT. Moved to
     another port or behind a hub, it is not found again as new hardware.
@@ -3402,8 +3429,16 @@ being unsigned, and no change to this driver can remove them:
     own device manager stops responding; it does the same on Microsoft's
     own USB stack. Wait for the install to finish before unplugging.
 
-  * A SUPERSPEED DEVICE'S POWER READS A QUARTER OF ITS DRAW on the Power
-    tab: the page doubles a value that is in 8 mA units at SuperSpeed.
+  * A SUPERSPEED DEVICE DECLARING MORE THAN 510 mA READS 510 mA on the
+    Power tab (a bus-powered hub is charged (ports + 1) x 100 mA, at most
+    500 mA, instead): the value the page reads cannot count past 510 mA. With
+    XhciLogVerbosity at 2, XHCISNAP's report gives the exact figure as
+    dev.ss.maxpower.ma, in hexadecimal mA.
+
+  * INTEL 7-, 8- AND 9-SERIES CHIPSETS: A DEVICE ON A BLUE CONNECTOR MOVES
+    BETWEEN THE USB 2.0 CONTROLLER AND THIS DRIVER when this driver's
+    controller starts or stops, so a drive busy there is disconnected
+    (XhciIntelPortSwitch, section 9).
 
   * WINDOWS XP FROM THE F6 FLOPPY: GUI-MODE SETUP ASKS ABOUT THE UNSIGNED
     DRIVER BEFORE THE USB KEYBOARD WORKS. A PS/2 or built-in laptop
@@ -3470,9 +3505,14 @@ debug throughout, in its build scripts and its documentation alike.)
  9. REGISTRY SETTINGS
 ==============================================================================
 
-Every registry value this driver reads. There are seven, all DWORDs. The
-install writes one of them, XhciImodInterval250ns; the other six are absent
-until you set them, and absent means the default each one states.
+Every registry value this driver reads. There are eight, all DWORDs. The
+install writes all eight, each at the default it states below except
+XhciImodInterval250ns, which it writes as 160. It writes each only where it is
+missing, so a value you changed survives an install or update; to go back to
+the default, set it by hand, or delete the value and update the driver. If
+an earlier install left XhciImodInterval250ns at 500, the update keeps it;
+set it to 160 by hand. A value that is absent
+means the default each one states.
 
   YOU SHOULD NOT NEED THIS SECTION FOR A LOG. If the maintainer asks for one,
   XHCISNAP -verbosity 2 sets the value that matters, on every controller, and
@@ -3528,12 +3568,10 @@ until you set them, and absent means the default each one states.
   wrote. 40 added only 1 to 3% more.
 
   FEEL FREE TO TUNE IT. Raise it towards 4000 (or delete it) if you get
-  audio stutter or instability under load; on real hardware under Windows
-  98 SE, Full-Speed audio played without stutter at 160 while a drive was
-  read at full speed. Enter it as a decimal DWORD. The driver
-  reads it when it starts, so a change takes effect after a restart;
-  XHCISNAP's report then shows under "registry values" the value it read,
-  the interval in force, and what the controller took.
+  audio stutter or instability under load. Enter it as a decimal DWORD.
+  The driver reads it when it starts, so a change takes effect after a
+  restart; XHCISNAP's report then shows under "registry values" the value
+  it read, the interval in force, and what the controller took.
 
   XhciForceBulkOnly  -  keep storage on Bulk-Only instead of UAS
   ..............................................................
@@ -3589,7 +3627,28 @@ until you set them, and absent means the default each one states.
   ms after the start with nothing plugged in, and 0.3 to 0.9 s after it
   with a mouse and a stick plugged in.
 
-  THOSE SEVEN ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
+  XhciIntelPortSwitch  -  the Intel 7/8/9-series port switchover
+  ..............................................................
+
+  Default 1: on. It matters only on an Intel xHCI with PCI device id 1E31,
+  8C31, 9C31, 8CB1, 9CB1 or 8D31 (7-, 8- and 9-series chipsets, Ivy Bridge
+  to Broadwell, and C610/X99), and is not read on any other controller.
+  There each switchable connector, usually a blue one, is wired to both the
+  USB 2.0 (EHCI) and the xHCI controller, and firmware on "Auto", or with
+  no setting, typically leaves it on the USB 2.0 one. This driver moves
+  those connectors to itself at each start and resume, and hands them back
+  when its controller stops and at shutdown.
+
+  A device under a running USB 2.0 driver (NUSB's, for example) on such a
+  connector is disconnected there when this driver starts and comes back
+  under it, and the reverse at a stop: do not have a drive busy there then.
+
+  Set it to 0 to leave the connectors where firmware put them. ONLY 0
+  TURNS IT OFF; absent or any other number is on. Read when the controller
+  starts, so restart after changing it. Read on a Lenovo B490 (1E31) under
+  Windows 98 SE with NUSB; standby and the other five ids are untested.
+
+  THOSE EIGHT ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
   XhciVirtualHSHubVid and XhciVirtualHSHubPid are not read: a copy left in
   the key by an earlier install has no effect, because this driver reports
   every device at its true speed with no virtual hub in the way. Delete
@@ -4149,10 +4208,9 @@ If USB is not working properly with this driver, this is what to run. It reads
 the driver's own log straight out of the running machine and writes a report
 you can paste into a bug report.
 
-On Windows 98 it is the ONLY way to get anything out. That is not a gap in
-this driver - it is the price of how it plugs into Windows. The usual ways
-a driver writes a log are closed to it, and this route goes through the
-Microsoft USB driver it sits underneath, which does have them.
+It talks to the driver directly, through the controller's own device, on
+every Windows version this driver supports. Nothing else needs installing,
+and no log file is written unless you ask for one.
 
 It changes nothing about how the driver behaves on the bus, and writes no file
 it was not asked to. It does READ the controller's port registers, which is a
@@ -4164,7 +4222,7 @@ What step 1 DOES change is ONE of this driver's own settings - that is the
 point of it, and it is why step 2 is a restart. It prints it as it writes it,
 and XHCISNAP -disable puts it back. Run that once you have sent the capture:
 while it is on, anyone using this machine can read the driver's diagnostic
-state. See the registry section for what that does and does not mean.
+state.
 
 
  THE FOUR STEPS

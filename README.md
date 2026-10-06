@@ -35,28 +35,6 @@ Neither has native xHCI support at all so even basic devices like keyboards, mic
 
 This project attempts to fill that gap.
 
-## What's new in 2.1.0.0
-
-`2.1.0.0`, released on 2026-10-05, is the first update of the `2.x` driver. [releases/history.md](releases/history.md) has the full list and the [release notes](docs/using/release-notes.md) the details.
-
-- External hubs appear in Device Manager as "xHCI98 USB Hub", with the devices behind them nested beneath. A USB 3 hub appears twice, the second time as "xHCI98 USB 3.x Hub" for its SuperSpeed half. Each hub has a Power tab.
-- A device with a serial number keeps its Device Manager entry when moved to another port, as under Microsoft's own hub driver.
-- A device that none of Windows' own INFs names is listed under its own product name instead of "USB Device", in Windows 98's Add New Hardware wizard and in Device Manager. Where a Windows INF names the device, its name shows, as over Microsoft's own stack. On Windows 98 SE and ME, characters outside plain ASCII show as `?`.
-- Fixed: on Windows ME, re-enabling the controller with a USB mouse attached hung the machine.
-- Fixed: the root hub's Power tab showed every device's power as unknown.
-- `txtsetup.oem`, so Windows 2000 and XP Setup, and their Recovery Console, can load the driver from a floppy at the F6 prompt (see "Installing Windows 2000 or XP, or using the Recovery Console" below).
-- `XhciFastPollFsLs`, an opt-in registry value for polling a Low- or Full-Speed mouse above 1000 Hz with SweetLow's hidusbf (see "Tuning" below). Untested ground.
-
-## From 1.2.0.0 to 2.0.0.0
-
-Up to `1.2.0.0`, `xhci98.sys` was a miniport underneath Windows' own `usbport.sys`. That stack predates USB 3.0, so the driver ran the controller's USB 2.0 ports only and a USB 3.0 device fell back to High Speed.
-
-`2.0.0.0` is a rewrite as a complete host controller driver. The same `xhci98.sys` file name now owns the controller, the root hub, every hub behind it and the splitting of composite devices, with no `usbport.sys`, `usbhub.sys` or `usbccgp.sys` involved. Windows' own class drivers (HID, `usbstor.sys`, USB audio, vendor drivers such as the ASIX Ethernet one) sit on top of it unchanged. UAS storage needs a class driver Windows 98 to 7 never had, so that is `xhciuas.sys`, shipped in the same package.
-
-In Device Manager the controller is "xHCI98 USB 3.x eXtensible Host Controller", with "xHCI98 USB 3.x Root Hub" beneath it and every USB device beneath that.
-
-The [roadmap](docs/contributing/roadmap-hcd.md) has the phases this took and [design record 13](docs/contributing/design/13-superspeed-hcd.md) the design.
-
 ## SuperSpeed and UAS
 
 <img src="images/xhci98-flash-speed-test.jpg" width="800">
@@ -193,20 +171,19 @@ After upgrading you can delete the `1.2.0.0` virtual-hub values `XhciVirtualHSHu
 
 After the upgrade every device is a new Device Manager entry, so a setting kept on a device's own entry, such as SweetLow's hidusbf polling rate, has to be applied again.
 
-### Updating from 2.0.0.0
+### Updating from 2.y.y.y
+Install the new version over the old one with Update Driver on "xHCI98 USB 3.x eXtensible Host Controller", pointed at the `release-x86\` or `release-x64\` directory. No file needs renaming, since neither `2.x` release uses NUSB's `usbport.sys`.
 
-Install over it with Update Driver on "xHCI98 USB 3.x eXtensible Host Controller", pointed at the `release-x86\` or `release-x64\` directory. No file needs renaming, since neither `2.x` release uses NUSB's `usbport.sys`.
-
-- **Windows 98 SE and ME: restart afterwards, although Windows does not ask.** The new file waits to replace the old one at the next start, and until then `2.0.0.0` keeps running. Under SweetLow's stack the controller may show a problem for a minute or two after Finish. On ME it shows one until the restart, while the devices keep working.
-- **Windows 2000: use Have Disk.** Letting Windows search answers that a suitable driver is already installed and keeps `2.0.0.0`. Use "Display a list of the known drivers" -> Have Disk, as in the steps above.
+- **Windows 98 SE and ME: restart afterwards, although Windows does not ask.** The new file waits to replace the old one at the next start, and until then the old driver keeps running. Under SweetLow's stack the controller may show a problem for a minute or two after Finish. On ME it shows one until the restart, while the devices keep working.
+- **Windows 2000: use Have Disk.** Letting Windows search answers that a suitable driver is already installed and keeps the old one. Use "Display a list of the known drivers" -> Have Disk, as in the steps above.
 - **XP, XP x64, Vista and 7**: the update takes effect at once with no restart, after one unsigned-driver warning.
 
-Afterwards the root hub's Driver tab still shows `2.0.0.0` (on 98 SE and ME, its date), although it runs the new file. To change it, run Update Driver on "xHCI98 USB 3.x Root Hub" too:
+Afterwards the root hub's Driver tab still shows the old version (on 98 SE and ME, its date), although it runs the new file. To change it, run Update Driver on "xHCI98 USB 3.x Root Hub" too:
 
-- On Vista and 7, "Let me pick from a list of device drivers on my computer" and the `2.1.0.0` entry. Searching does not always find it.
+- On Vista and 7, "Let me pick from a list of device drivers on my computer" and the new version's entry. Searching does not always find it.
 - Elsewhere, Have Disk.
 
-Each device is found once more as new hardware, exactly once: a stick under its serial number, the other devices under a new id. Let Windows install them.
+From `2.0.0.0` only, each device is found once more as new hardware, exactly once: a stick under its serial number, the other devices under a new id. Let Windows install them.
 
 - On the NT systems this needs no answer.
 - On Windows 98 SE the wizard runs for each and may ask for the CD for `hidclass.sys`.
@@ -227,6 +204,21 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 
 `NNNN` is the subkey whose `DriverDesc` is "xHCI98 USB 3.x eXtensible Host Controller". The number varies from machine to machine.
 
+| Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
+|---|---|---|---|---|---|
+| `XhciImodInterval250ns` | The interrupt moderation interval | `10` | `4000` | `4000` | `160` |
+| `XhciForceBulkOnly` | Bulk-Only instead of UAS | `0` | `1` | `0` | `0` |
+| `XhciFastPollFsLs` | A root-port Low- or Full-Speed mouse polled above 1000 Hz | `0` | `3` | `0` | `0` |
+| `XhciFirstEnumWaitMs` | The longest wait for a hub's first report | `0` | `30000` | `5000` | `5000` |
+| `XhciFirstEnumPortMs` | The longest one port may hold that wait | `0` | `XhciFirstEnumWaitMs` | `2000` | `2000` |
+| `XhciIntelPortSwitch` | The Intel 7/8/9-series port switchover; `0` turns it off | `0` | `1` | `1` | `1` |
+| `XhciLogVerbosity` | The driver's log, read by `XHCISNAP` | `0` | `4` | `0` | `0` |
+| `XhciLogDebugView` | The log sent to DebugView as well | `0` | `1` | `0` | `0` |
+
+An install or update writes a value only where it is missing, so a value you changed stays as you set it. To go back to the table's value, set it by hand, or delete the value and update the driver. A machine updated straight from `1.2.0.0` keeps that release's `XhciImodInterval250ns` of `500`; set it to `160` by hand.
+
+The two log values are described in the [release notes](docs/using/release-notes.md), "The log, and how to send one". The others are described below.
+
 ### The interrupt moderation interval
 
 `XhciImodInterval250ns` is in **units of 250 ns**. It sets how long the controller waits after one interrupt before raising the next. A shorter interval makes USB storage faster at the cost of more interrupts.
@@ -245,17 +237,17 @@ A value outside `10`-`4000` is replaced by `4000`, not rounded to the nearest li
 - `160` gave 211 MB/s write and 221 MB/s read.
 - `40` added only 1 to 3% more.
 
-Feel free to tune it. Raise it towards `4000` (or delete it) if you get audio stutter or instability under load. At `160`, Full-Speed audio played without stutter on real hardware under Windows 98 SE while a drive was read at full speed.
+Feel free to tune it. Raise it towards `4000` (or delete it) if you get audio stutter or instability under load.
 
 ### Forcing Bulk-Only instead of UAS
 
-`XhciForceBulkOnly` set to `1` makes every storage device on that controller that offers both transports use Bulk-Only (Windows' own `usbstor.sys`) instead of UAS. `0` or absent, the default, means UAS wherever the device offers it. The install does not write it.
+`XhciForceBulkOnly` set to `1` makes every storage device on that controller that offers both transports use Bulk-Only (Windows' own `usbstor.sys`) instead of UAS. `0` or absent, the default, means UAS wherever the device offers it. The install writes `0`.
 
 It is read each time a device enumerates, so unplug and replug the drive after changing it. On Windows 2000 and later, a drive already installed keeps its driver until you uninstall it in Device Manager and replug it. A UAS-only device stays on UAS whatever the value says.
 
 ### Polling a Low- or Full-Speed mouse above 1000 Hz
 
-`XhciFastPollFsLs`, new in `2.1.0.0`, is off by default and not written by the install. It works with SweetLow's hidusbf setting a mouse on a **root port** to its "31 Hz" or "62 Hz" rate:
+`XhciFastPollFsLs`, new in `2.1.0.0`, is off by default; the install writes `0`. It works with SweetLow's hidusbf setting a mouse on a **root port** to its "31 Hz" or "62 Hz" rate:
 
 | Value | "31 Hz" becomes | "62 Hz" becomes |
 |---|---|---|
@@ -270,7 +262,7 @@ This is outside the xHCI specification. A controller that refuses it is caught: 
 
 ### The first report's wait
 
-When the root hub or an external hub first reports its devices after it starts, the driver waits for the devices already plugged in to be ready, so Windows 2000's text-mode Setup sees them. Neither value is written by the install.
+When the root hub or an external hub first reports its devices after it starts, the driver waits for the devices already plugged in to be ready, so Windows 2000's text-mode Setup sees them. The install writes both at their defaults.
 
 | Value | Meaning | Default |
 |---|---|---|
@@ -278,6 +270,15 @@ When the root hub or an external hub first reports its devices after it starts, 
 | `XhciFirstEnumPortMs` | The longest one port may hold it, held to the total | `2000` |
 
 With the defaults, the root hub's first report typically comes 20 to 30 ms after its start with nothing plugged in, and 0.3 to 0.9 s after it with a mouse and a stick plugged in.
+
+### The Intel 7/8/9-series port switchover
+
+On Intel 7-, 8- and 9-series chipsets (Ivy Bridge to Broadwell) and C610/X99, each switchable connector, usually a blue one, is wired to both the USB 2.0 (EHCI) and the xHCI controller. With the firmware's USB 3.0 setting on Auto, or no setting at all, those connectors typically start on the USB 2.0 controller, so up to `2.1.0.0` this driver saw nothing on them.
+
+Since `2.1.1.0` the driver moves them to the xHCI controller at each start and resume, and hands them back to the USB 2.0 controller when its controller is disabled, removed or the machine shuts down. It does this only on Intel xHCI device ids `1E31`, `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`; every other controller is left alone.
+
+- A device on a switchable connector under a running USB 2.0 driver (NUSB's, for example) is disconnected there when this driver starts and comes back under it. Do not have a drive busy on a blue connector at that moment.
+- `XhciIntelPortSwitch` set to `0` turns it off. Only `0` does; absent or any other number is on. It is read when the controller starts, so restart after changing it.
 
 ### The 1.2.0.0 virtual-hub values
 
@@ -298,28 +299,28 @@ Windows 98 SE and Windows 2000 SP4 are the primary targets. Windows 98 SE has al
 
 | Machine | Controller | 2.0.0.0 result | Tested by |
 |---|---|---|---|
-| 2016 ThinkPad E460 | Intel Skylake, Sunrise Point-LP (100-series) PCH. xHCI 1.0. | Works on Windows 98 SE. | Me |
-| 2020 ThinkPad P14s Gen 1 | Intel Comet Lake PCH-LP (400-series). xHCI 1.1. | Works on Windows 98 SE, including UAS at SuperSpeed. | Me |
+| 2016 ThinkPad E460 | Intel Skylake, Sunrise Point-LP (100-series) PCH. xHCI 1.0. | Yes | Me |
+| 2020 ThinkPad P14s Gen 1 | Intel Comet Lake PCH-LP (400-series). xHCI 1.1. | Yes | Me |
 | Omores' Intel and AMD desktops | H110, B360, B550, X570, X670 | No `2.0.0.0` report yet. | [Omores](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) (1.x) |
 
 The devices, each characterised in [test-equipment.md](docs/contributing/test-equipment.md):
 
 | Device | VID:PID | Speed | 2.0.0.0 result |
 |---|---|---|---|
-| Terminus 7-port hub, multi-TT | `1A40:0201` | High | Works on Windows 98 SE on real hardware, with Low- and Full-Speed devices behind it. |
-| Terminus 4-port hub, single-TT | `1A40:0101` | High | Works on Windows 98 SE on real hardware, with Low- and Full-Speed devices behind it. |
-| Genesys 7-port hub (two cascaded chips), single-TT | `05E3:0608` | High | Works on Windows 98 SE on real hardware, with Low- and Full-Speed devices behind it. |
-| Genesys USB 3.0 hub | `05E3:0610`, `05E3:0612` | SuperSpeed and High | Works on Windows 98 SE on real hardware, with devices behind both halves. |
-| A Full-Speed hub behind a High-Speed hub | | Full | Works on Windows 98 SE on real hardware (a USB 2.0 hub held at Full Speed by an isolator). |
-| Logitech USB Optical Mouse | `046D:C077` | Low | Works on Windows 98 SE on real hardware, at a root port and behind a hub, polled every 8 ms. |
-| Microsoft Wired Keyboard 600 (composite) | `045E:0750` | Low | Works on Windows 98 SE on real hardware. |
-| SanDisk U3 Titanium flash drive | `0781:5408` | High | Works on Windows 98 SE on real hardware, with a verified round trip. |
-| MSSU10-128GSR flash drive | `090C:2320` | SuperSpeed, UAS | Works on Windows 98 SE on real hardware: UAS at SuperSpeed, forced Bulk-Only, and Bulk-Only behind a USB 2.0 hub. |
-| SanDisk 3.2Gen1 flash drive | `0781:55AB` | SuperSpeed, Bulk-Only | Works on Windows 98 SE on real hardware at SuperSpeed and behind a USB 2.0 hub. |
-| StoreJet Transcend USB-to-SATA bridge (ASMedia) | `174C:5106` | SuperSpeed, UAS and Bulk-Only | Works on Windows 98 SE on real hardware: UAS at SuperSpeed and High Speed, and forced Bulk-Only. |
-| ASIX AX88772A USB Ethernet | `0B95:7720` | High | Works with ASIX's own drivers on Windows 98 SE on real hardware, and on 98 SE and 2000 in VMs. |
-| Sound Blaster Play! 2 (UAC 1.0 composite) | `041E:323D` | Full | Works on Windows 98 SE on real hardware: played and heard at a root port and behind a hub. |
-| C-Media USB Audio Device (UAC 1.0 composite) | `0D8C:0014` | Full | Works on Windows 98 SE on real hardware, and on 98 SE and 2000 in VMs. |
+| Terminus 7-port hub, multi-TT | `1A40:0201` | High | Works, with Low- and Full-Speed devices behind it. |
+| Terminus 4-port hub, single-TT | `1A40:0101` | High | Works, with Low- and Full-Speed devices behind it. |
+| Genesys 7-port hub (two cascaded chips), single-TT | `05E3:0608` | High | Works, with Low- and Full-Speed devices behind it. |
+| Genesys USB 3.0 hub | `05E3:0610`, `05E3:0612` | SuperSpeed and High | Works, with devices behind both halves. |
+| A Full-Speed hub behind a High-Speed hub | | Full | Works (a USB 2.0 hub held at Full Speed by an isolator). |
+| Logitech USB Optical Mouse | `046D:C077` | Low | Works at a root port and behind a hub, polled every 8 ms. |
+| Microsoft Wired Keyboard 600 (composite) | `045E:0750` | Low | Works. |
+| SanDisk U3 Titanium flash drive | `0781:5408` | High | Works, with a verified round trip. |
+| MSSU10-128GSR flash drive | `090C:2320` | SuperSpeed, UAS | Works: UAS at SuperSpeed, forced Bulk-Only, and Bulk-Only behind a USB 2.0 hub. |
+| SanDisk 3.2Gen1 flash drive | `0781:55AB` | SuperSpeed, Bulk-Only | Works at SuperSpeed and behind a USB 2.0 hub. |
+| StoreJet Transcend USB-to-SATA bridge (ASMedia) | `174C:5106` | SuperSpeed, UAS and Bulk-Only | Works: UAS at SuperSpeed and High Speed, and forced Bulk-Only. |
+| ASIX AX88772A USB Ethernet | `0B95:7720` | High | Works with ASIX's own drivers, and on 98 SE and 2000 in VMs. |
+| Sound Blaster Play! 2 (UAC 1.0 composite) | `041E:323D` | Full | Works: played and heard at a root port and behind a hub. |
+| C-Media USB Audio Device (UAC 1.0 composite) | `0D8C:0014` | Full | Works, and on 98 SE and 2000 in VMs. |
 
 The `1.2.0.0` results are in its [README](https://github.com/yeokm1/xhci98/blob/1.2.0.0/README.md) and [release notes](https://github.com/yeokm1/xhci98/blob/1.2.0.0/docs/using/release-notes.md).
 
@@ -353,6 +354,7 @@ These come from Windows, NUSB or the driver being unsigned, and no change to thi
 | SuperSpeedPlus (USB 3.1 Gen 2, USB 3.2 Gen 1x2 and Gen 2x2) | Accepted at its trained rate, built from the specification. Not read on any hardware: no Gen 2 device has been tested, so every mode is untested. |
 | A UAS-only drive at SuperSpeed on a controller without streams | It is sent back to its USB 2.0 port and runs UAS at High Speed, or is refused if it has no USB 2.0 port. Built from the specification; no such controller has been held. |
 | Polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification. Not read on any real controller or in any virtual machine. |
+| The Intel port switchover beyond the B490 | Device ids `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`, systems other than Windows 98 SE, and standby. Built after Linux's handling of the same chipsets. |
 
 ## Toolchain and building
 
@@ -457,7 +459,7 @@ Using the driver:
 Working on the driver:
 
 - [Build and test](docs/contributing/build-and-test.md) - toolchain setup, builds, VMs, install, debugging, packaging, recovery
-- [Roadmap for 2.0.0.0 onward](docs/contributing/roadmap-hcd.md) - the host controller driver, Phases 25 onward, UAS in Phase 31; the 1.x miniport's [Phases 0-16](docs/contributing/roadmap.md) and [17-24](docs/contributing/roadmap-phases-17-on.md) are closed records
+- [Roadmap for 2.0.0.0 onward](docs/contributing/roadmap-hcd.md) - the host controller driver, Phases 25 onward, UAS in Phase 31; the 1.x miniport's [Phases 0-16](docs/contributing/roadmap.md) and [17-24](docs/contributing/roadmap-miniport-updates.md) are closed records
 - [Design record 13](docs/contributing/design/13-superspeed-hcd.md) - the host controller driver: the bus, hubs and composite devices, the UAS id policy, the INFs and the package
 - [Design records](docs/contributing/design/README.md) - the numbered design decisions
 - [Architecture](docs/contributing/architecture.md) and [implementation invariants](docs/contributing/implementation-invariants.md)

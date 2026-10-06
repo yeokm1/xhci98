@@ -2201,7 +2201,7 @@ publishes:
 - `docs/usb-xhci-info/win98-wdm.md`, "What about Windows XP?": the tier
   wording, the `GetHciMn` lineage difference, and the vendor xHCI driver
   survey.
-- `docs/contributing/roadmap-phases-17-on.md` Phase 19 (the template for
+- `docs/contributing/roadmap-miniport-updates.md` Phase 19 (the template for
   adding a VM-supported target), Phase 21 (this record's tasks) and Phase
   22, whose tasks 22.1 and 22.2 were taken in the same pass as 21.7 off the
   same media and whose static half section 6 therefore also settles.

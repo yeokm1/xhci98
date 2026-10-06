@@ -679,22 +679,39 @@ subsection when a machine turns out to need one.
 
 ### Intel 7/8-series (Panther Point / Lynx Point) - the `XUSB2PR` port mux
 
-> **Nothing in this section has been observed.** No machine of this class is
-> in the project's fleet, and none ever ran this tool. Read every expectation
-> below as a prediction.
+> **Observed on one machine, and not through this run sheet.** On 2026-10-05
+> the owner ran this tool on a Lenovo B490 (Panther Point, `8086:1E31`) before
+> Windows 98 SE, around the driver's own switchover reading
+> (`docs/contributing/runs/run-34.md`, 34.3-H2): with the firmware's USB 3.0
+> setting on Auto and on Smart Auto it found `XUSB2PR` and `USB3_PSSEN` at 0
+> and both masks nonzero, as predicted below, and found them at 0 again on
+> the boot after a shutdown under the driver. The logs stayed on the B490
+> (no `results/` directory), and which stages ran, the register values
+> themselves and the connector map were not recorded. The passes below were
+> not run. Read every other expectation in this section as a prediction.
 
 The section is written from the Intel 7-series PCH datasheet vol. 2 and from
 Linux's `usb_enable_intel_xhci_ports()` in `drivers/usb/host/pci-quirks.c`,
 and it is kept because it is the procedure someone with such a machine would
-follow. The same warning applies to the `XUSB2PR` section of
+follow. The same caution applies to the `XUSB2PR` section of
 [../docs/usb-xhci-info/xhci-programming.md](../docs/usb-xhci-info/xhci-programming.md),
 whose register table and BIOS-mode behaviour come from the same two sources.
 
-Why this class gets its own note: 7- and 8-series are the last Intel
-generations carrying both EHCI and xHCI, so they are the only parts with the
-`XUSB2PR` EHCI-to-xHCI port mux. Skylake (100-series) and later Intel have no
-EHCI, the ports are hardwired to xHCI, and these registers do not exist; nor
-do they on modern AMD. So this is the only class of machine where the routing
+**Since `2.1.1.0` the driver routes the ports itself** on Intel 1E31, 8C31,
+9C31, 8CB1, 9CB1 and 8D31 (roadmap-hcd task 34.3, design record 16), unless
+`XhciIntelPortSwitch` is 0, and hands them back to EHCI when it stops and at
+shutdown. So on such a machine this tool, run from DOS before Windows, shows
+firmware's routing, not the driver's: a report from a cold boot says what
+the driver will start from, and one from the boot after a shutdown under
+the driver should read the routing at firmware's values again.
+
+Why this class gets its own note: the 7-, 8- and 9-series PCH and Wellsburg
+(C610/X99) are the last Intel parts carrying both EHCI and xHCI, so they are
+the only parts with the `XUSB2PR` EHCI-to-xHCI port mux; `quirks.c` marks the
+six device ids above `QF_XUSB2PR`. Skylake (100-series) and later Intel have no
+EHCI and the ports are wired to xHCI alone, so there is nothing to route;
+what offsets 0xD0 to 0xDC do on those parts, and on modern AMD, is unread
+here. So this is the only class of machine where the routing
 questions in the programming guide can be observed at all.
 
 Two safety rules from "Safety and preparation" are usually already satisfied
@@ -762,8 +779,10 @@ the driver-side observation (`xhci98.sys` run against the routing), which
 additionally needs Win98 SE (+NUSB) or Win2000 SP4 installed on the machine
 plus built install media; see
 [../docs/contributing/build-and-test.md](../docs/contributing/build-and-test.md),
-"Option C: Real Hardware". That observation is published as an unreachable
-limitation for want of any machine of this class.
+"Option C: Real Hardware". That observation was the miniport's, published as
+an unreachable limitation for want of any machine of this class; for the
+HCD, which routes the ports itself since `2.1.1.0`, it is the B490 reading
+above, taken with `XHCISNAP`'s `psw.` records rather than with this tool.
 
 One cross-check you can skip: the `lspci -vv` PCI-PM comparison. It existed
 to validate the tool's PM decoder, and it passed field-for-field on the E460

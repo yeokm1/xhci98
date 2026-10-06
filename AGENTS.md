@@ -261,8 +261,9 @@ but not every input; see
 
 Read `docs/contributing/roadmap.md` for the current phase and its checkpoint.
 The roadmap is three files: that one has the status, the conventions and
-Phases 0-16 (the initial release); `docs/contributing/roadmap-phases-17-on.md`
-has Phases 17-24, the rest of the miniport's life, closed with the `1.2.0.0`
+Phases 0-16 (the initial release);
+`docs/contributing/roadmap-miniport-updates.md` has Phases 17-24, the
+miniport's public updates after it, closed with the `1.2.0.0`
 cut that froze it; and `docs/contributing/roadmap-hcd.md` has Phases 25
 onward, the host controller driver, the open phase included. The miniport is
 frozen (owner, 2026-10-02): `1.2.0.0` is its last release, and its sources

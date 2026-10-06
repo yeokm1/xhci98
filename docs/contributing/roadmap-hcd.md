@@ -7,8 +7,8 @@ that replaces `usbport.sys`, the hub driver and the composite parent with code
 of this project's own and so can drive USB 3.x SuperSpeed devices, hubs and
 UAS storage on the same targets the miniport serves. The first two files are
 unchanged by it: [`roadmap.md`](roadmap.md) keeps the status, the conventions
-and Phases 0-16, and [`roadmap-phases-17-on.md`](roadmap-phases-17-on.md)
-keeps Phases 17-24, the whole of the miniport's life after `1.0.0.0`. Every
+and Phases 0-16, and
+[`roadmap-miniport-updates.md`](roadmap-miniport-updates.md) keeps Phases 17-24, the whole of the miniport's life after `1.0.0.0`. Every
 convention of theirs holds here: the batching convention and the task-id
 rules, "observed on both" as `AGENTS.md` qualifies it, and the rule that no
 phase advances past an unobserved checkpoint.
@@ -17,8 +17,9 @@ phase advances past an unobserved checkpoint.
 cut on 2026-10-04 and squash-merged to `main` as `4038447` ("2.0.0.0
 (#13)"); the owner benched it after the cut and reports no issue beyond the
 known limitations (Phase 28, 28-E.1). `2.1.0.0`, the first update, was cut
-on 2026-10-05 (Phase 33), with its polling-rate reading owed to the bench. What comes next is "What is not on this
-roadmap" below.
+on 2026-10-05 (Phase 33), with its polling-rate reading owed to the bench.
+`2.1.1.0` is Phase 34, an interim release, and `2.2.0.0` is Phases 35 and
+36, cut at the end of Phase 36 (owner, 2026-10-05); Phase 34 is open.
 
 **The miniport is frozen.** `1.2.0.0` is the last release of the miniport
 (owner, 2026-10-02): no further miniport cut, and a defect reported against
@@ -49,11 +50,15 @@ table is the index.
 | The root hub and both property tabs | Kept, all of it (owner, 2026-10-02, reversing a narrower answer given on the Codex review earlier that day). The controller FDO creates a root-hub PDO under a **project-owned** hardware id, never `USB\ROOT_HUB` - which the OS's own `usbhub.sys` claims on every NT target and which would put Microsoft's hub driver back on top of this bus - and `xhci98.inf` binds that id to `xhci98.sys` itself, so one binary is both the controller's function driver and the root hub's, and every device PDO is a child of the root hub, where Device Manager users expect it. The controller's Advanced tab: the HCD answers the `USBUSER` request set `usbui.dll` sends to the controller devnode, and the INFs carry the two registrations the miniport's do - `EnumPropPages` to `sysclass.dll` on Windows 98, `EnumPropPages32` to `usbui.dll` on the NT paths. The root hub's Power tab: the root-hub devnode registers the hub property-page provider the OS INFs register for their own root hub, and answers the hub IOCTLs that page sends, read per target in task 25.4. `XHCISNAP` reaches the HCD through the controller's door. External hubs stay objects inside the bus (the hub decision above), so a device behind one appears under the root hub devnode, and the Power tab reports the budget the bus itself keeps. **Amended 2026-10-04 (task 33.4)**: each external hub is its own devnode with its own Power tab and door, and a device behind it appears under it (design record 13 section 10.11) |
 | The miniport's virtual-hub values | Not supported (owner, 2026-10-02). `XhciVirtualHSHub`, `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid` exist to make usbport tell the truth about a root-port device's speed; the HCD has no usbport to lie to and reports every device at its true speed with no hub in the way, so there is nothing for them to switch. The HCD reads none of the three, its INFs write none, a value left behind by a miniport install has no effect, and the release notes say so (32.1). Which of the miniport's other values carry over - the log switches, the interrupt moderation value - is 25.1's list |
 | SuperSpeed hubs on Windows 2000 | A vehicle is required, for now (owner, 2026-10-02, on the same review). Windows 2000 is a VM-only target and no QEMU device models a SuperSpeed hub, so Phase 30's "observed on both" has no vehicle today; the owner did not record an exception and revisits the question when Phase 30 opens. Until then Phase 30 cannot close, and Phases 31 and 32 wait on it. Revisited on 2026-10-04 ("SuperSpeed hubs on Windows 2000, revisited", below) |
-| SuperSpeedPlus: USB 3.1 Gen 2 and USB 3.2 Gen 1x2 and Gen 2x2, to 20 Gbit/s | In `2.0.0.0`, untested if need be (owner, 2026-10-02, later the same day, reversing the line in "What is not on this roadmap" that left it unassessed): the driver runs on every target to Windows 7, which has no USB 3 stack of its own, and newer chipsets with 10 and 20 Gbit/s ports often have no Windows 7 vendor driver either. A link that trains above 5 Gbit/s is accepted at its trained rate rather than sent back to USB 2.0. From the driver's side the step is small once Phase 29's Gen 1 path exists: the rate comes from the protocol capability's PSI dwords rather than a fixed table, bulk and interrupt framing are Gen 1's (1024-byte packets, burst to 16), and the new work is the SuperSpeedPlus isochronous companion with its 32-bit bytes-per-interval and the Endpoint Context's Max ESIT Payload Hi (task 29-A.6). Vehicles: QEMU models nothing above 5 Gbit/s; the P14s Gen 1's chipset controller (`8086:02ED`) advertises a USB 3.1 protocol with eight PSI dwords on ports 13-18 (`xhciqual/results/p14s-gen1-2026-07-25/PROBE.LOG`), but its published 10 Gbit/s connectors are the two USB-C 3.1 Gen 2 / Thunderbolt 3 ports, and neither source says which controller those reach - the chipset's ports or the Thunderbolt controller's own xHCI - so whether any P14s connector reaches 10 Gbit/s under this driver is 29-0's question and 29-E.2's reading; no 20 Gbit/s port is held (the B650M, whose chipset has one, is gone). What no vehicle reads is untested ground in the release notes (32.1) |
+| SuperSpeedPlus: USB 3.1 Gen 2 and USB 3.2 Gen 1x2 and Gen 2x2, to 20 Gbit/s | In `2.0.0.0`, untested if need be (owner, 2026-10-02, later the same day, reversing the roadmap line that had left it unassessed): the driver runs on every target to Windows 7, which has no USB 3 stack of its own, and newer chipsets with 10 and 20 Gbit/s ports often have no Windows 7 vendor driver either. A link that trains above 5 Gbit/s is accepted at its trained rate rather than sent back to USB 2.0. From the driver's side the step is small once Phase 29's Gen 1 path exists: the rate comes from the protocol capability's PSI dwords rather than a fixed table, bulk and interrupt framing are Gen 1's (1024-byte packets, burst to 16), and the new work is the SuperSpeedPlus isochronous companion with its 32-bit bytes-per-interval and the Endpoint Context's Max ESIT Payload Hi (task 29-A.6). Vehicles: QEMU models nothing above 5 Gbit/s; the P14s Gen 1's chipset controller (`8086:02ED`) advertises a USB 3.1 protocol with eight PSI dwords on ports 13-18 (`xhciqual/results/p14s-gen1-2026-07-25/PROBE.LOG`), but its published 10 Gbit/s connectors are the two USB-C 3.1 Gen 2 / Thunderbolt 3 ports, and neither source says which controller those reach - the chipset's ports or the Thunderbolt controller's own xHCI - so whether any P14s connector reaches 10 Gbit/s under this driver is 29-0's question and 29-E.2's reading; no 20 Gbit/s port is held (the B650M, whose chipset has one, is gone). What no vehicle reads is untested ground in the release notes (32.1) |
 | USB Audio 2.0 | Not in this repository and not on this roadmap. A class driver of generic design, so that it serves machines on EHCI and vendor stacks as well as this one, built in its own repository; it needs nothing from xHCI, since UAC 2.0 runs at High Speed and binds by class through the standard URB contract |
 | One bench session before the cut | **Superseded** on 2026-10-04 by "Cut before the bench" (below). All bench work moves to one combined bench session immediately before the `2.0.0.0` cut (owner, 2026-10-03). Phases 28, 29, 30 and 31 each close their V clauses and A tasks and stay open on their E.1 clause alone; work proceeds into the next phase while the earlier E.1 clauses wait - an explicit exception to the rule that no phase advances past an unobserved checkpoint, limited to the E.1 clauses. The session reads 28-E.1, 29-E.1, 30-E.1 and 31-E.1; each such phase closes only when its clause passes, and the cut (Phase 32) waits on the session. Supersedes the owner's instruction of 2026-10-02 to continue into Phase 29 while 28-E.1 waits. Accepted costs: Phase 30's SuperSpeed hub work, which no QEMU device models, is first executed on the bench; QEMU's SuperSpeed model is Phase 29's only runtime check until then; real-controller defects surface late and together. Mitigations in VMs: a strict mode in the `qemu` flavour checking xHCI slot and endpoint state preconditions before every command, real devices by `usb-host` passthrough, the SMP Windows 2000 guest with Driver Verifier, and Codex reviews aimed at specification preconditions |
 | Interrupt moderation default | 160 (40 us, Linux's long-standing value), **INF only** (owner, 2026-10-04): both INFs write 160 on every HCD install path, where they wrote 500 (125 us), the miniport's value from `1.1.1.0`; the code default `XHCI_IMOD_INTERVAL_DEFAULT` stays 4000 (1 ms), what an absent, unreadable or out-of-range value runs at, and the INF gate holds both files to 160 (`VAL-DEFAULT`). Evidence, the owner's ATTO runs on the P14s Gen 1 under Windows 98 SE (the MSSU10 over UAS at SuperSpeed, queue depth 1): at 8 MB, 181/181 MB/s write/read at 500, 211/221 at 160, 217/225 at 40. A Full-Speed audio stream was read again at 160 on a Windows 2000 guest before the change. `runs/run-28.md`, "The interrupt moderation default: 160" |
-| The idle power policy (28.3) | Carried as a known limitation of `2.0.0.0` (owner, 2026-10-04): the bus never initiates selective suspend, of a device or of a hub port; it handles a suspend or resume it is asked for, or that a hub reports, the same "handle, don't initiate" ruling 27-A.1 took. A later phase may add selective suspend |
+| The idle power policy (28.3) | Carried as a known limitation of `2.0.0.0` (owner, 2026-10-04): the bus never initiates selective suspend, of a device or of a hub port; it handles a suspend or resume it is asked for, or that a hub reports, the same "handle, don't initiate" ruling 27-A.1 took. Phase 36 adds selective suspend (owner, 2026-10-05; design record 14) |
+| `2.2.0.0` in three phases | Split on 2026-10-05 (owner), the day it opened: Phase 34 the registry values and the two Device Manager pages, Phase 35 polled event delivery, Phase 36 selective suspend, standby resume, the audio wedge, the docs and the cut. One release at the end; each phase closes on its own checkpoint. Task ids renumbered from the single Phase 34: 34c.N to 35.N, 34.4 to 36.1, 34.5 to 36.2, 34.6 to 36.3, 34.7 to 36.4, 34a and 34b to 36a and 36b. **Amended later the same day**: Phase 34 is cut on its own as `2.1.1.0` (the row below), and the four freed ids were taken again for Phase 34's new tasks - 34.4 the port switchover, 34.5 its docs, 34.6 its cut - no tracked file or published `readme.txt` having cited the old ones; renumbered 34.3, 34.4 and 34.5 when task 34.3 (the Vista/7 Advanced tab's bandwidth) was removed, below |
+| `2.1.1.0` at Phase 34 | An interim release cut at the end of Phase 34 (owner, 2026-10-05), amending the split's one release at the end: the registry values, the two Device Manager pages and the port switchover ship as `2.1.1.0`, and `2.2.0.0` carries Phases 35 and 36. Phase 34 takes its own docs (34.4) and cut (34.5); 36.3 and 36.4 cover Phases 35 and 36 |
+| The Intel port switchover | Phase 34, task 34.3 (owner, 2026-10-05, from a tester's report of Ivy Bridge machines): the HCD routes the Intel 7-, 8- and 9-series and C610 switchable connectors to itself, superseding the miniport's Phase 4 decision to leave the registers alone; a device-id gate of six, and the opt-out `XhciIntelPortSwitch` at 1. Design record 16 |
+| Polled event delivery | Phase 35 (owner, 2026-10-05, first added as Phase 34's stage C; design record 15): a switch, `XhciInterruptMode`, chooses automatic (0, the default: the line interrupt where the controller has one, an adaptive poll of the event ring where it has none), the line interrupt (1, failing as today without one) or polling (2), with 3 and above reserved (MSI, not scheduled) and run as 0, so an MSI- or MSI-X-only controller, which neither primary target can serve by interrupt, can be driven; the idle period `XhciPollIdleMs` defaults to 50 ms and the active period `XhciPollActiveMs` to 1 ms, neither may be 0, the idle period is held to 5000 ms and the active to the idle, and all three join 34.1's install rule. The delivery in effect and its reason are captured by `XHCISNAP` and the DebugView log. Each taken from options with a recommendation; the numbering replaced the same day's "0 line, 1 polling, 2 MSI" |
 | The other `1.2.0.0` limitations (28.3) | The NUSB stop crash, the Windows 98 churn wedge and the Windows 7 disable hang are each re-measured under the HCD and recorded as gone, carried or new (owner, 2026-10-04). A survivor is carried in the release notes and does not block the cut |
 | 28-E.1's Full-Speed hub clause | Taken at the bench, not recorded as untested ground (owner, 2026-10-04): a USB 2.0 hub forced to Full Speed by an ADuM full/low-speed isolator in front of it, in place of a USB 1.1 hub (owner, the same day, superseding the plan to buy one) |
 | Checkpoints of Phases 28 to 31 | Pre-approved (owner, 2026-10-04): each closes once its Codex review is clean, the x86 and amd64 builds, gates and host tests pass, every roadmap VM leg passes with its package hash recorded, and no regression is open on an earlier phase. Scope rulings, waivers, push, tag and the cut stay the owner's |
@@ -70,7 +75,7 @@ table is the index.
 | Windows ME: the controller re-enable, and a pull during an install | Carried as limitations of `2.0.0.0` (owner, 2026-10-04): re-enabling the controller with a device attached may hang ME, the HCD's own (ME's Microsoft UHCI stack re-enables with devices attached), so the release notes say to unplug first; the fix, first planned as `2.0.0.1`, is task 33.1 of `2.1.0.0` (`docs/issues/09-me-controller-reenable-stopped-pdos.md`). A pull while ME is installing the device freezes ME under its own UHCI stack too, so it is ME's behaviour, not the HCD's (`runs/run-28.md`) |
 | Cut before the bench | The `2.0.0.0` cut was taken before the combined bench session, not after it (owner, 2026-10-04, about 16:40: "I will do the bench session after the cut; if it works we release that, otherwise change and recut"); supersedes "One bench session before the cut" (above). The documents were written as if the bench passes, and 28-E.1, 29-E.1, 30-E.1 and 31-E.1 were read by the owner on real hardware after the cut, on the ThinkPad E460 and the ThinkPad P14s Gen 1 under Windows 98 SE (the README's photos are the P14s); the owner reports no issue beyond the known limitations. Windows 7 was not benched ("Windows 7 on the bench", above) |
 | SuperSpeed hubs on Windows 2000, revisited | Released untested (owner, 2026-10-04, with the cut), revisiting the 2026-10-02 row that required a vehicle: no vehicle exists, so the Windows 2000 half of Phase 30's checkpoint is untested ground, built from the specification, and the release notes say so |
-| Gaps dropped from `2.0.0.0` | Two task gaps ticked with the gap recorded rather than closed (owner, 2026-10-04): 29-A.1's registry value restoring the SuperSpeedPlus refusal (SuperSpeedPlus is accepted at its trained rate; `HCD_HOLD_REASON_SSP_REFUSED` in `src\hcd.h` is unused), and 31-0's unread sources - the xHCI 4.12 streams rows marked "to verify", NT `disk.inf`'s `GenDisk` binding and QEMU's `hw/usb/dev-uas.c` - not needed for `2.0.0.0` since UAS passed on every target. Both are listed under "What is not on this roadmap" |
+| Gaps dropped from `2.0.0.0` | Two task gaps ticked with the gap recorded rather than closed (owner, 2026-10-04): 29-A.1's registry value restoring the SuperSpeedPlus refusal (SuperSpeedPlus is accepted at its trained rate; `HCD_HOLD_REASON_SSP_REFUSED` in `src\hcd.h` is unused), and 31-0's unread sources - the xHCI 4.12 streams rows marked "to verify", NT `disk.inf`'s `GenDisk` binding and QEMU's `hw/usb/dev-uas.c` - not needed for `2.0.0.0` since UAS passed on every target. Neither is scheduled |
 
 ## The shape of the successor
 
@@ -112,7 +117,11 @@ on both primary targets. Phase 27 brings external USB 2.0 hubs inside the
 bus. Phase 28 takes the seven other guests, the amd64 build and the bench.
 Phase 29 is SuperSpeed on root ports, Phase 30 SuperSpeed hubs, Phase 31
 streams and UAS, and Phase 32 the `2.0.0.0` cut; Phase 33 is the first
-update, `2.1.0.0`. The order is deliberate:
+update, `2.1.0.0`; Phase 34 is `2.1.1.0`, an interim release: the registry
+values, the Device Manager pages and the Intel port switchover; Phases 35 and
+36 are `2.2.0.0`, cut at the end of Phase 36: polled event delivery, then
+selective suspend.
+The order is deliberate:
 parity first, because round 12's device matrix and the acceptance test are a
 free oracle for everything USB 2.0; SuperSpeed before hubs, because root-port
 storage is what a user plugs in first; UAS last, because it needs streams and
@@ -464,7 +473,7 @@ The checkpoint **closed on 2026-10-04**: 31-V.1 and 31-V.2 on the VMs, and
 
 Records: `design/13-superspeed-hcd.md`; `runs/run-31.md`.
 
-## Phase 32 - Release `2.0.0.0`
+## Phase 32 - Release `2.0.0.0`: The Bus Driver, SuperSpeed, Hubs and UAS
 
 Goal: the first release of the successor, both architectures, with the
 release notes, the acceptance test and the post-release run rewritten for a
@@ -496,7 +505,7 @@ as above, and the owner's acceptance in the bench verdict and the merge to
 Records: `releases/history.md`; `releases/2.0.0.0/`;
 `docs/using/release-notes.md`; `docs/using/release-acceptance-test.md`.
 
-## Phase 33 - Release `2.1.0.0`
+## Phase 33 - Release `2.1.0.0`: Hubs in Device Manager, Serial Instance IDs, F6 Setup and Faster Polling
 
 Goal: the first update of the HCD generation: the Windows ME controller
 re-enable fix, instance ids from serial numbers, device names from product
@@ -539,25 +548,145 @@ Records: `releases/history.md`; `releases/2.1.0.0/`;
 
 ---
 
-## What is not on this roadmap
+## Phase 34 - Release `2.1.1.0`: The Registry Values, the Power Tab and the Intel Port Switchover
 
-- **USB Audio 2.0.** A separate repository, by the owner's decision of
-  2026-10-02, because it needs nothing from this stack and should serve
-  machines on EHCI and vendor stacks too. The Sound Blaster X4 in
-  `test-equipment.md` is its specimen, and it can be built against the frozen
-  `1.2.0.0` miniport today.
-- **Power management beyond what the targets force.** Selective suspend,
-  U1 and U2, S3 resume and remote wake are the bus's own once it owns the
-  power IRPs. Task 28.3 records the decision for `2.0.0.0`; a phase after it
-  may take the rest.
-- **The SuperSpeed storage proposal behind a switch**
-  (`future-plans/superspeed-storage-behind-a-switch.md`). It was the way to
-  SuperSpeed storage without leaving the miniport; with the miniport frozen it
-  stays a record of what that would have taken.
-- **The SuperSpeedPlus refusal value (29-A.1).** Dropped from `2.0.0.0`:
-  no registry value sends a SuperSpeedPlus link back to USB 2.0, and
-  `HCD_HOLD_REASON_SSP_REFUSED` in `src\hcd.h` is unused.
-- **31-0's unread sources.** The xHCI 4.12 streams rows of
-  `xhci-data-structures.md` still marked "to verify", NT `disk.inf`'s
-  `GenDisk` binding and QEMU's `hw/usb/dev-uas.c`; dropped from `2.0.0.0`,
-  since UAS passed on every target.
+Goal: every registry value the driver reads written by the install, the
+Power tab's current for a SuperSpeed device, and the Intel EHCI-to-xHCI port
+switchover, released as the interim `2.1.1.0`.
+
+Status: closed 2026-10-06 on the cut. Opened 2026-10-05 on branch
+`2.1.1.0`. Split the same day from
+a single phase into 34, 35 (polled event delivery) and 36 (selective
+suspend and the rest), then made an interim release of its own, so
+`2.2.0.0` carries Phases 35 and 36 (decisions table). A first task 34.3,
+the controller's Advanced tab bandwidth on Windows Vista and 7, was removed
+by the owner the same day (its limitation stays in the release notes), and
+the tasks after it were renumbered: commits before `8a8514d` name the
+switchover 34.4, the docs 34.5 and the cut 34.6.
+
+Why a phase: 34.1 changes what every install writes, 34.3 writes chipset
+registers the project had left alone since Phase 4, and the phase ends in a
+release.
+
+- [x] 34.1 every registry value the driver reads written by the install, at its default, with FLG_ADDREG_NOCLOBBER (`0x00010003`) so an install or update keeps a value the user set (owner, 2026-10-05, over the unconditional form first built). Done 2026-10-05: the INF gate holds the values and flags (`VAL-*`); a fresh install and an update over `2.1.0.0` read on Windows 98 SE and 2000, and the update on Windows 7 x86 (34.1-V), which showed the driver store keeping the driver key; the other paths are covered by reasoning (`runs/run-34.md`, 34.1)
+- [x] 34.2 the Power tab's current for a SuperSpeed device, a quarter of its draw because the page doubles bMaxPower, which is in 8 mA units at SuperSpeed. Done 2026-10-05 (`f393bb6`; design record 13 section 8.3): the door rewrites the byte usbui reads, saturating at 510 mA, and `XHCISNAP` logs each SuperSpeed device's exact current (owner: both). Read on the P14s Gen 1 under Windows 98 SE: an 896 mA device reads 510 mA where `2.1.0.0` read 224 mA, and `dev.ss.maxpower.ma=00000380` (`runs/run-34.md`, 34.2-H)
+- [x] 34.3 the Intel EHCI-to-xHCI port switchover (owner, 2026-10-05, from a tester's report): on Intel 1E31, 8C31, 9C31, 8CB1, 9CB1 and 8D31 the HCD routes the switchable connectors to itself at start and resume and hands them back at stop and shutdown, superseding the miniport's Phase 4 decision; opt-out `XhciIntelPortSwitch` (1; only 0 is off). Done 2026-10-05 (`0def9a3` to `e591717`; design record 16; host vectors in `test_psw`): no config write on QEMU, the gate closed on the P14s Gen 1, and the switchover on the owner's Lenovo B490 (`1E31`) under Windows 98 SE with NUSB every clause but standby passing on Auto, and the firmware reading, the route, the SuperSpeed link and the shutdown again on Smart Auto (`runs/run-34.md`, 34.3-Q, -H1, -H2). Ticked on real hardware (owner)
+- [x] 34.4 the docs of this phase: the release notes, README and readme template for 34.1 to 34.3, records 13 and 16, `xhci-programming.md`, `implementation-invariants.md`, `failure-diagnosis.md`, the acceptance test, `xhciqual/hardware-testing.md`, `source-files.md` and `runs/run-34.md` (record 16 section 12). Done 2026-10-05 (`874085b` to `e36a05b`), Codex-converged over four rounds (`runs/run-34.md`, Codex)
+- [x] 34.5 the cut, dated 2026-10-06 (owner): `xhci_version.h` and the four INFs' `DriverVer` at `10/06/2026,2.1.1.0`, `releases/history.md`, the release notes, the README and `make-release.ps1`, and the ten install legs read from the asset, as 33.9. Done 2026-10-06 (`0be9dfc`, `41553dd`, `releases\2.1.1.0`, cut from `47f8d6c`): the ten release-asset install legs passed (`out\phase34\asset\`); Windows 98 SE's Driver tab read the driver file's date, not `DriverVer`, so `make-release.ps1` now dates every packaged file at noon on the `DriverVer` date, with a readme-only `-Force` re-cut (`e9bd04c`), the binaries unchanged, after which a fresh Windows 98 SE install read 10-6-2026 (`out\phase34\recut\`); asset `xhci98-2.1.1.0.zip`, 691,760 bytes
+
+Checkpoint: 34.1's values read on Windows 98 SE, 2000 and 7 x86; 34.2 and
+34.3 read on the owner's hardware; 34.3's host vectors passing and no
+config write on QEMU; the ten install legs read from the `2.1.1.0` asset.
+
+The checkpoint **closed on 2026-10-06**.
+
+Records: `runs/run-34.md`; `design/16-intel-port-switchover.md`;
+`releases/history.md`; `releases/2.1.1.0/`; `docs/using/release-notes.md`.
+
+---
+## Phase 35 - Polled Event Delivery
+
+Goal: a controller with no legacy interrupt - MSI- or MSI-X-only, which
+neither primary target can serve by interrupt - driven by an adaptive poll
+of the event ring, chosen by a switch whose default, automatic, keeps the
+line interrupt wherever the controller has one; `XHCIQUAL` saying such a
+controller needs polling rather than disqualifying it.
+
+Status: not opened; follows Phase 34 on branch `2.2.0.0`, the work on
+`p35-poll`. Design record 15 (`design/15-polled-event-delivery.md`) is the
+design: revision 4, Codex's findings on revisions 1 to 3 taken (10, 8
+and 5), and Codex's review converged at round 4 the same day, its one
+wording finding taken. 35.0 still owes the section 4.1 check against
+`xhci-data-structures.md`.
+
+Why a phase: it changes how every event reaches the driver when it polls,
+adds three install values, lifts a disqualification `XHCIQUAL` has made
+since Phase 0, and is automatic by default, so a machine with no interrupt
+that failed to start before now polls.
+
+The owner's decisions of 2026-10-05 are the decisions table's "Polled event
+delivery" row and record 15 section 12. 35.0 comes first.
+
+- [ ] 35.0 the design: record 15 reviewed by Codex to convergence before code (the owner's decisions of 2026-10-05 are its section 12); and the hardware statements of its section 4.1 - `IMAN.IP`, `USBSTS.EINT` and `ERDP.EHB` with the interrupt enables clear - checked against `xhci-data-structures.md`
+- [ ] 35.1 the three values (record 15 section 3): `XhciInterruptMode` 0 (0 automatic, 1 the line interrupt, 2 polling, 3 and above reserved and run as 0), `XhciPollIdleMs` 50 (held to 5000) and `XhciPollActiveMs` 1 (held to the idle period), neither period 0 (owner, 2026-10-05); read at each start with the out-of-range rules, written by both INFs on every install path under 34.1's don't-overwrite rule, the INF gate's `VAL-*` rows and the footprints with them. 36.4's install legs read them (Phase 34 is cut as `2.1.1.0` before this lands)
+- [ ] 35.2 the delivery and the poller (record 15 sections 4 and 5): the delivery and its reason settled once at start and kept through recovery and resume; `ResourcesTypes` truthful and the core's interrupt-bit and pin-0 gates applied to a line delivery only; under a poll delivery the ISR unconnected, `XHCI_EXT_FLAG_INTERRUPTS` never set and every poll drain passing no re-arm; `PollTimer` with its own DPC, `IsrDpc` queued by the peeks, `PollLock` admission, close by `KeCancelTimer` with the timer DPC retiring itself, and park and kick across D3 and the in-place recovery
+- [ ] 35.3 the adaptive period and the opportunistic checks (record 15 sections 6 and 7.1): the pure `xhci_poll.c` with host suite `test_poll` (ACTIVE, PERIODIC with interrupt IN and OUT, IDLE, the hysteresis and bounded-drain clauses, the clamps, promotion and the stale-decision rule); the peek under the controller lock after a doorbell, after a drain, on each thread pass, health poll and frame DPC, queueing the drain and never draining inline; poll delivery only; the counters, with the observed interval, and the delivery in effect and its reason (automatic, forced, or no interrupt) both in the counter block and in the one start log line, so `XHCISNAP` reads them from `XhciLogVerbosity` 1 and the DebugView sink emits them from 2 with `XhciLogDebugView` set (owner, 2026-10-05; section 8)
+- [ ] 35.4 `XHCISNAP` (record 15 section 9): the three values in the companion as `XhciImodInterval250ns` is, the delivery in effect and its reason, the moderation value said to have no effect when polled, the poll counters, the coherence wording for drains polled or not (the tear detector itself already counts them), the header grown under the schema rule and older headers still read
+- [ ] 35.5 `XHCIQUAL` (record 15 section 10): `Interrupt Pin = 0` no longer disqualifies - `quick_classify` and `quick_reason` say the controller needs polling - and the other disqualifiers stand; C4's "event in the ring, no interrupt" outcome reads "needs polling" while its tool failures and a controller that fails even polled do not; the polled tests run after the interrupt hook is removed; `main.c`'s C6/C8 gate and `report.c`'s verdict and exit code learn the outcome; vectors through the verdict, not only `test_mmiodiag`
+- [ ] 35-V the legs (record 15 section 11): mode 2 on 98 SE and 2000 (SMP, Driver Verifier) first, then ME, XP, Vista and 7, x86 and x64 - HID, Bulk-Only and UAS storage, composite audio playing, behind QEMU's hub, hot-plug, disable and enable, remove and rescan; the no-interrupt start made deterministic by a `qemu`-flavour switch (mode 0 polling with its reason, mode 1 failing as today); a forced recovery under polling, and the controller's D3 and back where a guest offers one without system standby - where none does, the recovery alone reads park and kick and a disable and enable reads the close (record 15 section 11), system standby and hibernate under polling being 36.1's; the races on the SMP guest (promotion against re-arm, close against peeks and expiry, a bounded drain continued); the period each kernel gives, from the counters; line against poll on the same guest (storage copy rate, audio continuity, idle CPU load); modes 0 and 1 on a pin reading as the Phase 34 build; the delivery and its reason read in `XHCISNAP` and in DebugView for each of modes 0, 1 and 2 and for the no-interrupt start; x86 and amd64 and every gate
+- [ ] 35-E the bench (owner): mode 2 on the E460 and the P14s Gen 1 under Windows 98 SE, and an MSI-only controller if one is at hand (the synthetic no-interrupt leg does not wait for one)
+
+Checkpoint: 35-V passing - its functional and regression legs on the
+`release` package and its fault-injection legs on the `qemu` flavour, kept
+apart (record 15 section 11), the `qemu` flavour never published; 35-E read
+by the owner; `XhciInterruptMode` at 0 and at 1,
+on a controller with a line interrupt, reading as the Phase 34 build. No
+cut.
+
+Records: `design/15-polled-event-delivery.md`; `runs/run-35.md` (to be
+opened).
+
+---
+
+## Phase 36 - Release `2.2.0.0`: Selective Suspend, Standby Resume and the Cut
+
+Goal: the bus suspends a device when Windows asks for it - a function's
+D-state in S0, or the idle notification on XP onward - and wakes it on D0 or
+on the device's remote wake, never on a timer of its own; USB 2.0 devices
+(stage A) and SuperSpeed devices (stage B). With them, the first standby and
+hibernate resume readings under the HCD (36.1), which the suspend design
+rests on, and the Windows 98 SE audio-load wedge re-measured against the
+new capabilities (36.2). Then the docs of Phases 35 and 36 (36.3) and the
+`2.2.0.0` cut, which carries both (36.4).
+
+Status: not opened; follows Phase 35 on branch `2.2.0.0`. Design record 14
+(`design/14-selective-suspend.md`) is the design; stage A's half converged
+with Codex over ten review rounds (`b2d03d5`). Stage A is to be built on
+`p36-ss`, stage B on `p36-ss3`, both merged into `2.2.0.0`.
+
+Why a phase: it lifts the idle-policy limitation carried since `2.0.0.0`
+(decisions table, "The idle power policy (28.3)"), turns on code paths no
+release has run - port suspend, the PDO's power IRPs, WAIT_WAKE, the idle
+callback - and is on by default (`XhciSelectiveSuspend` 1, the owner's
+decision of 2026-10-05; record 14 section 7), so every user of the release
+runs it. Its legs also run once under a poll delivery (`XhciInterruptMode`
+2), since suspend and polling both touch the controller's power and
+teardown paths.
+
+Owner's decisions of 2026-10-05 (record 14 section 11): the switch defaults
+to 1; the test client is tracked under `test\`, never shipped, refused by the
+packaging gate; stage A's checkpoint includes the owner's bench reading;
+stage B ships in the same release, so the cut waits for it.
+
+The tasks are listed, and numbered, easiest first (owner, 2026-10-05):
+standby resume, which the suspend design rests on, then stage A and stage B
+in their own order, then the wedge, which is re-measured against stage A's
+capabilities and so waits for it, then the docs and the cut.
+
+- [ ] 36.1 system standby (S3) and hibernate (S4) resume, read for the first time under the HCD: the controller's D3 and D0 paths in `hcd_power.c` - the D0 resume, the work-item route and the direct transition - have never run on a guest (its header; neither primary's test guest sleeps, Windows 2000's runs `acpi=off`), and record 14 section 4.4 rests on them (pended D0s across a controller transition, a device's link still in U3 after a restore). Read on guests that sleep - QEMU with S3 enabled, ME (which hibernates on QEMU's power-down), and each target that can be made to - and on the E460 and the P14s Gen 1 (owner): standby and resume, hibernate and resume, with devices idle, devices suspended by 36a, and a D0 pended across it; a controller with and without Force Save Context (QEMU reads FSC 0); what breaks is fixed in this phase. The release notes' "a wake from standby" row moves from untested to read
+- [ ] 36a.1 the link machine in the pure core, `xhci_susp.c`, with host suite `test_susp`: states and outcomes, the composite last-Dx rule, D0 during SUSPENDING, epoch-stamped Dx, wake classification, the episode's arming and completion by stamp, and the interleavings record 14 section 10 lists
+- [ ] 36a.2 the gate and the thread: one `SuspendPause` per pipe, the survivor restart, per-device slow-IRP deferral, root-port suspend and resume, the full-sample handoff at the port acknowledgement, USB 2.0 hub port suspend and both branches of the hub port look (record 14 section 3)
+- [ ] 36a.3 the PDO's power: slots, claiming, the composite rule, capabilities, WAIT_WAKE, GONE at the unlink, teardown in its order, START reopening, `PowerDown` admission and the controller's transitions (section 4 and 5)
+- [ ] 36a.4 the idle notification on the bus's callback thread: batches, the three-way claim, the context's phases, settlement of every idle IRP, quarantine (section 6 and 4.4)
+- [ ] 36a.5 the switch, the counters in the counter block and `XHCISNAP`, the bounded log lines
+- [ ] 36a.6 the test client under `test\`, and the packaging gate refusing it
+- [ ] 36a-V stage A's legs (record 14 section 10): the test client on 98 SE, 2000 (SMP, Driver Verifier), ME and XP, with the 9x WAIT_WAKE completion read and wake disabled on 9x if the defect holds; hidusb's own idle on XP, Vista and 7; behind QEMU's hub; composite interleavings; unplug at each state; controller disable, enable, D3 and restart mid-transition; the fault-injection leg; `XhciSelectiveSuspend` at 0 reading as the Phase 35 build; the matrix unchanged; x86 and amd64 and every gate
+- [ ] 36a-E stage A's bench (owner): a real remote-wake HID device on a 98 SE machine and on the E460's Windows 7
+- [ ] 36b.1 stage B's design: record 14 section 8 grown into the record proper - Function Suspend with wake enable per interface, the function remote-wake capability, Function Wake Device Notifications (DNCTRL, the event, interface-to-function ownership), PLS=Resume on USB 3 root ports and the `xhci_link.c` classification, SuperSpeed hub ports (no C_PORT_LINK_STATE on a wake) - reviewed by Codex to convergence before code
+- [ ] 36b.2 stage B built on stage A's machine, with host vectors
+- [ ] 36b-V stage B's legs on QEMU (root ports only: QEMU has no SuperSpeed hub)
+- [ ] 36b-E stage B's bench (owner): a SuperSpeed device with remote wake on a root port and behind a USB 3 hub
+- [ ] 36.2 the Windows 98 SE audio-load wedge (carried since `2.0.0.0`, release notes' known limitations; 28.3): a USB audio device attached about 40 s after a cold boot wedged the guest 5 of 6 times (taskbar clock stopped), after 120 s none of 20; every IRP the bus was given had been answered, the wait is in the configuration manager after SELECT_INTERFACE to alternate 0 and QUERY_CAPABILITIES, and `1.2.0.0` showed it too. In this phase because 36a changes what QUERY_CAPABILITIES answers (D1/D2, wake): re-measure it on the 36a build first (better, worse or the same), then find where the configuration manager waits (a debug `VMM`/`CONFIGMG` or a trace of the devnode's state), and fix it if a bus answer is the cause; if it is Windows 98's own, it stays a documented limitation with the measurement refreshed
+- [ ] 36.3 the docs: record 13 sections 5, 6.5, 10.2 and 10.9; the release notes (the limitation replaced, the switch and its escape); this table's 28.3 row; `source-files.md`; the locking record; `runs/run-35.md` and `runs/run-36.md`; and Phase 35's list (record 15 section 14): `implementation-invariants.md`'s "Interrupt Delivery", `architecture.md`, the release notes' "Controller" row and the switch, the acceptance test's step 3, `xhciqual/hardware-testing.md` and record 01's C4 note. Phase 34's docs are its own (34.4)
+- [ ] 36.4 the cut, and the ten install legs read from the asset
+
+Checkpoint: 36a-V and 36b-V passing - their functional and regression legs
+on the `release` package, and 36a-V's fault-injection leg on the `qemu`
+flavour, kept apart, the `qemu` flavour never published; 36a-V's functional
+legs on 98 SE and 2000 (SMP, Driver Verifier) and 36b-V's root-port legs
+run once more under `XhciInterruptMode` 2; 36a-E and 36b-E read by the owner; 36.1's resumes
+read on guests and the bench; 36.2 re-measured and, if bus-side, fixed;
+`XhciSelectiveSuspend` at 0 reading as the Phase 35 build; Phases 34 and 35
+closed; the ten install legs read from the asset.
+
+Records: `design/14-selective-suspend.md`; `runs/run-36.md` (to be opened).

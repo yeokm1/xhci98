@@ -1,7 +1,8 @@
-# Development Roadmap - Phases 17 Onward
+# Development Roadmap - The Miniport's Updates, Phases 17 to 24
 
-The second half of the roadmap: every phase after the initial release. The
-first half, [`roadmap.md`](roadmap.md), is the entry point. It carries the
+The second part of the roadmap: the miniport's public updates after its
+initial release, up to its last, `1.2.0.0`. The first part,
+[`roadmap.md`](roadmap.md), is the entry point. It carries the
 project-status paragraph, the batching convention and task-id rules, the phase
 sequence, Phases 0-16 (everything up to the `1.0.0.0` release, the move to
 specification revision 1.2c and the unattended post-release run), and the

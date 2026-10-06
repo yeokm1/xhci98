@@ -12,6 +12,59 @@ every published directory carries the history up to and including itself.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
+## 2.1.1.0 - 2026-10-06
+
+An interim update: the install now writes every registry value the driver
+reads, the root hub's Power page shows a SuperSpeed device's current
+correctly up to 510 mA, and on Intel 7-, 8- and 9-series chipsets the driver
+moves the switchable connectors to itself. Every system `2.1.0.0` supports
+is supported, from the same four directories. The registry values were
+read in QEMU virtual machines; the Power page and the port switchover on
+the owner's own machines, under Windows 98 SE; the release notes say what
+was read on which system.
+
+### What changed
+
+- The install writes all eight registry values the driver reads, each at
+  its default (`XhciImodInterval250ns` at `160`), so each is where a user
+  looks for it, and writes each only where it is missing: a value you set
+  survives an install or update. `2.1.0.0` wrote three, and wrote them over
+  a value you had changed. A machine updated straight from `1.2.0.0` keeps
+  that release's `XhciImodInterval250ns` of `500`; set it by hand. Read,
+  before the eighth value was added, on Windows 98 SE and 2000 (a fresh
+  install and an update) and 32-bit Windows 7 (an update) in virtual
+  machines.
+- Fixed: under `2.1.0.0` the Power page showed a SuperSpeed device's
+  current as a quarter of its draw, on every system. It now shows the
+  device's own figure up to 510 mA, and 510 mA for anything above; every
+  other reader of the device's descriptor still gets the device's own
+  bytes. A bus-powered hub is still charged (ports + 1) x 100 mA, at most
+  500 mA, by the page itself. `XHCISNAP`'s report gives each SuperSpeed
+  device's exact declared current (`dev.ss.maxpower.ma`, with
+  `XhciLogVerbosity` raised). Read on a ThinkPad P14s Gen 1 under Windows
+  98 SE: a drive declaring 896 mA, which read 224 mA, reads 510 mA.
+- On Intel 7-, 8- and 9-series chipsets (Ivy Bridge to Broadwell) and
+  C610/X99 - xHCI device ids `1E31`, `8C31`, `9C31`, `8CB1`, `9CB1` and
+  `8D31` - the driver moves the switchable connectors, usually the blue
+  ones, from the USB 2.0 controller to itself at each start and resume, and
+  hands them back when its controller stops or the machine shuts down. With
+  the firmware on Auto these connectors used to stay on the USB 2.0
+  controller, where this driver saw nothing on them. A device on one of them
+  under a running USB 2.0 driver is disconnected there and found again
+  under this driver, and the reverse when the controller stops, so do not
+  have a drive busy on a blue connector at those moments. The new value
+  `XhciIntelPortSwitch` (`1`; `0` turns it off) is the opt-out. Read on the
+  owner's Lenovo B490 (`1E31`) under Windows 98 SE with NUSB, firmware on
+  Auto and Smart Auto; standby, the other five ids and the other systems are
+  untested ground.
+- Updating from `2.1.0.0`: the same steps as from `2.0.0.0` (the release
+  notes, "Updating from 2.y.y.y"); the registry values already there are
+  kept and the missing ones added.
+- Known limitations: those of `2.1.0.0`, with the SuperSpeed Power-page
+  quarter replaced by the 510 mA ceiling, plus the devices that move between
+  controllers on Intel 7-, 8- and 9-series chipsets. The release notes have
+  the full list.
+
 ## 2.1.0.0 - 2026-10-05
 
 The first update of the host controller driver, a minor version because it

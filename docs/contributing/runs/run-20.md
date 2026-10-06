@@ -1,6 +1,6 @@
 # Phase 20 Record - the 2026-09-05 audit fixes and the `1.0.2.0` readings
 
-The detail behind `docs/contributing/roadmap-phases-17-on.md`, "Phase 20 -
+The detail behind `docs/contributing/roadmap-miniport-updates.md`, "Phase 20 -
 Release `1.0.2.0`: The 2026-09-05 Audit Fixes". The roadmap entry carries the goal,
 the status, the findings and the task list; this file carries what each task
 changed and what each reading said. Where the two disagree about a clause,

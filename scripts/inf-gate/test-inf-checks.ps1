@@ -502,7 +502,7 @@ try {
     # deleted it from both would pass just as loudly while proving nothing
     # about the half that matters.
     Assert-RuleFires "logverbosity-no-9x" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,XhciLogVerbosity,0x00010001,0",
+        param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,XhciLogVerbosity,0x00010003,0",
                              "HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"")
     }
     # **Re-anchored on the EnumPropPages line at roadmap task 23.1**, which is
@@ -513,31 +513,37 @@ try {
     # earning its keep for the second time. EnumPropPages is 9x-only, like
     # NTMPDriver, so the cases still cannot drift onto an NT path.
     Assert-RuleFires "logdbgview-no-9x" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,XhciLogVerbosity,0x00010001,0`r`nHKR,,XhciLogDebugView,0x00010001,0",
-                             "HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,XhciLogVerbosity,0x00010001,0")
+        param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciLogDebugView,0x00010003,0",
+                             "HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,XhciLogVerbosity,0x00010003,0")
     }
 
     # And the NT path, the same two.
     Assert-RuleFires "logverbosity-no-nt" "VAL-MISSING" {
-        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,0",
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0",
                              "[Xhci.AddReg.NT]`r`nHKR,,Unrelated,,x")
     }
     Assert-RuleFires "logdbgview-no-nt" "VAL-MISSING" {
-        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,0`r`nHKR,,XhciLogDebugView,0x00010001,0",
-                             "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,0`r`nHKR,,Unrelated,,x")
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciLogDebugView,0x00010003,0",
+                             "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,Unrelated,,x")
     }
 
     Assert-RuleFires "logdbgview-type" "VAL-TYPE" {
-        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,0`r`nHKR,,XhciLogDebugView,0x00010001,0",
-                             "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,0`r`nHKR,,XhciLogDebugView,,0")
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciLogDebugView,0x00010003,0",
+                             "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciLogDebugView,,0")
+    }
+    # Roadmap-hcd task 34.1: the unconditional DWORD would write the default
+    # over a value the user set.
+    Assert-RuleFires "firstenumwait-clobber" "VAL-TYPE" {
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciLogDebugView,0x00010003,0`r`nHKR,,XhciForceBulkOnly,0x00010003,0`r`nHKR,,XhciFastPollFsLs,0x00010003,0`r`nHKR,,XhciFirstEnumWaitMs,0x00010003,5000",
+                             "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciLogDebugView,0x00010003,0`r`nHKR,,XhciForceBulkOnly,0x00010003,0`r`nHKR,,XhciFastPollFsLs,0x00010003,0`r`nHKR,,XhciFirstEnumWaitMs,0x00010001,5000")
     }
     Assert-RuleFires "logdbgview-default" "VAL-DEFAULT" {
-        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,0`r`nHKR,,XhciLogDebugView,0x00010001,0",
-                             "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,0`r`nHKR,,XhciLogDebugView,0x00010001,1")
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciLogDebugView,0x00010003,0",
+                             "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciLogDebugView,0x00010003,1")
     }
     Assert-RuleFires "logdbgview-subkey" "VAL-SUBKEY" {
-        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,0`r`nHKR,,XhciLogDebugView,0x00010001,0",
-                             "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,0`r`nHKR,Parameters,XhciLogDebugView,0x00010001,0")
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciLogDebugView,0x00010003,0",
+                             "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,Parameters,XhciLogDebugView,0x00010003,0")
     }
     # **VAL-DUP had no case at all until the post-Phase 13 review rounds**, which is this suite's own
     # documented failure mode one rule over: `VAL-MISSING` was structurally
@@ -548,8 +554,8 @@ try {
     # writes the value twice on one path with a *different* default on the
     # second line, which is the shape that actually costs something.
     Assert-RuleFires "logverbosity-duplicated-nt" "VAL-DUP" {
-        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,0",
-                             "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,0`r`nHKR,,XhciLogVerbosity,0x00010001,1")
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0",
+                             "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciLogVerbosity,0x00010003,1")
     }
 
     # **The verbosity default is the one that matters most**, and since the
@@ -562,8 +568,8 @@ try {
     # replaces the separate `logsnapshot-default` one, which had the same
     # subject through the value that is gone.
     Assert-RuleFires "logverbosity-default" "VAL-DEFAULT" {
-        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,0",
-                             "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,1")
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0",
+                             "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,1")
     }
 
     # Roadmap task 23.4's moderation interval: one path at a time, for the
@@ -574,41 +580,63 @@ try {
     # On 9x the interval is the last line of [Xhci.AddReg], so the anchor is
     # the blank line and the root hub's section header after it.
     Assert-RuleFires "imod-no-9x" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,XhciLogDebugView,0x00010001,0`r`nHKR,,XhciImodInterval250ns,0x00010001,160`r`n`r`n[RootHub.Dev]",
-                             "HKR,,XhciLogDebugView,0x00010001,0`r`n`r`n[RootHub.Dev]")
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]",
+                             "`r`n[RootHub.Dev]")
     }
     Assert-RuleFires "imod-no-nt" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,160`r`nHKR,,EnumPropPages32",
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32",
                              "HKR,,EnumPropPages32")
     }
     # **The default is the driver's fallback, not the shipped value**, and
     # this is the edit that looks harmless: 4000 is what every release before
     # 1.1.1.0 ran at, and it is a VAL-DEFAULT because the owner's number is 160.
     Assert-RuleFires "imod-default-is-fallback" "VAL-DEFAULT" {
-        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,160`r`nHKR,,EnumPropPages32",
-                             "HKR,,XhciImodInterval250ns,0x00010001,4000`r`nHKR,,EnumPropPages32")
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32",
+                             "HKR,,XhciImodInterval250ns,0x00010003,4000`r`nHKR,,EnumPropPages32")
     }
     # **The superseded value is refused too.** 500 is what the miniport shipped
     # from 1.1.1.0 and the HCD until the owner's ruling of 2026-10-04 moved it
     # to 160, so it is the number a restored line or an old INF would carry -
     # on either path.
     Assert-RuleFires "imod-default-old-9x" "VAL-DEFAULT" {
-        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,160`r`n`r`n[RootHub.Dev]",
-                             "HKR,,XhciImodInterval250ns,0x00010001,500`r`n`r`n[RootHub.Dev]")
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]",
+                             "HKR,,XhciImodInterval250ns,0x00010003,500`r`n`r`n[RootHub.Dev]")
     }
     Assert-RuleFires "imod-default-old-nt" "VAL-DEFAULT" {
-        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,160`r`nHKR,,EnumPropPages32",
-                             "HKR,,XhciImodInterval250ns,0x00010001,500`r`nHKR,,EnumPropPages32")
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32",
+                             "HKR,,XhciImodInterval250ns,0x00010003,500`r`nHKR,,EnumPropPages32")
     }
     # Hex spells the same number and is still refused: the gate compares text,
     # and one spelling on every path is what the install legs have read.
     Assert-RuleFires "imod-default-hex-9x" "VAL-DEFAULT" {
-        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,160`r`n`r`n[RootHub.Dev]",
-                             "HKR,,XhciImodInterval250ns,0x00010001,0x000000a0`r`n`r`n[RootHub.Dev]")
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]",
+                             "HKR,,XhciImodInterval250ns,0x00010003,0x000000a0`r`n`r`n[RootHub.Dev]")
     }
     Assert-RuleFires "imod-type" "VAL-TYPE" {
-        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,160`r`nHKR,,EnumPropPages32",
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32",
                              "HKR,,XhciImodInterval250ns,,500`r`nHKR,,EnumPropPages32")
+    }
+
+    # Roadmap-hcd task 34.3's opt-out, anchored on the interval after it on
+    # each path. **Its default is 1, not 0**: shipping 0 would be an INF edit
+    # that turns the switchover off on every machine it exists for, and the
+    # unconditional DWORD would write a user's 0 back to 1 at an update.
+    Write-Step "the Intel port switchover's opt-out, on both paths"
+    Assert-RuleFires "portswitch-no-9x" "VAL-MISSING" {
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`nHKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]",
+                             "HKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]")
+    }
+    Assert-RuleFires "portswitch-no-nt" "VAL-MISSING" {
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`nHKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32",
+                             "HKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32")
+    }
+    Assert-RuleFires "portswitch-default-off" "VAL-DEFAULT" {
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`nHKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32",
+                             "HKR,,XhciIntelPortSwitch,0x00010003,0`r`nHKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32")
+    }
+    Assert-RuleFires "portswitch-clobber" "VAL-TYPE" {
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`nHKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]",
+                             "HKR,,XhciIntelPortSwitch,0x00010001,1`r`nHKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]")
     }
 
     # Roadmap task 24.3's three virtual-hub values, refused since 2026-10-02
@@ -619,8 +647,8 @@ try {
     # switches nothing whatever it says.
     Write-Step "the virtual hub's values, refused on every path"
     Assert-RuleFires "vhub-written-9x" "VAL-HCDVHUB" {
-        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,160`r`n`r`n[RootHub.Dev]",
-                             "HKR,,XhciImodInterval250ns,0x00010001,160`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`n`r`n[RootHub.Dev]")
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]",
+                             "HKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`n`r`n[RootHub.Dev]")
     }
     Assert-RuleFires "vhub-written-nt" "VAL-HCDVHUB" {
         param($t) $t.Replace("HKR,,Controller,1,01`r`n",
@@ -729,8 +757,8 @@ try {
     # And the 9x value on an NT path, which is the same line in the wrong
     # place: no NT engine reads it, so it is a value nothing anywhere reads.
     Assert-RuleFires "proppage-9x-value-on-nt" "PROP-STRAY" {
-        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,0",
-                             "[Xhci.AddReg.NT]`r`nHKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,XhciLogVerbosity,0x00010001,0")
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0",
+                             "[Xhci.AddReg.NT]`r`nHKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,XhciLogVerbosity,0x00010003,0")
     }
 
     # ---- HCD-* : the root hub, the HCD's second device role (task 25.8) ----
@@ -1286,9 +1314,13 @@ try {
     }
 
     # The same on the registry side. FLG_ADDREG_TYPE_DWORD is 0x00010001, so
-    # each of these ORs one operation bit into the production value.
+    # each of these ORs one operation bit into it. The production row is
+    # 0x00010003 since roadmap-hcd task 34.1, FLG_ADDREG_NOCLOBBER, whose
+    # 'keep' the production footprint itself holds - it writes only if the
+    # value was absent, the registry twin of COPYFLG_NO_OVERWRITE, and a draft
+    # classified the same condition two ways by making it 'review'.
     foreach ($case in @(
-        @{ Flags = "0x00010003"; Verdict = "keep";   Why = "FLG_ADDREG_NOCLOBBER writes only if the value was absent - the registry twin of COPYFLG_NO_OVERWRITE, and a draft classified the same condition two ways by making this one 'review'" },
+        @{ Flags = "0x00010001"; Verdict = "remove"; Why = "the plain DWORD, no operation bit, writes unconditionally" },
         @{ Flags = "0x00010005"; Verdict = "none";   Why = "FLG_ADDREG_DELVAL places nothing at all" },
         @{ Flags = "0x00010009"; Verdict = "review"; Why = "FLG_ADDREG_APPEND may leave pre-existing REG_MULTI_SZ elements - recognised is not modelled, and a first draft let this fall through to remove" },
         @{ Flags = "0x00010011"; Verdict = "review"; Why = "FLG_ADDREG_KEYONLY creates the key and ignores the value this row names, so the row's own subject was never written" },
@@ -1297,8 +1329,8 @@ try {
         @{ Flags = "4294967296"; Verdict = "review"; Why = "an out-of-range flags field is a row, not an aborted emit - the same policy the copy side has" }
     )) {
         $inf2 = New-MutatedInf -Name ("fp-addregflag-" + $case.Flags) -Mutate {
-            param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,0`r`nHKR,,XhciLogDebugView,0x00010001,0",
-                                 ("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,0`r`nHKR,,XhciLogDebugView," + $case.Flags + ",0"))
+            param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciLogDebugView,0x00010003,0",
+                                 ("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciLogDebugView," + $case.Flags + ",0"))
         }.GetNewClosure()
         $fp = Get-Footprint -Path $inf2
         Assert-RowVerdict -Rows $fp -Prefix "reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciLogDebugView|" -Verdict $case.Verdict `
@@ -1803,18 +1835,18 @@ try {
                              "[Xhci.Dev6.NTamd64]")
     } -Source $prodInfAmd64 -Arch amd64
     Assert-RuleFires "amd64-logverbosity-default" "VAL-DEFAULT" {
-        param($t) $t.Replace("HKR,,XhciLogVerbosity,0x00010001,0", "HKR,,XhciLogVerbosity,0x00010001,1")
+        param($t) $t.Replace("HKR,,XhciLogVerbosity,0x00010003,0", "HKR,,XhciLogVerbosity,0x00010003,1")
     } -Source $prodInfAmd64 -Arch amd64
     Assert-RuleFires "amd64-imod-missing" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,160`r`n", "")
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010003,160`r`n", "")
     } -Source $prodInfAmd64 -Arch amd64
     Assert-RuleFires "amd64-imod-default" "VAL-DEFAULT" {
-        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,160", "HKR,,XhciImodInterval250ns,0x00010001,4000")
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010003,160", "HKR,,XhciImodInterval250ns,0x00010003,4000")
     } -Source $prodInfAmd64 -Arch amd64
     # 500, the value before the owner's ruling of 2026-10-04, refused here as
     # on the 32-bit file: the 64-bit package ships 160 too.
     Assert-RuleFires "amd64-imod-default-old" "VAL-DEFAULT" {
-        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,160", "HKR,,XhciImodInterval250ns,0x00010001,500")
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010003,160", "HKR,,XhciImodInterval250ns,0x00010003,500")
     } -Source $prodInfAmd64 -Arch amd64
     #
     # **The version tie reaches the 64-bit file too**, and proving that needs

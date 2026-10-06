@@ -119,18 +119,27 @@ failed" are different findings.
 | 1.2 | Read every USB-related BIOS setting and write each one down, before anything else is done to the machine | Each setting with its value. A BIOS that offers no USB option at all is a result; write `NOT PRESENT` |
 | 1.3 | Record the target OS and its build, its architecture, on Windows 98 SE whether NUSB (and which version) or SweetLow's stack is installed, and whether any previous version of this package was ever installed here | The OS and build, the architecture (it decides which package step 4 installs, and on Vista and 7 whether the drivers load without signature enforcement disabled, 4.10), the USB stack, and `none` or the version. A machine that had one produces an upgrade result, which is a different measurement and is not what this test measures |
 
-1.2 comes before anything else because on Intel 7- and 8-series chipsets a
-BIOS setting decides which controller owns the USB ports: `XUSB2PR` routes the
-USB 2.0 ports between EHCI and xHCI, so the same machine presents a working
-xHCI or one with nothing on it depending on a setting nobody recorded.
+1.2 comes before anything else because on Intel 7-, 8- and 9-series chipsets
+and C610/X99 a BIOS setting decides which controller owns the USB ports at
+boot: `XUSB2PR` routes the USB 2.0 ports between EHCI and xHCI, so the same
+machine presents a working xHCI or one with nothing on it depending on a
+setting nobody recorded. Since `2.1.1.0` the driver routes the switchable
+ports to xHCI itself on those chipsets (Intel device ids 1E31, 8C31, 9C31,
+8CB1, 9CB1 and 8D31) unless `XhciIntelPortSwitch` is 0, so on such a machine
+also record that value, and keep the 8.4 report's `psw.` records with the
+result: the setting still decides what the machine looks like before the
+driver starts and which connectors are outside the switchable set.
 
 If a field cannot be answered: write what was looked at and why it could not be
 answered. A blank is not a result.
 
 Observed: the record format is `xhciqual/hardware-testing.md`'s, with
 `xhciqual/results/e460-2026-08-22/README.md` as a worked example. `XUSB2PR`'s
-behaviour is derived from the Intel datasheet and from Linux, and has never
-been measured on any machine this project has had; see
+behaviour is derived from the Intel datasheet and from Linux, and has been
+read on one machine: a Lenovo B490 (1E31) under Windows 98 SE, whose
+firmware on Auto and on Smart Auto left the switchable ports on EHCI and
+whose ports the driver then routed (roadmap-hcd task 34.3,
+`docs/contributing/runs/run-34.md` 34.3-H2); see
 `docs/usb-xhci-info/xhci-programming.md`, "Firmware Handoff, and the
 Controller Deviations This Driver Acts On".
 
@@ -434,7 +443,7 @@ a 32-bit program, runs under WOW64 against the 64-bit driver; `XHCISNAP
 | 8.4 | `XHCISNAP -o C:\MYDUMP` | It writes `C:\MYDUMP.TXT` and prints the resolved absolute path it wrote it to |
 | 8.5 | Read that file's header | The tool's version and build stamp, the driver's counters, and at level 2 the driver's own note ring below them. A report whose version is not this release's is a report from the wrong build |
 | 8.6 | `XHCISNAP -disable` | It reports the channel off again. A machine left with the channel on is a machine whose diagnostic state anyone using it can read |
-| 8.7 | Record only: look at the driver's own key for `XhciLogVerbosity`, `XhciLogDebugView`, `XhciImodInterval250ns` and `XhciForceBulkOnly`, then read the 8.4 report's "registry values" block | Write down whether each value is there and what its data is. On a fresh install `XhciImodInterval250ns` holds `160`, written by the INF, and the report shows it read and in force; the other three are absent unless set. Write down the report's lines for the value read and the interval in force |
+| 8.7 | Record only: look at the driver's own key for `XhciLogVerbosity`, `XhciLogDebugView`, `XhciImodInterval250ns`, `XhciForceBulkOnly`, `XhciFastPollFsLs`, `XhciFirstEnumWaitMs`, `XhciFirstEnumPortMs` and `XhciIntelPortSwitch`, then read the 8.4 report's "registry values" block | Write down whether each value is there and what its data is. On a fresh install the INF writes all eight: `XhciImodInterval250ns` `160`, `XhciFirstEnumWaitMs` `5000`, `XhciFirstEnumPortMs` `2000`, `XhciIntelPortSwitch` `1` and the other four `0`, and the report shows the interval read and in force. Write down the report's lines for the value read and the interval in force |
 | 8.8 | The SuperSpeed witness: in the 8.4 report, find 5.8's device | The speed the driver decoded from its port, SuperSpeed, and the speed it programmed into the device's slot, SuperSpeed, agreeing. The slot's speed is the report's slot table: `PSIV` is the Speed field of the controller's own Slot Context for the device, and `speed` is that value decoded, `SuperSpeed, 5 Gbit/s, Gen 1x1` for a 5 Gbit/s link. A SuperSpeed device that reads High Speed here ran on the USB 2.0 port of its connector; record which connector it was in |
 
 If nothing comes back (8.4): run `XHCISNAP -probe`, which answers whether the

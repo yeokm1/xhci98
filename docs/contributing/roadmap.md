@@ -7,8 +7,9 @@ acts that sit outside the phases (the upload and the hand-run acceptance).
 It is meant to orient a contributor. It is three files. This one carries the
 status, the conventions, the phase sequence, Phases 0-16 (the initial release)
 and the acceptance reminder;
-[`roadmap-phases-17-on.md`](roadmap-phases-17-on.md) carries the entries of
-Phases 17-24, the rest of the miniport's life, closed with the `1.2.0.0` cut;
+[`roadmap-miniport-updates.md`](roadmap-miniport-updates.md) carries the
+entries of Phases 17-24, the miniport's public updates, closed with the
+`1.2.0.0` cut;
 and [`roadmap-hcd.md`](roadmap-hcd.md), opened on 2026-10-02, carries Phases
 25 onward, the miniport's successor - the monolithic host controller driver,
 which took over `src\` and the name `xhci98.sys` on 2026-10-02 - including the
@@ -1331,9 +1332,9 @@ Phases 0-16 above are the initial release: everything up to the `1.0.0.0` cut,
 the specification revision it was moved to afterwards, and the unattended run
 made against it. Phases 17 to 24, the rest of the miniport's life up to the
 `1.2.0.0` cut that froze it, are in
-[`roadmap-phases-17-on.md`](roadmap-phases-17-on.md), split out so that neither
-file grows without bound; Phases 25 onward, the successor host controller
-driver's, the open one included, are in [`roadmap-hcd.md`](roadmap-hcd.md).
+[`roadmap-miniport-updates.md`](roadmap-miniport-updates.md), split out so
+that neither file grows without bound; Phases 25 onward, the successor host
+controller driver's, the open one included, are in [`roadmap-hcd.md`](roadmap-hcd.md).
 The status paragraph and the phase sequence at the head of this file cover
 all three.
 

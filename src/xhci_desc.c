@@ -720,3 +720,26 @@ ULONG XhciDescParseEnd(PXHCI_DESC_PARSE parse)
     parse->Table.Valid = 1;
     return XHCI_DESC_FOLD_COMMIT;
 }
+
+/* ------------------------------------------------------------------ */
+/* bMaxPower (roadmap-hcd task 34.2)                                    */
+/* ------------------------------------------------------------------ */
+
+ULONG XhciDescMaxPowerMa(ULONG bMaxPower, ULONG speedClass)
+{
+    bMaxPower &= 0xFFUL;
+    return (speedClass == XHCI_SPEED_SUPER) ? bMaxPower * 8UL
+                                            : bMaxPower * 2UL;
+}
+
+ULONG XhciDescPowerTabByte(ULONG bMaxPower, ULONG speedClass)
+{
+    bMaxPower &= 0xFFUL;
+    if (speedClass != XHCI_SPEED_SUPER) {
+        return bMaxPower;
+    }
+    if (bMaxPower > XHCI_DESC_POWER_TAB_MAX / 4UL) {
+        return XHCI_DESC_POWER_TAB_MAX;
+    }
+    return bMaxPower * 4UL;
+}

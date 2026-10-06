@@ -45,7 +45,13 @@
 > (an external hub's FDO, the third PnP role: each hub the bus serves is a
 > devnode under `XHCI98\HUB` or `XHCI98\HUB30`, design record 13 section 10.11)
 > and the hub PDO's pure half in `xhci_hub.c` (its ids, the presented parent,
-> node information; host suite `test_hub`). The tables below are the
+> node information; host suite `test_hub`). Task 34.3 adds the pure
+> `xhci_psw.c` / `xhci_psw.h` (the Intel EHCI-to-xHCI port switchover: the
+> device-id gate, the board exemption, the `XhciIntelPortSwitch` rule, and the
+> route and release sequences over two caller-supplied configuration-space
+> accessors; host suite `test_psw`), executed from `hcd_ctl.c` at start and
+> stop and from `hcd_power.c` at each return to D0 and a shutdown's D3
+> ([design record 16](design/16-intel-port-switchover.md)). The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name

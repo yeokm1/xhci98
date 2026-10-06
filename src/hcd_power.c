@@ -61,6 +61,9 @@ static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
     if (hc->ControllerStarted &&
         (hc->Common.DevicePower != PowerDeviceD0 || hc->SuspendedInD0)) {
         hc->SuspendedInD0 = 0;
+        /* Task 34.3: firmware may have put the connectors back on EHCI
+         * across the sleep; route them before the ports are resumed. */
+        HcdPswRoute(hc);
         if (XhciResumeController(&hc->Hc) != MP_STATUS_SUCCESS) {
             hc->ResumeFailures++;
             HcdControllerFail(hc);
@@ -110,10 +113,14 @@ static VOID hcdDirectTransitionGated(PHCD_CONTROLLER hc)
             XhciSuspendController(&hc->Hc);
             hc->SuspendedInD0 = 1;
         }
+        if (hc->Common.SystemPower == PowerSystemShutdown) {
+            HcdPswRelease(hc);
+        }
         return;
     }
     if (hc->SuspendedInD0) {
         hc->SuspendedInD0 = 0;
+        HcdPswRoute(hc);
         if (XhciResumeController(&hc->Hc) != MP_STATUS_SUCCESS) {
             hc->ResumeFailures++;
             HcdControllerFail(hc);
@@ -300,6 +307,12 @@ NTSTATUS HcdControllerPower(PHCD_CONTROLLER hc, PIRP irp)
         if (hc->ControllerStarted &&
             hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0) {
             XhciSuspendController(&hc->Hc);
+        }
+        /* Task 34.3: the shutdown's D3 hands the connectors back to EHCI,
+         * as Linux's xhci_shutdown does on these chipsets; a sleep keeps
+         * them, and its D0 routes them again. */
+        if (hc->Common.SystemPower == PowerSystemShutdown) {
+            HcdPswRelease(hc);
         }
         /* Suspended either way now, and the D0 that follows resumes it. */
         hc->SuspendedInD0 = 0;

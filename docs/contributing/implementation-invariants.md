@@ -563,6 +563,7 @@ code:
 
 - Under Option A, `usbport.sys` owns the host FDO and hands the miniport its translated resources (BAR, interrupt) at the start-controller callback - the miniport does not process `IRP_MN_START_DEVICE` itself. Use those translated resources for BAR mapping; never rediscover the BAR from PCI config space. (Under the Option B fallback, the same applies but via `IRP_MN_START_DEVICE`.)
 - PCI config space reads are for identification and quirk selection, not normal BAR discovery.
+- **Config space writes above the standard header are a kind of access of their own, and there is one** (since `2.1.1.0`, roadmap-hcd task 34.3, design record 16): the Intel port switchover writes `USB3_PSSEN` (0xD8) and `XUSB2PR` (0xD0) in the xHCI function's own config space, on Intel 1E31, 8C31, 9C31, 8CB1, 9CB1 and 8D31 only, gated by `XhciIntelPortSwitch`, through `HcdSvcConfigSpace` at PASSIVE_LEVEL under no spin lock, at each start, at each return to D0, at every stop and refused start, and at a system shutdown's D3. It is the HCD's second config-space writer, after the quiesce path's Bus Master Enable, and the only one above the header. The BAR rule above stands as it is: the switchover reads and writes no BAR.
 - Resource acquisition and release should be symmetric: map/allocate on start-controller, quiesce/free on stop-controller, following the lifecycle `usbport.sys` drives.
 
 ## Interrupt Delivery

@@ -1076,6 +1076,109 @@ static void write_companion_vhub(const SNAP_HEADER *h)
     }
 }
 
+/*
+ * **The installed driver's version, read from the file rather than the wire.**
+ * The header carries no version and adding one is a schema change for both
+ * drivers, so this reads `xhci98.sys`'s version resource where both INFs copy
+ * it (DestinationDirs 12: %windir%\system32\drivers on 98 SE, ME and NT). It is
+ * the file on disk, not proof of what is running: a file replaced without a
+ * restart reads the new version. The report says "file", and the Driver tab
+ * remains the reading of record.
+ *
+ * version.dll is loaded at run time so the import table stays KERNEL32 and
+ * ADVAPI32 (make-release.ps1 checks that). The tool is x86 only, so on x64
+ * Windows system32 is redirected to SysWOW64 and the 64-bit driver would read
+ * as missing: redirection is switched off around the read, looked up at run
+ * time because 98, ME and 2000 do not export it.
+ */
+typedef DWORD (WINAPI *PFN_GFVIS)(LPCSTR, LPDWORD);
+typedef BOOL  (WINAPI *PFN_GFVI)(LPCSTR, DWORD, DWORD, LPVOID);
+typedef BOOL  (WINAPI *PFN_VQV)(LPCVOID, LPCSTR, LPVOID *, PUINT);
+typedef BOOL  (WINAPI *PFN_W64DIS)(PVOID *);
+typedef BOOL  (WINAPI *PFN_W64REV)(PVOID);
+
+static const char *driver_file_version(void)
+{
+    /* Static, so zeroed: every _snprintf below is given one byte less than
+     * the buffer, and that last byte is the terminator MSVC 6 does not write
+     * when it truncates. */
+    static char text[MAX_PATH + 64];
+    static int done;
+    char path[MAX_PATH];
+    HMODULE ver, k32;
+    PFN_GFVIS gfvis;
+    PFN_GFVI gfvi;
+    PFN_VQV vqv;
+    PFN_W64DIS w64dis = NULL;
+    PFN_W64REV w64rev = NULL;
+    PVOID redir = NULL;
+    BOOL redirOff = FALSE;
+    DWORD size, dummy;
+    void *block;
+    VS_FIXEDFILEINFO *ffi;
+    UINT len;
+    UINT n;
+
+    if (done) {
+        return text;
+    }
+    done = 1;
+    lstrcpyA(text, "not read");
+
+    n = GetWindowsDirectoryA(path, sizeof(path));
+    if (n == 0 || n + 32 > sizeof(path)) {
+        return text;
+    }
+    lstrcatA(path, "\\system32\\drivers\\xhci98.sys");
+
+    ver = LoadLibraryA("version.dll");
+    if (ver == NULL) {
+        return text;
+    }
+    gfvis = (PFN_GFVIS)GetProcAddress(ver, "GetFileVersionInfoSizeA");
+    gfvi = (PFN_GFVI)GetProcAddress(ver, "GetFileVersionInfoA");
+    vqv = (PFN_VQV)GetProcAddress(ver, "VerQueryValueA");
+    if (gfvis == NULL || gfvi == NULL || vqv == NULL) {
+        FreeLibrary(ver);
+        return text;
+    }
+
+    k32 = GetModuleHandleA("kernel32.dll");
+    if (k32 != NULL) {
+        w64dis = (PFN_W64DIS)GetProcAddress(k32,
+                                            "Wow64DisableWow64FsRedirection");
+        w64rev = (PFN_W64REV)GetProcAddress(k32,
+                                            "Wow64RevertWow64FsRedirection");
+    }
+    if (w64dis != NULL && w64rev != NULL) {
+        redirOff = w64dis(&redir);
+    }
+
+    size = gfvis(path, &dummy);
+    block = (size != 0) ? malloc(size) : NULL;
+    if (block == NULL) {
+        _snprintf(text, sizeof(text) - 1, "not read (%s, error %lu)", path,
+                  (size == 0) ? GetLastError() : 0UL);
+    } else if (gfvi(path, 0, size, block) &&
+               vqv(block, "\\", (LPVOID *)&ffi, &len) &&
+               len >= sizeof(VS_FIXEDFILEINFO)) {
+        _snprintf(text, sizeof(text) - 1, "%u.%u.%u.%u (file %s)",
+                  (unsigned)HIWORD(ffi->dwFileVersionMS),
+                  (unsigned)LOWORD(ffi->dwFileVersionMS),
+                  (unsigned)HIWORD(ffi->dwFileVersionLS),
+                  (unsigned)LOWORD(ffi->dwFileVersionLS), path);
+    } else {
+        _snprintf(text, sizeof(text) - 1, "not read (%s has no version resource)", path);
+    }
+    free(block);
+
+    if (redirOff) {
+        w64rev(redir);
+    }
+    FreeLibrary(ver);
+    return text;
+}
+
 static void write_companion_header(const SNAP_HEADER *h)
 {
     comp("\nxhci98 snapshot - the part a maintainer can read without an offset "
@@ -1087,6 +1190,11 @@ static void write_companion_header(const SNAP_HEADER *h)
      * carries what the version cannot between cuts: which build. */
     comp("  tool               xhcisnap %s, built %s\n",
          XHCISNAP_VERSION, XHCISNAP_BUILT);
+    /* Wrapped under its own column: the path is the machine's, and the
+     * failure texts alone pass 79 columns on a default C:\WINDOWS. */
+    put_wrapped_to((companion != NULL) ? companion : stdout,
+                   "  driver file        ", "                     ",
+                   driver_file_version());
     comp("  schema             %lu, %lu-byte header\n",
          h->SchemaVersion, h->HeaderBytes);
     comp("  build flavour      %s\n", flavour_text(h->Flavour));
@@ -1240,8 +1348,13 @@ static void write_companion_ring(const SNAP_HEADER *h, const unsigned char *ext,
     for (i = 0; i < h->RingUsed; i++) {
         at = (start + i) & mask;
         c = ext[h->RingOffset + at];
-        if (c == '\r' || c == '\n') {
-            comp("%c", c);
+        /* The driver ends a record CR LF; the companion is a text-mode
+         * stream that turns LF into CR LF itself, so passing the CR through
+         * wrote CR CR LF and a blank line between records on most viewers. */
+        if (c == '\r') {
+            continue;
+        } else if (c == '\n') {
+            comp("\n");
         } else if (c < 0x20 || c > 0x7E) {
             comp(".");
         } else {
@@ -2736,9 +2849,8 @@ static int set_verbosity(unsigned long verbosity, int force)
         printf("Then reproduce and run:  XHCISNAP -o C:\\NAME\n");
         printf("Afterwards:              XHCISNAP -disable\n");
         say("  ", "While the channel is on, anyone using this machine can read "
-                  "this driver's diagnostic state through it. Windows' USB port "
-                  "driver owns that door and opens it to anyone, so this value "
-                  "IS the lock.");
+                  "this driver's diagnostic state through it. The controller's "
+                  "device opens to anyone, so this value IS the lock.");
     } else {
         /* **Not "and what -disable does"**, which is what this said until the
          * two spellings became one path: a user who typed `-disable` was being
@@ -3562,6 +3674,7 @@ int main(int argc, char **argv)
     printf("\n--- summary ------------------------------------------------\n");
     printf("  tool       xhcisnap %s, built %s\n",
            XHCISNAP_VERSION, XHCISNAP_BUILT);
+    say_hang("  drv file   ", "             ", "%s", driver_file_version());
     printf("  driver     %s, extension %lu bytes, schema %lu\n",
            flavour_text(extLast.Flavour), extLast.ExtensionBytes,
            extLast.SchemaVersion);

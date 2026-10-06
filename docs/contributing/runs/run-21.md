@@ -1,6 +1,6 @@
 # Phase 21 Record - 64-bit targets: Windows XP x64 and Server 2003 x64, then Vista x64 and Windows 7 x64
 
-The detail behind `docs/contributing/roadmap-phases-17-on.md`, "Phase 21 -
+The detail behind `docs/contributing/roadmap-miniport-updates.md`, "Phase 21 -
 64-bit Targets". The roadmap entry carries the goal, the status, the task list and
 the checkpoint; this file carries what each task did and what each reading
 said, moved here out of the roadmap on 2026-09-16 when the phase closed. Where
