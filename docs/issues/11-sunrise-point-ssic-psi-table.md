@@ -107,9 +107,10 @@ lookup a SuperSpeed hub's children are addressed with, or a hub would
 enumerate and its devices still fail. The Slot Context keeps the
 controller's raw ID. The invariant gains the exception in its own words.
 
-Still to read (35.2): the PSI tables of the P14s Gen 1 and the B490, from
-an `XHCISNAP` dump decoded against the matching offset table (`XHCIQUAL`
-prints the count, PSIC, but not the entries), so their immunity is explained rather than assumed (the likely
+Still to read (35.1's first step): the PSI tables of the E460, the P14s Gen 1
+and the B490, from `XHCIQUAL`'s read-only scan once it prints the entries
+(today it prints only the count, PSIC), so their immunity is explained
+rather than assumed (the likely
 answers - no table on the older B490, a table listing 4 on the P14s - are
 inference); and the E460 connector's physical USB 2.0 pairing - the hub's
 USB 2.0 half came up on port 1 where the driver's port map pairs 13 with 7 -
