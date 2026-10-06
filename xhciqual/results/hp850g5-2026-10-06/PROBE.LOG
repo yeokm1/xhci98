@@ -1,4 +1,4 @@
-XHCIQUAL 2.1.1.0 (build Oct  6 2026 21:19:06) - Win98/Win2000 USB qualification
+XHCIQUAL 2.1.1.0 (build Oct  6 2026 22:53:44) - USB host controller qualification
 Mode: PROBE-ONLY (read-only)
 Families: xHCI EHCI OHCI
 Found 2 selected USB host controller(s).
@@ -20,11 +20,11 @@ Found 2 selected USB host controller(s).
   MaxSlots 64  MaxIntrs 8  MaxPorts 18  Scratchpad 34  PAGESIZE 00000001
   HCCPARAMS2 00000000  FSC=0 U3C=0 CMC=0  (FSC=0: suspend/resume re-enumerates)
   USBLEGSUP: present
-  Protocol USB 2.0: ports 1-12, slot type 0, PSIC 3
+  Protocol USB 2.0 @8000: ports 1-12, slot type 0, PSIC 3
     PSI 000C0021  PSIV  1     12 Mb/s  symmetric  PFD 0  LP 0
     PSI 05DC0012  PSIV  2   1500 Kb/s  symmetric  PFD 0  LP 0
     PSI 01E00023  PSIV  3    480 Mb/s  symmetric  PFD 0  LP 0
-  Protocol USB 3.0: ports 13-18, slot type 0, PSIC 3
+  Protocol USB 3.0 @8020: ports 13-18, slot type 0, PSIC 3
     PSI 04E00121  PSIV  1   1248 Mb/s  symmetric  PFD 1  LP 0 (SuperSpeed)
     PSI 09C00122  PSIV  2   2496 Mb/s  symmetric  PFD 1  LP 0 (SuperSpeed)
     PSI 13800123  PSIV  3   4992 Mb/s  symmetric  PFD 1  LP 0 (SuperSpeed)
@@ -84,8 +84,8 @@ Found 2 selected USB host controller(s).
       8500: 002740C7 08100004 07185103 D30B2892
       8510: 49140F38 17595513 D71B6996 8A181F79
       8520: 279A5923 DB2BAA9A CB1C2FBA 37DB5D33
-      8530: DF3BEB9E 00003FFB A75FC9B1 00000000
-      8540: 0000B100 00000001 00000000 00000000
+      8530: DF3BEB9E 00003FFB A75FB530 00000000
+      8540: 0001F900 00000001 00000000 00000000
       8550: 00000001 00000000 00000000 00000001
       8560: 00000000 00000000 00000001 00000000
       8570: 00000000 00000001 00000000 00000000
@@ -143,11 +143,11 @@ Found 2 selected USB host controller(s).
   MaxSlots 64  MaxIntrs 8  MaxPorts 4  Scratchpad 34  PAGESIZE 00000001
   HCCPARAMS2 0000007C  FSC=1 U3C=0 CMC=0
   USBLEGSUP: present
-  Protocol USB 2.0: ports 1-2, slot type 0, PSIC 3
+  Protocol USB 2.0 @8000: ports 1-2, slot type 0, PSIC 3
     PSI 000C0021  PSIV  1     12 Mb/s  symmetric  PFD 0  LP 0
     PSI 05DC0012  PSIV  2   1500 Kb/s  symmetric  PFD 0  LP 0
     PSI 01E00023  PSIV  3    480 Mb/s  symmetric  PFD 0  LP 0
-  Protocol USB 3.1: ports 3-4, slot type 0, PSIC 2
+  Protocol USB 3.1 @8E28: ports 3-4, slot type 0, PSIC 2
     PSI 00050134  PSIV  4      5 Gb/s  symmetric  PFD 1  LP 0 (SuperSpeed)
     PSI 000A4135  PSIV  5     10 Gb/s  symmetric  PFD 1  LP 1 (SuperSpeedPlus)
   Port map:
@@ -231,7 +231,11 @@ Found 2 selected USB host controller(s).
       8920: 00000000 00000000 00000000 00000000
       8930: 00000000 00000000 00000000 00000000
       8940: 00000000
-    (dump bound reached, 32 capabilities / 256 dwords: the rest not recorded)
+    cap 8E28 ID   2 next  12  Supported Protocol, 6 of 12 dwords
+      8E28: 03010C02 20425355 20000203 00000000
+      8E38: 00050134 000A4135
+    (dump bound reached, 32 capabilities / 256 dwords: the rest not recorded,
+     except Supported Protocol and USB Legacy Support)
   FACT id=8086:15DB rev=02 bar=E9F00000 irq=11 pin=1 hciver=0110 csz=32 ac64=1 ppc=0 slots=64 intrs=8 ports=4 scratch=34 usb2ports=2 legsup=1 hcc2=0000007C fsc=1
 
 ---- Verdict for 8086:15DB ----
