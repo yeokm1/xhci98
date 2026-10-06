@@ -148,7 +148,7 @@ if errorlevel 1 (
     echo FAIL: -selftest-notes exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("port 13 look:  machine Empty, fed connect, link none; PORTSC CCS PED PLS 0, changes CSC PLC" "port 13 reset: attempt 0 came back enabled; PORTSC low 1203: speed ID 4" "ID 4 is unknown, by no mapping" "attempt 1 failed on the speed (no EP0 size for it); no retry follows" "port 13 end:   machine Failed" "port 13 look:  machine Failed, fed nothing" "ID 4 is SuperSpeed, by default ID, unlisted on a USB 3 table" "port 14 rate:  5000 Mbit/s" "Enable Slot completion 1 (Success), slot 5" "port 14 end:   machine Present" "port 15 quiet: its budget of 8 bursts is spent") do (
+for %%S in ("port 13 look:  machine Empty, fed connect, link none; PORTSC CCS PED PLS 0, changes CSC PLC" "port 13 reset: attempt 0 came back enabled; PORTSC low 1203: speed ID 4" "ID 4 is unknown, by no mapping" "attempt 1 failed on the speed (no EP0 size for it); no retry follows" "port 13 end:   machine Failed" "port 13 look:  machine Failed, fed nothing" "ID 4 is SuperSpeed, by default ID, unlisted on a USB 3 table" "port 14 rate:  5000 Mbit/s" "port  2 rate:  1.5 Mbit/s" "Enable Slot completion 1 (Success), slot 5" "port 14 end:   machine Present" "port 15 quiet: its budget of 8 bursts is spent") do (
     findstr /C:%%S "%BASE%.notes.log" > nul
     if errorlevel 1 (
         echo FAIL: the note decode does not say %%S
@@ -169,7 +169,7 @@ if errorlevel 1 (
     echo FAIL: -selftest-hcd exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("13  Failed      speed (no EP0 size)" "4  unknown (no mapping)" "notes 5 of 8, 2 refused" "14  Present     none" "4  SuperSpeed (default ID, unlisted on a USB 3 table)" "2 of 3 root ports shown" "SlotsEnabled               4" "PortSpeedSuper             1" "2 of 63 nonzero") do (
+for %%S in ("13  Failed      speed (no EP0 size)" "4  unknown (no mapping)" "notes 5 of 8, 2 refused" "14  Present     none" "4  SuperSpeed (default ID, unlisted on a USB 3 table)" "2 of 3 root ports shown" "SlotsEnabled               4" "PortSpeedSuper             1" "2 of 63 nonzero" "not a shape this build reads" "  17  Failed      speed (no EP0 size)" "1 of 2 root ports shown") do (
     findstr /C:%%S "%BASE%.hcd.log" > nul
     if errorlevel 1 (
         echo FAIL: the HCD region decode does not say %%S

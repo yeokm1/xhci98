@@ -275,7 +275,8 @@ ULONG XhciEnumAnswerCarries(ULONG parentSerial, ULONG answering,
  *                            table, 3 the USB 3 fallback of task 35.1)
  *   enum.port.rate   the rate that ID means:
  *                      31:24 port   23 SuperSpeedPlus
- *                      22:0  Mbit/s (0 when the group names none)
+ *                      22:0  units of 100 kbit/s (0 when the group
+ *                            names none; 7FFFFFh for a rate past it)
  *   enum.port.slot   Enable Slot's completion:
  *                      31:24 port   23:16 completion code (0 for a command
  *                            that never completed)

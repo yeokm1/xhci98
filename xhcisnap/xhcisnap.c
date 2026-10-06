@@ -1424,8 +1424,15 @@ static void enum_note_line(const char *line)
              (v >> 16) & 0xFF, enum_class_name((v >> 8) & 0xFF),
              enum_source_name(v & 0xFF));
     } else if (n == 4 && strncmp(kind, "rate", 4) == 0) {
-        comp("  port %2lu rate:  %lu Mbit/s%s\n", port, v & 0x007FFFFFUL,
-             (v & 0x00800000UL) != 0 ? ", SuperSpeedPlus" : "");
+        if ((v & 0x007FFFFFUL) % 10UL == 0) {
+            comp("  port %2lu rate:  %lu Mbit/s%s\n", port,
+                 (v & 0x007FFFFFUL) / 10UL,
+                 (v & 0x00800000UL) != 0 ? ", SuperSpeedPlus" : "");
+        } else {
+            comp("  port %2lu rate:  %lu.%lu Mbit/s%s\n", port,
+                 (v & 0x007FFFFFUL) / 10UL, (v & 0x007FFFFFUL) % 10UL,
+                 (v & 0x00800000UL) != 0 ? ", SuperSpeedPlus" : "");
+        }
     } else if (n == 4 && strncmp(kind, "slot", 4) == 0) {
         comp("  port %2lu slot:  attempt %lu, Enable Slot completion %lu%s, "
              "slot %lu\n",
@@ -1861,7 +1868,7 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
         headBytes < SNAP_HCD_HEAD_WORDS * 4 ||
         portBytes < SNAP_HCD_PORT_WORDS * 4 || (portBytes & 3UL) != 0 ||
         portsAt < headBytes || portsAt > bytes || ports > 255 ||
-        ports * portBytes > bytes - portsAt || countersAt > bytes ||
+        ports > (bytes - portsAt) / portBytes || countersAt > bytes ||
         counters > (bytes - countersAt) / 4) {
         comp("\nHCD region: version %lu, header %lu bytes, %lu ports of %lu "
              "bytes at +%lu,\n  %lu counters at +%lu, in %lu bytes - not a "
@@ -1873,6 +1880,9 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
 
     comp("\nroot ports, as the driver's enumeration holds them (HCD region "
          "version %lu):\n", version);
+    comp("  (read while the controller thread may be stepping them: one "
+         "record can mix two\n   enumeration steps, and the tear detector "
+         "does not cover this region)\n");
     comp("  port  state       cause                tries slot  ID  speed "
          "(meaning)\n");
     shown = 0;
@@ -1967,6 +1977,37 @@ static int selftest_hcd(void)
     put32(image, 32 + 3 * 64 + 39 * 4, 1);
     companion = NULL;
     print_hcd(image, sizeof(image));
+
+    /* Malformed: two records of 80000000h bytes, whose product wraps to 0
+     * and would pass a multiplied bound. Refused, nothing read. */
+    memset(image, 0, sizeof(image));
+    put32(image, 0, 1);
+    put32(image, 4, 32);
+    put32(image, 8, 2);
+    put32(image, 12, 0x80000000UL);
+    put32(image, 16, 32);
+    put32(image, 20, 0);
+    put32(image, 24, 32);
+    print_hcd(image, sizeof(image));
+
+    /* A later driver's longer record (80 bytes, words appended): walked by
+     * the header's record size, the known words read as before. */
+    memset(image, 0, sizeof(image));
+    put32(image, 0, 1);
+    put32(image, 4, 32);
+    put32(image, 8, 2);
+    put32(image, 12, 80);
+    put32(image, 16, 32);
+    put32(image, 20, 0);
+    put32(image, 24, 32 + 2 * 80);
+    put32(image, 28, 8);
+    base = 32 + 80;
+    put32(image, base + 0, 17);
+    put32(image, base + 4, 13);
+    put32(image, base + 8, 7);
+    put32(image, base + 20, 4);
+    put32(image, base + 64, 0xDEADBEEFUL);
+    print_hcd(image, 32 + 2 * 80);
     return 0;
 }
 
@@ -1993,7 +2034,8 @@ static int selftest_notes(void)
         "enum.port.look=0DD00003\r\n"
         "enum.port.reset=0E801203\r\n"
         "enum.port.speed=0E040403\r\n"
-        "enum.port.rate=0E001388\r\n"
+        "enum.port.rate=0E00C350\r\n"
+        "enum.port.rate=0200000F\r\n"
         "enum.port.slot=0E010005\r\n"
         "enum.port.end=0E0A0000\r\n"
         "enum.port.quiet=0F000008\r\n";

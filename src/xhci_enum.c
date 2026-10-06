@@ -544,8 +544,15 @@ ULONG XhciEnumNoteSpeed(ULONG port, ULONG psiv, ULONG speedClass,
 
 ULONG XhciEnumNoteRate(ULONG port, ULONG kbps, ULONG plus)
 {
-    return ((port & 0xFFUL) << 24) | (plus ? 0x00800000UL : 0UL) |
-           ((kbps / 1000UL) & 0x007FFFFFUL);
+    ULONG units;
+
+    /* 100 kbit/s units, so Low Speed's 1.5 Mbit/s is not read as 1 and 20
+     * Gbit/s (200000) still fits; a rate past the field reads its top. */
+    units = kbps / 100UL;
+    if (units > 0x007FFFFFUL) {
+        units = 0x007FFFFFUL;
+    }
+    return ((port & 0xFFUL) << 24) | (plus ? 0x00800000UL : 0UL) | units;
 }
 
 ULONG XhciEnumNoteSlot(ULONG port, ULONG code, ULONG attempt, ULONG slotId)

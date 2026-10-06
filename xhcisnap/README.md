@@ -258,7 +258,7 @@ number, as in the PORTSC table.
 | `enum.port.look` | an inspection of the port fed its machine a connect or disconnect, asked for a warm reset or gave the link up, or found the machine Failed (once, until something is fed again) | port `<< 24` \| machine state before it `<< 20` \| link action `<< 16` \| feed `<< 14` (bit 14 disconnect, bit 15 connect) \| PORTSC change bits 23:17 `<< 7` \| PLS `<< 3` \| PR `<< 2` \| PED `<< 1` \| CCS |
 | `enum.port.reset` | the machine reset the port | port `<< 24` \| ok `<< 23` \| attempt `<< 16` (0 the first) \| PORTSC bits 15:0 as the reset left it (speed ID at 13:10) |
 | `enum.port.speed` | the same, the reset ok | port `<< 24` \| raw speed ID `<< 16` \| class `<< 8` (0 unknown, 1 Low, 2 Full, 3 High, 4 SuperSpeed) \| where the meaning came from (0 none, 1 listed in the protocol's PSI table, 2 the default IDs of a protocol with no table, 3 the default ID for an ID 4 to 7 a USB 3 table does not list - task 35.1) |
-| `enum.port.rate` | the same | port `<< 24` \| SuperSpeedPlus `<< 23` \| Mbit/s (0 when the protocol names no rate for the ID) |
+| `enum.port.rate` | the same | port `<< 24` \| SuperSpeedPlus `<< 23` \| the rate in units of 100 kbit/s (0 when the protocol names no rate for the ID, 7FFFFFh for one past the field), printed in Mbit/s |
 | `enum.port.slot` | Enable Slot completed, or never did | port `<< 24` \| completion code `<< 16` (0 never completed) \| attempt `<< 8` \| Slot ID the controller gave |
 | `enum.port.fail` | an attempt failed | port `<< 24` \| cause `<< 16` \| attempt `<< 8` \| 1 when no retry follows |
 | `enum.port.end` | a run of the machine that reset the port ended | port `<< 24` \| state `<< 16` \| cause `<< 8` \| retries used |

@@ -848,16 +848,20 @@ static void test_notes(void)
                                XHCI_PSI_SOURCE_LISTED),
              0x01030301UL, "speed: High Speed, listed");
 
-    CHECK_EQ(XhciEnumNoteRate(13, 5000000UL, 0), 0x0D001388UL,
-             "rate: 5000 Mbit/s");
-    CHECK_EQ(XhciEnumNoteRate(16, 10000000UL, 1), 0x10802710UL,
+    CHECK_EQ(XhciEnumNoteRate(13, 5000000UL, 0), 0x0D00C350UL,
+             "rate: 5 Gbit/s is 50000 units of 100 kbit/s");
+    CHECK_EQ(XhciEnumNoteRate(16, 10000000UL, 1), 0x108186A0UL,
              "rate: 10 Gbit/s, SuperSpeedPlus");
-    CHECK_EQ(XhciEnumNoteRate(1, 480000UL, 0), 0x010001E0UL,
+    CHECK_EQ(XhciEnumNoteRate(18, 20000000UL, 1), 0x12830D40UL,
+             "rate: 20 Gbit/s fits");
+    CHECK_EQ(XhciEnumNoteRate(1, 480000UL, 0), 0x010012C0UL,
              "rate: 480 Mbit/s");
-    CHECK_EQ(XhciEnumNoteRate(1, 999UL, 0), 0x01000000UL,
-             "rate: below 1 Mbit/s reads 0");
-    CHECK_EQ(XhciEnumNoteRate(1, 0xFFFFFFFFUL, 0), 0x01000000UL | 4294967UL,
-             "rate: the largest kbit/s still fits 23 bits");
+    CHECK_EQ(XhciEnumNoteRate(2, 1500UL, 0), 0x0200000FUL,
+             "rate: Low Speed's 1.5 Mbit/s is 15, not truncated to 1");
+    CHECK_EQ(XhciEnumNoteRate(1, 99UL, 0), 0x01000000UL,
+             "rate: below 100 kbit/s reads 0");
+    CHECK_EQ(XhciEnumNoteRate(1, 0xFFFFFFFFUL, 0), 0x017FFFFFUL,
+             "rate: past the field reads its top, never wraps");
 
     CHECK_EQ(XhciEnumNoteSlot(13, 1, 0, 5), 0x0D010005UL,
              "slot: Success, slot 5");
