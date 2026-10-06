@@ -378,6 +378,14 @@ typedef struct _XHCI_TOL_DEAD {
 ULONG XhciTolDeadStep(PXHCI_TOL_DEAD dead, ULONG tolerance, ULONG admitted,
                       ULONG allOnes, ULONG startGen, ULONG now);
 
+/* 1 when an owed recovery waits: tolerance on, the containment step's own
+ * admission held, and USBSTS read all-ones. A reinitialization cannot run
+ * through a window that stopped decoding, and each attempt would begin a
+ * new start generation that restamps the episode, so the recovery is
+ * deferred, uncharged, until the window answers again or the controller is
+ * contained. */
+ULONG XhciTolRecoverDefer(ULONG tolerance, ULONG admitted, ULONG allOnes);
+
 /*
  * The counters a user can send (35-T.8, record 17 section 4.8), in the
  * extension the snapshot carries. Never gated by XhciTolerance: a dump

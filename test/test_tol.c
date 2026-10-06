@@ -629,6 +629,43 @@ static void test_dead(void)
     CHECK_EQ(d.Armed, 0, "no stamp at 0");
 }
 
+/* A recovery owed when the window stops decoding - a command timed out on
+ * it - is deferred, so the episode keeps its stamp and the controller is
+ * contained; each pass is the thread's order, recovery then containment,
+ * and a recovery begun is a new start generation. */
+static void test_dead_recover(void)
+{
+    XHCI_TOL_DEAD d;
+    ULONG c = XHCI_TOL_CONTAIN_TICKS;
+    ULONG gen = 7;
+    ULONG now;
+    ULONG contained = 0;
+
+    CHECK_EQ(XhciTolRecoverDefer(1, 1, 1), 1, "all-ones defers");
+    CHECK_EQ(XhciTolRecoverDefer(1, 1, 0), 0, "a good read recovers");
+    CHECK_EQ(XhciTolRecoverDefer(1, 0, 1), 0, "not admitted recovers");
+    CHECK_EQ(XhciTolRecoverDefer(0, 1, 1), 0, "tolerance 0 recovers");
+
+    d.Armed = 0;
+    for (now = 100; now <= 100 + c && !contained; now++) {
+        if (!XhciTolRecoverDefer(1, 1, 1)) {
+            gen++;
+        }
+        contained = XhciTolDeadStep(&d, 1, 1, 1, gen, now);
+    }
+    CHECK_EQ(contained, 1, "contained with a recovery owed");
+    CHECK_EQ(gen, 7, "no recovery begun");
+
+    /* What the deferral prevents: a recovery each pass restamps. */
+    d.Armed = 0;
+    contained = 0;
+    for (now = 100; now <= 100 + c + c; now++) {
+        gen++;
+        contained |= XhciTolDeadStep(&d, 1, 1, 1, gen, now);
+    }
+    CHECK_EQ(contained, 0, "never contained without it");
+}
+
 /* 35-T.8: the dump's terminal reason, each latch at its boundary. */
 static void test_terminal(void)
 {
@@ -711,6 +748,7 @@ int main(void)
     test_port();
     test_window();
     test_dead();
+    test_dead_recover();
     test_terminal();
     test_start();
 

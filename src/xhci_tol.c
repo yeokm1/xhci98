@@ -529,6 +529,11 @@ ULONG XhciTolDeadStep(PXHCI_TOL_DEAD dead, ULONG tolerance, ULONG admitted,
     return XhciTolElapsed(now, dead->Stamp, XHCI_TOL_CONTAIN_TICKS);
 }
 
+ULONG XhciTolRecoverDefer(ULONG tolerance, ULONG admitted, ULONG allOnes)
+{
+    return (tolerance && admitted && allOnes) ? 1UL : 0UL;
+}
+
 /* An even number of ULONGs, so XHCI_EXTENSION's TrailingPad keeps its
  * meaning when this block is appended to it. */
 typedef char xhciTolRootPorts[XHCI_TOL_ROOT_PORTS == XHCI_MAX_ROOT_PORTS ?

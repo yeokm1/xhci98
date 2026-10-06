@@ -658,6 +658,33 @@ VOID HcdThreadWake(PHCD_CONTROLLER hc)
 }
 
 /*
+ * The all-ones containment's admission (hcdContain): tolerance on, not yet
+ * contained, a started controller in D0, outside a power transition, with
+ * PnP saying it is present. HcInfoStatus is not asked: a recovery whose
+ * reinitialization met the dead window set it bad at its top and never got
+ * as far as decoding again, but the layout the start validated is still in
+ * HcInfo, which only a whole validated decode replaces (XhciDeriveHcInfo),
+ * and STARTED says the start validated one. Asking it would let a recovery
+ * shut the containment out for the rest of the lifetime.
+ * IRQL: DISPATCH_LEVEL, controller lock held.
+ */
+static ULONG hcdContainAdmitted(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+
+    ext = &hc->Hc;
+    return (ext->Tol.Stats.Tolerance && !ext->Tol.Unreadable &&
+            (ext->Flags & XHCI_EXT_FLAG_STARTED) != 0 &&
+            (ext->Flags & XHCI_EXT_FLAG_SUSPENDED) == 0 &&
+            hc->Common.DevicePower == PowerDeviceD0 &&
+            !hc->SuspendedInD0 &&
+            hc->Common.PnpState != HCD_PNP_SURPRISE_REMOVED &&
+            hc->Common.PnpState != HCD_PNP_REMOVED)
+               ? 1UL
+               : 0UL;
+}
+
+/*
  * The in-place recovery, as the miniport's recovery timer callback ran it,
  * but from this thread instead of a usbport timer DPC: the request is taken
  * under the lock, the recovery itself at DISPATCH_LEVEL, because
@@ -671,6 +698,8 @@ static VOID hcdRecover(PHCD_CONTROLLER hc)
     KIRQL raised;
     ULONG go;
     ULONG ok;
+    ULONG admitted;
+    ULONG allOnes;
 
     ext = &hc->Hc;
     go = 0;
@@ -687,8 +716,27 @@ static VOID hcdRecover(PHCD_CONTROLLER hc)
         (ext->Flags & XHCI_EXT_FLAG_SUSPENDED) == 0 &&
         hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0 &&
         ext->RecoveryFailuresConsecutive < XHCI_RECOVERY_MAX_ATTEMPTS) {
-        ext->RecoveryRequested = 0;
         go = 1;
+        /* 35-T.6: a request raised on a window that stopped decoding - a
+         * command that timed out on it - is left owed, uncharged, while
+         * all-ones stands and the containment would be admitted: begun, it
+         * would fail on the dead capability registers, and its new start
+         * generation would restamp the all-ones episode on every pass, so
+         * the containment would never run (XhciTolRecoverDefer). */
+        admitted = hcdContainAdmitted(hc);
+        allOnes = 0;
+        if (admitted) {
+            allOnes = (XhciReadOp(ext, XHCI_OP_USBSTS) == 0xFFFFFFFFUL)
+                          ? 1UL
+                          : 0UL;
+        }
+        if (XhciTolRecoverDefer(ext->Tol.Stats.Tolerance, admitted,
+                                allOnes)) {
+            go = 0;
+        }
+    }
+    if (go) {
+        ext->RecoveryRequested = 0;
         /* 35-T.6's window (record 17 section 4.6), charged as a recovery
          * begins, retries included: a fourth inside ten minutes is not
          * begun, and the request is dropped. Window.Refused, cleared only
@@ -859,16 +907,7 @@ static VOID hcdContain(PHCD_CONTROLLER hc)
     allOnes = 0;
     HcdPowerGateEnter(hc);
     XhciControllerLockAcquire(ext, &oldIrql);
-    admitted = (ext->Tol.Stats.Tolerance && !ext->Tol.Unreadable &&
-                ext->HcInfoStatus == XHCI_HC_OK &&
-                (ext->Flags & XHCI_EXT_FLAG_STARTED) != 0 &&
-                (ext->Flags & XHCI_EXT_FLAG_SUSPENDED) == 0 &&
-                hc->Common.DevicePower == PowerDeviceD0 &&
-                !hc->SuspendedInD0 &&
-                hc->Common.PnpState != HCD_PNP_SURPRISE_REMOVED &&
-                hc->Common.PnpState != HCD_PNP_REMOVED)
-                   ? 1UL
-                   : 0UL;
+    admitted = hcdContainAdmitted(hc);
     if (admitted) {
 #if defined(XHCI_FLAVOUR_QEMU)
         allOnes = (HcdInjUsbsts(hc, XhciReadOp(ext, XHCI_OP_USBSTS)) ==
