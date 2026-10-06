@@ -4299,6 +4299,54 @@ static VOID hcdSettleUndefer(PHCD_CONTROLLER hc)
 }
 
 /*
+ * The devices an event left unusable (hcd_dev.c, hcdSlotFatalMark): Table
+ * 6-90's recovery for Incompatible Device Error is a Disable Slot (p.468),
+ * so a published device leaves as CYCLE_PORT takes it - teardown, Disable
+ * Slot, PDO reported missing - and enumerates afresh, through HcdEnumCycle,
+ * whose request the CYCLE_PORT step of this same pass takes. A device not
+ * yet published is the enumeration's own: the step the code failed already
+ * disables its slot before any retry. A device already departing is
+ * dropped by that departure. At every XhciTolerance value, and charged to
+ * no budget. Thread only, powered, root hub started.
+ */
+static VOID hcdSlotFatalService(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+    PHCD_USB_DEVICE dev;
+    PHCD_PORT p;
+    KIRQL oldIrql;
+    ULONG fatal;
+    ULONG i;
+
+    ext = &hc->Hc;
+    for (i = 1; i <= XHCI_MAX_SLOTS && !hcdHalted(hc); i++) {
+        dev = hc->SlotDevice[i];
+        if (dev == NULL) {
+            continue;
+        }
+        XhciControllerLockAcquire(ext, &oldIrql);
+        fatal = dev->SlotFatal;
+        dev->SlotFatal = 0;
+        XhciControllerLockRelease(ext, oldIrql);
+        if (!fatal) {
+            continue;
+        }
+        p = (dev->Location != 0 && dev->Location <= HCD_PORT_COUNT)
+                ? &hc->Ports[dev->Location - 1]
+                : NULL;
+        if (p == NULL || p->Device != dev || dev->Gone || dev->Abandoned ||
+            dev->Pdo == NULL || dev->PdoGroup == 0) {
+            continue;
+        }
+        ext->IncompatibleDeviceTeardowns++;
+        XhciLogNote(ext, "slot.fatal.cycle", (p->PortId << 8) | i);
+        XHCI_DBG_VALUE("hcd: slot-fatal code, device cycled, location",
+                       p->PortId);
+        HcdEnumCycle(hc, p->PortId, dev->PdoGroup);
+    }
+}
+
+/*
  * 35-T.3 and 35-T.4's thread step (design record 17 section 4.3): each
  * device the event path marked (HcdTolCycleMark), its mark read - a halt
  * with no TD confirmed by its endpoint's context, a stale one costing that
@@ -4485,8 +4533,10 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
         hcdHoldService(hc);
     }
     if (!hcdHalted(hc) && hc->RootHubStarted && hc->ScratchVa != NULL) {
-        /* 35-T.3/4's cycles, before the CYCLE_PORT requests are taken
-         * below, so a published device's cycle runs in this pass. */
+        /* The slot-fatal teardowns and 35-T.3/4's cycles, before the
+         * CYCLE_PORT requests are taken below, so a published device's
+         * cycle runs in this pass. */
+        hcdSlotFatalService(hc);
         hcdCycleService(hc);
     }
 

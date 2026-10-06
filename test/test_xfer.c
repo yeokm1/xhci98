@@ -269,6 +269,22 @@ static void test_completion_code_mapping(void)
     expect_slot_fatal(5, 0, "and TRB Error is neither");
     expect_slot_fatal(192, 0, "nor a vendor error");
 
+    /*
+     * The HCD's two routes into a device's teardown and Disable Slot - a
+     * Transfer Event's code, and a matched Command Completion Event's - both
+     * ask XhciXferSlotFatal, so the whole byte is swept: 22 and nothing else,
+     * the controller-fatal codes included, takes a device down.
+     */
+    {
+        ULONG cc;
+
+        for (cc = 0; cc <= 255; cc++) {
+            CHECK_EQ(XhciXferSlotFatal(cc),
+                     cc == XHCI_CC_INCOMPATIBLE_DEVICE ? 1UL : 0UL,
+                     "only Incompatible Device is slot-fatal");
+        }
+    }
+
     /* Everything else: unassigned, isoch-only, command-only, or a code Table
      * 6-90 gives to an event family that is not a Transfer Event. */
     expect_code_rejected(0, "Invalid");

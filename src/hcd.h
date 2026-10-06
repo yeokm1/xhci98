@@ -400,6 +400,10 @@ typedef struct _HCD_USB_DEVICE {
      * Ep0Abandoned: and a TD of it was outstanding, so the scratch is held
      * (ScratchHeld) until the slot is taken back. Thread only. */
     XHCI_TOL_MARK CycleMark;
+    /* An event on the slot carried a slot-fatal code (XhciXferSlotFatal):
+     * set by the event DPC, taken by the thread (hcdSlotFatalService),
+     * both under the controller lock. */
+    ULONG SlotFatal;
     ULONG CycleAbandon;
     ULONG Ep0Abandoned;
     ULONG Ep0Halted;        /* a URB's control transfer stalled: the

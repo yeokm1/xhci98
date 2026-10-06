@@ -296,6 +296,16 @@ ULONG XhciXferCodeInfo(ULONG completionCode, PXHCI_XFER_CODE info)
     return XHCI_XFER_BAD_PARAM;
 }
 
+/* xhci_xfer.h. The table decides, as the restore's drain asks it to: no
+ * list of codes here. */
+ULONG XhciXferSlotFatal(ULONG completionCode)
+{
+    XHCI_XFER_CODE info;
+
+    return (XhciXferCodeInfo(completionCode, &info) == XHCI_XFER_OK &&
+            info.SlotFatal != 0) ? 1UL : 0UL;
+}
+
 /* ------------------------------------------------------------------ */
 /* 6-A.1: building a control transfer                                  */
 /* ------------------------------------------------------------------ */

@@ -70,13 +70,40 @@ VOID XhciSlotCommandLost(PXHCI_EXTENSION ext)
     (VOID)KeSetEvent(&hc->CmdDoneEvent, IO_NO_INCREMENT, FALSE);
 }
 
-/* IRQL: DISPATCH_LEVEL. */
+/*
+ * A slot-fatal code on an event naming slotId (Table 6-90, p.468): the
+ * device on it is marked for the thread, which takes it down with a Disable
+ * Slot and lets it enumerate afresh (hcd_enum.c, hcdSlotFatalService). Not
+ * a tolerance behaviour - the specification's own recovery - so it is
+ * neither gated by XhciTolerance nor charged to a location's budget. IRQL:
+ * DISPATCH_LEVEL, controller lock held.
+ */
+static VOID hcdSlotFatalMark(PHCD_CONTROLLER hc, ULONG slotId, ULONG cc)
+{
+    PHCD_USB_DEVICE dev;
+
+    hc->SlotFatalEvents++;
+    if (slotId < 1 || slotId > XHCI_MAX_SLOTS) {
+        return;
+    }
+    dev = hc->SlotDevice[slotId];
+    if (dev == NULL) {
+        return;
+    }
+    if (!dev->SlotFatal) {
+        XhciLogNoteLocked(&hc->Hc, "slot.fatal", (slotId << 8) | cc);
+    }
+    dev->SlotFatal = 1;
+    HcdThreadWake(hc);
+}
+
+/* The command engine matched the event, so its Slot ID is the command's
+ * (xhci_cmd.c). IRQL: DISPATCH_LEVEL, controller lock held. */
 VOID XhciSlotCommandSlotFatal(PXHCI_EXTENSION ext, ULONG completionCode,
                               ULONG control)
 {
-    UNREFERENCED_PARAMETER(completionCode);
-    UNREFERENCED_PARAMETER(control);
-    HcdControllerFromExt(ext)->SlotFatalEvents++;
+    hcdSlotFatalMark(HcdControllerFromExt(ext), XHCI_TRB_GET_SLOT_ID(control),
+                     completionCode);
 }
 
 /*
@@ -413,6 +440,12 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
     slotId = XHCI_TRB_GET_SLOT_ID(event->Control);
     dci = XHCI_TRB_GET_EP_ID(event->Control);
     hcdTolCountEvent(ext, slotId, dci, XHCI_TRB_GET_COMPLETION(event->Status));
+    /* The slot's verdict whatever becomes of the event below, which still
+     * retires its TD as the engine reads the code: an endpoint recovery
+     * leaves the slot exactly as the controller said it cannot use it. */
+    if (XhciXferSlotFatal(XHCI_TRB_GET_COMPLETION(event->Status))) {
+        hcdSlotFatalMark(hc, slotId, XHCI_TRB_GET_COMPLETION(event->Status));
+    }
     endpoint = NULL;
     pipe = hcdEventPipe(hc, slotId, dci);
     if (pipe != NULL &&

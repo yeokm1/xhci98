@@ -216,6 +216,15 @@ typedef struct _XHCI_XFER_CODE {
  */
 ULONG XhciXferCodeInfo(ULONG completionCode, PXHCI_XFER_CODE info);
 
+/*
+ * 1 when an event carrying `completionCode` - a Transfer Event, or a Command
+ * Completion Event the command engine matched - leaves its slot unusable, so
+ * the device on it is torn down and its slot disabled (Table 6-90, p.468:
+ * Incompatible Device Error is "fatal as far as the Slot is concerned.
+ * Software shall issue a Disable Slot Command to recover"); 0 otherwise.
+ */
+ULONG XhciXferSlotFatal(ULONG completionCode);
+
 /* ------------------------------------------------------------------ */
 /* 6-A.1: building a control transfer                                  */
 /* ------------------------------------------------------------------ */
