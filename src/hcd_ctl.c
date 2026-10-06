@@ -226,8 +226,8 @@ ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc)
  */
 static ULONG hcdPswRead(PVOID context, ULONG offset, PULONG value)
 {
-    return HcdSvcConfigSpace((PXHCI_EXTENSION)context, TRUE, value, offset,
-                             sizeof(ULONG)) == MP_STATUS_SUCCESS;
+    return HcdSvcConfigSpace(&((PHCD_CONTROLLER)context)->Hc, TRUE, value,
+                             offset, sizeof(ULONG)) == MP_STATUS_SUCCESS;
 }
 
 static ULONG hcdPswWrite(PVOID context, ULONG offset, ULONG value)
@@ -235,132 +235,177 @@ static ULONG hcdPswWrite(PVOID context, ULONG offset, ULONG value)
     ULONG data;
 
     data = value;
-    return HcdSvcConfigSpace((PXHCI_EXTENSION)context, FALSE, &data, offset,
-                             sizeof(ULONG)) == MP_STATUS_SUCCESS;
+    return HcdSvcConfigSpace(&((PHCD_CONTROLLER)context)->Hc, FALSE, &data,
+                             offset, sizeof(ULONG)) == MP_STATUS_SUCCESS;
+}
+
+static ULONG hcdPswValue(PVOID context, PULONG value)
+{
+    return NT_SUCCESS(hcdReadDword((PHCD_CONTROLLER)context,
+                                   HCD_VALUE_PORT_SWITCH, value));
 }
 
 static VOID hcdPswIo(PHCD_CONTROLLER hc, PXHCI_PSW_IO io)
 {
     io->Read = hcdPswRead;
     io->Write = hcdPswWrite;
-    io->Context = &hc->Hc;
+    io->Value = hcdPswValue;
+    io->Context = hc;
+}
+
+/* A route that ran: counted and logged. IRQL: PASSIVE_LEVEL. */
+static VOID hcdPswRouted(PHCD_CONTROLLER hc, const XHCI_PSW_STATE *st)
+{
+    PXHCI_EXTENSION ext;
+
+    ext = &hc->Hc;
+    hc->PswRoutes++;
+    if (st->Step != XHCI_PSW_DONE) {
+        hc->PswFailures++;
+    }
+    XhciLogNote(ext, "psw.usb3prm", st->Usb3Mask);
+    XhciLogNote(ext, "psw.usb3pssen", st->Usb3Now);
+    XhciLogNote(ext, "psw.xusb2prm", st->Usb2Mask);
+    XhciLogNote(ext, "psw.xusb2pr", st->Usb2Now);
+    XhciLogNote(ext, "psw.route.step", st->Step);
+    XhciLogNote(ext, "psw.route.written", st->Written);
+    XHCI_DBG_VALUE("hcd: port switchover, USB3_PSSEN now", st->Usb3Now);
+    XHCI_DBG_VALUE("hcd: port switchover, XUSB2PR now", st->Usb2Now);
+}
+
+/* A release that acted on a nonempty set: counted and logged.
+ * IRQL: PASSIVE_LEVEL. */
+static VOID hcdPswReleased(PHCD_CONTROLLER hc, const XHCI_PSW_STATE *st)
+{
+    PXHCI_EXTENSION ext;
+
+    ext = &hc->Hc;
+    hc->PswReleases++;
+    if (st->Step != XHCI_PSW_DONE) {
+        hc->PswFailures++;
+    }
+    XhciLogNote(ext, "psw.release.usb3pssen", st->Usb3Now);
+    XhciLogNote(ext, "psw.release.xusb2pr", st->Usb2Now);
+    XhciLogNote(ext, "psw.release.step", st->Step);
+    XHCI_DBG_VALUE("hcd: port switchover released, step", st->Step);
 }
 
 /*
- * Every switchable connector to xHCI, when this start found the mux and
- * the switch on (PswOn). At each start before XhciInitController, as Linux
- * routes before the controller's reset, and at each return to D0 before
- * the resume, since firmware reprograms the routing across standby.
+ * Every switchable connector to xHCI again, when this start decided to
+ * route (PswLife.On): at each return to D0 before the resume, since
+ * firmware reprograms the routing across standby. What it writes joins
+ * the lifetime's set, and a failed route takes nothing out of it.
  * IRQL: PASSIVE_LEVEL.
  */
 VOID HcdPswRoute(PHCD_CONTROLLER hc)
 {
-    PXHCI_EXTENSION ext;
     XHCI_PSW_IO io;
     XHCI_PSW_STATE st;
 
-    if (!hc->PswOn) {
-        return;
-    }
-    ext = &hc->Hc;
     hcdPswIo(hc, &io);
-    (VOID)XhciPswRoute(&io, &st);
-    hc->PswRoutes++;
-    if (st.Step != XHCI_PSW_DONE) {
-        hc->PswFailures++;
+    if (XhciPswLifeResume(&io, &hc->PswLife, &st)) {
+        hcdPswRouted(hc, &st);
     }
-    XhciLogNote(ext, "psw.usb3prm", st.Usb3Mask);
-    XhciLogNote(ext, "psw.usb3pssen", st.Usb3Now);
-    XhciLogNote(ext, "psw.xusb2prm", st.Usb2Mask);
-    XhciLogNote(ext, "psw.xusb2pr", st.Usb2Now);
-    XhciLogNote(ext, "psw.route.step", st.Step);
-    XHCI_DBG_VALUE("hcd: port switchover, USB3_PSSEN now", st.Usb3Now);
-    XHCI_DBG_VALUE("hcd: port switchover, XUSB2PR now", st.Usb2Now);
 }
 
 /*
- * Every connector back to EHCI, as Linux's usb_disable_xhci_ports: at the
- * stop once the controller has halted, at a refused start, and at the D3 of
- * a system shutdown, where Linux does it against a Panther Point, Lynx
- * Point-LP or Wildcat Point-LP machine powering itself back on. Done on
- * every gated controller here, so a stopped or removed driver never leaves the connectors on
- * an xHCI nothing drives. IRQL: PASSIVE_LEVEL.
+ * The registers this lifetime's routes wrote, and no other, back to
+ * EHCI, as Linux's usb_disable_xhci_ports: at the D3 of a system shutdown,
+ * where Linux does it against a Panther Point, Lynx Point-LP or Wildcat
+ * Point-LP machine powering itself back on. The set is kept, so a stop
+ * that follows releases it again. IRQL: PASSIVE_LEVEL.
  */
 VOID HcdPswRelease(PHCD_CONTROLLER hc)
 {
-    PXHCI_EXTENSION ext;
     XHCI_PSW_IO io;
     XHCI_PSW_STATE st;
 
-    if (!hc->PswOn) {
+    if (!hc->PswLife.On) {
         return;
     }
-    ext = &hc->Hc;
+    XhciLogNote(&hc->Hc, "psw.release.written", hc->PswLife.Written);
     hcdPswIo(hc, &io);
-    (VOID)XhciPswRelease(&io, &st);
-    hc->PswReleases++;
-    if (st.Step != XHCI_PSW_DONE) {
-        hc->PswFailures++;
+    if (XhciPswLifeRelease(&io, &hc->PswLife, &st)) {
+        hcdPswReleased(hc, &st);
     }
-    XhciLogNote(ext, "psw.release.usb3pssen", st.Usb3Now);
-    XhciLogNote(ext, "psw.release.xusb2pr", st.Usb2Now);
-    XhciLogNote(ext, "psw.release.step", st.Step);
-    XHCI_DBG_VALUE("hcd: port switchover released, step", st.Step);
 }
 
 /*
- * The start's decision, then its route. The gate reads PCI offset 0
- * itself because XhciInitController, which records it, runs after; on any
- * other controller (QEMU's 1B36:000D among them) no register past the
- * header is read or written, and psw.gate 0 says so. IRQL: PASSIVE_LEVEL.
+ * The same release at the stop once the controller has halted, and at a
+ * refused start, then the lifetime ends: so a stopped or removed driver
+ * never leaves the connectors on an xHCI nothing drives, and the next
+ * start inherits nothing. IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdPswEnd(PHCD_CONTROLLER hc)
+{
+    XHCI_PSW_IO io;
+    XHCI_PSW_STATE st;
+
+    if (hc->PswLife.On) {
+        XhciLogNote(&hc->Hc, "psw.release.written", hc->PswLife.Written);
+    }
+    hcdPswIo(hc, &io);
+    if (XhciPswLifeEnd(&io, &hc->PswLife, &st)) {
+        hcdPswReleased(hc, &st);
+    }
+}
+
+/*
+ * The start's decision, then its route, before XhciInitController as
+ * Linux routes before the controller's reset. The decision reads PCI
+ * offset 0 itself because XhciInitController, which records it, runs
+ * after; on another vendor's controller (QEMU's 1B36:000D among them) no
+ * register past the header is read or written and the value is not read,
+ * and psw.gate 0 says so. psw.mode is the value in effect: 2 on an
+ * unlisted Intel part is the bypass, at the user's own risk (record 16
+ * section 4a). IRQL: PASSIVE_LEVEL.
  */
 static VOID hcdPswStart(PHCD_CONTROLLER hc)
 {
     PXHCI_EXTENSION ext;
-    ULONG id;
-    ULONG subsystem;
-    ULONG value;
-    NTSTATUS status;
+    PXHCI_PSW_LIFE life;
+    XHCI_PSW_IO io;
+    XHCI_PSW_STATE st;
+    ULONG routed;
 
     ext = &hc->Hc;
-    hc->PswOn = 0;
-    id = 0;
-    if (!hcdPswRead(ext, XHCI_PCI_VENDOR_DEVICE, &id)) {
+    life = &hc->PswLife;
+    hcdPswIo(hc, &io);
+    routed = XhciPswLifeStart(&io, life, &st);
+
+    if (life->Decision == XHCI_PSW_DECIDE_ID_UNREAD) {
         XhciLogNote(ext, "psw.pci.unread", 1);
         return;
     }
-    XhciLogNote(ext, "psw.gate", XhciPswGate(id));
-    if (!XhciPswGate(id)) {
-        XHCI_DBG_TEXT("hcd: port switchover: not an Intel 7/8/9-series "
-                      "xHCI, no config write");
+    XhciLogNote(ext, "psw.gate", XhciPswGate(life->Id));
+    if (life->Decision == XHCI_PSW_DECIDE_NOT_INTEL) {
+        XHCI_DBG_TEXT("hcd: port switchover: not an Intel xHCI, no config "
+                      "write");
         return;
     }
-
-    value = 0;
-    status = hcdReadDword(hc, HCD_VALUE_PORT_SWITCH, &value);
-    XhciLogNote(ext, "psw.value.found", NT_SUCCESS(status) ? 1 : 0);
-    XhciLogNote(ext, "psw.value", NT_SUCCESS(status) ? value : 0);
-    if (!XhciPswEnabled(NT_SUCCESS(status), value)) {
-        XHCI_DBG_TEXT("hcd: port switchover: XhciIntelPortSwitch is 0, "
+    XhciLogNote(ext, "psw.value.found", life->Found);
+    XhciLogNote(ext, "psw.value", life->Value);
+    XhciLogNote(ext, "psw.mode", life->Mode);
+    if (life->Decision == XHCI_PSW_DECIDE_OFF) {
+        XHCI_DBG_TEXT("hcd: port switchover: off for this controller, "
                       "routing left as firmware set it");
         return;
     }
-
-    /* The exemption holds only on a reading: a subsystem id that could not
-     * be read is no evidence the board is not the one that cannot switch
-     * (Codex review of 34.3, round 1). */
-    subsystem = 0;
-    if (!hcdPswRead(ext, XHCI_PSW_PCI_SUBSYSTEM, &subsystem)) {
+    if (life->Decision == XHCI_PSW_DECIDE_BOARD_UNREAD) {
         XhciLogNote(ext, "psw.board.unread", 1);
         return;
     }
-    if (XhciPswBoardRefused(subsystem)) {
-        XhciLogNote(ext, "psw.board.refused", subsystem);
+    if (life->Decision == XHCI_PSW_DECIDE_BOARD_REFUSED) {
+        XhciLogNote(ext, "psw.board.refused", life->Subsystem);
         return;
     }
-
-    hc->PswOn = 1;
-    HcdPswRoute(hc);
+    if (life->Mode == XHCI_PSW_MODE_BYPASS) {
+        XHCI_DBG_TEXT("hcd: port switchover: XhciIntelPortSwitch 2, the "
+                      "device-id gate bypassed");
+    }
+    if (routed) {
+        hcdPswRouted(hc, &st);
+    }
 }
 
 /* --------------------------------------------------------------------- */
@@ -915,8 +960,7 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
             XhciFailClosedDma(ext);
         }
         /* A refused controller drives nothing: the connectors go back. */
-        HcdPswRelease(hc);
-        hc->PswOn = 0;
+        hcdPswEnd(hc);
         hcdRelease(hc);
         /* No thread ever ran to poll, and the half-built start's fatal
          * status or its stop's mask failure is the reading a refused start
@@ -975,8 +1019,7 @@ static VOID hcdStopBody(PHCD_CONTROLLER hc)
     }
     /* Task 34.3: once the controller has halted, so the disconnects the
      * hand-back makes are seen by no running xHCI. */
-    HcdPswRelease(hc);
-    hc->PswOn = 0;
+    hcdPswEnd(hc);
     /*
      * The devices go once the controller has halted, not before: freeing a
      * record completes its URBs (hcd_io.c, HcdIoDeviceGone), and a client

@@ -1070,16 +1070,17 @@ typedef struct _HCD_CONTROLLER {
     } SettleDeferHub[HCD_SETTLE_DEFER_HUB];
     ULONG SettleDeferHubFull;       /* a deferral did not fit: every hub
                                      * port rebuilt is taken as deferred */
-    /* The Intel port switchover (task 34.3; hcd_ctl.c, xhci_psw.h), at
-     * the end so no offset the harness reads moves. PswOn is set by a start
-     * that routed the switchable connectors to xHCI (the gate passed and
-     * XhciIntelPortSwitch is not 0), so each return to D0 routes them again
-     * and the stop, a refused start and a shutdown's D3 hand them back; the
-     * stop clears it. The counts are never zeroed. PASSIVE_LEVEL only. */
-    ULONG PswOn;
+    /* The Intel port switchover (tasks 34.3 and 35.5; hcd_ctl.c,
+     * xhci_psw.h, design record 16 section 7a). The counts are never
+     * zeroed. PswLife.On is set by a start that decided to route, so each
+     * return to D0 routes again; PswLife.Written is what those routes
+     * wrote, which the stop, a refused start and a shutdown's D3 hand
+     * back, and the stop and a refused start clear both. PASSIVE_LEVEL
+     * only. */
     ULONG PswRoutes;
     ULONG PswReleases;
     ULONG PswFailures;
+    XHCI_PSW_LIFE PswLife;
 } HCD_CONTROLLER, *PHCD_CONTROLLER;
 
 /* The root hub's PDO, created by the controller FDO (hcd_rh.c; design record
