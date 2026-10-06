@@ -24,9 +24,10 @@ decision of the same day, and converged in its turn at review round 11
 ## 1. What is asked, and what is not
 
 A tester on an AMD AM5 board reports that a USB mouse randomly stops
-working: "basically unusable" under `2.0.0.0`, and under the `2.1.x` builds
-it stops less often, and after being moved to another port it works for
-longer. Which controller sits behind each port, and what the driver saw,
+working: "basically unusable" under the `1.x.x.x` releases, the frozen
+`usbport.sys` miniport (owner's correction, 2026-10-06; this record said
+`2.0.0.0` until then), and under the `2.1.x` builds it stops less often, and
+after being moved to another port it works for longer. Which controller sits behind each port, and what the driver saw,
 are not known: no controller id and no `XHCISNAP` dump has been sent. A
 third-party report from before `2.0.0.0` (the README's tested table) has the
 miniport failing on an X570 board while B550 and X670 worked.
