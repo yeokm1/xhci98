@@ -239,19 +239,19 @@ running controller.
 **Every access is best effort.** A route or release that fails part-way is
 logged (its step) and counted (`PswFailures`), and nothing else follows: a
 failed route does not refuse the start or undo the writes already made, and
-`PswOn` stays set, so the stop still releases; a failed release does not
-hold up the stop, which clears `PswOn` all the same, so a refused
+`PswLife.On` stays set, so the stop still releases; a failed release does not
+hold up the stop, which clears `PswLife.On` all the same, so a refused
 `XUSB2PR = 0` leaves those connectors on xHCI.
 
 **The release writes only what a route wrote (revision 3).** Until revision
-3 the release wrote both registers whenever `PswOn` was set, and `PswOn` is
-set before the start's route runs: a route that stopped at an unreadable or
+3 the release wrote both registers whenever `PswOn` was set, and `PswOn` was
+set before the start's route ran: a route that stopped at an unreadable or
 all-ones `USB3PRM` had written nothing, and the stop still wrote zero to
 both; one that stopped at `XUSB2PRM` had written `USB3_PSSEN` only, and the
 stop still wrote zero to `XUSB2PR`. On a listed part that is a zero written
 over firmware's routing for no reason; under value 2 it is a write to an
 unknown register that the route itself had declined to make. So the
-executor keeps, per register, whether a route's write to it was accepted -
+lifetime (section 7a) keeps, per register, whether a route's write to it was accepted -
 `USB3_PSSEN` (`D8h`) and `XUSB2PR` (`D0h`) separately - accumulated over one
 started lifetime: the start's route and every resume's. A later route that
 fails does not clear what an earlier one wrote, since the register may still
@@ -259,7 +259,7 @@ hold the earlier value. The release writes zero to each register in that set,
 `USB3_PSSEN` first as before, and to no other; with the set empty it makes no
 access at all and is not counted. A release does not empty the set (writing
 zero twice is harmless, and a refused zero must be retried by the stop that
-may follow a shutdown's D3); it is emptied only where `PswOn` is cleared, at
+may follow a shutdown's D3); it is emptied only where `PswLife.On` is cleared, at
 each start's decision, the stop and a refused start. Membership is the
 configuration-space callback reporting success, nothing more: a write whose
 request failed was not confirmed accepted, though `HcdSvcConfigSpace`'s
@@ -269,8 +269,10 @@ recorded that register; releasing a register on no evidence it was written
 is what this revision exists to stop.
 
 This applies at every value, 1 included. The masks, the routes, the moments
-and the INFs' value are unchanged; what changes at 1 is only that a route
-that wrote nothing is followed by a release that writes nothing. The read-backs are logged
+and the INFs' value are unchanged; at 1 the release now writes only the
+accumulated accepted-write set, partial and empty sets included: a route
+that wrote only `D8h` is followed by a release of `D8h` alone, and one that
+wrote nothing by a release that writes nothing. The read-backs are logged
 but not compared with what was written, so step 0 says every access was
 accepted, not that the routing changed; the tester's capture is what
 compares them.
@@ -329,7 +331,7 @@ Intel controller the list does not name, the value found and exactly 2);
 
 Until revision 3 the start's decision and `PswOn` lived in `hcd_ctl.c`. The
 per-register write set has to survive every route of a started lifetime and
-be emptied at exactly the places `PswOn` is, and the roadmap asks for host
+be emptied at exactly the places `PswOn` was cleared, and the roadmap asks for host
 vectors over that lifetime, so the decision and the set move into
 `xhci_psw.c` beside the sequence:
 
@@ -380,16 +382,15 @@ nothing itself.
 - **IRQL and locks.** That service sends an IRP and waits, so every call is
   at PASSIVE_LEVEL and under no spin lock: the start and stop hold the door
   gate, and the D0 paths the power gate, both waitable events.
-- **State.** `HCD_CONTROLLER.PswOn` (appended at the end of the structure) is
-  set by a start that passed the gate, read the switch on and read a
-  non-exempt subsystem id; a route or release does nothing without it. Every
-  start clears it before deciding, and the stop and a refused start clear it
-  after releasing, so it cannot outlive the start that set it.
+- **State.** `HCD_CONTROLLER.PswLife.On` (section 7a; before revision 3,
+  the `PswOn` field it replaces) is set by a start that decided on and read
+  a non-exempt subsystem id; a route or release does nothing without it.
+  Every start clears it before deciding, and the stop and a refused start
+  clear it after releasing, so it cannot outlive the start that set it.
   `PswRoutes`, `PswReleases` and `PswFailures` count, never zeroed.
-  Revision 3 appends `PswLife`, the `XHCI_PSW_LIFE` of section 7a, which
-  carries the accepted-write set of section 6 and the mode; `PswLife.On`
-  replaces `PswOn` (section 7a). `On` is set exactly when the mode is not `OFF` and the board
-  check passed, and the start decides in this order: offset 0 read (else `psw.pci.unread`, nothing more);
+  `PswLife` also carries the accepted-write set of section 6 and the mode.
+  `On` is set exactly when the mode is not `OFF` and the board check passed,
+  and the start decides in this order: offset 0 read (else `psw.pci.unread`, nothing more);
   vendor Intel (else `psw.gate` 0, no value read); the value read; the mode
   (`OFF`: done); the subsystem read and the Sony check; then the route.
 - **The log.** On every controller, `psw.gate` (0 or 1), or `psw.pci.unread`
