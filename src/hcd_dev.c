@@ -97,6 +97,32 @@ static VOID hcdTolCountProgress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 }
 
 /*
+ * The soft retry's counts (35-T.2, design record 17 sections 4.2 and 4.8),
+ * from every result a pipe's event, settle or replay produced, and the
+ * thread's wake for a divert: the engine has kept the Transaction Error on
+ * the head and set the queue's RetryWanted, which HcdCfgRetryService
+ * decides. Controller lock held.
+ */
+static VOID hcdTolCountRetry(PHCD_CONTROLLER hc,
+                             const XHCI_XFER_EVENT_RESULT *result)
+{
+    PXHCI_TOL_STATS stats;
+
+    stats = &hc->Hc.Tol.Stats;
+    if (result->RetryDiverted) {
+        stats->RetryDiverts++;
+        hc->RetryWork = 1;
+        HcdThreadWake(hc);
+    }
+    if (result->RetryExhausted) {
+        stats->RetryExhausted++;
+    }
+    if (result->RetryRecovered) {
+        stats->RetryRecovered++;
+    }
+}
+
+/*
  * What the engine decided about one EP0 event or settle: a completed record
  * that is the thread's own ends its wait. A halted EP0 or a refused retire
  * is counted - the enumeration step that sees the failed status gives the
@@ -157,6 +183,7 @@ static ULONG hcdPipeResult(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
         return 1;
     }
     hcdTolCountProgress(hc, pipe->Device, result);
+    hcdTolCountRetry(hc, result);
     if (result->NeedsRecovery && !result->RefusedRetire &&
         pipe->TransferType != XHCI_PIPE_XFER_ISOCH) {
         pipe->Halted = 1;
@@ -419,6 +446,46 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
         return hcdEp0Result(hc, pipe->Device, &result);
     }
     return hcdPipeResult(hc, pipe, &result);
+}
+
+/*
+ * The soft retry's replay (35-T.2, design record 17 section 4.2): the
+ * deferred outcome of the TD `token` names on `pipe`'s queue, if it is still
+ * the head and still holds one, applied through the engine with the
+ * interception bypassed - so the TD completes as today's Transaction Error
+ * would have completed it, DEV_NOT_RESPONDING, retired or placed past, the
+ * pipe left Halted - and accounted as XhciSlotTransferEvent accounts an
+ * event. The completed record goes to the done list: the caller runs
+ * HcdIoDeferred once the lock is released. Returns 1 when an outcome was
+ * applied. IRQL: <= DISPATCH_LEVEL, controller lock held.
+ */
+ULONG HcdDevRetryReplay(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG token)
+{
+    PXHCI_EXTENSION ext;
+    XHCI_XFER_EVENT_RESULT result;
+    ULONG errors;
+    ULONG badCodes;
+    ULONG unmatched;
+    ULONG foreign;
+
+    ext = &hc->Hc;
+    errors = pipe->Queue->Errors;
+    badCodes = pipe->Queue->BadCodes;
+    unmatched = pipe->Queue->UnmatchedEvents;
+    foreign = pipe->Queue->ForeignEvents;
+    if (!XhciXferRetryReplay(pipe->Queue, pipe->Ring, pipe->Device->SlotId,
+                             pipe->Dci, token, &result)) {
+        return 0;
+    }
+    ext->Tol.Stats.RetryReplayed++;
+    hcdTolSumQueue(ext, pipe->Queue, errors, badCodes, unmatched, foreign);
+    if (result.NeedsRecovery && !result.RefusedRetire) {
+        ext->Tol.Stats.QueueHalts++;
+    }
+    /* A Transaction Error is not a fatal code (XhciXferCodeInfo), so there
+     * is no escalation to return. */
+    (VOID)hcdPipeResult(hc, pipe, &result);
+    return 1;
 }
 
 /* One pipe's settle: a short packet's promised tail that never came. The

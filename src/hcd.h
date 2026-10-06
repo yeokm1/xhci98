@@ -922,6 +922,8 @@ typedef struct _HCD_CONTROLLER {
      * controller lock. */
     LIST_ENTRY SlowIrps;
     ULONG CancelWork;               /* some pipe has CancelPending        */
+    ULONG RetryWork;                /* some queue has RetryWanted (35-T.2,
+                                     * HcdCfgRetryService)                */
     volatile LONG CancelsRunning;   /* cancel routines past the cancel lock */
     ULONG UrbsCompleted;
     ULONG UrbsGone;
@@ -1372,6 +1374,9 @@ VOID HcdStrictAfter(PHCD_CONTROLLER hc, const HCD_STRICT_SNAP *snap,
 VOID HcdStrictForgetSlots(PHCD_CONTROLLER hc);
 #endif
 
+/* hcd_dev.c */
+ULONG HcdDevRetryReplay(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG token);
+
 /* hcd_cfg.c */
 NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                      struct _HCD_DEVICE_PDO *pdo, PIRP irp);
@@ -1380,6 +1385,7 @@ VOID HcdCfgReleaseFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 VOID HcdCfgFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 VOID HcdCfgService(PHCD_CONTROLLER hc);
 VOID HcdCfgCancelService(PHCD_CONTROLLER hc);
+VOID HcdCfgRetryService(PHCD_CONTROLLER hc);
 VOID HcdCfgDeviceGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 PHCD_PIPE HcdCfgPipe(PHCD_USB_DEVICE dev, PVOID handle);
 ULONG HcdCfgParentConfigure(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);

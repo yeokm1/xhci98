@@ -194,6 +194,47 @@ static void test_retry(void)
     CHECK_EQ(XhciTolRetryDivert(1, XHCI_CC_STALL, 1, 0), 0, "a stall not");
     CHECK_EQ(XhciTolRetryDivert(0, XHCI_CC_USB_TRANSACTION_ERROR, 1, 0), 0,
              "out of scope");
+
+    /* Exhaustion: the one route a spent TD takes, counted only. */
+    CHECK_EQ(XhciTolRetryExhausted(1, XHCI_CC_USB_TRANSACTION_ERROR, 1, 3),
+             1, "the fourth error exhausts");
+    CHECK_EQ(XhciTolRetryExhausted(1, XHCI_CC_USB_TRANSACTION_ERROR, 1, 2),
+             0, "the third does not");
+    CHECK_EQ(XhciTolRetryExhausted(1, XHCI_CC_USB_TRANSACTION_ERROR, 0, 3),
+             0, "not the head: not the retry's");
+    CHECK_EQ(XhciTolRetryExhausted(0, XHCI_CC_USB_TRANSACTION_ERROR, 1, 3),
+             0, "out of scope: not the retry's");
+    CHECK_EQ(XhciTolRetryExhausted(1, XHCI_CC_STALL, 1, 3), 0,
+             "a stall not");
+    CHECK_EQ(XhciTolRetryExhausted(XhciTolRetryScope(0, AMD_ID, 1, 0, 0),
+                                   XHCI_CC_USB_TRANSACTION_ERROR, 1, 3),
+             0, "tolerance 0 counts no exhaustion");
+
+    /* The thread's first decision: at tolerance 0 and 1. */
+    CHECK_EQ(XhciTolRetryDecide(1, 0, 0, 1), XHCI_TOL_RETRY_RESET,
+             "nothing pending: Reset Endpoint");
+    CHECK_EQ(XhciTolRetryDecide(0, 0, 0, 1), XHCI_TOL_RETRY_REPLAY,
+             "tolerance 0: today's path");
+    CHECK_EQ(XhciTolRetryDecide(1, 1, 0, 1), XHCI_TOL_RETRY_REPLAY,
+             "an operation pending: replay");
+    CHECK_EQ(XhciTolRetryDecide(1, 0, 1, 1), XHCI_TOL_RETRY_REPLAY,
+             "DrainPending: replay");
+    CHECK_EQ(XhciTolRetryDecide(1, 0, 0, 0), XHCI_TOL_RETRY_REPLAY,
+             "the head changed: replay, if anything is left");
+    CHECK_EQ(XhciTolRetryDecide(1, 1, 1, 0), XHCI_TOL_RETRY_REPLAY,
+             "all at once");
+
+    /* The second, after the command. */
+    CHECK_EQ(XhciTolRetryAfterReset(1, 7, 7), XHCI_TOL_RETRY_RING,
+             "unchanged generation: ring and clear");
+    CHECK_EQ(XhciTolRetryAfterReset(1, 8, 7), XHCI_TOL_RETRY_LEAVE,
+             "a newer divert: leave its request");
+    CHECK_EQ(XhciTolRetryAfterReset(1, 0, 0xFFFFFFFFUL), XHCI_TOL_RETRY_LEAVE,
+             "across the generation's wrap");
+    CHECK_EQ(XhciTolRetryAfterReset(0, 7, 7), XHCI_TOL_RETRY_FAULT,
+             "a failed command: hcdCfgFault");
+    CHECK_EQ(XhciTolRetryAfterReset(0, 8, 7), XHCI_TOL_RETRY_FAULT,
+             "whatever the generation");
 }
 
 static void test_cycle(void)

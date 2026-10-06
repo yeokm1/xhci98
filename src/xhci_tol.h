@@ -149,6 +149,35 @@ ULONG XhciTolRetryScope(ULONG tolerance, ULONG vendorDevice, ULONG bulkOrInt,
 ULONG XhciTolRetryDivert(ULONG inScope, ULONG code, ULONG isHead,
                          ULONG retriesUsed);
 
+/* 1 when a matched event is the retry's exhaustion: a Transaction Error on
+ * the head of a queue in scope whose TD has spent its three retries. It
+ * takes today's path whole; this only counts it. */
+ULONG XhciTolRetryExhausted(ULONG inScope, ULONG code, ULONG isHead,
+                            ULONG retriesUsed);
+
+/* The thread's first decision on a pipe with RetryWanted, under the
+ * controller lock: REPLAY applies the deferred outcome (today's error path)
+ * when tolerance is off, an operation is pending on the pipe or its device
+ * (a cancel, ABORT_PIPE, RESET_PIPE, SYNC_RESET_PIPE or RESET_PORT, folded
+ * by the caller into opPending), DrainPending is set, or the queue's head is
+ * no longer the diverted TD; RESET issues Reset Endpoint with TSP 1. */
+#define XHCI_TOL_RETRY_REPLAY       0UL
+#define XHCI_TOL_RETRY_RESET        1UL
+
+ULONG XhciTolRetryDecide(ULONG tolerance, ULONG opPending, ULONG drainPending,
+                         ULONG headIsTd);
+
+/* The second, once the Reset Endpoint has completed: RING the doorbell and
+ * clear RetryWanted when the retry generation still reads the one decided
+ * on; LEAVE RetryWanted set when a newer divert re-armed it meanwhile; and
+ * FAULT (hcdCfgFault) when the command failed, whatever the generation. */
+#define XHCI_TOL_RETRY_RING         0UL
+#define XHCI_TOL_RETRY_LEAVE        1UL
+#define XHCI_TOL_RETRY_FAULT        2UL
+
+ULONG XhciTolRetryAfterReset(ULONG commandOk, ULONG genNow,
+                             ULONG genDecided);
+
 /* 35-T.3. 1 when a Transfer Event's code cycles the device: tolerance on,
  * the code not claimed by XhciXferCodeInfo (claimed is 1 when it returned
  * XHCI_XFER_OK; the caller asks it, so the two never drift), the endpoint

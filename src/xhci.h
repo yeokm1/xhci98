@@ -3602,6 +3602,20 @@ typedef struct _XHCI_TRANSFER {
     PVOID IsoParams;
     ULONG IsoPacketCount;
     ULONG IsoPacketsAnswered;
+    /*
+     * The soft retry (roadmap-hcd 35-T.2, design record 17 section 4.2).
+     * `RetryCount` is the Transaction Errors diverted on this TD, so its
+     * bound is the TD's and goes with it: every submit sets it to 0. The
+     * three words after it are the diverted event as the engine was handed
+     * it - its TRB pointer included, from which the replay recomputes the
+     * length and the TD's completion exactly as the first pass would have;
+     * the pointer's high dword is always 0 on these targets - meaningful
+     * only under `XHCI_XFER_FLAG_RETRY_DEFERRED`.
+     */
+    ULONG RetryCount;
+    ULONG RetryEventPA;
+    ULONG RetryEventDw2;
+    ULONG RetryEventDw3;
 } XHCI_TRANSFER, *PXHCI_TRANSFER;
 
 #define XHCI_XFER_NO_INDEX          0xFFFFFFFFUL
@@ -3653,6 +3667,13 @@ typedef struct _XHCI_TRANSFER {
  * list holding only real devices' completions never asks for one.
  */
 #define XHCI_XFER_FLAG_VHUB         0x00000010UL
+/*
+ * 35-T.2. A Transaction Error on this TD was diverted (XhciXferEvent): the
+ * event is kept in `RetryEvent*`, nothing of it applied, and the TD left at
+ * the queue's head unretired. Cleared by the next event matched to the TD,
+ * which then decides it as on any TD, or by the replay that applies it.
+ */
+#define XHCI_XFER_FLAG_RETRY_DEFERRED 0x00000020UL
 
 /* ------------------------------------------------------------------ */
 /* 9-A.1: the isochronous group's storage                              */
@@ -4055,6 +4076,26 @@ typedef struct _XHCI_TRANSFER_QUEUE {
     ULONG IsoMissedService;
     ULONG IsoGroupsAwaitingTail;
     ULONG IsoTailEvents;
+
+    /*
+     * The soft retry (35-T.2, design record 17 section 4.2). `RetryScope` is
+     * the device layer's answer at the pipe's open (XhciTolRetryScope: the
+     * start's XhciTolerance, the controller's id, the endpoint type, no
+     * streams, no TT), 0 for every queue XhciXferQueueInit makes, so EP0's
+     * and an isochronous or a stream's never divert. `RetryGen` counts every
+     * divert; `RetryWanted` and `RetryToken` are the thread's request - the
+     * diverted TD's Token - which only the thread clears, and only while
+     * `RetryGen` still reads the generation it decided on, so a newer
+     * request is never cleared. `RetryReplay` is set across the replay
+     * alone: the one event that is not intercepted again. `RetryDiverts` is
+     * this queue's count of diverted errors, beside its `Errors`.
+     */
+    ULONG RetryScope;
+    ULONG RetryGen;
+    ULONG RetryWanted;
+    ULONG RetryToken;
+    ULONG RetryReplay;
+    ULONG RetryDiverts;
 } XHCI_TRANSFER_QUEUE, *PXHCI_TRANSFER_QUEUE;
 
 /*

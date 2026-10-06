@@ -102,6 +102,31 @@ ULONG XhciTolRetryDivert(ULONG inScope, ULONG code, ULONG isHead,
             retriesUsed < XHCI_TOL_SOFT_RETRIES) ? 1UL : 0UL;
 }
 
+ULONG XhciTolRetryExhausted(ULONG inScope, ULONG code, ULONG isHead,
+                            ULONG retriesUsed)
+{
+    return (inScope && code == XHCI_CC_USB_TRANSACTION_ERROR && isHead &&
+            retriesUsed >= XHCI_TOL_SOFT_RETRIES) ? 1UL : 0UL;
+}
+
+ULONG XhciTolRetryDecide(ULONG tolerance, ULONG opPending, ULONG drainPending,
+                         ULONG headIsTd)
+{
+    if (!tolerance || opPending || drainPending || !headIsTd) {
+        return XHCI_TOL_RETRY_REPLAY;
+    }
+    return XHCI_TOL_RETRY_RESET;
+}
+
+ULONG XhciTolRetryAfterReset(ULONG commandOk, ULONG genNow,
+                             ULONG genDecided)
+{
+    if (!commandOk) {
+        return XHCI_TOL_RETRY_FAULT;
+    }
+    return (genNow == genDecided) ? XHCI_TOL_RETRY_RING : XHCI_TOL_RETRY_LEAVE;
+}
+
 ULONG XhciTolCycleOnRefused(ULONG tolerance, ULONG claimed, ULONG isoch,
                             ULONG hasDevice)
 {

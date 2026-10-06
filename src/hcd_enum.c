@@ -3980,6 +3980,9 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
         }
     }
     if (!hcdHalted(hc)) {
+        /* 35-T.2's decisions first: one that yields to a cancel, an abort
+         * or a reset applies today's outcome before that operation runs. */
+        HcdCfgRetryService(hc);
         HcdCfgCancelService(hc);
         /* The URBs that need commands (hcd_cfg.c). */
         HcdCfgService(hc);
@@ -4347,6 +4350,8 @@ VOID HcdEnumInit(PHCD_CONTROLLER hc)
         hc->PortCycle[i] = 0;
     }
     hc->SlotsInvalidated = 0;
+    /* 35-T.2: the queues that held requests went with their devices. */
+    hc->RetryWork = 0;
     hc->EnumDetachRequested = 0;
     hc->ScratchTainted = 0;
     (VOID)KeSetEvent(&hc->EnumDetachDone, IO_NO_INCREMENT, FALSE);
