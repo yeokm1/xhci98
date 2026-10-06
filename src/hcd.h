@@ -668,8 +668,8 @@ typedef struct _HCD_PORT {
      * path under the controller lock; TolCompletionsSeen, the thread's last
      * reading of it, for the location's stable progress. Each set by the
      * start (HcdEnumInit). The location's budget itself is the
-     * extension's (Tol.RootLoc) for a root port and the hub object's
-     * (TolLoc) for a hub's. */
+     * extension's too: Tol.RootLoc for a root port, Tol.HubLoc by port
+     * object for a hub's, set again when its hub is brought up. */
     XHCI_TOL_OC TolOc;
     ULONG TolCompletions;
     ULONG TolCompletionsSeen;
@@ -720,11 +720,6 @@ typedef struct _HCD_HUB {
     ULONG RearmPorts;
     ULONG RearmArmed;
     KTIMER RearmTimer;
-    /* Each port's location budget (35-T.5; design record 17 section 4.5),
-     * TolLoc[n - 1] for port n: set when the hub is brought up
-     * (HcdHubStart) and kept while the object lives, across its devices'
-     * re-enumerations and PDOs. */
-    XHCI_TOL_LOC TolLoc[HCD_HUB_MAX_PORTS];
 } HCD_HUB, *PHCD_HUB;
 
 /*
@@ -1232,7 +1227,8 @@ VOID HcdEnumContain(PHCD_CONTROLLER hc, ULONG proof);
  * cycle charges its re-enumeration through HcdTolLocCharge. */
 ULONG HcdTolLocCharge(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG kind);
 VOID HcdTolLocObserve(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG connected,
-                      ULONG powered);
+                      ULONG powered, ULONG changed);
+VOID HcdTolLocRecovery(PHCD_CONTROLLER hc, PHCD_PORT p);
 ULONG HcdEnumAttach(PHCD_CONTROLLER hc);
 ULONG HcdEnumSettleAsk(PHCD_CONTROLLER hc);
 ULONG HcdEnumSettleClock(VOID);

@@ -2232,6 +2232,70 @@ static VOID xhciPowerPorts(PXHCI_EXTENSION ext)
 }
 
 /*
+ * Controller tolerance's unpowered holds (35-T.5, design record 17 section
+ * 4.5), honoured by every initialization after the power pass: a root port
+ * held unpowered - its repowers spent, or its over-current never cleared -
+ * keeps the hold across an in-place recovery and a resume, which come here
+ * without a start (only a start's XhciTolStart releases it), and the power
+ * pass has just asserted PP on it with every other managed port. Its PP is
+ * taken off again once the assertions are confirmed, the order the VBus
+ * argument above requires, and read back within the same bounded wait. A
+ * port that does not confirm is counted as a power failure, and the
+ * controller thread takes it off again on its next pass (hcd_enum.c,
+ * hcdTolService). Nothing at XhciTolerance 0, and nothing on a controller
+ * without port power control, where PP is not writable.
+ *
+ * IRQL: as xhciPowerPorts.
+ */
+static VOID xhciTolHoldPorts(PXHCI_EXTENSION ext)
+{
+    const XHCI_PORT_MAP *map;
+    ULONG waited;
+    ULONG port;
+    ULONG portsc;
+    ULONG held;
+    ULONG pending;
+
+    map = &ext->PortMap;
+    if (!ext->Tol.Stats.Tolerance || !ext->HcInfo.Ppc) {
+        return;
+    }
+    held = 0;
+    for (port = 1; port <= map->PortCount && port <= XHCI_TOL_ROOT_PORTS;
+         port++) {
+        if (XhciTolLocUnpowered(&ext->Tol.RootLoc[port - 1])) {
+            (VOID)xhciDrivePortPower(ext, port, XHCI_PP_WANT_OFF);
+            held++;
+        }
+    }
+    if (held == 0) {
+        return;
+    }
+    waited = 0;
+    for (;;) {
+        pending = 0;
+        for (port = 1; port <= map->PortCount && port <= XHCI_TOL_ROOT_PORTS;
+             port++) {
+            if (!XhciTolLocUnpowered(&ext->Tol.RootLoc[port - 1])) {
+                continue;
+            }
+            portsc = XhciReadPortsc(ext, port);
+            if (portsc == 0xFFFFFFFFUL || (portsc & XHCI_PORTSC_PP) != 0) {
+                pending++;
+            }
+        }
+        if (pending == 0 || waited >= XHCI_PORT_POWER_SETTLE_MS) {
+            break;
+        }
+        XhciDelayMs(ext, XHCI_PORT_POWER_POLL_MS);
+        waited += XHCI_PORT_POWER_POLL_MS;
+    }
+    ext->PortPowerFailures += pending;
+    XHCI_DBG_VALUE("port power: tolerance holds kept unpowered", held);
+    XHCI_DBG_VALUE("port power: tolerance holds not confirmed", pending);
+}
+
+/*
  * Take port power back off on the way out, before the halt.
  *
  * "Note: Before the xHC driver is unloaded, the driver should clear the Port
@@ -5066,6 +5130,7 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
      */
     ext->InitStep = XHCI_INIT_STEP_PORT_POWER;
     xhciPowerPorts(ext);
+    xhciTolHoldPorts(ext);
 
     /*
      * Step 17 (roadmap Phase 5 task 2): the root hub usbport is about to build a

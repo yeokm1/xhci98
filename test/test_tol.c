@@ -440,18 +440,59 @@ static void test_port_oc(void)
     XhciTolLocHold(NULL, XHCI_TOL_HOLD_OC_WAIT);
     CHECK_EQ(XhciTolLocUnpowered(NULL), 0, "NULL");
 
-    /* A hub port observed only at its changes: one disconnect observation,
-     * then a connection once the interval has passed, re-arms; a connection
-     * before it does not. */
+    /* Review round 1, finding 4: a late connected look is no evidence that
+     * the port stayed disconnected; the stable disconnect stands only on a
+     * disconnected look made once the interval has passed (XhciTolLocDiscDue
+     * says when one is owed), with no connection change between. */
     XhciTolLocInit(&l);
     (VOID)XhciTolLocCharge(&l, XHCI_TOL_CHARGE_REENUM, 1);
-    CHECK_EQ(XhciTolLocObserve(&l, 0, 1, 0, 10), 0, "disconnect");
-    CHECK_EQ(XhciTolLocObserve(&l, 1, 1, 0, 10 + XHCI_TOL_STABLE_DISC_TICKS - 1),
-             0, "too soon");
-    CHECK_EQ(XhciTolLocObserve(&l, 0, 1, 0, 100), 0, "disconnect again");
-    CHECK_EQ(XhciTolLocObserve(&l, 1, 1, 0, 100 + XHCI_TOL_STABLE_DISC_TICKS),
-             1, "at the interval: re-armed");
+    CHECK_EQ(XhciTolLocObserveChange(&l, 0, 1, 0, 1, 10), 0, "disconnect");
+    CHECK_EQ(XhciTolLocObserveChange(&l, 1, 1, 0, 1,
+                                     10 + XHCI_TOL_STABLE_DISC_TICKS + 50),
+             0, "late connected look: no re-arm");
+    CHECK_EQ(l.Reenums, 1, "budget kept");
+    CHECK_EQ(XhciTolLocObserveChange(&l, 0, 1, 0, 1, 100), 0, "disconnect");
+    CHECK_EQ(XhciTolLocDiscDue(&l, 100 + XHCI_TOL_STABLE_DISC_TICKS - 1), 0,
+             "not yet due");
+    CHECK_EQ(XhciTolLocDiscDue(&l, 100 + XHCI_TOL_STABLE_DISC_TICKS), 1,
+             "a look is due");
+    CHECK_EQ(XhciTolLocObserveChange(&l, 0, 1, 0, 1,
+                                     100 + XHCI_TOL_STABLE_DISC_TICKS),
+             0, "a connection change between the looks restarts");
+    CHECK_EQ(l.DiscSeen, 0, "not seen");
+    CHECK_EQ(XhciTolLocDiscDue(&l, 100 + XHCI_TOL_STABLE_DISC_TICKS), 0,
+             "restarted: not due");
+    t = 100 + 2 * XHCI_TOL_STABLE_DISC_TICKS;
+    CHECK_EQ(XhciTolLocObserveChange(&l, 0, 1, 0, 0, t), 0, "stable");
+    CHECK_EQ(l.DiscSeen, 1, "seen");
+    CHECK_EQ(XhciTolLocDiscDue(&l, t), 0, "nothing owed");
+    CHECK_EQ(XhciTolLocObserveChange(&l, 1, 1, 0, 1, t + 500), 1,
+             "the connection after it re-arms");
     CHECK_EQ(l.Reenums, 0, "budget back");
+    CHECK_EQ(l.Rearms, 1, "re-arm counted");
+
+    /* Finding 2: the recovery's own disconnect - an over-current's lost
+     * power, its device not back after the power-on wait - is no evidence,
+     * through the reconnect that ends it; disconnects after that are. */
+    XhciTolLocInit(&l);
+    (VOID)XhciTolLocCharge(&l, XHCI_TOL_CHARGE_REPOWER, 1);
+    XhciTolLocRecovery(&l);
+    CHECK_EQ(XhciTolLocObserve(&l, 0, 0, 1, 2), 0, "unpowered, in fault");
+    CHECK_EQ(XhciTolLocObserve(&l, 0, 1, 0, 100), 0, "power back, no device");
+    t = 100 + 3 * XHCI_TOL_STABLE_DISC_TICKS;
+    CHECK_EQ(XhciTolLocObserve(&l, 0, 1, 0, t), 0, "still none");
+    CHECK_EQ(XhciTolLocDiscDue(&l, t), 0, "no look owed");
+    CHECK_EQ(XhciTolLocObserve(&l, 1, 1, 0, t + 1), 0,
+             "the reconnect re-arms nothing");
+    CHECK_EQ(l.Repowers, 1, "repower budget kept");
+    CHECK_EQ(l.RecoveryDisc, 0, "finished");
+    CHECK_EQ(XhciTolLocObserve(&l, 0, 1, 0, 1000), 0, "an unplug");
+    CHECK_EQ(XhciTolLocObserve(&l, 0, 1, 0,
+                               1000 + XHCI_TOL_STABLE_DISC_TICKS), 0,
+             "stable");
+    CHECK_EQ(XhciTolLocObserve(&l, 1, 1, 0, 2000), 1, "then evidence");
+    XhciTolLocRecovery(NULL);
+    CHECK_EQ(XhciTolLocDiscDue(NULL, 0), 0, "NULL");
     CHECK_EQ(XhciTolOcStep(NULL, 0, 0), XHCI_TOL_OC_ACT_NONE, "NULL");
 }
 

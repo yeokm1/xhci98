@@ -59,8 +59,9 @@ static VOID hcdLogEmit(const UCHAR *bytes, ULONG count)
 
 /*
  * Controller tolerance's counters (35-T.8, design record 17 section 4.8):
- * the scalars, then each completion code counted and each root port
- * charged, as pairs, so a quiet controller adds only the scalars. Controller
+ * the scalars, then each completion code counted and each location -
+ * root port or hub port - charged or held, as pairs, so a quiet controller
+ * adds only the scalars. Controller
  * lock held. IRQL: DISPATCH_LEVEL.
  */
 static VOID hcdLogTolLocked(PXHCI_EXTENSION ext, PXHCI_LOG log)
@@ -121,6 +122,20 @@ static VOID hcdLogTolLocked(PXHCI_EXTENSION ext, PXHCI_LOG log)
             XhciLogAppend(log, "tol.loc.reenums", loc->Reenums, 1);
             XhciLogAppend(log, "tol.loc.repowers", loc->Repowers, 1);
             XhciLogAppend(log, "tol.loc.hold", loc->Hold, 1);
+            XhciLogAppend(log, "tol.loc.rearms", loc->Rearms, 1);
+        }
+    }
+    /* A hub port's location by its port object's location number, past the
+     * root ports' (hcd.h, HCD_PORT). */
+    for (i = 0; i < XHCI_TOL_HUB_LOCS; i++) {
+        loc = &ext->Tol.HubLoc[i];
+        if (loc->Charges != 0 || loc->Hold != XHCI_TOL_HOLD_NONE) {
+            XhciLogAppend(log, "tol.loc.port", XHCI_TOL_ROOT_PORTS + i + 1, 1);
+            XhciLogAppend(log, "tol.loc.charges", loc->Charges, 1);
+            XhciLogAppend(log, "tol.loc.reenums", loc->Reenums, 1);
+            XhciLogAppend(log, "tol.loc.repowers", loc->Repowers, 1);
+            XhciLogAppend(log, "tol.loc.hold", loc->Hold, 1);
+            XhciLogAppend(log, "tol.loc.rearms", loc->Rearms, 1);
         }
     }
 }

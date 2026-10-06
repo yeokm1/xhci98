@@ -179,6 +179,8 @@ VOID XhciTolLocInit(PXHCI_TOL_LOC loc)
     loc->Holds = 0;
     loc->ProgArmed = 0;
     loc->ProgStamp = 0;
+    loc->RecoveryDisc = 0;
+    loc->Rearms = 0;
 }
 
 ULONG XhciTolLocCharge(PXHCI_TOL_LOC loc, ULONG kind, ULONG now)
@@ -217,10 +219,12 @@ static VOID xhciTolLocRearm(PXHCI_TOL_LOC loc)
     loc->Reenums = 0;
     loc->Repowers = 0;
     loc->Charged = 0;
+    loc->Rearms++;
 }
 
-ULONG XhciTolLocObserve(PXHCI_TOL_LOC loc, ULONG connected, ULONG powered,
-                        ULONG fault, ULONG now)
+ULONG XhciTolLocObserveChange(PXHCI_TOL_LOC loc, ULONG connected,
+                              ULONG powered, ULONG fault, ULONG changed,
+                              ULONG now)
 {
     if (loc == NULL) {
         return 0;
@@ -235,31 +239,68 @@ ULONG XhciTolLocObserve(PXHCI_TOL_LOC loc, ULONG connected, ULONG powered,
     }
     if (!connected) {
         loc->ProgArmed = 0;
-        if (!loc->DiscArmed) {
+        if (loc->RecoveryDisc) {
+            /* The recovery's own disconnect, until its device is back. */
+            loc->DiscArmed = 0;
+            loc->DiscSeen = 0;
+            return 0;
+        }
+        if (!loc->DiscArmed || changed) {
+            /* A connection change since the last look: whatever the port
+             * did between the looks, it was not disconnected throughout. */
             loc->DiscArmed = 1;
             loc->DiscStamp = now;
+            loc->DiscSeen = 0;
         } else if (XhciTolElapsed(now, loc->DiscStamp,
                                   XHCI_TOL_STABLE_DISC_TICKS)) {
             loc->DiscSeen = 1;
         }
         return 0;
     }
-    if (loc->DiscArmed &&
-        XhciTolElapsed(now, loc->DiscStamp, XHCI_TOL_STABLE_DISC_TICKS)) {
-        loc->DiscSeen = 1;
-    }
     loc->DiscArmed = 0;
+    if (loc->RecoveryDisc) {
+        /* The connection that ends the recovery's disconnect re-arms
+         * nothing; later disconnects are evidence again. */
+        loc->RecoveryDisc = 0;
+        loc->DiscSeen = 0;
+        return 0;
+    }
     if (!loc->DiscSeen) {
         return 0;
     }
     loc->DiscSeen = 0;
     xhciTolLocRearm(loc);
-    /* An unpowered hold never gets here (powered is 1), and a port held
-     * unpowered is released only by a controller start. */
+    /* A port held unpowered is released only by a controller start. */
     if (loc->Hold == XHCI_TOL_HOLD_REENUMS) {
         loc->Hold = XHCI_TOL_HOLD_NONE;
     }
     return 1;
+}
+
+ULONG XhciTolLocObserve(PXHCI_TOL_LOC loc, ULONG connected, ULONG powered,
+                        ULONG fault, ULONG now)
+{
+    return XhciTolLocObserveChange(loc, connected, powered, fault, 0, now);
+}
+
+VOID XhciTolLocRecovery(PXHCI_TOL_LOC loc)
+{
+    if (loc == NULL) {
+        return;
+    }
+    loc->RecoveryDisc = 1;
+    loc->DiscArmed = 0;
+    loc->DiscSeen = 0;
+    loc->ProgArmed = 0;
+}
+
+ULONG XhciTolLocDiscDue(const XHCI_TOL_LOC *loc, ULONG now)
+{
+    if (loc == NULL || !loc->DiscArmed || loc->DiscSeen ||
+        loc->RecoveryDisc) {
+        return 0;
+    }
+    return XhciTolElapsed(now, loc->DiscStamp, XHCI_TOL_STABLE_DISC_TICKS);
 }
 
 VOID XhciTolLocHold(PXHCI_TOL_LOC loc, ULONG reason)
@@ -478,6 +519,9 @@ VOID XhciTolStart(PXHCI_TOL_STATE st, ULONG vendorDevice,
     st->Clock = 0;
     for (i = 0; i < XHCI_TOL_ROOT_PORTS; i++) {
         XhciTolLocInit(&st->RootLoc[i]);
+    }
+    for (i = 0; i < XHCI_TOL_HUB_LOCS; i++) {
+        XhciTolLocInit(&st->HubLoc[i]);
     }
 }
 

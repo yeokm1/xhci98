@@ -805,7 +805,8 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
         }
         XhciHubPortDecide(state, status, change, d);
         HcdTolLocObserve(hc, q, (status & XHCI_HUB_PORT_CONNECTION) != 0,
-                         (status & XHCI_HUB_PORT_POWER) != 0);
+                         (status & XHCI_HUB_PORT_POWER) != 0,
+                         (change & XHCI_HUB_C_PORT_CONNECTION) != 0);
         for (bit = 1; bit <= XHCI_HUB_C_PORT_RESET; bit <<= 1) {
             selector = XhciHubClearSelector(bit);
             if ((d->Clear & bit) != 0 && selector != 0) {
@@ -1663,10 +1664,11 @@ ULONG HcdHubStart(PHCD_CONTROLLER hc, PHCD_PORT p, PHCD_USB_DEVICE dev)
     hub->SpeedClass = cls;
     hub->Tier = (node != NULL) ? node->Tier : 0;
     dev->Hub = hub;
-    /* Its ports' location budgets (35-T.5) live as long as the object, and
-     * are set here rather than left to HcdHubFree's clearing. */
+    /* Its ports' location budgets (35-T.5), in the extension so the dump
+     * shows them: each port a new location while this object lives. */
     for (n = 0; n < HCD_HUB_MAX_PORTS; n++) {
-        XhciTolLocInit(&hub->TolLoc[n]);
+        XhciTolLocInit(&hc->Hc.Tol.HubLoc[hub->Index * HCD_HUB_MAX_PORTS +
+                                          n]);
     }
 
     if (!XhciHubTierServable(hub->Tier)) {

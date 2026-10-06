@@ -66,6 +66,12 @@
  * (xhci.h), restated so this header stays free of xhci.h. */
 #define XHCI_TOL_ROOT_PORTS         255
 
+/* Hub ports with a location budget in the extension: HCD_MAX_HUBS hub
+ * objects (XHCI_TOPO_NODES) of HCD_HUB_MAX_PORTS (XHCI_HUB_MAX_PORTS) each,
+ * in port-object order; restated, and checked where both are seen
+ * (hcd_enum.c). */
+#define XHCI_TOL_HUB_LOCS           (16 * 14)
+
 /* Interrupt Interval cap (Linux's XHCI_LIMIT_ENDPOINT_INTERVAL_9). */
 #define XHCI_TOL_INTERVAL_CAP       8UL     /* 2^8 * 125 us = 32 ms          */
 #define XHCI_TOL_AVG_TRB_DEFAULT    1024UL
@@ -182,6 +188,10 @@ typedef struct _XHCI_TOL_LOC {
     ULONG Holds;        /* times held, never re-armed (the dump)            */
     ULONG ProgArmed;    /* a completion since the last charge or fault      */
     ULONG ProgStamp;    /* ...the first one, on the clock                   */
+    ULONG RecoveryDisc; /* a disconnect the driver's own recovery causes is
+                         * expected: no disconnect is evidence until a
+                         * connection has been observed after it          */
+    ULONG Rearms;       /* re-arms, never cleared but by a start (the dump) */
 } XHCI_TOL_LOC, *PXHCI_TOL_LOC;
 
 /* A controller start: every field cleared. */
@@ -192,17 +202,34 @@ VOID XhciTolLocInit(PXHCI_TOL_LOC loc);
  * location is never charged. */
 ULONG XhciTolLocCharge(PXHCI_TOL_LOC loc, ULONG kind, ULONG now);
 
-/* A pass's view of the port: connected (CCS, or the hub's port status),
- * powered (PP, or the hub's PORT_POWER), fault (an over-current or a
- * recovery the driver itself caused is active). Times the stable
- * disconnect; a connection after one re-arms the budget and releases a
- * powered hold. A connection observed once the interval has passed since
- * the disconnect was first observed counts as well: a hub's port is
- * observed only when it reports a change, and a connection between two
- * observations would have been reported as one. Returns 1 when it
- * re-armed. */
+/* A look at the port: connected (CCS, or the hub's port status), powered
+ * (PP, or the hub's PORT_POWER), fault (an over-current or another recovery
+ * the driver itself runs is active), changed (a connection change since the
+ * previous look: CSC, or the hub's C_PORT_CONNECTION). The stable
+ * disconnect is timed from the first disconnected look and stands only
+ * when a later disconnected look finds the interval passed with no
+ * connection change between; a connection after that re-arms the budget
+ * and releases a powered hold. A disconnect the driver's recovery causes
+ * (RecoveryDisc) is never evidence, through the connection that follows
+ * it. Duration is never inferred from a late look: the executor schedules a
+ * look when one is due (XhciTolLocDiscDue). Returns 1 when it re-armed. */
+ULONG XhciTolLocObserveChange(PXHCI_TOL_LOC loc, ULONG connected,
+                              ULONG powered, ULONG fault, ULONG changed,
+                              ULONG now);
+
+/* XhciTolLocObserveChange with no connection change. */
 ULONG XhciTolLocObserve(PXHCI_TOL_LOC loc, ULONG connected, ULONG powered,
                         ULONG fault, ULONG now);
+
+/* A recovery of the driver's own is about to take the port's connection
+ * away (an over-current's lost power, a warm reset): the disconnect and the
+ * reconnect after it are not evidence. A charge does not mark it: a
+ * re-enumeration's disconnect is software only and CCS stays set. */
+VOID XhciTolLocRecovery(PXHCI_TOL_LOC loc);
+
+/* 1 when a disconnected look is owed: the stable disconnect is being timed
+ * and its interval has passed, so a look now can confirm it. */
+ULONG XhciTolLocDiscDue(const XHCI_TOL_LOC *loc, ULONG now);
 
 /* Hold the location for reason (XHCI_TOL_HOLD_*): an over-current wait
  * that ran out, or a powered hold made unpowered by an over-current whose
@@ -344,7 +371,9 @@ typedef struct _XHCI_TOL_STATS {
 /* The tolerance state a start initializes (record 17 section 4.11): in the
  * extension, so the dump shows each root port's budget and hold, and set
  * explicitly by XhciTolStart rather than left to the start's zeroing. An
- * external hub's ports keep their XHCI_TOL_LOC on the hub. */
+ * external hub's ports have theirs here too, HubLoc in port-object order,
+ * so the dump shows every location's budget and hold; each is set again
+ * when its hub object is brought up. */
 typedef struct _XHCI_TOL_STATE {
     XHCI_TOL_STATS Stats;
     XHCI_TOL_OBS Obs;
@@ -353,6 +382,7 @@ typedef struct _XHCI_TOL_STATE {
     ULONG Unreadable;       /* 4.6: submissions park                        */
     ULONG Clock;            /* the tolerance clock, in ticks                */
     XHCI_TOL_LOC RootLoc[XHCI_TOL_ROOT_PORTS];
+    XHCI_TOL_LOC HubLoc[XHCI_TOL_HUB_LOCS];
 } XHCI_TOL_STATE, *PXHCI_TOL_STATE;
 
 /* A start, before admission reopens: every field set, the three values

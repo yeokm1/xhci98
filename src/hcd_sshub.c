@@ -538,7 +538,12 @@ ULONG HcdSsHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     d->Disabled = sd.Disabled;
     q->HubSsRecover = sd.WarmReset;
     HcdTolLocObserve(hc, q, (status & XHCI_SSHUB_PORT_CONNECTION) != 0,
-                     (status & XHCI_SSHUB_PORT_POWER) != 0);
+                     (status & XHCI_SSHUB_PORT_POWER) != 0,
+                     (change & XHCI_SSHUB_C_PORT_CONNECTION) != 0);
+    if (sd.WarmReset) {
+        /* The link's absence through the warm reset is the driver's. */
+        HcdTolLocRecovery(hc, q);
+    }
     if (sd.WarmReset) {
         XHCI_DBG_VALUE("hcd: SS hub port link error, port/link",
                        (n << 8) | XhciSsHubLinkState(status));
