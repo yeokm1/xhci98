@@ -3467,6 +3467,11 @@ May be addressed in a later release:
 
   * WINDOWS 98 SE AND ME SHOW A DEVICE NAME'S NON-ASCII CHARACTERS AS '?'.
 
+  * A DEVICE THE CONTROLLER FAULTS ON IS RE-ENUMERATED BY THE DRIVER, as if
+    unplugged and plugged in again (XhciTolerance, section 9). Whatever it
+    was doing ends as on an unplug: a copy to a drive fails part way. After
+    three on one port, the port is held until the device is unplugged.
+
 Untested ground:
 
   * SUPERSPEED ISOCHRONOUS TRANSFERS. Built from the specification. No
@@ -3484,6 +3489,14 @@ Untested ground:
   * POLLING ABOVE 1000 HZ (XhciFastPollFsLs, section 9). Outside the xHCI
     specification, and read on no real controller and in no virtual
     machine.
+
+  * XhciIntelPortSwitch AT 2 (section 9). Read on no unlisted Intel
+    controller, and at your own risk.
+
+  * THE CONTROLLER-FAULT HANDLING ON REAL HARDWARE (XhciTolerance, section
+    9). Each fault was made on purpose in virtual machines; no real
+    controller at hand raises them. XhciIntervalCap and XhciAvgTrbEsit
+    have been read on no AMD or other real controller.
 
 
 ==============================================================================
@@ -3630,12 +3643,13 @@ means the default each one states.
   XhciIntelPortSwitch  -  the Intel 7/8/9-series port switchover
   ..............................................................
 
-  Default 1: on. It matters only on an Intel xHCI with PCI device id 1E31,
-  8C31, 9C31, 8CB1, 9CB1 or 8D31 (7-, 8- and 9-series chipsets, Ivy Bridge
-  to Broadwell, and C610/X99), and is not read on any other controller.
-  There each switchable connector, usually a blue one, is wired to both the
-  USB 2.0 (EHCI) and the xHCI controller, and firmware on "Auto", or with
-  no setting, typically leaves it on the USB 2.0 one. This driver moves
+  Default 1: on, for an Intel xHCI with PCI device id 1E31, 8C31, 9C31,
+  8CB1, 9CB1 or 8D31 (7-, 8- and 9-series chipsets, Ivy Bridge to
+  Broadwell, and C610/X99). It is read on every Intel controller and on no
+  other vendor's. On those chipsets each switchable
+  connector, usually a blue one, is wired to both the USB 2.0 (EHCI) and
+  the xHCI controller, and firmware on "Auto", or with no setting,
+  typically leaves it on the USB 2.0 one. This driver moves
   those connectors to itself at each start and resume, and hands them back
   when its controller stops and at shutdown.
 
@@ -3645,34 +3659,69 @@ means the default each one states.
 
   Set it to 0 to leave the connectors where firmware put them. ONLY 0
   TURNS IT OFF; absent or any other number is on. Read when the controller
-  starts, so restart after changing it. Read on a Lenovo B490 (1E31) under
+  starts, so restart after changing it. A stop gives back only the
+  registers the driver itself wrote. Read on a Lenovo B490 (1E31) under
   Windows 98 SE with NUSB; standby and the other five ids are untested.
+
+  Set to exactly 2, it does the same on ANY Intel xHCI controller, listed
+  or not, for a chipset with these connectors that the list misses (on a
+  listed one 2 is the same as 1). AT YOUR OWN RISK:
+
+      Setting XhciIntelPortSwitch to 2 makes the driver read four Intel
+      chipset registers and write two of them on any Intel USB 3
+      controller, not only on the 7-, 8- and 9-series and C610/X99
+      chipsets it was written for. On a controller that does not have
+      those registers - every Intel chipset from the 100-series (Skylake)
+      on, and any other whose layout has not been read - it writes
+      registers of unknown meaning, at every start, resume, stop and
+      shutdown, and the result is unknown. Use 2 only for an Intel chipset
+      that has both an EHCI and an xHCI controller and that this driver
+      does not list, and at your own risk. Everyone else should leave the
+      value at 1.
+
+  Value 2 has been read on no unlisted Intel controller.
 
   XhciTolerance  -  the controller tolerance, all together
   ........................................................
 
-  Default 1: on. The driver recovers from a set of controller faults by
-  itself - a lost interrupt, a transfer error it retries, a device it
-  re-enumerates, a port or controller it restarts - each a few times at
-  most. Set it to 0 to turn all of that off together and have the earlier
-  releases' handling back. ONLY 0 TURNS IT OFF; absent or any other number
-  is on. XHCISNAP's counters keep counting at 0. Read when the controller
-  starts, so restart after changing it.
+  Default 1: on. The driver recovers by itself from controller faults that
+  a controller following the xHCI specification never raises but that
+  would otherwise leave a device dead until it is replugged: an interrupt
+  that never arrived, a transfer error (retried up to three times), a
+  fault it cannot pin on a transfer (the device is re-enumerated, as if
+  unplugged and plugged in again), a USB 2.0 root port the controller
+  disabled or an over-current (the port re-enumerated or powered again),
+  a controller that halts (recovered at most three times in ten minutes)
+  or stops answering (closed off). Each a few times at most: after three
+  on one port, the port is held until its device is unplugged, or, held
+  unpowered, until the controller restarts. On a healthy controller none
+  of it acts.
+
+  Set it to 0 to turn all of that off together and have the earlier
+  handling back. ONLY 0 TURNS IT OFF; absent or any other number is on.
+  It does not touch the next two values, and XHCISNAP's counters keep
+  counting at 0. Read when the controller starts, so restart after
+  changing it.
 
   XhciIntervalCap  -  the AMD interrupt-interval cap
   ..................................................
 
-  Default 1: on AMD controllers (PCI vendor 1022) only, a device asking to
-  be polled less often than every 32 ms is polled every 32 ms. Set it to 0
-  to turn it off, or to 2 to apply it on every controller. Read when the
-  controller starts.
+  Default 1: on AMD controllers (PCI vendor 1022) only, an interrupt
+  endpoint - a mouse, a keyboard, a hub - asking to be polled less often
+  than every 32 ms is polled every 32 ms, as Linux does on some AMD
+  controllers. Audio is never capped. Set it to 0 to turn it off, or to 2
+  to apply it on every controller; absent or any other number is 1. Read
+  when the controller starts. Read on no AMD controller yet.
 
-  XhciAvgTrbEsit  -  a setting for testing only
-  .............................................
+  XhciAvgTrbEsit  -  a comparison switch
+  ......................................
 
-  Default 0. Set to 1 only if the maintainer asks: it changes one value the
-  controller is told for each interrupt endpoint. Read when the controller
-  starts.
+  Default 0. Set to 1 it tells the controller, for each interrupt
+  endpoint, an average transfer size equal to the endpoint's largest
+  transfer per interval, as Linux does, instead of the 1024 bytes the xHCI
+  specification suggests. Any other value is 0. It exists so that a
+  machine whose USB devices misbehave can be compared both ways; leave it
+  at 0 otherwise. Read when the controller starts.
 
   THOSE ELEVEN ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
   XhciVirtualHSHubVid and XhciVirtualHSHubPid are not read: a copy left in
