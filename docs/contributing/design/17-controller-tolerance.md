@@ -605,11 +605,17 @@ held, no HCH requests a recovery, and no all-ones read is stamped or sets
 change takes effect at the next start, and the start leaves nothing of the
 previous lifetime behind:
 
-- **Deferred work is settled by the old lifetime's teardown.** A stop
-  completes every outstanding transfer through its existing teardown; a TD
-  with a deferred outcome is one of them, completed as the teardown
-  completes any, and its deferred outcome and `RetryWanted` go with it. A
-  `CycleWanted` mark dies with the device record it is on.
+- **Deferred work ends with the old lifetime, retired or retained.** A
+  stop's existing teardown completes the outstanding transfers of a
+  device whose common buffer is not pinned; a TD with a deferred outcome is
+  one of them, completed as the teardown completes any, and its deferred
+  outcome and `RetryWanted` are retired with it, as a `CycleWanted` mark is
+  with its device record. Where the buffer is pinned, the teardown keeps the
+  device records and their transfers allocated for good (`hcd_enum.c`,
+  lines 264 to 268, `DevicesKept`); a deferred outcome, `RetryWanted` or
+  `CycleWanted` on a kept record is retained with it, not destroyed, and is
+  unreachable: the new lifetime's executors visit only the records its own
+  enumeration creates, and never a kept one.
 - **Every piece of tolerance state is initialized explicitly by the start**,
   before admission reopens, wherever it lives: the start clears
   `XHCI_EXTENSION` but keeps the surrounding controller and initializes
@@ -618,9 +624,12 @@ previous lifetime behind:
   generations, the backstop's observation, the location budgets and holds,
   the recovery window, the all-ones stamp, `Unreadable`, and the tolerance
   clock, which is rearmed.
-- **A pinned common buffer stays pinned**: the start does not clear
-  `CommonBufferPinned` or release what it keeps, under the existing rule,
-  whatever the value.
+- **A pinned allocation stays retained**, under the existing rule, whatever
+  the value: the start does not release the old common buffer or anything
+  kept with it. It allocates a new common buffer for the new lifetime and
+  clears `CommonBufferPinned` for that new allocation (`hcd_dma.c`, lines 67
+  to 73), as it does today; the flag describes the current lifetime's
+  buffer, and the old one stays retained whatever the new one's flag says.
 
 35-V restarts the controller 1 to 0 to 1 with each of these outstanding - a
 deferred retry, a pending cycle, an exhausted budget and a held location,
@@ -833,3 +842,9 @@ scrub of the other records:
 | Finding | Severity | Answered in |
 |---|---|---|
 | 1 The off-switch had no lifecycle contract | medium | 4.11: latched per start, gated at every producer, deferred work settled by the old teardown, all tolerance state initialized explicitly, a pin kept; the 1-0-1 restart legs |
+
+Round 10:
+
+| Finding | Severity | Answered in |
+|---|---|---|
+| 1 A pinned stop keeps its transfers, and a start clears the flag for its new buffer | medium | 4.11: retired work told from retained work, kept state unreachable by the new lifetime, the old pinned allocation told from the new buffer |
