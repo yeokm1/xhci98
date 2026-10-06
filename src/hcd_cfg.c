@@ -545,14 +545,44 @@ static ULONG hcdCfgFunctionEndpoint(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                     speed, hc->Hc.HcInfo.Lec, ep);
 }
 
+/* The interval cap and the Average TRB Length switch (35-T.7, design record
+ * 17 section 4.7) applied to an interrupt endpoint before it is programmed,
+ * a hub's own included; isochronous endpoints are never changed. BInterval
+ * keeps the descriptor's value; Capped marks a lowered Interval, counted
+ * once the Configure Endpoint that opens it succeeds. Returns nonzero when
+ * the cap left the Interval as it was. Thread only. */
+static ULONG hcdCfgTolerance(PHCD_CONTROLLER hc, PXHCI_PIPE_EP ep)
+{
+    PXHCI_EXTENSION ext;
+    ULONG capped;
+
+    ext = &hc->Hc;
+    if (ep->TransferType != XHCI_PIPE_XFER_INTERRUPT) {
+        return 1;
+    }
+    ep->AverageTrbLength = XhciTolAvgTrbLength(ext->Tol.Stats.AvgTrbMode, 1,
+                                               ep->MaxEsitPayload);
+    capped = XhciTolCapInterval(ext->Tol.Stats.CapApplied, 1, ep->Interval);
+    if (capped == ep->Interval) {
+        return 1;
+    }
+    ep->Interval = capped;
+    ep->Capped = 1;
+    return 0;
+}
+
 /* Fast polling (33.8): the controller's XhciFastPollFsLs mode applied to an
  * endpoint a client's select names, never to a hub's own (HcdCfgHubOpen).
- * Thread only. */
+ * The cap comes first, and fast polling is offered only when it left the
+ * Interval unchanged, so eligibility is judged on the uncapped value
+ * (record 17 section 4.7). Thread only. */
 static VOID hcdCfgFastPoll(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                            PXHCI_PIPE_EP ep)
 {
-    (VOID)XhciPipeFastPoll(hc->FastPollMode, HcdDevicePipeSpeed(hc, dev),
-                           dev->Route, ep);
+    if (hcdCfgTolerance(hc, ep)) {
+        (VOID)XhciPipeFastPoll(hc->FastPollMode, HcdDevicePipeSpeed(hc, dev),
+                               dev->Route, ep);
+    }
 }
 
 /*
@@ -592,6 +622,10 @@ static ULONG hcdCfgConfigureAdd(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         code = hcdCfgCommand(hc, dev, &trb, &control);
         fast = 0;
         for (dci = 2; dci < 32; dci++) {
+            if (add[dci] != NULL && add[dci]->Ep.Capped &&
+                code == XHCI_CC_SUCCESS && opening) {
+                ext->Tol.Stats.CapIntervals++;
+            }
             if (add[dci] == NULL || !add[dci]->Ep.FastPoll) {
                 continue;
             }
@@ -938,14 +972,16 @@ ULONG HcdCfgParentConfigure(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
  * that also carries the hub marking HcdDeviceSlotParams adds once
  * dev->HubMarked is set - an Evaluate Context cannot set those fields. The
  * hub has no client, so no URB ever names this pipe; its one record is the
- * device's HubXfer. Returns the pipe, listed in dev->Pipes, or NULL with
- * nothing enabled. Thread only, powered.
+ * device's HubXfer. The interval cap applies to it (35-T.7), fast polling
+ * never does. Returns the pipe, listed in dev->Pipes, or NULL with nothing
+ * enabled. Thread only, powered.
  */
 PHCD_PIPE HcdCfgHubOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                         const XHCI_PIPE_EP *ep, ULONG iface)
 {
     PHCD_PIPE add[32];
     XHCI_PIPE_PLAN plan;
+    XHCI_PIPE_EP tol;
     PXHCI_EXTENSION ext;
     XHCI_TRB trb;
     KIRQL oldIrql;
@@ -959,6 +995,9 @@ PHCD_PIPE HcdCfgHubOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     if (ep->Dci < 2 || ep->Dci > 31 || dev->Pipes[ep->Dci] != NULL) {
         return NULL;
     }
+    tol = *ep;
+    (VOID)hcdCfgTolerance(hc, &tol);
+    ep = &tol;
     usbd = XHCI_USBD_STATUS_SUCCESS;
     pipe = hcdCfgPipeNew(hc, dev, ep, &usbd);
     if (pipe == NULL) {
@@ -984,6 +1023,9 @@ PHCD_PIPE HcdCfgHubOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                        (dev->SlotId << 8) | code);
         hcdCfgPipeFree(hc, dev, pipe);
         return NULL;
+    }
+    if (ep->Capped) {
+        ext->Tol.Stats.CapIntervals++;
     }
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     dev->Pipes[ep->Dci] = pipe;

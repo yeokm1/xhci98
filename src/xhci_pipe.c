@@ -407,6 +407,7 @@ ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
 
     out.FastPoll = 0;
     out.SpecInterval = out.Interval;
+    out.Capped = 0;
 
     out.ErrorCount = out.TransferType == XHCI_PIPE_XFER_ISOCH
                          ? 0UL : XHCI_PIPE_CERR;
@@ -665,6 +666,7 @@ static ULONG xhciPipeSuperSpeed(const UCHAR *config, ULONG total,
 
     out.FastPoll = 0;
     out.SpecInterval = out.Interval;
+    out.Capped = 0;
     *ep = out;
     return XHCI_PIPE_OK;
 }

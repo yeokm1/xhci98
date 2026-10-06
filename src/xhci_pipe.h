@@ -162,6 +162,9 @@ typedef struct _XHCI_PIPE_EP {
      * 6-12's FS/LS interrupt range, and the in-range one it replaced. */
     ULONG FastPoll;
     ULONG SpecInterval;
+    /* The interval cap (35-T.7, hcd_cfg.c hcdCfgTolerance) lowered
+     * Interval. */
+    ULONG Capped;
 } XHCI_PIPE_EP, *PXHCI_PIPE_EP;
 
 /*
