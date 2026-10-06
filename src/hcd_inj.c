@@ -23,9 +23,10 @@
  *   OC_RELEASE    OCA answered clear from then on, and the driver's PP write
  *                 ends the emulation (35-T.5)
  *   HCH           a real write clearing Run/Stop (35-T.6)
- *   DEAD          the containment step's USBSTS reads answer all-ones for
- *                 `arg` passes (0: until CLEAR), the Bus Master Enable proof
- *                 real (35-T.6)
+ *   DEAD          the health poll's USBSTS read (every XhciTolerance value,
+ *                 2.1.1.0's handling at 0) and the containment step's (at 1)
+ *                 answer all-ones for `arg` passes (0: until CLEAR), the Bus
+ *                 Master Enable proof real (35-T.6)
  *   DEAD_NOPROOF  the same, the proof's read-back answering set
  *   CLEAR         every answer and the lost-interrupt window off
  *
@@ -53,15 +54,21 @@
 /* The hooks the kept files and hcd_ctl.c call                              */
 /* ----------------------------------------------------------------------- */
 
-/* IRQL: DIRQL (hcdIsr). Lock-free: the thread moves the window, the ISR
- * only counts, and a fault fired as an interrupt arrives may lose one more
- * or one fewer - a test aid's slack, never a wrong drain. */
+/* IRQL: DIRQL (hcdIsr). Lock-free: the thread arms and disarms the window
+ * (hcdInjIrqArm), the ISR counts only while it is armed, so a disarmed
+ * window drops nothing however long it stays so. An interrupt claimed as
+ * the thread re-arms may count against the new window - one fewer dropped,
+ * a test aid's slack, never a drop with nothing armed. */
 ULONG HcdInjIsrDrop(PHCD_CONTROLLER hc)
 {
-    LONG seen;
+    ULONG taken;
 
-    seen = InterlockedIncrement((PLONG)&hc->InjIrqSeen);
-    if (hc->InjIrqForever == 0 && (LONG)(hc->InjIrqUntil - seen) < 0) {
+    if (!hc->InjIrqArmed) {
+        return 0;
+    }
+    taken = (ULONG)InterlockedIncrement((PLONG)&hc->InjIrqTaken);
+    if (!XhciInjIrqDrop(1, (ULONG)hc->InjIrqForever, taken,
+                        (ULONG)hc->InjIrqBudget)) {
         return 0;
     }
     (VOID)InterlockedIncrement((PLONG)&hc->InjIrqDropped);
@@ -104,14 +111,32 @@ ULONG HcdInjPortscWrite(PXHCI_EXTENSION ext, ULONG port, ULONG value)
 }
 
 /* The containment step's USBSTS read (hcdContain, under the controller
- * lock). IRQL: DISPATCH_LEVEL. */
+ * lock; XhciTolerance 1 only). It does not spend the fault: the health
+ * poll's read, earlier in the same pass, does. IRQL: DISPATCH_LEVEL. */
 ULONG HcdInjUsbsts(PHCD_CONTROLLER hc, ULONG usbsts)
 {
     KIRQL oldIrql;
     ULONG answer;
 
     KeAcquireSpinLock(&hc->InjLock, &oldIrql);
-    answer = XhciInjUsbsts(&hc->InjRegs, usbsts);
+    answer = XhciInjUsbsts(&hc->InjRegs, usbsts, 0);
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    return answer;
+}
+
+/* The health poll's USBSTS read (XhciControllerHealthPoll, under the
+ * controller lock), which 2.1.1.0's handling and XhciTolerance 0 rest on:
+ * answered at every tolerance value, one pass of the fault spent per read.
+ * IRQL: DISPATCH_LEVEL. */
+ULONG HcdInjHealthUsbsts(PXHCI_EXTENSION ext, ULONG usbsts)
+{
+    PHCD_CONTROLLER hc;
+    KIRQL oldIrql;
+    ULONG answer;
+
+    hc = HcdControllerFromExt(ext);
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    answer = XhciInjUsbsts(&hc->InjRegs, usbsts, 1);
     KeReleaseSpinLock(&hc->InjLock, oldIrql);
     return answer;
 }
@@ -132,6 +157,20 @@ USHORT HcdInjPciCommand(PHCD_CONTROLLER hc, USHORT command)
 /* The thread's half                                                        */
 /* ----------------------------------------------------------------------- */
 
+/* The lost-interrupt window: disarmed first, so the ISR stops counting
+ * before the count is reset under it; armed last. `budget` 0 leaves it
+ * disarmed. IRQL: PASSIVE_LEVEL (the thread). */
+static VOID hcdInjIrqArm(PHCD_CONTROLLER hc, ULONG budget, ULONG forever)
+{
+    (VOID)InterlockedExchange((PLONG)&hc->InjIrqArmed, 0);
+    (VOID)InterlockedExchange((PLONG)&hc->InjIrqTaken, 0);
+    (VOID)InterlockedExchange((PLONG)&hc->InjIrqBudget, (LONG)budget);
+    (VOID)InterlockedExchange((PLONG)&hc->InjIrqForever, forever ? 1 : 0);
+    if (budget != 0 || forever) {
+        (VOID)InterlockedExchange((PLONG)&hc->InjIrqArmed, 1);
+    }
+}
+
 /* IRQL: PASSIVE_LEVEL. */
 static VOID hcdInjClear(PHCD_CONTROLLER hc)
 {
@@ -140,8 +179,7 @@ static VOID hcdInjClear(PHCD_CONTROLLER hc)
     KeAcquireSpinLock(&hc->InjLock, &oldIrql);
     XhciInjRegsClear(&hc->InjRegs);
     KeReleaseSpinLock(&hc->InjLock, oldIrql);
-    (VOID)InterlockedExchange((PLONG)&hc->InjIrqForever, 0);
-    (VOID)InterlockedExchange((PLONG)&hc->InjIrqUntil, hc->InjIrqSeen);
+    hcdInjIrqArm(hc, 0, 0);
 }
 
 /*
@@ -297,11 +335,9 @@ static VOID hcdInjFire(PHCD_CONTROLLER hc, ULONG value)
     case XHCI_INJ_LOST_IRQ:
         count = XhciInjLostCount(arg);
         if (count == 0xFFFFFFFFUL) {
-            (VOID)InterlockedExchange((PLONG)&hc->InjIrqForever, 1);
+            hcdInjIrqArm(hc, 0, 1);
         } else {
-            (VOID)InterlockedExchange((PLONG)&hc->InjIrqForever, 0);
-            (VOID)InterlockedExchange((PLONG)&hc->InjIrqUntil,
-                                      hc->InjIrqSeen + (LONG)count);
+            hcdInjIrqArm(hc, count, 0);
         }
         break;
     case XHCI_INJ_OC_RELEASE:
@@ -351,6 +387,12 @@ VOID HcdInjPoll(PHCD_CONTROLLER hc)
         hc->InjIrqNoted = dropped;
         XHCI_DBG_VALUE("qemu inject: interrupts lost so far", (ULONG)dropped);
         XhciLogNote(ext, "qemu.inj.irq.lost", (ULONG)dropped);
+    }
+    /* A spent window is disarmed, so the ISR's count never runs on with
+     * nothing armed (XhciInjIrqDrop is unsigned besides). */
+    if (XhciInjIrqSpent((ULONG)hc->InjIrqArmed, (ULONG)hc->InjIrqForever,
+                        (ULONG)hc->InjIrqTaken, (ULONG)hc->InjIrqBudget)) {
+        hcdInjIrqArm(hc, 0, 0);
     }
 
     now = HcdTolNow(hc);

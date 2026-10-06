@@ -6313,7 +6313,7 @@ in the guest fires a fault at run time by writing it:
 | `03` | Over-current (35-T.5) | the port's PORTSC reads answer PP clear and OCA and OCC set; PP never leaves the real port |
 | `04` | Over-current released | OCA answered clear from now on; the driver's repower ends the emulation. Transient: `04` within the over-current wait (5 s, counted long); persistent: never send it |
 | `05` | HCH (35-T.6) | a real write clearing Run/Stop; the in-place recovery runs for real. Persistent: fire it again after each recovery, four times inside ten minutes |
-| `06` | All-ones USBSTS, with the proof (35-T.6) | the containment step's USBSTS read answers all-ones for `arg` passes (0 until CLEAR); configuration space is real, so Bus Master Enable is cleared and reads back clear. Transient: an `arg` of 5 or so, shorter than the containment interval |
+| `06` | All-ones USBSTS, with the proof (35-T.6) | the health poll's USBSTS read (at every `XhciTolerance` value, so at 0 it meets `2.1.1.0`'s handling and `HealthPollsDead` counts) and the containment step's (at 1) answer all-ones for `arg` thread passes (0 until CLEAR); configuration space is real, so Bus Master Enable is cleared and reads back clear. Transient: an `arg` of 5 or so, shorter than the containment interval |
 | `07` | All-ones USBSTS, no proof | the same, the Bus Master Enable read-back answering set: the pinned branch |
 | `FF` | CLEAR | every emulated answer and the lost-interrupt window off |
 

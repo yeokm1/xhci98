@@ -99,8 +99,9 @@ typedef struct _XHCI_INJ_TRIGGER {
  * acknowledgement; an over-current port reads PP clear (OCA and OCC set
  * while held) until the driver's PP write after the release, PP itself never
  * reaching the real port while emulated. USBSTS answers all-ones to the
- * containment step for DeadLeft reads (XHCI_INJ_DEAD_FOREVER: until CLEAR),
- * and Bus Master Enable reads back set once NoProof is armed.
+ * health poll and the containment step for DeadLeft passes
+ * (XHCI_INJ_DEAD_FOREVER: until CLEAR), and Bus Master Enable reads back
+ * set once NoProof is armed.
  */
 typedef struct _XHCI_INJ_REGS {
     ULONG PedPort;
@@ -111,6 +112,7 @@ typedef struct _XHCI_INJ_REGS {
     ULONG OccHeld;
     ULONG OcPpWrites;
     ULONG DeadLeft;
+    ULONG DeadLast;                 /* the health poll's last answer */
     ULONG NoProof;
 } XHCI_INJ_REGS, *PXHCI_INJ_REGS;
 
@@ -146,9 +148,24 @@ ULONG XhciInjPortscRead(const XHCI_INJ_REGS *r, ULONG port, ULONG raw);
  * and the value the hardware is given returned. */
 ULONG XhciInjPortscWrite(PXHCI_INJ_REGS r, ULONG port, ULONG value);
 
-/* The containment step's USBSTS read: all-ones while armed, each such read
- * spending one of DeadLeft. */
-ULONG XhciInjUsbsts(PXHCI_INJ_REGS r, ULONG raw);
+/* A USBSTS read the fault is answered on: all-ones while armed. The health
+ * poll's read, taken at every XhciTolerance value and once per thread pass,
+ * spends one of DeadLeft (`spend` 1); the containment step's read, gated on
+ * XhciTolerance 1 and after the poll in the same pass, does not (0) and
+ * answers as the poll last did. So an argument of N is N passes of
+ * all-ones to both readers. */
+ULONG XhciInjUsbsts(PXHCI_INJ_REGS r, ULONG raw, ULONG spend);
+
+/*
+ * The lost-interrupt window, decided without a compare-exchange (no import
+ * has one on Windows 98's evidence). Disarmed it drops nothing whatever the
+ * counts; armed, `taken` is the ISR's count of interrupts claimed since the
+ * arming (post-increment, from 1), and the first `budget` are dropped, or
+ * every one when `forever`. The thread disarms a spent window
+ * (XhciInjIrqSpent), so the count never runs on unarmed.
+ */
+ULONG XhciInjIrqDrop(ULONG armed, ULONG forever, ULONG taken, ULONG budget);
+ULONG XhciInjIrqSpent(ULONG armed, ULONG forever, ULONG taken, ULONG budget);
 
 /* The PCI Command register's read-back in the containment's proof. */
 ULONG XhciInjPciCommand(const XHCI_INJ_REGS *r, ULONG command);

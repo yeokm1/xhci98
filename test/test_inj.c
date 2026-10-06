@@ -210,22 +210,59 @@ static void test_oc(void)
     CHECK_EQ(XhciInjPortscWrite(&r, 0, OCC), OCC, "port 0 untouched");
 }
 
+/* Each thread pass reads USBSTS in the health poll (every XhciTolerance
+ * value, spend 1) and then, at XhciTolerance 1 only, in the containment
+ * step (spend 0). An argument of N is N passes to whichever readers run. */
+static void dead_pass(PXHCI_INJ_REGS r, ULONG tolerance, ULONG *health,
+                      ULONG *contain)
+{
+    *health = XhciInjUsbsts(r, 0x18UL, 1);
+    *contain = tolerance ? XhciInjUsbsts(r, 0x18UL, 0) : 0x18UL;
+}
+
 static void test_dead(void)
 {
     XHCI_INJ_REGS r;
+    ULONG tol;
+    ULONG pass;
+    ULONG health;
+    ULONG contain;
+    char what[80];
 
     XhciInjRegsClear(&r);
-    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL), 0x18UL, "not armed");
-    XhciInjArmDead(&r, 3, 0);
-    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL), 0xFFFFFFFFUL, "read 1");
-    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL), 0xFFFFFFFFUL, "read 2");
-    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL), 0xFFFFFFFFUL, "read 3");
-    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL), 0x18UL, "spent: the real read");
+    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL, 1), 0x18UL, "health: not armed");
+    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL, 0), 0x18UL, "contain: not armed");
+
+    for (tol = 0; tol <= 1; tol++) {
+        XhciInjArmDead(&r, 3, 0);
+        for (pass = 1; pass <= 4; pass++) {
+            dead_pass(&r, tol, &health, &contain);
+            sprintf(what, "tolerance %lu pass %lu, health poll", tol, pass);
+            CHECK_EQ(health, pass <= 3 ? 0xFFFFFFFFUL : 0x18UL, what);
+            sprintf(what, "tolerance %lu pass %lu, containment", tol, pass);
+            CHECK_EQ(contain, (tol && pass <= 3) ? 0xFFFFFFFFUL : 0x18UL, what);
+        }
+        CHECK_EQ(r.DeadLeft, 0, "spent by the health poll alone");
+    }
+    /* The containment read alone never spends it. */
+    XhciInjArmDead(&r, 1, 0);
+    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL, 0), 0xFFFFFFFFUL, "contain 1");
+    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL, 0), 0xFFFFFFFFUL, "contain 2");
+    CHECK_EQ(r.DeadLeft, 1, "unspent");
+    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL, 1), 0xFFFFFFFFUL, "health spends it");
+    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL, 0), 0xFFFFFFFFUL, "same pass");
+    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL, 1), 0x18UL, "next pass, health");
+    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL, 0), 0x18UL, "next pass, contain");
     CHECK_EQ(XhciInjPciCommand(&r, 0x0002UL), 0x0002UL, "proof real");
 
     XhciInjArmDead(&r, 0, 1);
     CHECK_EQ(r.DeadLeft, XHCI_INJ_DEAD_FOREVER, "0 is until CLEAR");
-    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL), 0xFFFFFFFFUL, "all-ones");
+    for (tol = 0; tol <= 1; tol++) {
+        dead_pass(&r, tol, &health, &contain);
+        CHECK_EQ(health, 0xFFFFFFFFUL, "persistent, health poll");
+        CHECK_EQ(contain, tol ? 0xFFFFFFFFUL : 0x18UL,
+                 "persistent, containment where it runs");
+    }
     CHECK_EQ(r.DeadLeft, XHCI_INJ_DEAD_FOREVER, "never spent");
     CHECK_EQ(XhciInjPciCommand(&r, 0x0002UL), 0x0006UL, "BME reads set");
     CHECK_EQ(XhciInjPciCommand(&r, 0x0006UL), 0x0006UL, "set stays set");
@@ -233,10 +270,52 @@ static void test_dead(void)
              "a function that does not answer is left so");
     CHECK_EQ(XHCI_INJ_PCI_BME, 0x0004UL, "PCI Command bit 2");
     XhciInjRegsClear(&r);
-    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL), 0x18UL, "CLEAR");
+    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL, 1), 0x18UL, "CLEAR, health");
+    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL, 0), 0x18UL, "CLEAR, containment");
     CHECK_EQ(XhciInjPciCommand(&r, 0x0002UL), 0x0002UL, "CLEAR, proof real");
 }
 
+/* The lost-interrupt window: the ISR counts `taken` only while armed. */
+static void test_irq_window(void)
+{
+    ULONG n;
+    ULONG wrap[4];
+    ULONG i;
+
+    /* Inactive: nothing drops, whatever the counts - the review's case of
+     * a count at 0x80000001 included. */
+    wrap[0] = 0;
+    wrap[1] = 1;
+    wrap[2] = 0x7FFFFFFFUL;
+    wrap[3] = 0x80000001UL;
+    for (i = 0; i < 4; i++) {
+        CHECK_EQ(XhciInjIrqDrop(0, 0, wrap[i], 0), 0, "disarmed");
+        CHECK_EQ(XhciInjIrqDrop(0, 0, wrap[i], 5), 0, "disarmed, budget");
+        CHECK_EQ(XhciInjIrqDrop(0, 1, wrap[i], 0), 0, "disarmed, forever");
+        CHECK_EQ(XhciInjIrqSpent(0, 0, wrap[i], 5), 0, "nothing to disarm");
+    }
+
+    /* Armed for 3: the first three claimed are dropped, then exhaustion. */
+    for (n = 1; n <= 6; n++) {
+        CHECK_EQ(XhciInjIrqDrop(1, 0, n, 3), n <= 3 ? 1UL : 0UL,
+                 "budget 3");
+        CHECK_EQ(XhciInjIrqSpent(1, 0, n, 3), n >= 3 ? 1UL : 0UL,
+                 "spent from the third");
+    }
+    CHECK_EQ(XhciInjIrqDrop(1, 0, 0, 3), 0, "no count yet, no drop");
+    CHECK_EQ(XhciInjIrqSpent(1, 0, 2, 3), 0, "not yet spent");
+
+    /* Wraparound while armed: a count past 0x7FFFFFFF is past any budget. */
+    CHECK_EQ(XhciInjIrqDrop(1, 0, 0x80000001UL, 254), 0, "wrapped count");
+    CHECK_EQ(XhciInjIrqDrop(1, 0, 0xFFFFFFFFUL, 254), 0, "top count");
+    CHECK_EQ(XhciInjIrqSpent(1, 0, 0x80000001UL, 254), 1, "and spent");
+
+    /* Forever: every one dropped, never spent; CLEAR is disarmed. */
+    CHECK_EQ(XhciInjIrqDrop(1, 1, 1, 0), 1, "forever, first");
+    CHECK_EQ(XhciInjIrqDrop(1, 1, 0x80000001UL, 0), 1, "forever, wrapped");
+    CHECK_EQ(XhciInjIrqSpent(1, 1, 0x80000001UL, 0), 0, "forever is never spent");
+    CHECK_EQ(XhciInjIrqDrop(0, 0, 0, 0), 0, "CLEAR drops nothing");
+}
 int main(void)
 {
     test_encoding();
@@ -246,6 +325,7 @@ int main(void)
     test_pec();
     test_oc();
     test_dead();
+    test_irq_window();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

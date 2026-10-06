@@ -97,6 +97,7 @@ PKSPIN_LOCK HcdSvcControllerLock(PXHCI_EXTENSION ext);
 ULONG HcdSvcQemuPsiE460(PXHCI_EXTENSION ext);
 ULONG HcdInjPortscRead(PXHCI_EXTENSION ext, ULONG port, ULONG value);
 ULONG HcdInjPortscWrite(PXHCI_EXTENSION ext, ULONG port, ULONG value);
+ULONG HcdInjHealthUsbsts(PXHCI_EXTENSION ext, ULONG usbsts);
 #endif
 
 #endif /* HCD_SVC_H */

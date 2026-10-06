@@ -1005,17 +1005,18 @@ typedef struct _HCD_CONTROLLER {
      * record 08). QemuPsiE460 is task 35.4's speed-table override, latched
      * at each start (hcd_ctl.c). The rest is 35-T.9's injection
      * (hcd_inj.c): InjLock is a leaf lock, taken at <= DISPATCH_LEVEL only,
-     * over InjRegs; the lost-interrupt window is lock-free - the ISR counts
-     * InjIrqSeen and InjIrqDropped, the thread moves InjIrqUntil and
-     * InjIrqForever; InjTrigger, InjReadAt and InjIrqNoted are the
-     * thread's. */
+     * over InjRegs; the lost-interrupt window is lock-free - the thread
+     * arms and disarms it (InjIrqArmed, InjIrqBudget, InjIrqForever), the
+     * ISR counts InjIrqTaken only while it is armed, and InjIrqDropped;
+     * InjTrigger, InjReadAt and InjIrqNoted are the thread's. */
     ULONG QemuPsiE460;
     KSPIN_LOCK InjLock;
     XHCI_INJ_REGS InjRegs;
     XHCI_INJ_TRIGGER InjTrigger;
     ULONG InjReadAt;
-    volatile LONG InjIrqSeen;
-    volatile LONG InjIrqUntil;
+    volatile LONG InjIrqArmed;
+    volatile LONG InjIrqTaken;
+    volatile LONG InjIrqBudget;
     volatile LONG InjIrqForever;
     volatile LONG InjIrqDropped;
     LONG InjIrqNoted;

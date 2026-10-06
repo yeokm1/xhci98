@@ -678,6 +678,10 @@ ULONG XhciControllerHealthPoll(PXHCI_EXTENSION ext)
      */
     XhciPollClockAdvance(ext);
     usbsts = XhciReadOp(ext, XHCI_OP_USBSTS);
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* 35-T.9's all-ones, met here at every XhciTolerance value (hcd_inj.c). */
+    usbsts = HcdInjHealthUsbsts(ext, usbsts);
+#endif
     ext->LastCheckStatus = usbsts;
 
     if (usbsts == 0xFFFFFFFFUL) {

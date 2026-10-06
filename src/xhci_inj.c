@@ -50,6 +50,7 @@ VOID XhciInjRegsClear(PXHCI_INJ_REGS r)
     r->OccHeld = 0;
     r->OcPpWrites = 0;
     r->DeadLeft = 0;
+    r->DeadLast = 0;
     r->NoProof = 0;
 }
 
@@ -94,6 +95,7 @@ VOID XhciInjReleaseOc(PXHCI_INJ_REGS r)
 VOID XhciInjArmDead(PXHCI_INJ_REGS r, ULONG reads, ULONG noProof)
 {
     r->DeadLeft = (reads == 0) ? XHCI_INJ_DEAD_FOREVER : reads;
+    r->DeadLast = 0;
     r->NoProof = noProof ? 1UL : 0UL;
 }
 
@@ -152,15 +154,39 @@ ULONG XhciInjPortscWrite(PXHCI_INJ_REGS r, ULONG port, ULONG value)
     return value;
 }
 
-ULONG XhciInjUsbsts(PXHCI_INJ_REGS r, ULONG raw)
+ULONG XhciInjUsbsts(PXHCI_INJ_REGS r, ULONG raw, ULONG spend)
 {
+    if (!spend) {
+        /* The containment step follows the health poll in the same pass
+         * and answers as it did, the pass that spent the last included. */
+        return (r->DeadLeft != 0 || r->DeadLast) ? 0xFFFFFFFFUL : raw;
+    }
     if (r->DeadLeft == 0) {
+        r->DeadLast = 0;
         return raw;
     }
     if (r->DeadLeft != XHCI_INJ_DEAD_FOREVER) {
         r->DeadLeft--;
     }
+    r->DeadLast = 1;
     return 0xFFFFFFFFUL;
+}
+
+ULONG XhciInjIrqDrop(ULONG armed, ULONG forever, ULONG taken, ULONG budget)
+{
+    if (!armed) {
+        return 0;
+    }
+    if (forever) {
+        return 1;
+    }
+    /* Unsigned: a count past 0x7FFFFFFF is past any budget, never under. */
+    return (taken != 0 && taken <= budget) ? 1UL : 0UL;
+}
+
+ULONG XhciInjIrqSpent(ULONG armed, ULONG forever, ULONG taken, ULONG budget)
+{
+    return (armed && !forever && taken >= budget) ? 1UL : 0UL;
 }
 
 ULONG XhciInjPciCommand(const XHCI_INJ_REGS *r, ULONG command)
