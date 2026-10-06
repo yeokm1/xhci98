@@ -957,6 +957,212 @@ static void test_quick_agrees_with_the_full_run(void)
     }
 }
 
+/* ------------------------------------------------------------------ */
+/* Roadmap task 35.1: the speed tables and the raw xECP chain          */
+/* ------------------------------------------------------------------ */
+
+/* CTRL is large (device records, DMA pointers); keep it off the stack. */
+static CTRL tc;
+
+static void add_proto(u8 major, u8 portoff, u8 portcnt, u8 psic,
+                      const u32 *psi)
+{
+    PROTOCAP *pr = &tc.proto[tc.nproto++];
+    int k;
+
+    pr->major = major;
+    pr->minor = 0;
+    pr->portoff = portoff;
+    pr->portcnt = portcnt;
+    pr->slottype = 0;
+    pr->psic = psic;
+    pr->npsi = psic;
+    for (k = 0; k < (int)psic; k++)
+        pr->psi[k] = psi[k];
+}
+
+/*
+ * The E460's (8086:9D2F) USB 3 protocol as read on 2026-10-06 (roadmap 35.0,
+ * issue 11): PSIC 3, Intel's SSIC rates 1248/2496/4992 Mb/s on IDs 1-3 and no
+ * ID 4. Expected strings transcribed by hand from xHCI 1.2c 7.2.2.1.2: PSIV
+ * 3:0, PSIE 5:4 (2 = Mb/s), PLT 7:6, PFD 8, LP 15:14, PSIM 31:16.
+ */
+static void test_psi_e460_usb3_ssic_table(void)
+{
+    static const u32 u3[3] = { 0x04E00121UL, 0x09C00122UL, 0x13800123UL };
+
+    memset(&tc, 0, sizeof(tc));
+    add_proto(3, 13, 6, 3, u3);
+    reset_out();
+    report_protocols(&tc, qprintf);
+    CHECK(has("  Protocol USB 3.0: ports 13-18, slot type 0, PSIC 3\n"),
+          "E460 USB3: protocol line");
+    CHECK(has("    PSI 04E00121  PSIV  1   1248 Mb/s  symmetric  PFD 1  "
+              "LP 0 (SuperSpeed)\n"), "E460 USB3: SSIC 1248 Mb/s entry");
+    CHECK(has("    PSI 09C00122  PSIV  2   2496 Mb/s  symmetric  PFD 1  "
+              "LP 0 (SuperSpeed)\n"), "E460 USB3: SSIC 2496 Mb/s entry");
+    CHECK(has("    PSI 13800123  PSIV  3   4992 Mb/s  symmetric  PFD 1  "
+              "LP 0 (SuperSpeed)\n"), "E460 USB3: SSIC 4992 Mb/s entry");
+    CHECK(has("  WARNING: USB 3 PSI table omits PSIV 4 (default SuperSpeed); "
+              "a driver that\n"
+              "    trusts the table strictly cannot decode a 5 Gb/s device "
+              "(issue 11)\n"), "E460 USB3: the issue 11 warning");
+    CHECK(psi_usb3_lacks_ss(&tc.proto[0]) == 1, "E460 USB3: lacks PSIV 4");
+}
+
+/* No warning where it does not apply: a USB 3 table that lists ID 4, a USB 3
+ * protocol with PSIC 0 (QEMU's), and a USB 2 table, whose LP is reserved. */
+static void test_psi_no_warning_cases(void)
+{
+    static const u32 u3ss[4] = {
+        0x04E00121UL, 0x09C00122UL, 0x13800123UL,
+        0x00050134UL    /* PSIV 4, 5 Gb/s, PFD 1, LP 0 */
+    };
+    static const u32 u2[3] = {
+        0x000C0021UL,   /* PSIV 1, 12 Mb/s */
+        0x05DC0012UL,   /* PSIV 2, 1500 Kb/s */
+        0x01E00023UL    /* PSIV 3, 480 Mb/s */
+    };
+
+    memset(&tc, 0, sizeof(tc));
+    add_proto(2, 1, 12, 3, u2);
+    add_proto(3, 13, 6, 4, u3ss);
+    add_proto(3, 0, 0, 0, u3ss);
+    reset_out();
+    report_protocols(&tc, qprintf);
+    CHECK(!has("WARNING"), "PSIV 4 listed, PSIC 0, USB2: no warning");
+    CHECK(has("    PSI 00050134  PSIV  4      5 Gb/s  symmetric  PFD 1  "
+              "LP 0 (SuperSpeed)\n"), "USB3 5 Gb/s entry");
+    CHECK(has("    PSI 000C0021  PSIV  1     12 Mb/s  symmetric  PFD 0  "
+              "LP 0\n"), "USB2 Full Speed entry, no LP name");
+    CHECK(has("    PSI 05DC0012  PSIV  2   1500 Kb/s  symmetric  PFD 0  "
+              "LP 0\n"), "USB2 Low Speed entry in Kb/s");
+    CHECK(has("    PSI 01E00023  PSIV  3    480 Mb/s  symmetric  PFD 0  "
+              "LP 0\n"), "USB2 High Speed entry");
+    CHECK(has("  Protocol USB 3.0: no ports, slot type 0, PSIC 0\n"),
+          "PSIC 0 protocol line kept");
+    CHECK(psi_usb3_lacks_ss(&tc.proto[0]) == 0, "USB2: never warns");
+    CHECK(psi_usb3_lacks_ss(&tc.proto[1]) == 0, "USB3 with 4: no warning");
+    CHECK(psi_usb3_lacks_ss(&tc.proto[2]) == 0, "USB3 PSIC 0: no warning");
+}
+
+/* The remaining fields: LP 1 (SuperSpeedPlus), both asymmetric PLTs, the
+ * reserved PLT and LP, and b/s. */
+static void test_psi_field_decode(void)
+{
+    static const u32 u3[5] = {
+        0x000A4135UL,   /* PSIV 5, 10 Gb/s, PFD 1, LP 1 */
+        0x000A01B6UL,   /* PSIV 6, 10 Gb/s, PLT 2 asym RX, PFD 1 */
+        0x000A01F7UL,   /* PSIV 7, 10 Gb/s, PLT 3 asym TX, PFD 1 */
+        0x0001C078UL,   /* PSIV 8, 1 Gb/s, PLT 1, LP 3 */
+        0x03E80009UL    /* PSIV 9, 1000 b/s */
+    };
+
+    memset(&tc, 0, sizeof(tc));
+    add_proto(3, 1, 2, 5, u3);
+    reset_out();
+    report_protocols(&tc, qprintf);
+    CHECK(has("    PSI 000A4135  PSIV  5     10 Gb/s  symmetric  PFD 1  "
+              "LP 1 (SuperSpeedPlus)\n"), "LP 1 is SuperSpeedPlus");
+    CHECK(has("    PSI 000A01B6  PSIV  6     10 Gb/s  asym RX    PFD 1  "
+              "LP 0 (SuperSpeed)\n"), "PLT 2 asym RX");
+    CHECK(has("    PSI 000A01F7  PSIV  7     10 Gb/s  asym TX    PFD 1  "
+              "LP 0 (SuperSpeed)\n"), "PLT 3 asym TX");
+    CHECK(has("    PSI 0001C078  PSIV  8      1 Gb/s  reserved   PFD 0  "
+              "LP 3 (reserved)\n"), "PLT 1 and LP 3 reserved");
+    CHECK(has("    PSI 03E80009  PSIV  9   1000 b/s   symmetric  PFD 0  "
+              "LP 0 (SuperSpeed)\n"), "PSIE 0 is b/s");
+    CHECK(has("WARNING: USB 3 PSI table omits PSIV 4"),
+          "a USB 3 table of 5-9 still lacks 4");
+}
+
+/* The raw chain: rows of four with their BAR0 offsets, a capability cut at
+ * the per-capability bound, and each reason a record ends. */
+static void test_xcap_dump(void)
+{
+    int k;
+
+    memset(&tc, 0, sizeof(tc));
+    reset_out();
+    report_xcap_dump(&tc, qprintf);
+    CHECK(has("  xECP: 0 - no extended capabilities\n"), "no xECP");
+
+    tc.xecp_off = 0x8000;
+    tc.nxcap = 2;
+    tc.xcap[0].off = 0x8000;
+    tc.xcap[0].id = 1;
+    tc.xcap[0].next = 4;
+    tc.xcap[0].first = 0;
+    tc.xcap[0].ndw = 4;
+    tc.xcap[0].want = 4;
+    tc.xdump[0] = 0x00000401UL;
+    tc.xdump[1] = 0xE0000000UL;
+    tc.xdump[2] = 0x11111111UL;
+    tc.xdump[3] = 0x22222222UL;
+    tc.xcap[1].off = 0x8010;
+    tc.xcap[1].id = 2;
+    tc.xcap[1].next = 0;
+    tc.xcap[1].first = 4;
+    tc.xcap[1].ndw = 7;
+    tc.xcap[1].want = 7;
+    tc.xdump[4] = 0x03000002UL;
+    tc.xdump[5] = 0x20425355UL;
+    tc.xdump[6] = 0x30000613UL;
+    tc.xdump[7] = 0x00000000UL;
+    tc.xdump[8] = 0x04E00121UL;
+    tc.xdump[9] = 0x09C00122UL;
+    tc.xdump[10] = 0x13800123UL;
+    tc.nxdump = 11;
+    tc.xcap_stop = XCAP_STOP_END;
+    reset_out();
+    report_xcap_dump(&tc, qprintf);
+    CHECK(has("  Extended capabilities, raw dwords (xECP 8000):\n"),
+          "dump header");
+    CHECK(has("    cap 8000 ID   1 next   4  USB Legacy Support, 4 dwords\n"
+              "      8000: 00000401 E0000000 11111111 22222222\n"),
+          "legacy support cap, one row");
+    CHECK(has("    cap 8010 ID   2 next   0  Supported Protocol, 7 dwords\n"
+              "      8010: 03000002 20425355 30000613 00000000\n"
+              "      8020: 04E00121 09C00122 13800123\n"),
+          "protocol cap with its PSI dwords, short last row");
+    CHECK(!has("(a header") && !has("(dump bound") && !has("(the walk"),
+          "chain ended by its own next pointer: no note");
+
+    /* a vendor capability cut at the per-capability bound */
+    tc.nxcap = 1;
+    tc.xcap[0].id = 192;
+    tc.xcap[0].next = 255;
+    tc.xcap[0].ndw = XCAP_DUMP_PER_CAP;
+    tc.xcap[0].want = 255;
+    for (k = 0; k < XCAP_DUMP_PER_CAP; k++)
+        tc.xdump[k] = (u32)k;
+    tc.xcap_stop = XCAP_STOP_FULL;
+    reset_out();
+    report_xcap_dump(&tc, qprintf);
+    CHECK(has("    cap 8000 ID 192 next 255  vendor defined, 32 of 255 "
+              "dwords\n"), "per-capability bound named");
+    CHECK(has("      8070: 0000001C 0000001D 0000001E 0000001F\n"),
+          "eighth row at +70h");
+    CHECK(has("(dump bound reached, 32 capabilities / 256 dwords"),
+          "total bound named");
+
+    tc.xcap[0].ndw = 1;
+    tc.xcap[0].want = 1;
+    tc.xdump[0] = 0xFFFFFFFFUL;
+    tc.xcap_stop = XCAP_STOP_ONES;
+    reset_out();
+    report_xcap_dump(&tc, qprintf);
+    CHECK(has("      8000: FFFFFFFF\n") &&
+          has("(a header read all ones: the chain is not followed past it)"),
+          "all-ones header stops the record");
+
+    tc.xcap_stop = XCAP_STOP_WALK;
+    reset_out();
+    report_xcap_dump(&tc, qprintf);
+    CHECK(has("(the walk stopped at the mapped window or its 64-step guard)"),
+          "walk bound named");
+}
+
 int main(void)
 {
     test_pm_absent();
@@ -987,6 +1193,10 @@ int main(void)
     test_quick_cannot_say();
     test_quick_dead_window_with_no_excuse();
     test_quick_agrees_with_the_full_run();
+    test_psi_e460_usb3_ssic_table();
+    test_psi_no_warning_cases();
+    test_psi_field_decode();
+    test_xcap_dump();
 
     printf("test_mmiodiag: %d checks, %d failed\n", checks, failures);
     return failures;

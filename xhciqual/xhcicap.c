@@ -200,6 +200,61 @@ unmap:
     return 0;
 }
 
+/*
+ * Record one extended capability for the raw dump (roadmap task 35.1, the
+ * README's "Raw extended-capability dump"). Read-only: it reads dwords inside
+ * the capability's own span and inside the mapped window, and a register read
+ * has no side effect here (the RW1C/RW1S bits of these registers act on writes,
+ * spec 5.1). The span is the distance to the next capability; the last one,
+ * whose span the chain does not give, takes its known size, 4 dwords if
+ * unknown. A Supported Protocol capability always includes its PSI dwords.
+ */
+static void xcap_record(CTRL *c, u32 off, u32 dw)
+{
+    XCAPREC *r;
+    u32 want, known, k;
+
+    if (c->nxcap >= XCAP_DUMP_CAPS || c->nxdump >= XCAP_DUMP_TOTAL) {
+        c->xcap_stop = XCAP_STOP_FULL;
+        return;
+    }
+    r = &c->xcap[c->nxcap++];
+    r->off = off;
+    r->id = (u8)(dw & 0xFF);
+    r->next = (u8)((dw >> 8) & 0xFF);
+    r->first = (u16)c->nxdump;
+    if (dw == 0xFFFFFFFFUL) {
+        /* a dead or vanished function; its "next" of FF is not a chain */
+        c->xdump[c->nxdump++] = dw;
+        r->ndw = 1;
+        r->want = 1;
+        c->xcap_stop = XCAP_STOP_ONES;
+        return;
+    }
+    switch (r->id) {
+    case XECP_ID_LEGSUP: known = 2; break;     /* USBLEGSUP, USBLEGCTLSTS */
+    case XECP_ID_PROTO:
+        known = (off + 0x0CUL < BAR_MAP_SIZE) ?
+                4 + ((RD32(c->base + off + 0x08) >> 28) & 0xF) : 1;
+        break;
+    case 3:  known = 2;  break;                 /* Extended Power Management */
+    case 10: known = 16; break;                 /* Debug Capability, 00h-3Ch */
+    default: known = 4;  break;
+    }
+    want = known;
+    if (r->next != 0) {
+        want = r->next;
+        if (r->id == XECP_ID_PROTO && known > want)
+            want = known;
+    }
+    r->want = (u16)want;
+    for (k = 0; k < want && k < XCAP_DUMP_PER_CAP &&
+                c->nxdump < XCAP_DUMP_TOTAL &&
+                off + k * 4 + 4 <= BAR_MAP_SIZE; k++)
+        c->xdump[c->nxdump++] = (k == 0) ? dw : RD32(c->base + off + k * 4);
+    r->ndw = (u16)k;
+}
+
 int xhci_read_caps(CTRL *c)
 {
     u32 off, dw;
@@ -273,11 +328,17 @@ int xhci_read_caps(CTRL *c)
     c->legsup_off = 0;
     c->nproto = 0;
     off = ((c->hcc1 >> 16) & 0xFFFF) << 2;
+    c->xecp_off = off;
+    c->nxcap = 0;
+    c->nxdump = 0;
+    c->xcap_stop = XCAP_STOP_END;
     for (guard = 0; off != 0 && off < BAR_MAP_SIZE - 0x40UL && guard < 64;
          guard++) {
         u32 next;
 
         dw = RD32(c->base + off);
+        if (c->xcap_stop == XCAP_STOP_END)
+            xcap_record(c, off, dw);
         switch (dw & 0xFF) {
         case XECP_ID_LEGSUP:
             if (c->legsup_off == 0)
@@ -323,6 +384,8 @@ int xhci_read_caps(CTRL *c)
      * may have missed USBLEGSUP, and "no USBLEGSUP" then passes C1 with no
      * handoff performed. Say so rather than end silently. */
     if (off >= BAR_MAP_SIZE - 0x40UL || guard >= 64) {
+        if (c->xcap_stop == XCAP_STOP_END)
+            c->xcap_stop = XCAP_STOP_WALK;
         qprintf("  NOTE: extended capability list not walked to its end "
                 "(next at %08lX); a USBLEGSUP beyond it was not seen\n",
                 (unsigned long)off);

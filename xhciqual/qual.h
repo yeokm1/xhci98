@@ -360,6 +360,33 @@ typedef struct {
     u32 psi[MAX_PSI];     /* raw Protocol Speed ID dwords (spec 7.2.2.1.2) */
 } PROTOCAP;
 
+/*
+ * Raw extended-capability chain, kept so the report can print the register
+ * words behind its decoded fact sheet and a log can become a host replay
+ * vector (README, "Raw extended-capability dump"). Captured during the one
+ * read-only walk in xhci_read_caps(), because the report is printed after
+ * qual_cleanup() and must not touch MMIO again. Bounded three ways: the
+ * capabilities recorded, the dwords per capability and the dwords in all.
+ */
+#define XCAP_DUMP_CAPS    32
+#define XCAP_DUMP_PER_CAP 32
+#define XCAP_DUMP_TOTAL   256
+
+/* CTRL.xcap_stop: why the record ends where it does */
+#define XCAP_STOP_END      0   /* next pointer 0: the chain's own end */
+#define XCAP_STOP_ONES     1   /* a header read all ones: nothing behind it */
+#define XCAP_STOP_FULL     2   /* XCAP_DUMP_CAPS or XCAP_DUMP_TOTAL reached */
+#define XCAP_STOP_WALK     3   /* the walk itself stopped (window or guard) */
+
+typedef struct {
+    u32 off;      /* BAR0-relative byte offset of the header dword */
+    u8  id;       /* Capability ID, header bits 7:0 */
+    u8  next;     /* Next Capability Pointer, header bits 15:8, in dwords */
+    u16 first;    /* index of the header dword in CTRL.xdump[] */
+    u16 ndw;      /* dwords recorded, header included */
+    u16 want;     /* dwords the capability spans, as far as it is known */
+} XCAPREC;
+
 /* ------------------------------------------------------------------ */
 /* C8 device identification results                                   */
 /* ------------------------------------------------------------------ */
@@ -440,6 +467,12 @@ typedef struct {
     int saw_debug_cap;
     PROTOCAP proto[MAX_PROTO];
     int nproto;
+    u32 xecp_off;            /* HCCPARAMS1 xECP in bytes, 0 = no chain */
+    int nxcap;               /* entries in xcap[] */
+    int xcap_stop;           /* XCAP_STOP_* */
+    int nxdump;              /* dwords used in xdump[] */
+    XCAPREC xcap[XCAP_DUMP_CAPS];
+    u32 xdump[XCAP_DUMP_TOTAL];
     u8  portclass[MAX_PORTS + 1];   /* 1-based */
     int usb2_ports;                 /* count of managed (PC_USB2_*) ports */
 
@@ -651,6 +684,19 @@ void report_pci_pm(const PCIINFO *p);          /* A4: PM cap contents */
 void report_pci_status(const PCIINFO *p);      /* A2: sticky bus-error bits */
 void report_mmio_dead(const PCIINFO *p);       /* why MMIO reads as absent */
 int  report_mmio_unavailable(const PCIINFO *p, int active_requested);
+
+/*
+ * Task 35.1's first step: the Supported Protocol capabilities with each PSI
+ * entry decoded, the USB 3 "no PSIV 4" warning (issue 11), and the raw
+ * extended-capability chain. Pure: they print what xhci_read_caps() stored and
+ * read no register. The printer is qprintf (screen and log) or qlogprintf (log
+ * and serial only), so the quick scan can put the same lines in its log
+ * without lengthening its one screen.
+ */
+typedef void (*QPRINTF_FN)(const char *fmt, ...);
+void report_protocols(const CTRL *c, QPRINTF_FN pf);
+int  psi_usb3_lacks_ss(const PROTOCAP *pr);    /* 1 = warn (issue 11) */
+void report_xcap_dump(const CTRL *c, QPRINTF_FN pf);
 
 /*
  * Task 11-V.8: what a **read-only** pass can honestly conclude about one
