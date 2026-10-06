@@ -1295,6 +1295,11 @@ ULONG HcdTolLocCharge(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG kind);
  */
 VOID HcdTolCycleMark(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG reason,
                      ULONG dci);
+/* The device's mark read as the cycle service reads it - each halt with no
+ * TD confirmed by its endpoint's context (XhciTolHaltOwner), a stale one
+ * cleared - and the reason it is to be cycled for, XHCI_TOL_CYCLE_NONE for
+ * none; a reason stays marked for the cycle service. Thread only. */
+ULONG HcdTolCycleResolve(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 VOID HcdTolLocObserve(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG connected,
                       ULONG powered, ULONG changed);
 VOID HcdTolLocRecovery(PHCD_CONTROLLER hc, PHCD_PORT p);

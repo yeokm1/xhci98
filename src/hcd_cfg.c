@@ -3839,22 +3839,35 @@ static VOID hcdCfgRetryOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG decision;
     ULONG applied;
     ULONG action;
+    ULONG live;
     ULONG ok;
 
     stats = &hc->Hc.Tol.Stats;
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    if (!XhciXferRetryPending(pipe->Queue, &token, &gen)) {
+    live = XhciXferRetryPending(pipe->Queue, NULL, NULL);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (!live) {
+        return;
+    }
+    /*
+     * Retry or cycle, decided here once a pass (35-T.3/4 beside 35-T.2;
+     * XhciTolJoin): the device's mark is read now, a halt the live retry
+     * explains (its deferred TD still the head, the endpoint Halted)
+     * leaving it, so a confirmed reason commits this pass to the cycle -
+     * taken and charged by this pass's cycle service, the TD and its
+     * deferred outcome drained by the teardown, no Reset Endpoint for a
+     * slot about to be disabled - and otherwise the retry proceeds now.
+     * A mark arriving between passes cannot postpone both.
+     */
+    if (XhciTolJoin(HcdTolCycleResolve(hc, dev), live) ==
+        XHCI_TOL_JOIN_CYCLE) {
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        hc->RetryWork = 1;
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         return;
     }
-    if (XhciTolMarkPending(&dev->CycleMark) || dev->CycleAbandon) {
-        /* The device is marked for a cycle (35-T.3/4), which this pass's
-         * cycle service takes: no Reset Endpoint for a slot about to be
-         * disabled, and no replay completing the TD the teardown is to
-         * hold. The request stays for the next pass; by then the device has
-         * gone, its queue drained with the TD and its deferred outcome, or
-         * its mark read stale and the retry is decided as ever. */
-        hc->RetryWork = 1;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (!XhciXferRetryPending(pipe->Queue, &token, &gen)) {
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         return;
     }

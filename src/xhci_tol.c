@@ -219,6 +219,26 @@ ULONG XhciTolMarkResolve(PXHCI_TOL_MARK mark, ULONG halted)
     return XHCI_TOL_CYCLE_NONE;
 }
 
+ULONG XhciTolHaltOwner(ULONG epState, ULONG retryHeadDeferred)
+{
+    if (epState == XHCI_EP_STATE_ERROR) {
+        return XHCI_TOL_HALT_CONFIRMED;
+    }
+    if (epState == XHCI_EP_STATE_HALTED) {
+        return retryHeadDeferred ? XHCI_TOL_HALT_RETRY
+                                 : XHCI_TOL_HALT_CONFIRMED;
+    }
+    return XHCI_TOL_HALT_STALE;
+}
+
+ULONG XhciTolJoin(ULONG reason, ULONG retryLive)
+{
+    if (reason != XHCI_TOL_CYCLE_NONE) {
+        return XHCI_TOL_JOIN_CYCLE;
+    }
+    return retryLive ? XHCI_TOL_JOIN_RETRY : XHCI_TOL_JOIN_NONE;
+}
+
 ULONG XhciTolCycleAct(ULONG reason, ULONG sameDevice, ULONG markGen,
                       ULONG locGen, ULONG published)
 {

@@ -239,6 +239,36 @@ ULONG XhciTolMarkPending(const XHCI_TOL_MARK *mark);
  * more. */
 ULONG XhciTolMarkResolve(PXHCI_TOL_MARK mark, ULONG halted);
 
+/*
+ * One marked endpoint's context read, beside a soft retry (35-T.2/3/4):
+ * Error always confirms the halt with no TD (a Reset Endpoint, the retry's
+ * command, is illegal there); Halted confirms it unless a live retry
+ * explains it - the queue's head is still the deferred TD RetryWanted
+ * names (retryHeadDeferred), whose Transaction Error halted the endpoint
+ * and whose Reset Endpoint is owed - and then the retry owns it; any other
+ * state is stale.
+ */
+#define XHCI_TOL_HALT_STALE         0UL
+#define XHCI_TOL_HALT_CONFIRMED     1UL
+#define XHCI_TOL_HALT_RETRY         2UL
+
+ULONG XhciTolHaltOwner(ULONG epState, ULONG retryHeadDeferred);
+
+/*
+ * Who recovers a device this pass, decided once, by the soft retry's
+ * service, from the mark as XhciTolMarkResolve left it (reason) and whether
+ * a pipe of it holds a live retry: a reason commits the pass to the cycle
+ * - charged to the location's budget and taken by this pass's cycle
+ * service, the retry left for the teardown - and otherwise the retry
+ * proceeds now. So each pass either consumes a retry or charges a cycle,
+ * however often a new mark arrives between passes.
+ */
+#define XHCI_TOL_JOIN_NONE          0UL
+#define XHCI_TOL_JOIN_RETRY         1UL
+#define XHCI_TOL_JOIN_CYCLE         2UL
+
+ULONG XhciTolJoin(ULONG reason, ULONG retryLive);
+
 /* What the thread does with a resolved mark (record 17 section 4.3). */
 #define XHCI_TOL_CYCLE_ACT_NONE     0UL     /* nothing marked, or stale      */
 #define XHCI_TOL_CYCLE_ACT_DROP     1UL     /* gone or replaced: counted     */

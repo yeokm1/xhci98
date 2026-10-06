@@ -447,6 +447,97 @@ static ULONG wait_model(const ULONG *script, ULONG slices, ULONG deadline,
     return 0xFFFFFFFFUL;
 }
 
+/*
+ * A soft retry and a halt with no TD on one device (35-T.2 beside 35-T.3/4):
+ * passes of the retry service, each preceded by a fresh T4 mark on the
+ * retry's endpoint (DCI 3), the context read through XhciTolHaltOwner and
+ * the pass decided once (XhciTolJoin). epState: the endpoint's state while
+ * the retry is live; headDeferred: the queue's head is still the deferred
+ * TD; refused: a refused code marked as well. Returns the pass (1-based) in
+ * which something progressed - the retry consumed or a cycle charged - and
+ * *what the decision; 0 when none did within `passes`.
+ */
+static ULONG join_model(ULONG epState, ULONG headDeferred, ULONG refused,
+                        ULONG passes, PULONG what)
+{
+    XHCI_TOL_MARK m;
+    XHCI_TOL_LOC loc;
+    ULONG retryLive;
+    ULONG owner;
+    ULONG reason;
+    ULONG pass;
+
+    XhciTolMarkInit(&m);
+    XhciTolLocInit(&loc);
+    retryLive = 1;
+    *what = XHCI_TOL_JOIN_NONE;
+    for (pass = 1; pass <= passes; pass++) {
+        XhciTolMarkSet(&m, XHCI_TOL_CYCLE_HALT_NO_TD, 3, 0);
+        if (refused) {
+            XhciTolMarkSet(&m, XHCI_TOL_CYCLE_REFUSED_CODE, 1, 0);
+        }
+        owner = XhciTolHaltOwner(retryLive ? epState : XHCI_EP_STATE_RUNNING,
+                                 retryLive && headDeferred);
+        reason = XhciTolMarkResolve(&m, owner == XHCI_TOL_HALT_CONFIRMED
+                                            ? 1UL << 3 : 0);
+        *what = XhciTolJoin(reason, retryLive);
+        if (*what == XHCI_TOL_JOIN_RETRY) {
+            retryLive = 0;
+            return pass;
+        }
+        if (*what == XHCI_TOL_JOIN_CYCLE) {
+            if (XhciTolLocCharge(&loc, XHCI_TOL_CHARGE_REENUM, pass)) {
+                return pass;
+            }
+            return 0;
+        }
+    }
+    return 0;
+}
+
+static void test_retry_join(void)
+{
+    ULONG what;
+
+    CHECK_EQ(XhciTolHaltOwner(XHCI_EP_STATE_ERROR, 1),
+             XHCI_TOL_HALT_CONFIRMED,
+             "Error confirms even beside a live retry (no Reset Endpoint)");
+    CHECK_EQ(XhciTolHaltOwner(XHCI_EP_STATE_ERROR, 0),
+             XHCI_TOL_HALT_CONFIRMED, "Error confirms");
+    CHECK_EQ(XhciTolHaltOwner(XHCI_EP_STATE_HALTED, 1), XHCI_TOL_HALT_RETRY,
+             "Halted with the deferred TD at the head: the retry's");
+    CHECK_EQ(XhciTolHaltOwner(XHCI_EP_STATE_HALTED, 0),
+             XHCI_TOL_HALT_CONFIRMED,
+             "Halted with a retry request that outlived its TD: confirmed");
+    CHECK_EQ(XhciTolHaltOwner(XHCI_EP_STATE_RUNNING, 1), XHCI_TOL_HALT_STALE,
+             "Running: stale");
+    CHECK_EQ(XhciTolHaltOwner(XHCI_EP_STATE_STOPPED, 0), XHCI_TOL_HALT_STALE,
+             "Stopped: stale");
+
+    CHECK_EQ(XhciTolJoin(XHCI_TOL_CYCLE_NONE, 1), XHCI_TOL_JOIN_RETRY,
+             "no reason, a live retry: the retry now");
+    CHECK_EQ(XhciTolJoin(XHCI_TOL_CYCLE_HALT_NO_TD, 1), XHCI_TOL_JOIN_CYCLE,
+             "a confirmed halt: the cycle this pass");
+    CHECK_EQ(XhciTolJoin(XHCI_TOL_CYCLE_REFUSED_CODE, 1), XHCI_TOL_JOIN_CYCLE,
+             "a refused code: the cycle this pass");
+    CHECK_EQ(XhciTolJoin(XHCI_TOL_CYCLE_NONE, 0), XHCI_TOL_JOIN_NONE,
+             "nothing owed");
+
+    /* A fresh T4 mark before every pass never starves both recoveries. */
+    CHECK_EQ(join_model(XHCI_EP_STATE_HALTED, 1, 0, 8, &what), 1,
+             "explained Halted: progress in the first pass");
+    CHECK_EQ(what, XHCI_TOL_JOIN_RETRY, "the retry consumed");
+    CHECK_EQ(join_model(XHCI_EP_STATE_ERROR, 1, 0, 8, &what), 1,
+             "Error beside the retry: progress in the first pass");
+    CHECK_EQ(what, XHCI_TOL_JOIN_CYCLE, "a cycle charged, no Reset Endpoint");
+    CHECK_EQ(join_model(XHCI_EP_STATE_HALTED, 0, 0, 8, &what), 1,
+             "stale RetryWanted, a genuine halt: progress in the first pass");
+    CHECK_EQ(what, XHCI_TOL_JOIN_CYCLE, "the halt cycled, not suppressed");
+    CHECK_EQ(join_model(XHCI_EP_STATE_HALTED, 1, 1, 8, &what), 1,
+             "a refused code beside the retry: progress in the first pass");
+    CHECK_EQ(what, XHCI_TOL_JOIN_CYCLE, "the cycle");
+}
+
 static void test_cycle_wait(void)
 {
     static const ULONG staleThenDone[] = { 1, 1, 1, 1, 1, 1, 1, 1, 3 };
@@ -1015,6 +1106,7 @@ int main(void)
     test_cycle();
     test_cycle_mark();
     test_cycle_wait();
+    test_retry_join();
     test_backstop();
     test_loc();
     test_port();

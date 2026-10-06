@@ -1476,6 +1476,8 @@ static ULONG hcdCycleResolve(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     KIRQL oldIrql;
     ULONG halted;
     ULONG reason;
+    ULONG retryHead;
+    ULONG token;
     ULONG dci;
 
     ext = &hc->Hc;
@@ -1490,15 +1492,17 @@ static ULONG hcdCycleResolve(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
             continue;
         }
         ext->Tol.Stats.HaltReads++;
-        /* A Halted state a soft retry holds (35-T.2: a matched TD's
-         * Transaction Error, its Reset Endpoint owed) is explained by that
-         * TD, not by the event with none: stale for this purpose. */
+        /* Halted beside a live soft retry whose deferred TD is still the
+         * head (35-T.2) is that TD's Transaction Error, the retry's to
+         * recover; Error, or a retry request that outlived its TD, is not
+         * (XhciTolHaltOwner). */
+        retryHead = 0;
         if (dci >= 2 && dev->Pipes[dci] != NULL &&
-            XhciXferRetryPending(dev->Pipes[dci]->Queue, NULL, NULL)) {
-            ext->Tol.Stats.HaltStale++;
-            continue;
+            XhciXferRetryPending(dev->Pipes[dci]->Queue, &token, NULL)) {
+            retryHead = XhciXferRetryHeadIs(dev->Pipes[dci]->Queue, token);
         }
-        if (XhciTolHaltConfirmed(hcdEpState(hc, dev, dci))) {
+        if (XhciTolHaltOwner(hcdEpState(hc, dev, dci), retryHead) ==
+            XHCI_TOL_HALT_CONFIRMED) {
             halted |= 1UL << dci;
         } else {
             ext->Tol.Stats.HaltStale++;
@@ -1507,6 +1511,12 @@ static ULONG hcdCycleResolve(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     reason = XhciTolMarkResolve(&dev->CycleMark, halted);
     XhciControllerLockRelease(ext, oldIrql);
     return reason;
+}
+
+/* hcd.h: the soft retry's service reads the mark through the same rule. */
+ULONG HcdTolCycleResolve(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    return hcdCycleResolve(hc, dev);
 }
 
 /* The mark taken off the device as its cycle begins: the reason, the
