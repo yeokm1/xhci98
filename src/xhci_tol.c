@@ -156,6 +156,20 @@ ULONG XhciTolHaltConfirmed(ULONG epState)
             epState == XHCI_EP_STATE_ERROR) ? 1UL : 0UL;
 }
 
+ULONG XhciTolCycleReason(ULONG tolerance, ULONG claimed, ULONG unattributed,
+                         ULONG code, ULONG isoch, ULONG hasDevice,
+                         ULONG pipeOpen)
+{
+    if (XhciTolCycleOnRefused(tolerance, claimed, isoch, hasDevice)) {
+        return XHCI_TOL_CYCLE_REFUSED_CODE;
+    }
+    if (claimed && unattributed && hasDevice &&
+        XhciTolHaltCandidate(tolerance, code, isoch, pipeOpen)) {
+        return XHCI_TOL_CYCLE_HALT_NO_TD;
+    }
+    return XHCI_TOL_CYCLE_NONE;
+}
+
 VOID XhciTolMarkInit(PXHCI_TOL_MARK mark)
 {
     mark->Refused = 0;

@@ -1490,6 +1490,14 @@ static ULONG hcdCycleResolve(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
             continue;
         }
         ext->Tol.Stats.HaltReads++;
+        /* A Halted state a soft retry holds (35-T.2: a matched TD's
+         * Transaction Error, its Reset Endpoint owed) is explained by that
+         * TD, not by the event with none: stale for this purpose. */
+        if (dci >= 2 && dev->Pipes[dci] != NULL &&
+            XhciXferRetryPending(dev->Pipes[dci]->Queue, NULL, NULL)) {
+            ext->Tol.Stats.HaltStale++;
+            continue;
+        }
         if (XhciTolHaltConfirmed(hcdEpState(hc, dev, dci))) {
             halted |= 1UL << dci;
         } else {

@@ -194,6 +194,16 @@ ULONG XhciTolHaltCandidate(ULONG tolerance, ULONG code, ULONG isoch,
 /* 1 when a halt candidate's context state (XHCI_EP_STATE_*) cycles. */
 ULONG XhciTolHaltConfirmed(ULONG epState);
 
+/* The event path's one decision (record 17 section 4.3): the reason a
+ * Transfer Event marks its device, XHCI_TOL_CYCLE_NONE for none. claimed:
+ * XhciXferCodeInfo took the code; unattributed: the queue could match no TD
+ * to it - a zero pointer, one on no ring of the endpoint (a stream ring's
+ * or a pointer above 4 GB, Foreign by pointer included) or inside no TD.
+ * A refused code (T3) first, then a halt candidate (T4) on an open pipe. */
+ULONG XhciTolCycleReason(ULONG tolerance, ULONG claimed, ULONG unattributed,
+                         ULONG code, ULONG isoch, ULONG hasDevice,
+                         ULONG pipeOpen);
+
 /*
  * A device's cycle mark (record 17 section 4.3), kept on its record: set by
  * the event path under the controller lock, read and cleared by the thread

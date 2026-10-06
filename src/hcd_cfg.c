@@ -3847,6 +3847,17 @@ static VOID hcdCfgRetryOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         return;
     }
+    if (XhciTolMarkPending(&dev->CycleMark) || dev->CycleAbandon) {
+        /* The device is marked for a cycle (35-T.3/4), which this pass's
+         * cycle service takes: no Reset Endpoint for a slot about to be
+         * disabled, and no replay completing the TD the teardown is to
+         * hold. The request stays for the next pass; by then the device has
+         * gone, its queue drained with the TD and its deferred outcome, or
+         * its mark read stale and the retry is decided as ever. */
+        hc->RetryWork = 1;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        return;
+    }
     decision = XhciTolRetryDecide(
         stats->Tolerance,
         hcdCfgRetryContended(hc, dev, pipe) || pipe->Streams != NULL ||

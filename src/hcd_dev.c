@@ -354,25 +354,24 @@ static VOID hcdTolSumQueue(PXHCI_EXTENSION ext,
  * (claimed 0), on a slot that names a device, in any endpoint state; or a
  * Stall, Transaction, Babble or Split Transaction error the queue could not
  * match (unattributed: zero, off the ring, or inside no TD) on an open
- * pipe, which the thread confirms from the endpoint's context. Either marks
- * the device; the isochronous path never comes here. IRQL: DISPATCH_LEVEL,
- * controller lock held.
+ * pipe, which the thread confirms from the endpoint's context
+ * (XhciTolCycleReason). Either marks the device; an isochronous pipe's
+ * events never do. IRQL: DISPATCH_LEVEL, controller lock held.
  */
 static VOID hcdTolCycleEvent(PHCD_CONTROLLER hc, ULONG slotId, ULONG dci,
                              ULONG cc, ULONG claimed, ULONG unattributed,
-                             ULONG pipeOpen)
+                             ULONG isoch, ULONG pipeOpen)
 {
     PHCD_USB_DEVICE dev;
-    ULONG tol;
+    ULONG reason;
 
     dev = (slotId >= 1 && slotId <= XHCI_MAX_SLOTS) ? hc->SlotDevice[slotId]
                                                     : NULL;
-    tol = hc->Hc.Tol.Stats.Tolerance;
-    if (XhciTolCycleOnRefused(tol, claimed, 0, dev != NULL)) {
-        HcdTolCycleMark(hc, dev, XHCI_TOL_CYCLE_REFUSED_CODE, dci);
-    } else if (unattributed && dev != NULL &&
-               XhciTolHaltCandidate(tol, cc, 0, pipeOpen)) {
-        HcdTolCycleMark(hc, dev, XHCI_TOL_CYCLE_HALT_NO_TD, dci);
+    reason = XhciTolCycleReason(hc->Hc.Tol.Stats.Tolerance, claimed,
+                                unattributed, cc, isoch, dev != NULL,
+                                pipeOpen);
+    if (reason != XHCI_TOL_CYCLE_NONE) {
+        HcdTolCycleMark(hc, dev, reason, dci);
     }
 }
 /*
@@ -415,9 +414,14 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
          * round 1 of 35-T.2, finding 3), and escalated when fatal, as an
          * event no queue owns is. */
         ext->Tol.Stats.QueueForeign++;
-        return XhciXferCodeInfo(XHCI_TRB_GET_COMPLETION(event->Status),
-                                &code) == XHCI_XFER_OK &&
-               code.Fatal;
+        cc = XHCI_TRB_GET_COMPLETION(event->Status);
+        reset = XhciXferCodeInfo(cc, &code) == XHCI_XFER_OK;
+        /* 35-T.3/4: Foreign by pointer, so a halt code here is a halt with
+         * no TD on the open pipe the slot and DCI name (record 17 section
+         * 4.3), and a refused code is one on a device. */
+        hcdTolCycleEvent(hc, slotId, dci, cc, reset, 1,
+                         pipe->TransferType == XHCI_PIPE_XFER_ISOCH, 1);
+        return reset && code.Fatal;
     }
     if (pipe != NULL && pipe->Streams != NULL) {
         endpoint = pipe;
@@ -455,7 +459,7 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
          * stream ring holds - the endpoint's pipe is open. An Event Data
          * event carries no pointer to judge. */
         if (!XHCI_EVENT_IS_EVENT_DATA(event->Control)) {
-            hcdTolCycleEvent(hc, slotId, dci, cc, reset, endpoint != NULL,
+            hcdTolCycleEvent(hc, slotId, dci, cc, reset, endpoint != NULL, 0,
                              endpoint != NULL);
         }
         return reset && code.Fatal;
@@ -491,7 +495,7 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
     }
     if (result.Refused || result.Unattributed) {
         hcdTolCycleEvent(hc, slotId, dci, result.Code, !result.Refused,
-                         result.Unattributed, 1);
+                         result.Unattributed, 0, 1);
     }
     if (dci == 1) {
         return hcdEp0Result(hc, pipe->Device, &result);

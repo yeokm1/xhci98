@@ -260,6 +260,37 @@ static void test_cycle(void)
     CHECK_EQ(XhciTolHaltConfirmed(XHCI_EP_STATE_ERROR), 1, "Error");
     CHECK_EQ(XhciTolHaltConfirmed(XHCI_EP_STATE_RUNNING), 0, "stale: running");
     CHECK_EQ(XhciTolHaltConfirmed(XHCI_EP_STATE_STOPPED), 0, "stale: stopped");
+
+    /* The event path's one decision: (tolerance, claimed, unattributed,
+     * code, isoch, hasDevice, pipeOpen). */
+    CHECK_EQ(XhciTolCycleReason(1, 0, 0, 12, 0, 1, 0),
+             XHCI_TOL_CYCLE_REFUSED_CODE,
+             "Endpoint Not Enabled on a DCI with no pipe: refused, cycled");
+    CHECK_EQ(XhciTolCycleReason(1, 0, 0, 12, 1, 1, 1), XHCI_TOL_CYCLE_NONE,
+             "refused on an isochronous pipe: its own path");
+    CHECK_EQ(XhciTolCycleReason(1, 0, 0, 12, 0, 0, 0), XHCI_TOL_CYCLE_NONE,
+             "refused on a slot with no device: dropped");
+    CHECK_EQ(XhciTolCycleReason(1, 1, 1, XHCI_CC_STALL, 0, 1, 1),
+             XHCI_TOL_CYCLE_HALT_NO_TD,
+             "a stall matching no TD (zero, off the ring, inside none)");
+    /* A pointer above 4 GB is refused as Foreign before the queue reads
+     * it (35-T.2): unattributed, on the open pipe its slot and DCI name. */
+    CHECK_EQ(XhciTolCycleReason(1, 1, 1, XHCI_CC_USB_TRANSACTION_ERROR, 0, 1,
+                                1),
+             XHCI_TOL_CYCLE_HALT_NO_TD,
+             "high-pointer Foreign Transaction Error: a halt candidate");
+    CHECK_EQ(XhciTolCycleReason(1, 1, 1, XHCI_CC_SUCCESS, 0, 1, 1),
+             XHCI_TOL_CYCLE_NONE, "high-pointer Foreign success: nothing");
+    CHECK_EQ(XhciTolCycleReason(1, 1, 1, XHCI_CC_STALL, 1, 1, 1),
+             XHCI_TOL_CYCLE_NONE, "high-pointer Foreign on isochronous: not");
+    CHECK_EQ(XhciTolCycleReason(1, 1, 0, XHCI_CC_STALL, 0, 1, 1),
+             XHCI_TOL_CYCLE_NONE, "a stall on a matched TD: the queue's");
+    CHECK_EQ(XhciTolCycleReason(1, 1, 1, XHCI_CC_STALL, 0, 1, 0),
+             XHCI_TOL_CYCLE_NONE, "no open pipe: no halt candidate");
+    CHECK_EQ(XhciTolCycleReason(0, 0, 1, 12, 0, 1, 1), XHCI_TOL_CYCLE_NONE,
+             "tolerance 0: nothing marked");
+    CHECK_EQ(XhciTolCycleReason(0, 1, 1, XHCI_CC_STALL, 0, 1, 1),
+             XHCI_TOL_CYCLE_NONE, "tolerance 0: no halt candidate");
 }
 
 /* 35-T.3/4: the mark the event path sets and the thread resolves, and what
