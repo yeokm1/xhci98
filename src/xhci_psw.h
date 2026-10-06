@@ -16,7 +16,8 @@
  * The sequence is Linux's usb_enable_intel_xhci_ports (pci-quirks.c):
  * USB3_PSSEN = USB3PRM first, so a SuperSpeed device connects at SuperSpeed
  * rather than at High Speed, then XUSB2PR = XUSB2PRM, each read back. Back
- * to EHCI is its usb_disable_xhci_ports: both written 0, USB3_PSSEN first.
+ * to EHCI is its usb_disable_xhci_ports: written 0, USB3_PSSEN first -
+ * here only the registers a route of this lifetime wrote (task 35.5).
  *
  * The gate is the device-id list, not Linux's rule (any Intel xHCI with an
  * Intel EHCI on the bus), which needs a PCI scan the HCD does not have

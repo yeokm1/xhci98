@@ -1213,7 +1213,7 @@ $requiredValues = @(
         Name    = "XhciIntelPortSwitch"
         Type    = "0x00010003"
         Default = "1"
-        Why     = "roadmap-hcd task 34.3's Intel EHCI-to-xHCI port switchover on the 7-, 8- and 9-series and C610 PCH, read at start on those six controllers only; 0 leaves the routing as firmware set it. The INF writes the 1 so the opt-out is where a user looks for it, under 34.1's don't-overwrite rule so a user's 0 survives an update (owner, 2026-10-05)"
+        Why     = "roadmap-hcd task 34.3's Intel EHCI-to-xHCI port switchover on the 7-, 8- and 9-series and C610 PCH, read at start on every Intel controller (roadmap-hcd task 35.5), where an exact 2 also routes on an unlisted one at the user's own risk; 0 leaves the routing as firmware set it. The INF writes the 1 so the opt-out is where a user looks for it, under 34.1's don't-overwrite rule so a user's 0 survives an update (owner, 2026-10-05)"
         DefaultWhy = "1 is the driver's own default - absent, of another type or any number but 0 is on (owner, 2026-10-05); shipping 0 would leave the machines the task exists for with nothing on their switchable connectors"
     },
     @{

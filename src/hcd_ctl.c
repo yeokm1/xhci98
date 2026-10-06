@@ -49,9 +49,10 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * they are absent and the same defaults stand. */
 #define HCD_VALUE_SETTLE_TOTAL  L"XhciFirstEnumWaitMs"
 #define HCD_VALUE_SETTLE_PORT   L"XhciFirstEnumPortMs"
-/* Task 34.3: the Intel port switchover, on unless the value is 0 (absent
- * is on: txtsetup.oem writes none). Read at start, on a gated controller
- * only. */
+/* Task 34.3: the Intel port switchover, on a listed controller unless the
+ * value is 0 (absent is on: txtsetup.oem writes none); an exact 2 also on
+ * an unlisted Intel one (task 35.5). Read at start, on every Intel
+ * controller and no other. */
 #define HCD_VALUE_PORT_SWITCH   L"XhciIntelPortSwitch"
 
 /* The health poll's period. usbport's CheckController was nominally 500 ms
@@ -230,6 +231,7 @@ static ULONG hcdPswRead(PVOID context, ULONG offset, PULONG value)
                              offset, sizeof(ULONG)) == MP_STATUS_SUCCESS;
 }
 
+/* IRQL: PASSIVE_LEVEL, as HcdSvcConfigSpace. */
 static ULONG hcdPswWrite(PVOID context, ULONG offset, ULONG value)
 {
     ULONG data;
@@ -239,12 +241,15 @@ static ULONG hcdPswWrite(PVOID context, ULONG offset, ULONG value)
                              offset, sizeof(ULONG)) == MP_STATUS_SUCCESS;
 }
 
+/* The registry read the decision makes on an Intel controller.
+ * IRQL: PASSIVE_LEVEL, under no spin lock, as hcdReadDword. */
 static ULONG hcdPswValue(PVOID context, PULONG value)
 {
     return NT_SUCCESS(hcdReadDword((PHCD_CONTROLLER)context,
                                    HCD_VALUE_PORT_SWITCH, value));
 }
 
+/* IRQL: any; the callbacks it installs are PASSIVE_LEVEL only. */
 static VOID hcdPswIo(PHCD_CONTROLLER hc, PXHCI_PSW_IO io)
 {
     io->Read = hcdPswRead;
@@ -253,7 +258,9 @@ static VOID hcdPswIo(PHCD_CONTROLLER hc, PXHCI_PSW_IO io)
     io->Context = hc;
 }
 
-/* A route that ran: counted and logged. IRQL: PASSIVE_LEVEL. */
+/* Only a route that ran is counted: the decision's own reads on a
+ * controller that is off are not a route (record 16 section 7a).
+ * IRQL: PASSIVE_LEVEL. */
 static VOID hcdPswRouted(PHCD_CONTROLLER hc, const XHCI_PSW_STATE *st)
 {
     PXHCI_EXTENSION ext;
@@ -273,8 +280,8 @@ static VOID hcdPswRouted(PHCD_CONTROLLER hc, const XHCI_PSW_STATE *st)
     XHCI_DBG_VALUE("hcd: port switchover, XUSB2PR now", st->Usb2Now);
 }
 
-/* A release that acted on a nonempty set: counted and logged.
- * IRQL: PASSIVE_LEVEL. */
+/* Only a release with a nonempty set is counted: one with nothing to hand
+ * back made no access (record 16 section 6). IRQL: PASSIVE_LEVEL. */
 static VOID hcdPswReleased(PHCD_CONTROLLER hc, const XHCI_PSW_STATE *st)
 {
     PXHCI_EXTENSION ext;

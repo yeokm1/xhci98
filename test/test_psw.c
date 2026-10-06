@@ -14,6 +14,8 @@
 
 #define FAKE_LOG 16
 #define PSW_BOTH (XHCI_PSW_WROTE_PSSEN | XHCI_PSW_WROTE_XUSB2PR)
+/* The registry value's place in the access log ('v'); no config offset. */
+#define FAKE_VALUE 0xFFFFFFFFUL
 
 /* The four registers, the accesses made in order, and one access that
  * fails: kind 'r' or 'w' at failOffset (0 for none). */
@@ -102,6 +104,7 @@ static ULONG fakeValue(PVOID context, PULONG value)
 
     f = (FAKE_CFG *)context;
     f->ValueReads++;
+    fakeLog(f, 'v', FAKE_VALUE, 0);
     if (!f->ValueFound) {
         return 0;
     }
@@ -234,10 +237,22 @@ static void test_mode(void)
              "Comet Lake-LP, 2");
     CHECK_EQ(XhciPswMode(ID_CML, 1, 1), XHCI_PSW_MODE_OFF,
              "Comet Lake-LP, 1");
+    CHECK_EQ(XhciPswMode(ID_CML, 0, 0), XHCI_PSW_MODE_OFF,
+             "Comet Lake-LP, absent");
+    CHECK_EQ(XhciPswMode(ID_CML, 1, 0), XHCI_PSW_MODE_OFF,
+             "Comet Lake-LP, 0");
+    CHECK_EQ(XhciPswMode(ID_CML, 1, 3), XHCI_PSW_MODE_OFF,
+             "Comet Lake-LP, 3");
+    CHECK_EQ(XhciPswMode(ID_CML, 1, 0xFFFFFFFFUL), XHCI_PSW_MODE_OFF,
+             "Comet Lake-LP, all-ones");
 
     /* Another vendor: never. */
     CHECK_EQ(XhciPswMode(ID_QEMU, 0, 0), XHCI_PSW_MODE_OFF, "QEMU, absent");
+    CHECK_EQ(XhciPswMode(ID_QEMU, 1, 0), XHCI_PSW_MODE_OFF, "QEMU, 0");
     CHECK_EQ(XhciPswMode(ID_QEMU, 1, 1), XHCI_PSW_MODE_OFF, "QEMU, 1");
+    CHECK_EQ(XhciPswMode(ID_QEMU, 1, 3), XHCI_PSW_MODE_OFF, "QEMU, 3");
+    CHECK_EQ(XhciPswMode(ID_QEMU, 1, 0xFFFFFFFFUL), XHCI_PSW_MODE_OFF,
+             "QEMU, all-ones");
     CHECK_EQ(XhciPswMode(ID_QEMU, 1, 2), XHCI_PSW_MODE_OFF,
              "QEMU, 2 is no bypass off Intel");
     CHECK_EQ(XhciPswMode(0x1E311B21UL, 1, 2), XHCI_PSW_MODE_OFF,
@@ -247,6 +262,7 @@ static void test_mode(void)
 
     CHECK_EQ(XhciPswIntel(ID_LISTED), 1, "Intel, listed");
     CHECK_EQ(XhciPswIntel(ID_SPT), 1, "Intel, unlisted");
+    CHECK_EQ(XhciPswIntel(ID_CML), 1, "Intel, Comet Lake-LP");
     CHECK_EQ(XhciPswIntel(ID_QEMU), 0, "QEMU");
     CHECK_EQ(XhciPswIntel(0x80861E31UL), 0, "vendor and device swapped");
     CHECK_EQ(XhciPswIntel(0xFFFFFFFFUL), 0, "an all-ones id");
@@ -520,10 +536,11 @@ static void test_life_start(void)
     CHECK_EQ(life.Decision, XHCI_PSW_DECIDE_ON, "decided on");
     CHECK_EQ(life.Written, PSW_BOTH, "both written");
     CHECK_EQ(life.Subsystem, 0x220017AAUL, "the subsystem kept");
-    CHECK_EQ(f.Count, 8, "the id, the subsystem and the route's six");
+    CHECK_EQ(f.Count, 9, "the id, the value, the subsystem, the route's six");
     checkAccess(&f, 0, 'r', XHCI_PSW_PCI_ID, 0, "the id first");
-    checkAccess(&f, 1, 'r', XHCI_PSW_PCI_SUBSYSTEM, 0, "the subsystem");
-    checkAccess(&f, 2, 'r', XHCI_PSW_USB3PRM, 0, "then the route");
+    checkAccess(&f, 1, 'v', FAKE_VALUE, 0, "the value second");
+    checkAccess(&f, 2, 'r', XHCI_PSW_PCI_SUBSYSTEM, 0, "the subsystem third");
+    checkAccess(&f, 3, 'r', XHCI_PSW_USB3PRM, 0, "then the route");
 
     fakeInit(&f, &io);
     f.Id = ID_QEMU;
@@ -540,7 +557,8 @@ static void test_life_start(void)
     CHECK_EQ(XhciPswLifeStart(&io, &life, &st), 0, "listed at 0");
     CHECK_EQ(life.Decision, XHCI_PSW_DECIDE_OFF, "off");
     CHECK_EQ(life.Found, 1, "the value found");
-    CHECK_EQ(f.Count, 1, "no subsystem read when off");
+    CHECK_EQ(f.Count, 2, "the id and the value, no subsystem read when off");
+    checkAccess(&f, 1, 'v', FAKE_VALUE, 0, "the value after the id");
 
     fakeInit(&f, &io);
     f.Id = ID_SPT;
@@ -564,7 +582,8 @@ static void test_life_start(void)
     CHECK_EQ(XhciPswLifeStart(&io, &life, &st), 0, "the Sony board under 2");
     CHECK_EQ(life.Decision, XHCI_PSW_DECIDE_BOARD_REFUSED, "refused");
     CHECK_EQ(life.On, 0, "off");
-    CHECK_EQ(f.Count, 2, "the id and the subsystem, no write");
+    CHECK_EQ(f.Count, 3, "the id, the value and the subsystem, no write");
+    checkAccess(&f, 2, 'r', XHCI_PSW_PCI_SUBSYSTEM, 0, "the subsystem last");
 
     fakeInit(&f, &io);
     f.Id = ID_SPT;
@@ -574,7 +593,7 @@ static void test_life_start(void)
     CHECK_EQ(XhciPswLifeStart(&io, &life, &st), 0,
              "an unreadable subsystem under 2");
     CHECK_EQ(life.Decision, XHCI_PSW_DECIDE_BOARD_UNREAD, "refused");
-    CHECK_EQ(f.Count, 2, "no write");
+    CHECK_EQ(f.Count, 3, "no write");
 
     fakeInit(&f, &io);
     f.FailKind = 'r';
