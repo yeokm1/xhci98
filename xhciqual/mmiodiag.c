@@ -497,17 +497,21 @@ static const char *psi_lp(const PROTOCAP *pr, u32 d)
 }
 
 /*
- * Issue 11: a USB 3 table that lists entries but not PSIV 4. Without a table a
- * USB 3 controller reports a 5 Gb/s device as PSIV 4 (spec 7.2.2.1.1), and a
- * reader that treats a non-empty table as replacing the default IDs - this
- * tool's C8 and the driver up to 2.1.1.0 - cannot name it. Informational: it
- * feeds no verdict and no exit code.
+ * Issue 11: a complete USB 3 table that lists entries but not PSIV 4. That is
+ * not wrong in itself - a valid table may advertise 5 Gb/s under another ID,
+ * and PORTSC then reports that ID, which decodes fine. It matters only if
+ * PORTSC still reports the default ID 4 for a 5 Gb/s device, as Sunrise
+ * Point-LP does: a reader that treats a non-empty table as replacing the
+ * default IDs - this tool's C8 and the driver up to 2.1.1.0 - cannot name it.
+ * Without a device the tool cannot see PORTSC, so the warning says "if". Only
+ * a table read in full (npsi == psic) can be said to omit an ID.
+ * Informational: it feeds no verdict and no exit code.
  */
 int psi_usb3_lacks_ss(const PROTOCAP *pr)
 {
     int k;
 
-    if (pr->major != 3 || pr->psic == 0)
+    if (pr->major != 3 || pr->psic == 0 || pr->npsi != pr->psic)
         return 0;
     for (k = 0; k < (int)pr->npsi; k++) {
         if (PSI_PSIV(pr->psi[k]) == 4)
@@ -541,9 +545,11 @@ void report_protocols(const CTRL *c, QPRINTF_FN pf)
             pf("    (%d of PSIC %d entries read: the rest lie past the "
                "mapped window)\n", pr->npsi, pr->psic);
         if (psi_usb3_lacks_ss(pr))
-            pf("  WARNING: USB 3 PSI table omits PSIV 4 (default SuperSpeed); "
-               "a driver that\n"
-               "    trusts the table strictly cannot decode a 5 Gb/s device "
+            pf("  WARNING: USB 3 PSI table does not list PSIV 4 (default "
+               "SuperSpeed). If\n"
+               "    PORTSC reports ID 4 for a 5 Gb/s device, as Sunrise Point "
+               "does, a driver\n"
+               "    that trusts the table strictly cannot decode it "
                "(issue 11)\n");
     }
 }
@@ -599,8 +605,7 @@ void report_xcap_dump(const CTRL *c, QPRINTF_FN pf)
     }
     switch (c->xcap_stop) {
     case XCAP_STOP_ONES:
-        pf("    (a header read all ones: the chain is not followed past "
-           "it)\n");
+        pf("    (a header read all ones: raw recording stops here)\n");
         break;
     case XCAP_STOP_FULL:
         pf("    (dump bound reached, %d capabilities / %d dwords: the rest "
@@ -612,5 +617,134 @@ void report_xcap_dump(const CTRL *c, QPRINTF_FN pf)
         break;
     default:
         break;
+    }
+}
+
+/*
+ * Record one extended capability for the raw dump (roadmap task 35.1, the
+ * README's "Raw extended-capability dump"). Read-only: it reads dwords inside
+ * the capability's own span and inside the mapped window, and a register read
+ * has no side effect here (the RW1C/RW1S bits of these registers act on writes,
+ * spec 5.1). The span is the distance to the next capability; the last one,
+ * whose span the chain does not give, takes its known size, 4 dwords if
+ * unknown. A Supported Protocol capability always includes its PSI dwords.
+ */
+static void xcap_record(CTRL *c, u32 off, u32 dw, u32 window,
+                        XCAP_RD_FN rd, void *ctx)
+{
+    XCAPREC *r;
+    u32 want, known, k;
+
+    if (c->nxcap >= XCAP_DUMP_CAPS || c->nxdump >= XCAP_DUMP_TOTAL) {
+        c->xcap_stop = XCAP_STOP_FULL;
+        return;
+    }
+    r = &c->xcap[c->nxcap++];
+    r->off = off;
+    r->id = (u8)(dw & 0xFF);
+    r->next = (u8)((dw >> 8) & 0xFF);
+    r->first = (u16)c->nxdump;
+    if (dw == 0xFFFFFFFFUL) {
+        /* A dead or vanished function. Recording stops here; the walk below
+         * is not changed by it and still follows the FF next field. */
+        c->xdump[c->nxdump++] = dw;
+        r->ndw = 1;
+        r->want = 1;
+        c->xcap_stop = XCAP_STOP_ONES;
+        return;
+    }
+    switch (r->id) {
+    case XECP_ID_LEGSUP: known = 2; break;     /* USBLEGSUP, USBLEGCTLSTS */
+    case XECP_ID_PROTO:
+        known = (off + 0x0CUL < window) ?
+                4 + ((rd(ctx, off + 0x08) >> 28) & 0xF) : 1;
+        break;
+    case 3:  known = 2;  break;                 /* Extended Power Management */
+    case 10: known = 16; break;                 /* Debug Capability, 00h-3Ch */
+    default: known = 4;  break;
+    }
+    want = known;
+    if (r->next != 0) {
+        want = r->next;
+        if (r->id == XECP_ID_PROTO && known > want)
+            want = known;
+    }
+    r->want = (u16)want;
+    for (k = 0; k < want && k < XCAP_DUMP_PER_CAP &&
+                c->nxdump < XCAP_DUMP_TOTAL &&
+                off + k * 4 + 4 <= window; k++)
+        c->xdump[c->nxdump++] = (k == 0) ? dw : rd(ctx, off + k * 4);
+    r->ndw = (u16)k;
+}
+
+void xcap_walk(CTRL *c, u32 xecp_off, u32 window, XCAP_RD_FN rd, void *ctx)
+{
+    u32 off, dw;
+    int guard;
+
+    c->legsup_off = 0;
+    c->nproto = 0;
+    off = xecp_off;
+    c->xecp_off = off;
+    c->nxcap = 0;
+    c->nxdump = 0;
+    c->xcap_stop = XCAP_STOP_END;
+    for (guard = 0; off != 0 && off < window - 0x40UL && guard < 64;
+         guard++) {
+        u32 next;
+
+        dw = rd(ctx, off);
+        if (c->xcap_stop == XCAP_STOP_END)
+            xcap_record(c, off, dw, window, rd, ctx);
+        switch (dw & 0xFF) {
+        case XECP_ID_LEGSUP:
+            if (c->legsup_off == 0)
+                c->legsup_off = off;
+            break;
+        case XECP_ID_PROTO:
+            if (c->nproto < MAX_PROTO) {
+                PROTOCAP *pr = &c->proto[c->nproto];
+                u32 dw2 = rd(ctx, off + 0x08);
+                int k;
+
+                pr->major   = (u8)(dw >> 24);
+                pr->minor   = (u8)(dw >> 16);
+                pr->portoff = (u8)(dw2 & 0xFF);
+                pr->portcnt = (u8)((dw2 >> 8) & 0xFF);
+                pr->psic    = (u8)((dw2 >> 28) & 0xF);
+                pr->slottype = (u8)(rd(ctx, off + 0x0C) & 0x1F);
+                /* PSIC > 0 means this cap redefines the speed IDs; the
+                 * default 1=FS/2=LS/3=HS/4=SS mapping does not apply
+                 * unless the table says so (spec 7.2, 7.2.2.1.2). */
+                pr->npsi = 0;
+                for (k = 0; k < (int)pr->psic && k < MAX_PSI; k++) {
+                    if (off + 0x10UL + (u32)k * 4 >= window)
+                        break;
+                    pr->psi[k] = rd(ctx, off + 0x10 + k * 4);
+                    pr->npsi++;
+                }
+                c->nproto++;
+            }
+            break;
+        case 10:
+            c->saw_debug_cap = 1;
+            break;
+        default:
+            break;
+        }
+        next = (dw >> 8) & 0xFF;
+        if (next == 0)
+            break;
+        off += next << 2;
+    }
+    /* A walk that ran off the mapped window (or past the 64-entry guard)
+     * may have missed USBLEGSUP, and "no USBLEGSUP" then passes C1 with no
+     * handoff performed. Say so rather than end silently. */
+    if (off >= window - 0x40UL || guard >= 64) {
+        if (c->xcap_stop == XCAP_STOP_END)
+            c->xcap_stop = XCAP_STOP_WALK;
+        qprintf("  NOTE: extended capability list not walked to its end "
+                "(next at %08lX); a USBLEGSUP beyond it was not seen\n",
+                (unsigned long)off);
     }
 }

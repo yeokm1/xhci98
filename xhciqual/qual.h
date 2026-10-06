@@ -374,7 +374,7 @@ typedef struct {
 
 /* CTRL.xcap_stop: why the record ends where it does */
 #define XCAP_STOP_END      0   /* next pointer 0: the chain's own end */
-#define XCAP_STOP_ONES     1   /* a header read all ones: nothing behind it */
+#define XCAP_STOP_ONES     1   /* a header read all ones: recording stops */
 #define XCAP_STOP_FULL     2   /* XCAP_DUMP_CAPS or XCAP_DUMP_TOTAL reached */
 #define XCAP_STOP_WALK     3   /* the walk itself stopped (window or guard) */
 
@@ -697,6 +697,17 @@ typedef void (*QPRINTF_FN)(const char *fmt, ...);
 void report_protocols(const CTRL *c, QPRINTF_FN pf);
 int  psi_usb3_lacks_ss(const PROTOCAP *pr);    /* 1 = warn (issue 11) */
 void report_xcap_dump(const CTRL *c, QPRINTF_FN pf);
+
+/*
+ * The extended-capability walk (B6, B7) and its raw recording, moved out of
+ * xhcicap.c unchanged in behaviour so the host runner can drive the production
+ * code through a checked fake reader. xecp_off is in bytes; window is the
+ * mapped size in bytes (BAR_MAP_SIZE in the tool); rd returns the dword at a
+ * byte offset (MMIO in the tool). Fills legsup_off, proto[], nproto,
+ * saw_debug_cap and the xcap/xdump record.
+ */
+typedef u32 (*XCAP_RD_FN)(void *ctx, u32 off);
+void xcap_walk(CTRL *c, u32 xecp_off, u32 window, XCAP_RD_FN rd, void *ctx);
 
 /*
  * Task 11-V.8: what a **read-only** pass can honestly conclude about one

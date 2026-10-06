@@ -156,8 +156,10 @@ Builds and runs `xhciqual/test/test_mmiodiag.c` on the Windows build host in
 seconds, with no VM and no DOS. It covers the pure `PCIINFO` -> report logic
 in `mmiodiag.c`: the PCI Power Management block, sticky PCI Status errors,
 the two dead-MMIO classifiers, the three-state C7 Intel routing
-classifier, and the speed-table and extended-capability printers (roadmap
-task 35.1), the first against the E460's real USB 3 PSI words.
+classifier, and (roadmap task 35.1) the speed-table and
+extended-capability printers, the first against the E460's real USB 3 PSI
+words, and the production extended-capability walk and raw recorder, driven
+through a fake reader that fails any read outside the window.
 
 That code lives in its own translation unit so it can be tested here, because
 the QEMU matrix cannot reach the field-dependent branches. SeaBIOS leaves
@@ -628,14 +630,22 @@ no ID 4, while its PORTSC reports a 5 Gb/s device as ID 4: a reader that
 treats a non-empty table as replacing the default IDs - this tool's C8 and the
 driver up to `2.1.1.0` - cannot name the device (`../docs/issues/11-sunrise-point-ssic-psi-table.md`).
 Every report now prints each protocol's PSI entries under its `Protocol` line
-and, on a USB 3.x protocol with PSIC > 0 and no entry for PSIV 4:
+and, on a USB 3.x protocol whose table was read in full (PSIC > 0, every entry
+inside the mapped window) and lists no PSIV 4:
 
 ```text
-  WARNING: USB 3 PSI table omits PSIV 4 (default SuperSpeed); a driver that
-    trusts the table strictly cannot decode a 5 Gb/s device (issue 11)
+  WARNING: USB 3 PSI table does not list PSIV 4 (default SuperSpeed). If
+    PORTSC reports ID 4 for a 5 Gb/s device, as Sunrise Point does, a driver
+    that trusts the table strictly cannot decode it (issue 11)
 ```
 
-It is informational: it feeds no verdict and no exit code.
+It is informational: it feeds no verdict and no exit code. It says "if"
+because a table without ID 4 is not wrong in itself: a valid table may
+advertise 5 Gb/s under another ID, and a controller whose PORTSC then reports
+that ID decodes fine. What the tool cannot see without a device is which ID
+PORTSC reports; Sunrise Point reports 4. A table only partly read prints how
+many entries it read instead, and no warning, since ID 4 may be among the
+rest.
 
 AMD has never run it and no longer can: the B650M was the project's only AMD
 machine and became unavailable, so AMD xHCI silicon is untested ground rather
@@ -771,9 +781,11 @@ first read from a driver snapshot rather than from this tool. Roadmap task
 35.1 closed the gap here rather than in the driver.
 
 What every xHCI report now carries, all of it from the one read-only
-capability walk in `xhci_read_caps()` (`xhcicap.c`), stored in `CTRL` and
-printed after it, so the printers (`mmiodiag.c`, host-tested) touch no
-register:
+capability walk (`xcap_walk()` in `mmiodiag.c`, called by `xhci_read_caps()`
+in `xhcicap.c` with an MMIO reader), stored in `CTRL` and printed after it, so
+the printers touch no register. The walk, its recorder and the printers are
+all host-tested, the walk through a fake reader that fails any read outside
+the window:
 
 - **On screen and in the log**, under each `Protocol USB x.y` line, one line
   per PSI entry: the raw dword, then PSIV, the rate as PSIM in the unit PSIE
@@ -787,8 +799,9 @@ register:
       PSI 04E00121  PSIV  1   1248 Mb/s  symmetric  PFD 1  LP 0 (SuperSpeed)
       PSI 09C00122  PSIV  2   2496 Mb/s  symmetric  PFD 1  LP 0 (SuperSpeed)
       PSI 13800123  PSIV  3   4992 Mb/s  symmetric  PFD 1  LP 0 (SuperSpeed)
-    WARNING: USB 3 PSI table omits PSIV 4 (default SuperSpeed); a driver that
-      trusts the table strictly cannot decode a 5 Gb/s device (issue 11)
+    WARNING: USB 3 PSI table does not list PSIV 4 (default SuperSpeed). If
+      PORTSC reports ID 4 for a 5 Gb/s device, as Sunrise Point does, a driver
+      that trusts the table strictly cannot decode it (issue 11)
   ```
 
   (the protocol line as in `results/e460-2026-07-25/`, the PSI words as
@@ -814,9 +827,11 @@ register:
   16) or 4 dwords. A Supported Protocol capability always includes its PSI
   dwords. Bounds: 32 dwords per capability (a longer one prints `n of m
   dwords`), 32 capabilities and 256 dwords per controller, never past the
-  64 KB mapped window. A header reading all ones ends the record with a note
-  rather than following its `FF` next pointer, and a walk that stops at the
-  window or its 64-step guard says so.
+  64 KB mapped window. A header reading all ones ends the raw record there
+  with a note; the capability walk itself is unchanged by it and still
+  follows that header's `FF` next field, as it always has, until the window
+  or its 64-step guard stops it. A walk that stops at the window or the guard
+  says so.
 
 Which runs print it. Every mode that prints the per-controller report:
 `--probe-only` (read-only; `1PROBE.BAT` runs

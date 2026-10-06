@@ -402,7 +402,7 @@ not in the report is only a disagreement if it is one of those four.
 
 Since roadmap task 35.1 each `Protocol USB x.y` line is followed by one line
 per entry of that protocol's speed table (PSI), and a USB 3 table that lists
-entries but not PSIV 4 gets a warning (issue 11). The E460's USB 3 protocol
+entries, read in full, but not PSIV 4 gets a warning (issue 11). The E460's USB 3 protocol
 reads:
 
 ```text
@@ -410,12 +410,16 @@ reads:
     PSI 04E00121  PSIV  1   1248 Mb/s  symmetric  PFD 1  LP 0 (SuperSpeed)
     PSI 09C00122  PSIV  2   2496 Mb/s  symmetric  PFD 1  LP 0 (SuperSpeed)
     PSI 13800123  PSIV  3   4992 Mb/s  symmetric  PFD 1  LP 0 (SuperSpeed)
-  WARNING: USB 3 PSI table omits PSIV 4 (default SuperSpeed); a driver that
-    trusts the table strictly cannot decode a 5 Gb/s device (issue 11)
+  WARNING: USB 3 PSI table does not list PSIV 4 (default SuperSpeed). If
+    PORTSC reports ID 4 for a 5 Gb/s device, as Sunrise Point does, a driver
+    that trusts the table strictly cannot decode it (issue 11)
 ```
 
-The warning changes no verdict and no exit code; it explains a machine on
-which the driver up to `2.1.1.0` never enumerates a SuperSpeed device. After
+The warning changes no verdict and no exit code. It is conditional: a table
+may validly carry 5 Gb/s under another ID, and only a controller whose PORTSC
+reports ID 4 for a SuperSpeed device anyway, as Sunrise Point does, defeats a
+strict decoder - which is why the driver up to `2.1.1.0` never enumerates a
+SuperSpeed device on the E460. After
 the port map, the log (not the screen) carries the raw extended-capability
 chain - xECP, then each capability's offset, ID and dwords - which is what a
 host replay vector is written from (`README.md`, "Raw extended-capability
@@ -638,7 +642,7 @@ remains clear, C4 FAIL reports `SOF set but PCI INTx did not assert (PCI
 | C6 FAIL | A port reported a connect but did not enable after reset. Not disqualifying on its own, and the verdict says "with warnings" - retry on a different port with a known-good USB 2.0 device, and check the C7 routing lines on Intel 7/8-series. |
 | C8 WARN/FAIL | Save `DEV` output and retry with a simple USB2 device or `--no-devid`; C8 is informational. |
 | C8 `PSIV n has no USB2 speed-class mapping` | Inconclusive capability mismatch, not a qualification failure. The port's PORTSC speed ID was absent from (or unrecognised in) the controller's advertised Protocol Speed ID table, so C8 declined to guess an EP0 packet size. This can indicate a decoder defect, inconsistent controller/firmware capability data, or an unrecognised encoding; the message alone does not distinguish them. QEMU reports `PSIC 0` and never exercises this path, so bare metal is where it is first proven. Save the log with the `Protocol USB x.y: ... PSIC n` lines and the C6 speed strings. |
-| `WARNING: USB 3 PSI table omits PSIV 4` | Informational, never a verdict. The controller's USB 3 Supported Protocol capability publishes a speed table without the ID a 5 Gb/s device reports, as Intel Sunrise Point-LP (`8086:9D2F`) does; the driver up to `2.1.1.0` then never enumerates a SuperSpeed device on it (`docs/issues/11-sunrise-point-ssic-psi-table.md`). Keep the log: its PSI lines and raw capability chain are the evidence. |
+| `WARNING: USB 3 PSI table does not list PSIV 4` | Informational, never a verdict. The controller's USB 3 Supported Protocol capability publishes a complete speed table without ID 4. That is valid if 5 Gb/s is listed under another ID and PORTSC reports that ID; it breaks a strict decoder only if PORTSC reports ID 4 anyway, as Intel Sunrise Point-LP (`8086:9D2F`) does, where the driver up to `2.1.1.0` never enumerates a SuperSpeed device (`docs/issues/11-sunrise-point-ssic-psi-table.md`). Keep the log: its PSI lines and raw capability chain are the evidence. |
 | C6 speed reads `PSIV n not advertised...` or `PSIV n, X Kb/s per protocol cap` | The advertised table did not yield a recognised USB speed class. The port still reset successfully - C6's verdict is unaffected - but preserve the full log and report the mismatch for decoder-versus-controller investigation. |
 | Poll-only PROVISIONAL | Expected: `--poll-only` never tests C4, so it cannot qualify a machine. It confirms reset/DMA/port reset work with no ISR. Re-run without `--poll-only` for a verdict. |
 | Poll-only C6 fault | A fault under `--poll-only` (no ISR installed) points at the port/DMA path, not interrupt reflection. Save `XPOLL.LOG` and the MAP, cold boot, and report the last checkpoint. |
