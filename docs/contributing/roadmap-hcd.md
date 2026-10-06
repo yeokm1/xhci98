@@ -554,7 +554,8 @@ Goal: every registry value the driver reads written by the install, the
 Power tab's current for a SuperSpeed device, and the Intel EHCI-to-xHCI port
 switchover, released as the interim `2.1.1.0`.
 
-Status: open since 2026-10-05 on branch `2.1.1.0`. Split the same day from
+Status: closed 2026-10-06 on the cut. Opened 2026-10-05 on branch
+`2.1.1.0`. Split the same day from
 a single phase into 34, 35 (polled event delivery) and 36 (selective
 suspend and the rest), then made an interim release of its own, so
 `2.2.0.0` carries Phases 35 and 36 (decisions table). A first task 34.3,
@@ -571,11 +572,13 @@ release.
 - [x] 34.2 the Power tab's current for a SuperSpeed device, a quarter of its draw because the page doubles bMaxPower, which is in 8 mA units at SuperSpeed. Done 2026-10-05 (`f393bb6`; design record 13 section 8.3): the door rewrites the byte usbui reads, saturating at 510 mA, and `XHCISNAP` logs each SuperSpeed device's exact current (owner: both). Read on the P14s Gen 1 under Windows 98 SE: an 896 mA device reads 510 mA where `2.1.0.0` read 224 mA, and `dev.ss.maxpower.ma=00000380` (`runs/run-34.md`, 34.2-H)
 - [x] 34.3 the Intel EHCI-to-xHCI port switchover (owner, 2026-10-05, from a tester's report): on Intel 1E31, 8C31, 9C31, 8CB1, 9CB1 and 8D31 the HCD routes the switchable connectors to itself at start and resume and hands them back at stop and shutdown, superseding the miniport's Phase 4 decision; opt-out `XhciIntelPortSwitch` (1; only 0 is off). Done 2026-10-05 (`0def9a3` to `e591717`; design record 16; host vectors in `test_psw`): no config write on QEMU, the gate closed on the P14s Gen 1, and the switchover on the owner's Lenovo B490 (`1E31`) under Windows 98 SE with NUSB every clause but standby passing on Auto, and the firmware reading, the route, the SuperSpeed link and the shutdown again on Smart Auto (`runs/run-34.md`, 34.3-Q, -H1, -H2). Ticked on real hardware (owner)
 - [x] 34.4 the docs of this phase: the release notes, README and readme template for 34.1 to 34.3, records 13 and 16, `xhci-programming.md`, `implementation-invariants.md`, `failure-diagnosis.md`, the acceptance test, `xhciqual/hardware-testing.md`, `source-files.md` and `runs/run-34.md` (record 16 section 12). Done 2026-10-05 (`874085b` to `e36a05b`), Codex-converged over four rounds (`runs/run-34.md`, Codex)
-- [ ] 34.5 the cut, dated 2026-10-06 (owner): `xhci_version.h` and the four INFs' `DriverVer` at `10/06/2026,2.1.1.0`, `releases/history.md`, the release notes, the README and `make-release.ps1`, and the ten install legs read from the asset, as 33.9
+- [x] 34.5 the cut, dated 2026-10-06 (owner): `xhci_version.h` and the four INFs' `DriverVer` at `10/06/2026,2.1.1.0`, `releases/history.md`, the release notes, the README and `make-release.ps1`, and the ten install legs read from the asset, as 33.9. Done 2026-10-06 (`0be9dfc`, `41553dd`, `releases\2.1.1.0`, cut from `47f8d6c`): the ten release-asset install legs passed (`out\phase34\asset\`); Windows 98 SE's Driver tab read the driver file's date, not `DriverVer`, so `make-release.ps1` now dates every packaged file at noon on the `DriverVer` date, with a readme-only `-Force` re-cut (`e9bd04c`), the binaries unchanged, after which a fresh Windows 98 SE install read 10-6-2026 (`out\phase34\recut\`); asset `xhci98-2.1.1.0.zip`, 691,760 bytes
 
 Checkpoint: 34.1's values read on Windows 98 SE, 2000 and 7 x86; 34.2 and
 34.3 read on the owner's hardware; 34.3's host vectors passing and no
 config write on QEMU; the ten install legs read from the `2.1.1.0` asset.
+
+The checkpoint **closed on 2026-10-06**.
 
 Records: `runs/run-34.md`; `design/16-intel-port-switchover.md`;
 `releases/history.md`; `releases/2.1.1.0/`; `docs/using/release-notes.md`.
