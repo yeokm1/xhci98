@@ -49,19 +49,22 @@ machines; the release notes say what was read on which system.
   the closing-off of a controller that cannot be proven to have stopped
   writing to memory), `XhciIntervalCap` (`1`, caps long mouse and keyboard
   polling intervals on AMD controllers) and `XhciAvgTrbEsit` (`0`). Read
-  in virtual machines with the faults made on purpose; no real controller
-  has raised one under this driver yet.
+  in QEMU virtual machines under Windows 98 SE and 2000, each fault made
+  on purpose at a root port (QEMU has no SuperSpeed hub); no real
+  controller has raised one under this driver yet.
 - `XHCISNAP`'s report now says why a device was not enumerated - each root
   port's speed, rate, slot and failure - and counts every fault above, so a
   report from a machine where something stopped working names its cause.
 - Updating from `2.1.1.0`: the same steps as from `2.0.0.0` (the release
   notes, "Updating from 2.y.y.y"); the registry values already there are
   kept and the three new ones added.
-- Known limitations: those of `2.1.1.0`, plus two: a device the
+- Known limitations: those of `2.1.1.0`, plus three: a device the
   controller keeps faulting on is removed after three tries and its port
-  held until it is unplugged or the controller restarts, and disabling a
-  controller that stopped answering can hang, needing a restart. The
-  release notes have the full list.
+  held until it is unplugged or the controller restarts; disabling a
+  controller the driver closed off without proof that it stopped hangs,
+  so restart the machine instead; and on Windows 2000 a mounted USB drive
+  may come back at Code 31 after a controller recovery, until it is
+  replugged. The release notes have the full list.
 
 ## 2.1.1.0 - 2026-10-06
 

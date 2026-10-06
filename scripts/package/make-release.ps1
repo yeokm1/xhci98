@@ -3472,18 +3472,29 @@ May be addressed in a later release:
     was doing ends as on an unplug: a copy to a drive fails part way. After
     three on one port, the next fault there removes the device and holds
     the port until the device is unplugged, or, held unpowered after
-    over-currents, until the controller restarts.
+    over-currents, until the controller restarts. A recovery of the
+    controller itself re-enumerates every device on it the same way, so a
+    copy running across it fails.
 
-  * DISABLING OR RESTARTING A CONTROLLER THAT STOPPED ANSWERING CAN HANG.
-    Only after the controller stopped answering altogether, or a recovery
-    could not stop it, and the driver could not prove it had stopped
-    writing to memory, so kept everything it
-    might still write into: if a transfer was at that moment waiting for
-    system DMA resources the kept transfers hold, a later disable of the
-    controller in Device Manager, or an update or removal of its driver,
-    waits for ever, and only restarting the machine ends it. Found by
-    reading the code, not seen to happen; an xHCI controller normally needs
-    none of those resources.
+  * DISABLING A CONTROLLER THE DRIVER CLOSED OFF WITHOUT PROOF THAT IT
+    STOPPED HANGS: RESTART THE MACHINE. Only after the controller stopped
+    answering altogether, or a recovery could not stop it, and the driver
+    could not prove it had stopped writing to memory, so kept everything it
+    might still write into (XHCISNAP reads "CONTAINED" and "PINNED"): a
+    later disable of the controller in Device Manager, or an update or
+    removal of its driver, waits for ever on the kept transfers, and only
+    restarting the machine ends it. Seen in virtual machines on Windows 98
+    SE and 2000 with the fault made on purpose. Restart the machine
+    instead.
+
+  * WINDOWS 2000: A MOUNTED USB DRIVE MAY COME BACK AT CODE 31 AFTER A
+    CONTROLLER RECOVERY. After the driver recovers the controller in place
+    (a halted controller, or a failed endpoint reset), a USB drive whose
+    volume was mounted may stay at Code 31 until it is unplugged and
+    plugged in again, or the controller is disabled and enabled in Device
+    Manager. Other devices come back. Seen in a virtual machine; not on
+    Windows 98 SE. The path predates 2.2.0.0, which recovers on more
+    faults.
 
 Untested ground:
 
@@ -3507,8 +3518,10 @@ Untested ground:
     controller, and at your own risk.
 
   * THE CONTROLLER-FAULT HANDLING ON REAL HARDWARE (XhciTolerance, section
-    9). Each fault was made on purpose in virtual machines; no real
-    controller at hand raises them. XhciIntervalCap and XhciAvgTrbEsit
+    9). Each fault was made on purpose at a root port in QEMU virtual
+    machines, under Windows 98 SE and Windows 2000; QEMU has no
+    SuperSpeed hub, so nothing was read behind one. No real controller has
+    raised one under this driver yet. XhciIntervalCap and XhciAvgTrbEsit
     have been read on no AMD or other real controller.
 
 
@@ -3724,8 +3737,8 @@ means the default each one states.
   reports incompatible is removed and re-enumerated, as the xHCI
   specification asks, at most three times on one port before the port is
   held; and a recovery that cannot stop the controller, and cannot prove
-  it has stopped writing to memory, closes the controller off until it
-  restarts. XHCISNAP then reports "CONTAINED: halt and reset did not
+  it has stopped writing to memory, closes the controller off until the
+  machine restarts. XHCISNAP then reports "CONTAINED: halt and reset did not
   complete and Bus Master Enable would not clear; DMA not proven stopped,
   common buffer pinned".
 
