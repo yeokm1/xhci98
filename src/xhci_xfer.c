@@ -280,15 +280,15 @@ ULONG XhciXferCodeInfo(ULONG completionCode, PXHCI_XFER_CODE info)
      * resolve, and offering it a zero would land on the ring's base - and not
      * because it belongs to the command ring.
      *
-     * Refusing it means nothing *here* acts on it. Recovery is not absent, it is
-     * **delayed**: the TD stays queued until usbport's timeout, and the Stop
-     * Endpoint that cancellation issues reads the Endpoint Context back, finds
-     * it Disabled - which is the condition code 12 reports - and takes
-     * `xhciEpStopped`'s Disabled branch, which raises `XHCI_EPQ_NO_CONTEXT` and
-     * owes the Configure Endpoint that puts the context back. That is a
-     * deliberate deviation with its reasons and its reopening measurement in
-     * docs/contributing/implementation-invariants.md, "Fatal Errors"; audit
-     * round 10 corrected an earlier wording of it that said nothing recovered.
+     * Refusing it means nothing *here* acts on it: nothing is retired and no
+     * transfer completes on it. The miniport leaned on usbport's URB timeout
+     * and the Stop Endpoint its cancellation issued; the HCD has no usbport and
+     * no client timeout, so the caller takes the refusal itself (design record
+     * 17 section 4.3, roadmap-hcd 35-T.3): a refused code on a non-isochronous
+     * endpoint of a device cycles the device (hcd_dev.c,
+     * XhciSlotTransferEvent; hcd_enum.c), whose Disable Slot takes back every
+     * TRB of the slot. That supersedes the deviation recorded in
+     * docs/contributing/implementation-invariants.md, "Fatal Errors".
      */
     default:
         break;
@@ -1951,10 +1951,10 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
         /*
          * An unassigned code, or one Table 6-90 gives to another event family.
          * Nothing here knows what the controller did with the TRBs, so nothing
-         * is retired and no transfer is completed on it: the visible failure is
-         * the counter plus usbport's own URB timeout, which is armed on every
-         * SubmitTransfer that returned success. Treating it as success is the
-         * one option that loses data silently.
+         * is retired and no transfer is completed on it: the counter and
+         * `Refused` say so, and the caller decides (35-T.3: the device is
+         * cycled, its Disable Slot taking the TRBs back; hcd_dev.c). Treating
+         * it as success is the one option that loses data silently.
          */
         queue->BadCodes++;
         result->Refused = 1;

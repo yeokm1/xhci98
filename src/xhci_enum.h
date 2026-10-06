@@ -51,6 +51,14 @@
 #define XHCI_ENUM_EV_PDO_CREATED   7UL  /* Ok                              */
 #define XHCI_ENUM_EV_PDO_STARTED   8UL
 #define XHCI_ENUM_EV_PDO_REMOVED   9UL
+/* ABANDONED_FOR_CYCLE (task 35-T.3; design record 17 section 4.3): a
+ * control transfer of the attempt was abandoned, or its device marked, for
+ * a device cycle. Not a failure: no Failed, so no retry, and no step's
+ * ordinary continuation - a tolerated BOS failure's configuration read
+ * among them. Everything the port holds goes as on a disconnect, and the
+ * machine is left Empty (Gone where a PDO exists), where the caller's
+ * pre-PDO cycle may feed it a CONNECT. Empty and Gone ignore it. */
+#define XHCI_ENUM_EV_ABANDONED     10UL
 
 /* Actions. */
 #define XHCI_ENUM_ACT_NONE          0UL

@@ -156,6 +156,74 @@ ULONG XhciTolHaltConfirmed(ULONG epState)
             epState == XHCI_EP_STATE_ERROR) ? 1UL : 0UL;
 }
 
+VOID XhciTolMarkInit(PXHCI_TOL_MARK mark)
+{
+    mark->Refused = 0;
+    mark->HaltDcis = 0;
+    mark->Confirmed = 0;
+    mark->Gen = 0;
+}
+
+ULONG XhciTolMarkPending(const XHCI_TOL_MARK *mark)
+{
+    return (mark->Refused || mark->HaltDcis != 0 || mark->Confirmed) ? 1UL
+                                                                     : 0UL;
+}
+
+ULONG XhciTolMarkSet(PXHCI_TOL_MARK mark, ULONG reason, ULONG dci, ULONG gen)
+{
+    ULONG was;
+
+    was = XhciTolMarkPending(mark);
+    if (reason == XHCI_TOL_CYCLE_REFUSED_CODE) {
+        mark->Refused = 1;
+    } else if (reason == XHCI_TOL_CYCLE_HALT_NO_TD && dci >= 1 && dci <= 31) {
+        mark->HaltDcis |= 1UL << dci;
+    } else {
+        return 0;
+    }
+    if (was) {
+        return 0;
+    }
+    mark->Gen = gen;
+    return 1;
+}
+
+ULONG XhciTolMarkResolve(PXHCI_TOL_MARK mark, ULONG halted)
+{
+    if ((halted & mark->HaltDcis) != 0) {
+        mark->Confirmed = 1;
+    }
+    mark->HaltDcis = 0;
+    if (mark->Refused) {
+        return XHCI_TOL_CYCLE_REFUSED_CODE;
+    }
+    if (mark->Confirmed) {
+        return XHCI_TOL_CYCLE_HALT_NO_TD;
+    }
+    XhciTolMarkInit(mark);
+    return XHCI_TOL_CYCLE_NONE;
+}
+
+ULONG XhciTolCycleAct(ULONG reason, ULONG sameDevice, ULONG markGen,
+                      ULONG locGen, ULONG published)
+{
+    if (reason != XHCI_TOL_CYCLE_REFUSED_CODE &&
+        reason != XHCI_TOL_CYCLE_HALT_NO_TD) {
+        return XHCI_TOL_CYCLE_ACT_NONE;
+    }
+    if (!sameDevice || markGen != locGen) {
+        return XHCI_TOL_CYCLE_ACT_DROP;
+    }
+    return published ? XHCI_TOL_CYCLE_ACT_PUBLISHED
+                     : XHCI_TOL_CYCLE_ACT_PRE_PDO;
+}
+
+ULONG XhciTolCycleReconnect(ULONG charged, ULONG empty, ULONG connected)
+{
+    return (charged && empty && connected) ? 1UL : 0UL;
+}
+
 ULONG XhciTolBackstop(PXHCI_TOL_OBS obs, ULONG tolerance, ULONG pending,
                       ULONG index, ULONG cycle, ULONG drainGen,
                       ULONG startGen, ULONG now)

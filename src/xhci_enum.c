@@ -23,7 +23,9 @@
  *   Present    --PDO started-->      Bound
  *
  * A disconnect from any state with a slot disables it; with a PDO it reports
- * the PDO missing and waits in Gone for the PDO's remove. Any failed step
+ * the PDO missing and waits in Gone for the PDO's remove. An attempt
+ * abandoned for a device cycle (XHCI_ENUM_EV_ABANDONED, 35-T.3) leaves the
+ * same way and is never retried. Any failed step
  * goes to Failed, disabling the slot it owned; a RETRY event then starts
  * once more from Reset (XHCI_ENUM_RETRIES), the rule the targets' own hub
  * drivers follow.
@@ -157,9 +159,16 @@ ULONG XhciEnumStep(PXHCI_ENUM_PORT port, const XHCI_ENUM_EVENT *event,
     }
     ok = event->Ok;
 
-    if (event->Kind == XHCI_ENUM_EV_DISCONNECT) {
+    if (event->Kind == XHCI_ENUM_EV_DISCONNECT ||
+        event->Kind == XHCI_ENUM_EV_ABANDONED) {
         if (port->State == XHCI_ENUM_EMPTY || port->State == XHCI_ENUM_GONE) {
             return port->State;
+        }
+        /* An abandoned attempt leaves no cause behind: it did not fail. */
+        if (event->Kind == XHCI_ENUM_EV_ABANDONED) {
+            port->FailCause = XHCI_ENUM_FAIL_NONE;
+            port->BosLength = 0;
+            port->BosMissing = 0;
         }
         return xhciEnumGone(port, action);
     }

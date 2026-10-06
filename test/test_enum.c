@@ -944,6 +944,74 @@ static void test_notes(void)
     XhciEnumNoteFinish(&n);
 }
 
+/*
+ * ABANDONED_FOR_CYCLE (35-T.3; design record 17 section 4.3): an attempt
+ * whose control transfer was abandoned for a device cycle is not a failure.
+ * It never reaches Failed, so no retry is owed; the step's ordinary
+ * continuation - the configuration read after a tolerated BOS failure - is
+ * not taken; the slot goes back and the machine is Empty, where a CONNECT
+ * starts it again. Empty and Gone ignore it, and with a PDO it leaves as a
+ * disconnect does.
+ */
+static void test_abandoned(void)
+{
+    XHCI_ENUM_PORT p;
+    XHCI_ENUM_ACTION a;
+    ULONG i;
+    ULONG bad;
+
+    ss_to_desc18(&p, &a);
+    CHECK_EQ(p.State, XHCI_ENUM_BOS5, "SS: at the BOS head");
+    step(&p, ev(XHCI_ENUM_EV_ABANDONED, 1), &a);
+    CHECK_EQ(p.State, XHCI_ENUM_EMPTY, "abandoned at Bos5: Empty, not Config9");
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_DISABLE_SLOT, "the slot given back");
+    CHECK_EQ(p.SlotId, 0, "and forgotten");
+    CHECK_EQ(p.FailCause, XHCI_ENUM_FAIL_NONE, "no failure recorded");
+    CHECK_EQ(p.BosMissing, 0, "BosMissing not set by it");
+    XhciEnumRetry(&p, &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_NONE, "no automatic retry");
+    CHECK_EQ(p.State, XHCI_ENUM_EMPTY, "still Empty");
+    step(&p, ev(XHCI_ENUM_EV_CONNECT, 1), &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_DEBOUNCE, "the cycle's CONNECT starts over");
+    CHECK_EQ(p.Retries, 0, "with the retries whole");
+
+    /* At every step of the full sequence before the PDO. */
+    bad = 0;
+    for (i = 1; i < FULL_SEQUENCE - 1; i++) {
+        drive_full(&p, i, &a);
+        step(&p, ev(XHCI_ENUM_EV_ABANDONED, 1), &a);
+        if (p.State != XHCI_ENUM_EMPTY || p.SlotId != 0 ||
+            p.FailCause != XHCI_ENUM_FAIL_NONE || p.Retries != 0) {
+            printf("  after %lu events, abandoned left state %lu\n", i,
+                   p.State);
+            bad++;
+        }
+    }
+    CHECK_EQ(bad, 0, "abandoned anywhere before the PDO: Empty, nothing owed");
+
+    /* From Failed: Empty, so the CONNECT the cycle feeds is taken. */
+    drive_full(&p, 7, &a);
+    step(&p, full_event(7, 0), &a);
+    CHECK_EQ(p.State, XHCI_ENUM_FAILED, "a failed read");
+    step(&p, ev(XHCI_ENUM_EV_ABANDONED, 1), &a);
+    CHECK_EQ(p.State, XHCI_ENUM_EMPTY, "abandoned from Failed: Empty");
+    CHECK_EQ(p.FailCause, XHCI_ENUM_FAIL_NONE, "the cause cleared");
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_NONE, "its slot already given back");
+
+    XhciEnumReset(&p);
+    step(&p, ev(XHCI_ENUM_EV_ABANDONED, 1), &a);
+    CHECK_EQ(p.State, XHCI_ENUM_EMPTY, "Empty ignores it");
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_NONE, "and asks nothing");
+
+    drive_full(&p, FULL_SEQUENCE, &a);
+    step(&p, ev(XHCI_ENUM_EV_ABANDONED, 1), &a);
+    CHECK_EQ(p.State, XHCI_ENUM_GONE, "with a PDO: Gone, as a disconnect");
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_REPORT_GONE, "the PDO reported missing");
+    step(&p, ev(XHCI_ENUM_EV_ABANDONED, 1), &a);
+    CHECK_EQ(p.State, XHCI_ENUM_GONE, "Gone ignores it");
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_NONE, "and asks nothing");
+}
+
 int main(void)
 {
     test_clean_paths();
@@ -958,6 +1026,7 @@ int main(void)
     test_retry_to_bound();
     test_hub_port_attempts();
     test_superspeed();
+    test_abandoned();
     test_settle();
     test_hub_let_go();
     test_notes();

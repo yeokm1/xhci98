@@ -194,6 +194,59 @@ ULONG XhciTolHaltCandidate(ULONG tolerance, ULONG code, ULONG isoch,
 /* 1 when a halt candidate's context state (XHCI_EP_STATE_*) cycles. */
 ULONG XhciTolHaltConfirmed(ULONG epState);
 
+/*
+ * A device's cycle mark (record 17 section 4.3), kept on its record: set by
+ * the event path under the controller lock, read and cleared by the thread
+ * under it. Refused: a refused code (T3), which cycles in any endpoint
+ * state. HaltDcis: the endpoints (DCI bits) a halt with no TD named (T4),
+ * whose contexts the thread has yet to read. Confirmed: one of them read
+ * Halted or Error. Gen: the location's connect generation when first
+ * marked. A record is zeroed when it is made, which is the empty mark.
+ */
+typedef struct _XHCI_TOL_MARK {
+    ULONG Refused;
+    ULONG HaltDcis;
+    ULONG Confirmed;
+    ULONG Gen;
+} XHCI_TOL_MARK, *PXHCI_TOL_MARK;
+
+VOID XhciTolMarkInit(PXHCI_TOL_MARK mark);
+
+/* Mark for reason (XHCI_TOL_CYCLE_REFUSED_CODE or _HALT_NO_TD; any other is
+ * ignored) on endpoint dci (1..31; a halt naming another is ignored), at the
+ * location's connect generation gen. The first mark stamps gen; a later one
+ * keeps it. Returns 1 when the device was not marked before. */
+ULONG XhciTolMarkSet(PXHCI_TOL_MARK mark, ULONG reason, ULONG dci, ULONG gen);
+
+/* 1 while anything is marked, confirmed or not. */
+ULONG XhciTolMarkPending(const XHCI_TOL_MARK *mark);
+
+/* The thread's reading: halted holds the DCI bits of HaltDcis whose contexts
+ * it read Halted or Error (XhciTolHaltConfirmed). HaltDcis is consumed.
+ * Returns the reason the device is cycled for - a refused code first, then
+ * a confirmed halt - or XHCI_TOL_CYCLE_NONE, when every halt read stale and
+ * the mark is cleared: a stale event costs its context read and nothing
+ * more. */
+ULONG XhciTolMarkResolve(PXHCI_TOL_MARK mark, ULONG halted);
+
+/* What the thread does with a resolved mark (record 17 section 4.3). */
+#define XHCI_TOL_CYCLE_ACT_NONE     0UL     /* nothing marked, or stale      */
+#define XHCI_TOL_CYCLE_ACT_DROP     1UL     /* gone or replaced: counted     */
+#define XHCI_TOL_CYCLE_ACT_PUBLISHED 2UL    /* charged, then HcdEnumCycle    */
+#define XHCI_TOL_CYCLE_ACT_PRE_PDO  3UL     /* the pre-PDO cycle             */
+
+/* reason from XhciTolMarkResolve; sameDevice 1 when the device is still the
+ * one at its location; markGen the mark's generation, locGen the
+ * location's now; published 1 when the device has its PDO and its group's
+ * serial (HcdEnumCycle's own condition). */
+ULONG XhciTolCycleAct(ULONG reason, ULONG sameDevice, ULONG markGen,
+                      ULONG locGen, ULONG published);
+
+/* After the pre-PDO cycle's teardown, with the location's machine Empty
+ * (empty): 1 when a CONNECT is fed - the charge allowed (charged; a held
+ * location is never charged) and the location still reads connected. */
+ULONG XhciTolCycleReconnect(ULONG charged, ULONG empty, ULONG connected);
+
 /* The backstop's one observation (record 17 section 4.1). */
 typedef struct _XHCI_TOL_OBS {
     ULONG Valid;

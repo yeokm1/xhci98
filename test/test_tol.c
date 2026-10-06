@@ -262,6 +262,77 @@ static void test_cycle(void)
     CHECK_EQ(XhciTolHaltConfirmed(XHCI_EP_STATE_STOPPED), 0, "stale: stopped");
 }
 
+/* 35-T.3/4: the mark the event path sets and the thread resolves, and what
+ * the thread does with it (record 17 section 4.3). */
+static void test_cycle_mark(void)
+{
+    XHCI_TOL_MARK m;
+
+    memset(&m, 0, sizeof(m));
+    CHECK_EQ(XhciTolMarkPending(&m), 0, "zeroed record: no mark");
+    CHECK_EQ(XhciTolMarkResolve(&m, 0xFFFFFFFFUL), XHCI_TOL_CYCLE_NONE,
+             "nothing marked resolves to none");
+
+    /* A refused code cycles in any state: no context read decides it. */
+    CHECK_EQ(XhciTolMarkSet(&m, XHCI_TOL_CYCLE_REFUSED_CODE, 1, 7), 1,
+             "first mark raises it");
+    CHECK_EQ(m.Gen, 7, "first mark stamps the generation");
+    CHECK_EQ(XhciTolMarkSet(&m, XHCI_TOL_CYCLE_HALT_NO_TD, 3, 9), 0,
+             "second mark: already marked");
+    CHECK_EQ(m.Gen, 7, "a later mark keeps the first generation");
+    CHECK_EQ(XhciTolMarkResolve(&m, 0), XHCI_TOL_CYCLE_REFUSED_CODE,
+             "refused wins over a stale halt");
+    CHECK_EQ(m.HaltDcis, 0, "the halt reading consumed");
+    CHECK_EQ(XhciTolMarkPending(&m), 1, "still pending until acted on");
+    XhciTolMarkInit(&m);
+    CHECK_EQ(XhciTolMarkPending(&m), 0, "cleared");
+
+    /* A halt with no TD: the context read decides. */
+    CHECK_EQ(XhciTolMarkSet(&m, XHCI_TOL_CYCLE_HALT_NO_TD, 4, 2), 1, "halt");
+    CHECK_EQ(m.HaltDcis, 1UL << 4, "DCI 4 to read");
+    CHECK_EQ(XhciTolMarkResolve(&m, 0), XHCI_TOL_CYCLE_NONE,
+             "stale: read Running or Stopped");
+    CHECK_EQ(XhciTolMarkPending(&m), 0, "a stale halt clears the mark");
+    CHECK_EQ(XhciTolMarkSet(&m, XHCI_TOL_CYCLE_HALT_NO_TD, 4, 2), 1, "again");
+    CHECK_EQ(XhciTolMarkSet(&m, XHCI_TOL_CYCLE_HALT_NO_TD, 5, 2), 0, "and 5");
+    CHECK_EQ(XhciTolMarkResolve(&m, 1UL << 6), XHCI_TOL_CYCLE_NONE,
+             "a halted DCI that was not marked confirms nothing");
+    CHECK_EQ(XhciTolMarkSet(&m, XHCI_TOL_CYCLE_HALT_NO_TD, 5, 2), 1, "5");
+    CHECK_EQ(XhciTolMarkResolve(&m, 1UL << 5), XHCI_TOL_CYCLE_HALT_NO_TD,
+             "Halted or Error: confirmed");
+    CHECK_EQ(XhciTolMarkResolve(&m, 0), XHCI_TOL_CYCLE_HALT_NO_TD,
+             "confirmed stays confirmed without a second read");
+    XhciTolMarkInit(&m);
+    CHECK_EQ(XhciTolMarkSet(&m, XHCI_TOL_CYCLE_HALT_NO_TD, 0, 1), 0,
+             "DCI 0 is no endpoint");
+    CHECK_EQ(XhciTolMarkSet(&m, XHCI_TOL_CYCLE_HALT_NO_TD, 32, 1), 0,
+             "DCI 32 is no endpoint");
+    CHECK_EQ(XhciTolMarkSet(&m, XHCI_TOL_CYCLE_PED, 1, 1), 0,
+             "a PED reconnect is no mark");
+    CHECK_EQ(XhciTolMarkPending(&m), 0, "none of them marked");
+
+    CHECK_EQ(XhciTolCycleAct(XHCI_TOL_CYCLE_NONE, 1, 3, 3, 1),
+             XHCI_TOL_CYCLE_ACT_NONE, "stale: nothing");
+    CHECK_EQ(XhciTolCycleAct(XHCI_TOL_CYCLE_REFUSED_CODE, 1, 3, 3, 1),
+             XHCI_TOL_CYCLE_ACT_PUBLISHED, "published: HcdEnumCycle");
+    CHECK_EQ(XhciTolCycleAct(XHCI_TOL_CYCLE_HALT_NO_TD, 1, 3, 3, 0),
+             XHCI_TOL_CYCLE_ACT_PRE_PDO, "not yet published: pre-PDO");
+    CHECK_EQ(XhciTolCycleAct(XHCI_TOL_CYCLE_REFUSED_CODE, 0, 3, 3, 1),
+             XHCI_TOL_CYCLE_ACT_DROP, "another device at the location");
+    CHECK_EQ(XhciTolCycleAct(XHCI_TOL_CYCLE_REFUSED_CODE, 1, 3, 4, 1),
+             XHCI_TOL_CYCLE_ACT_DROP, "a connect or disconnect since");
+    CHECK_EQ(XhciTolCycleAct(XHCI_TOL_CYCLE_HALT_NO_TD, 1, 0xFFFFFFFFUL, 0,
+                             0),
+             XHCI_TOL_CYCLE_ACT_DROP, "generation wrapped: not equal");
+    CHECK_EQ(XhciTolCycleAct(XHCI_TOL_CYCLE_PED, 1, 3, 3, 1),
+             XHCI_TOL_CYCLE_ACT_NONE, "a PED reconnect is not this path's");
+
+    CHECK_EQ(XhciTolCycleReconnect(1, 1, 1), 1, "charged, Empty, connected");
+    CHECK_EQ(XhciTolCycleReconnect(0, 1, 1), 0, "refused: held");
+    CHECK_EQ(XhciTolCycleReconnect(1, 0, 1), 0, "machine not Empty");
+    CHECK_EQ(XhciTolCycleReconnect(1, 1, 0), 0, "no longer connected");
+}
+
 static void test_backstop(void)
 {
     XHCI_TOL_OBS o;
@@ -764,6 +835,7 @@ int main(void)
     test_cap_fastpoll();
     test_retry();
     test_cycle();
+    test_cycle_mark();
     test_backstop();
     test_loc();
     test_port();
