@@ -18,7 +18,8 @@ before a PDO exists (4.3), and containment that drains only after its proof
 answered. **Converged**: review round 8, on revision 7 (`edc7a2a`), found
 every earlier finding resolved and nothing material remaining. Section
 4.11, the off-switch `XhciTolerance`, was added after it by the owner's
-decision of the same day.
+decision of the same day, and converged in its turn at review round 11
+(`d9b39c4`).
 
 ## 1. What is asked, and what is not
 
