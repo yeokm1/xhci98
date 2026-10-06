@@ -448,6 +448,12 @@ ULONG HcdSsHubPortReset(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     }
     q->Link.WarmResets = 0;
     q->Link.GaveUp = 0;
+    /* An enumeration after a recovery that timed out with the link still
+     * training: this reset's recovered connection ends that recovery's
+     * disconnect, as HcdSsHubPortRecover's own success does. */
+    HcdTolLocObserve(hc, q, (status & XHCI_SSHUB_PORT_CONNECTION) != 0,
+                     (status & XHCI_SSHUB_PORT_POWER) != 0,
+                     (change & XHCI_SSHUB_C_PORT_CONNECTION) != 0);
     *speedClass = XHCI_SPEED_SUPER;
     hcdSsHubReadExt(hc, hub, n, q);
     hcdSsHubDelay(HCD_SSHUB_RESET_RECOVERY_MS);

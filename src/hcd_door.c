@@ -729,13 +729,11 @@ static VOID hcdDoorSlots(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
 }
 
 /* XHCISNAP keeps the whole extension in one 128 KB image to print the note
- * ring from it (xhcisnap.c, EXT_IMAGE_MAX) and refuses a larger one: a
- * 32-bit build whose extension outgrows it fails here, not on a user's
- * machine (the amd64 layout, with its wider pointers, is not held to it). */
-#if !defined(_WIN64)
+ * ring from it (xhcisnap.c, EXT_IMAGE_MAX) and refuses a larger one, on
+ * either architecture: a build whose extension outgrows it fails here, not
+ * on a user's machine. */
 typedef char hcdSnapshotFitsTool[sizeof(XHCI_EXTENSION) <= 131072UL ? 1
                                                                      : -1];
-#endif
 
 /*
  * XHCISNAP's window, the miniport's xhciPassThru (branch 1.2.0.0) over the
