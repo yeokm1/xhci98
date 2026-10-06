@@ -869,6 +869,10 @@ static VOID hcdTerminalRelease(PHCD_CONTROLLER hc)
         if (XhciTolTerminalRelease(terminal, hc->SlotsInvalidated,
                                    hc->TerminalReleased, devices)) {
             hc->TerminalReleased = 1;
+            /* The slots stay enabled without a Disable Slot, their buffers
+             * about to be given back: no saved image may be restored over
+             * them, and no new one is taken while failed (xhciSaveState). */
+            ext->SavedStateValid = 0;
             usbsts = XhciReadOp(ext, XHCI_OP_USBSTS);
             XhciLogNoteLocked(ext, "ctrl.terminal.release", usbsts);
             XhciSlotInvalidateAll(ext, XhciTolHaltProven(usbsts));

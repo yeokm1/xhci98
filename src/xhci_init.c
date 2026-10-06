@@ -3096,6 +3096,21 @@ static ULONG xhciSaveState(PXHCI_EXTENSION ext)
     }
 
     /*
+     * **Never on a failed controller.** HCH proves the xHC stopped executing,
+     * but CSS starts memory writes while it is halted: with FSC it flushes the
+     * cached Slot, Endpoint and Stream Contexts (5.4.1, Table 5-20, p.361).
+     * A latched-failed controller's devices may already have been dropped
+     * without a Disable Slot (hcd_ctl.c, hcdTerminalRelease) and their
+     * stream-context buffers freed while its slots stay enabled, so a save
+     * would write into memory the driver gave back. Only the HCRST of a
+     * recovery or a start retires those slots, and either clears the latch.
+     */
+    if (XhciTolSaveRefused(ext->ControllerFailed)) {
+        XHCI_DBG_TEXT("save: declined - the controller is latched failed");
+        return 0;
+    }
+
+    /*
      * FSC, before anything is read or written. See the header: without it the
      * driver cannot make the saved image complete, and this is the earliest
      * point at which that is knowable - HcInfo was decoded at start time.
@@ -3353,6 +3368,11 @@ static ULONG xhciRestoreState(PXHCI_EXTENSION ext)
      * would be a restore with no save behind it.
      */
     ext->SavedStateValid = 0;
+    /* Nor CRS on a failed controller, for xhciSaveState's reason: the
+     * image would bring back slots whose buffers may have been given back. */
+    if (XhciTolSaveRefused(ext->ControllerFailed)) {
+        return 0;
+    }
 
     usbsts = XhciReadOp(ext, XHCI_OP_USBSTS);
     if (usbsts == 0xFFFFFFFFUL || (usbsts & XHCI_USBSTS_HCH) == 0) {

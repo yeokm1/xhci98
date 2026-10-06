@@ -842,6 +842,14 @@ the reason a dump names is unchanged. Not a
 tolerance behaviour: at `XhciTolerance` 0 the window never refuses, and the
 run of failures is released the same way.
 
+HCH proves the controller stopped executing, not that it will write
+nothing more: Save State (CSS) writes the cached Slot, Endpoint and Stream
+Contexts to memory while halted (xHCI 5.4.1), and after a release the
+slots stay enabled over buffers given back. So no CSS or CRS is issued on a
+latched-failed controller (`XhciTolSaveRefused`, in `xhciSaveState` and
+`xhciRestoreState`), and the release discards any saved image; only the
+HCRST of a recovery or a start, which clears the latch, retires the slots.
+
 ### 4.7 The interval cap (35-T.7, gated) and the Average TRB Length switch
 
 **The cap.** An interrupt endpoint whose Interval exceeds 8 (32 ms) is

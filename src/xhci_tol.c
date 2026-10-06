@@ -690,6 +690,11 @@ ULONG XhciTolTerminalRelease(ULONG terminal, ULONG pending, ULONG raised,
     return (!pending && !raised && devices) ? 1UL : 0UL;
 }
 
+ULONG XhciTolSaveRefused(ULONG failed)
+{
+    return failed ? 1UL : 0UL;
+}
+
 ULONG XhciTolHaltProven(ULONG usbsts)
 {
     return (usbsts != 0xFFFFFFFFUL && (usbsts & XHCI_USBSTS_HCH) != 0)

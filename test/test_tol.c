@@ -1213,6 +1213,11 @@ static void test_terminal_release(void)
     CHECK_EQ(XhciTolHaltProven(0x00000000UL), 0, "running");
     CHECK_EQ(XhciTolHaltProven(0x00001000UL), 0, "HCE, not halted");
     CHECK_EQ(XhciTolHaltProven(0xFFFFFFFFUL), 0, "all-ones proves nothing");
+
+    /* After a release the slots stay enabled over given-back buffers: no
+     * CSS or CRS while failed, at either value; a running controller saves. */
+    CHECK_EQ(XhciTolSaveRefused(1), 1, "failed: no save, no restore");
+    CHECK_EQ(XhciTolSaveRefused(0), 0, "running: saved as before");
 }
 
 /* Record 17 section 4.11: a start latches the three values and sets every

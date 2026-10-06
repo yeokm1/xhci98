@@ -550,6 +550,13 @@ ULONG XhciTolTerminalRelease(ULONG terminal, ULONG pending, ULONG raised,
  * window that decodes (an all-ones read carries HCH and proves nothing). */
 ULONG XhciTolHaltProven(ULONG usbsts);
 
+/* 1 when a Save State (CSS) or Restore State (CRS) must not be issued: the
+ * controller is latched failed (ControllerFailed). CSS writes cached
+ * contexts to memory while halted, and a failed controller's slots may
+ * name buffers already given back; only a HCRST, which clears the latch,
+ * retires them. At every XhciTolerance value. */
+ULONG XhciTolSaveRefused(ULONG failed);
+
 /* The all-ones episode (record 17 section 4.6). */
 typedef struct _XHCI_TOL_DEAD {
     ULONG Armed;
