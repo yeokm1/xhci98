@@ -174,7 +174,9 @@ controller lock with the window.
 What the report carries:
 
 - **The values in effect**: `XhciTolerance` (1 on, 0 off - `2.1.1.0`'s
-  handling, with the counters still counting), `XhciIntervalCap` with whether
+  handling; the counters of what was seen still count - the codes, the
+  queues' sums and halts, root port PED faults and over-currents - and
+  those of what a behaviour did stay at 0), `XhciIntervalCap` with whether
   the cap applies on this controller and how many endpoints it lowered, and
   `XhciAvgTrbEsit`.
 - **The controller**: running; failed with an in-place recovery still owed;

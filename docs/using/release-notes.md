@@ -730,7 +730,8 @@ than try for ever:
   `1022:43B9` and `1022:43BB`, Etron `1B6F:7023` and `1B6F:7052`).
 - **A report the driver cannot pin on a transfer** - a completion code the
   specification gives no transfer, or an endpoint the controller halted
-  with no transfer to blame - makes the driver re-enumerate the device, as
+  with no transfer to blame, on any endpoint but an isochronous (audio)
+  one - makes the driver re-enumerate the device, as
   if it had been unplugged and plugged in again. To Windows that is a
   departure and an arrival: transfers in flight end as on an unplug, a
   drive's open files with them, and the device is found again where it was.
@@ -740,9 +741,9 @@ than try for ever:
   again.
 - **Each port has a budget**, a root port and a port of an external hub
   alike: three re-enumerations and, on a root port, three repowers. Once it
-  is spent the port is held: nothing is enumerated there, and the report
-  says so. A held port that is still powered is released by unplugging its
-  device; one held unpowered after over-currents only by restarting the
+  is spent, the next fault there removes the device and holds the port:
+  nothing is enumerated there, and the report says so. A held port that is
+  still powered is released by unplugging its device; one held unpowered after over-currents only by restarting the
   controller - restarting Windows, or disabling and enabling the controller
   in Device Manager. A port gets its budget back when its device then works
   for a minute with no fault, or when it is left empty for a second and a
@@ -757,8 +758,8 @@ than try for ever:
   controller might still write into is kept.
 
 None of this acts on a healthy controller: the only cost there is one memory
-read each time the driver's thread looks, every 100 ms. What a class driver
-sees is either the same failed transfer it saw up to `2.1.1.0` or a device
+read and one read of the controller's status register each time the
+driver's thread looks, every 100 ms. What a class driver sees is either the same failed transfer it saw up to `2.1.1.0` or a device
 leaving and arriving, never a new kind of error.
 
 Two settings concern AMD controllers in particular (both under "Registry
@@ -771,13 +772,18 @@ told for each interrupt endpoint, for a tester whose machine misbehaves to
 try. And **`XhciTolerance`** set to `0` turns everything in the list above
 off at once, for a machine where it does more harm than good.
 
-`XHCISNAP`'s report counts what happened: the transfer errors, unknown
-codes and unmatched events per endpoint, the retries, each re-enumeration
-and why, a count of every completion code, the lost interrupts the thread
-delivered, each port's budget and hold, and the controller's recoveries and
-any closing-off - with `XhciLogVerbosity` at `1` or above, and at
-`XhciTolerance` `0` too, so a report taken with the behaviours off still
-shows what they would have answered. **If a USB device stops on your
+`XHCISNAP`'s report counts what happened, with `XhciLogVerbosity` at `1`
+or above: the transfer errors, unknown codes and unmatched events, summed
+over the controller, a count of every completion code, the retries, each
+re-enumeration and why, the lost interrupts the thread delivered, each
+port's budget and hold, and the controller's recoveries and any
+closing-off. At `XhciLogVerbosity` `2` the log also names the device and
+endpoint of the first few of each error code. At `XhciTolerance` `0` the
+errors, codes and unmatched events, and the root ports' disables and
+over-currents, are still counted, so a report taken with the behaviours
+off shows the faults they would have answered; the retries,
+re-enumerations, holds, recoveries and the rest count only what the
+behaviours did, and stay at `0`. **If a USB device stops on your
 machine**, send the controller's id (`XHCIQUAL`'s probe, or Device Manager)
 and two `XHCISNAP` reports at `XhciLogVerbosity` `2`, one while it works and
 one after it stops; and if it still stops, the same with `XhciAvgTrbEsit` at
@@ -969,7 +975,9 @@ settings below.
 | `0` | Off: every one of those paths is handled as `2.1.1.0` handled it |
 
 Only an explicit `0` turns it off. It does not touch `XhciIntervalCap` or
-`XhciAvgTrbEsit`, and `XHCISNAP`'s counters keep counting at `0`. It is
+`XhciAvgTrbEsit`, and at `0` `XHCISNAP`'s report still counts the faults
+it sees, though not what the behaviours would have done about them (see
+"Controller faults: what the driver does about them"). It is
 read when the controller starts, so a change takes effect at the next
 restart or at a disable and enable of the controller, and the new start
 leaves nothing of the old setting's work behind. The budgets and intervals
@@ -1127,7 +1135,8 @@ for anything to read.
 
 ## Known limitations
 
-Each was measured, in a virtual machine unless it names a physical machine.
+Each was measured, in a virtual machine unless it names a physical machine,
+or says it was found by reading the code.
 
 - **The driver never initiates selective suspend.** Idle devices and idle hub
   ports are never suspended to save power, on any target; the driver handles
@@ -1191,10 +1200,20 @@ Each was measured, in a virtual machine unless it names a physical machine.
   the driver** (since `2.2.0.0`; "Controller faults: what the driver does
   about them"). Whatever it was doing ends as on an unplug: a file copy to a
   drive fails part way, and a drive should be checked as after any
-  surprise removal. After three on one port the port is held and the device
-  stays gone until it is unplugged, or, on a root port held unpowered after
-  over-currents, until the controller is restarted. `XhciTolerance` `0`
-  turns it off.
+  surprise removal. After three on one port, the next fault there removes
+  the device and holds the port, and the device stays gone until it is
+  unplugged, or, on a root port held unpowered after over-currents, until
+  the controller is restarted. `XhciTolerance` `0` turns it off.
+- **After a controller stops answering, disabling or restarting it can
+  hang** (since `2.2.0.0`; same section). Only when the controller stopped
+  answering altogether and the driver could not prove it had stopped
+  writing to memory, so kept everything it might still write into: if a
+  transfer was at that moment waiting for system DMA resources the kept
+  transfers hold, a later stop of the controller - disabling it in Device
+  Manager, or updating or removing its driver - waits for ever, and only
+  restarting the machine ends it. Found by reading the code, not seen to
+  happen; an xHCI controller, a 32-bit bus master, normally needs none of
+  those resources. A later release may release them at the stop instead.
 - **Windows 98 SE and ME: a device name with characters outside plain ASCII
   shows them as `?`.** See "Devices and hubs in Device Manager".
 - **Windows XP and XP x64 installed with the F6 floppy: GUI-mode Setup asks

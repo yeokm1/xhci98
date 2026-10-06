@@ -292,13 +292,13 @@ Since `2.1.1.0` the driver moves them to the xHCI controller at each start and r
 Since `2.2.0.0` the driver deals with faults a controller following the xHCI specification never raises, but which, if one did, left a device dead until it was replugged. This follows a tester's report from an AMD AM5 board of a mouse that stops at random. Each is answered a few times at most, then the driver stops trying:
 
 - An event whose interrupt never arrived is picked up by the driver's own thread.
-- A transfer error on a bulk or interrupt endpoint is retried up to three times before the transfer fails.
-- A fault the driver cannot pin on a transfer makes it re-enumerate the device, as if it had been unplugged and plugged in again. Whatever the device was doing ends as on an unplug.
+- A USB transaction error (the device did not answer cleanly) on a bulk or interrupt endpoint is retried up to three times before the transfer fails; not for a Low- or Full-Speed device behind a USB 2.0 hub, on UAS stream endpoints, or on the four controllers Linux excludes.
+- A fault the driver cannot pin on a transfer, on any but an isochronous (audio) endpoint, makes it re-enumerate the device, as if it had been unplugged and plugged in again. Whatever the device was doing ends as on an unplug.
 - A USB 2.0 root port the controller disabled is re-enumerated, and one that reported an over-current is powered again.
-- After three re-enumerations or repowers a port is held until its device is unplugged, or, held unpowered, until the controller is restarted.
+- After three re-enumerations or repowers, the next fault on that port removes the device and holds the port until its device is unplugged, or, held unpowered, until the controller is restarted.
 - A controller that halts is recovered, at most three times in ten minutes; one that stops answering is closed off safely.
 
-None of this acts on a healthy controller. `XhciTolerance` set to `0` turns all of it off. `XHCISNAP`'s report counts each of them.
+None of this acts on a healthy controller. `XhciTolerance` set to `0` turns all of it off. `XHCISNAP`'s report counts each of them; at `0` it still counts the faults themselves, but not what the driver would have done.
 
 Two values concern AMD controllers. `XhciIntervalCap` polls an interrupt endpoint that asks for more than 32 ms every 32 ms, as Linux does on some AMD controllers; this driver does it on every AMD controller (PCI vendor `1022`), as the AM5 and X570 ones are not on Linux's list. `XhciAvgTrbEsit` set to `1` changes one figure the controller is told for each interrupt endpoint, as Linux does; it is off by default and exists so a machine that misbehaves can be compared both ways.
 
@@ -368,6 +368,7 @@ These come from Windows, NUSB or the driver being unsigned, and no change to thi
 |---|---|
 | The driver never starts selective suspend | Idle devices and hub ports are never suspended to save power. A suspend or resume a hub reports is handled. |
 | USB storage on Windows 98 is slower than the drive | An observation, not a defect found: Windows 98 sends one command at a time. On the P14s with the MSSU10 at 64 KB, about 208 MB/s on Windows 98 against 277 MB/s on Windows 11 at the same queue depth of one. This may be looked into in a later release. |
+| Disabling or restarting a controller that stopped answering can hang | Only after a controller stopped answering altogether and the driver could not prove it had stopped writing to memory, so kept everything it might still write into: if a transfer was at that moment waiting for system DMA resources the kept transfers hold, a later disable of the controller in Device Manager, or an update or removal of its driver, waits for ever, and only restarting the machine ends it. Found by reading the code, not seen to happen; an xHCI controller normally needs none of those resources. |
 | A UAS drive as the first USB storage device on Windows ME | On a fresh Windows ME installation whose first USB storage device is a UAS drive, the drive shows Code 2 (NTKERN.VXD device loader(s) could not load). ME has not yet copied its own `USBNTMAP.SYS` and `USBMPHLP.PDR`, which it installs only when its first ordinary USB stick is plugged in. To recover, plug in any ordinary USB stick once, then unplug the UAS drive and plug it back in. No Remove and no restart are needed. |
 
 ### Untested ground

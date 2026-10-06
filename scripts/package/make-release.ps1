@@ -3470,7 +3470,19 @@ May be addressed in a later release:
   * A DEVICE THE CONTROLLER FAULTS ON IS RE-ENUMERATED BY THE DRIVER, as if
     unplugged and plugged in again (XhciTolerance, section 9). Whatever it
     was doing ends as on an unplug: a copy to a drive fails part way. After
-    three on one port, the port is held until the device is unplugged.
+    three on one port, the next fault there removes the device and holds
+    the port until the device is unplugged, or, held unpowered after
+    over-currents, until the controller restarts.
+
+  * DISABLING OR RESTARTING A CONTROLLER THAT STOPPED ANSWERING CAN HANG.
+    Only after the controller stopped answering altogether and the driver
+    could not prove it had stopped writing to memory, so kept everything it
+    might still write into: if a transfer was at that moment waiting for
+    system DMA resources the kept transfers hold, a later disable of the
+    controller in Device Manager, or an update or removal of its driver,
+    waits for ever, and only restarting the machine ends it. Found by
+    reading the code, not seen to happen; an xHCI controller normally needs
+    none of those resources.
 
 Untested ground:
 
@@ -3687,21 +3699,24 @@ means the default each one states.
   Default 1: on. The driver recovers by itself from controller faults that
   a controller following the xHCI specification never raises but that
   would otherwise leave a device dead until it is replugged: an interrupt
-  that never arrived, a transfer error (retried up to three times), a
+  that never arrived, a USB transaction error on a bulk or interrupt
+  endpoint (retried up to three times, except behind a USB 2.0 hub for a
+  Low- or Full-Speed device, on UAS streams and on four controllers), a
   fault it cannot pin on a transfer (the device is re-enumerated, as if
   unplugged and plugged in again), a USB 2.0 root port the controller
   disabled or an over-current (the port re-enumerated or powered again),
   a controller that halts (recovered at most three times in ten minutes)
   or stops answering (closed off). Each a few times at most: after three
-  on one port, the port is held until its device is unplugged, or, held
-  unpowered, until the controller restarts. On a healthy controller none
+  on one port, the next fault removes the device and holds the port until
+  its device is unplugged, or, held unpowered, until the controller
+  restarts. On a healthy controller none
   of it acts.
 
   Set it to 0 to turn all of that off together and have the earlier
   handling back. ONLY 0 TURNS IT OFF; absent or any other number is on.
-  It does not touch the next two values, and XHCISNAP's counters keep
-  counting at 0. Read when the controller starts, so restart after
-  changing it.
+  It does not touch the next two values. At 0 XHCISNAP's report still
+  counts the faults it sees, but not what the driver would have done about
+  them. Read when the controller starts, so restart after changing it.
 
   XhciIntervalCap  -  the AMD interrupt-interval cap
   ..................................................
