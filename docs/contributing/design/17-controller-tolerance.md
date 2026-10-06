@@ -656,7 +656,8 @@ user's 0.
 
 QEMU raises none of these faults, and a fabricated event is only useful if
 the hardware state the driver then acts on is coherent with it. The
-`qemu`-flavour-only layer, beside 35.4's, makes each fault real where QEMU
+`qemu`-flavour-only layer, independent of 35.4's optional speed-table
+override, makes each fault real where QEMU
 allows it, and where it does not, it emulates the command that would meet
 the faked state rather than send it.
 

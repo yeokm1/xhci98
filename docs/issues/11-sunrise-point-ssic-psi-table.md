@@ -6,9 +6,10 @@ owner's E460 on 2026-10-06 (roadmap task 35.0); the fix is roadmap task
 
 Machines affected: those with an Intel Sunrise Point-LP xHCI controller
 (`8086:9D2F`), among them the ThinkPad E460 and the HP EliteBook 850 G5.
-Any controller whose USB 3 Supported Protocol capability publishes a speed
-table without the plain SuperSpeed ID would be affected the same way; none
-other is known. The P14s Gen 1 (`8086:02ED`) and the B490 (`8086:1E31`) are
+Any controller whose USB 3 Supported Protocol capability publishes a
+non-empty speed table that omits the ID its PORTSC actually reports for a
+SuperSpeed device (4 here) would be affected the same way; none other is
+known, and the HP's own mechanism is unconfirmed until its dump is read. The P14s Gen 1 (`8086:02ED`) and the B490 (`8086:1E31`) are
 not affected, and why is not yet read from their tables (section 6).
 
 ## 1. Symptom
@@ -91,7 +92,8 @@ hub by its protocol; a device on the USB 3 root hub is SuperSpeed to the
 USB core, and PORTSC's speed field is read only through fixed macros with
 the default IDs (`xhci-port.h`, `DEV_SUPERSPEED` and its neighbours). The
 table is read, logged and turned into the root hub's BOS SuperSpeedPlus
-descriptor (`xhci-hub.c`), nothing more. Windows evidently does the same.
+descriptor (`xhci-hub.c`), nothing more. Windows 10 and 11 run the same
+hardware at SuperSpeed; how they decode the speed is not read.
 
 ## 6. The fix (roadmap 35.1, owner, 2026-10-06)
 
@@ -105,13 +107,13 @@ lookup a SuperSpeed hub's children are addressed with, or a hub would
 enumerate and its devices still fail. The Slot Context keeps the
 controller's raw ID. The invariant gains the exception in its own words.
 
-Still to read (35.2): the PSI tables of the P14s Gen 1 and the B490, by
-`XHCIQUAL`, so their immunity is explained rather than assumed (the likely
+Still to read (35.2): the PSI tables of the P14s Gen 1 and the B490, from
+an `XHCISNAP` dump decoded against the matching offset table (`XHCIQUAL`
+prints the count, PSIC, but not the entries), so their immunity is explained rather than assumed (the likely
 answers - no table on the older B490, a table listing 4 on the P14s - are
 inference); and the E460 connector's physical USB 2.0 pairing - the hub's
 USB 2.0 half came up on port 1 where the driver's port map pairs 13 with 7 -
-which matters to the send-back of task 29-A.5 and the switchover of 34.3,
-not to this fix. The HP's "enumerates at High Speed" is not what this
+which matters to the send-back and holds of task 29-A.5, not to this fix. The HP's "enumerates at High Speed" is not what this
 failure does by itself, and needs its own dump.
 
 ## 7. What the project keeps from it
@@ -123,7 +125,7 @@ failure does by itself, and needs its own dump.
 - A rule written to protect against a hypothetical controller ("one that
   reorders its IDs") was met first by a real controller whose table was
   incomplete in the other direction. The exception keeps the protection and
-  follows what Linux and Windows do.
+  comes closer to what Linux does.
 - The planned lead fitted every symptom and was wrong; one reading with the
   shipped build, before any code, found it.
 
