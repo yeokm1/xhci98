@@ -533,6 +533,23 @@ ULONG XhciTolWindowAdmit(PXHCI_TOL_WINDOW win, ULONG tolerance, ULONG now);
 ULONG XhciTolTerminal(ULONG failed, ULONG unreadable, ULONG windowRefused,
                       ULONG failures, ULONG maxFailures);
 
+/* A terminal no recovery will act on - the window refused one, or the run
+ * of failures is spent - still holds every transfer the halted controller
+ * was given, and no recovery's invalidation is coming to complete them, so
+ * no class driver's request ends and no stop is ever sent. 1 when the
+ * thread is to raise that invalidation itself: terminal (XhciTolTerminal's
+ * value) WINDOW or FAILURES, none already pending, not yet raised in this
+ * lifetime, and a device record left to drop. A containment drains on its
+ * own (hcdContain, HcdEnumService). Not a tolerance behaviour: at
+ * XhciTolerance 0 the window never refuses, and the run of failures applies
+ * as at 1. */
+ULONG XhciTolTerminalRelease(ULONG terminal, ULONG pending, ULONG raised,
+                             ULONG devices);
+
+/* USBSTS's evidence that the controller stopped executing: HCH set on a
+ * window that decodes (an all-ones read carries HCH and proves nothing). */
+ULONG XhciTolHaltProven(ULONG usbsts);
+
 /* The all-ones episode (record 17 section 4.6). */
 typedef struct _XHCI_TOL_DEAD {
     ULONG Armed;

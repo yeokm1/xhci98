@@ -1006,6 +1006,9 @@ typedef struct _HCD_CONTROLLER {
      * controllerStopped 0) and not yet followed by a completed HCRST
      * (XhciSlotInit): the drain waits for a proof (HcdEnumService). */
     ULONG SlotsUnproven;
+    /* The invalidation a terminal no recovery acts on raised for itself
+     * (hcd_ctl.c, hcdTerminalRelease): once per lifetime. */
+    ULONG TerminalReleased;
     ULONG EnumDetachRequested;      /* the root hub is going               */
     KEVENT EnumDetachDone;
     ULONG ScratchTainted;           /* a timed-out EP0 transfer may DMA    */

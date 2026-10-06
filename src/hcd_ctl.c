@@ -826,6 +826,59 @@ static VOID hcdRecover(PHCD_CONTROLLER hc)
 }
 
 /*
+ * A terminal no recovery acts on - the window refused one (35-T.6), or the
+ * run of failures is spent - leaves the controller latched failed with the
+ * transfers it was given still on its rings: the event drain and the
+ * commands are refused, and only a recovery's own XhciSlotInvalidateAll
+ * ever completed them. With none coming, no class driver's request ended,
+ * no query-remove finished, and the stop that would drop them never came
+ * (35-V, the Windows 2000 SMP guest: the disable hung after
+ * ctrl.window.refused). So the thread raises that invalidation itself,
+ * once per lifetime, and HcdEnumService drains as after a recovery: with
+ * HCH read set (the controller stopped executing, the evidence the
+ * recovery takes) every device is dropped and its transfers completed;
+ * without it the invalidation is unproven, and HcdEnumService takes the
+ * Bus Master Enable proof first and, failing it, pins the buffer and
+ * contains, keeping every transfer and mapping. Admitted as that service
+ * is, on a started controller in D0. IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdTerminalRelease(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+    KIRQL oldIrql;
+    ULONG terminal;
+    ULONG devices;
+    ULONG usbsts;
+    ULONG i;
+
+    ext = &hc->Hc;
+    HcdPowerGateEnter(hc);
+    XhciControllerLockAcquire(ext, &oldIrql);
+    if ((ext->Flags & XHCI_EXT_FLAG_STARTED) != 0 &&
+        hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0) {
+        terminal = XhciTolTerminal(ext->ControllerFailed, ext->Tol.Unreadable,
+                                   ext->Tol.Window.Refused,
+                                   ext->RecoveryFailuresConsecutive,
+                                   XHCI_RECOVERY_MAX_ATTEMPTS);
+        /* Every record with a slot is in the table, written under this
+         * lock (hcdDeviceNew, hcdDeviceFree). */
+        devices = 0;
+        for (i = 1; i <= XHCI_MAX_SLOTS && !devices; i++) {
+            devices = (hc->SlotDevice[i] != NULL) ? 1UL : 0UL;
+        }
+        if (XhciTolTerminalRelease(terminal, hc->SlotsInvalidated,
+                                   hc->TerminalReleased, devices)) {
+            hc->TerminalReleased = 1;
+            usbsts = XhciReadOp(ext, XHCI_OP_USBSTS);
+            XhciLogNoteLocked(ext, "ctrl.terminal.release", usbsts);
+            XhciSlotInvalidateAll(ext, XhciTolHaltProven(usbsts));
+        }
+    }
+    XhciControllerLockRelease(ext, oldIrql);
+    HcdPowerGateLeave(hc);
+}
+
+/*
  * The lost-interrupt backstop (35-T.1, design record 17 section 4.1): a
  * step of its own after hcdRecover, under the power gate as that is, admitted
  * only on a good, initialized, unfailed controller in D0 with the DPC open -
@@ -1070,6 +1123,7 @@ static VOID hcdPoll(PHCD_CONTROLLER hc)
     /* Outside the STARTED gate: a failed resume (HcdControllerFail) is a
      * recovery request on a controller whose flags no longer say it runs. */
     hcdRecover(hc);
+    hcdTerminalRelease(hc);
     hcdBackstop(hc);
     hcdContain(hc);
 }

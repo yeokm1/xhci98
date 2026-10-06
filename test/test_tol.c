@@ -1161,6 +1161,60 @@ static void test_terminal(void)
     CHECK_EQ(XHCI_TOL_TERMINAL_DMA_UNPROVEN, 5, "the dump's value");
 }
 
+/* 35-V: a terminal no recovery acts on completes what the halted controller
+ * holds - the invalidation raised once, with HCH's evidence. */
+static void test_terminal_release(void)
+{
+    XHCI_TOL_WINDOW w;
+    ULONG t;
+    ULONG i;
+
+    /* The VM leg: three recoveries began, the fourth HCH refused. */
+    XhciTolWindowInit(&w);
+    for (i = 0; i < XHCI_TOL_RECOVERIES; i++) {
+        CHECK_EQ(XhciTolWindowAdmit(&w, 1, 100 + i), 1, "began");
+    }
+    CHECK_EQ(XhciTolWindowAdmit(&w, 1, 110), 0, "the fourth refused");
+    t = XhciTolTerminal(1, 0, w.Refused, 0, 3);
+    CHECK_EQ(t, XHCI_TOL_TERMINAL_WINDOW, "window terminal");
+    CHECK_EQ(XhciTolTerminalRelease(t, 0, 0, 1), 1,
+             "devices held, nothing pending: raised");
+    CHECK_EQ(XhciTolTerminalRelease(t, 0, 1, 1), 0, "once per lifetime");
+    CHECK_EQ(XhciTolTerminalRelease(t, 1, 0, 1), 0,
+             "an invalidation already pending drains them");
+    CHECK_EQ(XhciTolTerminalRelease(t, 0, 0, 0), 0, "nothing left to drop");
+
+    /* Tolerance 0: the window never refuses; the run of failures is
+     * 2.1.1.0's terminal and is released the same way when no attempt
+     * reached its own invalidation (each refused with CNR up). */
+    XhciTolWindowInit(&w);
+    for (i = 0; i < 10; i++) {
+        CHECK_EQ(XhciTolWindowAdmit(&w, 0, 100 + i), 1, "off: admitted");
+    }
+    t = XhciTolTerminal(1, 0, w.Refused, 3, 3);
+    CHECK_EQ(t, XHCI_TOL_TERMINAL_FAILURES, "off: the run's terminal");
+    CHECK_EQ(XhciTolTerminalRelease(t, 0, 0, 1), 1, "failures: raised");
+    CHECK_EQ(XhciTolTerminalRelease(t, 0, 0, 0), 0,
+             "failures: attempts already dropped every device");
+
+    /* Not a terminal of this kind. */
+    CHECK_EQ(XhciTolTerminalRelease(XHCI_TOL_TERMINAL_NONE, 0, 0, 1), 0,
+             "running");
+    CHECK_EQ(XhciTolTerminalRelease(XhciTolTerminal(1, 0, 0, 2, 3), 0, 0, 1),
+             0, "a recovery still owed resets it");
+    CHECK_EQ(XhciTolTerminalRelease(XHCI_TOL_TERMINAL_UNREADABLE, 0, 0, 1), 0,
+             "the all-ones containment drains on its own");
+    CHECK_EQ(XhciTolTerminalRelease(XHCI_TOL_TERMINAL_DMA_UNPROVEN, 0, 0, 1),
+             0, "so does the unproven one");
+
+    /* The evidence. */
+    CHECK_EQ(XhciTolHaltProven(0x00000001UL), 1, "HCH set");
+    CHECK_EQ(XhciTolHaltProven(0x00001001UL), 1, "HCH with HCE");
+    CHECK_EQ(XhciTolHaltProven(0x00000000UL), 0, "running");
+    CHECK_EQ(XhciTolHaltProven(0x00001000UL), 0, "HCE, not halted");
+    CHECK_EQ(XhciTolHaltProven(0xFFFFFFFFUL), 0, "all-ones proves nothing");
+}
+
 /* Record 17 section 4.11: a start latches the three values and sets every
  * piece of tolerance state explicitly, whatever the last lifetime left. */
 static void test_start(void)
@@ -1227,6 +1281,7 @@ int main(void)
     test_dead();
     test_dead_recover();
     test_terminal();
+    test_terminal_release();
     test_start();
 
     printf("\n%d checks, %d failures\n", checks, failures);

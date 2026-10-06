@@ -680,6 +680,23 @@ ULONG XhciTolTerminal(ULONG failed, ULONG unreadable, ULONG windowRefused,
     return XHCI_TOL_TERMINAL_OWED;
 }
 
+ULONG XhciTolTerminalRelease(ULONG terminal, ULONG pending, ULONG raised,
+                             ULONG devices)
+{
+    if (terminal != XHCI_TOL_TERMINAL_WINDOW &&
+        terminal != XHCI_TOL_TERMINAL_FAILURES) {
+        return 0;
+    }
+    return (!pending && !raised && devices) ? 1UL : 0UL;
+}
+
+ULONG XhciTolHaltProven(ULONG usbsts)
+{
+    return (usbsts != 0xFFFFFFFFUL && (usbsts & XHCI_USBSTS_HCH) != 0)
+               ? 1UL
+               : 0UL;
+}
+
 ULONG XhciTolDeadStep(PXHCI_TOL_DEAD dead, ULONG tolerance, ULONG admitted,
                       ULONG allOnes, ULONG startGen, ULONG now)
 {

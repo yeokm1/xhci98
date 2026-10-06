@@ -4955,6 +4955,7 @@ VOID HcdEnumInit(PHCD_CONTROLLER hc)
     }
     hc->SlotsInvalidated = 0;
     hc->SlotsUnproven = 0;
+    hc->TerminalReleased = 0;
     /* 35-T.2: the queues that held requests went with their devices. */
     hc->RetryWork = 0;
     hc->EnumDetachRequested = 0;

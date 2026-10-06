@@ -47,6 +47,11 @@ acts at 0 that is not a tolerance behaviour) and 5 (the second part), and
 section 7. Two of these are DMA-safety and specification rules rather than
 tolerance behaviours, and apply at every `XhciTolerance` value.
 
+Revision 11, 2026-10-07, after `2.2.0.0`, for a finding of the 35-V legs:
+section 4.6 gains an "As built" note (a terminal no recovery acts on
+completes the transfers it holds, at every `XhciTolerance` value) and
+section 4.11's note on what acts at 0 a line for it.
+
 ## 1. What is asked, and what is not
 
 A tester on an AMD AM5 board reports that a USB mouse randomly stops
@@ -807,6 +812,35 @@ on 2026-10-07:
   `XhciTolerance` 0 this is the only way `Unreadable` is set. The known
   limitation above applies to this pinned branch as to the all-ones one.
 
+**As built: a terminal no recovery acts on completes what it holds
+(revision 11).** 35-V's Windows 2000 SMP leg fired HCH four times inside
+the window: the fourth was refused (`ctrl.window.refused`) and a later
+Device Manager disable of the controller hung. Every transfer the halted
+controller had been given stayed on its rings: the event drain and the
+commands refuse a failed controller, and only a recovery's own
+`XhciSlotInvalidateAll` ever completed them, so with no recovery begun no
+class driver's request ended, the volume's and the disk's query-remove
+waited on them, and the stop that would have dropped them never came. The
+terminal after three failures in a row has the same hole when no attempt
+reached its invalidation (each refused with CNR up, before touching a
+register); `2.1.1.0` had it there too, and otherwise completed the
+transfers through the first failed attempt's invalidation. The controller
+thread now raises that invalidation itself (`hcdTerminalRelease`, after
+`hcdRecover`), once per lifetime, at either terminal, when no invalidation
+is pending and a device record is left (the pure
+`XhciTolTerminalRelease`). Its evidence is the recovery's own: USBSTS read
+then, HCH set on a window that decodes (`XhciTolHaltProven`) - the
+controller has stopped executing - and the devices are dropped through the
+existing departure (`hcdInvalidate`), their transfers completed, the
+devices reported gone so PnP can remove them and a stop can follow; new
+requests are refused as on a departed device. Without HCH the
+invalidation is unproven and the revision-10 rule above runs: Bus Master
+Enable cleared and read back clear, or the buffer pinned and the
+controller contained, which then names its own terminal reason; with HCH
+the reason a dump names is unchanged. Not a
+tolerance behaviour: at `XhciTolerance` 0 the window never refuses, and the
+run of failures is released the same way.
+
 ### 4.7 The interval cap (35-T.7, gated) and the Average TRB Length switch
 
 **The cap.** An interrupt endpoint whose Interval exceeds 8 (32 ms) is
@@ -1050,7 +1084,11 @@ be charged and held at 0 - so `Holds` and a held location can show in a
 dump taken at 0 - and the unproven invalidation's DMA-stop
 proof and containment (section 4.6's revision-10 note), which is the only
 way `Unreadable` and `Contained` are set at 0. Neither changes what
-`2.1.1.0` did for a fault this design added a behaviour for.
+`2.1.1.0` did for a fault this design added a behaviour for. Revision 11
+adds a third, the release of a terminal no recovery acts on (section 4.6's
+revision-11 note): at 0 it can meet only the run of failures, whose
+transfers `2.1.1.0` completed through a failed attempt's invalidation
+whenever one reached it.
 
 ## 5. Injection
 
