@@ -1984,6 +1984,33 @@ static ULONG xhciWantPortPower(const XHCI_PORT_MAP *map,
 }
 
 /*
+ * The policy above, with controller tolerance's unpowered holds (35-T.5,
+ * design record 17 section 4.5) taken out of a start's assertions: a root
+ * port held unpowered - its repowers spent, or its over-current never
+ * cleared - keeps the hold across an in-place recovery and a resume, which
+ * initialize the controller without a start (only a start's XhciTolStart
+ * releases it). HCRST has just asserted PP everywhere, so such a port is
+ * wanted off: never asserted or waited for, and deasserted with the
+ * deassertions, after the assertions are confirmed as the VBus argument
+ * below requires, and confirmed with them. Nothing at XhciTolerance 0 or
+ * without port power control; at a start no hold is left.
+ */
+static ULONG xhciWantPortPowerExt(PXHCI_EXTENSION ext, ULONG port,
+                                  ULONG phase)
+{
+    ULONG want;
+
+    want = xhciWantPortPower(&ext->PortMap, port, phase);
+    if (want == XHCI_PP_WANT_ON && phase == XHCI_PP_PHASE_START &&
+        ext->Tol.Stats.Tolerance && ext->HcInfo.Ppc &&
+        port >= 1 && port <= XHCI_TOL_ROOT_PORTS &&
+        XhciTolLocUnpowered(&ext->Tol.RootLoc[port - 1])) {
+        return XHCI_PP_WANT_OFF;
+    }
+    return want;
+}
+
+/*
  * Drive one port's PP to `want`, and report whether that took a write.
  *
  * The read-first is not an optimisation. A Root Hub port comes out of HCRST in
@@ -2075,7 +2102,7 @@ static ULONG xhciDrivePortPower(PXHCI_EXTENSION ext, ULONG port, ULONG want)
  * `ext->InitBelowPassive` set (task 13-R.1), where the delay is a stall.
  */
 /* How many ports of one class this driver wants PP written to. */
-static ULONG xhciCountPortsWanting(const XHCI_PORT_MAP *map,
+static ULONG xhciCountPortsWanting(PXHCI_EXTENSION ext,
                                    ULONG want,
                                    ULONG phase)
 {
@@ -2083,8 +2110,8 @@ static ULONG xhciCountPortsWanting(const XHCI_PORT_MAP *map,
     ULONG n;
 
     n = 0;
-    for (port = 1; port <= map->PortCount; port++) {
-        if (xhciWantPortPower(map, port, phase) == want) {
+    for (port = 1; port <= ext->PortMap.PortCount; port++) {
+        if (xhciWantPortPowerExt(ext, port, phase) == want) {
             n++;
         }
     }
@@ -2142,7 +2169,7 @@ static ULONG xhciSettlePortPower(PXHCI_EXTENSION ext,
         reached = 0;
         pending = 0;
         for (port = 1; port <= map->PortCount; port++) {
-            if (xhciWantPortPower(map, port, phase) != want) {
+            if (xhciWantPortPowerExt(ext, port, phase) != want) {
                 continue;
             }
             portsc = XhciReadPortsc(ext, port);
@@ -2175,14 +2202,14 @@ static VOID xhciPowerPorts(PXHCI_EXTENSION ext)
     ULONG superSpeed;
 
     map = &ext->PortMap;
-    managed = xhciCountPortsWanting(map, XHCI_PP_WANT_ON,
+    managed = xhciCountPortsWanting(ext, XHCI_PP_WANT_ON,
                                     XHCI_PP_PHASE_START);
-    superSpeed = xhciCountPortsWanting(map, XHCI_PP_WANT_OFF,
+    superSpeed = xhciCountPortsWanting(ext, XHCI_PP_WANT_OFF,
                                        XHCI_PP_PHASE_START);
 
     asserted = 0;
     for (port = 1; port <= map->PortCount; port++) {
-        if (xhciWantPortPower(map, port, XHCI_PP_PHASE_START) ==
+        if (xhciWantPortPowerExt(ext, port, XHCI_PP_PHASE_START) ==
             XHCI_PP_WANT_ON) {
             asserted += xhciDrivePortPower(ext, port, XHCI_PP_WANT_ON);
         }
@@ -2212,7 +2239,7 @@ static VOID xhciPowerPorts(PXHCI_EXTENSION ext)
                             asserted > 0 ? XHCI_PORT_POWER_SETTLE_MS : 0);
 
     for (port = 1; port <= map->PortCount; port++) {
-        if (xhciWantPortPower(map, port, XHCI_PP_PHASE_START) ==
+        if (xhciWantPortPowerExt(ext, port, XHCI_PP_PHASE_START) ==
             XHCI_PP_WANT_OFF) {
             (VOID)xhciDrivePortPower(ext, port, XHCI_PP_WANT_OFF);
         }
@@ -2229,70 +2256,6 @@ static VOID xhciPowerPorts(PXHCI_EXTENSION ext)
                    ext->PortsUnpowered);
     XHCI_DBG_VALUE("port power: ports that did not reach target",
                    ext->PortPowerFailures);
-}
-
-/*
- * Controller tolerance's unpowered holds (35-T.5, design record 17 section
- * 4.5), honoured by every initialization after the power pass: a root port
- * held unpowered - its repowers spent, or its over-current never cleared -
- * keeps the hold across an in-place recovery and a resume, which come here
- * without a start (only a start's XhciTolStart releases it), and the power
- * pass has just asserted PP on it with every other managed port. Its PP is
- * taken off again once the assertions are confirmed, the order the VBus
- * argument above requires, and read back within the same bounded wait. A
- * port that does not confirm is counted as a power failure, and the
- * controller thread takes it off again on its next pass (hcd_enum.c,
- * hcdTolService). Nothing at XhciTolerance 0, and nothing on a controller
- * without port power control, where PP is not writable.
- *
- * IRQL: as xhciPowerPorts.
- */
-static VOID xhciTolHoldPorts(PXHCI_EXTENSION ext)
-{
-    const XHCI_PORT_MAP *map;
-    ULONG waited;
-    ULONG port;
-    ULONG portsc;
-    ULONG held;
-    ULONG pending;
-
-    map = &ext->PortMap;
-    if (!ext->Tol.Stats.Tolerance || !ext->HcInfo.Ppc) {
-        return;
-    }
-    held = 0;
-    for (port = 1; port <= map->PortCount && port <= XHCI_TOL_ROOT_PORTS;
-         port++) {
-        if (XhciTolLocUnpowered(&ext->Tol.RootLoc[port - 1])) {
-            (VOID)xhciDrivePortPower(ext, port, XHCI_PP_WANT_OFF);
-            held++;
-        }
-    }
-    if (held == 0) {
-        return;
-    }
-    waited = 0;
-    for (;;) {
-        pending = 0;
-        for (port = 1; port <= map->PortCount && port <= XHCI_TOL_ROOT_PORTS;
-             port++) {
-            if (!XhciTolLocUnpowered(&ext->Tol.RootLoc[port - 1])) {
-                continue;
-            }
-            portsc = XhciReadPortsc(ext, port);
-            if (portsc == 0xFFFFFFFFUL || (portsc & XHCI_PORTSC_PP) != 0) {
-                pending++;
-            }
-        }
-        if (pending == 0 || waited >= XHCI_PORT_POWER_SETTLE_MS) {
-            break;
-        }
-        XhciDelayMs(ext, XHCI_PORT_POWER_POLL_MS);
-        waited += XHCI_PORT_POWER_POLL_MS;
-    }
-    ext->PortPowerFailures += pending;
-    XHCI_DBG_VALUE("port power: tolerance holds kept unpowered", held);
-    XHCI_DBG_VALUE("port power: tolerance holds not confirmed", pending);
 }
 
 /*
@@ -2336,7 +2299,7 @@ static VOID xhciUnpowerPorts(PXHCI_EXTENSION ext)
     ULONG usbsts;
 
     map = &ext->PortMap;
-    wanted = xhciCountPortsWanting(map, XHCI_PP_WANT_OFF,
+    wanted = xhciCountPortsWanting(ext, XHCI_PP_WANT_OFF,
                                    XHCI_PP_PHASE_TEARDOWN);
     if (wanted == 0) {
         return;
@@ -2392,7 +2355,7 @@ static VOID xhciUnpowerPorts(PXHCI_EXTENSION ext)
      * a hazard to sequence around.
      */
     for (port = 1; port <= map->PortCount; port++) {
-        if (xhciWantPortPower(map, port, XHCI_PP_PHASE_TEARDOWN) ==
+        if (xhciWantPortPowerExt(ext, port, XHCI_PP_PHASE_TEARDOWN) ==
             XHCI_PP_WANT_OFF) {
             (VOID)xhciDrivePortPower(ext, port, XHCI_PP_WANT_OFF);
         }
@@ -5130,7 +5093,6 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
      */
     ext->InitStep = XHCI_INIT_STEP_PORT_POWER;
     xhciPowerPorts(ext);
-    xhciTolHoldPorts(ext);
 
     /*
      * Step 17 (roadmap Phase 5 task 2): the root hub usbport is about to build a

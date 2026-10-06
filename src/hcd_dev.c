@@ -71,6 +71,32 @@ VOID XhciSlotCommandSlotFatal(PXHCI_EXTENSION ext, ULONG completionCode,
 }
 
 /*
+ * The location's stable progress (35-T.5), read by the thread: one count
+ * for each result that retired a transfer the engine latched as a success -
+ * whatever path retired it, a Transfer Event or the drain's settlement of
+ * a deferred short packet, and an isochronous transfer once its packets are
+ * answered - since every retirement passes through hcdEp0Result or
+ * hcdPipeResult once. A rejected, unmatched, trailing or deferred event
+ * retires nothing and is not progress. Controller lock held.
+ */
+static VOID hcdTolCountProgress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                const XHCI_XFER_EVENT_RESULT *result)
+{
+    PXHCI_TRANSFER t;
+
+    if (dev == NULL || dev->Location < 1 || dev->Location > HCD_PORT_COUNT ||
+        result->Action != XHCI_XFER_ACTION_COMPLETE) {
+        return;
+    }
+    for (t = result->Completed; t != NULL; t = t->Next) {
+        if (t->UsbdStatus == XHCI_USBD_STATUS_SUCCESS) {
+            hc->Ports[dev->Location - 1].TolCompletions++;
+            return;
+        }
+    }
+}
+
+/*
  * What the engine decided about one EP0 event or settle: a completed record
  * that is the thread's own ends its wait. A halted EP0 or a refused retire
  * is counted - the enumeration step that sees the failed status gives the
@@ -85,6 +111,7 @@ static ULONG hcdEp0Result(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     if (result->Fatal) {
         return 1;
     }
+    hcdTolCountProgress(hc, dev, result);
     if (result->NeedsRecovery || result->RefusedRetire) {
         hc->Ep0Recoveries++;
         /* A URB's control transfer halted EP0 (a STALL): the thread owes
@@ -129,6 +156,7 @@ static ULONG hcdPipeResult(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
     if (result->Fatal) {
         return 1;
     }
+    hcdTolCountProgress(hc, pipe->Device, result);
     if (result->NeedsRecovery && !result->RefusedRetire &&
         pipe->TransferType != XHCI_PIPE_XFER_ISOCH) {
         pipe->Halted = 1;
@@ -161,19 +189,6 @@ static ULONG hcdPipeResult(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
         }
     }
     return 0;
-}
-
-/* A completion the engine validated and answered with success or a short
- * packet - a TD retired, or an isochronous packet answered without error -
- * counted for the location's stable progress (35-T.5), which the thread
- * reads. A rejected, unmatched, trailing or deferred event is not progress.
- * Controller lock held. */
-static VOID hcdTolCountProgress(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
-{
-    if (pipe->Device != NULL && pipe->Device->Location >= 1 &&
-        pipe->Device->Location <= HCD_PORT_COUNT) {
-        hc->Ports[pipe->Device->Location - 1].TolCompletions++;
-    }
 }
 
 /*
@@ -233,10 +248,6 @@ static ULONG hcdIsoEvent(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG slotId,
     if (answer != XHCI_XFER_OK) {
         hc->Counters.TransferEventsUnclaimed++;
         return 0;
-    }
-    if ((cc == XHCI_CC_SUCCESS || cc == XHCI_CC_SHORT_PACKET) &&
-        q->IsoPacketsAnswered - answered > q->IsoPacketErrors - errors) {
-        hcdTolCountProgress(hc, pipe);
     }
     if (result.NeedsRecovery && !result.RefusedRetire && !result.Fatal) {
         hc->Hc.IsoTrbErrorRecoveries++;
@@ -400,12 +411,6 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
         return 0;
     }
     hcdTolSumQueue(ext, pipe->Queue, errors, badCodes, unmatched, foreign);
-    if ((cc == XHCI_CC_SUCCESS || cc == XHCI_CC_SHORT_PACKET) &&
-        result.Action == XHCI_XFER_ACTION_COMPLETE &&
-        result.CompletedCount != 0 && !result.NeedsRecovery &&
-        !result.Refused && !result.Unattributed) {
-        hcdTolCountProgress(hc, pipe);
-    }
     if (result.NeedsRecovery && !result.RefusedRetire) {
         ext->Tol.Stats.QueueHalts++;
     }

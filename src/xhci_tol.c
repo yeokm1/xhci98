@@ -170,7 +170,7 @@ VOID XhciTolLocInit(PXHCI_TOL_LOC loc)
     loc->Reenums = 0;
     loc->Repowers = 0;
     loc->Charges = 0;
-    loc->Hold = XHCI_TOL_HOLD_NONE;
+    loc->Hold = (UCHAR)XHCI_TOL_HOLD_NONE;
     loc->LastCharge = 0;
     loc->Charged = 0;
     loc->DiscArmed = 0;
@@ -190,14 +190,14 @@ ULONG XhciTolLocCharge(PXHCI_TOL_LOC loc, ULONG kind, ULONG now)
     }
     if (kind == XHCI_TOL_CHARGE_REPOWER) {
         if (loc->Repowers >= XHCI_TOL_REPOWERS) {
-            loc->Hold = XHCI_TOL_HOLD_REPOWERS;
+            loc->Hold = (UCHAR)XHCI_TOL_HOLD_REPOWERS;
             loc->Holds++;
             return 0;
         }
         loc->Repowers++;
     } else {
         if (loc->Reenums >= XHCI_TOL_REENUMS) {
-            loc->Hold = XHCI_TOL_HOLD_REENUMS;
+            loc->Hold = (UCHAR)XHCI_TOL_HOLD_REENUMS;
             loc->Holds++;
             return 0;
         }
@@ -272,7 +272,7 @@ ULONG XhciTolLocObserveChange(PXHCI_TOL_LOC loc, ULONG connected,
     xhciTolLocRearm(loc);
     /* A port held unpowered is released only by a controller start. */
     if (loc->Hold == XHCI_TOL_HOLD_REENUMS) {
-        loc->Hold = XHCI_TOL_HOLD_NONE;
+        loc->Hold = (UCHAR)XHCI_TOL_HOLD_NONE;
     }
     return 1;
 }
@@ -312,7 +312,7 @@ VOID XhciTolLocHold(PXHCI_TOL_LOC loc, ULONG reason)
     if (loc->Hold == XHCI_TOL_HOLD_NONE) {
         loc->Holds++;
     }
-    loc->Hold = reason;
+    loc->Hold = (UCHAR)reason;
     loc->DiscArmed = 0;
     loc->DiscSeen = 0;
     loc->ProgArmed = 0;

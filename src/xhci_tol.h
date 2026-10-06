@@ -175,23 +175,28 @@ ULONG XhciTolBackstop(PXHCI_TOL_OBS obs, ULONG tolerance, ULONG pending,
                       ULONG startGen, ULONG now);
 
 /* One location's budget (record 17 sections 4.5 and 4.9). */
+/* Eight ULONGs: the clock stamps and the dump's counts whole, the budgets,
+ * the hold and the flags a byte each (none exceeds 3, or 1), because there
+ * is one per root port and one per hub port in the extension and XHCISNAP
+ * keeps the whole extension in a 128 KB image (xhcisnap.c,
+ * EXT_IMAGE_MAX). */
 typedef struct _XHCI_TOL_LOC {
-    ULONG Reenums;      /* charged re-enumerations                          */
-    ULONG Repowers;     /* charged repowers                                 */
     ULONG Charges;      /* every charge, never re-armed (the dump)          */
-    ULONG Hold;         /* XHCI_TOL_HOLD_*                                  */
-    ULONG LastCharge;   /* tolerance clock at the last charge               */
-    ULONG Charged;      /* 1 once any charge was made                       */
-    ULONG DiscArmed;    /* a stable disconnect is being timed               */
-    ULONG DiscStamp;
-    ULONG DiscSeen;     /* stable-disconnect evidence stands                */
     ULONG Holds;        /* times held, never re-armed (the dump)            */
-    ULONG ProgArmed;    /* a completion since the last charge or fault      */
-    ULONG ProgStamp;    /* ...the first one, on the clock                   */
-    ULONG RecoveryDisc; /* a disconnect the driver's own recovery causes is
+    ULONG Rearms;       /* re-arms, never cleared but by a start (the dump) */
+    ULONG LastCharge;   /* tolerance clock at the last charge               */
+    ULONG DiscStamp;    /* ...when the stable disconnect began              */
+    ULONG ProgStamp;    /* ...when the stable progress began                */
+    UCHAR Reenums;      /* charged re-enumerations                          */
+    UCHAR Repowers;     /* charged repowers                                 */
+    UCHAR Hold;         /* XHCI_TOL_HOLD_*                                  */
+    UCHAR Charged;      /* 1 once any charge was made                       */
+    UCHAR DiscArmed;    /* a stable disconnect is being timed               */
+    UCHAR DiscSeen;     /* stable-disconnect evidence stands                */
+    UCHAR ProgArmed;    /* a completion since the last charge or fault      */
+    UCHAR RecoveryDisc; /* a disconnect the driver's own recovery causes is
                          * expected: no disconnect is evidence until a
                          * connection has been observed after it          */
-    ULONG Rearms;       /* re-arms, never cleared but by a start (the dump) */
 } XHCI_TOL_LOC, *PXHCI_TOL_LOC;
 
 /* A controller start: every field cleared. */
