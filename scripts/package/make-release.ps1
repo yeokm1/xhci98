@@ -3697,21 +3697,22 @@ means the default each one states.
   XhciTolerance  -  the controller tolerance, all together
   ........................................................
 
-  Default 1: on. The driver recovers by itself from controller faults that
-  a controller following the xHCI specification never raises but that
-  would otherwise leave a device dead until it is replugged: an interrupt
-  that never arrived, a USB transaction error on a bulk or interrupt
-  endpoint (retried up to three times, except behind a USB 2.0 hub for a
-  Low- or Full-Speed device, on UAS streams and on four controllers), a
-  fault it cannot pin on a transfer (the device is re-enumerated, as if
-  unplugged and plugged in again), a USB 2.0 root port the controller
-  disabled or an over-current (the port re-enumerated or powered again),
-  a controller that halts (recovered at most three times in ten minutes)
-  or stops answering (closed off). Each a few times at most: after three
-  on one port, the next fault removes the device and holds the port until
-  its device is unplugged, or, held unpowered, until the controller
-  restarts. On a healthy controller none
-  of it acts.
+  Default 1: on. The driver recovers by itself from transfer, port and
+  controller faults that used to leave a device dead until it was
+  replugged: an interrupt that never arrived, a USB transaction error on a
+  bulk or interrupt endpoint (retried up to three times, except for a Low-
+  or Full-Speed device behind a High-Speed hub's transaction translator - a
+  mouse or a keyboard in a USB 2.0 hub running at High Speed - on UAS
+  streams and on four controllers), a fault it cannot pin on a transfer
+  (the device is re-enumerated, as if unplugged and plugged in again), a
+  USB 2.0 root port the controller disabled or an over-current (the port
+  re-enumerated or powered again), a controller that halts (recovered at
+  most three times in a window of at least ten minutes) or stops answering
+  (closed off). Each but the lost interrupt, which is picked up every time,
+  a few times at most: after three on one port, the next fault removes the
+  device and holds the port until its device is unplugged for a few
+  seconds, or, held unpowered, until the controller restarts. On a healthy
+  controller none of it acts.
 
   Set it to 0 to turn all of that off together and have the earlier
   handling back. ONLY 0 TURNS IT OFF; absent or any other number is on.

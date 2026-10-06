@@ -213,7 +213,7 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | `XhciFirstEnumWaitMs` | The longest wait for a hub's first report | `0` | `30000` | `5000` | `5000` |
 | `XhciFirstEnumPortMs` | The longest one port may hold that wait | `0` | `XhciFirstEnumWaitMs` | `2000` | `2000` |
 | `XhciIntelPortSwitch` | The Intel 7/8/9-series port switchover; `0` turns it off, `2` applies it to any Intel controller **at your own risk** | `0` | `2` | `1` | `1` |
-| `XhciTolerance` | The handling of controller faults, all together; `0` turns it off | `0` | `1` | `1` | `1` |
+| `XhciTolerance` | The handling of controller faults, all together; `0` turns most of it off (see "Controller faults") | `0` | `1` | `1` | `1` |
 | `XhciIntervalCap` | Interrupt endpoints polled at least every 32 ms: `1` on AMD controllers, `2` on every controller, `0` off | `0` | `2` | `1` | `1` |
 | `XhciAvgTrbEsit` | A comparison switch for interrupt endpoints; leave at `0` unless comparing | `0` | `1` | `0` | `0` |
 | `XhciLogVerbosity` | The driver's log, read by `XHCISNAP` | `0` | `4` | `0` | `0` |
@@ -289,14 +289,14 @@ Since `2.1.1.0` the driver moves them to the xHCI controller at each start and r
 
 ### Controller faults
 
-Since `2.2.0.0` the driver deals with faults a controller following the xHCI specification never raises, but which, if one did, left a device dead until it was replugged. This follows a tester's report from an AMD AM5 board of a mouse that stops at random. Each is answered a few times at most, then the driver stops trying:
+Since `2.2.0.0` the driver deals with transfer, port and controller faults that used to leave a device dead until it was replugged. This follows a tester's report from an AMD AM5 board of a mouse that stops at random. Each but the lost interrupt, whose pickup keeps delivering, is answered a few times at most, then the driver stops trying:
 
 - An event whose interrupt never arrived is picked up by the driver's own thread.
-- A USB transaction error (the device did not answer cleanly) on a bulk or interrupt endpoint is retried up to three times before the transfer fails; not for a Low- or Full-Speed device behind a USB 2.0 hub, on UAS stream endpoints, or on the four controllers Linux excludes.
+- A USB transaction error (the device did not answer cleanly) on a bulk or interrupt endpoint is retried up to three times before the transfer fails; not for a Low- or Full-Speed device behind a High-Speed hub's transaction translator (a mouse or a keyboard plugged into a USB 2.0 hub running at High Speed), on UAS stream endpoints, or on the four controllers Linux excludes.
 - A fault the driver cannot pin on a transfer, on any but an isochronous (audio) endpoint, makes it re-enumerate the device, as if it had been unplugged and plugged in again. Whatever the device was doing ends as on an unplug.
 - A USB 2.0 root port the controller disabled is re-enumerated, and one that reported an over-current is powered again.
-- After three re-enumerations or repowers, the next fault on that port removes the device and holds the port until its device is unplugged, or, held unpowered, until the controller is restarted.
-- A controller that halts is recovered, at most three times in ten minutes; one that stops answering is closed off safely.
+- After three re-enumerations or repowers, the next fault on that port removes the device and holds the port until its device is unplugged, or, held unpowered, until the controller is restarted. Leave it unplugged for a few seconds: a quick unplug and replug may not release the port.
+- A controller that halts is recovered, at most three times in a window of at least ten minutes; one that stops answering is closed off safely.
 - A device the controller reports incompatible is removed and re-enumerated, as the xHCI specification asks, a bounded number of times (the same budget of three).
 - A recovery that cannot stop the controller, and cannot prove it has stopped writing to memory, closes it off too; `XHCISNAP` reports "CONTAINED: halt and reset did not complete and Bus Master Enable would not clear; DMA not proven stopped, common buffer pinned".
 

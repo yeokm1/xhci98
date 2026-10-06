@@ -710,12 +710,12 @@ New in `2.2.0.0`. A tester on an AMD AM5 board reported that a USB mouse
 stops working at random: "basically unusable" under the `1.x.x.x` releases,
 less often under `2.1.x`, and for longer after being moved to another port.
 Which controller sits behind those ports, and what the driver saw, have not
-been sent. Looking for a cause, the project found a set of faults that a
-controller following the xHCI specification never raises, and that, if one
-did, left a device dead until it was unplugged and plugged in again, with
-nothing in the driver noticing. Since `2.2.0.0` the driver answers each of
-them itself, a few times at most, and then stops in a stated state rather
-than try for ever:
+been sent. Looking for a cause, the project found a set of transfer, port
+and controller faults that used to leave a device dead until it was
+unplugged and plugged in again, with nothing in the driver noticing. Since
+`2.2.0.0` the driver answers each of them itself; but for the lost
+interrupt, whose pickup keeps delivering, it does so a few times at most,
+and then stops in a stated state rather than try for ever:
 
 - **A lost interrupt.** An event the controller has written and no
   interrupt has delivered is picked up by the driver's own thread once it
@@ -725,7 +725,10 @@ than try for ever:
   Error: the device did not answer cleanly) is retried in place, up to three
   times for the same transfer, before the transfer fails as it did up to
   `2.1.1.0`. Not on the control endpoint, isochronous (audio) or UAS stream
-  endpoints, not for a Low- or Full-Speed device behind a USB 2.0 hub, and
+  endpoints, not for a Low- or Full-Speed device behind a High-Speed hub's
+  transaction translator (a mouse or a keyboard plugged into a USB 2.0 hub
+  running at High Speed; one behind a Full-Speed-only hub plugged into the
+  computer's own connector is retried), and
   not on the four controllers Linux excludes from the same retry (AMD
   `1022:43B9` and `1022:43BB`, Etron `1B6F:7023` and `1B6F:7052`).
 - **A report the driver cannot pin on a transfer** - a completion code the
@@ -746,11 +749,17 @@ than try for ever:
   still powered is released by unplugging its device; one held unpowered after over-currents only by restarting the
   controller - restarting Windows, or disabling and enabling the controller
   in Device Manager. A port gets its budget back when its device then works
-  for a minute with no fault, or when it is left empty for a second and a
-  device is plugged in again.
+  with no fault for at least a minute of transfers completing (about two
+  and a quarter minutes at the driver's timer's nominal rate), or when it
+  is left empty and powered for at least a second (about 2.4 seconds) and a
+  device is plugged in again. The driver's timer is counted short on
+  purpose, so these intervals can run long but never short: a quick unplug
+  and replug may not release a held port, so leave it unplugged a few
+  seconds.
 - **A controller that halts by itself** is recovered in place, as one that
-  reports an error already was; at most three recoveries in ten minutes,
-  and after that it stays stopped until it is restarted.
+  reports an error already was; at most three recoveries in a window of at
+  least ten minutes (about 22 minutes at the nominal rate), and after that
+  it stays stopped until it is restarted.
 - **A controller that stops answering at all** (its status register reading
   as all ones for a second or more) is closed off: new requests wait rather than
   fail, and once the driver has proved the controller can no longer write to
@@ -989,7 +998,7 @@ every value.
 
 | Value | Effect |
 |---|---|
-| `1`, any other number but `0`, absent, or not a `DWORD` | On: the lost-interrupt pickup, the transfer retry, the re-enumeration of a device after a report nothing owns, the root ports' disable and over-current handling and every port's budget, the recovery of a halted controller and its limit of three in ten minutes, and the closing-off of a controller that stops answering |
+| `1`, any other number but `0`, absent, or not a `DWORD` | On: the lost-interrupt pickup, the transfer retry, the re-enumeration of a device after a report nothing owns, the root ports' disable and over-current handling and every port's budget, the recovery of a halted controller and its limit of three in a window of at least ten minutes, and the closing-off of a controller that stops answering |
 | `0` | Off: every one of those paths is handled as `2.1.1.0` handled it |
 
 Only an explicit `0` turns it off. It does not touch `XhciIntervalCap` or

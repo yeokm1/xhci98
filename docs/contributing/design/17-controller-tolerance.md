@@ -339,9 +339,13 @@ Five departures from the text above:
   so a later cancel that kept the TD could send OUT data twice. An abort,
   cancel, deconfiguration or port reset therefore meets today's state.
 - **A failed Reset Endpoint does not replay.** The TD is left to
-  `hcdCfgFault`'s teardown - the device's location cycled while it is
-  proven present, otherwise the departure already under way - which
-  completes it with the rest of the device's transfers.
+  `hcdCfgFault`'s outcome, which completes it with the rest of the device's
+  transfers. A device already gone or replaced at its location causes
+  nothing new, its departure already under way; a published non-hub device
+  whose hub path is no longer present (`HcdHubPathPresent`) has its
+  location cycled (`hcdCfgCycle`); any other - a device still present, a
+  hub, a device not yet published - requests the controller recovery,
+  charged to the window (section 5, `09`).
 - **Three event words are kept, not four.** The pointer's high dword is
   always 0 on a kept event: a Transfer Event whose pointer high dword is
   nonzero is refused before any processing (`XhciXferEventHighRefused`,

@@ -457,12 +457,17 @@ Ring/cycle bugs have distinctive signatures. Recognize them by shape:
   `2.2.0.0`, design record 17). The bus now answers the faults that used to
   leave a device dead - a lost interrupt, a Transaction Error, a code
   nothing claims, a halt with no TD, a root port disabled or over-current, a
-  controller halted or unreadable - each within a budget, so the symptom
+  controller halted or unreadable - each within a budget but the lost
+  interrupt's backstop, which keeps delivering (at most one drain per 100 ms
+  while an event stands) and has no terminal, so the symptom
   under `2.2.0.0` is either a recovery that worked (and is only counted) or
   a stated terminal state. Read, in this order, from an `XHCISNAP` report
   taken after the symptom (and one taken before it, to subtract):
   1. The values in effect, `XhciTolerance`, `XhciIntervalCap` and
-     `XhciAvgTrbEsit`. At `XhciTolerance` 0 none of the behaviours acts; the
+     `XhciAvgTrbEsit`. At `XhciTolerance` 0 none of the behaviours acts
+     but the two that apply at every value, the Incompatible Device Error
+     teardown with its charged re-enumeration and the containment when DMA
+     cannot be proven stopped (record 17 sections 4.3 and 4.6); the
      counts of what was seen - the completion codes, the queues' errors,
      refused codes and unmatched and foreign events, the halts, and the root
      ports' disables and over-currents (`PedFaults`, `OcFaults`) - still

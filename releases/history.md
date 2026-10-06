@@ -40,14 +40,17 @@ machines; the release notes say what was read on which system.
   report the driver cannot match to a transfer re-enumerates the device, a
   port the controller disabled or that lost its power is brought back, a
   lost interrupt is picked up, and a controller that halted or stops
-  answering is recovered or closed off safely. Each is tried a few times at
-  most before the driver stops trying. A device the controller reports
-  incompatible is taken down and re-enumerated, a bounded number of times.
-  Three new registry values: `XhciTolerance` (`1`; `0` turns all of this
-  off), `XhciIntervalCap` (`1`, caps long mouse and keyboard polling
-  intervals on AMD controllers) and `XhciAvgTrbEsit` (`0`). Read in virtual
-  machines with the faults made on purpose; no real controller has raised
-  one under this driver yet.
+  answering is recovered or closed off safely. Each but the lost-interrupt
+  pickup, which keeps delivering, is tried a few times at most before the
+  driver stops trying. A device the controller reports incompatible is
+  taken down and re-enumerated, a bounded number of times.
+  Three new registry values: `XhciTolerance` (`1`; `0` turns the retries
+  and recoveries off, except the incompatible device's re-enumeration and
+  the closing-off of a controller that cannot be proven to have stopped
+  writing to memory), `XhciIntervalCap` (`1`, caps long mouse and keyboard
+  polling intervals on AMD controllers) and `XhciAvgTrbEsit` (`0`). Read
+  in virtual machines with the faults made on purpose; no real controller
+  has raised one under this driver yet.
 - `XHCISNAP`'s report now says why a device was not enumerated - each root
   port's speed, rate, slot and failure - and counts every fault above, so a
   report from a machine where something stopped working names its cause.

@@ -1293,8 +1293,9 @@ keeps with the class drivers above it after a fault is record 17 section
   reset episode and `hidclass`'s backoff, `usbstor`'s up to three
   `RESET_PORT`s (one on NUSB), `usbaudio`'s abort and pipe reset. A retry
   whose Reset Endpoint fails is not completed that way: the TD is left to
-  the device's teardown (record 17 section 4.2, "As built"), so the class
-  driver sees it end with a departure, or with a controller reset.
+  `hcdCfgFault` (record 17 section 4.2, "As built"), so the class driver
+  sees it end with a controller recovery while the device is present, or
+  with a departure where its hub path is already gone.
 - **A departure and an arrival** where the bus cannot attribute the fault to
   a transfer or the location fails under the device: a completion code
   nothing claims or a halt with no TD on a non-isochronous endpoint (record
