@@ -2162,7 +2162,7 @@ static void print_tol(const unsigned char *hcd, unsigned long hcdBytes,
          "+%lu:\n", tolAt);
     v = get32(t, 0);
     comp("  XhciTolerance    %lu (%s)\n", v,
-         v == 0 ? "off: 2.1.1.0's handling; the counters still count"
+         v == 0 ? "off: 2.1.1.0's handling; faults seen still count"
                 : v == 1 ? "on" : "?");
     v = get32(t, 4);
     comp("  XhciIntervalCap  %lu (%s): %s here, %lu endpoint(s) capped\n",
