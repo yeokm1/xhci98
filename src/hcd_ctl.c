@@ -687,6 +687,41 @@ static ULONG hcdContainAdmitted(PHCD_CONTROLLER hc)
 }
 
 /*
+ * Put back the Bus Master Enable this driver cleared (a containment's or an
+ * unproven invalidation's proof, BusMasterCleared), and read it back set.
+ * The recovery's own step for it (XHCI_INIT_STEP_BUS_MASTER_RESTORE)
+ * refuses below PASSIVE_LEVEL, where the recovery runs; this is the same
+ * write at PASSIVE_LEVEL, made only on a controller that sequence has just
+ * halted and reset and not yet run (hcdRecover). IRQL: PASSIVE_LEVEL.
+ */
+static ULONG hcdRestoreBusMaster(PXHCI_EXTENSION ext)
+{
+    USHORT command;
+
+    command = 0;
+    if (XhciReadPciConfig(ext, XHCI_PCI_COMMAND, &command, sizeof(USHORT)) !=
+            MP_STATUS_SUCCESS ||
+        command == 0xFFFFU) {
+        return 0;
+    }
+    if ((command & XHCI_PCI_COMMAND_BME) == 0) {
+        command = (USHORT)(command | XHCI_PCI_COMMAND_BME);
+        if (XhciWritePciConfig(ext, XHCI_PCI_COMMAND, &command,
+                               sizeof(USHORT)) != MP_STATUS_SUCCESS) {
+            return 0;
+        }
+        command = 0;
+        if (XhciReadPciConfig(ext, XHCI_PCI_COMMAND, &command,
+                              sizeof(USHORT)) != MP_STATUS_SUCCESS ||
+            command == 0xFFFFU || (command & XHCI_PCI_COMMAND_BME) == 0) {
+            return 0;
+        }
+    }
+    ext->BusMasterCleared = 0;
+    return 1;
+}
+
+/*
  * The in-place recovery, as the miniport's recovery timer callback ran it,
  * but from this thread instead of a usbport timer DPC: the request is taken
  * under the lock, the recovery itself at DISPATCH_LEVEL, because
@@ -764,6 +799,21 @@ static VOID hcdRecover(PHCD_CONTROLLER hc)
     KeRaiseIrql(DISPATCH_LEVEL, &raised);
     ok = XhciRecoverController(ext);
     KeLowerIrql(raised);
+    /* A sequence refused at the Bus Master Enable restore had halted and
+     * reset the controller and stopped short of Run/Stop only because the
+     * write needs PASSIVE_LEVEL. Made here, under the same gate, and the
+     * sequence run once more: the same recovery, not a new one, so the
+     * window is not charged again. Without it, a recovery after a proof
+     * that cleared the bit could never restore service. */
+    if (!ok && ext->BusMasterCleared &&
+        ext->RecoveryLastStep == XHCI_INIT_STEP_BUS_MASTER_RESTORE &&
+        hcdRestoreBusMaster(ext)) {
+        XhciLogNote(ext, "ctrl.recover.bme.restored", 1);
+        hc->TolStartGen++;
+        KeRaiseIrql(DISPATCH_LEVEL, &raised);
+        ok = XhciRecoverController(ext);
+        KeLowerIrql(raised);
+    }
     HcdPowerGateLeave(hc);
 
     if (!ok) {
