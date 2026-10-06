@@ -174,11 +174,16 @@ controller lock with the window.
 What the report carries:
 
 - **The values in effect**: `XhciTolerance` (1 on, 0 off - `2.1.1.0`'s
-  handling, but for an incompatible device's re-enumeration and terminal
-  reason 5's containment, which apply at every value; the counters of what
-  was seen still count - the codes, the queues' sums and halts, root port
-  PED faults and over-currents - and those of what a behaviour did stay at
-  0), `XhciIntervalCap` with whether
+  handling, but for what applies at every value: an incompatible device's
+  re-enumeration, terminal reason 5's containment, and on a latched-failed
+  controller the release of its held transfers on HCH's proof, no resume
+  clearing a spent run of failures (a change from `2.1.1.0` at 0: only a
+  stop and a start bring it back), and no Save or Restore State; the
+  counters of what was seen still count - the codes, the queues' sums and
+  halts, root port PED faults and over-currents - and so do those of what
+  applies at every value (an incompatible device's charges and `Holds`,
+  `Contained`); the counters of the behaviours switched off stay at 0),
+  `XhciIntervalCap` with whether
   the cap applies on this controller and how many endpoints it lowered, and
   `XhciAvgTrbEsit`.
 - **The controller**: running; failed with an in-place recovery still owed;

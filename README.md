@@ -300,7 +300,9 @@ Since `2.2.0.0` the driver deals with transfer, port and controller faults that 
 - A device the controller reports incompatible is removed and re-enumerated, as the xHCI specification asks, a bounded number of times (the same budget of three).
 - A recovery that cannot stop the controller, and cannot prove it has stopped writing to memory, closes it off too; `XHCISNAP` reports "CONTAINED: halt and reset did not complete and Bus Master Enable would not clear; DMA not proven stopped, common buffer pinned".
 
-None of this acts on a healthy controller. `XhciTolerance` set to `0` turns all of it off but the last two entries, which apply at every value. `XHCISNAP`'s report counts each of them; at `0` it still counts the faults themselves, but not what the driver would have done.
+None of this acts while no fault is reported. A fault need not mean an unhealthy controller: a healthy one reports a device's missing handshake, a CRC failure or a timeout as a transaction error.
+
+`XhciTolerance` set to `0` turns all of it off but the last two entries, which apply at every value, as do three rules on a controller latched failed (its recoveries refused or failed three times in a row): once it shows it has halted, the transfers it holds are completed and its devices removed; a resume from standby no longer brings it back, only a disable and enable or a restart does (at `0` a change from `2.1.1.0`); and its state is not saved or restored for standby. `XHCISNAP`'s report counts each of them; at `0` it still counts the faults themselves and what the rules that apply at every value did, but the counters of the behaviours switched off stay at `0`.
 
 Two values concern AMD controllers. `XhciIntervalCap` polls an interrupt endpoint that asks for more than 32 ms every 32 ms, as Linux does on some AMD controllers; this driver does it on every AMD controller (PCI vendor `1022`), as the AM5 and X570 ones are not on Linux's list. `XhciAvgTrbEsit` set to `1` changes one figure the controller is told for each interrupt endpoint, as Linux does; it is off by default and exists so a machine that misbehaves can be compared both ways.
 

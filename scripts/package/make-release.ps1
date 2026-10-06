@@ -3724,23 +3724,32 @@ means the default each one states.
   (closed off). Each but the lost interrupt, which is picked up every time,
   a few times at most: after three on one port, the next fault removes the
   device and holds the port until its device is unplugged for a few
-  seconds, or, held unpowered, until the controller restarts. On a healthy
-  controller none of it acts.
+  seconds, or, held unpowered, until the controller restarts. While no
+  fault is reported none of it acts. A fault need not mean an unhealthy
+  controller: a healthy one reports a device's missing handshake, a CRC
+  failure or a timeout as a transaction error.
 
   Set it to 0 to turn all of that off together and have the earlier
-  handling back. ONLY 0 TURNS IT OFF; absent or any other number is on.
-  It does not touch the next two values. At 0 XHCISNAP's report still
-  counts the faults it sees, but not what the driver would have done about
-  them. Read when the controller starts, so restart after changing it.
+  handling back, but for the rules below that apply at every value.
+  ONLY 0 TURNS IT OFF; absent or any other number is on. It does not
+  touch the next two values. At 0 XHCISNAP's report still counts the
+  faults it sees and what the rules below did, while the counters of the
+  behaviours switched off stay at 0. Read when the controller starts, so
+  restart after changing it.
 
-  Two things apply at every value, 0 included: a device the controller
+  These apply at every value, 0 included: a device the controller
   reports incompatible is removed and re-enumerated, as the xHCI
   specification asks, at most three times on one port before the port is
   held; and a recovery that cannot stop the controller, and cannot prove
   it has stopped writing to memory, closes the controller off until the
-  machine restarts. XHCISNAP then reports "CONTAINED: halt and reset did not
-  complete and Bus Master Enable would not clear; DMA not proven stopped,
-  common buffer pinned".
+  machine restarts. XHCISNAP then reports "CONTAINED: halt and reset did
+  not complete and Bus Master Enable would not clear; DMA not proven
+  stopped, common buffer pinned". And on a controller latched failed (its
+  recoveries refused or failed three times in a row): once it shows it
+  has halted, the transfers it holds are completed and its devices
+  removed; a resume from standby no longer brings it back, only a disable
+  and enable or a restart does (at 0 a change from 2.1.1.0); and its
+  state is not saved or restored for standby.
 
   XhciIntervalCap  -  the AMD interrupt-interval cap
   ..................................................

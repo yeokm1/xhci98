@@ -16,7 +16,7 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
 SuperSpeed on Intel Sunrise Point-LP, a switchover for any Intel chipset at
 your own risk, and a driver that no longer gives up silently on a device
-when the controller misbehaves. Every system `2.1.1.0` supports is
+after a transfer, port or controller fault. Every system `2.1.1.0` supports is
 supported, from the same four directories. The SuperSpeed fix was read on
 the owner's ThinkPad E460 under Windows 98 SE; the rest in QEMU virtual
 machines; the release notes say what was read on which system.

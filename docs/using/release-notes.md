@@ -84,10 +84,10 @@ Windows XP x64, do not refuse unsigned drivers.
   and the Intel port switchover were read on the owner's real hardware under
   Windows 98 SE, and the registry values in virtual machines; of
   `2.2.0.0`'s, the SuperSpeed fix for Intel Sunrise Point was read on the
-  owner's ThinkPad E460 under Windows 98 SE, and the controller tolerance,
-  whose faults no healthy controller raises, by making each fault it
-  answers on purpose in QEMU virtual machines under Windows 98 SE and
-  Windows 2000; no real controller has raised one under this driver yet.
+  owner's ThinkPad E460 under Windows 98 SE, and the handling of
+  transfer, port and controller faults by making each fault it answers on
+  purpose in QEMU virtual machines under Windows 98 SE and Windows 2000;
+  no real controller has raised one under this driver yet.
   "Targets and their standing"
   says what each one rests on.
 - It is not a mass-storage driver for Windows 98 SE. Storage on Windows 98
@@ -129,7 +129,7 @@ release asset itself after the cut.
 | Every target, from the release package | | For `2.0.0.0`: the `release` flavour of the integration build, on the ten install legs (Windows 98 SE under NUSB and under SweetLow's stack, ME, 2000, XP, XP x64, and Vista and 7 in both architectures): installed, controller and root hub started, HID, storage with a verified file compare, composite audio bound, the controller's disable and enable, and shutdown, with SuperSpeed storage and UAS at SuperSpeed and at High Speed on most legs. The one defect was Windows ME's controller re-enable, which `2.1.0.0` fixes (the Windows ME row). For `2.1.0.0`: the `release` flavour of its integration build, installed over `2.0.0.0` on eleven virtual machines (the ten legs' systems and a stock Windows 98 SE) and read on the same clauses less SuperSpeed storage and UAS, all passing, the file compare skipped on the stock Windows 98 SE, which has no storage driver (see "Updating from 2.y.y.y"); and the ten install legs from the `2.1.0.0` release package, read after the cut, all passed: the same clauses with SuperSpeed storage and UAS at SuperSpeed and at High Speed, Windows ME's controller re-enable with a mouse attached, a hub disabled and enabled with a mouse and a stick behind it on the seven NT systems, and hidusbf Setup reading the mouse behind a hub on 32-bit XP. For `2.1.1.0`: the ten install legs from the `2.1.1.0` release package, read after the cut, all passed, on the same clauses as for `2.1.0.0` |
 | What `2.1.0.0` changed | | All in QEMU on development host A, on the `2.1.0.0` integration build unless the `release` flavour is named. The controller re-enable with devices kept: Windows ME with a mouse (three of three), with a mouse and a stick, with a USB keyboard alone, and with a hub holding a mouse and a stick, every device back and working; Windows 98 SE and 2000 disable and enable with a stick behind a hub and a file compare after, and a 10-cycle soak on each; 32-bit XP disable and enable with no USB keyboard attached (XP refuses the disable while one is). Instance ids from the serial number: a stick moved between root ports kept its one entry and was not found again as new hardware on Windows 98 SE, ME, 2000 and 32-bit XP, and on Vista and 7 in both architectures; moved behind a hub as well on Windows 98 SE, 2000, 32-bit XP and 32-bit Vista, and to a SuperSpeed port on Windows 98 SE. Two sticks with different serial numbers had two entries, and of two with the same one the second was known by its port (Windows 98 SE, 2000 and XP). External hubs as entries of their own, on QEMU's hub, which is a USB 1.1 Full-Speed hub: a mouse and a stick behind it, the tree by connection, the hub unplugged and plugged in again, a device unplugged behind it, and a two-tier chain, on Windows 98 SE, 2000 and 32-bit XP; the tree and the hub unplugged and plugged in again on Vista and 7 in both architectures, the tree on ME and XP x64, and USBView walking into the hub on XP, XP x64, Vista and 7; the hub disabled and enabled in Device Manager with the devices behind it coming back, on Windows 98 SE, and on Windows 2000 and XP with the fix for the defect the first reading found (two disable and enable cycles each in QEMU, the same instance ids and the stick's files intact). A High-Speed hub, its transaction translators, and a USB 3 hub's SuperSpeed half were read in no virtual machine; the owner read a High-Speed hub's entry and a USB 3 hub's "xHCI98 USB 3.x Hub" on real hardware after the cut, and both work. The Power tab: figures in mA on the root hub's and the hub's Power tabs on Windows 98 SE and 2000 (a mouse, a keyboard and an audio device 100 mA, a stick 0 mA), on 32-bit XP, and on XP x64 (a mouse and a keyboard 100 mA, a stick and the hub 0 mA; QEMU's stick and hub ask for 0 mA in their own descriptors), and a hub's Power tab on 32-bit 7. The Advanced tab's figure while audio plays was not read: Windows 98 SE's `USBAUDIO.VXD` fails on playing in QEMU ("Known limitations"). Device names: where a Windows class INF names the device, its name is shown, on every system read; the device's own product name was read in Windows 98 SE's "New Hardware Found" box, for devices no INF names on Windows 98 SE, 2000 and XP, and as Windows 7's "Bus reported device description" in both architectures. hidusbf: 1000, 500 and 250 Hz at a root port and behind a hub on Windows 98 SE under NUSB 3.6 and on ME, at a root port on 32-bit XP, the filter loaded and its setting reaching the controller on a stock Windows 98 SE (`release`), and behind a hub on 32-bit XP with the fix for the defect the first reading found (Setup read the mouse's speed, and 1000, 500 and 250 Hz programmed Interval 3, 4 and 5). Fast polling: not read. The F6 floppy, on the `release` flavour: Windows 2000 SP4 and 32-bit XP SP3 text-mode Setup with a USB keyboard and a USB stick, and the Recovery Console on both; see that section |
 | What `2.1.1.0` changed | | The registry values: in QEMU on development host A, on the `release` flavour before `XhciIntelPortSwitch` was added, a fresh install on Windows 98 SE and 2000 writing the seven at their defaults, and an update over `2.1.0.0` on Windows 98 SE, 2000 and 32-bit Windows 7 keeping two values set by hand and adding the missing three ("Registry settings"). The Power tab: on the owner's ThinkPad P14s Gen 1, a SuperSpeed drive declaring 896 mA reading 510 mA and `XHCISNAP` giving its exact figure, a USB 2.0 device reading as before ("The controller's Advanced tab and the root hub's Power tab"). The Intel port switchover: on the owner's Lenovo B490 (`1E31`) under Windows 98 SE with NUSB, on Auto and Smart Auto, and its gate staying closed on the P14s Gen 1 and in QEMU ("Intel 7-, 8- and 9-series chipsets: the port switchover") |
-| What `2.2.0.0` changed | | The SuperSpeed fix for Intel Sunrise Point-LP: on the owner's ThinkPad E460 (`8086:9D2F`) under Windows 98 SE, on the `release` flavour of a build taken before the cut with the fix and the enumeration notes in it, a UAS-capable USB 3 stick seen at SuperSpeed from power-on, after two unplug and replug cycles and behind a USB 3 hub, a large file copied there and back and compared clean, and ATTO Disk Benchmark at 242 MB/s writing and 245 MB/s reading at 8 MB transfers; the hub's SuperSpeed and USB 2.0 halves both present after a hot-plug, a replug and a cold boot; `XHCISNAP`'s report naming the port's speed ID 4 as SuperSpeed by its default meaning ("SuperSpeed and UAS"). No Bulk-Only SuperSpeed device was to hand. The speed tables of the ThinkPad P14s Gen 1, the Lenovo B490 and a tester's HP EliteBook 850 G5 were read with `XHCIQUAL`: the first two list ID 4, which is why they never failed, and the HP's Sunrise Point controller publishes the E460's table word for word. In QEMU on development host A, which publishes no speed table, on Windows 98 SE and on Windows 2000 SP4 at two processors under Driver Verifier: a SuperSpeed stick at a root port, a stick behind QEMU's Full-Speed hub, and a SuperSpeed unplug and replug, each with a file compare, read as `2.1.1.0` read beside them, on the integration build and, on Windows 98 SE, the `release` flavour, and again on the final code; with the E460's speed table put in QEMU's place by a test aid, the stick read at SuperSpeed by the default meaning. A SuperSpeed device behind a SuperSpeed hub was not read in QEMU, which models no SuperSpeed hub; the E460 reading above has it. `XhciIntelPortSwitch` 2: on QEMU's controller, which is not Intel, on Windows 98 SE on the `release` flavour, no switchover write and the devices working. The controller tolerance, on the `qemu` flavour with each fault made on purpose, on the same two guests: every fault design record 17 section 5 lists - a lost interrupt, a root port disabled, an over-current, the controller halted, all ones with and without the proof the controller stopped, a transaction error, the retry's failed reset and its two races, the reports nothing owns, and the control endpoint's - made once and made to persist, against a USB mouse with a Bulk-Only copy running on a SuperSpeed stick; each transient fault answered with no replug, each persistent one ending in its stated state, and the counters and terminal text read in `XHCISNAP`; at `XhciTolerance` `0`, each handled as `2.1.1.0` handles it and still counted. A copy running across a controller recovery fails, since every device is re-enumerated, and on Windows 2000 a mounted drive can come back at Code 31 ("Known limitations"). The three new registry values: written at `1`, `1` and `0` by the install into a driver key that had never had them on Windows 2000 and by an update on Windows 98 SE (a fresh install on Windows 98 SE was not read), and a user's `0` kept by an update on Windows 2000; `XhciIntervalCap` `2` capped the 255 ms status endpoint of QEMU's hub and `XhciAvgTrbEsit` `1` left the devices working, on Windows 98 SE on the `release` flavour |
+| What `2.2.0.0` changed | | The SuperSpeed fix for Intel Sunrise Point-LP: on the owner's ThinkPad E460 (`8086:9D2F`) under Windows 98 SE, on the `release` flavour of a build taken before the cut with the fix and the enumeration notes in it, a UAS-capable USB 3 stick seen at SuperSpeed from power-on, after two unplug and replug cycles and behind a USB 3 hub, a large file copied there and back and compared clean, and ATTO Disk Benchmark at 242 MB/s writing and 245 MB/s reading at 8 MB transfers; the hub's SuperSpeed and USB 2.0 halves both present after a hot-plug, a replug and a cold boot; `XHCISNAP`'s report naming the port's speed ID 4 as SuperSpeed by its default meaning ("SuperSpeed and UAS"). No Bulk-Only SuperSpeed device was to hand. The speed tables of the ThinkPad P14s Gen 1, the Lenovo B490 and a tester's HP EliteBook 850 G5 were read with `XHCIQUAL`: the first two list ID 4, which is why they never failed, and the HP's Sunrise Point controller publishes the E460's table word for word. In QEMU on development host A, which publishes no speed table, on Windows 98 SE and on Windows 2000 SP4 at two processors under Driver Verifier: a SuperSpeed stick at a root port, a stick behind QEMU's Full-Speed hub, and a SuperSpeed unplug and replug, each with a file compare, read as `2.1.1.0` read beside them, on the integration build and, on Windows 98 SE, the `release` flavour, and again on the final code; with the E460's speed table put in QEMU's place by a test aid, the stick read at SuperSpeed by the default meaning. A SuperSpeed device behind a SuperSpeed hub was not read in QEMU, which models no SuperSpeed hub; the E460 reading above has it. `XhciIntelPortSwitch` 2: on QEMU's controller, which is not Intel, on Windows 98 SE on the `release` flavour, no switchover write and the devices working. The controller tolerance, on the `qemu` flavour with each fault made on purpose, on the same two guests: every fault design record 17 section 5 lists - a lost interrupt, a root port disabled, an over-current, the controller halted, all ones with and without the proof the controller stopped, a transaction error, the retry's failed reset and its two races, the reports nothing owns, and the control endpoint's - each made once on both guests, against a USB mouse with a Bulk-Only copy running on a SuperSpeed stick, and each made to persist on Windows 98 SE and on Windows 2000 but for three not run there (the stale context's and the retry's two races persisting); each transient fault answered with no replug, each persistent one ending in its stated state, and the counters and terminal text read in `XHCISNAP`; at `XhciTolerance` `0`, on both guests, the root port disabled, the over-current, the controller halted, the transaction error and a report nothing owns, each handled as `2.1.1.0` handles it and still counted (the others were not read at `0`). A copy running across a controller recovery fails, since every device is re-enumerated, and on Windows 2000 a mounted drive can come back at Code 31 ("Known limitations"). The three new registry values: written at `1`, `1` and `0` by the install into a driver key that had never had them on Windows 2000 and by an update on Windows 98 SE (a fresh install on Windows 98 SE was not read), and a user's `0` kept by an update on Windows 2000; `XhciIntervalCap` `2` capped the 255 ms status endpoint of QEMU's hub and `XhciAvgTrbEsit` `1` left the devices working, on Windows 98 SE on the `release` flavour |
 
 The virtual machines are QEMU's `qemu-xhci`, which models no SuperSpeed hub,
 no link faster than 5 Gbit/s, no Low-Speed device and no High-Speed hub; what
@@ -787,9 +787,22 @@ and then stops in a stated state rather than try for ever:
   proven stopped, common buffer pinned". This too applies whatever
   `XhciTolerance` says.
 
-None of this acts on a healthy controller: the only cost there is one memory
-read and one read of the controller's status register each time the
-driver's thread looks, every 100 ms. What a class driver sees is either the same failed transfer it saw up to `2.1.1.0` or a device
+Three rules on a controller that is latched failed - its recoveries
+refused at the window's limit, or failed three times in a row - also
+apply whatever `XhciTolerance` says, since they keep memory and requests
+safe rather than answer a fault. When the controller shows it has halted,
+the transfers it still holds are completed and its devices removed, so a
+read of a drive fails at once and the controller can be disabled; a
+resume from standby no longer brings such a controller back, only
+disabling and enabling it or restarting Windows does (at `XhciTolerance`
+`0` a change from `2.1.1.0`, where a resume could); and its state is not
+saved or restored for standby while it is failed.
+
+None of this acts while no fault is reported: the only cost then is one
+memory read and one read of the controller's status register each time
+the driver's thread looks, every 100 ms. A fault need not mean the
+controller is unhealthy: a healthy controller reports a device's missing
+handshake, a CRC failure or a timeout as a transaction error. What a class driver sees is either the same failed transfer it saw up to `2.1.1.0` or a device
 leaving and arriving, never a new kind of error.
 
 Two settings concern AMD controllers in particular (both under "Registry
@@ -800,8 +813,8 @@ ones included, which Linux does not list. **`XhciAvgTrbEsit`** is a
 comparison switch, off by default, that changes one figure the controller is
 told for each interrupt endpoint, for a tester whose machine misbehaves to
 try. And **`XhciTolerance`** set to `0` turns everything in the list above
-off at once, but for the last two entries, for a machine where it does more
-harm than good.
+off at once, but for the last two entries and the three rules after the
+list, for a machine where it does more harm than good.
 
 `XHCISNAP`'s report counts what happened, with `XhciLogVerbosity` at `1`
 or above: the transfer errors, unknown codes and unmatched events, summed
@@ -814,8 +827,9 @@ errors, codes and unmatched events, and the root ports' disables and
 over-currents, are still counted, so a report taken with the behaviours
 off shows the faults they would have answered; the retries,
 re-enumerations, holds, recoveries and the rest count only what the
-behaviours did, and stay at `0` but for the two entries that apply at every
-value. **If a USB device stops on your
+behaviours did; those of the behaviours switched off stay at `0`, while
+what applies at every value still counts (a held port after repeated
+incompatible-device reports, a closing-off without proof). **If a USB device stops on your
 machine**, send the controller's id (`XHCIQUAL`'s probe, or Device Manager)
 and two `XHCISNAP` reports at `XhciLogVerbosity` `2`, one while it works and
 one after it stops; and if it still stops, the same with `XhciAvgTrbEsit` at
@@ -829,11 +843,15 @@ build can make (the lost interrupt, a root port disabled, an
 over-current, the controller halted, all ones with and without the proof
 the controller stopped, a transaction error, the retry's failed reset and
 its two races, the reports nothing owns, and the control endpoint's) was
-made once and made to persist at a root port, against a USB mouse with a
-file copy running on a SuperSpeed stick. Each transient fault was
-answered with no replug, each persistent one ended in its stated state,
-the counters read in `XHCISNAP` as above, and at `XhciTolerance` `0` each
-fault was handled as `2.1.1.0` handles it and still counted. QEMU has no
+made once on both guests at a root port, against a USB mouse with a file
+copy running on a SuperSpeed stick, and made to persist on both but for
+three run on Windows 98 SE alone: a stale context and the retry's two
+races, persisting. Each transient fault was answered with no replug, each
+persistent one ended in its stated state, and the counters read in
+`XHCISNAP` as above. At `XhciTolerance` `0`, on both guests, a root port
+disabled, an over-current, the controller halted, a transaction error
+and a report nothing owns were each handled as `2.1.1.0` handles it and
+still counted; the other faults were not read at `0`. QEMU has no
 SuperSpeed hub, so nothing was read behind one. The readings found one
 defect, fixed before the release: a controller that had reached its limit
 of recoveries kept its devices' transfers waiting, so a read of a drive
@@ -1019,13 +1037,15 @@ stayed with the USB 2.0 controller.
 New in `2.2.0.0`; the install writes `1`. It switches everything in
 "Controller faults: what the driver does about them" except the two AMD
 settings below and the last two entries of that list (a device reported
-incompatible, a recovery that cannot stop the controller), which apply at
+incompatible, a recovery that cannot stop the controller) and the three
+rules on a latched-failed controller after it (its held transfers
+completed, no resume bringing it back, no saved state), which apply at
 every value.
 
 | Value | Effect |
 |---|---|
 | `1`, any other number but `0`, absent, or not a `DWORD` | On: the lost-interrupt pickup, the transfer retry, the re-enumeration of a device after a report nothing owns, the root ports' disable and over-current handling and every port's budget, the recovery of a halted controller and its limit of three in a window of at least ten minutes, and the closing-off of a controller that stops answering |
-| `0` | Off: every one of those paths is handled as `2.1.1.0` handled it |
+| `0` | Off: every one of those paths is handled as `2.1.1.0` handled it, but for the rules above that apply at every value; one of them is a change from `2.1.1.0` at `0`: a resume no longer brings back a controller whose recoveries failed three times in a row |
 
 Only an explicit `0` turns it off. It does not touch `XhciIntervalCap` or
 `XhciAvgTrbEsit`, and at `0` `XHCISNAP`'s report still counts the faults
