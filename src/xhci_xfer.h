@@ -534,6 +534,18 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
                     PXHCI_XFER_EVENT_RESULT result);
 
 /*
+ * A Transfer Event's TRB pointer is 64 bits (Table 6-37), and every caller
+ * hands the engine its low dword: no ring of this driver lies above 4 GB,
+ * so a nonzero high dword names no TRB of it, and the low dword alone could
+ * alias one. Returns 1, counting the event in the queue's ForeignEvents,
+ * when the event is to be refused for it - before any stream lookup and
+ * before the ordinary, stopped or isochronous paths; 0 for a pointer below
+ * 4 GB and for an Event Data event, whose parameter is not a pointer.
+ */
+ULONG XhciXferEventHighRefused(PXHCI_TRANSFER_QUEUE queue, ULONG eventDw3,
+                               ULONG eventTrbPAHigh);
+
+/*
  * The soft retry's queue half (35-T.2, design record 17 section 4.2).
  *
  * **The interception is in `XhciXferEvent`**, once the event is matched to

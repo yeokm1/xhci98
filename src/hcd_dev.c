@@ -378,6 +378,18 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
     dci = XHCI_TRB_GET_EP_ID(event->Control);
     hcdTolCountEvent(ext, slotId, dci, XHCI_TRB_GET_COMPLETION(event->Status));
     pipe = hcdEventPipe(hc, slotId, dci);
+    if (pipe != NULL &&
+        XhciXferEventHighRefused(pipe->Queue, event->Control, event->Param1)) {
+        /* A TRB pointer above 4 GB names no ring of this driver; its low
+         * dword alone could alias a queued TD and complete or retry it.
+         * Refused as foreign before anything reads the pointer (review
+         * round 1 of 35-T.2, finding 3), and escalated when fatal, as an
+         * event no queue owns is. */
+        ext->Tol.Stats.QueueForeign++;
+        return XhciXferCodeInfo(XHCI_TRB_GET_COMPLETION(event->Status),
+                                &code) == XHCI_XFER_OK &&
+               code.Fatal;
+    }
     if (pipe != NULL && pipe->Streams != NULL) {
         endpoint = pipe;
         /* An Event Data TRB's event carries that TRB's parameter, not a

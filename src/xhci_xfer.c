@@ -2512,6 +2512,19 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
     return XHCI_XFER_OK;
 }
 
+/* IRQL: any; the caller holds the controller lock. */
+ULONG XhciXferEventHighRefused(PXHCI_TRANSFER_QUEUE queue, ULONG eventDw3,
+                               ULONG eventTrbPAHigh)
+{
+    if (eventTrbPAHigh == 0 || XHCI_EVENT_IS_EVENT_DATA(eventDw3)) {
+        return 0;
+    }
+    if (queue != NULL) {
+        queue->ForeignEvents++;
+    }
+    return 1;
+}
+
 /* 35-T.2, the thread's half (xhci_xfer.h). IRQL: any; the caller holds the
  * controller lock. */
 ULONG XhciXferRetryPending(const XHCI_TRANSFER_QUEUE *queue,

@@ -4177,6 +4177,34 @@ static void test_retry_settle_moves_dequeue(void)
     CHECK_EQ(fix.queue.Head, second, "and the failed TD is off the queue");
 }
 
+/* Review round 1 of 35-T.2, finding 3: an event whose pointer's low dword
+ * aliases a queued TD's TRB but whose high dword is nonzero names no TRB of
+ * this driver. It is refused as foreign before the engine sees it, so it
+ * neither completes nor diverts the TD; one below 4 GB, and an Event Data
+ * event whatever its parameter, pass on. */
+static void test_event_high_pointer_refused(void)
+{
+    XFER_FIXTURE fix;
+
+    retry_fixture_init(&fix);
+    CHECK_EQ(fixture_submit_interrupt(&fix, 0, 8), XHCI_XFER_OK, "submitted");
+    CHECK_EQ(XhciXferEventHighRefused(&fix.queue,
+                                      event_dw3(FIX_SLOT, FIX_DCI), 1), 1,
+             "an aliasing pointer above 4 GB is refused");
+    CHECK_EQ(fix.queue.ForeignEvents, 1, "counted as foreign");
+    CHECK_EQ(fix.queue.Count, 1, "the TD it aliases is untouched");
+    CHECK_EQ(fix.queue.RetryWanted, 0, "and not diverted");
+    CHECK_EQ(fix.transfers[0].Flags, 0, "nothing latched on it");
+    CHECK_EQ(XhciXferEventHighRefused(&fix.queue,
+                                      event_dw3(FIX_SLOT, FIX_DCI), 0), 0,
+             "below 4 GB it passes");
+    CHECK_EQ(XhciXferEventHighRefused(&fix.queue,
+                                      event_dw3(FIX_SLOT, FIX_DCI) |
+                                          XHCI_TRB_ED, 0x12345678UL), 0,
+             "an Event Data event's parameter is not a pointer");
+    CHECK_EQ(fix.queue.ForeignEvents, 1, "neither counted");
+}
+
 int main(void)
 {
     test_completion_code_mapping();
@@ -4244,6 +4272,7 @@ int main(void)
     test_retry_generation();
     test_retry_recovered_short();
     test_retry_settle_moves_dequeue();
+    test_event_high_pointer_refused();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;
