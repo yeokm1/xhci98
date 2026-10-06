@@ -4095,6 +4095,41 @@ static void test_retry_generation(void)
     CHECK_EQ(result.RetryRecovered, 1, "recovered");
 }
 
+/* Review round 1, finding 1: an operation's quiesce must settle a deferred
+ * outcome before programming the dequeue. Until the replay, the software
+ * dequeue is on the failed TD's first TRB - a Set TR Dequeue there would
+ * discard the controller's saved progress in the TD (xHCI 4.6.8) and run it
+ * again from its start; after it, the dequeue is past the TD, as today's
+ * path leaves it. */
+static void test_retry_settle_moves_dequeue(void)
+{
+    XFER_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+    PXHCI_TRANSFER first;
+    PXHCI_TRANSFER second;
+    ULONG token;
+    ULONG gen;
+
+    retry_fixture_init(&fix);
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 0), XHCI_XFER_OK, "first");
+    CHECK_EQ(fixture_submit_interrupt(&fix, 1, 8), XHCI_XFER_OK, "second");
+    first = &fix.transfers[0];
+    second = &fix.transfers[1];
+    CHECK_EQ(deliver(&fix, first->FirstIndex + 1,
+                     XHCI_CC_USB_TRANSACTION_ERROR, 64, &result),
+             XHCI_XFER_OK, "error in the TD's second TRB");
+    CHECK_EQ(result.RetryDiverted, 1, "diverted");
+    CHECK_EQ(fix.ring.Dequeue, first->FirstIndex,
+             "unsettled, the dequeue would restart the TD from its start");
+    CHECK_EQ(XhciXferRetryPending(&fix.queue, &token, &gen), 1, "pending");
+    CHECK_EQ(XhciXferRetryReplay(&fix.queue, &fix.ring, FIX_SLOT, FIX_DCI,
+                                 token, &result), 1, "settled");
+    CHECK_EQ(XhciXferRetryClear(&fix.queue, gen), 1, "request cleared");
+    CHECK_EQ(fix.ring.Dequeue, second->FirstIndex,
+             "settled, the dequeue is past the failed TD");
+    CHECK_EQ(fix.queue.Head, second, "and the failed TD is off the queue");
+}
+
 int main(void)
 {
     test_completion_code_mapping();
@@ -4160,6 +4195,7 @@ int main(void)
     test_retry_recovers();
     test_retry_bound();
     test_retry_generation();
+    test_retry_settle_moves_dequeue();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

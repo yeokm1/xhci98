@@ -2368,7 +2368,9 @@ static ULONG hcdCfgDeviceClearHalt(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * decision has - a Transaction Error diverted after this pass's
  * HcdCfgRetryService - so it meets the endpoint and the queue exactly as it
  * would have without the retry, and its Set TR Dequeue goes past the TD.
- * Thread only, controller lock not held.
+ * hcdCfgQuiesce calls it once its Reset Endpoint has completed, which is
+ * when the error's event is certain to have been drained. Thread only, the
+ * pipe paused, controller lock not held.
  */
 static VOID hcdCfgRetrySettle(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
 {
@@ -2422,7 +2424,6 @@ static ULONG hcdCfgQuiesce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         state = hcdCfgEpState(hc, dev, pipe->Dci);
     }
     if (state == XHCI_EP_STATE_HALTED) {
-        hcdCfgRetrySettle(hc, pipe);
         /* Reset Endpoint keeps the controller's retry position in the
          * failed TD whatever TSP says; only Set TR Dequeue clears it (xHCI
          * 4.6.8 p.116), so it follows at once, to the software dequeue the
@@ -2445,8 +2446,22 @@ static ULONG hcdCfgQuiesce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
          * a stream's, and 4.6.8 does not restrict TSP for a Primary Stream
          * Array endpoint (to verify against the transcription, design
          * record 13, not yet transcribed). */
-        if (!hcdCfgResetEndpoint(hc, dev, pipe, 1) ||
-            !hcdCfgRecoverDequeue(hc, dev, pipe, 0)) {
+        if (!hcdCfgResetEndpoint(hc, dev, pipe, 1)) {
+            (VOID)hcdCfgFault(hc, dev);
+            return XHCI_EP_STATE_RUNNING;
+        }
+        /* 35-T.2: after the Reset Endpoint's completion, not before it.
+         * The context reads Halted as soon as the controller halts, while
+         * the Transaction Error that halted it may not yet have been drained;
+         * its Transfer Event precedes the command's completion on the event
+         * ring, so it has been diverted by now. Its deferred outcome is
+         * applied here - the endpoint Stopped, the pipe still paused - so
+         * the software dequeue the Set TR Dequeue below programs is past the
+         * failed TD, as today's path left it; programmed on the TD it would
+         * clear the controller's saved progress in it (4.6.8) and restart it
+         * from its first TRB (review round 1, finding 1). */
+        hcdCfgRetrySettle(hc, pipe);
+        if (!hcdCfgRecoverDequeue(hc, dev, pipe, 0)) {
             (VOID)hcdCfgFault(hc, dev);
             return XHCI_EP_STATE_RUNNING;
         }
