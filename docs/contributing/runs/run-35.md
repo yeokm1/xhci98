@@ -466,7 +466,14 @@ documents each code and its outcomes.
   tolerance-off resets, the Configure Endpoint flags, failed and successful
   completions).
 
-To be read: the injections in a guest, which are 35-V's.
+Read in a guest at 35-V (2026-10-07, development host A): codes 08 to 12
+at `6808ff9` on Windows 98 SE and the Windows 2000 SMP guest under Driver
+Verifier, transient and persistent, and 08 and 0A at `XhciTolerance` 0,
+each reaching record 17 section 5's outcome (35-V's table). Two test-aid
+gaps the legs found are fixed: code 02 did nothing on QEMU, which ignores
+a PED write (`cabedf5`, read at `efc6fe1`), and a long persistent 08 could
+strand the mouse's TD once QEMU's dequeue stopped on the Link TRB
+(`6c39877`, host vectors only).
 
 ## Review findings on code already in the branch
 
@@ -520,7 +527,9 @@ tasks had left in the branch; each fixed on 2026-10-07 is in design record
   "channel abandoned" teardown (the adapter, the record and the FDO kept,
   `hcdMapExecute` safe after the teardown, a later start refused while the
   request is queued). A known limitation of `2.2.0.0` in the release notes,
-  the README and the package readme; record 17 section 4.6.
+  the README and the package readme; record 17 section 4.6. 35-V saw the
+  pinned branch's disable hang on both guests, at a device PDO's removal
+  rather than in `HcdDmaMapDrain` ("Known limitations observed").
 
 **The final review of the whole branch** (2026-10-07, at `2.2.0.0`) found
 these, fixed the same day and taken into design record 17's revision 10;
@@ -593,14 +602,231 @@ at the reconciliation of the documents).
 
 ## 35-V - the legs
 
-To be read: host tests and every gate, x86 and amd64; the QEMU legs on
-Windows 98 SE and the Windows 2000 SP4 guest (SMP, Driver Verifier), a
-virtual-machine regression and not a Windows 2000 hardware reading; 35.4's
-regression; 35.3's notes and region read in `XHCISNAP`; `XhciIntelPortSwitch`
-2 on QEMU; 35-T.9's injections against record 17 section 5's outcomes with
-the class drivers as record 13 section 6.7 reads them; the three values
-written by a fresh install and kept by an update; with no fault injected,
-every leg reading as `2.1.1.0`.
+2026-10-07, development host A, QEMU 11.1.0 TCG, `qemu-xhci,p2=4,p3=4`.
+Two guests, each on a throwaway overlay: the Windows 98 SE gold image at
+one processor, and the Windows 2000 SP4 guest at two processors (MTTCG)
+with Driver Verifier `0x1B` on `xhci98.sys`. A virtual-machine regression
+and fault reading, not a Windows 2000 hardware reading. On both, QEMU's
+`usb-mouse` at bus port 2 (root port 6, High Speed) was the HID device
+every injection aimed at, and a `usb-storage` stick at bus port 1 (root
+port 1, SuperSpeed, 5000 Mbit/s) carried the Bulk-Only copy run beside
+the faults (four 4 MB copies, each compared with `fc /b`), so the class
+drivers were read as record 13 section 6.7 reads them. Counters, notes and
+terminal text were read in `XHCISNAP` (on the 2000 guest with `-c 1`) and
+the driver's trace on QEMU's debug port.
+
+**The builds.** Each leg built `XHCISNAP` and the x86 `qemu` and `release`
+flavours in its own tree, with a private TEMP; every build and
+`make-package` exited 0.
+
+| Legs | Commit | `qemu` `xhci98.sys` (SHA-256, size) | `release` `xhci98.sys` (SHA-256, size) |
+|---|---|---|---|
+| Windows 98 SE, codes 01 to 07 and the values | `ed73d0a` | `65d09fec1389cfa97fa23a2ed39820f504dfae55dbd0c882ca9857060d574539`, 236,282 B | `ca621d30cd2f5c7fa62e0c9b4f4befe8057fe03844be12475182ebdc51ad831f`, 191,941 B |
+| Windows 2000 SMP, codes 01 to 07 and the values | `ed73d0a` | `4258ee32f016ea156b52df6d6df46bbc674b17d0d97a651f6d62983eb9fb7353`, 236,282 B | `21c4974515859aed99cbd15eca970a2fc4cbc076dff6681d08b1fd94e4dca41f`, 191,941 B |
+| Codes 08 to 12, both guests | `6808ff9` | `f820399b54746652c111c493bbdda3f31dabc9fcb8103ced1265b0085b9a1463`, 243,386 B | `e67d16eecc742df4d8a5610859f707455b07dcb98bee4ff36ede3ce0ac080e8b`, 191,941 B |
+| The re-run on the final code, both guests | `efc6fe1` | `af32ae2e1ac3a4ba94cd0bf2a84232a30c75f8b701dfef6987473122e5fa6097`, 246,442 B | `aa305f39bb32837512931d129b904ff55e3c1279e7e6fec26640822871f00178`, 194,501 B |
+
+`ed73d0a` carries 35-T.9's first part (codes 01 to 07) and none of the
+final review's fixes; `6808ff9` adds the second part (codes 08 to 12);
+`efc6fe1` has every fix below but `6c39877`, which touches only the
+`qemu` flavour's injection layer. The legs built the x86 images alone:
+host tests and the gates on x86 and amd64 are read at the cut (35.7).
+
+**Windows 98 SE, codes 01 to 07** (`ed73d0a`, the `qemu` flavour unless
+named; T transient, P persistent; the mouse and the stick hot-added once
+an MS-DOS prompt was open, see the vehicle notes):
+
+| Fault | Expected (record 17 section 5) | Observed | Counters | Result |
+|---|---|---|---|---|
+| `XhciQemuPsiE460` 1, controller disabled and enabled | the stick at SuperSpeed by 35.1's fallback | `qemu.psi.e460` 1; port 1 "ID 4 is SuperSpeed, by default ID, unlisted on a USB 3 table", the slot's PSIV 4, Gen 1x1; `fc` clean; unplug and replug the same; set back to 0 | - | pass |
+| 01 T | the backstop drains it | `irq.lost` 1; `fc` clean; the mouse moves | `BackstopDrains` 1 | pass |
+| 01 P | each delivered by the backstop, no terminal | 150 lost; the copy `fc` clean; the mouse moves | `BackstopDrains` 149 | pass |
+| 02 T and P | re-enumerated; held powered | nothing: QEMU ignores the PED write (below) | `PedFaults` 0 | not makeable at `ed73d0a`; read at `efc6fe1` |
+| 03, then 04 | repowered, re-enumerated | `tol.port.oc` 6, disconnect, repower, re-enumeration; the mouse moves; `fc` clean | `OcFaults` 1, `Repowers` 1 | pass |
+| 03 P | held unpowered until a start | "NOW HELD UNPOWERED, over-current never cleared"; the mouse gone, the stick unaffected, `fc` clean; Device Manager disable and enable: the mouse back, the counters clean | `OcFaults` 2, `Holds` 1, 0 after the start | pass |
+| 05 T | one recovery | `ctrl.hch`, recovery begun and recovered; every device re-enumerated, so the copy in flight failed ("Invalid drive"); `fc` clean after it, the mouse moves | `HchRecoveries` 1, window 1 of 3 | pass |
+| 05 P | the window's terminal | three recoveries, the fourth refused: "LATCHED FAILED: recovery window refused a fourth" | `HchRecoveries` 4, `WindowRefused` 1 | the terminal passes; the defect fixed by `882245d` beside it |
+| 06 T, 07 T | nothing | the episode stamped, not contained; `fc` clean, the mouse moves | `DeadEpisodes` 1, then 2 | pass |
+| 06 P | contained, released | "CONTAINED", "RELEASED: Bus Master Enable read back clear, devices dropped"; F: an invalid drive, no hang; CLEAR, disable and enable: a clean start, `fc` clean, the mouse moves | `tol.contained` 1 | pass |
+| 07 P | contained, pinned | "CONTAINED", "PINNED"; the stick "General failure reading drive F", no hang; CLEAR, then a Device Manager disable hung for good (QUERY_STOP reached the controller, no STOP followed, the clock stopped) | `tol.contained` 2 | the containment passes; the hang is the known limitation below |
+| 03 and 04 at `XhciTolerance` 0 | counted, nothing acts | no disconnect, repower or hold; the mouse kept working; `XHCISNAP` showed port 6 connected with PP clear (the emulated loss, which only a repower ends, and 0 makes none) until CLEAR | `OcFaults` 1, `Repowers` 0, `Holds` 0 | pass |
+| 05 at 0 | no HCH recovery | no `ctrl.hch`, no recovery; the mouse moved and completions advanced | every action counter 0 | pass |
+| Back to 1 | a clean start | on, counters clean, `fc` clean, the mouse moves | 0 | pass |
+| The three values | written 1, 1, 0 | an update on an overlay of the gold image, which never had them: `XhciTolerance` 1, `XhciIntervalCap` 1, `XhciAvgTrbEsit` 0 written (read with `regedit /e`); a fresh install was not practical on the gold image | - | pass, by the update path |
+| `release`: `XhciAvgTrbEsit` 1, `XhciIntervalCap` 2, `XhciIntelPortSwitch` 2, restart | devices work; the cap applies; no switchover write on a controller not Intel | the mouse moves, `fc` clean; the `usb-hub`'s status endpoint (Full Speed, 255 ms) capped, "1 endpoint(s) capped"; `psw.gate` 0, no `psw.mode` or `psw.route.written` note | `CapApplied` 1, `CapIntervals` 1 | pass |
+
+**Windows 2000 SP4 SMP under Driver Verifier, codes 01 to 07** (`ed73d0a`,
+the `qemu` flavour). Installed with Have Disk over the base image's
+`1.0.0.3`, no restart asked; the new driver key held `XhciTolerance` 1,
+`XhciIntervalCap` 1 and `XhciAvgTrbEsit` 0, written by the install into a
+key that had never had them.
+
+| Fault | Expected | Observed | Counters | Result |
+|---|---|---|---|---|
+| None: the regression | as 35.4 read `2.1.1.0` | the stick at root port 1, 5000 Mbit/s, `fc` clean; a `usb-hub` with a stick behind it (12 Mbit/s), `fc` clean; the SuperSpeed replug, `fc` clean; PORTSC port 1 `00001203` (speed 4), port 6 `00000E03` (3), port 7 `00000603` (1); the HCD region 844 bytes; the tolerance block on, `XhciIntervalCap` 1 not applying, `XhciAvgTrbEsit` 0, running, window 0 of 3, containment none | 0 nonzero; Success 2513, Short 11, Stopped 2 | pass |
+| `XhciQemuPsiE460` 1 | as on 98 SE | "ID 4 is SuperSpeed, by default ID, unlisted on a USB 3 table", PSIV 4; the HCD region's port 1 Bound by the same; `fc` clean; back to 0 | - | pass |
+| 01 T | the backstop drains it | `irq.lost` 1; four copies `fc` clean | `BackstopDrains` 1 | pass |
+| 01 P | each delivered, no terminal | copies slowed (one 4 MB copy about 3 minutes) and all four `fc` clean; the mouse moves; CLEAR ended it | `BackstopDrains` 592 | pass |
+| 02 T, P and at 0 | re-enumerated; held powered; counted | nothing (QEMU ignores the PED write) | `PedFaults` 0 | not makeable at `ed73d0a`; read at `efc6fe1` |
+| 03, then 04 | repowered, re-enumerated | the mouse back and moving; copies clean | `OcFaults` 1, `Repowers` 1 | pass |
+| 03 P | held unpowered until a start | "NOW HELD UNPOWERED"; the mouse gone; copies clean | `OcFaults` 2, `Holds` 1 | pass |
+| Disable and enable over 03's hold (02's leg, 03 standing in) | each start begins clean | controller, root hub and hub started; the mouse re-enumerated and moving; window 0 of 3, no location; Verifier `AllocationsFailed` 0 | 0 | pass |
+| 05 T | one recovery | recovered; every device dropped and re-enumerated: Unsafe Removal and Delayed Write Failed boxes, copies 2 to 4 failed ("device no longer available"); after it every device started, `fc` clean | `HchRecoveries` 1, window 1 of 3 | pass; the copy in flight lost |
+| 05 P | the window's terminal | recoveries 2 and 3, the fourth refused, "LATCHED FAILED" | `HchRecoveries` 4, `WindowRefused` 1 | the terminal passes; the defect fixed by `882245d` beside it |
+| 06 T, 07 T | nothing | the episode only; copies clean, the mouse moves | `DeadEpisodes` 1 | pass |
+| 06 P | contained, released | "CONTAINED", "RELEASED"; devices removed (Unsafe Removal), copies 3 and 4 failed; CLEAR, disable and enable: devices back, `fc` clean, a clean tolerance block | `tol.contained` 1 | pass |
+| 07 P | contained, pinned | "PINNED: no proof DMA stopped; buffer, transfers kept"; Delayed Write Failed boxes; CLEAR, then a disable: query-removes to every object, then a device PDO's REMOVE_DEVICE, and nothing more for more than 3 minutes | `tol.contained` 2 | the containment passes; the hang is the known limitation below |
+| `XhciTolerance` 0, then Have Disk again | the user's 0 kept | 0 kept, same key, no restart asked; `XHCISNAP` "XhciTolerance 0 (off: 2.1.1.0's handling; faults seen still count)" | - | pass |
+| 05 at 0 | `2.1.1.0`'s handling | no `ctrl.hch`; `2.1.1.0`'s health-poll recovery (`ctrl.failed.here`, recovery begun, recovered); devices dropped and back | `HchRecoveries` 0, window 0 of 3 | pass |
+| 03, then 04, at 0 (standing in for 02) | counted, nothing acts | no repower, no hold, no location | `OcFaults` 1, `Repowers` 0, `Holds` 0 | pass |
+| Back to 1 | a clean start | on, 0 nonzero | 0 | pass |
+
+Verifier read `0x1B` and `AllocationsFailed` 0 at every check; no bugcheck
+in either session.
+
+**Codes 08 to 12, both guests** (`6808ff9`, the `qemu` flavour; on 98 SE
+`XhciTolerance` absent, which is on). The 2000 guest's install wrote the
+three values into its new key as above.
+
+| Group | Fault | Expected | Windows 98 SE | Windows 2000 SMP | Result |
+|---|---|---|---|---|---|
+| Soft retry | 08, three injections | retried, recovered | `Diverts` 3, `Resets` 3 (Reset Endpoint answered Success), `Recovered` 1 | the same | pass |
+| | 08, four | exhausted, then today's path | `Exhausted` 1, `QueueErrors` 2, `QueueHalts` 2; an EP0 Stall after (hidusb's CLEAR_FEATURE(ENDPOINT_HALT), which QEMU stalls); the mouse moves | the same | pass |
+| | 08 P | four injections a TD, then today's path; no cycle, no loop | about 45 s: `Exhausted` 15, `Diverts` 48, an EP0 Stall each; no cycle, no hold; the mouse moves after CLEAR | `Exhausted` 12, `Stall` 12; the mouse moves after CLEAR | pass; one long run stranded the mouse, the test aid's (`6c39877`, below) |
+| | 08 P with the copy | the copy clean | four `fc` clean, `Exhausted` 31 to 44 meanwhile, no cycle, no hold | four `fc` clean | pass |
+| | 09 | the failed Reset Endpoint asks one recovery | answered Context State Error, `RetryResetFailed` 1, window 1 of 3, devices re-enumerated, `fc` clean | the same, the mouse back; the stick came back at problem 31 (Code 31) until it was replugged: the limitation below | pass |
+| | 09 P | the window's terminal | three recoveries, the fourth refused, LATCHED FAILED; the later shutdown hung | the same, `RetryResetFailed` 4; a later disable hung (query-removes, nothing after) | the terminal passes; the hang is the defect fixed by `882245d` |
+| | 11 | the race on the ring | `held.ring`, Success, `Recovered` +1 | the same | pass |
+| | 12 | the second stop | `held.second`, two answers, `Diverts` and `Resets` +2, `Recovered` +1 | the same | pass |
+| | 11 P, 12 P | each retry's reset raced; no cycle | 25 s each: `Exhausted` +8, the mouse moves after CLEAR | not run | pass |
+| Device cycle | 0A | a cycle, refused code | `CyclesRefusedCode` 1, port 6 charged 1, re-enumerated | the same | pass |
+| | 0B | a cycle, halted with no TD | `CyclesHaltNoTd` 1, `HaltReads` 1 | the same | pass |
+| | 0C (after a replug re-armed the budget) | a cycle, Error | `CyclesHaltNoTd` 2, `HaltReads` 2 | the same | pass |
+| | 0D | the context read only, no cycle | `HaltStale` 1 | the same | pass |
+| | 0E | a cycle, Endpoint Not Enabled | `CyclesRefusedCode` 2 | the same | pass |
+| | 0A, 0B, 0C, 0E P | three cycles, the fourth held (powered) | each: the fourth `tol.loc.hold`, `CyclesRefused` and `Holds` +1, the mouse removed; released by CLEAR and a replug | the same; 0A's hold released by a controller disable and enable instead, every device started | pass |
+| | 0D P | a stale read per injection, no cycle | about 50 s: 118,909 injections, `HaltStale` 118,908; no cycle, no hold; the mouse moves after CLEAR | not run | pass |
+| EP0 | 0F | a cycle from the thread's own transfer | armed, then a replug: `tol.cycle.wait`, the cycle, re-enumerated | armed, then the mouse disabled and enabled (the enable answered "reboot needed"; none was): `CyclesRefusedCode` 3, the mouse back | pass |
+| | 10 | a cycle before the PDO | `CyclesPrePdo` 1 | the same | pass |
+| | 0F P, 10 P | three cycles, then held | held after three; 10: `CyclesPrePdo` 4 | the same; 10: `CyclesPrePdo` 3 | pass |
+| At 0 | 08 once | today's path, counted | `QueueErrors` 2, `QueueHalts` 2, Transaction Error 1 in the histogram, `Retry*` 0 | the same | pass |
+| | 0A once | counted, no cycle | `QueueBadCodes` 1, Bandwidth Overrun 1 in the histogram, `Cycles` 0, no charge | the same | pass |
+
+Back at 1 after each 0 leg the start was clean; on the 2000 guest Verifier
+read `AllocationsFailed` 0, no bugcheck.
+
+**The re-run on the final code** (`efc6fe1`; the 2000 guest updated with
+Have Disk to `2.2.0.0`, `XhciTolerance` 1, Verifier `0x1B`; 98 SE with the
+value absent): the legs the fixes below touch.
+
+| Leg | Guest | Observed | Counters | Result |
+|---|---|---|---|---|
+| 05 P | 2000 SMP | recoveries 1 to 3, the fourth refused, `ctrl.terminal.release` 1; every USB device gone; `dir f:` fails at once; a controller disable completes (problem 22); the enable starts everything, `fc` clean, 0 nonzero, the mouse moves | `HchRecoveries` 4, `WindowRefused` 1 | pass |
+| 05 P, the stick replugged and its volume mounted before the fourth | 2000 SMP | the same; reads and copies to F: fail at once; disable and enable complete | the same | pass |
+| 05 P, a copy in flight at the fourth | 98 SE | refused, terminal release, LATCHED FAILED; the read failed promptly (Error Reading Disk, General failure, Fail); `dir F:` an invalid drive; the mouse dead; a Device Manager disable completed, no restart asked; the enable brought both devices back, `fc` clean, 0 nonzero; clean shutdowns | the same | pass |
+| 02 T | both | `tol.port.ped` 6, port 6 charged 1, the mouse moves | `PedFaults` 1, `CyclesPed` 1 | pass |
+| 02 P | both | `tol.loc.hold` `00000601`, "NOW HELD (powered)", the mouse dead; disable and enable: the mouse back, 0 nonzero | `PedFaults` 4, `CyclesPed` 3, `Holds` 1 | pass |
+| 02 at 0 | both | counted only, the mouse moves; back at 1, 0 nonzero | `PedFaults` 1 | pass |
+| `release` regression | 98 SE | the SuperSpeed stick `fc` clean; a `usb-hub` with a stick behind it (Full Speed) `fc` clean; the replug `fc` clean; tolerance on, running, window 0 of 3, containment none, 0 nonzero | 0 | pass |
+
+Verifier at the end: `0x1B`, `AllocationsFailed` 0, `xhci98.sys` loaded 8
+times and unloaded 7; no bugcheck; both guests shut down clean.
+
+**Not made or not read on QEMU.**
+
+- A SuperSpeed device behind a SuperSpeed hub: QEMU has no SuperSpeed hub
+  model (35.4); 35.2 read it on the E460.
+- A fresh install of the three values on Windows 98 SE: not practical on
+  the gold image, so the update path was read on an overlay that never
+  had them. On Windows 2000 the Have Disk install created a new driver key
+  and wrote all three, which is the fresh-key case.
+- A user's 0 kept by an update was read on Windows 2000 only.
+- Record 17 section 4.11's restart from 1 to 0 and back with a deferred
+  retry, a pending cycle and held locations all outstanding was not run as
+  one sequence; its parts were read apart (holds released by a start;
+  0 and back to 1 each starting clean).
+- Code 02 at `ed73d0a` and `6808ff9`: QEMU 11.1's `xhci_port_write` acts on
+  PR, WPR, the change bits, LWS and PLS, and PP, WCE, WDE and WOE, and
+  ignores a PED write, so the port stayed enabled and the driver saw PEC
+  with PED set, which is no PED fault. Read at `efc6fe1` with `cabedf5`.
+
+**Found by the legs, and fixed before the cut.**
+
+- **A terminal no recovery acts on held its transfers for ever**
+  (`882245d`). After the window refused a fourth recovery (persistent 05,
+  and persistent 09 through its failed Reset Endpoint), the controller was
+  latched failed and nothing completed the transfers on its rings: the
+  event drain and the commands refuse a failed controller, and only a
+  recovery's invalidation completed them. On 98 SE a read of the stick
+  never completed and froze the system VM until its MS-DOS task was ended,
+  and the shutdown hung at "Windows is shutting down" for more than 7
+  minutes; on 2000 the devices stayed started, a new copy hung, and a
+  controller disable hung for more than 7 minutes with the class drivers'
+  query-remove waiting. `hcdTerminalRelease` now raises that invalidation
+  itself, once per lifetime, at either terminal, on HCH's proof; record 17
+  revision 11, section 4.6. Its review: round 1 taken in `4dcc9c2` (no Save
+  or Restore State on a latched-failed controller, since CSS writes
+  contexts while halted), `d979d51` (a resume refuses the spent run of
+  failures too, a change from `2.1.1.0` at 0) and `f1dcd83` (the save gate
+  read the frozen miniport's device table, which the HCD never fills, and
+  so passed with transfers queued; it now asks the HCD's own queues,
+  `XhciSlotSaveBusy`; pre-existing); round 2 taken in `efc6fe1` (a transfer
+  still being mapped passed the gate; the gate now counts a transfer from
+  submission to completion, and a save a late mapping publishes into is
+  spoiled and the resume reinitializes). Re-read at `efc6fe1`: passes, the
+  table above.
+- **Test aid: code 02 did nothing on QEMU** (`cabedf5`). The layer now
+  answers PED clear in that port's PORTSC reads beside the emulated PEC,
+  until the driver's port reset or the device's departure. Re-read at
+  `efc6fe1`: passes.
+- **Test aid: a long 08 P stranded the mouse** (`6c39877`). Once on each
+  guest (98 SE at trace line 121484, during the copy; 2000 at line 9459,
+  after it), every later injection abandoned with `qemu.inj.abandon`
+  `00020305` and the mouse's interrupt TD never completed again until a
+  replug; a second 98 SE run did not reproduce it. QEMU leaves its dequeue
+  on the Link TRB after fetching a 64-TRB ring's last usable slot, which
+  the layer's stop verdict did not take as a fetch-ahead: one chance in 63
+  per TD injected. The `qemu` flavour alone; host vectors in `test_inj`,
+  not re-read in a guest.
+
+**Known limitations observed, not fixed.**
+
+- **Disabling a controller the driver closed off without proof hangs.**
+  After 07 P ("PINNED"), a controller disable hung on both guests: on 2000
+  at a device PDO's REMOVE_DEVICE, on 98 SE after QUERY_STOP. The pinned
+  branch keeps the transfers and mappings because DMA was not proven
+  stopped; only a restart of the machine ends it. Record 17 section 4.6's
+  known limitation, now observed; the release documents say so.
+- **Windows 2000: a mounted USB drive can come back at Code 31 after an
+  in-place controller recovery** (an HCH, a failed Reset Endpoint): 5 of 5
+  on the SMP guest at `efc6fe1` with the volume mounted at the fault; with
+  nothing mounted the next recovery brought it back started (2 of 2). The
+  mouse always returned; 98 SE never showed it; a replug, the next
+  recovery or a controller disable and enable clears it. The driver
+  re-presents the device as a new PDO before the old devnode's REMOVE has
+  arrived, and the function driver's add fails (`CM_PROB_FAILED_ADD`). The
+  same path is in `2.1.1.0` (`hcdInvalidate`, `hcdDropAll`,
+  `HcdDevicePdoExists`), so not a regression, though `2.2.0.0` reaches a
+  recovery on more faults. Not fixed: delaying the re-presentation until
+  the old REMOVE contradicts the owner's ruling of 2026-10-04 cited in
+  `hcdPortQuiet`. Left to the owner: an NT-only delay for a device whose
+  previous PDO's REMOVE just arrived, or keeping the PDOs across a
+  recovery.
+- **A copy in flight across an in-place controller recovery fails**, since
+  every device is re-enumerated (`2.1.1.0`'s recovery). By design.
+
+**Vehicle notes.**
+
+- Windows 98 SE gold image: with QEMU's `usb-mouse` attached at boot every
+  MS-DOS prompt failed ("must be run in MS-DOS mode") or hung, on this
+  build and on 35.4's alike; so the devices were hot-added after a prompt
+  was open.
+- QEMU's mouse stalls hidusb's CLEAR_FEATURE(ENDPOINT_HALT) on EP0: one
+  EP0 Stall in the histogram per exhausted soft-retry episode.
+- The 2000 SMP guest's interface is slow, as on `2.1.1.0`; `XHCISNAP`
+  needs `-c 1` there, since the guest's EHCI controller's `usbport.sys`
+  takes the first device name, and refuses `-c 1` with `-verbosity 2`
+  together, so the verbosity was set in the registry.
 
 ## 35.6 - the docs
 
@@ -670,7 +896,10 @@ To be read after 35.7's cut, on the `2.2.0.0` asset (decisions table,
   converged at round 4. 35.4's override and 35-T.9's first part: rounds 1
   and 2 taken in `cade36c` and `b0dd28c`, converged at round 3. 35-T.9's
   second part: round 1 taken in `6808ff9`. The final review of the whole
-  branch: its fixes `a113df2` to `2000fcc`, converged at round 4. What these
+  branch: its fixes `a113df2` to `2000fcc`, converged at round 4. 35-V's
+  terminal release (`882245d`): round 1 taken in `4dcc9c2`, `d979d51` and
+  `f1dcd83`, round 2 in `efc6fe1`; the test aids `cabedf5` and `6c39877`.
+  What these
   reviews found in code already in the branch, and its fixes, is "Review
   findings on code already in the branch".
 - The re-plan and issue 11: round 1 taken in `fadd358`.

@@ -49,9 +49,13 @@ tolerance behaviours, and apply at every `XhciTolerance` value.
 
 Revision 11, 2026-10-07, after `2.2.0.0`, for two findings of the 35-V
 legs: section 4.6 gains an "As built" note (a terminal no recovery acts on
-completes the transfers it holds, at every `XhciTolerance` value) and
-section 4.11's note on what acts at 0 a line for it; section 5's PED row
-says the layer answers PED clear on QEMU, which ignores the PED write.
+completes the transfers it holds, at every `XhciTolerance` value), with
+its review's rules - no Save or Restore State on a latched-failed
+controller, a resume refusing the spent run of failures, and a save gate
+that reads the HCD's own transfers from submission to completion - and
+section 4.11's note on what acts at 0 a line for each; section 5's PED row
+says the layer answers PED clear on QEMU, which ignores the PED write, and
+section 5 notes QEMU's dequeue left on the Link TRB.
 
 ## 1. What is asked, and what is not
 
@@ -861,6 +865,31 @@ release, and the hang came back. This is a change from `2.1.1.0` at 0,
 where such a resume brought the controller back: now only a stop and a
 start do, as section 4.6 says of the window.
 
+The save gate this rests on did not hold. `xhciSaveState` declines while a
+device has work outstanding, but it asked the frozen miniport's device
+table (`ext->Devices`), which the HCD never fills, so it passed with
+transfers queued; on a Force Save Context controller a suspend could then
+save over busy endpoints, and a completion written while halted was
+dropped at the restore by `XhciEventDiscardStale`, its URB left pending.
+Pre-existing. The gate now asks the HCD's own state under the controller
+lock (`XhciSlotSaveBusy`, `hcd_dev.c`): a pipe is busy - every endpoint,
+EP0 and each open stream - while any of its transfer records is in a
+state but free (mapping, on the ring, held, or retired and not yet
+completed), an IRP waits for a record, a record is held, or its queue
+holds a TD, so a transfer counts from its submission to its completion.
+A declined save sends the resume to the reinitialization, whose
+invalidation completes the transfers. What passes stays nonblocking: an
+idle gate arms a guard (`SavePublished`) in the same hold of the lock; a
+TD `HcdIoMapped` publishes on a controller not initialized sets it and
+clears `SavedStateValid` (the pure `XhciTolSavePublish`); the commit after
+CSS sets `SavedStateValid` only if nothing was published
+(`XhciSlotSaveCommit`, `XhciTolSaveCommit`); and after a restore has run
+the controller, `XhciSlotSaveSpoiled` sends the resume to the
+reinitialization when anything was published since the save, including
+between CRS and Run/Stop. A bus with nothing outstanding saves as before;
+a controller without Force Save Context, every virtual machine's, declines
+earlier anyway. At every `XhciTolerance` value.
+
 ### 4.7 The interval cap (35-T.7, gated) and the Average TRB Length switch
 
 **The cap.** An interrupt endpoint whose Interval exceeds 8 (32 ms) is
@@ -1108,7 +1137,13 @@ way `Unreadable` and `Contained` are set at 0. Neither changes what
 adds a third, the release of a terminal no recovery acts on (section 4.6's
 revision-11 note): at 0 it can meet only the run of failures, whose
 transfers `2.1.1.0` completed through a failed attempt's invalidation
-whenever one reached it, and which a resume no longer clears.
+whenever one reached it, and which a resume no longer clears. With it go
+two rules on Save and Restore State, neither tolerance (section 4.6's
+revision-11 notes): no CSS or CRS on a latched-failed controller, and a
+save gate that counts every transfer from submission to completion and
+spoils a save a late mapping publishes into. At 0 the refused resume of
+a spent run of failures is a change from `2.1.1.0`, where that resume
+brought the controller back.
 
 ## 5. Injection
 
