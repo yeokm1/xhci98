@@ -265,6 +265,20 @@ ULONG XhciTolCycleReconnect(ULONG charged, ULONG empty, ULONG connected);
 
 ULONG XhciTolWaitStep(ULONG done, ULONG marked, ULONG expired);
 
+/*
+ * After a RESOLVE: reason is what the mark resolved to, done and expired
+ * read with it. A confirmed reason abandons; otherwise a completion is
+ * taken, and a deadline already passed is the timeout here and now - not
+ * after another look, which a new stale mark installed on another
+ * processor between the resolution and that look could defer for ever.
+ * AGAIN: look again (the deadline still runs). The submission's own check
+ * takes the same answer with done 0, TIMEOUT meaning nothing was sent.
+ */
+#define XHCI_TOL_WAIT_ABANDON       4UL
+#define XHCI_TOL_WAIT_AGAIN         5UL
+
+ULONG XhciTolWaitResolved(ULONG reason, ULONG done, ULONG expired);
+
 /* The backstop's one observation (record 17 section 4.1). */
 typedef struct _XHCI_TOL_OBS {
     ULONG Valid;

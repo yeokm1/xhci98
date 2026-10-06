@@ -235,6 +235,17 @@ ULONG XhciTolWaitStep(ULONG done, ULONG marked, ULONG expired)
     return expired ? XHCI_TOL_WAIT_TIMEOUT : XHCI_TOL_WAIT_SLEEP;
 }
 
+ULONG XhciTolWaitResolved(ULONG reason, ULONG done, ULONG expired)
+{
+    if (reason != XHCI_TOL_CYCLE_NONE) {
+        return XHCI_TOL_WAIT_ABANDON;
+    }
+    if (done) {
+        return XHCI_TOL_WAIT_DONE;
+    }
+    return expired ? XHCI_TOL_WAIT_TIMEOUT : XHCI_TOL_WAIT_AGAIN;
+}
+
 ULONG XhciTolBackstop(PXHCI_TOL_OBS obs, ULONG tolerance, ULONG pending,
                       ULONG index, ULONG cycle, ULONG drainGen,
                       ULONG startGen, ULONG now)

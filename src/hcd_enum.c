@@ -935,6 +935,7 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG expired;
     ULONG marked;
     ULONG step;
+    ULONG reason;
     ULONG abandoned;
     ULONG i;
 
@@ -996,12 +997,18 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         if (!marked) {
             break;
         }
-        if (hcdCycleResolve(hc, dev) != XHCI_TOL_CYCLE_NONE) {
+        step = XhciTolWaitResolved(hcdCycleResolve(hc, dev), 0, expired);
+        if (step == XHCI_TOL_WAIT_ABANDON) {
             /* Nothing went out: the record and the scratch are free. */
             (VOID)KeCancelTimer(&deadline);
             dev->CycleAbandon = 1;
             dev->Ep0Stuck = 1;
             return HCD_CTL_ABANDONED;
+        }
+        if (step == XHCI_TOL_WAIT_TIMEOUT) {
+            /* Stale marks past the deadline: nothing was sent. */
+            (VOID)KeCancelTimer(&deadline);
+            return HCD_CTL_NOT_SENT;
         }
     }
     if (answer != XHCI_XFER_OK) {
@@ -1039,8 +1046,21 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             break;
         }
         if (step == XHCI_TOL_WAIT_RESOLVE) {
-            if (hcdCycleResolve(hc, dev) != XHCI_TOL_CYCLE_NONE) {
+            /* Decided with this look's deadline and a fresh look at the
+             * completion: a stale mark at an expired deadline ends the wait
+             * here, so marks installed one after another on another
+             * processor cannot hold the thread past it. */
+            reason = hcdCycleResolve(hc, dev);
+            XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+            done = dev->Ep0Done;
+            XhciControllerLockRelease(&hc->Hc, oldIrql);
+            step = XhciTolWaitResolved(reason, done, expired);
+            if (step == XHCI_TOL_WAIT_ABANDON) {
                 abandoned = 1;
+                done = 0;
+                break;
+            }
+            if (step == XHCI_TOL_WAIT_DONE || step == XHCI_TOL_WAIT_TIMEOUT) {
                 break;
             }
             continue;
