@@ -4528,8 +4528,9 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
          * A DMA safety rule, not a tolerance behaviour: it applies at every
          * XhciTolerance value, 0 included. */
         if (unproven && !HcdCtlProveDmaStopped(ext)) {
-            /* And the containment's terminal with it, its latch and
-             * reason reused: no recovery (hcdRecover) or resume
+            /* And the containment's terminal with it, its latch shared
+             * under a reason of its own (the controller still reads, so
+             * not "unreadable"): no recovery (hcdRecover) or resume
              * (hcd_power.c) may reinitialize into the pinned allocation,
              * which keeps its lifetime until a stop and a start allocate
              * a fresh one; new requests are held, as contained. */
@@ -4539,7 +4540,7 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
                 XhciMaskInterrupts(ext);
             }
             ext->ControllerFailed = 1;
-            ext->Tol.Unreadable = 1;
+            ext->Tol.Unreadable = XHCI_TOL_CONTAINED_DMA_UNPROVEN;
             ext->Tol.Stats.Contained = XHCI_TOL_CONTAIN_PINNED;
             XhciLogNoteLocked(ext, "slots.unproven.pinned", 1);
             XhciControllerLockRelease(ext, oldIrql);

@@ -662,6 +662,9 @@ ULONG XhciTolWindowAdmit(PXHCI_TOL_WINDOW win, ULONG tolerance, ULONG now)
 ULONG XhciTolTerminal(ULONG failed, ULONG unreadable, ULONG windowRefused,
                       ULONG failures, ULONG maxFailures)
 {
+    if (unreadable == XHCI_TOL_CONTAINED_DMA_UNPROVEN) {
+        return XHCI_TOL_TERMINAL_DMA_UNPROVEN;
+    }
     if (unreadable) {
         return XHCI_TOL_TERMINAL_UNREADABLE;
     }

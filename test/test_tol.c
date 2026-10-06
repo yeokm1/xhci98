@@ -1147,6 +1147,18 @@ static void test_terminal(void)
              "contained");
     CHECK_EQ(XhciTolTerminal(1, 1, 1, 3, 3), XHCI_TOL_TERMINAL_UNREADABLE,
              "the containment outranks both");
+    /* The unproven-DMA containment shares the latch, not the reason. */
+    CHECK_EQ(XhciTolTerminal(1, XHCI_TOL_CONTAINED_UNREADABLE, 0, 0, 3),
+             XHCI_TOL_TERMINAL_UNREADABLE, "all ones is unreadable");
+    CHECK_EQ(XhciTolTerminal(1, XHCI_TOL_CONTAINED_DMA_UNPROVEN, 0, 0, 3),
+             XHCI_TOL_TERMINAL_DMA_UNPROVEN,
+             "a readable controller not proven stopped is its own reason");
+    CHECK_EQ(XhciTolTerminal(1, XHCI_TOL_CONTAINED_DMA_UNPROVEN, 1, 3, 3),
+             XHCI_TOL_TERMINAL_DMA_UNPROVEN,
+             "and it outranks the window and the run of failures");
+    CHECK_EQ(XhciTolTerminal(0, XHCI_TOL_CONTAINED_DMA_UNPROVEN, 0, 0, 3),
+             XHCI_TOL_TERMINAL_DMA_UNPROVEN, "whatever the failure word");
+    CHECK_EQ(XHCI_TOL_TERMINAL_DMA_UNPROVEN, 5, "the dump's value");
 }
 
 /* Record 17 section 4.11: a start latches the three values and sets every

@@ -996,7 +996,7 @@ static VOID hcdContain(PHCD_CONTROLLER hc)
             XhciMaskInterrupts(ext);
         }
         ext->ControllerFailed = 1;
-        ext->Tol.Unreadable = 1;
+        ext->Tol.Unreadable = XHCI_TOL_CONTAINED_UNREADABLE;
         XhciLogNoteLocked(ext, "ctrl.failed.unreadable", HcdTolNow(hc));
     }
     XhciControllerLockRelease(ext, oldIrql);

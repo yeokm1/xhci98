@@ -109,6 +109,17 @@
 #define XHCI_TOL_TERMINAL_FAILURES  2UL     /* recoveries failed in a row    */
 #define XHCI_TOL_TERMINAL_WINDOW    3UL     /* the recovery window refused   */
 #define XHCI_TOL_TERMINAL_UNREADABLE 4UL    /* contained as unreadable       */
+#define XHCI_TOL_TERMINAL_DMA_UNPROVEN 5UL  /* contained: a readable
+                                             * controller not proven to
+                                             * have stopped mastering     */
+
+/* Why a controller is contained (XHCI_TOL_STATE.Unreadable, nonzero for
+ * either): the one latch every submission path, the recovery and the
+ * resume read, its value the reason the dump names. */
+#define XHCI_TOL_CONTAINED_UNREADABLE   1UL /* USBSTS all ones (35-T.6)      */
+#define XHCI_TOL_CONTAINED_DMA_UNPROVEN 2UL /* an invalidation no halt, HCRST
+                                             * or Bus Master Enable clear
+                                             * proved (hcd_enum.c)        */
 
 /* Registry values, read at each start: found is 1 when the value was found
  * as a REG_DWORD. Absent, another type or another number takes the
@@ -513,7 +524,8 @@ VOID XhciTolWindowInit(PXHCI_TOL_WINDOW win);
 ULONG XhciTolWindowAdmit(PXHCI_TOL_WINDOW win, ULONG tolerance, ULONG now);
 
 /* The terminal reason a dump names (XHCI_TOL_TERMINAL_*): failed is
- * ControllerFailed; unreadable, Unreadable; windowRefused, the window's
+ * ControllerFailed; unreadable, Unreadable (XHCI_TOL_CONTAINED_*, the
+ * unproven-DMA containment its own reason); windowRefused, the window's
  * Refused; failures and maxFailures, RecoveryFailuresConsecutive and its
  * bound. The containment outranks the window, the window the run of
  * failures - each latch stops the next from being reached. A failed
@@ -599,7 +611,7 @@ typedef struct _XHCI_TOL_STATE {
     XHCI_TOL_OBS Obs;
     XHCI_TOL_WINDOW Window;
     XHCI_TOL_DEAD Dead;
-    ULONG Unreadable;       /* 4.6: submissions park                        */
+    ULONG Unreadable;       /* 4.6: submissions park; XHCI_TOL_CONTAINED_* */
     ULONG Clock;            /* the tolerance clock, in ticks                */
     XHCI_TOL_LOC RootLoc[XHCI_TOL_ROOT_PORTS];
     XHCI_TOL_LOC HubLoc[XHCI_TOL_HUB_LOCS];

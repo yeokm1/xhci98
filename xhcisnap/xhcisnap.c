@@ -2036,6 +2036,10 @@ static const char *tol_terminal_text(unsigned long t)
         return "LATCHED FAILED: the recovery window refused a fourth";
     case 4:
         return "CONTAINED: USBSTS read all ones, the controller unreadable";
+    case 5:
+        return "CONTAINED: halt and reset did not complete and Bus Master "
+               "Enable would not clear; DMA not proven stopped, common "
+               "buffer pinned";
     default:
         return "?";
     }
@@ -2173,7 +2177,7 @@ static void print_tol(const unsigned char *hcd, unsigned long hcdBytes,
          v == 0 ? "Average TRB Length 1024"
                 : v == 1 ? "an interrupt endpoint's Max ESIT Payload" : "?");
     comp("  controller       %s\n", tol_terminal_text(terminal));
-    if (terminal == 2 || terminal == 3) {
+    if (terminal == 2 || terminal == 3 || terminal == 5) {
         comp("                   (it stays failed until a stop and start)\n");
     }
     count = get32(t, windowAt);
@@ -2443,6 +2447,10 @@ static int selftest_tol(void)
     print_tol(hcd, sizeof(hcd), ext, sizeof(ext));
 
     /* No extension image (short, or the wrong size): the terminal only. */
+    print_tol(hcd, sizeof(hcd), NULL, 0);
+
+    /* The unproven-DMA containment, its own terminal reason. */
+    put32(hcd, 76, 5);
     print_tol(hcd, sizeof(hcd), NULL, 0);
     return 0;
 }
