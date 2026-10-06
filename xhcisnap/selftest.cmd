@@ -177,6 +177,29 @@ for %%S in ("13  Failed      speed (no EP0 size)" "4  unknown (no mapping)" "not
     )
 )
 
+rem Task 35-T.8's tolerance state, named from a canned extension image at the
+rem place a canned HCD header gives: the values in effect, the controller's
+rem terminal reason and window, the counters and completion codes by name, a
+rem held root port and a re-armed hub port; then a 35.3 header, a state past
+rem the image, and no image at all.
+"%~dp0XHCISNAP.EXE" -selftest-tol > "%BASE%.tol.log"
+if errorlevel 1 (
+    echo FAIL: -selftest-tol exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("XhciTolerance    1 (on)" "XhciIntervalCap  1 (AMD controllers only): applies here, 2 endpoint(s) capped" "XhciAvgTrbEsit   0 (Average TRB Length 1024)" "controller       LATCHED FAILED: the recovery window refused a fourth" "3 of 3 begun inside ten minutes; 1 refused" "begun 300, 200, 100 ticks ago" "BackstopDrains            3" "RetryDiverts              4" "CyclesRefusedCode         2" "    4 USB Transaction Error        5" "   12 Endpoint Not Enabled         2" "  200 vendor-defined error         1" "root port 4        charges 3: re-enumerations 3 of 3" "NOW HELD, re-enumerations spent (powered)" "hub 1 port 2       charges 1" "not served by this driver (an xhci98.sys before 2.2.0.0's" "not a shape this build" "controller: LATCHED FAILED: the recovery window refused a fourth.") do (
+    findstr /C:%%S "%BASE%.tol.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the tolerance decode does not say %%S
+        set FAILED=1
+    )
+)
+findstr /C:"QueueHalts" "%BASE%.tol.log" > nul
+if not errorlevel 1 (
+    echo FAIL: the tolerance decode printed a zero counter
+    set FAILED=1
+)
+
 rd /s /q "%RUNDIR%" 2> nul
 rd out 2> nul
 
@@ -184,5 +207,5 @@ if "%FAILED%"=="1" (
     echo xhcisnap selftest FAILED
     exit /b 1
 )
-echo xhcisnap selftest: 8 cases, all passed
+echo xhcisnap selftest: 9 cases, all passed
 exit /b 0

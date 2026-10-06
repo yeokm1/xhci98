@@ -145,14 +145,75 @@ reads. A port is printed only when it has something to say, the counters only
 when nonzero, by name. A driver before 2.2.0.0 does not serve the region and
 the report says so. `-selftest-hcd` prints the decode over a canned image.
 
-The region is versioned on its own, inside the unchanged schema 5: an
-eight-word header (version, header bytes, port count, record bytes, the
-records' offset, counter count, the counters' offset, the notes' budget), then
-one sixteen-word record per root port (`src/xhci.h`,
-`XHCI_SNAPSHOT_HCD_PORT_*`), then the counters. The tool walks it by the
-sizes its header gives, so a later driver that appends to a record or to the
-counters is still read; a version past the one the tool knows is refused,
-since a version bump means a field changed meaning.
+The region is versioned on its own, inside the unchanged schema 5: a header
+(version, header bytes, port count, record bytes, the records' offset, counter
+count, the counters' offset, the notes' budget, and from 35-T.8 the twelve
+tolerance words below), then one sixteen-word record per root port
+(`src/xhci.h`, `XHCI_SNAPSHOT_HCD_PORT_*`), then the counters. The tool walks
+it by the sizes its header gives, so a later driver that appends to the
+header, a record or the counters is still read; a version past the one the
+tool knows is refused, since a version bump means a field changed meaning.
+35.3's driver sent an eight-word header; 35-T.8's appended twelve words with
+the version left at 1, and an older tool reads the region as before.
+
+### Controller tolerance (2.2.0.0)
+
+From 2.2.0.0 (roadmap-hcd.md task 35-T.8, design record 17 section 4.8) the
+`.TXT` also names, at every level, what the driver's controller tolerance saw
+and did. That state lives in the extension (`XHCI_EXTENSION.Tol`,
+`src/xhci_tol.h`), so it is in the `.BIN` and inside the tear detector's
+cover; the HCD region's header says where it lies in the extension image
+(`XHCI_SNAPSHOT_HCD_TOL_*`: its offset and size, the counters' word count, the
+recovery window's and the clock's offsets, and each kind of location's
+offset, count and record size), so the tool names it from the `.BIN`'s own
+bytes with no offset table, and checks each figure against the image before
+believing it. The last header word, `XHCI_SNAPSHOT_HCD_TERMINAL`, is a value
+rather than a place: the controller's terminal reason, cut under the
+controller lock with the window.
+
+What the report carries:
+
+- **The values in effect**: `XhciTolerance` (1 on, 0 off - `2.1.1.0`'s
+  handling, with the counters still counting), `XhciIntervalCap` with whether
+  the cap applies on this controller and how many endpoints it lowered, and
+  `XhciAvgTrbEsit`.
+- **The controller**: running; failed with an in-place recovery still owed;
+  latched failed after three recoveries failed in a row; latched failed
+  because the recovery window refused a fourth inside ten minutes; or
+  contained as unreadable (USBSTS read all ones). The two latched states end
+  only at a stop and start.
+- **The recovery window**: how many of the three recoveries it allows were
+  begun inside it, how long ago each began in tolerance-clock ticks (100 ms
+  nominal, credited at no more than 45 ms each), and how many it refused.
+- **The containment** and its branch: released (Bus Master Enable read back
+  clear, the devices dropped) or pinned (no proof DMA stopped, the common
+  buffer and transfers kept), and the all-ones episodes begun.
+- **The counters, nonzero only, by name** (`XHCI_TOL_STATS`): the backstop's
+  drains; the queues' `Errors`, `BadCodes`, `UnmatchedEvents` and
+  `ForeignEvents` summed, and halting completions; the soft retry's diverts,
+  Reset Endpoints, recoveries, exhaustions, replays and refused resets; the
+  device cycles by reason (a code nothing claims, a halt with no TD, a root
+  port found disabled), those before a PDO, those dropped as stale and those
+  a budget refused; the context reads for a halt with no TD and the stale
+  ones; root port PED faults, over-currents, repowers, holds; HCH recoveries
+  and recoveries the window refused. A counter a later driver appends before
+  the histogram prints by number.
+- **The completion codes**, every Transfer Event's code by count with its
+  xHCI name. The note ring's `xfer.error` records (slot `<< 16` \| DCI `<< 8`
+  \| code) carry the first few of each error code, a budget per code so a
+  storm of one cannot crowd out the first of another.
+- **Each location charged, held or re-armed**: a root port by number, an
+  external hub's port as hub object and port (the hub numbered from 0 in the
+  order the driver brought hubs up), with its charges, its re-enumerations
+  and repowers against their budget of three, its re-arms, how often it was
+  held, and the hold standing now - powered (ended by a stable disconnect or
+  a controller start) or unpowered (ended only by a controller start).
+
+A driver before 35-T.8 sends the eight-word header and the report says it
+does not serve the tolerance state; an extension image that came back short
+or another size than the driver declared is not decoded, and only the
+terminal reason is printed. `-selftest-tol` prints the decode over a canned
+image.
 
 The PORTSC decode is printed on screen whatever the level, because that is what
 the bench reads on the spot. The headline test is per port: a port reporting a

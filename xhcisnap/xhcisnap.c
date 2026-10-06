@@ -360,6 +360,20 @@ static const unsigned long snap_guid[4] = {
 #define SNAP_HCD_PORT_WORDS         16UL
 #define SNAP_HCD_COUNTER_WORDS      63UL
 #define SNAP_HCD_MAX_BYTES          32768UL
+/*
+ * Controller tolerance (2.2.0.0 on, task 35-T.8; design record 17 section
+ * 4.8). Its state stays in the extension, and the HCD region's header grew
+ * twelve words (version unchanged) that say where it lies in the extension
+ * image - the src/xhci.h XHCI_SNAPSHOT_HCD_TOL_* words - so it is named from
+ * the .BIN's own bytes with no offset table. A header shorter than that is
+ * a 35.3 driver's, which has none of it.
+ */
+#define SNAP_HCD_TOL_HEAD_WORDS     20UL
+#define SNAP_TOL_NAMED_WORDS        34UL    /* the counters this tool names */
+#define SNAP_TOL_CODES              256UL   /* the histogram, last          */
+#define SNAP_TOL_LOC_MIN_BYTES      28UL    /* six words, then the bytes    */
+#define SNAP_TOL_WINDOW_SLOTS       3UL
+#define SNAP_TOL_MAX_LOCS           1024UL  /* sanity bound on either count */
 
 /*
  * The verbosity ladder, as the driver's `XHCI_LOG_VERBOSITY_*` spells it. This
@@ -1936,6 +1950,308 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
     comp("  (%lu of %lu nonzero.)\n", shown, counters);
 }
 
+/* ---- controller tolerance: the extension's Tol, placed by the HCD header */
+
+/* XHCI_TOL_STATS (src/xhci_tol.h), its first 34 words in field order; the
+ * histogram of 256 follows them. test\test_snap.c holds the driver to it. */
+static const char *const tol_counter_names[SNAP_TOL_NAMED_WORDS] = {
+    "Tolerance", "CapMode", "AvgTrbMode", "CapApplied", "CapIntervals",
+    "BackstopDrains", "QueueErrors", "QueueBadCodes", "QueueUnmatched",
+    "QueueForeign", "QueueHalts",
+    "RetryDiverts", "RetryResets", "RetryRecovered", "RetryExhausted",
+    "RetryReplayed", "RetryResetFailed",
+    "CyclesNoReason", "CyclesRefusedCode", "CyclesHaltNoTd", "CyclesPed",
+    "CyclesPrePdo", "CyclesDropped", "CyclesRefused",
+    "HaltReads", "HaltStale", "PedFaults", "OcFaults", "Repowers", "Holds",
+    "HchRecoveries", "WindowRefused", "DeadEpisodes", "Contained"
+};
+
+/* What each counter is, for the reader of a report (record 17 4.1-4.6). */
+static const char *const tol_counter_meanings[SNAP_TOL_NAMED_WORDS] = {
+    "", "", "", "", "",
+    "drains queued for a lost or late interrupt",
+    "the queues' Errors, summed", "completion codes no path claims",
+    "events inside no queued TD", "events naming no live TD or pipe",
+    "halting completions on a matched TD",
+    "Transaction Errors held for a soft retry",
+    "Reset Endpoint (TSP 1) issued", "retried TDs that then succeeded",
+    "fourth errors, completed as before", "held errors applied by the thread",
+    "Reset Endpoints refused",
+    "device cycles, no reason (always 0)",
+    "device cycles: a code nothing claims",
+    "device cycles: a halt with no TD", "re-enumerations: port disabled",
+    "...of them before the device's PDO", "cycle marks gone stale",
+    "cycles the location's budget refused",
+    "context reads for a halt with no TD",
+    "...that read neither Halted nor Error",
+    "root ports found disabled (PED)", "root port over-currents",
+    "root port repowers", "locations held",
+    "recoveries requested by an unexpected HCH",
+    "recoveries the window refused", "all-ones USBSTS episodes", ""
+};
+
+/* xHCI 1.2 Table 6-90. */
+static const char *tol_code_name(unsigned long code)
+{
+    static const char *const names[37] = {
+        "Invalid", "Success", "Data Buffer Error", "Babble Detected",
+        "USB Transaction Error", "TRB Error", "Stall Error",
+        "Resource Error", "Bandwidth Error", "No Slots Available",
+        "Invalid Stream Type", "Slot Not Enabled", "Endpoint Not Enabled",
+        "Short Packet", "Ring Underrun", "Ring Overrun",
+        "VF Event Ring Full", "Parameter Error", "Bandwidth Overrun",
+        "Context State Error", "No Ping Response", "Event Ring Full",
+        "Incompatible Device", "Missed Service", "Command Ring Stopped",
+        "Command Aborted", "Stopped", "Stopped - Length Invalid",
+        "Stopped - Short Packet", "Max Exit Latency Too Large", "reserved",
+        "Isoch Buffer Overrun", "Event Lost", "Undefined Error",
+        "Invalid Stream ID", "Secondary Bandwidth Error",
+        "Split Transaction Error"
+    };
+
+    if (code < 37) {
+        return names[code];
+    }
+    if (code >= 192 && code <= 223) {
+        return "vendor-defined error";
+    }
+    if (code >= 224) {
+        return "vendor-defined information";
+    }
+    return "reserved";
+}
+
+static const char *tol_terminal_text(unsigned long t)
+{
+    switch (t) {
+    case 0:
+        return "running";
+    case 1:
+        return "failed; an in-place recovery is still owed";
+    case 2:
+        return "LATCHED FAILED: three recoveries failed in a row";
+    case 3:
+        return "LATCHED FAILED: the recovery window refused a fourth";
+    case 4:
+        return "CONTAINED: USBSTS read all ones, the controller unreadable";
+    default:
+        return "?";
+    }
+}
+
+static const char *tol_hold_text(unsigned long hold)
+{
+    switch (hold) {
+    case 1:
+        return "HELD, re-enumerations spent (powered)";
+    case 2:
+        return "HELD UNPOWERED, repowers spent";
+    case 3:
+        return "HELD UNPOWERED, over-current never cleared";
+    default:
+        return "held, reason ?";
+    }
+}
+
+/* One location, printed when it has been charged, held or re-armed. */
+static unsigned long tol_location(const unsigned char *l, const char *where)
+{
+    if (get32(l, 0) == 0 && get32(l, 4) == 0 && get32(l, 8) == 0 &&
+        l[26] == 0) {
+        return 0;
+    }
+    comp("  %-18s charges %lu: re-enumerations %u of 3, repowers %u of 3\n",
+         where, get32(l, 0), (unsigned)l[24], (unsigned)l[25]);
+    comp("  %-18s re-armed %lu, held %lu time(s)\n", "", get32(l, 8),
+         get32(l, 4));
+    if (l[26] != 0) {
+        comp("  %-18s NOW %s\n", "", tol_hold_text(l[26]));
+    }
+    return 1;
+}
+
+/*
+ * Task 35-T.8: the tolerance state named. It lives in the extension (design
+ * record 17 section 4.8), so it is read from the extension image this dump
+ * took - inside the tear detector's cover - at the place the HCD region's
+ * header gives, each figure checked against the bytes in hand first. The
+ * counters are never gated by XhciTolerance, so a dump at 0 still shows what
+ * the behaviours would have answered.
+ */
+static void print_tol(const unsigned char *hcd, unsigned long hcdBytes,
+                      const unsigned char *ext, unsigned long extBytes)
+{
+    static const char *const cap_text[3] = {
+        "off", "AMD controllers only", "every controller"
+    };
+    unsigned long headBytes;
+    unsigned long tolAt;
+    unsigned long tolBytes;
+    unsigned long statsWords;
+    unsigned long windowAt;
+    unsigned long clockAt;
+    unsigned long locBytes;
+    unsigned long rootAt;
+    unsigned long rootLocs;
+    unsigned long hubAt;
+    unsigned long hubLocs;
+    unsigned long hubPorts;
+    unsigned long terminal;
+    unsigned long codesAt;
+    unsigned long count;
+    unsigned long clock;
+    unsigned long shown;
+    unsigned long i;
+    unsigned long v;
+    const unsigned char *t;
+    char where[32];
+
+    if (hcdBytes < SNAP_HCD_HEAD_WORDS * 4 || get32(hcd, 0) == 0 ||
+        get32(hcd, 0) > SNAP_HCD_VERSION) {
+        return;
+    }
+    headBytes = get32(hcd, 4);
+    if (headBytes < SNAP_HCD_TOL_HEAD_WORDS * 4 ||
+        hcdBytes < SNAP_HCD_TOL_HEAD_WORDS * 4) {
+        comp("\ncontroller tolerance: not served by this driver (an "
+             "xhci98.sys before 2.2.0.0's\n  tolerance counters; its "
+             "HCD region header is %lu bytes).\n", headBytes);
+        return;
+    }
+    tolAt = get32(hcd, 32);
+    tolBytes = get32(hcd, 36);
+    statsWords = get32(hcd, 40);
+    windowAt = get32(hcd, 44);
+    clockAt = get32(hcd, 48);
+    locBytes = get32(hcd, 52);
+    rootAt = get32(hcd, 56);
+    rootLocs = get32(hcd, 60);
+    hubAt = get32(hcd, 64);
+    hubLocs = get32(hcd, 68);
+    hubPorts = get32(hcd, 72);
+    terminal = get32(hcd, 76);
+    if (ext == NULL) {
+        comp("\ncontroller tolerance: the extension image is not in hand, "
+             "so it is not decoded;\n  controller: %s.\n",
+             tol_terminal_text(terminal));
+        return;
+    }
+    if (tolAt > extBytes || tolBytes > extBytes - tolAt ||
+        statsWords < SNAP_TOL_NAMED_WORDS + SNAP_TOL_CODES ||
+        statsWords > tolBytes / 4 || (windowAt & 3UL) != 0 ||
+        windowAt > tolBytes || tolBytes - windowAt < 20 ||
+        (clockAt & 3UL) != 0 || clockAt > tolBytes - 4 ||
+        locBytes < SNAP_TOL_LOC_MIN_BYTES || (locBytes & 3UL) != 0 ||
+        rootLocs > SNAP_TOL_MAX_LOCS || hubLocs > SNAP_TOL_MAX_LOCS ||
+        rootAt > tolBytes || rootLocs > (tolBytes - rootAt) / locBytes ||
+        hubAt > tolBytes || hubLocs > (tolBytes - hubAt) / locBytes ||
+        (hubLocs != 0 && hubPorts == 0) || (tolAt & 3UL) != 0) {
+        comp("\ncontroller tolerance: %lu bytes at +%lu of a %lu-byte "
+             "extension,\n  %lu counter words, locations of %lu bytes - not "
+             "a shape this build\n  reads; not decoded.\n",
+             tolBytes, tolAt, extBytes, statsWords, locBytes);
+        return;
+    }
+    t = ext + tolAt;
+    clock = get32(t, clockAt);
+
+    comp("\ncontroller tolerance (design record 17), from the extension at "
+         "+%lu:\n", tolAt);
+    v = get32(t, 0);
+    comp("  XhciTolerance    %lu (%s)\n", v,
+         v == 0 ? "off: 2.1.1.0's handling; the counters still count"
+                : v == 1 ? "on" : "?");
+    v = get32(t, 4);
+    comp("  XhciIntervalCap  %lu (%s): %s here, %lu endpoint(s) capped\n",
+         v, v < 3 ? cap_text[v] : "?",
+         get32(t, 12) != 0 ? "applies" : "does not apply", get32(t, 16));
+    v = get32(t, 8);
+    comp("  XhciAvgTrbEsit   %lu (%s)\n", v,
+         v == 0 ? "Average TRB Length 1024"
+                : v == 1 ? "an interrupt endpoint's Max ESIT Payload" : "?");
+    comp("  controller       %s\n", tol_terminal_text(terminal));
+    if (terminal == 2 || terminal == 3) {
+        comp("                   (it stays failed until a stop and start)\n");
+    }
+    count = get32(t, windowAt);
+    if (count > SNAP_TOL_WINDOW_SLOTS) {
+        count = SNAP_TOL_WINDOW_SLOTS;
+    }
+    comp("  recovery window  %lu of 3 begun inside ten minutes; %lu refused\n",
+         count, get32(t, windowAt + 16));
+    for (i = 0; i < count; i++) {
+        comp("%s%lu", i == 0 ? "                   begun " : ", ",
+             clock - get32(t, windowAt + 4 + i * 4));
+    }
+    if (count != 0) {
+        comp(" ticks ago\n");
+    }
+    v = get32(t, 33 * 4);
+    comp("  containment      %s\n",
+         v == 0 ? "none"
+                : v == 1 ? "RELEASED: Bus Master Enable read back clear, "
+                           "devices dropped"
+                : v == 2 ? "PINNED: no proof DMA stopped; buffer, transfers "
+                           "kept"
+                         : "?");
+    comp("  all-ones USBSTS  %lu episode(s) begun\n", get32(t, 32 * 4));
+    comp("  tolerance clock  %lu ticks (100 ms nominal, at least 45 ms "
+         "each)\n", clock);
+
+    comp("\ntolerance counters, nonzero only:\n");
+    codesAt = statsWords - SNAP_TOL_CODES;
+    shown = 0;
+    for (i = 5; i < codesAt; i++) {
+        if (i == 33) {
+            continue;
+        }
+        v = get32(t, i * 4);
+        if (v == 0) {
+            continue;
+        }
+        if (i < SNAP_TOL_NAMED_WORDS) {
+            comp("  %-18s %8lu  %s\n", tol_counter_names[i], v,
+                 tol_counter_meanings[i]);
+        } else {
+            comp("  counter %-10lu %8lu\n", i, v);
+        }
+        shown++;
+    }
+    comp("  (%lu nonzero.)\n", shown);
+
+    comp("\ntransfer completion codes, by count:\n");
+    shown = 0;
+    for (i = 0; i < SNAP_TOL_CODES; i++) {
+        v = get32(t, (codesAt + i) * 4);
+        if (v == 0) {
+            continue;
+        }
+        comp("  %3lu %-28s %lu\n", i, tol_code_name(i), v);
+        shown++;
+    }
+    comp("  (%lu code(s) seen. The note ring's xfer.error records carry "
+         "the first of each\n   error code with its slot and endpoint.)\n",
+         shown);
+
+    comp("\nlocations charged, held or re-armed (budget 3 each):\n");
+    shown = 0;
+    for (i = 0; i < rootLocs; i++) {
+        sprintf(where, "root port %lu", i + 1);
+        shown += tol_location(t + rootAt + i * locBytes, where);
+    }
+    for (i = 0; i < hubLocs; i++) {
+        sprintf(where, "hub %lu port %lu", i / hubPorts, i % hubPorts + 1);
+        shown += tol_location(t + hubAt + i * locBytes, where);
+    }
+    if (shown == 0) {
+        comp("  (none.)\n");
+    } else {
+        comp("  (a powered hold ends at a stable disconnect or a controller "
+             "start, an\n   unpowered one only at a controller start. A hub "
+             "is numbered from 0 by its\n   object in the driver.)\n");
+    }
+}
+
 /* `-selftest-hcd`: the HCD region's decode over a canned image, for
  * xhcisnap\selftest.cmd: 35.0's E460 port 13 Failed on the speed, a
  * working port 14, an empty port 1 left out, and two counters. */
@@ -2008,6 +2324,91 @@ static int selftest_hcd(void)
     put32(image, base + 20, 4);
     put32(image, base + 64, 0xDEADBEEFUL);
     print_hcd(image, 32 + 2 * 80);
+    return 0;
+}
+
+/*
+ * `-selftest-tol`: task 35-T.8's decode over a canned HCD header and
+ * extension image, laid out as an x86 build lays XHCI_TOL_STATE: a mouse
+ * that kept failing - soft retries, two cycles for a refused code, its root
+ * port held - on a controller whose window then refused a recovery; a hub
+ * port re-armed. Then a 35.3 header, a state past the image, and no image.
+ */
+static int selftest_tol(void)
+{
+    static unsigned char hcd[SNAP_HCD_TOL_HEAD_WORDS * 4];
+    static unsigned char ext[64 + 16552];
+    const unsigned long tolAt = 64;
+    const unsigned long windowAt = 290 * 4 + 24;
+    const unsigned long clockAt = windowAt + 20 + 12 + 4;
+    const unsigned long rootAt = clockAt + 4;
+    const unsigned long hubAt = rootAt + 255 * 32;
+    unsigned char *t;
+    unsigned char *l;
+
+    memset(hcd, 0, sizeof(hcd));
+    memset(ext, 0, sizeof(ext));
+    put32(hcd, 0, 1);
+    put32(hcd, 4, SNAP_HCD_TOL_HEAD_WORDS * 4);
+    put32(hcd, 32, tolAt);
+    put32(hcd, 36, 16552);
+    put32(hcd, 40, 290);
+    put32(hcd, 44, windowAt);
+    put32(hcd, 48, clockAt);
+    put32(hcd, 52, 32);
+    put32(hcd, 56, rootAt);
+    put32(hcd, 60, 255);
+    put32(hcd, 64, hubAt);
+    put32(hcd, 68, 224);
+    put32(hcd, 72, 14);
+    put32(hcd, 76, 3);
+    t = ext + tolAt;
+    put32(t, 0 * 4, 1);
+    put32(t, 1 * 4, 1);
+    put32(t, 3 * 4, 1);
+    put32(t, 4 * 4, 2);
+    put32(t, 5 * 4, 3);
+    put32(t, 6 * 4, 5);
+    put32(t, 11 * 4, 4);
+    put32(t, 13 * 4, 3);
+    put32(t, 14 * 4, 1);
+    put32(t, 18 * 4, 2);
+    put32(t, 23 * 4, 1);
+    put32(t, 31 * 4, 1);
+    put32(t, (34 + 1) * 4, 1000);
+    put32(t, (34 + 4) * 4, 5);
+    put32(t, (34 + 12) * 4, 2);
+    put32(t, (34 + 13) * 4, 20);
+    put32(t, (34 + 200) * 4, 1);
+    put32(t, windowAt, 3);
+    put32(t, windowAt + 4, 100);
+    put32(t, windowAt + 8, 200);
+    put32(t, windowAt + 12, 300);
+    put32(t, windowAt + 16, 1);
+    put32(t, clockAt, 400);
+    l = t + rootAt + 3 * 32;
+    put32(l, 0, 3);
+    put32(l, 4, 1);
+    l[24] = 3;
+    l[26] = 1;
+    l = t + hubAt + 15 * 32;
+    put32(l, 0, 1);
+    put32(l, 8, 1);
+    l[24] = 1;
+    companion = NULL;
+    print_tol(hcd, sizeof(hcd), ext, sizeof(ext));
+
+    /* A 35.3 driver: an eight-word header, no tolerance words. */
+    put32(hcd, 4, SNAP_HCD_HEAD_WORDS * 4);
+    print_tol(hcd, sizeof(hcd), ext, sizeof(ext));
+
+    /* A state that would run past the image: refused, nothing read. */
+    put32(hcd, 4, SNAP_HCD_TOL_HEAD_WORDS * 4);
+    put32(hcd, 32, 0xFFFFFF00UL);
+    print_tol(hcd, sizeof(hcd), ext, sizeof(ext));
+
+    /* No extension image (short, or the wrong size): the terminal only. */
+    print_tol(hcd, sizeof(hcd), NULL, 0);
     return 0;
 }
 
@@ -3817,6 +4218,8 @@ int main(int argc, char **argv)
             return selftest_notes();
         } else if (strcmp(argv[i], "-selftest-hcd") == 0) {
             return selftest_hcd();
+        } else if (strcmp(argv[i], "-selftest-tol") == 0) {
+            return selftest_tol();
         } else if (strcmp(argv[i], "-selftest-report") == 0 && i + 1 < argc) {
             /*
              * The report path on its own, with no device: open BASE.TXT, write
@@ -4161,6 +4564,12 @@ int main(int argc, char **argv)
      */
     if (hcdState == 1) {
         print_hcd(hcd_image, hcdBytes);
+        /* 35-T.8's tolerance state, from the extension image: not from an
+         * image that is short or that the driver says is another size. */
+        print_tol(hcd_image, hcdBytes,
+                  (extMismatch || extBytes > sizeof(ext_image)) ? NULL
+                                                                : ext_image,
+                  extBytes);
     } else if (hcdState == 2) {
         comp("\nHCD region: not served by this driver (an xhci98.sys before "
              "2.2.0.0 has no\n  per-port enumeration region; the note ring "
