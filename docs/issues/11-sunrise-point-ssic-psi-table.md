@@ -2,7 +2,8 @@
 
 Status: **open; a limitation of every release to `2.1.1.0`.** Read on the
 owner's E460 on 2026-10-06 (roadmap task 35.0); the fix is roadmap task
-35.1, planned for `2.2.0.0`, and is not yet written.
+35.1, for `2.2.0.0`, written and host-tested on 2026-10-06 (section 6) and
+not yet read on the E460 (task 35.2).
 
 Machines affected: those with an Intel Sunrise Point-LP xHCI controller
 (`8086:9D2F`), among them the ThinkPad E460 and the HP EliteBook 850 G5.
@@ -121,6 +122,30 @@ machines that never failed list ID 4 explicitly; by Comet Lake Intel's table
 moves the SSIC rates off IDs 1-3 and lists 4 and 5. The P14s also shows why
 a listed entry must win over the fallback: it lists 6 and 7 as SSIC rates,
 where the default meaning of 6 and 7 is Gen1x2 and Gen2x2.
+
+As written (2026-10-06): one rule in `src/xhci_caps.c` (`xhciProtocolRate`)
+that the class, the rate and the inverse lookup all ask, and
+`XhciPortSpeedSource`, which names where an ID's meaning came from - listed,
+the defaults of a group with no table, or this fallback - for task 35.3's
+notes. In the inverse direction the fallback goes only as far as
+SuperSpeed's own ID: `XhciPortPsivForSpeed` answers 4 for SuperSpeed where a
+USB 3 table lists no 5 Gb/s entry and does not list 4. A SuperSpeedPlus
+child behind a hub on such a table is not given an unlisted 5 to 7: decoding
+an ID the controller reported is not the same as writing one it never named,
+and the raw capability header cannot gate it by revision (the P14s's USB 3.1
+group reads Minor Revision `01h`, not the BCD `10h` the specification
+describes). That child takes 4, counted unmatched, and the output Slot
+Context settles it, as before. Host vectors: `test/test_caps.c` (the three
+tables, replayed from the logs' words), `test/test_link.c` (port 13 at
+`00001203` to Enable Slot with EP0 at 512, and the `2.1.1.0` path to a
+terminal Failed) and `test/test_sshub.c` (the hub children); run against the
+unfixed sources the E460 vectors fail as 35.0 read.
+
+One more fact the raw dump shows: the E460's USB 3 capability is 20 DWORDs
+long and its header counts three PSI entries (PSIC 3), but the DWORDs after
+them carry a 5 Gb/s entry at ID 4 (`00050134`) and three more SSIC rates
+(`05B10125`, `0B630126`, `16C60127`). The controller publishes PSIC 3, so
+those are not part of its table, and the driver does not read them.
 
 Still to read (35.2): the E460 connector's physical USB 2.0 pairing - the
 hub's USB 2.0 half came up on port 1 where the driver's port map pairs 13

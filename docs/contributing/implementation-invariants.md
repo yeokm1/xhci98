@@ -902,15 +902,30 @@ Why there is no MSI on either target. MSI is an interrupt delivered as a memory 
   to match, so a wrong assumption fails silently until a controller that
   reorders them appears.
 - Retain all 15 entries allowed by the four-bit PSIC field. A PORTSC PSIV absent
-  from a non-empty advertised table is unknown, not a default ID. Any functional
-  decision derived from speed (including EP0's initial Max Packet Size) must use
-  the decoded speed class while the Slot Context continues to receive the raw
-  controller PSIV.
+  from a non-empty advertised table is unknown, not a default ID - with one
+  exception, below. Any functional decision derived from speed (including EP0's
+  initial Max Packet Size) must use the decoded speed class while the Slot
+  Context continues to receive the raw controller PSIV.
+- **The exception (roadmap-hcd task 35.1, issue 11): on a USB 3.x protocol, an
+  ID 4 to 7 its table does not list takes its default meaning** (5 Gb/s, 10 Gb/s,
+  2x5 and 2x10 Gb/s; each SuperSpeed, its rate and lanes kept apart). Intel
+  Sunrise Point-LP (`8086:9D2F`) publishes a USB 3 table of three SSIC rates at
+  IDs 1 to 3 and reports a 5 Gb/s link as 4; read strictly, no SuperSpeed device
+  ever enumerated there. A listed entry still wins, even one this driver cannot
+  decode - the P14s Gen 1 lists 6 and 7 as SSIC rates, where the defaults would
+  read Gen 1x2 and Gen 2x2 - and every other unlisted ID, and every unlisted ID
+  on a USB 2.0 protocol, stays unknown. `XhciPortSpeedSource` says which rule
+  named an ID (listed, default with no table, or this fallback).
 - **A device behind a hub has no PORTSC to read a PSIV from, and usbport reports
   a speed class, so its Protocol Speed ID is looked up by inverting the same
   PSI table** (`XhciPortPsivForSpeed`) - refusing rather than defaulting when
   the table has no entry for that class. "3 means High Speed" is what a
-  controller that reordered its IDs would break.
+  controller that reordered its IDs would break. The exception reaches this
+  direction only as far as SuperSpeed's own ID: 4, where a USB 3.x table lists
+  no 5 Gb/s entry and does not list 4. A SuperSpeedPlus child of such a table
+  is never given an unlisted 5 to 7 - writing an ID the controller never
+  named is not decoding one it reported - and takes 4, unmatched, for the
+  output Slot Context to settle (`XhciSsHubPsiv`).
 
 ## DMA Teardown
 

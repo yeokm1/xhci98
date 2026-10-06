@@ -735,12 +735,15 @@ XHCI_C_ASSERT(portsc_change_mask_is_within_rw1c_range,
 #define XHCI_PLS_COMPLIANCE     10
 #define XHCI_PLS_TEST_MODE      11
 
-/* Default Protocol Speed IDs (spec 7.2, used only when PSIC = 0). */
+/* Default Protocol Speed IDs (spec 7.2): used when PSIC = 0, and 4 to 7
+ * also for an ID a USB 3.x group's table does not list (task 35.1,
+ * xhci_caps.c, xhciProtocolRate). */
 #define XHCI_PSIV_FS            1
 #define XHCI_PSIV_LS            2
 #define XHCI_PSIV_HS            3
 #define XHCI_PSIV_SS            4
-/* The SuperSpeedPlus defaults of a USB 3.x protocol group with PSIC = 0:
+/* The SuperSpeedPlus defaults of a USB 3.x protocol group with PSIC = 0
+ * (or a table that does not list them, task 35.1):
  * Gen 2x1, Gen 1x2 and Gen 2x2 at 10, 10 and 20 Gb/s (Table 7-13's PSIM
  * column, p.485; xhci-data-structures.md section 10.1, verified). 7.2.2.1.2
  * (p.485-486) defines 5 only for a USB 3.1 or 3.2 group and 6 and 7 only
@@ -2095,14 +2098,29 @@ ULONG XhciPortSlotType(const XHCI_PORT_MAP *map, ULONG port, ULONG *slotType);
 
 /*
  * Decode a raw PORTSC Port Speed value against the protocol group that owns
- * the port. Falls back to the default IDs only when that group advertises no
- * PSI table; a PSIV absent from a non-empty table decodes as
- * XHCI_SPEED_UNKNOWN, never as a default. IRQL: any.
+ * the port. A listed entry wins; the default IDs apply when the group
+ * advertises no PSI table, and on a USB 3.x group to an unlisted ID 4 to 7
+ * (task 35.1, issue 11); any other PSIV absent from a non-empty table decodes
+ * as XHCI_SPEED_UNKNOWN. IRQL: any.
  */
 ULONG XhciPortSpeedClass(const XHCI_PORT_MAP *map,
                          ULONG port,
                          ULONG psiv,
                          ULONG *speedClass);
+
+/*
+ * Where a PSIV's meaning on this port comes from (task 35.1): NONE when this
+ * driver can name none (or no group claims the port), LISTED from the group's
+ * PSI table, DEFAULT from the default IDs of a group with no table, and
+ * FALLBACK from the default IDs for an ID 4 to 7 a USB 3.x group's table does
+ * not list - Sunrise Point-LP's case. A LISTED entry may still decode as
+ * unknown. IRQL: any.
+ */
+#define XHCI_PSI_SOURCE_NONE        0
+#define XHCI_PSI_SOURCE_LISTED      1
+#define XHCI_PSI_SOURCE_DEFAULT     2
+#define XHCI_PSI_SOURCE_FALLBACK    3
+ULONG XhciPortSpeedSource(const XHCI_PORT_MAP *map, ULONG port, ULONG psiv);
 
 /*
  * The other direction, which task 7b-A.3 needs: **which raw Protocol Speed ID
@@ -2119,8 +2137,10 @@ ULONG XhciPortSpeedClass(const XHCI_PORT_MAP *map,
  *
  * Answers XHCI_CAPS_NOT_FOUND when the group advertises a PSI table with no
  * entry of that speed, which is a refusal rather than a default for the same
- * reason the decode direction has one. Falls back to the default IDs only when
- * the group advertises no table at all. IRQL: any.
+ * reason the decode direction has one. Falls back to the default IDs when the
+ * group advertises no table at all, and for SuperSpeed to ID 4 when a USB 3.x
+ * group's table lists no 5 Gbit/s entry and does not list 4 (task 35.1).
+ * IRQL: any.
  */
 ULONG XhciPortPsivForSpeed(const XHCI_PORT_MAP *map,
                            ULONG port,
@@ -2131,7 +2151,8 @@ ULONG XhciPortPsivForSpeed(const XHCI_PORT_MAP *map,
  * The rate a raw Port Speed value means on this port, kept apart from the
  * speed class (task 29-A.1): `*kbps` the signalling rate in kbit/s, from the
  * group's PSI DWORD for that PSIV - or from the default table when the group
- * advertises none (PSIC = 0, as qemu-xhci reports) - and `*plus` 1 for a
+ * advertises none (PSIC = 0, as qemu-xhci reports) or, on a USB 3.x group,
+ * does not list an ID 4 to 7 (task 35.1) - and `*plus` 1 for a
  * SuperSpeedPlus link: a USB3 group's PSI DWORD with Link Protocol 1, or any
  * SuperSpeed-class rate above Gen 1x1's 5 Gbit/s. A rate is all a PSI DWORD
  * says: Gen 2x1 and Gen 1x2 are both 10 Gbit/s, and only PORTLI's lane counts

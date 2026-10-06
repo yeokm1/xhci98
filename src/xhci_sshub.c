@@ -458,8 +458,8 @@ ULONG XhciSsHubParentOf(ULONG hubUsb3, ULONG hubSsp, ULONG hubRank,
     return 0;
 }
 
-/* The SuperSpeedPlus ID at exactly `kbps` among the root port protocol's
- * named IDs, or 0. */
+/* The SuperSpeedPlus ID at exactly `kbps` among the IDs the root port
+ * protocol's PSI table lists, or 0. */
 static ULONG xhciSsHubPsivAt(const XHCI_PORT_MAP *map, ULONG rootPort,
                              ULONG kbps)
 {
@@ -468,12 +468,36 @@ static ULONG xhciSsHubPsivAt(const XHCI_PORT_MAP *map, ULONG rootPort,
     ULONG v;
 
     for (v = 1; v <= 15; v++) {
-        if (XhciPortRate(map, rootPort, v, &rate, &plus) == XHCI_CAPS_OK &&
+        if (XhciPortSpeedSource(map, rootPort, v) == XHCI_PSI_SOURCE_LISTED &&
+            XhciPortRate(map, rootPort, v, &rate, &plus) == XHCI_CAPS_OK &&
             plus && rate == kbps) {
             return v;
         }
     }
     return 0;
+}
+
+/*
+ * The default ID of a SuperSpeedPlus link - the lanes tell the two 10 Gbit/s
+ * modes apart - on a root port protocol with no PSI table, else 0. Not on
+ * an unlisted ID of a table (task 35.1): this direction writes an ID the
+ * controller never reported, so there the child takes SuperSpeed's ID,
+ * unmatched, and the output Slot Context settles it (XhciSsHubAdoptSpeed).
+ */
+static ULONG xhciSsHubDefaultPsiv(const XHCI_PORT_MAP *map, ULONG rootPort,
+                                  const XHCI_SSHUB_LINK *link)
+{
+    ULONG v;
+
+    if (link->Kbps == 10000000UL) {
+        v = (link->Lanes >= 2) ? XHCI_PSIV_SSP_GEN1X2 : XHCI_PSIV_SSP_GEN2X1;
+    } else if (link->Kbps == 20000000UL) {
+        v = XHCI_PSIV_SSP_GEN2X2;
+    } else {
+        return 0;
+    }
+    return XhciPortSpeedSource(map, rootPort, v) == XHCI_PSI_SOURCE_DEFAULT
+               ? v : 0;
 }
 
 /* IRQL: any. */
@@ -494,37 +518,28 @@ ULONG XhciSsHubPsiv(const XHCI_PORT_MAP *map, ULONG rootPort,
         map->Protocol[rootPort - 1] == XHCI_PORT_NO_PROTOCOL) {
         return XHCI_SSHUB_NOT_FOUND;
     }
-    v = 0;
     if (link != NULL && link->Plus) {
         proto = &map->Protocols[map->Protocol[rootPort - 1]];
-        if (proto->Major == 3 && proto->PsiCount == 0) {
-            /* The default IDs name two 10 Gbit/s modes; the lanes tell
-             * them apart. */
-            if (link->Kbps == 10000000UL) {
-                v = (link->Lanes >= 2) ? XHCI_PSIV_SSP_GEN1X2
-                                       : XHCI_PSIV_SSP_GEN2X1;
-            } else if (link->Kbps == 20000000UL) {
-                v = XHCI_PSIV_SSP_GEN2X2;
-            }
-        } else if (proto->Major == 3) {
+        if (proto->Major == 3) {
             /* A PSI DWORD names the aggregate rate (Codex review of
-             * 034a119, finding 2), so only that is a match; the lane
-             * rate's ID is a guess, given unmatched, and the controller's
-             * output Slot Context settles it after Address Device
-             * (XhciSsHubAdoptSpeed). */
+             * 034a119, finding 2), so a listed entry at it is a match. */
             v = xhciSsHubPsivAt(map, rootPort, link->Kbps);
             if (v == 0) {
-                v = xhciSsHubPsivAt(map, rootPort, link->LaneKbps);
-                if (v != 0) {
-                    *psiv = v;
-                    return XHCI_SSHUB_OK;
-                }
+                v = xhciSsHubDefaultPsiv(map, rootPort, link);
             }
-        }
-        if (v != 0) {
-            *psiv = v;
-            *matched = 1;
-            return XHCI_SSHUB_OK;
+            if (v != 0) {
+                *psiv = v;
+                *matched = 1;
+                return XHCI_SSHUB_OK;
+            }
+            /* The lane rate's listed ID is a guess, given unmatched, and the
+             * controller's output Slot Context settles it after Address
+             * Device (XhciSsHubAdoptSpeed). */
+            v = xhciSsHubPsivAt(map, rootPort, link->LaneKbps);
+            if (v != 0) {
+                *psiv = v;
+                return XHCI_SSHUB_OK;
+            }
         }
     }
     if (XhciPortPsivForSpeed(map, rootPort, XHCI_SPEED_SUPER, &v) !=

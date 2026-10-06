@@ -533,6 +533,139 @@ static void test_hold_portsc(void)
              "an all-ones read is no event");
 }
 
+/*
+ * Task 35.1 (issue 11): the E460's USB 3 root port 13 as 35.0 read it,
+ * PORTSC 00001203 - CCS, PED, U0, speed ID 4 - through the controller's
+ * own PSI table (Sunrise Point-LP, 8086:9D2F: USB 3 lists only SSIC IDs 1
+ * to 3; xhciqual/results/e460-2026-10-06/PROBE.LOG) and into the machine,
+ * as hcd_enum.c's XHCI_ENUM_ACT_RESET does: the raw ID kept for the Slot
+ * Context, the decoded class handed to the machine.
+ */
+static void e460_map(PXHCI_PORT_MAP m)
+{
+    PUCHAR p;
+    ULONG i;
+
+    p = (PUCHAR)m;
+    for (i = 0; i < sizeof(*m); i++) {
+        p[i] = 0;
+    }
+    for (i = 0; i < XHCI_MAX_ROOT_PORTS; i++) {
+        m->Protocol[i] = XHCI_PORT_NO_PROTOCOL;
+    }
+    m->PortCount = 18;
+    m->ProtocolCount = 2;
+    m->Protocols[0].Major = 2;
+    m->Protocols[0].PortOffset = 1;
+    m->Protocols[0].PortCount = 12;
+    m->Protocols[0].PsiCount = 3;
+    m->Protocols[0].Psi[0] = 0x000C0021UL;
+    m->Protocols[0].Psi[1] = 0x05DC0012UL;
+    m->Protocols[0].Psi[2] = 0x01E00023UL;
+    m->Protocols[1].Major = 3;
+    m->Protocols[1].PortOffset = 13;
+    m->Protocols[1].PortCount = 6;
+    m->Protocols[1].PsiCount = 3;
+    m->Protocols[1].Psi[0] = 0x04E00121UL;
+    m->Protocols[1].Psi[1] = 0x09C00122UL;
+    m->Protocols[1].Psi[2] = 0x13800123UL;
+    for (i = 0; i < 12; i++) {
+        m->Protocol[i] = 0;
+    }
+    for (i = 12; i < 18; i++) {
+        m->Protocol[i] = 1;
+    }
+}
+
+/* hcd_enum.c's hcdEnumSpeedOf: the class's default ID, 0 for unknown. */
+static ULONG enum_speed_of(ULONG speedClass)
+{
+    switch (speedClass) {
+    case XHCI_SPEED_LOW:
+        return XHCI_ENUM_SPEED_LOW;
+    case XHCI_SPEED_FULL:
+        return XHCI_ENUM_SPEED_FULL;
+    case XHCI_SPEED_HIGH:
+        return XHCI_ENUM_SPEED_HIGH;
+    case XHCI_SPEED_SUPER:
+        return XHCI_ENUM_SPEED_SUPER;
+    default:
+        return 0;
+    }
+}
+
+static void enum_to_reset(PXHCI_ENUM_PORT e)
+{
+    XHCI_ENUM_EVENT ev;
+    XHCI_ENUM_ACTION a;
+
+    ev.Ok = 1; ev.Speed = 0; ev.SlotId = 0; ev.Bytes = 0; ev.Value = 0;
+    ev.Kind = XHCI_ENUM_EV_CONNECT;
+    (VOID)XhciEnumStep(e, &ev, &a);
+    ev.Kind = XHCI_ENUM_EV_DEBOUNCED;
+    (VOID)XhciEnumStep(e, &ev, &a);
+}
+
+static void test_e460_port13(void)
+{
+    XHCI_PORT_MAP map;
+    XHCI_ENUM_PORT e;
+    XHCI_ENUM_EVENT ev;
+    XHCI_ENUM_ACTION a;
+    XHCI_LINK_PORT l;
+    XHCI_LINK_ACTION la;
+    ULONG psiv;
+    ULONG cls;
+    ULONG i;
+
+    e460_map(&map);
+    psiv = XHCI_PORTSC_GET_SPEED(0x00001203UL);
+    CHECK_EQ(psiv, 4, "PORTSC 00001203 reports speed ID 4");
+    CHECK_EQ(XhciLinkClassify(0x00001203UL), XHCI_LINK_ENABLED,
+             "and a trained link");
+    cls = XHCI_SPEED_UNKNOWN;
+    CHECK_EQ(XhciPortSpeedClass(&map, 13, psiv, &cls), XHCI_CAPS_OK,
+             "decoded through the E460's table");
+    CHECK_EQ(cls, XHCI_SPEED_SUPER, "as SuperSpeed (the fallback)");
+
+    XhciEnumReset(&e);
+    enum_to_reset(&e);
+    CHECK_EQ(e.State, XHCI_ENUM_RESET, "the machine resets the port");
+    ev.Ok = 1; ev.SlotId = 0; ev.Bytes = 0; ev.Value = 0;
+    ev.Kind = XHCI_ENUM_EV_RESET_DONE;
+    ev.Speed = enum_speed_of(cls);
+    (VOID)XhciEnumStep(&e, &ev, &a);
+    CHECK_EQ(e.State, XHCI_ENUM_ENABLE_SLOT, "to Enable Slot");
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_ENABLE_SLOT, "Enable Slot is sent");
+    CHECK_EQ(e.Mps0, 512, "EP0 at 512");
+    ev.Kind = XHCI_ENUM_EV_COMMAND_DONE;
+    ev.SlotId = 1;
+    (VOID)XhciEnumStep(&e, &ev, &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_ADDRESS, "Address Device");
+    CHECK_EQ(a.Mps0, 512, "with EP0 at 512");
+    CHECK_EQ(psiv, 4, "the Slot Context's ID stays the raw 4");
+
+    /* What 2.1.1.0 did: the unknown class failed the speed, the retry
+     * failed it again, and the port stayed Failed while the link sat in
+     * U0 with no change bit - terminal, which 35.1 leaves as it is. */
+    XhciEnumReset(&e);
+    XhciLinkInit(&l);
+    enum_to_reset(&e);
+    for (i = 0; i <= XHCI_ENUM_RETRIES; i++) {
+        ev.Kind = XHCI_ENUM_EV_RESET_DONE;
+        ev.Ok = 1;
+        ev.Speed = enum_speed_of(XHCI_SPEED_UNKNOWN);
+        (VOID)XhciEnumStep(&e, &ev, &a);
+        CHECK_EQ(e.State, XHCI_ENUM_FAILED, "an unknown speed fails");
+        CHECK_EQ(e.FailCause, XHCI_ENUM_FAIL_SPEED, "on the speed");
+        (VOID)XhciEnumRetry(&e, &a);
+    }
+    CHECK_EQ(e.State, XHCI_ENUM_FAILED, "and the retry spent, stays Failed");
+    CHECK_EQ(XhciLinkPortFeed(&l, 1, 0x00001203UL, e.State, &la), 0,
+             "and a trained link with no change bit feeds it nothing");
+    CHECK_EQ(la.Kind, XHCI_LINK_ACT_NONE, "nor asks for a write");
+}
+
 int main(void)
 {
     test_classify();
@@ -543,6 +676,7 @@ int main(void)
     test_hold_kinds();
     test_port_feed();
     test_hold_portsc();
+    test_e460_port13();
 
     printf("%d checks, %d failures\n", checks, failures);
     return failures;
