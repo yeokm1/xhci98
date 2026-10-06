@@ -523,6 +523,9 @@ ULONG HcdSsHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
                        (hub->Index << 24) | (n << 16) | status);
     }
     if (sd.Repower) {
+        /* As a USB 2.0 hub port's repower (hcd_hub.c): the absence until
+         * the device is seen again is not an unplug (35-T.5). */
+        HcdTolLocRecovery(hc, q);
         (VOID)hcdSsHubFeature(hc, hub, n, 1, XHCI_HUB_FEAT_PORT_POWER);
     }
     if (sd.ConfigError) {

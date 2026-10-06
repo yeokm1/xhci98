@@ -818,6 +818,10 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
                            (hub->Index << 24) | (n << 16) | status);
         }
         if (d->Repower) {
+            /* The device's absence until it is seen again is the
+             * over-current's and this repower's, not an unplug: it must
+             * not re-arm a spent budget or release a hold (35-T.5). */
+            HcdTolLocRecovery(hc, q);
             (VOID)hcdHubFeature(hc, hub, n, 1, XHCI_HUB_FEAT_PORT_POWER);
         }
     }

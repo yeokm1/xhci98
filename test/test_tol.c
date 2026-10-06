@@ -352,6 +352,27 @@ static void test_loc(void)
     XhciTolLocInit(&l);
     CHECK_EQ(l.Hold, XHCI_TOL_HOLD_NONE, "a start releases");
 
+    /* An external hub's port repowered after an over-current (hcd_hub.c,
+     * hcd_sshub.c), its budget spent: the repower is marked, so a device
+     * that stays away past the stable-disconnect interval before it comes
+     * back neither re-arms nor releases the powered hold. */
+    for (i = 0; i <= XHCI_TOL_REENUMS; i++) {
+        (VOID)XhciTolLocCharge(&l, XHCI_TOL_CHARGE_REENUM, i);
+    }
+    CHECK_EQ(l.Hold, XHCI_TOL_HOLD_REENUMS, "spent, held powered");
+    CHECK_EQ(XhciTolLocObserve(&l, 0, 0, 0, 10), 0, "power lost");
+    XhciTolLocRecovery(&l);
+    CHECK_EQ(XhciTolLocObserve(&l, 0, 1, 0, 20), 0, "repowered, away");
+    CHECK_EQ(XhciTolLocDiscDue(&l, 20 + XHCI_TOL_STABLE_DISC_TICKS), 0,
+             "no look owed");
+    CHECK_EQ(XhciTolLocObserve(&l, 0, 1, 0, 20 + XHCI_TOL_STABLE_DISC_TICKS),
+             0, "away past the interval");
+    CHECK_EQ(XhciTolLocObserve(&l, 1, 1, 0, 30 + XHCI_TOL_STABLE_DISC_TICKS),
+             0, "back: no re-arm");
+    CHECK_EQ(l.Hold, XHCI_TOL_HOLD_REENUMS, "still held");
+    CHECK_EQ(l.Reenums, XHCI_TOL_REENUMS, "still spent");
+    XhciTolLocInit(&l);
+
     /* Stable progress. */
     XhciTolLocInit(&l);
     CHECK_EQ(XhciTolLocProgress(&l, 99999), 0, "nothing charged");
