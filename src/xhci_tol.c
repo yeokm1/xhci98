@@ -695,6 +695,16 @@ ULONG XhciTolSaveRefused(ULONG failed)
     return failed ? 1UL : 0UL;
 }
 
+ULONG XhciTolResumeRefused(ULONG terminal)
+{
+    return (terminal == XHCI_TOL_TERMINAL_FAILURES ||
+            terminal == XHCI_TOL_TERMINAL_WINDOW ||
+            terminal == XHCI_TOL_TERMINAL_UNREADABLE ||
+            terminal == XHCI_TOL_TERMINAL_DMA_UNPROVEN)
+               ? 1UL
+               : 0UL;
+}
+
 ULONG XhciTolHaltProven(ULONG usbsts)
 {
     return (usbsts != 0xFFFFFFFFUL && (usbsts & XHCI_USBSTS_HCH) != 0)

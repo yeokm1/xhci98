@@ -1220,6 +1220,54 @@ static void test_terminal_release(void)
     CHECK_EQ(XhciTolSaveRefused(0), 0, "running: saved as before");
 }
 
+/* Review round 1, finding 2: at tolerance 0, the run of failures spent and
+ * its devices released, a suspend and resume must not clear the latch while
+ * the run and the release stay spent - a later fault would then get
+ * neither a recovery nor a release. The resume is refused instead. */
+static void test_terminal_resume(void)
+{
+    XHCI_TOL_WINDOW w;
+    ULONG failed;
+    ULONG failures;
+    ULONG released;
+    ULONG t;
+
+    XhciTolWindowInit(&w);
+    failed = 1;
+    failures = 0;
+    released = 0;
+    while (failures < 3) {
+        /* Each attempt admitted at 0, each failing before its own
+         * invalidation. */
+        CHECK_EQ(XhciTolWindowAdmit(&w, 0, 100 + failures), 1, "admitted");
+        CHECK_EQ(XhciTolResumeRefused(XhciTolTerminal(failed, 0, w.Refused,
+                                                      failures, 3)),
+                 0, "an owed recovery: a resume may reinitialize");
+        failures++;
+    }
+    t = XhciTolTerminal(failed, 0, w.Refused, failures, 3);
+    CHECK_EQ(t, XHCI_TOL_TERMINAL_FAILURES, "spent");
+    CHECK_EQ(XhciTolTerminalRelease(t, 0, released, 1), 1, "released");
+    released = 1;
+    CHECK_EQ(XhciTolSaveRefused(failed), 1, "the suspend saves nothing");
+    CHECK_EQ(XhciTolResumeRefused(t), 1, "the resume is refused");
+    /* So the latch stands: the terminal is unchanged across the resume, and
+     * the release is not owed again (nothing re-enumerates on a failed
+     * controller). */
+    t = XhciTolTerminal(failed, 0, w.Refused, failures, 3);
+    CHECK_EQ(t, XHCI_TOL_TERMINAL_FAILURES, "still terminal after resume");
+    CHECK_EQ(XhciTolTerminalRelease(t, 0, released, 0), 0, "nothing held");
+
+    /* The other terminals, and the running and owed states. */
+    CHECK_EQ(XhciTolResumeRefused(XHCI_TOL_TERMINAL_WINDOW), 1, "window");
+    CHECK_EQ(XhciTolResumeRefused(XHCI_TOL_TERMINAL_UNREADABLE), 1,
+             "contained");
+    CHECK_EQ(XhciTolResumeRefused(XHCI_TOL_TERMINAL_DMA_UNPROVEN), 1,
+             "contained, unproven");
+    CHECK_EQ(XhciTolResumeRefused(XHCI_TOL_TERMINAL_OWED), 0, "owed");
+    CHECK_EQ(XhciTolResumeRefused(XHCI_TOL_TERMINAL_NONE), 0, "running");
+}
+
 /* Record 17 section 4.11: a start latches the three values and sets every
  * piece of tolerance state explicitly, whatever the last lifetime left. */
 static void test_start(void)
@@ -1287,6 +1335,7 @@ int main(void)
     test_dead_recover();
     test_terminal();
     test_terminal_release();
+    test_terminal_resume();
     test_start();
 
     printf("\n%d checks, %d failures\n", checks, failures);

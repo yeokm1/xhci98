@@ -557,6 +557,12 @@ ULONG XhciTolHaltProven(ULONG usbsts);
  * retires them. At every XhciTolerance value. */
 ULONG XhciTolSaveRefused(ULONG failed);
 
+/* 1 when a resume must not reinitialize the controller: terminal
+ * (XhciTolTerminal's value) is a containment, the window's refusal or the
+ * spent run of failures - each holds until a stop and start. A failed
+ * controller with a recovery still owed resumes as before. */
+ULONG XhciTolResumeRefused(ULONG terminal);
+
 /* The all-ones episode (record 17 section 4.6). */
 typedef struct _XHCI_TOL_DEAD {
     ULONG Armed;

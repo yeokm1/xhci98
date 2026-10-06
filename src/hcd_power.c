@@ -60,21 +60,28 @@
  * XhciTolStart): a fourth recovery was not begun, and a resume would be
  * one. At XhciTolerance 0 only the first is set, and only by an
  * invalidation no proof of a stopped controller followed (hcd_enum.c,
- * HcdEnumService), whose pinned buffer it keeps. The power gate held.
- * IRQL: PASSIVE_LEVEL.
+ * HcdEnumService), whose pinned buffer it keeps. The run of recoveries
+ * failed in a row, at either value, is the same terminal: its devices were
+ * released without a Disable Slot (hcd_ctl.c, hcdTerminalRelease, once per
+ * lifetime), and a resume that cleared the latch while the run stays spent
+ * would leave a later fault with neither a recovery nor a release (the
+ * pure XhciTolResumeRefused). The power gate held. IRQL: PASSIVE_LEVEL.
  */
 static ULONG hcdResumeContained(PHCD_CONTROLLER hc)
 {
-    if (hc->Hc.Tol.Unreadable) {
-        XhciLogNote(&hc->Hc, "resume.contained", 1);
-        return 1;
+    PXHCI_EXTENSION ext;
+    ULONG terminal;
+
+    ext = &hc->Hc;
+    terminal = XhciTolTerminal(ext->ControllerFailed, ext->Tol.Unreadable,
+                               ext->Tol.Window.Refused,
+                               ext->RecoveryFailuresConsecutive,
+                               XHCI_RECOVERY_MAX_ATTEMPTS);
+    if (!XhciTolResumeRefused(terminal)) {
+        return 0;
     }
-    if (hc->Hc.Tol.Window.Refused != 0) {
-        XhciLogNote(&hc->Hc, "resume.window.refused",
-                    hc->Hc.Tol.Window.Refused);
-        return 1;
-    }
-    return 0;
+    XhciLogNote(ext, "resume.terminal", terminal);
+    return 1;
 }
 
 /* The resume half of a D0, then the IRP's completion. IRQL: PASSIVE_LEVEL. */

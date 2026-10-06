@@ -850,6 +850,17 @@ latched-failed controller (`XhciTolSaveRefused`, in `xhciSaveState` and
 `xhciRestoreState`), and the release discards any saved image; only the
 HCRST of a recovery or a start, which clears the latch, retires the slots.
 
+The release is once per lifetime, so the terminal it answers must last the
+lifetime too. A resume refused the containments and the window already;
+it now refuses the spent run of failures as well (`XhciTolResumeRefused`
+in `hcdResumeContained`), at either `XhciTolerance` value. Before, a
+resume through reinitialization cleared `ControllerFailed` while
+`RecoveryFailuresConsecutive` stayed spent and the release stayed taken,
+so after re-enumeration a later fault got neither a recovery nor a
+release, and the hang came back. This is a change from `2.1.1.0` at 0,
+where such a resume brought the controller back: now only a stop and a
+start do, as section 4.6 says of the window.
+
 ### 4.7 The interval cap (35-T.7, gated) and the Average TRB Length switch
 
 **The cap.** An interrupt endpoint whose Interval exceeds 8 (32 ms) is
@@ -1097,7 +1108,7 @@ way `Unreadable` and `Contained` are set at 0. Neither changes what
 adds a third, the release of a terminal no recovery acts on (section 4.6's
 revision-11 note): at 0 it can meet only the run of failures, whose
 transfers `2.1.1.0` completed through a failed attempt's invalidation
-whenever one reached it.
+whenever one reached it, and which a resume no longer clears.
 
 ## 5. Injection
 
