@@ -335,41 +335,62 @@ code:
   Error, and the Slot ID and Endpoint ID fields", posted to the Primary Event
   Ring. So it arrives on the transfer path, pointerless, like Ring Underrun
   and Ring Overrun.
-- **This driver refuses code 12 rather than decoding it, and what that costs is
-  immediate recovery rather than recovery.** `XhciXferCodeInfo` answers
-  `XHCI_XFER_BAD_PARAM` for it and `xhciCompletionCodeValid` leaves it off both
-  endpoint lists, so it is counted as a bad code and no completion is
-  attributed to it. That is the safe direction and is not the deviation: a
-  zero TRB pointer offered to the per-TD matcher would resolve to whatever sits
-  at the ring's base. The deviation is that nothing acts on the event.
-
-  The TD stays queued until usbport times it out, and recovery arrives on the
-  cancellation path that follows: the Stop Endpoint that cancellation issues
-  reads the Endpoint Context back, and a `Disabled` reading is the condition
-  code 12 reports, so `xhciEpStopped`'s Disabled branch raises
-  `XHCI_EPQ_NO_CONTEXT` and calls `xhciEpOweContextRestore`, which schedules
-  the Add-without-Drop Configure Endpoint that puts the context back. The
-  implemented behaviour is delayed recovery through a path that already exists
-  and has its own vector, not an endpoint stranded for good.
-
-  What justifies leaving the immediate route unbuilt: the event is a `should`
-  rather than a `shall`, and the same page says "The xHC may ignore doorbell
-  references to Device Slots in the Disabled state or endpoints in the
-  Disabled state", so its absence proves nothing either; and every lower rung
-  is illegal on a Disabled endpoint (a Reset Endpoint "may only be issued to
-  endpoints in the Halted state", 4.6.8 p.118), so an immediate answer would
-  have to be the same Configure Endpoint the delayed path already issues,
-  bought at the cost of a second route to it.
-
-  The measurement that reopens it is an `xfer.error` log record carrying
-  completion code 12: `XhciSlotTransferEvent` logs every non-ordinary code with
-  its Slot ID and DCI, in release builds as well as debug. `XHCISNAP` has read
-  both the note ring and the counters off Windows 98 bare metal since
-  `0.0.0.6`, from a shipping `release` build and a shipping `debug` build
-  alike, measured on the E460. What Windows 98 metal still has no channel for
-  is a live trace; the snapshot is a read on demand rather than a stop-time
-  flush, so the record is taken after the fact rather than caught as it
-  happens. No run of this project has produced one.
+- **This driver refuses code 12 rather than decoding it, and with it every
+  code nothing claims.** `XhciXferCodeInfo` answers `XHCI_XFER_BAD_PARAM` for
+  Endpoint Not Enabled, for Ring Underrun, Ring Overrun and Missed Service
+  outside the isochronous path, Bandwidth Overrun, Event Ring Full in a
+  Transfer Event and every unassigned code, and `xhciCompletionCodeValid`
+  leaves them off both endpoint lists, so each is counted in `BadCodes` and
+  no completion is attributed to it. That is the safe direction and it
+  stands: most of these events carry no TRB pointer, and a zero pointer
+  offered to the per-TD matcher would resolve to whatever sits at the ring's
+  base. The vendor ranges are not refused - 224 to 255 complete as Success,
+  192 to 223 as the fatal Undefined Error (the bullets above) - and the
+  isochronous path keeps its own handling of the codes it owns.
+- **A refused code cycles the device** (since `2.2.0.0`, roadmap-hcd task
+  35-T.3 and 35-T.4, design record 17 section 4.3; with `XhciTolerance` at
+  1). A Transfer Event carrying a refused code on a non-isochronous endpoint,
+  whose slot names a device, marks the device `CycleWanted` with its reason
+  and the location's connect generation, and the controller thread
+  re-enumerates it - in any state of the endpoint, since the refused code is
+  itself the evidence. A published device is cycled through `HcdEnumCycle`;
+  one not yet published, whose control transfers are the enumeration's own,
+  through the enumeration executor's `ABANDONED_FOR_CYCLE` outcome, which
+  tears the attempt's subtree down once, sets the location's machine `EMPTY`
+  and feeds a CONNECT if the location still reads connected. Either is charged
+  to the location's budget of three re-enumerations, and a mark whose device
+  has left or whose location's generation moved is dropped and counted. **No
+  TD is attributed and none is completed on the event**: the cycle's Disable
+  Slot takes back every TRB of the slot whatever the endpoint's state, and the
+  re-enumeration resynchronizes the sequence state on both sides, which no
+  in-place recovery could do soundly (record 17 section 4.3 has why). A
+  client's transfers end as on an unplug. If the thread is itself waiting on a
+  control transfer to that device, the mark ends the wait instead of letting
+  it time out into a controller reset, and the transfer's record and the
+  thread's scratch buffer are not reused until the Disable Slot has
+  completed; a failed Disable Slot sets `ScratchTainted`.
+- **So does a halt with no TD.** A Stall, or a Transaction, Babble or Split
+  Transaction error, on a non-isochronous endpoint, that the queue could not
+  match - Foreign by pointer, zero and off-ring pointers included, or
+  Unmatched - whose slot and DCI name an open pipe cycles the device the same
+  way, but only once the thread has read that endpoint's context as Halted or
+  Error: a stale event against an endpoint that is running costs one context
+  read and nothing more. A streams endpoint's Prime Pipe STALL keeps its own
+  path. Submissions to a Halted endpoint stay published and rung, and the
+  controller ignores the doorbell until a recovery, as before.
+- **The deviation this superseded.** Up to `2.1.1.0` nothing acted on a
+  refused code or a halt with no TD. The miniport's recovery for code 12 had
+  been usbport's URB timeout and the Stop Endpoint its cancellation issued,
+  whose `Disabled` reading `xhciEpStopped` answered with a context restore;
+  the HCD has no usbport and no URB timeout, so only a cancel a class driver
+  happened to send reached a Stop Endpoint, and otherwise the device stayed
+  dead until it was replugged. At `XhciTolerance` 0 that is still the
+  handling: no event marks a device and the refused code is counted only.
+  `XhciSlotTransferEvent` still logs every non-ordinary code with its Slot ID
+  and DCI, `XhciLogErrorBudget` is called from the transfer engine's error
+  path, and the snapshot carries a count of every completion code and the
+  cycles by reason (record 17 section 4.8), so a dump says which fault a
+  cycle answered.
 - **The list of fatal codes lives in `XhciXferCodeInfo` and nowhere else.**
   Every hand-written enumeration of them found downstream was short by at
   least one. Any path that has to know whether a code is fatal (the DPC's
@@ -897,7 +918,8 @@ Why there is no MSI on either target. MSI is an interrupt delivered as a memory 
   Protocol Speed IDs, and the PORTSC value indexes that table (spec 7.2.2.1.2;
   layout in `docs/usb-xhci-info/xhci-data-structures.md` section 6).
 - Read the PSI dwords during the Phase 4 port classification and decode speeds
-  against them, falling back to the defaults only when PSIC = 0. Do not hardcode
+  against them, falling back to the defaults only when PSIC = 0, or for the
+  unlisted USB 3.x IDs of the exception below. Do not hardcode
   the defaults: the fleet's Intel controllers ship a table whose entries happen
   to match, so a wrong assumption fails silently until a controller that
   reorders them appears.
