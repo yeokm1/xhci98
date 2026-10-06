@@ -12,6 +12,54 @@ every published directory carries the history up to and including itself.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
+## 2.2.0.0 - 2026-10-07
+
+SuperSpeed on Intel Sunrise Point-LP, a switchover for any Intel chipset at
+your own risk, and a driver that no longer gives up silently on a device
+when the controller misbehaves. Every system `2.1.1.0` supports is
+supported, from the same four directories. The SuperSpeed fix was read on
+the owner's ThinkPad E460 under Windows 98 SE; the rest in QEMU virtual
+machines; the release notes say what was read on which system.
+
+### What changed
+
+- Fixed: on Intel Sunrise Point-LP (`8086:9D2F`, the ThinkPad E460 and the
+  HP EliteBook 850 G5) no earlier release ever used a SuperSpeed device: a
+  USB 3 stick was not seen at all and a USB 3 hub showed only its USB 2.0
+  half. The controller reports a 5 Gbit/s link with a speed ID its own
+  speed table leaves out, and the driver now reads such an ID by the
+  standard meaning. On the E460 a UAS stick runs at SuperSpeed at a root
+  port and behind a USB 3 hub, about 242 MB/s writing and 245 MB/s reading.
+- `XhciIntelPortSwitch` `2` moves the switchable connectors to this driver
+  on any Intel xHCI controller, not only the six listed in `2.1.1.0`. It is
+  at your own risk: on a controller whose configuration registers at `D0h`
+  to `DCh` are not the switch registers, it writes registers of unknown
+  meaning. Leave it at `1` unless you know your chipset has them.
+- A device the controller faults on is no longer left dead until you
+  replug it: a USB transaction error is retried in place a few times, a
+  report the driver cannot match to a transfer re-enumerates the device, a
+  port the controller disabled or that lost its power is brought back, a
+  lost interrupt is picked up, and a controller that halted or stops
+  answering is recovered or closed off safely. Each is tried a few times at
+  most before the driver stops trying. A device the controller reports
+  incompatible is taken down and re-enumerated, a bounded number of times.
+  Three new registry values: `XhciTolerance` (`1`; `0` turns all of this
+  off), `XhciIntervalCap` (`1`, caps long mouse and keyboard polling
+  intervals on AMD controllers) and `XhciAvgTrbEsit` (`0`). Read in virtual
+  machines with the faults made on purpose; no real controller has raised
+  one under this driver yet.
+- `XHCISNAP`'s report now says why a device was not enumerated - each root
+  port's speed, rate, slot and failure - and counts every fault above, so a
+  report from a machine where something stopped working names its cause.
+- Updating from `2.1.1.0`: the same steps as from `2.0.0.0` (the release
+  notes, "Updating from 2.y.y.y"); the registry values already there are
+  kept and the three new ones added.
+- Known limitations: those of `2.1.1.0`, plus two: a device the
+  controller keeps faulting on is removed after three tries and its port
+  held until it is unplugged or the controller restarts, and disabling a
+  controller that stopped answering can hang, needing a restart. The
+  release notes have the full list.
+
 ## 2.1.1.0 - 2026-10-06
 
 An interim update: the install now writes every registry value the driver
