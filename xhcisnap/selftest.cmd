@@ -194,6 +194,13 @@ for %%S in ("XhciTolerance    1 (on)" "XhciIntervalCap  1 (AMD controllers only)
         set FAILED=1
     )
 )
+for %%S in ("2 of 3 begun inside ten minutes; 0 refused" "begun 512, 176 ticks ago" "1 older stamp(s) kept, past the window and not counted") do (
+    findstr /C:%%S "%BASE%.tol.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the expired window decode does not say %%S
+        set FAILED=1
+    )
+)
 findstr /C:"QueueHalts" "%BASE%.tol.log" > nul
 if not errorlevel 1 (
     echo FAIL: the tolerance decode printed a zero counter

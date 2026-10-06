@@ -185,6 +185,9 @@ What the report carries:
 - **The recovery window**: how many of the three recoveries it allows were
   begun inside it, how long ago each began in tolerance-clock ticks (100 ms
   nominal, credited at no more than 45 ms each), and how many it refused.
+  The driver drops an old stamp only when it next admits a recovery, so the
+  tool judges each stamp against the dump's own clock: one past the window
+  is reported as kept but not counted.
 - **The containment** and its branch: released (Bus Master Enable read back
   clear, the devices dropped) or pinned (no proof DMA stopped, the common
   buffer and transfers kept), and the all-ones episodes begun.

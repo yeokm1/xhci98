@@ -170,6 +170,10 @@ static void test_tol_words(void)
              "Cycles at word 17");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_TOL_STATS, Contained), 33 * 4,
              "Contained at word 33");
+    /* XHCISNAP judges the window's stamps itself (SNAP_TOL_WINDOW_TICKS),
+     * since the driver prunes them only at the next admission. */
+    CHECK_EQ(XHCI_TOL_RECOVERY_WINDOW_TICKS, 13335,
+             "the recovery window XHCISNAP restates");
     CHECK_EQ(loc, 32, "a location is eight words");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_TOL_ROOT_LOCS), 255,
              "every root port");

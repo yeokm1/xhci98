@@ -373,6 +373,8 @@ static const unsigned long snap_guid[4] = {
 #define SNAP_TOL_CODES              256UL   /* the histogram, last          */
 #define SNAP_TOL_LOC_MIN_BYTES      28UL    /* six words, then the bytes    */
 #define SNAP_TOL_WINDOW_SLOTS       3UL
+#define SNAP_TOL_WINDOW_TICKS       13335UL /* XHCI_TOL_RECOVERY_WINDOW_TICKS,
+                                             * held to it by test_snap     */
 #define SNAP_TOL_MAX_LOCS           1024UL  /* sanity bound on either count */
 
 /*
@@ -2100,6 +2102,7 @@ static void print_tol(const unsigned char *hcd, unsigned long hcdBytes,
     unsigned long codesAt;
     unsigned long count;
     unsigned long clock;
+    unsigned long inside;
     unsigned long shown;
     unsigned long i;
     unsigned long v;
@@ -2177,14 +2180,34 @@ static void print_tol(const unsigned char *hcd, unsigned long hcdBytes,
     if (count > SNAP_TOL_WINDOW_SLOTS) {
         count = SNAP_TOL_WINDOW_SLOTS;
     }
-    comp("  recovery window  %lu of 3 begun inside ten minutes; %lu refused\n",
-         count, get32(t, windowAt + 16));
+    /* The driver prunes its stamps only when a recovery is next admitted,
+     * so a stamp older than the window can still be held: judged here
+     * against the captured clock as XhciTolElapsed judges it, an unsigned
+     * difference that survives the clock's wrap. */
+    inside = 0;
     for (i = 0; i < count; i++) {
-        comp("%s%lu", i == 0 ? "                   begun " : ", ",
-             clock - get32(t, windowAt + 4 + i * 4));
+        if (clock - get32(t, windowAt + 4 + i * 4) <
+            SNAP_TOL_WINDOW_TICKS) {
+            inside++;
+        }
     }
-    if (count != 0) {
+    comp("  recovery window  %lu of 3 begun inside ten minutes; %lu refused\n",
+         inside, get32(t, windowAt + 16));
+    shown = 0;
+    for (i = 0; i < count; i++) {
+        v = clock - get32(t, windowAt + 4 + i * 4);
+        if (v >= SNAP_TOL_WINDOW_TICKS) {
+            continue;
+        }
+        comp("%s%lu", shown == 0 ? "                   begun " : ", ", v);
+        shown++;
+    }
+    if (shown != 0) {
         comp(" ticks ago\n");
+    }
+    if (count > inside) {
+        comp("                   %lu older stamp(s) kept, past the window "
+             "and not counted\n", count - inside);
     }
     v = get32(t, 33 * 4);
     comp("  containment      %s\n",
@@ -2397,6 +2420,18 @@ static int selftest_tol(void)
     l[24] = 1;
     companion = NULL;
     print_tol(hcd, sizeof(hcd), ext, sizeof(ext));
+
+    /* The window long after: the driver still holds three stamps, since it
+     * prunes only at the next admission, but one is past the window and is
+     * not counted; the other two straddle the clock's wrap. */
+    put32(hcd, 76, 0);
+    put32(t, windowAt + 4, 0xFFFF0000UL);
+    put32(t, windowAt + 8, 0xFFFFFF00UL);
+    put32(t, windowAt + 12, 0x50);
+    put32(t, windowAt + 16, 0);
+    put32(t, clockAt, 0x100);
+    print_tol(hcd, sizeof(hcd), ext, sizeof(ext));
+    put32(hcd, 76, 3);
 
     /* A 35.3 driver: an eight-word header, no tolerance words. */
     put32(hcd, 4, SNAP_HCD_HEAD_WORDS * 4);
