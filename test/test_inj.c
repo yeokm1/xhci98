@@ -210,14 +210,15 @@ static void test_oc(void)
     CHECK_EQ(XhciInjPortscWrite(&r, 0, OCC), OCC, "port 0 untouched");
 }
 
-/* Each thread pass reads USBSTS in the health poll (every XhciTolerance
- * value, spend 1) and then, at XhciTolerance 1 only, in the containment
- * step (spend 0). An argument of N is N passes to whichever readers run. */
-static void dead_pass(PXHCI_INJ_REGS r, ULONG tolerance, ULONG *health,
-                      ULONG *contain)
+/* One thread pass: the snapshot taken first (HcdInjPoll), then the health
+ * poll's read when it runs (not on a failed controller) and the containment
+ * step's at XhciTolerance 1. */
+static void dead_pass(PXHCI_INJ_REGS r, ULONG tolerance, ULONG healthRuns,
+                      ULONG *health, ULONG *contain)
 {
-    *health = XhciInjUsbsts(r, 0x18UL, 1);
-    *contain = tolerance ? XhciInjUsbsts(r, 0x18UL, 0) : 0x18UL;
+    (VOID)XhciInjDeadPass(r);
+    *health = healthRuns ? XhciInjUsbsts(r, 0x18UL) : 0x18UL;
+    *contain = tolerance ? XhciInjUsbsts(r, 0x18UL) : 0x18UL;
 }
 
 static void test_dead(void)
@@ -230,35 +231,55 @@ static void test_dead(void)
     char what[80];
 
     XhciInjRegsClear(&r);
-    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL, 1), 0x18UL, "health: not armed");
-    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL, 0), 0x18UL, "contain: not armed");
+    CHECK_EQ(XhciInjDeadPass(&r), 0, "no pass active unarmed");
+    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL), 0x18UL, "not armed");
 
+    /* N passes to both readers, at tolerance 0 and 1. */
     for (tol = 0; tol <= 1; tol++) {
         XhciInjArmDead(&r, 3, 0);
+        CHECK_EQ(XhciInjUsbsts(&r, 0x18UL), 0x18UL, "armed, not yet a pass");
         for (pass = 1; pass <= 4; pass++) {
-            dead_pass(&r, tol, &health, &contain);
+            dead_pass(&r, tol, 1, &health, &contain);
             sprintf(what, "tolerance %lu pass %lu, health poll", tol, pass);
             CHECK_EQ(health, pass <= 3 ? 0xFFFFFFFFUL : 0x18UL, what);
             sprintf(what, "tolerance %lu pass %lu, containment", tol, pass);
             CHECK_EQ(contain, (tol && pass <= 3) ? 0xFFFFFFFFUL : 0x18UL, what);
         }
-        CHECK_EQ(r.DeadLeft, 0, "spent by the health poll alone");
+        CHECK_EQ(r.DeadLeft, 0, "spent");
     }
-    /* The containment read alone never spends it. */
-    XhciInjArmDead(&r, 1, 0);
-    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL, 0), 0xFFFFFFFFUL, "contain 1");
-    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL, 0), 0xFFFFFFFFUL, "contain 2");
-    CHECK_EQ(r.DeadLeft, 1, "unspent");
-    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL, 1), 0xFFFFFFFFUL, "health spends it");
-    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL, 0), 0xFFFFFFFFUL, "same pass");
-    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL, 1), 0x18UL, "next pass, health");
-    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL, 0), 0x18UL, "next pass, contain");
-    CHECK_EQ(XhciInjPciCommand(&r, 0x0002UL), 0x0002UL, "proof real");
 
+    /* Skipped health reads (a failed controller's poll reads nothing): the
+     * pass still spends, and the containment step sees the fault end. */
+    XhciInjArmDead(&r, 2, 1);
+    for (pass = 1; pass <= 5; pass++) {
+        dead_pass(&r, 1, 0, &health, &contain);
+        sprintf(what, "no health read, pass %lu, containment", pass);
+        CHECK_EQ(contain, pass <= 2 ? 0xFFFFFFFFUL : 0x18UL, what);
+    }
+    CHECK_EQ(r.DeadLeft, 0, "spent with no health read at all");
+    /* Reads alone never spend it. */
+    XhciInjArmDead(&r, 1, 0);
+    (VOID)XhciInjDeadPass(&r);
+    for (pass = 0; pass < 10; pass++) {
+        CHECK_EQ(XhciInjUsbsts(&r, 0x18UL), 0xFFFFFFFFUL, "reads in one pass");
+    }
+    CHECK_EQ(XhciInjDeadPass(&r), 0, "the next pass ends it");
+    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL), 0x18UL, "real again");
+
+    /* The controller fails during an active finite injection: the health
+     * reads stop from pass 2, and the fault still ends on time. */
+    XhciInjArmDead(&r, 4, 1);
+    for (pass = 1; pass <= 6; pass++) {
+        dead_pass(&r, 1, pass < 2, &health, &contain);
+        sprintf(what, "failed at pass 2, pass %lu, containment", pass);
+        CHECK_EQ(contain, pass <= 4 ? 0xFFFFFFFFUL : 0x18UL, what);
+    }
+
+    /* Persistent: every pass, never spent, until CLEAR. */
     XhciInjArmDead(&r, 0, 1);
     CHECK_EQ(r.DeadLeft, XHCI_INJ_DEAD_FOREVER, "0 is until CLEAR");
     for (tol = 0; tol <= 1; tol++) {
-        dead_pass(&r, tol, &health, &contain);
+        dead_pass(&r, tol, 1, &health, &contain);
         CHECK_EQ(health, 0xFFFFFFFFUL, "persistent, health poll");
         CHECK_EQ(contain, tol ? 0xFFFFFFFFUL : 0x18UL,
                  "persistent, containment where it runs");
@@ -270,11 +291,28 @@ static void test_dead(void)
              "a function that does not answer is left so");
     CHECK_EQ(XHCI_INJ_PCI_BME, 0x0004UL, "PCI Command bit 2");
     XhciInjRegsClear(&r);
-    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL, 1), 0x18UL, "CLEAR, health");
-    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL, 0), 0x18UL, "CLEAR, containment");
+    CHECK_EQ(XhciInjUsbsts(&r, 0x18UL), 0x18UL, "CLEAR ends it at once");
+    CHECK_EQ(XhciInjDeadPass(&r), 0, "and stays ended");
     CHECK_EQ(XhciInjPciCommand(&r, 0x0002UL), 0x0002UL, "CLEAR, proof real");
 }
 
+/* Which commands a failed controller refuses. */
+static void test_needs_live(void)
+{
+    ULONG f;
+    ULONG want;
+    char what[64];
+
+    for (f = 0; f < 256; f++) {
+        want = (f == XHCI_INJ_LOST_IRQ || f == XHCI_INJ_PED ||
+                f == XHCI_INJ_OC || f == XHCI_INJ_HCH ||
+                f == XHCI_INJ_DEAD || f == XHCI_INJ_DEAD_NOPROOF) ? 1UL : 0UL;
+        sprintf(what, "fault %lu needs a live controller", f);
+        CHECK_EQ(XhciInjNeedsLive(f), want, what);
+    }
+    CHECK_EQ(XhciInjNeedsLive(XHCI_INJ_CLEAR), 0, "CLEAR always taken");
+    CHECK_EQ(XhciInjNeedsLive(XHCI_INJ_OC_RELEASE), 0, "the release too");
+}
 /* The lost-interrupt window: the ISR counts `taken` only while armed. */
 static void test_irq_window(void)
 {
@@ -326,6 +364,7 @@ int main(void)
     test_oc();
     test_dead();
     test_irq_window();
+    test_needs_live();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

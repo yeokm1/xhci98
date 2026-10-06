@@ -6322,7 +6322,7 @@ soft retry's Transaction Error, a failing Reset Endpoint, a refused code,
 the three halts with no TD, Endpoint Not Enabled, EP0 during the thread's
 own transfer and before the PDO, and the soft retry's two races); until
 they are built the layer refuses them. A command whose target is missing
-(no fitting port, a controller that is not running) is refused too, and its
+(no fitting port, a controller that is not running, or for any fault but `04` and `FF` a controller latched failed) is refused too, and its
 sequence spent. Every command is recorded in the log ring - `qemu.inj.fire`,
 `qemu.inj.port`, `qemu.inj.refused`, `qemu.inj.unbuilt`, `qemu.inj.unknown`,
 `qemu.inj.irq.lost` - and on the port-`0xE9` trace, so `XHCISNAP` at

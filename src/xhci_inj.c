@@ -50,7 +50,7 @@ VOID XhciInjRegsClear(PXHCI_INJ_REGS r)
     r->OccHeld = 0;
     r->OcPpWrites = 0;
     r->DeadLeft = 0;
-    r->DeadLast = 0;
+    r->DeadActive = 0;
     r->NoProof = 0;
 }
 
@@ -95,7 +95,7 @@ VOID XhciInjReleaseOc(PXHCI_INJ_REGS r)
 VOID XhciInjArmDead(PXHCI_INJ_REGS r, ULONG reads, ULONG noProof)
 {
     r->DeadLeft = (reads == 0) ? XHCI_INJ_DEAD_FOREVER : reads;
-    r->DeadLast = 0;
+    r->DeadActive = 0;
     r->NoProof = noProof ? 1UL : 0UL;
 }
 
@@ -154,22 +154,22 @@ ULONG XhciInjPortscWrite(PXHCI_INJ_REGS r, ULONG port, ULONG value)
     return value;
 }
 
-ULONG XhciInjUsbsts(PXHCI_INJ_REGS r, ULONG raw, ULONG spend)
+ULONG XhciInjDeadPass(PXHCI_INJ_REGS r)
 {
-    if (!spend) {
-        /* The containment step follows the health poll in the same pass
-         * and answers as it did, the pass that spent the last included. */
-        return (r->DeadLeft != 0 || r->DeadLast) ? 0xFFFFFFFFUL : raw;
-    }
     if (r->DeadLeft == 0) {
-        r->DeadLast = 0;
-        return raw;
+        r->DeadActive = 0;
+        return 0;
     }
     if (r->DeadLeft != XHCI_INJ_DEAD_FOREVER) {
         r->DeadLeft--;
     }
-    r->DeadLast = 1;
-    return 0xFFFFFFFFUL;
+    r->DeadActive = 1;
+    return 1;
+}
+
+ULONG XhciInjUsbsts(const XHCI_INJ_REGS *r, ULONG raw)
+{
+    return r->DeadActive ? 0xFFFFFFFFUL : raw;
 }
 
 ULONG XhciInjIrqDrop(ULONG armed, ULONG forever, ULONG taken, ULONG budget)
@@ -195,6 +195,12 @@ ULONG XhciInjPciCommand(const XHCI_INJ_REGS *r, ULONG command)
         return command | XHCI_INJ_PCI_BME;
     }
     return command;
+}
+
+ULONG XhciInjNeedsLive(ULONG fault)
+{
+    return (fault >= XHCI_INJ_LOST_IRQ && fault <= XHCI_INJ_DEAD_NOPROOF &&
+            fault != XHCI_INJ_OC_RELEASE) ? 1UL : 0UL;
 }
 
 ULONG XhciInjLostCount(ULONG arg)

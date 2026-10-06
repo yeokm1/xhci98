@@ -111,22 +111,22 @@ ULONG HcdInjPortscWrite(PXHCI_EXTENSION ext, ULONG port, ULONG value)
 }
 
 /* The containment step's USBSTS read (hcdContain, under the controller
- * lock; XhciTolerance 1 only). It does not spend the fault: the health
- * poll's read, earlier in the same pass, does. IRQL: DISPATCH_LEVEL. */
+ * lock; XhciTolerance 1 only), answered from the pass's snapshot
+ * (HcdInjPoll). IRQL: DISPATCH_LEVEL. */
 ULONG HcdInjUsbsts(PHCD_CONTROLLER hc, ULONG usbsts)
 {
     KIRQL oldIrql;
     ULONG answer;
 
     KeAcquireSpinLock(&hc->InjLock, &oldIrql);
-    answer = XhciInjUsbsts(&hc->InjRegs, usbsts, 0);
+    answer = XhciInjUsbsts(&hc->InjRegs, usbsts);
     KeReleaseSpinLock(&hc->InjLock, oldIrql);
     return answer;
 }
 
 /* The health poll's USBSTS read (XhciControllerHealthPoll, under the
  * controller lock), which 2.1.1.0's handling and XhciTolerance 0 rest on:
- * answered at every tolerance value, one pass of the fault spent per read.
+ * answered at every tolerance value from the pass's snapshot.
  * IRQL: DISPATCH_LEVEL. */
 ULONG HcdInjHealthUsbsts(PXHCI_EXTENSION ext, ULONG usbsts)
 {
@@ -136,7 +136,7 @@ ULONG HcdInjHealthUsbsts(PXHCI_EXTENSION ext, ULONG usbsts)
 
     hc = HcdControllerFromExt(ext);
     KeAcquireSpinLock(&hc->InjLock, &oldIrql);
-    answer = XhciInjUsbsts(&hc->InjRegs, usbsts, 1);
+    answer = XhciInjUsbsts(&hc->InjRegs, usbsts);
     KeReleaseSpinLock(&hc->InjLock, oldIrql);
     return answer;
 }
@@ -323,12 +323,27 @@ static VOID hcdInjFire(PHCD_CONTROLLER hc, ULONG value)
     ULONG arg;
     ULONG count;
     ULONG done;
+    ULONG failed;
 
     ext = &hc->Hc;
     fault = XHCI_INJ_GET_FAULT(value);
     arg = XHCI_INJ_GET_ARG(value);
     done = 1;
+    /* A fault aimed at a failed controller is refused: nothing would
+     * meet it, and an all-ones answer would stand until CLEAR. CLEAR and
+     * OC_RELEASE end faults and are always taken. */
+    if (XhciInjNeedsLive(fault)) {
+        XhciControllerLockAcquire(ext, &oldIrql);
+        failed = ext->ControllerFailed ? 1UL : 0UL;
+        XhciControllerLockRelease(ext, oldIrql);
+        if (failed) {
+            fault = XHCI_INJ_NONE;
+            done = 0;
+        }
+    }
     switch (fault) {
+    case XHCI_INJ_NONE:
+        break;
     case XHCI_INJ_CLEAR:
         hcdInjClear(hc);
         break;
@@ -380,8 +395,16 @@ VOID HcdInjPoll(PHCD_CONTROLLER hc)
     ULONG value;
     ULONG found;
     LONG dropped;
+    KIRQL oldIrql;
 
     ext = &hc->Hc;
+    /* The all-ones snapshot for this pass, before the health poll and the
+     * containment step read it: spent here whether or not either reads,
+     * so a finite fault ends on a failed controller too. */
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    (VOID)XhciInjDeadPass(&hc->InjRegs);
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+
     dropped = hc->InjIrqDropped;
     if (dropped != hc->InjIrqNoted) {
         hc->InjIrqNoted = dropped;

@@ -51,6 +51,7 @@
 
 /* The faults built (record 17 section 5's table, the rows whose driver
  * behaviour is in the tree). */
+#define XHCI_INJ_NONE            0UL  /* no fault (a refused command)     */
 #define XHCI_INJ_LOST_IRQ        1UL  /* arg interrupts lost; 0 one, 255 all */
 #define XHCI_INJ_PED             2UL  /* real PED write, PEC answered        */
 #define XHCI_INJ_OC              3UL  /* PP clear, OCA and OCC answered      */
@@ -112,7 +113,7 @@ typedef struct _XHCI_INJ_REGS {
     ULONG OccHeld;
     ULONG OcPpWrites;
     ULONG DeadLeft;
-    ULONG DeadLast;                 /* the health poll's last answer */
+    ULONG DeadActive;               /* this pass answers all-ones        */
     ULONG NoProof;
 } XHCI_INJ_REGS, *PXHCI_INJ_REGS;
 
@@ -148,13 +149,17 @@ ULONG XhciInjPortscRead(const XHCI_INJ_REGS *r, ULONG port, ULONG raw);
  * and the value the hardware is given returned. */
 ULONG XhciInjPortscWrite(PXHCI_INJ_REGS r, ULONG port, ULONG value);
 
-/* A USBSTS read the fault is answered on: all-ones while armed. The health
- * poll's read, taken at every XhciTolerance value and once per thread pass,
- * spends one of DeadLeft (`spend` 1); the containment step's read, gated on
- * XhciTolerance 1 and after the poll in the same pass, does not (0) and
- * answers as the poll last did. So an argument of N is N passes of
- * all-ones to both readers. */
-ULONG XhciInjUsbsts(PXHCI_INJ_REGS r, ULONG raw, ULONG spend);
+/*
+ * The all-ones fault is a snapshot taken once per thread pass, before any
+ * reader: XhciInjDeadPass sets DeadActive for the pass and spends one of
+ * DeadLeft, whether or not any read follows - a failed controller's health
+ * poll reads nothing, and a finite fault still runs out. Every USBSTS read
+ * in the pass (the health poll's at every XhciTolerance value, the
+ * containment step's at 1) answers from it, spending nothing. So an
+ * argument of N is N passes of all-ones to whichever readers run.
+ */
+ULONG XhciInjDeadPass(PXHCI_INJ_REGS r);
+ULONG XhciInjUsbsts(const XHCI_INJ_REGS *r, ULONG raw);
 
 /*
  * The lost-interrupt window, decided without a compare-exchange (no import
@@ -169,6 +174,11 @@ ULONG XhciInjIrqSpent(ULONG armed, ULONG forever, ULONG taken, ULONG budget);
 
 /* The PCI Command register's read-back in the containment's proof. */
 ULONG XhciInjPciCommand(const XHCI_INJ_REGS *r, ULONG command);
+
+/* Whether a fault needs a controller that has not failed: every built
+ * fault but CLEAR and OC_RELEASE, which end one. A failed controller's
+ * reads are never taken, so a fault armed on it would stand until CLEAR. */
+ULONG XhciInjNeedsLive(ULONG fault);
 
 /* LOST_IRQ's argument as a count: 0 is one, 255 is "until CLEAR"
  * (returned as 0xFFFFFFFF). */
