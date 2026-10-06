@@ -16,9 +16,9 @@ the engine's terminal mutations and generation-checked (4.2), the cycle
 before a PDO exists (4.3), and containment that drains only after its proof
 (4.6). Section 10 maps every finding of the seven rounds to where it is
 answered. **Converged**: review round 8, on revision 7 (`edc7a2a`), found
-every earlier finding resolved and nothing material remaining. Section 9's
-proposed intervals, budgets and value names stand as proposed until the
-owner changes them.
+every earlier finding resolved and nothing material remaining. Section
+4.11, the off-switch `XhciTolerance`, was added after it by the owner's
+decision of the same day.
 
 ## 1. What is asked, and what is not
 
@@ -527,7 +527,7 @@ halts and soft retries; the device cycles with their reasons; a histogram
 of completion codes 0 to 255 by count; `BackstopDrains`; each location's
 budget, its charges and its hold; the controller's recovery window, the
 containment and its branch, and its terminal reason; and the values in
-effect (`XhciIntervalCap`, `XhciAvgTrbEsit`), in the snapshot `XHCISNAP`
+effect (`XhciTolerance`, `XhciIntervalCap`, `XhciAvgTrbEsit`), in the snapshot `XHCISNAP`
 copies, under the schema rule. They live in the extension, which the
 snapshot already carries, rather than in `XHCIHC_COUNTERS`.
 `XhciLogErrorBudget` is called from the transfer engine's error path, so
@@ -570,6 +570,30 @@ this design can return - is therefore not a precondition of this design's
 convergence or of its code. It is taken before 35-V, tagged and given
 `legal-provenance.md` rows, and used to set 35-V's expectations of what each
 class driver does after an exhausted soft retry and after a cycle.
+
+### 4.11 The off-switch, and what is not a setting
+
+The budgets and intervals of section 4.9 are named constants of the pure
+core, not registry values (owner, 2026-10-06): each value costs INF rows on
+every install path, a `VAL-*` gate row, footprints and legs, and a budget
+set out of range is how a loop or a premature containment would come back.
+They are retuned in a build, against a reading.
+
+One switch turns the unconditional behaviours off together, so a user hit
+by a bad interaction on some controller has `2.1.1.0`'s handling back
+without a new build: `XhciTolerance`, a REG_DWORD in the controller's
+driver key read at each start. 1, the default, applies sections 4.1 to 4.6;
+0 applies none of them - no backstop, no soft retry, no device cycle for a
+refused code or a halt with no TD, no location recovery, no HCH recovery or
+recovery window, no all-ones containment - and every one of those paths is
+today's; absent, not a DWORD or any other number reads as 1. It does not
+touch `XhciIntervalCap` or `XhciAvgTrbEsit`, which keep their own values,
+nor the counters of section 4.8, which are observation and stay on so a
+dump taken at 0 still shows what the behaviours would have answered. Both
+INFs write it at 1 on every controller install path with `0x00010003`
+under 34.1's rule, with its `VAL-*` row and the footprints; `XHCISNAP`
+names the value in effect. Each behaviour's decision in the pure core takes
+it as an input, with host vectors at 0 and 1.
 
 ## 5. Injection
 
@@ -644,7 +668,7 @@ readings and take their tags and rows when they are made.
 
 ## 7. What it changes in the documents
 
-The release notes and README (`XhciIntervalCap`, `XhciAvgTrbEsit`, the AMD
+The release notes and README (`XhciTolerance`, `XhciIntervalCap`, `XhciAvgTrbEsit`, the AMD
 report, a device that is cycled after a controller fault), record 13
 (section 6's error contract, from 4.10), record 15 (the shared peek),
 `implementation-invariants.md` ("Fatal Errors": the refused-code deviation
@@ -666,11 +690,15 @@ superseded, the all-ones containment added), `failure-diagnosis.md`,
   0, off.
 - A code nothing claims and a halt with no TD cycle the device, rather than
   recover the endpoint in place (after review round 3).
+- The budgets and intervals are constants, not registry values; one
+  switch, `XhciTolerance`, INF-written at 1, turns the unconditional
+  behaviours off together (section 4.11). The value names `XhciIntervalCap`
+  and `XhciAvgTrbEsit` are confirmed.
 
 ## 9. Open for review
 
-The proposed intervals and budgets of section 4.9; and the names
-`XhciIntervalCap` and `XhciAvgTrbEsit`.
+The values of section 4.9's constants, which stand as proposed and are
+retuned in a build against the bench's and any tester's readings.
 
 ## 10. The review findings, and where each is answered
 
