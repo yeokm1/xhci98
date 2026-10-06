@@ -1814,6 +1814,12 @@ static VOID xhciXferFinishGroup(PXHCI_TRANSFER_QUEUE queue,
         if (walk->Flags & XHCI_XFER_FLAG_SHORT_DEFERRED) {
             walk->Flags &= ~XHCI_XFER_FLAG_SHORT_DEFERRED;
             queue->MidTdShortRetires++;
+            /* 35-T.2: a retried TD that ended short and is settled by its
+             * successor's event came back through the retry too. */
+            if (walk->RetryCount != 0 &&
+                !(walk->Flags & XHCI_XFER_FLAG_FAILED)) {
+                result->RetryRecovered++;
+            }
         } else {
             walk->UsbdStatus = XHCI_USBD_STATUS_INTERNAL_HC_ERROR;
             walk->Flags |= XHCI_XFER_FLAG_FAILED;
@@ -1831,7 +1837,7 @@ static VOID xhciXferFinishGroup(PXHCI_TRANSFER_QUEUE queue,
         queue->Errors++;
     } else if (owner->RetryCount != 0) {
         /* 35-T.2: a TD that came back through the soft retry. */
-        result->RetryRecovered = 1;
+        result->RetryRecovered++;
     }
 
     /*

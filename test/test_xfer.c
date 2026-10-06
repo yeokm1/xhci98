@@ -4095,6 +4095,53 @@ static void test_retry_generation(void)
     CHECK_EQ(result.RetryRecovered, 1, "recovered");
 }
 
+/* A retried TD that resumes and ends short mid-TD defers; however it is
+ * settled - by the drain's settle, or swept by its successor's event - it is
+ * counted recovered, once. */
+static void test_retry_recovered_short(void)
+{
+    XFER_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+    PXHCI_TRANSFER first;
+    PXHCI_TRANSFER second;
+
+    /* Settled by the drain. */
+    retry_fixture_init(&fix);
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 0), XHCI_XFER_OK,
+             "submitted");
+    first = &fix.transfers[0];
+    CHECK_EQ(deliver(&fix, first->FirstIndex, XHCI_CC_USB_TRANSACTION_ERROR,
+                     64, &result), XHCI_XFER_OK, "error");
+    CHECK_EQ(result.RetryDiverted, 1, "diverted");
+    CHECK_EQ(deliver(&fix, first->FirstIndex, XHCI_CC_SHORT_PACKET, 40,
+                     &result), XHCI_XFER_OK, "the resumed TD ends short");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE, "deferred");
+    CHECK_EQ(settle(&fix, &result), XHCI_XFER_OK, "settled");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "completed");
+    CHECK_EQ((ULONG)first->UsbdStatus, WANT_USBD_SUCCESS, "a short success");
+    CHECK_EQ(result.RetryRecovered, 1, "counted recovered by the settle");
+
+    /* Swept by its successor's event. */
+    retry_fixture_init(&fix);
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 0), XHCI_XFER_OK, "first");
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 1), XHCI_XFER_OK, "second");
+    first = &fix.transfers[0];
+    second = &fix.transfers[1];
+    CHECK_EQ(deliver(&fix, first->FirstIndex, XHCI_CC_USB_TRANSACTION_ERROR,
+                     64, &result), XHCI_XFER_OK, "error");
+    CHECK_EQ(result.RetryDiverted, 1, "diverted");
+    CHECK_EQ(deliver(&fix, first->FirstIndex, XHCI_CC_SHORT_PACKET, 40,
+                     &result), XHCI_XFER_OK, "the resumed TD ends short");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE, "deferred");
+    CHECK_EQ(deliver(&fix, second->LastIndex, XHCI_CC_SUCCESS, 0, &result),
+             XHCI_XFER_OK, "the successor completes");
+    CHECK_EQ(result.CompletedCount, 2, "sweeping the first");
+    CHECK_EQ((ULONG)first->UsbdStatus, WANT_USBD_SUCCESS,
+             "the swept retried TD a success");
+    CHECK_EQ(result.RetryRecovered, 1,
+             "counted recovered, though the event's own TD was never retried");
+}
+
 /* Review round 1, finding 1: an operation's quiesce must settle a deferred
  * outcome before programming the dequeue. Until the replay, the software
  * dequeue is on the failed TD's first TRB - a Set TR Dequeue there would
@@ -4195,6 +4242,7 @@ int main(void)
     test_retry_recovers();
     test_retry_bound();
     test_retry_generation();
+    test_retry_recovered_short();
     test_retry_settle_moves_dequeue();
 
     printf("\n%d checks, %d failures\n", checks, failures);

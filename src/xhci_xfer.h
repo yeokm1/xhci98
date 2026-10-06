@@ -481,8 +481,9 @@ typedef struct _XHCI_XFER_EVENT_RESULT {
      * the queue's head as its deferred outcome, nothing retired or
      * completed, the queue's RetryWanted set - the thread is owed a wake.
      * RetryExhausted: a Transaction Error the bound let through to today's
-     * path. RetryRecovered: a TD that had been diverted completed without
-     * failing.
+     * path. RetryRecovered: how many of the completed TDs had been diverted
+     * and completed without failing - the event's own TD, or a retried TD
+     * ending short that the event settled by sweeping it.
      */
     ULONG RetryDiverted;
     ULONG RetryExhausted;

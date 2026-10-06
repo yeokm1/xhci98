@@ -117,9 +117,7 @@ static VOID hcdTolCountRetry(PHCD_CONTROLLER hc,
     if (result->RetryExhausted) {
         stats->RetryExhausted++;
     }
-    if (result->RetryRecovered) {
-        stats->RetryRecovered++;
-    }
+    stats->RetryRecovered += result->RetryRecovered;
 }
 
 /*
