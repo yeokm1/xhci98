@@ -2,7 +2,9 @@
  * xhci_psw.c - the Intel EHCI-to-xHCI port switchover, the pure half
  * (xhci_psw.h; roadmap-hcd.md tasks 34.3 and 35.5).
  *
- * DDK-free: part of the pure core. C89. IRQL: any.
+ * DDK-free: part of the pure core. C89. IRQL: any for the functions that
+ * take no XHCI_PSW_IO; those that do run at their callbacks' IRQL, which
+ * with hcd_ctl.c's is PASSIVE_LEVEL under no spin lock.
  */
 
 #include "xhci_psw.h"

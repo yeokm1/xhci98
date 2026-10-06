@@ -37,7 +37,9 @@
  * and the value reader, and logs what comes back. Nothing here touches a
  * register, takes a lock or calls a kernel service.
  *
- * DDK-free: part of the pure core. C89. IRQL: any.
+ * DDK-free: part of the pure core. C89. IRQL: any for the functions that
+ * take no XHCI_PSW_IO; those that do run at their callbacks' IRQL, which
+ * with hcd_ctl.c's is PASSIVE_LEVEL under no spin lock.
  */
 
 #ifndef XHCI_PSW_H
@@ -57,7 +59,8 @@
  * What a route or release stopped at (XHCI_PSW_STATE.Step); 0 when every
  * access was made. A route stops at a failed mask read or a failed write,
  * so the USB 2.0 pairs never move to xHCI without the SuperSpeed
- * terminations; a release attempts both writes whatever the first did.
+ * terminations; a release attempts each write its set selects, whatever
+ * an earlier one did.
  */
 #define XHCI_PSW_DONE               0UL
 #define XHCI_PSW_STEP_USB3PRM       1UL /* mask unreadable or all-ones      */

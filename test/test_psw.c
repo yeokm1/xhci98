@@ -136,7 +136,6 @@ static void fakeInit(FAKE_CFG *f, XHCI_PSW_IO *io)
     io->Context = f;
 }
 
-/* How many writes the log holds at one offset. */
 static ULONG fakeWrites(FAKE_CFG *f, ULONG offset)
 {
     ULONG i;
@@ -446,7 +445,6 @@ static void test_release(void)
              "no state");
 }
 
-/* Route with one access failing (kind 0 for none), and its Written. */
 static ULONG routeWritten(char kind, ULONG offset, ULONG *step)
 {
     FAKE_CFG f;

@@ -241,8 +241,7 @@ static ULONG hcdPswWrite(PVOID context, ULONG offset, ULONG value)
                              offset, sizeof(ULONG)) == MP_STATUS_SUCCESS;
 }
 
-/* The registry read the decision makes on an Intel controller.
- * IRQL: PASSIVE_LEVEL, under no spin lock, as hcdReadDword. */
+/* IRQL: PASSIVE_LEVEL, under no spin lock, as hcdReadDword. */
 static ULONG hcdPswValue(PVOID context, PULONG value)
 {
     return NT_SUCCESS(hcdReadDword((PHCD_CONTROLLER)context,
