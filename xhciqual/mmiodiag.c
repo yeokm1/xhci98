@@ -657,6 +657,10 @@ static void xcap_record(CTRL *c, u32 off, u32 dw, u32 window,
     full = c->nxcap >= XCAP_DUMP_CAPS || c->nxdump >= XCAP_DUMP_TOTAL;
     if (full)
         xcap_set_full(c);
+    if (full && dw == 0xFFFFFFFFUL) {
+        c->xcap_stop = XCAP_STOP_ONES;  /* the reserve stops here too */
+        return;
+    }
     if (full && (!kept || c->nxcap >= XCAP_DUMP_CAPS + XCAP_KEPT_CAPS))
         return;
     total = kept ? XCAP_DUMP_TOTAL + XCAP_KEPT_DWORDS : XCAP_DUMP_TOTAL;
@@ -724,11 +728,8 @@ void xcap_walk(CTRL *c, u32 xecp_off, u32 window, XCAP_RD_FN rd, void *ctx)
         u32 next;
 
         dw = rd(ctx, off);
-        if (c->xcap_stop == XCAP_STOP_END ||
-            (c->xcap_stop == XCAP_STOP_FULL && xcap_kept(dw)))
+        if (c->xcap_stop == XCAP_STOP_END || c->xcap_stop == XCAP_STOP_FULL)
             xcap_record(c, off, dw, window, rd, ctx);
-        else if (c->xcap_stop == XCAP_STOP_FULL && dw == 0xFFFFFFFFUL)
-            c->xcap_stop = XCAP_STOP_ONES;  /* the reserve stops here too */
         switch (dw & 0xFF) {
         case XECP_ID_LEGSUP:
             if (c->legsup_off == 0)

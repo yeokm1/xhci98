@@ -1506,6 +1506,31 @@ static void test_walk_all_ones_after_the_bound(void)
           "ones after the bound: both lines printed");
 }
 
+/*
+ * The same with the count bound: exactly 32 one-dword vendor capabilities
+ * leave the record still open, and the all-ones header that follows must
+ * still close it before the protocol behind it.
+ */
+static void test_walk_all_ones_at_the_count_bound(void)
+{
+    static const u32 u31[2] = { 0x00050134UL, 0x000A4135UL };
+    u32 off;
+    int i;
+
+    fake_reset(0x10000UL, 0);
+    for (i = 0, off = 0x100; i < XCAP_DUMP_CAPS; i++, off += 4)
+        fput(off, 0x000001C0UL);              /* vendor, next 1 dword */
+    fput(off, 0xFFFFFFFFUL);
+    off += 0xFF * 4;
+    fput_proto(off, 3, 0, 3, 2, 2, u31);
+    xcap_walk(&tc, 0x100, fwindow, fake_rd, 0);
+    CHECK(fbad == 0, "ones at the count bound: reads inside the window");
+    CHECK(tc.nxcap == XCAP_DUMP_CAPS && tc.xcap_stop == XCAP_STOP_ONES &&
+          tc.xcap_full, "ones at the count bound: the reserve closed");
+    CHECK(tc.nproto == 1 && tc.proto[0].off == off,
+          "ones at the count bound: the protocol still decoded");
+}
+
 /* All ones: recording stops at the dead header; the walker, unchanged,
  * follows its FF next field until the window stops it, inside the window. */
 static void test_walk_all_ones(void)
@@ -1590,6 +1615,7 @@ int main(void)
     test_walk_protocol_past_the_bound();
     test_walk_protocol_across_the_bound();
     test_walk_all_ones_after_the_bound();
+    test_walk_all_ones_at_the_count_bound();
     test_walk_all_ones();
     test_walk_guard_and_none();
 
