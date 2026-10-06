@@ -57,6 +57,9 @@ rem                  XhciIntelPortSwitch rule, and the route and release over
 rem                  a modelled config space - write order, values, refusals;
 rem                  value 2's bypass, the accepted-write set and the
 rem                  lifetime that releases only it (task 35.5)
+rem   test_snap    - the snapshot's HCD region (src\xhci_snap.c, task 35.3):
+rem                  every word of the image located once, in order, and the
+rem                  header's sizes and offsets agreeing with it
 rem   test_tol     - controller tolerance (src\xhci_tol.c, 35-T.9): the three
 rem                  values, the tolerance clock's ticks at each interval's
 rem                  boundary, the interval cap with fast polling, the soft
@@ -270,6 +273,9 @@ rem test_psw links nothing else: the gate, the value rule, the two
 rem sequences and the lifetime are pure, driven over a modelled
 rem configuration space (34.3, 35.5).
 call :run test_psw "test_psw.c ..\src\xhci_psw.c"
+rem test_snap links nothing else: the snapshot's HCD region layout - where
+rem each word lies and what the header says - is pure (task 35.3).
+call :run test_snap "test_snap.c ..\src\xhci_snap.c"
 rem test_tol links xhci_pipe.c for fast polling's composition with the
 rem interval cap; the rest of controller tolerance's decisions, the clock's
 rem arithmetic and the budgets are pure (35-T.9, design record 17).

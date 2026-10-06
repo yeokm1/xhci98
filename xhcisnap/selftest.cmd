@@ -161,6 +161,22 @@ if not errorlevel 1 (
     set FAILED=1
 )
 
+rem Task 35.3's HCD region decoded over a canned image: a port Failed on the
+rem speed, a working SuperSpeed port by the fallback, an empty port left out,
+rem and the nonzero counters by name.
+"%~dp0XHCISNAP.EXE" -selftest-hcd > "%BASE%.hcd.log"
+if errorlevel 1 (
+    echo FAIL: -selftest-hcd exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("13  Failed      speed (no EP0 size)" "4  unknown (no mapping)" "notes 5 of 8, 2 refused" "14  Present     none" "4  SuperSpeed (default ID, unlisted on a USB 3 table)" "2 of 3 root ports shown" "SlotsEnabled               4" "PortSpeedSuper             1" "2 of 63 nonzero") do (
+    findstr /C:%%S "%BASE%.hcd.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the HCD region decode does not say %%S
+        set FAILED=1
+    )
+)
+
 rd /s /q "%RUNDIR%" 2> nul
 rd out 2> nul
 
@@ -168,5 +184,5 @@ if "%FAILED%"=="1" (
     echo xhcisnap selftest FAILED
     exit /b 1
 )
-echo xhcisnap selftest: 7 cases, all passed
+echo xhcisnap selftest: 8 cases, all passed
 exit /b 0

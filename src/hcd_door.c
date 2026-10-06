@@ -728,6 +728,129 @@ static VOID hcdDoorSlots(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
     }
 }
 
+/* One word of root port p's record in the HCD region (hcdDoorHcd).
+ * Controller lock held. IRQL: DISPATCH_LEVEL. */
+static ULONG hcdDoorHcdPortWord(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG word)
+{
+    ULONG cls;
+
+    switch (word) {
+    case XHCI_SNAPSHOT_HCD_PORT_ID:
+        return p->PortId;
+    case XHCI_SNAPSHOT_HCD_PORT_STATE:
+        return p->Enum.State;
+    case XHCI_SNAPSHOT_HCD_PORT_CAUSE:
+        return p->Enum.FailCause;
+    case XHCI_SNAPSHOT_HCD_PORT_RETRIES:
+        return p->Enum.Retries;
+    case XHCI_SNAPSHOT_HCD_PORT_SLOT:
+        return p->Enum.SlotId;
+    case XHCI_SNAPSHOT_HCD_PORT_PSIV:
+        return p->LinkPsiv;
+    case XHCI_SNAPSHOT_HCD_PORT_CLASS:
+        cls = XHCI_SPEED_UNKNOWN;
+        if (p->LinkPsiv != 0) {
+            (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, p->PortId, p->LinkPsiv,
+                                     &cls);
+        }
+        return cls;
+    case XHCI_SNAPSHOT_HCD_PORT_SOURCE:
+        return p->LinkPsiv == 0 ? (ULONG)XHCI_PSI_SOURCE_NONE
+                                : XhciPortSpeedSource(&hc->Hc.PortMap,
+                                                      p->PortId, p->LinkPsiv);
+    case XHCI_SNAPSHOT_HCD_PORT_PDO:
+        return p->Enum.PdoExists;
+    case XHCI_SNAPSHOT_HCD_PORT_USB3:
+        return XhciPortIsUsb3(&hc->Hc.PortMap, p->PortId);
+    case XHCI_SNAPSHOT_HCD_PORT_WARM:
+        return p->Link.WarmResets;
+    case XHCI_SNAPSHOT_HCD_PORT_GAVEUP:
+        return p->Link.GaveUp;
+    case XHCI_SNAPSHOT_HCD_PORT_NOTES:
+        return p->Notes.Used;
+    case XHCI_SNAPSHOT_HCD_PORT_REFUSED:
+        return p->Notes.Suppressed;
+    case XHCI_SNAPSHOT_HCD_PORT_HOLDFAIL:
+        return p->HoldRecoverFails;
+    case XHCI_SNAPSHOT_HCD_PORT_FLAGS:
+        return XhciSnapHcdFlags(p->SettleDeferred, p->LinkRecovering,
+                                p->Unreadable);
+    default:
+        return 0;
+    }
+}
+
+/*
+ * The HCD region (xhci.h, XHCI_SNAPSHOT_REGION_HCD; task 35.3): built word
+ * by word into the caller's window from where XhciSnapHcdLocate puts each
+ * word, so no image of the whole exists and nothing in it is a pointer. The
+ * ports are those the bus reports (hcdDoorPorts); the counters are
+ * hc->Counters, outside the extension. A port's fields are the controller
+ * thread's, written without this lock: each ULONG is read whole, but a
+ * record cut while the thread moves the machine may mix two of its steps,
+ * as the extension's own windows may (the tear detector covers neither).
+ * The counters are written under this lock or interlocked, besides the
+ * thread's plain writes (xhci_counters.h). Controller lock held, the same
+ * as the slots region. IRQL: DISPATCH_LEVEL.
+ */
+static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
+                       PUCHAR payload, ULONG capacity, ULONG offset)
+{
+    const ULONG *counters;
+    ULONG ports;
+    ULONG total;
+    ULONG first;
+    ULONG count;
+    ULONG record;
+    ULONG word;
+    ULONG value;
+    ULONG i;
+
+    ports = hcdDoorPorts(hc);
+    total = XhciSnapHcdWords(ports);
+    header->RegionBytes = total * (ULONG)sizeof(ULONG);
+    if ((offset & 3UL) != 0) {
+        header->Status |= XHCI_SNAPSHOT_S_BAD_REQUEST;
+        return;
+    }
+    if (offset >= header->RegionBytes) {
+        header->Status |= XHCI_SNAPSHOT_S_PAST_END;
+        return;
+    }
+    first = offset / (ULONG)sizeof(ULONG);
+    count = total - first;
+    if (count > capacity / (ULONG)sizeof(ULONG)) {
+        count = capacity / (ULONG)sizeof(ULONG);
+        header->Status |= XHCI_SNAPSHOT_S_TRUNCATED;
+    }
+    counters = (const ULONG *)&hc->Counters;
+    for (i = 0; i < count; i++) {
+        switch (XhciSnapHcdLocate(ports, first + i, &record, &word)) {
+        case XHCI_SNAPSHOT_HCD_IN_HEAD:
+            value = XhciSnapHcdHead(ports, word);
+            break;
+        case XHCI_SNAPSHOT_HCD_IN_PORT:
+            value = hcdDoorHcdPortWord(hc, &hc->Ports[record], word);
+            break;
+        case XHCI_SNAPSHOT_HCD_IN_COUNTERS:
+            value = counters[word];
+            break;
+        default:
+            value = 0;
+            break;
+        }
+        hcdPut32(payload, i * 4, value);
+    }
+    header->PayloadBytes = count * (ULONG)sizeof(ULONG);
+}
+
+/* The counter block is copied as XHCI_SNAPSHOT_HCD_COUNTER_WORDS ULONGs. */
+typedef char hcdSnapshotCounters[sizeof(XHCIHC_COUNTERS) ==
+                                         XHCI_SNAPSHOT_HCD_COUNTER_WORDS *
+                                             sizeof(ULONG)
+                                     ? 1
+                                     : -1];
+
 /* XHCISNAP keeps the whole extension in one 128 KB image to print the note
  * ring from it (xhcisnap.c, EXT_IMAGE_MAX) and refuses a larger one, on
  * either architecture: a build whose extension outgrows it fails here, not
@@ -890,6 +1013,8 @@ static ULONG hcdDoorSnapshot(PHCD_CONTROLLER hc, const UCHAR *guid,
         }
     } else if (requestRegion == XHCI_SNAPSHOT_REGION_SLOTS) {
         hcdDoorSlots(hc, header, payload, capacity, requestOffset);
+    } else if (requestRegion == XHCI_SNAPSHOT_REGION_HCD) {
+        hcdDoorHcd(hc, header, payload, capacity, requestOffset);
     } else {
         header->Status |= XHCI_SNAPSHOT_S_BAD_REGION;
     }

@@ -1,6 +1,8 @@
 /*
- * xhcisnap.c - read xhci98.sys's extension, raw PORTSC array and (from
- * 2.0.0.0) its enabled slots out of a running machine, from user mode.
+ * xhcisnap.c - read xhci98.sys's extension, raw PORTSC array, (from
+ * 2.0.0.0) its enabled slots and (from 2.2.0.0) its HCD region - each root
+ * port's enumeration and the counter block - out of a running machine, from
+ * user mode.
  *
  * TWO DRIVERS ANSWER IT. From 2.0.0.0 xhci98.sys is the successor host
  * controller driver (roadmap-hcd.md, design record 13): it owns its driver
@@ -342,6 +344,22 @@ static const unsigned long snap_guid[4] = {
 #define SNAP_SLOT_WORDS             10UL
 #define SNAP_SLOT_MAX               64UL
 #define SNAP_SLOT_UNREAD            0xFFFFFFFFUL
+/*
+ * The HCD region (src/xhci.h, XHCI_SNAPSHOT_REGION_HCD; 2.2.0.0 on, task
+ * 35.3): a versioned, pointer-free image of each root port's enumeration
+ * state and the controller's counter block (XHCIHC_COUNTERS), which lie
+ * outside the extension. A region again, so the schema stays 5: an older
+ * driver answers BAD_REGION. The image says its own sizes, and this tool
+ * walks it by them: a later driver that appends to a record or to the
+ * counters is still read, and only a version past the one known here is
+ * refused, because a version bump is a field that changed meaning.
+ */
+#define SNAP_REGION_HCD             3UL
+#define SNAP_HCD_VERSION            1UL
+#define SNAP_HCD_HEAD_WORDS         8UL
+#define SNAP_HCD_PORT_WORDS         16UL
+#define SNAP_HCD_COUNTER_WORDS      63UL
+#define SNAP_HCD_MAX_BYTES          32768UL
 
 /*
  * The verbosity ladder, as the driver's `XHCI_LOG_VERBOSITY_*` spells it. This
@@ -1771,6 +1789,184 @@ static int selftest_slots(void)
     }
     companion = NULL;
     print_slots(bytes, 5);
+    return 0;
+}
+
+/* ---- the HCD region: each root port's enumeration and the counters ------ */
+
+/* XHCIHC_COUNTERS (src/xhci_counters.h), in field order. */
+static const char *const hcd_counter_names[SNAP_HCD_COUNTER_WORDS] = {
+    "SlotsEnabled", "DevicesAddressed", "PortSpeedHigh", "PortSpeedFull",
+    "PortSpeedLow", "SlotSpeedHigh", "SlotSpeedFull", "SlotSpeedLow",
+    "SpeedDisagreements",
+    "EndpointsOpened", "SelectEndpointsRequested", "SelectEndpointsRefused",
+    "EndpointRefusalsType", "EndpointRefusalsParams", "EndpointRefusalsPool",
+    "EndpointConfigureFailures", "EndpointsNoBandwidth",
+    "EndpointsNoResources", "UrbsMalformed", "SelectsFailed",
+    "FatalStatus", "TransferEventsUnclaimed", "InterruptMaskFailures",
+    "CommandsGivenUp",
+    "TransfersSubmitted", "TransfersCompleted", "TransfersCancelled",
+    "IsoPacketsAnswered", "IsoMissedService", "IsoPacketErrors",
+    "HubsStarted", "TopoDescriptors", "TopoDescriptorsBad",
+    "TopoHubSlotsMarked", "TopoNodesDropped", "TopoBehindHubAddressed",
+    "TopoBehindHubOpens", "TopoBehindHubTooDeep", "TopoTtProgrammed",
+    "PortSpeedSuper", "SlotSpeedSuper", "PortSpeedSuperPlus", "SsWarmResets",
+    "SsResetsConverted", "SsLinksGivenUp", "SsDevicesOnUsb2", "SsBosMissing",
+    "SsEndpointsEsitRefused",
+    "HoldsPaired", "HoldsUnidentified", "HoldsOrphan", "HoldsReleased",
+    "HoldCompanionOthers", "HoldRequestsRefused", "HoldsDropped",
+    "SsHubsStarted", "SsHubPairs", "SsHubDepthRefused", "SsHubWarmResets",
+    "SsHubLinksGivenUp", "SsHubConfigErrors", "SsHubDevicesPlus",
+    "SsHubRateUnmatched"
+};
+
+/*
+ * The image's own header says where everything is; each figure is checked
+ * against the bytes that arrived before it is believed. A port is printed
+ * only when it has something to say - a machine not Empty, a cause, a speed
+ * ID, a link's warm resets or give-up, refused notes, a flag - and the
+ * counters only when nonzero.
+ */
+static void print_hcd(const unsigned char *image, unsigned long bytes)
+{
+    static const char *const cause_short[8] = {
+        "none", "reset", "no slot", "Address Device", "device descriptor",
+        "configuration", "PDO", "speed (no EP0 size)"
+    };
+    unsigned long version;
+    unsigned long headBytes;
+    unsigned long ports;
+    unsigned long portBytes;
+    unsigned long portsAt;
+    unsigned long counters;
+    unsigned long countersAt;
+    unsigned long shown;
+    unsigned long i;
+    unsigned long v;
+    const unsigned char *r;
+
+    if (bytes < SNAP_HCD_HEAD_WORDS * 4) {
+        comp("\nHCD region: %lu bytes, too short for its header; not "
+             "decoded.\n", bytes);
+        return;
+    }
+    version = get32(image, 0);
+    headBytes = get32(image, 4);
+    ports = get32(image, 8);
+    portBytes = get32(image, 12);
+    portsAt = get32(image, 16);
+    counters = get32(image, 20);
+    countersAt = get32(image, 24);
+    if (version == 0 || version > SNAP_HCD_VERSION ||
+        headBytes < SNAP_HCD_HEAD_WORDS * 4 ||
+        portBytes < SNAP_HCD_PORT_WORDS * 4 || (portBytes & 3UL) != 0 ||
+        portsAt < headBytes || portsAt > bytes || ports > 255 ||
+        ports * portBytes > bytes - portsAt || countersAt > bytes ||
+        counters > (bytes - countersAt) / 4) {
+        comp("\nHCD region: version %lu, header %lu bytes, %lu ports of %lu "
+             "bytes at +%lu,\n  %lu counters at +%lu, in %lu bytes - not a "
+             "shape this build reads\n  (it knows version %lu); not "
+             "decoded.\n", version, headBytes, ports, portBytes, portsAt,
+             counters, countersAt, bytes, SNAP_HCD_VERSION);
+        return;
+    }
+
+    comp("\nroot ports, as the driver's enumeration holds them (HCD region "
+         "version %lu):\n", version);
+    comp("  port  state       cause                tries slot  ID  speed "
+         "(meaning)\n");
+    shown = 0;
+    for (i = 0; i < ports; i++) {
+        r = image + portsAt + i * portBytes;
+        if (get32(r, 4) == 0 && get32(r, 8) == 0 && get32(r, 20) == 0 &&
+            get32(r, 40) == 0 && get32(r, 44) == 0 && get32(r, 52) == 0 &&
+            get32(r, 60) == 0) {
+            continue;
+        }
+        shown++;
+        comp("  %4lu  %-10s  %-19s  %5lu %4lu  %2lu  %s (%s)\n",
+             get32(r, 0), enum_state_names[get32(r, 4) & 0xF],
+             get32(r, 8) < 8 ? cause_short[get32(r, 8)] : "?",
+             get32(r, 12), get32(r, 16),
+             get32(r, 20), enum_class_name(get32(r, 24)),
+             enum_source_name(get32(r, 28)));
+        v = get32(r, 60);
+        if (get32(r, 36) != 0 || get32(r, 40) != 0 || get32(r, 44) != 0 ||
+            get32(r, 52) != 0 || get32(r, 56) != 0 || v != 0 ||
+            get32(r, 32) != 0) {
+            comp("        %s%s; warm resets %lu%s; notes %lu of %lu, %lu "
+                 "refused; recreations failed %lu%s%s%s\n",
+                 get32(r, 36) != 0 ? "USB 3" : "USB 2.0",
+                 get32(r, 32) != 0 ? ", PDO" : "", get32(r, 40),
+                 get32(r, 44) != 0 ? ", given up" : "", get32(r, 48),
+                 get32(image, 28), get32(r, 52), get32(r, 56),
+                 (v & 1UL) != 0 ? "; deferred by the settle" : "",
+                 (v & 2UL) != 0 ? "; warm reset in flight" : "",
+                 (v & 4UL) != 0 ? "; PORTSC unreadable" : "");
+        }
+    }
+    comp("  (%lu of %lu root ports shown; the rest are Empty with nothing "
+         "noted.\n   ID is the raw speed ID the port's last reset read.)\n",
+         shown, ports);
+
+    comp("\ncontroller counters (XHCIHC_COUNTERS), nonzero only:\n");
+    shown = 0;
+    for (i = 0; i < counters; i++) {
+        v = get32(image, countersAt + i * 4);
+        if (v == 0) {
+            continue;
+        }
+        if (i < SNAP_HCD_COUNTER_WORDS) {
+            comp("  %-26s %lu\n", hcd_counter_names[i], v);
+        } else {
+            comp("  counter %-18lu %lu\n", i, v);
+        }
+        shown++;
+    }
+    comp("  (%lu of %lu nonzero.)\n", shown, counters);
+}
+
+/* `-selftest-hcd`: the HCD region's decode over a canned image, for
+ * xhcisnap\selftest.cmd: 35.0's E460 port 13 Failed on the speed, a
+ * working port 14, an empty port 1 left out, and two counters. */
+static int selftest_hcd(void)
+{
+    static unsigned char image[32 + 3 * 64 + 63 * 4];
+    unsigned long base;
+
+    memset(image, 0, sizeof(image));
+    put32(image, 0, 1);
+    put32(image, 4, 32);
+    put32(image, 8, 3);
+    put32(image, 12, 64);
+    put32(image, 16, 32);
+    put32(image, 20, 63);
+    put32(image, 24, 32 + 3 * 64);
+    put32(image, 28, 8);
+    put32(image, 32, 1);
+    base = 32 + 64;
+    put32(image, base + 0, 13);
+    put32(image, base + 4, 13);
+    put32(image, base + 8, 7);
+    put32(image, base + 12, 1);
+    put32(image, base + 20, 4);
+    put32(image, base + 36, 1);
+    put32(image, base + 48, 5);
+    put32(image, base + 52, 2);
+    base = 32 + 128;
+    put32(image, base + 0, 14);
+    put32(image, base + 4, 10);
+    put32(image, base + 16, 5);
+    put32(image, base + 20, 4);
+    put32(image, base + 24, 4);
+    put32(image, base + 28, 3);
+    put32(image, base + 32, 1);
+    put32(image, base + 36, 1);
+    put32(image, base + 48, 2);
+    put32(image, 32 + 3 * 64 + 0 * 4, 4);
+    put32(image, 32 + 3 * 64 + 39 * 4, 1);
+    companion = NULL;
+    print_hcd(image, sizeof(image));
     return 0;
 }
 
@@ -3319,6 +3515,75 @@ static unsigned long read_slots(HANDLE device, int *state,
 }
 
 /*
+ * The HCD region (task 35.3), in as many windows as it takes - one, in
+ * practice: some 1.4 KB on an 18-port controller. Returns the bytes read;
+ * *state as for the slots. Read for the report alone, like the slots, and
+ * its windows count in the tear detector.
+ */
+static unsigned char hcd_image[SNAP_HCD_MAX_BYTES];
+
+static unsigned long read_hcd(HANDLE device, int *state,
+                              unsigned long *tearFirst,
+                              unsigned long *tearLast, int *tearTorn,
+                              int *tearSeen)
+{
+    SNAP_HEADER header;
+    const unsigned char *payload;
+    unsigned long have;
+
+    have = 0;
+    *state = 0;
+    for (;;) {
+        if (!take_window(device, SNAP_REGION_HCD, have, &header, &payload)) {
+            return 0;
+        }
+        if ((header.Status & SNAP_S_BAD_REGION) != 0) {
+            *state = 2;
+            return 0;
+        }
+        if (!*tearSeen) {
+            *tearFirst = header.TearDetector;
+            *tearSeen = 1;
+        } else if (header.TearDetector != *tearFirst) {
+            *tearTorn = 1;
+        }
+        *tearLast = header.TearDetector;
+        if ((header.Status & ~(SNAP_S_TRUNCATED | SNAP_S_PAST_END)) != 0) {
+            printf("  HCD region: the driver refused the read, status %08lX\n",
+                   header.Status);
+            return 0;
+        }
+        if (header.Region != SNAP_REGION_HCD || header.Offset != have ||
+            (header.RegionBytes & 3UL) != 0 ||
+            header.RegionBytes > SNAP_HCD_MAX_BYTES ||
+            header.PayloadBytes > SNAP_PARAM_BYTES - sizeof(SNAP_HEADER) ||
+            (header.PayloadBytes & 3UL) != 0 ||
+            header.Offset > header.RegionBytes ||
+            header.PayloadBytes > header.RegionBytes - header.Offset ||
+            (header.PayloadBytes == 0 &&
+             (header.Status & SNAP_S_TRUNCATED) != 0)) {
+            printf("  HCD region: an inconsistent reply (region %lu, offset "
+                   "%lu, %lu of %lu bytes)\n", header.Region, header.Offset,
+                   header.PayloadBytes, header.RegionBytes);
+            return 0;
+        }
+        memcpy(hcd_image + have, payload, header.PayloadBytes);
+        have += header.PayloadBytes;
+        if ((header.Status & SNAP_S_TRUNCATED) == 0) {
+            break;
+        }
+    }
+    if (have != header.RegionBytes) {
+        printf("  HCD region: %lu of %lu bytes arrived - incomplete, not "
+               "reported\n", have, header.RegionBytes);
+        return 0;
+    }
+    *state = 1;
+    printf("  HCD region: %lu bytes\n", have);
+    return have;
+}
+
+/*
  * `-selftest-report BASE`: the report path alone. See the switch in main.
  * Exit 0 with BASE.TXT complete, 3 with it incomplete or not created - the
  * same codes the dump answers for the same conditions.
@@ -3376,6 +3641,8 @@ int main(int argc, char **argv)
     SNAP_HEADER portscLast;
     unsigned long slotCount;
     int slotState;
+    unsigned long hcdBytes;
+    int hcdState;
     int companionWasWritten;
     HANDLE device;
     char devicePath[32];
@@ -3506,6 +3773,8 @@ int main(int argc, char **argv)
             return selftest_slots();
         } else if (strcmp(argv[i], "-selftest-notes") == 0) {
             return selftest_notes();
+        } else if (strcmp(argv[i], "-selftest-hcd") == 0) {
+            return selftest_hcd();
         } else if (strcmp(argv[i], "-selftest-report") == 0 && i + 1 < argc) {
             /*
              * The report path on its own, with no device: open BASE.TXT, write
@@ -3712,6 +3981,8 @@ int main(int argc, char **argv)
                               portsc_values, sizeof(portsc_values));
     slotCount = read_slots(device, &slotState, &tearFirst, &tearLast,
                            &tearTorn, &tearSeen);
+    hcdBytes = read_hcd(device, &hcdState, &tearFirst, &tearLast, &tearTorn,
+                        &tearSeen);
     CloseHandle(device);
     if (portscBytes == (unsigned long)-1) {
         DeleteFileA(extTmpPath);
@@ -3840,6 +4111,20 @@ int main(int argc, char **argv)
              "it gives).\n");
     } else {
         comp("\nslots: the read failed; see the progress lines above.\n");
+    }
+
+    /*
+     * Task 35.3's HCD region at every level, like the slots: port numbers,
+     * states, causes and counts carry no address.
+     */
+    if (hcdState == 1) {
+        print_hcd(hcd_image, hcdBytes);
+    } else if (hcdState == 2) {
+        comp("\nHCD region: not served by this driver (an xhci98.sys before "
+             "2.2.0.0 has no\n  per-port enumeration region; the note ring "
+             "and the .BIN are what it gives).\n");
+    } else {
+        comp("\nHCD region: the read failed; see the progress lines above.\n");
     }
 
     /*

@@ -58,7 +58,12 @@
 > and intervals as named constants, and the counters and state kept in the
 > extension; host suite `test_tol`), its clock run from `hcd_svc.c` and its
 > values read in `hcd_ctl.c`
-> ([design record 17](design/17-controller-tolerance.md)). The tables below are the
+> ([design record 17](design/17-controller-tolerance.md)). Task 35.3 adds the
+> pure `xhci_snap.c` (the layout of the snapshot's HCD region - each root
+> port's enumeration state and the counter block, word by word; host suite
+> `test_snap`), filled by `hcd_door.c`, and a root port's enumeration notes to
+> `xhci_enum.c` (their packing and budget; host suite `test_enum`), written
+> from `hcd_enum.c`. The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name

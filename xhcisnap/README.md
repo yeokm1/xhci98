@@ -1,14 +1,14 @@
 # xhcisnap - reading this driver's own log off a running machine
 
-`XHCISNAP.EXE` reads `xhci98.sys`'s extension, its raw PORTSC array and (from
-2.0.0.0) its enabled slots from user mode, and writes a report a user can send
-back.
+`XHCISNAP.EXE` reads `xhci98.sys`'s extension, its raw PORTSC array, (from
+2.0.0.0) its enabled slots and (from 2.2.0.0) its root ports' enumeration and
+counters from user mode, and writes a report a user can send back.
 
 Two drivers answer it. From 2.0.0.0 `xhci98.sys` is the successor host
 controller driver (`docs/contributing/roadmap-hcd.md`, design record 13): it
 owns its driver object, creates `\DosDevices\HCD<n>` itself and answers the
 same USBUSER `PassThru` request through its own door (`src/hcd_door.c`, schema
-5 unchanged, the slots region added). The 1.x miniport ran under usbport and
+5 unchanged, the slots and HCD regions added). The 1.x miniport ran under usbport and
 was reached through usbport's `PassThru` vendor escape. Most of this document
 is the 1.x history; where it says usbport or the miniport, that is the 1.x
 route, which the tool still reads.
@@ -133,6 +133,27 @@ actually carries (roadmap-hcd.md 29-E.1). It is read from a third snapshot
 region that is not saved as a raw file; a 1.x driver does not serve it, and
 the report says so. `-selftest-slots` prints the decode over canned records.
 
+From 2.2.0.0 (roadmap-hcd.md task 35.3) the `.TXT` also carries, at every
+level, the driver's own view of each root port and its counter block, read
+from a fourth region, the HCD region, which is not saved as a raw file either.
+Neither is in the extension, so neither is in the `.BIN`: each root port's
+enumeration machine - its state, why it failed, the attempts it used, its slot,
+the raw speed ID its last reset read with the class and meaning the driver
+gave it, its USB 3 link's warm resets and give-up, and its enumeration notes'
+budget and refusals - and `XHCIHC_COUNTERS`, the 63 counters the device matrix
+reads. A port is printed only when it has something to say, the counters only
+when nonzero, by name. A driver before 2.2.0.0 does not serve the region and
+the report says so. `-selftest-hcd` prints the decode over a canned image.
+
+The region is versioned on its own, inside the unchanged schema 5: an
+eight-word header (version, header bytes, port count, record bytes, the
+records' offset, counter count, the counters' offset, the notes' budget), then
+one sixteen-word record per root port (`src/xhci.h`,
+`XHCI_SNAPSHOT_HCD_PORT_*`), then the counters. The tool walks it by the
+sizes its header gives, so a later driver that appends to a record or to the
+counters is still read; a version past the one the tool knows is refused,
+since a version bump means a field changed meaning.
+
 The PORTSC decode is printed on screen whatever the level, because that is what
 the bench reads on the spot. The headline test is per port: a port reporting a
 device connected with `PP` clear is Finding Q read off the register, whatever
@@ -254,8 +275,8 @@ They are bounded. A look, or one run of the machine (both its attempts), is
 one burst, and a port has eight between enumerations: one that enumerates
 gets them all back, so a working port replugged any number of times keeps its
 records, and one that fails or flaps writes `enum.port.quiet` and then
-nothing until it enumerates. The bursts refused are counted per port. Ports
-behind a hub are not noted.
+nothing until it enumerates. The bursts refused are counted per port, in the
+HCD region above. Ports behind a hub are not noted.
 
 ## Three things to know before trusting a dump
 

@@ -170,6 +170,15 @@ PORTSC array (`XHCI_SNAPSHOT_REGION_PORTSC`). A caller puts a request
 signature in the block before the call, so a GUID match against uninitialised
 memory is refused rather than answered.
 
+The HCD (`xhci98.sys` from 2.0.0.0, `src/hcd_door.c`) adds two more, each
+without a schema bump because an older driver answers an unknown region with
+`XHCI_SNAPSHOT_S_BAD_REGION` and an older tool never asks:
+`XHCI_SNAPSHOT_REGION_SLOTS` (2.0.0.0; one record per enabled slot, the speed
+its Slot Context carries) and `XHCI_SNAPSHOT_REGION_HCD` (2.2.0.0, roadmap-hcd
+task 35.3; a versioned, pointer-free image of each root port's enumeration
+state and the `XHCIHC_COUNTERS` block, neither of which is in the extension).
+`xhcisnap/README.md` describes how the tool reads both.
+
 ## 5. The kernel side, and the ordering rules that are not obvious
 
 The whole callback is: validate, fill a truthful header, take the controller

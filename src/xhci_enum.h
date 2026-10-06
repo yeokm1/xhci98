@@ -255,8 +255,9 @@ ULONG XhciEnumAnswerCarries(ULONG parentSerial, ULONG answering,
  * functions below so the host suite checks every layout (test\test_enum.c).
  * Every field is masked to its width; the port is the xHCI port number.
  *
- *   enum.port.look   an inspection that fed the machine, asked for a link
- *                    action, or found the machine Failed:
+ *   enum.port.look   an inspection that fed the machine, wrote a warm reset
+ *                    or gave the link up, or found the machine Failed
+ *                    (once, until something is fed again):
  *                      31:24 port         23:20 machine state before it
  *                      19:16 link action (XHCI_LINK_ACT_*)
  *                      15:14 feed (bit 14 DISCONNECT, bit 15 CONNECT)

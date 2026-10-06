@@ -8462,6 +8462,83 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_SLOT_RANK         9   /* XHCI_SS_RANK_*: Gen and lanes */
 #define XHCI_SNAPSHOT_SLOT_WORDS        10UL
 
+/*
+ * The HCD region (xhci98.sys from 2.2.0.0, roadmap-hcd.md task 35.3): what
+ * the extension does not hold and 35.0's E460 reading had to infer - each
+ * root port's enumeration state and failure cause, and the controller's
+ * counter block (XHCIHC_COUNTERS) - as a versioned, pointer-free image of
+ * ULONGs: an XHCI_SNAPSHOT_HCD_HEAD_WORDS header, one record of
+ * XHCI_SNAPSHOT_HCD_PORT_WORDS per root port (HCSPARAMS1.MaxPorts of them),
+ * then the counters. A new region and not a header change, so the schema
+ * stays 5, by the rule the slots region set: an older driver answers it with
+ * XHCI_SNAPSHOT_S_BAD_REGION, which XHCISNAP reports as "not served by this
+ * driver", and an older tool never asks. The image carries its own version
+ * and its own sizes: appending a word to the record or a counter to the
+ * block changes the sizes and not the version, and a reader walks by the
+ * sizes; the version moves only when a word changes meaning or place.
+ * Offset is in bytes and must be a multiple of 4. The layout's arithmetic is
+ * src/xhci_snap.c's (host suite test_snap); the door fills it word by word
+ * (hcd_door.c).
+ */
+#define XHCI_SNAPSHOT_REGION_HCD        3UL
+#define XHCI_SNAPSHOT_HCD_VERSION       1UL
+
+/* The header's words. */
+#define XHCI_SNAPSHOT_HCD_VERSION_AT    0   /* XHCI_SNAPSHOT_HCD_VERSION     */
+#define XHCI_SNAPSHOT_HCD_HEAD_BYTES    1   /* this header, in bytes         */
+#define XHCI_SNAPSHOT_HCD_PORTS         2   /* root port records             */
+#define XHCI_SNAPSHOT_HCD_PORT_BYTES    3   /* one record, in bytes          */
+#define XHCI_SNAPSHOT_HCD_PORTS_AT      4   /* the first record's offset     */
+#define XHCI_SNAPSHOT_HCD_COUNTERS      5   /* counter words                 */
+#define XHCI_SNAPSHOT_HCD_COUNTERS_AT   6   /* the first counter's offset    */
+#define XHCI_SNAPSHOT_HCD_NOTE_BUDGET   7   /* XHCI_ENUM_NOTE_BUDGET         */
+#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    8UL
+
+/* One root port's record. The machine's fields are XHCI_ENUM_PORT's; the
+ * speed ID is the one the port's last reset read (0 none), decoded on its
+ * protocol when the window is cut. */
+#define XHCI_SNAPSHOT_HCD_PORT_ID       0   /* the xHCI port number          */
+#define XHCI_SNAPSHOT_HCD_PORT_STATE    1   /* XHCI_ENUM_*                   */
+#define XHCI_SNAPSHOT_HCD_PORT_CAUSE    2   /* XHCI_ENUM_FAIL_*              */
+#define XHCI_SNAPSHOT_HCD_PORT_RETRIES  3   /* retries used                  */
+#define XHCI_SNAPSHOT_HCD_PORT_SLOT     4   /* Slot ID, 0 none               */
+#define XHCI_SNAPSHOT_HCD_PORT_PSIV     5   /* raw Protocol Speed ID         */
+#define XHCI_SNAPSHOT_HCD_PORT_CLASS    6   /* XHCI_SPEED_* of that ID       */
+#define XHCI_SNAPSHOT_HCD_PORT_SOURCE   7   /* XHCI_PSI_SOURCE_* of that ID  */
+#define XHCI_SNAPSHOT_HCD_PORT_PDO      8   /* a PDO exists                  */
+#define XHCI_SNAPSHOT_HCD_PORT_USB3     9   /* a USB 3 protocol port         */
+#define XHCI_SNAPSHOT_HCD_PORT_WARM     10  /* its link's warm resets spent  */
+#define XHCI_SNAPSHOT_HCD_PORT_GAVEUP   11  /* its link given up             */
+#define XHCI_SNAPSHOT_HCD_PORT_NOTES    12  /* note bursts charged           */
+#define XHCI_SNAPSHOT_HCD_PORT_REFUSED  13  /* note bursts refused           */
+#define XHCI_SNAPSHOT_HCD_PORT_HOLDFAIL 14  /* failed PDO recreations        */
+#define XHCI_SNAPSHOT_HCD_PORT_FLAGS    15  /* XHCI_SNAPSHOT_HCD_F_*         */
+#define XHCI_SNAPSHOT_HCD_PORT_WORDS    16UL
+
+#define XHCI_SNAPSHOT_HCD_F_DEFERRED    0x00000001UL /* set aside by the settle */
+#define XHCI_SNAPSHOT_HCD_F_RECOVERING  0x00000002UL /* warm reset in flight */
+#define XHCI_SNAPSHOT_HCD_F_UNREADABLE  0x00000004UL /* PORTSC read all ones */
+
+/* XHCIHC_COUNTERS in ULONGs (xhci_counters.h; asserted in xhci_snap.c). */
+#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 63UL
+
+/* Where a word of the image lies (XhciSnapHcdLocate). */
+#define XHCI_SNAPSHOT_HCD_IN_HEAD       0UL
+#define XHCI_SNAPSHOT_HCD_IN_PORT       1UL
+#define XHCI_SNAPSHOT_HCD_IN_COUNTERS   2UL
+#define XHCI_SNAPSHOT_HCD_PAST_END      3UL
+
+/* The image's length in words for `ports` root ports (held to
+ * XHCI_MAX_ROOT_PORTS); its header word `word` (0 past the header); where
+ * word `index` lies - the part, and in it the record (a port's, from 0) and
+ * the word; and a record's flags word. IRQL: any. */
+ULONG XhciSnapHcdWords(ULONG ports);
+ULONG XhciSnapHcdHead(ULONG ports, ULONG word);
+ULONG XhciSnapHcdLocate(ULONG ports, ULONG index, PULONG record,
+                        PULONG word);
+ULONG XhciSnapHcdFlags(ULONG settleDeferred, ULONG linkRecovering,
+                       ULONG unreadable);
+
 /* Header Status bits. A window always comes back with a truthful header, so
  * every refusal below is reported here rather than through an MPSTATUS the
  * caller cannot tell apart from usbport's own. */
