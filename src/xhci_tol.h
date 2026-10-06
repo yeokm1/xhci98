@@ -340,7 +340,7 @@ ULONG XhciTolBackstop(PXHCI_TOL_OBS obs, ULONG tolerance, ULONG pending,
 /* Eight ULONGs: the clock stamps and the dump's counts whole, the budgets,
  * the hold and the flags a byte each (none exceeds 3, or 1), because there
  * is one per root port and one per hub port in the extension and XHCISNAP
- * keeps the whole extension in a 128 KB image (xhcisnap.c,
+ * keeps the whole extension in a 256 KB image (xhcisnap.c,
  * EXT_IMAGE_MAX). */
 typedef struct _XHCI_TOL_LOC {
     ULONG Charges;      /* every charge, never re-armed (the dump)          */

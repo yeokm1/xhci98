@@ -860,11 +860,11 @@ typedef char hcdSnapshotCounters[sizeof(XHCIHC_COUNTERS) ==
                                      ? 1
                                      : -1];
 
-/* XHCISNAP keeps the whole extension in one 128 KB image to print the note
+/* XHCISNAP keeps the whole extension in one 256 KB image to print the note
  * ring from it (xhcisnap.c, EXT_IMAGE_MAX) and refuses a larger one, on
  * either architecture: a build whose extension outgrows it fails here, not
  * on a user's machine. */
-typedef char hcdSnapshotFitsTool[sizeof(XHCI_EXTENSION) <= 131072UL ? 1
+typedef char hcdSnapshotFitsTool[sizeof(XHCI_EXTENSION) <= 262144UL ? 1
                                                                      : -1];
 
 /* The HCD region names a hub location by hub object and port from

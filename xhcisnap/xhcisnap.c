@@ -3772,7 +3772,8 @@ static unsigned char portsc_values[MAX_PORTS * 4];
 
 /*
  * The whole extension, kept in memory as well as written to the `.BIN`, so the
- * companion can print the note ring out of it. 128 KB is comfortably past the
+ * companion can print the note ring out of it. 256 KB since 2.2.0.0, whose
+ * amd64 extension outgrew the 128 KB this was before; 128 KB was past the
  * 90,272 bytes this was first built against, and past the 91,612 of 1.0.2.0,
  * and still a single static allocation on a machine with 64 MB of RAM -
  * which is what a Windows 98 SE target is. A driver
@@ -3780,7 +3781,7 @@ static unsigned char portsc_values[MAX_PORTS * 4];
  * short would give a rotated ring, which is a wrong reading and not a failed
  * one.
  */
-#define EXT_IMAGE_MAX 131072UL
+#define EXT_IMAGE_MAX 262144UL
 
 static unsigned char ext_image[EXT_IMAGE_MAX];
 
