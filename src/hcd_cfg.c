@@ -3956,6 +3956,13 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
              * them with their devices (round 2, finding 10). */
             break;
         }
+        if (hc->ScratchHeld != 0) {
+            /* An EP0 wait was abandoned for a device cycle (35-T.3): no
+             * control transfer goes out until that device's slot is taken
+             * back, later in this pass (hcdCycleService), so the rest wait
+             * for the next pass rather than fail for want of the scratch. */
+            break;
+        }
         /* The IRP's device's pending releases are claimed in the lock hold
          * that dequeues it and run before it is served. A REMOVE records
          * its release under this lock before it completes, so before its

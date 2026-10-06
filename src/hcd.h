@@ -389,9 +389,19 @@ typedef struct _HCD_USB_DEVICE {
     volatile LONG Refs;
     ULONG Gone;
     ULONG AbortAll;         /* the PDO is being removed: abort every pipe */
-    ULONG Ep0Stuck;         /* the thread's EP0 record timed out and is
-                             * still queued: no control transfer until
-                             * the reset frees the device                 */
+    ULONG Ep0Stuck;         /* the thread's EP0 record timed out, or its
+                             * wait was abandoned for a cycle, and may
+                             * still be queued: no control transfer until
+                             * the device's slot is taken back            */
+    /* 35-T.3/4 (design record 17 section 4.3). CycleMark: the cycle
+     * wanted, set by the event path and taken by the thread under the
+     * controller lock (HcdTolCycleMark). CycleAbandon: the thread gave its
+     * own EP0 work on the device up for that cycle (HCD_CTL_ABANDONED);
+     * Ep0Abandoned: and a TD of it was outstanding, so the scratch is held
+     * (ScratchHeld) until the slot is taken back. Thread only. */
+    XHCI_TOL_MARK CycleMark;
+    ULONG CycleAbandon;
+    ULONG Ep0Abandoned;
     ULONG Ep0Halted;        /* a URB's control transfer stalled: the
                              * thread owes Reset Endpoint + Set TR
                              * Dequeue (hcd_enum.c), controller lock   */
@@ -677,6 +687,13 @@ typedef struct _HCD_PORT {
      * set again (record 17 section 4.11). Set by the start. */
     ULONG TolOffPpLost;
     ULONG TolCompletionsSeen;
+    /* 35-T.3/4: the location's connect generation, bumped by every
+     * connect and disconnect fed at it, written by the thread and read by
+     * the event path's cycle mark under the controller lock; and the
+     * reason a pre-PDO cycle under way is for (XHCI_TOL_CYCLE_*), thread
+     * only. Each set by the start (HcdEnumInit). */
+    ULONG ConnectGen;
+    ULONG CycleReason;
     /* Task 35.3: a root port's enumeration notes and their budget
      * (xhci_enum.h), cleared by the start. Thread only. */
     XHCI_ENUM_NOTES Notes;
@@ -981,6 +998,16 @@ typedef struct _HCD_CONTROLLER {
     ULONG EnumDetachRequested;      /* the root hub is going               */
     KEVENT EnumDetachDone;
     ULONG ScratchTainted;           /* a timed-out EP0 transfer may DMA    */
+    /* 35-T.3 (design record 17 section 4.3): the slot whose EP0 transfer
+     * the thread's wait abandoned for a cycle, 0 for none. The controller
+     * may still own that TD and write the scratch, so no thread control
+     * transfer goes out until that slot's Disable Slot completes or HCRST
+     * takes it; a Disable Slot that fails sets ScratchTainted. Thread
+     * only. ThreadEp0Dev: the device the thread's control transfer is
+     * outstanding on, NULL between them, under the controller lock, so a
+     * cycle mark for it can end the wait (HcdTolCycleMark). */
+    ULONG ScratchHeld;
+    struct _HCD_USB_DEVICE *ThreadEp0Dev;
     ULONG SlotSweep;                /* Abandoned records await Disable Slot */
     volatile ULONG CmdDonePA;       /* the completed command's TRB        */
     volatile ULONG PortEvents;
@@ -1256,6 +1283,18 @@ VOID HcdEnumContain(PHCD_CONTROLLER hc, ULONG proof);
  * XhciTolerance 0 - and one look at the port. 35-T.3 and 35-T.4's device
  * cycle charges its re-enumeration through HcdTolLocCharge. */
 ULONG HcdTolLocCharge(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG kind);
+/*
+ * 35-T.3 and 35-T.4 (design record 17 section 4.3): mark the device to be
+ * cycled for reason (XHCI_TOL_CYCLE_REFUSED_CODE, or _HALT_NO_TD on endpoint
+ * dci, which the thread confirms by reading the endpoint's context), with
+ * its location's connect generation, and wake the thread - and, when the
+ * thread is waiting on its own control transfer to that device, end the
+ * wait. The one entry point every mark goes through, the event path's and
+ * any injection's. Nothing at XhciTolerance 0. IRQL: DISPATCH_LEVEL,
+ * controller lock held.
+ */
+VOID HcdTolCycleMark(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG reason,
+                     ULONG dci);
 VOID HcdTolLocObserve(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG connected,
                       ULONG powered, ULONG changed);
 VOID HcdTolLocRecovery(PHCD_CONTROLLER hc, PHCD_PORT p);
@@ -1311,6 +1350,9 @@ ULONG HcdThreadControlEx(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 #define HCD_CTL_FAILED      2UL /* it completed with another error       */
 #define HCD_CTL_NOT_SENT    3UL /* it never went out, or it timed out
                                  * (dev->Ep0Stuck, the reset requested)  */
+#define HCD_CTL_ABANDONED   4UL /* abandoned for a device cycle (35-T.3):
+                                 * dev->CycleAbandon, and nothing more is
+                                 * sent to the device                     */
 ULONG HcdThreadControlOutcome(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                               UCHAR requestType, UCHAR request,
                               USHORT value, USHORT index, ULONG length,

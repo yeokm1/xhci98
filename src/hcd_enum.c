@@ -88,6 +88,11 @@
  * its recovery has been asked for. */
 #define HCD_LINK_RECOVERY_PASSES 600UL
 #define HCD_LINK_RECOVERY_FAILED 0xFFFFFFFFUL
+/* Waits the thread's own control transfer restarts after a cycle mark for
+ * its device whose halt read stale (35-T.4): each needs another event from
+ * the controller, so a bound only against one that floods them; a bus
+ * policy number. */
+#define HCD_CYCLE_REWAITS      4UL
 
 #define HCD_DESC_DEVICE        1
 #define HCD_DESC_CONFIGURATION 2
@@ -248,6 +253,11 @@ static VOID hcdDeviceFree(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     if (dev == NULL) {
         return;
     }
+    /* Its slot is the controller's no longer, nor the abandoned TD that
+     * held the scratch (35-T.3). */
+    if (dev->Ep0Abandoned && hc->ScratchHeld == dev->SlotId) {
+        hc->ScratchHeld = 0;
+    }
     /* Its URBs first: the slot is disabled or HCRST has taken it, so the
      * engine's queue can be drained and every IRP completed (hcd_io.c). */
     kept = !HcdIoDeviceGone(hc, dev);
@@ -308,6 +318,11 @@ static VOID hcdDisableRecord(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     slotId = dev->SlotId;
     if (!hcdDisableSlotId(hc, slotId)) {
         dev->Abandoned = 0;
+        if (dev->Ep0Abandoned) {
+            /* Nothing took the abandoned TD back: the scratch stays out of
+             * use until the recovery the failure asked for (35-T.3). */
+            hc->ScratchTainted = 1;
+        }
         return;
     }
     dcbaa = XhciCommonAt(ext, ext->Layout.DcbaaOffset + slotId * 8UL);
@@ -326,6 +341,7 @@ static VOID hcdDisableRecord(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 
 static ULONG hcdSubtreeGo(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG how,
                           ULONG powered);
+static ULONG hcdCycleResolve(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 
 /* An endpoint's state as the controller keeps it in the output Device
  * Context (xHCI 6.2.3, EP State); Disabled when the slot has no context. */
@@ -756,6 +772,7 @@ static ULONG hcdEp0Quiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     LARGE_INTEGER now;
     KIRQL oldIrql;
     ULONG halted;
+    ULONG marked;
     ULONG count;
     ULONG ok;
 
@@ -774,7 +791,13 @@ static ULONG hcdEp0Quiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
         halted = dev->Ep0Halted;
         count = dev->Ep0Queue.Count;
+        marked = XhciTolMarkPending(&dev->CycleMark);
         XhciControllerLockRelease(&hc->Hc, oldIrql);
+        /* A device marked for a cycle (35-T.3/4) is not waited out: its
+         * client transfer may never end, and the cycle ends it. */
+        if (marked && hcdCycleResolve(hc, dev) != XHCI_TOL_CYCLE_NONE) {
+            break;
+        }
         if (halted) {
             if (!hcdResetEp0(hc, dev)) {
                 break;
@@ -843,14 +866,27 @@ ULONG HcdThreadControlOutcome(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG outcome;
 
     *bytes = 0;
-    if (dev->Ep0Stuck) {
+    if (dev->CycleAbandon) {
+        /* Given up for a cycle (35-T.3): nothing more goes to it. */
+        return HCD_CTL_ABANDONED;
+    }
+    if (dev->Ep0Stuck || hc->ScratchHeld != 0) {
         /* Its record is still queued from a timeout: reusing it would
-         * relink the engine's queue (round 2, finding 10). */
+         * relink the engine's queue (round 2, finding 10). Or another
+         * device's abandoned TD may still write the scratch until that
+         * slot is taken back (35-T.3). */
         return HCD_CTL_NOT_SENT;
     }
     if (length > HCD_SCRATCH_CONTROL_BYTES ||
         (length != 0 && (requestType & 0x80) == 0)) {
         return HCD_CTL_NOT_SENT;
+    }
+    if (hcdCycleResolve(hc, dev) != XHCI_TOL_CYCLE_NONE) {
+        /* Marked for a cycle (35-T.3/4): the cycle answers the device, so
+         * no request is begun on it. */
+        dev->CycleAbandon = 1;
+        dev->Ep0Stuck = 1;
+        return HCD_CTL_ABANDONED;
     }
     /*
      * EP0 to itself: client URBs are held at the pipe's gate, those already
@@ -864,6 +900,11 @@ ULONG HcdThreadControlOutcome(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     HcdIoPipePause(hc, &dev->Ep0Pipe);
     if (!hcdEp0Quiet(hc, dev)) {
         HcdIoPipeResume(hc, &dev->Ep0Pipe);
+        if (hcdCycleResolve(hc, dev) != XHCI_TOL_CYCLE_NONE) {
+            dev->CycleAbandon = 1;
+            dev->Ep0Stuck = 1;
+            return HCD_CTL_ABANDONED;
+        }
         return HCD_CTL_NOT_SENT;
     }
     outcome = hcdThreadControlQuiet(hc, dev, requestType, request, value,
@@ -888,6 +929,9 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     PUCHAR b;
     ULONG answer;
     ULONG done;
+    ULONG waited;
+    ULONG abandoned;
+    ULONG rewaits;
     ULONG i;
 
     b = (PUCHAR)&sg;
@@ -925,6 +969,7 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                        XHCI_XFER_MAX_CONTROL_TRBS);
         if (answer == XHCI_XFER_OK) {
             XhciWriteDoorbell(&hc->Hc, dev->SlotId, 1);
+            hc->ThreadEp0Dev = dev;
         }
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
@@ -932,8 +977,50 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         return HCD_CTL_NOT_SENT;
     }
 
-    done = hcdWaitEvent(&hc->XferDoneEvent, HCD_TRANSFER_WAIT_MS) &&
-           dev->Ep0Done;
+    /*
+     * A cycle mark for this device (35-T.3/4, HcdTolCycleMark) ends the
+     * wait rather than letting it time out into the controller reset: the
+     * mark's reason confirmed, the transfer is abandoned for the cycle. A
+     * halt the context shows stale is no reason, and the wait goes on, a
+     * bounded number of times. Ep0Done is read after the clear, so a
+     * completion between them is not lost.
+     */
+    done = 0;
+    abandoned = 0;
+    for (rewaits = 0; rewaits < HCD_CYCLE_REWAITS; rewaits++) {
+        waited = hcdWaitEvent(&hc->XferDoneEvent, HCD_TRANSFER_WAIT_MS);
+        if (dev->Ep0Done) {
+            done = 1;
+            break;
+        }
+        if (!waited) {
+            break;
+        }
+        if (hcdCycleResolve(hc, dev) != XHCI_TOL_CYCLE_NONE) {
+            abandoned = 1;
+            break;
+        }
+        KeClearEvent(&hc->XferDoneEvent);
+        if (dev->Ep0Done) {
+            done = 1;
+            break;
+        }
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->ThreadEp0Dev = NULL;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (abandoned) {
+        /* The controller may still own the TD and write the scratch:
+         * neither the record nor the scratch is used again until the
+         * cycle's Disable Slot takes the slot back (hcdDeviceFree), and a
+         * Disable Slot that fails taints the scratch (hcdDisableRecord). */
+        dev->Ep0Abandoned = 1;
+        dev->CycleAbandon = 1;
+        dev->Ep0Stuck = 1;
+        hc->ScratchHeld = dev->SlotId;
+        XhciLogNote(&hc->Hc, "tol.cycle.wait", dev->SlotId);
+        return HCD_CTL_ABANDONED;
+    }
     if (!done) {
         /* The TD is still on the ring and may yet DMA into the scratch:
          * nothing reuses it until the recovery's HCRST has taken every slot
@@ -1275,6 +1362,97 @@ VOID HcdEnumCycle(PHCD_CONTROLLER hc, ULONG port, ULONG serial)
     hc->PortCycleSerial[port - 1] = serial;
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     HcdThreadWake(hc);
+}
+
+/* hcd.h. The generation is read here, under the lock its writer takes
+ * (hcdConnectGen), so the thread can tell a mark made for this device at
+ * this location from one that outlived a connect or a disconnect. */
+VOID HcdTolCycleMark(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG reason,
+                     ULONG dci)
+{
+    ULONG gen;
+
+    if (dev == NULL || !hc->Hc.Tol.Stats.Tolerance) {
+        return;
+    }
+    gen = (dev->Location != 0 && dev->Location <= HCD_PORT_COUNT)
+              ? hc->Ports[dev->Location - 1].ConnectGen
+              : 0;
+    if (XhciTolMarkSet(&dev->CycleMark, reason, dci, gen)) {
+        XhciLogNoteLocked(&hc->Hc, "tol.cycle.mark",
+                          (dev->SlotId << 16) | (dci << 8) | reason);
+    }
+    if (hc->ThreadEp0Dev == dev) {
+        (VOID)KeSetEvent(&hc->XferDoneEvent, IO_NO_INCREMENT, FALSE);
+    }
+    HcdThreadWake(hc);
+}
+
+/* A connect or a disconnect fed at the location: its connect generation
+ * moves, under the lock the cycle mark reads it under. Thread only. */
+static VOID hcdConnectGen(PHCD_CONTROLLER hc, PHCD_PORT p)
+{
+    KIRQL oldIrql;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    p->ConnectGen++;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
+/*
+ * The thread's reading of a device's cycle mark (record 17 section 4.3): a
+ * halt with no TD confirmed only by the endpoint's context read Halted or
+ * Error - one read per endpoint named, counted, a stale one clearing the
+ * mark - and a refused code taken as it stands. Returns the reason the
+ * device is to be cycled for, XHCI_TOL_CYCLE_NONE for none; the mark is
+ * left for the cycle to take. The context is in the common buffer, read
+ * under the lock the mark is set under. Thread only.
+ */
+static ULONG hcdCycleResolve(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    PXHCI_EXTENSION ext;
+    KIRQL oldIrql;
+    ULONG halted;
+    ULONG reason;
+    ULONG dci;
+
+    ext = &hc->Hc;
+    XhciControllerLockAcquire(ext, &oldIrql);
+    if (!XhciTolMarkPending(&dev->CycleMark)) {
+        XhciControllerLockRelease(ext, oldIrql);
+        return XHCI_TOL_CYCLE_NONE;
+    }
+    halted = 0;
+    for (dci = 1; dci < 32; dci++) {
+        if ((dev->CycleMark.HaltDcis & (1UL << dci)) == 0) {
+            continue;
+        }
+        ext->Tol.Stats.HaltReads++;
+        if (XhciTolHaltConfirmed(hcdEpState(hc, dev, dci))) {
+            halted |= 1UL << dci;
+        } else {
+            ext->Tol.Stats.HaltStale++;
+        }
+    }
+    reason = XhciTolMarkResolve(&dev->CycleMark, halted);
+    XhciControllerLockRelease(ext, oldIrql);
+    return reason;
+}
+
+/* The mark taken off the device as its cycle begins: the reason, the
+ * generation it was made at; the mark cleared. Thread only. */
+static ULONG hcdCycleTake(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                          PULONG gen)
+{
+    KIRQL oldIrql;
+    ULONG reason;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    reason = XhciTolMarkResolve(&dev->CycleMark, 0);
+    *gen = dev->CycleMark.Gen;
+    XhciTolMarkInit(&dev->CycleMark);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    return reason;
 }
 
 /* Whether the device on the port is still the one that PDO group stands
@@ -2075,8 +2253,31 @@ static ULONG hcdSettleOutstanding(PHCD_CONTROLLER hc)
  * failed, when the port is disabled at the hub and left so until its next
  * connect change (section 10.2 step 7). A halted controller (hcdHalted)
  * ends the run where it stands; the invalidation that follows the recovery
- * settles the port from any state. */
-static VOID hcdRun(PHCD_CONTROLLER hc, PHCD_PORT p, XHCI_ENUM_EVENT event)
+ * settles the port from any state.
+ *
+ * An attempt abandoned for a device cycle (35-T.3/4; design record 17
+ * section 4.3) - a control transfer that returned HCD_CTL_ABANDONED, seen as
+ * the device's CycleAbandon before it has a PDO, or the run fed
+ * XHCI_ENUM_EV_ABANDONED by the cycle service - is not a failure: the
+ * outcome is replaced by XHCI_ENUM_EV_ABANDONED, so no continuation and no
+ * retry follows, and the slot goes back by the subtree teardown the machine's
+ * DISABLE_SLOT runs. Then, once per run - the run is the attempt, and
+ * `abandoned` its done-once mark - the pre-PDO cycle's handler
+ * (hcdCycleAfter): the location charged once and, when the budget allows
+ * and the location still reads connected, 1 returned for the caller to feed
+ * a CONNECT to the now-Empty machine. 0 otherwise.
+ */
+static ULONG hcdCycleAfter(PHCD_CONTROLLER hc, PHCD_PORT p);
+
+/* The device the port's attempt holds gave its control transfers up for a
+ * cycle before it had a PDO. Thread only. */
+static ULONG hcdRunAbandoned(PHCD_PORT p)
+{
+    return p->Device != NULL && p->Device->CycleAbandon &&
+           p->Device->Pdo == NULL;
+}
+
+static ULONG hcdRun(PHCD_CONTROLLER hc, PHCD_PORT p, XHCI_ENUM_EVENT event)
 {
     XHCI_ENUM_ACTION act;
     ULONG retries;
@@ -2087,9 +2288,13 @@ static VOID hcdRun(PHCD_CONTROLLER hc, PHCD_PORT p, XHCI_ENUM_EVENT event)
     ULONG deferring;
     ULONG cause;
     ULONG attempt;
+    ULONG abandoned;
+    ULONG reconnect;
+    ULONG gen;
 
     retries = (p->Hub != NULL) ? XHCI_HUB_PORT_ATTEMPTS - 1UL
                                : XHCI_ENUM_RETRIES;
+    abandoned = (event.Kind == XHCI_ENUM_EV_ABANDONED) ? 1UL : 0UL;
     /* The per-port budget (task 33.3): a relative timer, as the answer's
      * deadline, unaffected by a change of the system time. */
     armed = 0;
@@ -2159,6 +2364,17 @@ static VOID hcdRun(PHCD_CONTROLLER hc, PHCD_PORT p, XHCI_ENUM_EVENT event)
                 break;
             }
         }
+        if (!abandoned && hcdRunAbandoned(p)) {
+            /* The outcome just produced is not fed: the attempt was
+             * abandoned for a cycle, and the mark is the cycle's now. */
+            abandoned = 1;
+            p->CycleReason = hcdCycleTake(hc, p->Device, &gen);
+            hcdEventInit(&event, XHCI_ENUM_EV_ABANDONED, 1);
+        }
+    }
+    reconnect = 0;
+    if (abandoned) {
+        reconnect = hcdCycleAfter(hc, p);
     }
     if (deferring || (hcdHalted(hc) && !p->SettleDeferred &&
                       hcdSettleOutstanding(hc))) {
@@ -2193,14 +2409,83 @@ static VOID hcdRun(PHCD_CONTROLLER hc, PHCD_PORT p, XHCI_ENUM_EVENT event)
         }
         XhciEnumNoteFinish(&p->Notes);
     }
+    return reconnect;
 }
 
+/* Feed the port's machine one event and run it. A disconnect, a cycle's
+ * abandonment, and a connect that starts an enumeration (from Empty or
+ * Failed; one the machine ignores leaves its device as it was), move the
+ * location's connect
+ * generation (35-T.3/4). A pre-PDO cycle's CONNECT is fed here, after the
+ * run that cycled, so no run nests in another; each one was charged to the
+ * location's budget, which bounds them before the guard does. */
 static VOID hcdFeed(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG kind)
 {
     XHCI_ENUM_EVENT event;
+    ULONG guard;
 
+    if (kind == XHCI_ENUM_EV_DISCONNECT || kind == XHCI_ENUM_EV_ABANDONED ||
+        (kind == XHCI_ENUM_EV_CONNECT &&
+         (p->Enum.State == XHCI_ENUM_EMPTY ||
+          p->Enum.State == XHCI_ENUM_FAILED))) {
+        hcdConnectGen(hc, p);
+    }
     hcdEventInit(&event, kind, 1);
-    hcdRun(hc, p, event);
+    for (guard = 0; hcdRun(hc, p, event) && guard < XHCI_TOL_REENUMS;
+         guard++) {
+        XHCI_DBG_VALUE("hcd: pre-PDO cycle, connect fed again, location",
+                       p->PortId);
+        hcdConnectGen(hc, p);
+        hcdEventInit(&event, XHCI_ENUM_EV_CONNECT, 1);
+    }
+}
+
+/*
+ * The pre-PDO cycle's handler (design record 17 section 4.3), once per
+ * attempt (hcdRun), after XHCI_ENUM_EV_ABANDONED's teardown - the slot
+ * disabled, the device record and its DCBAA entry freed, as an ordinary
+ * failure's teardown does - left the location's own machine Empty with its
+ * slot and device cleared (or Gone, for a hub whose devnode exists): the
+ * location charged once, counted by the mark's reason, and 1 returned when
+ * a CONNECT is to be fed - the charge allowed, the machine Empty and the
+ * location still reading connected as hcdPortConnected reads it (CCS at a
+ * root port, the hub's port status at a hub's), with no over-current
+ * episode or send-back hold at a root port. A refused charge holds the
+ * location: the device stays gone. Thread only.
+ */
+static ULONG hcdCycleAfter(PHCD_CONTROLLER hc, PHCD_PORT p)
+{
+    PXHCI_EXTENSION ext;
+    ULONG reason;
+    ULONG charged;
+    ULONG connected;
+    ULONG empty;
+
+    ext = &hc->Hc;
+    reason = p->CycleReason;
+    p->CycleReason = XHCI_TOL_CYCLE_NONE;
+    if (reason >= XHCI_TOL_CYCLE_REASONS) {
+        reason = XHCI_TOL_CYCLE_NONE;
+    }
+    charged = HcdTolLocCharge(hc, p, XHCI_TOL_CHARGE_REENUM);
+    if (charged) {
+        ext->Tol.Stats.Cycles[reason]++;
+        ext->Tol.Stats.CyclesPrePdo++;
+    } else {
+        ext->Tol.Stats.CyclesRefused++;
+    }
+    XhciLogNote(ext, "tol.cycle.prepdo",
+                (p->PortId << 16) | (charged << 8) | reason);
+    empty = (p->Enum.State == XHCI_ENUM_EMPTY && p->Device == NULL) ? 1UL
+                                                                    : 0UL;
+    connected = 0;
+    if (charged && empty && !hcdHalted(hc) &&
+        (p->Hub != NULL ||
+         (p->TolOc.Phase == XHCI_TOL_OC_NONE &&
+          hcdHoldOf(hc, p->PortId) == NULL))) {
+        connected = hcdPortConnected(hc, p);
+    }
+    return XhciTolCycleReconnect(charged, empty, connected);
 }
 
 static VOID hcdHoldResolve(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG portsc);
@@ -3288,6 +3573,7 @@ static VOID hcdPortGone(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG how,
     XHCI_ENUM_EVENT event;
     XHCI_ENUM_ACTION act;
 
+    hcdConnectGen(hc, q);
     if (how == HCD_GO_DETACH) {
         q->AwaitSerial = 0;
         q->AwaitHub = NULL;
@@ -3476,6 +3762,7 @@ static VOID hcdDropPort(PHCD_CONTROLLER hc, PHCD_PORT p)
     XHCI_ENUM_EVENT event;
     XHCI_ENUM_ACTION act;
 
+    hcdConnectGen(hc, p);
     if (p->Device != NULL) {
         p->AwaitSerial = hcdSubtreeGo(hc, p, HCD_GO_TAKEN, 0);
     }
@@ -3553,6 +3840,7 @@ static VOID hcdInvalidate(PHCD_CONTROLLER hc)
     hcdHoldsForget(hc, 1);
     hcdDropAll(hc);
     hc->ScratchTainted = 0;
+    hc->ScratchHeld = 0;
 }
 
 /*
@@ -3582,6 +3870,7 @@ VOID HcdEnumContain(PHCD_CONTROLLER hc, ULONG proof)
  * Empty. */
 static VOID hcdDetachPort(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG powered)
 {
+    hcdConnectGen(hc, p);
     if (p->Device != NULL) {
         (VOID)hcdSubtreeGo(hc, p, HCD_GO_DETACH, powered);
     }
@@ -3910,6 +4199,89 @@ static VOID hcdSettleUndefer(PHCD_CONTROLLER hc)
     hc->SettleDeferHubFull = 0;
     HcdThreadWake(hc);
 }
+
+/*
+ * 35-T.3 and 35-T.4's thread step (design record 17 section 4.3): each
+ * device the event path marked (HcdTolCycleMark), its mark read - a halt
+ * with no TD confirmed by its endpoint's context, a stale one costing that
+ * read and nothing more - and then taken. A mark whose device is no longer
+ * the one at its location, or whose location saw a connect or a disconnect
+ * since, is dropped and counted. Otherwise the cycle is charged to the
+ * location's budget (HcdTolLocCharge) by one of two paths: a published
+ * device - its PDO and its group's serial, HcdEnumCycle's own condition -
+ * through HcdEnumCycle, whose request the CYCLE_PORT step of this same pass
+ * takes; a device not yet published through the pre-PDO cycle, the port's
+ * machine fed XHCI_ENUM_EV_ABANDONED, whose handler charges it
+ * (hcdCycleAfter). Charged or refused, the device goes: a refusal holds the
+ * location, as 35-T.5's PED reconnect does. Thread only, powered, root hub
+ * started.
+ */
+static VOID hcdCycleService(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+    PHCD_USB_DEVICE dev;
+    PHCD_PORT p;
+    KIRQL oldIrql;
+    ULONG marked;
+    ULONG reason;
+    ULONG charged;
+    ULONG gen;
+    ULONG same;
+    ULONG i;
+
+    ext = &hc->Hc;
+    if (!ext->Tol.Stats.Tolerance) {
+        return;
+    }
+    for (i = 1; i <= XHCI_MAX_SLOTS && !hcdHalted(hc); i++) {
+        dev = hc->SlotDevice[i];
+        if (dev == NULL) {
+            continue;
+        }
+        XhciControllerLockAcquire(ext, &oldIrql);
+        marked = XhciTolMarkPending(&dev->CycleMark);
+        XhciControllerLockRelease(ext, oldIrql);
+        if (!marked || hcdCycleResolve(hc, dev) == XHCI_TOL_CYCLE_NONE) {
+            continue;
+        }
+        reason = hcdCycleTake(hc, dev, &gen);
+        p = (dev->Location != 0 && dev->Location <= HCD_PORT_COUNT)
+                ? &hc->Ports[dev->Location - 1]
+                : NULL;
+        same = (p != NULL && p->Device == dev && !dev->Gone &&
+                !dev->Abandoned) ? 1UL : 0UL;
+        switch (XhciTolCycleAct(reason, same, gen,
+                                p != NULL ? p->ConnectGen : gen + 1UL,
+                                dev->Pdo != NULL && dev->PdoGroup != 0)) {
+        case XHCI_TOL_CYCLE_ACT_DROP:
+            ext->Tol.Stats.CyclesDropped++;
+            XhciLogNote(ext, "tol.cycle.dropped", (i << 8) | reason);
+            break;
+        case XHCI_TOL_CYCLE_ACT_PUBLISHED:
+            charged = HcdTolLocCharge(hc, p, XHCI_TOL_CHARGE_REENUM);
+            if (charged) {
+                ext->Tol.Stats.Cycles[reason]++;
+            } else {
+                ext->Tol.Stats.CyclesRefused++;
+            }
+            XhciLogNote(ext, "tol.cycle",
+                        (p->PortId << 16) | (charged << 8) | reason);
+            XHCI_DBG_VALUE("hcd: device cycled, location/reason",
+                           (p->PortId << 8) | reason);
+            HcdEnumCycle(hc, p->PortId, dev->PdoGroup);
+            break;
+        case XHCI_TOL_CYCLE_ACT_PRE_PDO:
+            XHCI_DBG_VALUE("hcd: device cycled pre-PDO, location/reason",
+                           (p->PortId << 8) | reason);
+            p->CycleReason = reason;
+            hcdFeed(hc, p, XHCI_ENUM_EV_ABANDONED);
+            break;
+        default:
+            break;
+        }
+    }
+}
+
 /*
  * The thread's port service, under the power gate; `powered` is the
  * controller's state read under it (Codex review of batch (b), round 1,
@@ -3991,6 +4363,11 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
         /* 29-A.5's send-backs, after the URBs that may have asked for
          * them. */
         hcdHoldService(hc);
+    }
+    if (!hcdHalted(hc) && hc->RootHubStarted && hc->ScratchVa != NULL) {
+        /* 35-T.3/4's cycles, before the CYCLE_PORT requests are taken
+         * below, so a published device's cycle runs in this pass. */
+        hcdCycleService(hc);
     }
 
     XhciControllerLockAcquire(ext, &oldIrql);
@@ -4332,6 +4709,9 @@ VOID HcdEnumInit(PHCD_CONTROLLER hc)
         hc->Ports[i].TolCompletions = 0;
         hc->Ports[i].TolOffPpLost = 0;
         hc->Ports[i].TolCompletionsSeen = 0;
+        /* 35-T.3/4's: no device record outlives the stop, nor its mark. */
+        hc->Ports[i].ConnectGen = 0;
+        hc->Ports[i].CycleReason = XHCI_TOL_CYCLE_NONE;
     }
     hc->SettleDeferredNow = 0;
     for (i = 0; i < HCD_SETTLE_DEFER_HUB; i++) {
@@ -4354,6 +4734,8 @@ VOID HcdEnumInit(PHCD_CONTROLLER hc)
     hc->RetryWork = 0;
     hc->EnumDetachRequested = 0;
     hc->ScratchTainted = 0;
+    hc->ScratchHeld = 0;
+    hc->ThreadEp0Dev = NULL;
     (VOID)KeSetEvent(&hc->EnumDetachDone, IO_NO_INCREMENT, FALSE);
 }
 
