@@ -242,8 +242,10 @@ rem (task 26-A.9).
 call :run test_enum "test_enum.c ..\src\xhci_enum.c"
 rem test_link links xhci_port.c for the PORTSC writes its actions become, and
 rem xhci_caps.c because xhci_port.c's root-hub map asks it which ports exist,
-rem and xhci_enum.c so the port-change feed is checked against a real machine.
-call :run test_link "test_link.c ..\src\xhci_link.c ..\src\xhci_port.c ..\src\xhci_caps.c ..\src\xhci_enum.c"
+rem and xhci_enum.c so the port-change feed is checked against a real machine;
+rem xhci_ctx.c and xhci_mem.c so task 35.1's vector reads the Slot Context's
+rem speed from the real encoder.
+call :run test_link "test_link.c ..\src\xhci_link.c ..\src\xhci_port.c ..\src\xhci_caps.c ..\src\xhci_enum.c ..\src\xhci_ctx.c ..\src\xhci_mem.c"
 call :run test_pipe "test_pipe.c ..\src\xhci_pipe.c"
 rem test_func links nothing else: the composite split, the filtered
 rem configuration descriptor, the function ids and the instance ids are pure

@@ -134,8 +134,10 @@ child behind a hub on such a table is not given an unlisted 5 to 7: decoding
 an ID the controller reported is not the same as writing one it never named,
 and the raw capability header cannot gate it by revision (the P14s's USB 3.1
 group reads Minor Revision `01h`, not the BCD `10h` the specification
-describes). That child takes 4, counted unmatched, and the output Slot
-Context settles it, as before. Host vectors: `test/test_caps.c` (the three
+describes). That child takes a listed entry at its aggregate rate, else one
+at its lane rate, and only when both searches fail 4, counted unmatched;
+after Address Device a usable output Slot Context speed is adopted, as
+before. Host vectors: `test/test_caps.c` (the three
 tables, replayed from the logs' words), `test/test_link.c` (port 13 at
 `00001203` to Enable Slot with EP0 at 512, and the `2.1.1.0` path to a
 terminal Failed) and `test/test_sshub.c` (the hub children); run against the

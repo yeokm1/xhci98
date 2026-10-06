@@ -924,8 +924,11 @@ Why there is no MSI on either target. MSI is an interrupt delivered as a memory 
   direction only as far as SuperSpeed's own ID: 4, where a USB 3.x table lists
   no 5 Gb/s entry and does not list 4. A SuperSpeedPlus child of such a table
   is never given an unlisted 5 to 7 - writing an ID the controller never
-  named is not decoding one it reported - and takes 4, unmatched, for the
-  output Slot Context to settle (`XhciSsHubPsiv`).
+  named is not decoding one it reported. It takes a listed entry at its
+  aggregate rate, else one at its lane rate (unmatched), and only when both
+  searches fail SuperSpeed's 4, unmatched; after Address Device a usable
+  output Slot Context speed is adopted (`XhciSsHubPsiv`,
+  `XhciSsHubAdoptSpeed`).
 
 ## DMA Teardown
 

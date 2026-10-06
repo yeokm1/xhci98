@@ -594,6 +594,29 @@ static ULONG enum_speed_of(ULONG speedClass)
     }
 }
 
+/* The Speed field of the Slot Context the encoder builds for a device on
+ * a root port, as hcd_enum.c builds it from p->LinkPsiv. */
+static ULONG slot_speed(ULONG rawPsiv, ULONG rootPort)
+{
+    static ULONG ctx[XHCI_CONTEXT_SIZE_LARGE / 4];
+    XHCI_SLOT_PARAMS sp;
+    ULONG i;
+
+    for (i = 0; i < XHCI_CONTEXT_SIZE_LARGE / 4; i++) {
+        ctx[i] = 0;
+    }
+    for (i = 0; i < sizeof(sp) / sizeof(ULONG); i++) {
+        ((PULONG)&sp)[i] = 0;
+    }
+    sp.Psiv = rawPsiv;
+    sp.RootHubPort = rootPort;
+    sp.ContextEntries = 1;
+    if (XhciBuildSlotContext(ctx, &sp) != XHCI_CTX_OK) {
+        return 0xFFFFFFFFUL;
+    }
+    return (ctx[0] & XHCI_SLOT_SPEED_MASK) >> XHCI_SLOT_SPEED_SHIFT;
+}
+
 static void enum_to_reset(PXHCI_ENUM_PORT e)
 {
     XHCI_ENUM_EVENT ev;
@@ -643,7 +666,18 @@ static void test_e460_port13(void)
     (VOID)XhciEnumStep(&e, &ev, &a);
     CHECK_EQ(a.Kind, XHCI_ENUM_ACT_ADDRESS, "Address Device");
     CHECK_EQ(a.Mps0, 512, "with EP0 at 512");
-    CHECK_EQ(psiv, 4, "the Slot Context's ID stays the raw 4");
+    CHECK_EQ(slot_speed(psiv, 13), 4,
+             "the Slot Context carries the raw ID 4");
+
+    /* The raw ID, not the machine's speed, even where the two differ: a
+     * USB 2.0 table that reorders its IDs, High Speed at 1. */
+    map.Protocols[0].Psi[0] = 0x01E00021UL;
+    map.Protocols[0].Psi[2] = 0x000C0023UL;
+    cls = XHCI_SPEED_UNKNOWN;
+    (VOID)XhciPortSpeedClass(&map, 2, 1, &cls);
+    CHECK_EQ(enum_speed_of(cls), XHCI_ENUM_SPEED_HIGH,
+             "reordered: the machine is fed High Speed's 3");
+    CHECK_EQ(slot_speed(1, 2), 1, "and the Slot Context the raw 1");
 
     /* What 2.1.1.0 did: the unknown class failed the speed, the retry
      * failed it again, and the port stayed Failed while the link sat in
