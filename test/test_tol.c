@@ -333,6 +333,114 @@ static void test_cycle_mark(void)
     CHECK_EQ(XhciTolCycleReconnect(1, 1, 0), 0, "no longer connected");
 }
 
+/*
+ * The thread's wait on its own control transfer (35-T.3/4), as the driver
+ * runs it: each look under the lock (XhciTolWaitStep), the wake event
+ * cleared only in a look that saw nothing, one deadline across every wake.
+ * The event path is modelled by what it sets under the same lock: Ep0Done,
+ * the mark, and the event. `script` gives, per slice, what arrives during
+ * it: 0 nothing, 1 a stale halt, 2 a confirmed halt, 3 the completion, 4 a
+ * stale halt and then the completion in the same slice. Returns the wait's
+ * end (XHCI_TOL_WAIT_DONE, _TIMEOUT, or _RESOLVE for an abandonment) and
+ * the slices it took.
+ */
+static ULONG wait_model(const ULONG *script, ULONG slices, ULONG deadline,
+                        PULONG taken)
+{
+    XHCI_TOL_MARK m;
+    ULONG halted;
+    ULONG done;
+    ULONG step;
+    ULONG now;
+    ULONG guard;
+
+    XhciTolMarkInit(&m);
+    halted = 0;
+    done = 0;
+    now = 0;
+    for (guard = 0; guard < 1000; guard++) {
+        step = XhciTolWaitStep(done, XhciTolMarkPending(&m), now >= deadline);
+        if (step == XHCI_TOL_WAIT_DONE || step == XHCI_TOL_WAIT_TIMEOUT) {
+            *taken = now;
+            return step;
+        }
+        if (step == XHCI_TOL_WAIT_RESOLVE) {
+            /* The context read: DCI 2 Halted once the script made it so. */
+            if (XhciTolMarkResolve(&m, halted ? 1UL << 2 : 0) !=
+                XHCI_TOL_CYCLE_NONE) {
+                *taken = now;
+                return XHCI_TOL_WAIT_RESOLVE;
+            }
+            continue;
+        }
+        /* One slice: what the event path does in it, each under the lock
+         * and each setting the wake event. */
+        if (now < slices) {
+            switch (script[now]) {
+            case 1:
+                XhciTolMarkSet(&m, XHCI_TOL_CYCLE_HALT_NO_TD, 2, 0);
+                break;
+            case 2:
+                XhciTolMarkSet(&m, XHCI_TOL_CYCLE_HALT_NO_TD, 2, 0);
+                halted = 1;
+                break;
+            case 3:
+                done = 1;
+                break;
+            case 4:
+                XhciTolMarkSet(&m, XHCI_TOL_CYCLE_HALT_NO_TD, 2, 0);
+                done = 1;
+                break;
+            default:
+                break;
+            }
+        }
+        now++;
+    }
+    *taken = now;
+    return 0xFFFFFFFFUL;
+}
+
+static void test_cycle_wait(void)
+{
+    static const ULONG staleThenDone[] = { 1, 1, 1, 1, 1, 1, 1, 1, 3 };
+    static const ULONG staleOnly[] = { 1, 1, 1, 1, 1, 1 };
+    static const ULONG confirmed[] = { 0, 1, 2 };
+    static const ULONG together[] = { 0, 4 };
+    ULONG taken;
+
+    CHECK_EQ(XhciTolWaitStep(0, 0, 0), XHCI_TOL_WAIT_SLEEP, "nothing: wait");
+    CHECK_EQ(XhciTolWaitStep(1, 0, 0), XHCI_TOL_WAIT_DONE, "completed");
+    CHECK_EQ(XhciTolWaitStep(1, 1, 1), XHCI_TOL_WAIT_DONE,
+             "a completion wins over a mark and the deadline");
+    CHECK_EQ(XhciTolWaitStep(0, 1, 0), XHCI_TOL_WAIT_RESOLVE, "a mark: read");
+    CHECK_EQ(XhciTolWaitStep(0, 1, 1), XHCI_TOL_WAIT_RESOLVE,
+             "a mark at the deadline is read before the timeout");
+    CHECK_EQ(XhciTolWaitStep(0, 0, 1), XHCI_TOL_WAIT_TIMEOUT, "expired");
+
+    /* Eight stale halts, more than any count of rewaits, then the
+     * completion well inside the deadline: completed, no timeout. */
+    CHECK_EQ(wait_model(staleThenDone, 9, 50, &taken), XHCI_TOL_WAIT_DONE,
+             "repeated stale events then timely completion: done");
+    CHECK_EQ(taken, 9, "at the completion, not before");
+    /* Stale halts alone: the wait runs to its one deadline, no sooner. */
+    CHECK_EQ(wait_model(staleOnly, 6, 50, &taken), XHCI_TOL_WAIT_TIMEOUT,
+             "stale events alone: the deadline");
+    CHECK_EQ(taken, 50, "the deadline, not shortened by the stale events");
+    CHECK_EQ(wait_model(confirmed, 3, 50, &taken), XHCI_TOL_WAIT_RESOLVE,
+             "a confirmed halt abandons the wait");
+    CHECK_EQ(taken, 3, "at the look after it arrived");
+    CHECK_EQ(wait_model(together, 2, 50, &taken), XHCI_TOL_WAIT_DONE,
+             "a stale mark and the completion in one slice: done");
+    /* A mark that lands in the last slice before the deadline is read,
+     * never left behind a timeout. */
+    {
+        static const ULONG late[] = { 0, 0, 0, 0, 2 };
+        CHECK_EQ(wait_model(late, 5, 5, &taken), XHCI_TOL_WAIT_RESOLVE,
+                 "a mark arriving as the deadline passes: read, abandoned");
+    }
+}
+
 static void test_backstop(void)
 {
     XHCI_TOL_OBS o;
@@ -836,6 +944,7 @@ int main(void)
     test_retry();
     test_cycle();
     test_cycle_mark();
+    test_cycle_wait();
     test_backstop();
     test_loc();
     test_port();

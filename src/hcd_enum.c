@@ -88,11 +88,11 @@
  * its recovery has been asked for. */
 #define HCD_LINK_RECOVERY_PASSES 600UL
 #define HCD_LINK_RECOVERY_FAILED 0xFFFFFFFFUL
-/* Waits the thread's own control transfer restarts after a cycle mark for
- * its device whose halt read stale (35-T.4): each needs another event from
- * the controller, so a bound only against one that floods them; a bus
- * policy number. */
-#define HCD_CYCLE_REWAITS      4UL
+/* The slice the thread's own control transfer waits on its wake event
+ * between looks at its one deadline (35-T.3/4): the deadline is a timer the
+ * event wait cannot also wait on (no KeWaitForMultipleObjects row), so a
+ * timeout is taken at most this late; a wake ends a slice at once. */
+#define HCD_WAIT_SLICE_MS      100UL
 
 #define HCD_DESC_DEVICE        1
 #define HCD_DESC_CONFIGURATION 2
@@ -927,11 +927,15 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     USBPORT_SCATTER_GATHER_LIST sg;
     KIRQL oldIrql;
     PUCHAR b;
+    KTIMER deadline;
+    LARGE_INTEGER due;
+    LARGE_INTEGER zero;
     ULONG answer;
     ULONG done;
-    ULONG waited;
+    ULONG expired;
+    ULONG marked;
+    ULONG step;
     ULONG abandoned;
-    ULONG rewaits;
     ULONG i;
 
     b = (PUCHAR)&sg;
@@ -957,23 +961,51 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     req.MaxPacketSize = dev->Mps0;
     req.SgList = &sg;
 
+    /* The transfer's one deadline, HCD_TRANSFER_WAIT_MS, kept across every
+     * wake (35-T.4: a stale mark costs its context read, not the wait): a
+     * relative timer polled with a zero wait, as hcdEp0Quiet's. */
+    KeInitializeTimer(&deadline);
+    HcdRelativeMs(&due, HCD_TRANSFER_WAIT_MS);
+    (VOID)KeSetTimer(&deadline, due, NULL);
+    zero.QuadPart = 0;
+
     /* Published and rung under the lock, and never for a device being
-     * torn down (Gone; Codex review of d54eef0, finding 1). */
-    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    dev->Ep0Done = 0;
-    KeClearEvent(&hc->XferDoneEvent);
-    answer = XHCI_XFER_BUSY;
-    if (!dev->Gone) {
-        answer = XhciXferSubmitControl(&dev->Ep0Queue, &dev->Ep0, &req,
-                                       &dev->Ep0Xfer, dev, trbs,
-                                       XHCI_XFER_MAX_CONTROL_TRBS);
-        if (answer == XHCI_XFER_OK) {
-            XhciWriteDoorbell(&hc->Hc, dev->SlotId, 1);
-            hc->ThreadEp0Dev = dev;
+     * torn down (Gone; Codex review of d54eef0, finding 1). In the same
+     * hold the thread registers as this device's waiter and looks for a
+     * cycle mark (35-T.3/4): one made after hcdEp0Quiet's last look and
+     * before this hold is read here, before anything goes out, and one
+     * made after it finds the waiter registered (HcdTolCycleMark). */
+    for (;;) {
+        expired = KeWaitForSingleObject(&deadline, Executive, KernelMode,
+                                        FALSE, &zero) == STATUS_SUCCESS;
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        marked = XhciTolMarkPending(&dev->CycleMark);
+        answer = XHCI_XFER_BUSY;
+        if (!marked && !expired && !dev->Gone) {
+            dev->Ep0Done = 0;
+            KeClearEvent(&hc->XferDoneEvent);
+            answer = XhciXferSubmitControl(&dev->Ep0Queue, &dev->Ep0, &req,
+                                           &dev->Ep0Xfer, dev, trbs,
+                                           XHCI_XFER_MAX_CONTROL_TRBS);
+            if (answer == XHCI_XFER_OK) {
+                XhciWriteDoorbell(&hc->Hc, dev->SlotId, 1);
+                hc->ThreadEp0Dev = dev;
+            }
+        }
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        if (!marked) {
+            break;
+        }
+        if (hcdCycleResolve(hc, dev) != XHCI_TOL_CYCLE_NONE) {
+            /* Nothing went out: the record and the scratch are free. */
+            (VOID)KeCancelTimer(&deadline);
+            dev->CycleAbandon = 1;
+            dev->Ep0Stuck = 1;
+            return HCD_CTL_ABANDONED;
         }
     }
-    XhciControllerLockRelease(&hc->Hc, oldIrql);
     if (answer != XHCI_XFER_OK) {
+        (VOID)KeCancelTimer(&deadline);
         return HCD_CTL_NOT_SENT;
     }
 
@@ -981,31 +1013,41 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
      * A cycle mark for this device (35-T.3/4, HcdTolCycleMark) ends the
      * wait rather than letting it time out into the controller reset: the
      * mark's reason confirmed, the transfer is abandoned for the cycle. A
-     * halt the context shows stale is no reason, and the wait goes on, a
-     * bounded number of times. Ep0Done is read after the clear, so a
-     * completion between them is not lost.
+     * halt the context shows stale is no reason, and the wait goes on to
+     * the same deadline. Each look (XhciTolWaitStep) is taken under the
+     * lock the event path sets Ep0Done, the mark and the wake event under,
+     * and the event is cleared only in a hold that saw neither, so no wake
+     * is lost; a pending mark is read before a timeout is taken.
      */
     done = 0;
     abandoned = 0;
-    for (rewaits = 0; rewaits < HCD_CYCLE_REWAITS; rewaits++) {
-        waited = hcdWaitEvent(&hc->XferDoneEvent, HCD_TRANSFER_WAIT_MS);
-        if (dev->Ep0Done) {
+    for (;;) {
+        expired = KeWaitForSingleObject(&deadline, Executive, KernelMode,
+                                        FALSE, &zero) == STATUS_SUCCESS;
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        step = XhciTolWaitStep(dev->Ep0Done,
+                               XhciTolMarkPending(&dev->CycleMark), expired);
+        if (step == XHCI_TOL_WAIT_SLEEP) {
+            KeClearEvent(&hc->XferDoneEvent);
+        }
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        if (step == XHCI_TOL_WAIT_DONE) {
             done = 1;
             break;
         }
-        if (!waited) {
+        if (step == XHCI_TOL_WAIT_TIMEOUT) {
             break;
         }
-        if (hcdCycleResolve(hc, dev) != XHCI_TOL_CYCLE_NONE) {
-            abandoned = 1;
-            break;
+        if (step == XHCI_TOL_WAIT_RESOLVE) {
+            if (hcdCycleResolve(hc, dev) != XHCI_TOL_CYCLE_NONE) {
+                abandoned = 1;
+                break;
+            }
+            continue;
         }
-        KeClearEvent(&hc->XferDoneEvent);
-        if (dev->Ep0Done) {
-            done = 1;
-            break;
-        }
+        (VOID)hcdWaitEvent(&hc->XferDoneEvent, HCD_WAIT_SLICE_MS);
     }
+    (VOID)KeCancelTimer(&deadline);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     hc->ThreadEp0Dev = NULL;
     XhciControllerLockRelease(&hc->Hc, oldIrql);

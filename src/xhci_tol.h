@@ -247,6 +247,24 @@ ULONG XhciTolCycleAct(ULONG reason, ULONG sameDevice, ULONG markGen,
  * location is never charged) and the location still reads connected. */
 ULONG XhciTolCycleReconnect(ULONG charged, ULONG empty, ULONG connected);
 
+/*
+ * The thread's wait on its own control transfer (record 17 section 4.3),
+ * one look at a time under the controller lock: done the transfer retired
+ * (Ep0Done), marked a cycle mark pending on the device, expired the one
+ * deadline the transfer has (the original 5000 ms, across every wake). A
+ * completion wins; a pending mark is read before anything else, a timeout
+ * included, so a mark is never left unread behind a reset; only an expired
+ * deadline with neither is a timeout. A stale mark resolves to nothing and
+ * the wait goes on to the same deadline: it costs its context read alone.
+ * SLEEP: the caller clears the wake event in the same lock hold, then waits.
+ */
+#define XHCI_TOL_WAIT_SLEEP         0UL
+#define XHCI_TOL_WAIT_DONE          1UL
+#define XHCI_TOL_WAIT_RESOLVE       2UL
+#define XHCI_TOL_WAIT_TIMEOUT       3UL
+
+ULONG XhciTolWaitStep(ULONG done, ULONG marked, ULONG expired);
+
 /* The backstop's one observation (record 17 section 4.1). */
 typedef struct _XHCI_TOL_OBS {
     ULONG Valid;

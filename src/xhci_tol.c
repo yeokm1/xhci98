@@ -224,6 +224,17 @@ ULONG XhciTolCycleReconnect(ULONG charged, ULONG empty, ULONG connected)
     return (charged && empty && connected) ? 1UL : 0UL;
 }
 
+ULONG XhciTolWaitStep(ULONG done, ULONG marked, ULONG expired)
+{
+    if (done) {
+        return XHCI_TOL_WAIT_DONE;
+    }
+    if (marked) {
+        return XHCI_TOL_WAIT_RESOLVE;
+    }
+    return expired ? XHCI_TOL_WAIT_TIMEOUT : XHCI_TOL_WAIT_SLEEP;
+}
+
 ULONG XhciTolBackstop(PXHCI_TOL_OBS obs, ULONG tolerance, ULONG pending,
                       ULONG index, ULONG cycle, ULONG drainGen,
                       ULONG startGen, ULONG now)
