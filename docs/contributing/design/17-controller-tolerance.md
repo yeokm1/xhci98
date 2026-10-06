@@ -1,13 +1,16 @@
 # Controller tolerance
 
 Design record for roadmap-hcd tasks 35-T.0 to 35-T.9 (Phase 35, release
-`2.2.0.0`). Revision 2, 2026-10-06, written before code. Revision 0
+`2.2.0.0`). Revision 3, 2026-10-06, written before code. Revision 0
 (`60f8f64`) drafted the findings and the shape; revision 1 (`4a63a35`)
-answered review round 1's eleven findings; review round 2 found five of
-them resolved, four in part and two not, and raised thirteen findings of
-its own. This revision rests the recoveries on a reading of the recovery
-machinery as it is (section 4.0), and section 10 maps every finding of
-both rounds to where it is answered. Nothing below is converged.
+answered review round 1; revision 2 (`67a3f75`) rested the recoveries on
+the machinery as it is and answered round 2. Review round 3 found the
+precise in-place endpoint recovery of revision 2 unsound in five ways, all
+of them in attributing a fault to a TD. This revision replaces it, by the
+owner's decision, with a device cycle - the replug the user does by hand,
+done by the bus (section 4.3) - and makes the soft retry pause nothing
+(section 4.2). Section 10 maps every finding of the three rounds to where
+it is answered. Nothing below is converged.
 
 ## 1. What is asked, and what is not
 
@@ -43,8 +46,10 @@ Not in this design: suspend, resume and runtime power quirks (Linux's
 and their kin); the isochronous AMD PLL quirk (`XHCI_AMD_PLL_FIX`, SB700 to
 Bolton only); link power management, which this driver never enables;
 MSI; ASMedia's flow-control register writes
-(`XHCI_ASMEDIA_MODIFY_FLOWCONTROL`); and Intel's `XHCI_MISSING_CAS`, which
-is Phase 35's own task 35.3.
+(`XHCI_ASMEDIA_MODIFY_FLOWCONTROL`); Intel's `XHCI_MISSING_CAS`, which is
+Phase 35's own task 35.3; and an in-place endpoint recovery that keeps a
+faulted device's other transfers alive (withdrawn at this revision,
+section 4.3).
 
 ## 2. The rule: tolerant by default, gated by exception
 
@@ -57,8 +62,9 @@ A behaviour is unconditional when all of these hold:
   no field the controller is told on a healthy device's path (no context
   field the controller uses for admission or scheduling);
 - the controller never loses a TRB or a buffer it still owns: a transfer is
-  completed only once its TRBs are retired, by the controller's own event
-  or by a stop the driver issued and the controller confirmed;
+  completed only once its TRBs are retired, by the controller's own event,
+  by a stop the driver issued and the controller confirmed, or by a Disable
+  Slot that takes every TRB of the slot back;
 - it is bounded by an episode budget (section 4.9), so a fault that
   persists ends in a stated terminal state and nothing loops;
 - it does not change what a class driver sees from a healthy device, and
@@ -90,7 +96,7 @@ Read in this tree at `08df41f` on 2026-10-06, corrected at revisions 1 and
 
 ## 4. The behaviours
 
-### 4.0 The machinery the recoveries are built on
+### 4.0 The machinery the behaviours are built on
 
 Read on 2026-10-06; the design uses these as they are, or says where it
 changes them.
@@ -98,65 +104,67 @@ changes them.
 - Every recovery command runs on the controller thread, which serializes
   them; a cancel, ABORT_PIPE, RESET_PIPE, SYNC_RESET_PIPE and RESET_PORT
   each pause the pipe, and so does the thread's own control transfer.
+  There is no pipe lock: these paths take the controller lock.
 - `Paused` is a nesting counter with no owner (`hcd.h`, line 240; `hcd_io.c`,
   `HcdIoPipePause` and `HcdIoPipeResume`, lines 1323 and 1337); resume
-  releases held submissions in order. A submission while paused is held;
-  one while not paused is published and rung, Halted or not.
-- `hcdCfgQuiesce` (`hcd_cfg.c`, line 2224) brings an endpoint to Stopped
-  and relocates the controller to the **software** dequeue, assuming the
-  engine has already retired the failed TD (lines 2246 to 2250).
-- `hcdCfgCancelPipe` (line 2717) is the one path that keeps survivors: a
-  cancelled head moves the dequeue to the first survivor with Set TR
-  Dequeue, a cancelled TD elsewhere becomes No-Ops in place, and the
-  survivors are restarted by a doorbell (lines 2804 to 2811).
-- No helper reads the Endpoint Context's TR Dequeue Pointer, and nothing
-  maps a hardware dequeue to a queued TD; the field's masks exist
-  (`xhci.h`, lines 1354 and 1355).
-- `XHCI_EPQ_NO_CONTEXT` has no consumer in the HCD; `hcdCfgRecycle` (line
-  2365) is the Drop and Add Configure Endpoint that puts a context back,
-  with the rings emptied.
+  releases held submissions, which are published and rung. A submission
+  while not paused is published and rung, Halted or not, and the
+  controller ignores a doorbell for a Halted endpoint.
+- Every existing quiesce relocates the controller to the **software**
+  dequeue (`hcd_cfg.c`, `hcdCfgQuiesce`, line 2224), and no helper reads the
+  Endpoint Context's TR Dequeue Pointer. This design adds no such helper.
 - There is no configuration generation; an event is mapped to a pipe by
   slot and DCI alone (`hcd_dev.c`, `hcdEventPipe`, line 231).
-- A device the bus drops completes its transfers `DEVICE_GONE`, which are
-  parked on the PDO and later completed `STATUS_CANCELLED`, unless the
-  common buffer is pinned (`hcd_io.c`, `HcdIoDeviceDrain`, line 1893, and
-  `HcdIoPark`, line 2028); a refusal is completed by a 1 ms DPC, never
+- `HcdEnumCycle` re-enumerates a device at its location, a root port or an
+  external hub's port: the PDO departs, the slot is disabled - which takes
+  back every TRB of the slot - and the device is enumerated again with a new
+  PDO. Every target's class drivers handle that as a removal and an
+  arrival. It is what a user's replug does.
+- A dropped device's transfers complete `DEVICE_GONE`, are parked on the
+  PDO and later completed `STATUS_CANCELLED`, unless the common buffer is
+  pinned, when they are kept (`hcd_io.c`, `HcdIoDeviceDrain`, line 1893,
+  and `HcdIoPark`, line 2028); a refusal is completed by a 1 ms DPC, never
   inline. Windows 98 SE's `hidclass.sys` answers a read failing
   `STATUS_DEVICE_NOT_CONNECTED` by resubmitting at once while its device is
   started (`hcd_io.c`, lines 1947 to 1953), so this design never returns
   that status for a device that is still listed.
-- `HcdEnumCycle` re-enumerates a device on its port: the PDO departs and a
-  new one arrives, which every target's class drivers handle as a removal
-  and an arrival. It is what a user's replug does.
+- The enumeration already keeps elapsed time: `HcdEnumSettleClock` and
+  `XhciEnumElapsedMs` (`hcd_enum.c`, line 3725). Every interval below is
+  measured with them, never by counting polls, because the controller
+  thread wakes on work as well as on its 100 ms timeout and does blocking
+  work between polls.
 
 ### 4.1 The lost-interrupt backstop (35-T.1, unconditional)
 
 Each health poll that its existing admission lets read (`HcInfoStatus`
 good, `INITIALIZED` set, the controller not failed, D0, `DpcClosed` clear)
 reads, under the controller lock, the event TRB at the software dequeue
-pointer, and compares it with what the previous poll saw. The drain is
-queued only when an event was already pending at the previous poll, at the
-same dequeue pointer and cycle: the controller wrote it at least one poll
-period ago and nothing has drained it since. A pending event seen for the
-first time is left to the interrupt, so moderation and an ordinary
-interrupt in flight are not raced. A lost interrupt is therefore recovered
-in 100 to 200 ms.
+pointer. A cycle bit equal to the consumer's means an event is pending. The
+poll keeps one observation: the dequeue index, the cycle, the drain
+generation (a counter every drain pass increments, so a ring that wrapped
+and came back to the same index is not mistaken for one that never moved),
+the start generation (bumped by every start and in-place recovery), and the
+time first seen. The drain is queued when the same observation - all four
+equal - has stood for at least 100 ms of elapsed time: the controller wrote
+an event and nothing has drained it since. An event pending for less is
+left to the interrupt, so moderation and an interrupt in flight are not
+raced. A lost interrupt is drained at the first poll at least 100 ms after
+the poll that first saw it; the thread's own pacing sets how long after.
 
 The queue goes through the ISR's admission: `DpcsInFlight` counted before
 `KeInsertQueueDpc` and rolled back on a refusal, nothing once `DpcClosed`
-is set. The insertion can succeed while a drain is executing on another
+is set. The insertion can succeed while a drain executes on another
 processor, since a running DPC is no longer queued; the second drain
-serializes on the controller lock and finds the ring empty. That costs one
-DPC, and only after an event has waited a whole poll period. It writes no
-register: ERDP and EHB stay the drain's, and IE, clear between the ISR's
-acknowledgement and the DPC's re-arm, stays the DPC's to restore.
-`XHCI_FIX_EVT_REARM` is retired. One helper serves the peek; record 15's
-opportunistic checks reuse it with their own staleness rule.
+serializes on the controller lock and finds the ring empty, which costs one
+DPC, and only after an event has waited 100 ms. It writes no register: ERDP
+and EHB stay the drain's, and IE, clear between the ISR's acknowledgement
+and the DPC's re-arm, stays the DPC's to restore. `XHCI_FIX_EVT_REARM` is
+retired. One helper serves the peek; record 15's opportunistic checks reuse
+it with their own staleness rule.
 
-Its count is `BackstopDrains`: drains the backstop queued. Under the
-two-poll rule a nonzero count is strong evidence of a lost or late
-interrupt, not proof of one. Cost on a compliant controller: one cached
-memory read per 100 ms.
+Its count is `BackstopDrains`: drains the backstop queued, evidence of a
+lost or late interrupt, not proof. Cost on a compliant controller: one
+cached memory read per poll.
 
 ### 4.2 The soft retry (35-T.2, unconditional but for an exclusion list)
 
@@ -165,100 +173,77 @@ no streams, whose device is not behind a TT, on a controller not on Linux's
 `XHCI_NO_SOFT_RETRY` list (`1022:43B9`, `1022:43BB`, `1B6F:7023`,
 `1B6F:7052`). EP0, isochronous and stream endpoints keep today's handling.
 
-**The engine.** For such an error the transfer engine does not retire or
-complete the TD: the TD stays the queue's head, the software dequeue stays
-on it, and the pipe is marked `RetryWanted` with the thread woken. The
-endpoint is Halted; submissions arriving now are published and wait behind
-the doorbell the controller ignores, as today.
+**The engine** defers its retirement: the TD is left unretired at the head,
+the software dequeue on it, and the pipe is marked `RetryWanted` with the
+thread woken. The endpoint is Halted; submissions arriving now are
+published and rung as today, and the controller ignores the doorbell.
 
-**The owner.** The retry is a pipe state, `Retry`, owned by the thread:
-NONE, then WANTED (set by the engine), then RESETTING (the thread has taken
-one pause and issued the command), then NONE. On the thread, before
-issuing: if a cancel, ABORT_PIPE, RESET_PIPE, SYNC_RESET_PIPE or RESET_PORT
-is pending on the pipe or its device, or `DrainPending` is set, the retry
-is abandoned without a command - the TD is completed with its error through
-the drain machinery, as today, and the pending request proceeds from the
-Halted endpoint it already handles. Otherwise the thread pauses the pipe
-once, sets RESETTING and issues Reset Endpoint with TSP 1, which xHCI 1.2c
-4.6.8.1 provides so the host's sequence state is kept and the device's data
-toggle stays aligned without a CLEAR_FEATURE. The retry path issues no Set
-TR Dequeue Pointer and no CLEAR_FEATURE, and keeps the TD's mapping.
+**The thread** takes no pause: every operation that could contend runs on
+the same thread, one at a time, and a doorbell rung on the Halted endpoint
+is ignored. When it reaches the pipe it decides under the controller lock:
 
-When the command completes the endpoint is Stopped with its dequeue on the
-halted TD. Under the pipe lock the thread checks the same pending set again
-and decides in one step: none pending, it rings the doorbell, the controller
-resumes at the halted TRB, and the thread sets NONE and resumes the pipe -
-the one pause it took, so held submissions are released after the doorbell;
-something pending, it leaves the endpoint Stopped, sets NONE and resumes,
-and the pending request runs next from Stopped, which every one of them
-already handles. A failed Reset Endpoint goes to `hcdCfgFault`, as any
-recovery command does. A multi-TRB TD resumes at the TRB that failed, as
-Linux's does.
+- If a cancel, ABORT_PIPE, RESET_PIPE, SYNC_RESET_PIPE or RESET_PORT is
+  pending on the pipe or its device, `DrainPending` is set, or the TD's
+  retries are spent, it performs the retirement the engine deferred -
+  exactly today's: the TD completed with `USBD_STATUS_DEV_NOT_RESPONDING`
+  and the software dequeue moved past it - and clears `RetryWanted`. The
+  endpoint is then Halted with today's state, and the pending operation, or
+  the class driver's own reset, proceeds from it as it does today.
+- Otherwise it issues Reset Endpoint with TSP 1, which xHCI 1.2c 4.6.8.1
+  provides so the host's sequence state is kept and the device's data
+  toggle stays aligned without a CLEAR_FEATURE; no Set TR Dequeue Pointer,
+  no CLEAR_FEATURE; the TD's mapping is kept. The endpoint becomes Stopped
+  with the controller's dequeue on the TRB that failed. The thread then
+  rings the doorbell and clears `RetryWanted`; the controller resumes at
+  that TRB, so a multi-TRB TD's completed TRBs are not transferred twice.
+  An operation that became pending meanwhile runs next against a Running
+  endpoint, which every one of them already handles. A failed Reset
+  Endpoint goes to `hcdCfgFault`, as any recovery command does.
 
 **The bound** is this project's: three retries per TD, counted on the TD and
 gone with it (Linux allows four, endpoint-wide). The fourth Transaction Error
-completes the TD with its error as today, and is charged to the endpoint's
-episode (section 4.9).
+takes the first branch, today's completion. An exhausted retry is not
+charged to any further budget: the class driver sees what it sees today.
 
 Cost on a compliant controller: nothing, since no Transaction Error arrives.
 
-### 4.3 The endpoint recovery (35-T.3 and 35-T.4, unconditional)
+### 4.3 The device cycle (35-T.3 and 35-T.4, unconditional)
 
-One sequence, `hcdCfgRecoverEndpoint`, serves both a code nothing claims
-(T3) and a halt with no TD (T4). It is driven by the endpoint's state, not
-by the event, so an event cannot make it act on a TD it does not own. On
-the thread, under one pause of the pipe:
+A code nothing claims (T3) and a halt with no TD (T4) are answered by
+cycling the device (owner, 2026-10-06), not by recovering the endpoint in
+place. Review round 3 showed every in-place form needs to attribute the
+fault to a TD, and that cannot be done soundly here: the Endpoint Context's
+TR Dequeue Pointer is defined only in some states (xHCI 1.2c Table 6-10),
+the queue's head and the ring's dequeue are kept apart by design, a
+recycled endpoint resets only the host's toggle, a Running endpoint can have
+passed the TD whose completion was refused, and EP0 needs a Setup boundary
+and a thread that is not waiting on itself. A Disable Slot takes back every
+TRB of the slot whatever its state, which is the ownership guarantee section
+2 asks for, and the re-enumeration resynchronizes both sides of every
+endpoint. These faults are not raised by a compliant controller, so the
+cost - a re-enumeration, the device's other transfers ending as on an
+unplug - is paid only where the alternative is a device dead until the user
+replugs it.
 
-1. **Stop.** Read the Endpoint Context. Running: Stop Endpoint, Context
-   State Error accepted and the state read again, as `hcdCfgQuiesce` does.
-   The endpoint is now Stopped, Halted, Error or Disabled.
-2. **Capture.** Read the Endpoint Context's TR Dequeue Pointer and DCS (a new
-   pure helper over the output context) and map it to the queued TD that
-   contains it, if any (a new pure helper over the ring and the queue).
-   This is the controller's position, captured before anything moves it.
-3. **Attribute.** If the state is Halted or Error and the captured position
-   lies inside a queued TD, that TD is the one the fault stopped: it is
-   marked cancelled with `USBD_STATUS_INTERNAL_HC_ERROR` (or the halting
-   code's own status, for T4). If the state is Stopped, or the position lies
-   in no TD, no TD is attributed and none is failed.
-4. **Move the software dequeue to the captured position** if they differ,
-   so the existing helpers, which relocate to the software dequeue, act on
-   the controller's position and not on an assumption.
-5. **Recover through the cancel path.** `hcdCfgCancelPipe`'s machinery:
-   Halted takes Reset Endpoint TSP 1 and Set TR Dequeue; the attributed TD,
-   now the head, is removed and the dequeue moved to the first survivor;
-   the survivors are restarted by a doorbell; the attributed TD completes
-   through the drain. `Halted` is cleared.
-6. **Disabled** (Endpoint Not Enabled): no TRB can be owned by a disabled
-   endpoint, so every transfer on the pipe is completed
-   `USBD_STATUS_INTERNAL_HC_ERROR` through the drain, the pipe is recycled
-   by `hcdCfgRecycle`, and the pipe resumes empty.
-7. Resume the pipe: the one pause the sequence took.
+**When.** T3: a Transfer Event on a non-isochronous endpoint with a code
+`XhciXferCodeInfo` refuses, whose slot names a device - any state of the
+endpoint, since a refused code is itself the evidence. T4: a Stall, or a
+Transaction, Babble or Split Transaction error on a non-isochronous
+endpoint, that the queue could not match - Foreign by pointer, zero
+included, or Unmatched - whose slot and DCI name an open pipe, and only if
+the thread then reads that endpoint's context as Halted or Error, so a
+stale event against an endpoint now running costs one context read and
+nothing more. A slot with no device is counted and dropped as today. The
+streams endpoint's Prime Pipe STALL path is kept as it is.
 
-**When it runs.** T3: any Transfer Event with a code `XhciXferCodeInfo`
-refuses, whose slot and DCI name an open pipe, on a non-isochronous
-endpoint. T4: a Stall, or a Transaction, Babble or Split Transaction error
-on a non-isochronous endpoint, that the queue could not match - Foreign by
-pointer (zero included) or Unmatched - whose slot and DCI name an open pipe.
-A slot or DCI with no open pipe is counted and dropped as today. The event
-only requests the sequence; the sequence's state check decides. A stale
-event that names a pipe now Running in a new configuration costs one Stop
-Endpoint and a restart in place, and is charged to the episode.
-
-**Streams.** The Prime Pipe STALL path is kept as it is. Any other T3 or T4
-event on a streams endpoint requests the existing endpoint abort
-(`hcdCfgAbort`), which drains every stream with the status and empties
-their rings, the streams staying open; per-stream attribution is not
-attempted.
-
-**EP0.** Client control transfers and the thread's own share `Ep0Pipe`
-(`hcd_dev.c`, `hcdEp0Result`, line 103). The same sequence runs on EP0,
-with `hcdResetEp0`'s commands (TSP 0, since a control transfer's Setup
-stage resets the toggle), and the attributed transfer is completed whichever
-owner it belongs to: a client transfer through the drain, the thread's own
-by its existing outcome path. Client control transfers have no timeout
-today, and this design adds none; it removes the case in which one waits on
-a Halted EP0.
+**How.** The event marks the device `CycleWanted` with its reason and wakes
+the thread; the thread runs `HcdEnumCycle` on it, charged to the location's
+budget (section 4.9). If the thread is at that moment waiting on its own
+control transfer to the same device, the mark also ends that wait: the wait
+returns "abandoned for a cycle" instead of timing out into a controller
+reset (`hcd_enum.c`, the 5000 ms wait and `Ep0Stuck`), and the transfer's
+record is released only after the cycle's Disable Slot. Client control
+transfers on EP0 end with the device, as on an unplug.
 
 The deviation in `implementation-invariants.md`, "Fatal Errors", is
 superseded and rewritten (35.6), and the comment at `xhci_xfer.c` line 270
@@ -266,11 +251,9 @@ corrected.
 
 ### 4.4 Submissions to a Halted endpoint
 
-Unchanged: published and rung, the doorbell ignored until the recovery, and
-the sequence's survivor restart rings it again. Revision 0's failing them
-was withdrawn at revision 1.
+Unchanged: published and rung, the doorbell ignored until a recovery.
 
-### 4.5 The root port the controller gave up on (35-T.5, unconditional)
+### 4.5 The location the controller gave up on (35-T.5, unconditional)
 
 **PED cleared.** A USB 2.0 root port with PEC set, PED clear, CCS set and a
 device held is fed a disconnect. Once the disconnect's teardown has
@@ -282,21 +265,24 @@ answers 0.
 
 **Over-current.** A root port with OCC set, or found with PP clear while
 the driver's own state says it powered it, is held and its device fed a
-disconnect. The thread then watches OCA on each pass: once OCA reads clear
-on two passes in a row, it sets PP, waits the power-on interval, and reads
-PORTSC afresh before looking for a connection. A port whose OCA does not
-clear within the over-current wait stays held.
+disconnect. The thread then reads OCA on each pass: once OCA has read clear
+for the over-current settle interval, it sets PP, waits the power-on
+interval, and reads PORTSC afresh before looking for a connection. A port
+whose OCA does not clear within the over-current wait stays held.
 
-**Episodes.** Each port has one episode for both, armed by the first fault.
-Its budget, charged when the recovery action starts, is three re-enumerations
-and three repowers. Transitions the recovery itself causes - CCS falling
-because PP was cleared, the driver's own disconnects - never re-arm it, and
-the budget survives a repower. It is re-armed by evidence of a genuine
-change only: CCS observed clear with PP set and no fault active for the
-stable-disconnect interval, followed by a connection; or the device
-enumerated and working for the stable-progress interval. Exhausted, the
-port is held in a terminal state the dump shows (`hold` with its reason),
-released only by that stable-disconnect evidence or a controller start.
+**Every location has one budget**, a root port and an external hub's port
+alike, for its re-enumerations (4.3's cycles and 4.5's PED reconnects) and,
+on a root port, its repowers: three of each. It is kept on the location, so
+a cycle, a reconfiguration or a new PDO at the location does not reset it.
+Transitions the recovery itself causes - CCS falling because PP was cleared,
+the driver's own disconnects and cycles - never re-arm it, and it survives a
+repower. It is re-armed only by evidence of a genuine change: CCS observed
+clear with PP set and no fault active for the stable-disconnect interval,
+followed by a connection; or a device enumerated at the location and
+completing transfers, with no charge, for the stable-progress interval.
+Exhausted, the location is held - the bus enumerates nothing there - in a
+state the dump shows (`hold` with its reason), released only by that
+stable-disconnect evidence or a controller start.
 
 ### 4.6 The controller halted or unreadable (35-T.6, unconditional)
 
@@ -313,25 +299,32 @@ The window is reset at start.
 
 **All-ones.** An all-ones USBSTS keeps its reading as a window that stopped
 decoding and never requests a reset. What changes is that it is no longer
-silent: once it has persisted for the containment interval while PnP says
-present and the power state is D0, the driver contains it through paths it
-already has.
+silent. The first all-ones read stamps the time; any good read clears the
+stamp. Once all-ones has stood for the containment interval of elapsed time,
+while PnP says present and the power state is D0, the thread - under the
+power gate the health poll already takes, so no power transition or
+recovery runs beside it - contains the controller:
 
-- It reads PCI configuration space. If the function still answers there,
-  it clears Bus Master Enable and reads it back clear: that read is the
-  proof DMA has stopped. The controller is latched failed with reason
-  `unreadable`, the health poll stops reading it, and every device is
-  dropped through the existing departure, so their transfers complete
-  `DEVICE_GONE`, are parked and later completed `STATUS_CANCELLED` - never
-  `STATUS_DEVICE_NOT_CONNECTED` on a listed device.
-- If configuration space reads all-ones too, or Bus Master Enable cannot be
-  read back clear, DMA cannot be proved stopped: the common buffer is
-  pinned through the existing `HcdSvcDmaNotStopped` and transfers are kept,
-  as `HcdIoDeviceDrain` already does for a pinned buffer, until PnP removes
-  the device.
+1. **Close admission.** `ControllerFailed` is latched with the reason
+   `unreadable`: the event drain drains nothing, `hcdHalted` stops commands,
+   enumeration and configuration service, the health poll stops reading the
+   controller, and `hcdRecover` never acts on this reason. Every device is
+   marked Gone through `HcdIoDeviceDrain`, so new submissions are refused
+   `DEVICE_GONE` through the existing deferred refusal.
+2. **Prove DMA stopped.** The thread reads PCI configuration space. If the
+   function answers, it clears Bus Master Enable and reads it back clear.
+3. **Release or keep.** With that proof, each device's transfers are
+   drained, parked and later completed `STATUS_CANCELLED`, and the devices
+   are dropped through the existing departure - never
+   `STATUS_DEVICE_NOT_CONNECTED` on a listed device. Without it -
+   configuration space reads all-ones too, or Bus Master Enable will not read
+   back clear - the common buffer is pinned through the existing
+   `HcdSvcDmaNotStopped`, and the transfers and mappings are kept under the
+   existing pinned-buffer rule, which this design does not relax: not
+   released at removal, nor at a D0 entry.
 
-Revalidation happens only at a start or a D0 entry, through the start's own
-checks.
+Revalidation happens only at a start, through the start's own checks; a
+pinned buffer stays pinned as the existing rule says.
 
 ### 4.7 The interval cap (35-T.7, gated) and the Average TRB Length switch
 
@@ -373,88 +366,107 @@ the report.
 ### 4.8 The counters a user can send (35-T.8)
 
 The per-queue `Errors`, `BadCodes`, `UnmatchedEvents`, `ForeignEvents`,
-halts, soft retries and endpoint recoveries; a histogram of completion
-codes 0 to 255 by count; `BackstopDrains`; each root port's episode, its
-charges and its hold; the controller's recovery window and its terminal
-reason; and the values in effect (`XhciIntervalCap`, `XhciAvgTrbEsit`), in
-the snapshot `XHCISNAP` copies, under the schema rule. They live in the
-extension, which the snapshot already carries, rather than in
-`XHCIHC_COUNTERS`. `XhciLogErrorBudget` is called from the transfer
-engine's error path, so the note ring carries the first records of each
-code. `xhciqual/quirks.c` grows report-only AMD rows.
+halts and soft retries; the device cycles with their reasons; a histogram
+of completion codes 0 to 255 by count; `BackstopDrains`; each location's
+budget, its charges and its hold; the controller's recovery window, the
+containment and its branch, and its terminal reason; and the values in
+effect (`XhciIntervalCap`, `XhciAvgTrbEsit`), in the snapshot `XHCISNAP`
+copies, under the schema rule. They live in the extension, which the
+snapshot already carries, rather than in `XHCIHC_COUNTERS`.
+`XhciLogErrorBudget` is called from the transfer engine's error path, so
+the note ring carries the first records of each code. `xhciqual/quirks.c`
+grows report-only AMD rows.
 
-### 4.9 The episode budgets
+### 4.9 The budgets
 
 Every behaviour that acts is charged when its action starts, to a budget
 with explicit re-arm and lifecycle rules, so no fault loops.
 
-| Behaviour | Episode | Budget | Re-armed by | Terminal | Reset at |
+| Behaviour | Kept on | Budget | Re-armed by | Terminal | Reset at |
 |---|---|---|---|---|---|
-| 4.1 backstop | none | at most one drain per poll period | - | - (it only queues a drain) | - |
-| 4.2 soft retry | one TD | 3 retries | the TD's completion | the error completes as today; charged to 4.3's episode | the TD's completion |
-| 4.3 endpoint recovery | one endpoint | 3 recoveries | the stable-progress interval with transfers completing and no recovery | a port cycle of the device (`HcdEnumCycle`), charged to 4.5's episode | a device's removal, a configuration change, a controller start |
-| 4.5 root port | one port | 3 re-enumerations and 3 repowers | stable-disconnect evidence, or the stable-progress interval enumerated | the port held, shown in the dump | a controller start |
+| 4.1 backstop | - | at most one drain per 100 ms an event stands | - | - (it only queues a drain) | - |
+| 4.2 soft retry | the TD | 3 retries | - | today's error completion | the TD's completion |
+| 4.3 device cycle, 4.5 PED reconnect | the location | 3 re-enumerations | stable-disconnect evidence, or the stable-progress interval with no charge | the location held, shown in the dump | a controller start |
+| 4.5 repower | the root port | 3 repowers | the same | the port held, shown | a controller start |
 | 4.6 controller recovery | the controller | 3 recoveries begun in 10 minutes | the window | latched failed until a stop and start | a controller start |
-| 4.6 all-ones | the controller | one containment | - | contained: unreadable, or pinned | a start or D0 entry |
+| 4.6 containment | the controller | once | - | contained: released or pinned | a start (a pin as its rule says) |
 
-The intervals, proposed: stable-progress 60 s; stable-disconnect 1 s;
-over-current wait 5 s; power-on interval 100 ms; containment 1 s (ten
-health polls). Each is a named constant in the pure core with a host vector
-at its boundary.
-
-An endpoint whose budget is exhausted is not failed back to its class
-driver: the device is cycled, which is a replug done by the bus, and every
-target's class drivers already handle a departure and an arrival. A device
-that keeps failing reaches the port's budget, and the port is held.
+The intervals, measured as elapsed time with the enumeration's clock:
+stable-progress 60 s; stable-disconnect 1 s; over-current settle 100 ms and
+over-current wait 5 s; power-on 100 ms; containment 1 s. Each is a named
+constant in the pure core with a host vector at its boundary.
 
 ### 4.10 What the class drivers see
 
-Revision 1 deferred this to a reading. Revision 2 removes the dependency:
-every recovery above is owned by the bus, and what a class driver sees is
-either an error completion it already gets today for the same fault (a soft
-retry exhausted, a TD the controller attributed), or a device departure and
-arrival (an exhausted endpoint, a root port re-enumerated), never a new
-status and never `STATUS_DEVICE_NOT_CONNECTED` on a listed device.
+Every behaviour above is owned by the bus, and what a class driver sees is
+either an error completion it already gets today for the same fault (a
+soft retry exhausted, which completes exactly as today), or a device
+departure and arrival (a cycle, a re-enumerated location, a contained
+controller's dropped devices), never a new status and never
+`STATUS_DEVICE_NOT_CONNECTED` on a listed device. So the design does not
+depend on how a class driver reacts to an error.
 
-35-T.0 still reads, per target, what `hidusb.sys`, `usbstor.sys` and
-`usbaudio.sys` do with each error completion this design can return -
-which requests they send and whether they resubmit - tagged and given
-`legal-provenance.md` rows, to set the endpoint budget against how fast a
-client's own reset loop runs. The design does not wait on it.
+The per-target reading - what `hidusb.sys`, `usbstor.sys` and `usbaudio.sys`
+send, and whether they resubmit, when a transfer completes with each error
+this design can return - is therefore not a precondition of this design's
+convergence or of its code. It is taken before 35-V, tagged and given
+`legal-provenance.md` rows, and used to set 35-V's expectations of what each
+class driver does after an exhausted soft retry and after a cycle.
 
 ## 5. Injection
 
 QEMU raises none of these faults, and a fabricated event is only useful if
 the hardware state the driver then acts on is coherent with it. The
-`qemu`-flavour-only layer, beside 35.4's, therefore makes each fault real
-where QEMU allows it, and where it does not, it emulates the command that
-would meet a faked state rather than send it:
+`qemu`-flavour-only layer, beside 35.4's, makes each fault real where QEMU
+allows it, and where it does not, it emulates the command that would meet
+the faked state rather than send it.
+
+**The soft retry's target** is chosen so its state is known: an interrupt-IN
+TD of QEMU's HID tablet or mouse while it has no input, which QEMU NAKs, so
+the TD sits at the controller's dequeue with nothing transferred. The layer
+issues a real Stop Endpoint, consumes the resulting Stopped event itself so
+the driver never sees it, confirms from the context that the dequeue is the
+TD's first TRB (and if it is not, abandons the attempt and counts it), then
+delivers an injected Transaction Error for that TD. Context reads answer
+Halted until the driver's Reset Endpoint, which the layer completes with
+Success without sending - the real endpoint is already Stopped, the state a
+Reset Endpoint leaves - and the driver's doorbell restarts the TD for real.
+Persistent: injected again on each restart.
 
 | Fault | How it is made | What the driver's commands meet |
 |---|---|---|
 | Lost interrupt | the ISR acknowledges as today but does not queue the DPC, for a set number of interrupts | real hardware; the event waits in the ring |
-| Transaction Error | a real Stop Endpoint on the chosen endpoint (QEMU goes Stopped, the TD kept), then an injected Transaction Error event on the TD at the dequeue | context reads answer Halted until the driver's Reset Endpoint, which the layer completes with Success without sending (the real endpoint is already Stopped, the state a Reset Endpoint leaves); the doorbell restarts the TD for real. Persistent: injected again on each restart |
-| Refused code, halt with no TD | as the Transaction Error, the event carrying the refused code, or a halting code with a pointer off the ring or zero | as above; Stop Endpoint on a real Running endpoint is sent for real |
-| Root port PED | a real write of PED 1 to a USB 2.0 root port's PORTSC, which disables the port | real hardware |
-| Over-current | QEMU has no port power control to clear; PORTSC reads for the chosen port answer PP clear and OCA and OCC set, and a write setting PP is recorded and answered | emulated reads until the layer releases OCA |
+| Transaction Error | as above | the emulated Halted and Reset Endpoint, then real hardware |
+| Reset Endpoint failing | as the Transaction Error, the emulated Reset Endpoint answering Context State Error | `hcdCfgFault`'s real path |
+| Refused code | an injected Transfer Event carrying a refused code, for a real TD of a real device | the cycle's real Disable Slot and re-enumeration |
+| Halt with no TD, Halted | a real Stop Endpoint, its Stopped event consumed, an injected Stall with a pointer off the ring or zero; context reads answer Halted | the cycle's real Disable Slot |
+| Halt with no TD, Error | as above, context reads answering Error | the same |
+| Halt with no TD, stale | as above with no context fake: the endpoint really reads Stopped, then the layer rings it | the context read only; no cycle |
+| Endpoint Not Enabled | an injected code 12 event | the cycle |
+| EP0 during the thread's own transfer | an injected refused code on EP0 while the thread waits on a control transfer to the device | the wait ended, the cycle |
+| Root port PED | a real write of PED 1 to a USB 2.0 root port's PORTSC | real hardware |
+| Over-current | QEMU has no port power control; PORTSC reads for the port answer PP clear and OCA and OCC set until the layer releases OCA; a write setting PP is recorded and answered | emulated reads |
 | HCH | a real write clearing Run/Stop | real hardware; the in-place recovery runs for real |
-| All-ones | the health poll's USBSTS read answers all-ones; configuration space is real | real Bus Master Enable clear and read-back |
+| All-ones, proof | the health poll's USBSTS read answers all-ones; configuration space is real | real Bus Master Enable clear and read-back |
+| All-ones, no proof | as above, with the Bus Master Enable read-back answering set | the pinned branch |
 
 The expected outcomes are fault-specific, and the legs check each:
 
 | Fault | Transient (cleared within the budget) | Persistent |
 |---|---|---|
-| Lost interrupt | drained by the backstop within two polls, `BackstopDrains` counted | the same each time; the backstop is the delivery, not a recovery, so it has no terminal |
-| Transaction Error | the TD completes after its retries, data intact | the error completes; after the endpoint budget, the device is cycled |
-| Refused code, halt with no TD | the endpoint recovered, the attributed TD failed, survivors complete | after the endpoint budget, the device cycled; after the port budget, the port held |
-| Root port PED or over-current | the device re-enumerated | the port held, shown |
+| Lost interrupt | drained by the backstop at the first poll 100 ms after it was seen, `BackstopDrains` counted | the same each time; the backstop is the delivery, not a recovery, so it has no terminal |
+| Transaction Error | the TD completes after its retries, data intact | today's error completion after the third retry |
+| Reset Endpoint failing | `hcdCfgFault`'s outcome, as today | the controller window's terminal |
+| Refused code, halt with no TD (Halted or Error), Endpoint Not Enabled, EP0 | the device cycled and working again | after three, the location held |
+| Halt with no TD, stale | nothing but the context read | nothing |
+| Root port PED or over-current | the device re-enumerated | the location held |
 | HCH | one recovery | the window reached, the controller latched failed |
-| All-ones | none (a transition shorter than the containment interval) | contained: unreadable, devices dropped, transfers parked |
+| All-ones | none (shorter than the containment interval) | contained: with proof, devices dropped and transfers parked; without, the buffer pinned and transfers kept |
 
 And beside them: a cancel, ABORT_PIPE, RESET_PIPE, SYNC_RESET_PIPE and
-RESET_PORT each racing a soft retry and an endpoint recovery, at each of
-the thread's decision points; a stream endpoint; EP0 with a client control
-transfer and with the thread's own; teardown and a power transition during
+RESET_PORT each pending at each of the soft retry's two decisions; a cycle
+requested while a cycle, a RESET_PORT or the location's PED reconnect is
+already running; a stream endpoint; teardown and a power transition during
 each; and every budget exhausted.
 
 ## 6. Provenance
@@ -471,12 +483,12 @@ readings and take their tags and rows when they are made.
 ## 7. What it changes in the documents
 
 The release notes and README (`XhciIntervalCap`, `XhciAvgTrbEsit`, the AMD
-report), record 13 (section 6's error contract, from 4.10), record 15 (the
-shared peek), `implementation-invariants.md` ("Fatal Errors": the
-refused-code deviation superseded, the all-ones containment added),
-`failure-diagnosis.md`, `xhcisnap/README.md`,
-`xhciqual/hardware-testing.md`, `source-files.md` and `runs/run-35.md`
-(roadmap 35.6).
+report, a device that is cycled after a controller fault), record 13
+(section 6's error contract, from 4.10), record 15 (the shared peek),
+`implementation-invariants.md` ("Fatal Errors": the refused-code deviation
+superseded, the all-ones containment added), `failure-diagnosis.md`,
+`xhcisnap/README.md`, `xhciqual/hardware-testing.md`, `source-files.md` and
+`runs/run-35.md` (roadmap 35.6).
 
 ## 8. Decisions taken (owner, 2026-10-06)
 
@@ -490,12 +502,13 @@ refused-code deviation superseded, the all-ones containment added),
 - The Average TRB Length change is not made by default (after review round
   1, finding 1); it is the switch `XhciAvgTrbEsit`, written by the INFs at
   0, off.
+- A code nothing claims and a halt with no TD cycle the device, rather than
+  recover the endpoint in place (after review round 3).
 
 ## 9. Open for review
 
-The proposed intervals and budgets of section 4.9; the names
-`XhciIntervalCap` and `XhciAvgTrbEsit`; and whether the per-target readings
-of section 4.10 call for a different endpoint budget.
+The proposed intervals and budgets of section 4.9; and the names
+`XhciIntervalCap` and `XhciAvgTrbEsit`.
 
 ## 10. The review findings, and where each is answered
 
@@ -504,9 +517,9 @@ Round 1:
 | Finding | Severity | Answered in |
 |---|---|---|
 | 1 Average TRB Length neither legal everywhere nor free | high | 4.7: a switch, off by default |
-| 2 A refused code does not prove its TD safe to complete | high | 4.3, steps 1 to 5; section 2's ownership clause |
-| 3 "Fail the oldest" can fail an unrelated transfer | high | 4.3: attribution by the captured hardware position |
-| 4 Class-driver recovery assumed | high | 4.10: bus-owned recovery, a device cycle as the terminal |
+| 2 A refused code does not prove its TD safe to complete | high | 4.3: no TD is completed on the event; the Disable Slot takes the TRBs back |
+| 3 "Fail the oldest" can fail an unrelated transfer | high | 4.3: no TD is attributed at all |
+| 4 Class-driver recovery assumed | high | 4.10: bus-owned behaviour only |
 | 5 The backstop must use the ISR's lifetime protocol | high | 4.1 |
 | 6 All-ones and the recovery budget | high | 4.6, 4.9 |
 | 7 Root-port recovery not fully bounded | medium | 4.5, 4.9 |
@@ -519,16 +532,33 @@ Round 2:
 
 | Finding | Severity | Answered in |
 |---|---|---|
-| 1 The injected Reset Endpoint met the wrong state | high | section 5: the command emulated, the real endpoint already Stopped |
-| 2 All-ones containment released I/O with no DMA proof | high | 4.6: Bus Master Enable cleared and read back, or the buffer pinned and transfers kept |
-| 3 `STATUS_DEVICE_NOT_CONNECTED` makes Windows 98 HID resubmit | high | 4.6 and 4.10: the existing departure and parking, never that status on a listed device |
-| 4 The existing quiesce does not retire the failed TD | high | 4.0 and 4.3: capture, attribute, move the software dequeue, then the cancel path; Disabled by recycle |
-| 5 Pause is not retry ownership | high | 4.2: the `Retry` state, one balanced pause, the decision under the pipe lock |
-| 6 Dropping off-ring and zero pointers defeats a halt with no TD | high | 4.3: the event only requests, the endpoint's state decides; the Prime Pipe path kept |
-| 7 EP0 has two owners | medium | 4.3, EP0 |
-| 8 CCS 0 then 1 can come from repowering | high | 4.5: recovery-caused transitions never re-arm; stable-disconnect evidence |
-| 9 A refused code on a Running endpoint still hangs | medium | 4.3, step 1: the endpoint is stopped whatever its state |
-| 10 The budget table was not executable | medium | 4.9: limits, charging points, re-arm, terminals, lifecycle resets, intervals |
-| 11 Backstop activity does not prove a lost interrupt; extra DPCs | medium | 4.1: the two-poll rule, the extra DPC stated, the counter's meaning narrowed |
-| 12 The interval cap and fast polling do not compose by themselves | medium | 4.7: the ordering, eligibility on the uncapped value, the fallback |
-| 13 Roadmap alignment | low | 35-V (the backstop's exception, the race legs) and 35.6 (record 15) |
+| 1 The injected Reset Endpoint met the wrong state | high | section 5: emulated, the real endpoint already Stopped |
+| 2 All-ones containment released I/O with no DMA proof | high | 4.6: admission closed first, Bus Master Enable read back, or pinned |
+| 3 `STATUS_DEVICE_NOT_CONNECTED` makes Windows 98 HID resubmit | high | 4.6 and 4.10 |
+| 4 The existing quiesce does not retire the failed TD | high | 4.3: no quiesce is used; the device is cycled |
+| 5 Pause is not retry ownership | high | 4.2: no pause is taken |
+| 6 Dropping off-ring and zero pointers defeats a halt with no TD | high | 4.3: they request the context read |
+| 7 EP0 has two owners | medium | 4.3: the thread's wait ended, client transfers end with the device |
+| 8 CCS 0 then 1 can come from repowering | high | 4.5 |
+| 9 A refused code on a Running endpoint still hangs | medium | 4.3: a refused code cycles in any state |
+| 10 The budget table was not executable | medium | 4.9 |
+| 11 Backstop activity does not prove a lost interrupt; extra DPCs | medium | 4.1 |
+| 12 The interval cap and fast polling do not compose by themselves | medium | 4.7 |
+| 13 Roadmap alignment | low | 35-V and 35.6 |
+
+Round 3:
+
+| Finding | Severity | Answered in |
+|---|---|---|
+| 1 Retry abandonment releases held work before the winning operation; no pipe lock | high | 4.2: no pause, so nothing is released; the decision under the controller lock; abandonment is today's retirement |
+| 2 The context's dequeue is undefined in Error or Disabled | high | 4.3: the dequeue is never read |
+| 3 Moving the ring's dequeue does not make the TD the queue's head | high | 4.3: no in-place recovery |
+| 4 A recycled endpoint resets only the host's toggle | high | 4.3: the cycle resynchronizes both sides |
+| 5 Stopping a Running endpoint does not resolve a missing completion | high | 4.3: a refused code cycles in any state |
+| 6 EP0 needs a Setup boundary and a thread not waiting on itself | high | 4.3: the wait ended for the cycle |
+| 7 Two polls are not 100 ms apart; equal pointers recur | medium | 4.0 and 4.1: elapsed time, the drain and start generations; 4.6 likewise |
+| 8 Pinning alone does not contain an unreadable controller | high | 4.6: admission closed first, the pin kept under its own rule |
+| 9 Episode resets bypass the bound; external hub locations | medium | 4.5 and 4.9: one budget per location, kept across cycles and reconfiguration |
+| 10 Injection ownership and branches | medium | section 5: the NAKing target, the consumed Stopped event, the Error, stale, Endpoint Not Enabled, EP0, command-failure and no-proof legs |
+| 11 The class-driver reading's place is inconsistent | medium | 4.10 and 35-T.0: before 35-V, not a precondition of the design |
+| 12 The roadmap named the reviewer | low | the roadmap, reworded throughout |
