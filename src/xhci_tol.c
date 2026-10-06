@@ -473,6 +473,22 @@ ULONG XhciTolLocUnpowered(const XHCI_TOL_LOC *loc)
                             loc->Hold == XHCI_TOL_HOLD_OC_WAIT)) ? 1UL : 0UL;
 }
 
+ULONG XhciTolLocActive(ULONG tolerance, const XHCI_TOL_LOC *loc)
+{
+    if (loc == NULL) {
+        return 0;
+    }
+    return (tolerance || loc->Charged || loc->Hold != XHCI_TOL_HOLD_NONE)
+               ? 1UL
+               : 0UL;
+}
+
+ULONG XhciTolLocHeld(ULONG tolerance, const XHCI_TOL_LOC *loc)
+{
+    return (XhciTolLocActive(tolerance, loc) &&
+            loc->Hold != XHCI_TOL_HOLD_NONE) ? 1UL : 0UL;
+}
+
 ULONG XhciTolLocProgress(PXHCI_TOL_LOC loc, ULONG now)
 {
     if (loc == NULL || loc->Hold != XHCI_TOL_HOLD_NONE || !loc->Charged) {

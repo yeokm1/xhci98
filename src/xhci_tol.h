@@ -406,6 +406,16 @@ VOID XhciTolLocHold(PXHCI_TOL_LOC loc, ULONG reason);
 /* 1 when the hold leaves the port unpowered: released only by a start. */
 ULONG XhciTolLocUnpowered(const XHCI_TOL_LOC *loc);
 
+/* 1 when the location's budget is observed and its hold enforced: always
+ * with tolerance on; at XhciTolerance 0 only once something charged it,
+ * which there is a slot-fatal teardown alone (hcd_enum.c,
+ * hcdSlotFatalService) - so a location it never charged behaves as it
+ * always has. */
+ULONG XhciTolLocActive(ULONG tolerance, const XHCI_TOL_LOC *loc);
+
+/* 1 when the location enumerates nothing: active and held. */
+ULONG XhciTolLocHeld(ULONG tolerance, const XHCI_TOL_LOC *loc);
+
 /* A device at the location completed a transfer. The first completion
  * after a charge, a fault or a disconnect starts the stable-progress
  * interval; a completion once it has passed, with none of those between,

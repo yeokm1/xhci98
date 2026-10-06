@@ -745,6 +745,62 @@ static void test_loc(void)
     CHECK_EQ(XhciTolLocCharge(NULL, 0, 0), 0, "NULL");
 }
 
+/* A slot-fatal teardown's re-enumeration (hcd_enum.c, hcdSlotFatalService)
+ * is charged at XhciTolerance 0 too: the location is observed and its hold
+ * enforced only once charged, the budget's boundary holds it, a stable
+ * disconnect re-arms it, and a start releases it. */
+static void test_loc_off(void)
+{
+    XHCI_TOL_LOC l;
+    ULONG i;
+
+    CHECK_EQ(XhciTolLocActive(0, NULL), 0, "NULL inactive");
+    CHECK_EQ(XhciTolLocActive(1, NULL), 0, "NULL inactive with tolerance");
+    CHECK_EQ(XhciTolLocHeld(1, NULL), 0, "NULL not held");
+    XhciTolLocInit(&l);
+    CHECK_EQ(XhciTolLocActive(1, &l), 1, "tolerance on: always active");
+    CHECK_EQ(XhciTolLocActive(0, &l), 0, "off, never charged: inactive");
+    CHECK_EQ(XhciTolLocHeld(0, &l), 0, "off, never charged: not held");
+
+    for (i = 0; i < XHCI_TOL_REENUMS; i++) {
+        CHECK_EQ(XhciTolLocCharge(&l, XHCI_TOL_CHARGE_REENUM, 10 + i), 1,
+                 "off: a teardown within the budget re-enumerates");
+        CHECK_EQ(XhciTolLocActive(0, &l), 1, "off: charged is active");
+        CHECK_EQ(XhciTolLocHeld(0, &l), 0, "off: within budget, not held");
+    }
+    CHECK_EQ(XhciTolLocCharge(&l, XHCI_TOL_CHARGE_REENUM, 20), 0,
+             "off: the budget's last plus one is refused");
+    CHECK_EQ(XhciTolLocHeld(0, &l), 1, "off: refused holds the location");
+    CHECK_EQ(XhciTolLocHeld(1, &l), 1, "the same hold with tolerance on");
+    CHECK_EQ(XhciTolLocUnpowered(&l), 0, "a powered hold");
+
+    /* Stable disconnect at its boundary, then a connection. */
+    CHECK_EQ(XhciTolLocObserve(&l, 0, 1, 0, 100), 0, "off: disconnect");
+    CHECK_EQ(XhciTolLocObserve(&l, 0, 1, 0,
+                               100 + XHCI_TOL_STABLE_DISC_TICKS - 1),
+             0, "off: one short");
+    CHECK_EQ(XhciTolLocObserve(&l, 1, 1, 0,
+                               100 + XHCI_TOL_STABLE_DISC_TICKS - 1),
+             0, "off: back too soon");
+    CHECK_EQ(XhciTolLocHeld(0, &l), 1, "off: still held");
+    CHECK_EQ(XhciTolLocObserve(&l, 0, 1, 0, 300), 0, "off: away again");
+    CHECK_EQ(XhciTolLocObserve(&l, 0, 1, 0, 300 + XHCI_TOL_STABLE_DISC_TICKS),
+             0, "off: stable");
+    CHECK_EQ(XhciTolLocObserve(&l, 1, 1, 0, 400), 1, "off: connect re-arms");
+    CHECK_EQ(XhciTolLocHeld(0, &l), 0, "off: released");
+    CHECK_EQ(XhciTolLocActive(0, &l), 0,
+             "off: re-armed, inactive again as if never charged");
+
+    /* Held, then a controller start. */
+    for (i = 0; i <= XHCI_TOL_REENUMS; i++) {
+        (VOID)XhciTolLocCharge(&l, XHCI_TOL_CHARGE_REENUM, 500 + i);
+    }
+    CHECK_EQ(XhciTolLocHeld(0, &l), 1, "off: spent again");
+    XhciTolLocInit(&l);
+    CHECK_EQ(XhciTolLocHeld(0, &l), 0, "a start releases");
+    CHECK_EQ(XhciTolLocActive(0, &l), 0, "and leaves it inactive at 0");
+}
+
 /* 35-T.5: the over-current episode at each interval's boundary, and the
  * holds an over-current leaves. */
 static void test_port_oc(void)
@@ -1109,6 +1165,7 @@ int main(void)
     test_retry_join();
     test_backstop();
     test_loc();
+    test_loc_off();
     test_port();
     test_window();
     test_dead();

@@ -2702,14 +2702,17 @@ static VOID hcdTolHold(PHCD_CONTROLLER hc, PHCD_PORT p, PXHCI_TOL_LOC loc,
     hcdTolHeld(hc, p, was, loc);
 }
 
-/* Thread only. */
-ULONG HcdTolLocCharge(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG kind)
+/* HcdTolLocCharge, or with always set the charge made at XhciTolerance 0
+ * too: a slot-fatal teardown's re-enumeration, bounded at every value
+ * (hcdSlotFatalService). Thread only. */
+static ULONG hcdTolLocCharge(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG kind,
+                             ULONG always)
 {
     PXHCI_TOL_LOC loc;
     ULONG was;
 
     loc = hcdTolLoc(hc, p);
-    if (!hc->Hc.Tol.Stats.Tolerance || loc == NULL) {
+    if ((!hc->Hc.Tol.Stats.Tolerance && !always) || loc == NULL) {
         return 1;
     }
     was = loc->Hold;
@@ -2722,6 +2725,12 @@ ULONG HcdTolLocCharge(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG kind)
     return 0;
 }
 
+/* Thread only. */
+ULONG HcdTolLocCharge(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG kind)
+{
+    return hcdTolLocCharge(hc, p, kind, 0);
+}
+
 /*
  * One look at the location's port: connected and powered as the port reads
  * them (CCS and PP, or the hub's port status), and changed when a connection
@@ -2730,7 +2739,9 @@ ULONG HcdTolLocCharge(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG kind)
  * location never charged costs nothing. A root port is in a fault the
  * driver's own recovery causes while an over-current episode runs, while
  * its link is in the warm reset an inspection began, and while it is held
- * for 29-A.5's send-back. Thread only.
+ * for 29-A.5's send-back. At XhciTolerance 0 only a location a slot-fatal
+ * teardown charged is looked at (XhciTolLocActive), so its hold re-arms
+ * by a stable disconnect as at any other value. Thread only.
  */
 VOID HcdTolLocObserve(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG connected,
                       ULONG powered, ULONG changed)
@@ -2740,7 +2751,7 @@ VOID HcdTolLocObserve(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG connected,
     ULONG was;
 
     loc = hcdTolLoc(hc, p);
-    if (!hc->Hc.Tol.Stats.Tolerance || loc == NULL ||
+    if (!XhciTolLocActive(hc->Hc.Tol.Stats.Tolerance, loc) ||
         (!loc->Charged && loc->Hold == XHCI_TOL_HOLD_NONE &&
          !loc->RecoveryDisc)) {
         return;
@@ -2765,7 +2776,7 @@ VOID HcdTolLocRecovery(PHCD_CONTROLLER hc, PHCD_PORT p)
     PXHCI_TOL_LOC loc;
 
     loc = hcdTolLoc(hc, p);
-    if (hc->Hc.Tol.Stats.Tolerance && loc != NULL) {
+    if (XhciTolLocActive(hc->Hc.Tol.Stats.Tolerance, loc)) {
         XhciTolLocRecovery(loc);
     }
 }
@@ -2873,7 +2884,8 @@ static VOID hcdTolOcPass(PHCD_CONTROLLER hc, PHCD_PORT p, PXHCI_TOL_LOC loc,
  *   held          the bus enumerates nothing at the location, and nothing
  *                 at a port whose PP reads clear.
  *
- * At XhciTolerance 0 the feed is returned as it came. Thread only.
+ * At XhciTolerance 0 the feed is returned as it came, but for a location a
+ * slot-fatal teardown held. Thread only.
  */
 static ULONG hcdTolPortFeed(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG portsc,
                             ULONG feed)
@@ -2906,6 +2918,16 @@ static ULONG hcdTolPortFeed(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG portsc,
                                 (p->Enum.State == XHCI_ENUM_PRESENT ||
                                  p->Enum.State == XHCI_ENUM_BOUND))) {
             ext->Tol.Stats.PedFaults++;
+        }
+        /* A location a slot-fatal teardown charged is still observed
+         * and its hold still enforced (hcdSlotFatalService). */
+        if (XhciTolLocActive(tol, loc)) {
+            HcdTolLocObserve(hc, p, (portsc & XHCI_PORTSC_CCS) != 0,
+                             (portsc & XHCI_PORTSC_PP) != 0,
+                             (portsc & XHCI_PORTSC_CSC) != 0);
+            if (XhciTolLocHeld(tol, loc)) {
+                feed &= ~XHCI_LINK_FEED_CONNECT;
+            }
         }
         return feed;
     }
@@ -4063,9 +4085,9 @@ static VOID hcdHubPortChanged(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
         d.Connect = !hcdHalted(hc) && HcdSsHubPortRecover(hc, hub, n);
         q->HubSsRecover = 0;
     }
-    /* A held location enumerates nothing (35-T.5). */
-    if (hc->Hc.Tol.Stats.Tolerance && hcdTolLoc(hc, q) != NULL &&
-        hcdTolLoc(hc, q)->Hold != XHCI_TOL_HOLD_NONE) {
+    /* A held location enumerates nothing (35-T.5, and a slot-fatal
+     * teardown's hold at any XhciTolerance value). */
+    if (XhciTolLocHeld(hc->Hc.Tol.Stats.Tolerance, hcdTolLoc(hc, q))) {
         d.Connect = 0;
     }
     if (d.Connect && !hcdHalted(hc)) {
@@ -4121,7 +4143,11 @@ static VOID hcdHubService(PHCD_CONTROLLER hc, ULONG outstanding)
  * hcdHubService in this pass), so the evidence comes from a look made when
  * it was due and never from a late one; every location's stable progress.
  * A location never charged and never held costs no register read and no
- * hub request. Thread only, powered, root hub started.
+ * hub request. At XhciTolerance 0 the pass runs too, for the locations a
+ * slot-fatal teardown charged (hcdSlotFatalService): no over-current
+ * episode or unpowered hold exists there, and every other location is
+ * neither charged nor held, so nothing else is read. Thread only, powered,
+ * root hub started.
  */
 static VOID hcdTolService(PHCD_CONTROLLER hc)
 {
@@ -4137,9 +4163,6 @@ static VOID hcdTolService(PHCD_CONTROLLER hc)
     ULONG n;
 
     ext = &hc->Hc;
-    if (!ext->Tol.Stats.Tolerance) {
-        return;
-    }
     now = HcdTolNow(hc);
     for (port = 1; port <= ext->PortMap.PortCount &&
                    port <= XHCI_MAX_ROOT_PORTS && !hcdHalted(hc); port++) {
@@ -4305,9 +4328,16 @@ static VOID hcdSettleUndefer(PHCD_CONTROLLER hc)
  * Slot, PDO reported missing - and enumerates afresh, through HcdEnumCycle,
  * whose request the CYCLE_PORT step of this same pass takes. A device not
  * yet published is the enumeration's own: the step the code failed already
- * disables its slot before any retry. A device already departing is
- * dropped by that departure. At every XhciTolerance value, and charged to
- * no budget. Thread only, powered, root hub started.
+ * disables its slot before any retry, a bounded number of times. A
+ * device already departing is dropped by that departure. The automatic
+ * re-enumeration is charged to the location's budget at every
+ * XhciTolerance value, 0 included, or a device whose every Configure
+ * Endpoint answers the code would be cycled for ever: once the budget is
+ * spent the device still goes - the Disable Slot is the specification's
+ * and never skipped - but the location is held, and enumerates again only
+ * after a stable disconnect re-arms it or a controller start releases it
+ * (XhciTolLocActive keeps that observation running at 0). Thread only,
+ * powered, root hub started.
  */
 static VOID hcdSlotFatalService(PHCD_CONTROLLER hc)
 {
@@ -4315,6 +4345,7 @@ static VOID hcdSlotFatalService(PHCD_CONTROLLER hc)
     PHCD_USB_DEVICE dev;
     PHCD_PORT p;
     KIRQL oldIrql;
+    ULONG charged;
     ULONG fatal;
     ULONG i;
 
@@ -4338,10 +4369,12 @@ static VOID hcdSlotFatalService(PHCD_CONTROLLER hc)
             dev->Pdo == NULL || dev->PdoGroup == 0) {
             continue;
         }
+        charged = hcdTolLocCharge(hc, p, XHCI_TOL_CHARGE_REENUM, 1);
         ext->IncompatibleDeviceTeardowns++;
-        XhciLogNote(ext, "slot.fatal.cycle", (p->PortId << 8) | i);
-        XHCI_DBG_VALUE("hcd: slot-fatal code, device cycled, location",
-                       p->PortId);
+        XhciLogNote(ext, "slot.fatal.cycle",
+                    (p->PortId << 16) | (charged << 8) | i);
+        XHCI_DBG_VALUE("hcd: slot-fatal code, device cycled, "
+                       "location/charged", (p->PortId << 8) | charged);
         HcdEnumCycle(hc, p->PortId, dev->PdoGroup);
     }
 }
