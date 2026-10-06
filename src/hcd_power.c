@@ -58,8 +58,10 @@
  * Contained (Unreadable): the dropped or kept devices and a pinned buffer
  * stay. The recovery window exhausted (Window.Refused, cleared only by
  * XhciTolStart): a fourth recovery was not begun, and a resume would be
- * one. Neither is set at XhciTolerance 0. The power gate held. IRQL:
- * PASSIVE_LEVEL.
+ * one. At XhciTolerance 0 only the first is set, and only by an
+ * invalidation no proof of a stopped controller followed (hcd_enum.c,
+ * HcdEnumService), whose pinned buffer it keeps. The power gate held.
+ * IRQL: PASSIVE_LEVEL.
  */
 static ULONG hcdResumeContained(PHCD_CONTROLLER hc)
 {
