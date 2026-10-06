@@ -1679,6 +1679,7 @@ ULONG HcdHubStart(PHCD_CONTROLLER hc, PHCD_PORT p, PHCD_USB_DEVICE dev)
     for (n = 0; n < HCD_HUB_MAX_PORTS; n++) {
         XhciTolLocInit(&hc->Hc.Tol.HubLoc[hub->Index * HCD_HUB_MAX_PORTS +
                                           n]);
+        XhciTolCycleChargeInit(&HcdHubPort(hc, hub, n + 1)->CycleCharge);
     }
 
     if (!XhciHubTierServable(hub->Tier)) {

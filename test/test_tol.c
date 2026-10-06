@@ -801,6 +801,49 @@ static void test_loc_off(void)
     CHECK_EQ(XhciTolLocActive(0, &l), 0, "and leaves it inactive at 0");
 }
 
+/* One charge per pending cycle: a RESET_PORT fallback (hcd_cfg.c,
+ * hcdCfgCycle) and a slot-fatal teardown (hcdSlotFatalService) asking for
+ * the same device's cycle at one connect generation charge once, so two
+ * earlier cycles still leave the third permitted re-enumeration. */
+static void test_cycle_charge(void)
+{
+    XHCI_TOL_CYCLE_CHARGE once;
+    XHCI_TOL_LOC l;
+
+    XhciTolLocInit(&l);
+    XhciTolCycleChargeInit(&once);
+    CHECK_EQ(XhciTolCycleCharge(NULL, &l, 0, 0), 0, "NULL once");
+    CHECK_EQ(XhciTolCycleCharge(&once, NULL, 0, 0), 0, "NULL location");
+    CHECK_EQ(once.Valid, 0, "nothing recorded on a refusal of the call");
+
+    /* Two earlier cycles, each its own generation. */
+    CHECK_EQ(XhciTolCycleCharge(&once, &l, 1, 10), 1, "first cycle");
+    CHECK_EQ(XhciTolCycleCharge(&once, &l, 3, 20), 1, "second cycle");
+    CHECK_EQ(l.Reenums, 2, "two charged");
+
+    /* The third: a fallback, then a slot-fatal request, one generation. */
+    CHECK_EQ(XhciTolCycleCharge(&once, &l, 5, 30), 1, "fallback charges");
+    CHECK_EQ(XhciTolCycleCharge(&once, &l, 5, 31), 1,
+             "slot-fatal at the same generation shares it");
+    CHECK_EQ(l.Reenums, 3, "charged once, not twice");
+    CHECK_EQ(l.Hold, XHCI_TOL_HOLD_NONE, "the third is permitted, not held");
+    CHECK_EQ(l.Charges, 3, "the dump's total counts one");
+
+    /* The cycle ran (the generation moved): the next asks afresh, and is
+     * the budget's fourth. */
+    CHECK_EQ(XhciTolCycleCharge(&once, &l, 7, 40), 0, "fourth refused");
+    CHECK_EQ(l.Hold, XHCI_TOL_HOLD_REENUMS, "held");
+    CHECK_EQ(XhciTolCycleCharge(&once, &l, 7, 41), 0,
+             "a second producer of it reads the same refusal");
+    CHECK_EQ(l.Holds, 1, "held once");
+
+    /* A start forgets the charge. */
+    XhciTolCycleChargeInit(&once);
+    XhciTolLocInit(&l);
+    CHECK_EQ(XhciTolCycleCharge(&once, &l, 7, 50), 1,
+             "after a start the same generation charges again");
+}
+
 /* 35-T.5: the over-current episode at each interval's boundary, and the
  * holds an over-current leaves. */
 static void test_port_oc(void)
@@ -1166,6 +1209,7 @@ int main(void)
     test_backstop();
     test_loc();
     test_loc_off();
+    test_cycle_charge();
     test_port();
     test_window();
     test_dead();

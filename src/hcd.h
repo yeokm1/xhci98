@@ -695,9 +695,12 @@ typedef struct _HCD_PORT {
      * connect and disconnect fed at it, written by the thread and read by
      * the event path's cycle mark under the controller lock; and the
      * reason a pre-PDO cycle under way is for (XHCI_TOL_CYCLE_*), thread
-     * only. Each set by the start (HcdEnumInit). */
+     * only. Each set by the start (HcdEnumInit). CycleCharge: the one
+     * re-enumeration charge of the cycle pending at ConnectGen, shared by
+     * every producer of it (HcdTolLocCharge), thread only. */
     ULONG ConnectGen;
     ULONG CycleReason;
+    XHCI_TOL_CYCLE_CHARGE CycleCharge;
     /* Task 35.3: a root port's enumeration notes and their budget
      * (xhci_enum.h), cleared by the start. Thread only. */
     XHCI_ENUM_NOTES Notes;

@@ -416,6 +416,27 @@ ULONG XhciTolLocActive(ULONG tolerance, const XHCI_TOL_LOC *loc);
 /* 1 when the location enumerates nothing: active and held. */
 ULONG XhciTolLocHeld(ULONG tolerance, const XHCI_TOL_LOC *loc);
 
+/* The one charge of a location's pending cycle: every producer that asks
+ * for the cycle of the device at one connect generation - a configuration
+ * fallback, a slot-fatal teardown, 35-T.3/4's cycle, a PED or hub-port
+ * disable - shares the charge the first one made, since one cycle runs.
+ * A connect or a disconnect fed at the location moves the generation and
+ * so begins the next. Thread only, in the port. */
+typedef struct _XHCI_TOL_CYCLE_CHARGE {
+    ULONG Gen;          /* the connect generation charged               */
+    ULONG Valid;        /* a charge was made at Gen                     */
+    ULONG Allowed;      /* ...and what the budget answered              */
+} XHCI_TOL_CYCLE_CHARGE, *PXHCI_TOL_CYCLE_CHARGE;
+
+/* No charge made (a start). */
+VOID XhciTolCycleChargeInit(PXHCI_TOL_CYCLE_CHARGE once);
+
+/* The re-enumeration charge for the cycle at connect generation gen: made
+ * once (XhciTolLocCharge, XHCI_TOL_CHARGE_REENUM) and that answer returned
+ * to every later producer at the same generation, which charges nothing. */
+ULONG XhciTolCycleCharge(PXHCI_TOL_CYCLE_CHARGE once, PXHCI_TOL_LOC loc,
+                         ULONG gen, ULONG now);
+
 /* A device at the location completed a transfer. The first completion
  * after a charge, a fault or a disconnect starts the stable-progress
  * interval; a completion once it has passed, with none of those between,

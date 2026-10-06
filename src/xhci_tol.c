@@ -489,6 +489,33 @@ ULONG XhciTolLocHeld(ULONG tolerance, const XHCI_TOL_LOC *loc)
             loc->Hold != XHCI_TOL_HOLD_NONE) ? 1UL : 0UL;
 }
 
+VOID XhciTolCycleChargeInit(PXHCI_TOL_CYCLE_CHARGE once)
+{
+    if (once != NULL) {
+        once->Gen = 0;
+        once->Valid = 0;
+        once->Allowed = 0;
+    }
+}
+
+ULONG XhciTolCycleCharge(PXHCI_TOL_CYCLE_CHARGE once, PXHCI_TOL_LOC loc,
+                         ULONG gen, ULONG now)
+{
+    ULONG allowed;
+
+    if (once == NULL || loc == NULL) {
+        return 0;
+    }
+    if (once->Valid && once->Gen == gen) {
+        return once->Allowed;
+    }
+    allowed = XhciTolLocCharge(loc, XHCI_TOL_CHARGE_REENUM, now);
+    once->Gen = gen;
+    once->Valid = 1;
+    once->Allowed = allowed;
+    return allowed;
+}
+
 ULONG XhciTolLocProgress(PXHCI_TOL_LOC loc, ULONG now)
 {
     if (loc == NULL || loc->Hold != XHCI_TOL_HOLD_NONE || !loc->Charged) {

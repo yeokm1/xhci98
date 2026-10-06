@@ -2716,7 +2716,12 @@ static ULONG hcdTolLocCharge(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG kind,
         return 1;
     }
     was = loc->Hold;
-    if (XhciTolLocCharge(loc, kind, HcdTolNow(hc))) {
+    /* A re-enumeration is charged once per pending cycle, whichever
+     * producers asked for it (XhciTolCycleCharge). */
+    if (kind == XHCI_TOL_CHARGE_REENUM
+            ? XhciTolCycleCharge(&p->CycleCharge, loc, p->ConnectGen,
+                                 HcdTolNow(hc))
+            : XhciTolLocCharge(loc, kind, HcdTolNow(hc))) {
         /* Completions before the charge are not progress after it. */
         p->TolCompletionsSeen = *(volatile ULONG *)&p->TolCompletions;
         return 1;
@@ -4929,6 +4934,7 @@ VOID HcdEnumInit(PHCD_CONTROLLER hc)
         /* 35-T.3/4's: no device record outlives the stop, nor its mark. */
         hc->Ports[i].ConnectGen = 0;
         hc->Ports[i].CycleReason = XHCI_TOL_CYCLE_NONE;
+        XhciTolCycleChargeInit(&hc->Ports[i].CycleCharge);
     }
     hc->SettleDeferredNow = 0;
     for (i = 0; i < HCD_SETTLE_DEFER_HUB; i++) {
