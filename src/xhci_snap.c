@@ -6,12 +6,14 @@
  * inference to say why a trained SuperSpeed link never got a slot: the
  * driver's per-port enumeration state and its counter block live in the
  * HCD's controller object, outside the extension the snapshot copies. The
- * HCD region publishes both as a pointer-free image of ULONGs - an eight-word
- * header, one record per root port, the counters - which the door
- * (hcd_door.c) fills word by word into the caller's window, so no image of
- * the whole is ever built in kernel memory. What lives here is where each
- * word of that image lies and what the header says, so the host suite
- * checks the layout with no controller (test\test_snap.c).
+ * HCD region publishes both as a pointer-free image of ULONGs - a header,
+ * one record per root port, the counters - which the door (hcd_door.c)
+ * fills word by word into the caller's window, so no image of the whole is
+ * ever built in kernel memory. What lives here is where each word of that
+ * image lies and what the header says, so the host suite checks the layout
+ * with no controller (test\test_snap.c). The header's words from
+ * XHCI_SNAPSHOT_HCD_TOL_AT (35-T.8) place the tolerance state inside the
+ * extension image rather than copy it: the state lives in the extension.
  *
  * DDK-free: part of the pure core. C89, pure: IRQL any.
  */
@@ -58,7 +60,31 @@ ULONG XhciSnapHcdHead(ULONG ports, ULONG word)
                 ports * XHCI_SNAPSHOT_HCD_PORT_WORDS) * 4UL;
     case XHCI_SNAPSHOT_HCD_NOTE_BUDGET:
         return XHCI_ENUM_NOTE_BUDGET;
+    case XHCI_SNAPSHOT_HCD_TOL_AT:
+        return XHCI_FIELD_OFFSET(XHCI_EXTENSION, Tol);
+    case XHCI_SNAPSHOT_HCD_TOL_BYTES:
+        return (ULONG)sizeof(XHCI_TOL_STATE);
+    case XHCI_SNAPSHOT_HCD_TOL_STATS:
+        return (ULONG)(sizeof(XHCI_TOL_STATS) / sizeof(ULONG));
+    case XHCI_SNAPSHOT_HCD_TOL_WINDOW_AT:
+        return XHCI_FIELD_OFFSET(XHCI_TOL_STATE, Window);
+    case XHCI_SNAPSHOT_HCD_TOL_CLOCK_AT:
+        return XHCI_FIELD_OFFSET(XHCI_TOL_STATE, Clock);
+    case XHCI_SNAPSHOT_HCD_TOL_LOC_BYTES:
+        return (ULONG)sizeof(XHCI_TOL_LOC);
+    case XHCI_SNAPSHOT_HCD_TOL_ROOT_AT:
+        return XHCI_FIELD_OFFSET(XHCI_TOL_STATE, RootLoc);
+    case XHCI_SNAPSHOT_HCD_TOL_ROOT_LOCS:
+        return XHCI_TOL_ROOT_PORTS;
+    case XHCI_SNAPSHOT_HCD_TOL_HUB_AT:
+        return XHCI_FIELD_OFFSET(XHCI_TOL_STATE, HubLoc);
+    case XHCI_SNAPSHOT_HCD_TOL_HUB_LOCS:
+        return XHCI_TOL_HUB_LOCS;
+    case XHCI_SNAPSHOT_HCD_TOL_HUB_PORTS:
+        return XHCI_TOL_HUB_LOC_PORTS;
     default:
+        /* XHCI_SNAPSHOT_HCD_TERMINAL is a reading, not layout: the door
+         * fills it (hcd_door.c). */
         return 0;
     }
 }

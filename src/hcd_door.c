@@ -790,8 +790,11 @@ static ULONG hcdDoorHcdPortWord(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG word)
  * record cut while the thread moves the machine may mix two of its steps,
  * as the extension's own windows may (the tear detector covers neither).
  * The counters are written under this lock or interlocked, besides the
- * thread's plain writes (xhci_counters.h). Controller lock held, the same
- * as the slots region. IRQL: DISPATCH_LEVEL.
+ * thread's plain writes (xhci_counters.h). The header's tolerance words
+ * place XHCI_EXTENSION.Tol in the extension region rather than copy it
+ * (35-T.8); its terminal reason is read here, under the lock that
+ * ControllerFailed and the window are written under. Controller lock held,
+ * the same as the slots region. IRQL: DISPATCH_LEVEL.
  */
 static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
                        PUCHAR payload, ULONG capacity, ULONG offset)
@@ -827,7 +830,13 @@ static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
     for (i = 0; i < count; i++) {
         switch (XhciSnapHcdLocate(ports, first + i, &record, &word)) {
         case XHCI_SNAPSHOT_HCD_IN_HEAD:
-            value = XhciSnapHcdHead(ports, word);
+            value = (word == XHCI_SNAPSHOT_HCD_TERMINAL)
+                        ? XhciTolTerminal(hc->Hc.ControllerFailed,
+                                          hc->Hc.Tol.Unreadable,
+                                          hc->Hc.Tol.Window.Refused,
+                                          hc->Hc.RecoveryFailuresConsecutive,
+                                          XHCI_RECOVERY_MAX_ATTEMPTS)
+                        : XhciSnapHcdHead(ports, word);
             break;
         case XHCI_SNAPSHOT_HCD_IN_PORT:
             value = hcdDoorHcdPortWord(hc, &hc->Ports[record], word);
@@ -857,6 +866,13 @@ typedef char hcdSnapshotCounters[sizeof(XHCIHC_COUNTERS) ==
  * on a user's machine. */
 typedef char hcdSnapshotFitsTool[sizeof(XHCI_EXTENSION) <= 131072UL ? 1
                                                                      : -1];
+
+/* The HCD region names a hub location by hub object and port from
+ * XHCI_TOL_HUB_LOC_PORTS (35-T.8); HubLoc is indexed by HCD_HUB_MAX_PORTS. */
+typedef char hcdSnapshotHubLocPorts[XHCI_TOL_HUB_LOC_PORTS ==
+                                            HCD_HUB_MAX_PORTS
+                                        ? 1
+                                        : -1];
 
 /*
  * XHCISNAP's window, the miniport's xhciPassThru (branch 1.2.0.0) over the

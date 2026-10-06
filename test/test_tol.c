@@ -588,6 +588,29 @@ static void test_dead(void)
     CHECK_EQ(d.Armed, 0, "no stamp at 0");
 }
 
+/* 35-T.8: the dump's terminal reason, each latch at its boundary. */
+static void test_terminal(void)
+{
+    CHECK_EQ(XhciTolTerminal(0, 0, 0, 0, 3), XHCI_TOL_TERMINAL_NONE,
+             "running");
+    CHECK_EQ(XhciTolTerminal(0, 0, 0, 3, 3), XHCI_TOL_TERMINAL_NONE,
+             "a spent run, the controller since recovered");
+    CHECK_EQ(XhciTolTerminal(1, 0, 0, 0, 3), XHCI_TOL_TERMINAL_OWED,
+             "failed, first recovery owed");
+    CHECK_EQ(XhciTolTerminal(1, 0, 0, 2, 3), XHCI_TOL_TERMINAL_OWED,
+             "two failed: one more owed");
+    CHECK_EQ(XhciTolTerminal(1, 0, 0, 3, 3), XHCI_TOL_TERMINAL_FAILURES,
+             "three failed in a row");
+    CHECK_EQ(XhciTolTerminal(1, 0, 1, 0, 3), XHCI_TOL_TERMINAL_WINDOW,
+             "the window refused");
+    CHECK_EQ(XhciTolTerminal(1, 0, 1, 3, 3), XHCI_TOL_TERMINAL_WINDOW,
+             "the window outranks the run");
+    CHECK_EQ(XhciTolTerminal(1, 1, 0, 0, 3), XHCI_TOL_TERMINAL_UNREADABLE,
+             "contained");
+    CHECK_EQ(XhciTolTerminal(1, 1, 1, 3, 3), XHCI_TOL_TERMINAL_UNREADABLE,
+             "the containment outranks both");
+}
+
 /* Record 17 section 4.11: a start latches the three values and sets every
  * piece of tolerance state explicitly, whatever the last lifetime left. */
 static void test_start(void)
@@ -647,6 +670,7 @@ int main(void)
     test_port();
     test_window();
     test_dead();
+    test_terminal();
     test_start();
 
     printf("\n%d checks, %d failures\n", checks, failures);

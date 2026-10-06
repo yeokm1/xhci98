@@ -8492,7 +8492,30 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_COUNTERS      5   /* counter words                 */
 #define XHCI_SNAPSHOT_HCD_COUNTERS_AT   6   /* the first counter's offset    */
 #define XHCI_SNAPSHOT_HCD_NOTE_BUDGET   7   /* XHCI_ENUM_NOTE_BUDGET         */
-#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    8UL
+/*
+ * Appended by 35-T.8 (design record 17 section 4.8), version unchanged: an
+ * older tool walks past them by the header's size. The tolerance state
+ * stays where it lives, in the extension the snapshot already carries; these
+ * words say where it lies in the extension image, so XHCISNAP names it from
+ * the .BIN's own bytes with no offset table. Offsets are in bytes, the
+ * first from the extension's start and the rest from XHCI_TOL_STATE's; the
+ * counters (XHCI_TOL_STATS) are its first words. TERMINAL is the one value
+ * here, cut with the window (XhciTolTerminal), since ControllerFailed and
+ * RecoveryFailuresConsecutive lie outside the tolerance state.
+ */
+#define XHCI_SNAPSHOT_HCD_TOL_AT        8   /* XHCI_EXTENSION.Tol            */
+#define XHCI_SNAPSHOT_HCD_TOL_BYTES     9   /* sizeof (XHCI_TOL_STATE)       */
+#define XHCI_SNAPSHOT_HCD_TOL_STATS     10  /* XHCI_TOL_STATS, in words      */
+#define XHCI_SNAPSHOT_HCD_TOL_WINDOW_AT 11  /* .Window                       */
+#define XHCI_SNAPSHOT_HCD_TOL_CLOCK_AT  12  /* .Clock                        */
+#define XHCI_SNAPSHOT_HCD_TOL_LOC_BYTES 13  /* sizeof (XHCI_TOL_LOC)         */
+#define XHCI_SNAPSHOT_HCD_TOL_ROOT_AT   14  /* .RootLoc                      */
+#define XHCI_SNAPSHOT_HCD_TOL_ROOT_LOCS 15  /* XHCI_TOL_ROOT_PORTS           */
+#define XHCI_SNAPSHOT_HCD_TOL_HUB_AT    16  /* .HubLoc                       */
+#define XHCI_SNAPSHOT_HCD_TOL_HUB_LOCS  17  /* XHCI_TOL_HUB_LOCS             */
+#define XHCI_SNAPSHOT_HCD_TOL_HUB_PORTS 18  /* HubLoc entries per hub object */
+#define XHCI_SNAPSHOT_HCD_TERMINAL      19  /* XHCI_TOL_TERMINAL_*           */
+#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    20UL
 
 /* One root port's record. The machine's fields are XHCI_ENUM_PORT's; the
  * speed ID is the one the port's last reset read (0 none), decoded on its

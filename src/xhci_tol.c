@@ -467,6 +467,24 @@ ULONG XhciTolWindowAdmit(PXHCI_TOL_WINDOW win, ULONG tolerance, ULONG now)
     return 1;
 }
 
+ULONG XhciTolTerminal(ULONG failed, ULONG unreadable, ULONG windowRefused,
+                      ULONG failures, ULONG maxFailures)
+{
+    if (unreadable) {
+        return XHCI_TOL_TERMINAL_UNREADABLE;
+    }
+    if (windowRefused) {
+        return XHCI_TOL_TERMINAL_WINDOW;
+    }
+    if (!failed) {
+        return XHCI_TOL_TERMINAL_NONE;
+    }
+    if (failures >= maxFailures) {
+        return XHCI_TOL_TERMINAL_FAILURES;
+    }
+    return XHCI_TOL_TERMINAL_OWED;
+}
+
 ULONG XhciTolDeadStep(PXHCI_TOL_DEAD dead, ULONG tolerance, ULONG admitted,
                       ULONG allOnes, ULONG startGen, ULONG now)
 {

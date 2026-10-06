@@ -71,6 +71,7 @@
  * in port-object order; restated, and checked where both are seen
  * (hcd_enum.c). */
 #define XHCI_TOL_HUB_LOCS           (16 * 14)
+#define XHCI_TOL_HUB_LOC_PORTS      14UL    /* per hub object, for the dump */
 
 /* Interrupt Interval cap (Linux's XHCI_LIMIT_ENDPOINT_INTERVAL_9). */
 #define XHCI_TOL_INTERVAL_CAP       8UL     /* 2^8 * 125 us = 32 ms          */
@@ -101,6 +102,13 @@
 #define XHCI_TOL_CONTAIN_NONE       0UL
 #define XHCI_TOL_CONTAIN_RELEASED   1UL     /* Bus Master Enable read clear  */
 #define XHCI_TOL_CONTAIN_PINNED     2UL     /* no proof                      */
+
+/* Where the controller stands (35-T.8, the dump's terminal reason). */
+#define XHCI_TOL_TERMINAL_NONE      0UL     /* running                       */
+#define XHCI_TOL_TERMINAL_OWED      1UL     /* failed, a recovery still owed */
+#define XHCI_TOL_TERMINAL_FAILURES  2UL     /* recoveries failed in a row    */
+#define XHCI_TOL_TERMINAL_WINDOW    3UL     /* the recovery window refused   */
+#define XHCI_TOL_TERMINAL_UNREADABLE 4UL    /* contained as unreadable       */
 
 /* Registry values, read at each start: found is 1 when the value was found
  * as a REG_DWORD. Absent, another type or another number takes the
@@ -318,6 +326,15 @@ VOID XhciTolWindowInit(PXHCI_TOL_WINDOW win);
  * than three began inside the window; 0 (counted) otherwise. At tolerance
  * 0 it always returns 1 and records nothing. */
 ULONG XhciTolWindowAdmit(PXHCI_TOL_WINDOW win, ULONG tolerance, ULONG now);
+
+/* The terminal reason a dump names (XHCI_TOL_TERMINAL_*): failed is
+ * ControllerFailed; unreadable, Unreadable; windowRefused, the window's
+ * Refused; failures and maxFailures, RecoveryFailuresConsecutive and its
+ * bound. The containment outranks the window, the window the run of
+ * failures - each latch stops the next from being reached. A failed
+ * controller at none of them still has a recovery owed. */
+ULONG XhciTolTerminal(ULONG failed, ULONG unreadable, ULONG windowRefused,
+                      ULONG failures, ULONG maxFailures);
 
 /* The all-ones episode (record 17 section 4.6). */
 typedef struct _XHCI_TOL_DEAD {
