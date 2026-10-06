@@ -3493,8 +3493,8 @@ May be addressed in a later release:
     volume was mounted may stay at Code 31 until it is unplugged and
     plugged in again, or the controller is disabled and enabled in Device
     Manager. Other devices come back. Seen in a virtual machine; not on
-    Windows 98 SE. The path predates 2.2.0.0, which recovers on more
-    faults.
+    Windows 98 SE. The path is older than this release, which recovers on
+    more faults.
 
 Untested ground:
 
@@ -3748,7 +3748,7 @@ means the default each one states.
   recoveries refused or failed three times in a row): once it shows it
   has halted, the transfers it holds are completed and its devices
   removed; a resume from standby no longer brings it back, only a disable
-  and enable or a restart does (at 0 a change from 2.1.1.0); and its
+  and enable or a restart does (at 0 a change from earlier releases); and its
   state is not saved or restored for standby.
 
   XhciIntervalCap  -  the AMD interrupt-interval cap
