@@ -1,9 +1,10 @@
 # Issue 11 - On Intel Sunrise Point-LP a SuperSpeed device is never enumerated: the link trains, and the driver reads the controller's speed table too strictly to know what it is
 
-Status: **open; a limitation of every release to `2.1.1.0`.** Read on the
-owner's E460 on 2026-10-06 (roadmap task 35.0); the fix is roadmap task
-35.1, for `2.2.0.0`, written and host-tested on 2026-10-06 (section 6) and
-not yet read on the E460 (task 35.2).
+Status: **fixed for `2.2.0.0`; a limitation of every release to
+`2.1.1.0`.** Read on the owner's E460 on 2026-10-06 (roadmap task 35.0);
+the fix is roadmap task 35.1 (section 6), read on the same E460 the same
+night with 35.3's diagnostics in the build (task 35.2, section 6). The issue
+closes with the `2.2.0.0` release (task 35.6).
 
 Machines affected: those with an Intel Sunrise Point-LP xHCI controller
 (`8086:9D2F`), among them the ThinkPad E460 and the HP EliteBook 850 G5.
@@ -158,10 +159,35 @@ them carry a 5 Gb/s entry at ID 4 (`00050134`) and three more SSIC rates
 (`05B10125`, `0B630126`, `16C60127`). The controller publishes PSIC 3, so
 those are not part of its table, and the driver does not read them.
 
-Still to read (35.2): the E460 connector's physical USB 2.0 pairing - the
-hub's USB 2.0 half came up on port 1 where the driver's port map pairs 13
-with 7 - which matters to the send-back and holds of task 29-A.5, not to
-this fix. The HP's "enumerates at High Speed" is not what this failure does
+Read on the E460 (task 35.2, owner, 2026-10-06, Windows 98 SE, the
+`release` flavour built at `7dc9eb5` with `XhciLogVerbosity` 3; 10 dumps,
+git-ignored in `temp/e460-352/`, and an ATTO screenshot). The UAS-capable
+USB 3 stick from 35.0 and the USB 3 hub, on another USB 3 connector than
+35.0's (owner): the stick seen from power-on, after two unplug-replug
+cycles and behind the hub; a large file copied there and back and compared
+with `FC /B`, clean; ATTO 242 MB/s writing and 245 MB/s reading at 8 MB
+transfers; the hub's two halves both present after a hot-plug, a replug
+and a cold boot, the stick behind it each time. The dumps name it: on root
+port 14, `enum.port.speed` "ID 4 is SuperSpeed, by default ID, unlisted on
+a USB 3 table", 5000 Mbit/s, Enable Slot successful; the controller's
+Output Slot Contexts read speed 4, SuperSpeed 5 Gbit/s Gen 1x1, for the
+stick direct, for the hub, and for the stick behind it (route 2, tier 1).
+No Bulk-Only SuperSpeed device was to hand.
+
+Two more facts from the same dumps. The pairing: the hub's USB 2.0 half
+came up on root port 2 beside its SuperSpeed half on 14, and in 35.0, on
+the other connector, on 1 beside 13 - on both connectors USB 3 port n
+shares the connector with USB 2.0 port n - 12, where the driver's
+convention pairs 13 with 7 and 14 with 8 (`xhciPairCompanions`). That
+matters to task 29-A.5's send-back and holds, not to this fix. And the
+hub's hot-plug and replug did not settle at once: each time, its
+SuperSpeed half's link fell to SS.Inactive after binding and took a warm
+reset (three, then two more on the replug, `SsWarmResets`), and its USB 2.0
+half's port reset failed twice (`enum.port.fail`, "failed on the reset")
+before both enumerated and stayed; the cold boot with the hub attached
+showed neither. Whether that is the hub's or this driver's is not read.
+
+The HP's "enumerates at High Speed" is not what this failure does
 by itself on the E460, where the stick was never seen; its table is now
 read, but which controller and connector the tester used, and what the
 device did after the failed enumeration, are not, and want a dump from
