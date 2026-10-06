@@ -63,7 +63,30 @@
 > port's enumeration state and the counter block, word by word; host suite
 > `test_snap`), filled by `hcd_door.c`, and a root port's enumeration notes to
 > `xhci_enum.c` (their packing and budget; host suite `test_enum`), written
-> from `hcd_enum.c`. The tables below are the
+> from `hcd_enum.c`. Phase 35 adds no other file to `src\`; what it changes
+> in existing ones: task 35.1 changes the speed decoding in `xhci_caps.c`
+> (one rule, `xhciProtocolRate`, that the class, the rate and the inverse
+> lookup ask, the fallback for an ID 4 to 7 a USB 3 table does not list, and
+> `XhciPortSpeedSource`; the hub child's lookup in `xhci_sshub.c`; host
+> vectors in `test_caps`, `test_link` and `test_sshub`, the E460's, P14s
+> Gen 1's and B490's tables replayed from their `XHCIQUAL` logs); task 35.5
+> moves the switchover's start decision and its per-register write set
+> into `xhci_psw.c` (`XhciPswMode`, `XHCI_PSW_LIFE`, the lifetime functions;
+> `test_psw`), which `hcd_ctl.c` and `hcd_power.c` call; and task 35-T's
+> behaviours are executed in the existing HCD files (`hcd_ctl.c` the
+> backstop, the HCH and all-ones steps and the values read at start,
+> `xhci_cmd.c` and `xhci_init.c` the HCH request and the recovery window,
+> `hcd_io.c` and `hcd_urb.c` the parked submissions of a contained
+> controller, `hcd_enum.c` the location budgets, the root-port PED and
+> over-current handling and `HcdTolLocCharge`, `hcd_svc.c` the tolerance
+> clock, `hcd_cfg.c` the interval cap and its order with fast polling, and
+> the soft retry, the device cycle and the counters where 35-T.2, 35-T.3/4
+> and 35-T.8 put them). Outside `src\`,
+> `xhciqual\mmiodiag.c` prints each protocol's PSI table and the raw
+> extended-capability chain (host suite `xhciqual\test\test_mmiodiag.c`),
+> `xhciqual\quirks.c` gains the report-only AMD rows, and
+> `xhcisnap\xhcisnap.c` decodes the enumeration notes and the HCD region.
+> The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name
