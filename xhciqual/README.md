@@ -827,13 +827,15 @@ the window:
   16) or 4 dwords. A Supported Protocol capability always includes its PSI
   dwords. Bounds: 32 dwords per capability (a longer one prints `n of m
   dwords`), 32 capabilities and 256 dwords per controller, never past the
-  64 KB mapped window. Past the last two, Supported Protocol and USB Legacy
-  Support capabilities are still recorded, from a reserve of their own and
-  with their defined dwords only (4 + PSIC, and 2): the HP EliteBook 850 G5's
-  `8086:15DB` spent the bound on vendor capabilities before its USB 3.1 table
+  64 KB mapped window. Past the last two, or where one would cut them,
+  Supported Protocol and USB Legacy Support capabilities are still recorded
+  in full, from a reserve of their own and with their defined dwords only
+  (4 + PSIC, and 2): the HP EliteBook 850 G5's `8086:15DB` spent the bound
+  on vendor capabilities before its USB 3.1 table
   (`results/hp850g5-2026-10-06/`). Each `Protocol USB x.y` line also names
-  its capability's BAR0 offset (`@8020`). A header reading all ones ends the raw record there
-  with a note; the capability walk itself is unchanged by it and still
+  its capability's BAR0 offset (`@8020`). A header reading all ones ends the
+  raw record there with a note, the reserve's included (a bound reached
+  before it is still reported); the capability walk itself is unchanged by it and still
   follows that header's `FF` next field, as it always has, until the window
   or its 64-step guard stops it. A walk that stops at the window or the guard
   says so.

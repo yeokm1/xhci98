@@ -1159,6 +1159,7 @@ static void test_xcap_dump(void)
     for (k = 0; k < XCAP_DUMP_PER_CAP; k++)
         tc.xdump[k] = (u32)k;
     tc.xcap_stop = XCAP_STOP_FULL;
+    tc.xcap_full = 1;
     reset_out();
     report_xcap_dump(&tc, qprintf);
     CHECK(has("    cap 8000 ID 192 next 255  vendor defined, 32 of 255 "
@@ -1172,6 +1173,7 @@ static void test_xcap_dump(void)
     tc.xcap[0].want = 1;
     tc.xdump[0] = 0xFFFFFFFFUL;
     tc.xcap_stop = XCAP_STOP_ONES;
+    tc.xcap_full = 0;
     reset_out();
     report_xcap_dump(&tc, qprintf);
     CHECK(has("      8000: FFFFFFFF\n") &&
@@ -1445,6 +1447,65 @@ static void test_walk_protocol_past_the_bound(void)
           "past the bound: the bound line says what is kept");
 }
 
+/*
+ * A protocol capability that would cross the general bound: 255 dwords
+ * spent, then a terminal one of 4 + PSIC 2. Its defined dwords all come from
+ * the reserve, and the record ends marked as bound-reached.
+ */
+static void test_walk_protocol_across_the_bound(void)
+{
+    static const u32 u31[2] = { 0x00050134UL, 0x000A4135UL };
+    u32 off;
+    int i;
+
+    fake_reset(0x10000UL, 0);
+    for (i = 0, off = 0x100; i < 7; i++, off += 32 * 4)
+        fput(off, 0x000020C0UL);              /* vendor, next 32 dwords */
+    fput(off, 0x00001FC0UL);                  /* vendor, next 31 dwords */
+    off += 31 * 4;
+    fput_proto(off, 3, 0, 3, 2, 2, u31);      /* terminal */
+    xcap_walk(&tc, 0x100, fwindow, fake_rd, 0);
+    CHECK(fbad == 0, "across the bound: reads inside the window");
+    CHECK(tc.nxcap == 9 && tc.xcap[8].off == off && tc.xcap[8].ndw == 6,
+          "across the bound: the protocol's six dwords, not its header alone");
+    CHECK(tc.xdump[tc.xcap[8].first + 5] == 0x000A4135UL,
+          "across the bound: its last PSI word as read");
+    CHECK(tc.nxdump == 261 && tc.xcap_stop == XCAP_STOP_FULL &&
+          tc.xcap_full, "across the bound: marked bound-reached");
+}
+
+/*
+ * An all-ones header after the bound stops the reserve too: the USB 3.1
+ * protocol behind it (the walk follows the FF next field, as it always has)
+ * is decoded but not recorded, and both reasons are printed.
+ */
+static void test_walk_all_ones_after_the_bound(void)
+{
+    static const u32 u2[3] = { 0x000C0021UL, 0x05DC0012UL, 0x01E00023UL };
+    static const u32 u31[2] = { 0x00050134UL, 0x000A4135UL };
+    u32 off;
+    int i;
+
+    fake_reset(0x10000UL, 0);
+    fput_proto(0x8000, 2, 0x1C, 1, 2, 3, u2);
+    for (i = 0, off = 0x8070; i < 9; i++, off += 0x100)
+        fput(off, 0x000040C0UL);              /* vendor, next 64 dwords */
+    fput(off, 0xFFFFFFFFUL);                  /* dead header at 8970 */
+    off += 0xFF * 4;
+    fput_proto(off, 3, 0, 3, 2, 2, u31);      /* behind it, terminal */
+    xcap_walk(&tc, 0x8000, fwindow, fake_rd, 0);
+    CHECK(fbad == 0, "ones after the bound: reads inside the window");
+    CHECK(tc.nxcap == 9 && tc.xcap_stop == XCAP_STOP_ONES && tc.xcap_full,
+          "ones after the bound: nothing more recorded, both facts kept");
+    CHECK(tc.nproto == 2 && tc.proto[1].off == off,
+          "ones after the bound: the protocol behind it still decoded");
+    reset_out();
+    report_xcap_dump(&tc, qprintf);
+    CHECK(has("(dump bound reached, 32 capabilities / 256 dwords") &&
+          has("(a header read all ones: raw recording stops here)"),
+          "ones after the bound: both lines printed");
+}
+
 /* All ones: recording stops at the dead header; the walker, unchanged,
  * follows its FF next field until the window stops it, inside the window. */
 static void test_walk_all_ones(void)
@@ -1527,6 +1588,8 @@ int main(void)
     test_walk_per_cap_bound();
     test_walk_exhaustion();
     test_walk_protocol_past_the_bound();
+    test_walk_protocol_across_the_bound();
+    test_walk_all_ones_after_the_bound();
     test_walk_all_ones();
     test_walk_guard_and_none();
 

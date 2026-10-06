@@ -605,14 +605,13 @@ void report_xcap_dump(const CTRL *c, QPRINTF_FN pf)
             pf("%s\n", line);
         }
     }
-    switch (c->xcap_stop) {
-    case XCAP_STOP_ONES:
-        pf("    (a header read all ones: raw recording stops here)\n");
-        break;
-    case XCAP_STOP_FULL:
+    if (c->xcap_full)
         pf("    (dump bound reached, %d capabilities / %d dwords: the rest "
            "not recorded,\n     except Supported Protocol and USB Legacy "
            "Support)\n", XCAP_DUMP_CAPS, XCAP_DUMP_TOTAL);
+    switch (c->xcap_stop) {
+    case XCAP_STOP_ONES:
+        pf("    (a header read all ones: raw recording stops here)\n");
         break;
     case XCAP_STOP_WALK:
         pf("    (the walk stopped at the mapped window or its 64-step "
@@ -632,6 +631,14 @@ void report_xcap_dump(const CTRL *c, QPRINTF_FN pf)
  * whose span the chain does not give, takes its known size, 4 dwords if
  * unknown. A Supported Protocol capability always includes its PSI dwords.
  */
+/* The general bound is reached: the stop, and the fact kept apart from it
+ * so a later all-ones header does not hide it. */
+static void xcap_set_full(CTRL *c)
+{
+    c->xcap_stop = XCAP_STOP_FULL;
+    c->xcap_full = 1;
+}
+
 /* A capability recorded past the general bound (XCAP_KEPT_*). */
 static int xcap_kept(u32 dw)
 {
@@ -649,10 +656,10 @@ static void xcap_record(CTRL *c, u32 off, u32 dw, u32 window,
     kept = xcap_kept(dw);
     full = c->nxcap >= XCAP_DUMP_CAPS || c->nxdump >= XCAP_DUMP_TOTAL;
     if (full)
-        c->xcap_stop = XCAP_STOP_FULL;
+        xcap_set_full(c);
     if (full && (!kept || c->nxcap >= XCAP_DUMP_CAPS + XCAP_KEPT_CAPS))
         return;
-    total = full ? XCAP_DUMP_TOTAL + XCAP_KEPT_DWORDS : XCAP_DUMP_TOTAL;
+    total = kept ? XCAP_DUMP_TOTAL + XCAP_KEPT_DWORDS : XCAP_DUMP_TOTAL;
     r = &c->xcap[c->nxcap++];
     r->off = off;
     r->id = (u8)(dw & 0xFF);
@@ -684,13 +691,19 @@ static void xcap_record(CTRL *c, u32 off, u32 dw, u32 window,
             want = known;
     }
     r->want = (u16)want;
-    if (full && want > known)
-        want = known;       /* from the reserve: the defined dwords only */
+    /* A kept capability past the bound, or one that would cross it, takes
+     * its defined dwords only, the reserve covering what the general bound
+     * cannot. */
+    if (kept && want > known &&
+        (full || c->nxdump + want > XCAP_DUMP_TOTAL))
+        want = known;
     for (k = 0; k < want && k < XCAP_DUMP_PER_CAP &&
                 c->nxdump < total &&
                 off + k * 4 + 4 <= window; k++)
         c->xdump[c->nxdump++] = (k == 0) ? dw : rd(ctx, off + k * 4);
     r->ndw = (u16)k;
+    if (c->nxdump >= XCAP_DUMP_TOTAL)
+        xcap_set_full(c);
 }
 
 void xcap_walk(CTRL *c, u32 xecp_off, u32 window, XCAP_RD_FN rd, void *ctx)
@@ -705,6 +718,7 @@ void xcap_walk(CTRL *c, u32 xecp_off, u32 window, XCAP_RD_FN rd, void *ctx)
     c->nxcap = 0;
     c->nxdump = 0;
     c->xcap_stop = XCAP_STOP_END;
+    c->xcap_full = 0;
     for (guard = 0; off != 0 && off < window - 0x40UL && guard < 64;
          guard++) {
         u32 next;
@@ -713,6 +727,8 @@ void xcap_walk(CTRL *c, u32 xecp_off, u32 window, XCAP_RD_FN rd, void *ctx)
         if (c->xcap_stop == XCAP_STOP_END ||
             (c->xcap_stop == XCAP_STOP_FULL && xcap_kept(dw)))
             xcap_record(c, off, dw, window, rd, ctx);
+        else if (c->xcap_stop == XCAP_STOP_FULL && dw == 0xFFFFFFFFUL)
+            c->xcap_stop = XCAP_STOP_ONES;  /* the reserve stops here too */
         switch (dw & 0xFF) {
         case XECP_ID_LEGSUP:
             if (c->legsup_off == 0)

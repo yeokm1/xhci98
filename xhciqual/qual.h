@@ -481,6 +481,7 @@ typedef struct {
     u32 xecp_off;            /* HCCPARAMS1 xECP in bytes, 0 = no chain */
     int nxcap;               /* entries in xcap[] */
     int xcap_stop;           /* XCAP_STOP_* */
+    int xcap_full;           /* the general bound was reached */
     int nxdump;              /* dwords used in xdump[] */
     XCAPREC xcap[XCAP_DUMP_CAPS + XCAP_KEPT_CAPS];
     u32 xdump[XCAP_DUMP_TOTAL + XCAP_KEPT_DWORDS];
