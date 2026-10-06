@@ -410,6 +410,25 @@ static LONG hcdCfgSelectAnswer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * device (xhci_cmd.c). Returns 1 when a reset was requested. Thread only,
  * powered.
  */
+/*
+ * An automatic fallback cycle of the device's location (a departing
+ * device's failed command, a failed RESET_PORT), charged once to the
+ * location's budget with tolerance on, as 35-T.3/4's cycles are: a device
+ * that fails the same way after every fresh enumeration would otherwise be
+ * removed and re-enumerated for ever. Refused, the device still goes and
+ * the location is held (35-T.5's hold, released by a stable disconnect or
+ * a start). At XhciTolerance 0 nothing is charged, as before
+ * (HcdTolLocCharge). The caller has checked dev->Location. Thread only.
+ */
+static VOID hcdCfgCycle(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    if (!HcdTolLocCharge(hc, &hc->Ports[dev->Location - 1],
+                         XHCI_TOL_CHARGE_REENUM)) {
+        hc->Hc.Tol.Stats.CyclesRefused++;
+    }
+    HcdEnumCycle(hc, dev->Location, dev->PdoGroup);
+}
+
 static ULONG hcdCfgFault(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     if (dev->Gone || dev->Location == 0 || dev->Location > HCD_PORT_COUNT ||
@@ -424,7 +443,7 @@ static ULONG hcdCfgFault(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         !HcdHubPathPresent(hc, &hc->Ports[dev->Location - 1])) {
         XHCI_DBG_VALUE("hcd: command failed on a departing device, "
                        "cycling location", dev->Location);
-        HcdEnumCycle(hc, dev->Location, dev->PdoGroup);
+        hcdCfgCycle(hc, dev);
         return 0;
     }
     HcdSvcRequestReset(&hc->Hc);
@@ -3175,7 +3194,7 @@ cleanup:
         XHCI_DBG_VALUE("hcd: reset port failed, cycling port", dev->Port);
         if (dev->Pdo != NULL) {
             /* The device's group: every function PDO of it goes. */
-            HcdEnumCycle(hc, dev->Location, dev->PdoGroup);
+            hcdCfgCycle(hc, dev);
         }
         return HCD_USBD_INTERNAL_HC_ERROR;
     }
