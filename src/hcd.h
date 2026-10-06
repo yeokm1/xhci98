@@ -1035,7 +1035,13 @@ typedef struct _HCD_CONTROLLER {
      * over InjRegs; the lost-interrupt window is lock-free - the thread
      * arms and disarms it (InjIrqArmed, InjIrqBudget, InjIrqForever), the
      * ISR counts InjIrqTaken only while it is armed, and InjIrqDropped;
-     * InjTrigger, InjReadAt and InjIrqNoted are the thread's. */
+     * InjTrigger, InjReadAt and InjIrqNoted are the thread's. The endpoint
+     * faults (35-T.2 to 35-T.4): InjEp under InjLock; InjEvDone signalled
+     * by the drain that took an injected event; the rest the thread's -
+     * the armed fault, its count and port, the phase of the injection in
+     * flight and since when, its target (InjDev compared, never followed
+     * once the slot no longer names it), and InjOwnCmd across the layer's
+     * own commands, which its command hook lets through. */
     ULONG QemuPsiE460;
     KSPIN_LOCK InjLock;
     XHCI_INJ_REGS InjRegs;
@@ -1047,6 +1053,18 @@ typedef struct _HCD_CONTROLLER {
     volatile LONG InjIrqForever;
     volatile LONG InjIrqDropped;
     LONG InjIrqNoted;
+    XHCI_INJ_EP InjEp;
+    KEVENT InjEvDone;
+    ULONG InjFault;
+    ULONG InjLeft;
+    ULONG InjPort;
+    ULONG InjPhase;
+    ULONG InjSince;
+    ULONG InjWaitNoted;
+    struct _HCD_USB_DEVICE *InjDev;
+    ULONG InjSlot;
+    ULONG InjDci;
+    ULONG InjOwnCmd;
 #endif
     /* The door (hcd_door.c, 26-A.8; design record 13 section 8): the
      * FDO's name's number, \DosDevices\HCD<n>, the host controller
@@ -1455,6 +1473,11 @@ VOID HcdInjPoll(PHCD_CONTROLLER hc);
 ULONG HcdInjIsrDrop(PHCD_CONTROLLER hc);
 ULONG HcdInjUsbsts(PHCD_CONTROLLER hc, ULONG usbsts);
 USHORT HcdInjPciCommand(PHCD_CONTROLLER hc, USHORT command);
+VOID HcdInjService(PHCD_CONTROLLER hc);
+ULONG HcdInjCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb, PULONG control,
+                    PULONG code);
+ULONG HcdInjEpState(PHCD_CONTROLLER hc, ULONG slot, ULONG dci, ULONG state);
+VOID HcdInjEp0Doorbell(PHCD_CONTROLLER hc, struct _HCD_USB_DEVICE *dev);
 #endif
 
 /* hcd_cfg.c */

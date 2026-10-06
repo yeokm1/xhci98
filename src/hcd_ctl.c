@@ -630,6 +630,8 @@ VOID HcdControllerInitObjects(PHCD_CONTROLLER hc)
 #if defined(XHCI_FLAVOUR_QEMU)
     KeInitializeSpinLock(&hc->InjLock);
     XhciInjRegsClear(&hc->InjRegs);
+    XhciInjEpClear(&hc->InjEp);
+    KeInitializeEvent(&hc->InjEvDone, NotificationEvent, FALSE);
 #endif
 }
 

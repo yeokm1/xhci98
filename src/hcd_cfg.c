@@ -2333,7 +2333,13 @@ static ULONG hcdCfgEpState(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                   &offset) != XHCI_LAYOUT_OK) {
         return XHCI_EP_STATE_DISABLED;
     }
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* 35-T.9: Halted or Error, as the injection answers it. */
+    return HcdInjEpState(hc, dev->SlotId, dci,
+                         XHCI_EP_GET_STATE(XhciCommonAt(&hc->Hc, offset)[0]));
+#else
     return XHCI_EP_GET_STATE(XhciCommonAt(&hc->Hc, offset)[0]);
+#endif
 }
 
 /*
@@ -3803,9 +3809,11 @@ static ULONG hcdCfgRetryContended(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * 4.6.8.1), which keeps the host's sequence state, so the device's data
  * toggle stays aligned with no CLEAR_FEATURE, and leaves the endpoint
  * Stopped with the controller's dequeue on the TRB that failed - no Set TR
- * Dequeue follows. Kept apart so the qemu flavour's injection (35-T.9) has
- * one place to answer it. Returns 1 when it completed successfully. Thread
- * only, powered.
+ * Dequeue follows. The qemu flavour's injection (35-T.9) answers it, as it
+ * answers every command to the endpoint it emulates, in hcdCommand: a
+ * client's RESET_PIPE after an exhausted retry meets the same emulated
+ * Halted endpoint. Returns 1 when it completed successfully. Thread only,
+ * powered.
  */
 static ULONG hcdCfgRetryResetEndpoint(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                       PHCD_PIPE pipe)

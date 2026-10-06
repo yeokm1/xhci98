@@ -6,6 +6,7 @@
  */
 
 #include "xhci_inj.h"
+#include "xhci_pipe.h"
 
 #if defined(XHCI_FLAVOUR_QEMU) || defined(XHCI_HOST_TEST)
 
@@ -30,12 +31,9 @@ ULONG XhciInjTake(PXHCI_INJ_TRIGGER t, ULONG found, ULONG value)
     t->Seen = 1;
     t->Seq = seq;
     fault = XHCI_INJ_GET_FAULT(value);
-    if ((fault >= XHCI_INJ_LOST_IRQ && fault <= XHCI_INJ_DEAD_NOPROOF) ||
+    if ((fault >= XHCI_INJ_LOST_IRQ && fault <= XHCI_INJ_LAST_BUILT) ||
         fault == XHCI_INJ_CLEAR) {
         return XHCI_INJ_TAKE_FIRE;
-    }
-    if (fault >= XHCI_INJ_TRANSACTION && fault <= XHCI_INJ_RESERVED_LAST) {
-        return XHCI_INJ_TAKE_UNBUILT;
     }
     return XHCI_INJ_TAKE_UNKNOWN;
 }
@@ -199,7 +197,7 @@ ULONG XhciInjPciCommand(const XHCI_INJ_REGS *r, ULONG command)
 
 ULONG XhciInjNeedsLive(ULONG fault)
 {
-    return (fault >= XHCI_INJ_LOST_IRQ && fault <= XHCI_INJ_DEAD_NOPROOF &&
+    return (fault >= XHCI_INJ_LOST_IRQ && fault <= XHCI_INJ_LAST_BUILT &&
             fault != XHCI_INJ_OC_RELEASE) ? 1UL : 0UL;
 }
 
@@ -212,6 +210,285 @@ ULONG XhciInjLostCount(ULONG arg)
         return 0xFFFFFFFFUL;
     }
     return arg;
+}
+
+/* ----------------------------------------------------------------------- */
+/* The endpoint faults                                                      */
+/* ----------------------------------------------------------------------- */
+
+ULONG XhciInjKind(ULONG fault)
+{
+    switch (fault) {
+    case XHCI_INJ_TRANSACTION:
+    case XHCI_INJ_RESET_EP_FAIL:
+    case XHCI_INJ_RACE_RING:
+    case XHCI_INJ_RACE_SECOND:
+        return XHCI_INJ_KIND_RETRY;
+    case XHCI_INJ_HALT_HALTED:
+    case XHCI_INJ_HALT_ERROR:
+    case XHCI_INJ_HALT_STALE:
+        return XHCI_INJ_KIND_HALT;
+    case XHCI_INJ_REFUSED_CODE:
+    case XHCI_INJ_EP_NOT_ENABLED:
+        return XHCI_INJ_KIND_REFUSED;
+    case XHCI_INJ_EP0_THREAD:
+    case XHCI_INJ_EP0_PREPDO:
+        return XHCI_INJ_KIND_EP0;
+    default:
+        return XHCI_INJ_KIND_OTHER;
+    }
+}
+
+ULONG XhciInjHoldOf(ULONG fault)
+{
+    switch (fault) {
+    case XHCI_INJ_RESET_EP_FAIL:
+        return XHCI_INJ_HOLD_FAIL;
+    case XHCI_INJ_RACE_RING:
+        return XHCI_INJ_HOLD_RING;
+    case XHCI_INJ_RACE_SECOND:
+        return XHCI_INJ_HOLD_SECOND;
+    default:
+        return XHCI_INJ_HOLD_NONE;
+    }
+}
+
+ULONG XhciInjHaltStateOf(ULONG fault)
+{
+    if (XhciInjKind(fault) == XHCI_INJ_KIND_RETRY ||
+        fault == XHCI_INJ_HALT_HALTED) {
+        return XHCI_EP_STATE_HALTED;
+    }
+    if (fault == XHCI_INJ_HALT_ERROR) {
+        return XHCI_EP_STATE_ERROR;
+    }
+    return 0;
+}
+
+ULONG XhciInjSpend(PULONG left)
+{
+    if (*left == 0) {
+        return 0;
+    }
+    if (*left != 0xFFFFFFFFUL) {
+        (*left)--;
+    }
+    return 1;
+}
+
+ULONG XhciInjPipeFits(ULONG wanted, ULONG devPort, ULONG published,
+                      ULONG isHub, ULONG gone, ULONG transferType,
+                      ULONG endpointAddress, ULONG streams, ULONG busy,
+                      ULONG queued, ULONG retryWanted)
+{
+    if (wanted != 0 && devPort != wanted) {
+        return 0;
+    }
+    if (!published || isHub || gone || streams || busy || !queued ||
+        retryWanted) {
+        return 0;
+    }
+    /* The record's target: an interrupt IN QEMU NAKs while the HID device
+     * is idle, so the TD sits at the dequeue with nothing moved. */
+    return (transferType == XHCI_PIPE_XFER_INTERRUPT &&
+            (endpointAddress & 0x80UL) != 0) ? 1UL : 0UL;
+}
+
+VOID XhciInjTransferEvent(XHCI_TRB *ev, ULONG pa, ULONG residual, ULONG cc,
+                          ULONG slot, ULONG dci)
+{
+    ev->Param0 = pa;
+    ev->Param1 = 0;
+    ev->Status = ((cc & 0xFFUL) << 24) | (residual & 0x00FFFFFFUL);
+    ev->Control = XHCI_TRB_TYPE(XHCI_TRB_TYPE_TRANSFER_EVENT) |
+                  XHCI_TRB_EP_ID(dci) | XHCI_TRB_SLOT_ID(slot);
+}
+
+VOID XhciInjEpClear(PXHCI_INJ_EP e)
+{
+    XhciInjEpEnd(e);
+    e->Dropped = 0;
+    e->StopSeen = 0;
+    e->StopPA = 0;
+    e->StopCode = 0;
+    e->StopResidual = 0;
+    e->EvPending = 0;
+    e->Ev.Param0 = 0;
+    e->Ev.Param1 = 0;
+    e->Ev.Status = 0;
+    e->Ev.Control = 0;
+    e->Ep0Want = 0;
+    e->Ep0Port = 0;
+    e->Ep0Left = 0;
+    e->Abandoned = 0;
+    e->Repointed = 0;
+}
+
+VOID XhciInjEpEnd(PXHCI_INJ_EP e)
+{
+    e->Slot = 0;
+    e->Dci = 0;
+    e->State = 0;
+    e->Block = 0;
+    e->Hold = XHCI_INJ_HOLD_NONE;
+    e->Watch = 0;
+}
+
+VOID XhciInjEpWatch(PXHCI_INJ_EP e, ULONG slot, ULONG dci)
+{
+    e->Slot = slot;
+    e->Dci = dci;
+    e->State = 0;
+    e->Block = 1;
+    e->Hold = XHCI_INJ_HOLD_NONE;
+    e->Watch = 1;
+    e->StopSeen = 0;
+    e->StopPA = 0;
+    e->StopCode = 0;
+    e->StopResidual = 0;
+}
+
+ULONG XhciInjEpSwallow(PXHCI_INJ_EP e, const XHCI_TRB *ev)
+{
+    ULONG cc;
+
+    if (!e->Watch || e->Slot == 0 ||
+        XHCI_TRB_GET_TYPE(ev->Control) != XHCI_TRB_TYPE_TRANSFER_EVENT ||
+        XHCI_TRB_GET_SLOT_ID(ev->Control) != e->Slot ||
+        XHCI_TRB_GET_EP_ID(ev->Control) != e->Dci) {
+        return 0;
+    }
+    cc = XHCI_TRB_GET_COMPLETION(ev->Status);
+    if (cc < XHCI_CC_STOPPED || cc > XHCI_CC_STOPPED_SHORT_PACKET) {
+        return 0;
+    }
+    e->StopSeen = 1;
+    e->StopPA = XHCI_EVENT_IS_EVENT_DATA(ev->Control) ? 0UL : ev->Param0;
+    e->StopCode = cc;
+    e->StopResidual = XHCI_TRB_GET_RESIDUAL(ev->Status);
+    return 1;
+}
+
+ULONG XhciInjEpDoorbell(PXHCI_INJ_EP e, ULONG slot, ULONG value)
+{
+    if (!e->Block || e->Slot == 0 || slot != e->Slot ||
+        (value & 0xFFUL) != e->Dci) {
+        return 0;
+    }
+    e->Dropped++;
+    return 1;
+}
+
+ULONG XhciInjEpState(const XHCI_INJ_EP *e, ULONG slot, ULONG dci, ULONG raw)
+{
+    if (e->Slot == 0 || e->State == 0 || slot != e->Slot || dci != e->Dci) {
+        return raw;
+    }
+    return e->State;
+}
+
+ULONG XhciInjCommand(PXHCI_INJ_EP e, const XHCI_TRB *cmd, PULONG code)
+{
+    ULONG type;
+    ULONG hold;
+
+    type = XHCI_TRB_GET_TYPE(cmd->Control);
+    if (e->Slot == 0 || XHCI_TRB_GET_SLOT_ID(cmd->Control) != e->Slot) {
+        return XHCI_INJ_CMD_PASS;
+    }
+    switch (type) {
+    case XHCI_TRB_TYPE_DISABLE_SLOT:
+    case XHCI_TRB_TYPE_ADDRESS_DEVICE:
+    case XHCI_TRB_TYPE_RESET_DEVICE:
+    case XHCI_TRB_TYPE_CONFIGURE_EP:
+        /* The endpoint's context is rewritten or gone. */
+        XhciInjEpEnd(e);
+        return XHCI_INJ_CMD_PASS;
+    case XHCI_TRB_TYPE_RESET_EP:
+        if (XHCI_TRB_GET_EP_ID(cmd->Control) != e->Dci || e->State == 0) {
+            return XHCI_INJ_CMD_PASS;
+        }
+        if (e->State == XHCI_EP_STATE_ERROR) {
+            *code = XHCI_CC_CONTEXT_STATE_ERROR;
+            return XHCI_INJ_CMD_ANSWER;
+        }
+        hold = e->Hold;
+        e->Hold = XHCI_INJ_HOLD_NONE;
+        if (hold == XHCI_INJ_HOLD_FAIL) {
+            *code = XHCI_CC_CONTEXT_STATE_ERROR;
+            return XHCI_INJ_CMD_ANSWER;
+        }
+        if (hold == XHCI_INJ_HOLD_RING) {
+            return XHCI_INJ_CMD_RING;
+        }
+        if (hold == XHCI_INJ_HOLD_SECOND) {
+            return XHCI_INJ_CMD_SECOND;
+        }
+        /* The real endpoint is already Stopped, the state a Reset
+         * Endpoint leaves: nothing needs sending. */
+        XhciInjEpEnd(e);
+        *code = XHCI_CC_SUCCESS;
+        return XHCI_INJ_CMD_ANSWER;
+    case XHCI_TRB_TYPE_SET_TR_DEQUEUE:
+        if (XHCI_TRB_GET_EP_ID(cmd->Control) != e->Dci || e->State == 0) {
+            return XHCI_INJ_CMD_PASS;
+        }
+        if (e->State == XHCI_EP_STATE_HALTED) {
+            *code = XHCI_CC_CONTEXT_STATE_ERROR;
+            return XHCI_INJ_CMD_ANSWER;
+        }
+        XhciInjEpEnd(e);
+        return XHCI_INJ_CMD_PASS;
+    default:
+        return XHCI_INJ_CMD_PASS;
+    }
+}
+
+ULONG XhciInjStopVerdict(ULONG ctxDeqPA, ULONG firstPA, ULONG afterPA,
+                         ULONG single, ULONG firstLen, ULONG seen,
+                         ULONG seenPA, ULONG seenCode, ULONG seenResidual)
+{
+    ULONG untouched;
+
+    /* A Stopped event names the TRB the TD stopped in; code 26's length is
+     * that TRB's residual, the other two say nothing exact. */
+    untouched = (seen && seenPA == firstPA && seenCode == XHCI_CC_STOPPED &&
+                 seenResidual == firstLen) ? 1UL : 0UL;
+    if ((ctxDeqPA & XHCI_EP_DEQUEUE_MASK) == firstPA) {
+        return (!seen || untouched) ? XHCI_INJ_STOP_OK : XHCI_INJ_STOP_BROKEN;
+    }
+    if (single && untouched && (ctxDeqPA & XHCI_EP_DEQUEUE_MASK) == afterPA) {
+        return XHCI_INJ_STOP_REPOINT;
+    }
+    return XHCI_INJ_STOP_BROKEN;
+}
+
+VOID XhciInjEp0Arm(PXHCI_INJ_EP e, ULONG fault, ULONG port, ULONG left)
+{
+    e->Ep0Want = (left != 0) ? fault : 0UL;
+    e->Ep0Port = port;
+    e->Ep0Left = left;
+}
+
+ULONG XhciInjEp0Fires(PXHCI_INJ_EP e, ULONG devPort, ULONG published)
+{
+    if (e->Ep0Want == 0 || e->EvPending) {
+        return 0;
+    }
+    if (e->Ep0Port != 0 && devPort != e->Ep0Port) {
+        return 0;
+    }
+    if ((e->Ep0Want == XHCI_INJ_EP0_THREAD) != (published != 0)) {
+        return 0;
+    }
+    if (!XhciInjSpend(&e->Ep0Left)) {
+        e->Ep0Want = 0;
+        return 0;
+    }
+    if (e->Ep0Left == 0) {
+        e->Ep0Want = 0;
+    }
+    return 1;
 }
 
 #else /* debug and release: injection is not in the image */

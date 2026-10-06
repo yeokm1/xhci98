@@ -47,6 +47,9 @@
  * of codes of its own, which is what audit rounds 6, 7 and 8 each found short. */
 #include "xhci_xfer.h"
 #include "xhci_dbg.h"
+#if defined(XHCI_FLAVOUR_QEMU)
+#include "hcd_svc.h"
+#endif
 
 /* XHCI_ISR_IMAN_READ_ATTEMPTS is in src/xhci_hw.h, with the contract it is part
  * of - the host vector for the literal fallback counts exactly that many reads. */
@@ -779,6 +782,15 @@ ULONG XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts)
     ringEmpty = 0;
     resetRequested = 0;
 
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* 35-T.9: a Transfer Event the injection layer made (hcd_inj.c), met
+     * by the same handler as one off the ring. */
+    if (HcdInjEventTake(ext, &trb)) {
+        resetRequested |= xhciHandleEvent(ext, &trb);
+        HcdInjEventDone(ext);
+    }
+#endif
+
     for (;;) {
         if (drained >= XHCI_DPC_MAX_EVENTS) {
             bounded = 1;
@@ -789,7 +801,15 @@ ULONG XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts)
             break;
         }
 
+#if defined(XHCI_FLAVOUR_QEMU)
+        /* 35-T.9: the Stopped event of the injection layer's own Stop
+         * Endpoint is the layer's, never the driver's. */
+        if (!HcdInjEventSwallow(ext, &trb)) {
+            resetRequested |= xhciHandleEvent(ext, &trb);
+        }
+#else
         resetRequested |= xhciHandleEvent(ext, &trb);
+#endif
 
         drained++;
         ext->EventsTotal++;

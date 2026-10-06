@@ -22,12 +22,17 @@
  * Nothing is written back: the driver's log ring and the qemu trace carry
  * "qemu.inj.*" notes for every command taken, refused or ended.
  *
- * ADDING A FAULT (35-T.2, 35-T.3/4): a code below, an executor in hcd_inj.c's
- * dispatch, and the hook at the one place the faked state is met - for those,
- * the event drain (consuming the layer's Stopped events and handing an
- * injected Transfer Event to xhciHandleEvent) and the Endpoint Context read
- * (answering Halted or Error). The codes are reserved here and refused with a
- * note until their executors exist.
+ * THE ENDPOINT FAULTS (codes 08 to 12 hex: 35-T.2's soft retry, 35-T.3/4's
+ * device cycle) meet the driver at five hooks, all qemu-only: the event drain
+ * (xhci_evt.c), which swallows the Stopped event of the layer's own Stop
+ * Endpoint and hands an injected Transfer Event to the handler a ring event
+ * meets; the Endpoint Context state reads (hcd_enum.c, hcd_cfg.c, hcd_hub.c),
+ * answered Halted or Error; every command the thread issues (hcd_enum.c,
+ * hcdCommand), where a Reset Endpoint or a Set TR Dequeue to the answered
+ * endpoint is completed without being sent; the doorbell (xhci_pci.c),
+ * dropped while the endpoint is answered for, as a halted endpoint ignores
+ * it; and the thread's own EP0 doorbell (hcd_enum.c, hcdThreadControlQuiet),
+ * which the EP0 faults withhold.
  *
  * C89, pure: IRQL any. The caller serializes (hcd_inj.c's InjLock).
  */
@@ -49,8 +54,7 @@
     (((((ULONG)(seq)) & 0xFFUL) << 24) | ((((ULONG)(fault)) & 0xFFUL) << 16) | \
      ((((ULONG)(port)) & 0xFFUL) << 8) | (((ULONG)(arg)) & 0xFFUL))
 
-/* The faults built (record 17 section 5's table, the rows whose driver
- * behaviour is in the tree). */
+/* The faults (record 17 section 5's table). */
 #define XHCI_INJ_NONE            0UL  /* no fault (a refused command)     */
 #define XHCI_INJ_LOST_IRQ        1UL  /* arg interrupts lost; 0 one, 255 all */
 #define XHCI_INJ_PED             2UL  /* real PED write, PEC answered        */
@@ -59,26 +63,59 @@
 #define XHCI_INJ_HCH             5UL  /* real Run/Stop clear                 */
 #define XHCI_INJ_DEAD            6UL  /* all-ones USBSTS, BME proof real     */
 #define XHCI_INJ_DEAD_NOPROOF    7UL  /* the same, BME reads back set        */
-/* Reserved for 35-T.2 to 35-T.4, refused until built. */
-#define XHCI_INJ_TRANSACTION     8UL
-#define XHCI_INJ_RESET_EP_FAIL   9UL
-#define XHCI_INJ_REFUSED_CODE    10UL
-#define XHCI_INJ_HALT_HALTED     11UL
-#define XHCI_INJ_HALT_ERROR      12UL
-#define XHCI_INJ_HALT_STALE      13UL
-#define XHCI_INJ_EP_NOT_ENABLED  14UL
-#define XHCI_INJ_EP0_THREAD      15UL
-#define XHCI_INJ_EP0_PREPDO      16UL
-#define XHCI_INJ_RACE_RING       17UL
-#define XHCI_INJ_RACE_SECOND     18UL
-#define XHCI_INJ_RESERVED_LAST   18UL
+/* 35-T.2 to 35-T.4's, on an interrupt-IN TD the controller is NAKing: `arg`
+ * is how many injections (0 one, 255 until CLEAR), the port the device's
+ * root port. */
+#define XHCI_INJ_TRANSACTION     8UL  /* Transaction Error, emulated Halted  */
+#define XHCI_INJ_RESET_EP_FAIL   9UL  /* the same, the Reset Endpoint
+                                       * answering Context State Error       */
+#define XHCI_INJ_REFUSED_CODE    10UL /* Bandwidth Overrun on the TD         */
+#define XHCI_INJ_HALT_HALTED     11UL /* Stall, pointer 0, reads Halted      */
+#define XHCI_INJ_HALT_ERROR      12UL /* Stall, off the ring, reads Error    */
+#define XHCI_INJ_HALT_STALE      13UL /* Stall, pointer 0, reads Stopped     */
+#define XHCI_INJ_EP_NOT_ENABLED  14UL /* code 12, pointer and length 0       */
+#define XHCI_INJ_EP0_THREAD      15UL /* a refused code on the thread's own
+                                       * EP0 transfer to a published device  */
+#define XHCI_INJ_EP0_PREPDO      16UL /* the same before the PDO exists      */
+#define XHCI_INJ_RACE_RING       17UL /* TRANSACTION, a ring during the held
+                                       * Reset Endpoint                      */
+#define XHCI_INJ_RACE_SECOND     18UL /* the same, then a second error       */
+#define XHCI_INJ_LAST_BUILT      18UL
 #define XHCI_INJ_CLEAR           0xFFUL  /* every injection ended            */
 
 /* XhciInjTake's verdicts. */
 #define XHCI_INJ_TAKE_NONE       0UL  /* nothing new                         */
 #define XHCI_INJ_TAKE_FIRE       1UL  /* a built fault or CLEAR              */
-#define XHCI_INJ_TAKE_UNBUILT    2UL  /* a reserved code: refused, noted     */
 #define XHCI_INJ_TAKE_UNKNOWN    3UL  /* no such code: refused, noted        */
+
+/* XhciInjKind: how a fault is carried out. */
+#define XHCI_INJ_KIND_OTHER      0UL  /* 01 to 07, CLEAR: hcd_inj.c's own    */
+#define XHCI_INJ_KIND_RETRY      1UL  /* a stop, emulated Halted, a TE       */
+#define XHCI_INJ_KIND_HALT       2UL  /* a stop, a Stall naming no TD        */
+#define XHCI_INJ_KIND_REFUSED    3UL  /* a refused code, no stop             */
+#define XHCI_INJ_KIND_EP0        4UL  /* at the thread's EP0 doorbell        */
+
+/* What the answered endpoint's next Reset Endpoint meets (XHCI_INJ_EP.Hold). */
+#define XHCI_INJ_HOLD_NONE       0UL  /* Success, the answers ended          */
+#define XHCI_INJ_HOLD_FAIL       1UL  /* Context State Error, still Halted   */
+#define XHCI_INJ_HOLD_RING       2UL  /* held: a ring resumes the endpoint   */
+#define XHCI_INJ_HOLD_SECOND     3UL  /* held: a ring, then a second error   */
+
+/* XhciInjCommand's verdicts on one command the thread issues. */
+#define XHCI_INJ_CMD_PASS        0UL  /* sent as it is                       */
+#define XHCI_INJ_CMD_ANSWER      1UL  /* *code answered, nothing sent        */
+#define XHCI_INJ_CMD_RING        2UL  /* held (HOLD_RING): the layer's turn  */
+#define XHCI_INJ_CMD_SECOND      3UL  /* held (HOLD_SECOND): the layer's     */
+
+/* XhciInjStopVerdict's: where the layer's Stop Endpoint left the TD. */
+#define XHCI_INJ_STOP_OK         0UL  /* the dequeue is the TD's first TRB   */
+#define XHCI_INJ_STOP_REPOINT    1UL  /* fetched ahead, nothing moved: a Set
+                                       * TR Dequeue puts it back             */
+#define XHCI_INJ_STOP_BROKEN     2UL  /* anything else: abandoned, counted   */
+
+/* The refused code REFUSED_CODE and the EP0 faults carry: record 17's
+ * finding T3 names Bandwidth Overrun among the codes nothing claims. */
+#define XHCI_INJ_REFUSED_CC      XHCI_CC_BANDWIDTH_OVERRUN
 
 /* The argument that means "until CLEAR" for LOST_IRQ; for DEAD it is 0. */
 #define XHCI_INJ_ARG_FOREVER     0xFFUL
@@ -87,6 +124,39 @@
 /* PCI Command, Bus Master Enable (xhci_hw.h's XHCI_PCI_COMMAND_BME, which
  * this pure half cannot include). */
 #define XHCI_INJ_PCI_BME         0x0004UL
+
+/*
+ * The endpoint the layer answers for (the endpoint faults; one at a time),
+ * under InjLock. Slot 0 is none. State is the EP State the context reads
+ * answer (Halted or Error; 0 the real one); Block drops the doorbells rung
+ * for it (Dropped counts them), from the layer's Stop Endpoint until the
+ * answers end, as a halted endpoint ignores a doorbell. Watch swallows the
+ * Stopped event of the layer's own Stop, kept in Stop*. Hold is what its
+ * next Reset Endpoint meets. Ev is an injected Transfer Event waiting for
+ * the drain (EvPending). Ep0* is an armed EP0 fault, fired at the thread's
+ * EP0 doorbell. Abandoned and Repointed count the stops that did not find
+ * the TD at the dequeue, and those QEMU's fetch-ahead needed put back.
+ */
+typedef struct _XHCI_INJ_EP {
+    ULONG Slot;
+    ULONG Dci;
+    ULONG State;
+    ULONG Block;
+    ULONG Dropped;
+    ULONG Hold;
+    ULONG Watch;
+    ULONG StopSeen;
+    ULONG StopPA;
+    ULONG StopCode;
+    ULONG StopResidual;
+    ULONG EvPending;
+    XHCI_TRB Ev;
+    ULONG Ep0Want;
+    ULONG Ep0Port;
+    ULONG Ep0Left;
+    ULONG Abandoned;
+    ULONG Repointed;
+} XHCI_INJ_EP, *PXHCI_INJ_EP;
 
 /* The trigger's memory: the last sequence seen, and whether one was. */
 typedef struct _XHCI_INJ_TRIGGER {
@@ -181,8 +251,109 @@ ULONG XhciInjPciCommand(const XHCI_INJ_REGS *r, ULONG command);
 ULONG XhciInjNeedsLive(ULONG fault);
 
 /* LOST_IRQ's argument as a count: 0 is one, 255 is "until CLEAR"
- * (returned as 0xFFFFFFFF). */
+ * (returned as 0xFFFFFFFF). The endpoint faults' count reads the same. */
 ULONG XhciInjLostCount(ULONG arg);
+
+/* ----------------------------------------------------------------------- */
+/* The endpoint faults (08 to 12 hex)                                       */
+/* ----------------------------------------------------------------------- */
+
+/* XHCI_INJ_KIND_* of a fault code. */
+ULONG XhciInjKind(ULONG fault);
+
+/* The Hold a fault's injection sets: FAIL, RING, SECOND or NONE. */
+ULONG XhciInjHoldOf(ULONG fault);
+
+/* The EP State a fault's context reads answer: Halted for TRANSACTION, the
+ * RESET_EP_FAIL and RACE ones and HALT_HALTED, Error for HALT_ERROR, 0 (the
+ * real state) for the rest. */
+ULONG XhciInjHaltStateOf(ULONG fault);
+
+/* One of a count spent: 0 when none was left. 0xFFFFFFFF never runs out. */
+ULONG XhciInjSpend(PULONG left);
+
+/*
+ * A pipe the endpoint faults may be aimed at (record 17 section 5's soft
+ * retry target): an interrupt-IN pipe with no streams, of a published
+ * device that is not a hub and is not leaving, at `wanted`'s root port when
+ * that is nonzero; idle of every operation (paused, closed, halted, a drain
+ * or a cancel owed: `busy`), with a TD queued and no soft retry owed.
+ * 1 fits, 0 not.
+ */
+ULONG XhciInjPipeFits(ULONG wanted, ULONG devPort, ULONG published,
+                      ULONG isHub, ULONG gone, ULONG transferType,
+                      ULONG endpointAddress, ULONG streams, ULONG busy,
+                      ULONG queued, ULONG retryWanted);
+
+/* A Transfer Event as a controller writes one: `pa` the TRB pointer (the
+ * high dword 0), `residual` the untransferred length, `cc` the completion
+ * code; ED 0 and the cycle bit 0, which no handler reads. */
+VOID XhciInjTransferEvent(XHCI_TRB *ev, ULONG pa, ULONG residual, ULONG cc,
+                          ULONG slot, ULONG dci);
+
+/* Every field of the endpoint off: a start. */
+VOID XhciInjEpClear(PXHCI_INJ_EP e);
+
+/* The answers end - endpoint, state, block, hold and watch - leaving the
+ * counts, a pending event and the EP0 arming. */
+VOID XhciInjEpEnd(PXHCI_INJ_EP e);
+
+/* The layer's Stop Endpoint begins: the endpoint taken, its doorbells
+ * dropped and its Stopped event watched for, nothing seen yet. */
+VOID XhciInjEpWatch(PXHCI_INJ_EP e, ULONG slot, ULONG dci);
+
+/* An event off the ring, in the drain: 1 when it is the watched Stopped
+ * event (a Transfer Event, code 26 to 28, for the watched endpoint), kept
+ * and swallowed; 0 when the driver is to see it. */
+ULONG XhciInjEpSwallow(PXHCI_INJ_EP e, const XHCI_TRB *ev);
+
+/* A doorbell write (`value` the register's, target in 7:0): 1 when it is
+ * dropped. */
+ULONG XhciInjEpDoorbell(PXHCI_INJ_EP e, ULONG slot, ULONG value);
+
+/* The EP State a context read answers. */
+ULONG XhciInjEpState(const XHCI_INJ_EP *e, ULONG slot, ULONG dci, ULONG raw);
+
+/*
+ * One command the thread issues (not the layer's own), against the answered
+ * endpoint: XHCI_INJ_CMD_*. A Disable Slot, Address Device, Reset Device or
+ * Configure Endpoint for its slot ends the answers and is sent. For the
+ * endpoint itself: a Reset Endpoint on Halted is answered Success, ending
+ * them (HOLD_NONE), answered Context State Error, leaving Halted
+ * (HOLD_FAIL), or held (HOLD_RING, HOLD_SECOND: the hold is spent and the
+ * caller answers); on Error it is answered Context State Error (xHCI 4.6.8:
+ * Halted only). A Set TR Dequeue on Halted is answered Context State Error;
+ * on Error it is sent - the real endpoint is Stopped, which takes it - and
+ * ends the answers (4.6.10: Stopped or Error). Everything else is sent.
+ * `*code` is written only for ANSWER.
+ */
+ULONG XhciInjCommand(PXHCI_INJ_EP e, const XHCI_TRB *cmd, PULONG code);
+
+/*
+ * Where the layer's Stop Endpoint left the TD (`firstPA` its first TRB,
+ * `afterPA` the TRB after its last, `firstLen` the first TRB's length,
+ * `single` 1 for a one-TRB TD), from the context's TR Dequeue Pointer and
+ * the Stopped event it swallowed, if one came. OK: the dequeue is the first
+ * TRB and no event says anything moved. REPOINT: a one-TRB TD the controller
+ * had fetched and stopped with nothing moved (Stopped, code 26, at its TRB,
+ * the residual its whole length) and a dequeue past it - QEMU's NAK
+ * handling, which fetches a TD before it transfers - which a Set TR Dequeue
+ * to its first TRB puts back where real hardware leaves it. BROKEN:
+ * anything else.
+ */
+ULONG XhciInjStopVerdict(ULONG ctxDeqPA, ULONG firstPA, ULONG afterPA,
+                         ULONG single, ULONG firstLen, ULONG seen,
+                         ULONG seenPA, ULONG seenCode, ULONG seenResidual);
+
+/* Arm an EP0 fault: `left` injections (XhciInjLostCount's), at `port`. */
+VOID XhciInjEp0Arm(PXHCI_INJ_EP e, ULONG fault, ULONG port, ULONG left);
+
+/* The thread's EP0 doorbell for a device at root port `devPort`,
+ * `published` 1 once its PDO exists: 1 when an armed EP0 fault fires on it
+ * (THREAD on a published device, PREPDO on one not yet published, at the
+ * armed port or any), one of its count spent and the fault disarmed when
+ * none is left. Never while an injected event still waits. */
+ULONG XhciInjEp0Fires(PXHCI_INJ_EP e, ULONG devPort, ULONG published);
 
 #endif /* XHCI_FLAVOUR_QEMU || XHCI_HOST_TEST */
 

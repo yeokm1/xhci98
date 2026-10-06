@@ -6303,7 +6303,7 @@ in the guest fires a fault at run time by writing it:
 |---|---|
 | 31:24 | sequence: a command fires when this differs from the last one seen. The value in the key at a start is latched and never fires, so a value left behind does not replay at the next boot |
 | 23:16 | the fault (table below) |
-| 15:8 | a root port, or 0 for the first managed USB 2.0 root port with a device enabled on it |
+| 15:8 | a root port, or 0 for the first that fits: for `02` and `03` a managed USB 2.0 root port with a device enabled on it, for `08` to `12` the root port the target device is under |
 | 7:0 | the fault's argument |
 
 | Code | Fault | How it is made, and the argument |
@@ -6315,18 +6315,79 @@ in the guest fires a fault at run time by writing it:
 | `05` | HCH (35-T.6) | a real write clearing Run/Stop; the in-place recovery runs for real. Persistent: fire it again after each recovery, four times inside ten minutes |
 | `06` | All-ones USBSTS, with the proof (35-T.6) | the health poll's USBSTS read (at every `XhciTolerance` value, so at 0 it meets `2.1.1.0`'s handling and `HealthPollsDead` counts) and the containment step's (at 1) answer all-ones for `arg` thread passes (0 until CLEAR); configuration space is real, so Bus Master Enable is cleared and reads back clear. Transient: an `arg` of 5 or so, shorter than the containment interval |
 | `07` | All-ones USBSTS, no proof | the same, the Bus Master Enable read-back answering set: the pinned branch |
-| `FF` | CLEAR | every emulated answer and the lost-interrupt window off |
+| `08` to `12` | The soft retry and the device cycle (35-T.2 to 35-T.4) | the next table |
+| `FF` | CLEAR | every emulated answer and the lost-interrupt window off, and no further `08` to `12` injection; one already in flight runs to its end (the driver's Reset Endpoint, or the slot's Disable Slot), so no endpoint is left Stopped under a driver that believes it Halted |
 
-Codes `08` to `12` (hex) are reserved for 35-T.2 to 35-T.4's faults (the
-soft retry's Transaction Error, a failing Reset Endpoint, a refused code,
-the three halts with no TD, Endpoint Not Enabled, EP0 during the thread's
-own transfer and before the PDO, and the soft retry's two races); until
-they are built the layer refuses them. A command whose target is missing
-(no fitting port, a controller that is not running, or for any fault but `04` and `FF` a controller latched failed) is refused too, and its
-sequence spent. Every command is recorded in the log ring - `qemu.inj.fire`,
-`qemu.inj.port`, `qemu.inj.refused`, `qemu.inj.unbuilt`, `qemu.inj.unknown`,
-`qemu.inj.irq.lost` - and on the port-`0xE9` trace, so `XHCISNAP` at
-verbosity 1 or more shows what was injected beside the tolerance counters.
+Codes `08` to `12` (hex) are 35-T.2 to 35-T.4's, record 17 section 5's rows
+for them. Their target is the one the record chose: an **interrupt-IN TD the
+controller is NAKing**, of a published device that is not a hub, under the
+root port in bits 15:8 (0 any) - in QEMU the HID tablet or mouse while the
+pointer is not moving in the VM window, so the TD sits at the dequeue with
+nothing transferred. Keep the pointer out of the window while one fires; a
+fault waiting for a target notes `qemu.inj.waiting` once and tries every
+thread pass. Their argument is a count of injections, as `01`'s: 0 is one,
+`FF` until CLEAR, N is N, one per injection the layer makes - for `08`,
+`09`, `11` and `12` one each time the driver restarts the TD, for the cycle
+faults one on each device the location re-enumerates. Only one of them is
+armed at a time: another is refused until the first is spent or CLEARed.
+What every stop does, and what keeps the hardware coherent with the faked
+state:
+
+- **The stop.** A real Stop Endpoint, its Stopped event swallowed by the
+  drain (`qemu.inj.stopped`), and the context's TR Dequeue Pointer
+  confirmed to be the TD's first TRB. **QEMU departs from record 17 here**:
+  it fetches an interrupt TD before the device answers and, on the NAK,
+  keeps it fetched, so its stop writes a dequeue *past* the TD (its Stopped
+  event naming the TD with the whole length untransferred). Real hardware
+  leaves the dequeue on the TD. The layer recognises exactly that case -
+  a one-TRB TD, Stopped with nothing moved, the dequeue on the next TRB -
+  and puts the dequeue back with a real Set TR Dequeue to the TD's first
+  TRB (counted `Repointed`) before it injects; anything else (the TD
+  completed meanwhile, data moved, a dequeue elsewhere) abandons the
+  attempt, counts it (`Abandoned`, note `qemu.inj.abandon`), rings the
+  endpoint so the TD runs again, and spends one of the count.
+- **The answers.** From the stop until they end, doorbells to the endpoint
+  are dropped (a halted endpoint ignores them), its context reads answer
+  Halted or Error, and a Reset Endpoint or Set TR Dequeue the thread issues
+  to it is completed by the layer without reaching the controller
+  (`qemu.inj.answer`: type, slot, DCI, code): Reset Endpoint on Halted
+  answers Success - the real endpoint is Stopped already, the state a
+  Reset Endpoint leaves - and ends the answers, so the driver's doorbell
+  restarts the TD for real; on Error it answers Context State Error (xHCI
+  4.6.8 asks for Halted). Set TR Dequeue answers Context State Error on
+  Halted and is sent on Error, ending it (4.6.10). A Disable Slot, Address
+  Device, Reset Device or Configure Endpoint for the slot is sent and ends
+  them; so does the device leaving.
+
+| Code | Fault | How it is made | Transient (cleared within the budget) | Persistent |
+|---|---|---|---|---|
+| `08` | Transaction Error | the stop, then a Transaction Error for the TD (pointer its first TRB, residual its length); Halted answered until the driver's Reset Endpoint (with TSP 1, the soft retry's) | `arg` 1 to 3: diverted each time (`RetryDiverts`, `RetryResets`), the TD restarted after each and completed when the pointer next moves, data intact (`RetryRecovered`) | `arg` 4 or more: the fourth takes today's path, `USBD_STATUS_DEV_NOT_RESPONDING` (`RetryExhausted`), and the class driver's own reset meets the emulated Halted endpoint; `FF` repeats on every TD |
+| `09` | Reset Endpoint failing | as `08`, the soft retry's Reset Endpoint answered Context State Error, Halted kept | `hcdCfgFault`'s real path, as today: for the published device the target is, a cycle of its location (`HcdEnumCycle`); the answers end at its Disable Slot | the same on each re-enumerated device. **Departs from record 17's "the controller window's terminal"**: that is `hcdCfgFault`'s answer for a device with no PDO (a controller reset), and the target always has one; such a cycle is not charged to a budget, so there is no terminal |
+| `0A` | Refused code | a Bandwidth Overrun (code 18) Transfer Event for the head TD, no stop: the cycle's Disable Slot takes the TD back | the device cycled and working again | after three, the location held |
+| `0B` | Halt with no TD, Halted | the stop, then a Stall with pointer 0; Halted answered | the device cycled and working again | after three, the location held |
+| `0C` | Halt with no TD, Error | the stop, then a Stall whose pointer is the event ring's base (a TRB no transfer ring holds); Error answered | the same | the same |
+| `0D` | Halt with no TD, stale | the stop, then a Stall with pointer 0 and no answer: the endpoint really reads Stopped; once the driver has read it (the mark gone, or after about 50 ticks) the layer rings it (`qemu.inj.stale.ring`) | nothing but the context read (`HaltReads`, `HaltStale`) | nothing |
+| `0E` | Endpoint Not Enabled | a code 12 Transfer Event with pointer, length and ED 0 (as xHCI 4.7 has a doorbell to a Disabled endpoint raise it), no stop | the device cycled and working again | after three, the location held |
+| `0F` | EP0 during the thread's own transfer | armed until the thread's next control transfer to a published device at the port: its doorbell is withheld (`qemu.inj.ep0`) - the TD waits as on a device that never answers - and a Bandwidth Overrun for the TD is delivered, whose mark ends the wait abandoned | the wait ended, the record and the scratch unused until the cycle's Disable Slot, the device cycled | after three, the location held |
+| `10` | EP0 before the PDO | the same at the enumeration's first control transfer to a device not yet published | the pre-PDO cycle: the attempt failed, the slot disabled, the connect run again | after three, the location held |
+| `11` | Soft retry, a ring during the Reset Endpoint | as `08`; the Reset Endpoint held while the layer ends the answers and rings the endpoint, which resumes the TD, then answered Success (`qemu.inj.held.ring`). **The ring is the layer's own, not a submission's**: the HID class driver's reads are already posted, so no submission arrives on cue; the doorbell is the same write | the TD resumed early; the generation unchanged, so the thread rings again (harmless) and clears `RetryWanted` | as `08` |
+| `12` | Soft retry, a second error during the Reset Endpoint | as `11`, then, still holding the completion: another real stop, the dequeue confirmed (put back or abandoned as above), Halted answered again and a second Transaction Error delivered and diverted (`qemu.inj.held.second`), then Success | a newer generation: the thread leaves `RetryWanted` set and its next visit resets and rings | as `08` |
+
+`0F` and `10` need a control transfer of the thread's own to happen after
+they are armed: for `0F`, disable and enable the device in Device Manager
+(its `SELECT_CONFIGURATION` is the thread's `SET_CONFIGURATION`); for `10`,
+any new enumeration at the port - fire `02` (PED) at the same port after
+`10`, or replug the device from the QEMU monitor.
+
+A command whose target is missing (no fitting port for `02` and `03`, a
+controller that is not running, or for any fault but `04` and `FF` a
+controller latched failed) is refused too, and its sequence spent. Every
+command is recorded in the log ring - `qemu.inj.fire`, `qemu.inj.port`,
+`qemu.inj.refused`, `qemu.inj.unknown`, `qemu.inj.irq.lost`, and for `08`
+to `12` `qemu.inj.ep` (fault, slot, DCI) at each injection, `qemu.inj.done`
+when the count is spent, and the notes above - and on the port-`0xE9`
+trace, so `XHCISNAP` at verbosity 1 or more shows what was injected beside
+the tolerance counters.
 
 Driving it from a guest: on Windows 98 SE and ME, a `.reg` file through
 `regedit /s`, one file per command (the sequence byte bumped each time):

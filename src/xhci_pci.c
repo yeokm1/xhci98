@@ -179,6 +179,12 @@ VOID XhciWriteDoorbell(PXHCI_EXTENSION ext, ULONG slot, ULONG value)
         XHCI_DBG_VALUE("doorbell: refused write to slot", slot);
         return;
     }
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* 35-T.9: an endpoint the injection answers Halted ignores it. */
+    if (slot != 0 && HcdInjDoorbell(ext, slot, value)) {
+        return;
+    }
+#endif
     XhciWrite32(ext, ext->HcInfo.DoorbellOffset + slot * XHCI_DB_STRIDE, value);
 }
 

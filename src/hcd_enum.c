@@ -162,6 +162,13 @@ static ULONG hcdCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
     if (hcdHalted(hc)) {
         return 0;
     }
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* 35-T.9: a command to an endpoint the injection answers for is
+     * completed by it, never sent. */
+    if (HcdInjCommand(hc, trb, control, &answer)) {
+        return answer;
+    }
+#endif
 #if DBG
     /* Read before the doorbell: the completion rewrites the contexts. */
     HcdStrictBefore(hc, trb, &strict);
@@ -353,7 +360,13 @@ static ULONG hcdEpState(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG dci)
                                   &offset) != XHCI_LAYOUT_OK) {
         return XHCI_EP_STATE_DISABLED;
     }
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* 35-T.9: Halted or Error, as the injection answers it. */
+    return HcdInjEpState(hc, dev->SlotId, dci,
+                         XHCI_EP_GET_STATE(XhciCommonAt(&hc->Hc, offset)[0]));
+#else
     return XHCI_EP_GET_STATE(XhciCommonAt(&hc->Hc, offset)[0]);
+#endif
 }
 
 static ULONG hcdEp0State(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
@@ -989,7 +1002,12 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                            &dev->Ep0Xfer, dev, trbs,
                                            XHCI_XFER_MAX_CONTROL_TRBS);
             if (answer == XHCI_XFER_OK) {
+#if defined(XHCI_FLAVOUR_QEMU)
+                /* 35-T.9's EP0 faults withhold this doorbell. */
+                HcdInjEp0Doorbell(hc, dev);
+#else
                 XhciWriteDoorbell(&hc->Hc, dev->SlotId, 1);
+#endif
                 hc->ThreadEp0Dev = dev;
             }
         }
@@ -4432,6 +4450,11 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
         }
     }
     if (!hcdHalted(hc)) {
+#if defined(XHCI_FLAVOUR_QEMU)
+        /* 35-T.9's endpoint faults, before the soft retry's service, which
+         * then decides an injected error in the same pass. */
+        HcdInjService(hc);
+#endif
         /* 35-T.2's decisions first: one that yields to a cancel, an abort
          * or a reset applies today's outcome before that operation runs. */
         HcdCfgRetryService(hc);
