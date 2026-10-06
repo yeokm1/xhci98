@@ -848,43 +848,6 @@ ULONG XhciControllerHealthPoll(PXHCI_EXTENSION ext)
         }
     }
 
-#ifdef XHCI_FIX_EVT_REARM
-    /*
-     * **EXPERIMENTAL, bench candidate W8 for Finding 3.** Built only under the
-     * define; no shipping flavour carries it.
-     *
-     * **The upstream half of "usbport was never told".** W7 forces the root-hub
-     * *announcement* gate, and is inert if no change was ever latched to
-     * announce. This covers the case where nothing is latched because **no event
-     * arrives at all**: EHB left set, so the xHC will not raise IP again
-     * (4.17.5 p.270), or IMAN.IE lost. Either silences the interrupter, and a
-     * silenced interrupter delivers no Port Status Change Events - so a connect
-     * is never seen, never latched, never announced, and nothing appears in
-     * Device Manager. Machine-wide, because one interrupter serves the whole
-     * controller.
-     *
-     * It also explains why the health poll keeps running while everything else
-     * stops: usbport drives this on its own timer, not on our interrupts.
-     *
-     * So re-publish the dequeue pointer with **EHB clear** and re-arm the
-     * interrupter, every poll, unconditionally. `XhciRearmInterrupter` carries
-     * the operand validation, read-back and bounded retry a raw write would
-     * skip.
-     *
-     * **Why clearing EHB here is not the mid-drain hazard `xhciPublishErdp`
-     * warns about**: that hazard is an intermediate write *during* a drain,
-     * which would let the interrupter fire into a drain already in progress.
-     * This runs under the controller lock, and the DPC drains to completion
-     * under that same lock, so no drain is in flight here.
-     *
-     * **A RECOVERY candidate, like W7**: if delivery was stalled, it restarts
-     * and the machine comes back on its own, with no cold boot.
-     */
-    XhciWrite64(ext, ext->HcInfo.RuntimeOffset + XHCI_RT_IR0 + XHCI_IR_ERDP,
-                XhciEventRingErdpValue(&ext->EventRing, 1));
-    (VOID)XhciRearmInterrupter(ext);
-#endif
-
     XhciControllerLockRelease(ext, oldIrql);
 
 #ifdef XHCI_FIX_PORT_POLL

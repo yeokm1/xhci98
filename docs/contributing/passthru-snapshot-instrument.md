@@ -93,9 +93,8 @@ That last point matters for decoding. Several candidate defines add a field
 and so move `MiniPortExtensionSize`, which invalidates the tracked offset
 table, which is what a counter reader must not do. The ones known to do it
 are `XHCI_FIX_NO_RING_REUSE`, `XHCI_FIX_ACK_OWED` and the polling/gate
-candidates in `src/xhci.h`; others, such as `XHCI_FIX_EVT_REARM`
-(`src/xhci_cmd.c`) and `XHCI_FIX_QUIESCE_GATE` (`src/xhci_slot.c`), are
-behaviour-only and change no field. This block adds no field, so a shipping
+candidates in `src/xhci.h`; others, such as `XHCI_FIX_QUIESCE_GATE`
+(`src/xhci_slot.c`), are behaviour-only and change no field. This block adds no field, so a shipping
 binary decodes against the ordinary `offsets.txt`. Do not reason about a
 combination of defines from that list: measure `sizeof(XHCI_EXTENSION)` for
 whatever set you build, which is the check section 11 ends on.

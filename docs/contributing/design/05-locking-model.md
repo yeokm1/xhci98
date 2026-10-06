@@ -395,16 +395,15 @@ that was not serialized against the drain could publish a pointer the DPC has
 already moved past, and could clear `EHB` mid-pass.
 
 The rule: any `ERDP` writer holds the controller lock, or holds the section 2
-precondition instead. There are three in every shipping build, and a fourth
-behind `XHCI_FIX_EVT_REARM` (`src/xhci_cmd.c`), a bench candidate no flavour
-defines, which takes the controller lock like the first two:
+precondition instead. There are three. (A fourth, the bench candidate
+`XHCI_FIX_EVT_REARM`, was retired by task 35-T.1, whose lost-interrupt
+backstop queues the drain and writes no register.)
 
 | Writer | What serializes it |
 |---|---|
 | `XhciEventDpc` | the controller lock, for the whole drain |
 | `XhciEnableInterrupts` | the controller lock, with both enables still clear |
 | `XhciEventDiscardStale` | no lock; the section 2 precondition, below |
-| the `XHCI_FIX_EVT_REARM` re-arm (compiled out) | the controller lock |
 
 (The init sequence programs `ERDP` too, under the same precondition.)
 

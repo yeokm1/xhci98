@@ -656,6 +656,7 @@ static VOID hcdRecover(PHCD_CONTROLLER hc)
         return;
     }
 
+    hc->TolStartGen++;
     KeRaiseIrql(DISPATCH_LEVEL, &raised);
     ok = XhciRecoverController(ext);
     KeLowerIrql(raised);
@@ -668,6 +669,61 @@ static VOID hcdRecover(PHCD_CONTROLLER hc)
         }
         XhciControllerLockRelease(ext, oldIrql);
     }
+}
+
+/*
+ * The lost-interrupt backstop (35-T.1, design record 17 section 4.1): a
+ * step of its own after hcdRecover, under the power gate as that is, admitted
+ * only on a good, initialized, unfailed controller in D0 with the DPC open -
+ * what the health poll's own admission does not check. Under the controller
+ * lock it peeks at the event TRB at the software dequeue; an event pending
+ * at the same index, cycle, drain pass (DpcCount, bumped under this lock by
+ * every admitted drain) and start generation for the backstop interval was
+ * written and never drained, and the drain is queued through the ISR's own
+ * admission. It writes no register: ERDP, EHB and IE stay the drain's.
+ * A refused admission drops the observation, so timing starts afresh.
+ * IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdBackstop(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+    KIRQL oldIrql;
+    ULONG admitted;
+    ULONG pending;
+    ULONG queue;
+
+    ext = &hc->Hc;
+    queue = 0;
+    HcdPowerGateEnter(hc);
+    XhciControllerLockAcquire(ext, &oldIrql);
+    admitted = (ext->HcInfoStatus == XHCI_HC_OK &&
+                (ext->Flags & XHCI_EXT_FLAG_INITIALIZED) != 0 &&
+                (ext->Flags & XHCI_EXT_FLAG_SUSPENDED) == 0 &&
+                !ext->ControllerFailed &&
+                hc->Common.DevicePower == PowerDeviceD0 &&
+                !hc->SuspendedInD0 && !hc->DpcClosed &&
+                ext->EventRing.Base != NULL) ? 1UL : 0UL;
+    pending = admitted ? XhciEventRingPending(&ext->EventRing) : 0UL;
+    queue = XhciTolBackstop(&ext->Tol.Obs, ext->Tol.Stats.Tolerance, pending,
+                            ext->EventRing.Dequeue, ext->EventRing.Ccs,
+                            ext->DpcCount, hc->TolStartGen, HcdTolNow(hc));
+    XhciControllerLockRelease(ext, oldIrql);
+    HcdPowerGateLeave(hc);
+    if (!queue) {
+        return;
+    }
+    /* hcdIsr's admission: counted before the insertion, rolled back on a
+     * refusal, nothing once the DPC is closed (the stop ends this thread
+     * before hcdRelease closes it). A drain already running on another
+     * processor serializes on the lock and finds the ring empty. */
+    (VOID)InterlockedIncrement(&hc->DpcsInFlight);
+    if (hc->DpcClosed || !KeInsertQueueDpc(&hc->IsrDpc, NULL, NULL)) {
+        (VOID)InterlockedDecrement(&hc->DpcsInFlight);
+        return;
+    }
+    XhciControllerLockAcquire(ext, &oldIrql);
+    ext->Tol.Stats.BackstopDrains++;
+    XhciControllerLockRelease(ext, oldIrql);
 }
 
 /*
@@ -717,6 +773,7 @@ static VOID hcdPoll(PHCD_CONTROLLER hc)
     /* Outside the STARTED gate: a failed resume (HcdControllerFail) is a
      * recovery request on a controller whose flags no longer say it runs. */
     hcdRecover(hc);
+    hcdBackstop(hc);
 }
 
 /* IRQL: PASSIVE_LEVEL (a system thread). */
@@ -1019,6 +1076,8 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
     hcdTolApplies(hc);
+    /* Before the thread runs, so no backstop pass reads it mid-write. */
+    hc->TolStartGen++;
     (VOID)XhciControllerUpdateFlags(ext, 0, XHCI_EXT_FLAG_STARTED);
     ext->InterruptEnables++;
     KeRaiseIrql(DISPATCH_LEVEL, &raised);

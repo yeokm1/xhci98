@@ -426,7 +426,11 @@ event not yet drained.
   `PollService` is 1 (section 5.3), so it reads a consistent `Dequeue` and
   cycle state of a ring that exists and a controller that runs. A peek without the lock was rejected: the
   dequeue index can be seen unwrapped (`xhci_ring.c:1373`), and the ring's
-  lifetime across a reset is not otherwise guaranteed.
+  lifetime across a reset is not otherwise guaranteed. Task 35-T.1's
+  lost-interrupt backstop (record 17 section 4.1, `hcd_ctl.c`
+  `hcdBackstop`) already takes this peek, under the same lock, on each
+  controller-thread pass; these checks reuse the helper with their own
+  staleness rule.
 - **Where**: on the URB submission path while the controller lock is still
   held for the doorbell (`hcd_io.c:1208`); at the end of each drain, for
   transfers a completion routine resubmitted; on each controller-thread pass

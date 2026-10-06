@@ -793,6 +793,10 @@ typedef struct _HCD_CONTROLLER {
     KDPC IsrDpc;
     volatile LONG DpcsInFlight;
     volatile ULONG DpcClosed;
+    /* 35-T.1's start generation: bumped by every start, resume and in-place
+     * recovery, each under the power gate (or before the thread runs), and
+     * read by the backstop under it. Never reset. */
+    ULONG TolStartGen;
     ULONG ControllerStarted;
     ULONG ResumeFailures;
     ULONG PowerRequestFailures;
