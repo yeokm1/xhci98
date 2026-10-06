@@ -10,7 +10,8 @@ Machines affected: those with an Intel Sunrise Point-LP xHCI controller
 Any controller whose USB 3 Supported Protocol capability publishes a
 non-empty speed table that omits the ID its PORTSC actually reports for a
 SuperSpeed device (4 here) would be affected the same way; none other is
-known, and the HP's own mechanism is unconfirmed until its dump is read. The P14s Gen 1 (`8086:02ED`) and the B490 (`8086:1E31`) are
+known. The HP's controller publishes the E460's table word for word
+(section 6). The P14s Gen 1 (`8086:02ED`) and the B490 (`8086:1E31`) are
 not affected: their tables list ID 4 (section 6).
 
 ## 1. Symptom
@@ -116,6 +117,14 @@ that prints them; `xhciqual/results/*-2026-10-06/PROBE.LOG`):
 | E460 | `8086:9D2F` rev 21 | 3.0, PSIC 3 | 1-3: SSIC 1248, 2496, 4992 Mb/s | not listed |
 | P14s Gen 1 | `8086:02ED` rev 00 | 3.1, PSIC 8 | 4: 5 Gb/s; 5: 10 Gb/s; 6-11: SSIC 1248, 2496, 4992, 1457, 2915, 5830 Mb/s | listed |
 | B490 | `8086:1E31` rev 04 | 3.0, PSIC 1 | 4: 5 Gb/s | listed |
+| HP EliteBook 850 G5 | `8086:9D2F` rev 21 | 3.0, PSIC 3 | 1-3: SSIC 1248, 2496, 4992 Mb/s - the E460's words | not listed |
+| HP EliteBook 850 G5 | `8086:15DB` rev 02 (second controller) | 3.1, PSIC 2 | 4: 5 Gb/s; 5: 10 Gb/s (LP SuperSpeedPlus) | listed |
+
+The HP's probe was brought in by the owner the same day
+(`xhciqual/results/hp850g5-2026-10-06/`): its Sunrise Point controller's
+USB 3 capability is the E460's, raw DWORDs included, so the same decoding
+fails on it and 35.1's fix applies; its second controller lists ID 4 and is
+not affected.
 
 Every USB 2.0 protocol lists 1-3 as Full, Low and High Speed. So the two
 machines that never failed list ID 4 explicitly; by Comet Lake Intel's table
@@ -153,7 +162,10 @@ Still to read (35.2): the E460 connector's physical USB 2.0 pairing - the
 hub's USB 2.0 half came up on port 1 where the driver's port map pairs 13
 with 7 - which matters to the send-back and holds of task 29-A.5, not to
 this fix. The HP's "enumerates at High Speed" is not what this failure does
-by itself, and needs its own dump.
+by itself on the E460, where the stick was never seen; its table is now
+read, but which controller and connector the tester used, and what the
+device did after the failed enumeration, are not, and want a dump from
+that machine.
 
 ## 7. What the project keeps from it
 
