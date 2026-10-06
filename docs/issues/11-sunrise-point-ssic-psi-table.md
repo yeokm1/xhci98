@@ -1,10 +1,14 @@
 # Issue 11 - On Intel Sunrise Point-LP a SuperSpeed device is never enumerated: the link trains, and the driver reads the controller's speed table too strictly to know what it is
 
-Status: **fixed for `2.2.0.0`; a limitation of every release to
+Status: **fixed in `2.2.0.0`, and closed; a limitation of every release to
 `2.1.1.0`.** Read on the owner's E460 on 2026-10-06 (roadmap task 35.0);
-the fix is roadmap task 35.1 (section 6), read on the same E460 the same
-night with 35.3's diagnostics in the build (task 35.2, section 6). The issue
-closes with the `2.2.0.0` release (task 35.6).
+the fix is roadmap task 35.1 (section 6). The evidence is task 35.2's
+reading on the same E460 the same night, on the `release` flavour of a
+build with the fix and 35.3's diagnostics in it (section 6): the UAS stick
+at SuperSpeed from power-on, after replugs and behind the USB 3 hub, a file
+compared clean, and the dumps naming port 14's speed ID 4 SuperSpeed by the
+fallback. Closed with the `2.2.0.0` documents (task 35.6, 2026-10-07); the
+release notes and the README carry the fix.
 
 Machines affected: those with an Intel Sunrise Point-LP xHCI controller
 (`8086:9D2F`), among them the ThinkPad E460 and the HP EliteBook 850 G5.
