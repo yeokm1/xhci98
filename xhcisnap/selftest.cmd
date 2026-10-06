@@ -140,6 +140,27 @@ for %%S in ("SuperSpeed, 5 Gbit/s, Gen 1x1" "SuperSpeedPlus, 10 Gbit/s, Gen 2x1"
     )
 )
 
+rem Task 35.3's root port enumeration notes, decoded over a canned ring: 35.0's
+rem E460 failure as 2.1.1.0 met it, the same link with 35.1's fallback, and a
+rem spent budget.
+"%~dp0XHCISNAP.EXE" -selftest-notes > "%BASE%.notes.log"
+if errorlevel 1 (
+    echo FAIL: -selftest-notes exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("port 13 look:  machine Empty, fed connect, link none; PORTSC CCS PED PLS 0, changes CSC PLC" "port 13 reset: attempt 0 came back enabled; PORTSC low 1203: speed ID 4" "ID 4 is unknown, by no mapping" "attempt 1 failed on the speed (no EP0 size for it); no retry follows" "port 13 end:   machine Failed" "port 13 look:  machine Failed, fed nothing" "ID 4 is SuperSpeed, by default ID, unlisted on a USB 3 table" "port 14 rate:  5000 Mbit/s" "Enable Slot completion 1 (Success), slot 5" "port 14 end:   machine Present" "port 15 quiet: its budget of 8 bursts is spent") do (
+    findstr /C:%%S "%BASE%.notes.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the note decode does not say %%S
+        set FAILED=1
+    )
+)
+findstr /C:"tol.mode" "%BASE%.notes.log" > nul
+if not errorlevel 1 (
+    echo FAIL: the note decode printed a record not its own
+    set FAILED=1
+)
+
 rd /s /q "%RUNDIR%" 2> nul
 rd out 2> nul
 
@@ -147,5 +168,5 @@ if "%FAILED%"=="1" (
     echo xhcisnap selftest FAILED
     exit /b 1
 )
-echo xhcisnap selftest: 6 cases, all passed
+echo xhcisnap selftest: 7 cases, all passed
 exit /b 0

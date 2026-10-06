@@ -1002,8 +1002,9 @@ static ULONG hcdUsb3ResetWrite(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG portsc,
  * from PORTSC once it has. A USB3 protocol port's reset is hot or warm by
  * its link's state (hcdUsb3ResetWrite), and completes with PRC - and WRC
  * when warm - and the link in U0. Returns 1 when the port came back
- * enabled. */
-static ULONG hcdResetPort(PHCD_CONTROLLER hc, PHCD_PORT p, PULONG speed)
+ * enabled; *after is the last PORTSC read, for task 35.3's note. */
+static ULONG hcdResetPort(PHCD_CONTROLLER hc, PHCD_PORT p, PULONG speed,
+                          PULONG after)
 {
     PXHCI_EXTENSION ext;
     LARGE_INTEGER due;
@@ -1020,6 +1021,7 @@ static ULONG hcdResetPort(PHCD_CONTROLLER hc, PHCD_PORT p, PULONG speed)
     port = p->PortId;
     usb3 = XhciPortIsUsb3(&ext->PortMap, port);
     portsc = XhciReadPortsc(ext, port);
+    *after = portsc;
     if (portsc == 0xFFFFFFFFUL ||
         (!usb3 && (portsc & XHCI_PORTSC_CCS) == 0)) {
         return 0;
@@ -1038,6 +1040,7 @@ static ULONG hcdResetPort(PHCD_CONTROLLER hc, PHCD_PORT p, PULONG speed)
         HcdRelativeMs(&due, HCD_POLL_STEP_MS);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
         portsc = XhciReadPortsc(ext, port);
+        *after = portsc;
         if (portsc == 0xFFFFFFFFUL) {
             return 0;
         }
@@ -1097,13 +1100,14 @@ static ULONG hcdPortReset(PHCD_CONTROLLER hc, PHCD_PORT p,
                           PULONG speedClass)
 {
     ULONG speed;
+    ULONG after;
 
     if (p->Hub != NULL) {
         return HcdHubPortReset(hc, p->Hub, p->Number, speedClass);
     }
     speed = 0;
     *speedClass = XHCI_SPEED_UNKNOWN;
-    if (!hcdResetPort(hc, p, &speed)) {
+    if (!hcdResetPort(hc, p, &speed, &after)) {
         return 0;
     }
     (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, p->PortId, speed, speedClass);
@@ -1648,6 +1652,70 @@ static VOID hcdEventInit(PXHCI_ENUM_EVENT e, ULONG kind, ULONG ok)
     e->Value = 0;
 }
 
+/* ----------------------------------------------------------------------- */
+/* Task 35.3: a root port's enumeration notes (xhci_enum.h has the labels,  */
+/* their packing and the budget). Each is called for a root port only.      */
+/* Thread.                                                                  */
+/* ----------------------------------------------------------------------- */
+
+static VOID hcdNoteQuiet(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG charged)
+{
+    if (charged == XHCI_ENUM_NOTE_QUIET) {
+        XhciLogNote(&hc->Hc, "enum.port.quiet", XhciEnumNoteQuiet(p->PortId));
+    }
+}
+
+static VOID hcdNoteLook(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG value)
+{
+    ULONG charged;
+
+    charged = XhciEnumNoteCharge(&p->Notes);
+    if (charged == XHCI_ENUM_NOTE_YES) {
+        XhciLogNote(&hc->Hc, "enum.port.look", value);
+    }
+    hcdNoteQuiet(hc, p, charged);
+}
+
+/* A reset's result, and on success the raw speed ID, its class, where its
+ * meaning came from and its rate: what 35.0's dump could not say. */
+static VOID hcdNoteReset(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG ok,
+                         ULONG portsc, ULONG speedClass)
+{
+    PXHCI_EXTENSION ext;
+    ULONG kbps;
+    ULONG plus;
+
+    ext = &hc->Hc;
+    hcdNoteQuiet(hc, p, XhciEnumNoteBegin(&p->Notes));
+    if (!XhciEnumNoteOn(&p->Notes)) {
+        return;
+    }
+    XhciLogNote(ext, "enum.port.reset",
+                XhciEnumNoteReset(p->PortId, ok, p->Enum.Retries, portsc));
+    if (!ok) {
+        return;
+    }
+    XhciLogNote(ext, "enum.port.speed",
+                XhciEnumNoteSpeed(p->PortId, p->LinkPsiv, speedClass,
+                                  XhciPortSpeedSource(&ext->PortMap,
+                                                      p->PortId,
+                                                      p->LinkPsiv)));
+    kbps = 0;
+    plus = 0;
+    (VOID)XhciPortRate(&ext->PortMap, p->PortId, p->LinkPsiv, &kbps, &plus);
+    XhciLogNote(ext, "enum.port.rate",
+                XhciEnumNoteRate(p->PortId, kbps, plus));
+}
+
+static VOID hcdNoteFail(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG cause,
+                        ULONG attempt, ULONG final)
+{
+    if (p->Hub == NULL && XhciEnumNoteOn(&p->Notes)) {
+        XhciLogNote(&hc->Hc, "enum.port.fail",
+                    XhciEnumNoteFail(p->PortId, cause, attempt, final));
+    }
+}
+
 /*
  * Carry out one action and describe its outcome as the next event.
  * Returns 0 when the action has no outcome to feed back.
@@ -1663,6 +1731,7 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
     ULONG speed;
     ULONG speedClass;
     ULONG bytes;
+    ULONG after;
     ULONG ok;
     PUCHAR s;
 
@@ -1690,13 +1759,15 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
         } else {
             /* The raw PSIV is kept for the Slot Context; the machine is
              * given the class the controller's PSI table decodes it to. */
-            ok = hcdResetPort(hc, p, &speed);
+            after = 0;
+            ok = hcdResetPort(hc, p, &speed, &after);
             p->LinkPsiv = ok ? speed : 0;
             speedClass = XHCI_SPEED_UNKNOWN;
             if (ok) {
                 (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, p->PortId, speed,
                                          &speedClass);
             }
+            hcdNoteReset(hc, p, ok, after, speedClass);
             speed = hcdEnumSpeedOf(speedClass);
         }
         hcdEventInit(next, XHCI_ENUM_EV_RESET_DONE, ok);
@@ -1711,6 +1782,15 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
             return 1;
         }
         code = hcdCommand(hc, &trb, &control);
+        if (p->Hub == NULL && XhciEnumNoteOn(&p->Notes)) {
+            /* The controller's answer, before this driver's own checks of
+             * it: a slot refused below shows as the fail note's cause. */
+            XhciLogNote(&hc->Hc, "enum.port.slot",
+                        XhciEnumNoteSlot(p->PortId, code, p->Enum.Retries,
+                                         code == XHCI_CC_SUCCESS
+                                             ? XHCI_TRB_GET_SLOT_ID(control)
+                                             : 0UL));
+        }
         if (code == XHCI_CC_SUCCESS) {
             next->SlotId = XHCI_TRB_GET_SLOT_ID(control);
             if (next->SlotId == 0 || next->SlotId > XHCI_MAX_SLOTS ||
@@ -1878,6 +1958,7 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
              * waits from the first (hcd_hub.c; Codex review of the Phase
              * 28-31 integration, round 3, finding 2). */
             p->HubSsRearms = 0;
+            XhciEnumNoteRefill(&p->Notes);
             (VOID)XhciEnumStep(&p->Enum, next, &none);
             hcdEventInit(next, XHCI_ENUM_EV_PDO_STARTED, 1);
             XHCI_DBG_VALUE("hcd: hub enumerated at location", p->PortId);
@@ -1888,6 +1969,9 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
         XHCI_DBG_VALUE("hcd: device enumerated at location", p->PortId);
         if (next->Ok) {
             p->HubSsRearms = 0;
+            /* Task 35.3: an enumerated port's notes have their budget
+             * back (meaningless on a hub's port, which writes none). */
+            XhciEnumNoteRefill(&p->Notes);
         }
         /* A device 31-A.3 asked 29-A.5 to send back (hcd_pdo.c,
          * HoldAsked) has no PDO yet: the machine waits in Present for the
@@ -2001,6 +2085,8 @@ static VOID hcdRun(PHCD_CONTROLLER hc, PHCD_PORT p, XHCI_ENUM_EVENT event)
     ULONG guard;
     ULONG armed;
     ULONG deferring;
+    ULONG cause;
+    ULONG attempt;
 
     retries = (p->Hub != NULL) ? XHCI_HUB_PORT_ATTEMPTS - 1UL
                                : XHCI_ENUM_RETRIES;
@@ -2043,11 +2129,18 @@ static VOID hcdRun(PHCD_CONTROLLER hc, PHCD_PORT p, XHCI_ENUM_EVENT event)
         }
         if (act.Kind == XHCI_ENUM_ACT_NONE ||
             !hcdPerform(hc, p, &act, &event)) {
-            if (p->Enum.State != XHCI_ENUM_FAILED || hcdHalted(hc) ||
-                !hcdPortConnected(hc, p)) {
+            if (p->Enum.State != XHCI_ENUM_FAILED) {
+                break;
+            }
+            cause = p->Enum.FailCause;
+            attempt = p->Enum.Retries;
+            if (hcdHalted(hc) || !hcdPortConnected(hc, p)) {
+                hcdNoteFail(hc, p, cause, attempt, 1);
                 break;
             }
             (VOID)XhciEnumRetryUpTo(&p->Enum, retries, &act);
+            hcdNoteFail(hc, p, cause, attempt,
+                        act.Kind == XHCI_ENUM_ACT_NONE);
             if (act.Kind == XHCI_ENUM_ACT_NONE) {
                 XHCI_DBG_VALUE("hcd: enumeration failed, port/cause",
                                (p->PortId << 16) | p->Enum.FailCause);
@@ -2091,6 +2184,14 @@ static VOID hcdRun(PHCD_CONTROLLER hc, PHCD_PORT p, XHCI_ENUM_EVENT event)
     }
     if (armed) {
         (VOID)KeCancelTimer(&budget);
+    }
+    if (p->Hub == NULL) {
+        if (XhciEnumNoteOn(&p->Notes)) {
+            XhciLogNote(&hc->Hc, "enum.port.end",
+                        XhciEnumNoteEnd(p->PortId, p->Enum.State,
+                                        p->Enum.FailCause, p->Enum.Retries));
+        }
+        XhciEnumNoteFinish(&p->Notes);
     }
 }
 
@@ -2548,6 +2649,13 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
     feed = XhciLinkPortFeed(&p->Link, XhciPortIsUsb3(&ext->PortMap, p->PortId),
                             portsc, p->Enum.State, &act);
     feed = hcdTolPortFeed(hc, p, portsc, feed);
+    if (XhciEnumNoteWantLook(&p->Notes, p->Enum.State, feed,
+                             act.Kind == XHCI_LINK_ACT_WARM_RESET ||
+                                 act.Kind == XHCI_LINK_ACT_GIVE_UP)) {
+        hcdNoteLook(hc, p,
+                    XhciEnumNoteLook(p->PortId, p->Enum.State, act.Kind,
+                                     feed, portsc));
+    }
     if ((feed & XHCI_LINK_FEED_DISCONNECT) != 0) {
         hcdFeed(hc, p, XHCI_ENUM_EV_DISCONNECT);
     }
@@ -4186,6 +4294,7 @@ VOID HcdEnumInit(PHCD_CONTROLLER hc)
         p->Unreadable = 0;
         p->LinkRecovering = 0;
         XhciLinkInit(&p->Link);
+        XhciEnumNotesInit(&p->Notes);
         if (p->Enum.State == XHCI_ENUM_GONE && !hcdPortQuiet(hc, p)) {
             continue;
         }

@@ -1282,6 +1282,193 @@ static void write_companion_header(const SNAP_HEADER *h)
 }
 
 /*
+ * ---- task 35.3's enumeration notes, decoded ------------------------------
+ *
+ * A root port's `enum.port.*` records pack one ULONG each; the layouts are
+ * src/xhci_enum.h's, the names below are the driver's numbers (XHCI_ENUM_*
+ * states and causes, XHCI_LINK_ACT_*, XHCI_SPEED_*, XHCI_PSI_SOURCE_*). The
+ * ring is printed verbatim above; this is the same records read out, one line
+ * each, so a dump like 35.0's says why a trained link never got a slot.
+ */
+static const char *const enum_state_names[16] = {
+    "Empty", "Debounce", "Reset", "EnableSlot", "Address", "Desc8",
+    "Evaluate", "Desc18", "Config9", "ConfigFull", "Present", "Bound",
+    "Gone", "Failed", "Bos5", "BosFull"
+};
+
+static const char *enum_cause_name(unsigned long cause)
+{
+    static const char *const names[8] = {
+        "none", "the reset", "no slot", "Address Device",
+        "the device descriptor", "the configuration", "the PDO",
+        "the speed (no EP0 size for it)"
+    };
+
+    return cause < 8 ? names[cause] : "?";
+}
+
+static const char *enum_class_name(unsigned long cls)
+{
+    static const char *const names[5] = {
+        "unknown", "Low Speed", "Full Speed", "High Speed", "SuperSpeed"
+    };
+
+    return cls < 5 ? names[cls] : "?";
+}
+
+static const char *enum_source_name(unsigned long source)
+{
+    static const char *const names[4] = {
+        "no mapping", "listed in the PSI table",
+        "default IDs (no table)", "default ID, unlisted on a USB 3 table"
+    };
+
+    return source < 4 ? names[source] : "?";
+}
+
+static const char *enum_link_name(unsigned long act)
+{
+    static const char *const names[10] = {
+        "none", "wait", "ready", "hot reset", "warm reset", "U0", "U3",
+        "disable", "RxDetect", "given up"
+    };
+
+    return act < 10 ? names[act] : "?";
+}
+
+/* One record's line, NUL-terminated: decoded if it is one of ours. */
+static void enum_note_line(const char *line)
+{
+    static const char prefix[] = "enum.port.";
+    static const char *const change_names[7] = {
+        "CSC", "PEC", "WRC", "OCC", "PRC", "PLC", "CEC"
+    };
+    char changes[32];
+    const char *eq;
+    const char *kind;
+    unsigned long v;
+    unsigned long port;
+    unsigned long n;
+    unsigned long d;
+    int i;
+
+    if (strncmp(line, prefix, sizeof(prefix) - 1) != 0) {
+        return;
+    }
+    kind = line + sizeof(prefix) - 1;
+    eq = strchr(kind, '=');
+    if (eq == NULL) {
+        return;
+    }
+    v = 0;
+    for (i = 1; i <= 8; i++) {
+        d = (unsigned char)eq[i];
+        if (d >= '0' && d <= '9') {
+            d -= '0';
+        } else if (d >= 'A' && d <= 'F') {
+            d = d - 'A' + 10;
+        } else if (d >= 'a' && d <= 'f') {
+            d = d - 'a' + 10;
+        } else {
+            return;
+        }
+        v = (v << 4) | d;
+    }
+    port = v >> 24;
+    n = (unsigned long)(eq - kind);
+    if (n == 4 && strncmp(kind, "look", 4) == 0) {
+        changes[0] = '\0';
+        for (i = 0; i < 7; i++) {
+            if ((v & (0x80UL << i)) != 0) {
+                strcat(changes, " ");
+                strcat(changes, change_names[i]);
+            }
+        }
+        comp("  port %2lu look:  machine %s, fed%s%s%s, link %s; PORTSC%s%s%s "
+             "PLS %lu, changes%s\n",
+             port, enum_state_names[(v >> 20) & 0xF],
+             (v & 0xC000UL) == 0 ? " nothing" : "",
+             (v & 0x8000UL) != 0 ? " connect" : "",
+             (v & 0x4000UL) != 0 ? " disconnect" : "",
+             enum_link_name((v >> 16) & 0xF),
+             (v & 1UL) != 0 ? " CCS" : "", (v & 2UL) != 0 ? " PED" : "",
+             (v & 4UL) != 0 ? " PR" : "", (v >> 3) & 0xF,
+             changes[0] != '\0' ? changes : " none");
+    } else if (n == 5 && strncmp(kind, "reset", 5) == 0) {
+        comp("  port %2lu reset: attempt %lu %s; PORTSC low %04lX: speed ID "
+             "%lu, PLS %lu%s%s\n",
+             port, (v >> 16) & 0x7F,
+             (v & 0x00800000UL) != 0 ? "came back enabled" : "FAILED",
+             v & 0xFFFFUL, (v >> 10) & 0xF, (v >> 5) & 0xF,
+             (v & 2UL) != 0 ? ", PED" : "", (v & 1UL) != 0 ? ", CCS" : "");
+    } else if (n == 5 && strncmp(kind, "speed", 5) == 0) {
+        comp("  port %2lu speed: ID %lu is %s, by %s\n", port,
+             (v >> 16) & 0xFF, enum_class_name((v >> 8) & 0xFF),
+             enum_source_name(v & 0xFF));
+    } else if (n == 4 && strncmp(kind, "rate", 4) == 0) {
+        comp("  port %2lu rate:  %lu Mbit/s%s\n", port, v & 0x007FFFFFUL,
+             (v & 0x00800000UL) != 0 ? ", SuperSpeedPlus" : "");
+    } else if (n == 4 && strncmp(kind, "slot", 4) == 0) {
+        comp("  port %2lu slot:  attempt %lu, Enable Slot completion %lu%s, "
+             "slot %lu\n",
+             port, (v >> 8) & 0xFF, (v >> 16) & 0xFF,
+             ((v >> 16) & 0xFF) == 0 ? " (never completed)" :
+             ((v >> 16) & 0xFF) == 1 ? " (Success)" : "", v & 0xFF);
+    } else if (n == 4 && strncmp(kind, "fail", 4) == 0) {
+        comp("  port %2lu fail:  attempt %lu failed on %s; %s\n", port,
+             (v >> 8) & 0xFF, enum_cause_name((v >> 16) & 0xFF),
+             (v & 1UL) != 0 ? "no retry follows" : "a retry follows");
+    } else if (n == 3 && strncmp(kind, "end", 3) == 0) {
+        comp("  port %2lu end:   machine %s, cause %s, retries used %lu\n",
+             port, enum_state_names[(v >> 16) & 0xF],
+             enum_cause_name((v >> 8) & 0xFF), v & 0xFF);
+    } else if (n == 5 && strncmp(kind, "quiet", 5) == 0) {
+        comp("  port %2lu quiet: its budget of %lu bursts is spent; nothing "
+             "more is noted\n           for it until it enumerates\n",
+             port, v & 0xFF);
+    }
+}
+
+/* Walk the ring a second time and decode the `enum.port.*` records; prints
+ * nothing when there are none. The caller has checked the ring's header. */
+static void write_companion_enum_notes(const unsigned char *ring,
+                                       unsigned long start,
+                                       unsigned long mask,
+                                       unsigned long used)
+{
+    char line[128];
+    unsigned long len;
+    unsigned long i;
+    unsigned long seen;
+    unsigned char c;
+
+    len = 0;
+    seen = 0;
+    for (i = 0; i < used; i++) {
+        c = ring[(start + i) & mask];
+        if (c == '\r') {
+            continue;
+        }
+        if (c != '\n') {
+            if (len < sizeof(line) - 1) {
+                line[len++] = (char)c;
+            }
+            continue;
+        }
+        line[len] = '\0';
+        len = 0;
+        if (strncmp(line, "enum.port.", 10) != 0) {
+            continue;
+        }
+        if (seen++ == 0) {
+            comp("\nroot port enumeration notes, decoded (task 35.3; "
+                 "oldest first):\n");
+        }
+        enum_note_line(line);
+    }
+}
+
+/*
  * Print the note ring's text out of the raw extension image. The ring is a byte
  * ring with a head, so the oldest byte is `(head - used)` masked to its size -
  * and printing it from offset 0 would give a rotated file, which is why the
@@ -1362,6 +1549,7 @@ static void write_companion_ring(const SNAP_HEADER *h, const unsigned char *ext,
         }
     }
     comp("\n----------------------------------------------------------------\n");
+    write_companion_enum_notes(ext + h->RingOffset, start, mask, h->RingUsed);
 }
 
 /* ---- the PORTSC decode, which is the headline at the bench -------------- */
@@ -1583,6 +1771,42 @@ static int selftest_slots(void)
     }
     companion = NULL;
     print_slots(bytes, 5);
+    return 0;
+}
+
+/* `-selftest-notes`: task 35.3's enumeration-note decode over a canned ring,
+ * on the screen, for xhcisnap\selftest.cmd. Port 13 replays 35.0's E460
+ * failure as 2.1.1.0 met it (speed ID 4 unknown, one retry, then Failed and
+ * a change storm noted once); port 14 the same link with 35.1's fallback;
+ * port 15 a spent budget. The ring starts mid-record, as a wrapped one does. */
+static int selftest_notes(void)
+{
+    static const char text[] =
+        "0000001\r\n"
+        "tol.mode=00000001\r\n"
+        "enum.port.look=0D009083\r\n"
+        "enum.port.reset=0D801203\r\n"
+        "enum.port.speed=0D040000\r\n"
+        "enum.port.rate=0D000000\r\n"
+        "enum.port.fail=0D070000\r\n"
+        "enum.port.reset=0D811203\r\n"
+        "enum.port.speed=0D040000\r\n"
+        "enum.port.rate=0D000000\r\n"
+        "enum.port.fail=0D070101\r\n"
+        "enum.port.end=0D0D0701\r\n"
+        "enum.port.look=0DD00003\r\n"
+        "enum.port.reset=0E801203\r\n"
+        "enum.port.speed=0E040403\r\n"
+        "enum.port.rate=0E001388\r\n"
+        "enum.port.slot=0E010005\r\n"
+        "enum.port.end=0E0A0000\r\n"
+        "enum.port.quiet=0F000008\r\n";
+    static unsigned char ring[1024];
+
+    memcpy(ring, text, sizeof(text) - 1);
+    companion = NULL;
+    write_companion_enum_notes(ring, 0, sizeof(ring) - 1,
+                               (unsigned long)(sizeof(text) - 1));
     return 0;
 }
 
@@ -3280,6 +3504,8 @@ int main(int argc, char **argv)
             probeOnly = 1;
         } else if (strcmp(argv[i], "-selftest-slots") == 0) {
             return selftest_slots();
+        } else if (strcmp(argv[i], "-selftest-notes") == 0) {
+            return selftest_notes();
         } else if (strcmp(argv[i], "-selftest-report") == 0 && i + 1 < argc) {
             /*
              * The report path on its own, with no device: open BASE.TXT, write

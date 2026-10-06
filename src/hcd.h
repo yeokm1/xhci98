@@ -673,6 +673,9 @@ typedef struct _HCD_PORT {
     XHCI_TOL_OC TolOc;
     ULONG TolCompletions;
     ULONG TolCompletionsSeen;
+    /* Task 35.3: a root port's enumeration notes and their budget
+     * (xhci_enum.h), cleared by the start. Thread only. */
+    XHCI_ENUM_NOTES Notes;
 } HCD_PORT, *PHCD_PORT;
 
 /*

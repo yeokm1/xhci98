@@ -220,6 +220,43 @@ what a stock mouse behind a virtual hub reads - and `00030005` the same
 mouse on a root port with the switch off, reported High Speed and polled
 every 4 ms.
 
+### The root port enumeration records (2.2.0.0)
+
+`xhci98.sys` from 2.2.0.0 (roadmap-hcd.md task 35.3) notes how each root
+port's enumeration went, so a dump names its own cause. 35.0's E460 dumps
+showed a SuperSpeed link trained and no slot ever made, and nothing in the
+log said why; these records would have said "speed ID 4, no mapping, failed
+on the speed, no retry follows". The `.TXT` prints them in the ring as
+written and, after it, once more decoded a line each ("root port
+enumeration notes, decoded"). `-selftest-notes` prints that decode over a
+canned ring. The layouts are `src/xhci_enum.h`'s; the port is the xHCI port
+number, as in the PORTSC table.
+
+| Label | Written when | Value |
+|---|---|---|
+| `enum.port.look` | an inspection of the port fed its machine a connect or disconnect, asked for a warm reset or gave the link up, or found the machine Failed (once, until something is fed again) | port `<< 24` \| machine state before it `<< 20` \| link action `<< 16` \| feed `<< 14` (bit 14 disconnect, bit 15 connect) \| PORTSC change bits 23:17 `<< 7` \| PLS `<< 3` \| PR `<< 2` \| PED `<< 1` \| CCS |
+| `enum.port.reset` | the machine reset the port | port `<< 24` \| ok `<< 23` \| attempt `<< 16` (0 the first) \| PORTSC bits 15:0 as the reset left it (speed ID at 13:10) |
+| `enum.port.speed` | the same, the reset ok | port `<< 24` \| raw speed ID `<< 16` \| class `<< 8` (0 unknown, 1 Low, 2 Full, 3 High, 4 SuperSpeed) \| where the meaning came from (0 none, 1 listed in the protocol's PSI table, 2 the default IDs of a protocol with no table, 3 the default ID for an ID 4 to 7 a USB 3 table does not list - task 35.1) |
+| `enum.port.rate` | the same | port `<< 24` \| SuperSpeedPlus `<< 23` \| Mbit/s (0 when the protocol names no rate for the ID) |
+| `enum.port.slot` | Enable Slot completed, or never did | port `<< 24` \| completion code `<< 16` (0 never completed) \| attempt `<< 8` \| Slot ID the controller gave |
+| `enum.port.fail` | an attempt failed | port `<< 24` \| cause `<< 16` \| attempt `<< 8` \| 1 when no retry follows |
+| `enum.port.end` | a run of the machine that reset the port ended | port `<< 24` \| state `<< 16` \| cause `<< 8` \| retries used |
+| `enum.port.quiet` | the port's budget was spent | port `<< 24` \| the budget |
+
+Machine states: 0 Empty, 1 Debounce, 2 Reset, 3 Enable Slot, 4 Address, 5
+the 8-byte descriptor, 6 Evaluate, 7 the device descriptor, 8 the
+configuration's head, 9 the whole configuration, 10 Present, 11 Bound, 12
+Gone, 13 Failed, 14 and 15 the BOS. Causes: 0 none, 1 the reset, 2 no slot,
+3 Address Device, 4 the device descriptor, 5 the configuration, 6 the PDO,
+7 the speed (no EP0 packet size for the class it decoded to).
+
+They are bounded. A look, or one run of the machine (both its attempts), is
+one burst, and a port has eight between enumerations: one that enumerates
+gets them all back, so a working port replugged any number of times keeps its
+records, and one that fails or flaps writes `enum.port.quiet` and then
+nothing until it enumerates. The bursts refused are counted per port. Ports
+behind a hub are not noted.
+
 ## Three things to know before trusting a dump
 
 It is windowed, so it can tear. usbport refuses `ParameterLength > 0x10000`

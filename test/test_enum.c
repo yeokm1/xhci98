@@ -10,6 +10,7 @@
  */
 
 #include <stdio.h>
+#include "../src/xhci.h"
 #include "../src/xhci_enum.h"
 #include "../src/xhci_hub.h"
 #include "test_harness.h"
@@ -804,6 +805,141 @@ static void test_hub_let_go(void)
     CHECK(!XhciEnumAnswerCarries(18, 17, 0), "another hub's child");
 }
 
+/* Task 35.3: the root port's enumeration notes, each packing and the
+ * budget. The E460's port 13 of 35.0 is the worked case: PORTSC 00001203,
+ * speed ID 4 unlisted on a USB 3 table, decoded by the fallback. */
+static void test_notes(void)
+{
+    XHCI_ENUM_NOTES n;
+    ULONG i;
+
+    /* An inspection of a Failed machine with a trained link, nothing fed:
+     * the 35.0 dump's port 13. */
+    CHECK_EQ(XhciEnumNoteLook(13, XHCI_ENUM_FAILED, 0, 0, 0x00001203UL),
+             0x0DD00003UL, "look: port 13, Failed, U0, PED and CCS");
+    /* A connect: CSC and PLC pending, connect fed to an Empty machine. */
+    CHECK_EQ(XhciEnumNoteLook(13, XHCI_ENUM_EMPTY, 0, 0x2UL,
+                              0x00421203UL | XHCI_PORTSC_PR),
+             0x0D008000UL | (0x21UL << 7) | 0x7UL,
+             "look: connect fed, CSC and PLC, PR, PED, CCS");
+    CHECK_EQ(XhciEnumNoteLook(2, XHCI_ENUM_BOUND, 4, 0x1UL,
+                              (0xFUL << 5) | XHCI_PORTSC_CHANGE_MASK),
+             0x02B44000UL | (0x7FUL << 7) | (0xFUL << 3),
+             "look: a warm reset and a disconnect, every change bit");
+    CHECK_EQ(XhciEnumNoteLook(0x1FF, 0x1F, 0x1F, 0x7, 0) & 0xFFFFC000UL,
+             0xFFFFC000UL, "look: each field held to its width");
+    CHECK_EQ(XhciEnumNoteLook(1, 0, 0, 0, 0xFE01FE00UL), 0x01000000UL,
+             "look: no bit outside the named ones");
+
+    CHECK_EQ(XhciEnumNoteReset(13, 1, 0, 0x00201203UL), 0x0D801203UL,
+             "reset: ok, first attempt, PORTSC low half");
+    CHECK_EQ(XhciEnumNoteReset(13, 0, 1, 0x000002A0UL), 0x0D0102A0UL,
+             "reset: failed, the retry, link in RxDetect");
+    CHECK_EQ(XhciEnumNoteReset(1, 1, 0xFF, 0), 0x01FF0000UL,
+             "reset: the attempt held to seven bits");
+
+    CHECK_EQ(XhciEnumNoteSpeed(13, 4, XHCI_SPEED_SUPER,
+                               XHCI_PSI_SOURCE_FALLBACK),
+             0x0D040403UL, "speed: ID 4, SuperSpeed, by the fallback");
+    CHECK_EQ(XhciEnumNoteSpeed(13, 4, XHCI_SPEED_UNKNOWN,
+                               XHCI_PSI_SOURCE_NONE),
+             0x0D040000UL, "speed: 2.1.1.0's reading, unknown, no source");
+    CHECK_EQ(XhciEnumNoteSpeed(1, 3, XHCI_SPEED_HIGH,
+                               XHCI_PSI_SOURCE_LISTED),
+             0x01030301UL, "speed: High Speed, listed");
+
+    CHECK_EQ(XhciEnumNoteRate(13, 5000000UL, 0), 0x0D001388UL,
+             "rate: 5000 Mbit/s");
+    CHECK_EQ(XhciEnumNoteRate(16, 10000000UL, 1), 0x10802710UL,
+             "rate: 10 Gbit/s, SuperSpeedPlus");
+    CHECK_EQ(XhciEnumNoteRate(1, 480000UL, 0), 0x010001E0UL,
+             "rate: 480 Mbit/s");
+    CHECK_EQ(XhciEnumNoteRate(1, 999UL, 0), 0x01000000UL,
+             "rate: below 1 Mbit/s reads 0");
+    CHECK_EQ(XhciEnumNoteRate(1, 0xFFFFFFFFUL, 0), 0x01000000UL | 4294967UL,
+             "rate: the largest kbit/s still fits 23 bits");
+
+    CHECK_EQ(XhciEnumNoteSlot(13, 1, 0, 5), 0x0D010005UL,
+             "slot: Success, slot 5");
+    CHECK_EQ(XhciEnumNoteSlot(13, 9, 1, 0), 0x0D090100UL,
+             "slot: No Slots Available on the retry");
+    CHECK_EQ(XhciEnumNoteFail(13, XHCI_ENUM_FAIL_SPEED, 0, 0), 0x0D070000UL,
+             "fail: the speed, a retry follows");
+    CHECK_EQ(XhciEnumNoteFail(13, XHCI_ENUM_FAIL_SPEED, 1, 7), 0x0D070101UL,
+             "fail: the speed, the last");
+    CHECK_EQ(XhciEnumNoteEnd(13, XHCI_ENUM_FAILED, XHCI_ENUM_FAIL_SPEED, 1),
+             0x0D0D0701UL, "end: Failed on the speed, one retry used");
+    CHECK_EQ(XhciEnumNoteEnd(13, XHCI_ENUM_PRESENT, 0, 0), 0x0D0A0000UL,
+             "end: Present");
+    CHECK_EQ(XhciEnumNoteQuiet(13), 0x0D000000UL | XHCI_ENUM_NOTE_BUDGET,
+             "quiet: the port and its budget");
+
+    /* The budget: XHCI_ENUM_NOTE_BUDGET bursts, one quiet, then none, each
+     * refusal counted; a refill gives it all back and keeps the count. */
+    XhciEnumNotesInit(&n);
+    for (i = 0; i < XHCI_ENUM_NOTE_BUDGET; i++) {
+        CHECK_EQ(XhciEnumNoteCharge(&n), XHCI_ENUM_NOTE_YES,
+                 "a burst within the budget is noted");
+    }
+    CHECK_EQ(n.Suppressed, 0, "nothing refused within the budget");
+    CHECK_EQ(XhciEnumNoteCharge(&n), XHCI_ENUM_NOTE_QUIET,
+             "the first burst past it says the port fell quiet");
+    CHECK_EQ(XhciEnumNoteCharge(&n), XHCI_ENUM_NOTE_NO, "then nothing");
+    CHECK_EQ(XhciEnumNoteCharge(&n), XHCI_ENUM_NOTE_NO, "and nothing again");
+    CHECK_EQ(n.Suppressed, 3, "each refused burst counted");
+    CHECK_EQ(n.Used, XHCI_ENUM_NOTE_BUDGET + 1, "held past the budget");
+    XhciEnumNoteRefill(&n);
+    CHECK_EQ(XhciEnumNoteCharge(&n), XHCI_ENUM_NOTE_YES,
+             "an enumeration gives the budget back");
+    CHECK_EQ(n.Suppressed, 3, "the refill keeps the count");
+    for (i = 1; i < XHCI_ENUM_NOTE_BUDGET; i++) {
+        (VOID)XhciEnumNoteCharge(&n);
+    }
+    CHECK_EQ(XhciEnumNoteCharge(&n), XHCI_ENUM_NOTE_QUIET,
+             "quiet again after a refill spent");
+    XhciEnumNotesInit(&n);
+    CHECK_EQ(n.Used + n.Open + n.Suppressed + n.FailedLooked, 0,
+             "a start clears it all");
+
+    /* Which looks are worth a burst: one look at a Failed machine until
+     * something is fed again. */
+    CHECK(XhciEnumNoteWantLook(&n, XHCI_ENUM_EMPTY, 0x2UL, 0),
+          "a look that feeds a connect");
+    CHECK(XhciEnumNoteWantLook(&n, XHCI_ENUM_PRESENT, 0, 1),
+          "a look that acts on the link");
+    CHECK(!XhciEnumNoteWantLook(&n, XHCI_ENUM_PRESENT, 0, 0),
+          "a look at a running machine that does nothing");
+    CHECK(XhciEnumNoteWantLook(&n, XHCI_ENUM_FAILED, 0, 0),
+          "the first look at a Failed machine");
+    CHECK(!XhciEnumNoteWantLook(&n, XHCI_ENUM_FAILED, 0, 0),
+          "not the second: a change storm on a Failed port is one look");
+    CHECK(XhciEnumNoteWantLook(&n, XHCI_ENUM_FAILED, 0x1UL, 0),
+          "a feed is noted");
+    CHECK(XhciEnumNoteWantLook(&n, XHCI_ENUM_FAILED, 0, 0),
+          "and re-arms the Failed look");
+
+    /* A run is charged once, at its first reset. */
+    XhciEnumNotesInit(&n);
+    CHECK(!XhciEnumNoteOn(&n), "no run, no notes");
+    CHECK_EQ(XhciEnumNoteBegin(&n), XHCI_ENUM_NOTE_YES, "a run charged");
+    CHECK(XhciEnumNoteOn(&n), "its notes are written");
+    CHECK_EQ(XhciEnumNoteBegin(&n), XHCI_ENUM_NOTE_NO,
+             "the retry's reset is not charged again");
+    CHECK_EQ(n.Used, 1, "one burst for the run");
+    XhciEnumNoteFinish(&n);
+    CHECK(!XhciEnumNoteOn(&n), "the run finished");
+    for (i = 1; i < XHCI_ENUM_NOTE_BUDGET; i++) {
+        (VOID)XhciEnumNoteCharge(&n);
+    }
+    CHECK_EQ(XhciEnumNoteBegin(&n), XHCI_ENUM_NOTE_QUIET,
+             "a run past the budget: the quiet note");
+    CHECK(!XhciEnumNoteOn(&n), "and nothing else");
+    CHECK_EQ(XhciEnumNoteBegin(&n), XHCI_ENUM_NOTE_NO,
+             "its retry is neither charged nor counted");
+    CHECK_EQ(n.Suppressed, 1, "the refused run counted once");
+    XhciEnumNoteFinish(&n);
+}
+
 int main(void)
 {
     test_clean_paths();
@@ -820,6 +956,7 @@ int main(void)
     test_superspeed();
     test_settle();
     test_hub_let_go();
+    test_notes();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;
