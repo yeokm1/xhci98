@@ -595,6 +595,39 @@ under 34.1's rule, with its `VAL-*` row and the footprints; `XHCISNAP`
 names the value in effect. Each behaviour's decision in the pure core takes
 it as an input, with host vectors at 0 and 1.
 
+**Its lifecycle.** The value is latched once per start, before admission
+reopens, and never changes within a started lifetime. At 0 the gate is at
+every producer, not only at the executors: the transfer engine diverts no
+Transaction Error and creates no deferred outcome, no event marks a device
+`CycleWanted`, the backstop takes no peek, no location fault is charged or
+held, no HCH requests a recovery, and no all-ones read is stamped or sets
+`Unreadable` - so nothing is produced that a later step could act on. A
+change takes effect at the next start, and the start leaves nothing of the
+previous lifetime behind:
+
+- **Deferred work is settled by the old lifetime's teardown.** A stop
+  completes every outstanding transfer through its existing teardown; a TD
+  with a deferred outcome is one of them, completed as the teardown
+  completes any, and its deferred outcome and `RetryWanted` go with it. A
+  `CycleWanted` mark dies with the device record it is on.
+- **Every piece of tolerance state is initialized explicitly by the start**,
+  before admission reopens, wherever it lives: the start clears
+  `XHCI_EXTENSION` but keeps the surrounding controller and initializes
+  enumeration fields one by one (`hcd_ctl.c`, lines 871 to 880;
+  `hcd_enum.c`, line 3753), so zeroing is not relied on. That is the retry
+  generations, the backstop's observation, the location budgets and holds,
+  the recovery window, the all-ones stamp, `Unreadable`, and the tolerance
+  clock, which is rearmed.
+- **A pinned common buffer stays pinned**: the start does not clear
+  `CommonBufferPinned` or release what it keeps, under the existing rule,
+  whatever the value.
+
+35-V restarts the controller 1 to 0 to 1 with each of these outstanding - a
+deferred retry, a pending cycle, an exhausted budget and a held location,
+and a containment with and without its proof - and reads that each start
+begins clean, that 0 shows `2.1.1.0`'s handling, and that an update keeps a
+user's 0.
+
 ## 5. Injection
 
 QEMU raises none of these faults, and a fabricated event is only useful if
@@ -793,3 +826,10 @@ Round 7:
 |---|---|---|
 | 1 The pre-PDO reconnect read CCS, which an external hub's port does not have | medium | 4.3: connected read as `hcdPortConnected` reads it, for either kind of location |
 | 2 "About 2.2 times" stated as an upper bound | low | 4.0: no fixed upper bound; 2.2 the long-interval factor under timely DPCs |
+
+Round 8 found nothing material. Round 9, on section 4.11 and the reviewer-name
+scrub of the other records:
+
+| Finding | Severity | Answered in |
+|---|---|---|
+| 1 The off-switch had no lifecycle contract | medium | 4.11: latched per start, gated at every producer, deferred work settled by the old teardown, all tolerance state initialized explicitly, a pin kept; the 1-0-1 restart legs |
