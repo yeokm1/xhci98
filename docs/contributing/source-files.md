@@ -51,7 +51,14 @@
 > route and release sequences over two caller-supplied configuration-space
 > accessors; host suite `test_psw`), executed from `hcd_ctl.c` at start and
 > stop and from `hcd_power.c` at each return to D0 and a shutdown's D3
-> ([design record 16](design/16-intel-port-switchover.md)). The tables below are the
+> ([design record 16](design/16-intel-port-switchover.md)). Task 35-T adds the
+> pure `xhci_tol.c` / `xhci_tol.h` (controller tolerance: the decisions of
+> each tolerant behaviour, the `XhciTolerance`, `XhciIntervalCap` and
+> `XhciAvgTrbEsit` rules, the tolerance clock's tick arithmetic, the budgets
+> and intervals as named constants, and the counters and state kept in the
+> extension; host suite `test_tol`), its clock run from `hcd_svc.c` and its
+> values read in `hcd_ctl.c`
+> ([design record 17](design/17-controller-tolerance.md)). The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name

@@ -258,6 +258,30 @@ static PHCD_PIPE hcdEventStream(PHCD_PIPE pipe, ULONG trbPA)
 }
 
 /*
+ * Controller tolerance's counting of one Transfer Event (35-T.8, design
+ * record 17 section 4.8): every completion code into the histogram, and an
+ * error code's first records into the note ring with the slot and endpoint
+ * it named - XhciLogErrorBudget's per-code budget, so a storm of one code
+ * cannot crowd out the first of another. IRQL: DISPATCH_LEVEL, controller
+ * lock held.
+ */
+static VOID hcdTolCountEvent(PXHCI_EXTENSION ext, ULONG slotId, ULONG dci,
+                             ULONG cc)
+{
+    XhciTolCountCode(&ext->Tol.Stats, cc);
+    if (cc == XHCI_CC_SUCCESS || cc == XHCI_CC_SHORT_PACKET ||
+        cc == XHCI_CC_STOPPED || cc == XHCI_CC_STOPPED_LENGTH_INVALID ||
+        cc == XHCI_CC_STOPPED_SHORT_PACKET ||
+        (cc >= XHCI_CC_VENDOR_INFO_MIN && cc <= XHCI_CC_VENDOR_INFO_MAX)) {
+        return;
+    }
+    if (XhciLogErrorBudget(&ext->Log, cc)) {
+        XhciLogNote(ext, "xfer.error", (slotId << 16) | (dci << 8) | cc);
+    } else {
+        ext->LogErrorsOverBudget++;
+    }
+}
+/*
  * A Transfer Event, matched by the transfer engine (xhci_xfer.c) against the
  * queue of the pipe its slot and endpoint name - EP0's, or one the
  * configuration opened: the engine checks the TRB address, the slot and the
@@ -277,10 +301,15 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
     ULONG cc;
     ULONG slotId;
     ULONG dci;
+    ULONG errors;
+    ULONG badCodes;
+    ULONG unmatched;
+    ULONG foreign;
 
     hc = HcdControllerFromExt(ext);
     slotId = XHCI_TRB_GET_SLOT_ID(event->Control);
     dci = XHCI_TRB_GET_EP_ID(event->Control);
+    hcdTolCountEvent(ext, slotId, dci, XHCI_TRB_GET_COMPLETION(event->Status));
     pipe = hcdEventPipe(hc, slotId, dci);
     if (pipe != NULL && pipe->Streams != NULL) {
         endpoint = pipe;
@@ -328,11 +357,24 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
     if (pipe->TransferType == XHCI_PIPE_XFER_ISOCH) {
         return hcdIsoEvent(hc, pipe, slotId, dci, event, cc);
     }
+    errors = pipe->Queue->Errors;
+    badCodes = pipe->Queue->BadCodes;
+    unmatched = pipe->Queue->UnmatchedEvents;
+    foreign = pipe->Queue->ForeignEvents;
     if (XhciXferEvent(pipe->Queue, pipe->Ring, slotId, dci, event->Param0,
                       event->Status, event->Control, &result) !=
         XHCI_XFER_OK) {
         hc->Counters.TransferEventsUnclaimed++;
         return 0;
+    }
+    /* The queue's own counts stay where they were; the controller-wide sums
+     * are what the dump carries (35-T.8). */
+    ext->Tol.Stats.QueueErrors += pipe->Queue->Errors - errors;
+    ext->Tol.Stats.QueueBadCodes += pipe->Queue->BadCodes - badCodes;
+    ext->Tol.Stats.QueueUnmatched += pipe->Queue->UnmatchedEvents - unmatched;
+    ext->Tol.Stats.QueueForeign += pipe->Queue->ForeignEvents - foreign;
+    if (result.NeedsRecovery && !result.RefusedRetire) {
+        ext->Tol.Stats.QueueHalts++;
     }
     if (dci == 1) {
         return hcdEp0Result(hc, pipe->Device, &result);

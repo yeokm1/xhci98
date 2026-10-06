@@ -834,6 +834,13 @@ typedef struct _HCD_CONTROLLER {
     KTIMER FrameTimer;
     KDPC FrameDpc;
     volatile LONG FrameArmed;
+    /* The tolerance clock (35-T, design record 17 section 4.0): a relative
+     * 100 ms timer whose DPC advances Hc.Tol.Clock and arms it again, by
+     * the frame sampler's rule - TolArmed under TimerLock, the drain waits
+     * it to 0. */
+    KTIMER TolTimer;
+    KDPC TolDpc;
+    volatile LONG TolArmed;
 
     /* The controller thread (hcd_ctl.c). */
     PVOID ThreadObject;
@@ -1428,6 +1435,8 @@ VOID HcdTimersInit(PHCD_CONTROLLER hc);
 VOID HcdTimersDrain(PHCD_CONTROLLER hc);
 VOID HcdTimersOpen(PHCD_CONTROLLER hc);
 VOID HcdFrameTimerStart(PHCD_CONTROLLER hc);
+VOID HcdTolClockStart(PHCD_CONTROLLER hc);
+ULONG HcdTolNow(PHCD_CONTROLLER hc);
 
 /* hcd_door.c */
 VOID HcdDoorGateEnter(PHCD_CONTROLLER hc);

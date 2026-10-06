@@ -116,6 +116,9 @@ HKR,,XhciFastPollFsLs,0x00010003,0
 HKR,,XhciFirstEnumWaitMs,0x00010003,5000
 HKR,,XhciFirstEnumPortMs,0x00010003,2000
 HKR,,XhciIntelPortSwitch,0x00010003,1
+HKR,,XhciTolerance,0x00010003,1
+HKR,,XhciIntervalCap,0x00010003,1
+HKR,,XhciAvgTrbEsit,0x00010003,0
 HKR,,XhciImodInterval250ns,0x00010003,160
 HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"
 HKR,,Controller,1,01

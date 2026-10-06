@@ -621,22 +621,51 @@ try {
     # each path. **Its default is 1, not 0**: shipping 0 would be an INF edit
     # that turns the switchover off on every machine it exists for, and the
     # unconditional DWORD would write a user's 0 back to 1 at an update.
+    # Task 35-T.7's three rows sit between it and the interval, so the anchor
+    # carries them; $tailFor9x and $tailForNt are the same block ending in
+    # each path's own successor line, which keeps the two paths apart.
+    $tolRows   = "HKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`n"
+    $tailFor9x = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]"
+    $tailForNt = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32"
     Write-Step "the Intel port switchover's opt-out, on both paths"
     Assert-RuleFires "portswitch-no-9x" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`nHKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]",
-                             "HKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]")
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailFor9x, $tailFor9x)
     }
     Assert-RuleFires "portswitch-no-nt" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`nHKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32",
-                             "HKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32")
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailForNt, $tailForNt)
     }
     Assert-RuleFires "portswitch-default-off" "VAL-DEFAULT" {
-        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`nHKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32",
-                             "HKR,,XhciIntelPortSwitch,0x00010003,0`r`nHKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32")
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailForNt,
+                             "HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailForNt)
     }
     Assert-RuleFires "portswitch-clobber" "VAL-TYPE" {
-        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`nHKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]",
-                             "HKR,,XhciIntelPortSwitch,0x00010001,1`r`nHKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]")
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailFor9x,
+                             "HKR,,XhciIntelPortSwitch,0x00010001,1`r`n" + $tailFor9x)
+    }
+
+    # Roadmap-hcd task 35-T.7's three values (design record 17 sections 4.7
+    # and 4.11), each missing from one path, shipped at the other number, and
+    # written without the don't-overwrite flag that keeps a user's choice
+    # across an update. XhciTolerance and XhciIntervalCap ship at 1, so their
+    # wrong default is 0; XhciAvgTrbEsit ships at 0, so its wrong one is 1.
+    Write-Step "the tolerance switch, the interval cap and the Average TRB Length switch, on both paths"
+    foreach ($tv in @(
+        @{ Key = "tolerance"; Row = "HKR,,XhciTolerance,0x00010003,1`r`n";   Wrong = "HKR,,XhciTolerance,0x00010003,0`r`n";   Clob = "HKR,,XhciTolerance,0x00010001,1`r`n" },
+        @{ Key = "intcap";    Row = "HKR,,XhciIntervalCap,0x00010003,1`r`n"; Wrong = "HKR,,XhciIntervalCap,0x00010003,0`r`n"; Clob = "HKR,,XhciIntervalCap,0x00010001,1`r`n" },
+        @{ Key = "avgtrb";    Row = "HKR,,XhciAvgTrbEsit,0x00010003,0`r`n";  Wrong = "HKR,,XhciAvgTrbEsit,0x00010003,1`r`n";  Clob = "HKR,,XhciAvgTrbEsit,0x00010001,0`r`n" }
+    )) {
+        Assert-RuleFires ($tv.Key + "-no-9x") "VAL-MISSING" {
+            param($t) $t.Replace($tailFor9x, $tailFor9x.Replace($tv.Row, ""))
+        }
+        Assert-RuleFires ($tv.Key + "-no-nt") "VAL-MISSING" {
+            param($t) $t.Replace($tailForNt, $tailForNt.Replace($tv.Row, ""))
+        }
+        Assert-RuleFires ($tv.Key + "-default") "VAL-DEFAULT" {
+            param($t) $t.Replace($tailForNt, $tailForNt.Replace($tv.Row, $tv.Wrong))
+        }
+        Assert-RuleFires ($tv.Key + "-clobber") "VAL-TYPE" {
+            param($t) $t.Replace($tailFor9x, $tailFor9x.Replace($tv.Row, $tv.Clob))
+        }
     }
 
     # Roadmap task 24.3's three virtual-hub values, refused since 2026-10-02
@@ -1848,6 +1877,20 @@ try {
     Assert-RuleFires "amd64-imod-default-old" "VAL-DEFAULT" {
         param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010003,160", "HKR,,XhciImodInterval250ns,0x00010003,500")
     } -Source $prodInfAmd64 -Arch amd64
+    # Task 35-T.7's three values on the 64-bit file: its one AddReg section
+    # serves both of its paths, so missing and wrong-default once each.
+    foreach ($tv in @(
+        @{ Key = "tolerance"; Row = "HKR,,XhciTolerance,0x00010003,1`r`n";   Wrong = "HKR,,XhciTolerance,0x00010003,0`r`n" },
+        @{ Key = "intcap";    Row = "HKR,,XhciIntervalCap,0x00010003,1`r`n"; Wrong = "HKR,,XhciIntervalCap,0x00010003,0`r`n" },
+        @{ Key = "avgtrb";    Row = "HKR,,XhciAvgTrbEsit,0x00010003,0`r`n";  Wrong = "HKR,,XhciAvgTrbEsit,0x00010003,1`r`n" }
+    )) {
+        Assert-RuleFires ("amd64-" + $tv.Key + "-missing") "VAL-MISSING" {
+            param($t) $t.Replace($tv.Row, "")
+        } -Source $prodInfAmd64 -Arch amd64
+        Assert-RuleFires ("amd64-" + $tv.Key + "-default") "VAL-DEFAULT" {
+            param($t) $t.Replace($tv.Row, $tv.Wrong)
+        } -Source $prodInfAmd64 -Arch amd64
+    }
     #
     # **The version tie reaches the 64-bit file too**, and proving that needs
     # the header staged beside the mutated copy: the cross-check skips silently

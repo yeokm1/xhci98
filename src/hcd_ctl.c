@@ -54,6 +54,12 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * an unlisted Intel one (task 35.5). Read at start, on every Intel
  * controller and no other. */
 #define HCD_VALUE_PORT_SWITCH   L"XhciIntelPortSwitch"
+/* 35-T (design record 17 sections 4.7 and 4.11): the tolerance off-switch,
+ * the interrupt-interval cap and the Average TRB Length switch, read at
+ * every start; absent, another type or another number takes the default. */
+#define HCD_VALUE_TOLERANCE     L"XhciTolerance"
+#define HCD_VALUE_INTERVAL_CAP  L"XhciIntervalCap"
+#define HCD_VALUE_AVG_TRB_ESIT  L"XhciAvgTrbEsit"
 
 /* The health poll's period. usbport's CheckController was nominally 500 ms
  * and measured at 36-80 ms on the E460 (run-13e, Finding V); the poll's
@@ -145,6 +151,12 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     ULONG imod;
     ULONG fast;
     ULONG value;
+    ULONG tolFound;
+    ULONG tolValue;
+    ULONG capFound;
+    ULONG capValue;
+    ULONG avgFound;
+    ULONG avgValue;
     NTSTATUS status;
 
     ext = &hc->Hc;
@@ -193,8 +205,39 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
                                              hc->SettleCapMs);
     XhciLogNote(ext, "settle.total.ms", hc->SettleCapMs);
     XhciLogNote(ext, "settle.port.ms", hc->SettlePortMs);
+
+    /* Latched here, before admission reopens, for the whole started
+     * lifetime (record 17 section 4.11); the cap's controller test waits
+     * for XhciInitController's PCI id (hcdTolApplies). */
+    tolValue = 0;
+    tolFound = NT_SUCCESS(hcdReadDword(hc, HCD_VALUE_TOLERANCE, &tolValue));
+    capValue = 0;
+    capFound = NT_SUCCESS(hcdReadDword(hc, HCD_VALUE_INTERVAL_CAP,
+                                       &capValue));
+    avgValue = 0;
+    avgFound = NT_SUCCESS(hcdReadDword(hc, HCD_VALUE_AVG_TRB_ESIT,
+                                       &avgValue));
+    XhciTolStart(&ext->Tol, 0, tolFound, tolValue, capFound, capValue,
+                 avgFound, avgValue);
+    XhciLogNote(ext, "tol.value", tolFound ? tolValue : 0xFFFFFFFFUL);
+    XhciLogNote(ext, "tol.mode", ext->Tol.Stats.Tolerance);
+    XhciLogNote(ext, "tol.cap.value", capFound ? capValue : 0xFFFFFFFFUL);
+    XhciLogNote(ext, "tol.cap.mode", ext->Tol.Stats.CapMode);
+    XhciLogNote(ext, "tol.avgtrb.value", avgFound ? avgValue : 0xFFFFFFFFUL);
+    XhciLogNote(ext, "tol.avgtrb.mode", ext->Tol.Stats.AvgTrbMode);
 }
 
+/* The interval cap's controller test, once XhciInitController has read the
+ * PCI id. IRQL: PASSIVE_LEVEL. */
+static VOID hcdTolApplies(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+
+    ext = &hc->Hc;
+    ext->Tol.Stats.CapApplied = XhciTolCapApplies(ext->Tol.Stats.CapMode,
+                                                  ext->PciVendorDevice);
+    XhciLogNote(ext, "tol.cap.applied", ext->Tol.Stats.CapApplied);
+}
 /*
  * The force-Bulk-Only value (roadmap-hcd.md 31-A.3): 1 when XhciForceBulkOnly
  * is a nonzero REG_DWORD in the controller's driver key, the key every other
@@ -975,6 +1018,7 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
         HcdCountersPoll(hc);
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
+    hcdTolApplies(hc);
     (VOID)XhciControllerUpdateFlags(ext, 0, XHCI_EXT_FLAG_STARTED);
     ext->InterruptEnables++;
     KeRaiseIrql(DISPATCH_LEVEL, &raised);
@@ -990,6 +1034,7 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
         return status;
     }
     HcdFrameTimerStart(hc);
+    HcdTolClockStart(hc);
     hc->ControllerStarted = 1;
     return STATUS_SUCCESS;
 }

@@ -211,6 +211,56 @@ VOID HcdFrameTimerStart(PHCD_CONTROLLER hc)
     KeReleaseSpinLock(&hc->TimerLock, oldIrql);
 }
 
+/*
+ * The tolerance clock's tick (35-T, design record 17 section 4.0): the
+ * count advances and the timer is armed again, relative, so a change of the
+ * system time does not move it. A tick may come up to one clock period
+ * early, which is why xhci_tol.h credits it at 45 ms. Only this DPC writes
+ * the count; readers take one aligned ULONG. IRQL: DISPATCH_LEVEL.
+ */
+static VOID hcdTolDpc(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2)
+{
+    PHCD_CONTROLLER hc;
+    LARGE_INTEGER due;
+    KIRQL oldIrql;
+
+    UNREFERENCED_PARAMETER(dpc);
+    UNREFERENCED_PARAMETER(arg1);
+    UNREFERENCED_PARAMETER(arg2);
+    hc = (PHCD_CONTROLLER)context;
+    KeAcquireSpinLock(&hc->TimerLock, &oldIrql);
+    if (hc->TimersClosed) {
+        hc->TolArmed = 0;
+    } else {
+        hc->Hc.Tol.Clock++;
+        HcdRelativeMs(&due, XHCI_TOL_TICK_MS);
+        (VOID)KeSetTimer(&hc->TolTimer, due, &hc->TolDpc);
+    }
+    KeReleaseSpinLock(&hc->TimerLock, oldIrql);
+}
+
+/* After the controller has started; once per start, the count already set
+ * to 0 by XhciTolStart. IRQL: PASSIVE_LEVEL. */
+VOID HcdTolClockStart(PHCD_CONTROLLER hc)
+{
+    LARGE_INTEGER due;
+    KIRQL oldIrql;
+
+    KeAcquireSpinLock(&hc->TimerLock, &oldIrql);
+    if (!hc->TimersClosed && !hc->TolArmed) {
+        hc->TolArmed = 1;
+        HcdRelativeMs(&due, XHCI_TOL_TICK_MS);
+        (VOID)KeSetTimer(&hc->TolTimer, due, &hc->TolDpc);
+    }
+    KeReleaseSpinLock(&hc->TimerLock, oldIrql);
+}
+
+/* The tolerance clock now, in ticks. IRQL: any. */
+ULONG HcdTolNow(PHCD_CONTROLLER hc)
+{
+    return *(volatile ULONG *)&hc->Hc.Tol.Clock;
+}
+
 /* IRQL: PASSIVE_LEVEL (start). */
 VOID HcdTimersInit(PHCD_CONTROLLER hc)
 {
@@ -223,6 +273,9 @@ VOID HcdTimersInit(PHCD_CONTROLLER hc)
     hc->FrameArmed = 0;
     KeInitializeTimer(&hc->FrameTimer);
     KeInitializeDpc(&hc->FrameDpc, hcdFrameDpc, hc);
+    hc->TolArmed = 0;
+    KeInitializeTimer(&hc->TolTimer);
+    KeInitializeDpc(&hc->TolDpc, hcdTolDpc, hc);
     for (i = 0; i < HCD_TIMER_SLOTS; i++) {
         hc->Timers[i].Controller = hc;
         hc->Timers[i].Busy = 0;
@@ -380,9 +433,13 @@ VOID HcdTimersDrain(PHCD_CONTROLLER hc)
     if (hc->FrameArmed && KeCancelTimer(&hc->FrameTimer)) {
         hc->FrameArmed = 0;
     }
+    if (hc->TolArmed && KeCancelTimer(&hc->TolTimer)) {
+        hc->TolArmed = 0;
+    }
     KeReleaseSpinLock(&hc->TimerLock, oldIrql);
-    /* A sampler DPC queued or running clears it under TimerLock, closed. */
-    while (hc->FrameArmed) {
+    /* A sampler or clock DPC queued or running clears its flag under
+     * TimerLock, closed. */
+    while (hc->FrameArmed || hc->TolArmed) {
         HcdRelativeMs(&due, 1);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
     }

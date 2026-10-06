@@ -475,6 +475,17 @@ typedef struct _XHCI_XFER_EVENT_RESULT {
     /* The controller reported a condition no transfer can recover from
      * (Event Lost). Escalate; do not treat it as this transfer's problem. */
     ULONG Fatal;
+    /*
+     * For controller tolerance (35-T.3/4, design record 17 section 4.3), so
+     * the caller can count and decide; nothing here acts on them. Code is the
+     * event's completion code once the event names this endpoint (0 before).
+     * Refused: XhciXferCodeInfo did not claim it, so nothing was retired.
+     * Unattributed: a claimed code whose pointer resolved onto no queued TD -
+     * zero, off this ring, or inside no TD - so nothing was retired either.
+     */
+    ULONG Code;
+    ULONG Refused;
+    ULONG Unattributed;
 } XHCI_XFER_EVENT_RESULT, *PXHCI_XFER_EVENT_RESULT;
 
 /*

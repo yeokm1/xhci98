@@ -57,6 +57,11 @@ rem                  XhciIntelPortSwitch rule, and the route and release over
 rem                  a modelled config space - write order, values, refusals;
 rem                  value 2's bypass, the accepted-write set and the
 rem                  lifetime that releases only it (task 35.5)
+rem   test_tol     - controller tolerance (src\xhci_tol.c, 35-T.9): the three
+rem                  values, the tolerance clock's ticks at each interval's
+rem                  boundary, the interval cap with fast polling, the soft
+rem                  retry, cycle and halt decisions, the backstop, location
+rem                  budgets, the recovery window and the all-ones episode
 rem   test_hub    - the hub class's pure half (src\xhci_hub.c): the hub
 rem                  descriptor, the status-change bitmap, the port decision,
 rem                  the reset progress and speed bits, the depth and multi-TT
@@ -263,6 +268,10 @@ rem test_psw links nothing else: the gate, the value rule, the two
 rem sequences and the lifetime are pure, driven over a modelled
 rem configuration space (34.3, 35.5).
 call :run test_psw "test_psw.c ..\src\xhci_psw.c"
+rem test_tol links xhci_pipe.c for fast polling's composition with the
+rem interval cap; the rest of controller tolerance's decisions, the clock's
+rem arithmetic and the budgets are pure (35-T.9, design record 17).
+call :run test_tol "test_tol.c ..\src\xhci_tol.c ..\src\xhci_pipe.c"
 rem test_strict links nothing else: strict mode's command precondition table
 rem (xHCI 1.2 section 4.6) is a pure function, checked here at every cell -
 rem each command type, DW3 bit 9, slot state and EP State.

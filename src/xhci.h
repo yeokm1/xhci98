@@ -36,6 +36,7 @@
 /* ...and task 24.3's virtual hubs, one record per root port (design record
  * 12 section 3.3), embedded for the same reason. */
 #include "xhci_vhub.h"
+#include "xhci_tol.h"
 
 /* ------------------------------------------------------------------ */
 /* Hardware structures referenced by the layout                        */
@@ -8217,6 +8218,15 @@ typedef struct _XHCI_EXTENSION {
     XHCI_VHUB_CONFIG VhubConfig;
     XHCI_VHUB Vhub[XHCI_MAX_ROOT_PORTS];
     XHCI_VHUB_BINDING VhubBind[XHCI_MAX_ROOT_PORTS];
+
+    /*
+     * Controller tolerance (35-T, design record 17; xhci_tol.h): the values
+     * in effect, the counters a user's dump carries, and the state a start
+     * sets explicitly - the backstop's observation, the recovery window, the
+     * all-ones episode, each root port's budget and hold, and the clock. Last,
+     * so no offset the harness reads moves; an even number of ULONGs.
+     */
+    XHCI_TOL_STATE Tol;
 
     /*
      * Keeps `TrailingSignature` the **last word** of the amd64 layout, which

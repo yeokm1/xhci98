@@ -1873,6 +1873,9 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
     result->NeedsRecovery = 0;
     result->RefusedRetire = 0;
     result->Fatal = 0;
+    result->Code = 0;
+    result->Refused = 0;
+    result->Unattributed = 0;
 
     if (queue == NULL || ring == NULL) {
         return XHCI_XFER_BAD_PARAM;
@@ -1911,6 +1914,7 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
 
     completionCode = XHCI_TRB_GET_COMPLETION(eventDw2);
     residual = XHCI_TRB_GET_RESIDUAL(eventDw2);
+    result->Code = completionCode;
 
     if (XhciXferCodeInfo(completionCode, &code) != XHCI_XFER_OK) {
         /*
@@ -1922,6 +1926,7 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
          * one option that loses data silently.
          */
         queue->BadCodes++;
+        result->Refused = 1;
         return XHCI_XFER_OK;
     }
     if (code.Fatal) {
@@ -1951,6 +1956,7 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
         /* Zero (an error the xHC could not attribute to a TRB, 4.11.3.1) or an
          * address on another ring; the RsvdZ low bits were masked above. */
         queue->ForeignEvents++;
+        result->Unattributed = 1;
         return XHCI_XFER_OK;
     }
 
@@ -1969,6 +1975,7 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
          * events for a transfer already completed. Expected, not an error
          * (docs/contributing/implementation-invariants.md, "Completion Matching"). */
         queue->UnmatchedEvents++;
+        result->Unattributed = 1;
         /* One of those trailing events is the second half of the mid-TD
          * departure taken below, and recognising it is the only thing that
          * distinguishes a conforming controller from QEMU's one-event xHC. */
@@ -2498,6 +2505,9 @@ ULONG XhciXferDrainSettled(PXHCI_TRANSFER_QUEUE queue,
     result->NeedsRecovery = 0;
     result->RefusedRetire = 0;
     result->Fatal = 0;
+    result->Code = 0;
+    result->Refused = 0;
+    result->Unattributed = 0;
 
     if (queue == NULL || ring == NULL) {
         return XHCI_XFER_BAD_PARAM;
@@ -3504,6 +3514,9 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
     result->NeedsRecovery = 0;
     result->RefusedRetire = 0;
     result->Fatal = 0;
+    result->Code = 0;
+    result->Refused = 0;
+    result->Unattributed = 0;
 
     if (queue == NULL || ring == NULL) {
         return XHCI_XFER_BAD_PARAM;

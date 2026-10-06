@@ -3505,8 +3505,8 @@ debug throughout, in its build scripts and its documentation alike.)
  9. REGISTRY SETTINGS
 ==============================================================================
 
-Every registry value this driver reads. There are eight, all DWORDs. The
-install writes all eight, each at the default it states below except
+Every registry value this driver reads. There are eleven, all DWORDs. The
+install writes all eleven, each at the default it states below except
 XhciImodInterval250ns, which it writes as 160. It writes each only where it is
 missing, so a value you changed survives an install or update; to go back to
 the default, set it by hand, or delete the value and update the driver. If
@@ -3648,7 +3648,33 @@ means the default each one states.
   starts, so restart after changing it. Read on a Lenovo B490 (1E31) under
   Windows 98 SE with NUSB; standby and the other five ids are untested.
 
-  THOSE EIGHT ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
+  XhciTolerance  -  the controller tolerance, all together
+  ........................................................
+
+  Default 1: on. The driver recovers from a set of controller faults by
+  itself - a lost interrupt, a transfer error it retries, a device it
+  re-enumerates, a port or controller it restarts - each a few times at
+  most. Set it to 0 to turn all of that off together and have the earlier
+  releases' handling back. ONLY 0 TURNS IT OFF; absent or any other number
+  is on. XHCISNAP's counters keep counting at 0. Read when the controller
+  starts, so restart after changing it.
+
+  XhciIntervalCap  -  the AMD interrupt-interval cap
+  ..................................................
+
+  Default 1: on AMD controllers (PCI vendor 1022) only, a device asking to
+  be polled less often than every 32 ms is polled every 32 ms. Set it to 0
+  to turn it off, or to 2 to apply it on every controller. Read when the
+  controller starts.
+
+  XhciAvgTrbEsit  -  a setting for testing only
+  .............................................
+
+  Default 0. Set to 1 only if the maintainer asks: it changes one value the
+  controller is told for each interrupt endpoint. Read when the controller
+  starts.
+
+  THOSE ELEVEN ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
   XhciVirtualHSHubVid and XhciVirtualHSHubPid are not read: a copy left in
   the key by an earlier install has no effect, because this driver reports
   every device at its true speed with no virtual hub in the way. Delete
