@@ -10,7 +10,7 @@ Any controller whose USB 3 Supported Protocol capability publishes a
 non-empty speed table that omits the ID its PORTSC actually reports for a
 SuperSpeed device (4 here) would be affected the same way; none other is
 known, and the HP's own mechanism is unconfirmed until its dump is read. The P14s Gen 1 (`8086:02ED`) and the B490 (`8086:1E31`) are
-not affected, and why is not yet read from their tables (section 6).
+not affected: their tables list ID 4 (section 6).
 
 ## 1. Symptom
 
@@ -107,15 +107,26 @@ lookup a SuperSpeed hub's children are addressed with, or a hub would
 enumerate and its devices still fail. The Slot Context keeps the
 controller's raw ID. The invariant gains the exception in its own words.
 
-Still to read (35.1's first step): the PSI tables of the E460, the P14s Gen 1
-and the B490, from `XHCIQUAL`'s read-only scan once it prints the entries
-(today it prints only the count, PSIC), so their immunity is explained
-rather than assumed (the likely
-answers - no table on the older B490, a table listing 4 on the P14s - are
-inference); and the E460 connector's physical USB 2.0 pairing - the hub's
-USB 2.0 half came up on port 1 where the driver's port map pairs 13 with 7 -
-which matters to the send-back and holds of task 29-A.5, not to this fix. The HP's "enumerates at High Speed" is not what this
-failure does by itself, and needs its own dump.
+The tables, read 2026-10-06 (owner; `XHCIQUAL --probe-only`, the build
+that prints them; `xhciqual/results/*-2026-10-06/PROBE.LOG`):
+
+| Machine | Controller | USB 3 protocol | PSI entries | ID 4 |
+|---|---|---|---|---|
+| E460 | `8086:9D2F` rev 21 | 3.0, PSIC 3 | 1-3: SSIC 1248, 2496, 4992 Mb/s | not listed |
+| P14s Gen 1 | `8086:02ED` rev 00 | 3.1, PSIC 8 | 4: 5 Gb/s; 5: 10 Gb/s; 6-11: SSIC 1248, 2496, 4992, 1457, 2915, 5830 Mb/s | listed |
+| B490 | `8086:1E31` rev 04 | 3.0, PSIC 1 | 4: 5 Gb/s | listed |
+
+Every USB 2.0 protocol lists 1-3 as Full, Low and High Speed. So the two
+machines that never failed list ID 4 explicitly; by Comet Lake Intel's table
+moves the SSIC rates off IDs 1-3 and lists 4 and 5. The P14s also shows why
+a listed entry must win over the fallback: it lists 6 and 7 as SSIC rates,
+where the default meaning of 6 and 7 is Gen1x2 and Gen2x2.
+
+Still to read (35.2): the E460 connector's physical USB 2.0 pairing - the
+hub's USB 2.0 half came up on port 1 where the driver's port map pairs 13
+with 7 - which matters to the send-back and holds of task 29-A.5, not to
+this fix. The HP's "enumerates at High Speed" is not what this failure does
+by itself, and needs its own dump.
 
 ## 7. What the project keeps from it
 
