@@ -2031,7 +2031,8 @@ static ULONG hcdAbortedLocked(PHCD_DEVICE_PDO pdo, PIRP irp, PVOID handle,
  * Every URB IRP is stamped at its dispatch, before anything of this driver
  * reads or rewrites its URB: the PDO's next submission sequence, in
  * DriverContext[0], which nothing else uses on a transfer's IRP (hcd_cfg.c
- * takes it only for the requests it pends, which are never held). IRQL:
+ * moves it to DriverContext[1] while it pends a request, and back before
+ * holding one). IRQL:
  * <= DISPATCH_LEVEL.
  */
 VOID HcdIoStamp(PHCD_DEVICE_PDO pdo, PIRP irp)

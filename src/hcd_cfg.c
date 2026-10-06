@@ -168,6 +168,10 @@ NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         }
         return HcdIoRefuseLater(pdo, irp, urb, HCD_USBD_DEVICE_GONE);
     }
+    /* The dispatch stamp (HcdIoStamp) moves to DriverContext[1], unused
+     * while queued, so a hold of it (hcdCfgHoldUnreadable) is measured
+     * against an abort in the order the two were submitted. */
+    irp->Tail.Overlay.DriverContext[1] = irp->Tail.Overlay.DriverContext[0];
     irp->Tail.Overlay.DriverContext[0] = dev;
     irp->Tail.Overlay.DriverContext[2] = pdo;
     (VOID)InterlockedIncrement(&pdo->UrbsPending);
@@ -223,16 +227,17 @@ static VOID hcdCfgHoldUnreadable(PHCD_USB_DEVICE dev, PIRP irp, PURB urb)
 
     pdo = (PHCD_DEVICE_PDO)irp->Tail.Overlay.DriverContext[2];
     if (urb->UrbHeader.Function == URB_FUNCTION_ABORT_PIPE) {
-        /* Its horizon was marked at dispatch (hcd_urb.c); the stamp that
-         * would mark it again is gone - DriverContext[0] names the device
-         * while queued - so only what that horizon covers is released. */
+        /* Its horizon was marked at dispatch (hcd_urb.c), so only what
+         * that horizon covers is released. */
         (VOID)HcdIoParkedRelease(pdo, 1);
         hcdCfgComplete(dev, irp, urb, XHCI_USBD_STATUS_SUCCESS);
         return;
     }
-    /* Stamped again, since the queue took DriverContext[0]: an abort
-     * submitted from here on covers it, one already run does not. */
-    HcdIoStamp(pdo, irp);
+    /* Its dispatch stamp back, kept across the queue (HcdCfgQueue): an
+     * abort submitted after it covers it, whether that abort already ran or
+     * runs later; a stamp taken here would put it past an abort already
+     * run, held behind it for good. */
+    irp->Tail.Overlay.DriverContext[0] = irp->Tail.Overlay.DriverContext[1];
     handle = hcdCfgHeldHandle(urb);
     /* The flush runs before the pipes are freed (HcdCfgDeviceGone). */
     XhciControllerLockAcquire(&dev->Controller->Hc, &oldIrql);
