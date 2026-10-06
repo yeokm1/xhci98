@@ -6272,6 +6272,79 @@ program's own output in a virtual machine, not a kernel trace channel on
 metal, and it is the Phase 0 matrix runner's only way of getting an answer out
 of a headless guest.
 
+### The qemu flavour's test aids: the E460 speed table and fault injection
+
+Two switches exist in the `qemu` flavour alone (`XHCI_FLAVOUR_QEMU`, which
+`src\sources` defines for that build and no other). The `debug` and
+`release` images compile none of their code, read neither value and carry
+none of their strings; no INF writes either, so both are absent, and off,
+until a guest sets them. Both live in the controller's driver key, the key
+every other value of this driver lives in: on Windows 98 SE and ME
+`HKLM\System\CurrentControlSet\Services\Class\USB\NNNN`, on the NT targets
+`HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\NNNN`
+(the release notes' table of keys).
+
+**`XhciQemuPsiE460`** (roadmap-hcd task 35.4). A REG_DWORD read at every
+start: exactly 1 makes the controller's USB 3 Supported Protocol capability
+read as the E460's - PSIC 3, PSI words `04E00121 09C00122 13800123`, the
+SSIC rates and nothing for speed ID 4 (issue 11) - so 35.1's decoding meets
+the real table with QEMU's real PORTSC and events. Absent, another type or
+any other number is off. The words are substituted after the parse, on the
+preflight and the post-reset parse alike (`XhciPortMapOverridePsi`,
+`src\xhci_caps.c`, host vectors in `test_caps`); the log ring notes
+`qemu.psi.e460`. A change takes effect at the next start (disable and enable
+the controller). It is kept apart from the injection below.
+
+**`XhciQemuInject`** (roadmap-hcd task 35-T.9, design record 17 section 5).
+A REG_DWORD the controller thread re-reads about once a second, so a script
+in the guest fires a fault at run time by writing it:
+
+| Bits | Field |
+|---|---|
+| 31:24 | sequence: a command fires when this differs from the last one seen. The value in the key at a start is latched and never fires, so a value left behind does not replay at the next boot |
+| 23:16 | the fault (table below) |
+| 15:8 | a root port, or 0 for the first managed USB 2.0 root port with a device enabled on it |
+| 7:0 | the fault's argument |
+
+| Code | Fault | How it is made, and the argument |
+|---|---|---|
+| `01` | Lost interrupt (35-T.1) | the ISR acknowledges as ever and does not queue the drain, for `arg` interrupts (0 is one, `FF` every one until `FF` CLEAR); the backstop delivers the waiting event |
+| `02` | Root port PED (35-T.5) | a real write of PED 1 to the port; its PORTSC reads answer PEC set until the driver's acknowledgement; a Port Status Change Event for the port handed to the drain's own handler. Persistent: fire it again after each re-enumeration, four times in all |
+| `03` | Over-current (35-T.5) | the port's PORTSC reads answer PP clear and OCA and OCC set; PP never leaves the real port |
+| `04` | Over-current released | OCA answered clear from now on; the driver's repower ends the emulation. Transient: `04` within the over-current wait (5 s, counted long); persistent: never send it |
+| `05` | HCH (35-T.6) | a real write clearing Run/Stop; the in-place recovery runs for real. Persistent: fire it again after each recovery, four times inside ten minutes |
+| `06` | All-ones USBSTS, with the proof (35-T.6) | the containment step's USBSTS read answers all-ones for `arg` passes (0 until CLEAR); configuration space is real, so Bus Master Enable is cleared and reads back clear. Transient: an `arg` of 5 or so, shorter than the containment interval |
+| `07` | All-ones USBSTS, no proof | the same, the Bus Master Enable read-back answering set: the pinned branch |
+| `FF` | CLEAR | every emulated answer and the lost-interrupt window off |
+
+Codes `08` to `12` (hex) are reserved for 35-T.2 to 35-T.4's faults (the
+soft retry's Transaction Error, a failing Reset Endpoint, a refused code,
+the three halts with no TD, Endpoint Not Enabled, EP0 during the thread's
+own transfer and before the PDO, and the soft retry's two races); until
+they are built the layer refuses them. A command whose target is missing
+(no fitting port, a controller that is not running) is refused too, and its
+sequence spent. Every command is recorded in the log ring - `qemu.inj.fire`,
+`qemu.inj.port`, `qemu.inj.refused`, `qemu.inj.unbuilt`, `qemu.inj.unknown`,
+`qemu.inj.irq.lost` - and on the port-`0xE9` trace, so `XHCISNAP` at
+verbosity 1 or more shows what was injected beside the tolerance counters.
+
+Driving it from a guest: on Windows 98 SE and ME, a `.reg` file through
+`regedit /s`, one file per command (the sequence byte bumped each time):
+
+```
+REGEDIT4
+
+[HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\Class\USB\0003]
+"XhciQemuInject"=dword:01020000
+```
+
+On the NT targets the same file (or `reg add <key> /v XhciQemuInject /t
+REG_DWORD /d 0x01020000 /f` where `reg.exe` exists; Windows 2000 has it only
+from its Support Tools). Wait a second or two after each write before
+reading the result. The expected outcome of each fault, transient and
+persistent, is record 17 section 5's second table; the 35-V legs read them
+with a HID device and a Bulk-Only copy running.
+
 ### Getting a trace off a bare-metal machine
 
 Two different things are covered here, and the distinction matters. The trace

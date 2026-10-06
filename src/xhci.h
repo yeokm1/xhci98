@@ -2090,6 +2090,21 @@ ULONG XhciFindExtendedCap(XHCI_READ32 read,
  */
 ULONG XhciPortMapEqual(const XHCI_PORT_MAP *a, const XHCI_PORT_MAP *b);
 
+#if defined(XHCI_FLAVOUR_QEMU) || defined(XHCI_HOST_TEST)
+/*
+ * Task 35.4's qemu-flavour-only override (XhciQemuPsiE460, hcd_ctl.c): every
+ * protocol group of the given major revision has its PSI table replaced by
+ * `count` words (0 restores "the default IDs apply"), the rest zeroed so
+ * XhciPortMapEqual still compares two overridden maps exactly. Applied to
+ * the preflight and the post-reset parse alike. Returns the groups changed.
+ * IRQL: any.
+ */
+#define XHCI_QEMU_PSI_E460_COUNT 3
+extern const ULONG XhciQemuPsiE460[XHCI_QEMU_PSI_E460_COUNT];
+ULONG XhciPortMapOverridePsi(PXHCI_PORT_MAP map, ULONG major,
+                             const ULONG *psi, ULONG count);
+#endif
+
 /* Port accessors. Out-of-range port numbers answer "not ours" rather than
  * reading past the arrays. Ports are 1-based. IRQL: any. */
 ULONG XhciPortClass(const XHCI_PORT_MAP *map, ULONG port);

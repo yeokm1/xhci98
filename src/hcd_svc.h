@@ -90,4 +90,13 @@ VOID HcdSvcRequestReset(PXHCI_EXTENSION ext);
 VOID HcdSvcDmaNotStopped(PXHCI_EXTENSION ext);
 PKSPIN_LOCK HcdSvcControllerLock(PXHCI_EXTENSION ext);
 
+#if defined(XHCI_FLAVOUR_QEMU)
+/* The qemu flavour's test aids, never in a published image: task 35.4's
+ * speed-table override, latched by the start (hcd_ctl.c), and 35-T.9's
+ * PORTSC filter (hcd_inj.c), on the two accessors in xhci_pci.c. */
+ULONG HcdSvcQemuPsiE460(PXHCI_EXTENSION ext);
+ULONG HcdInjPortscRead(PXHCI_EXTENSION ext, ULONG port, ULONG value);
+ULONG HcdInjPortscWrite(PXHCI_EXTENSION ext, ULONG port, ULONG value);
+#endif
+
 #endif /* HCD_SVC_H */

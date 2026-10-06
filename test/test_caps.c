@@ -1728,6 +1728,71 @@ static void test_replay_e460(void)
 }
 
 /*
+ * Task 35.4's qemu-flavour override (XhciQemuPsiE460): QEMU's chain, which
+ * publishes no PSI table, with the E460's USB 3 words substituted after the
+ * parse - so the decoding meets the E460's table on QEMU's ports.
+ */
+static void test_qemu_e460_override(void)
+{
+    static const ULONG e460[3] = { 0x04E00121UL, 0x09C00122UL, 0x13800123UL };
+    XHCI_PORT_MAP map;
+    XHCI_PORT_MAP again;
+    ULONG speed;
+    ULONG i;
+
+    for (i = 0; i < XHCI_QEMU_PSI_E460_COUNT; i++) {
+        CHECK_EQ(XhciQemuPsiE460[i], e460[i], "the E460's word as read");
+    }
+
+    bar_reset(0x800);
+    put_protocol(0x100, 4, 2, 0, 1, 4, 9, NULL, 0);
+    put_protocol(0x104, 0, 3, 0, 5, 4, 10, NULL, 0);
+    CHECK_EQ(XhciParseExtendedCaps(bar_read, NULL, 0x100, 0x800, 8, &map),
+             XHCI_CAPS_OK, "QEMU chain parsed");
+    CHECK_EQ(XhciPortMapOverridePsi(&map, 3, XhciQemuPsiE460,
+                                    XHCI_QEMU_PSI_E460_COUNT),
+             1, "one USB 3 group overridden");
+    CHECK_EQ(map.Protocols[0].PsiCount, 0, "the USB 2 group untouched");
+    CHECK_EQ(map.Protocols[1].PsiCount, 3, "PSIC 3");
+    for (i = 0; i < 3; i++) {
+        CHECK_EQ(map.Protocols[1].Psi[i], e460[i], "the E460's words");
+    }
+    for (i = 3; i < XHCI_MAX_PSI; i++) {
+        CHECK_EQ(map.Protocols[1].Psi[i], 0, "the rest zeroed");
+    }
+
+    /* What 35.1 fixed, met on QEMU's port 5: speed ID 4 SuperSpeed by the
+     * fallback, the SSIC IDs unknown, the USB 2 ports as before. */
+    CHECK_EQ(XhciPortSpeedClass(&map, 5, 4, &speed), XHCI_CAPS_OK, "ID 4");
+    CHECK_EQ(speed, XHCI_SPEED_SUPER, "SuperSpeed");
+    CHECK_EQ(XhciPortSpeedSource(&map, 5, 4), XHCI_PSI_SOURCE_FALLBACK,
+             "by the fallback");
+    CHECK_EQ(XhciPortSpeedClass(&map, 5, 1, &speed), XHCI_CAPS_OK, "ID 1");
+    CHECK_EQ(speed, XHCI_SPEED_UNKNOWN, "SSIC 1248 Mb/s unknown");
+    CHECK_EQ(XhciPortSpeedClass(&map, 1, 3, &speed), XHCI_CAPS_OK, "USB2 3");
+    CHECK_EQ(speed, XHCI_SPEED_HIGH, "High Speed by the default IDs");
+
+    /* The preflight and the post-reset parse, both overridden, compare
+     * equal; an unoverridden one does not. */
+    CHECK_EQ(XhciParseExtendedCaps(bar_read, NULL, 0x100, 0x800, 8, &again),
+             XHCI_CAPS_OK, "parsed again");
+    CHECK_EQ(XhciPortMapEqual(&map, &again), 0, "differs before the override");
+    (void)XhciPortMapOverridePsi(&again, 3, XhciQemuPsiE460,
+                                 XHCI_QEMU_PSI_E460_COUNT);
+    CHECK_EQ(XhciPortMapEqual(&map, &again), 1, "equal after it");
+
+    /* Count 0 restores the default IDs; refusals change nothing. */
+    CHECK_EQ(XhciPortMapOverridePsi(&again, 3, NULL, 0), 1, "count 0");
+    CHECK_EQ(again.Protocols[1].PsiCount, 0, "no table");
+    CHECK_EQ(XhciPortMapOverridePsi(&again, 3, NULL, 2), 0, "NULL words");
+    CHECK_EQ(XhciPortMapOverridePsi(&again, 3, e460, XHCI_MAX_PSI + 1), 0,
+             "more than PSIC can say");
+    CHECK_EQ(XhciPortMapOverridePsi(NULL, 3, e460, 3), 0, "NULL map");
+    CHECK_EQ(XhciPortMapOverridePsi(&again, 4, e460, 3), 0, "no USB 4 group");
+    CHECK_EQ(again.Protocols[1].PsiCount, 0, "still no table");
+}
+
+/*
  * ThinkPad P14s Gen 1, Comet Lake 8086:02ED rev 00, HCIVERSION 1.10 - and a
  * USB *3.1* group with eight PSI entries, which is the largest table this
  * project has seen on real hardware and the reason XHCI_MAX_PSI keeps all 15.
@@ -1920,6 +1985,7 @@ int main(void)
     test_port_map_equal();
     test_digest_collision();
     test_replay_e460();
+    test_qemu_e460_override();
     test_replay_p14s();
     test_replay_b490();
     test_capability_loop_refused();

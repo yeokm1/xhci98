@@ -131,8 +131,16 @@ ULONG XhciReadPortsc(PXHCI_EXTENSION ext, ULONG port)
         XHCI_DBG_VALUE("PORTSC: refused read of port", port);
         return 0xFFFFFFFFUL;
     }
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* 35-T.9's emulated PEC and over-current (hcd_inj.c). */
+    return HcdInjPortscRead(ext, port,
+                            XhciRead32(ext, ext->HcInfo.PortscOffset +
+                                                (port - 1UL) *
+                                                    XHCI_OP_PORT_STRIDE));
+#else
     return XhciRead32(ext, ext->HcInfo.PortscOffset +
                                (port - 1UL) * XHCI_OP_PORT_STRIDE);
+#endif
 }
 
 /* IRQL: any. */
@@ -142,6 +150,9 @@ VOID XhciWritePortsc(PXHCI_EXTENSION ext, ULONG port, ULONG value)
         XHCI_DBG_VALUE("PORTSC: refused write to port", port);
         return;
     }
+#if defined(XHCI_FLAVOUR_QEMU)
+    value = HcdInjPortscWrite(ext, port, value);
+#endif
     XhciWrite32(ext, ext->HcInfo.PortscOffset +
                          (port - 1UL) * XHCI_OP_PORT_STRIDE, value);
 }

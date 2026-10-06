@@ -1129,3 +1129,45 @@ ULONG XhciHcInfoEqual(const XHCI_HC_INFO *a, const XHCI_HC_INFO *b)
     }
     return 1;
 }
+
+#if defined(XHCI_FLAVOUR_QEMU) || defined(XHCI_HOST_TEST)
+/*
+ * Roadmap-hcd task 35.4's speed-table override, qemu flavour only: the PSI
+ * words the E460's Sunrise Point-LP (8086:9D2F) publishes for its USB 3
+ * protocol (issue 11's table) - PSIC 3, PSIV 1 to 3 at 1248, 2496 and 4992
+ * Mb/s, the SSIC rates, and nothing for PSIV 4. QEMU's controller publishes
+ * no table, so without this the decoding 35.1 fixed is never met in a VM.
+ * Substituted after the parse rather than fed through the reader: the
+ * reader cannot tell a PSI DWORD at offset + 16 from the next capability's
+ * header, which is what QEMU keeps there.
+ */
+const ULONG XhciQemuPsiE460[XHCI_QEMU_PSI_E460_COUNT] = {
+    0x04E00121UL, 0x09C00122UL, 0x13800123UL
+};
+
+ULONG XhciPortMapOverridePsi(PXHCI_PORT_MAP map, ULONG major,
+                             const ULONG *psi, ULONG count)
+{
+    XHCI_PROTOCOL *proto;
+    ULONG changed;
+    ULONG i;
+    ULONG j;
+
+    if (map == NULL || (count != 0 && psi == NULL) || count > XHCI_MAX_PSI) {
+        return 0;
+    }
+    changed = 0;
+    for (i = 0; i < map->ProtocolCount && i < XHCI_MAX_PROTOCOLS; i++) {
+        proto = &map->Protocols[i];
+        if (proto->Major != major) {
+            continue;
+        }
+        proto->PsiCount = count;
+        for (j = 0; j < XHCI_MAX_PSI; j++) {
+            proto->Psi[j] = (j < count) ? psi[j] : 0;
+        }
+        changed++;
+    }
+    return changed;
+}
+#endif

@@ -63,8 +63,8 @@
 > port's enumeration state and the counter block, word by word; host suite
 > `test_snap`), filled by `hcd_door.c`, and a root port's enumeration notes to
 > `xhci_enum.c` (their packing and budget; host suite `test_enum`), written
-> from `hcd_enum.c`. Phase 35 adds no other file to `src\`; what it changes
-> in existing ones: task 35.1 changes the speed decoding in `xhci_caps.c`
+> from `hcd_enum.c`. Phase 35 adds no other file to `src\` but the qemu
+> flavour's fault injection below; what it changes in existing ones: task 35.1 changes the speed decoding in `xhci_caps.c`
 > (one rule, `xhciProtocolRate`, that the class, the rate and the inverse
 > lookup ask, the fallback for an ID 4 to 7 a USB 3 table does not list, and
 > `XhciPortSpeedSource`; the hub child's lookup in `xhci_sshub.c`; host
@@ -86,7 +86,17 @@
 > extended-capability chain (host suite `xhciqual\test\test_mmiodiag.c`),
 > `xhciqual\quirks.c` gains the report-only AMD rows, and
 > `xhcisnap\xhcisnap.c` decodes the enumeration notes and the HCD region.
-> The tables below are the
+> Task 35-T.9 adds the qemu flavour's fault injection,
+> compiled into that flavour alone (`XHCI_FLAVOUR_QEMU`) and into neither
+> image that ships: the pure `xhci_inj.c` / `xhci_inj.h` (the
+> `XhciQemuInject` trigger's encoding and sequence rule, the ports a fault
+> may be aimed at, and every register answer the layer gives; host suite
+> `test_inj`) and the driver half `hcd_inj.c` (the thread's trigger read
+> and executors, the ISR's lost-interrupt window, and the PORTSC hooks in
+> `xhci_pci.c`); task 35.4's `XhciQemuPsiE460` override is
+> `XhciPortMapOverridePsi` in `xhci_caps.c`, read in `hcd_ctl.c`
+> ([design record 17](design/17-controller-tolerance.md) section 5;
+> `build-and-test.md`, "The qemu flavour's test aids"). The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name

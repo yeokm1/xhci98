@@ -60,6 +60,12 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
 #define HCD_VALUE_TOLERANCE     L"XhciTolerance"
 #define HCD_VALUE_INTERVAL_CAP  L"XhciIntervalCap"
 #define HCD_VALUE_AVG_TRB_ESIT  L"XhciAvgTrbEsit"
+#if defined(XHCI_FLAVOUR_QEMU)
+/* Task 35.4, qemu flavour only and written by no INF: 1 makes the USB 3
+ * protocol's PSI table read as the E460's (xhci_caps.c); absent, another
+ * type or any other number is off. Read at every start. */
+#define HCD_VALUE_QEMU_PSI_E460 L"XhciQemuPsiE460"
+#endif
 
 /* The health poll's period. usbport's CheckController was nominally 500 ms
  * and measured at 36-80 ms on the E460 (run-13e, Finding V); the poll's
@@ -225,7 +231,30 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     XhciLogNote(ext, "tol.cap.mode", ext->Tol.Stats.CapMode);
     XhciLogNote(ext, "tol.avgtrb.value", avgFound ? avgValue : 0xFFFFFFFFUL);
     XhciLogNote(ext, "tol.avgtrb.mode", ext->Tol.Stats.AvgTrbMode);
+
+#if defined(XHCI_FLAVOUR_QEMU)
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_QEMU_PSI_E460, &value);
+    hc->QemuPsiE460 = (NT_SUCCESS(status) && value == 1) ? 1UL : 0UL;
+    XhciLogNote(ext, "qemu.psi.e460", hc->QemuPsiE460);
+#endif
 }
+
+#if defined(XHCI_FLAVOUR_QEMU)
+/* Task 35.4's switch as the start latched it, for xhciBuildPortMap.
+ * IRQL: any. */
+ULONG HcdSvcQemuPsiE460(PXHCI_EXTENSION ext)
+{
+    return HcdControllerFromExt(ext)->QemuPsiE460;
+}
+
+/* hcdReadDword for the injection layer's trigger (hcd_inj.c).
+ * IRQL: PASSIVE_LEVEL. */
+NTSTATUS HcdCtlQemuReadDword(PHCD_CONTROLLER hc, PCWSTR name, PULONG value)
+{
+    return hcdReadDword(hc, name, value);
+}
+#endif
 
 /* The interval cap's controller test, once XhciInitController has read the
  * PCI id. IRQL: PASSIVE_LEVEL. */
@@ -535,6 +564,12 @@ static BOOLEAN NTAPI hcdIsr(PKINTERRUPT Interrupt, PVOID Context)
     if (!XhciIsr(&hc->Hc)) {
         return FALSE;
     }
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* 35-T.9's lost interrupt: acknowledged as ever, the drain not queued. */
+    if (HcdInjIsrDrop(hc)) {
+        return TRUE;
+    }
+#endif
     /* Counted when queued, not when the DPC starts: a DPC another processor
      * has dequeued but not yet entered is then still in the count the
      * teardown waits on (Codex review of 26-A.2, round 1, finding 2). */
@@ -592,6 +627,10 @@ VOID HcdControllerInitObjects(PHCD_CONTROLLER hc)
     KeInitializeEvent(&hc->EnumDetachDone, NotificationEvent, TRUE);
     KeInitializeEvent(&hc->DoorGate, SynchronizationEvent, TRUE);
     KeInitializeTimer(&hc->LinkRecoverTimer);
+#if defined(XHCI_FLAVOUR_QEMU)
+    KeInitializeSpinLock(&hc->InjLock);
+    XhciInjRegsClear(&hc->InjRegs);
+#endif
 }
 
 /*
@@ -775,6 +814,10 @@ static ULONG hcdContainProve(PXHCI_EXTENSION ext)
             return 0;
         }
     }
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* 35-T.9's all-ones without the proof: the read-back answers set. */
+    command = HcdInjPciCommand(HcdControllerFromExt(ext), command);
+#endif
     return (command & XHCI_PCI_COMMAND_BME) == 0 ? 1UL : 0UL;
 }
 
@@ -827,8 +870,13 @@ static VOID hcdContain(PHCD_CONTROLLER hc)
                    ? 1UL
                    : 0UL;
     if (admitted) {
+#if defined(XHCI_FLAVOUR_QEMU)
+        allOnes = (HcdInjUsbsts(hc, XhciReadOp(ext, XHCI_OP_USBSTS)) ==
+                   0xFFFFFFFFUL) ? 1UL : 0UL;
+#else
         allOnes = (XhciReadOp(ext, XHCI_OP_USBSTS) == 0xFFFFFFFFUL) ? 1UL
                                                                      : 0UL;
+#endif
     }
     armed = (ext->Tol.Dead.Armed && ext->Tol.Dead.StartGen == hc->TolStartGen)
                 ? 1UL
@@ -903,6 +951,11 @@ static VOID hcdPoll(PHCD_CONTROLLER hc)
     ULONG escalate;
 
     ext = &hc->Hc;
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* 35-T.9: a fault a guest script asked for, before the steps that
+     * meet it. */
+    HcdInjPoll(hc);
+#endif
     if ((ext->Flags & XHCI_EXT_FLAG_STARTED) != 0) {
         ext->CheckCallbacks++;
 
@@ -1151,6 +1204,9 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     ext->Signature = XHCI_EXTENSION_SIGNATURE;
     ext->TrailingSignature = XHCI_EXTENSION_TRAILING;
     hcdReadValues(hc);
+#if defined(XHCI_FLAVOUR_QEMU)
+    HcdInjStart(hc);
+#endif
 
     ext->ResourcesTypes = XhciResourcesRequired;
     ext->ResourceBase = (ULONG_PTR)hc->BarVa;

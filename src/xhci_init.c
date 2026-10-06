@@ -743,6 +743,16 @@ static ULONG xhciBuildPortMap(PXHCI_EXTENSION ext, ULONG afterReset)
     if (status != XHCI_CAPS_OK) {
         return xhciPortMapRefused(ext, afterReset, status);
     }
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Task 35.4: both parses alike, so the comparison below still holds. */
+    if (HcdSvcQemuPsiE460(ext)) {
+        ULONG groups;
+
+        groups = XhciPortMapOverridePsi(map, 3, XhciQemuPsiE460,
+                                        XHCI_QEMU_PSI_E460_COUNT);
+        XHCI_DBG_VALUE("port map: qemu E460 PSI table, USB 3 groups", groups);
+    }
+#endif
 
     /*
      * A controller whose capability chain names no port at all leaves nothing

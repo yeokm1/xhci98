@@ -33,6 +33,7 @@
 #include "xhci_psw.h"
 #include "xhci_stream.h"
 #include "xhci_counters.h"
+#include "xhci_inj.h"
 
 #define HCD_KIND_CONTROLLER_FDO 0x43464448UL /* 'HDFC' */
 #define HCD_KIND_ROOTHUB_PDO    0x50524448UL /* 'HDRP' */
@@ -999,6 +1000,26 @@ typedef struct _HCD_CONTROLLER {
     ULONG StrictSeen[64][2];
     ULONG StrictRefusalSeen[64];
 #endif
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* The qemu flavour's test aids, never in a published image (design
+     * record 08). QemuPsiE460 is task 35.4's speed-table override, latched
+     * at each start (hcd_ctl.c). The rest is 35-T.9's injection
+     * (hcd_inj.c): InjLock is a leaf lock, taken at <= DISPATCH_LEVEL only,
+     * over InjRegs; the lost-interrupt window is lock-free - the ISR counts
+     * InjIrqSeen and InjIrqDropped, the thread moves InjIrqUntil and
+     * InjIrqForever; InjTrigger, InjReadAt and InjIrqNoted are the
+     * thread's. */
+    ULONG QemuPsiE460;
+    KSPIN_LOCK InjLock;
+    XHCI_INJ_REGS InjRegs;
+    XHCI_INJ_TRIGGER InjTrigger;
+    ULONG InjReadAt;
+    volatile LONG InjIrqSeen;
+    volatile LONG InjIrqUntil;
+    volatile LONG InjIrqForever;
+    volatile LONG InjIrqDropped;
+    LONG InjIrqNoted;
+#endif
     /* The door (hcd_door.c, 26-A.8; design record 13 section 8): the
      * FDO's name's number, \DosDevices\HCD<n>, the host controller
      * interface, and the root hub's name GET_ROOT_HUB_NAME returns (under
@@ -1376,6 +1397,17 @@ VOID HcdStrictForgetSlots(PHCD_CONTROLLER hc);
 
 /* hcd_dev.c */
 ULONG HcdDevRetryReplay(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG token);
+
+/* hcd_inj.c and hcd_ctl.c's qemu half: the qemu flavour only, nothing in
+ * debug or release (design record 17 section 5; xhci_inj.h). */
+#if defined(XHCI_FLAVOUR_QEMU)
+NTSTATUS HcdCtlQemuReadDword(PHCD_CONTROLLER hc, PCWSTR name, PULONG value);
+VOID HcdInjStart(PHCD_CONTROLLER hc);
+VOID HcdInjPoll(PHCD_CONTROLLER hc);
+ULONG HcdInjIsrDrop(PHCD_CONTROLLER hc);
+ULONG HcdInjUsbsts(PHCD_CONTROLLER hc, ULONG usbsts);
+USHORT HcdInjPciCommand(PHCD_CONTROLLER hc, USHORT command);
+#endif
 
 /* hcd_cfg.c */
 NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,

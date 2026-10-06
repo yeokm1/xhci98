@@ -95,7 +95,12 @@ rem                  fail the run)
 rem   test_strict  - strict mode's command precondition table (src\xhci_strict.c):
 rem                  every command type x DW3 bit 9 x slot state x EP State,
 rem                  the Configure Endpoint flag rule and the refusal codes
-rem   test_desc    - the configuration-descriptor snoop (src\xhci_desc.c, task
+rem   test_inj     - the qemu flavour's fault injection (src\xhci_inj.c,
+rem                  35-T.9): the trigger value's fields and sequence rule,
+rem                  the ports a fault may be aimed at, and every register
+rem                  answer - PEC, the over-current's PP/OCA/OCC through
+rem                  release and repower, all-ones USBSTS, the BME read-back
+rem   test_desc   - the configuration-descriptor snoop (src\xhci_desc.c, task
 rem                  9-A.2): which EP0 setup packets are worth capturing, the
 rem                  descriptor walk fed at every chunk size, the isochronous
 rem                  bInterval table with its alternate-setting conflicts, and
@@ -286,6 +291,10 @@ rem test_strict links nothing else: strict mode's command precondition table
 rem (xHCI 1.2 section 4.6) is a pure function, checked here at every cell -
 rem each command type, DW3 bit 9, slot state and EP State.
 call :run test_strict "test_strict.c ..\src\xhci_strict.c"
+rem test_inj links xhci_caps.c for the port map a PED or over-current is
+rem aimed by; the trigger and every register answer of the qemu flavour's
+rem fault injection are pure (35-T.9, design record 17 section 5).
+call :run test_inj "test_inj.c ..\src\xhci_inj.c ..\src\xhci_caps.c"
 rem test_log links nothing else: task 11-V.7's ring is deliberately pure, so
 rem every decision it makes - the wrap, the record cap, the flush verdict, the
 rem drain's ordering - is drivable with no file system, no registry and no IRQL.
