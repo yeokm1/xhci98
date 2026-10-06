@@ -1284,19 +1284,28 @@ keeps with the class drivers above it after a fault is record 17 section
 
 - **An error completion the class driver already gets for the same fault,
   and only after the bus has done what it does.** A USB Transaction Error on
-  a bulk or interrupt endpoint is retried in place up to three times per TD
-  first (record 17 section 4.2); an exhausted retry completes exactly as up
-  to `2.1.1.0`, `USBD_STATUS_DEV_NOT_RESPONDING` with the endpoint Halted,
+  a bulk or interrupt endpoint with no streams, on a device not behind a
+  TT and a controller not on Linux's `XHCI_NO_SOFT_RETRY` list, is retried
+  in place up to three times per TD first (record 17 section 4.2); an
+  exhausted retry completes exactly as up to `2.1.1.0`,
+  `USBD_STATUS_DEV_NOT_RESPONDING` with the endpoint Halted,
   so section 6.7's reactions follow from it unchanged: `hidusb`'s port
   reset episode and `hidclass`'s backoff, `usbstor`'s up to three
-  `RESET_PORT`s (one on NUSB), `usbaudio`'s abort and pipe reset.
+  `RESET_PORT`s (one on NUSB), `usbaudio`'s abort and pipe reset. A retry
+  whose Reset Endpoint fails is not completed that way: the TD is left to
+  the device's teardown (record 17 section 4.2, "As built"), so the class
+  driver sees it end with a departure, or with a controller reset.
 - **A departure and an arrival** where the bus cannot attribute the fault to
   a transfer or the location fails under the device: a completion code
-  nothing claims, a halt with no TD (record 17 section 4.3), a USB 2.0 root
-  port the controller disabled, an over-current (section 4.5), and a
+  nothing claims or a halt with no TD on a non-isochronous endpoint (record
+  17 section 4.3), a USB 2.0 root port the controller disabled, an
+  over-current (section 4.5), and a
   controller contained as unreadable (section 4.6). The device's PDO is
   reported missing and, where the location allows, a new one is created by
-  the re-enumeration; transfers end as on an unplug. Section 6.7's last
+  the re-enumeration; transfers end as on an unplug. A location whose
+  budget is spent still loses the device at the next fault, and is then
+  held with nothing enumerated (record 17 sections 4.3 and 4.5, "As
+  built"). Section 6.7's last
   reading applies: every counter a class driver keeps lives in the stack
   being removed, so the re-enumerated device starts each driver afresh, and
   no class driver's `CYCLE_PORT` (none sends one) can spend the location's

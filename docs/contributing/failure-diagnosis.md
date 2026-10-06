@@ -462,20 +462,34 @@ Ring/cycle bugs have distinctive signatures. Recognize them by shape:
   a stated terminal state. Read, in this order, from an `XHCISNAP` report
   taken after the symptom (and one taken before it, to subtract):
   1. The values in effect, `XhciTolerance`, `XhciIntervalCap` and
-     `XhciAvgTrbEsit`. At `XhciTolerance` 0 none of the behaviours acts and
-     the counters still count, so a report at 0 shows what they would have
-     answered; that is the differential, a restart apart.
+     `XhciAvgTrbEsit`. At `XhciTolerance` 0 none of the behaviours acts; the
+     counts of what was seen - the completion codes, the queues' errors,
+     refused codes and unmatched and foreign events, the halts, and the root
+     ports' disables and over-currents (`PedFaults`, `OcFaults`) - still
+     move, and the counts of what a behaviour did stay at 0 (record 17
+     section 4.11, "As built"). A report at 0 therefore shows the faults the
+     behaviours would have met; that is the differential, a restart apart.
   2. `BackstopDrains` nonzero: events were picked up by the thread, not the
      interrupt. Evidence of a lost or late interrupt, not proof; rising
      steadily, suspect interrupt delivery (Phase 4 row 5) before the device.
-  3. The per-queue `Errors`, soft retries and halts, and the completion-code
-     histogram: Transaction Errors that the retry absorbed show here and
-     nowhere else; an exhausted retry is today's error completion, and what
-     the class driver then sends is design record 13 section 6.7.
-  4. `BadCodes`, `UnmatchedEvents` and `ForeignEvents` with the device
-     cycles and their reasons: a cycle answered a refused code or a halt
-     with no TD (record 17 section 4.3); a mark dropped because the device
-     had left is counted apart.
+  3. `QueueErrors` and `QueueHalts` (the queues' counts summed over the
+     controller; no per-endpoint figure is published), the soft retry's
+     `RetryDiverts`, `RetryResets`, `RetryRecovered`, `RetryExhausted`,
+     `RetryReplayed` and `RetryResetFailed`, and the completion-code
+     histogram. Which device and endpoint an error came from is in the note
+     ring's `xfer.error` records (`XhciLogVerbosity` 2), the first four of
+     each code with the slot and DCI. `RetryRecovered` is a Transaction Error
+     the retry absorbed; `RetryExhausted` is today's error completion, and
+     what the class driver then sends is design record 13 section 6.7;
+     `RetryResetFailed` sent the device to its teardown.
+  4. `QueueBadCodes`, `QueueUnmatched` and `QueueForeign` with the device
+     cycles by reason - `CyclesRefusedCode` and `CyclesHaltNoTd` (a refused
+     code, a halt with no TD; record 17 section 4.3), `CyclesPrePdo` of
+     them before the device's PDO - and `HaltReads` and `HaltStale`, the
+     context reads a halt with no TD cost and those that found the endpoint
+     neither Halted nor Error. A mark dropped because the device had left or
+     its location's generation moved is `CyclesDropped`, and a cycle the
+     spent budget refused, the device removed all the same, `CyclesRefused`.
   5. Each location's budget, charges and hold: a held port enumerates
      nothing until stable-disconnect evidence or, held unpowered after
      over-currents, a controller start. Root-port PED and over-current

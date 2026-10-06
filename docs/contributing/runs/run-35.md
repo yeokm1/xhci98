@@ -152,11 +152,22 @@ green.
 
 ## 35.4 - the regression on QEMU
 
+**The override** (2026-10-07; built with 35-T.9's first part in `8d27a13`,
+review rounds `cade36c` and `b0dd28c`, converged at round 3):
+`XhciQemuPsiE460`, a REG_DWORD in the controller's driver key read at each
+start, in the `qemu` flavour alone; exactly 1 makes `XhciPortMapOverridePsi`
+(`xhci_caps.c`) replace every USB 3 protocol group's PSI table with the
+E460's - PSIC 3, `04E00121` `09C00122` `13800123` - after the preflight
+parse and the post-reset parse alike, so 35.1's decoding meets the real
+table on QEMU's PORTSC and events; noted `qemu.psi.e460`. Host vectors in
+`test_caps`. The debug and release images carry none of it.
+`build-and-test.md`, "The qemu flavour's test aids", is the operator's
+reference.
+
 To be read: 35.1's change on the QEMU legs of 35-V - SuperSpeed devices
 directly and behind a SuperSpeed hub on Windows 98 SE and the Windows 2000
 SP4 guest, reading as the `2.1.1.0` build, QEMU's controller publishing no
-table - and, if built, the `qemu`-flavour-only override that makes the
-controller's USB 3 protocol read the E460's PSI words.
+table - and the same with the override set.
 
 ## 35.5 - `XhciIntelPortSwitch` 2
 
@@ -197,7 +208,9 @@ same day, static, is design record 13 section 6.7 with its
 `legal-provenance.md` rows (`b8bd0b9`): no class driver sends `CYCLE_PORT`;
 `hidusb` resets the port once per failed read without limit, `usbstor` at
 most three times per episode (once on NUSB), `usbaudio` never. Record 17
-revision 8 (35.6, 2026-10-07) records 35-T.5's departures.
+revision 8 (35.6, 2026-10-07) records 35-T.5's departures, revision 9 (the
+same day) those of 35-T.2, 35-T.3/4, 35-T.6's review fixes, 35-T.8 and
+35-T.9's first part.
 
 ## 35-T foundation, 35-T.1, 35-T.5, 35-T.6 and 35-T.7
 
@@ -233,7 +246,8 @@ virtual-machine leg yet (35-V's).
   reconnect and the over-current episode (`XHCI_TOL_OC`) at root ports, one
   budget per location (`Tol.HubLoc[]` for hub ports, in the extension so
   the snapshot carries it, `XHCI_TOL_LOC` at 8 ULONGs and the extension
-  held under `XHCISNAP`'s 128 KB image by a compile-time check), a
+  held under `XHCISNAP`'s extension image - 128 KB then, 256 KB since
+  `7e95afa` - by a compile-time check), a
   recovery's own disconnect latched (`RecoveryDisc`), stable progress from
   validated retirements, an unpowered hold kept off through a
   reinitialization, `HcdTolLocCharge` the hook 35-T.3/4 charge. Three
@@ -244,19 +258,217 @@ virtual-machine leg yet (35-V's).
 
 ## 35-T.2 - the soft retry
 
-To be read.
+Done 2026-10-07: `4ab1663`, review round 1 taken in `6c0ecc1`, `35f77b6`
+and `8fd1f49`, converged at round 2. Design record 17 section 4.2, with
+five departures its revision 9 records ("As built").
+
+- **Scope** set per pipe when it is opened (`hcdCfgPipeNew`,
+  `XhciTolRetryScope`): bulk or interrupt, no streams, the device not behind
+  a TT (`TtSlot` 0), the controller not `1022:43B9`, `1022:43BB`,
+  `1B6F:7023` or `1B6F:7052`, and `XhciTolerance` on.
+- **The interception** in `XhciXferEvent` (`XhciTolRetryDivert`), before
+  the TD's terminal mutations: the event kept on the head TD
+  (`XHCI_XFER_FLAG_RETRY_DEFERRED`), the queue's retry generation moved,
+  the thread woken; three retries a TD (`XHCI_TOL_SOFT_RETRIES`), the fourth
+  error taking today's path whole.
+- **The thread** (`HcdCfgRetryService`, `hcdCfgRetryOne`): with an
+  operation pending - a cancel, ABORT_PIPE, RESET_PIPE, SYNC_RESET_PIPE,
+  RESET_PORT, `DrainPending`, and as built also `AbortAll`, a Paused or
+  Closed pipe and a stream pipe - or the head changed, the kept event
+  replayed (`XhciXferRetryReplay`, `HcdDevRetryReplay`); otherwise Reset
+  Endpoint with TSP 1 (`hcdCfgRetryResetEndpoint`), then the doorbell and
+  the request cleared only if the generation is unchanged
+  (`XhciTolRetryAfterReset`). A failed Reset Endpoint goes to `hcdCfgFault`
+  with no replay.
+- **Round 1.** (1) `hcdCfgQuiesce` settled a retry before its own Reset
+  Endpoint, which the error's still-queued event could follow, so a Set TR
+  Dequeue programmed the failed TD's position and cleared the controller's
+  saved progress in it: a later cancel that kept it could send OUT data
+  twice. The settle now runs after that command completes, before the
+  dequeue is read (`6c0ecc1`). (2) A retried TD completed by its
+  successor's sweep was not counted recovered; `RetryRecovered` now counts
+  the whole completed group (`35f77b6`). (3) A Transfer Event pointer above
+  4 GB, whose low dword could alias a queued TD, is refused as Foreign
+  before anything reads it (`XhciXferEventHighRefused`, `8fd1f49`); the
+  finding predates the retry.
+- Counted as `RetryDiverts`, `RetryResets`, `RetryRecovered`,
+  `RetryExhausted`, `RetryReplayed` and `RetryResetFailed`. Host vectors in
+  `test_tol` and `test_xfer` (the settle moving the dequeue, the swept
+  short packet, the high pointer).
+
+No guest or hardware reading: QEMU raises no Transaction Error, and the
+injection codes for it are 35-T.9's second part.
 
 ## 35-T.3 and 35-T.4 - the device cycle
 
-To be read.
+Done 2026-10-07: the pure half `0e1cb42` and the driver half `c0f429c`,
+review rounds 1 to 3 taken in `18f383f`, `bdc93c0` and `adbc4e3`, converged
+at round 4; `d69814f` met 35-T.2. Design record 17 section 4.3, with five
+departures its revision 9 records ("As built").
+
+- **The producer**, `hcdTolCycleEvent` in `hcd_dev.c` over the pure
+  `XhciTolCycleReason`: a code `XhciXferCodeInfo` refuses on a
+  non-isochronous endpoint of a slot naming a device, in any endpoint state
+  and whether or not a pipe is open there (T3); a Stall, Transaction, Babble
+  or Split Transaction error the queue could not match on an open pipe,
+  a streams endpoint's pointer no stream ring holds and a pointer above
+  4 GB included (T4). It marks the device through `HcdTolCycleMark`, a no-op
+  at `XhciTolerance` 0.
+- **The thread**: `hcdCycleResolve` reads a T4's endpoint context (Halted or
+  Error confirms; anything else is stale, `HaltReads` and `HaltStale`);
+  `hcdCycleService` drops a mark whose device or connect generation
+  (`HCD_PORT.ConnectGen`) moved (`CyclesDropped`), and otherwise charges the
+  location and cycles a published device by `HcdEnumCycle`; a spent budget
+  still removes the device and holds the location (`CyclesRefused`). Before
+  the PDO, the enumeration's `XHCI_ENUM_EV_ABANDONED` outcome - no Failed
+  state, no retry, no continuation - tears the attempt down, and
+  `hcdCycleAfter`, once a run, charges the location and feeds the CONNECT
+  if it still reads connected (`CyclesPrePdo`).
+- **The thread's own EP0 wait** (`hcdThreadControlQuiet`): a mark for that
+  device ends it as abandoned for a cycle; `Ep0Stuck` and `ScratchHeld` keep
+  the record and the scratch until the cycle's Disable Slot, a failed one
+  setting `ScratchTainted`, and `HcdCfgService` waits meanwhile.
+- **Round 1** (`18f383f`): a mark made between the wait's last look and the
+  waiter's installation, or between its reading and `KeClearEvent`, was
+  lost and the wait timed out into a controller reset; the waiter is now
+  registered and each look taken under the controller lock. Stale T4 events
+  no longer extend the wait: one 5000 ms deadline, a relative timer polled
+  between 100 ms slices of the event wait (`XhciTolWaitStep`).
+- **Round 2** (`bdc93c0`): on a multiprocessor kernel a flood of fresh
+  stale marks could hold the wait past its deadline; a resolution now makes
+  the terminal decision itself (`XhciTolWaitResolved`).
+- **Meeting 35-T.2** (`d69814f`): the above-4 GB Foreign event feeds the
+  producer; a Halted endpoint holding a soft retry is not confirmed as a
+  halt with no TD.
+- **Round 3** (`adbc4e3`): the retry and the cycle are decided once a pass
+  (`XhciTolJoin`, `XhciTolHaltOwner`): Halted is the retry's only while its
+  deferred TD is the head, Error always confirms, a confirmed reason
+  commits the pass to the cycle, and otherwise the retry runs, so a mark
+  arriving between passes cannot postpone both.
+- Notes `tol.cycle.mark`, `tol.cycle`, `tol.cycle.prepdo`,
+  `tol.cycle.dropped`, `tol.cycle.wait`; no field added to
+  `XHCI_TOL_STATS`. Host vectors in `test_tol` (the mark, the action, the
+  reconnect, the wait model with its flood mode, the halt owner, the join
+  and a pass model) and `test_enum` (the abandoned outcome).
+
+No guest or hardware reading: the injection codes for T3 and T4 are 35-T.9's
+second part.
 
 ## 35-T.8 - the counters a user can send
 
-To be read.
+Done 2026-10-07: `dd6bd3c` and `df4045c`, review round 1 taken in
+`39066c0`, converged at round 4. Design record 17 section 4.8, as its
+revision 9 records.
+
+- **The HCD region's header** grows from 8 to 20 words, its version left
+  at 1 and the snapshot schema at 5, so an older `XHCISNAP` walks past the
+  new words: words 8 to 18 place the tolerance state in the extension image
+  (offset and size, counter words, the window's and the clock's offsets,
+  each location kind's offset, count and record size, the hub ports a hub
+  object), word 19 the terminal reason from the pure `XhciTolTerminal`
+  (running, owed, three failures, the window, unreadable).
+- **`XHCISNAP`'s `print_tol`**, at every verbosity the door answers: the
+  values in effect, the terminal reason, the recovery window, the
+  containment and its branch, every nonzero counter by name, the code
+  histogram with xHCI Table 6-90's names, and each location charged, held or
+  re-armed; `-selftest-tol` in `selftest.cmd`.
+- **Round 1**: the driver prunes the window's stamps only at its next
+  admission, so a report an hour after three recoveries said "3 of 3";
+  `XHCISNAP` now counts only stamps inside the ten minutes against the
+  dump's own clock and reports the older ones as kept, past the window.
+- Host vectors in `test_tol` (the terminal reason) and `test_snap` (the
+  twenty-word header and the 34 counters the tool names).
 
 ## 35-T.9 - the pure core's vectors and the `qemu`-flavour injection
 
-To be read.
+**First part** (2026-10-07): `8d27a13`, review rounds 1 and 2 taken in
+`cade36c` and `b0dd28c`, converged at round 3; design record 17 section 5,
+as its revision 9 records. The pure `xhci_inj.c` with host suite
+`test_inj`, the driver half `hcd_inj.c`, compiled into the `qemu` flavour
+alone. `XhciQemuInject`, re-read by the thread about once a second: bits
+31:24 a sequence, 23:16 the fault, 15:8 a root port, 7:0 the argument.
+Built: 01 lost interrupt, 02 root port PED, 03 over-current, 04 its release,
+05 HCH, 06 all-ones with the Bus Master Enable proof, 07 all-ones without
+it, FF clear; 08 and above reserved and refused with a note.
+
+- **Round 1** (`cade36c`): the lost-interrupt window had no inactive state
+  and compared a running count by signed difference, so once the count
+  wrapped past `0x80000000` an unarmed window dropped interrupts; the
+  thread now arms and disarms it and the ISR decides through the unsigned
+  `XhciInjIrqDrop`. Codes 06 and 07 reached only the containment step's
+  read, which `XhciTolerance` 0 never takes; the health poll's USBSTS read
+  meets them too.
+- **Round 2** (`b0dd28c`): a finite all-ones was spent by the health poll's
+  read, which a failed controller no longer takes, so it never ended; it is
+  now a per-pass snapshot (`XhciInjDeadPass`) spent one pass at a time
+  whatever reads it, and a command that needs a live controller is refused
+  on a failed one (`XhciInjNeedsLive`).
+
+To be read: the second part, the soft retry's and the device cycle's faults
+(codes 08 to 18, record 17 section 5's remaining rows).
+
+## Review findings on code already in the branch
+
+Review during the later Phase 35 tasks found these in code that earlier
+tasks had left in the branch; each fixed on 2026-10-07 is in design record
+17's revision 9.
+
+- **A deadlock on the first transfer error, on a multiprocessor kernel**
+  (`469b4d8`). `hcdTolCountEvent`, from the 35-T foundation (`9e8fdbf`),
+  wrote its `xfer.error` note through `XhciLogNote`, which takes the
+  controller lock, from the event drain that already holds it: on a
+  multiprocessor kernel the first error completion - a STALL or a
+  Transaction Error - spun for ever at DISPATCH_LEVEL. On a uniprocessor
+  kernel, Windows 98 SE's, a spin lock only raises IRQL, which is why the
+  E460 never showed it. It now writes through `XhciLogNoteLocked`. It was
+  introduced during this release's development and was never in a published
+  release: `2.1.1.0` predates it.
+- **At `XhciTolerance` 0 the root ports' faults went uncounted** (`469b4d8`,
+  `8b54faa`, `511b3a3`). The port path returned before counting, so a dump
+  taken for record 17 section 4.11's comparison hid disabled ports and
+  over-currents. Off, they are now counted and nothing acts: PEC and OCC
+  once each as change bits, and a power loss with OCC or without it once
+  until PP reads set again (`XhciTolOffOcCount`).
+- **An owed recovery shut the containment out** (`a76637d`, 35-T.6). A
+  command timed out on a window reading all-ones requested the in-place
+  recovery, whose reinitialization failed on the dead registers and whose
+  new start generation restamped the all-ones episode on every pass, so
+  Bus Master Enable was never cleared and neither branch ran. The recovery
+  now waits, owed and uncharged, while all-ones stands and the containment
+  would be admitted (`XhciTolRecoverDefer`), and the containment's admission
+  (`hcdContainAdmitted`) no longer asks `HcInfoStatus`, relying on the
+  layout the start validated.
+- **A held slow request lost its dispatch stamp** (`02ee24d`, 35-T.6). A
+  RESET_PIPE or SYNC request queued for the thread had its stamp
+  overwritten, and the containment's hold stamped it again, so an
+  ABORT_PIPE submitted after it and already run no longer covered it and it
+  stayed held for good. The stamp now moves to `DriverContext[1]` and the
+  hold puts it back.
+- **A hub port's repower re-armed its own budget** (`cd8f744`, 35-T.5).
+  Neither external hub path marked the recovery's disconnect when it
+  powered a port again after an over-current, so a device away for the
+  stable-disconnect interval and back re-armed a spent budget and released a
+  powered hold. `HcdHubPortLook` and `HcdSsHubPortLook` now mark it
+  (`HcdTolLocRecovery`) before setting PORT_POWER.
+- **Not fixed: a pinned teardown can wait for ever.** After the controller
+  became unreadable, if the containment found no Bus Master Enable proof and
+  pinned the buffer, and an adapter-channel allocation was waiting for map
+  registers the kept transfers hold, a later stop, disable or restart waits
+  for ever in `HcdDmaMapDrain`. Rare, since a 32-bit scatter-gather bus
+  master normally needs no real map registers. The fix proposed is a
+  "channel abandoned" teardown (the adapter, the record and the FDO kept,
+  `hcdMapExecute` safe after the teardown, a later start refused while the
+  request is queued). A known limitation of `2.2.0.0` in the release notes,
+  the README and the package readme; record 17 section 4.6.
+
+**The extension image grows to 256 KB** (`7e95afa`). Once 35-T.2 added its
+fields, the amd64 extension outgrew the 128 KB image `XHCISNAP` keeps it in,
+and `hcd_door.c`'s compile-time check stopped the amd64 build.
+`EXT_IMAGE_MAX` and the check both move to 256 KB, still one static
+allocation.
+
+Host tests read green at `adbc4e3` (`test\run-host-tests.cmd`, 2026-10-07,
+at the reconciliation of the documents).
 
 ## 35-V - the legs
 
@@ -281,6 +493,16 @@ report), the readme template, records 13 (section 6.8), 15 (section 2), 16
 release notes as `TODO(35-V: ...)` markers, which the cut refuses to run
 over. `xhcisnap/README.md` already carried the enumeration notes and the
 HCD region (35.3); its tolerance counters are 35-T.8's.
+
+The same day, once 35-T.2, 35-T.3/4, 35-T.8 and 35-T.9's first part had
+converged, the documents written before that code were reconciled with it
+at `adbc4e3`: design record 17 revision 9 records each departure; the
+release notes, the README and the readme template say what
+`XhciTolerance` 0 still counts, which error the soft retry takes, that a
+spent budget removes the device at the next fault, and the pinned teardown
+as a known limitation; record 13 section 6.8, `implementation-invariants.md`,
+`failure-diagnosis.md` and `source-files.md` follow the code; and this file
+records the four tasks.
 
 ## 35.7 - the cut
 
@@ -312,5 +534,12 @@ To be read after 35.7's cut, on the `2.2.0.0` asset (decisions table,
   round 3: a held stream request lost its endpoint; round 4: a helper
   re-read the PDO's controller; round 5 clean). 35-T.5: rounds 1 to 3 taken
   in `4a9010d`, `82d87fe` and `64461df`, converged at round 4.
+- 35-T.2: round 1 taken in `6c0ecc1`, `35f77b6` and `8fd1f49`; round 2
+  converged. 35-T.3/4: rounds 1 to 3 taken in `18f383f`, `bdc93c0` and
+  `adbc4e3`, converged at round 4. 35-T.8: round 1 taken in `39066c0`,
+  converged at round 4. 35.4's override and 35-T.9's first part: rounds 1
+  and 2 taken in `cade36c` and `b0dd28c`, converged at round 3. What these
+  reviews found in code already in the branch, and its fixes, is "Review
+  findings on code already in the branch".
 - The re-plan and issue 11: round 1 taken in `fadd358`.
 - 35.6: to be read.

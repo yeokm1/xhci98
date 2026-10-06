@@ -79,13 +79,27 @@
 > `hcd_io.c` and `hcd_urb.c` the parked submissions of a contained
 > controller, `hcd_enum.c` the location budgets, the root-port PED and
 > over-current handling and `HcdTolLocCharge`, `hcd_svc.c` the tolerance
-> clock, `hcd_cfg.c` the interval cap and its order with fast polling, and
-> the soft retry, the device cycle and the counters where 35-T.2, 35-T.3/4
-> and 35-T.8 put them). Outside `src\`,
+> clock, `hcd_cfg.c` the interval cap and its order with fast polling;
+> 35-T.2's soft retry in `xhci_xfer.c` (the interception in
+> `XhciXferEvent`, the replay `XhciXferRetryReplay`, the refusal of a
+> pointer above 4 GB `XhciXferEventHighRefused`; `test_xfer`), `hcd_dev.c`
+> (`HcdDevRetryReplay` and the retry's counts) and `hcd_cfg.c` (the thread's
+> `HcdCfgRetryService`, `hcdCfgRetryOne` and `hcdCfgRetryResetEndpoint`, and
+> the quiesce's settle); 35-T.3/4's device cycle in `hcd_dev.c` (the
+> producer `hcdTolCycleEvent`), `hcd_enum.c` (`HcdTolCycleMark`,
+> `hcdCycleResolve`, `hcdCycleService`, the pre-PDO `hcdCycleAfter` and the
+> thread's own wait `hcdThreadControlQuiet`) and `xhci_enum.c` (the
+> `XHCI_ENUM_EV_ABANDONED` outcome; `test_enum`), its decisions in
+> `xhci_tol.c` (`test_tol`); and 35-T.8's counters in `hcd_dev.c`
+> (`hcdTolCountEvent`, `hcdTolSumQueue`), `xhci_snap.c` (the HCD region's
+> header grown to 20 words; `test_snap`), `hcd_door.c` (the terminal reason
+> under the lock, from `xhci_tol.c`'s `XhciTolTerminal`) and `hcd_log.c` (the
+> `tol.*` counter block at a stop). Outside `src\`,
 > `xhciqual\mmiodiag.c` prints each protocol's PSI table and the raw
 > extended-capability chain (host suite `xhciqual\test\test_mmiodiag.c`),
 > `xhciqual\quirks.c` gains the report-only AMD rows, and
-> `xhcisnap\xhcisnap.c` decodes the enumeration notes and the HCD region.
+> `xhcisnap\xhcisnap.c` decodes the enumeration notes and the HCD region,
+> and since 35-T.8 the tolerance state (`print_tol`, `-selftest-tol`).
 > Task 35-T.9 adds the qemu flavour's fault injection,
 > compiled into that flavour alone (`XHCI_FLAVOUR_QEMU`) and into neither
 > image that ships: the pure `xhci_inj.c` / `xhci_inj.h` (the

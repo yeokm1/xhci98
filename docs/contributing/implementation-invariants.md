@@ -350,16 +350,20 @@ code:
 - **A refused code cycles the device** (since `2.2.0.0`, roadmap-hcd task
   35-T.3 and 35-T.4, design record 17 section 4.3; with `XhciTolerance` at
   1). A Transfer Event carrying a refused code on a non-isochronous endpoint,
-  whose slot names a device, marks the device `CycleWanted` with its reason
-  and the location's connect generation, and the controller thread
+  whose slot names a device - an endpoint with no open pipe included, so an
+  Endpoint Not Enabled on a DCI the configuration never opened counts - sets
+  the device's cycle mark (`CycleMark`, only through `HcdTolCycleMark`) with
+  its reason and the location's connect generation, and the controller thread
   re-enumerates it - in any state of the endpoint, since the refused code is
   itself the evidence. A published device is cycled through `HcdEnumCycle`;
   one not yet published, whose control transfers are the enumeration's own,
   through the enumeration executor's `ABANDONED_FOR_CYCLE` outcome, which
   tears the attempt's subtree down once, sets the location's machine `EMPTY`
   and feeds a CONNECT if the location still reads connected. Either is charged
-  to the location's budget of three re-enumerations, and a mark whose device
-  has left or whose location's generation moved is dropped and counted. **No
+  to the location's budget of three re-enumerations; once it is spent the
+  device is removed all the same and the location held (`CyclesRefused`). A
+  mark whose device has left or whose location's generation moved is dropped
+  and counted (`CyclesDropped`). **No
   TD is attributed and none is completed on the event**: the cycle's Disable
   Slot takes back every TRB of the slot whatever the endpoint's state, and the
   re-enumeration resynchronizes the sequence state on both sides, which no
@@ -368,15 +372,24 @@ code:
   control transfer to that device, the mark ends the wait instead of letting
   it time out into a controller reset, and the transfer's record and the
   thread's scratch buffer are not reused until the Disable Slot has
-  completed; a failed Disable Slot sets `ScratchTainted`.
+  completed (`Ep0Stuck`, `ScratchHeld`); a failed Disable Slot sets
+  `ScratchTainted`. The wait keeps one 5000 ms deadline across every wake,
+  polled between 100 ms slices of the event wait, so a timeout lands up to
+  about 100 ms late.
 - **So does a halt with no TD.** A Stall, or a Transaction, Babble or Split
   Transaction error, on a non-isochronous endpoint, that the queue could not
-  match - Foreign by pointer, zero and off-ring pointers included, or
+  match - Foreign by pointer, zero, off-ring and above-4 GB pointers
+  included, or
   Unmatched - whose slot and DCI name an open pipe cycles the device the same
   way, but only once the thread has read that endpoint's context as Halted or
   Error: a stale event against an endpoint that is running costs one context
-  read and nothing more. A streams endpoint's Prime Pipe STALL keeps its own
-  path. Submissions to a Halted endpoint stay published and rung, and the
+  read and nothing more. On a streams endpoint a halt whose pointer no stream
+  ring holds is such a halt; only the Prime Pipe STALL, with a zero pointer,
+  keeps its own path. An endpoint Halted by a Transaction Error that the soft
+  retry holds is the retry's while the queue's head is that deferred TD, and
+  the thread decides once a pass between the retry and a confirmed cycle,
+  the cycle winning (record 17 section 4.3, "As built"); Error always
+  confirms. Submissions to a Halted endpoint stay published and rung, and the
   controller ignores the doorbell until a recovery, as before.
 - **The deviation this superseded.** Up to `2.1.1.0` nothing acted on a
   refused code or a halt with no TD. The miniport's recovery for code 12 had
@@ -386,9 +399,10 @@ code:
   happened to send reached a Stop Endpoint, and otherwise the device stayed
   dead until it was replugged. At `XhciTolerance` 0 that is still the
   handling: no event marks a device and the refused code is counted only.
-  `XhciSlotTransferEvent` still logs every non-ordinary code with its Slot ID
-  and DCI, `XhciLogErrorBudget` is called from the transfer engine's error
-  path, and the snapshot carries a count of every completion code and the
+  `XhciSlotTransferEvent` counts every completion code and logs the first
+  four records of each error code with its Slot ID and DCI
+  (`hcdTolCountEvent`, under `XhciLogErrorBudget`), and the snapshot carries
+  a count of every completion code and the
   cycles by reason (record 17 section 4.8), so a dump says which fault a
   cycle answered.
 - **The list of fatal codes lives in `XhciXferCodeInfo` and nowhere else.**
