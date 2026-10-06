@@ -164,10 +164,40 @@ table on QEMU's PORTSC and events; noted `qemu.psi.e460`. Host vectors in
 `build-and-test.md`, "The qemu flavour's test aids", is the operator's
 reference.
 
-To be read: 35.1's change on the QEMU legs of 35-V - SuperSpeed devices
-directly and behind a SuperSpeed hub on Windows 98 SE and the Windows 2000
-SP4 guest, reading as the `2.1.1.0` build, QEMU's controller publishing no
-table - and the same with the override set.
+**The regression** (2026-10-07, development host A, QEMU 11.1.0 TCG,
+`qemu-xhci,p2=4,p3=4`; the tree at `26e8aac` with `469b4d8` taken in, the
+`qemu` flavour and, on Windows 98 SE, the `release` flavour too; no device
+was attached to a build without `469b4d8`). Passed: QEMU's controller
+publishes no PSI table (PSIC 0), and every leg read as `2.1.1.0`'s
+published `release-x86` build, run beside it on the same guests.
+
+| Leg | SuperSpeed stick at root port 1, `fc` | `usb-hub` and a stick behind it, `fc` | SuperSpeed unplug and replug, `fc` | Result |
+|---|---|---|---|---|
+| Windows 98 SE, `2.1.1.0` | pass, 5000 Mb/s | pass, 12 Mb/s | pass | the baseline |
+| Windows 98 SE, `qemu` flavour | pass, the same wizards | pass | pass | pass |
+| Windows 98 SE, `release` flavour | pass | pass | - | pass |
+| Windows 2000 SP4, two processors, Driver Verifier `0x1B`, `qemu` flavour | pass | pass | pass | pass; a restart with every device attached came back with no problem code; Verifier `AllocationsFailed: 0` |
+| Windows 2000 SP4, two processors, Driver Verifier, `2.1.1.0` | pass | pass | - | the baseline |
+
+PORTSC and the Output Slot Contexts read the same on both builds (port 1
+`00001203`, speed ID 4; the hub's port 7 `00000603`, speed ID 1). 35.3's
+notes and the HCD region were read in `XHCISNAP` in both guests and both
+flavours: `enum.port.speed` named ID 4 SuperSpeed "by default IDs (no
+table)" - the source for PSIC 0, never "listed" nor 35.1's fallback - at
+5000 Mbit/s, Enable Slot succeeded at the first attempt, and the region
+showed port 1 Bound, no failure cause, USB 3, warm resets 0; after the
+replug the notes read disconnect, connect, reset, speed, rate, slot and end
+afresh within their budget. The SMP guest's slow Start menu and start-up
+were the vehicle's: the same on `2.1.1.0`, both processors idle in the
+kernel's idle loop. On that guest `XHCISNAP` needs `-c 1`, since its
+launcher also gives it an EHCI controller whose `usbport.sys` takes the
+first device name.
+
+Not read on QEMU: a SuperSpeed device behind a SuperSpeed hub. QEMU has no
+SuperSpeed hub model - its `usb-hub` is Full Speed, as `run-30.md` found -
+so the clause has no vehicle here; 35.2 read it on the E460 with the real
+USB 3 hub (the stick behind its SuperSpeed half, ATTO and a compare). The
+override set is read with 35-V.
 
 ## 35.5 - `XhciIntelPortSwitch` 2
 
