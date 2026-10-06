@@ -1,8 +1,9 @@
 # Controller tolerance
 
 Design record for roadmap-hcd tasks 35-T.0 to 35-T.9 (Phase 35, release
-`2.2.0.0`). Revision 5, 2026-10-06, written before code; revision 4 is
-`9163f77`, and revision 5 answers review round 5 (section 10). Revision 0
+`2.2.0.0`). Revision 6, 2026-10-06, written before code; revision 4 is
+`9163f77` and revision 5 `74d14e8`, and revisions 5 and 6 answer review
+rounds 5 and 6 (section 10). Revision 0
 (`60f8f64`) drafted the findings and the shape; revision 1 (`4a63a35`)
 answered review round 1; revision 2 (`67a3f75`) rested the recoveries on
 the machinery as it is and answered round 2; revision 3 (`e8d2c0e`)
@@ -13,7 +14,7 @@ answers review round 4: a clock of the driver's own (section 4.0), the
 power gate taken explicitly (4.1, 4.6), the soft retry intercepted before
 the engine's terminal mutations and generation-checked (4.2), the cycle
 before a PDO exists (4.3), and containment that drains only after its proof
-(4.6). Section 10 maps every finding of the five rounds to where it is
+(4.6). Section 10 maps every finding of the six rounds to where it is
 answered. Nothing below is converged.
 
 ## 1. What is asked, and what is not
@@ -145,14 +146,20 @@ changes them.
   and 103) - whose DPC increments the count and arms the timer again,
   relative, for the next 100 ms. A relative timer is unaffected by a change
   of the system time, which is why the per-port budget already uses one
-  (`hcd_enum.c`, lines 2007 to 2013), and it never fires early, only late:
-  so N ticks counted means at least N times 100 ms have elapsed, and every
-  interval of this design can only run long, never short. A ULONG count
-  wraps after thirteen years. The timer is armed at start and closed at stop
-  by the same rule as the frame timer's (`hcd_svc.c`): cancelled, and its
-  DPC counted in flight and waited for. Every interval of this design is
-  measured on it, as "the count has advanced by at least N + 1 since the
-  stamp", the extra tick because the stamp may be taken just before a tick.
+  (`hcd_enum.c`, lines 2007 to 2013). It can expire up to one system clock
+  period early, and the error accumulates over re-arms, so a tick is not
+  credited as 100 ms. The clock period cannot be read on Windows 98's import
+  evidence (`KeQueryTimeIncrement` has no row), so each tick is credited at
+  its lower bound against the slowest clock interrupt a PC runs, the 8254
+  timer at its power-on 18.2 Hz, a period under 55 ms: at least 45 ms per
+  tick. An interval of T ms is therefore counted as `ceil(T / 45) + 1`
+  ticks - the extra tick because the stamp may be taken just before one -
+  and can only run long, never short, by up to about a factor of 2.2. A
+  ULONG count wraps after thirteen years. The timer is armed at start and
+  closed at stop by the same rule as the frame timer's (`hcd_svc.c`):
+  cancelled, and its DPC counted in flight and waited for. Host vectors
+  cover an interval's tick count at its boundary and the accumulated early
+  expiry of every tick at the 55 ms bound.
 - The controller's power gate (`HcdPowerGateEnter` and `HcdPowerGateLeave`,
   `hcd_ctl.c` line 560) excludes power transitions. The thread's health poll
   (`hcdPoll`) runs before the thread takes it, and `hcdRecover` takes it
@@ -177,12 +184,14 @@ generation (a counter every drain pass increments, so a ring that wrapped
 and came back to the same index is not mistaken for one that never moved),
 the start generation (bumped by every start and in-place recovery), and the
 time first seen on the tolerance clock. The drain is queued when the same
-observation - all four equal - has stood while the clock advanced by at least
-two ticks, so for at least 100 ms: the controller wrote
+observation - all four equal - has stood for the backstop interval, 100 ms
+counted as section 4.0 says (four ticks): the controller wrote
 an event and nothing has drained it since. An event pending for less is
 left to the interrupt, so moderation and an interrupt in flight are not
-raced. A lost interrupt is drained at the first pass at least 100 ms after
-the pass that first saw it; the thread's own pacing sets how long after.
+raced. A lost interrupt is drained at the first pass after the fourth tick
+since the pass that first saw it, so at least 100 ms and, at the usual
+clock rates, about 300 to 400 ms after it; the thread's own pacing adds to
+that.
 
 The queue goes through the ISR's admission: `DpcsInFlight` counted before
 `KeInsertQueueDpc` and rolled back on a refusal, nothing once `DpcClosed`
@@ -324,12 +333,19 @@ paths:
   continuations - the next control transfer after a step whose failure is
   otherwise tolerated, such as the BOS read (`xhci_enum.c`, lines 282 to
   295) - and its automatic retries (`hcd_enum.c`, lines 2044 to 2065).
-  The executor then performs one complete teardown of the attempt, the
-  same subtree teardown an ordinary failure runs (`hcd_enum.c`, line
-  1899), which disables the slot and frees the device record and its
-  DCBAA entry; charges the location's budget once; and, if CCS is still
-  set and the budget allows, runs the location's connect again as a fresh
-  connect. This is the pre-PDO cycle.
+  One handler, at the top of the executor where an attempt's outcome is
+  taken, then runs once per attempt, guarded by the attempt's own
+  done-once mark: the subtree teardown an ordinary failure runs
+  (`hcd_enum.c`, line 1899), which disables the slot and frees the device
+  record and its DCBAA entry; then the initiating location's own machine,
+  which `hcdSubtreeGo` leaves to its caller (`hcd_enum.c`, lines 2975 to
+  2977), is set to `EMPTY` with its slot id and device cleared - not left in
+  the descriptor or BOS state the attempt reached, from which a CONNECT is
+  ignored, since CONNECT starts an enumeration only from `EMPTY` or
+  `FAILED` (`xhci_enum.c`, lines 167 to 175), and not `FAILED`, which waits
+  for the next connect change; then the location's budget is charged once;
+  and, if a fresh PORTSC read shows CCS still set and the budget allows, a
+  CONNECT is fed to the now-`EMPTY` machine. This is the pre-PDO cycle.
 
 **The thread's own wait.** If the thread is waiting on its own control
 transfer to the device when the mark arrives, the mark ends that wait: it
@@ -428,10 +444,16 @@ step contains the controller, in this order:
    - a refusal would complete `DEVICE_GONE`, which `XhciPipeNtStatus` maps
    to `STATUS_DEVICE_NOT_CONNECTED` on a PDO that is not closing
    (`hcd_io.c`, lines 2304 to 2324), the status Windows 98 SE's
-   `hidclass.sys` resubmits on at once. A parked request is completed
-   `STATUS_CANCELLED` when it is cancelled, or when its device is dropped
-   or removed, as a parked request is today. No transfer already submitted
-   is completed and no mapping is released in this step.
+   `hidclass.sys` resubmits on at once. A parked request is released
+   exactly as one is today: completed `STATUS_CANCELLED` when it is
+   cancelled, when an abort that covers it runs (`hcd_urb.c`, line 650),
+   or when its PDO is stopped or removed (`hcd_pdo.c`, lines 509 and 2200);
+   dropping the device does not itself release it. Where `HcdIoPark`
+   declines (`hcd_io.c`, line 2037), the request is completed as the
+   deferred refusal already chooses for those two cases: `STATUS_CANCELLED`
+   for a request already cancelled, `STATUS_DELETE_PENDING` for a PDO that
+   is closing - neither is `STATUS_DEVICE_NOT_CONNECTED`. No transfer
+   already submitted is completed and no mapping is released in this step.
    `HcdIoDeviceDrain` is not called yet, because it drains as well as
    marking Gone (`hcd_io.c`, lines 1898 to 1912).
 2. **Prove DMA stopped.** The thread reads PCI configuration space. If the
@@ -718,3 +740,11 @@ Round 5:
 | 5 `Unreadable` refusals completed as `STATUS_DEVICE_NOT_CONNECTED` | high | 4.6: new requests parked, cancellable, not refused |
 | 6 The second-error injection lost coherence | medium | section 5: another real Stop and the emulated Halted state reinstated first |
 | 7 Retry exhaustion had two routes | low | 4.2: never intercepted; the thread never sees a spent TD |
+
+Round 6:
+
+| Finding | Severity | Answered in |
+|---|---|---|
+| 1 A relative timer can expire up to one clock period early, cumulatively | medium | 4.0: each tick credited at 45 ms against the slowest PC clock, intervals counted as `ceil(T / 45) + 1` ticks |
+| 2 The pre-PDO teardown left the location's machine where a CONNECT is ignored | high | 4.3: one handler sets it `EMPTY` with its slot and device cleared, once per attempt, before the CONNECT |
+| 3 Parked requests' release triggers misstated; `HcdIoPark` can decline | low | 4.6: today's triggers named; the declined cases completed `STATUS_CANCELLED` or `STATUS_DELETE_PENDING` |
