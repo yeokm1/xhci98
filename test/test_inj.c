@@ -875,6 +875,17 @@ static void test_stop_verdict(void)
              XHCI_INJ_STOP_BROKEN, "the event names another TRB");
     CHECK_EQ(XhciInjStopVerdict(0x3000, first, after, 1, 8, 0, 0, 0, 0),
              XHCI_INJ_STOP_BROKEN, "somewhere else entirely");
+
+    /* 35-V defect 1: a TD in a 64-TRB ring's last usable slot (62); QEMU's
+     * fetch-ahead stops on the Link TRB (63), not on slot 0. */
+    CHECK_EQ(XhciInjAfterPA(0x2000, 5), 0x2060, "the next slot");
+    CHECK_EQ(XhciInjAfterPA(0x2000, 62), 0x23F0, "the Link TRB, not slot 0");
+    CHECK_EQ(XhciInjStopVerdict(0x23F0 | 1, 0x23E0, XhciInjAfterPA(0x2000, 62),
+                                1, 8, 1, 0x23E0, XHCI_CC_STOPPED, 8),
+             XHCI_INJ_STOP_REPOINT, "fetched ahead onto the Link TRB");
+    CHECK_EQ(XhciInjStopVerdict(0x23F0, 0x23E0, 0x2000, 1, 8, 1, 0x23E0,
+                                XHCI_CC_STOPPED, 8),
+             XHCI_INJ_STOP_BROKEN, "the wrapped next index was the defect");
 }
 
 static void test_ep0(void)

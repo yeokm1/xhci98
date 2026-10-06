@@ -363,6 +363,15 @@ ULONG XhciInjStopVerdict(ULONG ctxDeqPA, ULONG firstPA, ULONG afterPA,
                          ULONG single, ULONG firstLen, ULONG seen,
                          ULONG seenPA, ULONG seenCode, ULONG seenResidual);
 
+/*
+ * XhciInjStopVerdict's `afterPA` for a TD whose last TRB is at `lastIndex`
+ * of the ring at `basePA`: where QEMU's fetch leaves its dequeue, the next
+ * slot of the segment. After the ring's last usable slot that is the Link
+ * TRB, not the ring's next TRB at index 0: QEMU follows a Link only when it
+ * fetches the TRB beyond it (hcd-xhci.c, xhci_ring_fetch).
+ */
+ULONG XhciInjAfterPA(ULONG basePA, ULONG lastIndex);
+
 /* Arm an EP0 fault: `left` injections (XhciInjLostCount's), at `port`. */
 VOID XhciInjEp0Arm(PXHCI_INJ_EP e, ULONG fault, ULONG port, ULONG left);
 

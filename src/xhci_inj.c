@@ -511,6 +511,11 @@ ULONG XhciInjStopVerdict(ULONG ctxDeqPA, ULONG firstPA, ULONG afterPA,
     return XHCI_INJ_STOP_BROKEN;
 }
 
+ULONG XhciInjAfterPA(ULONG basePA, ULONG lastIndex)
+{
+    return basePA + (lastIndex + 1UL) * XHCI_TRB_BYTES;
+}
+
 VOID XhciInjEp0Arm(PXHCI_INJ_EP e, ULONG fault, ULONG port, ULONG left)
 {
     e->Ep0Want = (left != 0) ? fault : 0UL;

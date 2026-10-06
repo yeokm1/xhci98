@@ -1222,7 +1222,12 @@ in what the text left open:
   recognises exactly that case (a one-TRB TD, Stopped with nothing moved,
   the dequeue on the next TRB) and puts the dequeue back with a real Set TR
   Dequeue before it injects; anything else abandons the attempt and counts
-  it, as the text says.
+  it, as the text says. For a TD in the ring's last usable slot "the next
+  TRB" is the Link TRB, which QEMU follows only when it fetches beyond it
+  (`XhciInjAfterPA`); read as the ring's next TD slot, index 0, that case
+  was abandoned, the stop having already dropped the fetched TD, and the
+  TD was stranded behind QEMU's dequeue for good (35-V, defect candidate
+  1).
 - **The races' ring is the layer's own.** The HID class driver's reads are
   already posted, so no submission arrives on cue; the layer rings the
   endpoint itself, the same doorbell write. The race runs only for the soft

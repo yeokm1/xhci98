@@ -706,7 +706,7 @@ static ULONG hcdInjStop(PHCD_CONTROLLER hc, ULONG token, PULONG firstPA,
         dcs = ring->Base[head->FirstIndex].Control & XHCI_TRB_CYCLE;
         verdict = XhciInjStopVerdict(
             hcdInjCtxDequeue(hc, hc->InjSlot, hc->InjDci), first,
-            XhciRingTrbPA(ring, XhciRingNextIndex(ring, head->LastIndex)),
+            XhciInjAfterPA(ring->BasePA, head->LastIndex),
             head->TrbCount == 1, len, seen, seenPA, seenCode, seenResidual);
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
