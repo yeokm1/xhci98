@@ -2513,6 +2513,16 @@ static ULONG hcdTolPortFeed(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG portsc,
          * change bits, so each fault counts once. */
         if ((portsc & XHCI_PORTSC_OCC) != 0) {
             ext->Tol.Stats.OcFaults++;
+        } else if ((portsc & XHCI_PORTSC_PP) == 0) {
+            /* A power loss with no OCC, as the enabled path's
+             * XhciTolOcFault reads it; once until PP returns. */
+            if (!p->TolOffPpLost) {
+                ext->Tol.Stats.OcFaults++;
+                p->TolOffPpLost = 1;
+            }
+        }
+        if ((portsc & XHCI_PORTSC_PP) != 0) {
+            p->TolOffPpLost = 0;
         }
         if (XhciTolPedFault(1, !XhciPortIsUsb3(&ext->PortMap, p->PortId),
                             (portsc & XHCI_PORTSC_PEC) != 0,
@@ -4326,6 +4336,7 @@ VOID HcdEnumInit(PHCD_CONTROLLER hc)
          * (XhciTolStart, HcdHubStart). */
         XhciTolOcInit(&hc->Ports[i].TolOc);
         hc->Ports[i].TolCompletions = 0;
+        hc->Ports[i].TolOffPpLost = 0;
         hc->Ports[i].TolCompletionsSeen = 0;
     }
     hc->SettleDeferredNow = 0;

@@ -672,6 +672,9 @@ typedef struct _HCD_PORT {
      * object for a hub's, set again when its hub is brought up. */
     XHCI_TOL_OC TolOc;
     ULONG TolCompletions;
+    /* At XhciTolerance 0: a power loss already counted, until PP reads
+     * set again (record 17 section 4.11). Set by the start. */
+    ULONG TolOffPpLost;
     ULONG TolCompletionsSeen;
     /* Task 35.3: a root port's enumeration notes and their budget
      * (xhci_enum.h), cleared by the start. Thread only. */
