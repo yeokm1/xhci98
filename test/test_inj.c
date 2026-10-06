@@ -26,6 +26,7 @@
 #define OCC XHCI_PORTSC_OCC
 #define PEC XHCI_PORTSC_PEC
 #define CSC XHCI_PORTSC_CSC
+#define PR  XHCI_PORTSC_PR
 
 static void test_encoding(void)
 {
@@ -161,8 +162,64 @@ static void test_pec(void)
     CHECK_EQ(XhciInjPortscRead(&r, 2, raw), raw | PEC, "still answered");
     CHECK_EQ(XhciInjPortscWrite(&r, 2, PP | PEC), PP | PEC,
              "the acknowledgement passes too");
-    CHECK_EQ(XhciInjPortscRead(&r, 2, raw), raw, "and ends it");
+    CHECK_EQ(XhciInjPortscRead(&r, 2, raw), raw, "and ends PEC");
+    /* PED stays answered clear until the port reset. */
+    CHECK_EQ(r.PedPort, 2, "PED still answered");
+    CHECK_EQ(XhciInjPortscWrite(&r, 2, PP | PR), PP | PR, "the reset passes");
     CHECK_EQ(r.PedPort, 0, "disarmed");
+}
+
+/* QEMU ignores the PED write (hcd-xhci.c, xhci_port_write): the real port
+ * reads enabled, and the layer answers it disabled until the driver's port
+ * reset or the device's departure. */
+static void test_ped_clear(void)
+{
+    XHCI_INJ_REGS r;
+    ULONG raw;
+
+    XhciInjRegsClear(&r);
+    raw = CCS | PED | PP;           /* QEMU kept the port enabled */
+    CHECK_EQ(XhciInjPortscRead(&r, 2, raw), raw, "nothing armed");
+    XhciInjArmPec(&r, 2);
+    CHECK_EQ(XhciInjPortscRead(&r, 2, raw), CCS | PP | PEC,
+             "PED clear, PEC set: the fault the driver needs");
+    CHECK_EQ(XhciInjPortscRead(&r, 1, raw), raw, "on that port only");
+    (VOID)XhciInjPortscWrite(&r, 2, PP | PEC);
+    CHECK_EQ(XhciInjPortscRead(&r, 2, raw), CCS | PP,
+             "acknowledged: PEC ends, PED still clear");
+    (VOID)XhciInjPortscWrite(&r, 2, PP | CSC);
+    CHECK_EQ(XhciInjPortscRead(&r, 2, raw), CCS | PP,
+             "a write without PR keeps it");
+    (VOID)XhciInjPortscWrite(&r, 1, PP | PR);
+    CHECK_EQ(XhciInjPortscRead(&r, 2, raw), CCS | PP,
+             "another port's reset keeps it");
+    CHECK_EQ(XhciInjPortscWrite(&r, 2, PP | PR), PP | PR,
+             "the driver's reset reaches QEMU");
+    CHECK_EQ(XhciInjPortscRead(&r, 2, raw), raw, "the real port from then on");
+    CHECK_EQ(r.PedPort, 0, "disarmed");
+
+    /* A reset before the acknowledgement: PED is real again, PEC still
+     * owed to the driver. */
+    XhciInjArmPec(&r, 3);
+    (VOID)XhciInjPortscWrite(&r, 3, PP | PR);
+    CHECK_EQ(XhciInjPortscRead(&r, 3, raw), raw | PEC, "PEC still owed");
+    (VOID)XhciInjPortscWrite(&r, 3, PP | PEC);
+    CHECK_EQ(r.PedPort, 0, "both ended");
+
+    /* The device leaves: CCS reads clear, and the answer ends with it. */
+    XhciInjArmPec(&r, 4);
+    (VOID)XhciInjPortscWrite(&r, 4, PP | PEC);
+    CHECK_EQ(XhciInjPortscRead(&r, 4, CSC | PP), CSC | PP, "gone");
+    CHECK_EQ(r.PedPort, 0, "ended by the departure");
+    CHECK_EQ(XhciInjPortscRead(&r, 4, raw), raw, "a new device reads real");
+
+    /* Unreadable and CLEAR. */
+    XhciInjArmPec(&r, 2);
+    CHECK_EQ(XhciInjPortscRead(&r, 2, 0xFFFFFFFFUL), 0xFFFFFFFFUL,
+             "unreadable passes, the answer kept");
+    CHECK_EQ(r.PedPort, 2, "kept");
+    XhciInjRegsClear(&r);
+    CHECK_EQ(XhciInjPortscRead(&r, 2, raw), raw, "CLEAR ends it");
 }
 
 static void test_oc(void)
@@ -857,6 +914,7 @@ int main(void)
     test_lost_count();
     test_port_fits();
     test_pec();
+    test_ped_clear();
     test_oc();
     test_dead();
     test_irq_window();

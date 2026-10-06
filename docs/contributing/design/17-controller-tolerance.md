@@ -47,10 +47,11 @@ acts at 0 that is not a tolerance behaviour) and 5 (the second part), and
 section 7. Two of these are DMA-safety and specification rules rather than
 tolerance behaviours, and apply at every `XhciTolerance` value.
 
-Revision 11, 2026-10-07, after `2.2.0.0`, for a finding of the 35-V legs:
-section 4.6 gains an "As built" note (a terminal no recovery acts on
+Revision 11, 2026-10-07, after `2.2.0.0`, for two findings of the 35-V
+legs: section 4.6 gains an "As built" note (a terminal no recovery acts on
 completes the transfers it holds, at every `XhciTolerance` value) and
-section 4.11's note on what acts at 0 a line for it.
+section 4.11's note on what acts at 0 a line for it; section 5's PED row
+says the layer answers PED clear on QEMU, which ignores the PED write.
 
 ## 1. What is asked, and what is not
 
@@ -1125,7 +1126,7 @@ Persistent: injected again on each restart.
 | EP0 before the PDO | the same during the enumeration's own control transfers, before the device is published | the pre-PDO cycle: the attempt failed, the slot disabled, the connect run again |
 | Soft retry, a submission rings during the Reset Endpoint | the layer holds the emulated Reset Endpoint's completion while a submission to the pipe rings it, the real endpoint Stopped and so resumed by that ring | the TD resumed early; the thread's generation check |
 | Soft retry, a second error during the Reset Endpoint | as above; once the submission's ring has resumed the real endpoint, the layer issues another real Stop Endpoint, consumes its Stopped event, confirms the dequeue is still the TD's first TRB (abandoning and counting the attempt if not), reinstates the emulated Halted state and only then delivers a second Transaction Error, all before the held completion is delivered | a newer generation; the thread leaves `RetryWanted` set |
-| Root port PED | a real write of PED 1 to a USB 2.0 root port's PORTSC, which disables the port without setting PEC, since PEC reports the controller's own disable (`xhci-data-structures.md`, line 232); so the layer also answers PEC set in that port's PORTSC reads, until the driver's change-bit acknowledgement writes PEC 1, and injects a Port Status Change Event for the port | the real disabled port, the emulated PEC and its acknowledgement |
+| Root port PED | a real write of PED 1 to a USB 2.0 root port's PORTSC, which disables the port without setting PEC, since PEC reports the controller's own disable (`xhci-data-structures.md`, line 232); so the layer also answers PEC set in that port's PORTSC reads, until the driver's change-bit acknowledgement writes PEC 1, and injects a Port Status Change Event for the port. QEMU ignores the PED write (revision 11), so the layer answers PED clear as well, until the driver's port reset (PR written) or the device's departure (CCS read clear) | the real disabled port (on QEMU, the emulated PED clear and its end at the reset), the emulated PEC and its acknowledgement |
 | Over-current | QEMU has no port power control; PORTSC reads for the port answer PP clear and OCA and OCC set until the layer releases OCA; a write setting PP is recorded and answered | emulated reads |
 | HCH | a real write clearing Run/Stop | real hardware; the in-place recovery runs for real |
 | All-ones, proof | the health poll's USBSTS read answers all-ones; configuration space is real | real Bus Master Enable clear and read-back |

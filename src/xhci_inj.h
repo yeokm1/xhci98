@@ -57,7 +57,7 @@
 /* The faults (record 17 section 5's table). */
 #define XHCI_INJ_NONE            0UL  /* no fault (a refused command)     */
 #define XHCI_INJ_LOST_IRQ        1UL  /* arg interrupts lost; 0 one, 255 all */
-#define XHCI_INJ_PED             2UL  /* real PED write, PEC answered        */
+#define XHCI_INJ_PED             2UL  /* PED write, PEC set, PED clear       */
 #define XHCI_INJ_OC              3UL  /* PP clear, OCA and OCC answered      */
 #define XHCI_INJ_OC_RELEASE      4UL  /* OCA answered clear from now on      */
 #define XHCI_INJ_HCH             5UL  /* real Run/Stop clear                 */
@@ -169,7 +169,9 @@ typedef struct _XHCI_INJ_TRIGGER {
 /*
  * The register answers the layer gives in place of the hardware's. A port's
  * PEC is answered set from the layer's PED write until the driver's
- * acknowledgement; an over-current port reads PP clear (OCA and OCC set
+ * acknowledgement, and its PED answered clear - QEMU ignores the write -
+ * until the driver's port reset (PR written) or the device's departure
+ * (CCS read clear); an over-current port reads PP clear (OCA and OCC set
  * while held) until the driver's PP write after the release, PP itself never
  * reaching the real port while emulated. USBSTS answers all-ones to the
  * health poll and the containment step for DeadLeft passes
@@ -179,6 +181,7 @@ typedef struct _XHCI_INJ_TRIGGER {
 typedef struct _XHCI_INJ_REGS {
     ULONG PedPort;
     ULONG PecHeld;
+    ULONG PedClear;
     ULONG OcPort;
     ULONG OcActive;
     ULONG OcaHeld;
@@ -214,8 +217,10 @@ VOID XhciInjReleaseOc(PXHCI_INJ_REGS r);
 /* `reads` 0 means until CLEAR. */
 VOID XhciInjArmDead(PXHCI_INJ_REGS r, ULONG reads, ULONG noProof);
 
-/* The PORTSC a read answers. An unreadable PORTSC passes unchanged. */
-ULONG XhciInjPortscRead(const XHCI_INJ_REGS *r, ULONG port, ULONG raw);
+/* The PORTSC a read answers. An unreadable PORTSC passes unchanged. A read
+ * with CCS clear on the PED port ends the PED-clear answer: the device has
+ * gone. */
+ULONG XhciInjPortscRead(PXHCI_INJ_REGS r, ULONG port, ULONG raw);
 
 /* A PORTSC write: the acknowledgements and PP writes it carries are taken,
  * and the value the hardware is given returned. */

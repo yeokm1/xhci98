@@ -16,8 +16,10 @@
  *                 for `arg` interrupts (255: until CLEAR); 35-T.1's backstop
  *                 is what delivers the event that waits in the ring
  *   PED           a real write of PED 1 to a USB 2.0 root port, PEC answered
- *                 set in its PORTSC reads until the driver acknowledges it,
- *                 and a Port Status Change Event for the port handed to the
+ *                 set in its PORTSC reads until the driver acknowledges it
+ *                 and PED answered clear - QEMU ignores the write - until
+ *                 the driver resets the port or the device leaves, and a
+ *                 Port Status Change Event for the port handed to the
  *                 drain's own handler (35-T.5)
  *   OC            the port's PORTSC reads answer PP clear and OCA and OCC set;
  *   OC_RELEASE    OCA answered clear from then on, and the driver's PP write
@@ -498,7 +500,9 @@ static ULONG hcdInjHardware(PHCD_CONTROLLER hc, ULONG fault, ULONG wanted)
         KeReleaseSpinLock(&hc->InjLock, oldIrql);
         /* PED is RW1C: writing 1 disables the port, the one way software
          * can, and the controller sets no PEC for it (xhci-data-structures.md,
-         * PORTSC) - which is why PEC is answered here. */
+         * PORTSC) - which is why PEC is answered here. QEMU ignores the
+         * write altogether (hcd-xhci.c, xhci_port_write), so PED is
+         * answered clear too; on hardware the write is the fault. */
         XhciWritePortsc(ext, port, XhciPortscDisable(portsc));
         hcdInjPortEvent(hc, port);
         break;

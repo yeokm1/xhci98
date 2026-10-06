@@ -6309,7 +6309,7 @@ in the guest fires a fault at run time by writing it:
 | Code | Fault | How it is made, and the argument |
 |---|---|---|
 | `01` | Lost interrupt (35-T.1) | the ISR acknowledges as ever and does not queue the drain, for `arg` interrupts (0 is one, `FF` every one until `FF` CLEAR); the backstop delivers the waiting event |
-| `02` | Root port PED (35-T.5) | a real write of PED 1 to the port; its PORTSC reads answer PEC set until the driver's acknowledgement; a Port Status Change Event for the port handed to the drain's own handler. Persistent: fire it again after each re-enumeration, four times in all |
+| `02` | Root port PED (35-T.5) | a real write of PED 1 to the port, which QEMU ignores (`hcd-xhci.c`, `xhci_port_write`), so its PORTSC reads also answer PED clear until the driver's port reset (PR written) or the device's departure (CCS read clear), and PEC set until the driver's acknowledgement; a Port Status Change Event for the port handed to the drain's own handler. Persistent: fire it again after each re-enumeration, four times in all |
 | `03` | Over-current (35-T.5) | the port's PORTSC reads answer PP clear and OCA and OCC set; PP never leaves the real port |
 | `04` | Over-current released | OCA answered clear from now on; the driver's repower ends the emulation. Transient: `04` within the over-current wait (5 s, counted long); persistent: never send it |
 | `05` | HCH (35-T.6) | a real write clearing Run/Stop; the in-place recovery runs for real. Persistent: fire it again after each recovery, four times inside ten minutes |

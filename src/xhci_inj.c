@@ -42,6 +42,7 @@ VOID XhciInjRegsClear(PXHCI_INJ_REGS r)
 {
     r->PedPort = 0;
     r->PecHeld = 0;
+    r->PedClear = 0;
     r->OcPort = 0;
     r->OcActive = 0;
     r->OcaHeld = 0;
@@ -74,6 +75,7 @@ VOID XhciInjArmPec(PXHCI_INJ_REGS r, ULONG port)
 {
     r->PedPort = port;
     r->PecHeld = 1;
+    r->PedClear = 1;
 }
 
 VOID XhciInjArmOc(PXHCI_INJ_REGS r, ULONG port)
@@ -97,7 +99,15 @@ VOID XhciInjArmDead(PXHCI_INJ_REGS r, ULONG reads, ULONG noProof)
     r->NoProof = noProof ? 1UL : 0UL;
 }
 
-ULONG XhciInjPortscRead(const XHCI_INJ_REGS *r, ULONG port, ULONG raw)
+/* The PED emulation's end, once neither half is answered. */
+static VOID xhciInjPedEnd(PXHCI_INJ_REGS r)
+{
+    if (!r->PecHeld && !r->PedClear) {
+        r->PedPort = 0;
+    }
+}
+
+ULONG XhciInjPortscRead(PXHCI_INJ_REGS r, ULONG port, ULONG raw)
 {
     ULONG value;
 
@@ -105,8 +115,19 @@ ULONG XhciInjPortscRead(const XHCI_INJ_REGS *r, ULONG port, ULONG raw)
     if (raw == 0xFFFFFFFFUL || port == 0) {
         return raw;
     }
+    if (r->PedClear && port == r->PedPort &&
+        (raw & XHCI_PORTSC_CCS) == 0) {
+        /* The device has gone: the real port is disabled now too. */
+        r->PedClear = 0;
+        xhciInjPedEnd(r);
+    }
     if (r->PecHeld && port == r->PedPort) {
         value |= XHCI_PORTSC_PEC;
+    }
+    if (r->PedClear && port == r->PedPort) {
+        /* QEMU ignores a PED write (hcd-xhci.c, xhci_port_write), so the
+         * real port stays enabled; the driver must read it disabled. */
+        value &= ~XHCI_PORTSC_PED;
     }
     if (r->OcActive && port == r->OcPort) {
         value &= ~XHCI_PORTSC_PP;
@@ -128,7 +149,13 @@ ULONG XhciInjPortscWrite(PXHCI_INJ_REGS r, ULONG port, ULONG value)
     if (r->PecHeld && port == r->PedPort &&
         (value & XHCI_PORTSC_PEC) != 0) {
         r->PecHeld = 0;
-        r->PedPort = 0;
+        xhciInjPedEnd(r);
+    }
+    if (r->PedClear && port == r->PedPort &&
+        (value & XHCI_PORTSC_PR) != 0) {
+        /* The driver's port reset re-enables the real port. */
+        r->PedClear = 0;
+        xhciInjPedEnd(r);
     }
     if (r->OcActive && port == r->OcPort) {
         if ((value & XHCI_PORTSC_OCC) != 0) {
