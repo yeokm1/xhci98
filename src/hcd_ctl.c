@@ -871,6 +871,13 @@ static ULONG hcdContainProve(PXHCI_EXTENSION ext)
     return (command & XHCI_PCI_COMMAND_BME) == 0 ? 1UL : 0UL;
 }
 
+/* The same proof for an invalidation no halt or HCRST has proven
+ * (HcdEnumService). IRQL: PASSIVE_LEVEL. */
+ULONG HcdCtlProveDmaStopped(PXHCI_EXTENSION ext)
+{
+    return hcdContainProve(ext);
+}
+
 /*
  * The all-ones containment (35-T.6, design record 17 section 4.6): a step of
  * its own after hcdRecover, under the power gate as that is, admitted only on

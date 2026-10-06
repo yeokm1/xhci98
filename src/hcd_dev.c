@@ -27,10 +27,19 @@
 /* Slots and commands                                                       */
 /* ----------------------------------------------------------------------- */
 
-/* IRQL: <= DISPATCH_LEVEL (init sequence). */
+/* HCRST has completed (xhci_init.c): no slot, ring or TD the previous run
+ * held is followed any more, which is the proof an invalidation raised on a
+ * controller not shown halted waits for (XhciSlotInvalidateAll). IRQL:
+ * <= DISPATCH_LEVEL (init sequence), controller lock released. */
 VOID XhciSlotInit(PXHCI_EXTENSION ext)
 {
-    UNREFERENCED_PARAMETER(ext);
+    PHCD_CONTROLLER hc;
+    KIRQL oldIrql;
+
+    hc = HcdControllerFromExt(ext);
+    XhciControllerLockAcquire(ext, &oldIrql);
+    hc->SlotsUnproven = 0;
+    XhciControllerLockRelease(ext, oldIrql);
 }
 
 /* A slot command's Command Completion Event, from the event DPC. IRQL:
@@ -630,14 +639,20 @@ VOID XhciSlotResumeSweep(PXHCI_EXTENSION ext)
 
 /* Every slot is gone (HCRST, stop, recovery): the thread drops the records
  * and settles the ports at its next powered pass (hcd_enum.c,
- * hcdInvalidate). IRQL: <= DISPATCH_LEVEL, controller lock held. */
+ * hcdInvalidate). The recovery and the resume raise it before their own
+ * halt, so a controllerStopped of 0 is remembered: unless the HCRST that
+ * follows completes (XhciSlotInit), the drain is not owed a released
+ * mapping (HcdEnumService). IRQL: <= DISPATCH_LEVEL, controller lock
+ * held. */
 VOID XhciSlotInvalidateAll(PXHCI_EXTENSION ext, ULONG controllerStopped)
 {
     PHCD_CONTROLLER hc;
 
-    UNREFERENCED_PARAMETER(controllerStopped);
     hc = HcdControllerFromExt(ext);
     hc->SlotsInvalidated = 1;
+    if (!controllerStopped) {
+        hc->SlotsUnproven = 1;
+    }
     HcdThreadWake(hc);
 }
 

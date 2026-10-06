@@ -995,6 +995,10 @@ typedef struct _HCD_CONTROLLER {
     ULONG PortCycleSerial[HCD_PORT_COUNT];
     /* Thread requests (hcd_enum.c), under the controller lock. */
     ULONG SlotsInvalidated;         /* HCRST took every slot              */
+    /* An invalidation raised without proof the controller stopped (its
+     * controllerStopped 0) and not yet followed by a completed HCRST
+     * (XhciSlotInit): the drain waits for a proof (HcdEnumService). */
+    ULONG SlotsUnproven;
     ULONG EnumDetachRequested;      /* the root hub is going               */
     KEVENT EnumDetachDone;
     ULONG ScratchTainted;           /* a timed-out EP0 transfer may DMA    */
@@ -1285,6 +1289,7 @@ VOID HcdStopController(PHCD_CONTROLLER hc);
 VOID HcdControllerInitObjects(PHCD_CONTROLLER hc);
 VOID HcdThreadWake(PHCD_CONTROLLER hc);
 VOID HcdControllerFail(PHCD_CONTROLLER hc);
+ULONG HcdCtlProveDmaStopped(PXHCI_EXTENSION ext);
 VOID HcdPowerGateEnter(PHCD_CONTROLLER hc);
 VOID HcdPowerGateLeave(PHCD_CONTROLLER hc);
 ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc);

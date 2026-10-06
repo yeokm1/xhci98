@@ -4401,6 +4401,7 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
     KIRQL oldIrql;
     ULONG serial;
     ULONG invalidated;
+    ULONG unproven;
     ULONG detach;
     ULONG asked;
     ULONG outstanding;
@@ -4420,8 +4421,10 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
     asked = hc->SettleAsked;
     outstanding = !XhciEnumSettleReached(hc->SettleDone, asked);
     invalidated = 0;
+    unproven = 0;
     if (powered) {
         invalidated = hc->SlotsInvalidated;
+        unproven = hc->SlotsUnproven;
         hc->SlotsInvalidated = 0;
     }
     XhciControllerLockRelease(ext, oldIrql);
@@ -4430,7 +4433,21 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
      * detach after it would otherwise send and, refused, turn into another
      * reset (round 3, finding 2). */
     if (invalidated) {
-        hcdInvalidate(hc);
+        /* Raised by a recovery or a resume before its halt, which then
+         * never completed an HCRST (the halt timed out, or an earlier step
+         * refused): the controller may still be following its rings and
+         * still be mastering into the clients' buffers, so the drain
+         * needs 35-T.6's proof first (design record 17 section 4.6) and,
+         * without it, keeps every transfer and mapping on a pinned buffer.
+         * A DMA safety rule, not a tolerance behaviour: it applies at every
+         * XhciTolerance value, 0 included. */
+        if (unproven && !HcdCtlProveDmaStopped(ext)) {
+            XhciLogNote(ext, "slots.unproven.pinned", 1);
+            HcdSvcDmaNotStopped(ext);
+            HcdEnumContain(hc, 0);
+        } else {
+            hcdInvalidate(hc);
+        }
     }
     if (detach) {
         hcdDetach(hc, powered);
@@ -4833,6 +4850,7 @@ VOID HcdEnumInit(PHCD_CONTROLLER hc)
         hc->PortCycle[i] = 0;
     }
     hc->SlotsInvalidated = 0;
+    hc->SlotsUnproven = 0;
     /* 35-T.2: the queues that held requests went with their devices. */
     hc->RetryWork = 0;
     hc->EnumDetachRequested = 0;
