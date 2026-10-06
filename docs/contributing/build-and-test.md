@@ -6355,14 +6355,18 @@ state:
   Reset Endpoint leaves - and ends the answers, so the driver's doorbell
   restarts the TD for real; on Error it answers Context State Error (xHCI
   4.6.8 asks for Halted). Set TR Dequeue answers Context State Error on
-  Halted and is sent on Error, ending it (4.6.10). A Disable Slot, Address
-  Device, Reset Device or Configure Endpoint for the slot is sent and ends
-  them; so does the device leaving.
+  Halted and is sent on Error, ending it once it succeeds (4.6.10). A
+  Disable Slot, Address Device or Reset Device for the slot, or a Configure
+  Endpoint that deconfigures it or whose Input Control Context Drop or Add
+  flags name the endpoint, is sent and ends them once it succeeds; a
+  Configure Endpoint for the slot's other endpoints (another function of a
+  composite device) leaves them standing, and so does any of these that
+  fails. The device leaving ends them too.
 
 | Code | Fault | How it is made | Transient (cleared within the budget) | Persistent |
 |---|---|---|---|---|
 | `08` | Transaction Error | the stop, then a Transaction Error for the TD (pointer its first TRB, residual its length); Halted answered until the driver's Reset Endpoint (with TSP 1, the soft retry's) | `arg` 1 to 3: diverted each time (`RetryDiverts`, `RetryResets`), the TD restarted after each and completed when the pointer next moves, data intact (`RetryRecovered`) | `arg` 4 or more: the fourth takes today's path, `USBD_STATUS_DEV_NOT_RESPONDING` (`RetryExhausted`), and the class driver's own reset meets the emulated Halted endpoint; `FF` repeats on every TD |
-| `09` | Reset Endpoint failing | as `08`, the soft retry's Reset Endpoint answered Context State Error, Halted kept | `hcdCfgFault`'s real path, as today: for the published device the target is, a cycle of its location (`HcdEnumCycle`); the answers end at its Disable Slot | the same on each re-enumerated device. **Departs from record 17's "the controller window's terminal"**: that is `hcdCfgFault`'s answer for a device with no PDO (a controller reset), and the target always has one; such a cycle is not charged to a budget, so there is no terminal |
+| `09` | Reset Endpoint failing | as `08`, the soft retry's Reset Endpoint answered Context State Error, Halted kept | `hcdCfgFault`'s real path, as today: the device is still present (`HcdHubPathPresent`), so the controller recovery is requested and charged to the recovery window (`XhciTolWindowAdmit`) - one recovery, whose invalidation ends the answers, the device re-enumerated | the layer fires again on each re-enumerated device: the recovery window's terminal, the controller latched failed (three recoveries begun in ten minutes) |
 | `0A` | Refused code | a Bandwidth Overrun (code 18) Transfer Event for the head TD, no stop: the cycle's Disable Slot takes the TD back | the device cycled and working again | after three, the location held |
 | `0B` | Halt with no TD, Halted | the stop, then a Stall with pointer 0; Halted answered | the device cycled and working again | after three, the location held |
 | `0C` | Halt with no TD, Error | the stop, then a Stall whose pointer is the event ring's base (a TRB no transfer ring holds); Error answered | the same | the same |
@@ -6370,7 +6374,7 @@ state:
 | `0E` | Endpoint Not Enabled | a code 12 Transfer Event with pointer, length and ED 0 (as xHCI 4.7 has a doorbell to a Disabled endpoint raise it), no stop | the device cycled and working again | after three, the location held |
 | `0F` | EP0 during the thread's own transfer | armed until the thread's next control transfer to a published device at the port: its doorbell is withheld (`qemu.inj.ep0`) - the TD waits as on a device that never answers - and a Bandwidth Overrun for the TD is delivered, whose mark ends the wait abandoned | the wait ended, the record and the scratch unused until the cycle's Disable Slot, the device cycled | after three, the location held |
 | `10` | EP0 before the PDO | the same at the enumeration's first control transfer to a device not yet published | the pre-PDO cycle: the attempt failed, the slot disabled, the connect run again | after three, the location held |
-| `11` | Soft retry, a ring during the Reset Endpoint | as `08`; the Reset Endpoint held while the layer ends the answers and rings the endpoint, which resumes the TD, then answered Success (`qemu.inj.held.ring`). **The ring is the layer's own, not a submission's**: the HID class driver's reads are already posted, so no submission arrives on cue; the doorbell is the same write | the TD resumed early; the generation unchanged, so the thread rings again (harmless) and clears `RetryWanted` | as `08` |
+| `11` | Soft retry, a ring during the Reset Endpoint | as `08`; the Reset Endpoint held while the layer ends the answers and rings the endpoint, which resumes the TD, then answered Success (`qemu.inj.held.ring`). **The ring is the layer's own, not a submission's**: the HID class driver's reads are already posted, so no submission arrives on cue; the doorbell is the same write. The race runs only for the soft retry's own reset - the pipe not paused, its `RetryWanted` naming the deferred TD still at the queue's head; a reset that yields to an abort, a cancel or a client's reset, or one at `XhciTolerance` 0, is answered Success plainly and nothing is rung, since the TD it would restart may already be retired | the TD resumed early; the generation unchanged, so the thread rings again (harmless) and clears `RetryWanted` | as `08` |
 | `12` | Soft retry, a second error during the Reset Endpoint | as `11`, then, still holding the completion: another real stop, the dequeue confirmed (put back or abandoned as above), Halted answered again and a second Transaction Error delivered and diverted (`qemu.inj.held.second`), then Success | a newer generation: the thread leaves `RetryWanted` set and its next visit resets and rings | as `08` |
 
 `0F` and `10` need a control transfer of the thread's own to happen after

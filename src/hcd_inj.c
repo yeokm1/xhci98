@@ -45,9 +45,15 @@
  *                 Endpoint, answered Success without being sent - the real
  *                 endpoint is Stopped already - and the driver's doorbell
  *                 restarts the TD for real (35-T.2)
- *   RESET_EP_FAIL the same, the Reset Endpoint answered Context State Error
+ *   RESET_EP_FAIL the same, the Reset Endpoint answered Context State Error:
+ *                 hcdCfgFault's real path, which for a device still present
+ *                 requests the controller recovery, charged to the recovery
+ *                 window - persistent, its terminal, the controller latched
+ *                 failed
  *   RACE_RING     the same, the Reset Endpoint held while the layer rings
- *                 the endpoint, as a submission would, resuming it
+ *                 the endpoint, as a submission would, resuming it - only
+ *                 the soft retry's own reset of the TD it still holds; any
+ *                 other reset is answered plainly, nothing rung
  *   RACE_SECOND   the same, then another real stop, the dequeue confirmed
  *                 again, Halted answered again and a second Transaction
  *                 Error delivered, all before the held Reset completes
@@ -76,6 +82,7 @@
 #include "hcd.h"
 #include "hcd_svc.h"
 #include "xhci_hw.h"
+#include "xhci_xfer.h"
 #include "xhci_dbg.h"
 
 #if defined(XHCI_FLAVOUR_QEMU)
@@ -529,15 +536,22 @@ static ULONG hcdInjHardware(PHCD_CONTROLLER hc, ULONG fault, ULONG wanted)
 
 /* The layer's own command, which its command hook lets through.
  * IRQL: PASSIVE_LEVEL (the thread), powered. */
-static ULONG hcdInjOwnCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb)
+static ULONG hcdInjSend(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
+                        PULONG control)
 {
-    ULONG control;
     ULONG code;
 
     hc->InjOwnCmd = 1;
-    code = HcdThreadCommand(hc, trb, &control);
+    code = HcdThreadCommand(hc, trb, control);
     hc->InjOwnCmd = 0;
     return code;
+}
+
+static ULONG hcdInjOwnCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb)
+{
+    ULONG control;
+
+    return hcdInjSend(hc, trb, &control);
 }
 
 /* An injected event handed to the drain and waited for. Returns 1 when the
@@ -785,13 +799,52 @@ static VOID hcdInjHeldSecond(PHCD_CONTROLLER hc)
 }
 
 /*
+ * Whether a Reset Endpoint for the target is the soft retry's own, for the
+ * TD it still holds (XhciInjCommand's `retrySurvives`): the pipe not paused
+ * - every operation that resets a halted endpoint for itself, an abort, a
+ * cancel or a client's reset, pauses it - and RetryWanted naming the TD
+ * the queue still has at its head with its deferred outcome. Read under
+ * the controller lock the queue is kept under. IRQL: PASSIVE_LEVEL.
+ */
+static ULONG hcdInjRetrySurvives(PHCD_CONTROLLER hc, ULONG slot, ULONG dci)
+{
+    PHCD_USB_DEVICE dev;
+    PHCD_PIPE pipe;
+    KIRQL oldIrql;
+    ULONG token;
+    ULONG survives;
+
+    survives = 0;
+    if (slot == 0 || slot > XHCI_MAX_SLOTS || dci < 2 || dci > 31) {
+        return 0;
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    dev = hc->SlotDevice[slot];
+    pipe = (dev != NULL && dev == hc->InjDev && !dev->Gone)
+               ? dev->Pipes[dci]
+               : NULL;
+    if (pipe != NULL && !pipe->Paused && !pipe->Closed &&
+        XhciXferRetryPending(pipe->Queue, &token, NULL) &&
+        XhciXferRetryHeadIs(pipe->Queue, token)) {
+        survives = 1;
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    return survives;
+}
+
+/*
  * Every command the thread issues (hcd_enum.c, hcdCommand), before it is
  * sent: the layer's own pass, and so does everything that does not meet
  * the answered endpoint (XhciInjCommand). A Reset Endpoint or Set TR
  * Dequeue the answers cover is completed here without reaching the
  * controller - `*code`, and a Command Completion's DW3 in `*control` -
- * and a held one after the race it holds for. Returns 1 when answered.
- * IRQL: PASSIVE_LEVEL (the thread), powered.
+ * and a held one after the race it holds for, which runs only for the
+ * soft retry's own reset (hcdInjRetrySurvives). A command that ends the
+ * answers only by succeeding (a Disable Slot, a Configure Endpoint that
+ * drops or adds the endpoint, its Address Device or Reset Device, a Set TR
+ * Dequeue leaving Error) is sent from here, once, and its completion
+ * returned; the answers end on its Success. Returns 1 when this function
+ * produced the completion. IRQL: PASSIVE_LEVEL (the thread), powered.
  */
 ULONG HcdInjCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb, PULONG control,
                     PULONG code)
@@ -799,15 +852,44 @@ ULONG HcdInjCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb, PULONG control,
     KIRQL oldIrql;
     ULONG verdict;
     ULONG answer;
+    ULONG icc;
+    ULONG icDrop;
+    ULONG icAdd;
+    ULONG survives;
+    ULONG type;
 
     if (hc->InjOwnCmd || hc->InjEp.Slot == 0) {
         return 0;
     }
+    type = XHCI_TRB_GET_TYPE(trb->Control);
+    icDrop = 0;
+    icAdd = 0;
+    if (type == XHCI_TRB_TYPE_CONFIGURE_EP &&
+        XhciInputControlContextOffset(&hc->Hc.Layout, &icc) ==
+            XHCI_LAYOUT_OK) {
+        /* The Input Control Context the command is about to be issued
+         * with: Drop flags in DW0, Add flags in DW1. */
+        icDrop = XhciCommonAt(&hc->Hc, icc)[0];
+        icAdd = XhciCommonAt(&hc->Hc, icc)[1];
+    }
+    survives = (type == XHCI_TRB_TYPE_RESET_EP)
+                   ? hcdInjRetrySurvives(hc, XHCI_TRB_GET_SLOT_ID(trb->Control),
+                                         XHCI_TRB_GET_EP_ID(trb->Control))
+                   : 0UL;
     answer = XHCI_CC_SUCCESS;
     KeAcquireSpinLock(&hc->InjLock, &oldIrql);
-    verdict = XhciInjCommand(&hc->InjEp, trb, &answer);
+    verdict = XhciInjCommand(&hc->InjEp, trb, icDrop, icAdd, survives,
+                             &answer);
     KeReleaseSpinLock(&hc->InjLock, oldIrql);
     switch (verdict) {
+    case XHCI_INJ_CMD_SEND_END:
+        answer = hcdInjSend(hc, trb, control);
+        KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+        XhciInjCommandSent(&hc->InjEp, XHCI_TRB_GET_SLOT_ID(trb->Control),
+                           answer);
+        KeReleaseSpinLock(&hc->InjLock, oldIrql);
+        *code = answer;
+        return 1;
     case XHCI_INJ_CMD_ANSWER:
         break;
     case XHCI_INJ_CMD_RING:

@@ -598,6 +598,13 @@ static void answered(PXHCI_INJ_EP e, ULONG state, ULONG hold)
     e->Hold = hold;
 }
 
+/* A command the soft retry itself sends: no Input Control Context flags,
+ * its TD surviving. */
+static ULONG command(PXHCI_INJ_EP e, const XHCI_TRB *t, PULONG code)
+{
+    return XhciInjCommand(e, t, 0, 0, 1, code);
+}
+
 static void test_command(void)
 {
     XHCI_INJ_EP e;
@@ -608,97 +615,173 @@ static void test_command(void)
 
     XhciInjEpClear(&e);
     cmd(&t, XHCI_TRB_TYPE_RESET_EP, 4, 3);
-    CHECK_EQ(XhciInjCommand(&e, &t, &code), XHCI_INJ_CMD_PASS,
+    CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_PASS,
              "nothing answered: sent");
 
     answered(&e, XHCI_EP_STATE_HALTED, XHCI_INJ_HOLD_NONE);
     code = 0;
     cmd(&t, XHCI_TRB_TYPE_RESET_EP, 4, 2);
-    CHECK_EQ(XhciInjCommand(&e, &t, &code), XHCI_INJ_CMD_PASS,
+    CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_PASS,
              "another endpoint's reset is sent");
     cmd(&t, XHCI_TRB_TYPE_RESET_EP, 5, 3);
-    CHECK_EQ(XhciInjCommand(&e, &t, &code), XHCI_INJ_CMD_PASS,
+    CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_PASS,
              "another slot's too");
     cmd(&t, XHCI_TRB_TYPE_STOP_EP, 4, 3);
-    CHECK_EQ(XhciInjCommand(&e, &t, &code), XHCI_INJ_CMD_PASS,
+    CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_PASS,
              "a stop is sent");
     CHECK_EQ(e.State, XHCI_EP_STATE_HALTED, "and leaves Halted");
     cmd(&t, XHCI_TRB_TYPE_SET_TR_DEQUEUE, 4, 3);
-    CHECK_EQ(XhciInjCommand(&e, &t, &code), XHCI_INJ_CMD_ANSWER,
+    CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_ANSWER,
              "Set TR Dequeue on Halted answered");
     CHECK_EQ(code, XHCI_CC_CONTEXT_STATE_ERROR, "Context State Error");
     CHECK_EQ(e.State, XHCI_EP_STATE_HALTED, "still Halted");
     code = 0;
     cmd(&t, XHCI_TRB_TYPE_RESET_EP, 4, 3);
-    CHECK_EQ(XhciInjCommand(&e, &t, &code), XHCI_INJ_CMD_ANSWER,
+    CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_ANSWER,
              "the Reset Endpoint answered, not sent");
     CHECK_EQ(code, XHCI_CC_SUCCESS, "Success");
     CHECK_EQ(e.Slot, 0, "the answers end");
     CHECK_EQ(e.Block, 0, "the doorbell reaches it again");
-    CHECK_EQ(XhciInjCommand(&e, &t, &code), XHCI_INJ_CMD_PASS,
+    CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_PASS,
              "a second reset is sent");
 
     answered(&e, XHCI_EP_STATE_HALTED, XHCI_INJ_HOLD_FAIL);
     cmd(&t, XHCI_TRB_TYPE_RESET_EP, 4, 3);
-    CHECK_EQ(XhciInjCommand(&e, &t, &code), XHCI_INJ_CMD_ANSWER,
+    CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_ANSWER,
              "the failing reset answered");
     CHECK_EQ(code, XHCI_CC_CONTEXT_STATE_ERROR, "Context State Error");
     CHECK_EQ(e.State, XHCI_EP_STATE_HALTED, "still Halted");
     CHECK_EQ(e.Hold, XHCI_INJ_HOLD_NONE, "once");
-    CHECK_EQ(XhciInjCommand(&e, &t, &code), XHCI_INJ_CMD_ANSWER,
+    CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_ANSWER,
              "the next reset");
     CHECK_EQ(code, XHCI_CC_SUCCESS, "succeeds");
 
     answered(&e, XHCI_EP_STATE_HALTED, XHCI_INJ_HOLD_RING);
     code = 0x55;
-    CHECK_EQ(XhciInjCommand(&e, &t, &code), XHCI_INJ_CMD_RING, "held, ring");
+    CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_RING, "held, ring");
     CHECK_EQ(code, 0x55, "no code written for a hold");
     CHECK_EQ(e.Hold, XHCI_INJ_HOLD_NONE, "the hold spent");
     CHECK_EQ(e.Slot, 4, "the caller ends the answers");
     answered(&e, XHCI_EP_STATE_HALTED, XHCI_INJ_HOLD_SECOND);
-    CHECK_EQ(XhciInjCommand(&e, &t, &code), XHCI_INJ_CMD_SECOND,
+    CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_SECOND,
              "held, second");
-    CHECK_EQ(XhciInjCommand(&e, &t, &code), XHCI_INJ_CMD_ANSWER,
+    CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_ANSWER,
              "after the second error, the next reset");
     CHECK_EQ(code, XHCI_CC_SUCCESS, "succeeds");
 
     answered(&e, XHCI_EP_STATE_ERROR, XHCI_INJ_HOLD_NONE);
     cmd(&t, XHCI_TRB_TYPE_RESET_EP, 4, 3);
-    CHECK_EQ(XhciInjCommand(&e, &t, &code), XHCI_INJ_CMD_ANSWER,
+    CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_ANSWER,
              "Reset Endpoint on Error");
     CHECK_EQ(code, XHCI_CC_CONTEXT_STATE_ERROR, "refused: Halted only");
     CHECK_EQ(e.State, XHCI_EP_STATE_ERROR, "still Error");
     cmd(&t, XHCI_TRB_TYPE_SET_TR_DEQUEUE, 4, 3);
-    CHECK_EQ(XhciInjCommand(&e, &t, &code), XHCI_INJ_CMD_PASS,
+    CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_SEND_END,
              "Set TR Dequeue on Error is sent");
-    CHECK_EQ(e.Slot, 0, "and leaves Error");
+    XhciInjCommandSent(&e, 4, XHCI_CC_CONTEXT_STATE_ERROR);
+    CHECK_EQ(e.State, XHCI_EP_STATE_ERROR, "a failed one leaves Error");
+    XhciInjCommandSent(&e, 4, XHCI_CC_SUCCESS);
+    CHECK_EQ(e.Slot, 0, "a successful one leaves it");
 
     /* The stale halt and the stop window answer nothing: sent. */
     answered(&e, 0, XHCI_INJ_HOLD_NONE);
     cmd(&t, XHCI_TRB_TYPE_RESET_EP, 4, 3);
-    CHECK_EQ(XhciInjCommand(&e, &t, &code), XHCI_INJ_CMD_PASS,
+    CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_PASS,
              "no answer, no emulation");
 
     types[0] = XHCI_TRB_TYPE_DISABLE_SLOT;
     types[1] = XHCI_TRB_TYPE_ADDRESS_DEVICE;
     types[2] = XHCI_TRB_TYPE_RESET_DEVICE;
-    types[3] = XHCI_TRB_TYPE_CONFIGURE_EP;
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < 3; i++) {
         answered(&e, XHCI_EP_STATE_HALTED, XHCI_INJ_HOLD_SECOND);
         cmd(&t, types[i], 5, 0);
-        CHECK_EQ(XhciInjCommand(&e, &t, &code), XHCI_INJ_CMD_PASS,
+        CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_PASS,
                  "another slot's slot command");
         CHECK_EQ(e.Slot, 4, "leaves the answers");
         cmd(&t, types[i], 4, 0);
-        CHECK_EQ(XhciInjCommand(&e, &t, &code), XHCI_INJ_CMD_PASS,
+        CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_SEND_END,
                  "the slot's own is sent");
-        CHECK_EQ(e.Slot, 0, "and ends the answers");
+        CHECK_EQ(e.Slot, 4, "the answers stand until it completes");
+        XhciInjCommandSent(&e, 5, XHCI_CC_SUCCESS);
+        CHECK_EQ(e.Slot, 4, "another slot's completion");
+        XhciInjCommandSent(&e, 4, 0);
+        CHECK_EQ(e.State, XHCI_EP_STATE_HALTED, "never completed: stands");
+        XhciInjCommandSent(&e, 4, XHCI_CC_CONTEXT_STATE_ERROR);
+        CHECK_EQ(e.State, XHCI_EP_STATE_HALTED, "refused: stands");
+        XhciInjCommandSent(&e, 4, XHCI_CC_SUCCESS);
+        CHECK_EQ(e.Slot, 0, "succeeded: the answers end");
     }
+
+    /* Configure Endpoint: only one that rewrites this endpoint's context
+     * ends the answers - a composite device's other function's does not. */
+    answered(&e, XHCI_EP_STATE_HALTED, XHCI_INJ_HOLD_NONE);
+    cmd(&t, XHCI_TRB_TYPE_CONFIGURE_EP, 4, 0);
+    CHECK_EQ(XhciInjCommand(&e, &t, 1UL << 5, (1UL << 5) | 1UL, 0, &code),
+             XHCI_INJ_CMD_PASS, "another endpoint dropped and added");
+    CHECK_EQ(XhciInjCommand(&e, &t, 0, (1UL << 4) | (1UL << 2) | 1UL, 0,
+                            &code),
+             XHCI_INJ_CMD_PASS, "the endpoints beside it added");
+    CHECK_EQ(XhciInjCommand(&e, &t, 0, 0, 0, &code), XHCI_INJ_CMD_PASS,
+             "no flags at all");
+    CHECK_EQ(e.State, XHCI_EP_STATE_HALTED, "Halted stands through them");
+    CHECK_EQ(XhciInjCommand(&e, &t, 1UL << 3, 0, 0, &code),
+             XHCI_INJ_CMD_SEND_END, "a Drop of the endpoint");
+    CHECK_EQ(XhciInjCommand(&e, &t, 0, (1UL << 3) | 1UL, 0, &code),
+             XHCI_INJ_CMD_SEND_END, "an Add of the endpoint");
+    t.Control |= XHCI_TRB_DC;
+    CHECK_EQ(XhciInjCommand(&e, &t, 0, 0, 0, &code), XHCI_INJ_CMD_SEND_END,
+             "a deconfigure");
+    XhciInjCommandSent(&e, 4, XHCI_CC_RESOURCE_ERROR);
+    CHECK_EQ(e.State, XHCI_EP_STATE_HALTED, "a failed one: Halted stands");
+    XhciInjCommandSent(&e, 4, XHCI_CC_SUCCESS);
+    CHECK_EQ(e.Slot, 0, "a successful one ends the answers");
+
     answered(&e, XHCI_EP_STATE_HALTED, XHCI_INJ_HOLD_NONE);
     cmd(&t, XHCI_TRB_TYPE_EVALUATE_CONTEXT, 4, 0);
-    CHECK_EQ(XhciInjCommand(&e, &t, &code), XHCI_INJ_CMD_PASS,
+    CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_PASS,
              "Evaluate Context sent");
     CHECK_EQ(e.Slot, 4, "and changes nothing");
+}
+
+/* The races run only for the soft retry's own reset of the TD it holds
+ * (retrySurvives): a reset an abort, a cancel or a client's reset issues
+ * on the paused pipe, one after the TD was retired, and one at
+ * XhciTolerance 0 (no RetryWanted) are answered Success with nothing
+ * rung, the hold spent. */
+static void test_hold_survives(void)
+{
+    XHCI_INJ_EP e;
+    XHCI_TRB t;
+    ULONG code;
+
+    cmd(&t, XHCI_TRB_TYPE_RESET_EP, 4, 3);
+    answered(&e, XHCI_EP_STATE_HALTED, XHCI_INJ_HOLD_RING);
+    code = 0;
+    CHECK_EQ(XhciInjCommand(&e, &t, 0, 0, 0, &code), XHCI_INJ_CMD_ANSWER,
+             "an abort's reset: no ring race");
+    CHECK_EQ(code, XHCI_CC_SUCCESS, "answered Success");
+    CHECK_EQ(e.Slot, 0, "the answers end, nothing held");
+    CHECK_EQ(e.Hold, XHCI_INJ_HOLD_NONE, "the hold spent");
+
+    answered(&e, XHCI_EP_STATE_HALTED, XHCI_INJ_HOLD_SECOND);
+    code = 0;
+    CHECK_EQ(XhciInjCommand(&e, &t, 0, 0, 0, &code), XHCI_INJ_CMD_ANSWER,
+             "a cancel's reset: no second-error race");
+    CHECK_EQ(code, XHCI_CC_SUCCESS, "answered Success");
+    CHECK_EQ(e.Slot, 0, "ended");
+
+    /* Tolerance off: the error took today's path, no retry survives; the
+     * client's reset meets the hold. */
+    answered(&e, XHCI_EP_STATE_HALTED, XHCI_INJ_HOLD_SECOND);
+    CHECK_EQ(XhciInjCommand(&e, &t, 0, 0, 0, &code), XHCI_INJ_CMD_ANSWER,
+             "XhciTolerance 0: answered plainly");
+    answered(&e, XHCI_EP_STATE_HALTED, XHCI_INJ_HOLD_RING);
+    CHECK_EQ(XhciInjCommand(&e, &t, 0, 0, 1, &code), XHCI_INJ_CMD_RING,
+             "the retry's own reset runs the race");
+    answered(&e, XHCI_EP_STATE_HALTED, XHCI_INJ_HOLD_FAIL);
+    CHECK_EQ(XhciInjCommand(&e, &t, 0, 0, 0, &code), XHCI_INJ_CMD_ANSWER,
+             "the failing reset fails whoever sends it");
+    CHECK_EQ(code, XHCI_CC_CONTEXT_STATE_ERROR, "Context State Error");
 }
 
 static void test_stop_verdict(void)
@@ -785,6 +868,7 @@ int main(void)
     test_transfer_event();
     test_swallow_doorbell_state();
     test_command();
+    test_hold_survives();
     test_stop_verdict();
     test_ep0();
 

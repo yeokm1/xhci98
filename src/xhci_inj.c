@@ -387,7 +387,8 @@ ULONG XhciInjEpState(const XHCI_INJ_EP *e, ULONG slot, ULONG dci, ULONG raw)
     return e->State;
 }
 
-ULONG XhciInjCommand(PXHCI_INJ_EP e, const XHCI_TRB *cmd, PULONG code)
+ULONG XhciInjCommand(PXHCI_INJ_EP e, const XHCI_TRB *cmd, ULONG icDrop,
+                     ULONG icAdd, ULONG retrySurvives, PULONG code)
 {
     ULONG type;
     ULONG hold;
@@ -400,9 +401,17 @@ ULONG XhciInjCommand(PXHCI_INJ_EP e, const XHCI_TRB *cmd, PULONG code)
     case XHCI_TRB_TYPE_DISABLE_SLOT:
     case XHCI_TRB_TYPE_ADDRESS_DEVICE:
     case XHCI_TRB_TYPE_RESET_DEVICE:
+        /* Every endpoint context of the slot is rewritten or gone - once
+         * the command has done it. */
+        return XHCI_INJ_CMD_SEND_END;
     case XHCI_TRB_TYPE_CONFIGURE_EP:
-        /* The endpoint's context is rewritten or gone. */
-        XhciInjEpEnd(e);
+        /* A deconfigure, or a Drop or Add of this endpoint, rewrites its
+         * context; one for another function's endpoints leaves it as the
+         * controller keeps it, Halted or Error included. */
+        if ((cmd->Control & XHCI_TRB_DC) != 0 ||
+            ((icDrop | icAdd) & (1UL << e->Dci)) != 0) {
+            return XHCI_INJ_CMD_SEND_END;
+        }
         return XHCI_INJ_CMD_PASS;
     case XHCI_TRB_TYPE_RESET_EP:
         if (XHCI_TRB_GET_EP_ID(cmd->Control) != e->Dci || e->State == 0) {
@@ -418,10 +427,16 @@ ULONG XhciInjCommand(PXHCI_INJ_EP e, const XHCI_TRB *cmd, PULONG code)
             *code = XHCI_CC_CONTEXT_STATE_ERROR;
             return XHCI_INJ_CMD_ANSWER;
         }
-        if (hold == XHCI_INJ_HOLD_RING) {
+        /* A race is run only for the soft retry's own reset of the TD it
+         * still holds: a reset that yields to an abort, a cancel or a
+         * reset - or one at XhciTolerance 0 - may come after that TD was
+         * retired, and a ring then would restart the controller on a TD
+         * whose buffer has gone back. Such a reset is answered plainly,
+         * the hold spent. */
+        if (hold == XHCI_INJ_HOLD_RING && retrySurvives) {
             return XHCI_INJ_CMD_RING;
         }
-        if (hold == XHCI_INJ_HOLD_SECOND) {
+        if (hold == XHCI_INJ_HOLD_SECOND && retrySurvives) {
             return XHCI_INJ_CMD_SECOND;
         }
         /* The real endpoint is already Stopped, the state a Reset
@@ -437,10 +452,16 @@ ULONG XhciInjCommand(PXHCI_INJ_EP e, const XHCI_TRB *cmd, PULONG code)
             *code = XHCI_CC_CONTEXT_STATE_ERROR;
             return XHCI_INJ_CMD_ANSWER;
         }
-        XhciInjEpEnd(e);
-        return XHCI_INJ_CMD_PASS;
+        return XHCI_INJ_CMD_SEND_END;
     default:
         return XHCI_INJ_CMD_PASS;
+    }
+}
+
+VOID XhciInjCommandSent(PXHCI_INJ_EP e, ULONG slot, ULONG code)
+{
+    if (e->Slot != 0 && slot == e->Slot && code == XHCI_CC_SUCCESS) {
+        XhciInjEpEnd(e);
     }
 }
 

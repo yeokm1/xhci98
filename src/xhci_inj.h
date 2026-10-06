@@ -106,6 +106,8 @@
 #define XHCI_INJ_CMD_ANSWER      1UL  /* *code answered, nothing sent        */
 #define XHCI_INJ_CMD_RING        2UL  /* held (HOLD_RING): the layer's turn  */
 #define XHCI_INJ_CMD_SECOND      3UL  /* held (HOLD_SECOND): the layer's     */
+#define XHCI_INJ_CMD_SEND_END    4UL  /* sent; the answers end if it succeeds
+                                       * (XhciInjCommandSent)               */
 
 /* XhciInjStopVerdict's: where the layer's Stop Endpoint left the TD. */
 #define XHCI_INJ_STOP_OK         0UL  /* the dequeue is the TD's first TRB   */
@@ -316,18 +318,29 @@ ULONG XhciInjEpState(const XHCI_INJ_EP *e, ULONG slot, ULONG dci, ULONG raw);
 
 /*
  * One command the thread issues (not the layer's own), against the answered
- * endpoint: XHCI_INJ_CMD_*. A Disable Slot, Address Device, Reset Device or
- * Configure Endpoint for its slot ends the answers and is sent. For the
+ * endpoint: XHCI_INJ_CMD_*. A Disable Slot, Address Device or Reset Device
+ * for its slot is sent and ends the answers once it succeeds (SEND_END);
+ * so is a Configure Endpoint that deconfigures (DC) or whose Input Control
+ * Context Drop (`icDrop`) or Add (`icAdd`) flags name the endpoint - one
+ * for other endpoints of the slot is sent and changes nothing. For the
  * endpoint itself: a Reset Endpoint on Halted is answered Success, ending
  * them (HOLD_NONE), answered Context State Error, leaving Halted
- * (HOLD_FAIL), or held (HOLD_RING, HOLD_SECOND: the hold is spent and the
- * caller answers); on Error it is answered Context State Error (xHCI 4.6.8:
- * Halted only). A Set TR Dequeue on Halted is answered Context State Error;
- * on Error it is sent - the real endpoint is Stopped, which takes it - and
- * ends the answers (4.6.10: Stopped or Error). Everything else is sent.
- * `*code` is written only for ANSWER.
+ * (HOLD_FAIL), or held (HOLD_RING, HOLD_SECOND) - only when
+ * `retrySurvives` says it is the soft retry's own reset, its pipe not
+ * paused and the queue's head still the deferred TD its RetryWanted names;
+ * any other reset spends the hold and is answered Success. On Error a
+ * Reset Endpoint is answered Context State Error (xHCI 4.6.8: Halted
+ * only). A Set TR Dequeue on Halted is answered Context State Error; on
+ * Error it is sent - the real endpoint is Stopped, which takes it - and
+ * ends the answers once it succeeds (4.6.10: Stopped or Error). Everything
+ * else is sent. `*code` is written only for ANSWER.
  */
-ULONG XhciInjCommand(PXHCI_INJ_EP e, const XHCI_TRB *cmd, PULONG code);
+ULONG XhciInjCommand(PXHCI_INJ_EP e, const XHCI_TRB *cmd, ULONG icDrop,
+                     ULONG icAdd, ULONG retrySurvives, PULONG code);
+
+/* A SEND_END command's completion `code` for `slot`: the answers end on
+ * Success, and stand on any failure. */
+VOID XhciInjCommandSent(PXHCI_INJ_EP e, ULONG slot, ULONG code);
 
 /*
  * Where the layer's Stop Endpoint left the TD (`firstPA` its first TRB,
