@@ -304,7 +304,8 @@ static VOID hcdTolCountEvent(PXHCI_EXTENSION ext, ULONG slotId, ULONG dci,
         return;
     }
     if (XhciLogErrorBudget(&ext->Log, cc)) {
-        XhciLogNote(ext, "xfer.error", (slotId << 16) | (dci << 8) | cc);
+        XhciLogNoteLocked(ext, "xfer.error",
+                          (slotId << 16) | (dci << 8) | cc);
     } else {
         ext->LogErrorsOverBudget++;
     }

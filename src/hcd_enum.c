@@ -2504,7 +2504,25 @@ static ULONG hcdTolPortFeed(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG portsc,
     ext = &hc->Hc;
     tol = ext->Tol.Stats.Tolerance;
     loc = hcdTolLoc(hc, p);
-    if (!tol || loc == NULL) {
+    if (loc == NULL) {
+        return feed;
+    }
+    if (!tol) {
+        /* Record 17 section 4.11: off, nothing acts, but a dump taken for
+         * the comparison still counts what was seen. OCC and PEC are
+         * change bits, so each fault counts once. */
+        if ((portsc & XHCI_PORTSC_OCC) != 0) {
+            ext->Tol.Stats.OcFaults++;
+        }
+        if (XhciTolPedFault(1, !XhciPortIsUsb3(&ext->PortMap, p->PortId),
+                            (portsc & XHCI_PORTSC_PEC) != 0,
+                            (portsc & XHCI_PORTSC_PED) != 0,
+                            (portsc & XHCI_PORTSC_CCS) != 0,
+                            p->Device != NULL &&
+                                (p->Enum.State == XHCI_ENUM_PRESENT ||
+                                 p->Enum.State == XHCI_ENUM_BOUND))) {
+            ext->Tol.Stats.PedFaults++;
+        }
         return feed;
     }
     now = HcdTolNow(hc);
