@@ -55,8 +55,8 @@ Not in this design: suspend, resume and runtime power quirks (Linux's
 and their kin); the isochronous AMD PLL quirk (`XHCI_AMD_PLL_FIX`, SB700 to
 Bolton only); link power management, which this driver never enables;
 MSI; ASMedia's flow-control register writes
-(`XHCI_ASMEDIA_MODIFY_FLOWCONTROL`); Intel's `XHCI_MISSING_CAS`, which is
-Phase 35's own task 35.3; and an in-place endpoint recovery that keeps a
+(`XHCI_ASMEDIA_MODIFY_FLOWCONTROL`); Intel's `XHCI_MISSING_CAS`, which was
+Phase 35's first lead and was set aside by 35.0's reading (issue 11); and an in-place endpoint recovery that keeps a
 faulted device's other transfers alive (withdrawn at this revision,
 section 4.3).
 
@@ -83,7 +83,7 @@ A behaviour is unconditional when all of these hold:
 
 A behaviour that fails any of these is gated - a pure-core decision on the
 PCI vendor and device id and a REG_DWORD in the controller's driver key
-with `XhciMissingCas`'s three values (1 the default, the list; 0 off; 2
+with three values (1 the default, the list; 0 off; 2
 every controller), written by both INFs under 34.1's rule - or offered as
 a switch that is off by default (section 4.7), or not done.
 
