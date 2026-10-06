@@ -13,7 +13,8 @@ are still taken from Linux and from
 number.)
 
 Revision 3, 2026-10-06, for roadmap-hcd task 35.5 (Phase 35, release
-`2.1.2.0`), written before its code: `XhciIntelPortSwitch` 2, the
+`2.2.0.0`, planned as `2.1.2.0` when this revision was written), written
+before its code: `XhciIntelPortSwitch` 2, the
 switchover on any Intel controller past the gate, at the user's own risk
 (sections 4a and 5); and, at every value, a release that writes only the
 registers a route wrote (sections 6 to 8). Its decisions are section 11's

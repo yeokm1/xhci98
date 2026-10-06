@@ -19,11 +19,13 @@ cut on 2026-10-04 and squash-merged to `main` as `4038447` ("2.0.0.0
 known limitations (Phase 28, 28-E.1). `2.1.0.0`, the first update, was cut
 on 2026-10-05 (Phase 33), with its polling-rate reading owed to the bench.
 `2.1.1.0`, an interim release, was cut on 2026-10-06 (Phase 34). Phase 35,
-SuperSpeed devices falling back to USB 2.0 on Intel Sunrise Point and
-`XhciIntelPortSwitch` 2, is the interim `2.1.2.0` (owner, 2026-10-06); it
-is not opened. Polled event
-delivery and selective suspend are planned but carry no phase number until
-the owner opens them (owner, 2026-10-06; "Planned work" below).
+SuperSpeed devices falling back to USB 2.0 on Intel Sunrise Point,
+`XhciIntelPortSwitch` 2 and the controller tolerance work, is `2.2.0.0`
+(owner, 2026-10-06; it was the interim `2.1.2.0` until the tolerance work
+joined it); it is not opened. Polled event
+delivery and selective suspend are planned but carry no phase number and
+no version until the owner opens them (owner, 2026-10-06; "Planned work"
+below).
 
 **The miniport is frozen.** `1.2.0.0` is the last release of the miniport
 (owner, 2026-10-02): no further miniport cut, and a defect reported against
@@ -63,6 +65,8 @@ table is the index.
 | `2.1.1.0` at Phase 34 | An interim release cut at the end of Phase 34 (owner, 2026-10-05), amending the split's one release at the end: the registry values, the two Device Manager pages and the port switchover ship as `2.1.1.0`, and `2.2.0.0` carries Phases 35 and 36. Phase 34 takes its own docs (34.4) and cut (34.5); 36.3 and 36.4 cover Phases 35 and 36. **Amended 2026-10-06**: the row below ("Phases numbered when opened") takes the numbers 35 and 36 off polled event delivery and selective suspend; their ids 35.N, 36.N, 36a.N and 36b.N are now `POLL.N`, `SUSP.N`, `SUSPa.N` and `SUSPb.N` |
 | Phases numbered when opened | Owner, 2026-10-06: planned work carries no phase number until the owner starts it. Polled event delivery and selective suspend, drawn up as Phases 35 and 36 on 2026-10-05, become "Planned work" sections with placeholder ids (`POLL`, `SUSP`), still meant for `2.2.0.0`, and take the next free number when opened. Commits and memories before this change call them Phases 35 and 36 |
 | Phase 35: SuperSpeed falling back to USB 2.0 on Sunrise Point | Owner, 2026-10-06, from the owner's E460 and a tester's HP EliteBook 850 G5, both Intel Sunrise Point-LP (`8086:9D2F`): SuperSpeed devices enumerate at High Speed or not at all, and a USB 3 hub shows only its USB 2.0 half; the P14s Gen 1 (`8086:02ED`) is unaffected. If the lead is confirmed, the fix is gated by `XhciMissingCas` (1 default on Linux's device list, 0 off, 2 every controller; INF-written under 34.1's rule; 35.3). With it, `XhciIntelPortSwitch` 2 (35.5, the switchover row below). Its own interim release, `2.1.2.0` |
+| Phase 35: controller tolerance (`35-T`) | Owner, 2026-10-06, from a tester's AMD AM5 report (a HID mouse randomly stops; moving it to another port helps for longer) and the review of Linux's xHCI quirks that followed: none of the AM5 or X570 controller ids carries a Linux quirk flag, and Linux's robustness on them is behaviour it applies to every controller, where this driver is stricter and has lost usbport's URB timeout. Joins Phase 35 and ships with it, not a release of its own; all seven tolerant behaviours (35-T.1 to 35-T.7) land together, not one at a time after a diagnostic reading; spec-legal behaviours that cost nothing on a compliant controller are unconditional, and only the interrupt-interval cap is gated - on every AMD controller (vendor `1022`), wider than Linux's list, by `XhciIntervalCap` 0/1/2 as `XhciMissingCas` is; the lost-interrupt backstop (35-T.1) is this phase's, and the planned polled delivery reuses its peek. Each taken from options with a recommendation. Design record 17 |
+| Phase 35 is `2.2.0.0` | Owner, 2026-10-06, once the tolerance work joined it: the size of the change makes Phase 35 a minor release, `2.2.0.0`, not the interim `2.1.2.0`, and its branch is renamed `2.2.0.0` to match. Polled event delivery and selective suspend, meant for `2.2.0.0` until then, carry no version: each takes one when the owner opens it. The rows above that name `2.1.2.0` for Phase 35, or `2.2.0.0` for the planned work, record what was decided at the time |
 | The Intel port switchover | Phase 34, task 34.3 (owner, 2026-10-05, from a tester's report of Ivy Bridge machines): the HCD routes the Intel 7-, 8- and 9-series and C610 switchable connectors to itself, superseding the miniport's Phase 4 decision to leave the registers alone; a device-id gate of six, and the opt-out `XhciIntelPortSwitch` at 1. Design record 16. **Amended 2026-10-06** (owner; task 35.5): `XhciIntelPortSwitch` 2 performs the switchover the moment an Intel controller is detected, the gate bypassed; 1 and other nonzero numbers keep the gate, the default stays 1. Value 2 is at the user's own risk - on a controller without the switch registers it writes registers of unknown meaning - and the README and release notes say so; the owner chose to inform rather than add a register-layout check |
 | Polled event delivery | Planned, unnumbered (`POLL`; drawn up as Phase 35) (owner, 2026-10-05, first added as Phase 34's stage C; design record 15): a switch, `XhciInterruptMode`, chooses automatic (0, the default: the line interrupt where the controller has one, an adaptive poll of the event ring where it has none), the line interrupt (1, failing as today without one) or polling (2), with 3 and above reserved (MSI, not scheduled) and run as 0, so an MSI- or MSI-X-only controller, which neither primary target can serve by interrupt, can be driven; the idle period `XhciPollIdleMs` defaults to 50 ms and the active period `XhciPollActiveMs` to 1 ms, neither may be 0, the idle period is held to 5000 ms and the active to the idle, and all three join 34.1's install rule. The delivery in effect and its reason are captured by `XHCISNAP` and the DebugView log. Each taken from options with a recommendation; the numbering replaced the same day's "0 line, 1 polling, 2 MSI" |
 | The other `1.2.0.0` limitations (28.3) | The NUSB stop crash, the Windows 98 churn wedge and the Windows 7 disable hang are each re-measured under the HCD and recorded as gone, carried or new (owner, 2026-10-04). A survivor is carried in the release notes and does not block the cut |
@@ -125,9 +129,10 @@ Phase 29 is SuperSpeed on root ports, Phase 30 SuperSpeed hubs, Phase 31
 streams and UAS, and Phase 32 the `2.0.0.0` cut; Phase 33 is the first
 update, `2.1.0.0`; Phase 34 is `2.1.1.0`, an interim release: the registry
 values, the Device Manager pages and the Intel port switchover; Phase 35 is
-`2.1.2.0`, another: SuperSpeed devices falling back to USB 2.0 on Intel
-Sunrise Point, and `XhciIntelPortSwitch` 2. Polled event delivery, then selective suspend, are planned
-for `2.2.0.0` and take phase numbers only when the owner opens them; their
+`2.2.0.0`: SuperSpeed devices falling back to USB 2.0 on Intel
+Sunrise Point, `XhciIntelPortSwitch` 2, and the controller tolerance work
+(35-T). Polled event delivery, then selective suspend, are planned
+and take phase numbers and versions only when the owner opens them; their
 task ids are placeholders (`POLL.n`, `SUSP.n`) until then.
 The order is deliberate:
 parity first, because round 12's device matrix and the acceptance test are a
@@ -566,8 +571,9 @@ Status: closed 2026-10-06 on the cut. Opened 2026-10-05 on branch
 `2.1.1.0`. Split the same day from
 a single phase into 34, 35 (polled event delivery) and 36 (selective
 suspend and the rest), then made an interim release of its own, so
-`2.2.0.0` carries Phases 35 and 36 (decisions table; both unnumbered since
-2026-10-06, "Planned work"). A first task 34.3,
+`2.2.0.0` was to carry Phases 35 and 36 (decisions table; both unnumbered
+and unversioned since 2026-10-06, "Planned work", and `2.2.0.0` is now
+Phase 35's). A first task 34.3,
 the controller's Advanced tab bandwidth on Windows Vista and 7, was removed
 by the owner the same day (its limitation stays in the release notes), and
 the tasks after it were renumbered: commits before `8a8514d` name the
@@ -594,15 +600,18 @@ Records: `runs/run-34.md`; `design/16-intel-port-switchover.md`;
 
 ---
 
-## Phase 35 - Release `2.1.2.0`: SuperSpeed on Intel Sunrise Point and the Ungated Port Switchover
+## Phase 35 - Release `2.2.0.0`: SuperSpeed on Intel Sunrise Point, the Ungated Port Switchover and Controller Tolerance
 
 Goal: a SuperSpeed device on an Intel Sunrise Point-LP controller
 (`8086:9D2F`) trains at SuperSpeed under this driver, as it does under a
 current Windows on the same port; and `XhciIntelPortSwitch` 2, the port
 switchover on any Intel controller, past 34.3's device-id gate, at the
-user's own risk (35.5); released as the interim `2.1.2.0`.
+user's own risk (35.5); a transfer, port or interrupt fault that a
+compliant controller never raises no longer leaves a device silently dead
+until it is replugged (35-T, design record 17); released as `2.2.0.0`.
 
-Status: not opened. Drawn up 2026-10-06 (owner) on branch `2.1.2.0`, cut
+Status: not opened. Drawn up 2026-10-06 (owner) on branch `2.2.0.0` (named
+`2.1.2.0` until the tolerance work joined the phase the same day), cut
 from `main` at `c6f17ba`. Reported on the owner's E460 and a tester's HP
 EliteBook 850 G5, both `8086:9D2F`: a SuperSpeed device enumerates at High
 Speed or is not seen at all, and a USB 3 hub shows only its USB 2.0 half.
@@ -646,26 +655,61 @@ QEMU does not model, gated by device id; 35.5 lets a user send chipset
 register writes to Intel controllers nobody has read them on; and it ends in
 a release.
 
+The tolerance work (35-T; owner, 2026-10-06, the decisions table). A
+tester's AMD AM5 board: a HID mouse randomly stops, and moving it to another
+port keeps it alive for longer. No Linux quirk flag names the AM5 or X570
+controller ids (`external/linux/xhci-pci.c`); Linux survives them on
+behaviour it applies to every controller. Read in this tree on 2026-10-06,
+each a path on which a fault leaves a device dead with nothing noticing:
+the event ring is drained only from the ISR (`hcd_ctl.c`, `hcdIsr`), so a
+lost interrupt or a stuck EHB or IE silences the bus, and the health poll's
+re-arm is the miniport's experiment `XHCI_FIX_EVT_REARM`, built in no
+flavour (`xhci_cmd.c`); a USB Transaction Error fails the transfer at once,
+with no soft retry; a completion code `XhciXferCodeInfo` refuses is counted
+in `BadCodes` and nothing is completed, a comment there relying on a
+usbport URB timeout this stack does not have (`xhci_xfer.c`); a halting
+event that matches no TD leaves the endpoint Halted with no URB failed; a
+USB 2.0 root port the controller disabled (PED clear, CCS set) is
+acknowledged and nothing more, while `GET_PORT_STATUS` answers enabled from
+the PDO's own state (`hcd_urb.c`), and an over-current leaves the port
+unpowered - the external hub path already re-enumerates on both; an
+all-ones USBSTS is only counted and an unexpected HCH is not looked at; and
+a user's `XHCISNAP` dump cannot tell any of these apart, since
+`XHCIHC_COUNTERS` lies outside the snapshot and the per-queue error
+counters are published nowhere. QEMU raises none of these faults, so every
+one of them needs the `qemu` flavour's injection to be read at all.
+
 - [ ] 35.0 the first reading (owner, on the E460 under Windows 98 SE with `2.1.1.0`, unmodified): `XHCISNAP -verbosity 3`, restart, and the applied level checked in the dump's header. Dumps with every port empty; with a SuperSpeed device attached from power-on; right after a hot-plug into the same connector; and some 10 s after it - each taken twice a few seconds apart, so a link caught training is told from one that stays. Once with the USB 3 hub and once with a plain Bulk-Only flash drive (not UAS-only, so 29-A.5's send-back is out of it). The `.TXT`, `.BIN` and `.PSC` kept, with the build, the controller's subsystem and revision, firmware's USB settings, the device, cable and physical connector. Read every port's PORTSC, USB 2.0 ones too, and the slot table's speeds. This dump holds no link history (the status paragraph): a USB3 port that stays in Polling with CCS and CAS clear supports the lead; Compliance points first at the existing recovery; either way 35.2 settles it
-- [ ] 35.1 root link notes in the shipping channel, observation only - the link policy and every recovery unchanged, so the package does not quietly fix or alter the symptom before it is read. Bounded `XhciLogNote` records, each with where it came from (a change event, the start's mark, an invalidation, a retry, or a timed sample) and USBCMD, USBSTS and the controller's power state at that moment: every USB3 root port inspection that acts or finds the link not trained (port, raw PORTSC before acknowledgement, ms since start or connect, the link decision and the action written); a read-only timed sample of USB3 root ports while any has gone without an inspection, so a hot-plug that raises no event still leaves a trace; the first trained state seen on a connection; the enumeration's hot reset and any warm reset, each with PORTSC before it and at its completion; the budget and give-up; a hold; the controller's power transitions; and at start, the BIOS handoff's outcome and USB3 PORTSC around the handoff, HCRST and run. Host vectors for the records; `XHCISNAP` decoding them; ships in `2.1.2.0` (the channel is off at `XhciLogVerbosity` 0). A test package from it for the owner
+- [ ] 35.1 root link notes in the shipping channel, observation only - the link policy and every recovery unchanged, so the package does not quietly fix or alter the symptom before it is read. Bounded `XhciLogNote` records, each with where it came from (a change event, the start's mark, an invalidation, a retry, or a timed sample) and USBCMD, USBSTS and the controller's power state at that moment: every USB3 root port inspection that acts or finds the link not trained (port, raw PORTSC before acknowledgement, ms since start or connect, the link decision and the action written); a read-only timed sample of USB3 root ports while any has gone without an inspection, so a hot-plug that raises no event still leaves a trace; the first trained state seen on a connection; the enumeration's hot reset and any warm reset, each with PORTSC before it and at its completion; the budget and give-up; a hold; the controller's power transitions; and at start, the BIOS handoff's outcome and USB3 PORTSC around the handoff, HCRST and run. Host vectors for the records; `XHCISNAP` decoding them; ships in `2.2.0.0` (the channel is off at `XhciLogVerbosity` 0). A test package from it for the owner
 - [ ] 35.2 the second reading (owner, on the E460 with 35.1's package): 35.0's scenarios again, with the link notes. It must tell a recovery never invoked (no inspection, or a Polling link waited on) from one invoked and failing (warm resets issued, Compliance or Inactive persisting, a give-up), and both from a link that trained and was lost at the enumeration's reset or at start. The result is a cause among the status paragraph's ranking, or explicitly inconclusive; 35.3 proceeds only on a never-invoked recovery of a stuck Polling or Compliance link with CCS and CAS clear. Any other cause, or an inconclusive reading, goes back to the owner for further notes or a bounded experiment before the phase is re-planned
 - [ ] 35.3 the design, once 35.2 confirms the lead: the rule checked against Linux's source (`xhci_port_missing_cas_quirk`: CCS and CAS clear, PLS Polling or Compliance) and xHCI 1.2c 4.19.1.2 and 4.19.8. Applying it at start and hot-plug, where Linux applies it only at resume, is this driver's own policy and needs 35.2's evidence: a training grace interval first, then a fresh qualifying read with PP set, no reset in progress and the controller running. The action carried through `XhciLinkPortFeed`, not dropped for a usable link. How a qualifying port is found - a timed revisit of a Polling port, and how a hot-plug that raises no event is discovered - and that work cancelled across stop, the controller's power transitions, recovery and holds. A recovery episode with its own budget, not refilled by an intermediate RxDetect or Disconnected the way 29-A.2's is today (`xhci_link.c`), and its re-arm conditions. Compliance recovery unchanged at `XhciMissingCas` 0. A design record, reviewed to convergence before code. The gate, a registry value (owner, 2026-10-06, each from options with a recommendation): `XhciMissingCas`, a REG_DWORD in the controller's driver key read at each start - 1, the default, applies the rule on Linux's `XHCI_MISSING_CAS` list (`22B5`, `9D2F`, `A12F`, `5AA8`, `19D0`, vendor and device both, never the HCIVERSION; not Linux's wider PME list), 0 turns it off, 2 applies it on every xHCI controller for an affected chip the list misses - bypassing the controller selection only, never a port, timing, power or budget precondition; absent, not a DWORD or any other number reads as 1, as `XhciIntelPortSwitch` does. Both INFs write it at 1 on every controller install path with `0x00010003` (FLG_ADDREG_NOCLOBBER) under 34.1's rule, with its `VAL-*` row in the INF gate and the footprints
 - [ ] 35.4 the fix: the pure core (`xhci_link.c`) with sequence vectors in `test_link` driven through `XhciLinkPortFeed` - progress with no event, a transient Polling left alone, budget exhaustion, an intermediate RxDetect, training success, unplug and replug, a held port, and the gate's three values against a listed and an unlisted id; its executor in `hcd_enum.c`; `XhciMissingCas` read and written as 35.3 says; `XHCISNAP` naming the value requested, whether the rule is in effect and why, and how often it fired; `XHCIQUAL`'s Sunrise Point quirk text names it. With it, a `qemu`-flavour-only injection layer, which nothing in the tree provides today (strict mode only observes command preconditions, `XHCI_FAIL_START_CONTROLLER` refuses a start, and `XhciReadPortsc` and `XhciWritePortsc` touch the register directly): on a chosen USB3 root port, reads answer Polling with CCS and CAS clear and the port's change events are suppressed, and a WPR either lets the real link through after a set number of resets or never does; compiled only into the `qemu` flavour, which is never published
 - [x] 35.5 `XhciIntelPortSwitch` 2 (owner, 2026-10-06): the switchover the moment an Intel controller (vendor `8086`) is detected, the six-id gate of 34.3 bypassed, for a switchable chipset the gate does not list. Today 2 is "any other number", on with the gate, and the value is read only on a gated controller (record 16 section 5): 2 takes the new meaning, the value is read on every Intel controller, and 1 and any other nonzero number keep the gated meaning. The default stays 1 and 0 stays off; the INFs' value and the `VAL-*` row are unchanged. Value 2 is at the user's own risk (owner, 2026-10-06): on a controller whose PCI configuration offsets `D0h` to `DCh` are not the switch registers (no EHCI, as on `9D2F` and `02ED`, or a layout nobody has read) it writes registers of unknown meaning at start, at every resume, and again at stop and shutdown, and the README and release notes say so in those words, with 1 as the setting for everyone else; the driver adds no register-layout check that would refuse it (a review proposed one; the owner chose to inform rather than guard). Record 16 grows a revision first: that risk and its wording; the Sony exemption and the refusal on an unreadable identity or subsystem both kept under 2; and, at every value, the release writing only the registers a route wrote - today `PswOn` is set before the route and gates the release, so a refused or partial route still gets the release's zero writes to both (`hcd_ctl.c`, `xhci_psw.c`). The fix tracks each register separately (`USB3_PSSEN` at `D8h`, `XUSB2PR` at `D0h`), accumulated over one started lifetime - the start's route and every resume's - so a later failed route does not erase an earlier write; reviewed to convergence before code. Then `xhci_psw.c` with host vectors in `test_psw`: no route write, no release write; `D8h` written and the `D4h` read failed, release `D8h` only; both written and a read-back failed, release both; a good start route then a failed resume route, release what was written; Sony and an unreadable subsystem under 2, no write; then the executor, and `XHCISNAP` naming the value in effect and whether the gate was bypassed. Done 2026-10-06 (`c7b29da`, `d3bf449`, `febf5ab`; design record 16 revision 3, `b44d753` and `0a70121`, reviewed to convergence before code and the code reviewed to convergence after): the start's decision and the per-register write set moved into the pure core (`XHCI_PSW_LIFE`, record 16 section 7a), so the lifetime vectors run on the shipped code; `PswLife.On` replaces `PswOn`; `XHCISNAP` shows `psw.mode`, `psw.route.written` and `psw.release.written` by label with no decoder change. Host tests (`test_psw`) and every gate pass on debug, release and qemu x86 and release amd64. Nothing yet read in a guest or on hardware: that is 35-V and 35-E
-- [ ] 35-V the legs: host tests and every gate, x86 and amd64; the QEMU legs reading as the `2.1.1.0` build (the gate closed, no extra warm reset), on 98 SE and on the Windows 2000 SP4 guest (SMP, Driver Verifier) - a VM regression, not a Windows 2000 hardware reading; 35.4's injection on the `qemu` flavour with `XhciMissingCas` 2 (QEMU's controller is not listed), at start and after a hot-plug with no event, on more than one port at once - a link released after a set number of warm resets proving the reset is issued, completes and the device enumerates at SuperSpeed, and a link never released proving the budget runs out, the give-up is recorded and nothing loops - and at `XhciMissingCas` 0 no warm reset for the injected Polling; disable and enable, remove and rescan, a forced recovery, and the controller's D3 and back where a guest offers one, with the revisit timers cancelled and no reset storm or endless first-answer settling; `XhciMissingCas` written at 1 by a fresh install and an update kept at a user's 0, and 2 on QEMU with SuperSpeed devices still enumerating; 35.1's link notes read in `XHCISNAP`; `XhciIntelPortSwitch` 2 on QEMU (not Intel: no write)
-- [ ] 35-E the bench (owner): on the E460 under Windows 98 SE, A/B runs with only `XhciMissingCas` changed (1 against 0), a campaign fixed before it starts - 10 cold boots and 10 hot-plugs per value with each of the hub and the flash drive unless the owner sets other counts, the failure rate at 0 recorded - with the USB 3 hub's SuperSpeed half present and a file copy through a SuperSpeed device and through the hub; at 1 SuperSpeed every time, at 0 the `2.1.1.0` behaviour back; the P14s Gen 1 unchanged (not listed); the HP 850 G5 if the tester can read it; `XhciIntelPortSwitch` 2 on the B490 (`1E31`, reading as 1), and on a no-EHCI Intel controller only if the owner chooses to take the risk value 2 documents. Ticked on real hardware
-- [ ] 35.6 the docs: the release notes and README (with `XhciMissingCas` and value 2's own-risk warning, 35.5), the readme template, records 13 and 16, `failure-diagnosis.md`, `xhciqual/hardware-testing.md`, `xhcisnap/README.md` for the link notes, `source-files.md` and `runs/run-35.md`
-- [ ] 35.7 the cut, `2.1.2.0`: `xhci_version.h`, the four INFs' `DriverVer`, `releases/history.md`, the release notes, the README and `make-release.ps1`, and the ten install legs read from the asset, as 34.5
+- [ ] 35-T.0 the design: design record 17, the tolerant behaviours below and the one gate, each checked against xHCI 1.2c and against the Linux behaviour it follows (`external/linux/xhci-ring.c`, `xhci-mem.c`, `xhci-pci.c`), reviewed to convergence before code. For each: the fault, what the driver does today, the tolerant behaviour, why it costs nothing on a compliant controller (or, for 35-T.7, what it costs and why it is gated), its bound so nothing loops, and its interaction with the in-place recovery, ABORT_PIPE and RESET_PIPE, and 35.3's link work
+- [ ] 35-T.1 the lost-interrupt backstop: each health poll, under the controller lock, reads the event TRB at the dequeue pointer and, if its cycle bit says the controller has written it, queues `IsrDpc` and counts it; the line interrupt stays the delivery. The peek a helper the planned polled delivery reuses (record 15 gets the cross-reference). `XHCI_FIX_EVT_REARM` retired from `xhci_cmd.c`
+- [ ] 35-T.2 the soft retry: a USB Transaction Error on a bulk or interrupt endpoint not behind a TT is retried with Reset Endpoint (TSP 1) and the doorbell, the TD kept, at most three times per TD and the count cleared by a Success or Short Packet, as Linux's `process_bulk_intr_td`; past the bound the error completes as today. Not on Linux's `XHCI_NO_SOFT_RETRY` controllers (`1022:43B9`, `1022:43BB`, `1B6F:7023`, `1B6F:7052`)
+- [ ] 35-T.3 the codes nothing claims: a Transfer Event with a code `XhciXferCodeInfo` refuses completes its TD with an error and has the endpoint state read, not dropped; Missed Service, Ring Underrun and Overrun on a non-isochronous endpoint likewise; vendor information codes 224 to 255 read as success, as Linux's `xhci_is_vendor_info_code`; the stale usbport-timeout comment corrected
+- [ ] 35-T.4 a halt with no TD: a halting code (Stall, Transaction, Babble, Split Transaction) on an event the queue cannot match still marks the pipe Halted and fails the oldest outstanding transfer, so the class driver's reset runs, as Linux's `check_endpoint_halted`; a submission to a Halted pipe is failed rather than queued behind a doorbell the controller ignores
+- [ ] 35-T.5 the root port the controller gave up on: a USB 2.0 root port with PEC set, PED clear and CCS set, holding a device, is fed a disconnect and a connect, as `XhciHubPortDecide` does for an external hub; an over-current that cleared PP is restored once the condition clears, under a budget; both counted. `GET_PORT_STATUS` keeps the PDO-state answer (its race rule stands)
+- [ ] 35-T.6 the controller gone or halted: an all-ones USBSTS on consecutive health polls, or HCH set while the driver has the controller running, requests the in-place recovery like HCE and HSE
+- [ ] 35-T.7 the interrupt-interval cap, gated: an interrupt endpoint whose Interval exceeds 8 (32 ms) is programmed at 8, as Linux's `XHCI_LIMIT_ENDPOINT_INTERVAL_9`, on every AMD controller (vendor `1022`), wider than Linux's list. `XhciIntervalCap`, a REG_DWORD in the controller's driver key read at each start: 1, the default, caps on vendor `1022`; 0 off; 2 on every controller; absent, not a DWORD or any other number reads as 1. Both INFs write it at 1 on every controller install path with `0x00010003` under 34.1's rule, with its `VAL-*` row and the footprints. The Average TRB Length of a periodic endpoint taken as its Max ESIT Payload, as Linux does, ungated
+- [ ] 35-T.8 the counters a user can send: the per-queue `Errors`, `BadCodes`, `UnmatchedEvents`, `ForeignEvents` and halts, a per-completion-code histogram, and 35-T.1 to 35-T.7's own counts, in the snapshot `XHCISNAP` copies, under the schema rule; `XHCISNAP` naming them and the gate in effect; `XhciLogErrorBudget` given its HCD caller. `XHCIQUAL`'s quirk table grows report-only AMD rows
+- [ ] 35-T.9 the pure core and its vectors: each of 35-T.1 to 35-T.7's decisions in the DDK-free core with host vectors, and a `qemu`-flavour-only injection, beside 35.4's, for each fault: a withheld interrupt, a Transaction Error a set number of times, a refused code, a halting event off the queue, PED cleared and PP cleared on a root port, USBSTS all-ones, HCH set
+- [ ] 35-V the legs: host tests and every gate, x86 and amd64; the QEMU legs reading as the `2.1.1.0` build (the gate closed, no extra warm reset), on 98 SE and on the Windows 2000 SP4 guest (SMP, Driver Verifier) - a VM regression, not a Windows 2000 hardware reading; 35.4's injection on the `qemu` flavour with `XhciMissingCas` 2 (QEMU's controller is not listed), at start and after a hot-plug with no event, on more than one port at once - a link released after a set number of warm resets proving the reset is issued, completes and the device enumerates at SuperSpeed, and a link never released proving the budget runs out, the give-up is recorded and nothing loops - and at `XhciMissingCas` 0 no warm reset for the injected Polling; disable and enable, remove and rescan, a forced recovery, and the controller's D3 and back where a guest offers one, with the revisit timers cancelled and no reset storm or endless first-answer settling; `XhciMissingCas` written at 1 by a fresh install and an update kept at a user's 0, and 2 on QEMU with SuperSpeed devices still enumerating; 35.1's link notes read in `XHCISNAP`; `XhciIntelPortSwitch` 2 on QEMU (not Intel: no write); 35-T.9's injections on the `qemu` flavour, each fault with a HID device and a Bulk-Only copy running, the device recovering with no replug and the counters read in `XHCISNAP` - and a fault past its bound ending as it does today, never looping; `XhciIntervalCap` 2 on QEMU (not AMD) capping a long-interval endpoint and 1 leaving it alone, written at 1 by a fresh install and kept at a user's 0 on an update; with no fault injected, every leg reading as the `2.1.1.0` build
+- [ ] 35-E the bench (owner): on the E460 under Windows 98 SE, A/B runs with only `XhciMissingCas` changed (1 against 0), a campaign fixed before it starts - 10 cold boots and 10 hot-plugs per value with each of the hub and the flash drive unless the owner sets other counts, the failure rate at 0 recorded - with the USB 3 hub's SuperSpeed half present and a file copy through a SuperSpeed device and through the hub; at 1 SuperSpeed every time, at 0 the `2.1.1.0` behaviour back; the P14s Gen 1 unchanged (not listed); the HP 850 G5 if the tester can read it; `XhciIntelPortSwitch` 2 on the B490 (`1E31`, reading as 1), and on a no-EHCI Intel controller only if the owner chooses to take the risk value 2 documents; 35-T on the E460 and the P14s Gen 1, a HID mouse, a flash drive copy and an audio stream reading as `2.1.1.0` with the 35-T counters at or near 0; and the AM5 tester's reading if offered - the controller id behind each port used, `XHCISNAP` dumps with the mouse working and after it stops, and whether it still stops - an outcome recorded, not a clause the phase waits on. Ticked on real hardware
+- [ ] 35.6 the docs: the release notes and README (with `XhciMissingCas` and value 2's own-risk warning, 35.5), the readme template, records 13, 16 and 17 (with 35-T's `XhciIntervalCap` and the AMD report in the release notes), `failure-diagnosis.md`, `xhciqual/hardware-testing.md`, `xhcisnap/README.md` for the link notes, `source-files.md` and `runs/run-35.md`
+- [ ] 35.7 the cut, `2.2.0.0`: `xhci_version.h`, the four INFs' `DriverVer`, `releases/history.md`, the release notes, the README and `make-release.ps1`, and the ten install legs read from the asset, as 34.5
 
 Checkpoint: 35.2 naming the cause; 35.3's design and record 16's revision
-for 35.5 reviewed to convergence; 35-V passing; 35-E read by the owner with its
+for 35.5 and record 17 for 35-T reviewed to convergence; 35-V passing; 35-E read by the owner with its
 outcomes met - SuperSpeed on the E460 at `XhciMissingCas` 1 in every run
 of the fixed campaign,
 the P14s Gen 1 unchanged, value 2 reading as 1 on the B490; value 2's risk
 in the README and release notes; the ten install legs read from the
-`2.1.2.0` asset.
+`2.2.0.0` asset.
 
-Records: `runs/run-35.md` (to be opened).
+Records: `runs/run-35.md` (to be opened);
+`design/17-controller-tolerance.md` (to be written, 35-T.0).
 
 ---
 
@@ -673,8 +717,9 @@ Records: `runs/run-35.md` (to be opened).
 
 Not phases yet: each takes the next free phase number when the owner opens
 it, and its placeholder ids take that number then (owner, 2026-10-06; the
-decisions table). Both are meant for `2.2.0.0`, cut at the end of the
-second.
+decisions table), and a version only then too: `2.2.0.0` is Phase 35's
+(owner, 2026-10-06). Polled event delivery comes first, then selective
+suspend, which ends in a cut.
 
 ## Planned - Polled Event Delivery
 
@@ -684,7 +729,7 @@ of the event ring, chosen by a switch whose default, automatic, keeps the
 line interrupt wherever the controller has one; `XHCIQUAL` saying such a
 controller needs polling rather than disqualifying it.
 
-Status: not opened and unnumbered; meant for `2.2.0.0`, its phase number
+Status: not opened, unnumbered and unversioned; its phase number, version
 and branch given when the owner opens it. Design record 15 (`design/15-polled-event-delivery.md`) is the
 design: revision 4, Codex's findings on revisions 1 to 3 taken (10, 8
 and 5), and Codex's review converged at round 4 the same day, its one
@@ -720,7 +765,7 @@ phase when it is opened.
 
 ---
 
-## Planned - Release `2.2.0.0`: Selective Suspend, Standby Resume and the Cut
+## Planned - Release: Selective Suspend, Standby Resume and the Cut
 
 Goal: the bus suspends a device when Windows asks for it - a function's
 D-state in S0, or the idle notification on XP onward - and wakes it on D0 or
@@ -729,13 +774,15 @@ on the device's remote wake, never on a timer of its own; USB 2.0 devices
 hibernate resume readings under the HCD (SUSP.1), which the suspend design
 rests on, and the Windows 98 SE audio-load wedge re-measured against the
 new capabilities (SUSP.2). Then the docs of both planned pieces (SUSP.3)
-and the `2.2.0.0` cut, which carries both (SUSP.4).
+and the cut, which carries both (SUSP.4), its version given when the owner
+opens the work.
 
-Status: not opened and unnumbered; follows the polled event delivery work,
-its phase number and branches given when the owner opens it. Design record
+Status: not opened, unnumbered and unversioned; follows the polled event
+delivery work, its phase number, version and branches given when the owner
+opens it. Design record
 14 (`design/14-selective-suspend.md`) is the design; stage A's half
 converged with Codex over ten review rounds (`b2d03d5`). Stages A and B are
-to be built on branches of their own, both merged into the `2.2.0.0`
+to be built on branches of their own, both merged into the release's
 branch.
 
 Why a phase: it lifts the idle-policy limitation carried since `2.0.0.0`
