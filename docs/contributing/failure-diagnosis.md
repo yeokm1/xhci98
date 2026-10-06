@@ -320,7 +320,7 @@ each row's test requires nothing from the rows below it.
 | 4 | Ring programming wrong (DMA works, no completion) | CRCR written with a virtual address instead of physical, or wrong initial Ring Cycle State. Verify every address written to CRCR/DCBAAP/ERSTBA came from the common-buffer physical side. |
 | 5 | Events reach memory, ISR never fires | This is the poll-vs-interrupt differential: events visible in ring memory but no interrupt = IRQ delivery problem (Interrupt Pin = 0? routing? see `docs/contributing/implementation-invariants.md` "Interrupt Delivery"), not a driver-logic problem. |
 | 6 | ISR fires once, never again | ERDP written back without setting EHB, or USBSTS.EINT / IMAN.IP not acknowledged; the interrupter stays latched busy. |
-| 7 | Ports powered but no connect events (Intel 7/8/9-series PCH or C610/X99, real hw) | XUSB2PR still routes the USB2 ports to EHCI (`docs/usb-xhci-info/xhci-programming.md`, the `XUSB2PR` section). Invisible in QEMU. **Since `2.1.1.0` the driver routes them itself** on Intel 1E31, 8C31, 9C31, 8CB1, 9CB1 and 8D31 (roadmap-hcd task 34.3, design record 16), so check the switchover first, from an `XHCISNAP` report with `XhciLogVerbosity` at 2 or above: `psw.gate` 0 means the controller is not on the list (an Intel part with the mux that the list misses lands here, and the switchover never ran), and `psw.pci.unread` that the gate could not read the id; `psw.value.found` 1 with `psw.value` 0 means `XhciIntelPortSwitch` turned it off (`psw.value.found` 0 means no valid DWORD was read - absent, unreadable, or of the wrong type or length - and the switch is then on, with `psw.value` 0 only a placeholder); `psw.board.unread` or `psw.board.refused` means the subsystem id stopped it; a `psw.route.step` other than 0 names the step that was refused; and step 0 with a read-back (`psw.usb3pssen`, `psw.xusb2pr`) unequal to its mask (`psw.usb3prm`, `psw.xusb2prm`) means a write was accepted and did not take. With step 0 and each read-back equal to its mask the routing is not the cause; a connector outside the masks stays on EHCI by design. Before the driver, or under a release up to `2.1.0.0`, confirm with xhciqual test C7 (`2XPOLL` or later; `1PROBE` does not print it) or the firmware's own xHCI-mode setting, per the `XUSB2PR` run sheet in `xhciqual/hardware-testing.md`. Observed once: on a Lenovo B490 (1E31, Windows 98 SE, firmware on Auto) `XHCIQUAL` read `XUSB2PR` and `USB3_PSSEN` at 0 with the masks nonzero before Windows, and under the driver the route ran at step 0 with each read-back equal to its mask (`docs/contributing/runs/run-34.md`, 34.3-H2; the values themselves were not transcribed). The rest of the predicted signature (C1-C4 PASS, ports powered and no connect event at all under a driver that does not route) is read off the Intel datasheet and Linux's `usb_enable_intel_xhci_ports()`, not off silicon. 100-series and later Intel and all modern AMD have no such mux, so on those the symptom means something else. |
+| 7 | Ports powered but no connect events (Intel 7/8/9-series PCH or C610/X99, real hw) | XUSB2PR still routes the USB2 ports to EHCI (`docs/usb-xhci-info/xhci-programming.md`, the `XUSB2PR` section). Invisible in QEMU. **Since `2.1.1.0` the driver routes them itself** on Intel 1E31, 8C31, 9C31, 8CB1, 9CB1 and 8D31 (roadmap-hcd task 34.3, design record 16), so check the switchover first, from an `XHCISNAP` report with `XhciLogVerbosity` at 2 or above: `psw.gate` 0 means the controller is not on the list (an Intel part with the mux that the list misses lands here, and the switchover never ran unless `psw.mode` reads 2: since `2.2.0.0` an Intel controller's report carries `psw.mode`, the setting in effect - 0 off, 1 on a listed part, 2 an unlisted Intel part taken past the list by `XhciIntelPortSwitch` 2, at the user's own risk (design record 16 section 4a) - so an unlisted part with the mux is answered by 2 rather than by a new release), and `psw.pci.unread` that the gate could not read the id; `psw.value.found` 1 with `psw.value` 0 means `XhciIntelPortSwitch` turned it off (`psw.value.found` 0 means no valid DWORD was read - absent, unreadable, or of the wrong type or length - and the switch is then on, with `psw.value` 0 only a placeholder); `psw.board.unread` or `psw.board.refused` means the subsystem id stopped it; a `psw.route.step` other than 0 names the step that was refused; and step 0 with a read-back (`psw.usb3pssen`, `psw.xusb2pr`) unequal to its mask (`psw.usb3prm`, `psw.xusb2prm`) means a write was accepted and did not take. Since `2.2.0.0` `psw.route.written` follows each route and `psw.release.written` precedes each release, each a set of the registers written (bit 0 `USB3_PSSEN`, bit 1 `XUSB2PR`): a release gives back only what a route of the same started lifetime wrote, so an empty `psw.release.written` after a refused route is correct, not a fault. With step 0 and each read-back equal to its mask the routing is not the cause; a connector outside the masks stays on EHCI by design. Before the driver, or under a release up to `2.1.0.0`, confirm with xhciqual test C7 (`2XPOLL` or later; `1PROBE` does not print it) or the firmware's own xHCI-mode setting, per the `XUSB2PR` run sheet in `xhciqual/hardware-testing.md`. Observed once: on a Lenovo B490 (1E31, Windows 98 SE, firmware on Auto) `XHCIQUAL` read `XUSB2PR` and `USB3_PSSEN` at 0 with the masks nonzero before Windows, and under the driver the route ran at step 0 with each read-back equal to its mask (`docs/contributing/runs/run-34.md`, 34.3-H2; the values themselves were not transcribed). The rest of the predicted signature (C1-C4 PASS, ports powered and no connect event at all under a driver that does not route) is read off the Intel datasheet and Linux's `usb_enable_intel_xhci_ports()`, not off silicon. 100-series and later Intel and all modern AMD have no such mux, so on those the symptom means something else. |
 
 A release build gives two readings before any of the rows above.
 `XHCI_EXTENSION.InitStep` and `.InitStatus` record the failing step and its
@@ -358,6 +358,31 @@ Ring/cycle bugs have distinctive signatures. Recognize them by shape:
    speed encoding (see `docs/usb-xhci-info/xhci-programming.md` "Speed Encoding") makes
    usbport compute the wrong EP0 max packet, which fails later and is
    misleading. Verify speed first, not last.
+
+   **On the HCD, read the root port's own account first** (since `2.2.0.0`,
+   roadmap-hcd task 35.3). With `XhciLogVerbosity` at 2 or above each root
+   port's enumeration leaves `enum.port.` notes, which `XHCISNAP` decodes
+   after the note ring ("root port enumeration notes, decoded"):
+   `enum.port.look` says why the port was inspected and what PORTSC read,
+   `enum.port.reset` the reset's result, `enum.port.speed` the raw speed ID,
+   the class it decoded to and where that meaning came from (listed in the
+   protocol's PSI table, the defaults of a protocol with none, or 35.1's
+   fallback for an ID 4 to 7 a USB 3 table does not list), `enum.port.rate`
+   the rate, `enum.port.slot` Enable Slot's completion and Slot ID,
+   `enum.port.fail` a failed attempt's cause and whether a retry follows,
+   `enum.port.end` the state the run left, and `enum.port.quiet` that the
+   port's eight bursts are spent until it next enumerates. From
+   `XhciLogVerbosity` 1, the snapshot's HCD region gives every root port's
+   machine state, failure cause, retries, slot, last raw speed ID with its
+   class and source, link warm resets and give-up, and the counter block,
+   which before `2.2.0.0` lay outside the snapshot. Issue 11 is the case it
+   was built for: a USB 3 port trained at U0 with speed ID 4, and no slot
+   ever made, read under `2.1.1.0` only by a hand-built offset table and a
+   static inference. With the notes, a failure of that kind reads
+   `enum.port.speed` with class 0 and `enum.port.fail` with cause 7, the
+   speed; on the E460 under `2.2.0.0` the port reads class 4 by the
+   fallback and Enable Slot succeeds (issue 11 section 6). Ports behind
+   a hub are not noted. `xhcisnap/README.md` has every layout.
 2. Address Device completes with Parameter/Context State Error (codes in
    `docs/usb-xhci-info/xhci-data-structures.md` "Completion Codes"). The input context
    content is wrong. Checklist, in order of how often each is the culprit:
@@ -421,9 +446,49 @@ Ring/cycle bugs have distinctive signatures. Recognize them by shape:
   under which building a target-side symbol checker is the right move.
 - Works for hours in QEMU, dies in minutes on hardware. Look the specific
   VID/DID up in Linux `drivers/usb/host/xhci-pci.c` before suspecting the common
-  code; this project keeps no quirk table of its own
-  (`docs/usb-xhci-info/xhci-programming.md`). Capture the Phase 0 tool's fact
+  code. This project keeps no general quirk table of its own
+  (`docs/usb-xhci-info/xhci-programming.md`); what it does key on a
+  controller id is the Intel switchover's list (design record 16), the soft
+  retry's exclusion of Linux's `XHCI_NO_SOFT_RETRY` parts and the interval
+  cap on AMD (design record 17 sections 4.2 and 4.7), and `XHCIQUAL`'s
+  `quirks.c` names the rest, report-only. Capture the Phase 0 tool's fact
   sheet for that machine if it exists.
+- **A device stops until it is replugged, or a port goes quiet** (since
+  `2.2.0.0`, design record 17). The bus now answers the faults that used to
+  leave a device dead - a lost interrupt, a Transaction Error, a code
+  nothing claims, a halt with no TD, a root port disabled or over-current, a
+  controller halted or unreadable - each within a budget, so the symptom
+  under `2.2.0.0` is either a recovery that worked (and is only counted) or
+  a stated terminal state. Read, in this order, from an `XHCISNAP` report
+  taken after the symptom (and one taken before it, to subtract):
+  1. The values in effect, `XhciTolerance`, `XhciIntervalCap` and
+     `XhciAvgTrbEsit`. At `XhciTolerance` 0 none of the behaviours acts and
+     the counters still count, so a report at 0 shows what they would have
+     answered; that is the differential, a restart apart.
+  2. `BackstopDrains` nonzero: events were picked up by the thread, not the
+     interrupt. Evidence of a lost or late interrupt, not proof; rising
+     steadily, suspect interrupt delivery (Phase 4 row 5) before the device.
+  3. The per-queue `Errors`, soft retries and halts, and the completion-code
+     histogram: Transaction Errors that the retry absorbed show here and
+     nowhere else; an exhausted retry is today's error completion, and what
+     the class driver then sends is design record 13 section 6.7.
+  4. `BadCodes`, `UnmatchedEvents` and `ForeignEvents` with the device
+     cycles and their reasons: a cycle answered a refused code or a halt
+     with no TD (record 17 section 4.3); a mark dropped because the device
+     had left is counted apart.
+  5. Each location's budget, charges and hold: a held port enumerates
+     nothing until stable-disconnect evidence or, held unpowered after
+     over-currents, a controller start. Root-port PED and over-current
+     faults are counted separately from the cycles.
+  6. The controller's recovery window and containment: a fourth recovery in
+     ten minutes is not begun and the controller stays latched failed; a
+     contained controller says whether Bus Master Enable read back clear
+     (devices dropped) or the buffer was pinned.
+  A HID device on an AMD controller that stops at random is the report the
+  work came from: read the controller id behind the port (`XHCIQUAL`'s
+  probe) first, and if it still stops with these at or near 0, compare with
+  `XhciAvgTrbEsit` 1. QEMU raises none of these faults; only the `qemu`
+  flavour's injection (record 17 section 5) makes them.
 
 ## When stuck for more than two sessions
 
