@@ -6,7 +6,7 @@ opens it, and the review history in section 13 keeps the old phase
 numbers). DRAFT, revision 4, 2026-10-05: written at the owner's request so the driver can run
 a controller that delivers no legacy interrupt - an MSI- or MSI-X-only xHCI
 controller, which neither primary target can serve today - by polling the
-event ring, adaptively, instead of waiting for an interrupt. Codex reviewed
+event ring, adaptively, instead of waiting for an interrupt. Reviews covered
 revisions 1 to 3 the same day (10, 8 and 5 findings, all taken; section 13
 maps each) and converged at round 4, on revision 4. Nothing is built.
 
@@ -24,7 +24,7 @@ phase schedules it), interrupters other than
 Interrupter 0, and any change to the line-interrupt path. On a controller
 with a line interrupt, the default must read as the Phase 34 build does.
 
-## 2. State today (read 2026-10-05, and by Codex on revision 1)
+## 2. State today (read 2026-10-05, and by review on revision 1)
 
 The start:
 
@@ -176,7 +176,7 @@ resume keep it; only a new start settles it again. For a poll delivery:
 `XhciImodInterval250ns` is still programmed as read; it has no effect
 without an interrupt.
 
-### 4.1 What the hardware needs (Codex, revision 1)
+### 4.1 What the hardware needs (review, revision 1)
 
 With `USBCMD.INTE` and `IMAN.IE` clear, cycle-bit dequeue and the `ERDP`
 write remain valid: `IMAN.IP` and `USBSTS.EINT` may stay pending without
@@ -502,7 +502,7 @@ A controller is no longer disqualified for `Interrupt Pin = 0`:
 or set `XhciInterruptMode` to 2)", and the other disqualifiers - BAR0 above
 4 GB, unassigned, I/O space - keep their verdicts.
 
-C4 is not converted wholesale. Its fail covers several causes (Codex,
+C4 is not converted wholesale. Its fail covers several causes (review,
 revision 1): the DPMI interrupt hook not installed (`bringup.c:580`), no
 `IP` and no matching event (`:605-623`), and an ISR that fired with no
 completion behind it (`:668`). Only the cause "the event reached the ring
@@ -587,7 +587,7 @@ Taken by the owner on 2026-10-05, each from options with a recommendation:
 5. The value names: `XhciInterruptMode`, `XhciPollIdleMs` and
    `XhciPollActiveMs`, as recommended.
 
-## 13. Codex's reviews
+## 13. The reviews
 
 ### 13.1 Revision 1
 
@@ -629,7 +629,7 @@ Taken by the owner on 2026-10-05, each from options with a recommendation:
 
 ### 13.4 Revision 4
 
-Converged (Codex, round 4, 2026-10-05): one wording finding, the roadmap's
+Converged (review round 4, 2026-10-05): one wording finding, the roadmap's
 Phase 35 status still naming revision 3, taken. No finding in the reopen,
 the deadline conversion, the phase split or the cross-references.
 

@@ -885,7 +885,7 @@ recovery's arming is released, re-requested and charged exactly as its
 age-out would have. A failure touches only the operation it was for, and a
 watchdog context is latched only while it still watches the outstanding
 command, so a stale writer on another CPU cannot overwrite a newer owe
-(the Codex review's three findings, `runs/run-24.md`, "24.4"). The handle out-pointer and
+(the review's three findings, `runs/run-24.md`, "24.4"). The handle out-pointer and
 `UsbPortCancelAsyncCallback` are not used: a stale callback is still the
 rule, and Windows 7's StopController runs a pending one early whatever the
 driver holds - with a live epoch, so an abort issued on a pending command or

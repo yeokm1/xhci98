@@ -6,8 +6,8 @@ Design record for roadmap-hcd's planned selective suspend work (tasks
 phase numbers). DRAFT, revision 10,
 2026-10-05: written at the owner's request to solve the known limitation "the
 driver never initiates selective suspend" (roadmap-hcd decisions table, row
-"The idle power policy (28.3)"; release notes, "Known limitations"). Codex
-reviewed revisions 1 to 9 the same day (13, 12, 10, 9, 3, 4, 1, 2 and 1 findings, all taken;
+"The idle power policy (28.3)"; release notes, "Known limitations"). Reviews
+covered revisions 1 to 9 the same day (13, 12, 10, 9, 3, 4, 1, 2 and 1 findings, all taken;
 section 9 maps each to where it is answered). Not yet a roadmap phase;
 nothing is built.
 
@@ -596,7 +596,7 @@ returned. A remote wake ends it through the woken function's D0.
 
 `XhciSelectiveSuspend`, REG_DWORD under the controller's driver key, read at
 start like `XhciFirstEnumWaitMs`. **Default 1** (owner, 2026-10-05, over
-Codex's round-2 advice of 0): sections 3 to 6 are on for every user of the
+review round 2's advice of 0): sections 3 to 6 are on for every user of the
 release that carries them. 0 is today's behaviour bit for bit (capabilities,
 WAIT_WAKE refused, idle callbacks never called, Dx recorded only) and is the
 escape a user is told about in the release notes. The INF writes nothing; the
@@ -615,7 +615,7 @@ C_PORT_LINK_STATE (record 13 section 10.2), so the notification is the only
 signal. `xhci_link.c`'s Resume classification and `WANT_RESUME` are fixed
 there. QEMU has no SS hub, so SUSPb's hub half is bench-only.
 
-## 9. Codex review of revision 1 (2026-10-05), where each finding is taken
+## 9. Review of revision 1 (2026-10-05), where each finding is taken
 
 | # | Finding | Answered in |
 |---|---|---|
@@ -769,4 +769,4 @@ Revision 9's review found 1; revision 10 takes it:
   packaging gate refuses it in a release (owner, 2026-10-05).
 - Stage B ships in the same release as stage A (owner, 2026-10-05): the
   release is cut only after stage B is designed (section 8 grown into the
-  record proper, Codex-reviewed), built and read, its bench included.
+  record proper, reviewed), built and read, its bench included.

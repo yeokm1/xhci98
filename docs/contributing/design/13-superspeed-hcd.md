@@ -162,7 +162,7 @@ is the index; this is the same list in the proposal's order:
   2026-10-03), the INFs' device
   descriptions on every path.
 - **The root hub is a devnode, and both property tabs are kept** (owner,
-  2026-10-02, reversing a narrower answer given on the Codex review earlier
+  2026-10-02, reversing a narrower answer given on the review earlier
   that day). The controller FDO creates a root-hub PDO under a
   project-owned hardware id - never `USB\ROOT_HUB`, which the OS's own
   `usbhub.sys` claims on every NT target - and `xhci98.inf` binds it to
@@ -300,7 +300,7 @@ in a `QUERY_DEVICE_RELATIONS` answer and has sent the PDO its remove. The
 device object inside the bus goes with the slot, not with the PDO: the PDO
 keeps copies of the descriptors its ids are made from, and nothing of the
 device object (corrected 2026-10-03 from "freed only then", which the
-implementation never did; Codex review of batch (b), round 1, finding 17).
+implementation never did; review of batch (b), round 1, finding 17).
 A Disable Slot the controller does not confirm is the exception: the device
 object stays, quarantined in the slot table, until the controller reset that
 failure requests has taken every slot. The PDO's own lifecycle, as 26-A.4
@@ -446,7 +446,7 @@ What is new has three layers, in this order from outermost to innermost:
    enumeration context links and unlinks the PDOs, a PDO's deleting remove
    and a parent's release unlink them too, and so the PDO list is the one
    part of the topology whose single-writer rule in layer 1 does not hold
-   (Codex review of batch (b), round 2, note 7). Held only to link, unlink,
+   (review of batch (b), round 2, note 7). Held only to link, unlink,
    mark or copy the lists.
 3. **The controller lock**, innermost, as above.
 
@@ -747,7 +747,7 @@ invalidation its PDO's creation makes.
   and 3), no
   send-back of the window in flight (`XhciEnumHoldInFlight`). A hub port
   whose `GET_STATUS` failed is owed its look again up to three times in a
-  row (`HCD_HUB_LOOK_TRIES`) rather than taken as looked at (Codex review of
+  row (`HCD_HUB_LOOK_TRIES`) rather than taken as looked at (review of
   33.3, round 1, findings 2 and 3). `SettleDone` only moves forward. With
   nothing attached, the first pass after the start finds nothing in flight.
 - **The waiter never holds what the thread needs.** The first answer looks
@@ -766,7 +766,7 @@ invalidation its PDO's creation makes.
 - **The deadline is one per answer**, not renewed per port: a relative
   `KTIMER` on the waiter's stack, armed at its first look and polled with a
   zero wait, the pattern `HcdHubPortDebounce` already uses on every target,
-  so a change of the system time moves no bound (Codex review of 33.3, round
+  so a change of the system time moves no bound (review of 33.3, round
   1, finding 4). At the deadline the waiter retires its own generation,
   counts it (`SettleTimeouts`; a teardown is counted apart, `SettleAborts`,
   finding 5) and answers; the thread finishes what it was doing, and those
@@ -853,7 +853,7 @@ specification's and stay unconfigurable.
    a per-hub cohort would need a second bookkeeping of the same machines.
    A hub's ports are seeded for their first look in its bring-up (10.3) and
    looked at in the same pass, after its PDO is made and before PnP can
-   start it (corrected after Codex review of 33.3, round 1), so its FDO's
+   start it (corrected after review of 33.3, round 1), so its FDO's
    first answer is one look unless the bus is busy elsewhere (0 to 31 ms
    measured). It never waits on a descendant hub FDO's
    start. Tiers add up at boot: a hub FDO starts only after its parent's
@@ -876,7 +876,7 @@ specification's and stay unconfigurable.
 **Measured** (runtime, the `qemu` flavour's trace unless a row says
 `release`, 2026-10-04 and 05, development host A, QEMU TCG;
 `out\phase33\initenum\`, git-ignored). The first rows were taken on
-`89a8025`, the rows marked "final" on `59e1897` (Codex rounds 1 and 2 in);
+`89a8025`, the rows marked "final" on `59e1897` (review rounds 1 and 2 in);
 rounds 3 and 4 after it touch only a SuperSpeed root link still in reset,
 which none of these legs has, and the keyboard-behind-a-hub F6 leg passed
 again on `82902e8` (the branch's last code; 562 ms and 31 ms).
@@ -2432,7 +2432,7 @@ reaches streams: an endpoint with streams open is stopped when any stream
 has work, and rung again per stream by its Stream ID. The request's
 encoding, `C_PORT_LINK_STATE` on a host-directed U3 exit and `PORT_ENABLE`
 staying set in U3 were read from USB 3.2 r1.1 10.16.2.6 and 10.16.2.10
-(Codex review of the merge, printed pp.446-454); no QEMU model has a SuperSpeed
+(review of the merge, printed pp.446-454); no QEMU model has a SuperSpeed
 hub, so `test_sshub`'s `test_resume` vectors are the only evidence until
 the bench (30-E.1).
 
@@ -2674,7 +2674,7 @@ case-insensitive matching above, and the form most INF lines use.
 |---|---|
 | `BusQueryDeviceID` | `USB\VID_vvvv&PID_pppp&MI_nn` |
 | `BusQueryHardwareIDs` | `USB\VID_vvvv&PID_pppp&REV_rrrr&MI_nn`, `USB\VID_vvvv&PID_pppp&MI_nn` |
-| `BusQueryCompatibleIDs` | `USB\Class_cc&SubClass_ss&Prot_pp`, `USB\Class_cc&SubClass_ss`, `USB\Class_cc`: for an IAD function from the IAD's `bFunctionClass` / `bFunctionSubClass` / `bFunctionProtocol`, as Microsoft's "Support for interface collections" gives them; for any other function, a legacy audio group included, from its first interface (alternate 0). Decided 2026-10-03 (Codex review of batch (c), round 19, finding 5); it was open (10.10) |
+| `BusQueryCompatibleIDs` | `USB\Class_cc&SubClass_ss&Prot_pp`, `USB\Class_cc&SubClass_ss`, `USB\Class_cc`: for an IAD function from the IAD's `bFunctionClass` / `bFunctionSubClass` / `bFunctionProtocol`, as Microsoft's "Support for interface collections" gives them; for any other function, a legacy audio group included, from its first interface (alternate 0). Decided 2026-10-03 (review of batch (c), round 19, finding 5); it was open (10.10) |
 | `BusQueryInstanceID` | with the device's serial id, that id, `&` and `nn`, `UniqueID` TRUE: `ABC123&03`; without, the location key in decimal, then `nn`: port 3's `MI_03` is `303`, `UniqueID` FALSE (task 33.2; the location form was corrected 2026-10-03 by 26-A.7 from "the parent device's instance string plus the function number") |
 
 **Instance ids from the serial number** (roadmap task 33.2, `2.1.0.0`;
@@ -2750,7 +2750,7 @@ device keeps the location form and `UniqueID` FALSE.
   moved to another root port and a hub B carrying a device D put where A
   was, was retired by D's listing although A revived and still reported
   it, and only B's side was invalidated - C's START failed and C sat as a
-  failed devnode under A (Codex review of the 33.1-33.6 integration,
+  failed devnode under A (review of the 33.1-33.6 integration,
   finding 3). Now C waits out its START and goes then, its own parent
   invalidated. A serial-less hub replaced by a different hub at the same
   root port still retires the old hub's group, and its children with it.
@@ -2830,7 +2830,7 @@ Add New Hardware wizard showed for every device (owner report).
   10 s wait, and a timeout's reset reports the device gone before its
   revival is tried - for a hub, the revived hub reported gone and its
   replacement given a new `Serial` that its dormant children can never
-  match (Codex review of the 33.1-33.6 integration, findings 1 and 2).
+  match (review of the 33.1-33.6 integration, findings 1 and 2).
   "Looks set to" is a preview taken once the group is built: the
   revival's own choice (`hcdDormantChooseLocked`, which `hcdDormantRevive`
   now calls too) under `hcdSerialLock` and `PdoListLock`, changing
@@ -2841,7 +2841,7 @@ Add New Hardware wizard showed for every device (owner report).
   and dropped at review: it missed a device whose earlier reads failed
   and whose serial id is now a duplicate, which revives its location
   group only after the duplicate check, so its text reads, and a timeout
-  in them, still came first (Codex review of this fix, round 1). The
+  in them, still came first (review of this fix, round 1). The
   preview is still not the decision, because the locks are let go for
   the reads: the decision that counts is `hcdDormantRevive`'s, after
   them, and should a dormant group come or go in between, the new PDOs
@@ -2897,7 +2897,7 @@ with more than 16 functions or IADs, or an interface number of 32 or more. A
 multi-interface device left whole no longer reports its first interface's
 class triple (10.7).
 
-Superseded on 2026-10-03 (owner and coordinator, after Codex review of batch
+Superseded on 2026-10-03 (owner and coordinator, after review of batch
 (c), round 19, finding 3): this paragraph read "Split when the active
 configuration has more than one interface ... **and** `bDeviceClass` is 0,
 or is `0xEF` with subclass 2 and protocol 1 ..., or the configuration carries
@@ -2930,7 +2930,7 @@ interfaces' descriptors:
    builds do the same thing. Any IAD turns the audio rule off for every
    interface, per Microsoft's grouping hierarchy ("Support for interface
    collections"), and an interface no IAD covers is then a function on its
-   own (superseded on 2026-10-03, Codex review of batch (c), round 19,
+   own (superseded on 2026-10-03, review of batch (c), round 19,
    finding 6: this rule read "for interfaces no IAD covers"):
    - **Consecutive class-`0x01` interfaces whose subclass differs from the
      first form one function.** An interface of class `0x01` (Audio) starts a
@@ -3002,7 +3002,7 @@ same shape going by its public symbol names alone
 | power | a function's D-state is its own; the device stays D0 while any function is D0 (selective suspend is outside the roadmap, 28.3) |
 
 **A function's polling interval is the caller's** (2026-10-05, whole-branch
-Codex review of `2.1.0.0`, area B, incidental 2). A function's
+review of `2.1.0.0`, area B, incidental 2). A function's
 `SELECT_CONFIGURATION` builds each endpoint from the device's own
 configuration (the one 10.8's SET_CONFIGURATION selected), but takes the
 `bInterval` of the descriptor the caller passed in when that descriptor's copy
@@ -3032,7 +3032,7 @@ counts endpoints added at a function's `SELECT_CONFIGURATION` or
 |---|---|
 | Every **(to transcribe)** USB 2.0 number above: 4.1.1 tiers; 7.1.7.3 `TATTDB`; 7.1.7.5 `TDRST`, `TRSTRCY`; 7.1.7.7 `TRSMRCY`; 9.2.6.3 `TDSETADDR`; 11.12.4 the bitmap; 11.23.1-2 the hub descriptor fields and the status endpoint's `bInterval`; 11.24.2 the TT requests' `wValue`; Tables 11-13, 11-16, 11-17, 11-21 and 11-22. The specification is added to `docs/references/` with its hash first. | 27-A.1 (one transcription batch) |
 | `BusQueryCompatibleIDs` for a device-class device (the `DevClass` forms, read from the hub drivers' id order statically), and the instance-id character set on Windows 98. Since task 33.2 a serial id brings any of `0x21`-`0x7E` but `,` and `\` into a Windows 98 instance id (10.7); its guest legs on Windows 98 SE and ME are where that set is first observed. | 26-A.4; 33.2 |
-| **Closed 2026-10-03 by decision, not by a static read** (owner and coordinator, Codex review of batch (c), round 19, findings 3 and 5): the IAD function's compatible ids come from the IAD (10.7), and the split follows Microsoft's composite-parent rule - one configuration, two or more interfaces, device class 0 or `EF/02/01` - so no other device class and no multi-configuration device is split (10.8). It read: the IAD function's compatible ids (from the IAD or the first interface: `ParseUSBInterfaceAssociationDescriptors` / the id builders), the device-class values Microsoft splits besides 0, and the multi-configuration rule - static reads of `usbccgp.sys` and the hub drivers. The X4's IAD fields have still not been read. | 26-A.7 |
+| **Closed 2026-10-03 by decision, not by a static read** (owner and coordinator, review of batch (c), round 19, findings 3 and 5): the IAD function's compatible ids come from the IAD (10.7), and the split follows Microsoft's composite-parent rule - one configuration, two or more interfaces, device class 0 or `EF/02/01` - so no other device class and no multi-configuration device is split (10.8). It read: the IAD function's compatible ids (from the IAD or the first interface: `ParseUSBInterfaceAssociationDescriptors` / the id builders), the device-class values Microsoft splits besides 0, and the multi-configuration rule - static reads of `usbccgp.sys` and the hub drivers. The X4's IAD fields have still not been read. | 26-A.7 |
 | The interface numbering and order of each UAC 1.0 unit in `test-equipment.md`, read off the units' descriptors. The bus logs each function's port and `MI_`, interface mask and class triple as it creates the PDOs (`HcdDevicePdoCreate`) for that reading. | 26-A.7 |
 | Windows 2000's and stock Windows 98's own composite parent (`usbhub.sys`) grouping rule is unread. The INF evidence (audio at `MI_00`, HID at `MI_02`) agrees with the `usbccgp` rule, and since the bus does the splitting, what matters is what those targets' audio drivers accept. | 26-V.1, 26-V.2 |
 | Whether `IoInvalidateDeviceRelations` may be called at `DISPATCH_LEVEL` on Windows 98 (section 7.7), which decides whether 10.1's state machine hands that one call to the PASSIVE worker. | 27-A.1 |
@@ -3114,7 +3114,7 @@ two parents' relations answers are not one answer, a serial id is not
 reused while PnP may still see it present under **another** parent: a gone
 PDO there not yet reported missing, or a dormant one there that this
 device cannot revive, holds it, and the newcomer takes the place form for
-that plug (`hcdSerialTakenLocked`; Codex review of 33.4, final round,
+that plug (`hcdSerialTakenLocked`; review of 33.4, final round,
 finding 1). Under the same parent one answer omits the old and carries
 the new, as 33.2's move between root ports relies on.
 
@@ -3189,7 +3189,7 @@ that rule to every gone PDO, whichever parent it answers for, so the ports
 behind a departed hub stop waiting and a gone PDO whose REMOVE has come
 reaches `RemovedPdos` and its deletion at the next answer, as any other.
 The rule is applied at the departure too (`HcdDevicePdoGone`), so a port
-never waits for an answer no FDO can give (Codex review of 33.4, round 1).
+never waits for an answer no FDO can give (review of 33.4, round 1).
 
 **Invalidation.** `IoInvalidateDeviceRelations` goes to the PDO a change
 belongs under: the root-hub PDO for `ParentSerial` 0, otherwise the hub PDO,
@@ -3247,7 +3247,7 @@ ancestor rule above. The hub PDO is referenced across the call.
    has no devnode to revive it into, and a revival could come after the
    hub's start had already asked for its cycle, and lost it. So the stop
    drops the group, missing at once, and the device comes back as new PDOs
-   (Codex review of this fix, round 1). The root hub needs nothing of this: its `REMOVE` detaches the bus,
+   (review of this fix, round 1). The root hub needs nothing of this: its `REMOVE` detaches the bus,
    and its `START` marks every port changed (`HcdEnumDetach`,
    `HcdEnumAttach`).
 5. The controller's stop and remove, and the root hub's: unchanged.
@@ -3264,7 +3264,7 @@ ancestor rule above. The hub PDO is referenced across the call.
    disabled: dropped, it would be gone and waiting for an answer only its
    dormant hub's FDO could give, and its port's wait would keep that hub
    from being enumerated again; nor may it be taken for absent, since PnP
-   still holds it present (Codex review of 33.4, rounds 1 and 2). A
+   still holds it present (review of 33.4, rounds 1 and 2). A
    composite with one function disabled is kept whole the same way. The
    residue: a disabled device unplugged while the controller is off stays
    listed, disabled, until a device enumerates at its place or its hub's
