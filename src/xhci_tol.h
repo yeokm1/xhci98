@@ -260,6 +260,11 @@ ULONG XhciTolPedFault(ULONG tolerance, ULONG usb2, ULONG pec, ULONG ped,
  * clear while the driver's own state says it powered the port. */
 ULONG XhciTolOcFault(ULONG tolerance, ULONG occ, ULONG pp, ULONG powered);
 
+/* At XhciTolerance 0 (record 17 section 4.11), what the dump counts and
+ * nothing acts on: 1 for OCC, or for PP clear when *lost is clear; *lost
+ * follows PP, so one power loss counts once whether OCC came with it. */
+ULONG XhciTolOffOcCount(ULONG occ, ULONG pp, PULONG lost);
+
 /* A root port's over-current episode (record 17 section 4.5): OCA read on
  * each pass until it has read clear for the settle interval, then PP set
  * and the power-on interval waited before PORTSC is read afresh; an OCA

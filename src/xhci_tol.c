@@ -354,6 +354,15 @@ ULONG XhciTolOcFault(ULONG tolerance, ULONG occ, ULONG pp, ULONG powered)
     return (tolerance && (occ || (!pp && powered))) ? 1UL : 0UL;
 }
 
+ULONG XhciTolOffOcCount(ULONG occ, ULONG pp, PULONG lost)
+{
+    ULONG count;
+
+    count = (occ || (!pp && !*lost)) ? 1UL : 0UL;
+    *lost = pp ? 0UL : 1UL;
+    return count;
+}
+
 VOID XhciTolOcInit(PXHCI_TOL_OC oc)
 {
     if (oc == NULL) {

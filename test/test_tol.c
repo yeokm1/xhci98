@@ -511,6 +511,22 @@ static void test_port(void)
     CHECK_EQ(XhciTolOcFault(1, 0, 0, 0), 0, "PP clear, never powered");
     CHECK_EQ(XhciTolOcFault(1, 0, 1, 1), 0, "healthy");
     CHECK_EQ(XhciTolOcFault(0, 1, 0, 1), 0, "tolerance 0");
+    {
+        ULONG lost = 0;
+        ULONG n;
+
+        n = XhciTolOffOcCount(1, 0, &lost);
+        n += XhciTolOffOcCount(0, 0, &lost);
+        n += XhciTolOffOcCount(0, 0, &lost);
+        CHECK_EQ(n, 1, "off: OCC then PP still clear counts once");
+        n = XhciTolOffOcCount(0, 1, &lost);
+        CHECK_EQ(n, 0, "off: power back");
+        n = XhciTolOffOcCount(0, 0, &lost);
+        n += XhciTolOffOcCount(0, 0, &lost);
+        CHECK_EQ(n, 1, "off: a second loss with no OCC counts once");
+        n = XhciTolOffOcCount(1, 1, &lost);
+        CHECK_EQ(n, 1, "off: OCC with power on");
+    }
 
     test_port_oc();
 

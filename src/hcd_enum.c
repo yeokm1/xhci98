@@ -2510,20 +2510,11 @@ static ULONG hcdTolPortFeed(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG portsc,
     if (!tol) {
         /* Record 17 section 4.11: off, nothing acts, but a dump taken for
          * the comparison still counts what was seen. OCC and PEC are
-         * change bits, so each fault counts once. */
-        if ((portsc & XHCI_PORTSC_OCC) != 0) {
-            ext->Tol.Stats.OcFaults++;
-        } else if ((portsc & XHCI_PORTSC_PP) == 0) {
-            /* A power loss with no OCC, as the enabled path's
-             * XhciTolOcFault reads it; once until PP returns. */
-            if (!p->TolOffPpLost) {
-                ext->Tol.Stats.OcFaults++;
-                p->TolOffPpLost = 1;
-            }
-        }
-        if ((portsc & XHCI_PORTSC_PP) != 0) {
-            p->TolOffPpLost = 0;
-        }
+         * change bits, and a power loss counts once until PP returns. */
+        ext->Tol.Stats.OcFaults +=
+            XhciTolOffOcCount((portsc & XHCI_PORTSC_OCC) != 0,
+                              (portsc & XHCI_PORTSC_PP) != 0,
+                              &p->TolOffPpLost);
         if (XhciTolPedFault(1, !XhciPortIsUsb3(&ext->PortMap, p->PortId),
                             (portsc & XHCI_PORTSC_PEC) != 0,
                             (portsc & XHCI_PORTSC_PED) != 0,
