@@ -662,6 +662,17 @@ typedef struct _HCD_PORT {
      * Thread only. */
     ULONG LinkRecovering;
     ULONG LookFails;
+    /* 35-T.5 (design record 17 section 4.5). TolOc: a root port's
+     * over-current episode; thread only. TolCompletions: transfers its
+     * device completed with success or a short packet, counted by the event
+     * path under the controller lock; TolCompletionsSeen, the thread's last
+     * reading of it, for the location's stable progress. Each set by the
+     * start (HcdEnumInit). The location's budget itself is the
+     * extension's (Tol.RootLoc) for a root port and the hub object's
+     * (TolLoc) for a hub's. */
+    XHCI_TOL_OC TolOc;
+    ULONG TolCompletions;
+    ULONG TolCompletionsSeen;
 } HCD_PORT, *PHCD_PORT;
 
 /*
@@ -709,6 +720,11 @@ typedef struct _HCD_HUB {
     ULONG RearmPorts;
     ULONG RearmArmed;
     KTIMER RearmTimer;
+    /* Each port's location budget (35-T.5; design record 17 section 4.5),
+     * TolLoc[n - 1] for port n: set when the hub is brought up
+     * (HcdHubStart) and kept while the object lives, across its devices'
+     * re-enumerations and PDOs. */
+    XHCI_TOL_LOC TolLoc[HCD_HUB_MAX_PORTS];
 } HCD_HUB, *PHCD_HUB;
 
 /*
@@ -1209,6 +1225,14 @@ VOID HcdPswRelease(PHCD_CONTROLLER hc);
 VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered);
 VOID HcdEnumDetach(PHCD_CONTROLLER hc);
 VOID HcdEnumContain(PHCD_CONTROLLER hc, ULONG proof);
+/* 35-T.5's location budget, a root port's or a hub port's (thread only):
+ * the charge for one action of kind XHCI_TOL_CHARGE_* - 1 to act, 0 when
+ * the budget is spent and the location now held, and 1 uncharged at
+ * XhciTolerance 0 - and one look at the port. 35-T.3 and 35-T.4's device
+ * cycle charges its re-enumeration through HcdTolLocCharge. */
+ULONG HcdTolLocCharge(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG kind);
+VOID HcdTolLocObserve(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG connected,
+                      ULONG powered);
 ULONG HcdEnumAttach(PHCD_CONTROLLER hc);
 ULONG HcdEnumSettleAsk(PHCD_CONTROLLER hc);
 ULONG HcdEnumSettleClock(VOID);

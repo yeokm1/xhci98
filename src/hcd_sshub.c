@@ -487,6 +487,7 @@ ULONG HcdSsHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     d->Resume = 0;
     d->Retry = 0;
     d->GaveUp = 0;
+    d->Disabled = 0;
     if (!HcdHubPortStatus(hc, hub, n, &status, &change)) {
         return 0;
     }
@@ -534,7 +535,10 @@ ULONG HcdSsHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     d->Repower = sd.Repower;
     d->Resume = sd.Resume;
     d->Suspended = sd.Resumed;
+    d->Disabled = sd.Disabled;
     q->HubSsRecover = sd.WarmReset;
+    HcdTolLocObserve(hc, q, (status & XHCI_SSHUB_PORT_CONNECTION) != 0,
+                     (status & XHCI_SSHUB_PORT_POWER) != 0);
     if (sd.WarmReset) {
         XHCI_DBG_VALUE("hcd: SS hub port link error, port/link",
                        (n << 8) | XhciSsHubLinkState(status));

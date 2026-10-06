@@ -254,6 +254,8 @@ typedef struct _XHCI_SSHUB_PORT_DECISION {
     ULONG LinkChange;       /* C_PORT_LINK_STATE was set                  */
     ULONG Resume;           /* held device, link in U3: resume to U0      */
     ULONG Resumed;          /* held device, a U3 exit finished            */
+    ULONG Disabled;         /* a held device's port no longer enabled: a
+                             * re-enumeration charged to the location    */
 } XHCI_SSHUB_PORT_DECISION, *PXHCI_SSHUB_PORT_DECISION;
 
 VOID XhciSsHubPortDecide(ULONG state, ULONG status, ULONG change,

@@ -371,6 +371,13 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
     badCodes = pipe->Queue->BadCodes;
     unmatched = pipe->Queue->UnmatchedEvents;
     foreign = pipe->Queue->ForeignEvents;
+    if ((cc == XHCI_CC_SUCCESS || cc == XHCI_CC_SHORT_PACKET) &&
+        pipe->Device != NULL && pipe->Device->Location >= 1 &&
+        pipe->Device->Location <= HCD_PORT_COUNT) {
+        /* The location's stable progress (35-T.5), read by the thread;
+         * an isochronous device's included. */
+        hc->Ports[pipe->Device->Location - 1].TolCompletions++;
+    }
     if (pipe->TransferType == XHCI_PIPE_XFER_ISOCH) {
         reset = hcdIsoEvent(hc, pipe, slotId, dci, event, cc);
         hcdTolSumQueue(ext, pipe->Queue, errors, badCodes, unmatched, foreign);

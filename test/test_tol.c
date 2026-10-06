@@ -343,6 +343,118 @@ static void test_loc(void)
     CHECK_EQ(XhciTolLocCharge(NULL, 0, 0), 0, "NULL");
 }
 
+/* 35-T.5: the over-current episode at each interval's boundary, and the
+ * holds an over-current leaves. */
+static void test_port_oc(void)
+{
+    XHCI_TOL_OC oc;
+    XHCI_TOL_LOC l;
+    ULONG t;
+    ULONG s;
+
+    XhciTolOcInit(&oc);
+    CHECK_EQ(XhciTolOcStep(&oc, 0, 5), XHCI_TOL_OC_ACT_NONE, "no episode");
+
+    /* OCA set, then clear: the settle interval at its boundary, the repower,
+     * then the power-on interval at its boundary. */
+    t = 1000;
+    XhciTolOcBegin(&oc, t);
+    CHECK_EQ(oc.Phase, XHCI_TOL_OC_WAIT, "waiting");
+    CHECK_EQ(XhciTolOcStep(&oc, 1, t + 1), XHCI_TOL_OC_ACT_NONE, "OCA set");
+    s = t + 2;
+    CHECK_EQ(XhciTolOcStep(&oc, 0, s), XHCI_TOL_OC_ACT_NONE, "OCA clear");
+    CHECK_EQ(oc.Phase, XHCI_TOL_OC_SETTLE, "settling");
+    CHECK_EQ(XhciTolOcStep(&oc, 0, s + XHCI_TOL_OC_SETTLE_TICKS - 1),
+             XHCI_TOL_OC_ACT_NONE, "settle not passed");
+    CHECK_EQ(XhciTolOcStep(&oc, 0, s + XHCI_TOL_OC_SETTLE_TICKS),
+             XHCI_TOL_OC_ACT_REPOWER, "settled: repower");
+    CHECK_EQ(oc.Phase, XHCI_TOL_OC_POWER_ON, "powering");
+    s = s + XHCI_TOL_OC_SETTLE_TICKS;
+    CHECK_EQ(XhciTolOcStep(&oc, 0, s + XHCI_TOL_POWER_ON_TICKS - 1),
+             XHCI_TOL_OC_ACT_NONE, "power-on not passed");
+    CHECK_EQ(XhciTolOcStep(&oc, 0, s + XHCI_TOL_POWER_ON_TICKS),
+             XHCI_TOL_OC_ACT_INSPECT, "powered: inspect");
+    CHECK_EQ(oc.Phase, XHCI_TOL_OC_NONE, "episode over");
+
+    /* OCA set again during the settle restarts it; the wait is not
+     * extended by a second over-current. */
+    t = 5000;
+    XhciTolOcBegin(&oc, t);
+    CHECK_EQ(XhciTolOcStep(&oc, 0, t + 1), XHCI_TOL_OC_ACT_NONE, "clear");
+    CHECK_EQ(XhciTolOcStep(&oc, 1, t + 2), XHCI_TOL_OC_ACT_NONE, "set again");
+    CHECK_EQ(oc.Phase, XHCI_TOL_OC_WAIT, "settle restarted");
+    XhciTolOcBegin(&oc, t + 3);
+    CHECK_EQ(oc.Stamp, t, "wait not extended");
+    CHECK_EQ(XhciTolOcStep(&oc, 1, t + XHCI_TOL_OC_WAIT_TICKS - 1),
+             XHCI_TOL_OC_ACT_NONE, "wait not passed");
+    CHECK_EQ(XhciTolOcStep(&oc, 1, t + XHCI_TOL_OC_WAIT_TICKS),
+             XHCI_TOL_OC_ACT_GIVE_UP, "OCA never cleared: give up");
+    CHECK_EQ(oc.Phase, XHCI_TOL_OC_NONE, "ended");
+
+    /* A flapping OCA gives up at the wait as well. */
+    t = 9000;
+    XhciTolOcBegin(&oc, t);
+    for (s = 1; s < XHCI_TOL_OC_WAIT_TICKS; s++) {
+        CHECK_EQ(XhciTolOcStep(&oc, s & 1, t + s), XHCI_TOL_OC_ACT_NONE,
+                 "flapping");
+    }
+    CHECK_EQ(XhciTolOcStep(&oc, 1, t + XHCI_TOL_OC_WAIT_TICKS),
+             XHCI_TOL_OC_ACT_GIVE_UP, "flapping: give up");
+
+    /* A new over-current during the power-on wait starts a new episode. */
+    XhciTolOcBegin(&oc, 20000);
+    (VOID)XhciTolOcStep(&oc, 0, 20001);
+    CHECK_EQ(XhciTolOcStep(&oc, 0, 20001 + XHCI_TOL_OC_SETTLE_TICKS),
+             XHCI_TOL_OC_ACT_REPOWER, "repower");
+    XhciTolOcBegin(&oc, 20100);
+    CHECK_EQ(oc.Phase, XHCI_TOL_OC_WAIT, "new episode");
+    CHECK_EQ(oc.Stamp, 20100, "stamped anew");
+
+    /* Holds: an over-current wait that ran out is unpowered; a powered hold
+     * made unpowered counts once; neither is released by a disconnect. */
+    XhciTolLocInit(&l);
+    CHECK_EQ(XhciTolLocUnpowered(&l), 0, "not held");
+    XhciTolLocHold(&l, XHCI_TOL_HOLD_OC_WAIT);
+    CHECK_EQ(l.Hold, XHCI_TOL_HOLD_OC_WAIT, "held");
+    CHECK_EQ(l.Holds, 1, "counted");
+    CHECK_EQ(XhciTolLocUnpowered(&l), 1, "unpowered");
+    CHECK_EQ(XhciTolLocObserve(&l, 0, 1, 0, 100), 0, "disconnect");
+    (VOID)XhciTolLocObserve(&l, 1, 1, 0, 1000);
+    CHECK_EQ(l.Hold, XHCI_TOL_HOLD_OC_WAIT, "still held");
+    CHECK_EQ(XhciTolLocCharge(&l, XHCI_TOL_CHARGE_REPOWER, 1001), 0,
+             "no charge while held");
+
+    XhciTolLocInit(&l);
+    for (s = 0; s < XHCI_TOL_REENUMS; s++) {
+        (VOID)XhciTolLocCharge(&l, XHCI_TOL_CHARGE_REENUM, s);
+    }
+    CHECK_EQ(XhciTolLocCharge(&l, XHCI_TOL_CHARGE_REENUM, 10), 0, "spent");
+    CHECK_EQ(l.Hold, XHCI_TOL_HOLD_REENUMS, "held powered");
+    CHECK_EQ(XhciTolLocUnpowered(&l), 0, "powered hold");
+    XhciTolLocHold(&l, XHCI_TOL_HOLD_REPOWERS);
+    CHECK_EQ(l.Hold, XHCI_TOL_HOLD_REPOWERS, "now unpowered");
+    CHECK_EQ(l.Holds, 1, "one hold");
+    CHECK_EQ(XhciTolLocObserve(&l, 0, 1, 0, 100), 0, "disconnect");
+    (VOID)XhciTolLocObserve(&l, 1, 1, 0, 1000);
+    CHECK_EQ(l.Hold, XHCI_TOL_HOLD_REPOWERS, "not released");
+    XhciTolLocHold(NULL, XHCI_TOL_HOLD_OC_WAIT);
+    CHECK_EQ(XhciTolLocUnpowered(NULL), 0, "NULL");
+
+    /* A hub port observed only at its changes: one disconnect observation,
+     * then a connection once the interval has passed, re-arms; a connection
+     * before it does not. */
+    XhciTolLocInit(&l);
+    (VOID)XhciTolLocCharge(&l, XHCI_TOL_CHARGE_REENUM, 1);
+    CHECK_EQ(XhciTolLocObserve(&l, 0, 1, 0, 10), 0, "disconnect");
+    CHECK_EQ(XhciTolLocObserve(&l, 1, 1, 0, 10 + XHCI_TOL_STABLE_DISC_TICKS - 1),
+             0, "too soon");
+    CHECK_EQ(XhciTolLocObserve(&l, 0, 1, 0, 100), 0, "disconnect again");
+    CHECK_EQ(XhciTolLocObserve(&l, 1, 1, 0, 100 + XHCI_TOL_STABLE_DISC_TICKS),
+             1, "at the interval: re-armed");
+    CHECK_EQ(l.Reenums, 0, "budget back");
+    CHECK_EQ(XhciTolOcStep(NULL, 0, 0), XHCI_TOL_OC_ACT_NONE, "NULL");
+}
+
 static void test_port(void)
 {
     CHECK_EQ(XhciTolPedFault(1, 1, 1, 0, 1, 1), 1, "PED fault");
@@ -358,6 +470,8 @@ static void test_port(void)
     CHECK_EQ(XhciTolOcFault(1, 0, 0, 0), 0, "PP clear, never powered");
     CHECK_EQ(XhciTolOcFault(1, 0, 1, 1), 0, "healthy");
     CHECK_EQ(XhciTolOcFault(0, 1, 0, 1), 0, "tolerance 0");
+
+    test_port_oc();
 
     CHECK_EQ(XhciTolHchRecover(1, 1, 1), 1, "HCH while running");
     CHECK_EQ(XhciTolHchRecover(1, 1, 0), 0, "HCH expected");

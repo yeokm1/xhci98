@@ -193,12 +193,24 @@ VOID XhciTolLocInit(PXHCI_TOL_LOC loc);
 ULONG XhciTolLocCharge(PXHCI_TOL_LOC loc, ULONG kind, ULONG now);
 
 /* A pass's view of the port: connected (CCS, or the hub's port status),
- * powered (PP, 1 at a hub's port), fault (an over-current or a recovery
- * the driver itself caused is active). Times the stable disconnect; a
- * connection after one re-arms the budget and releases a powered hold.
- * Returns 1 when it re-armed. */
+ * powered (PP, or the hub's PORT_POWER), fault (an over-current or a
+ * recovery the driver itself caused is active). Times the stable
+ * disconnect; a connection after one re-arms the budget and releases a
+ * powered hold. A connection observed once the interval has passed since
+ * the disconnect was first observed counts as well: a hub's port is
+ * observed only when it reports a change, and a connection between two
+ * observations would have been reported as one. Returns 1 when it
+ * re-armed. */
 ULONG XhciTolLocObserve(PXHCI_TOL_LOC loc, ULONG connected, ULONG powered,
                         ULONG fault, ULONG now);
+
+/* Hold the location for reason (XHCI_TOL_HOLD_*): an over-current wait
+ * that ran out, or a powered hold made unpowered by an over-current whose
+ * repower it cannot charge. Holds counts a location newly held. */
+VOID XhciTolLocHold(PXHCI_TOL_LOC loc, ULONG reason);
+
+/* 1 when the hold leaves the port unpowered: released only by a start. */
+ULONG XhciTolLocUnpowered(const XHCI_TOL_LOC *loc);
 
 /* A device at the location completed a transfer. The first completion
  * after a charge, a fault or a disconnect starts the stable-progress
@@ -215,6 +227,38 @@ ULONG XhciTolPedFault(ULONG tolerance, ULONG usb2, ULONG pec, ULONG ped,
 /* 1 when a root port is in over-current: tolerance on and OCC set, or PP
  * clear while the driver's own state says it powered the port. */
 ULONG XhciTolOcFault(ULONG tolerance, ULONG occ, ULONG pp, ULONG powered);
+
+/* A root port's over-current episode (record 17 section 4.5): OCA read on
+ * each pass until it has read clear for the settle interval, then PP set
+ * and the power-on interval waited before PORTSC is read afresh; an OCA
+ * that never clears for the settle interval within the over-current wait
+ * gives up. */
+#define XHCI_TOL_OC_NONE            0UL
+#define XHCI_TOL_OC_WAIT            1UL     /* OCA set, or not yet read     */
+#define XHCI_TOL_OC_SETTLE          2UL     /* OCA read clear, timing       */
+#define XHCI_TOL_OC_POWER_ON        3UL     /* PP set, waiting              */
+
+#define XHCI_TOL_OC_ACT_NONE        0UL
+#define XHCI_TOL_OC_ACT_REPOWER     1UL     /* charge it, then set PP       */
+#define XHCI_TOL_OC_ACT_INSPECT     2UL     /* read PORTSC afresh           */
+#define XHCI_TOL_OC_ACT_GIVE_UP     3UL     /* hold the port unpowered      */
+
+typedef struct _XHCI_TOL_OC {
+    ULONG Phase;        /* XHCI_TOL_OC_*                                    */
+    ULONG Stamp;        /* the episode's start; in POWER_ON, the repower's  */
+    ULONG SettleStamp;  /* OCA first read clear                             */
+} XHCI_TOL_OC, *PXHCI_TOL_OC;
+
+VOID XhciTolOcInit(PXHCI_TOL_OC oc);
+
+/* An over-current found at now: the episode starts, unless one is already
+ * waiting for OCA, whose wait it does not extend. */
+VOID XhciTolOcBegin(PXHCI_TOL_OC oc, ULONG now);
+
+/* One pass, oca the OCA bit read. REPOWER moves the episode to POWER_ON
+ * stamped now - the caller ends it (XhciTolOcInit) if the charge is
+ * refused; INSPECT and GIVE_UP end it. */
+ULONG XhciTolOcStep(PXHCI_TOL_OC oc, ULONG oca, ULONG now);
 
 /* 35-T.6. 1 when HCH requests the in-place recovery: tolerance on, HCH
  * set, and the driver's state says the controller runs (D0, started, not

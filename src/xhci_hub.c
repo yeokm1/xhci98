@@ -134,6 +134,7 @@ VOID XhciHubPortDecide(ULONG state, ULONG status, ULONG change,
     out->Resume = connected && (status & XHCI_HUB_PORT_SUSPEND) != 0;
     out->Retry = 0;
     out->GaveUp = 0;
+    out->Disabled = 0;
 
     if ((change & XHCI_HUB_C_PORT_OVER_CURRENT) != 0) {
         out->OverCurrent = 1;
@@ -155,6 +156,7 @@ VOID XhciHubPortDecide(ULONG state, ULONG status, ULONG change,
         (status & XHCI_HUB_PORT_ENABLE) == 0 && xhciHubHolds(state)) {
         out->Disconnect = 1;
         out->Connect = 1;
+        out->Disabled = 1;
         return;
     }
     if (state == XHCI_ENUM_EMPTY) {

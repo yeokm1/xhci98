@@ -244,6 +244,10 @@ ULONG XhciTolLocObserve(PXHCI_TOL_LOC loc, ULONG connected, ULONG powered,
         }
         return 0;
     }
+    if (loc->DiscArmed &&
+        XhciTolElapsed(now, loc->DiscStamp, XHCI_TOL_STABLE_DISC_TICKS)) {
+        loc->DiscSeen = 1;
+    }
     loc->DiscArmed = 0;
     if (!loc->DiscSeen) {
         return 0;
@@ -256,6 +260,27 @@ ULONG XhciTolLocObserve(PXHCI_TOL_LOC loc, ULONG connected, ULONG powered,
         loc->Hold = XHCI_TOL_HOLD_NONE;
     }
     return 1;
+}
+
+VOID XhciTolLocHold(PXHCI_TOL_LOC loc, ULONG reason)
+{
+    if (loc == NULL || reason == XHCI_TOL_HOLD_NONE ||
+        loc->Hold == reason) {
+        return;
+    }
+    if (loc->Hold == XHCI_TOL_HOLD_NONE) {
+        loc->Holds++;
+    }
+    loc->Hold = reason;
+    loc->DiscArmed = 0;
+    loc->DiscSeen = 0;
+    loc->ProgArmed = 0;
+}
+
+ULONG XhciTolLocUnpowered(const XHCI_TOL_LOC *loc)
+{
+    return (loc != NULL && (loc->Hold == XHCI_TOL_HOLD_REPOWERS ||
+                            loc->Hold == XHCI_TOL_HOLD_OC_WAIT)) ? 1UL : 0UL;
 }
 
 ULONG XhciTolLocProgress(PXHCI_TOL_LOC loc, ULONG now)
@@ -286,6 +311,64 @@ ULONG XhciTolPedFault(ULONG tolerance, ULONG usb2, ULONG pec, ULONG ped,
 ULONG XhciTolOcFault(ULONG tolerance, ULONG occ, ULONG pp, ULONG powered)
 {
     return (tolerance && (occ || (!pp && powered))) ? 1UL : 0UL;
+}
+
+VOID XhciTolOcInit(PXHCI_TOL_OC oc)
+{
+    if (oc == NULL) {
+        return;
+    }
+    oc->Phase = XHCI_TOL_OC_NONE;
+    oc->Stamp = 0;
+    oc->SettleStamp = 0;
+}
+
+VOID XhciTolOcBegin(PXHCI_TOL_OC oc, ULONG now)
+{
+    if (oc == NULL || oc->Phase == XHCI_TOL_OC_WAIT ||
+        oc->Phase == XHCI_TOL_OC_SETTLE) {
+        return;
+    }
+    oc->Phase = XHCI_TOL_OC_WAIT;
+    oc->Stamp = now;
+    oc->SettleStamp = 0;
+}
+
+ULONG XhciTolOcStep(PXHCI_TOL_OC oc, ULONG oca, ULONG now)
+{
+    if (oc == NULL) {
+        return XHCI_TOL_OC_ACT_NONE;
+    }
+    switch (oc->Phase) {
+    case XHCI_TOL_OC_WAIT:
+    case XHCI_TOL_OC_SETTLE:
+        if (oca) {
+            oc->Phase = XHCI_TOL_OC_WAIT;
+        } else if (oc->Phase == XHCI_TOL_OC_WAIT) {
+            oc->Phase = XHCI_TOL_OC_SETTLE;
+            oc->SettleStamp = now;
+        } else if (XhciTolElapsed(now, oc->SettleStamp,
+                                  XHCI_TOL_OC_SETTLE_TICKS)) {
+            oc->Phase = XHCI_TOL_OC_POWER_ON;
+            oc->Stamp = now;
+            return XHCI_TOL_OC_ACT_REPOWER;
+        }
+        /* A flapping OCA restarts the settle but not the wait, so the
+         * episode ends either way. */
+        if (XhciTolElapsed(now, oc->Stamp, XHCI_TOL_OC_WAIT_TICKS)) {
+            XhciTolOcInit(oc);
+            return XHCI_TOL_OC_ACT_GIVE_UP;
+        }
+        return XHCI_TOL_OC_ACT_NONE;
+    case XHCI_TOL_OC_POWER_ON:
+        if (!XhciTolElapsed(now, oc->Stamp, XHCI_TOL_POWER_ON_TICKS)) {
+            return XHCI_TOL_OC_ACT_NONE;
+        }
+        XhciTolOcInit(oc);
+        return XHCI_TOL_OC_ACT_INSPECT;
+    default:
+        return XHCI_TOL_OC_ACT_NONE;
+    }
 }
 
 ULONG XhciTolHchRecover(ULONG tolerance, ULONG hch, ULONG runs)

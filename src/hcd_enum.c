@@ -2161,6 +2161,260 @@ static VOID hcdHoldRelease(PHCD_CONTROLLER hc, PHCD_HOLD h)
     h->Used = 0;
 }
 
+/* ----------------------------------------------------------------------- */
+/* 35-T.5: the location the controller gave up on                          */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * A location's budget (design record 17 sections 4.5 and 4.9): a root
+ * port's in the extension, where the dump reads it, a hub port's on its hub
+ * object. NULL for a port object that is neither. Thread only.
+ */
+static PXHCI_TOL_LOC hcdTolLoc(PHCD_CONTROLLER hc, PHCD_PORT p)
+{
+    if (p->Hub == NULL) {
+        if (p->PortId < 1 || p->PortId > XHCI_MAX_ROOT_PORTS) {
+            return NULL;
+        }
+        return &hc->Hc.Tol.RootLoc[p->PortId - 1];
+    }
+    if (p->Number < 1 || p->Number > HCD_HUB_MAX_PORTS) {
+        return NULL;
+    }
+    return &p->Hub->TolLoc[p->Number - 1];
+}
+
+/* The location newly held, or its hold changed: counted once and recorded
+ * in the note ring, location and reason, which is how a hub port's hold
+ * reaches the dump. Thread only. */
+static VOID hcdTolHeld(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG was,
+                       const XHCI_TOL_LOC *loc)
+{
+    if (loc->Hold == was) {
+        return;
+    }
+    if (was == XHCI_TOL_HOLD_NONE) {
+        hc->Hc.Tol.Stats.Holds++;
+    }
+    XHCI_DBG_VALUE("hcd: location held, location/reason",
+                   (p->PortId << 8) | loc->Hold);
+    XhciLogNote(&hc->Hc, "tol.loc.hold", (p->PortId << 8) | loc->Hold);
+}
+
+/* Hold the location for reason. Thread only. */
+static VOID hcdTolHold(PHCD_CONTROLLER hc, PHCD_PORT p, PXHCI_TOL_LOC loc,
+                       ULONG reason)
+{
+    ULONG was;
+
+    was = loc->Hold;
+    XhciTolLocHold(loc, reason);
+    hcdTolHeld(hc, p, was, loc);
+}
+
+/* Thread only. */
+ULONG HcdTolLocCharge(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG kind)
+{
+    PXHCI_TOL_LOC loc;
+    ULONG was;
+
+    loc = hcdTolLoc(hc, p);
+    if (!hc->Hc.Tol.Stats.Tolerance || loc == NULL) {
+        return 1;
+    }
+    was = loc->Hold;
+    if (XhciTolLocCharge(loc, kind, HcdTolNow(hc))) {
+        /* Completions before the charge are not progress after it. */
+        p->TolCompletionsSeen = *(volatile ULONG *)&p->TolCompletions;
+        return 1;
+    }
+    hcdTolHeld(hc, p, was, loc);
+    return 0;
+}
+
+/*
+ * One look at the location's port: connected and powered as the port reads
+ * them (CCS and PP, or the hub's port status). Only a location with
+ * something to re-arm or release is timed, so a location never charged
+ * costs nothing. A root port in an over-current episode is in a fault the
+ * recovery caused. Thread only.
+ */
+VOID HcdTolLocObserve(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG connected,
+                      ULONG powered)
+{
+    PXHCI_TOL_LOC loc;
+    ULONG fault;
+    ULONG was;
+
+    loc = hcdTolLoc(hc, p);
+    if (!hc->Hc.Tol.Stats.Tolerance || loc == NULL ||
+        (!loc->Charged && loc->Hold == XHCI_TOL_HOLD_NONE)) {
+        return;
+    }
+    fault = (p->Hub == NULL && p->TolOc.Phase != XHCI_TOL_OC_NONE) ? 1UL
+                                                                   : 0UL;
+    was = loc->Hold;
+    if (XhciTolLocObserve(loc, connected, powered, fault, HcdTolNow(hc))) {
+        XhciLogNote(&hc->Hc, "tol.loc.rearm", (p->PortId << 8) | was);
+    }
+}
+
+/* The location's stable progress: its device's completions since the last
+ * pass, while it is bound and the location charged and not held. Thread
+ * only. */
+static VOID hcdTolProgress(PHCD_CONTROLLER hc, PHCD_PORT p, PXHCI_TOL_LOC loc,
+                           ULONG now)
+{
+    ULONG seen;
+
+    seen = *(volatile ULONG *)&p->TolCompletions;
+    if (seen == p->TolCompletionsSeen) {
+        return;
+    }
+    p->TolCompletionsSeen = seen;
+    if (!loc->Charged || loc->Hold != XHCI_TOL_HOLD_NONE ||
+        p->Enum.State != XHCI_ENUM_BOUND) {
+        return;
+    }
+    if (XhciTolLocProgress(loc, now)) {
+        XhciLogNote(&hc->Hc, "tol.loc.rearm", p->PortId << 8);
+    }
+}
+
+/* A root port held unpowered: PP taken off if the port has power control
+ * and it still reads set, so the hold is what the dump says. Thread only. */
+static VOID hcdTolUnpower(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG portsc)
+{
+    if (hc->Hc.HcInfo.Ppc && (portsc & XHCI_PORTSC_PP) != 0) {
+        XhciWritePortsc(&hc->Hc, p->PortId, XhciPortscPower(portsc, 0));
+    }
+}
+
+/*
+ * One pass of a root port's over-current episode (record 17 section 4.5):
+ * OCA read; once it has read clear for the settle interval the repower is
+ * charged and PP set, and once the power-on interval has passed the port
+ * is inspected afresh, where a connection is looked for. An OCA that does
+ * not clear within the over-current wait, or a repower the budget refuses,
+ * holds the port unpowered until a controller start. Thread only, powered.
+ */
+static VOID hcdTolOcPass(PHCD_CONTROLLER hc, PHCD_PORT p, PXHCI_TOL_LOC loc,
+                         ULONG now)
+{
+    PXHCI_EXTENSION ext;
+    ULONG portsc;
+
+    ext = &hc->Hc;
+    portsc = XhciReadPortsc(ext, p->PortId);
+    if (portsc == 0xFFFFFFFFUL) {
+        /* Read again at the next pass; the episode's wait still runs. */
+        return;
+    }
+    switch (XhciTolOcStep(&p->TolOc, (portsc & XHCI_PORTSC_OCA) != 0, now)) {
+    case XHCI_TOL_OC_ACT_REPOWER:
+        if (HcdTolLocCharge(hc, p, XHCI_TOL_CHARGE_REPOWER)) {
+            ext->Tol.Stats.Repowers++;
+            XHCI_DBG_VALUE("hcd: over-current settled, repower, port",
+                           p->PortId);
+            XhciWritePortsc(ext, p->PortId, XhciPortscPower(portsc, 1));
+            break;
+        }
+        XhciTolOcInit(&p->TolOc);
+        /* A powered hold the over-current found is unpowered now. */
+        hcdTolHold(hc, p, loc, XHCI_TOL_HOLD_REPOWERS);
+        hcdTolUnpower(hc, p, portsc);
+        break;
+    case XHCI_TOL_OC_ACT_GIVE_UP:
+        hcdTolHold(hc, p, loc, XHCI_TOL_HOLD_OC_WAIT);
+        hcdTolUnpower(hc, p, portsc);
+        break;
+    case XHCI_TOL_OC_ACT_INSPECT:
+        hcdPortInspectAgain(hc, p);
+        break;
+    default:
+        break;
+    }
+}
+
+/*
+ * What a root port's inspection feeds, under 35-T.5 (record 17 section
+ * 4.5), from what XhciLinkPortFeed decided and the PORTSC it read:
+ *
+ *   over-current  OCC, or PP clear while the driver's own state says it
+ *                 powered the port: the episode starts, the device is fed
+ *                 a disconnect, and no connect until the episode's own
+ *                 inspection;
+ *   PED cleared   a USB 2.0 port with PEC set, PED clear and CCS set under
+ *                 a device: the re-enumeration is charged and the device
+ *                 fed a disconnect; the inspection the teardown's end
+ *                 brings (the PDO's removal, or the one asked for here)
+ *                 reads PORTSC afresh and feeds the connect. Charged or
+ *                 refused, the device goes: a refusal holds the location;
+ *   held          the bus enumerates nothing at the location, and nothing
+ *                 at a port whose PP reads clear.
+ *
+ * At XhciTolerance 0 the feed is returned as it came. Thread only.
+ */
+static ULONG hcdTolPortFeed(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG portsc,
+                            ULONG feed)
+{
+    PXHCI_EXTENSION ext;
+    PXHCI_TOL_LOC loc;
+    ULONG tol;
+    ULONG now;
+    ULONG powered;
+
+    ext = &hc->Hc;
+    tol = ext->Tol.Stats.Tolerance;
+    loc = hcdTolLoc(hc, p);
+    if (!tol || loc == NULL) {
+        return feed;
+    }
+    now = HcdTolNow(hc);
+    HcdTolLocObserve(hc, p, (portsc & XHCI_PORTSC_CCS) != 0,
+                     (portsc & XHCI_PORTSC_PP) != 0);
+    /* Not while a repower's PP may still be on its way: the power-on
+     * interval's own inspection reads it. */
+    powered = !XhciTolLocUnpowered(loc) &&
+              p->TolOc.Phase == XHCI_TOL_OC_NONE;
+    if (XhciTolOcFault(tol, (portsc & XHCI_PORTSC_OCC) != 0,
+                       (portsc & XHCI_PORTSC_PP) != 0, powered)) {
+        ext->Tol.Stats.OcFaults++;
+        XHCI_DBG_VALUE("hcd: root port over-current, port/PORTSC low",
+                       (p->PortId << 16) | (portsc & 0xFFFFUL));
+        XhciLogNote(ext, "tol.port.oc", p->PortId);
+        XhciTolOcBegin(&p->TolOc, now);
+        (VOID)XhciTolLocObserve(loc, 0, 0, 1, now);
+        feed |= XHCI_LINK_FEED_DISCONNECT;
+    }
+    if (XhciTolPedFault(tol, !XhciPortIsUsb3(&ext->PortMap, p->PortId),
+                        (portsc & XHCI_PORTSC_PEC) != 0,
+                        (portsc & XHCI_PORTSC_PED) != 0,
+                        (portsc & XHCI_PORTSC_CCS) != 0,
+                        p->Device != NULL &&
+                            (p->Enum.State == XHCI_ENUM_PRESENT ||
+                             p->Enum.State == XHCI_ENUM_BOUND)) &&
+        p->TolOc.Phase == XHCI_TOL_OC_NONE) {
+        ext->Tol.Stats.PedFaults++;
+        XHCI_DBG_VALUE("hcd: root port disabled under its device, port",
+                       p->PortId);
+        XhciLogNote(ext, "tol.port.ped", p->PortId);
+        if (HcdTolLocCharge(hc, p, XHCI_TOL_CHARGE_REENUM)) {
+            ext->Tol.Stats.Cycles[XHCI_TOL_CYCLE_PED]++;
+        } else {
+            ext->Tol.Stats.CyclesRefused++;
+        }
+        feed |= XHCI_LINK_FEED_DISCONNECT;
+        hcdPortInspectAgain(hc, p);
+    }
+    if (p->TolOc.Phase != XHCI_TOL_OC_NONE ||
+        loc->Hold != XHCI_TOL_HOLD_NONE ||
+        (portsc & XHCI_PORTSC_PP) == 0) {
+        feed &= ~XHCI_LINK_FEED_CONNECT;
+    }
+    return feed;
+}
+
 /*
  * One root port marked changed: read it, acknowledge the change bits this
  * read saw - only those, so a change arriving after the read stays for the
@@ -2254,6 +2508,7 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
     }
     feed = XhciLinkPortFeed(&p->Link, XhciPortIsUsb3(&ext->PortMap, p->PortId),
                             portsc, p->Enum.State, &act);
+    feed = hcdTolPortFeed(hc, p, portsc, feed);
     if ((feed & XHCI_LINK_FEED_DISCONNECT) != 0) {
         hcdFeed(hc, p, XHCI_ENUM_EV_DISCONNECT);
     }
@@ -3231,6 +3486,16 @@ static VOID hcdHubPortChanged(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
         return;
     }
     q->LookFails = 0;
+    if (d.Disabled && d.Disconnect && hc->Hc.Tol.Stats.Tolerance) {
+        /* The hub disabled the port under its device (35-T.5): the
+         * re-enumeration is charged to the location, and a refusal holds
+         * it, the device still let go. */
+        if (HcdTolLocCharge(hc, q, XHCI_TOL_CHARGE_REENUM)) {
+            hc->Hc.Tol.Stats.Cycles[XHCI_TOL_CYCLE_PED]++;
+        } else {
+            hc->Hc.Tol.Stats.CyclesRefused++;
+        }
+    }
     if (d.Disconnect) {
         hcdFeed(hc, q, XHCI_ENUM_EV_DISCONNECT);
     }
@@ -3241,6 +3506,11 @@ static VOID hcdHubPortChanged(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
          * finding 1). */
         d.Connect = !hcdHalted(hc) && HcdSsHubPortRecover(hc, hub, n);
         q->HubSsRecover = 0;
+    }
+    /* A held location enumerates nothing (35-T.5). */
+    if (hc->Hc.Tol.Stats.Tolerance &&
+        hub->TolLoc[n - 1].Hold != XHCI_TOL_HOLD_NONE) {
+        d.Connect = 0;
     }
     if (d.Connect && !hcdHalted(hc)) {
         hcdFeed(hc, q, XHCI_ENUM_EV_CONNECT);
@@ -3280,6 +3550,69 @@ static VOID hcdHubService(PHCD_CONTROLLER hc, ULONG outstanding)
         }
         if (!hub->Draining && hub->Device != NULL && !hcdHalted(hc)) {
             HcdHubRearm(hc, hub);
+        }
+    }
+}
+
+/*
+ * 35-T.5's pass (design record 17 section 4.5): each root port's
+ * over-current episode stepped; a root port with something to re-arm or a
+ * powered hold to release looked at, and inspected again when the hold is
+ * released; every location's stable progress. A location never charged
+ * and never held costs no register read. Thread only, powered, root hub
+ * started.
+ */
+static VOID hcdTolService(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+    PXHCI_TOL_LOC loc;
+    PHCD_HUB hub;
+    PHCD_PORT p;
+    ULONG portsc;
+    ULONG now;
+    ULONG was;
+    ULONG port;
+    ULONG i;
+    ULONG n;
+
+    ext = &hc->Hc;
+    if (!ext->Tol.Stats.Tolerance) {
+        return;
+    }
+    now = HcdTolNow(hc);
+    for (port = 1; port <= ext->PortMap.PortCount &&
+                   port <= XHCI_MAX_ROOT_PORTS && !hcdHalted(hc); port++) {
+        if (!XhciPortIsManaged(&ext->PortMap, port)) {
+            continue;
+        }
+        p = &hc->Ports[port - 1];
+        loc = &ext->Tol.RootLoc[port - 1];
+        if (p->TolOc.Phase != XHCI_TOL_OC_NONE) {
+            hcdTolOcPass(hc, p, loc, now);
+        } else if (!XhciTolLocUnpowered(loc) &&
+                   (loc->Charged || loc->Hold != XHCI_TOL_HOLD_NONE)) {
+            portsc = XhciReadPortsc(ext, port);
+            if (portsc != 0xFFFFFFFFUL) {
+                was = loc->Hold;
+                HcdTolLocObserve(hc, p, (portsc & XHCI_PORTSC_CCS) != 0,
+                                 (portsc & XHCI_PORTSC_PP) != 0);
+                if (was != XHCI_TOL_HOLD_NONE &&
+                    loc->Hold == XHCI_TOL_HOLD_NONE) {
+                    hcdPortInspectAgain(hc, p);
+                }
+            }
+        }
+        hcdTolProgress(hc, p, loc, now);
+    }
+    for (i = 0; i < HCD_MAX_HUBS; i++) {
+        hub = &hc->Hubs[i];
+        if (!hub->Used || hub->Draining || hub->Device == NULL ||
+            hub->Refused) {
+            continue;
+        }
+        for (n = 1; n <= hub->Ports; n++) {
+            hcdTolProgress(hc, HcdHubPort(hc, hub, n), &hub->TolLoc[n - 1],
+                           now);
         }
     }
 }
@@ -3546,6 +3879,7 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
             return;
         }
     }
+    hcdTolService(hc);
     hcdHubService(hc, outstanding);
     if (outstanding && !hcdHalted(hc)) {
         hcdSettleCheck(hc, asked);
@@ -3802,6 +4136,11 @@ VOID HcdEnumInit(PHCD_CONTROLLER hc)
     }
     for (i = 0; i < HCD_PORT_COUNT; i++) {
         hc->Ports[i].SettleDeferred = 0;
+        /* 35-T.5's per-port state, set by the start as the budgets are
+         * (XhciTolStart, HcdHubStart). */
+        XhciTolOcInit(&hc->Ports[i].TolOc);
+        hc->Ports[i].TolCompletions = 0;
+        hc->Ports[i].TolCompletionsSeen = 0;
     }
     hc->SettleDeferredNow = 0;
     for (i = 0; i < HCD_SETTLE_DEFER_HUB; i++) {

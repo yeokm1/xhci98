@@ -83,6 +83,7 @@ VOID XhciSsHubPortDecide(ULONG state, ULONG status, ULONG change,
     out->LinkChange = (change & XHCI_SSHUB_C_PORT_LINK_STATE) != 0;
     out->Resume = 0;
     out->Resumed = 0;
+    out->Disabled = 0;
     connected = (status & XHCI_SSHUB_PORT_CONNECTION) != 0;
     link = XhciSsHubLinkState(status);
 
@@ -127,6 +128,7 @@ VOID XhciSsHubPortDecide(ULONG state, ULONG status, ULONG change,
          * longer reads enabled is enumerated afresh. */
         out->Disconnect = 1;
         out->Connect = 1;
+        out->Disabled = 1;
         return;
     }
     if (xhciSsHubHolds(state) && (status & XHCI_SSHUB_PORT_ENABLE) != 0) {

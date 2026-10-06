@@ -106,11 +106,13 @@ static void test_decide(void)
                           XHCI_HUB_PORT_ENABLE,
                       XHCI_HUB_C_PORT_CONNECTION, &d);
     CHECK(d.Disconnect && d.Connect, "a swap between polls");
+    CHECK(!d.Disabled, "a swap is not the hub's disable");
 
     XhciHubPortDecide(XHCI_ENUM_BOUND,
                       XHCI_HUB_PORT_POWER | XHCI_HUB_PORT_CONNECTION,
                       XHCI_HUB_C_PORT_ENABLE, &d);
     CHECK(d.Disconnect && d.Connect, "disabled by the hub: enumerate again");
+    CHECK(d.Disabled, "disabled by the hub: charged to the location");
 
     XhciHubPortDecide(XHCI_ENUM_BOUND,
                       XHCI_HUB_PORT_POWER | XHCI_HUB_PORT_CONNECTION |

@@ -20,6 +20,7 @@
  */
 
 #include <stdio.h>
+#include <string.h>
 #include "../src/xhci.h"
 #include "../src/xhci_enum.h"
 #include "../src/xhci_hub.h"
@@ -249,6 +250,12 @@ static void test_decide(void)
                       __LINE__);
         check_eq_impl(d.LinkChange, r->linkChange, r->what, __FILE__,
                       __LINE__);
+        /* 35-T.5: only the held device's disabled port is a
+         * re-enumeration charged to the location. */
+        check_eq_impl(d.Disabled,
+                      strcmp(r->what,
+                             "held device, port no longer enabled") == 0,
+                      r->what, __FILE__, __LINE__);
     }
     XhciSsHubPortDecide(E, UP, 0, NULL);
     CHECK(1, "a NULL decision is answered, not dereferenced");
