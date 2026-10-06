@@ -67,6 +67,21 @@ The drain and its accounting:
 - `xhci_ring.c:1373-1376`: `XhciEventRingDequeue` increments `Dequeue`
   before it wraps it, and `XhciEventRingPending` (`:1344`) indexes with it,
   so a reader without the controller lock can see an out-of-range index.
+- **Since `2.2.0.0` (task 35-T.1, after this section was read) the ISR is
+  not the only producer of `IsrDpc`.** Design record 17 section 4.1's
+  lost-interrupt backstop (`hcd_ctl.c`, `hcdBackstop`), a step of the
+  controller thread's own under the power gate, peeks the event TRB at the
+  software dequeue with `XhciEventRingPending` under the controller lock and
+  queues `IsrDpc` through `hcdIsr`'s admission - `DpcsInFlight` counted
+  before the insertion and rolled back on a refusal, nothing once
+  `DpcClosed` - when the same pending event (dequeue, cycle, drain
+  generation, start generation) has stood for 100 ms on the tolerance clock
+  (record 17 section 4.0). It writes no register and counts
+  `BackstopDrains`; `XhciTolerance` `0` turns it off. Section 7.1's
+  opportunistic checks reuse that peek with their own staleness rule, and
+  under a poll delivery the backstop's queueing is one more producer the
+  close sequence above already covers, since it goes through the same
+  admission.
 
 Timers:
 

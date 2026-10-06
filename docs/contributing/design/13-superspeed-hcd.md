@@ -1275,6 +1275,44 @@ serves `RESET_PORT` and whether it re-enumerates; XP x64, Vista and 7
 its mark; the x64 `usbstor` status-stage stall limits; the remove and stop
 paths before Windows 7 beyond section 6.3's URB lists.
 
+### 6.8 What a class driver is shown after a fault (`2.2.0.0`, design record 17)
+
+Since `2.2.0.0` the bus answers a set of controller faults itself (design
+record 17 sections 4.1 to 4.6, task 35-T), and the contract a device PDO
+keeps with the class drivers above it after a fault is record 17 section
+4.10's, in this order of precedence:
+
+- **An error completion the class driver already gets for the same fault,
+  and only after the bus has done what it does.** A USB Transaction Error on
+  a bulk or interrupt endpoint is retried in place up to three times per TD
+  first (record 17 section 4.2); an exhausted retry completes exactly as up
+  to `2.1.1.0`, `USBD_STATUS_DEV_NOT_RESPONDING` with the endpoint Halted,
+  so section 6.7's reactions follow from it unchanged: `hidusb`'s port
+  reset episode and `hidclass`'s backoff, `usbstor`'s up to three
+  `RESET_PORT`s (one on NUSB), `usbaudio`'s abort and pipe reset.
+- **A departure and an arrival** where the bus cannot attribute the fault to
+  a transfer or the location fails under the device: a completion code
+  nothing claims, a halt with no TD (record 17 section 4.3), a USB 2.0 root
+  port the controller disabled, an over-current (section 4.5), and a
+  controller contained as unreadable (section 4.6). The device's PDO is
+  reported missing and, where the location allows, a new one is created by
+  the re-enumeration; transfers end as on an unplug. Section 6.7's last
+  reading applies: every counter a class driver keeps lives in the stack
+  being removed, so the re-enumerated device starts each driver afresh, and
+  no class driver's `CYCLE_PORT` (none sends one) can spend the location's
+  budget.
+- **Never a new status, and never `STATUS_DEVICE_NOT_CONNECTED` on a PDO
+  that is still listed.** Windows 98 SE's `hidclass.sys` resubmits on that
+  status at once (section 6.7), so a contained controller parks new
+  requests on their PDOs, cancellable, instead of refusing them, and a
+  request it cannot park completes `STATUS_CANCELLED` or
+  `STATUS_DELETE_PENDING` (record 17 section 4.6).
+
+At `XhciTolerance` `0` none of the above acts and every path is
+`2.1.1.0`'s (record 17 section 4.11). What each class driver then does is
+section 6.7's static reading; 35-V reads it at run time against the
+injected faults.
+
 ## 7. The Windows 98 export evidence (task 25.3)
 
 The miniport imported almost nothing because `usbport.sys` did the work; the

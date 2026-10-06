@@ -18,7 +18,11 @@ before its code: `XhciIntelPortSwitch` 2, the
 switchover on any Intel controller past the gate, at the user's own risk
 (sections 4a and 5); and, at every value, a release that writes only the
 registers a route wrote (sections 6 to 8). Its decisions are section 11's
-second list; what it changes in the documents is section 13.
+second list; what it changes in the documents is section 13. Built in
+`c7b29da`, `d3bf449` and `febf5ab` (task 35.5, 2026-10-06), reviewed to
+convergence after the code; the documents of section 13 were changed at
+task 35.6 (2026-10-07). It ships in `2.2.0.0`, read so far on host tests
+alone (section 10).
 
 ## 1. What is asked, and what is not
 
@@ -570,3 +574,11 @@ set; the decision and the set move into the pure core (section 7a).
 - `failure-diagnosis.md`, row 7: `psw.mode` and the two `written` notes.
 - `source-files.md`: `xhci_psw.c` now holds the lifetime too.
 - Design record 13: nothing beyond the existing pointer.
+
+Done at task 35.6 (2026-10-07), each item above: the README's Tuning row
+and switchover subsection and the release notes' switchover section and
+`XhciIntelPortSwitch` table carry section 4a's warning word for word, with
+1 named as everyone else's setting, and the release notes and the README
+say a stop gives back only what a route wrote; the readme template's
+section 9 the same; `hardware-testing.md`'s Intel section; `failure-diagnosis.md`
+row 7; `source-files.md`.

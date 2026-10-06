@@ -21,6 +21,11 @@ every earlier finding resolved and nothing material remaining. Section
 decision of the same day, and converged in its turn at review round 11
 (`d9b39c4`).
 
+Revision 8, 2026-10-07, for roadmap-hcd task 35.6, after the code: section
+4.5 takes the three departures task 35-T.5 built and its done-note left to
+this record ("As built"), and section 7 says where each document change
+landed. Nothing else in the design changes.
+
 ## 1. What is asked, and what is not
 
 A tester on an AMD AM5 board reports that a USB mouse randomly stops
@@ -374,8 +379,9 @@ timed-out EP0 transfer does today, and the controller recovery that follows
 is what ends it.
 
 The deviation in `implementation-invariants.md`, "Fatal Errors", is
-superseded and rewritten (35.6), and the comment at `xhci_xfer.c` line 270
-corrected.
+superseded and rewritten (35.6, done: the refused-code bullets there now
+describe the cycle), and the comment at `xhci_xfer.c` line 270 corrected
+(35-T.3).
 
 ### 4.4 Submissions to a Halted endpoint
 
@@ -417,6 +423,35 @@ nothing without PP, and the design does not repower a port whose
 over-current budget is spent: it is released only by a controller start (a
 restart, or a disable and enable), and the dump and the release notes say
 so.
+
+**As built (35-T.5, `778b730` and review rounds `4a9010d`, `82d87fe`,
+`64461df`; revision 8).** Three departures from the text above, taken in
+the code and recorded here:
+
+- **An exhausted budget leaves the device disconnected.** When a PED
+  fault's charge finds the budget spent, the disconnect is fed all the same
+  and only the reconnect is refused (`CyclesRefused` counted): the device
+  leaves Windows and the location is held with nothing enumerated, rather
+  than the fault's device staying listed and dead behind a hold.
+- **A hub's disabling of a port is charged.** The external hub path
+  already re-enumerated a port its hub disabled (`XhciHubPortDecide`); that
+  re-enumeration is now charged to the hub port's budget like a root port's
+  PED reconnect, and a held hub port is never fed a connect. Section 4.5
+  named only root ports for PED.
+- **A hub's port budgets start afresh when the hub object is reused.** A
+  hub port's `XHCI_TOL_LOC` is kept in the extension (`Tol.HubLoc[]`, so the
+  snapshot carries it) and initialized in `HcdHubStart`, so a hub that
+  starts again - re-enumerated, or its record reused for another hub at the
+  same place - begins with full budgets and no hold, where this section
+  keeps a budget "across cycles, reconfiguration and new PDOs". A root
+  port's budget is kept as written.
+
+Also built, within the text above: the over-current episode is a pure-core
+machine (`XHCI_TOL_OC`); a recovery's own disconnect (an over-current, a
+SuperSpeed warm reset, a hub's warm reset) is latched (`RecoveryDisc`) and
+never re-arms a budget; stable progress counts only validated Success and
+Short Packet retirements; and an unpowered hold is kept off through a
+reinitialization's power pass.
 
 ### 4.6 The controller halted or unreadable (35-T.6, unconditional)
 
@@ -734,6 +769,16 @@ report, a device that is cycled after a controller fault), record 13
 superseded, the all-ones containment added), `failure-diagnosis.md`,
 `xhcisnap/README.md`, `xhciqual/hardware-testing.md`, `source-files.md` and
 `runs/run-35.md` (roadmap 35.6).
+
+Done at 35.6 (2026-10-07): the release notes' section "Controller faults:
+what the driver does about them", the three values under "Registry
+settings", a known limitation and untested-ground rows; the README's
+"Controller faults" and its Tuning rows; the package readme template;
+record 13 section 6.8; record 15 section 2; `implementation-invariants.md`'s
+refused-code bullets, rewritten; `failure-diagnosis.md`'s "a device that
+stops until it is replugged"; `xhciqual/hardware-testing.md`'s AMD rows;
+`source-files.md`; and `runs/run-35.md`, opened. `xhcisnap/README.md`'s
+counters are 35-T.8's.
 
 ## 8. Decisions taken (owner, 2026-10-06)
 
