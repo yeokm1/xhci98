@@ -233,7 +233,7 @@ scan to decide whether to continue; use this to record why.
 Expected output begins like:
 
 ```text
-XHCIQUAL <version> (build <date time>) - Win98/Win2000 USB qualification
+XHCIQUAL <version> (build <date time>) - USB host controller qualification
 Mode: PROBE-ONLY (read-only)
 Families: xHCI EHCI OHCI
 Found N selected USB host controller(s).

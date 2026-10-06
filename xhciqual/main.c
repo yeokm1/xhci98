@@ -696,7 +696,7 @@ int main(int argc, char **argv)
         opt_log_name = 0;   /* nothing was written: do not claim a copy */
     }
 
-    qprintf("XHCIQUAL %s (build %s) - Win98/Win2000 USB qualification\n",
+    qprintf("XHCIQUAL %s (build %s) - USB host controller qualification\n",
             TOOL_VERSION, TOOL_BUILD);
     if (!active)
         mode = "PROBE-ONLY (read-only)";
