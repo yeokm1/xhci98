@@ -177,6 +177,8 @@ VOID XhciTolLocInit(PXHCI_TOL_LOC loc)
     loc->DiscStamp = 0;
     loc->DiscSeen = 0;
     loc->Holds = 0;
+    loc->ProgArmed = 0;
+    loc->ProgStamp = 0;
 }
 
 ULONG XhciTolLocCharge(PXHCI_TOL_LOC loc, ULONG kind, ULONG now)
@@ -206,6 +208,7 @@ ULONG XhciTolLocCharge(PXHCI_TOL_LOC loc, ULONG kind, ULONG now)
      * disconnect the action itself causes is never a re-arm. */
     loc->DiscArmed = 0;
     loc->DiscSeen = 0;
+    loc->ProgArmed = 0;
     return 1;
 }
 
@@ -227,9 +230,11 @@ ULONG XhciTolLocObserve(PXHCI_TOL_LOC loc, ULONG connected, ULONG powered,
          * transition. */
         loc->DiscArmed = 0;
         loc->DiscSeen = 0;
+        loc->ProgArmed = 0;
         return 0;
     }
     if (!connected) {
+        loc->ProgArmed = 0;
         if (!loc->DiscArmed) {
             loc->DiscArmed = 1;
             loc->DiscStamp = now;
@@ -258,10 +263,16 @@ ULONG XhciTolLocProgress(PXHCI_TOL_LOC loc, ULONG now)
     if (loc == NULL || loc->Hold != XHCI_TOL_HOLD_NONE || !loc->Charged) {
         return 0;
     }
-    if (!XhciTolElapsed(now, loc->LastCharge,
+    if (!loc->ProgArmed) {
+        loc->ProgArmed = 1;
+        loc->ProgStamp = now;
+        return 0;
+    }
+    if (!XhciTolElapsed(now, loc->ProgStamp,
                         XHCI_TOL_STABLE_PROGRESS_TICKS)) {
         return 0;
     }
+    loc->ProgArmed = 0;
     xhciTolLocRearm(loc);
     return 1;
 }

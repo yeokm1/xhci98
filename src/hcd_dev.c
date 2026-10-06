@@ -281,6 +281,18 @@ static VOID hcdTolCountEvent(PXHCI_EXTENSION ext, ULONG slotId, ULONG dci,
         ext->LogErrorsOverBudget++;
     }
 }
+/* The queue's counts moved by one event, added to the controller-wide sums
+ * the dump carries (35-T.8); the queue's own stay where they were. IRQL:
+ * DISPATCH_LEVEL, controller lock held. */
+static VOID hcdTolSumQueue(PXHCI_EXTENSION ext,
+                           const XHCI_TRANSFER_QUEUE *queue, ULONG errors,
+                           ULONG badCodes, ULONG unmatched, ULONG foreign)
+{
+    ext->Tol.Stats.QueueErrors += queue->Errors - errors;
+    ext->Tol.Stats.QueueBadCodes += queue->BadCodes - badCodes;
+    ext->Tol.Stats.QueueUnmatched += queue->UnmatchedEvents - unmatched;
+    ext->Tol.Stats.QueueForeign += queue->ForeignEvents - foreign;
+}
 /*
  * A Transfer Event, matched by the transfer engine (xhci_xfer.c) against the
  * queue of the pipe its slot and endpoint name - EP0's, or one the
@@ -305,6 +317,7 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
     ULONG badCodes;
     ULONG unmatched;
     ULONG foreign;
+    ULONG reset;
 
     hc = HcdControllerFromExt(ext);
     slotId = XHCI_TRB_GET_SLOT_ID(event->Control);
@@ -354,25 +367,22 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
                                    event->Status);
         return 0;
     }
-    if (pipe->TransferType == XHCI_PIPE_XFER_ISOCH) {
-        return hcdIsoEvent(hc, pipe, slotId, dci, event, cc);
-    }
     errors = pipe->Queue->Errors;
     badCodes = pipe->Queue->BadCodes;
     unmatched = pipe->Queue->UnmatchedEvents;
     foreign = pipe->Queue->ForeignEvents;
+    if (pipe->TransferType == XHCI_PIPE_XFER_ISOCH) {
+        reset = hcdIsoEvent(hc, pipe, slotId, dci, event, cc);
+        hcdTolSumQueue(ext, pipe->Queue, errors, badCodes, unmatched, foreign);
+        return reset;
+    }
     if (XhciXferEvent(pipe->Queue, pipe->Ring, slotId, dci, event->Param0,
                       event->Status, event->Control, &result) !=
         XHCI_XFER_OK) {
         hc->Counters.TransferEventsUnclaimed++;
         return 0;
     }
-    /* The queue's own counts stay where they were; the controller-wide sums
-     * are what the dump carries (35-T.8). */
-    ext->Tol.Stats.QueueErrors += pipe->Queue->Errors - errors;
-    ext->Tol.Stats.QueueBadCodes += pipe->Queue->BadCodes - badCodes;
-    ext->Tol.Stats.QueueUnmatched += pipe->Queue->UnmatchedEvents - unmatched;
-    ext->Tol.Stats.QueueForeign += pipe->Queue->ForeignEvents - foreign;
+    hcdTolSumQueue(ext, pipe->Queue, errors, badCodes, unmatched, foreign);
     if (result.NeedsRecovery && !result.RefusedRetire) {
         ext->Tol.Stats.QueueHalts++;
     }

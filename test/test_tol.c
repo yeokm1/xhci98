@@ -315,11 +315,31 @@ static void test_loc(void)
     XhciTolLocInit(&l);
     CHECK_EQ(XhciTolLocProgress(&l, 99999), 0, "nothing charged");
     CHECK_EQ(XhciTolLocCharge(&l, XHCI_TOL_CHARGE_REENUM, 50), 1, "charge");
-    CHECK_EQ(XhciTolLocProgress(&l, 50 + XHCI_TOL_STABLE_PROGRESS_TICKS - 1),
+    /* A long stall, then one completion: that only starts the interval. */
+    CHECK_EQ(XhciTolLocProgress(&l, 50 + 5000), 0, "first completion arms");
+    CHECK_EQ(l.Reenums, 1, "a stall is not progress");
+    CHECK_EQ(XhciTolLocProgress(&l,
+                                50 + 5000 + XHCI_TOL_STABLE_PROGRESS_TICKS - 1),
              0, "one short");
-    CHECK_EQ(XhciTolLocProgress(&l, 50 + XHCI_TOL_STABLE_PROGRESS_TICKS), 1,
-             "re-armed");
+    /* A fault between voids it. */
+    CHECK_EQ(XhciTolLocObserve(&l, 1, 1, 1, 5060), 0, "fault");
+    CHECK_EQ(XhciTolLocProgress(&l,
+                                50 + 5000 + XHCI_TOL_STABLE_PROGRESS_TICKS),
+             0, "voided: arms again");
+    CHECK_EQ(XhciTolLocProgress(&l,
+                                50 + 5000 + 2 * XHCI_TOL_STABLE_PROGRESS_TICKS),
+             1, "a sustained interval re-arms");
     CHECK_EQ(l.Reenums, 0, "budget back");
+    CHECK_EQ(XhciTolLocProgress(&l, 99999), 0, "nothing left to re-arm");
+    /* A disconnect voids it too; a charge as well. */
+    CHECK_EQ(XhciTolLocCharge(&l, XHCI_TOL_CHARGE_REENUM, 100000), 1, "charge");
+    CHECK_EQ(XhciTolLocProgress(&l, 100001), 0, "arms");
+    CHECK_EQ(XhciTolLocObserve(&l, 0, 1, 0, 100002), 0, "disconnect");
+    CHECK_EQ(XhciTolLocProgress(&l, 100001 + XHCI_TOL_STABLE_PROGRESS_TICKS),
+             0, "voided by the disconnect");
+    CHECK_EQ(XhciTolLocCharge(&l, XHCI_TOL_CHARGE_REENUM, 200000), 1, "charge");
+    CHECK_EQ(XhciTolLocProgress(&l, 200000 + XHCI_TOL_STABLE_PROGRESS_TICKS),
+             0, "voided by the charge: arms");
     CHECK_EQ(XhciTolLocCharge(NULL, 0, 0), 0, "NULL");
 }
 

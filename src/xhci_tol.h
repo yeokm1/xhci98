@@ -180,6 +180,8 @@ typedef struct _XHCI_TOL_LOC {
     ULONG DiscStamp;
     ULONG DiscSeen;     /* stable-disconnect evidence stands                */
     ULONG Holds;        /* times held, never re-armed (the dump)            */
+    ULONG ProgArmed;    /* a completion since the last charge or fault      */
+    ULONG ProgStamp;    /* ...the first one, on the clock                   */
 } XHCI_TOL_LOC, *PXHCI_TOL_LOC;
 
 /* A controller start: every field cleared. */
@@ -198,9 +200,11 @@ ULONG XhciTolLocCharge(PXHCI_TOL_LOC loc, ULONG kind, ULONG now);
 ULONG XhciTolLocObserve(PXHCI_TOL_LOC loc, ULONG connected, ULONG powered,
                         ULONG fault, ULONG now);
 
-/* A device at the location completing transfers: re-arms when the
- * stable-progress interval has passed with no charge. Returns 1 when it
- * re-armed. */
+/* A device at the location completed a transfer. The first completion
+ * after a charge, a fault or a disconnect starts the stable-progress
+ * interval; a completion once it has passed, with none of those between,
+ * re-arms - so one completion after a long stall is not progress. Returns
+ * 1 when it re-armed. */
 ULONG XhciTolLocProgress(PXHCI_TOL_LOC loc, ULONG now);
 
 /* 35-T.5. 1 when a root port's change is the PED fault: tolerance on,
