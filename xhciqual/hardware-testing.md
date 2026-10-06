@@ -419,7 +419,10 @@ The warning changes no verdict and no exit code. It is conditional: a table
 may validly carry 5 Gb/s under another ID, and only a controller whose PORTSC
 reports ID 4 for a SuperSpeed device anyway, as Sunrise Point does, defeats a
 strict decoder - which is why the driver up to `2.1.1.0` never enumerates a
-SuperSpeed device on the E460. After
+SuperSpeed device on the E460. Since `2.2.0.0` the driver reads an ID 4 to
+7 that a USB 3 table does not list at its default meaning (roadmap-hcd task
+35.1), so on such a controller the warning still names the table's gap and
+no longer predicts a failure of this driver. After
 the port map, the log (not the screen) carries the raw extended-capability
 chain - xECP, then each capability's offset, ID and dwords - which is what a
 host replay vector is written from (`README.md`, "Raw extended-capability
@@ -642,7 +645,7 @@ remains clear, C4 FAIL reports `SOF set but PCI INTx did not assert (PCI
 | C6 FAIL | A port reported a connect but did not enable after reset. Not disqualifying on its own, and the verdict says "with warnings" - retry on a different port with a known-good USB 2.0 device, and check the C7 routing lines on Intel 7/8-series. |
 | C8 WARN/FAIL | Save `DEV` output and retry with a simple USB2 device or `--no-devid`; C8 is informational. |
 | C8 `PSIV n has no USB2 speed-class mapping` | Inconclusive capability mismatch, not a qualification failure. The port's PORTSC speed ID was absent from (or unrecognised in) the controller's advertised Protocol Speed ID table, so C8 declined to guess an EP0 packet size. This can indicate a decoder defect, inconsistent controller/firmware capability data, or an unrecognised encoding; the message alone does not distinguish them. QEMU reports `PSIC 0` and never exercises this path, so bare metal is where it is first proven. Save the log with the `Protocol USB x.y: ... PSIC n` lines and the C6 speed strings. |
-| `WARNING: USB 3 PSI table does not list PSIV 4` | Informational, never a verdict. The controller's USB 3 Supported Protocol capability publishes a complete speed table without ID 4. That is valid if 5 Gb/s is listed under another ID and PORTSC reports that ID; it breaks a strict decoder only if PORTSC reports ID 4 anyway, as Intel Sunrise Point-LP (`8086:9D2F`) does, where the driver up to `2.1.1.0` never enumerates a SuperSpeed device (`docs/issues/11-sunrise-point-ssic-psi-table.md`). Keep the log: its PSI lines and raw capability chain are the evidence. |
+| `WARNING: USB 3 PSI table does not list PSIV 4` | Informational, never a verdict. The controller's USB 3 Supported Protocol capability publishes a complete speed table without ID 4. That is valid if 5 Gb/s is listed under another ID and PORTSC reports that ID; it breaks a strict decoder only if PORTSC reports ID 4 anyway, as Intel Sunrise Point-LP (`8086:9D2F`) does, where the driver up to `2.1.1.0` never enumerates a SuperSpeed device (`docs/issues/11-sunrise-point-ssic-psi-table.md`); `2.2.0.0` reads such an ID by its default meaning and is not affected. Keep the log: its PSI lines and raw capability chain are the evidence. |
 | C6 speed reads `PSIV n not advertised...` or `PSIV n, X Kb/s per protocol cap` | The advertised table did not yield a recognised USB speed class. The port still reset successfully - C6's verdict is unaffected - but preserve the full log and report the mismatch for decoder-versus-controller investigation. |
 | Poll-only PROVISIONAL | Expected: `--poll-only` never tests C4, so it cannot qualify a machine. It confirms reset/DMA/port reset work with no ISR. Re-run without `--poll-only` for a verdict. |
 | Poll-only C6 fault | A fault under `--poll-only` (no ISR installed) points at the port/DMA path, not interrupt reflection. Save `XPOLL.LOG` and the MAP, cold boot, and report the last checkpoint. |
@@ -735,6 +738,31 @@ shutdown. So on such a machine this tool, run from DOS before Windows, shows
 firmware's routing, not the driver's: a report from a cold boot says what
 the driver will start from, and one from the boot after a shutdown under
 the driver should read the routing at firmware's values again.
+
+**An Intel part with the mux that the list misses: `XhciIntelPortSwitch` 2.**
+Since `2.2.0.0` (roadmap-hcd task 35.5, design record 16 section 4a) value
+2 takes any Intel xHCI past the device-id list. This tool does not read the
+routing registers on an Intel xHCI missing from its own table - C7 prints
+"not attempted - Intel xHCI ... is not in the quirk table" - but its
+`PROBE.LOG` lists the machine's controllers, and an Intel xHCI with no
+Intel EHCI beside it has nothing to route and must not be given 2. The
+driver adds no check of its own, and the warning the README and the
+release notes carry applies in full:
+
+> Setting `XhciIntelPortSwitch` to 2 makes the driver read four Intel
+> chipset registers and write two of them on any Intel USB 3 controller,
+> not only on the 7-, 8- and 9-series and C610/X99 chipsets it was written
+> for. On a controller that does not have those registers - every Intel
+> chipset from the 100-series (Skylake) on, and any other whose layout has
+> not been read - it writes registers of unknown meaning, at every start,
+> resume, stop and shutdown, and the result is unknown. Use 2 only for an
+> Intel chipset that has both an EHCI and an xHCI controller and that this
+> driver does not list, and at your own risk. Everyone else should leave the
+> value at 1.
+
+Send the `PROBE.LOG` with any report of such a part, and an `XHCISNAP`
+report with `psw.mode` 2 and its route records, so the list can grow by its
+id.
 
 Why this class gets its own note: the 7-, 8- and 9-series PCH and Wellsburg
 (C610/X99) are the last Intel parts carrying both EHCI and xHCI, so they are
@@ -902,3 +930,29 @@ If any stage prints `ERROR`, or the machine faults, freezes or reboots: stop
 the sequence, photograph the screen with the build stamp visible, power off,
 and keep every completed log and the `.MAP`. Do not immediately run another
 active test.
+
+### AMD (PCI vendor `1022`) - the report-only rows and the controller-fault report
+
+Since roadmap-hcd task 35-T.8 `quirks.c` names fifteen AMD xHCI ids, with
+no flag set: the tool acts on none of them, and the `quirks:` line only
+says what Linux's `xhci-pci.c` does with the part - the eight ids Linux
+caps the interrupt interval on (`13ED`, `13EE`, `148C`, `15D4`, `15D5`,
+`15E0`, `15E1`, `15E5`), the Promontory A parts `43B9` to `43BC` (`43B9`
+and `43BB` excluded from Linux's soft retry, and so from the driver's,
+design record 17 section 4.2), `43F7`, and the Promontory 21 parts `43FC`
+and `43FD`, which Linux hands to a separate driver. The driver's interval
+cap keys on the vendor rather than these rows: `XhciIntervalCap`'s default
+caps the interrupt interval on every AMD controller, listed or not (record
+17 section 4.7).
+
+The work behind them is a tester's AM5 report of a USB mouse that stops at
+random (record 17 section 1). The one AM5 probe on file
+(`results/pro-b650m-ct-csm-2026-10-06/`) shows four AMD controllers on one
+board - `43F7`, `15B6`, `15B7` and `15B8` - so which one a given connector
+is wired to is a per-machine fact. For such a report, take
+`XHCIQUAL --probe-only --no-page --log PROBE.LOG` first, say which
+controller the connector the device stops on belongs to where it can be
+told (the controller id under which Device Manager or `lsusb -t` lists the
+device on a current system), and send both with the driver's `XHCISNAP`
+reports (`docs/contributing/failure-diagnosis.md`, "A device stops until
+it is replugged").
