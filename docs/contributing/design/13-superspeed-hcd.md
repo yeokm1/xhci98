@@ -1169,6 +1169,112 @@ INF supplied, not by an IRP to the PDO at that moment.
 | `usbstor.sys` (all three NT 5.x-era builds) calls `IoBuildSynchronousFsdRequest` with a major function held in a variable (NUSB 0x13F18, 2000 0x140C0, XP 0x156C6); its target was not traced. It appears to be the class driver's own read path, not the PDO. | 26-A.5 |
 | Windows ME's class drivers were not read here. | 28-A.1 |
 
+### 6.7 What the class drivers send after a failed transfer (task 35-T.0)
+
+Design record 17 section 4.10 asks what each target's class drivers send,
+and whether they resubmit, after each error completion that record's
+tolerance can return; the answer sets 35-V's expectations. **Method.** Every
+fact in this section is **static**: read from a disassembly listing, nothing
+executed. A subagent read the binaries on 2026-10-06, and the reading was
+not re-read line by line by the coordinator. The 32-bit images with MSVC
+6.0's `dumpbin` 6.00.8447 `/disasm` and `/imports`, with no symbols (the IAT
+slots resolved by counting from each base `/imports` prints); XP x64, Vista
+and 7 with WDK 7.1 `cdb.exe -z` 6.12.0002.633 and the PDBs in
+`tools\symbols` (`x` and `uf`), XP x64 `hidusb.sys` with raw `u`, having no
+PDB; and a PowerShell byte search of every `hidusb`, `usbstor`, `usbaudio`
+and `hidclass` image under `tools\*-extracted\` for the little-endian IOCTL
+codes. The images and their hashes are section 6.2's; the Vista SP2 and 7
+SP1 `usbstor.sys` and `usbaudio.sys` (x86 and x64) are extracted there too.
+Constants from WDK 7.1 `usb.h` lines 353-370, `usbdi.h` line 44
+(`USBD_STATUS(s)` = `s & 0x0FFFFFFF`), `usbioctl.h` lines 130-131
+(`USBD_PORT_ENABLED` 1, `USBD_PORT_CONNECTED` 2) and `ntstatus.h`.
+Addresses are VAs at base `0x10000` as the tool printed them.
+
+**No class driver of any target sends `CYCLE_PORT`.** The bytes `1F 00 22
+00` (`0x22001F`) occur in no `hidusb.sys`, `usbstor.sys`, `usbaudio.sys` or
+`hidclass.sys` under `tools\*-extracted\` (98 SE, NUSB 3.3/3.6, 2000 SP4,
+XP SP3, XP x64, Vista SP2 x86/x64, 7 SP1 x86/x64); `07 00 22 00`
+(`RESET_PORT`) and `13 00 22 00` (`GET_PORT_STATUS`) occur once each in
+every `hidusb` and `usbstor` and in no `usbaudio` or `hidclass`.
+
+**`hidusb.sys`** never reads the URB status of a failed interrupt-IN read;
+it decides on the IRP's NTSTATUS alone. On 98 SE (4.10.2222, read completion
+`0x10A5A`, `0x10A74 jl`) any failing NTSTATUS, `0xC000009D` and
+`0xC0000120` included, queues one reset work item (`0x10935`; one at a time,
+by `InterlockedCompareExchange` on the extension's +0x28) and holds the read.
+From 2000 on (2000 SP4 5.00.2142.1 `0x11035` / `0x11043`; XP SP3
+5.1.2600.5512 `0x10AA7` / `0x10AB2`; XP x64 `0x11C09` / `0x11C10`; Vista and
+7 `HumReadCompletion`, 7 x86 `0x11EE8` / `0x11F09`) `STATUS_CANCELLED`
+(`0xC0000120`) and `STATUS_DEVICE_NOT_CONNECTED` (`0xC000009D`) complete
+with no reset. The work item sends `GET_PORT_STATUS`; then `ABORT_PIPE` and
+`RESET_PORT` - on 98 SE and 2000 only when the port reads connected and not
+enabled (98 SE `0x10963` / `0x10969`), from XP on whenever it reads
+connected (XP SP3 `0x109EE`, 7 x86 `0x11CCA`); then
+`SYNC_RESET_PIPE_AND_CLEAR_STALL` (URB 0x1E) on the interrupt pipe while the
+status so far is a success (on XP x64, Vista and 7 nothing follows a port
+that reads not connected); and completes the held read with its original
+error. XP SP3, Vista and 7 set the device failed (`IoInvalidateDeviceState`,
+`PNP_DEVICE_FAILED`) when `RESET_PORT` returns `0xC000009C` (XP SP3
+`0x10A0C`, 7 x86 `0x11D02`). No build keeps a counter. `hidclass.sys` then
+re-reads after a backoff of 1 s growing by 1 s to 5 s, with no limit (98 SE
+4.10.2222 `KeSetTimer` `0x110D6`, cap `0x1122C`; 2000 SP4 5.00.2195.6655
+`0x11769`; XP SP3 5.1.2600.5512 `0x120FF`, DPC `0x1238C`); on `0xC000009D`
+98 SE re-reads at once (`0x110A7`), 2000 stops reading (`0x11724`), XP has
+no case for it. So a HID device whose reads keep failing with any other
+status gets one reset episode per failed read, without limit - an inference
+from the two loops, not observed.
+
+**`usbstor.sys`** reads the URB status: `USBD_STATUS(urb) == 4`
+(`STALL_PID`) is cleared with `SYNC_RESET_PIPE_AND_CLEAR_STALL` and the
+Bulk-Only protocol continues, a status-stage stall at most twice per command
+(XP SP3 `0x118D7 cmp ecx,2`; 2000 `0x11769`; NUSB `0x11799`; 7 x86
+`0x1412D`); the CBI path resets both bulk pipes. Every other failure - not
+responding, CRC, babble alike - and a command timeout (XP SP3 `IoTimer`
+`0x10E9C`) completes the request `SRB_STATUS_BUS_RESET` /
+`STATUS_IO_DEVICE_ERROR` (`0xC0000185`) to the class driver and queues the
+reset work item, which cancels the in-flight IRP and then sends up to three
+rounds of `GET_PORT_STATUS` + `RESET_PORT`, ending at the first successful
+reset or at a port that reads not connected (2000 SP4 `0x11A73`, XP SP3
+`0x10E14`, XP x64 `0x11BD8`, Vista x86 `0x12FE3`, Vista x64 `0x157E0`, 7 x86
+`0x12DB2`, 7 x64 `0x15B77`). A reset that still fails leaves the stack
+failing every new request with `STATUS_DEVICE_DOES_NOT_EXIST`
+(`0xC00000C0`; XP SP3 `0x10E32`, `0x11FF6`) until it is removed. NUSB's
+4.90.3000.1 build, the 98 SE one, has no loop: one `GET_PORT_STATUS` and,
+if connected, one `RESET_PORT` (`0x11B46`) per episode. No build sends
+`ABORT_PIPE`. On NT 6.x an attempt whose context field reads 5 (7 x86
+`0x12D13`) sleeps 100 ms and counts as failed; what that field is was not
+read.
+
+**`usbaudio.sys`** sends no port request. A failed isochronous or MIDI
+completion marks the pin, and its next submission sends `ABORT_PIPE`, waits
+for the pin's outstanding URBs, sends `SYNC_RESET_PIPE_AND_CLEAR_STALL`,
+clears the mark and goes on streaming, with no counter (XP SP3 5.1.2600.5512
+completion `0x151E2`, mark `0x1520C`, reset `0x1905A`; 98 SE 4.10.2222 mark
+[pin+0x80] `0x13FA1`, reset `0x12C89` / `0x13EBB`; 2000 SP4 5.00.2150.1 the
+same test before `0x15380` / `0x17480`).
+
+**At a departure** (remove paths read on Windows 7 SP1 x86 only):
+`HumRemoveDevice` sends `ABORT_PIPE`, `HumStopDevice` also the unconfigure;
+`USBSTOR_FdoRemoveDevice` sends no URB. No class driver sends a port request
+on removal (the census), and every counter found lives in the extension of
+the stack being removed, so a re-enumerated device starts each driver
+afresh.
+
+**Against record 17's location budget of three re-enumerations:** no class
+driver asks for one. What they ask for is `RESET_PORT`, which the parent hub
+serves: `usbstor` at most three per episode (one on NUSB's 98 SE build) and
+then gives up for the life of the stack; `hidusb` one per failed read with no
+bound across reads, paced by `hidclass`'s 1-5 s backoff; `usbaudio` never.
+
+**Not read:** Windows ME (no binaries in `tools\`); XP x64 and NT 6.x
+`hidclass.sys` (not in `tools\`), so their resubmit policy; `disk.sys` /
+`classpnp.sys` retry counts above `usbstor`'s `SRB_STATUS_BUS_RESET`, which
+set how many `usbstor` episodes one failing read can cause; how the hub
+serves `RESET_PORT` and whether it re-enumerates; XP x64, Vista and 7
+`usbaudio` error paths (the byte census only) and where 2000 `usbaudio` sets
+its mark; the x64 `usbstor` status-stage stall limits; the remove and stop
+paths before Windows 7 beyond section 6.3's URB lists.
+
 ## 7. The Windows 98 export evidence (task 25.3)
 
 The miniport imported almost nothing because `usbport.sys` did the work; the

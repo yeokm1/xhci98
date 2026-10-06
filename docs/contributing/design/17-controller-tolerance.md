@@ -572,6 +572,20 @@ convergence or of its code. It is taken before 35-V, tagged and given
 `legal-provenance.md` rows, and used to set 35-V's expectations of what each
 class driver does after an exhausted soft retry and after a cycle.
 
+Taken 2026-10-06, static, in design record 13 section 6.7. In short: no
+class driver of any target sends `CYCLE_PORT`, so none asks for a
+re-enumeration and none spends the location budget of section 4.5 by
+itself. After an exhausted soft retry `hidusb` sends `GET_PORT_STATUS`,
+`ABORT_PIPE`, `RESET_PORT` and `SYNC_RESET_PIPE_AND_CLEAR_STALL` once per
+failed read, with no limit, paced by `hidclass`'s 1-5 s backoff (98 SE on
+any failure; from 2000 on not for `STATUS_CANCELLED` or
+`STATUS_DEVICE_NOT_CONNECTED`); `usbstor` resets the pipe on a stall and
+otherwise sends up to three rounds of `GET_PORT_STATUS` + `RESET_PORT` per
+episode (one `RESET_PORT` on NUSB's 98 SE build), then fails every request
+until removed; `usbaudio` sends only `ABORT_PIPE` and
+`SYNC_RESET_PIPE_AND_CLEAR_STALL` and keeps streaming. After a cycle each
+starts afresh: no counter survives the stack's removal.
+
 ### 4.11 The off-switch, and what is not a setting
 
 The budgets and intervals of section 4.9 are named constants of the pure
