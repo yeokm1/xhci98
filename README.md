@@ -48,6 +48,7 @@ Some things to know:
 - A UAS-capable drive gets UAS, and anything else gets Windows' own `usbstor.sys` (Bulk-Only), at whatever speed it connects. A drive that offers both can be forced to Bulk-Only (see "Tuning" below).
 - Device Manager and the other Windows tools on these systems show a SuperSpeed device as High Speed at most. The interface they read predates SuperSpeed, so that display says nothing about the real link speed.
 - On Windows 98 SE storage of any kind, UAS included, needs NUSB's mass-storage component (see "Installation Steps").
+- On Intel Sunrise Point-LP (`8086:9D2F`, the 100-series mobile chipset of the ThinkPad E460 and the HP EliteBook 850 G5), no release before `2.2.0.0` ever enumerated a SuperSpeed device: a USB 3 stick was not seen and a USB 3 hub showed only its USB 2.0 half. That controller reports a 5 Gbit/s link with a speed ID its own published speed table leaves out, and the driver read the table too strictly. `2.2.0.0` fixes it on every controller; on my E460 a UAS stick now runs at SuperSpeed, at a root port and behind a USB 3 hub, at about 242 MB/s write and 245 MB/s read. See [issue 11](docs/issues/11-sunrise-point-ssic-psi-table.md).
 
 ## Installation Steps
 
@@ -211,7 +212,10 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | `XhciFastPollFsLs` | A root-port Low- or Full-Speed mouse polled above 1000 Hz | `0` | `3` | `0` | `0` |
 | `XhciFirstEnumWaitMs` | The longest wait for a hub's first report | `0` | `30000` | `5000` | `5000` |
 | `XhciFirstEnumPortMs` | The longest one port may hold that wait | `0` | `XhciFirstEnumWaitMs` | `2000` | `2000` |
-| `XhciIntelPortSwitch` | The Intel 7/8/9-series port switchover; `0` turns it off | `0` | `1` | `1` | `1` |
+| `XhciIntelPortSwitch` | The Intel 7/8/9-series port switchover; `0` turns it off, `2` applies it to any Intel controller **at your own risk** | `0` | `2` | `1` | `1` |
+| `XhciTolerance` | The handling of controller faults, all together; `0` turns it off | `0` | `1` | `1` | `1` |
+| `XhciIntervalCap` | Interrupt endpoints polled at least every 32 ms: `1` on AMD controllers, `2` on every controller, `0` off | `0` | `2` | `1` | `1` |
+| `XhciAvgTrbEsit` | A comparison switch for interrupt endpoints; leave at `0` unless comparing | `0` | `1` | `0` | `0` |
 | `XhciLogVerbosity` | The driver's log, read by `XHCISNAP` | `0` | `4` | `0` | `0` |
 | `XhciLogDebugView` | The log sent to DebugView as well | `0` | `1` | `0` | `0` |
 
@@ -275,10 +279,30 @@ With the defaults, the root hub's first report typically comes 20 to 30 ms after
 
 On Intel 7-, 8- and 9-series chipsets (Ivy Bridge to Broadwell) and C610/X99, each switchable connector, usually a blue one, is wired to both the USB 2.0 (EHCI) and the xHCI controller. With the firmware's USB 3.0 setting on Auto, or no setting at all, those connectors typically start on the USB 2.0 controller, so up to `2.1.0.0` this driver saw nothing on them.
 
-Since `2.1.1.0` the driver moves them to the xHCI controller at each start and resume, and hands them back to the USB 2.0 controller when its controller is disabled, removed or the machine shuts down. It does this only on Intel xHCI device ids `1E31`, `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`; every other controller is left alone.
+Since `2.1.1.0` the driver moves them to the xHCI controller at each start and resume, and hands them back to the USB 2.0 controller when its controller is disabled, removed or the machine shuts down. It does this only on Intel xHCI device ids `1E31`, `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`; every other controller is left alone unless `XhciIntelPortSwitch` is `2` (below). Since `2.2.0.0` the hand-back writes only the registers the driver itself wrote.
 
 - A device on a switchable connector under a running USB 2.0 driver (NUSB's, for example) is disconnected there when this driver starts and comes back under it. Do not have a drive busy on a blue connector at that moment.
 - `XhciIntelPortSwitch` set to `0` turns it off. Only `0` does; absent or any other number is on. It is read when the controller starts, so restart after changing it.
+- Since `2.2.0.0`, `XhciIntelPortSwitch` set to `2` does the switchover on any Intel xHCI controller, listed or not, for a chipset with the same switchable connectors that the list misses. On a listed controller `2` is the same as `1`.
+
+> **Setting `XhciIntelPortSwitch` to 2 makes the driver read four Intel chipset registers and write two of them on any Intel USB 3 controller, not only on the 7-, 8- and 9-series and C610/X99 chipsets it was written for. On a controller that does not have those registers - every Intel chipset from the 100-series (Skylake) on, and any other whose layout has not been read - it writes registers of unknown meaning, at every start, resume, stop and shutdown, and the result is unknown. Use 2 only for an Intel chipset that has both an EHCI and an xHCI controller and that this driver does not list, and at your own risk. Everyone else should leave the value at 1.**
+
+### Controller faults
+
+Since `2.2.0.0` the driver deals with faults a controller following the xHCI specification never raises, but which, if one did, left a device dead until it was replugged. This follows a tester's report from an AMD AM5 board of a mouse that stops at random. Each is answered a few times at most, then the driver stops trying:
+
+- An event whose interrupt never arrived is picked up by the driver's own thread.
+- A transfer error on a bulk or interrupt endpoint is retried up to three times before the transfer fails.
+- A fault the driver cannot pin on a transfer makes it re-enumerate the device, as if it had been unplugged and plugged in again. Whatever the device was doing ends as on an unplug.
+- A USB 2.0 root port the controller disabled is re-enumerated, and one that reported an over-current is powered again.
+- After three re-enumerations or repowers a port is held until its device is unplugged, or, held unpowered, until the controller is restarted.
+- A controller that halts is recovered, at most three times in ten minutes; one that stops answering is closed off safely.
+
+None of this acts on a healthy controller. `XhciTolerance` set to `0` turns all of it off. `XHCISNAP`'s report counts each of them.
+
+Two values concern AMD controllers. `XhciIntervalCap` polls an interrupt endpoint that asks for more than 32 ms every 32 ms, as Linux does on some AMD controllers; this driver does it on every AMD controller (PCI vendor `1022`), as the AM5 and X570 ones are not on Linux's list. `XhciAvgTrbEsit` set to `1` changes one figure the controller is told for each interrupt endpoint, as Linux does; it is off by default and exists so a machine that misbehaves can be compared both ways.
+
+If a USB device stops working on your machine, a report with two `XHCISNAP` captures (one while it works, one after it stops) and the controller's id from `XHCIQUAL` is the most useful thing to send. The [release notes](docs/using/release-notes.md), "Controller faults: what the driver does about them", have the details.
 
 ### The 1.2.0.0 virtual-hub values
 
@@ -299,7 +323,7 @@ Windows 98 SE and Windows 2000 SP4 are the primary targets. Windows 98 SE has al
 
 | Machine | Controller | 2.0.0.0 result | Tested by |
 |---|---|---|---|
-| 2016 ThinkPad E460 | Intel Skylake, Sunrise Point-LP (100-series) PCH. xHCI 1.0. | Yes | Me |
+| 2016 ThinkPad E460 | Intel Skylake, Sunrise Point-LP (100-series) PCH. xHCI 1.0. | Yes, but SuperSpeed devices only since `2.2.0.0` ([issue 11](docs/issues/11-sunrise-point-ssic-psi-table.md)) | Me |
 | 2020 ThinkPad P14s Gen 1 | Intel Comet Lake PCH-LP (400-series). xHCI 1.1. | Yes | Me |
 | Omores' Intel and AMD desktops | H110, B360, B550, X570, X670 | No `2.0.0.0` report yet. | [Omores](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) (1.x) |
 
@@ -355,6 +379,9 @@ These come from Windows, NUSB or the driver being unsigned, and no change to thi
 | A UAS-only drive at SuperSpeed on a controller without streams | It is sent back to its USB 2.0 port and runs UAS at High Speed, or is refused if it has no USB 2.0 port. Built from the specification; no such controller has been held. |
 | Polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification. Not read on any real controller or in any virtual machine. |
 | The Intel port switchover beyond the B490 | Device ids `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`, systems other than Windows 98 SE, and standby. Built after Linux's handling of the same chipsets. |
+| `XhciIntelPortSwitch` set to `2` | Not read on any unlisted Intel controller. At your own risk (see the warning under "Tuning"). |
+| The handling of controller faults on real hardware | Each fault was made on purpose in virtual machines. No real controller at hand raises them, so none of the handling has been seen to act on real hardware. |
+| `XhciIntervalCap` and `XhciAvgTrbEsit` | Not read on any AMD or other real controller. |
 
 ## Toolchain and building
 
