@@ -995,8 +995,8 @@ static void test_psi_e460_usb3_ssic_table(void)
     add_proto(3, 13, 6, 3, u3);
     reset_out();
     report_protocols(&tc, qprintf);
-    CHECK(has("  Protocol USB 3.0: ports 13-18, slot type 0, PSIC 3\n"),
-          "E460 USB3: protocol line");
+    CHECK(has("  Protocol USB 3.0 @0000: ports 13-18, slot type 0, "
+              "PSIC 3\n"), "E460 USB3: protocol line");
     CHECK(has("    PSI 04E00121  PSIV  1   1248 Mb/s  symmetric  PFD 1  "
               "LP 0 (SuperSpeed)\n"), "E460 USB3: SSIC 1248 Mb/s entry");
     CHECK(has("    PSI 09C00122  PSIV  2   2496 Mb/s  symmetric  PFD 1  "
@@ -1061,7 +1061,7 @@ static void test_psi_no_warning_cases(void)
               "LP 0\n"), "USB2 Low Speed entry in Kb/s");
     CHECK(has("    PSI 01E00023  PSIV  3    480 Mb/s  symmetric  PFD 0  "
               "LP 0\n"), "USB2 High Speed entry");
-    CHECK(has("  Protocol USB 3.0: no ports, slot type 0, PSIC 0\n"),
+    CHECK(has("  Protocol USB 3.0 @0000: no ports, slot type 0, PSIC 0\n"),
           "PSIC 0 protocol line kept");
     CHECK(psi_usb3_lacks_ss(&tc.proto[0]) == 0, "USB2: never warns");
     CHECK(psi_usb3_lacks_ss(&tc.proto[1]) == 0, "USB3 with 4: no warning");
@@ -1378,8 +1378,12 @@ static void test_walk_exhaustion(void)
     fput(off, 0x00000001UL);
     xcap_walk(&tc, 0x100, fwindow, fake_rd, 0);
     CHECK(fbad == 0, "32 caps: reads inside the window");
-    CHECK(tc.nxcap == XCAP_DUMP_CAPS && tc.nxdump == XCAP_DUMP_CAPS &&
+    CHECK(tc.nxcap == XCAP_DUMP_CAPS + 1 &&
+          tc.nxdump == XCAP_DUMP_CAPS + 2 &&
           tc.xcap_stop == XCAP_STOP_FULL, "32 caps: count bound");
+    CHECK(tc.xcap[XCAP_DUMP_CAPS].off == off &&
+          tc.xcap[XCAP_DUMP_CAPS].ndw == 2,
+          "32 caps: the terminal USBLEGSUP is still recorded, two dwords");
     CHECK(tc.legsup_off == off, "32 caps: the walk still reaches the end");
     CHECK(!has("NOTE"), "32 caps: the walk ended on its own");
 
@@ -1394,6 +1398,51 @@ static void test_walk_exhaustion(void)
           "256 dwords: ninth cap cut by the total");
     CHECK(tc.nxdump == XCAP_DUMP_TOTAL && tc.xcap_stop == XCAP_STOP_FULL,
           "256 dwords: total bound");
+}
+
+/*
+ * The HP EliteBook 850 G5's 8086:15DB (xhciqual/results/hp850g5-2026-10-06):
+ * a USB 2 protocol, vendor capabilities that spend the 256-dword bound, then
+ * the USB 3.1 protocol the dump is for. It is recorded from the reserve, with
+ * its defined dwords only, and the decoded line names where it sits.
+ */
+static void test_walk_protocol_past_the_bound(void)
+{
+    static const u32 u2[3] = { 0x000C0021UL, 0x05DC0012UL, 0x01E00023UL };
+    static const u32 u31[2] = { 0x00050134UL, 0x000A4135UL };
+    u32 off;
+    int i;
+
+    fake_reset(0x10000UL, 0);
+    fput_proto(0x8000, 2, 0x1C, 1, 2, 3, u2);
+    for (i = 0, off = 0x8070; i < 9; i++, off += 0x100)
+        fput(off, 0x000040C0UL);              /* vendor, next 64 dwords */
+    fput_proto(off, 3, 20, 3, 2, 2, u31);
+    fput(off, fbar[off >> 2] | (0x01UL << 16));   /* minor 01h, as Intel's */
+    fput(off + 20 * 4, 0x000000C1UL);         /* vendor, terminal */
+    xcap_walk(&tc, 0x8000, fwindow, fake_rd, 0);
+    CHECK(fbad == 0, "past the bound: reads inside the window");
+    CHECK(tc.xcap_stop == XCAP_STOP_FULL, "past the bound: the bound was hit");
+    CHECK(tc.nxcap == 10 && tc.xcap[9].off == off && tc.xcap[9].id == 2,
+          "past the bound: the USB 3.1 protocol is recorded, the vendor "
+          "capability after it is not");
+    CHECK(tc.xcap[9].want == 20 && tc.xcap[9].ndw == 6,
+          "past the bound: header and its two PSI dwords only");
+    CHECK(tc.xdump[tc.xcap[9].first + 4] == 0x00050134UL &&
+          tc.xdump[tc.xcap[9].first + 5] == 0x000A4135UL,
+          "past the bound: the PSI words as read");
+    CHECK(tc.nproto == 2 && tc.proto[1].off == off,
+          "past the bound: decoded with its offset");
+    reset_out();
+    report_protocols(&tc, qprintf);
+    CHECK(has("  Protocol USB 3.1 @8970: ports 3-4, slot type 0, "
+              "PSIC 2\n"), "past the bound: protocol line");
+    reset_out();
+    report_xcap_dump(&tc, qprintf);
+    CHECK(has("    cap 8970 ID   2 next  20  Supported Protocol, 6 of 20 "
+              "dwords\n"), "past the bound: dump names the kept capability");
+    CHECK(has("except Supported Protocol and USB Legacy Support"),
+          "past the bound: the bound line says what is kept");
 }
 
 /* All ones: recording stops at the dead header; the walker, unchanged,
@@ -1477,6 +1526,7 @@ int main(void)
     test_walk_window_edge();
     test_walk_per_cap_bound();
     test_walk_exhaustion();
+    test_walk_protocol_past_the_bound();
     test_walk_all_ones();
     test_walk_guard_and_none();
 

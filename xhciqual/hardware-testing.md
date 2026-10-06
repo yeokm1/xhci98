@@ -406,7 +406,7 @@ entries, read in full, but not PSIV 4 gets a warning (issue 11). The E460's USB 
 reads:
 
 ```text
-  Protocol USB 3.0: ports 13-18, slot type 0, PSIC 3
+  Protocol USB 3.0 @8020: ports 13-18, slot type 0, PSIC 3
     PSI 04E00121  PSIV  1   1248 Mb/s  symmetric  PFD 1  LP 0 (SuperSpeed)
     PSI 09C00122  PSIV  2   2496 Mb/s  symmetric  PFD 1  LP 0 (SuperSpeed)
     PSI 13800123  PSIV  3   4992 Mb/s  symmetric  PFD 1  LP 0 (SuperSpeed)

@@ -357,6 +357,7 @@ typedef struct {
     u8  slottype;
     u8  psic;             /* advertised count */
     u8  npsi;             /* entries actually read into psi[] */
+    u32 off;              /* BAR0-relative byte offset of its header */
     u32 psi[MAX_PSI];     /* raw Protocol Speed ID dwords (spec 7.2.2.1.2) */
 } PROTOCAP;
 
@@ -371,6 +372,16 @@ typedef struct {
 #define XCAP_DUMP_CAPS    32
 #define XCAP_DUMP_PER_CAP 32
 #define XCAP_DUMP_TOTAL   256
+/*
+ * Supported Protocol and USB Legacy Support capabilities are still recorded
+ * once those bounds are spent, from a reserve of their own: header plus PSI
+ * dwords (4 + PSIC) for each of MAX_PROTO protocols, and USBLEGSUP's two.
+ * The HP EliteBook 850 G5's 8086:15DB spent the general bound on vendor
+ * capabilities before its USB 3.1 table (xhciqual/results/
+ * hp850g5-2026-10-06), and the table is what the dump is for.
+ */
+#define XCAP_KEPT_CAPS    (MAX_PROTO + 1)
+#define XCAP_KEPT_DWORDS  (MAX_PROTO * (4 + MAX_PSI) + 2)
 
 /* CTRL.xcap_stop: why the record ends where it does */
 #define XCAP_STOP_END      0   /* next pointer 0: the chain's own end */
@@ -471,8 +482,8 @@ typedef struct {
     int nxcap;               /* entries in xcap[] */
     int xcap_stop;           /* XCAP_STOP_* */
     int nxdump;              /* dwords used in xdump[] */
-    XCAPREC xcap[XCAP_DUMP_CAPS];
-    u32 xdump[XCAP_DUMP_TOTAL];
+    XCAPREC xcap[XCAP_DUMP_CAPS + XCAP_KEPT_CAPS];
+    u32 xdump[XCAP_DUMP_TOTAL + XCAP_KEPT_DWORDS];
     u8  portclass[MAX_PORTS + 1];   /* 1-based */
     int usb2_ports;                 /* count of managed (PC_USB2_*) ports */
 

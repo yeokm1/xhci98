@@ -528,11 +528,13 @@ void report_protocols(const CTRL *c, QPRINTF_FN pf)
         const PROTOCAP *pr = &c->proto[i];
 
         if (pr->portcnt == 0)   /* seen on qemu-xhci with p3=0 */
-            pf("  Protocol USB %X.%X: no ports, slot type %d, PSIC %d\n",
-               pr->major, pr->minor, pr->slottype, pr->psic);
+            pf("  Protocol USB %X.%X @%04lX: no ports, slot type %d, "
+               "PSIC %d\n",
+               pr->major, pr->minor, pr->off, pr->slottype, pr->psic);
         else
-            pf("  Protocol USB %X.%X: ports %d-%d, slot type %d, PSIC %d\n",
-               pr->major, pr->minor, pr->portoff,
+            pf("  Protocol USB %X.%X @%04lX: ports %d-%d, slot type %d, "
+               "PSIC %d\n",
+               pr->major, pr->minor, pr->off, pr->portoff,
                pr->portoff + pr->portcnt - 1, pr->slottype, pr->psic);
         for (k = 0; k < (int)pr->npsi; k++) {
             u32 d = pr->psi[k];
@@ -609,7 +611,8 @@ void report_xcap_dump(const CTRL *c, QPRINTF_FN pf)
         break;
     case XCAP_STOP_FULL:
         pf("    (dump bound reached, %d capabilities / %d dwords: the rest "
-           "not recorded)\n", XCAP_DUMP_CAPS, XCAP_DUMP_TOTAL);
+           "not recorded,\n     except Supported Protocol and USB Legacy "
+           "Support)\n", XCAP_DUMP_CAPS, XCAP_DUMP_TOTAL);
         break;
     case XCAP_STOP_WALK:
         pf("    (the walk stopped at the mapped window or its 64-step "
@@ -629,16 +632,27 @@ void report_xcap_dump(const CTRL *c, QPRINTF_FN pf)
  * whose span the chain does not give, takes its known size, 4 dwords if
  * unknown. A Supported Protocol capability always includes its PSI dwords.
  */
+/* A capability recorded past the general bound (XCAP_KEPT_*). */
+static int xcap_kept(u32 dw)
+{
+    return dw != 0xFFFFFFFFUL &&
+           ((dw & 0xFF) == XECP_ID_PROTO || (dw & 0xFF) == XECP_ID_LEGSUP);
+}
+
 static void xcap_record(CTRL *c, u32 off, u32 dw, u32 window,
                         XCAP_RD_FN rd, void *ctx)
 {
     XCAPREC *r;
-    u32 want, known, k;
+    u32 want, known, k, total;
+    int kept, full;
 
-    if (c->nxcap >= XCAP_DUMP_CAPS || c->nxdump >= XCAP_DUMP_TOTAL) {
+    kept = xcap_kept(dw);
+    full = c->nxcap >= XCAP_DUMP_CAPS || c->nxdump >= XCAP_DUMP_TOTAL;
+    if (full)
         c->xcap_stop = XCAP_STOP_FULL;
+    if (full && (!kept || c->nxcap >= XCAP_DUMP_CAPS + XCAP_KEPT_CAPS))
         return;
-    }
+    total = full ? XCAP_DUMP_TOTAL + XCAP_KEPT_DWORDS : XCAP_DUMP_TOTAL;
     r = &c->xcap[c->nxcap++];
     r->off = off;
     r->id = (u8)(dw & 0xFF);
@@ -670,8 +684,10 @@ static void xcap_record(CTRL *c, u32 off, u32 dw, u32 window,
             want = known;
     }
     r->want = (u16)want;
+    if (full && want > known)
+        want = known;       /* from the reserve: the defined dwords only */
     for (k = 0; k < want && k < XCAP_DUMP_PER_CAP &&
-                c->nxdump < XCAP_DUMP_TOTAL &&
+                c->nxdump < total &&
                 off + k * 4 + 4 <= window; k++)
         c->xdump[c->nxdump++] = (k == 0) ? dw : rd(ctx, off + k * 4);
     r->ndw = (u16)k;
@@ -694,7 +710,8 @@ void xcap_walk(CTRL *c, u32 xecp_off, u32 window, XCAP_RD_FN rd, void *ctx)
         u32 next;
 
         dw = rd(ctx, off);
-        if (c->xcap_stop == XCAP_STOP_END)
+        if (c->xcap_stop == XCAP_STOP_END ||
+            (c->xcap_stop == XCAP_STOP_FULL && xcap_kept(dw)))
             xcap_record(c, off, dw, window, rd, ctx);
         switch (dw & 0xFF) {
         case XECP_ID_LEGSUP:
@@ -707,6 +724,7 @@ void xcap_walk(CTRL *c, u32 xecp_off, u32 window, XCAP_RD_FN rd, void *ctx)
                 u32 dw2 = rd(ctx, off + 0x08);
                 int k;
 
+                pr->off     = off;
                 pr->major   = (u8)(dw >> 24);
                 pr->minor   = (u8)(dw >> 16);
                 pr->portoff = (u8)(dw2 & 0xFF);

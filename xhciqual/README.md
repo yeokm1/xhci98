@@ -795,7 +795,7 @@ the window:
   applies (the strict-PSI notes above). The E460's USB 3 protocol reads:
 
   ```text
-    Protocol USB 3.0: ports 13-18, slot type 0, PSIC 3
+    Protocol USB 3.0 @8020: ports 13-18, slot type 0, PSIC 3
       PSI 04E00121  PSIV  1   1248 Mb/s  symmetric  PFD 1  LP 0 (SuperSpeed)
       PSI 09C00122  PSIV  2   2496 Mb/s  symmetric  PFD 1  LP 0 (SuperSpeed)
       PSI 13800123  PSIV  3   4992 Mb/s  symmetric  PFD 1  LP 0 (SuperSpeed)
@@ -827,7 +827,12 @@ the window:
   16) or 4 dwords. A Supported Protocol capability always includes its PSI
   dwords. Bounds: 32 dwords per capability (a longer one prints `n of m
   dwords`), 32 capabilities and 256 dwords per controller, never past the
-  64 KB mapped window. A header reading all ones ends the raw record there
+  64 KB mapped window. Past the last two, Supported Protocol and USB Legacy
+  Support capabilities are still recorded, from a reserve of their own and
+  with their defined dwords only (4 + PSIC, and 2): the HP EliteBook 850 G5's
+  `8086:15DB` spent the bound on vendor capabilities before its USB 3.1 table
+  (`results/hp850g5-2026-10-06/`). Each `Protocol USB x.y` line also names
+  its capability's BAR0 offset (`@8020`). A header reading all ones ends the raw record there
   with a note; the capability walk itself is unchanged by it and still
   follows that header's `FF` next field, as it always has, until the window
   or its 64-step guard stops it. A walk that stops at the window or the guard
