@@ -3208,10 +3208,14 @@ static ULONG xhciSaveState(PXHCI_EXTENSION ext)
      * start zeroes the extension, so every entry reads FREE and the loop
      * passes whatever is queued. The HCD's own queues are the real answer,
      * and the same rule applies to them - declined while any transfer is
-     * outstanding, so the resume reinitializes and the invalidation that
+     * anywhere between submission and completion (mapping, held, waiting
+     * or on a ring), so the resume reinitializes and the invalidation that
      * follows completes it, rather than a restore discarding its completion
      * (XhciEventDiscardStale) and leaving the request pending. A bus with
-     * nothing queued saves as before.
+     * nothing outstanding saves as before. A transfer published after this
+     * check - a submission, or a mapping completing - spoils the image
+     * instead (XhciSlotSaveCommit below, XhciSlotSaveSpoiled at the
+     * resume): nothing blocks, and no new admission is closed.
      */
     if (XhciSlotSaveBusy(ext)) {
         XHCI_DBG_TEXT("save: declined - a transfer is outstanding");
@@ -3300,7 +3304,13 @@ static ULONG xhciSaveState(PXHCI_EXTENSION ext)
         return 0;
     }
 
-    ext->SavedStateValid = 1;
+    /* Committed under the controller lock, and only if no transfer was
+     * published since the gate above armed: a mapping that completed after
+     * it, or a submission, wrote a ring the image may not describe. */
+    if (!XhciSlotSaveCommit(ext)) {
+        XHCI_DBG_TEXT("save: discarded - a transfer was published meanwhile");
+        return 0;
+    }
     XHCI_DBG_VALUE("save: state saved, USBSTS", ext->LastSaveRestoreStatus);
     return 1;
 }
@@ -3846,6 +3856,14 @@ MPSTATUS XhciResumeController(PXHCI_EXTENSION ext)
             if (!xhciRunController(ext, &usbsts)) {
                 XHCI_DBG_VALUE("ResumeController: restored but would not run, "
                                "USBSTS", usbsts);
+                restored = 0;
+            } else if (XhciSlotSaveSpoiled(ext)) {
+                /* A TD was published since the save, its doorbell dropped
+                 * by the halted controller and not rung again here: the
+                 * reinitialization below completes it, as after any
+                 * failed restore. */
+                XHCI_DBG_TEXT("ResumeController: restored over a transfer "
+                              "published since the save, reinitializing");
                 restored = 0;
             }
         }

@@ -695,6 +695,16 @@ ULONG XhciTolSaveRefused(ULONG failed)
     return failed ? 1UL : 0UL;
 }
 
+ULONG XhciTolSavePublish(ULONG initialized)
+{
+    return initialized ? 0UL : 1UL;
+}
+
+ULONG XhciTolSaveCommit(ULONG published)
+{
+    return published ? 0UL : 1UL;
+}
+
 ULONG XhciTolResumeRefused(ULONG terminal)
 {
     return (terminal == XHCI_TOL_TERMINAL_FAILURES ||

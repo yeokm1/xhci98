@@ -1397,14 +1397,27 @@ VOID XhciSlotPoll(PXHCI_EXTENSION ext);
 VOID XhciSlotResumeSweep(PXHCI_EXTENSION ext);
 
 /*
- * 1 while any device has a transfer outstanding on its rings (the HCD's
- * queues: every endpoint's, EP0's and each stream's). The save gate
- * declines on it: step 1 of the save procedure stops Busy endpoints first
- * (4.23.2, p.313), and a completion the controller writes for one while
- * halted is discarded at the restore (XhciEventDiscardStale), leaving its
- * request pending. IRQL: <= DISPATCH_LEVEL, controller lock released.
+ * 1 while any device has work between submission and completion (the
+ * HCD's records in any state but free, IRPs waiting for a record, held
+ * records, and every endpoint's, EP0's and each stream's queue). The save
+ * gate declines on it: step 1 of the save procedure stops Busy endpoints
+ * first (4.23.2, p.313), and a completion the controller writes for one
+ * while halted is discarded at the restore (XhciEventDiscardStale),
+ * leaving its request pending. Idle, it arms the publication guard.
+ * IRQL: <= DISPATCH_LEVEL, controller lock released.
  */
 ULONG XhciSlotSaveBusy(PXHCI_EXTENSION ext);
+
+/*
+ * The guard's two ends. XhciSlotSaveCommit, once CSS completed, sets
+ * SavedStateValid under the controller lock, and only if nothing was
+ * published since the gate armed; XhciSlotSaveSpoiled, after a restore
+ * has run the controller, says whether something was published since, so
+ * the resume reinitializes instead. IRQL: <= DISPATCH_LEVEL, controller
+ * lock released.
+ */
+ULONG XhciSlotSaveCommit(PXHCI_EXTENSION ext);
+ULONG XhciSlotSaveSpoiled(PXHCI_EXTENSION ext);
 
 /*
  * Give up every device because the controller's state is gone: a stop, or a

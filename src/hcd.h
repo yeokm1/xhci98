@@ -1009,6 +1009,10 @@ typedef struct _HCD_CONTROLLER {
     /* The invalidation a terminal no recovery acts on raised for itself
      * (hcd_ctl.c, hcdTerminalRelease): once per lifetime. */
     ULONG TerminalReleased;
+    /* A transfer was published on a controller not initialized since the
+     * save gate armed (hcd_dev.c, XhciSlotSaveBusy; hcd_io.c,
+     * HcdIoMapped): the saved image is not committed, or not restored. */
+    ULONG SavePublished;
     ULONG EnumDetachRequested;      /* the root hub is going               */
     KEVENT EnumDetachDone;
     ULONG ScratchTainted;           /* a timed-out EP0 transfer may DMA    */

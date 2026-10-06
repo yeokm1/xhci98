@@ -1224,6 +1224,16 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
          * finding 2). */
         ep->SeqUsed = 1;
         hc->Counters.TransfersSubmitted++;
+        /* On a controller not initialized - suspended, or resuming before
+         * Run/Stop - the TD lands on a ring a saved image may describe and
+         * its doorbell is dropped: no image is committed or restored over
+         * it, and the resume's reinitialization completes it instead
+         * (XhciSlotSaveCommit, XhciSlotSaveSpoiled). */
+        if (XhciTolSavePublish(
+                (hc->Hc.Flags & XHCI_EXT_FLAG_INITIALIZED) != 0)) {
+            hc->SavePublished = 1;
+            hc->Hc.SavedStateValid = 0;
+        }
         /* The doorbell under the lock: once it is released the thread may
          * pause and stop the endpoint, and a doorbell rung after that
          * would restart it under the thread's edit (Codex review of batch

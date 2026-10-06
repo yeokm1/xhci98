@@ -664,11 +664,34 @@ VOID XhciSlotDeferredWorkForced(PXHCI_EXTENSION ext, ULONG armMode)
     UNREFERENCED_PARAMETER(armMode);
 }
 
-/* Whether a transfer is outstanding on any device's ring: an endpoint's
- * queue, EP0's (the thread's own record and the URBs') or a stream's. The
- * save gate (xhciSaveState) asked the miniport's device table, which the
- * HCD never fills, so every device passed as idle. IRQL: <= DISPATCH_LEVEL,
- * controller lock released. */
+/* One pipe's work anywhere between submission and completion: a record
+ * mapping, on the ring, held mapped or retired and not yet completed (any
+ * state but FREE), an IRP waiting for a record, or a TD on its queue (the
+ * thread's own EP0 record and the hub's status transfer are queued without
+ * a record). Controller lock held. */
+static ULONG hcdPipeSaveBusy(PHCD_PIPE pipe)
+{
+    ULONG i;
+
+    if (pipe->Queue->Count != 0 || !IsListEmpty(&pipe->Waiting) ||
+        !IsListEmpty(&pipe->Held)) {
+        return 1;
+    }
+    for (i = 0; i < pipe->XferCount; i++) {
+        if (pipe->Xfers[i].State != HCD_XFER_FREE) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Whether any device has work between submission and completion
+ * (hcdPipeSaveBusy, every endpoint, EP0 and each open stream). The save
+ * gate (xhciSaveState) asked the miniport's device table, which the HCD
+ * never fills, so every device passed as idle. Idle, the guard is armed in
+ * the same hold of the lock: a publication from here until the image is
+ * committed or restored spoils it (HcdIoMapped, XhciSlotSaveCommit).
+ * IRQL: <= DISPATCH_LEVEL, controller lock released. */
 ULONG XhciSlotSaveBusy(PXHCI_EXTENSION ext)
 {
     PHCD_CONTROLLER hc;
@@ -693,19 +716,61 @@ ULONG XhciSlotSaveBusy(PXHCI_EXTENSION ext)
             if (pipe == NULL) {
                 continue;
             }
-            busy = (pipe->Queue->Count != 0) ? 1UL : 0UL;
+            busy = hcdPipeSaveBusy(pipe);
             for (sid = 1; pipe->Streams != NULL &&
                               sid <= pipe->Streams->Count && !busy;
                  sid++) {
                 busy = (pipe->Streams->Pipe[sid] != NULL &&
-                        pipe->Streams->Pipe[sid]->Queue->Count != 0)
+                        hcdPipeSaveBusy(pipe->Streams->Pipe[sid]))
                            ? 1UL
                            : 0UL;
             }
         }
     }
+    if (!busy) {
+        hc->SavePublished = 0;
+    }
     XhciControllerLockRelease(ext, oldIrql);
     return busy;
+}
+
+/* The save's commit, after CSS completed: the image is valid only if
+ * nothing was published since the gate armed - a submission after the
+ * check, or a mapping that completed, wrote a ring the image may not
+ * describe (4.23.2) and rang a doorbell the halted controller dropped.
+ * Under the lock HcdIoMapped spoils it under, so the two cannot cross.
+ * Returns the image's validity. IRQL: <= DISPATCH_LEVEL, controller lock
+ * released. */
+ULONG XhciSlotSaveCommit(PXHCI_EXTENSION ext)
+{
+    PHCD_CONTROLLER hc;
+    KIRQL oldIrql;
+    ULONG valid;
+
+    hc = HcdControllerFromExt(ext);
+    XhciControllerLockAcquire(ext, &oldIrql);
+    valid = XhciTolSaveCommit(hc->SavePublished);
+    ext->SavedStateValid = valid;
+    XhciControllerLockRelease(ext, oldIrql);
+    return valid;
+}
+
+/* After a restore has run the controller: 1 when a publication since the
+ * save (or during the restore, before Run/Stop) spoiled it, so the resume
+ * reinitializes and its invalidation completes that transfer rather than
+ * leaving it on a ring whose doorbell the halted controller dropped.
+ * IRQL: <= DISPATCH_LEVEL, controller lock released. */
+ULONG XhciSlotSaveSpoiled(PXHCI_EXTENSION ext)
+{
+    PHCD_CONTROLLER hc;
+    KIRQL oldIrql;
+    ULONG spoiled;
+
+    hc = HcdControllerFromExt(ext);
+    XhciControllerLockAcquire(ext, &oldIrql);
+    spoiled = hc->SavePublished;
+    XhciControllerLockRelease(ext, oldIrql);
+    return spoiled;
 }
 
 /* IRQL: <= DISPATCH_LEVEL, controller lock released. */

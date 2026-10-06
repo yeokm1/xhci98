@@ -557,6 +557,15 @@ ULONG XhciTolHaltProven(ULONG usbsts);
  * retires them. At every XhciTolerance value. */
 ULONG XhciTolSaveRefused(ULONG failed);
 
+/* The save's publication guard. XhciTolSavePublish: 1 when a TD published
+ * now spoils a saved image - the controller is not initialized (suspended,
+ * or resuming before Run/Stop), so the TD lands on a ring the image may
+ * describe and its doorbell is dropped. XhciTolSaveCommit: 1 when the
+ * image may be marked valid, nothing having been published since the
+ * gate armed. */
+ULONG XhciTolSavePublish(ULONG initialized);
+ULONG XhciTolSaveCommit(ULONG published);
+
 /* 1 when a resume must not reinitialize the controller: terminal
  * (XhciTolTerminal's value) is a containment, the window's refusal or the
  * spent run of failures - each holds until a stop and start. A failed

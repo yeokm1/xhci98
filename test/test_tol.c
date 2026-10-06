@@ -1220,6 +1220,78 @@ static void test_terminal_release(void)
     CHECK_EQ(XhciTolSaveRefused(0), 0, "running: saved as before");
 }
 
+/* Review round 2: a transfer waiting on its mapping when the save gate
+ * looks. The gate declines on the record (any state but free); one that
+ * passes the gate and is published before the commit, or before a
+ * restore runs the controller, spoils the image, so the resume
+ * reinitializes and completes it. The model is the driver's: published
+ * (hc->SavePublished) and valid (SavedStateValid), each written under the
+ * controller lock. */
+static ULONG s_published;
+static ULONG s_valid;
+
+static ULONG saveArm(ULONG busy)
+{
+    if (!busy) {
+        s_published = 0;
+    }
+    return busy;
+}
+
+static void savePublish(ULONG initialized)
+{
+    if (XhciTolSavePublish(initialized)) {
+        s_published = 1;
+        s_valid = 0;
+    }
+}
+
+static void saveCommit(void)
+{
+    s_valid = XhciTolSaveCommit(s_published);
+}
+
+static void test_save_publish(void)
+{
+    /* The mapping still in the pump at the gate: declined, nothing saved. */
+    s_valid = 0;
+    CHECK_EQ(saveArm(1), 1, "a record mapping: busy, declined");
+    CHECK_EQ(s_valid, 0, "no image");
+
+    /* Idle at the gate, the mapping completing during CSS. */
+    CHECK_EQ(saveArm(0), 0, "idle: armed");
+    savePublish(0);                 /* HcdIoMapped, quiesced controller */
+    saveCommit();
+    CHECK_EQ(s_valid, 0, "published during CSS: not committed");
+
+    /* Idle, nothing published: committed, and restored. */
+    CHECK_EQ(saveArm(0), 0, "armed again");
+    saveCommit();
+    CHECK_EQ(s_valid, 1, "committed");
+    CHECK_EQ(s_published, 0, "the restore is not spoiled");
+
+    /* Published after the commit, while suspended: invalidated. */
+    savePublish(0);
+    CHECK_EQ(s_valid, 0, "published while suspended: no restore");
+
+    /* Committed, then published between the restore's CRS and Run/Stop:
+     * the restore consumed the image, and the spoil sends the resume to
+     * the reinitialization. */
+    CHECK_EQ(saveArm(0), 0, "armed");
+    saveCommit();
+    CHECK_EQ(s_valid, 1, "committed");
+    s_valid = 0;                    /* xhciRestoreState consumes it */
+    savePublish(0);
+    CHECK_EQ(s_published, 1, "spoiled: the resume reinitializes");
+
+    /* On a running controller a publication spoils nothing. */
+    CHECK_EQ(saveArm(0), 0, "armed");
+    saveCommit();
+    savePublish(1);
+    CHECK_EQ(s_valid, 1, "running: the image stands");
+    CHECK_EQ(s_published, 0, "and nothing is spoiled");
+}
+
 /* Review round 1, finding 2: at tolerance 0, the run of failures spent and
  * its devices released, a suspend and resume must not clear the latch while
  * the run and the release stay spent - a later fault would then get
@@ -1336,6 +1408,7 @@ int main(void)
     test_terminal();
     test_terminal_release();
     test_terminal_resume();
+    test_save_publish();
     test_start();
 
     printf("\n%d checks, %d failures\n", checks, failures);
