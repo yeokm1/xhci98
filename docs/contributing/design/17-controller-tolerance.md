@@ -1,9 +1,9 @@
 # Controller tolerance
 
 Design record for roadmap-hcd tasks 35-T.0 to 35-T.9 (Phase 35, release
-`2.2.0.0`). Revision 6, 2026-10-06, written before code; revision 4 is
-`9163f77` and revision 5 `74d14e8`, and revisions 5 and 6 answer review
-rounds 5 and 6 (section 10). Revision 0
+`2.2.0.0`). Revision 7, 2026-10-06, written before code. Revisions 4, 5
+and 6 are `9163f77`, `74d14e8` and `cc82d37`; revisions 5 to 7 answer
+review rounds 5 to 7 (section 10). Revision 0
 (`60f8f64`) drafted the findings and the shape; revision 1 (`4a63a35`)
 answered review round 1; revision 2 (`67a3f75`) rested the recoveries on
 the machinery as it is and answered round 2; revision 3 (`e8d2c0e`)
@@ -14,7 +14,7 @@ answers review round 4: a clock of the driver's own (section 4.0), the
 power gate taken explicitly (4.1, 4.6), the soft retry intercepted before
 the engine's terminal mutations and generation-checked (4.2), the cycle
 before a PDO exists (4.3), and containment that drains only after its proof
-(4.6). Section 10 maps every finding of the six rounds to where it is
+(4.6). Section 10 maps every finding of the seven rounds to where it is
 answered. Nothing below is converged.
 
 ## 1. What is asked, and what is not
@@ -154,7 +154,10 @@ changes them.
   timer at its power-on 18.2 Hz, a period under 55 ms: at least 45 ms per
   tick. An interval of T ms is therefore counted as `ceil(T / 45) + 1`
   ticks - the extra tick because the stamp may be taken just before one -
-  and can only run long, never short, by up to about a factor of 2.2. A
+  and can only run long, never short. How long it runs has no fixed upper
+  bound: a long interval with timely DPCs comes to about 2.2 times its
+  nominal length, a short one more (100 ms is four ticks, about 300 to 400
+  ms), and a delayed DPC stretches any of them further. A
   ULONG count wraps after thirteen years. The timer is armed at start and
   closed at stop by the same rule as the frame timer's (`hcd_svc.c`):
   cancelled, and its DPC counted in flight and waited for. Host vectors
@@ -344,8 +347,12 @@ paths:
   ignored, since CONNECT starts an enumeration only from `EMPTY` or
   `FAILED` (`xhci_enum.c`, lines 167 to 175), and not `FAILED`, which waits
   for the next connect change; then the location's budget is charged once;
-  and, if a fresh PORTSC read shows CCS still set and the budget allows, a
-  CONNECT is fed to the now-`EMPTY` machine. This is the pre-PDO cycle.
+  and, if the location still reads connected and the budget allows, a
+  CONNECT is fed to the now-`EMPTY` machine. Connected is read the way the
+  existing `hcdPortConnected` reads it for either kind of location
+  (`hcd_enum.c`, lines 1086 to 1091): PORTSC's CCS at a root port, the
+  hub's port status (`HcdHubPortStatus`) at an external hub's port. This
+  is the pre-PDO cycle.
 
 **The thread's own wait.** If the thread is waiting on its own control
 transfer to the device when the mark arrives, the mark ends that wait: it
@@ -748,3 +755,10 @@ Round 6:
 | 1 A relative timer can expire up to one clock period early, cumulatively | medium | 4.0: each tick credited at 45 ms against the slowest PC clock, intervals counted as `ceil(T / 45) + 1` ticks |
 | 2 The pre-PDO teardown left the location's machine where a CONNECT is ignored | high | 4.3: one handler sets it `EMPTY` with its slot and device cleared, once per attempt, before the CONNECT |
 | 3 Parked requests' release triggers misstated; `HcdIoPark` can decline | low | 4.6: today's triggers named; the declined cases completed `STATUS_CANCELLED` or `STATUS_DELETE_PENDING` |
+
+Round 7:
+
+| Finding | Severity | Answered in |
+|---|---|---|
+| 1 The pre-PDO reconnect read CCS, which an external hub's port does not have | medium | 4.3: connected read as `hcdPortConnected` reads it, for either kind of location |
+| 2 "About 2.2 times" stated as an upper bound | low | 4.0: no fixed upper bound; 2.2 the long-interval factor under timely DPCs |
