@@ -1,6 +1,8 @@
 /*
- * xhcisnap.c - read xhci98.sys's extension, raw PORTSC array and (from
- * 2.0.0.0) its enabled slots out of a running machine, from user mode.
+ * xhcisnap.c - read xhci98.sys's extension, raw PORTSC array, (from
+ * 2.0.0.0) its enabled slots and (from 2.2.0.0) its HCD region - each root
+ * port's enumeration and the counter block - out of a running machine, from
+ * user mode.
  *
  * TWO DRIVERS ANSWER IT. From 2.0.0.0 xhci98.sys is the successor host
  * controller driver (roadmap-hcd.md, design record 13): it owns its driver
@@ -342,6 +344,38 @@ static const unsigned long snap_guid[4] = {
 #define SNAP_SLOT_WORDS             10UL
 #define SNAP_SLOT_MAX               64UL
 #define SNAP_SLOT_UNREAD            0xFFFFFFFFUL
+/*
+ * The HCD region (src/xhci.h, XHCI_SNAPSHOT_REGION_HCD; 2.2.0.0 on, task
+ * 35.3): a versioned, pointer-free image of each root port's enumeration
+ * state and the controller's counter block (XHCIHC_COUNTERS), which lie
+ * outside the extension. A region again, so the schema stays 5: an older
+ * driver answers BAD_REGION. The image says its own sizes, and this tool
+ * walks it by them: a later driver that appends to a record or to the
+ * counters is still read, and only a version past the one known here is
+ * refused, because a version bump is a field that changed meaning.
+ */
+#define SNAP_REGION_HCD             3UL
+#define SNAP_HCD_VERSION            1UL
+#define SNAP_HCD_HEAD_WORDS         8UL
+#define SNAP_HCD_PORT_WORDS         16UL
+#define SNAP_HCD_COUNTER_WORDS      63UL
+#define SNAP_HCD_MAX_BYTES          32768UL
+/*
+ * Controller tolerance (2.2.0.0 on, task 35-T.8; design record 17 section
+ * 4.8). Its state stays in the extension, and the HCD region's header grew
+ * twelve words (version unchanged) that say where it lies in the extension
+ * image - the src/xhci.h XHCI_SNAPSHOT_HCD_TOL_* words - so it is named from
+ * the .BIN's own bytes with no offset table. A header shorter than that is
+ * a 35.3 driver's, which has none of it.
+ */
+#define SNAP_HCD_TOL_HEAD_WORDS     20UL
+#define SNAP_TOL_NAMED_WORDS        34UL    /* the counters this tool names */
+#define SNAP_TOL_CODES              256UL   /* the histogram, last          */
+#define SNAP_TOL_LOC_MIN_BYTES      28UL    /* six words, then the bytes    */
+#define SNAP_TOL_WINDOW_SLOTS       3UL
+#define SNAP_TOL_WINDOW_TICKS       13335UL /* XHCI_TOL_RECOVERY_WINDOW_TICKS,
+                                             * held to it by test_snap     */
+#define SNAP_TOL_MAX_LOCS           1024UL  /* sanity bound on either count */
 
 /*
  * The verbosity ladder, as the driver's `XHCI_LOG_VERBOSITY_*` spells it. This
@@ -1282,6 +1316,200 @@ static void write_companion_header(const SNAP_HEADER *h)
 }
 
 /*
+ * ---- task 35.3's enumeration notes, decoded ------------------------------
+ *
+ * A root port's `enum.port.*` records pack one ULONG each; the layouts are
+ * src/xhci_enum.h's, the names below are the driver's numbers (XHCI_ENUM_*
+ * states and causes, XHCI_LINK_ACT_*, XHCI_SPEED_*, XHCI_PSI_SOURCE_*). The
+ * ring is printed verbatim above; this is the same records read out, one line
+ * each, so a dump like 35.0's says why a trained link never got a slot.
+ */
+static const char *const enum_state_names[16] = {
+    "Empty", "Debounce", "Reset", "EnableSlot", "Address", "Desc8",
+    "Evaluate", "Desc18", "Config9", "ConfigFull", "Present", "Bound",
+    "Gone", "Failed", "Bos5", "BosFull"
+};
+
+static const char *enum_cause_name(unsigned long cause)
+{
+    static const char *const names[8] = {
+        "none", "the reset", "no slot", "Address Device",
+        "the device descriptor", "the configuration", "the PDO",
+        "the speed (no EP0 size for it)"
+    };
+
+    return cause < 8 ? names[cause] : "?";
+}
+
+static const char *enum_class_name(unsigned long cls)
+{
+    static const char *const names[5] = {
+        "unknown", "Low Speed", "Full Speed", "High Speed", "SuperSpeed"
+    };
+
+    return cls < 5 ? names[cls] : "?";
+}
+
+static const char *enum_source_name(unsigned long source)
+{
+    static const char *const names[4] = {
+        "no mapping", "listed in the PSI table",
+        "default IDs (no table)", "default ID, unlisted on a USB 3 table"
+    };
+
+    return source < 4 ? names[source] : "?";
+}
+
+static const char *enum_link_name(unsigned long act)
+{
+    static const char *const names[10] = {
+        "none", "wait", "ready", "hot reset", "warm reset", "U0", "U3",
+        "disable", "RxDetect", "given up"
+    };
+
+    return act < 10 ? names[act] : "?";
+}
+
+/* One record's line, NUL-terminated: decoded if it is one of ours. */
+static void enum_note_line(const char *line)
+{
+    static const char prefix[] = "enum.port.";
+    static const char *const change_names[7] = {
+        "CSC", "PEC", "WRC", "OCC", "PRC", "PLC", "CEC"
+    };
+    char changes[32];
+    const char *eq;
+    const char *kind;
+    unsigned long v;
+    unsigned long port;
+    unsigned long n;
+    unsigned long d;
+    int i;
+
+    if (strncmp(line, prefix, sizeof(prefix) - 1) != 0) {
+        return;
+    }
+    kind = line + sizeof(prefix) - 1;
+    eq = strchr(kind, '=');
+    if (eq == NULL) {
+        return;
+    }
+    v = 0;
+    for (i = 1; i <= 8; i++) {
+        d = (unsigned char)eq[i];
+        if (d >= '0' && d <= '9') {
+            d -= '0';
+        } else if (d >= 'A' && d <= 'F') {
+            d = d - 'A' + 10;
+        } else if (d >= 'a' && d <= 'f') {
+            d = d - 'a' + 10;
+        } else {
+            return;
+        }
+        v = (v << 4) | d;
+    }
+    port = v >> 24;
+    n = (unsigned long)(eq - kind);
+    if (n == 4 && strncmp(kind, "look", 4) == 0) {
+        changes[0] = '\0';
+        for (i = 0; i < 7; i++) {
+            if ((v & (0x80UL << i)) != 0) {
+                strcat(changes, " ");
+                strcat(changes, change_names[i]);
+            }
+        }
+        comp("  port %2lu look:  machine %s, fed%s%s%s, link %s; PORTSC%s%s%s "
+             "PLS %lu, changes%s\n",
+             port, enum_state_names[(v >> 20) & 0xF],
+             (v & 0xC000UL) == 0 ? " nothing" : "",
+             (v & 0x8000UL) != 0 ? " connect" : "",
+             (v & 0x4000UL) != 0 ? " disconnect" : "",
+             enum_link_name((v >> 16) & 0xF),
+             (v & 1UL) != 0 ? " CCS" : "", (v & 2UL) != 0 ? " PED" : "",
+             (v & 4UL) != 0 ? " PR" : "", (v >> 3) & 0xF,
+             changes[0] != '\0' ? changes : " none");
+    } else if (n == 5 && strncmp(kind, "reset", 5) == 0) {
+        comp("  port %2lu reset: attempt %lu %s; PORTSC low %04lX: speed ID "
+             "%lu, PLS %lu%s%s\n",
+             port, (v >> 16) & 0x7F,
+             (v & 0x00800000UL) != 0 ? "came back enabled" : "FAILED",
+             v & 0xFFFFUL, (v >> 10) & 0xF, (v >> 5) & 0xF,
+             (v & 2UL) != 0 ? ", PED" : "", (v & 1UL) != 0 ? ", CCS" : "");
+    } else if (n == 5 && strncmp(kind, "speed", 5) == 0) {
+        comp("  port %2lu speed: ID %lu is %s, by %s\n", port,
+             (v >> 16) & 0xFF, enum_class_name((v >> 8) & 0xFF),
+             enum_source_name(v & 0xFF));
+    } else if (n == 4 && strncmp(kind, "rate", 4) == 0) {
+        if ((v & 0x007FFFFFUL) % 10UL == 0) {
+            comp("  port %2lu rate:  %lu Mbit/s%s\n", port,
+                 (v & 0x007FFFFFUL) / 10UL,
+                 (v & 0x00800000UL) != 0 ? ", SuperSpeedPlus" : "");
+        } else {
+            comp("  port %2lu rate:  %lu.%lu Mbit/s%s\n", port,
+                 (v & 0x007FFFFFUL) / 10UL, (v & 0x007FFFFFUL) % 10UL,
+                 (v & 0x00800000UL) != 0 ? ", SuperSpeedPlus" : "");
+        }
+    } else if (n == 4 && strncmp(kind, "slot", 4) == 0) {
+        comp("  port %2lu slot:  attempt %lu, Enable Slot completion %lu%s, "
+             "slot %lu\n",
+             port, (v >> 8) & 0xFF, (v >> 16) & 0xFF,
+             ((v >> 16) & 0xFF) == 0 ? " (never completed)" :
+             ((v >> 16) & 0xFF) == 1 ? " (Success)" : "", v & 0xFF);
+    } else if (n == 4 && strncmp(kind, "fail", 4) == 0) {
+        comp("  port %2lu fail:  attempt %lu failed on %s; %s\n", port,
+             (v >> 8) & 0xFF, enum_cause_name((v >> 16) & 0xFF),
+             (v & 1UL) != 0 ? "no retry follows" : "a retry follows");
+    } else if (n == 3 && strncmp(kind, "end", 3) == 0) {
+        comp("  port %2lu end:   machine %s, cause %s, retries used %lu\n",
+             port, enum_state_names[(v >> 16) & 0xF],
+             enum_cause_name((v >> 8) & 0xFF), v & 0xFF);
+    } else if (n == 5 && strncmp(kind, "quiet", 5) == 0) {
+        comp("  port %2lu quiet: its budget of %lu bursts is spent; nothing "
+             "more is noted\n           for it until it enumerates\n",
+             port, v & 0xFF);
+    }
+}
+
+/* Walk the ring a second time and decode the `enum.port.*` records; prints
+ * nothing when there are none. The caller has checked the ring's header. */
+static void write_companion_enum_notes(const unsigned char *ring,
+                                       unsigned long start,
+                                       unsigned long mask,
+                                       unsigned long used)
+{
+    char line[128];
+    unsigned long len;
+    unsigned long i;
+    unsigned long seen;
+    unsigned char c;
+
+    len = 0;
+    seen = 0;
+    for (i = 0; i < used; i++) {
+        c = ring[(start + i) & mask];
+        if (c == '\r') {
+            continue;
+        }
+        if (c != '\n') {
+            if (len < sizeof(line) - 1) {
+                line[len++] = (char)c;
+            }
+            continue;
+        }
+        line[len] = '\0';
+        len = 0;
+        if (strncmp(line, "enum.port.", 10) != 0) {
+            continue;
+        }
+        if (seen++ == 0) {
+            comp("\nroot port enumeration notes, decoded (task 35.3; "
+                 "oldest first):\n");
+        }
+        enum_note_line(line);
+    }
+}
+
+/*
  * Print the note ring's text out of the raw extension image. The ring is a byte
  * ring with a head, so the oldest byte is `(head - used)` masked to its size -
  * and printing it from offset 0 would give a rotated file, which is why the
@@ -1362,6 +1590,7 @@ static void write_companion_ring(const SNAP_HEADER *h, const unsigned char *ext,
         }
     }
     comp("\n----------------------------------------------------------------\n");
+    write_companion_enum_notes(ext + h->RingOffset, start, mask, h->RingUsed);
 }
 
 /* ---- the PORTSC decode, which is the headline at the bench -------------- */
@@ -1583,6 +1812,683 @@ static int selftest_slots(void)
     }
     companion = NULL;
     print_slots(bytes, 5);
+    return 0;
+}
+
+/* ---- the HCD region: each root port's enumeration and the counters ------ */
+
+/* XHCIHC_COUNTERS (src/xhci_counters.h), in field order. */
+static const char *const hcd_counter_names[SNAP_HCD_COUNTER_WORDS] = {
+    "SlotsEnabled", "DevicesAddressed", "PortSpeedHigh", "PortSpeedFull",
+    "PortSpeedLow", "SlotSpeedHigh", "SlotSpeedFull", "SlotSpeedLow",
+    "SpeedDisagreements",
+    "EndpointsOpened", "SelectEndpointsRequested", "SelectEndpointsRefused",
+    "EndpointRefusalsType", "EndpointRefusalsParams", "EndpointRefusalsPool",
+    "EndpointConfigureFailures", "EndpointsNoBandwidth",
+    "EndpointsNoResources", "UrbsMalformed", "SelectsFailed",
+    "FatalStatus", "TransferEventsUnclaimed", "InterruptMaskFailures",
+    "CommandsGivenUp",
+    "TransfersSubmitted", "TransfersCompleted", "TransfersCancelled",
+    "IsoPacketsAnswered", "IsoMissedService", "IsoPacketErrors",
+    "HubsStarted", "TopoDescriptors", "TopoDescriptorsBad",
+    "TopoHubSlotsMarked", "TopoNodesDropped", "TopoBehindHubAddressed",
+    "TopoBehindHubOpens", "TopoBehindHubTooDeep", "TopoTtProgrammed",
+    "PortSpeedSuper", "SlotSpeedSuper", "PortSpeedSuperPlus", "SsWarmResets",
+    "SsResetsConverted", "SsLinksGivenUp", "SsDevicesOnUsb2", "SsBosMissing",
+    "SsEndpointsEsitRefused",
+    "HoldsPaired", "HoldsUnidentified", "HoldsOrphan", "HoldsReleased",
+    "HoldCompanionOthers", "HoldRequestsRefused", "HoldsDropped",
+    "SsHubsStarted", "SsHubPairs", "SsHubDepthRefused", "SsHubWarmResets",
+    "SsHubLinksGivenUp", "SsHubConfigErrors", "SsHubDevicesPlus",
+    "SsHubRateUnmatched"
+};
+
+/*
+ * The image's own header says where everything is; each figure is checked
+ * against the bytes that arrived before it is believed. A port is printed
+ * only when it has something to say - a machine not Empty, a cause, a speed
+ * ID, a link's warm resets or give-up, refused notes, a flag - and the
+ * counters only when nonzero.
+ */
+static void print_hcd(const unsigned char *image, unsigned long bytes)
+{
+    static const char *const cause_short[8] = {
+        "none", "reset", "no slot", "Address Device", "device descriptor",
+        "configuration", "PDO", "speed (no EP0 size)"
+    };
+    unsigned long version;
+    unsigned long headBytes;
+    unsigned long ports;
+    unsigned long portBytes;
+    unsigned long portsAt;
+    unsigned long counters;
+    unsigned long countersAt;
+    unsigned long shown;
+    unsigned long i;
+    unsigned long v;
+    const unsigned char *r;
+
+    if (bytes < SNAP_HCD_HEAD_WORDS * 4) {
+        comp("\nHCD region: %lu bytes, too short for its header; not "
+             "decoded.\n", bytes);
+        return;
+    }
+    version = get32(image, 0);
+    headBytes = get32(image, 4);
+    ports = get32(image, 8);
+    portBytes = get32(image, 12);
+    portsAt = get32(image, 16);
+    counters = get32(image, 20);
+    countersAt = get32(image, 24);
+    if (version == 0 || version > SNAP_HCD_VERSION ||
+        headBytes < SNAP_HCD_HEAD_WORDS * 4 ||
+        portBytes < SNAP_HCD_PORT_WORDS * 4 || (portBytes & 3UL) != 0 ||
+        portsAt < headBytes || portsAt > bytes || ports > 255 ||
+        ports > (bytes - portsAt) / portBytes || countersAt > bytes ||
+        counters > (bytes - countersAt) / 4) {
+        comp("\nHCD region: version %lu, header %lu bytes, %lu ports of %lu "
+             "bytes at +%lu,\n  %lu counters at +%lu, in %lu bytes - not a "
+             "shape this build reads\n  (it knows version %lu); not "
+             "decoded.\n", version, headBytes, ports, portBytes, portsAt,
+             counters, countersAt, bytes, SNAP_HCD_VERSION);
+        return;
+    }
+
+    comp("\nroot ports, as the driver's enumeration holds them (HCD region "
+         "version %lu):\n", version);
+    comp("  (read while the controller thread may be stepping them: one "
+         "record can mix two\n   enumeration steps, and the tear detector "
+         "does not cover this region)\n");
+    comp("  port  state       cause                tries slot  ID  speed "
+         "(meaning)\n");
+    shown = 0;
+    for (i = 0; i < ports; i++) {
+        r = image + portsAt + i * portBytes;
+        if (get32(r, 4) == 0 && get32(r, 8) == 0 && get32(r, 20) == 0 &&
+            get32(r, 40) == 0 && get32(r, 44) == 0 && get32(r, 52) == 0 &&
+            get32(r, 60) == 0) {
+            continue;
+        }
+        shown++;
+        comp("  %4lu  %-10s  %-19s  %5lu %4lu  %2lu  %s (%s)\n",
+             get32(r, 0), enum_state_names[get32(r, 4) & 0xF],
+             get32(r, 8) < 8 ? cause_short[get32(r, 8)] : "?",
+             get32(r, 12), get32(r, 16),
+             get32(r, 20), enum_class_name(get32(r, 24)),
+             enum_source_name(get32(r, 28)));
+        v = get32(r, 60);
+        if (get32(r, 36) != 0 || get32(r, 40) != 0 || get32(r, 44) != 0 ||
+            get32(r, 52) != 0 || get32(r, 56) != 0 || v != 0 ||
+            get32(r, 32) != 0) {
+            comp("        %s%s; warm resets %lu%s; notes %lu of %lu, %lu "
+                 "refused; recreations failed %lu%s%s%s\n",
+                 get32(r, 36) != 0 ? "USB 3" : "USB 2.0",
+                 get32(r, 32) != 0 ? ", PDO" : "", get32(r, 40),
+                 get32(r, 44) != 0 ? ", given up" : "", get32(r, 48),
+                 get32(image, 28), get32(r, 52), get32(r, 56),
+                 (v & 1UL) != 0 ? "; deferred by the settle" : "",
+                 (v & 2UL) != 0 ? "; warm reset in flight" : "",
+                 (v & 4UL) != 0 ? "; PORTSC unreadable" : "");
+        }
+    }
+    comp("  (%lu of %lu root ports shown; the rest are Empty with nothing "
+         "noted.\n   ID is the raw speed ID the port's last reset read.)\n",
+         shown, ports);
+
+    comp("\ncontroller counters (XHCIHC_COUNTERS), nonzero only:\n");
+    shown = 0;
+    for (i = 0; i < counters; i++) {
+        v = get32(image, countersAt + i * 4);
+        if (v == 0) {
+            continue;
+        }
+        if (i < SNAP_HCD_COUNTER_WORDS) {
+            comp("  %-26s %lu\n", hcd_counter_names[i], v);
+        } else {
+            comp("  counter %-18lu %lu\n", i, v);
+        }
+        shown++;
+    }
+    comp("  (%lu of %lu nonzero.)\n", shown, counters);
+}
+
+/* ---- controller tolerance: the extension's Tol, placed by the HCD header */
+
+/* XHCI_TOL_STATS (src/xhci_tol.h), its first 34 words in field order; the
+ * histogram of 256 follows them. test\test_snap.c holds the driver to it. */
+static const char *const tol_counter_names[SNAP_TOL_NAMED_WORDS] = {
+    "Tolerance", "CapMode", "AvgTrbMode", "CapApplied", "CapIntervals",
+    "BackstopDrains", "QueueErrors", "QueueBadCodes", "QueueUnmatched",
+    "QueueForeign", "QueueHalts",
+    "RetryDiverts", "RetryResets", "RetryRecovered", "RetryExhausted",
+    "RetryReplayed", "RetryResetFailed",
+    "CyclesNoReason", "CyclesRefusedCode", "CyclesHaltNoTd", "CyclesPed",
+    "CyclesPrePdo", "CyclesDropped", "CyclesRefused",
+    "HaltReads", "HaltStale", "PedFaults", "OcFaults", "Repowers", "Holds",
+    "HchRecoveries", "WindowRefused", "DeadEpisodes", "Contained"
+};
+
+/* What each counter is, for the reader of a report (record 17 4.1-4.6). */
+static const char *const tol_counter_meanings[SNAP_TOL_NAMED_WORDS] = {
+    "", "", "", "", "",
+    "drains queued for a lost or late interrupt",
+    "the queues' Errors, summed", "completion codes no path claims",
+    "events inside no queued TD", "events naming no live TD or pipe",
+    "halting completions on a matched TD",
+    "Transaction Errors held for a soft retry",
+    "Reset Endpoint (TSP 1) issued", "retried TDs that then succeeded",
+    "fourth errors, completed as before", "held errors applied by the thread",
+    "Reset Endpoints refused",
+    "device cycles, no reason (always 0)",
+    "device cycles: a code nothing claims",
+    "device cycles: a halt with no TD", "re-enumerations: port disabled",
+    "...of them before the device's PDO", "cycle marks gone stale",
+    "cycles the location's budget refused",
+    "context reads for a halt with no TD",
+    "...that read neither Halted nor Error",
+    "root ports found disabled (PED)", "root port over-currents",
+    "root port repowers", "locations held",
+    "recoveries requested by an unexpected HCH",
+    "recoveries the window refused", "all-ones USBSTS episodes", ""
+};
+
+/* xHCI 1.2 Table 6-90. */
+static const char *tol_code_name(unsigned long code)
+{
+    static const char *const names[37] = {
+        "Invalid", "Success", "Data Buffer Error", "Babble Detected",
+        "USB Transaction Error", "TRB Error", "Stall Error",
+        "Resource Error", "Bandwidth Error", "No Slots Available",
+        "Invalid Stream Type", "Slot Not Enabled", "Endpoint Not Enabled",
+        "Short Packet", "Ring Underrun", "Ring Overrun",
+        "VF Event Ring Full", "Parameter Error", "Bandwidth Overrun",
+        "Context State Error", "No Ping Response", "Event Ring Full",
+        "Incompatible Device", "Missed Service", "Command Ring Stopped",
+        "Command Aborted", "Stopped", "Stopped - Length Invalid",
+        "Stopped - Short Packet", "Max Exit Latency Too Large", "reserved",
+        "Isoch Buffer Overrun", "Event Lost", "Undefined Error",
+        "Invalid Stream ID", "Secondary Bandwidth Error",
+        "Split Transaction Error"
+    };
+
+    if (code < 37) {
+        return names[code];
+    }
+    if (code >= 192 && code <= 223) {
+        return "vendor-defined error";
+    }
+    if (code >= 224) {
+        return "vendor-defined information";
+    }
+    return "reserved";
+}
+
+static const char *tol_terminal_text(unsigned long t)
+{
+    switch (t) {
+    case 0:
+        return "running";
+    case 1:
+        return "failed; an in-place recovery is still owed";
+    case 2:
+        return "LATCHED FAILED: three recoveries failed in a row";
+    case 3:
+        return "LATCHED FAILED: the recovery window refused a fourth";
+    case 4:
+        return "CONTAINED: USBSTS read all ones, the controller unreadable";
+    case 5:
+        return "CONTAINED: halt and reset did not complete and Bus Master "
+               "Enable would not clear; DMA not proven stopped, common "
+               "buffer pinned";
+    default:
+        return "?";
+    }
+}
+
+static const char *tol_hold_text(unsigned long hold)
+{
+    switch (hold) {
+    case 1:
+        return "HELD, re-enumerations spent (powered)";
+    case 2:
+        return "HELD UNPOWERED, repowers spent";
+    case 3:
+        return "HELD UNPOWERED, over-current never cleared";
+    default:
+        return "held, reason ?";
+    }
+}
+
+/* One location, printed when it has been charged, held or re-armed. */
+static unsigned long tol_location(const unsigned char *l, const char *where)
+{
+    if (get32(l, 0) == 0 && get32(l, 4) == 0 && get32(l, 8) == 0 &&
+        l[26] == 0) {
+        return 0;
+    }
+    comp("  %-18s charges %lu: re-enumerations %u of 3, repowers %u of 3\n",
+         where, get32(l, 0), (unsigned)l[24], (unsigned)l[25]);
+    comp("  %-18s re-armed %lu, held %lu time(s)\n", "", get32(l, 8),
+         get32(l, 4));
+    if (l[26] != 0) {
+        comp("  %-18s NOW %s\n", "", tol_hold_text(l[26]));
+    }
+    return 1;
+}
+
+/*
+ * Task 35-T.8: the tolerance state named. It lives in the extension (design
+ * record 17 section 4.8), so it is read from the extension image this dump
+ * took - inside the tear detector's cover - at the place the HCD region's
+ * header gives, each figure checked against the bytes in hand first. The
+ * counters are never gated by XhciTolerance, so a dump at 0 still shows what
+ * the behaviours would have answered.
+ */
+static void print_tol(const unsigned char *hcd, unsigned long hcdBytes,
+                      const unsigned char *ext, unsigned long extBytes)
+{
+    static const char *const cap_text[3] = {
+        "off", "AMD controllers only", "every controller"
+    };
+    unsigned long headBytes;
+    unsigned long tolAt;
+    unsigned long tolBytes;
+    unsigned long statsWords;
+    unsigned long windowAt;
+    unsigned long clockAt;
+    unsigned long locBytes;
+    unsigned long rootAt;
+    unsigned long rootLocs;
+    unsigned long hubAt;
+    unsigned long hubLocs;
+    unsigned long hubPorts;
+    unsigned long terminal;
+    unsigned long codesAt;
+    unsigned long count;
+    unsigned long clock;
+    unsigned long inside;
+    unsigned long shown;
+    unsigned long i;
+    unsigned long v;
+    const unsigned char *t;
+    char where[32];
+
+    if (hcdBytes < SNAP_HCD_HEAD_WORDS * 4 || get32(hcd, 0) == 0 ||
+        get32(hcd, 0) > SNAP_HCD_VERSION) {
+        return;
+    }
+    headBytes = get32(hcd, 4);
+    if (headBytes < SNAP_HCD_TOL_HEAD_WORDS * 4 ||
+        hcdBytes < SNAP_HCD_TOL_HEAD_WORDS * 4) {
+        comp("\ncontroller tolerance: not served by this driver (an "
+             "xhci98.sys before 2.2.0.0's\n  tolerance counters; its "
+             "HCD region header is %lu bytes).\n", headBytes);
+        return;
+    }
+    tolAt = get32(hcd, 32);
+    tolBytes = get32(hcd, 36);
+    statsWords = get32(hcd, 40);
+    windowAt = get32(hcd, 44);
+    clockAt = get32(hcd, 48);
+    locBytes = get32(hcd, 52);
+    rootAt = get32(hcd, 56);
+    rootLocs = get32(hcd, 60);
+    hubAt = get32(hcd, 64);
+    hubLocs = get32(hcd, 68);
+    hubPorts = get32(hcd, 72);
+    terminal = get32(hcd, 76);
+    if (ext == NULL) {
+        comp("\ncontroller tolerance: the extension image is not in hand, "
+             "so it is not decoded;\n  controller: %s.\n",
+             tol_terminal_text(terminal));
+        return;
+    }
+    if (tolAt > extBytes || tolBytes > extBytes - tolAt ||
+        statsWords < SNAP_TOL_NAMED_WORDS + SNAP_TOL_CODES ||
+        statsWords > tolBytes / 4 || (windowAt & 3UL) != 0 ||
+        windowAt > tolBytes || tolBytes - windowAt < 20 ||
+        (clockAt & 3UL) != 0 || clockAt > tolBytes - 4 ||
+        locBytes < SNAP_TOL_LOC_MIN_BYTES || (locBytes & 3UL) != 0 ||
+        rootLocs > SNAP_TOL_MAX_LOCS || hubLocs > SNAP_TOL_MAX_LOCS ||
+        rootAt > tolBytes || rootLocs > (tolBytes - rootAt) / locBytes ||
+        hubAt > tolBytes || hubLocs > (tolBytes - hubAt) / locBytes ||
+        (hubLocs != 0 && hubPorts == 0) || (tolAt & 3UL) != 0) {
+        comp("\ncontroller tolerance: %lu bytes at +%lu of a %lu-byte "
+             "extension,\n  %lu counter words, locations of %lu bytes - not "
+             "a shape this build\n  reads; not decoded.\n",
+             tolBytes, tolAt, extBytes, statsWords, locBytes);
+        return;
+    }
+    t = ext + tolAt;
+    clock = get32(t, clockAt);
+
+    comp("\ncontroller tolerance (design record 17), from the extension at "
+         "+%lu:\n", tolAt);
+    v = get32(t, 0);
+    comp("  XhciTolerance    %lu (%s)\n", v,
+         v == 0 ? "off: 2.1.1.0's handling; faults seen still count"
+                : v == 1 ? "on" : "?");
+    v = get32(t, 4);
+    comp("  XhciIntervalCap  %lu (%s): %s here, %lu endpoint(s) capped\n",
+         v, v < 3 ? cap_text[v] : "?",
+         get32(t, 12) != 0 ? "applies" : "does not apply", get32(t, 16));
+    v = get32(t, 8);
+    comp("  XhciAvgTrbEsit   %lu (%s)\n", v,
+         v == 0 ? "Average TRB Length 1024"
+                : v == 1 ? "an interrupt endpoint's Max ESIT Payload" : "?");
+    comp("  controller       %s\n", tol_terminal_text(terminal));
+    if (terminal == 2 || terminal == 3 || terminal == 5) {
+        comp("                   (it stays failed until a stop and start)\n");
+    }
+    count = get32(t, windowAt);
+    if (count > SNAP_TOL_WINDOW_SLOTS) {
+        count = SNAP_TOL_WINDOW_SLOTS;
+    }
+    /* The driver prunes its stamps only when a recovery is next admitted,
+     * so a stamp older than the window can still be held: judged here
+     * against the captured clock as XhciTolElapsed judges it, an unsigned
+     * difference that survives the clock's wrap. */
+    inside = 0;
+    for (i = 0; i < count; i++) {
+        if (clock - get32(t, windowAt + 4 + i * 4) <
+            SNAP_TOL_WINDOW_TICKS) {
+            inside++;
+        }
+    }
+    comp("  recovery window  %lu of 3 begun inside ten minutes; %lu refused\n",
+         inside, get32(t, windowAt + 16));
+    shown = 0;
+    for (i = 0; i < count; i++) {
+        v = clock - get32(t, windowAt + 4 + i * 4);
+        if (v >= SNAP_TOL_WINDOW_TICKS) {
+            continue;
+        }
+        comp("%s%lu", shown == 0 ? "                   begun " : ", ", v);
+        shown++;
+    }
+    if (shown != 0) {
+        comp(" ticks ago\n");
+    }
+    if (count > inside) {
+        comp("                   %lu older stamp(s) kept, past the window "
+             "and not counted\n", count - inside);
+    }
+    v = get32(t, 33 * 4);
+    comp("  containment      %s\n",
+         v == 0 ? "none"
+                : v == 1 ? "RELEASED: Bus Master Enable read back clear, "
+                           "devices dropped"
+                : v == 2 ? "PINNED: no proof DMA stopped; buffer, transfers "
+                           "kept"
+                         : "?");
+    comp("  all-ones USBSTS  %lu episode(s) begun\n", get32(t, 32 * 4));
+    comp("  tolerance clock  %lu ticks (100 ms nominal, at least 45 ms "
+         "each)\n", clock);
+
+    comp("\ntolerance counters, nonzero only:\n");
+    codesAt = statsWords - SNAP_TOL_CODES;
+    shown = 0;
+    for (i = 5; i < codesAt; i++) {
+        if (i == 33) {
+            continue;
+        }
+        v = get32(t, i * 4);
+        if (v == 0) {
+            continue;
+        }
+        if (i < SNAP_TOL_NAMED_WORDS) {
+            comp("  %-18s %8lu  %s\n", tol_counter_names[i], v,
+                 tol_counter_meanings[i]);
+        } else {
+            comp("  counter %-10lu %8lu\n", i, v);
+        }
+        shown++;
+    }
+    comp("  (%lu nonzero.)\n", shown);
+
+    comp("\ntransfer completion codes, by count:\n");
+    shown = 0;
+    for (i = 0; i < SNAP_TOL_CODES; i++) {
+        v = get32(t, (codesAt + i) * 4);
+        if (v == 0) {
+            continue;
+        }
+        comp("  %3lu %-28s %lu\n", i, tol_code_name(i), v);
+        shown++;
+    }
+    comp("  (%lu code(s) seen. The note ring's xfer.error records carry "
+         "the first of each\n   error code with its slot and endpoint.)\n",
+         shown);
+
+    comp("\nlocations charged, held or re-armed (budget 3 each):\n");
+    shown = 0;
+    for (i = 0; i < rootLocs; i++) {
+        sprintf(where, "root port %lu", i + 1);
+        shown += tol_location(t + rootAt + i * locBytes, where);
+    }
+    for (i = 0; i < hubLocs; i++) {
+        sprintf(where, "hub %lu port %lu", i / hubPorts, i % hubPorts + 1);
+        shown += tol_location(t + hubAt + i * locBytes, where);
+    }
+    if (shown == 0) {
+        comp("  (none.)\n");
+    } else {
+        comp("  (a powered hold ends at a stable disconnect or a controller "
+             "start, an\n   unpowered one only at a controller start. A hub "
+             "is numbered from 0 by its\n   object in the driver.)\n");
+    }
+}
+
+/* `-selftest-hcd`: the HCD region's decode over a canned image, for
+ * xhcisnap\selftest.cmd: 35.0's E460 port 13 Failed on the speed, a
+ * working port 14, an empty port 1 left out, and two counters. */
+static int selftest_hcd(void)
+{
+    static unsigned char image[32 + 3 * 64 + 63 * 4];
+    unsigned long base;
+
+    memset(image, 0, sizeof(image));
+    put32(image, 0, 1);
+    put32(image, 4, 32);
+    put32(image, 8, 3);
+    put32(image, 12, 64);
+    put32(image, 16, 32);
+    put32(image, 20, 63);
+    put32(image, 24, 32 + 3 * 64);
+    put32(image, 28, 8);
+    put32(image, 32, 1);
+    base = 32 + 64;
+    put32(image, base + 0, 13);
+    put32(image, base + 4, 13);
+    put32(image, base + 8, 7);
+    put32(image, base + 12, 1);
+    put32(image, base + 20, 4);
+    put32(image, base + 36, 1);
+    put32(image, base + 48, 5);
+    put32(image, base + 52, 2);
+    base = 32 + 128;
+    put32(image, base + 0, 14);
+    put32(image, base + 4, 10);
+    put32(image, base + 16, 5);
+    put32(image, base + 20, 4);
+    put32(image, base + 24, 4);
+    put32(image, base + 28, 3);
+    put32(image, base + 32, 1);
+    put32(image, base + 36, 1);
+    put32(image, base + 48, 2);
+    put32(image, 32 + 3 * 64 + 0 * 4, 4);
+    put32(image, 32 + 3 * 64 + 39 * 4, 1);
+    companion = NULL;
+    print_hcd(image, sizeof(image));
+
+    /* Malformed: two records of 80000000h bytes, whose product wraps to 0
+     * and would pass a multiplied bound. Refused, nothing read. */
+    memset(image, 0, sizeof(image));
+    put32(image, 0, 1);
+    put32(image, 4, 32);
+    put32(image, 8, 2);
+    put32(image, 12, 0x80000000UL);
+    put32(image, 16, 32);
+    put32(image, 20, 0);
+    put32(image, 24, 32);
+    print_hcd(image, sizeof(image));
+
+    /* A later driver's longer record (80 bytes, words appended): walked by
+     * the header's record size, the known words read as before. */
+    memset(image, 0, sizeof(image));
+    put32(image, 0, 1);
+    put32(image, 4, 32);
+    put32(image, 8, 2);
+    put32(image, 12, 80);
+    put32(image, 16, 32);
+    put32(image, 20, 0);
+    put32(image, 24, 32 + 2 * 80);
+    put32(image, 28, 8);
+    base = 32 + 80;
+    put32(image, base + 0, 17);
+    put32(image, base + 4, 13);
+    put32(image, base + 8, 7);
+    put32(image, base + 20, 4);
+    put32(image, base + 64, 0xDEADBEEFUL);
+    print_hcd(image, 32 + 2 * 80);
+    return 0;
+}
+
+/*
+ * `-selftest-tol`: task 35-T.8's decode over a canned HCD header and
+ * extension image, laid out as an x86 build lays XHCI_TOL_STATE: a mouse
+ * that kept failing - soft retries, two cycles for a refused code, its root
+ * port held - on a controller whose window then refused a recovery; a hub
+ * port re-armed. Then a 35.3 header, a state past the image, and no image.
+ */
+static int selftest_tol(void)
+{
+    static unsigned char hcd[SNAP_HCD_TOL_HEAD_WORDS * 4];
+    static unsigned char ext[64 + 16552];
+    const unsigned long tolAt = 64;
+    const unsigned long windowAt = 290 * 4 + 24;
+    const unsigned long clockAt = windowAt + 20 + 12 + 4;
+    const unsigned long rootAt = clockAt + 4;
+    const unsigned long hubAt = rootAt + 255 * 32;
+    unsigned char *t;
+    unsigned char *l;
+
+    memset(hcd, 0, sizeof(hcd));
+    memset(ext, 0, sizeof(ext));
+    put32(hcd, 0, 1);
+    put32(hcd, 4, SNAP_HCD_TOL_HEAD_WORDS * 4);
+    put32(hcd, 32, tolAt);
+    put32(hcd, 36, 16552);
+    put32(hcd, 40, 290);
+    put32(hcd, 44, windowAt);
+    put32(hcd, 48, clockAt);
+    put32(hcd, 52, 32);
+    put32(hcd, 56, rootAt);
+    put32(hcd, 60, 255);
+    put32(hcd, 64, hubAt);
+    put32(hcd, 68, 224);
+    put32(hcd, 72, 14);
+    put32(hcd, 76, 3);
+    t = ext + tolAt;
+    put32(t, 0 * 4, 1);
+    put32(t, 1 * 4, 1);
+    put32(t, 3 * 4, 1);
+    put32(t, 4 * 4, 2);
+    put32(t, 5 * 4, 3);
+    put32(t, 6 * 4, 5);
+    put32(t, 11 * 4, 4);
+    put32(t, 13 * 4, 3);
+    put32(t, 14 * 4, 1);
+    put32(t, 18 * 4, 2);
+    put32(t, 23 * 4, 1);
+    put32(t, 31 * 4, 1);
+    put32(t, (34 + 1) * 4, 1000);
+    put32(t, (34 + 4) * 4, 5);
+    put32(t, (34 + 12) * 4, 2);
+    put32(t, (34 + 13) * 4, 20);
+    put32(t, (34 + 200) * 4, 1);
+    put32(t, windowAt, 3);
+    put32(t, windowAt + 4, 100);
+    put32(t, windowAt + 8, 200);
+    put32(t, windowAt + 12, 300);
+    put32(t, windowAt + 16, 1);
+    put32(t, clockAt, 400);
+    l = t + rootAt + 3 * 32;
+    put32(l, 0, 3);
+    put32(l, 4, 1);
+    l[24] = 3;
+    l[26] = 1;
+    l = t + hubAt + 15 * 32;
+    put32(l, 0, 1);
+    put32(l, 8, 1);
+    l[24] = 1;
+    companion = NULL;
+    print_tol(hcd, sizeof(hcd), ext, sizeof(ext));
+
+    /* The window long after: the driver still holds three stamps, since it
+     * prunes only at the next admission, but one is past the window and is
+     * not counted; the other two straddle the clock's wrap. */
+    put32(hcd, 76, 0);
+    put32(t, windowAt + 4, 0xFFFF0000UL);
+    put32(t, windowAt + 8, 0xFFFFFF00UL);
+    put32(t, windowAt + 12, 0x50);
+    put32(t, windowAt + 16, 0);
+    put32(t, clockAt, 0x100);
+    print_tol(hcd, sizeof(hcd), ext, sizeof(ext));
+    put32(hcd, 76, 3);
+
+    /* A 35.3 driver: an eight-word header, no tolerance words. */
+    put32(hcd, 4, SNAP_HCD_HEAD_WORDS * 4);
+    print_tol(hcd, sizeof(hcd), ext, sizeof(ext));
+
+    /* A state that would run past the image: refused, nothing read. */
+    put32(hcd, 4, SNAP_HCD_TOL_HEAD_WORDS * 4);
+    put32(hcd, 32, 0xFFFFFF00UL);
+    print_tol(hcd, sizeof(hcd), ext, sizeof(ext));
+
+    /* No extension image (short, or the wrong size): the terminal only. */
+    print_tol(hcd, sizeof(hcd), NULL, 0);
+
+    /* The unproven-DMA containment, its own terminal reason. */
+    put32(hcd, 76, 5);
+    print_tol(hcd, sizeof(hcd), NULL, 0);
+    return 0;
+}
+
+/* `-selftest-notes`: task 35.3's enumeration-note decode over a canned ring,
+ * on the screen, for xhcisnap\selftest.cmd. Port 13 replays 35.0's E460
+ * failure as 2.1.1.0 met it (speed ID 4 unknown, one retry, then Failed and
+ * a change storm noted once); port 14 the same link with 35.1's fallback;
+ * port 15 a spent budget. The ring starts mid-record, as a wrapped one does. */
+static int selftest_notes(void)
+{
+    static const char text[] =
+        "0000001\r\n"
+        "tol.mode=00000001\r\n"
+        "enum.port.look=0D009083\r\n"
+        "enum.port.reset=0D801203\r\n"
+        "enum.port.speed=0D040000\r\n"
+        "enum.port.rate=0D000000\r\n"
+        "enum.port.fail=0D070000\r\n"
+        "enum.port.reset=0D811203\r\n"
+        "enum.port.speed=0D040000\r\n"
+        "enum.port.rate=0D000000\r\n"
+        "enum.port.fail=0D070101\r\n"
+        "enum.port.end=0D0D0701\r\n"
+        "enum.port.look=0DD00003\r\n"
+        "enum.port.reset=0E801203\r\n"
+        "enum.port.speed=0E040403\r\n"
+        "enum.port.rate=0E00C350\r\n"
+        "enum.port.rate=0200000F\r\n"
+        "enum.port.slot=0E010005\r\n"
+        "enum.port.end=0E0A0000\r\n"
+        "enum.port.quiet=0F000008\r\n";
+    static unsigned char ring[1024];
+
+    memcpy(ring, text, sizeof(text) - 1);
+    companion = NULL;
+    write_companion_enum_notes(ring, 0, sizeof(ring) - 1,
+                               (unsigned long)(sizeof(text) - 1));
     return 0;
 }
 
@@ -2874,7 +3780,8 @@ static unsigned char portsc_values[MAX_PORTS * 4];
 
 /*
  * The whole extension, kept in memory as well as written to the `.BIN`, so the
- * companion can print the note ring out of it. 128 KB is comfortably past the
+ * companion can print the note ring out of it. 256 KB since 2.2.0.0, whose
+ * amd64 extension outgrew the 128 KB this was before; 128 KB was past the
  * 90,272 bytes this was first built against, and past the 91,612 of 1.0.2.0,
  * and still a single static allocation on a machine with 64 MB of RAM -
  * which is what a Windows 98 SE target is. A driver
@@ -2882,7 +3789,7 @@ static unsigned char portsc_values[MAX_PORTS * 4];
  * short would give a rotated ring, which is a wrong reading and not a failed
  * one.
  */
-#define EXT_IMAGE_MAX 131072UL
+#define EXT_IMAGE_MAX 262144UL
 
 static unsigned char ext_image[EXT_IMAGE_MAX];
 
@@ -3095,6 +4002,75 @@ static unsigned long read_slots(HANDLE device, int *state,
 }
 
 /*
+ * The HCD region (task 35.3), in as many windows as it takes - one, in
+ * practice: some 1.4 KB on an 18-port controller. Returns the bytes read;
+ * *state as for the slots. Read for the report alone, like the slots, and
+ * its windows count in the tear detector.
+ */
+static unsigned char hcd_image[SNAP_HCD_MAX_BYTES];
+
+static unsigned long read_hcd(HANDLE device, int *state,
+                              unsigned long *tearFirst,
+                              unsigned long *tearLast, int *tearTorn,
+                              int *tearSeen)
+{
+    SNAP_HEADER header;
+    const unsigned char *payload;
+    unsigned long have;
+
+    have = 0;
+    *state = 0;
+    for (;;) {
+        if (!take_window(device, SNAP_REGION_HCD, have, &header, &payload)) {
+            return 0;
+        }
+        if ((header.Status & SNAP_S_BAD_REGION) != 0) {
+            *state = 2;
+            return 0;
+        }
+        if (!*tearSeen) {
+            *tearFirst = header.TearDetector;
+            *tearSeen = 1;
+        } else if (header.TearDetector != *tearFirst) {
+            *tearTorn = 1;
+        }
+        *tearLast = header.TearDetector;
+        if ((header.Status & ~(SNAP_S_TRUNCATED | SNAP_S_PAST_END)) != 0) {
+            printf("  HCD region: the driver refused the read, status %08lX\n",
+                   header.Status);
+            return 0;
+        }
+        if (header.Region != SNAP_REGION_HCD || header.Offset != have ||
+            (header.RegionBytes & 3UL) != 0 ||
+            header.RegionBytes > SNAP_HCD_MAX_BYTES ||
+            header.PayloadBytes > SNAP_PARAM_BYTES - sizeof(SNAP_HEADER) ||
+            (header.PayloadBytes & 3UL) != 0 ||
+            header.Offset > header.RegionBytes ||
+            header.PayloadBytes > header.RegionBytes - header.Offset ||
+            (header.PayloadBytes == 0 &&
+             (header.Status & SNAP_S_TRUNCATED) != 0)) {
+            printf("  HCD region: an inconsistent reply (region %lu, offset "
+                   "%lu, %lu of %lu bytes)\n", header.Region, header.Offset,
+                   header.PayloadBytes, header.RegionBytes);
+            return 0;
+        }
+        memcpy(hcd_image + have, payload, header.PayloadBytes);
+        have += header.PayloadBytes;
+        if ((header.Status & SNAP_S_TRUNCATED) == 0) {
+            break;
+        }
+    }
+    if (have != header.RegionBytes) {
+        printf("  HCD region: %lu of %lu bytes arrived - incomplete, not "
+               "reported\n", have, header.RegionBytes);
+        return 0;
+    }
+    *state = 1;
+    printf("  HCD region: %lu bytes\n", have);
+    return have;
+}
+
+/*
  * `-selftest-report BASE`: the report path alone. See the switch in main.
  * Exit 0 with BASE.TXT complete, 3 with it incomplete or not created - the
  * same codes the dump answers for the same conditions.
@@ -3152,6 +4128,8 @@ int main(int argc, char **argv)
     SNAP_HEADER portscLast;
     unsigned long slotCount;
     int slotState;
+    unsigned long hcdBytes;
+    int hcdState;
     int companionWasWritten;
     HANDLE device;
     char devicePath[32];
@@ -3280,6 +4258,12 @@ int main(int argc, char **argv)
             probeOnly = 1;
         } else if (strcmp(argv[i], "-selftest-slots") == 0) {
             return selftest_slots();
+        } else if (strcmp(argv[i], "-selftest-notes") == 0) {
+            return selftest_notes();
+        } else if (strcmp(argv[i], "-selftest-hcd") == 0) {
+            return selftest_hcd();
+        } else if (strcmp(argv[i], "-selftest-tol") == 0) {
+            return selftest_tol();
         } else if (strcmp(argv[i], "-selftest-report") == 0 && i + 1 < argc) {
             /*
              * The report path on its own, with no device: open BASE.TXT, write
@@ -3486,6 +4470,8 @@ int main(int argc, char **argv)
                               portsc_values, sizeof(portsc_values));
     slotCount = read_slots(device, &slotState, &tearFirst, &tearLast,
                            &tearTorn, &tearSeen);
+    hcdBytes = read_hcd(device, &hcdState, &tearFirst, &tearLast, &tearTorn,
+                        &tearSeen);
     CloseHandle(device);
     if (portscBytes == (unsigned long)-1) {
         DeleteFileA(extTmpPath);
@@ -3614,6 +4600,26 @@ int main(int argc, char **argv)
              "it gives).\n");
     } else {
         comp("\nslots: the read failed; see the progress lines above.\n");
+    }
+
+    /*
+     * Task 35.3's HCD region at every level, like the slots: port numbers,
+     * states, causes and counts carry no address.
+     */
+    if (hcdState == 1) {
+        print_hcd(hcd_image, hcdBytes);
+        /* 35-T.8's tolerance state, from the extension image: not from an
+         * image that is short or that the driver says is another size. */
+        print_tol(hcd_image, hcdBytes,
+                  (extMismatch || extBytes > sizeof(ext_image)) ? NULL
+                                                                : ext_image,
+                  extBytes);
+    } else if (hcdState == 2) {
+        comp("\nHCD region: not served by this driver (an xhci98.sys before "
+             "2.2.0.0 has no\n  per-port enumeration region; the note ring "
+             "and the .BIN are what it gives).\n");
+    } else {
+        comp("\nHCD region: the read failed; see the progress lines above.\n");
     }
 
     /*

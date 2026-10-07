@@ -395,16 +395,15 @@ that was not serialized against the drain could publish a pointer the DPC has
 already moved past, and could clear `EHB` mid-pass.
 
 The rule: any `ERDP` writer holds the controller lock, or holds the section 2
-precondition instead. There are three in every shipping build, and a fourth
-behind `XHCI_FIX_EVT_REARM` (`src/xhci_cmd.c`), a bench candidate no flavour
-defines, which takes the controller lock like the first two:
+precondition instead. There are three. (A fourth, the bench candidate
+`XHCI_FIX_EVT_REARM`, was retired by task 35-T.1, whose lost-interrupt
+backstop queues the drain and writes no register.)
 
 | Writer | What serializes it |
 |---|---|
 | `XhciEventDpc` | the controller lock, for the whole drain |
 | `XhciEnableInterrupts` | the controller lock, with both enables still clear |
 | `XhciEventDiscardStale` | no lock; the section 2 precondition, below |
-| the `XHCI_FIX_EVT_REARM` re-arm (compiled out) | the controller lock |
 
 (The init sequence programs `ERDP` too, under the same precondition.)
 
@@ -885,7 +884,7 @@ recovery's arming is released, re-requested and charged exactly as its
 age-out would have. A failure touches only the operation it was for, and a
 watchdog context is latched only while it still watches the outstanding
 command, so a stale writer on another CPU cannot overwrite a newer owe
-(the Codex review's three findings, `runs/run-24.md`, "24.4"). The handle out-pointer and
+(the review's three findings, `runs/run-24.md`, "24.4"). The handle out-pointer and
 `UsbPortCancelAsyncCallback` are not used: a stale callback is still the
 rule, and Windows 7's StopController runs a pending one early whatever the
 driver holds - with a live epoch, so an abort issued on a pending command or

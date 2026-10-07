@@ -58,6 +58,88 @@ static VOID hcdLogEmit(const UCHAR *bytes, ULONG count)
 }
 
 /*
+ * Controller tolerance's counters (35-T.8, design record 17 section 4.8):
+ * the scalars, then each completion code counted and each location -
+ * root port or hub port - charged or held, as pairs, so a quiet controller
+ * adds only the scalars. Controller
+ * lock held. IRQL: DISPATCH_LEVEL.
+ */
+static VOID hcdLogTolLocked(PXHCI_EXTENSION ext, PXHCI_LOG log)
+{
+    PXHCI_TOL_STATS s;
+    PXHCI_TOL_LOC loc;
+    ULONG i;
+
+    s = &ext->Tol.Stats;
+    XhciLogAppend(log, "tol.mode", s->Tolerance, 1);
+    XhciLogAppend(log, "tol.cap.mode", s->CapMode, 1);
+    XhciLogAppend(log, "tol.cap.applied", s->CapApplied, 1);
+    XhciLogAppend(log, "tol.cap.intervals", s->CapIntervals, 1);
+    XhciLogAppend(log, "tol.avgtrb.mode", s->AvgTrbMode, 1);
+    XhciLogAppend(log, "tol.backstop.drains", s->BackstopDrains, 1);
+    XhciLogAppend(log, "tol.q.errors", s->QueueErrors, 1);
+    XhciLogAppend(log, "tol.q.badcodes", s->QueueBadCodes, 1);
+    XhciLogAppend(log, "tol.q.unmatched", s->QueueUnmatched, 1);
+    XhciLogAppend(log, "tol.q.foreign", s->QueueForeign, 1);
+    XhciLogAppend(log, "tol.q.halts", s->QueueHalts, 1);
+    XhciLogAppend(log, "tol.retry.diverts", s->RetryDiverts, 1);
+    XhciLogAppend(log, "tol.retry.resets", s->RetryResets, 1);
+    XhciLogAppend(log, "tol.retry.recovered", s->RetryRecovered, 1);
+    XhciLogAppend(log, "tol.retry.exhausted", s->RetryExhausted, 1);
+    XhciLogAppend(log, "tol.retry.replayed", s->RetryReplayed, 1);
+    XhciLogAppend(log, "tol.retry.resetfailed", s->RetryResetFailed, 1);
+    XhciLogAppend(log, "tol.cycle.refused.code",
+                  s->Cycles[XHCI_TOL_CYCLE_REFUSED_CODE], 1);
+    XhciLogAppend(log, "tol.cycle.halt.notd",
+                  s->Cycles[XHCI_TOL_CYCLE_HALT_NO_TD], 1);
+    XhciLogAppend(log, "tol.cycle.ped", s->Cycles[XHCI_TOL_CYCLE_PED], 1);
+    XhciLogAppend(log, "tol.cycle.prepdo", s->CyclesPrePdo, 1);
+    XhciLogAppend(log, "tol.cycle.dropped", s->CyclesDropped, 1);
+    XhciLogAppend(log, "tol.cycle.budget", s->CyclesRefused, 1);
+    XhciLogAppend(log, "tol.halt.reads", s->HaltReads, 1);
+    XhciLogAppend(log, "tol.halt.stale", s->HaltStale, 1);
+    XhciLogAppend(log, "tol.port.ped", s->PedFaults, 1);
+    XhciLogAppend(log, "tol.port.oc", s->OcFaults, 1);
+    XhciLogAppend(log, "tol.port.repowers", s->Repowers, 1);
+    XhciLogAppend(log, "tol.loc.holds", s->Holds, 1);
+    XhciLogAppend(log, "tol.hch.recoveries", s->HchRecoveries, 1);
+    XhciLogAppend(log, "tol.window.refused", s->WindowRefused, 1);
+    XhciLogAppend(log, "tol.window.count", ext->Tol.Window.Count, 1);
+    XhciLogAppend(log, "tol.dead.episodes", s->DeadEpisodes, 1);
+    XhciLogAppend(log, "tol.contained", s->Contained, 1);
+    XhciLogAppend(log, "tol.clock", ext->Tol.Clock, 1);
+    for (i = 0; i < 256; i++) {
+        if (s->Codes[i] != 0) {
+            XhciLogAppend(log, "tol.code", i, 1);
+            XhciLogAppend(log, "tol.code.count", s->Codes[i], 1);
+        }
+    }
+    for (i = 0; i < XHCI_TOL_ROOT_PORTS; i++) {
+        loc = &ext->Tol.RootLoc[i];
+        if (loc->Charges != 0 || loc->Hold != XHCI_TOL_HOLD_NONE) {
+            XhciLogAppend(log, "tol.loc.port", i + 1, 1);
+            XhciLogAppend(log, "tol.loc.charges", loc->Charges, 1);
+            XhciLogAppend(log, "tol.loc.reenums", loc->Reenums, 1);
+            XhciLogAppend(log, "tol.loc.repowers", loc->Repowers, 1);
+            XhciLogAppend(log, "tol.loc.hold", loc->Hold, 1);
+            XhciLogAppend(log, "tol.loc.rearms", loc->Rearms, 1);
+        }
+    }
+    /* A hub port's location by its port object's location number, past the
+     * root ports' (hcd.h, HCD_PORT). */
+    for (i = 0; i < XHCI_TOL_HUB_LOCS; i++) {
+        loc = &ext->Tol.HubLoc[i];
+        if (loc->Charges != 0 || loc->Hold != XHCI_TOL_HOLD_NONE) {
+            XhciLogAppend(log, "tol.loc.port", XHCI_TOL_ROOT_PORTS + i + 1, 1);
+            XhciLogAppend(log, "tol.loc.charges", loc->Charges, 1);
+            XhciLogAppend(log, "tol.loc.reenums", loc->Reenums, 1);
+            XhciLogAppend(log, "tol.loc.repowers", loc->Repowers, 1);
+            XhciLogAppend(log, "tol.loc.hold", loc->Hold, 1);
+            XhciLogAppend(log, "tol.loc.rearms", loc->Rearms, 1);
+        }
+    }
+}
+/*
  * The counter block, appended under the lock at a stop's flush: the set the
  * miniport published (branch 1.2.0.0, xhciLogCountersLocked), less what the
  * HCD has no field for, plus the HCD's own transfer-path and pool counts.
@@ -116,6 +198,7 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
     XhciLogAppend(log, "log.appends", log->Appends, 1);
     XhciLogAppend(log, "log.suppressed", log->Suppressed, 1);
     XhciLogAppend(log, "log.emits", log->DebugViewEmits, 1);
+    hcdLogTolLocked(ext, log);
 }
 
 /*

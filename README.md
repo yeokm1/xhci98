@@ -9,9 +9,7 @@ Since `2.0.0.0` the driver replaces Windows' own USB port and hub drivers with i
 - USB 2.0 and 1.1 (High, Full and Low Speed) devices and hubs
 - UAS (USB Attached SCSI) storage, through a second driver, `xhciuas.sys`
 
-`1.2.0.0`, the USB 2.0-only `usbport.sys` miniport, is frozen and stays available under [releases/1.2.0.0](releases/1.2.0.0/readme.txt) for anyone who needs it.
-
-This driver is developed based on Intel's xHCI specification and tested mainly on Intel machines so far. No guarantees have been made on xHCI implementations from other vendors. [Omores](https://www.youtube.com/@O_mores) has also [tested 1.x](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) on some AMD AM4 and AM5 platforms.
+This driver is developed based on Intel's xHCI specification and tested mainly on Intel machines so far. No guarantees have been made on xHCI implementations from other vendors, although best effort has been made to ensure compatibility. [Omores](https://www.youtube.com/@O_mores) has also [tested 1.x](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) on some AMD AM4 and AM5 platforms.
 
 This project is from a solo human with AI-assistance only so bugs are not unexpected. Feel free to report them if you encounter any issues.
 
@@ -48,6 +46,7 @@ Some things to know:
 - A UAS-capable drive gets UAS, and anything else gets Windows' own `usbstor.sys` (Bulk-Only), at whatever speed it connects. A drive that offers both can be forced to Bulk-Only (see "Tuning" below).
 - Device Manager and the other Windows tools on these systems show a SuperSpeed device as High Speed at most. The interface they read predates SuperSpeed, so that display says nothing about the real link speed.
 - On Windows 98 SE storage of any kind, UAS included, needs NUSB's mass-storage component (see "Installation Steps").
+- Before `2.2.0.0`, SuperSpeed devices did not work on Intel Sunrise Point-LP (`8086:9D2F`: ThinkPad E460, HP EliteBook 850 G5) - a USB 3 stick was not seen and a USB 3 hub showed only its USB 2.0 half. Fixed in `2.2.0.0`; on my E460 a UAS stick now runs at about 242 MB/s write and 245 MB/s read. See [issue 11](docs/issues/11-sunrise-point-ssic-psi-table.md).
 
 ## Installation Steps
 
@@ -172,7 +171,7 @@ After upgrading you can delete the `1.2.0.0` virtual-hub values `XhciVirtualHSHu
 After the upgrade every device is a new Device Manager entry, so a setting kept on a device's own entry, such as SweetLow's hidusbf polling rate, has to be applied again.
 
 ### Updating from 2.y.y.y
-Install the new version over the old one with Update Driver on "xHCI98 USB 3.x eXtensible Host Controller", pointed at the `release-x86\` or `release-x64\` directory. No file needs renaming, since neither `2.x` release uses NUSB's `usbport.sys`.
+Install the new version over the old one with Update Driver on "xHCI98 USB 3.x eXtensible Host Controller", then on "xHCI98 USB 3.x Root Hub", both pointed at the `release-x86\` or `release-x64\` directory. No file needs renaming, since neither `2.x` release uses NUSB's `usbport.sys`.
 
 - **Windows 98 SE and ME: restart afterwards, although Windows does not ask.** The new file waits to replace the old one at the next start, and until then the old driver keeps running. Under SweetLow's stack the controller may show a problem for a minute or two after Finish. On ME it shows one until the restart, while the devices keep working.
 - **Windows 2000: use Have Disk.** Letting Windows search answers that a suitable driver is already installed and keeps the old one. Use "Display a list of the known drivers" -> Have Disk, as in the steps above.
@@ -211,7 +210,10 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | `XhciFastPollFsLs` | A root-port Low- or Full-Speed mouse polled above 1000 Hz | `0` | `3` | `0` | `0` |
 | `XhciFirstEnumWaitMs` | The longest wait for a hub's first report | `0` | `30000` | `5000` | `5000` |
 | `XhciFirstEnumPortMs` | The longest one port may hold that wait | `0` | `XhciFirstEnumWaitMs` | `2000` | `2000` |
-| `XhciIntelPortSwitch` | The Intel 7/8/9-series port switchover; `0` turns it off | `0` | `1` | `1` | `1` |
+| `XhciIntelPortSwitch` | The Intel 7/8/9-series port switchover; `0` turns it off, `2` applies it to any Intel controller **at your own risk** | `0` | `2` | `1` | `1` |
+| `XhciTolerance` | The handling of controller faults, all together; `0` turns most of it off (see "Controller faults") | `0` | `1` | `1` | `1` |
+| `XhciIntervalCap` | Interrupt endpoints polled at least every 32 ms: `1` on AMD controllers, `2` on every controller, `0` off | `0` | `2` | `1` | `1` |
+| `XhciAvgTrbEsit` | A comparison switch for interrupt endpoints; leave at `0` unless comparing | `0` | `1` | `0` | `0` |
 | `XhciLogVerbosity` | The driver's log, read by `XHCISNAP` | `0` | `4` | `0` | `0` |
 | `XhciLogDebugView` | The log sent to DebugView as well | `0` | `1` | `0` | `0` |
 
@@ -275,10 +277,27 @@ With the defaults, the root hub's first report typically comes 20 to 30 ms after
 
 On Intel 7-, 8- and 9-series chipsets (Ivy Bridge to Broadwell) and C610/X99, each switchable connector, usually a blue one, is wired to both the USB 2.0 (EHCI) and the xHCI controller. With the firmware's USB 3.0 setting on Auto, or no setting at all, those connectors typically start on the USB 2.0 controller, so up to `2.1.0.0` this driver saw nothing on them.
 
-Since `2.1.1.0` the driver moves them to the xHCI controller at each start and resume, and hands them back to the USB 2.0 controller when its controller is disabled, removed or the machine shuts down. It does this only on Intel xHCI device ids `1E31`, `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`; every other controller is left alone.
+Since `2.1.1.0` the driver moves them to the xHCI controller at each start and resume, and hands them back to the USB 2.0 controller when its controller is disabled, removed or the machine shuts down. It does this only on Intel xHCI device ids `1E31`, `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`; every other controller is left alone unless `XhciIntelPortSwitch` is `2` (below). Since `2.2.0.0` the hand-back writes only the registers the driver itself wrote.
 
 - A device on a switchable connector under a running USB 2.0 driver (NUSB's, for example) is disconnected there when this driver starts and comes back under it. Do not have a drive busy on a blue connector at that moment.
 - `XhciIntelPortSwitch` set to `0` turns it off. Only `0` does; absent or any other number is on. It is read when the controller starts, so restart after changing it.
+- Since `2.2.0.0`, `XhciIntelPortSwitch` set to `2` does the switchover on any Intel xHCI controller, listed or not, for a chipset with the same switchable connectors that the list misses. On a listed controller `2` is the same as `1`.
+
+Setting `XhciIntelPortSwitch` to 2 writes Intel chipset registers on any Intel USB 3 controller. On one without them (every Intel chipset from the 100-series on, and any not yet read) it writes registers of unknown meaning, with unknown results. Use 2 only, at your own risk, for an unlisted Intel chipset with both EHCI and xHCI; everyone else should leave it at 1.
+
+### Controller faults
+
+Since `2.2.0.0` the driver no longer leaves a device dead until it is replugged after a transfer, port or controller fault. This follows a tester's report from an AMD AM5 board of a mouse that stops at random. In short:
+
+- A missed interrupt is picked up by the driver itself.
+- A USB transaction error is retried up to three times before the transfer fails.
+- A fault the driver cannot tie to a transfer re-enumerates the device, as if it had been replugged.
+- A USB 2.0 port the controller disabled, or one that reported an over-current, is brought back.
+- A controller that halts is recovered; one that stops answering is closed off safely.
+
+Each is tried a few times at most, then the driver stops and holds the port or the controller until the device is unplugged or the controller is restarted. None of it acts unless a fault is reported. `XhciTolerance` set to `0` turns it off. `XhciIntervalCap` and `XhciAvgTrbEsit` are two related settings for AMD controllers.
+
+If a USB device stops working on your machine, send two `XHCISNAP` captures (one while it works, one after it stops) and the controller's id from `XHCIQUAL`. The [release notes](docs/using/release-notes.md), "Controller faults: what the driver does about them", and the package's `readme.txt` have the details, including the exceptions.
 
 ### The 1.2.0.0 virtual-hub values
 
@@ -297,30 +316,31 @@ Windows 98 SE and Windows 2000 SP4 are the primary targets. Windows 98 SE has al
 | Windows Vista SP2 and 7 SP1, 32-bit and x64 | VMs only: the same, on four virtual processors. On the x64 systems, driver signature enforcement must be disabled. |
 | The release package | `2.0.0.0` and `2.1.0.0` each installed from the release download on all ten systems and passed. `2.1.0.0` also installed over `2.0.0.0` on each. |
 
-| Machine | Controller | 2.0.0.0 result | Tested by |
-|---|---|---|---|
-| 2016 ThinkPad E460 | Intel Skylake, Sunrise Point-LP (100-series) PCH. xHCI 1.0. | Yes | Me |
-| 2020 ThinkPad P14s Gen 1 | Intel Comet Lake PCH-LP (400-series). xHCI 1.1. | Yes | Me |
-| Omores' Intel and AMD desktops | H110, B360, B550, X570, X670 | No `2.0.0.0` report yet. | [Omores](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) (1.x) |
+| Machine | Controller | Tested by |
+|---|---|---|
+| 2012 Lenovo B490 | Intel Ivy Bridge, Panther Point HM77 (7-series) PCH, with EHCI beside it. xHCI 1.0. | Me |
+| 2016 ThinkPad E460 | Intel Skylake, Sunrise Point-LP (100-series) PCH. xHCI 1.0. | Me |
+| 2020 ThinkPad P14s Gen 1 | Intel Comet Lake PCH-LP (400-series). xHCI 1.1. | Me |
+| Omores' Intel and AMD desktops | H110, B360, B550, X570, X670 | [Omores](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) (1.x.x.x) |
 
 The devices, each characterised in [test-equipment.md](docs/contributing/test-equipment.md):
 
-| Device | VID:PID | Speed | 2.0.0.0 result |
-|---|---|---|---|
-| Terminus 7-port hub, multi-TT | `1A40:0201` | High | Works, with Low- and Full-Speed devices behind it. |
-| Terminus 4-port hub, single-TT | `1A40:0101` | High | Works, with Low- and Full-Speed devices behind it. |
-| Genesys 7-port hub (two cascaded chips), single-TT | `05E3:0608` | High | Works, with Low- and Full-Speed devices behind it. |
-| Genesys USB 3.0 hub | `05E3:0610`, `05E3:0612` | SuperSpeed and High | Works, with devices behind both halves. |
-| A Full-Speed hub behind a High-Speed hub | | Full | Works (a USB 2.0 hub held at Full Speed by an isolator). |
-| Logitech USB Optical Mouse | `046D:C077` | Low | Works at a root port and behind a hub, polled every 8 ms. |
-| Microsoft Wired Keyboard 600 (composite) | `045E:0750` | Low | Works. |
-| SanDisk U3 Titanium flash drive | `0781:5408` | High | Works, with a verified round trip. |
-| MSSU10-128GSR flash drive | `090C:2320` | SuperSpeed, UAS | Works: UAS at SuperSpeed, forced Bulk-Only, and Bulk-Only behind a USB 2.0 hub. |
-| SanDisk 3.2Gen1 flash drive | `0781:55AB` | SuperSpeed, Bulk-Only | Works at SuperSpeed and behind a USB 2.0 hub. |
-| StoreJet Transcend USB-to-SATA bridge (ASMedia) | `174C:5106` | SuperSpeed, UAS and Bulk-Only | Works: UAS at SuperSpeed and High Speed, and forced Bulk-Only. |
-| ASIX AX88772A USB Ethernet | `0B95:7720` | High | Works with ASIX's own drivers, and on 98 SE and 2000 in VMs. |
-| Sound Blaster Play! 2 (UAC 1.0 composite) | `041E:323D` | Full | Works: played and heard at a root port and behind a hub. |
-| C-Media USB Audio Device (UAC 1.0 composite) | `0D8C:0014` | Full | Works, and on 98 SE and 2000 in VMs. |
+| Device | VID:PID | Speed |
+|---|---|---|
+| Terminus 7-port hub, multi-TT | `1A40:0201` | High |
+| Terminus 4-port hub, single-TT | `1A40:0101` | High |
+| Genesys 7-port hub (two cascaded chips), single-TT | `05E3:0608` | High |
+| Genesys USB 3.0 hub | `05E3:0610`, `05E3:0612` | SuperSpeed and High |
+| A Full-Speed hub behind a High-Speed hub | | Full |
+| Logitech USB Optical Mouse | `046D:C077` | Low |
+| Microsoft Wired Keyboard 600 (composite) | `045E:0750` | Low |
+| SanDisk U3 Titanium flash drive | `0781:5408` | High |
+| MSSU10-128GSR flash drive | `090C:2320` | SuperSpeed, UAS |
+| SanDisk 3.2Gen1 flash drive | `0781:55AB` | SuperSpeed, Bulk-Only |
+| StoreJet Transcend USB-to-SATA bridge (ASMedia) | `174C:5106` | SuperSpeed, UAS and Bulk-Only |
+| ASIX AX88772A USB Ethernet | `0B95:7720` | High |
+| Sound Blaster Play! 2 (UAC 1.0 composite) | `041E:323D` | Full |
+| C-Media USB Audio Device (UAC 1.0 composite) | `0D8C:0014` | Full |
 
 The `1.2.0.0` results are in its [README](https://github.com/yeokm1/xhci98/blob/1.2.0.0/README.md) and [release notes](https://github.com/yeokm1/xhci98/blob/1.2.0.0/docs/using/release-notes.md).
 
@@ -338,12 +358,12 @@ These come from Windows, NUSB or the driver being unsigned, and no change to thi
 | Windows XP installed with the F6 floppy needs a PS/2 or built-in laptop keyboard | Setup copies Windows' own HID and USB helper files only with Microsoft's own USB controller drivers, so in GUI-mode Setup the USB keyboard and mouse wait for its device install, which first asks about the unsigned driver (default No). A USB-only keyboard cannot answer it; a PS/2 or built-in laptop keyboard can. Windows 2000 does not ask. |
 | Windows ME: unplugging a device while Windows installs it | ME's own device manager stops responding if a device is unplugged while Windows is still installing its driver. ME does the same on Microsoft's own USB stack. Wait for the install to finish before unplugging. |
 
-### May be addressed in a later release
+### Not planned, though a later release might address them
 
 | Limitation | Detail |
 |---|---|
 | The driver never starts selective suspend | Idle devices and hub ports are never suspended to save power. A suspend or resume a hub reports is handled. |
-| USB storage on Windows 98 is slower than the drive | An observation, not a defect found: Windows 98 sends one command at a time. On the P14s with the MSSU10 at 64 KB, about 208 MB/s on Windows 98 against 277 MB/s on Windows 11 at the same queue depth of one. This may be looked into in a later release. |
+| Windows 2000: a mounted USB drive may come back at Code 31 after a controller recovery | After the driver recovers the controller in place (a halted controller, or a failed endpoint reset), a USB drive whose volume was mounted may stay at Code 31 until it is unplugged and plugged in again, or the controller is disabled and enabled. Other devices come back. Seen in a virtual machine; not on Windows 98 SE. The path predates `2.2.0.0`, which recovers on more faults. |
 | A UAS drive as the first USB storage device on Windows ME | On a fresh Windows ME installation whose first USB storage device is a UAS drive, the drive shows Code 2 (NTKERN.VXD device loader(s) could not load). ME has not yet copied its own `USBNTMAP.SYS` and `USBMPHLP.PDR`, which it installs only when its first ordinary USB stick is plugged in. To recover, plug in any ordinary USB stick once, then unplug the UAS drive and plug it back in. No Remove and no restart are needed. |
 
 ### Untested ground

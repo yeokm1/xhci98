@@ -615,9 +615,72 @@ static ULONG xhciDefaultKilobits(ULONG psiv, ULONG major)
     }
 }
 
-static ULONG xhciDefaultSpeedClass(ULONG psiv, ULONG major)
+/*
+ * What one PSIV means on one protocol group: its rate in kbit/s (0 for none
+ * this driver can name), whether its PSI DWORD states SuperSpeedPlus, and
+ * where the meaning came from (XHCI_PSI_SOURCE_*). The one place the rule of
+ * docs/contributing/implementation-invariants.md, "Port Speed Decoding", is
+ * applied; the class, the rate and the inverse lookups all ask it.
+ *
+ * A listed entry always wins, even one whose rate this driver cannot
+ * represent, so a controller that reorders its IDs is read by its table. With
+ * no table the defaults apply. With a table, an unlisted ID still means
+ * nothing - except IDs 4 to 7 on a USB 3.x group, which take their default
+ * meaning (task 35.1, issue 11): Sunrise Point-LP (8086:9D2F) publishes a USB
+ * 3 table of three SSIC rates at IDs 1 to 3 and reports a 5 Gbit/s link as 4.
+ */
+static ULONG xhciProtocolRate(const XHCI_PROTOCOL *proto, ULONG psiv,
+                              ULONG *kbps, ULONG *lp)
 {
-    return xhciSpeedClassFromKilobits(xhciDefaultKilobits(psiv, major));
+    ULONG i;
+
+    *kbps = 0;
+    *lp = 0;
+    for (i = 0; i < proto->PsiCount; i++) {
+        if (XHCI_PSI_PSIV(proto->Psi[i]) == psiv) {
+            *kbps = xhciPsiKilobits(proto->Psi[i]);
+            if (proto->Major == 3 &&
+                XHCI_PSI_LP(proto->Psi[i]) == XHCI_PSI_LP_SSP) {
+                *lp = 1;
+            }
+            return XHCI_PSI_SOURCE_LISTED;
+        }
+    }
+    if (proto->PsiCount == 0) {
+        *kbps = xhciDefaultKilobits(psiv, proto->Major);
+        return *kbps != 0 ? XHCI_PSI_SOURCE_DEFAULT : XHCI_PSI_SOURCE_NONE;
+    }
+    if (proto->Major == 3 && psiv >= XHCI_PSIV_SS &&
+        psiv <= XHCI_PSIV_SSP_GEN2X2) {
+        *kbps = xhciDefaultKilobits(psiv, proto->Major);
+        return XHCI_PSI_SOURCE_FALLBACK;
+    }
+    return XHCI_PSI_SOURCE_NONE;
+}
+
+/* The group owning `port`, or NULL for a port no group claims. */
+static const XHCI_PROTOCOL *xhciPortProtocol(const XHCI_PORT_MAP *map,
+                                             ULONG port)
+{
+    if (map == NULL || port == 0 || port > map->PortCount ||
+        port > XHCI_MAX_ROOT_PORTS ||
+        map->Protocol[port - 1] == XHCI_PORT_NO_PROTOCOL) {
+        return NULL;
+    }
+    return &map->Protocols[map->Protocol[port - 1]];
+}
+
+ULONG XhciPortSpeedSource(const XHCI_PORT_MAP *map, ULONG port, ULONG psiv)
+{
+    const XHCI_PROTOCOL *proto;
+    ULONG kbps;
+    ULONG lp;
+
+    proto = xhciPortProtocol(map, port);
+    if (proto == NULL) {
+        return XHCI_PSI_SOURCE_NONE;
+    }
+    return xhciProtocolRate(proto, psiv, &kbps, &lp);
 }
 
 ULONG XhciPortSpeedClass(const XHCI_PORT_MAP *map,
@@ -626,40 +689,18 @@ ULONG XhciPortSpeedClass(const XHCI_PORT_MAP *map,
                          ULONG *speedClass)
 {
     const XHCI_PROTOCOL *proto;
-    ULONG i;
+    ULONG kbps;
+    ULONG lp;
 
     if (speedClass == NULL) {
         return XHCI_CAPS_BAD_PARAM;
     }
-    if (port == 0 || port > map->PortCount || port > XHCI_MAX_ROOT_PORTS) {
+    proto = xhciPortProtocol(map, port);
+    if (proto == NULL) {
         return XHCI_CAPS_NOT_FOUND;
     }
-    if (map->Protocol[port - 1] == XHCI_PORT_NO_PROTOCOL) {
-        return XHCI_CAPS_NOT_FOUND;
-    }
-
-    proto = &map->Protocols[map->Protocol[port - 1]];
-    if (proto->PsiCount == 0) {
-        *speedClass = xhciDefaultSpeedClass(psiv, proto->Major);
-        return XHCI_CAPS_OK;
-    }
-
-    /*
-     * The table replaces the defaults; it does not extend them. A PSIV the
-     * controller did not advertise is unknown, and a driver that fell back to
-     * "3 means High Speed" here would be guessing on exactly the controller
-     * that reordered its IDs (docs/contributing/implementation-invariants.md, "Port Speed
-     * Decoding").
-     */
-    for (i = 0; i < proto->PsiCount; i++) {
-        if (XHCI_PSI_PSIV(proto->Psi[i]) == psiv) {
-            *speedClass = xhciSpeedClassFromKilobits(
-                xhciPsiKilobits(proto->Psi[i]));
-            return XHCI_CAPS_OK;
-        }
-    }
-
-    *speedClass = XHCI_SPEED_UNKNOWN;
+    (VOID)xhciProtocolRate(proto, psiv, &kbps, &lp);
+    *speedClass = xhciSpeedClassFromKilobits(kbps);
     return XHCI_CAPS_OK;
 }
 
@@ -692,6 +733,8 @@ ULONG XhciPortPsivForSpeed(const XHCI_PORT_MAP *map,
 {
     const XHCI_PROTOCOL *proto;
     ULONG value;
+    ULONG kbps;
+    ULONG lp;
     ULONG i;
 
     if (psiv == NULL) {
@@ -707,25 +750,22 @@ ULONG XhciPortPsivForSpeed(const XHCI_PORT_MAP *map,
     if (value == 0) {
         return XHCI_CAPS_NOT_FOUND;
     }
-    if (port == 0 || port > map->PortCount || port > XHCI_MAX_ROOT_PORTS) {
+    proto = xhciPortProtocol(map, port);
+    if (proto == NULL) {
         return XHCI_CAPS_NOT_FOUND;
     }
-    if (map->Protocol[port - 1] == XHCI_PORT_NO_PROTOCOL) {
-        return XHCI_CAPS_NOT_FOUND;
-    }
-
-    proto = &map->Protocols[map->Protocol[port - 1]];
     if (proto->PsiCount == 0) {
         *psiv = value;
         return XHCI_CAPS_OK;
     }
 
     /*
-     * The table replaces the defaults in this direction too. A controller that
-     * advertises a PSI table and no entry of this speed is one this driver
-     * cannot describe a device of that speed to, and the honest answer is a
-     * refusal - the caller fails the record, which is a yellow bang rather than
-     * a device addressed at a speed the controller never named.
+     * The table replaces the defaults in this direction too, but for the
+     * decode direction's one exception. A controller that advertises a PSI
+     * table and no entry of this speed is one this driver cannot describe a
+     * device of that speed to, and the honest answer is a refusal - the caller
+     * fails the record, which is a yellow bang rather than a device addressed
+     * at a speed the controller never named. A listed entry is preferred.
      */
     for (i = 0; i < proto->PsiCount; i++) {
         /* SuperSpeed by class covers every rate from 5 Gbit/s up, so the
@@ -740,6 +780,16 @@ ULONG XhciPortPsivForSpeed(const XHCI_PORT_MAP *map,
             *psiv = XHCI_PSI_PSIV(proto->Psi[i]);
             return XHCI_CAPS_OK;
         }
+    }
+
+    /* The decode direction's exception, mirrored: SuperSpeed is ID 4 on a
+     * USB 3.x group whose table does not list 4 (task 35.1), so a device
+     * behind a SuperSpeed hub on Sunrise Point-LP is addressed too. */
+    if (speedClass == XHCI_SPEED_SUPER &&
+        xhciProtocolRate(proto, XHCI_PSIV_SS, &kbps, &lp) ==
+            XHCI_PSI_SOURCE_FALLBACK) {
+        *psiv = XHCI_PSIV_SS;
+        return XHCI_CAPS_OK;
     }
 
     return XHCI_CAPS_NOT_FOUND;
@@ -766,35 +816,17 @@ ULONG XhciPortRate(const XHCI_PORT_MAP *map,
     const XHCI_PROTOCOL *proto;
     ULONG rate;
     ULONG lp;
-    ULONG i;
 
     if (kbps == NULL || plus == NULL) {
         return XHCI_CAPS_BAD_PARAM;
     }
     *kbps = 0;
     *plus = 0;
-    if (map == NULL || port == 0 || port > map->PortCount ||
-        port > XHCI_MAX_ROOT_PORTS ||
-        map->Protocol[port - 1] == XHCI_PORT_NO_PROTOCOL) {
+    proto = xhciPortProtocol(map, port);
+    if (proto == NULL) {
         return XHCI_CAPS_NOT_FOUND;
     }
-    proto = &map->Protocols[map->Protocol[port - 1]];
-    rate = 0;
-    lp = 0;
-    if (proto->PsiCount == 0) {
-        rate = xhciDefaultKilobits(psiv, proto->Major);
-    } else {
-        for (i = 0; i < proto->PsiCount; i++) {
-            if (XHCI_PSI_PSIV(proto->Psi[i]) == psiv) {
-                rate = xhciPsiKilobits(proto->Psi[i]);
-                if (proto->Major == 3 &&
-                    XHCI_PSI_LP(proto->Psi[i]) == XHCI_PSI_LP_SSP) {
-                    lp = 1;
-                }
-                break;
-            }
-        }
-    }
+    (VOID)xhciProtocolRate(proto, psiv, &rate, &lp);
     if (rate == 0) {
         return XHCI_CAPS_NOT_FOUND;
     }
@@ -1097,3 +1129,45 @@ ULONG XhciHcInfoEqual(const XHCI_HC_INFO *a, const XHCI_HC_INFO *b)
     }
     return 1;
 }
+
+#if defined(XHCI_FLAVOUR_QEMU) || defined(XHCI_HOST_TEST)
+/*
+ * Roadmap-hcd task 35.4's speed-table override, qemu flavour only: the PSI
+ * words the E460's Sunrise Point-LP (8086:9D2F) publishes for its USB 3
+ * protocol (issue 11's table) - PSIC 3, PSIV 1 to 3 at 1248, 2496 and 4992
+ * Mb/s, the SSIC rates, and nothing for PSIV 4. QEMU's controller publishes
+ * no table, so without this the decoding 35.1 fixed is never met in a VM.
+ * Substituted after the parse rather than fed through the reader: the
+ * reader cannot tell a PSI DWORD at offset + 16 from the next capability's
+ * header, which is what QEMU keeps there.
+ */
+const ULONG XhciQemuPsiE460[XHCI_QEMU_PSI_E460_COUNT] = {
+    0x04E00121UL, 0x09C00122UL, 0x13800123UL
+};
+
+ULONG XhciPortMapOverridePsi(PXHCI_PORT_MAP map, ULONG major,
+                             const ULONG *psi, ULONG count)
+{
+    XHCI_PROTOCOL *proto;
+    ULONG changed;
+    ULONG i;
+    ULONG j;
+
+    if (map == NULL || (count != 0 && psi == NULL) || count > XHCI_MAX_PSI) {
+        return 0;
+    }
+    changed = 0;
+    for (i = 0; i < map->ProtocolCount && i < XHCI_MAX_PROTOCOLS; i++) {
+        proto = &map->Protocols[i];
+        if (proto->Major != major) {
+            continue;
+        }
+        proto->PsiCount = count;
+        for (j = 0; j < XHCI_MAX_PSI; j++) {
+            proto->Psi[j] = (j < count) ? psi[j] : 0;
+        }
+        changed++;
+    }
+    return changed;
+}
+#endif

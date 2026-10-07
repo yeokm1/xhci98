@@ -269,6 +269,22 @@ static void test_completion_code_mapping(void)
     expect_slot_fatal(5, 0, "and TRB Error is neither");
     expect_slot_fatal(192, 0, "nor a vendor error");
 
+    /*
+     * The HCD's two routes into a device's teardown and Disable Slot - a
+     * Transfer Event's code, and a matched Command Completion Event's - both
+     * ask XhciXferSlotFatal, so the whole byte is swept: 22 and nothing else,
+     * the controller-fatal codes included, takes a device down.
+     */
+    {
+        ULONG cc;
+
+        for (cc = 0; cc <= 255; cc++) {
+            CHECK_EQ(XhciXferSlotFatal(cc),
+                     cc == XHCI_CC_INCOMPATIBLE_DEVICE ? 1UL : 0UL,
+                     "only Incompatible Device is slot-fatal");
+        }
+    }
+
     /* Everything else: unassigned, isoch-only, command-only, or a code Table
      * 6-90 gives to an event family that is not a Transfer Event. */
     expect_code_rejected(0, "Invalid");
@@ -3810,6 +3826,401 @@ static void test_orphan_backstop_on_error(void)
     CHECK_EQ(fix.queue.Count, 0, "the queue is empty");
 }
 
+/* ------------------------------------------------------------------ */
+/* 5. The soft retry (35-T.2, design record 17 section 4.2)            */
+/* ------------------------------------------------------------------ */
+
+/* A fixture whose queue is in the retry's scope, as hcd_cfg.c sets it for a
+ * bulk or interrupt pipe at its open. */
+static void retry_fixture_init(XFER_FIXTURE *fix)
+{
+    fixture_init(fix, 32);
+    fix->queue.RetryScope = 1;
+}
+
+/* The head's Transaction Error is diverted: nothing of the TD is touched,
+ * nothing retired or completed, and the thread's request is raised. */
+static void test_retry_divert(void)
+{
+    XFER_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+    PXHCI_TRANSFER t;
+    ULONG token;
+    ULONG gen;
+    ULONG freeBefore;
+
+    retry_fixture_init(&fix);
+    CHECK_EQ(fix.queue.RetryWanted, 0, "no request at init");
+    CHECK_EQ(XhciXferRetryPending(&fix.queue, &token, &gen), 0,
+             "nothing pending");
+    CHECK_EQ(fixture_submit_interrupt(&fix, 0, 8), XHCI_XFER_OK, "submitted");
+    t = &fix.transfers[0];
+    CHECK_EQ(t->RetryCount, 0, "a new TD has spent no retries");
+    freeBefore = XhciRingFree(&fix.ring);
+
+    CHECK_EQ(deliver(&fix, 0, XHCI_CC_USB_TRANSACTION_ERROR, 8, &result),
+             XHCI_XFER_OK, "event");
+    CHECK_EQ(result.RetryDiverted, 1, "diverted");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE, "nothing completed");
+    CHECK_EQ(result.CompletedCount, 0, "none");
+    CHECK_EQ(result.NeedsRecovery, 0, "no recovery asked of the caller");
+    CHECK_EQ(fix.queue.Count, 1, "the TD stays queued");
+    CHECK_EQ(fix.queue.Head, t, "at the head");
+    CHECK_EQ(XhciRingFree(&fix.ring), freeBefore, "nothing retired");
+    CHECK_EQ(fix.ring.Dequeue, t->FirstIndex,
+             "the software dequeue still on the TD");
+    CHECK_EQ(t->Flags, XHCI_XFER_FLAG_RETRY_DEFERRED,
+             "no length fixed, no failure latched");
+    CHECK_EQ((ULONG)t->UsbdStatus, WANT_USBD_SUCCESS, "status untouched");
+    CHECK_EQ(t->BytesTransferred, 0, "length untouched");
+    CHECK_EQ(t->RetryCount, 1, "one retry spent");
+    CHECK_EQ(t->RetryEventPA, XhciRingTrbPA(&fix.ring, 0), "pointer kept");
+    CHECK_EQ(t->RetryEventDw2,
+             event_dw2(XHCI_CC_USB_TRANSACTION_ERROR, 8), "status kept");
+    CHECK_EQ(t->RetryEventDw3, event_dw3(FIX_SLOT, FIX_DCI), "control kept");
+    CHECK_EQ(fix.queue.Errors, 0, "not counted as an error");
+    CHECK_EQ(fix.queue.Recoveries, 0, "nor as a recovery");
+    CHECK_EQ(fix.queue.RetryDiverts, 1, "counted as a divert");
+    CHECK_EQ(XhciXferRetryPending(&fix.queue, &token, &gen), 1, "pending");
+    CHECK_EQ(token, t->Token, "naming the TD");
+    CHECK_EQ(gen, 1, "at generation 1");
+    CHECK_EQ(XhciXferRetryHeadIs(&fix.queue, token), 1, "the head is it");
+    CHECK_EQ(XhciXferRetryHeadIs(&fix.queue, token + 1), 0,
+             "and no other token");
+}
+
+/* Out of scope - XhciTolerance 0, EP0, isochronous, streams, behind a TT, a
+ * listed controller all leave RetryScope 0 - the error takes today's path. */
+static void test_retry_out_of_scope(void)
+{
+    XFER_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+
+    fixture_init(&fix, 32);
+    CHECK_EQ(fix.queue.RetryScope, 0, "a queue starts out of scope");
+    CHECK_EQ(fixture_submit_interrupt(&fix, 0, 8), XHCI_XFER_OK, "submitted");
+    CHECK_EQ(deliver(&fix, 0, XHCI_CC_USB_TRANSACTION_ERROR, 8, &result),
+             XHCI_XFER_OK, "event");
+    CHECK_EQ(result.RetryDiverted, 0, "not diverted");
+    CHECK_EQ(result.RetryExhausted, 0, "nor an exhaustion");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "today's completion");
+    CHECK_EQ((ULONG)result.Completed->UsbdStatus,
+             WANT_USBD_DEV_NOT_RESPONDING, "DEV_NOT_RESPONDING");
+    CHECK_EQ(result.NeedsRecovery, 1, "the endpoint Halted");
+    CHECK_EQ(fix.queue.RetryWanted, 0, "no request");
+
+    /* A Stall in scope is not a Transaction Error. */
+    retry_fixture_init(&fix);
+    CHECK_EQ(fixture_submit_interrupt(&fix, 0, 8), XHCI_XFER_OK, "again");
+    CHECK_EQ(deliver(&fix, 0, XHCI_CC_STALL, 8, &result), XHCI_XFER_OK,
+             "stall");
+    CHECK_EQ(result.RetryDiverted, 0, "a stall is not diverted");
+    CHECK_EQ((ULONG)result.Completed->UsbdStatus, WANT_USBD_STALL_PID,
+             "today's stall");
+}
+
+/* A TD that is not the head - one whose predecessors the engine would
+ * sweep - is not diverted: today's path whole. */
+static void test_retry_not_head(void)
+{
+    XFER_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+
+    retry_fixture_init(&fix);
+    CHECK_EQ(fixture_submit_interrupt(&fix, 0, 8), XHCI_XFER_OK, "first");
+    CHECK_EQ(fixture_submit_interrupt(&fix, 1, 8), XHCI_XFER_OK, "second");
+    CHECK_EQ(deliver(&fix, 1, XHCI_CC_USB_TRANSACTION_ERROR, 8, &result),
+             XHCI_XFER_OK, "event on the second");
+    CHECK_EQ(result.RetryDiverted, 0, "not diverted");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "today's path");
+    CHECK_EQ(result.CompletedCount, 2, "the head swept with it");
+    CHECK_EQ(fix.queue.RetryWanted, 0, "no request");
+}
+
+/* The replay is today's error path, exactly: the same length, status,
+ * recovery and ring position as the event would have given at once - on a
+ * multi-TRB TD failing in its second TRB, where the kept pointer is what
+ * the length is computed from. */
+static void test_retry_replay_is_todays_path(void)
+{
+    XFER_FIXTURE today;
+    XFER_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT want;
+    XHCI_XFER_EVENT_RESULT result;
+    ULONG token;
+    ULONG gen;
+
+    fixture_init(&today, 32);
+    CHECK_EQ(fixture_submit_interrupt_multi(&today, 0), XHCI_XFER_OK, "today");
+    CHECK_EQ(fixture_submit_interrupt(&today, 1, 8), XHCI_XFER_OK, "behind");
+    CHECK_EQ(deliver(&today, 1, XHCI_CC_USB_TRANSACTION_ERROR, 24, &want),
+             XHCI_XFER_OK, "today's event");
+    CHECK_EQ(want.Action, XHCI_XFER_ACTION_COMPLETE, "completed today");
+
+    retry_fixture_init(&fix);
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 0), XHCI_XFER_OK, "retried");
+    CHECK_EQ(fixture_submit_interrupt(&fix, 1, 8), XHCI_XFER_OK, "behind");
+    CHECK_EQ(deliver(&fix, 1, XHCI_CC_USB_TRANSACTION_ERROR, 24, &result),
+             XHCI_XFER_OK, "diverted event");
+    CHECK_EQ(result.RetryDiverted, 1, "diverted");
+    CHECK_EQ(XhciXferRetryPending(&fix.queue, &token, &gen), 1, "pending");
+
+    CHECK_EQ(XhciXferRetryReplay(&fix.queue, &fix.ring, FIX_SLOT, FIX_DCI,
+                                 token, &result), 1, "applied");
+    CHECK_EQ(result.RetryDiverted, 0, "not diverted a second time");
+    CHECK_EQ(result.Action, want.Action, "same action");
+    CHECK_EQ(result.CompletedCount, want.CompletedCount, "same count");
+    CHECK_EQ(result.Completed, &fix.transfers[0], "the diverted TD");
+    CHECK_EQ((ULONG)result.Completed->UsbdStatus,
+             (ULONG)want.Completed->UsbdStatus, "same status");
+    CHECK_EQ((ULONG)result.Completed->UsbdStatus,
+             WANT_USBD_DEV_NOT_RESPONDING, "DEV_NOT_RESPONDING");
+    CHECK_EQ(result.Completed->BytesTransferred,
+             want.Completed->BytesTransferred, "same length");
+    CHECK_EQ(result.Completed->BytesTransferred, 104,
+             "64 and 40 of the second, from the kept pointer");
+    CHECK_EQ(result.NeedsRecovery, want.NeedsRecovery, "same recovery");
+    CHECK_EQ(result.RefusedRetire, want.RefusedRetire, "same refusal");
+    CHECK_EQ(fix.ring.Dequeue, today.ring.Dequeue, "same ring position");
+    CHECK_EQ(fix.queue.Errors, today.queue.Errors, "same error count");
+    CHECK_EQ(fix.queue.Count, today.queue.Count, "same queue left");
+    CHECK_EQ(result.Completed->Flags & XHCI_XFER_FLAG_RETRY_DEFERRED, 0,
+             "the deferred outcome cleared with it");
+
+    CHECK_EQ(fix.queue.RetryWanted, 1, "the request is the caller's to clear");
+    CHECK_EQ(XhciXferRetryClear(&fix.queue, gen), 1, "cleared at its gen");
+    CHECK_EQ(fix.queue.RetryWanted, 0, "cleared");
+    CHECK_EQ(XhciXferRetryReplay(&fix.queue, &fix.ring, FIX_SLOT, FIX_DCI,
+                                 token, &result), 0, "nothing to apply twice");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE, "and an empty result");
+    CHECK_EQ(fix.queue.RetryReplay, 0, "the bypass is the replay's alone");
+}
+
+/* After the Reset Endpoint the TD resumes: a Success completes it normally,
+ * the deferred outcome discarded, and it is counted recovered. */
+static void test_retry_recovers(void)
+{
+    XFER_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+    PXHCI_TRANSFER t;
+
+    retry_fixture_init(&fix);
+    CHECK_EQ(fixture_submit_interrupt(&fix, 0, 8), XHCI_XFER_OK, "submitted");
+    t = &fix.transfers[0];
+    CHECK_EQ(deliver(&fix, 0, XHCI_CC_USB_TRANSACTION_ERROR, 8, &result),
+             XHCI_XFER_OK, "error");
+    CHECK_EQ(result.RetryDiverted, 1, "diverted");
+    CHECK_EQ(deliver(&fix, 0, XHCI_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+             "the retried TD's success");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "completed");
+    CHECK_EQ((ULONG)t->UsbdStatus, WANT_USBD_SUCCESS, "as a success");
+    CHECK_EQ(t->BytesTransferred, 8, "with its data");
+    CHECK_EQ(result.RetryRecovered, 1, "counted recovered");
+    CHECK_EQ(t->Flags & XHCI_XFER_FLAG_RETRY_DEFERRED, 0,
+             "the deferred outcome discarded");
+    CHECK_EQ(fix.queue.Errors, 0, "no error");
+    CHECK_EQ(XhciXferRetryHeadIs(&fix.queue, t->Token), 0,
+             "the head is no longer it");
+
+    /* A TD that never failed is not counted recovered. */
+    CHECK_EQ(fixture_submit_interrupt(&fix, 1, 8), XHCI_XFER_OK, "next");
+    CHECK_EQ(deliver(&fix, 1, XHCI_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+             "plain success");
+    CHECK_EQ(result.RetryRecovered, 0, "not a recovery");
+}
+
+/* Three retries per TD: the fourth Transaction Error is not intercepted and
+ * takes today's path whole. A new TD in the same storage starts afresh. */
+static void test_retry_bound(void)
+{
+    XFER_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+    PXHCI_TRANSFER t;
+    ULONG i;
+
+    retry_fixture_init(&fix);
+    CHECK_EQ(fixture_submit_interrupt(&fix, 0, 8), XHCI_XFER_OK, "submitted");
+    t = &fix.transfers[0];
+    for (i = 0; i < 3; i++) {
+        CHECK_EQ(deliver(&fix, 0, XHCI_CC_USB_TRANSACTION_ERROR, 8, &result),
+                 XHCI_XFER_OK, "error");
+        CHECK_EQ(result.RetryDiverted, 1, "diverted while retries remain");
+        CHECK_EQ(result.RetryExhausted, 0, "not exhausted");
+    }
+    CHECK_EQ(t->RetryCount, 3, "three spent");
+    CHECK_EQ(fix.queue.RetryGen, 3, "a generation per divert");
+    CHECK_EQ(deliver(&fix, 0, XHCI_CC_USB_TRANSACTION_ERROR, 8, &result),
+             XHCI_XFER_OK, "the fourth");
+    CHECK_EQ(result.RetryDiverted, 0, "not diverted");
+    CHECK_EQ(result.RetryExhausted, 1, "counted exhausted");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "today's completion");
+    CHECK_EQ((ULONG)t->UsbdStatus, WANT_USBD_DEV_NOT_RESPONDING,
+             "DEV_NOT_RESPONDING");
+    CHECK_EQ(result.NeedsRecovery, 1, "the endpoint left Halted");
+    CHECK_EQ(result.RetryRecovered, 0, "not a recovery");
+    CHECK_EQ(fix.queue.RetryGen, 3, "no new generation");
+
+    CHECK_EQ(fixture_submit_interrupt(&fix, 0, 8), XHCI_XFER_OK, "reused");
+    CHECK_EQ(t->RetryCount, 0, "the bound went with the TD");
+    CHECK_EQ(deliver(&fix, t->FirstIndex, XHCI_CC_USB_TRANSACTION_ERROR, 8,
+                     &result),
+             XHCI_XFER_OK, "error");
+    CHECK_EQ(result.RetryDiverted, 1, "the new TD is diverted");
+}
+
+/* The generation: a request is cleared only at the generation it was
+ * decided on, never a newer one; a second error while the first's request
+ * stands replaces the deferred outcome. */
+static void test_retry_generation(void)
+{
+    XFER_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+    PXHCI_TRANSFER t;
+    ULONG token;
+    ULONG gen;
+    ULONG gen2;
+
+    retry_fixture_init(&fix);
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 0), XHCI_XFER_OK,
+             "submitted");
+    t = &fix.transfers[0];
+    CHECK_EQ(deliver(&fix, 0, XHCI_CC_USB_TRANSACTION_ERROR, 64, &result),
+             XHCI_XFER_OK, "error on the first TRB");
+    CHECK_EQ(XhciXferRetryPending(&fix.queue, &token, &gen), 1, "pending");
+    /* The thread's Reset Endpoint is out; a submission's ring resumes the
+     * TD, which fails again on its second TRB before the command is in. */
+    CHECK_EQ(deliver(&fix, 1, XHCI_CC_USB_TRANSACTION_ERROR, 64, &result),
+             XHCI_XFER_OK, "error on the second TRB");
+    CHECK_EQ(result.RetryDiverted, 1, "diverted again");
+    CHECK_EQ(t->RetryEventPA, XhciRingTrbPA(&fix.ring, 1),
+             "the newer event replaces the deferred outcome");
+    CHECK_EQ(XhciXferRetryPending(&fix.queue, &token, &gen2), 1,
+             "still pending");
+    CHECK(gen2 != gen, "at a newer generation");
+    CHECK_EQ(XhciXferRetryClear(&fix.queue, gen), 0,
+             "the older decision never clears the newer request");
+    CHECK_EQ(fix.queue.RetryWanted, 1, "it stands");
+    CHECK_EQ(XhciXferRetryClear(&fix.queue, gen2), 1, "its own clears it");
+
+    /* A Short Packet ends the TD normally, the deferred outcome dropped. */
+    CHECK_EQ(deliver(&fix, 2, XHCI_CC_SHORT_PACKET, 2, &result),
+             XHCI_XFER_OK, "short on the last TRB");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "completed");
+    CHECK_EQ((ULONG)t->UsbdStatus, WANT_USBD_SUCCESS, "a short success");
+    CHECK_EQ(t->BytesTransferred, 158, "64 + 64 + 30");
+    CHECK_EQ(result.RetryRecovered, 1, "recovered");
+}
+
+/* A retried TD that resumes and ends short mid-TD defers; however it is
+ * settled - by the drain's settle, or swept by its successor's event - it is
+ * counted recovered, once. */
+static void test_retry_recovered_short(void)
+{
+    XFER_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+    PXHCI_TRANSFER first;
+    PXHCI_TRANSFER second;
+
+    /* Settled by the drain. */
+    retry_fixture_init(&fix);
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 0), XHCI_XFER_OK,
+             "submitted");
+    first = &fix.transfers[0];
+    CHECK_EQ(deliver(&fix, first->FirstIndex, XHCI_CC_USB_TRANSACTION_ERROR,
+                     64, &result), XHCI_XFER_OK, "error");
+    CHECK_EQ(result.RetryDiverted, 1, "diverted");
+    CHECK_EQ(deliver(&fix, first->FirstIndex, XHCI_CC_SHORT_PACKET, 40,
+                     &result), XHCI_XFER_OK, "the resumed TD ends short");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE, "deferred");
+    CHECK_EQ(settle(&fix, &result), XHCI_XFER_OK, "settled");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "completed");
+    CHECK_EQ((ULONG)first->UsbdStatus, WANT_USBD_SUCCESS, "a short success");
+    CHECK_EQ(result.RetryRecovered, 1, "counted recovered by the settle");
+
+    /* Swept by its successor's event. */
+    retry_fixture_init(&fix);
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 0), XHCI_XFER_OK, "first");
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 1), XHCI_XFER_OK, "second");
+    first = &fix.transfers[0];
+    second = &fix.transfers[1];
+    CHECK_EQ(deliver(&fix, first->FirstIndex, XHCI_CC_USB_TRANSACTION_ERROR,
+                     64, &result), XHCI_XFER_OK, "error");
+    CHECK_EQ(result.RetryDiverted, 1, "diverted");
+    CHECK_EQ(deliver(&fix, first->FirstIndex, XHCI_CC_SHORT_PACKET, 40,
+                     &result), XHCI_XFER_OK, "the resumed TD ends short");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE, "deferred");
+    CHECK_EQ(deliver(&fix, second->LastIndex, XHCI_CC_SUCCESS, 0, &result),
+             XHCI_XFER_OK, "the successor completes");
+    CHECK_EQ(result.CompletedCount, 2, "sweeping the first");
+    CHECK_EQ((ULONG)first->UsbdStatus, WANT_USBD_SUCCESS,
+             "the swept retried TD a success");
+    CHECK_EQ(result.RetryRecovered, 1,
+             "counted recovered, though the event's own TD was never retried");
+}
+
+/* Review round 1, finding 1: an operation's quiesce must settle a deferred
+ * outcome before programming the dequeue. Until the replay, the software
+ * dequeue is on the failed TD's first TRB - a Set TR Dequeue there would
+ * discard the controller's saved progress in the TD (xHCI 4.6.8) and run it
+ * again from its start; after it, the dequeue is past the TD, as today's
+ * path leaves it. */
+static void test_retry_settle_moves_dequeue(void)
+{
+    XFER_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+    PXHCI_TRANSFER first;
+    PXHCI_TRANSFER second;
+    ULONG token;
+    ULONG gen;
+
+    retry_fixture_init(&fix);
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 0), XHCI_XFER_OK, "first");
+    CHECK_EQ(fixture_submit_interrupt(&fix, 1, 8), XHCI_XFER_OK, "second");
+    first = &fix.transfers[0];
+    second = &fix.transfers[1];
+    CHECK_EQ(deliver(&fix, first->FirstIndex + 1,
+                     XHCI_CC_USB_TRANSACTION_ERROR, 64, &result),
+             XHCI_XFER_OK, "error in the TD's second TRB");
+    CHECK_EQ(result.RetryDiverted, 1, "diverted");
+    CHECK_EQ(fix.ring.Dequeue, first->FirstIndex,
+             "unsettled, the dequeue would restart the TD from its start");
+    CHECK_EQ(XhciXferRetryPending(&fix.queue, &token, &gen), 1, "pending");
+    CHECK_EQ(XhciXferRetryReplay(&fix.queue, &fix.ring, FIX_SLOT, FIX_DCI,
+                                 token, &result), 1, "settled");
+    CHECK_EQ(XhciXferRetryClear(&fix.queue, gen), 1, "request cleared");
+    CHECK_EQ(fix.ring.Dequeue, second->FirstIndex,
+             "settled, the dequeue is past the failed TD");
+    CHECK_EQ(fix.queue.Head, second, "and the failed TD is off the queue");
+}
+
+/* Review round 1 of 35-T.2, finding 3: an event whose pointer's low dword
+ * aliases a queued TD's TRB but whose high dword is nonzero names no TRB of
+ * this driver. It is refused as foreign before the engine sees it, so it
+ * neither completes nor diverts the TD; one below 4 GB, and an Event Data
+ * event whatever its parameter, pass on. */
+static void test_event_high_pointer_refused(void)
+{
+    XFER_FIXTURE fix;
+
+    retry_fixture_init(&fix);
+    CHECK_EQ(fixture_submit_interrupt(&fix, 0, 8), XHCI_XFER_OK, "submitted");
+    CHECK_EQ(XhciXferEventHighRefused(&fix.queue,
+                                      event_dw3(FIX_SLOT, FIX_DCI), 1), 1,
+             "an aliasing pointer above 4 GB is refused");
+    CHECK_EQ(fix.queue.ForeignEvents, 1, "counted as foreign");
+    CHECK_EQ(fix.queue.Count, 1, "the TD it aliases is untouched");
+    CHECK_EQ(fix.queue.RetryWanted, 0, "and not diverted");
+    CHECK_EQ(fix.transfers[0].Flags, 0, "nothing latched on it");
+    CHECK_EQ(XhciXferEventHighRefused(&fix.queue,
+                                      event_dw3(FIX_SLOT, FIX_DCI), 0), 0,
+             "below 4 GB it passes");
+    CHECK_EQ(XhciXferEventHighRefused(&fix.queue,
+                                      event_dw3(FIX_SLOT, FIX_DCI) |
+                                          XHCI_TRB_ED, 0x12345678UL), 0,
+             "an Event Data event's parameter is not a pointer");
+    CHECK_EQ(fix.queue.ForeignEvents, 1, "neither counted");
+}
+
 int main(void)
 {
     test_completion_code_mapping();
@@ -3868,6 +4279,16 @@ int main(void)
     test_token_never_zero();
     test_orphaned_group();
     test_orphan_backstop_on_error();
+    test_retry_divert();
+    test_retry_out_of_scope();
+    test_retry_not_head();
+    test_retry_replay_is_todays_path();
+    test_retry_recovers();
+    test_retry_bound();
+    test_retry_generation();
+    test_retry_recovered_short();
+    test_retry_settle_moves_dequeue();
+    test_event_high_pointer_refused();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

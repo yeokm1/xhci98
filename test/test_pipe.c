@@ -1843,6 +1843,22 @@ static void test_seq(void)
     CHECK(XhciSeqCovers(&h, 90, &c),
           "the same stamp in the horizon's own lap is covered");
 
+    /* 35-T.6 (hcd_cfg.c, hcdCfgHoldUnreadable): RESET_PIPE queued (stamp
+     * 1), ABORT_PIPE of its pipe (stamp 2, the horizon), then the
+     * containment holds the queued RESET_PIPE. Its dispatch stamp, kept
+     * across the queue, is covered and completes; a stamp taken at the hold
+     * (3) would leave it held behind an abort that already ran. */
+    c = seq64(0, 0);
+    XhciSeqNext(&c);
+    f = c;
+    XhciSeqNext(&c);
+    XhciSeqFromStamp(&c, c.Lo, &h);
+    XhciSeqNext(&c);
+    CHECK(XhciSeqCovers(&h, f.Lo, &c),
+          "a request queued before the abort is covered at the hold");
+    CHECK(!XhciSeqCovers(&h, c.Lo, &c),
+          "a stamp taken at the hold would not be");
+
     /* The bound: a lap is 2^32 - 1 values (a low word of 0 skipped). A
      * stamp of 0:1 followed by 0xFFFFFFFE submissions (count 0:FFFFFFFF)
      * still rebuilds exactly; followed by 0xFFFFFFFF (count 1:1) it

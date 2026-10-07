@@ -1079,7 +1079,7 @@ the build, each with the reason it went the way it did.
 
 The guest readings of 2026-09-27 (`docs/contributing/runs/run-24.md`,
 "24.3.4") found two defects that only NT 6.x shows, both of which would hit
-metal, and Codex's two rounds over them found two orderings the vectors had
+metal, and two review rounds over them found two orderings the vectors had
 not reached. Fixed together; the host vectors and their mutations are in
 run-24.md.
 
@@ -1228,7 +1228,7 @@ E460 - the owner took the first, which adds no timing to the reset path:
 3.3's rule, at the disable and power-off site and in the health poll's
 collector. It keeps the redisable: settled while PR or PRC is set, the
 reset's end would find no debt and leave port 1 enabled under usbhub's
-disable (the PRC half is from Codex's review of the rule). **What it does
+disable (the PRC half is from the review of the rule). **What it does
 not cover** is a port that carries a record - its own device, or one
 behind a real hub on it - which still waits for PED as before, for
 ever on QEMU; only a proof taken from the controller would end that wait,

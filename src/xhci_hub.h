@@ -176,6 +176,9 @@ typedef struct _XHCI_HUB_PORT_DECISION {
     ULONG Retry;            /* a resume did not finish: look again later  */
     ULONG GaveUp;           /* XHCI_HUB_RESUME_TRIES resumes did not
                              * finish: the port is enumerated afresh     */
+    ULONG Disabled;         /* the hub disabled a held device's port: the
+                             * Disconnect and Connect are a re-enumeration
+                             * charged to the location (35-T.5)          */
 } XHCI_HUB_PORT_DECISION, *PXHCI_HUB_PORT_DECISION;
 
 VOID XhciHubPortDecide(ULONG state, ULONG status, ULONG change,

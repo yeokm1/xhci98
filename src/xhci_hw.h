@@ -117,7 +117,7 @@ MPSTATUS XhciReadPciConfig(PXHCI_EXTENSION ext,
 /*
  * Write `length` bytes of this controller's PCI config space.
  *
- * **One caller, one register, one bit.** PCI configuration is the bus driver's
+ * **One register, one bit.** PCI configuration is the bus driver's
  * and usbport's to manage, and this driver reads it for identification only
  * (docs/contributing/implementation-invariants.md, "PnP Resources"). The exception is Bus
  * Master Enable, and only as the quiesce path's last resort: when the MMIO
@@ -125,6 +125,11 @@ MPSTATUS XhciReadPciConfig(PXHCI_EXTENSION ext,
  * the sole remaining way to prove the xHC cannot reach the common buffer
  * usbport is about to reclaim - which is the second of the two proofs
  * "DMA Teardown" already names.
+ *
+ * Its second caller writes the same bit for the same proof: the all-ones
+ * containment (35-T.6, design record 17 section 4.6; hcd_ctl.c,
+ * hcdContainProve), which clears it on a controller whose window has stopped
+ * decoding before any device's transfers are released.
  *
  * The HCD has one more writer, which does not come through here: the Intel
  * port switchover's USB3_PSSEN and XUSB2PR (task 34.3), written through
@@ -1390,6 +1395,29 @@ VOID XhciSlotPoll(PXHCI_EXTENSION ext);
  * still says it needs. IRQL: <= DISPATCH_LEVEL, controller lock released.
  */
 VOID XhciSlotResumeSweep(PXHCI_EXTENSION ext);
+
+/*
+ * 1 while any device has work between submission and completion (the
+ * HCD's records in any state but free, IRPs waiting for a record, held
+ * records, and every endpoint's, EP0's and each stream's queue). The save
+ * gate declines on it: step 1 of the save procedure stops Busy endpoints
+ * first (4.23.2, p.313), and a completion the controller writes for one
+ * while halted is discarded at the restore (XhciEventDiscardStale),
+ * leaving its request pending. Idle, it arms the publication guard.
+ * IRQL: <= DISPATCH_LEVEL, controller lock released.
+ */
+ULONG XhciSlotSaveBusy(PXHCI_EXTENSION ext);
+
+/*
+ * The guard's two ends. XhciSlotSaveCommit, once CSS completed, sets
+ * SavedStateValid under the controller lock, and only if nothing was
+ * published since the gate armed; XhciSlotSaveSpoiled, after a restore
+ * has run the controller, says whether something was published since, so
+ * the resume reinitializes instead. IRQL: <= DISPATCH_LEVEL, controller
+ * lock released.
+ */
+ULONG XhciSlotSaveCommit(PXHCI_EXTENSION ext);
+ULONG XhciSlotSaveSpoiled(PXHCI_EXTENSION ext);
 
 /*
  * Give up every device because the controller's state is gone: a stop, or a

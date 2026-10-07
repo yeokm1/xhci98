@@ -1,10 +1,12 @@
 # Polled event delivery for the HCD
 
-Design record for roadmap-hcd Phase 35 (tasks 35.*). DRAFT,
-revision 4, 2026-10-05: written at the owner's request so the driver can run
+Design record for roadmap-hcd's planned polled event delivery (tasks
+`POLL.*`; drawn up as Phase 35, unnumbered since 2026-10-06 until the owner
+opens it, and the review history in section 13 keeps the old phase
+numbers). DRAFT, revision 4, 2026-10-05: written at the owner's request so the driver can run
 a controller that delivers no legacy interrupt - an MSI- or MSI-X-only xHCI
 controller, which neither primary target can serve today - by polling the
-event ring, adaptively, instead of waiting for an interrupt. Codex reviewed
+event ring, adaptively, instead of waiting for an interrupt. Reviews covered
 revisions 1 to 3 the same day (10, 8 and 5 findings, all taken; section 13
 maps each) and converged at round 4, on revision 4. Nothing is built.
 
@@ -22,7 +24,7 @@ phase schedules it), interrupters other than
 Interrupter 0, and any change to the line-interrupt path. On a controller
 with a line interrupt, the default must read as the Phase 34 build does.
 
-## 2. State today (read 2026-10-05, and by Codex on revision 1)
+## 2. State today (read 2026-10-05, and by review on revision 1)
 
 The start:
 
@@ -65,6 +67,21 @@ The drain and its accounting:
 - `xhci_ring.c:1373-1376`: `XhciEventRingDequeue` increments `Dequeue`
   before it wraps it, and `XhciEventRingPending` (`:1344`) indexes with it,
   so a reader without the controller lock can see an out-of-range index.
+- **Since `2.2.0.0` (task 35-T.1, after this section was read) the ISR is
+  not the only producer of `IsrDpc`.** Design record 17 section 4.1's
+  lost-interrupt backstop (`hcd_ctl.c`, `hcdBackstop`), a step of the
+  controller thread's own under the power gate, peeks the event TRB at the
+  software dequeue with `XhciEventRingPending` under the controller lock and
+  queues `IsrDpc` through `hcdIsr`'s admission - `DpcsInFlight` counted
+  before the insertion and rolled back on a refusal, nothing once
+  `DpcClosed` - when the same pending event (dequeue, cycle, drain
+  generation, start generation) has stood for 100 ms on the tolerance clock
+  (record 17 section 4.0). It writes no register and counts
+  `BackstopDrains`; `XhciTolerance` `0` turns it off. Section 7.1's
+  opportunistic checks reuse that peek with their own staleness rule, and
+  under a poll delivery the backstop's queueing is one more producer the
+  close sequence above already covers, since it goes through the same
+  admission.
 
 Timers:
 
@@ -174,7 +191,7 @@ resume keep it; only a new start settles it again. For a poll delivery:
 `XhciImodInterval250ns` is still programmed as read; it has no effect
 without an interrupt.
 
-### 4.1 What the hardware needs (Codex, revision 1)
+### 4.1 What the hardware needs (review, revision 1)
 
 With `USBCMD.INTE` and `IMAN.IE` clear, cycle-bit dequeue and the `ERDP`
 write remain valid: `IMAN.IP` and `USBSTS.EINT` may stay pending without
@@ -184,7 +201,7 @@ acknowledges them, it keeps `EINT` before `IP`, as the ISR does, and it keeps
 the drain's final `EHB`-clearing write. The "no interrupt, no DPC" chain in
 the comment near `xhci_evt.c:990` describes interrupt-driven progress; an
 independently scheduled poll does not depend on it. Each statement is
-checked against `docs/usb-xhci-info/xhci-data-structures.md` in task 35.0
+checked against `docs/usb-xhci-info/xhci-data-structures.md` in task POLL.0
 before code.
 
 ## 5. The poller's lifecycle
@@ -424,7 +441,11 @@ event not yet drained.
   `PollService` is 1 (section 5.3), so it reads a consistent `Dequeue` and
   cycle state of a ring that exists and a controller that runs. A peek without the lock was rejected: the
   dequeue index can be seen unwrapped (`xhci_ring.c:1373`), and the ring's
-  lifetime across a reset is not otherwise guaranteed.
+  lifetime across a reset is not otherwise guaranteed. Task 35-T.1's
+  lost-interrupt backstop (record 17 section 4.1, `hcd_ctl.c`
+  `hcdBackstop`) already takes this peek, under the same lock, on each
+  controller-thread pass; these checks reuse the helper with their own
+  staleness rule.
 - **Where**: on the URB submission path while the controller lock is still
   held for the doorbell (`hcd_io.c:1208`); at the end of each drain, for
   transfers a completion routine resubmitted; on each controller-thread pass
@@ -478,7 +499,7 @@ as for every other diagnostic.
 The tear detector (`hcd_door.c:836`) needs no change: `DpcCount` counts
 every drain, polled or not (`xhci_evt.c:774`).
 
-## 9. `XHCISNAP` (task 35.4)
+## 9. `XHCISNAP` (task POLL.4)
 
 - The companion reports the three values as it does `XhciImodInterval250ns`
   (`write_companion_imod`): status, value as read, value in effect, and the
@@ -492,7 +513,7 @@ every drain, polled or not (`xhci_evt.c:774`).
 - The header grows under the snapshot's existing schema rule, and the tool
   still reads a `2.1.0.0` or earlier header.
 
-## 10. `XHCIQUAL` (task 35.5)
+## 10. `XHCIQUAL` (task POLL.5)
 
 A controller is no longer disqualified for `Interrupt Pin = 0`:
 `quick_classify` and `quick_reason` (`mmiodiag.c:342`, `361`) report it as
@@ -500,7 +521,7 @@ A controller is no longer disqualified for `Interrupt Pin = 0`:
 or set `XhciInterruptMode` to 2)", and the other disqualifiers - BAR0 above
 4 GB, unassigned, I/O space - keep their verdicts.
 
-C4 is not converted wholesale. Its fail covers several causes (Codex,
+C4 is not converted wholesale. Its fail covers several causes (review,
 revision 1): the DPMI interrupt hook not installed (`bringup.c:580`), no
 `IP` and no matching event (`:605-623`), and an ISR that fired with no
 completion behind it (`:668`). Only the cause "the event reached the ring
@@ -514,7 +535,7 @@ runs C6 and C8 and gets a definite verdict, with the exit code to match.
 Vectors at the classification level (`test_mmiodiag`) and for each C4
 outcome through the verdict, which `test_mmiodiag` alone cannot reach.
 
-## 11. Readings (task 35-V)
+## 11. Readings (task POLL-V)
 
 Two kinds of evidence, both required, kept apart. The functional and
 regression legs - every target in mode 2, line against poll, the defaults on
@@ -538,8 +559,8 @@ and that flavour is never published.
   offers one without system standby: the park and kick read in the
   counters. Where no guest does, the recovery alone reads park and kick, and
   a Device Manager disable and enable reads the close (section 5.2). System
-  standby and hibernate under a poll delivery are read in Phase 36, with
-  task 36.1.
+  standby and hibernate under a poll delivery are read in the planned
+  selective suspend work, with task SUSP.1.
 - **The races, on the Windows 2000 SMP guest under Driver Verifier**: a
   submission storm against the timer's re-arm (promotion never lost, never
   pushed later), close during a peek storm and a timer expiry (no DPC after
@@ -562,7 +583,7 @@ and that flavour is never published.
 - **The default on a pin**: mode 0 reading as the Phase 34 build
   (the matrix unchanged), and mode 1 the same.
 
-Bench (35-E, owner): mode 2 on the E460 and the P14s Gen 1 under Windows 98
+Bench (POLL-E, owner): mode 2 on the E460 and the P14s Gen 1 under Windows 98
 SE, and an MSI-only controller if one is at hand. The synthetic no-interrupt
 leg above does not depend on one.
 
@@ -585,7 +606,7 @@ Taken by the owner on 2026-10-05, each from options with a recommendation:
 5. The value names: `XhciInterruptMode`, `XhciPollIdleMs` and
    `XhciPollActiveMs`, as recommended.
 
-## 13. Codex's reviews
+## 13. The reviews
 
 ### 13.1 Revision 1
 
@@ -600,7 +621,7 @@ Taken by the owner on 2026-10-05, each from options with a recommendation:
 | 7 | The tear detector already counts polled drains | Sections 2, 8 and 9 |
 | 8 | C4 fails for several causes; main and report paths | Section 10 |
 | 9 | Legs do not exercise the lifecycle | Section 11 |
-| 10 | Wrong `XHCIQUAL` function; an unread Code 10; 5.1's review owner; the checkpoint's switch | Sections 2, 4.1 and 10; roadmap 35.0 and the checkpoint |
+| 10 | Wrong `XHCIQUAL` function; an unread Code 10; 5.1's review owner; the checkpoint's switch | Sections 2, 4.1 and 10; roadmap POLL.0 and the checkpoint |
 
 ### 13.2 Revision 2
 
@@ -621,24 +642,24 @@ Taken by the owner on 2026-10-05, each from options with a recommendation:
 |---|---|---|
 | 1 | CLOSED was terminal; a stop and start never reopened the poller | Section 5.2: initial state CLOSED, opened at each poll-delivery start |
 | 2 | A clock step breaks the deadline bound | Section 6.2: every deadline checked where it becomes an arm, every arm between the active and idle periods |
-| 3 | Phase 35's legs still waited on Phase 36's standby | Roadmap 35-V, as section 11 already had it |
+| 3 | Phase 35's legs still waited on Phase 36's standby | Roadmap POLL-V, as section 11 already had it |
 | 4 | Phase 36's checkpoint asked a `qemu`-only leg of the release package | Roadmap Phase 36 checkpoint |
-| 5 | Record 14's `34-V`, its baseline and run sheet; the roadmap's docs task citing a list this record had lost | Record 14; section 14 below; roadmap 36.3 |
+| 5 | Record 14's `34-V`, its baseline and run sheet; the roadmap's docs task citing a list this record had lost | Record 14; section 14 below; roadmap SUSP.3 |
 
 ### 13.4 Revision 4
 
-Converged (Codex, round 4, 2026-10-05): one wording finding, the roadmap's
+Converged (review round 4, 2026-10-05): one wording finding, the roadmap's
 Phase 35 status still naming revision 3, taken. No finding in the reopen,
 the deadline conversion, the phase split or the cross-references.
 
 ## 14. What changes in the documents
 
-Task 36.3, the docs of Phases 35 and 36: `implementation-invariants.md`,
+Task SUSP.3, the docs of both planned pieces: `implementation-invariants.md`,
 "Interrupt Delivery" (a pin-0 controller polled, not refused);
 `architecture.md`'s statement of line-based delivery; the release notes'
 "Controller" row and a row for the switch; the acceptance test's step 3 and
 its stop on the pin; `xhciqual/hardware-testing.md` and record 01's C4
 note; record 13 where it describes the ISR; `source-files.md` for
 `xhci_poll.c`; the locking record for `PollLock`, `PollService` and the
-lock order; `xhcisnap/README.md` for the new companion lines; and
-`runs/run-35.md`.
+lock order; `xhcisnap/README.md` for the new companion lines; and the
+phase's run record, named when it is opened.

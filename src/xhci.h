@@ -36,6 +36,7 @@
 /* ...and task 24.3's virtual hubs, one record per root port (design record
  * 12 section 3.3), embedded for the same reason. */
 #include "xhci_vhub.h"
+#include "xhci_tol.h"
 
 /* ------------------------------------------------------------------ */
 /* Hardware structures referenced by the layout                        */
@@ -734,12 +735,15 @@ XHCI_C_ASSERT(portsc_change_mask_is_within_rw1c_range,
 #define XHCI_PLS_COMPLIANCE     10
 #define XHCI_PLS_TEST_MODE      11
 
-/* Default Protocol Speed IDs (spec 7.2, used only when PSIC = 0). */
+/* Default Protocol Speed IDs (spec 7.2): used when PSIC = 0, and 4 to 7
+ * also for an ID a USB 3.x group's table does not list (task 35.1,
+ * xhci_caps.c, xhciProtocolRate). */
 #define XHCI_PSIV_FS            1
 #define XHCI_PSIV_LS            2
 #define XHCI_PSIV_HS            3
 #define XHCI_PSIV_SS            4
-/* The SuperSpeedPlus defaults of a USB 3.x protocol group with PSIC = 0:
+/* The SuperSpeedPlus defaults of a USB 3.x protocol group with PSIC = 0
+ * (or a table that does not list them, task 35.1):
  * Gen 2x1, Gen 1x2 and Gen 2x2 at 10, 10 and 20 Gb/s (Table 7-13's PSIM
  * column, p.485; xhci-data-structures.md section 10.1, verified). 7.2.2.1.2
  * (p.485-486) defines 5 only for a USB 3.1 or 3.2 group and 6 and 7 only
@@ -2086,6 +2090,21 @@ ULONG XhciFindExtendedCap(XHCI_READ32 read,
  */
 ULONG XhciPortMapEqual(const XHCI_PORT_MAP *a, const XHCI_PORT_MAP *b);
 
+#if defined(XHCI_FLAVOUR_QEMU) || defined(XHCI_HOST_TEST)
+/*
+ * Task 35.4's qemu-flavour-only override (XhciQemuPsiE460, hcd_ctl.c): every
+ * protocol group of the given major revision has its PSI table replaced by
+ * `count` words (0 restores "the default IDs apply"), the rest zeroed so
+ * XhciPortMapEqual still compares two overridden maps exactly. Applied to
+ * the preflight and the post-reset parse alike. Returns the groups changed.
+ * IRQL: any.
+ */
+#define XHCI_QEMU_PSI_E460_COUNT 3
+extern const ULONG XhciQemuPsiE460[XHCI_QEMU_PSI_E460_COUNT];
+ULONG XhciPortMapOverridePsi(PXHCI_PORT_MAP map, ULONG major,
+                             const ULONG *psi, ULONG count);
+#endif
+
 /* Port accessors. Out-of-range port numbers answer "not ours" rather than
  * reading past the arrays. Ports are 1-based. IRQL: any. */
 ULONG XhciPortClass(const XHCI_PORT_MAP *map, ULONG port);
@@ -2094,14 +2113,29 @@ ULONG XhciPortSlotType(const XHCI_PORT_MAP *map, ULONG port, ULONG *slotType);
 
 /*
  * Decode a raw PORTSC Port Speed value against the protocol group that owns
- * the port. Falls back to the default IDs only when that group advertises no
- * PSI table; a PSIV absent from a non-empty table decodes as
- * XHCI_SPEED_UNKNOWN, never as a default. IRQL: any.
+ * the port. A listed entry wins; the default IDs apply when the group
+ * advertises no PSI table, and on a USB 3.x group to an unlisted ID 4 to 7
+ * (task 35.1, issue 11); any other PSIV absent from a non-empty table decodes
+ * as XHCI_SPEED_UNKNOWN. IRQL: any.
  */
 ULONG XhciPortSpeedClass(const XHCI_PORT_MAP *map,
                          ULONG port,
                          ULONG psiv,
                          ULONG *speedClass);
+
+/*
+ * Where a PSIV's meaning on this port comes from (task 35.1): NONE when this
+ * driver can name none (or no group claims the port), LISTED from the group's
+ * PSI table, DEFAULT from the default IDs of a group with no table, and
+ * FALLBACK from the default IDs for an ID 4 to 7 a USB 3.x group's table does
+ * not list - Sunrise Point-LP's case. A LISTED entry may still decode as
+ * unknown. IRQL: any.
+ */
+#define XHCI_PSI_SOURCE_NONE        0
+#define XHCI_PSI_SOURCE_LISTED      1
+#define XHCI_PSI_SOURCE_DEFAULT     2
+#define XHCI_PSI_SOURCE_FALLBACK    3
+ULONG XhciPortSpeedSource(const XHCI_PORT_MAP *map, ULONG port, ULONG psiv);
 
 /*
  * The other direction, which task 7b-A.3 needs: **which raw Protocol Speed ID
@@ -2118,8 +2152,10 @@ ULONG XhciPortSpeedClass(const XHCI_PORT_MAP *map,
  *
  * Answers XHCI_CAPS_NOT_FOUND when the group advertises a PSI table with no
  * entry of that speed, which is a refusal rather than a default for the same
- * reason the decode direction has one. Falls back to the default IDs only when
- * the group advertises no table at all. IRQL: any.
+ * reason the decode direction has one. Falls back to the default IDs when the
+ * group advertises no table at all, and for SuperSpeed to ID 4 when a USB 3.x
+ * group's table lists no 5 Gbit/s entry and does not list 4 (task 35.1).
+ * IRQL: any.
  */
 ULONG XhciPortPsivForSpeed(const XHCI_PORT_MAP *map,
                            ULONG port,
@@ -2130,7 +2166,8 @@ ULONG XhciPortPsivForSpeed(const XHCI_PORT_MAP *map,
  * The rate a raw Port Speed value means on this port, kept apart from the
  * speed class (task 29-A.1): `*kbps` the signalling rate in kbit/s, from the
  * group's PSI DWORD for that PSIV - or from the default table when the group
- * advertises none (PSIC = 0, as qemu-xhci reports) - and `*plus` 1 for a
+ * advertises none (PSIC = 0, as qemu-xhci reports) or, on a USB 3.x group,
+ * does not list an ID 4 to 7 (task 35.1) - and `*plus` 1 for a
  * SuperSpeedPlus link: a USB3 group's PSI DWORD with Link Protocol 1, or any
  * SuperSpeed-class rate above Gen 1x1's 5 Gbit/s. A rate is all a PSI DWORD
  * says: Gen 2x1 and Gen 1x2 are both 10 Gbit/s, and only PORTLI's lane counts
@@ -3302,6 +3339,16 @@ ULONG XhciEventRingErdpValue(const XHCI_EVENT_RING *ring, ULONG ehb);
  * Set and cleared under the controller lock; read by `xhciRhAdmitted`.
  */
 #define XHCI_EXT_FLAG_RH_CLOSED   0x00000080UL
+/*
+ * "R/S is written 1 and HCHalted has been read clear since" (35-T.6, design
+ * record 17 section 4.6). Narrower than XHCI_EXT_FLAG_RUNNING, which is set
+ * *before* the R/S write so a quiesce knows there may be something to stop:
+ * between that write and HCH clearing, a halted controller is legitimate, and
+ * the health poll's HCH request must not read it as one that stopped itself.
+ * Set by xhciRunController once its wait has seen HCH clear; cleared on entry
+ * to it, by XhciControllerBeginQuiesce, and before every R/S 0 write.
+ */
+#define XHCI_EXT_FLAG_RS_CONFIRMED 0x00000100UL
 
 /*
  * Where the init sequence got to. Recorded in XHCI_EXTENSION.InitStep next to
@@ -3570,6 +3617,20 @@ typedef struct _XHCI_TRANSFER {
     PVOID IsoParams;
     ULONG IsoPacketCount;
     ULONG IsoPacketsAnswered;
+    /*
+     * The soft retry (roadmap-hcd 35-T.2, design record 17 section 4.2).
+     * `RetryCount` is the Transaction Errors diverted on this TD, so its
+     * bound is the TD's and goes with it: every submit sets it to 0. The
+     * three words after it are the diverted event as the engine was handed
+     * it - its TRB pointer included, from which the replay recomputes the
+     * length and the TD's completion exactly as the first pass would have;
+     * the pointer's high dword is always 0 on these targets - meaningful
+     * only under `XHCI_XFER_FLAG_RETRY_DEFERRED`.
+     */
+    ULONG RetryCount;
+    ULONG RetryEventPA;
+    ULONG RetryEventDw2;
+    ULONG RetryEventDw3;
 } XHCI_TRANSFER, *PXHCI_TRANSFER;
 
 #define XHCI_XFER_NO_INDEX          0xFFFFFFFFUL
@@ -3621,6 +3682,13 @@ typedef struct _XHCI_TRANSFER {
  * list holding only real devices' completions never asks for one.
  */
 #define XHCI_XFER_FLAG_VHUB         0x00000010UL
+/*
+ * 35-T.2. A Transaction Error on this TD was diverted (XhciXferEvent): the
+ * event is kept in `RetryEvent*`, nothing of it applied, and the TD left at
+ * the queue's head unretired. Cleared by the next event matched to the TD,
+ * which then decides it as on any TD, or by the replay that applies it.
+ */
+#define XHCI_XFER_FLAG_RETRY_DEFERRED 0x00000020UL
 
 /* ------------------------------------------------------------------ */
 /* 9-A.1: the isochronous group's storage                              */
@@ -4023,6 +4091,26 @@ typedef struct _XHCI_TRANSFER_QUEUE {
     ULONG IsoMissedService;
     ULONG IsoGroupsAwaitingTail;
     ULONG IsoTailEvents;
+
+    /*
+     * The soft retry (35-T.2, design record 17 section 4.2). `RetryScope` is
+     * the device layer's answer at the pipe's open (XhciTolRetryScope: the
+     * start's XhciTolerance, the controller's id, the endpoint type, no
+     * streams, no TT), 0 for every queue XhciXferQueueInit makes, so EP0's
+     * and an isochronous or a stream's never divert. `RetryGen` counts every
+     * divert; `RetryWanted` and `RetryToken` are the thread's request - the
+     * diverted TD's Token - which only the thread clears, and only while
+     * `RetryGen` still reads the generation it decided on, so a newer
+     * request is never cleared. `RetryReplay` is set across the replay
+     * alone: the one event that is not intercepted again. `RetryDiverts` is
+     * this queue's count of diverted errors, beside its `Errors`.
+     */
+    ULONG RetryScope;
+    ULONG RetryGen;
+    ULONG RetryWanted;
+    ULONG RetryToken;
+    ULONG RetryReplay;
+    ULONG RetryDiverts;
 } XHCI_TRANSFER_QUEUE, *PXHCI_TRANSFER_QUEUE;
 
 /*
@@ -8219,6 +8307,15 @@ typedef struct _XHCI_EXTENSION {
     XHCI_VHUB_BINDING VhubBind[XHCI_MAX_ROOT_PORTS];
 
     /*
+     * Controller tolerance (35-T, design record 17; xhci_tol.h): the values
+     * in effect, the counters a user's dump carries, and the state a start
+     * sets explicitly - the backstop's observation, the recovery window, the
+     * all-ones episode, each root port's budget and hold, and the clock. Last,
+     * so no offset the harness reads moves; an even number of ULONGs.
+     */
+    XHCI_TOL_STATE Tol;
+
+    /*
      * Keeps `TrailingSignature` the **last word** of the amd64 layout, which
      * `test_packet_amd64` asserts and which is what makes the signature pair
      * bracket the whole extension. The structure holds pointers, so on amd64
@@ -8420,6 +8517,106 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_SLOT_RATE_KBPS    8   /* trained rate, 0 unknown      */
 #define XHCI_SNAPSHOT_SLOT_RANK         9   /* XHCI_SS_RANK_*: Gen and lanes */
 #define XHCI_SNAPSHOT_SLOT_WORDS        10UL
+
+/*
+ * The HCD region (xhci98.sys from 2.2.0.0, roadmap-hcd.md task 35.3): what
+ * the extension does not hold and 35.0's E460 reading had to infer - each
+ * root port's enumeration state and failure cause, and the controller's
+ * counter block (XHCIHC_COUNTERS) - as a versioned, pointer-free image of
+ * ULONGs: an XHCI_SNAPSHOT_HCD_HEAD_WORDS header, one record of
+ * XHCI_SNAPSHOT_HCD_PORT_WORDS per root port (HCSPARAMS1.MaxPorts of them),
+ * then the counters. A new region and not a header change, so the schema
+ * stays 5, by the rule the slots region set: an older driver answers it with
+ * XHCI_SNAPSHOT_S_BAD_REGION, which XHCISNAP reports as "not served by this
+ * driver", and an older tool never asks. The image carries its own version
+ * and its own sizes: appending a word to the record or a counter to the
+ * block changes the sizes and not the version, and a reader walks by the
+ * sizes; the version moves only when a word changes meaning or place.
+ * Offset is in bytes and must be a multiple of 4. The layout's arithmetic is
+ * src/xhci_snap.c's (host suite test_snap); the door fills it word by word
+ * (hcd_door.c).
+ */
+#define XHCI_SNAPSHOT_REGION_HCD        3UL
+#define XHCI_SNAPSHOT_HCD_VERSION       1UL
+
+/* The header's words. */
+#define XHCI_SNAPSHOT_HCD_VERSION_AT    0   /* XHCI_SNAPSHOT_HCD_VERSION     */
+#define XHCI_SNAPSHOT_HCD_HEAD_BYTES    1   /* this header, in bytes         */
+#define XHCI_SNAPSHOT_HCD_PORTS         2   /* root port records             */
+#define XHCI_SNAPSHOT_HCD_PORT_BYTES    3   /* one record, in bytes          */
+#define XHCI_SNAPSHOT_HCD_PORTS_AT      4   /* the first record's offset     */
+#define XHCI_SNAPSHOT_HCD_COUNTERS      5   /* counter words                 */
+#define XHCI_SNAPSHOT_HCD_COUNTERS_AT   6   /* the first counter's offset    */
+#define XHCI_SNAPSHOT_HCD_NOTE_BUDGET   7   /* XHCI_ENUM_NOTE_BUDGET         */
+/*
+ * Appended by 35-T.8 (design record 17 section 4.8), version unchanged: an
+ * older tool walks past them by the header's size. The tolerance state
+ * stays where it lives, in the extension the snapshot already carries; these
+ * words say where it lies in the extension image, so XHCISNAP names it from
+ * the .BIN's own bytes with no offset table. Offsets are in bytes, the
+ * first from the extension's start and the rest from XHCI_TOL_STATE's; the
+ * counters (XHCI_TOL_STATS) are its first words. TERMINAL is the one value
+ * here, cut with the window (XhciTolTerminal), since ControllerFailed and
+ * RecoveryFailuresConsecutive lie outside the tolerance state.
+ */
+#define XHCI_SNAPSHOT_HCD_TOL_AT        8   /* XHCI_EXTENSION.Tol            */
+#define XHCI_SNAPSHOT_HCD_TOL_BYTES     9   /* sizeof (XHCI_TOL_STATE)       */
+#define XHCI_SNAPSHOT_HCD_TOL_STATS     10  /* XHCI_TOL_STATS, in words      */
+#define XHCI_SNAPSHOT_HCD_TOL_WINDOW_AT 11  /* .Window                       */
+#define XHCI_SNAPSHOT_HCD_TOL_CLOCK_AT  12  /* .Clock                        */
+#define XHCI_SNAPSHOT_HCD_TOL_LOC_BYTES 13  /* sizeof (XHCI_TOL_LOC)         */
+#define XHCI_SNAPSHOT_HCD_TOL_ROOT_AT   14  /* .RootLoc                      */
+#define XHCI_SNAPSHOT_HCD_TOL_ROOT_LOCS 15  /* XHCI_TOL_ROOT_PORTS           */
+#define XHCI_SNAPSHOT_HCD_TOL_HUB_AT    16  /* .HubLoc                       */
+#define XHCI_SNAPSHOT_HCD_TOL_HUB_LOCS  17  /* XHCI_TOL_HUB_LOCS             */
+#define XHCI_SNAPSHOT_HCD_TOL_HUB_PORTS 18  /* HubLoc entries per hub object */
+#define XHCI_SNAPSHOT_HCD_TERMINAL      19  /* XHCI_TOL_TERMINAL_*           */
+#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    20UL
+
+/* One root port's record. The machine's fields are XHCI_ENUM_PORT's; the
+ * speed ID is the one the port's last reset read (0 none), decoded on its
+ * protocol when the window is cut. */
+#define XHCI_SNAPSHOT_HCD_PORT_ID       0   /* the xHCI port number          */
+#define XHCI_SNAPSHOT_HCD_PORT_STATE    1   /* XHCI_ENUM_*                   */
+#define XHCI_SNAPSHOT_HCD_PORT_CAUSE    2   /* XHCI_ENUM_FAIL_*              */
+#define XHCI_SNAPSHOT_HCD_PORT_RETRIES  3   /* retries used                  */
+#define XHCI_SNAPSHOT_HCD_PORT_SLOT     4   /* Slot ID, 0 none               */
+#define XHCI_SNAPSHOT_HCD_PORT_PSIV     5   /* raw Protocol Speed ID         */
+#define XHCI_SNAPSHOT_HCD_PORT_CLASS    6   /* XHCI_SPEED_* of that ID       */
+#define XHCI_SNAPSHOT_HCD_PORT_SOURCE   7   /* XHCI_PSI_SOURCE_* of that ID  */
+#define XHCI_SNAPSHOT_HCD_PORT_PDO      8   /* a PDO exists                  */
+#define XHCI_SNAPSHOT_HCD_PORT_USB3     9   /* a USB 3 protocol port         */
+#define XHCI_SNAPSHOT_HCD_PORT_WARM     10  /* its link's warm resets spent  */
+#define XHCI_SNAPSHOT_HCD_PORT_GAVEUP   11  /* its link given up             */
+#define XHCI_SNAPSHOT_HCD_PORT_NOTES    12  /* note bursts charged           */
+#define XHCI_SNAPSHOT_HCD_PORT_REFUSED  13  /* note bursts refused           */
+#define XHCI_SNAPSHOT_HCD_PORT_HOLDFAIL 14  /* failed PDO recreations        */
+#define XHCI_SNAPSHOT_HCD_PORT_FLAGS    15  /* XHCI_SNAPSHOT_HCD_F_*         */
+#define XHCI_SNAPSHOT_HCD_PORT_WORDS    16UL
+
+#define XHCI_SNAPSHOT_HCD_F_DEFERRED    0x00000001UL /* set aside by the settle */
+#define XHCI_SNAPSHOT_HCD_F_RECOVERING  0x00000002UL /* warm reset in flight */
+#define XHCI_SNAPSHOT_HCD_F_UNREADABLE  0x00000004UL /* PORTSC read all ones */
+
+/* XHCIHC_COUNTERS in ULONGs (xhci_counters.h; asserted in xhci_snap.c). */
+#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 63UL
+
+/* Where a word of the image lies (XhciSnapHcdLocate). */
+#define XHCI_SNAPSHOT_HCD_IN_HEAD       0UL
+#define XHCI_SNAPSHOT_HCD_IN_PORT       1UL
+#define XHCI_SNAPSHOT_HCD_IN_COUNTERS   2UL
+#define XHCI_SNAPSHOT_HCD_PAST_END      3UL
+
+/* The image's length in words for `ports` root ports (held to
+ * XHCI_MAX_ROOT_PORTS); its header word `word` (0 past the header); where
+ * word `index` lies - the part, and in it the record (a port's, from 0) and
+ * the word; and a record's flags word. IRQL: any. */
+ULONG XhciSnapHcdWords(ULONG ports);
+ULONG XhciSnapHcdHead(ULONG ports, ULONG word);
+ULONG XhciSnapHcdLocate(ULONG ports, ULONG index, PULONG record,
+                        PULONG word);
+ULONG XhciSnapHcdFlags(ULONG settleDeferred, ULONG linkRecovering,
+                       ULONG unreadable);
 
 /* Header Status bits. A window always comes back with a truthful header, so
  * every refusal below is reported here rather than through an MPSTATUS the

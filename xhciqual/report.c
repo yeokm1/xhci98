@@ -304,21 +304,16 @@ void report_controller(CTRL *c, int active_ran)
     qprintf("  USBLEGSUP: %s\n",
             c->legsup_off ? "present" : "absent (no BIOS handoff needed)");
 
-    for (i = 0; i < c->nproto; i++) {
-        PROTOCAP *pr = &c->proto[i];
-        if (pr->portcnt == 0)   /* seen on qemu-xhci with p3=0 */
-            qprintf("  Protocol USB %X.%X: no ports, slot type %d, "
-                    "PSIC %d\n",
-                    pr->major, pr->minor, pr->slottype, pr->psic);
-        else
-            qprintf("  Protocol USB %X.%X: ports %d-%d, slot type %d, "
-                    "PSIC %d\n",
-                    pr->major, pr->minor, pr->portoff,
-                    pr->portoff + pr->portcnt - 1, pr->slottype, pr->psic);
-    }
+    /* Each protocol with its PSI entries decoded and the issue 11 warning, on
+     * screen and in the log (roadmap task 35.1). */
+    report_protocols(c, qprintf);
     qprintf("  Port map:\n");
     for (i = 1; i <= c->maxports && i <= MAX_PORTS; i++)
         qprintf("    port %2d: %s\n", i, class_name(c->portclass[i]));
+    /* The raw chain behind the lines above, for a host replay vector: the log
+     * and serial line only, since it runs to dozens of rows and the screen is
+     * 25 (README, "Raw extended-capability dump"). */
+    report_xcap_dump(c, qlogprintf);
 
     if (active_ran) {
         qprintf("  --- Tier C results ---\n");

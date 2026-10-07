@@ -54,7 +54,17 @@ rem                  either, and the hardware and compatible ids that follow
 rem   test_psw     - the Intel port switchover (src\xhci_psw.c, task 34.3):
 rem                  the device-id gate, the board exemption, the
 rem                  XhciIntelPortSwitch rule, and the route and release over
-rem                  a modelled config space - write order, values, refusals
+rem                  a modelled config space - write order, values, refusals;
+rem                  value 2's bypass, the accepted-write set and the
+rem                  lifetime that releases only it (task 35.5)
+rem   test_snap    - the snapshot's HCD region (src\xhci_snap.c, task 35.3):
+rem                  every word of the image located once, in order, and the
+rem                  header's sizes and offsets agreeing with it
+rem   test_tol     - controller tolerance (src\xhci_tol.c, 35-T.9): the three
+rem                  values, the tolerance clock's ticks at each interval's
+rem                  boundary, the interval cap with fast polling, the soft
+rem                  retry, cycle and halt decisions, the backstop, location
+rem                  budgets, the recovery window and the all-ones episode
 rem   test_hub    - the hub class's pure half (src\xhci_hub.c): the hub
 rem                  descriptor, the status-change bitmap, the port decision,
 rem                  the reset progress and speed bits, the depth and multi-TT
@@ -85,7 +95,12 @@ rem                  fail the run)
 rem   test_strict  - strict mode's command precondition table (src\xhci_strict.c):
 rem                  every command type x DW3 bit 9 x slot state x EP State,
 rem                  the Configure Endpoint flag rule and the refusal codes
-rem   test_desc    - the configuration-descriptor snoop (src\xhci_desc.c, task
+rem   test_inj     - the qemu flavour's fault injection (src\xhci_inj.c,
+rem                  35-T.9): the trigger value's fields and sequence rule,
+rem                  the ports a fault may be aimed at, and every register
+rem                  answer - PEC, the over-current's PP/OCA/OCC through
+rem                  release and repower, all-ones USBSTS, the BME read-back
+rem   test_desc   - the configuration-descriptor snoop (src\xhci_desc.c, task
 rem                  9-A.2): which EP0 setup packets are worth capturing, the
 rem                  descriptor walk fed at every chunk size, the isochronous
 rem                  bInterval table with its alternate-setting conflicts, and
@@ -222,21 +237,25 @@ call :run test_topo "test_topo.c ..\src\xhci_topo.c"
 rem test_xfer links xhci_ring.c: the transfer engine's whole job is to
 rem produce TRBs and then read completion events back off the ring it wrote
 rem them to, so testing it against a stub ring would test neither half.
-call :run test_xfer "test_xfer.c ..\src\xhci_xfer.c ..\src\xhci_ring.c"
-rem test_iso links the same two files and for the same reason.
-call :run test_iso "test_iso.c ..\src\xhci_xfer.c ..\src\xhci_ring.c"
+rem It links xhci_tol.c as well, whose soft-retry decision (35-T.2) the
+rem engine's interception asks; so do the two suites below.
+call :run test_xfer "test_xfer.c ..\src\xhci_xfer.c ..\src\xhci_ring.c ..\src\xhci_tol.c"
+rem test_iso links the same three files and for the same reason.
+call :run test_iso "test_iso.c ..\src\xhci_xfer.c ..\src\xhci_ring.c ..\src\xhci_tol.c"
 rem test_td links xhci_pipe.c as well: hcd_io.c fills the isochronous block
 rem with its packet-length and fragment helpers, so the block the engine is
 rem given here is built by the same code that builds it in the driver.
-call :run test_td "test_td.c ..\src\xhci_xfer.c ..\src\xhci_ring.c ..\src\xhci_pipe.c"
+call :run test_td "test_td.c ..\src\xhci_xfer.c ..\src\xhci_ring.c ..\src\xhci_pipe.c ..\src\xhci_tol.c"
 rem test_enum links nothing else: the enumeration machine of design record 13
 rem section 5.3 is a pure transition function, driven here with no controller
 rem (task 26-A.9).
 call :run test_enum "test_enum.c ..\src\xhci_enum.c"
 rem test_link links xhci_port.c for the PORTSC writes its actions become, and
 rem xhci_caps.c because xhci_port.c's root-hub map asks it which ports exist,
-rem and xhci_enum.c so the port-change feed is checked against a real machine.
-call :run test_link "test_link.c ..\src\xhci_link.c ..\src\xhci_port.c ..\src\xhci_caps.c ..\src\xhci_enum.c"
+rem and xhci_enum.c so the port-change feed is checked against a real machine;
+rem xhci_ctx.c and xhci_mem.c so task 35.1's vector reads the Slot Context's
+rem speed from the real encoder.
+call :run test_link "test_link.c ..\src\xhci_link.c ..\src\xhci_port.c ..\src\xhci_caps.c ..\src\xhci_enum.c ..\src\xhci_ctx.c ..\src\xhci_mem.c"
 call :run test_pipe "test_pipe.c ..\src\xhci_pipe.c"
 rem test_func links nothing else: the composite split, the filtered
 rem configuration descriptor, the function ids and the instance ids are pure
@@ -257,13 +276,25 @@ call :run test_stream "test_stream.c ..\src\xhci_stream.c"
 rem test_xport links nothing else: the transport choice and its ids are pure
 rem computations over descriptor bytes and three flags (task 31-A.3).
 call :run test_xport "test_xport.c ..\src\xhci_xport.c"
-rem test_psw links nothing else: the gate, the value rule and the two
-rem sequences are pure, driven over a modelled configuration space (34.3).
+rem test_psw links nothing else: the gate, the value rule, the two
+rem sequences and the lifetime are pure, driven over a modelled
+rem configuration space (34.3, 35.5).
 call :run test_psw "test_psw.c ..\src\xhci_psw.c"
+rem test_snap links nothing else: the snapshot's HCD region layout - where
+rem each word lies and what the header says - is pure (task 35.3).
+call :run test_snap "test_snap.c ..\src\xhci_snap.c"
+rem test_tol links xhci_pipe.c for fast polling's composition with the
+rem interval cap; the rest of controller tolerance's decisions, the clock's
+rem arithmetic and the budgets are pure (35-T.9, design record 17).
+call :run test_tol "test_tol.c ..\src\xhci_tol.c ..\src\xhci_pipe.c"
 rem test_strict links nothing else: strict mode's command precondition table
 rem (xHCI 1.2 section 4.6) is a pure function, checked here at every cell -
 rem each command type, DW3 bit 9, slot state and EP State.
 call :run test_strict "test_strict.c ..\src\xhci_strict.c"
+rem test_inj links xhci_caps.c for the port map a PED or over-current is
+rem aimed by; the trigger and every register answer of the qemu flavour's
+rem fault injection are pure (35-T.9, design record 17 section 5).
+call :run test_inj "test_inj.c ..\src\xhci_inj.c ..\src\xhci_caps.c"
 rem test_log links nothing else: task 11-V.7's ring is deliberately pure, so
 rem every decision it makes - the wrap, the record cap, the flush verdict, the
 rem drain's ordering - is drivable with no file system, no registry and no IRQL.

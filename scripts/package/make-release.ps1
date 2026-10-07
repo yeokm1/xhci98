@@ -3182,8 +3182,9 @@ UPDATING FROM AN EARLIER 2.x RELEASE
 ....................................
 
 Install over it with Update Driver on "xHCI98 USB 3.x eXtensible Host
-Controller", pointed at the same directory as a new install. Nothing needs
-renaming first. As read in virtual machines:
+Controller", then on "xHCI98 USB 3.x Root Hub", both pointed at the same
+directory as a new install. Nothing needs renaming first. As read in
+virtual machines:
 
   WINDOWS 98 SE AND ME: RESTART AFTERWARDS, ALTHOUGH WINDOWS DOES NOT ASK.
   The new file waits to replace the old one at the next start, and until
@@ -3450,12 +3451,6 @@ May be addressed in a later release:
     hub ports are never suspended to save power. A suspend or resume a hub
     reports is handled.
 
-  * USB STORAGE ON WINDOWS 98 IS SLOWER THAN THE DRIVE. An observation, not
-    a defect found: Windows 98 sends one command at a time. On a ThinkPad
-    P14s Gen 1 with an MSSU10 drive at 64 KB, about 208 MB/s on Windows 98
-    against 277 MB/s on Windows 11 at the same queue depth of one. This may
-    be looked into in a later release.
-
   * WINDOWS ME: A UAS DRIVE AS THE FIRST USB STORAGE DEVICE SHOWS CODE 2.
     ME has not yet copied its own USBNTMAP.SYS and USBMPHLP.PDR, which it
     installs only when its first ordinary USB stick is plugged in. Plug in
@@ -3466,6 +3461,35 @@ May be addressed in a later release:
     The figure comes from a query this driver does not answer.
 
   * WINDOWS 98 SE AND ME SHOW A DEVICE NAME'S NON-ASCII CHARACTERS AS '?'.
+
+  * A DEVICE THE CONTROLLER FAULTS ON IS RE-ENUMERATED BY THE DRIVER, as if
+    unplugged and plugged in again (XhciTolerance, section 9). Whatever it
+    was doing ends as on an unplug: a copy to a drive fails part way. After
+    three on one port, the next fault there removes the device and holds
+    the port until the device is unplugged, or, held unpowered after
+    over-currents, until the controller restarts. A recovery of the
+    controller itself re-enumerates every device on it the same way, so a
+    copy running across it fails.
+
+  * DISABLING A CONTROLLER THE DRIVER CLOSED OFF WITHOUT PROOF THAT IT
+    STOPPED HANGS: RESTART THE MACHINE. Only after the controller stopped
+    answering altogether, or a recovery could not stop it, and the driver
+    could not prove it had stopped writing to memory, so kept everything it
+    might still write into (XHCISNAP reads "CONTAINED" and "PINNED"): a
+    later disable of the controller in Device Manager, or an update or
+    removal of its driver, waits for ever on the kept transfers, and only
+    restarting the machine ends it. Seen in virtual machines on Windows 98
+    SE and 2000 with the fault made on purpose. Restart the machine
+    instead.
+
+  * WINDOWS 2000: A MOUNTED USB DRIVE MAY COME BACK AT CODE 31 AFTER A
+    CONTROLLER RECOVERY. After the driver recovers the controller in place
+    (a halted controller, or a failed endpoint reset), a USB drive whose
+    volume was mounted may stay at Code 31 until it is unplugged and
+    plugged in again, or the controller is disabled and enabled in Device
+    Manager. Other devices come back. Seen in a virtual machine; not on
+    Windows 98 SE. The path is older than this release, which recovers on
+    more faults.
 
 Untested ground:
 
@@ -3484,6 +3508,16 @@ Untested ground:
   * POLLING ABOVE 1000 HZ (XhciFastPollFsLs, section 9). Outside the xHCI
     specification, and read on no real controller and in no virtual
     machine.
+
+  * XhciIntelPortSwitch AT 2 (section 9). Read on no unlisted Intel
+    controller, and at your own risk.
+
+  * THE CONTROLLER-FAULT HANDLING ON REAL HARDWARE (XhciTolerance, section
+    9). Each fault was made on purpose at a root port in QEMU virtual
+    machines, under Windows 98 SE and Windows 2000; QEMU has no
+    SuperSpeed hub, so nothing was read behind one. No real controller has
+    raised one under this driver yet. XhciIntervalCap and XhciAvgTrbEsit
+    have been read on no AMD or other real controller.
 
 
 ==============================================================================
@@ -3505,8 +3539,8 @@ debug throughout, in its build scripts and its documentation alike.)
  9. REGISTRY SETTINGS
 ==============================================================================
 
-Every registry value this driver reads. There are eight, all DWORDs. The
-install writes all eight, each at the default it states below except
+Every registry value this driver reads. There are eleven, all DWORDs. The
+install writes all eleven, each at the default it states below except
 XhciImodInterval250ns, which it writes as 160. It writes each only where it is
 missing, so a value you changed survives an install or update; to go back to
 the default, set it by hand, or delete the value and update the driver. If
@@ -3630,12 +3664,13 @@ means the default each one states.
   XhciIntelPortSwitch  -  the Intel 7/8/9-series port switchover
   ..............................................................
 
-  Default 1: on. It matters only on an Intel xHCI with PCI device id 1E31,
-  8C31, 9C31, 8CB1, 9CB1 or 8D31 (7-, 8- and 9-series chipsets, Ivy Bridge
-  to Broadwell, and C610/X99), and is not read on any other controller.
-  There each switchable connector, usually a blue one, is wired to both the
-  USB 2.0 (EHCI) and the xHCI controller, and firmware on "Auto", or with
-  no setting, typically leaves it on the USB 2.0 one. This driver moves
+  Default 1: on, for an Intel xHCI with PCI device id 1E31, 8C31, 9C31,
+  8CB1, 9CB1 or 8D31 (7-, 8- and 9-series chipsets, Ivy Bridge to
+  Broadwell, and C610/X99). It is read on every Intel controller and on no
+  other vendor's. On those chipsets each switchable
+  connector, usually a blue one, is wired to both the USB 2.0 (EHCI) and
+  the xHCI controller, and firmware on "Auto", or with no setting,
+  typically leaves it on the USB 2.0 one. This driver moves
   those connectors to itself at each start and resume, and hands them back
   when its controller stops and at shutdown.
 
@@ -3645,10 +3680,93 @@ means the default each one states.
 
   Set it to 0 to leave the connectors where firmware put them. ONLY 0
   TURNS IT OFF; absent or any other number is on. Read when the controller
-  starts, so restart after changing it. Read on a Lenovo B490 (1E31) under
+  starts, so restart after changing it. A stop gives back only the
+  registers the driver itself wrote. Read on a Lenovo B490 (1E31) under
   Windows 98 SE with NUSB; standby and the other five ids are untested.
 
-  THOSE EIGHT ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
+  Set to exactly 2, it does the same on ANY Intel xHCI controller, listed
+  or not, for a chipset with these connectors that the list misses (on a
+  listed one 2 is the same as 1). AT YOUR OWN RISK:
+
+      Setting XhciIntelPortSwitch to 2 makes the driver read four Intel
+      chipset registers and write two of them on any Intel USB 3
+      controller, not only on the 7-, 8- and 9-series and C610/X99
+      chipsets it was written for. On a controller that does not have
+      those registers - every Intel chipset from the 100-series (Skylake)
+      on, and any other whose layout has not been read - it writes
+      registers of unknown meaning, at every start, resume, stop and
+      shutdown, and the result is unknown. Use 2 only for an Intel chipset
+      that has both an EHCI and an xHCI controller and that this driver
+      does not list, and at your own risk. Everyone else should leave the
+      value at 1.
+
+  Value 2 has been read on no unlisted Intel controller.
+
+  XhciTolerance  -  the controller tolerance, all together
+  ........................................................
+
+  Default 1: on. The driver recovers by itself from transfer, port and
+  controller faults that used to leave a device dead until it was
+  replugged: an interrupt that never arrived, a USB transaction error on a
+  bulk or interrupt endpoint (retried up to three times, except for a Low-
+  or Full-Speed device behind a High-Speed hub's transaction translator - a
+  mouse or a keyboard in a USB 2.0 hub running at High Speed - on UAS
+  streams and on four controllers), a fault it cannot pin on a transfer
+  (the device is re-enumerated, as if unplugged and plugged in again), a
+  USB 2.0 root port the controller disabled or an over-current (the port
+  re-enumerated or powered again), a controller that halts (recovered at
+  most three times in a window of at least ten minutes) or stops answering
+  (closed off). Each but the lost interrupt, which is picked up every time,
+  a few times at most: after three on one port, the next fault removes the
+  device and holds the port until its device is unplugged for a few
+  seconds, or, held unpowered, until the controller restarts. While no
+  fault is reported none of it acts. A fault need not mean an unhealthy
+  controller: a healthy one reports a device's missing handshake, a CRC
+  failure or a timeout as a transaction error.
+
+  Set it to 0 to turn all of that off together and have the earlier
+  handling back, but for the rules below that apply at every value.
+  ONLY 0 TURNS IT OFF; absent or any other number is on. It does not
+  touch the next two values. At 0 XHCISNAP's report still counts the
+  faults it sees and what the rules below did, while the counters of the
+  behaviours switched off stay at 0. Read when the controller starts, so
+  restart after changing it.
+
+  These apply at every value, 0 included: a device the controller
+  reports incompatible is removed and re-enumerated, as the xHCI
+  specification asks, at most three times on one port before the port is
+  held; and a recovery that cannot stop the controller, and cannot prove
+  it has stopped writing to memory, closes the controller off until the
+  machine restarts. XHCISNAP then reports "CONTAINED: halt and reset did
+  not complete and Bus Master Enable would not clear; DMA not proven
+  stopped, common buffer pinned". And on a controller latched failed (its
+  recoveries refused or failed three times in a row): once it shows it
+  has halted, the transfers it holds are completed and its devices
+  removed; a resume from standby no longer brings it back, only a disable
+  and enable or a restart does (at 0 a change from earlier releases); and its
+  state is not saved or restored for standby.
+
+  XhciIntervalCap  -  the AMD interrupt-interval cap
+  ..................................................
+
+  Default 1: on AMD controllers (PCI vendor 1022) only, an interrupt
+  endpoint - a mouse, a keyboard, a hub - asking to be polled less often
+  than every 32 ms is polled every 32 ms, as Linux does on some AMD
+  controllers. Audio is never capped. Set it to 0 to turn it off, or to 2
+  to apply it on every controller; absent or any other number is 1. Read
+  when the controller starts. Read on no AMD controller yet.
+
+  XhciAvgTrbEsit  -  a comparison switch
+  ......................................
+
+  Default 0. Set to 1 it tells the controller, for each interrupt
+  endpoint, an average transfer size equal to the endpoint's largest
+  transfer per interval, as Linux does, instead of the 1024 bytes the xHCI
+  specification suggests. Any other value is 0. It exists so that a
+  machine whose USB devices misbehave can be compared both ways; leave it
+  at 0 otherwise. Read when the controller starts.
+
+  THOSE ELEVEN ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
   XhciVirtualHSHubVid and XhciVirtualHSHubPid are not read: a copy left in
   the key by an earlier install has no effect, because this driver reports
   every device at its true speed with no virtual hub in the way. Delete

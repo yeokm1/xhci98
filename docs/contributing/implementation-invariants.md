@@ -253,7 +253,47 @@ code:
   stopped decoding, and HCE and HSE are two of the thirty-two bits it answers
   with. The same operand rule applies to the interrupt masks; here the cost of
   getting it wrong is a healthy controller marked terminally failed on one bad
-  read.
+  read. It still never requests a reset. Since roadmap-hcd task 35-T.6 it is
+  no longer silent either: with `XhciTolerance` at 1, a step of the
+  controller thread's own, under the power gate, reads `USBSTS` itself and,
+  once all ones has stood for the containment interval, contains the
+  controller - latched failed with `Unreadable` set, which the recovery never
+  acts on, new requests held on their PDOs, Bus Master Enable cleared and
+  read back clear, and only with that proof the devices drained and dropped;
+  without it the common buffer is pinned first (design record 17 section
+  4.6; `hcd_ctl.c`, `hcdContain`). The health poll's own samples are not
+  that evidence.
+- **HCH with the driver's R/S still written 1 is a request too** (35-T.6,
+  with `XhciTolerance` at 1): the health poll, on an admitted controller that
+  is not suspended and whose `XHCI_EXT_FLAG_RS_CONFIRMED` stands - R/S
+  written 1 and HCH since read clear, so a start's or resume's run step,
+  HCH not yet clear, is not read as a halt - asks for the in-place recovery
+  behind the same `ControllerFatal` latch as HCE and HSE. Every recovery
+  begun is charged to a window of three in ten minutes beside
+  `RecoveryFailuresConsecutive`; a fourth is not begun, and the controller
+  stays failed until a stop and start: no later request is acted on and no
+  resume reinitializes it, as for a contained controller.
+- **An invalidation no halt or HCRST proved releases nothing until DMA is
+  proven stopped** (since `2.2.0.0`, at every `XhciTolerance` value; design
+  record 17 section 4.6, revision 10). The in-place recovery and the
+  reinitializing resume invalidate every slot before their own halt; if
+  that halt times out or an earlier step refuses, no HCRST follows and the
+  controller may still be executing the TDs. Draining the devices then
+  hands client buffers and map registers back under a live bus master; that
+  was the HCD's behaviour from `2.0.0.0` until 2026-10-07. Such an
+  invalidation is remembered (`SlotsUnproven`, cleared only by
+  `XhciSlotInit`, which runs after a completed HCRST), and the thread first
+  takes the containment's proof (`HcdCtlProveDmaStopped`: Bus Master Enable
+  cleared and read back clear). With it the devices drop as before, and
+  `hcdRecover` sets Bus Master Enable again at PASSIVE_LEVEL after the
+  proven halt and reset and runs the sequence once more as the same
+  recovery (`hcdRestoreBusMaster`). Without it the controller is contained:
+  `ControllerFailed`, `Tol.Unreadable` = `XHCI_TOL_CONTAINED_DMA_UNPROVEN`
+  (2; the all-ones containment is 1), the common buffer pinned
+  (`HcdSvcDmaNotStopped`) and the no-proof drain run, every transfer and
+  mapping kept; no recovery or resume reinitializes into the pinned
+  allocation, and only a stop and start end it. `XhciTolTerminal` reports
+  it as terminal reason 5, `XHCI_TOL_TERMINAL_DMA_UNPROVEN`.
 - **A Host Controller Event escalates from the DPC, not from the poll.** Event
   Ring Full and Event Lost set neither HCE nor HSE, so no poll of `USBSTS` will
   ever see them, and a driver that recorded the completion code and waited for
@@ -306,6 +346,29 @@ code:
   `XhciXferCodeInfo` after the ordinary retirement: a slot-fatal code goes to
   `XhciSlotCommandSlotFatal`, selected by the event's own Slot ID, and a fatal
   one takes the engine's existing `XHCI_CMD_ACTION_RESET` route.
+- **In the HCD both families take the device down, and the re-enumeration is
+  bounded** (since `2.2.0.0`; design record 17 section 4.3, revision 10).
+  Until 2026-10-07 the HCD acted on the command's code 22 only and ignored
+  the transfer's, so the endpoint was halted and recovered while the slot
+  stayed enabled. Now a Transfer Event (through the pure
+  `XhciXferSlotFatal`, which answers 1 for 22 alone) and a matched Command
+  Completion (through the engine's `XhciSlotCommandSlotFatal`) both mark the
+  device on the event's slot (`hcdSlotFatalMark`, event DPC, controller lock
+  held), and the thread (`hcdSlotFatalService`) takes a published device
+  down through `HcdEnumCycle` - teardown, Disable Slot, PDO reported
+  missing, the location enumerated afresh - counted in
+  `IncompatibleDeviceTeardowns`, noted `slot.fatal.cycle`. A device not yet
+  published is the enumeration's, whose failed step already disables the
+  slot; a departing one is its departure's. This is the specification's
+  recovery, not a tolerance behaviour, so it runs at every `XhciTolerance`
+  value, and so is the bound on it: the re-enumeration is charged to the
+  location's budget of three at every value, 0 included (`XhciTolLocActive`
+  and `XhciTolLocHeld` run the location machinery at 0 for a location
+  something charged). Spent, the Disable Slot is still issued and the device
+  still removed, and the location is held until a stable disconnect or a
+  controller start. A cycle is charged once per connect generation however
+  many producers asked for it (`XhciTolCycleCharge`), so a RESET_PORT
+  failure answered with 22 costs one re-enumeration, not two.
 - **Endpoint Not Enabled Error (`XHCI_CC_EP_NOT_ENABLED`, 12) is not a command
   result.** Table 6-90 p.467: "Asserted if a doorbell is rung for an endpoint
   that is in the Disabled state. The Slot ID and error Endpoint ID are
@@ -316,41 +379,76 @@ code:
   Error, and the Slot ID and Endpoint ID fields", posted to the Primary Event
   Ring. So it arrives on the transfer path, pointerless, like Ring Underrun
   and Ring Overrun.
-- **This driver refuses code 12 rather than decoding it, and what that costs is
-  immediate recovery rather than recovery.** `XhciXferCodeInfo` answers
-  `XHCI_XFER_BAD_PARAM` for it and `xhciCompletionCodeValid` leaves it off both
-  endpoint lists, so it is counted as a bad code and no completion is
-  attributed to it. That is the safe direction and is not the deviation: a
-  zero TRB pointer offered to the per-TD matcher would resolve to whatever sits
-  at the ring's base. The deviation is that nothing acts on the event.
-
-  The TD stays queued until usbport times it out, and recovery arrives on the
-  cancellation path that follows: the Stop Endpoint that cancellation issues
-  reads the Endpoint Context back, and a `Disabled` reading is the condition
-  code 12 reports, so `xhciEpStopped`'s Disabled branch raises
-  `XHCI_EPQ_NO_CONTEXT` and calls `xhciEpOweContextRestore`, which schedules
-  the Add-without-Drop Configure Endpoint that puts the context back. The
-  implemented behaviour is delayed recovery through a path that already exists
-  and has its own vector, not an endpoint stranded for good.
-
-  What justifies leaving the immediate route unbuilt: the event is a `should`
-  rather than a `shall`, and the same page says "The xHC may ignore doorbell
-  references to Device Slots in the Disabled state or endpoints in the
-  Disabled state", so its absence proves nothing either; and every lower rung
-  is illegal on a Disabled endpoint (a Reset Endpoint "may only be issued to
-  endpoints in the Halted state", 4.6.8 p.118), so an immediate answer would
-  have to be the same Configure Endpoint the delayed path already issues,
-  bought at the cost of a second route to it.
-
-  The measurement that reopens it is an `xfer.error` log record carrying
-  completion code 12: `XhciSlotTransferEvent` logs every non-ordinary code with
-  its Slot ID and DCI, in release builds as well as debug. `XHCISNAP` has read
-  both the note ring and the counters off Windows 98 bare metal since
-  `0.0.0.6`, from a shipping `release` build and a shipping `debug` build
-  alike, measured on the E460. What Windows 98 metal still has no channel for
-  is a live trace; the snapshot is a read on demand rather than a stop-time
-  flush, so the record is taken after the fact rather than caught as it
-  happens. No run of this project has produced one.
+- **This driver refuses code 12 rather than decoding it, and with it every
+  code nothing claims.** `XhciXferCodeInfo` answers `XHCI_XFER_BAD_PARAM` for
+  Endpoint Not Enabled, for Ring Underrun, Ring Overrun and Missed Service
+  outside the isochronous path, Bandwidth Overrun, Event Ring Full in a
+  Transfer Event and every unassigned code, and `xhciCompletionCodeValid`
+  leaves them off both endpoint lists, so each is counted in `BadCodes` and
+  no completion is attributed to it. That is the safe direction and it
+  stands: most of these events carry no TRB pointer, and a zero pointer
+  offered to the per-TD matcher would resolve to whatever sits at the ring's
+  base. The vendor ranges are not refused - 224 to 255 complete as Success,
+  192 to 223 as the fatal Undefined Error (the bullets above) - and the
+  isochronous path keeps its own handling of the codes it owns.
+- **A refused code cycles the device** (since `2.2.0.0`, roadmap-hcd task
+  35-T.3 and 35-T.4, design record 17 section 4.3; with `XhciTolerance` at
+  1). A Transfer Event carrying a refused code on a non-isochronous endpoint,
+  whose slot names a device - an endpoint with no open pipe included, so an
+  Endpoint Not Enabled on a DCI the configuration never opened counts - sets
+  the device's cycle mark (`CycleMark`, only through `HcdTolCycleMark`) with
+  its reason and the location's connect generation, and the controller thread
+  re-enumerates it - in any state of the endpoint, since the refused code is
+  itself the evidence. A published device is cycled through `HcdEnumCycle`;
+  one not yet published, whose control transfers are the enumeration's own,
+  through the enumeration executor's `ABANDONED_FOR_CYCLE` outcome, which
+  tears the attempt's subtree down once, sets the location's machine `EMPTY`
+  and feeds a CONNECT if the location still reads connected. Either is charged
+  to the location's budget of three re-enumerations; once it is spent the
+  device is removed all the same and the location held (`CyclesRefused`). A
+  mark whose device has left or whose location's generation moved is dropped
+  and counted (`CyclesDropped`). **No
+  TD is attributed and none is completed on the event**: the cycle's Disable
+  Slot takes back every TRB of the slot whatever the endpoint's state, and the
+  re-enumeration resynchronizes the sequence state on both sides, which no
+  in-place recovery could do soundly (record 17 section 4.3 has why). A
+  client's transfers end as on an unplug. If the thread is itself waiting on a
+  control transfer to that device, the mark ends the wait instead of letting
+  it time out into a controller reset, and the transfer's record and the
+  thread's scratch buffer are not reused until the Disable Slot has
+  completed (`Ep0Stuck`, `ScratchHeld`); a failed Disable Slot sets
+  `ScratchTainted`. The wait keeps one 5000 ms deadline across every wake,
+  polled between 100 ms slices of the event wait, so a timeout lands up to
+  about 100 ms late.
+- **So does a halt with no TD.** A Stall, or a Transaction, Babble or Split
+  Transaction error, on a non-isochronous endpoint, that the queue could not
+  match - Foreign by pointer, zero, off-ring and above-4 GB pointers
+  included, or
+  Unmatched - whose slot and DCI name an open pipe cycles the device the same
+  way, but only once the thread has read that endpoint's context as Halted or
+  Error: a stale event against an endpoint that is running costs one context
+  read and nothing more. On a streams endpoint a halt whose pointer no stream
+  ring holds is such a halt; only the Prime Pipe STALL, with a zero pointer,
+  keeps its own path. An endpoint Halted by a Transaction Error that the soft
+  retry holds is the retry's while the queue's head is that deferred TD, and
+  the thread decides once a pass between the retry and a confirmed cycle,
+  the cycle winning (record 17 section 4.3, "As built"); Error always
+  confirms. Submissions to a Halted endpoint stay published and rung, and the
+  controller ignores the doorbell until a recovery, as before.
+- **The deviation this superseded.** Up to `2.1.1.0` nothing acted on a
+  refused code or a halt with no TD. The miniport's recovery for code 12 had
+  been usbport's URB timeout and the Stop Endpoint its cancellation issued,
+  whose `Disabled` reading `xhciEpStopped` answered with a context restore;
+  the HCD has no usbport and no URB timeout, so only a cancel a class driver
+  happened to send reached a Stop Endpoint, and otherwise the device stayed
+  dead until it was replugged. At `XhciTolerance` 0 that is still the
+  handling: no event marks a device and the refused code is counted only.
+  `XhciSlotTransferEvent` counts every completion code and logs the first
+  four records of each error code with its Slot ID and DCI
+  (`hcdTolCountEvent`, under `XhciLogErrorBudget`), and the snapshot carries
+  a count of every completion code and the
+  cycles by reason (record 17 section 4.8), so a dump says which fault a
+  cycle answered.
 - **The list of fatal codes lives in `XhciXferCodeInfo` and nowhere else.**
   Every hand-written enumeration of them found downstream was short by at
   least one. Any path that has to know whether a code is fatal (the DPC's
@@ -878,20 +976,39 @@ Why there is no MSI on either target. MSI is an interrupt delivered as a memory 
   Protocol Speed IDs, and the PORTSC value indexes that table (spec 7.2.2.1.2;
   layout in `docs/usb-xhci-info/xhci-data-structures.md` section 6).
 - Read the PSI dwords during the Phase 4 port classification and decode speeds
-  against them, falling back to the defaults only when PSIC = 0. Do not hardcode
+  against them, falling back to the defaults only when PSIC = 0, or for the
+  unlisted USB 3.x IDs of the exception below. Do not hardcode
   the defaults: the fleet's Intel controllers ship a table whose entries happen
   to match, so a wrong assumption fails silently until a controller that
   reorders them appears.
 - Retain all 15 entries allowed by the four-bit PSIC field. A PORTSC PSIV absent
-  from a non-empty advertised table is unknown, not a default ID. Any functional
-  decision derived from speed (including EP0's initial Max Packet Size) must use
-  the decoded speed class while the Slot Context continues to receive the raw
-  controller PSIV.
+  from a non-empty advertised table is unknown, not a default ID - with one
+  exception, below. Any functional decision derived from speed (including EP0's
+  initial Max Packet Size) must use the decoded speed class while the Slot
+  Context continues to receive the raw controller PSIV.
+- **The exception (roadmap-hcd task 35.1, issue 11): on a USB 3.x protocol, an
+  ID 4 to 7 its table does not list takes its default meaning** (5 Gb/s, 10 Gb/s,
+  2x5 and 2x10 Gb/s; each SuperSpeed, its rate and lanes kept apart). Intel
+  Sunrise Point-LP (`8086:9D2F`) publishes a USB 3 table of three SSIC rates at
+  IDs 1 to 3 and reports a 5 Gb/s link as 4; read strictly, no SuperSpeed device
+  ever enumerated there. A listed entry still wins, even one this driver cannot
+  decode - the P14s Gen 1 lists 6 and 7 as SSIC rates, where the defaults would
+  read Gen 1x2 and Gen 2x2 - and every other unlisted ID, and every unlisted ID
+  on a USB 2.0 protocol, stays unknown. `XhciPortSpeedSource` says which rule
+  named an ID (listed, default with no table, or this fallback).
 - **A device behind a hub has no PORTSC to read a PSIV from, and usbport reports
   a speed class, so its Protocol Speed ID is looked up by inverting the same
   PSI table** (`XhciPortPsivForSpeed`) - refusing rather than defaulting when
   the table has no entry for that class. "3 means High Speed" is what a
-  controller that reordered its IDs would break.
+  controller that reordered its IDs would break. The exception reaches this
+  direction only as far as SuperSpeed's own ID: 4, where a USB 3.x table lists
+  no 5 Gb/s entry and does not list 4. A SuperSpeedPlus child of such a table
+  is never given an unlisted 5 to 7 - writing an ID the controller never
+  named is not decoding one it reported. It takes a listed entry at its
+  aggregate rate, else one at its lane rate (unmatched), and only when both
+  searches fail SuperSpeed's 4, unmatched; after Address Device a usable
+  output Slot Context speed is adopted (`XhciSsHubPsiv`,
+  `XhciSsHubAdoptSpeed`).
 
 ## DMA Teardown
 

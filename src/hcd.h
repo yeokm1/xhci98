@@ -33,6 +33,7 @@
 #include "xhci_psw.h"
 #include "xhci_stream.h"
 #include "xhci_counters.h"
+#include "xhci_inj.h"
 
 #define HCD_KIND_CONTROLLER_FDO 0x43464448UL /* 'HDFC' */
 #define HCD_KIND_ROOTHUB_PDO    0x50524448UL /* 'HDRP' */
@@ -388,9 +389,23 @@ typedef struct _HCD_USB_DEVICE {
     volatile LONG Refs;
     ULONG Gone;
     ULONG AbortAll;         /* the PDO is being removed: abort every pipe */
-    ULONG Ep0Stuck;         /* the thread's EP0 record timed out and is
-                             * still queued: no control transfer until
-                             * the reset frees the device                 */
+    ULONG Ep0Stuck;         /* the thread's EP0 record timed out, or its
+                             * wait was abandoned for a cycle, and may
+                             * still be queued: no control transfer until
+                             * the device's slot is taken back            */
+    /* 35-T.3/4 (design record 17 section 4.3). CycleMark: the cycle
+     * wanted, set by the event path and taken by the thread under the
+     * controller lock (HcdTolCycleMark). CycleAbandon: the thread gave its
+     * own EP0 work on the device up for that cycle (HCD_CTL_ABANDONED);
+     * Ep0Abandoned: and a TD of it was outstanding, so the scratch is held
+     * (ScratchHeld) until the slot is taken back. Thread only. */
+    XHCI_TOL_MARK CycleMark;
+    /* An event on the slot carried a slot-fatal code (XhciXferSlotFatal):
+     * set by the event DPC, taken by the thread (hcdSlotFatalService),
+     * both under the controller lock. */
+    ULONG SlotFatal;
+    ULONG CycleAbandon;
+    ULONG Ep0Abandoned;
     ULONG Ep0Halted;        /* a URB's control transfer stalled: the
                              * thread owes Reset Endpoint + Set TR
                              * Dequeue (hcd_enum.c), controller lock   */
@@ -662,6 +677,33 @@ typedef struct _HCD_PORT {
      * Thread only. */
     ULONG LinkRecovering;
     ULONG LookFails;
+    /* 35-T.5 (design record 17 section 4.5). TolOc: a root port's
+     * over-current episode; thread only. TolCompletions: transfers its
+     * device completed with success or a short packet, counted by the event
+     * path under the controller lock; TolCompletionsSeen, the thread's last
+     * reading of it, for the location's stable progress. Each set by the
+     * start (HcdEnumInit). The location's budget itself is the
+     * extension's too: Tol.RootLoc for a root port, Tol.HubLoc by port
+     * object for a hub's, set again when its hub is brought up. */
+    XHCI_TOL_OC TolOc;
+    ULONG TolCompletions;
+    /* At XhciTolerance 0: a power loss already counted, until PP reads
+     * set again (record 17 section 4.11). Set by the start. */
+    ULONG TolOffPpLost;
+    ULONG TolCompletionsSeen;
+    /* 35-T.3/4: the location's connect generation, bumped by every
+     * connect and disconnect fed at it, written by the thread and read by
+     * the event path's cycle mark under the controller lock; and the
+     * reason a pre-PDO cycle under way is for (XHCI_TOL_CYCLE_*), thread
+     * only. Each set by the start (HcdEnumInit). CycleCharge: the one
+     * re-enumeration charge of the cycle pending at ConnectGen, shared by
+     * every producer of it (HcdTolLocCharge), thread only. */
+    ULONG ConnectGen;
+    ULONG CycleReason;
+    XHCI_TOL_CYCLE_CHARGE CycleCharge;
+    /* Task 35.3: a root port's enumeration notes and their budget
+     * (xhci_enum.h), cleared by the start. Thread only. */
+    XHCI_ENUM_NOTES Notes;
 } HCD_PORT, *PHCD_PORT;
 
 /*
@@ -793,6 +835,10 @@ typedef struct _HCD_CONTROLLER {
     KDPC IsrDpc;
     volatile LONG DpcsInFlight;
     volatile ULONG DpcClosed;
+    /* 35-T.1's start generation: bumped by every start, resume and in-place
+     * recovery, each under the power gate (or before the thread runs), and
+     * read by the backstop under it. Never reset. */
+    ULONG TolStartGen;
     ULONG ControllerStarted;
     ULONG ResumeFailures;
     ULONG PowerRequestFailures;
@@ -834,6 +880,13 @@ typedef struct _HCD_CONTROLLER {
     KTIMER FrameTimer;
     KDPC FrameDpc;
     volatile LONG FrameArmed;
+    /* The tolerance clock (35-T, design record 17 section 4.0): a relative
+     * 100 ms timer whose DPC advances Hc.Tol.Clock and arms it again, by
+     * the frame sampler's rule - TolArmed under TimerLock, the drain waits
+     * it to 0. */
+    KTIMER TolTimer;
+    KDPC TolDpc;
+    volatile LONG TolArmed;
 
     /* The controller thread (hcd_ctl.c). */
     PVOID ThreadObject;
@@ -894,6 +947,8 @@ typedef struct _HCD_CONTROLLER {
      * controller lock. */
     LIST_ENTRY SlowIrps;
     ULONG CancelWork;               /* some pipe has CancelPending        */
+    ULONG RetryWork;                /* some queue has RetryWanted (35-T.2,
+                                     * HcdCfgRetryService)                */
     volatile LONG CancelsRunning;   /* cancel routines past the cancel lock */
     ULONG UrbsCompleted;
     ULONG UrbsGone;
@@ -947,9 +1002,30 @@ typedef struct _HCD_CONTROLLER {
     ULONG PortCycleSerial[HCD_PORT_COUNT];
     /* Thread requests (hcd_enum.c), under the controller lock. */
     ULONG SlotsInvalidated;         /* HCRST took every slot              */
+    /* An invalidation raised without proof the controller stopped (its
+     * controllerStopped 0) and not yet followed by a completed HCRST
+     * (XhciSlotInit): the drain waits for a proof (HcdEnumService). */
+    ULONG SlotsUnproven;
+    /* The invalidation a terminal no recovery acts on raised for itself
+     * (hcd_ctl.c, hcdTerminalRelease): once per lifetime. */
+    ULONG TerminalReleased;
+    /* A transfer was published on a controller not initialized since the
+     * save gate armed (hcd_dev.c, XhciSlotSaveBusy; hcd_io.c,
+     * HcdIoMapped): the saved image is not committed, or not restored. */
+    ULONG SavePublished;
     ULONG EnumDetachRequested;      /* the root hub is going               */
     KEVENT EnumDetachDone;
     ULONG ScratchTainted;           /* a timed-out EP0 transfer may DMA    */
+    /* 35-T.3 (design record 17 section 4.3): the slot whose EP0 transfer
+     * the thread's wait abandoned for a cycle, 0 for none. The controller
+     * may still own that TD and write the scratch, so no thread control
+     * transfer goes out until that slot's Disable Slot completes or HCRST
+     * takes it; a Disable Slot that fails sets ScratchTainted. Thread
+     * only. ThreadEp0Dev: the device the thread's control transfer is
+     * outstanding on, NULL between them, under the controller lock, so a
+     * cycle mark for it can end the wait (HcdTolCycleMark). */
+    ULONG ScratchHeld;
+    struct _HCD_USB_DEVICE *ThreadEp0Dev;
     ULONG SlotSweep;                /* Abandoned records await Disable Slot */
     volatile ULONG CmdDonePA;       /* the completed command's TRB        */
     volatile ULONG PortEvents;
@@ -968,6 +1044,45 @@ typedef struct _HCD_CONTROLLER {
     ULONG StrictRefusals;           /* answered SNE, Parameter or CSE     */
     ULONG StrictSeen[64][2];
     ULONG StrictRefusalSeen[64];
+#endif
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* The qemu flavour's test aids, never in a published image (design
+     * record 08). QemuPsiE460 is task 35.4's speed-table override, latched
+     * at each start (hcd_ctl.c). The rest is 35-T.9's injection
+     * (hcd_inj.c): InjLock is a leaf lock, taken at <= DISPATCH_LEVEL only,
+     * over InjRegs; the lost-interrupt window is lock-free - the thread
+     * arms and disarms it (InjIrqArmed, InjIrqBudget, InjIrqForever), the
+     * ISR counts InjIrqTaken only while it is armed, and InjIrqDropped;
+     * InjTrigger, InjReadAt and InjIrqNoted are the thread's. The endpoint
+     * faults (35-T.2 to 35-T.4): InjEp under InjLock; InjEvDone signalled
+     * by the drain that took an injected event; the rest the thread's -
+     * the armed fault, its count and port, the phase of the injection in
+     * flight and since when, its target (InjDev compared, never followed
+     * once the slot no longer names it), and InjOwnCmd across the layer's
+     * own commands, which its command hook lets through. */
+    ULONG QemuPsiE460;
+    KSPIN_LOCK InjLock;
+    XHCI_INJ_REGS InjRegs;
+    XHCI_INJ_TRIGGER InjTrigger;
+    ULONG InjReadAt;
+    volatile LONG InjIrqArmed;
+    volatile LONG InjIrqTaken;
+    volatile LONG InjIrqBudget;
+    volatile LONG InjIrqForever;
+    volatile LONG InjIrqDropped;
+    LONG InjIrqNoted;
+    XHCI_INJ_EP InjEp;
+    KEVENT InjEvDone;
+    ULONG InjFault;
+    ULONG InjLeft;
+    ULONG InjPort;
+    ULONG InjPhase;
+    ULONG InjSince;
+    ULONG InjWaitNoted;
+    struct _HCD_USB_DEVICE *InjDev;
+    ULONG InjSlot;
+    ULONG InjDci;
+    ULONG InjOwnCmd;
 #endif
     /* The door (hcd_door.c, 26-A.8; design record 13 section 8): the
      * FDO's name's number, \DosDevices\HCD<n>, the host controller
@@ -1070,16 +1185,17 @@ typedef struct _HCD_CONTROLLER {
     } SettleDeferHub[HCD_SETTLE_DEFER_HUB];
     ULONG SettleDeferHubFull;       /* a deferral did not fit: every hub
                                      * port rebuilt is taken as deferred */
-    /* The Intel port switchover (task 34.3; hcd_ctl.c, xhci_psw.h), at
-     * the end so no offset the harness reads moves. PswOn is set by a start
-     * that routed the switchable connectors to xHCI (the gate passed and
-     * XhciIntelPortSwitch is not 0), so each return to D0 routes them again
-     * and the stop, a refused start and a shutdown's D3 hand them back; the
-     * stop clears it. The counts are never zeroed. PASSIVE_LEVEL only. */
-    ULONG PswOn;
+    /* The Intel port switchover (tasks 34.3 and 35.5; hcd_ctl.c,
+     * xhci_psw.h, design record 16 section 7a). The counts are never
+     * zeroed. PswLife.On is set by a start that decided to route, so each
+     * return to D0 routes again; PswLife.Written is what those routes
+     * wrote, which the stop, a refused start and a shutdown's D3 hand
+     * back, and the stop and a refused start clear both. PASSIVE_LEVEL
+     * only. */
     ULONG PswRoutes;
     ULONG PswReleases;
     ULONG PswFailures;
+    XHCI_PSW_LIFE PswLife;
 } HCD_CONTROLLER, *PHCD_CONTROLLER;
 
 /* The root hub's PDO, created by the controller FDO (hcd_rh.c; design record
@@ -1187,6 +1303,7 @@ VOID HcdStopController(PHCD_CONTROLLER hc);
 VOID HcdControllerInitObjects(PHCD_CONTROLLER hc);
 VOID HcdThreadWake(PHCD_CONTROLLER hc);
 VOID HcdControllerFail(PHCD_CONTROLLER hc);
+ULONG HcdCtlProveDmaStopped(PXHCI_EXTENSION ext);
 VOID HcdPowerGateEnter(PHCD_CONTROLLER hc);
 VOID HcdPowerGateLeave(PHCD_CONTROLLER hc);
 ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc);
@@ -1196,6 +1313,33 @@ VOID HcdPswRelease(PHCD_CONTROLLER hc);
 /* hcd_enum.c */
 VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered);
 VOID HcdEnumDetach(PHCD_CONTROLLER hc);
+VOID HcdEnumContain(PHCD_CONTROLLER hc, ULONG proof);
+/* 35-T.5's location budget, a root port's or a hub port's (thread only):
+ * the charge for one action of kind XHCI_TOL_CHARGE_* - 1 to act, 0 when
+ * the budget is spent and the location now held, and 1 uncharged at
+ * XhciTolerance 0 - and one look at the port. 35-T.3 and 35-T.4's device
+ * cycle charges its re-enumeration through HcdTolLocCharge. */
+ULONG HcdTolLocCharge(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG kind);
+/*
+ * 35-T.3 and 35-T.4 (design record 17 section 4.3): mark the device to be
+ * cycled for reason (XHCI_TOL_CYCLE_REFUSED_CODE, or _HALT_NO_TD on endpoint
+ * dci, which the thread confirms by reading the endpoint's context), with
+ * its location's connect generation, and wake the thread - and, when the
+ * thread is waiting on its own control transfer to that device, end the
+ * wait. The one entry point every mark goes through, the event path's and
+ * any injection's. Nothing at XhciTolerance 0. IRQL: DISPATCH_LEVEL,
+ * controller lock held.
+ */
+VOID HcdTolCycleMark(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG reason,
+                     ULONG dci);
+/* The device's mark read as the cycle service reads it - each halt with no
+ * TD confirmed by its endpoint's context (XhciTolHaltOwner), a stale one
+ * cleared - and the reason it is to be cycled for, XHCI_TOL_CYCLE_NONE for
+ * none; a reason stays marked for the cycle service. Thread only. */
+ULONG HcdTolCycleResolve(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+VOID HcdTolLocObserve(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG connected,
+                      ULONG powered, ULONG changed);
+VOID HcdTolLocRecovery(PHCD_CONTROLLER hc, PHCD_PORT p);
 ULONG HcdEnumAttach(PHCD_CONTROLLER hc);
 ULONG HcdEnumSettleAsk(PHCD_CONTROLLER hc);
 ULONG HcdEnumSettleClock(VOID);
@@ -1248,6 +1392,9 @@ ULONG HcdThreadControlEx(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 #define HCD_CTL_FAILED      2UL /* it completed with another error       */
 #define HCD_CTL_NOT_SENT    3UL /* it never went out, or it timed out
                                  * (dev->Ep0Stuck, the reset requested)  */
+#define HCD_CTL_ABANDONED   4UL /* abandoned for a device cycle (35-T.3):
+                                 * dev->CycleAbandon, and nothing more is
+                                 * sent to the device                     */
 ULONG HcdThreadControlOutcome(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                               UCHAR requestType, UCHAR request,
                               USHORT value, USHORT index, ULONG length,
@@ -1333,6 +1480,25 @@ VOID HcdStrictAfter(PHCD_CONTROLLER hc, const HCD_STRICT_SNAP *snap,
 VOID HcdStrictForgetSlots(PHCD_CONTROLLER hc);
 #endif
 
+/* hcd_dev.c */
+ULONG HcdDevRetryReplay(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG token);
+
+/* hcd_inj.c and hcd_ctl.c's qemu half: the qemu flavour only, nothing in
+ * debug or release (design record 17 section 5; xhci_inj.h). */
+#if defined(XHCI_FLAVOUR_QEMU)
+NTSTATUS HcdCtlQemuReadDword(PHCD_CONTROLLER hc, PCWSTR name, PULONG value);
+VOID HcdInjStart(PHCD_CONTROLLER hc);
+VOID HcdInjPoll(PHCD_CONTROLLER hc);
+ULONG HcdInjIsrDrop(PHCD_CONTROLLER hc);
+ULONG HcdInjUsbsts(PHCD_CONTROLLER hc, ULONG usbsts);
+USHORT HcdInjPciCommand(PHCD_CONTROLLER hc, USHORT command);
+VOID HcdInjService(PHCD_CONTROLLER hc);
+ULONG HcdInjCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb, PULONG control,
+                    PULONG code);
+ULONG HcdInjEpState(PHCD_CONTROLLER hc, ULONG slot, ULONG dci, ULONG state);
+VOID HcdInjEp0Doorbell(PHCD_CONTROLLER hc, struct _HCD_USB_DEVICE *dev);
+#endif
+
 /* hcd_cfg.c */
 NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                      struct _HCD_DEVICE_PDO *pdo, PIRP irp);
@@ -1341,6 +1507,7 @@ VOID HcdCfgReleaseFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 VOID HcdCfgFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 VOID HcdCfgService(PHCD_CONTROLLER hc);
 VOID HcdCfgCancelService(PHCD_CONTROLLER hc);
+VOID HcdCfgRetryService(PHCD_CONTROLLER hc);
 VOID HcdCfgDeviceGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 PHCD_PIPE HcdCfgPipe(PHCD_USB_DEVICE dev, PVOID handle);
 ULONG HcdCfgParentConfigure(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
@@ -1402,6 +1569,11 @@ VOID HcdIoRefusedInit(struct _HCD_DEVICE_PDO *pdo);
 ULONG HcdIoPark(struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb,
                 PVOID handle, PVOID endpoint);
 ULONG HcdIoParkedRelease(struct _HCD_DEVICE_PDO *pdo, ULONG aborted);
+/* HcdIoPark's endpoint for a request whose endpoint cannot be named any
+ * more (35-T.6): an abort of any pipe of the PDO covers it. */
+#define HCD_IO_ENDPOINT_ANY ((PVOID)(ULONG_PTR)1)
+NTSTATUS HcdIoHoldUnreadable(struct _HCD_DEVICE_PDO *pdo, PIRP irp,
+                             PVOID urb, PVOID handle, PVOID endpoint);
 VOID HcdIoStamp(struct _HCD_DEVICE_PDO *pdo, PIRP irp);
 VOID HcdIoAbortMark(struct _HCD_DEVICE_PDO *pdo, PIRP abortIrp,
                     PVOID handle, ULONG known);
@@ -1427,6 +1599,8 @@ VOID HcdTimersInit(PHCD_CONTROLLER hc);
 VOID HcdTimersDrain(PHCD_CONTROLLER hc);
 VOID HcdTimersOpen(PHCD_CONTROLLER hc);
 VOID HcdFrameTimerStart(PHCD_CONTROLLER hc);
+VOID HcdTolClockStart(PHCD_CONTROLLER hc);
+ULONG HcdTolNow(PHCD_CONTROLLER hc);
 
 /* hcd_door.c */
 VOID HcdDoorGateEnter(PHCD_CONTROLLER hc);

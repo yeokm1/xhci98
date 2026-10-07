@@ -817,13 +817,124 @@ static void test_rate(void)
              XHCI_CAPS_OK, "SuperSpeed-only table parsed");
     CHECK_EQ(XhciPortRate(&map, 1, 4, &kbps, &plus), XHCI_CAPS_OK, "Gen 1");
     CHECK_EQ(plus, 0, "not SuperSpeedPlus");
-    CHECK_EQ(XhciPortRate(&map, 1, 5, &kbps, &plus), XHCI_CAPS_NOT_FOUND,
-             "the table replaces the defaults: no PSIV 5 here");
+    /* Task 35.1: an unlisted 4 to 7 on a USB 3.x group takes its default. */
+    CHECK_EQ(XhciPortRate(&map, 1, 5, &kbps, &plus), XHCI_CAPS_OK,
+             "an unlisted PSIV 5 on a USB 3.x group falls back");
+    CHECK_EQ(kbps, 10000000UL, "to Gen 2x1's 10 Gbit/s");
+    CHECK_EQ(plus, 1, "SuperSpeedPlus by its rate");
     CHECK_EQ(XhciPortSpeedClass(&map, 1, 5, &speed), XHCI_CAPS_OK, "decode");
-    CHECK_EQ(speed, XHCI_SPEED_UNKNOWN, "unknown, never a default");
+    CHECK_EQ(speed, XHCI_SPEED_SUPER, "the SuperSpeed class");
+    CHECK_EQ(XhciPortSpeedSource(&map, 1, 5), XHCI_PSI_SOURCE_FALLBACK,
+             "named a fallback");
+    CHECK_EQ(XhciPortSpeedSource(&map, 1, 4), XHCI_PSI_SOURCE_LISTED,
+             "the listed 4 is the table's");
+    CHECK_EQ(XhciPortRate(&map, 1, 8, &kbps, &plus), XHCI_CAPS_NOT_FOUND,
+             "an unlisted 8 still names nothing");
+    CHECK_EQ(XhciPortSpeedSource(&map, 1, 8), XHCI_PSI_SOURCE_NONE, "NONE");
 
     CHECK_EQ(XhciPortRate(&map, 1, 4, NULL, &plus), XHCI_CAPS_BAD_PARAM,
              "NULL output refused");
+}
+
+/*
+ * Task 35.1 (issue 11): on a USB 3.x group with a table, an unlisted ID 4 to
+ * 7 takes its default meaning; a listed entry always wins, even one this
+ * driver cannot decode; every other unlisted ID, and USB 2.0, as before.
+ */
+static void test_unlisted_fallback(void)
+{
+    static const ULONG psi2[3] = { PSI_FS, PSI_LS, PSI_HS };
+    /* USB 3: 4 listed at 480 Mb/s (a reordering), 9 at 5 Gb/s, and 5
+     * listed twice - the first entry is the one read. */
+    static const ULONG odd3[4] = { 0x01E00024UL, 0x00050139UL,
+                                   0x000A0135UL, 0x00140135UL };
+    /* USB 3: one entry whose rate cannot be represented, at ID 6. */
+    static ULONG absurd3[1];
+    XHCI_PORT_MAP map;
+    ULONG speed;
+    ULONG kbps;
+    ULONG plus;
+    ULONG psiv;
+
+    bar_reset(0x800);
+    put_protocol(0x100, 8, 2, 0, 1, 2, 0, psi2, 3);
+    put_protocol(0x108, 0, 3, 0x10, 3, 2, 0, odd3, 4);
+    CHECK_EQ(XhciParseExtendedCaps(bar_read, NULL, 0x100, 0x800, 4, &map),
+             XHCI_CAPS_OK, "odd USB 3 table parsed");
+
+    CHECK_EQ(XhciPortSpeedClass(&map, 3, 4, &speed), XHCI_CAPS_OK, "PSIV 4");
+    CHECK_EQ(speed, XHCI_SPEED_HIGH,
+             "a listed 4 is read by the table, not as SuperSpeed");
+    CHECK_EQ(XhciPortSpeedSource(&map, 3, 4), XHCI_PSI_SOURCE_LISTED,
+             "LISTED");
+    CHECK_EQ(XhciPortRate(&map, 3, 5, &kbps, &plus), XHCI_CAPS_OK, "PSIV 5");
+    CHECK_EQ(kbps, 10000000UL, "the first of two listed 5s");
+    CHECK_EQ(XhciPortSpeedClass(&map, 3, 6, &speed), XHCI_CAPS_OK, "PSIV 6");
+    CHECK_EQ(speed, XHCI_SPEED_SUPER, "an unlisted 6 is Gen 1x2's class");
+    CHECK_EQ(XhciPortRate(&map, 3, 6, &kbps, &plus), XHCI_CAPS_OK, "rate 6");
+    CHECK_EQ(kbps, 10000000UL, "10 Gbit/s aggregate");
+    CHECK_EQ(plus, 1, "SuperSpeedPlus");
+    CHECK_EQ(XhciPortRate(&map, 3, 7, &kbps, &plus), XHCI_CAPS_OK, "rate 7");
+    CHECK_EQ(kbps, 20000000UL, "an unlisted 7 is Gen 2x2's 20 Gbit/s");
+    CHECK_EQ(XhciPortSpeedSource(&map, 3, 7), XHCI_PSI_SOURCE_FALLBACK,
+             "FALLBACK");
+    CHECK_EQ(XhciPortSpeedClass(&map, 3, 3, &speed), XHCI_CAPS_OK, "PSIV 3");
+    CHECK_EQ(speed, XHCI_SPEED_UNKNOWN, "an unlisted 3 stays unknown");
+    CHECK_EQ(XhciPortSpeedClass(&map, 3, 8, &speed), XHCI_CAPS_OK, "PSIV 8");
+    CHECK_EQ(speed, XHCI_SPEED_UNKNOWN, "an unlisted 8 stays unknown");
+    CHECK_EQ(XhciPortSpeedClass(&map, 3, 9, &speed), XHCI_CAPS_OK, "PSIV 9");
+    CHECK_EQ(speed, XHCI_SPEED_SUPER, "the listed 9 is SuperSpeed");
+
+    /* The inverse: the listed Gen 1 entry is preferred over a fallback 4,
+     * and a listed 4 that is not Gen 1 is never taken as SuperSpeed. */
+    CHECK_EQ(XhciPortPsivForSpeed(&map, 3, XHCI_SPEED_SUPER, &psiv),
+             XHCI_CAPS_OK, "SuperSpeed by class");
+    CHECK_EQ(psiv, 9, "the listed 5 Gbit/s entry");
+    CHECK_EQ(XhciPortPsivForSpeed(&map, 3, XHCI_SPEED_HIGH, &psiv),
+             XHCI_CAPS_OK, "High Speed by class");
+    CHECK_EQ(psiv, 4, "the listed 4, as the table says");
+
+    /* USB 2.0 unchanged: an unlisted 4 to 7 in a table is unknown. */
+    CHECK_EQ(XhciPortSpeedClass(&map, 1, 4, &speed), XHCI_CAPS_OK, "USB2 4");
+    CHECK_EQ(speed, XHCI_SPEED_UNKNOWN, "unknown on a USB 2.0 group");
+    CHECK_EQ(XhciPortSpeedSource(&map, 1, 4), XHCI_PSI_SOURCE_NONE, "NONE");
+    CHECK_EQ(XhciPortRate(&map, 1, 5, &kbps, &plus), XHCI_CAPS_NOT_FOUND,
+             "and no rate");
+    CHECK_EQ(XhciPortPsivForSpeed(&map, 1, XHCI_SPEED_SUPER, &psiv),
+             XHCI_CAPS_NOT_FOUND, "nor SuperSpeed's ID");
+    CHECK_EQ(XhciPortSpeedSource(&map, 0, 4), XHCI_PSI_SOURCE_NONE,
+             "port 0: NONE");
+    CHECK_EQ(XhciPortSpeedSource(&map, 5, 4), XHCI_PSI_SOURCE_NONE,
+             "past MaxPorts: NONE");
+
+    /* A listed entry wins even when its rate reads unknown. */
+    absurd3[0] = 0x00000036UL | (65535UL << 16);   /* PSIV 6, Gb/s, 65535 */
+    bar_reset(0x800);
+    put_protocol(0x100, 0, 3, 0x20, 1, 2, 0, absurd3, 1);
+    CHECK_EQ(XhciParseExtendedCaps(bar_read, NULL, 0x100, 0x800, 2, &map),
+             XHCI_CAPS_OK, "absurd USB 3 table parsed");
+    CHECK_EQ(XhciPortSpeedClass(&map, 1, 6, &speed), XHCI_CAPS_OK, "PSIV 6");
+    CHECK_EQ(speed, XHCI_SPEED_UNKNOWN,
+             "the listed 6 is unknown, not Gen 1x2");
+    CHECK_EQ(XhciPortSpeedSource(&map, 1, 6), XHCI_PSI_SOURCE_LISTED,
+             "LISTED");
+    CHECK_EQ(XhciPortRate(&map, 1, 6, &kbps, &plus), XHCI_CAPS_NOT_FOUND,
+             "and has no rate");
+    CHECK_EQ(XhciPortSpeedClass(&map, 1, 4, &speed), XHCI_CAPS_OK, "PSIV 4");
+    CHECK_EQ(speed, XHCI_SPEED_SUPER, "the unlisted 4 still falls back");
+    CHECK_EQ(XhciPortPsivForSpeed(&map, 1, XHCI_SPEED_SUPER, &psiv),
+             XHCI_CAPS_OK, "SuperSpeed by class");
+    CHECK_EQ(psiv, 4, "the fallback 4");
+
+    /* PSIC 0 on a USB 3 group: the defaults, named DEFAULT. */
+    bar_reset(0x800);
+    put_protocol(0x100, 0, 3, 0, 1, 2, 0, NULL, 0);
+    CHECK_EQ(XhciParseExtendedCaps(bar_read, NULL, 0x100, 0x800, 2, &map),
+             XHCI_CAPS_OK, "tableless USB 3 parsed");
+    CHECK_EQ(XhciPortSpeedSource(&map, 1, 4), XHCI_PSI_SOURCE_DEFAULT,
+             "DEFAULT");
+    CHECK_EQ(XhciPortSpeedSource(&map, 1, 8), XHCI_PSI_SOURCE_NONE,
+             "no default 8");
 }
 
 /* ------------------------------------------------------------------ */
@@ -1451,10 +1562,11 @@ static void test_digest_collision(void)
  *     test_field_macros are what check those.
  *   - xECP, DBOFF, RTSOFF, the BAR length and HCSPARAMS2's other fields were
  *     not recorded at all, so they are synthetic and nothing asserts them.
- *   - PSI *counts* were recorded; the PSI DWORDs were not. The tables below are
- *     filled with plausible entries purely so the counts are reachable, and no
- *     check reads them. A true speed-decode replay needs a xhciqual change to
- *     dump the raw capability DWORDs, and then another bare-metal run.
+ *   - PSI *counts* were recorded; the PSI DWORDs were not, until XHCIQUAL
+ *     printed them and the owner ran it on 2026-10-06 (task 35.1,
+ *     xhciqual/results/*-2026-10-06/PROBE.LOG). The tables below are those
+ *     words, and the speed decode is checked against them - the E460's is
+ *     the table issue 11 is about.
  *
  * Both machines present the same topology, which is itself worth pinning: 18
  * logical ports, USB 2.0 on 1-12 and USB 3.x on 13-18, so the six USB 3.x ports
@@ -1545,9 +1657,16 @@ static void check_fleet_port_map(const XHCI_PORT_MAP *map)
  */
 static void test_replay_e460(void)
 {
-    static const ULONG psi2[3] = { PSI_FS, PSI_LS, PSI_HS };
-    static const ULONG psi3[3] = { PSI_SS, PSI_SS, PSI_SS };
+    /* The PSI DWORDs as read 2026-10-06 (task 35.1; xhciqual/results/
+     * e460-2026-10-06/PROBE.LOG): USB 3 lists only Intel's SSIC rates
+     * 1248, 2496 and 4992 Mb/s at IDs 1 to 3. */
+    static const ULONG psi2[3] = { 0x000C0021UL, 0x05DC0012UL, 0x01E00023UL };
+    static const ULONG psi3[3] = { 0x04E00121UL, 0x09C00122UL, 0x13800123UL };
     XHCI_PORT_MAP map;
+    ULONG speed;
+    ULONG kbps;
+    ULONG plus;
+    ULONG psiv;
 
     check_fleet_hc_info(0x01000080UL, "E460 capability registers decode");
 
@@ -1556,6 +1675,13 @@ static void test_replay_e460(void)
     put_legacy(0x180, 2);
     put_protocol(0x182, 8, 2, 0, 1, 12, 0, psi2, 3);
     put_protocol(0x18A, 0, 3, 0, 13, 6, 0, psi3, 3);
+    /* The capability is 20 DWORDs long and goes on past PSIC: a 5 Gb/s
+     * entry at ID 4 and three more SSIC rates sit uncounted after the
+     * three it counts. PSIC is what the controller publishes. */
+    bar[0x18A + 7] = 0x00050134UL;
+    bar[0x18A + 8] = 0x05B10125UL;
+    bar[0x18A + 9] = 0x0B630126UL;
+    bar[0x18A + 10] = 0x16C60127UL;
 
     CHECK_EQ(XhciParseExtendedCaps(bar_read, NULL, 0x180, FLEET_MAPPED, 18,
                                    &map),
@@ -1566,7 +1692,104 @@ static void test_replay_e460(void)
     CHECK_EQ(map.Protocols[0].PsiCount, 3, "USB2 capability advertises PSIC 3");
     CHECK_EQ(map.Protocols[1].Minor, 0, "USB 3.0");
     CHECK_EQ(map.Protocols[1].PsiCount, 3, "USB3 capability advertises PSIC 3");
+    CHECK_EQ(map.Protocols[1].Psi[3], 0, "the uncounted entries are not read");
     check_fleet_port_map(&map);
+
+    /* 35.0's reading: port 13 at 00001203, speed ID 4. Before 35.1 this
+     * decoded as unknown and the enumeration failed before Enable Slot. */
+    CHECK_EQ(XhciPortSpeedClass(&map, 13, 4, &speed), XHCI_CAPS_OK,
+             "E460 port 13, speed ID 4");
+    CHECK_EQ(speed, XHCI_SPEED_SUPER, "is SuperSpeed");
+    CHECK_EQ(XhciPortSpeedSource(&map, 13, 4), XHCI_PSI_SOURCE_FALLBACK,
+             "by the fallback");
+    CHECK_EQ(XhciPortRate(&map, 13, 4, &kbps, &plus), XHCI_CAPS_OK, "rate");
+    CHECK_EQ(kbps, 5000000UL, "5 Gbit/s");
+    CHECK_EQ(plus, 0, "not SuperSpeedPlus");
+    CHECK_EQ(XhciPortSpeedClass(&map, 13, 3, &speed), XHCI_CAPS_OK, "ID 3");
+    CHECK_EQ(speed, XHCI_SPEED_UNKNOWN, "the listed SSIC 4992 Mb/s is unknown");
+    CHECK_EQ(XhciPortSpeedClass(&map, 13, 1, &speed), XHCI_CAPS_OK, "ID 1");
+    CHECK_EQ(speed, XHCI_SPEED_UNKNOWN, "and never Full Speed");
+    CHECK_EQ(XhciPortSpeedClass(&map, 13, 5, &speed), XHCI_CAPS_OK, "ID 5");
+    CHECK_EQ(speed, XHCI_SPEED_SUPER, "an unlisted 5 falls back too");
+    CHECK_EQ(XhciPortPsivForSpeed(&map, 13, XHCI_SPEED_SUPER, &psiv),
+             XHCI_CAPS_OK, "a SuperSpeed hub's child has an ID");
+    CHECK_EQ(psiv, 4, "ID 4");
+    CHECK_EQ(XhciPortPsivForSpeed(&map, 13, XHCI_SPEED_HIGH, &psiv),
+             XHCI_CAPS_NOT_FOUND, "High Speed is not the USB 3 group's");
+
+    /* The USB 2.0 half (the hub's USB 2.0 half came up on port 1). */
+    CHECK_EQ(XhciPortSpeedClass(&map, 1, 3, &speed), XHCI_CAPS_OK, "port 1");
+    CHECK_EQ(speed, XHCI_SPEED_HIGH, "High Speed, as before");
+    CHECK_EQ(XhciPortSpeedClass(&map, 1, 4, &speed), XHCI_CAPS_OK, "USB2 4");
+    CHECK_EQ(speed, XHCI_SPEED_UNKNOWN, "ID 4 on USB 2.0 stays unknown");
+    CHECK_EQ(XhciPortPsivForSpeed(&map, 7, XHCI_SPEED_HIGH, &psiv),
+             XHCI_CAPS_OK, "a High Speed hub child");
+    CHECK_EQ(psiv, 3, "ID 3");
+}
+
+/*
+ * Task 35.4's qemu-flavour override (XhciQemuPsiE460): QEMU's chain, which
+ * publishes no PSI table, with the E460's USB 3 words substituted after the
+ * parse - so the decoding meets the E460's table on QEMU's ports.
+ */
+static void test_qemu_e460_override(void)
+{
+    static const ULONG e460[3] = { 0x04E00121UL, 0x09C00122UL, 0x13800123UL };
+    XHCI_PORT_MAP map;
+    XHCI_PORT_MAP again;
+    ULONG speed;
+    ULONG i;
+
+    for (i = 0; i < XHCI_QEMU_PSI_E460_COUNT; i++) {
+        CHECK_EQ(XhciQemuPsiE460[i], e460[i], "the E460's word as read");
+    }
+
+    bar_reset(0x800);
+    put_protocol(0x100, 4, 2, 0, 1, 4, 9, NULL, 0);
+    put_protocol(0x104, 0, 3, 0, 5, 4, 10, NULL, 0);
+    CHECK_EQ(XhciParseExtendedCaps(bar_read, NULL, 0x100, 0x800, 8, &map),
+             XHCI_CAPS_OK, "QEMU chain parsed");
+    CHECK_EQ(XhciPortMapOverridePsi(&map, 3, XhciQemuPsiE460,
+                                    XHCI_QEMU_PSI_E460_COUNT),
+             1, "one USB 3 group overridden");
+    CHECK_EQ(map.Protocols[0].PsiCount, 0, "the USB 2 group untouched");
+    CHECK_EQ(map.Protocols[1].PsiCount, 3, "PSIC 3");
+    for (i = 0; i < 3; i++) {
+        CHECK_EQ(map.Protocols[1].Psi[i], e460[i], "the E460's words");
+    }
+    for (i = 3; i < XHCI_MAX_PSI; i++) {
+        CHECK_EQ(map.Protocols[1].Psi[i], 0, "the rest zeroed");
+    }
+
+    /* What 35.1 fixed, met on QEMU's port 5: speed ID 4 SuperSpeed by the
+     * fallback, the SSIC IDs unknown, the USB 2 ports as before. */
+    CHECK_EQ(XhciPortSpeedClass(&map, 5, 4, &speed), XHCI_CAPS_OK, "ID 4");
+    CHECK_EQ(speed, XHCI_SPEED_SUPER, "SuperSpeed");
+    CHECK_EQ(XhciPortSpeedSource(&map, 5, 4), XHCI_PSI_SOURCE_FALLBACK,
+             "by the fallback");
+    CHECK_EQ(XhciPortSpeedClass(&map, 5, 1, &speed), XHCI_CAPS_OK, "ID 1");
+    CHECK_EQ(speed, XHCI_SPEED_UNKNOWN, "SSIC 1248 Mb/s unknown");
+    CHECK_EQ(XhciPortSpeedClass(&map, 1, 3, &speed), XHCI_CAPS_OK, "USB2 3");
+    CHECK_EQ(speed, XHCI_SPEED_HIGH, "High Speed by the default IDs");
+
+    /* The preflight and the post-reset parse, both overridden, compare
+     * equal; an unoverridden one does not. */
+    CHECK_EQ(XhciParseExtendedCaps(bar_read, NULL, 0x100, 0x800, 8, &again),
+             XHCI_CAPS_OK, "parsed again");
+    CHECK_EQ(XhciPortMapEqual(&map, &again), 0, "differs before the override");
+    (void)XhciPortMapOverridePsi(&again, 3, XhciQemuPsiE460,
+                                 XHCI_QEMU_PSI_E460_COUNT);
+    CHECK_EQ(XhciPortMapEqual(&map, &again), 1, "equal after it");
+
+    /* Count 0 restores the default IDs; refusals change nothing. */
+    CHECK_EQ(XhciPortMapOverridePsi(&again, 3, NULL, 0), 1, "count 0");
+    CHECK_EQ(again.Protocols[1].PsiCount, 0, "no table");
+    CHECK_EQ(XhciPortMapOverridePsi(&again, 3, NULL, 2), 0, "NULL words");
+    CHECK_EQ(XhciPortMapOverridePsi(&again, 3, e460, XHCI_MAX_PSI + 1), 0,
+             "more than PSIC can say");
+    CHECK_EQ(XhciPortMapOverridePsi(NULL, 3, e460, 3), 0, "NULL map");
+    CHECK_EQ(XhciPortMapOverridePsi(&again, 4, e460, 3), 0, "no USB 4 group");
+    CHECK_EQ(again.Protocols[1].PsiCount, 0, "still no table");
 }
 
 /*
@@ -1655,10 +1878,17 @@ static void test_capability_loop_refused(void)
 
 static void test_replay_p14s(void)
 {
-    static const ULONG psi2[3] = { PSI_FS, PSI_LS, PSI_HS };
-    static const ULONG psi3[8] = { PSI_SS, PSI_SS, PSI_SS, PSI_SS,
-                                   PSI_SS, PSI_SS, PSI_SS, PSI_SS };
+    /* As read 2026-10-06 (xhciqual/results/p14s-gen1-2026-10-06/
+     * PROBE.LOG): 4 at 5 Gb/s, 5 at 10 Gb/s, the SSIC rates at 6 to 11. */
+    static const ULONG psi2[3] = { 0x000C0021UL, 0x05DC0012UL, 0x01E00023UL };
+    static const ULONG psi3[8] = { 0x00050134UL, 0x000A0135UL, 0x04E00126UL,
+                                   0x09C00127UL, 0x13800128UL, 0x05B10129UL,
+                                   0x0B63012AUL, 0x16C6012BUL };
     XHCI_PORT_MAP map;
+    ULONG speed;
+    ULONG kbps;
+    ULONG plus;
+    ULONG psiv;
 
     check_fleet_hc_info(0x01100080UL, "P14s capability registers decode");
 
@@ -1676,6 +1906,65 @@ static void test_replay_p14s(void)
     CHECK_EQ(map.Protocols[1].Minor, 1, "USB 3.1");
     CHECK_EQ(map.Protocols[1].PsiCount, 8, "USB3.1 capability advertises PSIC 8");
     check_fleet_port_map(&map);
+
+    CHECK_EQ(XhciPortSpeedClass(&map, 13, 4, &speed), XHCI_CAPS_OK, "ID 4");
+    CHECK_EQ(speed, XHCI_SPEED_SUPER, "SuperSpeed");
+    CHECK_EQ(XhciPortSpeedSource(&map, 13, 4), XHCI_PSI_SOURCE_LISTED,
+             "from its listed entry");
+    CHECK_EQ(XhciPortRate(&map, 13, 5, &kbps, &plus), XHCI_CAPS_OK, "ID 5");
+    CHECK_EQ(kbps, 10000000UL, "10 Gbit/s");
+    CHECK_EQ(plus, 1, "SuperSpeedPlus by its rate (its LP reads 0)");
+    /* The listed 6 and 7 are SSIC rates where the defaults would read Gen
+     * 1x2 and Gen 2x2: the listed entry wins. */
+    CHECK_EQ(XhciPortSpeedClass(&map, 13, 6, &speed), XHCI_CAPS_OK, "ID 6");
+    CHECK_EQ(speed, XHCI_SPEED_UNKNOWN, "SSIC 1248 Mb/s, not Gen 1x2");
+    CHECK_EQ(XhciPortSpeedSource(&map, 13, 6), XHCI_PSI_SOURCE_LISTED,
+             "LISTED");
+    CHECK_EQ(XhciPortSpeedClass(&map, 13, 7, &speed), XHCI_CAPS_OK, "ID 7");
+    CHECK_EQ(speed, XHCI_SPEED_UNKNOWN, "SSIC 2496 Mb/s, not Gen 2x2");
+    CHECK_EQ(XhciPortRate(&map, 13, 7, &kbps, &plus), XHCI_CAPS_OK, "rate 7");
+    CHECK_EQ(kbps, 2496000UL, "the table's rate");
+    CHECK_EQ(XhciPortSpeedClass(&map, 13, 12, &speed), XHCI_CAPS_OK, "ID 12");
+    CHECK_EQ(speed, XHCI_SPEED_UNKNOWN, "an unlisted 12 is unknown");
+    CHECK_EQ(XhciPortPsivForSpeed(&map, 13, XHCI_SPEED_SUPER, &psiv),
+             XHCI_CAPS_OK, "SuperSpeed by class");
+    CHECK_EQ(psiv, 4, "the listed Gen 1 entry");
+}
+
+/*
+ * ThinkPad B490, Intel 7-series 8086:1E31 rev 04, HCIVERSION 1.00, eight
+ * ports: USB 2.0 on 1-4, USB 3.0 on 5-8, its USB 3 table one 5 Gb/s entry
+ * at ID 4. xhciqual/results/b490-2026-10-06/PROBE.LOG.
+ */
+static void test_replay_b490(void)
+{
+    static const ULONG psi2[3] = { 0x000C0021UL, 0x05DC0012UL, 0x01E00023UL };
+    static const ULONG psi3[1] = { 0x00050134UL };
+    XHCI_PORT_MAP map;
+    ULONG speed;
+    ULONG psiv;
+    ULONG i;
+
+    bar_reset(FLEET_MAPPED);
+    put_protocol(0x180, 8, 2, 0, 1, 4, 0, psi2, 3);
+    put_protocol(0x188, 0, 3, 0, 5, 4, 0, psi3, 1);
+    CHECK_EQ(XhciParseExtendedCaps(bar_read, NULL, 0x180, FLEET_MAPPED, 8,
+                                   &map),
+             XHCI_CAPS_OK, "B490 chain parsed");
+    CHECK_EQ(barOutOfWindow, 0, "no read left the mapped window");
+    CHECK_EQ(map.Protocols[1].PsiCount, 1, "USB3 capability advertises PSIC 1");
+    for (i = 1; i <= 4; i++) {
+        CHECK_EQ(map.Companion[i - 1], i + 4, "1-4 pair with 5-8");
+    }
+    CHECK_EQ(XhciPortSpeedClass(&map, 5, 4, &speed), XHCI_CAPS_OK, "ID 4");
+    CHECK_EQ(speed, XHCI_SPEED_SUPER, "SuperSpeed");
+    CHECK_EQ(XhciPortSpeedSource(&map, 5, 4), XHCI_PSI_SOURCE_LISTED,
+             "from its listed entry");
+    CHECK_EQ(XhciPortPsivForSpeed(&map, 8, XHCI_SPEED_SUPER, &psiv),
+             XHCI_CAPS_OK, "SuperSpeed by class");
+    CHECK_EQ(psiv, 4, "the listed 4");
+    CHECK_EQ(XhciPortSpeedClass(&map, 4, 3, &speed), XHCI_CAPS_OK, "port 4");
+    CHECK_EQ(speed, XHCI_SPEED_HIGH, "High Speed");
 }
 
 int main(void)
@@ -1691,11 +1980,14 @@ int main(void)
     test_speed_decode();
     test_speed_encode();
     test_rate();
+    test_unlisted_fallback();
     test_hc_info();
     test_port_map_equal();
     test_digest_collision();
     test_replay_e460();
+    test_qemu_e460_override();
     test_replay_p14s();
+    test_replay_b490();
     test_capability_loop_refused();
 
     printf("\n%d checks, %d failures\n", checks, failures);

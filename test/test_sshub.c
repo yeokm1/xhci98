@@ -20,6 +20,7 @@
  */
 
 #include <stdio.h>
+#include <string.h>
 #include "../src/xhci.h"
 #include "../src/xhci_enum.h"
 #include "../src/xhci_hub.h"
@@ -249,6 +250,12 @@ static void test_decide(void)
                       __LINE__);
         check_eq_impl(d.LinkChange, r->linkChange, r->what, __FILE__,
                       __LINE__);
+        /* 35-T.5: only the held device's disabled port is a
+         * re-enumeration charged to the location. */
+        check_eq_impl(d.Disabled,
+                      strcmp(r->what,
+                             "held device, port no longer enabled") == 0,
+                      r->what, __FILE__, __LINE__);
     }
     XhciSsHubPortDecide(E, UP, 0, NULL);
     CHECK(1, "a NULL decision is answered, not dereferenced");
@@ -755,6 +762,94 @@ static void test_psiv(void)
              "a SuperSpeed hub port feeds the machine SuperSpeed");
 }
 
+/*
+ * Task 35.1: a SuperSpeed hub's children on the real tables (xhciqual/
+ * results/*-2026-10-06/PROBE.LOG). Root port 1: the E460's USB 3.0 group,
+ * SSIC IDs 1-3 only. Root port 2: the P14s Gen 1's USB 3.1 group, 4 at 5
+ * Gb/s, 5 at 10, SSIC rates at 6-11.
+ */
+static void mapReal(PXHCI_PORT_MAP m)
+{
+    PUCHAR p;
+    ULONG i;
+
+    p = (PUCHAR)m;
+    for (i = 0; i < sizeof(*m); i++) {
+        p[i] = 0;
+    }
+    for (i = 0; i < XHCI_MAX_ROOT_PORTS; i++) {
+        m->Protocol[i] = XHCI_PORT_NO_PROTOCOL;
+    }
+    m->PortCount = 2;
+    m->ProtocolCount = 2;
+    m->Protocols[0].Major = 3;
+    m->Protocols[0].PortOffset = 1;
+    m->Protocols[0].PortCount = 1;
+    m->Protocols[0].PsiCount = 3;
+    m->Protocols[0].Psi[0] = 0x04E00121UL;
+    m->Protocols[0].Psi[1] = 0x09C00122UL;
+    m->Protocols[0].Psi[2] = 0x13800123UL;
+    m->Protocols[1].Major = 3;
+    m->Protocols[1].Minor = 0x01;
+    m->Protocols[1].PortOffset = 2;
+    m->Protocols[1].PortCount = 1;
+    m->Protocols[1].PsiCount = 8;
+    m->Protocols[1].Psi[0] = 0x00050134UL;
+    m->Protocols[1].Psi[1] = 0x000A0135UL;
+    m->Protocols[1].Psi[2] = 0x04E00126UL;
+    m->Protocols[1].Psi[3] = 0x09C00127UL;
+    m->Protocols[1].Psi[4] = 0x13800128UL;
+    m->Protocols[1].Psi[5] = 0x05B10129UL;
+    m->Protocols[1].Psi[6] = 0x0B63012AUL;
+    m->Protocols[1].Psi[7] = 0x16C6012BUL;
+    m->Protocol[0] = 0;
+    m->Protocol[1] = 1;
+}
+
+static void test_psiv_tables(void)
+{
+    XHCI_PORT_MAP m;
+    XHCI_SSHUB_LINK l;
+    ULONG psiv;
+    ULONG matched;
+
+    mapReal(&m);
+
+    CHECK_EQ(XhciSsHubPsiv(&m, 1, NULL, &psiv, &matched), XHCI_SSHUB_OK,
+             "E460: a SuperSpeed child is addressed");
+    CHECK(psiv == 4 && matched, "at ID 4, the table lists no 5 Gb/s");
+    linkOf(&l, 5, 1);
+    (VOID)XhciSsHubPsiv(&m, 1, &l, &psiv, &matched);
+    CHECK(psiv == 4 && matched, "E460: Gen 1x1 is ID 4");
+    linkOf(&l, 10, 1);
+    (VOID)XhciSsHubPsiv(&m, 1, &l, &psiv, &matched);
+    CHECK(psiv == 4 && !matched,
+          "E460: no ID is invented for 10 Gb/s - SuperSpeed's, unmatched");
+    linkOf(&l, 5, 2);
+    (VOID)XhciSsHubPsiv(&m, 1, &l, &psiv, &matched);
+    CHECK(psiv == 4 && !matched, "E460: Gen 1x2 likewise");
+    CHECK_EQ(XhciSsHubAdoptSpeed(&m, 1, 4, 5), 5,
+             "E460: an output Slot Context of 5 is SuperSpeed and adopted");
+    CHECK_EQ(XhciSsHubAdoptSpeed(&m, 1, 4, 3), 4,
+             "E460: the listed SSIC 3 is not a SuperSpeed answer");
+
+    CHECK_EQ(XhciSsHubPsiv(&m, 2, NULL, &psiv, &matched), XHCI_SSHUB_OK,
+             "P14s: a SuperSpeed child");
+    CHECK(psiv == 4 && matched, "at its listed 4");
+    linkOf(&l, 10, 1);
+    (VOID)XhciSsHubPsiv(&m, 2, &l, &psiv, &matched);
+    CHECK(psiv == 5 && matched, "P14s: 10 Gb/s is its listed 5");
+    linkOf(&l, 5, 2);
+    (VOID)XhciSsHubPsiv(&m, 2, &l, &psiv, &matched);
+    CHECK(psiv == 5 && matched,
+          "P14s: Gen 1x2 takes the listed 10 Gb/s entry, never the SSIC 6");
+    linkOf(&l, 10, 2);
+    (VOID)XhciSsHubPsiv(&m, 2, &l, &psiv, &matched);
+    CHECK(psiv == 5 && !matched,
+          "P14s: 20 Gb/s is not 7 (SSIC there) - the lane rate's 5, "
+          "unmatched");
+}
+
 static void test_pairing(void)
 {
     /* The SuperSpeed half on root port 5, its USB 2.0 half on root port 1,
@@ -953,6 +1048,7 @@ int main(void)
     test_resume();
     test_ext_status();
     test_psiv();
+    test_psiv_tables();
     test_pairing();
     test_parent_rank();
 

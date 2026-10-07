@@ -51,6 +51,39 @@
 #define HCD_POWER_WORK_SYSTEM 2UL
 #define HCD_POWER_WORK_DIRECT 3UL
 
+/*
+ * A controller at a 35-T.6 terminal (design record 17 section 4.6) is not
+ * resumed: a resume reinitializes and would clear the failure latch, and
+ * each terminal holds until a stop and start, where the record revalidates.
+ * Contained (Unreadable): the dropped or kept devices and a pinned buffer
+ * stay. The recovery window exhausted (Window.Refused, cleared only by
+ * XhciTolStart): a fourth recovery was not begun, and a resume would be
+ * one. At XhciTolerance 0 only the first is set, and only by an
+ * invalidation no proof of a stopped controller followed (hcd_enum.c,
+ * HcdEnumService), whose pinned buffer it keeps. The run of recoveries
+ * failed in a row, at either value, is the same terminal: its devices were
+ * released without a Disable Slot (hcd_ctl.c, hcdTerminalRelease, once per
+ * lifetime), and a resume that cleared the latch while the run stays spent
+ * would leave a later fault with neither a recovery nor a release (the
+ * pure XhciTolResumeRefused). The power gate held. IRQL: PASSIVE_LEVEL.
+ */
+static ULONG hcdResumeContained(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+    ULONG terminal;
+
+    ext = &hc->Hc;
+    terminal = XhciTolTerminal(ext->ControllerFailed, ext->Tol.Unreadable,
+                               ext->Tol.Window.Refused,
+                               ext->RecoveryFailuresConsecutive,
+                               XHCI_RECOVERY_MAX_ATTEMPTS);
+    if (!XhciTolResumeRefused(terminal)) {
+        return 0;
+    }
+    XhciLogNote(ext, "resume.terminal", terminal);
+    return 1;
+}
+
 /* The resume half of a D0, then the IRP's completion. IRQL: PASSIVE_LEVEL. */
 static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
 {
@@ -64,7 +97,9 @@ static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
         /* Task 34.3: firmware may have put the connectors back on EHCI
          * across the sleep; route them before the ports are resumed. */
         HcdPswRoute(hc);
-        if (XhciResumeController(&hc->Hc) != MP_STATUS_SUCCESS) {
+        hc->TolStartGen++;
+        if (!hcdResumeContained(hc) &&
+            XhciResumeController(&hc->Hc) != MP_STATUS_SUCCESS) {
             hc->ResumeFailures++;
             HcdControllerFail(hc);
         }
@@ -121,7 +156,9 @@ static VOID hcdDirectTransitionGated(PHCD_CONTROLLER hc)
     if (hc->SuspendedInD0) {
         hc->SuspendedInD0 = 0;
         HcdPswRoute(hc);
-        if (XhciResumeController(&hc->Hc) != MP_STATUS_SUCCESS) {
+        hc->TolStartGen++;
+        if (!hcdResumeContained(hc) &&
+            XhciResumeController(&hc->Hc) != MP_STATUS_SUCCESS) {
             hc->ResumeFailures++;
             HcdControllerFail(hc);
         }

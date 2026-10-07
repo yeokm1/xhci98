@@ -51,6 +51,7 @@
  */
 
 #include "xhci_xfer.h"
+#include "xhci_tol.h"
 
 /* ------------------------------------------------------------------ */
 /* 6-A.3: completion codes                                             */
@@ -279,20 +280,30 @@ ULONG XhciXferCodeInfo(ULONG completionCode, PXHCI_XFER_CODE info)
      * resolve, and offering it a zero would land on the ring's base - and not
      * because it belongs to the command ring.
      *
-     * Refusing it means nothing *here* acts on it. Recovery is not absent, it is
-     * **delayed**: the TD stays queued until usbport's timeout, and the Stop
-     * Endpoint that cancellation issues reads the Endpoint Context back, finds
-     * it Disabled - which is the condition code 12 reports - and takes
-     * `xhciEpStopped`'s Disabled branch, which raises `XHCI_EPQ_NO_CONTEXT` and
-     * owes the Configure Endpoint that puts the context back. That is a
-     * deliberate deviation with its reasons and its reopening measurement in
-     * docs/contributing/implementation-invariants.md, "Fatal Errors"; audit
-     * round 10 corrected an earlier wording of it that said nothing recovered.
+     * Refusing it means nothing *here* acts on it: nothing is retired and no
+     * transfer completes on it. The miniport leaned on usbport's URB timeout
+     * and the Stop Endpoint its cancellation issued; the HCD has no usbport and
+     * no client timeout, so the caller takes the refusal itself (design record
+     * 17 section 4.3, roadmap-hcd 35-T.3): a refused code on a non-isochronous
+     * endpoint of a device cycles the device (hcd_dev.c,
+     * XhciSlotTransferEvent; hcd_enum.c), whose Disable Slot takes back every
+     * TRB of the slot. That supersedes the deviation recorded in
+     * docs/contributing/implementation-invariants.md, "Fatal Errors".
      */
     default:
         break;
     }
     return XHCI_XFER_BAD_PARAM;
+}
+
+/* xhci_xfer.h. The table decides, as the restore's drain asks it to: no
+ * list of codes here. */
+ULONG XhciXferSlotFatal(ULONG completionCode)
+{
+    XHCI_XFER_CODE info;
+
+    return (XhciXferCodeInfo(completionCode, &info) == XHCI_XFER_OK &&
+            info.SlotFatal != 0) ? 1UL : 0UL;
 }
 
 /* ------------------------------------------------------------------ */
@@ -904,6 +915,11 @@ ULONG XhciXferSubmitNormal(PXHCI_TRANSFER_QUEUE queue,
      * extension is not assumed zeroed, so it is written here rather than left
      * to whatever the previous transfer through this storage put in it. */
     transfer->ShortTrbPA = 0;
+    /* 35-T.2: the retry bound is the TD's, so a new TD starts it afresh. */
+    transfer->RetryCount = 0;
+    transfer->RetryEventPA = 0;
+    transfer->RetryEventDw2 = 0;
+    transfer->RetryEventDw3 = 0;
 
     if (queue->Tail != NULL) {
         queue->Tail->Next = transfer;
@@ -978,6 +994,14 @@ VOID XhciXferQueueInit(PXHCI_TRANSFER_QUEUE queue)
     queue->IsoMissedService = 0;
     queue->IsoGroupsAwaitingTail = 0;
     queue->IsoTailEvents = 0;
+    /* 35-T.2: out of scope until the device layer says otherwise, and no
+     * request left from a queue this storage held before. */
+    queue->RetryScope = 0;
+    queue->RetryGen = 0;
+    queue->RetryWanted = 0;
+    queue->RetryToken = 0;
+    queue->RetryReplay = 0;
+    queue->RetryDiverts = 0;
 }
 
 /*
@@ -1240,6 +1264,11 @@ ULONG XhciXferSubmitControl(PXHCI_TRANSFER_QUEUE queue,
      * extension is not assumed zeroed, so it is written here rather than left
      * to whatever the previous transfer through this storage put in it. */
     transfer->ShortTrbPA = 0;
+    /* 35-T.2: the retry bound is the TD's, so a new TD starts it afresh. */
+    transfer->RetryCount = 0;
+    transfer->RetryEventPA = 0;
+    transfer->RetryEventDw2 = 0;
+    transfer->RetryEventDw3 = 0;
 
     if (queue->Tail != NULL) {
         queue->Tail->Next = transfer;
@@ -1795,6 +1824,12 @@ static VOID xhciXferFinishGroup(PXHCI_TRANSFER_QUEUE queue,
         if (walk->Flags & XHCI_XFER_FLAG_SHORT_DEFERRED) {
             walk->Flags &= ~XHCI_XFER_FLAG_SHORT_DEFERRED;
             queue->MidTdShortRetires++;
+            /* 35-T.2: a retried TD that ended short and is settled by its
+             * successor's event came back through the retry too. */
+            if (walk->RetryCount != 0 &&
+                !(walk->Flags & XHCI_XFER_FLAG_FAILED)) {
+                result->RetryRecovered++;
+            }
         } else {
             walk->UsbdStatus = XHCI_USBD_STATUS_INTERNAL_HC_ERROR;
             walk->Flags |= XHCI_XFER_FLAG_FAILED;
@@ -1810,6 +1845,9 @@ static VOID xhciXferFinishGroup(PXHCI_TRANSFER_QUEUE queue,
     queue->Completed += result->CompletedCount;
     if (owner->Flags & XHCI_XFER_FLAG_FAILED) {
         queue->Errors++;
+    } else if (owner->RetryCount != 0) {
+        /* 35-T.2: a TD that came back through the soft retry. */
+        result->RetryRecovered++;
     }
 
     /*
@@ -1873,6 +1911,12 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
     result->NeedsRecovery = 0;
     result->RefusedRetire = 0;
     result->Fatal = 0;
+    result->RetryDiverted = 0;
+    result->RetryExhausted = 0;
+    result->RetryRecovered = 0;
+    result->Code = 0;
+    result->Refused = 0;
+    result->Unattributed = 0;
 
     if (queue == NULL || ring == NULL) {
         return XHCI_XFER_BAD_PARAM;
@@ -1911,17 +1955,19 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
 
     completionCode = XHCI_TRB_GET_COMPLETION(eventDw2);
     residual = XHCI_TRB_GET_RESIDUAL(eventDw2);
+    result->Code = completionCode;
 
     if (XhciXferCodeInfo(completionCode, &code) != XHCI_XFER_OK) {
         /*
          * An unassigned code, or one Table 6-90 gives to another event family.
          * Nothing here knows what the controller did with the TRBs, so nothing
-         * is retired and no transfer is completed on it: the visible failure is
-         * the counter plus usbport's own URB timeout, which is armed on every
-         * SubmitTransfer that returned success. Treating it as success is the
-         * one option that loses data silently.
+         * is retired and no transfer is completed on it: the counter and
+         * `Refused` say so, and the caller decides (35-T.3: the device is
+         * cycled, its Disable Slot taking the TRBs back; hcd_dev.c). Treating
+         * it as success is the one option that loses data silently.
          */
         queue->BadCodes++;
+        result->Refused = 1;
         return XHCI_XFER_OK;
     }
     if (code.Fatal) {
@@ -1951,6 +1997,7 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
         /* Zero (an error the xHC could not attribute to a TRB, 4.11.3.1) or an
          * address on another ring; the RsvdZ low bits were masked above. */
         queue->ForeignEvents++;
+        result->Unattributed = 1;
         return XHCI_XFER_OK;
     }
 
@@ -1969,6 +2016,7 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
          * events for a transfer already completed. Expected, not an error
          * (docs/contributing/implementation-invariants.md, "Completion Matching"). */
         queue->UnmatchedEvents++;
+        result->Unattributed = 1;
         /* One of those trailing events is the second half of the mid-TD
          * departure taken below, and recognising it is the only thing that
          * distinguishes a conforming controller from QEMU's one-event xHC. */
@@ -1977,6 +2025,39 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
         }
         return XHCI_XFER_OK;
     }
+
+    /*
+     * The soft retry (35-T.2, design record 17 section 4.2), here because
+     * this is the first point the event has a TD and the last before any of
+     * that TD's terminal mutations below - the length fixed, the failure
+     * latched, the retirement. Only the head is diverted: a TD with
+     * predecessors would have them swept, and that is today's path. A
+     * diverted TD is left exactly as it was; the event is kept whole on it
+     * (the pointer as masked above, so a replay counts no reserved bit
+     * twice) for the thread's replay, which comes back through here with
+     * `RetryReplay` set and is not diverted again. Any other event the TD
+     * meets ends its deferred outcome, none of which was ever applied.
+     */
+    if (!queue->RetryReplay) {
+        if (XhciTolRetryDivert(queue->RetryScope, completionCode,
+                               ahead == 0 ? 1UL : 0UL, owner->RetryCount)) {
+            owner->RetryCount++;
+            owner->RetryEventPA = eventTrbPA;
+            owner->RetryEventDw2 = eventDw2;
+            owner->RetryEventDw3 = eventDw3;
+            owner->Flags |= XHCI_XFER_FLAG_RETRY_DEFERRED;
+            queue->RetryGen++;
+            queue->RetryToken = owner->Token;
+            queue->RetryWanted = 1;
+            queue->RetryDiverts++;
+            result->RetryDiverted = 1;
+            return XHCI_XFER_OK;
+        }
+        result->RetryExhausted =
+            XhciTolRetryExhausted(queue->RetryScope, completionCode,
+                                  ahead == 0 ? 1UL : 0UL, owner->RetryCount);
+    }
+    owner->Flags &= ~XHCI_XFER_FLAG_RETRY_DEFERRED;
 
     /* Snapshotted **before** anything below sets it, because two decisions rest
      * on "had this transfer already been measured when this event arrived": the
@@ -2441,6 +2522,88 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
     return XHCI_XFER_OK;
 }
 
+/* IRQL: any; the caller holds the controller lock. */
+ULONG XhciXferEventHighRefused(PXHCI_TRANSFER_QUEUE queue, ULONG eventDw3,
+                               ULONG eventTrbPAHigh)
+{
+    if (eventTrbPAHigh == 0 || XHCI_EVENT_IS_EVENT_DATA(eventDw3)) {
+        return 0;
+    }
+    if (queue != NULL) {
+        queue->ForeignEvents++;
+    }
+    return 1;
+}
+
+/* 35-T.2, the thread's half (xhci_xfer.h). IRQL: any; the caller holds the
+ * controller lock. */
+ULONG XhciXferRetryPending(const XHCI_TRANSFER_QUEUE *queue,
+                           ULONG *token, ULONG *gen)
+{
+    if (queue == NULL || !queue->RetryWanted) {
+        return 0;
+    }
+    if (token != NULL) {
+        *token = queue->RetryToken;
+    }
+    if (gen != NULL) {
+        *gen = queue->RetryGen;
+    }
+    return 1;
+}
+
+ULONG XhciXferRetryHeadIs(const XHCI_TRANSFER_QUEUE *queue, ULONG token)
+{
+    return (queue != NULL && queue->Head != NULL &&
+            queue->Head->Token == token &&
+            (queue->Head->Flags & XHCI_XFER_FLAG_RETRY_DEFERRED) != 0)
+               ? 1UL : 0UL;
+}
+
+ULONG XhciXferRetryReplay(PXHCI_TRANSFER_QUEUE queue,
+                          PXHCI_RING ring,
+                          ULONG slotId,
+                          ULONG dci,
+                          ULONG token,
+                          PXHCI_XFER_EVENT_RESULT result)
+{
+    PXHCI_TRANSFER td;
+
+    if (result == NULL) {
+        return 0;
+    }
+    result->Action = XHCI_XFER_ACTION_NONE;
+    result->Completed = NULL;
+    result->CompletedCount = 0;
+    result->NeedsRecovery = 0;
+    result->RefusedRetire = 0;
+    result->Fatal = 0;
+    result->RetryDiverted = 0;
+    result->RetryExhausted = 0;
+    result->RetryRecovered = 0;
+    result->Code = 0;
+    result->Refused = 0;
+    result->Unattributed = 0;
+    if (ring == NULL || !XhciXferRetryHeadIs(queue, token)) {
+        return 0;
+    }
+    td = queue->Head;
+    queue->RetryReplay = 1;
+    (VOID)XhciXferEvent(queue, ring, slotId, dci, td->RetryEventPA,
+                        td->RetryEventDw2, td->RetryEventDw3, result);
+    queue->RetryReplay = 0;
+    return 1;
+}
+
+ULONG XhciXferRetryClear(PXHCI_TRANSFER_QUEUE queue, ULONG gen)
+{
+    if (queue == NULL || !queue->RetryWanted || queue->RetryGen != gen) {
+        return 0;
+    }
+    queue->RetryWanted = 0;
+    return 1;
+}
+
 /*
  * Task 9-0.2. A drain pass has emptied the event ring; settle the head-most
  * transfer still waiting for a tail that will now never come.
@@ -2498,6 +2661,12 @@ ULONG XhciXferDrainSettled(PXHCI_TRANSFER_QUEUE queue,
     result->NeedsRecovery = 0;
     result->RefusedRetire = 0;
     result->Fatal = 0;
+    result->RetryDiverted = 0;
+    result->RetryExhausted = 0;
+    result->RetryRecovered = 0;
+    result->Code = 0;
+    result->Refused = 0;
+    result->Unattributed = 0;
 
     if (queue == NULL || ring == NULL) {
         return XHCI_XFER_BAD_PARAM;
@@ -3373,6 +3542,11 @@ ULONG XhciXferSubmitIso(PXHCI_TRANSFER_QUEUE queue,
     transfer->TopoReply = XHCI_TOPO_REPLY_NONE;
     transfer->DescAction = XHCI_DESC_ACT_NONE;
     transfer->ShortTrbPA = 0;
+    /* 35-T.2: the retry bound is the TD's, so a new TD starts it afresh. */
+    transfer->RetryCount = 0;
+    transfer->RetryEventPA = 0;
+    transfer->RetryEventDw2 = 0;
+    transfer->RetryEventDw3 = 0;
     /*
      * Cast away const: the block is usbport's, the two output fields in each
      * entry are the miniport's to write, and this is the pointer they are
@@ -3504,6 +3678,12 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
     result->NeedsRecovery = 0;
     result->RefusedRetire = 0;
     result->Fatal = 0;
+    result->RetryDiverted = 0;
+    result->RetryExhausted = 0;
+    result->RetryRecovered = 0;
+    result->Code = 0;
+    result->Refused = 0;
+    result->Unattributed = 0;
 
     if (queue == NULL || ring == NULL) {
         return XHCI_XFER_BAD_PARAM;

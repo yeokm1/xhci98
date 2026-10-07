@@ -31,7 +31,7 @@ missing value. The owner chose the flag the same day over the unconditional
 for those rows is `keep`, that a later release can never change a default
 on a machine that already holds the old one, and that a machine updated
 straight from `1.2.0.0` keeps that release's `XhciImodInterval250ns` of 500.
-`XhciSelectiveSuspend` (36a.5) joins the same rule when it lands.
+`XhciSelectiveSuspend` (SUSPa.5) joins the same rule when it lands.
 
 All readings 2026-10-05, `release` flavour, development host A:
 

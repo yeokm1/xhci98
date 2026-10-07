@@ -610,7 +610,9 @@ VOID XhciControllerBeginQuiesce(PXHCI_EXTENSION ext)
     /* A DIRQL ISR may decline only after this controller cannot still be the
      * source of the shared level-triggered interrupt. */
     XhciMaskInterrupts(ext);
-    ext->Flags &= ~XHCI_EXT_FLAG_INITIALIZED;
+    /* RS_CONFIRMED with it: no HCH read from here to the next confirmed
+     * run is a controller stopping itself (35-T.6). */
+    ext->Flags &= ~(XHCI_EXT_FLAG_INITIALIZED | XHCI_EXT_FLAG_RS_CONFIRMED);
     XhciControllerLockRelease(ext, oldIrql);
 }
 
@@ -676,6 +678,10 @@ ULONG XhciControllerHealthPoll(PXHCI_EXTENSION ext)
      */
     XhciPollClockAdvance(ext);
     usbsts = XhciReadOp(ext, XHCI_OP_USBSTS);
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* 35-T.9's all-ones, met here at every XhciTolerance value (hcd_inj.c). */
+    usbsts = HcdInjHealthUsbsts(ext, usbsts);
+#endif
     ext->LastCheckStatus = usbsts;
 
     if (usbsts == 0xFFFFFFFFUL) {
@@ -724,6 +730,31 @@ ULONG XhciControllerHealthPoll(PXHCI_EXTENSION ext)
             ext->FatalStatusDetected++;
             escalate = 1;
             XHCI_DBG_VALUE("check: FATAL controller status, USBSTS", usbsts);
+        }
+    } else if (XhciTolHchRecover(
+                   ext->Tol.Stats.Tolerance,
+                   (usbsts & XHCI_USBSTS_HCH) != 0 ? 1UL : 0UL,
+                   (ext->Flags & (XHCI_EXT_FLAG_RS_CONFIRMED |
+                                  XHCI_EXT_FLAG_SUSPENDED)) ==
+                       XHCI_EXT_FLAG_RS_CONFIRMED ? 1UL : 0UL)) {
+        /*
+         * 35-T.6 (design record 17 section 4.6): HCH on a controller admitted
+         * above (initialized, not failed), not suspended, whose R/S this
+         * driver wrote 1 and then saw HCH clear for (RS_CONFIRMED). Not
+         * RUNNING: that is set before the R/S write, so a resume's run step
+         * - INITIALIZED already up, HCH not yet clear - would read as a
+         * halt. A stop, a suspend and the in-place recovery each take
+         * RS_CONFIRMED down under this lock before they write R/S 0
+         * (XhciControllerBeginQuiesce, and every R/S 0 write), so such a
+         * read is the controller stopping itself. The same request as HCE
+         * and HSE, behind the same latch.
+         */
+        if (!ext->ControllerFatal) {
+            ext->ControllerFatal = 1;
+            ext->Tol.Stats.HchRecoveries++;
+            escalate = 1;
+            XhciLogNoteLocked(ext, "ctrl.hch", usbsts);
+            XHCI_DBG_VALUE("check: controller halted itself, USBSTS", usbsts);
         }
     }
 
@@ -847,43 +878,6 @@ ULONG XhciControllerHealthPoll(PXHCI_EXTENSION ext)
             }
         }
     }
-
-#ifdef XHCI_FIX_EVT_REARM
-    /*
-     * **EXPERIMENTAL, bench candidate W8 for Finding 3.** Built only under the
-     * define; no shipping flavour carries it.
-     *
-     * **The upstream half of "usbport was never told".** W7 forces the root-hub
-     * *announcement* gate, and is inert if no change was ever latched to
-     * announce. This covers the case where nothing is latched because **no event
-     * arrives at all**: EHB left set, so the xHC will not raise IP again
-     * (4.17.5 p.270), or IMAN.IE lost. Either silences the interrupter, and a
-     * silenced interrupter delivers no Port Status Change Events - so a connect
-     * is never seen, never latched, never announced, and nothing appears in
-     * Device Manager. Machine-wide, because one interrupter serves the whole
-     * controller.
-     *
-     * It also explains why the health poll keeps running while everything else
-     * stops: usbport drives this on its own timer, not on our interrupts.
-     *
-     * So re-publish the dequeue pointer with **EHB clear** and re-arm the
-     * interrupter, every poll, unconditionally. `XhciRearmInterrupter` carries
-     * the operand validation, read-back and bounded retry a raw write would
-     * skip.
-     *
-     * **Why clearing EHB here is not the mid-drain hazard `xhciPublishErdp`
-     * warns about**: that hazard is an intermediate write *during* a drain,
-     * which would let the interrupter fire into a drain already in progress.
-     * This runs under the controller lock, and the DPC drains to completion
-     * under that same lock, so no drain is in flight here.
-     *
-     * **A RECOVERY candidate, like W7**: if delivery was stalled, it restarts
-     * and the machine comes back on its own, with no cold boot.
-     */
-    XhciWrite64(ext, ext->HcInfo.RuntimeOffset + XHCI_RT_IR0 + XHCI_IR_ERDP,
-                XhciEventRingErdpValue(&ext->EventRing, 1));
-    (VOID)XhciRearmInterrupter(ext);
-#endif
 
     XhciControllerLockRelease(ext, oldIrql);
 

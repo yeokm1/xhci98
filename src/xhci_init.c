@@ -743,6 +743,16 @@ static ULONG xhciBuildPortMap(PXHCI_EXTENSION ext, ULONG afterReset)
     if (status != XHCI_CAPS_OK) {
         return xhciPortMapRefused(ext, afterReset, status);
     }
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Task 35.4: both parses alike, so the comparison below still holds. */
+    if (HcdSvcQemuPsiE460(ext)) {
+        ULONG groups;
+
+        groups = XhciPortMapOverridePsi(map, 3, XhciQemuPsiE460,
+                                        XHCI_QEMU_PSI_E460_COUNT);
+        XHCI_DBG_VALUE("port map: qemu E460 PSI table, USB 3 groups", groups);
+    }
+#endif
 
     /*
      * A controller whose capability chain names no port at all leaves nothing
@@ -899,7 +909,8 @@ static ULONG xhciHalt(PXHCI_EXTENSION ext)
     }
     if ((usbsts & XHCI_USBSTS_HCH) != 0) {
         (VOID)XhciControllerUpdateFlags(
-            ext, XHCI_EXT_FLAG_RUNNING | XHCI_EXT_FLAG_HW_RUNNING, 0);
+            ext, XHCI_EXT_FLAG_RUNNING | XHCI_EXT_FLAG_HW_RUNNING |
+                     XHCI_EXT_FLAG_RS_CONFIRMED, 0);
         return 1;
     }
 
@@ -910,6 +921,7 @@ static ULONG xhciHalt(PXHCI_EXTENSION ext)
      * set up by firmware, aimed at memory this driver does not own - has no
      * useful outcome.
      */
+    (VOID)XhciControllerUpdateFlags(ext, XHCI_EXT_FLAG_RS_CONFIRMED, 0);
     if (!xhciWriteUsbCmd(ext, 0)) {
         return 0;
     }
@@ -932,7 +944,8 @@ static ULONG xhciHalt(PXHCI_EXTENSION ext)
          * driver's R/S ownership, which is what xhciUnpowerPorts reads.)
          */
         (VOID)XhciControllerUpdateFlags(
-            ext, XHCI_EXT_FLAG_RUNNING | XHCI_EXT_FLAG_HW_RUNNING, 0);
+            ext, XHCI_EXT_FLAG_RUNNING | XHCI_EXT_FLAG_HW_RUNNING |
+                     XHCI_EXT_FLAG_RS_CONFIRMED, 0);
     }
     return halted;
 }
@@ -981,6 +994,7 @@ static ULONG xhciReset(PXHCI_EXTENSION ext)
      * and the read value came from firmware - but the write still goes through
      * xhciWriteUsbCmd, because RsvdP is a rule about the write rather than
      * about what the register ends up holding. */
+    (VOID)XhciControllerUpdateFlags(ext, XHCI_EXT_FLAG_RS_CONFIRMED, 0);
     if (!xhciWriteUsbCmd(ext, XHCI_USBCMD_HCRST)) {
         return 0;
     }
@@ -1359,6 +1373,7 @@ static ULONG xhciRunController(PXHCI_EXTENSION ext, ULONG *usbstsOut)
      * exception is the refusal immediately below, which is the case where
      * nothing was written at all.
      */
+    (VOID)XhciControllerUpdateFlags(ext, XHCI_EXT_FLAG_RS_CONFIRMED, 0);
     previous = XhciControllerUpdateFlags(ext, 0, XHCI_EXT_FLAG_RUNNING);
     if (!xhciWriteUsbCmd(ext, XHCI_USBCMD_RS)) {
         /*
@@ -1411,6 +1426,9 @@ static ULONG xhciRunController(PXHCI_EXTENSION ext, ULONG *usbstsOut)
         return 0;
     }
 
+    /* Only now may a later HCH read as the controller stopping itself
+     * (XHCI_EXT_FLAG_RS_CONFIRMED). */
+    (VOID)XhciControllerUpdateFlags(ext, 0, XHCI_EXT_FLAG_RS_CONFIRMED);
     return 1;
 }
 
@@ -1976,6 +1994,33 @@ static ULONG xhciWantPortPower(const XHCI_PORT_MAP *map,
 }
 
 /*
+ * The policy above, with controller tolerance's unpowered holds (35-T.5,
+ * design record 17 section 4.5) taken out of a start's assertions: a root
+ * port held unpowered - its repowers spent, or its over-current never
+ * cleared - keeps the hold across an in-place recovery and a resume, which
+ * initialize the controller without a start (only a start's XhciTolStart
+ * releases it). HCRST has just asserted PP everywhere, so such a port is
+ * wanted off: never asserted or waited for, and deasserted with the
+ * deassertions, after the assertions are confirmed as the VBus argument
+ * below requires, and confirmed with them. Nothing at XhciTolerance 0 or
+ * without port power control; at a start no hold is left.
+ */
+static ULONG xhciWantPortPowerExt(PXHCI_EXTENSION ext, ULONG port,
+                                  ULONG phase)
+{
+    ULONG want;
+
+    want = xhciWantPortPower(&ext->PortMap, port, phase);
+    if (want == XHCI_PP_WANT_ON && phase == XHCI_PP_PHASE_START &&
+        ext->Tol.Stats.Tolerance && ext->HcInfo.Ppc &&
+        port >= 1 && port <= XHCI_TOL_ROOT_PORTS &&
+        XhciTolLocUnpowered(&ext->Tol.RootLoc[port - 1])) {
+        return XHCI_PP_WANT_OFF;
+    }
+    return want;
+}
+
+/*
  * Drive one port's PP to `want`, and report whether that took a write.
  *
  * The read-first is not an optimisation. A Root Hub port comes out of HCRST in
@@ -2067,7 +2112,7 @@ static ULONG xhciDrivePortPower(PXHCI_EXTENSION ext, ULONG port, ULONG want)
  * `ext->InitBelowPassive` set (task 13-R.1), where the delay is a stall.
  */
 /* How many ports of one class this driver wants PP written to. */
-static ULONG xhciCountPortsWanting(const XHCI_PORT_MAP *map,
+static ULONG xhciCountPortsWanting(PXHCI_EXTENSION ext,
                                    ULONG want,
                                    ULONG phase)
 {
@@ -2075,8 +2120,8 @@ static ULONG xhciCountPortsWanting(const XHCI_PORT_MAP *map,
     ULONG n;
 
     n = 0;
-    for (port = 1; port <= map->PortCount; port++) {
-        if (xhciWantPortPower(map, port, phase) == want) {
+    for (port = 1; port <= ext->PortMap.PortCount; port++) {
+        if (xhciWantPortPowerExt(ext, port, phase) == want) {
             n++;
         }
     }
@@ -2134,7 +2179,7 @@ static ULONG xhciSettlePortPower(PXHCI_EXTENSION ext,
         reached = 0;
         pending = 0;
         for (port = 1; port <= map->PortCount; port++) {
-            if (xhciWantPortPower(map, port, phase) != want) {
+            if (xhciWantPortPowerExt(ext, port, phase) != want) {
                 continue;
             }
             portsc = XhciReadPortsc(ext, port);
@@ -2167,14 +2212,14 @@ static VOID xhciPowerPorts(PXHCI_EXTENSION ext)
     ULONG superSpeed;
 
     map = &ext->PortMap;
-    managed = xhciCountPortsWanting(map, XHCI_PP_WANT_ON,
+    managed = xhciCountPortsWanting(ext, XHCI_PP_WANT_ON,
                                     XHCI_PP_PHASE_START);
-    superSpeed = xhciCountPortsWanting(map, XHCI_PP_WANT_OFF,
+    superSpeed = xhciCountPortsWanting(ext, XHCI_PP_WANT_OFF,
                                        XHCI_PP_PHASE_START);
 
     asserted = 0;
     for (port = 1; port <= map->PortCount; port++) {
-        if (xhciWantPortPower(map, port, XHCI_PP_PHASE_START) ==
+        if (xhciWantPortPowerExt(ext, port, XHCI_PP_PHASE_START) ==
             XHCI_PP_WANT_ON) {
             asserted += xhciDrivePortPower(ext, port, XHCI_PP_WANT_ON);
         }
@@ -2204,7 +2249,7 @@ static VOID xhciPowerPorts(PXHCI_EXTENSION ext)
                             asserted > 0 ? XHCI_PORT_POWER_SETTLE_MS : 0);
 
     for (port = 1; port <= map->PortCount; port++) {
-        if (xhciWantPortPower(map, port, XHCI_PP_PHASE_START) ==
+        if (xhciWantPortPowerExt(ext, port, XHCI_PP_PHASE_START) ==
             XHCI_PP_WANT_OFF) {
             (VOID)xhciDrivePortPower(ext, port, XHCI_PP_WANT_OFF);
         }
@@ -2264,7 +2309,7 @@ static VOID xhciUnpowerPorts(PXHCI_EXTENSION ext)
     ULONG usbsts;
 
     map = &ext->PortMap;
-    wanted = xhciCountPortsWanting(map, XHCI_PP_WANT_OFF,
+    wanted = xhciCountPortsWanting(ext, XHCI_PP_WANT_OFF,
                                    XHCI_PP_PHASE_TEARDOWN);
     if (wanted == 0) {
         return;
@@ -2320,7 +2365,7 @@ static VOID xhciUnpowerPorts(PXHCI_EXTENSION ext)
      * a hazard to sequence around.
      */
     for (port = 1; port <= map->PortCount; port++) {
-        if (xhciWantPortPower(map, port, XHCI_PP_PHASE_TEARDOWN) ==
+        if (xhciWantPortPowerExt(ext, port, XHCI_PP_PHASE_TEARDOWN) ==
             XHCI_PP_WANT_OFF) {
             (VOID)xhciDrivePortPower(ext, port, XHCI_PP_WANT_OFF);
         }
@@ -3051,6 +3096,21 @@ static ULONG xhciSaveState(PXHCI_EXTENSION ext)
     }
 
     /*
+     * **Never on a failed controller.** HCH proves the xHC stopped executing,
+     * but CSS starts memory writes while it is halted: with FSC it flushes the
+     * cached Slot, Endpoint and Stream Contexts (5.4.1, Table 5-20, p.361).
+     * A latched-failed controller's devices may already have been dropped
+     * without a Disable Slot (hcd_ctl.c, hcdTerminalRelease) and their
+     * stream-context buffers freed while its slots stay enabled, so a save
+     * would write into memory the driver gave back. Only the HCRST of a
+     * recovery or a start retires those slots, and either clears the latch.
+     */
+    if (XhciTolSaveRefused(ext->ControllerFailed)) {
+        XHCI_DBG_TEXT("save: declined - the controller is latched failed");
+        return 0;
+    }
+
+    /*
      * FSC, before anything is read or written. See the header: without it the
      * driver cannot make the saved image complete, and this is the earliest
      * point at which that is knowable - HcInfo was decoded at start time.
@@ -3143,6 +3203,24 @@ static ULONG xhciSaveState(PXHCI_EXTENSION ext)
             return 0;
         }
     }
+    /*
+     * **The table above is the miniport's, and the HCD never fills it**: the
+     * start zeroes the extension, so every entry reads FREE and the loop
+     * passes whatever is queued. The HCD's own queues are the real answer,
+     * and the same rule applies to them - declined while any transfer is
+     * anywhere between submission and completion (mapping, held, waiting
+     * or on a ring), so the resume reinitializes and the invalidation that
+     * follows completes it, rather than a restore discarding its completion
+     * (XhciEventDiscardStale) and leaving the request pending. A bus with
+     * nothing outstanding saves as before. A transfer published after this
+     * check - a submission, or a mapping completing - spoils the image
+     * instead (XhciSlotSaveCommit below, XhciSlotSaveSpoiled at the
+     * resume): nothing blocks, and no new admission is closed.
+     */
+    if (XhciSlotSaveBusy(ext)) {
+        XHCI_DBG_TEXT("save: declined - a transfer is outstanding");
+        return 0;
+    }
 
     /*
      * Step 2 of the same procedure: "Ensure that the Command Ring is in the
@@ -3226,7 +3304,13 @@ static ULONG xhciSaveState(PXHCI_EXTENSION ext)
         return 0;
     }
 
-    ext->SavedStateValid = 1;
+    /* Committed under the controller lock, and only if no transfer was
+     * published since the gate above armed: a mapping that completed after
+     * it, or a submission, wrote a ring the image may not describe. */
+    if (!XhciSlotSaveCommit(ext)) {
+        XHCI_DBG_TEXT("save: discarded - a transfer was published meanwhile");
+        return 0;
+    }
     XHCI_DBG_VALUE("save: state saved, USBSTS", ext->LastSaveRestoreStatus);
     return 1;
 }
@@ -3308,6 +3392,11 @@ static ULONG xhciRestoreState(PXHCI_EXTENSION ext)
      * would be a restore with no save behind it.
      */
     ext->SavedStateValid = 0;
+    /* Nor CRS on a failed controller, for xhciSaveState's reason: the
+     * image would bring back slots whose buffers may have been given back. */
+    if (XhciTolSaveRefused(ext->ControllerFailed)) {
+        return 0;
+    }
 
     usbsts = XhciReadOp(ext, XHCI_OP_USBSTS);
     if (usbsts == 0xFFFFFFFFUL || (usbsts & XHCI_USBSTS_HCH) == 0) {
@@ -3767,6 +3856,14 @@ MPSTATUS XhciResumeController(PXHCI_EXTENSION ext)
             if (!xhciRunController(ext, &usbsts)) {
                 XHCI_DBG_VALUE("ResumeController: restored but would not run, "
                                "USBSTS", usbsts);
+                restored = 0;
+            } else if (XhciSlotSaveSpoiled(ext)) {
+                /* A TD was published since the save, its doorbell dropped
+                 * by the halted controller and not rung again here: the
+                 * reinitialization below completes it, as after any
+                 * failed restore. */
+                XHCI_DBG_TEXT("ResumeController: restored over a transfer "
+                              "published since the save, reinitializing");
                 restored = 0;
             }
         }
@@ -4278,7 +4375,8 @@ ULONG XhciQuiesceController(PXHCI_EXTENSION ext)
             return 0;
         }
         (VOID)XhciControllerUpdateFlags(
-            ext, XHCI_EXT_FLAG_RUNNING | XHCI_EXT_FLAG_HW_RUNNING, 0);
+            ext, XHCI_EXT_FLAG_RUNNING | XHCI_EXT_FLAG_HW_RUNNING |
+                     XHCI_EXT_FLAG_RS_CONFIRMED, 0);
         return 1;
     }
 
@@ -4295,6 +4393,7 @@ ULONG XhciQuiesceController(PXHCI_EXTENSION ext)
      * is worth nothing if the write then re-reads and takes RsvdP from a window
      * that died in between.
      */
+    (VOID)XhciControllerUpdateFlags(ext, XHCI_EXT_FLAG_RS_CONFIRMED, 0);
     xhciWriteUsbCmdFrom(ext, usbcmd, 0);
 
     if (!XhciWaitForBits(ext, ext->HcInfo.OperationalOffset + XHCI_OP_USBSTS,
@@ -4316,12 +4415,14 @@ ULONG XhciQuiesceController(PXHCI_EXTENSION ext)
             return 0;
         }
         (VOID)XhciControllerUpdateFlags(
-            ext, XHCI_EXT_FLAG_RUNNING | XHCI_EXT_FLAG_HW_RUNNING, 0);
+            ext, XHCI_EXT_FLAG_RUNNING | XHCI_EXT_FLAG_HW_RUNNING |
+                     XHCI_EXT_FLAG_RS_CONFIRMED, 0);
         return 1;
     }
 
     (VOID)XhciControllerUpdateFlags(
-        ext, XHCI_EXT_FLAG_RUNNING | XHCI_EXT_FLAG_HW_RUNNING, 0);
+        ext, XHCI_EXT_FLAG_RUNNING | XHCI_EXT_FLAG_HW_RUNNING |
+                 XHCI_EXT_FLAG_RS_CONFIRMED, 0);
     XHCI_DBG_VALUE("quiesce: halted, USBSTS", usbsts);
     return 1;
 }

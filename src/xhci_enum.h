@@ -51,6 +51,14 @@
 #define XHCI_ENUM_EV_PDO_CREATED   7UL  /* Ok                              */
 #define XHCI_ENUM_EV_PDO_STARTED   8UL
 #define XHCI_ENUM_EV_PDO_REMOVED   9UL
+/* ABANDONED_FOR_CYCLE (task 35-T.3; design record 17 section 4.3): a
+ * control transfer of the attempt was abandoned, or its device marked, for
+ * a device cycle. Not a failure: no Failed, so no retry, and no step's
+ * ordinary continuation - a tolerated BOS failure's configuration read
+ * among them. Everything the port holds goes as on a disconnect, and the
+ * machine is left Empty (Gone where a PDO exists), where the caller's
+ * pre-PDO cycle may feed it a CONNECT. Empty and Gone ignore it. */
+#define XHCI_ENUM_EV_ABANDONED     10UL
 
 /* Actions. */
 #define XHCI_ENUM_ACT_NONE          0UL
@@ -245,6 +253,115 @@ ULONG XhciEnumLetGo(ULONG listed, ULONG reported, ULONG removeReceived);
  * `parentSerial`: its own children, never one PnP let go of. */
 ULONG XhciEnumAnswerCarries(ULONG parentSerial, ULONG answering,
                             ULONG letGo);
+
+/*
+ * A root port's enumeration notes (task 35.3; issue 11 section 7). 35.0's
+ * dumps showed a trained link and no slot, and nothing in the log said why:
+ * the cause had to be inferred from the code and an offset table built by
+ * hand. These shipping XhciLogNote records name it, in every flavour, from
+ * XhciLogVerbosity 2. Root ports only; one value per note, packed by the
+ * functions below so the host suite checks every layout (test\test_enum.c).
+ * Every field is masked to its width; the port is the xHCI port number.
+ *
+ *   enum.port.look   an inspection that fed the machine, wrote a warm reset
+ *                    or gave the link up, or found the machine Failed
+ *                    (once, until something is fed again):
+ *                      31:24 port         23:20 machine state before it
+ *                      19:16 link action (XHCI_LINK_ACT_*)
+ *                      15:14 feed (bit 14 DISCONNECT, bit 15 CONNECT)
+ *                      13:7  PORTSC change bits 23:17 (CSC at bit 7)
+ *                      6:3   PORTSC PLS   2 PR   1 PED   0 CCS
+ *   enum.port.reset  a reset's result:
+ *                      31:24 port   23 ok   22:16 attempt (0 the first)
+ *                      15:0  PORTSC bits 15:0 as the reset left it (speed
+ *                            at 13:10, PLS at 8:5, PED, CCS)
+ *   enum.port.speed  the raw speed ID and what it decoded to:
+ *                      31:24 port   23:16 raw PSIV
+ *                      15:8  class (XHCI_SPEED_*, 0 unknown)
+ *                      7:0   source (XHCI_PSI_SOURCE_*: 1 listed in the
+ *                            PSI table, 2 the defaults of a group with no
+ *                            table, 3 the USB 3 fallback of task 35.1)
+ *   enum.port.rate   the rate that ID means:
+ *                      31:24 port   23 SuperSpeedPlus
+ *                      22:0  units of 100 kbit/s (0 when the group
+ *                            names none; 7FFFFFh for a rate past it)
+ *   enum.port.slot   Enable Slot's completion:
+ *                      31:24 port   23:16 completion code (0 for a command
+ *                            that never completed)
+ *                      15:8  attempt   7:0 Slot ID (0 none kept)
+ *   enum.port.fail   a failed attempt:
+ *                      31:24 port   23:16 cause (XHCI_ENUM_FAIL_*)
+ *                      15:8  attempt   7:0 1 when no retry follows
+ *   enum.port.end    where a run that reset the port left the machine:
+ *                      31:24 port   23:16 state   15:8 cause
+ *                      7:0   retries used
+ *   enum.port.quiet  the port's budget is spent (31:24 port, 7:0 budget):
+ *                    nothing more is noted for it until it enumerates.
+ *
+ * The bound. A burst - one look, or one run of the machine that reset the
+ * port - is charged to the port's budget of XHCI_ENUM_NOTE_BUDGET when it
+ * begins; a run notes at most two attempts of four or five notes each, so a
+ * port costs the 16 KB ring at most some 2.5 KB between enumerations. A
+ * port that enumerates (its PDO created) is given the whole budget back, so
+ * a working port replugged any number of times keeps its notes and only a
+ * port that fails or flaps falls quiet; the bursts it was refused are
+ * counted (Suppressed) and published in the snapshot's HCD region. Thread
+ * only, like the rest of a port's machine.
+ */
+#define XHCI_ENUM_NOTE_BUDGET       8UL
+
+#define XHCI_ENUM_NOTE_NO           0UL /* nothing is noted              */
+#define XHCI_ENUM_NOTE_YES          1UL /* the burst is noted            */
+#define XHCI_ENUM_NOTE_QUIET        2UL /* only enum.port.quiet, once    */
+
+typedef struct _XHCI_ENUM_NOTES {
+    ULONG Used;             /* bursts charged since the last refill, held
+                             * at XHCI_ENUM_NOTE_BUDGET + 1 once quiet  */
+    ULONG Open;             /* the run in progress: 0 not yet charged,
+                             * 1 noted, 2 refused                       */
+    ULONG Suppressed;       /* bursts refused since the start           */
+    ULONG FailedLooked;     /* a look at the Failed machine was noted
+                             * and nothing has been fed since           */
+} XHCI_ENUM_NOTES, *PXHCI_ENUM_NOTES;
+
+/* Clear a port's budget and counts: at a start. */
+VOID XhciEnumNotesInit(PXHCI_ENUM_NOTES notes);
+
+/* Charge one burst. Returns XHCI_ENUM_NOTE_YES while the budget lasts,
+ * XHCI_ENUM_NOTE_QUIET for the first burst past it, and XHCI_ENUM_NOTE_NO
+ * after that; each refusal is counted. */
+ULONG XhciEnumNoteCharge(PXHCI_ENUM_NOTES notes);
+
+/* The port enumerated: the whole budget again. */
+VOID XhciEnumNoteRefill(PXHCI_ENUM_NOTES notes);
+
+/* Whether a look is worth a burst: it fed the machine (`feed`, the
+ * XHCI_LINK_FEED_* bits) or acted on the link (`linkActed`), or it found
+ * the machine Failed (`state`) for the first time since anything was fed -
+ * a trained link whose change events keep coming to a machine that will
+ * not try again is 35.0's case, and one look says so. */
+ULONG XhciEnumNoteWantLook(PXHCI_ENUM_NOTES notes, ULONG state, ULONG feed,
+                           ULONG linkActed);
+
+/* A run of the machine that resets the port: charged once, at its first
+ * reset; returns the charge's answer then and XHCI_ENUM_NOTE_NO at every
+ * later call of the same run. XhciEnumNoteOn says whether the run's notes
+ * are written; XhciEnumNoteFinish ends the run. */
+ULONG XhciEnumNoteBegin(PXHCI_ENUM_NOTES notes);
+ULONG XhciEnumNoteOn(const XHCI_ENUM_NOTES *notes);
+VOID XhciEnumNoteFinish(PXHCI_ENUM_NOTES notes);
+
+/* The packings above, one function a label. */
+ULONG XhciEnumNoteLook(ULONG port, ULONG state, ULONG linkAction,
+                       ULONG feed, ULONG portsc);
+ULONG XhciEnumNoteReset(ULONG port, ULONG ok, ULONG attempt, ULONG portsc);
+ULONG XhciEnumNoteSpeed(ULONG port, ULONG psiv, ULONG speedClass,
+                        ULONG source);
+ULONG XhciEnumNoteRate(ULONG port, ULONG kbps, ULONG plus);
+ULONG XhciEnumNoteSlot(ULONG port, ULONG code, ULONG attempt, ULONG slotId);
+ULONG XhciEnumNoteFail(ULONG port, ULONG cause, ULONG attempt, ULONG final);
+ULONG XhciEnumNoteEnd(ULONG port, ULONG state, ULONG cause, ULONG retries);
+ULONG XhciEnumNoteQuiet(ULONG port);
 
 
 #endif /* XHCI_ENUM_H */

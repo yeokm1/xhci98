@@ -957,6 +957,621 @@ static void test_quick_agrees_with_the_full_run(void)
     }
 }
 
+/* ------------------------------------------------------------------ */
+/* Roadmap task 35.1: the speed tables and the raw xECP chain          */
+/* ------------------------------------------------------------------ */
+
+/* CTRL is large (device records, DMA pointers); keep it off the stack. */
+static CTRL tc;
+
+static void add_proto(u8 major, u8 portoff, u8 portcnt, u8 psic,
+                      const u32 *psi)
+{
+    PROTOCAP *pr = &tc.proto[tc.nproto++];
+    int k;
+
+    pr->major = major;
+    pr->minor = 0;
+    pr->portoff = portoff;
+    pr->portcnt = portcnt;
+    pr->slottype = 0;
+    pr->psic = psic;
+    pr->npsi = psic;
+    for (k = 0; k < (int)psic; k++)
+        pr->psi[k] = psi[k];
+}
+
+/*
+ * The E460's (8086:9D2F) USB 3 protocol as read on 2026-10-06 (roadmap 35.0,
+ * issue 11): PSIC 3, Intel's SSIC rates 1248/2496/4992 Mb/s on IDs 1-3 and no
+ * ID 4. Expected strings transcribed by hand from xHCI 1.2c 7.2.2.1.2: PSIV
+ * 3:0, PSIE 5:4 (2 = Mb/s), PLT 7:6, PFD 8, LP 15:14, PSIM 31:16.
+ */
+static void test_psi_e460_usb3_ssic_table(void)
+{
+    static const u32 u3[3] = { 0x04E00121UL, 0x09C00122UL, 0x13800123UL };
+
+    memset(&tc, 0, sizeof(tc));
+    add_proto(3, 13, 6, 3, u3);
+    reset_out();
+    report_protocols(&tc, qprintf);
+    CHECK(has("  Protocol USB 3.0 @0000: ports 13-18, slot type 0, "
+              "PSIC 3\n"), "E460 USB3: protocol line");
+    CHECK(has("    PSI 04E00121  PSIV  1   1248 Mb/s  symmetric  PFD 1  "
+              "LP 0 (SuperSpeed)\n"), "E460 USB3: SSIC 1248 Mb/s entry");
+    CHECK(has("    PSI 09C00122  PSIV  2   2496 Mb/s  symmetric  PFD 1  "
+              "LP 0 (SuperSpeed)\n"), "E460 USB3: SSIC 2496 Mb/s entry");
+    CHECK(has("    PSI 13800123  PSIV  3   4992 Mb/s  symmetric  PFD 1  "
+              "LP 0 (SuperSpeed)\n"), "E460 USB3: SSIC 4992 Mb/s entry");
+    CHECK(has("  WARNING: USB 3 PSI table does not list PSIV 4 (default "
+              "SuperSpeed). If\n"
+              "    PORTSC reports ID 4 for a 5 Gb/s device, as Sunrise Point "
+              "does, a driver\n"
+              "    that trusts the table strictly cannot decode it "
+              "(issue 11)\n"), "E460 USB3: the issue 11 warning");
+    CHECK(psi_usb3_lacks_ss(&tc.proto[0]) == 1, "E460 USB3: lacks PSIV 4");
+    {
+        const char *s;
+
+        for (s = out; *s != '\0'; ) {
+            const char *eol = strchr(s, '\n');
+            size_t len = eol ? (size_t)(eol - s) : strlen(s);
+
+            CHECK(len <= 79, "E460 USB3: every line fits 80 columns");
+            s += len + (eol ? 1 : 0);
+        }
+    }
+
+    /* A table only partly read (the rest past the mapped window) might hold
+     * ID 4 among the unread entries: no omission is declared. */
+    tc.proto[0].npsi = 2;
+    reset_out();
+    report_protocols(&tc, qprintf);
+    CHECK(psi_usb3_lacks_ss(&tc.proto[0]) == 0, "partial table: no verdict");
+    CHECK(!has("WARNING") && has("(2 of PSIC 3 entries read"),
+          "partial table: the shortfall, not the warning");
+}
+
+/* No warning where it does not apply: a USB 3 table that lists ID 4, a USB 3
+ * protocol with PSIC 0 (QEMU's), and a USB 2 table, whose LP is reserved. */
+static void test_psi_no_warning_cases(void)
+{
+    static const u32 u3ss[4] = {
+        0x04E00121UL, 0x09C00122UL, 0x13800123UL,
+        0x00050134UL    /* PSIV 4, 5 Gb/s, PFD 1, LP 0 */
+    };
+    static const u32 u2[3] = {
+        0x000C0021UL,   /* PSIV 1, 12 Mb/s */
+        0x05DC0012UL,   /* PSIV 2, 1500 Kb/s */
+        0x01E00023UL    /* PSIV 3, 480 Mb/s */
+    };
+
+    memset(&tc, 0, sizeof(tc));
+    add_proto(2, 1, 12, 3, u2);
+    add_proto(3, 13, 6, 4, u3ss);
+    add_proto(3, 0, 0, 0, u3ss);
+    reset_out();
+    report_protocols(&tc, qprintf);
+    CHECK(!has("WARNING"), "PSIV 4 listed, PSIC 0, USB2: no warning");
+    CHECK(has("    PSI 00050134  PSIV  4      5 Gb/s  symmetric  PFD 1  "
+              "LP 0 (SuperSpeed)\n"), "USB3 5 Gb/s entry");
+    CHECK(has("    PSI 000C0021  PSIV  1     12 Mb/s  symmetric  PFD 0  "
+              "LP 0\n"), "USB2 Full Speed entry, no LP name");
+    CHECK(has("    PSI 05DC0012  PSIV  2   1500 Kb/s  symmetric  PFD 0  "
+              "LP 0\n"), "USB2 Low Speed entry in Kb/s");
+    CHECK(has("    PSI 01E00023  PSIV  3    480 Mb/s  symmetric  PFD 0  "
+              "LP 0\n"), "USB2 High Speed entry");
+    CHECK(has("  Protocol USB 3.0 @0000: no ports, slot type 0, PSIC 0\n"),
+          "PSIC 0 protocol line kept");
+    CHECK(psi_usb3_lacks_ss(&tc.proto[0]) == 0, "USB2: never warns");
+    CHECK(psi_usb3_lacks_ss(&tc.proto[1]) == 0, "USB3 with 4: no warning");
+    CHECK(psi_usb3_lacks_ss(&tc.proto[2]) == 0, "USB3 PSIC 0: no warning");
+}
+
+/* The remaining fields: LP 1 (SuperSpeedPlus), both asymmetric PLTs, the
+ * reserved PLT and LP, and b/s. */
+static void test_psi_field_decode(void)
+{
+    static const u32 u3[5] = {
+        0x000A4135UL,   /* PSIV 5, 10 Gb/s, PFD 1, LP 1 */
+        0x000A01B6UL,   /* PSIV 6, 10 Gb/s, PLT 2 asym RX, PFD 1 */
+        0x000A01F7UL,   /* PSIV 7, 10 Gb/s, PLT 3 asym TX, PFD 1 */
+        0x0001C078UL,   /* PSIV 8, 1 Gb/s, PLT 1, LP 3 */
+        0x03E80009UL    /* PSIV 9, 1000 b/s */
+    };
+
+    memset(&tc, 0, sizeof(tc));
+    add_proto(3, 1, 2, 5, u3);
+    reset_out();
+    report_protocols(&tc, qprintf);
+    CHECK(has("    PSI 000A4135  PSIV  5     10 Gb/s  symmetric  PFD 1  "
+              "LP 1 (SuperSpeedPlus)\n"), "LP 1 is SuperSpeedPlus");
+    CHECK(has("    PSI 000A01B6  PSIV  6     10 Gb/s  asym RX    PFD 1  "
+              "LP 0 (SuperSpeed)\n"), "PLT 2 asym RX");
+    CHECK(has("    PSI 000A01F7  PSIV  7     10 Gb/s  asym TX    PFD 1  "
+              "LP 0 (SuperSpeed)\n"), "PLT 3 asym TX");
+    CHECK(has("    PSI 0001C078  PSIV  8      1 Gb/s  reserved   PFD 0  "
+              "LP 3 (reserved)\n"), "PLT 1 and LP 3 reserved");
+    CHECK(has("    PSI 03E80009  PSIV  9   1000 b/s   symmetric  PFD 0  "
+              "LP 0 (SuperSpeed)\n"), "PSIE 0 is b/s");
+    CHECK(has("WARNING: USB 3 PSI table does not list PSIV 4"),
+          "a USB 3 table of 5-9 still lacks 4 (the warning says \"if\")");
+}
+
+/* The raw chain: rows of four with their BAR0 offsets, a capability cut at
+ * the per-capability bound, and each reason a record ends. */
+static void test_xcap_dump(void)
+{
+    int k;
+
+    memset(&tc, 0, sizeof(tc));
+    reset_out();
+    report_xcap_dump(&tc, qprintf);
+    CHECK(has("  xECP: 0 - no extended capabilities\n"), "no xECP");
+
+    tc.xecp_off = 0x8000;
+    tc.nxcap = 2;
+    tc.xcap[0].off = 0x8000;
+    tc.xcap[0].id = 1;
+    tc.xcap[0].next = 4;
+    tc.xcap[0].first = 0;
+    tc.xcap[0].ndw = 4;
+    tc.xcap[0].want = 4;
+    tc.xdump[0] = 0x00000401UL;
+    tc.xdump[1] = 0xE0000000UL;
+    tc.xdump[2] = 0x11111111UL;
+    tc.xdump[3] = 0x22222222UL;
+    tc.xcap[1].off = 0x8010;
+    tc.xcap[1].id = 2;
+    tc.xcap[1].next = 0;
+    tc.xcap[1].first = 4;
+    tc.xcap[1].ndw = 7;
+    tc.xcap[1].want = 7;
+    tc.xdump[4] = 0x03000002UL;
+    tc.xdump[5] = 0x20425355UL;
+    tc.xdump[6] = 0x30000613UL;
+    tc.xdump[7] = 0x00000000UL;
+    tc.xdump[8] = 0x04E00121UL;
+    tc.xdump[9] = 0x09C00122UL;
+    tc.xdump[10] = 0x13800123UL;
+    tc.nxdump = 11;
+    tc.xcap_stop = XCAP_STOP_END;
+    reset_out();
+    report_xcap_dump(&tc, qprintf);
+    CHECK(has("  Extended capabilities, raw dwords (xECP 8000):\n"),
+          "dump header");
+    CHECK(has("    cap 8000 ID   1 next   4  USB Legacy Support, 4 dwords\n"
+              "      8000: 00000401 E0000000 11111111 22222222\n"),
+          "legacy support cap, one row");
+    CHECK(has("    cap 8010 ID   2 next   0  Supported Protocol, 7 dwords\n"
+              "      8010: 03000002 20425355 30000613 00000000\n"
+              "      8020: 04E00121 09C00122 13800123\n"),
+          "protocol cap with its PSI dwords, short last row");
+    CHECK(!has("(a header") && !has("(dump bound") && !has("(the walk"),
+          "chain ended by its own next pointer: no note");
+
+    /* a vendor capability cut at the per-capability bound */
+    tc.nxcap = 1;
+    tc.xcap[0].id = 192;
+    tc.xcap[0].next = 255;
+    tc.xcap[0].ndw = XCAP_DUMP_PER_CAP;
+    tc.xcap[0].want = 255;
+    for (k = 0; k < XCAP_DUMP_PER_CAP; k++)
+        tc.xdump[k] = (u32)k;
+    tc.xcap_stop = XCAP_STOP_FULL;
+    tc.xcap_full = 1;
+    reset_out();
+    report_xcap_dump(&tc, qprintf);
+    CHECK(has("    cap 8000 ID 192 next 255  vendor defined, 32 of 255 "
+              "dwords\n"), "per-capability bound named");
+    CHECK(has("      8070: 0000001C 0000001D 0000001E 0000001F\n"),
+          "eighth row at +70h");
+    CHECK(has("(dump bound reached, 32 capabilities / 256 dwords"),
+          "total bound named");
+
+    tc.xcap[0].ndw = 1;
+    tc.xcap[0].want = 1;
+    tc.xdump[0] = 0xFFFFFFFFUL;
+    tc.xcap_stop = XCAP_STOP_ONES;
+    tc.xcap_full = 0;
+    reset_out();
+    report_xcap_dump(&tc, qprintf);
+    CHECK(has("      8000: FFFFFFFF\n") &&
+          has("(a header read all ones: raw recording stops here)"),
+          "all-ones header stops the record");
+
+    tc.xcap_stop = XCAP_STOP_WALK;
+    reset_out();
+    report_xcap_dump(&tc, qprintf);
+    CHECK(has("(the walk stopped at the mapped window or its 64-step guard)"),
+          "walk bound named");
+}
+
+/*
+ * The production walk and its raw recorder (xcap_walk / xcap_record in
+ * mmiodiag.c, the code XHCIQUAL runs against MMIO) driven through a checked
+ * fake BAR. Every read is counted, and one that is unaligned or reaches past
+ * the window is a failure in itself (fbad), whatever the walk then does.
+ */
+static u32 fbar[0x4000];      /* 64 KB, the tool's own BAR_MAP_SIZE */
+static u32 fwindow;
+static int freads;
+static int fbad;
+
+static u32 fake_rd(void *ctx, u32 off)
+{
+    (void)ctx;
+    freads++;
+    if ((off & 3UL) != 0 || off + 4 < off || off + 4 > fwindow ||
+        off + 4 > sizeof(fbar)) {
+        fbad++;
+        return 0xFFFFFFFFUL;
+    }
+    return fbar[off >> 2];
+}
+
+static void fake_reset(u32 window, u32 fill)
+{
+    u32 i;
+
+    for (i = 0; i < sizeof(fbar) / sizeof(fbar[0]); i++)
+        fbar[i] = fill;
+    fwindow = window;
+    freads = 0;
+    fbad = 0;
+    memset(&tc, 0, sizeof(tc));
+    reset_out();
+}
+
+static void fput(u32 off, u32 v)
+{
+    fbar[off >> 2] = v;
+}
+
+/* a Supported Protocol capability: header, name "USB ", ports, slot, PSI */
+static void fput_proto(u32 off, u32 major, u32 next, u32 portoff,
+                       u32 portcnt, u32 psic, const u32 *psi)
+{
+    u32 k;
+
+    fput(off, (major << 24) | (next << 8) | XECP_ID_PROTO);
+    fput(off + 4, 0x20425355UL);
+    fput(off + 8, (psic << 28) | (portcnt << 8) | portoff);
+    fput(off + 0x0C, 0);
+    for (k = 0; k < psic; k++)
+        fput(off + 0x10 + k * 4, psi[k]);
+}
+
+/* The E460's chain as the 35.0 words describe it: legacy support, USB 2
+ * (PSIC 3), USB 3 (PSIC 3, SSIC only), terminal next 0. */
+static void test_walk_e460_chain(void)
+{
+    static const u32 u2[3] = { 0x000C0021UL, 0x05DC0012UL, 0x01E00023UL };
+    static const u32 u3[3] = { 0x04E00121UL, 0x09C00122UL, 0x13800123UL };
+    int k;
+
+    fake_reset(0x10000UL, 0);
+    fput(0x600, 0x00000201UL);                /* LEGSUP, next 2 */
+    fput_proto(0x608, 2, 8, 1, 12, 3, u2);
+    fput_proto(0x628, 3, 0, 13, 6, 3, u3);
+    xcap_walk(&tc, 0x600, fwindow, fake_rd, 0);
+    CHECK(fbad == 0, "E460 walk: every read inside the window");
+    CHECK(tc.xecp_off == 0x600 && tc.nxcap == 3 &&
+          tc.xcap_stop == XCAP_STOP_END, "E460 walk: three caps, chain end");
+    CHECK(tc.xcap[0].off == 0x600 && tc.xcap[0].want == 2 &&
+          tc.xcap[0].ndw == 2, "E460 walk: legacy support span 2");
+    CHECK(tc.xcap[1].off == 0x608 && tc.xcap[1].want == 8 &&
+          tc.xcap[1].ndw == 8, "E460 walk: USB2 span to next");
+    CHECK(tc.xcap[2].off == 0x628 && tc.xcap[2].next == 0 &&
+          tc.xcap[2].want == 7 && tc.xcap[2].ndw == 7,
+          "E460 walk: terminal USB3 takes 4 + PSIC");
+    for (k = 0; k < 3; k++)
+        CHECK(tc.xdump[tc.xcap[2].first + 4 + k] == u3[k],
+              "E460 walk: USB3 PSI dwords recorded raw");
+    CHECK(tc.nxdump == 17, "E460 walk: 2 + 8 + 7 dwords");
+    CHECK(tc.legsup_off == 0x600 && tc.nproto == 2 &&
+          tc.proto[1].portoff == 13 && tc.proto[1].portcnt == 6 &&
+          tc.proto[1].npsi == 3 && tc.proto[1].psi[2] == u3[2],
+          "E460 walk: the decoded facts unchanged");
+    CHECK(!has("NOTE"), "E460 walk: no early-stop note");
+    report_protocols(&tc, qprintf);
+    CHECK(has("WARNING: USB 3 PSI table does not list PSIV 4"),
+          "E460 walk: end to end, the warning");
+}
+
+/* PSIC 15 on the last capability: 19 dwords, all 15 PSI entries. */
+static void test_walk_psic15(void)
+{
+    u32 psi[15];
+    u32 k;
+
+    for (k = 0; k < 15; k++)
+        psi[k] = 0x00050130UL | (k + 1);
+    fake_reset(0x10000UL, 0);
+    fput_proto(0x100, 3, 0, 1, 2, 15, psi);
+    xcap_walk(&tc, 0x100, fwindow, fake_rd, 0);
+    CHECK(fbad == 0, "PSIC 15: reads inside the window");
+    CHECK(tc.nxcap == 1 && tc.xcap[0].want == 19 && tc.xcap[0].ndw == 19,
+          "PSIC 15: 4 + 15 dwords");
+    CHECK(tc.xdump[18] == psi[14], "PSIC 15: last PSI dword recorded");
+    CHECK(tc.proto[0].npsi == 15, "PSIC 15: all entries decoded");
+    CHECK(psi_usb3_lacks_ss(&tc.proto[0]) == 0, "PSIC 15: lists PSIV 4");
+}
+
+/* A span shorter than the capability's known size: a legacy support cap with
+ * next 1 is recorded as 1 dword; a protocol cap whose next lands inside its
+ * own PSI dwords still records them all, and the overlapping capability that
+ * header names is recorded from there. */
+static void test_walk_short_and_overlapping_spans(void)
+{
+    static const u32 u2[3] = { 0x000C0021UL, 0x05DC0012UL, 0x01E00023UL };
+
+    fake_reset(0x10000UL, 0);
+    fput(0x0FC, 0x00000101UL);                /* LEGSUP, next 1 */
+    fput_proto(0x100, 2, 6, 1, 4, 3, u2);     /* next lands on PSI[2] */
+    xcap_walk(&tc, 0x0FC, fwindow, fake_rd, 0);
+    CHECK(fbad == 0, "short spans: reads inside the window");
+    CHECK(tc.nxcap == 3, "short spans: three records");
+    CHECK(tc.xcap[0].want == 1 && tc.xcap[0].ndw == 1,
+          "short spans: legacy support cut to its span");
+    CHECK(tc.xcap[1].want == 7 && tc.xcap[1].ndw == 7,
+          "short spans: protocol keeps 4 + PSIC past a short next");
+    CHECK(tc.xcap[2].off == 0x118 && tc.xcap[2].id == 0x23 &&
+          tc.xcap[2].next == 0 && tc.xcap[2].want == 4 &&
+          tc.xcap[2].ndw == 4, "short spans: the overlapping header");
+    CHECK(tc.xcap_stop == XCAP_STOP_END, "short spans: chain end");
+}
+
+/* The window's edge: a capability running past it is cut there, and a
+ * protocol table past it is read only in part (no PSIV 4 verdict). */
+static void test_walk_window_edge(void)
+{
+    static const u32 psi[15] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+                                 13, 14, 15 };
+
+    fake_reset(0x400UL, 0);
+    fput(0x3BC, 0x000020C0UL);                /* vendor, next 32 dwords */
+    xcap_walk(&tc, 0x3BC, fwindow, fake_rd, 0);
+    CHECK(fbad == 0, "window edge: no read past the window");
+    CHECK(tc.nxcap == 1 && tc.xcap[0].want == 32 && tc.xcap[0].ndw == 17,
+          "window edge: vendor cap cut at the window");
+    CHECK(tc.xcap_stop == XCAP_STOP_WALK, "window edge: walk stop named");
+    CHECK(has("NOTE: extended capability list not walked to its end "
+              "(next at 0000043C)"), "window edge: the walk's own note");
+
+    fake_reset(0x400UL, 0);
+    fput_proto(0x3BC, 3, 0, 1, 2, 15, psi);
+    xcap_walk(&tc, 0x3BC, fwindow, fake_rd, 0);
+    CHECK(fbad == 0, "window edge, protocol: no read past the window");
+    CHECK(tc.xcap[0].want == 19 && tc.xcap[0].ndw == 17,
+          "window edge, protocol: record cut at the window");
+    CHECK(tc.proto[0].psic == 15 && tc.proto[0].npsi == 13,
+          "window edge, protocol: 13 of 15 PSI entries read");
+    CHECK(psi_usb3_lacks_ss(&tc.proto[0]) == 0,
+          "window edge, protocol: partial table, no verdict");
+}
+
+/* The per-capability bound: a 64-dword span records 32. */
+static void test_walk_per_cap_bound(void)
+{
+    fake_reset(0x10000UL, 0);
+    fput(0x100, 0x000040C0UL);                /* vendor, next 64 dwords */
+    fput(0x200, 0x000000C1UL);                /* vendor, terminal */
+    xcap_walk(&tc, 0x100, fwindow, fake_rd, 0);
+    CHECK(fbad == 0, "per-cap bound: reads inside the window");
+    CHECK(tc.nxcap == 2 && tc.xcap[0].want == 64 &&
+          tc.xcap[0].ndw == XCAP_DUMP_PER_CAP,
+          "per-cap bound: 32 of 64 dwords");
+    CHECK(tc.xcap[1].off == 0x200 && tc.xcap[1].first == XCAP_DUMP_PER_CAP,
+          "per-cap bound: next record follows");
+    CHECK(tc.xcap_stop == XCAP_STOP_END, "per-cap bound: chain end");
+}
+
+/* The capability-count and total-dword bounds; the walk itself goes on. */
+static void test_walk_exhaustion(void)
+{
+    u32 off;
+    int i;
+
+    /* 40 one-dword caps, the last a terminal LEGSUP */
+    fake_reset(0x10000UL, 0);
+    for (i = 0, off = 0x100; i < 39; i++, off += 4)
+        fput(off, 0x000001C0UL);
+    fput(off, 0x00000001UL);
+    xcap_walk(&tc, 0x100, fwindow, fake_rd, 0);
+    CHECK(fbad == 0, "32 caps: reads inside the window");
+    CHECK(tc.nxcap == XCAP_DUMP_CAPS + 1 &&
+          tc.nxdump == XCAP_DUMP_CAPS + 2 &&
+          tc.xcap_stop == XCAP_STOP_FULL, "32 caps: count bound");
+    CHECK(tc.xcap[XCAP_DUMP_CAPS].off == off &&
+          tc.xcap[XCAP_DUMP_CAPS].ndw == 2,
+          "32 caps: the terminal USBLEGSUP is still recorded, two dwords");
+    CHECK(tc.legsup_off == off, "32 caps: the walk still reaches the end");
+    CHECK(!has("NOTE"), "32 caps: the walk ended on its own");
+
+    /* nine 30-dword caps then a terminal: 8 x 30 + 16 = 256 */
+    fake_reset(0x10000UL, 0);
+    for (i = 0, off = 0x100; i < 9; i++, off += 30 * 4)
+        fput(off, 0x00001EC0UL);
+    fput(off, 0x000000C1UL);
+    xcap_walk(&tc, 0x100, fwindow, fake_rd, 0);
+    CHECK(fbad == 0, "256 dwords: reads inside the window");
+    CHECK(tc.nxcap == 9 && tc.xcap[8].want == 30 && tc.xcap[8].ndw == 16,
+          "256 dwords: ninth cap cut by the total");
+    CHECK(tc.nxdump == XCAP_DUMP_TOTAL && tc.xcap_stop == XCAP_STOP_FULL,
+          "256 dwords: total bound");
+}
+
+/*
+ * The HP EliteBook 850 G5's 8086:15DB (xhciqual/results/hp850g5-2026-10-06):
+ * a USB 2 protocol, vendor capabilities that spend the 256-dword bound, then
+ * the USB 3.1 protocol the dump is for. It is recorded from the reserve, with
+ * its defined dwords only, and the decoded line names where it sits.
+ */
+static void test_walk_protocol_past_the_bound(void)
+{
+    static const u32 u2[3] = { 0x000C0021UL, 0x05DC0012UL, 0x01E00023UL };
+    static const u32 u31[2] = { 0x00050134UL, 0x000A4135UL };
+    u32 off;
+    int i;
+
+    fake_reset(0x10000UL, 0);
+    fput_proto(0x8000, 2, 0x1C, 1, 2, 3, u2);
+    for (i = 0, off = 0x8070; i < 9; i++, off += 0x100)
+        fput(off, 0x000040C0UL);              /* vendor, next 64 dwords */
+    fput_proto(off, 3, 20, 3, 2, 2, u31);
+    fput(off, fbar[off >> 2] | (0x01UL << 16));   /* minor 01h, as Intel's */
+    fput(off + 20 * 4, 0x000000C1UL);         /* vendor, terminal */
+    xcap_walk(&tc, 0x8000, fwindow, fake_rd, 0);
+    CHECK(fbad == 0, "past the bound: reads inside the window");
+    CHECK(tc.xcap_stop == XCAP_STOP_FULL, "past the bound: the bound was hit");
+    CHECK(tc.nxcap == 10 && tc.xcap[9].off == off && tc.xcap[9].id == 2,
+          "past the bound: the USB 3.1 protocol is recorded, the vendor "
+          "capability after it is not");
+    CHECK(tc.xcap[9].want == 20 && tc.xcap[9].ndw == 6,
+          "past the bound: header and its two PSI dwords only");
+    CHECK(tc.xdump[tc.xcap[9].first + 4] == 0x00050134UL &&
+          tc.xdump[tc.xcap[9].first + 5] == 0x000A4135UL,
+          "past the bound: the PSI words as read");
+    CHECK(tc.nproto == 2 && tc.proto[1].off == off,
+          "past the bound: decoded with its offset");
+    reset_out();
+    report_protocols(&tc, qprintf);
+    CHECK(has("  Protocol USB 3.1 @8970: ports 3-4, slot type 0, "
+              "PSIC 2\n"), "past the bound: protocol line");
+    reset_out();
+    report_xcap_dump(&tc, qprintf);
+    CHECK(has("    cap 8970 ID   2 next  20  Supported Protocol, 6 of 20 "
+              "dwords\n"), "past the bound: dump names the kept capability");
+    CHECK(has("except Supported Protocol and USB Legacy Support"),
+          "past the bound: the bound line says what is kept");
+}
+
+/*
+ * A protocol capability that would cross the general bound: 255 dwords
+ * spent, then a terminal one of 4 + PSIC 2. Its defined dwords all come from
+ * the reserve, and the record ends marked as bound-reached.
+ */
+static void test_walk_protocol_across_the_bound(void)
+{
+    static const u32 u31[2] = { 0x00050134UL, 0x000A4135UL };
+    u32 off;
+    int i;
+
+    fake_reset(0x10000UL, 0);
+    for (i = 0, off = 0x100; i < 7; i++, off += 32 * 4)
+        fput(off, 0x000020C0UL);              /* vendor, next 32 dwords */
+    fput(off, 0x00001FC0UL);                  /* vendor, next 31 dwords */
+    off += 31 * 4;
+    fput_proto(off, 3, 0, 3, 2, 2, u31);      /* terminal */
+    xcap_walk(&tc, 0x100, fwindow, fake_rd, 0);
+    CHECK(fbad == 0, "across the bound: reads inside the window");
+    CHECK(tc.nxcap == 9 && tc.xcap[8].off == off && tc.xcap[8].ndw == 6,
+          "across the bound: the protocol's six dwords, not its header alone");
+    CHECK(tc.xdump[tc.xcap[8].first + 5] == 0x000A4135UL,
+          "across the bound: its last PSI word as read");
+    CHECK(tc.nxdump == 261 && tc.xcap_stop == XCAP_STOP_FULL &&
+          tc.xcap_full, "across the bound: marked bound-reached");
+}
+
+/*
+ * An all-ones header after the bound stops the reserve too: the USB 3.1
+ * protocol behind it (the walk follows the FF next field, as it always has)
+ * is decoded but not recorded, and both reasons are printed.
+ */
+static void test_walk_all_ones_after_the_bound(void)
+{
+    static const u32 u2[3] = { 0x000C0021UL, 0x05DC0012UL, 0x01E00023UL };
+    static const u32 u31[2] = { 0x00050134UL, 0x000A4135UL };
+    u32 off;
+    int i;
+
+    fake_reset(0x10000UL, 0);
+    fput_proto(0x8000, 2, 0x1C, 1, 2, 3, u2);
+    for (i = 0, off = 0x8070; i < 9; i++, off += 0x100)
+        fput(off, 0x000040C0UL);              /* vendor, next 64 dwords */
+    fput(off, 0xFFFFFFFFUL);                  /* dead header at 8970 */
+    off += 0xFF * 4;
+    fput_proto(off, 3, 0, 3, 2, 2, u31);      /* behind it, terminal */
+    xcap_walk(&tc, 0x8000, fwindow, fake_rd, 0);
+    CHECK(fbad == 0, "ones after the bound: reads inside the window");
+    CHECK(tc.nxcap == 9 && tc.xcap_stop == XCAP_STOP_ONES && tc.xcap_full,
+          "ones after the bound: nothing more recorded, both facts kept");
+    CHECK(tc.nproto == 2 && tc.proto[1].off == off,
+          "ones after the bound: the protocol behind it still decoded");
+    reset_out();
+    report_xcap_dump(&tc, qprintf);
+    CHECK(has("(dump bound reached, 32 capabilities / 256 dwords") &&
+          has("(a header read all ones: raw recording stops here)"),
+          "ones after the bound: both lines printed");
+}
+
+/*
+ * The same with the count bound: exactly 32 one-dword vendor capabilities
+ * leave the record still open, and the all-ones header that follows must
+ * still close it before the protocol behind it.
+ */
+static void test_walk_all_ones_at_the_count_bound(void)
+{
+    static const u32 u31[2] = { 0x00050134UL, 0x000A4135UL };
+    u32 off;
+    int i;
+
+    fake_reset(0x10000UL, 0);
+    for (i = 0, off = 0x100; i < XCAP_DUMP_CAPS; i++, off += 4)
+        fput(off, 0x000001C0UL);              /* vendor, next 1 dword */
+    fput(off, 0xFFFFFFFFUL);
+    off += 0xFF * 4;
+    fput_proto(off, 3, 0, 3, 2, 2, u31);
+    xcap_walk(&tc, 0x100, fwindow, fake_rd, 0);
+    CHECK(fbad == 0, "ones at the count bound: reads inside the window");
+    CHECK(tc.nxcap == XCAP_DUMP_CAPS && tc.xcap_stop == XCAP_STOP_ONES &&
+          tc.xcap_full, "ones at the count bound: the reserve closed");
+    CHECK(tc.nproto == 1 && tc.proto[0].off == off,
+          "ones at the count bound: the protocol still decoded");
+}
+
+/* All ones: recording stops at the dead header; the walker, unchanged,
+ * follows its FF next field until the window stops it, inside the window. */
+static void test_walk_all_ones(void)
+{
+    fake_reset(0x10000UL, 0xFFFFFFFFUL);
+    fput(0x100, 0x00000101UL);                /* LEGSUP, next 1 */
+    xcap_walk(&tc, 0x100, fwindow, fake_rd, 0);
+    CHECK(fbad == 0, "all ones: every read inside the window");
+    CHECK(tc.nxcap == 2 && tc.xcap[1].off == 0x104 &&
+          tc.xcap[1].ndw == 1 && tc.xdump[tc.xcap[1].first] == 0xFFFFFFFFUL,
+          "all ones: the dead header recorded once");
+    CHECK(tc.xcap_stop == XCAP_STOP_ONES, "all ones: stop reason kept");
+    CHECK(freads > 10, "all ones: the walk went on past it");
+    CHECK(has("NOTE: extended capability list not walked to its end"),
+          "all ones: the walk's own note");
+    report_xcap_dump(&tc, qprintf);
+    CHECK(has("(a header read all ones: raw recording stops here)"),
+          "all ones: the dump says recording stopped");
+}
+
+/* The 64-step guard, and xECP 0. */
+static void test_walk_guard_and_none(void)
+{
+    u32 off;
+    int i;
+
+    fake_reset(0x10000UL, 0);
+    for (i = 0, off = 0x100; i < 70; i++, off += 4)
+        fput(off, 0x000001C0UL);
+    xcap_walk(&tc, 0x100, fwindow, fake_rd, 0);
+    CHECK(fbad == 0, "guard: reads inside the window");
+    CHECK(has("NOTE: extended capability list not walked to its end "
+              "(next at 00000200)"), "guard: stops after 64 steps");
+    CHECK(tc.xcap_stop == XCAP_STOP_FULL, "guard: the count bound first");
+
+    fake_reset(0x10000UL, 0);
+    xcap_walk(&tc, 0, fwindow, fake_rd, 0);
+    CHECK(freads == 0 && tc.nxcap == 0 && tc.nproto == 0 &&
+          tc.xcap_stop == XCAP_STOP_END, "xECP 0: nothing read");
+}
+
 int main(void)
 {
     test_pm_absent();
@@ -987,6 +1602,22 @@ int main(void)
     test_quick_cannot_say();
     test_quick_dead_window_with_no_excuse();
     test_quick_agrees_with_the_full_run();
+    test_psi_e460_usb3_ssic_table();
+    test_psi_no_warning_cases();
+    test_psi_field_decode();
+    test_xcap_dump();
+    test_walk_e460_chain();
+    test_walk_psic15();
+    test_walk_short_and_overlapping_spans();
+    test_walk_window_edge();
+    test_walk_per_cap_bound();
+    test_walk_exhaustion();
+    test_walk_protocol_past_the_bound();
+    test_walk_protocol_across_the_bound();
+    test_walk_all_ones_after_the_bound();
+    test_walk_all_ones_at_the_count_bound();
+    test_walk_all_ones();
+    test_walk_guard_and_none();
 
     printf("test_mmiodiag: %d checks, %d failed\n", checks, failures);
     return failures;

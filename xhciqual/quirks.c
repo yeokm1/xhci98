@@ -128,9 +128,43 @@ static const QUIRK quirk_table[] = {
     { 0x1106, 0x3432, 0, "VIA Labs VL800" },
     { 0x1106, 0x3483, 0, "VIA Labs VL805" },
 
-    /* Etron */
-    { 0x1B6F, 0x7023, QF_AVOID, "Etron EJ168" },
-    { 0x1B6F, 0x7052, QF_AVOID, "Etron EJ188" },
+    /* Etron. xhci-pci.c:418-425 gives both parts XHCI_NO_SOFT_RETRY among
+     * its four bits: the driver's soft retry (design record 17 section 4.2)
+     * excludes them. */
+    { 0x1B6F, 0x7023, QF_AVOID, "Etron EJ168 (Linux: no soft retry)" },
+    { 0x1B6F, 0x7052, QF_AVOID, "Etron EJ188 (Linux: no soft retry)" },
+
+    /* AMD, PCI vendor 0x1022 (roadmap-hcd task 35-T.8; design record 17
+     * section 4.8). Report-only: no flag is set and the tool acts on none of
+     * these. The driver caps an interrupt endpoint's Interval at 8 on EVERY
+     * AMD controller under XhciIntervalCap (record 17 section 4.7), wider
+     * than Linux's XHCI_LIMIT_ENDPOINT_INTERVAL_9 list at xhci-pci.c:293-302,
+     * whose eight ids are the first rows here (Linux also sets it on the ATI
+     * 0x1002 Navi10 7316, which is not an AMD-vendor xHCI and has no row).
+     * Raven 15E0/15E1 also get XHCI_SUSPEND_DELAY and XHCI_SNPS_BROKEN_SUSPEND,
+     * Raven2 15E5 XHCI_DISABLE_SPARSE and XHCI_RESET_ON_RESUME. The Promontory
+     * A parts get XHCI_U2_DISABLE_WAKE (xhci-pci.c:334-339); 43B9 and 43BB
+     * also XHCI_NO_SOFT_RETRY (xhci-pci.c:488-491), which the driver's soft
+     * retry honours, and 43BB XHCI_SUSPEND_DELAY. 43F7 gets only
+     * XHCI_DEFAULT_PM_RUNTIME_ALLOW (xhci-pci.c:331-332). The Promontory 21
+     * parts 43FC/43FD go to Linux's separate xhci-pci-prom21 driver when it
+     * is built (xhci-pci.c:699-714), and the AM5 and X570 lines are otherwise
+     * unlisted in the mirror. None of these bits has a flag here. */
+    { 0x1022, 0x13ED, 0, "AMD Ariel Type-C (Linux: interval cap 9)" },
+    { 0x1022, 0x13EE, 0, "AMD Ariel Type-A (Linux: interval cap 9)" },
+    { 0x1022, 0x148C, 0, "AMD Starship (Linux: interval cap 9)" },
+    { 0x1022, 0x15D4, 0, "AMD Fireflight (Linux: interval cap 9)" },
+    { 0x1022, 0x15D5, 0, "AMD Fireflight (Linux: interval cap 9)" },
+    { 0x1022, 0x15E0, 0, "AMD Raven (Linux: interval cap 9)" },
+    { 0x1022, 0x15E1, 0, "AMD Raven (Linux: interval cap 9)" },
+    { 0x1022, 0x15E5, 0, "AMD Raven2 (Linux: interval cap 9)" },
+    { 0x1022, 0x43B9, 0, "AMD Promontory A (Linux: no soft retry)" },
+    { 0x1022, 0x43BA, 0, "AMD Promontory A" },
+    { 0x1022, 0x43BB, 0, "AMD Promontory A (Linux: no soft retry)" },
+    { 0x1022, 0x43BC, 0, "AMD Promontory A" },
+    { 0x1022, 0x43F7, 0, "AMD xHCI 43F7" },
+    { 0x1022, 0x43FC, 0, "AMD Promontory 21" },
+    { 0x1022, 0x43FD, 0, "AMD Promontory 21" },
 
     { 0, 0, 0, NULL }
 };

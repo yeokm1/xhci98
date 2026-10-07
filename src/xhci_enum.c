@@ -23,7 +23,9 @@
  *   Present    --PDO started-->      Bound
  *
  * A disconnect from any state with a slot disables it; with a PDO it reports
- * the PDO missing and waits in Gone for the PDO's remove. Any failed step
+ * the PDO missing and waits in Gone for the PDO's remove. An attempt
+ * abandoned for a device cycle (XHCI_ENUM_EV_ABANDONED, 35-T.3) leaves the
+ * same way and is never retried. Any failed step
  * goes to Failed, disabling the slot it owned; a RETRY event then starts
  * once more from Reset (XHCI_ENUM_RETRIES), the rule the targets' own hub
  * drivers follow.
@@ -43,6 +45,7 @@
  * C89, pure: IRQL any.
  */
 
+#include "xhci.h"
 #include "xhci_enum.h"
 
 #define XHCI_ENUM_EV_RETRY_INTERNAL 0x100UL
@@ -156,9 +159,16 @@ ULONG XhciEnumStep(PXHCI_ENUM_PORT port, const XHCI_ENUM_EVENT *event,
     }
     ok = event->Ok;
 
-    if (event->Kind == XHCI_ENUM_EV_DISCONNECT) {
+    if (event->Kind == XHCI_ENUM_EV_DISCONNECT ||
+        event->Kind == XHCI_ENUM_EV_ABANDONED) {
         if (port->State == XHCI_ENUM_EMPTY || port->State == XHCI_ENUM_GONE) {
             return port->State;
+        }
+        /* An abandoned attempt leaves no cause behind: it did not fail. */
+        if (event->Kind == XHCI_ENUM_EV_ABANDONED) {
+            port->FailCause = XHCI_ENUM_FAIL_NONE;
+            port->BosLength = 0;
+            port->BosMissing = 0;
         }
         return xhciEnumGone(port, action);
     }
@@ -448,4 +458,131 @@ ULONG XhciEnumAnswerCarries(ULONG parentSerial, ULONG answering,
                             ULONG letGo)
 {
     return (parentSerial == answering && !letGo) ? 1UL : 0UL;
+}
+
+/* ------------------------------------------------------------------ */
+/* A root port's enumeration notes (task 35.3; xhci_enum.h)            */
+/* ------------------------------------------------------------------ */
+
+VOID XhciEnumNotesInit(PXHCI_ENUM_NOTES notes)
+{
+    notes->Used = 0;
+    notes->Open = 0;
+    notes->Suppressed = 0;
+    notes->FailedLooked = 0;
+}
+
+ULONG XhciEnumNoteCharge(PXHCI_ENUM_NOTES notes)
+{
+    if (notes->Used < XHCI_ENUM_NOTE_BUDGET) {
+        notes->Used++;
+        return XHCI_ENUM_NOTE_YES;
+    }
+    notes->Suppressed++;
+    if (notes->Used == XHCI_ENUM_NOTE_BUDGET) {
+        notes->Used++;
+        return XHCI_ENUM_NOTE_QUIET;
+    }
+    return XHCI_ENUM_NOTE_NO;
+}
+
+VOID XhciEnumNoteRefill(PXHCI_ENUM_NOTES notes)
+{
+    notes->Used = 0;
+}
+
+ULONG XhciEnumNoteWantLook(PXHCI_ENUM_NOTES notes, ULONG state, ULONG feed,
+                           ULONG linkActed)
+{
+    if (feed != 0 || linkActed) {
+        notes->FailedLooked = 0;
+        return 1;
+    }
+    if (state == XHCI_ENUM_FAILED && !notes->FailedLooked) {
+        notes->FailedLooked = 1;
+        return 1;
+    }
+    return 0;
+}
+
+ULONG XhciEnumNoteBegin(PXHCI_ENUM_NOTES notes)
+{
+    ULONG charged;
+
+    if (notes->Open != 0) {
+        return XHCI_ENUM_NOTE_NO;
+    }
+    charged = XhciEnumNoteCharge(notes);
+    notes->Open = (charged == XHCI_ENUM_NOTE_YES) ? 1UL : 2UL;
+    return charged;
+}
+
+ULONG XhciEnumNoteOn(const XHCI_ENUM_NOTES *notes)
+{
+    return (notes->Open == 1) ? 1UL : 0UL;
+}
+
+VOID XhciEnumNoteFinish(PXHCI_ENUM_NOTES notes)
+{
+    notes->Open = 0;
+}
+
+ULONG XhciEnumNoteLook(ULONG port, ULONG state, ULONG linkAction,
+                       ULONG feed, ULONG portsc)
+{
+    return ((port & 0xFFUL) << 24) | ((state & 0xFUL) << 20) |
+           ((linkAction & 0xFUL) << 16) | ((feed & 0x3UL) << 14) |
+           (((portsc & XHCI_PORTSC_CHANGE_MASK) >> 17) << 7) |
+           (XHCI_PORTSC_GET_PLS(portsc) << 3) |
+           ((portsc & XHCI_PORTSC_PR) != 0 ? 0x4UL : 0UL) |
+           (portsc & (XHCI_PORTSC_PED | XHCI_PORTSC_CCS));
+}
+
+ULONG XhciEnumNoteReset(ULONG port, ULONG ok, ULONG attempt, ULONG portsc)
+{
+    return ((port & 0xFFUL) << 24) | (ok ? 0x00800000UL : 0UL) |
+           ((attempt & 0x7FUL) << 16) | (portsc & 0xFFFFUL);
+}
+
+ULONG XhciEnumNoteSpeed(ULONG port, ULONG psiv, ULONG speedClass,
+                        ULONG source)
+{
+    return ((port & 0xFFUL) << 24) | ((psiv & 0xFFUL) << 16) |
+           ((speedClass & 0xFFUL) << 8) | (source & 0xFFUL);
+}
+
+ULONG XhciEnumNoteRate(ULONG port, ULONG kbps, ULONG plus)
+{
+    ULONG units;
+
+    /* 100 kbit/s units, so Low Speed's 1.5 Mbit/s is not read as 1 and 20
+     * Gbit/s (200000) still fits; a rate past the field reads its top. */
+    units = kbps / 100UL;
+    if (units > 0x007FFFFFUL) {
+        units = 0x007FFFFFUL;
+    }
+    return ((port & 0xFFUL) << 24) | (plus ? 0x00800000UL : 0UL) | units;
+}
+
+ULONG XhciEnumNoteSlot(ULONG port, ULONG code, ULONG attempt, ULONG slotId)
+{
+    return ((port & 0xFFUL) << 24) | ((code & 0xFFUL) << 16) |
+           ((attempt & 0xFFUL) << 8) | (slotId & 0xFFUL);
+}
+
+ULONG XhciEnumNoteFail(ULONG port, ULONG cause, ULONG attempt, ULONG final)
+{
+    return ((port & 0xFFUL) << 24) | ((cause & 0xFFUL) << 16) |
+           ((attempt & 0xFFUL) << 8) | (final ? 1UL : 0UL);
+}
+
+ULONG XhciEnumNoteEnd(ULONG port, ULONG state, ULONG cause, ULONG retries)
+{
+    return ((port & 0xFFUL) << 24) | ((state & 0xFFUL) << 16) |
+           ((cause & 0xFFUL) << 8) | (retries & 0xFFUL);
+}
+
+ULONG XhciEnumNoteQuiet(ULONG port)
+{
+    return ((port & 0xFFUL) << 24) | (XHCI_ENUM_NOTE_BUDGET & 0xFFUL);
 }

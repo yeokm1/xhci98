@@ -254,6 +254,8 @@ typedef struct _XHCI_SSHUB_PORT_DECISION {
     ULONG LinkChange;       /* C_PORT_LINK_STATE was set                  */
     ULONG Resume;           /* held device, link in U3: resume to U0      */
     ULONG Resumed;          /* held device, a U3 exit finished            */
+    ULONG Disabled;         /* a held device's port no longer enabled: a
+                             * re-enumeration charged to the location    */
 } XHCI_SSHUB_PORT_DECISION, *PXHCI_SSHUB_PORT_DECISION;
 
 VOID XhciSsHubPortDecide(ULONG state, ULONG status, ULONG change,
@@ -451,10 +453,13 @@ ULONG XhciSsHubParentOf(ULONG hubUsb3, ULONG hubSsp, ULONG hubRank,
  * for 20 Gbit/s (xHCI Table 7-13, p.485; a leniency kept as xhci_caps.c
  * keeps it: 7.2.2.1.2 defines 5 only on a USB 3.1 or 3.2 group and 6 and 7
  * only on a USB 3.2 group, and this does not narrow the choice by the
- * group's Minor Revision). Only those are matches. Failing them, the ID
- * named at the lane rate, else the SuperSpeed class's, is given with *matched 0: the
- * device is still addressed, the caller counts it, and the controller's
- * output Slot Context decides after Address Device (XhciSsHubAdoptSpeed).
+ * group's Minor Revision). Only those are matches; a table's unlisted 5 to
+ * 7 are not taken here (task 35.1: decoding an ID a controller reported is
+ * not writing one it never named). Failing them, the ID named at the lane
+ * rate, else the SuperSpeed class's (ID 4 where the table lists no 5 Gbit/s
+ * entry and does not list 4), is given with *matched 0: the device is still
+ * addressed, the caller counts it, and the controller's output Slot Context
+ * decides after Address Device (XhciSsHubAdoptSpeed).
  */
 ULONG XhciSsHubPsiv(const struct _XHCI_PORT_MAP *map, ULONG rootPort,
                     const XHCI_SSHUB_LINK *link, PULONG psiv,

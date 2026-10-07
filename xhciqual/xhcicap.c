@@ -200,10 +200,17 @@ unmap:
     return 0;
 }
 
+/* The production reader for the extended-capability walk: one MMIO dword at a
+ * BAR0 byte offset. The walk itself is xcap_walk() in mmiodiag.c, where the
+ * host runner drives it through a checked fake. */
+static u32 xcap_mmio_rd(void *ctx, u32 off)
+{
+    return RD32(((CTRL *)ctx)->base + off);
+}
+
 int xhci_read_caps(CTRL *c)
 {
-    u32 off, dw;
-    int guard, sp_hi, sp_lo;
+    int sp_hi, sp_lo;
 
     if (!c->mmio_ok)
         return 0;
@@ -269,64 +276,10 @@ int xhci_read_caps(CTRL *c)
 
     c->pagesize = RD32(c->op + XOP_PAGESIZE);
 
-    /* extended capability walk (B6, B7) */
-    c->legsup_off = 0;
-    c->nproto = 0;
-    off = ((c->hcc1 >> 16) & 0xFFFF) << 2;
-    for (guard = 0; off != 0 && off < BAR_MAP_SIZE - 0x40UL && guard < 64;
-         guard++) {
-        u32 next;
-
-        dw = RD32(c->base + off);
-        switch (dw & 0xFF) {
-        case XECP_ID_LEGSUP:
-            if (c->legsup_off == 0)
-                c->legsup_off = off;
-            break;
-        case XECP_ID_PROTO:
-            if (c->nproto < MAX_PROTO) {
-                PROTOCAP *pr = &c->proto[c->nproto];
-                u32 dw2 = RD32(c->base + off + 0x08);
-                int k;
-
-                pr->major   = (u8)(dw >> 24);
-                pr->minor   = (u8)(dw >> 16);
-                pr->portoff = (u8)(dw2 & 0xFF);
-                pr->portcnt = (u8)((dw2 >> 8) & 0xFF);
-                pr->psic    = (u8)((dw2 >> 28) & 0xF);
-                pr->slottype = (u8)(RD32(c->base + off + 0x0C) & 0x1F);
-                /* PSIC > 0 means this cap redefines the speed IDs; the
-                 * default 1=FS/2=LS/3=HS/4=SS mapping does not apply
-                 * unless the table says so (spec 7.2, 7.2.2.1.2). */
-                pr->npsi = 0;
-                for (k = 0; k < (int)pr->psic && k < MAX_PSI; k++) {
-                    if (off + 0x10UL + (u32)k * 4 >= BAR_MAP_SIZE)
-                        break;
-                    pr->psi[k] = RD32(c->base + off + 0x10 + k * 4);
-                    pr->npsi++;
-                }
-                c->nproto++;
-            }
-            break;
-        case 10:
-            c->saw_debug_cap = 1;
-            break;
-        default:
-            break;
-        }
-        next = (dw >> 8) & 0xFF;
-        if (next == 0)
-            break;
-        off += next << 2;
-    }
-    /* A walk that ran off the mapped window (or past the 64-entry guard)
-     * may have missed USBLEGSUP, and "no USBLEGSUP" then passes C1 with no
-     * handoff performed. Say so rather than end silently. */
-    if (off >= BAR_MAP_SIZE - 0x40UL || guard >= 64) {
-        qprintf("  NOTE: extended capability list not walked to its end "
-                "(next at %08lX); a USBLEGSUP beyond it was not seen\n",
-                (unsigned long)off);
-    }
+    /* extended capability walk (B6, B7), unchanged in behaviour since it
+     * moved to mmiodiag.c for the host runner (roadmap task 35.1) */
+    xcap_walk(c, ((c->hcc1 >> 16) & 0xFFFF) << 2, BAR_MAP_SIZE,
+              xcap_mmio_rd, c);
 
     xhci_classify_ports(c);
     return 1;

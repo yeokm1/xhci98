@@ -90,4 +90,21 @@ VOID HcdSvcRequestReset(PXHCI_EXTENSION ext);
 VOID HcdSvcDmaNotStopped(PXHCI_EXTENSION ext);
 PKSPIN_LOCK HcdSvcControllerLock(PXHCI_EXTENSION ext);
 
+#if defined(XHCI_FLAVOUR_QEMU)
+/* The qemu flavour's test aids, never in a published image: task 35.4's
+ * speed-table override, latched by the start (hcd_ctl.c), and 35-T.9's
+ * hooks (hcd_inj.c): the PORTSC filter and the doorbell on the accessors
+ * in xhci_pci.c, the health poll's USBSTS (xhci_cmd.c), and the event
+ * drain's swallowed Stopped event and injected Transfer Event
+ * (xhci_evt.c). */
+ULONG HcdSvcQemuPsiE460(PXHCI_EXTENSION ext);
+ULONG HcdInjPortscRead(PXHCI_EXTENSION ext, ULONG port, ULONG value);
+ULONG HcdInjPortscWrite(PXHCI_EXTENSION ext, ULONG port, ULONG value);
+ULONG HcdInjHealthUsbsts(PXHCI_EXTENSION ext, ULONG usbsts);
+ULONG HcdInjDoorbell(PXHCI_EXTENSION ext, ULONG slot, ULONG value);
+ULONG HcdInjEventSwallow(PXHCI_EXTENSION ext, const XHCI_TRB *ev);
+ULONG HcdInjEventTake(PXHCI_EXTENSION ext, XHCI_TRB *ev);
+VOID HcdInjEventDone(PXHCI_EXTENSION ext);
+#endif
+
 #endif /* HCD_SVC_H */

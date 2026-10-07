@@ -77,7 +77,10 @@ a machine said on a day.
   `--probe-only` shows no routing values.
 - Tier B: family-specific capability introspection. xHCI reports HCIVERSION,
   context size, slots/interrupters/ports, scratchpads, PPC, `HCCPARAMS2`
-  (U3C/CMC/FSC), USBLEGSUP, and USB2/USB3 protocol topology. FSC is the one
+  (U3C/CMC/FSC), USBLEGSUP, and USB2/USB3 protocol topology with each
+  protocol's speed table (PSI entries) decoded, plus, in the log and on the
+  serial line only, the raw extended-capability chain ("Raw
+  extended-capability dump" below). FSC is the one
   worth knowing before a suspend/resume matters: with `FSC = 0` the driver
   declines every controller Save State, so a resume rebuilds the bus instead
   of restoring it (`docs/using/release-notes.md`, "Known limitations"). Read the bit,
@@ -152,8 +155,11 @@ xhciqual\test\run-host-tests.cmd
 Builds and runs `xhciqual/test/test_mmiodiag.c` on the Windows build host in
 seconds, with no VM and no DOS. It covers the pure `PCIINFO` -> report logic
 in `mmiodiag.c`: the PCI Power Management block, sticky PCI Status errors,
-the two dead-MMIO classifiers, and the three-state C7 Intel routing
-classifier.
+the two dead-MMIO classifiers, the three-state C7 Intel routing
+classifier, and (roadmap task 35.1) the speed-table and
+extended-capability printers, the first against the E460's real USB 3 PSI
+words, and the production extended-capability walk and raw recorder, driven
+through a fake reader that fails any read outside the window.
 
 That code lives in its own translation unit so it can be tested here, because
 the QEMU matrix cannot reach the field-dependent branches. SeaBIOS leaves
@@ -617,6 +623,30 @@ Both fleet Intel machines have cleared it: the E460 on Sunrise Point-LP
 the USB2 capability and each identifying every device it saw across
 Full-Speed and High-Speed, with no PSIV mismatch line.
 
+The USB 3 side is where the strict reading bites, and C8 never meets it
+because it identifies USB2-path devices only. The E460's USB 3 capability
+(`8086:9D2F`) publishes PSIC 3 with only Intel's SSIC rates on IDs 1 to 3 and
+no ID 4, while its PORTSC reports a 5 Gb/s device as ID 4: a reader that
+treats a non-empty table as replacing the default IDs - this tool's C8 and the
+driver up to `2.1.1.0` - cannot name the device (`../docs/issues/11-sunrise-point-ssic-psi-table.md`).
+Every report now prints each protocol's PSI entries under its `Protocol` line
+and, on a USB 3.x protocol whose table was read in full (PSIC > 0, every entry
+inside the mapped window) and lists no PSIV 4:
+
+```text
+  WARNING: USB 3 PSI table does not list PSIV 4 (default SuperSpeed). If
+    PORTSC reports ID 4 for a 5 Gb/s device, as Sunrise Point does, a driver
+    that trusts the table strictly cannot decode it (issue 11)
+```
+
+It is informational: it feeds no verdict and no exit code. It says "if"
+because a table without ID 4 is not wrong in itself: a valid table may
+advertise 5 Gb/s under another ID, and a controller whose PORTSC then reports
+that ID decodes fine. What the tool cannot see without a device is which ID
+PORTSC reports; Sunrise Point reports 4. A table only partly read prints how
+many entries it read instead, and no warning, since ID 4 may be among the
+rest.
+
 AMD has never run it and no longer can: the B650M was the project's only AMD
 machine and became unavailable, so AMD xHCI silicon is untested ground rather
 than pending work. C6's speed line carries the same evidence; preserve and
@@ -737,21 +767,99 @@ v0.8 PM reporting, v0.9 PM fields, and two read-only probe regression cases,
 passed the 31-case QEMU matrix and the 5-case Win98 batch harness in Phase 0
 (including both C4 IRQ cases).
 
-## Open item: dump the raw extended-capability DWORDs
+## Raw extended-capability dump
 
-The report prints a decoded fact sheet (protocol groups, port map, PSI
-counts) and never the register words behind it. Driver Phase 4 task 3 turned
-both machines' reports into host-test replay vectors (`test_replay_e460` /
-`test_replay_p14s` in `test/test_caps.c`), and that is where the limit shows:
-a vector can carry a capability's shape but not its bytes, so xECP itself is
-synthetic in the vectors and the PSI DWORDs are placeholders that no check
-reads. Both fleet controllers advertise a PSI table (PSIC 3 on the USB2
-capability, 3 and 8 on the USB3 ones), so the driver's speed decode really
-does run through that table on this hardware, and it is the one part of the
-classification path real machines cannot currently be replayed against.
+Until `2.2.0.0` the report printed a decoded fact sheet (protocol groups,
+port map, PSI counts) and never the register words behind it. Driver Phase 4
+task 3 turned both machines' reports into host-test replay vectors
+(`test_replay_e460` / `test_replay_p14s` in `test/test_caps.c`), and that is
+where the limit showed: a vector could carry a capability's shape but not its
+bytes, so xECP is synthetic in those vectors and their PSI DWORDs are
+placeholders. Issue 11 (`../docs/issues/11-sunrise-point-ssic-psi-table.md`)
+is what that cost: the E460's USB 3 table, which the driver misreads, was
+first read from a driver snapshot rather than from this tool. Roadmap task
+35.1 closed the gap here rather than in the driver.
 
-The fix is small and belongs here rather than in the driver: emit a hex dump
-of the xECP chain (`xECP` itself, then each capability's DWORDs) alongside
-the decoded block. It needs a bare-metal run on each machine afterwards to be
-worth anything, so do it at the next bench session rather than as a session
-of its own.
+What every xHCI report now carries, all of it from the one read-only
+capability walk (`xcap_walk()` in `mmiodiag.c`, called by `xhci_read_caps()`
+in `xhcicap.c` with an MMIO reader), stored in `CTRL` and printed after it, so
+the printers touch no register. The walk, its recorder and the printers are
+all host-tested, the walk through a fake reader that fails any read outside
+the window:
+
+- **On screen and in the log**, under each `Protocol USB x.y` line, one line
+  per PSI entry: the raw dword, then PSIV, the rate as PSIM in the unit PSIE
+  names (b/s, Kb/s, Mb/s or Gb/s), PLT (`symmetric`, `asym RX`, `asym TX`,
+  or `reserved`), PFD, and LP, named `SuperSpeed` or `SuperSpeedPlus` on a
+  USB 3.x protocol (reserved on USB 2). Then the issue 11 warning where it
+  applies (the strict-PSI notes above). The E460's USB 3 protocol reads:
+
+  ```text
+    Protocol USB 3.0 @8020: ports 13-18, slot type 0, PSIC 3
+      PSI 04E00121  PSIV  1   1248 Mb/s  symmetric  PFD 1  LP 0 (SuperSpeed)
+      PSI 09C00122  PSIV  2   2496 Mb/s  symmetric  PFD 1  LP 0 (SuperSpeed)
+      PSI 13800123  PSIV  3   4992 Mb/s  symmetric  PFD 1  LP 0 (SuperSpeed)
+    WARNING: USB 3 PSI table does not list PSIV 4 (default SuperSpeed). If
+      PORTSC reports ID 4 for a 5 Gb/s device, as Sunrise Point does, a driver
+      that trusts the table strictly cannot decode it (issue 11)
+  ```
+
+  (the protocol line as in `results/e460-2026-07-25/`, the PSI words as
+  35.0 read them; the host runner checks these exact lines).
+- **In the log and on the serial line only**, after the port map, the raw
+  chain: xECP's byte offset, then per capability its BAR0 offset, ID (named),
+  next pointer and dwords, four to a row, each row headed by its BAR0 offset.
+  It runs to dozens of rows on an Intel controller, so the 25-row screen does
+  not get it; run with `--log` or `--serial` to have it. QEMU's controller
+  reads:
+
+  ```text
+    Extended capabilities, raw dwords (xECP 0020):
+      cap 0020 ID   2 next   4  Supported Protocol, 4 dwords
+        0020: 02000402 20425355 00000405 00000000
+      cap 0030 ID   2 next   0  Supported Protocol, 4 dwords
+        0030: 03000002 20425355 00000401 00000000
+  ```
+
+  A capability's span is the distance to the next one; the last, whose span
+  the chain does not give, takes its known size (USB Legacy Support 2,
+  Supported Protocol 4 + PSIC, Extended Power Management 2, Debug Capability
+  16) or 4 dwords. A Supported Protocol capability always includes its PSI
+  dwords. Bounds: 32 dwords per capability (a longer one prints `n of m
+  dwords`), 32 capabilities and 256 dwords per controller, never past the
+  64 KB mapped window. Past the last two, or where one would cut them,
+  Supported Protocol and USB Legacy Support capabilities are still recorded
+  in full, from a reserve of their own and with their defined dwords only
+  (4 + PSIC, and 2): the HP EliteBook 850 G5's `8086:15DB` spent the bound
+  on vendor capabilities before its USB 3.1 table
+  (`results/hp850g5-2026-10-06/`). Each `Protocol USB x.y` line also names
+  its capability's BAR0 offset (`@8020`). A header reading all ones ends the
+  raw record there with a note, the reserve's included (a bound reached
+  before it is still reported); the capability walk itself is unchanged by it and still
+  follows that header's `FF` next field, as it always has, until the window
+  or its 64-step guard stops it. A walk that stops at the window or the guard
+  says so.
+
+Which runs print it. Every mode that prints the per-controller report:
+`--probe-only` (read-only; `1PROBE.BAT` runs
+`XHCIQUAL --probe-only --no-page --log PROBE.LOG`) and the active modes. `XHCIQUAL --quick --log` (or
+`--quick --serial`) puts the protocol lines, PSI entries, warning and chain
+into the log after each xHCI controller's one-line verdict, leaving its screen
+unchanged. A bare `XHCIQUAL --log` is the full active run, not a read-only one
+("Command-line reference" above), so for a read-only reading with no device
+attached ask for `XHCIQUAL --probe-only --no-page --log FILE` or
+`XHCIQUAL --quick --log FILE`.
+
+Turning a log into a replay vector. A replay in `test/test_caps.c` fills a
+simulated BAR (`bar_reset`, then `put_legacy` / `put_protocol` today) and
+walks it with the driver's own `XhciParseExtendedCaps`. From a log: write
+each row's dwords at that row's BAR0 offset, word for word, in place of the
+`put_*` helpers' synthesised ones; pass the xECP offset in dwords (the
+printed byte offset divided by 4, as `test_replay_e460` passes `0x180` for
+`0x600`); and take the port count and the other capability registers from
+the same report's lines above. The Supported Protocol rows then carry the
+real port ranges and PSI dwords, so `XhciPortSpeedClass` runs against the
+controller's actual table rather than placeholders. A vector can carry only
+the dwords printed: a capability cut at the 32-dword bound says so on its
+line (`n of m dwords`). Roadmap task 35.2 takes the readings (E460, P14s Gen
+1, B490) and 35.1 writes the vectors from them.

@@ -399,7 +399,13 @@ static ULONG hcdHubEpState(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                   &offset) != XHCI_LAYOUT_OK) {
         return XHCI_EP_STATE_DISABLED;
     }
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* 35-T.9: Halted or Error, as the injection answers it. */
+    return HcdInjEpState(hc, dev->SlotId, dci,
+                         XHCI_EP_GET_STATE(XhciCommonAt(&hc->Hc, offset)[0]));
+#else
     return XHCI_EP_GET_STATE(XhciCommonAt(&hc->Hc, offset)[0]);
+#endif
 }
 
 /* Whether a device record's path to the root passes hub port q: on q
@@ -804,6 +810,9 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
             goto resumed;
         }
         XhciHubPortDecide(state, status, change, d);
+        HcdTolLocObserve(hc, q, (status & XHCI_HUB_PORT_CONNECTION) != 0,
+                         (status & XHCI_HUB_PORT_POWER) != 0,
+                         (change & XHCI_HUB_C_PORT_CONNECTION) != 0);
         for (bit = 1; bit <= XHCI_HUB_C_PORT_RESET; bit <<= 1) {
             selector = XhciHubClearSelector(bit);
             if ((d->Clear & bit) != 0 && selector != 0) {
@@ -815,6 +824,10 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
                            (hub->Index << 24) | (n << 16) | status);
         }
         if (d->Repower) {
+            /* The device's absence until it is seen again is the
+             * over-current's and this repower's, not an unplug: it must
+             * not re-arm a spent budget or release a hold (35-T.5). */
+            HcdTolLocRecovery(hc, q);
             (VOID)hcdHubFeature(hc, hub, n, 1, XHCI_HUB_FEAT_PORT_POWER);
         }
     }
@@ -1661,6 +1674,13 @@ ULONG HcdHubStart(PHCD_CONTROLLER hc, PHCD_PORT p, PHCD_USB_DEVICE dev)
     hub->SpeedClass = cls;
     hub->Tier = (node != NULL) ? node->Tier : 0;
     dev->Hub = hub;
+    /* Its ports' location budgets (35-T.5), in the extension so the dump
+     * shows them: each port a new location while this object lives. */
+    for (n = 0; n < HCD_HUB_MAX_PORTS; n++) {
+        XhciTolLocInit(&hc->Hc.Tol.HubLoc[hub->Index * HCD_HUB_MAX_PORTS +
+                                          n]);
+        XhciTolCycleChargeInit(&HcdHubPort(hc, hub, n + 1)->CycleCharge);
+    }
 
     if (!XhciHubTierServable(hub->Tier)) {
         hub->Refused = 1;

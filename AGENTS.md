@@ -274,8 +274,10 @@ miniport's rules (pool, the INFs' file set, SuperSpeed), the sections below
 say so, and `roadmap-hcd.md`'s decisions table and design record 13 are the
 authority.
 **Do not advance past a phase whose checkpoint has not been observed to pass.**
-The one exception is the E.1 bench clauses of Phases 28 to 31, read by the
-owner after the `2.0.0.0` cut (`roadmap-hcd.md`, decisions table).
+The exceptions are the bench clauses the owner reads after a cut: the E.1
+clauses of Phases 28 to 31, after the `2.0.0.0` cut, and Phase 35's 35-E,
+after the `2.2.0.0` cut (`roadmap-hcd.md`, decisions table, "Cut before the
+bench" and "`2.2.0.0`: cut before the bench").
 Then use the "What to read for each phase" table in `docs/README.md` for the
 documents that phase needs.
 

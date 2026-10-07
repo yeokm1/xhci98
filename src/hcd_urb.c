@@ -609,6 +609,89 @@ static NTSTATUS hcdFunctionControl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     return hcdTransferParsed(pdo, hc, irp, urb, &req);
 }
 
+/*
+ * A URB on a contained controller (35-T.6, design record 17 section 4.6:
+ * Unreadable): every transfer and command is held on its PDO instead of
+ * refused (HcdIoHoldUnreadable), listed or departed alike, and an abort is
+ * answered here as one on a departed PDO is, since no thread command will
+ * run again in this lifetime. A held command names its pipe, or none; an
+ * abort that cannot place a handle covers every pipe (HcdIoAbortMark).
+ * Returns 0, nothing done, for any other function, and for a transfer URB
+ * that does not parse, which the ordinary path refuses as before.
+ */
+/* The endpoint a held request's handle belongs to when it is a stream's
+ * (35-T.6), resolved while the device record is referenced, so an abort of
+ * the endpoint covers the stream's held request as xhci98_streams.h
+ * promises; NULL for an endpoint's own handle or one the device does not
+ * hold. On a departed PDO nothing names it any more: HCD_IO_ENDPOINT_ANY,
+ * which any abort of the PDO covers. hc is the dispatch's own: a removal
+ * clears pdo->Controller before it waits for active dispatches. */
+static PVOID hcdHeldEndpoint(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                             PVOID handle)
+{
+    PHCD_USB_DEVICE dev;
+    PHCD_PIPE pipe;
+    PVOID endpoint;
+    KIRQL oldIrql;
+
+    if (handle == NULL) {
+        return NULL;
+    }
+    dev = hcdDeviceRef(hc, pdo);
+    if (dev == NULL) {
+        return HCD_IO_ENDPOINT_ANY;
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    pipe = HcdCfgPipe(dev, handle);
+    endpoint = (pipe != NULL) ? (PVOID)pipe->Parent : NULL;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    (VOID)InterlockedDecrement(&dev->Refs);
+    return endpoint;
+}
+
+static ULONG hcdUnreadable(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                           PIRP irp, PURB urb, ULONG function,
+                           NTSTATUS *status)
+{
+    HCD_IO_REQUEST req;
+    PVOID handle;
+
+    handle = NULL;
+    switch (function) {
+    case URB_FUNCTION_ABORT_PIPE:
+        HcdIoAbortMark(pdo, irp, urb->UrbPipeRequest.PipeHandle, 0);
+        (VOID)HcdIoParkedRelease(pdo, 1);
+        urb->UrbHeader.Status = USBD_STATUS_SUCCESS;
+        *status = HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+        return 1;
+
+    case URB_FUNCTION_RESET_PIPE:
+    case XHCI_PIPE_URB_SYNC_RESET_PIPE:
+    case XHCI_PIPE_URB_SYNC_CLEAR_STALL:
+        handle = urb->UrbPipeRequest.PipeHandle;
+        break;
+
+    case URB_FUNCTION_SELECT_CONFIGURATION:
+    case URB_FUNCTION_SELECT_INTERFACE:
+        break;
+
+    default:
+        if (!hcdIsControl(function) &&
+            function != URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER &&
+            function != URB_FUNCTION_ISOCH_TRANSFER) {
+            return 0;
+        }
+        if (HcdUrbIoRequest(urb, &req) != USBD_STATUS_SUCCESS) {
+            return 0;
+        }
+        handle = req.Handle;
+        break;
+    }
+    *status = HcdIoHoldUnreadable(pdo, irp, urb, handle,
+                                  hcdHeldEndpoint(pdo, hc, handle));
+    return 1;
+}
+
 static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
                              PIRP irp, PURB urb)
 {
@@ -616,6 +699,7 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     ULONG valid;
     KIRQL lockIrql;
     PHCD_USB_DEVICE dev;
+    NTSTATUS status;
 
     if (urb == NULL) {
         return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
@@ -650,6 +734,13 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         (VOID)HcdIoParkedRelease(pdo, 1);
         urb->UrbHeader.Status = USBD_STATUS_SUCCESS;
         return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+    }
+    /* Before the departed test: a contained controller's dropped devices'
+     * PDOs hold their requests too. HcdIoSubmit tests it again under the
+     * lock it is set under. */
+    if (hc != NULL && hc->Hc.Tol.Unreadable &&
+        hcdUnreadable(pdo, hc, irp, urb, function, &status)) {
+        return status;
     }
     if (hc == NULL || !pdo->Listed) {
         /* Orphaned, or its device has left: nothing on the bus answers. */

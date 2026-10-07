@@ -27,10 +27,19 @@
 /* Slots and commands                                                       */
 /* ----------------------------------------------------------------------- */
 
-/* IRQL: <= DISPATCH_LEVEL (init sequence). */
+/* HCRST has completed (xhci_init.c): no slot, ring or TD the previous run
+ * held is followed any more, which is the proof an invalidation raised on a
+ * controller not shown halted waits for (XhciSlotInvalidateAll). IRQL:
+ * <= DISPATCH_LEVEL (init sequence), controller lock released. */
 VOID XhciSlotInit(PXHCI_EXTENSION ext)
 {
-    UNREFERENCED_PARAMETER(ext);
+    PHCD_CONTROLLER hc;
+    KIRQL oldIrql;
+
+    hc = HcdControllerFromExt(ext);
+    XhciControllerLockAcquire(ext, &oldIrql);
+    hc->SlotsUnproven = 0;
+    XhciControllerLockRelease(ext, oldIrql);
 }
 
 /* A slot command's Command Completion Event, from the event DPC. IRQL:
@@ -61,13 +70,90 @@ VOID XhciSlotCommandLost(PXHCI_EXTENSION ext)
     (VOID)KeSetEvent(&hc->CmdDoneEvent, IO_NO_INCREMENT, FALSE);
 }
 
-/* IRQL: DISPATCH_LEVEL. */
+/*
+ * A slot-fatal code on an event naming slotId (Table 6-90, p.468): the
+ * device on it is marked for the thread, which takes it down with a Disable
+ * Slot and lets it enumerate afresh (hcd_enum.c, hcdSlotFatalService). Not
+ * a tolerance behaviour - the specification's own recovery - so it is
+ * neither gated by XhciTolerance nor charged to a location's budget. IRQL:
+ * DISPATCH_LEVEL, controller lock held.
+ */
+static VOID hcdSlotFatalMark(PHCD_CONTROLLER hc, ULONG slotId, ULONG cc)
+{
+    PHCD_USB_DEVICE dev;
+
+    hc->SlotFatalEvents++;
+    if (slotId < 1 || slotId > XHCI_MAX_SLOTS) {
+        return;
+    }
+    dev = hc->SlotDevice[slotId];
+    if (dev == NULL) {
+        return;
+    }
+    if (!dev->SlotFatal) {
+        XhciLogNoteLocked(&hc->Hc, "slot.fatal", (slotId << 8) | cc);
+    }
+    dev->SlotFatal = 1;
+    HcdThreadWake(hc);
+}
+
+/* The command engine matched the event, so its Slot ID is the command's
+ * (xhci_cmd.c). IRQL: DISPATCH_LEVEL, controller lock held. */
 VOID XhciSlotCommandSlotFatal(PXHCI_EXTENSION ext, ULONG completionCode,
                               ULONG control)
 {
-    UNREFERENCED_PARAMETER(completionCode);
-    UNREFERENCED_PARAMETER(control);
-    HcdControllerFromExt(ext)->SlotFatalEvents++;
+    hcdSlotFatalMark(HcdControllerFromExt(ext), XHCI_TRB_GET_SLOT_ID(control),
+                     completionCode);
+}
+
+/*
+ * The location's stable progress (35-T.5), read by the thread: one count
+ * for each result that retired a transfer the engine latched as a success -
+ * whatever path retired it, a Transfer Event or the drain's settlement of
+ * a deferred short packet, and an isochronous transfer once its packets are
+ * answered - since every retirement passes through hcdEp0Result or
+ * hcdPipeResult once. A rejected, unmatched, trailing or deferred event
+ * retires nothing and is not progress. Controller lock held.
+ */
+static VOID hcdTolCountProgress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                const XHCI_XFER_EVENT_RESULT *result)
+{
+    PXHCI_TRANSFER t;
+
+    if (dev == NULL || dev->Location < 1 || dev->Location > HCD_PORT_COUNT ||
+        result->Action != XHCI_XFER_ACTION_COMPLETE) {
+        return;
+    }
+    for (t = result->Completed; t != NULL; t = t->Next) {
+        if (t->UsbdStatus == XHCI_USBD_STATUS_SUCCESS) {
+            hc->Ports[dev->Location - 1].TolCompletions++;
+            return;
+        }
+    }
+}
+
+/*
+ * The soft retry's counts (35-T.2, design record 17 sections 4.2 and 4.8),
+ * from every result a pipe's event, settle or replay produced, and the
+ * thread's wake for a divert: the engine has kept the Transaction Error on
+ * the head and set the queue's RetryWanted, which HcdCfgRetryService
+ * decides. Controller lock held.
+ */
+static VOID hcdTolCountRetry(PHCD_CONTROLLER hc,
+                             const XHCI_XFER_EVENT_RESULT *result)
+{
+    PXHCI_TOL_STATS stats;
+
+    stats = &hc->Hc.Tol.Stats;
+    if (result->RetryDiverted) {
+        stats->RetryDiverts++;
+        hc->RetryWork = 1;
+        HcdThreadWake(hc);
+    }
+    if (result->RetryExhausted) {
+        stats->RetryExhausted++;
+    }
+    stats->RetryRecovered += result->RetryRecovered;
 }
 
 /*
@@ -85,6 +171,7 @@ static ULONG hcdEp0Result(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     if (result->Fatal) {
         return 1;
     }
+    hcdTolCountProgress(hc, dev, result);
     if (result->NeedsRecovery || result->RefusedRetire) {
         hc->Ep0Recoveries++;
         /* A URB's control transfer halted EP0 (a STALL): the thread owes
@@ -129,6 +216,8 @@ static ULONG hcdPipeResult(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
     if (result->Fatal) {
         return 1;
     }
+    hcdTolCountProgress(hc, pipe->Device, result);
+    hcdTolCountRetry(hc, result);
     if (result->NeedsRecovery && !result->RefusedRetire &&
         pipe->TransferType != XHCI_PIPE_XFER_ISOCH) {
         pipe->Halted = 1;
@@ -258,6 +347,70 @@ static PHCD_PIPE hcdEventStream(PHCD_PIPE pipe, ULONG trbPA)
 }
 
 /*
+ * Controller tolerance's counting of one Transfer Event (35-T.8, design
+ * record 17 section 4.8): every completion code into the histogram, and an
+ * error code's first records into the note ring with the slot and endpoint
+ * it named - XhciLogErrorBudget's per-code budget, so a storm of one code
+ * cannot crowd out the first of another. IRQL: DISPATCH_LEVEL, controller
+ * lock held.
+ */
+static VOID hcdTolCountEvent(PXHCI_EXTENSION ext, ULONG slotId, ULONG dci,
+                             ULONG cc)
+{
+    XhciTolCountCode(&ext->Tol.Stats, cc);
+    if (cc == XHCI_CC_SUCCESS || cc == XHCI_CC_SHORT_PACKET ||
+        cc == XHCI_CC_STOPPED || cc == XHCI_CC_STOPPED_LENGTH_INVALID ||
+        cc == XHCI_CC_STOPPED_SHORT_PACKET ||
+        (cc >= XHCI_CC_VENDOR_INFO_MIN && cc <= XHCI_CC_VENDOR_INFO_MAX)) {
+        return;
+    }
+    if (XhciLogErrorBudget(&ext->Log, cc)) {
+        XhciLogNoteLocked(ext, "xfer.error",
+                          (slotId << 16) | (dci << 8) | cc);
+    } else {
+        ext->LogErrorsOverBudget++;
+    }
+}
+/* The queue's counts moved by one event, added to the controller-wide sums
+ * the dump carries (35-T.8); the queue's own stay where they were. IRQL:
+ * DISPATCH_LEVEL, controller lock held. */
+static VOID hcdTolSumQueue(PXHCI_EXTENSION ext,
+                           const XHCI_TRANSFER_QUEUE *queue, ULONG errors,
+                           ULONG badCodes, ULONG unmatched, ULONG foreign)
+{
+    ext->Tol.Stats.QueueErrors += queue->Errors - errors;
+    ext->Tol.Stats.QueueBadCodes += queue->BadCodes - badCodes;
+    ext->Tol.Stats.QueueUnmatched += queue->UnmatchedEvents - unmatched;
+    ext->Tol.Stats.QueueForeign += queue->ForeignEvents - foreign;
+}
+
+/*
+ * 35-T.3 and 35-T.4's producer (design record 17 section 4.3): a Transfer
+ * Event on a non-isochronous endpoint whose code the engine refused
+ * (claimed 0), on a slot that names a device, in any endpoint state; or a
+ * Stall, Transaction, Babble or Split Transaction error the queue could not
+ * match (unattributed: zero, off the ring, or inside no TD) on an open
+ * pipe, which the thread confirms from the endpoint's context
+ * (XhciTolCycleReason). Either marks the device; an isochronous pipe's
+ * events never do. IRQL: DISPATCH_LEVEL, controller lock held.
+ */
+static VOID hcdTolCycleEvent(PHCD_CONTROLLER hc, ULONG slotId, ULONG dci,
+                             ULONG cc, ULONG claimed, ULONG unattributed,
+                             ULONG isoch, ULONG pipeOpen)
+{
+    PHCD_USB_DEVICE dev;
+    ULONG reason;
+
+    dev = (slotId >= 1 && slotId <= XHCI_MAX_SLOTS) ? hc->SlotDevice[slotId]
+                                                    : NULL;
+    reason = XhciTolCycleReason(hc->Hc.Tol.Stats.Tolerance, claimed,
+                                unattributed, cc, isoch, dev != NULL,
+                                pipeOpen);
+    if (reason != XHCI_TOL_CYCLE_NONE) {
+        HcdTolCycleMark(hc, dev, reason, dci);
+    }
+}
+/*
  * A Transfer Event, matched by the transfer engine (xhci_xfer.c) against the
  * queue of the pipe its slot and endpoint name - EP0's, or one the
  * configuration opened: the engine checks the TRB address, the slot and the
@@ -277,11 +430,41 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
     ULONG cc;
     ULONG slotId;
     ULONG dci;
+    ULONG errors;
+    ULONG badCodes;
+    ULONG unmatched;
+    ULONG foreign;
+    ULONG reset;
 
     hc = HcdControllerFromExt(ext);
     slotId = XHCI_TRB_GET_SLOT_ID(event->Control);
     dci = XHCI_TRB_GET_EP_ID(event->Control);
+    hcdTolCountEvent(ext, slotId, dci, XHCI_TRB_GET_COMPLETION(event->Status));
+    /* The slot's verdict whatever becomes of the event below, which still
+     * retires its TD as the engine reads the code: an endpoint recovery
+     * leaves the slot exactly as the controller said it cannot use it. */
+    if (XhciXferSlotFatal(XHCI_TRB_GET_COMPLETION(event->Status))) {
+        hcdSlotFatalMark(hc, slotId, XHCI_TRB_GET_COMPLETION(event->Status));
+    }
+    endpoint = NULL;
     pipe = hcdEventPipe(hc, slotId, dci);
+    if (pipe != NULL &&
+        XhciXferEventHighRefused(pipe->Queue, event->Control, event->Param1)) {
+        /* A TRB pointer above 4 GB names no ring of this driver; its low
+         * dword alone could alias a queued TD and complete or retry it.
+         * Refused as foreign before anything reads the pointer (review
+         * round 1 of 35-T.2, finding 3), and escalated when fatal, as an
+         * event no queue owns is. */
+        ext->Tol.Stats.QueueForeign++;
+        cc = XHCI_TRB_GET_COMPLETION(event->Status);
+        reset = XhciXferCodeInfo(cc, &code) == XHCI_XFER_OK;
+        /* 35-T.3/4: Foreign by pointer, so a halt code here is a halt with
+         * no TD on the open pipe the slot and DCI name (record 17 section
+         * 4.3), and a refused code is one on a device. */
+        hcdTolCycleEvent(hc, slotId, dci, cc, reset, 1,
+                         pipe->TransferType == XHCI_PIPE_XFER_ISOCH, 1);
+        return reset && code.Fatal;
+    }
     if (pipe != NULL && pipe->Streams != NULL) {
         endpoint = pipe;
         /* An Event Data TRB's event carries that TRB's parameter, not a
@@ -311,9 +494,17 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
          * that belongs to the caller that routed the event"; Codex review
          * of batch (c), round 1, finding 3). */
         hc->Counters.TransferEventsUnclaimed++;
-        return XhciXferCodeInfo(XHCI_TRB_GET_COMPLETION(event->Status),
-                                &code) == XHCI_XFER_OK &&
-               code.Fatal;
+        cc = XHCI_TRB_GET_COMPLETION(event->Status);
+        reset = XhciXferCodeInfo(cc, &code) == XHCI_XFER_OK;
+        /* 35-T.3/4: a refused code on a slot naming a device, whatever its
+         * endpoint; and on a streams endpoint, a halt whose pointer no
+         * stream ring holds - the endpoint's pipe is open. An Event Data
+         * event carries no pointer to judge. */
+        if (!XHCI_EVENT_IS_EVENT_DATA(event->Control)) {
+            hcdTolCycleEvent(hc, slotId, dci, cc, reset, endpoint != NULL, 0,
+                             endpoint != NULL);
+        }
+        return reset && code.Fatal;
     }
     cc = XHCI_TRB_GET_COMPLETION(event->Status);
     if (cc == XHCI_CC_STOPPED || cc == XHCI_CC_STOPPED_LENGTH_INVALID ||
@@ -325,8 +516,14 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
                                    event->Status);
         return 0;
     }
+    errors = pipe->Queue->Errors;
+    badCodes = pipe->Queue->BadCodes;
+    unmatched = pipe->Queue->UnmatchedEvents;
+    foreign = pipe->Queue->ForeignEvents;
     if (pipe->TransferType == XHCI_PIPE_XFER_ISOCH) {
-        return hcdIsoEvent(hc, pipe, slotId, dci, event, cc);
+        reset = hcdIsoEvent(hc, pipe, slotId, dci, event, cc);
+        hcdTolSumQueue(ext, pipe->Queue, errors, badCodes, unmatched, foreign);
+        return reset;
     }
     if (XhciXferEvent(pipe->Queue, pipe->Ring, slotId, dci, event->Param0,
                       event->Status, event->Control, &result) !=
@@ -334,10 +531,58 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
         hc->Counters.TransferEventsUnclaimed++;
         return 0;
     }
+    hcdTolSumQueue(ext, pipe->Queue, errors, badCodes, unmatched, foreign);
+    if (result.NeedsRecovery && !result.RefusedRetire) {
+        ext->Tol.Stats.QueueHalts++;
+    }
+    if (result.Refused || result.Unattributed) {
+        hcdTolCycleEvent(hc, slotId, dci, result.Code, !result.Refused,
+                         result.Unattributed, 0, 1);
+    }
     if (dci == 1) {
         return hcdEp0Result(hc, pipe->Device, &result);
     }
     return hcdPipeResult(hc, pipe, &result);
+}
+
+/*
+ * The soft retry's replay (35-T.2, design record 17 section 4.2): the
+ * deferred outcome of the TD `token` names on `pipe`'s queue, if it is still
+ * the head and still holds one, applied through the engine with the
+ * interception bypassed - so the TD completes as today's Transaction Error
+ * would have completed it, DEV_NOT_RESPONDING, retired or placed past, the
+ * pipe left Halted - and accounted as XhciSlotTransferEvent accounts an
+ * event. The completed record goes to the done list: the caller runs
+ * HcdIoDeferred once the lock is released. Returns 1 when an outcome was
+ * applied. IRQL: <= DISPATCH_LEVEL, controller lock held.
+ */
+ULONG HcdDevRetryReplay(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG token)
+{
+    PXHCI_EXTENSION ext;
+    XHCI_XFER_EVENT_RESULT result;
+    ULONG errors;
+    ULONG badCodes;
+    ULONG unmatched;
+    ULONG foreign;
+
+    ext = &hc->Hc;
+    errors = pipe->Queue->Errors;
+    badCodes = pipe->Queue->BadCodes;
+    unmatched = pipe->Queue->UnmatchedEvents;
+    foreign = pipe->Queue->ForeignEvents;
+    if (!XhciXferRetryReplay(pipe->Queue, pipe->Ring, pipe->Device->SlotId,
+                             pipe->Dci, token, &result)) {
+        return 0;
+    }
+    ext->Tol.Stats.RetryReplayed++;
+    hcdTolSumQueue(ext, pipe->Queue, errors, badCodes, unmatched, foreign);
+    if (result.NeedsRecovery && !result.RefusedRetire) {
+        ext->Tol.Stats.QueueHalts++;
+    }
+    /* A Transaction Error is not a fatal code (XhciXferCodeInfo), so there
+     * is no escalation to return. */
+    (VOID)hcdPipeResult(hc, pipe, &result);
+    return 1;
 }
 
 /* One pipe's settle: a short packet's promised tail that never came. The
@@ -419,6 +664,115 @@ VOID XhciSlotDeferredWorkForced(PXHCI_EXTENSION ext, ULONG armMode)
     UNREFERENCED_PARAMETER(armMode);
 }
 
+/* One pipe's work anywhere between submission and completion: a record
+ * mapping, on the ring, held mapped or retired and not yet completed (any
+ * state but FREE), an IRP waiting for a record, or a TD on its queue (the
+ * thread's own EP0 record and the hub's status transfer are queued without
+ * a record). Controller lock held. */
+static ULONG hcdPipeSaveBusy(PHCD_PIPE pipe)
+{
+    ULONG i;
+
+    if (pipe->Queue->Count != 0 || !IsListEmpty(&pipe->Waiting) ||
+        !IsListEmpty(&pipe->Held)) {
+        return 1;
+    }
+    for (i = 0; i < pipe->XferCount; i++) {
+        if (pipe->Xfers[i].State != HCD_XFER_FREE) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Whether any device has work between submission and completion
+ * (hcdPipeSaveBusy, every endpoint, EP0 and each open stream). The save
+ * gate (xhciSaveState) asked the miniport's device table, which the HCD
+ * never fills, so every device passed as idle. Idle, the guard is armed in
+ * the same hold of the lock: a publication from here until the image is
+ * committed or restored spoils it (HcdIoMapped, XhciSlotSaveCommit).
+ * IRQL: <= DISPATCH_LEVEL, controller lock released. */
+ULONG XhciSlotSaveBusy(PXHCI_EXTENSION ext)
+{
+    PHCD_CONTROLLER hc;
+    PHCD_USB_DEVICE dev;
+    PHCD_PIPE pipe;
+    KIRQL oldIrql;
+    ULONG busy;
+    ULONG slot;
+    ULONG dci;
+    ULONG sid;
+
+    hc = HcdControllerFromExt(ext);
+    busy = 0;
+    XhciControllerLockAcquire(ext, &oldIrql);
+    for (slot = 1; slot <= XHCI_MAX_SLOTS && !busy; slot++) {
+        dev = hc->SlotDevice[slot];
+        if (dev == NULL) {
+            continue;
+        }
+        for (dci = 1; dci < 32 && !busy; dci++) {
+            pipe = (dci == 1) ? &dev->Ep0Pipe : dev->Pipes[dci];
+            if (pipe == NULL) {
+                continue;
+            }
+            busy = hcdPipeSaveBusy(pipe);
+            for (sid = 1; pipe->Streams != NULL &&
+                              sid <= pipe->Streams->Count && !busy;
+                 sid++) {
+                busy = (pipe->Streams->Pipe[sid] != NULL &&
+                        hcdPipeSaveBusy(pipe->Streams->Pipe[sid]))
+                           ? 1UL
+                           : 0UL;
+            }
+        }
+    }
+    if (!busy) {
+        hc->SavePublished = 0;
+    }
+    XhciControllerLockRelease(ext, oldIrql);
+    return busy;
+}
+
+/* The save's commit, after CSS completed: the image is valid only if
+ * nothing was published since the gate armed - a submission after the
+ * check, or a mapping that completed, wrote a ring the image may not
+ * describe (4.23.2) and rang a doorbell the halted controller dropped.
+ * Under the lock HcdIoMapped spoils it under, so the two cannot cross.
+ * Returns the image's validity. IRQL: <= DISPATCH_LEVEL, controller lock
+ * released. */
+ULONG XhciSlotSaveCommit(PXHCI_EXTENSION ext)
+{
+    PHCD_CONTROLLER hc;
+    KIRQL oldIrql;
+    ULONG valid;
+
+    hc = HcdControllerFromExt(ext);
+    XhciControllerLockAcquire(ext, &oldIrql);
+    valid = XhciTolSaveCommit(hc->SavePublished);
+    ext->SavedStateValid = valid;
+    XhciControllerLockRelease(ext, oldIrql);
+    return valid;
+}
+
+/* After a restore has run the controller: 1 when a publication since the
+ * save (or during the restore, before Run/Stop) spoiled it, so the resume
+ * reinitializes and its invalidation completes that transfer rather than
+ * leaving it on a ring whose doorbell the halted controller dropped.
+ * IRQL: <= DISPATCH_LEVEL, controller lock released. */
+ULONG XhciSlotSaveSpoiled(PXHCI_EXTENSION ext)
+{
+    PHCD_CONTROLLER hc;
+    KIRQL oldIrql;
+    ULONG spoiled;
+
+    hc = HcdControllerFromExt(ext);
+    XhciControllerLockAcquire(ext, &oldIrql);
+    spoiled = hc->SavePublished;
+    XhciControllerLockRelease(ext, oldIrql);
+    return spoiled;
+}
+
 /* IRQL: <= DISPATCH_LEVEL, controller lock released. */
 VOID XhciSlotResumeSweep(PXHCI_EXTENSION ext)
 {
@@ -427,14 +781,20 @@ VOID XhciSlotResumeSweep(PXHCI_EXTENSION ext)
 
 /* Every slot is gone (HCRST, stop, recovery): the thread drops the records
  * and settles the ports at its next powered pass (hcd_enum.c,
- * hcdInvalidate). IRQL: <= DISPATCH_LEVEL, controller lock held. */
+ * hcdInvalidate). The recovery and the resume raise it before their own
+ * halt, so a controllerStopped of 0 is remembered: unless the HCRST that
+ * follows completes (XhciSlotInit), the drain is not owed a released
+ * mapping (HcdEnumService). IRQL: <= DISPATCH_LEVEL, controller lock
+ * held. */
 VOID XhciSlotInvalidateAll(PXHCI_EXTENSION ext, ULONG controllerStopped)
 {
     PHCD_CONTROLLER hc;
 
-    UNREFERENCED_PARAMETER(controllerStopped);
     hc = HcdControllerFromExt(ext);
     hc->SlotsInvalidated = 1;
+    if (!controllerStopped) {
+        hc->SlotsUnproven = 1;
+    }
     HcdThreadWake(hc);
 }
 

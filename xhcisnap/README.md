@@ -1,14 +1,14 @@
 # xhcisnap - reading this driver's own log off a running machine
 
-`XHCISNAP.EXE` reads `xhci98.sys`'s extension, its raw PORTSC array and (from
-2.0.0.0) its enabled slots from user mode, and writes a report a user can send
-back.
+`XHCISNAP.EXE` reads `xhci98.sys`'s extension, its raw PORTSC array, (from
+2.0.0.0) its enabled slots and (from 2.2.0.0) its root ports' enumeration and
+counters from user mode, and writes a report a user can send back.
 
 Two drivers answer it. From 2.0.0.0 `xhci98.sys` is the successor host
 controller driver (`docs/contributing/roadmap-hcd.md`, design record 13): it
 owns its driver object, creates `\DosDevices\HCD<n>` itself and answers the
 same USBUSER `PassThru` request through its own door (`src/hcd_door.c`, schema
-5 unchanged, the slots region added). The 1.x miniport ran under usbport and
+5 unchanged, the slots and HCD regions added). The 1.x miniport ran under usbport and
 was reached through usbport's `PassThru` vendor escape. Most of this document
 is the 1.x history; where it says usbport or the miniport, that is the 1.x
 route, which the tool still reads.
@@ -133,6 +133,107 @@ actually carries (roadmap-hcd.md 29-E.1). It is read from a third snapshot
 region that is not saved as a raw file; a 1.x driver does not serve it, and
 the report says so. `-selftest-slots` prints the decode over canned records.
 
+From 2.2.0.0 (roadmap-hcd.md task 35.3) the `.TXT` also carries, at every
+level, the driver's own view of each root port and its counter block, read
+from a fourth region, the HCD region, which is not saved as a raw file either.
+Neither is in the extension, so neither is in the `.BIN`: each root port's
+enumeration machine - its state, why it failed, the attempts it used, its slot,
+the raw speed ID its last reset read with the class and meaning the driver
+gave it, its USB 3 link's warm resets and give-up, and its enumeration notes'
+budget and refusals - and `XHCIHC_COUNTERS`, the 63 counters the device matrix
+reads. A port is printed only when it has something to say, the counters only
+when nonzero, by name. A driver before 2.2.0.0 does not serve the region and
+the report says so. `-selftest-hcd` prints the decode over a canned image.
+
+The region is versioned on its own, inside the unchanged schema 5: a header
+(version, header bytes, port count, record bytes, the records' offset, counter
+count, the counters' offset, the notes' budget, and from 35-T.8 the twelve
+tolerance words below), then one sixteen-word record per root port
+(`src/xhci.h`, `XHCI_SNAPSHOT_HCD_PORT_*`), then the counters. The tool walks
+it by the sizes its header gives, so a later driver that appends to the
+header, a record or the counters is still read; a version past the one the
+tool knows is refused, since a version bump means a field changed meaning.
+35.3's driver sent an eight-word header; 35-T.8's appended twelve words with
+the version left at 1, and an older tool reads the region as before.
+
+### Controller tolerance (2.2.0.0)
+
+From 2.2.0.0 (roadmap-hcd.md task 35-T.8, design record 17 section 4.8) the
+`.TXT` also names, at every level, what the driver's controller tolerance saw
+and did. That state lives in the extension (`XHCI_EXTENSION.Tol`,
+`src/xhci_tol.h`), so it is in the `.BIN` and inside the tear detector's
+cover; the HCD region's header says where it lies in the extension image
+(`XHCI_SNAPSHOT_HCD_TOL_*`: its offset and size, the counters' word count, the
+recovery window's and the clock's offsets, and each kind of location's
+offset, count and record size), so the tool names it from the `.BIN`'s own
+bytes with no offset table, and checks each figure against the image before
+believing it. The last header word, `XHCI_SNAPSHOT_HCD_TERMINAL`, is a value
+rather than a place: the controller's terminal reason, cut under the
+controller lock with the window.
+
+What the report carries:
+
+- **The values in effect**: `XhciTolerance` (1 on, 0 off - `2.1.1.0`'s
+  handling, but for what applies at every value: an incompatible device's
+  re-enumeration, terminal reason 5's containment, and on a latched-failed
+  controller the release of its held transfers on HCH's proof, no resume
+  clearing a spent run of failures (a change from `2.1.1.0` at 0: only a
+  stop and a start bring it back), and no Save or Restore State; the
+  counters of what was seen still count - the codes, the queues' sums and
+  halts, root port PED faults and over-currents - and so do those of what
+  applies at every value (an incompatible device's charges and `Holds`,
+  `Contained`); the counters of the behaviours switched off stay at 0),
+  `XhciIntervalCap` with whether
+  the cap applies on this controller and how many endpoints it lowered, and
+  `XhciAvgTrbEsit`.
+- **The controller**: running; failed with an in-place recovery still owed;
+  latched failed after three recoveries failed in a row; latched failed
+  because the recovery window refused a fourth inside it (at least ten
+  minutes, about 22 at the timer's nominal rate); contained as unreadable
+  (USBSTS read all ones); or, terminal reason 5,
+  "CONTAINED: halt and reset did not complete and Bus Master Enable would
+  not clear; DMA not proven stopped, common buffer pinned" - an in-place
+  recovery or a reinitializing resume whose halt and controller reset never
+  completed, on a controller that still reads, and whose Bus Master Enable
+  clear was not proven either (at every `XhciTolerance` value, 0 included;
+  the containment below then reads pinned). The two latched states and
+  reason 5 end only at a stop and start, and the report says so beside them.
+- **The recovery window**: how many of the three recoveries it allows were
+  begun inside it, how long ago each began in tolerance-clock ticks (100 ms
+  nominal, credited at no more than 45 ms each), and how many it refused.
+  The driver drops an old stamp only when it next admits a recovery, so the
+  tool judges each stamp against the dump's own clock: one past the window
+  is reported as kept but not counted.
+- **The containment** and its branch: released (Bus Master Enable read back
+  clear, the devices dropped) or pinned (no proof DMA stopped, the common
+  buffer and transfers kept), and the all-ones episodes begun.
+- **The counters, nonzero only, by name** (`XHCI_TOL_STATS`): the backstop's
+  drains; the queues' `Errors`, `BadCodes`, `UnmatchedEvents` and
+  `ForeignEvents` summed, and halting completions; the soft retry's diverts,
+  Reset Endpoints, recoveries, exhaustions, replays and refused resets; the
+  device cycles by reason (a code nothing claims, a halt with no TD, a root
+  port found disabled), those before a PDO, those dropped as stale and those
+  a budget refused; the context reads for a halt with no TD and the stale
+  ones; root port PED faults, over-currents, repowers, holds; HCH recoveries
+  and recoveries the window refused. A counter a later driver appends before
+  the histogram prints by number.
+- **The completion codes**, every Transfer Event's code by count with its
+  xHCI name. The note ring's `xfer.error` records (slot `<< 16` \| DCI `<< 8`
+  \| code) carry the first few of each error code, a budget per code so a
+  storm of one cannot crowd out the first of another.
+- **Each location charged, held or re-armed**: a root port by number, an
+  external hub's port as hub object and port (the hub numbered from 0 in the
+  order the driver brought hubs up), with its charges, its re-enumerations
+  and repowers against their budget of three, its re-arms, how often it was
+  held, and the hold standing now - powered (ended by a stable disconnect or
+  a controller start) or unpowered (ended only by a controller start).
+
+A driver before 35-T.8 sends the eight-word header and the report says it
+does not serve the tolerance state; an extension image that came back short
+or another size than the driver declared is not decoded, and only the
+terminal reason is printed. `-selftest-tol` prints the decode over a canned
+image.
+
 The PORTSC decode is printed on screen whatever the level, because that is what
 the bench reads on the spot. The headline test is per port: a port reporting a
 device connected with `PP` clear is Finding Q read off the register, whatever
@@ -219,6 +320,43 @@ So `ep.open.ival=00020006` is a Full-Speed endpoint at Interval 6, 8 ms -
 what a stock mouse behind a virtual hub reads - and `00030005` the same
 mouse on a root port with the switch off, reported High Speed and polled
 every 4 ms.
+
+### The root port enumeration records (2.2.0.0)
+
+`xhci98.sys` from 2.2.0.0 (roadmap-hcd.md task 35.3) notes how each root
+port's enumeration went, so a dump names its own cause. 35.0's E460 dumps
+showed a SuperSpeed link trained and no slot ever made, and nothing in the
+log said why; these records would have said "speed ID 4, no mapping, failed
+on the speed, no retry follows". The `.TXT` prints them in the ring as
+written and, after it, once more decoded a line each ("root port
+enumeration notes, decoded"). `-selftest-notes` prints that decode over a
+canned ring. The layouts are `src/xhci_enum.h`'s; the port is the xHCI port
+number, as in the PORTSC table.
+
+| Label | Written when | Value |
+|---|---|---|
+| `enum.port.look` | an inspection of the port fed its machine a connect or disconnect, asked for a warm reset or gave the link up, or found the machine Failed (once, until something is fed again) | port `<< 24` \| machine state before it `<< 20` \| link action `<< 16` \| feed `<< 14` (bit 14 disconnect, bit 15 connect) \| PORTSC change bits 23:17 `<< 7` \| PLS `<< 3` \| PR `<< 2` \| PED `<< 1` \| CCS |
+| `enum.port.reset` | the machine reset the port | port `<< 24` \| ok `<< 23` \| attempt `<< 16` (0 the first) \| PORTSC bits 15:0 as the reset left it (speed ID at 13:10) |
+| `enum.port.speed` | the same, the reset ok | port `<< 24` \| raw speed ID `<< 16` \| class `<< 8` (0 unknown, 1 Low, 2 Full, 3 High, 4 SuperSpeed) \| where the meaning came from (0 none, 1 listed in the protocol's PSI table, 2 the default IDs of a protocol with no table, 3 the default ID for an ID 4 to 7 a USB 3 table does not list - task 35.1) |
+| `enum.port.rate` | the same | port `<< 24` \| SuperSpeedPlus `<< 23` \| the rate in units of 100 kbit/s (0 when the protocol names no rate for the ID, 7FFFFFh for one past the field), printed in Mbit/s |
+| `enum.port.slot` | Enable Slot completed, or never did | port `<< 24` \| completion code `<< 16` (0 never completed) \| attempt `<< 8` \| Slot ID the controller gave |
+| `enum.port.fail` | an attempt failed | port `<< 24` \| cause `<< 16` \| attempt `<< 8` \| 1 when no retry follows |
+| `enum.port.end` | a run of the machine that reset the port ended | port `<< 24` \| state `<< 16` \| cause `<< 8` \| retries used |
+| `enum.port.quiet` | the port's budget was spent | port `<< 24` \| the budget |
+
+Machine states: 0 Empty, 1 Debounce, 2 Reset, 3 Enable Slot, 4 Address, 5
+the 8-byte descriptor, 6 Evaluate, 7 the device descriptor, 8 the
+configuration's head, 9 the whole configuration, 10 Present, 11 Bound, 12
+Gone, 13 Failed, 14 and 15 the BOS. Causes: 0 none, 1 the reset, 2 no slot,
+3 Address Device, 4 the device descriptor, 5 the configuration, 6 the PDO,
+7 the speed (no EP0 packet size for the class it decoded to).
+
+They are bounded. A look, or one run of the machine (both its attempts), is
+one burst, and a port has eight between enumerations: one that enumerates
+gets them all back, so a working port replugged any number of times keeps its
+records, and one that fails or flaps writes `enum.port.quiet` and then
+nothing until it enumerates. The bursts refused are counted per port, in the
+HCD region above. Ports behind a hub are not noted.
 
 ## Three things to know before trusting a dump
 

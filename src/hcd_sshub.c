@@ -448,6 +448,12 @@ ULONG HcdSsHubPortReset(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     }
     q->Link.WarmResets = 0;
     q->Link.GaveUp = 0;
+    /* An enumeration after a recovery that timed out with the link still
+     * training: this reset's recovered connection ends that recovery's
+     * disconnect, as HcdSsHubPortRecover's own success does. */
+    HcdTolLocObserve(hc, q, (status & XHCI_SSHUB_PORT_CONNECTION) != 0,
+                     (status & XHCI_SSHUB_PORT_POWER) != 0,
+                     (change & XHCI_SSHUB_C_PORT_CONNECTION) != 0);
     *speedClass = XHCI_SPEED_SUPER;
     hcdSsHubReadExt(hc, hub, n, q);
     hcdSsHubDelay(HCD_SSHUB_RESET_RECOVERY_MS);
@@ -487,6 +493,7 @@ ULONG HcdSsHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     d->Resume = 0;
     d->Retry = 0;
     d->GaveUp = 0;
+    d->Disabled = 0;
     if (!HcdHubPortStatus(hc, hub, n, &status, &change)) {
         return 0;
     }
@@ -516,6 +523,9 @@ ULONG HcdSsHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
                        (hub->Index << 24) | (n << 16) | status);
     }
     if (sd.Repower) {
+        /* As a USB 2.0 hub port's repower (hcd_hub.c): the absence until
+         * the device is seen again is not an unplug (35-T.5). */
+        HcdTolLocRecovery(hc, q);
         (VOID)hcdSsHubFeature(hc, hub, n, 1, XHCI_HUB_FEAT_PORT_POWER);
     }
     if (sd.ConfigError) {
@@ -534,7 +544,11 @@ ULONG HcdSsHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     d->Repower = sd.Repower;
     d->Resume = sd.Resume;
     d->Suspended = sd.Resumed;
+    d->Disabled = sd.Disabled;
     q->HubSsRecover = sd.WarmReset;
+    HcdTolLocObserve(hc, q, (status & XHCI_SSHUB_PORT_CONNECTION) != 0,
+                     (status & XHCI_SSHUB_PORT_POWER) != 0,
+                     (change & XHCI_SSHUB_C_PORT_CONNECTION) != 0);
     if (sd.WarmReset) {
         XHCI_DBG_VALUE("hcd: SS hub port link error, port/link",
                        (n << 8) | XhciSsHubLinkState(status));
@@ -580,6 +594,9 @@ ULONG HcdSsHubPortRecover(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
         !hcdSsHubFeature(hc, hub, n, 1, XHCI_SSHUB_FEAT_BH_PORT_RESET)) {
         return 0;
     }
+    /* The warm reset has begun: the link's absence through it is the
+     * driver's own (35-T.5), until the port is seen connected again. */
+    HcdTolLocRecovery(hc, q);
     warmSeen = 0;
     progress = hcdSsHubResetWait(hc, hub, n, HCD_SSHUB_WARM_WAIT_MS,
                                  &status, &change, &warmSeen);
@@ -587,6 +604,11 @@ ULONG HcdSsHubPortRecover(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
     if (progress == XHCI_HUB_RESET_ENABLED) {
         q->Link.WarmResets = 0;
         q->Link.GaveUp = 0;
+        /* The recovered connection, seen here and cleared with its change
+         * bits, is the look that ends the recovery's disconnect. */
+        HcdTolLocObserve(hc, q, (status & XHCI_SSHUB_PORT_CONNECTION) != 0,
+                         (status & XHCI_SSHUB_PORT_POWER) != 0,
+                         (change & XHCI_SSHUB_C_PORT_CONNECTION) != 0);
     }
     XhciSsHubPortDecide(XHCI_ENUM_EMPTY, status, 0, &after);
     return after.Connect;

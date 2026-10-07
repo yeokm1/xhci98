@@ -140,6 +140,73 @@ for %%S in ("SuperSpeed, 5 Gbit/s, Gen 1x1" "SuperSpeedPlus, 10 Gbit/s, Gen 2x1"
     )
 )
 
+rem Task 35.3's root port enumeration notes, decoded over a canned ring: 35.0's
+rem E460 failure as 2.1.1.0 met it, the same link with 35.1's fallback, and a
+rem spent budget.
+"%~dp0XHCISNAP.EXE" -selftest-notes > "%BASE%.notes.log"
+if errorlevel 1 (
+    echo FAIL: -selftest-notes exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("port 13 look:  machine Empty, fed connect, link none; PORTSC CCS PED PLS 0, changes CSC PLC" "port 13 reset: attempt 0 came back enabled; PORTSC low 1203: speed ID 4" "ID 4 is unknown, by no mapping" "attempt 1 failed on the speed (no EP0 size for it); no retry follows" "port 13 end:   machine Failed" "port 13 look:  machine Failed, fed nothing" "ID 4 is SuperSpeed, by default ID, unlisted on a USB 3 table" "port 14 rate:  5000 Mbit/s" "port  2 rate:  1.5 Mbit/s" "Enable Slot completion 1 (Success), slot 5" "port 14 end:   machine Present" "port 15 quiet: its budget of 8 bursts is spent") do (
+    findstr /C:%%S "%BASE%.notes.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the note decode does not say %%S
+        set FAILED=1
+    )
+)
+findstr /C:"tol.mode" "%BASE%.notes.log" > nul
+if not errorlevel 1 (
+    echo FAIL: the note decode printed a record not its own
+    set FAILED=1
+)
+
+rem Task 35.3's HCD region decoded over a canned image: a port Failed on the
+rem speed, a working SuperSpeed port by the fallback, an empty port left out,
+rem and the nonzero counters by name.
+"%~dp0XHCISNAP.EXE" -selftest-hcd > "%BASE%.hcd.log"
+if errorlevel 1 (
+    echo FAIL: -selftest-hcd exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("13  Failed      speed (no EP0 size)" "4  unknown (no mapping)" "notes 5 of 8, 2 refused" "14  Present     none" "4  SuperSpeed (default ID, unlisted on a USB 3 table)" "2 of 3 root ports shown" "SlotsEnabled               4" "PortSpeedSuper             1" "2 of 63 nonzero" "not a shape this build reads" "  17  Failed      speed (no EP0 size)" "1 of 2 root ports shown") do (
+    findstr /C:%%S "%BASE%.hcd.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the HCD region decode does not say %%S
+        set FAILED=1
+    )
+)
+
+rem Task 35-T.8's tolerance state, named from a canned extension image at the
+rem place a canned HCD header gives: the values in effect, the controller's
+rem terminal reason and window, the counters and completion codes by name, a
+rem held root port and a re-armed hub port; then a 35.3 header, a state past
+rem the image, and no image at all.
+"%~dp0XHCISNAP.EXE" -selftest-tol > "%BASE%.tol.log"
+if errorlevel 1 (
+    echo FAIL: -selftest-tol exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("XhciTolerance    1 (on)" "XhciIntervalCap  1 (AMD controllers only): applies here, 2 endpoint(s) capped" "XhciAvgTrbEsit   0 (Average TRB Length 1024)" "controller       LATCHED FAILED: the recovery window refused a fourth" "3 of 3 begun inside ten minutes; 1 refused" "begun 300, 200, 100 ticks ago" "BackstopDrains            3" "RetryDiverts              4" "CyclesRefusedCode         2" "    4 USB Transaction Error        5" "   12 Endpoint Not Enabled         2" "  200 vendor-defined error         1" "root port 4        charges 3: re-enumerations 3 of 3" "NOW HELD, re-enumerations spent (powered)" "hub 1 port 2       charges 1" "not served by this driver (an xhci98.sys before 2.2.0.0's" "not a shape this build" "controller: LATCHED FAILED: the recovery window refused a fourth." "controller: CONTAINED: halt and reset did not complete and Bus Master Enable would not clear; DMA not proven stopped, common buffer pinned.") do (
+    findstr /C:%%S "%BASE%.tol.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the tolerance decode does not say %%S
+        set FAILED=1
+    )
+)
+for %%S in ("2 of 3 begun inside ten minutes; 0 refused" "begun 512, 176 ticks ago" "1 older stamp(s) kept, past the window and not counted") do (
+    findstr /C:%%S "%BASE%.tol.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the expired window decode does not say %%S
+        set FAILED=1
+    )
+)
+findstr /C:"QueueHalts" "%BASE%.tol.log" > nul
+if not errorlevel 1 (
+    echo FAIL: the tolerance decode printed a zero counter
+    set FAILED=1
+)
+
 rd /s /q "%RUNDIR%" 2> nul
 rd out 2> nul
 
@@ -147,5 +214,5 @@ if "%FAILED%"=="1" (
     echo xhcisnap selftest FAILED
     exit /b 1
 )
-echo xhcisnap selftest: 6 cases, all passed
+echo xhcisnap selftest: 9 cases, all passed
 exit /b 0

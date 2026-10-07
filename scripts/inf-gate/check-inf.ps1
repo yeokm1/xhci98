@@ -80,7 +80,9 @@ What it checks, grouped by the failure each rule prevents:
            so every value the driver reads is where a user looks for it
            (owner, 2026-10-05). Task 34.3 made it eight:
            XhciIntelPortSwitch at 1, the Intel port switchover's opt-out
-           (owner, 2026-10-05).
+           (owner, 2026-10-05). Task 35-T.7 made it eleven: XhciTolerance
+           at 1, XhciIntervalCap at 1 and XhciAvgTrbEsit at 0 (design
+           record 17 sections 4.7 and 4.11).
            (**VAL-SZ was removed with XhciLogFile.** It was the
            string half - a REG_SZ's data is text two setup engines may quote,
            trim or tokenise differently, which a DWORD's is not - and with no
@@ -1213,8 +1215,29 @@ $requiredValues = @(
         Name    = "XhciIntelPortSwitch"
         Type    = "0x00010003"
         Default = "1"
-        Why     = "roadmap-hcd task 34.3's Intel EHCI-to-xHCI port switchover on the 7-, 8- and 9-series and C610 PCH, read at start on those six controllers only; 0 leaves the routing as firmware set it. The INF writes the 1 so the opt-out is where a user looks for it, under 34.1's don't-overwrite rule so a user's 0 survives an update (owner, 2026-10-05)"
+        Why     = "roadmap-hcd task 34.3's Intel EHCI-to-xHCI port switchover on the 7-, 8- and 9-series and C610 PCH, read at start on every Intel controller (roadmap-hcd task 35.5), where an exact 2 also routes on an unlisted one at the user's own risk; 0 leaves the routing as firmware set it. The INF writes the 1 so the opt-out is where a user looks for it, under 34.1's don't-overwrite rule so a user's 0 survives an update (owner, 2026-10-05)"
         DefaultWhy = "1 is the driver's own default - absent, of another type or any number but 0 is on (owner, 2026-10-05); shipping 0 would leave the machines the task exists for with nothing on their switchable connectors"
+    },
+    @{
+        Name    = "XhciTolerance"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-hcd task 35-T.7's off-switch for the unconditional tolerance behaviours (design record 17 section 4.11), latched at each start: 1 applies sections 4.1 to 4.6, 0 gives 2.1.1.0's handling back without a new build. The INF writes the 1 so the switch is where a user looks for it, under 34.1's don't-overwrite rule so a user's 0 survives an update"
+        DefaultWhy = "1 is the driver's own default - absent, of another type or any number but 0 reads as 1 (design record 17 section 4.11); shipping 0 would turn off the tolerance the release exists to add"
+    },
+    @{
+        Name    = "XhciIntervalCap"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-hcd task 35-T.7's interrupt-interval cap at 8 (32 ms) on AMD controllers (design record 17 section 4.7), gated with design record 17 section 2's three values: 1 the list, 0 off, 2 every controller. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
+        DefaultWhy = "1 is the driver's own default, the gated list (design record 17 section 2); 0 or 2 would be a new decision"
+    },
+    @{
+        Name    = "XhciAvgTrbEsit"
+        Type    = "0x00010003"
+        Default = "0"
+        Why     = "roadmap-hcd task 35-T.7's Average TRB Length switch (design record 17 section 4.7), read at each start: 0 keeps 1024, 1 programs an interrupt endpoint's Average TRB Length as its Max ESIT Payload. The INF writes the 0 so the value is where a tester looks for it, under 34.1's don't-overwrite rule"
+        DefaultWhy = "0 is the driver's own default and keeps what a healthy controller is told today; 1 changes the controller's bandwidth admission input and is a tester's comparison, not a default (owner, 2026-10-06)"
     },
     @{
         Name    = "XhciVirtualHSHub"

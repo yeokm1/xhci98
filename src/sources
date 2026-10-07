@@ -74,6 +74,8 @@ SOURCES=xhci_mem.c    \
         xhci_enum.c   \
         xhci_link.c   \
         xhci_psw.c    \
+        xhci_snap.c   \
+        xhci_tol.c    \
         xhci_pipe.c   \
         xhci_stream.c \
         xhci_func.c   \
@@ -85,6 +87,8 @@ SOURCES=xhci_mem.c    \
         hcd_pool.c    \
         xhci_strict.c \
         hcd_strict.c  \
+        xhci_inj.c    \
+        hcd_inj.c     \
         hcd_door.c    \
         hcd_log.c     \
         xhci98.rc
@@ -117,7 +121,10 @@ SOURCES=xhci_mem.c    \
 # XHCI_DBG_LIVE and XHCI_DBG_E9 make the qemu flavour: the live trace and its
 # port-0xE9 mirror, a runtime and a load-time hazard respectively on Windows 98
 # metal (design record 08 section 5.1), both opt-in. XHCI_FLAVOUR_* is the
-# in-image flavour marker hcd_entry.c emits.
+# in-image flavour marker hcd_entry.c emits, and XHCI_FLAVOUR_QEMU alone
+# compiles the qemu test aids: task 35.4's XhciQemuPsiE460 and 35-T.9's fault
+# injection (xhci_inj.c, hcd_inj.c), which compile to nothing in the two
+# flavours that ship.
 #
 !IF "$(BUILD_ALT_DIR)" == "chk_qemu"
 C_DEFINES=$(C_DEFINES) -DXHCI_DBG_LIVE -DXHCI_DBG_E9 -DXHCI_FLAVOUR_QEMU

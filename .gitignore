@@ -219,6 +219,7 @@ handoff.md
 # it). Lives with the harness, not at the repo root; the loaders look only here.
 scripts/vm-matrix/matrix.config.psd1
 
-# build.exe's warning log for the UAS class driver (src\uas, task 31-A.2):
-# written only when a flavour warns, and never source.
+# build.exe's warning logs, for the HCD (src) and the UAS class driver
+# (src\uas, task 31-A.2): written only when a flavour warns, and never source.
+src/build*.wrn
 src/uas/build*.wrn

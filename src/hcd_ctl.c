@@ -49,10 +49,23 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * they are absent and the same defaults stand. */
 #define HCD_VALUE_SETTLE_TOTAL  L"XhciFirstEnumWaitMs"
 #define HCD_VALUE_SETTLE_PORT   L"XhciFirstEnumPortMs"
-/* Task 34.3: the Intel port switchover, on unless the value is 0 (absent
- * is on: txtsetup.oem writes none). Read at start, on a gated controller
- * only. */
+/* Task 34.3: the Intel port switchover, on a listed controller unless the
+ * value is 0 (absent is on: txtsetup.oem writes none); an exact 2 also on
+ * an unlisted Intel one (task 35.5). Read at start, on every Intel
+ * controller and no other. */
 #define HCD_VALUE_PORT_SWITCH   L"XhciIntelPortSwitch"
+/* 35-T (design record 17 sections 4.7 and 4.11): the tolerance off-switch,
+ * the interrupt-interval cap and the Average TRB Length switch, read at
+ * every start; absent, another type or another number takes the default. */
+#define HCD_VALUE_TOLERANCE     L"XhciTolerance"
+#define HCD_VALUE_INTERVAL_CAP  L"XhciIntervalCap"
+#define HCD_VALUE_AVG_TRB_ESIT  L"XhciAvgTrbEsit"
+#if defined(XHCI_FLAVOUR_QEMU)
+/* Task 35.4, qemu flavour only and written by no INF: 1 makes the USB 3
+ * protocol's PSI table read as the E460's (xhci_caps.c); absent, another
+ * type or any other number is off. Read at every start. */
+#define HCD_VALUE_QEMU_PSI_E460 L"XhciQemuPsiE460"
+#endif
 
 /* The health poll's period. usbport's CheckController was nominally 500 ms
  * and measured at 36-80 ms on the E460 (run-13e, Finding V); the poll's
@@ -144,6 +157,12 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     ULONG imod;
     ULONG fast;
     ULONG value;
+    ULONG tolFound;
+    ULONG tolValue;
+    ULONG capFound;
+    ULONG capValue;
+    ULONG avgFound;
+    ULONG avgValue;
     NTSTATUS status;
 
     ext = &hc->Hc;
@@ -192,8 +211,62 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
                                              hc->SettleCapMs);
     XhciLogNote(ext, "settle.total.ms", hc->SettleCapMs);
     XhciLogNote(ext, "settle.port.ms", hc->SettlePortMs);
+
+    /* Latched here, before admission reopens, for the whole started
+     * lifetime (record 17 section 4.11); the cap's controller test waits
+     * for XhciInitController's PCI id (hcdTolApplies). */
+    tolValue = 0;
+    tolFound = NT_SUCCESS(hcdReadDword(hc, HCD_VALUE_TOLERANCE, &tolValue));
+    capValue = 0;
+    capFound = NT_SUCCESS(hcdReadDword(hc, HCD_VALUE_INTERVAL_CAP,
+                                       &capValue));
+    avgValue = 0;
+    avgFound = NT_SUCCESS(hcdReadDword(hc, HCD_VALUE_AVG_TRB_ESIT,
+                                       &avgValue));
+    XhciTolStart(&ext->Tol, 0, tolFound, tolValue, capFound, capValue,
+                 avgFound, avgValue);
+    XhciLogNote(ext, "tol.value", tolFound ? tolValue : 0xFFFFFFFFUL);
+    XhciLogNote(ext, "tol.mode", ext->Tol.Stats.Tolerance);
+    XhciLogNote(ext, "tol.cap.value", capFound ? capValue : 0xFFFFFFFFUL);
+    XhciLogNote(ext, "tol.cap.mode", ext->Tol.Stats.CapMode);
+    XhciLogNote(ext, "tol.avgtrb.value", avgFound ? avgValue : 0xFFFFFFFFUL);
+    XhciLogNote(ext, "tol.avgtrb.mode", ext->Tol.Stats.AvgTrbMode);
+
+#if defined(XHCI_FLAVOUR_QEMU)
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_QEMU_PSI_E460, &value);
+    hc->QemuPsiE460 = (NT_SUCCESS(status) && value == 1) ? 1UL : 0UL;
+    XhciLogNote(ext, "qemu.psi.e460", hc->QemuPsiE460);
+#endif
 }
 
+#if defined(XHCI_FLAVOUR_QEMU)
+/* Task 35.4's switch as the start latched it, for xhciBuildPortMap.
+ * IRQL: any. */
+ULONG HcdSvcQemuPsiE460(PXHCI_EXTENSION ext)
+{
+    return HcdControllerFromExt(ext)->QemuPsiE460;
+}
+
+/* hcdReadDword for the injection layer's trigger (hcd_inj.c).
+ * IRQL: PASSIVE_LEVEL. */
+NTSTATUS HcdCtlQemuReadDword(PHCD_CONTROLLER hc, PCWSTR name, PULONG value)
+{
+    return hcdReadDword(hc, name, value);
+}
+#endif
+
+/* The interval cap's controller test, once XhciInitController has read the
+ * PCI id. IRQL: PASSIVE_LEVEL. */
+static VOID hcdTolApplies(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+
+    ext = &hc->Hc;
+    ext->Tol.Stats.CapApplied = XhciTolCapApplies(ext->Tol.Stats.CapMode,
+                                                  ext->PciVendorDevice);
+    XhciLogNote(ext, "tol.cap.applied", ext->Tol.Stats.CapApplied);
+}
 /*
  * The force-Bulk-Only value (roadmap-hcd.md 31-A.3): 1 when XhciForceBulkOnly
  * is a nonzero REG_DWORD in the controller's driver key, the key every other
@@ -226,141 +299,191 @@ ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc)
  */
 static ULONG hcdPswRead(PVOID context, ULONG offset, PULONG value)
 {
-    return HcdSvcConfigSpace((PXHCI_EXTENSION)context, TRUE, value, offset,
-                             sizeof(ULONG)) == MP_STATUS_SUCCESS;
+    return HcdSvcConfigSpace(&((PHCD_CONTROLLER)context)->Hc, TRUE, value,
+                             offset, sizeof(ULONG)) == MP_STATUS_SUCCESS;
 }
 
+/* IRQL: PASSIVE_LEVEL, as HcdSvcConfigSpace. */
 static ULONG hcdPswWrite(PVOID context, ULONG offset, ULONG value)
 {
     ULONG data;
 
     data = value;
-    return HcdSvcConfigSpace((PXHCI_EXTENSION)context, FALSE, &data, offset,
-                             sizeof(ULONG)) == MP_STATUS_SUCCESS;
+    return HcdSvcConfigSpace(&((PHCD_CONTROLLER)context)->Hc, FALSE, &data,
+                             offset, sizeof(ULONG)) == MP_STATUS_SUCCESS;
 }
 
+/* IRQL: PASSIVE_LEVEL, under no spin lock, as hcdReadDword. */
+static ULONG hcdPswValue(PVOID context, PULONG value)
+{
+    return NT_SUCCESS(hcdReadDword((PHCD_CONTROLLER)context,
+                                   HCD_VALUE_PORT_SWITCH, value));
+}
+
+/* IRQL: any; the callbacks it installs are PASSIVE_LEVEL only. */
 static VOID hcdPswIo(PHCD_CONTROLLER hc, PXHCI_PSW_IO io)
 {
     io->Read = hcdPswRead;
     io->Write = hcdPswWrite;
-    io->Context = &hc->Hc;
+    io->Value = hcdPswValue;
+    io->Context = hc;
+}
+
+/* Only a route that ran is counted: the decision's own reads on a
+ * controller that is off are not a route (record 16 section 7a).
+ * IRQL: PASSIVE_LEVEL. */
+static VOID hcdPswRouted(PHCD_CONTROLLER hc, const XHCI_PSW_STATE *st)
+{
+    PXHCI_EXTENSION ext;
+
+    ext = &hc->Hc;
+    hc->PswRoutes++;
+    if (st->Step != XHCI_PSW_DONE) {
+        hc->PswFailures++;
+    }
+    XhciLogNote(ext, "psw.usb3prm", st->Usb3Mask);
+    XhciLogNote(ext, "psw.usb3pssen", st->Usb3Now);
+    XhciLogNote(ext, "psw.xusb2prm", st->Usb2Mask);
+    XhciLogNote(ext, "psw.xusb2pr", st->Usb2Now);
+    XhciLogNote(ext, "psw.route.step", st->Step);
+    XhciLogNote(ext, "psw.route.written", st->Written);
+    XHCI_DBG_VALUE("hcd: port switchover, USB3_PSSEN now", st->Usb3Now);
+    XHCI_DBG_VALUE("hcd: port switchover, XUSB2PR now", st->Usb2Now);
+}
+
+/* Only a release with a nonempty set is counted: one with nothing to hand
+ * back made no access (record 16 section 6). IRQL: PASSIVE_LEVEL. */
+static VOID hcdPswReleased(PHCD_CONTROLLER hc, const XHCI_PSW_STATE *st)
+{
+    PXHCI_EXTENSION ext;
+
+    ext = &hc->Hc;
+    hc->PswReleases++;
+    if (st->Step != XHCI_PSW_DONE) {
+        hc->PswFailures++;
+    }
+    XhciLogNote(ext, "psw.release.usb3pssen", st->Usb3Now);
+    XhciLogNote(ext, "psw.release.xusb2pr", st->Usb2Now);
+    XhciLogNote(ext, "psw.release.step", st->Step);
+    XHCI_DBG_VALUE("hcd: port switchover released, step", st->Step);
 }
 
 /*
- * Every switchable connector to xHCI, when this start found the mux and
- * the switch on (PswOn). At each start before XhciInitController, as Linux
- * routes before the controller's reset, and at each return to D0 before
- * the resume, since firmware reprograms the routing across standby.
+ * Every switchable connector to xHCI again, when this start decided to
+ * route (PswLife.On): at each return to D0 before the resume, since
+ * firmware reprograms the routing across standby. What it writes joins
+ * the lifetime's set, and a failed route takes nothing out of it.
  * IRQL: PASSIVE_LEVEL.
  */
 VOID HcdPswRoute(PHCD_CONTROLLER hc)
 {
-    PXHCI_EXTENSION ext;
     XHCI_PSW_IO io;
     XHCI_PSW_STATE st;
 
-    if (!hc->PswOn) {
-        return;
-    }
-    ext = &hc->Hc;
     hcdPswIo(hc, &io);
-    (VOID)XhciPswRoute(&io, &st);
-    hc->PswRoutes++;
-    if (st.Step != XHCI_PSW_DONE) {
-        hc->PswFailures++;
+    if (XhciPswLifeResume(&io, &hc->PswLife, &st)) {
+        hcdPswRouted(hc, &st);
     }
-    XhciLogNote(ext, "psw.usb3prm", st.Usb3Mask);
-    XhciLogNote(ext, "psw.usb3pssen", st.Usb3Now);
-    XhciLogNote(ext, "psw.xusb2prm", st.Usb2Mask);
-    XhciLogNote(ext, "psw.xusb2pr", st.Usb2Now);
-    XhciLogNote(ext, "psw.route.step", st.Step);
-    XHCI_DBG_VALUE("hcd: port switchover, USB3_PSSEN now", st.Usb3Now);
-    XHCI_DBG_VALUE("hcd: port switchover, XUSB2PR now", st.Usb2Now);
 }
 
 /*
- * Every connector back to EHCI, as Linux's usb_disable_xhci_ports: at the
- * stop once the controller has halted, at a refused start, and at the D3 of
- * a system shutdown, where Linux does it against a Panther Point, Lynx
- * Point-LP or Wildcat Point-LP machine powering itself back on. Done on
- * every gated controller here, so a stopped or removed driver never leaves the connectors on
- * an xHCI nothing drives. IRQL: PASSIVE_LEVEL.
+ * The registers this lifetime's routes wrote, and no other, back to
+ * EHCI, as Linux's usb_disable_xhci_ports: at the D3 of a system shutdown,
+ * where Linux does it against a Panther Point, Lynx Point-LP or Wildcat
+ * Point-LP machine powering itself back on. The set is kept, so a stop
+ * that follows releases it again. IRQL: PASSIVE_LEVEL.
  */
 VOID HcdPswRelease(PHCD_CONTROLLER hc)
 {
-    PXHCI_EXTENSION ext;
     XHCI_PSW_IO io;
     XHCI_PSW_STATE st;
 
-    if (!hc->PswOn) {
+    if (!hc->PswLife.On) {
         return;
     }
-    ext = &hc->Hc;
+    XhciLogNote(&hc->Hc, "psw.release.written", hc->PswLife.Written);
     hcdPswIo(hc, &io);
-    (VOID)XhciPswRelease(&io, &st);
-    hc->PswReleases++;
-    if (st.Step != XHCI_PSW_DONE) {
-        hc->PswFailures++;
+    if (XhciPswLifeRelease(&io, &hc->PswLife, &st)) {
+        hcdPswReleased(hc, &st);
     }
-    XhciLogNote(ext, "psw.release.usb3pssen", st.Usb3Now);
-    XhciLogNote(ext, "psw.release.xusb2pr", st.Usb2Now);
-    XhciLogNote(ext, "psw.release.step", st.Step);
-    XHCI_DBG_VALUE("hcd: port switchover released, step", st.Step);
 }
 
 /*
- * The start's decision, then its route. The gate reads PCI offset 0
- * itself because XhciInitController, which records it, runs after; on any
- * other controller (QEMU's 1B36:000D among them) no register past the
- * header is read or written, and psw.gate 0 says so. IRQL: PASSIVE_LEVEL.
+ * The same release at the stop once the controller has halted, and at a
+ * refused start, then the lifetime ends: so a stopped or removed driver
+ * never leaves the connectors on an xHCI nothing drives, and the next
+ * start inherits nothing. IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdPswEnd(PHCD_CONTROLLER hc)
+{
+    XHCI_PSW_IO io;
+    XHCI_PSW_STATE st;
+
+    if (hc->PswLife.On) {
+        XhciLogNote(&hc->Hc, "psw.release.written", hc->PswLife.Written);
+    }
+    hcdPswIo(hc, &io);
+    if (XhciPswLifeEnd(&io, &hc->PswLife, &st)) {
+        hcdPswReleased(hc, &st);
+    }
+}
+
+/*
+ * The start's decision, then its route, before XhciInitController as
+ * Linux routes before the controller's reset. The decision reads PCI
+ * offset 0 itself because XhciInitController, which records it, runs
+ * after; on another vendor's controller (QEMU's 1B36:000D among them) no
+ * register past the header is read or written and the value is not read,
+ * and psw.gate 0 says so. psw.mode is the value in effect: 2 on an
+ * unlisted Intel part is the bypass, at the user's own risk (record 16
+ * section 4a). IRQL: PASSIVE_LEVEL.
  */
 static VOID hcdPswStart(PHCD_CONTROLLER hc)
 {
     PXHCI_EXTENSION ext;
-    ULONG id;
-    ULONG subsystem;
-    ULONG value;
-    NTSTATUS status;
+    PXHCI_PSW_LIFE life;
+    XHCI_PSW_IO io;
+    XHCI_PSW_STATE st;
+    ULONG routed;
 
     ext = &hc->Hc;
-    hc->PswOn = 0;
-    id = 0;
-    if (!hcdPswRead(ext, XHCI_PCI_VENDOR_DEVICE, &id)) {
+    life = &hc->PswLife;
+    hcdPswIo(hc, &io);
+    routed = XhciPswLifeStart(&io, life, &st);
+
+    if (life->Decision == XHCI_PSW_DECIDE_ID_UNREAD) {
         XhciLogNote(ext, "psw.pci.unread", 1);
         return;
     }
-    XhciLogNote(ext, "psw.gate", XhciPswGate(id));
-    if (!XhciPswGate(id)) {
-        XHCI_DBG_TEXT("hcd: port switchover: not an Intel 7/8/9-series "
-                      "xHCI, no config write");
+    XhciLogNote(ext, "psw.gate", XhciPswGate(life->Id));
+    if (life->Decision == XHCI_PSW_DECIDE_NOT_INTEL) {
+        XHCI_DBG_TEXT("hcd: port switchover: not an Intel xHCI, no config "
+                      "write");
         return;
     }
-
-    value = 0;
-    status = hcdReadDword(hc, HCD_VALUE_PORT_SWITCH, &value);
-    XhciLogNote(ext, "psw.value.found", NT_SUCCESS(status) ? 1 : 0);
-    XhciLogNote(ext, "psw.value", NT_SUCCESS(status) ? value : 0);
-    if (!XhciPswEnabled(NT_SUCCESS(status), value)) {
-        XHCI_DBG_TEXT("hcd: port switchover: XhciIntelPortSwitch is 0, "
+    XhciLogNote(ext, "psw.value.found", life->Found);
+    XhciLogNote(ext, "psw.value", life->Value);
+    XhciLogNote(ext, "psw.mode", life->Mode);
+    if (life->Decision == XHCI_PSW_DECIDE_OFF) {
+        XHCI_DBG_TEXT("hcd: port switchover: off for this controller, "
                       "routing left as firmware set it");
         return;
     }
-
-    /* The exemption holds only on a reading: a subsystem id that could not
-     * be read is no evidence the board is not the one that cannot switch
-     * (Codex review of 34.3, round 1). */
-    subsystem = 0;
-    if (!hcdPswRead(ext, XHCI_PSW_PCI_SUBSYSTEM, &subsystem)) {
+    if (life->Decision == XHCI_PSW_DECIDE_BOARD_UNREAD) {
         XhciLogNote(ext, "psw.board.unread", 1);
         return;
     }
-    if (XhciPswBoardRefused(subsystem)) {
-        XhciLogNote(ext, "psw.board.refused", subsystem);
+    if (life->Decision == XHCI_PSW_DECIDE_BOARD_REFUSED) {
+        XhciLogNote(ext, "psw.board.refused", life->Subsystem);
         return;
     }
-
-    hc->PswOn = 1;
-    HcdPswRoute(hc);
+    if (life->Mode == XHCI_PSW_MODE_BYPASS) {
+        XHCI_DBG_TEXT("hcd: port switchover: XhciIntelPortSwitch 2, the "
+                      "device-id gate bypassed");
+    }
+    if (routed) {
+        hcdPswRouted(hc, &st);
+    }
 }
 
 /* --------------------------------------------------------------------- */
@@ -441,6 +564,12 @@ static BOOLEAN NTAPI hcdIsr(PKINTERRUPT Interrupt, PVOID Context)
     if (!XhciIsr(&hc->Hc)) {
         return FALSE;
     }
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* 35-T.9's lost interrupt: acknowledged as ever, the drain not queued. */
+    if (HcdInjIsrDrop(hc)) {
+        return TRUE;
+    }
+#endif
     /* Counted when queued, not when the DPC starts: a DPC another processor
      * has dequeued but not yet entered is then still in the count the
      * teardown waits on (Codex review of 26-A.2, round 1, finding 2). */
@@ -498,6 +627,12 @@ VOID HcdControllerInitObjects(PHCD_CONTROLLER hc)
     KeInitializeEvent(&hc->EnumDetachDone, NotificationEvent, TRUE);
     KeInitializeEvent(&hc->DoorGate, SynchronizationEvent, TRUE);
     KeInitializeTimer(&hc->LinkRecoverTimer);
+#if defined(XHCI_FLAVOUR_QEMU)
+    KeInitializeSpinLock(&hc->InjLock);
+    XhciInjRegsClear(&hc->InjRegs);
+    XhciInjEpClear(&hc->InjEp);
+    KeInitializeEvent(&hc->InjEvDone, NotificationEvent, FALSE);
+#endif
 }
 
 /*
@@ -525,6 +660,68 @@ VOID HcdThreadWake(PHCD_CONTROLLER hc)
 }
 
 /*
+ * The all-ones containment's admission (hcdContain): tolerance on, not yet
+ * contained, a started controller in D0, outside a power transition, with
+ * PnP saying it is present. HcInfoStatus is not asked: a recovery whose
+ * reinitialization met the dead window set it bad at its top and never got
+ * as far as decoding again, but the layout the start validated is still in
+ * HcInfo, which only a whole validated decode replaces (XhciDeriveHcInfo),
+ * and STARTED says the start validated one. Asking it would let a recovery
+ * shut the containment out for the rest of the lifetime.
+ * IRQL: DISPATCH_LEVEL, controller lock held.
+ */
+static ULONG hcdContainAdmitted(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+
+    ext = &hc->Hc;
+    return (ext->Tol.Stats.Tolerance && !ext->Tol.Unreadable &&
+            (ext->Flags & XHCI_EXT_FLAG_STARTED) != 0 &&
+            (ext->Flags & XHCI_EXT_FLAG_SUSPENDED) == 0 &&
+            hc->Common.DevicePower == PowerDeviceD0 &&
+            !hc->SuspendedInD0 &&
+            hc->Common.PnpState != HCD_PNP_SURPRISE_REMOVED &&
+            hc->Common.PnpState != HCD_PNP_REMOVED)
+               ? 1UL
+               : 0UL;
+}
+
+/*
+ * Put back the Bus Master Enable this driver cleared (a containment's or an
+ * unproven invalidation's proof, BusMasterCleared), and read it back set.
+ * The recovery's own step for it (XHCI_INIT_STEP_BUS_MASTER_RESTORE)
+ * refuses below PASSIVE_LEVEL, where the recovery runs; this is the same
+ * write at PASSIVE_LEVEL, made only on a controller that sequence has just
+ * halted and reset and not yet run (hcdRecover). IRQL: PASSIVE_LEVEL.
+ */
+static ULONG hcdRestoreBusMaster(PXHCI_EXTENSION ext)
+{
+    USHORT command;
+
+    command = 0;
+    if (XhciReadPciConfig(ext, XHCI_PCI_COMMAND, &command, sizeof(USHORT)) !=
+            MP_STATUS_SUCCESS ||
+        command == 0xFFFFU) {
+        return 0;
+    }
+    if ((command & XHCI_PCI_COMMAND_BME) == 0) {
+        command = (USHORT)(command | XHCI_PCI_COMMAND_BME);
+        if (XhciWritePciConfig(ext, XHCI_PCI_COMMAND, &command,
+                               sizeof(USHORT)) != MP_STATUS_SUCCESS) {
+            return 0;
+        }
+        command = 0;
+        if (XhciReadPciConfig(ext, XHCI_PCI_COMMAND, &command,
+                              sizeof(USHORT)) != MP_STATUS_SUCCESS ||
+            command == 0xFFFFU || (command & XHCI_PCI_COMMAND_BME) == 0) {
+            return 0;
+        }
+    }
+    ext->BusMasterCleared = 0;
+    return 1;
+}
+
+/*
  * The in-place recovery, as the miniport's recovery timer callback ran it,
  * but from this thread instead of a usbport timer DPC: the request is taken
  * under the lock, the recovery itself at DISPATCH_LEVEL, because
@@ -538,6 +735,8 @@ static VOID hcdRecover(PHCD_CONTROLLER hc)
     KIRQL raised;
     ULONG go;
     ULONG ok;
+    ULONG admitted;
+    ULONG allOnes;
 
     ext = &hc->Hc;
     go = 0;
@@ -550,11 +749,45 @@ static VOID hcdRecover(PHCD_CONTROLLER hc)
     HcdPowerGateEnter(hc);
     XhciControllerLockAcquire(ext, &oldIrql);
     if (ext->RecoveryRequested && ext->ControllerFailed &&
+        !ext->Tol.Unreadable && ext->Tol.Window.Refused == 0 &&
         (ext->Flags & XHCI_EXT_FLAG_SUSPENDED) == 0 &&
         hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0 &&
         ext->RecoveryFailuresConsecutive < XHCI_RECOVERY_MAX_ATTEMPTS) {
-        ext->RecoveryRequested = 0;
         go = 1;
+        /* 35-T.6: a request raised on a window that stopped decoding - a
+         * command that timed out on it - is left owed, uncharged, while
+         * all-ones stands and the containment would be admitted: begun, it
+         * would fail on the dead capability registers, and its new start
+         * generation would restamp the all-ones episode on every pass, so
+         * the containment would never run (XhciTolRecoverDefer). */
+        admitted = hcdContainAdmitted(hc);
+        allOnes = 0;
+        if (admitted) {
+            allOnes = (XhciReadOp(ext, XHCI_OP_USBSTS) == 0xFFFFFFFFUL)
+                          ? 1UL
+                          : 0UL;
+        }
+        if (XhciTolRecoverDefer(ext->Tol.Stats.Tolerance, admitted,
+                                allOnes)) {
+            go = 0;
+        }
+    }
+    if (go) {
+        ext->RecoveryRequested = 0;
+        /* 35-T.6's window (record 17 section 4.6), charged as a recovery
+         * begins, retries included: a fourth inside ten minutes is not
+         * begun, and the request is dropped. Window.Refused, cleared only
+         * by XhciTolStart, is the latch: no later request is acted on and
+         * no resume reinitializes the controller (hcd_power.c), so it
+         * stays failed until a stop and start - today's terminal after
+         * three failures in a row, which keeps its own meaning. */
+        if (!XhciTolWindowAdmit(&ext->Tol.Window, ext->Tol.Stats.Tolerance,
+                                HcdTolNow(hc))) {
+            go = 0;
+            ext->Tol.Stats.WindowRefused++;
+            XhciLogNoteLocked(ext, "ctrl.window.refused",
+                              ext->Tol.Window.Refused);
+        }
     }
     XhciControllerLockRelease(ext, oldIrql);
     if (!go) {
@@ -562,9 +795,25 @@ static VOID hcdRecover(PHCD_CONTROLLER hc)
         return;
     }
 
+    hc->TolStartGen++;
     KeRaiseIrql(DISPATCH_LEVEL, &raised);
     ok = XhciRecoverController(ext);
     KeLowerIrql(raised);
+    /* A sequence refused at the Bus Master Enable restore had halted and
+     * reset the controller and stopped short of Run/Stop only because the
+     * write needs PASSIVE_LEVEL. Made here, under the same gate, and the
+     * sequence run once more: the same recovery, not a new one, so the
+     * window is not charged again. Without it, a recovery after a proof
+     * that cleared the bit could never restore service. */
+    if (!ok && ext->BusMasterCleared &&
+        ext->RecoveryLastStep == XHCI_INIT_STEP_BUS_MASTER_RESTORE &&
+        hcdRestoreBusMaster(ext)) {
+        XhciLogNote(ext, "ctrl.recover.bme.restored", 1);
+        hc->TolStartGen++;
+        KeRaiseIrql(DISPATCH_LEVEL, &raised);
+        ok = XhciRecoverController(ext);
+        KeLowerIrql(raised);
+    }
     HcdPowerGateLeave(hc);
 
     if (!ok) {
@@ -574,6 +823,256 @@ static VOID hcdRecover(PHCD_CONTROLLER hc)
         }
         XhciControllerLockRelease(ext, oldIrql);
     }
+}
+
+/*
+ * A terminal no recovery acts on - the window refused one (35-T.6), or the
+ * run of failures is spent - leaves the controller latched failed with the
+ * transfers it was given still on its rings: the event drain and the
+ * commands are refused, and only a recovery's own XhciSlotInvalidateAll
+ * ever completed them. With none coming, no class driver's request ended,
+ * no query-remove finished, and the stop that would drop them never came
+ * (35-V, the Windows 2000 SMP guest: the disable hung after
+ * ctrl.window.refused). So the thread raises that invalidation itself,
+ * once per lifetime, and HcdEnumService drains as after a recovery: with
+ * HCH read set (the controller stopped executing, the evidence the
+ * recovery takes) every device is dropped and its transfers completed;
+ * without it the invalidation is unproven, and HcdEnumService takes the
+ * Bus Master Enable proof first and, failing it, pins the buffer and
+ * contains, keeping every transfer and mapping. Admitted as that service
+ * is, on a started controller in D0. IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdTerminalRelease(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+    KIRQL oldIrql;
+    ULONG terminal;
+    ULONG devices;
+    ULONG usbsts;
+    ULONG i;
+
+    ext = &hc->Hc;
+    HcdPowerGateEnter(hc);
+    XhciControllerLockAcquire(ext, &oldIrql);
+    if ((ext->Flags & XHCI_EXT_FLAG_STARTED) != 0 &&
+        hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0) {
+        terminal = XhciTolTerminal(ext->ControllerFailed, ext->Tol.Unreadable,
+                                   ext->Tol.Window.Refused,
+                                   ext->RecoveryFailuresConsecutive,
+                                   XHCI_RECOVERY_MAX_ATTEMPTS);
+        /* Every record with a slot is in the table, written under this
+         * lock (hcdDeviceNew, hcdDeviceFree). */
+        devices = 0;
+        for (i = 1; i <= XHCI_MAX_SLOTS && !devices; i++) {
+            devices = (hc->SlotDevice[i] != NULL) ? 1UL : 0UL;
+        }
+        if (XhciTolTerminalRelease(terminal, hc->SlotsInvalidated,
+                                   hc->TerminalReleased, devices)) {
+            hc->TerminalReleased = 1;
+            /* The slots stay enabled without a Disable Slot, their buffers
+             * about to be given back: no saved image may be restored over
+             * them, and no new one is taken while failed (xhciSaveState). */
+            ext->SavedStateValid = 0;
+            usbsts = XhciReadOp(ext, XHCI_OP_USBSTS);
+            XhciLogNoteLocked(ext, "ctrl.terminal.release", usbsts);
+            XhciSlotInvalidateAll(ext, XhciTolHaltProven(usbsts));
+        }
+    }
+    XhciControllerLockRelease(ext, oldIrql);
+    HcdPowerGateLeave(hc);
+}
+
+/*
+ * The lost-interrupt backstop (35-T.1, design record 17 section 4.1): a
+ * step of its own after hcdRecover, under the power gate as that is, admitted
+ * only on a good, initialized, unfailed controller in D0 with the DPC open -
+ * what the health poll's own admission does not check. Under the controller
+ * lock it peeks at the event TRB at the software dequeue; an event pending
+ * at the same index, cycle, drain pass (DpcCount, bumped under this lock by
+ * every admitted drain) and start generation for the backstop interval was
+ * written and never drained, and the drain is queued through the ISR's own
+ * admission. It writes no register: ERDP, EHB and IE stay the drain's.
+ * A refused admission drops the observation, so timing starts afresh.
+ * IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdBackstop(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+    KIRQL oldIrql;
+    ULONG admitted;
+    ULONG pending;
+    ULONG queue;
+
+    ext = &hc->Hc;
+    queue = 0;
+    HcdPowerGateEnter(hc);
+    XhciControllerLockAcquire(ext, &oldIrql);
+    admitted = (ext->HcInfoStatus == XHCI_HC_OK &&
+                (ext->Flags & XHCI_EXT_FLAG_INITIALIZED) != 0 &&
+                (ext->Flags & XHCI_EXT_FLAG_SUSPENDED) == 0 &&
+                !ext->ControllerFailed &&
+                hc->Common.DevicePower == PowerDeviceD0 &&
+                !hc->SuspendedInD0 && !hc->DpcClosed &&
+                ext->EventRing.Base != NULL) ? 1UL : 0UL;
+    pending = admitted ? XhciEventRingPending(&ext->EventRing) : 0UL;
+    queue = XhciTolBackstop(&ext->Tol.Obs, ext->Tol.Stats.Tolerance, pending,
+                            ext->EventRing.Dequeue, ext->EventRing.Ccs,
+                            ext->DpcCount, hc->TolStartGen, HcdTolNow(hc));
+    XhciControllerLockRelease(ext, oldIrql);
+    HcdPowerGateLeave(hc);
+    if (!queue) {
+        return;
+    }
+    /* hcdIsr's admission: counted before the insertion, rolled back on a
+     * refusal, nothing once the DPC is closed (the stop ends this thread
+     * before hcdRelease closes it). A drain already running on another
+     * processor serializes on the lock and finds the ring empty. */
+    (VOID)InterlockedIncrement(&hc->DpcsInFlight);
+    if (hc->DpcClosed || !KeInsertQueueDpc(&hc->IsrDpc, NULL, NULL)) {
+        (VOID)InterlockedDecrement(&hc->DpcsInFlight);
+        return;
+    }
+    XhciControllerLockAcquire(ext, &oldIrql);
+    ext->Tol.Stats.BackstopDrains++;
+    XhciControllerLockRelease(ext, oldIrql);
+}
+
+/*
+ * 35-T.6's proof that a contained controller masters nothing (design record
+ * 17 section 4.6, step 2): configuration space answers, and Bus Master Enable
+ * reads back clear - cleared here when it was set. Stricter than the
+ * quiesce's own fallback (xhci_init.c, xhciTryClearBusMaster), which takes a
+ * Command register of all ones as a device off the bus: here that is a
+ * function that does not answer, and no proof. A clear this driver made is
+ * recorded, so a later start puts the bit back (xhciRestoreBusMaster).
+ * IRQL: PASSIVE_LEVEL (configuration space goes out to the bus driver).
+ */
+static ULONG hcdContainProve(PXHCI_EXTENSION ext)
+{
+    USHORT command;
+
+    command = 0;
+    if (XhciReadPciConfig(ext, XHCI_PCI_COMMAND, &command, sizeof(USHORT)) !=
+            MP_STATUS_SUCCESS ||
+        command == 0xFFFFU) {
+        return 0;
+    }
+    if ((command & XHCI_PCI_COMMAND_BME) != 0) {
+        command = (USHORT)(command & ~XHCI_PCI_COMMAND_BME);
+        if (XhciWritePciConfig(ext, XHCI_PCI_COMMAND, &command,
+                               sizeof(USHORT)) != MP_STATUS_SUCCESS) {
+            return 0;
+        }
+        ext->BusMasterCleared = 1;
+        command = 0;
+        if (XhciReadPciConfig(ext, XHCI_PCI_COMMAND, &command,
+                              sizeof(USHORT)) != MP_STATUS_SUCCESS ||
+            command == 0xFFFFU) {
+            return 0;
+        }
+    }
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* 35-T.9's all-ones without the proof: the read-back answers set. */
+    command = HcdInjPciCommand(HcdControllerFromExt(ext), command);
+#endif
+    return (command & XHCI_PCI_COMMAND_BME) == 0 ? 1UL : 0UL;
+}
+
+/* The same proof for an invalidation no halt or HCRST has proven
+ * (HcdEnumService). IRQL: PASSIVE_LEVEL. */
+ULONG HcdCtlProveDmaStopped(PXHCI_EXTENSION ext)
+{
+    return hcdContainProve(ext);
+}
+
+/*
+ * The all-ones containment (35-T.6, design record 17 section 4.6): a step of
+ * its own after hcdRecover, under the power gate as that is, admitted only on
+ * a started controller in D0, outside a power transition, with PnP saying it
+ * is present - so no power transition or recovery runs beside it - and with
+ * tolerance on. It reads USBSTS itself; the health poll's ungated samples are
+ * not used. XhciTolDeadStep stamps the first all-ones read with the start
+ * generation and clears the stamp on a good read, a refused admission, or a
+ * new generation (a start, a resume, an in-place recovery). Once all-ones has
+ * stood on every admitted pass for the containment interval, in order:
+ *
+ *   1 the controller latched failed and Unreadable, under the controller
+ *     lock: the drain, commands, enumeration and the health poll stop, the
+ *     recovery never acts on it (hcdRecover), and every submission path
+ *     holds a new request on its PDO instead of refusing it. Nothing already
+ *     submitted is completed;
+ *   2 Bus Master Enable cleared and read back clear (hcdContainProve);
+ *   3 with that proof, every device drained and dropped (HcdEnumContain);
+ *     without it, the common buffer pinned first, then every device drained,
+ *     which on a pinned buffer keeps every transfer and mapping.
+ *
+ * Once per lifetime: Unreadable refuses the admission until a start clears
+ * it (XhciTolStart). IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdContain(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+    KIRQL oldIrql;
+    ULONG admitted;
+    ULONG allOnes;
+    ULONG armed;
+    ULONG contain;
+    ULONG proof;
+
+    ext = &hc->Hc;
+    allOnes = 0;
+    HcdPowerGateEnter(hc);
+    XhciControllerLockAcquire(ext, &oldIrql);
+    admitted = hcdContainAdmitted(hc);
+    if (admitted) {
+#if defined(XHCI_FLAVOUR_QEMU)
+        allOnes = (HcdInjUsbsts(hc, XhciReadOp(ext, XHCI_OP_USBSTS)) ==
+                   0xFFFFFFFFUL) ? 1UL : 0UL;
+#else
+        allOnes = (XhciReadOp(ext, XHCI_OP_USBSTS) == 0xFFFFFFFFUL) ? 1UL
+                                                                     : 0UL;
+#endif
+    }
+    armed = (ext->Tol.Dead.Armed && ext->Tol.Dead.StartGen == hc->TolStartGen)
+                ? 1UL
+                : 0UL;
+    contain = XhciTolDeadStep(&ext->Tol.Dead, ext->Tol.Stats.Tolerance,
+                              admitted, allOnes, hc->TolStartGen,
+                              HcdTolNow(hc));
+    if (!armed && ext->Tol.Dead.Armed) {
+        ext->Tol.Stats.DeadEpisodes++;
+        XhciLogNoteLocked(ext, "tol.dead.stamp", ext->Tol.Dead.Stamp);
+    }
+    if (contain) {
+        /* Step 1. The reason is Unreadable itself: no recovery request is
+         * raised, and one raised elsewhere is never acted on. The enables
+         * are masked as any failure masks them, a write the dead window
+         * may not take. */
+        if (!ext->ControllerFailed &&
+            (ext->Flags & XHCI_EXT_FLAG_INITIALIZED) != 0) {
+            XhciMaskInterrupts(ext);
+        }
+        ext->ControllerFailed = 1;
+        ext->Tol.Unreadable = XHCI_TOL_CONTAINED_UNREADABLE;
+        XhciLogNoteLocked(ext, "ctrl.failed.unreadable", HcdTolNow(hc));
+    }
+    XhciControllerLockRelease(ext, oldIrql);
+    if (!contain) {
+        HcdPowerGateLeave(hc);
+        return;
+    }
+
+    proof = hcdContainProve(ext);
+    if (!proof) {
+        HcdSvcDmaNotStopped(ext);
+    }
+    HcdEnumContain(hc, proof);
+    XhciControllerLockAcquire(ext, &oldIrql);
+    ext->Tol.Stats.Contained = proof ? XHCI_TOL_CONTAIN_RELEASED
+                                     : XHCI_TOL_CONTAIN_PINNED;
+    XhciLogNoteLocked(ext, "tol.contained", ext->Tol.Stats.Contained);
+    XhciControllerLockRelease(ext, oldIrql);
+    HcdPowerGateLeave(hc);
 }
 
 /*
@@ -607,6 +1106,11 @@ static VOID hcdPoll(PHCD_CONTROLLER hc)
     ULONG escalate;
 
     ext = &hc->Hc;
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* 35-T.9: a fault a guest script asked for, before the steps that
+     * meet it. */
+    HcdInjPoll(hc);
+#endif
     if ((ext->Flags & XHCI_EXT_FLAG_STARTED) != 0) {
         ext->CheckCallbacks++;
 
@@ -623,6 +1127,9 @@ static VOID hcdPoll(PHCD_CONTROLLER hc)
     /* Outside the STARTED gate: a failed resume (HcdControllerFail) is a
      * recovery request on a controller whose flags no longer say it runs. */
     hcdRecover(hc);
+    hcdTerminalRelease(hc);
+    hcdBackstop(hc);
+    hcdContain(hc);
 }
 
 /* IRQL: PASSIVE_LEVEL (a system thread). */
@@ -853,6 +1360,9 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     ext->Signature = XHCI_EXTENSION_SIGNATURE;
     ext->TrailingSignature = XHCI_EXTENSION_TRAILING;
     hcdReadValues(hc);
+#if defined(XHCI_FLAVOUR_QEMU)
+    HcdInjStart(hc);
+#endif
 
     ext->ResourcesTypes = XhciResourcesRequired;
     ext->ResourceBase = (ULONG_PTR)hc->BarVa;
@@ -915,8 +1425,7 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
             XhciFailClosedDma(ext);
         }
         /* A refused controller drives nothing: the connectors go back. */
-        HcdPswRelease(hc);
-        hc->PswOn = 0;
+        hcdPswEnd(hc);
         hcdRelease(hc);
         /* No thread ever ran to poll, and the half-built start's fatal
          * status or its stop's mask failure is the reading a refused start
@@ -925,6 +1434,9 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
         HcdCountersPoll(hc);
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
+    hcdTolApplies(hc);
+    /* Before the thread runs, so no backstop pass reads it mid-write. */
+    hc->TolStartGen++;
     (VOID)XhciControllerUpdateFlags(ext, 0, XHCI_EXT_FLAG_STARTED);
     ext->InterruptEnables++;
     KeRaiseIrql(DISPATCH_LEVEL, &raised);
@@ -940,6 +1452,7 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
         return status;
     }
     HcdFrameTimerStart(hc);
+    HcdTolClockStart(hc);
     hc->ControllerStarted = 1;
     return STATUS_SUCCESS;
 }
@@ -975,8 +1488,7 @@ static VOID hcdStopBody(PHCD_CONTROLLER hc)
     }
     /* Task 34.3: once the controller has halted, so the disconnects the
      * hand-back makes are seen by no running xHCI. */
-    HcdPswRelease(hc);
-    hc->PswOn = 0;
+    hcdPswEnd(hc);
     /*
      * The devices go once the controller has halted, not before: freeing a
      * record completes its URBs (hcd_io.c, HcdIoDeviceGone), and a client

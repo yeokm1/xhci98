@@ -93,9 +93,8 @@ That last point matters for decoding. Several candidate defines add a field
 and so move `MiniPortExtensionSize`, which invalidates the tracked offset
 table, which is what a counter reader must not do. The ones known to do it
 are `XHCI_FIX_NO_RING_REUSE`, `XHCI_FIX_ACK_OWED` and the polling/gate
-candidates in `src/xhci.h`; others, such as `XHCI_FIX_EVT_REARM`
-(`src/xhci_cmd.c`) and `XHCI_FIX_QUIESCE_GATE` (`src/xhci_slot.c`), are
-behaviour-only and change no field. This block adds no field, so a shipping
+candidates in `src/xhci.h`; others, such as `XHCI_FIX_QUIESCE_GATE`
+(`src/xhci_slot.c`), are behaviour-only and change no field. This block adds no field, so a shipping
 binary decodes against the ordinary `offsets.txt`. Do not reason about a
 combination of defines from that list: measure `sizeof(XHCI_EXTENSION)` for
 whatever set you build, which is the check section 11 ends on.
@@ -170,6 +169,15 @@ The two regions are the extension (`XHCI_SNAPSHOT_REGION_EXTENSION`) and the
 PORTSC array (`XHCI_SNAPSHOT_REGION_PORTSC`). A caller puts a request
 signature in the block before the call, so a GUID match against uninitialised
 memory is refused rather than answered.
+
+The HCD (`xhci98.sys` from 2.0.0.0, `src/hcd_door.c`) adds two more, each
+without a schema bump because an older driver answers an unknown region with
+`XHCI_SNAPSHOT_S_BAD_REGION` and an older tool never asks:
+`XHCI_SNAPSHOT_REGION_SLOTS` (2.0.0.0; one record per enabled slot, the speed
+its Slot Context carries) and `XHCI_SNAPSHOT_REGION_HCD` (2.2.0.0, roadmap-hcd
+task 35.3; a versioned, pointer-free image of each root port's enumeration
+state and the `XHCIHC_COUNTERS` block, neither of which is in the extension).
+`xhcisnap/README.md` describes how the tool reads both.
 
 ## 5. The kernel side, and the ordering rules that are not obvious
 

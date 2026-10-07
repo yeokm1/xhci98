@@ -562,6 +562,14 @@ static int run_quick_scan(void)
                 hidden++;
             }
         }
+        /* Roadmap task 35.1: the speed tables (PSI entries decoded, the
+         * issue 11 warning) and the raw extended-capability chain, in the log
+         * and on the serial line only - the screen keeps its one line per
+         * controller. ctrls[0] still holds this controller's walk. */
+        if (p->hctype == HC_XHCI && mmio_ok) {
+            report_protocols(&ctrls[0], qlogprintf);
+            report_xcap_dump(&ctrls[0], qlogprintf);
+        }
     }
 
     if (hidden > 0) {
@@ -688,7 +696,7 @@ int main(int argc, char **argv)
         opt_log_name = 0;   /* nothing was written: do not claim a copy */
     }
 
-    qprintf("XHCIQUAL %s (build %s) - Win98/Win2000 USB qualification\n",
+    qprintf("XHCIQUAL %s (build %s) - USB host controller qualification\n",
             TOOL_VERSION, TOOL_BUILD);
     if (!active)
         mode = "PROBE-ONLY (read-only)";

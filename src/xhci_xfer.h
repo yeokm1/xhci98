@@ -216,6 +216,15 @@ typedef struct _XHCI_XFER_CODE {
  */
 ULONG XhciXferCodeInfo(ULONG completionCode, PXHCI_XFER_CODE info);
 
+/*
+ * 1 when an event carrying `completionCode` - a Transfer Event, or a Command
+ * Completion Event the command engine matched - leaves its slot unusable, so
+ * the device on it is torn down and its slot disabled (Table 6-90, p.468:
+ * Incompatible Device Error is "fatal as far as the Slot is concerned.
+ * Software shall issue a Disable Slot Command to recover"); 0 otherwise.
+ */
+ULONG XhciXferSlotFatal(ULONG completionCode);
+
 /* ------------------------------------------------------------------ */
 /* 6-A.1: building a control transfer                                  */
 /* ------------------------------------------------------------------ */
@@ -475,6 +484,30 @@ typedef struct _XHCI_XFER_EVENT_RESULT {
     /* The controller reported a condition no transfer can recover from
      * (Event Lost). Escalate; do not treat it as this transfer's problem. */
     ULONG Fatal;
+    /*
+     * The soft retry (35-T.2, design record 17 section 4.2), for the caller
+     * to count and act on. RetryDiverted: a Transaction Error was kept on
+     * the queue's head as its deferred outcome, nothing retired or
+     * completed, the queue's RetryWanted set - the thread is owed a wake.
+     * RetryExhausted: a Transaction Error the bound let through to today's
+     * path. RetryRecovered: how many of the completed TDs had been diverted
+     * and completed without failing - the event's own TD, or a retried TD
+     * ending short that the event settled by sweeping it.
+     */
+    ULONG RetryDiverted;
+    ULONG RetryExhausted;
+    ULONG RetryRecovered;
+    /*
+     * For controller tolerance (35-T.3/4, design record 17 section 4.3), so
+     * the caller can count and decide; nothing here acts on them. Code is the
+     * event's completion code once the event names this endpoint (0 before).
+     * Refused: XhciXferCodeInfo did not claim it, so nothing was retired.
+     * Unattributed: a claimed code whose pointer resolved onto no queued TD -
+     * zero, off this ring, or inside no TD - so nothing was retired either.
+     */
+    ULONG Code;
+    ULONG Refused;
+    ULONG Unattributed;
 } XHCI_XFER_EVENT_RESULT, *PXHCI_XFER_EVENT_RESULT;
 
 /*
@@ -508,6 +541,65 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
                     ULONG eventDw2,
                     ULONG eventDw3,
                     PXHCI_XFER_EVENT_RESULT result);
+
+/*
+ * A Transfer Event's TRB pointer is 64 bits (Table 6-37), and every caller
+ * hands the engine its low dword: no ring of this driver lies above 4 GB,
+ * so a nonzero high dword names no TRB of it, and the low dword alone could
+ * alias one. Returns 1, counting the event in the queue's ForeignEvents,
+ * when the event is to be refused for it - before any stream lookup and
+ * before the ordinary, stopped or isochronous paths; 0 for a pointer below
+ * 4 GB and for an Event Data event, whose parameter is not a pointer.
+ */
+ULONG XhciXferEventHighRefused(PXHCI_TRANSFER_QUEUE queue, ULONG eventDw3,
+                               ULONG eventTrbPAHigh);
+
+/*
+ * The soft retry's queue half (35-T.2, design record 17 section 4.2).
+ *
+ * **The interception is in `XhciXferEvent`**, once the event is matched to
+ * its TD and before any of the TD's terminal mutations: a Transaction Error
+ * on the queue's head, on a queue whose `RetryScope` is set, with the TD's
+ * three retries not spent (XhciTolRetryDivert), is kept whole on the TD -
+ * pointer, status and control - and the TD is left as it was, unretired at
+ * the head with the software dequeue on it. The retry generation is
+ * incremented and `RetryWanted` set with the TD's Token. Any other event
+ * matched to a TD that holds a deferred outcome discards it: nothing of it
+ * was ever applied.
+ *
+ * The functions below are the thread's. Each is pure, callable at any IRQL;
+ * the caller holds the controller lock across a decision and its act.
+ */
+
+/* 1 when the queue has RetryWanted: *token and *gen receive the diverted
+ * TD's Token and the generation the request stands at. */
+ULONG XhciXferRetryPending(const XHCI_TRANSFER_QUEUE *queue,
+                           ULONG *token, ULONG *gen);
+
+/* 1 when the queue's head is still the TD named by token and still holds
+ * its deferred outcome. */
+ULONG XhciXferRetryHeadIs(const XHCI_TRANSFER_QUEUE *queue, ULONG token);
+
+/*
+ * Apply the deferred outcome of the TD named by token, if it is still the
+ * head and still holds one: the kept event is replayed through
+ * `XhciXferEvent` with the interception bypassed, so the TD meets exactly
+ * today's error processing - the length, the failure, the retirement or the
+ * placement, `NeedsRecovery` - and `result` says so as an event's would.
+ * The deferred outcome is cleared with it. Returns 1 when one was applied;
+ * 0, with `result` empty, when there was nothing to apply. `RetryWanted` is
+ * not touched: XhciXferRetryClear is the caller's, under its generation.
+ */
+ULONG XhciXferRetryReplay(PXHCI_TRANSFER_QUEUE queue,
+                          PXHCI_RING ring,
+                          ULONG slotId,
+                          ULONG dci,
+                          ULONG token,
+                          PXHCI_XFER_EVENT_RESULT result);
+
+/* Clear RetryWanted if the generation still reads gen, the one the caller
+ * decided on; a newer divert's request stands. Returns 1 when cleared. */
+ULONG XhciXferRetryClear(PXHCI_TRANSFER_QUEUE queue, ULONG gen);
 
 /*
  * Task 9-0.2. Settle one transfer whose TD ended on a mid-TD Short Packet Event

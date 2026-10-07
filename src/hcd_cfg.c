@@ -91,6 +91,36 @@ static PURB hcdCfgUrbOf(PIRP irp)
     return (PURB)stack->Parameters.Others.Argument1;
 }
 
+/* The pipe a held command names (35-T.6), so an abort of that pipe covers
+ * it as it covers the pipe's transfers (HcdIoAbortMark): RESET_PIPE and the
+ * two SYNC requests carry one; a select names none. */
+static PVOID hcdCfgHeldHandle(PURB urb)
+{
+    switch (urb->UrbHeader.Function) {
+    case URB_FUNCTION_RESET_PIPE:
+    case XHCI_PIPE_URB_SYNC_RESET_PIPE:
+    case XHCI_PIPE_URB_SYNC_CLEAR_STALL:
+        return urb->UrbPipeRequest.PipeHandle;
+    default:
+        return NULL;
+    }
+}
+
+/* A held command's endpoint when its handle is a stream's, so an abort of
+ * the endpoint covers it as xhci98_streams.h promises; NULL for an
+ * endpoint's own handle, none, or one the device does not hold. Controller
+ * lock held, the device record referenced or the thread's. */
+static PVOID hcdCfgHeldEndpoint(PHCD_USB_DEVICE dev, PVOID handle)
+{
+    PHCD_PIPE pipe;
+
+    if (handle == NULL) {
+        return NULL;
+    }
+    pipe = HcdCfgPipe(dev, handle);
+    return (pipe != NULL) ? (PVOID)pipe->Parent : NULL;
+}
+
 /* Pend one IRP for the thread - a URB, or RESET_PORT; the caller's device
  * reference passes to it. IRQL: <= DISPATCH_LEVEL. */
 NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
@@ -98,9 +128,32 @@ NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 {
     KIRQL oldIrql;
     PURB urb;
+    PVOID handle;
+    PVOID endpoint;
 
     urb = hcdCfgUrbOf(irp);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (hc->Hc.Tol.Unreadable && urb != NULL) {
+        /* 35-T.6: a URB that passed hcd_urb.c's test as the containment
+         * set it - tested before Gone, which the containment's drain sets
+         * on a device whose PDO stays listed, and whose refusal would
+         * complete STATUS_DEVICE_NOT_CONNECTED. No command runs again in
+         * this lifetime, so an abort is answered as one on a departed PDO,
+         * and anything else is held (HcdIoHoldUnreadable) under the pipe it
+         * names, so that pipe's abort covers it - and, for a stream's,
+         * its endpoint's, resolved here while the record is referenced. */
+        handle = hcdCfgHeldHandle(urb);
+        endpoint = hcdCfgHeldEndpoint(dev, handle);
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        (VOID)InterlockedDecrement(&dev->Refs);
+        if (urb->UrbHeader.Function == URB_FUNCTION_ABORT_PIPE) {
+            HcdIoAbortMark(pdo, irp, urb->UrbPipeRequest.PipeHandle, 0);
+            (VOID)HcdIoParkedRelease(pdo, 1);
+            urb->UrbHeader.Status = USBD_STATUS_SUCCESS;
+            return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+        }
+        return HcdIoHoldUnreadable(pdo, irp, urb, handle, endpoint);
+    }
     if (dev->Gone) {
         /* The thread has begun freeing the device and has flushed its
          * queued URBs already: one queued now would hold a reference
@@ -115,6 +168,10 @@ NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         }
         return HcdIoRefuseLater(pdo, irp, urb, HCD_USBD_DEVICE_GONE);
     }
+    /* The dispatch stamp (HcdIoStamp) moves to DriverContext[1], unused
+     * while queued, so a hold of it (hcdCfgHoldUnreadable) is measured
+     * against an abort in the order the two were submitted. */
+    irp->Tail.Overlay.DriverContext[1] = irp->Tail.Overlay.DriverContext[0];
     irp->Tail.Overlay.DriverContext[0] = dev;
     irp->Tail.Overlay.DriverContext[2] = pdo;
     (VOID)InterlockedIncrement(&pdo->UrbsPending);
@@ -150,6 +207,49 @@ static VOID hcdCfgComplete(PHCD_USB_DEVICE dev, PIRP irp, PURB urb,
     (VOID)InterlockedDecrement(&dev->Refs);
 }
 
+/*
+ * A queued slow URB of a contained controller's device (35-T.6, design
+ * record 17 section 4.6), as the containment's drain reaches it: completed
+ * DEVICE_GONE it would read STATUS_DEVICE_NOT_CONNECTED while its PDO may
+ * still be listed. An abort succeeds, as one on a departed PDO does, its
+ * horizon released; anything else is held on its PDO (HcdIoPark), keeping
+ * the count in UrbsPending it was queued with, and released as a held
+ * request is - cancel, an abort covering it, or the PDO's stop or removal.
+ * Where the hold declines, the deferred refusal completes it CANCELLED or
+ * DELETE_PENDING. The device reference goes back either way. Thread only.
+ */
+static VOID hcdCfgHoldUnreadable(PHCD_USB_DEVICE dev, PIRP irp, PURB urb)
+{
+    PHCD_DEVICE_PDO pdo;
+    PVOID handle;
+    PVOID endpoint;
+    KIRQL oldIrql;
+
+    pdo = (PHCD_DEVICE_PDO)irp->Tail.Overlay.DriverContext[2];
+    if (urb->UrbHeader.Function == URB_FUNCTION_ABORT_PIPE) {
+        /* Its horizon was marked at dispatch (hcd_urb.c), so only what
+         * that horizon covers is released. */
+        (VOID)HcdIoParkedRelease(pdo, 1);
+        hcdCfgComplete(dev, irp, urb, XHCI_USBD_STATUS_SUCCESS);
+        return;
+    }
+    /* Its dispatch stamp back, kept across the queue (HcdCfgQueue): an
+     * abort submitted after it covers it, whether that abort already ran or
+     * runs later; a stamp taken here would put it past an abort already
+     * run, held behind it for good. */
+    irp->Tail.Overlay.DriverContext[0] = irp->Tail.Overlay.DriverContext[1];
+    handle = hcdCfgHeldHandle(urb);
+    /* The flush runs before the pipes are freed (HcdCfgDeviceGone). */
+    XhciControllerLockAcquire(&dev->Controller->Hc, &oldIrql);
+    endpoint = hcdCfgHeldEndpoint(dev, handle);
+    XhciControllerLockRelease(&dev->Controller->Hc, oldIrql);
+    if (!HcdIoPark(pdo, irp, urb, handle, endpoint)) {
+        (VOID)HcdIoRefuseLater(pdo, irp, urb, HCD_USBD_CANCELED);
+        (VOID)InterlockedDecrement(&pdo->UrbsPending);
+    }
+    (VOID)InterlockedDecrement(&dev->Refs);
+}
+
 /* A device leaving (hcd_io.c, HcdIoDeviceGone): its queued slow URBs
  * complete as DEVICE_GONE here, since only this thread serves them and it
  * is the one waiting for their references. Thread only. */
@@ -175,6 +275,10 @@ VOID HcdCfgFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     while (!IsListEmpty(&mine)) {
         entry = RemoveHeadList(&mine);
         irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
+        if (hc->Hc.Tol.Unreadable && hcdCfgUrbOf(irp) != NULL) {
+            hcdCfgHoldUnreadable(dev, irp, hcdCfgUrbOf(irp));
+            continue;
+        }
         hcdCfgComplete(dev, irp, hcdCfgUrbOf(irp), HCD_USBD_DEVICE_GONE);
     }
 }
@@ -306,6 +410,25 @@ static LONG hcdCfgSelectAnswer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * device (xhci_cmd.c). Returns 1 when a reset was requested. Thread only,
  * powered.
  */
+/*
+ * An automatic fallback cycle of the device's location (a departing
+ * device's failed command, a failed RESET_PORT), charged once to the
+ * location's budget with tolerance on, as 35-T.3/4's cycles are: a device
+ * that fails the same way after every fresh enumeration would otherwise be
+ * removed and re-enumerated for ever. Refused, the device still goes and
+ * the location is held (35-T.5's hold, released by a stable disconnect or
+ * a start). At XhciTolerance 0 nothing is charged, as before
+ * (HcdTolLocCharge). The caller has checked dev->Location. Thread only.
+ */
+static VOID hcdCfgCycle(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    if (!HcdTolLocCharge(hc, &hc->Ports[dev->Location - 1],
+                         XHCI_TOL_CHARGE_REENUM)) {
+        hc->Hc.Tol.Stats.CyclesRefused++;
+    }
+    HcdEnumCycle(hc, dev->Location, dev->PdoGroup);
+}
+
 static ULONG hcdCfgFault(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     if (dev->Gone || dev->Location == 0 || dev->Location > HCD_PORT_COUNT ||
@@ -320,7 +443,7 @@ static ULONG hcdCfgFault(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         !HcdHubPathPresent(hc, &hc->Ports[dev->Location - 1])) {
         XHCI_DBG_VALUE("hcd: command failed on a departing device, "
                        "cycling location", dev->Location);
-        HcdEnumCycle(hc, dev->Location, dev->PdoGroup);
+        hcdCfgCycle(hc, dev);
         return 0;
     }
     HcdSvcRequestReset(&hc->Hc);
@@ -545,14 +668,44 @@ static ULONG hcdCfgFunctionEndpoint(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                     speed, hc->Hc.HcInfo.Lec, ep);
 }
 
+/* The interval cap and the Average TRB Length switch (35-T.7, design record
+ * 17 section 4.7) applied to an interrupt endpoint before it is programmed,
+ * a hub's own included; isochronous endpoints are never changed. BInterval
+ * keeps the descriptor's value; Capped marks a lowered Interval, counted
+ * once the Configure Endpoint that opens it succeeds. Returns nonzero when
+ * the cap left the Interval as it was. Thread only. */
+static ULONG hcdCfgTolerance(PHCD_CONTROLLER hc, PXHCI_PIPE_EP ep)
+{
+    PXHCI_EXTENSION ext;
+    ULONG capped;
+
+    ext = &hc->Hc;
+    if (ep->TransferType != XHCI_PIPE_XFER_INTERRUPT) {
+        return 1;
+    }
+    ep->AverageTrbLength = XhciTolAvgTrbLength(ext->Tol.Stats.AvgTrbMode, 1,
+                                               ep->MaxEsitPayload);
+    capped = XhciTolCapInterval(ext->Tol.Stats.CapApplied, 1, ep->Interval);
+    if (capped == ep->Interval) {
+        return 1;
+    }
+    ep->Interval = capped;
+    ep->Capped = 1;
+    return 0;
+}
+
 /* Fast polling (33.8): the controller's XhciFastPollFsLs mode applied to an
  * endpoint a client's select names, never to a hub's own (HcdCfgHubOpen).
- * Thread only. */
+ * The cap comes first, and fast polling is offered only when it left the
+ * Interval unchanged, so eligibility is judged on the uncapped value
+ * (record 17 section 4.7). Thread only. */
 static VOID hcdCfgFastPoll(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                            PXHCI_PIPE_EP ep)
 {
-    (VOID)XhciPipeFastPoll(hc->FastPollMode, HcdDevicePipeSpeed(hc, dev),
-                           dev->Route, ep);
+    if (hcdCfgTolerance(hc, ep)) {
+        (VOID)XhciPipeFastPoll(hc->FastPollMode, HcdDevicePipeSpeed(hc, dev),
+                               dev->Route, ep);
+    }
 }
 
 /*
@@ -592,6 +745,10 @@ static ULONG hcdCfgConfigureAdd(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         code = hcdCfgCommand(hc, dev, &trb, &control);
         fast = 0;
         for (dci = 2; dci < 32; dci++) {
+            if (add[dci] != NULL && add[dci]->Ep.Capped &&
+                code == XHCI_CC_SUCCESS && opening) {
+                ext->Tol.Stats.CapIntervals++;
+            }
             if (add[dci] == NULL || !add[dci]->Ep.FastPoll) {
                 continue;
             }
@@ -671,6 +828,15 @@ static PHCD_PIPE hcdCfgPipeNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     pipe->Ring = &pipe->OwnRing;
     pipe->Queue = &pipe->OwnQueue;
     XhciXferQueueInit(&pipe->OwnQueue);
+    /* The soft retry's scope (35-T.2, design record 17 section 4.2), fixed
+     * for the pipe's life: a pipe opens with no streams, and a stream's own
+     * queue, made in hcdCfgStreamsOpen, keeps XhciXferQueueInit's 0. The
+     * tolerance value is the start's latch, so a pipe never outlives it. */
+    pipe->OwnQueue.RetryScope = XhciTolRetryScope(
+        ext->Tol.Stats.Tolerance, ext->PciVendorDevice,
+        (ep->TransferType == XHCI_PIPE_XFER_BULK ||
+         ep->TransferType == XHCI_PIPE_XFER_INTERRUPT) ? 1UL : 0UL,
+        0, dev->TtSlot != 0 ? 1UL : 0UL);
     if (ep->TransferType == XHCI_PIPE_XFER_ISOCH) {
         pipe->Iso = (PHCD_ISO_BLOCK)HcdPoolAlloc(
             (ULONG)(HCD_PIPE_XFERS * sizeof(HCD_ISO_BLOCK)));
@@ -938,14 +1104,16 @@ ULONG HcdCfgParentConfigure(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
  * that also carries the hub marking HcdDeviceSlotParams adds once
  * dev->HubMarked is set - an Evaluate Context cannot set those fields. The
  * hub has no client, so no URB ever names this pipe; its one record is the
- * device's HubXfer. Returns the pipe, listed in dev->Pipes, or NULL with
- * nothing enabled. Thread only, powered.
+ * device's HubXfer. The interval cap applies to it (35-T.7), fast polling
+ * never does. Returns the pipe, listed in dev->Pipes, or NULL with nothing
+ * enabled. Thread only, powered.
  */
 PHCD_PIPE HcdCfgHubOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                         const XHCI_PIPE_EP *ep, ULONG iface)
 {
     PHCD_PIPE add[32];
     XHCI_PIPE_PLAN plan;
+    XHCI_PIPE_EP tol;
     PXHCI_EXTENSION ext;
     XHCI_TRB trb;
     KIRQL oldIrql;
@@ -959,6 +1127,9 @@ PHCD_PIPE HcdCfgHubOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     if (ep->Dci < 2 || ep->Dci > 31 || dev->Pipes[ep->Dci] != NULL) {
         return NULL;
     }
+    tol = *ep;
+    (VOID)hcdCfgTolerance(hc, &tol);
+    ep = &tol;
     usbd = XHCI_USBD_STATUS_SUCCESS;
     pipe = hcdCfgPipeNew(hc, dev, ep, &usbd);
     if (pipe == NULL) {
@@ -984,6 +1155,9 @@ PHCD_PIPE HcdCfgHubOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                        (dev->SlotId << 8) | code);
         hcdCfgPipeFree(hc, dev, pipe);
         return NULL;
+    }
+    if (ep->Capped) {
+        ext->Tol.Stats.CapIntervals++;
     }
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     dev->Pipes[ep->Dci] = pipe;
@@ -2178,7 +2352,13 @@ static ULONG hcdCfgEpState(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                   &offset) != XHCI_LAYOUT_OK) {
         return XHCI_EP_STATE_DISABLED;
     }
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* 35-T.9: Halted or Error, as the injection answers it. */
+    return HcdInjEpState(hc, dev->SlotId, dci,
+                         XHCI_EP_GET_STATE(XhciCommonAt(&hc->Hc, offset)[0]));
+#else
     return XHCI_EP_GET_STATE(XhciCommonAt(&hc->Hc, offset)[0]);
+#endif
 }
 
 /*
@@ -2208,6 +2388,37 @@ static ULONG hcdCfgDeviceClearHalt(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                        (pipe->EndpointAddress << 16) | outcome);
     }
     return outcome;
+}
+
+/*
+ * A soft retry's deferred outcome on `pipe` applied now (35-T.2, design
+ * record 17 section 4.2): today's error completion of the diverted TD, by
+ * the replay, and its request cleared at the generation read with it. For
+ * an operation that reaches a Halted endpoint before the thread's retry
+ * decision has - a Transaction Error diverted after this pass's
+ * HcdCfgRetryService - so it meets the endpoint and the queue exactly as it
+ * would have without the retry, and its Set TR Dequeue goes past the TD.
+ * hcdCfgQuiesce calls it once its Reset Endpoint has completed, which is
+ * when the error's event is certain to have been drained. Thread only, the
+ * pipe paused, controller lock not held.
+ */
+static VOID hcdCfgRetrySettle(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
+{
+    KIRQL oldIrql;
+    ULONG token;
+    ULONG gen;
+    ULONG applied;
+
+    applied = 0;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (XhciXferRetryPending(pipe->Queue, &token, &gen)) {
+        applied = HcdDevRetryReplay(hc, pipe, token);
+        (VOID)XhciXferRetryClear(pipe->Queue, gen);
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (applied) {
+        HcdIoDeferred(hc);
+    }
 }
 
 /*
@@ -2265,8 +2476,22 @@ static ULONG hcdCfgQuiesce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
          * a stream's, and 4.6.8 does not restrict TSP for a Primary Stream
          * Array endpoint (to verify against the transcription, design
          * record 13, not yet transcribed). */
-        if (!hcdCfgResetEndpoint(hc, dev, pipe, 1) ||
-            !hcdCfgRecoverDequeue(hc, dev, pipe, 0)) {
+        if (!hcdCfgResetEndpoint(hc, dev, pipe, 1)) {
+            (VOID)hcdCfgFault(hc, dev);
+            return XHCI_EP_STATE_RUNNING;
+        }
+        /* 35-T.2: after the Reset Endpoint's completion, not before it.
+         * The context reads Halted as soon as the controller halts, while
+         * the Transaction Error that halted it may not yet have been drained;
+         * its Transfer Event precedes the command's completion on the event
+         * ring, so it has been diverted by now. Its deferred outcome is
+         * applied here - the endpoint Stopped, the pipe still paused - so
+         * the software dequeue the Set TR Dequeue below programs is past the
+         * failed TD, as today's path left it; programmed on the TD it would
+         * clear the controller's saved progress in it (4.6.8) and restart it
+         * from its first TRB (review round 1, finding 1). */
+        hcdCfgRetrySettle(hc, pipe);
+        if (!hcdCfgRecoverDequeue(hc, dev, pipe, 0)) {
             (VOID)hcdCfgFault(hc, dev);
             return XHCI_EP_STATE_RUNNING;
         }
@@ -2969,7 +3194,7 @@ cleanup:
         XHCI_DBG_VALUE("hcd: reset port failed, cycling port", dev->Port);
         if (dev->Pdo != NULL) {
             /* The device's group: every function PDO of it goes. */
-            HcdEnumCycle(hc, dev->Location, dev->PdoGroup);
+            hcdCfgCycle(hc, dev);
         }
         return HCD_USBD_INTERNAL_HC_ERROR;
     }
@@ -3543,6 +3768,216 @@ VOID HcdCfgCancelService(PHCD_CONTROLLER hc)
 }
 
 /* ----------------------------------------------------------------------- */
+/* The soft retry (35-T.2)                                                  */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * Whether an operation the soft retry must yield to is pending on the pipe
+ * or its device (design record 17 section 4.2): a cancel, an abort of every
+ * pipe (a removing PDO), or a queued ABORT_PIPE, RESET_PIPE or
+ * SYNC_RESET_PIPE naming the pipe - by a stream's handle too, which resets
+ * its endpoint - or a queued RESET_PORT. A pipe left paused by a failed
+ * operation, or closed, yields as well: what waits on it is that
+ * operation's recovery. Controller lock held.
+ */
+static ULONG hcdCfgRetryContended(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                  PHCD_PIPE pipe)
+{
+    PLIST_ENTRY entry;
+    PHCD_PIPE target;
+    PIRP irp;
+    PURB urb;
+
+    if (pipe->CancelPending || pipe->Paused || pipe->Closed ||
+        dev->AbortAll) {
+        return 1;
+    }
+    for (entry = hc->SlowIrps.Flink; entry != &hc->SlowIrps;
+         entry = entry->Flink) {
+        irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
+        if (irp->Tail.Overlay.DriverContext[0] != dev) {
+            continue;
+        }
+        if (IoGetCurrentIrpStackLocation(irp)
+                ->Parameters.DeviceIoControl.IoControlCode ==
+            IOCTL_INTERNAL_USB_RESET_PORT) {
+            return 1;
+        }
+        urb = hcdCfgUrbOf(irp);
+        if (urb == NULL) {
+            continue;
+        }
+        switch (urb->UrbHeader.Function) {
+        case HCD_URB_ABORT_PIPE:
+        case HCD_URB_RESET_PIPE:
+        case HCD_URB_SYNC_RESET_PIPE:
+            target = HcdCfgPipe(dev, urb->UrbPipeRequest.PipeHandle);
+            if (target != NULL && hcdCfgEndpointOf(target) == pipe) {
+                return 1;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+    return 0;
+}
+
+/*
+ * The soft retry's one command: Reset Endpoint with TSP 1 (xHCI 1.2c
+ * 4.6.8.1), which keeps the host's sequence state, so the device's data
+ * toggle stays aligned with no CLEAR_FEATURE, and leaves the endpoint
+ * Stopped with the controller's dequeue on the TRB that failed - no Set TR
+ * Dequeue follows. The qemu flavour's injection (35-T.9) answers it, as it
+ * answers every command to the endpoint it emulates, in hcdCommand: a
+ * client's RESET_PIPE after an exhausted retry meets the same emulated
+ * Halted endpoint. Returns 1 when it completed successfully. Thread only,
+ * powered.
+ */
+static ULONG hcdCfgRetryResetEndpoint(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                      PHCD_PIPE pipe)
+{
+    return hcdCfgResetEndpoint(hc, dev, pipe, 1);
+}
+
+/*
+ * One pipe's RetryWanted, decided under the controller lock with the
+ * generation G and the diverted TD's identity read in the same hold
+ * (XhciTolRetryDecide). Replayed - an operation pending, DrainPending, the
+ * head no longer that TD, or tolerance off - the TD meets today's error
+ * path and the request is cleared if still G. Otherwise Reset Endpoint
+ * with TSP 1, no pause taken: a doorbell a submission rings meanwhile is
+ * ignored while the endpoint is Halted and resumes the TD once it is
+ * Stopped, and the TD's next event is the engine's as on any TD. Then,
+ * under the lock again (XhciTolRetryAfterReset): at G the doorbell - a
+ * second ring is harmless - and the request cleared; past G a newer
+ * divert's request is left for the next visit; a failed command goes to
+ * hcdCfgFault, as any recovery command does, the TD left for the teardown
+ * that follows since the endpoint's state is then unknown. Thread only,
+ * powered.
+ */
+static VOID hcdCfgRetryOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                           PHCD_PIPE pipe)
+{
+    PXHCI_TOL_STATS stats;
+    KIRQL oldIrql;
+    ULONG token;
+    ULONG gen;
+    ULONG decision;
+    ULONG applied;
+    ULONG action;
+    ULONG live;
+    ULONG ok;
+
+    stats = &hc->Hc.Tol.Stats;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    live = XhciXferRetryPending(pipe->Queue, NULL, NULL);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (!live) {
+        return;
+    }
+    /*
+     * Retry or cycle, decided here once a pass (35-T.3/4 beside 35-T.2;
+     * XhciTolJoin): the device's mark is read now, a halt the live retry
+     * explains (its deferred TD still the head, the endpoint Halted)
+     * leaving it, so a confirmed reason commits this pass to the cycle -
+     * taken and charged by this pass's cycle service, the TD and its
+     * deferred outcome drained by the teardown, no Reset Endpoint for a
+     * slot about to be disabled - and otherwise the retry proceeds now.
+     * A mark arriving between passes cannot postpone both.
+     */
+    if (XhciTolJoin(HcdTolCycleResolve(hc, dev), live) ==
+        XHCI_TOL_JOIN_CYCLE) {
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        hc->RetryWork = 1;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        return;
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (!XhciXferRetryPending(pipe->Queue, &token, &gen)) {
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        return;
+    }
+    decision = XhciTolRetryDecide(
+        stats->Tolerance,
+        hcdCfgRetryContended(hc, dev, pipe) || pipe->Streams != NULL ||
+            pipe->StreamId != 0,
+        pipe->DrainPending, XhciXferRetryHeadIs(pipe->Queue, token));
+    applied = 0;
+    if (decision == XHCI_TOL_RETRY_REPLAY) {
+        applied = HcdDevRetryReplay(hc, pipe, token);
+        (VOID)XhciXferRetryClear(pipe->Queue, gen);
+    } else {
+        stats->RetryResets++;
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (decision == XHCI_TOL_RETRY_REPLAY) {
+        if (applied) {
+            HcdIoDeferred(hc);
+        }
+        return;
+    }
+
+    ok = hcdCfgRetryResetEndpoint(hc, dev, pipe);
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    action = XhciTolRetryAfterReset(ok, pipe->Queue->RetryGen, gen);
+    if (action == XHCI_TOL_RETRY_RING) {
+        if (!pipe->Paused && !pipe->Closed && !dev->Gone) {
+            /* The surviving TD restarts the sequence's use. */
+            pipe->SeqUsed = 1;
+            XhciWriteDoorbell(&hc->Hc, dev->SlotId, pipe->Dci);
+        }
+        (VOID)XhciXferRetryClear(pipe->Queue, gen);
+    } else if (action == XHCI_TOL_RETRY_FAULT) {
+        stats->RetryResetFailed++;
+        (VOID)XhciXferRetryClear(pipe->Queue, gen);
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (action == XHCI_TOL_RETRY_FAULT) {
+        XHCI_DBG_VALUE("hcd: soft retry's Reset Endpoint failed, slot/dci",
+                       (dev->SlotId << 8) | pipe->Dci);
+        (VOID)hcdCfgFault(hc, dev);
+    }
+}
+
+/* Every pipe with a soft retry owed, after an event diverted one (hcd_dev.c,
+ * RetryWork). Bulk and interrupt endpoints only: EP0's queue and a stream's
+ * are never in scope. A controller that failed meanwhile leaves the rest for
+ * its recovery, whose invalidation drains them. Thread only, powered, the
+ * controller not halted. */
+VOID HcdCfgRetryService(PHCD_CONTROLLER hc)
+{
+    PHCD_USB_DEVICE dev;
+    KIRQL oldIrql;
+    ULONG work;
+    ULONG slot;
+    ULONG dci;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    work = hc->RetryWork;
+    hc->RetryWork = 0;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (!work) {
+        return;
+    }
+    for (slot = 1; slot <= XHCI_MAX_SLOTS; slot++) {
+        if (hc->Hc.ControllerFailed || hc->ScratchTainted) {
+            return;
+        }
+        dev = hc->SlotDevice[slot];
+        if (dev == NULL || dev->Gone) {
+            continue;
+        }
+        for (dci = 2; dci < 32; dci++) {
+            if (dev->Pipes[dci] != NULL) {
+                hcdCfgRetryOne(hc, dev, dev->Pipes[dci]);
+            }
+        }
+    }
+}
+
+/* ----------------------------------------------------------------------- */
 /* The thread's service                                                     */
 /* ----------------------------------------------------------------------- */
 
@@ -3570,6 +4005,13 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
             /* A command or EP0 transfer just failed into the reset: the
              * rest wait for the recovery, whose invalidation completes
              * them with their devices (round 2, finding 10). */
+            break;
+        }
+        if (hc->ScratchHeld != 0) {
+            /* An EP0 wait was abandoned for a device cycle (35-T.3): no
+             * control transfer goes out until that device's slot is taken
+             * back, later in this pass (hcdCycleService), so the rest wait
+             * for the next pass rather than fail for want of the scratch. */
             break;
         }
         /* The IRP's device's pending releases are claimed in the lock hold
