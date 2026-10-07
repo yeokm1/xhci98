@@ -907,11 +907,15 @@ every SuperSpeed device read speed ID 4 as SuperSpeed by 35.1's fallback,
 enumerated at the first attempt and configured at PSIV 4; file copies, a
 mouse and audio working (owner); the tolerance block running, the window 0
 of 3, no location charged, the only fault counters one Stall on a stick's
-bulk-IN endpoint, an ordinary mass-storage stall a pipe reset clears. Port
+bulk-IN endpoint, an ordinary mass-storage stall a pipe reset clears; then
+5 cold boots with the hub and both sticks attached, each coming up with the
+hub's SuperSpeed half present, the stick behind it and the stick at the
+root port both at SuperSpeed (owner). Port
 2, the USB 2.0 half of port 14's connector, read Failed on its reset after
 a stick was pulled from that connector - a connect no longer than the pins'
-contact, left until that connector's next connect. The counted campaign (10
-cold boots and 10 hot-plugs with each of the hub and the stick), the P14s
+contact, left until that connector's next connect. The rest of the counted
+campaign (10 cold boots and 10 hot-plugs with each of the hub and the
+stick, unless the owner sets other counts), the P14s
 Gen 1, the B490 and value 2 on the B490 are the owner's still.
 
 ## Review
