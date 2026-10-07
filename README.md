@@ -48,7 +48,7 @@ Some things to know:
 - A UAS-capable drive gets UAS, and anything else gets Windows' own `usbstor.sys` (Bulk-Only), at whatever speed it connects. A drive that offers both can be forced to Bulk-Only (see "Tuning" below).
 - Device Manager and the other Windows tools on these systems show a SuperSpeed device as High Speed at most. The interface they read predates SuperSpeed, so that display says nothing about the real link speed.
 - On Windows 98 SE storage of any kind, UAS included, needs NUSB's mass-storage component (see "Installation Steps").
-- On Intel Sunrise Point-LP (`8086:9D2F`, the 100-series mobile chipset of the ThinkPad E460 and the HP EliteBook 850 G5), no release before `2.2.0.0` ever enumerated a SuperSpeed device: a USB 3 stick was not seen and a USB 3 hub showed only its USB 2.0 half. That controller reports a 5 Gbit/s link with a speed ID its own published speed table leaves out, and the driver read the table too strictly. `2.2.0.0` fixes it on every controller; on my E460 a UAS stick now runs at SuperSpeed, at a root port and behind a USB 3 hub, at about 242 MB/s write and 245 MB/s read. See [issue 11](docs/issues/11-sunrise-point-ssic-psi-table.md).
+- Before `2.2.0.0`, SuperSpeed devices did not work on Intel Sunrise Point-LP (`8086:9D2F`: ThinkPad E460, HP EliteBook 850 G5) - a USB 3 stick was not seen and a USB 3 hub showed only its USB 2.0 half. Fixed in `2.2.0.0`; on my E460 a UAS stick now runs at about 242 MB/s write and 245 MB/s read. See [issue 11](docs/issues/11-sunrise-point-ssic-psi-table.md).
 
 ## Installation Steps
 
