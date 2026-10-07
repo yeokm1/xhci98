@@ -205,8 +205,12 @@ scripts/        The build wrapper, host setup helpers, and the import/INF/
                 tooling; do not make a committed procedure depend on it.
 xhciqual/       Phase 0 DOS hardware-qualification tool (Open Watcom).
                 `xhciqual/README.md` and `xhciqual/hardware-testing.md` are
-                its guides; `xhciqual/results/` holds the bare-metal run logs
-                that roadmap checkpoints cite as evidence. Tracked.
+                its guides. Tracked. `xhciqual/results/` holds the bare-metal
+                run logs that roadmap checkpoints cite as evidence; it is
+                git-ignored and kept only on the maintainer's disk, for
+                privacy (owner, 2026-10-07), so a citation of it names where
+                the evidence is held, not a file in the clone. Archive new
+                runs there, and never force-add them.
 xhcisnap/       The host-side reader for the driver's log channel
                 (`XHCISNAP.EXE`); `xhcisnap/README.md` is its guide. Tracked.
 images/         The pictures `README.md` embeds. Tracked.

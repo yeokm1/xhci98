@@ -384,7 +384,7 @@ binary, and inventoried by source method in
 docs/contributing/legal-provenance.md section 4;
 generated output carrying its producer's own notices, such as XHCIQUAL.MAP,
 the Open Watcom linker map that sits beside XHCIQUAL.EXE in every release
-directory - a download included - and the archived map under xhciqual/results/;
+directory - a download included;
 and third-party names and marks, used only to identify the hardware and
 software this driver interoperates with.
 

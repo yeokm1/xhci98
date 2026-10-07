@@ -183,12 +183,12 @@ xhciqual/test/*.ppm
 # them.
 temp/*
 
-# Archived bare-metal qualification runs are evidence, not build output:
-# keep them despite the global *.log rule (case-insensitive on Windows).
-# The linker MAP archived beside them is what turns a photographed DOS/32A
-# fault EIP back into a symbol, so it is evidence too - keep it despite *.map.
-!xhciqual/results/**/*.LOG
-!xhciqual/results/**/*.MAP
+# Archived bare-metal qualification runs are evidence, but they identify the
+# machines they were taken on, so they are kept on the maintainer's disk and
+# not published (owner, 2026-10-07, for privacy; untracked then, and earlier
+# commits still hold the copies tracked until that day). Documents cite them by
+# path as a record of where the evidence is held, not as files in a clone.
+xhciqual/results/
 
 # macOS / OneDrive cruft
 .DS_Store
