@@ -900,8 +900,10 @@ owner asked that the update steps name the root hub too - Update Driver on
 "xHCI98 USB 3.x Root Hub" after the controller - in the README, the release
 notes and the readme template; `make-release.ps1 -Force` regenerated
 `readme.txt` alone (`ab0f870`), every binary and INF unchanged, so the ten
-legs stand. Asset now 761,837 bytes, SHA-256
-`b904b08841b498a3e6f8b4cf30d7e1c33f277e512950651ae6b4164afa547dfd`.
+legs stand. A second readme-only re-cut the same day (`dff56a8`) took out the
+limitation saying USB storage on Windows 98 is slower than the drive
+(owner: not something the driver can change). Asset now 761,688 bytes,
+SHA-256 `c4c9cd65ccc834e2d703d3a11469c33046d552f3afaf51d373307151185c1258`.
 
 ## 35-E - the bench
 
