@@ -38,6 +38,14 @@
 #include "xhci_dbg.h"
 #include "xhci_pipe.h"
 #include "xhci98_streams.h"
+#include "xhci98_report.h"
+
+/* A report's words fill a snapshot record after the bus's own. */
+typedef char hcdClientReportFits[XHCI_SNAPSHOT_HCD_CLIENT_FIRST +
+                                         XHCI98_REPORT_WORDS ==
+                                     XHCI_SNAPSHOT_HCD_CLIENT_WORDS
+                                 ? 1
+                                 : -1];
 
 /* The amd64 build's WDK carries usbbusif.h, and the structures below are
  * checked against it there; the Windows 2000 DDK has none. */
@@ -1543,6 +1551,45 @@ static NTSTATUS hcdStreamsIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     return HcdCfgQueue(hc, dev, pdo, irp);
 }
 
+/*
+ * IOCTL_XHCI98_CLIENT_REPORT (xhci98_report.h, task 36.2): the report kept
+ * for the snapshot under the device's slot, root port and route, answered
+ * before returning. The slot is read under the PDO list lock, as
+ * hcdDeviceRef reads the device; a PDO whose device has gone keeps its
+ * report under slot 0. IRQL: <= DISPATCH_LEVEL.
+ */
+static NTSTATUS hcdClientReport(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                                PIRP irp, const XHCI98_CLIENT_REPORT *rq)
+{
+    KIRQL oldIrql;
+    ULONG slot;
+    ULONG place;
+    ULONG index;
+
+    if (rq == NULL || rq->Size < sizeof(XHCI98_CLIENT_REPORT) ||
+        rq->Signature != XHCI98_REPORT_SIGNATURE ||
+        rq->Version != XHCI98_REPORT_VERSION) {
+        return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
+    }
+    if (hc == NULL) {
+        return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+    }
+    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    slot = (pdo->Listed && pdo->Device != NULL) ? pdo->Device->SlotId : 0;
+    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    place = ((pdo->RootPort & 0xFFUL) << 24) | (pdo->Route & 0x000FFFFFUL);
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->Counters.ClientReports++;
+    index = XhciSnapClientPick(hc->ClientRecords,
+                               XHCI_SNAPSHOT_HCD_CLIENTS_KEPT, slot, place);
+    XhciSnapClientStore(&hc->ClientRecords[index *
+                                           XHCI_SNAPSHOT_HCD_CLIENT_WORDS],
+                        hc->Counters.ClientReports, slot, place, rq->Kind,
+                        rq->Words, XHCI98_REPORT_WORDS);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+}
+
 /* The slot an internal IOCTL is traced under once: its function number, the
  * internal range (USB_IOCTL_INTERNAL_INDEX, 0) at 0..0x1F and the
  * USB_IOCTL_INDEX range (0xFF) above it, everything else in the last. */
@@ -1663,6 +1710,12 @@ NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp)
     case IOCTL_XHCI98_CLOSE_STREAMS:
         status = hcdStreamsIoctl(pdo, hc, irp,
                                  (PXHCI98_STREAMS_REQUEST)
+                                     stack->Parameters.Others.Argument1);
+        break;
+
+    case IOCTL_XHCI98_CLIENT_REPORT:
+        status = hcdClientReport(pdo, hc, irp,
+                                 (const XHCI98_CLIENT_REPORT *)
                                      stack->Parameters.Others.Argument1);
         break;
 

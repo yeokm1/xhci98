@@ -183,6 +183,11 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
     XhciLogAppend(log, "urb.unknown", hc->UrbUnknown, 1);
     XhciLogAppend(log, "ioctl.unknown", hc->IoctlUnknown, 1);
     XhciLogAppend(log, "enum.cmd.timedout", hc->EnumCommandsTimedOut, 1);
+    XhciLogAppend(log, "enum.cmd.refused", hc->Counters.EnumCommandsRefused,
+                  1);
+    XhciLogAppend(log, "enum.cmd.busy", hc->Counters.EnumCommandsBusy, 1);
+    XhciLogAppend(log, "start.drains", hc->Counters.StartDrainsQueued, 1);
+    XhciLogAppend(log, "client.resets", hc->Counters.ClientPortResets, 1);
     XhciLogAppend(log, "enum.xfer.timedout", hc->EnumTransfersTimedOut, 1);
     XhciLogAppend(log, "serial.ids", hc->SerialIdsTaken, 1);
     XhciLogAppend(log, "serial.refused", hc->SerialIdsRefused, 1);
@@ -396,6 +401,17 @@ static VOID hcdCountersTrace(const XHCIHC_COUNTERS *cnt)
                            cnt->SsHubDevicesPlus);
     XHCI_DBG_VALUE_CHANGED("superspeed hubs: rates without an ID",
                            cnt->SsHubRateUnmatched);
+
+    XHCI_DBG_VALUE_CHANGED("commands: met a busy engine",
+                           cnt->EnumCommandsBusy);
+    XHCI_DBG_VALUE_CHANGED("commands: busy engine waited out",
+                           cnt->EnumCommandsBusyCleared);
+    XHCI_DBG_VALUE_CHANGED("commands: refused by the engine",
+                           cnt->EnumCommandsRefused);
+    XHCI_DBG_VALUE_CHANGED("start: drains queued at interrupt enable",
+                           cnt->StartDrainsQueued);
+    XHCI_DBG_VALUE_CHANGED("client port resets", cnt->ClientPortResets);
+    XHCI_DBG_VALUE_CHANGED("client reports kept", cnt->ClientReports);
 }
 #endif
 
@@ -425,6 +441,10 @@ VOID HcdCountersStart(PHCD_CONTROLLER hc)
     p = (PUCHAR)&hc->Counters;
     for (i = 0; i < sizeof(XHCIHC_COUNTERS); i++) {
         p[i] = 0;
+    }
+    for (i = 0; i < XHCI_SNAPSHOT_HCD_CLIENTS_KEPT *
+                        XHCI_SNAPSHOT_HCD_CLIENT_WORDS; i++) {
+        hc->ClientRecords[i] = 0;
     }
     hc->CountersStart = (ULONG)InterlockedIncrement(&hcdCountersStarts);
     if (hc->CountersStart == 0) {

@@ -1,4 +1,6 @@
-SIZEOF 252
+SIZEOF 276
+ClientPortResets 268
+ClientReports 272
 CommandsGivenUp 92
 DevicesAddressed 4
 EndpointConfigureFailures 60
@@ -8,6 +10,9 @@ EndpointRefusalsType 48
 EndpointsNoBandwidth 64
 EndpointsNoResources 68
 EndpointsOpened 36
+EnumCommandsBusy 252
+EnumCommandsBusyCleared 256
+EnumCommandsRefused 260
 FatalStatus 80
 HoldCompanionOthers 208
 HoldRequestsRefused 212
@@ -49,6 +54,7 @@ SsHubWarmResets 232
 SsLinksGivenUp 176
 SsResetsConverted 172
 SsWarmResets 168
+StartDrainsQueued 264
 TopoBehindHubAddressed 140
 TopoBehindHubOpens 144
 TopoBehindHubTooDeep 148

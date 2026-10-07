@@ -168,6 +168,18 @@ ULONG UasSrbStatus(ULONG scsiStatus, ULONG requested, ULONG transferred);
 ULONG UasCdbDirection(UCHAR opcode);
 
 /*
+ * Task 36.2: sense data as one word for the client report
+ * (xhci98_report.h, a "sense" word): key | ASC << 8 | ASCQ << 16 |
+ * response code << 24, from fixed (0x70, 0x71) or descriptor (0x72, 0x73)
+ * format; 0 when the response code is neither or the data is too short to
+ * hold the three. UAS_INTERNAL_SENSE is what the driver's own commands ask
+ * for: the fixed format's first 18 bytes.
+ */
+#define UAS_INTERNAL_SENSE      18
+
+ULONG UasSenseWord(const UCHAR *sense, ULONG length);
+
+/*
  * Storage ids from the INQUIRY data of a LUN, as the class INFs on each
  * target match them (design in uas_pdo.c). Each builder writes ASCII into
  * out, NUL-separated and NUL-terminated (a MULTI_SZ for the list kinds),

@@ -137,7 +137,8 @@ static ULONG hcdHalted(PHCD_CONTROLLER hc)
 /*
  * Submit one command and wait for its own completion. Returns the completion
  * code, or 0 when it never completed (lost, refused or timed out); *control
- * receives the Command Completion Event's DW3.
+ * receives the Command Completion Event's DW3. A busy engine is waited out,
+ * within HCD_COMMAND_WAIT_MS, before the command counts as refused.
  *
  * A completion counts only when its TRB is the one this submit placed
  * (CmdDonePA, from hcd_dev.c): a completion of an earlier command, the
@@ -154,6 +155,9 @@ static ULONG hcdCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
     ULONG trbPA;
     ULONG answer;
     ULONG rounds;
+    ULONG busy;
+    ULONG waited;
+    ULONG slice;
 #if DBG
     HCD_STRICT_SNAP strict;
 #endif
@@ -173,14 +177,41 @@ static ULONG hcdCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
     /* Read before the doorbell: the completion rewrites the contexts. */
     HcdStrictBefore(hc, trb, &strict);
 #endif
-    KeClearEvent(&hc->CmdDoneEvent);
-    hc->CmdDoneLost = 0;
-    hc->CmdDonePA = 0;
-    trbPA = 0;
-    answer = XhciCommandSubmit(&hc->Hc, trb, &trbPA, XHCI_ARM_UNLOCKED);
+    busy = 0;
+    waited = 0;
+    for (;;) {
+        KeClearEvent(&hc->CmdDoneEvent);
+        hc->CmdDoneLost = 0;
+        hc->CmdDonePA = 0;
+        trbPA = 0;
+        answer = XhciCommandSubmit(&hc->Hc, trb, &trbPA, XHCI_ARM_UNLOCKED);
+        if (answer != XHCI_CMD_BUSY) {
+            break;
+        }
+        /* Task 36.1: an earlier command's completion not yet drained - the
+         * start's No Op on the E7250 (issue 12) - is waited out, a drain
+         * queued each slice in case its interrupt never comes. Any
+         * completion signals the event; a slice that ends without one just
+         * tries again. */
+        if (!busy) {
+            busy = 1;
+            hc->Counters.EnumCommandsBusy++;
+        }
+        slice = XhciEnumBusyWait(waited, HCD_COMMAND_WAIT_MS,
+                                 XHCI_ENUM_BUSY_SLICE_MS);
+        if (slice == 0 || hcdHalted(hc)) {
+            break;
+        }
+        (VOID)HcdQueueDrain(hc);
+        (VOID)hcdWaitEvent(&hc->CmdDoneEvent, slice);
+        waited += slice;
+    }
     if (answer != XHCI_CMD_OK) {
-        hc->EnumCommandsRefused++;
+        hc->Counters.EnumCommandsRefused++;
         return 0;
+    }
+    if (busy) {
+        hc->Counters.EnumCommandsBusyCleared++;
     }
     for (rounds = 0; rounds < 4; rounds++) {
         KeClearEvent(&hc->CmdDoneEvent);

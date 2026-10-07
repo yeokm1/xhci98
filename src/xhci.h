@@ -8571,7 +8571,16 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_TOL_HUB_LOCS  17  /* XHCI_TOL_HUB_LOCS             */
 #define XHCI_SNAPSHOT_HCD_TOL_HUB_PORTS 18  /* HubLoc entries per hub object */
 #define XHCI_SNAPSHOT_HCD_TERMINAL      19  /* XHCI_TOL_TERMINAL_*           */
-#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    20UL
+/*
+ * Appended by task 36.2 (issue 12), version unchanged: the class-driver
+ * reports (xhci98_report.h) after the counters, XHCI_SNAPSHOT_HCD_CLIENTS
+ * records of XHCI_SNAPSHOT_HCD_CLIENT_BYTES. A header too short to hold
+ * these words is an older driver's, and its image has no reports.
+ */
+#define XHCI_SNAPSHOT_HCD_CLIENTS       20  /* report records                */
+#define XHCI_SNAPSHOT_HCD_CLIENT_BYTES  21  /* one record, in bytes          */
+#define XHCI_SNAPSHOT_HCD_CLIENTS_AT    22  /* the first record's offset     */
+#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    23UL
 
 /* One root port's record. The machine's fields are XHCI_ENUM_PORT's; the
  * speed ID is the one the port's last reset read (0 none), decoded on its
@@ -8599,13 +8608,31 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_F_UNREADABLE  0x00000004UL /* PORTSC read all ones */
 
 /* XHCIHC_COUNTERS in ULONGs (xhci_counters.h; asserted in xhci_snap.c). */
-#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 63UL
+#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 69UL
+
+/*
+ * One class-driver report's record (task 36.2): the bus's four words, then
+ * the client's XHCI98_REPORT_WORDS as it sent them. The bus keeps
+ * XHCI_SNAPSHOT_HCD_CLIENTS_KEPT, one per device - a newer report from the
+ * same slot, port and route replaces the older, and a new device takes an
+ * empty record or the oldest (XhciSnapClientPick) - from the controller's
+ * start, under the controller lock. STAMP is the counter block's
+ * ClientReports when the record was written, 0 for an empty record.
+ */
+#define XHCI_SNAPSHOT_HCD_CLIENTS_KEPT  4UL
+#define XHCI_SNAPSHOT_HCD_CLIENT_STAMP  0   /* 0: empty                      */
+#define XHCI_SNAPSHOT_HCD_CLIENT_SLOT   1   /* Slot ID, 0 none               */
+#define XHCI_SNAPSHOT_HCD_CLIENT_PLACE  2   /* root port << 24 | route string */
+#define XHCI_SNAPSHOT_HCD_CLIENT_KIND   3   /* XHCI98_REPORT_KIND_*          */
+#define XHCI_SNAPSHOT_HCD_CLIENT_FIRST  4   /* the client's words from here  */
+#define XHCI_SNAPSHOT_HCD_CLIENT_WORDS  32UL
 
 /* Where a word of the image lies (XhciSnapHcdLocate). */
 #define XHCI_SNAPSHOT_HCD_IN_HEAD       0UL
 #define XHCI_SNAPSHOT_HCD_IN_PORT       1UL
 #define XHCI_SNAPSHOT_HCD_IN_COUNTERS   2UL
 #define XHCI_SNAPSHOT_HCD_PAST_END      3UL
+#define XHCI_SNAPSHOT_HCD_IN_CLIENTS    4UL
 
 /* The image's length in words for `ports` root ports (held to
  * XHCI_MAX_ROOT_PORTS); its header word `word` (0 past the header); where
@@ -8617,6 +8644,16 @@ ULONG XhciSnapHcdLocate(ULONG ports, ULONG index, PULONG record,
                         PULONG word);
 ULONG XhciSnapHcdFlags(ULONG settleDeferred, ULONG linkRecovering,
                        ULONG unreadable);
+
+/* The report records (task 36.2), `kept` of XHCI_SNAPSHOT_HCD_CLIENT_WORDS
+ * each: which one a report from (slot, place) is written into - its own
+ * device's, else an empty one, else the oldest - and the write itself, of
+ * `count` client words (held to the record; the rest zeroed). A stamp of 0
+ * is written as 1, since 0 means empty. IRQL: any; the caller serializes. */
+ULONG XhciSnapClientPick(const ULONG *records, ULONG kept, ULONG slot,
+                         ULONG place);
+VOID XhciSnapClientStore(PULONG record, ULONG stamp, ULONG slot, ULONG place,
+                         ULONG kind, const ULONG *words, ULONG count);
 
 /* Header Status bits. A window always comes back with a truthful header, so
  * every refusal below is reported here rather than through an MPSTATUS the

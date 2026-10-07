@@ -152,9 +152,24 @@ typedef struct _XHCIHC_COUNTERS {
     ULONG SsHubConfigErrors;
     ULONG SsHubDevicesPlus;
     ULONG SsHubRateUnmatched;
+
+    /* Phase 36 (issue 12), appended: the bus's own commands that met a busy
+     * engine, once per command; of those, the ones resubmitted once it went
+     * idle; the bus's commands that never reached the ring (busy past the
+     * wait, or refused outright), which a port then fails "no slot" on; the
+     * drain queued when interrupts are enabled at a start; the
+     * IOCTL_INTERNAL_USB_RESET_PORT requests clients sent, apart from the
+     * bus's own resets; and the class-driver reports kept for the snapshot
+     * (xhci98_report.h). */
+    ULONG EnumCommandsBusy;
+    ULONG EnumCommandsBusyCleared;
+    ULONG EnumCommandsRefused;
+    ULONG StartDrainsQueued;
+    ULONG ClientPortResets;
+    ULONG ClientReports;
 } XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 63 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 69 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */

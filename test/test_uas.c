@@ -499,9 +499,48 @@ static void test_ids(void)
              "an unknown kind is refused");
 }
 
+/* 36.2: sense as the report's word. */
+static void test_sense_word(void)
+{
+    UCHAR fixed[18];
+    UCHAR desc[8];
+    ULONG i;
+
+    for (i = 0; i < sizeof(fixed); i++) {
+        fixed[i] = 0;
+    }
+    fixed[0] = 0xF0;    /* VALID, current, fixed */
+    fixed[2] = 0x25;    /* ILI, and ILLEGAL REQUEST (5) */
+    fixed[12] = 0x24;   /* INVALID FIELD IN CDB */
+    fixed[13] = 0x00;
+    CHECK_EQ(UasSenseWord(fixed, 18), 0x70002405UL,
+             "fixed: key, ASC, ASCQ, the code without VALID");
+    fixed[0] = 0x70;
+    fixed[2] = 0x06;    /* UNIT ATTENTION */
+    fixed[12] = 0x28;
+    fixed[13] = 0x01;
+    CHECK_EQ(UasSenseWord(fixed, 14), 0x70012806UL,
+             "fixed in fourteen bytes");
+    CHECK_EQ(UasSenseWord(fixed, 13), 0, "fixed too short for the ASCQ");
+    fixed[0] = 0x71;
+    CHECK_EQ(UasSenseWord(fixed, 18) >> 24, 0x71, "deferred, fixed");
+
+    desc[0] = 0x72;
+    desc[1] = 0x02;     /* NOT READY */
+    desc[2] = 0x3A;     /* MEDIUM NOT PRESENT */
+    desc[3] = 0x00;
+    desc[4] = desc[5] = desc[6] = desc[7] = 0;
+    CHECK_EQ(UasSenseWord(desc, 8), 0x72003A02UL, "descriptor format");
+    CHECK_EQ(UasSenseWord(desc, 3), 0, "descriptor too short");
+    desc[0] = 0x7F;
+    CHECK_EQ(UasSenseWord(desc, 8), 0, "a vendor response code: none");
+    CHECK_EQ(UasSenseWord(NULL, 18), 0, "no data");
+}
+
 int main(void)
 {
     test_tags();
+    test_sense_word();
     test_command_iu();
     test_task_iu();
     test_parse();

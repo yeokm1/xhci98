@@ -122,7 +122,22 @@
 > enumeration service) and `hcd_ctl.c`'s `hcdRestoreBusMaster`; the
 > configuration's charged fallback `hcdCfgCycle` in `hcd_cfg.c`; and in
 > `xhci_tol.c` `XhciTolLocActive`, `XhciTolLocHeld`, the once-per-cycle
-> charge `XhciTolCycleCharge` and the terminal reason 5 (`test_tol`). The tables below are the
+> charge `XhciTolCycleCharge` and the terminal reason 5 (`test_tol`).
+> Phase 36 (issue 12) adds one file, `xhci98_report.h`, the private
+> client-report interface `xhciuas.sys` includes beside `xhci98_streams.h`,
+> answered in `hcd_urb.c` (`hcdClientReport`) and kept for the snapshot by
+> the pure `XhciSnapClientPick` and `XhciSnapClientStore` in `xhci_snap.c`
+> (the HCD region's header grown to 23 words; `test_snap`), filled by
+> `hcd_door.c`. Task 36.1 adds `HcdQueueDrain` to `hcd_ctl.c` (the drain at
+> interrupt enable, and the backstop's and the injector's queueing) and the
+> busy engine's wait to `hcd_enum.c`'s `hcdCommand`, its slices the pure
+> `XhciEnumBusyWait` in `xhci_enum.c` (`test_enum`); task 36.2 the counter
+> block's six appended counters (`xhci_counters.h`), the client port resets
+> counted in `hcd_cfg.c`, and in `src\uas\` the report itself (`UasReport`
+> in `uas_fdo.c`, the transfer failures in `uas_xport.c`, the sense word
+> `UasSenseWord` in `uas_iu.c`; `test_uas`); task 36.3 the qemu flavour's
+> `XhciQemuStartHold` in `hcd_inj.c`. `xhcisnap\xhcisnap.c` names the new
+> counters and decodes the reports (`print_hcd_clients`). The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name

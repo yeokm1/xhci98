@@ -47,6 +47,7 @@
 #include <ntddstor.h>
 #include "uas_iu.h"
 #include "uas_streams.h"
+#include "../xhci98_report.h"
 
 #define UAS_POOL_TAG            ' saU'
 
@@ -217,6 +218,11 @@ typedef struct _UAS_FDO {
     UAS_XFER SharedStatus;          /* streamless: the one status reader */
     PUCHAR SharedBuffer;
     ULONG Counters[8];
+    /* Task 36.2: what the next client report says (xhci98_report.h,
+     * XHCI98_UAS_*), by word; the transfer failures under Lock, the rest
+     * from the start and the recovery worker, which never run together.
+     * Counters are copied in when it is sent (UasReport, uas_fdo.c). */
+    ULONG Report[XHCI98_REPORT_WORDS];
 
     KTIMER Timer;
     KDPC TimerDpc;
@@ -271,6 +277,7 @@ NTSTATUS UasFdoPnp(PUAS_FDO fdo, PIRP irp);
 NTSTATUS UasFdoPower(PUAS_FDO fdo, PIRP irp);
 NTSTATUS UasSyncUrb(PUAS_FDO fdo, PURB urb);
 NTSTATUS UasSyncIoctl(PUAS_FDO fdo, ULONG code);
+VOID UasReport(PUAS_FDO fdo, ULONG reason);
 
 /* uas_pdo.c - PnP at PASSIVE; SCSI and device control at <= DISPATCH. */
 NTSTATUS UasPdoCreate(PUAS_FDO fdo, ULONG lun, const UCHAR *inquiry,
@@ -291,7 +298,8 @@ NTSTATUS UasEngineSubmit(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
                          PSCSI_REQUEST_BLOCK srb);
 NTSTATUS UasInternalCommand(PUAS_FDO fdo, ULONG lun, const UCHAR *cdb,
                             ULONG cdbLength, PVOID buffer, ULONG length,
-                            PULONG transferred, PUCHAR scsiStatus);
+                            PULONG transferred, PUCHAR scsiStatus,
+                            PULONG result, PULONG sense);
 NTSTATUS UasEngineAbort(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
                         PSCSI_REQUEST_BLOCK srb);
 NTSTATUS UasEngineReset(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,

@@ -4070,6 +4070,8 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
             continue;
         }
         if (urb == NULL) {
+            /* Task 36.2: a client's reset, apart from the bus's own. */
+            hc->Counters.ClientPortResets++;
             usbd = hcdCfgResetPort(hc, dev);
             hcdCfgReleaseAgain(hc, dev, held);
             hcdCfgComplete(dev, irp, NULL, usbd);

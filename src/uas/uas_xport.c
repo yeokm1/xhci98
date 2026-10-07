@@ -804,6 +804,42 @@ static VOID uasStatusIu(PUAS_FDO fdo, PUAS_XFER x, PUAS_ACT a)
 }
 
 /*
+ * Task 36.2 (issue 12): a transfer that failed on its own, kept for the
+ * client report - which pipe (so a dump says whether a stalled IN endpoint
+ * is the status or the data-in pipe), the USBD status, and the tag. The
+ * first failure since the start is kept beside the latest. Lock held.
+ */
+static VOID uasNoteFailure(PUAS_FDO fdo, PUAS_XFER x, PUAS_SLOT slot)
+{
+    ULONG pipe;
+    ULONG who;
+
+    switch (x->Kind) {
+    case UAS_XFER_COMMAND:
+        pipe = UAS_PIPE_COMMAND;
+        fdo->Report[XHCI98_UAS_FAIL_COMMAND]++;
+        break;
+    case UAS_XFER_STATUS:
+        pipe = UAS_PIPE_STATUS;
+        fdo->Report[XHCI98_UAS_FAIL_STATUS]++;
+        break;
+    default:
+        pipe = (slot != NULL && !slot->DataIn) ? UAS_PIPE_DATA_OUT
+                                               : UAS_PIPE_DATA_IN;
+        fdo->Report[XHCI98_UAS_FAIL_DATA]++;
+        break;
+    }
+    who = (x->Kind & 0xFFUL) | (pipe << 8) |
+          (((slot != NULL) ? slot->Tag : 0UL) << 16);
+    if (fdo->Report[XHCI98_UAS_FAIL_FIRST_WHO] == 0) {
+        fdo->Report[XHCI98_UAS_FAIL_FIRST] = (ULONG)x->Urb.Hdr.Status;
+        fdo->Report[XHCI98_UAS_FAIL_FIRST_WHO] = who;
+    }
+    fdo->Report[XHCI98_UAS_FAIL_LAST] = (ULONG)x->Urb.Hdr.Status;
+    fdo->Report[XHCI98_UAS_FAIL_LAST_WHO] = who;
+}
+
+/*
  * The completion of every transfer. It holds the reference uasXferBuild
  * took until its last line, so nothing it starts - the finish of a slot,
  * a re-post, a recovery request, a pump - can outlive the FDO.
@@ -834,6 +870,7 @@ static NTSTATUS uasXferDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
 
     if (!ok) {
         if (!cancelled) {
+            uasNoteFailure(fdo, x, slot);
             if (slot != NULL) {
                 uasSlotFault(slot, &a);
             } else {
@@ -1171,12 +1208,14 @@ static BOOLEAN uasResetDevice(PUAS_FDO fdo)
     if (!NT_SUCCESS(status)) {
         fdo->Dead = TRUE;
         KeReleaseSpinLock(&fdo->Lock, irql);
+        UasReport(fdo, XHCI98_UAS_REASON_RESET);
         return FALSE;
     }
     /* The port reset lost every task the device held: quarantined tags
      * are safe again. */
     uasReleaseQuarantine(fdo);
     KeReleaseSpinLock(&fdo->Lock, irql);
+    UasReport(fdo, XHCI98_UAS_REASON_RESET);
     return TRUE;
 }
 
@@ -1909,9 +1948,11 @@ VOID UasEngineCloseLun(PUAS_FDO fdo, PUAS_PDO pdo, UCHAR srbStatus)
  */
 NTSTATUS UasInternalCommand(PUAS_FDO fdo, ULONG lun, const UCHAR *cdb,
                             ULONG cdbLength, PVOID buffer, ULONG length,
-                            PULONG transferred, PUCHAR scsiStatus)
+                            PULONG transferred, PUCHAR scsiStatus,
+                            PULONG result, PULONG sense)
 {
     PSCSI_REQUEST_BLOCK srb;
+    PUCHAR senseData;
     PIRP irp;
     KEVENT done;
     NTSTATUS status;
@@ -1920,10 +1961,16 @@ NTSTATUS UasInternalCommand(PUAS_FDO fdo, ULONG lun, const UCHAR *cdb,
 
     *transferred = 0;
     *scsiStatus = 0;
+    *result = 0;
+    *sense = 0;
     if (cdbLength > 16) {
         return STATUS_INVALID_PARAMETER;
     }
-    srb = (PSCSI_REQUEST_BLOCK)UasAlloc(sizeof(SCSI_REQUEST_BLOCK));
+    /* Task 36.2: the sense kept, so a START that found no LUN says why in
+     * its report (xhci98_report.h); the SRB and its sense buffer are one
+     * allocation. */
+    srb = (PSCSI_REQUEST_BLOCK)UasAlloc(sizeof(SCSI_REQUEST_BLOCK) +
+                                        UAS_INTERNAL_SENSE);
     irp = IoAllocateIrp(1, FALSE);
     if (srb == NULL || irp == NULL) {
         UasFree(srb);
@@ -1942,7 +1989,9 @@ NTSTATUS UasInternalCommand(PUAS_FDO fdo, ULONG lun, const UCHAR *cdb,
     srb->DataTransferLength = length;
     srb->SrbFlags = (length != 0) ? SRB_FLAGS_DATA_IN
                                   : SRB_FLAGS_NO_DATA_TRANSFER;
-    srb->SrbFlags |= SRB_FLAGS_DISABLE_AUTOSENSE;
+    senseData = (PUCHAR)(srb + 1);
+    srb->SenseInfoBuffer = senseData;
+    srb->SenseInfoBufferLength = UAS_INTERNAL_SENSE;
     srb->TimeOutValue = 10;
     srb->SrbStatus = SRB_STATUS_PENDING;
 
@@ -1959,6 +2008,10 @@ NTSTATUS UasInternalCommand(PUAS_FDO fdo, ULONG lun, const UCHAR *cdb,
                                     NULL);
         *scsiStatus = srb->ScsiStatus;
         *transferred = srb->DataTransferLength;
+        *result = (ULONG)srb->SrbStatus | ((ULONG)srb->ScsiStatus << 8);
+        if ((srb->SrbStatus & SRB_STATUS_AUTOSENSE_VALID) != 0) {
+            *sense = UasSenseWord(senseData, srb->SenseInfoBufferLength);
+        }
         status = (SRB_STATUS(srb->SrbStatus) == SRB_STATUS_SUCCESS ||
                   SRB_STATUS(srb->SrbStatus) == SRB_STATUS_DATA_OVERRUN)
                      ? STATUS_SUCCESS : STATUS_IO_DEVICE_ERROR;

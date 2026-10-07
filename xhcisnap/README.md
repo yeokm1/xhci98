@@ -156,6 +156,21 @@ tool knows is refused, since a version bump means a field changed meaning.
 35.3's driver sent an eight-word header; 35-T.8's appended twelve words with
 the version left at 1, and an older tool reads the region as before.
 
+From roadmap-hcd.md Phase 36 (issue 12) the counter block has 69 counters -
+the six appended are the bus's commands that met a busy engine, those waited
+out, those refused, the drain queued at interrupt enable, the port resets
+clients asked for, and the class-driver reports kept - and the header three
+more words (23), placing up to four **class-driver reports** after the
+counters (`src/xhci98_report.h`). `xhciuas.sys` sends one at the end of every
+START, after every port reset it asks for and at STOP; the bus keeps the
+newest per device, stamped with its slot, root port and route, and the
+`.TXT` decodes it: how far START got and its status, the interface and the
+endpoint each UAS pipe uses, the streams granted, REPORT LUNS and the last
+INQUIRY with SRB status, SCSI status, tries and sense, the LUNs found, the
+first and latest transfer failure with the pipe it was on, and the class
+driver's eight counters. A shorter header is an older driver's and the
+report says it keeps none.
+
 ### Controller tolerance (2.2.0.0)
 
 From 2.2.0.0 (roadmap-hcd.md task 35-T.8, design record 17 section 4.8) the

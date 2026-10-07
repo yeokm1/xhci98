@@ -1,4 +1,9 @@
-﻿CommandsGivenUp	commands the engine gave up on
+﻿ClientPortResets	client port resets
+ClientReports	client reports kept
+CommandsGivenUp	commands the engine gave up on
+EnumCommandsBusyCleared	commands: busy engine waited out
+EnumCommandsBusy	commands: met a busy engine
+EnumCommandsRefused	commands: refused by the engine
 DevicesAddressed	devices addressed
 EndpointConfigureFailures	endpoint configure failures
 EndpointRefusalsParams	endpoint refusals - params
@@ -34,6 +39,7 @@ SlotSpeedLow	slot context speed - low speed
 SlotSpeedSuper	slot context speed - superspeed
 SpeedDisagreements	slot speed disagreeing with port speed
 SlotsEnabled	slots enabled
+StartDrainsQueued	start: drains queued at interrupt enable
 SsHubPairs	superspeed hubs: halves paired
 SsHubConfigErrors	superspeed hubs: port config errors
 SsHubLinksGivenUp	superspeed hubs: port links given up

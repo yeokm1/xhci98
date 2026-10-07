@@ -107,9 +107,10 @@ interrupt, which has been seen only on this machine.
    `HcdEnumService` runs port 13's whole enumeration, both attempts, before
    the thread gets back to the poll that would drain it.
 
-`EnumCommandsRefused` lives in `HCD_CONTROLLER` (`src/hcd.h:962`), outside
-the `XHCI_EXTENSION` that XHCISNAP dumps. So the refusal is inferred from
-CommandsIssued 1 and CommandsGivenUp 0, not counted in the dump.
+In `2.2.0.0` `EnumCommandsRefused` lived in `HCD_CONTROLLER`, outside the
+`XHCI_EXTENSION` that XHCISNAP dumps. So the refusal is inferred from
+CommandsIssued 1 and CommandsGivenUp 0, not counted in the dump. (Task 36.1
+moved it into the counter block; section 3.5.)
 
 ### 3.3 Workaround
 
@@ -135,6 +136,31 @@ so a future dump names this failure directly.
 A fix needs a host test, both builds (x86 and `-amd64`), the gates, and a
 bench reading with a device present at boot, from this user or from another
 Intel 9-series machine.
+
+### 3.5 What the interim build does (task 36.1)
+
+Both candidates, taken on 2026-10-07: asked to choose, the owner asked for
+a recommendation, and both was it, because the first closes only the window
+seen here and the second covers every busy engine an enumeration can meet -
+an in-place recovery's own No Op (`xhci_init.c` enables interrupts there
+itself, not through `hcdStart`) among them.
+
+- `hcdStart` queues one drain through the ISR's admission right after
+  `XhciEnableInterrupts` (`HcdQueueDrain`, the queueing the backstop and the
+  injector now share), counted as `StartDrainsQueued`.
+- `hcdCommand`, on `XHCI_CMD_BUSY`, queues a drain and waits on the command
+  event a 10 ms slice at a time, then submits again, for at most
+  `HCD_COMMAND_WAIT_MS` (5 s) in all; the slices are the pure
+  `XhciEnumBusyWait` (`src/xhci_enum.c`, host vectors in `test_enum`). A
+  command that met a busy engine counts `EnumCommandsBusy` once, one that
+  then went out `EnumCommandsBusyCleared`, and one that never reached the
+  ring - busy past the wait, or refused for any other reason -
+  `EnumCommandsRefused`. All three are in the counter block, so a dump now
+  names this failure directly.
+
+On the E7250 either would have let the first Enable Slot out: the start's
+drain retires the No Op at once, and a busy engine met anyway is waited out
+by the second.
 
 ## 4. Finding 2 - hot-plugged: `xhciuas` binds, and no disk appears (open)
 
@@ -214,6 +240,35 @@ everywhere (`src/hcd_pdo.c:2426`, `src/hcd_rh.c:299`,
   data-in pipe during INQUIRY is not normal. It may be this device, or a
   stream or ring set-up problem in the HCD on this controller.
 
+### 4.5 What the interim build records (task 36.2)
+
+No fix for Finding 2; what the next dump needs to give it a cause:
+
+- **A class-driver report in the dump.** `xhciuas.sys` sends the bus a
+  report (`src/xhci98_report.h`, `IOCTL_XHCI98_CLIENT_REPORT`) at the end of
+  every START, after every port reset it asks for, and at STOP. The bus
+  keeps the newest four, one per device, in the snapshot's HCD region after
+  the counters, and XHCISNAP decodes them. A report says how far START got
+  and with what status; the interface, its alternate and the endpoint each
+  Pipe Usage descriptor named (so EP1 IN is named the status or the data-in
+  pipe); the streams wanted and granted; REPORT LUNS's and the last
+  INQUIRY's SRB status, SCSI status, tries and sense; the LUNs reported,
+  inquired, found and failed; the first and latest transfer failure with
+  its USBD status, pipe and tag, and the failures per pipe; and the driver's
+  eight counters, its port resets among them.
+- **Sense for the driver's own commands.** REPORT LUNS and INQUIRY were sent
+  with autosense disabled, so a CHECK CONDITION left nothing to read. They
+  now carry an 18-byte sense buffer; the commands themselves and how their
+  outcome is judged are unchanged.
+- **Client port resets apart.** The bus counts the
+  `IOCTL_INTERNAL_USB_RESET_PORT` requests clients send as
+  `ClientPortResets`, beside its own SuperSpeed counts, which settles the
+  first question of section 4.4.
+
+The report needs `xhciuas.sys` from the same build: an older `xhciuas.sys`
+sends none, and an older `xhci98.sys` refuses the request, which `xhciuas`
+ignores.
+
 ## 5. Interrupt delivery is poor on this machine
 
 DpcCount always equals InterruptsClaimed + BackstopDrains: 69 + 54 = 123
@@ -253,8 +308,10 @@ affects the drive letter, not whether a disk appears.
 The work is roadmap Phase 36: an interim build made from this evidence and
 checked again on the E7250 by the owner.
 
-1. Owner: choose the Finding 1 fix (section 3.4; task 36.1).
+1. Owner: choose the Finding 1 fix (section 3.4; task 36.1). Both, built
+   (section 3.5).
 2. Add the diagnostics that let one dump settle section 4.4 (task 36.2).
+   Built (section 4.5).
 3. Build x86 and amd64, host-test, run the gates and the QEMU regression,
    and send the interim build (task 36.3).
 4. Read it on the E7250 with a device present at boot and the reader

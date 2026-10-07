@@ -363,5 +363,17 @@ ULONG XhciEnumNoteFail(ULONG port, ULONG cause, ULONG attempt, ULONG final);
 ULONG XhciEnumNoteEnd(ULONG port, ULONG state, ULONG cause, ULONG retries);
 ULONG XhciEnumNoteQuiet(ULONG port);
 
+/*
+ * Task 36.1 (issue 12, Finding 1): a bus command that finds the engine busy
+ * - an earlier command's completion not yet drained - is not refused at
+ * once. The bus queues a drain and waits for a completion, a slice at a
+ * time, and submits again. This is the slice after `waitedMs` of a
+ * `budgetMs` wait: `sliceMs`, held to what the budget has left, and 0 once
+ * it is spent, when the command is refused as before. A slice of 0 waits
+ * nothing. IRQL: any.
+ */
+#define XHCI_ENUM_BUSY_SLICE_MS     10UL
+ULONG XhciEnumBusyWait(ULONG waitedMs, ULONG budgetMs, ULONG sliceMs);
+
 
 #endif /* XHCI_ENUM_H */

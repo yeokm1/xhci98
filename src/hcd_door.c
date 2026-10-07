@@ -793,7 +793,8 @@ static ULONG hcdDoorHcdPortWord(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG word)
  * thread's plain writes (xhci_counters.h). The header's tolerance words
  * place XHCI_EXTENSION.Tol in the extension region rather than copy it
  * (35-T.8); its terminal reason is read here, under the lock that
- * ControllerFailed and the window are written under. Controller lock held,
+ * ControllerFailed and the window are written under, as the class-driver
+ * reports after the counters are (36.2, hcd_urb.c). Controller lock held,
  * the same as the slots region. IRQL: DISPATCH_LEVEL.
  */
 static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
@@ -843,6 +844,10 @@ static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
             break;
         case XHCI_SNAPSHOT_HCD_IN_COUNTERS:
             value = counters[word];
+            break;
+        case XHCI_SNAPSHOT_HCD_IN_CLIENTS:
+            value = hc->ClientRecords[record * XHCI_SNAPSHOT_HCD_CLIENT_WORDS +
+                                      word];
             break;
         default:
             value = 0;

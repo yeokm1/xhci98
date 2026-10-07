@@ -6274,11 +6274,11 @@ of a headless guest.
 
 ### The qemu flavour's test aids: the E460 speed table and fault injection
 
-Two switches exist in the `qemu` flavour alone (`XHCI_FLAVOUR_QEMU`, which
+Three switches exist in the `qemu` flavour alone (`XHCI_FLAVOUR_QEMU`, which
 `src\sources` defines for that build and no other). The `debug` and
-`release` images compile none of their code, read neither value and carry
-none of their strings; no INF writes either, so both are absent, and off,
-until a guest sets them. Both live in the controller's driver key, the key
+`release` images compile none of their code, read no value of theirs and
+carry none of their strings; no INF writes any, so all are absent, and off,
+until a guest sets them. All live in the controller's driver key, the key
 every other value of this driver lives in: on Windows 98 SE and ME
 `HKLM\System\CurrentControlSet\Services\Class\USB\NNNN`, on the NT targets
 `HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\NNNN`
@@ -6294,6 +6294,20 @@ preflight and the post-reset parse alike (`XhciPortMapOverridePsi`,
 `src\xhci_caps.c`, host vectors in `test_caps`); the log ring notes
 `qemu.psi.e460`. A change takes effect at the next start (disable and enable
 the controller). It is kept apart from the injection below.
+
+**`XhciQemuStartHold`** (roadmap-hcd task 36.3, issue 12). A REG_DWORD read
+at every start: a number of milliseconds, held to 5000, for which the start
+holds back every event drain but the bus's own command path's - the drain
+queued at interrupt enable (36.1), the ISR's (it acknowledges and queues
+nothing, as fault `01` below) and the backstop's. The No Op self-test's
+completion then stands undrained and the command engine busy, as the Dell
+E7250's lost interrupt left it, so a device present at boot meets a busy
+engine at its first Enable Slot. A build with 36.1 waits it out in
+`hcdCommand`, whose own drain is not held (`EnumCommandsBusy` and
+`EnumCommandsBusyCleared` 1 each in the counter block); a build without it
+fails the port "no slot". Absent, another type or 0 holds nothing; the log
+ring notes `qemu.inj.starthold`. 2000 covers QEMU's first enumeration. A
+change takes effect at the next start.
 
 **`XhciQemuInject`** (roadmap-hcd task 35-T.9, design record 17 section 5).
 A REG_DWORD the controller thread re-reads about once a second, so a script
