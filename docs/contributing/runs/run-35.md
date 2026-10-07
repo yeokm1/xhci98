@@ -913,9 +913,10 @@ hub's SuperSpeed half present, the stick behind it and the stick at the
 root port both at SuperSpeed (owner). Port
 2, the USB 2.0 half of port 14's connector, read Failed on its reset after
 a stick was pulled from that connector - a connect no longer than the pins'
-contact, left until that connector's next connect. The rest of the counted
-campaign (10 cold boots and 10 hot-plugs with each of the hub and the
-stick, unless the owner sets other counts), the P14s
+contact, left until that connector's next connect. Then 5 hot-plugs, the
+SuperSpeed devices found again each time (owner). The owner set the E460's
+campaign at those 5 cold boots and 5 hot-plugs (2026-10-07, in place of
+the roadmap's 10 and 10): the E460's clauses passed. The P14s
 Gen 1, the B490 and value 2 on the B490 are the owner's still.
 
 ## Review
