@@ -9,9 +9,7 @@ Since `2.0.0.0` the driver replaces Windows' own USB port and hub drivers with i
 - USB 2.0 and 1.1 (High, Full and Low Speed) devices and hubs
 - UAS (USB Attached SCSI) storage, through a second driver, `xhciuas.sys`
 
-`1.2.0.0`, the USB 2.0-only `usbport.sys` miniport, is frozen and stays available under [releases/1.2.0.0](releases/1.2.0.0/readme.txt) for anyone who needs it.
-
-This driver is developed based on Intel's xHCI specification and tested mainly on Intel machines so far. No guarantees have been made on xHCI implementations from other vendors. [Omores](https://www.youtube.com/@O_mores) has also [tested 1.x](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) on some AMD AM4 and AM5 platforms.
+This driver is developed based on Intel's xHCI specification and tested mainly on Intel machines so far. No guarantees have been made on xHCI implementations from other vendors, although best effort has been made to ensure compatibility. [Omores](https://www.youtube.com/@O_mores) has also [tested 1.x](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) on some AMD AM4 and AM5 platforms.
 
 This project is from a solo human with AI-assistance only so bugs are not unexpected. Feel free to report them if you encounter any issues.
 
