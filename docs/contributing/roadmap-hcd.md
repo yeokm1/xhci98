@@ -22,7 +22,9 @@ on 2026-10-05 (Phase 33), with its polling-rate reading owed to the bench.
 SuperSpeed devices falling back to USB 2.0 on Intel Sunrise Point,
 `XhciIntelPortSwitch` 2 and the controller tolerance work, is `2.2.0.0`
 (owner, 2026-10-06; it was the interim `2.1.2.0` until the tolerance work
-joined it), cut on 2026-10-07 and closed the same day on the owner's bench (35-E). Polled event
+joined it), cut on 2026-10-07 and closed the same day on the owner's bench (35-E). Phase 36,
+opened 2026-10-07 from a user's Dell E7250 under Windows XP x64 (issue 12),
+is open on branch `2.2.1.0`. Polled event
 delivery and selective suspend are planned but carry no phase number and
 no version until the owner opens them (owner, 2026-10-06; "Planned work"
 below).
@@ -647,6 +649,50 @@ Records: `runs/run-35.md`; `design/17-controller-tolerance.md`;
 `design/16-intel-port-switchover.md`;
 `docs/issues/11-sunrise-point-ssic-psi-table.md`; `releases/history.md`;
 `releases/2.2.0.0/`; `docs/using/release-notes.md`.
+
+---
+
+## Phase 36 - The Dell E7250 under Windows XP x64: a Device Present at Boot, and UAS With No Disk
+
+Goal: an interim build, made from the evidence so far, that enumerates a
+device present at boot on the Dell E7250 (Intel Wildcat Point-LP,
+`8086:9CB1`) rather than failing it "no slot", and that records enough on
+its own for the next check to diagnose the hot-plugged UAS reader that
+binds `xhciuas` and shows no disk.
+
+Status: opened 2026-10-07 (owner) from a user report against `2.2.0.0`,
+the first report of the HCD on real hardware under Windows XP x64 (issue
+12), on branch `2.2.1.0`. The new evidence is what the interim build
+records when it is checked again. Finding 1's
+cause is read from the code and consistent with every counter: both Enable
+Slot commands are refused `XHCI_CMD_BUSY` behind the start's No Op, whose
+completion raises no interrupt on this machine and is drained by the 100 ms
+backstop only after the enumeration thread has run the port's whole
+enumeration. Finding 2 is not diagnosed: a class driver selected the UAS
+interface, EP1 IN stalled four times, and `xhciuas` completes START with no
+LUN found when every INQUIRY fails. About half of all events on this
+machine are delivered by the backstop.
+
+Why a phase: it changes how every enumeration meets a busy command engine,
+on every target; it adds shipping diagnostics to `xhciuas`; and its only
+evidence is a machine nobody here has, read through a build sent to it.
+
+The interim build carries 36.1 and 36.2 only. Finding 2 gets no fix in
+it: there is not enough evidence to choose one, and the build's job there
+is to record what the next check needs (36.2). Fixes for Finding 2 and the
+interrupt delivery wait for that check (36.4, 36.5).
+
+- [ ] 36.1 the Finding 1 fix (owner chooses; issue 12 section 3.4): a drain queued through the ISR's admission right after `XhciEnableInterrupts` in `hcdStart`, and/or `hcdCommand` on `XHCI_CMD_BUSY` queueing a drain and waiting, inside `HCD_COMMAND_WAIT_MS`, for the engine to go idle, then resubmitting; a host test of the refusal and the resubmit
+- [ ] 36.2 the diagnostics, chosen so that one dump settles what the user can no longer be asked (issue 12 sections 4.4 and 6): `EnumCommandsRefused` in a region `XHCISNAP` reads and names; for `xhciuas`, the START outcome (LUNs found, REPORT LUNS and INQUIRY results with sense), its counters and its port resets, and the Pipe Usage map (which endpoint is status and which is data-in), reachable from a dump; port resets requested by a client counted apart in the HCD; `XHCISNAP` decoding all of it
+- [ ] 36.3 the interim build: x86 and `-amd64`, the host suites and every gate, and the regression on QEMU under Windows 98 SE, 2000 and XP x64, with a device present at boot and, on the `qemu` flavour, an engine held busy at the first enumeration; sent to the E7250 by the owner. Not a release
+- [ ] 36.4 the check again (owner): the interim build on the E7250 under XP x64, a device present at boot and the reader hot-plugged, the dumps read with the 36.2 diagnostics; Finding 1 confirmed fixed or not, and Finding 2 given a cause or a stated limitation
+- [ ] 36.5 what 36.4 leaves owed: a Finding 2 fix if one is (a pipe-level stall recovery in `xhciuas`, or a START that fails rather than succeeds with no disk), and the interrupt delivery (issue 12 section 5: why half the events come from the backstop, whether the No Op's IP is lost while masked or with the rest)
+
+Checkpoint: the interim build read on the E7250 (36.4) with a device
+present at boot enumerated; Finding 2 has a cause or a stated limitation.
+Which release carries the result is the owner's call.
+
+Records: `docs/issues/12-e7250-xp64-boot-enable-slot-refused.md`.
 
 ---
 
