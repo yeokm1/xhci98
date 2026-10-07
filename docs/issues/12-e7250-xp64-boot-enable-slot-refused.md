@@ -269,6 +269,17 @@ The report needs `xhciuas.sys` from the same build: an older `xhciuas.sys`
 sends none, and an older `xhci98.sys` refuses the request, which `xhciuas`
 ignores.
 
+### 4.6 The interim build
+
+Numbered `2.2.0.1` to mark it a test build, not a release (owner,
+2026-10-07). Built x86 and amd64 in all three flavours with every gate, the
+host suites passing, and reviewed by Codex to convergence over three rounds
+on 2026-10-07: round 1 found a race between START's report and the recovery
+worker's (fixed with a report gate and locked writes), round 2 that the
+qemu start hold could time out the resubmitted command (fixed by ending the
+hold at the first busy drain), round 3 nothing. The QEMU regression legs of
+task 36.3 are not yet run.
+
 ## 5. Interrupt delivery is poor on this machine
 
 DpcCount always equals InterruptsClaimed + BackstopDrains: 69 + 54 = 123
