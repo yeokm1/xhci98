@@ -25,6 +25,10 @@
 
 #include "uas.h"
 
+static VOID uasReportPut(PUAS_FDO fdo, ULONG first, const ULONG *words,
+                         ULONG count);
+static VOID uasReportSet(PUAS_FDO fdo, ULONG at, ULONG value);
+
 static NTSTATUS uasSignal(PDEVICE_OBJECT device, PIRP irp, PVOID context)
 {
     UNREFERENCED_PARAMETER(device);
@@ -226,7 +230,7 @@ static ULONG uasStreamsWanted(PUAS_FDO fdo)
 
 /* REPORT LUNS on LUN 0, retried past a unit attention; LUN 0 alone when
  * the device cannot answer. */
-static ULONG uasReportLuns(PUAS_FDO fdo, PUCHAR luns)
+static ULONG uasReportLuns(PUAS_FDO fdo, PUCHAR luns, PULONG reported)
 {
     UCHAR cdb[12];
     PUCHAR buf;
@@ -236,6 +240,7 @@ static ULONG uasReportLuns(PUAS_FDO fdo, PUCHAR luns)
     ULONG tries;
     ULONG result;
     ULONG sense;
+    ULONG words[3];
     UCHAR scsi;
 
     n = 0;
@@ -255,12 +260,15 @@ static ULONG uasReportLuns(PUAS_FDO fdo, PUCHAR luns)
                 break;
             }
         }
-        fdo->Report[XHCI98_UAS_RLUNS] = (result & 0xFFFFUL) |
-                                        ((tries & 0xFFUL) << 16);
-        fdo->Report[XHCI98_UAS_RLUNS_SENSE] = sense;
         UasFree(buf);
+    } else {
+        tries = 0;
     }
-    fdo->Report[XHCI98_UAS_LUNS] = n & 0xFFUL;
+    words[0] = (result & 0xFFFFUL) | ((tries & 0xFFUL) << 16);
+    words[1] = sense;
+    words[2] = n & 0xFFUL;
+    *reported = words[2];
+    uasReportPut(fdo, XHCI98_UAS_RLUNS, words, 3);
     if (n == 0) {
         luns[0] = 0;
         n = 1;
@@ -276,6 +284,7 @@ static NTSTATUS uasInquiry(PUAS_FDO fdo, ULONG lun, PUCHAR inquiry)
     ULONG tries;
     ULONG result;
     ULONG sense;
+    ULONG words[3];
     UCHAR scsi;
     NTSTATUS status;
 
@@ -302,12 +311,11 @@ static NTSTATUS uasInquiry(PUAS_FDO fdo, ULONG lun, PUCHAR inquiry)
         }
         status = STATUS_UNSUCCESSFUL;
     }
-    fdo->Report[XHCI98_UAS_INQ] = (result & 0xFFFFUL) |
-                                  ((tries & 0xFFUL) << 16) |
-                                  ((lun & 0xFFUL) << 24);
-    fdo->Report[XHCI98_UAS_INQ_SENSE] = sense;
-    fdo->Report[XHCI98_UAS_INQ_BYTE0] = (ULONG)buf[0] |
-                                        ((got & 0xFFFFUL) << 8);
+    words[0] = (result & 0xFFFFUL) | ((tries & 0xFFUL) << 16) |
+               ((lun & 0xFFUL) << 24);
+    words[1] = sense;
+    words[2] = (ULONG)buf[0] | ((got & 0xFFFFUL) << 8);
+    uasReportPut(fdo, XHCI98_UAS_INQ, words, 3);
     UasFree(buf);
     return status;
 }
@@ -323,18 +331,20 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
     ULONG wanted;
     ULONG i;
     ULONG j;
+    ULONG info;
+    ULONG streams;
+    ULONG tally;
+    ULONG zero[XHCI98_UAS_SEQUENCE];
     BOOLEAN known;
     PUAS_PDO pdo;
     UCHAR serialIndex;
     NTSTATUS status;
 
-    /* The report starts afresh, its sequence aside; no transfer runs on
-     * the bulk pipes before the engine starts below. */
-    for (i = 0; i < XHCI98_REPORT_WORDS; i++) {
-        if (i != XHCI98_UAS_SEQUENCE) {
-            fdo->Report[i] = 0;
-        }
+    /* The report starts afresh, its sequence (the last word) aside. */
+    for (i = 0; i < XHCI98_UAS_SEQUENCE; i++) {
+        zero[i] = 0;
     }
+    uasReportPut(fdo, 0, zero, XHCI98_UAS_SEQUENCE);
     desc = (PUCHAR)UasAlloc(18);
     if (desc == NULL) {
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -346,7 +356,7 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
     if (!NT_SUCCESS(status)) {
         return status;
     }
-    fdo->Report[XHCI98_UAS_STAGE] = XHCI98_UAS_STAGE_DESCRIPTOR;
+    uasReportSet(fdo, XHCI98_UAS_STAGE, XHCI98_UAS_STAGE_DESCRIPTOR);
 
     if (fdo->Config == NULL) {
         desc = (PUCHAR)UasAlloc(9);
@@ -382,29 +392,30 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
         }
     }
 
-    fdo->Report[XHCI98_UAS_STAGE] = XHCI98_UAS_STAGE_CONFIG;
-    fdo->Report[XHCI98_UAS_INFO] =
-        (fdo->Info.SuperSpeed ? XHCI98_UAS_INFO_SUPERSPEED : 0UL) |
-        ((fdo->Info.InterfaceNumber & 0xFFUL) << 8) |
-        ((fdo->Info.AlternateSetting & 0xFFUL) << 16) |
-        ((fdo->Info.EndpointCount & 0xFFUL) << 24);
-    fdo->Report[XHCI98_UAS_PIPES] = 0;
+    info = (fdo->Info.SuperSpeed ? XHCI98_UAS_INFO_SUPERSPEED : 0UL) |
+           ((fdo->Info.InterfaceNumber & 0xFFUL) << 8) |
+           ((fdo->Info.AlternateSetting & 0xFFUL) << 16) |
+           ((fdo->Info.EndpointCount & 0xFFUL) << 24);
+    tally = 0;
     for (i = 0; i < UAS_PIPES; i++) {
-        fdo->Report[XHCI98_UAS_PIPES] |=
-            (fdo->Info.EndpointAddress[i] & 0xFFUL) << (8 * i);
+        tally |= (fdo->Info.EndpointAddress[i] & 0xFFUL) << (8 * i);
     }
+    uasReportSet(fdo, XHCI98_UAS_INFO, info);
+    uasReportSet(fdo, XHCI98_UAS_PIPES, tally);
+    uasReportSet(fdo, XHCI98_UAS_STAGE, XHCI98_UAS_STAGE_CONFIG);
 
     status = uasSelect(fdo);
     if (!NT_SUCCESS(status)) {
         return status;
     }
-    fdo->Report[XHCI98_UAS_STAGE] = XHCI98_UAS_STAGE_SELECT;
+    uasReportSet(fdo, XHCI98_UAS_STAGE, XHCI98_UAS_STAGE_SELECT);
     uasReadSerial(fdo, serialIndex);
 
     fdo->Streamed = FALSE;
     if (fdo->Info.SuperSpeed) {
         wanted = uasStreamsWanted(fdo);
-        fdo->Report[XHCI98_UAS_STREAMS] = wanted & 0xFFFFUL;
+        streams = wanted & 0xFFFFUL;
+        uasReportSet(fdo, XHCI98_UAS_STREAMS, streams);
         if (wanted < 2) {
             return STATUS_DEVICE_CONFIGURATION_ERROR;
         }
@@ -415,15 +426,16 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
         if (!NT_SUCCESS(status)) {
             return status;
         }
-        fdo->Report[XHCI98_UAS_STREAMS] |= fdo->Streams.Granted << 16;
+        streams |= fdo->Streams.Granted << 16;
+        uasReportSet(fdo, XHCI98_UAS_STREAMS, streams);
         if (fdo->Streams.Granted < 2) {
             UasStreamsClose(&fdo->Streams);
             return STATUS_DEVICE_CONFIGURATION_ERROR;
         }
         fdo->Streamed = TRUE;
-        fdo->Report[XHCI98_UAS_INFO] |= XHCI98_UAS_INFO_STREAMED;
+        uasReportSet(fdo, XHCI98_UAS_INFO, info | XHCI98_UAS_INFO_STREAMED);
     }
-    fdo->Report[XHCI98_UAS_STAGE] = XHCI98_UAS_STAGE_STREAMS;
+    uasReportSet(fdo, XHCI98_UAS_STAGE, XHCI98_UAS_STAGE_STREAMS);
 
     if (fdo->Slots == NULL) {
         status = UasEngineInit(fdo);
@@ -433,14 +445,16 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
         }
     }
     UasEngineStart(fdo);
-    fdo->Report[XHCI98_UAS_STAGE] = XHCI98_UAS_STAGE_ENGINE;
+    uasReportSet(fdo, XHCI98_UAS_STAGE, XHCI98_UAS_STAGE_ENGINE);
 
-    count = uasReportLuns(fdo, luns);
-    fdo->Report[XHCI98_UAS_STAGE] = XHCI98_UAS_STAGE_LUNS;
+    count = uasReportLuns(fdo, luns, &tally);
+    uasReportSet(fdo, XHCI98_UAS_STAGE, XHCI98_UAS_STAGE_LUNS);
     for (i = 0; i < count; i++) {
-        fdo->Report[XHCI98_UAS_LUNS] += 1UL << 8;
+        tally += 1UL << 8;
+        uasReportSet(fdo, XHCI98_UAS_LUNS, tally);
         if (!NT_SUCCESS(uasInquiry(fdo, luns[i], inquiry))) {
-            fdo->Report[XHCI98_UAS_LUNS] += 1UL << 24;
+            tally += 1UL << 24;
+            uasReportSet(fdo, XHCI98_UAS_LUNS, tally);
             continue;
         }
         /* Peripheral qualifier 0: a unit is attached at this LUN. */
@@ -455,17 +469,19 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
             }
         }
         if (known) {
-            fdo->Report[XHCI98_UAS_LUNS] += 1UL << 16;
+            tally += 1UL << 16;
+            uasReportSet(fdo, XHCI98_UAS_LUNS, tally);
         }
         if (known || fdo->LunCount >= UAS_MAX_LUNS) {
             continue;
         }
         if (NT_SUCCESS(UasPdoCreate(fdo, luns[i], inquiry, &pdo))) {
             fdo->Luns[fdo->LunCount++] = pdo;
-            fdo->Report[XHCI98_UAS_LUNS] += 1UL << 16;
+            tally += 1UL << 16;
+            uasReportSet(fdo, XHCI98_UAS_LUNS, tally);
         }
     }
-    fdo->Report[XHCI98_UAS_STAGE] = XHCI98_UAS_STAGE_DONE;
+    uasReportSet(fdo, XHCI98_UAS_STAGE, XHCI98_UAS_STAGE_DONE);
     return STATUS_SUCCESS;
 }
 
@@ -486,6 +502,8 @@ VOID UasReport(PUAS_FDO fdo, ULONG reason)
     rq.Version = XHCI98_REPORT_VERSION;
     rq.Size = sizeof(rq);
     rq.Kind = XHCI98_REPORT_KIND_UAS;
+    (VOID)KeWaitForSingleObject(&fdo->ReportGate, Executive, KernelMode,
+                                FALSE, NULL);
     KeAcquireSpinLock(&fdo->Lock, &irql);
     fdo->Report[XHCI98_UAS_SEQUENCE]++;
     fdo->Report[XHCI98_UAS_REASON] = reason;
@@ -500,6 +518,28 @@ VOID UasReport(PUAS_FDO fdo, ULONG reason)
     }
     KeReleaseSpinLock(&fdo->Lock, irql);
     (VOID)uasInternalIoctl(fdo, IOCTL_XHCI98_CLIENT_REPORT, &rq);
+    (VOID)KeSetEvent(&fdo->ReportGate, IO_NO_INCREMENT, FALSE);
+}
+
+/* A run of report words written together under Lock, so a report the
+ * recovery worker copies never mixes one result with another's sense.
+ * PASSIVE_LEVEL (START). */
+static VOID uasReportPut(PUAS_FDO fdo, ULONG first, const ULONG *words,
+                         ULONG count)
+{
+    KIRQL irql;
+    ULONG i;
+
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    for (i = 0; i < count; i++) {
+        fdo->Report[first + i] = words[i];
+    }
+    KeReleaseSpinLock(&fdo->Lock, irql);
+}
+
+static VOID uasReportSet(PUAS_FDO fdo, ULONG at, ULONG value)
+{
+    uasReportPut(fdo, at, &value, 1);
 }
 
 /* The engine stopped with every request ended, the streams closed. */
@@ -597,7 +637,7 @@ NTSTATUS UasFdoPnp(PUAS_FDO fdo, PIRP irp)
             if (!NT_SUCCESS(status)) {
                 uasFdoQuiesce(fdo, SRB_STATUS_NO_DEVICE);
             }
-            fdo->Report[XHCI98_UAS_STATUS] = (ULONG)status;
+            uasReportSet(fdo, XHCI98_UAS_STATUS, (ULONG)status);
             UasReport(fdo, XHCI98_UAS_REASON_START);
         }
         return UasCompleteIrp(irp, status, 0);

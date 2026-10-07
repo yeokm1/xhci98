@@ -219,10 +219,13 @@ typedef struct _UAS_FDO {
     PUCHAR SharedBuffer;
     ULONG Counters[8];
     /* Task 36.2: what the next client report says (xhci98_report.h,
-     * XHCI98_UAS_*), by word; the transfer failures under Lock, the rest
-     * from the start and the recovery worker, which never run together.
-     * Counters are copied in when it is sent (UasReport, uas_fdo.c). */
+     * XHCI98_UAS_*), by word, written under Lock. START and the recovery
+     * worker can both send one, so ReportGate (a synchronization event,
+     * signalled when free) is held from the copy through the send, and the
+     * last report sent is the newest. Counters are copied in when it is
+     * sent (UasReport, uas_fdo.c). */
     ULONG Report[XHCI98_REPORT_WORDS];
+    KEVENT ReportGate;
 
     KTIMER Timer;
     KDPC TimerDpc;
