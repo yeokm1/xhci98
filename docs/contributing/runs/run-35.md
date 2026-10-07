@@ -898,10 +898,10 @@ again some 100 s after a controller re-enable, slow under TCG.
 **Re-cut** (2026-10-07, before publication, readme only, as 34.5's): the
 owner asked that the update steps name the root hub too - Update Driver on
 "xHCI98 USB 3.x Root Hub" after the controller - in the README, the release
-notes and the readme template;  regenerated
- alone (ab0f870), every binary and INF unchanged, so the ten
+notes and the readme template; `make-release.ps1 -Force` regenerated
+`readme.txt` alone (`ab0f870`), every binary and INF unchanged, so the ten
 legs stand. Asset now 761,837 bytes, SHA-256
-.
+`b904b08841b498a3e6f8b4cf30d7e1c33f277e512950651ae6b4164afa547dfd`.
 
 ## 35-E - the bench
 
