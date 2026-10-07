@@ -862,12 +862,57 @@ both at every `XhciTolerance` value, with `XHCISNAP`'s new terminal text);
 
 ## 35.7 - the cut
 
-To be read.
+Cut 2026-10-07 (owner's date): `xhci_version.h` and the four INFs'
+`DriverVer` at `10/07/2026,2.2.0.0` (`355199f`), the `history.md` entry
+(`92fa6ca`), and `releases\2.2.0.0` by `make-release.ps1` from `fcaa47a`
+(`e192335`); the cut first refused two release numbers spelled out in the
+readme template's new limitation lines, reworded in `fcaa47a`. Built
+before it: x86 debug, release and qemu and amd64 release and debug, every
+gate green. Asset `xhci98-2.2.0.0.zip`, 761,822 bytes, SHA-256
+`3fa85b75ba234fc6a544c4e7a1e79cbba88499282f373ea348c94e7904d7fe43`, every
+file dated 2026-10-07 12:00; `release-x86\xhci98.sys` SHA-256
+`98f1fb1d...4922b88a`, `release-x64\xhci98.sys` `07bec20c...6643aeee`.
+
+**The ten install legs from the asset** (development host A, QEMU 11.1.0,
+fresh overlays, run by four agents in parallel, 07:48 to 09:50; reports and
+shots in the git-ignored `out\phase35\asset\`), on 34.5's clauses: 32.3's
+1 to 9, the hub disable and enable on the seven NT legs, `hidusbf` behind
+the hub on XP, and the controller's driver key read after the install.
+All ten passed, with no driver defect: Windows 98 SE with NUSB and with
+SweetLow's stack, Windows ME, Windows 2000 SP4, XP SP3, XP x64, Vista x86
+and x64, and Windows 7 x86 and x64. On every leg the install wrote
+`XhciTolerance` 1, `XhciIntervalCap` 1 and `XhciAvgTrbEsit` 0 beside the
+other eight values; every installed driver file compared equal to the
+asset's; every debugcon log was empty. The Driver tab read 2.2.0.0 dated
+10-7-2026 on Windows 98 SE (34.5's file dating holding), 10/07/2026 on ME,
+07-Oct-26 on XP and XP x64, 7/10/2026 (day first) on Vista and 7, and "Not
+available" on 2000 as always. Vehicle notes, as on `2.1.1.0`: the Program
+Compatibility Assistant's box after each unsigned install on Vista x64 and
+7 x64; XP x64 restarted once when a step script's Enter answered Windows'
+restart prompt for a newly installed volume (setupapi "required reboot:
+Device not started"), the driver's devices staying at no problem; Vista's
+hub disable passed on its first cycle with Explorer's window on the hub's
+drive closed first; on Windows 98 SE with SweetLow's stack the mouse moved
+again some 100 s after a controller re-enable, slow under TCG.
 
 ## 35-E - the bench
 
-To be read after 35.7's cut, on the `2.2.0.0` asset (decisions table,
-"`2.2.0.0`: cut before the bench").
+Read by the owner on the `2.2.0.0` asset's `release-x86` package after the
+cut (decisions table, "`2.2.0.0`: cut before the bench"). So far
+(2026-10-07, the ThinkPad E460 under Windows 98 SE; `XHCISNAP` dumps
+git-ignored in `temp\e460-2200\`): the USB 3 hub (`05E3:0612`) at root port
+13 with a UAS-capable stick (`090C:2320`) behind its SuperSpeed half, the
+hub's USB 2.0 half at port 1, and a second stick (`0781:55AB`) at port 15 -
+every SuperSpeed device read speed ID 4 as SuperSpeed by 35.1's fallback,
+enumerated at the first attempt and configured at PSIV 4; file copies, a
+mouse and audio working (owner); the tolerance block running, the window 0
+of 3, no location charged, the only fault counters one Stall on a stick's
+bulk-IN endpoint, an ordinary mass-storage stall a pipe reset clears. Port
+2, the USB 2.0 half of port 14's connector, read Failed on its reset after
+a stick was pulled from that connector - a connect no longer than the pins'
+contact, left until that connector's next connect. The counted campaign (10
+cold boots and 10 hot-plugs with each of the hub and the stick), the P14s
+Gen 1, the B490 and value 2 on the B490 are the owner's still.
 
 ## Review
 
