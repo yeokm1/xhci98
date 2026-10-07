@@ -8,6 +8,14 @@ user will provide no further information. The work is roadmap Phase 36
 (`roadmap-hcd.md`, opened 2026-10-07 on branch `2.2.1.0`): an interim build
 from this evidence, checked again on the E7250.
 
+**Update, 2026-10-07 evening:** the owner reproduced Finding 2 on the
+owner's own E7250 under Windows 7 x64 through Microsoft's `usbstor.sys`
+(section 8), which points to `xhci98.sys` rather than `xhciuas` (not yet
+proven). The interim build
+`2.2.0.1` (sections 3.5, 4.5 and 4.6) was withdrawn before it was sent and
+its code reverted; a diagnostic build, `2.2.0.2`, takes its place
+(section 8.4).
+
 **This is the first report of the HCD on real hardware under Windows XP
 x64.** That tier had been virtual-machine only (AGENTS.md, the release
 notes' "Targets and their standing").
@@ -139,6 +147,9 @@ Intel 9-series machine.
 
 ### 3.5 What the interim build does (task 36.1)
 
+> **Withdrawn 2026-10-07 (owner):** this code was reverted before the build
+> was sent (section 8.4). The section records what was built.
+
 Both candidates, taken on 2026-10-07: asked to choose, the owner asked for
 a recommendation, and both was it, because the first closes only the window
 seen here and the second covers every busy engine an enumeration can meet -
@@ -242,6 +253,9 @@ everywhere (`src/hcd_pdo.c:2426`, `src/hcd_rh.c:299`,
 
 ### 4.5 What the interim build records (task 36.2)
 
+> **Withdrawn 2026-10-07 (owner):** this code was reverted before the build
+> was sent (section 8.4). The section records what was built.
+
 No fix for Finding 2; what the next dump needs to give it a cause:
 
 - **A class-driver report in the dump.** `xhciuas.sys` sends the bus a
@@ -270,6 +284,9 @@ sends none, and an older `xhci98.sys` refuses the request, which `xhciuas`
 ignores.
 
 ### 4.6 The interim build
+
+> **Withdrawn 2026-10-07 (owner), never sent;** superseded by the
+> diagnostic build `2.2.0.2` (section 8.4).
 
 Numbered `2.2.0.1` to mark it a test build, not a release (owner,
 2026-10-07). Built x86 and amd64 in all three flavours with every gate, the
@@ -327,6 +344,148 @@ checked again on the E7250 by the owner.
    and send the interim build (task 36.3).
 4. Read it on the E7250 with a device present at boot and the reader
    hot-plugged (task 36.4), then fix what that leaves owed (task 36.5).
+
+Superseded on 2026-10-07 by section 8.4: the diagnostic build `2.2.0.2`
+(task 36.6), read on the owner's E7250 (task 36.7), then the fix.
+
+## 8. Reproduced on the owner's E7250 under Windows 7 x64
+
+### 8.1 The run
+
+On 2026-10-07 the owner ran `2.2.0.0` (release, amd64, `XhciLogVerbosity`
+3) on the owner's own Dell E7250: the same controller as the user's
+(XHCIQUAL quick scan: `8086:9CB1` rev 03, subsystem `1028:062D`). Windows 7
+x64, because XP x64 would not install. Device: a SanDisk USB 3.2 Gen 1 flash
+drive, `0781:55AB`, Bulk-Only; `xhciuas` was not installed, so Windows'
+own `usbstor.sys` drove it. Root port 13, SuperSpeed.
+
+- **Hot-plugged:** "USB Mass Storage Device" and the SanDisk disk appear
+  in Device Manager, both working properly. No drive letter ever appears,
+  and Disk Management never gets past "Connecting to Virtual Disk Service".
+- **Present at boot:** Device Manager will not open and Explorer hangs.
+  Unplugging the stick does not release them.
+- **A USB mouse** on the same machine works, but moves sluggishly.
+
+Dumps (git-ignored, the owner's): `temp/e7520/hotplug.*` and `atboot.*`,
+with `setupapi-hotplug.log`.
+
+### 8.2 What the dumps show
+
+Decoded from the `.TXT` and from the `.BIN` with an amd64 probe built
+against `2.2.0.0` (`sizeof` 132912 matches the dump):
+
+| | hot-plug | at boot |
+|---|---|---|
+| TransfersSubmitted / Completed | 99 / 98 | 332 / 331 |
+| TransfersCancelled | 0 | 0 |
+| Stall Error, slot's EP1 IN (DCI 3) | 7 | 7 |
+| Stopped - Length Invalid | 2 | 2 |
+| Commands issued = completed | 21 | 24 |
+| InterruptCount / InterruptsClaimed | 750 / 80 | 885 / 242 |
+| BackstopDrains (DpcCount = claimed + backstop) | 60 | 133 |
+
+- **One transfer was outstanding when each dump was taken**, both taken
+  well into the hang: submitted, with no completion and nothing retired by
+  a cancel or abort (TransfersCancelled 0). Which endpoint it is on, and
+  for how long, is not in the dump.
+- The command engine is idle (the last command a Set TR Dequeue,
+  completed Success). Every event was matched to its TD, and the
+  controller thread had been polling up to the dump (its poll counter and
+  clock agree); one dump cannot show that it went on doing so.
+- **The same signature as the user's UAS dumps** (section 4.1: stalls on
+  DCI 3, two Stopped - Length Invalid, no disk). A class driver Microsoft
+  wrote fails here much as `xhciuas` did there. That points to a cause in
+  `xhci98.sys` rather than in `xhciuas`, and replaces section 4.3's
+  leading reading; it does not prove that the two reports share one fault,
+  nor rule out the devices or the controller.
+- Interrupt delivery (section 5) is just as poor under Windows 7: 43% and
+  35% of DPCs come from the 100 ms backstop. That is the likely cause of
+  the sluggish mouse.
+- At boot, port 13 took slot 1, its machine ended Empty, and it enumerated
+  again as slot 2; and USB 2.0 port 2 saw a connect and failed its reset.
+  Why is not in the dump (a link bounce at the BIOS hand-off, and an
+  internal device during the port switch, are guesses). The hot-plug run
+  fails the same way without either, so neither is needed for the hang.
+
+### 8.3 What the code allows (read, not yet confirmed)
+
+Read against `2.2.0.0`, by a Claude subagent and independently by Codex:
+
+- **The stall recovery runs in the wrong order.** `hcdCfgReset`
+  (`src/hcd_cfg.c`, RESET_PIPE) sends the device `CLEAR_FEATURE(ENDPOINT_HALT)`
+  before Reset Endpoint (TSP 0) and Set TR Dequeue. xHCI 4.6.8 resets the
+  host endpoint first, then clears the halt on the device. When the clear
+  fails or returns busy, the pipe resumes with the controller's endpoint
+  still Halted (unless EP0 is stuck, when it is left paused).
+- **A transfer on a Halted endpoint waits until something else retires
+  it.** `HcdIoMapped` (`src/hcd_io.c`) does not check the pipe's Halted
+  state: it publishes the TD and rings the doorbell, which a Halted
+  endpoint ignores. Only a later recovery, cancel or abort ends it; the HCD
+  has no transfer timeout of its own (usbport had one).
+- RESET_PIPE, ABORT_PIPE and RESET_PORT pend on one queue with no cancel
+  routine. A device's departure parks its in-flight transfers rather than
+  completing them (`HcdIoPark`, `src/hcd_io.c`). Parked transfers stay
+  cancellable and are released by an abort, the PDO's stop or its removal,
+  so this fits "unplugging does not release it" only if the PnP hang keeps
+  those from arriving: a possible explanation, not a shown one.
+
+These make one path to the hang plausible. They do not prove it: the
+snapshot does not hold the pipes, their transfers or the controller's
+Endpoint Contexts. Other explanations remain: the endpoint Running but the
+device out of step after recovery; the stuck transfer a control transfer
+on EP0; an event the controller never generated.
+
+### 8.4 The diagnostic build (`2.2.0.2`)
+
+The owner's choice, 2026-10-07: withdraw `2.2.0.1` and revert its code,
+keeping these documents with the withdrawn sections marked; then build a
+diagnostic build, `2.2.0.2`, on `2.2.0.0`'s code, with no change in
+behaviour, so the hang reproduces and one dump taken during it names its
+cause. It records:
+
+1. **The stuck transfer and its pipe:** for each open pipe, its flags and
+   queue, its oldest outstanding transfer (URB function, setup bytes,
+   length, age, TD address), and the Output Endpoint Context's state, TR
+   Dequeue and DCS, read when the dump is taken.
+2. **The recovery timeline:** the last RESET_PIPE, ABORT_PIPE, RESET_PORT
+   and cancel requests: when each arrived and completed, the endpoint, the
+   `CLEAR_FEATURE` outcome, the commands sent and their status, and how
+   many slow requests were queued.
+3. **Interrupt state at the backstop:** before each backstop drain,
+   USBSTS, IMAN, ERDP, IMOD and USBCMD, and whether an event was waiting,
+   with ISR and DPC times.
+
+Roadmap tasks 36.6 (the build) and 36.7 (the read on the E7250 under
+Windows 7 x64), then the fix.
+
+Built on 2026-10-07 (`src/hcd_diag.c`; the HCD region's header grown to 31
+words, version 1; `xhcisnap/README.md`, "The diagnostic build's records").
+What a dump now carries, read under the controller lock:
+
+1. Up to 24 endpoint pipes, those with a transfer outstanding first, the
+   oldest first (the outstanding ones that do not fit are counted), each
+   with the transfer it is on - the bus's own EP0 transfer (a
+   CLEAR_FEATURE among them) when it heads the queue, else the oldest
+   client transfer: record state, URB function, TransferFlags, SETUP bytes,
+   lengths, TD addresses and cancel marks, the ticks (100 ms) since it was
+   claimed and last published - and the Output Endpoint and Slot Contexts
+   read at the dump; with the slow queue's depth, the URBs parked on PDOs,
+   and the thread's wakes, cancel routines and cancels served.
+2. The last 32 timeline entries: each slow request from its queueing to its
+   completion, or to its hold on the PDO or its return to the queue, with
+   the CLEAR_FEATURE outcome (never sent included) and the first four
+   commands with their codes; each transfer cancel routine's run; and the
+   thread's cancels, drains and removal aborts.
+3. The last 16 backstop drains whose DPC was inserted, each with USBCMD,
+   USBSTS, IMAN, IMOD, ERDP and the event at the software dequeue, and the
+   ISR's, claim's and DPC's ages; the refused insertions counted; counts of
+   the backstop's looks by IP set, IP clear and nothing waiting; and the
+   same registers read live at the dump.
+
+The only behaviour it adds is the recording itself: a few stores per
+transfer, ISR and DPC, five register reads when the backstop finds an event
+waiting, and the controller lock taken around each record on the slow
+paths.
 
 ## Sources
 

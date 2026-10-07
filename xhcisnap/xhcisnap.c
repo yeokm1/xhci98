@@ -2279,6 +2279,662 @@ static void print_tol(const unsigned char *hcd, unsigned long hcdBytes,
     }
 }
 
+/* ---- the diagnostic build's parts of the HCD region (2.2.0.2) ----------- */
+
+/*
+ * Roadmap-hcd.md task 36.6 (issue 12 section 8.4): the HCD region's header
+ * grew eleven words, version unchanged, placing four parts after the
+ * counters - a diagnostic block read at the dump, the pipe records, the
+ * recovery timeline and the backstop samples (src/xhci.h,
+ * XHCI_SNAPSHOT_DIAG_*, _PIPE_*, _REC_*, _IRQ_*). A shorter header is an
+ * older driver's, which keeps none of them. Word positions are restated
+ * here and held to the driver's by test\test_snap.c (test_diag_words).
+ */
+#define SNAP_HCD_DIAG_HEAD_WORDS    31UL
+#define SNAP_DG_WORDS               41UL
+#define SNAP_PR_WORDS               39UL
+#define SNAP_RE_WORDS               15UL
+#define SNAP_IQ_WORDS               16UL
+#define SNAP_DIAG_MAX_RECORDS       1024UL
+#define SNAP_UNREAD                 0xFFFFFFFFUL
+
+/* xHCI 1.2 Table 6-91, the TRB types this tool names. */
+static const char *trb_type_name(unsigned long t)
+{
+    static const char *const names[40] = {
+        "reserved", "Normal", "Setup Stage", "Data Stage", "Status Stage",
+        "Isoch", "Link", "Event Data", "No-Op", "Enable Slot",
+        "Disable Slot", "Address Device", "Configure Endpoint",
+        "Evaluate Context", "Reset Endpoint", "Stop Endpoint",
+        "Set TR Dequeue", "Reset Device", "Force Event", "Negotiate BW",
+        "Set LT", "Get Port BW", "Force Header", "No Op Command",
+        "Get Extended Property", "Set Extended Property", "reserved",
+        "reserved", "reserved", "reserved", "reserved", "reserved",
+        "Transfer Event", "Command Completion", "Port Status Change",
+        "Bandwidth Request", "Doorbell", "Host Controller",
+        "Device Notification", "MFINDEX Wrap"
+    };
+
+    return (t < 40) ? names[t] : (t >= 48 ? "vendor" : "reserved");
+}
+
+/* xHCI 1.2 Table 6-8, EP State. */
+static const char *ep_state_name(unsigned long s)
+{
+    static const char *const names[8] = {
+        "Disabled", "Running", "HALTED", "Stopped", "ERROR", "reserved 5",
+        "reserved 6", "reserved 7"
+    };
+
+    return names[s & 7UL];
+}
+
+/* xHCI 1.2 Table 6-7, Slot State. */
+static const char *slot_state_name(unsigned long s)
+{
+    switch (s) {
+    case 0:  return "Disabled/Enabled";
+    case 1:  return "Default";
+    case 2:  return "Addressed";
+    case 3:  return "Configured";
+    default: return "reserved";
+    }
+}
+
+/* URB functions, Windows 2000 DDK inc\usbdi.h and WDK 7.1 inc\api\usb.h. */
+static const char *urb_function_name(unsigned long f)
+{
+    static const char *const names[0x33] = {
+        "SELECT_CONFIGURATION", "SELECT_INTERFACE", "ABORT_PIPE",
+        "TAKE_FRAME_LENGTH_CONTROL", "RELEASE_FRAME_LENGTH_CONTROL",
+        "GET_FRAME_LENGTH", "SET_FRAME_LENGTH", "GET_CURRENT_FRAME_NUMBER",
+        "CONTROL_TRANSFER", "BULK_OR_INTERRUPT_TRANSFER", "ISOCH_TRANSFER",
+        "GET_DESCRIPTOR_FROM_DEVICE", "SET_DESCRIPTOR_TO_DEVICE",
+        "SET_FEATURE_TO_DEVICE", "SET_FEATURE_TO_INTERFACE",
+        "SET_FEATURE_TO_ENDPOINT", "CLEAR_FEATURE_TO_DEVICE",
+        "CLEAR_FEATURE_TO_INTERFACE", "CLEAR_FEATURE_TO_ENDPOINT",
+        "GET_STATUS_FROM_DEVICE", "GET_STATUS_FROM_INTERFACE",
+        "GET_STATUS_FROM_ENDPOINT", "reserved 16h", "VENDOR_DEVICE",
+        "VENDOR_INTERFACE", "VENDOR_ENDPOINT", "CLASS_DEVICE",
+        "CLASS_INTERFACE", "CLASS_ENDPOINT", "reserved 1Dh", "RESET_PIPE",
+        "CLASS_OTHER", "VENDOR_OTHER", "GET_STATUS_FROM_OTHER",
+        "CLEAR_FEATURE_TO_OTHER", "SET_FEATURE_TO_OTHER",
+        "GET_DESCRIPTOR_FROM_ENDPOINT", "SET_DESCRIPTOR_TO_ENDPOINT",
+        "GET_CONFIGURATION", "GET_INTERFACE",
+        "GET_DESCRIPTOR_FROM_INTERFACE", "SET_DESCRIPTOR_TO_INTERFACE",
+        "GET_MS_FEATURE_DESCRIPTOR", "reserved 2Bh", "reserved 2Ch",
+        "reserved 2Dh", "reserved 2Eh", "reserved 2Fh", "SYNC_RESET_PIPE",
+        "SYNC_CLEAR_STALL", "CONTROL_TRANSFER_EX"
+    };
+
+    return (f < 0x33) ? names[f] : "unknown";
+}
+
+/* The USBD statuses the driver sets (src\hcd.h, src\xhci_xfer.h). */
+static const char *usbd_status_name(unsigned long s)
+{
+    switch (s) {
+    case 0x00000000UL: return "SUCCESS";
+    case 0x00010000UL: return "CANCELED";
+    case 0xC0000004UL: return "STALL_PID";
+    case 0xC0000005UL: return "DEV_NOT_RESPONDING";
+    case 0xC0000008UL: return "DATA_OVERRUN";
+    case 0xC0000009UL: return "DATA_UNDERRUN";
+    case 0xC000000CUL: return "BUFFER_OVERRUN";
+    case 0xC000000FUL: return "NOT_ACCESSED";
+    case 0xC0000A00UL: return "BAD_START_FRAME";
+    case 0xC0000B00UL: return "ISOCH_REQUEST_FAILED";
+    case 0xC0003000UL: return "BUFFER_TOO_SMALL";
+    case 0xC0007000UL: return "DEVICE_GONE";
+    case 0x80000100UL: return "NO_MEMORY";
+    case 0x80000200UL: return "INVALID_URB_FUNCTION";
+    case 0x80000300UL: return "INVALID_PARAMETER";
+    case 0x80000400UL: return "ERROR_BUSY";
+    case 0x80000500UL: return "REQUEST_FAILED";
+    case 0x80000600UL: return "INVALID_PIPE_HANDLE";
+    case 0x80000700UL: return "NO_BANDWIDTH";
+    case 0x80000800UL: return "INTERNAL_HC_ERROR";
+    case 0x80000900UL: return "ERROR_SHORT_TRANSFER";
+    default:           return "?";
+    }
+}
+
+static const char *xfer_state_name(unsigned long s)
+{
+    static const char *const names[7] = {
+        "free", "being mapped", "ON THE RING", "done, completing",
+        "held (pipe paused or owned)",
+        "the THREAD'S OWN EP0 control transfer, ON THE RING",
+        "a hub status transfer, on the ring"
+    };
+
+    return (s < 7) ? names[s] : "?";
+}
+
+/*
+ * Where a TRB address lies against a TD on a ring of `trbs` TRBs at
+ * `ringPa`, the Link TRB last: 1 at the TD's first TRB, 2 inside it, 0
+ * elsewhere. A TD whose last TRB lies before its first wrapped past the
+ * Link TRB. `trbs` 0 is a ring of unknown size: the wrapped half is then
+ * taken to run to the address itself. Ring-aware so a wrapped TD is not
+ * reported as elsewhere.
+ */
+static int diag_td_where(unsigned long first, unsigned long last,
+                         unsigned long ringPa, unsigned long trbs,
+                         unsigned long at)
+{
+    unsigned long end;
+
+    if (at == first) {
+        return 1;
+    }
+    if (last >= first) {
+        return (at > first && at <= last) ? 2 : 0;
+    }
+    end = (trbs != 0) ? ringPa + trbs * 16UL : 0xFFFFFFF0UL;
+    if ((at > first && at < end) || (at >= ringPa && at <= last)) {
+        return 2;
+    }
+    return 0;
+}
+
+static const char *pipe_type_name(unsigned long t)
+{
+    static const char *const names[4] = {
+        "control", "isochronous", "bulk", "interrupt"
+    };
+
+    return (t < 4) ? names[t] : "?";
+}
+
+static const char *rec_kind_name(unsigned long k)
+{
+    static const char *const names[14] = {
+        "?", "RESET_PIPE", "SYNC_RESET_PIPE", "SYNC_CLEAR_STALL",
+        "ABORT_PIPE", "RESET_PORT", "SELECT_CONFIGURATION",
+        "SELECT_INTERFACE", "streams request", "other slow URB",
+        "cancel routine", "cancel served", "drain (refused retire)",
+        "abort all (PDO removed)"
+    };
+
+    return (k < 14) ? names[k] : "?";
+}
+
+static const char *clear_name(unsigned long c)
+{
+    static const char *const names[6] = {
+        "", "; CLEAR_FEATURE(ENDPOINT_HALT) taken",
+        "; CLEAR_FEATURE(ENDPOINT_HALT) STALLED by the device",
+        "; CLEAR_FEATURE(ENDPOINT_HALT) FAILED",
+        "; CLEAR_FEATURE(ENDPOINT_HALT) NOT SENT or timed out",
+        "; CLEAR_FEATURE(ENDPOINT_HALT) abandoned for a device cycle"
+    };
+
+    return (c < 6) ? names[c] : "; CLEAR_FEATURE ?";
+}
+
+/* An age on the tolerance clock (100 ms ticks): "never" for a stamp of 0 -
+ * the driver stamps the clock plus one, so its first 100 ms read as 1, not
+ * as never - and a stamp after `now` said as such rather than wrapped. */
+static const char *diag_age(char *buf, unsigned long now, unsigned long tick)
+{
+    unsigned long d;
+
+    if (tick == 0) {
+        return "never";
+    }
+    if (tick > now) {
+        sprintf(buf, "%lu tick(s) after the dump", tick - now);
+        return buf;
+    }
+    d = now - tick;
+    sprintf(buf, "%lu.%lu s ago", d / 10, d % 10);
+    return buf;
+}
+
+/* A system-clock stamp (ms, low 32 bits) relative to the dump's. */
+static const char *diag_ms(char *buf, unsigned long now, unsigned long ms)
+{
+    unsigned long d;
+
+    if (ms == 0) {
+        return "not yet";
+    }
+    d = now - ms;
+    if (d > 0x80000000UL) {
+        sprintf(buf, "+%lu ms after the dump", ms - now);
+        return buf;
+    }
+    sprintf(buf, "T-%lu.%03lu s", d / 1000, d % 1000);
+    return buf;
+}
+
+static void diag_registers(const char *indent, unsigned long cmd,
+                           unsigned long sts, unsigned long iman,
+                           unsigned long imod, unsigned long erdp)
+{
+    if (sts == SNAP_UNREAD && iman == SNAP_UNREAD) {
+        comp("%sregisters not read (no MMIO at that moment)\n", indent);
+        return;
+    }
+    comp("%sUSBCMD %08lX (%s%s%s)  USBSTS %08lX (%s%s%s%s%s)\n", indent, cmd,
+         (cmd & 1UL) ? "R/S" : "STOPPED", (cmd & 4UL) ? ", INTE" : ", INTE OFF",
+         (cmd & 8UL) ? ", HSEE" : "", sts, (sts & 1UL) ? "HCH" : "running",
+         (sts & 4UL) ? ", HSE" : "", (sts & 8UL) ? ", EINT" : "",
+         (sts & 0x10UL) ? ", PCD" : "", (sts & 0x1000UL) ? ", HCE" : "");
+    comp("%sIMAN %08lX (IP %lu, IE %lu)  IMOD %08lX (interval %lu x 250 ns, "
+         "counter %lu)\n%sERDP %08lX (EHB %lu, dequeue %08lX)\n", indent,
+         iman, iman & 1UL, (iman >> 1) & 1UL, imod, imod & 0xFFFFUL,
+         imod >> 16, indent, erdp, (erdp >> 3) & 1UL, erdp & ~0xFUL);
+}
+
+static void diag_event(const char *indent, unsigned long deq, unsigned long dw3)
+{
+    unsigned long ccs;
+
+    if (deq == SNAP_UNREAD) {
+        comp("%sevent ring: not read\n", indent);
+        return;
+    }
+    ccs = deq >> 31;
+    comp("%sevent ring: software dequeue %lu, CCS %lu; the TRB there: %s, "
+         "cycle %lu - %s\n", indent, deq & 0x7FFFFFFFUL, ccs,
+         trb_type_name((dw3 >> 10) & 0x3FUL), dw3 & 1UL,
+         ((dw3 & 1UL) == ccs) ? "AN EVENT IS WAITING" : "nothing waiting");
+}
+
+static void diag_block(const unsigned char *d)
+{
+    char a[48];
+    char b[48];
+    char c[48];
+    unsigned long now;
+    unsigned long v;
+
+    now = get32(d, 1 * 4);
+    comp("\ninterrupt delivery and the thread (2.2.0.2 diagnostics), at the "
+         "dump:\n");
+    comp("  tolerance clock %lu ticks of 100 ms; system clock %lu ms (low 32 "
+         "bits); %s%s\n", now, get32(d, 0),
+         (get32(d, 2 * 4) & 1UL) ? "registers read" : "registers NOT read",
+         (get32(d, 2 * 4) & 2UL) ? ", contexts read" : ", contexts NOT read");
+    comp("  ISR entered %lu times, claimed %lu; drain DPCs %lu; backstop "
+         "drains %lu\n", get32(d, 21 * 4), get32(d, 22 * 4), get32(d, 23 * 4),
+         get32(d, 24 * 4));
+    comp("  ISR last entered %s, last claimed %s; drain DPC last ran %s\n",
+         diag_age(a, now, get32(d, 18 * 4)), diag_age(b, now, get32(d, 19 * 4)),
+         diag_age(c, now, get32(d, 20 * 4)));
+    comp("  backstop looks: event waiting with IMAN.IP set %lu, waiting with "
+         "IP CLEAR %lu,\n    nothing waiting %lu, not admitted %lu; %lu "
+         "sample(s) kept,\n    %lu drain(s) not queued (the DPC already "
+         "queued or closed; no sample)\n", get32(d, 25 * 4),
+         get32(d, 26 * 4), get32(d, 27 * 4), get32(d, 28 * 4),
+         get32(d, 29 * 4), get32(d, 40 * 4));
+    diag_registers("  ", get32(d, 30 * 4), get32(d, 31 * 4), get32(d, 32 * 4),
+                   get32(d, 33 * 4), get32(d, 34 * 4));
+    diag_event("  ", get32(d, 35 * 4), get32(d, 36 * 4));
+    comp("  the ISR's last USBSTS %08lX\n", get32(d, 37 * 4));
+    comp("  controller thread: %lu wakes, the last %s\n", get32(d, 11 * 4),
+         diag_age(a, now, get32(d, 12 * 4)));
+    comp("  transfer cancel routines %lu (%lu marked a record); pipe cancels "
+         "served %lu;\n    CancelWork %lu, cancel routines in flight %lu\n",
+         get32(d, 13 * 4), get32(d, 14 * 4), get32(d, 15 * 4),
+         get32(d, 9 * 4), get32(d, 10 * 4));
+    v = get32(d, 3 * 4);
+    comp("  slow requests: %lu served; %lu queued now", get32(d, 16 * 4), v);
+    if (v != 0) {
+        comp(", the first %s (timeline #%lu)", rec_kind_name(get32(d, 4 * 4)),
+             get32(d, 5 * 4));
+    }
+    comp("\n  device PDOs listed %lu; URBs parked on PDOs %lu; URB IRPs "
+         "pending on PDOs %lu\n", get32(d, 6 * 4), get32(d, 7 * 4),
+         get32(d, 8 * 4));
+}
+
+static void diag_pipe(const unsigned char *r, unsigned long now)
+{
+    char a[48];
+    char b[48];
+    unsigned long f;
+    unsigned long x;
+    unsigned long dw0;
+    unsigned long dw2;
+    unsigned long first;
+    unsigned long state;
+    int where;
+
+    f = get32(r, 4 * 4);
+    comp("  slot %lu DCI %lu, EP %02lX %s%s:", get32(r, 0), get32(r, 4),
+         get32(r, 2 * 4), pipe_type_name(get32(r, 3 * 4)),
+         get32(r, 3 * 4) == 0               ? ""
+         : (get32(r, 2 * 4) & 0x80UL) != 0 ? " IN"
+                                            : " OUT");
+    if (f == 0) {
+        comp(" no flags");
+    }
+    comp("%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n",
+         (f & 0x1UL) ? " CLOSED" : "", (f & 0x2UL) ? " HALTED" : "",
+         (f & 0x4UL) ? " seq-used" : "", (f & 0x8UL) ? " CANCEL-PENDING" : "",
+         (f & 0x10UL) ? " DRAIN-PENDING" : "", (f & 0x20UL) ? " PAUSED" : "",
+         (f & 0x40UL) ? " owned" : "", (f & 0x80UL) ? " ring-wait" : "",
+         (f & 0x100UL) ? " streams" : "",
+         (f & 0x200UL) ? " stream-fault" : "",
+         (f & 0x10000UL) ? " DEVICE-GONE" : "",
+         (f & 0x20000UL) ? " ABORT-ALL" : "",
+         (f & 0x40000UL) ? " EP0-STUCK" : "",
+         (f & 0x80000UL) ? " EP0-HALTED" : "",
+         (f & 0x100000UL) ? " SLOT-FATAL" : "");
+    comp("    queue %lu TD(s) (submitted %lu, completed %lu); ring enqueue "
+         "%lu, dequeue %lu,\n    cycle %lu, at %08lX; records busy %lu, "
+         "IRPs waiting %lu, held %lu\n", get32(r, 5 * 4), get32(r, 6 * 4),
+         get32(r, 7 * 4), get32(r, 8 * 4), get32(r, 9 * 4), get32(r, 10 * 4),
+         get32(r, 11 * 4), get32(r, 12 * 4), get32(r, 13 * 4),
+         get32(r, 14 * 4));
+    dw0 = get32(r, 33 * 4);
+    dw2 = get32(r, 35 * 4);
+    if (dw0 == SNAP_UNREAD) {
+        comp("    Endpoint Context: not read\n");
+    } else {
+        comp("    Endpoint Context: %s, TR Dequeue %08lX%08lX, DCS %lu; "
+             "slot %s\n      (DW0 %08lX DW1 %08lX DW2 %08lX DW3 %08lX)\n",
+             ep_state_name(dw0), get32(r, 36 * 4), dw2 & ~0xFUL, dw2 & 1UL,
+             get32(r, 37 * 4) == SNAP_UNREAD
+                 ? "not read"
+                 : slot_state_name(get32(r, 37 * 4) >> 27),
+             dw0, get32(r, 34 * 4), dw2, get32(r, 36 * 4));
+    }
+    x = get32(r, 15 * 4);
+    if (x == SNAP_UNREAD) {
+        comp("    no transfer outstanding\n");
+        return;
+    }
+    if (x >= 5) {
+        comp("    the transfer heading the queue: %s, token %lu\n",
+             xfer_state_name(x), get32(r, 16 * 4));
+    } else {
+        comp("    oldest transfer: record seq %lu, %s; URB %s (%04lXh), "
+             "TransferFlags %lX%s%s\n", get32(r, 16 * 4), xfer_state_name(x),
+             urb_function_name(get32(r, 17 * 4)), get32(r, 17 * 4),
+             get32(r, 18 * 4), (get32(r, 18 * 4) & 1UL) ? " (IN" : " (OUT",
+             (get32(r, 18 * 4) & 2UL) ? ", SHORT_OK)" : ")");
+    }
+    comp("      length %lu: %lu moved by earlier chunks, this chunk %lu, "
+         "%lu latched\n", get32(r, 21 * 4), get32(r, 22 * 4),
+         get32(r, 23 * 4), get32(r, 24 * 4));
+    f = get32(r, 27 * 4);
+    comp("      claimed %s; %s %s\n", diag_age(a, now, get32(r, 25 * 4)),
+         (f & 0x20UL) ? "last published" : "never published",
+         (f & 0x20UL) ? diag_age(b, now, get32(r, 26 * 4)) : "");
+    comp("      %s%s%s%s%s%s; status %08lX (%s), engine %08lX (%s), engine "
+         "flags %lX\n", (f & 0x1UL) ? "CANCEL ASKED" : "no cancel asked",
+         (f & 0x2UL) ? ", IRP CANCELLED" : "",
+         (f & 0x4UL) ? ", control" : "", (f & 0x10UL) ? ", mapped" : "",
+         (f & 0x40UL) ? ", isoch" : "", (f & 0x80UL) ? ", owns the pipe" : "",
+         get32(r, 28 * 4), usbd_status_name(get32(r, 28 * 4)),
+         get32(r, 32 * 4), usbd_status_name(get32(r, 32 * 4)),
+         get32(r, 31 * 4));
+    if (f & 0x4UL) {
+        comp("      SETUP %02lX %02lX %02lX %02lX %02lX %02lX %02lX %02lX\n",
+             get32(r, 19 * 4) & 0xFFUL, (get32(r, 19 * 4) >> 8) & 0xFFUL,
+             (get32(r, 19 * 4) >> 16) & 0xFFUL, get32(r, 19 * 4) >> 24,
+             get32(r, 20 * 4) & 0xFFUL, (get32(r, 20 * 4) >> 8) & 0xFFUL,
+             (get32(r, 20 * 4) >> 16) & 0xFFUL, get32(r, 20 * 4) >> 24);
+    }
+    first = get32(r, 29 * 4);
+    if (first != 0) {
+        /* xHCI 1.2c Table 6-10: the Output Endpoint Context's TR Dequeue
+         * Pointer is defined only in the Halted, Stopped and Error states;
+         * in any other it is a stale value from the last stop. */
+        state = dw0 & 7UL;
+        where = (dw0 == SNAP_UNREAD) ? 3
+                : (state < 2 || state > 4)
+                    ? 4
+                    : diag_td_where(first, get32(r, 30 * 4),
+                                    get32(r, 11 * 4), get32(r, 38 * 4),
+                                    dw2 & ~0xFUL);
+        comp("      TD %08lX to %08lX%s; the controller's TR Dequeue %s%s\n",
+             first, get32(r, 30 * 4),
+             get32(r, 30 * 4) < first ? " (wrapped past the Link TRB)" : "",
+             where == 3   ? "not read"
+             : where == 4 ? "undefined in state "
+             : where == 1 ? "is AT this TD's first TRB"
+             : where == 2 ? "is INSIDE this TD"
+                          : "is elsewhere",
+             where == 4 ? (state == 1 ? "Running (stale value)"
+                                      : "Disabled or reserved (stale value)")
+                        : "");
+    }
+}
+
+static void diag_rec(const unsigned char *e, unsigned long now)
+{
+    char a[48];
+    char b[48];
+    char c[48];
+    unsigned long kind;
+    unsigned long n;
+    unsigned long i;
+    unsigned long cmd;
+    unsigned long det;
+
+    kind = get32(e, 1 * 4);
+    if (kind == 10) {
+        comp("  #%-4lu %-22s slot %lu DCI %lu: at %s\n", get32(e, 0),
+             rec_kind_name(kind), get32(e, 2 * 4), get32(e, 3 * 4),
+             diag_ms(a, now, get32(e, 4 * 4)));
+    } else {
+        comp("  #%-4lu %-22s slot %lu DCI %lu: queued %s, taken %s, done "
+             "%s%s\n", get32(e, 0), rec_kind_name(kind), get32(e, 2 * 4),
+             get32(e, 3 * 4), diag_ms(a, now, get32(e, 4 * 4)),
+             diag_ms(b, now, get32(e, 5 * 4)),
+             diag_ms(c, now, get32(e, 6 * 4)),
+             get32(e, 5 * 4) == 0 ? " (NOT TAKEN YET)"
+             : get32(e, 6 * 4) != 0 ? ""
+             : (kind <= 9 &&
+                (get32(e, 13 * 4) & 0xFFUL) == 1) ? " (HELD, not completed)"
+             : (kind <= 9 &&
+                (get32(e, 13 * 4) & 0xFFUL) == 2) ? " (PUT BACK, not completed)"
+                                                  : " (NOT COMPLETED YET)");
+    }
+    if (kind == 10) {
+        det = get32(e, 13 * 4);
+        comp("        record seq %lu, %s%s%s\n", det & 0xFFFFUL,
+             (det & 0x20000000UL) ? "an IRP waiting for a record"
+             : (det & 0x80000000UL)
+                 ? xfer_state_name((det >> 16) & 0xFFUL)
+                 : "no record of it found",
+             (det & 0x80000000UL) ? ": marked for the thread" : "",
+             (det & 0x40000000UL) ? " (cancelled before it was armed)" : "");
+        return;
+    }
+    if (kind == 11) {
+        det = get32(e, 13 * 4);
+        comp("        TDs queued %lu before, %lu after\n", (det >> 8) & 0xFFUL,
+             det & 0xFFUL);
+    } else {
+        det = (kind <= 9) ? get32(e, 13 * 4) : 0UL;
+        if (get32(e, 6 * 4) != 0 && (det & 0x100UL) != 0) {
+            comp("        streams status %lu (%s)", get32(e, 9 * 4),
+                 get32(e, 9 * 4) == 0 ? "success" : "failed");
+        } else if (get32(e, 6 * 4) != 0) {
+            comp("        USBD %08lX (%s)%s", get32(e, 9 * 4),
+                 usbd_status_name(get32(e, 9 * 4)),
+                 (det & 0xFFUL) == 3   ? ", its hold on the PDO declined"
+                 : (det & 0xFFUL) == 4 ? ", an earlier abort covered it"
+                                       : "");
+        } else if ((det & 0xFFUL) == 1) {
+            comp("        held on its PDO for an unreadable controller");
+        } else if ((det & 0xFFUL) == 2) {
+            comp("        put back on the queue for the recovery");
+        } else {
+            comp("        no status yet");
+        }
+        if (kind <= 9) {
+            comp("; %lu slow request(s) ahead of it", get32(e, 7 * 4));
+        }
+        comp("%s\n", clear_name(get32(e, 8 * 4)));
+    }
+    n = get32(e, 10 * 4);
+    if (n != 0) {
+        comp("        commands %lu:", n);
+        for (i = 0; i < n && i < 4; i++) {
+            cmd = get32(e, (11 + i / 2) * 4) >> ((i % 2) * 16);
+            comp(" %s=%s", trb_type_name((cmd >> 8) & 0x3FUL),
+                 (cmd & 0xFFUL) == 0 ? "NO COMPLETION"
+                                     : tol_code_name(cmd & 0xFFUL));
+        }
+        comp("%s\n", n > 4 ? " ..." : "");
+    }
+}
+
+static void diag_irq(const unsigned char *e, unsigned long now)
+{
+    char a[48];
+    char b[48];
+    char c[48];
+    char t[48];
+    unsigned long tick;
+
+    tick = get32(e, 2 * 4);
+    comp("  #%-4lu %s (tick %lu): ISR entered %s, claimed %s, DPC %s;\n"
+         "        counts then: entered %lu, claimed %lu, DPCs %lu\n",
+         get32(e, 0), diag_ms(t, now, get32(e, 1 * 4)), tick,
+         diag_age(a, tick, get32(e, 10 * 4)), diag_age(b, tick, get32(e, 11 * 4)),
+         diag_age(c, tick, get32(e, 12 * 4)), get32(e, 13 * 4),
+         get32(e, 14 * 4), get32(e, 15 * 4));
+    diag_registers("        ", get32(e, 3 * 4), get32(e, 4 * 4),
+                   get32(e, 5 * 4), get32(e, 6 * 4), get32(e, 7 * 4));
+    diag_event("        ", get32(e, 8 * 4), get32(e, 9 * 4));
+}
+
+/* Entries of a ring part in their numbers' order, oldest first; 0 is an
+ * empty entry. Returns how many. */
+static unsigned long diag_order(const unsigned char *at, unsigned long count,
+                                unsigned long bytes, unsigned long *order)
+{
+    unsigned long n;
+    unsigned long i;
+    unsigned long j;
+    unsigned long k;
+
+    n = 0;
+    for (i = 0; i < count; i++) {
+        if (get32(at + i * bytes, 0) != 0) {
+            order[n++] = i;
+        }
+    }
+    for (i = 1; i < n; i++) {
+        k = order[i];
+        for (j = i; j > 0 && get32(at + order[j - 1] * bytes, 0) >
+                                 get32(at + k * bytes, 0);
+             j--) {
+            order[j] = order[j - 1];
+        }
+        order[j] = k;
+    }
+    return n;
+}
+
+/* One part's placement, believed only inside the image. */
+static int diag_part(const unsigned char *image, unsigned long bytes,
+                     unsigned long headAt, unsigned long minWords,
+                     unsigned long *count, unsigned long *size,
+                     unsigned long *at)
+{
+    *count = get32(image, headAt);
+    *size = get32(image, headAt + 4);
+    *at = get32(image, headAt + 8);
+    return *size >= minWords * 4 && (*size & 3UL) == 0 &&
+           *count <= SNAP_DIAG_MAX_RECORDS && *at <= bytes &&
+           (*count == 0 || *count <= (bytes - *at) / *size);
+}
+
+/*
+ * The four parts decoded: the block, the pipes with something to say before
+ * the idle ones, the timeline and the samples oldest first. Each placement
+ * is checked against the bytes in hand before it is believed.
+ */
+static void print_diag(const unsigned char *image, unsigned long bytes)
+{
+    static unsigned long order[SNAP_DIAG_MAX_RECORDS];
+    unsigned long diagAt;
+    unsigned long diagBytes;
+    unsigned long pipes;
+    unsigned long pipeBytes;
+    unsigned long pipesAt;
+    unsigned long recs;
+    unsigned long recBytes;
+    unsigned long recsAt;
+    unsigned long irqs;
+    unsigned long irqBytes;
+    unsigned long irqsAt;
+    unsigned long now;
+    unsigned long nowMs;
+    unsigned long shown;
+    unsigned long n;
+    unsigned long i;
+
+    if (bytes < SNAP_HCD_HEAD_WORDS * 4 ||
+        get32(image, 4) < SNAP_HCD_DIAG_HEAD_WORDS * 4 ||
+        get32(image, 4) > bytes) {
+        comp("\ndiagnostic records: none - this driver keeps no pipe "
+             "records, recovery timeline\n  or backstop samples (an "
+             "xhci98.sys before 2.2.0.2).\n");
+        return;
+    }
+    diagAt = get32(image, 20 * 4);
+    diagBytes = get32(image, 21 * 4);
+    if (diagBytes < SNAP_DG_WORDS * 4 || diagAt > bytes ||
+        diagBytes > bytes - diagAt ||
+        !diag_part(image, bytes, 22 * 4, SNAP_PR_WORDS, &pipes, &pipeBytes,
+                   &pipesAt) ||
+        !diag_part(image, bytes, 25 * 4, SNAP_RE_WORDS, &recs, &recBytes,
+                   &recsAt) ||
+        !diag_part(image, bytes, 28 * 4, SNAP_IQ_WORDS, &irqs, &irqBytes,
+                   &irqsAt)) {
+        comp("\ndiagnostic records: the header places them outside the "
+             "region's %lu bytes, or\n  in records smaller than this build "
+             "knows; not decoded.\n", bytes);
+        return;
+    }
+    diag_block(image + diagAt);
+    now = get32(image + diagAt, 1 * 4);
+    nowMs = get32(image + diagAt, 0);
+
+    comp("\npipes (2.2.0.2), those with a request or a flag first; each "
+         "with its oldest\noutstanding transfer and its Endpoint Context, "
+         "read at the dump:\n");
+    shown = 0;
+    for (i = 0; i < pipes; i++) {
+        if (get32(image + pipesAt + i * pipeBytes, 0) == 0) {
+            continue;
+        }
+        diag_pipe(image + pipesAt + i * pipeBytes, now);
+        shown++;
+    }
+    comp("  (%lu of %lu open endpoint pipes listed; %lu more with a "
+         "transfer outstanding\n   did not fit.)\n", shown,
+         get32(image + diagAt, 38 * 4), get32(image + diagAt, 39 * 4));
+
+    comp("\nrecovery timeline (2.2.0.2), oldest first; times before the "
+         "dump's system clock:\n");
+    n = diag_order(image + recsAt, recs, recBytes, order);
+    for (i = 0; i < n; i++) {
+        diag_rec(image + recsAt + order[i] * recBytes, nowMs);
+    }
+    comp("  (%lu entr%s kept of %lu written.)\n", n, n == 1 ? "y" : "ies",
+         get32(image + diagAt, 17 * 4));
+
+    comp("\nbackstop samples (2.2.0.2), oldest first: the interrupter as the "
+         "lost-interrupt\nbackstop found it each time it queued a drain; "
+         "ages are from the sample:\n");
+    n = diag_order(image + irqsAt, irqs, irqBytes, order);
+    for (i = 0; i < n; i++) {
+        diag_irq(image + irqsAt + order[i] * irqBytes, nowMs);
+    }
+    comp("  (%lu kept of %lu queued.)\n", n, get32(image + diagAt, 29 * 4));
+}
+
 /* `-selftest-hcd`: the HCD region's decode over a canned image, for
  * xhcisnap\selftest.cmd: 35.0's E460 port 13 Failed on the speed, a
  * working port 14, an empty port 1 left out, and two counters. */
@@ -2452,6 +3108,259 @@ static int selftest_tol(void)
     /* The unproven-DMA containment, its own terminal reason. */
     put32(hcd, 76, 5);
     print_tol(hcd, sizeof(hcd), NULL, 0);
+    return 0;
+}
+
+/*
+ * `-selftest-diag`: 2.2.0.2's diagnostic parts decoded over a canned image
+ * laid out as the driver lays them (one root port), for
+ * xhcisnap\selftest.cmd: issue 12's E7250 shape - a bulk IN transfer on the
+ * ring of a Halted endpoint whose TR Dequeue is that TD, a RESET_PIPE whose
+ * CLEAR_FEATURE the device stalled and a second never taken, a cancel the
+ * thread served, and backstop samples with IP clear and an event waiting.
+ * Then a 2.2.0.0 header, which has none of it, and a placement past the
+ * image.
+ */
+static int selftest_diag(void)
+{
+    static unsigned char image[(31 + 16 + 63 + 41 + 24 * 39 + 32 * 15 +
+                                16 * 16) * 4];
+    const unsigned long diagAt = (31 + 16 + 63) * 4;
+    const unsigned long pipesAt = diagAt + 41 * 4;
+    const unsigned long recsAt = pipesAt + 24 * 39 * 4;
+    const unsigned long irqsAt = recsAt + 32 * 15 * 4;
+    unsigned char *d;
+    unsigned char *r;
+    unsigned long i;
+
+    memset(image, 0, sizeof(image));
+    put32(image, 0, 1);
+    put32(image, 4, 31 * 4);
+    put32(image, 8, 1);
+    put32(image, 12, 64);
+    put32(image, 16, 31 * 4);
+    put32(image, 20, 63);
+    put32(image, 24, (31 + 16) * 4);
+    put32(image, 28, 8);
+    put32(image, 20 * 4, diagAt);
+    put32(image, 21 * 4, 41 * 4);
+    put32(image, 22 * 4, 24);
+    put32(image, 23 * 4, 39 * 4);
+    put32(image, 24 * 4, pipesAt);
+    put32(image, 25 * 4, 32);
+    put32(image, 26 * 4, 15 * 4);
+    put32(image, 27 * 4, recsAt);
+    put32(image, 28 * 4, 16);
+    put32(image, 29 * 4, 16 * 4);
+    put32(image, 30 * 4, irqsAt);
+
+    d = image + diagAt;
+    put32(d, 0 * 4, 100000);
+    put32(d, 1 * 4, 900);
+    put32(d, 2 * 4, 3);
+    put32(d, 3 * 4, 1);
+    put32(d, 4 * 4, 1);
+    put32(d, 5 * 4, 9);
+    put32(d, 6 * 4, 2);
+    put32(d, 8 * 4, 3);
+    put32(d, 11 * 4, 5000);
+    put32(d, 12 * 4, 899);
+    put32(d, 13 * 4, 1);
+    put32(d, 14 * 4, 1);
+    put32(d, 15 * 4, 1);
+    put32(d, 16 * 4, 8);
+    put32(d, 17 * 4, 10);
+    put32(d, 18 * 4, 880);
+    put32(d, 19 * 4, 1);
+    put32(d, 20 * 4, 890);
+    put32(d, 21 * 4, 885);
+    put32(d, 22 * 4, 242);
+    put32(d, 23 * 4, 375);
+    put32(d, 24 * 4, 133);
+    put32(d, 25 * 4, 3);
+    put32(d, 26 * 4, 130);
+    put32(d, 27 * 4, 8000);
+    put32(d, 29 * 4, 133);
+    put32(d, 30 * 4, 5);
+    put32(d, 31 * 4, 8);
+    put32(d, 32 * 4, 3);
+    put32(d, 33 * 4, 0xFA0);
+    put32(d, 34 * 4, 0x01234568UL);
+    put32(d, 35 * 4, 17 | 0x80000000UL);
+    put32(d, 36 * 4, 0x8401);
+    put32(d, 37 * 4, 8);
+    put32(d, 38 * 4, 4);
+    put32(d, 39 * 4, 2);
+    put32(d, 40 * 4, 7);
+
+    r = image + pipesAt;
+    put32(r, 0 * 4, 2);
+    put32(r, 1 * 4, 3);
+    put32(r, 2 * 4, 0x81);
+    put32(r, 3 * 4, 2);
+    put32(r, 4 * 4, 0x4);
+    put32(r, 5 * 4, 1);
+    put32(r, 6 * 4, 99);
+    put32(r, 7 * 4, 98);
+    put32(r, 8 * 4, 40);
+    put32(r, 9 * 4, 38);
+    put32(r, 10 * 4, 1);
+    put32(r, 11 * 4, 0x01000000UL);
+    put32(r, 12 * 4, 1);
+    put32(r, 15 * 4, 2);
+    put32(r, 16 * 4, 50);
+    put32(r, 17 * 4, 9);
+    put32(r, 18 * 4, 3);
+    put32(r, 21 * 4, 13);
+    put32(r, 23 * 4, 13);
+    put32(r, 25 * 4, 300);
+    put32(r, 26 * 4, 300);
+    put32(r, 27 * 4, 0x28);
+    put32(r, 29 * 4, 0x01000260UL);
+    put32(r, 30 * 4, 0x01000260UL);
+    put32(r, 33 * 4, 2);
+    put32(r, 34 * 4, 0x04000034UL);
+    put32(r, 35 * 4, 0x01000261UL);
+    put32(r, 37 * 4, 3UL << 27);
+    put32(r, 38 * 4, 256);
+    /* A bulk OUT endpoint Stopped inside a TD wrapped past the Link TRB:
+     * there the TR Dequeue is defined. */
+    r = image + pipesAt + 2 * 39 * 4;
+    put32(r, 0 * 4, 2);
+    put32(r, 1 * 4, 4);
+    put32(r, 2 * 4, 0x02);
+    put32(r, 3 * 4, 2);
+    put32(r, 5 * 4, 1);
+    put32(r, 11 * 4, 0x03000000UL);
+    put32(r, 15 * 4, 2);
+    put32(r, 16 * 4, 9);
+    put32(r, 17 * 4, 9);
+    put32(r, 21 * 4, 512);
+    put32(r, 23 * 4, 512);
+    put32(r, 25 * 4, 850);
+    put32(r, 26 * 4, 850);
+    put32(r, 27 * 4, 0x20);
+    put32(r, 29 * 4, 0x03000FE0UL);
+    put32(r, 30 * 4, 0x03000020UL);
+    put32(r, 33 * 4, 3);
+    put32(r, 35 * 4, 0x03000011UL);
+    put32(r, 37 * 4, 3UL << 27);
+    put32(r, 38 * 4, 256);
+    /* EP0: the thread's own CLEAR_FEATURE(ENDPOINT_HALT) on the ring, its
+     * TD wrapped past the Link TRB; the endpoint Running, so its context's
+     * TR Dequeue is a stale value and says nothing of where it is. */
+    r = image + pipesAt + 39 * 4;
+    put32(r, 0 * 4, 2);
+    put32(r, 1 * 4, 1);
+    put32(r, 5 * 4, 1);
+    put32(r, 11 * 4, 0x02000000UL);
+    put32(r, 15 * 4, 5);
+    put32(r, 16 * 4, 7);
+    put32(r, 19 * 4, 0x00000102UL);
+    put32(r, 20 * 4, 0x00000081UL);
+    put32(r, 25 * 4, 880);
+    put32(r, 26 * 4, 880);
+    put32(r, 27 * 4, 0x24);
+    put32(r, 29 * 4, 0x02000FF0UL);
+    put32(r, 30 * 4, 0x02000010UL);
+    put32(r, 33 * 4, 1);
+    put32(r, 35 * 4, 0x02000001UL);
+    put32(r, 37 * 4, 3UL << 27);
+    put32(r, 38 * 4, 256);
+
+    /* Out of order in the ring, as a wrapped ring holds them. */
+    r = image + recsAt + 7 * 15 * 4;
+    put32(r, 0 * 4, 4);
+    put32(r, 1 * 4, 1);
+    put32(r, 2 * 4, 2);
+    put32(r, 3 * 4, 3);
+    put32(r, 4 * 4, 50000);
+    put32(r, 5 * 4, 50000);
+    put32(r, 6 * 4, 50001);
+    put32(r, 9 * 4, 0x00010000UL);
+    put32(r, 13 * 4, 4);
+    r = image + recsAt;
+    put32(r, 0 * 4, 10);
+    put32(r, 1 * 4, 10);
+    put32(r, 2 * 4, 2);
+    put32(r, 3 * 4, 3);
+    put32(r, 4 * 4, 99500);
+    put32(r, 13 * 4, 0x80020032UL);
+    r += 15 * 4;
+    put32(r, 0 * 4, 7);
+    put32(r, 1 * 4, 11);
+    put32(r, 2 * 4, 2);
+    put32(r, 3 * 4, 3);
+    put32(r, 4 * 4, 80000);
+    put32(r, 5 * 4, 80000);
+    put32(r, 6 * 4, 80020);
+    put32(r, 10 * 4, 2);
+    put32(r, 11 * 4, 0x10130F01UL);
+    put32(r, 13 * 4, 0x80000100UL);
+    r += 15 * 4;
+    put32(r, 0 * 4, 8);
+    put32(r, 1 * 4, 1);
+    put32(r, 2 * 4, 2);
+    put32(r, 3 * 4, 3);
+    put32(r, 4 * 4, 90000);
+    put32(r, 5 * 4, 90010);
+    put32(r, 6 * 4, 90500);
+    put32(r, 8 * 4, 2);
+    put32(r, 9 * 4, 0xC0000004UL);
+    r += 15 * 4;
+    put32(r, 0 * 4, 9);
+    put32(r, 1 * 4, 1);
+    put32(r, 2 * 4, 2);
+    put32(r, 3 * 4, 3);
+    put32(r, 4 * 4, 99000);
+    r += 15 * 4;
+    put32(r, 0 * 4, 6);
+    put32(r, 1 * 4, 1);
+    put32(r, 2 * 4, 2);
+    put32(r, 3 * 4, 3);
+    put32(r, 4 * 4, 70000);
+    put32(r, 5 * 4, 70000);
+    put32(r, 13 * 4, 1);
+    r += 15 * 4;
+    put32(r, 0 * 4, 5);
+    put32(r, 1 * 4, 8);
+    put32(r, 2 * 4, 2);
+    put32(r, 4 * 4, 60000);
+    put32(r, 5 * 4, 60000);
+    put32(r, 6 * 4, 60010);
+    put32(r, 9 * 4, 4);
+    put32(r, 13 * 4, 0x100);
+
+    for (i = 0; i < 2; i++) {
+        r = image + irqsAt + i * 16 * 4;
+        put32(r, 0 * 4, 133 - i);
+        put32(r, 1 * 4, 99000 - i * 100);
+        put32(r, 2 * 4, 890 - i);
+        put32(r, 3 * 4, 5);
+        put32(r, 4 * 4, 8);
+        put32(r, 5 * 4, 2);
+        put32(r, 6 * 4, 0xFA0);
+        put32(r, 7 * 4, 0x01234568UL);
+        put32(r, 8 * 4, 17 | 0x80000000UL);
+        put32(r, 9 * 4, 0x8001);
+        put32(r, 10 * 4, 880);
+        put32(r, 11 * 4, (i == 0) ? 0UL : 700UL);
+        put32(r, 12 * 4, 885);
+        put32(r, 13 * 4, 885);
+        put32(r, 14 * 4, 242);
+        put32(r, 15 * 4, 375 - i);
+    }
+    companion = NULL;
+    print_diag(image, sizeof(image));
+
+    /* A 2.2.0.0 driver: a twenty-word header, nothing after the counters. */
+    put32(image, 4, 20 * 4);
+    print_diag(image, (20 + 16 + 63) * 4);
+
+    /* Pipe records placed past the image: refused, nothing read. */
+    put32(image, 4, 31 * 4);
+    put32(image, 24 * 4, sizeof(image) - 4);
+    print_diag(image, sizeof(image));
     return 0;
 }
 
@@ -4264,6 +5173,8 @@ int main(int argc, char **argv)
             return selftest_hcd();
         } else if (strcmp(argv[i], "-selftest-tol") == 0) {
             return selftest_tol();
+        } else if (strcmp(argv[i], "-selftest-diag") == 0) {
+            return selftest_diag();
         } else if (strcmp(argv[i], "-selftest-report") == 0 && i + 1 < argc) {
             /*
              * The report path on its own, with no device: open BASE.TXT, write
@@ -4614,6 +5525,9 @@ int main(int argc, char **argv)
                   (extMismatch || extBytes > sizeof(ext_image)) ? NULL
                                                                 : ext_image,
                   extBytes);
+        /* 2.2.0.2's pipes, recovery timeline and backstop samples, from the
+         * same image; an older driver's says it keeps none. */
+        print_diag(hcd_image, hcdBytes);
     } else if (hcdState == 2) {
         comp("\nHCD region: not served by this driver (an xhci98.sys before "
              "2.2.0.0 has no\n  per-port enumeration region; the note ring "

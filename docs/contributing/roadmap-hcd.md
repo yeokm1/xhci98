@@ -682,14 +682,29 @@ it: there is not enough evidence to choose one, and the build's job there
 is to record what the next check needs (36.2). Fixes for Finding 2 and the
 interrupt delivery wait for that check (36.4, 36.5).
 
-- [x] 36.1 the Finding 1 fix (owner chooses; issue 12 section 3.4; both, on the recommendation the owner asked for, 2026-10-07, issue 12 section 3.5): a drain queued through the ISR's admission right after `XhciEnableInterrupts` in `hcdStart`, and/or `hcdCommand` on `XHCI_CMD_BUSY` queueing a drain and waiting, inside `HCD_COMMAND_WAIT_MS`, for the engine to go idle, then resubmitting; a host test of the refusal and the resubmit
-- [x] 36.2 the diagnostics (issue 12 section 4.5: the counter block's six new counters, and `xhciuas`'s report through `IOCTL_XHCI98_CLIENT_REPORT`, `src/xhci98_report.h`, kept in the snapshot's HCD region), chosen so that one dump settles what the user can no longer be asked (issue 12 sections 4.4 and 6): `EnumCommandsRefused` in a region `XHCISNAP` reads and names; for `xhciuas`, the START outcome (LUNs found, REPORT LUNS and INQUIRY results with sense), its counters and its port resets, and the Pipe Usage map (which endpoint is status and which is data-in), reachable from a dump; port resets requested by a client counted apart in the HCD; `XHCISNAP` decoding all of it
-- [ ] 36.3 the interim build, numbered `2.2.0.1` to mark it a test build (owner, 2026-10-07): x86 and `-amd64`, the host suites and every gate (passed, 2026-10-07, after a Codex review loop), and the regression on QEMU under Windows 98 SE, 2000 and XP x64, with a device present at boot and, on the `qemu` flavour, an engine held busy at the first enumeration (`XhciQemuStartHold`, `build-and-test.md`); sent to the E7250 by the owner. Not a release
-- [ ] 36.4 the check again (owner): the interim build on the E7250 under XP x64, a device present at boot and the reader hot-plugged, the dumps read with the 36.2 diagnostics; Finding 1 confirmed fixed or not, and Finding 2 given a cause or a stated limitation
-- [ ] 36.5 what 36.4 leaves owed: a Finding 2 fix if one is (a pipe-level stall recovery in `xhciuas`, or a START that fails rather than succeeds with no disk), and the interrupt delivery (issue 12 section 5: why half the events come from the backstop, whether the No Op's IP is lost while masked or with the rest)
+**Re-planned 2026-10-07, later the same day (owner).** The owner reproduced
+Finding 2 on the owner's own E7250 under Windows 7 x64 on `2.2.0.0`
+through Microsoft's `usbstor.sys`, not `xhciuas` (issue 12 section 8): one
+bulk transfer is left outstanding after stalls on EP1 IN, which points
+to the HCD rather than `xhciuas` (not yet proven), and the interrupt
+delivery shows as a sluggish mouse. The owner
+withdrew `2.2.0.1` before it was sent: its code (36.1, 36.2, 36.3's start
+hold) is reverted to `2.2.0.0`'s, and the documents describing it are kept
+and marked withdrawn. In its place a diagnostic build, `2.2.0.2` (36.6),
+records what the Windows 7 hang needs, with no change in behaviour, so
+that the hang still reproduces and can be captured.
 
-Checkpoint: the interim build read on the E7250 (36.4) with a device
-present at boot enumerated; Finding 2 has a cause or a stated limitation.
+- [x] 36.1 **withdrawn 2026-10-07, code reverted** - the Finding 1 fix (owner chooses; issue 12 section 3.4; both, on the recommendation the owner asked for, 2026-10-07, issue 12 section 3.5): a drain queued through the ISR's admission right after `XhciEnableInterrupts` in `hcdStart`, and/or `hcdCommand` on `XHCI_CMD_BUSY` queueing a drain and waiting, inside `HCD_COMMAND_WAIT_MS`, for the engine to go idle, then resubmitting; a host test of the refusal and the resubmit
+- [x] 36.2 **withdrawn 2026-10-07, code reverted** - the diagnostics (issue 12 section 4.5: the counter block's six new counters, and `xhciuas`'s report through `IOCTL_XHCI98_CLIENT_REPORT`, `src/xhci98_report.h`, kept in the snapshot's HCD region), chosen so that one dump settles what the user can no longer be asked (issue 12 sections 4.4 and 6): `EnumCommandsRefused` in a region `XHCISNAP` reads and names; for `xhciuas`, the START outcome (LUNs found, REPORT LUNS and INQUIRY results with sense), its counters and its port resets, and the Pipe Usage map (which endpoint is status and which is data-in), reachable from a dump; port resets requested by a client counted apart in the HCD; `XHCISNAP` decoding all of it
+- [ ] 36.3 **withdrawn 2026-10-07, never sent; superseded by 36.6** - the interim build, numbered `2.2.0.1` to mark it a test build (owner, 2026-10-07): x86 and `-amd64`, the host suites and every gate (passed, 2026-10-07, after a Codex review loop), and the regression on QEMU under Windows 98 SE, 2000 and XP x64, with a device present at boot and, on the `qemu` flavour, an engine held busy at the first enumeration (`XhciQemuStartHold`, `build-and-test.md`); it was to be sent to the E7250 by the owner. Not a release
+- [ ] 36.4 **superseded 2026-10-07 by 36.7** (it relied on the withdrawn 36.2) - the check again (owner): the interim build on the E7250 under XP x64, a device present at boot and the reader hot-plugged, the dumps read with the 36.2 diagnostics; Finding 1 confirmed fixed or not, and Finding 2 given a cause or a stated limitation
+- [ ] 36.5 **superseded 2026-10-07 by 36.7's fix** - what 36.4 leaves owed: a Finding 2 fix if one is (a pipe-level stall recovery in `xhciuas`, or a START that fails rather than succeeds with no disk), and the interrupt delivery (issue 12 section 5: why half the events come from the backstop, whether the No Op's IP is lost while masked or with the rest)
+- [ ] 36.6 the diagnostic build, numbered `2.2.0.2` (owner, 2026-10-07), on `2.2.0.0`'s code with no change in behaviour (issue 12 section 8.4): per open pipe of every slot, its flags, queue and oldest outstanding transfer (URB function, setup bytes, length, age, TD address), with the Output Endpoint Context's state, TR Dequeue and DCS read at dump time; a timeline of the last RESET_PIPE, ABORT_PIPE, RESET_PORT and cancel requests (arrival, completion, endpoint, the CLEAR_FEATURE outcome, the commands and their status, the slow-IRP depth); and the interrupter's registers (USBSTS, IMAN, ERDP, IMOD, USBCMD) and pending event before each backstop drain, with ISR and DPC times. `XHCISNAP` decodes all of it; host tests, every gate, a Codex review loop
+- [ ] 36.7 the read (owner): `2.2.0.2` on the E7250 under Windows 7 x64, the SanDisk stick hot-plugged and present at boot, a dump taken during the hang; the stuck transfer and its endpoint's state named, and the cause of the slow event delivery narrowed. Then the fix, which replaces 36.4 and 36.5
+
+Checkpoint (re-planned 2026-10-07): `2.2.0.2` read on the E7250 (36.7)
+and the hang it captures given a cause, then fixed or stated as a
+limitation; a device present at boot enumerated.
 Which release carries the result is the owner's call.
 
 Records: `docs/issues/12-e7250-xp64-boot-enable-slot-refused.md`.

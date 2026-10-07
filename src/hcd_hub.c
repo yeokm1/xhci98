@@ -1266,6 +1266,7 @@ VOID HcdHubRearm(PHCD_CONTROLLER hc, PHCD_HUB hub)
                                       XHCI_XFER_MAX_CONTROL_TRBS);
         if (answer == XHCI_XFER_OK) {
             dev->HubXferArmed = 1;
+            dev->DiagHubTick = HcdDiagTick(hc);
             XhciWriteDoorbell(&hc->Hc, dev->SlotId, pipe->Dci);
         }
     }

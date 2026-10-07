@@ -129,6 +129,9 @@ typedef struct _HCD_IO_REQUEST {
     PMDL Mdl;                       /* wins over Buffer                    */
     ULONG Length;
     PULONG LengthOut;               /* the URB's TransferBufferLength      */
+    ULONG Function;                 /* the URB's, for the snapshot (2.2.0.2) */
+    ULONG TransferFlags;            /* ... and its TransferFlags, 0 where
+                                     * its structure has none            */
 } HCD_IO_REQUEST, *PHCD_IO_REQUEST;
 /* Windows 2000 DDK incSbdi.h:312: a success-class value there. */
 #define HCD_USBD_CANCELED           ((LONG)0x00010000L)
@@ -193,6 +196,14 @@ typedef struct _HCD_XFER {
     ULONG Asap;                     /* USBD_START_ISO_TRANSFER_ASAP       */
     ULONG Seq;                      /* its pipe's submission order        */
     ULONG Mapped;                   /* held with its chunk mapped         */
+    /* For the snapshot's pipe records (2.2.0.2): the tolerance clock when
+     * the record was claimed for its IRP and when a chunk of it was last
+     * published, both under the controller lock, and the URB's function
+     * and flags, written as the record is filled, before it is published. */
+    ULONG DiagFunction;
+    ULONG DiagFlags;
+    ULONG DiagTick;
+    ULONG DiagRingTick;
     struct _HCD_XFER_SG {
         USBPORT_SCATTER_GATHER_LIST List;
         USBPORT_SCATTER_GATHER_ELEMENT More[HCD_SG_ELEMENTS];
@@ -409,6 +420,14 @@ typedef struct _HCD_USB_DEVICE {
     ULONG Ep0Halted;        /* a URB's control transfer stalled: the
                              * thread owes Reset Endpoint + Set TR
                              * Dequeue (hcd_enum.c), controller lock   */
+    /* For the snapshot's pipe records (2.2.0.2), under the controller
+     * lock: the tolerance clock when the thread last published its own EP0
+     * control transfer, its SETUP bytes (0-3, 4-7), and when the hub's
+     * status transfer was last armed. */
+    ULONG DiagEp0Tick;
+    ULONG DiagEp0Setup0;
+    ULONG DiagEp0Setup1;
+    ULONG DiagHubTick;
     HCD_PIPE Ep0Pipe;
     /* The configuration (hcd_cfg.c, the thread): the open pipes by DCI,
      * read by the event DPC under the controller lock, the pool rings they
@@ -807,6 +826,40 @@ typedef struct _HCD_HOLD {
 /* Hub ports remembered as deferred for the first answer (task 33.3). */
 #define HCD_SETTLE_DEFER_HUB 16UL
 
+/*
+ * The diagnostic build's records (2.2.0.2, roadmap-hcd.md task 36.6; issue
+ * 12 section 8.4; hcd_diag.c), read by the door into the snapshot's HCD
+ * region. They record and decide nothing. Recs and Irqs are the timeline
+ * and the backstop samples in the image's own layout (xhci.h,
+ * XHCI_SNAPSHOT_REC_* and _IRQ_*), and every word of them, the totals and
+ * the counts below are written under the controller lock - except the
+ * three ticks, which the ISR and the DPC store lock-free, each a whole
+ * ULONG, and the thread's own pass count, tick, cancels served and
+ * refused backstop insertions, which
+ * only the thread writes: the door may read one a step stale, as it may a
+ * root port's fields. RecCur is the entry the
+ * thread is serving, 0 for none: thread only. Zeroed at each start
+ * (HcdDiagStart), with the tolerance clock the ticks are read on.
+ */
+typedef struct _HCD_DIAG {
+    ULONG Recs[XHCI_SNAPSHOT_HCD_RECS_KEPT * XHCI_SNAPSHOT_REC_WORDS];
+    ULONG RecTotal;
+    ULONG RecCur;
+    ULONG Irqs[XHCI_SNAPSHOT_HCD_IRQS_KEPT * XHCI_SNAPSHOT_IRQ_WORDS];
+    ULONG IrqTotal;
+    volatile ULONG IsrTick;
+    volatile ULONG ClaimTick;
+    volatile ULONG DpcTick;
+    ULONG Backstop[4];              /* by XHCI_SNAPSHOT_BS_*              */
+    ULONG BackstopRefused;          /* the drain's DPC insertion refused  */
+    ULONG ThreadPasses;
+    ULONG ThreadTick;
+    ULONG CancelCalls;
+    ULONG CancelMarks;
+    ULONG CancelServed;
+    ULONG SlowServed;
+} HCD_DIAG, *PHCD_DIAG;
+
 typedef struct _HCD_CONTROLLER {
     HCD_COMMON Common;
     PDEVICE_OBJECT Pdo;
@@ -1196,6 +1249,9 @@ typedef struct _HCD_CONTROLLER {
     ULONG PswReleases;
     ULONG PswFailures;
     XHCI_PSW_LIFE PswLife;
+    /* The diagnostic build's records (2.2.0.2), last so no offset the
+     * harness reads moves. */
+    HCD_DIAG Diag;
 } HCD_CONTROLLER, *PHCD_CONTROLLER;
 
 /* The root hub's PDO, created by the controller FDO (hcd_rh.c; design record
@@ -1566,6 +1622,13 @@ ULONG HcdIoDeviceDrain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 NTSTATUS HcdIoRefuseLater(struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb,
                           LONG usbd);
 VOID HcdIoRefusedInit(struct _HCD_DEVICE_PDO *pdo);
+/* HcdIoParkHow's answers; HcdIoPark is "not DECLINED". */
+#define HCD_IO_PARK_DECLINED    0UL /* closing or cancelled: not taken    */
+#define HCD_IO_PARK_HELD        1UL /* parked on the PDO                  */
+#define HCD_IO_PARK_COMPLETED   2UL /* an abort already covered it:
+                                     * completed CANCELED here            */
+ULONG HcdIoParkHow(struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb,
+                   PVOID handle, PVOID endpoint);
 ULONG HcdIoPark(struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb,
                 PVOID handle, PVOID endpoint);
 ULONG HcdIoParkedRelease(struct _HCD_DEVICE_PDO *pdo, ULONG aborted);
@@ -1601,6 +1664,28 @@ VOID HcdTimersOpen(PHCD_CONTROLLER hc);
 VOID HcdFrameTimerStart(PHCD_CONTROLLER hc);
 VOID HcdTolClockStart(PHCD_CONTROLLER hc);
 ULONG HcdTolNow(PHCD_CONTROLLER hc);
+
+/* hcd_diag.c (2.2.0.2): the diagnostic build's records. */
+VOID HcdDiagStart(PHCD_CONTROLLER hc);
+ULONG HcdDiagMs(VOID);
+ULONG HcdDiagTick(PHCD_CONTROLLER hc);
+ULONG HcdDiagSlowKind(PIRP irp);
+ULONG HcdDiagClearOf(ULONG outcome);
+ULONG HcdDiagRecOpenLocked(PHCD_CONTROLLER hc, ULONG kind, ULONG slot,
+                           ULONG dci, ULONG detail);
+ULONG HcdDiagRecBegin(PHCD_CONTROLLER hc, ULONG seq, ULONG kind, ULONG slot,
+                      ULONG dci);
+VOID HcdDiagRecClear(PHCD_CONTROLLER hc, ULONG clear);
+VOID HcdDiagRecCommand(PHCD_CONTROLLER hc, ULONG trbType, ULONG code);
+VOID HcdDiagRecEnd(PHCD_CONTROLLER hc, ULONG seq, LONG usbd, ULONG detail);
+VOID HcdDiagRecHold(PHCD_CONTROLLER hc, ULONG seq, ULONG detail);
+VOID HcdDiagIrqTakeLocked(PHCD_CONTROLLER hc, PULONG sample,
+                          const ULONG *regs, ULONG dequeue, ULONG dw3);
+VOID HcdDiagIrqCommitLocked(PHCD_CONTROLLER hc, const ULONG *sample);
+VOID HcdDiagSlowLook(PHCD_CONTROLLER hc, PULONG depth, PULONG kind,
+                     PULONG seq);
+VOID HcdDiagPdos(PHCD_CONTROLLER hc, PULONG pdos, PULONG parked,
+                 PULONG pending);
 
 /* hcd_door.c */
 VOID HcdDoorGateEnter(PHCD_CONTROLLER hc);

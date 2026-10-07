@@ -71,6 +71,7 @@ SOURCES=xhci_mem.c    \
         hcd_urb.c     \
         hcd_io.c      \
         hcd_cfg.c     \
+        hcd_diag.c    \
         xhci_enum.c   \
         xhci_link.c   \
         xhci_psw.c    \

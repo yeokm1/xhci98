@@ -8571,7 +8571,26 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_TOL_HUB_LOCS  17  /* XHCI_TOL_HUB_LOCS             */
 #define XHCI_SNAPSHOT_HCD_TOL_HUB_PORTS 18  /* HubLoc entries per hub object */
 #define XHCI_SNAPSHOT_HCD_TERMINAL      19  /* XHCI_TOL_TERMINAL_*           */
-#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    20UL
+/*
+ * Appended by the diagnostic build 2.2.0.2 (roadmap-hcd.md task 36.6, issue
+ * 12 section 8.4), version unchanged: four parts after the counters - the
+ * diagnostic block, the pipe records, the recovery timeline and the backstop
+ * samples - each placed by these words. A header too short to hold them is
+ * an older driver's, which keeps none of them; an older tool walks past them
+ * by the header's size.
+ */
+#define XHCI_SNAPSHOT_HCD_DIAG_AT       20  /* the diagnostic block's offset */
+#define XHCI_SNAPSHOT_HCD_DIAG_BYTES    21  /* its size                      */
+#define XHCI_SNAPSHOT_HCD_PIPES         22  /* pipe records                  */
+#define XHCI_SNAPSHOT_HCD_PIPE_BYTES    23  /* one record, in bytes          */
+#define XHCI_SNAPSHOT_HCD_PIPES_AT      24  /* the first record's offset     */
+#define XHCI_SNAPSHOT_HCD_RECS          25  /* timeline entries              */
+#define XHCI_SNAPSHOT_HCD_REC_BYTES     26
+#define XHCI_SNAPSHOT_HCD_RECS_AT       27
+#define XHCI_SNAPSHOT_HCD_IRQS          28  /* backstop samples              */
+#define XHCI_SNAPSHOT_HCD_IRQ_BYTES     29
+#define XHCI_SNAPSHOT_HCD_IRQS_AT       30
+#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    31UL
 
 /* One root port's record. The machine's fields are XHCI_ENUM_PORT's; the
  * speed ID is the one the port's last reset read (0 none), decoded on its
@@ -8601,22 +8620,329 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 /* XHCIHC_COUNTERS in ULONGs (xhci_counters.h; asserted in xhci_snap.c). */
 #define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 63UL
 
+/*
+ * The diagnostic block (2.2.0.2): one record, read when the window is cut.
+ * Times are of two clocks. _MS words are the system time in milliseconds,
+ * its low 32 bits (XhciSnapMs); _TICK words are the tolerance clock
+ * (XHCI_TOL_TICK_MS, zeroed at each start) plus one (XhciSnapTick), the
+ * one clock the ISR, the DPC and the submission path read for free. An age
+ * is NOW less the stamp, in that stamp's clock; a tick of 0 is "never",
+ * which the clock's own 0, in its first 100 ms, is not. The live registers are
+ * XHCI_SNAPSHOT_UNREAD when the window could not touch MMIO.
+ */
+#define XHCI_SNAPSHOT_UNREAD            0xFFFFFFFFUL
+#define XHCI_SNAPSHOT_DIAG_NOW_MS       0
+#define XHCI_SNAPSHOT_DIAG_NOW_TICK     1
+#define XHCI_SNAPSHOT_DIAG_FLAGS        2   /* XHCI_SNAPSHOT_DF_*            */
+#define XHCI_SNAPSHOT_DIAG_SLOW_DEPTH   3   /* IRPs on SlowIrps              */
+#define XHCI_SNAPSHOT_DIAG_SLOW_FIRST   4   /* the first one's XHCI_SNAPSHOT_RK_* */
+#define XHCI_SNAPSHOT_DIAG_SLOW_SEQ     5   /* ... and its timeline entry     */
+#define XHCI_SNAPSHOT_DIAG_PDOS         6   /* device PDOs listed            */
+#define XHCI_SNAPSHOT_DIAG_PARKED       7   /* URBs parked on PDOs           */
+#define XHCI_SNAPSHOT_DIAG_URBS_PENDING 8   /* URB IRPs pended on PDOs       */
+#define XHCI_SNAPSHOT_DIAG_CANCEL_WORK  9   /* CancelWork                    */
+#define XHCI_SNAPSHOT_DIAG_CANCELS_RUN  10  /* cancel routines in flight     */
+#define XHCI_SNAPSHOT_DIAG_THREAD_PASSES 11 /* controller thread wakes       */
+#define XHCI_SNAPSHOT_DIAG_THREAD_TICK  12  /* ... the last one              */
+#define XHCI_SNAPSHOT_DIAG_CANCEL_CALLS 13  /* transfer cancel routine runs  */
+#define XHCI_SNAPSHOT_DIAG_CANCEL_MARKS 14  /* ... that marked a record      */
+#define XHCI_SNAPSHOT_DIAG_CANCEL_SERVED 15 /* pipes' cancels the thread ran */
+#define XHCI_SNAPSHOT_DIAG_SLOW_SERVED  16  /* slow IRPs the thread took     */
+#define XHCI_SNAPSHOT_DIAG_REC_TOTAL    17  /* timeline entries written      */
+#define XHCI_SNAPSHOT_DIAG_ISR_TICK     18  /* the ISR entered               */
+#define XHCI_SNAPSHOT_DIAG_CLAIM_TICK   19  /* ... and claimed               */
+#define XHCI_SNAPSHOT_DIAG_DPC_TICK     20  /* the drain DPC ran             */
+#define XHCI_SNAPSHOT_DIAG_INTERRUPTS   21  /* InterruptCount                */
+#define XHCI_SNAPSHOT_DIAG_CLAIMED      22  /* InterruptsClaimed             */
+#define XHCI_SNAPSHOT_DIAG_DPCS         23  /* DpcCount                      */
+#define XHCI_SNAPSHOT_DIAG_BACKSTOPS    24  /* Tol.Stats.BackstopDrains      */
+#define XHCI_SNAPSHOT_DIAG_BS_IP        25  /* backstop looks: event pending,
+                                             * IMAN.IP set                   */
+#define XHCI_SNAPSHOT_DIAG_BS_NO_IP     26  /* ... pending, IP clear         */
+#define XHCI_SNAPSHOT_DIAG_BS_IDLE      27  /* ... nothing pending           */
+#define XHCI_SNAPSHOT_DIAG_BS_SKIPPED   28  /* ... not admitted              */
+#define XHCI_SNAPSHOT_DIAG_IRQ_TOTAL    29  /* backstop samples written      */
+#define XHCI_SNAPSHOT_DIAG_USBCMD       30  /* live, when the window was cut */
+#define XHCI_SNAPSHOT_DIAG_USBSTS       31
+#define XHCI_SNAPSHOT_DIAG_IMAN         32
+#define XHCI_SNAPSHOT_DIAG_IMOD         33
+#define XHCI_SNAPSHOT_DIAG_ERDP         34  /* low dword, EHB included       */
+#define XHCI_SNAPSHOT_DIAG_EVT_DEQUEUE  35  /* index | Ccs << 31             */
+#define XHCI_SNAPSHOT_DIAG_EVT_DW3      36  /* the event TRB there, DW3      */
+#define XHCI_SNAPSHOT_DIAG_ISR_STATUS   37  /* LastIsrStatus                 */
+#define XHCI_SNAPSHOT_DIAG_PIPES_OPEN   38  /* open endpoint pipes, all slots */
+#define XHCI_SNAPSHOT_DIAG_PIPES_OMITTED 39 /* ... with a transfer outstanding,
+                                             * past the records' room       */
+#define XHCI_SNAPSHOT_DIAG_BS_REFUSED   40  /* backstop drains whose DPC
+                                             * insertion was refused: no
+                                             * sample kept                   */
+#define XHCI_SNAPSHOT_DIAG_WORDS        41UL
+
+#define XHCI_SNAPSHOT_DF_MMIO           0x00000001UL /* registers read     */
+#define XHCI_SNAPSHOT_DF_CONTEXTS       0x00000002UL /* contexts readable  */
+
+/*
+ * One pipe record (2.2.0.2): an endpoint's pipe of an enabled slot, read
+ * under the controller lock when the window is cut. Up to
+ * XHCI_SNAPSHOT_HCD_PIPES_KEPT, by XhciSnapPipeBefore: first the pipes with
+ * a transfer outstanding, the oldest first, then those with only a flag,
+ * then idle ones; a stream's pipe is not listed (its endpoint carries
+ * XHCI_SNAPSHOT_PF_STREAMS). The X_ words are the transfer the endpoint is
+ * on: the thread's own EP0 or hub status transfer when it heads the queue
+ * (X_STATE XHCI_SNAPSHOT_X_EP0_THREAD or _HUB_STATUS), else the oldest
+ * record in use (XhciSnapOldest, X_STATE an HCD_XFER_* state);
+ * XHCI_SNAPSHOT_UNREAD when none, and the TD addresses only while it is on
+ * the ring. The context words are the Output Device Context's,
+ * XHCI_SNAPSHOT_UNREAD when not readable.
+ */
+#define XHCI_SNAPSHOT_HCD_PIPES_KEPT    24UL
+#define XHCI_SNAPSHOT_PIPE_SLOT         0
+#define XHCI_SNAPSHOT_PIPE_DCI          1
+#define XHCI_SNAPSHOT_PIPE_EP_ADDRESS   2
+#define XHCI_SNAPSHOT_PIPE_TYPE         3   /* XHCI_PIPE_XFER_*              */
+#define XHCI_SNAPSHOT_PIPE_FLAGS        4   /* XHCI_SNAPSHOT_PF_*            */
+#define XHCI_SNAPSHOT_PIPE_QUEUED       5   /* TDs in the engine's queue     */
+#define XHCI_SNAPSHOT_PIPE_SUBMITTED    6   /* the queue's counts            */
+#define XHCI_SNAPSHOT_PIPE_COMPLETED    7
+#define XHCI_SNAPSHOT_PIPE_RING_ENQ     8   /* software ring indexes         */
+#define XHCI_SNAPSHOT_PIPE_RING_DEQ     9
+#define XHCI_SNAPSHOT_PIPE_RING_CYCLE   10
+#define XHCI_SNAPSHOT_PIPE_RING_PA      11
+#define XHCI_SNAPSHOT_PIPE_BUSY         12  /* records in use                */
+#define XHCI_SNAPSHOT_PIPE_WAITING      13  /* IRPs on Waiting               */
+#define XHCI_SNAPSHOT_PIPE_HELD         14  /* records on Held               */
+#define XHCI_SNAPSHOT_PIPE_X_STATE      15  /* HCD_XFER_* (hcd.h)            */
+#define XHCI_SNAPSHOT_PIPE_X_SEQ        16
+#define XHCI_SNAPSHOT_PIPE_X_FUNCTION   17  /* URB function                  */
+#define XHCI_SNAPSHOT_PIPE_X_TFLAGS     18  /* its TransferFlags             */
+#define XHCI_SNAPSHOT_PIPE_X_SETUP0     19  /* SETUP bytes 0-3, LE           */
+#define XHCI_SNAPSHOT_PIPE_X_SETUP1     20  /* SETUP bytes 4-7               */
+#define XHCI_SNAPSHOT_PIPE_X_LENGTH     21  /* requested                     */
+#define XHCI_SNAPSHOT_PIPE_X_OFFSET     22  /* moved by earlier chunks       */
+#define XHCI_SNAPSHOT_PIPE_X_CHUNK      23  /* this chunk                    */
+#define XHCI_SNAPSHOT_PIPE_X_BYTES      24  /* this chunk's latched count    */
+#define XHCI_SNAPSHOT_PIPE_X_TICK       25  /* claimed for its IRP           */
+#define XHCI_SNAPSHOT_PIPE_X_RING_TICK  26  /* last published (XF_ENGINE)    */
+#define XHCI_SNAPSHOT_PIPE_X_BITS       27  /* XHCI_SNAPSHOT_XF_*            */
+#define XHCI_SNAPSHOT_PIPE_X_STATUS     28  /* the record's USBD status      */
+#define XHCI_SNAPSHOT_PIPE_X_TD_FIRST   29  /* first TRB's address           */
+#define XHCI_SNAPSHOT_PIPE_X_TD_LAST    30  /* last TRB's address            */
+#define XHCI_SNAPSHOT_PIPE_X_ENGINE     31  /* XHCI_XFER_FLAG_*              */
+#define XHCI_SNAPSHOT_PIPE_X_USBD       32  /* the engine's latched status   */
+#define XHCI_SNAPSHOT_PIPE_EP_DW0       33  /* EP State in 2:0               */
+#define XHCI_SNAPSHOT_PIPE_EP_DW1       34
+#define XHCI_SNAPSHOT_PIPE_EP_DW2       35  /* TR Dequeue low | DCS          */
+#define XHCI_SNAPSHOT_PIPE_EP_DW3       36
+#define XHCI_SNAPSHOT_PIPE_SLOT_DW3     37  /* Slot State in 31:27           */
+#define XHCI_SNAPSHOT_PIPE_RING_TRBS    38  /* the ring's TRBs, Link included */
+#define XHCI_SNAPSHOT_PIPE_WORDS        39UL
+
+/* X_STATE beyond the HCD_XFER_* states: the thread's own transfers. */
+#define XHCI_SNAPSHOT_X_EP0_THREAD      5UL  /* dev->Ep0Xfer                 */
+#define XHCI_SNAPSHOT_X_HUB_STATUS      6UL  /* dev->HubXfer                 */
+
+/* A pipe's class for the selection (XhciSnapPipeClass). */
+#define XHCI_SNAPSHOT_PC_OUTSTANDING    0UL
+#define XHCI_SNAPSHOT_PC_FLAGGED        1UL
+#define XHCI_SNAPSHOT_PC_IDLE           2UL
+
+/* PIPE_FLAGS: the pipe's own in the low half, its device's in the high. */
+#define XHCI_SNAPSHOT_PF_CLOSED         0x00000001UL
+#define XHCI_SNAPSHOT_PF_HALTED         0x00000002UL
+#define XHCI_SNAPSHOT_PF_SEQ_USED       0x00000004UL
+#define XHCI_SNAPSHOT_PF_CANCEL_PENDING 0x00000008UL
+#define XHCI_SNAPSHOT_PF_DRAIN_PENDING  0x00000010UL
+#define XHCI_SNAPSHOT_PF_PAUSED         0x00000020UL
+#define XHCI_SNAPSHOT_PF_EXCLUSIVE      0x00000040UL
+#define XHCI_SNAPSHOT_PF_RING_WAIT      0x00000080UL
+#define XHCI_SNAPSHOT_PF_STREAMS        0x00000100UL
+#define XHCI_SNAPSHOT_PF_STREAM_FAULT   0x00000200UL
+#define XHCI_SNAPSHOT_PF_DEV_GONE       0x00010000UL
+#define XHCI_SNAPSHOT_PF_DEV_ABORT_ALL  0x00020000UL
+#define XHCI_SNAPSHOT_PF_DEV_EP0_STUCK  0x00040000UL
+#define XHCI_SNAPSHOT_PF_DEV_EP0_HALTED 0x00080000UL
+#define XHCI_SNAPSHOT_PF_DEV_SLOT_FATAL 0x00100000UL
+
+/* X_BITS. */
+#define XHCI_SNAPSHOT_XF_CANCEL_ASKED   0x00000001UL /* marked by the cancel */
+#define XHCI_SNAPSHOT_XF_IRP_CANCEL     0x00000002UL /* Irp->Cancel set     */
+#define XHCI_SNAPSHOT_XF_CONTROL        0x00000004UL
+#define XHCI_SNAPSHOT_XF_IN             0x00000008UL
+#define XHCI_SNAPSHOT_XF_MAPPED         0x00000010UL
+#define XHCI_SNAPSHOT_XF_ENGINE         0x00000020UL /* published at least once */
+#define XHCI_SNAPSHOT_XF_ISOCH          0x00000040UL
+#define XHCI_SNAPSHOT_XF_OWNER          0x00000080UL /* the pipe's Exclusive */
+
+/*
+ * One timeline entry (2.2.0.2): a slow request (RESET_PIPE and its two
+ * halves, ABORT_PIPE, RESET_PORT, a select, a streams request), a transfer
+ * cancel routine's run, or the thread's cancel, drain or removal abort of a
+ * pipe. XHCI_SNAPSHOT_HCD_RECS_KEPT in a ring (XhciSnapRingNext), each
+ * numbered from 1 by REC_SEQ, 0 empty. A slow request's entry opens when it
+ * is queued and is completed when the thread serves it; an entry with
+ * END_MS 0 has not completed. The commands are the thread's while the entry
+ * was being served (XhciSnapRecCommand), four kept of COMMANDS.
+ */
+#define XHCI_SNAPSHOT_HCD_RECS_KEPT     32UL
+#define XHCI_SNAPSHOT_REC_SEQ           0
+#define XHCI_SNAPSHOT_REC_KIND          1   /* XHCI_SNAPSHOT_RK_*            */
+#define XHCI_SNAPSHOT_REC_SLOT          2
+#define XHCI_SNAPSHOT_REC_DCI           3   /* 0: none or the whole device   */
+#define XHCI_SNAPSHOT_REC_ARRIVE_MS     4   /* queued, 0 not known           */
+#define XHCI_SNAPSHOT_REC_START_MS      5   /* the thread took it, 0 not yet */
+#define XHCI_SNAPSHOT_REC_END_MS        6   /* completed, 0 not yet          */
+#define XHCI_SNAPSHOT_REC_DEPTH         7   /* SlowIrps on arrival           */
+#define XHCI_SNAPSHOT_REC_CLEAR         8   /* XHCI_SNAPSHOT_CLEAR_*         */
+#define XHCI_SNAPSHOT_REC_USBD          9   /* the status it ended with      */
+#define XHCI_SNAPSHOT_REC_COMMANDS      10  /* commands issued               */
+#define XHCI_SNAPSHOT_REC_CMD01         11  /* the first four, 16 bits each: */
+#define XHCI_SNAPSHOT_REC_CMD23         12  /* TRB type << 8 | code          */
+#define XHCI_SNAPSHOT_REC_DETAIL        13  /* by kind (xhcisnap.c)          */
+#define XHCI_SNAPSHOT_REC_TICK          14  /* opened, tolerance clock       */
+#define XHCI_SNAPSHOT_REC_WORDS         15UL
+#define XHCI_SNAPSHOT_REC_CMD_KEPT      4UL
+
+#define XHCI_SNAPSHOT_RK_RESET_PIPE     1UL
+#define XHCI_SNAPSHOT_RK_SYNC_RESET     2UL  /* SYNC_RESET_PIPE              */
+#define XHCI_SNAPSHOT_RK_SYNC_CLEAR     3UL  /* SYNC_CLEAR_STALL             */
+#define XHCI_SNAPSHOT_RK_ABORT_PIPE     4UL
+#define XHCI_SNAPSHOT_RK_RESET_PORT     5UL
+#define XHCI_SNAPSHOT_RK_SELECT_CONFIG  6UL
+#define XHCI_SNAPSHOT_RK_SELECT_IFACE   7UL
+#define XHCI_SNAPSHOT_RK_STREAMS        8UL
+#define XHCI_SNAPSHOT_RK_OTHER          9UL  /* another slow URB             */
+#define XHCI_SNAPSHOT_RK_CANCEL         10UL /* a transfer's cancel routine  */
+#define XHCI_SNAPSHOT_RK_CANCEL_SERVICE 11UL /* the thread took them off     */
+#define XHCI_SNAPSHOT_RK_DRAIN          12UL /* a refused retire's abort     */
+#define XHCI_SNAPSHOT_RK_ABORT_ALL      13UL /* a removing PDO's pipes       */
+
+/* REC_DETAIL of a slow request (RK_RESET_PIPE to RK_OTHER): how it left
+ * the queue's service, in the low byte, and whether REC_USBD holds an
+ * XHCI98_STREAMS_* status rather than a USBD one. */
+#define XHCI_SNAPSHOT_RD_SERVED         0UL  /* completed with REC_USBD      */
+#define XHCI_SNAPSHOT_RD_HELD           1UL  /* held on its PDO for an
+                                              * unreadable controller: not
+                                              * completed                   */
+#define XHCI_SNAPSHOT_RD_PUT_BACK       2UL  /* requeued for the recovery    */
+#define XHCI_SNAPSHOT_RD_REFUSED        3UL  /* its hold declined: refused
+                                              * at the next tick, REC_USBD   */
+#define XHCI_SNAPSHOT_RD_COVERED        4UL  /* an earlier abort's horizon
+                                              * covered it: completed
+                                              * CANCELED in place            */
+#define XHCI_SNAPSHOT_RD_STREAMS        0x100UL
+
+/* REC_CLEAR: what became of CLEAR_FEATURE(ENDPOINT_HALT). */
+#define XHCI_SNAPSHOT_CLEAR_NONE        0UL  /* not sent by this request     */
+#define XHCI_SNAPSHOT_CLEAR_DONE        1UL
+#define XHCI_SNAPSHOT_CLEAR_STALLED     2UL
+#define XHCI_SNAPSHOT_CLEAR_FAILED      3UL
+#define XHCI_SNAPSHOT_CLEAR_NOT_SENT    4UL  /* never went out, or timed out */
+#define XHCI_SNAPSHOT_CLEAR_ABANDONED   5UL
+
+/*
+ * One backstop sample (2.2.0.2): the interrupter's registers and the
+ * interrupt path's stamps, read under the controller lock just before the
+ * backstop queues a drain (hcd_ctl.c, hcdBackstop), and kept, in a ring of
+ * XHCI_SNAPSHOT_HCD_IRQS_KEPT numbered like the timeline, only once the
+ * drain's DPC was inserted; a refused insertion is counted
+ * (XHCI_SNAPSHOT_DIAG_BS_REFUSED) and keeps nothing.
+ */
+#define XHCI_SNAPSHOT_HCD_IRQS_KEPT     16UL
+#define XHCI_SNAPSHOT_IRQ_SEQ           0
+#define XHCI_SNAPSHOT_IRQ_MS            1
+#define XHCI_SNAPSHOT_IRQ_TICK          2
+#define XHCI_SNAPSHOT_IRQ_USBCMD        3
+#define XHCI_SNAPSHOT_IRQ_USBSTS        4
+#define XHCI_SNAPSHOT_IRQ_IMAN          5
+#define XHCI_SNAPSHOT_IRQ_IMOD          6
+#define XHCI_SNAPSHOT_IRQ_ERDP          7
+#define XHCI_SNAPSHOT_IRQ_EVT_DEQUEUE   8   /* index | Ccs << 31             */
+#define XHCI_SNAPSHOT_IRQ_EVT_DW3       9
+#define XHCI_SNAPSHOT_IRQ_ISR_TICK      10
+#define XHCI_SNAPSHOT_IRQ_CLAIM_TICK    11
+#define XHCI_SNAPSHOT_IRQ_DPC_TICK      12
+#define XHCI_SNAPSHOT_IRQ_INTERRUPTS    13
+#define XHCI_SNAPSHOT_IRQ_CLAIMED       14
+#define XHCI_SNAPSHOT_IRQ_DPCS          15
+#define XHCI_SNAPSHOT_IRQ_WORDS         16UL
+
+/* A backstop look's class (XhciSnapIrqClass). */
+#define XHCI_SNAPSHOT_BS_SKIPPED        0UL
+#define XHCI_SNAPSHOT_BS_IDLE           1UL
+#define XHCI_SNAPSHOT_BS_IP             2UL
+#define XHCI_SNAPSHOT_BS_NO_IP          3UL
+
 /* Where a word of the image lies (XhciSnapHcdLocate). */
 #define XHCI_SNAPSHOT_HCD_IN_HEAD       0UL
 #define XHCI_SNAPSHOT_HCD_IN_PORT       1UL
 #define XHCI_SNAPSHOT_HCD_IN_COUNTERS   2UL
 #define XHCI_SNAPSHOT_HCD_PAST_END      3UL
+#define XHCI_SNAPSHOT_HCD_IN_DIAG       4UL
+#define XHCI_SNAPSHOT_HCD_IN_PIPE       5UL
+#define XHCI_SNAPSHOT_HCD_IN_REC        6UL
+#define XHCI_SNAPSHOT_HCD_IN_IRQ        7UL
 
 /* The image's length in words for `ports` root ports (held to
  * XHCI_MAX_ROOT_PORTS); its header word `word` (0 past the header); where
- * word `index` lies - the part, and in it the record (a port's, from 0) and
- * the word; and a record's flags word. IRQL: any. */
+ * word `index` lies - the part, and in it the record (a port's, a pipe's,
+ * a timeline entry's or a sample's, from 0) and the word; and a record's
+ * flags word. IRQL: any. */
 ULONG XhciSnapHcdWords(ULONG ports);
 ULONG XhciSnapHcdHead(ULONG ports, ULONG word);
 ULONG XhciSnapHcdLocate(ULONG ports, ULONG index, PULONG record,
                         PULONG word);
 ULONG XhciSnapHcdFlags(ULONG settleDeferred, ULONG linkRecovering,
                        ULONG unreadable);
+
+/*
+ * The diagnostic build's helpers (2.2.0.2). IRQL: any; the caller
+ * serializes.
+ *
+ * XhciSnapMs: a system time (100 ns units, as its two halves) in
+ * milliseconds, the low 32 bits, with no 64-bit arithmetic.
+ *
+ * XhciSnapOldest: of `count` records, the index of the one in use (state
+ * not `freeState`) submitted first by its 32-bit sequence, which wraps; or
+ * `count` when none is in use.
+ *
+ * XhciSnapRingNext: the next entry of a ring of `kept` entries of `words`,
+ * zeroed and numbered (word 0) from *total, which it advances; a number is
+ * never 0. XhciSnapRingFind: entry `seq`, or NULL once it was overwritten.
+ *
+ * XhciSnapRecCommand: one command (its TRB type and completion code, 0 for
+ * none) counted into a timeline entry, the first XHCI_SNAPSHOT_REC_CMD_KEPT
+ * kept. XhciSnapIrqClass: a backstop look's XHCI_SNAPSHOT_BS_*.
+ */
+ULONG XhciSnapMs(ULONG high, ULONG low);
+ULONG XhciSnapOldest(const ULONG *states, const ULONG *seqs, ULONG count,
+                     ULONG freeState);
+PULONG XhciSnapRingNext(PULONG ring, ULONG kept, ULONG words, PULONG total);
+PULONG XhciSnapRingFind(PULONG ring, ULONG kept, ULONG words, ULONG seq);
+VOID XhciSnapRecCommand(PULONG rec, ULONG trbType, ULONG code);
+ULONG XhciSnapIrqClass(ULONG admitted, ULONG pending, ULONG iman);
+
+/*
+ * The pipe records' order (2.2.0.2). XhciSnapPipeClass: a pipe's
+ * XHCI_SNAPSHOT_PC_*. XhciSnapPipeBefore: whether pipe A ranks before pipe
+ * B - by class, then (an outstanding transfer) the older claim tick, then
+ * the id (slot << 5 | DCI), so no two pipes rank alike. XhciSnapClearOf: a
+ * thread control transfer's outcome, HCD_CTL_* (hcd.h: DONE, STALLED,
+ * FAILED, NOT_SENT, ABANDONED, 0 to 4), as XHCI_SNAPSHOT_CLEAR_*. IRQL: any.
+ */
+ULONG XhciSnapPipeClass(ULONG outstanding, ULONG flagged);
+ULONG XhciSnapPipeBefore(ULONG classA, ULONG tickA, ULONG idA, ULONG classB,
+                         ULONG tickB, ULONG idB);
+ULONG XhciSnapClearOf(ULONG outcome);
+
+/* How a request held for an unreadable controller left (hcd_io.c,
+ * HcdIoParkHow: DECLINED, HELD, COMPLETED, 0 to 2) as REC_DETAIL records
+ * it: XHCI_SNAPSHOT_RD_REFUSED, _HELD or _COVERED. IRQL: any. */
+ULONG XhciSnapHoldOf(ULONG how);
+
+/* The tolerance clock `now` as a stamp: plus one, so a stamp is never 0,
+ * which means "never"; past the clock's last value it stays 0xFFFFFFFF.
+ * IRQL: any. */
+ULONG XhciSnapTick(ULONG now);
 
 /* Header Status bits. A window always comes back with a truthful header, so
  * every refusal below is reported here rather than through an MPSTATUS the

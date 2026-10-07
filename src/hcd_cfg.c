@@ -121,8 +121,28 @@ static PVOID hcdCfgHeldEndpoint(PHCD_USB_DEVICE dev, PVOID handle)
     return (pipe != NULL) ? (PVOID)pipe->Parent : NULL;
 }
 
+/* The DCI a pended request names, for its timeline entry (2.2.0.2): a pipe
+ * request's, 0 for one naming none or a pipe the device does not hold.
+ * Controller lock held. */
+static ULONG hcdCfgDiagDci(PHCD_USB_DEVICE dev, PURB urb)
+{
+    PHCD_PIPE pipe;
+
+    if (urb == NULL) {
+        return 0;
+    }
+    if (urb->UrbHeader.Function != URB_FUNCTION_ABORT_PIPE &&
+        hcdCfgHeldHandle(urb) == NULL) {
+        return 0;
+    }
+    pipe = HcdCfgPipe(dev, urb->UrbPipeRequest.PipeHandle);
+    return (pipe != NULL) ? pipe->Dci : 0;
+}
+
 /* Pend one IRP for the thread - a URB, or RESET_PORT; the caller's device
- * reference passes to it. IRQL: <= DISPATCH_LEVEL. */
+ * reference passes to it. Its timeline entry is opened here, and its
+ * number kept in DriverContext[3], unused while it is queued.
+ * IRQL: <= DISPATCH_LEVEL. */
 NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                      PHCD_DEVICE_PDO pdo, PIRP irp)
 {
@@ -174,6 +194,8 @@ NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     irp->Tail.Overlay.DriverContext[1] = irp->Tail.Overlay.DriverContext[0];
     irp->Tail.Overlay.DriverContext[0] = dev;
     irp->Tail.Overlay.DriverContext[2] = pdo;
+    irp->Tail.Overlay.DriverContext[3] = (PVOID)(ULONG_PTR)HcdDiagRecOpenLocked(
+        hc, HcdDiagSlowKind(irp), dev->SlotId, hcdCfgDiagDci(dev, urb), 0);
     (VOID)InterlockedIncrement(&pdo->UrbsPending);
     IoMarkIrpPending(irp);
     InsertTailList(&hc->SlowIrps, &irp->Tail.Overlay.ListEntry);
@@ -216,14 +238,17 @@ static VOID hcdCfgComplete(PHCD_USB_DEVICE dev, PIRP irp, PURB urb,
  * the count in UrbsPending it was queued with, and released as a held
  * request is - cancel, an abort covering it, or the PDO's stop or removal.
  * Where the hold declines, the deferred refusal completes it CANCELLED or
- * DELETE_PENDING. The device reference goes back either way. Thread only.
+ * DELETE_PENDING. The device reference goes back either way. Returns how
+ * it left, XHCI_SNAPSHOT_RD_* (SERVED for the abort; XhciSnapHoldOf for
+ * the rest), for its timeline entry. Thread only.
  */
-static VOID hcdCfgHoldUnreadable(PHCD_USB_DEVICE dev, PIRP irp, PURB urb)
+static ULONG hcdCfgHoldUnreadable(PHCD_USB_DEVICE dev, PIRP irp, PURB urb)
 {
     PHCD_DEVICE_PDO pdo;
     PVOID handle;
     PVOID endpoint;
     KIRQL oldIrql;
+    ULONG held;
 
     pdo = (PHCD_DEVICE_PDO)irp->Tail.Overlay.DriverContext[2];
     if (urb->UrbHeader.Function == URB_FUNCTION_ABORT_PIPE) {
@@ -231,7 +256,7 @@ static VOID hcdCfgHoldUnreadable(PHCD_USB_DEVICE dev, PIRP irp, PURB urb)
          * that horizon covers is released. */
         (VOID)HcdIoParkedRelease(pdo, 1);
         hcdCfgComplete(dev, irp, urb, XHCI_USBD_STATUS_SUCCESS);
-        return;
+        return XHCI_SNAPSHOT_RD_SERVED;
     }
     /* Its dispatch stamp back, kept across the queue (HcdCfgQueue): an
      * abort submitted after it covers it, whether that abort already ran or
@@ -243,11 +268,13 @@ static VOID hcdCfgHoldUnreadable(PHCD_USB_DEVICE dev, PIRP irp, PURB urb)
     XhciControllerLockAcquire(&dev->Controller->Hc, &oldIrql);
     endpoint = hcdCfgHeldEndpoint(dev, handle);
     XhciControllerLockRelease(&dev->Controller->Hc, oldIrql);
-    if (!HcdIoPark(pdo, irp, urb, handle, endpoint)) {
+    held = HcdIoParkHow(pdo, irp, urb, handle, endpoint);
+    if (held == HCD_IO_PARK_DECLINED) {
         (VOID)HcdIoRefuseLater(pdo, irp, urb, HCD_USBD_CANCELED);
         (VOID)InterlockedDecrement(&pdo->UrbsPending);
     }
     (VOID)InterlockedDecrement(&dev->Refs);
+    return XhciSnapHoldOf(held);
 }
 
 /* A device leaving (hcd_io.c, HcdIoDeviceGone): its queued slow URBs
@@ -260,6 +287,8 @@ VOID HcdCfgFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     PLIST_ENTRY next;
     PIRP irp;
     KIRQL oldIrql;
+    ULONG diag;
+    ULONG held;
 
     InitializeListHead(&mine);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
@@ -275,10 +304,21 @@ VOID HcdCfgFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     while (!IsListEmpty(&mine)) {
         entry = RemoveHeadList(&mine);
         irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
+        diag = (ULONG)(ULONG_PTR)irp->Tail.Overlay.DriverContext[3];
         if (hc->Hc.Tol.Unreadable && hcdCfgUrbOf(irp) != NULL) {
-            hcdCfgHoldUnreadable(dev, irp, hcdCfgUrbOf(irp));
+            held = hcdCfgHoldUnreadable(dev, irp, hcdCfgUrbOf(irp));
+            if (held == XHCI_SNAPSHOT_RD_HELD) {
+                HcdDiagRecHold(hc, diag, held);
+            } else {
+                HcdDiagRecEnd(hc, diag,
+                              held == XHCI_SNAPSHOT_RD_SERVED
+                                  ? XHCI_USBD_STATUS_SUCCESS
+                                  : HCD_USBD_CANCELED,
+                              held);
+            }
             continue;
         }
+        HcdDiagRecEnd(hc, diag, HCD_USBD_DEVICE_GONE, 0);
         hcdCfgComplete(dev, irp, hcdCfgUrbOf(irp), HCD_USBD_DEVICE_GONE);
     }
 }
@@ -2767,12 +2807,18 @@ static LONG hcdCfgClearStall(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                              PHCD_PIPE pipe)
 {
     ULONG bytes;
+    ULONG outcome;
 
     if (pipe->TransferType == XHCI_PIPE_XFER_ISOCH) {
         return XHCI_USBD_STATUS_SUCCESS;
     }
-    if (!HcdThreadControl(hc, dev, 0x02, 1, 0,
-                          (USHORT)pipe->EndpointAddress, 0, &bytes)) {
+    /* HcdThreadControl's own call, its answer DONE or not, with the
+     * outcome kept for the timeline (2.2.0.2). */
+    outcome = HcdThreadControlOutcome(hc, dev, 0x02, 1, 0,
+                                      (USHORT)pipe->EndpointAddress, 0,
+                                      &bytes);
+    HcdDiagRecClear(hc, HcdDiagClearOf(outcome));
+    if (outcome != HCD_CTL_DONE) {
         return (LONG)XHCI_PIPE_USBD_REQUEST_FAILED;
     }
     return XHCI_USBD_STATUS_SUCCESS;
@@ -2853,6 +2899,7 @@ static LONG hcdCfgReset(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 {
     KIRQL oldIrql;
     ULONG ok;
+    ULONG outcome;
     LONG result;
 
     /* A stream's handle resets its endpoint, every stream of it: the halt,
@@ -2880,7 +2927,9 @@ static LONG hcdCfgReset(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
      * reset is asked for (Codex review of c4ec1c3, finding 1). A clear that
      * never went out is no answer from the device: it fails busy. */
     if (pipe->TransferType != XHCI_PIPE_XFER_ISOCH) {
-        switch (hcdCfgDeviceClearHalt(hc, dev, pipe)) {
+        outcome = hcdCfgDeviceClearHalt(hc, dev, pipe);
+        HcdDiagRecClear(hc, HcdDiagClearOf(outcome));
+        switch (outcome) {
         case HCD_CTL_DONE:
             break;
         case HCD_CTL_STALLED:
@@ -3633,10 +3682,10 @@ static ULONG hcdCfgStreamsClose(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 
 /* One OPEN_STREAMS or CLOSE_STREAMS, pended by hcd_urb.c with a device
  * reference, served and completed here; the request's Status says what
- * happened and the IRP's status mirrors it (xhci98_streams.h). Thread
- * only, powered. */
-static VOID hcdCfgStreamsRequest(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
-                                 PHCD_DEVICE_PDO pdo, PIRP irp, ULONG code)
+ * happened and the IRP's status mirrors it (xhci98_streams.h). Returns
+ * that XHCI98_STREAMS_* status, for the timeline. Thread only, powered. */
+static ULONG hcdCfgStreamsRequest(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                  PHCD_DEVICE_PDO pdo, PIRP irp, ULONG code)
 {
     PXHCI98_STREAMS_REQUEST rq;
     PHCD_PIPE pipe;
@@ -3690,6 +3739,7 @@ static VOID hcdCfgStreamsRequest(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     IoCompleteRequest(irp, IO_NO_INCREMENT);
     (VOID)InterlockedDecrement(&pdo->UrbsPending);
     (VOID)InterlockedDecrement(&dev->Refs);
+    return answer;
 }
 
 /* ----------------------------------------------------------------------- */
@@ -3701,16 +3751,30 @@ static VOID hcdCfgStreamsRequest(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 static VOID hcdCfgCancelOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                             PHCD_PIPE pipe)
 {
+    ULONG diag;
+    ULONG before;
+    LONG usbd;
+
     if (pipe->DrainPending) {
+        diag = HcdDiagRecBegin(hc, 0, XHCI_SNAPSHOT_RK_DRAIN, dev->SlotId,
+                               pipe->Dci);
         /* On a streams endpoint's own pipe only a stall no stream could be
          * given sets it (hcd_dev.c, a Prime Pipe STALL): every stream's
          * requests complete as stalled, the endpoint reset on both sides,
          * the streams left open. */
-        (VOID)hcdCfgAbort(hc, dev, pipe,
-                          pipe->Streams != NULL ? HCD_USBD_STALL_PID
-                                                : HCD_USBD_INTERNAL_HC_ERROR);
+        usbd = hcdCfgAbort(hc, dev, pipe,
+                           pipe->Streams != NULL ? HCD_USBD_STALL_PID
+                                                 : HCD_USBD_INTERNAL_HC_ERROR);
+        HcdDiagRecEnd(hc, diag, usbd, 0);
     } else if (pipe->CancelPending) {
+        before = pipe->Queue->Count;
+        diag = HcdDiagRecBegin(hc, 0, XHCI_SNAPSHOT_RK_CANCEL_SERVICE,
+                               dev->SlotId, pipe->Dci);
         hcdCfgCancelPipe(hc, dev, pipe);
+        hc->Diag.CancelServed++;
+        HcdDiagRecEnd(hc, diag, XHCI_USBD_STATUS_SUCCESS,
+                      0x80000000UL | ((before & 0xFFUL) << 8) |
+                          (pipe->Queue->Count & 0xFFUL));
     }
 }
 
@@ -3725,6 +3789,9 @@ VOID HcdCfgCancelService(PHCD_CONTROLLER hc)
     ULONG slot;
     ULONG dci;
     ULONG id;
+    ULONG diag;
+    LONG usbd;
+    LONG one;
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     work = hc->CancelWork;
@@ -3742,15 +3809,21 @@ VOID HcdCfgCancelService(PHCD_CONTROLLER hc)
             /* Its PDO is being removed (hcd_pdo.c): every open pipe is
              * aborted so the PDO's pending URBs complete before it does. */
             dev->AbortAll = 0;
+            diag = HcdDiagRecBegin(hc, 0, XHCI_SNAPSHOT_RK_ABORT_ALL,
+                                   dev->SlotId, 0);
             /* EP0 too: its control URBs count against the PDO as much as
              * the other pipes' (round 3, finding 3). */
-            (VOID)hcdCfgAbort(hc, dev, &dev->Ep0Pipe, HCD_USBD_CANCELED);
+            usbd = hcdCfgAbort(hc, dev, &dev->Ep0Pipe, HCD_USBD_CANCELED);
             for (dci = 2; dci < 32; dci++) {
                 if (dev->Pipes[dci] != NULL) {
-                    (VOID)hcdCfgAbort(hc, dev, dev->Pipes[dci],
+                    one = hcdCfgAbort(hc, dev, dev->Pipes[dci],
                                       HCD_USBD_CANCELED);
+                    if (one != XHCI_USBD_STATUS_SUCCESS) {
+                        usbd = one;
+                    }
                 }
             }
+            HcdDiagRecEnd(hc, diag, usbd, 0);
         }
         for (dci = 1; dci < 32; dci++) {
             pipe = (dci == 1) ? &dev->Ep0Pipe : dev->Pipes[dci];
@@ -3997,6 +4070,7 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
     ULONG held;
     ULONG number;
     ULONG code;
+    ULONG diag;
     LONG usbd;
 
     hcdCfgReleases(hc);
@@ -4036,7 +4110,11 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
 
         pdo = (PHCD_DEVICE_PDO)irp->Tail.Overlay.DriverContext[2];
         urb = hcdCfgUrbOf(irp);
+        diag = HcdDiagRecBegin(
+            hc, (ULONG)(ULONG_PTR)irp->Tail.Overlay.DriverContext[3],
+            HcdDiagSlowKind(irp), dev->SlotId, 0);
         if (dev->Gone) {
+            HcdDiagRecEnd(hc, diag, HCD_USBD_DEVICE_GONE, 0);
             hcdCfgComplete(dev, irp, urb, HCD_USBD_DEVICE_GONE);
             continue;
         }
@@ -4054,7 +4132,9 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
         }
         hcdCfgReleaseAgain(hc, dev, owed);
         if (hc->Hc.ControllerFailed || hc->ScratchTainted) {
-            /* Put back for the recovery's invalidation to complete. */
+            /* Put back for the recovery's invalidation to complete: its
+             * entry stays open, no longer the thread's current one. */
+            HcdDiagRecHold(hc, diag, XHCI_SNAPSHOT_RD_PUT_BACK);
             hcdCfgReleaseAgain(hc, dev, held);
             XhciControllerLockAcquire(&hc->Hc, &oldIrql);
             InsertHeadList(&hc->SlowIrps, entry);
@@ -4065,12 +4145,15 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
                    ->Parameters.DeviceIoControl.IoControlCode;
         if (code == IOCTL_XHCI98_OPEN_STREAMS ||
             code == IOCTL_XHCI98_CLOSE_STREAMS) {
-            hcdCfgStreamsRequest(hc, dev, pdo, irp, code);
+            HcdDiagRecEnd(hc, diag,
+                          (LONG)hcdCfgStreamsRequest(hc, dev, pdo, irp, code),
+                          XHCI_SNAPSHOT_RD_STREAMS);
             hcdCfgReleaseAgain(hc, dev, held);
             continue;
         }
         if (urb == NULL) {
             usbd = hcdCfgResetPort(hc, dev);
+            HcdDiagRecEnd(hc, diag, usbd, 0);
             hcdCfgReleaseAgain(hc, dev, held);
             hcdCfgComplete(dev, irp, NULL, usbd);
             continue;
@@ -4124,6 +4207,7 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
             usbd = (LONG)USBD_STATUS_INVALID_URB_FUNCTION;
             break;
         }
+        HcdDiagRecEnd(hc, diag, usbd, 0);
         hcdCfgReleaseAgain(hc, dev, held);
         hcdCfgComplete(dev, irp, urb, usbd);
     }

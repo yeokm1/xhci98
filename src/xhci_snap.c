@@ -14,6 +14,10 @@
  * with no controller (test\test_snap.c). The header's words from
  * XHCI_SNAPSHOT_HCD_TOL_AT (35-T.8) place the tolerance state inside the
  * extension image rather than copy it: the state lives in the extension.
+ * The diagnostic build 2.2.0.2 (roadmap-hcd.md task 36.6) appends four
+ * parts after the counters - a diagnostic block, the pipe records, the
+ * recovery timeline and the backstop samples - and the helpers that keep
+ * the last two as rings and pick each pipe's oldest transfer.
  *
  * DDK-free: part of the pure core. C89, pure: IRQL any.
  */
@@ -32,6 +36,17 @@ ULONG XhciSnapHcdWords(ULONG ports)
     if (ports > XHCI_MAX_ROOT_PORTS) {
         ports = XHCI_MAX_ROOT_PORTS;
     }
+    return XHCI_SNAPSHOT_HCD_HEAD_WORDS +
+           ports * XHCI_SNAPSHOT_HCD_PORT_WORDS +
+           XHCI_SNAPSHOT_HCD_COUNTER_WORDS + XHCI_SNAPSHOT_DIAG_WORDS +
+           XHCI_SNAPSHOT_HCD_PIPES_KEPT * XHCI_SNAPSHOT_PIPE_WORDS +
+           XHCI_SNAPSHOT_HCD_RECS_KEPT * XHCI_SNAPSHOT_REC_WORDS +
+           XHCI_SNAPSHOT_HCD_IRQS_KEPT * XHCI_SNAPSHOT_IRQ_WORDS;
+}
+
+/* The first word of the diagnostic block, past the counters. */
+static ULONG xhciSnapDiagAt(ULONG ports)
+{
     return XHCI_SNAPSHOT_HCD_HEAD_WORDS +
            ports * XHCI_SNAPSHOT_HCD_PORT_WORDS +
            XHCI_SNAPSHOT_HCD_COUNTER_WORDS;
@@ -82,6 +97,33 @@ ULONG XhciSnapHcdHead(ULONG ports, ULONG word)
         return XHCI_TOL_HUB_LOCS;
     case XHCI_SNAPSHOT_HCD_TOL_HUB_PORTS:
         return XHCI_TOL_HUB_LOC_PORTS;
+    case XHCI_SNAPSHOT_HCD_DIAG_AT:
+        return xhciSnapDiagAt(ports) * 4UL;
+    case XHCI_SNAPSHOT_HCD_DIAG_BYTES:
+        return XHCI_SNAPSHOT_DIAG_WORDS * 4UL;
+    case XHCI_SNAPSHOT_HCD_PIPES:
+        return XHCI_SNAPSHOT_HCD_PIPES_KEPT;
+    case XHCI_SNAPSHOT_HCD_PIPE_BYTES:
+        return XHCI_SNAPSHOT_PIPE_WORDS * 4UL;
+    case XHCI_SNAPSHOT_HCD_PIPES_AT:
+        return (xhciSnapDiagAt(ports) + XHCI_SNAPSHOT_DIAG_WORDS) * 4UL;
+    case XHCI_SNAPSHOT_HCD_RECS:
+        return XHCI_SNAPSHOT_HCD_RECS_KEPT;
+    case XHCI_SNAPSHOT_HCD_REC_BYTES:
+        return XHCI_SNAPSHOT_REC_WORDS * 4UL;
+    case XHCI_SNAPSHOT_HCD_RECS_AT:
+        return (xhciSnapDiagAt(ports) + XHCI_SNAPSHOT_DIAG_WORDS +
+                XHCI_SNAPSHOT_HCD_PIPES_KEPT * XHCI_SNAPSHOT_PIPE_WORDS) *
+               4UL;
+    case XHCI_SNAPSHOT_HCD_IRQS:
+        return XHCI_SNAPSHOT_HCD_IRQS_KEPT;
+    case XHCI_SNAPSHOT_HCD_IRQ_BYTES:
+        return XHCI_SNAPSHOT_IRQ_WORDS * 4UL;
+    case XHCI_SNAPSHOT_HCD_IRQS_AT:
+        return (xhciSnapDiagAt(ports) + XHCI_SNAPSHOT_DIAG_WORDS +
+                XHCI_SNAPSHOT_HCD_PIPES_KEPT * XHCI_SNAPSHOT_PIPE_WORDS +
+                XHCI_SNAPSHOT_HCD_RECS_KEPT * XHCI_SNAPSHOT_REC_WORDS) *
+               4UL;
     default:
         /* XHCI_SNAPSHOT_HCD_TERMINAL is a reading, not layout: the door
          * fills it (hcd_door.c). */
@@ -115,6 +157,29 @@ ULONG XhciSnapHcdLocate(ULONG ports, ULONG index, PULONG record,
         *word = index;
         return XHCI_SNAPSHOT_HCD_IN_COUNTERS;
     }
+    index -= XHCI_SNAPSHOT_HCD_COUNTER_WORDS;
+    if (index < XHCI_SNAPSHOT_DIAG_WORDS) {
+        *word = index;
+        return XHCI_SNAPSHOT_HCD_IN_DIAG;
+    }
+    index -= XHCI_SNAPSHOT_DIAG_WORDS;
+    if (index < XHCI_SNAPSHOT_HCD_PIPES_KEPT * XHCI_SNAPSHOT_PIPE_WORDS) {
+        *record = index / XHCI_SNAPSHOT_PIPE_WORDS;
+        *word = index % XHCI_SNAPSHOT_PIPE_WORDS;
+        return XHCI_SNAPSHOT_HCD_IN_PIPE;
+    }
+    index -= XHCI_SNAPSHOT_HCD_PIPES_KEPT * XHCI_SNAPSHOT_PIPE_WORDS;
+    if (index < XHCI_SNAPSHOT_HCD_RECS_KEPT * XHCI_SNAPSHOT_REC_WORDS) {
+        *record = index / XHCI_SNAPSHOT_REC_WORDS;
+        *word = index % XHCI_SNAPSHOT_REC_WORDS;
+        return XHCI_SNAPSHOT_HCD_IN_REC;
+    }
+    index -= XHCI_SNAPSHOT_HCD_RECS_KEPT * XHCI_SNAPSHOT_REC_WORDS;
+    if (index < XHCI_SNAPSHOT_HCD_IRQS_KEPT * XHCI_SNAPSHOT_IRQ_WORDS) {
+        *record = index / XHCI_SNAPSHOT_IRQ_WORDS;
+        *word = index % XHCI_SNAPSHOT_IRQ_WORDS;
+        return XHCI_SNAPSHOT_HCD_IN_IRQ;
+    }
     return XHCI_SNAPSHOT_HCD_PAST_END;
 }
 
@@ -124,4 +189,142 @@ ULONG XhciSnapHcdFlags(ULONG settleDeferred, ULONG linkRecovering,
     return (settleDeferred ? XHCI_SNAPSHOT_HCD_F_DEFERRED : 0UL) |
            (linkRecovering ? XHCI_SNAPSHOT_HCD_F_RECOVERING : 0UL) |
            (unreadable ? XHCI_SNAPSHOT_HCD_F_UNREADABLE : 0UL);
+}
+
+/*
+ * The quotient of (high:low) by 10000 taken a half-word at a time, each
+ * partial dividend under 2^30: only its low 32 bits are kept, so the
+ * high word's own quotient, a multiple of 2^32, drops out.
+ */
+ULONG XhciSnapMs(ULONG high, ULONG low)
+{
+    ULONG rest;
+    ULONG upper;
+    ULONG lower;
+
+    rest = high % 10000UL;
+    upper = ((rest << 16) | (low >> 16)) / 10000UL;
+    rest = ((rest << 16) | (low >> 16)) % 10000UL;
+    lower = ((rest << 16) | (low & 0xFFFFUL)) / 10000UL;
+    return (upper << 16) + lower;
+}
+
+ULONG XhciSnapOldest(const ULONG *states, const ULONG *seqs, ULONG count,
+                     ULONG freeState)
+{
+    ULONG best;
+    ULONG i;
+
+    best = count;
+    for (i = 0; i < count; i++) {
+        if (states[i] == freeState) {
+            continue;
+        }
+        if (best == count || (LONG)(seqs[i] - seqs[best]) < 0) {
+            best = i;
+        }
+    }
+    return best;
+}
+
+PULONG XhciSnapRingNext(PULONG ring, ULONG kept, ULONG words, PULONG total)
+{
+    PULONG entry;
+    ULONG i;
+
+    (*total)++;
+    if (*total == 0) {
+        (*total)++;
+    }
+    entry = ring + ((*total - 1UL) % kept) * words;
+    for (i = 0; i < words; i++) {
+        entry[i] = 0;
+    }
+    entry[0] = *total;
+    return entry;
+}
+
+PULONG XhciSnapRingFind(PULONG ring, ULONG kept, ULONG words, ULONG seq)
+{
+    PULONG entry;
+
+    if (seq == 0) {
+        return NULL;
+    }
+    entry = ring + ((seq - 1UL) % kept) * words;
+    return (entry[0] == seq) ? entry : NULL;
+}
+
+VOID XhciSnapRecCommand(PULONG rec, ULONG trbType, ULONG code)
+{
+    ULONG n;
+
+    n = rec[XHCI_SNAPSHOT_REC_COMMANDS];
+    if (n < XHCI_SNAPSHOT_REC_CMD_KEPT) {
+        rec[XHCI_SNAPSHOT_REC_CMD01 + n / 2UL] |=
+            (((trbType & 0x3FUL) << 8) | (code & 0xFFUL)) << ((n % 2UL) * 16);
+    }
+    if (n != 0xFFFFFFFFUL) {
+        rec[XHCI_SNAPSHOT_REC_COMMANDS] = n + 1UL;
+    }
+}
+
+ULONG XhciSnapIrqClass(ULONG admitted, ULONG pending, ULONG iman)
+{
+    if (!admitted) {
+        return XHCI_SNAPSHOT_BS_SKIPPED;
+    }
+    if (!pending) {
+        return XHCI_SNAPSHOT_BS_IDLE;
+    }
+    return (iman & XHCI_IMAN_IP) != 0 ? XHCI_SNAPSHOT_BS_IP
+                                      : XHCI_SNAPSHOT_BS_NO_IP;
+}
+
+ULONG XhciSnapPipeClass(ULONG outstanding, ULONG flagged)
+{
+    if (outstanding) {
+        return XHCI_SNAPSHOT_PC_OUTSTANDING;
+    }
+    return flagged ? XHCI_SNAPSHOT_PC_FLAGGED : XHCI_SNAPSHOT_PC_IDLE;
+}
+
+ULONG XhciSnapPipeBefore(ULONG classA, ULONG tickA, ULONG idA, ULONG classB,
+                         ULONG tickB, ULONG idB)
+{
+    if (classA != classB) {
+        return classA < classB;
+    }
+    if (classA == XHCI_SNAPSHOT_PC_OUTSTANDING && tickA != tickB) {
+        return (LONG)(tickA - tickB) < 0;
+    }
+    return idA < idB;
+}
+
+ULONG XhciSnapTick(ULONG now)
+{
+    return (now != 0xFFFFFFFFUL) ? now + 1UL : now;
+}
+
+ULONG XhciSnapHoldOf(ULONG how)
+{
+    switch (how) {
+    case 1:
+        return XHCI_SNAPSHOT_RD_HELD;
+    case 2:
+        return XHCI_SNAPSHOT_RD_COVERED;
+    default:
+        return XHCI_SNAPSHOT_RD_REFUSED;
+    }
+}
+
+ULONG XhciSnapClearOf(ULONG outcome)
+{
+    static const ULONG clear[5] = {
+        XHCI_SNAPSHOT_CLEAR_DONE, XHCI_SNAPSHOT_CLEAR_STALLED,
+        XHCI_SNAPSHOT_CLEAR_FAILED, XHCI_SNAPSHOT_CLEAR_NOT_SENT,
+        XHCI_SNAPSHOT_CLEAR_ABANDONED
+    };
+
+    return (outcome < 5) ? clear[outcome] : XHCI_SNAPSHOT_CLEAR_NOT_SENT;
 }

@@ -123,6 +123,8 @@
 > configuration's charged fallback `hcdCfgCycle` in `hcd_cfg.c`; and in
 > `xhci_tol.c` `XhciTolLocActive`, `XhciTolLocHeld`, the once-per-cycle
 > charge `XhciTolCycleCharge` and the terminal reason 5 (`test_tol`).
+> **Withdrawn 2026-10-07 with `2.2.0.1`; the code below is reverted and
+> `xhci98_report.h` removed (issue 12 section 8.4).**
 > Phase 36 (issue 12) adds one file, `xhci98_report.h`, the private
 > client-report interface `xhciuas.sys` includes beside `xhci98_streams.h`,
 > answered in `hcd_urb.c` (`hcdClientReport`) and kept for the snapshot by
@@ -137,7 +139,24 @@
 > in `uas_fdo.c`, the transfer failures in `uas_xport.c`, the sense word
 > `UasSenseWord` in `uas_iu.c`; `test_uas`); task 36.3 the qemu flavour's
 > `XhciQemuStartHold` in `hcd_inj.c`. `xhcisnap\xhcisnap.c` names the new
-> counters and decodes the reports (`print_hcd_clients`). The tables below are the
+> counters and decodes the reports (`print_hcd_clients`).
+> The diagnostic build `2.2.0.2` (task 36.6, issue 12 section 8.4) adds one
+> file, `hcd_diag.c`: the recovery timeline (each slow request from
+> `HcdCfgQueue` to its completion in `HcdCfgService`, with the
+> CLEAR_FEATURE outcome and the commands `hcd_enum.c`'s `hcdCommand` issued
+> for it; each transfer cancel routine's run in `hcd_io.c`; the thread's
+> cancel, drain and removal aborts in `hcd_cfg.c`) and the backstop samples
+> `hcd_ctl.c`'s `hcdBackstop` takes, with the ISR's, DPC's and thread's
+> stamps beside them. `hcd_door.c` reads them, and each open pipe's oldest
+> transfer and Output Endpoint Context, into four parts appended to the HCD
+> region (the header grown to 31 words, version unchanged); the layout and
+> the pure `XhciSnapMs`, `XhciSnapOldest`, `XhciSnapRingNext`,
+> `XhciSnapRingFind`, `XhciSnapRecCommand`, `XhciSnapIrqClass`,
+> `XhciSnapPipeClass`, `XhciSnapPipeBefore` and `XhciSnapClearOf` are
+> `xhci_snap.c`'s (`test_snap`). `hcd_urb.c` and `hcd_io.c` keep each
+> transfer's URB function, flags and claim and publish ticks for it;
+> `xhcisnap\xhcisnap.c` decodes all of it (`print_diag`). It records and
+> decides nothing. The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name
