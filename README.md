@@ -289,24 +289,17 @@ Since `2.1.1.0` the driver moves them to the xHCI controller at each start and r
 
 ### Controller faults
 
-Since `2.2.0.0` the driver deals with transfer, port and controller faults that used to leave a device dead until it was replugged. This follows a tester's report from an AMD AM5 board of a mouse that stops at random. Each but the lost interrupt, whose pickup keeps delivering, is answered a few times at most, then the driver stops trying:
+Since `2.2.0.0` the driver no longer leaves a device dead until it is replugged after a transfer, port or controller fault. This follows a tester's report from an AMD AM5 board of a mouse that stops at random. In short:
 
-- An event whose interrupt never arrived is picked up by the driver's own thread.
-- A USB transaction error (the device did not answer cleanly) on a bulk or interrupt endpoint is retried up to three times before the transfer fails; not for a Low- or Full-Speed device behind a High-Speed hub's transaction translator (a mouse or a keyboard plugged into a USB 2.0 hub running at High Speed), on UAS stream endpoints, or on the four controllers Linux excludes.
-- A fault the driver cannot pin on a transfer, on any but an isochronous (audio) endpoint, makes it re-enumerate the device, as if it had been unplugged and plugged in again. Whatever the device was doing ends as on an unplug.
-- A USB 2.0 root port the controller disabled is re-enumerated, and one that reported an over-current is powered again.
-- After three re-enumerations or repowers, the next fault on that port removes the device and holds the port until its device is unplugged, or, held unpowered, until the controller is restarted. Leave it unplugged for a few seconds: a quick unplug and replug may not release the port.
-- A controller that halts is recovered, at most three times in a window of at least ten minutes, then its devices are removed until it is restarted; a recovery re-enumerates every device on it, so a copy running across it fails. One that stops answering is closed off safely.
-- A device the controller reports incompatible is removed and re-enumerated, as the xHCI specification asks, a bounded number of times (the same budget of three).
-- A recovery that cannot stop the controller, and cannot prove it has stopped writing to memory, closes it off too; `XHCISNAP` reports "CONTAINED: halt and reset did not complete and Bus Master Enable would not clear; DMA not proven stopped, common buffer pinned".
+- A missed interrupt is picked up by the driver itself.
+- A USB transaction error is retried up to three times before the transfer fails.
+- A fault the driver cannot tie to a transfer re-enumerates the device, as if it had been replugged.
+- A USB 2.0 port the controller disabled, or one that reported an over-current, is brought back.
+- A controller that halts is recovered; one that stops answering is closed off safely.
 
-None of this acts while no fault is reported. A fault need not mean an unhealthy controller: a healthy one reports a device's missing handshake, a CRC failure or a timeout as a transaction error.
+Each is tried a few times at most, then the driver stops and holds the port or the controller until the device is unplugged or the controller is restarted. None of it acts unless a fault is reported. `XhciTolerance` set to `0` turns it off. `XhciIntervalCap` and `XhciAvgTrbEsit` are two related settings for AMD controllers.
 
-`XhciTolerance` set to `0` turns all of it off but the last two entries, which apply at every value, as do three rules on a controller latched failed (its recoveries refused or failed three times in a row): once it shows it has halted, the transfers it holds are completed and its devices removed; a resume from standby no longer brings it back, only a disable and enable or a restart does (at `0` a change from `2.1.1.0`); and its state is not saved or restored for standby. `XHCISNAP`'s report counts each of them; at `0` it still counts the faults themselves and what the rules that apply at every value did, but the counters of the behaviours switched off stay at `0`.
-
-Two values concern AMD controllers. `XhciIntervalCap` polls an interrupt endpoint that asks for more than 32 ms every 32 ms, as Linux does on some AMD controllers; this driver does it on every AMD controller (PCI vendor `1022`), as the AM5 and X570 ones are not on Linux's list. `XhciAvgTrbEsit` set to `1` changes one figure the controller is told for each interrupt endpoint, as Linux does; it is off by default and exists so a machine that misbehaves can be compared both ways.
-
-If a USB device stops working on your machine, a report with two `XHCISNAP` captures (one while it works, one after it stops) and the controller's id from `XHCIQUAL` is the most useful thing to send. The [release notes](docs/using/release-notes.md), "Controller faults: what the driver does about them", have the details.
+If a USB device stops working on your machine, send two `XHCISNAP` captures (one while it works, one after it stops) and the controller's id from `XHCIQUAL`. The [release notes](docs/using/release-notes.md), "Controller faults: what the driver does about them", and the package's `readme.txt` have the details, including the exceptions.
 
 ### The 1.2.0.0 virtual-hub values
 
