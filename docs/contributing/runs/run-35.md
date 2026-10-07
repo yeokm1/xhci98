@@ -926,8 +926,12 @@ a stick was pulled from that connector - a connect no longer than the pins'
 contact, left until that connector's next connect. Then 5 hot-plugs, the
 SuperSpeed devices found again each time (owner). The owner set the E460's
 campaign at those 5 cold boots and 5 hot-plugs (2026-10-07, in place of
-the roadmap's 10 and 10): the E460's clauses passed. The P14s
-Gen 1, the B490 and value 2 on the B490 are the owner's still.
+the roadmap's 10 and 10): the E460's clauses passed. The ThinkPad P14s Gen
+1 works under `2.2.0.0`, unchanged, and the Lenovo B490 at
+`XhciIntelPortSwitch` 1 works, unchanged (owner, 2026-10-07). Not read:
+value 2 on the B490 (owner: waived), the HP EliteBook 850 G5 and the AM5
+tester's board (optional, no reading offered). 35-E is read; Phase 35
+closes on it.
 
 ## Review
 
