@@ -3451,12 +3451,6 @@ May be addressed in a later release:
     hub ports are never suspended to save power. A suspend or resume a hub
     reports is handled.
 
-  * USB STORAGE ON WINDOWS 98 IS SLOWER THAN THE DRIVE. An observation, not
-    a defect found: Windows 98 sends one command at a time. On a ThinkPad
-    P14s Gen 1 with an MSSU10 drive at 64 KB, about 208 MB/s on Windows 98
-    against 277 MB/s on Windows 11 at the same queue depth of one. This may
-    be looked into in a later release.
-
   * WINDOWS ME: A UAS DRIVE AS THE FIRST USB STORAGE DEVICE SHOWS CODE 2.
     ME has not yet copied its own USBNTMAP.SYS and USBMPHLP.PDR, which it
     installs only when its first ordinary USB stick is plugged in. Plug in

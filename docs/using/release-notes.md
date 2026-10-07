@@ -1240,11 +1240,6 @@ or says it was found by reading the code.
 - **Windows 98 shows no driver version on the Driver tab**, only the file
   date; the four-part version is under Driver File Details, which also lists
   `xhci98.tmp`, a leftover of the install's temporary copy (cosmetic).
-- **USB storage on Windows 98 is slower than the drive.** An observation,
-  not a defect found: Windows 98 sends one command at a time. On the P14s
-  with the MSSU10 at 64 KB, about 208 MB/s on Windows 98 against 277 MB/s
-  on Windows 11 at the same queue depth of one. This may be looked into in a
-  later release.
 - **Windows ME: do not unplug a device while Windows is installing it.**
   ME's own device manager stops responding; it does the same on Microsoft's
   own USB stack.
