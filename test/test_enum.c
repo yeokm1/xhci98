@@ -1012,49 +1012,6 @@ static void test_abandoned(void)
     CHECK_EQ(a.Kind, XHCI_ENUM_ACT_NONE, "and asks nothing");
 }
 
-/* Task 36.1: the busy engine's wait - slices to the budget, then refused. */
-static void test_busy_wait(void)
-{
-    ULONG waited;
-    ULONG slice;
-    ULONG slices;
-
-    CHECK_EQ(XhciEnumBusyWait(0, 5000, 10), 10, "the first slice");
-    CHECK_EQ(XhciEnumBusyWait(4995, 5000, 10), 5, "held to the budget left");
-    CHECK_EQ(XhciEnumBusyWait(5000, 5000, 10), 0, "spent: refused");
-    CHECK_EQ(XhciEnumBusyWait(6000, 5000, 10), 0, "past it: refused");
-    CHECK_EQ(XhciEnumBusyWait(0, 0, 10), 0, "no budget: refused at once");
-    CHECK_EQ(XhciEnumBusyWait(0, 5000, 0), 0, "a zero slice waits nothing");
-    CHECK_EQ(XhciEnumBusyWait(0, 5000, 9000), 5000, "a slice past the budget");
-
-    /* Every slice the bus would take, summed: exactly the budget, and the
-     * number of resubmits it allows bounded. */
-    waited = 0;
-    slices = 0;
-    for (;;) {
-        slice = XhciEnumBusyWait(waited, 5000, XHCI_ENUM_BUSY_SLICE_MS);
-        if (slice == 0) {
-            break;
-        }
-        waited += slice;
-        slices++;
-    }
-    CHECK_EQ(waited, 5000, "the slices sum to the budget");
-    CHECK_EQ(slices, 5000 / XHCI_ENUM_BUSY_SLICE_MS, "and are bounded");
-    waited = 0;
-    slices = 0;
-    for (;;) {
-        slice = XhciEnumBusyWait(waited, 25, 10);
-        if (slice == 0) {
-            break;
-        }
-        waited += slice;
-        slices++;
-    }
-    CHECK_EQ(waited, 25, "a budget not a multiple: summed exactly");
-    CHECK_EQ(slices, 3, "10, 10, then 5");
-}
-
 int main(void)
 {
     test_clean_paths();
@@ -1073,7 +1030,6 @@ int main(void)
     test_settle();
     test_hub_let_go();
     test_notes();
-    test_busy_wait();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

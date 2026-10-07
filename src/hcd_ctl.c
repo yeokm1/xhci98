@@ -565,9 +565,8 @@ static BOOLEAN NTAPI hcdIsr(PKINTERRUPT Interrupt, PVOID Context)
         return FALSE;
     }
 #if defined(XHCI_FLAVOUR_QEMU)
-    /* 35-T.9's lost interrupt, and 36.3's start hold: acknowledged as
-     * ever, the drain not queued. */
-    if (HcdInjIsrDrop(hc) || HcdInjStartHeld(hc)) {
+    /* 35-T.9's lost interrupt: acknowledged as ever, the drain not queued. */
+    if (HcdInjIsrDrop(hc)) {
         return TRUE;
     }
 #endif
@@ -884,24 +883,6 @@ static VOID hcdTerminalRelease(PHCD_CONTROLLER hc)
 }
 
 /*
- * The event drain queued through hcdIsr's admission, for a path that knows
- * events may stand with no interrupt to come: counted before the insertion,
- * rolled back on a refusal, nothing once the DPC is closed (the stop ends
- * the thread before hcdRelease closes it). A drain already running on
- * another processor serializes on the controller lock and finds the ring
- * empty. Returns whether it was queued. IRQL: <= DISPATCH_LEVEL.
- */
-ULONG HcdQueueDrain(PHCD_CONTROLLER hc)
-{
-    (VOID)InterlockedIncrement(&hc->DpcsInFlight);
-    if (hc->DpcClosed || !KeInsertQueueDpc(&hc->IsrDpc, NULL, NULL)) {
-        (VOID)InterlockedDecrement(&hc->DpcsInFlight);
-        return 0;
-    }
-    return 1;
-}
-
-/*
  * The lost-interrupt backstop (35-T.1, design record 17 section 4.1): a
  * step of its own after hcdRecover, under the power gate as that is, admitted
  * only on a good, initialized, unfailed controller in D0 with the DPC open -
@@ -924,11 +905,6 @@ static VOID hcdBackstop(PHCD_CONTROLLER hc)
 
     ext = &hc->Hc;
     queue = 0;
-#if defined(XHCI_FLAVOUR_QEMU)
-    if (HcdInjStartHeld(hc)) {
-        return;
-    }
-#endif
     HcdPowerGateEnter(hc);
     XhciControllerLockAcquire(ext, &oldIrql);
     admitted = (ext->HcInfoStatus == XHCI_HC_OK &&
@@ -944,7 +920,16 @@ static VOID hcdBackstop(PHCD_CONTROLLER hc)
                             ext->DpcCount, hc->TolStartGen, HcdTolNow(hc));
     XhciControllerLockRelease(ext, oldIrql);
     HcdPowerGateLeave(hc);
-    if (!queue || !HcdQueueDrain(hc)) {
+    if (!queue) {
+        return;
+    }
+    /* hcdIsr's admission: counted before the insertion, rolled back on a
+     * refusal, nothing once the DPC is closed (the stop ends this thread
+     * before hcdRelease closes it). A drain already running on another
+     * processor serializes on the lock and finds the ring empty. */
+    (VOID)InterlockedIncrement(&hc->DpcsInFlight);
+    if (hc->DpcClosed || !KeInsertQueueDpc(&hc->IsrDpc, NULL, NULL)) {
+        (VOID)InterlockedDecrement(&hc->DpcsInFlight);
         return;
     }
     XhciControllerLockAcquire(ext, &oldIrql);
@@ -1457,18 +1442,6 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     KeRaiseIrql(DISPATCH_LEVEL, &raised);
     XhciEnableInterrupts(ext);
     KeLowerIrql(raised);
-    /* Task 36.1 (issue 12, Finding 1): the No Op self-test completed while
-     * the interrupter was masked, and the E7250 raised no interrupt for it
-     * once unmasked; its event then held the command engine busy until the
-     * backstop's 100 ms, and the first enumeration's Enable Slot was
-     * refused. The drain retires anything posted while masked now. */
-#if defined(XHCI_FLAVOUR_QEMU)
-    if (!HcdInjStartHeld(hc) && HcdQueueDrain(hc)) {
-#else
-    if (HcdQueueDrain(hc)) {
-#endif
-        hc->Counters.StartDrainsQueued++;
-    }
     XhciLogNote(ext, "imod.interval", ext->ImodInterval);
     XhciLogNote(ext, "imod.readback", ext->ImodReadback);
     XhciLogNoteAddress(ext, "start.ok", (ULONG)ext->ResourceBase);

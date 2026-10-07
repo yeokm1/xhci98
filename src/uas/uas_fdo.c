@@ -15,19 +15,13 @@
  * companions the device is at High Speed (or below) and runs streamless.
  * The engine is started, REPORT LUNS asked of LUN 0 (one LUN if the device
  * cannot answer), INQUIRY asked of each LUN, and a PDO made per LUN whose
- * peripheral qualifier says one is there. Every START, STOP and port reset
- * ends with a report to the bus (UasReport, task 36.2), which the snapshot
- * carries: how far START got and what REPORT LUNS and INQUIRY answered.
+ * peripheral qualifier says one is there.
  *
  * IRQL: PASSIVE_LEVEL throughout (PnP and power IRPs; this driver's objects
  * are DO_POWER_PAGABLE). The completion routine at <= DISPATCH_LEVEL.
  */
 
 #include "uas.h"
-
-static VOID uasReportPut(PUAS_FDO fdo, ULONG first, const ULONG *words,
-                         ULONG count);
-static VOID uasReportSet(PUAS_FDO fdo, ULONG at, ULONG value);
 
 static NTSTATUS uasSignal(PDEVICE_OBJECT device, PIRP irp, PVOID context)
 {
@@ -230,7 +224,7 @@ static ULONG uasStreamsWanted(PUAS_FDO fdo)
 
 /* REPORT LUNS on LUN 0, retried past a unit attention; LUN 0 alone when
  * the device cannot answer. */
-static ULONG uasReportLuns(PUAS_FDO fdo, PUCHAR luns, PULONG reported)
+static ULONG uasReportLuns(PUAS_FDO fdo, PUCHAR luns)
 {
     UCHAR cdb[12];
     PUCHAR buf;
@@ -238,14 +232,9 @@ static ULONG uasReportLuns(PUAS_FDO fdo, PUCHAR luns, PULONG reported)
     ULONG got;
     ULONG n;
     ULONG tries;
-    ULONG result;
-    ULONG sense;
-    ULONG words[3];
     UCHAR scsi;
 
     n = 0;
-    result = 0;
-    sense = 0;
     length = 8 + 8 * UAS_MAX_LUNS;
     buf = (PUCHAR)UasAlloc(length);
     if (buf != NULL) {
@@ -254,21 +243,13 @@ static ULONG uasReportLuns(PUAS_FDO fdo, PUCHAR luns, PULONG reported)
         cdb[9] = (UCHAR)length;
         for (tries = 0; tries < 3 && n == 0; tries++) {
             if (NT_SUCCESS(UasInternalCommand(fdo, 0, cdb, 12, buf, length,
-                                              &got, &scsi, &result, &sense))) {
+                                              &got, &scsi))) {
                 n = UasParseReportLuns(buf, got, luns, UAS_MAX_LUNS);
-                tries++;
                 break;
             }
         }
         UasFree(buf);
-    } else {
-        tries = 0;
     }
-    words[0] = (result & 0xFFFFUL) | ((tries & 0xFFUL) << 16);
-    words[1] = sense;
-    words[2] = n & 0xFFUL;
-    *reported = words[2];
-    uasReportPut(fdo, XHCI98_UAS_RLUNS, words, 3);
     if (n == 0) {
         luns[0] = 0;
         n = 1;
@@ -282,9 +263,6 @@ static NTSTATUS uasInquiry(PUAS_FDO fdo, ULONG lun, PUCHAR inquiry)
     PUCHAR buf;
     ULONG got;
     ULONG tries;
-    ULONG result;
-    ULONG sense;
-    ULONG words[3];
     UCHAR scsi;
     NTSTATUS status;
 
@@ -296,26 +274,16 @@ static NTSTATUS uasInquiry(PUAS_FDO fdo, ULONG lun, PUCHAR inquiry)
     cdb[0] = 0x12;
     cdb[4] = UAS_INQUIRY_LENGTH;
     status = STATUS_UNSUCCESSFUL;
-    got = 0;
-    result = 0;
-    sense = 0;
     for (tries = 0; tries < 3; tries++) {
         UasZero(buf, UAS_INQUIRY_LENGTH);
         status = UasInternalCommand(fdo, lun, cdb, 6, buf,
-                                    UAS_INQUIRY_LENGTH, &got, &scsi,
-                                    &result, &sense);
+                                    UAS_INQUIRY_LENGTH, &got, &scsi);
         if (NT_SUCCESS(status) && got >= 5) {
             UasCopy(inquiry, buf, UAS_INQUIRY_LENGTH);
-            tries++;
             break;
         }
         status = STATUS_UNSUCCESSFUL;
     }
-    words[0] = (result & 0xFFFFUL) | ((tries & 0xFFUL) << 16) |
-               ((lun & 0xFFUL) << 24);
-    words[1] = sense;
-    words[2] = (ULONG)buf[0] | ((got & 0xFFFFUL) << 8);
-    uasReportPut(fdo, XHCI98_UAS_INQ, words, 3);
     UasFree(buf);
     return status;
 }
@@ -331,20 +299,11 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
     ULONG wanted;
     ULONG i;
     ULONG j;
-    ULONG info;
-    ULONG streams;
-    ULONG tally;
-    ULONG zero[XHCI98_UAS_SEQUENCE];
     BOOLEAN known;
     PUAS_PDO pdo;
     UCHAR serialIndex;
     NTSTATUS status;
 
-    /* The report starts afresh, its sequence (the last word) aside. */
-    for (i = 0; i < XHCI98_UAS_SEQUENCE; i++) {
-        zero[i] = 0;
-    }
-    uasReportPut(fdo, 0, zero, XHCI98_UAS_SEQUENCE);
     desc = (PUCHAR)UasAlloc(18);
     if (desc == NULL) {
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -356,7 +315,6 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
     if (!NT_SUCCESS(status)) {
         return status;
     }
-    uasReportSet(fdo, XHCI98_UAS_STAGE, XHCI98_UAS_STAGE_DESCRIPTOR);
 
     if (fdo->Config == NULL) {
         desc = (PUCHAR)UasAlloc(9);
@@ -392,30 +350,15 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
         }
     }
 
-    info = (fdo->Info.SuperSpeed ? XHCI98_UAS_INFO_SUPERSPEED : 0UL) |
-           ((fdo->Info.InterfaceNumber & 0xFFUL) << 8) |
-           ((fdo->Info.AlternateSetting & 0xFFUL) << 16) |
-           ((fdo->Info.EndpointCount & 0xFFUL) << 24);
-    tally = 0;
-    for (i = 0; i < UAS_PIPES; i++) {
-        tally |= (fdo->Info.EndpointAddress[i] & 0xFFUL) << (8 * i);
-    }
-    uasReportSet(fdo, XHCI98_UAS_INFO, info);
-    uasReportSet(fdo, XHCI98_UAS_PIPES, tally);
-    uasReportSet(fdo, XHCI98_UAS_STAGE, XHCI98_UAS_STAGE_CONFIG);
-
     status = uasSelect(fdo);
     if (!NT_SUCCESS(status)) {
         return status;
     }
-    uasReportSet(fdo, XHCI98_UAS_STAGE, XHCI98_UAS_STAGE_SELECT);
     uasReadSerial(fdo, serialIndex);
 
     fdo->Streamed = FALSE;
     if (fdo->Info.SuperSpeed) {
         wanted = uasStreamsWanted(fdo);
-        streams = wanted & 0xFFFFUL;
-        uasReportSet(fdo, XHCI98_UAS_STREAMS, streams);
         if (wanted < 2) {
             return STATUS_DEVICE_CONFIGURATION_ERROR;
         }
@@ -426,16 +369,12 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
         if (!NT_SUCCESS(status)) {
             return status;
         }
-        streams |= fdo->Streams.Granted << 16;
-        uasReportSet(fdo, XHCI98_UAS_STREAMS, streams);
         if (fdo->Streams.Granted < 2) {
             UasStreamsClose(&fdo->Streams);
             return STATUS_DEVICE_CONFIGURATION_ERROR;
         }
         fdo->Streamed = TRUE;
-        uasReportSet(fdo, XHCI98_UAS_INFO, info | XHCI98_UAS_INFO_STREAMED);
     }
-    uasReportSet(fdo, XHCI98_UAS_STAGE, XHCI98_UAS_STAGE_STREAMS);
 
     if (fdo->Slots == NULL) {
         status = UasEngineInit(fdo);
@@ -445,16 +384,10 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
         }
     }
     UasEngineStart(fdo);
-    uasReportSet(fdo, XHCI98_UAS_STAGE, XHCI98_UAS_STAGE_ENGINE);
 
-    count = uasReportLuns(fdo, luns, &tally);
-    uasReportSet(fdo, XHCI98_UAS_STAGE, XHCI98_UAS_STAGE_LUNS);
+    count = uasReportLuns(fdo, luns);
     for (i = 0; i < count; i++) {
-        tally += 1UL << 8;
-        uasReportSet(fdo, XHCI98_UAS_LUNS, tally);
         if (!NT_SUCCESS(uasInquiry(fdo, luns[i], inquiry))) {
-            tally += 1UL << 24;
-            uasReportSet(fdo, XHCI98_UAS_LUNS, tally);
             continue;
         }
         /* Peripheral qualifier 0: a unit is attached at this LUN. */
@@ -468,78 +401,14 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
                 fdo->Luns[j]->Present = TRUE;
             }
         }
-        if (known) {
-            tally += 1UL << 16;
-            uasReportSet(fdo, XHCI98_UAS_LUNS, tally);
-        }
         if (known || fdo->LunCount >= UAS_MAX_LUNS) {
             continue;
         }
         if (NT_SUCCESS(UasPdoCreate(fdo, luns[i], inquiry, &pdo))) {
             fdo->Luns[fdo->LunCount++] = pdo;
-            tally += 1UL << 16;
-            uasReportSet(fdo, XHCI98_UAS_LUNS, tally);
         }
     }
-    uasReportSet(fdo, XHCI98_UAS_STAGE, XHCI98_UAS_STAGE_DONE);
     return STATUS_SUCCESS;
-}
-
-/*
- * Task 36.2 (issue 12): the report the bus keeps for the snapshot
- * (xhci98_report.h). Sent and forgotten: a bus that is not xhci98.sys
- * refuses it and nothing changes. PASSIVE_LEVEL (the start, the stop, the
- * recovery worker).
- */
-VOID UasReport(PUAS_FDO fdo, ULONG reason)
-{
-    XHCI98_CLIENT_REPORT rq;
-    KIRQL irql;
-    ULONG i;
-
-    UasZero(&rq, sizeof(rq));
-    rq.Signature = XHCI98_REPORT_SIGNATURE;
-    rq.Version = XHCI98_REPORT_VERSION;
-    rq.Size = sizeof(rq);
-    rq.Kind = XHCI98_REPORT_KIND_UAS;
-    (VOID)KeWaitForSingleObject(&fdo->ReportGate, Executive, KernelMode,
-                                FALSE, NULL);
-    KeAcquireSpinLock(&fdo->Lock, &irql);
-    fdo->Report[XHCI98_UAS_SEQUENCE]++;
-    fdo->Report[XHCI98_UAS_REASON] = reason;
-    if (fdo->Dead) {
-        fdo->Report[XHCI98_UAS_INFO] |= XHCI98_UAS_INFO_DEAD;
-    }
-    for (i = 0; i < 8; i++) {
-        fdo->Report[XHCI98_UAS_COUNTERS + i] = fdo->Counters[i];
-    }
-    for (i = 0; i < XHCI98_REPORT_WORDS; i++) {
-        rq.Words[i] = fdo->Report[i];
-    }
-    KeReleaseSpinLock(&fdo->Lock, irql);
-    (VOID)uasInternalIoctl(fdo, IOCTL_XHCI98_CLIENT_REPORT, &rq);
-    (VOID)KeSetEvent(&fdo->ReportGate, IO_NO_INCREMENT, FALSE);
-}
-
-/* A run of report words written together under Lock, so a report the
- * recovery worker copies never mixes one result with another's sense.
- * PASSIVE_LEVEL (START). */
-static VOID uasReportPut(PUAS_FDO fdo, ULONG first, const ULONG *words,
-                         ULONG count)
-{
-    KIRQL irql;
-    ULONG i;
-
-    KeAcquireSpinLock(&fdo->Lock, &irql);
-    for (i = 0; i < count; i++) {
-        fdo->Report[first + i] = words[i];
-    }
-    KeReleaseSpinLock(&fdo->Lock, irql);
-}
-
-static VOID uasReportSet(PUAS_FDO fdo, ULONG at, ULONG value)
-{
-    uasReportPut(fdo, at, &value, 1);
 }
 
 /* The engine stopped with every request ended, the streams closed. */
@@ -637,8 +506,6 @@ NTSTATUS UasFdoPnp(PUAS_FDO fdo, PIRP irp)
             if (!NT_SUCCESS(status)) {
                 uasFdoQuiesce(fdo, SRB_STATUS_NO_DEVICE);
             }
-            uasReportSet(fdo, XHCI98_UAS_STATUS, (ULONG)status);
-            UasReport(fdo, XHCI98_UAS_REASON_START);
         }
         return UasCompleteIrp(irp, status, 0);
 
@@ -669,7 +536,6 @@ NTSTATUS UasFdoPnp(PUAS_FDO fdo, PIRP irp)
 
     case IRP_MN_STOP_DEVICE:
         uasFdoQuiesce(fdo, SRB_STATUS_BUS_RESET);
-        UasReport(fdo, XHCI98_UAS_REASON_STOP);
         irp->IoStatus.Status = STATUS_SUCCESS;
         break;
 

@@ -90,13 +90,6 @@
 #if defined(XHCI_FLAVOUR_QEMU)
 
 #define HCD_VALUE_QEMU_INJECT L"XhciQemuInject"
-/* Task 36.3: milliseconds after a start for which the start's drain, the
- * ISR's drains and the backstop are held back, so the No Op self-test's
- * completion keeps the command engine busy into the first enumeration, as
- * the E7250's lost interrupt did (issue 12). Read at each start, held to
- * HCD_QEMU_START_HOLD_MAX; absent or 0 holds nothing. */
-#define HCD_VALUE_QEMU_START_HOLD L"XhciQemuStartHold"
-#define HCD_QEMU_START_HOLD_MAX   5000UL
 
 /* The trigger is read once per ten tolerance ticks, about a second. */
 #define HCD_INJ_READ_TICKS 10UL
@@ -136,28 +129,6 @@ ULONG HcdInjIsrDrop(PHCD_CONTROLLER hc)
     }
     (VOID)InterlockedIncrement((PLONG)&hc->InjIrqDropped);
     return 1;
-}
-
-/* Task 36.3: whether XhciQemuStartHold still holds this start's drains
- * back. Reads only. IRQL: any. */
-ULONG HcdInjStartHeld(PHCD_CONTROLLER hc)
-{
-    ULONG ticks;
-
-    ticks = (ULONG)hc->InjStartHoldTicks;
-    return ticks != 0 && HcdTolNow(hc) < ticks;
-}
-
-/* The hold has done its work once the bus's command path met the busy
- * engine: ended before that path's drain, so the resubmitted command's
- * own completion interrupt is drained as ever (Codex review of Phase 36,
- * round 2). IRQL: <= DISPATCH_LEVEL. */
-VOID HcdInjStartRelease(PHCD_CONTROLLER hc)
-{
-    if (hc->InjStartHoldTicks != 0) {
-        (VOID)InterlockedExchange((PLONG)&hc->InjStartHoldTicks, 0);
-        XhciLogNote(&hc->Hc, "qemu.inj.starthold.released", 1);
-    }
 }
 
 /* IRQL: any. Above DISPATCH_LEVEL nothing is answered: InjLock cannot be
@@ -325,11 +296,15 @@ ULONG HcdInjEpState(PHCD_CONTROLLER hc, ULONG slot, ULONG dci, ULONG state)
     return answer;
 }
 
-/* The drain queued through the ISR's admission (hcd_ctl.c).
- * IRQL: <= DISPATCH_LEVEL. */
+/* The drain queued through the ISR's admission, as the backstop queues it
+ * (hcd_ctl.c): counted before the insertion, rolled back on a refusal,
+ * nothing once the DPC is closed. IRQL: <= DISPATCH_LEVEL. */
 static VOID hcdInjQueueDrain(PHCD_CONTROLLER hc)
 {
-    (VOID)HcdQueueDrain(hc);
+    (VOID)InterlockedIncrement((PLONG)&hc->DpcsInFlight);
+    if (hc->DpcClosed || !KeInsertQueueDpc(&hc->IsrDpc, NULL, NULL)) {
+        (VOID)InterlockedDecrement((PLONG)&hc->DpcsInFlight);
+    }
 }
 
 /*
@@ -444,18 +419,6 @@ VOID HcdInjStart(PHCD_CONTROLLER hc)
     XhciInjTriggerStart(&hc->InjTrigger, found, value);
     hc->InjReadAt = HcdTolNow(hc);
     XhciLogNote(&hc->Hc, "qemu.inj.latched", found ? value : 0xFFFFFFFFUL);
-    value = 0;
-    if (!NT_SUCCESS(HcdCtlQemuReadDword(hc, HCD_VALUE_QEMU_START_HOLD,
-                                        &value))) {
-        value = 0;
-    }
-    if (value > HCD_QEMU_START_HOLD_MAX) {
-        value = HCD_QEMU_START_HOLD_MAX;
-    }
-    (VOID)InterlockedExchange((PLONG)&hc->InjStartHoldTicks,
-                              (LONG)((value + XHCI_TOL_TICK_MS - 1) /
-                                     XHCI_TOL_TICK_MS));
-    XhciLogNote(&hc->Hc, "qemu.inj.starthold", value);
 }
 
 /*

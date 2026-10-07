@@ -85,7 +85,6 @@ static NTSTATUS uasAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
     KeInitializeEvent(&fdo->TimerDone, NotificationEvent, TRUE);
     fdo->IoCount = 1;
     KeInitializeEvent(&fdo->IoIdle, NotificationEvent, FALSE);
-    KeInitializeEvent(&fdo->ReportGate, SynchronizationEvent, TRUE);
     fdo->Lower = IoAttachDeviceToDeviceStack(self, pdo);
     if (fdo->Lower == NULL) {
         IoDeleteDevice(self);

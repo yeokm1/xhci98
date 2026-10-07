@@ -586,14 +586,3 @@ ULONG XhciEnumNoteQuiet(ULONG port)
 {
     return ((port & 0xFFUL) << 24) | (XHCI_ENUM_NOTE_BUDGET & 0xFFUL);
 }
-
-ULONG XhciEnumBusyWait(ULONG waitedMs, ULONG budgetMs, ULONG sliceMs)
-{
-    if (waitedMs >= budgetMs) {
-        return 0;
-    }
-    if (sliceMs > budgetMs - waitedMs) {
-        return budgetMs - waitedMs;
-    }
-    return sliceMs;
-}

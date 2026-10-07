@@ -34,8 +34,7 @@ ULONG XhciSnapHcdWords(ULONG ports)
     }
     return XHCI_SNAPSHOT_HCD_HEAD_WORDS +
            ports * XHCI_SNAPSHOT_HCD_PORT_WORDS +
-           XHCI_SNAPSHOT_HCD_COUNTER_WORDS +
-           XHCI_SNAPSHOT_HCD_CLIENTS_KEPT * XHCI_SNAPSHOT_HCD_CLIENT_WORDS;
+           XHCI_SNAPSHOT_HCD_COUNTER_WORDS;
 }
 
 ULONG XhciSnapHcdHead(ULONG ports, ULONG word)
@@ -83,14 +82,6 @@ ULONG XhciSnapHcdHead(ULONG ports, ULONG word)
         return XHCI_TOL_HUB_LOCS;
     case XHCI_SNAPSHOT_HCD_TOL_HUB_PORTS:
         return XHCI_TOL_HUB_LOC_PORTS;
-    case XHCI_SNAPSHOT_HCD_CLIENTS:
-        return XHCI_SNAPSHOT_HCD_CLIENTS_KEPT;
-    case XHCI_SNAPSHOT_HCD_CLIENT_BYTES:
-        return XHCI_SNAPSHOT_HCD_CLIENT_WORDS * 4UL;
-    case XHCI_SNAPSHOT_HCD_CLIENTS_AT:
-        return (XHCI_SNAPSHOT_HCD_HEAD_WORDS +
-                ports * XHCI_SNAPSHOT_HCD_PORT_WORDS +
-                XHCI_SNAPSHOT_HCD_COUNTER_WORDS) * 4UL;
     default:
         /* XHCI_SNAPSHOT_HCD_TERMINAL is a reading, not layout: the door
          * fills it (hcd_door.c). */
@@ -124,67 +115,7 @@ ULONG XhciSnapHcdLocate(ULONG ports, ULONG index, PULONG record,
         *word = index;
         return XHCI_SNAPSHOT_HCD_IN_COUNTERS;
     }
-    index -= XHCI_SNAPSHOT_HCD_COUNTER_WORDS;
-    if (index < XHCI_SNAPSHOT_HCD_CLIENTS_KEPT *
-                    XHCI_SNAPSHOT_HCD_CLIENT_WORDS) {
-        *record = index / XHCI_SNAPSHOT_HCD_CLIENT_WORDS;
-        *word = index % XHCI_SNAPSHOT_HCD_CLIENT_WORDS;
-        return XHCI_SNAPSHOT_HCD_IN_CLIENTS;
-    }
     return XHCI_SNAPSHOT_HCD_PAST_END;
-}
-
-ULONG XhciSnapClientPick(const ULONG *records, ULONG kept, ULONG slot,
-                         ULONG place)
-{
-    const ULONG *r;
-    ULONG empty;
-    ULONG oldest;
-    ULONG i;
-
-    empty = kept;
-    oldest = 0;
-    for (i = 0; i < kept; i++) {
-        r = records + i * XHCI_SNAPSHOT_HCD_CLIENT_WORDS;
-        if (r[XHCI_SNAPSHOT_HCD_CLIENT_STAMP] == 0) {
-            if (empty == kept) {
-                empty = i;
-            }
-            continue;
-        }
-        if (r[XHCI_SNAPSHOT_HCD_CLIENT_SLOT] == slot &&
-            r[XHCI_SNAPSHOT_HCD_CLIENT_PLACE] == place) {
-            return i;
-        }
-        if (r[XHCI_SNAPSHOT_HCD_CLIENT_STAMP] <
-            records[oldest * XHCI_SNAPSHOT_HCD_CLIENT_WORDS +
-                    XHCI_SNAPSHOT_HCD_CLIENT_STAMP] ||
-            records[oldest * XHCI_SNAPSHOT_HCD_CLIENT_WORDS +
-                    XHCI_SNAPSHOT_HCD_CLIENT_STAMP] == 0) {
-            oldest = i;
-        }
-    }
-    return (empty < kept) ? empty : oldest;
-}
-
-VOID XhciSnapClientStore(PULONG record, ULONG stamp, ULONG slot, ULONG place,
-                         ULONG kind, const ULONG *words, ULONG count)
-{
-    ULONG i;
-
-    if (count > XHCI_SNAPSHOT_HCD_CLIENT_WORDS -
-                    XHCI_SNAPSHOT_HCD_CLIENT_FIRST) {
-        count = XHCI_SNAPSHOT_HCD_CLIENT_WORDS - XHCI_SNAPSHOT_HCD_CLIENT_FIRST;
-    }
-    record[XHCI_SNAPSHOT_HCD_CLIENT_STAMP] = (stamp != 0) ? stamp : 1UL;
-    record[XHCI_SNAPSHOT_HCD_CLIENT_SLOT] = slot;
-    record[XHCI_SNAPSHOT_HCD_CLIENT_PLACE] = place;
-    record[XHCI_SNAPSHOT_HCD_CLIENT_KIND] = kind;
-    for (i = XHCI_SNAPSHOT_HCD_CLIENT_FIRST;
-         i < XHCI_SNAPSHOT_HCD_CLIENT_WORDS; i++) {
-        record[i] = (i - XHCI_SNAPSHOT_HCD_CLIENT_FIRST < count)
-                        ? words[i - XHCI_SNAPSHOT_HCD_CLIENT_FIRST] : 0UL;
-    }
 }
 
 ULONG XhciSnapHcdFlags(ULONG settleDeferred, ULONG linkRecovering,

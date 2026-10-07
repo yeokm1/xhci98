@@ -358,7 +358,7 @@ static const unsigned long snap_guid[4] = {
 #define SNAP_HCD_VERSION            1UL
 #define SNAP_HCD_HEAD_WORDS         8UL
 #define SNAP_HCD_PORT_WORDS         16UL
-#define SNAP_HCD_COUNTER_WORDS      69UL
+#define SNAP_HCD_COUNTER_WORDS      63UL
 #define SNAP_HCD_MAX_BYTES          32768UL
 /*
  * Controller tolerance (2.2.0.0 on, task 35-T.8; design record 17 section
@@ -376,17 +376,6 @@ static const unsigned long snap_guid[4] = {
 #define SNAP_TOL_WINDOW_TICKS       13335UL /* XHCI_TOL_RECOVERY_WINDOW_TICKS,
                                              * held to it by test_snap     */
 #define SNAP_TOL_MAX_LOCS           1024UL  /* sanity bound on either count */
-/*
- * Class-driver reports (task 36.2, issue 12; src/xhci98_report.h): the
- * header grew three more words (version unchanged) placing the records the
- * bus keeps after the counters. A header shorter than that is an older
- * driver's, which keeps none. Each record is the bus's four words - stamp,
- * slot, root port and route, kind - then the client's own, decoded by kind.
- */
-#define SNAP_HCD_CLIENT_HEAD_WORDS  23UL
-#define SNAP_HCD_CLIENT_MIN_BYTES   128UL   /* four words and twenty-eight */
-#define SNAP_HCD_CLIENT_MAX         16UL
-#define SNAP_REPORT_KIND_UAS        0x31534155UL    /* 'UAS1' */
 
 /*
  * The verbosity ladder, as the driver's `XHCI_LOG_VERBOSITY_*` spells it. This
@@ -1851,156 +1840,8 @@ static const char *const hcd_counter_names[SNAP_HCD_COUNTER_WORDS] = {
     "HoldCompanionOthers", "HoldRequestsRefused", "HoldsDropped",
     "SsHubsStarted", "SsHubPairs", "SsHubDepthRefused", "SsHubWarmResets",
     "SsHubLinksGivenUp", "SsHubConfigErrors", "SsHubDevicesPlus",
-    "SsHubRateUnmatched",
-    "EnumCommandsBusy", "EnumCommandsBusyCleared", "EnumCommandsRefused",
-    "StartDrainsQueued", "ClientPortResets", "ClientReports"
+    "SsHubRateUnmatched"
 };
-
-/* A "result" word of a UAS report: SRB status, SCSI status, tries, LUN. */
-static void print_uas_result(const char *what, unsigned long r,
-                             unsigned long sense)
-{
-    comp("    %-12s SRB status 0x%02lX, SCSI status 0x%02lX, %lu tries",
-         what, r & 0xFFUL, (r >> 8) & 0xFFUL, (r >> 16) & 0xFFUL);
-    if (sense != 0) {
-        comp("; sense key 0x%lX ASC 0x%02lX ASCQ 0x%02lX (response 0x%02lX)",
-             sense & 0xFUL, (sense >> 8) & 0xFFUL, (sense >> 16) & 0xFFUL,
-             (sense >> 24) & 0xFFUL);
-    } else {
-        comp("; no sense");
-    }
-    comp("\n");
-}
-
-/* A transfer failure's "who" word: the kind, the pipe, the tag. */
-static void print_uas_failure(const char *what, unsigned long usbd,
-                              unsigned long who)
-{
-    static const char *const pipe_names[5] = {
-        "?", "command", "status", "data-in", "data-out"
-    };
-    unsigned long pipe;
-
-    pipe = (who >> 8) & 0xFFUL;
-    comp("    %-12s USBD status 0x%08lX on the %s pipe (endpoint by the "
-         "map above), tag %lu\n", what, usbd,
-         pipe < 5 ? pipe_names[pipe] : "?", (who >> 16) & 0xFFFFUL);
-}
-
-/* src/xhci98_report.h, XHCI98_UAS_*: words from the record's fifth. */
-static void print_uas_report(const unsigned char *w)
-{
-    static const char *const stage_names[8] = {
-        "none", "device descriptor read", "configuration parsed",
-        "UAS alternate selected", "streams open (or streamless)",
-        "engine started", "REPORT LUNS asked", "every LUN inquired"
-    };
-    static const char *const reason_names[4] = {
-        "?", "START", "port reset", "STOP"
-    };
-    static const char *const ctr_names[8] = {
-        "commands", "sense", "protocol errors", "timeouts", "aborts",
-        "LUN resets", "port resets", "busy"
-    };
-    unsigned long v;
-    unsigned long i;
-
-    v = get32(w, 0);
-    comp("    report %lu, sent at %s; START reached: %s; START status "
-         "0x%08lX\n", get32(w, 27 * 4),
-         get32(w, 26 * 4) < 4 ? reason_names[get32(w, 26 * 4)] : "?",
-         v < 8 ? stage_names[v] : "?", get32(w, 4));
-    v = get32(w, 2 * 4);
-    comp("    interface %lu alternate %lu, %lu endpoints;%s%s%s\n",
-         (v >> 8) & 0xFFUL, (v >> 16) & 0xFFUL, (v >> 24) & 0xFFUL,
-         (v & 1UL) != 0 ? " SuperSpeed" : " not SuperSpeed",
-         (v & 2UL) != 0 ? ", streamed" : ", streamless",
-         (v & 4UL) != 0 ? "; DEAD (a port reset failed)" : "");
-    v = get32(w, 3 * 4);
-    comp("    pipes by Pipe Usage: command 0x%02lX, status 0x%02lX, data-in "
-         "0x%02lX, data-out 0x%02lX\n", v & 0xFFUL, (v >> 8) & 0xFFUL,
-         (v >> 16) & 0xFFUL, (v >> 24) & 0xFFUL);
-    v = get32(w, 4 * 4);
-    comp("    streams wanted %lu, granted %lu\n", v & 0xFFFFUL, v >> 16);
-    print_uas_result("REPORT LUNS:", get32(w, 5 * 4), get32(w, 6 * 4));
-    v = get32(w, 7 * 4);
-    comp("    LUNs: %lu reported (0: none parsed, LUN 0 assumed), %lu "
-         "inquired, %lu found, %lu INQUIRY failed\n", v & 0xFFUL,
-         (v >> 8) & 0xFFUL, (v >> 16) & 0xFFUL, (v >> 24) & 0xFFUL);
-    v = get32(w, 8 * 4);
-    comp("    last INQUIRY of LUN %lu: byte 0 0x%02lX, %lu bytes back\n",
-         (v >> 24) & 0xFFUL, get32(w, 10 * 4) & 0xFFUL,
-         get32(w, 10 * 4) >> 8);
-    print_uas_result("INQUIRY:", v, get32(w, 9 * 4));
-    comp("    transfer failures: command %lu, status %lu, data %lu\n",
-         get32(w, 15 * 4), get32(w, 16 * 4), get32(w, 17 * 4));
-    if (get32(w, 12 * 4) != 0) {
-        print_uas_failure("first:", get32(w, 11 * 4), get32(w, 12 * 4));
-        print_uas_failure("latest:", get32(w, 13 * 4), get32(w, 14 * 4));
-    }
-    comp("    counters:");
-    for (i = 0; i < 8; i++) {
-        comp(" %s %lu%s", ctr_names[i], get32(w, (18 + i) * 4),
-             i < 7 ? "," : "\n");
-    }
-}
-
-/*
- * The class-driver reports after the counters (36.2), placed by the
- * header's words 20 to 22 when it is long enough to hold them. Each record
- * is checked whole against the bytes that arrived; an empty one (stamp 0)
- * is skipped.
- */
-static void print_hcd_clients(const unsigned char *image, unsigned long bytes,
-                              unsigned long headBytes)
-{
-    unsigned long clients;
-    unsigned long clientBytes;
-    unsigned long clientsAt;
-    unsigned long shown;
-    unsigned long i;
-    unsigned long place;
-    const unsigned char *r;
-
-    if (headBytes < SNAP_HCD_CLIENT_HEAD_WORDS * 4 ||
-        bytes < SNAP_HCD_CLIENT_HEAD_WORDS * 4) {
-        comp("\nclass-driver reports: none - this driver keeps none "
-             "(before 36.2).\n");
-        return;
-    }
-    clients = get32(image, 80);
-    clientBytes = get32(image, 84);
-    clientsAt = get32(image, 88);
-    if (clients > SNAP_HCD_CLIENT_MAX ||
-        clientBytes < SNAP_HCD_CLIENT_MIN_BYTES || (clientBytes & 3UL) != 0 ||
-        clientsAt > bytes ||
-        (clients != 0 && clients > (bytes - clientsAt) / clientBytes)) {
-        comp("\nclass-driver reports: %lu of %lu bytes at +%lu in %lu - not "
-             "a shape this build reads; not decoded.\n", clients, clientBytes,
-             clientsAt, bytes);
-        return;
-    }
-    comp("\nclass-driver reports kept by the bus (newest per device):\n");
-    shown = 0;
-    for (i = 0; i < clients; i++) {
-        r = image + clientsAt + i * clientBytes;
-        if (get32(r, 0) == 0) {
-            continue;
-        }
-        shown++;
-        place = get32(r, 8);
-        comp("  #%lu  slot %lu, root port %lu, route 0x%05lX, kind 0x%08lX",
-             get32(r, 0), get32(r, 4), place >> 24, place & 0xFFFFFUL,
-             get32(r, 12));
-        if (get32(r, 12) == SNAP_REPORT_KIND_UAS) {
-            comp(" (xhciuas)\n");
-            print_uas_report(r + 16);
-        } else {
-            comp(" (not a kind this build knows)\n");
-        }
-    }
-    comp("  (%lu of %lu records in use.)\n", shown, clients);
-}
 
 /*
  * The image's own header says where everything is; each figure is checked
@@ -2109,7 +1950,6 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
         shown++;
     }
     comp("  (%lu of %lu nonzero.)\n", shown, counters);
-    print_hcd_clients(image, bytes, headBytes);
 }
 
 /* ---- controller tolerance: the extension's Tol, placed by the HCD header */
@@ -2441,12 +2281,10 @@ static void print_tol(const unsigned char *hcd, unsigned long hcdBytes,
 
 /* `-selftest-hcd`: the HCD region's decode over a canned image, for
  * xhcisnap\selftest.cmd: 35.0's E460 port 13 Failed on the speed, a
- * working port 14, an empty port 1 left out, and two counters; then a
- * malformed image, a longer record, and 36.2's class-driver report. */
+ * working port 14, an empty port 1 left out, and two counters. */
 static int selftest_hcd(void)
 {
     static unsigned char image[32 + 3 * 64 + 63 * 4];
-    static unsigned char clients[92 + 64 + 69 * 4 + 4 * 128];
     unsigned long base;
 
     memset(image, 0, sizeof(image));
@@ -2513,51 +2351,6 @@ static int selftest_hcd(void)
     put32(image, base + 20, 4);
     put32(image, base + 64, 0xDEADBEEFUL);
     print_hcd(image, 32 + 2 * 80);
-
-    /* 36.2: issue 12's reader as the interim build would report it - a
-     * SuperSpeed UAS device on port 13 whose INQUIRY failed on a stalled
-     * status pipe, START succeeding with no LUN - and the new counters. */
-    memset(clients, 0, sizeof(clients));
-    put32(clients, 0, 1);
-    put32(clients, 4, 92);
-    put32(clients, 8, 1);
-    put32(clients, 12, 64);
-    put32(clients, 16, 92);
-    put32(clients, 20, 69);
-    put32(clients, 24, 92 + 64);
-    put32(clients, 28, 8);
-    put32(clients, 80, 4);
-    put32(clients, 84, 128);
-    put32(clients, 88, 92 + 64 + 69 * 4);
-    put32(clients, 92, 13);
-    put32(clients, 96, 10);
-    put32(clients, 92 + 64 + 63 * 4, 1);
-    put32(clients, 92 + 64 + 64 * 4, 1);
-    put32(clients, 92 + 64 + 67 * 4, 4);
-    put32(clients, 92 + 64 + 68 * 4, 2);
-    base = 92 + 64 + 69 * 4 + 128;
-    put32(clients, base + 0, 2);
-    put32(clients, base + 4, 1);
-    put32(clients, base + 8, 0x0D000000UL);
-    put32(clients, base + 12, SNAP_REPORT_KIND_UAS);
-    base += 16;
-    put32(clients, base + 0 * 4, 7);
-    put32(clients, base + 2 * 4, 0x04010003UL);
-    put32(clients, base + 3 * 4, 0x04838102UL);
-    put32(clients, base + 4 * 4, 0x00100010UL);
-    put32(clients, base + 5 * 4, 0x00030004UL);
-    put32(clients, base + 7 * 4, 0x01000100UL);
-    put32(clients, base + 8 * 4, 0x00030004UL);
-    put32(clients, base + 11 * 4, 0xC0000004UL);
-    put32(clients, base + 12 * 4, 0x00010201UL);
-    put32(clients, base + 13 * 4, 0xC0000004UL);
-    put32(clients, base + 14 * 4, 0x00010201UL);
-    put32(clients, base + 16 * 4, 4);
-    put32(clients, base + 18 * 4, 6);
-    put32(clients, base + 24 * 4, 2);
-    put32(clients, base + 26 * 4, 1);
-    put32(clients, base + 27 * 4, 3);
-    print_hcd(clients, sizeof(clients));
     return 0;
 }
 

@@ -959,6 +959,7 @@ typedef struct _HCD_CONTROLLER {
                                      * cancel, not by a record's release  */
     ULONG DevicesKept;              /* freed with URBs left: DMA not stopped */
     ULONG Ep0Resets;
+    ULONG EnumCommandsRefused;
     ULONG EnumCommandsTimedOut;
     ULONG EnumDisableFailures;
     ULONG EnumTransfersTimedOut;
@@ -1060,9 +1061,6 @@ typedef struct _HCD_CONTROLLER {
      * once the slot no longer names it), and InjOwnCmd across the layer's
      * own commands, which its command hook lets through. */
     ULONG QemuPsiE460;
-    /* Task 36.3: XhciQemuStartHold in tolerance ticks, latched at each
-     * start (HcdInjStart), 0 none; ended early by HcdInjStartRelease. */
-    volatile LONG InjStartHoldTicks;
     KSPIN_LOCK InjLock;
     XHCI_INJ_REGS InjRegs;
     XHCI_INJ_TRIGGER InjTrigger;
@@ -1118,11 +1116,6 @@ typedef struct _HCD_CONTROLLER {
      * tell a restart from a block that did not move. */
     XHCIHC_COUNTERS Counters;
     ULONG CountersStart;
-    /* The class-driver reports the snapshot carries (task 36.2,
-     * xhci98_report.h; xhci.h, XHCI_SNAPSHOT_HCD_CLIENT_*): zeroed with the
-     * counters, written and read under the controller lock. */
-    ULONG ClientRecords[XHCI_SNAPSHOT_HCD_CLIENTS_KEPT *
-                        XHCI_SNAPSHOT_HCD_CLIENT_WORDS];
     /* The storage transport decisions (31-A.3), one per XHCI_XPORT_WHY_*
      * but NOT_UAS, by the controller thread at PDO creation; never zeroed,
      * and outside the matrix block, whose offsets the harness reads (the
@@ -1314,7 +1307,6 @@ ULONG HcdCtlProveDmaStopped(PXHCI_EXTENSION ext);
 VOID HcdPowerGateEnter(PHCD_CONTROLLER hc);
 VOID HcdPowerGateLeave(PHCD_CONTROLLER hc);
 ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc);
-ULONG HcdQueueDrain(PHCD_CONTROLLER hc);
 VOID HcdPswRoute(PHCD_CONTROLLER hc);
 VOID HcdPswRelease(PHCD_CONTROLLER hc);
 
@@ -1498,8 +1490,6 @@ NTSTATUS HcdCtlQemuReadDword(PHCD_CONTROLLER hc, PCWSTR name, PULONG value);
 VOID HcdInjStart(PHCD_CONTROLLER hc);
 VOID HcdInjPoll(PHCD_CONTROLLER hc);
 ULONG HcdInjIsrDrop(PHCD_CONTROLLER hc);
-ULONG HcdInjStartHeld(PHCD_CONTROLLER hc);
-VOID HcdInjStartRelease(PHCD_CONTROLLER hc);
 ULONG HcdInjUsbsts(PHCD_CONTROLLER hc, ULONG usbsts);
 USHORT HcdInjPciCommand(PHCD_CONTROLLER hc, USHORT command);
 VOID HcdInjService(PHCD_CONTROLLER hc);

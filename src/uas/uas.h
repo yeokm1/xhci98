@@ -47,7 +47,6 @@
 #include <ntddstor.h>
 #include "uas_iu.h"
 #include "uas_streams.h"
-#include "../xhci98_report.h"
 
 #define UAS_POOL_TAG            ' saU'
 
@@ -218,14 +217,6 @@ typedef struct _UAS_FDO {
     UAS_XFER SharedStatus;          /* streamless: the one status reader */
     PUCHAR SharedBuffer;
     ULONG Counters[8];
-    /* Task 36.2: what the next client report says (xhci98_report.h,
-     * XHCI98_UAS_*), by word, written under Lock. START and the recovery
-     * worker can both send one, so ReportGate (a synchronization event,
-     * signalled when free) is held from the copy through the send, and the
-     * last report sent is the newest. Counters are copied in when it is
-     * sent (UasReport, uas_fdo.c). */
-    ULONG Report[XHCI98_REPORT_WORDS];
-    KEVENT ReportGate;
 
     KTIMER Timer;
     KDPC TimerDpc;
@@ -280,7 +271,6 @@ NTSTATUS UasFdoPnp(PUAS_FDO fdo, PIRP irp);
 NTSTATUS UasFdoPower(PUAS_FDO fdo, PIRP irp);
 NTSTATUS UasSyncUrb(PUAS_FDO fdo, PURB urb);
 NTSTATUS UasSyncIoctl(PUAS_FDO fdo, ULONG code);
-VOID UasReport(PUAS_FDO fdo, ULONG reason);
 
 /* uas_pdo.c - PnP at PASSIVE; SCSI and device control at <= DISPATCH. */
 NTSTATUS UasPdoCreate(PUAS_FDO fdo, ULONG lun, const UCHAR *inquiry,
@@ -301,8 +291,7 @@ NTSTATUS UasEngineSubmit(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
                          PSCSI_REQUEST_BLOCK srb);
 NTSTATUS UasInternalCommand(PUAS_FDO fdo, ULONG lun, const UCHAR *cdb,
                             ULONG cdbLength, PVOID buffer, ULONG length,
-                            PULONG transferred, PUCHAR scsiStatus,
-                            PULONG result, PULONG sense);
+                            PULONG transferred, PUCHAR scsiStatus);
 NTSTATUS UasEngineAbort(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
                         PSCSI_REQUEST_BLOCK srb);
 NTSTATUS UasEngineReset(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,

@@ -434,28 +434,6 @@ ULONG UasCdbDirection(UCHAR opcode)
     }
 }
 
-/* SPC-3 4.5.2 and 4.5.3: the response code in bits 0-6 of byte 0 (bit 7 is
- * the fixed format's VALID); fixed carries the key in byte 2's low nibble
- * and ASC, ASCQ at 12 and 13, descriptor at 1, 2 and 3. */
-ULONG UasSenseWord(const UCHAR *sense, ULONG length)
-{
-    ULONG code;
-
-    if (sense == NULL || length < 4) {
-        return 0;
-    }
-    code = sense[0] & 0x7FUL;
-    if ((code == 0x70 || code == 0x71) && length >= 14) {
-        return (sense[2] & 0x0FUL) | ((ULONG)sense[12] << 8) |
-               ((ULONG)sense[13] << 16) | (code << 24);
-    }
-    if (code == 0x72 || code == 0x73) {
-        return (sense[1] & 0x0FUL) | ((ULONG)sense[2] << 8) |
-               ((ULONG)sense[3] << 16) | (code << 24);
-    }
-    return 0;
-}
-
 /* ------------------------------------------------------------------ */
 /* Storage ids                                                        */
 /* ------------------------------------------------------------------ */
