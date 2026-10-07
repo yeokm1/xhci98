@@ -403,7 +403,8 @@ hidusbf's polling rate, has to be applied again (see "SweetLow's hidusbf").
 ### Updating from 2.y.y.y
 
 Install a newer `2.y.y.y` over an older one with Update Driver on "xHCI98
-USB 3.x eXtensible Host Controller", pointed at the `release-` directory.
+USB 3.x eXtensible Host Controller", then on "xHCI98 USB 3.x Root Hub",
+both pointed at the `release-` directory.
 The steps are the same from every earlier `2.y.y.y`. The registry
 values already there are kept and the missing ones added ("Registry
 settings"); that update over `2.1.0.0` was read on Windows 98 SE (Have

@@ -3182,8 +3182,9 @@ UPDATING FROM AN EARLIER 2.x RELEASE
 ....................................
 
 Install over it with Update Driver on "xHCI98 USB 3.x eXtensible Host
-Controller", pointed at the same directory as a new install. Nothing needs
-renaming first. As read in virtual machines:
+Controller", then on "xHCI98 USB 3.x Root Hub", both pointed at the same
+directory as a new install. Nothing needs renaming first. As read in
+virtual machines:
 
   WINDOWS 98 SE AND ME: RESTART AFTERWARDS, ALTHOUGH WINDOWS DOES NOT ASK.
   The new file waits to replace the old one at the next start, and until
