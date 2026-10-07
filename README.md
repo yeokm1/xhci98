@@ -318,6 +318,7 @@ Windows 98 SE and Windows 2000 SP4 are the primary targets. Windows 98 SE has al
 
 | Machine | Controller | 2.0.0.0 result | Tested by |
 |---|---|---|---|
+| 2012 Lenovo B490 | Intel Ivy Bridge, Panther Point HM77 (7-series) PCH, with EHCI beside it. xHCI 1.0. | Yes; the switchable USB 3 connectors since `2.1.1.0` | Me |
 | 2016 ThinkPad E460 | Intel Skylake, Sunrise Point-LP (100-series) PCH. xHCI 1.0. | Yes, but SuperSpeed devices only since `2.2.0.0` ([issue 11](docs/issues/11-sunrise-point-ssic-psi-table.md)) | Me |
 | 2020 ThinkPad P14s Gen 1 | Intel Comet Lake PCH-LP (400-series). xHCI 1.1. | Yes | Me |
 | Omores' Intel and AMD desktops | H110, B360, B550, X570, X670 | No `2.0.0.0` report yet. | [Omores](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) (1.x) |
