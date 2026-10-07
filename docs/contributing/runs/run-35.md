@@ -895,6 +895,14 @@ hub disable passed on its first cycle with Explorer's window on the hub's
 drive closed first; on Windows 98 SE with SweetLow's stack the mouse moved
 again some 100 s after a controller re-enable, slow under TCG.
 
+**Re-cut** (2026-10-07, before publication, readme only, as 34.5's): the
+owner asked that the update steps name the root hub too - Update Driver on
+"xHCI98 USB 3.x Root Hub" after the controller - in the README, the release
+notes and the readme template;  regenerated
+ alone (ab0f870), every binary and INF unchanged, so the ten
+legs stand. Asset now 761,837 bytes, SHA-256
+.
+
 ## 35-E - the bench
 
 Read by the owner on the `2.2.0.0` asset's `release-x86` package after the
