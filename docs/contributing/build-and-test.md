@@ -6303,7 +6303,9 @@ nothing, as fault `01` below) and the backstop's. The No Op self-test's
 completion then stands undrained and the command engine busy, as the Dell
 E7250's lost interrupt left it, so a device present at boot meets a busy
 engine at its first Enable Slot. A build with 36.1 waits it out in
-`hcdCommand`, whose own drain is not held (`EnumCommandsBusy` and
+`hcdCommand`, whose own drain is not held and which ends the hold before
+queueing it, so the resubmitted command's interrupt is drained as ever
+(`EnumCommandsBusy` and
 `EnumCommandsBusyCleared` 1 each in the counter block); a build without it
 fails the port "no slot". Absent, another type or 0 holds nothing; the log
 ring notes `qemu.inj.starthold`. 2000 covers QEMU's first enumeration. A

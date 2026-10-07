@@ -1061,8 +1061,8 @@ typedef struct _HCD_CONTROLLER {
      * own commands, which its command hook lets through. */
     ULONG QemuPsiE460;
     /* Task 36.3: XhciQemuStartHold in tolerance ticks, latched at each
-     * start (HcdInjStart), 0 none; read only after that. */
-    ULONG InjStartHoldTicks;
+     * start (HcdInjStart), 0 none; ended early by HcdInjStartRelease. */
+    volatile LONG InjStartHoldTicks;
     KSPIN_LOCK InjLock;
     XHCI_INJ_REGS InjRegs;
     XHCI_INJ_TRIGGER InjTrigger;
@@ -1499,6 +1499,7 @@ VOID HcdInjStart(PHCD_CONTROLLER hc);
 VOID HcdInjPoll(PHCD_CONTROLLER hc);
 ULONG HcdInjIsrDrop(PHCD_CONTROLLER hc);
 ULONG HcdInjStartHeld(PHCD_CONTROLLER hc);
+VOID HcdInjStartRelease(PHCD_CONTROLLER hc);
 ULONG HcdInjUsbsts(PHCD_CONTROLLER hc, ULONG usbsts);
 USHORT HcdInjPciCommand(PHCD_CONTROLLER hc, USHORT command);
 VOID HcdInjService(PHCD_CONTROLLER hc);

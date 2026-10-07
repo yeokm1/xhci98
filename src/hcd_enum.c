@@ -202,6 +202,9 @@ static ULONG hcdCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
         if (slice == 0 || hcdHalted(hc)) {
             break;
         }
+#if defined(XHCI_FLAVOUR_QEMU)
+        HcdInjStartRelease(hc);
+#endif
         (VOID)HcdQueueDrain(hc);
         (VOID)hcdWaitEvent(&hc->CmdDoneEvent, slice);
         waited += slice;

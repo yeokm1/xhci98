@@ -142,8 +142,22 @@ ULONG HcdInjIsrDrop(PHCD_CONTROLLER hc)
  * back. Reads only. IRQL: any. */
 ULONG HcdInjStartHeld(PHCD_CONTROLLER hc)
 {
-    return hc->InjStartHoldTicks != 0 &&
-           HcdTolNow(hc) < hc->InjStartHoldTicks;
+    ULONG ticks;
+
+    ticks = (ULONG)hc->InjStartHoldTicks;
+    return ticks != 0 && HcdTolNow(hc) < ticks;
+}
+
+/* The hold has done its work once the bus's command path met the busy
+ * engine: ended before that path's drain, so the resubmitted command's
+ * own completion interrupt is drained as ever (Codex review of Phase 36,
+ * round 2). IRQL: <= DISPATCH_LEVEL. */
+VOID HcdInjStartRelease(PHCD_CONTROLLER hc)
+{
+    if (hc->InjStartHoldTicks != 0) {
+        (VOID)InterlockedExchange((PLONG)&hc->InjStartHoldTicks, 0);
+        XhciLogNote(&hc->Hc, "qemu.inj.starthold.released", 1);
+    }
 }
 
 /* IRQL: any. Above DISPATCH_LEVEL nothing is answered: InjLock cannot be
@@ -438,7 +452,9 @@ VOID HcdInjStart(PHCD_CONTROLLER hc)
     if (value > HCD_QEMU_START_HOLD_MAX) {
         value = HCD_QEMU_START_HOLD_MAX;
     }
-    hc->InjStartHoldTicks = (value + XHCI_TOL_TICK_MS - 1) / XHCI_TOL_TICK_MS;
+    (VOID)InterlockedExchange((PLONG)&hc->InjStartHoldTicks,
+                              (LONG)((value + XHCI_TOL_TICK_MS - 1) /
+                                     XHCI_TOL_TICK_MS));
     XhciLogNote(&hc->Hc, "qemu.inj.starthold", value);
 }
 
