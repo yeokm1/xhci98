@@ -385,9 +385,6 @@ These come from Windows, NUSB or the driver being unsigned, and no change to thi
 | A UAS-only drive at SuperSpeed on a controller without streams | It is sent back to its USB 2.0 port and runs UAS at High Speed, or is refused if it has no USB 2.0 port. Built from the specification; no such controller has been held. |
 | Polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification. Not read on any real controller or in any virtual machine. |
 | The Intel port switchover beyond the B490 | Device ids `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`, systems other than Windows 98 SE, and standby. Built after Linux's handling of the same chipsets. |
-| `XhciIntelPortSwitch` set to `2` | Not read on any unlisted Intel controller. At your own risk (see the warning under "Tuning"). |
-| The handling of controller faults on real hardware | Each fault was made on purpose at a root port in QEMU virtual machines, under Windows 98 SE and Windows 2000; QEMU has no SuperSpeed hub, so nothing was read behind one. No real controller has raised one under this driver yet, so none of the handling has been seen to act on real hardware. |
-| `XhciIntervalCap` and `XhciAvgTrbEsit` | Not read on any AMD or other real controller. |
 
 ## Toolchain and building
 
