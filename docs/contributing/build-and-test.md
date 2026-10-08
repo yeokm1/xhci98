@@ -6295,7 +6295,7 @@ preflight and the post-reset parse alike (`XhciPortMapOverridePsi`,
 `qemu.psi.e460`. A change takes effect at the next start (disable and enable
 the controller). It is kept apart from the injection below.
 
-**Withdrawn 2026-10-07 with `2.2.0.1`; the code is reverted, so `2.2.0.2` has two switches, not three (issue 12 section 8.4).** **`XhciQemuStartHold`** (roadmap-hcd task 36w.3, issue 12). A REG_DWORD read
+**Withdrawn 2026-10-07 with `2.2.0.1`; the code is reverted, so `2.2.0.2` has two switches, not three (issue 12 section 3.2).** **`XhciQemuStartHold`** (roadmap-hcd task 36w.3, issue 12). A REG_DWORD read
 at every start: a number of milliseconds, held to 5000, for which the start
 holds back every event drain but the bus's own command path's - the drain
 queued at interrupt enable (36w.1), the ISR's (it acknowledges and queues

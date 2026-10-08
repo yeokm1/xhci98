@@ -124,7 +124,7 @@
 > `xhci_tol.c` `XhciTolLocActive`, `XhciTolLocHeld`, the once-per-cycle
 > charge `XhciTolCycleCharge` and the terminal reason 5 (`test_tol`).
 > **Withdrawn 2026-10-07 with `2.2.0.1`; the code below is reverted and
-> `xhci98_report.h` removed (issue 12 section 8.4).**
+> `xhci98_report.h` removed (issue 12 section 3.2).**
 > Phase 36 (issue 12) adds one file, `xhci98_report.h`, the private
 > client-report interface `xhciuas.sys` includes beside `xhci98_streams.h`,
 > answered in `hcd_urb.c` (`hcdClientReport`) and kept for the snapshot by
@@ -140,7 +140,10 @@
 > `UasSenseWord` in `uas_iu.c`; `test_uas`); task 36w.3 the qemu flavour's
 > `XhciQemuStartHold` in `hcd_inj.c`. `xhcisnap\xhcisnap.c` names the new
 > counters and decodes the reports (`print_hcd_clients`).
-> The diagnostic build `2.2.0.2` (task 36.1, issue 12 section 8.4) adds one
+> **Reverted 2026-10-08 (owner): `hcd_diag.c` is removed, and the code below,
+> `XHCISNAP`'s `print_diag` included, is restored to `2.2.0.0`'s (issue 12
+> section 3.3).**
+> The diagnostic build `2.2.0.2` (task 36.1, issue 12 section 3.3) adds one
 > file, `hcd_diag.c`: the recovery timeline (each slow request from
 > `HcdCfgQueue` to its completion in `HcdCfgService`, with the
 > CLEAR_FEATURE outcome and the commands `hcd_enum.c`'s `hcdCommand` issued

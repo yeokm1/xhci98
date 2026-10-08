@@ -676,12 +676,12 @@ How it got here:
 - **2026-10-07.**
   - An interim build, `2.2.0.1`, held a Finding 1 fix and diagnostics. It
     was withdrawn before it was sent, and its code was reverted. Its record
-    stays in issue 12 sections 3.5, 4.5 and 4.6.
+    stays in issue 12 section 3.2.
   - The owner reproduced Finding 2 under Windows 7 x64 through Microsoft's
-    `usbstor.sys` (issue 12 section 8).
+    `usbstor.sys` (issue 12 section 3.1).
 - **2026-10-08.**
   - The diagnostic build `2.2.0.2` (36.1) and its read on the E7250 (36.2)
-    found the cause (issue 12 section 9). The E7250's BIOS routes the
+    found the cause (issue 12 sections 2 and 3). The E7250's BIOS routes the
     xHCI's INTA in the PCH's `D20IR` (RCBA+3160) to PIRQA (GSI 16), while
     ACPI tells Windows the xHCI is on GSI 21 (PIRQF). The ISR runs only
     when the EHCI on the shared line interrupts.
@@ -689,7 +689,7 @@ How it got here:
   - Rewriting `D20IR` to PIRQF live fixed the mouse and mounted the stick.
   - The owner chose a permanent fix in xhci98 behind a registry value that
     is on by default for this machine and controller only. No separate
-    tool. The policy follows a Codex review (issue 12 section 9.6).
+    tool. The policy follows a Codex review (issue 12 section 5.1).
   - 36.3 comes first. 36.4 to 36.6 are separate changes, each committed on
     its own.
 
@@ -699,22 +699,22 @@ renumbering cite these numbers:
 
 | Then | Now |
 |---|---|
-| 36.1 to 36.3 (the withdrawn `2.2.0.1`: Finding 1 fix, diagnostics, interim build) | 36w.1 to 36w.3, removed; issue 12 sections 3.5, 4.5 and 4.6 |
+| 36.1 to 36.3 (the withdrawn `2.2.0.1`: Finding 1 fix, diagnostics, interim build) | 36w.1 to 36w.3, removed; issue 12 section 3.2 |
 | 36.4, 36.5 (the check again, and what it left owed) | 36w.4, 36w.5, removed; superseded by the old 36.7 |
 | 36.6 to 36.12 | 36.1 to 36.7 |
 
-- [x] 36.1 **done 2026-10-08** (`3d667f1`) - the diagnostic build, numbered `2.2.0.2` (owner, 2026-10-07), on `2.2.0.0`'s code with no change in behaviour (issue 12 section 8.4):
+- [x] 36.1 **done 2026-10-08** (`3d667f1`); **reverted 2026-10-08 (owner) after its read**: the code and the `XHCISNAP` decoder are removed, the tree is back to `2.2.0.0`, and the description is kept as the record (issue 12 section 3.3) - the diagnostic build, numbered `2.2.0.2` (owner, 2026-10-07), on `2.2.0.0`'s code with no change in behaviour (issue 12 section 3.3):
   - per open pipe of every slot: its flags, queue and oldest outstanding transfer (URB function, setup bytes, length, age, TD address), with the Output Endpoint Context's state, TR Dequeue and DCS read at dump time;
   - a timeline of the last RESET_PIPE, ABORT_PIPE, RESET_PORT and cancel requests: arrival, completion, endpoint, the CLEAR_FEATURE outcome, the commands and their status, and the slow-IRP depth;
   - the interrupter's registers (USBSTS, IMAN, ERDP, IMOD, USBCMD) and the pending event before each backstop drain, with ISR and DPC times.
 
   `XHCISNAP` decodes all of it. Host tests, every gate, a Codex review loop.
-- [x] 36.2 **done 2026-10-08** (issue 12 section 9) - the read (owner): `2.2.0.2` on the E7250 under Windows 7 x64 and XP x64, with the stick hot-plugged and present at boot, and with the EHCI disabled. Then RW-Everything reads of the PCI and PCH registers, and the live `D20IR` write. The root cause is found, and the fix (36.3) replaces the superseded check.
-- [ ] 36.3 the routing quirk, `XhciIntelIrqRoute` (REG_DWORD on the controller's software key):
+- [x] 36.2 **done 2026-10-08** (issue 12 section 3) - the read (owner): `2.2.0.2` on the E7250 under Windows 7 x64 and XP x64, with the stick hot-plugged and present at boot, and with the EHCI disabled. Then RW-Everything reads of the PCI and PCH registers, and the live `D20IR` write. The root cause is found, and the fix (36.3) replaces the superseded check.
+- [ ] 36.3 the routing quirk, `XhciIntelIrqRoute` (REG_DWORD on the controller's software key; the full design, with the reviewed ID table, is issue 12 section 5.1):
   - **The values.**
     - **0**: no writes; report only.
     - **1** (default, also for missing, wrong-type or out-of-range values, logged): only xHCI `8086:9CB1` with subsystem `1028:062D` and LPC `8086:9CC3`.
-    - **2** (opt-in, never the default): any reviewed xHCI/LPC pair regardless of subsystem. The pairs are 1E31, 8C31, 9C31, 8CB1, 9CB1 and 8D31, each with its exact LPC IDs (issue 12 section 9.6). It never admits unlisted Intel, 100-series and later (PCR/ITSS) or non-Intel.
+    - **2** (opt-in, never the default): any reviewed xHCI/LPC pair regardless of subsystem. The pairs are 1E31, 8C31, 9C31, 8CB1, 9CB1 and 8D31, each with its exact LPC IDs (issue 12 section 5.1). It never admits unlisted Intel, 100-series and later (PCR/ITSS) or non-Intel.
   - **Writes only when all hold:**
     - a valid, enabled RCBA read from LPC `00:1F.0` F0;
     - D20IP agrees with the xHCI's INTA;
@@ -736,7 +736,7 @@ renumbering cite these numbers:
 - [ ] 36.5 XHCIQUAL, read-only:
   - It reports the LPC identity, RCBA, D20IP and D20IR, the selected PIRQ, and the PIC destination and its disable bit.
   - It flags a mismatch only against a GSI supplied separately.
-- [ ] 36.6 RESET_PIPE in xHCI 4.6.8 order in `hcdCfgReset` (Reset Endpoint and Set TR Dequeue, then `CLEAR_FEATURE(ENDPOINT_HALT)`). It is a spec fix, kept apart so it does not muddy the interrupt tests (issue 12 section 8.3).
+- [ ] 36.6 RESET_PIPE in xHCI 4.6.8 order in `hcdCfgReset` (Reset Endpoint and Set TR Dequeue, then `CLEAR_FEATURE(ENDPOINT_HALT)`). It is a spec fix, kept apart so it does not muddy the interrupt tests (issue 12 section 3.2).
 - [ ] 36.7 `2.2.1.0` builds, x86 and `-amd64`:
   - the host suites and every gate;
   - a Codex review loop per task;
