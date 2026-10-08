@@ -1,6 +1,6 @@
 # Issue 12 - On a Dell E7250 under Windows XP x64, a SuperSpeed reader present at boot fails "no slot", and hot-plugged it binds `xhciuas` but shows no disk
 
-Status: **open.** A user report against `2.2.0.0`, read on 2026-10-07 from
+Status: **open, root cause found (section 9.5); no fix yet.** A user report against `2.2.0.0`, read on 2026-10-07 from
 XHCISNAP dumps and the source. Finding 1 (section 3) has a cause read from
 the code and consistent with every counter, and no fix yet. Finding 2
 (section 4) is not diagnosed; the leading reading is unconfirmed, and the
@@ -24,6 +24,16 @@ Nothing is stuck and every stall is recovered; the I/O is only very slow.
 That slowness explains the sluggish mouse and the missing drive letter.
 `xpboot` reproduces Finding 1, and the same lost interrupt is behind it. So
 section 8.3's reading is set aside, and section 5 is answered.
+
+**Update, 2026-10-08 evening - root cause (section 9.5).** The E7250's
+BIOS routes the xHCI's INTA in the chipset to PIRQA (IRQ 16), while its
+ACPI tables tell Windows the xHCI is on IRQ 21 (PIRQF, the EHCI's line).
+The driver therefore listens on a line its controller never drives. The
+owner rewrote the PCH's Device 20 Interrupt Route register (`D20IR`) to
+PIRQF on the running machine. The mouse became smooth at once, and a
+hot-plugged stick mounted with a drive letter. This is a firmware defect.
+It goes unnoticed under Intel's own Windows 7 driver and under Windows 8
+and later, because those use MSI and bypass the PIRQ routing.
 
 **This is the first report of the HCD on real hardware under Windows XP
 x64.** That tier had been virtual-machine only (AGENTS.md, the release
@@ -576,23 +586,26 @@ The INF does not ask for MSI.
   waited for the backstop, and port 13's enumeration had finished failing
   before the backstop drained it. `w7boot` did not show it: every Enable Slot
   succeeded.
+- **Two qualifications (Codex review).**
+  - `xphot1` shows the bulk IN endpoint Halted, then Running again in
+    `xphot2`: a fresh stall waiting for service.
+  - Some `w7boot` recoveries took 0-80 ms, when the EHCI happened to
+    interrupt.
+
+  Starvation explains the slowness. The fix still has to show that the mount
+  completes.
 - **The cost.** Every event waits for the backstop. The mouse's reports
   arrive about twice a second, and usbstor's commands take several half
   seconds each. A recovery takes several control transfers and so takes
   2-3 s. That is slow enough that partmgr and the mount never finish, so
   there is no drive letter and PnP appears hung.
 
-### 9.3 Not yet known
+### 9.3 The EHCI test
 
-- **Why the controller's INTx does not arrive** (not answered by the EHCI
-  test, which shows only that it does not). Candidates:
-  - a mismatch between the ACPI `_PRT` and the PCH's own routing of the xHCI
-    interrupt;
-  - a masked I/O APIC entry;
-  - the PCI Command register's Interrupt Disable bit set after start, which
-    `gate.busmaster.command` `0006` rules out only at start.
-
-  XHCIQUAL under DOS saw pin A, line 11.
+- **Why the controller's INTx does not arrive.** The candidates were a
+  mismatch between ACPI `_PRT` and the PCH's own routing, a masked I/O APIC
+  entry, and the PCI Interrupt Disable bit. Section 9.5 settles it: the
+  routing mismatch.
 - **The EHCI test, done the same day (`xpnoehci`, XP x64).** The owner disabled
   the EHCI controller in Device Manager and restarted with the mouse and the
   stick plugged in. Neither was detected, and the xhci98 controller showed
@@ -602,9 +615,13 @@ The INF does not ask for MSI.
     ISR call in the earlier dumps was made for the EHCI on the shared line,
     and the claims were events that happened to be waiting when the EHCI
     interrupted.
-  - With no ISR calls at all, the backstop drained only about every 5 s:
-    samples #2 to #5 are about 51 ticks apart. With the EHCI enabled, the
-    gap had been about 0.5 s.
+  - With no ISR calls at all, the backstop drained only about every 5 s.
+    Its interval did not change; its thread was blocked:
+    - `hcdThread` runs `hcdBackstop` and the enumeration on one thread.
+    - `hcdCommandBody` waits up to 5000 ms on `CmdDoneEvent`
+      (`src/hcd_enum.c`), and only the ISR's DPC sets that event.
+    - Each wait expired, counted a give-up and asked for a reset. Samples #3
+      to #5 show a fresh start No Op at dequeue 0 each time.
   - So every command timed out: the mouse's Enable Slot read "never
     completed", and port 1 ended Failed, cause "no slot". `CommandsGivenUp`
     was 4. That started three controller recoveries inside ten minutes, and
@@ -613,20 +630,87 @@ The INF does not ask for MSI.
   - So on this machine the driver works at all only because the EHCI shares
     the line.
 
-### 9.4 Fix candidates (owner to choose)
+### 9.4 PCI and chipset reads (RW-Everything, XP x64, EHCI enabled)
 
-- **Work without the interrupt.**
-  - Drain on every 100 ms tick, or poll faster, once the line is seen not to
-    deliver.
-  - Make the start's No Op and the enumeration commands tolerate a late
-    completion instead of failing the port.
+`temp/e7250-2202/pci-idle.jpg`, `pci-busy.jpg`, `lpc.jpg` and
+`rcba-3100.jpg`.
 
-  This would fix both findings on every OS.
-- **MSI on NT6**, through an INF `MSISupported` entry, if usbport on
-  Windows 7 connects a miniport's message interrupt. It would not help XP,
-  which has no MSI.
-- **Find and fix the routing** on this machine, if the cause turns out to
-  be something the driver can correct.
+xHCI `00:14.0` configuration space:
+
+| Offset | Value | Meaning |
+|---|---|---|
+| 04 Command | `0006` | memory and bus master on; **Interrupt Disable 0** |
+| 06 Status | `0290` idle, **`0298` busy** | the Interrupt Status bit sets during traffic: **the controller asserts INTx** |
+| 80 MSI capability | Message Control `0086` | **MSI Enable 0**; 64-bit, 8 vectors capable |
+| 70 PM capability | PMCSR `0008` | D0 |
+| 3C / 3D | `15` / `01` | line 21, pin INTA |
+
+The chipset, through the LPC bridge `00:1F.0`:
+- F0 is `FED1C001`, so RCBA = `FED1C000`.
+- The offsets below are from coreboot's Broadwell `rcba.h`.
+- A route register's low nibble (bits 3:0) routes INTA: 0-7 = PIRQA-H. In
+  APIC mode PIRQA-H are GSI 16-23.
+
+| Register | Device | Value | INTA goes to |
+|---|---|---|---|
+| `D29IP` (3108) / `D29IR` (3144) | EHCI | INTA / `2035` | PIRQF = **IRQ 21**, as Windows has it |
+| `D20IP` (3128) / `D20IR` (3160) | xHCI | INTA / `3210` | **PIRQA = IRQ 16**; Windows has IRQ 21 |
+
+### 9.5 Root cause, and the live test
+
+**The BIOS routes the xHCI's INTA to PIRQA (GSI 16), and its ACPI `_PRT`
+tells the OS the xHCI is on GSI 21.**
+- Windows 7 and XP x64 both connect the driver's ISR on IRQ 21, the line
+  the EHCI really uses.
+- Every interrupt the xHCI asserts goes to I/O APIC input 16, where nothing
+  listens. The IOAPIC entry for input 16 is masked, or is owned by another
+  device that ignores it.
+- The ISR runs only when the EHCI interrupts, and then finds the xHCI's
+  events waiting. With the EHCI disabled it never runs.
+
+That is every observation in sections 5, 8 and 9:
+- the backstop's share of DPCs;
+- ISR claims tracking EHCI activity;
+- the sluggish mouse with nothing else plugged in;
+- the start No Op stranded with IP set (Finding 1);
+- I/O too slow for the mount (Finding 2);
+- the controller failing outright without the EHCI.
+
+**The live test, 2026-10-08.**
+- The owner wrote `D20IR` = `3215` (INTA to PIRQF) with RW-Everything, as a
+  16-bit write at `FED1F160`, on the running XP x64 system with the EHCI
+  enabled.
+- The mouse became smooth at once.
+- A hot-plugged SanDisk stick then mounted with a drive letter.
+- A restart restores the BIOS value. The dump `XPFIXED` was taken after
+  the change, before the restart.
+
+Why this has not been seen before: Intel's Windows 7 xHCI driver, and
+Microsoft's from Windows 8, enable MSI. MSI does not use PIRQ routing, so the
+wrong `D20IR` never mattered to them. XHCIQUAL under DOS reported line 11,
+which is the BIOS's legacy PIC routing and is not affected.
+
+### 9.6 Fix candidates (owner to choose; Codex consulted)
+
+- **A routing quirk.** On Intel PCHs that keep `D20IR` in RCBA (8 and 9
+  series, -H and -LP), read `D20IR` at start and on every return to D0. If
+  its INTA PIRQ does not match the GSI the OS assigned, write the IAR field
+  to match.
+  - Gate it by device ID.
+  - Record what it found and did in the dump.
+  - Add a registry value to turn it off.
+  - Open questions: the GSI on each OS (the raw interrupt resource; PIC mode
+    on Windows 98, 2000 and XP without an APIC); S3 resume; other devices on
+    PIRQA.
+- **MSI on NT6** through `IoConnectInterruptEx`. This HCD connects its own
+  interrupt, so the work is in this driver, not just an INF setting. It
+  does not help Windows 98, 2000 or XP.
+- **A polling safety net** for an interrupt that stays dead.
+  - An independent 10-20 ms timer drain that does not depend on
+    `hcdThread`.
+  - A BUSY retry for the start No Op.
+  - Polling kept across a recovery.
+- XHCIQUAL could detect and report the mismatch from DOS.
 - Separately, the 4.6.8 order in `hcdCfgReset` (section 8.3), as a spec fix.
 
 ## Sources
@@ -635,7 +719,10 @@ The INF does not ask for MSI.
   `PROBE.LOG`.
 - `temp/e7520/` (git-ignored): the owner's `2.2.0.0` Windows 7 dumps.
 - `temp/e7250-2202/` (git-ignored): the owner's `2.2.0.2` dumps, Windows 7
-  x64 (`w7*`) and XP x64 (`xp*`).
+  x64 (`w7*`) and XP x64 (`xp*`, `xpnoehci`, `xpfixed`), and the RW-Everything
+  screenshots.
+- coreboot, `src/soc/intel/broadwell/include/soc/rcba.h`: the DnnIP and DnnIR
+  offsets and the DIR_ROUTE layout.
 - `src/hcd_ctl.c` (`hcdStart`, `hcdThread`, `hcdPoll`, `hcdBackstop`),
   `src/hcd_enum.c` (`hcdCommand`), `src/xhci_cmd.c`, `src/xhci_evt.c`
   (`XhciEnableInterrupts`), `src/xhci_init.c`, `src/hcd_cfg.c`.
