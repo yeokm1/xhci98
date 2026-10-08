@@ -208,7 +208,7 @@ if not errorlevel 1 (
 )
 
 rem The diagnostic build 2.2.0.2's parts of the HCD region (roadmap-hcd.md
-rem task 36.6): a bulk IN transfer on the ring of a Halted endpoint whose TR
+rem task 36.1): a bulk IN transfer on the ring of a Halted endpoint whose TR
 rem Dequeue is that TD, the thread's own EP0 transfer heading its queue with
 rem its TD wrapped past the Link TRB, the recovery timeline in order with a
 rem stalled CLEAR_FEATURE, a request not taken, one held, a streams status

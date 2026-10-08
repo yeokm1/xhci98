@@ -1,6 +1,6 @@
 /*
  * hcd_diag.c - the diagnostic build's records (2.2.0.2; roadmap-hcd.md task
- * 36.6, issue 12 section 8.4), which the door reads into the snapshot's HCD
+ * 36.1, issue 12 section 8.4), which the door reads into the snapshot's HCD
  * region (hcd_door.c) and XHCISNAP decodes.
  *
  * Issue 12's dumps showed one bulk transfer outstanding for good after its

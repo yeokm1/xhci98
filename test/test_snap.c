@@ -8,7 +8,7 @@
  * the two must agree: every word of the image is located exactly once, in
  * order, the header's offsets name the words Locate puts there, and the
  * counter block is the whole of XHCIHC_COUNTERS. The diagnostic build
- * 2.2.0.2 (roadmap-hcd.md task 36.6) appends four parts and the helpers
+ * 2.2.0.2 (roadmap-hcd.md task 36.1) appends four parts and the helpers
  * that fill two of them as rings; both are held here too.
  */
 

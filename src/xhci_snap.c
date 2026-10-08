@@ -14,7 +14,7 @@
  * with no controller (test\test_snap.c). The header's words from
  * XHCI_SNAPSHOT_HCD_TOL_AT (35-T.8) place the tolerance state inside the
  * extension image rather than copy it: the state lives in the extension.
- * The diagnostic build 2.2.0.2 (roadmap-hcd.md task 36.6) appends four
+ * The diagnostic build 2.2.0.2 (roadmap-hcd.md task 36.1) appends four
  * parts after the counters - a diagnostic block, the pipe records, the
  * recovery timeline and the backstop samples - and the helpers that keep
  * the last two as rings and pick each pipe's oldest transfer.

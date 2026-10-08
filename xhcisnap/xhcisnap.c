@@ -2282,7 +2282,7 @@ static void print_tol(const unsigned char *hcd, unsigned long hcdBytes,
 /* ---- the diagnostic build's parts of the HCD region (2.2.0.2) ----------- */
 
 /*
- * Roadmap-hcd.md task 36.6 (issue 12 section 8.4): the HCD region's header
+ * Roadmap-hcd.md task 36.1 (issue 12 section 8.4): the HCD region's header
  * grew eleven words, version unchanged, placing four parts after the
  * counters - a diagnostic block read at the dump, the pipe records, the
  * recovery timeline and the backstop samples (src/xhci.h,

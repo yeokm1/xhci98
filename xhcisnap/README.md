@@ -177,7 +177,7 @@ report says it keeps none.
 
 ### The diagnostic build's records (2.2.0.2)
 
-The diagnostic build `2.2.0.2` (roadmap-hcd.md task 36.6, issue 12 section
+The diagnostic build `2.2.0.2` (roadmap-hcd.md task 36.1, issue 12 section
 8.4) appends eleven header words (31), version still 1, placing four parts
 after the counters (`src/xhci.h`, `XHCI_SNAPSHOT_DIAG_*`, `_PIPE_*`,
 `_REC_*`, `_IRQ_*`), and the `.TXT` decodes each at every level:

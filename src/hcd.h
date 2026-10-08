@@ -827,7 +827,7 @@ typedef struct _HCD_HOLD {
 #define HCD_SETTLE_DEFER_HUB 16UL
 
 /*
- * The diagnostic build's records (2.2.0.2, roadmap-hcd.md task 36.6; issue
+ * The diagnostic build's records (2.2.0.2, roadmap-hcd.md task 36.1; issue
  * 12 section 8.4; hcd_diag.c), read by the door into the snapshot's HCD
  * region. They record and decide nothing. Recs and Irqs are the timeline
  * and the backstop samples in the image's own layout (xhci.h,

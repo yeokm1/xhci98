@@ -35,6 +35,11 @@ hot-plugged stick mounted with a drive letter. This is a firmware defect.
 It goes unnoticed under Intel's own Windows 7 driver and under Windows 8
 and later, because those use MSI and bypass the PIRQ routing.
 
+Task numbers: roadmap Phase 36 was renumbered on 2026-10-08. The withdrawn
+and superseded tasks are cited here as 36w.1 to 36w.5. The diagnostic build
+is 36.1, its read 36.2 and the routing fix 36.3 (`roadmap-hcd.md`, Phase 36,
+the renumbering table).
+
 **This is the first report of the HCD on real hardware under Windows XP
 x64.** That tier had been virtual-machine only (AGENTS.md, the release
 notes' "Targets and their standing").
@@ -136,7 +141,7 @@ interrupt, which has been seen only on this machine.
 
 In `2.2.0.0` `EnumCommandsRefused` lived in `HCD_CONTROLLER`, outside the
 `XHCI_EXTENSION` that XHCISNAP dumps. So the refusal is inferred from
-CommandsIssued 1 and CommandsGivenUp 0, not counted in the dump. (Task 36.1
+CommandsIssued 1 and CommandsGivenUp 0, not counted in the dump. (Task 36w.1
 moved it into the counter block; section 3.5.)
 
 ### 3.3 Workaround
@@ -164,7 +169,7 @@ A fix needs a host test, both builds (x86 and `-amd64`), the gates, and a
 bench reading with a device present at boot, from this user or from another
 Intel 9-series machine.
 
-### 3.5 What the interim build does (task 36.1)
+### 3.5 What the interim build does (task 36w.1)
 
 > **Withdrawn 2026-10-07 (owner):** this code was reverted before the build
 > was sent (section 8.4). The section records what was built.
@@ -270,7 +275,7 @@ everywhere (`src/hcd_pdo.c:2426`, `src/hcd_rh.c:299`,
   data-in pipe during INQUIRY is not normal. It may be this device, or a
   stream or ring set-up problem in the HCD on this controller.
 
-### 4.5 What the interim build records (task 36.2)
+### 4.5 What the interim build records (task 36w.2)
 
 > **Withdrawn 2026-10-07 (owner):** this code was reverted before the build
 > was sent (section 8.4). The section records what was built.
@@ -314,7 +319,7 @@ on 2026-10-07: round 1 found a race between START's report and the recovery
 worker's (fixed with a report gate and locked writes), round 2 that the
 qemu start hold could time out the resubmitted command (fixed by ending the
 hold at the first busy drain), round 3 nothing. The QEMU regression legs of
-task 36.3 are not yet run.
+task 36w.3 are not yet run.
 
 ## 5. Interrupt delivery is poor on this machine
 
@@ -338,7 +343,7 @@ interrupt was raised but not claimed.
 
 **The user will provide no further information** (owner, 2026-10-07).
 These would have separated the readings in section 4.3, and the interim
-build's diagnostics (roadmap 36.2) have to stand in for them where they can:
+build's diagnostics (roadmap 36w.2) have to stand in for them where they can:
 
 - `setupapi.log` and a Device Manager view by connection with hidden
   devices shown: where the reader's devnode was, and whether it stayed.
@@ -359,17 +364,17 @@ affects the drive letter, not whether a disk appears.
 The work is roadmap Phase 36: an interim build made from this evidence and
 checked again on the E7250 by the owner.
 
-1. Owner: choose the Finding 1 fix (section 3.4; task 36.1). Both, built
+1. Owner: choose the Finding 1 fix (section 3.4; task 36w.1). Both, built
    (section 3.5).
-2. Add the diagnostics that let one dump settle section 4.4 (task 36.2).
+2. Add the diagnostics that let one dump settle section 4.4 (task 36w.2).
    Built (section 4.5).
 3. Build x86 and amd64, host-test, run the gates and the QEMU regression,
-   and send the interim build (task 36.3).
+   and send the interim build (task 36w.3).
 4. Read it on the E7250 with a device present at boot and the reader
-   hot-plugged (task 36.4), then fix what that leaves owed (task 36.5).
+   hot-plugged (task 36w.4), then fix what that leaves owed (task 36w.5).
 
 Superseded on 2026-10-07 by section 8.4: the diagnostic build `2.2.0.2`
-(task 36.6), read on the owner's E7250 (task 36.7), then the fix.
+(task 36.1), read on the owner's E7250 (task 36.2), then the fix.
 
 ## 8. Reproduced on the owner's E7250 under Windows 7 x64
 
@@ -482,7 +487,7 @@ cause. It records:
    USBSTS, IMAN, ERDP, IMOD and USBCMD, and whether an event was waiting,
    with ISR and DPC times.
 
-Roadmap tasks 36.6 (the build) and 36.7 (the read on the E7250 under
+Roadmap tasks 36.1 (the build) and 36.2 (the read on the E7250 under
 Windows 7 x64), then the fix.
 
 Built on 2026-10-07 (`src/hcd_diag.c`; the HCD region's header grown to 31
@@ -514,7 +519,7 @@ transfer, ISR and DPC, five register reads when the backstop finds an event
 waiting, and the controller lock taken around each record on the slow
 paths.
 
-## 9. The `2.2.0.2` read: the controller's interrupt never reaches the ISR (task 36.7)
+## 9. The `2.2.0.2` read: the controller's interrupt never reaches the ISR (task 36.2)
 
 ### 9.1 The runs
 

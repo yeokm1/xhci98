@@ -8572,7 +8572,7 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_TOL_HUB_PORTS 18  /* HubLoc entries per hub object */
 #define XHCI_SNAPSHOT_HCD_TERMINAL      19  /* XHCI_TOL_TERMINAL_*           */
 /*
- * Appended by the diagnostic build 2.2.0.2 (roadmap-hcd.md task 36.6, issue
+ * Appended by the diagnostic build 2.2.0.2 (roadmap-hcd.md task 36.1, issue
  * 12 section 8.4), version unchanged: four parts after the counters - the
  * diagnostic block, the pipe records, the recovery timeline and the backstop
  * samples - each placed by these words. A header too short to hold them is

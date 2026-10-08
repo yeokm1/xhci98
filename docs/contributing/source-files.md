@@ -130,17 +130,17 @@
 > answered in `hcd_urb.c` (`hcdClientReport`) and kept for the snapshot by
 > the pure `XhciSnapClientPick` and `XhciSnapClientStore` in `xhci_snap.c`
 > (the HCD region's header grown to 23 words; `test_snap`), filled by
-> `hcd_door.c`. Task 36.1 adds `HcdQueueDrain` to `hcd_ctl.c` (the drain at
+> `hcd_door.c`. Task 36w.1 adds `HcdQueueDrain` to `hcd_ctl.c` (the drain at
 > interrupt enable, and the backstop's and the injector's queueing) and the
 > busy engine's wait to `hcd_enum.c`'s `hcdCommand`, its slices the pure
-> `XhciEnumBusyWait` in `xhci_enum.c` (`test_enum`); task 36.2 the counter
+> `XhciEnumBusyWait` in `xhci_enum.c` (`test_enum`); task 36w.2 the counter
 > block's six appended counters (`xhci_counters.h`), the client port resets
 > counted in `hcd_cfg.c`, and in `src\uas\` the report itself (`UasReport`
 > in `uas_fdo.c`, the transfer failures in `uas_xport.c`, the sense word
-> `UasSenseWord` in `uas_iu.c`; `test_uas`); task 36.3 the qemu flavour's
+> `UasSenseWord` in `uas_iu.c`; `test_uas`); task 36w.3 the qemu flavour's
 > `XhciQemuStartHold` in `hcd_inj.c`. `xhcisnap\xhcisnap.c` names the new
 > counters and decodes the reports (`print_hcd_clients`).
-> The diagnostic build `2.2.0.2` (task 36.6, issue 12 section 8.4) adds one
+> The diagnostic build `2.2.0.2` (task 36.1, issue 12 section 8.4) adds one
 > file, `hcd_diag.c`: the recovery timeline (each slow request from
 > `HcdCfgQueue` to its completion in `HcdCfgService`, with the
 > CLEAR_FEATURE outcome and the commands `hcd_enum.c`'s `hcdCommand` issued
