@@ -24,7 +24,7 @@ SuperSpeed devices falling back to USB 2.0 on Intel Sunrise Point,
 (owner, 2026-10-06; it was the interim `2.1.2.0` until the tolerance work
 joined it), cut on 2026-10-07 and closed the same day on the owner's bench (35-E). Phase 36,
 opened 2026-10-07 from a user's Dell E7250 under Windows XP x64 (issue 12),
-is open on branch `2.2.1.0`. Its root cause was found on 2026-10-08: the
+is open on branch `2.3.0.0`, its target version. Its root cause was found on 2026-10-08: the
 BIOS's `D20IR` interrupt routing. The fix is task 36.3. Polled event
 delivery and selective suspend are planned but carry no phase number and
 no version until the owner opens them (owner, 2026-10-06; "Planned work"
@@ -75,6 +75,7 @@ table is the index.
 | Polled event delivery | Planned, unnumbered (`POLL`; drawn up as Phase 35) (owner, 2026-10-05, first added as Phase 34's stage C; design record 15): a switch, `XhciInterruptMode`, chooses automatic (0, the default: the line interrupt where the controller has one, an adaptive poll of the event ring where it has none), the line interrupt (1, failing as today without one) or polling (2), with 3 and above reserved (MSI, not scheduled) and run as 0, so an MSI- or MSI-X-only controller, which neither primary target can serve by interrupt, can be driven; the idle period `XhciPollIdleMs` defaults to 50 ms and the active period `XhciPollActiveMs` to 1 ms, neither may be 0, the idle period is held to 5000 ms and the active to the idle, and all three join 34.1's install rule. The delivery in effect and its reason are captured by `XHCISNAP` and the DebugView log. Each taken from options with a recommendation; the numbering replaced the same day's "0 line, 1 polling, 2 MSI" |
 | Polled event delivery joins Phase 36 | Owner, 2026-10-08, after issue 12: the `POLL.*` tasks become 36.5 to 36.10, 36.13 and 36.14. Record 15 is amended (section 4.2, decision 6): automatic mode also moves to polling when a line interrupt is proven dead at run time, which replaces 36.4's stalled-event watchdog. 36.4 keeps the BUSY retry |
 | MSI on Vista and 7 | Owner, 2026-10-08: added to Phase 36 for both architectures (36.15, 36.16), designed as a record 15 amendment. The x86 binary resolves `IoConnectInterruptEx` from the kernel's export table at run time, because it must still load on 98 and ME |
+| Phase 36 is `2.3.0.0` | Owner, 2026-10-08: the routing quirk, polled event delivery and MSI make Phase 36 a minor release, so the branch `2.2.1.0` is renamed `2.3.0.0`, and that is the target version. Commits before the rename were made on `2.2.1.0` |
 | The other `1.2.0.0` limitations (28.3) | The NUSB stop crash, the Windows 98 churn wedge and the Windows 7 disable hang are each re-measured under the HCD and recorded as gone, carried or new (owner, 2026-10-04). A survivor is carried in the release notes and does not block the cut |
 | 28-E.1's Full-Speed hub clause | Taken at the bench, not recorded as untested ground (owner, 2026-10-04): a USB 2.0 hub forced to Full Speed by an ADuM full/low-speed isolator in front of it, in place of a USB 1.1 hub (owner, the same day, superseding the plan to buy one) |
 | Checkpoints of Phases 28 to 31 | Pre-approved (owner, 2026-10-04): each closes once its review is clean, the x86 and amd64 builds, gates and host tests pass, every roadmap VM leg passes with its package hash recorded, and no regression is open on an earlier phase. Scope rulings, waivers, push, tag and the cut stay the owner's |
@@ -671,7 +672,9 @@ Goal:
 
 Status: opened 2026-10-07 (owner) from a user report against `2.2.0.0`,
 the first report of the HCD on real hardware under Windows XP x64 (issue
-12), on branch `2.2.1.0`. The root cause was found on 2026-10-08 (36.2).
+12). The root cause was found on 2026-10-08 (36.2). Its branch and target
+version are `2.3.0.0` (owner, 2026-10-08): the branch was `2.2.1.0` until the
+phase grew to take the routing quirk, polling and MSI.
 
 Why a phase: its only evidence was a machine nobody here had, until the
 owner reproduced the report on the owner's own E7250. The fix writes a
@@ -722,7 +725,7 @@ renumbering cite these numbers:
 | 36.4 (watchdog and BUSY retry) | 36.4, the BUSY retry alone; the watchdog is replaced by polling's dead-line rule (36.5, 36.7) |
 | 36.5 (`XHCIQUAL` routing report) | 36.11 |
 | 36.6 (RESET_PIPE order) | 36.12 |
-| 36.7 (the `2.2.1.0` builds and check) | 36.17 (36.15 until MSI joined as 36.15 and 36.16) |
+| 36.7 (the release builds and check) | 36.17 (36.15 until MSI joined as 36.15 and 36.16) |
 | `POLL.0` to `POLL.5` (planned work) | 36.5 to 36.10 |
 | `POLL-V`, `POLL-E` (planned work) | 36.13, 36.14 |
 
@@ -839,7 +842,7 @@ renumbering cite these numbers:
   - **Down-level:** 98 SE, 2000 and XP x86 and x64 reading as the release before it, with the line. The x86 binary loads on 98 and ME with the new code.
   - **The owner's E7250** under Windows 7 x64, with `XhciIntelIrqRoute` 0, read as MSI with the mouse and the stick working.
   - **The owner's E460 and P14s Gen 1** under Windows 7 if installed, read as MSI.
-- [ ] 36.17 the `2.2.1.0` builds, x86 and `-amd64`:
+- [ ] 36.17 the `2.3.0.0` builds, x86 and `-amd64`:
   - the host suites and every gate;
   - a Codex review loop per task;
   - the QEMU regression legs (still owed from `2.2.0.2`);
@@ -850,7 +853,7 @@ renumbering cite these numbers:
     - S3 resume;
     - Windows 98 SE (PIC mode), and Windows 7 with `XhciInterruptMode` 1 (the line forced), with the routing fix repairing the route in both.
 
-Checkpoint: `2.2.1.0` on the E7250 under XP x64 and Windows 7 x64, with
+Checkpoint: `2.3.0.0` on the E7250 under XP x64 and Windows 7 x64, with
 `XhciIntelIrqRoute` at its default:
 - the xHCI's interrupts delivered by the ISR (the backstop near idle);
 - a device present at boot enumerated;
@@ -866,7 +869,7 @@ Checkpoint: `2.2.1.0` on the E7250 under XP x64 and Windows 7 x64, with
 - 36.16 passing: MSI on Vista and 7, and the x86 binary still loading on
   98 and ME.
 
-Which release carries the result is the owner's call.
+The phase is cut as `2.3.0.0` (owner, 2026-10-08).
 
 Records: `docs/issues/12-e7250-xp64-boot-enable-slot-refused.md`;
 `design/15-polled-event-delivery.md`.

@@ -1,7 +1,7 @@
 # Issue 12 - On the Dell Latitude E7250, the BIOS routes the xHCI's interrupt to a different IRQ from the one Windows connects, so USB devices crawl, hang or fail
 
 Status: **open, root cause found (2026-10-08); fix planned** (roadmap
-`roadmap-hcd.md` Phase 36, task 36.3 first; branch `2.2.1.0`). There is a
+`roadmap-hcd.md` Phase 36, task 36.3 first; branch and target version `2.3.0.0`). There is a
 manual workaround (section 6).
 
 **Machine:**
@@ -361,7 +361,7 @@ and its open questions.
     behind P2SB;
   - Bay Trail and Braswell use the iLB.
 - **36.12:** RESET_PIPE in xHCI 4.6.8 order.
-- **36.17:** the `2.2.1.0` builds, the QEMU regression, and the owner's check
+- **36.17:** the `2.3.0.0` builds, the QEMU regression, and the owner's check
   on the E7250 under XP x64 and Windows 7 with no manual write. The check
   covers:
   - the mouse;
