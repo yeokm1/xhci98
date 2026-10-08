@@ -736,6 +736,12 @@ renumbering cite these numbers:
 - [ ] 36.5 XHCIQUAL, read-only:
   - It reports the LPC identity, RCBA, D20IP and D20IR, the selected PIRQ, and the PIC destination and its disable bit.
   - It flags a mismatch only against a GSI supplied separately.
+  - **Only on the reviewed RCBA chipsets** (the xHCI/LPC pairs of issue 12 section 5.1: 7, 8 and 9 series and C610/X99). The registers do not exist elsewhere:
+    - 100 series and later, and the Apollo Lake-class Atom SoCs, route through ITSS behind P2SB;
+    - Bay Trail and Braswell route through the iLB;
+    - non-Intel controllers have no equivalent.
+
+    Elsewhere it reports "routing registers not applicable" and reads nothing. Support for ITSS is not in scope.
 - [ ] 36.6 RESET_PIPE in xHCI 4.6.8 order in `hcdCfgReset` (Reset Endpoint and Set TR Dequeue, then `CLEAR_FEATURE(ENDPOINT_HALT)`). It is a spec fix, kept apart so it does not muddy the interrupt tests (issue 12 section 3.2).
 - [ ] 36.7 `2.2.1.0` builds, x86 and `-amd64`:
   - the host suites and every gate;

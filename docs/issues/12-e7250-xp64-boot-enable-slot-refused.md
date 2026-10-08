@@ -297,7 +297,12 @@ cannot repair:
 ### 5.3 Related changes
 
 - **36.5:** XHCIQUAL reports the LPC, RCBA, `D20IP`/`D20IR` and the PIRQ
-  routing, read-only.
+  routing, read-only. It does so only on the reviewed pairs of section 5.1,
+  and elsewhere says "not applicable". These registers exist only on the
+  RCBA chipsets:
+  - 100 series and later, and the Apollo Lake-class Atom SoCs, use ITSS
+    behind P2SB;
+  - Bay Trail and Braswell use the iLB.
 - **36.6:** RESET_PIPE in xHCI 4.6.8 order.
 - **36.7:** the `2.2.1.0` builds, the QEMU regression, and the owner's check
   on the E7250 under XP x64 and Windows 7 with no manual write. The check
