@@ -342,8 +342,6 @@ The devices, each characterised in [test-equipment.md](docs/contributing/test-eq
 | Sound Blaster Play! 2 (UAC 1.0 composite) | `041E:323D` | Full |
 | C-Media USB Audio Device (UAC 1.0 composite) | `0D8C:0014` | Full |
 
-The `1.2.0.0` results are in its [README](https://github.com/yeokm1/xhci98/blob/1.2.0.0/README.md) and [release notes](https://github.com/yeokm1/xhci98/blob/1.2.0.0/docs/using/release-notes.md).
-
 ## Known limitations/issues
 
 ### Outside this driver's control
