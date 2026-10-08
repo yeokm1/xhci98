@@ -225,25 +225,31 @@ Codex reviews.
 Value 1 is keyed on the subsystem because the fault is this firmware's,
 not the silicon's.
 
-The reviewed xHCI/LPC pairs, all vendor `8086`. Each has `D20IR` at
-RCBA+`3160`, 16-bit, with IAR in bits 2:0 and bit 3 reserved:
+The reviewed xHCI/LPC pairs, all vendor `8086`. Where a PCH datasheet is in
+`docs/references/`, it confirms the registers as follows:
+- RCBA is at LPC `D31:F0` `F0h`: bits 31:14 hold the base, bit 0 the enable.
+- `D20IP` is at RCBA+`3128h`; its bits 3:0 give the xHCI's pin (1 = INTA#).
+- `D20IR` is at RCBA+`3160h`, 16-bit; its bits 2:0 route INTA (0-7 =
+  PIRQA#-H#) and bit 3 is reserved.
+- In APIC mode PIRQA# is IRQ16, up to PIRQH#, which is IRQ23.
 
-| xHCI | Chipset | LPC device IDs |
-|---|---|---|
-| `1E31` | 7 series (Panther Point) | `1E44 1E46 1E47 1E48 1E49 1E4A 1E53 1E55 1E56 1E57 1E58 1E59 1E5B` |
-| `8C31` | 8 series (Lynx Point, C220) | `8C44 8C46 8C49 8C4A 8C4B 8C4C 8C4E 8C4F 8C50 8C52 8C54 8C56 8C5C` |
-| `9C31` | 8 series LP | `9C43 9C45`; `9C47` is from coreboot only |
-| `8CB1` | 9 series (Wildcat Point) | `8CC3 8CC4 8CC6` |
-| `9CB1` | 9 series LP (Wildcat Point-LP) | `9CC3`, verified on the E7250 |
-| `8D31` | C610 / X99 (Wellsburg) | `8D44 8D47` |
+| xHCI | Chipset | LPC device IDs | Register source |
+|---|---|---|---|
+| `1E31` | 7 series (Panther Point) | `1E40`-`1E5F` (Linux `pci_ids.h` range); Codex's list `1E44 1E46 1E47 1E48 1E49 1E4A 1E53 1E55 1E56 1E57 1E58 1E59 1E5B` | 326776-003: `D20IP` 10.1.25 p.406, `D20IR` 10.1.33 p.414, RCBA 13.1.40 p.493. Device IDs are in its specification update, not fetched |
+| `8C31` | 8 series (Lynx Point, C220) | `8C44 8C46 8C49 8C4A 8C4B 8C4C 8C4E 8C4F 8C50 8C52 8C54 8C56 8C5C` (Table 1-2; `8C41`/`8C42` are engineering samples, not admitted) | 328904-003: `D20IP` 10.1.25 p.343, `D20IR` 10.1.34 p.350, RCBA 12.1.40 p.400 |
+| `9C31` | 8 series LP | `9C43 9C45`; `9C47` is from coreboot only | **Not yet confirmed:** the Mobile 4th Gen I/O datasheet 329003 is not fetched. coreboot's `lynxpoint` header gives the same offsets |
+| `8CB1` | 9 series (Wildcat Point) | `8CC3 8CC4 8CC6` | **Not yet confirmed:** the 9 Series datasheet 330550 is not fetched |
+| `9CB1` | 9 series LP (Wildcat Point-LP) | `9CC3` | **Confirmed on hardware:** the owner's live write (section 3.6) and coreboot's Broadwell `rcba.h`. The Mobile 5th Gen I/O datasheet is not fetched |
+| `8D31` | C610 / X99 (Wellsburg) | `8D44 8D47` | 330788-003: `D20IP` 10.1.34 p.288, `D20IR` 10.1.43 p.294, RCBA 12.1.40 p.350. Its summary Table 10-1 misplaces these as `3140h` and `31FEh`; the register pages agree with the other datasheets |
 
 These are not admitted:
 - whole ID ranges, and engineering samples;
 - 100-series and later PCHs, which route through PCR/ITSS behind P2SB;
 - non-Intel controllers.
 
-Beyond this machine, `9CB1` rests on the datasheet family, not a reviewed
-Broadwell-LP document.
+Before a "not yet confirmed" pair ships as admitted, its datasheet should be
+fetched and checked. The fetching notes and hashes are in
+`docs/references/README.md`, "Intel PCH datasheets".
 
 **The driver writes only when all of these hold**, and otherwise reports
 what it found:
@@ -389,8 +395,10 @@ Reading an amd64 `.BIN`:
   level +48, mode +52.
 
 Sources:
-- Intel 7-, 8- and 9-series and C610/X99 PCH datasheets (RCBA, `DnnIP` and
-  `DnnIR`).
+- Intel PCH datasheets 326776-003 (7 series), 328904-003 (8 series) and
+  330788-003 (C610/X99), and Linux `pci_ids.h`. They are fetched into
+  `docs/references/`, with the hashes and the ones still to fetch in its
+  README.
 - coreboot: `src/soc/intel/broadwell/include/soc/rcba.h`, and the
   `bd82x6x` and `lynxpoint` `pch.h` headers.
 - The code: `src/hcd_ctl.c` (`hcdParseResources`, `hcdStart`, `hcdThread`,

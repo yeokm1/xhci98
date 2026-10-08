@@ -323,3 +323,44 @@ sections 10 and 11 were verified against it on 2026-10-04.
   Cite the printed number, as `USB 3.2 p.N`, and check it the way the xHCI
   section above checks its own: the number sits in the running head as
   `- N -`, after "Revision 1.1 June 2022".
+
+## Intel PCH datasheets (issue 12, the `D20IR` routing quirk)
+
+These are fetched for issue 12 and roadmap task 36.3, the
+`XhciIntelIrqRoute` quirk. They are the authority for:
+- the RCBA register (LPC `D31:F0`, offset `F0h`);
+- `D20IP` (RCBA+`3128h`, bits 3:0 = the xHCI's pin) and `D20IR`
+  (RCBA+`3160h`, 16-bit, bits 2:0 = the INTA route, 0-7 = PIRQA#-H#);
+- the APIC-mode mapping of PIRQA#-H# to IRQ16-23.
+
+Intel's servers refuse scripted downloads (HTTP 403), so fetch these in a
+browser. The owner fetched them on 2026-10-08. Their text dumps
+(`<name>-dump.txt`, made with `pdftotext -layout`) sit beside them, and the
+dumps are not authoritative.
+
+| Save as | Version | SHA-256 | What it settles |
+|---|---|---|---|
+| `7-series-chipset-pch-datasheet.pdf` | 7 Series / C216 PCH datasheet, order no. 326776-003, June 2012 | `558cbf7e82b9f5ae2dfd366ce9e26b1edb646bc93e3a102be4a6d3799e60fded` | `D20IP` 10.1.25 p.406, `D20IR` 10.1.33 p.414, RCBA 13.1.40 p.493. The device IDs are not in it; it defers to its specification update |
+| `8-series-chipset-pch-datasheet.pdf` | 8 Series / C220 PCH datasheet, order no. 328904-003, May 2014 | `1239037e57bcfa9b753c0e0c799a32f09e9705670cd2890f183c0bed7f19ec98` | `D20IP` 10.1.25 p.343, `D20IR` 10.1.34 p.350, RCBA 12.1.40 p.400. LPC device IDs `8C44`-`8C5C` in Table 1-2 |
+| `x99-chipset-pch-datasheet.pdf` | C610 Series / X99 PCH datasheet, order no. 330788-003, October 2015 | `7168d555962ad39a74fd780cb0cf1500427c023bc185b4ce922819dc9e9f7860` | `D20IP` 10.1.34 p.288, `D20IR` 10.1.43 p.294, RCBA 12.1.40 p.350. xHCI `8D31` in Table 1-3. **Erratum:** Table 10-1's rows from `3110h` are misaligned (it lists `D20IP` at `3140h` and `D20IR` at `31FEh`). The register pages give `3128h` and `3160h`, as the other datasheets do |
+| `pci_ids.h` | Linux `include/linux/pci_ids.h`, master as fetched 2026-10-08 ([GitHub](https://github.com/torvalds/linux/blob/master/include/linux/pci_ids.h)) | `020fac001871c0f8441c1294f787231fb6cfbf2c55915ca8f918262e2db4487c` | `PANTHERPOINT_XHCI` `1E31` and the 7-series LPC range `1E40`-`1E5F`. It has no entries for the 8/9-series or C610 xHCI. GPL-2.0; kept here as a reference copy, not used by the build |
+
+Fetched but not relevant to the quirk. These are processor documents, not
+PCH documents:
+- `5th-gen-core-family-datasheet-vol-1.pdf`: 5th Gen Core processor
+  datasheet vol. 1, 330834-005, June 2015. SHA-256
+  `ec706408cb407cc69e428a43908511a18f77ccedbdeb6688384c9b7faba0ca24`.
+- `634961_BDW-H_Spec_Update.pdf`: Broadwell-H processor specification
+  update, 634961-024. SHA-256
+  `04cb9bb12eb71445aaf9f61abfe4c5b0f06a0ceaaad763d9cadd357546a47ffe`.
+
+Still to fetch, for the chipsets the quirk lists but no datasheet here
+covers:
+- the 9 Series PCH datasheet, order no. 330550, for `8CB1`;
+- the Mobile 4th Gen Core Processor Family I/O datasheet, order no. 329003,
+  for Lynx Point-LP `9C31`;
+- the Mobile 5th Gen Core Processor Family I/O datasheet, for Wildcat
+  Point-LP `9CB1`, the E7250's. Its specification update is 330838.
+
+The Licence limits section above applies to these as well: Intel's
+documents are fetched per machine, never tracked.
