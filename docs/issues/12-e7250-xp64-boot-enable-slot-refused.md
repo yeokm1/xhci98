@@ -239,7 +239,7 @@ The reviewed xHCI/LPC pairs, all vendor `8086`. Where a PCH datasheet is in
 | `8C31` | 8 series (Lynx Point, C220) | `8C44 8C46 8C49 8C4A 8C4B 8C4C 8C4E 8C4F 8C50 8C52 8C54 8C56 8C5C` (Table 1-2; `8C41`/`8C42` are engineering samples, not admitted) | 328904-003: `D20IP` 10.1.25 p.343, `D20IR` 10.1.34 p.350, RCBA 12.1.40 p.400 |
 | `9C31` | 8 series LP (Lynx Point-LP) | `9C43 9C45` (`9C41` is an engineering sample, not admitted; `9C47` is from coreboot only, not in the datasheet, and not admitted) | 329003-003: `D20IP` 8.1.23 p.335, `D20IR` 8.1.31 p.342, RCBA 10.1.40 p.403 |
 | `8CB1` | 9 series (Wildcat Point) | `8CC3 8CC4 8CC6` (`8CC1`/`8CC2` are engineering samples, not admitted) | 330550-002: `D20IP` 10.1.25 p.336, `D20IR` 10.1.34 p.343, RCBA 12.1.40 p.393 |
-| `9CB1` | 9 series LP (Wildcat Point-LP) | `9CC3` | **Confirmed on hardware:** the owner's live write (section 3.6) and coreboot's Broadwell `rcba.h`. **The Mobile 5th Gen I/O datasheet is not yet fetched** |
+| `9CB1` | 9 series LP (Wildcat Point-LP) | `9CC3` | 330837-002 (Core M I/O, Wildcat Point-LP): `D20IP` 8.1.23 p.337, `D20IR` 8.1.31 p.344, RCBA 10.1.40 p.405; xHCI `9CB1` rev 03 in Table 1-4. Its LPC rows are the Y-line's; `9CC3` (U-line) was read on the E7250 itself. Also confirmed on hardware by the live write (section 3.6) |
 | `8D31` | C610 / X99 (Wellsburg) | `8D44 8D47` | 330788-003: `D20IP` 10.1.34 p.288, `D20IR` 10.1.43 p.294, RCBA 12.1.40 p.350. Its summary Table 10-1 misplaces these as `3140h` and `31FEh`; the register pages agree with the other datasheets |
 
 These are not admitted:
@@ -247,7 +247,7 @@ These are not admitted:
 - 100-series and later PCHs, which route through PCR/ITSS behind P2SB;
 - non-Intel controllers.
 
-Only `9CB1`'s own datasheet, the Mobile 5th Gen I/O one, is still to fetch. The fetching notes and hashes are in
+Every pair is now confirmed by its datasheet. The fetching notes and hashes are in
 `docs/references/README.md`, "Intel PCH datasheets".
 
 **The driver writes only when all of these hold**, and otherwise reports
@@ -395,8 +395,8 @@ Reading an amd64 `.BIN`:
 
 Sources:
 - Intel PCH datasheets 326776-003 (7 series), 328904-003 (8 series),
-  329003-003 (Lynx Point-LP I/O), 330550-002 (9 series) and 330788-003
-  (C610/X99), and Linux `pci_ids.h`. They are fetched into
+  329003-003 (Lynx Point-LP I/O), 330550-002 (9 series), 330837-002
+  (Core M I/O, Wildcat Point-LP) and 330788-003 (C610/X99), and Linux `pci_ids.h`. They are fetched into
   `docs/references/`, with the hashes and the ones still to fetch in its
   README.
 - coreboot: `src/soc/intel/broadwell/include/soc/rcba.h`, and the
