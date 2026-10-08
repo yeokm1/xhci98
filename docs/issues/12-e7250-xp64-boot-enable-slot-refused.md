@@ -584,7 +584,8 @@ The INF does not ask for MSI.
 
 ### 9.3 Not yet known
 
-- **Why the controller's INTx does not arrive.** Candidates:
+- **Why the controller's INTx does not arrive** (not answered by the EHCI
+  test, which shows only that it does not). Candidates:
   - a mismatch between the ACPI `_PRT` and the PCH's own routing of the xHCI
     interrupt;
   - a masked I/O APIC entry;
@@ -592,11 +593,25 @@ The INF does not ask for MSI.
     `gate.busmaster.command` `0006` rules out only at start.
 
   XHCIQUAL under DOS saw pin A, line 11.
-- **A test under way:** with the EHCI controller disabled in Device Manager,
-  - if the ISR's entries stop altogether, the xHCI's line never reached the
-    ISR;
-  - if delivery starts working, the EHCI or its driver is interfering with the
-    shared line.
+- **The EHCI test, done the same day (`xpnoehci`, XP x64).** The owner disabled
+  the EHCI controller in Device Manager and restarted with the mouse and the
+  stick plugged in. Neither was detected, and the xhci98 controller showed
+  "working" with no devices under it. The dump settles it:
+  - **ISR entered 0 times** in about 90 s, while IMAN showed IP = 1 and IE = 1
+    and USBCMD showed INTE. **The xHCI's INTx never reaches the ISR.** Every
+    ISR call in the earlier dumps was made for the EHCI on the shared line,
+    and the claims were events that happened to be waiting when the EHCI
+    interrupted.
+  - With no ISR calls at all, the backstop drained only about every 5 s:
+    samples #2 to #5 are about 51 ticks apart. With the EHCI enabled, the
+    gap had been about 0.5 s.
+  - So every command timed out: the mouse's Enable Slot read "never
+    completed", and port 1 ended Failed, cause "no slot". `CommandsGivenUp`
+    was 4. That started three controller recoveries inside ten minutes, and
+    the window refused a fourth. **The controller latched FAILED**, with INTE
+    and IE cleared, and the backstop was refused 534 times.
+  - So on this machine the driver works at all only because the EHCI shares
+    the line.
 
 ### 9.4 Fix candidates (owner to choose)
 
