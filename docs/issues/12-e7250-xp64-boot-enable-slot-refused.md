@@ -197,10 +197,9 @@ A restart restores the BIOS value.
 
 ## 4. Considered and not chosen
 
-- **MSI on NT6.** It would bypass the routing. But this HCD connects its own
-  interrupt, so the work is parsing message resources and using
-  `IoConnectInterruptEx` in this driver, not just an INF setting. And it
-  would not help Windows 98, 2000 or XP. Kept as a possible later option.
+- **MSI as the only fix.** It would bypass the routing on Vista and 7, but
+  it cannot help Windows 98, 2000 or XP, which have no MSI. It is planned
+  as well, not instead (section 5.3).
 - **Polling only.** It works anywhere, but costs CPU time and latency
   everywhere. Polled event delivery is planned instead as a fallback
   beside the quirk (section 5.2).
@@ -305,7 +304,22 @@ Polled event delivery (design record 15), moved into Phase 36 on
   bounded time and retries under one deadline, instead of failing the port
   at once.
 
-### 5.3 Related changes
+### 5.3 MSI on Vista and 7 (tasks 36.15, 36.16)
+
+A message-signalled interrupt does not pass through PIRQ routing, so a
+wrong `D20IR` cannot affect it. That is why Intel's own Windows 7 driver
+works on the E7250. The plan covers x86 and amd64:
+- **The INF** requests MSI on the NT6 paths.
+- **The driver** accepts a message resource and connects it with
+  `IoConnectInterruptEx`. On x86 that routine is found in the kernel's
+  export table at run time, so the same binary still loads on 98 and ME.
+- **The ISR** treats a message as always its own.
+
+Windows 98, ME, 2000 and XP keep the line, with the routing quirk and
+polling. Design record 15 section 4.3 and roadmap 36.15 carry the design
+and its open questions.
+
+### 5.4 Related changes
 
 - **36.11:** XHCIQUAL reports the LPC, RCBA, `D20IP`/`D20IR` and the PIRQ
   routing, read-only. It does so only on the reviewed pairs of section 5.1,
@@ -315,7 +329,7 @@ Polled event delivery (design record 15), moved into Phase 36 on
     behind P2SB;
   - Bay Trail and Braswell use the iLB.
 - **36.12:** RESET_PIPE in xHCI 4.6.8 order.
-- **36.15:** the `2.2.1.0` builds, the QEMU regression, and the owner's check
+- **36.17:** the `2.2.1.0` builds, the QEMU regression, and the owner's check
   on the E7250 under XP x64 and Windows 7 with no manual write. The check
   covers:
   - the mouse;

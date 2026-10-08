@@ -14,10 +14,13 @@ placeholders, which map as follows:
 | `POLL.5` | 36.10 |
 | `POLL-V` | 36.13 |
 | `POLL-E` | 36.14 |
+| (new) MSI on Vista and 7 | 36.15, 36.16 |
 
 It was drawn up as Phase 35, and the review history in section 13 keeps the
 old phase numbers. Section 4.2 and decision 6 are the 2026-10-08 amendment
-for issue 12. They are reviewed in 36.5. DRAFT, revision 4, 2026-10-05: written at the owner's request so the driver can run
+for issue 12. They are reviewed in 36.5. Section 4.3 and decision 7 add MSI
+on Vista and 7 (36.15). That reverses section 1's "not in this design" for
+MSI on NT6; MSI-X and more than one interrupter stay out. DRAFT, revision 4, 2026-10-05: written at the owner's request so the driver can run
 a controller that delivers no legacy interrupt - an MSI- or MSI-X-only xHCI
 controller, which neither primary target can serve today - by polling the
 event ring, adaptively, instead of waiting for an interrupt. Reviews covered
@@ -232,6 +235,26 @@ polling, with the reason "automatic: line interrupt not delivered".
 
 **Mode 1** (the line, forced) never moves, so it reads as today. **Mode 2**
 polls from the start.
+
+### 4.3 MSI on Vista and 7 (amendment, 2026-10-08; to be designed in 36.15)
+
+**The decision.** The owner, 2026-10-08: on Vista and 7, x86 and amd64,
+the controller may take a message-signalled interrupt. It needs one
+message, for Interrupter 0.
+
+**What it changes:**
+- The INF requests MSI (`MSISupported` 1, message limit 1) on the NT6
+  paths.
+- `hcdParseResources` accepts a message resource.
+- The interrupt is connected with `IoConnectInterruptEx`. On x86 the
+  routine is resolved from the kernel image's export table at run time,
+  because the same binary must still load on 98 and ME, where neither it
+  nor `MmGetSystemRoutineAddress` exists.
+- The ISR treats a message as always its own.
+
+The delivery table above gains an MSI row for each mode once 36.15 settles
+how `XhciInterruptMode` reads, with 3 the natural "MSI" value. The open
+questions are listed in the roadmap's 36.15.
 
 ### 4.1 What the hardware needs (review, revision 1)
 
@@ -650,6 +673,8 @@ Taken by the owner on 2026-10-05, each from options with a recommendation:
 6. (2026-10-08, after issue 12) Automatic mode moves a line proven dead at
    run time to polling (section 4.2). This replaces a narrower
    stalled-event watchdog the issue 12 plan had held as task 36.4.
+7. (2026-10-08) MSI on Vista and 7, both architectures (section 4.3;
+   roadmap 36.15 and 36.16).
 
 ## 13. The reviews
 

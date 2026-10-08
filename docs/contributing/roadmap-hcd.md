@@ -74,6 +74,7 @@ table is the index.
 | The Intel port switchover | Phase 34, task 34.3 (owner, 2026-10-05, from a tester's report of Ivy Bridge machines): the HCD routes the Intel 7-, 8- and 9-series and C610 switchable connectors to itself, superseding the miniport's Phase 4 decision to leave the registers alone; a device-id gate of six, and the opt-out `XhciIntelPortSwitch` at 1. Design record 16. **Amended 2026-10-06** (owner; task 35.5): `XhciIntelPortSwitch` 2 performs the switchover the moment an Intel controller is detected, the gate bypassed; 1 and other nonzero numbers keep the gate, the default stays 1. Value 2 is at the user's own risk - on a controller without the switch registers it writes registers of unknown meaning - and the README and release notes say so; the owner chose to inform rather than add a register-layout check |
 | Polled event delivery | Planned, unnumbered (`POLL`; drawn up as Phase 35) (owner, 2026-10-05, first added as Phase 34's stage C; design record 15): a switch, `XhciInterruptMode`, chooses automatic (0, the default: the line interrupt where the controller has one, an adaptive poll of the event ring where it has none), the line interrupt (1, failing as today without one) or polling (2), with 3 and above reserved (MSI, not scheduled) and run as 0, so an MSI- or MSI-X-only controller, which neither primary target can serve by interrupt, can be driven; the idle period `XhciPollIdleMs` defaults to 50 ms and the active period `XhciPollActiveMs` to 1 ms, neither may be 0, the idle period is held to 5000 ms and the active to the idle, and all three join 34.1's install rule. The delivery in effect and its reason are captured by `XHCISNAP` and the DebugView log. Each taken from options with a recommendation; the numbering replaced the same day's "0 line, 1 polling, 2 MSI" |
 | Polled event delivery joins Phase 36 | Owner, 2026-10-08, after issue 12: the `POLL.*` tasks become 36.5 to 36.10, 36.13 and 36.14. Record 15 is amended (section 4.2, decision 6): automatic mode also moves to polling when a line interrupt is proven dead at run time, which replaces 36.4's stalled-event watchdog. 36.4 keeps the BUSY retry |
+| MSI on Vista and 7 | Owner, 2026-10-08: added to Phase 36 for both architectures (36.15, 36.16), designed as a record 15 amendment. The x86 binary resolves `IoConnectInterruptEx` from the kernel's export table at run time, because it must still load on 98 and ME |
 | The other `1.2.0.0` limitations (28.3) | The NUSB stop crash, the Windows 98 churn wedge and the Windows 7 disable hang are each re-measured under the HCD and recorded as gone, carried or new (owner, 2026-10-04). A survivor is carried in the release notes and does not block the cut |
 | 28-E.1's Full-Speed hub clause | Taken at the bench, not recorded as untested ground (owner, 2026-10-04): a USB 2.0 hub forced to Full Speed by an ADuM full/low-speed isolator in front of it, in place of a USB 1.1 hub (owner, the same day, superseding the plan to buy one) |
 | Checkpoints of Phases 28 to 31 | Pre-approved (owner, 2026-10-04): each closes once its review is clean, the x86 and amd64 builds, gates and host tests pass, every roadmap VM leg passes with its package hash recorded, and no regression is open on an earlier phase. Scope rulings, waivers, push, tag and the cut stay the owner's |
@@ -665,6 +666,8 @@ Goal:
 - Polled event delivery (design record 15) keeps a controller working when
   its interrupt cannot be delivered or repaired: no legacy interrupt at
   all, or a line proven dead at run time.
+- MSI on Vista and 7 bypasses PIRQ routing altogether wherever the OS
+  offers it (36.15).
 
 Status: opened 2026-10-07 (owner) from a user report against `2.2.0.0`,
 the first report of the HCD on real hardware under Windows XP x64 (issue
@@ -703,6 +706,8 @@ How it got here:
     a line interrupt proven dead at run time moves to polling (record 15
     section 4.2). That replaces the stalled-event watchdog 36.4 held, and
     36.4 keeps only the BUSY retry.
+  - The owner then added MSI on Vista and 7, for both architectures, as
+    36.15 and 36.16. The builds and E7250 check moved to 36.17.
 
 **Renumbered twice on 2026-10-08 (owner).** First, the withdrawn and
 superseded tasks were removed from this list. Then polled event delivery
@@ -717,7 +722,7 @@ renumbering cite these numbers:
 | 36.4 (watchdog and BUSY retry) | 36.4, the BUSY retry alone; the watchdog is replaced by polling's dead-line rule (36.5, 36.7) |
 | 36.5 (`XHCIQUAL` routing report) | 36.11 |
 | 36.6 (RESET_PIPE order) | 36.12 |
-| 36.7 (the `2.2.1.0` builds and check) | 36.15 |
+| 36.7 (the `2.2.1.0` builds and check) | 36.17 (36.15 until MSI joined as 36.15 and 36.16) |
 | `POLL.0` to `POLL.5` (planned work) | 36.5 to 36.10 |
 | `POLL-V`, `POLL-E` (planned work) | 36.13, 36.14 |
 
@@ -811,7 +816,27 @@ renumbering cite these numbers:
   - mode 2 on the E460 and the P14s Gen 1 under Windows 98 SE;
   - an MSI-only controller if one is at hand (the synthetic no-interrupt leg does not wait for one);
   - the E7250 under XP x64 with `XhciIntelIrqRoute` 0 and mode 0, read as the dead-line move to polling.
-- [ ] 36.15 the `2.2.1.0` builds, x86 and `-amd64`:
+- [ ] 36.15 MSI on Vista and 7, x86 and amd64 (owner, 2026-10-08), designed as a record 15 amendment (section 4.3) and reviewed before code:
+  - **Why.** A message-signalled interrupt bypasses PIRQ routing, so a BIOS routing fault like the E7250's cannot affect it. It is also how an MSI-only controller gets real interrupts on NT6 instead of polling. Windows 98, ME, 2000 and XP have no MSI, so they keep the line, the routing quirk and polling.
+  - **The INF.** `MSISupported` 1 under `Interrupt Management\MessageSignaledInterruptProperties` in the controller's hardware key, with a message limit of 1 (Interrupter 0 only). The NT6 install paths only; earlier systems ignore it.
+  - **The resources.** `hcdParseResources` takes a message interrupt (`CM_RESOURCE_INTERRUPT_MESSAGE`) as well as a line one. Windows may still grant the line, so both paths stay supported.
+  - **The connection.** `IoConnectInterruptEx` (`CONNECT_MESSAGE_BASED`, with `CONNECT_LINE_BASED` or `CONNECT_FULLY_SPECIFIED` for a line) and `IoDisconnectInterruptEx`, on Vista and later only.
+    - **The single x86 binary** also loads on 98, ME, 2000 and XP, so it must not import these routines. `MmGetSystemRoutineAddress` is absent on 98 and ME too.
+    - So both architectures resolve them at run time by a bounded walk of the kernel image's export table. It is used only when `IoIsWdmVersionAvailable(6, 0)` is TRUE, and the line path through `IoConnectInterrupt` is used when they are not found.
+    - The walk is a pure, host-tested parser, fed the image bytes.
+  - **The ISR.** A message ISR: EINT then IP acknowledged and the drain queued, as now. An MSI is never shared, so the "not ours" path does not apply to it.
+  - **To settle in review:**
+    - how `XhciInterruptMode` reads with MSI: 3 = MSI where offered; 1 = the line, which the INF key cannot withdraw once Windows has granted a message, so whether 1 needs its own INF path; 0 = MSI where granted, else the line, else polling;
+    - the dead-line rule (section 4.2) not applied to a message delivery, or applied to it alike;
+    - the interaction with the routing quirk, which is not needed under MSI and reports only;
+    - XP x64, which ignores the key and keeps the line.
+  - **What is recorded:** the delivery (MSI, line or poll) and its reason, in the counter block, the start log line and `XHCISNAP`.
+- [ ] 36.16 the MSI legs:
+  - **QEMU** (`qemu-xhci` offers MSI and MSI-X): Vista and 7, x86 and x64, with HID, Bulk-Only and UAS storage, and audio, under mode 0 and mode 3. Also disable and enable, remove and rescan, a forced recovery, and the controller's D3 and back. These are read as MSI in `XHCISNAP`.
+  - **Down-level:** 98 SE, 2000 and XP x86 and x64 reading as the release before it, with the line. The x86 binary loads on 98 and ME with the new code.
+  - **The owner's E7250** under Windows 7 x64, with `XhciIntelIrqRoute` 0, read as MSI with the mouse and the stick working.
+  - **The owner's E460 and P14s Gen 1** under Windows 7 if installed, read as MSI.
+- [ ] 36.17 the `2.2.1.0` builds, x86 and `-amd64`:
   - the host suites and every gate;
   - a Codex review loop per task;
   - the QEMU regression legs (still owed from `2.2.0.2`);
@@ -833,7 +858,9 @@ Checkpoint: `2.2.1.0` on the E7250 under XP x64 and Windows 7 x64, with
   The `qemu` flavour is never published;
 - 36.14 read by the owner;
 - `XhciInterruptMode` at 0 and at 1, on a controller whose line interrupt
-  works, reading as the release before it.
+  works, reading as the release before it on the down-level systems;
+- 36.16 passing: MSI on Vista and 7, and the x86 binary still loading on
+  98 and ME.
 
 Which release carries the result is the owner's call.
 
