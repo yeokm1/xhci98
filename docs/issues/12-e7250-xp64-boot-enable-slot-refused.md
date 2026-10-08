@@ -16,6 +16,15 @@ proven). The interim build
 its code reverted; a diagnostic build, `2.2.0.2`, takes its place
 (section 8.4).
 
+**Update, 2026-10-08:** the owner ran the diagnostic build `2.2.0.2` on the
+E7250 under Windows 7 x64 and under a fresh XP x64 (section 9). **On both,
+the controller's interrupt never reaches the ISR.** All event delivery
+falls to the lost-interrupt backstop, at about one drain every half second.
+Nothing is stuck and every stall is recovered; the I/O is only very slow.
+That slowness explains the sluggish mouse and the missing drive letter.
+`xpboot` reproduces Finding 1, and the same lost interrupt is behind it. So
+section 8.3's reading is set aside, and section 5 is answered.
+
 **This is the first report of the HCD on real hardware under Windows XP
 x64.** That tier had been virtual-machine only (AGENTS.md, the release
 notes' "Targets and their standing").
@@ -299,6 +308,10 @@ task 36.3 are not yet run.
 
 ## 5. Interrupt delivery is poor on this machine
 
+*Answered by section 9: the controller's own interrupt is not delivered at
+all. The claims counted here came from ISR calls made for the other device on
+the shared line.*
+
 DpcCount always equals InterruptsClaimed + BackstopDrains: 69 + 54 = 123
 (AFTERUSB), 114 + 112 = 226 (MYDUMP). About half of all event deliveries
 come from the 100 ms backstop rather than an interrupt. InterruptCount is
@@ -409,6 +422,10 @@ against `2.2.0.0` (`sizeof` 132912 matches the dump):
 
 ### 8.3 What the code allows (read, not yet confirmed)
 
+*Set aside by section 9: the `2.2.0.2` dumps show every RESET_PIPE succeeding
+and no Halted endpoint. The 4.6.8 ordering below is still a deviation from
+the spec, but it is not this hang.*
+
 Read against `2.2.0.0`, by a Claude subagent and independently by Codex:
 
 - **The stall recovery runs in the wrong order.** `hcdCfgReset`
@@ -487,10 +504,123 @@ transfer, ISR and DPC, five register reads when the backstop finds an event
 waiting, and the controller lock taken around each record on the slow
 paths.
 
+## 9. The `2.2.0.2` read: the controller's interrupt never reaches the ISR (task 36.7)
+
+### 9.1 The runs
+
+On 2026-10-08 the owner ran `2.2.0.2` (release, amd64, verbosity 3, applied
+3) on the E7250. The device was the same SanDisk stick, on root port 13 at
+SuperSpeed, driven by `usbstor`, with a low-speed USB mouse on port 1. The
+dumps are in `temp/e7250-2202/` (git-ignored):
+
+| Dump | Windows 7 x64 | XP x64 (fresh install) |
+|---|---|---|
+| clean boot, nothing plugged in at first | `w7start` | `xpstart` |
+| mouse only | `w7mouse0` | `xpmouse0` |
+| about 30 s after the stick was hot-plugged | `w7hot1` | `xphot1` |
+| about 2 min later, mouse moved just before | `w7hot2` | `xphot2` |
+| stick and mouse present at boot | `w7boot` | `xpboot` |
+
+What the owner saw was the same on both systems:
+- The mouse is sluggish, even with no stick plugged in.
+- A hot-plugged stick gets no drive letter, even after more than 2 minutes.
+- A stick present at boot hangs PnP.
+
+The interrupt resource, read from the start of the `.BIN`'s `XHCI_EXTENSION`
+(amd64: vector +44, level +48, mode +52):
+- Windows 7: vector `0xB2`, IRQL 11, LevelSensitive.
+- XP x64: vector `0x171`, IRQL 7, LevelSensitive. Device Manager shows IRQ
+  21, shared only with the EHCI controller ("Standard Enhanced PCI to USB
+  Host Controller").
+
+The INF does not ask for MSI.
+
+### 9.2 What the dumps show
+
+| | w7hot1 | w7hot2 | w7boot | xphot1 | xphot2 | xpboot |
+|---|---|---|---|---|---|---|
+| Transfers submitted / completed | 182 / 179 | 464 / 461 | 417 / 414 | 62 / 59 | 440 / 437 | 7 / 5 |
+| Stall Error / Stopped - Length Invalid | 3 / 2 | 7 / 2 | 7 / 5 | 2 / 2 | 3 / 2 | 0 / 0 |
+| ISR entered / claimed | 859 / 92 | 1081 / 203 | 964 / 283 | 587 / 61 | 793 / 164 | 322 / 13 |
+| Backstop drains | 65 | 202 | 175 | 29 | 164 | 3 |
+| Backstop looks: event waiting with IP set / with IP clear | 459 / 0 | 1402 / 0 | 1195 / 0 | 208 / 0 | 1146 / 0 | 21 / 0 |
+
+- **Nothing is stuck.** In every dump the oldest outstanding bulk transfer
+  is 0.1-0.4 s old, the pipes' Endpoint Contexts are Running, and transfers
+  keep completing. Every stall on the bulk IN endpoint is recovered: each
+  RESET_PIPE takes CLEAR_FEATURE, then Reset Endpoint = Success, then
+  Set TR Dequeue = Success. But each one takes 2-3 s. At the start of
+  `w7boot` the first five took 0-80 ms, then the later ones slowed to 2-3 s.
+- **The controller raises the interrupt, and the ISR is not called for it.**
+  At every backstop sample:
+  - USBCMD has R/S and INTE, USBSTS has EINT, IMAN has IP = 1 and IE = 1, and
+    an event is waiting.
+  - The ISR was last entered 0.4-1.0 s before.
+  - The backstop never once found an event waiting with IP clear.
+
+  With a level-sensitive line held asserted, the ISR would be called again
+  and again. It is not.
+  - The ISR is entered a few times a second, for the other device on the line.
+  - Its last USBSTS read is `0x10` or `0`, without EINT.
+  - Its claims track the backstop drains (`w7hot2` 203 vs 202, `xphot2` 164
+    vs 164).
+- **It fails from the very first event.** In `xpstart` and `xpboot`, backstop
+  sample #1, at tick 5, shows the start's No Op Command Completion waiting
+  with IP = 1 and IE = 1, and "ISR entered never". So delivery never worked,
+  rather than working for a while and then stopping.
+- **Finding 1, reproduced (`xpboot`).** Port 13's Enable Slot read "never
+  completed" on attempts 0 and 1, and the port ended Failed, cause "no slot",
+  with PORTSC still CCS and PED. This is section 3.2's mechanism. It also
+  answers that section's open question, step 2: the controller did latch IP
+  while masked, and the interrupt was not delivered. The No Op's completion
+  waited for the backstop, and port 13's enumeration had finished failing
+  before the backstop drained it. `w7boot` did not show it: every Enable Slot
+  succeeded.
+- **The cost.** Every event waits for the backstop. The mouse's reports
+  arrive about twice a second, and usbstor's commands take several half
+  seconds each. A recovery takes several control transfers and so takes
+  2-3 s. That is slow enough that partmgr and the mount never finish, so
+  there is no drive letter and PnP appears hung.
+
+### 9.3 Not yet known
+
+- **Why the controller's INTx does not arrive.** Candidates:
+  - a mismatch between the ACPI `_PRT` and the PCH's own routing of the xHCI
+    interrupt;
+  - a masked I/O APIC entry;
+  - the PCI Command register's Interrupt Disable bit set after start, which
+    `gate.busmaster.command` `0006` rules out only at start.
+
+  XHCIQUAL under DOS saw pin A, line 11.
+- **A test under way:** with the EHCI controller disabled in Device Manager,
+  - if the ISR's entries stop altogether, the xHCI's line never reached the
+    ISR;
+  - if delivery starts working, the EHCI or its driver is interfering with the
+    shared line.
+
+### 9.4 Fix candidates (owner to choose)
+
+- **Work without the interrupt.**
+  - Drain on every 100 ms tick, or poll faster, once the line is seen not to
+    deliver.
+  - Make the start's No Op and the enumeration commands tolerate a late
+    completion instead of failing the port.
+
+  This would fix both findings on every OS.
+- **MSI on NT6**, through an INF `MSISupported` entry, if usbport on
+  Windows 7 connects a miniport's message interrupt. It would not help XP,
+  which has no MSI.
+- **Find and fix the routing** on this machine, if the cause turns out to
+  be something the driver can correct.
+- Separately, the 4.6.8 order in `hcdCfgReset` (section 8.3), as a spec fix.
+
 ## Sources
 
 - `temp/e7250/` (git-ignored): `MYDUM`, `MYDUMP`, `BEFOREUSB`, `AFTERUSB`,
   `PROBE.LOG`.
+- `temp/e7520/` (git-ignored): the owner's `2.2.0.0` Windows 7 dumps.
+- `temp/e7250-2202/` (git-ignored): the owner's `2.2.0.2` dumps, Windows 7
+  x64 (`w7*`) and XP x64 (`xp*`).
 - `src/hcd_ctl.c` (`hcdStart`, `hcdThread`, `hcdPoll`, `hcdBackstop`),
   `src/hcd_enum.c` (`hcdCommand`), `src/xhci_cmd.c`, `src/xhci_evt.c`
   (`XhciEnableInterrupts`), `src/xhci_init.c`, `src/hcd_cfg.c`.
