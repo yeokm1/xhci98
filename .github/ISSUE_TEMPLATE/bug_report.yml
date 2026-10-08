@@ -11,23 +11,6 @@ body:
         report useful is being able to tell your machine apart from everybody
         else's.
 
-        **Please check the known limitations first:**
-        [docs/using/release-notes.md](https://github.com/yeokm1/xhci98/blob/main/docs/using/release-notes.md).
-        Each one says what was measured, and whether on real hardware or in a
-        virtual machine.
-
-        **From `2.0.0.0` the driver is the whole USB stack**: it replaces
-        Windows' own USB port and hub drivers on every system, and only the
-        device drivers above it (keyboard, mouse, storage, audio) are Windows'
-        own. The `1.x.x.x` releases were a different driver, a plug-in under
-        Windows' or NUSB's USB 2.0 stack; `1.2.0.0` was the last, and it gets
-        no more fixes. If you are on `1.x.x.x`, please try the latest `2.x.x.x`
-        release before reporting.
-
-        **One thing is already known:** upgrading in place over a running
-        `1.x.x.x` on Windows 98 with NUSB blue-screens the machine, in NUSB's
-        `usbport.sys`. The README's "Upgrading from 1.x.x.x to 2.y.y.y" avoids it.
-
   - type: dropdown
     id: os
     attributes:
@@ -168,14 +151,16 @@ body:
         thing you can send. XHCISNAP.EXE is in the download; use the one from
         the release you installed, not a copy from a 1.x.x.x release:
 
-            XHCISNAP -verbosity 2
+            XHCISNAP -verbosity 3
             (restart the machine)
-            (make the problem happen again)
-            XHCISNAP -o C:\MYDUMP
+            XHCISNAP -o C:\dump-before
+            (make the problem happen)
+            XHCISNAP -o C:\dump-after
+            XHCISNAP -disable
 
-        Attach C:\MYDUMP.TXT here (plain text, no internal addresses). Keep
-        C:\MYDUMP.BIN and attach it only if a maintainer asks. Afterwards run
-        XHCISNAP -disable. The log cannot capture a crash; for a crash, the
+        Attach C:\dump-before.TXT and C:\dump-after.TXT here (plain text, no
+        internal addresses). Keep the matching .BIN files and attach them only
+        if a maintainer asks. The log cannot capture a crash; for a crash, the
         photo above and the XHCIQUAL report below are what helps.
     validations:
       required: false
