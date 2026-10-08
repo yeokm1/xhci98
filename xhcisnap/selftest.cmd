@@ -207,40 +207,6 @@ if not errorlevel 1 (
     set FAILED=1
 )
 
-rem The diagnostic build 2.2.0.2's parts of the HCD region (roadmap-hcd.md
-rem task 36.1): a bulk IN transfer on the ring of a Halted endpoint whose TR
-rem Dequeue is that TD, the thread's own EP0 transfer heading its queue with
-rem its TD wrapped past the Link TRB, the recovery timeline in order with a
-rem stalled CLEAR_FEATURE, a request not taken, one held, a streams status
-rem and the commands by name, backstop samples with IP clear and an event
-rem waiting and refused insertions counted; then a 2.2.0.0 header, which
-rem keeps none of it, and a placement past the image.
-"%~dp0XHCISNAP.EXE" -selftest-diag > "%BASE%.diag.log"
-if errorlevel 1 (
-    echo FAIL: -selftest-diag exited %errorlevel%, expected 0
-    set FAILED=1
-)
-for %%S in ("ISR last entered 2.0 s ago, last claimed 89.9 s ago" "ISR entered 1.0 s ago, claimed never, DPC 0.5 s ago" "waiting with IP CLEAR 130" "the TRB there: Command Completion, cycle 1 - AN EVENT IS WAITING" "the first RESET_PIPE (timeline #9)" "slot 2 DCI 3, EP 81 bulk IN: seq-used" "Endpoint Context: HALTED, TR Dequeue 0000000001000260, DCS 1; slot Configured" "record seq 50, ON THE RING; URB BULK_OR_INTERRUPT_TRANSFER (0009h), TransferFlags 3 (IN, SHORT_OK)" "the controller's TR Dequeue is AT this TD's first TRB" "(3 of 4 open endpoint pipes listed; 2 more with a transfer outstanding" "the THREAD'S OWN EP0 control transfer, ON THE RING, token 7" "SETUP 02 01 00 00 81 00 00 00" "TD 02000FF0 to 02000010 (wrapped past the Link TRB); the controller's TR Dequeue undefined in state Running (stale value)" "TD 03000FE0 to 03000020 (wrapped past the Link TRB); the controller's TR Dequeue is INSIDE this TD" "Endpoint Context: Stopped, TR Dequeue 0000000003000010" "USBD 00010000 (CANCELED), an earlier abort covered it" "done not yet (HELD, not completed)" "streams status 4 (failed)" "7 drain(s) not queued" "commands 2: Stop Endpoint=Success Set TR Dequeue=Context State Error" "CLEAR_FEATURE(ENDPOINT_HALT) STALLED by the device" "(NOT TAKEN YET)" "record seq 50, ON THE RING: marked for the thread" "(7 entries kept of 10 written.)" "IMAN 00000002 (IP 0, IE 1)" "(2 kept of 133 queued.)" "an xhci98.sys before 2.2.0.2" "in records smaller than this build knows; not decoded.") do (
-    findstr /C:%%S "%BASE%.diag.log" > nul
-    if errorlevel 1 (
-        echo FAIL: the diagnostic decode does not say %%S
-        set FAILED=1
-    )
-)
-findstr /N /C:"  #7 " /C:"  #8 " /C:"  #9 " /C:"  #10 " "%BASE%.diag.log" > "%BASE%.diag-order.log"
-for /f "tokens=1 delims=:" %%L in ('findstr /C:"  #7 " "%BASE%.diag-order.log"') do set "ORD7=%%L"
-for /f "tokens=1 delims=:" %%L in ('findstr /C:"  #10 " "%BASE%.diag-order.log"') do set "ORD10=%%L"
-if not defined ORD7 (
-    echo FAIL: the diagnostic decode lost timeline entry #7
-    set FAILED=1
-) else if not defined ORD10 (
-    echo FAIL: the diagnostic decode lost timeline entry #10
-    set FAILED=1
-) else if %ORD7% GEQ %ORD10% (
-    echo FAIL: the timeline is not printed oldest first
-    set FAILED=1
-)
-
 rd /s /q "%RUNDIR%" 2> nul
 rd out 2> nul
 
@@ -248,5 +214,5 @@ if "%FAILED%"=="1" (
     echo xhcisnap selftest FAILED
     exit /b 1
 )
-echo xhcisnap selftest: 10 cases, all passed
+echo xhcisnap selftest: 9 cases, all passed
 exit /b 0

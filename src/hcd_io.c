@@ -161,19 +161,10 @@ static VOID NTAPI hcdCancel(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     }
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    hc->Diag.CancelCalls++;
     if (x->Irp == Irp && x->Seq == seq && x->State != HCD_XFER_FREE) {
         x->CancelRequested = 1;
         x->Pipe->CancelPending = 1;
         hc->CancelWork = 1;
-        hc->Diag.CancelMarks++;
-        (VOID)HcdDiagRecOpenLocked(hc, XHCI_SNAPSHOT_RK_CANCEL,
-                                   x->Pipe->Device->SlotId, x->Pipe->Dci,
-                                   0x80000000UL | (x->State << 16) |
-                                       (seq & 0xFFFFUL));
-    } else {
-        (VOID)HcdDiagRecOpenLocked(hc, XHCI_SNAPSHOT_RK_CANCEL, 0, 0,
-                                   seq & 0xFFFFUL);
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     HcdThreadWake(hc);
@@ -195,12 +186,6 @@ static VOID hcdCancelOn(PIRP irp, PHCD_XFER x)
         x->CancelRequested = 1;
         x->Pipe->CancelPending = 1;
         hc->CancelWork = 1;
-        hc->Diag.CancelCalls++;
-        hc->Diag.CancelMarks++;
-        (VOID)HcdDiagRecOpenLocked(hc, XHCI_SNAPSHOT_RK_CANCEL,
-                                   x->Pipe->Device->SlotId, x->Pipe->Dci,
-                                   0xC0000000UL | (x->State << 16) |
-                                       (x->Seq & 0xFFFFUL));
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         HcdThreadWake(hc);
     }
@@ -237,10 +222,6 @@ static PHCD_XFER hcdTakeRecord(PHCD_PIPE pipe, PIRP irp)
             x->CancelRequested = 0;
             x->Mapped = 0;
             x->Seq = ++pipe->Seq;
-            x->DiagFunction = 0;
-            x->DiagFlags = 0;
-            x->DiagTick = HcdDiagTick(pipe->Device->Controller);
-            x->DiagRingTick = 0;
             return x;
         }
     }
@@ -293,9 +274,6 @@ static VOID NTAPI hcdWaitCancel(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     RemoveEntryList(&Irp->Tail.Overlay.ListEntry);
     dev = pipe->Device;
-    hc->Diag.CancelCalls++;
-    (VOID)HcdDiagRecOpenLocked(hc, XHCI_SNAPSHOT_RK_CANCEL, dev->SlotId,
-                               pipe->Dci, 0x20000000UL);
     x = hcdWaitingStart(hc, pipe);
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     if (x != NULL) {
@@ -416,10 +394,6 @@ static PIRP hcdRecordRelease(PHCD_PIPE pipe, PHCD_XFER x)
     } else {
         x->State = HCD_XFER_MAPPING;
         x->Seq = ++pipe->Seq;
-        x->DiagFunction = 0;
-        x->DiagFlags = 0;
-        x->DiagTick = HcdDiagTick(pipe->Device->Controller);
-        x->DiagRingTick = 0;
     }
     return next;
 }
@@ -876,8 +850,6 @@ static LONG hcdFill(PHCD_CONTROLLER hc, PHCD_XFER x, PVOID urb,
         (VOID)InterlockedIncrement((PLONG)&hc->Counters.UrbsMalformed);
         return HCD_USBD_INVALID_PARAMETER;
     }
-    x->DiagFunction = req->Function;
-    x->DiagFlags = req->TransferFlags;
     x->Control = req->Control;
     x->In = (req->Flags & HCD_IO_IN) != 0;
     x->ShortOk = (req->Flags & HCD_IO_SHORT_OK) != 0;
@@ -1247,7 +1219,6 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
     if (answer == XHCI_XFER_OK) {
         x->State = HCD_XFER_ON_RING;
         x->Engine = 1;
-        x->DiagRingTick = HcdDiagTick(hc);
         /* The device's sequence moves from here (hcd_cfg.c reads it once
          * the endpoint is paused and settled; Codex review of c4ec1c3,
          * finding 2). */
@@ -2088,26 +2059,23 @@ VOID HcdIoStamp(PHCD_DEVICE_PDO pdo, PIRP irp)
     irp->Tail.Overlay.DriverContext[0] = (PVOID)(ULONG_PTR)stamp;
 }
 
-/* HcdIoPark, saying which way it took the IRP (HCD_IO_PARK_*): for the
- * diagnostic timeline (2.2.0.2), which must not call a request held that
- * an abort's horizon already completed. */
-ULONG HcdIoParkHow(PHCD_DEVICE_PDO pdo, PIRP irp, PVOID urb, PVOID handle,
-                   PVOID endpoint)
+ULONG HcdIoPark(PHCD_DEVICE_PDO pdo, PIRP irp, PVOID urb, PVOID handle,
+                PVOID endpoint)
 {
     KIRQL cancelIrql;
 
     if (pdo == NULL) {
-        return HCD_IO_PARK_DECLINED;
+        return 0;
     }
     IoAcquireCancelSpinLock(&cancelIrql);
     if (pdo->Closing || irp->Cancel) {
         IoReleaseCancelSpinLock(cancelIrql);
-        return HCD_IO_PARK_DECLINED;
+        return 0;
     }
     if (hcdAbortedLocked(pdo, irp, handle, endpoint)) {
         IoReleaseCancelSpinLock(cancelIrql);
         hcdParkedComplete(pdo, irp);
-        return HCD_IO_PARK_COMPLETED;
+        return 1;
     }
     ((PURB)urb)->UrbHeader.Status = HCD_USBD_DEVICE_GONE;
     /* The handle it was submitted on, and for a stream its endpoint's
@@ -2121,14 +2089,7 @@ ULONG HcdIoParkHow(PHCD_DEVICE_PDO pdo, PIRP irp, PVOID urb, PVOID handle,
     InsertTailList(&pdo->ParkedIrps, &irp->Tail.Overlay.ListEntry);
     pdo->ParkedCount++;
     IoReleaseCancelSpinLock(cancelIrql);
-    return HCD_IO_PARK_HELD;
-}
-
-ULONG HcdIoPark(PHCD_DEVICE_PDO pdo, PIRP irp, PVOID urb, PVOID handle,
-                PVOID endpoint)
-{
-    return HcdIoParkHow(pdo, irp, urb, handle, endpoint) !=
-           HCD_IO_PARK_DECLINED;
+    return 1;
 }
 
 /*

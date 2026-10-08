@@ -342,14 +342,10 @@ static LONG hcdControlRequest(PURB urb, ULONG function, PHCD_IO_REQUEST req)
             c.Index = urb->UrbControlGetInterfaceRequest.Interface;
             break;
         case XHCI_PIPE_URB_CONTROL_TRANSFER:
-            req->TransferFlags = ct->TransferFlags;
-            break;
         case XHCI_PIPE_URB_GET_CONFIGURATION:
             break;
         default:
             /* Vendor and class: the client states the direction. */
-            req->TransferFlags =
-                urb->UrbControlVendorClassRequest.TransferFlags;
             c.DirectionIn = (urb->UrbControlVendorClassRequest.TransferFlags &
                              USBD_TRANSFER_DIRECTION_IN) != 0;
             c.ReservedBits =
@@ -421,7 +417,6 @@ static LONG hcdIsochRequest(PURB urb, PHCD_IO_REQUEST req)
         return USBD_STATUS_INVALID_PARAMETER;
     }
     req->Handle = it->PipeHandle;
-    req->TransferFlags = it->TransferFlags;
     req->Flags = HCD_IO_ISOCH;
     if (it->TransferFlags & USBD_START_ISO_TRANSFER_ASAP) {
         req->Flags |= HCD_IO_ASAP;
@@ -455,7 +450,6 @@ LONG HcdUrbIoRequest(PVOID urbv, PHCD_IO_REQUEST req)
         ((PUCHAR)req)[i] = 0;
     }
     function = urb->UrbHeader.Function;
-    req->Function = function;
     if (hcdIsControl(function)) {
         return hcdControlRequest(urb, function, req);
     }
@@ -467,7 +461,6 @@ LONG HcdUrbIoRequest(PVOID urbv, PHCD_IO_REQUEST req)
     }
     bi = &urb->UrbBulkOrInterruptTransfer;
     req->Handle = bi->PipeHandle;
-    req->TransferFlags = bi->TransferFlags;
     if (bi->TransferFlags & USBD_TRANSFER_DIRECTION_IN) {
         req->Flags |= HCD_IO_IN;
     }

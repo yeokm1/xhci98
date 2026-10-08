@@ -561,12 +561,9 @@ static BOOLEAN NTAPI hcdIsr(PKINTERRUPT Interrupt, PVOID Context)
     UNREFERENCED_PARAMETER(Interrupt);
 
     hc = (PHCD_CONTROLLER)Context;
-    /* 2.2.0.2's stamps (hcd_diag.c): one lock-free store each. */
-    hc->Diag.IsrTick = HcdDiagTick(hc);
     if (!XhciIsr(&hc->Hc)) {
         return FALSE;
     }
-    hc->Diag.ClaimTick = hc->Diag.IsrTick;
 #if defined(XHCI_FLAVOUR_QEMU)
     /* 35-T.9's lost interrupt: acknowledged as ever, the drain not queued. */
     if (HcdInjIsrDrop(hc)) {
@@ -597,7 +594,6 @@ static VOID NTAPI hcdIsrDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
 
     hc = (PHCD_CONTROLLER)Context;
     if (!hc->DpcClosed) {
-        hc->Diag.DpcTick = HcdDiagTick(hc);
         /* XhciEventDpc's own return is the Version 300 report route, which
          * the HCD never takes (RootHubReportThroughDpc is 0). */
         portEvents = hc->PortEvents;
@@ -897,10 +893,6 @@ static VOID hcdTerminalRelease(PHCD_CONTROLLER hc)
  * written and never drained, and the drain is queued through the ISR's own
  * admission. It writes no register: ERDP, EHB and IE stay the drain's.
  * A refused admission drops the observation, so timing starts afresh.
- * The diagnostic build 2.2.0.2 classes each look and, with an event
- * pending, reads the interrupter's registers - reads only - taken as a
- * sample when the drain is to be queued and kept once its DPC is inserted
- * (hcd_diag.c); a refused insertion is counted instead.
  * IRQL: PASSIVE_LEVEL.
  */
 static VOID hcdBackstop(PHCD_CONTROLLER hc)
@@ -910,9 +902,6 @@ static VOID hcdBackstop(PHCD_CONTROLLER hc)
     ULONG admitted;
     ULONG pending;
     ULONG queue;
-    ULONG regs[5];
-    ULONG sample[XHCI_SNAPSHOT_IRQ_WORDS];
-    ULONG i;
 
     ext = &hc->Hc;
     queue = 0;
@@ -926,28 +915,9 @@ static VOID hcdBackstop(PHCD_CONTROLLER hc)
                 !hc->SuspendedInD0 && !hc->DpcClosed &&
                 ext->EventRing.Base != NULL) ? 1UL : 0UL;
     pending = admitted ? XhciEventRingPending(&ext->EventRing) : 0UL;
-    for (i = 0; i < 5; i++) {
-        regs[i] = XHCI_SNAPSHOT_UNREAD;
-    }
-    if (pending) {
-        regs[0] = XhciReadOp(ext, XHCI_OP_USBCMD);
-        regs[1] = XhciReadOp(ext, XHCI_OP_USBSTS);
-        regs[2] = XhciReadIr0(ext, XHCI_IR_IMAN);
-        regs[3] = XhciReadIr0(ext, XHCI_IR_IMOD);
-        regs[4] = XhciReadIr0(ext, XHCI_IR_ERDP);
-    }
-    hc->Diag.Backstop[XhciSnapIrqClass(admitted, pending, regs[2])]++;
     queue = XhciTolBackstop(&ext->Tol.Obs, ext->Tol.Stats.Tolerance, pending,
                             ext->EventRing.Dequeue, ext->EventRing.Ccs,
                             ext->DpcCount, hc->TolStartGen, HcdTolNow(hc));
-    sample[XHCI_SNAPSHOT_IRQ_SEQ] = 0;
-    if (queue && pending) {
-        HcdDiagIrqTakeLocked(
-            hc, sample, regs,
-            ext->EventRing.Dequeue | ((ext->EventRing.Ccs & 1UL) << 31),
-            ext->EventRing.Base[ext->EventRing.Dequeue].Control);
-        sample[XHCI_SNAPSHOT_IRQ_SEQ] = 1;
-    }
     XhciControllerLockRelease(ext, oldIrql);
     HcdPowerGateLeave(hc);
     if (!queue) {
@@ -960,14 +930,10 @@ static VOID hcdBackstop(PHCD_CONTROLLER hc)
     (VOID)InterlockedIncrement(&hc->DpcsInFlight);
     if (hc->DpcClosed || !KeInsertQueueDpc(&hc->IsrDpc, NULL, NULL)) {
         (VOID)InterlockedDecrement(&hc->DpcsInFlight);
-        hc->Diag.BackstopRefused++;
         return;
     }
     XhciControllerLockAcquire(ext, &oldIrql);
     ext->Tol.Stats.BackstopDrains++;
-    if (sample[XHCI_SNAPSHOT_IRQ_SEQ] != 0) {
-        HcdDiagIrqCommitLocked(hc, sample);
-    }
     XhciControllerLockRelease(ext, oldIrql);
 }
 
@@ -1180,8 +1146,6 @@ static VOID NTAPI hcdThread(PVOID Context)
         if (hc->ThreadStop) {
             break;
         }
-        hc->Diag.ThreadPasses++;
-        hc->Diag.ThreadTick = HcdDiagTick(hc);
         hcdPoll(hc);
         /* The powered state is read under the gate, as the recovery's is: a
          * check before it could pass and then lose to a power-down (Codex
@@ -1369,7 +1333,6 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
      * finding 1). */
     hc->SuspendedInD0 = 0;
     HcdCountersStart(hc);
-    HcdDiagStart(hc);
     HcdEnumInit(hc);
 
     status = hcdParseResources(hc, irp);

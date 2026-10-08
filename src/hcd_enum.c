@@ -148,8 +148,8 @@ static ULONG hcdHalted(PHCD_CONTROLLER hc)
  * failure: the reset is requested, and the recovery's invalidation settles
  * whatever the command owned.
  */
-static ULONG hcdCommandBody(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
-                            PULONG control)
+static ULONG hcdCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
+                        PULONG control)
 {
     ULONG trbPA;
     ULONG answer;
@@ -205,18 +205,6 @@ static ULONG hcdCommandBody(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
     hc->Counters.CommandsGivenUp++;
     HcdSvcRequestReset(&hc->Hc);
     return 0;
-}
-
-/* hcdCommandBody, its type and outcome recorded in the timeline entry the
- * thread is serving, if any (2.2.0.2, hcd_diag.c). Thread only. */
-static ULONG hcdCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
-                        PULONG control)
-{
-    ULONG code;
-
-    code = hcdCommandBody(hc, trb, control);
-    HcdDiagRecCommand(hc, XHCI_TRB_GET_TYPE(trb->Control), code);
-    return code;
 }
 
 /* A command from the thread for the configuration code (hcd_cfg.c). */
@@ -1014,12 +1002,6 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                            &dev->Ep0Xfer, dev, trbs,
                                            XHCI_XFER_MAX_CONTROL_TRBS);
             if (answer == XHCI_XFER_OK) {
-                dev->DiagEp0Tick = HcdDiagTick(hc);
-                dev->DiagEp0Setup0 = (ULONG)req.Setup.bmRequestType |
-                                     ((ULONG)req.Setup.bRequest << 8) |
-                                     ((ULONG)req.Setup.wValue << 16);
-                dev->DiagEp0Setup1 = (ULONG)req.Setup.wIndex |
-                                     ((ULONG)req.Setup.wLength << 16);
 #if defined(XHCI_FLAVOUR_QEMU)
                 /* 35-T.9's EP0 faults withhold this doorbell. */
                 HcdInjEp0Doorbell(hc, dev);
