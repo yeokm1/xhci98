@@ -24,7 +24,8 @@ SuperSpeed devices falling back to USB 2.0 on Intel Sunrise Point,
 (owner, 2026-10-06; it was the interim `2.1.2.0` until the tolerance work
 joined it), cut on 2026-10-07 and closed the same day on the owner's bench (35-E). Phase 36,
 opened 2026-10-07 from a user's Dell E7250 under Windows XP x64 (issue 12),
-is open on branch `2.2.1.0`. Polled event
+is open on branch `2.2.1.0`. Its root cause was found on 2026-10-08: the
+BIOS's `D20IR` interrupt routing. The fix is task 36.8. Polled event
 delivery and selective suspend are planned but carry no phase number and
 no version until the owner opens them (owner, 2026-10-06; "Planned work"
 below).
@@ -654,7 +655,9 @@ Records: `runs/run-35.md`; `design/17-controller-tolerance.md`;
 
 ## Phase 36 - The Dell E7250 under Windows XP x64: a Device Present at Boot, and UAS With No Disk
 
-Goal: an interim build, made from the evidence so far, that enumerates a
+Goal (as re-planned 2026-10-08, below): xhci98 corrects the E7250 BIOS's
+`D20IR` interrupt routing, so the xHCI's interrupts reach the ISR. Original
+goal: an interim build, made from the evidence so far, that enumerates a
 device present at boot on the Dell E7250 (Intel Wildcat Point-LP,
 `8086:9CB1`) rather than failing it "no slot", and that records enough on
 its own for the next check to diagnose the hot-plugged UAS reader that
@@ -699,12 +702,65 @@ that the hang still reproduces and can be captured.
 - [ ] 36.3 **withdrawn 2026-10-07, never sent; superseded by 36.6** - the interim build, numbered `2.2.0.1` to mark it a test build (owner, 2026-10-07): x86 and `-amd64`, the host suites and every gate (passed, 2026-10-07, after a Codex review loop), and the regression on QEMU under Windows 98 SE, 2000 and XP x64, with a device present at boot and, on the `qemu` flavour, an engine held busy at the first enumeration (`XhciQemuStartHold`, `build-and-test.md`); it was to be sent to the E7250 by the owner. Not a release
 - [ ] 36.4 **superseded 2026-10-07 by 36.7** (it relied on the withdrawn 36.2) - the check again (owner): the interim build on the E7250 under XP x64, a device present at boot and the reader hot-plugged, the dumps read with the 36.2 diagnostics; Finding 1 confirmed fixed or not, and Finding 2 given a cause or a stated limitation
 - [ ] 36.5 **superseded 2026-10-07 by 36.7's fix** - what 36.4 leaves owed: a Finding 2 fix if one is (a pipe-level stall recovery in `xhciuas`, or a START that fails rather than succeeds with no disk), and the interrupt delivery (issue 12 section 5: why half the events come from the backstop, whether the No Op's IP is lost while masked or with the rest)
-- [ ] 36.6 the diagnostic build, numbered `2.2.0.2` (owner, 2026-10-07), on `2.2.0.0`'s code with no change in behaviour (issue 12 section 8.4): per open pipe of every slot, its flags, queue and oldest outstanding transfer (URB function, setup bytes, length, age, TD address), with the Output Endpoint Context's state, TR Dequeue and DCS read at dump time; a timeline of the last RESET_PIPE, ABORT_PIPE, RESET_PORT and cancel requests (arrival, completion, endpoint, the CLEAR_FEATURE outcome, the commands and their status, the slow-IRP depth); and the interrupter's registers (USBSTS, IMAN, ERDP, IMOD, USBCMD) and pending event before each backstop drain, with ISR and DPC times. `XHCISNAP` decodes all of it; host tests, every gate, a Codex review loop
-- [ ] 36.7 the read (owner): `2.2.0.2` on the E7250 under Windows 7 x64, the SanDisk stick hot-plugged and present at boot, a dump taken during the hang; the stuck transfer and its endpoint's state named, and the cause of the slow event delivery narrowed. Then the fix, which replaces 36.4 and 36.5
+- [x] 36.6 **done 2026-10-08** (`3d667f1`) - the diagnostic build, numbered `2.2.0.2` (owner, 2026-10-07), on `2.2.0.0`'s code with no change in behaviour (issue 12 section 8.4): per open pipe of every slot, its flags, queue and oldest outstanding transfer (URB function, setup bytes, length, age, TD address), with the Output Endpoint Context's state, TR Dequeue and DCS read at dump time; a timeline of the last RESET_PIPE, ABORT_PIPE, RESET_PORT and cancel requests (arrival, completion, endpoint, the CLEAR_FEATURE outcome, the commands and their status, the slow-IRP depth); and the interrupter's registers (USBSTS, IMAN, ERDP, IMOD, USBCMD) and pending event before each backstop drain, with ISR and DPC times. `XHCISNAP` decodes all of it; host tests, every gate, a Codex review loop
+- [x] 36.7 **done 2026-10-08** (issue 12 section 9) - the read (owner): `2.2.0.2` on the E7250 under Windows 7 x64, the SanDisk stick hot-plugged and present at boot, a dump taken during the hang; the stuck transfer and its endpoint's state named, and the cause of the slow event delivery narrowed. Then the fix, which replaces 36.4 and 36.5
 
-Checkpoint (re-planned 2026-10-07): `2.2.0.2` read on the E7250 (36.7)
-and the hang it captures given a cause, then fixed or stated as a
-limitation; a device present at boot enumerated.
+**Re-planned 2026-10-08 (owner): root cause found** (issue 12 sections
+9.4-9.6).
+- The E7250's BIOS routes the xHCI's INTA in the PCH's `D20IR` (RCBA+3160)
+  to PIRQA (GSI 16), while ACPI tells Windows the xHCI is on GSI 21 (PIRQF).
+  The ISR therefore runs only when the EHCI on the shared line interrupts.
+- Both findings, and the sluggish HID, follow from that.
+- Rewriting `D20IR` to PIRQF live fixed the mouse and mounted the stick.
+- The owner chose a permanent fix in xhci98 behind a registry value that is
+  on by default for this machine and controller only. No separate tool.
+- The policy follows a Codex review (issue 12 section 9.6). 36.8 comes
+  first; 36.9 to 36.11 are separate changes, each committed on its own.
+
+- [ ] 36.8 the routing quirk, `XhciIntelIrqRoute` (REG_DWORD on the controller's software key):
+  - **The values.**
+    - **0**: no writes; report only.
+    - **1** (default, also for missing, wrong-type or out-of-range values, logged): only xHCI `8086:9CB1` with subsystem `1028:062D` and LPC `8086:9CC3`.
+    - **2** (opt-in, never the default): any reviewed xHCI/LPC pair regardless of subsystem. The pairs are 1E31, 8C31, 9C31, 8CB1, 9CB1 and 8D31, each with its exact LPC IDs (handoff and issue 12 section 9.6). It never admits unlisted Intel, 100-series and later (PCR/ITSS) or non-Intel.
+  - **Writes only when all hold:**
+    - a valid, enabled RCBA read from LPC `00:1F.0` F0;
+    - D20IP agrees with the xHCI's INTA;
+    - a line-based APIC interrupt with a raw GSI of 16-23;
+    - D20IR's IAR differs from GSI-16.
+
+    Then it writes `(old & ~7) | (GSI-16)` as a 16-bit write and reads it back.
+  - **Report-only, whatever the value,** in PIC mode or Windows 98, or when the mode is uncertain.
+  - **The parser** keeps the raw interrupt resource (level, vector, flags, share), which it does not today (`hcd_ctl.c` ~524).
+  - **Reaching LPC config space:** a supported path to read `00:1F.0` on every target, which `HcdSvcConfigSpace` does not give (it targets the xHCI's own PDO). Settle it first (HalGetBusDataByOffset or equivalent, per OS, Windows 98 included). Not CF8/CFC.
+  - **Placement:** in the HCD layer.
+    - At start: after IoConnectInterrupt and `XhciInitController`, before `XhciEnableInterrupts`.
+    - On each D0 return: before `XhciResumeController`.
+  - **What is recorded:** what it found, decided and wrote, in the snapshot and the note ring, decoded by `XHCISNAP`.
+  - **Tests:** host tests of the pure policy. The INF and `docs/using` document the value, modelled on `XhciIntelPortSwitch`; copy its strict DWORD reader, not its "2 = unlisted Intel" meaning.
+- [ ] 36.9 a stalled-event watchdog and a bounded BUSY retry (separate change):
+  - **The watchdog.** An independent check, about every 100 ms, that queues the existing drain when pending events stop progressing. It runs while `hcdThread` is blocked in a command wait, from a DPC-safe path rather than `hcdBackstop`. A rescue drain does not spend recovery budget.
+  - **The retry.** `hcdCommand` on `XHCI_CMD_BUSY` waits a bounded time and retries under one deadline (the start No Op case, issue 12 Finding 1).
+- [ ] 36.10 XHCIQUAL, read-only:
+  - It reports the LPC identity, RCBA, D20IP and D20IR, the selected PIRQ, and the PIC destination and its disable bit.
+  - It flags a mismatch only against a GSI supplied separately.
+- [ ] 36.11 RESET_PIPE in xHCI 4.6.8 order in `hcdCfgReset` (Reset Endpoint and Set TR Dequeue, then `CLEAR_FEATURE(ENDPOINT_HALT)`). It is a spec fix, kept apart so it does not muddy the interrupt tests (issue 12 section 8.3).
+- [ ] 36.12 `2.2.1.0` builds, x86 and `-amd64`:
+  - the host suites and every gate;
+  - a Codex review loop per task;
+  - the QEMU regression legs (still owed from `2.2.0.2`);
+  - then the owner's check on the E7250 under XP x64 and Windows 7 x64, with no manual `D20IR` write, which verifies:
+    - the mouse;
+    - the stick hot-plugged and present at boot;
+    - `xpnoehci`'s case (the EHCI disabled);
+    - S3 resume.
+
+Checkpoint (re-planned 2026-10-08): `2.2.1.0` on the E7250 under XP x64
+and Windows 7 x64 with `XhciIntelIrqRoute` at its default:
+- the xHCI's interrupts delivered by the ISR (the backstop near idle);
+- a device present at boot enumerated;
+- the stick mounted;
+- the controller working with the EHCI disabled;
+- the route still correct after S3.
 Which release carries the result is the owner's call.
 
 Records: `docs/issues/12-e7250-xp64-boot-enable-slot-refused.md`.
