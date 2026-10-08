@@ -342,6 +342,8 @@ dumps are not authoritative.
 |---|---|---|---|
 | `7-series-chipset-pch-datasheet.pdf` | 7 Series / C216 PCH datasheet, order no. 326776-003, June 2012 | `558cbf7e82b9f5ae2dfd366ce9e26b1edb646bc93e3a102be4a6d3799e60fded` | `D20IP` 10.1.25 p.406, `D20IR` 10.1.33 p.414, RCBA 13.1.40 p.493. The device IDs are not in it; it defers to its specification update |
 | `8-series-chipset-pch-datasheet.pdf` | 8 Series / C220 PCH datasheet, order no. 328904-003, May 2014 | `1239037e57bcfa9b753c0e0c799a32f09e9705670cd2890f183c0bed7f19ec98` | `D20IP` 10.1.25 p.343, `D20IR` 10.1.34 p.350, RCBA 12.1.40 p.400. LPC device IDs `8C44`-`8C5C` in Table 1-2 |
+| `4th-gen-core-family-mobile-i-o-datasheet.pdf` | Mobile 4th Gen Core Processor Family I/O datasheet (Lynx Point-LP), document no. 329003-003, February 2015 | `74ee3eb507145bd47fa173221580d405455364f0c62cf5b5e1432051ff8f595a` | `D20IP` 8.1.23 p.335, `D20IR` 8.1.31 p.342 (its summary table labels the `3160h` row "Device 22"; the register page is right), RCBA 10.1.40 p.403. xHCI `9C31`, LPC `9C41` (engineering sample), `9C43` (Premium) and `9C45` (Base) in the ID table, p.63 |
+| `9-series-chipset-pch-datasheet.pdf` | 9 Series PCH datasheet, order no. 330550-002, June 2015 | `45ea509e826e451fe289e7f4c03eb28c4c28fb3a7f69dc1131266a547d3ec50e` | `D20IP` 10.1.25 p.336, `D20IR` 10.1.34 p.343, RCBA 12.1.40 p.393. xHCI `8CB1`, LPC `8CC1`/`8CC2` (engineering samples), `8CC3`, `8CC4` and `8CC6` |
 | `x99-chipset-pch-datasheet.pdf` | C610 Series / X99 PCH datasheet, order no. 330788-003, October 2015 | `7168d555962ad39a74fd780cb0cf1500427c023bc185b4ce922819dc9e9f7860` | `D20IP` 10.1.34 p.288, `D20IR` 10.1.43 p.294, RCBA 12.1.40 p.350. xHCI `8D31` in Table 1-3. **Erratum:** Table 10-1's rows from `3110h` are misaligned (it lists `D20IP` at `3140h` and `D20IR` at `31FEh`). The register pages give `3128h` and `3160h`, as the other datasheets do |
 | `pci_ids.h` | Linux `include/linux/pci_ids.h`, master as fetched 2026-10-08 ([GitHub](https://github.com/torvalds/linux/blob/master/include/linux/pci_ids.h)) | `020fac001871c0f8441c1294f787231fb6cfbf2c55915ca8f918262e2db4487c` | `PANTHERPOINT_XHCI` `1E31` and the 7-series LPC range `1E40`-`1E5F`. It has no entries for the 8/9-series or C610 xHCI. GPL-2.0; kept here as a reference copy, not used by the build |
 
@@ -350,17 +352,20 @@ PCH documents:
 - `5th-gen-core-family-datasheet-vol-1.pdf`: 5th Gen Core processor
   datasheet vol. 1, 330834-005, June 2015. SHA-256
   `ec706408cb407cc69e428a43908511a18f77ccedbdeb6688384c9b7faba0ca24`.
+- `mobile-5th-gen-core-family-datasheet-vol-2.pdf`: Mobile 5th Gen Core
+  processor datasheet vol. 2 (H-processor line), 332379-001, June 2015.
+  SHA-256 `9d627f994a8d45c4bf54d75f616dfbd727fccdd820ede8584d8fa13d7f2dad9b`.
+  This is not the I/O datasheet.
 - `634961_BDW-H_Spec_Update.pdf`: Broadwell-H processor specification
   update, 634961-024. SHA-256
   `04cb9bb12eb71445aaf9f61abfe4c5b0f06a0ceaaad763d9cadd357546a47ffe`.
 
-Still to fetch, for the chipsets the quirk lists but no datasheet here
-covers:
-- the 9 Series PCH datasheet, order no. 330550, for `8CB1`;
-- the Mobile 4th Gen Core Processor Family I/O datasheet, order no. 329003,
-  for Lynx Point-LP `9C31`;
-- the Mobile 5th Gen Core Processor Family I/O datasheet, for Wildcat
-  Point-LP `9CB1`, the E7250's. Its specification update is 330838.
+Still to fetch: the **Mobile 5th Gen Core Processor Family I/O datasheet**
+(Wildcat Point-LP), for `9CB1`, the E7250's chipset. Its specification update
+is 330838. It is the "I/O" datasheet, not either processor volume (330834,
+332379). Until it is fetched, `9CB1` rests on the owner's live write and
+coreboot. The 7 Series specification update would also give the `1E31`
+LPC device IDs, which the 7 Series datasheet leaves to it.
 
 The Licence limits section above applies to these as well: Intel's
 documents are fetched per machine, never tracked.
