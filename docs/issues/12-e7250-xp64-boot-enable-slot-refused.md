@@ -106,7 +106,7 @@ fault was in `xhci98.sys`, not `xhciuas`.
   `CLEAR_FEATURE(ENDPOINT_HALT)` before Reset Endpoint and Set TR Dequeue.
   That reverses xHCI 4.6.8, and Codex and a Claude subagent each suspected
   it. But the dumps below showed every stall recovered. It is a spec fix to
-  make on its own (task 36.6), not this hang.
+  make on its own (task 36.12), not this hang.
 
 ### 3.3 The diagnostic build `2.2.0.2` (task 36.1)
 
@@ -202,7 +202,8 @@ A restart restores the BIOS value.
   `IoConnectInterruptEx` in this driver, not just an INF setting. And it
   would not help Windows 98, 2000 or XP. Kept as a possible later option.
 - **Polling only.** It works anywhere, but costs CPU time and latency
-  everywhere. It is kept only as a safety net (section 5.2).
+  everywhere. Polled event delivery is planned instead as a fallback
+  beside the quirk (section 5.2).
 - **A standalone tool** (a small driver that applies the write at boot). The
   owner chose to put the fix in `xhci98.sys` instead.
 
@@ -287,29 +288,34 @@ LPC PIRQ selectors, and GSI-16 means nothing there.
 **What it records:** what it found, decided, wrote and read back, in the
 snapshot and the note ring, decoded by `XHCISNAP`.
 
-### 5.2 Polling as a safety net (task 36.4)
+### 5.2 Polling and the BUSY retry (tasks 36.4 to 36.10, 36.13, 36.14)
 
-For an interrupt that stays dead, on a machine the quirk does not cover or
-cannot repair:
-- **The watchdog.** An independent check, about every 100 ms, queues the
-  existing drain when pending events stop progressing.
-  - It runs while the controller thread is blocked in a command wait, from
-    a DPC-safe path rather than `hcdBackstop`.
-  - A rescue drain spends no recovery budget.
-- **The retry.** `hcdCommand` on `XHCI_CMD_BUSY` waits a bounded time and
-  retries under one deadline, instead of failing the port at once.
+Polled event delivery (design record 15), moved into Phase 36 on
+2026-10-08:
+- `XhciInterruptMode` 0 automatic, 1 line, 2 polling, with an adaptive
+  poll period (`XhciPollIdleMs` 50, `XhciPollActiveMs` 1).
+- **For this issue**, automatic mode also moves to polling when a line
+  interrupt is proven dead at run time: events waiting with `IP`, `IE` and
+  `INTE` set, and the ISR claiming nothing (record 15 section 4.2).
+  - That covers a machine the routing quirk does not, or cannot, repair.
+  - The poller has its own timer DPC, so it keeps running while the
+    controller thread is blocked in a command wait.
+  - Mode 1 (the line, forced) never moves.
+- **The BUSY retry (36.4).** `hcdCommand` on `XHCI_CMD_BUSY` waits a
+  bounded time and retries under one deadline, instead of failing the port
+  at once.
 
 ### 5.3 Related changes
 
-- **36.5:** XHCIQUAL reports the LPC, RCBA, `D20IP`/`D20IR` and the PIRQ
+- **36.11:** XHCIQUAL reports the LPC, RCBA, `D20IP`/`D20IR` and the PIRQ
   routing, read-only. It does so only on the reviewed pairs of section 5.1,
   and elsewhere says "not applicable". These registers exist only on the
   RCBA chipsets:
   - 100 series and later, and the Apollo Lake-class Atom SoCs, use ITSS
     behind P2SB;
   - Bay Trail and Braswell use the iLB.
-- **36.6:** RESET_PIPE in xHCI 4.6.8 order.
-- **36.7:** the `2.2.1.0` builds, the QEMU regression, and the owner's check
+- **36.12:** RESET_PIPE in xHCI 4.6.8 order.
+- **36.15:** the `2.2.1.0` builds, the QEMU regression, and the owner's check
   on the E7250 under XP x64 and Windows 7 with no manual write. The check
   covers:
   - the mouse;

@@ -73,6 +73,7 @@ table is the index.
 | `2.2.0.0`: cut before the bench | Owner, 2026-10-06, as for `2.0.0.0` ("Cut before the bench", below): 35-E is read on real hardware after 35.7's cut, on the `2.2.0.0` asset rather than a release candidate, and the documents are written as if it passes. A 35-E outcome not met is changed and recut before the release is published. Taken after 35.2 had read SuperSpeed on the E460 with 35.1 and 35.3 (2026-10-06), which leaves 35-E the counted campaign, the P14s Gen 1, the B490 and 35-T on real hardware; the cost accepted is that a 35-T regression found there is a recut rather than a fix before the cut |
 | The Intel port switchover | Phase 34, task 34.3 (owner, 2026-10-05, from a tester's report of Ivy Bridge machines): the HCD routes the Intel 7-, 8- and 9-series and C610 switchable connectors to itself, superseding the miniport's Phase 4 decision to leave the registers alone; a device-id gate of six, and the opt-out `XhciIntelPortSwitch` at 1. Design record 16. **Amended 2026-10-06** (owner; task 35.5): `XhciIntelPortSwitch` 2 performs the switchover the moment an Intel controller is detected, the gate bypassed; 1 and other nonzero numbers keep the gate, the default stays 1. Value 2 is at the user's own risk - on a controller without the switch registers it writes registers of unknown meaning - and the README and release notes say so; the owner chose to inform rather than add a register-layout check |
 | Polled event delivery | Planned, unnumbered (`POLL`; drawn up as Phase 35) (owner, 2026-10-05, first added as Phase 34's stage C; design record 15): a switch, `XhciInterruptMode`, chooses automatic (0, the default: the line interrupt where the controller has one, an adaptive poll of the event ring where it has none), the line interrupt (1, failing as today without one) or polling (2), with 3 and above reserved (MSI, not scheduled) and run as 0, so an MSI- or MSI-X-only controller, which neither primary target can serve by interrupt, can be driven; the idle period `XhciPollIdleMs` defaults to 50 ms and the active period `XhciPollActiveMs` to 1 ms, neither may be 0, the idle period is held to 5000 ms and the active to the idle, and all three join 34.1's install rule. The delivery in effect and its reason are captured by `XHCISNAP` and the DebugView log. Each taken from options with a recommendation; the numbering replaced the same day's "0 line, 1 polling, 2 MSI" |
+| Polled event delivery joins Phase 36 | Owner, 2026-10-08, after issue 12: the `POLL.*` tasks become 36.5 to 36.10, 36.13 and 36.14. Record 15 is amended (section 4.2, decision 6): automatic mode also moves to polling when a line interrupt is proven dead at run time, which replaces 36.4's stalled-event watchdog. 36.4 keeps the BUSY retry |
 | The other `1.2.0.0` limitations (28.3) | The NUSB stop crash, the Windows 98 churn wedge and the Windows 7 disable hang are each re-measured under the HCD and recorded as gone, carried or new (owner, 2026-10-04). A survivor is carried in the release notes and does not block the cut |
 | 28-E.1's Full-Speed hub clause | Taken at the bench, not recorded as untested ground (owner, 2026-10-04): a USB 2.0 hub forced to Full Speed by an ADuM full/low-speed isolator in front of it, in place of a USB 1.1 hub (owner, the same day, superseding the plan to buy one) |
 | Checkpoints of Phases 28 to 31 | Pre-approved (owner, 2026-10-04): each closes once its review is clean, the x86 and amd64 builds, gates and host tests pass, every roadmap VM leg passes with its package hash recorded, and no regression is open on an earlier phase. Scope rulings, waivers, push, tag and the cut stay the owner's |
@@ -135,9 +136,10 @@ update, `2.1.0.0`; Phase 34 is `2.1.1.0`, an interim release: the registry
 values, the Device Manager pages and the Intel port switchover; Phase 35 is
 `2.2.0.0`: SuperSpeed devices falling back to USB 2.0 on Intel
 Sunrise Point, `XhciIntelPortSwitch` 2, and the controller tolerance work
-(35-T). Polled event delivery, then selective suspend, are planned
-and take phase numbers and versions only when the owner opens them; their
-task ids are placeholders (`POLL.n`, `SUSP.n`) until then.
+(35-T). Phase 36 is issue 12's E7250 interrupt routing, with polled event
+delivery, which joined it on 2026-10-08. Selective suspend is planned, and
+takes a phase number and version only when the owner opens it; its task
+ids are placeholders (`SUSP.n`) until then.
 The order is deliberate:
 parity first, because round 12's device matrix and the acceptance test are a
 free oracle for everything USB 2.0; SuperSpeed before hubs, because root-port
@@ -655,10 +657,14 @@ Records: `runs/run-35.md`; `design/17-controller-tolerance.md`;
 
 ## Phase 36 - The Dell E7250 under Windows XP x64: a Device Present at Boot, and UAS With No Disk
 
-Goal: xhci98 corrects the E7250 BIOS's `D20IR` interrupt routing, so the
-xHCI's interrupts reach the ISR. Then a device present at boot enumerates,
-and a hot-plugged disk mounts, on the Dell E7250 (Intel Wildcat Point-LP,
-`8086:9CB1`).
+Goal:
+- xhci98 corrects the E7250 BIOS's `D20IR` interrupt routing, so the xHCI's
+  interrupts reach the ISR. Then a device present at boot enumerates, and a
+  hot-plugged disk mounts, on the Dell E7250 (Intel Wildcat Point-LP,
+  `8086:9CB1`).
+- Polled event delivery (design record 15) keeps a controller working when
+  its interrupt cannot be delivered or repaired: no legacy interrupt at
+  all, or a line proven dead at run time.
 
 Status: opened 2026-10-07 (owner) from a user report against `2.2.0.0`,
 the first report of the HCD on real hardware under Windows XP x64 (issue
@@ -690,18 +696,30 @@ How it got here:
   - The owner chose a permanent fix in xhci98 behind a registry value that
     is on by default for this machine and controller only. No separate
     tool. The policy follows a Codex review (issue 12 section 5.1).
-  - 36.3 comes first. 36.4 to 36.6 are separate changes, each committed on
-    its own.
+  - 36.3 comes first. The rest are separate changes, each committed on its
+    own.
+  - Later the same day the owner moved polled event delivery (`POLL.*`, until
+    then planned work) into this phase. Its automatic mode gains one rule:
+    a line interrupt proven dead at run time moves to polling (record 15
+    section 4.2). That replaces the stalled-event watchdog 36.4 held, and
+    36.4 keeps only the BUSY retry.
 
-**Renumbered 2026-10-08 (owner).** The withdrawn and superseded tasks are
-removed from this list. Documents and commits written before the
+**Renumbered twice on 2026-10-08 (owner).** First, the withdrawn and
+superseded tasks were removed from this list. Then polled event delivery
+joined the phase. Documents and commits written before the
 renumbering cite these numbers:
 
 | Then | Now |
 |---|---|
 | 36.1 to 36.3 (the withdrawn `2.2.0.1`: Finding 1 fix, diagnostics, interim build) | 36w.1 to 36w.3, removed; issue 12 section 3.2 |
 | 36.4, 36.5 (the check again, and what it left owed) | 36w.4, 36w.5, removed; superseded by the old 36.7 |
-| 36.6 to 36.12 | 36.1 to 36.7 |
+| 36.6 to 36.12 | 36.1 to 36.7 (first renumbering) |
+| 36.4 (watchdog and BUSY retry) | 36.4, the BUSY retry alone; the watchdog is replaced by polling's dead-line rule (36.5, 36.7) |
+| 36.5 (`XHCIQUAL` routing report) | 36.11 |
+| 36.6 (RESET_PIPE order) | 36.12 |
+| 36.7 (the `2.2.1.0` builds and check) | 36.15 |
+| `POLL.0` to `POLL.5` (planned work) | 36.5 to 36.10 |
+| `POLL-V`, `POLL-E` (planned work) | 36.13, 36.14 |
 
 - [x] 36.1 **done 2026-10-08** (`3d667f1`); **reverted 2026-10-08 (owner) after its read**: the code and the `XHCISNAP` decoder are removed, the tree is back to `2.2.0.0`, and the description is kept as the record (issue 12 section 3.3) - the diagnostic build, numbered `2.2.0.2` (owner, 2026-10-07), on `2.2.0.0`'s code with no change in behaviour (issue 12 section 3.3):
   - per open pipe of every slot: its flags, queue and oldest outstanding transfer (URB function, setup bytes, length, age, TD address), with the Output Endpoint Context's state, TR Dequeue and DCS read at dump time;
@@ -730,10 +748,42 @@ renumbering cite these numbers:
     - On each D0 return: before `XhciResumeController`.
   - **What is recorded:** what it found, decided and wrote, in the snapshot and the note ring, decoded by `XHCISNAP`.
   - **Tests:** host tests of the pure policy. The INF and `docs/using` document the value, modelled on `XhciIntelPortSwitch`; copy its strict DWORD reader, not its "2 = unlisted Intel" meaning.
-- [ ] 36.4 a stalled-event watchdog and a bounded BUSY retry (separate change):
-  - **The watchdog.** An independent check, about every 100 ms, that queues the existing drain when pending events stop progressing. It runs while `hcdThread` is blocked in a command wait, from a DPC-safe path rather than `hcdBackstop`. A rescue drain does not spend recovery budget.
-  - **The retry.** `hcdCommand` on `XHCI_CMD_BUSY` waits a bounded time and retries under one deadline (the start No Op case, issue 12 Finding 1).
-- [ ] 36.5 XHCIQUAL, read-only:
+- [ ] 36.4 the bounded BUSY retry: `hcdCommand` on `XHCI_CMD_BUSY` waits a bounded time for the engine to go idle, asking for a drain, and retries under one deadline, instead of failing the port at once. This is the start No Op case of issue 12 Finding 1. A small change of its own; the stalled-event watchdog that 36.4 also held is replaced by polling's dead-line rule (36.5, 36.7)
+- [ ] 36.5 (was POLL.0) the polling design: record 15 reviewed to convergence before code (the owner's decisions of 2026-10-05 are its section 12), with its amendment for issue 12 reviewed too (section 4.2, decision 6):
+  - automatic mode (0) also moves to polling when a line interrupt is proven dead at run time;
+  - the hardware statements of its section 4.1 (`IMAN.IP`, `USBSTS.EINT` and `ERDP.EHB` with the interrupt enables clear) checked against `xhci-data-structures.md`
+- [ ] 36.6 (was POLL.1) the three values (record 15 section 3):
+  - `XhciInterruptMode` 0: 0 automatic, 1 the line interrupt, 2 polling, 3 and above reserved and run as 0;
+  - `XhciPollIdleMs` 50, held to 5000;
+  - `XhciPollActiveMs` 1, held to the idle period;
+  - neither period 0 (owner, 2026-10-05).
+
+  They are read at each start with the out-of-range rules, and written by both INFs on every install path under 34.1's don't-overwrite rule, with the INF gate's `VAL-*` rows and the footprints. SUSP.4's install legs read them
+- [ ] 36.7 (was POLL.2) the delivery and the poller (record 15 sections 4 and 5):
+  - the delivery and its reason settled at start and kept through recovery and resume;
+  - mode 0's run-time move from a dead line to polling (section 4.2), kept the same way;
+  - `ResourcesTypes` truthful, and the core's interrupt-bit and pin-0 gates applied to a line delivery only;
+  - under a poll delivery: the ISR unconnected, or claiming nothing after a run-time move; `XHCI_EXT_FLAG_INTERRUPTS` never set; every poll drain passing no re-arm;
+  - `PollTimer` with its own DPC, so polling does not depend on `hcdThread`, which can be blocked in a command wait (issue 12 section 2);
+  - `IsrDpc` queued by the peeks, `PollLock` admission, and close by `KeCancelTimer` with the timer DPC retiring itself;
+  - park and kick across D3 and the in-place recovery
+- [ ] 36.8 (was POLL.3) the adaptive period and the opportunistic checks (record 15 sections 6 and 7.1):
+  - **The pure core:** `xhci_poll.c` with host suite `test_poll`. It covers ACTIVE, PERIODIC with interrupt IN and OUT, IDLE, the hysteresis and bounded-drain clauses, the clamps, promotion and the stale-decision rule.
+  - **The peeks:** under the controller lock, after a doorbell, after a drain, on each thread pass, health poll and frame DPC. Each queues the drain and never drains inline; poll delivery only.
+  - **The counters:** the observed interval, and the delivery in effect with its reason (automatic, forced, no interrupt, or line not delivered). They are in the counter block and in the start log line (a run-time move logs its own line). `XHCISNAP` reads them from `XhciLogVerbosity` 1, and the DebugView sink emits them from 2 with `XhciLogDebugView` set (owner, 2026-10-05; section 8)
+- [ ] 36.9 (was POLL.4) `XHCISNAP` (record 15 section 9):
+  - the three values in the companion, as `XhciImodInterval250ns` is;
+  - the delivery in effect and its reason;
+  - the moderation value said to have no effect when polled;
+  - the poll counters;
+  - the coherence wording for drains polled or not (the tear detector itself already counts them);
+  - the header grown under the schema rule, with older headers still read
+- [ ] 36.10 (was POLL.5) `XHCIQUAL`'s polling verdicts (record 15 section 10):
+  - `Interrupt Pin = 0` no longer disqualifies: `quick_classify` and `quick_reason` say the controller needs polling. The other disqualifiers stand.
+  - C4's "event in the ring, no interrupt" outcome reads "needs polling". Its tool failures, and a controller that fails even polled, do not.
+  - The polled tests run after the interrupt hook is removed.
+  - `main.c`'s C6/C8 gate and `report.c`'s verdict and exit code learn the outcome, with vectors through the verdict, not only `test_mmiodiag`
+- [ ] 36.11 `XHCIQUAL`'s routing report, read-only:
   - It reports the LPC identity, RCBA, D20IP and D20IR, the selected PIRQ, and the PIC destination and its disable bit.
   - It flags a mismatch only against a GSI supplied separately.
   - **Only on the reviewed RCBA chipsets** (the xHCI/LPC pairs of issue 12 section 5.1: 7, 8 and 9 series and C610/X99). The registers do not exist elsewhere:
@@ -742,8 +792,26 @@ renumbering cite these numbers:
     - non-Intel controllers have no equivalent.
 
     Elsewhere it reports "routing registers not applicable" and reads nothing. Support for ITSS is not in scope.
-- [ ] 36.6 RESET_PIPE in xHCI 4.6.8 order in `hcdCfgReset` (Reset Endpoint and Set TR Dequeue, then `CLEAR_FEATURE(ENDPOINT_HALT)`). It is a spec fix, kept apart so it does not muddy the interrupt tests (issue 12 section 3.2).
-- [ ] 36.7 `2.2.1.0` builds, x86 and `-amd64`:
+- [ ] 36.12 RESET_PIPE in xHCI 4.6.8 order in `hcdCfgReset` (Reset Endpoint and Set TR Dequeue, then `CLEAR_FEATURE(ENDPOINT_HALT)`). It is a spec fix, kept apart so it does not muddy the interrupt tests (issue 12 section 3.2).
+- [ ] 36.13 (was POLL-V) the polling legs (record 15 section 11):
+  - **Guests:** mode 2 on 98 SE and 2000 (SMP, Driver Verifier) first, then ME, XP, Vista and 7, x86 and x64.
+  - **Devices and actions:** HID, Bulk-Only and UAS storage, composite audio playing, behind QEMU's hub, hot-plug, disable and enable, remove and rescan.
+  - **The no-interrupt start,** made deterministic by a `qemu`-flavour switch: mode 0 polls with its reason, and mode 1 fails as today.
+  - **The dead-line move:** a `qemu`-flavour line that delivers nothing after start, under mode 0, read as the move to polling with its reason; under mode 1, as no move.
+  - **Recovery and power under polling:**
+    - a forced recovery;
+    - the controller's D3 and back, where a guest offers one without system standby. Where none does, the recovery alone reads park and kick, and a disable and enable reads the close (record 15 section 11).
+    - system standby and hibernate under polling are SUSP.1's.
+  - **The races, on the SMP guest:** promotion against re-arm, close against peeks and expiry, a bounded drain continued.
+  - **Measurements:** the period each kernel gives, from the counters; line against poll on the same guest (storage copy rate, audio continuity, idle CPU load).
+  - **Regression:** modes 0 and 1 on a pin reading as the release before it.
+  - **Visibility:** the delivery and its reason read in `XHCISNAP` and in DebugView for each of modes 0, 1 and 2, for the no-interrupt start and for the dead-line move.
+  - x86 and amd64, and every gate
+- [ ] 36.14 (was POLL-E) the polling bench (owner):
+  - mode 2 on the E460 and the P14s Gen 1 under Windows 98 SE;
+  - an MSI-only controller if one is at hand (the synthetic no-interrupt leg does not wait for one);
+  - the E7250 under XP x64 with `XhciIntelIrqRoute` 0 and mode 0, read as the dead-line move to polling.
+- [ ] 36.15 the `2.2.1.0` builds, x86 and `-amd64`:
   - the host suites and every gate;
   - a Codex review loop per task;
   - the QEMU regression legs (still owed from `2.2.0.2`);
@@ -759,11 +827,18 @@ Checkpoint: `2.2.1.0` on the E7250 under XP x64 and Windows 7 x64, with
 - a device present at boot enumerated;
 - the stick mounted;
 - the controller working with the EHCI disabled;
-- the route still correct after S3.
+- the route still correct after S3;
+- 36.13 passing, with its functional and regression legs on the `release`
+  package and its fault-injection legs on the `qemu` flavour, kept apart.
+  The `qemu` flavour is never published;
+- 36.14 read by the owner;
+- `XhciInterruptMode` at 0 and at 1, on a controller whose line interrupt
+  works, reading as the release before it.
 
 Which release carries the result is the owner's call.
 
-Records: `docs/issues/12-e7250-xp64-boot-enable-slot-refused.md`.
+Records: `docs/issues/12-e7250-xp64-boot-enable-slot-refused.md`;
+`design/15-polled-event-delivery.md`.
 
 ---
 
@@ -772,52 +847,8 @@ Records: `docs/issues/12-e7250-xp64-boot-enable-slot-refused.md`.
 Not phases yet: each takes the next free phase number when the owner opens
 it, and its placeholder ids take that number then (owner, 2026-10-06; the
 decisions table), and a version only then too: `2.2.0.0` is Phase 35's
-(owner, 2026-10-06). Polled event delivery comes first, then selective
-suspend, which ends in a cut.
-
-## Planned - Polled Event Delivery
-
-Goal: a controller with no legacy interrupt - MSI- or MSI-X-only, which
-neither primary target can serve by interrupt - driven by an adaptive poll
-of the event ring, chosen by a switch whose default, automatic, keeps the
-line interrupt wherever the controller has one; `XHCIQUAL` saying such a
-controller needs polling rather than disqualifying it.
-
-Status: not opened, unnumbered and unversioned; its phase number, version
-and branch given when the owner opens it. Design record 15 (`design/15-polled-event-delivery.md`) is the
-design: revision 4, the review's findings on revisions 1 to 3 taken (10, 8
-and 5), and the review converged at round 4 the same day, its one
-wording finding taken. POLL.0 still owes the section 4.1 check against
-`xhci-data-structures.md`.
-
-Why a phase: it changes how every event reaches the driver when it polls,
-adds three install values, lifts a disqualification `XHCIQUAL` has made
-since Phase 0, and is automatic by default, so a machine with no interrupt
-that failed to start before now polls.
-
-The owner's decisions of 2026-10-05 are the decisions table's "Polled event
-delivery" row and record 15 section 12. POLL.0 comes first.
-
-- [ ] POLL.0 the design: record 15 reviewed to convergence before code (the owner's decisions of 2026-10-05 are its section 12); and the hardware statements of its section 4.1 - `IMAN.IP`, `USBSTS.EINT` and `ERDP.EHB` with the interrupt enables clear - checked against `xhci-data-structures.md`
-- [ ] POLL.1 the three values (record 15 section 3): `XhciInterruptMode` 0 (0 automatic, 1 the line interrupt, 2 polling, 3 and above reserved and run as 0), `XhciPollIdleMs` 50 (held to 5000) and `XhciPollActiveMs` 1 (held to the idle period), neither period 0 (owner, 2026-10-05); read at each start with the out-of-range rules, written by both INFs on every install path under 34.1's don't-overwrite rule, the INF gate's `VAL-*` rows and the footprints with them. SUSP.4's install legs read them (Phase 34 is cut as `2.1.1.0` before this lands)
-- [ ] POLL.2 the delivery and the poller (record 15 sections 4 and 5): the delivery and its reason settled once at start and kept through recovery and resume; `ResourcesTypes` truthful and the core's interrupt-bit and pin-0 gates applied to a line delivery only; under a poll delivery the ISR unconnected, `XHCI_EXT_FLAG_INTERRUPTS` never set and every poll drain passing no re-arm; `PollTimer` with its own DPC, `IsrDpc` queued by the peeks, `PollLock` admission, close by `KeCancelTimer` with the timer DPC retiring itself, and park and kick across D3 and the in-place recovery
-- [ ] POLL.3 the adaptive period and the opportunistic checks (record 15 sections 6 and 7.1): the pure `xhci_poll.c` with host suite `test_poll` (ACTIVE, PERIODIC with interrupt IN and OUT, IDLE, the hysteresis and bounded-drain clauses, the clamps, promotion and the stale-decision rule); the peek under the controller lock after a doorbell, after a drain, on each thread pass, health poll and frame DPC, queueing the drain and never draining inline; poll delivery only; the counters, with the observed interval, and the delivery in effect and its reason (automatic, forced, or no interrupt) both in the counter block and in the one start log line, so `XHCISNAP` reads them from `XhciLogVerbosity` 1 and the DebugView sink emits them from 2 with `XhciLogDebugView` set (owner, 2026-10-05; section 8)
-- [ ] POLL.4 `XHCISNAP` (record 15 section 9): the three values in the companion as `XhciImodInterval250ns` is, the delivery in effect and its reason, the moderation value said to have no effect when polled, the poll counters, the coherence wording for drains polled or not (the tear detector itself already counts them), the header grown under the schema rule and older headers still read
-- [ ] POLL.5 `XHCIQUAL` (record 15 section 10): `Interrupt Pin = 0` no longer disqualifies - `quick_classify` and `quick_reason` say the controller needs polling - and the other disqualifiers stand; C4's "event in the ring, no interrupt" outcome reads "needs polling" while its tool failures and a controller that fails even polled do not; the polled tests run after the interrupt hook is removed; `main.c`'s C6/C8 gate and `report.c`'s verdict and exit code learn the outcome; vectors through the verdict, not only `test_mmiodiag`
-- [ ] POLL-V the legs (record 15 section 11): mode 2 on 98 SE and 2000 (SMP, Driver Verifier) first, then ME, XP, Vista and 7, x86 and x64 - HID, Bulk-Only and UAS storage, composite audio playing, behind QEMU's hub, hot-plug, disable and enable, remove and rescan; the no-interrupt start made deterministic by a `qemu`-flavour switch (mode 0 polling with its reason, mode 1 failing as today); a forced recovery under polling, and the controller's D3 and back where a guest offers one without system standby - where none does, the recovery alone reads park and kick and a disable and enable reads the close (record 15 section 11), system standby and hibernate under polling being SUSP.1's; the races on the SMP guest (promotion against re-arm, close against peeks and expiry, a bounded drain continued); the period each kernel gives, from the counters; line against poll on the same guest (storage copy rate, audio continuity, idle CPU load); modes 0 and 1 on a pin reading as the release before it; the delivery and its reason read in `XHCISNAP` and in DebugView for each of modes 0, 1 and 2 and for the no-interrupt start; x86 and amd64 and every gate
-- [ ] POLL-E the bench (owner): mode 2 on the E460 and the P14s Gen 1 under Windows 98 SE, and an MSI-only controller if one is at hand (the synthetic no-interrupt leg does not wait for one)
-
-Checkpoint: POLL-V passing - its functional and regression legs on the
-`release` package and its fault-injection legs on the `qemu` flavour, kept
-apart (record 15 section 11), the `qemu` flavour never published; POLL-E read
-by the owner; `XhciInterruptMode` at 0 and at 1,
-on a controller with a line interrupt, reading as the release before it.
-No cut.
-
-Records: `design/15-polled-event-delivery.md`; a run record, named for the
-phase when it is opened.
-
----
+(owner, 2026-10-06). Selective suspend is what remains, and it ends in a
+cut. Polled event delivery moved into Phase 36 on 2026-10-08 (owner).
 
 ## Planned - Release: Selective Suspend, Standby Resume and the Cut
 

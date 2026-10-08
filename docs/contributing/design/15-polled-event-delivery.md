@@ -1,9 +1,23 @@
 # Polled event delivery for the HCD
 
-Design record for roadmap-hcd's planned polled event delivery (tasks
-`POLL.*`; drawn up as Phase 35, unnumbered since 2026-10-06 until the owner
-opens it, and the review history in section 13 keeps the old phase
-numbers). DRAFT, revision 4, 2026-10-05: written at the owner's request so the driver can run
+Design record for roadmap-hcd's polled event delivery. It is now part of
+Phase 36 (owner, 2026-10-08). The task ids in this record are the old
+placeholders, which map as follows:
+
+| Old | Phase 36 |
+|---|---|
+| `POLL.0` | 36.5 |
+| `POLL.1` | 36.6 |
+| `POLL.2` | 36.7 |
+| `POLL.3` | 36.8 |
+| `POLL.4` | 36.9 |
+| `POLL.5` | 36.10 |
+| `POLL-V` | 36.13 |
+| `POLL-E` | 36.14 |
+
+It was drawn up as Phase 35, and the review history in section 13 keeps the
+old phase numbers. Section 4.2 and decision 6 are the 2026-10-08 amendment
+for issue 12. They are reviewed in 36.5. DRAFT, revision 4, 2026-10-05: written at the owner's request so the driver can run
 a controller that delivers no legacy interrupt - an MSI- or MSI-X-only xHCI
 controller, which neither primary target can serve today - by polling the
 event ring, adaptively, instead of waiting for an interrupt. Reviews covered
@@ -190,6 +204,34 @@ resume keep it; only a new start settles it again. For a poll delivery:
 
 `XhciImodInterval250ns` is still programmed as read; it has no effect
 without an interrupt.
+
+### 4.2 A line that never arrives (amendment, 2026-10-08; issue 12)
+
+Issue 12 found a controller whose line interrupt exists but never reaches
+the ISR. On the Dell E7250 the BIOS routes the xHCI's INTA to a different
+IRQ from the one ACPI gives the OS. The table above settles that controller
+on "line, automatic", and the driver then lives on the lost-interrupt
+backstop alone. With no other device on its line, it fails outright. The
+routing quirk (roadmap 36.3) repairs the E7250. This rule covers what it
+cannot: an unlisted chipset, PIC mode, or another firmware fault.
+
+**Mode 0 only:** a line delivery that is proven dead at run time moves to
+polling, with the reason "automatic: line interrupt not delivered".
+- **Proven dead** means repeated backstop looks find an event waiting with
+  `IMAN.IP` and `IE` and `USBCMD.INTE` set, while the ISR has claimed
+  nothing since the previous look. The exact count and window are settled
+  in review (36.5), so that a shared or merely slow line does not trip it.
+- **The move.** It masks the interrupter (`INTE`, then `IE`, the existing
+  mask order) and starts the poller as for a poll delivery chosen at start.
+  It keeps the move through recovery and resume, like any delivery.
+- **The ISR stays connected,** because disconnecting at DISPATCH is not
+  possible. It claims nothing once the move is made, so a shared line's
+  other devices are unaffected.
+- **Moves happen in one direction only.** A later interrupt does not move
+  the controller back; only a new start settles the delivery again.
+
+**Mode 1** (the line, forced) never moves, so it reads as today. **Mode 2**
+polls from the start.
 
 ### 4.1 What the hardware needs (review, revision 1)
 
@@ -605,6 +647,9 @@ Taken by the owner on 2026-10-05, each from options with a recommendation:
    MSI".
 5. The value names: `XhciInterruptMode`, `XhciPollIdleMs` and
    `XhciPollActiveMs`, as recommended.
+6. (2026-10-08, after issue 12) Automatic mode moves a line proven dead at
+   run time to polling (section 4.2). This replaces a narrower
+   stalled-event watchdog the issue 12 plan had held as task 36.4.
 
 ## 13. The reviews
 
