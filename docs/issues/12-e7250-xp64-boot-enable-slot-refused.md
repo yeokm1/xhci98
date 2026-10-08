@@ -682,8 +682,17 @@ That is every observation in sections 5, 8 and 9:
   enabled.
 - The mouse became smooth at once.
 - A hot-plugged SanDisk stick then mounted with a drive letter.
-- A restart restores the BIOS value. The dump `XPFIXED` was taken after
-  the change, before the restart.
+- A restart restores the BIOS value.
+- **The dump `xpfixed` confirms it.** It was taken after the change, in the
+  same boot, so its counters are cumulative across the boot.
+  - The last backstop drain (#839) was at T-306 s, which is about when the
+    write was made. There was none after it.
+  - The ISR was entered 70,427 times and claimed 68,791, nearly all after the
+    change.
+  - Transfers submitted / completed: 69,527 / 69,525.
+  - Before the change, a stall recovery (RESET_PIPE) took 2.5-3 s
+    (T-938 s). After it, the recoveries took under 16 ms (T-279 s, T-12 s).
+  - Every Endpoint Context was Running.
 
 Why this has not been seen before: Intel's Windows 7 xHCI driver, and
 Microsoft's from Windows 8, enable MSI. MSI does not use PIRQ routing, so the
