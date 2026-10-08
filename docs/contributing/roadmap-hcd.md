@@ -741,11 +741,14 @@ renumbering cite these numbers:
   - **Writes only when all hold:**
     - a valid, enabled RCBA read from LPC `00:1F.0` F0;
     - D20IP agrees with the xHCI's INTA;
-    - a line-based APIC interrupt with a raw GSI of 16-23;
-    - D20IR's IAR differs from GSI-16.
+    - a line-based, unambiguous interrupt;
+    - a target PIRQ derived from the raw IRQ, and D20IR's IAR differing from it:
+      - **APIC mode** (raw IRQ 16-23): the target is IRQ-16;
+      - **PIC mode** (raw IRQ below 16; Windows 98 and ME, or NT without the APIC): the target is a PIRQ whose LPC `PIRQx_ROUT` (`60h`-`63h`, `68h`-`6Bh`) is enabled and names that IRQ. The current one is kept if it matches, else the lowest is taken. Those registers are read, never written.
 
-    Then it writes `(old & ~7) | (GSI-16)` as a 16-bit write and reads it back.
-  - **Report-only, whatever the value,** in PIC mode or Windows 98, or when the mode is uncertain.
+    Then it writes `(old & ~7) | target` as a 16-bit write and reads it back.
+  - **Which deliveries it serves:** every line delivery. That means Windows 98, ME, 2000 and XP, and Vista and 7 under `XhciInterruptMode` 1 or without an MSI grant. Under MSI it only reports. Under polling it still repairs, for a later start on the line.
+  - **Report-only** when no target can be derived, or the raw value is outside both ranges. The PIC-mode rule (owner, 2026-10-08) replaces an earlier "report-only in PIC mode", and gets its own Codex review.
   - **The parser** keeps the raw interrupt resource (level, vector, flags, share), which it does not today (`hcd_ctl.c` ~524).
   - **Reaching LPC config space:** a supported path to read `00:1F.0` on every target, which `HcdSvcConfigSpace` does not give (it targets the xHCI's own PDO). Settle it first (HalGetBusDataByOffset or equivalent, per OS, Windows 98 included). Not CF8/CFC.
   - **Placement:** in the HCD layer.
@@ -828,7 +831,7 @@ renumbering cite these numbers:
   - **To settle in review:**
     - how `XhciInterruptMode` reads with MSI: 3 = MSI where offered; 1 = the line, which the INF key cannot withdraw once Windows has granted a message, so whether 1 needs its own INF path; 0 = MSI where granted, else the line, else polling;
     - the dead-line rule (section 4.2) not applied to a message delivery, or applied to it alike;
-    - the interaction with the routing quirk, which is not needed under MSI and reports only;
+    - the routing quirk, which reports only under MSI but still repairs when mode 1 or a refused grant leaves the line in use (36.3);
     - XP x64, which ignores the key and keeps the line.
   - **What is recorded:** the delivery (MSI, line or poll) and its reason, in the counter block, the start log line and `XHCISNAP`.
 - [ ] 36.16 the MSI legs:
@@ -844,7 +847,8 @@ renumbering cite these numbers:
     - the mouse;
     - the stick hot-plugged and present at boot;
     - `xpnoehci`'s case (the EHCI disabled);
-    - S3 resume.
+    - S3 resume;
+    - Windows 98 SE (PIC mode), and Windows 7 with `XhciInterruptMode` 1 (the line forced), with the routing fix repairing the route in both.
 
 Checkpoint: `2.2.1.0` on the E7250 under XP x64 and Windows 7 x64, with
 `XhciIntelIrqRoute` at its default:

@@ -250,26 +250,58 @@ These are not admitted:
 Every pair is now confirmed by its datasheet. The fetching notes and hashes are in
 `docs/references/README.md`, "Intel PCH datasheets".
 
+**Which deliveries it serves.** The quirk is for every line-interrupt
+delivery, in either case:
+- **Windows 98, ME, 2000 and XP**, which have no MSI;
+- **Vista and 7 when the line is in use**: `XhciInterruptMode` 1 (forced),
+  or MSI not granted.
+
+Under MSI (36.15) the route does not matter, so it only reports. Under a poll
+delivery it still repairs the route, so that a later start on the line finds
+it correct.
+
 **The driver writes only when all of these hold**, and otherwise reports
 what it found:
 1. The pair is admitted by the value, at the expected locations: xHCI
    `00:14.0`, LPC `00:1F.0`.
 2. The LPC's RCBA is enabled and valid.
 3. `D20IP` agrees with the xHCI's Interrupt Pin.
-4. The interrupt is line-based in APIC mode, with a raw GSI of 16-23. The
-   translated vector and IRQL are never used, and message-signalled or
-   ambiguous resources are refused.
-5. `D20IR`'s IAR differs from GSI-16.
+4. The interrupt is line-based (not message-signalled) and unambiguous. The
+   translated vector and IRQL are never used; the raw resource names the
+   IRQ.
+5. A target PIRQ can be derived from that IRQ (below), and `D20IR`'s IAR
+   differs from it.
+
+**The target PIRQ**, by interrupt mode:
+- **APIC mode**, when the raw IRQ is 16 to 23 (Windows 2000, XP, Vista and 7
+  on the E7250): the target is PIRQ (IRQ-16), because the PCH wires
+  PIRQA#-H# to I/O APIC inputs 16-23.
+- **PIC mode**, when the raw IRQ is below 16 (Windows 98 and ME, and an NT
+  system booted without the APIC):
+  - Here the route has two stages: `D20IR` picks the PIRQ, then the LPC's
+    `PIRQx_ROUT` registers (`60h`-`63h`, `68h`-`6Bh`; bit 7 IRQEN = 0 means
+    routed, bits 3:0 the ISA IRQ) send each PIRQ to an 8259 input.
+  - The OS programmed those through ACPI's link devices or the BIOS's
+    `$PIR` table, for the PIRQ it believes the xHCI uses.
+  - The target is a PIRQ whose `PIRQx_ROUT` is enabled and names the
+    assigned IRQ. When several do, they share that IRQ, so any of them
+    delivers it: the driver keeps `D20IR` as it is if its PIRQ is among
+    them, or else takes the lowest.
+  - When none does, it reports and writes nothing.
+- **Any other raw value**, or none: report only.
 
 **The write:**
-- `(old & ~7) | (GSI-16)` as a 16-bit write, then a read-back.
+- `(old & ~7) | target` as a 16-bit write, then a read-back.
 - It goes through one noncached page mapped at RCBA+`3000`.
-- Nothing else is touched: no other device's route, no LPC PIRQ selector,
-  no IOAPIC entry, no ACPI link.
+- Nothing else is touched: no other device's route, no LPC `PIRQx_ROUT`
+  register (read only, in PIC mode), no IOAPIC entry, no ACPI link.
 
-**Report-only, whatever the value**, in PIC mode (Windows 98 included) or
-when the mode is uncertain. In PIC mode the route also passes through the
-LPC PIRQ selectors, and GSI-16 means nothing there.
+The PIC-mode rule was added on 2026-10-08 at the owner's request, so that
+the E7250 also works under Windows 98 and ME. It replaces an earlier
+"report-only in PIC mode". It gets its own Codex review in 36.3, and the E7250
+check (36.17) runs under Windows 98 SE as well. Whether the E7250's BIOS
+leaves the xHCI's PIRQ unrouted in PIC mode is unknown until then:
+`XHCIQUAL` under DOS saw line 11.
 
 **When it runs:**
 - at start, after IoConnectInterrupt and `XhciInitController`, before
