@@ -13,7 +13,7 @@ line is offered and no helper is bound (section 4.3). **Revision 7**
 takes review round 5 and the owner's further decision of the same day:
 `XhciInterruptMode` 1 on its own forces the line on Vista and 7, x86
 and amd64, through the same filter (section 4.2). Revision 8 takes
-review round 6.
+review round 6, and revision 9 round 7.
 
 Design record 15 section 4.3 designs MSI for the HCD and fixes the seam
 this record plugs into: `hcdMsgConnect(hc, connect, disconnect)`, handed
@@ -374,26 +374,33 @@ replaces, and returns the replacement in `Information` with
   `test_poll`'s decision table and the record's transitions.
 
 **The filter-time mode read.** The start's reader, `hcdReadDword`, calls
-`IoOpenDeviceRegistryKey`, which the WDK requires in a system thread;
+`IoOpenDeviceRegistryKey`, which the WDK requires in a system thread.
 `IRP_MN_FILTER_RESOURCE_REQUIREMENTS` arrives at PASSIVE_LEVEL in an
-arbitrary thread. So the filter does not call it inline: it queues a
-work item with `ExQueueWorkItem` (admitted in both images' allowlists)
-on `DelayedWorkQueue`, the `WORK_QUEUE_ITEM`, a `KEVENT` and the result
-slots embedded in `hc` (the PnP manager sends one PnP IRP at a time to a
-devnode, so one filter's item at a time; `hc` outlives it because the
-filter waits for the event before it completes, and remove cannot come
-while the filter IRP is in progress). The worker reads the raw DWORD and
-its status into filter-time fields of `hc` and sets the event; the
-filter then applies record 15's strict validation and normalisation (the
-pure function the start uses) to that raw value. The result lives in
-its own fields (`FilterModeRaw`, `FilterModeStatus`, `FilterMode`), never
-in the start's `PollValues`, and nothing the start settles
-(`hcdSettleDelivery` and the rest) is called. An unreadable value is
-mode 0's, as at the start. **For the orchestrator:** the start's own
-call of `hcdReadValues` runs in the `START_DEVICE` dispatch, whose
-thread the WDK also does not promise to be a system thread; the code
-phase audits it and, if it needs one, routes it through the same worker
-(p36-poll's code).
+arbitrary thread, so the filter reads no registry itself. Instead it uses
+a value read where the WDK does promise a system thread: **`AddDevice`**
+(documented as called in a system thread at PASSIVE_LEVEL) reads the raw
+`XhciInterruptMode` DWORD and its status through the same
+`hcdReadDword`, and **`IRP_MN_START_DEVICE`** (documented as arriving at
+PASSIVE_LEVEL in a system thread; `HcdForwardAndWait` resumes on that
+same dispatch thread) refreshes them when the start reads its values. The
+filter applies record 15's strict validation and normalisation (the pure
+function the start uses) to the latest raw value. No worker thread or
+work item is involved, so nothing of the driver's runs after the filter
+completes and no unload window is opened. The result lives in its own
+fields (`FilterModeRaw`, `FilterModeStatus`, `FilterMode`, and where it
+was read: `AddDevice` or the start), never in the start's `PollValues`,
+and nothing the start settles (`hcdSettleDelivery` and the rest) is
+called from the filter. An unreadable value is mode 0's, as at the start.
+
+What that means for a change of the value: a disable and enable creates a
+new FDO whose `AddDevice` reads the new value before its first filter, so
+the documented way to change the mode (a disable and enable, section 4.4)
+gives the filter the current value. A rebalance (stop, filter, start on
+the same FDO) uses the value the last start read; a value changed while
+the controller ran and not followed by a disable and enable can therefore
+meet a rebalance's filter with the previous mode, and the start's own
+fresh reading then governs as above. That is recorded (`FilterModeRaw`
+beside the start's value), not prevented.
 
 Otherwise (amd64 in modes 0, 2 and 3; x86 with the helper bound in those
 modes) the filter walks, classifies and records the list (steps 1 to 5)
@@ -1224,8 +1231,9 @@ edit them):
   `XHCI_POLL_R_FORCED_NO_LINE_OFFERED`; section 9's `XHCISNAP` names for it
   and for section 9's new fields here.
 - Record 15 section 3's "read at each start": on Vista and 7
-  `XhciInterruptMode` is also read at each requirements filter, through a
-  system worker, into separate fields (section 4.2).
+  `XhciInterruptMode` is also read at `AddDevice` (and kept from each
+  start's reading) for the requirements filter, into separate fields
+  (section 4.2).
 - Roadmap's decisions table, the "MSI on Vista and 7" row (~79), which
   still says x86's imports are unchanged and x86 keeps the line: one
   import added, the helper, the strip, mode 1 forcing the line.
@@ -1263,7 +1271,7 @@ pure functions, compiled into both drivers and the host suite),
 Changed: `src\xhci98.inf`, `src\sources`, `src\hcd.h`, `src\hcd_pnp.c`
 (the filter and the remove), `src\hcd_ctl.c` (the x86 caller of
 `hcdMsgConnect`, the republication after `HcdCountersStart`),
-`src\hcd_entry.c` (the state at `AddDevice`), `src\hcd_pool.c` (the paged
+`src\hcd_entry.c` (the state and the filter-time mode read at `AddDevice`), `src\hcd_pool.c` (the paged
 site, now in both images), `src\xhci98-amd64.inf` unchanged but the amd64
 image's filter (`src\hcd_msi86.c`'s filter part compiled for both; the
 helper look x86-only), `src\xhci_poll.c` and `test\test_poll.c` (the mode-1 input and
@@ -1380,7 +1388,17 @@ coherent.
 
 | # | Finding | Where answered |
 |---|---|---|
-| 1 | P1: the start's registry reader needs a system thread; the filter arrives in an arbitrary one | Section 4.2: the filter-time read through an `ExQueueWorkItem` worker with storage in `hc`, its own fields, the start's validation applied, nothing settled; the start's own context to audit |
+| 1 | P1: the start's registry reader needs a system thread; the filter arrives in an arbitrary one | Section 4.2: revision 8 used an `ExQueueWorkItem` worker; revision 9 (round 7) replaced it with readings taken at `AddDevice` and at each start, both documented system-thread contexts |
 | 2 | P2: a NO-LINE class could survive a later filter that never classified | Section 4.2, step 0: UNKNOWN at `AddDevice` and at every filter entry, published only with that filter's sequence; vectors |
 | 3 | P2: amd64 stripping enabled without amd64 readings | Section 10, R on x64 too, admission per OS and architecture; section 9's labels per architecture |
 | 4 | P3: the filter-time read missing from the reconciliation and the record | Sections 9 and 12; D3 reworded; transition vectors 1 to 0, 0 to 1, 1 to 2 |
+
+### 14.8 Revision 8
+
+Round 7 (`bb65eae`, same thread): 1 P1, 1 P3, both taken in revision 9.
+Round-6 findings 2 to 4 were confirmed closed.
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | P1: the worker's completion event does not keep the image loaded until the callback returns (`ExQueueWorkItem` holds no device reference; `xhci98.sys` is unloadable) | Section 4.2: no worker at all; the filter uses the raw mode read at `AddDevice` and refreshed at each start, both documented system-thread contexts; a rebalance after an unannounced value change is recorded |
+| 2 | P3: `START_DEVICE` is documented as a system thread | Section 4.2: the audit note removed; the start's reading is one of the two sources |
