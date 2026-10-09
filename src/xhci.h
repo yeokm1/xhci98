@@ -8571,7 +8571,17 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_TOL_HUB_LOCS  17  /* XHCI_TOL_HUB_LOCS             */
 #define XHCI_SNAPSHOT_HCD_TOL_HUB_PORTS 18  /* HubLoc entries per hub object */
 #define XHCI_SNAPSHOT_HCD_TERMINAL      19  /* XHCI_TOL_TERMINAL_*           */
-#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    20UL
+/*
+ * Appended by task 36.3, version unchanged: the interrupt routing quirk's
+ * record (XHCI_PIRQ_STATE, xhci_pirq.h), which lives in the HCD's
+ * controller object rather than the extension, copied whole - a count of
+ * its words, then the words in the structure's order, all ULONGs. A header
+ * shorter than this is an earlier driver's, which has no quirk.
+ */
+#define XHCI_SNAPSHOT_HCD_PIRQ_WORDS    20  /* XHCI_PIRQ_STATE, in words     */
+#define XHCI_SNAPSHOT_HCD_PIRQ_AT       21  /* its first word                */
+#define XHCI_SNAPSHOT_HCD_PIRQ_COUNT    27UL
+#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    48UL
 
 /* One root port's record. The machine's fields are XHCI_ENUM_PORT's; the
  * speed ID is the one the port's last reset read (0 none), decoded on its

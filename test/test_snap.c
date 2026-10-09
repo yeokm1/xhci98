@@ -14,6 +14,7 @@
 #include "../src/xhci.h"
 #include "../src/xhci_counters.h"
 #include "../src/xhci_enum.h"
+#include "../src/xhci_pirq.h"
 #include "test_harness.h"
 
 #define H XHCI_SNAPSHOT_HCD_HEAD_WORDS
@@ -22,26 +23,26 @@ static void test_header(void)
 {
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_VERSION_AT), 1,
              "version 1");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_BYTES), 80,
-             "a twenty-word header (35-T.8 appended twelve)");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_BYTES), 192,
+             "a 48-word header (35-T.8 appended twelve, 36.3 28)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS), 18,
              "the E460's eighteen root ports");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORT_BYTES), 64,
              "a sixteen-word record");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 80,
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 192,
              "records right after the header");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 63,
              "the whole counter block");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS_AT),
-             80 + 18 * 64, "counters after the last record");
+             192 + 18 * 64, "counters after the last record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_NOTE_BUDGET),
              XHCI_ENUM_NOTE_BUDGET, "the notes' budget");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_WORDS), 0,
              "past the header reads 0");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_COUNTER_WORDS * sizeof(ULONG),
              sizeof(XHCIHC_COUNTERS), "the counters word for word");
-    CHECK_EQ(XhciSnapHcdWords(18), 20 + 18 * 16 + 63, "the E460's image");
-    CHECK_EQ(XhciSnapHcdWords(0), 20 + 63,
+    CHECK_EQ(XhciSnapHcdWords(18), 48 + 18 * 16 + 63, "the E460's image");
+    CHECK_EQ(XhciSnapHcdWords(0), 48 + 63,
              "no ports: a header and the counters");
     CHECK_EQ(XhciSnapHcdWords(1000), XhciSnapHcdWords(XHCI_MAX_ROOT_PORTS),
              "ports held to the root port maximum");
@@ -148,8 +149,8 @@ static void test_tol_words(void)
     ULONG loc;
 
     CHECK_EQ(XHCI_SNAPSHOT_HCD_TOL_AT, 8, "appended after the notes' budget");
-    CHECK_EQ(XHCI_SNAPSHOT_HCD_TERMINAL, XHCI_SNAPSHOT_HCD_HEAD_WORDS - 1,
-             "the terminal reason last");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_TERMINAL, 19,
+             "the terminal reason last of 35-T.8's words");
     at = XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_TOL_AT);
     bytes = XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_TOL_BYTES);
     loc = XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_TOL_LOC_BYTES);
@@ -202,10 +203,38 @@ static void test_tol_words(void)
              "independent of the port count");
 }
 
+/* 36.3: the routing quirk's record, copied whole after its count.
+ * XHCISNAP names these words at these places (xhcisnap.c,
+ * SNAP_PIRQ_*), so a field moved fails here until the tool follows. */
+static void test_pirq_words(void)
+{
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_PIRQ_WORDS, 20, "after the terminal reason");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_PIRQ_AT, 21, "the record right after");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PIRQ_WORDS),
+             sizeof(XHCI_PIRQ_STATE) / 4, "its count, the whole state");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_PIRQ_AT + sizeof(XHCI_PIRQ_STATE) / 4,
+             XHCI_SNAPSHOT_HCD_HEAD_WORDS, "the record ends the header");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PIRQ_AT), 0,
+             "the record is the door's, not layout");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_PIRQ_STATE, Runs), 0 * 4, "Runs");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_PIRQ_STATE, Mode), 3 * 4, "Mode");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_PIRQ_STATE, Decision), 8 * 4,
+             "Decision");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_PIRQ_STATE, XhciId), 9 * 4, "XhciId");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_PIRQ_STATE, LpcId), 13 * 4, "LpcId");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_PIRQ_STATE, IrqCount), 17 * 4,
+             "IrqCount");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_PIRQ_STATE, IrqMode), 22 * 4, "IrqMode");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_PIRQ_STATE, D20irAfter), 26 * 4,
+             "D20irAfter last");
+    CHECK_EQ(XHCI_PIRQ_D_COUNT, 23, "the decisions XHCISNAP names");
+}
+
 int main(void)
 {
     test_header();
     test_tol_words();
+    test_pirq_words();
     test_walk(0);
     test_walk(1);
     test_walk(18);

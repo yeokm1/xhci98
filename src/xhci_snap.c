@@ -21,6 +21,14 @@
 #include "xhci.h"
 #include "xhci_counters.h"
 #include "xhci_enum.h"
+#include "xhci_pirq.h"
+
+/* The header carries the routing quirk's record whole, after its count. */
+XHCI_C_ASSERT(xhci_snap_hcd_pirq,
+              sizeof(XHCI_PIRQ_STATE) ==
+                  XHCI_SNAPSHOT_HCD_PIRQ_COUNT * sizeof(ULONG) &&
+              XHCI_SNAPSHOT_HCD_PIRQ_AT + XHCI_SNAPSHOT_HCD_PIRQ_COUNT ==
+                  XHCI_SNAPSHOT_HCD_HEAD_WORDS);
 
 /* The image carries the counter block whole, word for word. */
 XHCI_C_ASSERT(xhci_snap_hcd_counters,
@@ -82,9 +90,11 @@ ULONG XhciSnapHcdHead(ULONG ports, ULONG word)
         return XHCI_TOL_HUB_LOCS;
     case XHCI_SNAPSHOT_HCD_TOL_HUB_PORTS:
         return XHCI_TOL_HUB_LOC_PORTS;
+    case XHCI_SNAPSHOT_HCD_PIRQ_WORDS:
+        return XHCI_SNAPSHOT_HCD_PIRQ_COUNT;
     default:
-        /* XHCI_SNAPSHOT_HCD_TERMINAL is a reading, not layout: the door
-         * fills it (hcd_door.c). */
+        /* XHCI_SNAPSHOT_HCD_TERMINAL and the routing record are readings,
+         * not layout: the door fills them (hcd_door.c). */
         return 0;
     }
 }

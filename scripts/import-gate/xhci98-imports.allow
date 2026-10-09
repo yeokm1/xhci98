@@ -159,6 +159,19 @@ ntoskrnl.exe!IoSetDeviceInterfaceState       all  required  w2k-export; win98-pr
 ntoskrnl.exe!IoGetDeviceProperty             all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!IoGetDeviceProperty, hint 49) (+7 other 98 SE); ntkern-name
 ntoskrnl.exe!ZwSetValueKey                   all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!ZwSetValueKey, hint FF) (+12 other 98 SE); ntkern-name (design record 13 Appendix A row 159)
 
+# --- Task 36.3: the Intel PCH interrupt routing quirk ----------------------
+# Reads the LPC bridge's and 00:14.0's configuration space, which no PDO of
+# this driver reaches, and writes the 16-bit D20IR in the chipset's RCBA
+# space. Each pair's only Windows 98 evidence is its name in ntkern.vxd's
+# tables - HalGetBusData in the hal.dll block beside KfAcquireSpinLock, the
+# two accessors in the ntoskrnl block beside READ_REGISTER_ULONG - so all
+# three are LOAD-TEST ITEMS on Windows 98 SE and ME (design record 13 section
+# 7.7); no guest has loaded them yet. HalGetBusDataByOffset has no Windows 98
+# evidence and is not used.
+HAL.dll!HalGetBusData                       all  required  w2k-export; ntkern-name (ntkern.vxd's hal.dll name block, beside KfAcquireSpinLock; legal-provenance.md section 4); task 36.3, 00:14.0 and 00:1F.0 read from offset 0
+ntoskrnl.exe!READ_REGISTER_USHORT          all  required  w2k-export; ntkern-name; task 36.3, D20IR read at its own width
+ntoskrnl.exe!WRITE_REGISTER_USHORT         all  required  w2k-export; ntkern-name; task 36.3, the one D20IR write
+
 [deny]
 
 # Where the reason is a fact about a target - absent on Windows 98, or

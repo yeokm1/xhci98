@@ -57,6 +57,10 @@ rem                  XhciIntelPortSwitch rule, and the route and release over
 rem                  a modelled config space - write order, values, refusals;
 rem                  value 2's bypass, the accepted-write set and the
 rem                  lifetime that releases only it (task 35.5)
+rem   test_pirq    - the Intel PCH interrupt routing quirk (src\xhci_pirq.c,
+rem                  task 36.3): the XhciIntelIrqRoute rule, the reviewed
+rem                  pairs, the target PIRQ in APIC and PIC mode, the
+rem                  delivery, and the run over a modelled machine
 rem   test_snap    - the snapshot's HCD region (src\xhci_snap.c, task 35.3):
 rem                  every word of the image located once, in order, and the
 rem                  header's sizes and offsets agreeing with it
@@ -280,6 +284,9 @@ rem test_psw links nothing else: the gate, the value rule, the two
 rem sequences and the lifetime are pure, driven over a modelled
 rem configuration space (34.3, 35.5).
 call :run test_psw "test_psw.c ..\src\xhci_psw.c"
+rem test_pirq links nothing else: the value rule, the pair table, the
+rem target PIRQ and the run are pure, driven over a modelled PCH (36.3).
+call :run test_pirq "test_pirq.c ..\src\xhci_pirq.c"
 rem test_snap links nothing else: the snapshot's HCD region layout - where
 rem each word lies and what the header says - is pure (task 35.3).
 call :run test_snap "test_snap.c ..\src\xhci_snap.c"

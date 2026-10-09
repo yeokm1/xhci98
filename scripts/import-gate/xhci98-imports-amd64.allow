@@ -109,6 +109,10 @@ ntoskrnl.exe!IoSetDeviceInterfaceState     all  required  nt52-amd64-export; twi
 ntoskrnl.exe!IoGetDeviceProperty           all  required  nt52-amd64-export; twin of the x86 row (task 26-A.8)
 ntoskrnl.exe!ZwSetValueKey                 all  required  nt52-amd64-export; twin of the x86 row (task 26-A.8)
 
+# Task 36.3: the routing quirk's LPC and 00:14.0 reads. The register
+# accessors are inlines on amd64 and import nothing.
+HAL.dll!HalGetBusData                     all  required  nt52-amd64-export; twin of the x86 row (task 36.3); also in WDK 7.1's wlh and win7 amd64 hal.lib
+
 [deny]
 
 ExAllocatePool              Not the HCD's spelling (xhci98-imports.allow; task 25.3). Allocate with ExAllocatePoolWithTag once its row exists.

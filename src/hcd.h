@@ -31,6 +31,7 @@
 #include "xhci_sshub.h"
 #include "xhci_link.h"
 #include "xhci_psw.h"
+#include "xhci_pirq.h"
 #include "xhci_stream.h"
 #include "xhci_counters.h"
 #include "xhci_inj.h"
@@ -831,6 +832,11 @@ typedef struct _HCD_CONTROLLER {
     KAFFINITY IntAffinity;
     KINTERRUPT_MODE IntMode;
     BOOLEAN IntShared;
+    /* The raw list's interrupt resource and the delivery it gives, kept
+     * for the routing quirk (task 36.3), which names the IRQ from the raw
+     * resource and never from the translated vector. */
+    XHCI_PIRQ_IRQ IntRaw;
+    ULONG IntDelivery;
     PKINTERRUPT Interrupt;
     KDPC IsrDpc;
     volatile LONG DpcsInFlight;
@@ -1196,6 +1202,13 @@ typedef struct _HCD_CONTROLLER {
     ULONG PswReleases;
     ULONG PswFailures;
     XHCI_PSW_LIFE PswLife;
+    /* The interrupt routing quirk (task 36.3; hcd_ctl.c, xhci_pirq.h): the
+     * start's value and the last run's findings, with counts never zeroed,
+     * published whole in the snapshot's HCD region; and the RCBA page a run
+     * maps, NULL outside one. PASSIVE_LEVEL only, at the start under the
+     * door gate and at a return to D0 under the power gate. */
+    XHCI_PIRQ_STATE Pirq;
+    PVOID PirqVa;
 } HCD_CONTROLLER, *PHCD_CONTROLLER;
 
 /* The root hub's PDO, created by the controller FDO (hcd_rh.c; design record
@@ -1309,6 +1322,7 @@ VOID HcdPowerGateLeave(PHCD_CONTROLLER hc);
 ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc);
 VOID HcdPswRoute(PHCD_CONTROLLER hc);
 VOID HcdPswRelease(PHCD_CONTROLLER hc);
+VOID HcdPirqResume(PHCD_CONTROLLER hc);
 
 /* hcd_enum.c */
 VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered);

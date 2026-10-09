@@ -97,6 +97,8 @@ static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
         /* Task 34.3: firmware may have put the connectors back on EHCI
          * across the sleep; route them before the ports are resumed. */
         HcdPswRoute(hc);
+        /* Task 36.3: and may have put the xHCI's interrupt route back. */
+        HcdPirqResume(hc);
         hc->TolStartGen++;
         if (!hcdResumeContained(hc) &&
             XhciResumeController(&hc->Hc) != MP_STATUS_SUCCESS) {
@@ -156,6 +158,7 @@ static VOID hcdDirectTransitionGated(PHCD_CONTROLLER hc)
     if (hc->SuspendedInD0) {
         hc->SuspendedInD0 = 0;
         HcdPswRoute(hc);
+        HcdPirqResume(hc);
         hc->TolStartGen++;
         if (!hcdResumeContained(hc) &&
             XhciResumeController(&hc->Hc) != MP_STATUS_SUCCESS) {

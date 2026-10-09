@@ -54,6 +54,10 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * an unlisted Intel one (task 35.5). Read at start, on every Intel
  * controller and no other. */
 #define HCD_VALUE_PORT_SWITCH   L"XhciIntelPortSwitch"
+/* Task 36.3: the Intel PCH interrupt routing quirk; absent, another type
+ * or another number than 0 to 2 is 1, the verified E7250 only
+ * (xhci_pirq.h). Read at start; a return to D0 runs on the start's. */
+#define HCD_VALUE_IRQ_ROUTE     L"XhciIntelIrqRoute"
 /* 35-T (design record 17 sections 4.7 and 4.11): the tolerance off-switch,
  * the interrupt-interval cap and the Average TRB Length switch, read at
  * every start; absent, another type or another number takes the default. */
@@ -487,11 +491,264 @@ static VOID hcdPswStart(PHCD_CONTROLLER hc)
 }
 
 /* --------------------------------------------------------------------- */
+/* The Intel PCH interrupt routing quirk (task 36.3)                      */
+/* --------------------------------------------------------------------- */
+
+/* The Windows 2000 DDK predates message-signalled interrupts; the bit is
+ * WDK 7.1 wdm.h's. */
+#ifndef CM_RESOURCE_INTERRUPT_MESSAGE
+#define CM_RESOURCE_INTERRUPT_MESSAGE 2
+#endif
+
+/*
+ * PCI configuration space of a function on bus 0 that is not this one's:
+ * the PCH's 00:14.0 and 00:1F.0. HcdSvcConfigSpace reaches only this
+ * device's own PDO, and the LPC bridge's PDO is not this driver's to
+ * address, so the read goes through the HAL, the one route every target
+ * offers: HalGetBusData is in every Windows 2000 SP4 HAL's export table,
+ * in Vista's and 7's x86 HAL, in XP x64's, in WDK 7.1's Vista and 7
+ * amd64 hal.lib, and in Windows 98 SE ntkern.vxd's hal.dll name block
+ * beside KfAcquireSpinLock. The ...ByOffset form has no Windows 98
+ * evidence, so the header is read from offset 0. Reads only: nothing is
+ * written through this route. IRQL: PASSIVE_LEVEL.
+ */
+static ULONG hcdPirqSlot(PVOID context, ULONG device, ULONG function,
+                         PUCHAR buffer, ULONG length)
+{
+    UNREFERENCED_PARAMETER(context);
+
+    /* PCI_SLOT_NUMBER: device 4:0, function 7:5. */
+    return HalGetBusData(PCIConfiguration, 0,
+                         (device & 0x1FUL) | ((function & 0x7UL) << 5),
+                         buffer, length);
+}
+
+/* One noncached page of the chipset's RCBA space, for the run only.
+ * IRQL: PASSIVE_LEVEL. */
+static ULONG hcdPirqMap(PVOID context, ULONG physical)
+{
+    PHCD_CONTROLLER hc;
+    PHYSICAL_ADDRESS pa;
+
+    hc = (PHCD_CONTROLLER)context;
+    pa.LowPart = physical;
+    pa.HighPart = 0;
+    hc->PirqVa = MmMapIoSpace(pa, XHCI_PIRQ_WINDOW_BYTES, MmNonCached);
+    return hc->PirqVa != NULL ? 1UL : 0UL;
+}
+
+/* IRQL: PASSIVE_LEVEL. */
+static VOID hcdPirqUnmap(PVOID context)
+{
+    PHCD_CONTROLLER hc;
+
+    hc = (PHCD_CONTROLLER)context;
+    if (hc->PirqVa != NULL) {
+        MmUnmapIoSpace(hc->PirqVa, XHCI_PIRQ_WINDOW_BYTES);
+        hc->PirqVa = NULL;
+    }
+}
+
+/* IRQL: PASSIVE_LEVEL. */
+static ULONG hcdPirqRead32(PVOID context, ULONG offset, PULONG value)
+{
+    PHCD_CONTROLLER hc;
+
+    hc = (PHCD_CONTROLLER)context;
+    if (hc->PirqVa == NULL || offset > XHCI_PIRQ_WINDOW_BYTES - 4) {
+        return 0;
+    }
+    *value = READ_REGISTER_ULONG((PULONG)((PUCHAR)hc->PirqVa + offset));
+    return 1;
+}
+
+/* D20IR is a 16-bit register, accessed at its own width. IRQL:
+ * PASSIVE_LEVEL. */
+static ULONG hcdPirqRead16(PVOID context, ULONG offset, PUSHORT value)
+{
+    PHCD_CONTROLLER hc;
+
+    hc = (PHCD_CONTROLLER)context;
+    if (hc->PirqVa == NULL || offset > XHCI_PIRQ_WINDOW_BYTES - 2) {
+        return 0;
+    }
+    *value = READ_REGISTER_USHORT((PUSHORT)((PUCHAR)hc->PirqVa + offset));
+    return 1;
+}
+
+/* IRQL: PASSIVE_LEVEL. */
+static ULONG hcdPirqWrite16(PVOID context, ULONG offset, USHORT value)
+{
+    PHCD_CONTROLLER hc;
+
+    hc = (PHCD_CONTROLLER)context;
+    if (hc->PirqVa == NULL || offset > XHCI_PIRQ_WINDOW_BYTES - 2) {
+        return 0;
+    }
+    WRITE_REGISTER_USHORT((PUSHORT)((PUCHAR)hc->PirqVa + offset), value);
+    return 1;
+}
+
+/* IRQL: any; the callbacks it installs are PASSIVE_LEVEL only. The own
+ * reads are the port switchover's. */
+static VOID hcdPirqIo(PHCD_CONTROLLER hc, PXHCI_PIRQ_IO io)
+{
+    io->Own = hcdPswRead;
+    io->Slot = hcdPirqSlot;
+    io->Map = hcdPirqMap;
+    io->Read32 = hcdPirqRead32;
+    io->Read16 = hcdPirqRead16;
+    io->Write16 = hcdPirqWrite16;
+    io->Unmap = hcdPirqUnmap;
+    io->Context = hc;
+}
+
+/*
+ * One run and its record: the whole state is in the snapshot's HCD region
+ * at every verbosity (hcd_door.c), and the note ring carries the decision
+ * and what it turned on. IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdPirqRun(PHCD_CONTROLLER hc, ULONG when)
+{
+    PXHCI_EXTENSION ext;
+    PXHCI_PIRQ_STATE st;
+    XHCI_PIRQ_IO io;
+
+    ext = &hc->Hc;
+    st = &hc->Pirq;
+    hcdPirqIo(hc, &io);
+    (VOID)XhciPirqRun(&io, when, hc->IntDelivery, &hc->IntRaw, st);
+    hcdPirqUnmap(hc);
+
+    XhciLogNote(ext, "pirq.decision", st->Decision);
+    XhciLogNote(ext, "pirq.when", st->When);
+    XhciLogNote(ext, "pirq.delivery", st->Delivery);
+    XhciLogNote(ext, "pirq.irq", st->IrqLevel);
+    XHCI_DBG_VALUE("hcd: interrupt routing, decision", st->Decision);
+    if (st->Decision == XHCI_PIRQ_D_NOT_REVIEWED ||
+        st->Decision == XHCI_PIRQ_D_OWN_UNREAD) {
+        return;
+    }
+    XhciLogNote(ext, "pirq.slot.id", st->SlotId);
+    XhciLogNote(ext, "pirq.lpc.id", st->LpcId);
+    XhciLogNote(ext, "pirq.rcba", st->Rcba);
+    XhciLogNote(ext, "pirq.d20ip", st->D20ip);
+    XhciLogNote(ext, "pirq.d20ir", st->D20ir);
+    XhciLogNote(ext, "pirq.target", st->Target);
+    XhciLogNote(ext, "pirq.d20ir.after", st->D20irAfter);
+    XHCI_DBG_VALUE("hcd: interrupt routing, D20IR found", st->D20ir);
+    XHCI_DBG_VALUE("hcd: interrupt routing, D20IR now", st->D20irAfter);
+}
+
+#if defined(XHCI_FLAVOUR_QEMU)
+static ULONG hcdPirqLe32(const UCHAR *b, ULONG offset)
+{
+    return (ULONG)b[offset] | ((ULONG)b[offset + 1] << 8) |
+           ((ULONG)b[offset + 2] << 16) | ((ULONG)b[offset + 3] << 24);
+}
+
+/*
+ * No guest offers a reviewed PCH, so every guest's run stops at
+ * NOT_REVIEWED before any bus-data read. This takes the run's own
+ * HalGetBusData route over bus 0, finding this function by the dwords the
+ * run identifies 00:14.0 by, and reads 00:1F.0 (absent on QEMU's pc
+ * machine), so a guest shows that route answering on its OS, with the raw
+ * interrupt resource the run would name the IRQ from. Reads only. IRQL:
+ * PASSIVE_LEVEL.
+ */
+static VOID hcdPirqQemuProbe(PHCD_CONTROLLER hc)
+{
+    static const ULONG same[4] = {
+        XHCI_PIRQ_CFG_ID, XHCI_PIRQ_CFG_BAR0, XHCI_PIRQ_CFG_BAR1,
+        XHCI_PIRQ_CFG_SUBSYSTEM
+    };
+    UCHAR cfg[XHCI_PIRQ_SLOT_BYTES];
+    ULONG own[4];
+    ULONG bytes;
+    ULONG found;
+    ULONG device;
+    ULONG i;
+
+    for (i = 0; i < 4; i++) {
+        if (!hcdPswRead(hc, same[i], &own[i])) {
+            return;
+        }
+    }
+    found = 0xFFFFFFFFUL;
+    for (device = 0; device < 32 && found == 0xFFFFFFFFUL; device++) {
+        bytes = hcdPirqSlot(hc, device, 0, cfg, XHCI_PIRQ_SLOT_BYTES);
+        if (bytes < XHCI_PIRQ_SLOT_BYTES) {
+            continue;
+        }
+        found = device;
+        for (i = 0; i < 4; i++) {
+            if (hcdPirqLe32(cfg, same[i]) != own[i]) {
+                found = 0xFFFFFFFFUL;
+            }
+        }
+    }
+    bytes = hcdPirqSlot(hc, XHCI_PIRQ_LPC_DEVICE, 0, cfg,
+                        XHCI_PIRQ_SLOT_BYTES);
+    XhciLogNote(&hc->Hc, "pirq.qemu.device", found);
+    XhciLogNote(&hc->Hc, "pirq.qemu.lpc.bytes", bytes);
+    XHCI_DBG_VALUE("hcd: interrupt routing probe, this function at device",
+                   found);
+    XHCI_DBG_VALUE("hcd: interrupt routing probe, 00:1F.0 bytes", bytes);
+    XHCI_DBG_VALUE("hcd: interrupt routing probe, raw count",
+                   hc->IntRaw.Count);
+    XHCI_DBG_VALUE("hcd: interrupt routing probe, raw level",
+                   hc->IntRaw.Level);
+    XHCI_DBG_VALUE("hcd: interrupt routing probe, raw vector",
+                   hc->IntRaw.Vector);
+}
+#endif
+
+/*
+ * The start's value and run: after the interrupt is connected and
+ * XhciInitController has run, before XhciEnableInterrupts, so the start's
+ * No Op completes on a repaired line. IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdPirqStart(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+    ULONG value;
+    ULONG found;
+
+    ext = &hc->Hc;
+    value = 0;
+    found = NT_SUCCESS(hcdReadDword(hc, HCD_VALUE_IRQ_ROUTE, &value)) ? 1UL
+                                                                        : 0UL;
+    XhciPirqLatch(&hc->Pirq, found, value);
+    XhciLogNote(ext, "pirq.value", found ? value : 0xFFFFFFFFUL);
+    XhciLogNote(ext, "pirq.mode", hc->Pirq.Mode);
+    if (!found || value > XHCI_PIRQ_MODE_REVIEWED) {
+        XhciLogNote(ext, "pirq.value.defaulted", 1);
+    }
+    hcdPirqRun(hc, XHCI_PIRQ_WHEN_START);
+#if defined(XHCI_FLAVOUR_QEMU)
+    if (hc->Pirq.Decision == XHCI_PIRQ_D_NOT_REVIEWED) {
+        hcdPirqQemuProbe(hc);
+    }
+#endif
+}
+
+/*
+ * A return to D0, before the controller resumes: firmware may have put
+ * its route back across the sleep. Decided again on the start's value and
+ * delivery. IRQL: PASSIVE_LEVEL, the power gate held.
+ */
+VOID HcdPirqResume(PHCD_CONTROLLER hc)
+{
+    hcdPirqRun(hc, XHCI_PIRQ_WHEN_RESUME);
+}
+
+/* --------------------------------------------------------------------- */
 /* Resources                                                              */
 /* --------------------------------------------------------------------- */
 
 /* The first memory window and the first interrupt of the translated list,
- * and the raw memory window's bus address. IRQL: PASSIVE_LEVEL. */
+ * the raw memory window's bus address, and the raw interrupt resource with
+ * how many the raw list holds (task 36.3). IRQL: PASSIVE_LEVEL. */
 static NTSTATUS hcdParseResources(PHCD_CONTROLLER hc, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
@@ -500,10 +757,18 @@ static NTSTATUS hcdParseResources(PHCD_CONTROLLER hc, PIRP irp)
     PCM_PARTIAL_RESOURCE_LIST list;
     PCM_PARTIAL_RESOURCE_LIST rawList;
     PCM_PARTIAL_RESOURCE_DESCRIPTOR d;
+    ULONG rawMemory;
     ULONG i;
 
     hc->HaveMemory = 0;
     hc->HaveInterrupt = 0;
+    hc->IntRaw.Count = 0;
+    hc->IntRaw.Level = 0;
+    hc->IntRaw.Vector = 0;
+    hc->IntRaw.Flags = 0;
+    hc->IntRaw.Share = 0;
+    hc->IntDelivery = XHCI_PIRQ_DELIVERY_NONE;
+    rawMemory = 0;
 
     stack = IoGetCurrentIrpStackLocation(irp);
     translated = stack->Parameters.StartDevice.AllocatedResourcesTranslated;
@@ -536,10 +801,23 @@ static NTSTATUS hcdParseResources(PHCD_CONTROLLER hc, PIRP irp)
     }
     for (i = 0; i < rawList->Count; i++) {
         d = &rawList->PartialDescriptors[i];
-        if (d->Type == CmResourceTypeMemory) {
+        if (d->Type == CmResourceTypeMemory && !rawMemory) {
             hc->BarRaw = d->u.Memory.Start;
-            break;
+            rawMemory = 1;
+        } else if (d->Type == CmResourceTypeInterrupt) {
+            if (hc->IntRaw.Count == 0) {
+                hc->IntRaw.Level = d->u.Interrupt.Level;
+                hc->IntRaw.Vector = d->u.Interrupt.Vector;
+                hc->IntRaw.Flags = d->Flags;
+                hc->IntRaw.Share = d->ShareDisposition;
+            }
+            hc->IntRaw.Count++;
         }
+    }
+    if (hc->IntRaw.Count != 0) {
+        hc->IntDelivery = (hc->IntRaw.Flags & CM_RESOURCE_INTERRUPT_MESSAGE)
+                              ? XHCI_PIRQ_DELIVERY_MESSAGE
+                              : XHCI_PIRQ_DELIVERY_LINE;
     }
 
     if (!hc->HaveMemory || !hc->HaveInterrupt) {
@@ -1435,6 +1713,8 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
     hcdTolApplies(hc);
+    /* Task 36.3: the route repaired before the first interrupt is enabled. */
+    hcdPirqStart(hc);
     /* Before the thread runs, so no backstop pass reads it mid-write. */
     hc->TolStartGen++;
     (VOID)XhciControllerUpdateFlags(ext, 0, XHCI_EXT_FLAG_STARTED);

@@ -800,6 +800,7 @@ static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
                        PUCHAR payload, ULONG capacity, ULONG offset)
 {
     const ULONG *counters;
+    const ULONG *pirq;
     ULONG ports;
     ULONG total;
     ULONG first;
@@ -827,9 +828,17 @@ static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
         header->Status |= XHCI_SNAPSHOT_S_TRUNCATED;
     }
     counters = (const ULONG *)&hc->Counters;
+    pirq = (const ULONG *)&hc->Pirq;
     for (i = 0; i < count; i++) {
         switch (XhciSnapHcdLocate(ports, first + i, &record, &word)) {
         case XHCI_SNAPSHOT_HCD_IN_HEAD:
+            /* The routing record (36.3) is written at PASSIVE_LEVEL under
+             * the door or power gate, not this lock: each ULONG is read
+             * whole, and a window cut during a run may mix two runs. */
+            if (word >= XHCI_SNAPSHOT_HCD_PIRQ_AT) {
+                value = pirq[word - XHCI_SNAPSHOT_HCD_PIRQ_AT];
+                break;
+            }
             value = (word == XHCI_SNAPSHOT_HCD_TERMINAL)
                         ? XhciTolTerminal(hc->Hc.ControllerFailed,
                                           hc->Hc.Tol.Unreadable,
