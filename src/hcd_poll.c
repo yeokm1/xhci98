@@ -460,6 +460,13 @@ VOID HcdPollPromoteLocked(PHCD_CONTROLLER hc, ULONG needMs)
         }
         hc->Counters.PollPromotions++;
     } else if (step == XHCI_POLL_P_OWED) {
+        /* The earliest owed deadline keeps the state that asked for it
+         * (record 15 section 8). */
+        if (hc->Poll.OwedValid && hc->Poll.Owed == deadline) {
+            hc->PollOwedState = (needMs <= hc->PollValues.ActiveMs)
+                                    ? XHCI_POLL_BUS_ACTIVE
+                                    : XHCI_POLL_BUS_PERIODIC;
+        }
         hc->Counters.PollPromotions++;
     }
     KeReleaseSpinLock(&hc->PollLock, pollIrql);
@@ -815,9 +822,9 @@ epilogue:
     } else if (hc->Poll.State == XHCI_POLL_S_FIRING && hc->Poll.OwedValid &&
                XhciPollEarlier(hc->Poll.Owed,
                                now + decision * XHCI_POLL_TICKS_PER_MS)) {
-        /* A promotion owed during the pass wins the arm: its state is
-         * the active one (record 15 section 8). */
-        state = XHCI_POLL_BUS_ACTIVE;
+        /* A promotion owed during the pass wins the arm: the state is the
+         * one that asked for it (record 15 section 8). */
+        state = hc->PollOwedState;
     }
     if (XhciPollEnd(&hc->Poll, decision, now, hc->PollValues.ActiveMs,
                     hc->PollValues.IdleMs, &ms, &displaced)) {

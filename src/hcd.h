@@ -1069,6 +1069,7 @@ typedef struct _HCD_CONTROLLER {
     ULONG PollLastEventTime;
     ULONG PollEventSeen;
     ULONG PollContainAsked;
+    ULONG PollOwedState;            /* XHCI_POLL_BUS_* of Poll.Owed; PollLock */
 
 #if DBG
     /* Strict mode (hcd_strict.c): the command preconditions a conforming
