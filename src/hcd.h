@@ -970,7 +970,8 @@ typedef struct _HCD_CONTROLLER {
     ULONG EnumDisableFailures;
     ULONG EnumTransfersTimedOut;
     /* Task 36.4's busy retry (hcd_enum.c, hcdCommandBusy): commands that
-     * met XHCI_CMD_BUSY, those then submitted, and the drains it queued.
+     * read the engine not idle before their first submit or were answered
+     * XHCI_CMD_BUSY, those then submitted, and the drains it queued.
      * Thread only. */
     ULONG EnumCommandsBusy;
     ULONG EnumCommandsBusyCleared;

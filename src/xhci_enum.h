@@ -383,8 +383,9 @@ ULONG XhciEnumNoteQuiet(ULONG port);
 ULONG XhciEnumBusyStep(ULONG halted, ULONG genChanged, ULONG expired,
                        ULONG idle);
 
-/* The note an episode ends with: the command's TRB type, the submit's last
- * answer (XHCI_CMD_*), and the looks it took, held to 16 bits. */
+/* The note an episode ends with: the command's TRB type, the last submit's
+ * answer (XHCI_CMD_*), or XHCI_CMD_BUSY when none was made, and the looks
+ * it took, held to 16 bits. */
 ULONG XhciEnumNoteBusy(ULONG type, ULONG answer, ULONG looks);
 
 
