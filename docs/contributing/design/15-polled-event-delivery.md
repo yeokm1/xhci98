@@ -583,32 +583,39 @@ start; single-message MSI-X is admitted; the dead-line rule is the line's
 only; the routing quirk is not active under a message; XP x64 ignores the
 key and keeps the line.
 
-**Amended in 36.5's review: amd64 only, for now** (orchestrator decision,
-owner to confirm). Four review rounds found no way for the one x86 binary
-to reach `IoConnectInterruptEx` that is safe without an import Windows 98
+**How each architecture reaches `IoConnectInterruptEx`** (36.5's review;
+owner, 2026-10-09). Four review rounds found no way for the one x86
+binary to reach it by itself that is safe without an import Windows 98
 lacks: a walk of the running kernel's memory cannot prove the pages it
 reads are mapped (rounds 1 to 3), and a parse of the kernel's file, tied
 to the running image by the driver's own imports, proves where those
-imports are but not where `IoConnectInterruptEx` is (round 4: a file whose
-anchors all agree can still differ in the target). So on Vista and 7 x86
-the INF asks for no message, the controller keeps the line, the routing
-quirk and polling exactly as on XP, and the E7250 under 7 x64 - the case
-the decision was taken for - gets MSI. What an x86 path would need, if one
-is taken later: the running kernel's own identity from a documented
-source, or a second, NT 6-only x86 binary (a packaging decision of its
-own).
+imports are but not where `IoConnectInterruptEx` is (round 4). So:
+
+- **amd64** calls `MmGetSystemRoutineAddress` (below).
+- **x86** gets them from **a small NT 6-only x86 helper driver**, installed
+  only by the Vista and 7 x86 INF section, which imports
+  `IoConnectInterruptEx` and `IoDisconnectInterruptEx` normally and hands
+  them to `xhci98.sys` over a documented channel, so `xhci98.sys`'s x86
+  imports stay unchanged (owner, 2026-10-09, option A). The helper is
+  designed and built separately, in its own design record (task branch
+  `p36-msi86`); this record does not design it, and fixes only the seam it
+  plugs into (the connection, below).
+- **Without the helper** - not installed, not loaded, or its channel not
+  answering - Vista and 7 x86 keep the line, the routing quirk and
+  polling, exactly as on XP: the rows below for a routine not found apply.
 
 **Why it is safe on the down-level targets.** Windows 98, ME, 2000 and XP
 (and XP x64) never grant a message: their PnP managers do not read the
 key, and no message descriptor reaches the parser. Every step below is
 taken only when `IoIsWdmVersionAvailable(6, 0)` is TRUE, the test the
-driver already uses for NT 6.x's other paths, and only in the amd64 image;
-nothing is added to the x86 image's imports. A message descriptor that
-reaches the x86 image anyway (a `MSISupported` 1 set by hand) takes
-section 4's "message not connected" row and polls.
+driver already uses for NT 6.x's other paths, and nothing is added to the
+x86 image's imports. A message descriptor that reaches the x86 image with
+no helper answering takes section 4's "message not connected" row and
+polls.
 
 **The INF.** On the `Xhci.Dev6.NTamd64` path of `src/xhci98-amd64.inf`
-(Vista and 7 x64) alone, in the hardware key:
+(Vista and 7 x64), in the hardware key (the `Xhci.Dev6.NTx86` path's
+equivalent, with the helper, is the helper's design record's):
 
 ```
 [Xhci.Dev6.NTamd64.HW]
@@ -624,9 +631,9 @@ HKR,"Interrupt Management\MessageSignaledInterruptProperties",MessageNumberLimit
 `FLG_ADDREG_NOCLOBBER` keeps a user's `MSISupported` 0 across an update,
 under 34.1's rule; it also keeps a larger `MessageNumberLimit` a user set,
 which is why the driver, not the INF, is what holds the delivery to one
-message (below). The XP x64 path (`Xhci.Dev.NTamd64`) and every path of
-the 32-bit INF get no `.HW` section, and the gate refuses these lines
-anywhere but that one section (a new `MSI-*` rule in `check-inf.ps1`, with
+message (below). The XP x64 path (`Xhci.Dev.NTamd64`) and the 98, ME,
+2000 and XP paths get no `.HW` section, and the gate refuses these lines
+anywhere but the NT 6 sections (a new `MSI-*` rule in `check-inf.ps1`, with
 self-test mutations).
 
 **The resources.** `hcdParseResources` already keeps the first raw
@@ -641,7 +648,13 @@ a compile-time size check against the partial descriptor it overlays.
 
 **Finding `IoConnectInterruptEx`.** The amd64 image imports
 `MmGetSystemRoutineAddress` and asks it for `IoConnectInterruptEx` and
-`IoDisconnectInterruptEx`. Every amd64 target exports it (NT 5.2 and
+`IoDisconnectInterruptEx`; the x86 image asks the helper (above).
+**The seam:** both architectures hand the pair to one function,
+`hcdMsgConnect(hc, connect, disconnect)`, which makes the connection
+below and keeps `disconnect` for the release; the amd64 caller passes
+what `MmGetSystemRoutineAddress` returned, the x86 caller what the
+helper's channel returned, and a NULL in either is "not found". Nothing
+else in the delivery path knows where the pair came from. On amd64: Every amd64 target exports it (NT 5.2 and
 later; XP x64 answers NULL for both names, so it keeps the line), so the
 import gate takes an `amd64` row for it with that evidence. When either
 is not found, a line resource connects through `IoConnectInterrupt` as
@@ -719,14 +732,14 @@ and its reason in the counter block and the start's log note; how the
 routines were found; the message descriptors and the `MessageCount` granted; the
 capability read. `XHCISNAP` names each (36.9).
 
-**Legs** are 36.16's, on Vista and 7 x64: QEMU's `qemu-xhci` with `msi=on,msix=off`,
+**Legs** are 36.16's, on Vista and 7 x64, and on x86 with the helper: QEMU's `qemu-xhci` with `msi=on,msix=off`,
 `msi=off,msix=on` and the launchers' default, under modes 0 and 3, read
 as MSI, MSI-X and whatever Windows granted; `MSISupported` 0 read as the
 line; mode 1 under a grant read as the message with its log note; a
 `qemu`-flavour failed connection read as polling with its reason; a
 `MessageNumberLimit` raised by hand, read as a grant of several served as
-one; and the down-level targets, Vista and 7 x86 among them, reading as
-the release before it, with a hand-set `MSISupported` 1 on x86 read as
+one; and the down-level targets, and Vista and 7 x86 without the helper,
+reading as the release before it, with a message grant there read as
 polling with "message not connected".
 
 ## 5. The poller's lifecycle
@@ -1369,7 +1382,7 @@ and that flavour is never published.
 - **Line against poll** on the same guest: a storage copy rate, audio
   continuity, and the guest's idle CPU load.
 - **The default on a pin**: mode 0 reading as the release before it (the
-  matrix unchanged; on Vista and 7 x64, where the INF now asks for
+  matrix unchanged; on Vista and 7, where the INF now asks for
   MSI, with `MSISupported` 0), and mode 1 the same, on a target without
   MSI and on Vista and 7 with `MSISupported` 0 (section 4.3); with a
   message granted, modes 0, 1 and 3 read as the message.
@@ -1491,7 +1504,7 @@ Round 4 (`f4d8a28`): 2 P1, 2 P2, all taken.
 
 | # | Finding | Where answered |
 |---|---|---|
-| 1 | P1: agreeing anchors do not prove the target's RVA | Section 4.3: MSI is amd64 only for now; x86 Vista and 7 keep the line (orchestrator decision, owner to confirm); roadmap 36.15 |
+| 1 | P1: agreeing anchors do not prove the target's RVA | Section 4.3: amd64 through `MmGetSystemRoutineAddress`; x86 through an NT 6-only helper driver designed separately (owner, 2026-10-09, after the review), the line without it; roadmap 36.15 |
 | 2 | P1: an unproven retirement and the ISR's lifecycle gates | Section 4.2: why the ISR path never acknowledges this assertion; the unproven outcome recorded and ended by the next HCRST |
 | 3 | P2: CLOSED published before the DPC's last controller access | Section 5.2: CLOSING kept through the park; CLOSED in a `PollLock`-only epilogue |
 | 4 | P2: the file parser's callable-address and short-read checks | Moot with finding 1: the file parser is withdrawn |
