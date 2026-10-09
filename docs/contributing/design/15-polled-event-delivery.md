@@ -20,7 +20,8 @@ It was drawn up as Phase 35, and the review history in section 13 keeps the
 old phase numbers. Section 4.2 and decision 6 are the 2026-10-08 amendment
 for issue 12. They are reviewed in 36.5. Section 4.3 and decision 7 add MSI
 on Vista and 7 (36.15). That reverses section 1's "not in this design" for
-MSI on NT6; MSI-X and more than one interrupter stay out. DRAFT, revision 4, 2026-10-05: written at the owner's request so the driver can run
+MSI on NT6. Single-message MSI-X is admitted with it (owner, 2026-10-09);
+more than one message or interrupter stays out. DRAFT, revision 4, 2026-10-05: written at the owner's request so the driver can run
 a controller that delivers no legacy interrupt - an MSI- or MSI-X-only xHCI
 controller, which neither primary target can serve today - by polling the
 event ring, adaptively, instead of waiting for an interrupt. Reviews covered
@@ -228,18 +229,25 @@ polling, with the reason "automatic: line interrupt not delivered".
   The predicate is a line delivery's only: under MSI or MSI-X the
   controller clears `IP` itself once the message write completes (xHCI
   1.2c 4.17.5, p.270), so `IP` set cannot show a lost message.
-- **Open: who looks** (Codex review of `7567dec`, to settle in 36.5 before
-  code). `hcdBackstop` runs on `hcdThread`, and `hcdCommand` blocks that
-  thread in a command wait for the very completion a dead line never
+- **Who looks** (Codex review of `7567dec`; decided by the owner,
+  2026-10-09). `hcdBackstop` runs on `hcdThread`, and `hcdCommand` blocks
+  that thread in a command wait for the very completion a dead line never
   delivers (issue 12 section 2), so "backstop looks" cannot be the
-  observer. It has to run independently of that thread for every line
-  delivery, command waits and `XhciTolerance` 0 included.
+  observer. The poller's own timer and DPC look instead: under every line
+  delivery in mode 0 the poller runs in a slow WATCHING state that peeks
+  `IMAN`, `USBCMD.INTE` and the event ring and never drains, whatever
+  `hcdThread` is doing, command waits and `XhciTolerance` 0 included. Its
+  period, count and window are settled in 36.5. A message delivery is not
+  watched.
 - **The move.** It masks the interrupter (`INTE`, then `IE`, the existing
   mask order) and starts the poller as for a poll delivery chosen at start.
-  **Open** (the same review): section 5.2 lets the poller leave CLOSED only
-  at a start under a poll delivery, so this move needs a live transition of
-  its own, synchronised under `PollLock` with `PollService`, the masking,
-  the ISR's admission and a concurrent close, written into section 5.2.
+  With the poller already WATCHING, the move is its own transition from
+  WATCHING to in service, under `PollLock`, with the masking first, the
+  ISR admitting nothing after, and a concurrent close. Section 5.2, which
+  today lets the poller leave CLOSED only at a start under a poll delivery,
+  gains WATCHING (opened at a mode 0 line start) and this move, in 36.5.
+  The delivery and its reason in the counter block change at the move
+  (section 8).
   It keeps the move through recovery and resume, like any delivery.
 - **The ISR stays connected,** because disconnecting at DISPATCH is not
   possible. It claims nothing once the move is made, so a shared line's
@@ -266,9 +274,12 @@ message, for Interrupter 0.
   nor `MmGetSystemRoutineAddress` exists.
 - The ISR treats a message as always its own.
 
-The delivery table above gains an MSI row for each mode once 36.15 settles
-how `XhciInterruptMode` reads, with 3 the natural "MSI" value. The open
-questions are listed in the roadmap's 36.15.
+**Decided (owner, 2026-10-09; the roadmap's 36.15 has the full list).**
+On Vista and 7, mode 0 takes MSI where Windows granted a message, else the
+line, else polling; 3 reads as 0; 1 under a message grant runs as 0 and
+logs it, and the line is forced by `MSISupported` 0 in the hardware key; a
+message connection that fails polls for that start. The delivery table
+above gains these rows in 36.20.
 
 ### 4.1 What the hardware needs (review, revision 1)
 
@@ -556,7 +567,8 @@ it does and does not guarantee:
 
 - **The counter block, through `XHCISNAP`** - the reliable route. The
   delivery, its reason, the pin's read status and the values in effect are
-  persistent fields, set once at start; `XHCISNAP` reads them whenever the
+  persistent fields, set at start, and the delivery and its reason set again
+  at a run-time move to polling (section 4.2); `XHCISNAP` reads them whenever the
   log channel is on (`XhciLogVerbosity` 1 and above; `src/xhci_log.h`, the
   ladder).
 - **The counter dump at each stop, through DebugView.** The fields are

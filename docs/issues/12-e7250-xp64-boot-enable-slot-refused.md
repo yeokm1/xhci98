@@ -256,7 +256,8 @@ Every pair is now confirmed by its datasheet. The fetching notes and hashes are 
 **Which deliveries it serves.** The quirk is for every line-interrupt
 delivery, in either case:
 - **Windows 98, ME, 2000 and XP**, which have no MSI;
-- **Vista and 7 when the line is in use**: `XhciInterruptMode` 1 (forced),
+- **Vista and 7 when the line is in use**: `MSISupported` 0 in the
+  controller's hardware key (forced; 36.15),
   or MSI not granted.
 
 **It is not active under MSI or polling** (owner, 2026-10-09). Under MSI
