@@ -135,6 +135,33 @@ static ULONG hcdHalted(PHCD_CONTROLLER hc)
 }
 
 /*
+ * The waiter's marks cleared in the same controller-lock hold that reads
+ * the command engine idle, and only then. The completion and loss paths
+ * publish the marks under that lock, and an idle engine has no command left
+ * to complete or lose, so whatever the waiter sees after the submit is its
+ * own command's: a loss published between a clear outside the lock and the
+ * submit - an earlier command's abort ending - would otherwise be taken for
+ * the new command's (review of 36.4, round 2; it predates 36.4). An
+ * invalidation in between is the controller's failure or stop, which the
+ * submit then refuses. Returns whether the engine read idle. Thread only.
+ */
+static ULONG hcdCommandArm(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+    ULONG idle;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    idle = (hc->Hc.CommandState == XHCI_CMD_STATE_IDLE) ? 1UL : 0UL;
+    if (idle) {
+        KeClearEvent(&hc->CmdDoneEvent);
+        hc->CmdDoneLost = 0;
+        hc->CmdDonePA = 0;
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    return idle;
+}
+
+/*
  * Task 36.4 (issue 12, Finding 1): the engine answered XHCI_CMD_BUSY, so an
  * earlier command is outstanding or an abort is in progress - the start's
  * asynchronous No Op, whose completion on the E7250 came with no interrupt
@@ -144,9 +171,9 @@ static ULONG hcdHalted(PHCD_CONTROLLER hc)
  * deadline of HCD_COMMAND_WAIT_MS for the whole episode; the command is
  * submitted again only once the engine reads idle under the controller
  * lock, and never once the controller has failed or the start generation
- * has moved (XhciEnumBusyStep). The waiter's marks are cleared before each
- * submit, as the first submit's are, so only this command's own TRB counts
- * afterwards. Returns the last submit's answer; *trbPA its TRB. Thread
+ * has moved (XhciEnumBusyStep). The idle read is hcdCommandArm's, which
+ * clears the waiter's marks in the same hold, so only this command's own
+ * TRB counts afterwards. Returns the last submit's answer; *trbPA its TRB. Thread
  * only. It drains; it does not decide that a line is dead, which is the
  * dead-line rule's (task 36.7).
  */
@@ -156,7 +183,6 @@ static ULONG hcdCommandBusy(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
     KTIMER deadline;
     LARGE_INTEGER due;
     LARGE_INTEGER zero;
-    KIRQL oldIrql;
     ULONG answer;
     ULONG expired;
     ULONG idle;
@@ -180,9 +206,7 @@ static ULONG hcdCommandBusy(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
     for (;;) {
         expired = KeWaitForSingleObject(&deadline, Executive, KernelMode,
                                         FALSE, &zero) == STATUS_SUCCESS;
-        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-        idle = (hc->Hc.CommandState == XHCI_CMD_STATE_IDLE) ? 1UL : 0UL;
-        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        idle = hcdCommandArm(hc);
         looks++;
         step = XhciEnumBusyStep(hcdHalted(hc), hc->TolStartGen != gen,
                                 expired, idle);
@@ -190,9 +214,6 @@ static ULONG hcdCommandBusy(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
             break;
         }
         if (step == XHCI_ENUM_BUSY_SUBMIT) {
-            KeClearEvent(&hc->CmdDoneEvent);
-            hc->CmdDoneLost = 0;
-            hc->CmdDonePA = 0;
             *trbPA = 0;
             answer = XhciCommandSubmit(&hc->Hc, trb, trbPA,
                                        XHCI_ARM_UNLOCKED);
@@ -253,11 +274,11 @@ static ULONG hcdCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
     /* Read before the doorbell: the completion rewrites the contexts. */
     HcdStrictBefore(hc, trb, &strict);
 #endif
-    KeClearEvent(&hc->CmdDoneEvent);
-    hc->CmdDoneLost = 0;
-    hc->CmdDonePA = 0;
     trbPA = 0;
-    answer = XhciCommandSubmit(&hc->Hc, trb, &trbPA, XHCI_ARM_UNLOCKED);
+    answer = XHCI_CMD_BUSY;
+    if (hcdCommandArm(hc)) {
+        answer = XhciCommandSubmit(&hc->Hc, trb, &trbPA, XHCI_ARM_UNLOCKED);
+    }
     if (answer == XHCI_CMD_BUSY) {
         answer = hcdCommandBusy(hc, trb, &trbPA);
     }

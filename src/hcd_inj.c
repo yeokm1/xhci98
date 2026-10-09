@@ -94,9 +94,11 @@
  * backstop's are held back, so the No Op self-test's completion stands
  * undrained and the command engine busy into the first enumeration, as the
  * E7250's lost interrupt left it (issue 12, Finding 1), on a line that
- * works. Read at each start, held to HCD_QEMU_START_HOLD_MAX, which ends
- * the hold well inside the No Op's own watchdog (XHCI_COMMAND_TIMEOUT_MS,
- * 5000), so the aid never times the No Op out; absent or 0 holds nothing. */
+ * works. Read at each start, held to HCD_QEMU_START_HOLD_MAX: a nominal
+ * margin inside the No Op's own watchdog (XHCI_COMMAND_TIMEOUT_MS, 5000),
+ * not a guarantee - the watchdog runs from the No Op's submit, the hold
+ * from a later point of the start, and it ends at a thread pass - which
+ * the leg confirms; absent or 0 holds nothing. */
 #define HCD_VALUE_QEMU_START_HOLD L"XhciQemuStartHold"
 #define HCD_QEMU_START_HOLD_MAX   3000UL
 
