@@ -12,7 +12,8 @@ requested by the INF (section 5), and mode 1 failing the start where no
 line is offered and no helper is bound (section 4.3). **Revision 7**
 takes review round 5 and the owner's further decision of the same day:
 `XhciInterruptMode` 1 on its own forces the line on Vista and 7, x86
-and amd64, through the same filter (section 4.2).
+and amd64, through the same filter (section 4.2). Revision 8 takes
+review round 6.
 
 Design record 15 section 4.3 designs MSI for the HCD and fixes the seam
 this record plugs into: `hcdMsgConnect(hc, connect, disconnect)`, handed
@@ -363,12 +364,36 @@ replaces, and returns the replacement in `Information` with
   purpose, sections 1 and 4); or
 - **the effective mode is 1**, on x86 or amd64 (owner, 2026-10-09):
   mode 1 forces the line on Vista and 7 by itself, so a user no longer
-  needs `MSISupported` 0 for it. The filter reads `XhciInterruptMode`
-  itself, through the same reader and out-of-range rules the start uses
-  (record 15 section 3), since the start has not run yet. If the value
-  changes between the filter and the start, the start's own reading
-  governs and meets whatever was granted under record 15's tables and
-  section 4.3.
+  needs `MSISupported` 0 for it. The start has not run yet, so the
+  filter reads `XhciInterruptMode` itself (below). If the value changes
+  between the filter and the start, the start's own reading governs and
+  meets whatever was granted under record 15's tables and section 4.3:
+  1 then 0 starts on the granted line in automatic mode, watcher and
+  all; 0 then 1 may receive a message and takes section 4.3a's fallback;
+  1 then 2 polls despite the line. Vectors for these three in
+  `test_poll`'s decision table and the record's transitions.
+
+**The filter-time mode read.** The start's reader, `hcdReadDword`, calls
+`IoOpenDeviceRegistryKey`, which the WDK requires in a system thread;
+`IRP_MN_FILTER_RESOURCE_REQUIREMENTS` arrives at PASSIVE_LEVEL in an
+arbitrary thread. So the filter does not call it inline: it queues a
+work item with `ExQueueWorkItem` (admitted in both images' allowlists)
+on `DelayedWorkQueue`, the `WORK_QUEUE_ITEM`, a `KEVENT` and the result
+slots embedded in `hc` (the PnP manager sends one PnP IRP at a time to a
+devnode, so one filter's item at a time; `hc` outlives it because the
+filter waits for the event before it completes, and remove cannot come
+while the filter IRP is in progress). The worker reads the raw DWORD and
+its status into filter-time fields of `hc` and sets the event; the
+filter then applies record 15's strict validation and normalisation (the
+pure function the start uses) to that raw value. The result lives in
+its own fields (`FilterModeRaw`, `FilterModeStatus`, `FilterMode`), never
+in the start's `PollValues`, and nothing the start settles
+(`hcdSettleDelivery` and the rest) is called. An unreadable value is
+mode 0's, as at the start. **For the orchestrator:** the start's own
+call of `hcdReadValues` runs in the `START_DEVICE` dispatch, whose
+thread the WDK also does not promise to be a system thread; the code
+phase audits it and, if it needs one, routes it through the same worker
+(p36-poll's code).
 
 Otherwise (amd64 in modes 0, 2 and 3; x86 with the helper bound in those
 modes) the filter walks, classifies and records the list (steps 1 to 5)
@@ -378,6 +403,16 @@ helper look (step 2) is x86's alone.
 
 The filter:
 
+0. **Resets the class** of the list kept in `hc` to UNKNOWN and advances
+   the FDO's filter sequence number, before anything can return early;
+   the class is UNKNOWN from `AddDevice` too. A class other than UNKNOWN
+   is published only by step 6 of this same filter, with this filter's
+   sequence number and outcome beside it, so the start never reads an
+   earlier filter's class after a later filter that failed, found no
+   list, or found an inconsistent one. Vectors (in the pure record
+   function, `XhciMsi86FilterRecord`, shared `xhci_msi86.c`): a NO-LINE
+   filter followed by a lower failure, by a NULL list, and by an
+   inconsistent list, each leaving the class UNKNOWN for the start.
 1. Forwards the IRP and waits (`HcdForwardAndWait`). If the lower status
    is a failure other than `STATUS_NOT_SUPPORTED`, it completes the IRP
    with that status and `Information` untouched, and records "lower
@@ -564,7 +599,8 @@ x86 image:
 - **Mode 1, no line, no helper: the start fails** (owner, 2026-10-09).
   When the image is x86, the effective mode is 1, the resource is a
   message, the helper is not bound after the start's look, and this FDO's
-  last filter classified its list NO-LINE (section 4.2), the start fails as a forced-line start with no
+  latest filter classified its list NO-LINE (section 4.2: not UNKNOWN, and
+  published by that filter), the start fails as a forced-line start with no
   line fails on XP: reason "forced, no line offered", the delivery none,
   the release run, `STATUS_DEVICE_CONFIGURATION_ERROR` as record 15's
   "forced, no interrupt" row returns. The condition is narrow on purpose.
@@ -893,13 +929,17 @@ number of looks made on this FDO.
 **The last filter's list snapshot**, bounded, for every flavour:
 `AlternativeLists`, and for up to 4 configurations and 12 descriptors in
 all, each descriptor's configuration index, descriptor index, `Type`,
-`Option`, `Flags`, `ShareDisposition` and its six `u` words raw (WDK 7.1's
-x86 `IO_RESOURCE_DESCRIPTOR` layout, `wdm.h`: for an interrupt
-`MinimumVector`, `MaximumVector`, `AffinityPolicy`, `PriorityPolicy`,
-`TargetedProcessors`; for a device-private descriptor its data words),
+`Option`, `Flags`, `ShareDisposition` and the 24 bytes of its `u` area
+raw, labelled by each architecture's WDK 7.1 `IO_RESOURCE_DESCRIPTOR`
+layout (`wdm.h`): for an interrupt `MinimumVector`, `MaximumVector`,
+`AffinityPolicy`, `PriorityPolicy` and `TargetedProcessors`, the last a
+32-bit `KAFFINITY` at +16 on x86 and a 64-bit one at +16 on amd64; for a
+device-private descriptor its data words),
 with a truncation flag and the totals when there were more; then the
-filter's outcome by name (section 4.2) and, for "replaced", the
-configurations and descriptors removed. `XHCISNAP` labels the words by
+filter's sequence number, class and outcome by name (section 4.2), for
+"replaced" the configurations and descriptors removed, and the
+filter-time mode: `FilterModeRaw`, `FilterModeStatus`, `FilterMode`, kept
+apart from the start's values. `XHCISNAP` labels the words by
 that layout. A truncated snapshot is evidence that something is missing,
 not evidence of what.
 
@@ -958,10 +998,14 @@ and that the boot was an ordinary one: no test-signing, no
 signature-enforcement override, no kernel debugger.
 
 **R - the readings that gate the strip** (section 11), first, on the
-`qemu` package of the first build with `XhciMsi86NoStrip` set: Vista SP2
-x86 and 7 SP1 x86, `qemu-xhci` with `msi=on,msix=off`, `msi=off,msix=on`
-and the default, the helper bound and then absent, the snapshot read each
-time.
+`qemu` packages of the first build with `XhciMsi86NoStrip` set: Vista SP2
+and 7 SP1, **x86 and x64**, `qemu-xhci` with `msi=on,msix=off`,
+`msi=off,msix=on` and the default (on x86 with the helper bound and then
+absent; on x64 under mode 1), the complete trace read each time. The
+admitted shapes are recorded per OS and architecture; the strip is
+enabled on an OS and architecture only for the shapes its own capture
+admitted, unless the captures show the lists identical, which is then
+stated with them.
 
 **M - MSI with the helper**, on Vista SP2 x86 and 7 SP1 x86, each after a
 reboot that follows the install: record 15 section 4.3's x86 set -
@@ -981,7 +1025,10 @@ with `XhciMsi86NoStrip` set (`qemu` package): the message with record
 15's "line asked for, message granted" note; then mode 1 on a NO-LINE
 list (`XhciMsi86InjNoLine`) on x64: the message with that note (x86's
 case is H1a); and back to mode 0 after a disable and enable: the
-message (x64; x86 with the helper bound).
+message (x64; x86 with the helper bound). Each mode-1 line start is also
+read for record 15's forced-line properties: the routing quirk applied
+as on a line (where the chipset has it; QEMU's has not, so its record
+says "not applicable"), and the watcher not opened (mode 1 never moves).
 
 **L - lifetime**, on 7 x86 with the helper bound:
 
@@ -1071,9 +1118,9 @@ before it is read:
   there with `IoGetDeviceObjectPointer` in its imports, read as the
   driver started and the device working, not inferred from the gate; ME
   likewise;
-- D3 Vista x64 and 7 x64: no helper in the package, MSI as record 15 has
-  it (that leg is 36.16's; here only that the x64 package is unchanged by
-  this record);
+- D3 Vista x64 and 7 x64: no helper and no media change in the x64
+  package; MSI as record 15 has it under modes 0 and 3 (that leg is
+  36.16's). The amd64 HCD's behaviour does change under mode 1 (leg F);
 - D4 7 x86 with Driver Verifier on `xhcimsi.sys` and `xhci98.sys`, through
   M's first variant, a disable and enable, and L3.
 
@@ -1176,6 +1223,12 @@ edit them):
 - Record 15 section 8's catalogue of reasons: the new
   `XHCI_POLL_R_FORCED_NO_LINE_OFFERED`; section 9's `XHCISNAP` names for it
   and for section 9's new fields here.
+- Record 15 section 3's "read at each start": on Vista and 7
+  `XhciInterruptMode` is also read at each requirements filter, through a
+  system worker, into separate fields (section 4.2).
+- Roadmap's decisions table, the "MSI on Vista and 7" row (~79), which
+  still says x86's imports are unchanged and x86 keeps the line: one
+  import added, the helper, the strip, mode 1 forcing the line.
 - Record 15 section 11's regression line ("mode 1 the same, ... on Vista
   and 7 with `MSISupported` 0"): mode 1 now forces the line on Vista and 7
   with `MSISupported` 1 too.
@@ -1317,3 +1370,17 @@ as the recorded alternative, and the narrow mode-1 rule were found sound.
 
 Also from round 5: `MSIHLP-REBOOT` must read a bare directive (section
 8.2).
+
+### 14.7 Revision 7
+
+Round 6 (`17f83ba`, same thread): 1 P1, 2 P2, 1 P3, all taken in
+revision 8. Round-5's fixes were confirmed; the mode-change policy and
+mode 1's forced-line properties (routing quirk, no watcher) were found
+coherent.
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | P1: the start's registry reader needs a system thread; the filter arrives in an arbitrary one | Section 4.2: the filter-time read through an `ExQueueWorkItem` worker with storage in `hc`, its own fields, the start's validation applied, nothing settled; the start's own context to audit |
+| 2 | P2: a NO-LINE class could survive a later filter that never classified | Section 4.2, step 0: UNKNOWN at `AddDevice` and at every filter entry, published only with that filter's sequence; vectors |
+| 3 | P2: amd64 stripping enabled without amd64 readings | Section 10, R on x64 too, admission per OS and architecture; section 9's labels per architecture |
+| 4 | P3: the filter-time read missing from the reconciliation and the record | Sections 9 and 12; D3 reworded; transition vectors 1 to 0, 0 to 1, 1 to 2 |
