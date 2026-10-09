@@ -64,6 +64,17 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
 #define HCD_VALUE_TOLERANCE     L"XhciTolerance"
 #define HCD_VALUE_INTERVAL_CAP  L"XhciIntervalCap"
 #define HCD_VALUE_AVG_TRB_ESIT  L"XhciAvgTrbEsit"
+/* Task 36.22: the command size xhciuas.sys advertises, in KiB, 64 to 2048
+ * in steps of 4; anything else is 1024 (xhci_xstat.h, XhciXpolValue). Read
+ * at every start; a change reaches the class driver at its next start, and
+ * its storage stack at the next reboot. */
+#define HCD_VALUE_MAX_TRANSFER  L"XhciMaxTransferKB"
+#if defined(XHCI_FLAVOUR_QEMU)
+/* Task 36.22, qemu flavour only and written by no INF: the map grant a
+ * chunk may use, held to this many registers (1 to the real grant), so a
+ * leg can constrain it; absent, 0 or larger leaves the grant as given. */
+#define HCD_VALUE_QEMU_MAP_GRANT L"XhciQemuMapGrant"
+#endif
 #if defined(XHCI_FLAVOUR_QEMU)
 /* Task 35.4, qemu flavour only and written by no INF: 1 makes the USB 3
  * protocol's PSI table read as the E460's (xhci_caps.c); absent, another
@@ -167,6 +178,10 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     ULONG capValue;
     ULONG avgFound;
     ULONG avgValue;
+    ULONG found;
+    ULONG bytes;
+    ULONG why;
+    KIRQL oldIrql;
     NTSTATUS status;
 
     ext = &hc->Hc;
@@ -236,7 +251,30 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     XhciLogNote(ext, "tol.avgtrb.value", avgFound ? avgValue : 0xFFFFFFFFUL);
     XhciLogNote(ext, "tol.avgtrb.mode", ext->Tol.Stats.AvgTrbMode);
 
+    /* 36.22: absent, another type, out of range or off a step is the
+     * default, each noted apart (the type refusal is hcdTakeDword's). */
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_MAX_TRANSFER, &value);
+    found = NT_SUCCESS(status) ? XHCI_XPOL_FOUND_DWORD
+            : (status == STATUS_OBJECT_TYPE_MISMATCH) ? XHCI_XPOL_FOUND_OTHER
+                                                     : XHCI_XPOL_FOUND_NONE;
+    bytes = XhciXpolValue(found, value, &why);
+    XhciControllerLockAcquire(ext, &oldIrql);
+    hc->Xstat.ValueWhy = why;
+    hc->Xstat.ValueRaw = NT_SUCCESS(status) ? value : 0;
+    hc->Xstat.CommandBytes = bytes;
+    XhciControllerLockRelease(ext, oldIrql);
+    XhciLogNote(ext, "xfer.max.value",
+                NT_SUCCESS(status) ? value : 0xFFFFFFFFUL);
+    XhciLogNote(ext, "xfer.max.why", why);
+    XhciLogNote(ext, "xfer.max.bytes", bytes);
+
 #if defined(XHCI_FLAVOUR_QEMU)
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_QEMU_MAP_GRANT, &value);
+    hc->QemuMapGrant = NT_SUCCESS(status) ? value : 0;
+    XhciLogNote(ext, "qemu.mapgrant", hc->QemuMapGrant);
+
     value = 0;
     status = hcdReadDword(hc, HCD_VALUE_QEMU_PSI_E460, &value);
     hc->QemuPsiE460 = (NT_SUCCESS(status) && value == 1) ? 1UL : 0UL;
@@ -1681,6 +1719,55 @@ static VOID hcdRelease(PHCD_CONTROLLER hc)
 static VOID hcdStopBody(PHCD_CONTROLLER hc);
 
 /*
+ * 36.21's readings start again with each start, the clocks' pair taken
+ * now; the class drivers' records are kept (each says when it came). Under
+ * the controller lock, which the door reads them under. IRQL:
+ * PASSIVE_LEVEL.
+ */
+static VOID hcdXstatStart(PHCD_CONTROLLER hc)
+{
+    PXHCI_XSTAT s;
+    LARGE_INTEGER now;
+    KIRQL oldIrql;
+    PUCHAR p;
+    ULONG i;
+
+    s = &hc->Xstat;
+    KeQuerySystemTime(&now);
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    p = (PUCHAR)s;
+    for (i = 0; i < sizeof(*s); i++) {
+        p[i] = 0;
+    }
+    HcdTscRead(&s->TscStartLo, &s->TscStartHi);
+    s->TimeStartLo = now.LowPart;
+    s->TimeStartHi = (ULONG)now.HighPart;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
+/* The grant IoGetDmaAdapter gave, and what one chunk may span of it
+ * (hcd_io.c, hcdPlanChunk). IRQL: PASSIVE_LEVEL, after HcdDmaOpen. */
+static VOID hcdXstatGrant(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* 36.22's constrained grant: fewer registers than the adapter gave,
+     * so every chunk is planned from it (hcd_io.c, hcdPlanChunk). */
+    if (hc->QemuMapGrant != 0 && hc->QemuMapGrant < hc->MapRegisters) {
+        hc->MapRegisters = hc->QemuMapGrant;
+        XhciLogNote(&hc->Hc, "qemu.mapgrant.applied", hc->MapRegisters);
+    }
+#endif
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->Xstat.MapGrant = hc->MapRegisters;
+    hc->Xstat.ChunkPages = hc->MapRegisters < HCD_SG_ELEMENTS
+                               ? hc->MapRegisters
+                               : HCD_SG_ELEMENTS;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
+/*
  * Bring the controller up: resources, BAR, adapter and common buffer, the
  * interrupt, XhciInitController, the interrupt enables, the thread. Called
  * after the PCI stack has started (hcd_pnp.c). IRQL: PASSIVE_LEVEL.
@@ -1713,6 +1800,7 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
      * the lower driver saw it (HcdPirqStartAttempt, hcd_pnp.c). */
     HcdCountersStart(hc);
     HcdEnumInit(hc);
+    hcdXstatStart(hc);
 
     status = hcdParseResources(hc, irp);
     if (!NT_SUCCESS(status)) {
@@ -1754,6 +1842,7 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     XhciLogNoteAddress(ext, "start.bar", hc->BarRaw.LowPart);
     XhciLogNote(ext, "start.common.pa", ext->StartPA);
     XhciLogNote(ext, "start.mapregs", hc->MapRegisters);
+    hcdXstatGrant(hc);
     /* The design record 13 section 11.4 reading, on the debug channel
      * too: the log ring has no reader until 26-A.8. */
     XHCI_DBG_VALUE("hcd: start, map registers granted", hc->MapRegisters);

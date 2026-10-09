@@ -185,4 +185,39 @@ ULONG UasCdbDirection(UCHAR opcode);
 ULONG UasBuildId(ULONG kind, const UCHAR *inquiry, ULONG inquiryLength,
                  const char *serial, ULONG lun, char *out, ULONG size);
 
+/*
+ * Task 36.21's telemetry (xhci98_xfer.h): the bucket of a command's data
+ * length - up to 4 KiB, 16, 64, 128, 256, 512 KiB, 1 MiB, 2 MiB, above -
+ * and of the commands in flight as one starts - 1, 2, 3-4, 5-8, 9-16, 17
+ * and more (0 reads as 1). The bus's own buckets are the same
+ * (xhci_xstat.c). And a sum's carry by hand.
+ */
+#define UAS_TELE_BUCKETS        9UL
+#define UAS_TELE_DEPTHS         6UL
+
+ULONG UasTeleBucket(ULONG bytes);
+ULONG UasTeleDepthBucket(ULONG active);
+VOID UasTeleAdd64(PULONG lo, PULONG hi, ULONG v);
+
+/*
+ * Task 36.22: the command size from the bus's answer to
+ * IOCTL_XHCI98_TRANSFER_POLICY (xhci98_xfer.h). `sent` says how the
+ * request itself went; `reply` is the request structure as it came back
+ * (read only when sent is UAS_POLICY_SENT_OK). Returns the size in bytes
+ * - the bus's when its reply keeps the contract, 64 KiB otherwise - and
+ * sets *source to the XHCI98_TELE_SRC_* that says which.
+ */
+#define UAS_POLICY_SENT_OK          0UL /* the IRP succeeded              */
+#define UAS_POLICY_SENT_UNSUPPORTED 1UL /* NOT_SUPPORTED, INVALID_DEVICE_
+                                         * REQUEST: an older bus          */
+#define UAS_POLICY_SENT_REFUSED     2UL /* INVALID_PARAMETER: the bus
+                                         * refused the request's header  */
+#define UAS_POLICY_SENT_FAILED      3UL /* anything else: removal, no
+                                         * memory, no IRP                 */
+#define UAS_POLICY_FALLBACK_BYTES   0x10000UL
+
+struct _XHCI98_TRANSFER_POLICY;
+ULONG UasPolicyValue(ULONG sent, const struct _XHCI98_TRANSFER_POLICY *reply,
+                     PULONG source);
+
 #endif /* UAS_IU_H */

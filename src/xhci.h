@@ -8581,7 +8581,38 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_PIRQ_WORDS    20  /* XHCI_PIRQ_STATE, in words     */
 #define XHCI_SNAPSHOT_HCD_PIRQ_AT       21  /* its first word                */
 #define XHCI_SNAPSHOT_HCD_PIRQ_COUNT    27UL
-#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    48UL
+/*
+ * Appended by task 36.21, version unchanged: the transfer-size readings.
+ * Three counts, then the controller's XHCI_XSTAT (xhci_xstat.h) whole,
+ * then the class driver records the bus holds (HCD_UAS_TELE, hcd.h): per
+ * record the Slot ID it last came from, the sends taken since its device
+ * took it, the time-stamp count at the last one (a reader ages it against
+ * XHCI_XSTAT's TscNow), its state - none has come, its device live, or
+ * departed - and the record itself (xhci98_xfer.h, XHCI98_TELEMETRY), all
+ * of which read 0 until a send arrives. A header shorter than this is an
+ * earlier driver's, which measured none of it.
+ */
+#define XHCI_SNAPSHOT_HCD_XSTAT_WORDS   48  /* XHCI_XSTAT, in words          */
+#define XHCI_SNAPSHOT_HCD_TELE_RECORDS  49  /* class driver records          */
+#define XHCI_SNAPSHOT_HCD_TELE_WORDS    50  /* one record, in words          */
+#define XHCI_SNAPSHOT_HCD_XSTAT_AT      51  /* XHCI_XSTAT's first word       */
+#define XHCI_SNAPSHOT_HCD_XSTAT_COUNT   59UL
+#define XHCI_SNAPSHOT_HCD_TELE_AT       110 /* the first record's first word */
+#define XHCI_SNAPSHOT_HCD_TELE_COUNT    2UL
+#define XHCI_SNAPSHOT_HCD_TELE_SLOT     0   /* a record's words              */
+#define XHCI_SNAPSHOT_HCD_TELE_TAKEN    1
+#define XHCI_SNAPSHOT_HCD_TELE_TSC_LO   2
+#define XHCI_SNAPSHOT_HCD_TELE_TSC_HI   3
+#define XHCI_SNAPSHOT_HCD_TELE_STATE    4   /* XHCI_SNAPSHOT_HCD_TELE_S_*    */
+#define XHCI_SNAPSHOT_HCD_TELE_BODY     5   /* XHCI98_TELEMETRY's words      */
+#define XHCI_SNAPSHOT_HCD_TELE_BODY_WORDS 41UL
+#define XHCI_SNAPSHOT_HCD_TELE_RECORD_WORDS                                  \
+    (XHCI_SNAPSHOT_HCD_TELE_BODY + XHCI_SNAPSHOT_HCD_TELE_BODY_WORDS)
+#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    202UL
+
+#define XHCI_SNAPSHOT_HCD_TELE_S_NONE     0UL /* no send has come          */
+#define XHCI_SNAPSHOT_HCD_TELE_S_LIVE     1UL /* its device is present     */
+#define XHCI_SNAPSHOT_HCD_TELE_S_DEPARTED 2UL /* its device left: history  */
 
 /* One root port's record. The machine's fields are XHCI_ENUM_PORT's; the
  * speed ID is the one the port's last reset read (0 none), decoded on its

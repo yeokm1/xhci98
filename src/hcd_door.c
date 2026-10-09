@@ -820,6 +820,35 @@ static ULONG hcdDoorHcdPortWord(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG word)
     }
 }
 
+/* One word of the class driver records (task 36.21; xhci.h,
+ * XHCI_SNAPSHOT_HCD_TELE_*), `index` from the first record's first word.
+ * Controller lock held. */
+static ULONG hcdDoorTeleWord(PHCD_CONTROLLER hc, ULONG index)
+{
+    PHCD_UAS_TELE t;
+    ULONG word;
+
+    if (index >= HCD_UAS_TELE_RECORDS * XHCI_SNAPSHOT_HCD_TELE_RECORD_WORDS) {
+        return 0;
+    }
+    t = &hc->UasTele[index / XHCI_SNAPSHOT_HCD_TELE_RECORD_WORDS];
+    word = index % XHCI_SNAPSHOT_HCD_TELE_RECORD_WORDS;
+    switch (word) {
+    case XHCI_SNAPSHOT_HCD_TELE_SLOT:
+        return t->Slot;
+    case XHCI_SNAPSHOT_HCD_TELE_TAKEN:
+        return t->Taken;
+    case XHCI_SNAPSHOT_HCD_TELE_TSC_LO:
+        return t->TscLo;
+    case XHCI_SNAPSHOT_HCD_TELE_TSC_HI:
+        return t->TscHi;
+    case XHCI_SNAPSHOT_HCD_TELE_STATE:
+        return t->State;
+    default:
+        return t->Word[word - XHCI_SNAPSHOT_HCD_TELE_BODY];
+    }
+}
+
 /*
  * The HCD region (xhci.h, XHCI_SNAPSHOT_REGION_HCD; task 35.3): built word
  * by word into the caller's window from where XhciSnapHcdLocate puts each
@@ -841,6 +870,8 @@ static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
 {
     const ULONG *counters;
     const ULONG *pirq;
+    const ULONG *xstat;
+    LARGE_INTEGER now;
     ULONG ports;
     ULONG total;
     ULONG first;
@@ -869,16 +900,34 @@ static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
     }
     counters = (const ULONG *)&hc->Counters;
     pirq = (const ULONG *)&hc->Pirq;
+    /* 36.21: the clocks' pair as this window is cut, beside the start's,
+     * so a reader converts the time-stamp counts. */
+    KeQuerySystemTime(&now);
+    HcdTscRead(&hc->Xstat.TscNowLo, &hc->Xstat.TscNowHi);
+    hc->Xstat.TimeNowLo = now.LowPart;
+    hc->Xstat.TimeNowHi = (ULONG)now.HighPart;
+    xstat = (const ULONG *)&hc->Xstat;
     for (i = 0; i < count; i++) {
         switch (XhciSnapHcdLocate(ports, first + i, &record, &word)) {
         case XHCI_SNAPSHOT_HCD_IN_HEAD:
+            /* 36.21's readings and the class drivers' records are written
+             * under this lock (hcd_io.c, hcd_urb.c). */
+            if (word >= XHCI_SNAPSHOT_HCD_TELE_AT) {
+                value = hcdDoorTeleWord(hc, word - XHCI_SNAPSHOT_HCD_TELE_AT);
+                break;
+            }
+            if (word >= XHCI_SNAPSHOT_HCD_XSTAT_AT) {
+                value = xstat[word - XHCI_SNAPSHOT_HCD_XSTAT_AT];
+                break;
+            }
             /* The routing record (36.3) is written at PASSIVE_LEVEL under
              * the door gate (a start) or the power gate (a return to D0),
              * not this lock. This copy runs under both gates, so one
              * window never mixes two runs; a header split across two
              * windows could, which XHCISNAP's first window (the whole
              * header) never does. */
-            if (word >= XHCI_SNAPSHOT_HCD_PIRQ_AT) {
+            if (word >= XHCI_SNAPSHOT_HCD_PIRQ_AT &&
+                word < XHCI_SNAPSHOT_HCD_XSTAT_WORDS) {
                 value = pirq[word - XHCI_SNAPSHOT_HCD_PIRQ_AT];
                 break;
             }

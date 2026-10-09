@@ -67,13 +67,14 @@ static void test_trigger(void)
     CHECK_EQ(XhciInjTake(&t, 1, XHCI_INJ_VALUE(0, XHCI_INJ_LOST_IRQ, 0, 1)),
              XHCI_INJ_TAKE_FIRE, "first value after an absent one");
 
-    /* Every code: built (01 to 13 hex, FF) or unknown. A refused one is
+    /* Every code: built (01 to 17 hex - 13 is 36.12's device clear, 14 to
+     * 17 are 36.22's bulk faults - and FF) or unknown. A refused one is
      * consumed. */
     for (f = 0; f < 256; f++) {
         ULONG want;
         char what[64];
 
-        if ((f >= 1 && f <= 0x13) || f == XHCI_INJ_CLEAR) {
+        if ((f >= 1 && f <= 0x17) || f == XHCI_INJ_CLEAR) {
             want = XHCI_INJ_TAKE_FIRE;
         } else {
             want = XHCI_INJ_TAKE_UNKNOWN;
@@ -367,7 +368,7 @@ static void test_needs_live(void)
         want = (f == XHCI_INJ_LOST_IRQ || f == XHCI_INJ_PED ||
                 f == XHCI_INJ_OC || f == XHCI_INJ_HCH ||
                 f == XHCI_INJ_DEAD || f == XHCI_INJ_DEAD_NOPROOF ||
-                (f >= 0x08 && f <= 0x13)) ? 1UL : 0UL;
+                (f >= 0x08 && f <= 0x17)) ? 1UL : 0UL;
         sprintf(what, "fault %lu needs a live controller", f);
         CHECK_EQ(XhciInjNeedsLive(f), want, what);
     }
@@ -430,6 +431,10 @@ static void test_codes(void)
     CHECK_EQ(XHCI_INJ_RACE_RING, 0x11, "11 race, a ring");
     CHECK_EQ(XHCI_INJ_RACE_SECOND, 0x12, "12 race, a second error");
     CHECK_EQ(XHCI_INJ_CLEAR_HALT, 0x13, "13 the device clear answered");
+    CHECK_EQ(XHCI_INJ_BULK_TIMEOUT, 0x14, "14 bulk timeout (after 36.12)");
+    CHECK_EQ(XHCI_INJ_BULK_STOP, 0x15, "15 bulk stop");
+    CHECK_EQ(XHCI_INJ_BULK_ERROR, 0x16, "16 bulk error");
+    CHECK_EQ(XHCI_INJ_BULK_SHORT, 0x17, "17 bulk short");
     CHECK_EQ(XHCI_INJ_REFUSED_CC, 18, "Bandwidth Overrun");
 }
 
@@ -453,6 +458,9 @@ static void test_kinds(void)
             break;
         case 0x0F: case 0x10:
             kind = XHCI_INJ_KIND_EP0;
+            break;
+        case 0x14: case 0x15: case 0x16: case 0x17:
+            kind = XHCI_INJ_KIND_BULK;
             break;
         default:
             kind = XHCI_INJ_KIND_OTHER;
@@ -919,6 +927,60 @@ static void test_ep0(void)
     CHECK_EQ(e.Ep0Want, 0, "a count of none arms nothing");
 }
 
+/* 36.22: a bulk endpoint's doorbells withheld; the driver's own stop of it
+ * ends that once sent, and nothing else of it is answered. */
+static void test_bulk(void)
+{
+    XHCI_INJ_EP e;
+    XHCI_TRB t;
+    ULONG code;
+
+    XhciInjEpClear(&e);
+    XhciInjEpWatch(&e, 4, 6);
+    e.Watch = 0;
+    e.Bulk = 1;
+    CHECK_EQ(XhciInjEpDoorbell(&e, 4, 6), 1, "its doorbell withheld");
+    CHECK_EQ(XhciInjEpDoorbell(&e, 4, 6 | (3UL << 16)), 1,
+             "a stream's of it too");
+    CHECK_EQ(XhciInjEpDoorbell(&e, 4, 2), 0, "another endpoint's rung");
+    CHECK_EQ(XhciInjEpState(&e, 4, 6, XHCI_EP_STATE_RUNNING),
+             XHCI_EP_STATE_RUNNING, "its state read as it is");
+    code = 0;
+    cmd(&t, XHCI_TRB_TYPE_RESET_EP, 4, 6);
+    CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_SEND_END,
+             "its Reset Endpoint: sent, ending the withholding on success");
+    XhciInjCommandSent(&e, 4, XHCI_CC_CONTEXT_STATE_ERROR);
+    CHECK_EQ(e.Bulk, 1, "a refused one ends nothing");
+    cmd(&t, XHCI_TRB_TYPE_SET_TR_DEQUEUE, 4, 6);
+    CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_SEND_END,
+             "a dequeue move on an endpoint already Stopped takes the TD "
+             "back too (review round 3)");
+    cmd(&t, XHCI_TRB_TYPE_SET_TR_DEQUEUE, 4, 2);
+    CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_PASS,
+             "another endpoint's passes");
+    cmd(&t, XHCI_TRB_TYPE_STOP_EP, 4, 2);
+    CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_PASS,
+             "another endpoint's stop too");
+    cmd(&t, XHCI_TRB_TYPE_STOP_EP, 4, 6);
+    CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_SEND_END,
+             "its own stop: sent, ending the withholding");
+    XhciInjCommandSent(&e, 4, XHCI_CC_SUCCESS);
+    CHECK(e.Slot == 0 && e.Block == 0 && e.Bulk == 0, "ended whole");
+    CHECK_EQ(XhciInjEpDoorbell(&e, 4, 6), 0, "and its doorbell rung");
+
+    XhciInjEpClear(&e);
+    XhciInjEpWatch(&e, 4, 6);
+    e.Watch = 0;
+    e.Bulk = 1;
+    e.State = XHCI_EP_STATE_HALTED;
+    cmd(&t, XHCI_TRB_TYPE_STOP_EP, 4, 6);
+    CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_PASS,
+             "BULK_ERROR's emulated halt: a stop is sent and ends nothing");
+    CHECK_EQ(XhciInjHaltStateOf(XHCI_INJ_BULK_ERROR), XHCI_EP_STATE_HALTED,
+             "BULK_ERROR halts as TRANSACTION does");
+    CHECK_EQ(XhciInjHaltStateOf(XHCI_INJ_BULK_SHORT), 0, "SHORT does not");
+}
+
 int main(void)
 {
     test_encoding();
@@ -938,6 +1000,7 @@ int main(void)
     test_transfer_event();
     test_swallow_doorbell_state();
     test_command();
+    test_bulk();
     test_hold_survives();
     test_stop_verdict();
     test_ep0();

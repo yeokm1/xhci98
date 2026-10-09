@@ -35,6 +35,45 @@
 #include "xhci_stream.h"
 #include "xhci_counters.h"
 #include "xhci_inj.h"
+#include "xhci_xstat.h"
+#include "xhci98_xfer.h"
+
+/*
+ * The processor's time-stamp counter (task 36.21; xhci_xstat.h): the only
+ * clock finer than the system time's tick on every target that needs no
+ * import - the RDTSC instruction, which every processor these targets run
+ * on has and which a kernel-mode caller may always execute. MSVC 6.0's
+ * assembler predates the mnemonic, so x86 emits its two bytes; amd64 has
+ * the compiler's intrinsic through wdm.h (hcd_io.c, HcdTscRead).
+ * HcdTscStamp takes the full count and, from CPUID leaf 1, the initial
+ * APIC ID of the processor that read it - no processor number is an
+ * import on Windows 98 - so an interval is measured only within one
+ * processor's clock (XhciXstatInterval). On a processor without an APIC
+ * the ID reads 0, which is a uniprocessor's anyway. IRQL: any; a stamp
+ * taken below DISPATCH_LEVEL may straddle a move to another processor,
+ * which at worst names the wrong one for that stamp.
+ */
+VOID HcdTscRead(PULONG lo, PULONG hi);
+VOID HcdTscStamp(PXHCI_XSTAT_STAMP s);
+
+/* One class driver's telemetry (IOCTL_XHCI98_TELEMETRY, xhci98_xfer.h):
+ * the device it came from (Owner: the device record, compared and never
+ * followed, NULL once the record is freed - HcdIoDeviceGone - when State
+ * becomes departed), its slot, the sends taken since this device took the
+ * record, the counter at the last, and the record as it came. Under the
+ * controller lock. */
+#define HCD_UAS_TELE_RECORDS    XHCI_SNAPSHOT_HCD_TELE_COUNT
+typedef struct _HCD_UAS_TELE {
+    PVOID Owner;
+    ULONG State;                    /* XHCI_SNAPSHOT_HCD_TELE_S_*         */
+    ULONG Slot;
+    ULONG Taken;
+    ULONG TscLo;
+    ULONG TscHi;
+    ULONG Word[XHCI98_TELE_WORDS];
+} HCD_UAS_TELE, *PHCD_UAS_TELE;
+XHCI_C_ASSERT(hcd_uas_tele_words,
+              XHCI98_TELE_WORDS == XHCI_SNAPSHOT_HCD_TELE_BODY_WORDS);
 
 #define HCD_KIND_CONTROLLER_FDO 0x43464448UL /* 'HDFC' */
 #define HCD_KIND_ROOTHUB_PDO    0x50524448UL /* 'HDRP' */
@@ -194,6 +233,13 @@ typedef struct _HCD_XFER {
     ULONG Asap;                     /* USBD_START_ISO_TRANSFER_ASAP       */
     ULONG Seq;                      /* its pipe's submission order        */
     ULONG Mapped;                   /* held with its chunk mapped         */
+    /* 36.21: chunks of this URB published; the stamp at which software
+     * retired its last chunk with data still to move, and the one at which
+     * the next chunk was queued for mapping, each cleared when used or
+     * when the URB ends; controller lock. */
+    ULONG ChunksPublished;
+    XHCI_XSTAT_STAMP Retire;
+    XHCI_XSTAT_STAMP MapQueued;
     struct _HCD_XFER_SG {
         USBPORT_SCATTER_GATHER_LIST List;
         USBPORT_SCATTER_GATHER_ELEMENT More[HCD_SG_ELEMENTS];
@@ -262,6 +308,10 @@ typedef struct _HCD_PIPE {
                                      * packet's; controller lock          */
     ULONG RingWait;                 /* a record waits for ring room;
                                      * controller lock                    */
+    /* 36.21: the stamp at which software found this ring empty with a URB
+     * unfinished, until the next publication on it or that URB's end;
+     * controller lock. */
+    XHCI_XSTAT_STAMP Empty;
     /* Streams (31-A.1; xhci98_streams.h). An endpoint with streams open
      * has Streams, and takes no transfer itself; each stream is a pipe of
      * its own with Parent the endpoint's and StreamId 1..31, on a ring in
@@ -1090,6 +1140,9 @@ typedef struct _HCD_CONTROLLER {
      * once the slot no longer names it), and InjOwnCmd across the layer's
      * own commands, which its command hook lets through. */
     ULONG QemuPsiE460;
+    /* Task 36.22: XhciQemuMapGrant as the start read it, 0 none; applied
+     * to MapRegisters once the adapter has given its grant (hcd_ctl.c). */
+    ULONG QemuMapGrant;
     /* Task 36.4: XhciQemuStartHold's end in tolerance ticks, latched at
      * each start (HcdInjStart), 0 none; ended early by HcdInjStartRelease. */
     volatile LONG InjStartHoldTicks;
@@ -1118,6 +1171,15 @@ typedef struct _HCD_CONTROLLER {
     /* Task 36.12: fault 13's answer for the next device clear, HCD_CTL_*
      * plus 1, 0 none; the thread's (hcd_inj.c, HcdInjClearHalt). */
     ULONG InjClearHalt;
+    ULONG InjBulkStream;            /* 36.22: the held TD's stream, 0 none */
+    /* BULK_TIMEOUT (review round 5): armed to lose the target endpoint's
+     * next TD's completion events; once one is lost, every event inside
+     * that TD's TRBs. Controller lock (the drain's hook sets them). */
+    ULONG InjBulkLose;
+    ULONG InjBulkLost;
+    ULONG InjBulkLostFirst;
+    ULONG InjBulkLostToken;
+    ULONG InjBulkLostEvents;
 #endif
     /* The door (hcd_door.c, 26-A.8; design record 13 section 8): the
      * FDO's name's number, \DosDevices\HCD<n>, the host controller
@@ -1238,6 +1300,13 @@ typedef struct _HCD_CONTROLLER {
      * door gate and at a return to D0 under the power gate. */
     XHCI_PIRQ_STATE Pirq;
     PVOID PirqVa;
+    /* The transfer size (tasks 36.21 and 36.22; xhci_xstat.h, hcd_io.c):
+     * the readings since the start, zeroed and the value latched by each
+     * start (hcd_ctl.c), and the class drivers' records (hcd_urb.c), kept
+     * across starts. Controller lock, but CommandBytes, which only a start
+     * writes, before any device PDO can ask. */
+    XHCI_XSTAT Xstat;
+    HCD_UAS_TELE UasTele[HCD_UAS_TELE_RECORDS];
 } HCD_CONTROLLER, *PHCD_CONTROLLER;
 
 /* The root hub's PDO, created by the controller FDO (hcd_rh.c; design record

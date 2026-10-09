@@ -86,6 +86,7 @@ HKR,,XhciIntelIrqRoute,0x00010003,1
 HKR,,XhciTolerance,0x00010003,1
 HKR,,XhciIntervalCap,0x00010003,1
 HKR,,XhciAvgTrbEsit,0x00010003,0
+HKR,,XhciMaxTransferKB,0x00010003,1024
 HKR,,XhciImodInterval250ns,0x00010003,160
 
 [RootHub.Dev]
@@ -134,6 +135,7 @@ HKR,,XhciIntelIrqRoute,0x00010003,1
 HKR,,XhciTolerance,0x00010003,1
 HKR,,XhciIntervalCap,0x00010003,1
 HKR,,XhciAvgTrbEsit,0x00010003,0
+HKR,,XhciMaxTransferKB,0x00010003,1024
 HKR,,XhciImodInterval250ns,0x00010003,160
 HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"
 HKR,,Controller,1,01

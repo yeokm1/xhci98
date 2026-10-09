@@ -76,6 +76,7 @@ SOURCES=xhci_mem.c    \
         xhci_psw.c    \
         xhci_pirq.c   \
         xhci_snap.c   \
+        xhci_xstat.c  \
         xhci_tol.c    \
         xhci_pipe.c   \
         xhci_stream.c \
