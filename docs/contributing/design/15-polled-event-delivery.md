@@ -456,48 +456,61 @@ the same controller-lock hold as the look that proved the line dead:
       and from here no interrupt is ever wanted again, so `EINT` is left
       as it stands and no ISR of this controller reads it.
 
-   **A retirement owed is retired at every chance**, through the same
-   routine: at the start of every later service pass; and, from the HCD at
-   PASSIVE_LEVEL, before a suspend (`hcd_power.c`, before
-   `XhciSuspendController`), before an in-place recovery (`hcdRecover`,
-   before `XhciRecoverController`), and at the release before the
-   interrupt is disconnected. **A completed HCRST retires it too**: after
-   a reset IMAN, USBCMD and USBSTS hold their defaults, `IP`, `IE` and
-   `INTE` 0 (4.23.1, p.312), so `XhciInitController`, once its HCRST has
-   completed, sets `LineRetired` when `LineMoved` is set - which covers
-   the recovery and the reinitialising resume. Each attempt is counted,
-   and `LineRetired` once set stays set for the start.
-
-   **Containment when the retirement does not prove** (rounds 4 and 5).
+   **A retirement owed is retired at every chance** (rounds 3 to 6).
    The verdict says only that no claim came in a 300 ms window, not that
    the ISR can never acknowledge later (on the E7250 an EHCI interrupt can
-   still bring it there), so the ISR keeps its acknowledgement path
-   (`LineMoved`, above) and the driver escalates, in order, until one step
-   proves the line can no longer be asserted:
-   1. the DIRQL retirement above, at every chance listed;
-   2. **INTx Disable**: from the controller thread at PASSIVE_LEVEL, the
-      first pass after the move with the retirement still owed sets bit 10
-      of the PCI Command register (Interrupt Disable; PCI 3.0 6.2.2: "when
-      set, the function is prevented from asserting INTx#", which on PCI
-      Express sends the Deassert_INTx message), through the same
+   still bring it there), so while the retirement is owed the ISR keeps
+   its acknowledgement path (`LineMoved`, below), and the driver works
+   through these, in order, until one proves the line can no longer be
+   asserted:
+   1. **The DIRQL retirement** above, at the start of every service pass.
+   2. **The PASSIVE containment**, `HcdPollContain(hc)`: one helper, called
+      with the power gate held and no spin lock held, only while the
+      controller is started and in D0 (its power state read under the
+      gate). It runs the DIRQL retirement once more and, if that does not
+      prove, sets bit 10 of the PCI Command register (Interrupt Disable;
+      PCI 3.0 6.2.2: "when set, the function is prevented from asserting
+      INTx#", which on PCI Express sends Deassert_INTx), through the same
       configuration path and read-modify-write the Bus Master Enable
-      restore uses (`XhciReadPciConfig`/`XhciWritePciConfig`), and reads
-      it back. Read back set is a proof whatever `IP` holds: `LineRetired`
-      is then published inside `KeSynchronizeExecution` as in step 3.3. A
-      message interrupt is unaffected by the bit, and no line is wanted
-      again this start. The bit is the start's to undo: every start whose
-      delivery is a line clears it, if set, before connecting, and records
-      that it did (`intr.intxdisable.cleared`);
-   3. **the in-place recovery**, asked for if both fail: its HCRST returns
-      `IP`, `IE` and `INTE` to 0. Through the recovery's reinitialisation
-      window the ISR's `HcInfoStatus` gate stays - it may not touch a
-      register whose base is being re-derived - which is the residual of
-      this last step only;
-   4. **uncontained**, if the recovery is refused or fails: the
-      controller is latched failed as for any refused recovery, and the
-      record says so (`intr.retire.uncontained`, the counter block's
-      retirement state 3). The stop then disconnects the ISR, as PnP
-      requires; nothing later is counted on to contain it.
+      restore uses (`XhciReadPciConfig`, `XhciWritePciConfig`), with no
+      controller lock or `PollLock` held across the requests, and reads it
+      back. Set on read back is a proof whatever `IP` holds, and
+      `LineRetired` is then published inside `KeSynchronizeExecution` as
+      in step 3.3. It is called by the controller thread on each pass while
+      the retirement is owed; by the suspend paths in `hcd_power.c` before
+      `XhciSuspendController`; by `hcdRecover` before
+      `XhciRecoverController`; and by the stop, after `hcdThreadStop` and
+      before the release disconnects the interrupt, so a move made just
+      before a stop or a suspend is contained by that path itself. Outside
+      D0 it does nothing and records why (the controller is not powered,
+      so it is not asserting).
+   3. **The in-place recovery**, asked for through the existing
+      `XhciRequestControllerReset` when the thread's containment does not
+      prove: it enters the existing machinery whole - `ControllerFailed`
+      and `RecoveryRequested`, the recovery's bounded retries and its
+      window (35-T.6), and their existing terminal and terminal release.
+      `XhciInitController` sets `LineRetired` as soon as its HCRST has
+      completed while `LineMoved` is set, so the proof stands even if a
+      later step of that initialisation fails. Through the
+      reinitialisation window the ISR's `HcInfoStatus` gate stays - it may
+      not touch a register whose base is being re-derived.
+   4. **Uncontained**: a stop reached with the retirement still owed (the
+      stop's own containment having failed) disconnects as PnP requires,
+      and the record says so (`intr.retire.uncontained`, the counter
+      block's retirement state 3). No new latch is added: a controller the
+      recovery cannot restore is the existing terminal, and is recorded as
+      such.
+
+   **Interrupt Disable is the start's to undo, after the reset.** A later
+   start whose delivery is a line clears the bit, if a configuration read
+   finds it set, only after `XhciInitController` has succeeded - its
+   HCRST having returned `IP`, `IE` and `INTE` to 0 - and immediately
+   before `XhciEnableInterrupts`, with the ISR connected; it reads the bit
+   back and records it (`intr.intxdisable.cleared`). A start that fails
+   before then leaves the bit set. A bit that will not clear leaves the
+   start running on a line that cannot assert: in mode 0 the watcher then
+   proves it dead and moves to polling; in mode 1 it is recorded
+   (`intr.intxdisable.stuck`) and runs as a dead line does today.
 
 4. `hc->IntDelivery` becomes poll, so the routing quirk's run at a later
    return to D0 writes nothing. A write it made at the start is not undone
@@ -1465,6 +1478,14 @@ Round 5 (`5508b61`): 2 P1, 1 P2, all taken.
 | 1 | P1: PARKED published before the DPC's last access; a grant could arm under a parking DPC | Sections 5.2 and 5.3: `ParkPending` and `KickOwed`; ownership given up only in the `PollLock`-only epilogue |
 | 2 | P1: a finite verdict is not permanent unreachability; containment needed | Section 4.2: the ISR keeps its path; escalation to PCI INTx Disable, then the recovery's HCRST, then a recorded uncontained terminal |
 | 3 | P2: the acceptance legs still asked MSI of x86 | Roadmap decisions table, 36.15 and 36.16; section 4.3's legs |
+
+Round 6 (`ded0bbf`): 1 P1, 2 P2, all taken.
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | P1: clearing Interrupt Disable before the reset could re-expose a pending `IP` | Section 4.2: cleared only after `XhciInitController` succeeded, just before `XhciEnableInterrupts`, read back; left set on a failed start; a stuck bit handled per mode |
+| 2 | P2: stop and suspend could bypass the PCI step | Section 4.2: `HcdPollContain`, under the power gate in D0, called by the thread, both suspend paths, `hcdRecover` and the stop after the thread ends |
+| 3 | P2: "latched failed" did not enter the recovery machinery | Section 4.2: the recovery asked through `XhciRequestControllerReset`, its existing bounded retries and terminal kept; `LineRetired` set at HCRST completion |
 
 ## 14. What changes in the documents
 
