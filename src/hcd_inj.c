@@ -438,6 +438,30 @@ static VOID hcdInjClear(PHCD_CONTROLLER hc)
     XhciInjRegsClear(&hc->InjRegs);
     KeReleaseSpinLock(&hc->InjLock, oldIrql);
     hcdInjIrqArm(hc, 0, 0);
+    hc->InjClearHalt = 0;
+}
+
+/*
+ * Task 36.12: fault 13. The next CLEAR_FEATURE(ENDPOINT_HALT) the thread
+ * sends a device (hcd_cfg.c, hcdCfgDeviceClearHalt: a RESET_PIPE, a
+ * SYNC_CLEAR_STALL, a streams open or close) is answered with the armed
+ * outcome and never sent, once; the device's halt and toggle stay as they
+ * were, which is what a refused clear leaves. Returns 1 with *outcome
+ * (HCD_CTL_*) when it answered. IRQL: PASSIVE_LEVEL, the thread.
+ */
+ULONG HcdInjClearHalt(PHCD_CONTROLLER hc, ULONG slot, ULONG dci,
+                      PULONG outcome)
+{
+    if (hc->InjClearHalt == 0) {
+        return 0;
+    }
+    *outcome = hc->InjClearHalt - 1;
+    hc->InjClearHalt = 0;
+    XHCI_DBG_VALUE("qemu inject: device clear answered, slot/dci/outcome",
+                   (slot << 24) | (dci << 16) | *outcome);
+    XhciLogNote(&hc->Hc, "qemu.inj.clearhalt",
+                (slot << 24) | (dci << 16) | *outcome);
+    return 1;
 }
 
 /*
@@ -1825,7 +1849,7 @@ static ULONG hcdInjBulkFire(PHCD_CONTROLLER hc)
         }
         if (!delivered) {
             /* Never rewound: a successor may have run meanwhile (review
-             * round 6). The TD is then a lost completion, as code 13's,
+             * round 6). The TD is then a lost completion, as code 14's,
              * for the driver's own timeout. */
             XhciLogNote(&hc->Hc, "qemu.inj.undelivered", fault);
         }
@@ -1940,6 +1964,16 @@ static VOID hcdInjFire(PHCD_CONTROLLER hc, ULONG value)
         done = hc->InjRegs.OcActive;
         XhciInjReleaseOc(&hc->InjRegs);
         KeReleaseSpinLock(&hc->InjLock, oldIrql);
+        break;
+    case XHCI_INJ_CLEAR_HALT:
+        /* arg 0 STALL, 1 another failure, 2 never sent. */
+        if (arg <= 2) {
+            hc->InjClearHalt = (arg == 0   ? HCD_CTL_STALLED
+                                : arg == 1 ? HCD_CTL_FAILED
+                                           : HCD_CTL_NOT_SENT) + 1;
+        } else {
+            done = 0;
+        }
         break;
     case XHCI_INJ_DEAD:
     case XHCI_INJ_DEAD_NOPROOF:

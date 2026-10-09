@@ -184,6 +184,8 @@ static VOID hcdFrameDpc(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2)
     hc = (PHCD_CONTROLLER)context;
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     XhciFrameSample(&hc->Hc);
+    /* Design record 15 section 7.1: a peek, under a poll delivery only. */
+    HcdPollPeekLocked(hc);
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     KeAcquireSpinLock(&hc->TimerLock, &oldIrql);
     if (hc->TimersClosed) {

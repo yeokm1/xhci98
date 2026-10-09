@@ -24,6 +24,7 @@
  */
 
 #include <stdio.h>
+#include "../src/xhci.h"
 #include "../src/xhci_pipe.h"
 #include "test_harness.h"
 
@@ -2047,7 +2048,8 @@ static void test_fast_poll(void)
     CHECK_EQ(XhciPipeFastMode(1), XHCI_PIPE_FAST_1K, "1 is 1K");
     CHECK_EQ(XhciPipeFastMode(2), XHCI_PIPE_FAST_2K4K, "2 is 2K4K");
     CHECK_EQ(XhciPipeFastMode(3), XHCI_PIPE_FAST_4K8K, "3 is 4K8K");
-    CHECK_EQ(XhciPipeFastMode(4), XHCI_PIPE_FAST_OFF, "4 is off");
+    CHECK_EQ(XhciPipeFastMode(4), XHCI_PIPE_FAST_CODES, "4 is the codes");
+    CHECK_EQ(XhciPipeFastMode(5), XHCI_PIPE_FAST_OFF, "5 is off");
     CHECK_EQ(XhciPipeFastMode(0xFFFFFFFFUL), XHCI_PIPE_FAST_OFF,
              "all ones is off");
 
@@ -2147,6 +2149,281 @@ static void test_fast_poll(void)
     CHECK_EQ(XhciPipeFastRetry(0), 0, "no code does not");
 }
 
+/* Mode 4 (task 36.19; design record 13 section 13.7): the codes 128, 129
+ * and 130 are Interval 2, 1 and 0 for an interrupt endpoint, Full and Low
+ * Speed on a root port, High Speed and SuperSpeed anywhere; the fallback is
+ * 3. */
+static void test_fast_codes(void)
+{
+    static const ULONG speeds[4] = {
+        XHCI_PIPE_SPEED_LOW, XHCI_PIPE_SPEED_FULL, XHCI_PIPE_SPEED_HIGH,
+        XHCI_PIPE_SPEED_SUPER
+    };
+    UCHAR c[64];
+    XHCI_PIPE_EP ep;
+    ULONG applied;
+    ULONG s;
+    ULONG b;
+    ULONG spec;
+
+    for (s = 0; s < 4; s++) {
+        for (b = 128; b <= 130; b++) {
+            if (speeds[s] == XHCI_PIPE_SPEED_SUPER) {
+                ss_config(c, 3, 8, b, 0, 0, 0, 1, 0);
+                CHECK_EQ(XhciPipeEndpointParamsAt(c, 64, 18, speeds[s], 0,
+                                                  &ep), XHCI_PIPE_OK,
+                         "SS interrupt with a code parses");
+            } else {
+                CHECK_EQ(ep_params(0x81, 3, 8, b, speeds[s], &ep),
+                         XHCI_PIPE_OK, "a code parses");
+            }
+            spec = ep.Interval;
+            CHECK_EQ(spec, (speeds[s] == XHCI_PIPE_SPEED_LOW ||
+                            speeds[s] == XHCI_PIPE_SPEED_FULL) ? 10UL : 15UL,
+                     "Table 6-12's reading of a code");
+            CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_CODES, speeds[s], 0,
+                                      &ep), 1, "a code applies at a root port");
+            CHECK_EQ(ep.Interval, 130 - b, "128/129/130 -> 2/1/0");
+            CHECK_EQ(ep.SpecInterval, spec, "SpecInterval stays Table 6-12's");
+            CHECK_EQ(ep.FallbackInterval, 3, "the fallback is 3");
+            CHECK_EQ(ep.BInterval, b, "the client is told its own byte");
+            CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_CODES, speeds[s], 0,
+                                      &ep), 0, "no double application");
+            CHECK_EQ(ep.Interval, 130 - b, "unchanged by the second");
+            CHECK_EQ(XhciPipeFastRevert(&ep), 1, "reverted");
+            CHECK_EQ(ep.Interval, 3, "the revert lands at 3");
+            CHECK_EQ(ep.FastPoll, 0, "and is not fast");
+            CHECK_EQ(XhciPipeFastRevert(&ep), 0, "once");
+
+            /* Behind a hub: FS and LS untouched, HS and SS applied. */
+            if (speeds[s] == XHCI_PIPE_SPEED_SUPER) {
+                XhciPipeEndpointParamsAt(c, 64, 18, speeds[s], 0, &ep);
+            } else {
+                ep_params(0x81, 3, 8, b, speeds[s], &ep);
+            }
+            applied = XhciPipeFastPoll(XHCI_PIPE_FAST_CODES, speeds[s], 0x21,
+                                       &ep);
+            if (speeds[s] == XHCI_PIPE_SPEED_LOW ||
+                speeds[s] == XHCI_PIPE_SPEED_FULL) {
+                CHECK_EQ(applied, 0, "FS/LS behind a hub untouched");
+                CHECK_EQ(ep.Interval, 10, "keeps Table 6-12's");
+            } else {
+                CHECK_EQ(applied, 1, "HS/SS behind a hub applied");
+                CHECK_EQ(ep.Interval, 130 - b, "the code's Interval");
+            }
+
+            /* Modes 2 and 3 do not honour the codes. */
+            ep_params(0x81, 3, 8, b, XHCI_PIPE_SPEED_FULL, &ep);
+            CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_4K8K,
+                                      XHCI_PIPE_SPEED_FULL, 0, &ep), 0,
+                     "mode 3 ignores a code");
+            CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_2K4K,
+                                      XHCI_PIPE_SPEED_FULL, 0, &ep), 0,
+                     "mode 2 ignores a code");
+            CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_OFF,
+                                      XHCI_PIPE_SPEED_FULL, 0, &ep), 0,
+                     "off ignores a code");
+            CHECK_EQ(ep.Interval, 10, "128 ms as the byte legally means");
+        }
+    }
+    ss_config(c, 3, 8, 130, 0, 0, 0, 1, 0);
+    XhciPipeEndpointParamsAt(c, 64, 18, XHCI_PIPE_SPEED_SUPER_PLUS, 0, &ep);
+    CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_CODES,
+                              XHCI_PIPE_SPEED_SUPER_PLUS, 0x1, &ep), 1,
+             "SuperSpeedPlus behind a hub");
+    CHECK_EQ(ep.Interval, 0, "8000 Hz");
+
+    /* Not codes. */
+    for (b = 0; b <= 255; b++) {
+        if (b >= 128 && b <= 130) {
+            continue;
+        }
+        if (b == 0) {
+            continue;
+        }
+        ep_params(0x81, 3, 8, b, XHCI_PIPE_SPEED_FULL, &ep);
+        spec = ep.Interval;
+        CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_CODES, XHCI_PIPE_SPEED_FULL,
+                                  0, &ep), 0, "not a code");
+        CHECK_EQ(ep.Interval, spec, "Table 6-12 unchanged");
+    }
+    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_CODES, XHCI_PIPE_SPEED_FULL, 0, 3,
+                           127, &applied), 9, "127 untouched: 9");
+    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_CODES, XHCI_PIPE_SPEED_FULL, 0, 3,
+                           131, &applied), 10, "131 untouched");
+    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_CODES, XHCI_PIPE_SPEED_FULL, 0, 3,
+                           255, &applied), 10, "255 untouched");
+    CHECK_EQ(applied, 0, "not applied");
+    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_CODES, XHCI_PIPE_SPEED_LOW, 0, 3,
+                           16, &applied), 7, "mode 4 does not map 16-63");
+    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_CODES, XHCI_PIPE_SPEED_LOW, 0, 3,
+                           32, &applied), 8, "nor 32");
+    CHECK_EQ(applied, 0, "not applied");
+
+    /* Isochronous and bulk untouched. */
+    ep_params(0x81, 1, 8, 128, XHCI_PIPE_SPEED_HIGH, &ep);
+    CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_CODES, XHCI_PIPE_SPEED_HIGH, 0,
+                              &ep), 0, "HS isochronous untouched");
+    ep_params(0x81, 1, 8, 128, XHCI_PIPE_SPEED_FULL, &ep);
+    CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_CODES, XHCI_PIPE_SPEED_FULL, 0,
+                              &ep), 0, "FS isochronous untouched");
+    ep_params(0x81, 2, 512, 128, XHCI_PIPE_SPEED_HIGH, &ep);
+    CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_CODES, XHCI_PIPE_SPEED_HIGH, 0,
+                              &ep), 0, "HS bulk untouched");
+    CHECK_EQ(ep.Interval, 0, "bulk keeps 0");
+
+    /* Modes 2 and 3 keep reverting to the Interval they replaced. */
+    ep_params(0x81, 3, 8, 16, XHCI_PIPE_SPEED_LOW, &ep);
+    CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_4K8K, XHCI_PIPE_SPEED_LOW, 0,
+                              &ep), 1, "mode 3");
+    CHECK_EQ(ep.FallbackInterval, 7, "fallback 7");
+    XhciPipeFastRevert(&ep);
+    CHECK_EQ(ep.Interval, 7, "mode 3 reverts to 7, not 3");
+}
+
+/* XhciPipeRebaseInterval agrees with the parser at every speed, type and
+ * bInterval; and a composite function at SuperSpeed takes the caller's
+ * byte with its companion kept (XhciPipeFunctionEndpoint; task 36.19). */
+static void test_rebase(void)
+{
+    static const ULONG speeds[3] = {
+        XHCI_PIPE_SPEED_LOW, XHCI_PIPE_SPEED_FULL, XHCI_PIPE_SPEED_HIGH
+    };
+    static const ULONG types[2] = { 1, 3 };
+    /* An SS device of two interfaces: 0 a bulk pair, 1 an interrupt IN
+     * of 1024 bytes, burst 1, 2048 bytes an interval, bInterval 4. */
+    static const UCHAR ssDev[] = {
+        9, 2, 0, 0, 2, 1, 0, 0x80, 50,
+        9, 4, 0, 0, 2, 8, 6, 0x50, 0,
+        7, 5, 0x82, 2, 0x00, 0x04, 0,
+        6, 0x30, 15, 0, 0, 0,
+        7, 5, 0x02, 2, 0x00, 0x04, 0,
+        6, 0x30, 15, 0, 0, 0,
+        9, 4, 1, 0, 1, 3, 0, 0, 0,
+        7, 5, 0x81, 3, 0x00, 0x04, 4,
+        6, 0x30, 1, 0, 0x00, 0x08
+    };
+    /* The function's copy as its class driver passes it, a filter having
+     * written the code 129 into the endpoint. */
+    static const UCHAR fnCaller[] = {
+        9, 2, 0, 0, 1, 1, 0, 0x80, 50,
+        9, 4, 1, 0, 1, 3, 0, 0, 0,
+        7, 5, 0x81, 3, 0x00, 0x04, 129,
+        6, 0x30, 1, 0, 0x00, 0x08
+    };
+    UCHAR dev[sizeof(ssDev)];
+    UCHAR fn[sizeof(fnCaller)];
+    UCHAR c[64];
+    XHCI_PIPE_IFACE f;
+    XHCI_PIPE_EP ep;
+    XHCI_PIPE_EP want;
+    ULONG s;
+    ULONG t;
+    ULONG b;
+
+    for (s = 0; s < 3; s++) {
+        for (t = 0; t < 2; t++) {
+            if (speeds[s] == XHCI_PIPE_SPEED_LOW && types[t] == 1) {
+                continue;
+            }
+            for (b = 0; b <= 255; b++) {
+                if (ep_params(0x81, types[t], 8, 1, speeds[s], &ep) !=
+                        XHCI_PIPE_OK ||
+                    ep_params(0x81, types[t], 8, b, speeds[s], &want) !=
+                        XHCI_PIPE_OK) {
+                    continue;
+                }
+                CHECK_EQ(XhciPipeRebaseInterval(&ep, speeds[s], b),
+                         XHCI_PIPE_OK, "rebased");
+                CHECK_EQ(ep.Interval, want.Interval, "the parser's Interval");
+                CHECK_EQ(ep.IntervalClamped, want.IntervalClamped,
+                         "the parser's clamp");
+                CHECK_EQ(ep.SpecInterval, want.SpecInterval, "SpecInterval");
+                CHECK_EQ(ep.FallbackInterval, want.FallbackInterval,
+                         "FallbackInterval");
+                CHECK_EQ(ep.BInterval, b, "the byte");
+            }
+        }
+    }
+    for (b = 0; b <= 255; b++) {
+        for (t = 0; t < 2; t++) {
+            ss_config(c, types[t], 8, 1, 0, 0, 0, 1, 0);
+            if (XhciPipeEndpointParamsAt(c, 64, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                         &ep) != XHCI_PIPE_OK) {
+                continue;
+            }
+            ss_config(c, types[t], 8, b, 0, 0, 0, 1, 0);
+            XhciPipeEndpointParamsAt(c, 64, 18, XHCI_PIPE_SPEED_SUPER, 0,
+                                     &want);
+            CHECK_EQ(XhciPipeRebaseInterval(&ep, XHCI_PIPE_SPEED_SUPER, b),
+                     XHCI_PIPE_OK, "SS rebased");
+            CHECK_EQ(ep.Interval, want.Interval, "SS: the parser's");
+            CHECK_EQ(ep.IntervalClamped, want.IntervalClamped, "SS clamp");
+        }
+    }
+    ep_params(0x82, 2, 512, 0, XHCI_PIPE_SPEED_HIGH, &ep);
+    CHECK_EQ(XhciPipeRebaseInterval(&ep, XHCI_PIPE_SPEED_HIGH, 128),
+             XHCI_PIPE_OK, "bulk");
+    CHECK_EQ(ep.Interval, 0, "bulk keeps Interval 0");
+    CHECK_EQ(XhciPipeRebaseInterval(NULL, XHCI_PIPE_SPEED_HIGH, 1),
+             XHCI_PIPE_BAD_PARAM, "NULL");
+    ep_params(0x81, 3, 8, 128, XHCI_PIPE_SPEED_HIGH, &ep);
+    XhciPipeFastPoll(XHCI_PIPE_FAST_CODES, XHCI_PIPE_SPEED_HIGH, 0, &ep);
+    CHECK_EQ(XhciPipeRebaseInterval(&ep, XHCI_PIPE_SPEED_HIGH, 4),
+             XHCI_PIPE_BAD_PARAM, "not after fast polling");
+    CHECK_EQ(XhciPipeRebaseInterval(&ep, 9, 4), XHCI_PIPE_BAD_PARAM,
+             "an unknown speed");
+
+    /* The integration vector: a split SuperSpeed device. */
+    copy_bytes(dev, ssDev, sizeof(dev));
+    set_total(dev, sizeof(dev));
+    copy_bytes(fn, fnCaller, sizeof(fn));
+    set_total(fn, sizeof(fn));
+    CHECK_EQ(XhciPipeFindInterface(dev, sizeof(dev), 1, 0, &f), XHCI_PIPE_OK,
+             "the HID interface");
+    CHECK_EQ(XhciPipeFunctionEndpoint(dev, sizeof(dev), f.EndpointOffset[0],
+                                      fn, 1, 0, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_OK, "the function's");
+    CHECK_EQ(ep.MaxPacketSize, 1024, "the device's packet size");
+    CHECK_EQ(ep.MaxBurstSize, 1, "the companion's burst kept");
+    CHECK_EQ(ep.MaxEsitPayload, 2048, "the companion's payload kept");
+    CHECK_EQ(ep.BInterval, 129, "the caller's byte, not the device's 4");
+    CHECK_EQ(ep.Interval, 15, "Table 6-12's reading of it");
+    CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_CODES, XHCI_PIPE_SPEED_SUPER,
+                              0x1, &ep), 1, "mode 4 applies");
+    CHECK_EQ(ep.Interval, 1, "4000 Hz");
+    CHECK_EQ(ep.MaxEsitPayload, 2048, "the payload still the companion's");
+    XhciPipeFastRevert(&ep);
+    CHECK_EQ(ep.Interval, 3, "the fallback 3");
+
+    CHECK_EQ(XhciPipeFunctionEndpoint(dev, sizeof(dev), f.EndpointOffset[0],
+                                      NULL, 1, 0, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_OK, "no caller");
+    CHECK_EQ(ep.BInterval, 4, "the device's own");
+    CHECK_EQ(ep.Interval, 3, "bInterval 4 at SS");
+    CHECK_EQ(ep.MaxBurstSize, 1, "burst");
+    fn[24] = 4;
+    CHECK_EQ(XhciPipeFunctionEndpoint(dev, sizeof(dev), f.EndpointOffset[0],
+                                      fn, 1, 0, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_OK, "the same byte");
+    CHECK_EQ(ep.Interval, 3, "as the device's");
+    fn[24] = 129;
+    fn[22] = 0x08;                      /* wMaxPacketSize differs: no match */
+    CHECK_EQ(XhciPipeFunctionEndpoint(dev, sizeof(dev), f.EndpointOffset[0],
+                                      fn, 1, 0, XHCI_PIPE_SPEED_SUPER, 0,
+                                      &ep), XHCI_PIPE_OK, "unmatched");
+    CHECK_EQ(ep.BInterval, 4, "the device's own when unmatched");
+
+    /* Below SuperSpeed the seven-byte path, as before. */
+    copy_bytes(fn, fnCaller, sizeof(fn));
+    set_total(fn, sizeof(fn));
+    CHECK_EQ(XhciPipeFunctionEndpoint(dev, sizeof(dev), f.EndpointOffset[0],
+                                      fn, 1, 0, XHCI_PIPE_SPEED_HIGH, 0,
+                                      &ep), XHCI_PIPE_OK, "HS function");
+    CHECK_EQ(ep.BInterval, 129, "the caller's byte at HS");
+    CHECK_EQ(ep.Interval, 15, "clamped at HS");
+}
+
 /* A composite function's select whose descriptor a filter rewrote
  * (XhciPipeCallerInterval; whole-branch review of 2.1.0.0): the caller's
  * bInterval is taken for an endpoint whose first six bytes equal the
@@ -2237,6 +2514,99 @@ static void test_caller_interval(void)
              XHCI_PIPE_BAD_PARAM, "no answer");
 }
 
+/*
+ * Task 36.12: RESET_PIPE in xHCI 1.2c 4.6.8 order. The order is transcribed
+ * from the spec's "reset a pipe" list (p.116), not from the code: Reset
+ * Endpoint, CLEAR_TT_BUFFER (control or bulk, behind a TT), the device's
+ * CLEAR_FEATURE(ENDPOINT_HALT) (any endpoint but control), Set TR Dequeue,
+ * the doorbell. A failed device clear after the Reset Endpoint owes the
+ * device's half on a Stopped endpoint, and the next reset takes that path
+ * without a second Reset Endpoint.
+ */
+static void test_reset_steps(void)
+{
+    const ULONG both = XHCI_PIPE_RESET_HOST | XHCI_PIPE_RESET_DEVICE;
+    const ULONG halted = XHCI_EP_STATE_HALTED;
+    const ULONG stopped = XHCI_EP_STATE_STOPPED;
+
+    CHECK_EQ(XhciPipeResetSteps(both, halted, 0, XHCI_PIPE_XFER_BULK),
+             XHCI_PIPE_STEP_RESET_EP | XHCI_PIPE_STEP_CLEAR_TT |
+                 XHCI_PIPE_STEP_DEVICE | XHCI_PIPE_STEP_SET_DEQUEUE,
+             "Halted bulk: the full 4.6.8 order, TT clear included");
+    CHECK_EQ(XhciPipeResetSteps(both, halted, 0, XHCI_PIPE_XFER_INTERRUPT),
+             XHCI_PIPE_STEP_RESET_EP | XHCI_PIPE_STEP_DEVICE |
+                 XHCI_PIPE_STEP_SET_DEQUEUE,
+             "Halted interrupt: no TT clear (control and bulk only)");
+    CHECK_EQ(XhciPipeResetSteps(both, halted, 0, XHCI_PIPE_XFER_CONTROL),
+             XHCI_PIPE_STEP_RESET_EP | XHCI_PIPE_STEP_CLEAR_TT |
+                 XHCI_PIPE_STEP_SET_DEQUEUE,
+             "Halted control: no device clear (4.6.8: any endpoint but "
+             "control)");
+    CHECK_EQ(XhciPipeResetSteps(both, halted, 0, XHCI_PIPE_XFER_ISOCH),
+             XHCI_PIPE_STEP_RESET_EP | XHCI_PIPE_STEP_SET_DEQUEUE,
+             "Halted isochronous: no halt to clear, no TT clear");
+    /* An owed record on a Halted endpoint is not followed: Reset Endpoint is
+     * legal there, so the full order is taken again. */
+    CHECK_EQ(XhciPipeResetSteps(both, halted, 1, XHCI_PIPE_XFER_BULK),
+             XHCI_PIPE_STEP_RESET_EP | XHCI_PIPE_STEP_CLEAR_TT |
+                 XHCI_PIPE_STEP_DEVICE | XHCI_PIPE_STEP_SET_DEQUEUE,
+             "owed but Halted: the full order");
+
+    CHECK_EQ(XhciPipeResetSteps(both, stopped, 1, XHCI_PIPE_XFER_BULK),
+             XHCI_PIPE_STEP_CLEAR_TT | XHCI_PIPE_STEP_DEVICE |
+                 XHCI_PIPE_STEP_SET_DEQUEUE,
+             "owed, Stopped: TT and device again, Set TR Dequeue, no Reset "
+             "Endpoint");
+    CHECK_EQ(XhciPipeResetSteps(both, stopped, 1, XHCI_PIPE_XFER_INTERRUPT),
+             XHCI_PIPE_STEP_DEVICE | XHCI_PIPE_STEP_SET_DEQUEUE,
+             "owed interrupt, Stopped");
+    CHECK_EQ(XhciPipeResetSteps(XHCI_PIPE_RESET_DEVICE, stopped, 1,
+                                XHCI_PIPE_XFER_BULK),
+             XHCI_PIPE_STEP_CLEAR_TT | XHCI_PIPE_STEP_DEVICE |
+                 XHCI_PIPE_STEP_SET_DEQUEUE,
+             "SYNC_CLEAR_STALL on an owed endpoint finishes the reset");
+
+    CHECK_EQ(XhciPipeResetSteps(both, stopped, 0, XHCI_PIPE_XFER_BULK),
+             XHCI_PIPE_STEP_DEVICE_FIRST | XHCI_PIPE_STEP_RECYCLE,
+             "not Halted, nothing owed: the device's clear first, then the "
+             "recycle, as before 36.12");
+    CHECK_EQ(XhciPipeResetSteps(both, XHCI_EP_STATE_RUNNING, 0,
+                                XHCI_PIPE_XFER_INTERRUPT),
+             XHCI_PIPE_STEP_DEVICE_FIRST | XHCI_PIPE_STEP_RECYCLE,
+             "Running: the recycle");
+    CHECK_EQ(XhciPipeResetSteps(both, XHCI_EP_STATE_ERROR, 1,
+                                XHCI_PIPE_XFER_BULK),
+             XHCI_PIPE_STEP_DEVICE_FIRST | XHCI_PIPE_STEP_RECYCLE,
+             "owed but Error: the recycle (the record is not followed)");
+    CHECK_EQ(XhciPipeResetSteps(both, stopped, 0, XHCI_PIPE_XFER_ISOCH),
+             XHCI_PIPE_STEP_RECYCLE, "isochronous, not Halted: no clear");
+    CHECK_EQ(XhciPipeResetSteps(XHCI_PIPE_RESET_DEVICE, stopped, 0,
+                                XHCI_PIPE_XFER_BULK),
+             XHCI_PIPE_STEP_DEVICE_FIRST,
+             "SYNC_CLEAR_STALL, nothing owed: the clear alone");
+    CHECK_EQ(XhciPipeResetSteps(XHCI_PIPE_RESET_HOST, halted, 1,
+                                XHCI_PIPE_XFER_BULK),
+             0, "SYNC_RESET_PIPE is its own path");
+    CHECK_EQ(XhciPipeResetSteps(0, halted, 0, XHCI_PIPE_XFER_BULK), 0,
+             "no halves, no steps");
+
+    CHECK_EQ(XhciPipeClearVerdict(XHCI_PIPE_STEP_DEVICE, 1, 0),
+             XHCI_PIPE_CLEAR_GO, "taken after Reset Endpoint: go on");
+    CHECK_EQ(XhciPipeClearVerdict(XHCI_PIPE_STEP_DEVICE, 0, 0),
+             XHCI_PIPE_CLEAR_OWED,
+             "stalled or failed after Reset Endpoint: owed, not resumed");
+    CHECK_EQ(XhciPipeClearVerdict(XHCI_PIPE_STEP_DEVICE, 0, 1),
+             XHCI_PIPE_CLEAR_HELD,
+             "timed out after Reset Endpoint: held for the recovery");
+    CHECK_EQ(XhciPipeClearVerdict(XHCI_PIPE_STEP_DEVICE_FIRST, 0, 0),
+             XHCI_PIPE_CLEAR_RESUME,
+             "refused before the host's half: resumed as it was");
+    CHECK_EQ(XhciPipeClearVerdict(XHCI_PIPE_STEP_DEVICE_FIRST, 0, 1),
+             XHCI_PIPE_CLEAR_HELD, "timed out first: held");
+    CHECK_EQ(XhciPipeClearVerdict(XHCI_PIPE_STEP_DEVICE_FIRST, 1, 0),
+             XHCI_PIPE_CLEAR_GO, "taken first: go on");
+}
+
 int main(void)
 {
     test_seq();
@@ -2259,11 +2629,14 @@ int main(void)
     test_iso_fragments();
     test_iso_frames();
     test_xp_requests();
+    test_reset_steps();
     test_superspeed_endpoints();
     test_superspeedplus_isoch();
     test_bos();
     test_zero_bandwidth();
     test_fast_poll();
+    test_fast_codes();
+    test_rebase();
     test_caller_interval();
 
     printf("\n%d checks, %d failures\n", checks, failures);

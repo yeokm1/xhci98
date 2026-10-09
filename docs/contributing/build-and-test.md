@@ -6332,6 +6332,32 @@ ring notes `qemu.mapgrant` (the value read) and `qemu.mapgrant.applied`
 (the registers in force when it was applied); `XHCISNAP`'s "transfer size"
 section prints the grant in force. A change takes effect at the next start.
 
+**`XhciQemuNoInterrupt`, `XhciQemuPinUnreadable`, `XhciQemuDeadLine`**
+(roadmap-hcd tasks 36.7 and 36.13, design record 15 section 11). REG_DWORDs
+read at every start. `XhciQemuNoInterrupt` 1 makes the start see no
+interrupt resource and pin 0: mode 0 then polls with reason 4, mode 1 fails
+the start as a controller with no interrupt always did. `XhciQemuPinUnreadable`
+1 fails the HCD's pin read: modes 0 and 1 run the line with reason 2 or 6.
+`XhciQemuDeadLine` N + 1 (0 off, held to 100001, 100 s) latches a stand-in dead line
+N ms after the start's grant (at once, before the connection, for a value of
+1): the ISR still acknowledges what it claims, so QEMU's level line does not
+storm, but queues no drain and withholds the claim from the watcher, and
+every watcher look reads asserted. Under mode 0 the log ring then shows
+`qemu.inj.deadline`, `intr.moved` (the stale pairs) and `intr.moved.masked`,
+and the counter block delivery 2 with reason 9; under mode 1 no move. The
+start notes `qemu.inj.nointerrupt`, `qemu.inj.pinunreadable` and
+`qemu.inj.deadline.value`.
+
+**The delivery's log notes** (every flavour; design record 15 section 8). At
+start: `intr.mode.read`, `intr.mode`, `intr.delivery`, `intr.reason`,
+`intr.pin`, `poll.idle.ms`, `poll.active.ms`; at a move `intr.moved`,
+`intr.moved.masked`; for the line's retirement `intr.retired` (1 by
+acknowledgement, 2 by PCI Interrupt Disable), `intr.retire.recover`,
+`intr.retire.uncontained`, `intr.contain.unpowered`; at a line start that
+cleared a leftover Interrupt Disable `intr.intxdisable.cleared` (or
+`intr.intxdisable.stuck`). The stop's counter dump adds `intr.*`, `poll.*`
+and `watch.*` lines for the counter block's new words.
+
 **`XhciQemuInject`** (roadmap-hcd task 35-T.9, design record 17 section 5).
 A REG_DWORD the controller thread re-reads about once a second, so a script
 in the guest fires a fault at run time by writing it:
@@ -6353,7 +6379,8 @@ in the guest fires a fault at run time by writing it:
 | `06` | All-ones USBSTS, with the proof (35-T.6) | the health poll's USBSTS read (at every `XhciTolerance` value, so at 0 it meets `2.1.1.0`'s handling and `HealthPollsDead` counts) and the containment step's (at 1) answer all-ones for `arg` thread passes (0 until CLEAR); configuration space is real, so Bus Master Enable is cleared and reads back clear. Transient: an `arg` of 5 or so, shorter than the containment interval |
 | `07` | All-ones USBSTS, no proof | the same, the Bus Master Enable read-back answering set: the pinned branch |
 | `08` to `12` | The soft retry and the device cycle (35-T.2 to 35-T.4) | the next table |
-| `13` to `16` | A bulk TD's short, error, stop and timeout (roadmap-hcd task 36.22) | the paragraph after the next table |
+| `13` | A device clear not taken (36.12) | the next CLEAR_FEATURE(ENDPOINT_HALT) the thread sends any device - a RESET_PIPE's, a SYNC_CLEAR_STALL's, a streams open's or close's - is answered and never sent, once: `arg` 0 a STALL, 1 another failure, 2 never sent (any other `arg` is refused); the device's halt and toggle stay as they were. Noted `qemu.inj.clearhalt` (slot, DCI, outcome). Fire it before the reset it is for, for example before `08` with `arg` 4 on the HID pointer, whose fourth Transaction Error has the class driver reset the emulated Halted endpoint: the reset's Reset Endpoint, then this answer, leaves the device's half owed (`pipe.clear.owed`: slot, DCI, outcome) and the pipe paused, and the next RESET_PIPE, SYNC_CLEAR_STALL or RESET_PORT ends it (`pipe.clear.owed.end`: slot, DCI, and 1 both halves done, 2 a fresh context, 3 the endpoint no longer Stopped); a SYNC_RESET_PIPE between answers success and leaves it owed |
+| `14` to `17` | A bulk TD's short, error, stop and timeout (roadmap-hcd task 36.22) | the paragraph after the next table |
 | `FF` | CLEAR | every emulated answer and the lost-interrupt window off, and no further `08` to `12` injection; one already in flight runs to its end (the driver's Reset Endpoint, or the slot's Disable Slot), so no endpoint is left Stopped under a driver that believes it Halted |
 
 Codes `08` to `12` (hex) are 35-T.2 to 35-T.4's, record 17 section 5's rows
@@ -6415,10 +6442,10 @@ state:
 | `11` | Soft retry, a ring during the Reset Endpoint | as `08`; the Reset Endpoint held while the layer ends the answers and rings the endpoint, which resumes the TD, then answered Success (`qemu.inj.held.ring`). **The ring is the layer's own, not a submission's**: the HID class driver's reads are already posted, so no submission arrives on cue; the doorbell is the same write. The race runs only for the soft retry's own reset - the pipe not paused, its `RetryWanted` naming the deferred TD still at the queue's head; a reset that yields to an abort, a cancel or a client's reset, or one at `XhciTolerance` 0, is answered Success plainly and nothing is rung, since the TD it would restart may already be retired | the TD resumed early; the generation unchanged, so the thread rings again (harmless) and clears `RetryWanted` | as `08` |
 | `12` | Soft retry, a second error during the Reset Endpoint | as `11`, then, still holding the completion: another real stop, the dequeue confirmed (put back or abandoned as above), Halted answered again and a second Transaction Error delivered and diverted (`qemu.inj.held.second`), then Success | a newer generation: the thread leaves `RetryWanted` set and its next visit resets and rings | as `08` |
 
-Codes `13` to `16` (hex) are task 36.22's, for the transfer-size legs
+Codes `14` to `17` (hex) are task 36.22's (after 36.12's `13`), for the transfer-size legs
 (36.26): a bulk TD's early end, where the earlier codes reach only a
 one-TRB interrupt TD. QEMU finishes a bulk TD inside its doorbell write, so
-`14` to `16` first **withhold the doorbells** of one bulk endpoint of a published
+`15` to `17` first **withhold the doorbells** of one bulk endpoint of a published
 device that is not a hub at the port (bits 15:8, 0 any) - the endpoint whose
 address is `arg`, or with `arg` 0 the first bulk IN, which on a UAS device is
 likely its status pipe, so name the data pipe - and so leaves the next
@@ -6432,10 +6459,10 @@ queued (`qemu.inj.bulk.cleared`).
 
 | Code | Fault | What follows the withheld doorbell |
 |---|---|---|
-| `13` | Timeout | no doorbell withheld: QEMU runs the endpoint's next TD (any stream), and its completion is **lost** on the way to the driver: the first Transfer Event of the endpoint whose pointer lies on its ring or a stream's, inside the TD at that ring's head (`qemu.inj.bulk.lost`, the TD's first TRB), and from then every Transfer Event on that one ring - a short's tail and a successor's completion too, so the engine never sweeps the lost TD as failed. The TD stays outstanding, with the controller past it, as on a device or an interrupt that never answers, until the driver's own Stop Endpoint, Reset Endpoint or Set TR Dequeue for the endpoint (which ends the losing as it is sent, before the recovery goes on), a slot command, or the TD leaving the queue (`qemu.inj.bulk.released`, the events lost). CLEAR ends the losing at once; a completion already lost stays the driver's to recover. Streams too |
-| `14` | Stop | a real stop with the TD confirmed at its dequeue, then a Stopped event for the TD handed to the driver - the controller's own when it reported one for the TD, else the one a stop at a TD's start gives (its first TRB, code 26, nothing moved), since QEMU reports none for a TD it never fetched (`qemu.inj.bulk.stopped`: bit 8 the controller reported one, bits 7:0 its code) - then every stream with a TD rung. Streams too |
-| `15` | Error | `08`'s path on this TD: a real stop, its dequeue confirmed (the stream's Stream Context for a stream), Halted answered and a Transaction Error delivered for the TD's first TRB, the driver's Reset Endpoint answered. Streams too |
-| `16` | Short | a real stop, the dequeue confirmed, a real Set TR Dequeue past the TD (the stream's, for a stream), then a Short Packet for the TD's last TRB with half that TRB's length left - one event, its IOC TRB, so no trailing event follows - tried three times, and every stream with a TD rung. An event that never reached the driver is not rewound (`qemu.inj.undelivered`): the TD is then a lost completion, as `13`'s. Streams too |
+| `14` | Timeout | no doorbell withheld: QEMU runs the endpoint's next TD (any stream), and its completion is **lost** on the way to the driver: the first Transfer Event of the endpoint whose pointer lies on its ring or a stream's, inside the TD at that ring's head (`qemu.inj.bulk.lost`, the TD's first TRB), and from then every Transfer Event on that one ring - a short's tail and a successor's completion too, so the engine never sweeps the lost TD as failed. The TD stays outstanding, with the controller past it, as on a device or an interrupt that never answers, until the driver's own Stop Endpoint, Reset Endpoint or Set TR Dequeue for the endpoint (which ends the losing as it is sent, before the recovery goes on), a slot command, or the TD leaving the queue (`qemu.inj.bulk.released`, the events lost). CLEAR ends the losing at once; a completion already lost stays the driver's to recover. Streams too |
+| `15` | Stop | a real stop with the TD confirmed at its dequeue, then a Stopped event for the TD handed to the driver - the controller's own when it reported one for the TD, else the one a stop at a TD's start gives (its first TRB, code 26, nothing moved), since QEMU reports none for a TD it never fetched (`qemu.inj.bulk.stopped`: bit 8 the controller reported one, bits 7:0 its code) - then every stream with a TD rung. Streams too |
+| `16` | Error | `08`'s path on this TD: a real stop, its dequeue confirmed (the stream's Stream Context for a stream), Halted answered and a Transaction Error delivered for the TD's first TRB, the driver's Reset Endpoint answered. Streams too |
+| `17` | Short | a real stop, the dequeue confirmed, a real Set TR Dequeue past the TD (the stream's, for a stream), then a Short Packet for the TD's last TRB with half that TRB's length left - one event, its IOC TRB, so no trailing event follows - tried three times, and every stream with a TD rung. An event that never reached the driver is not rewound (`qemu.inj.undelivered`): the TD is then a lost completion, as `14`'s. Streams too |
 
 `0F` and `10` need a control transfer of the thread's own to happen after
 they are armed: for `0F`, disable and enable the device in Device Manager

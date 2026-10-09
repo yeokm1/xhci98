@@ -86,7 +86,9 @@ What it checks, grouped by the failure each rule prevents:
            XhciIntelIrqRoute at 1, the Intel interrupt routing quirk
            (owner, 2026-10-08). Task 36.22 made it thirteen:
            XhciMaxTransferKB at 1024, the UAS command size (owner,
-           2026-10-09).
+           2026-10-09). Task 36.6 made it sixteen:
+           XhciInterruptMode at 0, XhciPollIdleMs at 50 and
+           XhciPollActiveMs at 1 (design record 15 section 3).
            (**VAL-SZ was removed with XhciLogFile.** It was the
            string half - a REG_SZ's data is text two setup engines may quote,
            trim or tokenise differently, which a DWORD's is not - and with no
@@ -1256,6 +1258,27 @@ $requiredValues = @(
         Default = "1024"
         Why     = "roadmap-hcd task 36.22's command size, the size xhciuas.sys advertises to the storage class driver, in KiB: 64 to 2048 in steps of 4, read at each start and asked of the bus by xhciuas.sys at its own start; it takes effect at the next reboot. The INF writes the 1024 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's choice survives an update (owner, 2026-10-09)"
         DefaultWhy = "1024 is the driver's own default - absent, of another type, out of range or off a step reads as 1024 (owner, 2026-10-09); the roadmap's checkpoint keeps 1 MiB only if the bench measures it no slower, and a different default is that measurement's to decide, not this gate's"
+    },
+    @{
+        Name    = "XhciInterruptMode"
+        Type    = "0x00010003"
+        Default = "0"
+        Why     = "roadmap-hcd task 36.6's event delivery (design record 15 section 3), read at each start: 0 automatic (the line where it works, polling where there is none or the line is proven dead), 1 the line, 2 polling, 3 and above as 0. The INF writes the 0 so the value is where a user looks for it, under 34.1's don't-overwrite rule"
+        DefaultWhy = "0 is the driver's own default (owner, 2026-10-05): on a controller whose line works it reads as the release before it"
+    },
+    @{
+        Name    = "XhciPollIdleMs"
+        Type    = "0x00010003"
+        Default = "50"
+        Why     = "roadmap-hcd task 36.6's idle poll period in ms (design record 15 section 3), 0 as 50, held to 5000. The INF writes the 50 under 34.1's don't-overwrite rule"
+        DefaultWhy = "50 is the driver's own default (owner, 2026-10-05)"
+    },
+    @{
+        Name    = "XhciPollActiveMs"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-hcd task 36.6's active poll period in ms (design record 15 section 3), 0 as 1, held to the idle period. The INF writes the 1 under 34.1's don't-overwrite rule"
+        DefaultWhy = "1 is the driver's own default (owner, 2026-10-05)"
     },
     @{
         Name    = "XhciVirtualHSHub"

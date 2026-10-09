@@ -141,6 +141,37 @@ void pci_recheck_status(PCIINFO *p);     /* re-read 0x06 after active tests */
 int  pci_disable_bus_master(PCIINFO *p); /* restore original bits, BME clear */
 const char *hc_name(int hctype);
 
+/*
+ * Task 36.11: the Intel PCH interrupt routing, read only (route.c and
+ * pci.c's route_read). Filled for an xHCI before anything active runs; the
+ * registers exist only on the reviewed RCBA chipsets (the driver's table,
+ * src/xhci_pirq.c), and elsewhere nothing past the xHCI's own header is
+ * read. `state` says how far the read went.
+ */
+#define ROUTE_NOT_READ      0   /* not looked at                          */
+#define ROUTE_NA_XHCI       1   /* not a reviewed xHCI: nothing read      */
+#define ROUTE_NA_SLOT       2   /* a reviewed id, not at 00:14.0          */
+#define ROUTE_NA_LPC        3   /* 00:1F.0 not this xHCI's LPC: id only   */
+#define ROUTE_RCBA_INVALID  4   /* LPC read; RCBA disabled or invalid     */
+#define ROUTE_MAP_FAILED    5   /* the RCBA page not mapped               */
+#define ROUTE_READ          6   /* D20IP and D20IR read                   */
+
+typedef struct {
+    int state;
+    u32 xhci_id;        /* the xHCI's 00h: vendor 15:0, device 31:16      */
+    u8  xhci_pin;       /* its 3Dh                                        */
+    u32 lpc_id;         /* 00:1F.0's 00h                                  */
+    u32 rcba;           /* its F0h                                        */
+    u32 pirq_ad;        /* its 60h-63h, PIRQA-D_ROUT                      */
+    u32 pirq_eh;        /* its 68h-6Bh, PIRQE-H_ROUT                      */
+    u32 d20ip;          /* RCBA+3128h                                     */
+    u16 d20ir;          /* RCBA+3160h                                     */
+} ROUTEINFO;
+
+/* Reads only: configuration space through 0xCF8/0xCFC and one DPMI mapping
+ * of the RCBA page; no write of any kind. */
+void route_read(const PCIINFO *p, ROUTEINFO *r);
+
 /* ------------------------------------------------------------------ */
 /* Quirk table (quirks.c)                                             */
 /* ------------------------------------------------------------------ */
@@ -518,6 +549,8 @@ typedef struct {
     int v_dev;       /* C8 - informational, never disqualifying */
     int cleanup_failed;
     int irq_selftest;
+    ROUTEINFO route;         /* task 36.11, read before any active test */
+    long route_gsi;          /* --gsi N, or -1                           */
     char irq_note[80];
     char port_note[80];
     char handoff_note[80];
@@ -762,5 +795,29 @@ const char *quick_reason(const PCIINFO *p, int mmio_ok, int usb2_ports,
 #define XUSB2PR_UNDETERMINED  2    /* the words cannot answer the question */
 
 int  report_xusb2pr(const PCIINFO *p);         /* C7: prints, then verdicts */
+
+/* ------------------------------------------------------------------ */
+/* route.c - the routing report's pure half (task 36.11), host-tested */
+/* by xhciqual/test/test_route.c                                      */
+/* ------------------------------------------------------------------ */
+
+#define ROUTE_CMP_NONE          0   /* no GSI given                       */
+#define ROUTE_CMP_MATCH         1
+#define ROUTE_CMP_MISMATCH      2
+#define ROUTE_CMP_NOT_COMPARED  3   /* no PIRQ, or a GSI in neither range */
+
+/* ROUTE_READ to go on to the LPC, or ROUTE_NA_XHCI / ROUTE_NA_SLOT. */
+int  route_scope(u32 xhci_id, u8 bus, u8 dev, u8 fn);
+int  route_lpc_listed(u32 xhci_id, u32 lpc_id);
+int  route_rcba_valid(u32 rcba);
+/* The PIRQ (0-7) D20IR routes D20IP's pin to, or -1. */
+int  route_pirq(const ROUTEINFO *r);
+/* Against a GSI given separately: 16-23 the I/O APIC input PIRQA-H is,
+ * below 16 an 8259 IRQ the PIRQ's PIRQx_ROUT must be enabled for and name.
+ * gsi -1 is none. */
+int  route_compare(const ROUTEINFO *r, long gsi);
+void report_route(const ROUTEINFO *r, long gsi, QPRINTF_FN pf);
+/* One phrase for the quick scan's screen. Never NULL. */
+const char *route_summary(const ROUTEINFO *r, long gsi);
 
 #endif /* QUAL_H */

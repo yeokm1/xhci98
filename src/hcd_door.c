@@ -27,8 +27,9 @@
  *     (section 8.10).
  *
  * The hub answers are the bus's truth within what the structures can carry:
- * a SuperSpeed device's Speed reads High Speed in the _EX form, the ceiling
- * that interface has (section 8.4). Since task 33.4 (section 10.11) every
+ * a SuperSpeed device's Speed reads High Speed in the _EX form on every NT
+ * target, and 3 or 4 on Windows 98 and ME, and the _EX_V2 form gives the
+ * real speed everywhere (task 36.18, section 8.4). Since task 33.4 (section 10.11) every
  * external hub with a PDO is a devnode with a door of its own - its FDO
  * answers the same set for its own ports, \DosDevices\XHCI98HUB<serial> -
  * and a connection to it reads DeviceIsHub TRUE with that name; a hub that
@@ -64,6 +65,7 @@
 #define HCD_IOCTL_CONN_INFO_EX     0x00220448UL
 #define HCD_IOCTL_RESET_HUB        0x0022044CUL
 #define HCD_IOCTL_HUB_CAPS_EX      0x00220450UL
+#define HCD_IOCTL_CONN_INFO_EX_V2  0x0022045CUL
 
 /* USBUSER (WDK 7.1 usbuser.h): the header, the codes, the two requests. */
 #define HCD_UU_HEADER_BYTES        0x10UL
@@ -134,6 +136,11 @@ static const GUID hcdGuidHub = {
     0xF18A0E88UL, 0xC30C, 0x11D0,
     { 0x88, 0x15, 0x00, 0xA0, 0xC9, 0x06, 0xBE, 0xD8 }
 };
+/* GUID_DEVINTERFACE_USB_DEVICE, WDK 7.1 usbiodef.h (task 36.17). */
+static const GUID hcdGuidUsbDevice = {
+    0xA5DCBF10UL, 0x6530, 0x11D2,
+    { 0x90, 0x1F, 0x00, 0xC0, 0x4F, 0xB9, 0x51, 0xED }
+};
 
 static const WCHAR hcdDosDevices[] = L"\\DosDevices\\";
 static const WCHAR hcdDevice[] = L"\\Device\\";
@@ -142,6 +149,9 @@ typedef struct _HCD_DOOR_CONN {
     ULONG Status;                   /* HCD_CONN_*                          */
     UCHAR DeviceDesc[18];
     ULONG SpeedClass;               /* XHCI_SPEED_*                        */
+    ULONG Plus;                     /* SuperSpeedPlus link (dev->Plus)     */
+    ULONG BosSs;                    /* its BOS has a SuperSpeed capability */
+    ULONG BosSsp;                   /* ... and a SuperSpeedPlus one        */
     ULONG Address;
     ULONG ConfigValue;
     ULONG Pipes;
@@ -573,6 +583,36 @@ VOID HcdDoorHubStart(PHCD_HUB_FDO fdo, PHCD_CONTROLLER hc)
 VOID HcdDoorHubStop(PHCD_HUB_FDO fdo)
 {
     hcdInterfaceOff(&fdo->Interface, &fdo->InterfaceOn, 0);
+}
+
+/*
+ * GUID_DEVINTERFACE_USB_DEVICE on a device PDO (task 36.17; design record
+ * 13 section 8.10): every device PDO and every external hub's PDO, as
+ * usbhub registers it, and of a composite the bus splits only the function
+ * that owns the device's first interface - the group's first PDO, whose
+ * Group is its own Serial, the one the door already answers the
+ * connection's driver key from (hcdDoorConnection). That function's state
+ * is the interface's: with it disabled, failed or driverless the device has
+ * none while its siblings run (owner, 2026-10-09). Registered once, at the
+ * first successful start, and enabled at every one; best effort, as the hub
+ * interface is. IRQL: PASSIVE_LEVEL.
+ */
+VOID HcdDoorDeviceStart(PHCD_DEVICE_PDO pdo)
+{
+    if (pdo->Function && pdo->Group != pdo->Serial) {
+        return;
+    }
+    hcdInterfaceOn(pdo->Common.Self, &hcdGuidUsbDevice, &pdo->UsbInterface,
+                   &pdo->UsbInterfaceOn);
+}
+
+/* Disabled at a stop, a surprise removal and a removal - once: a removal
+ * after a surprise removal finds it off - and the link freed when `release`
+ * (the PDO's deletion, hcd_pdo.c hcdDeletePdo), which every path that
+ * destroys a device PDO goes through. Idempotent. IRQL: PASSIVE_LEVEL. */
+VOID HcdDoorDeviceStop(PHCD_DEVICE_PDO pdo, ULONG release)
+{
+    hcdInterfaceOff(&pdo->UsbInterface, &pdo->UsbInterfaceOn, release);
 }
 
 /* At the hub FDO's remove; `hc` may be NULL. IRQL: PASSIVE_LEVEL. */
@@ -1291,6 +1331,10 @@ static VOID hcdDoorDeviceLocked(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             c->Address = XHCI_SLOT_GET_ADDRESS(slotDw3);
         }
     }
+    /* Task 36.18: the rate and the BOS, fixed once enumeration is done. */
+    c->Plus = dev->Plus;
+    c->BosSs = dev->BosInfo.HasSuperSpeed;
+    c->BosSsp = dev->BosInfo.HasSuperSpeedPlus;
     for (dci = 2; dci < 32 && c->Pipes < HCD_DOOR_PIPES; dci++) {
         pipe = dev->Pipes[dci];
         if (pipe == NULL || pipe->Closed) {
@@ -1495,21 +1539,21 @@ static NTSTATUS hcdDoorNodeInfo(PHCD_CONTROLLER hc, PUCHAR buf, ULONG outLen,
 }
 
 /* USB_NODE_CONNECTION_INFORMATION and its _EX form, which differ in byte 23:
- * BOOLEAN LowSpeed, or the UCHAR Speed of usb200.h (0 low, 1 full, 2 high -
- * the ceiling). DeviceIsHub is TRUE for a hub whose door exists, whose name
+ * BOOLEAN LowSpeed, or the UCHAR Speed of usb200.h (0 low, 1 full, 2 high),
+ * with 3 and 4 for SuperSpeed and SuperSpeedPlus on Windows 98 and ME only
+ * (`win9x`; task 36.18, XhciHubExSpeed, section 8.4). DeviceIsHub is TRUE for a hub whose door exists, whose name
  * GET_NODE_CONNECTION_NAME then returns (task 33.4). IRQL: <=
  * DISPATCH_LEVEL. */
 static NTSTATUS hcdDoorConnInfo(PHCD_CONTROLLER hc,
                                 const HCD_DOOR_NODE *node, PUCHAR buf,
                                 ULONG inLen, ULONG outLen, ULONG ex,
-                                PULONG_PTR info)
+                                ULONG win9x, PULONG_PTR info)
 {
     HCD_DOOR_CONN c;
     ULONG port;
     ULONG room;
     ULONG n;
     ULONG i;
-    ULONG speed;
 
     if (inLen < 4 || outLen < HCD_CONN_INFO_BYTES) {
         return STATUS_BUFFER_TOO_SMALL;
@@ -1525,10 +1569,8 @@ static NTSTATUS hcdDoorConnInfo(PHCD_CONTROLLER hc,
     hcdCopy(buf + 4, c.DeviceDesc, 18);
     buf[22] = (UCHAR)c.ConfigValue;
     if (ex) {
-        speed = (c.SpeedClass == XHCI_SPEED_LOW)    ? 0UL
-                : (c.SpeedClass == XHCI_SPEED_FULL) ? 1UL
-                                                    : 2UL;
-        buf[23] = (c.Status == HCD_CONN_CONNECTED) ? (UCHAR)speed : 0;
+        buf[23] = (UCHAR)XhciHubExSpeed(c.Status == HCD_CONN_CONNECTED,
+                                        c.SpeedClass, c.Plus, win9x);
     } else {
         buf[23] = (c.SpeedClass == XHCI_SPEED_LOW) ? 1 : 0;
     }
@@ -1546,6 +1588,48 @@ static NTSTATUS hcdDoorConnInfo(PHCD_CONTROLLER hc,
         hcdPut32(buf, HCD_CONN_INFO_BYTES + i * HCD_PIPE_INFO_BYTES + 7, 0);
     }
     *info = HCD_CONN_INFO_BYTES + n * HCD_PIPE_INFO_BYTES;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * USB_NODE_CONNECTION_INFORMATION_EX_V2 (task 36.18; section 8.4): the
+ * request's own checks (XhciHubExV2Check), the port refused out of range as
+ * the _EX form refuses it, then the port's protocols - a root port's by its
+ * protocol group, an external hub's port by the hub's speed - and the
+ * device's flags. IRQL: <= DISPATCH_LEVEL.
+ */
+static NTSTATUS hcdDoorConnInfoV2(PHCD_CONTROLLER hc,
+                                  const HCD_DOOR_NODE *node, PUCHAR buf,
+                                  ULONG inLen, ULONG outLen, PULONG_PTR info)
+{
+    HCD_DOOR_CONN c;
+    ULONG port;
+    ULONG check;
+    ULONG protocols;
+    ULONG connected;
+
+    check = XhciHubExV2Check(buf, inLen, outLen);
+    if (check == XHCI_HUB_EXV2_TOO_SMALL) {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    if (check != XHCI_HUB_EXV2_OK) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    port = hcdGet32(buf, 0);
+    if (!hcdDoorPortValid(node, port)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    hcdDoorConnection(hc, node->Parent, hcdDoorLocation(node, port), &c,
+                      NULL, 0, 0);
+    protocols = node->Root
+                    ? XhciHubRootPortProtocols(
+                          XhciPortClass(&hc->Hc.PortMap, port))
+                    : XhciHubHubPortProtocols(node->SpeedClass);
+    connected = c.Status == HCD_CONN_CONNECTED;
+    XhciHubExV2Fill(buf, protocols,
+                    XhciHubExV2Flags(connected, c.SpeedClass, c.Plus,
+                                     c.BosSs, c.BosSsp));
+    *info = XHCI_HUB_EXV2_BYTES;
     return STATUS_SUCCESS;
 }
 
@@ -1725,11 +1809,17 @@ static NTSTATUS hcdDoorNodeIoctl(PHCD_CONTROLLER hc,
         break;
 
     case HCD_IOCTL_CONN_INFO:
-        status = hcdDoorConnInfo(hc, node, buf, inLen, outLen, 0, &info);
+        status = hcdDoorConnInfo(hc, node, buf, inLen, outLen, 0, 0, &info);
         break;
 
     case HCD_IOCTL_CONN_INFO_EX:
-        status = hcdDoorConnInfo(hc, node, buf, inLen, outLen, 1, &info);
+        /* Windows 98 and ME: the test hcd_pdo.c uses for them. */
+        status = hcdDoorConnInfo(hc, node, buf, inLen, outLen, 1,
+                                 !IoIsWdmVersionAvailable(1, 0x10), &info);
+        break;
+
+    case HCD_IOCTL_CONN_INFO_EX_V2:
+        status = hcdDoorConnInfoV2(hc, node, buf, inLen, outLen, &info);
         break;
 
     case HCD_IOCTL_CONN_DESCRIPTOR:

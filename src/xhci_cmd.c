@@ -155,6 +155,13 @@ ULONG XhciControllerUpdateFlags(PXHCI_EXTENSION ext,
     XhciControllerLockAcquire(ext, &oldIrql);
     previous = ext->Flags;
     ext->Flags = (previous & ~clearMask) | setMask;
+    /* The poller's admission goes with INITIALIZED, in the same hold, and
+     * its generation moves so a watcher never joins two runs (design
+     * record 15 section 5.3). Only the HCD grants it back. */
+    if ((clearMask & XHCI_EXT_FLAG_INITIALIZED) != 0) {
+        ext->PollService = 0;
+        ext->PollServiceGen++;
+    }
     XhciControllerLockRelease(ext, oldIrql);
     return previous;
 }
@@ -613,6 +620,8 @@ VOID XhciControllerBeginQuiesce(PXHCI_EXTENSION ext)
     /* RS_CONFIRMED with it: no HCH read from here to the next confirmed
      * run is a controller stopping itself (35-T.6). */
     ext->Flags &= ~(XHCI_EXT_FLAG_INITIALIZED | XHCI_EXT_FLAG_RS_CONFIRMED);
+    ext->PollService = 0;
+    ext->PollServiceGen++;
     XhciControllerLockRelease(ext, oldIrql);
 }
 

@@ -520,6 +520,16 @@ under "Targets and their standing" lists them per system.
   systems would convert it has not been read; the NT systems show the name
   as the device sends it. A name with characters outside plain ASCII was
   not read on any system.
+- **Every device has the USB device interface** (new in `2.3.0.0`; GitHub
+  issue 17). Each device and each external hub registers
+  `GUID_DEVINTERFACE_USB_DEVICE`, as under Microsoft's own hub driver, so
+  a program that finds USB devices through it (`SetupDiGetClassDevs` with
+  that interface, or `RegisterDeviceNotification` for its arrivals and
+  removals) finds them. The root hub has none, as under Microsoft's stack.
+  A composite device the driver splits into parts has no entry of its own,
+  so the interface is on the part that holds the device's first interface:
+  while that part is disabled, has no driver or fails to start, the device
+  has no interface, although its other parts work.
 
 ## SweetLow's hidusbf: a mouse's polling rate
 
@@ -969,6 +979,9 @@ turns those two settings into fast ones.
 | absent, `0`, `1` or anything else | 31 Hz | 62 Hz |
 | `2` | 2000 Hz | 4000 Hz |
 | `3` | 4000 Hz | 8000 Hz |
+| `4` | 31 Hz | 62 Hz (the codes below instead) |
+
+With `2` or `3`:
 
 - **Root ports only.** A device behind a hub keeps its ordinary rate.
 - **Outside the xHCI specification.** The specification's shortest interval
@@ -981,8 +994,41 @@ turns those two settings into fast ones.
 - **It applies to every device that asks for 16 to 63 ms.** While it is set,
   any Low- or Full-Speed device on a root port whose own polling interval is
   16 to 63 ms is polled faster too, hidusbf or not.
-- It is read when the controller starts, so a change takes effect after a
-  restart.
+
+**`4`: the rate the client chooses** (new in `2.3.0.0`; GitHub issue 17).
+An interrupt endpoint whose polling interval in the configuration Windows
+selects is 128, 129 or 130 is polled at 2000, 4000 or 8000 Hz; every other
+interval is polled as the specification reads it, so value `4` does not do
+`2`'s and `3`'s speeding up of 16 to 63 ms, and `2` and `3` do not honour
+the codes. It applies to a Low- or Full-Speed device on a root port only,
+and to a High-Speed or SuperSpeed device at a root port or behind a hub.
+The procedure is the value first, then the client: set `XhciFastPollFsLs`
+to `4` and restart, then set hidusbf (or another filter) to write 128, 129
+or 130. Two cautions:
+
+- 128 to 255 ms are legal polling intervals for a Low- or Full-Speed
+  device, so a device that itself asks for 128, 129 or 130 ms is polled at
+  2000 to 8000 Hz while the value is `4`.
+- A filter that writes a code while the value is not `4` gets what the
+  number means without it: a Low- or Full-Speed device is polled every
+  128 ms, and a High-Speed or SuperSpeed one, for which the number is out
+  of range, every 4.096 s; on a controller where `XhciIntervalCap` applies,
+  either is polled every 32 ms instead.
+
+A controller that refuses a code is caught as for `2` and `3` and counted
+in `fastpoll.fallbacks`, and the device is then polled every 1 ms
+(1000 Hz), not at the code's ordinary reading. A controller that accepts
+it and misbehaves cannot be caught; delete the value and restart. At High
+Speed and SuperSpeed the programmed polling interval is inside the
+specification's range; at Low and Full Speed it is outside it, as `2`'s
+and `3`'s are. On an AMD controller
+the code is applied before `XhciIntervalCap`, which leaves it alone. A
+part of a composite device keeps the code only until its class driver
+issues a later select of its interface (`SELECT_INTERFACE`), even of the
+same alternate setting, as with `2` and `3`; HID class drivers do not.
+
+The value is read when the controller starts, so a change takes effect
+after a restart.
 
 **Untested ground**: it has been read on no real controller and in no
 virtual machine. The bench reading on the ThinkPad E460 and P14s Gen 1 was
@@ -1120,8 +1166,9 @@ within USB 2.0 and costs a few polls a second for such a device.
 | `2` | The cap on every controller |
 
 It is applied after a polling rate a setting such as hidusbf's asked for
-and does not change which mouse `XhciFastPollFsLs` speeds up. It is read
-when the controller starts.
+and does not change which mouse `XhciFastPollFsLs` speeds up; under
+`XhciFastPollFsLs` `4` a code is applied first, and the cap leaves it
+alone. It is read when the controller starts.
 
 ### XhciAvgTrbEsit: a comparison switch
 
@@ -1278,6 +1325,24 @@ own arithmetic:
   shows `dev.ss.maxpower.ma=00000380` (896 mA); a USB 2.0 device reads as
   it did. A SuperSpeed device declaring less than 510 mA has not been read
   on hardware.
+
+### A device's speed on the hub pages (new in `2.3.0.0`)
+
+On Windows 98 SE and ME the newer form of the connection information
+(`IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX`, which tools such as
+SweetLow's USBView ask for) reads 3 for a SuperSpeed device and 4 for a
+SuperSpeedPlus one, as Intel's USB 3 drivers for those systems report it;
+up to `2.2.0.0` both read High Speed. Windows' own pages on those systems
+send the older form, which says only whether a device is Low Speed, and
+are unchanged. On the NT systems the newer form still reads High Speed,
+because Vista's and 7's hub page would list any other value among the
+Full-Speed devices. Every system also answers the request Windows 8
+introduced (`IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2`), which tools
+use to tell SuperSpeed and SuperSpeedPlus apart: it gives the port's
+protocols and whether the device runs at, and can run at, SuperSpeed or
+SuperSpeedPlus. A USB 3 device running at High Speed is not reported as
+SuperSpeed-capable, since the driver does not read that part of its
+descriptors at High Speed.
 
 ## The log, and how to send one
 

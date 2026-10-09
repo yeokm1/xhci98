@@ -625,7 +625,7 @@ try {
     # the interval, so the anchor carries them; $tailFor9x and $tailForNt are
     # the same block ending in each path's own successor line, which keeps
     # the two paths apart.
-    $tolRows   = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`nHKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`nHKR,,XhciMaxTransferKB,0x00010003,1024`r`n"
+    $tolRows   = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`nHKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`nHKR,,XhciMaxTransferKB,0x00010003,1024`r`nHKR,,XhciInterruptMode,0x00010003,0`r`nHKR,,XhciPollIdleMs,0x00010003,50`r`nHKR,,XhciPollActiveMs,0x00010003,1`r`n"
     $tailFor9x = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]"
     $tailForNt = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32"
     Write-Step "the Intel port switchover's opt-out, on both paths"
@@ -658,7 +658,10 @@ try {
         @{ Key = "irqroute";  Row = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`n"; Wrong = "HKR,,XhciIntelIrqRoute,0x00010003,0`r`n"; Clob = "HKR,,XhciIntelIrqRoute,0x00010001,1`r`n" },
         @{ Key = "tolerance"; Row = "HKR,,XhciTolerance,0x00010003,1`r`n";   Wrong = "HKR,,XhciTolerance,0x00010003,0`r`n";   Clob = "HKR,,XhciTolerance,0x00010001,1`r`n" },
         @{ Key = "intcap";    Row = "HKR,,XhciIntervalCap,0x00010003,1`r`n"; Wrong = "HKR,,XhciIntervalCap,0x00010003,0`r`n"; Clob = "HKR,,XhciIntervalCap,0x00010001,1`r`n" },
-        @{ Key = "avgtrb";    Row = "HKR,,XhciAvgTrbEsit,0x00010003,0`r`n";  Wrong = "HKR,,XhciAvgTrbEsit,0x00010003,1`r`n";  Clob = "HKR,,XhciAvgTrbEsit,0x00010001,0`r`n" }
+        @{ Key = "avgtrb";    Row = "HKR,,XhciAvgTrbEsit,0x00010003,0`r`n";  Wrong = "HKR,,XhciAvgTrbEsit,0x00010003,1`r`n";  Clob = "HKR,,XhciAvgTrbEsit,0x00010001,0`r`n" },
+        @{ Key = "intrmode";  Row = "HKR,,XhciInterruptMode,0x00010003,0`r`n"; Wrong = "HKR,,XhciInterruptMode,0x00010003,2`r`n"; Clob = "HKR,,XhciInterruptMode,0x00010001,0`r`n" },
+        @{ Key = "pollidle";  Row = "HKR,,XhciPollIdleMs,0x00010003,50`r`n"; Wrong = "HKR,,XhciPollIdleMs,0x00010003,5000`r`n"; Clob = "HKR,,XhciPollIdleMs,0x00010001,50`r`n" },
+        @{ Key = "pollactive"; Row = "HKR,,XhciPollActiveMs,0x00010003,1`r`n"; Wrong = "HKR,,XhciPollActiveMs,0x00010003,0`r`n"; Clob = "HKR,,XhciPollActiveMs,0x00010001,1`r`n" }
     )) {
         Assert-RuleFires ($tv.Key + "-no-9x") "VAL-MISSING" {
             param($t) $t.Replace($tailFor9x, $tailFor9x.Replace($tv.Row, ""))
@@ -1889,7 +1892,10 @@ try {
         @{ Key = "tolerance"; Row = "HKR,,XhciTolerance,0x00010003,1`r`n";   Wrong = "HKR,,XhciTolerance,0x00010003,0`r`n" },
         @{ Key = "intcap";    Row = "HKR,,XhciIntervalCap,0x00010003,1`r`n"; Wrong = "HKR,,XhciIntervalCap,0x00010003,0`r`n" },
         @{ Key = "avgtrb";    Row = "HKR,,XhciAvgTrbEsit,0x00010003,0`r`n";  Wrong = "HKR,,XhciAvgTrbEsit,0x00010003,1`r`n" },
-        @{ Key = "maxxfer";   Row = "HKR,,XhciMaxTransferKB,0x00010003,1024`r`n"; Wrong = "HKR,,XhciMaxTransferKB,0x00010003,64`r`n" }
+        @{ Key = "maxxfer";   Row = "HKR,,XhciMaxTransferKB,0x00010003,1024`r`n"; Wrong = "HKR,,XhciMaxTransferKB,0x00010003,64`r`n" },
+        @{ Key = "intrmode";  Row = "HKR,,XhciInterruptMode,0x00010003,0`r`n"; Wrong = "HKR,,XhciInterruptMode,0x00010003,2`r`n" },
+        @{ Key = "pollidle";  Row = "HKR,,XhciPollIdleMs,0x00010003,50`r`n"; Wrong = "HKR,,XhciPollIdleMs,0x00010003,5000`r`n" },
+        @{ Key = "pollactive"; Row = "HKR,,XhciPollActiveMs,0x00010003,1`r`n"; Wrong = "HKR,,XhciPollActiveMs,0x00010003,0`r`n" }
     )) {
         Assert-RuleFires ("amd64-" + $tv.Key + "-missing") "VAL-MISSING" {
             param($t) $t.Replace($tv.Row, "")

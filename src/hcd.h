@@ -37,6 +37,7 @@
 #include "xhci_inj.h"
 #include "xhci_xstat.h"
 #include "xhci98_xfer.h"
+#include "xhci_poll.h"
 
 /*
  * The processor's time-stamp counter (task 36.21; xhci_xstat.h): the only
@@ -49,9 +50,10 @@
  * APIC ID of the processor that read it - no processor number is an
  * import on Windows 98 - so an interval is measured only within one
  * processor's clock (XhciXstatInterval). On a processor without an APIC
- * the ID reads 0, which is a uniprocessor's anyway. IRQL: any; a stamp
- * taken below DISPATCH_LEVEL may straddle a move to another processor,
- * which at worst names the wrong one for that stamp.
+ * the ID reads 0, which is a uniprocessor's anyway. IRQL: any; below
+ * DISPATCH_LEVEL HcdTscStamp raises to it for the ID and the count and
+ * then restores the caller's IRQL, so both come from one processor.
+ * HcdTscRead alone takes no IRQL step.
  */
 VOID HcdTscRead(PULONG lo, PULONG hi);
 VOID HcdTscStamp(PXHCI_XSTAT_STAMP s);
@@ -283,6 +285,16 @@ typedef struct _HCD_PIPE {
      * A streams open or close of a used endpoint owes the device that
      * clear (hcdCfgStreamsSequence). */
     ULONG SeqUsed;
+    /* Task 36.12 (an endpoint's pipe, never a stream's; the thread's): a
+     * RESET_PIPE's Reset Endpoint restarted the host's toggle and left the
+     * endpoint Stopped, and the device did not take its
+     * CLEAR_FEATURE(ENDPOINT_HALT), so the device's half is owed. The pipe
+     * holds one pause for it (Paused counts it) until the half is done
+     * (hcdCfgReset) or the endpoint's context is replaced
+     * (hcdCfgConfigureAdd: RESET_PORT, a recycle, a streams open or close),
+     * either of which ends it (hcdCfgOwedEnd); a select or the device's
+     * going frees the pipe with it. */
+    ULONG ClearOwed;
     ULONG CancelPending;            /* a record of it was cancelled      */
     ULONG DrainPending;             /* a refused retire: stop and drain  */
     ULONG Paused;                   /* the thread is stopping or editing
@@ -631,6 +643,12 @@ typedef struct _HCD_DEVICE_PDO {
     ULONG PciBus;
     ULONG PciAddress;
     volatile ULONG PciRead;
+    /* GUID_DEVINTERFACE_USB_DEVICE (task 36.17; hcd_door.c,
+     * HcdDoorDeviceStart): the link IoRegisterDeviceInterface gave at the
+     * first start, and whether it is enabled. Written on the PnP paths and
+     * at the deletion only, all PASSIVE_LEVEL. */
+    UNICODE_STRING UsbInterface;
+    ULONG UsbInterfaceOn;
     /* Where it is presented (task 33.4; design record 13 section 10.11):
      * the Serial of the hub PDO whose FDO's BusRelations carry it, 0 for
      * the root hub's - the nearest hub above it that has a PDO
@@ -1093,6 +1111,33 @@ typedef struct _HCD_CONTROLLER {
     volatile ULONG CmdDonePA;       /* the completed command's TRB        */
     volatile ULONG PortEvents;
 
+    /* Event delivery (hcd_poll.c; design record 15, roadmap-hcd.md 36.6
+     * to 36.8). Values, delivery, reason and pin are settled at each start
+     * (hcdStartBody) and kept outside the zeroed extension, which takes a
+     * copy of the delivery. The poller: its timer and the KDPC only the
+     * timer is given, PollLock (after the controller lock, never before),
+     * the pure state and the interval observation under PollLock. The
+     * period's inputs: PollPortsBusy, published by the thread under the
+     * controller lock; PollLastEvents/PollLastEventTime, the service DPC's
+     * own under the controller lock. PollContainAsked: the thread asked a
+     * recovery to contain an owed retirement (record 15 section 4.2). */
+    XHCI_POLL_VALUES PollValues;
+    ULONG PollDelivery;
+    ULONG PollReason;
+    ULONG PollPinStatus;
+    ULONG PollPin;
+    KTIMER PollTimer;
+    KDPC PollTimerDpc;
+    KSPIN_LOCK PollLock;
+    XHCI_POLL_STATE Poll;
+    XHCI_POLL_OBS PollObs;
+    ULONG PollPortsBusy;
+    ULONG PollLastEvents;
+    ULONG PollLastEventTime;
+    ULONG PollEventSeen;
+    ULONG PollContainAsked;
+    ULONG PollOwedState;            /* XHCI_POLL_BUS_* of Poll.Owed; PollLock */
+
 #if DBG
     /* Strict mode (hcd_strict.c): the command preconditions a conforming
      * xHC enforces and QEMU does not, checked before each command. Thread
@@ -1130,6 +1175,18 @@ typedef struct _HCD_CONTROLLER {
     /* Task 36.4: XhciQemuStartHold's end in tolerance ticks, latched at
      * each start (HcdInjStart), 0 none; ended early by HcdInjStartRelease. */
     volatile LONG InjStartHoldTicks;
+    /* Record 15 section 11's switches, latched at each start: no interrupt
+     * resource and pin 0; the HCD's pin read failing; and the dead line,
+     * N + 1 in the value (0 off), latched N ms after the start's grant (at
+     * once for N = 0, before the connection), from when the ISR queues no
+     * drain and its claims are withheld from the watcher (QemuDeadClaims)
+     * and every look reads asserted. */
+    ULONG QemuNoInterrupt;
+    ULONG QemuPinUnreadable;
+    ULONG QemuDeadLine;
+    volatile ULONG QemuDeadLatched;
+    ULONG QemuDeadAt;
+    volatile LONG QemuDeadClaims;
     KSPIN_LOCK InjLock;
     XHCI_INJ_REGS InjRegs;
     XHCI_INJ_TRIGGER InjTrigger;
@@ -1152,6 +1209,9 @@ typedef struct _HCD_CONTROLLER {
     ULONG InjSlot;
     ULONG InjDci;
     ULONG InjOwnCmd;
+    /* Task 36.12: fault 13's answer for the next device clear, HCD_CTL_*
+     * plus 1, 0 none; the thread's (hcd_inj.c, HcdInjClearHalt). */
+    ULONG InjClearHalt;
     ULONG InjBulkStream;            /* 36.22: the held TD's stream, 0 none */
     /* BULK_TIMEOUT (review round 5): armed to lose the target endpoint's
      * next TD's completion events; once one is lost, every event inside
@@ -1405,6 +1465,19 @@ VOID HcdPswRoute(PHCD_CONTROLLER hc);
 VOID HcdPswRelease(PHCD_CONTROLLER hc);
 VOID HcdPirqResume(PHCD_CONTROLLER hc);
 VOID HcdPirqStartAttempt(PHCD_CONTROLLER hc);
+ULONG HcdCtlDrainAdmitted(PHCD_CONTROLLER hc);
+
+/* hcd_poll.c (design record 15) */
+VOID HcdPollInitObjects(PHCD_CONTROLLER hc);
+VOID HcdPollOpen(PHCD_CONTROLLER hc, ULONG role);
+VOID HcdPollGrant(PHCD_CONTROLLER hc);
+VOID HcdPollRevoke(PHCD_CONTROLLER hc);
+VOID HcdPollClose(PHCD_CONTROLLER hc);
+ULONG HcdPollContain(PHCD_CONTROLLER hc);
+VOID HcdPollPeekLocked(PHCD_CONTROLLER hc);
+VOID HcdPollPromoteLocked(PHCD_CONTROLLER hc, ULONG needMs);
+VOID HcdPollPortsBusy(PHCD_CONTROLLER hc, ULONG busy);
+VOID HcdPollThreadPass(PHCD_CONTROLLER hc);
 
 /* hcd_enum.c */
 VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered);
@@ -1595,6 +1668,8 @@ ULONG HcdInjCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb, PULONG control,
                     PULONG code);
 ULONG HcdInjEpState(PHCD_CONTROLLER hc, ULONG slot, ULONG dci, ULONG state);
 VOID HcdInjEp0Doorbell(PHCD_CONTROLLER hc, struct _HCD_USB_DEVICE *dev);
+ULONG HcdInjClearHalt(PHCD_CONTROLLER hc, ULONG slot, ULONG dci,
+                      PULONG outcome);
 #endif
 
 /* hcd_cfg.c */
@@ -1716,6 +1791,8 @@ VOID HcdDoorHubStart(PHCD_HUB_FDO fdo, PHCD_CONTROLLER hc);
 VOID HcdDoorHubStop(PHCD_HUB_FDO fdo);
 VOID HcdDoorHubRemove(PHCD_HUB_FDO fdo, PHCD_CONTROLLER hc);
 NTSTATUS HcdDoorHubIoctl(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO hub, PIRP irp);
+VOID HcdDoorDeviceStart(PHCD_DEVICE_PDO pdo);
+VOID HcdDoorDeviceStop(PHCD_DEVICE_PDO pdo, ULONG release);
 
 /* hcd_hubfdo.c (task 33.4) */
 NTSTATUS HcdHubAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo);

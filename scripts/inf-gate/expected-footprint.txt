@@ -98,6 +98,9 @@ reg|Windows 98|Xhci.AddReg|HKR||XhciTolerance|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciIntervalCap|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciAvgTrbEsit|0x00010003|0|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciMaxTransferKB|0x00010003|1024|keep
+reg|Windows 98|Xhci.AddReg|HKR||XhciInterruptMode|0x00010003|0|keep
+reg|Windows 98|Xhci.AddReg|HKR||XhciPollIdleMs|0x00010003|50|keep
+reg|Windows 98|Xhci.AddReg|HKR||XhciPollActiveMs|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciImodInterval250ns|0x00010003|160|keep
 path|Windows 2000|device install|Xhci.Dev.NTx86
 file|Windows 2000|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
@@ -115,6 +118,9 @@ reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciTolerance|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciIntervalCap|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciAvgTrbEsit|0x00010003|0|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciMaxTransferKB|0x00010003|1024|keep
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciInterruptMode|0x00010003|0|keep
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciPollIdleMs|0x00010003|50|keep
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciPollActiveMs|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciImodInterval250ns|0x00010003|160|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBControllerPropPageProvider"|remove
 reg|Windows 2000|Xhci.AddReg.NT|HKR||Controller|1|01|remove
@@ -180,6 +186,9 @@ reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciTolerance|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciIntervalCap|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciAvgTrbEsit|0x00010003|0|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciMaxTransferKB|0x00010003|1024|keep
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciInterruptMode|0x00010003|0|keep
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciPollIdleMs|0x00010003|50|keep
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciPollActiveMs|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciImodInterval250ns|0x00010003|160|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBControllerPropPageProvider"|remove
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||Controller|1|01|remove

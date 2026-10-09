@@ -112,6 +112,7 @@ ntoskrnl.exe!ZwSetValueKey                 all  required  nt52-amd64-export; twi
 # Task 36.3: the routing quirk's LPC and 00:14.0 reads. The register
 # accessors are inlines on amd64 and import nothing.
 HAL.dll!HalGetBusData                     all  required  nt52-amd64-export; twin of the x86 row (task 36.3); also in WDK 7.1's wlh and win7 amd64 hal.lib
+ntoskrnl.exe!KeSynchronizeExecution      all  required  nt52-amd64-export; twin of the x86 row (task 36.7)
 
 [deny]
 

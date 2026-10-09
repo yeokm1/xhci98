@@ -67,13 +67,14 @@ static void test_trigger(void)
     CHECK_EQ(XhciInjTake(&t, 1, XHCI_INJ_VALUE(0, XHCI_INJ_LOST_IRQ, 0, 1)),
              XHCI_INJ_TAKE_FIRE, "first value after an absent one");
 
-    /* Every code: built (01 to 16 hex - 13 to 16 are 36.22's bulk faults -
-     * and FF) or unknown. A refused one is consumed. */
+    /* Every code: built (01 to 17 hex - 13 is 36.12's device clear, 14 to
+     * 17 are 36.22's bulk faults - and FF) or unknown. A refused one is
+     * consumed. */
     for (f = 0; f < 256; f++) {
         ULONG want;
         char what[64];
 
-        if ((f >= 1 && f <= 0x16) || f == XHCI_INJ_CLEAR) {
+        if ((f >= 1 && f <= 0x17) || f == XHCI_INJ_CLEAR) {
             want = XHCI_INJ_TAKE_FIRE;
         } else {
             want = XHCI_INJ_TAKE_UNKNOWN;
@@ -367,7 +368,7 @@ static void test_needs_live(void)
         want = (f == XHCI_INJ_LOST_IRQ || f == XHCI_INJ_PED ||
                 f == XHCI_INJ_OC || f == XHCI_INJ_HCH ||
                 f == XHCI_INJ_DEAD || f == XHCI_INJ_DEAD_NOPROOF ||
-                (f >= 0x08 && f <= 0x16)) ? 1UL : 0UL;
+                (f >= 0x08 && f <= 0x17)) ? 1UL : 0UL;
         sprintf(what, "fault %lu needs a live controller", f);
         CHECK_EQ(XhciInjNeedsLive(f), want, what);
     }
@@ -429,6 +430,11 @@ static void test_codes(void)
     CHECK_EQ(XHCI_INJ_EP0_PREPDO, 0x10, "10 EP0 before the PDO");
     CHECK_EQ(XHCI_INJ_RACE_RING, 0x11, "11 race, a ring");
     CHECK_EQ(XHCI_INJ_RACE_SECOND, 0x12, "12 race, a second error");
+    CHECK_EQ(XHCI_INJ_CLEAR_HALT, 0x13, "13 the device clear answered");
+    CHECK_EQ(XHCI_INJ_BULK_TIMEOUT, 0x14, "14 bulk timeout (after 36.12)");
+    CHECK_EQ(XHCI_INJ_BULK_STOP, 0x15, "15 bulk stop");
+    CHECK_EQ(XHCI_INJ_BULK_ERROR, 0x16, "16 bulk error");
+    CHECK_EQ(XHCI_INJ_BULK_SHORT, 0x17, "17 bulk short");
     CHECK_EQ(XHCI_INJ_REFUSED_CC, 18, "Bandwidth Overrun");
 }
 
@@ -453,7 +459,7 @@ static void test_kinds(void)
         case 0x0F: case 0x10:
             kind = XHCI_INJ_KIND_EP0;
             break;
-        case 0x13: case 0x14: case 0x15: case 0x16:
+        case 0x14: case 0x15: case 0x16: case 0x17:
             kind = XHCI_INJ_KIND_BULK;
             break;
         default:
