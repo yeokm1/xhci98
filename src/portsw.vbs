@@ -22,8 +22,12 @@
 ' nothing to install: Windows 98 SE and ME (which have no reg.exe), 2000
 ' (none by default), XP, XP x64, Vista and 7. The controller's driver key is
 ' Class\USB\NNNN on 98 and ME and Class\{36FC9E60-...}\NNNN on the NT
-' systems; NNNN differs between machines, so every NNNN is probed and the
-' keys whose DriverDesc is this driver's controller are the ones used.
+' systems; NNNN differs between machines, so every NNNN subkey is read and
+' the keys whose DriverDesc is this driver's controller are the ones used.
+' Script Host cannot list subkeys itself: WMI lists them on the NT systems,
+' and on 98 and ME (where WMI is not part of a stock install) regedit /e
+' exports the class key and its section headers are read. If neither
+' answers, every number from 0000 to 9999 is probed, which is slow.
 ' ASCII only, CRLF line endings.
 
 Option Explicit
@@ -33,12 +37,11 @@ Const VALUE_NAME = "XhciIntelPortSwitch"
 Const CLASS_9X = "HKLM\System\CurrentControlSet\Services\Class\USB\"
 Const CLASS_NT = "HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\"
 Const TITLE = "xhci98 port switchover"
-' Every number up to PROBE_ALL is probed; past it, probing stops after
-' PROBE_GAP numbers in a row with no key at all.
-Const PROBE_ALL = 999
-Const PROBE_GAP = 200
+Const PROBE_LAST = 9999
+Const HKEY_LOCAL_MACHINE = &H80000002
 
 Dim sh, isNT, base, keys, args, action, elevated, onConsole, report, i, answer
+Dim actions, a, listed
 
 Set sh = CreateObject("WScript.Shell")
 onConsole = (LCase(Right(WScript.FullName, 11)) = "cscript.exe")
@@ -53,16 +56,21 @@ End If
 
 Set args = WScript.Arguments
 action = ""
+actions = 0
 elevated = False
 For i = 0 To args.Count - 1
-    If LCase(args(i)) = "-elevated" Then
+    a = LCase(args(i))
+    If a = "-elevated" Then
         elevated = True
     Else
-        action = LCase(args(i))
+        If a = "/show" Or a = "-show" Then a = "show"
+        actions = actions + 1
+        action = a
+        If a <> "show" And a <> "0" And a <> "1" Then Usage
     End If
 Next
-If action = "/show" Or action = "-show" Then action = "show"
-If action <> "" And action <> "show" And action <> "0" And action <> "1" Then
+If actions > 1 Then
+    action = "more than one of show, 1 and 0"
     Usage
 End If
 
@@ -110,15 +118,18 @@ End Function
 ' controller (the root hub and hubs have their own descriptions); on 98 and
 ' ME its NTMPDriver must be xhci98.sys too.
 Function FindKeys()
-    Dim n, misses, name, desc, ok, found, drv
+    Dim names, name, desc, ok, found, drv
     found = ""
-    misses = 0
-    n = 0
-    Do While n <= 9999 And (n <= PROBE_ALL Or misses < PROBE_GAP)
-        name = Right("000" & CStr(n), 4)
+    listed = False
+    If isNT Then
+        names = SubKeysWmi()
+    Else
+        names = SubKeysExport()
+    End If
+    If Not listed Then names = SubKeysProbe()
+    For Each name In Split(Trim(names), " ")
         desc = ReadValue(base & name & "\DriverDesc", ok)
         If ok Then
-            misses = 0
             If VarType(desc) = vbString Then
                 If LCase(desc) = LCase(XHCI_DESC) Then
                     If isNT Then
@@ -135,12 +146,87 @@ Function FindKeys()
                     End If
                 End If
             End If
-        Else
-            misses = misses + 1
         End If
-        n = n + 1
-    Loop
+    Next
     FindKeys = Split(Trim(found), " ")
+End Function
+
+' A class instance key's name: four decimal digits.
+Function IsInstance(k)
+    Dim j
+    IsInstance = False
+    If Len(k) <> 4 Then Exit Function
+    For j = 1 To 4
+        If InStr("0123456789", Mid(k, j, 1)) = 0 Then Exit Function
+    Next
+    IsInstance = True
+End Function
+
+' The NT systems: WMI's registry provider lists the subkeys.
+Function SubKeysWmi()
+    Dim reg, subs, rc, k, s
+    s = ""
+    On Error Resume Next
+    Err.Clear
+    Set reg = GetObject("winmgmts:{impersonationLevel=impersonate}!\\.\root\default:StdRegProv")
+    If Err.Number = 0 Then
+        rc = reg.EnumKey(HKEY_LOCAL_MACHINE, Mid(base, 6, Len(base) - 6), subs)
+        If Err.Number = 0 And rc = 0 Then
+            listed = True
+            If IsArray(subs) Then
+                For Each k In subs
+                    If IsInstance(k) Then s = s & k & " "
+                Next
+            End If
+        End If
+    End If
+    Err.Clear
+    SubKeysWmi = s
+End Function
+
+' 98 and ME: regedit exports the class key to a temporary file, and its
+' section headers name the subkeys.
+Function SubKeysExport()
+    Dim fso, tmp, f, line, prefix, rest, s, q
+    s = ""
+    q = Chr(34)
+    On Error Resume Next
+    Err.Clear
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    tmp = fso.BuildPath(fso.GetSpecialFolder(2), fso.GetTempName())
+    sh.Run "regedit /e " & q & tmp & q & " " & q & "HKEY_LOCAL_MACHINE" & _
+        Mid(base, 5, Len(base) - 5) & q, 0, True
+    If Err.Number = 0 And fso.FileExists(tmp) Then
+        prefix = "[HKEY_LOCAL_MACHINE" & UCase(Mid(base, 5))
+        Set f = fso.OpenTextFile(tmp, 1)
+        If Err.Number = 0 Then
+            listed = True
+            Do While Not f.AtEndOfStream
+                line = UCase(Trim(f.ReadLine()))
+                If Left(line, Len(prefix)) = prefix And Right(line, 1) = "]" Then
+                    rest = Mid(line, Len(prefix) + 1, Len(line) - Len(prefix) - 1)
+                    If IsInstance(rest) Then s = s & rest & " "
+                End If
+            Loop
+            f.Close
+        End If
+        fso.DeleteFile tmp
+    End If
+    Err.Clear
+    SubKeysExport = s
+End Function
+
+' The last resort: every number from 0000 to 9999, whether or not the
+' numbers before it exist.
+Function SubKeysProbe()
+    Dim n, name, ok, s, v
+    s = ""
+    For n = 0 To PROBE_LAST
+        name = Right("000" & CStr(n), 4)
+        v = ReadValue(base & name & "\DriverDesc", ok)
+        If ok Then s = s & name & " "
+    Next
+    SubKeysProbe = s
 End Function
 
 ' What the driver makes of the value: only a DWORD is read, and since

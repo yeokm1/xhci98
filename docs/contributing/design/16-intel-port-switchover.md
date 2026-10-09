@@ -253,8 +253,12 @@ Which key: the controller's driver key is
 `HKLM\System\CurrentControlSet\Services\Class\USB\NNNN` on 98 and ME and
 `HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\NNNN`
 on the NT systems, with NNNN varying. Script Host cannot list subkeys, so
-the script probes every number from `0000` to `0999`, and past that goes on
-until 200 numbers in a row have no key; a key is this driver's controller when its `DriverDesc` is the
+the script asks WMI's registry provider (`StdRegProv.EnumKey`) on the NT
+systems, and on 98 and ME, where WMI is not part of a stock install, has
+`regedit /e` export the class key to a temporary file and reads its section
+headers; only if neither answers does it probe every number from `0000` to
+`9999`, which takes minutes (a gap in the numbers says nothing about the keys
+after it, so no shorter probe is complete). A key is this driver's controller when its `DriverDesc` is the
 INFs' `XhciDesc` ("xHCI98 USB 3.x eXtensible Host Controller", which
 neither the root hub nor a hub carries), and on 98 and ME also when its
 `NTMPDriver` is `xhci98.sys`. Every such key is set, so a key left from an
