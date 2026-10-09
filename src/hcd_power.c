@@ -133,6 +133,12 @@ static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
         }
     }
     hc->Common.DevicePower = PowerDeviceD0;
+    /* The poller's service, once D0 is published and inside the gate
+     * (design record 15 section 5.3); its own admission refuses a resume
+     * that failed or was contained. */
+    if (hc->ControllerStarted) {
+        HcdPollGrant(hc);
+    }
     HcdPowerGateLeave(hc);
     (VOID)PoSetPowerState(hc->Common.Self, DevicePowerState,
                           stack->Parameters.Power.State);
@@ -173,6 +179,10 @@ static VOID hcdDirectTransitionGated(PHCD_CONTROLLER hc)
 {
     if (hc->PowerDirectWant != PowerDeviceD0) {
         if (hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0) {
+            /* Record 15 section 4.2: revoke, then contain an owed
+             * retirement, before the controller is suspended. */
+            HcdPollRevoke(hc);
+            (VOID)HcdPollContain(hc);
             hcdSuspendSettled(hc);
             hc->SuspendedInD0 = 1;
         }
@@ -191,6 +201,7 @@ static VOID hcdDirectTransitionGated(PHCD_CONTROLLER hc)
             hc->ResumeFailures++;
             HcdControllerFail(hc);
         }
+        HcdPollGrant(hc);
         return;
     }
     hc->WakesWithoutPower++;
@@ -372,6 +383,10 @@ NTSTATUS HcdControllerPower(PHCD_CONTROLLER hc, PIRP irp)
         HcdPowerGateEnter(hc);
         if (hc->ControllerStarted &&
             hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0) {
+            /* Record 15 section 4.2: revoke, then contain an owed
+             * retirement, before the controller is suspended. */
+            HcdPollRevoke(hc);
+            (VOID)HcdPollContain(hc);
             hcdSuspendSettled(hc);
         }
         /* Task 34.3: the shutdown's D3 hands the connectors back to EHCI,

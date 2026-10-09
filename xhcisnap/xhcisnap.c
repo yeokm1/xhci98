@@ -2563,6 +2563,395 @@ static void print_pirq(const unsigned char *hcd, unsigned long hcdBytes)
 }
 
 /*
+ * Task 36.21: the transfer-size readings (src/xhci_xstat.h, XHCI_XSTAT, in
+ * its field order) and the class driver records (src/xhci98_xfer.h), in the
+ * HCD header after the routing record. test\test_snap.c holds the driver's
+ * layout to these numbers.
+ */
+#define SNAP_HCD_XSTAT_HEAD_WORDS   202UL
+#define SNAP_XSTAT_COUNT_AT         48UL
+#define SNAP_TELE_RECORDS_AT        49UL
+#define SNAP_TELE_WORDS_AT          50UL
+#define SNAP_XSTAT_AT               51UL
+#define SNAP_XSTAT_WORDS            59UL
+#define SNAP_TELE_AT                110UL
+#define SNAP_TELE_STATE             4UL
+#define SNAP_TELE_BODY              5UL
+#define SNAP_TELE_BODY_WORDS        41UL
+
+#define SNAP_XS_WHY                 0UL
+#define SNAP_XS_RAW                 1UL
+#define SNAP_XS_BYTES               2UL
+#define SNAP_XS_QUERIES             3UL
+#define SNAP_XS_GRANT               4UL
+#define SNAP_XS_PAGES               5UL
+#define SNAP_XS_URBS                6UL
+#define SNAP_XS_BYTES_LO            7UL
+#define SNAP_XS_BYTES_HI            8UL
+#define SNAP_XS_LENGTH_MAX          9UL
+#define SNAP_XS_HIST                10UL
+#define SNAP_XS_CHUNKS              19UL
+#define SNAP_XS_MULTI               20UL
+#define SNAP_XS_CHUNKS_MAX          21UL
+#define SNAP_XS_CHUNK_HIST          22UL
+#define SNAP_XS_GAP                 27UL
+#define SNAP_XS_EMPTY               31UL
+#define SNAP_XS_PUBLISH             35UL
+#define SNAP_XS_COMPLETE            39UL
+#define SNAP_XS_DISCARDED           43UL
+#define SNAP_XS_TSC_START           44UL
+#define SNAP_XS_TIME_START          46UL
+#define SNAP_XS_TSC_NOW             48UL
+#define SNAP_XS_TIME_NOW            50UL
+#define SNAP_XS_TELE_TAKEN          52UL
+#define SNAP_XS_TELE_REFUSED        53UL
+#define SNAP_XS_MAP                 54UL
+#define SNAP_XS_CROSSED             58UL
+
+#define SNAP_TL_SEQUENCE            3UL
+#define SNAP_TL_COMMAND_BYTES       4UL
+#define SNAP_TL_SOURCE              5UL
+#define SNAP_TL_STREAMED            6UL
+#define SNAP_TL_QUEUE_DEPTH         7UL
+#define SNAP_TL_ACTIVE              8UL
+#define SNAP_TL_ACTIVE_MAX          9UL
+#define SNAP_TL_COMMANDS            10UL
+#define SNAP_TL_DATA_COMMANDS       11UL
+#define SNAP_TL_DATA_LO             12UL
+#define SNAP_TL_DATA_HI             13UL
+#define SNAP_TL_LENGTH_MAX          14UL
+#define SNAP_TL_HIST                15UL
+#define SNAP_TL_DEPTH_HIST          24UL
+#define SNAP_TL_COUNTERS            30UL
+#define SNAP_TL_UNSUPPORTED         38UL
+#define SNAP_TL_MALFORMED           39UL
+#define SNAP_TL_TRANSPORT           40UL
+
+static const char *const xs_bucket_name[9] = {
+    "<=4K", "<=16K", "<=64K", "<=128K", "<=256K", "<=512K", "<=1M",
+    "<=2M", ">2M"
+};
+
+/* A Lo/Hi pair of time-stamp counts as microseconds at `perUs` counts a
+ * microsecond; 0 when the rate is unknown. */
+static double xs_us(unsigned long lo, unsigned long hi, double perUs)
+{
+    if (perUs <= 0.0) {
+        return 0.0;
+    }
+    return ((double)hi * 4294967296.0 + (double)lo) / perUs;
+}
+
+/* One measured interval: count, mean and longest. */
+static void xs_time(const char *name, const unsigned char *p,
+                    unsigned long at, double perUs)
+{
+    unsigned long n;
+    double sum;
+
+    n = get32(p, at * 4);
+    sum = xs_us(get32(p, (at + 1) * 4), get32(p, (at + 2) * 4), perUs);
+    if (n == 0) {
+        comp("  %-27s none\n", name);
+        return;
+    }
+    if (perUs <= 0.0) {
+        comp("  %-27s %lu, the clock's rate unknown\n", name, n);
+        return;
+    }
+    comp("  %-27s %lu, mean %.1f us, longest %.1f us\n", name, n,
+         sum / (double)n, xs_us(get32(p, (at + 3) * 4), 0, perUs));
+}
+
+static void xs_hist(const char *lead, const unsigned char *p,
+                    unsigned long at, unsigned long count,
+                    const char *const *names)
+{
+    unsigned long i;
+
+    comp("    %s", lead);
+    for (i = 0; i < count; i++) {
+        comp(" %s %lu", names[i], get32(p, (at + i) * 4));
+    }
+    comp("\n");
+}
+
+static void print_xstat(const unsigned char *hcd, unsigned long hcdBytes)
+{
+    static const char *const why_text[6] = {
+        "not read by this start", "used as set", "absent: the default",
+        "not a DWORD: the default", "out of 64-2048: the default",
+        "not a multiple of 4: the default"
+    };
+    static const char *const source_text[5] = {
+        "not asked yet", "the bus's answer", "an older bus: 64 KiB",
+        "a reply out of contract: 64 KiB", "the request failed: 64 KiB"
+    };
+    static const char *const chunk_names[5] = {
+        "1:", "2:", "3-8:", "9-16:", "17+:"
+    };
+    static const char *const depth_names[6] = {
+        "1:", "2:", "3-4:", "5-8:", "9-16:", "17+:"
+    };
+    unsigned long headBytes;
+    unsigned long records;
+    unsigned long recWords;
+    unsigned long r;
+    unsigned long v;
+    double dTsc;
+    double dTime;
+    double perUs;
+    const unsigned char *s;
+    const unsigned char *t;
+    const unsigned char *b;
+
+    if (hcdBytes < SNAP_HCD_HEAD_WORDS * 4 || get32(hcd, 0) == 0 ||
+        get32(hcd, 0) > SNAP_HCD_VERSION) {
+        return;
+    }
+    headBytes = get32(hcd, 4);
+    if (headBytes < SNAP_HCD_XSTAT_HEAD_WORDS * 4) {
+        comp("\ntransfer size (XhciMaxTransferKB): not measured by this "
+             "driver (an xhci98.sys\n  before 2.3.0.0's task 36.21; its HCD "
+             "region header is %lu bytes).\n", headBytes);
+        return;
+    }
+    if (hcdBytes < SNAP_HCD_XSTAT_HEAD_WORDS * 4) {
+        comp("\ntransfer size: the HCD region came back %lu bytes, shorter "
+             "than its %lu-byte\n  header; not decoded.\n", hcdBytes,
+             headBytes);
+        return;
+    }
+    records = get32(hcd, SNAP_TELE_RECORDS_AT * 4);
+    recWords = get32(hcd, SNAP_TELE_WORDS_AT * 4);
+    /* Each count held to a bound before the two are multiplied, so the
+     * product cannot wrap past the checks (review round 1, finding 5). */
+    if (get32(hcd, SNAP_XSTAT_COUNT_AT * 4) < SNAP_XSTAT_WORDS ||
+        recWords < SNAP_TELE_BODY + SNAP_TELE_BODY_WORDS || recWords > 1024 ||
+        records > 16 ||
+        SNAP_TELE_AT + records * recWords > headBytes / 4 ||
+        SNAP_TELE_AT + records * recWords > hcdBytes / 4) {
+        comp("\ntransfer size: %lu readings and %lu records of %lu words in "
+             "a %lu-byte header -\n  not a shape this build reads; not "
+             "decoded.\n", get32(hcd, SNAP_XSTAT_COUNT_AT * 4), records,
+             recWords, headBytes);
+        return;
+    }
+    s = hcd + SNAP_XSTAT_AT * 4;
+#define XW(i) get32(s, (i) * 4)
+    /* Counts per microsecond, from the two (count, system time) pairs. */
+    dTsc = (double)XW(SNAP_XS_TSC_NOW + 1) * 4294967296.0 +
+           (double)XW(SNAP_XS_TSC_NOW) -
+           ((double)XW(SNAP_XS_TSC_START + 1) * 4294967296.0 +
+            (double)XW(SNAP_XS_TSC_START));
+    dTime = (double)XW(SNAP_XS_TIME_NOW + 1) * 4294967296.0 +
+            (double)XW(SNAP_XS_TIME_NOW) -
+            ((double)XW(SNAP_XS_TIME_START + 1) * 4294967296.0 +
+             (double)XW(SNAP_XS_TIME_START));
+    perUs = (dTime >= 10000000.0 && dTsc > 0.0) ? dTsc / (dTime / 10.0)
+                                                : 0.0;
+
+    comp("\ntransfer size (task 36.21, since the controller's start");
+    /* The two pairs may be two processors' (src/xhci_xstat.h): the rate and
+     * the ages are approximate where their counters disagree. */
+    if (perUs > 0.0) {
+        comp(", %.0f s; the time-stamp\n  counter at %.1f counts a "
+             "microsecond):\n", dTime / 10000000.0, perUs);
+        comp("  (times and ages converted at that rate, taken from two "
+             "readings that may be\n  two processors': approximate where "
+             "their counters disagree)\n");
+    } else {
+        comp("; under 1 s or no\n  clock, so times are not converted):\n");
+    }
+    v = XW(SNAP_XS_WHY);
+    comp("  XhciMaxTransferKB           %s", v < 6 ? why_text[v] : "?");
+    if (v == 1 || v == 4 || v == 5) {
+        comp(" (%lu)", XW(SNAP_XS_RAW));
+    }
+    comp("\n  command size in effect      %lu bytes; asked %lu times\n",
+         XW(SNAP_XS_BYTES), XW(SNAP_XS_QUERIES));
+    comp("  map grant                   %lu registers; a chunk spans at "
+         "most %lu pages\n", XW(SNAP_XS_GRANT), XW(SNAP_XS_PAGES));
+    comp("  bulk data URBs              %lu, %.0f bytes, the longest %lu\n",
+         XW(SNAP_XS_URBS),
+         (double)XW(SNAP_XS_BYTES_HI) * 4294967296.0 +
+             (double)XW(SNAP_XS_BYTES_LO),
+         XW(SNAP_XS_LENGTH_MAX));
+    xs_hist("by length:", s, SNAP_XS_HIST, 9, xs_bucket_name);
+    comp("  chunks published            %lu; URBs of more than one %lu, the "
+         "most %lu\n", XW(SNAP_XS_CHUNKS), XW(SNAP_XS_MULTI),
+         XW(SNAP_XS_CHUNKS_MAX));
+    xs_hist("chunks a URB:", s, SNAP_XS_CHUNK_HIST, 5, chunk_names);
+    xs_time("gap, retired to published", s, SNAP_XS_GAP, perUs);
+    xs_time("ring empty, URB unfinished", s, SNAP_XS_EMPTY, perUs);
+    xs_time("publication's cost", s, SNAP_XS_PUBLISH, perUs);
+    xs_time("completion pass's cost", s, SNAP_XS_COMPLETE, perUs);
+    xs_time("next chunk's mapping", s, SNAP_XS_MAP, perUs);
+    comp("  intervals discarded         %lu; across two processors %lu\n",
+         XW(SNAP_XS_DISCARDED), XW(SNAP_XS_CROSSED));
+    comp("  class driver records        %lu sends taken, %lu refused\n",
+         XW(SNAP_XS_TELE_TAKEN), XW(SNAP_XS_TELE_REFUSED));
+    for (r = 0; r < records; r++) {
+        t = hcd + (SNAP_TELE_AT + r * recWords) * 4;
+        v = get32(t, SNAP_TELE_STATE * 4);
+        if (v == 0) {
+            comp("  record %lu: none has come\n", r + 1);
+            continue;
+        }
+        b = t + SNAP_TELE_BODY * 4;
+        comp("  record %lu: %s, slot %lu, %lu sends taken", r + 1,
+             v == 1 ? "its device present"
+                    : v == 2 ? "its device departed" : "state unknown",
+             get32(t, 0), get32(t, 4));
+        if (perUs > 0.0) {
+            comp(", the last %.1f s before this dump",
+                 (((double)XW(SNAP_XS_TSC_NOW + 1) - (double)get32(t, 12)) *
+                      4294967296.0 +
+                  (double)XW(SNAP_XS_TSC_NOW) - (double)get32(t, 8)) /
+                     perUs / 1000000.0);
+        }
+        comp("\n");
+        v = get32(b, SNAP_TL_SOURCE * 4);
+        comp("    send %lu: command size %lu bytes (%s), %s, depth %lu, in "
+             "flight %lu (most %lu)\n", get32(b, SNAP_TL_SEQUENCE * 4),
+             get32(b, SNAP_TL_COMMAND_BYTES * 4),
+             v < 5 ? source_text[v] : "?",
+             get32(b, SNAP_TL_STREAMED * 4) ? "streamed" : "streamless",
+             get32(b, SNAP_TL_QUEUE_DEPTH * 4), get32(b, SNAP_TL_ACTIVE * 4),
+             get32(b, SNAP_TL_ACTIVE_MAX * 4));
+        comp("    commands %lu, with data %lu, %.0f bytes, the longest "
+             "%lu\n", get32(b, SNAP_TL_COMMANDS * 4),
+             get32(b, SNAP_TL_DATA_COMMANDS * 4),
+             (double)get32(b, SNAP_TL_DATA_HI * 4) * 4294967296.0 +
+                 (double)get32(b, SNAP_TL_DATA_LO * 4),
+             get32(b, SNAP_TL_LENGTH_MAX * 4));
+        xs_hist("by length:", b, SNAP_TL_HIST, 9, xs_bucket_name);
+        xs_hist("in flight as one started:", b, SNAP_TL_DEPTH_HIST, 6,
+                depth_names);
+        comp("    sense %lu, protocol %lu, timeouts %lu, aborts %lu, LUN "
+             "resets %lu, port resets %lu, busy %lu\n",
+             get32(b, (SNAP_TL_COUNTERS + 1) * 4),
+             get32(b, (SNAP_TL_COUNTERS + 2) * 4),
+             get32(b, (SNAP_TL_COUNTERS + 3) * 4),
+             get32(b, (SNAP_TL_COUNTERS + 4) * 4),
+             get32(b, (SNAP_TL_COUNTERS + 5) * 4),
+             get32(b, (SNAP_TL_COUNTERS + 6) * 4),
+             get32(b, (SNAP_TL_COUNTERS + 7) * 4));
+        comp("    the size question since load: older bus %lu, out of contract "
+             "%lu, failed %lu\n", get32(b, SNAP_TL_UNSUPPORTED * 4),
+             get32(b, SNAP_TL_MALFORMED * 4), get32(b, SNAP_TL_TRANSPORT * 4));
+    }
+#undef XW
+}
+
+/*
+ * `-selftest-xstat`: task 36.21's decode over canned HCD headers: a
+ * streamed UAS copy at 1 MiB commands over 128 KiB chunks with one class
+ * driver record, a header from before 36.21, an image cut short, and a
+ * record count it cannot hold.
+ */
+static int selftest_xstat(void)
+{
+    static unsigned char hcd[SNAP_HCD_XSTAT_HEAD_WORDS * 4];
+    unsigned char *s;
+    unsigned char *t;
+    unsigned char *b;
+
+    memset(hcd, 0, sizeof(hcd));
+    put32(hcd, 0, 1);
+    put32(hcd, 4, SNAP_HCD_XSTAT_HEAD_WORDS * 4);
+    put32(hcd, SNAP_XSTAT_COUNT_AT * 4, SNAP_XSTAT_WORDS);
+    put32(hcd, SNAP_TELE_RECORDS_AT * 4, 2);
+    put32(hcd, SNAP_TELE_WORDS_AT * 4, SNAP_TELE_BODY + SNAP_TELE_BODY_WORDS);
+    s = hcd + SNAP_XSTAT_AT * 4;
+    put32(s, SNAP_XS_WHY * 4, 1);
+    put32(s, SNAP_XS_RAW * 4, 1024);
+    put32(s, SNAP_XS_BYTES * 4, 0x100000UL);
+    put32(s, SNAP_XS_QUERIES * 4, 1);
+    put32(s, SNAP_XS_GRANT * 4, 256);
+    put32(s, SNAP_XS_PAGES * 4, 32);
+    put32(s, SNAP_XS_URBS * 4, 100);
+    put32(s, SNAP_XS_BYTES_LO * 4, 104857600UL);
+    put32(s, SNAP_XS_LENGTH_MAX * 4, 0x100000UL);
+    put32(s, (SNAP_XS_HIST + 6) * 4, 100);
+    put32(s, SNAP_XS_CHUNKS * 4, 800);
+    put32(s, SNAP_XS_MULTI * 4, 100);
+    put32(s, SNAP_XS_CHUNKS_MAX * 4, 8);
+    put32(s, (SNAP_XS_CHUNK_HIST + 2) * 4, 100);
+    /* 3000 counts a microsecond: 700 gaps of 90 us each. */
+    put32(s, SNAP_XS_GAP * 4, 700);
+    put32(s, (SNAP_XS_GAP + 1) * 4, 189000000UL);
+    put32(s, (SNAP_XS_GAP + 3) * 4, 600000UL);
+    put32(s, SNAP_XS_EMPTY * 4, 700);
+    put32(s, (SNAP_XS_EMPTY + 1) * 4, 168000000UL);
+    put32(s, (SNAP_XS_EMPTY + 3) * 4, 540000UL);
+    put32(s, SNAP_XS_PUBLISH * 4, 800);
+    put32(s, (SNAP_XS_PUBLISH + 1) * 4, 24000000UL);
+    put32(s, (SNAP_XS_PUBLISH + 3) * 4, 90000UL);
+    put32(s, SNAP_XS_TSC_START * 4, 0);
+    put32(s, (SNAP_XS_TSC_START + 1) * 4, 1);
+    /* 10 s later: 3e10 counts, 1e8 hundred-nanoseconds. */
+    put32(s, SNAP_XS_TSC_NOW * 4, 4230196224UL);
+    put32(s, (SNAP_XS_TSC_NOW + 1) * 4, 7);
+    put32(s, SNAP_XS_TIME_START * 4, 1000);
+    put32(s, SNAP_XS_TIME_NOW * 4, 100001000UL);
+    put32(s, SNAP_XS_TELE_TAKEN * 4, 9);
+    t = hcd + SNAP_TELE_AT * 4;
+    put32(t, 0, 2);
+    put32(t, 4, 9);
+    put32(t, SNAP_TELE_STATE * 4, 1);
+    put32(t, 8, 4230196224UL - 3000000000UL);
+    put32(t, 12, 7);
+    b = t + SNAP_TELE_BODY * 4;
+    put32(b, SNAP_TL_SEQUENCE * 4, 9);
+    put32(b, SNAP_TL_COMMAND_BYTES * 4, 0x100000UL);
+    put32(b, SNAP_TL_SOURCE * 4, 1);
+    put32(b, SNAP_TL_STREAMED * 4, 1);
+    put32(b, SNAP_TL_QUEUE_DEPTH * 4, 30);
+    put32(b, SNAP_TL_ACTIVE_MAX * 4, 2);
+    put32(b, SNAP_TL_COMMANDS * 4, 104);
+    put32(b, SNAP_TL_DATA_COMMANDS * 4, 100);
+    put32(b, SNAP_TL_DATA_LO * 4, 104857600UL);
+    put32(b, SNAP_TL_LENGTH_MAX * 4, 0x100000UL);
+    put32(b, (SNAP_TL_HIST + 6) * 4, 100);
+    put32(b, SNAP_TL_DEPTH_HIST * 4, 90);
+    put32(b, (SNAP_TL_DEPTH_HIST + 1) * 4, 14);
+    put32(b, SNAP_TL_MALFORMED * 4, 1);
+    print_xstat(hcd, sizeof(hcd));
+
+    /* A value out of range, no clock yet, no record. */
+    put32(s, SNAP_XS_WHY * 4, 4);
+    put32(s, SNAP_XS_RAW * 4, 4096);
+    put32(s, SNAP_XS_TIME_NOW * 4, 1000);
+    put32(t, SNAP_TELE_STATE * 4, 0);
+    print_xstat(hcd, sizeof(hcd));
+
+    /* A record whose device departed, and intervals across processors. */
+    put32(t, SNAP_TELE_STATE * 4, 2);
+    put32(s, SNAP_XS_CROSSED * 4, 3);
+    print_xstat(hcd, sizeof(hcd));
+
+    /* A 2.3.0.0 header from before 36.21: the routing record's 48 words. */
+    put32(hcd, 4, 48 * 4);
+    print_xstat(hcd, sizeof(hcd));
+
+    /* A 36.21 header in an image cut short. */
+    put32(hcd, 4, SNAP_HCD_XSTAT_HEAD_WORDS * 4);
+    print_xstat(hcd, 48 * 4);
+
+    /* A record count the header cannot hold. */
+    put32(hcd, SNAP_TELE_RECORDS_AT * 4, 9);
+    print_xstat(hcd, sizeof(hcd));
+
+    /* A record size whose product with the count wraps 32 bits back into
+     * the header (review round 1, finding 5): refused, not read past. */
+    put32(hcd, SNAP_TELE_RECORDS_AT * 4, 3);
+    put32(hcd, SNAP_TELE_WORDS_AT * 4, 0x55555573UL);
+    print_xstat(hcd, sizeof(hcd));
+    return 0;
+}
+
+/*
  * `-selftest-pirq`: task 36.3's decode over canned HCD headers: the E7250's
  * repair over the direct path (IRQ 21, INTA moved from PIRQA to PIRQF), a
  * reviewed pair at value 1 not admitted, a message grant in its own
@@ -4680,6 +5069,8 @@ int main(int argc, char **argv)
             return selftest_tol();
         } else if (strcmp(argv[i], "-selftest-pirq") == 0) {
             return selftest_pirq();
+        } else if (strcmp(argv[i], "-selftest-xstat") == 0) {
+            return selftest_xstat();
         } else if (strcmp(argv[i], "-selftest-report") == 0 && i + 1 < argc) {
             /*
              * The report path on its own, with no device: open BASE.TXT, write
@@ -5032,6 +5423,8 @@ int main(int argc, char **argv)
                   extBytes);
         /* 36.3's interrupt routing record, from the header alone. */
         print_pirq(hcd_image, hcdBytes);
+        /* 36.21's transfer-size readings, from the header alone. */
+        print_xstat(hcd_image, hcdBytes);
     } else if (hcdState == 2) {
         comp("\nHCD region: not served by this driver (an xhci98.sys before "
              "2.2.0.0 has no\n  per-port enumeration region; the note ring "

@@ -513,6 +513,9 @@ static VOID hcdDeletePdo(PHCD_DEVICE_PDO pdo)
      * interface call is inside it then (Codex review of 28-A.1, round 1,
      * finding 3). */
     HcdUrbBusifRelease(pdo);
+    /* Its USB device interface off and its link freed (task 36.17): the
+     * one place every deletion passes, before the object goes. */
+    HcdDoorDeviceStop(pdo, 1);
     pdo->Deleted = 1;
     pdo->Controller = NULL;
     HcdPoolFree(pdo->Config);
@@ -2568,6 +2571,7 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
             return HcdCompleteIrp(irp, STATUS_UNSUCCESSFUL, 0);
         }
         pdo->Common.PnpState = HCD_PNP_STARTED;
+        HcdDoorDeviceStart(pdo);
         return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
 
     case IRP_MN_QUERY_STOP_DEVICE:
@@ -2582,6 +2586,7 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
             pdo->Surprised = 1;
         }
         pdo->Common.PnpState = HCD_PNP_STOPPED;
+        HcdDoorDeviceStop(pdo, 0);
         hcdPdoQuiesce(pdo, 0);
         return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
 
@@ -2593,6 +2598,7 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
             hcdDormantRemoved(pdo);
         }
         pdo->Common.PnpState = HCD_PNP_REMOVED;
+        HcdDoorDeviceStop(pdo, 0);
         hcdPdoQuiesce(pdo, 1);
         HcdSuspPdoRundown(pdo);
         hcdPdoFunctionRelease(pdo);

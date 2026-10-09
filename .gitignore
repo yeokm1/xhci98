@@ -63,6 +63,7 @@ objfre/
 !xhciqual/build.cmd
 !xhcisnap/build.cmd
 !xhcisnap/selftest.cmd
+!test/xfertest/build.cmd
 !xhciqual/test/*.cmd
 !scripts/**/*.cmd
 !test/*.cmd

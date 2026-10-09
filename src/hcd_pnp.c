@@ -60,6 +60,12 @@ static NTSTATUS hcdStart(PHCD_CONTROLLER hc, PIRP irp)
     if (NT_SUCCESS(status)) {
         hc->Common.PnpState = HCD_PNP_STARTED;
         hc->Common.DevicePower = PowerDeviceD0;
+        /* The poller's service, after D0 is published and inside the power
+         * gate (design record 15 section 5.3): the watcher or the server
+         * opened by the start is armed here. */
+        HcdPowerGateEnter(hc);
+        HcdPollGrant(hc);
+        HcdPowerGateLeave(hc);
         /* The door's names (hcd_door.c, 26-A.8), best effort: a missing
          * name costs a property page, not the controller. */
         HcdDoorControllerStart(hc);

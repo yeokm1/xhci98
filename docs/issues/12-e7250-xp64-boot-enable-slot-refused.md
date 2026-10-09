@@ -372,7 +372,9 @@ works on the E7250. The plan covers x86 and amd64:
 - **The driver** accepts a message resource and connects it with
   `IoConnectInterruptEx`. On x86 that routine is found in the kernel's
   export table at run time, so the same binary still loads on 98 and ME.
-- **The ISR** treats a message as always its own.
+- **The ISR** handles a message as it does the line, and still answers
+  "not mine" for an interrupt this controller did not raise, since Windows
+  permits shared message interrupts (record 15 section 4.3).
 
 Windows 98, ME, 2000 and XP keep the line, with the routing quirk and
 polling. Design record 15 section 4.3 and roadmap 36.15 carry the design

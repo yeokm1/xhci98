@@ -47,12 +47,15 @@
 #include <ntddstor.h>
 #include "uas_iu.h"
 #include "uas_streams.h"
+#include "../xhci98_xfer.h"
 
 #define UAS_POOL_TAG            ' saU'
 
 #define UAS_MAX_LUNS            8
 #define UAS_STATUS_BUFFER       288     /* a SENSE IU with 252 sense bytes */
-#define UAS_MAX_TRANSFER        0x10000 /* what the adapter descriptor says */
+#define UAS_MAX_TRANSFER        0x10000 /* the command size until the bus
+                                         * answers, and whenever it cannot
+                                         * (task 36.22; CommandBytes) */
 #define UAS_DEFAULT_TIMEOUT     30      /* seconds, an SRB that names none */
 #define UAS_TMF_TIMEOUT_MS      3000
 
@@ -217,6 +220,44 @@ typedef struct _UAS_FDO {
     UAS_XFER SharedStatus;          /* streamless: the one status reader */
     PUCHAR SharedBuffer;
     ULONG Counters[8];
+
+    /* Task 36.21's readings, under the lock: commands in flight at most,
+     * those with a data phase, their lengths' sum, the longest, and the
+     * commands by length and by the number in flight as each started
+     * (xhci98_xfer.h's buckets). Kept across stops, as Counters are. */
+    ULONG ActiveMax;
+    ULONG DataCommands;
+    ULONG DataLo;
+    ULONG DataHi;
+    ULONG LengthMax;
+    ULONG Hist[XHCI98_TELE_BUCKETS];
+    ULONG DepthHist[XHCI98_TELE_DEPTHS];
+    /* The command size this driver advertises, in bytes, and where it came
+     * from (XHCI98_TELE_SRC_*): the descriptor and the pipes read this one
+     * stored value. */
+    ULONG CommandBytes;
+    ULONG PolicySource;
+    /* Starts whose question fell back to 64 KiB, by why, since load. */
+    ULONG PolicyUnsupported;
+    ULONG PolicyMalformed;
+    ULONG PolicyTransport;
+    /* The record handed to the bus (IOCTL_XHCI98_TELEMETRY) from the timer
+     * at most once a second when any word of it differs from the last one
+     * the bus took (TeleLast; a failed send leaves it, so the next tick
+     * tries again): built under the lock, sent after it with this driver's
+     * own IRP. TeleBusy (lock) from the send to the completion; TeleOff
+     * once a bus has refused the request as unknown, so an older bus is
+     * asked no more. TeleSubmitting (lock) from the build until the send's
+     * IoCallDriver has returned: UasEngineStop waits it out, then cancels
+     * a send still pending, and its rundown waits for the completion. */
+    PIRP TeleIrp;
+    USHORT TeleIrpSize;
+    BOOLEAN TeleBusy;
+    BOOLEAN TeleOff;
+    BOOLEAN TeleSubmitting;
+    ULONG TeleSequence;
+    XHCI98_TELEMETRY TeleRecord;
+    XHCI98_TELEMETRY TeleLast;
 
     KTIMER Timer;
     KDPC TimerDpc;

@@ -614,3 +614,115 @@ ULONG XhciHubCapsEx(ULONG speedClass, ULONG multiTtCapable, ULONG multiTtOn)
     }
     return flags;
 }
+
+/* IRQL: any. */
+ULONG XhciHubExSpeed(ULONG connected, ULONG speedClass, ULONG plus,
+                     ULONG win9x)
+{
+    if (!connected) {
+        return 0;
+    }
+    if (speedClass == XHCI_SPEED_LOW) {
+        return 0;
+    }
+    if (speedClass == XHCI_SPEED_FULL) {
+        return 1;
+    }
+    if (speedClass == XHCI_SPEED_SUPER && win9x) {
+        return plus ? 4UL : 3UL;
+    }
+    return 2;
+}
+
+static ULONG xhciHubGet32(const UCHAR *b, ULONG off)
+{
+    return (ULONG)b[off] | ((ULONG)b[off + 1] << 8) |
+           ((ULONG)b[off + 2] << 16) | ((ULONG)b[off + 3] << 24);
+}
+
+static VOID xhciHubPut32(UCHAR *b, ULONG off, ULONG v)
+{
+    b[off] = (UCHAR)(v & 0xFFUL);
+    b[off + 1] = (UCHAR)((v >> 8) & 0xFFUL);
+    b[off + 2] = (UCHAR)((v >> 16) & 0xFFUL);
+    b[off + 3] = (UCHAR)((v >> 24) & 0xFFUL);
+}
+
+/* IRQL: any. */
+ULONG XhciHubExV2Check(const UCHAR *buf, ULONG inLen, ULONG outLen)
+{
+    if (buf == NULL || inLen < XHCI_HUB_EXV2_BYTES ||
+        outLen < XHCI_HUB_EXV2_BYTES) {
+        return XHCI_HUB_EXV2_TOO_SMALL;
+    }
+    if (inLen != XHCI_HUB_EXV2_BYTES ||
+        xhciHubGet32(buf, 4) != XHCI_HUB_EXV2_BYTES ||
+        (xhciHubGet32(buf, 8) & XHCI_HUB_PROTO_USB300) == 0) {
+        return XHCI_HUB_EXV2_INVALID;
+    }
+    return XHCI_HUB_EXV2_OK;
+}
+
+/* IRQL: any. */
+ULONG XhciHubRootPortProtocols(ULONG portClass)
+{
+    switch (portClass) {
+    case XHCI_PORT_CLASS_USB2_ONLY:
+    case XHCI_PORT_CLASS_USB2_COMPANION:
+        return XHCI_HUB_PROTO_USB110 | XHCI_HUB_PROTO_USB200;
+    case XHCI_PORT_CLASS_USB3_COMPANION:
+    case XHCI_PORT_CLASS_USB3_ORPHAN:
+        return XHCI_HUB_PROTO_USB300;
+    default:
+        return 0;
+    }
+}
+
+/* IRQL: any. */
+ULONG XhciHubHubPortProtocols(ULONG hubSpeedClass)
+{
+    switch (hubSpeedClass) {
+    case XHCI_SPEED_SUPER:
+        return XHCI_HUB_PROTO_USB300;
+    case XHCI_SPEED_HIGH:
+        return XHCI_HUB_PROTO_USB110 | XHCI_HUB_PROTO_USB200;
+    case XHCI_SPEED_FULL:
+    case XHCI_SPEED_LOW:
+        return XHCI_HUB_PROTO_USB110;
+    default:
+        return 0;
+    }
+}
+
+/* IRQL: any. */
+ULONG XhciHubExV2Flags(ULONG connected, ULONG speedClass, ULONG plus,
+                       ULONG bosSs, ULONG bosSsp)
+{
+    ULONG flags;
+
+    if (!connected) {
+        return 0;
+    }
+    flags = 0;
+    if (speedClass == XHCI_SPEED_SUPER) {
+        flags |= XHCI_HUB_EXV2_SS_OPERATING | XHCI_HUB_EXV2_SS_CAPABLE;
+        if (plus) {
+            flags |= XHCI_HUB_EXV2_SSP_OPERATING | XHCI_HUB_EXV2_SSP_CAPABLE;
+        }
+    }
+    if (bosSs || bosSsp) {
+        flags |= XHCI_HUB_EXV2_SS_CAPABLE;
+    }
+    if (bosSsp) {
+        flags |= XHCI_HUB_EXV2_SSP_CAPABLE;
+    }
+    return flags;
+}
+
+/* IRQL: any. */
+VOID XhciHubExV2Fill(UCHAR *buf, ULONG protocols, ULONG flags)
+{
+    xhciHubPut32(buf, 4, XHCI_HUB_EXV2_BYTES);
+    xhciHubPut32(buf, 8, protocols);
+    xhciHubPut32(buf, 12, flags);
+}

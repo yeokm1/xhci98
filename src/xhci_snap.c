@@ -22,12 +22,24 @@
 #include "xhci_counters.h"
 #include "xhci_enum.h"
 #include "xhci_pirq.h"
+#include "xhci_xstat.h"
 
 /* The header carries the routing quirk's record whole, after its count. */
 XHCI_C_ASSERT(xhci_snap_hcd_pirq,
               sizeof(XHCI_PIRQ_STATE) ==
                   XHCI_SNAPSHOT_HCD_PIRQ_COUNT * sizeof(ULONG) &&
               XHCI_SNAPSHOT_HCD_PIRQ_AT + XHCI_SNAPSHOT_HCD_PIRQ_COUNT ==
+                  XHCI_SNAPSHOT_HCD_XSTAT_WORDS);
+
+/* 36.21's readings: the controller's whole, then the class driver records,
+ * to the header's end. */
+XHCI_C_ASSERT(xhci_snap_hcd_xstat,
+              XHCI_SNAPSHOT_HCD_XSTAT_COUNT == XHCI_XSTAT_WORDS &&
+              XHCI_SNAPSHOT_HCD_XSTAT_AT + XHCI_SNAPSHOT_HCD_XSTAT_COUNT ==
+                  XHCI_SNAPSHOT_HCD_TELE_AT &&
+              XHCI_SNAPSHOT_HCD_TELE_AT +
+                      XHCI_SNAPSHOT_HCD_TELE_COUNT *
+                          XHCI_SNAPSHOT_HCD_TELE_RECORD_WORDS ==
                   XHCI_SNAPSHOT_HCD_HEAD_WORDS);
 
 /* The image carries the counter block whole, word for word. */
@@ -92,9 +104,16 @@ ULONG XhciSnapHcdHead(ULONG ports, ULONG word)
         return XHCI_TOL_HUB_LOC_PORTS;
     case XHCI_SNAPSHOT_HCD_PIRQ_WORDS:
         return XHCI_SNAPSHOT_HCD_PIRQ_COUNT;
+    case XHCI_SNAPSHOT_HCD_XSTAT_WORDS:
+        return XHCI_SNAPSHOT_HCD_XSTAT_COUNT;
+    case XHCI_SNAPSHOT_HCD_TELE_RECORDS:
+        return XHCI_SNAPSHOT_HCD_TELE_COUNT;
+    case XHCI_SNAPSHOT_HCD_TELE_WORDS:
+        return XHCI_SNAPSHOT_HCD_TELE_RECORD_WORDS;
     default:
-        /* XHCI_SNAPSHOT_HCD_TERMINAL and the routing record are readings,
-         * not layout: the door fills them (hcd_door.c). */
+        /* XHCI_SNAPSHOT_HCD_TERMINAL, the routing record, the transfer
+         * readings and the class driver records are readings, not layout:
+         * the door fills them (hcd_door.c). */
         return 0;
     }
 }

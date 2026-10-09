@@ -5,6 +5,9 @@
  */
 
 #include "uas_iu.h"
+/* For its structure and numbers alone; its IOCTL codes need the DDK and are
+ * not expanded here. */
+#include "../xhci98_xfer.h"
 
 /* ------------------------------------------------------------------ */
 /* Tags                                                               */
@@ -659,4 +662,92 @@ ULONG UasBuildId(ULONG kind, const UCHAR *inquiry, ULONG inquiryLength,
         return 0;
     }
     return o.Overflow ? 0 : o.Used;
+}
+
+/* ------------------------------------------------------------------ */
+/* Telemetry (task 36.21)                                             */
+/* ------------------------------------------------------------------ */
+
+ULONG UasTeleBucket(ULONG bytes)
+{
+    ULONG limit;
+    ULONG i;
+
+    limit = 0x1000UL;
+    for (i = 0; i < UAS_TELE_BUCKETS - 1; i++) {
+        if (bytes <= limit) {
+            return i;
+        }
+        limit = (i < 2) ? limit * 4UL : limit * 2UL;
+    }
+    return UAS_TELE_BUCKETS - 1;
+}
+
+ULONG UasTeleDepthBucket(ULONG active)
+{
+    ULONG limit;
+    ULONG i;
+
+    limit = 1;
+    for (i = 0; i < UAS_TELE_DEPTHS - 1; i++) {
+        if (active <= limit) {
+            return i;
+        }
+        limit *= 2UL;
+    }
+    return UAS_TELE_DEPTHS - 1;
+}
+
+VOID UasTeleAdd64(PULONG lo, PULONG hi, ULONG v)
+{
+    ULONG before;
+
+    before = *lo;
+    *lo = before + v;
+    if (*lo < before) {
+        *hi += 1UL;
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* The transfer policy (task 36.22)                                   */
+/* ------------------------------------------------------------------ */
+
+ULONG UasPolicyValue(ULONG sent, const XHCI98_TRANSFER_POLICY *reply,
+                     PULONG source)
+{
+    ULONG i;
+
+    if (sent == UAS_POLICY_SENT_UNSUPPORTED) {
+        *source = XHCI98_TELE_SRC_UNSUPPORTED;
+        return UAS_POLICY_FALLBACK_BYTES;
+    }
+    if (sent == UAS_POLICY_SENT_REFUSED) {
+        *source = XHCI98_TELE_SRC_MALFORMED;
+        return UAS_POLICY_FALLBACK_BYTES;
+    }
+    if (sent != UAS_POLICY_SENT_OK || reply == NULL) {
+        *source = XHCI98_TELE_SRC_TRANSPORT;
+        return UAS_POLICY_FALLBACK_BYTES;
+    }
+    *source = XHCI98_TELE_SRC_MALFORMED;
+    if (reply->Signature != XHCI98_POLICY_SIGNATURE ||
+        reply->Version != XHCI98_POLICY_VERSION ||
+        reply->Size != sizeof(XHCI98_TRANSFER_POLICY) ||
+        reply->Status != XHCI98_POLICY_SUCCESS ||
+        reply->MinBytes != XHCI98_POLICY_MIN_BYTES ||
+        reply->MaxBytes != XHCI98_POLICY_MAX_BYTES ||
+        reply->StepBytes != XHCI98_POLICY_STEP_BYTES ||
+        reply->CommandBytes < XHCI98_POLICY_MIN_BYTES ||
+        reply->CommandBytes > XHCI98_POLICY_MAX_BYTES ||
+        (reply->CommandBytes % XHCI98_POLICY_STEP_BYTES) != 0) {
+        return UAS_POLICY_FALLBACK_BYTES;
+    }
+    for (i = 0; i < 4; i++) {
+        if (reply->Reserved[i] != 0) {
+            return UAS_POLICY_FALLBACK_BYTES;
+        }
+    }
+    *source = XHCI98_TELE_SRC_BUS;
+    return reply->CommandBytes;
 }

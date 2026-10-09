@@ -8326,6 +8326,27 @@ typedef struct _XHCI_EXTENSION {
      * delete this word then, and put it back on the next single addition.
      * On x86 it costs 4 bytes and changes nothing else.
      */
+    /*
+     * Event delivery (design record 15, roadmap-hcd.md 36.7), appended after
+     * Tol so no offset the harness reads moves; six ULONGs, so the parity
+     * TrailingPad keeps is unchanged. `EventDelivery` is the start's (or the
+     * dead-line move's) XHCI_POLL_DELIVERY_*, copied from the controller
+     * after the start zeroes the extension. `PollService` is the poller's
+     * admission to the hardware and `PollServiceGen` advances at every
+     * grant and revocation (record 15 section 5.3), both under the
+     * controller lock. `LineMoved` and `LineRetired` belong to the move
+     * (section 4.2): the ISR reads them at DIRQL, and they are published
+     * inside KeSynchronizeExecution or under the controller lock before any
+     * interrupt can reach the ISR. `LineRetireState` is the counter block's
+     * retirement state (XHCI_POLL_RETIRED_*).
+     */
+    ULONG EventDelivery;
+    ULONG PollService;
+    ULONG PollServiceGen;
+    volatile ULONG LineMoved;
+    volatile ULONG LineRetired;
+    ULONG LineRetireState;
+
     ULONG TrailingPad;
 
     ULONG TrailingSignature;
@@ -8581,7 +8602,38 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_PIRQ_WORDS    20  /* XHCI_PIRQ_STATE, in words     */
 #define XHCI_SNAPSHOT_HCD_PIRQ_AT       21  /* its first word                */
 #define XHCI_SNAPSHOT_HCD_PIRQ_COUNT    27UL
-#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    48UL
+/*
+ * Appended by task 36.21, version unchanged: the transfer-size readings.
+ * Three counts, then the controller's XHCI_XSTAT (xhci_xstat.h) whole,
+ * then the class driver records the bus holds (HCD_UAS_TELE, hcd.h): per
+ * record the Slot ID it last came from, the sends taken since its device
+ * took it, the time-stamp count at the last one (a reader ages it against
+ * XHCI_XSTAT's TscNow), its state - none has come, its device live, or
+ * departed - and the record itself (xhci98_xfer.h, XHCI98_TELEMETRY), all
+ * of which read 0 until a send arrives. A header shorter than this is an
+ * earlier driver's, which measured none of it.
+ */
+#define XHCI_SNAPSHOT_HCD_XSTAT_WORDS   48  /* XHCI_XSTAT, in words          */
+#define XHCI_SNAPSHOT_HCD_TELE_RECORDS  49  /* class driver records          */
+#define XHCI_SNAPSHOT_HCD_TELE_WORDS    50  /* one record, in words          */
+#define XHCI_SNAPSHOT_HCD_XSTAT_AT      51  /* XHCI_XSTAT's first word       */
+#define XHCI_SNAPSHOT_HCD_XSTAT_COUNT   59UL
+#define XHCI_SNAPSHOT_HCD_TELE_AT       110 /* the first record's first word */
+#define XHCI_SNAPSHOT_HCD_TELE_COUNT    2UL
+#define XHCI_SNAPSHOT_HCD_TELE_SLOT     0   /* a record's words              */
+#define XHCI_SNAPSHOT_HCD_TELE_TAKEN    1
+#define XHCI_SNAPSHOT_HCD_TELE_TSC_LO   2
+#define XHCI_SNAPSHOT_HCD_TELE_TSC_HI   3
+#define XHCI_SNAPSHOT_HCD_TELE_STATE    4   /* XHCI_SNAPSHOT_HCD_TELE_S_*    */
+#define XHCI_SNAPSHOT_HCD_TELE_BODY     5   /* XHCI98_TELEMETRY's words      */
+#define XHCI_SNAPSHOT_HCD_TELE_BODY_WORDS 41UL
+#define XHCI_SNAPSHOT_HCD_TELE_RECORD_WORDS                                  \
+    (XHCI_SNAPSHOT_HCD_TELE_BODY + XHCI_SNAPSHOT_HCD_TELE_BODY_WORDS)
+#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    202UL
+
+#define XHCI_SNAPSHOT_HCD_TELE_S_NONE     0UL /* no send has come          */
+#define XHCI_SNAPSHOT_HCD_TELE_S_LIVE     1UL /* its device is present     */
+#define XHCI_SNAPSHOT_HCD_TELE_S_DEPARTED 2UL /* its device left: history  */
 
 /* One root port's record. The machine's fields are XHCI_ENUM_PORT's; the
  * speed ID is the one the port's last reset read (0 none), decoded on its
@@ -8609,7 +8661,7 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_F_UNREADABLE  0x00000004UL /* PORTSC read all ones */
 
 /* XHCIHC_COUNTERS in ULONGs (xhci_counters.h; asserted in xhci_snap.c). */
-#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 63UL
+#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 96UL
 
 /* Where a word of the image lies (XhciSnapHcdLocate). */
 #define XHCI_SNAPSHOT_HCD_IN_HEAD       0UL
