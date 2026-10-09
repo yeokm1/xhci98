@@ -1018,8 +1018,9 @@ A controller that refuses a code is caught as for `2` and `3` and counted
 in `fastpoll.fallbacks`, and the device is then polled every 1 ms
 (1000 Hz), not at the code's ordinary reading. A controller that accepts
 it and misbehaves cannot be caught; delete the value and restart. At High
-Speed and SuperSpeed a code is inside the specification's range; at Low
-and Full Speed it is outside it, as `2` and `3` are. On an AMD controller
+Speed and SuperSpeed the programmed polling interval is inside the
+specification's range; at Low and Full Speed it is outside it, as `2`'s
+and `3`'s are. On an AMD controller
 the code is applied before `XhciIntervalCap`, which leaves it alone. A
 part of a composite device keeps the code only until its class driver
 issues a later select of its interface (`SELECT_INTERFACE`), even of the
