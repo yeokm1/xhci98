@@ -587,7 +587,7 @@ static int c4_no_line(CTRL *c, const char *why)
 int qual_irq(CTRL *c)
 {
     u32 trb_phys, ms, before;
-    int got_evt, pending;
+    int got_evt, pending, ip_any;
     C4_SEEN s;
     char why[48];
 
@@ -636,6 +636,8 @@ int qual_irq(CTRL *c)
     before = irq_count;
     trb_phys = cmd_submit(c, 0, 0, TRB_TYPE(TRB_T_NOOP_CMD));
     pending = 0;
+    got_evt = 0;
+    ip_any = 0;
     for (ms = 0; ms < 1000; ms++) {
         if ((RD32(c->op + XOP_USBSTS) & STS_EINT) != 0 &&
             (RD32(c->rt + XRT_IMAN) & IMAN_IP) != 0) {
@@ -645,14 +647,11 @@ int qual_irq(CTRL *c)
         msleep(1);
     }
     if (!pending) {
-        int ip_late = 0;
-
-        got_evt = 0;
         for (ms = 0; ms < 1000 && !got_evt; ms++) {
             TRB e;
 
             if ((RD32(c->rt + XRT_IMAN) & IMAN_IP) != 0)
-                ip_late = 1;
+                ip_any = 1;
             while (evt_next(c, &e)) {
                 if (TRB_GET_TYPE(e.ctl) == TRB_T_CMD_DONE &&
                     e.p0 == trb_phys)
@@ -662,22 +661,34 @@ int qual_irq(CTRL *c)
                 msleep(1);
         }
         if ((RD32(c->rt + XRT_IMAN) & IMAN_IP) != 0)
-            ip_late = 1;
+            ip_any = 1;
+        /* A source that came live late (review round 3): EINT and IP both
+         * up now is the condition the first wait looked for, so delivery
+         * is tested as for a prompt one, the completion already in hand
+         * carried over. Both are RW1C and nothing here wrote them, so a
+         * level source still asserts. */
+        if ((RD32(c->op + XOP_USBSTS) & STS_EINT) != 0 &&
+            (RD32(c->rt + XRT_IMAN) & IMAN_IP) != 0)
+            pending = 1;
+    }
+    if (!pending) {
         /* The event in the ring and no interrupt: needs polling. Neither:
          * the controller failed the command, polled or not. */
         s.event_seen = got_evt;
         c->irq_no_event = got_evt ? 0 : 1;
         /* IP not seen at any look, through both waits (review round 2):
          * the driver's automatic mode moves a line to polling only on an
-         * IP it sees, so this one is told mode 2. An IP that came up late
-         * is one the watcher can see. An enabled MSI or MSI-X clears IP
-         * itself, which the caveat says (report_caveats). */
-        c->irq_force_poll = (got_evt && !ip_late) ? 1 : 0;
+         * IP it sees, so this one is told mode 2. An enabled MSI or MSI-X
+         * clears IP itself, which the caveat says (report_caveats). */
+        c->irq_force_poll = (got_evt && !ip_any) ? 1 : 0;
         c->v_irq = c4_verdict(&s);
-        strcpy(c->irq_note, !got_evt ?
+        strcpy(c->irq_note,
+               (!got_evt && ip_any) ?
+               "xHCI IP seen without EINT; matching No-Op event absent" :
+               !got_evt ?
                "No xHCI IP or No-Op event while PIC masked" :
-               ip_late ?
-               "xHCI IP late while PIC masked; event completed by polling" :
+               ip_any ?
+               "xHCI IP without EINT while PIC masked; event polled" :
                "No xHCI IP while PIC masked; event completed by polling");
         xhci_irq_source_off(c);
         return 0;
@@ -698,7 +709,7 @@ int qual_irq(CTRL *c)
         msleep(1);
     }
 
-    got_evt = 0;
+    /* got_evt carries a completion a late source already gave. */
     for (ms = 0; ms < 1000 && !got_evt; ms++) {
         {
             TRB e;

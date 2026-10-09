@@ -124,6 +124,16 @@ static void test_c4_verdict(void)
     s.no_line = 1;
     CHECK(c4_verdict(&s) == V_FAIL, "even with no line");
 
+    /* A source that came live late reaches the delivery test as a prompt
+     * one does (review round 3): the same table decides. */
+    memset(&s, 0, sizeof(s));
+    s.ip_seen = 1;
+    s.isr_fired = 1;
+    s.event_seen = 1;
+    CHECK(c4_verdict(&s) == V_PASS, "late IP, the ISR entered: PASS");
+    s.isr_fired = 0;
+    CHECK(c4_verdict(&s) == V_POLL, "late IP, the ISR never entered: POLL");
+
     CHECK(strcmp(verdict_name(V_POLL), "POLL") == 0, "POLL is named");
     CHECK(strcmp(verdict_name(V_PASS), "PASS") == 0, "PASS still is");
     CHECK(strcmp(verdict_name(V_SKIP), "SKIP") == 0, "and SKIP");
