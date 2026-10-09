@@ -1152,6 +1152,7 @@ typedef struct _HCD_CONTROLLER {
     ULONG InjSlot;
     ULONG InjDci;
     ULONG InjOwnCmd;
+    ULONG InjBulkStream;            /* 36.22: the held TD's stream, 0 none */
 #endif
     /* The door (hcd_door.c, 26-A.8; design record 13 section 8): the
      * FDO's name's number, \DosDevices\HCD<n>, the host controller

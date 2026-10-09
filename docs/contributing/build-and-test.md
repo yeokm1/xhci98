@@ -6353,6 +6353,7 @@ in the guest fires a fault at run time by writing it:
 | `06` | All-ones USBSTS, with the proof (35-T.6) | the health poll's USBSTS read (at every `XhciTolerance` value, so at 0 it meets `2.1.1.0`'s handling and `HealthPollsDead` counts) and the containment step's (at 1) answer all-ones for `arg` thread passes (0 until CLEAR); configuration space is real, so Bus Master Enable is cleared and reads back clear. Transient: an `arg` of 5 or so, shorter than the containment interval |
 | `07` | All-ones USBSTS, no proof | the same, the Bus Master Enable read-back answering set: the pinned branch |
 | `08` to `12` | The soft retry and the device cycle (35-T.2 to 35-T.4) | the next table |
+| `13` to `16` | A bulk TD's short, error, stop and timeout (roadmap-hcd task 36.22) | the paragraph after the next table |
 | `FF` | CLEAR | every emulated answer and the lost-interrupt window off, and no further `08` to `12` injection; one already in flight runs to its end (the driver's Reset Endpoint, or the slot's Disable Slot), so no endpoint is left Stopped under a driver that believes it Halted |
 
 Codes `08` to `12` (hex) are 35-T.2 to 35-T.4's, record 17 section 5's rows
@@ -6413,6 +6414,24 @@ state:
 | `10` | EP0 before the PDO | the same at the enumeration's first control transfer to a device not yet published | the pre-PDO cycle: the attempt failed, the slot disabled, the connect run again | after three, the location held |
 | `11` | Soft retry, a ring during the Reset Endpoint | as `08`; the Reset Endpoint held while the layer ends the answers and rings the endpoint, which resumes the TD, then answered Success (`qemu.inj.held.ring`). **The ring is the layer's own, not a submission's**: the HID class driver's reads are already posted, so no submission arrives on cue; the doorbell is the same write. The race runs only for the soft retry's own reset - the pipe not paused, its `RetryWanted` naming the deferred TD still at the queue's head; a reset that yields to an abort, a cancel or a client's reset, or one at `XhciTolerance` 0, is answered Success plainly and nothing is rung, since the TD it would restart may already be retired | the TD resumed early; the generation unchanged, so the thread rings again (harmless) and clears `RetryWanted` | as `08` |
 | `12` | Soft retry, a second error during the Reset Endpoint | as `11`, then, still holding the completion: another real stop, the dequeue confirmed (put back or abandoned as above), Halted answered again and a second Transaction Error delivered and diverted (`qemu.inj.held.second`), then Success | a newer generation: the thread leaves `RetryWanted` set and its next visit resets and rings | as `08` |
+
+Codes `13` to `16` (hex) are task 36.22's, for the transfer-size legs
+(36.26): a bulk TD's early end, where the earlier codes reach only a
+one-TRB interrupt TD. QEMU finishes a bulk TD inside its doorbell write, so
+each first **withholds the doorbells** of one bulk endpoint of a published
+device that is not a hub at the port (bits 15:8, 0 any) - the endpoint whose
+address is `arg`, or with `arg` 0 the first bulk IN - and so leaves the next
+TD published on it sitting unstarted on its ring (`qemu.inj.bulk.armed`,
+then `qemu.inj.bulk` with the fault, stream, slot and DCI once one is
+there). One injection per command; `FF` CLEAR before that hands the
+doorbell back and rings it (`qemu.inj.bulk.cleared`).
+
+| Code | Fault | What follows the withheld doorbell |
+|---|---|---|
+| `13` | Timeout | nothing: the TD waits, as on a device that never answers, until the driver's own Stop Endpoint (an abort or a cancel), Reset Endpoint or slot command takes it back; the stop ends the withholding as it is sent (`qemu.inj.bulk.released`). Streams too: every stream of the endpoint is held |
+| `14` | Stop | a real Stop Endpoint whose events reach the driver (`qemu.inj.bulk.stopped`, its completion code), then the doorbell rung for the TD's stream. Streams too |
+| `15` | Error | `08`'s path on this TD: a real stop, its dequeue confirmed, Halted answered and a Transaction Error delivered for the TD's first TRB, the driver's Reset Endpoint answered. Not on a stream endpoint (its dequeue is in a stream context) |
+| `16` | Short | a real stop, the dequeue confirmed, a real Set TR Dequeue past the TD, then a Short Packet for the TD's last TRB with half that TRB's length left - one event, its IOC TRB, so no trailing event follows - and the doorbell rung. Not on a stream endpoint |
 
 `0F` and `10` need a control transfer of the thread's own to happen after
 they are armed: for `0F`, disable and enable the device in Device Manager

@@ -261,6 +261,11 @@ ULONG XhciInjKind(ULONG fault)
     case XHCI_INJ_EP0_THREAD:
     case XHCI_INJ_EP0_PREPDO:
         return XHCI_INJ_KIND_EP0;
+    case XHCI_INJ_BULK_TIMEOUT:
+    case XHCI_INJ_BULK_STOP:
+    case XHCI_INJ_BULK_ERROR:
+    case XHCI_INJ_BULK_SHORT:
+        return XHCI_INJ_KIND_BULK;
     default:
         return XHCI_INJ_KIND_OTHER;
     }
@@ -283,7 +288,7 @@ ULONG XhciInjHoldOf(ULONG fault)
 ULONG XhciInjHaltStateOf(ULONG fault)
 {
     if (XhciInjKind(fault) == XHCI_INJ_KIND_RETRY ||
-        fault == XHCI_INJ_HALT_HALTED) {
+        fault == XHCI_INJ_HALT_HALTED || fault == XHCI_INJ_BULK_ERROR) {
         return XHCI_EP_STATE_HALTED;
     }
     if (fault == XHCI_INJ_HALT_ERROR) {
@@ -359,6 +364,7 @@ VOID XhciInjEpEnd(PXHCI_INJ_EP e)
     e->Block = 0;
     e->Hold = XHCI_INJ_HOLD_NONE;
     e->Watch = 0;
+    e->Bulk = 0;
 }
 
 VOID XhciInjEpWatch(PXHCI_INJ_EP e, ULONG slot, ULONG dci)
@@ -471,6 +477,15 @@ ULONG XhciInjCommand(PXHCI_INJ_EP e, const XHCI_TRB *cmd, ULONG icDrop,
         XhciInjEpEnd(e);
         *code = XHCI_CC_SUCCESS;
         return XHCI_INJ_CMD_ANSWER;
+    case XHCI_TRB_TYPE_STOP_EP:
+        /* 36.22: the driver stopping an endpoint whose doorbell a bulk
+         * fault withholds takes its TD back: the withholding ends with the
+         * stop, sent as it is. */
+        if (e->Bulk && e->State == 0 &&
+            XHCI_TRB_GET_EP_ID(cmd->Control) == e->Dci) {
+            return XHCI_INJ_CMD_SEND_END;
+        }
+        return XHCI_INJ_CMD_PASS;
     case XHCI_TRB_TYPE_SET_TR_DEQUEUE:
         if (XHCI_TRB_GET_EP_ID(cmd->Control) != e->Dci || e->State == 0) {
             return XHCI_INJ_CMD_PASS;
