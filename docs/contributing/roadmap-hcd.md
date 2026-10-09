@@ -748,7 +748,8 @@ How it got here:
       - **PIC mode** (raw IRQ below 16; Windows 98 and ME, or NT without the APIC): the target is a PIRQ whose LPC `PIRQx_ROUT` (`60h`-`63h`, `68h`-`6Bh`) is enabled and names that IRQ. The current one is kept if it matches, else the lowest is taken. Those registers are read, never written.
 
     Then it writes `(old & ~7) | target` as a 16-bit write and reads it back.
-  - **Which deliveries it serves:** every line delivery. That means Windows 98, ME, 2000 and XP, and Vista and 7 under `XhciInterruptMode` 1 or without an MSI grant. Under MSI it only reports. Under polling it still repairs, for a later start on the line.
+  - **Which deliveries it serves:** every line delivery. That means Windows 98, ME, 2000 and XP, and Vista and 7 under `XhciInterruptMode` 1 or without an MSI grant.
+  - **Not active under MSI or polling** (owner, 2026-10-09): when the delivery in effect is a message interrupt (Vista and 7 with an MSI grant) or a poll (`XhciInterruptMode` 2, or mode 0 with no line), it writes nothing and only reports. It decides at each run, so a later start or D0 return on the line repairs the route then. A move to polling at run time (the dead-line rule, 36.7) does not undo a write already made. This replaces "under polling it still repairs, for a later start on the line".
   - **Report-only** when no target can be derived, or the raw value is outside both ranges. The PIC-mode rule (owner, 2026-10-08) replaces an earlier "report-only in PIC mode", and gets its own Codex review.
   - **The parser** keeps the raw interrupt resource (level, vector, flags, share), which it does not today (`hcd_ctl.c` ~524).
   - **Reaching LPC config space:** a supported path to read `00:1F.0` on every target, which `HcdSvcConfigSpace` does not give (it targets the xHCI's own PDO). Settle it first (HalGetBusDataByOffset or equivalent, per OS, Windows 98 included). Not CF8/CFC.
@@ -756,7 +757,7 @@ How it got here:
     - At start: after IoConnectInterrupt and `XhciInitController`, before `XhciEnableInterrupts`.
     - On each D0 return: before `XhciResumeController`.
   - **What is recorded:** what it found, decided and wrote, in the snapshot and the note ring, decoded by `XHCISNAP`.
-  - **Tests:** host tests of the pure policy. The INF and `docs/using` document the value, modelled on `XhciIntelPortSwitch`; copy its strict DWORD reader, not its "2 = unlisted Intel" meaning.
+  - **Tests:** host tests of the pure policy, the delivery included. The INF and `docs/using` document the value, modelled on `XhciIntelPortSwitch`; copy its strict DWORD reader, not its "2 = unlisted Intel" meaning. `docs/using` says plainly that the value does nothing on Vista or 7 with MSI, or under polling.
 - [ ] 36.4 the bounded BUSY retry: `hcdCommand` on `XHCI_CMD_BUSY` waits a bounded time for the engine to go idle, asking for a drain, and retries under one deadline, instead of failing the port at once. This is the start No Op case of issue 12 Finding 1. A small change of its own; the stalled-event watchdog that 36.4 also held is replaced by polling's dead-line rule (36.5, 36.7)
 - [ ] 36.5 (was POLL.0) the polling design: record 15 reviewed to convergence before code (the owner's decisions of 2026-10-05 are its section 12), with its amendment for issue 12 reviewed too (section 4.2, decision 6):
   - automatic mode (0) also moves to polling when a line interrupt is proven dead at run time;
@@ -832,7 +833,7 @@ How it got here:
   - **To settle in review:**
     - how `XhciInterruptMode` reads with MSI: 3 = MSI where offered; 1 = the line, which the INF key cannot withdraw once Windows has granted a message, so whether 1 needs its own INF path; 0 = MSI where granted, else the line, else polling;
     - the dead-line rule (section 4.2) not applied to a message delivery, or applied to it alike;
-    - the routing quirk, which reports only under MSI but still repairs when mode 1 or a refused grant leaves the line in use (36.3);
+    - the routing quirk, which is not active under MSI or polling and repairs only when mode 1 or a refused grant leaves the line in use (36.3);
     - XP x64, which ignores the key and keeps the line.
   - **What is recorded:** the delivery (MSI, line or poll) and its reason, in the counter block, the start log line and `XHCISNAP`.
 - [ ] 36.16 the MSI legs:
@@ -871,7 +872,8 @@ How it got here:
     - the stick hot-plugged and present at boot;
     - the EHCI disabled in Device Manager, read as delivered by the line interrupt (not moved to polling), with the backstop near idle;
     - S3 resume;
-    - Windows 98 SE (PIC mode), and Windows 7 with `XhciInterruptMode` 1 (the line forced), with the routing fix repairing the route in both.
+    - Windows 98 SE (PIC mode), and Windows 7 with `XhciInterruptMode` 1 (the line forced), with the routing fix repairing the route in both;
+    - Windows 7 with MSI granted, and any target under `XhciInterruptMode` 2, with the routing fix reporting only and `D20IR` left as the BIOS set it.
 
 Checkpoint: `2.3.0.0` on the E7250 under XP x64 and Windows 7 x64, with
 `XhciIntelIrqRoute` at its default:

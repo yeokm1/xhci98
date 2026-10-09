@@ -256,9 +256,12 @@ delivery, in either case:
 - **Vista and 7 when the line is in use**: `XhciInterruptMode` 1 (forced),
   or MSI not granted.
 
-Under MSI (36.15) the route does not matter, so it only reports. Under a poll
-delivery it still repairs the route, so that a later start on the line finds
-it correct.
+**It is not active under MSI or polling** (owner, 2026-10-09). Under MSI
+(36.15) and under a poll delivery the route does not matter, so the quirk
+writes nothing and only reports. It decides at each start and each D0
+return, so a later start on the line repairs the route then. Until
+2026-10-09 the design repaired the route under polling too, for that later
+start.
 
 **The driver writes only when all of these hold**, and otherwise reports
 what it found:
