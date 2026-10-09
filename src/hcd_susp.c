@@ -219,23 +219,69 @@ static VOID hcdSuspCompleteWake(PHCD_DEVICE_PDO pdo, PIRP irp,
     (VOID)InterlockedDecrement(&pdo->PowerPending);
 }
 
+/*
+ * The PDO's power reports, ordered (Codex review of 36.31, round 4): a
+ * D-IRP's admission with its report, a START's report and the thread's
+ * report of a START-driven D0 each run inside this mutex, so an older D0
+ * report cannot land after a newer Dx's. Nothing inside it blocks but the
+ * spin locks. IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdSuspReportEnter(PHCD_DEVICE_PDO pdo)
+{
+    (VOID)KeWaitForSingleObject(&pdo->PwrReport, Executive, KernelMode,
+                                FALSE, NULL);
+}
+
+static VOID hcdSuspReportLeave(PHCD_DEVICE_PDO pdo)
+{
+    (VOID)KeSetEvent(&pdo->PwrReport, IO_NO_INCREMENT, FALSE);
+}
+
+/* The thread wrote PwrState D0 for a START with no D0 IRP (3.9, 3.11):
+ * the power manager is told now that the device is powered, unless a newer
+ * D-IRP has moved the slot since. Thread only, PASSIVE_LEVEL. */
+static VOID hcdSuspReportD0(PHCD_DEVICE_PDO pdo)
+{
+    PHCD_CONTROLLER hc;
+    POWER_STATE state;
+    KIRQL oldIrql;
+    ULONG still;
+
+    hc = pdo->Controller;
+    if (hc == NULL) {
+        return;
+    }
+    hcdSuspReportEnter(pdo);
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    still = (pdo->PwrState == XHCI_SUSP_D0 &&
+             pdo->PwrWanted == XHCI_SUSP_D0 && !pdo->PwrClosed) ? 1UL : 0UL;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (still) {
+        pdo->Common.DevicePower = PowerDeviceD0;
+        state.DeviceState = PowerDeviceD0;
+        (VOID)PoSetPowerState(pdo->Common.Self, DevicePowerState, state);
+    }
+    hcdSuspReportLeave(pdo);
+}
+
 /* What one claim took, completed after the hold. */
 typedef struct _HCD_SUSP_TAKEN {
     ULONG Count;
-    PHCD_DEVICE_PDO Pdo[2 * HCD_SUSP_MAX_FUNCS];
-    PIRP Irp[2 * HCD_SUSP_MAX_FUNCS];
-    ULONG Kind[2 * HCD_SUSP_MAX_FUNCS];
+    PHCD_DEVICE_PDO Pdo[3 * HCD_SUSP_MAX_FUNCS];
+    PIRP Irp[3 * HCD_SUSP_MAX_FUNCS];
+    ULONG Kind[3 * HCD_SUSP_MAX_FUNCS];
 } HCD_SUSP_TAKEN, *PHCD_SUSP_TAKEN;
 
 #define HCD_SUSP_TAKE_DX        1UL
 #define HCD_SUSP_TAKE_D0        2UL
 #define HCD_SUSP_TAKE_WAKE_OK   3UL
 #define HCD_SUSP_TAKE_WAKE_NS   4UL     /* STATUS_NOT_SUPPORTED */
+#define HCD_SUSP_TAKE_REPORT    5UL     /* no IRP: a START's D0 reported */
 
 static VOID hcdSuspTake(PHCD_SUSP_TAKEN t, PHCD_DEVICE_PDO pdo, PIRP irp,
                         ULONG kind)
 {
-    if (t->Count < 2 * HCD_SUSP_MAX_FUNCS) {
+    if (t->Count < 3 * HCD_SUSP_MAX_FUNCS) {
         t->Pdo[t->Count] = pdo;
         t->Irp[t->Count] = irp;
         t->Kind[t->Count] = kind;
@@ -257,6 +303,9 @@ static VOID hcdSuspFinish(PHCD_SUSP_TAKEN t)
             break;
         case HCD_SUSP_TAKE_WAKE_OK:
             hcdSuspCompleteWake(t->Pdo[i], t->Irp[i], STATUS_SUCCESS);
+            break;
+        case HCD_SUSP_TAKE_REPORT:
+            hcdSuspReportD0(t->Pdo[i]);
             break;
         default:
             hcdSuspCompleteWake(t->Pdo[i], t->Irp[i], STATUS_NOT_SUPPORTED);
@@ -828,6 +877,10 @@ static ULONG hcdSuspDecideOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         pdos[i]->WokeHold = funcs[i].WokeHold;
         if (funcs[i].ToD0) {
             pdos[i]->PwrState = XHCI_SUSP_D0;
+            if (!funcs[i].CompleteD0) {
+                /* A START's D0, with no IRP to carry its report. */
+                hcdSuspTake(&taken, pdos[i], NULL, HCD_SUSP_TAKE_REPORT);
+            }
         }
         if ((funcs[i].CompleteDx || funcs[i].CompleteD0) &&
             pdos[i]->PwrIrp != NULL) {
@@ -1173,6 +1226,7 @@ ULONG HcdSuspPdoSetPower(PHCD_DEVICE_PDO pdo, PIRP irp, NTSTATUS *status)
     }
     in.Eligible = 1;
     in.Requested = (ULONG)stack->Parameters.Power.State.DeviceState;
+    hcdSuspReportEnter(pdo);
     if (in.Requested != XHCI_SUSP_D0) {
         /* A Dx is effective at once (4.1), whatever the admission: its
          * record made before the IRP can be claimed, so no completion
@@ -1205,6 +1259,7 @@ ULONG HcdSuspPdoSetPower(PHCD_DEVICE_PDO pdo, PIRP irp, NTSTATUS *status)
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     KeReleaseSpinLock(&hc->PdoListLock, listIrql);
     if (answer == XHCI_SUSP_ADMIT_PEND) {
+        hcdSuspReportLeave(pdo);
         HcdThreadWake(hc);
         *status = STATUS_PENDING;
         return 1;
@@ -1214,6 +1269,7 @@ ULONG HcdSuspPdoSetPower(PHCD_DEVICE_PDO pdo, PIRP irp, NTSTATUS *status)
         (VOID)PoSetPowerState(pdo->Common.Self, DevicePowerState,
                               stack->Parameters.Power.State);
     }
+    hcdSuspReportLeave(pdo);
     PoStartNextPowerIrp(irp);
     *status = HcdCompleteIrp(irp, STATUS_SUCCESS, irp->IoStatus.Information);
     return 1;
@@ -1425,6 +1481,7 @@ ULONG HcdSuspPdoReopen(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
     LARGE_INTEGER due;
     KIRQL listIrql;
     KIRQL oldIrql;
+    ULONG report;
 
     /* 4.4: once an earlier teardown's power rundown has finished - a
      * WAIT_WAKE its stop left to a cancel routine completes first (Codex
@@ -1436,6 +1493,7 @@ ULONG HcdSuspPdoReopen(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
         HcdRelativeMs(&due, 1);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
     }
+    hcdSuspReportEnter(pdo);
     KeAcquireSpinLock(&hc->PdoListLock, &listIrql);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     dev = pdo->Device;
@@ -1445,8 +1503,10 @@ ULONG HcdSuspPdoReopen(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
          * finding 2). */
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         KeReleaseSpinLock(&hc->PdoListLock, listIrql);
+        hcdSuspReportLeave(pdo);
         return 0;
     }
+    report = 0;
     pdo->PwrSwitch = hc->SuspOn;
     pdo->PwrClosed = 0;
     pdo->PwrWanted = XHCI_SUSP_D0;
@@ -1454,19 +1514,23 @@ ULONG HcdSuspPdoReopen(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
     pdo->WokeHold = 0;
     if (dev->Susp.State == XHCI_SUSP_ACTIVE && !hc->PowerDown) {
         pdo->PwrState = XHCI_SUSP_D0;
+        report = hcdSuspPdoEligible(hc, pdo);
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     KeReleaseSpinLock(&hc->PdoListLock, listIrql);
-    if (pdo->PwrSwitch) {
-        /* The bus reports a started device's power itself: no D0 IRP is
-         * owed at a START (Codex review of 36.31, round 3). Whether the
-         * link is ACTIVE now or the thread resumes it for this START, D0
-         * is what the function's stack is told; with the switch at 0,
-         * today's START, which reports nothing. */
+    if (report) {
+        /* The bus reports a started stage A PDO's power itself: a START
+         * owes no D0 IRP (Codex review of 36.31, round 3). Only once the
+         * device is powered - on a suspended link the thread reports it
+         * when its resume reaches ACTIVE (hcdSuspReportD0) - and, inside
+         * the PDO's report mutex, never after a newer Dx's report (round
+         * 4). A hub, a SuperSpeed PDO and the switch at 0 keep today's
+         * START, which reports nothing. */
         state.DeviceState = PowerDeviceD0;
         pdo->Common.DevicePower = PowerDeviceD0;
         (VOID)PoSetPowerState(pdo->Common.Self, DevicePowerState, state);
     }
+    hcdSuspReportLeave(pdo);
     HcdThreadWake(hc);
     return 1;
 }

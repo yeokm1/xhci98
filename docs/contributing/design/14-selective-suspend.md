@@ -518,9 +518,14 @@ a hub or SuperSpeed PDO, every answer is today's.
   for nothing, since a live WAIT_WAKE may be pending. Then, in one
   `PdoListLock` and controller-lock hold, a PDO still listed with its
   device has admission reopened, D0 asked, `PwrState` D0 at once on a
-  powered ACTIVE link and otherwise the thread's, and D0 reported to the
-  power manager (`PoSetPowerState`) - a START owes no D0 IRP; one unlinked
-  meanwhile stays closed and its START is refused.
+  powered ACTIVE link and otherwise the thread's; one unlinked meanwhile
+  stays closed and its START is refused. A START owes no D0 IRP, so for a
+  stage A PDO the bus reports D0 itself (`PoSetPowerState`) once the
+  device is powered: at once on an ACTIVE link, else by the thread when the
+  resume it makes for the START reaches ACTIVE. Every report and every
+  D-IRP's admission with its report runs inside the PDO's report mutex
+  (a synchronization event), so an older D0 report never lands after a
+  newer Dx's.
 - **The controller's transitions** (4.4): the D3 and the direct transition
   (`hcd_power.c`), the in-place recovery and the stop (`hcd_ctl.c`) move
   `PowerEpoch` and set `PowerDown` in one controller-lock hold; the
