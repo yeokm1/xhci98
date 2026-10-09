@@ -50,9 +50,10 @@
  * APIC ID of the processor that read it - no processor number is an
  * import on Windows 98 - so an interval is measured only within one
  * processor's clock (XhciXstatInterval). On a processor without an APIC
- * the ID reads 0, which is a uniprocessor's anyway. IRQL: any; a stamp
- * taken below DISPATCH_LEVEL may straddle a move to another processor,
- * which at worst names the wrong one for that stamp.
+ * the ID reads 0, which is a uniprocessor's anyway. IRQL: any; below
+ * DISPATCH_LEVEL HcdTscStamp raises to it for the ID and the count and
+ * then restores the caller's IRQL, so both come from one processor.
+ * HcdTscRead alone takes no IRQL step.
  */
 VOID HcdTscRead(PULONG lo, PULONG hi);
 VOID HcdTscStamp(PXHCI_XSTAT_STAMP s);
