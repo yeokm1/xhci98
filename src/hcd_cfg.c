@@ -175,6 +175,7 @@ NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
          * save given up so the resume enumerates afresh (hcd_io.c,
          * hcdGo). */
         hc->Hc.SavedStateValid = 0;
+        hc->SuspendRefused = 1;
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         (VOID)InterlockedDecrement(&dev->Refs);
         if (urb == NULL) {

@@ -84,6 +84,27 @@ static ULONG hcdResumeContained(PHCD_CONTROLLER hc)
     return 1;
 }
 
+/*
+ * The controller suspended, then what clients still have in flight
+ * completed now, not in the resume (task 36.28; hcd_io.c,
+ * HcdIoSuspendSettle), on the strength of this suspend's own quiesce: a
+ * failed one counts in SuspendFailures. The episode's refusal flag is
+ * cleared first, under the lock the refusals set it under, before
+ * SUSPENDED is published. The power gate held; IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdSuspendSettled(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+    ULONG failures;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->SuspendRefused = 0;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    failures = hc->Hc.SuspendFailures;
+    XhciSuspendController(&hc->Hc);
+    HcdIoSuspendSettle(hc, hc->Hc.SuspendFailures == failures);
+}
+
 /* The resume half of a D0, then the IRP's completion. IRQL: PASSIVE_LEVEL. */
 static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
 {
@@ -147,8 +168,7 @@ static VOID hcdDirectTransitionGated(PHCD_CONTROLLER hc)
 {
     if (hc->PowerDirectWant != PowerDeviceD0) {
         if (hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0) {
-            XhciSuspendController(&hc->Hc);
-            HcdIoSuspendSettle(hc);
+            hcdSuspendSettled(hc);
             hc->SuspendedInD0 = 1;
         }
         if (hc->Common.SystemPower == PowerSystemShutdown) {
@@ -347,10 +367,7 @@ NTSTATUS HcdControllerPower(PHCD_CONTROLLER hc, PIRP irp)
         HcdPowerGateEnter(hc);
         if (hc->ControllerStarted &&
             hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0) {
-            XhciSuspendController(&hc->Hc);
-            /* Task 36.28: what clients still have in flight completes
-             * now, not in the resume (hcd_io.c, HcdIoSuspendSettle). */
-            HcdIoSuspendSettle(hc);
+            hcdSuspendSettled(hc);
         }
         /* Task 34.3: the shutdown's D3 hands the connectors back to EHCI,
          * as Linux's xhci_shutdown does on these chipsets; a sleep keeps

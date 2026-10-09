@@ -965,6 +965,7 @@ static VOID hcdGo(PHCD_CONTROLLER hc, PHCD_XFER x)
          * class stack its failure may have left in recovery (finding 2). */
         if ((hc->Hc.Flags & XHCI_EXT_FLAG_SUSPENDED) != 0) {
             hc->Hc.SavedStateValid = 0;
+            hc->SuspendRefused = 1;
         }
         x->Engine = 0;
         x->Status = dev->Gone ? HCD_USBD_DEVICE_GONE : HCD_USBD_CANCELED;
@@ -1192,6 +1193,7 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
         ok = 0;
         x->Status = HCD_USBD_CANCELED;
         hc->Hc.SavedStateValid = 0;
+        hc->SuspendRefused = 1;
     }
     if (ok && !dev->Gone && !pipe->Closed && !x->CancelRequested &&
         (pipe->Paused ||
@@ -1923,12 +1925,11 @@ static ULONG hcdSuspendOwed(PHCD_PIPE pipe)
     return 0;
 }
 
-VOID HcdIoSuspendSettle(PHCD_CONTROLLER hc)
+VOID HcdIoSuspendSettle(PHCD_CONTROLLER hc, ULONG dmaStopped)
 {
     PHCD_USB_DEVICE dev;
     PHCD_PIPE pipe;
     KIRQL oldIrql;
-    ULONG usbsts;
     ULONG owed;
     ULONG slot;
     ULONG dci;
@@ -1937,15 +1938,14 @@ VOID HcdIoSuspendSettle(PHCD_CONTROLLER hc)
         hc->Hc.HcInfoStatus != XHCI_HC_OK) {
         return;
     }
-    usbsts = XhciReadOp(&hc->Hc, XHCI_OP_USBSTS);
-    if ((usbsts == 0xFFFFFFFFUL || (usbsts & XHCI_USBSTS_HCH) == 0) &&
-        !hc->Hc.BusMasterCleared) {
-        /* Neither halted nor cut off from the bus by the quiesce's BME
-         * fallback: the rings may still be followed. With BME confirmed
-         * clear the controller cannot master, a restore refuses a
-         * controller that is not halted, and the reinitialization resets
-         * it before it gives bus mastering back, so no stale TD can run
-         * (Codex review of 36.28, round 1, finding 3). */
+    if (!dmaStopped) {
+        /* The suspend's quiesce did not prove DMA stopped - neither a halt
+         * nor a verified BME clear (XhciSuspendController counted a
+         * failure): the rings may still be followed, and nothing is
+         * touched (Codex review of 36.28, rounds 1 and 2). With the proof,
+         * a restore refuses a controller that is not halted and the
+         * reinitialization resets it before giving BME back, so no stale
+         * TD runs. */
         return;
     }
     owed = 0;

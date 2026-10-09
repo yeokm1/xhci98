@@ -1055,6 +1055,11 @@ typedef struct _HCD_CONTROLLER {
      * save gate armed (hcd_dev.c, XhciSlotSaveBusy; hcd_io.c,
      * HcdIoMapped): the saved image is not committed, or not restored. */
     ULONG SavePublished;
+    /* Task 36.28: a request was refused while the controller was
+     * suspended, in this suspend episode (cleared before the suspend
+     * begins, hcd_power.c): the save may not be committed or restored, so
+     * the resume enumerates afresh. Controller lock. */
+    ULONG SuspendRefused;
     ULONG EnumDetachRequested;      /* the root hub is going               */
     KEVENT EnumDetachDone;
     ULONG ScratchTainted;           /* a timed-out EP0 transfer may DMA    */
@@ -1628,7 +1633,7 @@ NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                      struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb,
                      const HCD_IO_REQUEST *req);
 VOID HcdIoDrainPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd);
-VOID HcdIoSuspendSettle(PHCD_CONTROLLER hc);
+VOID HcdIoSuspendSettle(PHCD_CONTROLLER hc, ULONG dmaStopped);
 VOID HcdIoPipeRelease(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoPipePause(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoPipeResume(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
