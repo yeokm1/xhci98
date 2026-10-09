@@ -2264,6 +2264,13 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     HcdCountersStart(hc);
     HcdEnumInit(hc);
     hcdXstatStart(hc);
+    /* This attempt's decision starts unknown, so a start refused before
+     * hcdSettleDelivery reports none rather than the previous start's in
+     * its start-decision record (Codex review of the 36.15 code, round
+     * 3). */
+    hc->PollValues.Mode = XHCI_POLL_NOT_FOUND;
+    hc->PollDelivery = XHCI_POLL_DELIVERY_NONE;
+    hc->PollReason = XHCI_POLL_R_NONE;
 
     status = hcdParseResources(hc, irp);
     if (!NT_SUCCESS(status)) {
