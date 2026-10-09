@@ -2404,9 +2404,12 @@ static ULONG hcdCfgEpState(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * re-enumerate every device to settle one device's toggle (QEMU's usb-uas
  * STALLs every endpoint CLEAR_FEATURE; a reset here was a re-init loop,
  * s29k launches 1 and 2) - so no caller resets the controller for it: its
- * caller fails the client's request with the host's half not done
- * (RESET_PIPE, a streams open or close), as usbport does (Codex review of
- * c4ec1c3, finding 1). Thread only.
+ * caller fails the client's request (Codex review of c4ec1c3, finding 1).
+ * A clear sent before the host's half (a streams open or close,
+ * SYNC_CLEAR_STALL, RESET_PIPE on an endpoint not Halted) fails it with the
+ * host's half not done, as usbport does; one sent after a RESET_PIPE's
+ * Reset Endpoint fails it with the pipe paused and the device's half owed
+ * (task 36.12, hcdCfgResetClear). Thread only.
  */
 static ULONG hcdCfgDeviceClearHalt(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                    PHCD_PIPE pipe)
