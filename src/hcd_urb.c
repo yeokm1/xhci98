@@ -1558,9 +1558,9 @@ static NTSTATUS hcdTelemetryIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
                                   PIRP irp, PXHCI98_TELEMETRY rq)
 {
     PHCD_UAS_TELE t;
+    PHCD_USB_DEVICE dev;
     PVOID owner;
     KIRQL oldIrql;
-    ULONG slot;
     ULONG i;
     ULONG lo;
     ULONG hi;
@@ -1568,22 +1568,24 @@ static NTSTATUS hcdTelemetryIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     if (hc == NULL) {
         return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
     }
-    slot = 0;
-    owner = NULL;
-    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
-    if (pdo->Listed && pdo->Device != NULL) {
-        owner = (PVOID)pdo->Device;
-        slot = pdo->Device->SlotId;
+    /* A reference, so the device record cannot be freed - and its record
+     * said departed (HcdIoDeviceGone, which waits references out) - while
+     * this send is taken; Gone is read under the controller lock with the
+     * update, so a leaving device publishes nothing (review round 2). */
+    dev = hcdDeviceRef(hc, pdo);
+    if (dev == NULL) {
+        return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
     }
-    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    owner = (PVOID)dev;
     HcdTscRead(&lo, &hi);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     if (rq == NULL || rq->Word[XHCI98_TELE_SIG] != XHCI98_TELE_SIGNATURE ||
         rq->Word[XHCI98_TELE_VER] != XHCI98_TELE_VERSION ||
         rq->Word[XHCI98_TELE_SIZE] != sizeof(XHCI98_TELEMETRY) ||
-        owner == NULL) {
+        dev->Gone) {
         hc->Xstat.TeleRefused++;
         XhciControllerLockRelease(&hc->Hc, oldIrql);
+        (VOID)InterlockedDecrement((PLONG)&dev->Refs);
         return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
     }
     t = NULL;
@@ -1605,6 +1607,7 @@ static NTSTATUS hcdTelemetryIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     if (t == NULL) {
         hc->Xstat.TeleRefused++;
         XhciControllerLockRelease(&hc->Hc, oldIrql);
+        (VOID)InterlockedDecrement((PLONG)&dev->Refs);
         return HcdCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES, 0);
     }
     if (t->Owner != owner) {
@@ -1612,7 +1615,7 @@ static NTSTATUS hcdTelemetryIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         t->State = XHCI_SNAPSHOT_HCD_TELE_S_LIVE;
         t->Taken = 0;
     }
-    t->Slot = slot;
+    t->Slot = dev->SlotId;
     t->Taken++;
     t->TscLo = lo;
     t->TscHi = hi;
@@ -1621,6 +1624,7 @@ static NTSTATUS hcdTelemetryIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     }
     hc->Xstat.TeleTaken++;
     XhciControllerLockRelease(&hc->Hc, oldIrql);
+    (VOID)InterlockedDecrement((PLONG)&dev->Refs);
     return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
 }
 

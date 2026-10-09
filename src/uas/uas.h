@@ -247,12 +247,14 @@ typedef struct _UAS_FDO {
      * tries again): built under the lock, sent after it with this driver's
      * own IRP. TeleBusy (lock) from the send to the completion; TeleOff
      * once a bus has refused the request as unknown, so an older bus is
-     * asked no more. UasEngineStop cancels a send still pending once no
-     * new one can start, and its rundown waits for the completion. */
+     * asked no more. TeleSubmitting (lock) from the build until the send's
+     * IoCallDriver has returned: UasEngineStop waits it out, then cancels
+     * a send still pending, and its rundown waits for the completion. */
     PIRP TeleIrp;
     USHORT TeleIrpSize;
     BOOLEAN TeleBusy;
     BOOLEAN TeleOff;
+    BOOLEAN TeleSubmitting;
     ULONG TeleSequence;
     XHCI98_TELEMETRY TeleRecord;
     XHCI98_TELEMETRY TeleLast;

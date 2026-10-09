@@ -987,6 +987,7 @@ static BOOLEAN uasTeleBuild(PUAS_FDO fdo)
     fdo->TeleSequence++;
     w[XHCI98_TELE_SEQUENCE] = fdo->TeleSequence;
     fdo->TeleBusy = TRUE;
+    fdo->TeleSubmitting = TRUE;
     uasRef(fdo);
     return TRUE;
 }
@@ -996,6 +997,7 @@ static VOID uasTeleSend(PUAS_FDO fdo)
 {
     PIO_STACK_LOCATION next;
     PIRP irp;
+    KIRQL irql;
 
     irp = fdo->TeleIrp;
     UasIrpReset(irp, fdo->TeleIrpSize, fdo->Lower->StackSize);
@@ -1006,6 +1008,9 @@ static VOID uasTeleSend(PUAS_FDO fdo)
     next->Parameters.Others.Argument1 = &fdo->TeleRecord;
     UAS_SET_COMPLETION_ALWAYS(irp, uasTeleDone, fdo);
     (VOID)IoCallDriver(fdo->Lower, irp);
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    fdo->TeleSubmitting = FALSE;
+    KeReleaseSpinLock(&fdo->Lock, irql);
 }
 
 static VOID uasArmTimer(PUAS_FDO fdo)
@@ -1762,6 +1767,7 @@ VOID UasEngineStop(PUAS_FDO fdo, UCHAR srbStatus)
     PLIST_ENTRY e;
     BOOLEAN wasStarted;
     BOOLEAN teleBusy;
+    BOOLEAN teleSubmitting;
     KIRQL irql;
 
     InitializeListHead(&drain);
@@ -1774,16 +1780,23 @@ VOID UasEngineStop(PUAS_FDO fdo, UCHAR srbStatus)
         (VOID)KeWaitForSingleObject(&fdo->TimerDone, Executive, KernelMode,
                                     FALSE, NULL);
     }
-    /* Task 36.21: no telemetry send is built now (Started is FALSE); one
-     * pending is cancelled, and the rundown below waits for its
-     * completion. The IRP is this driver's, freed only by UasEngineFree
-     * after that rundown, so a cancel that meets it completed, or being
-     * sent by a timer run still on another processor, touches valid
-     * memory; such a send is held in the rundown by that run's reference
-     * and completes as this bus completes it, at once. */
-    KeAcquireSpinLock(&fdo->Lock, &irql);
-    teleBusy = fdo->TeleBusy;
-    KeReleaseSpinLock(&fdo->Lock, irql);
+    /* Task 36.21: no telemetry send is built now (Started is FALSE). One
+     * a timer run has built is waited for until its IoCallDriver has
+     * returned - a timer run on another processor may still be resetting
+     * and sending the IRP, and a cancel before that would be lost (review
+     * round 2) - then, still pending, cancelled; the rundown below waits
+     * for its completion. The IRP is this driver's, freed only by
+     * UasEngineFree after that rundown. */
+    for (;;) {
+        KeAcquireSpinLock(&fdo->Lock, &irql);
+        teleBusy = fdo->TeleBusy;
+        teleSubmitting = fdo->TeleSubmitting;
+        KeReleaseSpinLock(&fdo->Lock, irql);
+        if (!teleBusy || !teleSubmitting) {
+            break;
+        }
+        uasSleepMs(1);
+    }
     if (teleBusy) {
         (VOID)IoCancelIrp(fdo->TeleIrp);
     }

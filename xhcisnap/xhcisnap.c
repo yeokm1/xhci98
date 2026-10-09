@@ -2757,6 +2757,9 @@ static void print_xstat(const unsigned char *hcd, unsigned long hcdBytes)
     if (perUs > 0.0) {
         comp(", %.0f s; the time-stamp\n  counter at %.1f counts a "
              "microsecond):\n", dTime / 10000000.0, perUs);
+        comp("  (times and ages converted at that rate, taken from two "
+             "readings that may be\n  two processors': approximate where "
+             "their counters disagree)\n");
     } else {
         comp("; under 1 s or no\n  clock, so times are not converted):\n");
     }

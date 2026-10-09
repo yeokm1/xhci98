@@ -104,9 +104,9 @@ VOID XhciXstatClear(PXHCI_XSTAT_STAMP s)
     s->Cpu = 0;
 }
 
-ULONG XhciXstatInterval(PXHCI_XSTAT_TIME t, PULONG discarded, PULONG crossed,
-                        const XHCI_XSTAT_STAMP *from,
-                        const XHCI_XSTAT_STAMP *to)
+ULONG XhciXstatDiff(PULONG discarded, PULONG crossed,
+                    const XHCI_XSTAT_STAMP *from, const XHCI_XSTAT_STAMP *to,
+                    PULONG counts)
 {
     ULONG d;
     ULONG hi;
@@ -126,11 +126,29 @@ ULONG XhciXstatInterval(PXHCI_XSTAT_TIME t, PULONG discarded, PULONG crossed,
         (*discarded)++;
         return 0;
     }
+    *counts = d;
+    return 1;
+}
+
+VOID XhciXstatAddTime(PXHCI_XSTAT_TIME t, ULONG counts)
+{
     t->Count++;
-    XhciXstatAdd64(&t->SumLo, &t->SumHi, d);
-    if (d > t->Max) {
-        t->Max = d;
+    XhciXstatAdd64(&t->SumLo, &t->SumHi, counts);
+    if (counts > t->Max) {
+        t->Max = counts;
     }
+}
+
+ULONG XhciXstatInterval(PXHCI_XSTAT_TIME t, PULONG discarded, PULONG crossed,
+                        const XHCI_XSTAT_STAMP *from,
+                        const XHCI_XSTAT_STAMP *to)
+{
+    ULONG d;
+
+    if (!XhciXstatDiff(discarded, crossed, from, to, &d)) {
+        return 0;
+    }
+    XhciXstatAddTime(t, d);
     return 1;
 }
 

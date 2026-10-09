@@ -179,6 +179,14 @@ ULONG XhciXstatInterval(PXHCI_XSTAT_TIME t, PULONG discarded, PULONG crossed,
                         const XHCI_XSTAT_STAMP *from,
                         const XHCI_XSTAT_STAMP *to);
 
+/* XhciXstatInterval's two halves, for an interval measured in pieces: the
+ * difference into *counts under the same rules (1 when it is one), and one
+ * interval of `counts` added. */
+ULONG XhciXstatDiff(PULONG discarded, PULONG crossed,
+                    const XHCI_XSTAT_STAMP *from, const XHCI_XSTAT_STAMP *to,
+                    PULONG counts);
+VOID XhciXstatAddTime(PXHCI_XSTAT_TIME t, ULONG counts);
+
 /* A data URB's end: its length and the chunks published for it. */
 VOID XhciXstatUrb(PXHCI_XSTAT s, ULONG length, ULONG chunks);
 

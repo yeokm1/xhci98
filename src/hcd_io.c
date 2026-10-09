@@ -80,6 +80,12 @@ VOID HcdIoPipeInitEp0(PHCD_USB_DEVICE dev)
 /* The time-stamp counter (task 36.21; hcd.h)                               */
 /* ----------------------------------------------------------------------- */
 
+#if defined(_M_AMD64)
+/* The compiler's CPUID intrinsic (intrin.h's declaration; wdm.h has none). */
+void __cpuid(int info[4], int leaf);
+#pragma intrinsic(__cpuid)
+#endif
+
 /* IRQL: any. */
 VOID HcdTscRead(PULONG lo, PULONG hi)
 {
@@ -118,22 +124,37 @@ static ULONG hcdCpuId(VOID)
     ULONG b;
 
     /* CPUID, 0F A2, which MSVC 6.0's assembler does not name either. The
-     * compiler saves the registers an __asm block uses. */
+     * compiler saves the registers an __asm block names, and the emitted
+     * bytes name none: so ECX and EDX, which CPUID also writes, are named
+     * here as well. */
     __asm {
         mov eax, 1
+        xor ecx, ecx
         _emit 0x0F
         _emit 0xA2
         mov b, ebx
+        xor edx, edx
     }
     return (b >> 24) & 0xFFUL;
 #endif
 }
 
-/* IRQL: any. */
+/* IRQL: any. Below DISPATCH_LEVEL it is raised for the pair, so the count
+ * and the processor's ID come from one processor (review round 2). */
 VOID HcdTscStamp(PXHCI_XSTAT_STAMP s)
 {
+    KIRQL oldIrql;
+    ULONG raised;
+
+    raised = (KeGetCurrentIrql() < DISPATCH_LEVEL) ? 1UL : 0UL;
+    if (raised) {
+        KeRaiseIrql(DISPATCH_LEVEL, &oldIrql);
+    }
     s->Cpu = hcdCpuId();
     HcdTscRead(&s->Lo, &s->Hi);
+    if (raised) {
+        KeLowerIrql(oldIrql);
+    }
     if (s->Lo == 0 && s->Hi == 0) {
         /* All zero is "not stamped": one count later. */
         s->Lo = 1;
@@ -1789,6 +1810,9 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
     ULONG engine;
     ULONG parked;
     ULONG isData;
+    ULONG pieceOk;
+    ULONG piece;
+    ULONG rest;
     XHCI_XSTAT_STAMP entered;
     XHCI_XSTAT_STAMP done;
 
@@ -1803,6 +1827,8 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
 
         x = CONTAINING_RECORD(entry, HCD_XFER, Link);
         HcdTscStamp(&entered);
+        pieceOk = 0;
+        piece = 0;
         dev = x->Pipe->Device;
         HcdDmaUnmap(hc, x);
         engine = x->Engine;
@@ -1891,6 +1917,11 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
             if (x->ChunksPublished != 0) {
                 XhciXstatUrb(&hc->Xstat, x->Length, x->ChunksPublished);
             }
+            /* The pass's first piece, to the pipe's release, which may
+             * publish another record inside it (measured as its own). */
+            HcdTscStamp(&done);
+            pieceOk = XhciXstatDiff(&hc->Xstat.Discarded, &hc->Xstat.Crossed,
+                                    &entered, &done, &piece);
         }
         release = (x->Pipe->Exclusive == x) || x->Pipe->RingWait;
         if (x->Pipe->Exclusive == x) {
@@ -1901,14 +1932,22 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
         if (release) {
             HcdIoPipeRelease(hc, x->Pipe);
         }
+        if (isData) {
+            HcdTscStamp(&entered);
+        }
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
         if (isData) {
-            /* 36.21: the pass's cost to here, before the record is freed
-             * and its pipe may go; the IRP's completion and the client's
-             * routine it runs are not the bus's. */
+            /* 36.21: the second piece, from the pipe's release to here,
+             * before the record is freed and its pipe may go. The pass's
+             * cost is the two together: the pipe's release, which runs
+             * another record's publication, is left out, and so is the
+             * IRP's completion with the client's routine it runs. */
             HcdTscStamp(&done);
-            (VOID)XhciXstatInterval(&hc->Xstat.Complete, &hc->Xstat.Discarded,
-                                    &hc->Xstat.Crossed, &entered, &done);
+            if (XhciXstatDiff(&hc->Xstat.Discarded, &hc->Xstat.Crossed,
+                              &entered, &done, &rest) &&
+                pieceOk && rest <= XHCI_XSTAT_INTERVAL_MAX - piece) {
+                XhciXstatAddTime(&hc->Xstat.Complete, piece + rest);
+            }
         }
         nextIrp = hcdRecordRelease(x->Pipe, x);
         XhciControllerLockRelease(&hc->Hc, oldIrql);
