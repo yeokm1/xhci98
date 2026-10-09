@@ -103,10 +103,14 @@ tool source/
   mmiodiag.c   Pure PCIINFO -> report-text: the PM block and the two dead-MMIO
                classifiers. A translation unit of its own precisely so the host
                suite below can reach it                                [host-testable]
+  route.c      Task 36.11: the Intel PCH interrupt routing report (D20IP,
+               D20IR, PIRQx_ROUT) on the reviewed chipsets, and the
+               comparison against --gsi; pure, read by pci.c's
+               route_read                                              [host-testable]
   main.c       Sequencing, family selection (default all), CLI flags
                (--probe-only/--no-active, --poll-only, --irq-selftest, --set-intel-ports,
                --no-wait, --no-devid, --no-page, --serial, --log [filename],
-               --done-flag FILE)
+               --done-flag FILE, --gsi N)
 ```
 
 `--probe-only` runs Tier A and any Tier B reads the firmware's existing PCI state permits. It is read-only: it never enables MSE, clears INTx Disable, writes PMCSR, or takes ownership. If MSE is clear, the report records that Tier B was unavailable and leaves the bit unchanged. The default runs the full suite.
@@ -123,9 +127,9 @@ Register offsets below are relative to BAR0 unless noted. Capability regs at BAR
 
 The detailed matrix below is the xHCI matrix. EHCI/OHCI reuse its C1/C2/C3/C4/C5/C6 meanings with the family-specific mechanisms described in section 2. C7 and C8 remain xHCI-only.
 
-### Automated QEMU regression matrix (40 cases)
+### Automated QEMU regression matrix (42 cases)
 
-`xhciqual/test/run-qemu-matrix.ps1` cold-boots a fresh Win98SE (MS-DOS 7.1) QEMU process per case, the same DOS the field procedure uses. The matrix stands at 40 cases as of v0.11 (`xhciqual/README.md` carries the version history). The `HCCPARAMS2` line (row B9) is pinned in the `xhci_probe_only` case, so a regression in the read-only U3C/CMC/FSC report fails the matrix.
+`xhciqual/test/run-qemu-matrix.ps1` cold-boots a fresh Win98SE (MS-DOS 7.1) QEMU process per case, the same DOS the field procedure uses. The matrix stood at 40 cases as of v0.11 and at 42 since task 36.11's two `--gsi` cases (`xhciqual/README.md` carries the version history). The `HCCPARAMS2` line (row B9) is pinned in the `xhci_probe_only` case, so a regression in the read-only U3C/CMC/FSC report fails the matrix.
 
 The cases are: standalone help, an isolated locked xHCI IRQ self-test, two `--probe-only` cases, and the controller/device cases. Controller presence is exhaustive across the requested families: none, xHCI, EHCI, OHCI, xHCI+EHCI, xHCI+OHCI, EHCI+OHCI, and all three. Empty and attached-device variants cover xHCI HS storage, FS HID, a hub with downstream HID, and an unmanaged SuperSpeed-only placement; EHCI HS storage and FS HID; OHCI HID and storage; pairwise mixed attachments; and all-three mixed attachments. It also covers default-all scanning, combined selectors, selecting an absent family, and --log ohci log-name/selector disambiguation.
 
@@ -138,6 +142,8 @@ The QEMU matrix is not the whole of what runs per build. `xhciqual/build.cmd` ru
 ### Host-side unit tests
 
 `xhciqual/test/run-host-tests.cmd` builds and runs `xhciqual/test/test_mmiodiag.c` on the Windows build host in seconds, with no VM and no DOS. It covers `xhciqual/mmiodiag.c`, the pure `PCIINFO` -> report-text logic behind the PCI Power Management block and the two dead-MMIO classifiers.
+
+Since task 36.11 it also builds `xhciqual/test/test_route.c`, over `xhciqual/route.c` and the driver's `src/xhci_pirq.c`: the routing report on the reviewed Intel chipsets, which no QEMU controller has.
 
 That code is a separate translation unit so it can be tested here, because the QEMU matrix cannot reach any of it. SeaBIOS always leaves Memory Space Enable set and the BAR assigned, so `mmio_ok` is always true and neither classifier runs, and no emulated USB controller exposes a PM capability, so only the "capability absent" branch executes. Without the host runner, every other branch would first execute on a field machine.
 

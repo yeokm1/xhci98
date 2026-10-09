@@ -24,6 +24,7 @@
  */
 
 #include <stdio.h>
+#include "../src/xhci.h"
 #include "../src/xhci_pipe.h"
 #include "test_harness.h"
 
@@ -2237,6 +2238,99 @@ static void test_caller_interval(void)
              XHCI_PIPE_BAD_PARAM, "no answer");
 }
 
+/*
+ * Task 36.12: RESET_PIPE in xHCI 1.2c 4.6.8 order. The order is transcribed
+ * from the spec's "reset a pipe" list (p.116), not from the code: Reset
+ * Endpoint, CLEAR_TT_BUFFER (control or bulk, behind a TT), the device's
+ * CLEAR_FEATURE(ENDPOINT_HALT) (any endpoint but control), Set TR Dequeue,
+ * the doorbell. A failed device clear after the Reset Endpoint owes the
+ * device's half on a Stopped endpoint, and the next reset takes that path
+ * without a second Reset Endpoint.
+ */
+static void test_reset_steps(void)
+{
+    const ULONG both = XHCI_PIPE_RESET_HOST | XHCI_PIPE_RESET_DEVICE;
+    const ULONG halted = XHCI_EP_STATE_HALTED;
+    const ULONG stopped = XHCI_EP_STATE_STOPPED;
+
+    CHECK_EQ(XhciPipeResetSteps(both, halted, 0, XHCI_PIPE_XFER_BULK),
+             XHCI_PIPE_STEP_RESET_EP | XHCI_PIPE_STEP_CLEAR_TT |
+                 XHCI_PIPE_STEP_DEVICE | XHCI_PIPE_STEP_SET_DEQUEUE,
+             "Halted bulk: the full 4.6.8 order, TT clear included");
+    CHECK_EQ(XhciPipeResetSteps(both, halted, 0, XHCI_PIPE_XFER_INTERRUPT),
+             XHCI_PIPE_STEP_RESET_EP | XHCI_PIPE_STEP_DEVICE |
+                 XHCI_PIPE_STEP_SET_DEQUEUE,
+             "Halted interrupt: no TT clear (control and bulk only)");
+    CHECK_EQ(XhciPipeResetSteps(both, halted, 0, XHCI_PIPE_XFER_CONTROL),
+             XHCI_PIPE_STEP_RESET_EP | XHCI_PIPE_STEP_CLEAR_TT |
+                 XHCI_PIPE_STEP_SET_DEQUEUE,
+             "Halted control: no device clear (4.6.8: any endpoint but "
+             "control)");
+    CHECK_EQ(XhciPipeResetSteps(both, halted, 0, XHCI_PIPE_XFER_ISOCH),
+             XHCI_PIPE_STEP_RESET_EP | XHCI_PIPE_STEP_SET_DEQUEUE,
+             "Halted isochronous: no halt to clear, no TT clear");
+    /* An owed record on a Halted endpoint is not followed: Reset Endpoint is
+     * legal there, so the full order is taken again. */
+    CHECK_EQ(XhciPipeResetSteps(both, halted, 1, XHCI_PIPE_XFER_BULK),
+             XHCI_PIPE_STEP_RESET_EP | XHCI_PIPE_STEP_CLEAR_TT |
+                 XHCI_PIPE_STEP_DEVICE | XHCI_PIPE_STEP_SET_DEQUEUE,
+             "owed but Halted: the full order");
+
+    CHECK_EQ(XhciPipeResetSteps(both, stopped, 1, XHCI_PIPE_XFER_BULK),
+             XHCI_PIPE_STEP_CLEAR_TT | XHCI_PIPE_STEP_DEVICE |
+                 XHCI_PIPE_STEP_SET_DEQUEUE,
+             "owed, Stopped: TT and device again, Set TR Dequeue, no Reset "
+             "Endpoint");
+    CHECK_EQ(XhciPipeResetSteps(both, stopped, 1, XHCI_PIPE_XFER_INTERRUPT),
+             XHCI_PIPE_STEP_DEVICE | XHCI_PIPE_STEP_SET_DEQUEUE,
+             "owed interrupt, Stopped");
+    CHECK_EQ(XhciPipeResetSteps(XHCI_PIPE_RESET_DEVICE, stopped, 1,
+                                XHCI_PIPE_XFER_BULK),
+             XHCI_PIPE_STEP_CLEAR_TT | XHCI_PIPE_STEP_DEVICE |
+                 XHCI_PIPE_STEP_SET_DEQUEUE,
+             "SYNC_CLEAR_STALL on an owed endpoint finishes the reset");
+
+    CHECK_EQ(XhciPipeResetSteps(both, stopped, 0, XHCI_PIPE_XFER_BULK),
+             XHCI_PIPE_STEP_DEVICE_FIRST | XHCI_PIPE_STEP_RECYCLE,
+             "not Halted, nothing owed: the device's clear first, then the "
+             "recycle, as before 36.12");
+    CHECK_EQ(XhciPipeResetSteps(both, XHCI_EP_STATE_RUNNING, 0,
+                                XHCI_PIPE_XFER_INTERRUPT),
+             XHCI_PIPE_STEP_DEVICE_FIRST | XHCI_PIPE_STEP_RECYCLE,
+             "Running: the recycle");
+    CHECK_EQ(XhciPipeResetSteps(both, XHCI_EP_STATE_ERROR, 1,
+                                XHCI_PIPE_XFER_BULK),
+             XHCI_PIPE_STEP_DEVICE_FIRST | XHCI_PIPE_STEP_RECYCLE,
+             "owed but Error: the recycle (the record is not followed)");
+    CHECK_EQ(XhciPipeResetSteps(both, stopped, 0, XHCI_PIPE_XFER_ISOCH),
+             XHCI_PIPE_STEP_RECYCLE, "isochronous, not Halted: no clear");
+    CHECK_EQ(XhciPipeResetSteps(XHCI_PIPE_RESET_DEVICE, stopped, 0,
+                                XHCI_PIPE_XFER_BULK),
+             XHCI_PIPE_STEP_DEVICE_FIRST,
+             "SYNC_CLEAR_STALL, nothing owed: the clear alone");
+    CHECK_EQ(XhciPipeResetSteps(XHCI_PIPE_RESET_HOST, halted, 1,
+                                XHCI_PIPE_XFER_BULK),
+             0, "SYNC_RESET_PIPE is its own path");
+    CHECK_EQ(XhciPipeResetSteps(0, halted, 0, XHCI_PIPE_XFER_BULK), 0,
+             "no halves, no steps");
+
+    CHECK_EQ(XhciPipeClearVerdict(XHCI_PIPE_STEP_DEVICE, 1, 0),
+             XHCI_PIPE_CLEAR_GO, "taken after Reset Endpoint: go on");
+    CHECK_EQ(XhciPipeClearVerdict(XHCI_PIPE_STEP_DEVICE, 0, 0),
+             XHCI_PIPE_CLEAR_OWED,
+             "stalled or failed after Reset Endpoint: owed, not resumed");
+    CHECK_EQ(XhciPipeClearVerdict(XHCI_PIPE_STEP_DEVICE, 0, 1),
+             XHCI_PIPE_CLEAR_HELD,
+             "timed out after Reset Endpoint: held for the recovery");
+    CHECK_EQ(XhciPipeClearVerdict(XHCI_PIPE_STEP_DEVICE_FIRST, 0, 0),
+             XHCI_PIPE_CLEAR_RESUME,
+             "refused before the host's half: resumed as it was");
+    CHECK_EQ(XhciPipeClearVerdict(XHCI_PIPE_STEP_DEVICE_FIRST, 0, 1),
+             XHCI_PIPE_CLEAR_HELD, "timed out first: held");
+    CHECK_EQ(XhciPipeClearVerdict(XHCI_PIPE_STEP_DEVICE_FIRST, 1, 0),
+             XHCI_PIPE_CLEAR_GO, "taken first: go on");
+}
+
 int main(void)
 {
     test_seq();
@@ -2259,6 +2353,7 @@ int main(void)
     test_iso_fragments();
     test_iso_frames();
     test_xp_requests();
+    test_reset_steps();
     test_superspeed_endpoints();
     test_superspeedplus_isoch();
     test_bos();

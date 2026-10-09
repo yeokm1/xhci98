@@ -647,6 +647,50 @@ ULONG XhciPipeConfigureUsbdStatus(ULONG completionCode);
  * device's for 0x31, none (0) for any other function. */
 ULONG XhciPipeResetParts(ULONG function);
 
+/*
+ * Task 36.12: the steps of a pipe reset, in the order the executor
+ * (hcd_cfg.c, hcdCfgReset) takes them. A Halted endpoint follows xHCI 1.2c
+ * 4.6.8 (p.116, "reset a pipe"): Reset Endpoint with TSP 0, CLEAR_TT_BUFFER
+ * to the TT behind which a control or bulk endpoint sits, the device's
+ * CLEAR_FEATURE(ENDPOINT_HALT) for any endpoint but control (and
+ * isochronous, which has no halt to clear), then Set TR Dequeue past the
+ * failed TD and the doorbell. A reset whose device clear the device did not
+ * take (XhciPipeClearVerdict) owes the device's half: the endpoint, Stopped
+ * by its Reset Endpoint, gets the TT clear and the device clear again, then
+ * the Set TR Dequeue - no second Reset Endpoint, which a Stopped endpoint
+ * refuses. Any other endpoint keeps the path before 36.12: the device's
+ * clear first, then the endpoint brought to Stopped and given a fresh
+ * context, the only toggle restart it has.
+ */
+#define XHCI_PIPE_STEP_DEVICE_FIRST 0x01UL  /* CLEAR_FEATURE, host untouched */
+#define XHCI_PIPE_STEP_RESET_EP     0x02UL  /* Reset Endpoint, TSP 0         */
+#define XHCI_PIPE_STEP_RECYCLE      0x04UL  /* to Stopped, a fresh context   */
+#define XHCI_PIPE_STEP_CLEAR_TT     0x08UL  /* CLEAR_TT_BUFFER, behind a TT  */
+#define XHCI_PIPE_STEP_DEVICE       0x10UL  /* CLEAR_FEATURE, host's half
+                                             * done                          */
+#define XHCI_PIPE_STEP_SET_DEQUEUE  0x20UL  /* Set TR Dequeue                */
+
+/* The steps for both halves (RESET_PIPE), or for the device's alone
+ * (SYNC_CLEAR_STALL) on an endpoint that owes it, by the endpoint's state
+ * (XHCI_EP_STATE_*), whether it owes the device's half, and its transfer
+ * type (XHCI_PIPE_XFER_*). The device's half alone with nothing owed is
+ * DEVICE_FIRST: the clear, nothing else; the host's half alone is 0, its
+ * own path (hcdCfgResetHost). */
+ULONG XhciPipeResetSteps(ULONG parts, ULONG state, ULONG owed, ULONG type);
+
+/* What a device clear left. */
+#define XHCI_PIPE_CLEAR_GO          0UL  /* taken: the next step           */
+#define XHCI_PIPE_CLEAR_RESUME      1UL  /* not taken, the host's half not
+                                          * begun: the pipe as it was      */
+#define XHCI_PIPE_CLEAR_OWED        2UL  /* not taken after the host's half:
+                                          * paused, the device's half owed */
+#define XHCI_PIPE_CLEAR_HELD        3UL  /* timed out: paused for the
+                                          * recovery its timeout asked for */
+
+/* `step` is the clear's step (DEVICE_FIRST or DEVICE), `taken` whether the
+ * device took it, `stuck` whether it timed out with EP0 left stuck. */
+ULONG XhciPipeClearVerdict(ULONG step, ULONG taken, ULONG stuck);
+
 /* USB_BUS_INTERFACE_USBDI_GUID's versions and their sizes. The structure
  * (WDK 7.1 inc\ddk\usbbusif.h lines 252-414) is two USHORTs, then pointers
  * only: BusContext, InterfaceReference, InterfaceDereference and four

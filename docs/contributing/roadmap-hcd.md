@@ -840,7 +840,7 @@ How it got here:
   - C4's "event in the ring, no interrupt" outcome reads "needs polling". Its tool failures, and a controller that fails even polled, do not.
   - The polled tests run after the interrupt hook is removed.
   - `main.c`'s C6/C8 gate and `report.c`'s verdict and exit code learn the outcome, with vectors through the verdict, not only `test_mmiodiag`
-- [ ] 36.11 `XHCIQUAL`'s routing report, read-only:
+- [x] 36.11 `XHCIQUAL`'s routing report, read-only:
   - It reports the LPC identity, RCBA, D20IP and D20IR, the selected PIRQ, and the PIC destination and its disable bit.
   - It flags a mismatch only against a GSI supplied separately.
   - **Only on the reviewed RCBA chipsets** (the xHCI/LPC pairs of issue 12 section 5.1: 7, 8 and 9 series and C610/X99). The registers do not exist elsewhere:
@@ -849,6 +849,7 @@ How it got here:
     - non-Intel controllers have no equivalent.
 
     Elsewhere it reports "routing registers not applicable" and reads nothing. Support for ITSS is not in scope.
+  - **Done 2026-10-09** (`9c8a5ec`, `4848c08`, the review loop clean at its second round; `XHCIQUAL` built, its host suite passing with the new `test_route`, the QEMU matrix 42 cases passing on development host A). `xhciqual/route.c` (pure) and `pci.c`'s `route_read`, the reviewed pairs taken from the driver's own `src/xhci_pirq.c`; read before any active test in every mode, reads only. The GSI is `--gsi N`, accepted only beside `--quick` or `--probe-only`, so it never starts an active run; an IRQ below 16 is compared on the 8259 path alone, as DOS found it, and says that it proves nothing for an NT APIC HAL. No guest has these registers (QEMU reads "not applicable"); a reading on a reviewed chipset, the E7250 under DOS, is owed to the bench (36.final).
 - [ ] 36.12 RESET_PIPE in xHCI 4.6.8 order in `hcdCfgReset`. It is a spec fix, kept apart so it does not muddy the interrupt tests (issue 12 section 3.2).
   - **The order** (xHCI 1.2c 4.6.8, p.116, "reset a pipe"): Reset Endpoint (TSP 0); then `CLEAR_TT_BUFFER` to the hub, when the device is behind a TT and the endpoint is control or bulk (`HcdHubClearTt`); then `CLEAR_FEATURE(ENDPOINT_HALT)` to the device, for any endpoint but control; then Set TR Dequeue past the failed TD; then the doorbell. Today the device's clear comes first, as usbport ordered it (`hcd_cfg.c` ~2875).
   - **Halted and not.** This order is the Halted endpoint's. A non-Halted one keeps today's path, brought to Stopped and given a fresh context (`hcdCfgQuiesce`, `hcdCfgRecycle`), since Reset Endpoint is refused on it.

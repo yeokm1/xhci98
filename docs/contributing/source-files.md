@@ -178,7 +178,16 @@
 > `XhciEnumNoteBusy` in `xhci_enum.c` (`test_enum`), its drain
 > `hcd_ctl.c`'s `HcdCommandDrain` under the backstop's admission
 > (`hcdDrainAdmitted`), and the qemu flavour's `XhciQemuStartHold` in
-> `hcd_inj.c` (`HcdInjStartHeld`, `HcdInjStartRelease`). The tables below are the
+> `hcd_inj.c` (`HcdInjStartHeld`, `HcdInjStartRelease`). Task 36.11 adds
+> `xhciqual\route.c` (the routing report's pure half, built with this
+> tree's `xhci_pirq.c` for its reviewed-pair table; host suite
+> `xhciqual\test\test_route.c`) and its reader, `xhciqual\pci.c`'s
+> `route_read`. Task 36.12 adds no file: RESET_PIPE in xHCI 4.6.8 order is
+> `hcd_cfg.c`'s `hcdCfgReset` (the device's half owed after a refused clear,
+> `HCD_PIPE.ClearOwed`, ended by `hcdCfgOwedEnd`), its steps and verdict the
+> pure `XhciPipeResetSteps` and `XhciPipeClearVerdict` in `xhci_pipe.c`
+> (`test_pipe`), and the qemu flavour's fault 13 in `hcd_inj.c`
+> (`HcdInjClearHalt`; `xhci_inj.h`, `test_inj`). The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name

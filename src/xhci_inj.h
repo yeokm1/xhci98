@@ -80,7 +80,10 @@
 #define XHCI_INJ_RACE_RING       17UL /* TRANSACTION, a ring during the held
                                        * Reset Endpoint                      */
 #define XHCI_INJ_RACE_SECOND     18UL /* the same, then a second error       */
-#define XHCI_INJ_LAST_BUILT      18UL
+#define XHCI_INJ_CLEAR_HALT      19UL /* 36.12: the next CLEAR_FEATURE(ENDPOINT_
+                                       * HALT) answered, not sent: arg 0
+                                       * STALL, 1 failed, 2 never sent      */
+#define XHCI_INJ_LAST_BUILT      19UL
 #define XHCI_INJ_CLEAR           0xFFUL  /* every injection ended            */
 
 /* XhciInjTake's verdicts. */

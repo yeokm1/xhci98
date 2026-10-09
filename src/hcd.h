@@ -237,6 +237,16 @@ typedef struct _HCD_PIPE {
      * A streams open or close of a used endpoint owes the device that
      * clear (hcdCfgStreamsSequence). */
     ULONG SeqUsed;
+    /* Task 36.12 (an endpoint's pipe, never a stream's; the thread's): a
+     * RESET_PIPE's Reset Endpoint restarted the host's toggle and left the
+     * endpoint Stopped, and the device did not take its
+     * CLEAR_FEATURE(ENDPOINT_HALT), so the device's half is owed. The pipe
+     * holds one pause for it (Paused counts it) until the half is done
+     * (hcdCfgReset) or the endpoint's context is replaced
+     * (hcdCfgConfigureAdd: RESET_PORT, a recycle, a streams open or close),
+     * either of which ends it (hcdCfgOwedEnd); a select or the device's
+     * going frees the pipe with it. */
+    ULONG ClearOwed;
     ULONG CancelPending;            /* a record of it was cancelled      */
     ULONG DrainPending;             /* a refused retire: stop and drain  */
     ULONG Paused;                   /* the thread is stopping or editing
@@ -1099,6 +1109,9 @@ typedef struct _HCD_CONTROLLER {
     ULONG InjSlot;
     ULONG InjDci;
     ULONG InjOwnCmd;
+    /* Task 36.12: fault 13's answer for the next device clear, HCD_CTL_*
+     * plus 1, 0 none; the thread's (hcd_inj.c, HcdInjClearHalt). */
+    ULONG InjClearHalt;
 #endif
     /* The door (hcd_door.c, 26-A.8; design record 13 section 8): the
      * FDO's name's number, \DosDevices\HCD<n>, the host controller
@@ -1526,6 +1539,8 @@ ULONG HcdInjCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb, PULONG control,
                     PULONG code);
 ULONG HcdInjEpState(PHCD_CONTROLLER hc, ULONG slot, ULONG dci, ULONG state);
 VOID HcdInjEp0Doorbell(PHCD_CONTROLLER hc, struct _HCD_USB_DEVICE *dev);
+ULONG HcdInjClearHalt(PHCD_CONTROLLER hc, ULONG slot, ULONG dci,
+                      PULONG outcome);
 #endif
 
 /* hcd_cfg.c */
