@@ -90,10 +90,14 @@
 #define XHCI_PIRQ_DELIVERY_MESSAGE  2UL     /* MSI or MSI-X                 */
 #define XHCI_PIRQ_DELIVERY_POLL     3UL
 
-/* Which interrupt controller the raw IRQ names. */
+/* The path the raw IRQ's number names: 16-23 the PIRQs wired direct to
+ * I/O APIC inputs 16-23, below 16 a PIRQx_ROUT byte steering a PIRQ to it.
+ * The number names a path, not the HAL's mode: an I/O APIC HAL can hand
+ * out an IRQ below 16 too (review round 1, finding 2). The names are
+ * kept. */
 #define XHCI_PIRQ_IRQ_NONE          0UL
-#define XHCI_PIRQ_IRQ_APIC          1UL     /* 16-23: I/O APIC, PIRQ direct */
-#define XHCI_PIRQ_IRQ_PIC           2UL     /* an 8259 IRQ PIRQx_ROUT names */
+#define XHCI_PIRQ_IRQ_APIC          1UL     /* 16-23: the direct path       */
+#define XHCI_PIRQ_IRQ_PIC           2UL     /* below 16: PIRQx_ROUT steered */
 
 /* When a run was made (XHCI_PIRQ_STATE.When). */
 #define XHCI_PIRQ_WHEN_NONE         0UL
@@ -160,7 +164,10 @@ typedef struct _XHCI_PIRQ_IO {
 
 /* The raw interrupt resource, as the start's parser kept it: how many
  * interrupt descriptors the raw list holds, and the first one's fields.
- * The translated vector and IRQL are never used. */
+ * The translated vector and IRQL are never used. Under
+ * CM_RESOURCE_INTERRUPT_MESSAGE the first word is a reserved USHORT then
+ * MessageCount, so Level holds the count in 31:16; the run reports a
+ * message delivery before it reads Level. */
 typedef struct _XHCI_PIRQ_IRQ {
     ULONG Count;
     ULONG Level;
@@ -235,6 +242,12 @@ ULONG XhciPirqPicIrq(ULONG irq);
  */
 ULONG XhciPirqTarget(ULONG irq, ULONG pirqAd, ULONG pirqEh, ULONG current,
                      PULONG irqMode, PULONG target);
+
+/* The start of every start attempt, before anything can refuse it: the
+ * value and the last run's fields cleared, Mode XHCI_PIRQ_UNREAD until the
+ * latch, the counts kept. A start refused before the routing step then
+ * leaves no earlier start's run in the record. */
+VOID XhciPirqReset(PXHCI_PIRQ_STATE st);
 
 /* The start: the value's meaning latched, the last run's fields cleared,
  * the counts kept. */

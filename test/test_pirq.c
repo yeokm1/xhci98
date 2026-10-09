@@ -898,6 +898,35 @@ static void test_latch(void)
     XhciPirqLatch(NULL, 1, 1);
 }
 
+/* A start attempt resets the record before anything can refuse it: a
+ * refused start shows no earlier start's run or value (review round 1,
+ * finding 1). */
+static void test_reset(void)
+{
+    FAKE_PC f;
+    XHCI_PIRQ_IO io;
+    XHCI_PIRQ_IRQ irq;
+    XHCI_PIRQ_STATE st;
+
+    zeroState(&st);
+    fakeInit(&f, &io, &irq);
+    (VOID)run(&f, &io, &irq, &st, 1, 1, XHCI_PIRQ_DELIVERY_LINE);
+    CHECK_EQ(st.Decision, XHCI_PIRQ_D_WROTE, "a run that wrote");
+    XhciPirqReset(&st);
+    CHECK_EQ(st.Runs, 1, "runs kept");
+    CHECK_EQ(st.Writes, 1, "writes kept");
+    CHECK_EQ(st.Decision, XHCI_PIRQ_D_NONE, "its decision gone");
+    CHECK_EQ(st.When, XHCI_PIRQ_WHEN_NONE, "no run this start");
+    CHECK_EQ(st.D20ir, XHCI_PIRQ_UNREAD, "its readings gone");
+    CHECK_EQ(st.Target, XHCI_PIRQ_UNREAD, "its target gone");
+    CHECK_EQ(st.ValueFound, 0, "no value found this start");
+    CHECK_EQ(st.Value, XHCI_PIRQ_UNREAD, "no value read");
+    CHECK_EQ(st.Mode, XHCI_PIRQ_UNREAD, "no mode until the latch");
+    XhciPirqLatch(&st, 0, 0);
+    CHECK_EQ(st.Mode, XHCI_PIRQ_MODE_VERIFIED, "the latch then decides");
+    XhciPirqReset(NULL);
+}
+
 int main(void)
 {
     test_mode();
@@ -911,6 +940,7 @@ int main(void)
     test_pic();
     test_write();
     test_latch();
+    test_reset();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

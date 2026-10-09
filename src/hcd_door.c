@@ -833,8 +833,11 @@ static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
         switch (XhciSnapHcdLocate(ports, first + i, &record, &word)) {
         case XHCI_SNAPSHOT_HCD_IN_HEAD:
             /* The routing record (36.3) is written at PASSIVE_LEVEL under
-             * the door or power gate, not this lock: each ULONG is read
-             * whole, and a window cut during a run may mix two runs. */
+             * the door gate (a start) or the power gate (a return to D0),
+             * not this lock. This copy runs under both gates, so one
+             * window never mixes two runs; a header split across two
+             * windows could, which XHCISNAP's first window (the whole
+             * header) never does. */
             if (word >= XHCI_SNAPSHOT_HCD_PIRQ_AT) {
                 value = pirq[word - XHCI_SNAPSHOT_HCD_PIRQ_AT];
                 break;

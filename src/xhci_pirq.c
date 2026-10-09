@@ -192,6 +192,17 @@ static VOID xhciPirqClear(PXHCI_PIRQ_STATE st)
     st->D20irAfter = XHCI_PIRQ_UNREAD;
 }
 
+VOID XhciPirqReset(PXHCI_PIRQ_STATE st)
+{
+    if (st == NULL) {
+        return;
+    }
+    xhciPirqClear(st);
+    st->ValueFound = 0;
+    st->Value = XHCI_PIRQ_UNREAD;
+    st->Mode = XHCI_PIRQ_UNREAD;
+}
+
 VOID XhciPirqLatch(PXHCI_PIRQ_STATE st, ULONG found, ULONG value)
 {
     if (st == NULL) {

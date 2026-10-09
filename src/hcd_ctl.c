@@ -815,6 +815,11 @@ static NTSTATUS hcdParseResources(PHCD_CONTROLLER hc, PIRP irp)
             rawMemory = 1;
         } else if (d->Type == CmResourceTypeInterrupt) {
             if (hc->IntRaw.Count == 0) {
+                /* Kept as given. Under CM_RESOURCE_INTERRUPT_MESSAGE the
+                 * first word is WDK 7.1's u.MessageInterrupt.Raw, a
+                 * reserved USHORT then MessageCount, so Level carries the
+                 * count in 31:16; the run reports a message grant before
+                 * it reads Level, and XHCISNAP decodes it so. */
                 hc->IntRaw.Level = d->u.Interrupt.Level;
                 hc->IntRaw.Vector = d->u.Interrupt.Vector;
                 hc->IntRaw.Flags = d->Flags;
@@ -1619,6 +1624,10 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
      * rebuilds, so it is reset with it (Codex review of 26-A.2, round 4,
      * finding 1). */
     hc->SuspendedInD0 = 0;
+    /* Task 36.3: before anything below can refuse the start, so a refused
+     * start shows no earlier start's routing run (review round 1, finding
+     * 1). The counts are kept. */
+    XhciPirqReset(&hc->Pirq);
     HcdCountersStart(hc);
     HcdEnumInit(hc);
 

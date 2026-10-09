@@ -2356,7 +2356,7 @@ static const char *const pirq_decision_text[SNAP_PIRQ_DECISIONS] = {
     "value 0: a write was due, none made",
     "value 1, not the verified E7250: a write was due, none made",
     "D20IR written and read back",
-    "D20IR written; the read-back disagrees"
+    "the write or its read-back failed, or the read-back disagrees"
 };
 
 /* A record word, or "not read" for one the run did not reach. */
@@ -2407,8 +2407,13 @@ static void print_pirq(const unsigned char *hcd, unsigned long hcdBytes)
     static const char *const delivery_text[4] = {
         "none", "a line (INTx)", "a message (MSI or MSI-X)", "polled"
     };
+    /* By the IRQ's number alone, which names a path, not the HAL's mode:
+     * an I/O APIC HAL can hand out an IRQ below 16 too (review round 1,
+     * finding 2). */
     static const char *const irq_text[3] = {
-        "neither", "APIC (16-23, PIRQ direct)", "PIC (through PIRQx_ROUT)"
+        "in neither range",
+        "16-23: PIRQA-H wired direct to I/O APIC inputs 16-23",
+        "below 16: a PIRQx_ROUT byte steering a PIRQ to it"
     };
     unsigned long headBytes;
     unsigned long count;
@@ -2422,11 +2427,16 @@ static void print_pirq(const unsigned char *hcd, unsigned long hcdBytes)
         return;
     }
     headBytes = get32(hcd, 4);
-    if (headBytes < SNAP_HCD_PIRQ_HEAD_WORDS * 4 ||
-        hcdBytes < SNAP_HCD_PIRQ_HEAD_WORDS * 4) {
+    if (headBytes < SNAP_HCD_PIRQ_HEAD_WORDS * 4) {
         comp("\ninterrupt routing (XhciIntelIrqRoute): not served by this "
              "driver (an\n  xhci98.sys before 2.3.0.0's; its HCD region "
              "header is %lu bytes).\n", headBytes);
+        return;
+    }
+    if (hcdBytes < SNAP_HCD_PIRQ_HEAD_WORDS * 4) {
+        comp("\ninterrupt routing (XhciIntelIrqRoute): the HCD region "
+             "came back %lu bytes,\n  shorter than its %lu-byte header; "
+             "not decoded.\n", hcdBytes, headBytes);
         return;
     }
     count = get32(hcd, SNAP_PIRQ_COUNT_AT * 4);
@@ -2443,15 +2453,21 @@ static void print_pirq(const unsigned char *hcd, unsigned long hcdBytes)
 
     comp("\ninterrupt routing (XhciIntelIrqRoute, task 36.3):\n");
     v = PW(SNAP_PIRQ_MODE);
-    if (PW(SNAP_PIRQ_VALUE_FOUND) != 0) {
-        comp("  value            %lu", PW(SNAP_PIRQ_VALUE));
+    if (v == SNAP_PIRQ_UNREAD) {
+        /* XhciPirqReset at the start's entry, no latch after it. */
+        comp("  value            not read: this start ended before the "
+             "routing step\n");
     } else {
-        comp("  value            not set");
+        if (PW(SNAP_PIRQ_VALUE_FOUND) != 0) {
+            comp("  value            %lu", PW(SNAP_PIRQ_VALUE));
+        } else {
+            comp("  value            not set");
+        }
+        comp(" (taken as %lu: %s)\n", v,
+             v == 0 ? "off, reports and writes nothing"
+                    : v == 1 ? "writes on the verified E7250 only"
+                    : v == 2 ? "writes on any reviewed xHCI/LPC pair" : "?");
     }
-    comp(" (taken as %lu: %s)\n", v,
-         v == 0 ? "off, reports and writes nothing"
-                : v == 1 ? "writes on the verified E7250 only"
-                : v == 2 ? "writes on any reviewed xHCI/LPC pair" : "?");
     comp("  runs             %lu; D20IR writes %lu, %lu failed\n",
          PW(SNAP_PIRQ_RUNS), PW(SNAP_PIRQ_WRITES),
          PW(SNAP_PIRQ_WRITE_FAILURES));
@@ -2474,15 +2490,27 @@ static void print_pirq(const unsigned char *hcd, unsigned long hcdBytes)
         comp("  raw interrupt    not read\n");
     } else if (v == 0) {
         comp("  raw interrupt    none in the raw resource list\n");
+    } else if ((PW(SNAP_PIRQ_IRQ_FLAGS) & 2UL) != 0) {
+        /* CM_RESOURCE_INTERRUPT_MESSAGE: the first word is a reserved
+         * USHORT then MessageCount, not a level (review round 1, finding
+         * 3). */
+        comp("  raw interrupt    %lu descriptor(s), a message grant: %lu "
+             "message(s),\n                   vector %lX, flags %lX, share "
+             "%lu\n", v, PW(SNAP_PIRQ_IRQ_LEVEL) >> 16,
+             PW(SNAP_PIRQ_IRQ_VECTOR), PW(SNAP_PIRQ_IRQ_FLAGS),
+             PW(SNAP_PIRQ_IRQ_SHARE));
     } else {
         comp("  raw interrupt    %lu descriptor(s); level %lu, vector %lu, "
              "flags %lX, share %lu\n", v, PW(SNAP_PIRQ_IRQ_LEVEL),
              PW(SNAP_PIRQ_IRQ_VECTOR), PW(SNAP_PIRQ_IRQ_FLAGS),
              PW(SNAP_PIRQ_IRQ_SHARE));
     }
+    /* XHCI_PIRQ_IRQ_NONE (0) is also what a run that never reached the
+     * IRQ leaves, so "neither" only where the IRQ was judged so. */
     v = PW(SNAP_PIRQ_IRQ_MODE);
-    if (v != SNAP_PIRQ_UNREAD) {
-        comp("  IRQ taken as     %s\n", v < 3 ? irq_text[v] : "?");
+    if (v == 1 || v == 2 ||
+        (v == 0 && PW(SNAP_PIRQ_DECISION) == 16)) {
+        comp("  IRQ path         %s\n", irq_text[v]);
     }
     comp("  xHCI             id %s, subsystem %s",
          pirq_word(PW(SNAP_PIRQ_XHCI_ID), buf),
@@ -2533,10 +2561,11 @@ static void print_pirq(const unsigned char *hcd, unsigned long hcdBytes)
 
 /*
  * `-selftest-pirq`: task 36.3's decode over canned HCD headers: the E7250's
- * repair in APIC mode (IRQ 21, INTA moved from PIRQA to PIRQF), a reviewed
- * pair at value 1 not admitted, a message interrupt, a non-Intel
- * controller, a header from before 2.3.0.0, and a record count it cannot
- * hold.
+ * repair over the direct path (IRQ 21, INTA moved from PIRQA to PIRQF), a
+ * reviewed pair at value 1 not admitted, a message grant in its own
+ * layout, a non-Intel controller, a start refused before the routing
+ * step, a header from before 2.3.0.0, an image cut short, and a record
+ * count it cannot hold.
  */
 static int selftest_pirq(void)
 {
@@ -2593,9 +2622,15 @@ static int selftest_pirq(void)
     put32(p, SNAP_PIRQ_DELIVERY * 4, 2);
     put32(p, SNAP_PIRQ_DECISION * 4, 12);
     put32(p, SNAP_PIRQ_IRQ_FLAGS * 4, 2);
-    put32(p, SNAP_PIRQ_IRQ_MODE * 4, SNAP_PIRQ_UNREAD);
+    /* WDK 7.1's u.MessageInterrupt.Raw: MessageCount 1 in 31:16, a
+     * vector the bus gave, not an IRQ. */
+    put32(p, SNAP_PIRQ_IRQ_LEVEL * 4, 0x00010000UL);
+    put32(p, SNAP_PIRQ_IRQ_VECTOR * 4, 0xFFFFFFFEUL);
+    put32(p, SNAP_PIRQ_IRQ_MODE * 4, 0);
     put32(p, SNAP_PIRQ_TARGET * 4, SNAP_PIRQ_UNREAD);
     print_pirq(hcd, sizeof(hcd));
+    put32(p, SNAP_PIRQ_IRQ_LEVEL * 4, 21);
+    put32(p, SNAP_PIRQ_IRQ_VECTOR * 4, 21);
 
     /* Another vendor: nothing past its own space read, the value unset. */
     for (i = SNAP_PIRQ_SLOT_ID; i < SNAP_PIRQ_WORDS; i++) {
@@ -2612,9 +2647,25 @@ static int selftest_pirq(void)
     put32(p, SNAP_PIRQ_XHCI_ID * 4, 0x01941033UL);
     print_pirq(hcd, sizeof(hcd));
 
+    /* A start refused before the routing step: reset, never latched. */
+    for (i = SNAP_PIRQ_MODE; i < SNAP_PIRQ_WORDS; i++) {
+        put32(p, i * 4, SNAP_PIRQ_UNREAD);
+    }
+    put32(p, SNAP_PIRQ_VALUE_FOUND * 4, 0);
+    put32(p, SNAP_PIRQ_WHEN * 4, 0);
+    put32(p, SNAP_PIRQ_DELIVERY * 4, 0);
+    put32(p, SNAP_PIRQ_DECISION * 4, 0);
+    put32(p, SNAP_PIRQ_IRQ_COUNT * 4, 0);
+    put32(p, SNAP_PIRQ_IRQ_MODE * 4, 0);
+    print_pirq(hcd, sizeof(hcd));
+
     /* A 2.2.0.0 driver's twenty-word header. */
     put32(hcd, 4, SNAP_HCD_TOL_HEAD_WORDS * 4);
     print_pirq(hcd, sizeof(hcd));
+
+    /* A 2.3.0.0 header in an image cut short. */
+    put32(hcd, 4, SNAP_HCD_PIRQ_HEAD_WORDS * 4);
+    print_pirq(hcd, SNAP_HCD_TOL_HEAD_WORDS * 4);
 
     /* A count the header cannot hold. */
     put32(hcd, 4, SNAP_HCD_PIRQ_HEAD_WORDS * 4);
