@@ -507,10 +507,53 @@ static void test_wake_at_observe(void)
     CHECK_EQ(XhciSuspEvidence(&link, XHCI_SUSP_EV_WAKE), 0,
              "during the observation: kept");
     CHECK_EQ(link.WakeKept, 1, "kept");
-    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_TIMEOUT, 60, &wait);
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_EXPIRED, 60, &wait);
     CHECK_EQ(link.State, XHCI_SUSP_RESUMING, "woken: RESUMING");
     CHECK_EQ(step, XHCI_SUSP_STEP_RECOVERY, "hub: the hub timed it");
     CHECK_EQ(link.ClaimDue, 1, "the event taken");
+
+    /* The same, but the observation's GET_STATUS itself timed out: a
+     * transport failure stays uncertain (round 3, finding 2). */
+    XhciSuspLinkInit(&link, 0, 1);
+    step = XhciSuspBegin(&link, XHCI_SUSP_RUN_SUSPEND, 0, 0, 0, &wait);
+    while (step != XHCI_SUSP_STEP_OBSERVE) {
+        step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 1, &wait);
+    }
+    (VOID)XhciSuspEvidence(&link, XHCI_SUSP_EV_WAKE);
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_TIMEOUT, 30, &wait);
+    CHECK_EQ(link.State, XHCI_SUSP_RECOVERING,
+             "kept wake, then a transport timeout: RECOVERING");
+    /* No evidence and the bound ran out: uncertain. */
+    XhciSuspLinkInit(&link, 0, 1);
+    step = XhciSuspBegin(&link, XHCI_SUSP_RUN_SUSPEND, 0, 0, 0, &wait);
+    while (step != XHCI_SUSP_STEP_OBSERVE) {
+        step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 1, &wait);
+    }
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_EXPIRED, 60, &wait);
+    CHECK_EQ(link.State, XHCI_SUSP_RECOVERING,
+             "nothing seen in the bound: RECOVERING");
+
+    /* A sample read after the U3 request is issued but before the step
+     * is reported belongs to this suspension (round 3, finding 1). */
+    XhciSuspLinkInit(&link, 0, 1);
+    step = XhciSuspBegin(&link, XHCI_SUSP_RUN_SUSPEND, 0, 0, 0, &wait);
+    while (step != XHCI_SUSP_STEP_U3) {
+        step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 1, &wait);
+    }
+    (VOID)XhciSuspEvidence(&link, XHCI_SUSP_EV_WAKE);
+    CHECK_EQ(link.WakeKept, 0, "before the request: not kept");
+    XhciSuspU3Issued(&link);
+    (VOID)XhciSuspEvidence(&link, XHCI_SUSP_EV_WAKE);
+    CHECK_EQ(link.WakeKept, 1, "after the request: kept");
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 2, &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_OBSERVE, "observed");
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_EXPIRED, 52, &wait);
+    CHECK_EQ(link.State, XHCI_SUSP_RESUMING, "taken at the observation");
+    /* A new suspend starts with nothing issued. */
+    XhciSuspLinkInit(&link, 0, 1);
+    step = XhciSuspBegin(&link, XHCI_SUSP_RUN_SUSPEND, 0, 0, 0, &wait);
+    XhciSuspU3Issued(&link);
+    CHECK_EQ(link.U3Issued, 0, "issued only at the U3 step");
 
     /* A disconnect kept while SUSPENDING outranks a kept wake. */
     XhciSuspLinkInit(&link, 1, 1);
@@ -668,6 +711,26 @@ static void test_latch_and_rearm(void)
     f[0].Seq += 2;
     CHECK_EQ(XhciSuspDecide(&link, f, 1, 1, 0, &d), XHCI_SUSP_DO_SUSPEND,
              "changed after the baseline: suspend");
+
+    /* An armed STALL refusal: its WAIT_WAKE claimed for NOT_SUPPORTED in
+     * the hold, before the latch - that removal alone does not release
+     * it (round 3, finding 3). */
+    XhciSuspLinkInit(&link, 1, 1);
+    func_init(&f[0], D2);
+    f[0].WaitWake = 1;
+    f[0].DxPended = 1;
+    f[0].DxEpoch = 1;
+    (VOID)XhciSuspDecide(&link, f, 1, 1, 0, &d);
+    step = XhciSuspBegin(&link, XHCI_SUSP_RUN_SUSPEND, d.ArmIntent, 0, 0,
+                         &wait);
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 1, &wait);
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_STALL, 2, &wait);
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 3, &wait);
+    CHECK_EQ(link.Reason, XHCI_SUSP_WHY_STALL, "STALL");
+    f[0].WaitWake = 0;          /* claimed in the hold, before the latch */
+    XhciSuspLatch(&link, f, 1);
+    CHECK_EQ(XhciSuspDecide(&link, f, 1, 1, 0, &d), XHCI_SUSP_DO_NONE,
+             "the refusal's own edits do not release the latch");
 
     /* A change while not all Dx spends the latch too. */
     link.LatchDue = 1;

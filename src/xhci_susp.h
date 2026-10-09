@@ -180,6 +180,8 @@ typedef struct _XHCI_SUSP_LINK {
     ULONG WakeKept;         /* wake evidence kept while SUSPENDING       */
     ULONG WakeTaken;        /* this suspension's wake event is recorded  */
     ULONG GoneKept;         /* a disconnect reported while a sequence ran */
+    ULONG U3Issued;         /* the U3 request of the running suspend has
+                             * been issued (XhciSuspU3Issued)            */
     ULONG Internal;         /* the sequence is an internal cycle (5.4)   */
     ULONG LatchDue;         /* a refusal: latch at the next decision     */
     ULONG Latched;          /* no suspend until the slots' digest moves  */
@@ -265,10 +267,13 @@ ULONG XhciSuspDecide(PXHCI_SUSP_LINK link, PXHCI_SUSP_FUNC funcs,
 #define XHCI_SUSP_RES_FAILED        3UL /* failed with every endpoint's
                                          * state read back, nothing left
                                          * U0: the hardware is usable     */
-#define XHCI_SUSP_RES_TIMEOUT       4UL /* an EP0 or command timeout, or a
-                                         * bound run out unrefuted        */
+#define XHCI_SUSP_RES_TIMEOUT       4UL /* an EP0, hub-request or command
+                                         * timeout: the transport failed  */
 #define XHCI_SUSP_RES_DISCONNECT    5UL /* CSC, lost CCS, a port error    */
 #define XHCI_SUSP_RES_WAKE          6UL /* OBSERVE: the device is waking  */
+#define XHCI_SUSP_RES_EXPIRED       7UL /* OBSERVE or VERIFY: the bound ran
+                                         * out with every sample read and
+                                         * nothing seen either way       */
 
 /* How a sequence ended (link->Outcome). */
 #define XHCI_SUSP_OUT_NONE          0UL
@@ -294,6 +299,12 @@ ULONG XhciSuspDecide(PXHCI_SUSP_LINK link, PXHCI_SUSP_FUNC funcs,
 ULONG XhciSuspBegin(PXHCI_SUSP_LINK link, ULONG kind, ULONG armWanted,
                     ULONG internal, ULONG nowMs, PULONG waitMs);
 
+/* The executor has issued the U3 step's request (before it reports the
+ * step): wake samples it feeds from now on belong to this suspension,
+ * including any it reads before reporting the step (Codex review of
+ * 36.29, round 3, finding 1). */
+VOID XhciSuspU3Issued(PXHCI_SUSP_LINK link);
+
 /* The current step's result at `nowMs`: the next step, or END with
  * link->State and link->Outcome written. */
 ULONG XhciSuspAdvance(PXHCI_SUSP_LINK link, ULONG result, ULONG nowMs,
@@ -310,8 +321,11 @@ VOID XhciSuspRecovered(PXHCI_SUSP_LINK link, ULONG ok);
  * device's slots IN THE SAME controller-lock hold in which that ACTIVE
  * became visible to dispatch (the Advance or Recovered call that wrote it),
  * so a slot change dispatch makes afterwards is a change against the
- * baseline (Codex review of 36.29, round 2, finding 4). Does nothing when
- * no latch is due.
+ * baseline (Codex review of 36.29, round 2, finding 4). The refusal's own
+ * slot edits - a STALL's WAIT_WAKEs claimed for NOT_SUPPORTED - are made
+ * earlier in that same hold, before this call, so they are in the
+ * baseline and do not release it (round 3, finding 3); the claimed IRPs
+ * are completed after the hold. Does nothing when no latch is due.
  */
 VOID XhciSuspLatch(PXHCI_SUSP_LINK link, const XHCI_SUSP_FUNC *funcs,
                    ULONG count);
@@ -346,10 +360,11 @@ ULONG XhciSuspHubEvidence(const XHCI_SUSP_LINK *link, ULONG status,
  * then, in the same hold, reads hc->WakeSeq as the watermark, claims the
  * WAIT_WAKEs XhciSuspWakeClaims names (setting each claimed PDO's
  * WokeHold) and reports how many with XhciSuspWakeCount, and begins
- * RUN_WAKE. A wake sample while SUSPENDING counts only during the
- * observation (before the U3 request it is an earlier suspension's): it
- * is kept (WakeKept) and taken when the observation reports, whatever it
- * reports but a disconnect, which sets ClaimDue the same way. Evidence
+ * RUN_WAKE. A wake sample while SUSPENDING counts only once the U3
+ * request is issued (before it, it is an earlier suspension's): it is kept
+ * (WakeKept) and taken when the observation reports OK, WAKE or EXPIRED -
+ * never a TIMEOUT, a transport failure that stays the uncertain outcome,
+ * nor a disconnect - which sets ClaimDue the same way. Evidence
  * while RESUMING is ignored. A DISCONNECT
  * makes the link GONE at once outside a sequence; inside one it is kept
  * (GoneKept) and the sequence's next step ends GONE, ahead of any wake.

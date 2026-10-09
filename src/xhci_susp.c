@@ -118,6 +118,7 @@ VOID XhciSuspLinkInit(PXHCI_SUSP_LINK link, ULONG root, ULONG generation)
     link->WakeKept = 0;
     link->WakeTaken = 0;
     link->GoneKept = 0;
+    link->U3Issued = 0;
     link->Internal = 0;
     link->LatchDue = 0;
     link->Latched = 0;
@@ -368,6 +369,7 @@ ULONG XhciSuspBegin(PXHCI_SUSP_LINK link, ULONG kind, ULONG armWanted,
         link->WakeKept = 0;
         link->WakeTaken = 0;
         link->GoneKept = 0;
+        link->U3Issued = 0;
         return xhciSuspStep(link, XHCI_SUSP_STEP_GATE, 0, nowMs, waitMs);
     }
     if (kind == XHCI_SUSP_RUN_WAKE) {
@@ -391,6 +393,13 @@ static ULONG xhciSuspAfterRecovery(PXHCI_SUSP_LINK link, ULONG nowMs,
         return xhciSuspStep(link, XHCI_SUSP_STEP_DISARM, 0, nowMs, waitMs);
     }
     return xhciSuspStep(link, XHCI_SUSP_STEP_RESTART, 0, nowMs, waitMs);
+}
+
+VOID XhciSuspU3Issued(PXHCI_SUSP_LINK link)
+{
+    if (link->Step == XHCI_SUSP_STEP_U3) {
+        link->U3Issued = 1;
+    }
 }
 
 ULONG XhciSuspAdvance(PXHCI_SUSP_LINK link, ULONG result, ULONG nowMs,
@@ -472,12 +481,12 @@ ULONG XhciSuspAdvance(PXHCI_SUSP_LINK link, ULONG result, ULONG nowMs,
                                XHCI_SUSP_OUT_SUSPENDED, waitMs);
         }
         if (result == XHCI_SUSP_RES_OK || result == XHCI_SUSP_RES_WAKE ||
-            link->WakeKept) {
+            (link->WakeKept && result == XHCI_SUSP_RES_EXPIRED)) {
             /* Suspension happened and the device is already waking: seen
              * now, or kept from a sample of this observation whose change
-             * is acknowledged since - taken whatever the poll then read,
-             * a timeout included (Codex review of 36.29, rounds 1 and 2,
-             * finding 7 and 3). */
+             * is acknowledged since - taken when the bound then runs out,
+             * but never over a transport timeout, which stays uncertain
+             * (Codex review of 36.29, rounds 1 to 3). */
             link->U3Ms = nowMs;
             return xhciSuspWakeBranch(link, nowMs, waitMs);
         }
@@ -662,7 +671,8 @@ ULONG XhciSuspEvidence(PXHCI_SUSP_LINK link, ULONG event)
         /* Only a sample taken after this suspension's U3 request belongs
          * to it: before it the link is U0, and a wake read then is an
          * earlier suspension's (round 2, finding 1). */
-        if (link->Step == XHCI_SUSP_STEP_OBSERVE) {
+        if (link->Step == XHCI_SUSP_STEP_OBSERVE ||
+            (link->Step == XHCI_SUSP_STEP_U3 && link->U3Issued)) {
             link->WakeKept = 1;
         }
         return 0;

@@ -266,13 +266,15 @@ ask, and perform the one step asked. What it decides:
   drain, which the executor's EP0-quiet wait must keep to, and a ring not
   drained by then is NOT_SENT again, a refusal. Before the U3 request the
   executor acknowledges a stale PLC (root) or C_PORT_SUSPEND (hub), and
-  only wake evidence sampled during the observation belongs to this
-  suspension - before the request the link is U0 and a wake read then is
-  an earlier suspension's, ignored. Evidence of this observation is kept
-  and taken when the observation reports, whatever it then reads but a
-  disconnect - its change may be acknowledged already, so it is not
-  waited for again, and a timeout after it is not the uncertain outcome;
-  a wake the observation itself reads is taken the same way. Either is
+  only wake evidence sampled once that request is issued belongs to this
+  suspension - before it the link is U0 and a wake read then is an
+  earlier suspension's, ignored. Such evidence is kept and taken when the
+  observation reports U3, a wake, or its bound run out with nothing seen
+  - its change may be acknowledged already, so it is not waited for
+  again. A transport timeout (EP0, a hub request, a command) stays the
+  uncertain outcome whatever was kept: the evidence settles whether the
+  device suspended, not a control transfer left outstanding. A wake the
+  observation itself reads is taken the same way. Either is
   the device-initiated resume: at a root port TDRSMDN from the PLC and
   then U0, at a hub the hub has timed it. A disconnect
   reported while a sequence runs is kept too, and ends the sequence GONE
@@ -304,7 +306,9 @@ ask, and perform the one step asked. What it decides:
 - **After a refusal** (3.5: "does not retry until the slots change"), and
   after an uncertain outcome that ended ACTIVE: the slots are latched, in
   the same controller-lock hold in which that ACTIVE became visible to
-  dispatch (`XhciSuspLatch`), by a digest of each PDO's
+  dispatch (`XhciSuspLatch`), after the refusal's own slot edits in that
+  hold (a STALL's WAIT_WAKEs claimed for NOT_SUPPORTED), by a digest of
+  each PDO's
   `PwrSeq`, `PwrState`, `PwrWanted`, pended D0, held WAIT_WAKE and
   closure - a pended Dx is not in it, since the machine completes that
   itself - and no suspend is begun until the digest moves. The change
@@ -357,10 +361,10 @@ All under the **controller lock** (innermost, record 13 section 5.4):
 |---|---|---|
 | `pdo->PwrIrp` | the one pended D-IRP | dispatch (set), whoever claims it (clear) |
 | `pdo->PwrWanted` | the D-state asked | dispatch |
-| `pdo->PwrState` | the D-state the bus acts on | dispatch (a Dx: at once), thread (D0: at ACTIVE) |
+| `pdo->PwrState` | the D-state the bus acts on | dispatch (a Dx: at once; a D0 on a powered ACTIVE link: at once), thread (D0: at ACTIVE) |
 | `pdo->PwrClosed` | admission closed | teardown |
 | `pdo->PwrSeq` | the slot's change count (3.9) | dispatch, cancel |
-| `pdo->WokeHold` | a wake completed its WAIT_WAKE (3.9) | thread |
+| `pdo->WokeHold` | a wake completed its WAIT_WAKE (3.9) | thread (set, clear), dispatch (clear, when it writes D0) |
 | `pdo->IdleState`, `IdleBatch` | section 6 | dispatch, cancel, callback thread, teardown |
 | `dev->Link`, `dev->Episode`, pipes' `SuspendPause` | sections 3, 5 | thread |
 | `hc->PowerEpoch` | controller session | power path, recovery |
