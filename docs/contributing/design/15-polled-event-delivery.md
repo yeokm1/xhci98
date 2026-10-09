@@ -468,23 +468,37 @@ the same controller-lock hold as the look that proved the line dead:
    the recovery and the reinitialising resume. Each attempt is counted,
    and `LineRetired` once set stays set for the start.
 
-   **A retirement that never proves** (round 4) is recorded
-   (`intr.retire.failed`, and the counter block's retirement attempts with
-   `LineRetired` 0) and left as it is, and the ISR's acknowledgement path
-   is not kept on its behalf: the move was made because that path does not
-   reach this assertion. The verdict is four asserted looks with no claim
-   between them, which means either the ISR was never called for it - the
-   INTx lands on a line this driver is not connected to, issue 12's case -
-   or it was called and declined, which `XhciIsr` does with `IP` and `IE`
-   standing only on `EINT` 0 or an all-ones window, and then it never
-   acknowledges either. So an unproven retirement leaves the line exactly
-   as the start found it, the assertion having stood unacknowledged since
-   then; the stop disconnects the ISR as PnP requires, and the next start's
-   HCRST (`XhciInitController`) returns `IP`, `IE` and `INTE` to 0. The
-   ISR's other gates - `HcInfoStatus` during a reinitialisation, the
-   suppression gate - therefore stay as they are; `LineMoved` only keeps
-   the suppression gate from opening early while the ISR can still be
-   called.
+   **Containment when the retirement does not prove** (rounds 4 and 5).
+   The verdict says only that no claim came in a 300 ms window, not that
+   the ISR can never acknowledge later (on the E7250 an EHCI interrupt can
+   still bring it there), so the ISR keeps its acknowledgement path
+   (`LineMoved`, above) and the driver escalates, in order, until one step
+   proves the line can no longer be asserted:
+   1. the DIRQL retirement above, at every chance listed;
+   2. **INTx Disable**: from the controller thread at PASSIVE_LEVEL, the
+      first pass after the move with the retirement still owed sets bit 10
+      of the PCI Command register (Interrupt Disable; PCI 3.0 6.2.2: "when
+      set, the function is prevented from asserting INTx#", which on PCI
+      Express sends the Deassert_INTx message), through the same
+      configuration path and read-modify-write the Bus Master Enable
+      restore uses (`XhciReadPciConfig`/`XhciWritePciConfig`), and reads
+      it back. Read back set is a proof whatever `IP` holds: `LineRetired`
+      is then published inside `KeSynchronizeExecution` as in step 3.3. A
+      message interrupt is unaffected by the bit, and no line is wanted
+      again this start. The bit is the start's to undo: every start whose
+      delivery is a line clears it, if set, before connecting, and records
+      that it did (`intr.intxdisable.cleared`);
+   3. **the in-place recovery**, asked for if both fail: its HCRST returns
+      `IP`, `IE` and `INTE` to 0. Through the recovery's reinitialisation
+      window the ISR's `HcInfoStatus` gate stays - it may not touch a
+      register whose base is being re-derived - which is the residual of
+      this last step only;
+   4. **uncontained**, if the recovery is refused or fails: the
+      controller is latched failed as for any refused recovery, and the
+      record says so (`intr.retire.uncontained`, the counter block's
+      retirement state 3). The stop then disconnects the ISR, as PnP
+      requires; nothing later is counted on to contain it.
+
 4. `hc->IntDelivery` becomes poll, so the routing quirk's run at a later
    return to D0 writes nothing. A write it made at the start is not undone
    (36.3).
@@ -647,8 +661,7 @@ Enable) and MSI-X (ID 11h, Message Control bit 15, MSI-X Enable), and
 records which is enabled: MSI-X when its bit is set, else MSI when its bit
 is set, else "message, capability not read" - the delivery is still the
 message, and the record says the read did not settle which. The walk is a
-pure function over the configuration bytes, host-tested beside the export
-walk.
+pure function over the configuration bytes, host-tested (`test_msi`).
 
 **The ISR.** `hcdMsgIsr(Interrupt, Context, MessageId)` does what the line
 ISR does - `XhciIsr`: EINT then IP acknowledged and `IE` written 0, on a
@@ -677,13 +690,15 @@ and its reason in the counter block and the start's log note; how the
 routines were found; the message descriptors and the `MessageCount` granted; the
 capability read. `XHCISNAP` names each (36.9).
 
-**Legs** are 36.16's: QEMU's `qemu-xhci` with `msi=on,msix=off`,
+**Legs** are 36.16's, on Vista and 7 x64: QEMU's `qemu-xhci` with `msi=on,msix=off`,
 `msi=off,msix=on` and the launchers' default, under modes 0 and 3, read
 as MSI, MSI-X and whatever Windows granted; `MSISupported` 0 read as the
 line; mode 1 under a grant read as the message with its log note; a
 `qemu`-flavour failed connection read as polling with its reason; a
 `MessageNumberLimit` raised by hand, read as a grant of several served as
-one; and the down-level targets reading as the release before it.
+one; and the down-level targets, Vista and 7 x86 among them, reading as
+the release before it, with a hand-set `MSISupported` 1 on x86 read as
+polling with "message not connected".
 
 ## 5. The poller's lifecycle
 
@@ -767,14 +782,20 @@ promoted and never peeked for.
   owner or a party holding the arm back sets the timer - does nothing.
 - **The DPC's pass.** In CLOSING it does nothing more and ends. Otherwise,
   under the controller lock, it reads the admission of section 5.3; not
-  admitted, it parks (section 5.3) and ends. A close asked between its
-  taking ownership and that lock is honoured there (rounds 3 and 4):
-  under the controller lock and then `PollLock`, the park turns FIRING
-  into PARKED and leaves CLOSING as it is, and only after **both** locks
-  are released does the DPC take `PollLock` alone once more, turn CLOSING
-  into CLOSED, release it and return - so CLOSED is published after its
-  last touch of the controller, and the release's wait for CLOSED and its
-  `PollLock` handshake cover the whole pass. Admitted: in the watch role it
+  admitted, it decides to park (section 5.3) and ends. **The DPC keeps
+  ownership until its epilogue** (rounds 3 to 5): the decision, made
+  under the controller lock and then `PollLock`, only marks the pass
+  `ParkPending`; the state stays FIRING (or CLOSING, if a close came
+  meanwhile). After **both** locks are released the DPC takes `PollLock`
+  alone once more for its epilogue, which is the only place it gives
+  ownership up: CLOSING becomes CLOSED; a FIRING pass marked
+  `ParkPending` becomes ARMED at the role's first period if a kick came
+  while it was pending (`KickOwed`), and PARKED otherwise; any other
+  FIRING pass arms as below. It then releases `PollLock` and returns, so
+  no state another party can act on - PARKED, CLOSED - is published
+  before the DPC's last touch of the controller or the poller, and the
+  release's wait for CLOSED and its `PollLock` handshake cover the whole
+  pass. Admitted: in the watch role it
   looks (section 4.2) and, if the line is proven dead, makes the move and
   continues as a server in the same pass; in the service role it releases
   the controller lock and drains with `XhciEventDpc(ext, FALSE)`, wakes the
@@ -877,23 +898,27 @@ run bit is written, so neither proves the controller runs.
 **Park and kick are serialised by the controller lock.**
 
 - The timer DPC, finding itself not admitted under the controller lock,
-  takes `PollLock` inside that hold and parks: FIRING becomes PARKED (a
-  CLOSING asked meanwhile is left for the DPC's epilogue, section 5.2),
-  and the watcher's count is cleared. It drains and looks at nothing, arms
-  nothing, and returns.
+  takes `PollLock` inside that hold and marks the pass `ParkPending`,
+  clearing the watcher's count; it drains and looks at nothing, and its
+  epilogue (section 5.2) publishes PARKED - or CLOSED, or ARMED for a kick
+  owed - once both locks are released.
 - A revocation cancels no timer: an arm made before a suspend or a
   recovery still expires, and its DPC finds itself not admitted and
   parks, as above.
 - `HcdPollGrant`, in the same controller-lock hold that sets
   `PollService`, takes `PollLock` and **kicks**: PARKED becomes ARMED at
   the role's first period (the active period for a server, the watch
-  period for a watcher). In ARMED or FIRING the kick does nothing, since
-  the owner will see `PollService` 1 at its next admission. In CLOSING or
-  CLOSED it does nothing.
+  period for a watcher). In FIRING with `ParkPending` the kick is recorded
+  as `KickOwed` and arms nothing - the DPC still owns the timer, and its
+  epilogue arms. In ARMED, or FIRING without `ParkPending`, it does
+  nothing, since the owner reads `PollService` at its next admission, or
+  read it as 1 already. In CLOSING or CLOSED it does nothing.
 
 Both decisions are taken inside one hold of the controller lock, so either
-the DPC parks first and the kick finds PARKED and arms, or the kick sets
-`PollService` first and the DPC does not park. A restart cannot be lost.
+the DPC decides to park first and the kick finds `ParkPending` and leaves
+`KickOwed` for the epilogue, or the kick sets `PollService` first and the
+DPC does not park. A restart cannot be lost, and no arm is made while the
+DPC owns the timer.
 `KeSetTimer` is callable at DISPATCH_LEVEL, so the recovery path can kick.
 The timer service's own close (`TimersClosed`) is not used for any of
 this: the controller's initialisation needs the timer service during
@@ -910,7 +935,9 @@ resume, between `INITIALIZED` and the D0 publication (not admitted,
 parked; the grant after the publication kicks it back), and the start's
 own window, where no grant has been made and nothing is armed; a park
 against a close asked after the DPC took ownership (CLOSING kept through
-the park, CLOSED only in the `PollLock`-only epilogue, nothing armed); a retirement whose `IP` step
+the park, CLOSED only in the `PollLock`-only epilogue, nothing armed); a
+close and a grant each arriving after the parking decision and before
+the epilogue (CLOSED; ARMED by `KickOwed`, never armed twice); a retirement whose `IP` step
 fails followed at once by a suspend and by a recovery (the ISR still
 claiming through it, the HCD's attempt before each, and the HCRST's
 proof); a
@@ -1131,7 +1158,9 @@ arms replaced as displaced (section 6.2); the shortest and longest interval
 observed between two poll runs with the count of discarded intervals
 (section 7); and the watcher's looks, asserted looks, stale pairs, the move
 (0 or 1), whether the mask at the move was proven, the attempts to retire
-the standing assertion and whether one proved it (`LineRetired`). The delivery and the
+the standing assertion, and the retirement's state (0 none owed, 1
+proven by acknowledgement, 2 by INTx Disable, 3 uncontained, 4 by an
+HCRST). The delivery and the
 reason are written at start and again at the move, under the controller
 lock; the poller's counters under the controller lock or `PollLock`, as
 each site holds.
@@ -1428,6 +1457,14 @@ Round 4 (`f4d8a28`): 2 P1, 2 P2, all taken.
 | 2 | P1: an unproven retirement and the ISR's lifecycle gates | Section 4.2: why the ISR path never acknowledges this assertion; the unproven outcome recorded and ended by the next HCRST |
 | 3 | P2: CLOSED published before the DPC's last controller access | Section 5.2: CLOSING kept through the park; CLOSED in a `PollLock`-only epilogue |
 | 4 | P2: the file parser's callable-address and short-read checks | Moot with finding 1: the file parser is withdrawn |
+
+Round 5 (`5508b61`): 2 P1, 1 P2, all taken.
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | P1: PARKED published before the DPC's last access; a grant could arm under a parking DPC | Sections 5.2 and 5.3: `ParkPending` and `KickOwed`; ownership given up only in the `PollLock`-only epilogue |
+| 2 | P1: a finite verdict is not permanent unreachability; containment needed | Section 4.2: the ISR keeps its path; escalation to PCI INTx Disable, then the recovery's HCRST, then a recorded uncontained terminal |
+| 3 | P2: the acceptance legs still asked MSI of x86 | Roadmap decisions table, 36.15 and 36.16; section 4.3's legs |
 
 ## 14. What changes in the documents
 
