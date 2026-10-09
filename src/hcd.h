@@ -969,6 +969,12 @@ typedef struct _HCD_CONTROLLER {
     ULONG EnumCommandsTimedOut;
     ULONG EnumDisableFailures;
     ULONG EnumTransfersTimedOut;
+    /* Task 36.4's busy retry (hcd_enum.c, hcdCommandBusy): commands that
+     * met XHCI_CMD_BUSY, those then submitted, and the drains it queued.
+     * Thread only. */
+    ULONG EnumCommandsBusy;
+    ULONG EnumCommandsBusyCleared;
+    ULONG EnumCommandBusyDrains;
     /* Removal and the TT (27-A.3; hcd_enum.c, hcd_hub.c): endpoints
      * stopped so a leaving device's URBs complete before its slot goes,
      * hub ports given up after their attempts, CLEAR_TT_BUFFER sent and
@@ -1067,6 +1073,9 @@ typedef struct _HCD_CONTROLLER {
      * once the slot no longer names it), and InjOwnCmd across the layer's
      * own commands, which its command hook lets through. */
     ULONG QemuPsiE460;
+    /* Task 36.4: XhciQemuStartHold's end in tolerance ticks, latched at
+     * each start (HcdInjStart), 0 none; ended early by HcdInjStartRelease. */
+    volatile LONG InjStartHoldTicks;
     KSPIN_LOCK InjLock;
     XHCI_INJ_REGS InjRegs;
     XHCI_INJ_TRIGGER InjTrigger;
@@ -1320,6 +1329,7 @@ ULONG HcdCtlProveDmaStopped(PXHCI_EXTENSION ext);
 VOID HcdPowerGateEnter(PHCD_CONTROLLER hc);
 VOID HcdPowerGateLeave(PHCD_CONTROLLER hc);
 ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc);
+ULONG HcdCommandDrain(PHCD_CONTROLLER hc);
 VOID HcdPswRoute(PHCD_CONTROLLER hc);
 VOID HcdPswRelease(PHCD_CONTROLLER hc);
 VOID HcdPirqResume(PHCD_CONTROLLER hc);
@@ -1505,6 +1515,8 @@ NTSTATUS HcdCtlQemuReadDword(PHCD_CONTROLLER hc, PCWSTR name, PULONG value);
 VOID HcdInjStart(PHCD_CONTROLLER hc);
 VOID HcdInjPoll(PHCD_CONTROLLER hc);
 ULONG HcdInjIsrDrop(PHCD_CONTROLLER hc);
+ULONG HcdInjStartHeld(PHCD_CONTROLLER hc);
+VOID HcdInjStartRelease(PHCD_CONTROLLER hc);
 ULONG HcdInjUsbsts(PHCD_CONTROLLER hc, ULONG usbsts);
 USHORT HcdInjPciCommand(PHCD_CONTROLLER hc, USHORT command);
 VOID HcdInjService(PHCD_CONTROLLER hc);

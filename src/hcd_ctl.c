@@ -875,8 +875,9 @@ static BOOLEAN NTAPI hcdIsr(PKINTERRUPT Interrupt, PVOID Context)
         return FALSE;
     }
 #if defined(XHCI_FLAVOUR_QEMU)
-    /* 35-T.9's lost interrupt: acknowledged as ever, the drain not queued. */
-    if (HcdInjIsrDrop(hc)) {
+    /* 35-T.9's lost interrupt, and task 36.4's start hold: acknowledged as
+     * ever, the drain not queued. */
+    if (HcdInjIsrDrop(hc) || HcdInjStartHeld(hc)) {
         return TRUE;
     }
 #endif
@@ -1196,17 +1197,50 @@ static VOID hcdTerminalRelease(PHCD_CONTROLLER hc)
 }
 
 /*
+ * The drain's admission, the backstop's and the bus command path's: a good,
+ * initialized, unfailed controller in D0 with the DPC open - what the health
+ * poll's own admission does not check. Called with the controller lock
+ * held. IRQL: DISPATCH_LEVEL.
+ */
+static ULONG hcdDrainAdmitted(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+
+    ext = &hc->Hc;
+    return (ext->HcInfoStatus == XHCI_HC_OK &&
+            (ext->Flags & XHCI_EXT_FLAG_INITIALIZED) != 0 &&
+            (ext->Flags & XHCI_EXT_FLAG_SUSPENDED) == 0 &&
+            !ext->ControllerFailed &&
+            hc->Common.DevicePower == PowerDeviceD0 &&
+            !hc->SuspendedInD0 && !hc->DpcClosed &&
+            ext->EventRing.Base != NULL) ? 1UL : 0UL;
+}
+
+/* hcdIsr's admission: counted before the insertion, rolled back on a
+ * refusal, nothing once the DPC is closed (the stop ends the thread before
+ * hcdRelease closes it). A drain already running on another processor
+ * serializes on the lock and finds the ring empty. Returns whether it was
+ * queued. IRQL: <= DISPATCH_LEVEL. */
+static ULONG hcdQueueDrain(PHCD_CONTROLLER hc)
+{
+    (VOID)InterlockedIncrement(&hc->DpcsInFlight);
+    if (hc->DpcClosed || !KeInsertQueueDpc(&hc->IsrDpc, NULL, NULL)) {
+        (VOID)InterlockedDecrement(&hc->DpcsInFlight);
+        return 0;
+    }
+    return 1;
+}
+
+/*
  * The lost-interrupt backstop (35-T.1, design record 17 section 4.1): a
  * step of its own after hcdRecover, under the power gate as that is, admitted
- * only on a good, initialized, unfailed controller in D0 with the DPC open -
- * what the health poll's own admission does not check. Under the controller
- * lock it peeks at the event TRB at the software dequeue; an event pending
- * at the same index, cycle, drain pass (DpcCount, bumped under this lock by
- * every admitted drain) and start generation for the backstop interval was
- * written and never drained, and the drain is queued through the ISR's own
- * admission. It writes no register: ERDP, EHB and IE stay the drain's.
- * A refused admission drops the observation, so timing starts afresh.
- * IRQL: PASSIVE_LEVEL.
+ * by hcdDrainAdmitted. Under the controller lock it peeks at the event TRB
+ * at the software dequeue; an event pending at the same index, cycle, drain
+ * pass (DpcCount, bumped under this lock by every admitted drain) and start
+ * generation for the backstop interval was written and never drained, and
+ * the drain is queued through the ISR's own admission. It writes no
+ * register: ERDP, EHB and IE stay the drain's. A refused admission drops
+ * the observation, so timing starts afresh. IRQL: PASSIVE_LEVEL.
  */
 static VOID hcdBackstop(PHCD_CONTROLLER hc)
 {
@@ -1218,36 +1252,55 @@ static VOID hcdBackstop(PHCD_CONTROLLER hc)
 
     ext = &hc->Hc;
     queue = 0;
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Task 36.4's start hold keeps the start's No Op undrained. */
+    if (HcdInjStartHeld(hc)) {
+        return;
+    }
+#endif
     HcdPowerGateEnter(hc);
     XhciControllerLockAcquire(ext, &oldIrql);
-    admitted = (ext->HcInfoStatus == XHCI_HC_OK &&
-                (ext->Flags & XHCI_EXT_FLAG_INITIALIZED) != 0 &&
-                (ext->Flags & XHCI_EXT_FLAG_SUSPENDED) == 0 &&
-                !ext->ControllerFailed &&
-                hc->Common.DevicePower == PowerDeviceD0 &&
-                !hc->SuspendedInD0 && !hc->DpcClosed &&
-                ext->EventRing.Base != NULL) ? 1UL : 0UL;
+    admitted = hcdDrainAdmitted(hc);
     pending = admitted ? XhciEventRingPending(&ext->EventRing) : 0UL;
     queue = XhciTolBackstop(&ext->Tol.Obs, ext->Tol.Stats.Tolerance, pending,
                             ext->EventRing.Dequeue, ext->EventRing.Ccs,
                             ext->DpcCount, hc->TolStartGen, HcdTolNow(hc));
     XhciControllerLockRelease(ext, oldIrql);
     HcdPowerGateLeave(hc);
-    if (!queue) {
-        return;
-    }
-    /* hcdIsr's admission: counted before the insertion, rolled back on a
-     * refusal, nothing once the DPC is closed (the stop ends this thread
-     * before hcdRelease closes it). A drain already running on another
-     * processor serializes on the lock and finds the ring empty. */
-    (VOID)InterlockedIncrement(&hc->DpcsInFlight);
-    if (hc->DpcClosed || !KeInsertQueueDpc(&hc->IsrDpc, NULL, NULL)) {
-        (VOID)InterlockedDecrement(&hc->DpcsInFlight);
+    if (!queue || !hcdQueueDrain(hc)) {
         return;
     }
     XhciControllerLockAcquire(ext, &oldIrql);
     ext->Tol.Stats.BackstopDrains++;
     XhciControllerLockRelease(ext, oldIrql);
+}
+
+/*
+ * Task 36.4 (issue 12, Finding 1): a drain for the bus's command path, which
+ * met the engine busy with an earlier command whose completion may have
+ * come with no interrupt - the start's No Op on the E7250, whose line
+ * reached nothing, and which the backstop cannot drain while the thread
+ * waits here. The backstop's admission under the controller lock, without
+ * the power gate, which the thread may already hold (HcdEnumService), and
+ * only when an event stands at the dequeue. Returns whether one was queued.
+ * IRQL: PASSIVE_LEVEL.
+ */
+ULONG HcdCommandDrain(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+    KIRQL oldIrql;
+    ULONG queue;
+
+    ext = &hc->Hc;
+    XhciControllerLockAcquire(ext, &oldIrql);
+    queue = (hcdDrainAdmitted(hc) &&
+             XhciEventRingPending(&ext->EventRing)) ? 1UL : 0UL;
+    XhciControllerLockRelease(ext, oldIrql);
+    if (!queue || !hcdQueueDrain(hc)) {
+        return 0;
+    }
+    hc->EnumCommandBusyDrains++;
+    return 1;
 }
 
 /*

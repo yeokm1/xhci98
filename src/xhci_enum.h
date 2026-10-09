@@ -363,5 +363,29 @@ ULONG XhciEnumNoteFail(ULONG port, ULONG cause, ULONG attempt, ULONG final);
 ULONG XhciEnumNoteEnd(ULONG port, ULONG state, ULONG cause, ULONG retries);
 ULONG XhciEnumNoteQuiet(ULONG port);
 
+/*
+ * Task 36.4 (issue 12, Finding 1): a bus command the engine answers
+ * XHCI_CMD_BUSY is not refused at once. An earlier command - the start's No
+ * Op among them - may have completed with its event not yet drained, and on
+ * a line that delivers nothing nothing else will drain it. The bus asks for
+ * a drain, waits a slice for a completion, and looks again, under one
+ * deadline for the whole of it. Each look is decided here, in this order:
+ * the controller failed (`halted`) or the start generation moved
+ * (`genChanged`: a start, resume or in-place recovery) stops it; so does
+ * the deadline (`expired`), even at a look that reads the engine idle; an
+ * engine read idle (`idle`) is submitted to again; anything else waits.
+ * A stop is the refusal it always was. IRQL: any.
+ */
+#define XHCI_ENUM_BUSY_WAIT     0UL
+#define XHCI_ENUM_BUSY_SUBMIT   1UL
+#define XHCI_ENUM_BUSY_STOP     2UL
+#define XHCI_ENUM_BUSY_SLICE_MS 10UL
+ULONG XhciEnumBusyStep(ULONG halted, ULONG genChanged, ULONG expired,
+                       ULONG idle);
+
+/* The note an episode ends with: the command's TRB type, the submit's last
+ * answer (XHCI_CMD_*), and the looks it took, held to 16 bits. */
+ULONG XhciEnumNoteBusy(ULONG type, ULONG answer, ULONG looks);
+
 
 #endif /* XHCI_ENUM_H */

@@ -1012,6 +1012,47 @@ static void test_abandoned(void)
     CHECK_EQ(a.Kind, XHCI_ENUM_ACT_NONE, "and asks nothing");
 }
 
+/* Task 36.4: the busy retry's look, in its order, and its note. */
+static void test_busy(void)
+{
+    ULONG halted;
+    ULONG gen;
+    ULONG expired;
+    ULONG idle;
+    ULONG want;
+
+    for (halted = 0; halted < 2; halted++) {
+        for (gen = 0; gen < 2; gen++) {
+            for (expired = 0; expired < 2; expired++) {
+                for (idle = 0; idle < 2; idle++) {
+                    if (halted || gen || expired) {
+                        want = XHCI_ENUM_BUSY_STOP;
+                    } else if (idle) {
+                        want = XHCI_ENUM_BUSY_SUBMIT;
+                    } else {
+                        want = XHCI_ENUM_BUSY_WAIT;
+                    }
+                    CHECK_EQ(XhciEnumBusyStep(halted, gen, expired, idle),
+                             want, "busy: each look's step");
+                }
+            }
+        }
+    }
+    CHECK_EQ(XhciEnumBusyStep(0, 0, 1, 1), XHCI_ENUM_BUSY_STOP,
+             "busy: the deadline stops even an idle engine");
+    CHECK_EQ(XhciEnumBusyStep(1, 0, 0, 1), XHCI_ENUM_BUSY_STOP,
+             "busy: a failed controller is never submitted to");
+    CHECK_EQ(XhciEnumBusyStep(0, 1, 0, 1), XHCI_ENUM_BUSY_STOP,
+             "busy: a new start generation is never submitted to");
+
+    CHECK_EQ(XhciEnumNoteBusy(11, XHCI_CMD_OK, 3), 0x0B000003UL,
+             "busy note: Enable Slot, submitted, three looks");
+    CHECK_EQ(XhciEnumNoteBusy(11, XHCI_CMD_BUSY, 0x12345UL), 0x0B03FFFFUL,
+             "busy note: the looks held to 16 bits");
+    CHECK_EQ(XhciEnumNoteBusy(0x1FF, 0x1FF, 0), 0xFFFF0000UL,
+             "busy note: type and answer held to a byte each");
+}
+
 int main(void)
 {
     test_clean_paths();
@@ -1030,6 +1071,7 @@ int main(void)
     test_settle();
     test_hub_let_go();
     test_notes();
+    test_busy();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

@@ -586,3 +586,20 @@ ULONG XhciEnumNoteQuiet(ULONG port)
 {
     return ((port & 0xFFUL) << 24) | (XHCI_ENUM_NOTE_BUDGET & 0xFFUL);
 }
+
+ULONG XhciEnumBusyStep(ULONG halted, ULONG genChanged, ULONG expired,
+                       ULONG idle)
+{
+    if (halted || genChanged || expired) {
+        return XHCI_ENUM_BUSY_STOP;
+    }
+    return idle ? XHCI_ENUM_BUSY_SUBMIT : XHCI_ENUM_BUSY_WAIT;
+}
+
+ULONG XhciEnumNoteBusy(ULONG type, ULONG answer, ULONG looks)
+{
+    if (looks > 0xFFFFUL) {
+        looks = 0xFFFFUL;
+    }
+    return ((type & 0xFFUL) << 24) | ((answer & 0xFFUL) << 16) | looks;
+}

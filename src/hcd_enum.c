@@ -135,9 +135,89 @@ static ULONG hcdHalted(PHCD_CONTROLLER hc)
 }
 
 /*
+ * Task 36.4 (issue 12, Finding 1): the engine answered XHCI_CMD_BUSY, so an
+ * earlier command is outstanding or an abort is in progress - the start's
+ * asynchronous No Op, whose completion on the E7250 came with no interrupt
+ * and which the backstop cannot drain while this thread waits here. A drain
+ * is asked for (HcdCommandDrain, only when an event stands), a completion
+ * waited for a slice at a time, and the engine looked at again, under one
+ * deadline of HCD_COMMAND_WAIT_MS for the whole episode; the command is
+ * submitted again only once the engine reads idle under the controller
+ * lock, and never once the controller has failed or the start generation
+ * has moved (XhciEnumBusyStep). The waiter's marks are cleared before each
+ * submit, as the first submit's are, so only this command's own TRB counts
+ * afterwards. Returns the last submit's answer; *trbPA its TRB. Thread
+ * only. It drains; it does not decide that a line is dead, which is the
+ * dead-line rule's (task 36.7).
+ */
+static ULONG hcdCommandBusy(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
+                            PULONG trbPA)
+{
+    KTIMER deadline;
+    LARGE_INTEGER due;
+    LARGE_INTEGER zero;
+    KIRQL oldIrql;
+    ULONG answer;
+    ULONG expired;
+    ULONG idle;
+    ULONG gen;
+    ULONG looks;
+    ULONG step;
+
+    hc->EnumCommandsBusy++;
+    gen = hc->TolStartGen;
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* The test aid has done its work: this episode's own completion is
+     * drained as ever. */
+    HcdInjStartRelease(hc);
+#endif
+    KeInitializeTimer(&deadline);
+    HcdRelativeMs(&due, HCD_COMMAND_WAIT_MS);
+    (VOID)KeSetTimer(&deadline, due, NULL);
+    zero.QuadPart = 0;
+    answer = XHCI_CMD_BUSY;
+    looks = 0;
+    for (;;) {
+        expired = KeWaitForSingleObject(&deadline, Executive, KernelMode,
+                                        FALSE, &zero) == STATUS_SUCCESS;
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        idle = (hc->Hc.CommandState == XHCI_CMD_STATE_IDLE) ? 1UL : 0UL;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        looks++;
+        step = XhciEnumBusyStep(hcdHalted(hc), hc->TolStartGen != gen,
+                                expired, idle);
+        if (step == XHCI_ENUM_BUSY_STOP) {
+            break;
+        }
+        if (step == XHCI_ENUM_BUSY_SUBMIT) {
+            KeClearEvent(&hc->CmdDoneEvent);
+            hc->CmdDoneLost = 0;
+            hc->CmdDonePA = 0;
+            *trbPA = 0;
+            answer = XhciCommandSubmit(&hc->Hc, trb, trbPA,
+                                       XHCI_ARM_UNLOCKED);
+            if (answer != XHCI_CMD_BUSY) {
+                break;
+            }
+        }
+        (VOID)HcdCommandDrain(hc);
+        (VOID)hcdWaitEvent(&hc->CmdDoneEvent, XHCI_ENUM_BUSY_SLICE_MS);
+    }
+    (VOID)KeCancelTimer(&deadline);
+    if (answer == XHCI_CMD_OK) {
+        hc->EnumCommandsBusyCleared++;
+    }
+    XhciLogNote(&hc->Hc, "enum.cmd.busy.end",
+                XhciEnumNoteBusy(XHCI_TRB_GET_TYPE(trb->Control), answer,
+                                 looks));
+    return answer;
+}
+
+/*
  * Submit one command and wait for its own completion. Returns the completion
  * code, or 0 when it never completed (lost, refused or timed out); *control
- * receives the Command Completion Event's DW3.
+ * receives the Command Completion Event's DW3. A busy engine is waited out
+ * first (hcdCommandBusy, task 36.4).
  *
  * A completion counts only when its TRB is the one this submit placed
  * (CmdDonePA, from hcd_dev.c): a completion of an earlier command, the
@@ -178,6 +258,9 @@ static ULONG hcdCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
     hc->CmdDonePA = 0;
     trbPA = 0;
     answer = XhciCommandSubmit(&hc->Hc, trb, &trbPA, XHCI_ARM_UNLOCKED);
+    if (answer == XHCI_CMD_BUSY) {
+        answer = hcdCommandBusy(hc, trb, &trbPA);
+    }
     if (answer != XHCI_CMD_OK) {
         hc->EnumCommandsRefused++;
         return 0;

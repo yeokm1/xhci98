@@ -6274,7 +6274,7 @@ of a headless guest.
 
 ### The qemu flavour's test aids: the E460 speed table and fault injection
 
-Three switches existed in the withdrawn `2.2.0.1`'s `qemu` flavour alone; two exist from `2.2.0.2` (`XHCI_FLAVOUR_QEMU`, which
+Three switches exist in the `qemu` flavour alone (`XHCI_FLAVOUR_QEMU`, which
 `src\sources` defines for that build and no other). The `debug` and
 `release` images compile none of their code, read no value of theirs and
 carry none of their strings; no INF writes any, so all are absent, and off,
@@ -6295,21 +6295,23 @@ preflight and the post-reset parse alike (`XhciPortMapOverridePsi`,
 `qemu.psi.e460`. A change takes effect at the next start (disable and enable
 the controller). It is kept apart from the injection below.
 
-**Withdrawn 2026-10-07 with `2.2.0.1`; the code is reverted, so `2.2.0.2` has two switches, not three (issue 12 section 3.2).** **`XhciQemuStartHold`** (roadmap-hcd task 36w.3, issue 12). A REG_DWORD read
-at every start: a number of milliseconds, held to 5000, for which the start
-holds back every event drain but the bus's own command path's - the drain
-queued at interrupt enable (36w.1), the ISR's (it acknowledges and queues
+**`XhciQemuStartHold`** (roadmap-hcd task 36.4, issue 12 Finding 1). A
+REG_DWORD read at every start: a number of milliseconds, held to 5000, for
+which the start holds back the ISR's event drains (it acknowledges and queues
 nothing, as fault `01` below) and the backstop's. The No Op self-test's
 completion then stands undrained and the command engine busy, as the Dell
-E7250's lost interrupt left it, so a device present at boot meets a busy
-engine at its first Enable Slot. A build with 36w.1 waits it out in
-`hcdCommand`, whose own drain is not held and which ends the hold before
-queueing it, so the resubmitted command's interrupt is drained as ever
-(`EnumCommandsBusy` and
-`EnumCommandsBusyCleared` 1 each in the counter block); a build without it
-fails the port "no slot". Absent, another type or 0 holds nothing; the log
-ring notes `qemu.inj.starthold`. 2000 covers QEMU's first enumeration. A
-change takes effect at the next start.
+E7250's lost interrupt left it, on a line that works, so a device present at
+boot meets a busy engine at its first Enable Slot. `hcdCommand` waits it out
+(`hcdCommandBusy`): it ends the hold before it asks for its first drain, so
+the resubmitted command's own interrupt is drained as ever, and the log ring
+notes `qemu.inj.starthold.released`, then `enum.cmd.busy.end` (the TRB type,
+the last submit's answer, 0 for submitted, and the looks taken), and at the
+stop `enum.cmd.busy` and `enum.cmd.busy.cleared` 1 each. A build without the
+retry fails the port "no slot". Absent, another type or 0 holds nothing; the
+log ring notes `qemu.inj.starthold`. 2000 covers QEMU's first enumeration. A
+change takes effect at the next start. (A switch of this name was in the
+withdrawn `2.2.0.1`, task 36w.3, and was reverted with it; this is its
+return, without that build's drain at interrupt enable.)
 
 **`XhciQemuInject`** (roadmap-hcd task 35-T.9, design record 17 section 5).
 A REG_DWORD the controller thread re-reads about once a second, so a script

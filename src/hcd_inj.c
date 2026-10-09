@@ -90,6 +90,14 @@
 #if defined(XHCI_FLAVOUR_QEMU)
 
 #define HCD_VALUE_QEMU_INJECT L"XhciQemuInject"
+/* Task 36.4: milliseconds after a start for which the ISR's drains and the
+ * backstop's are held back, so the No Op self-test's completion stands
+ * undrained and the command engine busy into the first enumeration, as the
+ * E7250's lost interrupt left it (issue 12, Finding 1), on a line that
+ * works. Read at each start, held to HCD_QEMU_START_HOLD_MAX; absent or 0
+ * holds nothing. */
+#define HCD_VALUE_QEMU_START_HOLD L"XhciQemuStartHold"
+#define HCD_QEMU_START_HOLD_MAX   5000UL
 
 /* The trigger is read once per ten tolerance ticks, about a second. */
 #define HCD_INJ_READ_TICKS 10UL
@@ -129,6 +137,27 @@ ULONG HcdInjIsrDrop(PHCD_CONTROLLER hc)
     }
     (VOID)InterlockedIncrement((PLONG)&hc->InjIrqDropped);
     return 1;
+}
+
+/* Task 36.4: whether XhciQemuStartHold still holds this start's drains
+ * back. Reads only. IRQL: any. */
+ULONG HcdInjStartHeld(PHCD_CONTROLLER hc)
+{
+    ULONG end;
+
+    end = (ULONG)hc->InjStartHoldTicks;
+    return (end != 0 && HcdTolNow(hc) < end) ? 1UL : 0UL;
+}
+
+/* The hold has done its work once the bus's command path met the busy
+ * engine: ended before that path's first drain, so the resubmitted
+ * command's own completion interrupt is drained as ever. IRQL:
+ * <= DISPATCH_LEVEL. */
+VOID HcdInjStartRelease(PHCD_CONTROLLER hc)
+{
+    if (InterlockedExchange((PLONG)&hc->InjStartHoldTicks, 0) != 0) {
+        XhciLogNote(&hc->Hc, "qemu.inj.starthold.released", HcdTolNow(hc));
+    }
 }
 
 /* IRQL: any. Above DISPATCH_LEVEL nothing is answered: InjLock cannot be
@@ -419,6 +448,22 @@ VOID HcdInjStart(PHCD_CONTROLLER hc)
     XhciInjTriggerStart(&hc->InjTrigger, found, value);
     hc->InjReadAt = HcdTolNow(hc);
     XhciLogNote(&hc->Hc, "qemu.inj.latched", found ? value : 0xFFFFFFFFUL);
+    value = 0;
+    if (!NT_SUCCESS(HcdCtlQemuReadDword(hc, HCD_VALUE_QEMU_START_HOLD,
+                                        &value))) {
+        value = 0;
+    }
+    if (value > HCD_QEMU_START_HOLD_MAX) {
+        value = HCD_QEMU_START_HOLD_MAX;
+    }
+    /* An end on the tolerance clock, never 0 while a hold is asked for. */
+    (VOID)InterlockedExchange(
+        (PLONG)&hc->InjStartHoldTicks,
+        (value == 0) ? 0L
+                     : (LONG)(HcdTolNow(hc) +
+                              (value + XHCI_TOL_TICK_MS - 1UL) /
+                                  XHCI_TOL_TICK_MS));
+    XhciLogNote(&hc->Hc, "qemu.inj.starthold", value);
 }
 
 /*

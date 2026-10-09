@@ -172,7 +172,13 @@
 > at each return to D0 (`HcdPirqResume`). The record is copied whole into
 > the HCD region's header (words 20 to 47, version unchanged; `xhci.h`'s
 > `XHCI_SNAPSHOT_HCD_PIRQ_*`, `test_snap`) by `hcd_door.c`, and
-> `xhcisnap\xhcisnap.c` names it (`print_pirq`, `-selftest-pirq`). The tables below are the
+> `xhcisnap\xhcisnap.c` names it (`print_pirq`, `-selftest-pirq`).
+> Task 36.4 adds no file: the bounded BUSY retry is `hcd_enum.c`'s
+> `hcdCommandBusy`, its look the pure `XhciEnumBusyStep` and its note
+> `XhciEnumNoteBusy` in `xhci_enum.c` (`test_enum`), its drain
+> `hcd_ctl.c`'s `HcdCommandDrain` under the backstop's admission
+> (`hcdDrainAdmitted`), and the qemu flavour's `XhciQemuStartHold` in
+> `hcd_inj.c` (`HcdInjStartHeld`, `HcdInjStartRelease`). The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name
