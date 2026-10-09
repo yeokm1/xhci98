@@ -1124,10 +1124,12 @@ ME actually send before anything is promised for them.
     URB unfinished). Plain ring-empty time includes idle and is not the
     gap. The ring's dequeue is software's view, advanced as events are
     handled (`xhci_ring.c` ~27), and a Transfer Event carries no
-    timestamp, so the interval includes event delivery, moderation and
-    DPC latency; hardware starvation itself is recorded unmeasured unless
-    a separate trace method shows it, and 36.23 decides on the observed
-    interval, CPU cost and throughput;
+    timestamp. So the interval starts when software processes the
+    completion and observes the ring empty, and omits any hardware-empty
+    time before that while event delivery, moderation or DPC scheduling
+    delayed the observation. Hardware starvation itself is recorded
+    unmeasured unless a separate trace method shows it, and 36.23 decides
+    on the observed interval, CPU cost and throughput;
   - the HCD region's header grows append-only (`xhci.h` ~8525's
     size-based extension), the outer snapshot header and schema
     unchanged, and `XHCISNAP` decodes the new fields; `test_snap` and
