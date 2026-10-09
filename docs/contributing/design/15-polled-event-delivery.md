@@ -467,6 +467,24 @@ the same controller-lock hold as the look that proved the line dead:
    completed, sets `LineRetired` when `LineMoved` is set - which covers
    the recovery and the reinitialising resume. Each attempt is counted,
    and `LineRetired` once set stays set for the start.
+
+   **A retirement that never proves** (round 4) is recorded
+   (`intr.retire.failed`, and the counter block's retirement attempts with
+   `LineRetired` 0) and left as it is, and the ISR's acknowledgement path
+   is not kept on its behalf: the move was made because that path does not
+   reach this assertion. The verdict is four asserted looks with no claim
+   between them, which means either the ISR was never called for it - the
+   INTx lands on a line this driver is not connected to, issue 12's case -
+   or it was called and declined, which `XhciIsr` does with `IP` and `IE`
+   standing only on `EINT` 0 or an all-ones window, and then it never
+   acknowledges either. So an unproven retirement leaves the line exactly
+   as the start found it, the assertion having stood unacknowledged since
+   then; the stop disconnects the ISR as PnP requires, and the next start's
+   HCRST (`XhciInitController`) returns `IP`, `IE` and `INTE` to 0. The
+   ISR's other gates - `HcInfoStatus` during a reinitialisation, the
+   suppression gate - therefore stay as they are; `LineMoved` only keeps
+   the suppression gate from opening early while the ISR can still be
+   called.
 4. `hc->IntDelivery` becomes poll, so the routing quirk's run at a later
    return to D0 writes nothing. A write it made at the start is not undone
    (36.3).
@@ -522,19 +540,35 @@ start; single-message MSI-X is admitted; the dead-line rule is the line's
 only; the routing quirk is not active under a message; XP x64 ignores the
 key and keeps the line.
 
+**Amended in 36.5's review: amd64 only, for now** (orchestrator decision,
+owner to confirm). Four review rounds found no way for the one x86 binary
+to reach `IoConnectInterruptEx` that is safe without an import Windows 98
+lacks: a walk of the running kernel's memory cannot prove the pages it
+reads are mapped (rounds 1 to 3), and a parse of the kernel's file, tied
+to the running image by the driver's own imports, proves where those
+imports are but not where `IoConnectInterruptEx` is (round 4: a file whose
+anchors all agree can still differ in the target). So on Vista and 7 x86
+the INF asks for no message, the controller keeps the line, the routing
+quirk and polling exactly as on XP, and the E7250 under 7 x64 - the case
+the decision was taken for - gets MSI. What an x86 path would need, if one
+is taken later: the running kernel's own identity from a documented
+source, or a second, NT 6-only x86 binary (a packaging decision of its
+own).
+
 **Why it is safe on the down-level targets.** Windows 98, ME, 2000 and XP
 (and XP x64) never grant a message: their PnP managers do not read the
 key, and no message descriptor reaches the parser. Every step below is
 taken only when `IoIsWdmVersionAvailable(6, 0)` is TRUE, the test the
-driver already uses for NT 6.x's other paths, and nothing below adds an
-import the Windows 98 export set lacks to the x86 image.
+driver already uses for NT 6.x's other paths, and only in the amd64 image;
+nothing is added to the x86 image's imports. A message descriptor that
+reaches the x86 image anyway (a `MSISupported` 1 set by hand) takes
+section 4's "message not connected" row and polls.
 
-**The INF.** On the `Xhci.Dev6` paths of both INFs (`.NTx86` for Vista and
-7 x86 in `src/xhci98.inf`, `.NTamd64` for Vista and 7 x64 in
-`src/xhci98-amd64.inf`), in the hardware key:
+**The INF.** On the `Xhci.Dev6.NTamd64` path of `src/xhci98-amd64.inf`
+(Vista and 7 x64) alone, in the hardware key:
 
 ```
-[Xhci.Dev6.NTx86.HW]               ; and .NTamd64.HW
+[Xhci.Dev6.NTamd64.HW]
 AddReg = Xhci.Msi.AddReg
 
 [Xhci.Msi.AddReg]
@@ -547,10 +581,10 @@ HKR,"Interrupt Management\MessageSignaledInterruptProperties",MessageNumberLimit
 `FLG_ADDREG_NOCLOBBER` keeps a user's `MSISupported` 0 across an update,
 under 34.1's rule; it also keeps a larger `MessageNumberLimit` a user set,
 which is why the driver, not the INF, is what holds the delivery to one
-message (below). The XP x64 path (`Xhci.Dev.NTamd64`) and the 32-bit paths
-for 98, ME, 2000 and XP get no `.HW` section, and the gate refuses these
-lines anywhere but the two `Xhci.Dev6` sections (a new `MSI-*` rule in
-`check-inf.ps1`, with self-test mutations).
+message (below). The XP x64 path (`Xhci.Dev.NTamd64`) and every path of
+the 32-bit INF get no `.HW` section, and the gate refuses these lines
+anywhere but that one section (a new `MSI-*` rule in `check-inf.ps1`, with
+self-test mutations).
 
 **The resources.** `hcdParseResources` already keeps the first raw
 interrupt descriptor and its message flag (36.3). For a message grant it
@@ -559,88 +593,19 @@ descriptors there are and the message count each raw one carries (WDK
 7.1's `u.MessageInterrupt.Raw`: a reserved `USHORT`, then `MessageCount`,
 then `Vector` and `Affinity`; translated: `Level`, `Vector`, `Affinity`).
 The 32-bit headers of the Windows 2000 DDK lack the message member, so the
-driver declares the WDK 7.1 layout itself, with a compile-time size check
-against the partial descriptor it overlays, for both architectures.
+driver declares the WDK 7.1 layout itself where the headers lack it, with
+a compile-time size check against the partial descriptor it overlays.
 
-**Finding `IoConnectInterruptEx`.**
-
-- **amd64** imports `MmGetSystemRoutineAddress` and asks it for
-  `IoConnectInterruptEx` and `IoDisconnectInterruptEx`. Every amd64 target
-  exports it (NT 5.2 and later; XP x64 answers NULL for both names, so it
-  keeps the line), so the import gate takes an `amd64` row for it with that
-  evidence, and no walk is needed. This departs from roadmap 36.15's "both
-  architectures by a walk", whose reason was one tested path; a P1 of the
-  design review (the walk's memory safety) is why the documented call is
-  taken where it can be. *Owner to confirm.*
-- **x86** cannot import it: the one binary also loads on 98 and ME, whose
-  `ntkern.vxd` names neither `IoConnectInterruptEx` nor
-  `MmGetSystemRoutineAddress`, and an unresolved import blocks the load
-  there. No call available on 98 says whether a kernel address is mapped,
-  so a walk of the running kernel's memory cannot be made safe (Codex
-  review of revision 5, rounds 1 to 3). **The x86 path reads no kernel
-  memory at all.** It reads the kernel's *file*, and proves the file is
-  the image running by addresses the loader has already given the driver
-  (round 3's "independently established identity"):
-
-  1. **The candidates.** `\SystemRoot\System32\ntkrnlpa.exe` and
-     `\SystemRoot\System32\ntoskrnl.exe` - the two x86 kernels every
-     Vista and 7 install carries, one of which the loader ran - opened
-     with `ZwCreateFile` (read, shared, synchronous, at PASSIVE_LEVEL in
-     the start) and read with `ZwReadFile` at explicit offsets, one small
-     range at a time into a buffer on the stack: the DOS and PE headers,
-     the section table, the export directory, and then only the array
-     entries and names a binary search over the sorted name table touches
-     (each name at most 64 bytes, each entry four) - not the whole export
-     section, which is 62 KB in Vista SP2's `ntoskrnl.exe` and 70 KB in
-     7 SP1's. A table that is not sorted can make the search miss a name,
-     which reads as "not found", never as a wrong address: step 3 checks
-     every RVA found against the running image. `ZwCreateFile`, `ZwReadFile` and
-     `ZwQueryInformationFile` are in Windows 98 SE's `ntkern.vxd` and
-     imported by its own `swmidi.sys`, `redbook.sys` and `sysaudio.sys`,
-     so they take `all` allowlist rows with that precedent; they are
-     called only on NT 6.x.
-  2. **The exports, from the file.** The pure parser (`xhci_msi.c`) maps
-     each RVA it needs to a file offset through the section table and
-     checks every range against the file's size and the section's raw
-     size, every sum for overflow, `NumberOfNames` and `NumberOfFunctions`
-     held to 65536, every name terminated within 64 bytes, ordinals
-     against `NumberOfFunctions`, and a function RVA inside the export
-     directory refused as a forwarder. It yields the RVAs of
-     `IoConnectInterruptEx` and `IoDisconnectInterruptEx` and of a fixed
-     list of routines the driver imports from `ntoskrnl.exe` - at least
-     eight of them, `KeInsertQueueDpc`, `KeSetTimer`, `KeCancelTimer`,
-     `IoConnectInterrupt`, `IoDisconnectInterrupt`, `KeQuerySystemTime`,
-     `ExAllocatePoolWithTag` and `IoIsWdmVersionAvailable` among them.
-  3. **The identity.** For each listed routine, the address its import
-     resolved to (read from the driver's own import slot, by taking the
-     imported function's address) less its RVA in the file gives a
-     candidate base. **The file is the running kernel only if every one
-     of them gives the same base**, and that base is 4 KB aligned. A
-     second kernel file, a different build, or a Driver Verifier thunk in
-     the import slots gives bases that disagree, and the candidate is
-     refused. Then each routine is `base + RVA`, and nothing of the
-     kernel's memory was read to find it - the only kernel addresses
-     touched are the ones called, as any import is.
-  4. **Not found** - neither candidate agrees, a file fails to open or
-     to read, or the parser refuses it - is the documented fallback: a
-     line grant connects through `IoConnectInterrupt` as today, and a
-     message grant (which the INF asked for, and which cannot be handed
-     back for that start) polls with "message not connected". The step it
-     stopped at is recorded.
-  5. **Host vectors** (`test_msi`): synthetic files with each header and
-     range check failing, a forwarder, an ordinal out of range, names not
-     terminated, sums that overflow, and a reader that refuses part-way;
-     the identity with all bases agreeing, one disagreeing, one routine
-     missing from the exports, and a misaligned base; and the real Vista
-     SP2 and 7 SP1 `ntoskrnl.exe` from `tools`, read as files, for every
-     listed name.
-
-When either routine is not found, a line resource connects through
-`IoConnectInterrupt` as today, and a message resource polls with "message
-not connected". WDK 7.1's `iointex.lib` (`WdmlibIoConnectInterruptEx`) was
-considered for amd64 and not taken: `MmGetSystemRoutineAddress` is the
-documented call it wraps, with no further third-party object in the amd64
-image.
+**Finding `IoConnectInterruptEx`.** The amd64 image imports
+`MmGetSystemRoutineAddress` and asks it for `IoConnectInterruptEx` and
+`IoDisconnectInterruptEx`. Every amd64 target exports it (NT 5.2 and
+later; XP x64 answers NULL for both names, so it keeps the line), so the
+import gate takes an `amd64` row for it with that evidence. When either
+is not found, a line resource connects through `IoConnectInterrupt` as
+today, and a message resource polls with "message not connected". WDK
+7.1's `iointex.lib` (`WdmlibIoConnectInterruptEx`) was considered and not
+taken: `MmGetSystemRoutineAddress` is the documented call it wraps, with
+no further third-party object in the image.
 
 **The connection.** Under a message grant, `IoConnectInterruptEx` with
 `Version = CONNECT_MESSAGE_BASED` (3): the PDO; the message ISR; the
@@ -709,8 +674,7 @@ with this revision.)
 
 **What is recorded** (section 8): the delivery (MSI, MSI-X, line or poll)
 and its reason in the counter block and the start's log note; how the
-routines were found (amd64 call, x86 file) and, for the file, the step it
-stopped at; the message descriptors and the `MessageCount` granted; the
+routines were found; the message descriptors and the `MessageCount` granted; the
 capability read. `XHCISNAP` names each (36.9).
 
 **Legs** are 36.16's: QEMU's `qemu-xhci` with `msi=on,msix=off`,
@@ -803,11 +767,14 @@ promoted and never peeked for.
   owner or a party holding the arm back sets the timer - does nothing.
 - **The DPC's pass.** In CLOSING it does nothing more and ends. Otherwise,
   under the controller lock, it reads the admission of section 5.3; not
-  admitted, it parks (section 5.3) and ends - and a close asked between
-  its taking ownership and that lock is honoured there: under the
-  controller lock and then `PollLock`, the park turns CLOSING into
-  CLOSED, FIRING into PARKED, arms nothing, and the DPC touches the
-  poller no more (Codex review of revision 5, round 3). Admitted: in the watch role it
+  admitted, it parks (section 5.3) and ends. A close asked between its
+  taking ownership and that lock is honoured there (rounds 3 and 4):
+  under the controller lock and then `PollLock`, the park turns FIRING
+  into PARKED and leaves CLOSING as it is, and only after **both** locks
+  are released does the DPC take `PollLock` alone once more, turn CLOSING
+  into CLOSED, release it and return - so CLOSED is published after its
+  last touch of the controller, and the release's wait for CLOSED and its
+  `PollLock` handshake cover the whole pass. Admitted: in the watch role it
   looks (section 4.2) and, if the line is proven dead, makes the move and
   continues as a server in the same pass; in the service role it releases
   the controller lock and drains with `XhciEventDpc(ext, FALSE)`, wakes the
@@ -910,9 +877,9 @@ run bit is written, so neither proves the controller runs.
 **Park and kick are serialised by the controller lock.**
 
 - The timer DPC, finding itself not admitted under the controller lock,
-  takes `PollLock` inside that hold and parks: FIRING becomes PARKED, or
-  CLOSING becomes CLOSED if a close was asked meanwhile, and the
-  watcher's count is cleared. It drains and looks at nothing, arms
+  takes `PollLock` inside that hold and parks: FIRING becomes PARKED (a
+  CLOSING asked meanwhile is left for the DPC's epilogue, section 5.2),
+  and the watcher's count is cleared. It drains and looks at nothing, arms
   nothing, and returns.
 - A revocation cancels no timer: an arm made before a suspend or a
   recovery still expires, and its DPC finds itself not admitted and
@@ -942,8 +909,8 @@ started afresh); a timer armed before a suspend that expires during the
 resume, between `INITIALIZED` and the D0 publication (not admitted,
 parked; the grant after the publication kicks it back), and the start's
 own window, where no grant has been made and nothing is armed; a park
-against a close asked after the DPC took ownership (CLOSING to CLOSED,
-nothing armed, the release's wait ends); a retirement whose `IP` step
+against a close asked after the DPC took ownership (CLOSING kept through
+the park, CLOSED only in the `PollLock`-only epilogue, nothing armed); a retirement whose `IP` step
 fails followed at once by a suspend and by a recovery (the ISR still
 claiming through it, the HCD's attempt before each, and the HCRST's
 proof); a
@@ -1334,7 +1301,7 @@ and that flavour is never published.
 - **Line against poll** on the same guest: a storage copy rate, audio
   continuity, and the guest's idle CPU load.
 - **The default on a pin**: mode 0 reading as the release before it (the
-  matrix unchanged; on Vista and 7 x86 and x64, where the INF now asks for
+  matrix unchanged; on Vista and 7 x64, where the INF now asks for
   MSI, with `MSISupported` 0), and mode 1 the same, on a target without
   MSI and on Vista and 7 with `MSISupported` 0 (section 4.3); with a
   message granted, modes 0, 1 and 3 read as the message.
@@ -1452,6 +1419,15 @@ Round 3 (`b814ee3`): 2 P1, 1 P2, 1 P3, all taken.
 | 2 | P1: a build number does not prove the running kernel's layout | Section 4.3: x86 reads no kernel memory - it parses the kernel's file and proves the identity by every import resolving to one base; roadmap 36.15 |
 | 3 | P2: a park against a close asked after the DPC took ownership | Sections 5.2 and 5.3: the park turns CLOSING into CLOSED; a revocation cancels no timer, stated; vectors |
 | 4 | P3: the retirement's `EINT` write broke Table 5-21's order | Section 4.2, step 3.3: `EINT` is not acknowledged |
+
+Round 4 (`f4d8a28`): 2 P1, 2 P2, all taken.
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | P1: agreeing anchors do not prove the target's RVA | Section 4.3: MSI is amd64 only for now; x86 Vista and 7 keep the line (orchestrator decision, owner to confirm); roadmap 36.15 |
+| 2 | P1: an unproven retirement and the ISR's lifecycle gates | Section 4.2: why the ISR path never acknowledges this assertion; the unproven outcome recorded and ended by the next HCRST |
+| 3 | P2: CLOSED published before the DPC's last controller access | Section 5.2: CLOSING kept through the park; CLOSED in a `PollLock`-only epilogue |
+| 4 | P2: the file parser's callable-address and short-read checks | Moot with finding 1: the file parser is withdrawn |
 
 ## 14. What changes in the documents
 
