@@ -1382,6 +1382,52 @@ ULONG XhciPipeResetParts(ULONG function)
     }
 }
 
+ULONG XhciPipeResetSteps(ULONG parts, ULONG state, ULONG owed, ULONG type)
+{
+    ULONG tt;
+    ULONG device;
+
+    /* Behind a TT only a control or bulk endpoint's buffer can hold the
+     * halted transaction (4.6.8 p.116); a control endpoint's halt is ended
+     * by its next SETUP, and an isochronous one has none. */
+    tt = (type == XHCI_PIPE_XFER_CONTROL || type == XHCI_PIPE_XFER_BULK)
+             ? XHCI_PIPE_STEP_CLEAR_TT
+             : 0;
+    device = (type == XHCI_PIPE_XFER_BULK || type == XHCI_PIPE_XFER_INTERRUPT)
+                 ? XHCI_PIPE_STEP_DEVICE
+                 : 0;
+    if ((parts & XHCI_PIPE_RESET_DEVICE) == 0) {
+        return 0;
+    }
+    if (owed && state == XHCI_EP_STATE_STOPPED) {
+        return tt | device | XHCI_PIPE_STEP_SET_DEQUEUE;
+    }
+    if ((parts & XHCI_PIPE_RESET_HOST) == 0) {
+        return type != XHCI_PIPE_XFER_ISOCH ? XHCI_PIPE_STEP_DEVICE_FIRST : 0;
+    }
+    if (state == XHCI_EP_STATE_HALTED) {
+        return XHCI_PIPE_STEP_RESET_EP | tt | device |
+               XHCI_PIPE_STEP_SET_DEQUEUE;
+    }
+    return (type != XHCI_PIPE_XFER_ISOCH ? XHCI_PIPE_STEP_DEVICE_FIRST : 0) |
+           XHCI_PIPE_STEP_RECYCLE;
+}
+
+ULONG XhciPipeClearVerdict(ULONG step, ULONG taken, ULONG stuck)
+{
+    if (taken) {
+        return XHCI_PIPE_CLEAR_GO;
+    }
+    if (stuck) {
+        return XHCI_PIPE_CLEAR_HELD;
+    }
+    /* After Reset Endpoint the host's toggle is restarted and the endpoint
+     * Stopped; resuming over a device that kept its own leaves the
+     * endpoint's behaviour undefined (4.6.8), so the pipe stays paused. */
+    return step == XHCI_PIPE_STEP_DEVICE ? XHCI_PIPE_CLEAR_OWED
+                                         : XHCI_PIPE_CLEAR_RESUME;
+}
+
 ULONG XhciPipeUsbdiSize(ULONG version, ULONG pointerBytes)
 {
     ULONG pointers;

@@ -67,13 +67,13 @@ static void test_trigger(void)
     CHECK_EQ(XhciInjTake(&t, 1, XHCI_INJ_VALUE(0, XHCI_INJ_LOST_IRQ, 0, 1)),
              XHCI_INJ_TAKE_FIRE, "first value after an absent one");
 
-    /* Every code: built (01 to 12 hex, FF) or unknown. A refused one is
+    /* Every code: built (01 to 13 hex, FF) or unknown. A refused one is
      * consumed. */
     for (f = 0; f < 256; f++) {
         ULONG want;
         char what[64];
 
-        if ((f >= 1 && f <= 0x12) || f == XHCI_INJ_CLEAR) {
+        if ((f >= 1 && f <= 0x13) || f == XHCI_INJ_CLEAR) {
             want = XHCI_INJ_TAKE_FIRE;
         } else {
             want = XHCI_INJ_TAKE_UNKNOWN;
@@ -367,7 +367,7 @@ static void test_needs_live(void)
         want = (f == XHCI_INJ_LOST_IRQ || f == XHCI_INJ_PED ||
                 f == XHCI_INJ_OC || f == XHCI_INJ_HCH ||
                 f == XHCI_INJ_DEAD || f == XHCI_INJ_DEAD_NOPROOF ||
-                (f >= 0x08 && f <= 0x12)) ? 1UL : 0UL;
+                (f >= 0x08 && f <= 0x13)) ? 1UL : 0UL;
         sprintf(what, "fault %lu needs a live controller", f);
         CHECK_EQ(XhciInjNeedsLive(f), want, what);
     }
@@ -429,6 +429,7 @@ static void test_codes(void)
     CHECK_EQ(XHCI_INJ_EP0_PREPDO, 0x10, "10 EP0 before the PDO");
     CHECK_EQ(XHCI_INJ_RACE_RING, 0x11, "11 race, a ring");
     CHECK_EQ(XHCI_INJ_RACE_SECOND, 0x12, "12 race, a second error");
+    CHECK_EQ(XHCI_INJ_CLEAR_HALT, 0x13, "13 the device clear answered");
     CHECK_EQ(XHCI_INJ_REFUSED_CC, 18, "Bandwidth Overrun");
 }
 
