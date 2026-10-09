@@ -296,7 +296,7 @@ Since `2.3.0.0` the driver reads those registers at each start and resume and, w
 - `2`: on any of the six Intel controllers listed above, each with one of its own chipset ids.
 - `0`: reads and reports only.
 
-It writes nothing on any other controller, nothing when the interrupt is a message (MSI) rather than a line, as it can be on Vista and 7, and nothing while the driver is polling the controller. `XHCISNAP`'s report has an "interrupt routing" section that says what it found and did.
+It writes nothing on any other controller, nothing when the interrupt is a message (MSI) rather than a line, as it can be on Vista and 7, nothing while the driver is polling the controller, and on 2000 to 7 nothing when Windows gave the controller an interrupt below 16. `XHCISNAP`'s report has an "interrupt routing" section that says what it found and did.
 
 ### Controller faults
 

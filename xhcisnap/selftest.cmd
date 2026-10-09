@@ -217,7 +217,7 @@ if errorlevel 1 (
     echo FAIL: -selftest-pirq exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("decision         21 WROTE" "D20IR before     00003210 (INTA -> PIRQA)" "PIRQ wanted      PIRQF" "D20IR after      00003215 (INTA -> PIRQF)" "level 21, vector 21, flags 0, share 3" "16-23: PIRQA-H wired direct to I/O APIC inputs 16-23" "a message grant: 1 message(s)," "vector FFFFFFFE, flags 2, share 3" "not read: this start ended before the routing step" "came back 80 bytes" "PIRQA IRQ 11, PIRQB IRQ 10" "PIRQE off" "decision         20 NOT_ADMITTED" "decision         12 MESSAGE" "at a return to D0" "decision         3 NOT_REVIEWED" "00:14.0          id not read" "not set (taken as 1: writes on the verified E7250 only)" "xhci98.sys before 2.3.0.0's" "a record of 40 words") do (
+for %%S in ("decision         22 WROTE" "D20IR before     00003210 (INTA -> PIRQA)" "PIRQ wanted      PIRQF" "D20IR after      00003215 (INTA -> PIRQF)" "level 21, vector 21, flags 0, share 3" "16-23: PIRQA-H wired direct to I/O APIC inputs 16-23" "a message grant: 1 message(s)," "vector FFFFFFFE, flags 2, share 3" "not read: this start ended before the routing step" "came back 80 bytes" "PIRQA IRQ 11, PIRQB IRQ 10" "PIRQE off" "decision         21 NOT_ADMITTED" "decision         12 MESSAGE" "at a return to D0" "decision         3 NOT_REVIEWED" "00:14.0          id not read" "not set (taken as 1: writes on the verified E7250 only)" "xhci98.sys before 2.3.0.0's" "a record of 40 words") do (
     findstr /C:%%S "%BASE%.pirq.log" > nul
     if errorlevel 1 (
         echo FAIL: the routing decode does not say %%S

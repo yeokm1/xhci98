@@ -3723,7 +3723,9 @@ means the default each one states.
 
   IT DOES NOTHING on any other controller, NOTHING when the interrupt is a
   message (MSI) rather than a line, as it can be on Vista and 7, and
-  NOTHING while the driver is polling the controller. XHCISNAP's report
+  NOTHING while the driver is polling the controller. On 2000, XP, Vista
+  and 7 it also writes nothing when Windows gave the controller an
+  interrupt below 16. XHCISNAP's report
   has an "interrupt routing" section saying what it found and did. The
   same register written by hand fixed the E7250 under XP x64; the
   driver's own write has not yet been read on any machine.

@@ -227,7 +227,7 @@ static void test_pirq_words(void)
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_PIRQ_STATE, IrqMode), 22 * 4, "IrqMode");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_PIRQ_STATE, D20irAfter), 26 * 4,
              "D20irAfter last");
-    CHECK_EQ(XHCI_PIRQ_D_COUNT, 23, "the decisions XHCISNAP names");
+    CHECK_EQ(XHCI_PIRQ_D_COUNT, 24, "the decisions XHCISNAP names");
 }
 
 int main(void)

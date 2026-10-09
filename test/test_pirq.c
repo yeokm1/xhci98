@@ -261,6 +261,7 @@ static void fakeInit(FAKE_PC *f, XHCI_PIRQ_IO *io, XHCI_PIRQ_IRQ *irq)
     io->Write16 = fakeWrite16;
     io->Unmap = fakeUnmap;
     io->Context = f;
+    io->Steerable = 1;
 
     irq->Count = 1;
     irq->Level = 21;
@@ -833,6 +834,35 @@ static void test_pic(void)
                  XHCI_PIRQ_D_IRQ_UNROUTABLE, "a reserved IRQ");
         CHECK_EQ(fakeCount(&f, 'w'), 0, "no write");
     }
+
+    /* On 2000 to 7 an IRQ below 16 is reported at every value, the
+     * target still derived; 16-23 is written there as on 98 (owner,
+     * 2026-10-09, after review round 1). */
+    for (i = 0; i <= 2; i++) {
+        fakeInit(&f, &io, &irq);
+        io.Steerable = 0;
+        fakeLpc(&f, E7250_LPC, E7250_RCBA, 0x8080800AUL, 0x80800B80UL);
+        irq.Level = 11;
+        irq.Vector = 11;
+        CHECK_EQ(run(&f, &io, &irq, &st, 1, i, XHCI_PIRQ_DELIVERY_LINE),
+                 XHCI_PIRQ_D_STEERED_NT, "below 16 on NT");
+        CHECK_EQ(st.IrqMode, XHCI_PIRQ_IRQ_PIC, "the steered path");
+        CHECK_EQ(st.Target, 5, "its target still named");
+        CHECK_EQ(st.D20irAfter, XHCI_PIRQ_UNREAD, "nothing after");
+        CHECK_EQ(fakeCount(&f, 'w'), 0, "no write");
+    }
+    fakeInit(&f, &io, &irq);
+    io.Steerable = 0;
+    fakeLpc(&f, E7250_LPC, E7250_RCBA, 0x8080800AUL, 0x80800B80UL);
+    irq.Level = 10;
+    irq.Vector = 10;
+    CHECK_EQ(run(&f, &io, &irq, &st, 1, 2, XHCI_PIRQ_DELIVERY_LINE),
+             XHCI_PIRQ_D_ROUTED, "already right on NT: ROUTED first");
+    fakeInit(&f, &io, &irq);
+    io.Steerable = 0;
+    CHECK_EQ(run(&f, &io, &irq, &st, 1, 1, XHCI_PIRQ_DELIVERY_LINE),
+             XHCI_PIRQ_D_WROTE, "21 on NT: the direct path is written");
+    CHECK_EQ(f.D20ir, 0x3215U, "written");
 }
 
 /* The write and its read-back. */

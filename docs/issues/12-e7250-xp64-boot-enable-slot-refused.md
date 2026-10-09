@@ -299,6 +299,12 @@ what it found:
     delivers it: the driver keeps `D20IR` as it is if its PIRQ is among
     them, or else takes the lowest.
   - When none does, it reports and writes nothing.
+  - **Written on Windows 98 and ME only.** A raw IRQ below 16 proves the
+    8259 path only there: on Windows 2000, XP, Vista and 7 an I/O APIC
+    HAL can hand out an IRQ below 16 too, and which route it then uses is
+    not proven. There the run derives and records the target and writes
+    nothing, at every value (decision `STEERED_NT`). The driver tells the
+    two apart by WDM version (`IoIsWdmVersionAvailable(1, 0x10)`, 2000's).
 - **Any other raw value**, or none: report only.
 
 **The write:**
@@ -309,8 +315,10 @@ what it found:
 
 The PIC-mode rule was added on 2026-10-08 at the owner's request, so that
 the E7250 also works under Windows 98 and ME. It replaces an earlier
-"report-only in PIC mode". It gets its own Codex review in 36.3, and the E7250
-check (36.final) runs under Windows 98 SE as well. Whether the E7250's BIOS
+"report-only in PIC mode". Its review in 36.3 found the rule's mechanics
+right for the 8259 path but could not show which path an NT I/O APIC HAL
+uses for an IRQ below 16, so the owner limited the write to 98 and ME on
+2026-10-09. The E7250 check (36.final) runs under Windows 98 SE as well. Whether the E7250's BIOS
 leaves the xHCI's PIRQ unrouted in PIC mode is unknown until then:
 `XHCIQUAL` under DOS saw line 11.
 

@@ -128,11 +128,12 @@
 #define XHCI_PIRQ_D_IRQ_UNROUTABLE  16UL    /* in neither range             */
 #define XHCI_PIRQ_D_PIC_NO_PIRQ     17UL    /* no routed PIRQ names the IRQ */
 #define XHCI_PIRQ_D_ROUTED          18UL    /* IAR already delivers it      */
-#define XHCI_PIRQ_D_OFF             19UL    /* value 0: would have written  */
-#define XHCI_PIRQ_D_NOT_ADMITTED    20UL    /* value 1, not the E7250       */
-#define XHCI_PIRQ_D_WROTE           21UL    /* written and read back        */
-#define XHCI_PIRQ_D_WRITE_FAILED    22UL    /* the read-back disagrees      */
-#define XHCI_PIRQ_D_COUNT           23UL
+#define XHCI_PIRQ_D_STEERED_NT      19UL    /* below 16 on NT: report       */
+#define XHCI_PIRQ_D_OFF             20UL    /* value 0: would have written  */
+#define XHCI_PIRQ_D_NOT_ADMITTED    21UL    /* value 1, not the E7250       */
+#define XHCI_PIRQ_D_WROTE           22UL    /* written and read back        */
+#define XHCI_PIRQ_D_WRITE_FAILED    23UL    /* write or read-back failed    */
+#define XHCI_PIRQ_D_COUNT           24UL
 
 /* The xHCI's own configuration space, one dword; return 1 when read. */
 typedef ULONG (*XHCI_PIRQ_OWN)(PVOID context, ULONG offset, PULONG value);
@@ -160,6 +161,12 @@ typedef struct _XHCI_PIRQ_IO {
     XHCI_PIRQ_WRITE16 Write16;
     XHCI_PIRQ_UNMAP Unmap;
     PVOID Context;
+    /* 1 where an IRQ below 16 is the 8259 path for certain, Windows 98
+     * and ME, so the PIRQx_ROUT-steered target may be written; 0 on 2000,
+     * XP, Vista and 7, where an I/O APIC HAL can hand out a low IRQ too
+     * and which route it uses is not proven: such a run reports
+     * XHCI_PIRQ_D_STEERED_NT (owner, 2026-10-09, after review round 1). */
+    ULONG Steerable;
 } XHCI_PIRQ_IO, *PXHCI_PIRQ_IO;
 
 /* The raw interrupt resource, as the start's parser kept it: how many

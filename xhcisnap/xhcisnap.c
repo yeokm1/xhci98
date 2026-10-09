@@ -2322,7 +2322,7 @@ static void print_tol(const unsigned char *hcd, unsigned long hcdBytes,
 #define SNAP_PIRQ_TARGET            25UL
 #define SNAP_PIRQ_D20IR_AFTER       26UL
 
-#define SNAP_PIRQ_DECISIONS         23UL
+#define SNAP_PIRQ_DECISIONS         24UL
 
 /* XHCI_PIRQ_D_*, in the order the run checks: the name, then what it
  * means. */
@@ -2330,8 +2330,8 @@ static const char *const pirq_decision_name[SNAP_PIRQ_DECISIONS] = {
     "NONE", "BAD_PARAM", "OWN_UNREAD", "NOT_REVIEWED", "SLOT_UNREAD",
     "NOT_AT_SLOT", "LPC_UNREAD", "LPC_UNLISTED", "RCBA_INVALID",
     "MAP_FAILED", "PIN", "D20IR_UNREAD", "MESSAGE", "POLL", "NO_INTERRUPT",
-    "IRQ_AMBIGUOUS", "IRQ_UNROUTABLE", "PIC_NO_PIRQ", "ROUTED", "OFF",
-    "NOT_ADMITTED", "WROTE", "WRITE_FAILED"
+    "IRQ_AMBIGUOUS", "IRQ_UNROUTABLE", "PIC_NO_PIRQ", "ROUTED",
+    "STEERED_NT", "OFF", "NOT_ADMITTED", "WROTE", "WRITE_FAILED"
 };
 static const char *const pirq_decision_text[SNAP_PIRQ_DECISIONS] = {
     "not run",
@@ -2353,6 +2353,7 @@ static const char *const pirq_decision_text[SNAP_PIRQ_DECISIONS] = {
     "the IRQ is in neither the APIC nor the PIC range",
     "no routed PIRQx_ROUT names the IRQ",
     "D20IR already routes INTA to the PIRQ that delivers the IRQ",
+    "below 16 on 2000 to 7: the steered path is not proven; reported",
     "value 0: a write was due, none made",
     "value 1, not the verified E7250: a write was due, none made",
     "D20IR written and read back",
@@ -2588,7 +2589,7 @@ static int selftest_pirq(void)
     put32(p, SNAP_PIRQ_VALUE * 4, 1);
     put32(p, SNAP_PIRQ_WHEN * 4, 1);
     put32(p, SNAP_PIRQ_DELIVERY * 4, 1);
-    put32(p, SNAP_PIRQ_DECISION * 4, 21);
+    put32(p, SNAP_PIRQ_DECISION * 4, 22);
     put32(p, SNAP_PIRQ_XHCI_ID * 4, 0x9CB18086UL);
     put32(p, SNAP_PIRQ_XHCI_SUBSYSTEM * 4, 0x062D1028UL);
     put32(p, SNAP_PIRQ_XHCI_PIN * 4, 1);
@@ -2611,7 +2612,7 @@ static int selftest_pirq(void)
 
     /* Another reviewed machine at value 1: a write due, not admitted. */
     put32(p, SNAP_PIRQ_WRITES * 4, 0);
-    put32(p, SNAP_PIRQ_DECISION * 4, 20);
+    put32(p, SNAP_PIRQ_DECISION * 4, 21);
     put32(p, SNAP_PIRQ_XHCI_SUBSYSTEM * 4, 0x22128086UL);
     put32(p, SNAP_PIRQ_D20IR_AFTER * 4, SNAP_PIRQ_UNREAD);
     print_pirq(hcd, sizeof(hcd));

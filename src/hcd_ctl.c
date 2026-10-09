@@ -610,6 +610,9 @@ static VOID hcdPirqIo(PHCD_CONTROLLER hc, PXHCI_PIRQ_IO io)
     io->Write16 = hcdPirqWrite16;
     io->Unmap = hcdPirqUnmap;
     io->Context = hc;
+    /* WDM 1.10 is Windows 2000's: below it, 98 and ME, an IRQ below 16 is
+     * the 8259 path (XHCI_PIRQ_IO.Steerable). */
+    io->Steerable = IoIsWdmVersionAvailable(1, 0x10) ? 0UL : 1UL;
 }
 
 /*

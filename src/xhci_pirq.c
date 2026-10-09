@@ -274,6 +274,11 @@ static ULONG xhciPirqRoute(const XHCI_PIRQ_IO *io, ULONG delivery,
     if ((st->D20ir & XHCI_PIRQ_IAR) == target) {
         return XHCI_PIRQ_D_ROUTED;
     }
+    /* Below 16 the target is the 8259 path's; only 98 and ME are known
+     * to use it (XHCI_PIRQ_IO.Steerable), whatever the value. */
+    if (st->IrqMode == XHCI_PIRQ_IRQ_PIC && !io->Steerable) {
+        return XHCI_PIRQ_D_STEERED_NT;
+    }
     if (st->Mode == XHCI_PIRQ_MODE_OFF) {
         return XHCI_PIRQ_D_OFF;
     }

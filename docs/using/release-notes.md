@@ -1060,9 +1060,12 @@ fails. **It also does nothing
 when the controller's interrupt is a message (MSI) rather than a line**, as
 it can be on Windows Vista and 7, **and nothing when the driver is polling
 the controller instead of taking its interrupt**: neither goes through the
-line it would repair. It decides again at each start and return from
-standby, so a change takes effect at the next restart or at a disable and
-enable of the controller.
+line it would repair. On Windows 2000, XP, Vista and 7 it also writes
+nothing when Windows gave the controller an interrupt below 16, since
+which route an I/O APIC system then uses is not proven; it reports what it
+would have done. It decides again at each start and return from standby,
+so a change takes effect at the next restart or at a disable and enable of
+the controller.
 
 What it logs. `XHCISNAP`'s report has a section "interrupt routing" with
 the value in effect, how many times it ran and wrote, and the last run's
