@@ -6305,8 +6305,8 @@ boot meets a busy engine at its first Enable Slot. `hcdCommand` waits it out
 (`hcdCommandBusy`): it ends the hold before it asks for its first drain, so
 the resubmitted command's own interrupt is drained as ever, and the log ring
 notes `qemu.inj.starthold.released`, then `enum.cmd.busy.end` (the TRB type,
-the last submit's answer, 0 for submitted and 3 when the engine never read
-idle, so none was made, and the looks taken), and at the
+the last submit's answer, 0 for submitted and 3 when no submit was made,
+and the looks taken), and at the
 stop `enum.cmd.busy` and `enum.cmd.busy.cleared` 1 each. A build without the
 retry fails the port "no slot". A hold that runs out with no command having
 met the busy engine (no device present) ends with one drain of the
