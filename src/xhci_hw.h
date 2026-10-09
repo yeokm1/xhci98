@@ -117,7 +117,7 @@ MPSTATUS XhciReadPciConfig(PXHCI_EXTENSION ext,
 /*
  * Write `length` bytes of this controller's PCI config space.
  *
- * **One register, one bit.** PCI configuration is the bus driver's
+ * **One register, two bits.** PCI configuration is the bus driver's
  * and usbport's to manage, and this driver reads it for identification only
  * (docs/contributing/implementation-invariants.md, "PnP Resources"). The exception is Bus
  * Master Enable, and only as the quiesce path's last resort: when the MMIO
@@ -130,6 +130,13 @@ MPSTATUS XhciReadPciConfig(PXHCI_EXTENSION ext,
  * containment (35-T.6, design record 17 section 4.6; hcd_ctl.c,
  * hcdContainProve), which clears it on a controller whose window has stopped
  * decoding before any device's transfers are released.
+ *
+ * Its third bit is the Command register's Interrupt Disable (bit 10, PCI
+ * 3.0 6.2.2), and only for an INTx this driver must stop: set by
+ * hcd_poll.c's containment of a line moved to polling whose standing
+ * assertion could not be retired at the registers, and cleared by a later
+ * start's line delivery after its HCRST (hcd_ctl.c, hcdIntxEnable; design
+ * record 15 section 4.2).
  *
  * The HCD has one more writer, which does not come through here: the Intel
  * port switchover's USB3_PSSEN and XUSB2PR (task 34.3), written through
@@ -771,6 +778,8 @@ BOOLEAN XhciIsr(PXHCI_EXTENSION ext);
  * otherwise. IRQL: DISPATCH_LEVEL.
  */
 ULONG XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts);
+ULONG XhciEventDpcDrained(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts,
+                          PULONG drained);
 
 /*
  * Receive and discard whatever the event ring is already holding, returning how

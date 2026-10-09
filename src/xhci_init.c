@@ -43,6 +43,7 @@
 #include "xhci_usbport.h"
 #include "xhci_hw.h"
 #include "xhci_dbg.h"
+#include "xhci_poll.h"
 #include "hcd_svc.h"
 
 /*
@@ -4649,9 +4650,19 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
      * `0x0C` on 2026-09-10 because this test was hard-wired to the NT 5.x
      * `0x06`.
      */
+    /*
+     * Under a poll delivery (design record 15 section 4) no interrupt is
+     * connected, and only the memory window is required; the interrupt bit
+     * is the line delivery's gate alone.
+     */
     if (((resources != NULL ? resources->ResourcesTypes
                             : ext->ResourcesTypes) &
-         XhciResourcesRequired) != XhciResourcesRequired) {
+         ((ext->EventDelivery == XHCI_POLL_DELIVERY_POLL)
+              ? (XhciResourcesRequired & ~(ULONG)USBPORT_RESOURCES_INTERRUPT)
+              : XhciResourcesRequired)) !=
+        ((ext->EventDelivery == XHCI_POLL_DELIVERY_POLL)
+             ? (XhciResourcesRequired & ~(ULONG)USBPORT_RESOURCES_INTERRUPT)
+             : XhciResourcesRequired)) {
         return xhciInitFailed(ext, XHCI_INIT_STEP_RESOURCES,
                               ext->ResourcesTypes, MP_STATUS_NO_RESOURCES);
     }
@@ -4724,7 +4735,10 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
          * what it saw, which is the difference between a controller that has no
          * pin and a config space that would not answer. */
         XhciLogNote(ext, "gate.intx.pin", ext->InterruptPin);
-        if (interruptPin == 0) {
+        /* The refusal is a line delivery's only: a poll delivery has no
+         * interrupt to lose (design record 15 section 4). */
+        if (interruptPin == 0 &&
+            ext->EventDelivery == XHCI_POLL_DELIVERY_LINE) {
             XHCI_DBG_TEXT("controller is MSI/MSI-X only - no INTx on either "
                           "target's usbport; refusing");
             return xhciInitFailed(ext, XHCI_INIT_STEP_INTERRUPT, 0,
@@ -4860,6 +4874,21 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
         return xhciInitFailed(ext, XHCI_INIT_STEP_RESET,
                               XhciReadOp(ext, XHCI_OP_USBSTS),
                               MP_STATUS_HW_ERROR);
+    }
+    /*
+     * A line moved to polling and still owed its retirement is retired by
+     * this HCRST: IP, IE and INTE are at their defaults of 0 (4.23.1,
+     * p.312; design record 15 section 4.2, containment step 3). Published
+     * as soon as the reset has completed, so the proof stands whatever a
+     * later step of this sequence refuses.
+     */
+    if (ext->LineMoved && !ext->LineRetired) {
+        KIRQL retireIrql;
+
+        XhciControllerLockAcquire(ext, &retireIrql);
+        ext->LineRetired = 1;
+        ext->LineRetireState = XHCI_POLL_RETIRED_HCRST;
+        XhciControllerLockRelease(ext, retireIrql);
     }
 
     /*

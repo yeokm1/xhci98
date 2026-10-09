@@ -220,3 +220,46 @@ void pci_recheck_status(PCIINFO *p)
     p->status_final = pci_read16(p->bus, p->dev, p->fn, 0x06);
     p->status_rechecked = 1;
 }
+
+/*
+ * Task 36.11: the routing registers, read only, before anything active
+ * runs. Nothing past the xHCI's own header is read unless route_scope()
+ * admits it (a reviewed xHCI at 00:14.0), nothing past the LPC's id
+ * unless it is that xHCI's reviewed LPC, and nothing in RCBA space unless
+ * RCBA is enabled and valid. pci_config_write_count is untouched: this is
+ * reads only, through 0xCF8/0xCFC and one DPMI mapping of RCBA+3000h.
+ */
+void route_read(const PCIINFO *p, ROUTEINFO *r)
+{
+    volatile u8 *page;
+    u32 base;
+
+    memset(r, 0, sizeof(*r));
+    r->xhci_id = (u32)p->vid | ((u32)p->did << 16);
+    r->xhci_pin = p->ipin;
+    r->state = route_scope(r->xhci_id, p->bus, p->dev, p->fn);
+    if (r->state != ROUTE_READ)
+        return;
+    r->lpc_id = pci_read32(0, 0x1F, 0, 0x00);
+    if (!route_lpc_listed(r->xhci_id, r->lpc_id)) {
+        r->state = ROUTE_NA_LPC;
+        return;
+    }
+    r->rcba = pci_read32(0, 0x1F, 0, 0xF0);
+    r->pirq_ad = pci_read32(0, 0x1F, 0, 0x60);
+    r->pirq_eh = pci_read32(0, 0x1F, 0, 0x68);
+    if (!route_rcba_valid(r->rcba)) {
+        r->state = ROUTE_RCBA_INVALID;
+        return;
+    }
+    base = r->rcba & 0xFFFFC000UL;
+    page = (volatile u8 *)dpmi_map_phys(base + 0x3000UL, 0x1000UL);
+    if (page == 0) {
+        r->state = ROUTE_MAP_FAILED;
+        return;
+    }
+    r->d20ip = RD32(page + 0x128);
+    r->d20ir = RD16(page + 0x160);
+    dpmi_unmap_phys((void *)page);
+    r->state = ROUTE_READ;
+}

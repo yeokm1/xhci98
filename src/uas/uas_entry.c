@@ -85,6 +85,9 @@ static NTSTATUS uasAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
     KeInitializeEvent(&fdo->TimerDone, NotificationEvent, TRUE);
     fdo->IoCount = 1;
     KeInitializeEvent(&fdo->IoIdle, NotificationEvent, FALSE);
+    /* 64 KiB until the bus has answered otherwise (task 36.22). */
+    fdo->CommandBytes = UAS_MAX_TRANSFER;
+    fdo->PolicySource = XHCI98_TELE_SRC_UNASKED;
     fdo->Lower = IoAttachDeviceToDeviceStack(self, pdo);
     if (fdo->Lower == NULL) {
         IoDeleteDevice(self);

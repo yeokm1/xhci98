@@ -192,6 +192,12 @@ $cases = @(
     # xHCI, is answered before the list and prints neither.
     (Case "quick_none" @() $quick @("quick scan (read-only)","No USB host controller found","DISQUALIFIED")),
     (Case "quick_xhci" @("-device","qemu-xhci,id=hc,msi=off,msix=off") $quick @("Found 1 USB host controller","xHCI ","LOOKS QUALIFIED","Probe safety: PASS - no PCI configuration writes.")),
+    # Task 36.11: QEMU's xHCI is no reviewed Intel PCH's, so the routing
+    # report says not applicable and reads nothing past the xHCI's header -
+    # the one branch a guest can reach (test_route.c covers the rest). With
+    # --gsi, the quick scan puts its phrase on the screen as well.
+    (Case "quick_xhci_gsi" @("-device","qemu-xhci,id=hc,msi=off,msix=off") ($quick+" --gsi 21") @("LOOKS QUALIFIED","routing registers not applicable","Routing: registers not applicable - not a reviewed Intel","Probe safety: PASS - no PCI configuration writes.")),
+    (Case "xhci_probe_gsi" @("-device","qemu-xhci,id=hc,msi=off,msix=off") "xhciqual --serial --no-page xhci --probe-only --gsi=16" @("PROBE-ONLY (read-only)","Routing: registers not applicable - not a reviewed Intel","Probe safety: PASS - no PCI configuration writes.","Done.")),
     # **AN EHCI-ONLY OR OHCI-ONLY MACHINE IS DISQUALIFIED**, and these two
     # cases pinned the opposite until the 2026-09-07 audit's I1. The quick
     # scan's question is whether THIS driver can work on THIS machine, and a

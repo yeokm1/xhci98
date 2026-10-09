@@ -514,12 +514,16 @@ static NTSTATUS uasAdapterProperty(PUAS_PDO pdo, PVOID out, ULONG outLength,
                                    PULONG written)
 {
     STORAGE_ADAPTER_DESCRIPTOR a;
+    ULONG bytes;
 
+    /* Task 36.22: the one value the start stored (uas_fdo.c,
+     * uasAskPolicy); 64 KiB when the parent is going. */
+    bytes = (pdo->Fdo != NULL) ? pdo->Fdo->CommandBytes : UAS_MAX_TRANSFER;
     UasZero(&a, sizeof(a));
     a.Version = sizeof(STORAGE_ADAPTER_DESCRIPTOR);
     a.Size = sizeof(STORAGE_ADAPTER_DESCRIPTOR);
-    a.MaximumTransferLength = UAS_MAX_TRANSFER;
-    a.MaximumPhysicalPages = UAS_MAX_TRANSFER / PAGE_SIZE + 1;
+    a.MaximumTransferLength = bytes;
+    a.MaximumPhysicalPages = bytes / PAGE_SIZE + 1;
     a.AlignmentMask = 0;
     a.AdapterUsesPio = FALSE;
     a.AdapterScansDown = FALSE;

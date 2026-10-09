@@ -636,36 +636,20 @@ static ULONG hcdCfgBuildInput(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * but at the bInterval the caller's descriptor `caller` gives it when that
  * differs (XhciPipeCallerInterval): a filter's rewritten polling interval
  * (hidusbf), which a whole device's select already takes from the
- * descriptor it is handed, and which XhciFastPollFsLs keys on. Not at
- * SuperSpeed, whose endpoint reads its companion from the device's own.
- * Thread only.
+ * descriptor it is handed, and which XhciFastPollFsLs keys on. At
+ * SuperSpeed the endpoint keeps its companion from the device's own and
+ * takes the caller's byte by XhciPipeRebaseInterval (task 36.19; design
+ * record 13 section 13.7): XhciPipeFunctionEndpoint. Thread only.
  */
 static ULONG hcdCfgFunctionEndpoint(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                     const UCHAR *caller, ULONG offset,
                                     ULONG number, ULONG alternate,
                                     PXHCI_PIPE_EP ep)
 {
-    UCHAR copy[XHCI_PIPE_ENDPOINT_BYTES];
-    ULONG speed;
-    ULONG b;
-    ULONG i;
-
-    speed = HcdDevicePipeSpeed(hc, dev);
-    if (caller != NULL && speed != XHCI_PIPE_SPEED_SUPER &&
-        speed != XHCI_PIPE_SPEED_SUPER_PLUS &&
-        XhciPipeCallerInterval(dev->Selected, dev->SelectedLength, offset,
-                               caller,
-                               (ULONG)caller[2] | ((ULONG)caller[3] << 8),
-                               number, alternate, &b) == XHCI_PIPE_OK &&
-        b != (ULONG)dev->Selected[offset + 6]) {
-        for (i = 0; i < XHCI_PIPE_ENDPOINT_BYTES; i++) {
-            copy[i] = dev->Selected[offset + i];
-        }
-        copy[6] = (UCHAR)b;
-        return XhciPipeEndpointParams(copy, speed, ep);
-    }
-    return XhciPipeEndpointParamsAt(dev->Selected, dev->SelectedLength, offset,
-                                    speed, hc->Hc.HcInfo.Lec, ep);
+    return XhciPipeFunctionEndpoint(dev->Selected, dev->SelectedLength,
+                                    offset, caller, number, alternate,
+                                    HcdDevicePipeSpeed(hc, dev),
+                                    hc->Hc.HcInfo.Lec, ep);
 }
 
 /* The interval cap and the Average TRB Length switch (35-T.7, design record
@@ -696,26 +680,60 @@ static ULONG hcdCfgTolerance(PHCD_CONTROLLER hc, PXHCI_PIPE_EP ep)
 
 /* Fast polling (33.8): the controller's XhciFastPollFsLs mode applied to an
  * endpoint a client's select names, never to a hub's own (HcdCfgHubOpen).
- * The cap comes first, and fast polling is offered only when it left the
- * Interval unchanged, so eligibility is judged on the uncapped value
- * (record 17 section 4.7). Thread only. */
+ * Modes 2 and 3: the cap comes first, and fast polling is offered only when
+ * it left the Interval unchanged, so eligibility is judged on the uncapped
+ * value (record 17 section 4.7). Mode 4 (task 36.19) comes before the cap,
+ * which leaves a code's Interval of 2 or less as it is, so a capped
+ * controller does not silence a code; the cap still runs, for the Average
+ * TRB Length and for an endpoint with no code. Thread only. */
 static VOID hcdCfgFastPoll(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                            PXHCI_PIPE_EP ep)
 {
+    if (hc->FastPollMode == XHCI_PIPE_FAST_CODES) {
+        (VOID)XhciPipeFastPoll(hc->FastPollMode, HcdDevicePipeSpeed(hc, dev),
+                               dev->Route, ep);
+        (VOID)hcdCfgTolerance(hc, ep);
+        return;
+    }
     if (hcdCfgTolerance(hc, ep)) {
         (VOID)XhciPipeFastPoll(hc->FastPollMode, HcdDevicePipeSpeed(hc, dev),
                                dev->Route, ep);
     }
 }
 
+/* Why an owed device half ended (task 36.12), the low byte of the
+ * pipe.clear.owed.end note. */
+#define HCD_CFG_OWED_DONE       1UL     /* a reset finished both halves     */
+#define HCD_CFG_OWED_CONTEXT    2UL     /* the endpoint's context replaced  */
+#define HCD_CFG_OWED_STATE      3UL     /* the endpoint not Stopped: moot   */
+
+/*
+ * The device's half a RESET_PIPE owes (HCD_PIPE.ClearOwed, task 36.12)
+ * ended: the record cleared and the pause it held given back. Nothing is
+ * published until the caller's own pause ends too - every caller holds
+ * one. Thread only, controller lock not held.
+ */
+static VOID hcdCfgOwedEnd(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                          PHCD_PIPE pipe, ULONG why)
+{
+    if (!pipe->ClearOwed) {
+        return;
+    }
+    pipe->ClearOwed = 0;
+    XhciLogNote(&hc->Hc, "pipe.clear.owed.end",
+                (dev->SlotId << 24) | (pipe->Dci << 16) | why);
+    HcdIoPipeResume(hc, pipe);
+}
+
 /*
  * One Configure Endpoint for `plan`, adding `add`'s pipes: built, issued,
  * and - when it fails with a code XhciPipeFastRetry names while a pipe it
- * adds was set below Table 6-12's range - those pipes put back at their
- * Table 6-12 Interval, counted, and the command built and issued once more.
- * A refused command leaves the Output Device Context as it was (xHCI 1.2c
- * 4.6.6, p.112), so the second is the command the select would have issued
- * with the value off. `opening` counts the fast pipes a success opens: a
+ * adds is one fast polling changed (FastPoll) - those pipes put back at
+ * their FallbackInterval, counted, and the command built and issued once
+ * more. A refused command leaves the Output Device Context as it was (xHCI
+ * 1.2c 4.6.6, p.112), so under modes 2 and 3 the second is the command the
+ * select would have issued with the value off; under mode 4 the fallback is
+ * Interval 3, not the code's Table 6-12 reading (task 36.19). `opening` counts the fast pipes a success opens: a
  * select's, not a replay of pipes already open. Returns the completion
  * code, or HCD_CFG_NOT_ISSUED when nothing was issued. Thread only,
  * powered.
@@ -771,6 +789,17 @@ static ULONG hcdCfgConfigureAdd(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         hc->FastPollFallbacks++;
         XhciLogNote(ext, "fastpoll.fallback",
                     (dev->SlotId << 24) | (fast << 8) | code);
+    }
+    /* Task 36.12: a fresh context restarts the host's toggle at DATA0 and
+     * every caller's device half is its own (a reset, a select, a clear),
+     * so a device half an earlier RESET_PIPE owed is moot: the record never
+     * outlives the context it describes. */
+    if (code == XHCI_CC_SUCCESS) {
+        for (dci = 2; dci < 32; dci++) {
+            if (add[dci] != NULL && add[dci]->ClearOwed) {
+                hcdCfgOwedEnd(hc, dev, add[dci], HCD_CFG_OWED_CONTEXT);
+            }
+        }
     }
     return code;
 }
@@ -2369,9 +2398,12 @@ static ULONG hcdCfgEpState(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * re-enumerate every device to settle one device's toggle (QEMU's usb-uas
  * STALLs every endpoint CLEAR_FEATURE; a reset here was a re-init loop,
  * s29k launches 1 and 2) - so no caller resets the controller for it: its
- * caller fails the client's request with the host's half not done
- * (RESET_PIPE, a streams open or close), as usbport does (Codex review of
- * c4ec1c3, finding 1). Thread only.
+ * caller fails the client's request (Codex review of c4ec1c3, finding 1).
+ * A clear sent before the host's half (a streams open or close,
+ * SYNC_CLEAR_STALL, RESET_PIPE on an endpoint not Halted) fails it with the
+ * host's half not done, as usbport does; one sent after a RESET_PIPE's
+ * Reset Endpoint fails it with the pipe paused and the device's half owed
+ * (task 36.12, hcdCfgResetClear). Thread only.
  */
 static ULONG hcdCfgDeviceClearHalt(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                    PHCD_PIPE pipe)
@@ -2379,6 +2411,13 @@ static ULONG hcdCfgDeviceClearHalt(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG bytes;
     ULONG outcome;
 
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Task 36.12's legs: XhciQemuInject fault 13 answers this clear
+     * without sending it. */
+    if (HcdInjClearHalt(hc, dev->SlotId, pipe->Dci, &outcome)) {
+        return outcome;
+    }
+#endif
     outcome = HcdThreadControlOutcome(hc, dev, 0x02, 1, 0,
                                       (USHORT)pipe->EndpointAddress, 0,
                                       &bytes);
@@ -2761,18 +2800,18 @@ static ULONG hcdCfgPipeBusy(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
  * (ReactOS usbport urb.c, USBPORT_ClearStall). An isochronous endpoint has
  * no halt to clear (the same skip as below). A failed request is the
  * client's to see; it says nothing about the controller's toggle, so no
- * recovery is asked for.
+ * recovery is asked for. An endpoint that owes its device's half (task
+ * 36.12) does not come here: hcdCfgReset finishes that reset.
  */
 static LONG hcdCfgClearStall(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                              PHCD_PIPE pipe)
 {
-    ULONG bytes;
-
     if (pipe->TransferType == XHCI_PIPE_XFER_ISOCH) {
         return XHCI_USBD_STATUS_SUCCESS;
     }
-    if (!HcdThreadControl(hc, dev, 0x02, 1, 0,
-                          (USHORT)pipe->EndpointAddress, 0, &bytes)) {
+    /* Through hcdCfgDeviceClearHalt, so the qemu flavour's fault 13 meets
+     * this clear too; any outcome but taken is REQUEST_FAILED, as ever. */
+    if (hcdCfgDeviceClearHalt(hc, dev, pipe) != HCD_CTL_DONE) {
         return (LONG)XHCI_PIPE_USBD_REQUEST_FAILED;
     }
     return XHCI_USBD_STATUS_SUCCESS;
@@ -2797,6 +2836,14 @@ static LONG hcdCfgClearStall(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  *             touches no toggle). Not a Soft Retry: the doorbell that
  *             follows starts a new TD, not the failed one;
  *   Error     Set TR Dequeue alone (4.8.3), which moves it to Stopped;
+ *   owed      Stopped by a RESET_PIPE whose device clear was not taken
+ *             (task 36.12): the host's half is done already, so nothing is
+ *             sent and the answer is success, but the pipe stays paused
+ *             with the record - the host's toggle was restarted and the
+ *             device's was not, and nothing here can align them (Codex
+ *             review of 36.12, round 1, finding 1). The device's half is
+ *             still the next RESET_PIPE's or SYNC_CLEAR_STALL's, which the
+ *             usual SYNC_RESET_PIPE then SYNC_CLEAR_STALL pair sends;
  *   other     no halt to clear: nothing is sent, and no context is
  *             recreated - that would restart the toggle (4.6.8 p.118).
  *
@@ -2815,6 +2862,13 @@ static LONG hcdCfgResetHost(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         return HCD_USBD_ERROR_BUSY;
     }
     state = hcdCfgEpState(hc, dev, pipe->Dci);
+    if (pipe->ClearOwed) {
+        if (state == XHCI_EP_STATE_STOPPED) {
+            HcdIoPipeResume(hc, pipe);      /* the record's pause stays */
+            return XHCI_USBD_STATUS_SUCCESS;
+        }
+        hcdCfgOwedEnd(hc, dev, pipe, HCD_CFG_OWED_STATE);
+    }
     ok = 1;
     if (state == XHCI_EP_STATE_HALTED) {
         ok = hcdCfgResetEndpoint(hc, dev, pipe, 1) &&
@@ -2832,33 +2886,107 @@ static LONG hcdCfgResetHost(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 }
 
 /*
+ * A device clear in a reset, and what its outcome leaves (task 36.12,
+ * XhciPipeClearVerdict): taken, 1 and nothing else. Not taken before the
+ * host's half began (`step` DEVICE_FIRST), the pipe resumes as it was -
+ * the client's answer, no controller reset (Codex review of c4ec1c3,
+ * finding 1). Not taken after Reset Endpoint (`step` DEVICE), the host's
+ * toggle is restarted and the endpoint Stopped while the device's is not:
+ * resuming would leave the endpoint undefined (xHCI 4.6.8), so the pipe
+ * stays paused, its pause kept as the owed record's (HCD_PIPE.ClearOwed),
+ * and the client gets the failure. Timed out, EP0 is stuck and the
+ * recovery its control path asked for settles the pipe, paused until it
+ * (hcd_enum.c); that containment is unchanged. Returns 1 to go on, else 0
+ * with *result the client's answer: STALL_PID for a STALL,
+ * INTERNAL_HC_ERROR for another failure or a timeout, ERROR_BUSY for a
+ * clear that never went out. Thread only, the caller's pause held.
+ */
+static ULONG hcdCfgResetClear(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                              PHCD_PIPE pipe, ULONG step, PLONG result)
+{
+    ULONG outcome;
+
+    outcome = hcdCfgDeviceClearHalt(hc, dev, pipe);
+    switch (outcome) {
+    case HCD_CTL_DONE:
+        return 1;
+    case HCD_CTL_STALLED:
+        *result = XHCI_USBD_STATUS_STALL_PID;
+        break;
+    case HCD_CTL_FAILED:
+        *result = HCD_USBD_INTERNAL_HC_ERROR;
+        break;
+    default:
+        *result = dev->Ep0Stuck ? HCD_USBD_INTERNAL_HC_ERROR
+                                : HCD_USBD_ERROR_BUSY;
+        break;
+    }
+    switch (XhciPipeClearVerdict(step, 0,
+                                 (outcome != HCD_CTL_STALLED &&
+                                  outcome != HCD_CTL_FAILED &&
+                                  dev->Ep0Stuck) ? 1UL : 0UL)) {
+    case XHCI_PIPE_CLEAR_OWED:
+        if (pipe->ClearOwed) {
+            /* Owed already: that record keeps its pause, this request's
+             * own is given back. */
+            HcdIoPipeResume(hc, pipe);
+        } else {
+            pipe->ClearOwed = 1;
+        }
+        XhciLogNote(&hc->Hc, "pipe.clear.owed",
+                    (dev->SlotId << 24) | (pipe->Dci << 16) | outcome);
+        break;
+    case XHCI_PIPE_CLEAR_RESUME:
+        HcdIoPipeResume(hc, pipe);
+        break;
+    default:
+        break;                  /* held, paused for the recovery */
+    }
+    return 0;
+}
+
+/*
  * RESET_PIPE (`parts` both halves), with SYNC_RESET_PIPE (hcdCfgResetHost)
- * and SYNC_CLEAR_STALL (hcdCfgClearStall) sent to their own paths: inside
- * the pipe's pause from the start, so nothing is published between the
- * check and the reset (round 3, finding 7). Anything still on the pipe is
- * aborted first. Then the device's half - CLEAR_FEATURE(ENDPOINT_HALT),
- * whose failure is returned with the host's half not done (usbport's order;
- * Codex review of c4ec1c3, finding 1) - and the controller's by the
- * endpoint's state (round 2, finding 6), so both ends restart the data
- * toggle (SeqUsed cleared):
+ * sent to its own path, and SYNC_CLEAR_STALL (hcdCfgClearStall) too unless
+ * the endpoint owes its device's half: inside the pipe's pause from the
+ * start, so nothing is published between the check and the reset (round 3,
+ * finding 7). Anything still on the pipe is aborted first. Then the steps
+ * XhciPipeResetSteps gives for the endpoint's state (task 36.12), so both
+ * ends restart the data toggle (SeqUsed cleared):
  *
- *   Halted    Reset Endpoint (TSP 0, which restarts the toggle), then Set TR
- *             Dequeue past the failed TD;
- *   other     brought to Stopped (hcdCfgQuiesce), then a fresh context
- *             (hcdCfgRecycle), the only toggle restart a non-Halted
- *             endpoint has (xHCI 4.6.8).
+ *   Halted    xHCI 4.6.8's order (p.116): Reset Endpoint (TSP 0, which
+ *             restarts the host's toggle); CLEAR_TT_BUFFER behind a TT for
+ *             control and bulk (HcdHubClearTt); the device's
+ *             CLEAR_FEATURE(ENDPOINT_HALT), for any endpoint but control;
+ *             Set TR Dequeue past the failed TD; the doorbell (the resume).
+ *             A clear the device does not take leaves the pipe paused with
+ *             the device's half owed (hcdCfgResetClear) - the order
+ *             usbport used, the device's clear first (SP4 USBPORT.SYS image
+ *             VA 0x24123, NUSB 3.3's 0x23AA3, static; ReactOS usbport
+ *             urb.c, USBPORT_ResetPipe), is 4.6.8's no longer;
+ *   owed      Stopped by that Reset Endpoint, which a second one would
+ *             find a Context State Error: the TT clear and the device's
+ *             clear again, then Set TR Dequeue (legal on Stopped) and the
+ *             doorbell. A record on an endpoint in any other state is moot
+ *             and ended, and the state's own path taken;
+ *   other     the device's clear first, refused as before 36.12 (the pipe
+ *             resumed as it was), then brought to Stopped (hcdCfgQuiesce)
+ *             and a fresh context (hcdCfgRecycle), the only toggle restart
+ *             a non-Halted endpoint has (4.6.8).
  */
 static LONG hcdCfgReset(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                         PHCD_PIPE pipe, ULONG parts)
 {
     KIRQL oldIrql;
+    ULONG state;
+    ULONG steps;
     ULONG ok;
     LONG result;
 
     /* A stream's handle resets its endpoint, every stream of it: the halt,
      * the reset and the device's sequence are the endpoint's (31-A.1). */
     pipe = hcdCfgEndpointOf(pipe);
-    if ((parts & XHCI_PIPE_RESET_HOST) == 0) {
+    if ((parts & XHCI_PIPE_RESET_HOST) == 0 && !pipe->ClearOwed) {
         return hcdCfgClearStall(hc, dev, pipe);
     }
     if ((parts & XHCI_PIPE_RESET_DEVICE) == 0) {
@@ -2866,60 +2994,62 @@ static LONG hcdCfgReset(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     }
     HcdIoPipePause(hc, pipe);
     result = XHCI_USBD_STATUS_SUCCESS;
-    if (hcdCfgPipeBusy(hc, pipe)) {
+    /* SYNC_CLEAR_STALL finishing an owed reset aborts nothing: what waits
+     * on the pause was submitted after that reset and is not on the ring. */
+    if ((parts & XHCI_PIPE_RESET_HOST) != 0 && hcdCfgPipeBusy(hc, pipe)) {
         result = hcdCfgAbortPaused(hc, dev, pipe, HCD_USBD_CANCELED);
     }
     if (result != XHCI_USBD_STATUS_SUCCESS) {
         return result;          /* left paused, as hcdCfgAbort */
     }
-    /* The device's half first, as usbport orders it (SP4 USBPORT.SYS image
-     * VA 0x24123 and the failure branch at 0x2412D, NUSB 3.3's 0x23AA3 and
-     * 0x23AAD, static; ReactOS usbport urb.c, USBPORT_ResetPipe): a clear
-     * the device does not take is the client's answer, and the host's half
-     * is not done - the two ends are left as they were, and no controller
-     * reset is asked for (Codex review of c4ec1c3, finding 1). A clear that
-     * never went out is no answer from the device: it fails busy. */
-    if (pipe->TransferType != XHCI_PIPE_XFER_ISOCH) {
-        switch (hcdCfgDeviceClearHalt(hc, dev, pipe)) {
-        case HCD_CTL_DONE:
-            break;
-        case HCD_CTL_STALLED:
+    state = hcdCfgEpState(hc, dev, pipe->Dci);
+    if (pipe->ClearOwed && state != XHCI_EP_STATE_STOPPED) {
+        hcdCfgOwedEnd(hc, dev, pipe, HCD_CFG_OWED_STATE);
+        if ((parts & XHCI_PIPE_RESET_HOST) == 0) {
             HcdIoPipeResume(hc, pipe);
-            return XHCI_USBD_STATUS_STALL_PID;
-        case HCD_CTL_FAILED:
-            HcdIoPipeResume(hc, pipe);
-            return HCD_USBD_INTERNAL_HC_ERROR;
-        default:
-            if (dev->Ep0Stuck) {
-                /* Timed out: the reset its control path requested settles
-                 * the pipe, paused until it. */
-                return HCD_USBD_INTERNAL_HC_ERROR;
-            }
-            HcdIoPipeResume(hc, pipe);
-            return HCD_USBD_ERROR_BUSY;
+            return hcdCfgClearStall(hc, dev, pipe);
         }
     }
-    if (hcdCfgEpState(hc, dev, pipe->Dci) == XHCI_EP_STATE_HALTED) {
-        ok = hcdCfgResetEndpoint(hc, dev, pipe, 0) &&
-             hcdCfgSetDequeue(hc, dev, pipe);
-        if (ok) {
-            HcdHubClearTt(hc, dev, pipe->EndpointAddress,
-                          pipe->TransferType, 0);
-        }
-    } else {
+    steps = XhciPipeResetSteps(parts, state, pipe->ClearOwed,
+                               pipe->TransferType);
+    if ((steps & XHCI_PIPE_STEP_DEVICE_FIRST) != 0 &&
+        !hcdCfgResetClear(hc, dev, pipe, XHCI_PIPE_STEP_DEVICE_FIRST,
+                          &result)) {
+        return result;
+    }
+    ok = 1;
+    if ((steps & XHCI_PIPE_STEP_RESET_EP) != 0) {
+        ok = hcdCfgResetEndpoint(hc, dev, pipe, 0);
+    }
+    if (ok && (steps & XHCI_PIPE_STEP_RECYCLE) != 0) {
         ok = hcdCfgQuiesce(hc, dev, pipe) != XHCI_EP_STATE_RUNNING &&
              hcdCfgRecycle(hc, dev, pipe);
     }
     if (!ok) {
         (VOID)hcdCfgFault(hc, dev);
-        result = HCD_USBD_INTERNAL_HC_ERROR;
-        return result;          /* left paused, as hcdCfgAbort */
+        return HCD_USBD_INTERNAL_HC_ERROR;  /* left paused, as hcdCfgAbort */
+    }
+    if ((steps & XHCI_PIPE_STEP_CLEAR_TT) != 0) {
+        /* Behind a TT, the halted transaction may still hold its buffer;
+         * HcdHubClearTt sends nothing for a device behind none. */
+        HcdHubClearTt(hc, dev, pipe->EndpointAddress, pipe->TransferType,
+                      0);
+    }
+    if ((steps & XHCI_PIPE_STEP_DEVICE) != 0 &&
+        !hcdCfgResetClear(hc, dev, pipe, XHCI_PIPE_STEP_DEVICE, &result)) {
+        return result;
+    }
+    if ((steps & XHCI_PIPE_STEP_SET_DEQUEUE) != 0 &&
+        !hcdCfgSetDequeue(hc, dev, pipe)) {
+        (VOID)hcdCfgFault(hc, dev);
+        return HCD_USBD_INTERNAL_HC_ERROR;  /* left paused, as hcdCfgAbort */
     }
     /* Both ends restarted: the sequence is fresh. */
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     pipe->Halted = 0;
     pipe->SeqUsed = 0;
     XhciControllerLockRelease(&hc->Hc, oldIrql);
+    hcdCfgOwedEnd(hc, dev, pipe, HCD_CFG_OWED_DONE);
     HcdIoPipeResume(hc, pipe);
     hcdCfgStreamKick(hc, dev, pipe);
     return result;

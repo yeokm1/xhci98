@@ -261,6 +261,9 @@ void report_controller(CTRL *c, int active_ran)
     qprintf("  PCI subsys: %04X:%04X\n", p->subsys_vid, p->subsys_did);
     qprintf("  PCI caps: PM=%d MSI=%d(en=%d) MSI-X=%d PCIe=%d\n",
             p->has_pm, p->has_msi, p->msi_enabled, p->has_msix, p->has_pcie);
+    /* Task 36.11: read before any active test, so it is the firmware's
+     * routing as found, whatever this run went on to do. */
+    report_route(&c->route, c->route_gsi, qprintf);
     report_pci_status(p);
     report_pci_pm(p);
     qprintf("  BAR0: %08lX%s%s (raw lo=%08lX hi=%08lX)\n",

@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "../src/uas/uas_iu.h"
+#include "../src/xhci98_xfer.h"
 #include "test_harness.h"
 
 static int bytes_eq(const UCHAR *a, const UCHAR *b, ULONG n)
@@ -499,9 +500,130 @@ static void test_ids(void)
              "an unknown kind is refused");
 }
 
+/* Task 36.21: the telemetry's buckets are the bus's (xhci_xstat.c,
+ * test_snap), and its sums carry. */
+static void test_tele(void)
+{
+    ULONG lo;
+    ULONG hi;
+
+    CHECK_EQ(UasTeleBucket(512), 0, "a sector in the first");
+    CHECK_EQ(UasTeleBucket(65536), 2, "64 KiB in the third");
+    CHECK_EQ(UasTeleBucket(65537), 3, "past it, 128 KiB's");
+    CHECK_EQ(UasTeleBucket(1048576), 6, "1 MiB");
+    CHECK_EQ(UasTeleBucket(2097152), 7, "2 MiB");
+    CHECK_EQ(UasTeleBucket(2097153), 8, "above 2 MiB");
+    CHECK_EQ(UasTeleDepthBucket(0), 0, "none reads as one");
+    CHECK_EQ(UasTeleDepthBucket(3), 2, "three to four");
+    CHECK_EQ(UasTeleDepthBucket(30), 5, "thirty: seventeen and more");
+    lo = 0xFFFF0000UL;
+    hi = 0;
+    UasTeleAdd64(&lo, &hi, 0x20000UL);
+    CHECK(lo == 0x10000UL && hi == 1, "a sum carries");
+}
+
+/* Task 36.22: the bus's answer to the transfer-policy question, as
+ * uasAskPolicy (uas_fdo.c) hands it over. */
+static void good_reply(XHCI98_TRANSFER_POLICY *r, ULONG bytes)
+{
+    memset(r, 0, sizeof(*r));
+    r->Signature = XHCI98_POLICY_SIGNATURE;
+    r->Version = XHCI98_POLICY_VERSION;
+    r->Size = sizeof(*r);
+    r->Status = XHCI98_POLICY_SUCCESS;
+    r->CommandBytes = bytes;
+    r->MinBytes = XHCI98_POLICY_MIN_BYTES;
+    r->MaxBytes = XHCI98_POLICY_MAX_BYTES;
+    r->StepBytes = XHCI98_POLICY_STEP_BYTES;
+}
+
+static void test_policy(void)
+{
+    XHCI98_TRANSFER_POLICY r;
+    ULONG src;
+
+    CHECK_EQ(XHCI98_POLICY_MIN_BYTES, 64UL * 1024, "64 KiB at least");
+    CHECK_EQ(XHCI98_POLICY_MAX_BYTES, 2048UL * 1024, "2 MiB at most");
+    CHECK_EQ(XHCI98_POLICY_DEFAULT_BYTES, 1024UL * 1024, "1 MiB default");
+    CHECK_EQ(sizeof(XHCI98_TRANSFER_POLICY), 12 * 4,
+             "a pointer-free request of twelve words");
+
+    good_reply(&r, 0x100000UL);
+    CHECK_EQ(UasPolicyValue(UAS_POLICY_SENT_OK, &r, &src), 0x100000UL,
+             "1 MiB taken");
+    CHECK_EQ(src, XHCI98_TELE_SRC_BUS, "from the bus");
+    good_reply(&r, 0x10000UL);
+    CHECK_EQ(UasPolicyValue(UAS_POLICY_SENT_OK, &r, &src), 0x10000UL,
+             "64 KiB taken as the bus's own");
+    CHECK_EQ(src, XHCI98_TELE_SRC_BUS, "still the bus's");
+    good_reply(&r, 0x200000UL);
+    CHECK_EQ(UasPolicyValue(UAS_POLICY_SENT_OK, &r, &src), 0x200000UL,
+             "2 MiB taken");
+    good_reply(&r, 0x11000UL);
+    CHECK_EQ(UasPolicyValue(UAS_POLICY_SENT_OK, &r, &src), 0x11000UL,
+             "68 KiB, a step, taken");
+
+    CHECK_EQ(UasPolicyValue(UAS_POLICY_SENT_UNSUPPORTED, NULL, &src),
+             0x10000UL, "an older bus: 64 KiB");
+    CHECK_EQ(src, XHCI98_TELE_SRC_UNSUPPORTED, "said as unsupported");
+    CHECK_EQ(UasPolicyValue(UAS_POLICY_SENT_FAILED, NULL, &src), 0x10000UL,
+             "a failed request: 64 KiB");
+    CHECK_EQ(src, XHCI98_TELE_SRC_TRANSPORT, "said as transport");
+    good_reply(&r, 0x100000UL);
+    CHECK_EQ(UasPolicyValue(UAS_POLICY_SENT_FAILED, &r, &src), 0x10000UL,
+             "a failed request's buffer is not read");
+    CHECK_EQ(UasPolicyValue(UAS_POLICY_SENT_REFUSED, &r, &src), 0x10000UL,
+             "a refused header: 64 KiB");
+    CHECK_EQ(src, XHCI98_TELE_SRC_MALFORMED, "said as out of contract");
+    CHECK_EQ(UasPolicyValue(UAS_POLICY_SENT_OK, NULL, &src), 0x10000UL,
+             "success with no reply: 64 KiB");
+
+    good_reply(&r, 0x100000UL);
+    r.Signature = 0;
+    CHECK_EQ(UasPolicyValue(UAS_POLICY_SENT_OK, &r, &src), 0x10000UL,
+             "a wrong signature");
+    CHECK_EQ(src, XHCI98_TELE_SRC_MALFORMED, "out of contract");
+    good_reply(&r, 0x100000UL);
+    r.Version = 2;
+    CHECK_EQ(UasPolicyValue(UAS_POLICY_SENT_OK, &r, &src), 0x10000UL,
+             "another version");
+    good_reply(&r, 0x100000UL);
+    r.Size = 8;
+    CHECK_EQ(UasPolicyValue(UAS_POLICY_SENT_OK, &r, &src), 0x10000UL,
+             "another size");
+    good_reply(&r, 0x100000UL);
+    r.Status = XHCI98_POLICY_INVALID;
+    CHECK_EQ(UasPolicyValue(UAS_POLICY_SENT_OK, &r, &src), 0x10000UL,
+             "a status that is not success");
+    good_reply(&r, 0xF000UL);
+    CHECK_EQ(UasPolicyValue(UAS_POLICY_SENT_OK, &r, &src), 0x10000UL,
+             "below the range");
+    good_reply(&r, 0x201000UL);
+    CHECK_EQ(UasPolicyValue(UAS_POLICY_SENT_OK, &r, &src), 0x10000UL,
+             "above it");
+    good_reply(&r, 0x100200UL);
+    CHECK_EQ(UasPolicyValue(UAS_POLICY_SENT_OK, &r, &src), 0x10000UL,
+             "off a step");
+    good_reply(&r, 0x100000UL);
+    r.StepBytes = 512;
+    CHECK_EQ(UasPolicyValue(UAS_POLICY_SENT_OK, &r, &src), 0x10000UL,
+             "another step");
+    good_reply(&r, 0x100000UL);
+    r.MaxBytes = 0x400000UL;
+    CHECK_EQ(UasPolicyValue(UAS_POLICY_SENT_OK, &r, &src), 0x10000UL,
+             "another range");
+    good_reply(&r, 0x100000UL);
+    r.Reserved[3] = 1;
+    CHECK_EQ(UasPolicyValue(UAS_POLICY_SENT_OK, &r, &src), 0x10000UL,
+             "a reserved word set");
+    CHECK_EQ(src, XHCI98_TELE_SRC_MALFORMED, "out of contract");
+}
+
 int main(void)
 {
     test_tags();
+    test_tele();
+    test_policy();
     test_command_iu();
     test_task_iu();
     test_parse();
