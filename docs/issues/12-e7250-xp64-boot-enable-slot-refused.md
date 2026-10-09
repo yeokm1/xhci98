@@ -104,8 +104,11 @@ fault was in `xhci98.sys`, not `xhciuas`.
   36w.1 to 36w.3.
 - **The stall-recovery order.** `hcdCfgReset` sends
   `CLEAR_FEATURE(ENDPOINT_HALT)` before Reset Endpoint and Set TR Dequeue.
-  That reverses xHCI 4.6.8, and Codex and a Claude subagent each suspected
-  it. But the dumps below showed every stall recovered. It is a spec fix to
+  xHCI 4.6.8 (p.116) puts it between them: Reset Endpoint, then
+  `CLEAR_TT_BUFFER` behind a TT for control and bulk, then the device's
+  clear, then Set TR Dequeue, then the doorbell. Codex and a Claude
+  subagent each suspected the order. But the dumps below showed every
+  stall recovered. It is a spec fix to
   make on its own (task 36.12), not this hang.
 
 ### 3.3 The diagnostic build `2.2.0.2` (task 36.1)
@@ -268,7 +271,9 @@ what it found:
 1. The pair is admitted by the value, at the expected locations: xHCI
    `00:14.0`, LPC `00:1F.0`.
 2. The LPC's RCBA is enabled and valid.
-3. `D20IP` agrees with the xHCI's Interrupt Pin.
+3. `D20IP` reads INTA (1), and the xHCI's Interrupt Pin is INTA too.
+   Agreement on another pin is not enough, because the repair writes only
+   `D20IR`'s INTA field (IAR, bits 2:0).
 4. The interrupt is line-based (not message-signalled) and unambiguous. The
    translated vector and IRQL are never used; the raw resource names the
    IRQ.
@@ -279,8 +284,10 @@ what it found:
 - **APIC mode**, when the raw IRQ is 16 to 23 (Windows 2000, XP, Vista and 7
   on the E7250): the target is PIRQ (IRQ-16), because the PCH wires
   PIRQA#-H# to I/O APIC inputs 16-23.
-- **PIC mode**, when the raw IRQ is below 16 (Windows 98 and ME, and an NT
-  system booted without the APIC):
+- **PIC mode**, when the raw IRQ is 3-7, 9-12, 14 or 15 (Windows 98 and
+  ME, and an NT system booted without the APIC). These are the IRQs
+  `PIRQx_ROUT`'s field can name; 0, 1, 2, 8 and 13 are reserved encodings
+  there (330837-002 10.1.17), so a raw IRQ among them is report-only:
   - Here the route has two stages: `D20IR` picks the PIRQ, then the LPC's
     `PIRQx_ROUT` registers (`60h`-`63h`, `68h`-`6Bh`; bit 7 IRQEN = 0 means
     routed, bits 3:0 the ISA IRQ) send each PIRQ to an 8259 input.
@@ -363,7 +370,9 @@ and its open questions.
   - 100 series and later, and the Apollo Lake-class Atom SoCs, use ITSS
     behind P2SB;
   - Bay Trail and Braswell use the iLB.
-- **36.12:** RESET_PIPE in xHCI 4.6.8 order.
+- **36.12:** RESET_PIPE in xHCI 4.6.8 order: Reset Endpoint, the TT clear,
+  the device's clear, Set TR Dequeue, the doorbell. A device clear that
+  fails leaves the pipe halted rather than resumed.
 - **36.final:** the `2.3.0.0` builds, the QEMU regression, and the owner's check
   on the E7250 under XP x64 and Windows 7 with no manual write. The check
   covers:

@@ -215,8 +215,9 @@ the ISR. On the Dell E7250 the BIOS routes the xHCI's INTA to a different
 IRQ from the one ACPI gives the OS. The table above settles that controller
 on "line, automatic", and the driver then lives on the lost-interrupt
 backstop alone. With no other device on its line, it fails outright. The
-routing quirk (roadmap 36.3) repairs the E7250. This rule covers what it
-cannot: an unlisted chipset, PIC mode, or another firmware fault.
+routing quirk (roadmap 36.3) repairs the E7250, in APIC and PIC mode. This
+rule covers what it cannot: an unlisted chipset, a quirk set to 0, or
+another firmware fault.
 
 **Mode 0 only:** a line delivery that is proven dead at run time moves to
 polling, with the reason "automatic: line interrupt not delivered".
@@ -224,8 +225,21 @@ polling, with the reason "automatic: line interrupt not delivered".
   `IMAN.IP` and `IE` and `USBCMD.INTE` set, while the ISR has claimed
   nothing since the previous look. The exact count and window are settled
   in review (36.5), so that a shared or merely slow line does not trip it.
+  The predicate is a line delivery's only: under MSI or MSI-X the
+  controller clears `IP` itself once the message write completes (xHCI
+  1.2c 4.17.5, p.270), so `IP` set cannot show a lost message.
+- **Open: who looks** (Codex review of `7567dec`, to settle in 36.5 before
+  code). `hcdBackstop` runs on `hcdThread`, and `hcdCommand` blocks that
+  thread in a command wait for the very completion a dead line never
+  delivers (issue 12 section 2), so "backstop looks" cannot be the
+  observer. It has to run independently of that thread for every line
+  delivery, command waits and `XhciTolerance` 0 included.
 - **The move.** It masks the interrupter (`INTE`, then `IE`, the existing
   mask order) and starts the poller as for a poll delivery chosen at start.
+  **Open** (the same review): section 5.2 lets the poller leave CLOSED only
+  at a start under a poll delivery, so this move needs a live transition of
+  its own, synchronised under `PollLock` with `PollService`, the masking,
+  the ISR's admission and a concurrent close, written into section 5.2.
   It keeps the move through recovery and resume, like any delivery.
 - **The ISR stays connected,** because disconnecting at DISPATCH is not
   possible. It claims nothing once the move is made, so a shared line's
@@ -724,7 +738,8 @@ the deadline conversion, the phase split or the cross-references.
 
 ## 14. What changes in the documents
 
-Task SUSP.3, the docs of both planned pieces: `implementation-invariants.md`,
+Task 36.20 (SUSP.3 until 2026-10-09, when Phase 36 took the cut that ships
+polling): `implementation-invariants.md`,
 "Interrupt Delivery" (a pin-0 controller polled, not refused);
 `architecture.md`'s statement of line-based delivery; the release notes'
 "Controller" row and a row for the switch; the acceptance test's step 3 and

@@ -726,6 +726,16 @@ How it got here:
   is planned work ("Issue 17 follow-up"). The `XhciIntelPortSwitch`
   default waits on the reporter's reason, and the UAS figures are a report.
   The owner tests these items and answers the issue after.
+- **2026-10-09, later.** A Codex review of the plan at `7567dec` (2 P1, 10
+  P2) was taken into the tasks: 36.12's order corrected to xHCI 4.6.8; the
+  dead-line rule's observer and live transition left open for 36.5 (record
+  15 section 4.2); 36.4 kept, with its rules; 36.3's PIC IRQs limited to
+  the routable ones; 36.17's lifecycle, 36.18's `_EX_V2` sources and 36.19's
+  SuperSpeed composite path made explicit; the docs and install legs moved
+  here from SUSP.3 and SUSP.4 (36.20, 36.final). Five points wait on the
+  owner: MSI's mode table and failure path, MSI-X, the `_EX` byte on Vista
+  and 7, mode 4 across `SELECT_INTERFACE`, and the composite interface's
+  representative.
 
 - [x] 36.1 **done 2026-10-08** (`3d667f1`); **reverted 2026-10-08 (owner) after its read**: the code and the `XHCISNAP` decoder are removed, the tree is back to `2.2.0.0`, and the description is kept as the record (issue 12 section 3.3) - the diagnostic build, numbered `2.2.0.2` (owner, 2026-10-07), on `2.2.0.0`'s code with no change in behaviour (issue 12 section 3.3):
   - per open pipe of every slot: its flags, queue and oldest outstanding transfer (URB function, setup bytes, length, age, TD address), with the Output Endpoint Context's state, TR Dequeue and DCS read at dump time;
@@ -745,7 +755,7 @@ How it got here:
     - a line-based, unambiguous interrupt;
     - a target PIRQ derived from the raw IRQ, and D20IR's IAR differing from it:
       - **APIC mode** (raw IRQ 16-23): the target is IRQ-16;
-      - **PIC mode** (raw IRQ below 16; Windows 98 and ME, or NT without the APIC): the target is a PIRQ whose LPC `PIRQx_ROUT` (`60h`-`63h`, `68h`-`6Bh`) is enabled and names that IRQ. The current one is kept if it matches, else the lowest is taken. Those registers are read, never written.
+      - **PIC mode** (raw IRQ 3-7, 9-12, 14 or 15; Windows 98 and ME, or NT without the APIC): the target is a PIRQ whose LPC `PIRQx_ROUT` (`60h`-`63h`, `68h`-`6Bh`) is enabled and names that IRQ. The current one is kept if it matches, else the lowest is taken. Those registers are read, never written. The other values below 16 (0, 1, 2, 8 and 13) are reserved encodings in `PIRQx_ROUT`'s IRQ field (Intel 330837-002 10.1.17, and each pair's datasheet), name no routable interrupt, and are report-only; host vectors cover each of them.
 
     Then it writes `(old & ~7) | target` as a 16-bit write and reads it back.
   - **Which deliveries it serves:** every line delivery. That means Windows 98, ME, 2000 and XP, and Vista and 7 under `XhciInterruptMode` 1 or without an MSI grant.
@@ -758,9 +768,17 @@ How it got here:
     - On each D0 return: before `XhciResumeController`.
   - **What is recorded:** what it found, decided and wrote, in the snapshot and the note ring, decoded by `XHCISNAP`.
   - **Tests:** host tests of the pure policy, the delivery included. The INF and `docs/using` document the value, modelled on `XhciIntelPortSwitch`; copy its strict DWORD reader, not its "2 = unlisted Intel" meaning. `docs/using` says plainly that the value does nothing on Vista or 7 with MSI, or under polling.
-- [ ] 36.4 the bounded BUSY retry: `hcdCommand` on `XHCI_CMD_BUSY` waits a bounded time for the engine to go idle, asking for a drain, and retries under one deadline, instead of failing the port at once. This is the start No Op case of issue 12 Finding 1. A small change of its own; the stalled-event watchdog that 36.4 also held is replaced by polling's dead-line rule (36.5, 36.7)
+- [ ] 36.4 the bounded BUSY retry: `hcdCommand` on `XHCI_CMD_BUSY` waits a bounded time for the engine to go idle, asking for a drain, and retries under one deadline, instead of failing the port at once. This is the start No Op case of issue 12 Finding 1. A small change of its own; the stalled-event watchdog that 36.4 also held is replaced by polling's dead-line rule (36.5, 36.7).
+  - **Still needed after 36.3, polling and MSI** (Codex review of `7567dec`, and the owner's reading). They deliver completions; none guarantees that the start's asynchronous No Op has completed before the next submit, and `XhciCommandSubmit` also answers BUSY during an abort (`xhci_cmd.c` ~1004). Its remaining cases: a dead line inside the window before the dead-line rule moves to polling; mode 1, which never moves; a completion waiting for the next poll at the idle period; and any transient BUSY, which is never a device's failure.
+  - **The rules.** One deadline across waiting and resubmission; a completion counts only by its own TRB, as now; the retry stops on controller failure or a change of reset generation; it resubmits only once the engine reads idle. It complements the dead-line detector and does not replace it.
+  - **Leg.** A `qemu`-flavour delay of the start No Op's completion, so BUSY is met deterministically with a healthy line: the device present at boot enumerates.
 - [ ] 36.5 (was POLL.0) the polling design: record 15 reviewed to convergence before code (the owner's decisions of 2026-10-05 are its section 12), with its amendment for issue 12 reviewed too (section 4.2, decision 6):
   - automatic mode (0) also moves to polling when a line interrupt is proven dead at run time;
+  - **two gaps in that amendment, settled before code** (Codex review of `7567dec`):
+    - **the detector.** Section 4.2 proves a line dead by repeated backstop looks, but `hcdBackstop` runs on `hcdThread` (`hcd_ctl.c` ~898), which `hcdCommand` blocks waiting for the very completion that never arrives (issue 12 section 2). The record names an observer that runs independently of that thread during every line delivery, command waits and `XhciTolerance` 0 included, with its count and window;
+    - **the transition.** Section 5.2 lets the poller leave CLOSED only at a start under a poll delivery, so a live line delivery has no path to start it. The record adds a synchronised live transition: CLOSED to PARKED or in service under `PollLock`, `PollService`, the interrupter masked first, the ISR admitting nothing after, and a concurrent close;
+    - and the legs gain a line dead from the first No Op and one that dies during a command wait;
+  - the dead-line predicate (`IMAN.IP` set, nothing claimed) stays line-only: xHCI 4.17.5 clears `IP` itself after an MSI or MSI-X write, so it cannot detect a lost message;
   - the hardware statements of its section 4.1 (`IMAN.IP`, `USBSTS.EINT` and `ERDP.EHB` with the interrupt enables clear) checked against `xhci-data-structures.md`
 - [ ] 36.6 (was POLL.1) the three values (record 15 section 3):
   - `XhciInterruptMode` 0: 0 automatic, 1 the line interrupt, 2 polling, 3 and above reserved and run as 0;
@@ -768,7 +786,7 @@ How it got here:
   - `XhciPollActiveMs` 1, held to the idle period;
   - neither period 0 (owner, 2026-10-05).
 
-  They are read at each start with the out-of-range rules, and written by both INFs on every install path under 34.1's don't-overwrite rule, with the INF gate's `VAL-*` rows and the footprints. SUSP.4's install legs read them
+  They are read at each start with the out-of-range rules, and written by both INFs on every install path under 34.1's don't-overwrite rule, with the INF gate's `VAL-*` rows and the footprints. 36.final's install and update legs read them
 - [ ] 36.7 (was POLL.2) the delivery and the poller (record 15 sections 4 and 5):
   - the delivery and its reason settled at start and kept through recovery and resume;
   - mode 0's run-time move from a dead line to polling (section 4.2), kept the same way;
@@ -802,7 +820,11 @@ How it got here:
     - non-Intel controllers have no equivalent.
 
     Elsewhere it reports "routing registers not applicable" and reads nothing. Support for ITSS is not in scope.
-- [ ] 36.12 RESET_PIPE in xHCI 4.6.8 order in `hcdCfgReset` (Reset Endpoint and Set TR Dequeue, then `CLEAR_FEATURE(ENDPOINT_HALT)`). It is a spec fix, kept apart so it does not muddy the interrupt tests (issue 12 section 3.2).
+- [ ] 36.12 RESET_PIPE in xHCI 4.6.8 order in `hcdCfgReset`. It is a spec fix, kept apart so it does not muddy the interrupt tests (issue 12 section 3.2).
+  - **The order** (xHCI 1.2c 4.6.8, p.116, "reset a pipe"): Reset Endpoint (TSP 0); then `CLEAR_TT_BUFFER` to the hub, when the device is behind a TT and the endpoint is control or bulk (`HcdHubClearTt`); then `CLEAR_FEATURE(ENDPOINT_HALT)` to the device, for any endpoint but control; then Set TR Dequeue past the failed TD; then the doorbell. Today the device's clear comes first, as usbport ordered it (`hcd_cfg.c` ~2875).
+  - **Halted and not.** This order is the Halted endpoint's. A non-Halted one keeps today's path, brought to Stopped and given a fresh context (`hcdCfgQuiesce`, `hcdCfgRecycle`), since Reset Endpoint is refused on it.
+  - **A device clear that fails.** After Reset Endpoint the host's toggle is reset, and 4.6.8 warns that the endpoint's behaviour is undefined if the device's is not. So a clear that stalls, fails or times out does not ring the doorbell and resume the pipe, as today's failure branches do (`hcd_cfg.c` ~2886): the pipe stays paused and halted, the client gets the failure, and its next RESET_PIPE starts the sequence again. Settled in the task's Codex review before code.
+  - **Tests.** A device clear that stalls and one that times out; a TT-attached bulk endpoint, read for the TT clear's place in the order; a non-Halted endpoint.
 - [ ] 36.13 (was POLL-V) the polling legs (record 15 section 11):
   - **Guests:** mode 2 on 98 SE and 2000 (SMP, Driver Verifier) first, then ME, XP, Vista and 7, x86 and x64.
   - **Devices and actions:** HID, Bulk-Only and UAS storage, composite audio playing, behind QEMU's hub, hot-plug, disable and enable, remove and rescan.
@@ -843,17 +865,30 @@ How it got here:
   - **The owner's E460 and P14s Gen 1** under Windows 7 if installed, read as MSI.
 - [ ] 36.17 `GUID_DEVINTERFACE_USB_DEVICE` (`{A5DCBF10-6530-11D2-901F-00C04FB951ED}`) on every device the bus presents (issue 17 item 3):
   - **Where.** Every device PDO and every external hub's PDO, as usbhub registers it; not the root hub, on which usbport registers none.
-  - **A composite the bus splits** has no parent devnode, so the interface goes on its first function's PDO, the rule the door already uses for the connection's driver key (design record 13 section 8.10). Its path then carries `&MI_00`.
-  - **How.** `hcdInterfaceOn` at the PDO's start, `hcdInterfaceOff` at its stop and, releasing the string, at its removal, as `HcdDoorHubStart`, `HcdDoorHubStop` and `HcdDoorHubRemove` do for the hub interface. Best effort, as theirs: a failed registration is a missing interface, not a failed device.
-  - **Legs.** A SetupDi enumeration of the class on every guest, x86 and amd64: a device, a hub and a device behind it, a split composite, a hot-plug and a removal, and a disable and enable of the controller.
+  - **A composite the bus splits** has no parent devnode, so the interface goes on one function's PDO: the function that owns the device's first interface (its `FirstInterface`, the group identity the door already uses for the connection's driver key, design record 13 section 8.10), not a hard-coded `MI_00`. Functions start and stop independently (`hcdPdoFunctionRelease` leaves siblings running), so what happens when that function has no driver, fails its start or is disabled is the owner's decision, recorded here once taken.
+  - **The lifecycle** (`IoSetDeviceInterfaceState`'s contract):
+    - registered once, and enabled after a successful start;
+    - disabled at stop, at surprise removal, and at removal, never twice: a removal after a surprise removal finds it already off;
+    - the string freed, idempotently, on every path that destroys the PDO: the normal remove, the retained PDO after a disable, and Windows 98's deferred deletion (`hcd_pdo.c` ~504, ~2317, ~2532), never only at `IoDeleteDevice`;
+    - enabled again when a retained PDO is started again.
+    - Best effort, as `HcdDoorHubStart`, `HcdDoorHubStop` and `HcdDoorHubRemove` are for the hub interface: a failed registration is a missing interface, not a failed device.
+  - **Legs.** On every guest, x86 and amd64:
+    - a SetupDi enumeration of the class: a device, a hub and a device behind it, a split composite;
+    - arrival and removal notifications for the class (`RegisterDeviceNotification` with `DBT_DEVTYP_DEVICEINTERFACE`, on 98 and ME as on NT) across a hot-plug, a surprise unplug and replug, a disable and enable of one device in Device Manager, and a disable and enable of the controller;
+    - a split composite whose representative function is unbound or disabled while a sibling works, read against the owner's decision.
 - [ ] 36.18 the device's real speed on every hub door (issue 17 item 6), both halves (owner, 2026-10-09):
-  - **The `_EX` form's `Speed` byte** reads 3 for a SuperSpeed connection and 4 for SuperSpeedPlus, as Intel's USB 3 drivers for Windows 9x report it, on every target. 0 to 2 are unchanged. No Microsoft header defines 4, and the WDK 7.1 headers stop at 2, so design record 13 section 8.4 is amended to replace the High Speed ceiling.
+  - **The `_EX` form's `Speed` byte** reads 3 for a SuperSpeed connection and 4 for SuperSpeedPlus, as Intel's USB 3 drivers for Windows 9x report it, on every target (owner, 2026-10-09; Vista and 7 subject to the decision below). 0 to 2 are unchanged. No Microsoft header defines 4, and the WDK 7.1 headers stop at 2, so design record 13 section 8.4 is amended to replace the High Speed ceiling.
   - **`IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2`** (`0x0022045C`), new.
-  - **The structure.** `ConnectionIndex`, `Length`, `SupportedUsbProtocols` and `Flags`, 16 bytes, written byte by byte like the rest of the door. The protocols are what the port and device support (USB 1.1, 2.0, 3.0). The flags are SuperSpeed or higher operating and capable, and SuperSpeedPlus operating and capable, from the connection's speed class and the port's protocol.
-  - **Refused** for a buffer or `Length` short of the structure, or a port out of range. How Microsoft's hub treats the caller's `SupportedUsbProtocols` on input, and what it refuses, is read from the WDK's documentation before code.
+  - **The structure.** `ConnectionIndex`, `Length`, `SupportedUsbProtocols` and `Flags`, 16 bytes, written byte by byte like the rest of the door. Three separate sources (Codex review of `7567dec`, from Microsoft's `USB_PROTOCOLS` and `_EX_V2_FLAGS` pages):
+    - **`SupportedUsbProtocols`, out:** the **port's** signalling protocols, not the device's and not their intersection. An empty port has them; a Full Speed device on a USB 2.0 port leaves `Usb200` set. A USB 3 logical port does not gain `Usb110` or `Usb200` from its USB 2.0 companion, which is a port of its own here.
+    - **The operating flags** (`DeviceIsOperatingAtSuperSpeedOrHigher`, `...SuperSpeedPlusOrHigher`): from the connection's negotiated speed.
+    - **The capable flags** (`DeviceIsSuperSpeedCapableOrHigher`, `...SuperSpeedPlusCapableOrHigher`): from the device's BOS (its SuperSpeed and SuperSpeedPlus capability descriptors), not from the speed, since a SuperSpeedPlus device may be running at 5 Gbit/s. The BOS is read only on the SuperSpeed enumeration path today (`xhci_enum.c` ~280), so a USB 3 device running at High Speed reports neither capable flag unless its BOS is read too; this task decides which, and says so.
+  - **Input** (Microsoft's IOCTL page): the caller sets `SupportedUsbProtocols` to the protocols it asks about, and Windows 8 refuses with `STATUS_INVALID_PARAMETER` unless `Usb300` is set; that is a property of the request, not of the port. `Length` and the input buffer must be `sizeof(USB_NODE_CONNECTION_INFORMATION_EX_V2)`. A port out of range is refused as the `_EX` form refuses it.
+  - **Static reading of the `_EX` byte's consumers** (Codex review of `7567dec`, disassembly in `tools\win7-x86-extracted\ui` and `tools\vista-x64-extracted\ui`): Vista's and 7's `usbui!UsbItem::IsHighSpeed` tests the byte at `+0x17` for exactly 2, so 3 and 4 read as not High Speed, and the hub page's `AddFullSpeedDevicesToListView` lists such a device among the Full Speed devices: a misclassification, not a crash. XP's and XP x64's pages send the older `0x22040C` and never read the byte. What the `_EX` half does on Vista and 7 given this is the owner's decision, recorded here once taken; the reading goes into `legal-provenance.md` when the change is made.
+  - **Host vectors:** the input flags and lengths, an empty port, a slower device on a faster port, a SuperSpeedPlus-capable device at 5 Gbit/s, and each `_EX` value.
   - **Legs.**
     - SweetLow's usbview (http://sweetlow.orgfree.com/download/usbview.zip) on 98 SE and 7: a SuperSpeed device on a root port and behind a USB 3 hub, a High Speed device, and a hub port with nothing on it.
-    - Microsoft's own pages with a SuperSpeed device attached, the risk of the 3 and 4: the hub's Power tab on 98 SE, ME, 2000 and XP, and the hub's Advanced tab on Vista and 7. Read by the owner. A page that misreads the value is a finding, and the `_EX` half is then gated rather than dropped.
+    - Microsoft's own pages with a SuperSpeed device attached, the risk of the 3 and 4: the hub's Power tab on 98 SE, ME, 2000 and XP, and the hub's Advanced tab on Vista and 7, read for **which list the device lands in**, not only whether the page opens. Both 3 and 4, with a synthetic 4 on the `qemu` flavour where no SuperSpeedPlus device is at hand. Read by the owner.
 - [ ] 36.19 polling rates a client chooses: `XhciFastPollFsLs` 4 (issue 17 item 2; design record 13 section 13 gains a section for it):
   - **The codes.** Under mode 4, an interrupt endpoint whose `bInterval` in the caller's descriptor is 128, 129 or 130 is programmed at Interval 2, 1 or 0 (2000, 4000 or 8000 Hz). Every other `bInterval` reads by Table 6-12. Mode 4 does not do modes 2 and 3's 16-63 mapping, and they do not honour the codes.
   - **Why an opt-in.** 128 to 255 ms are legal Full- and Low-Speed values, so a device may declare a code. And a client that sends codes with the mode off gets what they legally mean: 128 ms at Full Speed. The procedure is mode 4 first, then hidusbf set to the codes, and the release notes say so.
@@ -861,12 +896,20 @@ How it got here:
   - **Scope.** Full and Low Speed on a root port only, as modes 2 and 3; High Speed and SuperSpeed anywhere. Never isochronous, bulk, or a hub's own endpoint.
   - **Keyed on the descriptor's byte** (`BInterval`), not on the Interval Table 6-12 derives from it: 10 at Full Speed, 15 after the High Speed clamp.
   - **Applied before the interval cap** (35-T.7), which leaves Interval 2 or less unchanged. Today a capped endpoint is never fast-polled, so on an AMD controller the cap would otherwise silence every code.
-  - **A refusal falls back to Interval 3 (1 ms)**, not to Table 6-12's reading of the code, which would leave the device polled every 128 ms.
+  - **A refusal falls back to Interval 3 (1 ms)**, not to Table 6-12's reading of the code, which would leave the device polled every 128 ms. The endpoint keeps its Table 6-12 Interval and its fallback apart, so modes 2 and 3 revert exactly as today. `RESET_PORT` and the endpoint recycle rebuild from the stored `pipe->Ep` (`hcdCfgConfigureAdd`), so they keep the chosen Interval and fallback without reading the descriptor again.
+  - **SuperSpeed composite functions.** `hcdCfgFunctionEndpoint` (`hcd_cfg.c` ~654) does not take the caller's `bInterval` at SuperSpeed or SuperSpeedPlus, so a function's code there would be lost. This task changes it: the endpoint and its companion are parsed from the device's own configuration (`dev->Selected`), and the caller's `bInterval` then overrides the Interval alone, keeping burst, Mult and Max ESIT Payload. Not by sending a seven-byte copy through the USB 2.0 parser. An integration vector with a split SuperSpeed device and a nontrivial companion.
+  - **A composite function's later `SELECT_INTERFACE`** rebuilds from the device's own configuration (`hcd_cfg.c` ~1549) and so loses a code, as it loses modes 2 and 3's mapping today (design record 13 section 13.5). Whether mode 4 keeps the code across it is the owner's decision, recorded here once taken.
+  - **Docs:** record 13 section 13 gains mode 4; record 17 section 4.7, which orders the caller's `bInterval`, the cap and then fast polling, gains mode 4's place before the cap; the release notes' registry table and the procedure.
   - **Host vectors** in `test_fast_poll`: 4 accepted and 5 off; each code at Low, Full and High Speed and SuperSpeed; 127, 131 and 255 untouched; Full Speed behind a hub untouched and High Speed behind one applied; isochronous and bulk untouched; the two conventions kept apart; no double application; the revert landing at 3. **Legs:** hidusbf set to the codes on 98 SE and 7 in QEMU, read in the `fastpoll.*` records; mode 4 with an unpatched device reading as the release before it.
+- [ ] 36.20 the docs of what `2.3.0.0` ships, moved here from SUSP.3 because this phase cuts polling and MSI (Codex review of `7567dec`):
+  - record 15 section 14's list: `implementation-invariants.md`'s "Interrupt Delivery" (a pin-0 controller polled, not refused), `architecture.md`'s line-based delivery, the release notes' "Controller" row and rows for the switches, the acceptance test's step 3 and its stop on the pin, `xhciqual/hardware-testing.md` and record 01's C4 note, record 13 where it describes the ISR, `source-files.md`, the locking record, `xhcisnap/README.md`;
+  - the MSI delivery, 36.3's `XhciIntelIrqRoute` and 36.17 to 36.19, in the release notes, `docs/using` and the records they amend;
+  - the statements this phase made stale, reconciled: record 15's "PIC mode" among what the routing quirk cannot repair, its reserved mode 3, and its MSI-X scope, once 36.15 settles them.
 - [ ] 36.final the `2.3.0.0` builds, x86 and `-amd64`, after every task above:
   - the host suites and every gate;
   - a Codex review loop per task;
   - the QEMU regression legs (still owed from `2.2.0.2`);
+  - the ten install legs read from the asset, with the update legs reading 36.3's and 36.6's values preserved across an update (34.1's rule), moved here from SUSP.4;
   - then the owner's check on the E7250 under XP x64 and Windows 7 x64, with no manual `D20IR` write, which verifies:
     - the mouse;
     - the stick hot-plugged and present at boot;
@@ -892,7 +935,8 @@ Checkpoint: `2.3.0.0` on the E7250 under XP x64 and Windows 7 x64, with
 - 36.16 passing: MSI on Vista and 7, and the x86 binary still loading on
   98 and ME;
 - 36.17 to 36.19's legs passing, and `XhciFastPollFsLs` 0 to 3 reading as
-  the release before it.
+  the release before it;
+- 36.20's docs done, and the ten install legs read from the asset.
 
 The phase is cut as `2.3.0.0` (owner, 2026-10-08).
 
@@ -920,12 +964,11 @@ on the device's remote wake, never on a timer of its own; USB 2.0 devices
 (stage A) and SuperSpeed devices (stage B). With them, the first standby and
 hibernate resume readings under the HCD (SUSP.1), which the suspend design
 rests on, and the Windows 98 SE audio-load wedge re-measured against the
-new capabilities (SUSP.2). Then the docs of both planned pieces (SUSP.3)
-and the cut, which carries both (SUSP.4), its version given when the owner
-opens the work.
+new capabilities (SUSP.2). Then its docs (SUSP.3) and the cut (SUSP.4),
+its version given when the owner opens the work. Polled event delivery's
+docs and install legs moved to Phase 36 (36.20, 36.final) on 2026-10-09.
 
-Status: not opened, unnumbered and unversioned; follows the polled event
-delivery work, its phase number, version and branches given when the owner
+Status: not opened, unnumbered and unversioned; follows Phase 36, its phase number, version and branches given when the owner
 opens it. Design record
 14 (`design/14-selective-suspend.md`) is the design; stage A's half
 converged over ten review rounds (`b2d03d5`). Stages A and B are
@@ -965,7 +1008,7 @@ capabilities and so waits for it, then the docs and the cut.
 - [ ] SUSPb-V stage B's legs on QEMU (root ports only: QEMU has no SuperSpeed hub)
 - [ ] SUSPb-E stage B's bench (owner): a SuperSpeed device with remote wake on a root port and behind a USB 3 hub
 - [ ] SUSP.2 the Windows 98 SE audio-load wedge (carried since `2.0.0.0`, release notes' known limitations; 28.3): a USB audio device attached about 40 s after a cold boot wedged the guest 5 of 6 times (taskbar clock stopped), after 120 s none of 20; every IRP the bus was given had been answered, the wait is in the configuration manager after SELECT_INTERFACE to alternate 0 and QUERY_CAPABILITIES, and `1.2.0.0` showed it too. In this phase because SUSPa changes what QUERY_CAPABILITIES answers (D1/D2, wake): re-measure it on the SUSPa build first (better, worse or the same), then find where the configuration manager waits (a debug `VMM`/`CONFIGMG` or a trace of the devnode's state), and fix it if a bus answer is the cause; if it is Windows 98's own, it stays a documented limitation with the measurement refreshed
-- [ ] SUSP.3 the docs: record 13 sections 5, 6.5, 10.2 and 10.9; the release notes (the limitation replaced, the switch and its escape); this table's 28.3 row; `source-files.md`; the locking record; both pieces' run records; and the polled event delivery work's list (record 15 section 14): `implementation-invariants.md`'s "Interrupt Delivery", `architecture.md`, the release notes' "Controller" row and the switch, the acceptance test's step 3, `xhciqual/hardware-testing.md` and record 01's C4 note. Phases 34 and 35 take their own docs (34.4, 35.6)
+- [ ] SUSP.3 the docs: record 13 sections 5, 6.5, 10.2 and 10.9; the release notes (the limitation replaced, the switch and its escape); this table's 28.3 row; `source-files.md`; the locking record; the run record. Phases 34, 35 and 36 take their own docs (34.4, 35.6, 36.20)
 - [ ] SUSP.4 the cut, and the ten install legs read from the asset
 
 Checkpoint: SUSPa-V and SUSPb-V passing - their functional and regression legs
@@ -974,8 +1017,8 @@ flavour, kept apart, the `qemu` flavour never published; SUSPa-V's functional
 legs on 98 SE and 2000 (SMP, Driver Verifier) and SUSPb-V's root-port legs
 run once more under `XhciInterruptMode` 2; SUSPa-E and SUSPb-E read by the owner; SUSP.1's resumes
 read on guests and the bench; SUSP.2 re-measured and, if bus-side, fixed;
-`XhciSelectiveSuspend` at 0 reading as the build before it; the polled
-event delivery work closed; the ten install legs read from the asset.
+`XhciSelectiveSuspend` at 0 reading as the build before it; the ten
+install legs read from the asset.
 
 Records: `design/14-selective-suspend.md`; a run record, named for the
 phase when it is opened.
