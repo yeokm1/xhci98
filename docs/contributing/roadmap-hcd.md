@@ -810,14 +810,15 @@ How it got here:
   - the dead-line predicate (`IMAN.IP` set, nothing claimed) stays line-only: xHCI 4.17.5 clears `IP` itself after an MSI or MSI-X write, so it cannot detect a lost message;
   - the hardware statements of its section 4.1 (`IMAN.IP`, `USBSTS.EINT` and `ERDP.EHB` with the interrupt enables clear) checked against `xhci-data-structures.md`
   - **Done 2026-10-09** (`a744811..f7f0907`, record 15 revision 5; the Codex loop converged at its eighth round, section 13.5). Settled: the watcher (100 ms, three stale pairs over at least 300 ms, `PollServiceGen`), the move and the line's retirement under `KeSynchronizeExecution` with its containment (PCI Interrupt Disable, then the recovery), WATCH and SERVE as roles with `ParkPending`/`KickOwed`, the grants after D0 under the power gate, the period's inputs and the doorbell hook, and 36.15's design. MSI's x86 route: no safe way was found for the x86 binary alone, and the owner decided (2026-10-09) on an NT 6-only x86 helper driver, designed separately; amd64 calls `MmGetSystemRoutineAddress`; both feed one connection seam (36.15, 36.16 and the decisions table amended).
-- [ ] 36.6 (was POLL.1) the three values (record 15 section 3):
+- [x] 36.6 (was POLL.1) the three values (record 15 section 3):
   - `XhciInterruptMode` 0: 0 automatic, 1 the line interrupt, 2 polling, 3 the same as 0 (MSI where granted is already 0's first choice, 36.15), 4 and above reserved and run as 0;
   - `XhciPollIdleMs` 50, held to 5000;
   - `XhciPollActiveMs` 1, held to the idle period;
   - neither period 0 (owner, 2026-10-05).
 
   They are read at each start with the out-of-range rules, and written by both INFs on every install path under 34.1's don't-overwrite rule, with the INF gate's `VAL-*` rows and the footprints. 36.final's install and update legs read them
-- [ ] 36.7 (was POLL.2) the delivery and the poller (record 15 sections 4 and 5):
+  - **Done 2026-10-09** (`158ad18..53cb9e2`, one Codex loop over 36.6 to 36.8, clean at its fifth round; built x86 and `-amd64`, all flavours, every gate and the host suites passing at `53cb9e2`). `XhciInterruptMode`, `XhciPollIdleMs` and `XhciPollActiveMs` read at each start (`hcdSettleDelivery`, `XhciPollValues`), in both INFs on every path with the gate's value rows, footprints and mutations. Owed: 36.13's VM legs (no guest was run by this task), and 36.9/36.10's tool work.
+- [x] 36.7 (was POLL.2) the delivery and the poller (record 15 sections 4 and 5):
   - the delivery and its reason settled at start and kept through recovery and resume;
   - mode 0's run-time move from a dead line to polling (section 4.2), kept the same way, with the delivery and its reason in the counter block updated at the move, not only set at start;
   - `ResourcesTypes` truthful, and the core's interrupt-bit and pin-0 gates applied to a line delivery only;
@@ -825,10 +826,12 @@ How it got here:
   - `PollTimer` with its own DPC, so polling does not depend on `hcdThread`, which can be blocked in a command wait (issue 12 section 2);
   - `IsrDpc` queued by the peeks, `PollLock` admission, and close by `KeCancelTimer` with the timer DPC retiring itself;
   - park and kick across D3 and the in-place recovery
-- [ ] 36.8 (was POLL.3) the adaptive period and the opportunistic checks (record 15 sections 6 and 7.1):
+  - **Done 2026-10-09** (`158ad18..53cb9e2`, one Codex loop over 36.6 to 36.8, clean at its fifth round; built x86 and `-amd64`, all flavours, every gate and the host suites passing at `53cb9e2`). `hcd_poll.c` and `xhci_poll.c` (`test_poll`): the delivery settled before connecting, `hcdConnect` as MSI's seam, the poller and its WATCH and SERVE roles, the dead-line move with the line's retirement and containment, the grants after D0, park and kick. Owed: 36.13's VM legs (no guest was run by this task), and 36.9/36.10's tool work.
+- [x] 36.8 (was POLL.3) the adaptive period and the opportunistic checks (record 15 sections 6 and 7.1):
   - **The pure core:** `xhci_poll.c` with host suite `test_poll`. It covers ACTIVE, PERIODIC with interrupt IN and OUT, IDLE, the hysteresis and bounded-drain clauses, the clamps, promotion and the stale-decision rule.
   - **The peeks:** under the controller lock, after a doorbell, after a drain, on each thread pass, health poll and frame DPC. Each queues the drain and never drains inline; poll delivery only.
   - **The counters:** the observed interval, and the delivery in effect with its reason (automatic, forced, no interrupt, or line not delivered). They are in the counter block and in the start log line (a run-time move logs its own line). `XHCISNAP` reads them from `XhciLogVerbosity` 1, and the DebugView sink emits them from 2 with `XhciLogDebugView` set (owner, 2026-10-05; section 8)
+  - **Done 2026-10-09** (`158ad18..53cb9e2`, one Codex loop over 36.6 to 36.8, clean at its fifth round; built x86 and `-amd64`, all flavours, every gate and the host suites passing at `53cb9e2`). The adaptive period, the peeks and the doorbell hook, and 33 counter words appended to `XHCIHC_COUNTERS` (63 to 96) with their log names. Owed: 36.13's VM legs (no guest was run by this task), and 36.9/36.10's tool work.
 - [ ] 36.9 (was POLL.4) `XHCISNAP` (record 15 section 9):
   - the three values in the companion, as `XhciImodInterval250ns` is;
   - the delivery in effect and its reason;
