@@ -1494,3 +1494,15 @@ of the cached reading stated where the strip is asked for and in section
 rebalance exception kept), and the cache's fields kept apart from the
 filter's snapshot, with a transition vector. Review thread
 `01a120a8-e037-7a31-b88b-4e325ef35abb`, rounds 1 to 8.
+
+### 14.10 The code (task 36.15)
+
+Reviewed 2026-10-10 on the range `bfec7b0..` (thread
+`01a121f2-8cbc-7ac3-8385-b83eb80cb85d`), three rounds; the loop ended at
+the first round with no P1 or P2 (owner rule, 2026-10-10).
+
+| Round | Findings | Taken in |
+|---|---|---|
+| 1 | P1: every message ID ran the ISR body, so a foreign shared message could be claimed and two messages' ISRs could run at once under their own locks - the ISR now declines every ID but 0 first. P2: the trace validator checked counts, not identity, order or totals. P2: a helper refusal's event was unreachable behind the reference drop. P3: `MSI-VALUES` did not require exactly `0x00010003` | `7212604` |
+| 2 | P2: a damaged lifecycle or start record could vanish unnoticed - every record is now numbered and the validator refuses a gap or a fragment. P2: the start-decision record was written for a failed decision only - now for every start outcome; the routines' source is a lifecycle record. P3: `SynchronizeIrql` 0's meaning | `0308ad2` |
+| 3 | No P1 or P2. P3: a start refused before the decision reported the previous start's | the commit that converged |
