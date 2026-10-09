@@ -5,7 +5,8 @@ Vista and Windows 7 (roadmap-hcd Phase 36, tasks 36.15 and 36.16; the task
 lines for this record's code and legs are the orchestrator's to number).
 Revision 1, 2026-10-09, written before any code, on branch `p36-msi86`;
 revision 2 the same day, after review round 1, revision 3 after round
-2, and revision 4 after round 3 (section 14).
+2, revision 4 after round 3, and revision 5 after round 4, which
+converged (section 14).
 
 Design record 15 section 4.3 designs MSI for the HCD and fixes the seam
 this record plugs into: `hcdMsgConnect(hc, connect, disconnect)`, handed
@@ -383,14 +384,17 @@ switched off, below); **no line offered**, **no interrupt**,
 **no message** (nothing to strip: kept); **replaced**; **kept: no
 memory**.
 
-**The rule that follows, used everywhere in this record:** a "replaced"
-outcome removes every message choice, so the controller is granted the
-line. Every other outcome leaves the list's choices as Windows built
-them, and delivery is then settled by what Windows actually grants and
-whether the helper is bound **at the start** (section 4.3): a line grant
-runs the line; a message grant with the helper bound runs the message;
-a message grant without it polls with "message not connected". None of
-these is worse than polling.
+**The resource-choice rule, used everywhere in this record:** a
+"replaced" outcome leaves only line interrupt choices, so, if resource
+assignment succeeds, the controller is granted a line. Every other
+outcome leaves the list's choices as Windows built them. Either way the
+filter decides only what Windows may grant; the delivery is then settled
+at the start by record 15's tables (section 4 and 4.3) from the effective
+mode, the resource actually granted, the pin and the connection's
+result - forced polling, a line, a message connected through the bound
+helper's routines, the connection's own fallback to the line, a message
+with no routines ("message not connected", polling), or no interrupt
+resource at all (mode 1 failing its start as today).
 
 **The allocation** is one new named site, `HcdPoolAllocRequirements` in
 `hcd_pool.c`, the HCD's only `PagedPool` allocation: the IRP's contract
@@ -586,10 +590,10 @@ versions. The cases:
 
 | Installed | Running | Result |
 |---|---|---|
-| this package, freshly | no helper until the next boot | section 4.2's helper-less outcome this session (the line where the list offers one); MSI after the boot (section 5) |
+| this package, freshly | no helper until the next boot | section 4.2's helper-less resource choice this session, delivery settled at the start; after the boot the helper is bound (section 5) |
 | this package, updated from one with the helper | the old helper until the next boot (a boot-start image in use is replaced at reboot) | bound if its major is 1; else section 4.2's helper-less outcome until the boot |
 | a later package with interface major 2 | old HCD, new helper | the old HCD's V1 code is refused by a V2-only helper: section 4.2's helper-less outcome. A later helper that keeps answering V1 (the rule for a minor change) binds |
-| this HCD, the helper's file removed or its copy failed | none | section 4.2's helper-less outcome (the line where the list offers one), recorded `ABSENT` |
+| this HCD, the helper's file removed or its copy failed | none | section 4.2's helper-less resource choice, delivery settled at the start, recorded `ABSENT` |
 | a package older than this one installed over it | old HCD, this helper still loaded | the helper idles; but see below |
 | the device uninstalled | the helper service remains, boot-start | it loads, idles, and answers nobody; removing it is a manual step the release notes give (`sc delete xhcimsi`, then reboot) |
 
@@ -943,13 +947,14 @@ before it is read:
    list, an inconsistent list) and Windows then grants a message, or when
    the filter never ran (section 4.2's rule). Record 15 and roadmap
    36.15/36.16 are the orchestrator's to reconcile.
-4. **Orchestrator decision, owner to confirm:** a fresh install runs the
-   line until the next boot rather than asking for a reboot (section 5).
+4. **Orchestrator decision, owner to confirm:** a fresh install takes
+   section 4.2's helper-less resource choice until the helper loads at the
+   next boot, rather than asking for a reboot (section 5).
 5. **Orchestrator decision, owner to confirm:** the strip's replacement
    list is the HCD's one `PagedPool` allocation, at one named site, as the
    IRP's contract asks (section 4.2).
 6. **Orchestrator decision, owner to confirm:** an MSI-only controller (no
-   LINE configuration) without the helper keeps its message grant and
+   STRIPPABLE configuration) without the helper keeps its message grant and
    polls, so mode 1 polls there where XP would fail the start (section
    4.2).
 
@@ -1035,3 +1040,12 @@ Round-2 findings 1, 2, 3, 4 and 8 were confirmed closed; no new P1.
 | 4 | P2: the shared C file was outside the helper's source stamp | Section 8.2: the shared source's build arrangement; `source-stamp.ps1`'s parser keeps path separators; mutations |
 | 5 | P3: fallback promises still exceeded the algorithm | Section 4.2's rule (replaced gives the line; otherwise the grant and the binding at start decide), used in sections 5, 6 and decision 3 |
 | 6 | P3: stale vector results and classification names | Section 4.2's vectors; section 11 renamed to STRIPPABLE / MESSAGE-BOUND / NONE and the complete trace |
+
+### 14.4 Revision 4
+
+Round 4 (`db66b6a`, same thread): **converged** - "the design is sound
+enough to implement", no P1 or P2; round-3 findings 1 to 4 and 6 closed.
+Two P3s taken in revision 5: the delivery rule restated as a
+resource-choice rule that defers delivery to record 15's mode, pin and
+connection tables (section 4.2), and the last unconditional line promises
+removed (section 6, decisions 4 and 6). R1 to R3 stay runtime gates.
