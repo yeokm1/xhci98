@@ -6424,14 +6424,15 @@ address is `arg`, or with `arg` 0 the first bulk IN - and so leaves the next
 TD published on it sitting unstarted on its ring (`qemu.inj.bulk.armed`,
 then `qemu.inj.bulk` with the fault, stream, slot and DCI once one is
 there). One injection per command; `FF` CLEAR before that hands the
-doorbell back and rings it (`qemu.inj.bulk.cleared`).
+doorbells back at the next thread pass and rings every stream with a TD
+queued (`qemu.inj.bulk.cleared`).
 
 | Code | Fault | What follows the withheld doorbell |
 |---|---|---|
-| `13` | Timeout | nothing: the TD waits, as on a device that never answers, until the driver's own Stop Endpoint (an abort or a cancel), Reset Endpoint or slot command takes it back; the stop ends the withholding as it is sent (`qemu.inj.bulk.released`). Streams too: every stream of the endpoint is held |
-| `14` | Stop | a real Stop Endpoint whose events reach the driver (`qemu.inj.bulk.stopped`, its completion code), then the doorbell rung for the TD's stream. Streams too |
-| `15` | Error | `08`'s path on this TD: a real stop, its dequeue confirmed, Halted answered and a Transaction Error delivered for the TD's first TRB, the driver's Reset Endpoint answered. Not on a stream endpoint (its dequeue is in a stream context) |
-| `16` | Short | a real stop, the dequeue confirmed, a real Set TR Dequeue past the TD, then a Short Packet for the TD's last TRB with half that TRB's length left - one event, its IOC TRB, so no trailing event follows - and the doorbell rung. Not on a stream endpoint |
+| `13` | Timeout | nothing: the TD waits, as on a device that never answers, until the driver's own Stop Endpoint, Reset Endpoint or Set TR Dequeue for the endpoint (an abort or a cancel; the stop is skipped on an endpoint already Stopped) or a slot command takes it back; that command ends the withholding once it succeeds (`qemu.inj.bulk.released`). Streams too: every stream of the endpoint is held |
+| `14` | Stop | a real stop with the TD confirmed at its dequeue, then a Stopped event for the TD handed to the driver - the controller's own when it reported one for the TD, else the one a stop at a TD's start gives (its first TRB, code 26, nothing moved), since QEMU reports none for a TD it never fetched (`qemu.inj.bulk.stopped`: bit 8 the controller reported one, bits 7:0 its code) - then every stream with a TD rung. Streams too |
+| `15` | Error | `08`'s path on this TD: a real stop, its dequeue confirmed (the stream's Stream Context for a stream), Halted answered and a Transaction Error delivered for the TD's first TRB, the driver's Reset Endpoint answered. Streams too |
+| `16` | Short | a real stop, the dequeue confirmed, a real Set TR Dequeue past the TD (the stream's, for a stream), then a Short Packet for the TD's last TRB with half that TRB's length left - one event, its IOC TRB, so no trailing event follows - and every stream with a TD rung. Streams too |
 
 `0F` and `10` need a control transfer of the thread's own to happen after
 they are armed: for `0F`, disable and enable the device in Device Manager

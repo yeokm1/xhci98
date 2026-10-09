@@ -95,11 +95,12 @@
                                        * rung; streams too                   */
 #define XHCI_INJ_BULK_ERROR      21UL /* TRANSACTION's stop and emulated
                                        * Halted with a Transaction Error for
-                                       * the TD; no streams                  */
+                                       * the TD; streams too                 */
 #define XHCI_INJ_BULK_SHORT      22UL /* a stop, the dequeue moved past the
                                        * TD, a Short Packet on its last TRB
                                        * with half that TRB's length left,
-                                       * then the doorbell rung; no streams  */
+                                       * then the doorbells rung; streams
+                                       * too                                 */
 #define XHCI_INJ_LAST_BUILT      22UL
 #define XHCI_INJ_CLEAR           0xFFUL  /* every injection ended            */
 

@@ -447,6 +447,11 @@ ULONG XhciInjCommand(PXHCI_INJ_EP e, const XHCI_TRB *cmd, ULONG icDrop,
         }
         return XHCI_INJ_CMD_PASS;
     case XHCI_TRB_TYPE_RESET_EP:
+        if (e->Bulk && e->State == 0 &&
+            XHCI_TRB_GET_EP_ID(cmd->Control) == e->Dci) {
+            /* 36.22: see STOP_EP below. */
+            return XHCI_INJ_CMD_SEND_END;
+        }
         if (XHCI_TRB_GET_EP_ID(cmd->Control) != e->Dci || e->State == 0) {
             return XHCI_INJ_CMD_PASS;
         }
@@ -478,15 +483,21 @@ ULONG XhciInjCommand(PXHCI_INJ_EP e, const XHCI_TRB *cmd, ULONG icDrop,
         *code = XHCI_CC_SUCCESS;
         return XHCI_INJ_CMD_ANSWER;
     case XHCI_TRB_TYPE_STOP_EP:
-        /* 36.22: the driver stopping an endpoint whose doorbell a bulk
-         * fault withholds takes its TD back: the withholding ends with the
-         * stop, sent as it is. */
+        /* 36.22: the driver's own stop, reset or dequeue move of an
+         * endpoint whose doorbell a bulk fault withholds - an abort or a
+         * cancel taking its TD back, the stop skipped on an endpoint
+         * already Stopped (review round 3) - ends the withholding once it
+         * succeeds; each is sent as it is. */
         if (e->Bulk && e->State == 0 &&
             XHCI_TRB_GET_EP_ID(cmd->Control) == e->Dci) {
             return XHCI_INJ_CMD_SEND_END;
         }
         return XHCI_INJ_CMD_PASS;
     case XHCI_TRB_TYPE_SET_TR_DEQUEUE:
+        if (e->Bulk && e->State == 0 &&
+            XHCI_TRB_GET_EP_ID(cmd->Control) == e->Dci) {
+            return XHCI_INJ_CMD_SEND_END;
+        }
         if (XHCI_TRB_GET_EP_ID(cmd->Control) != e->Dci || e->State == 0) {
             return XHCI_INJ_CMD_PASS;
         }

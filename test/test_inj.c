@@ -941,8 +941,17 @@ static void test_bulk(void)
              XHCI_EP_STATE_RUNNING, "its state read as it is");
     code = 0;
     cmd(&t, XHCI_TRB_TYPE_RESET_EP, 4, 6);
+    CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_SEND_END,
+             "its Reset Endpoint: sent, ending the withholding on success");
+    XhciInjCommandSent(&e, 4, XHCI_CC_CONTEXT_STATE_ERROR);
+    CHECK_EQ(e.Bulk, 1, "a refused one ends nothing");
+    cmd(&t, XHCI_TRB_TYPE_SET_TR_DEQUEUE, 4, 6);
+    CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_SEND_END,
+             "a dequeue move on an endpoint already Stopped takes the TD "
+             "back too (review round 3)");
+    cmd(&t, XHCI_TRB_TYPE_SET_TR_DEQUEUE, 4, 2);
     CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_PASS,
-             "a Reset Endpoint is sent as it is");
+             "another endpoint's passes");
     cmd(&t, XHCI_TRB_TYPE_STOP_EP, 4, 2);
     CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_PASS,
              "another endpoint's stop too");
