@@ -972,10 +972,12 @@ measured before the next is taken:
   whole-command timeout (the SRB's, or 30 seconds, taken once and counted
   down over the command's life, `uas_xport.c` ~569 and ~915, never
   scaled or restarted per chunk), and the caller's payload held under
-  partial MDLs (`uas_mem.c` ~38): up to 30 streamed commands
-  (`uas_xport.c` ~1595) pin 60 MiB of caller pages at 2 MiB each against
-  1.875 MiB at 64 KiB. That is residency, not new common buffer, and
-  36.26 validates it.
+  partial MDLs over pages its caller already locked (`uas_mem.c` ~31):
+  up to 30 active streamed commands (`uas_xport.c` ~1595) represent
+  60 MiB of caller payload at 2 MiB each against 1.875 MiB at 64 KiB;
+  page coverage of unaligned buffers and requests still queued can
+  retain more. That is residency, not new common buffer, and 36.26
+  validates it.
 - **Stage 2, bounded pipelining**, if stage 1's readings show the gaps
   between chunks cost throughput (the ring empty while the next chunk is
   mapped): more than one chunk of one URB on the ring at once. Not a
@@ -988,9 +990,11 @@ measured before the next is taken:
   128 TRBs moves the shared pool geometry: the pool/EP0 stride assert
   (`xhci.h` ~988), the isochronous limits derived from the pool count
   (~3721) and stream allocation (`hcd_cfg.c` ~3294). So the isochronous
-  decoupling, the memory, stream and snapshot tests those touch, and the
-  event-burst review below come with whichever stage first changes the
-  pool ring: stage 2 if it grows it.
+  decoupling and the memory, stream and snapshot tests those touch come
+  with whichever stage first changes the pool ring: stage 2 if it grows
+  it. The event-burst review below comes with stage 2 whatever its ring,
+  since two 31-page chunks in today's ring already put more than one TD
+  of a URB on it.
 - **Stage 3, larger TDs**, only if stage 2 falls short: the limits below.
 
 **What the TD size touches** (stage 3, and in part stage 2):
@@ -1077,9 +1081,17 @@ before pipe selection and before any LUN is exposed. Its contract:
   wrong) means 64 KiB with its own note and counter;
 - a transport failure (removal, no memory) is kept apart from both, as
   `uas_streams.c` ~35 keeps transport status apart from reply status: it
-  means 64 KiB with its own note, and the start goes on;
-- host tests: new UAS on an old HCD, old UAS on a new HCD, High-Speed
-  without streams, a malformed reply and a transport failure.
+  means 64 KiB with its own note, and the start goes on through its
+  ordinary sequence, whose own failures (selection, streams) still fail
+  it;
+- host vectors for the production reply-validation and fallback helper
+  (unsupported, malformed, transport failure, each valid value); the
+  mixed binaries themselves are guest legs in 36.26, since `test_uas`
+  links only the pure `uas_iu.c` and reaches no dispatch or start.
+- the counters handed to the HCD (36.21) go in bounded records copied
+  into HCD-owned storage, never through the synchronous PASSIVE-only
+  request helper from a path holding the UAS lock, and unavailable or
+  stale telemetry reads apart from zero.
 
 Activation. Storage class drivers keep the adapter descriptor they read
 in their own device extensions, and a UAS stop and start keeps the LUN
@@ -1107,12 +1119,21 @@ ME actually send before anything is promised for them.
   - the HCD counts data URB length, chunks per URB and the map grant;
   - the gap, per data pipe or stream and only while a URB has data not
     yet on the ring, measured as two parts: software time from a chunk's
-    retirement to the next chunk's publication, and hardware starvation
-    (the ring empty with that URB unfinished). Plain ring-empty time
-    includes idle and is not the gap;
-  - the snapshot head and `XHCISNAP` grow by these, with `test_snap` and
-    `XHCISNAP`'s selftest showing an older snapshot still read and a
-    newer one read by an older tool.
+    retirement to the next chunk's publication, and the observed
+    software-empty interval (the ring empty in software's view with that
+    URB unfinished). Plain ring-empty time includes idle and is not the
+    gap. The ring's dequeue is software's view, advanced as events are
+    handled (`xhci_ring.c` ~27), and a Transfer Event carries no
+    timestamp, so the interval includes event delivery, moderation and
+    DPC latency; hardware starvation itself is recorded unmeasured unless
+    a separate trace method shows it, and 36.23 decides on the observed
+    interval, CPU cost and throughput;
+  - the HCD region's header grows append-only (`xhci.h` ~8525's
+    size-based extension), the outer snapshot header and schema
+    unchanged, and `XHCISNAP` decodes the new fields; `test_snap` and
+    `XHCISNAP`'s selftest show an older snapshot still read, and an
+    actual older `XHCISNAP` reading a newer snapshot with the new fields
+    simply absent.
 
   Then on this phase's build before 36.22, plus that instrumentation, on
   the E460 and the P14s Gen 1 under 98 SE and 7 (owner): ATTO Disk
@@ -1137,10 +1158,10 @@ ME actually send before anything is promised for them.
 - [ ] 36.23 (was MB.2) the decision on stage 2, from 36.22's readings (owner): command
   rate, chunk rate, the gap's two parts, CPU cost and throughput
 - [ ] 36.24 (was MB.3) stage 2, if taken: its design reviewed to
-  convergence, then the code with host vectors in `test_td`, `test_xfer`
-  and `test_ring`. If it grows the pool ring, also the isochronous
-  decoupling, the stride assert, `test_iso`, `test_membuf`,
-  `test_stream` and `test_snap`, and the event-burst review
+  convergence, the event-burst review included whatever the ring, then
+  the code with host vectors in `test_td`, `test_xfer` and `test_ring`.
+  If it grows the pool ring, also the isochronous decoupling, the stride
+  assert, `test_iso`, `test_membuf`, `test_stream` and `test_snap`
 - [ ] 36.25 (was MB.4) stage 3, if taken: its design reviewed to convergence (fixed
   rings placed by physical address, or a fixed set of page segments
   allocated with the pipe, sized from the table above and qualified on a
@@ -1155,7 +1176,13 @@ ME actually send before anything is promised for them.
   file compares, the value at 64, 1024, 2048 and out of range, the
   activation (a reboot takes a new value; a controller restart with the
   storage stack re-enumerated counts only if shown to refresh the
-  descriptor), Windows 2000 SMP under Driver Verifier, stop and restart,
+  descriptor), mixed binaries (this `xhciuas.sys` on the `2.2.0.x` HCD
+  and the `2.2.0.x` `xhciuas.sys` on this HCD, streams and High-Speed
+  without them, each showing the descriptor it advertises and file I/O
+  passing), the query failing in transport alone (qemu injection) with
+  the start otherwise completing, and removal during the query ending in
+  the ordinary start failure and cleanup, Windows 2000 SMP under Driver
+  Verifier, stop and restart,
   D3 and resume, unplug with work outstanding, audio and input under
   storage load. Geometry, through 36.22's test client rather than the
   file system's own SRBs, with assertions per stage:
