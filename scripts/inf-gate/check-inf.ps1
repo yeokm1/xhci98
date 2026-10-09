@@ -82,7 +82,9 @@ What it checks, grouped by the failure each rule prevents:
            XhciIntelPortSwitch at 1, the Intel port switchover's opt-out
            (owner, 2026-10-05). Task 35-T.7 made it eleven: XhciTolerance
            at 1, XhciIntervalCap at 1 and XhciAvgTrbEsit at 0 (design
-           record 17 sections 4.7 and 4.11).
+           record 17 sections 4.7 and 4.11). Task 36.3 made it twelve:
+           XhciIntelIrqRoute at 1, the Intel interrupt routing quirk
+           (owner, 2026-10-08).
            (**VAL-SZ was removed with XhciLogFile.** It was the
            string half - a REG_SZ's data is text two setup engines may quote,
            trim or tokenise differently, which a DWORD's is not - and with no
@@ -1217,6 +1219,13 @@ $requiredValues = @(
         Default = "1"
         Why     = "roadmap-hcd task 34.3's Intel EHCI-to-xHCI port switchover on the 7-, 8- and 9-series and C610 PCH, read at start on every Intel controller (roadmap-hcd task 35.5), where an exact 2 also routes on an unlisted one at the user's own risk; 0 leaves the routing as firmware set it. The INF writes the 1 so the opt-out is where a user looks for it, under 34.1's don't-overwrite rule so a user's 0 survives an update (owner, 2026-10-05)"
         DefaultWhy = "1 is the driver's own default - absent, of another type or any number but 0 is on (owner, 2026-10-05); shipping 0 would leave the machines the task exists for with nothing on their switchable connectors"
+    },
+    @{
+        Name    = "XhciIntelIrqRoute"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-hcd task 36.3's Intel PCH interrupt routing quirk (issue 12 section 5.1), read at each start and return to D0: on a reviewed 7-, 8- or 9-series or Wellsburg xHCI with a line interrupt it routes D20IR's INTA to the PIRQ that delivers the IRQ the OS assigned. 0 reports and writes nothing, 1 writes on the verified E7250 only, 2 on any reviewed xHCI/LPC pair. The INF writes the 1 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's choice survives an update (owner, 2026-10-08)"
+        DefaultWhy = "1 is the driver's own default - absent, of another type or out of range reads as 1 (owner, 2026-10-08); 0 would leave the E7250 the task exists for without its interrupt, and 2 widens the write past the one verified machine, a new decision"
     },
     @{
         Name    = "XhciTolerance"

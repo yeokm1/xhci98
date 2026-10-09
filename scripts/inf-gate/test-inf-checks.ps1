@@ -621,10 +621,11 @@ try {
     # each path. **Its default is 1, not 0**: shipping 0 would be an INF edit
     # that turns the switchover off on every machine it exists for, and the
     # unconditional DWORD would write a user's 0 back to 1 at an update.
-    # Task 35-T.7's three rows sit between it and the interval, so the anchor
-    # carries them; $tailFor9x and $tailForNt are the same block ending in
-    # each path's own successor line, which keeps the two paths apart.
-    $tolRows   = "HKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`n"
+    # Task 36.3's routing row and task 35-T.7's three rows sit between it and
+    # the interval, so the anchor carries them; $tailFor9x and $tailForNt are
+    # the same block ending in each path's own successor line, which keeps
+    # the two paths apart.
+    $tolRows   = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`nHKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`n"
     $tailFor9x = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]"
     $tailForNt = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32"
     Write-Step "the Intel port switchover's opt-out, on both paths"
@@ -648,8 +649,11 @@ try {
     # written without the don't-overwrite flag that keeps a user's choice
     # across an update. XhciTolerance and XhciIntervalCap ship at 1, so their
     # wrong default is 0; XhciAvgTrbEsit ships at 0, so its wrong one is 1.
-    Write-Step "the tolerance switch, the interval cap and the Average TRB Length switch, on both paths"
+    # Task 36.3's XhciIntelIrqRoute ships at 1 like the first two, the same
+    # four cases.
+    Write-Step "the routing quirk, the tolerance switch, the interval cap and the Average TRB Length switch, on both paths"
     foreach ($tv in @(
+        @{ Key = "irqroute";  Row = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`n"; Wrong = "HKR,,XhciIntelIrqRoute,0x00010003,0`r`n"; Clob = "HKR,,XhciIntelIrqRoute,0x00010001,1`r`n" },
         @{ Key = "tolerance"; Row = "HKR,,XhciTolerance,0x00010003,1`r`n";   Wrong = "HKR,,XhciTolerance,0x00010003,0`r`n";   Clob = "HKR,,XhciTolerance,0x00010001,1`r`n" },
         @{ Key = "intcap";    Row = "HKR,,XhciIntervalCap,0x00010003,1`r`n"; Wrong = "HKR,,XhciIntervalCap,0x00010003,0`r`n"; Clob = "HKR,,XhciIntervalCap,0x00010001,1`r`n" },
         @{ Key = "avgtrb";    Row = "HKR,,XhciAvgTrbEsit,0x00010003,0`r`n";  Wrong = "HKR,,XhciAvgTrbEsit,0x00010003,1`r`n";  Clob = "HKR,,XhciAvgTrbEsit,0x00010001,0`r`n" }
