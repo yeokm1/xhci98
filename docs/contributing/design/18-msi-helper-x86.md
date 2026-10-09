@@ -4,7 +4,8 @@ Design record for the x86 half of message-signalled interrupts on Windows
 Vista and Windows 7 (roadmap-hcd Phase 36, tasks 36.15 and 36.16; the task
 lines for this record's code and legs are the orchestrator's to number).
 Revision 1, 2026-10-09, written before any code, on branch `p36-msi86`;
-revision 2 the same day, after review round 1 (section 14).
+revision 2 the same day, after review round 1, and revision 3 after
+round 2 (section 14).
 
 Design record 15 section 4.3 designs MSI for the HCD and fixes the seam
 this record plugs into: `hcdMsgConnect(hc, connect, disconnect)`, handed
@@ -196,15 +197,25 @@ field, so the V1 prefix is the same in every minor.
 (0x28 today), its major, minor and version, and passes the block with
 `InputBufferLength` and `OutputBufferLength` both equal to `Size`.
 
-**The helper validates before it reads anything else:** `Type3InputBuffer`
-non-NULL; `InputBufferLength == OutputBufferLength`; `Size` (read once,
-after the length test) equal to that length; `Size >= V1_MIN`. A failure
-completes `STATUS_INVALID_PARAMETER` (`STATUS_BUFFER_TOO_SMALL` for a
-`Size` below `V1_MIN`), a `CallerMajor` it does not serve
-`STATUS_REVISION_MISMATCH`. It then writes `n = min(Size, its own block
-size)` bytes' worth of its fields from offset 0x0C on (never the caller's
-fields), sets `Returned = n` and the IRP's `Information = n`, and
-completes with `STATUS_SUCCESS`.
+**The helper validates before it reads anything:** `Type3InputBuffer`
+non-NULL; `InputBufferLength == OutputBufferLength`; that length
+`>= V1_MIN` - all three before any byte of the block is read, so a
+buffer shorter than the header is never dereferenced. Only then is
+`Size` read (once) and required to equal the length, and the caller's
+major checked. A failure completes with `Information = 0` and
+`STATUS_BUFFER_TOO_SMALL` (a length below `V1_MIN`),
+`STATUS_INVALID_PARAMETER` (any other length or `Size` failure) or
+`STATUS_REVISION_MISMATCH` (a major it does not serve). It then writes
+its fields for `n = min(Size, its own block size)` bytes from offset 0x0C
+on (never the caller's fields), sets `Returned = n` and the IRP's
+`Information = n`, and completes with `STATUS_SUCCESS`. The validation
+and the fill are a pure function (`XhciMsi86Answer`) in the shared
+DDK-free `src\xhci_msi86.c` that the helper compiles in and the host
+suite tests: lengths 0 to 3 and 0x27 (refused before any read), unequal
+lengths, `Size` disagreeing with the length, an unknown major, a longer
+block from a newer caller (filled to its own size), and the block placed
+at the end of a guarded host allocation so a read past it faults the
+test.
 
 **The HCD accepts the answer** only if all of these hold, tested in this
 order and before any field after `Size` is used, a pure function
@@ -325,32 +336,39 @@ on 98, ME, 2000 and XP the state stays `UNSEEN` and nothing below runs.
 ### 4.2 The requirements filter
 
 **The IRP's contract** (`IRP_MN_FILTER_RESOURCE_REQUIREMENTS` in the WDK):
-a function driver handles it on the way up, after the lower stack. The
-current list is at `Irp->IoStatus.Information` when that is non-NULL (a
-lower driver, or the PnP manager, put it there), else at
-`Parameters.FilterResourceRequirements.IoResourceRequirementList`. A
-driver that changes the list's size allocates a replacement from **paged**
-pool, frees the list it replaces, and returns the replacement in
-`Information` with `STATUS_SUCCESS`.
+a function driver handles it on the way up, after the lower stack, and
+works on the list at `Irp->IoStatus.Information`. The stack location's
+`IoResourceRequirementList` is not a fallback: it can describe an earlier
+list, and is neither read nor freed here. A driver that changes the
+list's size allocates a replacement from **paged** pool, frees the list it
+replaces, and returns the replacement in `Information` with
+`STATUS_SUCCESS`.
 
 On the x86 image, NT 6 only, the filter:
 
 1. Forwards the IRP and waits (`HcdForwardAndWait`). If the lower status
    is a failure other than `STATUS_NOT_SUPPORTED`, it completes the IRP
-   with that status and touches nothing.
-2. Takes the current list as above. If neither pointer is set, it
-   completes with the lower status and records "no list".
-3. Looks for the helper (section 4.1) unless `BOUND`.
-4. Records the list (section 9's snapshot), whatever the state.
-5. If `BOUND`, or the strip is disabled (below), completes with the lower
-   status and `Information` unchanged.
-6. Else computes the stripped list (below). If it differs, allocates the
-   replacement, writes it, frees the current list with `ExFreePool`, sets
-   `Information` to the replacement and completes with `STATUS_SUCCESS`.
-   If the allocation fails it leaves the current list in place, completes
-   with the lower status, and records "strip failed: no memory"; that
-   start then meets a message grant with the helper not bound and polls
-   with "message not connected" (section 4.3) - never worse than that.
+   with that status and `Information` untouched, and records "lower
+   failed".
+2. Looks for the helper (section 4.1) unless `BOUND`.
+3. If `Information` is NULL: completes with the lower status, records
+   "no list", and dereferences nothing.
+4. Records the list (section 9), whatever the state.
+5. Computes the outcome (below). Every outcome but "replaced" completes
+   with the lower status and `Information` untouched; "replaced"
+   allocates the replacement, writes it, frees the old list with
+   `ExFreePool`, sets `Information` to the replacement and completes with
+   `STATUS_SUCCESS`. A failed allocation turns "replaced" into "kept: no
+   memory".
+
+Outcomes, recorded by name: **bound** (the helper is bound: nothing
+changes, Windows may grant the message); **disabled** (the strip is
+switched off, below); **no line offered**, **no interrupt**,
+**unsupported shape**, **inconsistent** (each: kept as is, below);
+**no message** (nothing to strip: kept); **replaced**; **kept: no
+memory**. A kept list with a message in it meets
+the start with the helper not bound, and polls with "message not
+connected" (section 4.3) - never worse than that.
 
 **The allocation** is one new named site, `HcdPoolAllocRequirements` in
 `hcd_pool.c`, the HCD's only `PagedPool` allocation: the IRP's contract
@@ -362,65 +380,91 @@ confirm.**
 
 **The strip** works at both levels of choice a requirements list has. An
 `IO_RESOURCE_REQUIREMENTS_LIST` carries `AlternativeLists` complete
-configurations (`IO_RESOURCE_LIST`s), of which the arbiter assigns one;
-inside a configuration, a run of descriptors whose followers carry
-`IO_RESOURCE_ALTERNATIVE` is one requirement satisfied by any member.
-Removing descriptors alone is not enough: from `[BAR, MSI]` and
-`[BAR, INTx]` it would leave `[BAR]` and `[BAR, INTx]`, and the arbiter
-could take the first and grant no interrupt at all.
+configurations (`IO_RESOURCE_LIST`s), of which the arbiter assigns one.
+Inside a configuration each **requirement** is a run: a head descriptor
+(its `Option` without `IO_RESOURCE_ALTERNATIVE`) and the descriptors after
+it that carry `IO_RESOURCE_ALTERNATIVE`; every requirement must be
+satisfied, by any one member of its run. Removing descriptors alone is
+not enough: from `[BAR, MSI]` and `[BAR, INTx]` it would leave `[BAR]` and
+`[BAR, INTx]`, and the arbiter could take the first and grant no
+interrupt; and from `[BAR, INTx, MSI]` with two separate requirements it
+would delete a requirement outright.
 
-So each configuration is classed by its interrupt descriptors:
+So each interrupt requirement is classed by its members (a message member
+is one whose `Flags` carry `CM_RESOURCE_INTERRUPT_MESSAGE`, 0x0002,
+declared by the HCD where the Windows 2000 DDK lacks it; MSI and MSI-X
+both carry it): **line-only**, **mixed** (both kinds) or
+**message-only**. Each configuration is then:
 
-- **LINE**: at least one interrupt descriptor without
-  `CM_RESOURCE_INTERRUPT_MESSAGE` (0x0002, declared by the HCD where the
-  Windows 2000 DDK lacks it);
-- **MSG-ONLY**: interrupt descriptors, every one a message one (MSI and
-  MSI-X both carry the flag);
+- **STRIPPABLE**: at least one interrupt requirement, none of them
+  message-only. Stripping it removes the message members of its mixed
+  requirements, the next kept member taking over as head where a head was
+  removed, and copies every other descriptor unchanged
+  (`CmResourceTypeDevicePrivate` included; R2 decides whether that is
+  right before the strip is enabled, and nothing is inferred from
+  adjacency).
+- **MESSAGE-BOUND**: at least one message-only interrupt requirement. It
+  cannot be stripped without deleting a requirement.
 - **NONE**: no interrupt descriptor.
 
-and the stripped list is:
+and the outcome is:
 
-- **If any configuration is LINE:** only the LINE configurations are kept,
-  in their original order (`AlternativeLists` reduced). In each, every
-  message descriptor is removed; where a removed descriptor headed a run
-  (its `Option` without `IO_RESOURCE_ALTERNATIVE`), the next kept member
-  of that run has the bit cleared so that it heads it. Every other
-  descriptor is copied unchanged, `CmResourceTypeDevicePrivate` included
-  (R2 decides whether that is right before the strip is enabled; nothing
-  is inferred from adjacency).
-- **If none is LINE** (a controller with `Interrupt Pin` 0, MSI only): the
-  list is left as it is. There is no line to give, and stripping would
-  only turn a message grant the start cannot connect into no interrupt at
-  all. Record 15's rows for a message grant with no routines apply: the
-  start polls with "message not connected", under mode 1 too, since record
-  15 runs mode 1 under a message grant as mode 0. On XP the same
-  controller has no interrupt resource at all, so modes 0 and 2 poll and
-  mode 1 fails its start; the one difference from XP here is mode 1
-  polling instead of failing, which is recorded, not hidden.
-- `ListSize` is recomputed from what is written.
+- **replaced**, when at least one configuration is STRIPPABLE and at
+  least one configuration has a message member: the new list holds the
+  STRIPPABLE configurations alone, stripped, in their original order
+  (`AlternativeLists` reduced, `ListSize` recomputed). MESSAGE-BOUND and
+  NONE configurations are dropped: the arbiter must not be able to pick a
+  configuration that grants a message the start cannot connect, or none
+  at all, while a line configuration exists.
+- **no line offered**, when there are message members and no
+  configuration is STRIPPABLE (an MSI-only controller with `Interrupt
+  Pin` 0, or a controller with a pin whose list, against R1's
+  expectation, offers no line). There is no line to give, and stripping
+  would turn a message grant the start cannot connect into no interrupt
+  at all, or delete a requirement. Kept as is; record 15's rows for a
+  message grant with no routines apply: the start polls with "message not
+  connected", under mode 1 too, since record 15 runs mode 1 under a
+  message grant as mode 0. On XP an MSI-only controller has no interrupt
+  resource, so mode 1 fails its start there; that one difference from XP
+  is recorded, not hidden (decision 6).
+- **no interrupt**, when no configuration has an interrupt descriptor:
+  kept as is; record 15's no-interrupt rows apply, as on XP.
+- **unsupported shape**, when some configuration has a message member and
+  the list also has a shape the reading of R1/R2 did not admit (for
+  instance a message-only requirement beside a STRIPPABLE configuration
+  that R1 never showed): kept as is, the shape recorded. Until R1 and R2
+  are read every shape is admitted only through the `qemu` switch below.
+- **inconsistent**, when `ListSize` is short of what the counts claim:
+  kept as is.
 
-The strip is a pure function over the list's bytes (`XhciMsi86Strip`, in
-the DDK-free core, layouts declared with `C_ASSERT`s against the DDK's
+The classification and the strip are one pure function over the list's
+bytes (`XhciMsi86Strip`, in the shared DDK-free `xhci_msi86.c`, layouts
+declared with `C_ASSERT`s against the DDK's
 `IO_RESOURCE_REQUIREMENTS_LIST`, `IO_RESOURCE_LIST` and
 `IO_RESOURCE_DESCRIPTOR`), a sizing pass then a writing pass, with host
-vectors in `test_msi`: one configuration with a message-then-line run and
-one with a line-then-message run; `[BAR, MSI]` and `[BAR, INTx]` in both
-orders; an MSI-X descriptor; a message descriptor with several messages;
-two interrupt requirements in one configuration; a MSG-ONLY list
-(unchanged); a NONE configuration beside a LINE one (dropped); a list with
-no interrupt at all (unchanged); an inconsistent list (`ListSize` short of
-what the counts claim: left unchanged, recorded).
+vectors in `test_msi` and each expected outcome stated: one configuration
+with a message-then-line run and one with a line-then-message run
+(replaced, the line heading the run); `[BAR, MSI]` and `[BAR, INTx]` in
+both orders (replaced, the first dropped); an MSI-X member; a message
+member with several messages; `[BAR, INTx, MSI]` as two requirements,
+alone (no line offered) and beside `[BAR, INTx]` (replaced, the two-
+requirement configuration dropped); a message-only list (no line
+offered); a NONE configuration beside a STRIPPABLE one (dropped); a list
+with no interrupt (no interrupt); a line-only list (replaced is not
+reached: nothing to strip, kept, outcome "no message"); an inconsistent
+list (inconsistent).
 
 **The strip is enabled only after R1 and R2 are read** (section 11). The
-first build carries it behind a `qemu`-only switch, `XhciMsi86NoStrip`,
-under which the filter records and does not strip; R1 and R2 are read from
-section 9's snapshot on both guests; the transformation above is confirmed
-or amended in this record (a review round) before the code is taken as
-done. If R1 shows that the PCI driver offers no LINE configuration for a
-controller with a pin, the strip is withdrawn, the helper-less start takes
-record 15's "message not connected" row and polls, and the owner is told
-that "exactly as on XP" cannot hold for a helper-less install with
-`MSISupported` 1.
+first build carries a `qemu`-only switch, `XhciMsi86NoStrip`, under which
+the filter records and does not strip (outcome "disabled"); R1 and R2 are
+read from the complete trace of section 9 on both guests; the shapes they
+show are written into this record as the admitted shapes, by a review
+round, before the code is taken as done, and any other shape takes
+"unsupported shape". If R1 shows that the PCI driver offers no line
+configuration for a controller with a pin, the strip is withdrawn, the
+helper-less start takes record 15's "message not connected" row and
+polls, and the owner is told that "exactly as on XP" cannot hold for a
+helper-less install with `MSISupported` 1.
 
 ### 4.3 The start
 
@@ -436,10 +480,11 @@ x86 image:
   `hcdMsgConnect(hc, ConnectEx, DisconnectEx)` with the accepted block's
   pair when `BOUND`, else `hcdMsgConnect(hc, NULL, NULL)`, which record 15
   defines as "not found": that start polls with "message not connected".
-  A message grant **without a bound helper** is reached only through a
-  list the filter left in place (an MSI-only controller, a failed
-  allocation, the strip disabled) or a filter that never came; the record
-  says which (section 9).
+  A message grant **without a bound helper** comes from a list the
+  filter kept on purpose (outcomes "no line offered", "unsupported
+  shape", "inconsistent", "disabled", "kept: no memory", "no list",
+  "lower failed") or from a filter that never came; the record says which
+  (section 9).
 
 Everything after the seam - the connection, its fallback to the line, the
 release through `IoDisconnectInterruptEx`, the ISR, the capability read -
@@ -487,9 +532,10 @@ that cost acceptable, and section 10's Driver Verifier leg reads it.
 **The race that remains** is the first install. SetupAPI does not start a
 boot-start service when it installs it, so on a fresh install (and on an
 update from a package without the helper) the helper is not running until
-the next boot: the controller's filter finds it `ABSENT`, strips, and the
-controller runs the line, as on XP, for the rest of that session. MSI
-takes over at the next boot. Asking for a reboot from the INF was
+the next boot: the controller's filter finds it `ABSENT` and takes
+section 4.2's outcome - on a controller whose list offers a line, the
+line, as on XP, for the rest of that session; on one that offers none,
+polling - and MSI takes over at the next boot. Asking for a reboot from the INF was
 considered and not taken: the line is a working configuration, and a
 reboot prompt on every update is a cost for no correctness gain. The
 release notes say so.
@@ -514,10 +560,10 @@ versions. The cases:
 
 | Installed | Running | Result |
 |---|---|---|
-| this package, freshly | no helper until the next boot | line this session; MSI after the boot (section 5) |
+| this package, freshly | no helper until the next boot | section 4.2's helper-less outcome this session (the line where the list offers one); MSI after the boot (section 5) |
 | this package, updated from one with the helper | the old helper until the next boot (a boot-start image in use is replaced at reboot) | bound if its major is 1, else line until the boot |
 | a later package with interface major 2 | old HCD, new helper | the old HCD's V1 code is refused by a V2-only helper: line. A later helper that keeps answering V1 (the rule for a minor change) binds |
-| this HCD, the helper's file removed or its copy failed | none | line (the filter strips), recorded `ABSENT` |
+| this HCD, the helper's file removed or its copy failed | none | section 4.2's helper-less outcome (the line where the list offers one), recorded `ABSENT` |
 | a package older than this one installed over it | old HCD, this helper still loaded | the helper idles; but see below |
 | the device uninstalled | the helper service remains, boot-start | it loads, idles, and answers nobody; removing it is a manual step the release notes give (`sc delete xhcimsi`, then reboot) |
 
@@ -617,10 +663,18 @@ Why WDK 7.1 x86 and not MSVC 6 with the 2000 DDK:
   1998-era runtime assumptions) bind it.
 
 `WLH` (Vista) rather than `WIN7`: the helper must load on Vista SP2, and
-the `wlh` libraries can only have the Vista exports. `BUFFER_OVERFLOW_CHECKS=0`
-in its `sources`: the helper has no stack buffer, and leaving the `/GS`
-cookie object (`BufferOverflowK.lib`) out keeps its image free of the
-third-party object whose notice question is open for the amd64 build.
+the `wlh` libraries can only have the Vista exports. **The `/GS` cookie
+stays on**, the kit's default (`BUFFER_OVERFLOW_CHECKS` unset, so
+`GsDriverEntry` and `BufferOverflowK.lib` initialise the cookie): the
+`wdmsec.lib` members that `IoCreateDeviceSecure` pulls in are precompiled
+with cookie checks (a static reading of the `wlh\i386` library in review
+round 2 found `___security_cookie` and `@__security_check_cookie@4`
+references in `ppregstate.obj` and `cmregutil.obj`), and turning the
+checks off for the helper's own source would leave those library members
+checking a cookie nobody initialised. Which library members and imports
+the link actually retains is read from the first link's map and
+`dumpbin /imports`, and the gate and the provenance record are written
+from that reading, not from this paragraph.
 `C_DEFINES` sets the flavour defines as `src\uas\sources` does, from
 `BUILD_ALT_DIR`, and refuses any other value.
 
@@ -644,9 +698,9 @@ by `make-package.ps1` anyway.
 | `make-package.ps1` | `-Arch x86` stages `xhcimsi.sys` (the staging table; `$MsiDriverPath`), gated like the UAS pair: exists, flavour marker, import gate with the `nt6x86` profile; `-Arch amd64` refuses one |
 | `make-release.ps1` | **Media per leg, not per release.** Today the declared media are derived once, from the first published INF, for every upload leg, on the strength of the two INFs' equal `[SourceDisksFiles]` (~1351). That becomes per leg: each leg's publishable set and media layout come from that leg's own INF (x86 legs: `xhci98.inf`, `xhci98.sys`, `xhcimsi.sys`; x64 legs: as today), through upload assembly and `-UploadSetOnly`, and a historical release whose INFs declare no helper is reconstructed exactly as before. `Assert-MsiHelperPublished`, modelled on `Assert-UasPublished`, per x86 leg: the file exists, its `FileVersion` equals the version, `VS_FF_DEBUG` matches the flavour, the marker, bytes equal to `src\msi86\obj...\i386\xhcimsi.sys`, `source-stamp -Driver xhcimsi -Check`. An x64 leg holding a helper is refused. The readme and contents text name it |
 | `test-package.ps1` | Cases: an x86 package with the helper and an x64 one without, assembled in both leg orders; an x86 package missing the helper (refused); a helper in an x64 package (refused); a historical upload set without the helper (reconstructed unchanged); a helper of the wrong flavour (refused); a helper whose source stamp is stale, and one swapped for another build's bytes (refused) |
-| `legal-provenance.md` | Section 2's toolchain row: WDK 7.1 now also builds an x86 binary (the helper), with `BUFFER_OVERFLOW_CHECKS=0`, and links one WDK library object into it, `wdmsec.lib`'s `IoCreateDeviceSecure` (stated as a fact, beside the amd64 `/GS` object's open notice question); section 4: a row for the NT 6 x86 export readings (static: the export tables of the four kernels and two HALs) and for R1-R3 (runtime, through the driver's own log) |
+| `legal-provenance.md` | Section 2's toolchain row: WDK 7.1 now also builds an x86 binary (the helper), with the `/GS` cookie support the amd64 build also links (`BufferOverflowK.lib`, under the amd64 row's open notice question) and the `wdmsec.lib` members its link retains, listed from the link map (stated as facts); section 4: a row for the NT 6 x86 export readings (static: the export tables of the four kernels and two HALs) and for R1-R3 (runtime, through the driver's own log) |
 | Pool | `hcd_pool.c` gains `HcdPoolAllocRequirements`, the one `PagedPool` site (section 4.2); record 13 section 7.5 and AGENTS.md's pool paragraph name the exception |
-| Host tests | `test_msi` (record 15's suite) gains `XhciMsi86Accept` and `XhciMsi86Strip`; `test\run-host-tests.cmd` unchanged otherwise |
+| Host tests | `test_msi` (record 15's suite) gains `XhciMsi86Answer`, `XhciMsi86Accept`, `XhciMsi86Strip` and `XhciMsi86BindStep`, all in the shared DDK-free `src\xhci_msi86.c`; `test\run-host-tests.cmd` unchanged otherwise |
 
 ### 8.3 Shared tables touched (for the integrator)
 
@@ -674,15 +728,32 @@ acceptance test's number, the IRP status, `Information`, `Returned` and
 `HelperVersion` and `Flags` (a `qemu` helper says so) for `BOUND`; the
 number of looks made on this FDO.
 
-**The last filter's list snapshot**, bounded: `AlternativeLists`, and for
-up to 4 configurations and 12 descriptors in all, each descriptor's
-configuration index, descriptor index, `Type`, `Option`, `Flags`,
-`ShareDisposition` and its three `u` words (an interrupt's minimum and
-maximum vector and its affinity, a device-private descriptor's three data
-words), with a truncation flag and the totals when there were more; then
-the filter's outcome - not stripped (bound / disabled / MSI-only / no
-list / inconsistent), stripped (configurations and descriptors removed),
-or strip failed (no memory). This is what R1 and R2 are read from.
+**The last filter's list snapshot**, bounded, for every flavour:
+`AlternativeLists`, and for up to 4 configurations and 12 descriptors in
+all, each descriptor's configuration index, descriptor index, `Type`,
+`Option`, `Flags`, `ShareDisposition` and its six `u` words raw (WDK 7.1's
+x86 `IO_RESOURCE_DESCRIPTOR` layout, `wdm.h`: for an interrupt
+`MinimumVector`, `MaximumVector`, `AffinityPolicy`, `PriorityPolicy`,
+`TargetedProcessors`; for a device-private descriptor its data words),
+with a truncation flag and the totals when there were more; then the
+filter's outcome by name (section 4.2) and, for "replaced", the
+configurations and descriptors removed. `XHCISNAP` labels the words by
+that layout. A truncated snapshot is evidence that something is missing,
+not evidence of what.
+
+**The complete trace, for R1 and R2:** the `qemu` flavour also writes
+every descriptor of every configuration of the list it received, and of
+the list it returned, as one debug-channel line each (the port-`0xE9`
+mirror, captured by the QEMU launcher to a host file), with the same
+fields and the FDO's serial. That capture is unbounded and survives the
+guest, so R1 and R2 are closed from it, never from a truncated snapshot.
+
+**Lifecycle events**, `qemu` flavour, the same channel, each with the
+FDO's serial: look (result), bind, refuse, the start's routine source,
+the disconnect, the reference dropped. They are the durable evidence of
+section 10's L legs, since a removed FDO's counter block goes with it and
+the HCD's last log flush at stop (`hcd_ctl.c` ~1912) precedes the
+reference drop at remove.
 
 **At the start:** "routines from the helper" or "helper not bound", as
 record 15's "how the routines were found"; and when a message grant meets
@@ -720,18 +791,26 @@ grant, read as the message with its log note; a raised
   and one removed and rescanned, while the other keeps running; each
   FDO's looks and reference read from its own record;
 - L2 a stop and restart on the same FDO, with a new filter between: by a
-  resource change in Device Manager where the guest offers one, else
-  recorded as not reached and left to the strip's and the binding's host
-  vectors;
+  resource change in Device Manager where the guest offers one, read as
+  no new look and the same binding; where none is offered, recorded as
+  not reached on a guest. The binding's rules are host-tested either way:
+  the per-FDO state machine is a pure function (`XhciMsi86BindStep`,
+  shared `xhci_msi86.c`, `test_msi`) over the events filter, start, stop,
+  surprise removal, remove and look result, with vectors for stop then
+  filter then start (no new look, bound kept), remove (reference dropped
+  exactly once, after the disconnect), a refused answer (reference
+  dropped at once), and a look at each event while not bound;
 - L3 surprise removal (QEMU `device_del` of the controller) after
-  binding: the disconnect, then the reference dropped at remove, read in
-  the log;
+  binding: the disconnect, then the reference dropped at remove, read
+  from section 9's lifecycle trace;
 - L4 a start that fails after binding (the HCD's `qemu`-flavour start
-  refusal): the release, then the next start binds without a new look.
+  refusal): the release (disconnect), `IRP_MN_REMOVE_DEVICE` with the
+  reference dropped, then - on the next enumeration - a new FDO that looks
+  again and binds, read from the trace with both FDO serials.
 
 **H - the helper missing or wrong**, on 7 x86 (and H1 to H3 on Vista x86
 too), each read as the line with the list stripped (or, where R1 found no
-LINE configuration, as section 4.2's fallback), and the helper's state
+line configuration, as section 4.2's "no line offered"), and the helper's state
 with its detail. A running helper cannot be unloaded, so every change to
 the helper's file, service or injection value is followed by a reboot
 before it is read:
@@ -779,12 +858,12 @@ before it is read:
 - **R1.** The requirements list Vista's and 7's PCI driver builds for a
   controller with a pin and `MSISupported` 1: how many configurations,
   which of them LINE, MSG-ONLY or NONE, and, inside each, the order and
-  `Option` of the interrupt descriptors. Read from section 9's snapshot
+  `Option` of the interrupt descriptors. Read from section 9's complete trace
   with the strip disabled. It confirms or amends section 4.2's
   transformation, and if no LINE configuration exists, section 4.2's
   fallback applies.
 - **R2.** Whether a message descriptor is accompanied by a
-  `CmResourceTypeDevicePrivate` descriptor, and where; read from the same
+  `CmResourceTypeDevicePrivate` descriptor, and where; read from the same complete
   snapshot, and taken as a fact about the readings, not inferred from
   adjacency alone. If one is found inside a LINE configuration that keeps
   it, the transformation is amended before the strip is enabled.
@@ -800,12 +879,15 @@ before it is read:
    one new import, `IoGetDeviceObjectPointer`, with Windows 2000 export and
    stock Windows 98 SE evidence (section 3.4).
 3. **Orchestrator decision, owner to confirm:** without the helper the HCD
-   strips the message descriptors in `IRP_MN_FILTER_RESOURCE_REQUIREMENTS`
-   so Windows grants the line (section 4.2). This refines record 15 section
-   4.3's statement that a helper-less x86 start with a message grant polls:
-   with the strip that row is the fallback of a grant the filter missed,
-   not the helper-less norm. Record 15 and roadmap 36.15/36.16 are the
-   orchestrator's to reconcile.
+   keeps only the line configurations in
+   `IRP_MN_FILTER_RESOURCE_REQUIREMENTS` so Windows grants the line where
+   the list offers one (section 4.2). This refines record 15 section 4.3's
+   statement that a helper-less x86 start with a message grant polls: with
+   the strip, that row is reached when the filter deliberately keeps a
+   message (no line offered, an unadmitted shape, the strip disabled or
+   out of memory) or never ran - not on a controller whose list offers a
+   line. Record 15 and roadmap 36.15/36.16 are the orchestrator's to
+   reconcile.
 4. **Orchestrator decision, owner to confirm:** a fresh install runs the
    line until the next boot rather than asking for a reboot (section 5).
 5. **Orchestrator decision, owner to confirm:** the strip's replacement
@@ -819,7 +901,9 @@ before it is read:
 ## 13. Files the code touches
 
 New: `src\msi86\sources`, `src\msi86\makefile`, `src\msi86\msi86_entry.c`,
-`src\msi86\xhcimsi.rc`, `src\xhci_msi86.h`, `src\hcd_msi86.c`,
+`src\msi86\xhcimsi.rc`, `src\xhci_msi86.h`, `src\xhci_msi86.c` (the shared
+pure functions, compiled into both drivers and the host suite),
+`src\hcd_msi86.c`,
 `scripts\import-gate\xhcimsi-imports.allow`,
 `scripts\import-gate\nt6x86-baselines.expected`.
 
@@ -828,8 +912,7 @@ Changed: `src\xhci98.inf`, `src\sources`, `src\hcd.h`, `src\hcd_pnp.c`
 `hcdMsgConnect`, the republication after `HcdCountersStart`),
 `src\hcd_entry.c` (the state at `AddDevice`), `src\hcd_pool.c` (the paged
 site), the counter block and log (`src\hcd_log.c`, `src\xhci.h` where
-record 15's fields live), the DDK-free core file that takes
-`XhciMsi86Accept` and `XhciMsi86Strip` (record 15's `test_msi` code's),
+record 15's fields live),
 `test\test_msi.c`; `scripts\build-driver.cmd`,
 `scripts\import-gate\check-imports.ps1`, `xhci98-imports.allow`,
 `win98-evidence.list`, `extract-target-baselines.ps1`,
@@ -866,3 +949,19 @@ Round 1 (`69b69f1`, review thread `01a120a8-e037-7a31-b88b-4e325ef35abb`):
 | 8 | P2: legs missed lifetime and mixed-install cases | Section 10: L1-L4, U1-U3, reboots after every helper change, the kernel image and an ordinary boot recorded |
 | 9 | P3: "no interrupt" polls only by mode; the normal MSI path called exceptional | Sections 4.2 and 4.3; the index line |
 | 10 | P3: the WDM test is a minimum, and a dangling section reference | Section 2 |
+
+### 14.2 Revision 2
+
+Round 2 (`a4c8307`, same thread): 1 P1, 5 P2, 2 P3, all taken in
+revision 3. Round-1 findings 3, 5, 6 and 10 were confirmed closed.
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | P1: the stack's list pointer was still a fallback, and could be freed | Section 4.2: `IoStatus.Information` only; NULL is "no list", nothing dereferenced; every outcome's completion stated |
+| 2 | P2: a buffer shorter than the header passed the length tests before `Size` was read | Section 3.2: lengths `>= V1_MIN` before any read, `Information = 0` on refusal; `XhciMsi86Answer` host-tested, guarded end-of-allocation vector |
+| 3 | P2: a configuration with a separate message-only requirement lost that requirement | Section 4.2: requirements (runs) classed line-only / mixed / message-only; only STRIPPABLE configurations kept; outcomes named; the two-requirement vectors' results stated |
+| 4 | P2: `wdmsec.lib` members carry `/GS` checks, so turning the cookie off is wrong | Section 8.1: the cookie stays on (kit default); retained members and imports read from the first link; section 8.2's provenance row |
+| 5 | P2: a truncated snapshot cannot close R1/R2 | Section 9: a complete `qemu`-flavour descriptor trace on the debug channel; section 11 reads from it |
+| 6 | P2: L4 expected no new look after a failed start; L2's host vectors unnamed; L3's evidence lost at remove | Section 10: L4 expects remove and a new FDO's look; `XhciMsi86BindStep` vectors; lifecycle events on the durable trace (section 9) |
+| 7 | P3: the fallback promises were broader than the algorithm | Sections 4.2, 4.3, 5, 6 and decision 3: outcomes "no line offered", "no interrupt" and the rest distinguished; results conditional on the list |
+| 8 | P3: the third interrupt word is `AffinityPolicy`, not affinity | Section 9: six raw words labelled by WDK 7.1's layout |
