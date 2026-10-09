@@ -483,20 +483,33 @@ static void test_wake_at_observe(void)
     CHECK_EQ(link.Armed, 0, "disarmed");
     step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 513, &wait);
     CHECK_EQ(link.State, XHCI_SUSP_ACTIVE, "ACTIVE");
-    CHECK_EQ(link.LatchDue, 1, "a claimed wake latches");
+    CHECK_EQ(link.LatchDue, 0, "a wake does not latch: WokeHold holds");
 
-    /* Evidence kept while SUSPENDING and taken at the observation. */
-    XhciSuspLinkInit(&link, 1, 1);
+    /* Evidence kept while SUSPENDING (a hub's C_PORT_SUSPEND, already
+     * acknowledged) is taken once the U3 request is done, without being
+     * seen again at an observation (round 1, finding 7). */
+    XhciSuspLinkInit(&link, 0, 1);
     step = XhciSuspBegin(&link, XHCI_SUSP_RUN_SUSPEND, 1, 0, 0, &wait);
     CHECK_EQ(XhciSuspEvidence(&link, XHCI_SUSP_EV_WAKE), 0,
              "SUSPENDING: kept, not yet the event");
     CHECK_EQ(link.WakeKept, 1, "kept");
-    while (step != XHCI_SUSP_STEP_OBSERVE) {
+    while (step != XHCI_SUSP_STEP_U3) {
         step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 1, &wait);
     }
     step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 2, &wait);
-    CHECK_EQ(link.State, XHCI_SUSP_RESUMING, "U3 read, but woken: RESUMING");
-    CHECK_EQ(link.ClaimDue, 1, "the event at the observation");
+    CHECK_EQ(link.State, XHCI_SUSP_RESUMING, "woken: RESUMING, no observation");
+    CHECK_EQ(step, XHCI_SUSP_STEP_RECOVERY, "hub: the hub timed it");
+    CHECK_EQ(link.ClaimDue, 1, "the event taken");
+
+    /* A disconnect kept while SUSPENDING outranks a kept wake. */
+    XhciSuspLinkInit(&link, 1, 1);
+    step = XhciSuspBegin(&link, XHCI_SUSP_RUN_SUSPEND, 0, 0, 0, &wait);
+    (VOID)XhciSuspEvidence(&link, XHCI_SUSP_EV_WAKE);
+    (VOID)XhciSuspEvidence(&link, XHCI_SUSP_EV_DISCONNECT);
+    CHECK_EQ(link.State, XHCI_SUSP_SUSPENDING, "kept for the step");
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 1, &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_END, "the next step ends it");
+    CHECK_EQ(link.State, XHCI_SUSP_GONE, "GONE, not woken");
 
     /* Hub: PORT_SUSPEND clear with C_PORT_SUSPEND at the observation. */
     XhciSuspLinkInit(&link, 0, 1);
@@ -534,8 +547,8 @@ static void test_resume_outcomes(void)
     step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 90, &wait);
     CHECK_EQ(step, XHCI_SUSP_STEP_DISARM, "disarm");
     step = XhciSuspAdvance(&link, XHCI_SUSP_RES_STALL, 91, &wait);
-    CHECK_EQ(step, XHCI_SUSP_STEP_RESTART, "a refused disarm is counted");
-    CHECK_EQ(link.Armed, 0, "and dropped");
+    CHECK_EQ(step, XHCI_SUSP_STEP_RESTART, "a refused disarm: the resume goes on");
+    CHECK_EQ(link.Armed, 1, "and the feature may still be set");
     step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 92, &wait);
     CHECK_EQ(link.Outcome, XHCI_SUSP_OUT_ACTIVE, "ACTIVE");
     CHECK_EQ(link.LatchDue, 0, "a host resume does not latch");
@@ -603,13 +616,32 @@ static void test_latch_and_rearm(void)
     f[0].DxPended = 0;
     CHECK_EQ(XhciSuspDecide(&link, f, 1, 1, 0, &d), XHCI_SUSP_DO_NONE,
              "still latched");
-    /* The function goes D3: the slots changed. */
+    /* A D0 and a fresh D2 between two passes: the states read as they did,
+     * but the slot's Seq moved twice (round 1, finding 3). */
+    f[0].Seq += 2;
+    f[0].DxPended = 1;
+    CHECK_EQ(XhciSuspDecide(&link, f, 1, 1, 0, &d), XHCI_SUSP_DO_SUSPEND,
+             "a D0 and a Dx in between: suspend again");
+    CHECK_EQ(link.Latched, 0, "latch cleared");
+    /* Latched again, then the function goes D3. */
+    link.LatchDue = 1;
+    f[0].DxPended = 0;
+    (VOID)XhciSuspDecide(&link, f, 1, 1, 0, &d);
     f[0].PwrState = D3;
     f[0].PwrWanted = D3;
     f[0].DxPended = 1;
+    f[0].Seq++;
     CHECK_EQ(XhciSuspDecide(&link, f, 1, 1, 0, &d), XHCI_SUSP_DO_SUSPEND,
              "slots changed: suspend again");
-    CHECK_EQ(link.Latched, 0, "latch cleared");
+    /* A change while not all Dx spends the latch too. */
+    link.LatchDue = 1;
+    f[0].DxPended = 0;
+    (VOID)XhciSuspDecide(&link, f, 1, 1, 0, &d);
+    f[0].PwrState = D0;
+    f[0].PwrWanted = D0;
+    f[0].Seq++;
+    (VOID)XhciSuspDecide(&link, f, 1, 1, 0, &d);
+    CHECK_EQ(link.Latched, 0, "spent by a D0");
 
     /* Rearm: a WAIT_WAKE accepted while SUSPENDED unarmed. */
     XhciSuspLinkInit(&link, 1, 1);
@@ -654,45 +686,91 @@ static void test_latch_and_rearm(void)
     CHECK_EQ(d.ArmIntent, 0, "intent recomputed: none");
 }
 
-static void test_claimed_wake_latch(void)
+static void test_woke_hold(void)
 {
     XHCI_SUSP_LINK link;
-    XHCI_SUSP_FUNC f[1];
+    XHCI_SUSP_FUNC f[2];
     XHCI_SUSP_DECISION d;
     ULONG wait;
     ULONG step;
 
     XhciSuspLinkInit(&link, 1, 1);
     func_init(&f[0], D2);
+    func_init(&f[1], D2);
     f[0].WaitWake = 1;
     link.State = XHCI_SUSP_SUSPENDED;
     link.Armed = 1;
     CHECK_EQ(XhciSuspEvidence(&link, XHCI_SUSP_EV_WAKE), 1, "wake event");
     CHECK_EQ(XhciSuspEvidence(&link, XHCI_SUSP_EV_WAKE), 0,
              "one event per suspension");
-    /* Claimed: the WAIT_WAKE completed SUCCESS at once. */
+    /* Claimed: A's WAIT_WAKE completed SUCCESS at once, its hold set. */
     f[0].WaitWake = 0;
+    f[0].WokeHold = 1;
     XhciSuspWakeCount(&link, 1);
+    CHECK_EQ(link.ClaimDue, 0, "counted");
     step = XhciSuspBegin(&link, XHCI_SUSP_RUN_WAKE, 0, 0, 0, &wait);
     CHECK_EQ(XhciSuspEvidence(&link, XHCI_SUSP_EV_WAKE), 0,
              "repeated while RESUMING: ignored");
     while (step != XHCI_SUSP_STEP_END) {
         step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 100, &wait);
     }
-    CHECK_EQ(XhciSuspDecide(&link, f, 1, 1, 0, &d), XHCI_SUSP_DO_NONE,
+    CHECK_EQ(XhciSuspDecide(&link, f, 2, 1, 0, &d), XHCI_SUSP_DO_NONE,
              "claimed wake: no re-suspend before its D0");
+    CHECK_EQ(f[0].WokeHold, 1, "held");
+    /* A sibling's change does not release it (round 1, finding 2). */
+    f[1].PwrState = D3;
+    f[1].PwrWanted = D3;
+    f[1].Seq++;
+    f[1].DxPended = 1;
+    f[1].DxEpoch = 1;
+    CHECK_EQ(XhciSuspDecide(&link, f, 2, 1, 0, &d), XHCI_SUSP_DO_NONE,
+             "a sibling's D3: still held");
+    CHECK_EQ(f[1].CompleteDx, 1, "its Dx completes: logical Dx");
+    f[1].DxPended = 0;
     /* The woken function's completion routine sends D0: at once. */
     f[0].PwrState = D0;
     f[0].PwrWanted = D0;
-    CHECK_EQ(XhciSuspDecide(&link, f, 1, 1, 0, &d), XHCI_SUSP_DO_NONE,
+    f[0].Seq++;
+    CHECK_EQ(XhciSuspDecide(&link, f, 2, 1, 0, &d), XHCI_SUSP_DO_NONE,
              "D0: active");
+    CHECK_EQ(f[0].WokeHold, 0, "the hold ends at its D0");
     /* Later it idles again. */
     f[0].PwrState = D2;
     f[0].PwrWanted = D2;
     f[0].DxPended = 1;
     f[0].DxEpoch = 1;
-    CHECK_EQ(XhciSuspDecide(&link, f, 1, 1, 0, &d), XHCI_SUSP_DO_SUSPEND,
+    f[0].Seq++;
+    CHECK_EQ(XhciSuspDecide(&link, f, 2, 1, 0, &d), XHCI_SUSP_DO_SUSPEND,
              "and suspends again");
+
+    /* A woken function closed instead: the hold ends. */
+    func_init(&f[0], D2);
+    f[0].WokeHold = 1;
+    f[0].Closed = 1;
+    func_init(&f[1], D2);
+    XhciSuspLinkInit(&link, 1, 1);
+    CHECK_EQ(XhciSuspDecide(&link, f, 2, 1, 0, &d), XHCI_SUSP_DO_SUSPEND,
+             "closed: hold ended");
+    CHECK_EQ(f[0].WokeHold, 0, "cleared");
+}
+
+static void test_powerdown_d0(void)
+{
+    XHCI_SUSP_LINK link;
+    XHCI_SUSP_FUNC f[1];
+    XHCI_SUSP_DECISION d;
+
+    /* A D0 pended while the controller goes down is not completed by the
+     * walker that retires old-epoch Dx (round 1, finding 6). */
+    XhciSuspLinkInit(&link, 1, 1);
+    func_init(&f[0], D2);
+    f[0].PwrWanted = D0;
+    f[0].D0Pended = 1;
+    (VOID)XhciSuspDecide(&link, f, 1, 2, 1, &d);
+    CHECK_EQ(f[0].CompleteD0, 0, "PowerDown: D0 pends");
+    CHECK_EQ(f[0].ToD0, 0, "PowerDown: PwrState stays");
+    (VOID)XhciSuspDecide(&link, f, 1, 2, 0, &d);
+    CHECK_EQ(f[0].CompleteD0, 1, "powered again: completed");
 }
 
 static void test_start_reopen(void)
@@ -997,12 +1075,20 @@ static void test_idle_submit_and_batch(void)
     CHECK_EQ(XhciSuspIdleBatchReady(f, 2, XHCI_SUSP_ACTIVE, 1), 0,
              "a sibling has not submitted: held");
     f[1].Started = 0;
+    f[1].PwrState = D3;
     CHECK_EQ(XhciSuspIdleBatchReady(f, 2, XHCI_SUSP_ACTIVE, 1), 1,
-             "an unstarted sibling is not of the group");
+             "an unstarted sibling in D3 is not of the group");
+    f[1].PwrState = D0;
+    CHECK_EQ(XhciSuspIdleBatchReady(f, 2, XHCI_SUSP_ACTIVE, 1), 0,
+             "an unstarted sibling at D0 holds the device: no batch "
+             "(round 1, finding 1)");
     f[1].Started = 1;
     f[1].Closed = 1;
+    CHECK_EQ(XhciSuspIdleBatchReady(f, 2, XHCI_SUSP_ACTIVE, 1), 0,
+             "a closed sibling at D0 likewise");
+    f[1].PwrState = D2;
     CHECK_EQ(XhciSuspIdleBatchReady(f, 2, XHCI_SUSP_ACTIVE, 1), 1,
-             "a closed sibling is not either");
+             "a closed sibling in D2 is not of the group");
     f[1] = f[0];
     f[1].PwrState = D2;
     CHECK_EQ(XhciSuspIdleBatchReady(f, 2, XHCI_SUSP_ACTIVE, 1), 0,
@@ -1154,18 +1240,24 @@ static void test_idle_settle(void)
  * a claimer swaps the routine out under the lock. Each schedule must
  * complete the IRP at most once, and exactly once whenever it was
  * cancelled or claimed; the slot must be empty once it is complete.
+ * The claimer's second form is the callback thread's (6.4): it owns the
+ * IRP while its callback RUNS, the slot still naming it and no routine
+ * set, and then re-publishes it under the lock in the submitter's two
+ * steps, the irp->Cancel test included - a cancel that came while it ran
+ * must complete it then (Codex review of 36.29, round 1, note).
  */
 typedef struct _HS {
     int sub;        /* 0 not yet, 1 slot filled + routine set, 2 done    */
     int can;        /* 0 not yet, 1 swapped (routine pending), 2 done    */
-    int clm;        /* 0 not yet, 1 done                                 */
-    int lock;       /* submitter holds the lock between its two steps    */
+    int clm;        /* 0 not yet, 1 done; RUNNING form: 2 owned, 3
+                     * routine set again (lock held), 4 done              */
+    int lock;       /* held between a publication's two steps            */
     int routine;    /* the IRP's cancel routine is set                   */
     int cancel;     /* irp->Cancel                                       */
     int slot;
     int completed;
     int doCancel;
-    int doClaim;
+    int doClaim;    /* 1 claim and complete; 2 the RUNNING form          */
 } HS;
 
 static int hs_checks_failed;
@@ -1174,7 +1266,7 @@ static void hs_check_final(const HS *h)
 {
     int want;
 
-    want = (h->doCancel || h->doClaim) ? 1 : 0;
+    want = (h->doCancel || h->doClaim == 1) ? 1 : 0;
     if (h->completed > 1) {
         hs_checks_failed++;
     }
@@ -1257,10 +1349,42 @@ static void hs_run(HS h)
             n.routine = 0;
         }
         if (XhciSuspClaim((ULONG)n.slot, (ULONG)cleared)) {
+            if (n.doClaim == 1) {
+                n.slot = 0;
+                n.completed++;
+                n.clm = 1;
+            } else {
+                n.clm = 2;      /* RUNNING: owned, the slot kept */
+            }
+        } else {
+            n.clm = (n.doClaim == 1) ? 1 : 4;
+        }
+        hs_run(n);
+        moved = 1;
+    } else if (h.clm == 2 && !h.lock) {
+        n = h;
+        n.lock = 1;
+        n.routine = 1;
+        n.clm = 3;
+        hs_run(n);
+        moved = 1;
+    } else if (h.clm == 3) {
+        int cleared;
+        ULONG r;
+
+        n = h;
+        cleared = 0;
+        if (n.cancel) {
+            cleared = n.routine;
+            n.routine = 0;
+        }
+        r = XhciSuspPublish((ULONG)n.cancel, (ULONG)cleared);
+        if (r == XHCI_SUSP_PUB_TAKE_BACK) {
             n.slot = 0;
             n.completed++;
         }
-        n.clm = 1;
+        n.lock = 0;
+        n.clm = 4;
         hs_run(n);
         moved = 1;
     }
@@ -1286,7 +1410,7 @@ static void test_handshake(void)
 
     hs_checks_failed = 0;
     for (c = 0; c < 2; c++) {
-        for (k = 0; k < 2; k++) {
+        for (k = 0; k < 3; k++) {
             memset(&h, 0, sizeof(h));
             h.doCancel = c;
             h.doClaim = k;
@@ -1314,9 +1438,11 @@ static void test_handshake(void)
 /* Teardown's. */
 #define D_DETACH      0  /* (1): detach unclaimed entries (controller)    */
 #define D_OBSERVE     1  /* read the phase, choose by XhciSuspHandoff    */
-#define D_CAS         2  /* try the chosen compare-exchange               */
-#define D_JOIN        3  /* EXITING won: join the thread                  */
-#define D_DONE        4
+#define D_WAIT        2  /* (4): wait for the phase read to change        */
+#define D_CAS         3  /* try the chosen compare-exchange               */
+#define D_FINAL       4  /* won: (1) once more (XhciSuspHandoff's note)   */
+#define D_JOIN        5  /* EXITING won: join the thread                  */
+#define D_DONE        6
 
 typedef struct _PH {
     int phase;
@@ -1324,13 +1450,20 @@ typedef struct _PH {
     int d;
     int queue;      /* unclaimed entries                                 */
     int held;       /* the thread holds a claimed entry                  */
-    int dfrom;
+    int dfrom;      /* the phase teardown read, or its CAS's from        */
     int dto;
     int returns;    /* the callback may return                           */
 } PH;
 
 static int ph_violations;
 static int ph_finals;
+
+/* Teardown has won: the thread may touch neither the controller nor the
+ * queue from here on. */
+static int ph_won(const PH *p)
+{
+    return p->d == D_FINAL || p->d == D_JOIN || p->d == D_DONE;
+}
 
 static int ph_cas(PH *p, int actor, int from, int to)
 {
@@ -1347,42 +1480,59 @@ static int ph_cas(PH *p, int actor, int from, int to)
 
 static void ph_run(PH p);
 
-static void ph_thread(PH p)
+/* One step of the thread; `choice` picks among its branches. Returns 0
+ * when that branch does not exist or the thread cannot move. */
+static int ph_thread(PH p, int choice)
 {
     switch (p.t) {
     case T_TRY_CLAIM:
+        if (choice != 0) {
+            return 0;
+        }
         if (ph_cas(&p, XHCI_SUSP_ACTOR_THREAD, XHCI_SUSP_PH_IDLE,
                    XHCI_SUSP_PH_CLAIMING)) {
             p.t = T_DEQUEUE;
         } else if (p.phase == XHCI_SUSP_PH_EXITING) {
             p.t = T_EXITED;
         } else {
-            return;
+            return 0;
         }
         break;
     case T_DEQUEUE:
-        if (p.d == D_DONE || p.d == D_JOIN) {
+        if (ph_won(&p)) {
             ph_violations++;    /* controller touched after teardown won */
         }
-        if (p.queue > 0) {
+        if (choice == 0 && p.queue > 0) {
+            /* An entry claimed: its callback is called. */
             p.queue--;
             p.held = 1;
             (VOID)ph_cas(&p, XHCI_SUSP_ACTOR_THREAD, XHCI_SUSP_PH_CLAIMING,
                          XHCI_SUSP_PH_IN_CALLBACK);
             p.t = T_CALL;
-        } else {
+        } else if (choice == 1 && p.queue > 0) {
+            /* An entry whose slot was empty or cancel-owned: let go. */
+            p.queue--;
             (VOID)ph_cas(&p, XHCI_SUSP_ACTOR_THREAD, XHCI_SUSP_PH_CLAIMING,
                          XHCI_SUSP_PH_IDLE);
             p.t = T_TRY_CLAIM;
+        } else if (choice == 0 && p.queue == 0) {
+            (VOID)ph_cas(&p, XHCI_SUSP_ACTOR_THREAD, XHCI_SUSP_PH_CLAIMING,
+                         XHCI_SUSP_PH_IDLE);
+            p.t = T_TRY_CLAIM;
+        } else {
+            return 0;
         }
         break;
     case T_CALL:
-        if (!p.returns) {
-            return;
+        if (choice != 0 || !p.returns) {
+            return 0;
         }
         p.t = T_TRY_RET;
         break;
     case T_TRY_RET:
+        if (choice != 0) {
+            return 0;
+        }
         if (ph_cas(&p, XHCI_SUSP_ACTOR_THREAD, XHCI_SUSP_PH_IN_CALLBACK,
                    XHCI_SUSP_PH_RETURNING)) {
             p.t = T_BOOK;
@@ -1391,28 +1541,44 @@ static void ph_thread(PH p)
         }
         break;
     case T_BOOK:
-        if (p.d == D_DONE || p.d == D_JOIN) {
+        if (ph_won(&p)) {
             ph_violations++;
         }
-        p.held = 0;
+        if (choice == 0) {
+            p.held = 0;         /* settled and let go                    */
+        } else if (choice == 1) {
+            p.held = 0;         /* put back as unclaimed                 */
+            p.queue++;
+        } else {
+            return 0;
+        }
         p.t = T_TRY_IDLE;
         break;
     case T_TRY_IDLE:
+        if (choice != 0) {
+            return 0;
+        }
         (VOID)ph_cas(&p, XHCI_SUSP_ACTOR_THREAD, XHCI_SUSP_PH_RETURNING,
                      XHCI_SUSP_PH_IDLE);
         p.t = T_TRY_CLAIM;
         break;
     case T_ABANDONED:
+        if (choice != 0) {
+            return 0;
+        }
+        /* It completes the IRP it owns and frees the context: nothing
+         * of the controller. */
         p.held = 0;
         p.t = T_EXITED;
         break;
     default:
-        return;
+        return 0;
     }
     ph_run(p);
+    return 1;
 }
 
-static void ph_teardown(PH p)
+static int ph_teardown(PH p)
 {
     ULONG h;
 
@@ -1432,45 +1598,49 @@ static void ph_teardown(PH p)
             p.dto = XHCI_SUSP_PH_ABANDONED;
             p.d = D_CAS;
         } else if (h == XHCI_SUSP_HAND_WAIT) {
-            /* Wait for it to leave the phase, then retry from (1). */
-            if (p.phase == XHCI_SUSP_PH_CLAIMING ||
-                p.phase == XHCI_SUSP_PH_RETURNING) {
-                return;
-            }
-            p.d = D_DETACH;
+            p.dfrom = p.phase;
+            p.dto = 0;
+            p.d = D_WAIT;
         } else {
             ph_violations++;
-            return;
+            return 0;
         }
+        break;
+    case D_WAIT:
+        if (p.phase == p.dfrom) {
+            return 0;
+        }
+        p.d = D_DETACH;
         break;
     case D_CAS:
         if (ph_cas(&p, XHCI_SUSP_ACTOR_TEARDOWN, p.dfrom, p.dto)) {
-            if (p.dto == XHCI_SUSP_PH_EXITING) {
-                if (p.held) {
-                    ph_violations++;    /* a claimed entry left behind */
-                }
-                p.d = D_JOIN;
-            } else {
-                p.d = D_DONE;
+            if (p.dto == XHCI_SUSP_PH_EXITING && p.held) {
+                ph_violations++;    /* a claimed entry left behind */
             }
+            p.d = D_FINAL;
         } else {
             p.d = D_DETACH;
         }
         break;
+    case D_FINAL:
+        p.queue = 0;
+        p.d = (p.dto == XHCI_SUSP_PH_EXITING) ? D_JOIN : D_DONE;
+        break;
     case D_JOIN:
         if (p.t != T_EXITED) {
-            return;
+            return 0;
         }
         p.d = D_DONE;
         break;
     default:
-        return;
+        return 0;
     }
     ph_run(p);
+    return 1;
 }
 
 /* The model's states are few: each is explored once. */
-static unsigned char ph_seen[1UL << 19];
+static unsigned char ph_seen[1UL << 20];
 
 static unsigned long ph_key(const PH *p)
 {
@@ -1483,6 +1653,7 @@ static unsigned long ph_key(const PH *p)
 static void ph_run(PH p)
 {
     unsigned long key;
+    int c;
 
     key = ph_key(&p);
     if (ph_seen[key]) {
@@ -1491,31 +1662,39 @@ static void ph_run(PH p)
     ph_seen[key] = 1;
     if (p.d == D_DONE) {
         ph_finals++;
+        /* Nothing left queued, and the thread can add nothing now. */
+        if (p.queue != 0) {
+            ph_violations++;
+        }
     }
-    ph_thread(p);
-    ph_teardown(p);
+    for (c = 0; c < 2; c++) {
+        (VOID)ph_thread(p, c);
+    }
+    (VOID)ph_teardown(p);
 }
 
-/* Teardown alone, the thread frozen where it is: it must finish unless
- * the thread is in a phase that cannot block (CLAIMING, RETURNING). */
+/* Teardown alone, the thread frozen where it is: 1 when teardown
+ * finishes, -1 when it waits on a phase that cannot block (CLAIMING,
+ * RETURNING), 0 when it is stuck otherwise. */
 static int ph_solo(PH p)
 {
     int i;
     ULONG h;
 
     for (i = 0; i < 20; i++) {
-        if (p.d == D_DONE) {
+        switch (p.d) {
+        case D_DONE:
             return 1;
-        }
-        if (p.d == D_JOIN) {
-            return (p.t == T_EXITED || p.t == T_TRY_CLAIM) ? 1 : 0;
-        }
-        if (p.d == D_DETACH) {
+        case D_JOIN:
+            return (p.t == T_EXITED || p.t == T_TRY_CLAIM ||
+                    p.t == T_CALL) ? 1 : 0;
+        case D_DETACH:
+        case D_FINAL:
             p.queue = 0;
-            p.d = D_OBSERVE;
-            continue;
-        }
-        if (p.d == D_OBSERVE) {
+            p.d = (p.d == D_DETACH) ? D_OBSERVE
+                  : (p.dto == XHCI_SUSP_PH_EXITING) ? D_JOIN : D_DONE;
+            break;
+        case D_OBSERVE:
             h = XhciSuspHandoff((ULONG)p.phase);
             if (h == XHCI_SUSP_HAND_WAIT) {
                 return -1;
@@ -1528,15 +1707,17 @@ static int ph_solo(PH p)
             p.dto = (h == XHCI_SUSP_HAND_EXIT) ? XHCI_SUSP_PH_EXITING
                                                : XHCI_SUSP_PH_ABANDONED;
             p.d = D_CAS;
-            continue;
-        }
-        if (p.d == D_CAS) {
+            break;
+        case D_CAS:
             if (p.phase == p.dfrom) {
                 p.phase = p.dto;
-                p.d = (p.dto == XHCI_SUSP_PH_EXITING) ? D_JOIN : D_DONE;
+                p.d = D_FINAL;
             } else {
                 p.d = D_DETACH;
             }
+            break;
+        default:
+            return 0;
         }
     }
     return 0;
@@ -1580,8 +1761,10 @@ static void test_phases(void)
     CHECK_EQ(XhciSuspHandoff(XHCI_SUSP_PH_EXITING), XHCI_SUSP_HAND_DONE,
              "EXITING");
 
-    /* Every interleaving: a QUEUED entry (and one behind it), a callback
-     * that returns or never does, against teardown. */
+    /* Every interleaving: entries queued (one behind another), a
+     * callback that returns or never does, an entry let go empty or put
+     * back as unclaimed after its callback, against teardown with its
+     * wait-and-retry and its last (1). */
     ph_violations = 0;
     ph_finals = 0;
     memset(ph_seen, 0, sizeof(ph_seen));
@@ -1595,8 +1778,8 @@ static void test_phases(void)
         }
     }
     CHECK_EQ(ph_violations, 0,
-             "no controller access after teardown won, no entry left held, "
-             "only allowed compare-exchanges");
+             "no controller or queue access after teardown won, no entry "
+             "left held or queued, only allowed compare-exchanges");
     CHECK(ph_finals > 0, "teardown finishes in some schedules");
 
     /* A callback that never returns, and an idle thread: teardown alone
@@ -1619,8 +1802,8 @@ static void test_phases(void)
 /* Finalization (4.4 (b) finish, (e))                                  */
 /* ------------------------------------------------------------------ */
 
-static ULONG fin(ULONG thread, ULONG exited, ULONG urbs, ULONG cb,
-                 ULONG halted)
+static ULONG fin2(ULONG thread, ULONG exited, ULONG urbs, ULONG cb,
+                  ULONG power, ULONG halted, ULONG pinned)
 {
     XHCI_SUSP_FIN_IN in;
 
@@ -1628,8 +1811,16 @@ static ULONG fin(ULONG thread, ULONG exited, ULONG urbs, ULONG cb,
     in.ThreadExited = exited;
     in.UrbsPending = urbs;
     in.CallbackRunning = cb;
+    in.PowerPending = power;
     in.DmaHalted = halted;
+    in.Pinned = pinned;
     return XhciSuspFinalize(&in);
+}
+
+static ULONG fin(ULONG thread, ULONG exited, ULONG urbs, ULONG cb,
+                 ULONG halted)
+{
+    return fin2(thread, exited, urbs, cb, 0, halted, 0);
 }
 
 static void test_finalize(void)
@@ -1649,6 +1840,21 @@ static void test_finalize(void)
              "a callback waiting on cancelled I/O, no proof: quarantine");
     CHECK_EQ(fin(0, 1, 0, 0, 0), XHCI_SUSP_FIN_NOW,
              "after exit, nothing owed");
+    /* A WAIT_WAKE whose cancel routine owns it, its completion not yet
+     * returned (round 1, finding 4). */
+    CHECK_EQ(fin2(0, 0, 0, 0, 1, 0, 0), XHCI_SUSP_FIN_WAIT,
+             "a power completion still running: waits");
+    CHECK_EQ(fin2(1, 0, 0, 0, 1, 0, 0), XHCI_SUSP_FIN_DEFER,
+             "...or the thread defers");
+    /* Containment pinned the buffer with the thread alive (round 1,
+     * finding 5). */
+    CHECK_EQ(fin2(0, 0, 1, 0, 0, 0, 1), XHCI_SUSP_FIN_QUARANTINE,
+             "pinned, thread alive, URBs pinned: quarantine");
+    CHECK_EQ(fin2(1, 0, 0, 1, 0, 0, 1), XHCI_SUSP_FIN_QUARANTINE,
+             "pinned, the thread as caller: quarantine, not deferred "
+             "forever");
+    CHECK_EQ(fin2(0, 0, 0, 0, 0, 0, 1), XHCI_SUSP_FIN_NOW,
+             "pinned, nothing owed: finalized");
 }
 
 /* ------------------------------------------------------------------ */
@@ -1710,7 +1916,8 @@ int main(void)
     test_wake_at_observe();
     test_resume_outcomes();
     test_latch_and_rearm();
-    test_claimed_wake_latch();
+    test_woke_hold();
+    test_powerdown_d0();
     test_start_reopen();
     test_gone();
     test_digest();

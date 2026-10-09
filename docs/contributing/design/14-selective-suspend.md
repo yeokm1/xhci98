@@ -230,14 +230,16 @@ ask, and perform the one step asked. What it decides:
   completes - a pended Dx whose epoch is not the controller's (4.4), a
   pended Dx that is no longer the last (a sibling returned to D0 while the
   link stayed ACTIVE: logical Dx holds, 3.5), every pended D0 once the link
-  is ACTIVE (4.3). A PDO that is closed or not started keeps its
-  `PwrState`, D0 for one never powered down, so it holds the device awake:
-  the conservative reading of 4.3's "any sibling" (a function without a
-  driver, or disabled while D0, keeps today's behaviour for the device).
-  The thread writes SUSPENDING in the **same** hold in which it read the
-  slots that asked for it, so a D0 accepted after that hold sees a link
-  that is not ACTIVE and pends (4.3), and one accepted before it is in the
-  slots the thread read. A START that reopens a PDO (4.4) while its
+  is ACTIVE and the controller not `PowerDown` (4.3, 4.4; a D0 pended
+  across the controller's transition is never completed by the walker
+  that retires old-epoch Dx). A PDO that is closed or not started keeps
+  its `PwrState`, D0 for one never powered down, so it holds the device
+  awake: the conservative reading of 4.3's "any sibling" (a function
+  without a driver, or disabled while D0, keeps today's behaviour for the
+  device). The thread writes SUSPENDING in the **same** hold in which it
+  read the slots that asked for it, so a D0 accepted after that hold sees
+  a link that is not ACTIVE and pends (4.3), and one accepted before it is
+  in the slots the thread read. A START that reopens a PDO (4.4) while its
   device's link is not ACTIVE - a function disabled and enabled on the
   same device, whose driver sent D3 before its REMOVE and so let the link
   suspend - writes `PwrWanted` D0 and leaves `PwrState` to the thread:
@@ -252,36 +254,55 @@ ask, and perform the one step asked. What it decides:
   D0, or while the link is not ACTIVE (the PDO is already Dx there, 4.3's
   D2->D3): complete at once; otherwise pend, the last to leave D0. A D0:
   complete at once only when the link is ACTIVE and the controller is not
-  `PowerDown`; otherwise pend.
+  `PowerDown`; otherwise pend. Every D-IRP, WAIT_WAKE and START dispatch
+  accepts, and every cancel it settles, adds one to the slot's change
+  count `PwrSeq` (controller lock); the machine's own completions do not.
 - **The sequences of 3.4 and 3.6 as steps**: the executor begins a suspend
   or a resume, performs the step it is given and reports its result; the
   machine answers the next step or the end and its outcome (3.5). A
   refusal after the stop asks for the restart no sooner than 10 ms after
-  the Stop Endpoint (SP=1's minimum, as 3.5); NOT_SENT at the arm is
-  retried once, after the ring drains, within 100 ms. Wake evidence
-  arriving while SUSPENDING is kept and taken at the observation (3.7); a
-  wake observed there is the device-initiated resume: at a root port
-  TDRSMDN from the PLC and then U0, at a hub the hub has timed it. The
-  disarm after a verified U0 is best effort - a STALL or a failure is
-  counted and the resume goes on, the link being usable; a timeout is the
-  uncertain outcome. The dwell's start is the time U3 was observed. A
-  refusal after a successful arm leaves the feature set: the link never
-  left U0 and EP0 may be stopped, so no disarm is sent; the record keeps
-  `Armed`, the next resume disarms, and a wake meanwhile is 5.4's
-  unclaimed one. A pended last Dx completes when the decision after the
-  sequence finds the link not ACTIVE, or ACTIVE and latched; a suspend
-  that ended in a wake without a claim suspends again on the same pass
-  and its Dx completes when that one ends.
-- **After a wake**: the machine does not suspend the device again until its
-  slots change, when the wake completed at least one WAIT_WAKE - so the
-  woken function's own D0, which its completion routine sends, finds the
-  link ACTIVE instead of racing a re-suspend that would hold its input
-  (5.4's "a remote wake ends it through the woken function's D0"). A wake
-  that claimed nothing (`WakeUnclaimed`) and 5.4's rearm are internal
-  cycles and suspend again on the same pass. A refusal latches the same
-  way (3.5: "does not retry until the slots change"); the slots are
-  compared by a digest of each PDO's `PwrState`, `PwrWanted`, pended Dx and
-  D0 and held WAIT_WAKE.
+  the Stop Endpoint (SP=1's minimum, as 3.5). NOT_SENT at the arm is
+  retried once: the repeated arm step carries a 100 ms bound on EP0's
+  drain, which the executor's EP0-quiet wait must keep to, and a ring not
+  drained by then is NOT_SENT again, a refusal. Wake evidence arriving
+  while SUSPENDING is kept and taken as soon as the U3 request is done -
+  it is itself the proof that the device entered U3 and left it, and its
+  change may already be acknowledged, so it is not waited for again at
+  the observation; a wake observed at the observation is taken the same
+  way. Either is the device-initiated resume: at a root port TDRSMDN from
+  the PLC and then U0, at a hub the hub has timed it. A disconnect
+  reported while a sequence runs is kept too, and ends the sequence GONE
+  at its next step, ahead of any wake (3.7's precedence). The disarm
+  after a verified U0 is best effort - a STALL, NOT_SENT or failure is
+  counted and the resume goes on, the link being usable, but only a
+  disarm the device took clears `Armed`, so the next resume tries again;
+  a timeout is the uncertain outcome. The dwell's start is the time U3
+  was observed. A refusal after a successful arm leaves the feature set:
+  the link never left U0 and EP0 may be stopped, so no disarm is sent; the
+  record keeps `Armed`, the next resume disarms, and a wake meanwhile is
+  5.4's unclaimed one. A pended last Dx completes when the decision after
+  the sequence finds the link not ACTIVE, or ACTIVE and not suspending
+  again; a suspend that ended in a wake without a claim suspends again on
+  the same pass and its Dx completes when that one ends.
+- **After a wake that claimed**: each PDO whose WAIT_WAKE the wake
+  completed gets `WokeHold` (set by the executor at the claim, in the same
+  hold), and the device is not suspended again while any PDO holds it; a
+  PDO's hold ends when its `PwrState` is D0 again, or when it is closed or
+  its device GONE. So the woken function's own D0, which its completion
+  routine sends, finds the link ACTIVE instead of racing a re-suspend that
+  would hold its input (5.4's "a remote wake ends it through the woken
+  function's D0"), whatever its siblings do meanwhile. A function whose
+  driver never sends that D0 leaves the device awake, which is today's
+  behaviour. A wake that claimed nothing (`WakeUnclaimed`) and 5.4's rearm
+  are internal cycles and suspend again on the same pass.
+- **After a refusal** (3.5: "does not retry until the slots change"), and
+  after an uncertain outcome that ended ACTIVE: the slots the decision
+  after the sequence reads are latched by a digest of each PDO's
+  `PwrSeq`, `PwrState`, `PwrWanted`, pended D0, held WAIT_WAKE and
+  closure - a pended Dx is not in it, since the machine completes that
+  itself - and no suspend is begun until the digest moves. The change
+  count makes a D0 and a fresh Dx between two passes a change though the
+  states read as before.
 - **Wake evidence** (3.7, 3.8): the root port's sample and a USB 2.0 hub
   port's (status, the change mask acknowledged, the generation) classified
   in 3.7's precedence; the observation at (5); the verification at 3.6.
@@ -291,15 +312,30 @@ ask, and perform the one step asked. What it decides:
   configuration's remote-wake bit and 9x wake.
 - **The idle notification** (section 6): the submission's answer, a
   batch's readiness, the claim at call time with its three branches, the
-  settlement table of 6.5 and which events end an episode.
+  settlement table of 6.5 and which events end an episode. A batch is not
+  formed while a PDO outside the group (not started, or closed) is D0:
+  that PDO holds the device awake (above), and a callback would send its
+  siblings to Dx on a link that cannot suspend, with nothing to end their
+  episode.
 - **The callback context's phases** (4.4): which compare-exchanges each
   actor may make, and teardown's handoff step for a phase it observed.
-- **Finalization of a PDO** (4.4 (b) finish and (e)): finalize, wait (a PnP
-  caller, the thread alive), defer (the enum thread as caller) or
-  quarantine (no DMA-halt proof).
+  Teardown runs its step (1) once more after it wins EXITING or
+  ABANDONED: the thread may have put an entry back as unclaimed after
+  teardown's first (1) and gone IDLE before teardown read the phase, and
+  once teardown has won, the thread touches the queue no more.
+- **Finalization of a PDO** (4.4 (b) finish and (e)): its prerequisites
+  are `UrbsPending`, the idle rundown and `PowerPending` (a D-IRP or
+  WAIT_WAKE whose completion has not returned, a cancel routine's
+  included, 4.2) all at 0. Owed with the buffer pinned (the DMA-halt
+  proof failed, `CommonBufferPinned`, the thread alive or not):
+  quarantine, since the pinned URBs never end. Otherwise owed: defer (the
+  enum thread as caller), quarantine (the thread exited and no proof), or
+  wait (a PnP caller).
 - **Publication and claim of a cancellable IRP** (4.2): what the submitter
   does with the `irp->Cancel` test's two answers, and what a claimer owns
-  for each answer of `IoSetCancelRoutine(irp, NULL)`.
+  for each answer of `IoSetCancelRoutine(irp, NULL)`; the callback
+  thread's re-publication after a callback returns is the submitter's two
+  steps again.
 
 The pure core returns status codes of its own (`XHCI_SUSP_ST_*`), which the
 executor maps to `NTSTATUS`; the D-states are `DEVICE_POWER_STATE`'s values.
@@ -316,6 +352,8 @@ All under the **controller lock** (innermost, record 13 section 5.4):
 | `pdo->PwrWanted` | the D-state asked | dispatch |
 | `pdo->PwrState` | the D-state the bus acts on | dispatch (a Dx: at once), thread (D0: at ACTIVE) |
 | `pdo->PwrClosed` | admission closed | teardown |
+| `pdo->PwrSeq` | the slot's change count (3.9) | dispatch, cancel |
+| `pdo->WokeHold` | a wake completed its WAIT_WAKE (3.9) | thread |
 | `pdo->IdleState`, `IdleBatch` | section 6 | dispatch, cancel, callback thread, teardown |
 | `dev->Link`, `dev->Episode`, pipes' `SuspendPause` | sections 3, 5 | thread |
 | `hc->PowerEpoch` | controller session | power path, recovery |
@@ -478,7 +516,10 @@ once (5.4 reconciles wake). D0 never completes before ACTIVE, except on GONE
     its context reference, and the teardown proceeds without joining. (4)
     Else the phase is CLAIMING or RETURNING: the thread is in a step that
     cannot block; wait for it to leave that phase and retry from (1) (an
-    entry it put back as unclaimed is then drained).
+    entry it put back as unclaimed is then drained). (5) Having won in (2)
+    or (3), run (1) once more: an entry put back after the first (1) by a
+    thread that went IDLE before teardown read the phase is drained then,
+    the thread touching the queue no more (3.9).
   - **An abandoned thread's return** (if ever): its IN_CALLBACK ->
     RETURNING fails on ABANDONED, so it touches nothing of the controller -
     no lock, no slot, no re-publication. It completes the idle IRP it owns

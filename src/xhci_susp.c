@@ -117,7 +117,7 @@ VOID XhciSuspLinkInit(PXHCI_SUSP_LINK link, ULONG root, ULONG generation)
     link->BusyRetried = 0;
     link->WakeKept = 0;
     link->WakeTaken = 0;
-    link->WakeClaimed = 0;
+    link->GoneKept = 0;
     link->Internal = 0;
     link->LatchDue = 0;
     link->Latched = 0;
@@ -132,15 +132,19 @@ ULONG XhciSuspDigest(const XHCI_SUSP_FUNC *funcs, ULONG count)
     ULONG d;
     ULONG i;
 
-    /* A pended Dx is not in it: its PwrState already is (4.1), and the
-     * Dx's completion at a sequence's end must not read as a change. */
+    /* Seq moves with every change dispatch accepts, so a D0 and a fresh
+     * Dx between two passes is a change though the states read alike
+     * (Codex review of 36.29, round 1, finding 3). A pended Dx is not in
+     * it: the machine's own completion of it must not read as one. */
     d = 0x811C9DC5UL ^ count;
     for (i = 0; i < count; i++) {
         d = (d ^ ((funcs[i].PwrState & 7UL) |
                   ((funcs[i].PwrWanted & 7UL) << 3) |
                   ((funcs[i].D0Pended ? 1UL : 0UL) << 6) |
                   ((funcs[i].WaitWake ? 1UL : 0UL) << 7) |
-                  (i << 8))) * 0x01000193UL;
+                  ((funcs[i].Closed ? 1UL : 0UL) << 8) |
+                  (i << 9))) * 0x01000193UL;
+        d = (d ^ funcs[i].Seq) * 0x01000193UL;
     }
     return d;
 }
@@ -157,7 +161,9 @@ ULONG XhciSuspDecide(PXHCI_SUSP_LINK link, PXHCI_SUSP_FUNC funcs,
 {
     ULONG i;
     ULONG active;
+    ULONG awake;
     ULONG allDx;
+    ULONG held;
     ULONG digest;
 
     out->Do = XHCI_SUSP_DO_NONE;
@@ -167,6 +173,9 @@ ULONG XhciSuspDecide(PXHCI_SUSP_LINK link, PXHCI_SUSP_FUNC funcs,
     out->Completions = 0;
 
     active = (link->State == XHCI_SUSP_ACTIVE) ? 1UL : 0UL;
+    /* D0 is written and completed only on a powered ACTIVE link (4.3,
+     * 4.4), or completed on GONE, never powered (round 1, finding 6). */
+    awake = (active && !powerDown) ? 1UL : 0UL;
     for (i = 0; i < count; i++) {
         funcs[i].ToD0 = 0;
         funcs[i].CompleteDx = 0;
@@ -174,13 +183,11 @@ ULONG XhciSuspDecide(PXHCI_SUSP_LINK link, PXHCI_SUSP_FUNC funcs,
         if (funcs[i].PwrWanted == XHCI_SUSP_D0 &&
             (funcs[i].PwrState != XHCI_SUSP_D0 || funcs[i].D0Pended)) {
             out->WantD0 = 1;
-            /* 4.3: D0 only at ACTIVE, or on GONE (completed, never
-             * powered). */
-            if (active) {
+            if (awake) {
                 funcs[i].ToD0 = 1;
             }
             if (funcs[i].D0Pended &&
-                (active || link->State == XHCI_SUSP_GONE)) {
+                (awake || link->State == XHCI_SUSP_GONE)) {
                 funcs[i].CompleteD0 = 1;
             }
         }
@@ -190,9 +197,20 @@ ULONG XhciSuspDecide(PXHCI_SUSP_LINK link, PXHCI_SUSP_FUNC funcs,
     }
 
     allDx = (count != 0) ? 1UL : 0UL;
+    held = 0;
     for (i = 0; i < count; i++) {
         if (funcs[i].PwrState == XHCI_SUSP_D0 || funcs[i].ToD0) {
             allDx = 0;
+        }
+        /* A woken function's hold ends at its own D0, or when it is
+         * closed or its device gone (round 1, finding 2). */
+        if (funcs[i].WokeHold &&
+            (funcs[i].PwrState == XHCI_SUSP_D0 || funcs[i].ToD0 ||
+             funcs[i].Closed || link->State == XHCI_SUSP_GONE)) {
+            funcs[i].WokeHold = 0;
+        }
+        if (funcs[i].WokeHold) {
+            held = 1;
         }
     }
     out->AllDx = allDx;
@@ -210,14 +228,14 @@ ULONG XhciSuspDecide(PXHCI_SUSP_LINK link, PXHCI_SUSP_FUNC funcs,
 
     switch (link->State) {
     case XHCI_SUSP_ACTIVE:
+        digest = XhciSuspDigest(funcs, count);
         if (link->LatchDue) {
-            /* The slots at the end of a refusal, an uncertain outcome
-             * ended ACTIVE, or a claimed wake: no suspend on them. */
+            /* The slots at the end of a refusal, or of an uncertain
+             * outcome that ended ACTIVE: no suspend on them. */
             link->LatchDue = 0;
             link->Latched = 1;
-            link->LatchDigest = XhciSuspDigest(funcs, count);
+            link->LatchDigest = digest;
         }
-        digest = XhciSuspDigest(funcs, count);
         if (link->Latched && digest != link->LatchDigest) {
             /* The slots changed since: the latch is spent, whatever
              * they now ask. */
@@ -226,7 +244,7 @@ ULONG XhciSuspDecide(PXHCI_SUSP_LINK link, PXHCI_SUSP_FUNC funcs,
         if (!allDx || powerDown) {
             break;
         }
-        if (link->Latched) {
+        if (link->Latched || held) {
             /* Not this time: logical Dx holds for a pended one. */
             for (i = 0; i < count; i++) {
                 if (funcs[i].DxPended) {
@@ -235,7 +253,6 @@ ULONG XhciSuspDecide(PXHCI_SUSP_LINK link, PXHCI_SUSP_FUNC funcs,
             }
             break;
         }
-        link->Latched = 0;
         out->Do = XHCI_SUSP_DO_SUSPEND;
         break;
     case XHCI_SUSP_SUSPENDED:
@@ -353,7 +370,7 @@ ULONG XhciSuspBegin(PXHCI_SUSP_LINK link, ULONG kind, ULONG armWanted,
         link->BusyRetried = 0;
         link->WakeKept = 0;
         link->WakeTaken = 0;
-        link->WakeClaimed = 0;
+        link->GoneKept = 0;
         return xhciSuspStep(link, XHCI_SUSP_STEP_GATE, 0, nowMs, waitMs);
     }
     if (kind == XHCI_SUSP_RUN_WAKE) {
@@ -389,7 +406,9 @@ ULONG XhciSuspAdvance(PXHCI_SUSP_LINK link, ULONG result, ULONG nowMs,
     if (step == 0 || step == XHCI_SUSP_STEP_END) {
         return XHCI_SUSP_STEP_END;
     }
-    if (result == XHCI_SUSP_RES_DISCONNECT) {
+    if (result == XHCI_SUSP_RES_DISCONNECT || link->GoneKept) {
+        /* A disconnect outranks everything, a wake kept included (3.7). */
+        link->GoneKept = 0;
         return xhciSuspEnd(link, XHCI_SUSP_GONE, XHCI_SUSP_OUT_GONE, waitMs);
     }
 
@@ -439,6 +458,14 @@ ULONG XhciSuspAdvance(PXHCI_SUSP_LINK link, ULONG result, ULONG nowMs,
         return xhciSuspRefuse(link, XHCI_SUSP_WHY_FAILED, nowMs, waitMs);
 
     case XHCI_SUSP_STEP_U3:
+        if (result == XHCI_SUSP_RES_OK && link->WakeKept) {
+            /* The wake already seen is the proof that the device entered
+             * U3 and left it: it is taken now, not waited for again at
+             * the observation, where its change may already be
+             * acknowledged (Codex review of 36.29, round 1, finding 7). */
+            link->U3Ms = nowMs;
+            return xhciSuspWakeBranch(link, nowMs, waitMs);
+        }
         if (result == XHCI_SUSP_RES_OK) {
             return xhciSuspStep(link, XHCI_SUSP_STEP_OBSERVE,
                                 XHCI_SUSP_OBSERVE_MS, nowMs, waitMs);
@@ -499,8 +526,12 @@ ULONG XhciSuspAdvance(PXHCI_SUSP_LINK link, ULONG result, ULONG nowMs,
             return xhciSuspEnd(link, XHCI_SUSP_RECOVERING,
                                XHCI_SUSP_OUT_UNCERTAIN, waitMs);
         }
-        /* Best effort on a usable link (3.9): a refusal is counted. */
-        link->Armed = 0;
+        /* Best effort on a usable link (3.9). Only a disarm the device
+         * took clears Armed: after a refusal the feature may still be set,
+         * and the next resume tries again (round 1, finding 9). */
+        if (result == XHCI_SUSP_RES_OK) {
+            link->Armed = 0;
+        }
         return xhciSuspStep(link, XHCI_SUSP_STEP_RESTART, 0, nowMs, waitMs);
 
     case XHCI_SUSP_STEP_RESTART:
@@ -508,9 +539,6 @@ ULONG XhciSuspAdvance(PXHCI_SUSP_LINK link, ULONG result, ULONG nowMs,
             link->LatchDue = 1;
             return xhciSuspEnd(link, XHCI_SUSP_ACTIVE, XHCI_SUSP_OUT_REFUSED,
                                waitMs);
-        }
-        if (link->Kind == XHCI_SUSP_RUN_WAKE && link->WakeClaimed) {
-            link->LatchDue = 1;
         }
         return xhciSuspEnd(link, XHCI_SUSP_ACTIVE, XHCI_SUSP_OUT_ACTIVE,
                            waitMs);
@@ -617,6 +645,8 @@ ULONG XhciSuspEvidence(PXHCI_SUSP_LINK link, ULONG event)
     if (event == XHCI_SUSP_EV_DISCONNECT) {
         if (link->Step == 0 || link->Step == XHCI_SUSP_STEP_END) {
             XhciSuspGone(link);
+        } else {
+            link->GoneKept = 1;
         }
         return 0;
     }
@@ -645,10 +675,10 @@ ULONG XhciSuspWakeClaims(ULONG stamp, ULONG watermark, ULONG pwrState)
 
 VOID XhciSuspWakeCount(PXHCI_SUSP_LINK link, ULONG claimed)
 {
+    /* The claimed PDOs' WokeHold is the executor's to set, in the slots
+     * (3.9); the count is the log's. */
+    (VOID)claimed;
     link->ClaimDue = 0;
-    if (claimed != 0) {
-        link->WakeClaimed = 1;
-    }
 }
 
 static ULONG xhciSuspRootGone(ULONG portsc)
@@ -770,6 +800,12 @@ ULONG XhciSuspIdleBatchReady(const XHCI_SUSP_IDLE_FUNC *funcs, ULONG count,
     started = 0;
     for (i = 0; i < count; i++) {
         if (!funcs[i].Started || funcs[i].Closed) {
+            if (funcs[i].PwrState == XHCI_SUSP_D0) {
+                /* It holds the device awake (3.9): a callback now would
+                 * leave its siblings in Dx on a link that cannot
+                 * suspend (Codex review of 36.29, round 1, finding 1). */
+                return 0;
+            }
             continue;
         }
         started++;
@@ -909,9 +945,17 @@ ULONG XhciSuspFinalize(const XHCI_SUSP_FIN_IN *in)
 {
     ULONG owed;
 
-    owed = (in->UrbsPending || in->CallbackRunning) ? 1UL : 0UL;
+    owed = (in->UrbsPending || in->CallbackRunning || in->PowerPending)
+               ? 1UL
+               : 0UL;
     if (!owed) {
         return XHCI_SUSP_FIN_NOW;
+    }
+    if (in->Pinned) {
+        /* The proof failed: the pinned URBs never end, and a callback
+         * waiting on them never returns, whether or not the thread is
+         * alive (4.4 quarantine; round 1, finding 5). */
+        return XHCI_SUSP_FIN_QUARANTINE;
     }
     if (in->CallerIsThread) {
         /* Never a wait on the enum thread by itself (4.4 (b) finish). */

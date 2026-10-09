@@ -109,6 +109,16 @@ typedef struct _XHCI_SUSP_FUNC {
     ULONG DxEpoch;          /* ...accepted in this controller epoch      */
     ULONG D0Pended;         /* a D0 IRP is in its slot                   */
     ULONG WaitWake;         /* a WAIT_WAKE is held                       */
+    ULONG Closed;           /* PwrClosed: torn down, or not started      */
+    ULONG Seq;              /* the slot's change count: dispatch adds one
+                             * for every D-IRP, WAIT_WAKE and START it
+                             * accepts and every cancel it settles, never
+                             * for the machine's own completions (3.9)   */
+    /* in and out: the executor writes it back into the slot */
+    ULONG WokeHold;         /* a wake completed this PDO's WAIT_WAKE: the
+                             * device is not suspended again until it is
+                             * D0 or closed (3.9); set by the executor at
+                             * the claim, cleared here                   */
     /* outputs of XhciSuspDecide */
     ULONG CompleteDx;       /* claim and complete the pended Dx, SUCCESS */
     ULONG ToD0;             /* write PwrState D0: the link is ACTIVE and
@@ -165,9 +175,9 @@ typedef struct _XHCI_SUSP_LINK {
     ULONG BusyRetried;      /* NOT_SENT's one retry is spent             */
     ULONG WakeKept;         /* wake evidence kept while SUSPENDING       */
     ULONG WakeTaken;        /* this suspension's wake event is recorded  */
-    ULONG WakeClaimed;      /* ...and it completed at least one WAIT_WAKE */
+    ULONG GoneKept;         /* a disconnect reported while a sequence ran */
     ULONG Internal;         /* the sequence is an internal cycle (5.4)   */
-    ULONG LatchDue;         /* latch at the next decision (3.9)          */
+    ULONG LatchDue;         /* a refusal: latch at the next decision     */
     ULONG Latched;          /* no suspend until the slots' digest moves  */
     ULONG LatchDigest;
     ULONG ClaimDue;         /* the wake event was just taken: claim the
@@ -179,7 +189,8 @@ typedef struct _XHCI_SUSP_LINK {
 /* A new device's record: ACTIVE, unarmed. */
 VOID XhciSuspLinkInit(PXHCI_SUSP_LINK link, ULONG root, ULONG generation);
 
-/* The slots' digest the latch compares (3.9). */
+/* The slots' digest the refusal latch compares (3.9): each PDO's Seq and
+ * the state it changed. */
 ULONG XhciSuspDigest(const XHCI_SUSP_FUNC *funcs, ULONG count);
 
 /* What the thread starts for the device this pass. */
@@ -217,8 +228,11 @@ ULONG XhciSuspDecide(PXHCI_SUSP_LINK link, PXHCI_SUSP_FUNC funcs,
 #define XHCI_SUSP_RUN_WAKE          3UL /* device-initiated               */
 
 /* The steps the executor performs. Each names its wait in *waitMs from
- * XhciSuspBegin or XhciSuspAdvance: the executor waits that long (or, for
- * OBSERVE and VERIFY, polls up to it) before or while performing it. */
+ * XhciSuspBegin or XhciSuspAdvance: the executor waits that long before
+ * performing it - except OBSERVE and VERIFY, which poll for up to it, and
+ * a repeated ARM, for which it is the bound on EP0's drain: the executor
+ * waits for the ring to drain for at most *waitMs, its EP0-quiet wait
+ * included, and reports NOT_SENT again if it has not (3.5). */
 #define XHCI_SUSP_STEP_GATE         1UL /* close the gate (3.2)           */
 #define XHCI_SUSP_STEP_ARM          2UL /* SET_FEATURE(DEVICE_REMOTE_WAKEUP) */
 #define XHCI_SUSP_STEP_STOP         3UL /* Stop Endpoint SP=1, every one  */
@@ -312,11 +326,13 @@ ULONG XhciSuspHubEvidence(const XHCI_SUSP_LINK *link, ULONG status,
  * The thread hands the machine one classified sample. Returns 1 when it
  * is the suspension's wake event (5.4), with ClaimDue set: the executor
  * then, in the same hold, reads hc->WakeSeq as the watermark, claims the
- * WAIT_WAKEs XhciSuspWakeClaims names and reports how many with
- * XhciSuspWakeCount, and begins RUN_WAKE. Evidence while SUSPENDING is
- * kept (WakeKept) and taken at OBSERVE, which sets ClaimDue the same way.
- * Evidence while RESUMING is ignored. A DISCONNECT makes the link GONE
- * unless a sequence is running, whose step then reports it.
+ * WAIT_WAKEs XhciSuspWakeClaims names (setting each claimed PDO's
+ * WokeHold) and reports how many with XhciSuspWakeCount, and begins
+ * RUN_WAKE. Evidence while SUSPENDING is kept (WakeKept) and taken once
+ * the U3 request is done - without waiting to see it again - which sets
+ * ClaimDue the same way. Evidence while RESUMING is ignored. A DISCONNECT
+ * makes the link GONE at once outside a sequence; inside one it is kept
+ * (GoneKept) and the sequence's next step ends GONE, ahead of any wake.
  */
 ULONG XhciSuspEvidence(PXHCI_SUSP_LINK link, ULONG event);
 
@@ -382,7 +398,9 @@ typedef struct _XHCI_SUSP_IDLE_FUNC {
 
 /* 6.2: every started function PDO of the device holds an idle IRP in HELD
  * with PwrState D0, at least one is started, the link is ACTIVE and the
- * system in S0. */
+ * system in S0 - and no PDO outside the group (not started, or closed)
+ * is D0, since such a PDO holds the device awake (3.9) and a callback
+ * would send its function to Dx on a link that cannot suspend. */
 ULONG XhciSuspIdleBatchReady(const XHCI_SUSP_IDLE_FUNC *funcs, ULONG count,
                              ULONG link, ULONG systemS0);
 
@@ -478,6 +496,11 @@ ULONG XhciSuspPhaseAllowed(ULONG actor, ULONG from, ULONG to);
                                          * it to leave, retry from (1)    */
 #define XHCI_SUSP_HAND_DONE         4UL /* EXITING or ABANDONED already   */
 
+/* After teardown wins EXITING or ABANDONED it runs its step (1) once more:
+ * the thread may have put an entry back as unclaimed after the first (1)
+ * and gone IDLE before teardown read the phase, and once teardown has won
+ * the thread touches the queue no more (4.4). */
+
 ULONG XhciSuspHandoff(ULONG phase);
 
 /* ------------------------------------------------------------------ */
@@ -494,7 +517,13 @@ typedef struct _XHCI_SUSP_FIN_IN {
     ULONG ThreadExited;     /* the enum thread has exited                */
     ULONG UrbsPending;      /* nonzero                                   */
     ULONG CallbackRunning;  /* the idle rundown is not finished          */
+    ULONG PowerPending;     /* a D-IRP or WAIT_WAKE whose completion has
+                             * not returned (4.2) - a cancel routine's
+                             * included                                  */
     ULONG DmaHalted;        /* the DMA-halt proof holds                  */
+    ULONG Pinned;           /* the proof failed and the common buffer is
+                             * pinned (CommonBufferPinned), the thread
+                             * alive or not: the pending URBs never end  */
 } XHCI_SUSP_FIN_IN, *PXHCI_SUSP_FIN_IN;
 
 ULONG XhciSuspFinalize(const XHCI_SUSP_FIN_IN *in);
