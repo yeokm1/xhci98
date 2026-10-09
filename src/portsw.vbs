@@ -33,7 +33,9 @@ Const VALUE_NAME = "XhciIntelPortSwitch"
 Const CLASS_9X = "HKLM\System\CurrentControlSet\Services\Class\USB\"
 Const CLASS_NT = "HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\"
 Const TITLE = "xhci98 port switchover"
-' Probing stops after this many numbers in a row with no key at all.
+' Every number up to PROBE_ALL is probed; past it, probing stops after
+' PROBE_GAP numbers in a row with no key at all.
+Const PROBE_ALL = 999
 Const PROBE_GAP = 200
 
 Dim sh, isNT, base, keys, args, action, elevated, onConsole, report, i, answer
@@ -112,7 +114,7 @@ Function FindKeys()
     found = ""
     misses = 0
     n = 0
-    Do While n <= 9999 And misses < PROBE_GAP
+    Do While n <= 9999 And (n <= PROBE_ALL Or misses < PROBE_GAP)
         name = Right("000" & CStr(n), 4)
         desc = ReadValue(base & name & "\DriverDesc", ok)
         If ok Then
@@ -196,26 +198,34 @@ Function IsNT6()
     End If
 End Function
 
+' Exit code 3: the elevated copy was started, and this one does not know
+' its result.
 Sub SetAll(v)
-    Dim k, rc
+    Dim k, rc, written
+    written = 0
     For Each k In keys
         rc = WriteValue(k, v)
         If rc <> 0 Then
-            If IsNT6() And Not elevated Then
+            If written = 0 And IsNT6() And Not elevated Then
                 CreateObject("Shell.Application").ShellExecute "wscript.exe", _
                     """" & WScript.ScriptFullName & """ " & CStr(v) & " -elevated", _
                     "", "runas", 1
-                Say "Windows is asking for administrator rights; the result is"
-                Say "shown in the window that opens next. Nothing was changed here."
-                Finish 0
+                Say "Windows is asking for administrator rights. Nothing was"
+                Say "changed by this window; the result is shown in the window"
+                Say "that opens next."
+                Finish 3
             End If
             Say "Could not write " & VALUE_NAME & " to"
             Say "  " & base & k
             Say "(error " & CStr(rc) & "). Run this as an administrator."
+            If written > 0 Then
+                Say "The " & CStr(written) & " key(s) listed before it were set."
+            End If
             Say ""
             Say ShowText()
             Finish 1
         End If
+        written = written + 1
     Next
     Say ShowText()
     Say VALUE_NAME & " is now " & CStr(v) & " on every xhci98 controller."

@@ -253,8 +253,8 @@ Which key: the controller's driver key is
 `HKLM\System\CurrentControlSet\Services\Class\USB\NNNN` on 98 and ME and
 `HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\NNNN`
 on the NT systems, with NNNN varying. Script Host cannot list subkeys, so
-the script probes `0000` upward and stops after 200 numbers in a row with
-no key; a key is this driver's controller when its `DriverDesc` is the
+the script probes every number from `0000` to `0999`, and past that goes on
+until 200 numbers in a row have no key; a key is this driver's controller when its `DriverDesc` is the
 INFs' `XhciDesc` ("xHCI98 USB 3.x eXtensible Host Controller", which
 neither the root hub nor a hub carries), and on 98 and ME also when its
 `NTMPDriver` is `xhci98.sys`. Every such key is set, so a key left from an
@@ -263,8 +263,9 @@ is the user's own risk (section 4a) and is set by hand.
 
 On Vista and 7 a write without the administrator token fails; the script
 then starts itself once more through `ShellExecute` with the `runas` verb,
-which raises the elevation prompt. Elsewhere a refused write is reported
-with the advice to run it as an administrator.
+which raises the elevation prompt, and exits with 3, since it cannot know
+the elevated copy's result. Elsewhere a refused write is reported, with the
+keys already set named, and the advice to run it as an administrator.
 
 The packaging gates hold it: `make-package.ps1` stages it, `make-release.ps1`
 publishes it in every flavour directory, the packager's self-tests check it

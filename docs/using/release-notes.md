@@ -1334,8 +1334,8 @@ or says it was found by reading the code.
   Power tab, on every system: the value the page reads cannot count past
   510 mA. `XHCISNAP`'s report gives the exact figure. Same section. (Under
   `2.1.0.0` every SuperSpeed device read a quarter of its draw there.)
-- **Intel 7-, 8- and 9-series chipsets, with `XhciIntelPortSwitch` at `1`
-  (off by default since `2.3.0.0`): a device on a blue connector moves
+- **Intel 7-, 8- and 9-series chipsets, with the switchover turned on
+  (`XhciIntelPortSwitch` `1` or `2`; off by default since `2.3.0.0`): a device on a blue connector moves
   between the USB 2.0 controller and this driver when the controller starts
   or stops**: it is disconnected on one side and found again on the other.
   Read on a Lenovo B490 under Windows 98 SE with NUSB, with a mouse plugged

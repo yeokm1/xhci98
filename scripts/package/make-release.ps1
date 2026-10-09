@@ -3447,7 +3447,8 @@ being unsigned, and no change to this driver can remove them:
   * INTEL 7-, 8- AND 9-SERIES CHIPSETS: A DEVICE ON A BLUE CONNECTOR MOVES
     BETWEEN THE USB 2.0 CONTROLLER AND THIS DRIVER when this driver's
     controller starts or stops, so a drive busy there is disconnected.
-    Only with XhciIntelPortSwitch at 1, off by default (section 9).
+    Only with the switchover on (XhciIntelPortSwitch 1 or 2); it is off
+    by default (section 9).
 
   * WINDOWS XP FROM THE F6 FLOPPY: GUI-MODE SETUP ASKS ABOUT THE UNSIGNED
     DRIVER BEFORE THE USB KEYBOARD WORKS. A PS/2 or built-in laptop

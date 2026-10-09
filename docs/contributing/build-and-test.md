@@ -3948,7 +3948,8 @@ double-clicked it asks through a dialog, and from a command prompt it takes
     cscript //nologo portsw.vbs show  > C:\PSW-SHOW0.TXT
 
 The exit code is 0 on success, 1 when no controller was found or a write
-was refused, 2 for an unknown argument. A fresh install of the `release`
+was refused, 2 for an unknown argument, and 3 when it handed the write to an
+elevated copy of itself (Vista and 7), whose result it does not see. A fresh install of the `release`
 package must show `0 - off`; a value deleted by hand shows `not set - off`.
 On Vista and 7 a non-elevated `1` or `0` starts the script again through
 the elevation prompt, and the result appears in a message box rather than

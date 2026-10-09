@@ -125,8 +125,9 @@ boot: `XUSB2PR` routes the USB 2.0 ports between EHCI and xHCI, so the same
 machine presents a working xHCI or one with nothing on it depending on a
 setting nobody recorded. Since `2.1.1.0` the driver can route the switchable
 ports to xHCI itself on those chipsets (Intel device ids 1E31, 8C31, 9C31,
-8CB1, 9CB1 and 8D31), since `2.3.0.0` only when `XhciIntelPortSwitch` is 1
-(the install writes 0; an update keeps an earlier 1), so on such a machine
+8CB1, 9CB1 and 8D31), since `2.3.0.0` only when `XhciIntelPortSwitch` turns
+it on (1, or 2; the install writes 0, and an update keeps an earlier 1), so
+on such a machine
 also record that value, and keep the 8.4 report's `psw.` records with the
 result: the setting still decides what the machine looks like before the
 driver starts and which connectors are outside the switchable set.
