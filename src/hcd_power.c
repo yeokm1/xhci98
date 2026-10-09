@@ -148,6 +148,7 @@ static VOID hcdDirectTransitionGated(PHCD_CONTROLLER hc)
     if (hc->PowerDirectWant != PowerDeviceD0) {
         if (hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0) {
             XhciSuspendController(&hc->Hc);
+            HcdIoSuspendSettle(hc);
             hc->SuspendedInD0 = 1;
         }
         if (hc->Common.SystemPower == PowerSystemShutdown) {
@@ -347,6 +348,9 @@ NTSTATUS HcdControllerPower(PHCD_CONTROLLER hc, PIRP irp)
         if (hc->ControllerStarted &&
             hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0) {
             XhciSuspendController(&hc->Hc);
+            /* Task 36.28: what clients still have in flight completes
+             * now, not in the resume (hcd_io.c, HcdIoSuspendSettle). */
+            HcdIoSuspendSettle(hc);
         }
         /* Task 34.3: the shutdown's D3 hands the connectors back to EHCI,
          * as Linux's xhci_shutdown does on these chipsets; a sleep keeps

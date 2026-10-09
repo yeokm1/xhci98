@@ -1582,6 +1582,7 @@ NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 VOID HcdCfgReleaseFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                            ULONG interfaceMask);
 VOID HcdCfgFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+ULONG HcdCfgSlowQueued(PHCD_CONTROLLER hc);
 VOID HcdCfgService(PHCD_CONTROLLER hc);
 VOID HcdCfgCancelService(PHCD_CONTROLLER hc);
 VOID HcdCfgRetryService(PHCD_CONTROLLER hc);
@@ -1627,6 +1628,7 @@ NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                      struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb,
                      const HCD_IO_REQUEST *req);
 VOID HcdIoDrainPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd);
+VOID HcdIoSuspendSettle(PHCD_CONTROLLER hc);
 VOID HcdIoPipeRelease(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoPipePause(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoPipeResume(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
