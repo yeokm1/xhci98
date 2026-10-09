@@ -196,7 +196,7 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     XhciLogNote(ext, "imod.status", ext->ImodStatus);
     XhciLogNote(ext, "imod.requested", ext->ImodRequested);
 
-    /* Off unless a value of 1 to 3 is there (XhciPipeFastMode). */
+    /* Off unless a value of 1 to 4 is there (XhciPipeFastMode). */
     fast = 0;
     if (!NT_SUCCESS(hcdReadDword(hc, HCD_VALUE_FAST_POLL, &fast))) {
         fast = 0;

@@ -158,6 +158,55 @@ static void test_cap_fastpoll(void)
     }
 }
 
+/* Mode 4 (task 36.19; record 17 section 4.7): before the cap, as the
+ * executor runs it (hcd_cfg.c hcdCfgFastPoll). Keyed on the descriptor's
+ * byte; a code's Interval (2 or less) is never capped, so a capped
+ * controller does not silence it; the fallback 3 is never capped either;
+ * an endpoint with no code is capped as before. Every cap mode, FS at a
+ * root port, bInterval 1 to 255. */
+static void test_cap_codes(void)
+{
+    ULONG cap;
+    ULONG b;
+
+    for (cap = 0; cap <= 2; cap++) {
+        for (b = 1; b <= 255; b++) {
+            XHCI_PIPE_EP ep;
+            ULONG applies = XhciTolCapApplies(cap, AMD_ID);
+            ULONG table;
+            ULONG fast;
+
+            memset(&ep, 0, sizeof(ep));
+            ep.TransferType = XHCI_PIPE_XFER_INTERRUPT;
+            ep.BInterval = b;
+            ep.Interval = 3;
+            while ((1UL << ep.Interval) < b * 8UL &&
+                   (1UL << (ep.Interval + 1)) <= b * 8UL) {
+                ep.Interval++;
+            }
+            table = ep.Interval;
+            ep.SpecInterval = table;
+            ep.FallbackInterval = table;
+            fast = XhciPipeFastPoll(XHCI_PIPE_FAST_CODES,
+                                    XHCI_PIPE_SPEED_FULL, 0, &ep);
+            ep.Interval = XhciTolCapInterval(applies, 1, ep.Interval);
+
+            CHECK(fast == (ULONG)(b >= 128 && b <= 130), "a code applies");
+            if (fast) {
+                CHECK_EQ(ep.Interval, 130 - b,
+                         "the cap leaves a code's Interval");
+                (VOID)XhciPipeFastRevert(&ep);
+                CHECK_EQ(XhciTolCapInterval(applies, 1, ep.Interval), 3,
+                         "the fallback 3, never capped");
+            } else {
+                CHECK_EQ(ep.Interval,
+                         XhciTolCapInterval(applies, 1, table),
+                         "no code: the cap as before");
+            }
+        }
+    }
+}
+
 static void test_retry(void)
 {
     CHECK_EQ(XhciTolNoSoftRetry(AMD_NOSR), 1, "43B9 listed");
@@ -1392,6 +1441,7 @@ int main(void)
     test_clock();
     test_cap();
     test_cap_fastpoll();
+    test_cap_codes();
     test_retry();
     test_cycle();
     test_cycle_mark();

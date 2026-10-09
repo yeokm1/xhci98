@@ -494,7 +494,7 @@ task. The miniport reads six values from its device key (`src\*.c`, the six
 | `XhciLogDebugView` | Carried over, same meaning; under the HCD it also selects 26-A.8's continuous PASSIVE flusher |
 | `XhciImodInterval250ns` | Carried over, same meaning and code default 4000; both INFs write 160 (40 us) on every install path since the owner's ruling of 2026-10-04 (`roadmap-hcd.md`, decisions table), 500 until then |
 | `XhciVirtualHSHub`, `XhciVirtualHSHubVid`, `XhciVirtualHSHubPid` | Not read and not written (owner, 2026-10-02); the INF gate refuses them in an HCD INF (`VAL-HCDVHUB`) |
-| `XhciFastPollFsLs` | New in `2.1.0.0` (task 33.8), the HCD's own: read at each controller start, written by no INF until task 34.1 and as 0 since, absent or 0 is off. Lets a Low- or Full-Speed interrupt endpoint on a root port be polled faster than 1 ms; section 13 |
+| `XhciFastPollFsLs` | New in `2.1.0.0` (task 33.8), the HCD's own: read at each controller start, written by no INF until task 34.1 and as 0 since, absent or 0 is off. Lets a Low- or Full-Speed interrupt endpoint on a root port be polled faster than 1 ms; section 13. Since task 36.19, 4 lets a client choose 2000 to 8000 Hz by the codes 128 to 130, section 13.7 |
 | `XhciIntelPortSwitch` | New in `2.1.1.0` (task 34.3), the HCD's own: read at each start of a controller the switchover's gate passes, and on no other; written as 1 by every controller install path under task 34.1's rule; only an explicit 0 turns the switchover off. Design record 16 section 5 |
 
 The root-hub sections write no value of the controller's: they carry the
@@ -1978,6 +1978,55 @@ target's UI can be told is High Speed (NT 6.x) or "not low speed" (98 to XP
 x64), and a SuperSpeed device has to be reported as one of those. That is
 why no checkpoint reads a speed from these pages.
 
+**Amended by task 36.18 (2026-10-09; GitHub issue 17 item 6).** The High
+Speed ceiling above is replaced, in two halves:
+
+- **The `_EX` form's `Speed` byte** reads 3 for a SuperSpeed connection and
+  4 for a SuperSpeedPlus one (the trained rate, `dev->Plus`), as Intel's USB
+  3 drivers for Windows 9x report it, **on Windows 98 and ME only** - where
+  `IoIsWdmVersionAvailable(1, 0x10)` is FALSE, the test `hcd_pdo.c` uses
+  for them (owner, 2026-10-09). No Microsoft header defines 4, and the WDK
+  7.1 headers stop at 2. Every NT target keeps 2 for both: Vista's and 7's
+  `usbui!UsbItem::IsHighSpeed` tests the byte for exactly 2, and their hub
+  page would list a 3 among the Full Speed devices (static,
+  `legal-provenance.md` section 4, "Who reads the `_EX` `Speed` byte"); XP's
+  and XP x64's pages never read it. 0 to 2 are unchanged
+  (`XhciHubExSpeed`, `xhci_hub.c`).
+- **`IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2`** (`0x0022045C`),
+  new on every target, for NT tools: `ConnectionIndex`, `Length`,
+  `SupportedUsbProtocols` (`Usb110` bit 0, `Usb200` bit 1, `Usb300` bit 2)
+  and the flags (`DeviceIsOperatingAtSuperSpeedOrHigher` bit 0,
+  `...SuperSpeedCapableOrHigher` bit 1, `...OperatingAtSuperSpeedPlusOrHigher`
+  bit 2, `...SuperSpeedPlusCapableOrHigher` bit 3), 16 bytes, from
+  Microsoft's `usbioctl.h` reference pages (documentation, read
+  2026-10-09), written byte by byte like the rest of the door.
+  - **The request**: an input or output buffer shorter than 16 bytes is
+    `STATUS_BUFFER_TOO_SMALL`, each checked apart; an input longer than 16
+    bytes, a `Length` other than 16,
+    or an input `SupportedUsbProtocols` without `Usb300` (Windows 8 refuses
+    that, by Microsoft's IOCTL page), is `STATUS_INVALID_PARAMETER`; a port
+    out of range is refused as the `_EX` form refuses it. The answer is 16
+    bytes, `ConnectionIndex` kept (`XhciHubExV2Check`, `XhciHubExV2Fill`).
+  - **`SupportedUsbProtocols`, out**: the **port's** protocols, not the
+    device's and not the request's: a root port by its protocol group
+    (`Usb110` and `Usb200` on a USB 2.0 port, `Usb300` alone on a USB 3
+    logical port, which gains nothing from its USB 2.0 companion), an
+    external hub's port by the hub's speed (a SuperSpeed half's `Usb300`, a
+    High-Speed hub's `Usb110` and `Usb200`, a Full-Speed hub's `Usb110`). An
+    empty port has them too.
+  - **The operating flags**: from the connection's negotiated speed class
+    and rate.
+  - **The capable flags**: from the device's BOS (its SuperSpeed and
+    SuperSpeedPlus capability descriptors, `dev->BosInfo`), not from the
+    speed, since a SuperSpeedPlus device may be running at 5 Gbit/s; and
+    also set when the device operates at that speed, which proves it. The BOS
+    is read only on the SuperSpeed enumeration path (`xhci_enum.c`), and
+    **this task does not add a BOS read at High Speed**: a USB 3 device
+    running at High Speed (on a USB 2.0 port, or sent back there) reports
+    neither capable flag. Reading the BOS of every High-Speed device with a
+    `bcdUSB` of 0x0210 or more would change every such device's enumeration
+    for one flag, which is the larger risk (`XhciHubExV2Flags`).
+
 ### 8.5 The OS INFs' registrations, quoted
 
 Root hub, NT paths - every NT target registers the same provider:
@@ -2162,6 +2211,29 @@ creates its PDOs.
 | `sysclass.dll`'s `DiagnosticMode` and `SupportNonComp` value names: purpose unread. | 26-A.8 |
 | A `bcdUSB` of 0x0300 in `DeviceDescriptor`, and a SuperSpeed device's `Speed` on Vista and 7 (`UsbHighSpeed` is the ceiling): whether `UsbItem::UsbVersion` or the bandwidth arithmetic misreads a 3.x descriptor. | Phase 29 |
 | Device-object security for a non-elevated Device Manager on Vista and 7 (`GENERIC_WRITE` open): a runtime question. | 28-A.1 |
+
+**The USB device interface (task 36.17, 2026-10-09; GitHub issue 17 item
+3).** `GUID_DEVINTERFACE_USB_DEVICE` (`{A5DCBF10-6530-11D2-901F-00C04FB951ED}`,
+WDK 7.1 `usbiodef.h`) is registered on every device PDO and every external
+hub's PDO, as usbhub registers it, and not on the root hub, on which usbport
+registers none (`hcd_door.c`, `HcdDoorDeviceStart` and `HcdDoorDeviceStop`).
+A composite the bus splits has no parent devnode, so the interface goes on
+one function's PDO: the function that owns the device's first interface,
+the group's first PDO, the one the door already answers the connection's
+driver key from (the split-composite row above), never a hard-coded
+`MI_00`. **Decided (owner, 2026-10-09):** the interface stays on that
+function and follows its state - when it has no driver, fails its start or
+is disabled, the device has no interface while its siblings run. Its
+lifecycle follows `IoSetDeviceInterfaceState`'s contract: registered once,
+at the first successful start, and enabled at every successful start (a
+retained PDO started again included); disabled at a stop, a surprise
+removal and a removal, never twice; the link string freed, idempotently,
+in `hcdDeletePdo`, the one helper every path that destroys a device PDO
+goes through (the relations answer after a removal, the retained PDO's
+deletion after a disable, an orphan's deletion and Windows 98's deferred
+one, the parent's release), not left to `IoDeleteDevice`. Best effort, as
+the hub interface is: a failed registration is a missing interface, not a
+failed device.
 
 ## 9. The harness and the gates (task 25.5)
 
@@ -3169,8 +3241,10 @@ below the class driver that rewrites `bInterval` (hidusbf) reaches a function
 as it already reached a whole device, whose select parses the caller's
 descriptor. Before this, a composite mouse's function ignored hidusbf's rate
 and `XhciFastPollFsLs` (section 13.5) saw the device's own `bInterval`.
-**Still the device's**: a SuperSpeed function's endpoints (their companion
-descriptors are read from the device's configuration), and a later
+**Still the device's**: a SuperSpeed function's companion fields (Max
+Burst, Mult, Max ESIT Payload, read from the device's configuration; since
+task 36.19 its `bInterval` is the caller's matched byte too, section 13.7),
+and a later
 `SELECT_INTERFACE` on a function, which reads the device's configuration -
 so a client that selects an interface after its configuration loses a
 rewritten interval (no HID class driver of any target does). Host vectors:
@@ -3759,7 +3833,8 @@ no QEMU run can rule out.
 - **The value**: `XhciFastPollFsLs`, a REG_DWORD on the controller's driver
   key, read at each controller start (`hcd_ctl.c`), written by no INF.
   `XhciPipeFastMode`: 1, 2 and 3 are themselves, anything else - absent, 0,
-  a value of another type, 4 and up - is off. Logged as `fastpoll.value`
+  a value of another type, 4 and up - is off. (Since task 36.19, 4 is
+  itself too, section 13.7, and 5 and up are off.) Logged as `fastpoll.value`
   and `fastpoll.mode`.
 - **The mapping** (`XhciPipeFastPoll`, `xhci_pipe.c`), hidusbf's own numbers
   so a user picks the rate in the terms its Setup already uses: 1 changes
@@ -3851,6 +3926,133 @@ the P14s Gen 1, on a build of this branch:
 A machine whose Windows mouse path cannot report more than it is given
 (Windows 98's mouse stack may coalesce) still shows the programmed rate in
 the counters; the rate tool is the second reading, not the first.
+
+### 13.7 Mode 4: the polling rate a client chooses (task 36.19, 2026-10-09)
+
+The request is GitHub issue 17's item 2 (SweetLow, testing `2.x`): let a
+client pick 2000, 4000 or 8000 Hz for one endpoint directly, rather than
+through modes 2 and 3's reuse of the "31 Hz" and "62 Hz" settings, which
+also speed up every device on a root port that declares 16 to 63 ms. The
+owner took it into Phase 36 on 2026-10-09 as an opt-in mode of the same
+value. Nothing here was read out of a binary; it adds no
+`legal-provenance.md` row.
+
+**The value.** `XhciFastPollFsLs` 4 (`XHCI_PIPE_FAST_CODES`).
+`XhciPipeFastMode` passes 1 to 4 as themselves; 5 and up, 0, absent and a
+value of another type stay off, as before.
+
+**The codes.** Under mode 4, an interrupt endpoint whose `bInterval` in the
+descriptor the HCD is handed is 128, 129 or 130 is programmed at Interval
+2, 1 or 0: 500, 250 or 125 us, 2000, 4000 or 8000 Hz. Every other
+`bInterval` is read by Table 6-12, exactly as with the value off: mode 4
+does not do modes 2 and 3's mapping of Intervals 7 and 8, and modes 2 and 3
+do not honour the codes. The two conventions never meet on one controller,
+since the value holds one mode.
+
+**Why an opt-in.** 128 to 255 ms are legal Full- and Low-Speed values
+(Table 6-12's 1-255 row), so a device may itself declare a code: under mode
+4 such a device is polled every 125 to 500 us instead of every 128 ms. And
+a client that sends a code with the mode off gets what the byte legally
+means, 128 ms at Full Speed, so the procedure is the mode first, then the
+client (hidusbf) set to the codes. The release notes say both.
+
+**The ceiling.** 125 us, Interval 0, at any speed. 131 and above are not
+codes and read by Table 6-12; no input reaches below Interval 0.
+
+**Scope.**
+- Full and Low Speed on a root port only (Route String 0), as modes 2 and
+  3: behind a hub a transaction translator or a Full-Speed hub carries the
+  device's periodic traffic one frame at a time.
+- High Speed and SuperSpeed (and SuperSpeedPlus) anywhere, root port or
+  behind a hub, since their Interval range already reaches 125 us (Table
+  6-12's HS and SS rows: Interval 0 is a valid value there). A code at
+  those speeds is otherwise an out-of-range `bInterval` that the driver's
+  existing clamp to Table 6-12's range takes to 16 (Interval 15, 4.096 s); the code replaces that.
+- Interrupt endpoints only: never isochronous (whose interval sets its data
+  rate), never bulk, never a hub's own status endpoint (`HcdCfgHubOpen`
+  never asks).
+
+**Keyed on the descriptor's byte** (`XHCI_PIPE_EP.BInterval`, as the
+caller's descriptor gave it), not on the Interval Table 6-12 derives from
+it, which for a code is 10 at Full and Low Speed (footnote 113's rounding of
+128 to 130 ms) and 15 at High Speed and SuperSpeed after the clamp, values
+an ordinary device also produces.
+
+**Its place before the interval cap** (record 17 section 4.7). Modes 2 and 3
+run after the cap and only when the cap left the Interval as it was, so on
+an AMD controller (cap on) a capped endpoint is never fast-polled. Mode 4
+runs first: a code's Interval (2 or less) is then never above the cap's 8,
+so the cap leaves it, and an AMD controller does not silence the code. An
+endpoint with no code goes through the cap as it does today.
+
+**The fallback.** The endpoint keeps two values apart: `SpecInterval`, the
+Table 6-12 Interval its descriptor gives (for the record), and
+`FallbackInterval`, the Interval a refusal returns it to. Modes 2 and 3 set
+the fallback to the Interval they replaced, which is today's revert
+exactly. Mode 4 sets it to 3 (1 ms), not to Table 6-12's reading of the
+code: that would leave a device that asked for 8000 Hz polled every 128 ms
+(or 4.096 s at High Speed). 3 is inside every speed's interrupt range
+(Full and Low Speed 3-10, High Speed and SuperSpeed 0-15) and at or below
+the cap. The refusal path is section 13.5's, unchanged:
+`hcdCfgConfigureAdd` reverts every pipe the mode changed when Configure
+Endpoint fails with Parameter, Bandwidth or Secondary Bandwidth Error
+(`XhciPipeFastRetry`) and issues it once more, counted in
+`fastpoll.fallbacks` with a `fastpoll.fallback` record. An endpoint opened
+fast is `fastpoll.opened` and a `fastpoll.open` record (slot, DCI,
+`SpecInterval`, the Interval programmed): under mode 4 a Full-Speed code
+reads `0A00` to `0A02`, a High-Speed or SuperSpeed one `0F00` to `0F02`.
+
+**The replays.** `RESET_PORT` and the endpoint recycle rebuild the
+Endpoint Context from the stored `pipe->Ep` (`hcdCfgConfigureAdd` with
+`opening` 0), so they keep the chosen Interval, the fast flag and the
+fallback without reading a descriptor again; a pipe already reverted stays
+at its fallback.
+
+**SuperSpeed composite functions.** A composite function's select takes
+each endpoint from the device's own configuration (`dev->Selected`) but the
+`bInterval` from the caller's matched endpoint (section 10.9,
+`XhciPipeCallerInterval`). Today `hcdCfgFunctionEndpoint` (`hcd_cfg.c`)
+does that only below SuperSpeed, by sending a seven-byte copy with the
+caller's byte through the USB 2.0 parser, which cannot carry a companion;
+at SuperSpeed and SuperSpeedPlus the caller's byte is ignored, so a
+function's code would be lost there. Changed, and moved into a pure
+helper the host suite runs, `XhciPipeFunctionEndpoint` (`xhci_pipe.c`),
+which `hcdCfgFunctionEndpoint` calls: at those speeds the endpoint and its
+companions are parsed from `dev->Selected` as now
+(`XhciPipeEndpointParamsAt`, keeping Max Burst, Mult and Max ESIT
+Payload), and then, when the caller's matched byte differs from the
+device's, `XhciPipeRebaseInterval` replaces `BInterval` with it and derives
+the ordinary Interval (and `IntervalClamped`, `SpecInterval`) from it by
+the same Table 6-12 rule the parser uses for that speed and type; mode 4 is
+then applied through `hcdCfgFastPoll` like every other endpoint. The
+Interval is never written directly. Below SuperSpeed the seven-byte path
+stays as it is. A bulk endpoint's Interval stays 0 whatever the byte.
+
+**A composite function's later `SELECT_INTERFACE`** rebuilds from the
+device's own configuration, and so loses a code, as it loses modes 2 and
+3's mapping today (section 13.5). Decided (owner, 2026-10-09): accepted and
+documented here and in the release notes; HID class drivers do not reselect
+an interface. Revisited if a report shows it.
+
+**What the client is told** is unchanged: the `bInterval` it gave, in
+`USBD_PIPE_INFORMATION.Interval`.
+
+**Host vectors** (`test\test_pipe.c`, `test_fast_poll` and its
+neighbours): 4 accepted and 5 off; each code at Low, Full and High Speed
+and SuperSpeed; 127, 131 and 255 untouched; Full Speed behind a hub
+untouched and High Speed and SuperSpeed behind one applied; isochronous and
+bulk untouched; modes 2 and 3 ignoring the codes and mode 4 ignoring
+Intervals 7 and 8; no double application; the revert landing at 3 under
+mode 4 and at the replaced Interval under modes 2 and 3; mode 4 before the
+cap in `test_tol.c`'s ordering vector; `XhciPipeRebaseInterval` agreeing
+with the parser at every speed and type; and an integration vector with a
+split SuperSpeed device, a nontrivial companion, and a device byte that
+differs from the caller's code.
+
+**Legs.** hidusbf set to the codes on 98 SE and 7 in QEMU, read in the
+`fastpoll.*` records (QEMU paces Interval 0 at 125 us, section 13.4, and
+can show no refusal); mode 4 with an unpatched device reading as the
+release before it. The owner's bench reads a real controller's acceptance.
 
 ## Appendix A. The Windows 98 export evidence, pair by pair (task 25.3)
 

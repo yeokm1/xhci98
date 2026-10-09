@@ -908,8 +908,13 @@ keeps its uncapped Interval, and fast polling's eligibility (Interval 7 or
 8, `xhci_pipe.c`, `XhciPipeFastPoll`) is judged on that uncapped value, so
 the cap never makes an endpoint eligible that was not. Fast polling's
 fallback on a refused Configure Endpoint restores the capped Interval, not
-the uncapped one. Host vectors cover each combination of the cap's three
-values with fast polling's modes and the fallback.
+the uncapped one. Mode 4 (task 36.19, record 13 section 13.7) is the
+exception and comes before the cap: keyed on the caller's `bInterval` (128
+to 130), it programs Interval 2 to 0, which the cap leaves, so a capped
+controller does not silence a code; its fallback is Interval 3, which the
+cap leaves too. An endpoint mode 4 does not change goes through the cap as
+above. Host vectors cover each combination of the cap's three values with
+fast polling's modes, mode 4 included, and the fallback.
 
 **The Average TRB Length switch** (owner, 2026-10-06). Revision 0 proposed
 taking the Average TRB Length of a periodic endpoint as its Max ESIT

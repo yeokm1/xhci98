@@ -591,6 +591,12 @@ typedef struct _HCD_DEVICE_PDO {
     ULONG PciBus;
     ULONG PciAddress;
     volatile ULONG PciRead;
+    /* GUID_DEVINTERFACE_USB_DEVICE (task 36.17; hcd_door.c,
+     * HcdDoorDeviceStart): the link IoRegisterDeviceInterface gave at the
+     * first start, and whether it is enabled. Written on the PnP paths and
+     * at the deletion only, all PASSIVE_LEVEL. */
+    UNICODE_STRING UsbInterface;
+    ULONG UsbInterfaceOn;
     /* Where it is presented (task 33.4; design record 13 section 10.11):
      * the Serial of the hub PDO whose FDO's BusRelations carry it, 0 for
      * the root hub's - the nearest hub above it that has a PDO
@@ -1662,6 +1668,8 @@ VOID HcdDoorHubStart(PHCD_HUB_FDO fdo, PHCD_CONTROLLER hc);
 VOID HcdDoorHubStop(PHCD_HUB_FDO fdo);
 VOID HcdDoorHubRemove(PHCD_HUB_FDO fdo, PHCD_CONTROLLER hc);
 NTSTATUS HcdDoorHubIoctl(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO hub, PIRP irp);
+VOID HcdDoorDeviceStart(PHCD_DEVICE_PDO pdo);
+VOID HcdDoorDeviceStop(PHCD_DEVICE_PDO pdo, ULONG release);
 
 /* hcd_hubfdo.c (task 33.4) */
 NTSTATUS HcdHubAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo);
