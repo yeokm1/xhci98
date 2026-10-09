@@ -171,7 +171,12 @@ function Get-InfFacts {
             $mfgTargets += $f[0]
             for ($k = 1; $k -lt $f.Count; $k++) { $mfgTargets += ($f[0] + "." + $f[$k]) }
         }
-        if ($line -match '^AddService\s*=\s*([^,\s]+)') { $services[$matches[1].ToLowerInvariant()] = $true }
+        # The x86 MSI helper (design record 18) is added by the 32-bit Vista
+        # and 7 controller section alone (the INF gate's MSIHLP-* rules hold
+        # it there), a path text-mode Setup of 2000 and XP never takes, and it
+        # is no device's function driver; it is not one of the services this
+        # file maps ids to.
+        if ($line -match '^AddService\s*=\s*([^,\s]+)' -and $matches[1] -ine "xhcimsi") { $services[$matches[1].ToLowerInvariant()] = $true }
     }
     $current = ""
     foreach ($rawLine in ($Text -split "`r`n")) {

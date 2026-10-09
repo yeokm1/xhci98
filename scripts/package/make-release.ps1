@@ -493,6 +493,25 @@ $archInfPath  = @{ "x86" = "src\xhci98.inf"; "x64" = "src\xhci98-amd64.inf" }
 # two [SourceDisksFiles] names - see releases\README.md.
 $publishable = @("xhci98.inf", "xhci98.sys")
 
+# **A leg may publish a third file of this project's own, when its INF
+# declares it** (task 36.15; design record 18 section 8.2): xhcimsi.sys, the
+# NT 6 x86 MSI helper, which the 32-bit INF names and the 64-bit one does not.
+# So the publishable set is per leg - the two above plus whichever of these
+# that leg's own INF declares - and a release cut before 2.3.0.0, whose INFs
+# declare none, is published and reconstructed exactly as before.
+$legPublishableExtra = @("xhcimsi.sys")
+
+function Get-LegPublishable {
+    # The publishable set of one leg, from the media layout its own INF
+    # declares (Get-DeclaredMediaLayout).
+    param([hashtable]$Layout, [string[]]$Base)
+    $out = @($Base)
+    foreach ($extra in $legPublishableExtra) {
+        if ($Layout.ContainsKey($extra.ToLowerInvariant())) { $out += $extra }
+    }
+    return $out
+}
+
 # The UAS class driver's pair (roadmap task 31-A.2), published beside them in
 # every flavour directory a cut writes. Not in $publishable, which is the
 # controller INF's declared media and what tells a flavour directory from any
@@ -1203,6 +1222,74 @@ writes the stamp as it goes; or, for a binary that must ship unstamped, pass
     }
 }
 
+function Assert-MsiHelperPublished {
+    # xhcimsi.sys, the NT 6 x86 MSI helper (design record 18; task 36.15),
+    # held to the refusals Assert-UasPublished makes of xhciuas.sys, which are
+    # the build loop's of xhci98.sys: the release FileVersion, VS_FF_DEBUG,
+    # the flavour marker, the staged bytes being the built ones, and the
+    # source stamp beside the build (scripts\source-stamp.ps1 -Driver
+    # xhcimsi), unstamped only under -AllowUnstampedDriver. x86 legs only:
+    # the caller publishes it where that leg's INF declares it.
+    param([string]$Sys, [object]$Leg, [string]$Flavor, [string]$Version, [string]$ObjRoot)
+
+    $rebuild = "scripts\build-driver.cmd $Flavor"
+    if (-not (Test-Path -LiteralPath $Sys)) {
+        throw "the $($Leg.Id) leg has no xhcimsi.sys to publish. Rebuild: $rebuild"
+    }
+    $info = (Get-Item -LiteralPath $Sys).VersionInfo
+    if (-not (Test-DriverVersionMatches -Reported $info.FileVersion -Declared $Version)) {
+        throw "the MSI helper for $($Leg.Dir)\ reports FileVersion '$($info.FileVersion)', not $Version. Rebuild: $rebuild"
+    }
+    if ($info.IsDebug -ne ($Flavor -eq "debug")) {
+        throw "the MSI helper about to be published as $($Leg.Dir)\ has VS_FF_DEBUG = $($info.IsDebug); that is the wrong obj directory. Rebuild: $rebuild"
+    }
+    $marker = Get-ImageFlavourMarker -Path $Sys
+    if ($marker -ne $Flavor) {
+        $found = if ($marker -eq "") { "none" } else { $marker }
+        throw "the MSI helper about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release and debug are published. Rebuild: $rebuild"
+    }
+    $builtSys = Join-Path $ObjRoot "xhcimsi.sys"
+    if (-not (Test-Path -LiteralPath $builtSys)) {
+        throw "the $($Leg.Id) MSI helper about to be published has no counterpart at $builtSys, so nothing ties it to the sources in src\msi86. Rebuild: $rebuild"
+    }
+    if ((Get-FileHash -LiteralPath $builtSys -Algorithm SHA256).Hash -ne
+        (Get-FileHash -LiteralPath $Sys -Algorithm SHA256).Hash) {
+        throw "the MSI helper about to be published as $($Leg.Dir)\ is not the one in $builtSys, so its source stamp says nothing about the bytes being shipped. Rebuild: $rebuild"
+    }
+    $stampScript = Join-Path $repo "scripts\source-stamp.ps1"
+    $savedEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $stampOut = & powershell -NoProfile -ExecutionPolicy Bypass `
+            -File $stampScript -Driver xhcimsi -Check $ObjRoot 2>&1
+        $stampCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedEap
+    }
+    if ($stampCode -eq 1) {
+        throw @"
+the MSI helper about to be published as $($Leg.Dir)\ was built from sources this
+tree no longer holds:
+$($stampOut -join "`n")
+Rebuild it ($rebuild) so the published bytes are ones the tree can reproduce.
+"@
+    } elseif ($stampCode -eq 2) {
+        if (-not $AllowUnstampedDriver) {
+            throw @"
+no source stamp beside the $Flavor MSI helper in $ObjRoot, so this script
+cannot tell whether src\msi86 still reproduces it. Rebuild it ($rebuild), which
+writes the stamp as it goes; or, for a binary that must ship unstamped, pass
+-AllowUnstampedDriver, as for xhci98.sys.
+"@
+        }
+        Write-Warn "no source stamp beside the $Flavor MSI helper, and -AllowUnstampedDriver was passed."
+    } elseif ($stampCode -ne 0) {
+        throw "scripts\source-stamp.ps1 -Driver xhcimsi -Check '$ObjRoot' failed: $($stampOut -join "`n")"
+    } else {
+        Write-Ok "$($Leg.Id) MSI helper matches the sources in src\msi86"
+    }
+}
+
 function New-UploadSet {
     # Assembles out\upload-<version>\ and out\xhci98-<version>.zip: the
     # published tree, each flavour directory gated as the install media it is.
@@ -1358,10 +1445,19 @@ their defaults.
     # fails if they ever stop agreeing. Each directory is still checked against
     # the layout individually below; this is where the layout comes from, not a
     # substitute for checking.
-    $mediaLayout = Get-DeclaredMediaLayout `
-        -InfPath (Join-Path $PublishedRoot (Join-Path $Flavors[0] $infName)) `
-        -Arch $LegArches[$Flavors[0]] `
-        -Label "the published $infName"
+    # **Per leg since task 36.15** (design record 18 section 8.2): the two
+    # INFs no longer declare the same media - the 32-bit one adds the x86 MSI
+    # helper - so each directory's layout comes from its own INF, and the
+    # first leg's is no longer made to answer for the others. The comment
+    # above describes the arrangement this replaced.
+    $legLayouts = @{}
+    foreach ($legDir in $Flavors) {
+        $legLayouts[$legDir] = Get-DeclaredMediaLayout `
+            -InfPath (Join-Path $PublishedRoot (Join-Path $legDir $infName)) `
+            -Arch $LegArches[$legDir] `
+            -Label "the published $legDir\$infName"
+    }
+    $mediaLayout = $legLayouts[$Flavors[0]]
 
     # Source name -> where the INF puts it, lower-cased on both sides, split
     # into the files this assembly adds and the two a release directory already
@@ -1373,24 +1469,33 @@ their defaults.
     # produces - look like a file nobody declared (review round 3).
     # The path is the thing everything else here is checked against, so it is
     # what these are checked against too.
-    $expected = @{}
-    $publishedPaths = @{}
-    foreach ($name in $mediaLayout.Keys) {
-        if ($name -in $publishableKeys) {
-            $publishedPaths[$name] = $mediaLayout[$name]
-        } else {
-            $expected[$name] = $mediaLayout[$name]
-        }
-    }
-
-    # The backstop for the same rule the ordinary cut now checks before it
-    # builds anything - see Assert-PublishableAtMediaRoot. It is repeated here
-    # because -UploadSetOnly reaches this function without passing through that
-    # check, and reads its INF from the published tree rather than from src\.
-    Assert-PublishableAtMediaRoot -Layout $mediaLayout -PublishableKeys $publishableKeys `
-                                  -InfName $infName -Label "the published $infName"
-
     foreach ($f in $Flavors) {
+        $mediaLayout = $legLayouts[$f]
+        $legKeys = @((Get-LegPublishable -Layout $mediaLayout -Base $Publishable) |
+                     ForEach-Object { $_.ToLowerInvariant() })
+        $expected = @{}
+        $publishedPaths = @{}
+        foreach ($name in $mediaLayout.Keys) {
+            if ($name -in $legKeys) {
+                $publishedPaths[$name] = $mediaLayout[$name]
+            } else {
+                $expected[$name] = $mediaLayout[$name]
+            }
+        }
+        foreach ($name in $legKeys) {
+            if (-not (Test-Path -LiteralPath (Join-Path (Join-Path $uploadRoot $f) $name))) {
+                throw "'$f' in the published tree has no '$name', which its own $infName declares."
+            }
+        }
+
+        # The backstop for the same rule the ordinary cut now checks before it
+        # builds anything - see Assert-PublishableAtMediaRoot. It is repeated
+        # here because -UploadSetOnly reaches this function without passing
+        # through that check, and reads its INF from the published tree rather
+        # than from src\.
+        Assert-PublishableAtMediaRoot -Layout $mediaLayout -PublishableKeys $legKeys `
+                                      -InfName $infName -Label "the published $f\$infName"
+
         $pkgDir = $null
         if ($null -ne $PkgDirs -and $PkgDirs.ContainsKey($f)) { $pkgDir = $PkgDirs[$f] }
         $uploadFlavorDir = Join-Path $uploadRoot $f
@@ -1783,6 +1888,8 @@ To cut one, run this script without it.
                     throw "'$finalRoot' has no $($leg.Dir)\ directory, so $Version was not published with that flavour and architecture."
                 }
             }
+            # The two every version publishes; a leg whose INF declares the
+            # x86 helper is held to it inside New-UploadSet, from that INF.
             foreach ($name in $publishable) {
                 if (-not (Test-Path -LiteralPath (Join-Path $pubDir $name))) {
                     throw "'$pubDir' has no '$name', so it is not a published flavour directory of $Version."
@@ -2003,6 +2110,7 @@ the result in place of the marker, then cut again. The first:
     $publishableKeys = @($publishable | ForEach-Object { $_.ToLowerInvariant() })
     $declaredExpected = @{}
     $declaredPublished = @{}
+    $declaredPublishable = @{}
     foreach ($a in $Arch) {
         $archInf = Join-Path $repo $archInfPath[$a]
         $layoutA = Get-DeclaredMediaLayout -InfPath $archInf -Arch $archPkgName[$a] -Label $archInfPath[$a]
@@ -2013,14 +2121,21 @@ the result in place of the marker, then cut again. The first:
         # The same split the assembly makes, made once per architecture here so
         # the build loop below can hold each package to it as soon as
         # make-package.ps1 returns.
+        # The leg's own publishable set (task 36.15): the x86 INF's helper
+        # is published beside xhci98.sys.
+        $legPublishable = @(Get-LegPublishable -Layout $layoutA -Base $publishable)
+        $legKeysA = @($legPublishable | ForEach-Object { $_.ToLowerInvariant() })
+        Assert-PublishableAtMediaRoot -Layout $layoutA -PublishableKeys $legKeysA `
+                                      -InfName "xhci98.inf" -Label $archInfPath[$a]
         $expectedA = @{}
         $publishedA = @{}
         foreach ($name in $layoutA.Keys) {
-            if ($name -in $publishableKeys) { $publishedA[$name] = $layoutA[$name] }
-            else                            { $expectedA[$name] = $layoutA[$name] }
+            if ($name -in $legKeysA) { $publishedA[$name] = $layoutA[$name] }
+            else                     { $expectedA[$name] = $layoutA[$name] }
         }
         $declaredExpected[$a] = $expectedA
         $declaredPublished[$a] = $publishedA
+        $declaredPublishable[$a] = $legPublishable
     }
 
     # **And where the upload set would land, which is knowable now.** Checked
@@ -2085,7 +2200,7 @@ runs are what stand between a broken binary and a guest that cannot boot.
         Ensure-Directory $destRoot
         Ensure-Directory $destDir
 
-        foreach ($name in ($publishable + $uasPublishable + $oemPublishable)) {
+        foreach ($name in ($declaredPublishable[$leg.Arch] + $uasPublishable + $oemPublishable)) {
             $src = Join-Path $pkgDir $name
             if (-not (Test-Path -LiteralPath $src)) {
                 throw "make-package.ps1 produced no '$name' in '$pkgDir'."
@@ -2271,6 +2386,13 @@ invalidate readings already taken on these exact bytes - say so:
         $uasSys = Join-Path $destDir "xhciuas.sys"
         Assert-UasPublished -Sys $uasSys -Leg $leg -Flavor $f -Version $Version `
                             -ObjRoot (Join-Path $repo ("src\uas\" + $objDirName[$f] + "\" + $archDirName[$leg.Arch]))
+
+        # The NT 6 x86 MSI helper, where this leg's INF declares it (design
+        # record 18), held to the same refusals.
+        if ($declaredPublishable[$leg.Arch] -contains "xhcimsi.sys") {
+            Assert-MsiHelperPublished -Sys (Join-Path $destDir "xhcimsi.sys") -Leg $leg -Flavor $f -Version $Version `
+                                      -ObjRoot (Join-Path $repo ("src\msi86\" + $objDirName[$f] + "\i386"))
+        }
 
         $staged[$leg.Id] = [pscustomobject]@{
             Flavor    = $f
