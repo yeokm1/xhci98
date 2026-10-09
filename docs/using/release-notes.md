@@ -520,6 +520,16 @@ under "Targets and their standing" lists them per system.
   systems would convert it has not been read; the NT systems show the name
   as the device sends it. A name with characters outside plain ASCII was
   not read on any system.
+- **Every device has the USB device interface** (new in `2.3.0.0`; GitHub
+  issue 17). Each device and each external hub registers
+  `GUID_DEVINTERFACE_USB_DEVICE`, as under Microsoft's own hub driver, so
+  a program that finds USB devices through it (`SetupDiGetClassDevs` with
+  that interface, or `RegisterDeviceNotification` for its arrivals and
+  removals) finds them. The root hub has none, as under Microsoft's stack.
+  A composite device the driver splits into parts has no entry of its own,
+  so the interface is on the part that holds the device's first interface:
+  while that part is disabled, has no driver or fails to start, the device
+  has no interface, although its other parts work.
 
 ## SweetLow's hidusbf: a mouse's polling rate
 
@@ -968,6 +978,31 @@ turns those two settings into fast ones.
 | absent, `0`, `1` or anything else | 31 Hz | 62 Hz |
 | `2` | 2000 Hz | 4000 Hz |
 | `3` | 4000 Hz | 8000 Hz |
+| `4` | 31 Hz | 62 Hz (the codes below instead) |
+
+**`4`: the rate the client chooses** (new in `2.3.0.0`; GitHub issue 17).
+An interrupt endpoint whose polling interval in the configuration Windows
+selects is 128, 129 or 130 is polled at 2000, 4000 or 8000 Hz; every other
+interval is polled as the specification reads it, so value `4` does not do
+`2`'s and `3`'s speeding up of 16 to 63 ms, and `2` and `3` do not honour
+the codes. It applies to a Low- or Full-Speed device on a root port, and
+to a High-Speed or SuperSpeed device at a root port or behind a hub.
+The procedure is the value first, then the client: set `XhciFastPollFsLs`
+to `4` and restart, then set hidusbf (or another filter) to write 128, 129
+or 130. Two cautions:
+
+- 128 to 255 ms are legal polling intervals for a Low- or Full-Speed
+  device, so a device that itself asks for 128, 129 or 130 ms is polled at
+  2000 to 8000 Hz while the value is `4`.
+- A filter that writes a code while the value is not `4` gets what the
+  number legally means: the device is polled every 128 ms.
+
+A controller that refuses the code is caught as for `2` and `3`, and the
+device is then polled every 1 ms (1000 Hz), not every 128 ms. On an AMD
+controller the code is applied before `XhciIntervalCap`, which leaves it
+alone. A part of a composite device keeps the code only until its class
+driver selects another alternate setting of its interface, as with `2` and
+`3`; HID class drivers do not.
 
 - **Root ports only.** A device behind a hub keeps its ordinary rate.
 - **Outside the xHCI specification.** The specification's shortest interval
@@ -1119,8 +1154,9 @@ within USB 2.0 and costs a few polls a second for such a device.
 | `2` | The cap on every controller |
 
 It is applied after a polling rate a setting such as hidusbf's asked for
-and does not change which mouse `XhciFastPollFsLs` speeds up. It is read
-when the controller starts.
+and does not change which mouse `XhciFastPollFsLs` speeds up; under
+`XhciFastPollFsLs` `4` a code is applied first, and the cap leaves it
+alone. It is read when the controller starts.
 
 ### XhciAvgTrbEsit: a comparison switch
 
@@ -1198,6 +1234,21 @@ own arithmetic:
   shows `dev.ss.maxpower.ma=00000380` (896 mA); a USB 2.0 device reads as
   it did. A SuperSpeed device declaring less than 510 mA has not been read
   on hardware.
+
+### A device's speed on the hub pages (new in `2.3.0.0`)
+
+On Windows 98 SE and ME the connection information the hub pages and
+tools such as USBView ask for reads 3 for a SuperSpeed device and 4 for a
+SuperSpeedPlus one, as Intel's USB 3 drivers for those systems report
+it; up to `2.2.0.0` both read High Speed. On the NT systems it still reads
+High Speed, because Vista's and 7's hub page would list any other value
+among the Full-Speed devices. Every system also answers the newer request
+Windows 8 introduced (`IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2`),
+which tools use to tell SuperSpeed and SuperSpeedPlus apart: it gives the
+port's protocols and whether the device runs at, and can run at,
+SuperSpeed or SuperSpeedPlus. A USB 3 device running at High Speed is not
+reported as SuperSpeed-capable, since the driver does not read that part of
+its descriptors at High Speed.
 
 ## The log, and how to send one
 
