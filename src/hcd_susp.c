@@ -222,19 +222,25 @@ static VOID hcdSuspCompleteWake(PHCD_DEVICE_PDO pdo, PIRP irp,
 /*
  * The PDO's power reports, ordered (Codex review of 36.31, round 4): a
  * D-IRP's admission with its report, a START's report and the thread's
- * report of a START-driven D0 each run inside this mutex, so an older D0
- * report cannot land after a newer Dx's. Nothing inside it blocks but the
- * spin locks. IRQL: PASSIVE_LEVEL.
+ * report of a START-driven D0 each run while this flag is owned, so an
+ * older D0 report cannot land after a newer Dx's. A test-and-set by
+ * InterlockedExchange, polled at 1 ms, rather than a wait on an event,
+ * which Windows 98 can end without satisfying (win98-wdm.md; round 5).
+ * Nothing done while owned blocks but the spin locks. IRQL: PASSIVE_LEVEL.
  */
 static VOID hcdSuspReportEnter(PHCD_DEVICE_PDO pdo)
 {
-    (VOID)KeWaitForSingleObject(&pdo->PwrReport, Executive, KernelMode,
-                                FALSE, NULL);
+    LARGE_INTEGER due;
+
+    while (InterlockedExchange((PLONG)&pdo->PwrReport, 1) != 0) {
+        HcdRelativeMs(&due, 1);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
 }
 
 static VOID hcdSuspReportLeave(PHCD_DEVICE_PDO pdo)
 {
-    (VOID)KeSetEvent(&pdo->PwrReport, IO_NO_INCREMENT, FALSE);
+    (VOID)InterlockedExchange((PLONG)&pdo->PwrReport, 0);
 }
 
 /* The thread wrote PwrState D0 for a START with no D0 IRP (3.9, 3.11):

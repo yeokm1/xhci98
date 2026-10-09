@@ -633,8 +633,8 @@ typedef struct _HCD_DEVICE_PDO {
     ULONG PwrSwitch;                /* the controller's switch at the PDO's
                                      * creation or last START: what a
                                      * released controller's PDO answers by */
-    KEVENT PwrReport;               /* a mutex (synchronization event)
-                                     * ordering the PDO's power reports
+    volatile LONG PwrReport;        /* a test-and-set flag ordering the
+                                     * PDO's power reports
                                      * (PoSetPowerState) with its D-IRP
                                      * admission (hcd_susp.c); PASSIVE  */
 } HCD_DEVICE_PDO, *PHCD_DEVICE_PDO;

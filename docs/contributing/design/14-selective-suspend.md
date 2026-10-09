@@ -522,10 +522,13 @@ a hub or SuperSpeed PDO, every answer is today's.
   stays closed and its START is refused. A START owes no D0 IRP, so for a
   stage A PDO the bus reports D0 itself (`PoSetPowerState`) once the
   device is powered: at once on an ACTIVE link, else by the thread when the
-  resume it makes for the START reaches ACTIVE. Every report and every
-  D-IRP's admission with its report runs inside the PDO's report mutex
-  (a synchronization event), so an older D0 report never lands after a
-  newer Dx's.
+  resume it makes for the START reaches ACTIVE. A D-IRP's admission with
+  its report, a START's report and the thread's START-driven report run
+  while the PDO's report flag is owned (a test-and-set by
+  `InterlockedExchange`, polled at 1 ms - not an event, whose wait Windows
+  98 can end unsatisfied), so an older D0 report never lands after a newer
+  Dx's; a pended D0's report is made at its completion, before
+  `PoStartNextPowerIrp`, so the next D-IRP follows it.
 - **The controller's transitions** (4.4): the D3 and the direct transition
   (`hcd_power.c`), the in-place recovery and the stop (`hcd_ctl.c`) move
   `PowerEpoch` and set `PowerDown` in one controller-lock hold; the

@@ -742,7 +742,6 @@ static NTSTATUS hcdPdoNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     pdo->PwrWanted = XHCI_SUSP_D0;
     pdo->PwrState = XHCI_SUSP_D0;
     pdo->PwrSwitch = hc->SuspOn;
-    KeInitializeEvent(&pdo->PwrReport, SynchronizationEvent, TRUE);
     pdo->Serial = serial;
     pdo->Port = dev->Location;
     pdo->InstanceKey = XhciHubInstanceKey(dev->Port, dev->Route);
