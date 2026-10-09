@@ -257,6 +257,31 @@ A header from before 2.3.0.0 is reported as not serving the record, and a
 record count the header cannot hold is not decoded. `-selftest-pirq` prints
 the decode over canned headers.
 
+From the same release the header also carries the transfer-size readings
+(roadmap task 36.21) after the routing record, in a section of their own,
+"transfer size", since the controller's start:
+
+- **The value** `XhciMaxTransferKB` as the start took it (task 36.22), the
+  command size in effect and how often a class driver asked for it, and the
+  map grant (registers, and the pages one chunk may span).
+- **Bulk data URBs** by length, and the chunks each became.
+- **The gap between two chunks of one URB**, in two parts: software's time
+  from a chunk's retirement to the next one's publication, and the time the
+  ring stood empty in software's view with the URB unfinished; and the
+  processor time a publication and a completion pass take. These are
+  time-stamp counter readings converted with the rate the start's and the
+  dump's (counter, system time) pairs give, so a dump under a second after
+  the start prints counts only. Hardware starvation itself is not measured.
+- **Each class driver record** (`xhciuas.sys` sends one a second while it
+  moves data): the command size it advertises and where it came from,
+  streamed or not, its queue depth and the most commands in flight, its
+  commands by length and by the number in flight as each started, its
+  counters, and how old the record is. A record slot nothing has written
+  reads "none has come", never zeros.
+
+A header from before 36.21 is reported as not measuring it. `-selftest-xstat`
+prints the decode over canned headers.
+
 The PORTSC decode is printed on screen whatever the level, because that is what
 the bench reads on the spot. The headline test is per port: a port reporting a
 device connected with `PP` clear is Finding Q read off the register, whatever

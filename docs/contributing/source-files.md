@@ -178,7 +178,26 @@
 > `XhciEnumNoteBusy` in `xhci_enum.c` (`test_enum`), its drain
 > `hcd_ctl.c`'s `HcdCommandDrain` under the backstop's admission
 > (`hcdDrainAdmitted`), and the qemu flavour's `XhciQemuStartHold` in
-> `hcd_inj.c` (`HcdInjStartHeld`, `HcdInjStartRelease`). The tables below are the
+> `hcd_inj.c` (`HcdInjStartHeld`, `HcdInjStartRelease`).
+> Task 36.21 adds three files: the pure `xhci_xstat.c` / `xhci_xstat.h`
+> (the transfer-size readings `XHCI_XSTAT`: length, chunk and depth
+> buckets, the hand-carried 64-bit sums, the interval rule over the
+> processor's time-stamp counter; host suite `test_snap`), and
+> `xhci98_xfer.h`, the private transfer-size interface `xhciuas.sys`
+> includes beside `xhci98_streams.h` (`IOCTL_XHCI98_TELEMETRY`, the class
+> driver's bounded record). `hcd_io.c` reads the counter (`HcdTscRead`,
+> `HcdTscStamp`) and stamps a chunk's retirement, publication and the
+> deferred pass (`hcdChunkPublished`); `hcd_ctl.c` starts the readings
+> (`hcdXstatStart`, `hcdXstatGrant`); `hcd_urb.c` takes the record
+> (`hcdTelemetryIoctl`); `hcd_door.c` copies both into the HCD region's
+> header (words 48 to 194, version unchanged); in `src\uas\`,
+> `uas_xport.c` counts each command (`uasTeleCount`) and sends the record
+> from its timer (`uasTeleBuild`, `uasTeleSend`), its buckets
+> `UasTeleBucket` and `UasTeleDepthBucket` in `uas_iu.c` (`test_uas`).
+> `xhcisnap\xhcisnap.c` decodes them (`print_xstat`, `-selftest-xstat`).
+> The guest-side client `test\xfertest\` (`XFERTEST.EXE`, built by its own
+> `build.cmd`, in no package) moves data in requests of a given size and
+> times them. The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name

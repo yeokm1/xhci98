@@ -15,6 +15,8 @@
 #include "../src/xhci_counters.h"
 #include "../src/xhci_enum.h"
 #include "../src/xhci_pirq.h"
+#include "../src/xhci_xstat.h"
+#include "../src/xhci98_xfer.h"
 #include "test_harness.h"
 
 #define H XHCI_SNAPSHOT_HCD_HEAD_WORDS
@@ -23,26 +25,27 @@ static void test_header(void)
 {
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_VERSION_AT), 1,
              "version 1");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_BYTES), 192,
-             "a 48-word header (35-T.8 appended twelve, 36.3 28)");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_BYTES), 780,
+             "a 195-word header (35-T.8 appended twelve, 36.3 28, 36.21 "
+             "147)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS), 18,
              "the E460's eighteen root ports");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORT_BYTES), 64,
              "a sixteen-word record");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 192,
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 780,
              "records right after the header");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 63,
              "the whole counter block");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS_AT),
-             192 + 18 * 64, "counters after the last record");
+             780 + 18 * 64, "counters after the last record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_NOTE_BUDGET),
              XHCI_ENUM_NOTE_BUDGET, "the notes' budget");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_WORDS), 0,
              "past the header reads 0");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_COUNTER_WORDS * sizeof(ULONG),
              sizeof(XHCIHC_COUNTERS), "the counters word for word");
-    CHECK_EQ(XhciSnapHcdWords(18), 48 + 18 * 16 + 63, "the E460's image");
-    CHECK_EQ(XhciSnapHcdWords(0), 48 + 63,
+    CHECK_EQ(XhciSnapHcdWords(18), 195 + 18 * 16 + 63, "the E460's image");
+    CHECK_EQ(XhciSnapHcdWords(0), 195 + 63,
              "no ports: a header and the counters");
     CHECK_EQ(XhciSnapHcdWords(1000), XhciSnapHcdWords(XHCI_MAX_ROOT_PORTS),
              "ports held to the root port maximum");
@@ -212,8 +215,8 @@ static void test_pirq_words(void)
     CHECK_EQ(XHCI_SNAPSHOT_HCD_PIRQ_AT, 21, "the record right after");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PIRQ_WORDS),
              sizeof(XHCI_PIRQ_STATE) / 4, "its count, the whole state");
-    CHECK_EQ(XHCI_SNAPSHOT_HCD_PIRQ_AT + sizeof(XHCI_PIRQ_STATE) / 4,
-             XHCI_SNAPSHOT_HCD_HEAD_WORDS, "the record ends the header");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_PIRQ_AT + sizeof(XHCI_PIRQ_STATE) / 4, 48,
+             "the record ends 36.3's header, word 48");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PIRQ_AT), 0,
              "the record is the door's, not layout");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_PIRQ_STATE, Runs), 0 * 4, "Runs");
@@ -230,11 +233,155 @@ static void test_pirq_words(void)
     CHECK_EQ(XHCI_PIRQ_D_COUNT, 24, "the decisions XHCISNAP names");
 }
 
+/* 36.21: the transfer-size readings and the class driver records, after
+ * the routing record. XHCISNAP names the words at these places (xhcisnap.c,
+ * SNAP_XS_* and SNAP_TL_*), so a field moved fails here until the tool
+ * follows. */
+static void test_xstat_words(void)
+{
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_XSTAT_WORDS, 48, "after the routing record");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_TELE_RECORDS, 49, "then the record count");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_TELE_WORDS, 50, "and a record's words");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_XSTAT_AT, 51, "the readings at 51");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_XSTAT_WORDS), 54,
+             "fifty-four readings");
+    CHECK_EQ(sizeof(XHCI_XSTAT), 54 * 4, "the whole of XHCI_XSTAT");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_TELE_RECORDS), 2,
+             "two class driver records");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_TELE_WORDS), 45,
+             "four words of the bus's, then the record");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_TELE_AT, 51 + 54, "the records after");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_TELE_AT + 2 * 45, XHCI_SNAPSHOT_HCD_HEAD_WORDS,
+             "and they end the header");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_XSTAT_AT), 0,
+             "the readings are the door's, not layout");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_TELE_AT), 0,
+             "and so are the records");
+    CHECK_EQ(sizeof(XHCI98_TELEMETRY), 41 * 4, "a record of 41 words");
+    CHECK_EQ(XHCI98_TELE_WORDS, XHCI_SNAPSHOT_HCD_TELE_BODY_WORDS,
+             "the snapshot carries it whole");
+    CHECK_EQ(XHCI98_TELE_BUCKETS, XHCI_XSTAT_BUCKETS,
+             "the class driver's buckets are the bus's");
+    CHECK_EQ(XHCI98_TELE_DEPTHS, XHCI_XSTAT_DEPTH_BUCKETS,
+             "and its depths");
+    CHECK_EQ(XHCI98_TELE_DEPTH_HIST, XHCI98_TELE_HIST + 9,
+             "depths after lengths");
+    CHECK_EQ(XHCI98_TELE_COUNTERS + 8, XHCI98_TELE_UNSUPPORTED,
+             "the policy counts after the counters");
+    CHECK_EQ(XHCI98_TELE_TRANSPORT + 1, XHCI98_TELE_WORDS,
+             "and last");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XSTAT, MapGrant), 4 * 4, "MapGrant");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XSTAT, Hist), 10 * 4, "Hist");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XSTAT, Chunks), 19 * 4, "Chunks");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XSTAT, ChunkHist), 22 * 4, "ChunkHist");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XSTAT, Gap), 27 * 4, "Gap");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XSTAT, Empty), 31 * 4, "Empty");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XSTAT, Publish), 35 * 4, "Publish");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XSTAT, Complete), 39 * 4, "Complete");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XSTAT, Discarded), 43 * 4, "Discarded");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XSTAT, TscStartLo), 44 * 4,
+             "TscStartLo");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XSTAT, TimeStartLo), 46 * 4,
+             "TimeStartLo");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XSTAT, TscNowLo), 48 * 4, "TscNowLo");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XSTAT, TimeNowLo), 50 * 4, "TimeNowLo");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XSTAT, TeleRefused), 53 * 4,
+             "TeleRefused last");
+}
+
+/* 36.21's arithmetic, as the driver calls it. */
+static void test_xstat_math(void)
+{
+    XHCI_XSTAT s;
+    XHCI_XSTAT_TIME t;
+    ULONG discarded;
+    ULONG lo;
+    ULONG hi;
+    ULONG i;
+
+    CHECK_EQ(XhciXstatBucket(0), 0, "an empty length in the first");
+    CHECK_EQ(XhciXstatBucket(4096), 0, "4 KiB in the first");
+    CHECK_EQ(XhciXstatBucket(4097), 1, "past it, the second");
+    CHECK_EQ(XhciXstatBucket(16384), 1, "16 KiB");
+    CHECK_EQ(XhciXstatBucket(65536), 2, "64 KiB");
+    CHECK_EQ(XhciXstatBucket(65537), 3, "past 64 KiB");
+    CHECK_EQ(XhciXstatBucket(131072), 3, "128 KiB");
+    CHECK_EQ(XhciXstatBucket(262144), 4, "256 KiB");
+    CHECK_EQ(XhciXstatBucket(524288), 5, "512 KiB");
+    CHECK_EQ(XhciXstatBucket(1048576), 6, "1 MiB");
+    CHECK_EQ(XhciXstatBucket(2097152), 7, "2 MiB");
+    CHECK_EQ(XhciXstatBucket(2097153), 8, "above 2 MiB");
+    CHECK_EQ(XhciXstatBucket(0xFFFFFFFFUL), 8, "and the most");
+    CHECK_EQ(XhciXstatChunkBucket(0), 0, "no chunk counts as one");
+    CHECK_EQ(XhciXstatChunkBucket(1), 0, "one");
+    CHECK_EQ(XhciXstatChunkBucket(2), 1, "two");
+    CHECK_EQ(XhciXstatChunkBucket(8), 2, "eight: 1 MiB at 128 KiB");
+    CHECK_EQ(XhciXstatChunkBucket(9), 3, "nine: unaligned 1 MiB");
+    CHECK_EQ(XhciXstatChunkBucket(16), 3, "sixteen: 2 MiB");
+    CHECK_EQ(XhciXstatChunkBucket(17), 4, "seventeen and more");
+    CHECK_EQ(XhciXstatDepthBucket(0), 0, "none in flight reads as one");
+    CHECK_EQ(XhciXstatDepthBucket(1), 0, "one");
+    CHECK_EQ(XhciXstatDepthBucket(2), 1, "two");
+    CHECK_EQ(XhciXstatDepthBucket(4), 2, "three to four");
+    CHECK_EQ(XhciXstatDepthBucket(5), 3, "five to eight");
+    CHECK_EQ(XhciXstatDepthBucket(16), 4, "nine to sixteen");
+    CHECK_EQ(XhciXstatDepthBucket(30), 5, "thirty: the most UAS runs");
+
+    lo = 0xFFFFFFF0UL;
+    hi = 2;
+    XhciXstatAdd64(&lo, &hi, 0x20);
+    CHECK(lo == 0x10 && hi == 3, "a sum carries into the high word");
+    XhciXstatAdd64(&lo, &hi, 0);
+    CHECK(lo == 0x10 && hi == 3, "nothing added, nothing carried");
+
+    for (i = 0; i < sizeof(t); i++) {
+        ((unsigned char *)&t)[i] = 0;
+    }
+    discarded = 0;
+    CHECK_EQ(XhciXstatInterval(&t, &discarded, 0, 500), 0,
+             "an unstamped start records nothing");
+    CHECK_EQ(XhciXstatInterval(&t, &discarded, 500, 0), 0,
+             "nor an unstamped end");
+    CHECK_EQ(XhciXstatInterval(&t, &discarded, 101, 401), 1, "300 counts");
+    CHECK_EQ(XhciXstatInterval(&t, &discarded, 0xFFFFFF01UL, 0x101), 1,
+             "across the low half's wrap: 512 counts");
+    CHECK(t.Count == 2 && t.SumLo == 812 && t.SumHi == 0 && t.Max == 512,
+          "two intervals, their sum and the longest");
+    CHECK_EQ(XhciXstatInterval(&t, &discarded, 1001, 1), 0,
+             "a counter that ran backwards is no interval");
+    CHECK_EQ(discarded, 1, "and is counted as discarded");
+    CHECK_EQ(XhciXstatInterval(&t, &discarded, 1, 0x80000001UL), 0,
+             "nor one past the limit");
+    CHECK_EQ(XhciXstatInterval(&t, &discarded, 1, 0x80000000UL), 1,
+             "the limit itself is one");
+    CHECK_EQ(t.Count, 3, "three recorded in all");
+    CHECK_EQ(discarded, 2, "two discarded");
+
+    for (i = 0; i < sizeof(s); i++) {
+        ((unsigned char *)&s)[i] = 0;
+    }
+    XhciXstatUrb(&s, 1048576, 8);
+    XhciXstatUrb(&s, 65536, 1);
+    XhciXstatUrb(&s, 0xFFFFFFF0UL, 17);
+    CHECK_EQ(s.Urbs, 3, "three URBs");
+    CHECK(s.BytesLo == 0x0010FFF0UL && s.BytesHi == 1,
+          "their lengths' sum, carried");
+    CHECK_EQ(s.LengthMax, 0xFFFFFFF0UL, "the longest");
+    CHECK(s.Hist[6] == 1 && s.Hist[2] == 1 && s.Hist[8] == 1,
+          "each in its bucket");
+    CHECK_EQ(s.MultiChunk, 2, "two of more than one chunk");
+    CHECK_EQ(s.ChunksMax, 17, "the most chunks");
+    CHECK(s.ChunkHist[0] == 1 && s.ChunkHist[2] == 1 && s.ChunkHist[4] == 1,
+          "by chunk count");
+}
+
 int main(void)
 {
     test_header();
     test_tol_words();
     test_pirq_words();
+    test_xstat_words();
+    test_xstat_math();
     test_walk(0);
     test_walk(1);
     test_walk(18);

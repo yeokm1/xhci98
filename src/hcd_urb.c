@@ -1543,6 +1543,78 @@ static NTSTATUS hcdStreamsIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     return HcdCfgQueue(hc, dev, pdo, irp);
 }
 
+/*
+ * IOCTL_XHCI98_TELEMETRY (xhci98_xfer.h, task 36.21): the class driver's
+ * record, its signature, version and size checked, copied whole into the
+ * record of the device it came from - or, the first time, into a free one
+ * - under the controller lock, and the IRP completed before this returns,
+ * so nothing here holds the caller's memory. A record of a device whose
+ * slot is gone is kept, and a new device takes it only when no record is
+ * free. IRQL: <= DISPATCH_LEVEL.
+ */
+static NTSTATUS hcdTelemetryIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                                  PIRP irp, PXHCI98_TELEMETRY rq)
+{
+    PHCD_UAS_TELE t;
+    KIRQL oldIrql;
+    ULONG slot;
+    ULONG i;
+    ULONG lo;
+    ULONG hi;
+
+    if (hc == NULL) {
+        return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+    }
+    slot = 0;
+    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    if (pdo->Listed && pdo->Device != NULL) {
+        slot = pdo->Device->SlotId;
+    }
+    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    HcdTscRead(&lo, &hi);
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (rq == NULL || rq->Word[XHCI98_TELE_SIG] != XHCI98_TELE_SIGNATURE ||
+        rq->Word[XHCI98_TELE_VER] != XHCI98_TELE_VERSION ||
+        rq->Word[XHCI98_TELE_SIZE] != sizeof(XHCI98_TELEMETRY) ||
+        slot == 0) {
+        hc->Xstat.TeleRefused++;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
+    }
+    t = NULL;
+    for (i = 0; i < HCD_UAS_TELE_RECORDS && t == NULL; i++) {
+        if (hc->UasTele[i].Slot == slot) {
+            t = &hc->UasTele[i];
+        }
+    }
+    for (i = 0; i < HCD_UAS_TELE_RECORDS && t == NULL; i++) {
+        if (hc->UasTele[i].Slot == 0) {
+            t = &hc->UasTele[i];
+        }
+    }
+    for (i = 0; i < HCD_UAS_TELE_RECORDS && t == NULL; i++) {
+        if (hc->SlotDevice[hc->UasTele[i].Slot] == NULL) {
+            t = &hc->UasTele[i];
+            t->Taken = 0;
+        }
+    }
+    if (t == NULL) {
+        hc->Xstat.TeleRefused++;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        return HcdCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES, 0);
+    }
+    t->Slot = slot;
+    t->Taken++;
+    t->TscLo = lo;
+    t->TscHi = hi;
+    for (i = 0; i < XHCI98_TELE_WORDS; i++) {
+        t->Word[i] = rq->Word[i];
+    }
+    hc->Xstat.TeleTaken++;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+}
+
 /* The slot an internal IOCTL is traced under once: its function number, the
  * internal range (USB_IOCTL_INTERNAL_INDEX, 0) at 0..0x1F and the
  * USB_IOCTL_INDEX range (0xFF) above it, everything else in the last. */
@@ -1664,6 +1736,12 @@ NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp)
         status = hcdStreamsIoctl(pdo, hc, irp,
                                  (PXHCI98_STREAMS_REQUEST)
                                      stack->Parameters.Others.Argument1);
+        break;
+
+    case IOCTL_XHCI98_TELEMETRY:
+        status = hcdTelemetryIoctl(pdo, hc, irp,
+                                   (PXHCI98_TELEMETRY)
+                                       stack->Parameters.Others.Argument1);
         break;
 
     default:

@@ -1681,6 +1681,47 @@ static VOID hcdRelease(PHCD_CONTROLLER hc)
 static VOID hcdStopBody(PHCD_CONTROLLER hc);
 
 /*
+ * 36.21's readings start again with each start, the clocks' pair taken
+ * now; the class drivers' records are kept (each says when it came). Under
+ * the controller lock, which the door reads them under. IRQL:
+ * PASSIVE_LEVEL.
+ */
+static VOID hcdXstatStart(PHCD_CONTROLLER hc)
+{
+    PXHCI_XSTAT s;
+    LARGE_INTEGER now;
+    KIRQL oldIrql;
+    PUCHAR p;
+    ULONG i;
+
+    s = &hc->Xstat;
+    KeQuerySystemTime(&now);
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    p = (PUCHAR)s;
+    for (i = 0; i < sizeof(*s); i++) {
+        p[i] = 0;
+    }
+    HcdTscRead(&s->TscStartLo, &s->TscStartHi);
+    s->TimeStartLo = now.LowPart;
+    s->TimeStartHi = (ULONG)now.HighPart;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
+/* The grant IoGetDmaAdapter gave, and what one chunk may span of it
+ * (hcd_io.c, hcdPlanChunk). IRQL: PASSIVE_LEVEL, after HcdDmaOpen. */
+static VOID hcdXstatGrant(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->Xstat.MapGrant = hc->MapRegisters;
+    hc->Xstat.ChunkPages = hc->MapRegisters < HCD_SG_ELEMENTS
+                               ? hc->MapRegisters
+                               : HCD_SG_ELEMENTS;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
+/*
  * Bring the controller up: resources, BAR, adapter and common buffer, the
  * interrupt, XhciInitController, the interrupt enables, the thread. Called
  * after the PCI stack has started (hcd_pnp.c). IRQL: PASSIVE_LEVEL.
@@ -1713,6 +1754,7 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
      * the lower driver saw it (HcdPirqStartAttempt, hcd_pnp.c). */
     HcdCountersStart(hc);
     HcdEnumInit(hc);
+    hcdXstatStart(hc);
 
     status = hcdParseResources(hc, irp);
     if (!NT_SUCCESS(status)) {
@@ -1754,6 +1796,7 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     XhciLogNoteAddress(ext, "start.bar", hc->BarRaw.LowPart);
     XhciLogNote(ext, "start.common.pa", ext->StartPA);
     XhciLogNote(ext, "start.mapregs", hc->MapRegisters);
+    hcdXstatGrant(hc);
     /* The design record 13 section 11.4 reading, on the debug channel
      * too: the log ring has no reader until 26-A.8. */
     XHCI_DBG_VALUE("hcd: start, map registers granted", hc->MapRegisters);

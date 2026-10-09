@@ -608,6 +608,25 @@ static UCHAR uasSlotPrepare(PUAS_SLOT slot, PIRP irp,
     return 0;
 }
 
+/* Lock held. Task 36.21: a command started, counted by the commands in
+ * flight with it and by its data length. */
+static VOID uasTeleCount(PUAS_FDO fdo, PUAS_SLOT slot)
+{
+    if (fdo->Active > fdo->ActiveMax) {
+        fdo->ActiveMax = fdo->Active;
+    }
+    fdo->DepthHist[UasTeleDepthBucket(fdo->Active)]++;
+    if (!slot->NeedsData) {
+        return;
+    }
+    fdo->DataCommands++;
+    UasTeleAdd64(&fdo->DataLo, &fdo->DataHi, slot->DataLength);
+    if (slot->DataLength > fdo->LengthMax) {
+        fdo->LengthMax = slot->DataLength;
+    }
+    fdo->Hist[UasTeleBucket(slot->DataLength)]++;
+}
+
 /*
  * <= DISPATCH_LEVEL, no lock held, from a context that keeps the FDO (a
  * referenced engine context or a PDO dispatch inside its Busy count).
@@ -689,6 +708,7 @@ static VOID uasPump(PUAS_FDO fdo)
             slot->State = UAS_SLOT_ACTIVE;
             fdo->Active++;
             fdo->Counters[UAS_CTR_COMMANDS]++;
+            uasTeleCount(fdo, slot);
             uasPostStatus(fdo, slot, &a);
             if (fdo->Streamed) {
                 uasPostData(fdo, slot, &a);
@@ -881,6 +901,100 @@ static NTSTATUS uasXferDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
 /* The timer                                                          */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Task 36.21: the telemetry record handed to the bus (xhci98_xfer.h,
+ * IOCTL_XHCI98_TELEMETRY). Built under the lock from the readings, sent
+ * after its release with the FDO's own IRP, which the bus completes before
+ * its dispatch returns; counted in the rundown from the send to the end of
+ * the completion, so UasEngineStop waits for it. A bus that does not know
+ * the request is not asked again. Never through UasSyncIoctl (PASSIVE_LEVEL
+ * only, and waiting) and never under the lock.
+ */
+static NTSTATUS uasTeleDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
+{
+    PUAS_FDO fdo;
+    KIRQL irql;
+
+    UNREFERENCED_PARAMETER(device);
+    fdo = (PUAS_FDO)context;
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    if (irp->IoStatus.Status == STATUS_NOT_SUPPORTED ||
+        irp->IoStatus.Status == STATUS_INVALID_DEVICE_REQUEST) {
+        fdo->TeleOff = TRUE;
+    }
+    fdo->TeleBusy = FALSE;
+    KeReleaseSpinLock(&fdo->Lock, irql);
+    uasDeref(fdo);
+    return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+/* Lock held. TRUE when a record was built and is to be sent; the caller
+ * then sends it with uasTeleSend after the lock's release. */
+static BOOLEAN uasTeleBuild(PUAS_FDO fdo)
+{
+    PULONG w;
+    ULONG i;
+
+    if (fdo->TeleIrp == NULL || fdo->TeleBusy || fdo->TeleOff ||
+        fdo->Gone || !fdo->Started) {
+        return FALSE;
+    }
+    if (fdo->TeleSequence != 0 &&
+        fdo->TeleLastCommands == fdo->Counters[UAS_CTR_COMMANDS] &&
+        fdo->TeleLastActive == fdo->Active) {
+        return FALSE;
+    }
+    fdo->TeleSequence++;
+    fdo->TeleLastCommands = fdo->Counters[UAS_CTR_COMMANDS];
+    fdo->TeleLastActive = fdo->Active;
+    w = fdo->TeleRecord.Word;
+    UasZero(w, sizeof(fdo->TeleRecord));
+    w[XHCI98_TELE_SIG] = XHCI98_TELE_SIGNATURE;
+    w[XHCI98_TELE_VER] = XHCI98_TELE_VERSION;
+    w[XHCI98_TELE_SIZE] = sizeof(XHCI98_TELEMETRY);
+    w[XHCI98_TELE_SEQUENCE] = fdo->TeleSequence;
+    w[XHCI98_TELE_COMMAND_BYTES] = fdo->CommandBytes;
+    w[XHCI98_TELE_POLICY_SOURCE] = fdo->PolicySource;
+    w[XHCI98_TELE_STREAMED] = fdo->Streamed ? 1UL : 0UL;
+    w[XHCI98_TELE_QUEUE_DEPTH] = fdo->QueueDepth;
+    w[XHCI98_TELE_ACTIVE] = fdo->Active;
+    w[XHCI98_TELE_ACTIVE_MAX] = fdo->ActiveMax;
+    w[XHCI98_TELE_COMMANDS] = fdo->Counters[UAS_CTR_COMMANDS];
+    w[XHCI98_TELE_DATA_COMMANDS] = fdo->DataCommands;
+    w[XHCI98_TELE_DATA_LO] = fdo->DataLo;
+    w[XHCI98_TELE_DATA_HI] = fdo->DataHi;
+    w[XHCI98_TELE_LENGTH_MAX] = fdo->LengthMax;
+    for (i = 0; i < XHCI98_TELE_BUCKETS; i++) {
+        w[XHCI98_TELE_HIST + i] = fdo->Hist[i];
+    }
+    for (i = 0; i < XHCI98_TELE_DEPTHS; i++) {
+        w[XHCI98_TELE_DEPTH_HIST + i] = fdo->DepthHist[i];
+    }
+    for (i = 0; i < 8; i++) {
+        w[XHCI98_TELE_COUNTERS + i] = fdo->Counters[i];
+    }
+    fdo->TeleBusy = TRUE;
+    uasRef(fdo);
+    return TRUE;
+}
+
+/* No lock held, <= DISPATCH_LEVEL, after uasTeleBuild said TRUE. */
+static VOID uasTeleSend(PUAS_FDO fdo)
+{
+    PIO_STACK_LOCATION next;
+    PIRP irp;
+
+    irp = fdo->TeleIrp;
+    UasIrpReset(irp, fdo->TeleIrpSize, fdo->Lower->StackSize);
+    irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+    next = IoGetNextIrpStackLocation(irp);
+    next->MajorFunction = IRP_MJ_INTERNAL_DEVICE_CONTROL;
+    next->Parameters.DeviceIoControl.IoControlCode = IOCTL_XHCI98_TELEMETRY;
+    next->Parameters.Others.Argument1 = &fdo->TeleRecord;
+    UAS_SET_COMPLETION_ALWAYS(irp, uasTeleDone, fdo);
+    (VOID)IoCallDriver(fdo->Lower, irp);
+}
+
 static VOID uasArmTimer(PUAS_FDO fdo)
 {
     LARGE_INTEGER due;
@@ -896,6 +1010,7 @@ static VOID uasTick(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2)
     PUAS_SLOT slot;
     BOOLEAN queue;
     BOOLEAN expired;
+    BOOLEAN tele;
     ULONG t;
     KIRQL irql;
 
@@ -905,6 +1020,7 @@ static VOID uasTick(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2)
     fdo = (PUAS_FDO)context;
     queue = FALSE;
     expired = FALSE;
+    tele = FALSE;
     KeAcquireSpinLock(&fdo->Lock, &irql);
     if (fdo->TimerStop) {
         KeReleaseSpinLock(&fdo->Lock, irql);
@@ -928,12 +1044,16 @@ static VOID uasTick(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2)
     if (expired) {
         queue = uasWantRecovery(fdo);
     }
+    tele = uasTeleBuild(fdo);
     /* Re-armed under the lock, so UasEngineStop's KeCancelTimer either
      * finds it queued or this DPC finds TimerStop. */
     uasArmTimer(fdo);
     KeReleaseSpinLock(&fdo->Lock, irql);
     if (queue) {
         ExQueueWorkItem(&fdo->Recovery, DelayedWorkQueue);
+    }
+    if (tele) {
+        uasTeleSend(fdo);
     }
     uasDeref(fdo);
 }
@@ -1549,6 +1669,9 @@ NTSTATUS UasEngineInit(PUAS_FDO fdo)
     if (x->Irp == NULL) {
         goto cleanup;
     }
+    /* Task 36.21's telemetry send; its absence only leaves the bus without
+     * the record. */
+    fdo->TeleIrp = UasIrpAlloc(stack, &fdo->TeleIrpSize);
     KeInitializeTimer(&fdo->Timer);
     KeInitializeDpc(&fdo->TimerDpc, uasTick, fdo);
     ExInitializeWorkItem(&fdo->Recovery, uasRecoveryWorker, fdo);
@@ -1576,6 +1699,8 @@ VOID UasEngineFree(PUAS_FDO fdo)
     }
     UasFree(fdo->SharedStatus.Irp);
     fdo->SharedStatus.Irp = NULL;
+    UasFree(fdo->TeleIrp);
+    fdo->TeleIrp = NULL;
     UasFree(fdo->SharedBuffer);
     fdo->SharedBuffer = NULL;
 }

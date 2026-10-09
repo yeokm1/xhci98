@@ -225,6 +225,23 @@ for %%S in ("decision         22 WROTE" "D20IR before     00003210 (INTA -> PIRQ
     )
 )
 
+rem Task 36.21's transfer-size readings from canned HCD headers: a streamed
+rem UAS copy at 1 MiB commands over 128 KiB chunks with one class driver
+rem record, a value out of range with no clock yet; then a header from before
+rem 36.21, an image cut short and a record count the header cannot hold.
+"%~dp0XHCISNAP.EXE" -selftest-xstat > "%BASE%.xstat.log"
+if errorlevel 1 (
+    echo FAIL: -selftest-xstat exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("XhciMaxTransferKB           used as set (1024)" "command size in effect      1048576 bytes; asked 1 times" "a chunk spans at most 32 pages" "bulk data URBs              100, 104857600 bytes, the longest 1048576" "<=1M 100" "URBs of more than one 100, the most 8" "3-8: 100" "at 3000.0 counts a" "gap, retired to published   700, mean 90.0 us, longest 200.0 us" "ring empty, URB unfinished  700, mean 80.0 us, longest 180.0 us" "record 1: slot 2, 9 sends taken, the last 1.0 s before this dump" "command size 1048576 bytes (the bus's answer), streamed, depth 30" "1: 90 2: 14" "record 2: none has come" "out of 64-2048: the default (4096)" "times are not converted" "not measured by this driver" "came back 192 bytes" "9 records of 45 words" "older bus 0, out of contract 1, failed 0") do (
+    findstr /C:%%S "%BASE%.xstat.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the transfer-size decode does not say %%S
+        set FAILED=1
+    )
+)
+
 rd /s /q "%RUNDIR%" 2> nul
 rd out 2> nul
 
@@ -232,5 +249,5 @@ if "%FAILED%"=="1" (
     echo xhcisnap selftest FAILED
     exit /b 1
 )
-echo xhcisnap selftest: 10 cases, all passed
+echo xhcisnap selftest: 11 cases, all passed
 exit /b 0

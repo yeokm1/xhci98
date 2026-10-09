@@ -47,6 +47,7 @@
 #include <ntddstor.h>
 #include "uas_iu.h"
 #include "uas_streams.h"
+#include "../xhci98_xfer.h"
 
 #define UAS_POOL_TAG            ' saU'
 
@@ -217,6 +218,36 @@ typedef struct _UAS_FDO {
     UAS_XFER SharedStatus;          /* streamless: the one status reader */
     PUCHAR SharedBuffer;
     ULONG Counters[8];
+
+    /* Task 36.21's readings, under the lock: commands in flight at most,
+     * those with a data phase, their lengths' sum, the longest, and the
+     * commands by length and by the number in flight as each started
+     * (xhci98_xfer.h's buckets). Kept across stops, as Counters are. */
+    ULONG ActiveMax;
+    ULONG DataCommands;
+    ULONG DataLo;
+    ULONG DataHi;
+    ULONG LengthMax;
+    ULONG Hist[XHCI98_TELE_BUCKETS];
+    ULONG DepthHist[XHCI98_TELE_DEPTHS];
+    /* The command size this driver advertises, in bytes, and where it came
+     * from (XHCI98_TELE_SRC_*): the descriptor and the pipes read this one
+     * stored value. */
+    ULONG CommandBytes;
+    ULONG PolicySource;
+    /* The record handed to the bus (IOCTL_XHCI98_TELEMETRY) from the timer
+     * at most once a second when something moved: built under the lock,
+     * sent after it with this driver's own IRP. TeleBusy (lock) from the
+     * send to the completion; TeleOff once a bus has refused the request
+     * as unknown, so an older bus is asked no more. */
+    PIRP TeleIrp;
+    USHORT TeleIrpSize;
+    BOOLEAN TeleBusy;
+    BOOLEAN TeleOff;
+    ULONG TeleSequence;
+    ULONG TeleLastCommands;
+    ULONG TeleLastActive;
+    XHCI98_TELEMETRY TeleRecord;
 
     KTIMER Timer;
     KDPC TimerDpc;

@@ -660,3 +660,48 @@ ULONG UasBuildId(ULONG kind, const UCHAR *inquiry, ULONG inquiryLength,
     }
     return o.Overflow ? 0 : o.Used;
 }
+
+/* ------------------------------------------------------------------ */
+/* Telemetry (task 36.21)                                             */
+/* ------------------------------------------------------------------ */
+
+ULONG UasTeleBucket(ULONG bytes)
+{
+    ULONG limit;
+    ULONG i;
+
+    limit = 0x1000UL;
+    for (i = 0; i < UAS_TELE_BUCKETS - 1; i++) {
+        if (bytes <= limit) {
+            return i;
+        }
+        limit = (i < 2) ? limit * 4UL : limit * 2UL;
+    }
+    return UAS_TELE_BUCKETS - 1;
+}
+
+ULONG UasTeleDepthBucket(ULONG active)
+{
+    ULONG limit;
+    ULONG i;
+
+    limit = 1;
+    for (i = 0; i < UAS_TELE_DEPTHS - 1; i++) {
+        if (active <= limit) {
+            return i;
+        }
+        limit *= 2UL;
+    }
+    return UAS_TELE_DEPTHS - 1;
+}
+
+VOID UasTeleAdd64(PULONG lo, PULONG hi, ULONG v)
+{
+    ULONG before;
+
+    before = *lo;
+    *lo = before + v;
+    if (*lo < before) {
+        *hi += 1UL;
+    }
+}

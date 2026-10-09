@@ -287,9 +287,10 @@ call :run test_psw "test_psw.c ..\src\xhci_psw.c"
 rem test_pirq links nothing else: the value rule, the pair table, the
 rem target PIRQ and the run are pure, driven over a modelled PCH (36.3).
 call :run test_pirq "test_pirq.c ..\src\xhci_pirq.c"
-rem test_snap links nothing else: the snapshot's HCD region layout - where
-rem each word lies and what the header says - is pure (task 35.3).
-call :run test_snap "test_snap.c ..\src\xhci_snap.c"
+rem test_snap links xhci_xstat.c beside it: the snapshot's HCD region layout -
+rem where each word lies and what the header says - is pure (task 35.3), and
+rem so is the arithmetic of the transfer-size readings it carries (36.21).
+call :run test_snap "test_snap.c ..\src\xhci_snap.c ..\src\xhci_xstat.c"
 rem test_tol links xhci_pipe.c for fast polling's composition with the
 rem interval cap; the rest of controller tolerance's decisions, the clock's
 rem arithmetic and the budgets are pure (35-T.9, design record 17).

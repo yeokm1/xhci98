@@ -35,6 +35,37 @@
 #include "xhci_stream.h"
 #include "xhci_counters.h"
 #include "xhci_inj.h"
+#include "xhci_xstat.h"
+#include "xhci98_xfer.h"
+
+/*
+ * The processor's time-stamp counter (task 36.21; xhci_xstat.h): the only
+ * clock finer than the system time's tick on every target that needs no
+ * import - the RDTSC instruction, which every processor these targets run
+ * on has and which a kernel-mode caller may always execute. MSVC 6.0's
+ * assembler predates the mnemonic, so x86 emits its two bytes; amd64 has
+ * the compiler's intrinsic through wdm.h (hcd_io.c, HcdTscRead).
+ * HcdTscStamp is the low half with bit 0 set, so 0 can mean "not
+ * stamped" (one count of resolution lost). A count from one processor
+ * compared with another's may run backwards or jump; XhciXstatInterval
+ * discards what is out of range. IRQL: any.
+ */
+VOID HcdTscRead(PULONG lo, PULONG hi);
+ULONG HcdTscStamp(VOID);
+
+/* One class driver's telemetry (IOCTL_XHCI98_TELEMETRY, xhci98_xfer.h):
+ * the device it came from, the sends taken, the counter at the last, and
+ * the record as it came. Under the controller lock. */
+#define HCD_UAS_TELE_RECORDS    XHCI_SNAPSHOT_HCD_TELE_COUNT
+typedef struct _HCD_UAS_TELE {
+    ULONG Slot;
+    ULONG Taken;
+    ULONG TscLo;
+    ULONG TscHi;
+    ULONG Word[XHCI98_TELE_WORDS];
+} HCD_UAS_TELE, *PHCD_UAS_TELE;
+XHCI_C_ASSERT(hcd_uas_tele_words,
+              XHCI98_TELE_WORDS == XHCI_SNAPSHOT_HCD_TELE_BODY_WORDS);
 
 #define HCD_KIND_CONTROLLER_FDO 0x43464448UL /* 'HDFC' */
 #define HCD_KIND_ROOTHUB_PDO    0x50524448UL /* 'HDRP' */
@@ -194,6 +225,11 @@ typedef struct _HCD_XFER {
     ULONG Asap;                     /* USBD_START_ISO_TRANSFER_ASAP       */
     ULONG Seq;                      /* its pipe's submission order        */
     ULONG Mapped;                   /* held with its chunk mapped         */
+    /* 36.21: chunks of this URB published, and the time-stamp
+     * (HcdTscStamp) at which software retired its last chunk with data
+     * still to move, 0 none; controller lock. */
+    ULONG ChunksPublished;
+    ULONG RetireTsc;
     struct _HCD_XFER_SG {
         USBPORT_SCATTER_GATHER_LIST List;
         USBPORT_SCATTER_GATHER_ELEMENT More[HCD_SG_ELEMENTS];
@@ -252,6 +288,10 @@ typedef struct _HCD_PIPE {
                                      * packet's; controller lock          */
     ULONG RingWait;                 /* a record waits for ring room;
                                      * controller lock                    */
+    /* 36.21: the time-stamp at which software found this ring empty with
+     * a URB unfinished, until the next publication on it; 0 none;
+     * controller lock. */
+    ULONG EmptyTsc;
     /* Streams (31-A.1; xhci98_streams.h). An endpoint with streams open
      * has Streams, and takes no transfer itself; each stream is a pipe of
      * its own with Parent the endpoint's and StreamId 1..31, on a ring in
@@ -1219,6 +1259,13 @@ typedef struct _HCD_CONTROLLER {
      * door gate and at a return to D0 under the power gate. */
     XHCI_PIRQ_STATE Pirq;
     PVOID PirqVa;
+    /* The transfer size (tasks 36.21 and 36.22; xhci_xstat.h, hcd_io.c):
+     * the readings since the start, zeroed and the value latched by each
+     * start (hcd_ctl.c), and the class drivers' records (hcd_urb.c), kept
+     * across starts. Controller lock, but CommandBytes, which only a start
+     * writes, before any device PDO can ask. */
+    XHCI_XSTAT Xstat;
+    HCD_UAS_TELE UasTele[HCD_UAS_TELE_RECORDS];
 } HCD_CONTROLLER, *PHCD_CONTROLLER;
 
 /* The root hub's PDO, created by the controller FDO (hcd_rh.c; design record

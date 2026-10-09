@@ -499,9 +499,32 @@ static void test_ids(void)
              "an unknown kind is refused");
 }
 
+/* Task 36.21: the telemetry's buckets are the bus's (xhci_xstat.c,
+ * test_snap), and its sums carry. */
+static void test_tele(void)
+{
+    ULONG lo;
+    ULONG hi;
+
+    CHECK_EQ(UasTeleBucket(512), 0, "a sector in the first");
+    CHECK_EQ(UasTeleBucket(65536), 2, "64 KiB in the third");
+    CHECK_EQ(UasTeleBucket(65537), 3, "past it, 128 KiB's");
+    CHECK_EQ(UasTeleBucket(1048576), 6, "1 MiB");
+    CHECK_EQ(UasTeleBucket(2097152), 7, "2 MiB");
+    CHECK_EQ(UasTeleBucket(2097153), 8, "above 2 MiB");
+    CHECK_EQ(UasTeleDepthBucket(0), 0, "none reads as one");
+    CHECK_EQ(UasTeleDepthBucket(3), 2, "three to four");
+    CHECK_EQ(UasTeleDepthBucket(30), 5, "thirty: seventeen and more");
+    lo = 0xFFFF0000UL;
+    hi = 0;
+    UasTeleAdd64(&lo, &hi, 0x20000UL);
+    CHECK(lo == 0x10000UL && hi == 1, "a sum carries");
+}
+
 int main(void)
 {
     test_tags();
+    test_tele();
     test_command_iu();
     test_task_iu();
     test_parse();

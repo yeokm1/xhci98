@@ -185,4 +185,18 @@ ULONG UasCdbDirection(UCHAR opcode);
 ULONG UasBuildId(ULONG kind, const UCHAR *inquiry, ULONG inquiryLength,
                  const char *serial, ULONG lun, char *out, ULONG size);
 
+/*
+ * Task 36.21's telemetry (xhci98_xfer.h): the bucket of a command's data
+ * length - up to 4 KiB, 16, 64, 128, 256, 512 KiB, 1 MiB, 2 MiB, above -
+ * and of the commands in flight as one starts - 1, 2, 3-4, 5-8, 9-16, 17
+ * and more (0 reads as 1). The bus's own buckets are the same
+ * (xhci_xstat.c). And a sum's carry by hand.
+ */
+#define UAS_TELE_BUCKETS        9UL
+#define UAS_TELE_DEPTHS         6UL
+
+ULONG UasTeleBucket(ULONG bytes);
+ULONG UasTeleDepthBucket(ULONG active);
+VOID UasTeleAdd64(PULONG lo, PULONG hi, ULONG v);
+
 #endif /* UAS_IU_H */

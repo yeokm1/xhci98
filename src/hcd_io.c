@@ -76,6 +76,52 @@ VOID HcdIoPipeInitEp0(PHCD_USB_DEVICE dev)
 }
 
 /* ----------------------------------------------------------------------- */
+/* The time-stamp counter (task 36.21; hcd.h)                               */
+/* ----------------------------------------------------------------------- */
+
+/* IRQL: any. */
+VOID HcdTscRead(PULONG lo, PULONG hi)
+{
+#if defined(_M_AMD64)
+    ULONG64 tsc;
+
+    tsc = ReadTimeStampCounter();
+    *lo = (ULONG)tsc;
+    *hi = (ULONG)(tsc >> 32);
+#else
+    ULONG l;
+    ULONG h;
+
+    /* RDTSC, 0F 31: MSVC 6.0's assembler has no mnemonic for it. */
+    __asm {
+        _emit 0x0F
+        _emit 0x31
+        mov l, eax
+        mov h, edx
+    }
+    *lo = l;
+    *hi = h;
+#endif
+}
+
+/* IRQL: any. */
+ULONG HcdTscStamp(VOID)
+{
+    ULONG lo;
+    ULONG hi;
+
+    HcdTscRead(&lo, &hi);
+    return lo | 1UL;
+}
+
+/* A bulk data record: what 36.21 measures. */
+static ULONG hcdIsData(PHCD_XFER x)
+{
+    return !x->Control && !x->Isoch &&
+           x->Pipe->TransferType == XHCI_PIPE_XFER_BULK;
+}
+
+/* ----------------------------------------------------------------------- */
 /* Submission                                                               */
 /* ----------------------------------------------------------------------- */
 
@@ -886,6 +932,8 @@ static LONG hcdFill(PHCD_CONTROLLER hc, PHCD_XFER x, PVOID urb,
     x->Length = req->Length;
     x->Offset = 0;
     x->Chunk = 0;
+    x->ChunksPublished = 0;
+    x->RetireTsc = 0;
     x->Status = XHCI_USBD_STATUS_SUCCESS;
     x->Engine = 0;
     x->LengthOut = req->LengthOut;
@@ -1134,6 +1182,30 @@ NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 }
 
 /*
+ * 36.21: a bulk data chunk is on the ring and its doorbell rung. Counted,
+ * and the gap's two parts closed: from its URB's previous chunk's
+ * retirement, and from the moment software found this ring empty with a
+ * URB unfinished. `entered` is HcdIoMapped's own stamp, so its time to
+ * here is the publication's processor cost. Controller lock held.
+ */
+static VOID hcdChunkPublished(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
+                              PHCD_XFER x, ULONG entered)
+{
+    PXHCI_XSTAT s;
+    ULONG now;
+
+    s = &hc->Xstat;
+    now = HcdTscStamp();
+    x->ChunksPublished++;
+    s->Chunks++;
+    (VOID)XhciXstatInterval(&s->Gap, &s->Discarded, x->RetireTsc, now);
+    x->RetireTsc = 0;
+    (VOID)XhciXstatInterval(&s->Empty, &s->Discarded, pipe->EmptyTsc, now);
+    pipe->EmptyTsc = 0;
+    (VOID)XhciXstatInterval(&s->Publish, &s->Discarded, entered, now);
+}
+
+/*
  * A record whose chunk is mapped (or needs no mapping): publish it through
  * the engine and ring the doorbell, or, when the mapping failed, the device
  * has gone, the pipe closed, the IRP was cancelled or the ring refused it,
@@ -1163,7 +1235,9 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
     ULONG slot;
     ULONG dci;
     ULONG i;
+    ULONG entered;
 
+    entered = HcdTscStamp();
     pipe = x->Pipe;
     dev = pipe->Device;
     ep = (pipe->Parent != NULL) ? pipe->Parent : pipe;
@@ -1241,6 +1315,9 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
         slot = dev->SlotId;
         dci = XhciStreamDoorbell(pipe->Dci, pipe->StreamId);
         XhciWriteDoorbell(&hc->Hc, slot, dci);
+        if (hcdIsData(x)) {
+            hcdChunkPublished(hc, pipe, x, entered);
+        }
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         return;
     }
@@ -1637,6 +1714,20 @@ VOID HcdIoRetired(PHCD_CONTROLLER hc, PXHCI_TRANSFER t)
     x = (PHCD_XFER)t;
     x->State = HCD_XFER_DONE;
     InsertTailList(&hc->DoneList, &x->Link);
+    /* 36.21: a bulk chunk that moved all it asked for with more of its URB
+     * still to go opens the gap here, as software handles the completion;
+     * if the ring now holds nothing, so does the software-empty interval.
+     * The URB may yet end instead (cancelled, gone): HcdIoDeferred closes
+     * both unrecorded then. */
+    if (x->Engine && hcdIsData(x) &&
+        x->Xfer.UsbdStatus == XHCI_USBD_STATUS_SUCCESS &&
+        x->Xfer.BytesTransferred >= x->Chunk &&
+        x->Offset + x->Chunk < x->Length) {
+        x->RetireTsc = HcdTscStamp();
+        if (x->Pipe->Queue->Count == 0 && x->Pipe->EmptyTsc == 0) {
+            x->Pipe->EmptyTsc = x->RetireTsc;
+        }
+    }
 }
 
 /*
@@ -1663,6 +1754,7 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
     ULONG release;
     ULONG engine;
     ULONG parked;
+    ULONG entered;
 
     for (;;) {
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
@@ -1674,6 +1766,7 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
         XhciControllerLockRelease(&hc->Hc, oldIrql);
 
         x = CONTAINING_RECORD(entry, HCD_XFER, Link);
+        entered = HcdTscStamp();
         dev = x->Pipe->Device;
         HcdDmaUnmap(hc, x);
         engine = x->Engine;
@@ -1699,6 +1792,15 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
             if (more && hcdPlanChunk(hc, x)) {
                 x->State = HCD_XFER_MAPPING;
                 x->Engine = 0;
+                if (hcdIsData(x)) {
+                    /* 36.21: this pass's cost, before the map pump may
+                     * run the next chunk's publication inside the call. */
+                    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+                    (VOID)XhciXstatInterval(&hc->Xstat.Complete,
+                                            &hc->Xstat.Discarded, entered,
+                                            HcdTscStamp());
+                    XhciControllerLockRelease(&hc->Hc, oldIrql);
+                }
                 HcdDmaMapQueue(hc, x);
                 continue;
             }
@@ -1734,6 +1836,19 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
          * finding 6). Any end of a record also releases one that waited
          * for ring room on the pipe. */
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        if (hcdIsData(x)) {
+            /* 36.21: the URB's end. A gap it left open closes unrecorded:
+             * no next chunk of it will be published. */
+            if (x->RetireTsc != 0 && x->Pipe->EmptyTsc == x->RetireTsc) {
+                x->Pipe->EmptyTsc = 0;
+            }
+            x->RetireTsc = 0;
+            if (x->ChunksPublished != 0) {
+                XhciXstatUrb(&hc->Xstat, x->Length, x->ChunksPublished);
+            }
+            (VOID)XhciXstatInterval(&hc->Xstat.Complete, &hc->Xstat.Discarded,
+                                    entered, HcdTscStamp());
+        }
         release = (x->Pipe->Exclusive == x) || x->Pipe->RingWait;
         if (x->Pipe->Exclusive == x) {
             x->Pipe->Exclusive = NULL;
