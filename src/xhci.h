@@ -8326,6 +8326,27 @@ typedef struct _XHCI_EXTENSION {
      * delete this word then, and put it back on the next single addition.
      * On x86 it costs 4 bytes and changes nothing else.
      */
+    /*
+     * Event delivery (design record 15, roadmap-hcd.md 36.7), appended after
+     * Tol so no offset the harness reads moves; six ULONGs, so the parity
+     * TrailingPad keeps is unchanged. `EventDelivery` is the start's (or the
+     * dead-line move's) XHCI_POLL_DELIVERY_*, copied from the controller
+     * after the start zeroes the extension. `PollService` is the poller's
+     * admission to the hardware and `PollServiceGen` advances at every
+     * grant and revocation (record 15 section 5.3), both under the
+     * controller lock. `LineMoved` and `LineRetired` belong to the move
+     * (section 4.2): the ISR reads them at DIRQL, and they are published
+     * inside KeSynchronizeExecution or under the controller lock before any
+     * interrupt can reach the ISR. `LineRetireState` is the counter block's
+     * retirement state (XHCI_POLL_RETIRED_*).
+     */
+    ULONG EventDelivery;
+    ULONG PollService;
+    ULONG PollServiceGen;
+    volatile ULONG LineMoved;
+    volatile ULONG LineRetired;
+    ULONG LineRetireState;
+
     ULONG TrailingPad;
 
     ULONG TrailingSignature;
@@ -8640,7 +8661,7 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_F_UNREADABLE  0x00000004UL /* PORTSC read all ones */
 
 /* XHCIHC_COUNTERS in ULONGs (xhci_counters.h; asserted in xhci_snap.c). */
-#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 63UL
+#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 96UL
 
 /* Where a word of the image lies (XhciSnapHcdLocate). */
 #define XHCI_SNAPSHOT_HCD_IN_HEAD       0UL

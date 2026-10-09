@@ -37,6 +37,7 @@
 #include "xhci_inj.h"
 #include "xhci_xstat.h"
 #include "xhci98_xfer.h"
+#include "xhci_poll.h"
 
 /*
  * The processor's time-stamp counter (task 36.21; xhci_xstat.h): the only
@@ -1109,6 +1110,33 @@ typedef struct _HCD_CONTROLLER {
     volatile ULONG CmdDonePA;       /* the completed command's TRB        */
     volatile ULONG PortEvents;
 
+    /* Event delivery (hcd_poll.c; design record 15, roadmap-hcd.md 36.6
+     * to 36.8). Values, delivery, reason and pin are settled at each start
+     * (hcdStartBody) and kept outside the zeroed extension, which takes a
+     * copy of the delivery. The poller: its timer and the KDPC only the
+     * timer is given, PollLock (after the controller lock, never before),
+     * the pure state and the interval observation under PollLock. The
+     * period's inputs: PollPortsBusy, published by the thread under the
+     * controller lock; PollLastEvents/PollLastEventTime, the service DPC's
+     * own under the controller lock. PollContainAsked: the thread asked a
+     * recovery to contain an owed retirement (record 15 section 4.2). */
+    XHCI_POLL_VALUES PollValues;
+    ULONG PollDelivery;
+    ULONG PollReason;
+    ULONG PollPinStatus;
+    ULONG PollPin;
+    KTIMER PollTimer;
+    KDPC PollTimerDpc;
+    KSPIN_LOCK PollLock;
+    XHCI_POLL_STATE Poll;
+    XHCI_POLL_OBS PollObs;
+    ULONG PollPortsBusy;
+    ULONG PollLastEvents;
+    ULONG PollLastEventTime;
+    ULONG PollEventSeen;
+    ULONG PollContainAsked;
+    ULONG PollOwedState;            /* XHCI_POLL_BUS_* of Poll.Owed; PollLock */
+
 #if DBG
     /* Strict mode (hcd_strict.c): the command preconditions a conforming
      * xHC enforces and QEMU does not, checked before each command. Thread
@@ -1146,6 +1174,18 @@ typedef struct _HCD_CONTROLLER {
     /* Task 36.4: XhciQemuStartHold's end in tolerance ticks, latched at
      * each start (HcdInjStart), 0 none; ended early by HcdInjStartRelease. */
     volatile LONG InjStartHoldTicks;
+    /* Record 15 section 11's switches, latched at each start: no interrupt
+     * resource and pin 0; the HCD's pin read failing; and the dead line,
+     * N + 1 in the value (0 off), latched N ms after the start's grant (at
+     * once for N = 0, before the connection), from when the ISR queues no
+     * drain and its claims are withheld from the watcher (QemuDeadClaims)
+     * and every look reads asserted. */
+    ULONG QemuNoInterrupt;
+    ULONG QemuPinUnreadable;
+    ULONG QemuDeadLine;
+    volatile ULONG QemuDeadLatched;
+    ULONG QemuDeadAt;
+    volatile LONG QemuDeadClaims;
     KSPIN_LOCK InjLock;
     XHCI_INJ_REGS InjRegs;
     XHCI_INJ_TRIGGER InjTrigger;
@@ -1424,6 +1464,19 @@ VOID HcdPswRoute(PHCD_CONTROLLER hc);
 VOID HcdPswRelease(PHCD_CONTROLLER hc);
 VOID HcdPirqResume(PHCD_CONTROLLER hc);
 VOID HcdPirqStartAttempt(PHCD_CONTROLLER hc);
+ULONG HcdCtlDrainAdmitted(PHCD_CONTROLLER hc);
+
+/* hcd_poll.c (design record 15) */
+VOID HcdPollInitObjects(PHCD_CONTROLLER hc);
+VOID HcdPollOpen(PHCD_CONTROLLER hc, ULONG role);
+VOID HcdPollGrant(PHCD_CONTROLLER hc);
+VOID HcdPollRevoke(PHCD_CONTROLLER hc);
+VOID HcdPollClose(PHCD_CONTROLLER hc);
+ULONG HcdPollContain(PHCD_CONTROLLER hc);
+VOID HcdPollPeekLocked(PHCD_CONTROLLER hc);
+VOID HcdPollPromoteLocked(PHCD_CONTROLLER hc, ULONG needMs);
+VOID HcdPollPortsBusy(PHCD_CONTROLLER hc, ULONG busy);
+VOID HcdPollThreadPass(PHCD_CONTROLLER hc);
 
 /* hcd_enum.c */
 VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered);

@@ -199,7 +199,7 @@
 > deferred pass (`hcdChunkPublished`); `hcd_ctl.c` starts the readings
 > (`hcdXstatStart`, `hcdXstatGrant`); `hcd_urb.c` takes the record
 > (`hcdTelemetryIoctl`); `hcd_door.c` copies both into the HCD region's
-> header (words 48 to 194, version unchanged); in `src\uas\`,
+> header (words 48 to 201, version unchanged); in `src\uas\`,
 > `uas_xport.c` counts each command (`uasTeleCount`) and sends the record
 > from its timer (`uasTeleBuild`, `uasTeleSend`), its buckets
 > `UasTeleBucket` and `UasTeleDepthBucket` in `uas_iu.c` (`test_uas`).
@@ -213,7 +213,19 @@
 > (`uasAskPolicy`, `uas_fdo.c`; the reply check `UasPolicyValue`,
 > `uas_iu.c`, `test_uas`) and its descriptor (`uas_pdo.c`) and pipes read
 > the answer; the qemu flavour's `XhciQemuMapGrant` constrains the grant
-> (`hcdXstatGrant`, `hcd_ctl.c`). The tables below are the
+> (`hcdXstatGrant`, `hcd_ctl.c`).
+> Tasks 36.6 to 36.8 (design record 15) add the pure `xhci_poll.c` /
+> `xhci_poll.h` (the three values, the delivery and its reason, the
+> poller's ownership machine and roles, promotion, park and kick, the
+> watcher's dead-line verdict, the adaptive period, the interval
+> observation and the line's retirement over register callbacks; host suite
+> `test_poll`) and the driver half `hcd_poll.c` (the poll timer and its DPC,
+> `PollLock`, the watcher's look and the move, the retirement under
+> `KeSynchronizeExecution`, `HcdPollContain`'s PCI Interrupt Disable, the
+> grant and revocation, the peeks and the doorbell hook `HcdSvcDoorbell`).
+> `hcd_ctl.c` settles the delivery at start (`hcdSettleDelivery`,
+> `hcdConnect`, the seam 36.15's MSI joins), and the counters are appended
+> to `XHCIHC_COUNTERS`. The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name

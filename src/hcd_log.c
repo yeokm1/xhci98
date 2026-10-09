@@ -203,6 +203,42 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
     XhciLogAppend(log, "log.appends", log->Appends, 1);
     XhciLogAppend(log, "log.suppressed", log->Suppressed, 1);
     XhciLogAppend(log, "log.emits", log->DebugViewEmits, 1);
+    /* Event delivery (design record 15 section 8). */
+    XhciLogAppend(log, "intr.mode.read", hc->Counters.IntrModeRead, 1);
+    XhciLogAppend(log, "intr.mode", hc->Counters.IntrMode, 1);
+    XhciLogAppend(log, "intr.delivery", hc->Counters.IntrDelivery, 1);
+    XhciLogAppend(log, "intr.reason", hc->Counters.IntrReason, 1);
+    XhciLogAppend(log, "intr.pin.status", hc->Counters.IntrPinStatus, 1);
+    XhciLogAppend(log, "intr.pin", hc->Counters.IntrPin, 1);
+    XhciLogAppend(log, "poll.idle.ms", hc->Counters.PollIdleMs, 1);
+    XhciLogAppend(log, "poll.active.ms", hc->Counters.PollActiveMs, 1);
+    XhciLogAppend(log, "poll.role", hc->Counters.PollRole, 1);
+    XhciLogAppend(log, "poll.period.last", hc->Counters.PollPeriodLast, 1);
+    XhciLogAppend(log, "poll.state.last", hc->Counters.PollStateLast, 1);
+    XhciLogAppend(log, "poll.runs", hc->Counters.PollRuns, 1);
+    XhciLogAppend(log, "poll.runs.events", hc->Counters.PollRunsWithEvents,
+                  1);
+    XhciLogAppend(log, "poll.peeks", hc->Counters.PollPeeks, 1);
+    XhciLogAppend(log, "poll.peek.hits", hc->Counters.PollPeekHits, 1);
+    XhciLogAppend(log, "poll.promotions", hc->Counters.PollPromotions, 1);
+    XhciLogAppend(log, "poll.parks", hc->Counters.PollParks, 1);
+    XhciLogAppend(log, "poll.kicks", hc->Counters.PollKicks, 1);
+    XhciLogAppend(log, "poll.displaced", hc->Counters.PollArmsDisplaced, 1);
+    XhciLogAppend(log, "poll.interval.min", hc->Counters.PollIntervalMinMs,
+                  1);
+    XhciLogAppend(log, "poll.interval.max", hc->Counters.PollIntervalMaxMs,
+                  1);
+    XhciLogAppend(log, "poll.interval.discarded",
+                  hc->Counters.PollIntervalsDiscarded, 1);
+    XhciLogAppend(log, "watch.looks", hc->Counters.WatchLooks, 1);
+    XhciLogAppend(log, "watch.asserted", hc->Counters.WatchAsserted, 1);
+    XhciLogAppend(log, "watch.stale", hc->Counters.WatchStalePairs, 1);
+    XhciLogAppend(log, "intr.moves", hc->Counters.LineMoves, 1);
+    XhciLogAppend(log, "intr.retire.attempts",
+                  hc->Counters.LineRetireAttempts, 1);
+    XhciLogAppend(log, "intr.retire.state", ext->LineRetireState, 1);
+    XhciLogAppend(log, "intr.moved.masked", hc->Counters.LineMoveMasked, 1);
+    XhciLogAppend(log, "intr.values.found", hc->Counters.IntrValuesFound, 1);
     hcdLogTolLocked(ext, log);
 }
 
@@ -461,6 +497,9 @@ VOID HcdCountersPoll(PHCD_CONTROLLER hc)
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     hc->Counters.FatalStatus = hc->Hc.FatalStatusDetected;
     hc->Counters.InterruptMaskFailures = hc->Hc.InterruptMaskFailures;
+    /* The core sets it at an HCRST that retired a moved line (record 15
+     * section 4.2); the HCD's own proofs set both. */
+    hc->Counters.LineRetireState = hc->Hc.LineRetireState;
     XhciControllerLockRelease(&hc->Hc, oldIrql);
 #ifdef XHCI_DBG_TRACE
     hcdCountersTrace(&hc->Counters);
