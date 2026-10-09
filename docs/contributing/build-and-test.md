@@ -6296,8 +6296,9 @@ preflight and the post-reset parse alike (`XhciPortMapOverridePsi`,
 the controller). It is kept apart from the injection below.
 
 **`XhciQemuStartHold`** (roadmap-hcd task 36.4, issue 12 Finding 1). A
-REG_DWORD read at every start: a number of milliseconds, held to 5000, for
-which the start holds back the ISR's event drains (it acknowledges and queues
+REG_DWORD read at every start: a number of milliseconds, held to 3000 so
+the hold ends well inside the No Op's own 5000 ms watchdog, for which the
+start holds back the ISR's event drains (it acknowledges and queues
 nothing, as fault `01` below) and the backstop's. The No Op self-test's
 completion then stands undrained and the command engine busy, as the Dell
 E7250's lost interrupt left it, on a line that works, so a device present at
@@ -6307,8 +6308,12 @@ the resubmitted command's own interrupt is drained as ever, and the log ring
 notes `qemu.inj.starthold.released`, then `enum.cmd.busy.end` (the TRB type,
 the last submit's answer, 0 for submitted, and the looks taken), and at the
 stop `enum.cmd.busy` and `enum.cmd.busy.cleared` 1 each. A build without the
-retry fails the port "no slot". Absent, another type or 0 holds nothing; the
-log ring notes `qemu.inj.starthold`. 2000 covers QEMU's first enumeration. A
+retry fails the port "no slot". A hold that runs out with no command having
+met the busy engine (no device present) ends with one drain of the
+thread's own, since the swallowed interrupt's acknowledgement left the
+interrupter disabled and the backstop is off at `XhciTolerance` 0: the log
+ring notes `qemu.inj.starthold.expired`, 1 when a drain was queued. Absent,
+another type or 0 holds nothing; the log ring notes `qemu.inj.starthold`. 2000 covers QEMU's first enumeration. A
 change takes effect at the next start. (A switch of this name was in the
 withdrawn `2.2.0.1`, task 36w.3, and was reverted with it; this is its
 return, without that build's drain at interrupt enable.)

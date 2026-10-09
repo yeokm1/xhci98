@@ -94,10 +94,11 @@
  * backstop's are held back, so the No Op self-test's completion stands
  * undrained and the command engine busy into the first enumeration, as the
  * E7250's lost interrupt left it (issue 12, Finding 1), on a line that
- * works. Read at each start, held to HCD_QEMU_START_HOLD_MAX; absent or 0
- * holds nothing. */
+ * works. Read at each start, held to HCD_QEMU_START_HOLD_MAX, which ends
+ * the hold well inside the No Op's own watchdog (XHCI_COMMAND_TIMEOUT_MS,
+ * 5000), so the aid never times the No Op out; absent or 0 holds nothing. */
 #define HCD_VALUE_QEMU_START_HOLD L"XhciQemuStartHold"
-#define HCD_QEMU_START_HOLD_MAX   5000UL
+#define HCD_QEMU_START_HOLD_MAX   3000UL
 
 /* The trigger is read once per ten tolerance ticks, about a second. */
 #define HCD_INJ_READ_TICKS 10UL
@@ -1305,6 +1306,19 @@ VOID HcdInjPoll(PHCD_CONTROLLER hc)
     KIRQL oldIrql;
 
     ext = &hc->Hc;
+    /* Task 36.4: a hold that ran out with no command meeting the busy
+     * engine has swallowed an interrupt whose acknowledgement cleared
+     * IMAN.IE, and nothing else may drain it (the backstop is off at
+     * XhciTolerance 0): one drain of its own, under the power gate and the
+     * drain's admission, apart from the busy retry's count (Codex review of
+     * 36.4, round 1). */
+    if (hc->InjStartHoldTicks != 0 && !HcdInjStartHeld(hc) &&
+        InterlockedExchange((PLONG)&hc->InjStartHoldTicks, 0) != 0) {
+        HcdPowerGateEnter(hc);
+        found = HcdDrainPending(hc);
+        HcdPowerGateLeave(hc);
+        XhciLogNote(ext, "qemu.inj.starthold.expired", found);
+    }
     /* The all-ones snapshot for this pass, before the health poll and the
      * containment step read it: spent here whether or not either reads,
      * so a finite fault ends on a failed controller too. */

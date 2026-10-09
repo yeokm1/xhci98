@@ -1329,6 +1329,7 @@ ULONG HcdCtlProveDmaStopped(PXHCI_EXTENSION ext);
 VOID HcdPowerGateEnter(PHCD_CONTROLLER hc);
 VOID HcdPowerGateLeave(PHCD_CONTROLLER hc);
 ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc);
+ULONG HcdDrainPending(PHCD_CONTROLLER hc);
 ULONG HcdCommandDrain(PHCD_CONTROLLER hc);
 VOID HcdPswRoute(PHCD_CONTROLLER hc);
 VOID HcdPswRelease(PHCD_CONTROLLER hc);

@@ -1276,6 +1276,26 @@ static VOID hcdBackstop(PHCD_CONTROLLER hc)
 }
 
 /*
+ * A drain under hcdDrainAdmitted, asked for only when an event stands at the
+ * dequeue; the caller's own counting. Returns whether one was queued. IRQL:
+ * PASSIVE_LEVEL, the power gate held by the caller or by nothing that could
+ * be waiting on it.
+ */
+ULONG HcdDrainPending(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+    KIRQL oldIrql;
+    ULONG queue;
+
+    ext = &hc->Hc;
+    XhciControllerLockAcquire(ext, &oldIrql);
+    queue = (hcdDrainAdmitted(hc) &&
+             XhciEventRingPending(&ext->EventRing)) ? 1UL : 0UL;
+    XhciControllerLockRelease(ext, oldIrql);
+    return (queue && hcdQueueDrain(hc)) ? 1UL : 0UL;
+}
+
+/*
  * Task 36.4 (issue 12, Finding 1): a drain for the bus's command path, which
  * met the engine busy with an earlier command whose completion may have
  * come with no interrupt - the start's No Op on the E7250, whose line
@@ -1287,16 +1307,7 @@ static VOID hcdBackstop(PHCD_CONTROLLER hc)
  */
 ULONG HcdCommandDrain(PHCD_CONTROLLER hc)
 {
-    PXHCI_EXTENSION ext;
-    KIRQL oldIrql;
-    ULONG queue;
-
-    ext = &hc->Hc;
-    XhciControllerLockAcquire(ext, &oldIrql);
-    queue = (hcdDrainAdmitted(hc) &&
-             XhciEventRingPending(&ext->EventRing)) ? 1UL : 0UL;
-    XhciControllerLockRelease(ext, oldIrql);
-    if (!queue || !hcdQueueDrain(hc)) {
+    if (!HcdDrainPending(hc)) {
         return 0;
     }
     hc->EnumCommandBusyDrains++;
