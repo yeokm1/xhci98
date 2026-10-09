@@ -518,8 +518,9 @@ a hub or SuperSpeed PDO, every answer is today's.
   for nothing, since a live WAIT_WAKE may be pending. Then, in one
   `PdoListLock` and controller-lock hold, a PDO still listed with its
   device has admission reopened, D0 asked, `PwrState` D0 at once on a
-  powered ACTIVE link and otherwise the thread's; one unlinked meanwhile
-  stays closed and its START is refused.
+  powered ACTIVE link and otherwise the thread's, and D0 reported to the
+  power manager (`PoSetPowerState`) - a START owes no D0 IRP; one unlinked
+  meanwhile stays closed and its START is refused.
 - **The controller's transitions** (4.4): the D3 and the direct transition
   (`hcd_power.c`), the in-place recovery and the stop (`hcd_ctl.c`) move
   `PowerEpoch` and set `PowerDown` in one controller-lock hold; the

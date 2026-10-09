@@ -1421,6 +1421,7 @@ VOID HcdSuspPdoRundown(PHCD_DEVICE_PDO pdo)
 ULONG HcdSuspPdoReopen(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
 {
     PHCD_USB_DEVICE dev;
+    POWER_STATE state;
     LARGE_INTEGER due;
     KIRQL listIrql;
     KIRQL oldIrql;
@@ -1456,7 +1457,16 @@ ULONG HcdSuspPdoReopen(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     KeReleaseSpinLock(&hc->PdoListLock, listIrql);
-    pdo->Common.DevicePower = PowerDeviceD0;
+    if (pdo->PwrSwitch) {
+        /* The bus reports a started device's power itself: no D0 IRP is
+         * owed at a START (Codex review of 36.31, round 3). Whether the
+         * link is ACTIVE now or the thread resumes it for this START, D0
+         * is what the function's stack is told; with the switch at 0,
+         * today's START, which reports nothing. */
+        state.DeviceState = PowerDeviceD0;
+        pdo->Common.DevicePower = PowerDeviceD0;
+        (VOID)PoSetPowerState(pdo->Common.Self, DevicePowerState, state);
+    }
     HcdThreadWake(hc);
     return 1;
 }
