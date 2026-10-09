@@ -13,7 +13,8 @@ line is offered and no helper is bound (section 4.3). **Revision 7**
 takes review round 5 and the owner's further decision of the same day:
 `XhciInterruptMode` 1 on its own forces the line on Vista and 7, x86
 and amd64, through the same filter (section 4.2). Revision 8 takes
-review round 6, and revision 9 round 7.
+review round 6, revision 9 round 7, and revision 10 round 8, which
+converged.
 
 Design record 15 section 4.3 designs MSI for the HCD and fixes the seam
 this record plugs into: `hcdMsgConnect(hc, connect, disconnect)`, handed
@@ -365,7 +366,9 @@ replaces, and returns the replacement in `Information` with
 - **the effective mode is 1**, on x86 or amd64 (owner, 2026-10-09):
   mode 1 forces the line on Vista and 7 by itself, so a user no longer
   needs `MSISupported` 0 for it. The start has not run yet, so the
-  filter reads `XhciInterruptMode` itself (below). If the value changes
+  filter uses the latest `XhciInterruptMode` reading cached at
+  `AddDevice` or at the last start (below), and reads no registry
+  itself. If the value changes
   between the filter and the start, the start's own reading governs and
   meets whatever was granted under record 15's tables and section 4.3:
   1 then 0 starts on the granted line in automatic mode, watcher and
@@ -386,11 +389,19 @@ same dispatch thread) refreshes them when the start reads its values. The
 filter applies record 15's strict validation and normalisation (the pure
 function the start uses) to the latest raw value. No worker thread or
 work item is involved, so nothing of the driver's runs after the filter
-completes and no unload window is opened. The result lives in its own
-fields (`FilterModeRaw`, `FilterModeStatus`, `FilterMode`, and where it
-was read: `AddDevice` or the start), never in the start's `PollValues`,
-and nothing the start settles (`hcdSettleDelivery` and the rest) is
-called from the filter. An unreadable value is mode 0's, as at the start.
+completes and no unload window is opened.
+
+Two separate sets of fields hold it. The **cache** (`ModeCacheRaw`,
+`ModeCacheStatus`, `ModeCacheFrom`: `AddDevice` or start) is written at
+`AddDevice` and at each start. The **filter's snapshot**
+(`FilterModeRaw`, `FilterModeStatus`, `FilterModeFrom`, `FilterMode`) is
+copied from the cache by each filter, with that filter's sequence number,
+and is what section 9 records as the last filter's mode; a start never
+writes it. Neither is the start's `PollValues`, and nothing the start
+settles (`hcdSettleDelivery` and the rest) is called from the filter. An
+unreadable value is mode 0's, as at the start. A vector in
+`XhciMsi86FilterRecord`'s sequences: cache 0, a filter records 0, a start
+reads 1 (the snapshot still 0), the next filter records 1.
 
 What that means for a change of the value: a disable and enable creates a
 new FDO whose `AddDevice` reads the new value before its first filter, so
@@ -675,9 +686,11 @@ offset checks ("for both architectures").
   filter, and strips only under mode 1 (section 4.2).
 - `XhciInterruptMode` keeps record 15's meaning, with section 4.3a's
   mode 1. Mode 2 polls even with a message granted. The filter consults
-  the mode for 1 alone; a change to or from 1 takes effect on the line
-  side at the next resource assignment (a disable and enable), and until
-  then the start's tables meet whatever was granted.
+  the mode for 1 alone. The supported way to change it is a disable and
+  enable, whose new FDO reads the value at `AddDevice` before its first
+  filter; a same-FDO rebalance's filter uses the previous start's reading
+  (section 4.2), and in either case the start's tables meet whatever was
+  granted.
 - `MSISupported` 0, set by a user, removes the message descriptors before
   the HCD sees the list; the filter then has nothing to strip, and the
   line runs as on XP, helper or not.
@@ -1402,3 +1415,13 @@ Round-6 findings 2 to 4 were confirmed closed.
 |---|---|---|
 | 1 | P1: the worker's completion event does not keep the image loaded until the callback returns (`ExQueueWorkItem` holds no device reference; `xhci98.sys` is unloadable) | Section 4.2: no worker at all; the filter uses the raw mode read at `AddDevice` and refreshed at each start, both documented system-thread contexts; a rebalance after an unannounced value change is recorded |
 | 2 | P3: `START_DEVICE` is documented as a system thread | Section 4.2: the audit note removed; the start's reading is one of the two sources |
+
+### 14.9 Revision 9
+
+Round 8 (`dede1e1`, same thread): **converged** - "sound enough to
+implement", no P1 or P2. Two P3s taken in revision 10: the filter's use
+of the cached reading stated where the strip is asked for and in section
+4.4 (a disable and enable as the supported way to change the mode, the
+rebalance exception kept), and the cache's fields kept apart from the
+filter's snapshot, with a transition vector. Review thread
+`01a120a8-e037-7a31-b88b-4e325ef35abb`, rounds 1 to 8.
