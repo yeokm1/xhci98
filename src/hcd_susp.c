@@ -55,17 +55,33 @@ static ULONG hcdSuspHalted(PHCD_CONTROLLER hc)
     return hc->Hc.ControllerFailed || hc->ScratchTainted;
 }
 
-/* A wait the machine asked for, counted on its clock (3.10). */
-static VOID hcdSuspDelay(PHCD_CONTROLLER hc, ULONG milliseconds)
+/*
+ * A wait the machine requires - the dwell, TDRSMDN, TRSMRCY, SP=1's
+ * minimum - and only these advance its clock (3.10). Before Windows 8 a
+ * relative KeDelayExecutionThread may end up to a clock period early, so
+ * a minimum is kept by stalling, in 50 us steps, which never ends early;
+ * these waits are tens of milliseconds and rare (Codex review of 36.30,
+ * round 3, finding 2).
+ */
+static VOID hcdSuspHold(PHCD_CONTROLLER hc, ULONG milliseconds)
+{
+    ULONG steps;
+
+    for (steps = milliseconds * 20UL; steps != 0; steps--) {
+        KeStallExecutionProcessor(50);
+    }
+    hc->SuspClockMs += milliseconds;
+}
+
+/* A pause between polls, which bounds nothing and is not counted: the
+ * clock only ever under-counts, so every wait computed from it is at
+ * least as long as asked. */
+static VOID hcdSuspPause(ULONG milliseconds)
 {
     LARGE_INTEGER due;
 
-    if (milliseconds == 0) {
-        return;
-    }
     HcdRelativeMs(&due, milliseconds);
     (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
-    hc->SuspClockMs += milliseconds;
 }
 
 static ULONG hcdSuspEpState(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
@@ -454,7 +470,7 @@ static ULONG hcdSuspArm(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG bound)
                                   &now) == STATUS_SUCCESS) {
             break;
         }
-        hcdSuspDelay(hc, 1);
+        hcdSuspPause(1);
         HcdIoDeferred(hc);
     }
     (VOID)KeCancelTimer(&deadline);
@@ -598,7 +614,7 @@ static ULONG hcdSuspPoll(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG verify,
             answer = XHCI_SUSP_RES_EXPIRED;
             break;
         }
-        hcdSuspDelay(hc, (q->Hub == NULL) ? 1UL : HCD_SUSP_HUB_POLL_MS);
+        hcdSuspPause((q->Hub == NULL) ? 1UL : HCD_SUSP_HUB_POLL_MS);
     }
     (VOID)KeCancelTimer(&deadline);
     return answer;
@@ -700,25 +716,25 @@ static ULONG hcdSuspRun(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG step,
                 result = hcdSuspPoll(hc, q, 0, wait);
                 break;
             case XHCI_SUSP_STEP_SIGNAL:
-                hcdSuspDelay(hc, wait);
+                hcdSuspHold(hc, wait);
                 result = hcdSuspSignal(hc, q);
                 break;
             case XHCI_SUSP_STEP_U0:
-                hcdSuspDelay(hc, wait);
+                hcdSuspHold(hc, wait);
                 result = hcdSuspU0(hc, q);
                 break;
             case XHCI_SUSP_STEP_VERIFY:
                 result = hcdSuspPoll(hc, q, 1, wait);
                 break;
             case XHCI_SUSP_STEP_RECOVERY:
-                hcdSuspDelay(hc, wait);
+                hcdSuspHold(hc, wait);
                 result = XHCI_SUSP_RES_OK;
                 break;
             case XHCI_SUSP_STEP_DISARM:
                 result = hcdSuspControl(hc, dev, HCD_SUSP_REQ_CLEAR_FEATURE);
                 break;
             case XHCI_SUSP_STEP_RESTART:
-                hcdSuspDelay(hc, wait);
+                hcdSuspHold(hc, wait);
                 hcdSuspGateOpen(hc, dev, 1);
                 result = XHCI_SUSP_RES_OK;
                 break;
@@ -939,14 +955,26 @@ VOID HcdSuspRootSample(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG portsc,
                                        q->ConnectGen));
 }
 
-/* A USB 2.0 hub port's finished resume handed over (3.8). */
+/* A USB 2.0 hub port's finished resume handed over (3.8). `acked` the
+ * change bits whose clear the hub took; when C_PORT_SUSPEND was seen and
+ * its clear failed (`lost`), the hub may have taken it and report no more:
+ * the wake would be stranded, so the device is uncertain and cycled, its
+ * gate kept closed (Codex review of 36.30, round 3, finding 1). */
 VOID HcdSuspHubSample(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG status,
-                      ULONG acked)
+                      ULONG acked, ULONG lost)
 {
     PHCD_USB_DEVICE dev;
+    PHCD_DEVICE_PDO pdo;
 
     dev = hcdSuspOwner(hc, q);
     if (dev == NULL) {
+        return;
+    }
+    if (lost) {
+        pdo = hcdSuspPdo(dev->Pdo);
+        if (pdo != NULL && !hcdSuspHalted(hc)) {
+            HcdEnumCycle(hc, dev->Location, pdo->Group);
+        }
         return;
     }
     hcdSuspSample(hc, dev,

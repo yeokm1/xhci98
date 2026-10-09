@@ -1716,7 +1716,7 @@ ULONG HcdSuspOwnsPort(PHCD_CONTROLLER hc, PHCD_PORT q);
 VOID HcdSuspRootSample(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG portsc,
                        ULONG acked);
 VOID HcdSuspHubSample(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG status,
-                      ULONG acked);
+                      ULONG acked, ULONG lost);
 /* hcd_cfg.c's half of 3.3's deferral */
 VOID HcdCfgUndefer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 

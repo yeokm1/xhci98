@@ -377,10 +377,14 @@ admission, capabilities, teardown, the controller's transitions). Until
   again in the same pass, at most four times, so its last Dx, its D0s and
   an unclaimed wake's re-suspend are not left for a later wake-up.
 - **Time.** No clock read is on the import allowlist. The machine is
-  given a controller-wide millisecond count that advances by every delay
-  the executor itself waits. Time that passes elsewhere is not counted, so
-  every wait computed from it - the dwell after U3, SP=1's minimum - is
-  longer than asked, never shorter. A bounded poll is bounded by a timer,
+  given a controller-wide millisecond count that advances only by the
+  waits the protocol requires (the dwell, TDRSMDN, TRSMRCY, SP=1's
+  minimum), and those are kept by `KeStallExecutionProcessor` in 50 us
+  steps, since before Windows 8 a relative `KeDelayExecutionThread` may
+  end up to a clock period early; they are tens of milliseconds and rare.
+  Pauses between polls use `KeDelayExecutionThread` and are not counted.
+  Time that passes elsewhere is not counted either, so every wait computed
+  from the count is at least as long as asked. A bounded poll is bounded by a timer,
   as `hcdEp0Quiet` is: the observation and the verification report
   `EXPIRED` when it runs out, the repeated arm's drain NOT_SENT.
 - **The arm and the disarm** go through `HcdThreadControlOutcome`. The
@@ -441,8 +445,10 @@ admission, capabilities, teardown, the controller's transitions). Until
 - **The hub port look** (3.8). For a USB 2.0 hub port whose device the
   machine owns: the auto-resume is skipped, and a finished resume
   (`Suspended`) hands its sample (status, the change bits the hub took
-  back - a clear that failed is no evidence - and `ConnectGen`) to the
-  machine instead of the quiesce, wait and release.
+  back, and `ConnectGen`) to the machine instead of the quiesce, wait and
+  release. A C_PORT_SUSPEND whose clear failed is no evidence, and since
+  the hub may have taken it and report no more, the device is uncertain:
+  cycled, its gate kept closed.
 - **Slow IRPs** (3.3). A slow IRP dequeued for a device whose link is not
   ACTIVE (SUSPENDED, or RECOVERING, whose device the cycle drops) is
   served if it is ABORT_PIPE, else moved to `dev->SlowDeferred` in order,

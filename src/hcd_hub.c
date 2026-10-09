@@ -857,7 +857,9 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
                  * C_PORT_SUSPEND without its clear is no wake (Codex
                  * review of 36.30, round 2, finding 4). */
                 d->Suspended = 0;
-                HcdSuspHubSample(hc, q, status, acked);
+                HcdSuspHubSample(hc, q, status, acked,
+                                 (d->Clear & XHCI_HUB_C_PORT_SUSPEND) != 0 &&
+                                     (acked & XHCI_HUB_C_PORT_SUSPEND) == 0);
             }
         }
     }
