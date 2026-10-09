@@ -636,36 +636,20 @@ static ULONG hcdCfgBuildInput(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * but at the bInterval the caller's descriptor `caller` gives it when that
  * differs (XhciPipeCallerInterval): a filter's rewritten polling interval
  * (hidusbf), which a whole device's select already takes from the
- * descriptor it is handed, and which XhciFastPollFsLs keys on. Not at
- * SuperSpeed, whose endpoint reads its companion from the device's own.
- * Thread only.
+ * descriptor it is handed, and which XhciFastPollFsLs keys on. At
+ * SuperSpeed the endpoint keeps its companion from the device's own and
+ * takes the caller's byte by XhciPipeRebaseInterval (task 36.19; design
+ * record 13 section 13.7): XhciPipeFunctionEndpoint. Thread only.
  */
 static ULONG hcdCfgFunctionEndpoint(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                     const UCHAR *caller, ULONG offset,
                                     ULONG number, ULONG alternate,
                                     PXHCI_PIPE_EP ep)
 {
-    UCHAR copy[XHCI_PIPE_ENDPOINT_BYTES];
-    ULONG speed;
-    ULONG b;
-    ULONG i;
-
-    speed = HcdDevicePipeSpeed(hc, dev);
-    if (caller != NULL && speed != XHCI_PIPE_SPEED_SUPER &&
-        speed != XHCI_PIPE_SPEED_SUPER_PLUS &&
-        XhciPipeCallerInterval(dev->Selected, dev->SelectedLength, offset,
-                               caller,
-                               (ULONG)caller[2] | ((ULONG)caller[3] << 8),
-                               number, alternate, &b) == XHCI_PIPE_OK &&
-        b != (ULONG)dev->Selected[offset + 6]) {
-        for (i = 0; i < XHCI_PIPE_ENDPOINT_BYTES; i++) {
-            copy[i] = dev->Selected[offset + i];
-        }
-        copy[6] = (UCHAR)b;
-        return XhciPipeEndpointParams(copy, speed, ep);
-    }
-    return XhciPipeEndpointParamsAt(dev->Selected, dev->SelectedLength, offset,
-                                    speed, hc->Hc.HcInfo.Lec, ep);
+    return XhciPipeFunctionEndpoint(dev->Selected, dev->SelectedLength,
+                                    offset, caller, number, alternate,
+                                    HcdDevicePipeSpeed(hc, dev),
+                                    hc->Hc.HcInfo.Lec, ep);
 }
 
 /* The interval cap and the Average TRB Length switch (35-T.7, design record
@@ -696,12 +680,21 @@ static ULONG hcdCfgTolerance(PHCD_CONTROLLER hc, PXHCI_PIPE_EP ep)
 
 /* Fast polling (33.8): the controller's XhciFastPollFsLs mode applied to an
  * endpoint a client's select names, never to a hub's own (HcdCfgHubOpen).
- * The cap comes first, and fast polling is offered only when it left the
- * Interval unchanged, so eligibility is judged on the uncapped value
- * (record 17 section 4.7). Thread only. */
+ * Modes 2 and 3: the cap comes first, and fast polling is offered only when
+ * it left the Interval unchanged, so eligibility is judged on the uncapped
+ * value (record 17 section 4.7). Mode 4 (task 36.19) comes before the cap,
+ * which leaves a code's Interval of 2 or less as it is, so a capped
+ * controller does not silence a code; the cap still runs, for the Average
+ * TRB Length and for an endpoint with no code. Thread only. */
 static VOID hcdCfgFastPoll(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                            PXHCI_PIPE_EP ep)
 {
+    if (hc->FastPollMode == XHCI_PIPE_FAST_CODES) {
+        (VOID)XhciPipeFastPoll(hc->FastPollMode, HcdDevicePipeSpeed(hc, dev),
+                               dev->Route, ep);
+        (VOID)hcdCfgTolerance(hc, ep);
+        return;
+    }
     if (hcdCfgTolerance(hc, ep)) {
         (VOID)XhciPipeFastPoll(hc->FastPollMode, HcdDevicePipeSpeed(hc, dev),
                                dev->Route, ep);
@@ -712,7 +705,7 @@ static VOID hcdCfgFastPoll(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * One Configure Endpoint for `plan`, adding `add`'s pipes: built, issued,
  * and - when it fails with a code XhciPipeFastRetry names while a pipe it
  * adds was set below Table 6-12's range - those pipes put back at their
- * Table 6-12 Interval, counted, and the command built and issued once more.
+ * fallback Interval (Table 6-12's, or mode 4's 3), counted, and the command built and issued once more.
  * A refused command leaves the Output Device Context as it was (xHCI 1.2c
  * 4.6.6, p.112), so the second is the command the select would have issued
  * with the value off. `opening` counts the fast pipes a success opens: a

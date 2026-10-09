@@ -1978,6 +1978,54 @@ target's UI can be told is High Speed (NT 6.x) or "not low speed" (98 to XP
 x64), and a SuperSpeed device has to be reported as one of those. That is
 why no checkpoint reads a speed from these pages.
 
+**Amended by task 36.18 (2026-10-09; GitHub issue 17 item 6).** The High
+Speed ceiling above is replaced, in two halves:
+
+- **The `_EX` form's `Speed` byte** reads 3 for a SuperSpeed connection and
+  4 for a SuperSpeedPlus one (the trained rate, `dev->Plus`), as Intel's USB
+  3 drivers for Windows 9x report it, **on Windows 98 and ME only** - where
+  `IoIsWdmVersionAvailable(1, 0x10)` is FALSE, the test `hcd_pdo.c` uses
+  for them (owner, 2026-10-09). No Microsoft header defines 4, and the WDK
+  7.1 headers stop at 2. Every NT target keeps 2 for both: Vista's and 7's
+  `usbui!UsbItem::IsHighSpeed` tests the byte for exactly 2, and their hub
+  page would list a 3 among the Full Speed devices (static,
+  `legal-provenance.md` section 4, "Who reads the `_EX` `Speed` byte"); XP's
+  and XP x64's pages never read it. 0 to 2 are unchanged
+  (`XhciHubExSpeed`, `xhci_hub.c`).
+- **`IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2`** (`0x0022045C`),
+  new on every target, for NT tools: `ConnectionIndex`, `Length`,
+  `SupportedUsbProtocols` (`Usb110` bit 0, `Usb200` bit 1, `Usb300` bit 2)
+  and the flags (`DeviceIsOperatingAtSuperSpeedOrHigher` bit 0,
+  `...SuperSpeedCapableOrHigher` bit 1, `...OperatingAtSuperSpeedPlusOrHigher`
+  bit 2, `...SuperSpeedPlusCapableOrHigher` bit 3), 16 bytes, from
+  Microsoft's `usbioctl.h` reference pages (documentation, read
+  2026-10-09), written byte by byte like the rest of the door.
+  - **The request**: an input or output buffer shorter than 16 bytes is
+    `STATUS_BUFFER_TOO_SMALL`, each checked apart; a `Length` other than 16,
+    or an input `SupportedUsbProtocols` without `Usb300` (Windows 8 refuses
+    that, by Microsoft's IOCTL page), is `STATUS_INVALID_PARAMETER`; a port
+    out of range is refused as the `_EX` form refuses it. The answer is 16
+    bytes, `ConnectionIndex` kept (`XhciHubExV2Check`, `XhciHubExV2Fill`).
+  - **`SupportedUsbProtocols`, out**: the **port's** protocols, not the
+    device's and not the request's: a root port by its protocol group
+    (`Usb110` and `Usb200` on a USB 2.0 port, `Usb300` alone on a USB 3
+    logical port, which gains nothing from its USB 2.0 companion), an
+    external hub's port by the hub's speed (a SuperSpeed half's `Usb300`, a
+    High-Speed hub's `Usb110` and `Usb200`, a Full-Speed hub's `Usb110`). An
+    empty port has them too.
+  - **The operating flags**: from the connection's negotiated speed class
+    and rate.
+  - **The capable flags**: from the device's BOS (its SuperSpeed and
+    SuperSpeedPlus capability descriptors, `dev->BosInfo`), not from the
+    speed, since a SuperSpeedPlus device may be running at 5 Gbit/s; and
+    also set when the device operates at that speed, which proves it. The BOS
+    is read only on the SuperSpeed enumeration path (`xhci_enum.c`), and
+    **this task does not add a BOS read at High Speed**: a USB 3 device
+    running at High Speed (on a USB 2.0 port, or sent back there) reports
+    neither capable flag. Reading the BOS of every High-Speed device with a
+    `bcdUSB` of 0x0210 or more would change every such device's enumeration
+    for one flag, which is the larger risk (`XhciHubExV2Flags`).
+
 ### 8.5 The OS INFs' registrations, quoted
 
 Root hub, NT paths - every NT target registers the same provider:
@@ -2162,6 +2210,29 @@ creates its PDOs.
 | `sysclass.dll`'s `DiagnosticMode` and `SupportNonComp` value names: purpose unread. | 26-A.8 |
 | A `bcdUSB` of 0x0300 in `DeviceDescriptor`, and a SuperSpeed device's `Speed` on Vista and 7 (`UsbHighSpeed` is the ceiling): whether `UsbItem::UsbVersion` or the bandwidth arithmetic misreads a 3.x descriptor. | Phase 29 |
 | Device-object security for a non-elevated Device Manager on Vista and 7 (`GENERIC_WRITE` open): a runtime question. | 28-A.1 |
+
+**The USB device interface (task 36.17, 2026-10-09; GitHub issue 17 item
+3).** `GUID_DEVINTERFACE_USB_DEVICE` (`{A5DCBF10-6530-11D2-901F-00C04FB951ED}`,
+WDK 7.1 `usbiodef.h`) is registered on every device PDO and every external
+hub's PDO, as usbhub registers it, and not on the root hub, on which usbport
+registers none (`hcd_door.c`, `HcdDoorDeviceStart` and `HcdDoorDeviceStop`).
+A composite the bus splits has no parent devnode, so the interface goes on
+one function's PDO: the function that owns the device's first interface,
+the group's first PDO, the one the door already answers the connection's
+driver key from (the split-composite row above), never a hard-coded
+`MI_00`. **Decided (owner, 2026-10-09):** the interface stays on that
+function and follows its state - when it has no driver, fails its start or
+is disabled, the device has no interface while its siblings run. Its
+lifecycle follows `IoSetDeviceInterfaceState`'s contract: registered once,
+at the first successful start, and enabled at every successful start (a
+retained PDO started again included); disabled at a stop, a surprise
+removal and a removal, never twice; the link string freed, idempotently,
+in `hcdDeletePdo`, the one helper every path that destroys a device PDO
+goes through (the relations answer after a removal, the retained PDO's
+deletion after a disable, an orphan's deletion and Windows 98's deferred
+one, the parent's release), not left to `IoDeleteDevice`. Best effort, as
+the hub interface is: a failed registration is a missing interface, not a
+failed device.
 
 ## 9. The harness and the gates (task 25.5)
 
@@ -3892,8 +3963,8 @@ codes and read by Table 6-12; no input reaches below Interval 0.
 - High Speed and SuperSpeed (and SuperSpeedPlus) anywhere, root port or
   behind a hub, since their Interval range already reaches 125 us (Table
   6-12's HS and SS rows: Interval 0 is a valid value there). A code at
-  those speeds is otherwise an out-of-range `bInterval` that Table 6-12's
-  clamp takes to 16 (Interval 15, 4.096 s); the code replaces that.
+  those speeds is otherwise an out-of-range `bInterval` that the driver's
+  existing clamp to Table 6-12's range takes to 16 (Interval 15, 4.096 s); the code replaces that.
 - Interrupt endpoints only: never isochronous (whose interval sets its data
   rate), never bulk, never a hub's own status endpoint (`HcdCfgHubOpen`
   never asks).

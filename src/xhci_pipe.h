@@ -159,9 +159,13 @@ typedef struct _XHCI_PIPE_EP {
     ULONG SspIso;               /* the SSP isochronous companion's
                                  * dwBytesPerInterval was used            */
     /* Fast polling (33.8, XhciPipeFastPoll): Interval was set below Table
-     * 6-12's FS/LS interrupt range, and the in-range one it replaced. */
+     * 6-12's FS/LS interrupt range (or, under mode 4, to a code's), the
+     * Table 6-12 Interval the descriptor gives, and the Interval a refused
+     * Configure Endpoint returns it to (task 36.19): the one modes 2 and 3
+     * replaced, or mode 4's 3. */
     ULONG FastPoll;
     ULONG SpecInterval;
+    ULONG FallbackInterval;
     /* The interval cap (35-T.7, hcd_cfg.c hcdCfgTolerance) lowered
      * Interval. */
     ULONG Capped;
@@ -288,26 +292,73 @@ ULONG XhciPipeZeroBandwidth(const XHCI_PIPE_EP *ep);
 #define XHCI_PIPE_FAST_2K4K     2UL
 #define XHCI_PIPE_FAST_4K8K     3UL
 
-/* The mode a registry value asks for: 1 to 3 as themselves, anything else
+/*
+ * Mode 4, CODES (task 36.19; design record 13 section 13.7): the client
+ * chooses. An interrupt endpoint whose descriptor bInterval is 128, 129 or
+ * 130 is programmed at Interval 2, 1 or 0 (500, 250, 125 us) - at Full and
+ * Low Speed on a root port only, at High Speed and SuperSpeed anywhere -
+ * and every other bInterval by Table 6-12. It does not do modes 2 and 3's
+ * mapping, and they do not honour the codes. Applied before the interval
+ * cap, and a refusal falls back to Interval 3 (1 ms).
+ */
+#define XHCI_PIPE_FAST_CODES    4UL
+#define XHCI_PIPE_FAST_CODE_LOW     128UL
+#define XHCI_PIPE_FAST_CODE_HIGH    130UL
+#define XHCI_PIPE_FAST_CODE_FALLBACK 3UL
+
+/* The mode a registry value asks for: 1 to 4 as themselves, anything else
  * OFF, so a value outside the table can never program an Interval. */
 ULONG XhciPipeFastMode(ULONG value);
 
 /*
  * Apply `mode` to one endpoint XhciPipeEndpointParams has filled for a
- * device at `speed` and Route String `route`. Only a Low- or Full-Speed
- * interrupt endpoint of a device on a root port (route 0) whose Interval is
- * 7 or 8 is changed: Interval becomes the table's, SpecInterval keeps the
- * Table 6-12 value and FastPoll is set, and the return is 1. Every other
- * endpoint, mode and NULL returns 0 with `ep` untouched - a device behind a
- * hub included, whose Full- or Low-Speed periodic traffic a transaction
- * translator or a Full-Speed hub carries one frame at a time.
+ * device at `speed` and Route String `route`. Modes 2 and 3: only a Low- or
+ * Full-Speed interrupt endpoint of a device on a root port (route 0) whose
+ * Interval is 7 or 8 is changed: Interval becomes the table's, SpecInterval
+ * and FallbackInterval keep the Interval it replaced and FastPoll is set,
+ * and the return is 1. Mode 4: an interrupt endpoint whose BInterval is a
+ * code (128 to 130) - Low or Full Speed on a root port, High Speed,
+ * SuperSpeed or SuperSpeedPlus at any route - takes the code's Interval,
+ * FallbackInterval 3 and FastPoll, SpecInterval left at the Table 6-12
+ * value, and the return is 1. Every other endpoint, mode and NULL returns 0
+ * with `ep` untouched - a Full- or Low-Speed device behind a hub included,
+ * whose periodic traffic a transaction translator or a Full-Speed hub
+ * carries one frame at a time - and so does an endpoint already changed.
  */
 ULONG XhciPipeFastPoll(ULONG mode, ULONG speed, ULONG route,
                        PXHCI_PIPE_EP ep);
 
-/* Back to Table 6-12: Interval = SpecInterval and FastPoll cleared, 1 when
+/* The fallback: Interval = FallbackInterval and FastPoll cleared, 1 when
  * `ep` had been changed by XhciPipeFastPoll, else 0 with it untouched. */
 ULONG XhciPipeFastRevert(PXHCI_PIPE_EP ep);
+
+/*
+ * The caller's `bInterval` put in place of the descriptor's in an endpoint
+ * XhciPipeEndpointParams or XhciPipeEndpointParamsAt filled for `speed`:
+ * BInterval replaced, and Interval, IntervalClamped, SpecInterval and
+ * FallbackInterval derived from it by the rule the parser uses for that
+ * speed and transfer type (Table 6-12; bulk keeps Interval 0). Every other
+ * field - Max Burst, Mult, Max ESIT Payload, the companion's - is kept.
+ * XHCI_PIPE_BAD_PARAM for NULL, an endpoint already fast-polled or capped,
+ * or a speed the parser does not take; else XHCI_PIPE_OK.
+ */
+ULONG XhciPipeRebaseInterval(PXHCI_PIPE_EP ep, ULONG speed, ULONG bInterval);
+
+/*
+ * An endpoint of a composite function's select (design record 13 sections
+ * 10.9 and 13.7): parsed from the device's own configuration `config` at
+ * `offset`, at the bInterval the caller's descriptor `caller` gives it when
+ * that differs (XhciPipeCallerInterval). Below SuperSpeed a seven-byte copy
+ * with the caller's byte goes through XhciPipeEndpointParams, as since
+ * 2.1.0.0; at SuperSpeed and SuperSpeedPlus the endpoint and its companions
+ * are parsed from `config` (XhciPipeEndpointParamsAt) and then rebased on
+ * the caller's byte (XhciPipeRebaseInterval). `caller` NULL, or no match,
+ * is the device's own. Returns the parser's code.
+ */
+ULONG XhciPipeFunctionEndpoint(const UCHAR *config, ULONG length,
+                               ULONG offset, const UCHAR *caller,
+                               ULONG interfaceNumber, ULONG alternate,
+                               ULONG speed, ULONG lec, PXHCI_PIPE_EP ep);
 
 /*
  * Whether a Configure Endpoint that failed with `completionCode` while
