@@ -259,6 +259,27 @@ for %%S in ("value 2; in effect 2 (polling)" "reason               forced pollin
     )
 )
 
+rem Task 36.9's review: a header longer than its image is refused by
+rem print_hcd, and no other section decodes anything from it.
+"%~dp0XHCISNAP.EXE" -selftest-hcd-bad > "%BASE%.hcdbad.log"
+if errorlevel 1 (
+    echo FAIL: -selftest-hcd-bad exited %errorlevel%, expected 0
+    set FAILED=1
+)
+findstr /C:"not a shape this build" "%BASE%.hcdbad.log" > nul
+if errorlevel 1 (
+    echo FAIL: the malformed header is not refused
+    set FAILED=1
+)
+for %%S in ("controller tolerance" "interrupt routing" "transfer size" "event delivery") do (
+    findstr /C:%%S "%BASE%.hcdbad.log" > nul
+    if not errorlevel 1 (
+        echo FAIL: a refused header was still decoded: %%S
+        set FAILED=1
+    )
+)
+
+
 rd /s /q "%RUNDIR%" 2> nul
 rd out 2> nul
 
@@ -266,5 +287,5 @@ if "%FAILED%"=="1" (
     echo xhcisnap selftest FAILED
     exit /b 1
 )
-echo xhcisnap selftest: 12 cases, all passed
+echo xhcisnap selftest: 13 cases, all passed
 exit /b 0

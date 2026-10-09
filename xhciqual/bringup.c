@@ -645,10 +645,14 @@ int qual_irq(CTRL *c)
         msleep(1);
     }
     if (!pending) {
+        int ip_late = 0;
+
         got_evt = 0;
         for (ms = 0; ms < 1000 && !got_evt; ms++) {
             TRB e;
 
+            if ((RD32(c->rt + XRT_IMAN) & IMAN_IP) != 0)
+                ip_late = 1;
             while (evt_next(c, &e)) {
                 if (TRB_GET_TYPE(e.ctl) == TRB_T_CMD_DONE &&
                     e.p0 == trb_phys)
@@ -657,17 +661,24 @@ int qual_irq(CTRL *c)
             if (!got_evt)
                 msleep(1);
         }
+        if ((RD32(c->rt + XRT_IMAN) & IMAN_IP) != 0)
+            ip_late = 1;
         /* The event in the ring and no interrupt: needs polling. Neither:
          * the controller failed the command, polled or not. */
         s.event_seen = got_evt;
         c->irq_no_event = got_evt ? 0 : 1;
-        /* IP never rose: the driver's automatic mode watches for IP
-         * before it moves a line to polling, so this one must be told. */
-        c->irq_force_poll = got_evt ? 1 : 0;
+        /* IP not seen at any look, through both waits (review round 2):
+         * the driver's automatic mode moves a line to polling only on an
+         * IP it sees, so this one is told mode 2. An IP that came up late
+         * is one the watcher can see. An enabled MSI or MSI-X clears IP
+         * itself, which the caveat says (report_caveats). */
+        c->irq_force_poll = (got_evt && !ip_late) ? 1 : 0;
         c->v_irq = c4_verdict(&s);
-        strcpy(c->irq_note, got_evt ?
-               "No xHCI IP while PIC masked; event completed by polling" :
-               "No xHCI IP or No-Op event while PIC masked");
+        strcpy(c->irq_note, !got_evt ?
+               "No xHCI IP or No-Op event while PIC masked" :
+               ip_late ?
+               "xHCI IP late while PIC masked; event completed by polling" :
+               "No xHCI IP while PIC masked; event completed by polling");
         xhci_irq_source_off(c);
         return 0;
     }

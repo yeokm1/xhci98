@@ -482,11 +482,13 @@ event latency (`XhciPollIdleMs`, 50 ms by default, when idle); or an
 MSI-capable OS - the tool reads the PCI capability list (05h MSI, 11h MSI-X)
 and says whether Windows Vista and 7 can take a message interrupt instead
 (x64 directly, 32-bit with the `xhcimsi.sys` helper), or that polling is the
-only route. One case differs: a controller that never raised its pending
-bit (IMAN.IP) is not one automatic mode can see - the driver moves a line to
-polling when it sees IP asserted and nothing claimed - so the verdict names
-`XhciInterruptMode` 2, and offers no MSI route, since xHCI sends a message
-from the same bit. Warnings, if any, are shown beside it. Exit code 3. Not a
+only route. One case differs: a controller whose pending bit (IMAN.IP) was
+never seen, through both of C4's waits, is not one automatic mode can see -
+the driver moves a line to polling when it sees IP asserted and nothing
+claimed - so the verdict names `XhciInterruptMode` 2; the MSI route is still
+named from the capability list, as untested, and an MSI or MSI-X found
+enabled is named as a reason IP may not have been seen (an enabled message
+clears IP itself). Warnings, if any, are shown beside it. Exit code 3. Not a
 caveat but a failure: a DPMI step that failed (the tool's), an ISR entry the
 controller's status did not own, an ISR with no completion behind it, and a
 No-Op that never completed even polled. `--irq-selftest` reports the same

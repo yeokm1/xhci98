@@ -1348,11 +1348,14 @@ can arrive, and the polled completion is the same evidence. FAIL stays for
 a DPMI step that failed, an ISR entry the controller's status did not own,
 an ISR with no completion behind it, and a No-Op that never completed even
 polled, which the verdict words as the command's failure rather than the
-line's. One POLL differs in its advice (review round 1): when `IP` never
-came up, the driver's automatic mode cannot see the dead line - section
-4.2's watcher moves on `IP` asserted with nothing claimed - so the caveat
-names `XhciInterruptMode` 2, and offers no message route, since xHCI sends
-MSI and MSI-X from the same pending bit (4.17.5). Every path that installed
+line's. One POLL differs in its advice (review rounds 1 and 2): when `IP`
+was never seen, at any look through both of C4's waits, the driver's
+automatic mode cannot see the dead line - section 4.2's watcher moves on
+`IP` asserted with nothing claimed - so the caveat names
+`XhciInterruptMode` 2. Its message route is still named from the
+capability list, said as untested; and since an enabled MSI or MSI-X
+clears `IP` itself after its message (4.17.5), one found enabled (Message
+Control, read only) is named as a reason `IP` may not have been seen. Every path that installed
 the hook removes it before C4 returns,
 so C6 and C8 run with no live ISR. `--irq-selftest` gives the same outcome
 as "IRQ SELF-TEST: NO WORKING INTERRUPT", exit 3. The QEMU matrix reaches

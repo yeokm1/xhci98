@@ -81,6 +81,7 @@ typedef struct {
     int bar_is64, bar_pref;
     int has_pm, has_msi, has_msix, has_pcie;
     int msi_enabled;
+    int msix_enabled;       /* MSI-X Message Control bit 15, as found */
     /* PCI Power Management capability (valid if has_pm). Read-only: the
      * qualifier never writes PMCSR - transitioning a D3 device back to D0 is
      * the driver's job, and --probe-only must take no ownership. */

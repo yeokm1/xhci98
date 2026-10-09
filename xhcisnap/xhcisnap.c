@@ -1887,8 +1887,10 @@ static const char *const hcd_counter_names[SNAP_HCD_COUNTER_WORDS] = {
  * fails (and says so), and the sections read from the same header
  * (print_intr) decode nothing from it either, so one malformed header
  * cannot be refused by one reader and believed by another (task 36.9's
- * review round 1). The header lies inside the image, the records after it,
- * and the counters after the header and inside the image, word-aligned.
+ * review rounds 1 and 2). The header lies inside the image, the records
+ * after it, and the counters after the records and inside the image,
+ * word-aligned. The products cannot wrap: ports * portBytes is bounded by
+ * the bytes after portsAt before it is compared.
  */
 static int hcd_shape_ok(const unsigned char *image, unsigned long bytes)
 {
@@ -1917,6 +1919,8 @@ static int hcd_shape_ok(const unsigned char *image, unsigned long bytes)
              portsAt < headBytes || portsAt > bytes || ports > 255 ||
              ports > (bytes - portsAt) / portBytes || countersAt > bytes ||
              countersAt < headBytes || (countersAt & 3UL) != 0 ||
+             countersAt < portsAt ||
+             countersAt - portsAt < ports * portBytes ||
              counters > (bytes - countersAt) / 4);
 }
 
@@ -3336,8 +3340,60 @@ static int selftest_intr(void)
     intr_image(hcd, H, SNAP_HCD_COUNTER_WORDS);
     put32(hcd, 24, (H - 4) * 4);
     print_intr(hcd, bytes, ext, sizeof(ext));
+    /* One port record at the header's end and the counters on top of it
+     * (review round 2). */
+    intr_image(hcd, H, SNAP_HCD_COUNTER_WORDS);
+    put32(hcd, 8, 1);
+    print_intr(hcd, bytes, ext, sizeof(ext));
     intr_image(hcd, H, 80);
     print_intr(hcd, bytes, ext, sizeof(ext));
+    return 0;
+}
+
+/*
+ * The HCD region's report: the ports and counters, then every section read
+ * from the same header. When the header does not fit its image print_hcd
+ * says so and nothing else is decoded from it (task 36.9's review round 2),
+ * so no reader believes a header another refused. `ext` is NULL when the
+ * extension image is short or not the driver's size.
+ */
+static void print_hcd_sections(const unsigned char *hcd, unsigned long bytes,
+                               const unsigned char *ext,
+                               unsigned long extBytes)
+{
+    print_hcd(hcd, bytes);
+    if (!hcd_shape_ok(hcd, bytes)) {
+        return;
+    }
+    /* 35-T.8's tolerance state, from the extension image. */
+    print_tol(hcd, bytes, ext, extBytes);
+    /* 36.3's interrupt routing record, from the header alone. */
+    print_pirq(hcd, bytes);
+    /* 36.21's transfer-size readings, from the header alone. */
+    print_xstat(hcd, bytes);
+    /* 36.9: the event delivery, from the counters and the extension words
+     * the header places. */
+    print_intr(hcd, bytes, ext, extBytes);
+}
+
+/*
+ * `-selftest-hcd-bad`: one image whose header claims more bytes than came
+ * back, its tolerance, routing and transfer-size words otherwise valid.
+ * Only print_hcd's refusal may print (xhcisnap\selftest.cmd checks that no
+ * other section does).
+ */
+static int selftest_hcd_bad(void)
+{
+    static unsigned char hcd[(SNAP_HCD_DELIVERY_HEAD_WORDS +
+                              SNAP_HCD_COUNTER_WORDS) * 4];
+    unsigned long bytes = sizeof(hcd);
+
+    companion = NULL;
+    intr_image(hcd, SNAP_HCD_DELIVERY_HEAD_WORDS, SNAP_HCD_COUNTER_WORDS);
+    put32(hcd, 4, bytes + 4);
+    put32(hcd, 80, 27);
+    put32(hcd, 48 * 4, 59);
+    print_hcd_sections(hcd, bytes, NULL, 0);
     return 0;
 }
 
@@ -5566,6 +5622,8 @@ int main(int argc, char **argv)
             return selftest_tol();
         } else if (strcmp(argv[i], "-selftest-pirq") == 0) {
             return selftest_pirq();
+        } else if (strcmp(argv[i], "-selftest-hcd-bad") == 0) {
+            return selftest_hcd_bad();
         } else if (strcmp(argv[i], "-selftest-intr") == 0) {
             return selftest_intr();
         } else if (strcmp(argv[i], "-selftest-xstat") == 0) {
@@ -5913,23 +5971,11 @@ int main(int argc, char **argv)
      * states, causes and counts carry no address.
      */
     if (hcdState == 1) {
-        print_hcd(hcd_image, hcdBytes);
-        /* 35-T.8's tolerance state, from the extension image: not from an
-         * image that is short or that the driver says is another size. */
-        print_tol(hcd_image, hcdBytes,
-                  (extMismatch || extBytes > sizeof(ext_image)) ? NULL
-                                                                : ext_image,
-                  extBytes);
-        /* 36.3's interrupt routing record, from the header alone. */
-        print_pirq(hcd_image, hcdBytes);
-        /* 36.21's transfer-size readings, from the header alone. */
-        print_xstat(hcd_image, hcdBytes);
-        /* 36.9: the event delivery, from the counters and the extension
-         * words the header places. */
-        print_intr(hcd_image, hcdBytes,
-                   (extMismatch || extBytes > sizeof(ext_image)) ? NULL
-                                                                 : ext_image,
-                   extBytes);
+        print_hcd_sections(hcd_image, hcdBytes,
+                           (extMismatch || extBytes > sizeof(ext_image))
+                               ? NULL
+                               : ext_image,
+                           extBytes);
     } else if (hcdState == 2) {
         comp("\nHCD region: not served by this driver (an xhci98.sys before "
              "2.2.0.0 has no\n  per-port enumeration region; the note ring "

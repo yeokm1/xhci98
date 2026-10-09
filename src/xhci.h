@@ -8635,7 +8635,8 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
  * design record 15 section 9), in bytes from the extension's start, and
  * how many there are, so XHCISNAP names them from the .BIN's own bytes as
  * it does the tolerance state. A header shorter than this is an earlier
- * driver's, which has no polled delivery.
+ * driver's, which places no extension words; whether a driver has the
+ * polling counters is the counter block's size to say (63 words or 96).
  */
 #define XHCI_SNAPSHOT_HCD_DELIVERY_AT   202 /* XHCI_EXTENSION.EventDelivery  */
 #define XHCI_SNAPSHOT_HCD_DELIVERY_WORDS 203 /* its words, in order          */
