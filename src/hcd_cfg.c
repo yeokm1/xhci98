@@ -263,6 +263,12 @@ VOID HcdCfgFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 
     InitializeListHead(&mine);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    /* Those selective suspend deferred first, in their order (design
+     * record 14 section 3.3). */
+    while (!IsListEmpty(&dev->SlowDeferred)) {
+        entry = RemoveHeadList(&dev->SlowDeferred);
+        InsertTailList(&mine, entry);
+    }
     for (entry = hc->SlowIrps.Flink; entry != &hc->SlowIrps; entry = next) {
         next = entry->Flink;
         irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
@@ -1959,7 +1965,10 @@ static VOID hcdCfgReleases(PHCD_CONTROLLER hc)
             break;
         }
         dev = hc->SlotDevice[slot];
-        if (dev == NULL) {
+        if (dev == NULL || !HcdSuspLinkActive(dev)) {
+            /* A device whose link selective suspend holds keeps its
+             * release owed, whole, until it is ACTIVE (design record 14
+             * section 3.10). */
             continue;
         }
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
@@ -3027,7 +3036,7 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
      * reaches a device being torn down (finding 1). */
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     if (pipe->Queue->Count != 0 && state != XHCI_EP_STATE_DISABLED &&
-        !dev->Gone) {
+        !dev->Gone && HcdSuspLinkActive(dev)) {
         /* The survivors run again: the device's sequence moves (Codex
          * review of the Phase 28-31 integration, round 6, finding 4). */
         hcdCfgEndpointOf(pipe)->SeqUsed = 1;
@@ -4039,6 +4048,22 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
         if (dev->Gone) {
             hcdCfgComplete(dev, irp, urb, HCD_USBD_DEVICE_GONE);
             continue;
+        }
+        if (!HcdSuspLinkActive(dev)) {
+            /* Selective suspend holds the link (design record 14 sections
+             * 3.3, 3.10): its release stays owed; an ABORT_PIPE, host side
+             * only, is served; anything else waits on the device, in
+             * order, until it is ACTIVE. */
+            hcdCfgReleaseAgain(hc, dev, release);
+            release = 0;
+            if (HcdSuspDefers(dev, urb != NULL &&
+                                       urb->UrbHeader.Function ==
+                                           HCD_URB_ABORT_PIPE)) {
+                XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+                InsertTailList(&dev->SlowDeferred, entry);
+                XhciControllerLockRelease(&hc->Hc, oldIrql);
+                continue;
+            }
         }
         owed = hcdCfgReleaseOne(hc, dev, release);
         held = 0;

@@ -737,6 +737,10 @@ static NTSTATUS hcdPdoNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     pdo->Common.SystemPower = PowerSystemWorking;
     pdo->Controller = hc;
     pdo->Device = dev;
+    /* Selective suspend's slot (design record 14 section 4.1): D0 asked
+     * and acted on; the rest of it zero with the extension. */
+    pdo->PwrWanted = XHCI_SUSP_D0;
+    pdo->PwrState = XHCI_SUSP_D0;
     pdo->Serial = serial;
     pdo->Port = dev->Location;
     pdo->InstanceKey = XhciHubInstanceKey(dev->Port, dev->Route);

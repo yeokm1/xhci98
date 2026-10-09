@@ -1926,6 +1926,7 @@ ULONG HcdIoDeviceDrain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     dev->Gone = 1;
+    HcdSuspDeviceGone(dev);
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     if (hc->CommonBufferPinned) {
         /* The controller could not be proven to have stopped mastering:

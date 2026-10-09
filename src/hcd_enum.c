@@ -345,6 +345,7 @@ static PHCD_USB_DEVICE hcdDeviceNew(PHCD_CONTROLLER hc, PHCD_PORT port,
     dev->Location = port->PortId;
     dev->SlotId = slotId;
     dev->Speed = speed;
+    HcdSuspDeviceInit(dev, port);
     XhciXferQueueInit(&dev->Ep0Queue);
     HcdIoPipeInitEp0(dev);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
@@ -992,6 +993,13 @@ ULONG HcdThreadControlOutcome(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
          * relink the engine's queue (round 2, finding 10). Or another
          * device's abandoned TD may still write the scratch until that
          * slot is taken back (35-T.3). */
+        return HCD_CTL_NOT_SENT;
+    }
+    if (dev->Susp.State == XHCI_SUSP_SUSPENDED ||
+        dev->Susp.State == XHCI_SUSP_RECOVERING) {
+        /* No control traffic on a suspended link, or on one whose state
+         * is unknown, whoever asks (design record 14 sections 3.5,
+         * 3.10). */
         return HCD_CTL_NOT_SENT;
     }
     if (length > HCD_SCRATCH_CONTROL_BYTES ||
@@ -3155,6 +3163,10 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
         XhciWritePortsc(ext, p->PortId,
                         XhciPortscClearChanges(portsc, changes));
     }
+    /* The whole sample to selective suspend's machine for a device it
+     * holds (design record 14 section 3.7); connection processing below
+     * is unchanged. */
+    HcdSuspRootSample(hc, p, portsc, changes);
     if ((portsc & XHCI_PORTSC_CCS) == 0 ||
         (changes & XHCI_PORTSC_CSC) != 0) {
         /* Physically empty, or a connection change the hardware reported
@@ -3671,6 +3683,7 @@ static VOID hcdDeviceFreeze(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     dev->Gone = 1;
+    HcdSuspDeviceGone(dev);
     XhciControllerLockRelease(&hc->Hc, oldIrql);
 }
 
@@ -4776,6 +4789,11 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
     hcdHubService(hc, outstanding);
     if (outstanding && !hcdHalted(hc)) {
         hcdSettleCheck(hc, asked);
+    }
+    if (!hcdHalted(hc)) {
+        /* Selective suspend's pass, after every port's evidence of this
+         * pass was handed over (design record 14 section 3.10). */
+        HcdSuspService(hc);
     }
 }
 

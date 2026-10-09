@@ -30,6 +30,7 @@
 #include "xhci_hub.h"
 #include "xhci_sshub.h"
 #include "xhci_link.h"
+#include "xhci_susp.h"
 #include "xhci_psw.h"
 #include "xhci_pirq.h"
 #include "xhci_stream.h"
@@ -243,6 +244,9 @@ typedef struct _HCD_PIPE {
                                      * it: nothing is published meanwhile */
     LIST_ENTRY Held;                /* records mapped while Paused, or
                                      * behind Exclusive                   */
+    ULONG SuspendPause;             /* one of Paused is selective
+                                     * suspend's gate (design record 14
+                                     * section 3.2); controller lock      */
     struct _HCD_XFER *Exclusive;    /* a request split into chunks: none
                                      * other is published until it ends   */
     ULONG Seq;                      /* the last submission's order         */
@@ -444,6 +448,13 @@ typedef struct _HCD_USB_DEVICE {
                                      * enabled: the controller may hold
                                      * the array until the slot goes
                                      * (hcd_cfg.c, 31-A.1); thread        */
+    /* Selective suspend (design record 14, hcd_susp.c): the link machine,
+     * written by the thread alone and read under the controller lock; the
+     * slow IRPs deferred while SUSPENDED (section 3.3), under the
+     * controller lock; and a wake event whose sequence the pass owes. */
+    XHCI_SUSP_LINK Susp;
+    LIST_ENTRY SlowDeferred;
+    ULONG SuspWakeDue;
 } HCD_USB_DEVICE, *PHCD_USB_DEVICE;
 
 /* Distinct pipe handles a PDO keeps an abort horizon for: more than any
@@ -601,6 +612,24 @@ typedef struct _HCD_DEVICE_PDO {
     ULONG HubMttCapable;
     ULONG HubMttOn;
     ULONG HubLinked;
+    /* Selective suspend's slot (design record 14 section 4.1), under the
+     * controller lock: the one pended D-IRP, the D-state asked and the one
+     * the bus acts on (XHCI_SUSP_D*, PowerDeviceD0..D3), the epoch a
+     * pended Dx was accepted in, admission closed, the change count, the
+     * hold after a claimed wake, and the WAIT_WAKE held with its stamp.
+     * PowerPending counts a D-IRP or WAIT_WAKE from acceptance until its
+     * completion returns. Dispatch fills them (36.31); the thread reads
+     * and settles them (hcd_susp.c). */
+    PIRP PwrIrp;
+    ULONG PwrWanted;
+    ULONG PwrState;
+    ULONG PwrDxEpoch;
+    ULONG PwrClosed;
+    ULONG PwrSeq;
+    ULONG WokeHold;
+    PIRP WaitWakeIrp;
+    ULONG WakeStamp;
+    volatile LONG PowerPending;
 } HCD_DEVICE_PDO, *PHCD_DEVICE_PDO;
 
 /* Whether a PDO may use a pipe of its device: a device PDO any, a function
@@ -1219,6 +1248,18 @@ typedef struct _HCD_CONTROLLER {
      * door gate and at a return to D0 under the power gate. */
     XHCI_PIRQ_STATE Pirq;
     PVOID PirqVa;
+    /* Selective suspend (design record 14; hcd_susp.c). SuspOn: the
+     * switch, XhciSelectiveSuspend, read at start (36.33; 0 until then).
+     * PowerEpoch and PowerDown: the controller's session and its leaving
+     * D0 (section 4.4), under the controller lock. WakeSeq: the WAIT_WAKE
+     * stamp counter (5.3), under the controller lock. SuspClockMs: the
+     * machine's millisecond count, advanced by the executor's own waits
+     * (section 3.10); thread only. */
+    ULONG SuspOn;
+    ULONG PowerEpoch;
+    ULONG PowerDown;
+    ULONG WakeSeq;
+    ULONG SuspClockMs;
 } HCD_CONTROLLER, *PHCD_CONTROLLER;
 
 /* The root hub's PDO, created by the controller FDO (hcd_rh.c; design record
@@ -1456,6 +1497,8 @@ ULONG HcdHubPlace(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG speedClass,
 ULONG HcdHubStart(PHCD_CONTROLLER hc, PHCD_PORT p, PHCD_USB_DEVICE dev);
 VOID HcdHubForget(PHCD_CONTROLLER hc, PHCD_HUB hub);
 VOID HcdHubFree(PHCD_CONTROLLER hc, PHCD_HUB hub);
+ULONG HcdHubPortFeature(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
+                        ULONG set, ULONG selector);
 ULONG HcdHubPortStatus(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
                        PULONG status, PULONG change);
 ULONG HcdHubPortDebounce(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n);
@@ -1657,6 +1700,18 @@ NTSTATUS HcdHubFdoDeviceControl(PHCD_HUB_FDO fdo, PIRP irp);
 VOID HcdLogFlush(PHCD_CONTROLLER hc, ULONG reason, ULONG counters);
 VOID HcdCountersStart(PHCD_CONTROLLER hc);
 VOID HcdCountersPoll(PHCD_CONTROLLER hc);
+
+/* hcd_susp.c (task 36.30; design record 14 section 3.10) */
+VOID HcdSuspService(PHCD_CONTROLLER hc);
+VOID HcdSuspDeviceInit(PHCD_USB_DEVICE dev, PHCD_PORT port);
+VOID HcdSuspDeviceGone(PHCD_USB_DEVICE dev);
+ULONG HcdSuspLinkActive(PHCD_USB_DEVICE dev);
+ULONG HcdSuspDefers(PHCD_USB_DEVICE dev, ULONG abortOnly);
+ULONG HcdSuspOwnsPort(PHCD_CONTROLLER hc, PHCD_PORT q);
+VOID HcdSuspRootSample(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG portsc,
+                       ULONG acked);
+VOID HcdSuspHubSample(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG status,
+                      ULONG acked);
 
 /* hcd_pool.c */
 PVOID HcdPoolAlloc(ULONG bytes);

@@ -15,7 +15,8 @@ covered revisions 1 to 9 the same day (13, 12, 10, 9, 3, 4, 1, 2 and 1 findings,
 section 9 maps each to where it is answered); the review of revision 10
 was clean (`b2d03d5`). Revision 11, 2026-10-09: section 3.9, the pure
 core's split and the rules implementing it settled (36.29), reviewed with
-its code. Stage A is being built: 36.29 first.
+its code. Stage A is being built: 36.29 done; section 3.10, the
+thread's executor, with 36.30.
 
 ## 1. What is asked, and what is not
 
@@ -350,6 +351,91 @@ ask, and perform the one step asked. What it decides:
 
 The pure core returns status codes of its own (`XHCI_SUSP_ST_*`), which the
 executor maps to `NTSTATUS`; the D-states are `DEVICE_POWER_STATE`'s values.
+
+### 3.10 The thread's executor (36.30)
+
+36.30 builds everything the enum thread does (sections 3, 3.9 and the
+thread's half of 5.4): the gate, the restart, the sequences at a root port
+and a USB 2.0 hub port, the decision pass over the slots with the
+completions it owes, the wake event's claim, the evidence at the root
+port's acknowledgement and in the hub port look, and the slow-IRP
+deferral. 36.31 builds the dispatch's half (D-IRP, WAIT_WAKE and START
+admission, capabilities, teardown, the controller's transitions). Until
+36.31 nothing fills a slot, and until 36.33 nothing sets the switch, so
+36.30 is inert. In `src/hcd_susp.c`, with hooks in `hcd_enum.c`,
+`hcd_hub.c`, `hcd_cfg.c` and `hcd_io.c`:
+
+- **The pass** runs at the end of each powered service pass, with the
+  switch on and the root hub started, over every addressed device that is
+  not a hub, not SuperSpeed, and has a PDO. In one controller-lock hold it
+  copies the PDO chain's slots, decides (`XhciSuspDecide`), writes back
+  `WokeHold` and the D0s, claims every IRP the decision completes and, for
+  a suspend, begins it (`XhciSuspBegin`, SUSPENDING); the claimed IRPs are
+  completed after the hold. A device that ended a sequence is decided
+  again in the same pass, at most four times, so its last Dx, its D0s and
+  an unclaimed wake's re-suspend are not left for a later wake-up.
+- **Time.** No clock read is on the import allowlist. The machine is
+  given a controller-wide millisecond count that advances by every delay
+  the executor itself waits. Time that passes elsewhere is not counted, so
+  every wait computed from it - the dwell after U3, SP=1's minimum - is
+  longer than asked, never shorter. A bounded poll (the observation, the
+  verification, the arm's drain) is bounded by a timer, as `hcdEp0Quiet`
+  is, and reports `EXPIRED` when it runs out.
+- **The arm and the disarm** go through `HcdThreadControlOutcome`. The
+  first arm is not sent while EP0's queue holds a client's transfer
+  (NOT_SENT at once, no 5-second quiet wait); the repeated arm waits for
+  the queue to drain, polled, within its bound, and is NOT_SENT again if it
+  has not. Outcomes: DONE is OK, STALLED is STALL, NOT_SENT and FAILED are
+  themselves unless the device's EP0 is now stuck or the controller halted
+  (a timeout, `HCD_CTL_NOT_SENT`'s other meaning), and ABANDONED is a
+  timeout. `HcdThreadControlOutcome` refuses (NOT_SENT) any request on a
+  SUSPENDED or RECOVERING device: no control traffic on a suspended link,
+  or on one whose state is unknown, whoever asks.
+- **The stop** is a Stop Endpoint with SP=1 for every endpoint the device
+  context reads Running, EP0 included; Context State Error (already
+  stopped) is success; a command that never answers is a timeout (the
+  reset it requested follows); any other completion a failure.
+- **U3.** At a root port: a stale PLC is acknowledged, then PLS=U3 with
+  LWS; at a hub port: a stale C_PORT_SUSPEND is cleared, then
+  SetPortFeature(PORT_SUSPEND). `XhciSuspU3Issued` follows the write. A
+  hub request that fails is a timeout when the hub's EP0 is now stuck or
+  the controller halted, else a failure.
+- **The observation and verification** poll every millisecond (root
+  PORTSC) or every 10 ms (hub GET_STATUS); an all-ones PORTSC or a GET_STATUS
+  that fails is a timeout; a C_PORT_SUSPEND read is cleared.
+- **The resume** at a root port is PLS=Resume, the 20 ms, PLS=U0 - QEMU
+  ignores the first write and moves on the second (lessons.md); at a hub
+  port ClearPortFeature(PORT_SUSPEND).
+- **The uncertain outcome's recovery** is the device cycle
+  (`HcdEnumCycle` on the device's PDO group): the device is dropped as an
+  unplug drops it and enumerated afresh, a new device. That is the
+  existing path that re-establishes a device whose state is unknown; the
+  old device is GONE and its slots settled at the unlink. A controller
+  timeout leaves the device to the controller's recovery, which
+  invalidates it.
+- **The restart** (3.2) rings, under the lock, every endpoint that the
+  context reads Stopped, is not Halted, holds TDs and whose pipe holds no
+  pause but the machine's (`Paused` 1), once per stream with work, then
+  opens the gate. Then the device's deferred slow IRPs go back to the head
+  of `SlowIrps`, in order, and the thread is woken.
+- **Root-port evidence.** `hcdPortChanged` hands the sample - PORTSC as
+  read, the change bits it acknowledged, the location's `ConnectGen` - to
+  the machine after the acknowledgement, for a device the machine owns. A
+  wake event's claim runs in that hold; the wake sequence runs in the
+  pass. Connection processing goes on unchanged after it.
+- **The hub port look** (3.8). For a USB 2.0 hub port whose device the
+  machine owns: the auto-resume is skipped, and a finished resume
+  (`Suspended`) hands its sample (status, the change bits cleared,
+  `ConnectGen`) to the machine instead of the quiesce, wait and release.
+- **Slow IRPs** (3.3). A slow IRP dequeued for a device whose link is not
+  ACTIVE (SUSPENDED, or RECOVERING, whose device the cycle drops) is
+  served if it is ABORT_PIPE, else moved to `dev->SlowDeferred` in order.
+  A function release owed to such a device is kept owed whole, its
+  host-side half included, until the device is ACTIVE: simpler than
+  splitting it, and it forces no resume. A deferred IRP of a device that
+  leaves completes DEVICE_GONE with the queued ones (`HcdCfgFlushDevice`).
+  The survivor restart after a cancel rings no doorbell while the link is
+  not ACTIVE; the machine's restart does.
 
 ## 4. Function power state at the device PDO
 

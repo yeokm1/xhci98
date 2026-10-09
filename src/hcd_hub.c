@@ -300,6 +300,14 @@ static ULONG hcdHubFeature(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
                          (USHORT)selector, (USHORT)n, 0, &bytes, &stalled);
 }
 
+/* SetPortFeature or ClearPortFeature(selector) on port n, for selective
+ * suspend's executor (hcd_susp.c). Thread only. */
+ULONG HcdHubPortFeature(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
+                        ULONG set, ULONG selector)
+{
+    return hcdHubFeature(hc, hub, n, set, selector);
+}
+
 /* GET_STATUS(port n): wPortStatus and wPortChange. */
 ULONG HcdHubPortStatus(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
                        PULONG status, PULONG change)
@@ -829,6 +837,17 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
              * not re-arm a spent budget or release a hold (35-T.5). */
             HcdTolLocRecovery(hc, q);
             (VOID)hcdHubFeature(hc, hub, n, 1, XHCI_HUB_FEAT_PORT_POWER);
+        }
+        if (HcdSuspOwnsPort(hc, q)) {
+            /* A device selective suspend holds (design record 14 section
+             * 3.8): not resumed here, and a finished resume is the
+             * machine's evidence, not this look's to quiesce and release.
+             * Connection processing is unchanged. */
+            d->Resume = 0;
+            if (d->Suspended) {
+                d->Suspended = 0;
+                HcdSuspHubSample(hc, q, status, d->Clear);
+            }
         }
     }
     if (!d->Resume) {
