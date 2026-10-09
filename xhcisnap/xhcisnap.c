@@ -2353,7 +2353,7 @@ static const char *const pirq_decision_text[SNAP_PIRQ_DECISIONS] = {
     "the IRQ is in neither the APIC nor the PIC range",
     "no routed PIRQx_ROUT names the IRQ",
     "D20IR already routes INTA to the PIRQ that delivers the IRQ",
-    "below 16 on 2000 to 7: the steered path is not proven; reported",
+    "below 16 on 2000 to 7: steered path unproven; reported",
     "value 0: a write was due, none made",
     "value 1, not the verified E7250: a write was due, none made",
     "D20IR written and read back",
@@ -2456,8 +2456,10 @@ static void print_pirq(const unsigned char *hcd, unsigned long hcdBytes)
     v = PW(SNAP_PIRQ_MODE);
     if (v == SNAP_PIRQ_UNREAD) {
         /* XhciPirqReset at the start's entry, no latch after it. */
-        comp("  value            not read: this start ended before the "
-             "routing step\n");
+        /* A start still pending reads the same, so nothing is said of
+         * how it ended (review round 3). */
+        comp("  value            not read: the routing step has not run "
+             "for this start\n");
     } else {
         if (PW(SNAP_PIRQ_VALUE_FOUND) != 0) {
             comp("  value            %lu", PW(SNAP_PIRQ_VALUE));
@@ -2564,8 +2566,8 @@ static void print_pirq(const unsigned char *hcd, unsigned long hcdBytes)
  * `-selftest-pirq`: task 36.3's decode over canned HCD headers: the E7250's
  * repair over the direct path (IRQ 21, INTA moved from PIRQA to PIRQF), a
  * reviewed pair at value 1 not admitted, a message grant in its own
- * layout, a non-Intel controller, a start refused before the routing
- * step, a header from before 2.3.0.0, an image cut short, and a record
+ * layout, IRQ 11 on Windows 2000 to 7 (reported, not written), a
+ * non-Intel controller, a start whose routing step has not run, a header from before 2.3.0.0, an image cut short, and a record
  * count it cannot hold.
  */
 static int selftest_pirq(void)
@@ -2629,6 +2631,22 @@ static int selftest_pirq(void)
     put32(p, SNAP_PIRQ_IRQ_VECTOR * 4, 0xFFFFFFFEUL);
     put32(p, SNAP_PIRQ_IRQ_MODE * 4, 0);
     put32(p, SNAP_PIRQ_TARGET * 4, SNAP_PIRQ_UNREAD);
+    print_pirq(hcd, sizeof(hcd));
+    put32(p, SNAP_PIRQ_IRQ_LEVEL * 4, 21);
+    put32(p, SNAP_PIRQ_IRQ_VECTOR * 4, 21);
+
+    /* IRQ 11 on Windows 2000 to 7, PIRQF steered to it: the target named,
+     * nothing written. */
+    put32(p, SNAP_PIRQ_WHEN * 4, 1);
+    put32(p, SNAP_PIRQ_DELIVERY * 4, 1);
+    put32(p, SNAP_PIRQ_DECISION * 4, 19);
+    put32(p, SNAP_PIRQ_IRQ_FLAGS * 4, 0);
+    put32(p, SNAP_PIRQ_IRQ_LEVEL * 4, 11);
+    put32(p, SNAP_PIRQ_IRQ_VECTOR * 4, 11);
+    put32(p, SNAP_PIRQ_IRQ_MODE * 4, 2);
+    put32(p, SNAP_PIRQ_PIRQ_AD * 4, 0x8080800AUL);
+    put32(p, SNAP_PIRQ_PIRQ_EH * 4, 0x80800B80UL);
+    put32(p, SNAP_PIRQ_TARGET * 4, 5);
     print_pirq(hcd, sizeof(hcd));
     put32(p, SNAP_PIRQ_IRQ_LEVEL * 4, 21);
     put32(p, SNAP_PIRQ_IRQ_VECTOR * 4, 21);

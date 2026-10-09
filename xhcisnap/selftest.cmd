@@ -209,7 +209,7 @@ if not errorlevel 1 (
 
 rem Task 36.3's interrupt routing record, named from canned HCD headers: the
 rem E7250's repair (INTA moved from PIRQA to PIRQF for IRQ 21), a reviewed
-rem pair not admitted at value 1, a message grant, another vendor, a start
+rem pair not admitted at value 1, a message grant, IRQ 11 on NT, another vendor, a start
 rem refused before the routing step; then a 2.2.0.0 header, an image cut
 rem short and a record count the header cannot hold.
 "%~dp0XHCISNAP.EXE" -selftest-pirq > "%BASE%.pirq.log"
@@ -217,7 +217,7 @@ if errorlevel 1 (
     echo FAIL: -selftest-pirq exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("decision         22 WROTE" "D20IR before     00003210 (INTA -> PIRQA)" "PIRQ wanted      PIRQF" "D20IR after      00003215 (INTA -> PIRQF)" "level 21, vector 21, flags 0, share 3" "16-23: PIRQA-H wired direct to I/O APIC inputs 16-23" "a message grant: 1 message(s)," "vector FFFFFFFE, flags 2, share 3" "not read: this start ended before the routing step" "came back 80 bytes" "PIRQA IRQ 11, PIRQB IRQ 10" "PIRQE off" "decision         21 NOT_ADMITTED" "decision         12 MESSAGE" "at a return to D0" "decision         3 NOT_REVIEWED" "00:14.0          id not read" "not set (taken as 1: writes on the verified E7250 only)" "xhci98.sys before 2.3.0.0's" "a record of 40 words") do (
+for %%S in ("decision         22 WROTE" "D20IR before     00003210 (INTA -> PIRQA)" "PIRQ wanted      PIRQF" "D20IR after      00003215 (INTA -> PIRQF)" "level 21, vector 21, flags 0, share 3" "16-23: PIRQA-H wired direct to I/O APIC inputs 16-23" "a message grant: 1 message(s)," "vector FFFFFFFE, flags 2, share 3" "not read: the routing step has not run for this start" "decision         19 STEERED_NT" "below 16: a PIRQx_ROUT byte steering a PIRQ to it" "PIRQF IRQ 11" "came back 80 bytes" "PIRQA IRQ 11, PIRQB IRQ 10" "PIRQE off" "decision         21 NOT_ADMITTED" "decision         12 MESSAGE" "at a return to D0" "decision         3 NOT_REVIEWED" "00:14.0          id not read" "not set (taken as 1: writes on the verified E7250 only)" "xhci98.sys before 2.3.0.0's" "a record of 40 words") do (
     findstr /C:%%S "%BASE%.pirq.log" > nul
     if errorlevel 1 (
         echo FAIL: the routing decode does not say %%S
