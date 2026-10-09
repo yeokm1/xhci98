@@ -500,6 +500,15 @@ static VOID hcdPswStart(PHCD_CONTROLLER hc)
 #define CM_RESOURCE_INTERRUPT_MESSAGE 2
 #endif
 
+/* WDK 7.1's wdm.h defines NO_LEGACY_DRIVERS under _WIN64, which hides
+ * ntddk.h's HalGetBusData prototype; XP x64's hal.dll still exports it
+ * and WDK 7.1's amd64 hal.lib lists it, so the declaration is restated
+ * here as ntddk.h has it. */
+#if defined(_WIN64) && defined(NO_LEGACY_DRIVERS)
+NTHALAPI ULONG HalGetBusData(BUS_DATA_TYPE BusDataType, ULONG BusNumber,
+                             ULONG SlotNumber, PVOID Buffer, ULONG Length);
+#endif
+
 /*
  * PCI configuration space of a function on bus 0 that is not this one's:
  * the PCH's 00:14.0 and 00:1F.0. HcdSvcConfigSpace reaches only this
