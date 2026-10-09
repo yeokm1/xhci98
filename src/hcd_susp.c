@@ -410,15 +410,19 @@ static ULONG hcdSuspControl(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                          : XHCI_SUSP_RES_FAILED;
 }
 
+/* EP0 busy for the arm: a client's transfer queued, or a stall whose
+ * recovery (hcdEp0Quiet's Reset Endpoint) would run past the arm's bound -
+ * that recovery is the next pass's, the device ACTIVE again after the
+ * refusal (Codex review of 36.30, round 2, finding 3). */
 static ULONG hcdSuspEp0Queued(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     KIRQL oldIrql;
-    ULONG count;
+    ULONG busy;
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    count = dev->Ep0Queue.Count;
+    busy = (dev->Ep0Queue.Count != 0 || dev->Ep0Halted) ? 1UL : 0UL;
     XhciControllerLockRelease(&hc->Hc, oldIrql);
-    return count;
+    return busy;
 }
 
 /* The arm (3.4 (2)): a first attempt is not sent behind a client's
@@ -529,11 +533,15 @@ static ULONG hcdSuspU3(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                            XHCI_HUB_FEAT_C_PORT_SUSPEND)) {
         return hcdSuspHubFailed(hc, q->Hub);
     }
+    XhciSuspU3Issued(&dev->Susp);
     if (!HcdHubPortFeature(hc, q->Hub, q->Number, 1,
                            XHCI_HUB_FEAT_PORT_SUSPEND)) {
-        return hcdSuspHubFailed(hc, q->Hub);
+        /* The request may have taken effect though its transfer failed:
+         * nothing proves the link still U0, so it is uncertain, never a
+         * refusal that would reopen the gate (Codex review of 36.30,
+         * round 2, finding 1). */
+        return XHCI_SUSP_RES_TIMEOUT;
     }
-    XhciSuspU3Issued(&dev->Susp);
     return XHCI_SUSP_RES_OK;
 }
 

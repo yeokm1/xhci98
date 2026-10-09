@@ -786,6 +786,7 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     ULONG change;
     ULONG bit;
     ULONG selector;
+    ULONG acked;
 
     q = HcdHubPort(hc, hub, n);
     if (hub->Usb3) {
@@ -825,10 +826,12 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
         HcdTolLocObserve(hc, q, (status & XHCI_HUB_PORT_CONNECTION) != 0,
                          (status & XHCI_HUB_PORT_POWER) != 0,
                          (change & XHCI_HUB_C_PORT_CONNECTION) != 0);
+        acked = 0;
         for (bit = 1; bit <= XHCI_HUB_C_PORT_RESET; bit <<= 1) {
             selector = XhciHubClearSelector(bit);
-            if ((d->Clear & bit) != 0 && selector != 0) {
-                (VOID)hcdHubFeature(hc, hub, n, 0, selector);
+            if ((d->Clear & bit) != 0 && selector != 0 &&
+                hcdHubFeature(hc, hub, n, 0, selector)) {
+                acked |= bit;
             }
         }
         if (d->OverCurrent) {
@@ -849,8 +852,12 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
              * Connection processing is unchanged. */
             d->Resume = 0;
             if (d->Suspended) {
+                /* Only the changes the hub took back are evidence: a
+                 * clear that failed leaves the transport uncertain, and
+                 * C_PORT_SUSPEND without its clear is no wake (Codex
+                 * review of 36.30, round 2, finding 4). */
                 d->Suspended = 0;
-                HcdSuspHubSample(hc, q, status, d->Clear);
+                HcdSuspHubSample(hc, q, status, acked);
             }
         }
     }

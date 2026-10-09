@@ -568,10 +568,12 @@ static ULONG hcdResetEp0(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
      * lock (Codex review of d54eef0, finding 1). */
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     if (waiting && !dev->Gone && dev->Susp.State != XHCI_SUSP_SUSPENDED &&
-        dev->Susp.State != XHCI_SUSP_RECOVERING) {
-        /* Not on a suspended link, or one whose state is unknown: the
-         * survivors wait for selective suspend's restart (design record
-         * 14 section 3.2; Codex review of 36.30, round 1, finding 1). */
+        dev->Susp.State != XHCI_SUSP_RECOVERING &&
+        dev->Susp.State != XHCI_SUSP_GONE) {
+        /* Not on a suspended link, one whose state is unknown, or one
+         * the machine saw leave: the survivors wait for selective
+         * suspend's restart, or go with the device (design record 14
+         * section 3.2; Codex review of 36.30, rounds 1 and 2). */
         XhciWriteDoorbell(&hc->Hc, dev->SlotId, 1);
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
@@ -1000,10 +1002,11 @@ ULONG HcdThreadControlOutcome(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         return HCD_CTL_NOT_SENT;
     }
     if (dev->Susp.State == XHCI_SUSP_SUSPENDED ||
-        dev->Susp.State == XHCI_SUSP_RECOVERING) {
-        /* No control traffic on a suspended link, or on one whose state
-         * is unknown, whoever asks (design record 14 sections 3.5,
-         * 3.10). */
+        dev->Susp.State == XHCI_SUSP_RECOVERING ||
+        dev->Susp.State == XHCI_SUSP_GONE) {
+        /* No control traffic on a suspended link, on one whose state is
+         * unknown, or on one the machine saw leave and whose cycle is
+         * owed, whoever asks (design record 14 sections 3.5, 3.10). */
         return HCD_CTL_NOT_SENT;
     }
     if (length > HCD_SCRATCH_CONTROL_BYTES ||

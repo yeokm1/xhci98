@@ -384,24 +384,27 @@ admission, capabilities, teardown, the controller's transitions). Until
   as `hcdEp0Quiet` is: the observation and the verification report
   `EXPIRED` when it runs out, the repeated arm's drain NOT_SENT.
 - **The arm and the disarm** go through `HcdThreadControlOutcome`. The
-  first arm is not sent while EP0's queue holds a client's transfer
-  (NOT_SENT at once, no 5-second quiet wait); the repeated arm waits for
-  the queue to drain, polled, within its bound, and is NOT_SENT again if it
-  has not. Outcomes: DONE is OK, STALLED is STALL, NOT_SENT and FAILED are
+  first arm is not sent while EP0's queue holds a client's transfer or EP0
+  is halted (NOT_SENT at once, no 5-second quiet wait, no Reset Endpoint
+  inside the bound); the repeated arm waits for both to clear, polled,
+  within its bound, and is NOT_SENT again if they have not. Outcomes: DONE is OK, STALLED is STALL, NOT_SENT and FAILED are
   themselves unless the device's EP0 is now stuck or the controller halted
   (a timeout, `HCD_CTL_NOT_SENT`'s other meaning), and ABANDONED is a
   timeout. `HcdThreadControlOutcome` refuses (NOT_SENT) any request on a
-  SUSPENDED or RECOVERING device: no control traffic on a suspended link,
-  or on one whose state is unknown, whoever asks.
+  SUSPENDED, RECOVERING or GONE device: no control traffic on a suspended
+  link, on one whose state is unknown, or on one the machine saw leave,
+  whoever asks.
 - **The stop** is a Stop Endpoint with SP=1 for every endpoint the device
   context reads Running, EP0 included; Context State Error (already
   stopped) is success; a command that never answers is a timeout (the
   reset it requested follows); any other completion a failure.
 - **U3.** At a root port: a stale PLC is acknowledged, then PLS=U3 with
   LWS; at a hub port: a stale C_PORT_SUSPEND is cleared, then
-  SetPortFeature(PORT_SUSPEND). `XhciSuspU3Issued` follows the write. A
-  hub request that fails is a timeout when the hub's EP0 is now stuck or
-  the controller halted, else a failure.
+  SetPortFeature(PORT_SUSPEND). `XhciSuspU3Issued` precedes the request.
+  The suspend request itself failing is a timeout - it may have taken
+  effect, so nothing proves the link still U0 - and a hub request before
+  it (the stale clear) failing is a timeout when the hub's EP0 is now
+  stuck or the controller halted, else a failure.
 - **The observation and verification** poll every millisecond (root
   PORTSC) or every 10 ms (hub GET_STATUS); an all-ones PORTSC or a GET_STATUS
   that fails is a timeout; a C_PORT_SUSPEND read is cleared.
@@ -425,8 +428,8 @@ admission, capabilities, teardown, the controller's transitions). Until
   opens the gate. Then the device's deferred slow IRPs go back to the head
   of `SlowIrps`, in order, and the thread is woken. Every other doorbell
   that could restart a held device's survivors respects the gate: EP0's
-  recovery (`hcdResetEp0`) rings nothing while the link is SUSPENDED or
-  RECOVERING, and a hub's release of its subtree (`hcdHubReleaseBelow`,
+  recovery (`hcdResetEp0`) rings nothing while the link is SUSPENDED,
+  RECOVERING or GONE, and a hub's release of its subtree (`hcdHubReleaseBelow`,
   an ancestor port's resume) rings no endpoint whose pipe holds the
   machine's pause; the publish paths, the isochronous restart, a cancel's
   stream kick and the soft retry test `Paused` already.
@@ -437,8 +440,9 @@ admission, capabilities, teardown, the controller's transitions). Until
   pass. Connection processing goes on unchanged after it.
 - **The hub port look** (3.8). For a USB 2.0 hub port whose device the
   machine owns: the auto-resume is skipped, and a finished resume
-  (`Suspended`) hands its sample (status, the change bits cleared,
-  `ConnectGen`) to the machine instead of the quiesce, wait and release.
+  (`Suspended`) hands its sample (status, the change bits the hub took
+  back - a clear that failed is no evidence - and `ConnectGen`) to the
+  machine instead of the quiesce, wait and release.
 - **Slow IRPs** (3.3). A slow IRP dequeued for a device whose link is not
   ACTIVE (SUSPENDED, or RECOVERING, whose device the cycle drops) is
   served if it is ABORT_PIPE, else moved to `dev->SlowDeferred` in order,
