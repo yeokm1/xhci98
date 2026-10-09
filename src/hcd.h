@@ -1323,6 +1323,7 @@ ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc);
 VOID HcdPswRoute(PHCD_CONTROLLER hc);
 VOID HcdPswRelease(PHCD_CONTROLLER hc);
 VOID HcdPirqResume(PHCD_CONTROLLER hc);
+VOID HcdPirqStartAttempt(PHCD_CONTROLLER hc);
 
 /* hcd_enum.c */
 VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered);

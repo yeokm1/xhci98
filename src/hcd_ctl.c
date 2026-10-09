@@ -754,6 +754,21 @@ VOID HcdPirqResume(PHCD_CONTROLLER hc)
     hcdPirqRun(hc, XHCI_PIRQ_WHEN_RESUME);
 }
 
+/*
+ * Every START_DEVICE, before it goes down the stack: a start the lower
+ * driver refuses, or one refused before the routing step, then shows no
+ * earlier start's run through a door handle still open (review rounds 1
+ * and 2, finding 1). The counts are kept. Under the door gate, which the
+ * snapshot's copy holds; released before the IRP is forwarded.
+ * IRQL: PASSIVE_LEVEL.
+ */
+VOID HcdPirqStartAttempt(PHCD_CONTROLLER hc)
+{
+    HcdDoorGateEnter(hc);
+    XhciPirqReset(&hc->Pirq);
+    HcdDoorGateLeave(hc);
+}
+
 /* --------------------------------------------------------------------- */
 /* Resources                                                              */
 /* --------------------------------------------------------------------- */
@@ -921,6 +936,9 @@ VOID HcdControllerInitObjects(PHCD_CONTROLLER hc)
     KeInitializeEvent(&hc->XferDoneEvent, NotificationEvent, FALSE);
     KeInitializeEvent(&hc->EnumDetachDone, NotificationEvent, TRUE);
     KeInitializeEvent(&hc->DoorGate, SynchronizationEvent, TRUE);
+    /* Task 36.3: the routing record's unread marks, not zeros, before
+     * any start (a zero Mode would read as value 0). */
+    XhciPirqReset(&hc->Pirq);
     KeInitializeTimer(&hc->LinkRecoverTimer);
 #if defined(XHCI_FLAVOUR_QEMU)
     KeInitializeSpinLock(&hc->InjLock);
@@ -1627,10 +1645,8 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
      * rebuilds, so it is reset with it (Codex review of 26-A.2, round 4,
      * finding 1). */
     hc->SuspendedInD0 = 0;
-    /* Task 36.3: before anything below can refuse the start, so a refused
-     * start shows no earlier start's routing run (review round 1, finding
-     * 1). The counts are kept. */
-    XhciPirqReset(&hc->Pirq);
+    /* Task 36.3's record was reset when the START_DEVICE arrived, before
+     * the lower driver saw it (HcdPirqStartAttempt, hcd_pnp.c). */
     HcdCountersStart(hc);
     HcdEnumInit(hc);
 

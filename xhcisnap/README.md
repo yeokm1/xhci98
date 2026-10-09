@@ -241,8 +241,9 @@ and the report names it in a section of its own, "interrupt routing":
 - **The value** as found, or "not set", and how the driver took it: 0 reports
   and writes nothing, 1 writes on the verified E7250 only, 2 on any reviewed
   xHCI and LPC pair.
-- **The counts** since the driver loaded: runs, D20IR writes, writes whose
-  read-back disagreed.
+- **The counts** since the driver loaded: runs, D20IR writes, and writes
+  that failed (the write refused, its read-back failed, or the read-back
+  disagreed).
 - **The last run**: at the start or at a return to D0, its decision by name
   and meaning (the run stops at the first check that fails), the delivery
   (a line, a message interrupt, polled, none), and the raw interrupt

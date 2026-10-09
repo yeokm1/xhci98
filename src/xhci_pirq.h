@@ -192,7 +192,7 @@ typedef struct _XHCI_PIRQ_IRQ {
 typedef struct _XHCI_PIRQ_STATE {
     ULONG Runs;
     ULONG Writes;       /* D20IR writes issued                              */
-    ULONG WriteFailures;
+    ULONG WriteFailures;/* write or read-back refused, or read-back differs */
     ULONG Mode;         /* XHCI_PIRQ_MODE_*                                 */
     ULONG ValueFound;   /* XhciIntelIrqRoute found as a DWORD               */
     ULONG Value;        /* its value, XHCI_PIRQ_UNREAD when not found       */

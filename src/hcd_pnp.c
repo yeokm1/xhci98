@@ -48,6 +48,9 @@ static NTSTATUS hcdStart(PHCD_CONTROLLER hc, PIRP irp)
 {
     NTSTATUS status;
 
+    /* Task 36.3: the routing record describes this attempt from here on,
+     * whoever refuses it. */
+    HcdPirqStartAttempt(hc);
     status = HcdForwardAndWait(hc, irp);
     if (!NT_SUCCESS(status)) {
         return HcdCompleteIrp(irp, status, irp->IoStatus.Information);
