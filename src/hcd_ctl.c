@@ -935,8 +935,10 @@ static NTSTATUS hcdSettleDelivery(PHCD_CONTROLLER hc)
     hc->QemuDeadLine =
         NT_SUCCESS(hcdReadDword(hc, HCD_VALUE_QEMU_DEADLINE, &value)) ? value
                                                                       : 0UL;
-    if (hc->QemuDeadLine > 600001UL) {
-        hc->QemuDeadLine = 600001UL;
+    /* Held to 100 s: the latch's deadline is compared by signed
+     * difference of the system time's low word (record 15 section 6.2). */
+    if (hc->QemuDeadLine > 100001UL) {
+        hc->QemuDeadLine = 100001UL;
     }
     hc->QemuDeadLatched = (hc->QemuDeadLine == 1) ? 1UL : 0UL;
     hc->QemuDeadAt = 0;
@@ -944,6 +946,7 @@ static NTSTATUS hcdSettleDelivery(PHCD_CONTROLLER hc)
     if (hc->QemuNoInterrupt) {
         haveInterrupt = 0;
         message = 0;
+        hc->HaveInterrupt = 0;
     }
 #endif
 
@@ -2002,10 +2005,11 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
         hc->IntDelivery = XHCI_PIRQ_DELIVERY_POLL;
     }
 
-    /* The interrupt bit only for a resource this start connects (record 15
-     * section 4: ResourcesTypes tells the truth). */
+    /* The interrupt bit only when an interrupt resource was given (record
+     * 15 section 4: ResourcesTypes tells the truth); the core requires it
+     * of a line delivery alone. */
     ext->ResourcesTypes =
-        (hc->PollDelivery == XHCI_POLL_DELIVERY_LINE)
+        hc->HaveInterrupt
             ? XhciResourcesRequired
             : (XhciResourcesRequired & ~(ULONG)USBPORT_RESOURCES_INTERRUPT);
     ext->ResourceBase = (ULONG_PTR)hc->BarVa;
@@ -2129,8 +2133,11 @@ static VOID hcdStopBody(PHCD_CONTROLLER hc)
     /* Record 15 section 4.2: the poller's service revoked and a moved
      * line's owed retirement contained by the stop itself, before anything
      * is disabled or disconnected; still owed, it is recorded uncontained. */
-    HcdPollRevoke(hc);
     HcdPowerGateEnter(hc);
+    HcdPollRevoke(hc);
+    /* Closed before the check, so no watcher can move behind it; a grant
+     * meanwhile finds it CLOSED and arms nothing (record 15 section 5.2). */
+    HcdPollClose(hc);
     (VOID)HcdPollContain(hc);
     HcdPowerGateLeave(hc);
     if (ext->LineMoved && !ext->LineRetired) {

@@ -237,6 +237,7 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
     XhciLogAppend(log, "intr.retire.attempts",
                   hc->Counters.LineRetireAttempts, 1);
     XhciLogAppend(log, "intr.retire.state", ext->LineRetireState, 1);
+    XhciLogAppend(log, "intr.moved.masked", hc->Counters.LineMoveMasked, 1);
     hcdLogTolLocked(ext, log);
 }
 

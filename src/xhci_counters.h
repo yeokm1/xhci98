@@ -167,7 +167,7 @@ typedef struct _XHCIHC_COUNTERS {
      * the attempts to retire the line and the retirement's state
      * (XHCI_POLL_RETIRED_*); and a start that cleared a leftover PCI
      * Interrupt Disable. Written at start before the poller runs, then
-     * under the controller lock. */
+     * under the controller lock or PollLock (the poller's own words). */
     ULONG IntrModeRead;
     ULONG IntrMode;
     ULONG IntrDelivery;
@@ -199,9 +199,12 @@ typedef struct _XHCIHC_COUNTERS {
     ULONG LineRetireAttempts;
     ULONG LineRetireState;
     ULONG IntxDisableCleared;
+    /* The move's mask (record 15 section 8): 1 when both enables read back
+     * down at the move's retirement attempt, whatever its IP step did. */
+    ULONG LineMoveMasked;
 } XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 94 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 95 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */

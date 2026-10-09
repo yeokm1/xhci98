@@ -30,6 +30,7 @@ XHCI_C_ASSERT(hcd_poll_ie, XHCI_POLL_IMAN_IE == XHCI_IMAN_IE);
 
 static VOID NTAPI hcdPollDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
                              PVOID Arg2);
+static VOID hcdPollQemuLatch(PHCD_CONTROLLER hc, ULONG now);
 
 /* The low word of the system time, in 100 ns units. IRQL: any. */
 static ULONG hcdPollNow(VOID)
@@ -251,12 +252,15 @@ static BOOLEAN NTAPI hcdPollPublishSync(PVOID Context)
  * whether LineRetired now holds. IRQL: <= DISPATCH_LEVEL, controller lock
  * held (it reads HcInfoStatus under it).
  */
-static ULONG hcdPollRetireLocked(PHCD_CONTROLLER hc)
+static ULONG hcdPollRetireLocked(PHCD_CONTROLLER hc, PULONG result)
 {
     PXHCI_EXTENSION ext;
     HCD_POLL_SYNC sync;
 
     ext = &hc->Hc;
+    if (result != NULL) {
+        *result = XHCI_POLL_RETIRE_ENABLES;
+    }
     if (!ext->LineMoved || ext->LineRetired) {
         return ext->LineRetired;
     }
@@ -266,6 +270,9 @@ static ULONG hcdPollRetireLocked(PHCD_CONTROLLER hc)
     sync.Hc = hc;
     sync.Result = XHCI_POLL_RETIRE_ENABLES;
     (VOID)KeSynchronizeExecution(hc->Interrupt, hcdPollRetireSync, &sync);
+    if (result != NULL) {
+        *result = sync.Result;
+    }
     hc->Counters.LineRetireAttempts++;
     if (ext->LineRetired) {
         ext->LineRetireState = XHCI_POLL_RETIRED_ACK;
@@ -301,7 +308,7 @@ ULONG HcdPollContain(PHCD_CONTROLLER hc)
         return 2;
     }
     XhciControllerLockAcquire(ext, &oldIrql);
-    retired = hcdPollRetireLocked(hc);
+    retired = hcdPollRetireLocked(hc, NULL);
     XhciControllerLockRelease(ext, oldIrql);
     if (retired) {
         return 1;
@@ -366,6 +373,7 @@ VOID HcdPollThreadPass(PHCD_CONTROLLER hc)
         }
     }
     XhciControllerLockAcquire(ext, &oldIrql);
+    hcdPollQemuLatch(hc, hcdPollNow());
     HcdPollPeekLocked(hc);
     XhciControllerLockRelease(ext, oldIrql);
 }
@@ -471,7 +479,11 @@ VOID HcdSvcDoorbell(PXHCI_EXTENSION ext, ULONG slot, ULONG value)
             pipe = dev->Pipes[dci];
             if (pipe != NULL &&
                 pipe->TransferType == XHCI_PIPE_XFER_INTERRUPT) {
-                need = XhciPollIntervalMs(pipe->Ep.Interval);
+                /* A hub's status endpoint never asks for less than the
+                 * idle period (record 15 section 6.1). */
+                need = (dev->Hub != NULL)
+                           ? hc->PollValues.IdleMs
+                           : XhciPollIntervalMs(pipe->Ep.Interval);
             }
         }
     }
@@ -488,6 +500,26 @@ VOID HcdPollPortsBusy(PHCD_CONTROLLER hc, ULONG busy)
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     hc->PollPortsBusy = busy;
     XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
+/*
+ * The qemu flavour's delayed dead line (record 15 section 11), latched by
+ * whichever looks first - the watcher's DPC or the controller thread, so
+ * mode 1, which has no watcher, latches too. IRQL: DISPATCH_LEVEL,
+ * controller lock held.
+ */
+static VOID hcdPollQemuLatch(PHCD_CONTROLLER hc, ULONG now)
+{
+#if defined(XHCI_FLAVOUR_QEMU)
+    if (hc->QemuDeadLine > 1 && !hc->QemuDeadLatched &&
+        hc->Hc.PollService && (LONG)(now - hc->QemuDeadAt) >= 0) {
+        hc->QemuDeadLatched = 1;
+        XhciLogNoteLocked(&hc->Hc, "qemu.inj.deadline", 1);
+    }
+#else
+    UNREFERENCED_PARAMETER(hc);
+    UNREFERENCED_PARAMETER(now);
+#endif
 }
 
 /* ------------------------------------------------------------------ */
@@ -551,6 +583,11 @@ static VOID hcdPollBus(PHCD_CONTROLLER hc, PXHCI_POLL_BUS bus)
                 bus->Async = 1;
                 break;
             }
+            if (dev->Hub != NULL) {
+                /* A hub's status endpoint: nothing shorter than the idle
+                 * period (record 15 section 6.1). */
+                continue;
+            }
             ms = XhciPollIntervalMs(pipe->Ep.Interval);
             if (ms == 0) {
                 ms = 1;
@@ -601,7 +638,7 @@ static VOID hcdPollMove(PHCD_CONTROLLER hc, ULONG pairs)
 {
     PXHCI_EXTENSION ext;
     KIRQL pollIrql;
-    ULONG retired;
+    ULONG result;
 
     ext = &hc->Hc;
     ext->EventDelivery = XHCI_POLL_DELIVERY_POLL;
@@ -616,8 +653,14 @@ static VOID hcdPollMove(PHCD_CONTROLLER hc, ULONG pairs)
     hc->IntDelivery = XHCI_PIRQ_DELIVERY_POLL;
     hc->Counters.LineMoves = 1;
     XhciLogNoteLocked(ext, "intr.moved", pairs);
-    retired = hcdPollRetireLocked(hc);
-    XhciLogNoteLocked(ext, "intr.moved.masked", retired);
+    (VOID)hcdPollRetireLocked(hc, &result);
+    /* The mask's own outcome, apart from the IP step's (record 15 section
+     * 8): both enables proven down unless the first step failed. */
+    hc->Counters.LineMoveMasked =
+        (result == XHCI_POLL_RETIRE_PROVEN || result == XHCI_POLL_RETIRE_IP)
+            ? 1UL
+            : 0UL;
+    XhciLogNoteLocked(ext, "intr.moved.masked", hc->Counters.LineMoveMasked);
     KeAcquireSpinLock(&hc->PollLock, &pollIrql);
     XhciPollServe(&hc->Poll);
     hc->Counters.PollRole = XHCI_POLL_ROLE_SERVE;
@@ -678,13 +721,7 @@ static VOID NTAPI hcdPollDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
     }
 
     if (role == XHCI_POLL_ROLE_WATCH) {
-#if defined(XHCI_FLAVOUR_QEMU)
-        if (hc->QemuDeadLine > 1 && !hc->QemuDeadLatched &&
-            (LONG)(now - hc->QemuDeadAt) >= 0) {
-            hc->QemuDeadLatched = 1;
-            XhciLogNoteLocked(ext, "qemu.inj.deadline", 1);
-        }
-#endif
+        hcdPollQemuLatch(hc, now);
         hc->Counters.WatchLooks++;
         asserted = hcdPollLook(hc);
         claims = ext->InterruptsClaimed;
@@ -711,7 +748,7 @@ static VOID NTAPI hcdPollDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
     }
 
     /* The service pass. An owed retirement is tried at its start. */
-    (VOID)hcdPollRetireLocked(hc);
+    (VOID)hcdPollRetireLocked(hc, NULL);
     events = ext->EventsTotal;
     bounds = ext->DrainBoundHits;
     portEvents = hc->PortEvents;
@@ -756,7 +793,10 @@ static VOID NTAPI hcdPollDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
 
 epilogue:
     /* The only place the DPC gives the poller up (record 15 section 5.2):
-     * after both locks are released, PollLock alone. */
+     * after both locks are released, PollLock alone. The time is taken
+     * again, so a PollOwed that fell due during the pass is served at
+     * once (section 6.2) and the armed deadline is the one set. */
+    now = hcdPollNow();
     KeAcquireSpinLock(&hc->PollLock, &pollIrql);
     if (XhciPollEnd(&hc->Poll, decision, now, hc->PollValues.ActiveMs,
                     hc->PollValues.IdleMs, &ms, &displaced)) {

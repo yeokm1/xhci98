@@ -6328,7 +6328,7 @@ read at every start. `XhciQemuNoInterrupt` 1 makes the start see no
 interrupt resource and pin 0: mode 0 then polls with reason 4, mode 1 fails
 the start as a controller with no interrupt always did. `XhciQemuPinUnreadable`
 1 fails the HCD's pin read: modes 0 and 1 run the line with reason 2 or 6.
-`XhciQemuDeadLine` N + 1 (0 off, held to 600001) latches a stand-in dead line
+`XhciQemuDeadLine` N + 1 (0 off, held to 100001, 100 s) latches a stand-in dead line
 N ms after the start's grant (at once, before the connection, for a value of
 1): the ISR still acknowledges what it claims, so QEMU's level line does not
 storm, but queues no drain and withholds the claim from the watcher, and

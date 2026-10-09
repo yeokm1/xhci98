@@ -4875,6 +4875,21 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
                               XhciReadOp(ext, XHCI_OP_USBSTS),
                               MP_STATUS_HW_ERROR);
     }
+    /*
+     * A line moved to polling and still owed its retirement is retired by
+     * this HCRST: IP, IE and INTE are at their defaults of 0 (4.23.1,
+     * p.312; design record 15 section 4.2, containment step 3). Published
+     * as soon as the reset has completed, so the proof stands whatever a
+     * later step of this sequence refuses.
+     */
+    if (ext->LineMoved && !ext->LineRetired) {
+        KIRQL retireIrql;
+
+        XhciControllerLockAcquire(ext, &retireIrql);
+        ext->LineRetired = 1;
+        ext->LineRetireState = XHCI_POLL_RETIRED_HCRST;
+        XhciControllerLockRelease(ext, retireIrql);
+    }
 
     /*
      * Step 4, widened. The roadmap asks for HCIVERSION to be re-checked after
@@ -4965,17 +4980,6 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
          * exists to close.
          */
         ext->ControllerFatal = 0;
-        /*
-         * A line moved to polling and still owed its retirement is retired
-         * by this HCRST: IP, IE and INTE are at their defaults of 0 (design
-         * record 15 section 4.2, containment step 3). Set here, as soon as
-         * the reset has completed, so the proof stands even if a later step
-         * of this sequence refuses.
-         */
-        if (ext->LineMoved && !ext->LineRetired) {
-            ext->LineRetired = 1;
-            ext->LineRetireState = XHCI_POLL_RETIRED_HCRST;
-        }
         XhciControllerLockRelease(ext, failedIrql);
     }
 
