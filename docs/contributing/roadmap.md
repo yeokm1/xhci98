@@ -132,8 +132,8 @@ there the same day.
 routing, polled event delivery, MSI on Vista and 7, three items of
 GitHub issue 17, and UAS commands of 1 MiB (36.21 to 36.27, a plan
 reviewed clean at `86db9a3`). Its plan was reviewed by Codex to a clean
-round at `ef7fbac`. 36.3, the routing quirk, is done (its VM legs owed);
-the next task is 36.4.
+round at `ef7fbac`. 36.3, the routing quirk, and 36.4, the bounded BUSY
+retry, are done (their VM legs owed); the next task is 36.5.
 [`roadmap-hcd.md`](roadmap-hcd.md), "Phase 36", is the record.
 
 ---
