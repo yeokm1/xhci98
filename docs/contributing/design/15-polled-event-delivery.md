@@ -539,8 +539,9 @@ the same controller-lock hold as the look that proved the line dead:
 
 **The ISR after the move** claims nothing once the line is retired, so a
 shared line's other devices are unaffected: `XhciIsr` declines, before it
-reads `USBSTS`, while `LineRetired` is 1 - the standing assertion proven
-ended and both enables proven down - which extends the existing rule that
+reads `USBSTS`, while `LineRetired` is 1 - further INTx assertion proven
+prevented, by a masked acknowledgement, a verified PCI Interrupt Disable
+or a completed HCRST - which extends the existing rule that
 declining is free only once this controller can no longer be asserting
 the line. **While a retirement is owed** (`LineMoved` 1, `LineRetired`
 0), the ISR skips its existing suppression gate - the one that declines
@@ -909,9 +910,14 @@ run bit is written, so neither proves the controller runs.
   site that clears it directly (`xhci_cmd.c`'s quiesce,
   `XhciControllerBeginQuiesce`) - which covers the start's and the
   recovery's `XhciInitController` entry, the quiesce of a suspend and of
-  the recovery, a stop and a failed recovery. Clearing needs no HCD call:
-  the poller sees it at its next admission, and the generation keeps the
-  watcher's looks apart (section 4.2).
+  the recovery, a stop and a failed recovery. The core's clear needs no
+  HCD call: the poller sees it at its next admission, and the generation
+  keeps the watcher's looks apart (section 4.2). **The HCD revokes
+  earlier**, through `HcdPollRevoke` (the same two writes under the
+  controller lock), at the start of each lifecycle containment - a
+  suspend, a recovery, the stop - so the watcher cannot move behind the
+  containment's check (section 4.2); the core's clear that follows is
+  then a defensive repeat.
 - **The admission** of the poller's DPC and of a peek is `PollService` 1,
   `ControllerFailed` 0 and the drain admission the backstop uses
   (`hcdDrainAdmitted`: the window decoded, D0, the DPC open, the event ring
@@ -1444,8 +1450,7 @@ the deadline conversion, the phase split or the cross-references.
 
 ### 13.5 Revision 5 (task 36.5)
 
-Reviewed 2026-10-09 in 36.5's loop; the findings of each round and where
-each was answered are added here as the rounds return.
+Reviewed 2026-10-09 in 36.5's loop, eight rounds, converged at round 8.
 
 Round 1 (`a744811`): 4 P1, 5 P2, all taken.
 
@@ -1513,6 +1518,12 @@ Round 7 (`8cee483`): 1 P1, 1 P2, both taken.
 |---|---|---|
 | 1 | P1: containment could write MMIO during a reset or on a bad layout | Section 4.2, step 3: `HcInfoStatus` admission, HCRST/CNR and operand guards; the PCI step taken without MMIO |
 | 2 | P2: the watcher could create an obligation after a lifecycle check | Section 4.2, containment step 2: `HcdPollRevoke` before the check |
+
+Round 8 (`59e0959`): **converged** - "the design is now sound enough to
+implement", no P1 or P2. Two P3s taken: `HcdPollRevoke` named among the
+revocation's writers (section 5.3), and what `LineRetired` proves stated
+for all three of its proofs (section 4.2). Review thread
+`01a12062-0080-7c92-a609-9e2b765333c4`.
 
 ## 14. What changes in the documents
 
