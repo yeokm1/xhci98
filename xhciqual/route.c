@@ -125,9 +125,15 @@ const char *route_summary(const ROUTEINFO *r, long gsi)
     }
     switch (route_compare(r, gsi)) {
     case ROUTE_CMP_MATCH:
-        return "routing MATCHES the GSI given";
+        return gsi < ROUTE_APIC_FIRST
+                   ? "routing MATCHES the IRQ given on the 8259 path, as "
+                     "DOS found it"
+                   : "routing MATCHES the GSI given";
     case ROUTE_CMP_MISMATCH:
-        return "routing MISMATCH against the GSI given";
+        return gsi < ROUTE_APIC_FIRST
+                   ? "routing MISMATCH against the IRQ given on the 8259 "
+                     "path, as DOS found it"
+                   : "routing MISMATCH against the GSI given";
     case ROUTE_CMP_NOT_COMPARED:
         return "routing read; the GSI given was not compared";
     default:
@@ -221,18 +227,26 @@ void report_route(const ROUTEINFO *r, long gsi, QPRINTF_FN pf)
     cmp = route_compare(r, gsi);
     if (cmp == ROUTE_CMP_NONE) {
         pf("    no GSI given (--gsi N): nothing compared\n");
-    } else if (cmp == ROUTE_CMP_MATCH) {
+    } else if (cmp == ROUTE_CMP_MATCH && gsi >= ROUTE_APIC_FIRST) {
         pf("    GSI %ld given: MATCH - PIRQ%c delivers it\n", gsi,
            pirq_letter(pirq));
-    } else if (cmp == ROUTE_CMP_MISMATCH) {
-        if (gsi >= ROUTE_APIC_FIRST) {
-            pf("    GSI %ld given: MISMATCH - the pin reaches PIRQ%c "
-               "(GSI %d), and GSI %ld is PIRQ%c\n", gsi, pirq_letter(pirq),
-               16 + pirq, gsi, pirq_letter((int)(gsi - ROUTE_APIC_FIRST)));
-        } else {
-            pf("    GSI %ld given: MISMATCH - PIRQ%c's PIRQx_ROUT does "
-               "not route it to IRQ %ld\n", gsi, pirq_letter(pirq), gsi);
-        }
+    } else if (cmp == ROUTE_CMP_MISMATCH && gsi >= ROUTE_APIC_FIRST) {
+        pf("    GSI %ld given: MISMATCH - the pin reaches PIRQ%c "
+           "(GSI %d), and GSI %ld is PIRQ%c\n", gsi, pirq_letter(pirq),
+           16 + pirq, gsi, pirq_letter((int)(gsi - ROUTE_APIC_FIRST)));
+    } else if (cmp == ROUTE_CMP_MATCH || cmp == ROUTE_CMP_MISMATCH) {
+        /* Below 16 the comparison is the 8259 path's alone, with the
+         * PIRQx_ROUT bytes DOS found: Windows 98 and ME program their own,
+         * and an NT I/O APIC HAL can hand out an IRQ below 16 whose route
+         * is not this one (issue 12 section 5.1, STEERED_NT). */
+        pf("    IRQ %ld given: %s on the 8259 path - PIRQ%c_ROUT %s IRQ "
+           "%ld, as DOS found it\n", gsi,
+           cmp == ROUTE_CMP_MATCH ? "MATCH" : "MISMATCH", pirq_letter(pirq),
+           cmp == ROUTE_CMP_MATCH ? "routes it to" : "does not route it to",
+           gsi);
+        pf("    (Windows 98 and ME program PIRQx_ROUT themselves; under an "
+           "NT APIC HAL a\n     low IRQ may take another route, so this "
+           "proves nothing for one)\n");
     } else {
         pf("    GSI %ld given: not compared (%s)\n", gsi,
            pirq < 0 ? "no PIRQ selected"

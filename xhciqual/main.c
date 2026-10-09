@@ -94,7 +94,10 @@ static void prescan_done_flag(int argc, char **argv)
         const char *a = argv[i];
         while (*a == '-' || *a == '/')
             a++;
-        if (strcmp(a, "scan") == 0 || strcmp(a, "controller") == 0) {
+        /* --gsi takes the next token whatever it is, as parse_args does, so
+         * an operand spelled like an option is never read as one here. */
+        if (strcmp(a, "scan") == 0 || strcmp(a, "controller") == 0 ||
+            strcmp(a, "gsi") == 0) {
             if (i + 1 < argc)
                 i++;
         } else if (strcmp(a, "log") == 0) {
@@ -259,7 +262,8 @@ static void print_help(void)
             "                    the xHCI's Intel PCH interrupt routing\n"
             "                    (D20IR, PIRQx_ROUT) against N, the GSI or\n"
             "                    IRQ Windows reports for the controller\n"
-            "                    (16-23 an APIC input, below 16 a PIC IRQ).\n"
+            "                    (16-23 an APIC input; below 16 a PIC IRQ,\n"
+            "                    compared with the routing DOS found only).\n"
             "                    The routing itself is reported on every\n"
             "                    run, read only, on the reviewed Intel\n"
             "                    7/8/9-series and C610 xHCIs alone\n"

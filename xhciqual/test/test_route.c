@@ -182,7 +182,25 @@ static void test_report(void)
     r.d20ir = 0x3215;
     report_route(&r, 11, cap);
     CHECK(has("PIRQF_ROUT=0B: routed to the PIC, IRQ 11"), "routed ROUT");
-    CHECK(has("GSI 11 given: MATCH - PIRQF delivers it"), "PIC match");
+    CHECK(has("IRQ 11 given: MATCH on the 8259 path - PIRQF_ROUT routes it "
+              "to IRQ 11, as DOS found it"), "PIC match, scoped to DOS");
+    CHECK(has("proves nothing for one"),
+          "a low IRQ says nothing for an NT APIC HAL");
+    CHECK(strcmp(route_summary(&r, 11),
+                 "routing MATCHES the IRQ given on the 8259 path, as DOS "
+                 "found it") == 0, "summary, PIC match scoped");
+
+    out[0] = '\0';
+    report_route(&r, 10, cap);
+    CHECK(has("IRQ 10 given: MISMATCH on the 8259 path - PIRQF_ROUT does "
+              "not route it to IRQ 10, as DOS found it"), "PIC mismatch");
+    CHECK(strcmp(route_summary(&r, 10),
+                 "routing MISMATCH against the IRQ given on the 8259 path, "
+                 "as DOS found it") == 0, "summary, PIC mismatch scoped");
+
+    out[0] = '\0';
+    report_route(&r, 13, cap);
+    CHECK(has("GSI 13 given: not compared"), "a reserved IRQ, not compared");
 
     out[0] = '\0';
     r.xhci_pin = 2;

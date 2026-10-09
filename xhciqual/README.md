@@ -919,9 +919,13 @@ What it reports, for a reviewed pair:
 Windows was told: N is the IRQ Device Manager shows for the controller
 under the system the question is about. 16-23 is compared as an I/O APIC
 input (PIRQA-H); 3-7, 9-12, 14 and 15 as an 8259 IRQ, which the PIRQ
-delivers only when its `PIRQx_ROUT` is enabled and names it (the PIC
-routing is as the BIOS left it under DOS, and Windows 98 programs its
-own); any other N is reported as not compared. Without `--gsi` the
+delivers only when its `PIRQx_ROUT` is enabled and names it. That one is
+the 8259 path's alone, with `PIRQx_ROUT` as the BIOS left it under DOS,
+and the report says so: Windows 98 and ME program their own, and under an
+NT I/O APIC HAL an IRQ below 16 may take another route (the driver's own
+rule, `STEERED_NT`, writes nothing there for that reason), so a low-IRQ
+result proves nothing about such a system. Any other N is reported as not
+compared. Without `--gsi` the
 registers are reported and nothing is flagged. The E7250 under XP x64 would
 read:
 
