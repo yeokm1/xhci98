@@ -21,6 +21,9 @@ VOID XhciPollValues(PXHCI_POLL_VALUES v, ULONG modeFound, ULONG mode,
                     ULONG idleFound, ULONG idle, ULONG activeFound,
                     ULONG active)
 {
+    v->Found = (modeFound ? XHCI_POLL_FOUND_MODE : 0UL) |
+               (idleFound ? XHCI_POLL_FOUND_IDLE : 0UL) |
+               (activeFound ? XHCI_POLL_FOUND_ACTIVE : 0UL);
     v->ModeRead = modeFound ? mode : XHCI_POLL_NOT_FOUND;
     v->Mode = (modeFound &&
                (mode == XHCI_POLL_MODE_LINE || mode == XHCI_POLL_MODE_POLL))
@@ -466,6 +469,27 @@ ULONG XhciPollDecidePeriod(const XHCI_POLL_BUS *bus, ULONG activeMs,
     }
     *busState = XHCI_POLL_BUS_IDLE;
     return idleMs;
+}
+
+/*
+ * "An event drained within the last idle period" (section 6.1): `last` is
+ * when one was seen. An age outside [0, idle) - elapsed, or a clock that
+ * stepped back, or one so old the low word's signed difference wrapped -
+ * expires the stamp for good, so it can never read recent again.
+ */
+ULONG XhciPollRecent(PULONG seen, ULONG last, ULONG now, ULONG idleMs)
+{
+    LONG age;
+
+    if (!*seen) {
+        return 0;
+    }
+    age = (LONG)(now - last);
+    if (age < 0 || (ULONG)age >= idleMs * XHCI_POLL_TICKS_PER_MS) {
+        *seen = 0;
+        return 0;
+    }
+    return 1;
 }
 
 /* The interval since the last poll run, quantised to the system clock: a

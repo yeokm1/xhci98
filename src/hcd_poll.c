@@ -41,14 +41,24 @@ static ULONG hcdPollNow(VOID)
     return now.LowPart;
 }
 
-/* The owner's KeSetTimer. IRQL: <= DISPATCH_LEVEL, PollLock held. */
-static VOID hcdPollArm(PHCD_CONTROLLER hc, ULONG ms)
+/* The owner's KeSetTimer, with the period and the state that chose it
+ * recorded together (record 15 section 8). IRQL: <= DISPATCH_LEVEL,
+ * PollLock held. */
+static VOID hcdPollArm(PHCD_CONTROLLER hc, ULONG ms, ULONG state)
 {
     LARGE_INTEGER due;
 
     HcdRelativeMs(&due, ms);
     (VOID)KeSetTimer(&hc->PollTimer, due, &hc->PollTimerDpc);
     hc->Counters.PollPeriodLast = ms;
+    hc->Counters.PollStateLast = state;
+}
+
+/* The state a first arm (a kick, or a kick owed) stands for. */
+static ULONG hcdPollFirstState(PHCD_CONTROLLER hc)
+{
+    return (hc->Poll.Role == XHCI_POLL_ROLE_WATCH) ? XHCI_POLL_BUS_WATCH
+                                                   : XHCI_POLL_BUS_ACTIVE;
 }
 
 /* Once, beside the controller's other objects. IRQL: PASSIVE_LEVEL. */
@@ -126,7 +136,7 @@ VOID HcdPollGrant(PHCD_CONTROLLER hc)
 #endif
         KeAcquireSpinLock(&hc->PollLock, &pollIrql);
         if (XhciPollKick(&hc->Poll, now, hc->PollValues.ActiveMs, &ms)) {
-            hcdPollArm(hc, ms);
+            hcdPollArm(hc, ms, hcdPollFirstState(hc));
             hc->Counters.PollKicks++;
         } else if (hc->Poll.KickOwed) {
             hc->Counters.PollKicks++;
@@ -440,7 +450,10 @@ VOID HcdPollPromoteLocked(PHCD_CONTROLLER hc, ULONG needMs)
         if (XhciPollPromoteDone(&hc->Poll, deadline, cancelled, now,
                                 hc->PollValues.ActiveMs,
                                 hc->PollValues.IdleMs, &ms, &displaced)) {
-            hcdPollArm(hc, ms);
+            hcdPollArm(hc, ms,
+                       (needMs <= hc->PollValues.ActiveMs)
+                           ? XHCI_POLL_BUS_ACTIVE
+                           : XHCI_POLL_BUS_PERIODIC);
             if (displaced) {
                 hc->Counters.PollArmsDisplaced++;
             }
@@ -698,6 +711,7 @@ static VOID NTAPI hcdPollDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
     ext = &hc->Hc;
     now = hcdPollNow();
     decision = hc->PollValues.IdleMs;
+    state = XHCI_POLL_BUS_IDLE;
 
     KeAcquireSpinLock(&hc->PollLock, &pollIrql);
     take = XhciPollTake(&hc->Poll);
@@ -770,19 +784,15 @@ static VOID NTAPI hcdPollDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
         hc->PollEventSeen = 1;
     }
     hcdPollBus(hc, &bus);
-    bus.DrainedRecently =
-        (hc->PollEventSeen &&
-         (LONG)(now - hc->PollLastEventTime) <
-             (LONG)(hc->PollValues.IdleMs * XHCI_POLL_TICKS_PER_MS))
-            ? 1UL
-            : 0UL;
+    bus.DrainedRecently = XhciPollRecent(&hc->PollEventSeen,
+                                         hc->PollLastEventTime, now,
+                                         hc->PollValues.IdleMs);
     bus.Bounded = (ext->DrainBoundHits != bounds &&
                    XhciEventRingPending(&ext->EventRing))
                       ? 1UL
                       : 0UL;
     decision = XhciPollDecidePeriod(&bus, hc->PollValues.ActiveMs,
                                     hc->PollValues.IdleMs, &state);
-    hc->Counters.PollStateLast = state;
     KeAcquireSpinLock(&hc->PollLock, &pollIrql);
     XhciPollObserve(&hc->PollObs, now);
     hc->Counters.PollIntervalMinMs = hc->PollObs.MinMs;
@@ -798,9 +808,14 @@ epilogue:
      * once (section 6.2) and the armed deadline is the one set. */
     now = hcdPollNow();
     KeAcquireSpinLock(&hc->PollLock, &pollIrql);
+    if (hc->Poll.Role == XHCI_POLL_ROLE_WATCH) {
+        state = XHCI_POLL_BUS_WATCH;
+    } else if (hc->Poll.ParkPending) {
+        state = XHCI_POLL_BUS_ACTIVE;
+    }
     if (XhciPollEnd(&hc->Poll, decision, now, hc->PollValues.ActiveMs,
                     hc->PollValues.IdleMs, &ms, &displaced)) {
-        hcdPollArm(hc, ms);
+        hcdPollArm(hc, ms, state);
         if (displaced) {
             hc->Counters.PollArmsDisplaced++;
         }

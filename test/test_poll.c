@@ -22,6 +22,7 @@ static void test_values(void)
     XHCI_POLL_VALUES v;
 
     XhciPollValues(&v, 0, 0, 0, 0, 0, 0);
+    CHECK_EQ(v.Found, 0, "nothing found");
     CHECK_EQ(v.ModeRead, XHCI_POLL_NOT_FOUND, "absent mode recorded");
     CHECK_EQ(v.Mode, 0, "absent mode is automatic");
     CHECK_EQ(v.IdleMs, 50, "absent idle is 50");
@@ -50,6 +51,10 @@ static void test_values(void)
     CHECK_EQ(v.ModeRead, 4, "4 recorded");
     CHECK_EQ(v.IdleMs, 5000, "5000 kept");
 
+    XhciPollValues(&v, 1, 0xFFFFFFFFUL, 0, 0, 1, 1);
+    CHECK_EQ(v.Found, XHCI_POLL_FOUND_MODE | XHCI_POLL_FOUND_ACTIVE,
+             "a set 0xFFFFFFFF is found, apart from its value");
+    CHECK_EQ(v.ModeRead, 0xFFFFFFFFUL, "as read");
     XhciPollValues(&v, 1, 0xFFFFFFFEUL, 1, 1, 1, 1);
     CHECK_EQ(v.Mode, 0, "a huge value runs as 0");
     CHECK_EQ(v.IdleMs, 1, "idle 1 kept");
@@ -511,6 +516,33 @@ static void test_period(void)
     CHECK_EQ(XhciPollIntervalMs(99), 4096, "held to 15");
 }
 
+static void test_recent(void)
+{
+    ULONG seen;
+    ULONG late;
+
+    seen = 0;
+    CHECK(!XhciPollRecent(&seen, 0, 0, 50), "nothing seen");
+    seen = 1;
+    CHECK(XhciPollRecent(&seen, MS(100), MS(120), 50), "20 ms ago: recent");
+    CHECK(seen, "still seen");
+    CHECK(!XhciPollRecent(&seen, MS(100), MS(150), 50), "50 ms ago: not");
+    CHECK(!seen, "expired");
+    CHECK(!XhciPollRecent(&seen, MS(100), MS(120), 50),
+          "expired for good, even at a recent-looking time");
+    seen = 1;
+    CHECK(!XhciPollRecent(&seen, MS(100), MS(90), 50), "clock stepped back");
+    CHECK(!seen, "expired by the step");
+    seen = 1;
+    late = 0x10;
+    CHECK(!XhciPollRecent(&seen, late, late + 0x80000010UL, 50),
+          "past the signed half-range: not recent");
+    seen = 1;
+    late = 0xFFFFFFF0UL;
+    CHECK(XhciPollRecent(&seen, late, late + MS(10), 50),
+          "across the wrap, 10 ms: recent");
+}
+
 static void test_observe(void)
 {
     XHCI_POLL_OBS o;
@@ -698,6 +730,7 @@ int main(void)
     test_watch_look();
     test_period();
     test_observe();
+    test_recent();
     test_retire();
     printf("test_poll: %d checks, %d failures\n", checks, failures);
     return failures != 0;

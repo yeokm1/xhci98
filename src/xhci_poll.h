@@ -118,7 +118,13 @@ typedef struct _XHCI_POLL_VALUES {
     ULONG IdleMs;
     ULONG ActiveRead;
     ULONG ActiveMs;
+    ULONG Found;            /* XHCI_POLL_FOUND_*: each value read as a DWORD */
 } XHCI_POLL_VALUES, *PXHCI_POLL_VALUES;
+
+/* XHCI_POLL_VALUES.Found, the read status apart from the value. */
+#define XHCI_POLL_FOUND_MODE            0x00000001UL
+#define XHCI_POLL_FOUND_IDLE            0x00000002UL
+#define XHCI_POLL_FOUND_ACTIVE          0x00000004UL
 
 /*
  * The poller (section 5): the owner state and the role, the armed deadline
@@ -197,6 +203,7 @@ ULONG XhciPollIntervalMs(ULONG epInterval);
 ULONG XhciPollDecidePeriod(const XHCI_POLL_BUS *bus, ULONG activeMs,
                            ULONG idleMs, PULONG busState);
 VOID XhciPollObserve(PXHCI_POLL_OBS obs, ULONG now);
+ULONG XhciPollRecent(PULONG seen, ULONG last, ULONG now, ULONG idleMs);
 
 
 /*

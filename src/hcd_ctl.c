@@ -971,10 +971,6 @@ static NTSTATUS hcdSettleDelivery(PHCD_CONTROLLER hc)
     reason = XHCI_POLL_R_NONE;
     delivery = XhciPollDecide(hc->PollValues.Mode, haveInterrupt, message, 0,
                               hc->PollPinStatus, hc->PollPin, &reason);
-    if (delivery == XHCI_POLL_DELIVERY_NONE && haveInterrupt) {
-        /* Mode 1 with pin 0: the line, refused by the core's own gate. */
-        delivery = XHCI_POLL_DELIVERY_LINE;
-    }
     hc->PollDelivery = delivery;
     hc->PollReason = reason;
     hc->Counters.IntrModeRead = hc->PollValues.ModeRead;
@@ -988,8 +984,14 @@ static NTSTATUS hcdSettleDelivery(PHCD_CONTROLLER hc)
     hc->Counters.PollActiveMsRead = hc->PollValues.ActiveRead;
     hc->Counters.PollActiveMs = hc->PollValues.ActiveMs;
     hc->Counters.PollIntervalMinMs = XHCI_POLL_NOT_FOUND;
+    hc->Counters.IntrValuesFound = hc->PollValues.Found;
+    /* Mode 1 with no usable line fails here, before anything is connected,
+     * with the status a start always gave it: no resource, the resources
+     * refused; a resource on pin 0, the controller's configuration refused
+     * (record 15 section 4). */
     if (delivery == XHCI_POLL_DELIVERY_NONE) {
-        return STATUS_INSUFFICIENT_RESOURCES;
+        return haveInterrupt ? STATUS_DEVICE_CONFIGURATION_ERROR
+                             : STATUS_INSUFFICIENT_RESOURCES;
     }
     return STATUS_SUCCESS;
 }

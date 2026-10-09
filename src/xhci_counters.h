@@ -202,9 +202,12 @@ typedef struct _XHCIHC_COUNTERS {
     /* The move's mask (record 15 section 8): 1 when both enables read back
      * down at the move's retirement attempt, whatever its IP step did. */
     ULONG LineMoveMasked;
+    /* The three values' read status apart from their values (record 15
+     * section 3): XHCI_POLL_FOUND_* bits. */
+    ULONG IntrValuesFound;
 } XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 95 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 96 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */
