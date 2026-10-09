@@ -46,6 +46,7 @@ VOID HcdIoPipeInitCount(PHCD_PIPE pipe, PHCD_USB_DEVICE dev, ULONG records)
     pipe->Signature = HCD_PIPE_SIGNATURE;
     pipe->Device = dev;
     pipe->XferCount = records;
+    XhciXstatClear(&pipe->Empty);
     InitializeListHead(&pipe->Waiting);
     InitializeListHead(&pipe->Held);
     for (i = 0; i < records; i++) {
@@ -104,14 +105,39 @@ VOID HcdTscRead(PULONG lo, PULONG hi)
 #endif
 }
 
-/* IRQL: any. */
-ULONG HcdTscStamp(VOID)
+/* The initial APIC ID of the processor running this, CPUID leaf 1's EBX
+ * bits 31:24 (0 where there is none). IRQL: any. */
+static ULONG hcdCpuId(VOID)
 {
-    ULONG lo;
-    ULONG hi;
+#if defined(_M_AMD64)
+    int info[4];
 
-    HcdTscRead(&lo, &hi);
-    return lo | 1UL;
+    __cpuid(info, 1);
+    return ((ULONG)info[1] >> 24) & 0xFFUL;
+#else
+    ULONG b;
+
+    /* CPUID, 0F A2, which MSVC 6.0's assembler does not name either. The
+     * compiler saves the registers an __asm block uses. */
+    __asm {
+        mov eax, 1
+        _emit 0x0F
+        _emit 0xA2
+        mov b, ebx
+    }
+    return (b >> 24) & 0xFFUL;
+#endif
+}
+
+/* IRQL: any. */
+VOID HcdTscStamp(PXHCI_XSTAT_STAMP s)
+{
+    s->Cpu = hcdCpuId();
+    HcdTscRead(&s->Lo, &s->Hi);
+    if (s->Lo == 0 && s->Hi == 0) {
+        /* All zero is "not stamped": one count later. */
+        s->Lo = 1;
+    }
 }
 
 /* A bulk data record: what 36.21 measures. */
@@ -933,7 +959,8 @@ static LONG hcdFill(PHCD_CONTROLLER hc, PHCD_XFER x, PVOID urb,
     x->Offset = 0;
     x->Chunk = 0;
     x->ChunksPublished = 0;
-    x->RetireTsc = 0;
+    XhciXstatClear(&x->Retire);
+    XhciXstatClear(&x->MapQueued);
     x->Status = XHCI_USBD_STATUS_SUCCESS;
     x->Engine = 0;
     x->LengthOut = req->LengthOut;
@@ -1189,20 +1216,26 @@ NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * here is the publication's processor cost. Controller lock held.
  */
 static VOID hcdChunkPublished(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
-                              PHCD_XFER x, ULONG entered)
+                              PHCD_XFER x, const XHCI_XSTAT_STAMP *entered)
 {
     PXHCI_XSTAT s;
-    ULONG now;
+    XHCI_XSTAT_STAMP now;
 
     s = &hc->Xstat;
-    now = HcdTscStamp();
+    HcdTscStamp(&now);
     x->ChunksPublished++;
     s->Chunks++;
-    (VOID)XhciXstatInterval(&s->Gap, &s->Discarded, x->RetireTsc, now);
-    x->RetireTsc = 0;
-    (VOID)XhciXstatInterval(&s->Empty, &s->Discarded, pipe->EmptyTsc, now);
-    pipe->EmptyTsc = 0;
-    (VOID)XhciXstatInterval(&s->Publish, &s->Discarded, entered, now);
+    (VOID)XhciXstatInterval(&s->Gap, &s->Discarded, &s->Crossed, &x->Retire,
+                            &now);
+    XhciXstatClear(&x->Retire);
+    (VOID)XhciXstatInterval(&s->Map, &s->Discarded, &s->Crossed,
+                            &x->MapQueued, entered);
+    XhciXstatClear(&x->MapQueued);
+    (VOID)XhciXstatInterval(&s->Empty, &s->Discarded, &s->Crossed,
+                            &pipe->Empty, &now);
+    XhciXstatClear(&pipe->Empty);
+    (VOID)XhciXstatInterval(&s->Publish, &s->Discarded, &s->Crossed, entered,
+                            &now);
 }
 
 /*
@@ -1235,9 +1268,9 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
     ULONG slot;
     ULONG dci;
     ULONG i;
-    ULONG entered;
+    XHCI_XSTAT_STAMP entered;
 
-    entered = HcdTscStamp();
+    HcdTscStamp(&entered);
     pipe = x->Pipe;
     dev = pipe->Device;
     ep = (pipe->Parent != NULL) ? pipe->Parent : pipe;
@@ -1316,7 +1349,7 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
         dci = XhciStreamDoorbell(pipe->Dci, pipe->StreamId);
         XhciWriteDoorbell(&hc->Hc, slot, dci);
         if (hcdIsData(x)) {
-            hcdChunkPublished(hc, pipe, x, entered);
+            hcdChunkPublished(hc, pipe, x, &entered);
         }
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         return;
@@ -1723,9 +1756,10 @@ VOID HcdIoRetired(PHCD_CONTROLLER hc, PXHCI_TRANSFER t)
         x->Xfer.UsbdStatus == XHCI_USBD_STATUS_SUCCESS &&
         x->Xfer.BytesTransferred >= x->Chunk &&
         x->Offset + x->Chunk < x->Length) {
-        x->RetireTsc = HcdTscStamp();
-        if (x->Pipe->Queue->Count == 0 && x->Pipe->EmptyTsc == 0) {
-            x->Pipe->EmptyTsc = x->RetireTsc;
+        HcdTscStamp(&x->Retire);
+        if (x->Pipe->Queue->Count == 0 &&
+            !XhciXstatStamped(&x->Pipe->Empty)) {
+            x->Pipe->Empty = x->Retire;
         }
     }
 }
@@ -1754,7 +1788,9 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
     ULONG release;
     ULONG engine;
     ULONG parked;
-    ULONG entered;
+    ULONG isData;
+    XHCI_XSTAT_STAMP entered;
+    XHCI_XSTAT_STAMP done;
 
     for (;;) {
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
@@ -1766,7 +1802,7 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
         XhciControllerLockRelease(&hc->Hc, oldIrql);
 
         x = CONTAINING_RECORD(entry, HCD_XFER, Link);
-        entered = HcdTscStamp();
+        HcdTscStamp(&entered);
         dev = x->Pipe->Device;
         HcdDmaUnmap(hc, x);
         engine = x->Engine;
@@ -1794,11 +1830,15 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
                 x->Engine = 0;
                 if (hcdIsData(x)) {
                     /* 36.21: this pass's cost, before the map pump may
-                     * run the next chunk's publication inside the call. */
+                     * run the next chunk's publication inside the call,
+                     * and the mapping's start, which the publication
+                     * closes (hcdChunkPublished). */
                     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+                    HcdTscStamp(&x->MapQueued);
                     (VOID)XhciXstatInterval(&hc->Xstat.Complete,
-                                            &hc->Xstat.Discarded, entered,
-                                            HcdTscStamp());
+                                            &hc->Xstat.Discarded,
+                                            &hc->Xstat.Crossed, &entered,
+                                            &x->MapQueued);
                     XhciControllerLockRelease(&hc->Hc, oldIrql);
                 }
                 HcdDmaMapQueue(hc, x);
@@ -1836,18 +1876,21 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
          * finding 6). Any end of a record also releases one that waited
          * for ring room on the pipe. */
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-        if (hcdIsData(x)) {
+        isData = hcdIsData(x);
+        if (isData) {
             /* 36.21: the URB's end. A gap it left open closes unrecorded:
-             * no next chunk of it will be published. */
-            if (x->RetireTsc != 0 && x->Pipe->EmptyTsc == x->RetireTsc) {
-                x->Pipe->EmptyTsc = 0;
+             * no next chunk of it will be published, and a ring left empty
+             * by it is idle, not a gap. */
+            if (XhciXstatStamped(&x->Retire) &&
+                x->Pipe->Empty.Lo == x->Retire.Lo &&
+                x->Pipe->Empty.Hi == x->Retire.Hi) {
+                XhciXstatClear(&x->Pipe->Empty);
             }
-            x->RetireTsc = 0;
+            XhciXstatClear(&x->Retire);
+            XhciXstatClear(&x->MapQueued);
             if (x->ChunksPublished != 0) {
                 XhciXstatUrb(&hc->Xstat, x->Length, x->ChunksPublished);
             }
-            (VOID)XhciXstatInterval(&hc->Xstat.Complete, &hc->Xstat.Discarded,
-                                    entered, HcdTscStamp());
         }
         release = (x->Pipe->Exclusive == x) || x->Pipe->RingWait;
         if (x->Pipe->Exclusive == x) {
@@ -1859,6 +1902,14 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
             HcdIoPipeRelease(hc, x->Pipe);
         }
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        if (isData) {
+            /* 36.21: the pass's cost to here, before the record is freed
+             * and its pipe may go; the IRP's completion and the client's
+             * routine it runs are not the bus's. */
+            HcdTscStamp(&done);
+            (VOID)XhciXstatInterval(&hc->Xstat.Complete, &hc->Xstat.Discarded,
+                                    &hc->Xstat.Crossed, &entered, &done);
+        }
         nextIrp = hcdRecordRelease(x->Pipe, x);
         XhciControllerLockRelease(&hc->Hc, oldIrql);
 
@@ -2062,6 +2113,8 @@ ULONG HcdIoDeviceDrain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 ULONG HcdIoDeviceGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     LARGE_INTEGER due;
+    KIRQL oldIrql;
+    ULONG i;
 
     if (!HcdIoDeviceDrain(hc, dev)) {
         return 0;
@@ -2071,6 +2124,16 @@ ULONG HcdIoDeviceGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
         HcdIoDeferred(hc);
     }
+    /* 36.21: a class driver record of this device is kept, said departed,
+     * and owned by nothing: the next device takes it afresh. */
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    for (i = 0; i < HCD_UAS_TELE_RECORDS; i++) {
+        if (hc->UasTele[i].Owner == (PVOID)dev) {
+            hc->UasTele[i].Owner = NULL;
+            hc->UasTele[i].State = XHCI_SNAPSHOT_HCD_TELE_S_DEPARTED;
+        }
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
     return 1;
 }
 

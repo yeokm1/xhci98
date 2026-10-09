@@ -1546,16 +1546,19 @@ static NTSTATUS hcdStreamsIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
 /*
  * IOCTL_XHCI98_TELEMETRY (xhci98_xfer.h, task 36.21): the class driver's
  * record, its signature, version and size checked, copied whole into the
- * record of the device it came from - or, the first time, into a free one
- * - under the controller lock, and the IRP completed before this returns,
- * so nothing here holds the caller's memory. A record of a device whose
- * slot is gone is kept, and a new device takes it only when no record is
- * free. IRQL: <= DISPATCH_LEVEL.
+ * record its device owns - or, the first time, into a free one, else into
+ * one whose device has departed (HcdIoDeviceGone), its count started
+ * afresh - under the controller lock, and the IRP completed before this
+ * returns, so nothing here holds the caller's memory. The device record is
+ * the owner's identity, compared and never followed; while two live
+ * devices hold both records a third is refused and counted. IRQL:
+ * <= DISPATCH_LEVEL.
  */
 static NTSTATUS hcdTelemetryIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
                                   PIRP irp, PXHCI98_TELEMETRY rq)
 {
     PHCD_UAS_TELE t;
+    PVOID owner;
     KIRQL oldIrql;
     ULONG slot;
     ULONG i;
@@ -1566,8 +1569,10 @@ static NTSTATUS hcdTelemetryIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
     }
     slot = 0;
+    owner = NULL;
     KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
     if (pdo->Listed && pdo->Device != NULL) {
+        owner = (PVOID)pdo->Device;
         slot = pdo->Device->SlotId;
     }
     KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
@@ -1576,32 +1581,36 @@ static NTSTATUS hcdTelemetryIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     if (rq == NULL || rq->Word[XHCI98_TELE_SIG] != XHCI98_TELE_SIGNATURE ||
         rq->Word[XHCI98_TELE_VER] != XHCI98_TELE_VERSION ||
         rq->Word[XHCI98_TELE_SIZE] != sizeof(XHCI98_TELEMETRY) ||
-        slot == 0) {
+        owner == NULL) {
         hc->Xstat.TeleRefused++;
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
     }
     t = NULL;
     for (i = 0; i < HCD_UAS_TELE_RECORDS && t == NULL; i++) {
-        if (hc->UasTele[i].Slot == slot) {
+        if (hc->UasTele[i].Owner == owner) {
             t = &hc->UasTele[i];
         }
     }
     for (i = 0; i < HCD_UAS_TELE_RECORDS && t == NULL; i++) {
-        if (hc->UasTele[i].Slot == 0) {
+        if (hc->UasTele[i].State == XHCI_SNAPSHOT_HCD_TELE_S_NONE) {
             t = &hc->UasTele[i];
         }
     }
     for (i = 0; i < HCD_UAS_TELE_RECORDS && t == NULL; i++) {
-        if (hc->SlotDevice[hc->UasTele[i].Slot] == NULL) {
+        if (hc->UasTele[i].State == XHCI_SNAPSHOT_HCD_TELE_S_DEPARTED) {
             t = &hc->UasTele[i];
-            t->Taken = 0;
         }
     }
     if (t == NULL) {
         hc->Xstat.TeleRefused++;
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         return HcdCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES, 0);
+    }
+    if (t->Owner != owner) {
+        t->Owner = owner;
+        t->State = XHCI_SNAPSHOT_HCD_TELE_S_LIVE;
+        t->Taken = 0;
     }
     t->Slot = slot;
     t->Taken++;

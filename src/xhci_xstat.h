@@ -10,10 +10,18 @@
  * view with that URB unfinished - plus the processor time the chunk path
  * spends. The bus has no clock finer than the system time's tick on every
  * target (KeQuerySystemTime is the one time import), so intervals are
- * processor time-stamp counts (hcd.h, HCD_TSC), and the start's and the
+ * processor time-stamp counts (hcd.h, HcdTscStamp), and the start's and the
  * snapshot's (time-stamp, system time) pairs let a reader convert them.
  * Hardware starvation itself is not measured: a Transfer Event carries no
  * time, and the interval starts when software handles the completion.
+ *
+ * Two processors' counters need not agree, and no processor number is an
+ * import on Windows 98, so each stamp carries the initial APIC ID CPUID
+ * reports beside the full 64-bit count, and an interval is counted only
+ * between two stamps of one processor (XhciXstatInterval); one that crossed
+ * is counted apart and not measured. The start's and the dump's pairs may
+ * come from two processors: on a machine whose counters disagree the rate
+ * and the ages they give are approximate, which XHCISNAP says.
  *
  * 36.22's value, XhciMaxTransferKB: the command size xhciuas.sys
  * advertises, 64 to 2048 KiB in steps of 4, default 1024; read once at the
@@ -22,7 +30,7 @@
  *
  * Everything here is ULONGs, so the snapshot copies XHCI_XSTAT word for
  * word into the HCD region's header (xhci.h, XHCI_SNAPSHOT_HCD_XSTAT_AT).
- * Sums wider than 32 bits are Lo/Hi pairs carried by hand: no 64-bit
+ * Wider sums and differences are Lo/Hi pairs carried by hand: no 64-bit
  * arithmetic (AGENTS.md).
  *
  * DDK-free: part of the pure core. C89. IRQL: any; the callers hold the
@@ -42,10 +50,17 @@
 /* Commands in flight: 1, 2, 3-4, 5-8, 9-16, 17 and more. */
 #define XHCI_XSTAT_DEPTH_BUCKETS    6UL
 
-/* An interval longer than this many counts is not a gap but a counter
- * that went backwards or a processor whose counter is not this one's: it
- * is discarded and counted (XHCI_XSTAT.Discarded). */
+/* An interval longer than this many counts, or one whose end precedes its
+ * start, is not a gap: it is discarded and counted (Discarded). */
 #define XHCI_XSTAT_INTERVAL_MAX     0x7FFFFFFFUL
+
+/* One time-stamp: the full count and the processor that read it. Lo and
+ * Hi both 0 is "not stamped". */
+typedef struct _XHCI_XSTAT_STAMP {
+    ULONG Lo;
+    ULONG Hi;
+    ULONG Cpu;
+} XHCI_XSTAT_STAMP, *PXHCI_XSTAT_STAMP;
 
 /* One measured interval: how many, their sum, the longest. */
 typedef struct _XHCI_XSTAT_TIME {
@@ -66,11 +81,13 @@ typedef struct _XHCI_XSTAT {
     ULONG ValueRaw;             /* the DWORD read, 0 when none was        */
     ULONG CommandBytes;         /* the command size in effect             */
     ULONG PolicyQueries;        /* IOCTL_XHCI98_TRANSFER_POLICY answered  */
-    /* The map grant: what IoGetDmaAdapter gave, and what a chunk may span
+    /* The map grant: what a chunk is planned from, and what it may span
      * (the grant, held to the SG elements a record carries). */
     ULONG MapGrant;
     ULONG ChunkPages;
-    /* Bulk and interrupt data URBs completed, by length. */
+    /* Bulk URBs completed after one chunk or more reached the ring - the
+     * UAS information units too, which fall in the first bucket - by
+     * length. */
     ULONG Urbs;
     ULONG BytesLo;
     ULONG BytesHi;
@@ -87,9 +104,10 @@ typedef struct _XHCI_XSTAT {
      * its URB unfinished, to the next publication on that ring. */
     XHCI_XSTAT_TIME Gap;
     XHCI_XSTAT_TIME Empty;
-    /* Processor time: a data chunk's publication (HcdIoMapped), and one
-     * pass of the deferred work over a retired data record (HcdIoDeferred,
-     * the next chunk's planning and queueing or the URB's completion). */
+    /* Processor time: a bulk chunk's publication (HcdIoMapped, to its
+     * doorbell), and one pass of the deferred work over a retired bulk
+     * record (HcdIoDeferred: to the next chunk's queueing, or to the IRP's
+     * completion call, the client's completion routine not included). */
     XHCI_XSTAT_TIME Publish;
     XHCI_XSTAT_TIME Complete;
     ULONG Discarded;            /* intervals out of range                 */
@@ -107,9 +125,14 @@ typedef struct _XHCI_XSTAT {
      * refused (malformed, or every record held by another device). */
     ULONG TeleTaken;
     ULONG TeleRefused;
+    /* A next chunk's mapping: from its queueing on the map pump to its
+     * publication's start (the pump's wait and its execution routine). */
+    XHCI_XSTAT_TIME Map;
+    /* Intervals whose two stamps came from two processors: not measured. */
+    ULONG Crossed;
 } XHCI_XSTAT, *PXHCI_XSTAT;
 
-#define XHCI_XSTAT_WORDS            54UL
+#define XHCI_XSTAT_WORDS            59UL
 
 /* How the start's XhciMaxTransferKB read went. */
 #define XHCI_XPOL_WHY_UNREAD        0UL /* no start has read it           */
@@ -144,12 +167,17 @@ ULONG XhciXstatDepthBucket(ULONG active);
 /* *lo/*hi += v, the carry by hand. */
 VOID XhciXstatAdd64(PULONG lo, PULONG hi, ULONG v);
 
-/* `to - from` as a count, into *t when it is an interval at all (at most
- * XHCI_XSTAT_INTERVAL_MAX); otherwise *discarded is bumped. Either
- * argument 0 means "not stamped" and records nothing. Returns 1 when
- * recorded. */
-ULONG XhciXstatInterval(PXHCI_XSTAT_TIME t, PULONG discarded, ULONG from,
-                        ULONG to);
+/* A stamp taken, or cleared to "not stamped". */
+ULONG XhciXstatStamped(const XHCI_XSTAT_STAMP *s);
+VOID XhciXstatClear(PXHCI_XSTAT_STAMP s);
+
+/* `to - from` into *t when both are stamped, by one processor, `to` not
+ * before `from`, and at most XHCI_XSTAT_INTERVAL_MAX counts apart. Two
+ * processors bump *crossed and an interval out of range *discarded; an
+ * unstamped end records nothing. Returns 1 when recorded. */
+ULONG XhciXstatInterval(PXHCI_XSTAT_TIME t, PULONG discarded, PULONG crossed,
+                        const XHCI_XSTAT_STAMP *from,
+                        const XHCI_XSTAT_STAMP *to);
 
 /* A data URB's end: its length and the chunks published for it. */
 VOID XhciXstatUrb(PXHCI_XSTAT s, ULONG length, ULONG chunks);

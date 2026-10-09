@@ -3650,7 +3650,12 @@ Task 36.22 changes only the first.
   `uasAskPolicy`); an older bus (`STATUS_NOT_SUPPORTED`), a reply out of
   contract and a request that failed in transport each leave 64 KiB,
   counted apart, and the start goes on (`UasPolicyValue`, `uas_iu.c`,
-  `test_uas`). The adapter descriptor's `MaximumTransferLength` and
+  `test_uas`). Whatever the outcome it is noted in the UAS device's
+  hardware key - on NT its `Device Parameters` - as `XhciUasCommandBytes`,
+  `XhciUasCommandSource` (0 not asked, 1 the bus, 2 an older bus, 3 out of
+  contract, 4 the request failed) and `XhciUasCommandStatus` (the request's
+  NTSTATUS), so the note survives an older bus and a start that fails
+  later (`uasNotePolicy`). The adapter descriptor's `MaximumTransferLength` and
   `MaximumPhysicalPages` (bytes / page + 1) and every pipe's
   `MaximumTransferSize` read that one stored value.
 - **Activation.** A storage class driver keeps the descriptor it read and a
@@ -3662,13 +3667,19 @@ Task 36.22 changes only the first.
   became, the map grant, the gap between two chunks of one URB in two parts
   (retirement to the next publication, and the ring empty in software's
   view with the URB unfinished), and the processor time of a publication
-  and a completion pass. The clock is the processor's time-stamp counter
-  (RDTSC, no import), converted by the start's and the snapshot's (counter,
-  system time) pairs; hardware starvation before software handles an event
+  and a completion pass, and a next chunk's mapping. The clock is the
+  processor's time-stamp counter (RDTSC, no import), each stamp carrying
+  the full count and the processor's initial APIC ID (CPUID), so an
+  interval is measured only within one processor's clock and one across
+  two is counted apart; the start's and the snapshot's (counter, system
+  time) pairs convert counts to time, approximately where processors'
+  counters disagree. Hardware starvation before software handles an event
   is not measured. `xhciuas.sys` counts its commands by length and by the
-  number in flight, and hands the bus a bounded record once a second while
-  it moves data (`IOCTL_XHCI98_TELEMETRY`, copied whole into the bus's own
-  storage), so a dump shows both sides.
+  number in flight, and hands the bus a bounded record, at most once a
+  second and when anything in it changed (`IOCTL_XHCI98_TELEMETRY`, copied whole into the
+  bus's own storage, its stop cancelling a send still pending), so a dump
+  shows both sides; the bus keys each record by the device it came from
+  and keeps it, said departed, once the device leaves.
 - **The qemu flavour** adds `XhciQemuMapGrant`, a constrained grant for
   the legs (`build-and-test.md`, the qemu test aids).
 

@@ -92,16 +92,37 @@ VOID XhciXstatAdd64(PULONG lo, PULONG hi, ULONG v)
     }
 }
 
-ULONG XhciXstatInterval(PXHCI_XSTAT_TIME t, PULONG discarded, ULONG from,
-                        ULONG to)
+ULONG XhciXstatStamped(const XHCI_XSTAT_STAMP *s)
+{
+    return s->Lo != 0 || s->Hi != 0;
+}
+
+VOID XhciXstatClear(PXHCI_XSTAT_STAMP s)
+{
+    s->Lo = 0;
+    s->Hi = 0;
+    s->Cpu = 0;
+}
+
+ULONG XhciXstatInterval(PXHCI_XSTAT_TIME t, PULONG discarded, PULONG crossed,
+                        const XHCI_XSTAT_STAMP *from,
+                        const XHCI_XSTAT_STAMP *to)
 {
     ULONG d;
+    ULONG hi;
 
-    if (from == 0 || to == 0) {
+    if (!XhciXstatStamped(from) || !XhciXstatStamped(to)) {
         return 0;
     }
-    d = to - from;
-    if (d > XHCI_XSTAT_INTERVAL_MAX) {
+    if (from->Cpu != to->Cpu) {
+        (*crossed)++;
+        return 0;
+    }
+    /* The 64-bit difference by hand: a borrow from the low half, and any
+     * high half left over is an interval far past the limit, or negative. */
+    d = to->Lo - from->Lo;
+    hi = to->Hi - from->Hi - ((to->Lo < from->Lo) ? 1UL : 0UL);
+    if (hi != 0 || d > XHCI_XSTAT_INTERVAL_MAX) {
         (*discarded)++;
         return 0;
     }

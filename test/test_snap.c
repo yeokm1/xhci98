@@ -25,27 +25,27 @@ static void test_header(void)
 {
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_VERSION_AT), 1,
              "version 1");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_BYTES), 780,
-             "a 195-word header (35-T.8 appended twelve, 36.3 28, 36.21 "
-             "147)");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_BYTES), 808,
+             "a 202-word header (35-T.8 appended twelve, 36.3 28, 36.21 "
+             "154)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS), 18,
              "the E460's eighteen root ports");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORT_BYTES), 64,
              "a sixteen-word record");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 780,
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 808,
              "records right after the header");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 63,
              "the whole counter block");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS_AT),
-             780 + 18 * 64, "counters after the last record");
+             808 + 18 * 64, "counters after the last record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_NOTE_BUDGET),
              XHCI_ENUM_NOTE_BUDGET, "the notes' budget");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_WORDS), 0,
              "past the header reads 0");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_COUNTER_WORDS * sizeof(ULONG),
              sizeof(XHCIHC_COUNTERS), "the counters word for word");
-    CHECK_EQ(XhciSnapHcdWords(18), 195 + 18 * 16 + 63, "the E460's image");
-    CHECK_EQ(XhciSnapHcdWords(0), 195 + 63,
+    CHECK_EQ(XhciSnapHcdWords(18), 202 + 18 * 16 + 63, "the E460's image");
+    CHECK_EQ(XhciSnapHcdWords(0), 202 + 63,
              "no ports: a header and the counters");
     CHECK_EQ(XhciSnapHcdWords(1000), XhciSnapHcdWords(XHCI_MAX_ROOT_PORTS),
              "ports held to the root port maximum");
@@ -243,15 +243,15 @@ static void test_xstat_words(void)
     CHECK_EQ(XHCI_SNAPSHOT_HCD_TELE_RECORDS, 49, "then the record count");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_TELE_WORDS, 50, "and a record's words");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_XSTAT_AT, 51, "the readings at 51");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_XSTAT_WORDS), 54,
-             "fifty-four readings");
-    CHECK_EQ(sizeof(XHCI_XSTAT), 54 * 4, "the whole of XHCI_XSTAT");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_XSTAT_WORDS), 59,
+             "fifty-nine readings");
+    CHECK_EQ(sizeof(XHCI_XSTAT), 59 * 4, "the whole of XHCI_XSTAT");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_TELE_RECORDS), 2,
              "two class driver records");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_TELE_WORDS), 45,
-             "four words of the bus's, then the record");
-    CHECK_EQ(XHCI_SNAPSHOT_HCD_TELE_AT, 51 + 54, "the records after");
-    CHECK_EQ(XHCI_SNAPSHOT_HCD_TELE_AT + 2 * 45, XHCI_SNAPSHOT_HCD_HEAD_WORDS,
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_TELE_WORDS), 46,
+             "five words of the bus's, then the record");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_TELE_AT, 51 + 59, "the records after");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_TELE_AT + 2 * 46, XHCI_SNAPSHOT_HCD_HEAD_WORDS,
              "and they end the header");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_XSTAT_AT), 0,
              "the readings are the door's, not layout");
@@ -286,7 +286,11 @@ static void test_xstat_words(void)
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XSTAT, TscNowLo), 48 * 4, "TscNowLo");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XSTAT, TimeNowLo), 50 * 4, "TimeNowLo");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XSTAT, TeleRefused), 53 * 4,
-             "TeleRefused last");
+             "TeleRefused");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XSTAT, Map), 54 * 4, "Map");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XSTAT, Crossed), 58 * 4, "Crossed last");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_TELE_STATE, 4, "a record's state at 4");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_TELE_BODY, 5, "its body at 5");
 }
 
 /* 36.22: XhciMaxTransferKB as each start takes it. */
@@ -334,12 +338,31 @@ static void test_xpol(void)
              "its default");
 }
 
+/* XhciXstatInterval over two stamps given as (Lo, Hi, Cpu). */
+static ULONG iv(PXHCI_XSTAT_TIME t, PULONG discarded, PULONG crossed,
+                ULONG fromLo, ULONG fromHi, ULONG fromCpu, ULONG toLo,
+                ULONG toHi, ULONG toCpu)
+{
+    XHCI_XSTAT_STAMP from;
+    XHCI_XSTAT_STAMP to;
+
+    from.Lo = fromLo;
+    from.Hi = fromHi;
+    from.Cpu = fromCpu;
+    to.Lo = toLo;
+    to.Hi = toHi;
+    to.Cpu = toCpu;
+    return XhciXstatInterval(t, discarded, crossed, &from, &to);
+}
+
 /* 36.21's arithmetic, as the driver calls it. */
 static void test_xstat_math(void)
 {
     XHCI_XSTAT s;
     XHCI_XSTAT_TIME t;
+    XHCI_XSTAT_STAMP st;
     ULONG discarded;
+    ULONG crossed;
     ULONG lo;
     ULONG hi;
     ULONG i;
@@ -383,24 +406,43 @@ static void test_xstat_math(void)
         ((unsigned char *)&t)[i] = 0;
     }
     discarded = 0;
-    CHECK_EQ(XhciXstatInterval(&t, &discarded, 0, 500), 0,
+    crossed = 0;
+    CHECK_EQ(iv(&t, &discarded, &crossed, 0, 0, 0, 500, 0, 0), 0,
              "an unstamped start records nothing");
-    CHECK_EQ(XhciXstatInterval(&t, &discarded, 500, 0), 0,
+    CHECK_EQ(iv(&t, &discarded, &crossed, 500, 0, 0, 0, 0, 0), 0,
              "nor an unstamped end");
-    CHECK_EQ(XhciXstatInterval(&t, &discarded, 101, 401), 1, "300 counts");
-    CHECK_EQ(XhciXstatInterval(&t, &discarded, 0xFFFFFF01UL, 0x101), 1,
-             "across the low half's wrap: 512 counts");
-    CHECK(t.Count == 2 && t.SumLo == 812 && t.SumHi == 0 && t.Max == 512,
-          "two intervals, their sum and the longest");
-    CHECK_EQ(XhciXstatInterval(&t, &discarded, 1001, 1), 0,
+    CHECK_EQ(iv(&t, &discarded, &crossed, 0, 1, 0, 300, 1, 0), 1,
+             "a start with only its high half set is stamped");
+    CHECK_EQ(iv(&t, &discarded, &crossed, 101, 7, 2, 401, 7, 2), 1,
+             "300 counts on processor 2");
+    CHECK_EQ(iv(&t, &discarded, &crossed, 0xFFFFFF01UL, 7, 0, 0x101, 8, 0),
+             1, "across the low half's carry: 512 counts");
+    CHECK(t.Count == 3 && t.SumLo == 1112 && t.SumHi == 0 && t.Max == 512,
+          "three intervals, their sum and the longest");
+    CHECK_EQ(iv(&t, &discarded, &crossed, 101, 7, 0, 401, 7, 1), 0,
+             "two processors' stamps are no interval");
+    CHECK_EQ(crossed, 1, "and are counted as crossed");
+    CHECK_EQ(discarded, 0, "not as discarded");
+    CHECK_EQ(iv(&t, &discarded, &crossed, 1001, 7, 0, 1, 7, 0), 0,
              "a counter that ran backwards is no interval");
     CHECK_EQ(discarded, 1, "and is counted as discarded");
-    CHECK_EQ(XhciXstatInterval(&t, &discarded, 1, 0x80000001UL), 0,
+    CHECK_EQ(iv(&t, &discarded, &crossed, 1000, 7, 0, 2000, 8, 0), 0,
+             "2^32 + 1000 counts is not 1000 (review round 1, finding 2)");
+    CHECK_EQ(iv(&t, &discarded, &crossed, 1000, 7, 0, 999, 8, 0), 0,
+             "nor is 2^32 - 1");
+    CHECK_EQ(iv(&t, &discarded, &crossed, 1, 7, 0, 0x80000002UL, 7, 0), 0,
              "nor one past the limit");
-    CHECK_EQ(XhciXstatInterval(&t, &discarded, 1, 0x80000000UL), 1,
+    CHECK_EQ(iv(&t, &discarded, &crossed, 1, 7, 0, 0x80000000UL, 7, 0), 1,
              "the limit itself is one");
-    CHECK_EQ(t.Count, 3, "three recorded in all");
-    CHECK_EQ(discarded, 2, "two discarded");
+    CHECK_EQ(t.Count, 4, "four recorded in all");
+    CHECK_EQ(discarded, 4, "four discarded");
+    st.Lo = 5;
+    st.Hi = 6;
+    st.Cpu = 7;
+    CHECK_EQ(XhciXstatStamped(&st), 1, "a stamp");
+    XhciXstatClear(&st);
+    CHECK(st.Lo == 0 && st.Hi == 0 && st.Cpu == 0, "cleared whole");
+    CHECK_EQ(XhciXstatStamped(&st), 0, "and reads unstamped");
 
     for (i = 0; i < sizeof(s); i++) {
         ((unsigned char *)&s)[i] = 0;

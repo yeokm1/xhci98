@@ -268,16 +268,22 @@ From the same release the header also carries the transfer-size readings
 - **The gap between two chunks of one URB**, in two parts: software's time
   from a chunk's retirement to the next one's publication, and the time the
   ring stood empty in software's view with the URB unfinished; and the
-  processor time a publication and a completion pass take. These are
-  time-stamp counter readings converted with the rate the start's and the
-  dump's (counter, system time) pairs give, so a dump under a second after
-  the start prints counts only. Hardware starvation itself is not measured.
-- **Each class driver record** (`xhciuas.sys` sends one a second while it
-  moves data): the command size it advertises and where it came from,
+  processor time a publication, a completion pass and a next chunk's
+  mapping take. These are time-stamp counter readings converted with the
+  rate the start's and the dump's (counter, system time) pairs give, so a
+  dump under a second after the start prints counts only; an interval
+  whose two readings came from two processors is not measured but counted
+  ("across two processors"), and on a machine whose processors' counters
+  disagree the rate and ages are approximate. Hardware starvation itself
+  is not measured.
+- **Each class driver record** (`xhciuas.sys` sends one at most once a
+  second, when anything in it changed): whether its device is present or
+  departed, the command size it advertises and where it came from,
   streamed or not, its queue depth and the most commands in flight, its
   commands by length and by the number in flight as each started, its
-  counters, and how old the record is. A record slot nothing has written
-  reads "none has come", never zeros.
+  counters, how often its size question fell back to 64 KiB, and how old
+  the record is. A record slot nothing has written reads "none has come",
+  never zeros.
 
 A header from before 36.21 is reported as not measuring it. `-selftest-xstat`
 prints the decode over canned headers.

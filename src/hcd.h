@@ -45,19 +45,27 @@
  * on has and which a kernel-mode caller may always execute. MSVC 6.0's
  * assembler predates the mnemonic, so x86 emits its two bytes; amd64 has
  * the compiler's intrinsic through wdm.h (hcd_io.c, HcdTscRead).
- * HcdTscStamp is the low half with bit 0 set, so 0 can mean "not
- * stamped" (one count of resolution lost). A count from one processor
- * compared with another's may run backwards or jump; XhciXstatInterval
- * discards what is out of range. IRQL: any.
+ * HcdTscStamp takes the full count and, from CPUID leaf 1, the initial
+ * APIC ID of the processor that read it - no processor number is an
+ * import on Windows 98 - so an interval is measured only within one
+ * processor's clock (XhciXstatInterval). On a processor without an APIC
+ * the ID reads 0, which is a uniprocessor's anyway. IRQL: any; a stamp
+ * taken below DISPATCH_LEVEL may straddle a move to another processor,
+ * which at worst names the wrong one for that stamp.
  */
 VOID HcdTscRead(PULONG lo, PULONG hi);
-ULONG HcdTscStamp(VOID);
+VOID HcdTscStamp(PXHCI_XSTAT_STAMP s);
 
 /* One class driver's telemetry (IOCTL_XHCI98_TELEMETRY, xhci98_xfer.h):
- * the device it came from, the sends taken, the counter at the last, and
- * the record as it came. Under the controller lock. */
+ * the device it came from (Owner: the device record, compared and never
+ * followed, NULL once the record is freed - HcdIoDeviceGone - when State
+ * becomes departed), its slot, the sends taken since this device took the
+ * record, the counter at the last, and the record as it came. Under the
+ * controller lock. */
 #define HCD_UAS_TELE_RECORDS    XHCI_SNAPSHOT_HCD_TELE_COUNT
 typedef struct _HCD_UAS_TELE {
+    PVOID Owner;
+    ULONG State;                    /* XHCI_SNAPSHOT_HCD_TELE_S_*         */
     ULONG Slot;
     ULONG Taken;
     ULONG TscLo;
@@ -225,11 +233,13 @@ typedef struct _HCD_XFER {
     ULONG Asap;                     /* USBD_START_ISO_TRANSFER_ASAP       */
     ULONG Seq;                      /* its pipe's submission order        */
     ULONG Mapped;                   /* held with its chunk mapped         */
-    /* 36.21: chunks of this URB published, and the time-stamp
-     * (HcdTscStamp) at which software retired its last chunk with data
-     * still to move, 0 none; controller lock. */
+    /* 36.21: chunks of this URB published; the stamp at which software
+     * retired its last chunk with data still to move, and the one at which
+     * the next chunk was queued for mapping, each cleared when used or
+     * when the URB ends; controller lock. */
     ULONG ChunksPublished;
-    ULONG RetireTsc;
+    XHCI_XSTAT_STAMP Retire;
+    XHCI_XSTAT_STAMP MapQueued;
     struct _HCD_XFER_SG {
         USBPORT_SCATTER_GATHER_LIST List;
         USBPORT_SCATTER_GATHER_ELEMENT More[HCD_SG_ELEMENTS];
@@ -288,10 +298,10 @@ typedef struct _HCD_PIPE {
                                      * packet's; controller lock          */
     ULONG RingWait;                 /* a record waits for ring room;
                                      * controller lock                    */
-    /* 36.21: the time-stamp at which software found this ring empty with
-     * a URB unfinished, until the next publication on it; 0 none;
+    /* 36.21: the stamp at which software found this ring empty with a URB
+     * unfinished, until the next publication on it or that URB's end;
      * controller lock. */
-    ULONG EmptyTsc;
+    XHCI_XSTAT_STAMP Empty;
     /* Streams (31-A.1; xhci98_streams.h). An endpoint with streams open
      * has Streams, and takes no transfer itself; each stream is a pipe of
      * its own with Parent the endpoint's and StreamId 1..31, on a ring in

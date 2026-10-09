@@ -2568,14 +2568,15 @@ static void print_pirq(const unsigned char *hcd, unsigned long hcdBytes)
  * HCD header after the routing record. test\test_snap.c holds the driver's
  * layout to these numbers.
  */
-#define SNAP_HCD_XSTAT_HEAD_WORDS   195UL
+#define SNAP_HCD_XSTAT_HEAD_WORDS   202UL
 #define SNAP_XSTAT_COUNT_AT         48UL
 #define SNAP_TELE_RECORDS_AT        49UL
 #define SNAP_TELE_WORDS_AT          50UL
 #define SNAP_XSTAT_AT               51UL
-#define SNAP_XSTAT_WORDS            54UL
-#define SNAP_TELE_AT                105UL
-#define SNAP_TELE_BODY              4UL
+#define SNAP_XSTAT_WORDS            59UL
+#define SNAP_TELE_AT                110UL
+#define SNAP_TELE_STATE             4UL
+#define SNAP_TELE_BODY              5UL
 #define SNAP_TELE_BODY_WORDS        41UL
 
 #define SNAP_XS_WHY                 0UL
@@ -2604,6 +2605,8 @@ static void print_pirq(const unsigned char *hcd, unsigned long hcdBytes)
 #define SNAP_XS_TIME_NOW            50UL
 #define SNAP_XS_TELE_TAKEN          52UL
 #define SNAP_XS_TELE_REFUSED        53UL
+#define SNAP_XS_MAP                 54UL
+#define SNAP_XS_CROSSED             58UL
 
 #define SNAP_TL_SEQUENCE            3UL
 #define SNAP_TL_COMMAND_BYTES       4UL
@@ -2721,8 +2724,11 @@ static void print_xstat(const unsigned char *hcd, unsigned long hcdBytes)
     }
     records = get32(hcd, SNAP_TELE_RECORDS_AT * 4);
     recWords = get32(hcd, SNAP_TELE_WORDS_AT * 4);
+    /* Each count held to a bound before the two are multiplied, so the
+     * product cannot wrap past the checks (review round 1, finding 5). */
     if (get32(hcd, SNAP_XSTAT_COUNT_AT * 4) < SNAP_XSTAT_WORDS ||
-        recWords < SNAP_TELE_BODY + SNAP_TELE_BODY_WORDS || records > 16 ||
+        recWords < SNAP_TELE_BODY + SNAP_TELE_BODY_WORDS || recWords > 1024 ||
+        records > 16 ||
         SNAP_TELE_AT + records * recWords > headBytes / 4 ||
         SNAP_TELE_AT + records * recWords > hcdBytes / 4) {
         comp("\ntransfer size: %lu readings and %lu records of %lu words in "
@@ -2746,6 +2752,8 @@ static void print_xstat(const unsigned char *hcd, unsigned long hcdBytes)
                                                 : 0.0;
 
     comp("\ntransfer size (task 36.21, since the controller's start");
+    /* The two pairs may be two processors' (src/xhci_xstat.h): the rate and
+     * the ages are approximate where their counters disagree. */
     if (perUs > 0.0) {
         comp(", %.0f s; the time-stamp\n  counter at %.1f counts a "
              "microsecond):\n", dTime / 10000000.0, perUs);
@@ -2775,18 +2783,23 @@ static void print_xstat(const unsigned char *hcd, unsigned long hcdBytes)
     xs_time("ring empty, URB unfinished", s, SNAP_XS_EMPTY, perUs);
     xs_time("publication's cost", s, SNAP_XS_PUBLISH, perUs);
     xs_time("completion pass's cost", s, SNAP_XS_COMPLETE, perUs);
-    comp("  intervals discarded         %lu\n", XW(SNAP_XS_DISCARDED));
+    xs_time("next chunk's mapping", s, SNAP_XS_MAP, perUs);
+    comp("  intervals discarded         %lu; across two processors %lu\n",
+         XW(SNAP_XS_DISCARDED), XW(SNAP_XS_CROSSED));
     comp("  class driver records        %lu sends taken, %lu refused\n",
          XW(SNAP_XS_TELE_TAKEN), XW(SNAP_XS_TELE_REFUSED));
     for (r = 0; r < records; r++) {
         t = hcd + (SNAP_TELE_AT + r * recWords) * 4;
-        if (get32(t, 0) == 0) {
+        v = get32(t, SNAP_TELE_STATE * 4);
+        if (v == 0) {
             comp("  record %lu: none has come\n", r + 1);
             continue;
         }
         b = t + SNAP_TELE_BODY * 4;
-        comp("  record %lu: slot %lu, %lu sends taken", r + 1, get32(t, 0),
-             get32(t, 4));
+        comp("  record %lu: %s, slot %lu, %lu sends taken", r + 1,
+             v == 1 ? "its device present"
+                    : v == 2 ? "its device departed" : "state unknown",
+             get32(t, 0), get32(t, 4));
         if (perUs > 0.0) {
             comp(", the last %.1f s before this dump",
                  (((double)XW(SNAP_XS_TSC_NOW + 1) - (double)get32(t, 12)) *
@@ -2883,6 +2896,7 @@ static int selftest_xstat(void)
     t = hcd + SNAP_TELE_AT * 4;
     put32(t, 0, 2);
     put32(t, 4, 9);
+    put32(t, SNAP_TELE_STATE * 4, 1);
     put32(t, 8, 4230196224UL - 3000000000UL);
     put32(t, 12, 7);
     b = t + SNAP_TELE_BODY * 4;
@@ -2906,7 +2920,12 @@ static int selftest_xstat(void)
     put32(s, SNAP_XS_WHY * 4, 4);
     put32(s, SNAP_XS_RAW * 4, 4096);
     put32(s, SNAP_XS_TIME_NOW * 4, 1000);
-    put32(t, 0, 0);
+    put32(t, SNAP_TELE_STATE * 4, 0);
+    print_xstat(hcd, sizeof(hcd));
+
+    /* A record whose device departed, and intervals across processors. */
+    put32(t, SNAP_TELE_STATE * 4, 2);
+    put32(s, SNAP_XS_CROSSED * 4, 3);
     print_xstat(hcd, sizeof(hcd));
 
     /* A 2.3.0.0 header from before 36.21: the routing record's 48 words. */
@@ -2919,6 +2938,12 @@ static int selftest_xstat(void)
 
     /* A record count the header cannot hold. */
     put32(hcd, SNAP_TELE_RECORDS_AT * 4, 9);
+    print_xstat(hcd, sizeof(hcd));
+
+    /* A record size whose product with the count wraps 32 bits back into
+     * the header (review round 1, finding 5): refused, not read past. */
+    put32(hcd, SNAP_TELE_RECORDS_AT * 4, 3);
+    put32(hcd, SNAP_TELE_WORDS_AT * 4, 0x55555573UL);
     print_xstat(hcd, sizeof(hcd));
     return 0;
 }

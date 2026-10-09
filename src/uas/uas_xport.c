@@ -904,11 +904,15 @@ static NTSTATUS uasXferDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
 /*
  * Task 36.21: the telemetry record handed to the bus (xhci98_xfer.h,
  * IOCTL_XHCI98_TELEMETRY). Built under the lock from the readings, sent
- * after its release with the FDO's own IRP, which the bus completes before
+ * after its release with the FDO's own IRP, which this bus completes before
  * its dispatch returns; counted in the rundown from the send to the end of
- * the completion, so UasEngineStop waits for it. A bus that does not know
- * the request is not asked again. Never through UasSyncIoctl (PASSIVE_LEVEL
- * only, and waiting) and never under the lock.
+ * the completion, so UasEngineStop waits for it - and cancels it, should a
+ * bus or a filter between leave it pending. Sent when any word differs
+ * from the last record the bus took, so a counter that moves alone (a
+ * timeout on a command still in flight) is reported; a send that failed
+ * leaves the last taken record as it was, so the next tick tries again. A
+ * bus that does not know the request is not asked again. Never through
+ * UasSyncIoctl (PASSIVE_LEVEL only, and waiting) and never under the lock.
  */
 static NTSTATUS uasTeleDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
 {
@@ -921,6 +925,9 @@ static NTSTATUS uasTeleDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
     if (irp->IoStatus.Status == STATUS_NOT_SUPPORTED ||
         irp->IoStatus.Status == STATUS_INVALID_DEVICE_REQUEST) {
         fdo->TeleOff = TRUE;
+    } else if (NT_SUCCESS(irp->IoStatus.Status)) {
+        UasCopy(&fdo->TeleLast, &fdo->TeleRecord, sizeof(fdo->TeleLast));
+        fdo->TeleLast.Word[XHCI98_TELE_SEQUENCE] = 0;
     }
     fdo->TeleBusy = FALSE;
     KeReleaseSpinLock(&fdo->Lock, irql);
@@ -939,20 +946,11 @@ static BOOLEAN uasTeleBuild(PUAS_FDO fdo)
         fdo->Gone || !fdo->Started) {
         return FALSE;
     }
-    if (fdo->TeleSequence != 0 &&
-        fdo->TeleLastCommands == fdo->Counters[UAS_CTR_COMMANDS] &&
-        fdo->TeleLastActive == fdo->Active) {
-        return FALSE;
-    }
-    fdo->TeleSequence++;
-    fdo->TeleLastCommands = fdo->Counters[UAS_CTR_COMMANDS];
-    fdo->TeleLastActive = fdo->Active;
     w = fdo->TeleRecord.Word;
     UasZero(w, sizeof(fdo->TeleRecord));
     w[XHCI98_TELE_SIG] = XHCI98_TELE_SIGNATURE;
     w[XHCI98_TELE_VER] = XHCI98_TELE_VERSION;
     w[XHCI98_TELE_SIZE] = sizeof(XHCI98_TELEMETRY);
-    w[XHCI98_TELE_SEQUENCE] = fdo->TeleSequence;
     w[XHCI98_TELE_COMMAND_BYTES] = fdo->CommandBytes;
     w[XHCI98_TELE_POLICY_SOURCE] = fdo->PolicySource;
     w[XHCI98_TELE_STREAMED] = fdo->Streamed ? 1UL : 0UL;
@@ -976,6 +974,18 @@ static BOOLEAN uasTeleBuild(PUAS_FDO fdo)
     w[XHCI98_TELE_UNSUPPORTED] = fdo->PolicyUnsupported;
     w[XHCI98_TELE_MALFORMED] = fdo->PolicyMalformed;
     w[XHCI98_TELE_TRANSPORT] = fdo->PolicyTransport;
+    /* The sequence is the one word that moves on every send: compared
+     * as 0 on both sides. */
+    for (i = 0; i < XHCI98_TELE_WORDS; i++) {
+        if (w[i] != fdo->TeleLast.Word[i]) {
+            break;
+        }
+    }
+    if (i == XHCI98_TELE_WORDS) {
+        return FALSE;
+    }
+    fdo->TeleSequence++;
+    w[XHCI98_TELE_SEQUENCE] = fdo->TeleSequence;
     fdo->TeleBusy = TRUE;
     uasRef(fdo);
     return TRUE;
@@ -1751,6 +1761,7 @@ VOID UasEngineStop(PUAS_FDO fdo, UCHAR srbStatus)
     LIST_ENTRY drain;
     PLIST_ENTRY e;
     BOOLEAN wasStarted;
+    BOOLEAN teleBusy;
     KIRQL irql;
 
     InitializeListHead(&drain);
@@ -1762,6 +1773,19 @@ VOID UasEngineStop(PUAS_FDO fdo, UCHAR srbStatus)
     if (wasStarted && !KeCancelTimer(&fdo->Timer)) {
         (VOID)KeWaitForSingleObject(&fdo->TimerDone, Executive, KernelMode,
                                     FALSE, NULL);
+    }
+    /* Task 36.21: no telemetry send is built now (Started is FALSE); one
+     * pending is cancelled, and the rundown below waits for its
+     * completion. The IRP is this driver's, freed only by UasEngineFree
+     * after that rundown, so a cancel that meets it completed, or being
+     * sent by a timer run still on another processor, touches valid
+     * memory; such a send is held in the rundown by that run's reference
+     * and completes as this bus completes it, at once. */
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    teleBusy = fdo->TeleBusy;
+    KeReleaseSpinLock(&fdo->Lock, irql);
+    if (teleBusy) {
+        (VOID)IoCancelIrp(fdo->TeleIrp);
     }
     if (fdo->Slots != NULL) {
         uasAbortAll(fdo, srbStatus);

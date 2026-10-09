@@ -242,18 +242,20 @@ typedef struct _UAS_FDO {
     ULONG PolicyMalformed;
     ULONG PolicyTransport;
     /* The record handed to the bus (IOCTL_XHCI98_TELEMETRY) from the timer
-     * at most once a second when something moved: built under the lock,
-     * sent after it with this driver's own IRP. TeleBusy (lock) from the
-     * send to the completion; TeleOff once a bus has refused the request
-     * as unknown, so an older bus is asked no more. */
+     * at most once a second when any word of it differs from the last one
+     * the bus took (TeleLast; a failed send leaves it, so the next tick
+     * tries again): built under the lock, sent after it with this driver's
+     * own IRP. TeleBusy (lock) from the send to the completion; TeleOff
+     * once a bus has refused the request as unknown, so an older bus is
+     * asked no more. UasEngineStop cancels a send still pending once no
+     * new one can start, and its rundown waits for the completion. */
     PIRP TeleIrp;
     USHORT TeleIrpSize;
     BOOLEAN TeleBusy;
     BOOLEAN TeleOff;
     ULONG TeleSequence;
-    ULONG TeleLastCommands;
-    ULONG TeleLastActive;
     XHCI98_TELEMETRY TeleRecord;
+    XHCI98_TELEMETRY TeleLast;
 
     KTIMER Timer;
     KDPC TimerDpc;

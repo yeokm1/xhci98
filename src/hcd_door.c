@@ -802,6 +802,8 @@ static ULONG hcdDoorTeleWord(PHCD_CONTROLLER hc, ULONG index)
         return t->TscLo;
     case XHCI_SNAPSHOT_HCD_TELE_TSC_HI:
         return t->TscHi;
+    case XHCI_SNAPSHOT_HCD_TELE_STATE:
+        return t->State;
     default:
         return t->Word[word - XHCI_SNAPSHOT_HCD_TELE_BODY];
     }

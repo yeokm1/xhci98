@@ -157,6 +157,38 @@ static VOID uasReadSerial(PUAS_FDO fdo, UCHAR index)
  * failures (selection, streams) still fail it. The descriptor and the
  * pipes read the one value stored here. PASSIVE_LEVEL, no lock held.
  */
+static VOID uasNoteDword(HANDLE key, PCWSTR name, ULONG value)
+{
+    UNICODE_STRING n;
+
+    RtlInitUnicodeString(&n, name);
+    (VOID)ZwSetValueKey(key, &n, 0, REG_DWORD, &value, sizeof(value));
+}
+
+/*
+ * The question's outcome as a note of its own, in the UAS device's
+ * hardware key (on NT its Device Parameters key): the size taken, where
+ * from (XHCI98_TELE_SRC_*), and the request's NTSTATUS - written whatever
+ * the outcome, so an older bus, a reply out of contract or a failed
+ * request reads in the registry even when no telemetry can reach the bus
+ * and the start fails later. A key that will not open writes nothing.
+ * PASSIVE_LEVEL.
+ */
+static VOID uasNotePolicy(PUAS_FDO fdo, ULONG bytes, ULONG source,
+                          NTSTATUS status)
+{
+    HANDLE key;
+
+    if (!NT_SUCCESS(IoOpenDeviceRegistryKey(fdo->Pdo, PLUGPLAY_REGKEY_DEVICE,
+                                            KEY_WRITE, &key))) {
+        return;
+    }
+    uasNoteDword(key, L"XhciUasCommandBytes", bytes);
+    uasNoteDword(key, L"XhciUasCommandSource", source);
+    uasNoteDword(key, L"XhciUasCommandStatus", (ULONG)status);
+    ZwClose(key);
+}
+
 static VOID uasAskPolicy(PUAS_FDO fdo)
 {
     PXHCI98_TRANSFER_POLICY rq;
@@ -172,6 +204,7 @@ static VOID uasAskPolicy(PUAS_FDO fdo)
     KeReleaseSpinLock(&fdo->Lock, irql);
 
     rq = (PXHCI98_TRANSFER_POLICY)UasAlloc(sizeof(XHCI98_TRANSFER_POLICY));
+    status = STATUS_INSUFFICIENT_RESOURCES;
     if (rq == NULL) {
         sent = UAS_POLICY_SENT_FAILED;
     } else {
@@ -205,6 +238,7 @@ static VOID uasAskPolicy(PUAS_FDO fdo)
         fdo->PolicyTransport++;
     }
     KeReleaseSpinLock(&fdo->Lock, irql);
+    uasNotePolicy(fdo, bytes, source, status);
 }
 
 /* SELECT_CONFIGURATION with the UAS alternate setting, and the four pipe

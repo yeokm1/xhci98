@@ -60,6 +60,11 @@ ntoskrnl.exe!ObfReferenceObject              all  required  w2k-export; win98-pr
 HAL.dll!KfAcquireSpinLock                    all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KfAcquireSpinLock, hint 6) (+31 other 98 SE); ntkern-name
 HAL.dll!KfReleaseSpinLock                    all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KfReleaseSpinLock, hint 9) (+31 other 98 SE); ntkern-name
 ntoskrnl.exe!IoCancelIrp                     all  required  w2k-export; win98-precedent openhci.sys 4.10.2222 (NTOSKRNL.EXE!IoCancelIrp, hint 35) (+14 other 98 SE); ntkern-name (design record 13 Appendix A row 30). Cancels this driver's own transfer IRPs in recovery
+# Task 36.22: the transfer-size question's note in the UAS device's hardware
+# key (uas_fdo.c, uasNotePolicy); the same rows xhci98.sys carries.
+ntoskrnl.exe!IoOpenDeviceRegistryKey         all  required  SITES=uas_fdo.obj w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!IoOpenDeviceRegistryKey, hint 53) (+18 other 98 SE); ntkern-name
+ntoskrnl.exe!ZwSetValueKey                   all  required  SITES=uas_fdo.obj w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!ZwSetValueKey, hint FF) (+12 other 98 SE); ntkern-name (design record 13 Appendix A row 159)
+ntoskrnl.exe!ZwClose                         all  required  SITES=uas_fdo.obj w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!ZwClose, hint EF) (+29 other 98 SE); ntkern-name
 
 # --- Pool, MDLs and transfer-IRP memory: uas_mem.obj only ---
 ntoskrnl.exe!ExAllocatePoolWithTag           all  required  SITES=uas_mem.obj w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!ExAllocatePoolWithTag, hint 7) (+61 other 98 SE); ntkern-name
