@@ -1088,6 +1088,9 @@ static VOID hcdRecover(PHCD_CONTROLLER hc)
     }
     if (go) {
         ext->RecoveryRequested = 0;
+        /* Selective suspend's epoch (design record 14 section 4.4): the
+         * thread's next powered pass settles a Dx pended before it. */
+        HcdSuspControllerDownLocked(hc);
         /* 35-T.6's window (record 17 section 4.6), charged as a recovery
          * begins, retries included: a fourth inside ten minutes is not
          * begun, and the request is dropped. Window.Refused, cleared only
@@ -1847,9 +1850,15 @@ static VOID hcdStopBody(PHCD_CONTROLLER hc)
 {
     PXHCI_EXTENSION ext;
     KIRQL raised;
+    KIRQL oldIrql;
 
     XHCI_DBG_TEXT("hcd: stop controller");
     ext = &hc->Hc;
+    XhciControllerLockAcquire(ext, &oldIrql);
+    /* Selective suspend's epoch and admission (design record 14 section
+     * 4.4): the stop's device teardown settles every slot at its unlink. */
+    HcdSuspControllerDownLocked(hc);
+    XhciControllerLockRelease(ext, oldIrql);
     hcdThreadStop(hc);
     /*
      * Whenever a register window is mapped, not only when INITIALIZED is

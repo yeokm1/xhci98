@@ -4680,6 +4680,9 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
     if (!powered) {
         return;
     }
+    /* Selective suspend's admission back to normal (design record 14
+     * section 4.4): the controller is served powered again. */
+    HcdSuspControllerUp(hc);
     if (!outstanding) {
         hcdSettleUndefer(hc);
     }

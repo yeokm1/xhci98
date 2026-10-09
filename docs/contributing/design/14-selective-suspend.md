@@ -15,8 +15,8 @@ covered revisions 1 to 9 the same day (13, 12, 10, 9, 3, 4, 1, 2 and 1 findings,
 section 9 maps each to where it is answered); the review of revision 10
 was clean (`b2d03d5`). Revision 11, 2026-10-09: section 3.9, the pure
 core's split and the rules implementing it settled (36.29), reviewed with
-its code. Stage A is being built: 36.29 done; section 3.10, the
-thread's executor, with 36.30.
+its code. Stage A is being built: 36.29 and 36.30 done; section 3.11,
+dispatch's executor, with 36.31.
 
 ## 1. What is asked, and what is not
 
@@ -465,6 +465,58 @@ admission, capabilities, teardown, the controller's transitions). Until
   queued ones (`HcdCfgFlushDevice`).
   The survivor restart after a cancel rings no doorbell while the link is
   not ACTIVE; the machine's restart does.
+
+### 3.11 Dispatch's executor (36.31)
+
+The dispatch's half of sections 4 and 5 (`src/hcd_susp.c`, called from
+`hcd_pdo.c`, `hcd_power.c`, `hcd_ctl.c` and `hcd_enum.c`); the idle
+notification's parts of 4.4 and 6 are 36.32's. With the switch at 0, or for
+a hub or SuperSpeed PDO, every answer is today's.
+
+- **Reaching the controller** (4.2): the PDO's `Busy` count is raised
+  before `pdo->Controller` is read, as the URB dispatch does, and the
+  release waits it out. The slot is written under `PdoListLock` then the
+  controller lock (4.1's order), so `pdo->Device` and the device's PDO
+  chain (for the composite's sibling test) cannot be unlinked meanwhile.
+- **A D-IRP** (4.2 to 4.4): `XhciSuspAdmit` over the slot, the device's link
+  state (GONE when the PDO is unlinked, which is also closed), `PowerDown`
+  and the siblings. Every accepted D-IRP writes `PwrWanted`, `PwrState` as
+  admitted, and one more `PwrSeq`; one that leaves `PwrState` D0 clears
+  `WokeHold`. A pended IRP takes the slot, the epoch and a `PowerPending`
+  count, and wakes the thread; a pended Dx is effective at once
+  (`PoSetPowerState` at acceptance). A D-state outside D0 to D3 is today's.
+- **WAIT_WAKE** (5.3): `XhciSuspWaitWakeAdmit` with the configuration's
+  remote-wake bit and the IRP's system state; accepted under the
+  controller lock with `hc->WakeSeq`'s next value as its stamp, one more
+  `PwrSeq` and a `PowerPending` count, then published by 4.2's handshake.
+  Its cancel routine clears the slot under the controller lock and hands
+  the completion to a system work item whose storage is the IRP's
+  `DriverContext`, since a power IRP is completed at PASSIVE_LEVEL on
+  Windows 98 (win98-wdm.md) and a cancel routine runs at DISPATCH_LEVEL.
+  Wake on 9x is offered until 36.35 reads 5.5's defect.
+- **Capabilities** (5.2): `XhciSuspCaps` over today's values; the
+  latencies stay 0 until a target's usbhub values are read (5.2's "read
+  per target", 36.35).
+- **Teardown** (4.4 (a), (c)): STOP, SURPRISE_REMOVAL and REMOVE close
+  admission and claim the slot's IRPs after the dispatches inside are
+  waited out (`hcdPdoQuiesce`): the pended D-IRP completes SUCCESS, the
+  WAIT_WAKE CANCELLED at a stop and NO_SUCH_DEVICE at a removal, a
+  surprise one included. A REMOVE also waits for `PowerPending` 0, so a
+  cancel routine's work item has returned before the client may unload.
+  The idle rundown and 4.4 (b)'s split are 36.32's.
+- **GONE at the unlink** (4.4): `HcdDevicePdoGone` claims and closes each
+  PDO's slot in its `PdoListLock` hold and completes the claims after it
+  (D-IRP SUCCESS, WAIT_WAKE NO_SUCH_DEVICE).
+- **START** (4.4, 3.9): admission reopened, D0 asked, `PwrState` D0 at once
+  on a powered ACTIVE link and otherwise the thread's.
+- **The controller's transitions** (4.4): the D3 and the direct transition
+  (`hcd_power.c`), the in-place recovery and the stop (`hcd_ctl.c`) move
+  `PowerEpoch` and set `PowerDown` in one controller-lock hold; the
+  thread's first powered service pass clears it. After the suspend, the
+  power path itself completes every Dx pended in an older epoch
+  (`HcdSuspSettleStale`), at PASSIVE_LEVEL with the controller quiesced;
+  after a recovery the thread's decision pass does (`XhciSuspDxStale`);
+  the stop's teardown settles every slot at its unlink.
 
 ## 4. Function power state at the device PDO
 

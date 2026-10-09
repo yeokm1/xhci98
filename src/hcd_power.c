@@ -99,10 +99,15 @@ static VOID hcdSuspendSettled(PHCD_CONTROLLER hc)
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     hc->SuspendRefused = 0;
+    /* Selective suspend's admission completes every Dx at once from here
+     * until the thread serves the controller powered again, and a Dx
+     * pended before it is settled below (design record 14 section 4.4). */
+    HcdSuspControllerDownLocked(hc);
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     failures = hc->Hc.SuspendFailures;
     XhciSuspendController(&hc->Hc);
     HcdIoSuspendSettle(hc, hc->Hc.SuspendFailures == failures);
+    HcdSuspSettleStale(hc);
 }
 
 /* The resume half of a D0, then the IRP's completion. IRQL: PASSIVE_LEVEL. */

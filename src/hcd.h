@@ -1724,6 +1724,27 @@ VOID HcdSuspRootSample(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG portsc,
                        ULONG acked);
 VOID HcdSuspHubSample(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG status,
                       ULONG acked, ULONG lost);
+/* 36.31, dispatch's half (design record 14 section 3.11) */
+typedef struct _HCD_SUSP_SETTLE {
+    struct _HCD_DEVICE_PDO *Pdo;
+    PIRP Pwr;
+    ULONG PwrD0;
+    PIRP Wake;
+} HCD_SUSP_SETTLE, *PHCD_SUSP_SETTLE;
+ULONG HcdSuspPdoSetPower(struct _HCD_DEVICE_PDO *pdo, PIRP irp,
+                         NTSTATUS *status);
+ULONG HcdSuspPdoWaitWake(struct _HCD_DEVICE_PDO *pdo, PIRP irp,
+                         NTSTATUS *status);
+VOID HcdSuspPdoCaps(struct _HCD_DEVICE_PDO *pdo, PDEVICE_CAPABILITIES caps);
+VOID HcdSuspPdoClose(struct _HCD_DEVICE_PDO *pdo, ULONG removal);
+VOID HcdSuspPdoRundown(struct _HCD_DEVICE_PDO *pdo);
+VOID HcdSuspPdoReopen(PHCD_CONTROLLER hc, struct _HCD_DEVICE_PDO *pdo);
+ULONG HcdSuspUnlinkLocked(PHCD_CONTROLLER hc, struct _HCD_DEVICE_PDO *pdo,
+                          PHCD_SUSP_SETTLE out);
+VOID HcdSuspUnlinkFinish(PHCD_SUSP_SETTLE s);
+VOID HcdSuspControllerDownLocked(PHCD_CONTROLLER hc);
+VOID HcdSuspControllerUp(PHCD_CONTROLLER hc);
+VOID HcdSuspSettleStale(PHCD_CONTROLLER hc);
 /* hcd_cfg.c's half of 3.3's deferral */
 VOID HcdCfgUndefer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 
