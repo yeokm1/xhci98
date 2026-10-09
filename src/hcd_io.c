@@ -953,10 +953,19 @@ static VOID hcdGo(PHCD_CONTROLLER hc, PHCD_XFER x)
     dev = pipe->Device;
     hcdCancelOn(x->Irp, x);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    if (x->CancelRequested || pipe->Closed || dev->Gone) {
+    if (x->CancelRequested || pipe->Closed || dev->Gone ||
+        (hc->Hc.Flags & XHCI_EXT_FLAG_SUSPENDED) != 0) {
         /* Cancelled, or its pipe or device going, while it was being
          * filled in: it completes now and is never held, so no drain the
-         * thread has already passed can miss it (round 4, finding 2). */
+         * thread has already passed can miss it (round 4, finding 2).
+         * Likewise on a suspended controller (task 36.28): held there it
+         * would wait for the resume, past the settle's drain (Codex review
+         * of 36.28, round 1, finding 1); and the refusal gives the saved
+         * state up, so the resume enumerates afresh rather than restore a
+         * class stack its failure may have left in recovery (finding 2). */
+        if ((hc->Hc.Flags & XHCI_EXT_FLAG_SUSPENDED) != 0) {
+            hc->Hc.SavedStateValid = 0;
+        }
         x->Engine = 0;
         x->Status = dev->Gone ? HCD_USBD_DEVICE_GONE : HCD_USBD_CANCELED;
         x->State = HCD_XFER_DONE;
@@ -1178,9 +1187,11 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
          * TD left there could end only in the resume, and Windows ME
          * holds the resume behind its own I/O (HcdIoSuspendSettle); the
          * request fails now instead, as one in flight at the suspend
-         * did. */
+         * did, and the save is given up as for any refusal while
+         * suspended (hcdGo). */
         ok = 0;
         x->Status = HCD_USBD_CANCELED;
+        hc->Hc.SavedStateValid = 0;
     }
     if (ok && !dev->Gone && !pipe->Closed && !x->CancelRequested &&
         (pipe->Paused ||
@@ -1871,9 +1882,11 @@ static VOID hcdDrainOne(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd)
  * is given up - the rings now name TDs whose records are gone - so the
  * resume reinitializes, as it does on any controller without Force Save
  * Context, and the devices are enumerated afresh. A hub's own
- * status-change record and the thread's EP0 record are not a client's and
- * stay. Nothing in flight: nothing done, the save kept. With the halt not
- * read back the rings may still be followed, and nothing is touched.
+ * status-change record is not a client's and stays (hubs are skipped);
+ * the thread's EP0 record, not running behind the power gate, is detached
+ * with the rest but never completed as a client's (hcdDrainOne). Nothing in flight: nothing done, the save kept. With neither the
+ * halt read back nor bus mastering confirmed off, the rings may still be
+ * followed, and nothing is touched.
  * IRQL: PASSIVE_LEVEL, the power gate held, so the thread is not inside a
  * service pass.
  */
@@ -1925,7 +1938,14 @@ VOID HcdIoSuspendSettle(PHCD_CONTROLLER hc)
         return;
     }
     usbsts = XhciReadOp(&hc->Hc, XHCI_OP_USBSTS);
-    if (usbsts == 0xFFFFFFFFUL || (usbsts & XHCI_USBSTS_HCH) == 0) {
+    if ((usbsts == 0xFFFFFFFFUL || (usbsts & XHCI_USBSTS_HCH) == 0) &&
+        !hc->Hc.BusMasterCleared) {
+        /* Neither halted nor cut off from the bus by the quiesce's BME
+         * fallback: the rings may still be followed. With BME confirmed
+         * clear the controller cannot master, a restore refuses a
+         * controller that is not halted, and the reinitialization resets
+         * it before it gives bus mastering back, so no stale TD can run
+         * (Codex review of 36.28, round 1, finding 3). */
         return;
     }
     owed = 0;

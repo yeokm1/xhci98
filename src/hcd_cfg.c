@@ -171,7 +171,10 @@ NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     if ((hc->Hc.Flags & XHCI_EXT_FLAG_SUSPENDED) != 0) {
         /* Task 36.28: not queued behind a suspended controller, whose
          * resume a client may be holding up (hcd_io.c,
-         * HcdIoSuspendSettle); refused as a leaving device's are. */
+         * HcdIoSuspendSettle); refused as a leaving device's are, and the
+         * save given up so the resume enumerates afresh (hcd_io.c,
+         * hcdGo). */
+        hc->Hc.SavedStateValid = 0;
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         (VOID)InterlockedDecrement(&dev->Refs);
         if (urb == NULL) {
