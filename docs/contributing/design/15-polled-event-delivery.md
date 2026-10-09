@@ -18,15 +18,25 @@ placeholders, which map as follows:
 
 It was drawn up as Phase 35, and the review history in section 13 keeps the
 old phase numbers. Section 4.2 and decision 6 are the 2026-10-08 amendment
-for issue 12. They are reviewed in 36.5. Section 4.3 and decision 7 add MSI
-on Vista and 7 (36.15). That reverses section 1's "not in this design" for
-MSI on NT6. Single-message MSI-X is admitted with it (owner, 2026-10-09);
-more than one message or interrupter stays out. DRAFT, revision 4, 2026-10-05: written at the owner's request so the driver can run
-a controller that delivers no legacy interrupt - an MSI- or MSI-X-only xHCI
-controller, which neither primary target can serve today - by polling the
-event ring, adaptively, instead of waiting for an interrupt. Reviews covered
-revisions 1 to 3 the same day (10, 8 and 5 findings, all taken; section 13
-maps each) and converged at round 4, on revision 4. Nothing is built.
+for issue 12. Section 4.3 and decision 7 add MSI on Vista and 7 (36.15).
+That reverses section 1's "not in this design" for MSI on NT6.
+Single-message MSI-X is admitted with it (owner, 2026-10-09); more than one
+message or interrupter stays out.
+
+Revision 4, 2026-10-05: written at the owner's request so the driver can
+run a controller that delivers no legacy interrupt - an MSI- or MSI-X-only
+xHCI controller, which neither primary target can serve today - by polling
+the event ring, adaptively, instead of waiting for an interrupt. Reviews
+covered revisions 1 to 3 the same day (10, 8 and 5 findings, all taken;
+section 13 maps each) and converged at round 4, on revision 4.
+
+**Revision 5, 2026-10-09 (task 36.5).** The issue 12 amendment made
+concrete before code: the watcher of section 4.2 (its predicate, period,
+count and window, and the move), WATCHING as a role in section 5, the
+mode rules reconciled with 36.15's decisions (sections 1, 3, 4 and 11),
+section 4.1 checked against the spec, the inputs and hooks of sections 6
+and 7.1 named, and section 4.3 designed in full for 36.15, so the MSI code
+has a reviewed design. Reviewed in 36.5's loop (section 13.5).
 
 ## 1. What is asked, and what is not
 
@@ -37,13 +47,19 @@ long when the bus is idle, short when it is busy - with the ring also looked
 at whenever the driver is entered anyway. Automatic takes the line interrupt
 where the controller has one and polls where it has none.
 
-Not in this design: MSI or MSI-X (a value of 3 or above is reserved, and no
-phase schedules it), interrupters other than
-Interrupter 0, and any change to the line-interrupt path. **Superseded in
-part** (2026-10-08 and 2026-10-09, section 4.3): MSI and single-message
-MSI-X are taken on Vista and 7, and 3 is now the same as 0; more than one
-interrupter stays out. On a controller
-with a line interrupt, the default must read as the Phase 34 build does.
+Also in this design since 2026-10-08: a line interrupt that exists but is
+proven at run time never to arrive moves to polling in automatic mode
+(section 4.2, issue 12), and on Vista and 7 a message-signalled interrupt -
+MSI, or MSI-X with one message - is automatic mode's first choice where
+Windows grants one (section 4.3, task 36.15).
+
+Not in this design: MSI or MSI-X on Windows 98, ME, 2000 or XP (none of
+them has a message interrupt to grant), more than one message,
+interrupters other than Interrupter 0, and any change to the line-interrupt
+path beyond section 4.2's watcher, which reads and never writes until it
+moves. On a controller whose line interrupt works, the default must read
+as the release before it does: the same delivery, the same ISR, the same
+drains.
 
 ## 2. State today (read 2026-10-05, and by review on revision 1)
 
@@ -139,7 +155,14 @@ with no interrupt.
 |---|---|---|---|
 | `XhciInterruptMode` | 0 | 0 automatic; 1 the line interrupt; 2 polling; 3 the same as 0 (2026-10-09, section 4.3); 4 and above reserved | 4 and above run as 0, the value read recorded (section 8) |
 | `XhciPollIdleMs` | 50 | The poll period when nothing is outstanding (section 6) | 0 runs as 50; above 5000 held to 5000 |
-| `XhciPollActiveMs` | 1 | The poll period while work is outstanding | 0 runs as 1; above the idle period held to it |
+| `XhciPollActiveMs` | 1 | The poll period while work is outstanding | 0 runs as 1; above the idle period in effect held to it |
+
+A value that is absent, not a four-byte `REG_DWORD`, or unreadable takes
+the default, as `XhciIntelIrqRoute`'s strict reader does; the read status
+is recorded apart from the value (section 8), so a 0 somebody set is told
+from a value never found. The **effective mode** is what the rules below
+act on: 0 for a value of 0, 3 or 4 and above, else the value. Every rule
+in this record that says "mode 0" means the effective mode 0.
 
 Owner's decisions of 2026-10-05 (section 12): the values, their names and
 defaults, the numbering, that neither period may be 0, and the 5000 ms
@@ -147,10 +170,13 @@ bound.
 
 ### 3.1 The defaults
 
-- **0, automatic.** On every machine with a line interrupt it is exactly
-  today's driver; on one without, it polls instead of failing the start. The
-  numbering lets a future MSI path (a reserved value) become what automatic
-  prefers without asking users to change anything.
+- **0, automatic.** On every machine whose line interrupt works it reads
+  as the release before it; on one with no interrupt, it polls instead of
+  failing the start; on one whose line never arrives, it moves to polling
+  (section 4.2); and on Vista and 7 it takes a message interrupt where
+  Windows grants one (section 4.3). 3 was the value reserved for MSI and
+  now reads as 0 (2026-10-09), since MSI where granted is already 0's
+  first choice.
 - **50 ms idle.** A connect is debounced for 100 ms by the USB 2.0
   specification before a driver acts on it, so a 50 ms look at an idle ring
   adds no delay a user can see to a hot-plug, and costs about 20 timer DPCs
@@ -171,155 +197,422 @@ to" form `XhciFirstEnumWaitMs` uses (held to 30 s).
 
 ## 4. Choosing the delivery at start
 
-The start reads the values (section 3) and the resource list, then settles
-the **delivery** - line or poll - and its **reason**, once:
+The start settles the **delivery** - line, message (MSI or MSI-X, section
+4.3) or poll - and its **reason**, once, at PASSIVE_LEVEL in `hcdStartBody`,
+after the values (section 3) and the resource list are read and **before**
+anything is connected:
 
-The pin is read once, and its read status is kept apart from its value:
-today a failed read with an interrupt resource present is accepted, the pin
-recorded as `0xFFFFFFFF` and the resource trusted (`xhci_init.c:4605-4617`),
-and that stays.
+- **The resource list.** The memory window stays required. An interrupt
+  descriptor no longer is: `hcdParseResources` records whether one was
+  given and whether its raw form is a message (`CM_RESOURCE_INTERRUPT_MESSAGE`,
+  `hc->IntDelivery` since 36.3), and the decision below says what its
+  absence means. Mode 1 keeps today's refusal, so "forced" fails exactly as
+  today.
+- **The pin.** Read once by the HCD from configuration space (`Interrupt
+  Pin`, offset 3Dh, through the same `XhciReadPciConfig` the core uses),
+  before the connection, with its read status kept apart from its value.
+  The core's own read in `XhciInitController` stays, and so does its rule
+  that a failed read with an interrupt resource present is accepted, the
+  pin recorded as `0xFFFFFFFF` and the resource trusted
+  (`xhci_init.c` ~4705). The in-place recovery reads no configuration space
+  and keeps the start's answer.
+- **The decision** is one pure function in `xhci_poll.c`
+  (`XhciPollDecide`, host vectors in `test_poll`), from the effective mode,
+  whether an interrupt resource was given, whether it is a message, and the
+  pin's status and value, to the delivery and the reason.
 
-This table is the line resource's: every target but Vista and 7 with a
-message granted. Where Windows granted a message (section 4.3), modes 0, 1
-and 3 take the message, the pin plays no part, a message connection that
-fails polls for that start, and mode 2 polls.
+**A line resource** - every target, and Vista and 7 without a message
+grant:
 
-| `XhciInterruptMode` | Interrupt resource | Pin | Delivery | Reason |
+| Effective mode | Interrupt resource | Pin | Delivery | Reason |
 |---|---|---|---|---|
-| 0, or 3 and above | present | not 0 | line | automatic |
-| 0, or 3 and above | present | unreadable | line, as today | automatic, pin unreadable |
-| 0, or 3 and above | present | 0 | poll | automatic: interrupt pin 0 |
-| 0, or 3 and above | absent | any | poll | automatic: no interrupt resource |
+| 0 | present | not 0 | line | automatic |
+| 0 | present | unreadable | line, as today | automatic, pin unreadable |
+| 0 | present | 0 | poll | automatic: interrupt pin 0 |
+| 0 | absent | any | poll | automatic: no interrupt resource |
 | 1 | present | not 0, or unreadable | line, as today | forced (pin unreadable, if so) |
 | 1 | present and pin 0, or absent | | none: the start fails as today | forced, no interrupt |
 | 2 | any | any | poll | forced |
 
-A value of 4 and above also records "reserved value N, run as automatic"; 3
-is the same as 0 and records nothing extra.
+**A message resource** - Vista and 7 only, where the INF asks for one
+(section 4.3):
 
-The delivery is held in the controller (`hc`) and copied into the core's
-extension after the start zeroes it, so the in-place recovery and every
-resume keep it; only a new start settles it again. For a poll delivery:
+| Effective mode | Connection | Delivery | Reason |
+|---|---|---|---|
+| 0 | the message connected | MSI or MSI-X | automatic: message |
+| 1 | the message connected | MSI or MSI-X | line asked for, message granted |
+| 0 or 1 | `IoConnectInterruptEx` not found, or the connection refused | poll | message not connected |
+| 2 | (nothing connected) | poll | forced |
 
-- **`ResourcesTypes` tells the truth.** Both sites (`hcd_ctl.c:704`, `723`)
-  set the interrupt bit only when an interrupt resource was taken, and the
-  core's two gates in `xhci_init.c` - the interrupt bit and the pin-0 refusal
-  - apply to a line delivery only. Mode 1 keeps both, so "forced" fails
-  exactly as today.
+The pin plays no part under a message grant. Until 36.15's code is in,
+`IoConnectInterruptEx` is never looked for, so a message resource reaches
+the "not connected" row: a machine whose `MSISupported` was set by hand
+polls rather than handing `IoConnectInterrupt` a message vector.
+
+A value of 4 and above is recorded as "reserved value N, run as
+automatic"; 3 is the same as 0 and records nothing extra.
+
+The delivery and reason are held in the controller (`hc`) and copied into
+the core's extension (`EventDelivery`) after the start zeroes it, so the
+in-place recovery and every resume keep them; only a new start settles
+them again, and only the move of section 4.2 changes them in between. For
+a poll delivery:
+
+- **`ResourcesTypes` tells the truth.** Both sites (`hcd_ctl.c`
+  `hcdStartBody`, the extension's copy and the `USBPORT_RESOURCES` it hands
+  `XhciInitController`) set the interrupt bit only when an interrupt
+  resource was taken, and the core's two gates in `xhci_init.c` - the
+  interrupt bit and the pin-0 refusal - apply to a line delivery only
+  (they read `EventDelivery`). Mode 1 keeps both.
 - **The ISR is not connected**, even when a resource exists (mode 2 on a
   machine with a pin).
-- **No interrupt is ever enabled.** `XHCI_EXT_FLAG_INTERRUPTS` is never set
-  for a poll delivery, so neither the drain (`xhci_evt.c:903`) nor resume
-  nor recovery (`xhci_init.c:3806`, `3911`, `4162`) re-arms `IMAN.IE` or
-  sets `USBCMD.INTE`, and every poll drain passes `FALSE` for the re-arm as
-  well. A controller with a pin therefore never asserts a level-triggered,
-  possibly shared, line that no ISR of this driver claims.
+- **No interrupt is ever enabled.** `XhciEnableInterrupts` is not called,
+  so `XHCI_EXT_FLAG_INTERRUPTS` is never set for a poll delivery, and
+  neither the drain (`xhci_evt.c`, the re-arm) nor resume nor recovery
+  (`xhci_init.c`, their `XHCI_EXT_FLAG_INTERRUPTS` branches) re-arms
+  `IMAN.IE` or sets `USBCMD.INTE`; every poll drain passes `FALSE` for the
+  re-arm as well. A controller with a pin therefore never asserts a
+  level-triggered, possibly shared, line that no ISR of this driver claims.
+- **The routing quirk writes nothing** (36.3): `hc->IntDelivery` reads
+  poll, at the start and at each return to D0.
 
 `XhciImodInterval250ns` is still programmed as read; it has no effect
 without an interrupt.
+
+### 4.1 What the hardware needs (checked 2026-10-09)
+
+With `USBCMD.INTE` and `IMAN.IE` clear, cycle-bit dequeue and the `ERDP`
+write remain valid. Checked against `docs/usb-xhci-info/xhci-data-structures.md`
+and the spec it transcribes:
+
+- **The enables gate signalling, not the ring.** `IMAN.IE` 0 leaves the
+  Interrupter "prohibited from generating interrupts" (Table 5-38, p.391),
+  and `USBCMD.INTE` enables "host system interrupts generated by
+  Interrupters" (5.4.1, p.360). Neither appears in the event ring's producer
+  rules: the xHC writes an Event TRB and advances its enqueue by the Cycle
+  bit and the advertised `ERDP` alone (4.9.4, p.162), and detects Event Ring Full
+  from `ERDP` (the data-structures note on intermediate `ERDP` writes). So
+  events are written, and consumed by a cycle-bit dequeue, with both
+  enables clear.
+- **`IP`, `EINT` and `EHB` may stand.** `IP` is set by `IPE`, `IMODC` and
+  `EHB` (4.17.5, p.270), `EHB` with it (4.17.2, p.264; 5.5.2.3.3, p.394),
+  and `EINT` on each `IP` 0-to-1 transition (5.4.2). Under a pin, `IP` is
+  cleared only by software (4.17.5), so under a poll delivery it may stay
+  1 for the whole run. With `IE` clear the Interrupter is prohibited from
+  generating interrupts (Table 5-38), and with `INTE` clear no host system
+  interrupt is issued (Table 5-20, p.360), so a standing `IP` asserts
+  nothing; the INTx line that `IP` holds asserted (4.17.3, p.268) is one an
+  enabled Interrupter raised. `EHB` governs whether `IP` may be set again,
+  not whether the ring may be read.
+- **The drain's writes are kept.** The poll drain is `XhciEventDpc` itself:
+  it publishes `ERDP` every 32 events with `EHB` written 0 and ends with
+  the `EHB`-clearing write (the data-structures notes on ERDP). It never
+  acknowledges `EINT` or `IP` - only the ISR does, `EINT` before `IP`
+  (Table 5-21's note) - so no order is at stake.
+- **MSI.** "If MSI or MSI-X interrupts are enabled, IP shall be cleared to
+  '0' automatically when the PCI Dword write generated by the Interrupt
+  assertion is complete" (4.17.5, p.270). Hence section 4.2's predicate is
+  a line's only. The ISR's acknowledgement of `IP` under a message is a
+  write of 1 to an RW1C bit already 0, which changes nothing.
+
+`xhci-data-structures.md` gains the 4.17.5 `IP` rules and the "prohibited
+from generating interrupts" line beside its IMAN row, so the next reader
+does not need the spec for them; its "pin-based interrupts (this driver's
+only mode)" sentence is 36.20's.
+
+The "no interrupt, no DPC" chain in the comment near `xhci_evt.c`'s
+`XhciEnableInterrupts` describes interrupt-driven progress; an
+independently scheduled poll does not depend on it.
 
 ### 4.2 A line that never arrives (amendment, 2026-10-08; issue 12)
 
 Issue 12 found a controller whose line interrupt exists but never reaches
 the ISR. On the Dell E7250 the BIOS routes the xHCI's INTA to a different
-IRQ from the one ACPI gives the OS. The table above settles that controller
-on "line, automatic", and the driver then lives on the lost-interrupt
-backstop alone. With no other device on its line, it fails outright. The
-routing quirk (roadmap 36.3) repairs the E7250, in APIC and PIC mode. This
-rule covers what it cannot: an unlisted chipset, a quirk set to 0, or
-another firmware fault.
+IRQ from the one ACPI gives the OS. The table above settles that
+controller on "line, automatic", and the driver then lives on the
+lost-interrupt backstop alone. With no other device on its line, it fails
+outright. The routing quirk (roadmap 36.3) repairs the E7250, in APIC and
+PIC mode. This rule covers what it cannot: an unlisted chipset, a quirk set
+to 0, or another firmware fault.
 
-**Mode 0 only:** a line delivery that is proven dead at run time moves to
-polling, with the reason "automatic: line interrupt not delivered".
-- **Proven dead** means repeated backstop looks find an event waiting with
-  `IMAN.IP` and `IE` and `USBCMD.INTE` set, while the ISR has claimed
-  nothing since the previous look. The exact count and window are settled
-  in review (36.5), so that a shared or merely slow line does not trip it.
-  The predicate is a line delivery's only: under MSI or MSI-X the
-  controller clears `IP` itself once the message write completes (xHCI
-  1.2c 4.17.5, p.270), so `IP` set cannot show a lost message.
-- **Who looks** (Codex review of `7567dec`; decided by the owner,
-  2026-10-09). `hcdBackstop` runs on `hcdThread`, and `hcdCommand` blocks
-  that thread in a command wait for the very completion a dead line never
-  delivers (issue 12 section 2), so "backstop looks" cannot be the
-  observer. The poller's own timer and DPC look instead: under every line
-  delivery in mode 0 the poller runs in a slow WATCHING state that peeks
-  `IMAN`, `USBCMD.INTE` and the event ring and never drains, whatever
-  `hcdThread` is doing, command waits and `XhciTolerance` 0 included. Its
-  period, count and window are settled in 36.5. A message delivery is not
-  watched.
-- **The move.** It masks the interrupter (`INTE`, then `IE`, the existing
-  mask order) and starts the poller as for a poll delivery chosen at start.
-  With the poller already WATCHING, the move is its own transition from
-  WATCHING to in service, under `PollLock`, with the masking first, the
-  ISR admitting nothing after, and a concurrent close. Section 5.2, which
-  today lets the poller leave CLOSED only at a start under a poll delivery,
-  gains WATCHING (opened at a mode 0 line start) and this move, in 36.5.
-  The delivery and its reason in the counter block change at the move
-  (section 8).
-  It keeps the move through recovery and resume, like any delivery.
-- **The ISR stays connected,** because disconnecting at DISPATCH is not
-  possible. It claims nothing once the move is made, so a shared line's
-  other devices are unaffected.
-- **Moves happen in one direction only.** A later interrupt does not move
-  the controller back; only a new start settles the delivery again.
+**Mode 0 only, and a line delivery only:** a line delivery that is proven
+dead at run time moves to polling, with the reason "automatic: line
+interrupt not delivered". Mode 1 (the line, forced) never moves, so it
+reads as today. Mode 2 polls from the start. A message delivery is not
+watched.
 
-**Mode 1** (the line, forced) never moves, so it reads as today. **Mode 2**
-polls from the start.
+**Who looks** (Codex review of `7567dec`; decided by the owner,
+2026-10-09). `hcdBackstop` runs on `hcdThread`, and `hcdCommand` blocks
+that thread in a command wait for the very completion a dead line never
+delivers (issue 12 section 2), so the backstop cannot be the observer. The
+poller's own timer and DPC look instead: at a mode 0 start under a line
+delivery the poller is opened in the **watch role** (section 5.2), and its
+DPC runs whatever `hcdThread` is doing, command waits and `XhciTolerance` 0
+included.
 
-### 4.3 MSI on Vista and 7 (amendment, 2026-10-08; to be designed in 36.15)
+**A look**, every `XHCI_POLL_WATCH_MS` (100 ms), from the poller's timer
+DPC with the controller lock held and only while `PollService` is 1
+(section 5.3), so the window it reads is a running controller's:
+
+1. Read `IMAN`. All ones, or `IP` or `IE` clear: the look is **clear**.
+2. Read `USBCMD`. All ones, or `INTE` clear: **clear**.
+3. Otherwise the look is **asserted**: `IP`, `IE` and `INTE` are all 1, so
+   the controller is holding its INTx asserted (4.17.3, p.268). It records
+   `InterruptsClaimed` as it stood.
+
+The look reads two registers and writes none. It does not ask the event
+ring: a backstop drain empties the ring without acknowledging `IP` (only
+the ISR acknowledges it), so on a dead line `IP` stays 1 through every
+drain, and a ring that reads empty says nothing about the line.
+
+**The verdict.** A **stale pair** is an asserted look whose previous look
+was also asserted, with `InterruptsClaimed` unchanged between them: `IP`
+has stood unacknowledged with both enables up for a whole period, and no
+interrupt of this controller was claimed meanwhile. The line is **proven
+dead** at the third stale pair in a row (`XHCI_POLL_WATCH_PAIRS`, four
+asserted looks), provided at least `XHCI_POLL_WATCH_DEAD_MS` (300 ms) of
+system time, by the low word of `KeQuerySystemTime`, lies between the
+first of those looks and the last, so a timer that expires early cannot
+shorten the window. Any clear look, any claim, and any park (section 5.3)
+starts the count afresh. The count and the elapsed time are one pure
+function, `XhciPollWatchLook`, with host vectors.
+
+Why it cannot trip on a working line:
+
+- On a line that delivers, `IP` set with `IE` and `INTE` up is a state of
+  at most the moderation interval plus the ISR's latency: `IMODI` is held
+  to 4000 (1 ms) by the start, and the ISR acknowledges `IP` and writes
+  `IE` 0 when it claims. Four looks 100 ms apart that all find it, with no
+  claim between, are three such episodes each lasting a whole period.
+- Between the ISR and its DPC, `IE` is 0 (the ISR writes it so), so that
+  interval reads clear, not asserted.
+- A **shared** line is covered by the claim count, not by the entry count:
+  an interrupt of another device on the line enters the ISR
+  (`InterruptCount`) and is declined; one of this controller's is claimed
+  (`InterruptsClaimed`) and its `IP` acknowledged. On the E7250 with the
+  EHCI enabled, the EHCI's interrupts on the xHCI's assigned line do reach
+  this ISR, which then finds `EINT` set and claims, so the count resets on
+  each; the line is proven dead in any interval of 300 ms in which the
+  EHCI is quiet and an xHCI event waits. That is the behaviour wanted:
+  such a line is the "slow" one issue 12 described, delivering only at the
+  EHCI's pace.
+- A **slow** line that delivers late - but within a period - has a claim
+  between any two looks and never makes a stale pair.
+- The in-place recovery, a suspend and a stop clear `PollService` first
+  (section 5.3); the watcher parks and looks at nothing, and its count
+  starts afresh at the kick.
+
+**The move**, made by the watcher's own DPC as the owner of the poller, in
+the same controller-lock hold as the look that proved the line dead:
+
+1. `EventDelivery` becomes poll and the reason "automatic: line interrupt
+   not delivered", in the extension and in `hc`, with the counter block's
+   delivery and reason (section 8).
+2. `XHCI_EXT_FLAG_INTERRUPTS` is cleared, so no drain, resume or recovery
+   re-arms, and the interrupter is masked with `XhciMaskInterrupts`
+   (`INTE`, then `IE`, the existing mask order), whose verdict lands in
+   `InterruptDeliverySuppressed` as for every other mask.
+3. `hc->IntDelivery` becomes poll, so the routing quirk's run at a later
+   return to D0 writes nothing. A write it made at the start is not undone
+   (36.3).
+4. Under `PollLock`, inside the same hold, the poller's role becomes
+   service (section 5.2). The ownership does not change hands: the DPC
+   owned the poller as a watcher and owns it as a server, and a close
+   asked meanwhile is honoured by its CLOSING exactly as for any expiry.
+5. With the controller lock released, the same DPC runs its first service
+   pass (section 5.2) at once: the drain the dead line never delivered.
+
+**The ISR after the move** claims nothing, so a shared line's other devices
+are unaffected: `XhciIsr` declines while `EventDelivery` is not line and
+`InterruptDeliverySuppressed` is 1, the existing rule that declining is
+free only once the enables are proven down. Should the mask not be proven
+(a window answering all ones), the ISR keeps claiming and acknowledging
+until a later mask proves it, as it does after any unproven mask; its DPC
+then drains with the re-arm off. The ISR stays connected, because
+`IoDisconnectInterrupt` is a PASSIVE_LEVEL call and the move is made at
+DISPATCH_LEVEL; the stop disconnects it as ever.
+
+**Moves happen in one direction only.** A later interrupt does not move the
+controller back; only a new start settles the delivery again. The move is
+kept through the in-place recovery and every resume like any delivery,
+since it lives in `EventDelivery` and `hc`.
+
+**Timing against issue 12's Finding 1.** The start's No Op is submitted
+before the first look; on the E7250 with the line dead and no EHCI
+traffic, the move comes about 300 to 400 ms after the start, and its first
+service pass drains the No Op's completion. 36.4's BUSY retry waits under
+a 5000 ms deadline, so an Enable Slot that met the engine busy is
+resubmitted once the drain has run.
+
+### 4.3 MSI on Vista and 7 (amendment, 2026-10-08; designed 2026-10-09 for task 36.15)
 
 **The decision.** The owner, 2026-10-08: on Vista and 7, x86 and amd64,
 the controller may take a message-signalled interrupt. It needs one
-message, for Interrupter 0.
+message, for Interrupter 0. Decided 2026-10-09 (roadmap 36.15 has the full
+list): mode 0 takes a message where Windows granted one, else the line,
+else polling; 3 reads as 0; 1 under a message grant runs as 0 and logs
+that the line was asked for; the line is forced by `MSISupported` 0 in the
+controller's hardware key; a message connection that fails polls for that
+start; single-message MSI-X is admitted; the dead-line rule is the line's
+only; the routing quirk is not active under a message; XP x64 ignores the
+key and keeps the line.
 
-**What it changes:**
-- The INF requests MSI (`MSISupported` 1, message limit 1) on the NT6
-  paths.
-- `hcdParseResources` accepts a message resource.
-- The interrupt is connected with `IoConnectInterruptEx`. On x86 the
-  routine is resolved from the kernel image's export table at run time,
-  because the same binary must still load on 98 and ME, where neither it
-  nor `MmGetSystemRoutineAddress` exists.
-- The ISR treats a message as always its own.
+**Why it is safe on the down-level targets.** Windows 98, ME, 2000 and XP
+(and XP x64) never grant a message: their PnP managers do not read the
+key, and no message descriptor reaches the parser. Every step below is
+taken only when `IoIsWdmVersionAvailable(6, 0)` is TRUE, which is the test
+the driver already uses for NT 6.x's other paths.
 
-**Decided (owner, 2026-10-09; the roadmap's 36.15 has the full list).**
-On Vista and 7, mode 0 takes MSI where Windows granted a message, else the
-line, else polling; 3 reads as 0; 1 under a message grant runs as 0 and
-logs it, and the line is forced by `MSISupported` 0 in the hardware key; a
-message connection that fails polls for that start. The delivery table
-above gains these rows in 36.20.
+**The INF.** On the `Xhci.Dev6` paths of both INFs (`.NTx86` for Vista and
+7 x86 in `src/xhci98.inf`, `.NTamd64` for Vista and 7 x64 in
+`src/xhci98-amd64.inf`), in the hardware key:
 
-### 4.1 What the hardware needs (review, revision 1)
+```
+[Xhci.Dev6.NTx86.HW]               ; and .NTamd64.HW
+AddReg = Xhci.Msi.AddReg
 
-With `USBCMD.INTE` and `IMAN.IE` clear, cycle-bit dequeue and the `ERDP`
-write remain valid: `IMAN.IP` and `USBSTS.EINT` may stay pending without
-stopping the controller from writing events, and `ERDP.EHB` governs
-interrupt generation, not consumption of the ring. If the poll drain
-acknowledges them, it keeps `EINT` before `IP`, as the ISR does, and it keeps
-the drain's final `EHB`-clearing write. The "no interrupt, no DPC" chain in
-the comment near `xhci_evt.c:990` describes interrupt-driven progress; an
-independently scheduled poll does not depend on it. Each statement is
-checked against `docs/usb-xhci-info/xhci-data-structures.md` in task POLL.0
-before code.
+[Xhci.Msi.AddReg]
+HKR,"Interrupt Management",,0x00000010
+HKR,"Interrupt Management\MessageSignaledInterruptProperties",,0x00000010
+HKR,"Interrupt Management\MessageSignaledInterruptProperties",MSISupported,0x00010003,1
+HKR,"Interrupt Management\MessageSignaledInterruptProperties",MessageNumberLimit,0x00010003,1
+```
+
+`FLG_ADDREG_NOCLOBBER` keeps a user's `MSISupported` 0 across an update,
+under 34.1's rule. The XP x64 path (`Xhci.Dev.NTamd64`) and the 32-bit
+paths for 98, ME, 2000 and XP get no `.HW` section, so the gate refuses
+these lines anywhere but the two `Xhci.Dev6` sections (a new `MSI-*` rule
+in `check-inf.ps1`, with self-test mutations).
+
+**The resources.** `hcdParseResources` already keeps the raw descriptor
+and its message flag (36.3). For a message it also reads, from WDK 7.1's
+layout (`u.MessageInterrupt.Raw`: a reserved `USHORT`, then
+`MessageCount`, then `Vector` and `Affinity`; the translated half:
+`Level`, `Vector`, `Affinity`), the message count, and refuses more than
+one by taking the first message only - the connection is asked for one
+(below), so a grant of more is used as one. The 32-bit headers of the
+Windows 2000 DDK lack the message member, so the driver declares the
+WDK 7.1 layout itself, with a compile-time size check against the
+partial descriptor it overlays.
+
+**Finding `IoConnectInterruptEx` without importing it.** The single x86
+binary also loads on 98 and ME, whose kernels export neither
+`IoConnectInterruptEx` nor `MmGetSystemRoutineAddress`, and an import
+either one cannot resolve blocks the load there. So both architectures
+resolve `IoConnectInterruptEx` and `IoDisconnectInterruptEx` at run time
+from the kernel image's export table, only when
+`IoIsWdmVersionAvailable(6, 0)` is TRUE, at PASSIVE_LEVEL in the start:
+
+1. **The image base.** Start from the address the driver's own import of
+   `KeInsertQueueDpc` resolved to - a nonpaged routine of `ntoskrnl` on
+   every NT 6.x kernel, so its page and every page below it down to the
+   image's first are nonpaged code, read-only data or the headers, never
+   a discarded `INIT` page. Round down to 4 KB and step down one page at a
+   time, at most `XHCI_MSI_WALK_MAX` (32 MB) in all, to the first page
+   that begins with `MZ`, whose `e_lfanew` lies inside the page, whose PE
+   signature, machine (`IMAGE_FILE_MACHINE_I386` or `AMD64`, the build's
+   own) and optional header magic match, and whose `SizeOfImage` covers
+   the starting address. A page that fails any test is not the base; the
+   walk ends, failed, at the bound.
+2. **The exports.** The export directory from the data directory, checked
+   against `SizeOfImage` field by field (`NumberOfNames`, the three
+   arrays, every name's RVA and terminator) before it is read; names
+   compared byte by byte, at most 64 bytes each; a function RVA that falls
+   inside the export directory is a forwarder, and refused; an RVA outside
+   the image refused.
+3. **The parser is pure** (`xhci_msi.c`, host vectors in `test_msi` fed
+   synthetic images: a good image, each header check failing, truncated
+   arrays, a name not terminated in bounds, a forwarder, an ordinal out of
+   range). The kernel side only supplies the base and a reader bounded by
+   `SizeOfImage`.
+
+When either routine is not found, a line resource connects through
+`IoConnectInterrupt` as today, and a message resource polls with "message
+not connected". WDK 7.1's `iointex.lib` (`WdmlibIoConnectInterruptEx`) was
+considered for amd64 and not taken: one host-tested walk for both
+architectures, and no further third-party object in the amd64 image.
+
+**The connection.** Under a message grant, `IoConnectInterruptEx` with
+`Version = CONNECT_MESSAGE_BASED` (3), the PDO, the message ISR, the
+controller as context, a spin lock of the driver's own, the synchronize
+IRQL 0 (the system's choice), and `FallBackServiceRoutine` the line ISR,
+for a grant Windows turned back into a line. On return `Version` says
+which was connected: `CONNECT_MESSAGE_BASED` is a message delivery,
+`CONNECT_LINE_BASED` (2) a line delivery with the reason "automatic"
+(the line rules of section 4 and 4.2 then apply, watcher included), and a
+failure status polls with "message not connected". The structure layouts
+(`IO_CONNECT_INTERRUPT_PARAMETERS`, `IO_DISCONNECT_INTERRUPT_PARAMETERS`,
+`IO_INTERRUPT_MESSAGE_INFO`) are declared from WDK 7.1's `wdm.h` with
+compile-time size checks for both architectures, since the Windows 2000
+DDK has none of them. `IoDisconnectInterruptEx` is called at the stop with
+the same `Version` the connection returned, in place of
+`IoDisconnectInterrupt`. A line resource on NT 6.x keeps
+`IoConnectInterrupt` (no change on the line path).
+
+**MSI or MSI-X.** The message resource does not say which capability
+Windows enabled. After the connection the start walks the controller's PCI
+capability list (bounded at 48 entries, each pointer checked to lie in
+40h-FCh and be DWORD-aligned) for MSI (ID 05h, Message Control bit 0, MSI
+Enable) and MSI-X (ID 11h, Message Control bit 15, MSI-X Enable), and
+records which is enabled: MSI-X when its bit is set, else MSI when its bit
+is set, else "message, capability not read" - the delivery is still the
+message, and the record says the read did not settle which. The walk is a
+pure function over the configuration bytes, host-tested beside the export
+walk.
+
+**The ISR.** `hcdMsgIsr(Interrupt, Context, MessageId)` does what the line
+ISR does - `XhciIsr`, EINT then IP acknowledged, `IE` written 0, the drain
+queued under the same admission - and returns TRUE whatever `XhciIsr`
+says: a message is never shared, so the "not ours" answer that lets a
+shared line's other ISRs run has no meaning, and returning FALSE would be
+counted by the system as an unclaimed interrupt. `XhciIsr`'s own gates
+(the window not decoded, the controller not admitted) still keep it from
+touching a register it must not. The drain re-arms `IE` as under a line;
+the moderation interval applies unchanged.
+
+**What follows from a message delivery:**
+- The dead-line rule does not apply (section 4.1: `IP` is cleared by the
+  message write itself); the poller stays CLOSED.
+- The routing quirk writes nothing (36.3; `hc->IntDelivery` is message).
+- The core's interrupt-bit gate treats a message as an interrupt resource,
+  and its pin-0 refusal is skipped: a controller with pin 0 that Windows
+  gave a message is served by it.
+
+**What is recorded** (section 8): the delivery (MSI, MSI-X, line or poll)
+and its reason in the counter block and the start's log note; the walk's
+outcome (found, not found, and at which step it failed); the message count
+granted; the capability read. `XHCISNAP` names each (36.9).
+
+**Legs** are 36.16's: QEMU's `qemu-xhci` with `msi=on,msix=off`,
+`msi=off,msix=on` and the launchers' default, under modes 0 and 3, read
+as MSI, MSI-X and whatever Windows granted; `MSISupported` 0 read as the
+line; mode 1 under a grant read as the message with its log note; a
+`qemu`-flavour failed connection read as polling with its reason; and the
+down-level targets reading as the release before it.
 
 ## 5. The poller's lifecycle
 
 ### 5.1 The objects
 
 - `PollTimer` and `PollTimerDpc`: a `KTIMER` and the `KDPC` given only to
-  `KeSetTimer`. The timer's DPC drains, decides the next deadline and
-  re-arms.
+  `KeSetTimer`. The timer's DPC drains (or, in the watch role, looks),
+  decides the next deadline and re-arms.
 - `IsrDpc`, which no ISR queues under a poll delivery, is the DPC the
   opportunistic checks queue explicitly, with `DpcsInFlight` counted before
   the queue as `hcdIsr` does. One `KDPC` is never handed to both the timer
   and `KeInsertQueueDpc` (Microsoft's `CustomTimerDpc` guidance).
 - `PollLock`, a spin lock, guarding the poller's state (section 5.2), its
-  deadline `PollDue`, and `PollOwed`, the earliest deadline asked for while
-  the timer's DPC owned the poller.
+  role, its deadline `PollDue`, and `PollOwed`, the earliest deadline asked
+  for while the timer's DPC owned the poller.
 - `PollService`, in the core's extension and written only under the
   controller lock: 1 while the controller is running and its event ring may
-  be drained by a poll, 0 otherwise (section 5.3).
+  be drained or watched by the poller, 0 otherwise (section 5.3).
+- The pure state of all of this - the state, the role, the deadlines, the
+  watcher's count and the counters of section 8 - is one structure in
+  `xhci_poll.h` (`XHCI_POLL_STATE`) driven by pure functions in
+  `xhci_poll.c`, so `test_poll` runs every transition below with the kernel
+  calls stubbed; `hcd_poll.c` holds the timer, the DPC and the locks and
+  calls them.
 
 **Lock order: the controller lock, then `PollLock`; never the reverse.**
 Neither is held across a drain, and `TimerLock` is never taken with
@@ -334,33 +627,60 @@ under `PollLock`:
 |---|---|---|
 | PARKED | nobody | no arm, no DPC; the controller is not in service, or the poller has not started |
 | ARMED | the timer | `KeSetTimer` has been called and the DPC has not yet taken ownership |
-| FIRING | the DPC | the DPC has taken ownership and is draining or deciding |
+| FIRING | the DPC | the DPC has taken ownership and is draining, looking or deciding |
 | CLOSING | the DPC | as FIRING, but close has been asked; the DPC ends it |
 | CLOSED | nobody | closed; nothing touches the poller until a start reopens it |
 
+**The role** (2026-10-09; Codex review of `6cac234`) is not a state. The
+states say who owns the timer; the role, `PollRole` under `PollLock`, says
+what the DPC does while it owns it:
+
+| Role | Opened by | The DPC | Period |
+|---|---|---|---|
+| WATCH | a start whose effective mode is 0 under a line delivery | looks (section 4.2), never drains | `XHCI_POLL_WATCH_MS` |
+| SERVE | a start under a poll delivery, or the move of section 4.2 | drains (section 6) | section 6's |
+
+The role is set when the poller is opened and changed only by its owner,
+the DPC, from WATCH to SERVE at the move; nothing changes it back. Every
+rule of this section and of section 5.3 applies to both roles unchanged -
+the opening, the ownership, the promotion's arm-taking, the park and kick,
+the close - except that promotions (section 6.2) and the opportunistic
+checks (section 7.1) run under a poll delivery only, so a watcher is never
+promoted and never peeked for.
+
 - **Initial state, and reopening.** The controller object outlives a stop:
   its synchronisation objects are initialised once
-  (`HcdControllerInitObjects`, `hcd_ctl.c:330`), every start reopens the
-  timer service and the DPC admission (`hcd_ctl.c:734-735`), and the start's
-  zeroing of the core's extension (`hcd_ctl.c:667`) does not reach fields
-  held in `hc`. So `PollTimer`, `PollTimerDpc` and `PollLock` are
-  initialised there with the other objects, and the state starts CLOSED. A
-  start under a poll delivery **opens** the poller beside
-  `HcdTimersOpen`: under `PollLock`, CLOSED becomes PARKED and `PollDue` and
-  `PollOwed` are marked invalid; it is the only way out of CLOSED, and it is
-  taken only after the previous release has seen CLOSED (the close below),
-  so a disable and enable, or a start that failed and is retried,
+  (`HcdControllerInitObjects`), every start reopens the timer service and
+  the DPC admission (`HcdTimersOpen`, `DpcClosed` 0), and the start's
+  zeroing of the core's extension does not reach fields held in `hc`. So
+  `PollTimer`, `PollTimerDpc` and `PollLock` are initialised there with the
+  other objects, and the state starts CLOSED. A start whose delivery is
+  poll, or whose effective mode is 0 under a line delivery, **opens** the
+  poller beside `HcdTimersOpen`: under `PollLock`, CLOSED becomes PARKED
+  with the start's role, the watcher's count is cleared, and `PollDue` and
+  `PollOwed` are marked invalid. It is the only way out of CLOSED, and it
+  is taken only after the previous release has seen CLOSED (the close
+  below), so a disable and enable, or a start that failed and is retried,
   begins from a drained poller. The kick at the end of a successful start
-  (section 5.3) then arms it. A start under a line delivery leaves it
-  CLOSED in mode 1; in effective mode 0 it opens it the same way, in the
-  watch role of section 4.2 (2026-10-09), whose ownership, park, kick and
-  close are this section's and section 5.3's unchanged (designed in 36.5). A failed start runs the same release as a stop, which closes it
-  from whatever state it reached.
+  (section 5.3) then arms it. A start in mode 1, a start under a message
+  delivery, and a start that fails before it opens it, leave it CLOSED. A
+  failed start runs the same release as a stop, which closes it from
+  whatever state it reached.
 - **The DPC takes ownership** as it starts: under `PollLock`, ARMED becomes
-  FIRING (CLOSING stays CLOSING), and `PollOwed` is cleared.
-- **The DPC gives it up** as it ends, under `PollLock` (section 5.3 for the
-  park): CLOSING becomes CLOSED; otherwise it arms at the earlier of its own
-  decision and `PollOwed` and the state becomes ARMED.
+  FIRING (CLOSING stays CLOSING), and `PollOwed` is cleared. A DPC that
+  finds CLOSED or PARKED - which no arm can leave behind, since only the
+  owner or a party holding the arm back sets the timer - does nothing.
+- **The DPC's pass.** In CLOSING it does nothing more and ends. Otherwise,
+  under the controller lock, it reads the admission of section 5.3; not
+  admitted, it parks (section 5.3) and ends. Admitted: in the watch role it
+  looks (section 4.2) and, if the line is proven dead, makes the move and
+  continues as a server in the same pass; in the service role it releases
+  the controller lock and drains with `XhciEventDpc(ext, FALSE)`, wakes the
+  thread on a port event as `hcdIsrDpc` does, and takes section 6's
+  decision under the controller lock again.
+- **The DPC gives it up** as it ends, under `PollLock`: CLOSING becomes
+  CLOSED; otherwise it arms at the earlier of its own decision and
+  `PollOwed`, converted as section 6.2 says, and the state becomes ARMED.
 - **Only the owner, or a party that has taken the arm back, calls
   `KeSetTimer`.** A promotion (section 6.2) in ARMED takes the arm back with
   `KeCancelTimer`: TRUE means the timer was still queued and no DPC will
@@ -370,13 +690,16 @@ under `PollLock`:
   records in `PollOwed`. No external `KeSetTimer` ever runs while a DPC owns
   the poller, so there is never a second callback.
 - **Close** (release, at PASSIVE_LEVEL, where the interrupt disconnect is
-  today), under `PollLock`: PARKED becomes CLOSED; ARMED with `KeCancelTimer`
-  TRUE becomes CLOSED; ARMED with FALSE, and FIRING, become CLOSING, and the
-  DPC finishes the close. Release then waits for CLOSED, acquires and
-  releases `PollLock` once more so the DPC's last release of it has
-  happened, and only then goes on to `DpcClosed`, the `DpcsInFlight` wait
-  and the timer and DMA drains. What the DPC does after that last release is
-  return - the same residual the `DpcsInFlight` decrement already accepts.
+  today, and after it), under `PollLock`: PARKED becomes CLOSED; ARMED with
+  `KeCancelTimer` TRUE becomes CLOSED; ARMED with FALSE, and FIRING, become
+  CLOSING, and the DPC finishes the close. Release then waits for CLOSED,
+  in 1 ms delays as it waits `DpcsInFlight`, acquires and releases
+  `PollLock` once more so the DPC's last release of it has happened, and
+  only then goes on to `DpcClosed`, the `DpcsInFlight` wait and the timer
+  and DMA drains. What the DPC does after that last release is return -
+  the same residual the `DpcsInFlight` decrement already accepts. The
+  watcher closes the same way: a close against a watcher's expiry is the
+  ARMED-with-FALSE row.
 - **A peek's queueing of `IsrDpc`** increments `DpcsInFlight` under
   `PollLock` only while the state is neither CLOSING nor CLOSED, before
   `KeInsertQueueDpc`, and undoes the count if the DPC was already queued.
@@ -390,32 +713,46 @@ evidence here for one.
 
 `PollService` is the poller's admission to the hardware, separate from the
 core's own flags. `INITIALIZED` is published before the controller is run
-(`xhci_init.c:4999`, then `xhciRunController` at `:5004`), and `RUNNING`
-before the run bit is written (`:1362-1363`), so neither proves the
-controller runs.
+(`XhciInitController`, then `xhciRunController`), and `RUNNING` before the
+run bit is written, so neither proves the controller runs.
 
-- **Set** under the controller lock after the controller is running: at the
-  end of a successful start, of the restoring resume (near
-  `xhci_init.c:3805`), of the reinitialising resume (near `:3911`) and of a
-  successful in-place recovery (near `:4162`) - outside the
+- **Set** under the controller lock after the controller is running,
+  through one HCD service the core calls (`HcdSvcPollService(ext, 1)`,
+  DISPATCH_LEVEL, controller lock held): at the end of a successful start
+  (in `hcdStartBody`, after `XhciInitController` returned success and,
+  under a line delivery, after `XhciEnableInterrupts`), of the restoring
+  resume and of the reinitialising resume (`xhci_init.c`, where each
+  publishes its run), and of a successful in-place recovery - outside the
   `XHCI_EXT_FLAG_INTERRUPTS` branches at those sites, since that flag is
   clear under a poll delivery.
 - **Cleared** under the controller lock before anything quiesces, resets,
-  suspends or stops the controller.
-- **Checked inside the drain's own locked admission**, under a poll delivery
-  only: `XhciEventDpc` refuses a poll drain while it is 0, under the same
-  controller-lock hold in which it would drain, not in a wrapper that drops
-  the lock first. The peek checks it the same way (section 7.1).
+  suspends or stops the controller: wherever `INITIALIZED` is cleared
+  (`XhciControllerUpdateFlags` clears `PollService` in the same hold when
+  it clears `INITIALIZED`, and so does every site that clears the flag
+  directly), which covers the start's and the recovery's
+  `XhciInitController` entry, the quiesce of a suspend, a stop and a
+  failed recovery.
+- **The admission** of the poller's DPC and of a peek is `PollService` 1,
+  `ControllerFailed` 0 and the drain admission the backstop uses
+  (`hcdDrainAdmitted`: the window decoded, D0, the DPC open, the event ring
+  present), read in one controller-lock hold. A failed controller is not
+  served: its DPC parks, and the recovery that clears the failure kicks.
+- **Checked inside the drain's own locked admission**, under a poll
+  delivery only: `XhciEventDpc` refuses a drain while `PollService` is 0,
+  under the same controller-lock hold in which it would drain, not in a
+  wrapper that drops the lock first. Under a line delivery the drain's
+  admission is unchanged.
 
 **Park and kick are serialised by the controller lock.**
 
-- The timer DPC, finding `PollService` 0 under the controller lock, takes
-  `PollLock` inside that hold and parks: FIRING becomes PARKED. It drains
-  nothing.
+- The timer DPC, finding itself not admitted under the controller lock,
+  takes `PollLock` inside that hold and parks: FIRING becomes PARKED, and
+  the watcher's count is cleared. It drains and looks at nothing.
 - Each `PollService` set site, in the same controller-lock hold that sets
-  it, takes `PollLock` and **kicks**: PARKED becomes ARMED at the active
-  period. In ARMED or FIRING the kick does nothing, since the owner will see
-  `PollService` 1.
+  it, takes `PollLock` and **kicks**: PARKED becomes ARMED at the role's
+  first period (the active period for a server, the watch period for a
+  watcher). In ARMED or FIRING the kick does nothing, since the owner will
+  see `PollService` 1. In CLOSING or CLOSED it does nothing.
 
 Both decisions are taken inside one hold of the controller lock, so either
 the DPC parks first and the kick finds PARKED and arms, or the kick sets
@@ -424,6 +761,14 @@ the DPC parks first and the kick finds PARKED and arms, or the kick sets
 The timer service's own close (`TimersClosed`) is not used for any of
 this: the controller's initialisation needs the timer service during
 recovery.
+
+**Host vectors** (`test_poll`, beside section 11's list): a watcher's close
+against its own expiry (ARMED with `KeCancelTimer` FALSE, then the DPC
+finishing CLOSING); a watcher across the in-place recovery (cleared
+`PollService`, the park, the count cleared, the kick re-arming at the watch
+period) and across D3 and back; a move made in the same pass as a close
+asked (the move recorded, CLOSING ended, nothing re-armed); and a kick in
+each state.
 
 ## 6. The adaptive period (pure core, `xhci_poll.c`)
 
@@ -449,13 +794,57 @@ The bounded-drain clause replaces what an interrupt did for a drain that
 stopped at its bound: the interrupt would have fired again; here the next
 poll comes at the active period.
 
+**The inputs**, gathered by the service DPC in the controller-lock hold
+that follows its drain, so each is the drain's own state (`hcd_poll.c`,
+then handed to the pure `XhciPollDecidePeriod`):
+
+- **A command:** `CommandState` not `XHCI_CMD_STATE_IDLE`.
+- **TDs outstanding:** a walk of `hc->SlotDevice[1..MaxSlots]`. For each
+  device, its EP0 queue (the thread's and the URBs' control transfers);
+  each open pipe in `Pipes[]` with records on its queue, by its transfer
+  type - control, bulk or isochronous is ACTIVE, interrupt contributes its
+  service interval; and for an endpoint with streams open, each live
+  stream's pipe the same way. The hub status transfer contributes nothing
+  shorter than the idle period. The walk reads pointers and counts that
+  the event path and the submissions write under the same lock; it is
+  bounded by `MaxSlots` x 31 pipes and stops at the first ACTIVE input.
+- **A port in reset or enumeration:** any root or hub port object whose
+  machine is between `XHCI_ENUM_DEBOUNCE` and `XHCI_ENUM_CONFIG_FULL`, or
+  in `XHCI_ENUM_BOS5` or `XHCI_ENUM_BOS_FULL`.
+- **An event drained within the last idle period:** `EventsTotal`
+  compared with the value the previous pass saw; a change stamps the time
+  (the low word of `KeQuerySystemTime`), and the clause holds while less
+  than the idle period has passed since the stamp.
+- **A drain stopped at its bound:** `DrainBoundHits` moved during this
+  pass's drain and `XhciEventRingPending` still reads an event.
+
+An interrupt endpoint's service interval is its Endpoint Context
+`Interval` as programmed (`pipe->Ep.Interval`, after any fast polling or
+interval cap): `2^Interval` x 125 us (Table 6-12), in whole milliseconds
+rounded down; below 1 ms it is the active period.
+
 ### 6.2 Promotion
 
 A submission whose need would bring the next poll earlier brings it
 earlier, and never later. Deadlines, not periods, are compared.
 
-- A control, bulk or isochronous TD, or a command, needs the active period;
-  an interrupt TD needs its endpoint's interval. Its deadline is now plus
+- **Where.** Every doorbell this driver rings goes through
+  `XhciWriteDoorbell` (`xhci_pci.c`), and every caller holds the
+  controller lock: the URB path (`hcd_io.c`), the thread's EP0 and hub
+  transfers (`hcd_enum.c`, `hcd_hub.c`), the endpoint restarts
+  (`hcd_cfg.c`), the isochronous underrun (`hcd_dev.c`), the `qemu`
+  flavour's injection (`hcd_inj.c`) and the command submit
+  (`xhci_cmd.c`). After the write that function calls one HCD service,
+  `HcdSvcDoorbell(ext, slot, value)`; under a poll delivery it promotes
+  and then peeks (section 7.1), under any other it returns at once. Its
+  IRQL contract becomes its callers' own: DISPATCH_LEVEL, controller lock
+  held.
+- **The need.** Doorbell 0 (a command), a control endpoint (DCI 1), or a
+  bulk or isochronous endpoint needs the active period; an interrupt
+  endpoint's needs its service interval (section 6.1), found from
+  `hc->SlotDevice[slot]` and the DCI in the doorbell value. A slot or DCI
+  the lookup cannot place needs the active period, which costs at most one
+  early poll. Its deadline is now plus
   the need, in the low word of `KeQuerySystemTime`, compared by signed
   difference (no 64-bit arithmetic; a deadline the poller makes is within
   5 s, far inside the word's lap of about 429 s, and one a clock step has
@@ -546,11 +935,19 @@ event not yet drained.
   lost-interrupt backstop (record 17 section 4.1, `hcd_ctl.c`
   `hcdBackstop`) already takes this peek, under the same lock, on each
   controller-thread pass; these checks reuse the helper with their own
-  staleness rule.
-- **Where**: on the URB submission path while the controller lock is still
-  held for the doorbell (`hcd_io.c:1208`); at the end of each drain, for
-  transfers a completion routine resubmitted; on each controller-thread pass
-  and health poll; and in the frame timer's DPC.
+  staleness rule, which is none: a hit queues the drain at once, since
+  under a poll delivery nothing else will come for it before the next
+  poll. A hit while `IsrDpc` is already queued costs nothing
+  (`KeInsertQueueDpc` answers FALSE and the count is undone).
+- **Where**: after every doorbell, in `HcdSvcDoorbell` (section 6.2), with
+  the controller lock still held for it - which covers the URB submission
+  path, a completion routine's resubmission inside the drain's deferred
+  work, the thread's own transfers and the command submit; at the end of
+  each drain `IsrDpc` runs, in its own controller-lock hold after
+  `XhciEventDpc` returns (the service DPC needs none: its decision sees
+  the bounded clause); on each controller-thread pass (`hcdPoll`, beside
+  the backstop); and in the frame timer's DPC (`hcdFrameDpc`, in the hold
+  it already takes).
 - **On a hit**: queue `IsrDpc` under the admission rule (section 5.2). Never
   drain inline: a drain completes IRPs, a class driver's completion routine
   resubmits, the submission would peek again, and the recursion would run
@@ -562,14 +959,37 @@ today's code.
 
 ## 8. Counters and log
 
-In the counter block: the value of `XhciInterruptMode` as read, the
-delivery in effect and its reason (section 4), the pin and its read status,
-the two periods as read and in effect, the period last armed and the state
-that chose it, poll runs,
-poll runs that found an event, peeks and peek hits, promotions, parks and
-kicks, and the shortest and longest interval observed between two poll runs
-with the count of discarded intervals (section 7). One bounded log line at
-start with the delivery and its reason; nothing per poll.
+In the counter block (`XHCIHC_COUNTERS`, `src/xhci_counters.h`, appended
+after its last word, so an older `XHCISNAP` walks past them by the HCD
+region's own sizes and prints them as numbered counters): the value of
+`XhciInterruptMode` as read (`0xFFFFFFFF` when not found) and the effective
+mode; the delivery in effect and its reason (section 4); the pin and its
+read status; the two periods as read and in effect; the poller's role; the
+period last armed and the state that chose it; poll runs, and poll runs
+that found an event; peeks and peek hits; promotions, parks and kicks;
+arms replaced as displaced (section 6.2); the shortest and longest interval
+observed between two poll runs with the count of discarded intervals
+(section 7); and the watcher's looks, asserted looks, stale pairs, the move
+(0 or 1) and whether the mask at the move was proven. The delivery and the
+reason are written at start and again at the move, under the controller
+lock; the poller's counters under the controller lock or `PollLock`, as
+each site holds.
+
+The codes, in `xhci_poll.h`: delivery 0 none (a failed start), 1 line, 2
+poll, 3 MSI, 4 MSI-X, 5 a message whose capability was not read; reason 1
+automatic, 2 automatic with the pin unreadable, 3 automatic: interrupt pin
+0, 4 automatic: no interrupt resource, 5 forced line, 6 forced line with
+the pin unreadable, 7 forced, no interrupt (the start fails), 8 forced
+poll, 9 automatic: line interrupt not delivered (the move), 10 automatic:
+message, 11 line asked for, message granted, 12 message not connected; pin
+status 0 not read, 1 read, 2 unreadable.
+
+The log ring's notes: at start `intr.mode.read`, `intr.mode`,
+`intr.delivery`, `intr.reason`, `intr.pin`, `poll.idle.ms` and
+`poll.active.ms`; at the move `intr.moved` (the stale pairs that proved it)
+and `intr.moved.masked`. Nothing per poll or per look. The stop's counter
+dump (`hcdLogCountersLocked`) carries the delivery, the reason and the
+poller's and watcher's counters by the same `intr.*` and `poll.*` names.
 
 **The delivery in effect must be capturable** (owner, 2026-10-05): a user
 on a machine that polls automatically and one forced to poll must be told
@@ -679,13 +1099,34 @@ and that flavour is never published.
 - **The pin's read failing**, by a `qemu`-flavour switch beside the
   no-interrupt one: with a resource present, modes 0 and 1 run the line
   interrupt as today, with the reason "pin unreadable".
+- **The dead line (section 4.2)**, by a third `qemu`-flavour switch,
+  `XhciQemuDeadLine` N: from N ms after the start's kick, the ISR still
+  acknowledges what it claims but queues no drain and counts no claim, and
+  the watcher's look reads `IMAN` and `USBCMD` as asserted whenever an event
+  waits at the dequeue. It is a stand-in, said as one: QEMU's level line
+  cannot be held asserted with no ISR claiming it without an interrupt
+  storm that would stop the guest. Read under mode 0 as the move, with its
+  reason and `intr.moved`, and devices working after it; under mode 1 as no
+  move. Two legs: N = 0, a line dead from the first No Op (with
+  `XhciQemuStartHold` and a device present at boot, read as the BUSY retry
+  meeting the move); and N chosen to fall inside a command wait of a
+  hot-plugged device's enumeration, read as the wait ending by the move's
+  drain rather than by its timeout.
+- **The watcher on a working line**, every target in mode 0: looks counted,
+  no asserted look held into a stale pair, no move, and the matrix
+  unchanged from the release before it.
+- **The switches' names** (the `qemu` flavour only, written by no INF, read
+  at every start): `XhciQemuNoInterrupt` 1 drops the interrupt resource and
+  reports the pin 0, `XhciQemuPinUnreadable` 1 fails the HCD's pin read,
+  and `XhciQemuDeadLine` as above.
 - **The period observed** per target, from the counters.
 - **Line against poll** on the same guest: a storage copy rate, audio
   continuity, and the guest's idle CPU load.
-- **The default on a pin**: mode 0 reading as the Phase 34 build
-  (the matrix unchanged), and mode 1 the same, on a target without MSI and
-  on Vista and 7 with `MSISupported` 0 (section 4.3); with a message
-  granted, both read as the message.
+- **The default on a pin**: mode 0 reading as the release before it (the
+  matrix unchanged; on Vista and 7 x86 and x64, where the INF now asks for
+  MSI, with `MSISupported` 0), and mode 1 the same, on a target without
+  MSI and on Vista and 7 with `MSISupported` 0 (section 4.3); with a
+  message granted, modes 0, 1 and 3 read as the message.
 
 Bench (POLL-E, owner): mode 2 on the E460 and the P14s Gen 1 under Windows 98
 SE, and an MSI-only controller if one is at hand. The synthetic no-interrupt
@@ -760,6 +1201,11 @@ Taken by the owner on 2026-10-05, each from options with a recommendation:
 Converged (review round 4, 2026-10-05): one wording finding, the roadmap's
 Phase 35 status still naming revision 3, taken. No finding in the reopen,
 the deadline conversion, the phase split or the cross-references.
+
+### 13.5 Revision 5 (task 36.5)
+
+Reviewed 2026-10-09 in 36.5's loop; the findings of each round and where
+each was answered are added here as the rounds return.
 
 ## 14. What changes in the documents
 
