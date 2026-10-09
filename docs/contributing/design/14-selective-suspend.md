@@ -1,9 +1,13 @@
 # Selective suspend for the HCD
 
-Design record for roadmap-hcd's planned selective suspend work (tasks
-`SUSP.*`, `SUSPa.*`, `SUSPb.*`; drawn up as Phase 36, unnumbered since
-2026-10-06 until the owner opens it, and its review history keeps the old
-phase numbers). DRAFT, revision 10,
+Design record for roadmap-hcd's selective suspend work (tasks
+`SUSP.*`, `SUSPa.*`, `SUSPb.*`; drawn up as Phase 36, unnumbered from
+2026-10-06, and since 2026-10-09 (owner) Phase 36's tasks 36.28 to 36.41:
+SUSP.1 is 36.28, SUSPa.1 to SUSPa.6 are 36.29 to 36.34, SUSPa-V and
+SUSPa-E 36.35 and 36.36, SUSPb.1, SUSPb.2, SUSPb-V and SUSPb-E 36.37 to
+36.40, SUSP.2 is 36.41, and SUSP.3 and SUSP.4 joined 36.20 and 36.final.
+This record keeps the old ids, and its review history the old phase
+numbers). DRAFT, revision 10,
 2026-10-05: written at the owner's request to solve the known limitation "the
 driver never initiates selective suspend" (roadmap-hcd decisions table, row
 "The idle power policy (28.3)"; release notes, "Known limitations"). Reviews
@@ -595,11 +599,13 @@ returned. A remote wake ends it through the woken function's D0.
 ## 7. The switch
 
 `XhciSelectiveSuspend`, REG_DWORD under the controller's driver key, read at
-start like `XhciFirstEnumWaitMs`. **Default 1** (owner, 2026-10-05, over
-review round 2's advice of 0): sections 3 to 6 are on for every user of the
-release that carries them. 0 is today's behaviour bit for bit (capabilities,
-WAIT_WAKE refused, idle callbacks never called, Dx recorded only) and is the
-escape a user is told about in the release notes. The INF writes nothing; the
+start like `XhciFirstEnumWaitMs`. **Default 0** (owner, 2026-10-09, when
+the work joined Phase 36; it was default 1 from 2026-10-05, over review
+round 2's advice of 0): 0 is today's behaviour bit for bit (capabilities,
+WAIT_WAKE refused, idle callbacks never called, Dx recorded only), so the
+release that carries sections 3 to 6 changes nothing for a user who does
+not set the value, and 1 turns them on - what the release notes tell a user
+who wants it. The INF writes nothing; the
 INF gate's SUSP-* rules stand.
 
 ## 8. Stage B outline (SuperSpeed), designed after stage A's readings
@@ -761,7 +767,8 @@ Revision 9's review found 1; revision 10 takes it:
 
 ## 11. Decisions
 
-- The switch defaults to 1 (owner, 2026-10-05; section 7).
+- The switch defaults to 0 (owner, 2026-10-09, replacing 2026-10-05's
+  default 1; section 7).
 - Stage A's checkpoint includes the owner's bench reading (owner,
   2026-10-05): a real remote-wake HID device on a 98 SE machine and on the
   E460's Windows 7.
