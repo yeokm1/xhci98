@@ -118,7 +118,11 @@ typedef struct _XHCI_SUSP_FUNC {
     ULONG WokeHold;         /* a wake completed this PDO's WAIT_WAKE: the
                              * device is not suspended again until it is
                              * D0 or closed (3.9); set by the executor at
-                             * the claim, cleared here                   */
+                             * the claim, cleared here - and by dispatch
+                             * in the hold in which it writes PwrState D0
+                             * (XhciSuspAdmit's *newState D0), so a D0 and
+                             * a fresh Dx between two passes still ends
+                             * it (round 2, finding 2)                   */
     /* outputs of XhciSuspDecide */
     ULONG CompleteDx;       /* claim and complete the pended Dx, SUCCESS */
     ULONG ToD0;             /* write PwrState D0: the link is ACTIVE and
@@ -236,6 +240,8 @@ ULONG XhciSuspDecide(PXHCI_SUSP_LINK link, PXHCI_SUSP_FUNC funcs,
 #define XHCI_SUSP_STEP_GATE         1UL /* close the gate (3.2)           */
 #define XHCI_SUSP_STEP_ARM          2UL /* SET_FEATURE(DEVICE_REMOTE_WAKEUP) */
 #define XHCI_SUSP_STEP_STOP         3UL /* Stop Endpoint SP=1, every one  */
+/* Before the U3 request the executor acknowledges a stale PLC (root) or
+ * C_PORT_SUSPEND (hub), so the observation reads this suspension's. */
 #define XHCI_SUSP_STEP_U3           4UL /* root: PLS=U3; hub:
                                          * SetPortFeature(PORT_SUSPEND)   */
 #define XHCI_SUSP_STEP_OBSERVE      5UL /* poll, bounded *waitMs          */
@@ -298,6 +304,18 @@ ULONG XhciSuspAdvance(PXHCI_SUSP_LINK link, ULONG result, ULONG nowMs,
  * recovery's caller's), else GONE. */
 VOID XhciSuspRecovered(PXHCI_SUSP_LINK link, ULONG ok);
 
+/*
+ * A refusal's latch (3.9): when a sequence ends ACTIVE with LatchDue set -
+ * a refusal, or XhciSuspRecovered(1) - the executor calls this with the
+ * device's slots IN THE SAME controller-lock hold in which that ACTIVE
+ * became visible to dispatch (the Advance or Recovered call that wrote it),
+ * so a slot change dispatch makes afterwards is a change against the
+ * baseline (Codex review of 36.29, round 2, finding 4). Does nothing when
+ * no latch is due.
+ */
+VOID XhciSuspLatch(PXHCI_SUSP_LINK link, const XHCI_SUSP_FUNC *funcs,
+                   ULONG count);
+
 /* The device is gone (unplug, invalidation): GONE from any state. */
 VOID XhciSuspGone(PXHCI_SUSP_LINK link);
 
@@ -328,9 +346,11 @@ ULONG XhciSuspHubEvidence(const XHCI_SUSP_LINK *link, ULONG status,
  * then, in the same hold, reads hc->WakeSeq as the watermark, claims the
  * WAIT_WAKEs XhciSuspWakeClaims names (setting each claimed PDO's
  * WokeHold) and reports how many with XhciSuspWakeCount, and begins
- * RUN_WAKE. Evidence while SUSPENDING is kept (WakeKept) and taken once
- * the U3 request is done - without waiting to see it again - which sets
- * ClaimDue the same way. Evidence while RESUMING is ignored. A DISCONNECT
+ * RUN_WAKE. A wake sample while SUSPENDING counts only during the
+ * observation (before the U3 request it is an earlier suspension's): it
+ * is kept (WakeKept) and taken when the observation reports, whatever it
+ * reports but a disconnect, which sets ClaimDue the same way. Evidence
+ * while RESUMING is ignored. A DISCONNECT
  * makes the link GONE at once outside a sequence; inside one it is kept
  * (GoneKept) and the sequence's next step ends GONE, ahead of any wake.
  */

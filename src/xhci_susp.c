@@ -228,14 +228,11 @@ ULONG XhciSuspDecide(PXHCI_SUSP_LINK link, PXHCI_SUSP_FUNC funcs,
 
     switch (link->State) {
     case XHCI_SUSP_ACTIVE:
+        /* The baseline is XhciSuspLatch's, taken in the hold that wrote
+         * ACTIVE; one still due here (an executor that did not) is taken
+         * now, late but never lost. */
+        XhciSuspLatch(link, funcs, count);
         digest = XhciSuspDigest(funcs, count);
-        if (link->LatchDue) {
-            /* The slots at the end of a refusal, or of an uncertain
-             * outcome that ended ACTIVE: no suspend on them. */
-            link->LatchDue = 0;
-            link->Latched = 1;
-            link->LatchDigest = digest;
-        }
         if (link->Latched && digest != link->LatchDigest) {
             /* The slots changed since: the latch is spent, whatever
              * they now ask. */
@@ -458,14 +455,6 @@ ULONG XhciSuspAdvance(PXHCI_SUSP_LINK link, ULONG result, ULONG nowMs,
         return xhciSuspRefuse(link, XHCI_SUSP_WHY_FAILED, nowMs, waitMs);
 
     case XHCI_SUSP_STEP_U3:
-        if (result == XHCI_SUSP_RES_OK && link->WakeKept) {
-            /* The wake already seen is the proof that the device entered
-             * U3 and left it: it is taken now, not waited for again at
-             * the observation, where its change may already be
-             * acknowledged (Codex review of 36.29, round 1, finding 7). */
-            link->U3Ms = nowMs;
-            return xhciSuspWakeBranch(link, nowMs, waitMs);
-        }
         if (result == XHCI_SUSP_RES_OK) {
             return xhciSuspStep(link, XHCI_SUSP_STEP_OBSERVE,
                                 XHCI_SUSP_OBSERVE_MS, nowMs, waitMs);
@@ -482,8 +471,13 @@ ULONG XhciSuspAdvance(PXHCI_SUSP_LINK link, ULONG result, ULONG nowMs,
             return xhciSuspEnd(link, XHCI_SUSP_SUSPENDED,
                                XHCI_SUSP_OUT_SUSPENDED, waitMs);
         }
-        if (result == XHCI_SUSP_RES_OK || result == XHCI_SUSP_RES_WAKE) {
-            /* Suspension happened and the device is already waking. */
+        if (result == XHCI_SUSP_RES_OK || result == XHCI_SUSP_RES_WAKE ||
+            link->WakeKept) {
+            /* Suspension happened and the device is already waking: seen
+             * now, or kept from a sample of this observation whose change
+             * is acknowledged since - taken whatever the poll then read,
+             * a timeout included (Codex review of 36.29, rounds 1 and 2,
+             * finding 7 and 3). */
             link->U3Ms = nowMs;
             return xhciSuspWakeBranch(link, nowMs, waitMs);
         }
@@ -548,6 +542,17 @@ ULONG XhciSuspAdvance(PXHCI_SUSP_LINK link, ULONG result, ULONG nowMs,
     }
     return xhciSuspEnd(link, XHCI_SUSP_RECOVERING, XHCI_SUSP_OUT_UNCERTAIN,
                        waitMs);
+}
+
+VOID XhciSuspLatch(PXHCI_SUSP_LINK link, const XHCI_SUSP_FUNC *funcs,
+                   ULONG count)
+{
+    if (!link->LatchDue) {
+        return;
+    }
+    link->LatchDue = 0;
+    link->Latched = 1;
+    link->LatchDigest = XhciSuspDigest(funcs, count);
 }
 
 VOID XhciSuspRecovered(PXHCI_SUSP_LINK link, ULONG ok)
@@ -654,7 +659,12 @@ ULONG XhciSuspEvidence(PXHCI_SUSP_LINK link, ULONG event)
         return 0;
     }
     if (link->State == XHCI_SUSP_SUSPENDING) {
-        link->WakeKept = 1;
+        /* Only a sample taken after this suspension's U3 request belongs
+         * to it: before it the link is U0, and a wake read then is an
+         * earlier suspension's (round 2, finding 1). */
+        if (link->Step == XHCI_SUSP_STEP_OBSERVE) {
+            link->WakeKept = 1;
+        }
         return 0;
     }
     if (link->State == XHCI_SUSP_SUSPENDED && !link->WakeTaken) {

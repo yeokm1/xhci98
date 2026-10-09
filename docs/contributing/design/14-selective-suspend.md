@@ -264,13 +264,17 @@ ask, and perform the one step asked. What it decides:
   the Stop Endpoint (SP=1's minimum, as 3.5). NOT_SENT at the arm is
   retried once: the repeated arm step carries a 100 ms bound on EP0's
   drain, which the executor's EP0-quiet wait must keep to, and a ring not
-  drained by then is NOT_SENT again, a refusal. Wake evidence arriving
-  while SUSPENDING is kept and taken as soon as the U3 request is done -
-  it is itself the proof that the device entered U3 and left it, and its
-  change may already be acknowledged, so it is not waited for again at
-  the observation; a wake observed at the observation is taken the same
-  way. Either is the device-initiated resume: at a root port TDRSMDN from
-  the PLC and then U0, at a hub the hub has timed it. A disconnect
+  drained by then is NOT_SENT again, a refusal. Before the U3 request the
+  executor acknowledges a stale PLC (root) or C_PORT_SUSPEND (hub), and
+  only wake evidence sampled during the observation belongs to this
+  suspension - before the request the link is U0 and a wake read then is
+  an earlier suspension's, ignored. Evidence of this observation is kept
+  and taken when the observation reports, whatever it then reads but a
+  disconnect - its change may be acknowledged already, so it is not
+  waited for again, and a timeout after it is not the uncertain outcome;
+  a wake the observation itself reads is taken the same way. Either is
+  the device-initiated resume: at a root port TDRSMDN from the PLC and
+  then U0, at a hub the hub has timed it. A disconnect
   reported while a sequence runs is kept too, and ends the sequence GONE
   at its next step, ahead of any wake (3.7's precedence). The disarm
   after a verified U0 is best effort - a STALL, NOT_SENT or failure is
@@ -287,8 +291,10 @@ ask, and perform the one step asked. What it decides:
 - **After a wake that claimed**: each PDO whose WAIT_WAKE the wake
   completed gets `WokeHold` (set by the executor at the claim, in the same
   hold), and the device is not suspended again while any PDO holds it; a
-  PDO's hold ends when its `PwrState` is D0 again, or when it is closed or
-  its device GONE. So the woken function's own D0, which its completion
+  PDO's hold ends when its `PwrState` is D0 again - cleared by dispatch in
+  the hold in which it writes D0, and by the thread when it does, so a D0
+  and a fresh Dx between two passes still end it - or when it is closed
+  or its device GONE. So the woken function's own D0, which its completion
   routine sends, finds the link ACTIVE instead of racing a re-suspend that
   would hold its input (5.4's "a remote wake ends it through the woken
   function's D0"), whatever its siblings do meanwhile. A function whose
@@ -296,8 +302,9 @@ ask, and perform the one step asked. What it decides:
   behaviour. A wake that claimed nothing (`WakeUnclaimed`) and 5.4's rearm
   are internal cycles and suspend again on the same pass.
 - **After a refusal** (3.5: "does not retry until the slots change"), and
-  after an uncertain outcome that ended ACTIVE: the slots the decision
-  after the sequence reads are latched by a digest of each PDO's
+  after an uncertain outcome that ended ACTIVE: the slots are latched, in
+  the same controller-lock hold in which that ACTIVE became visible to
+  dispatch (`XhciSuspLatch`), by a digest of each PDO's
   `PwrSeq`, `PwrState`, `PwrWanted`, pended D0, held WAIT_WAKE and
   closure - a pended Dx is not in it, since the machine completes that
   itself - and no suspend is begun until the digest moves. The change

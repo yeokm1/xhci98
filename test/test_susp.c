@@ -485,25 +485,39 @@ static void test_wake_at_observe(void)
     CHECK_EQ(link.State, XHCI_SUSP_ACTIVE, "ACTIVE");
     CHECK_EQ(link.LatchDue, 0, "a wake does not latch: WokeHold holds");
 
-    /* Evidence kept while SUSPENDING (a hub's C_PORT_SUSPEND, already
-     * acknowledged) is taken once the U3 request is done, without being
-     * seen again at an observation (round 1, finding 7). */
+    /* A wake sample before the U3 request is an earlier suspension's:
+     * ignored, and the new suspension is observed (round 2, finding 1). */
     XhciSuspLinkInit(&link, 0, 1);
     step = XhciSuspBegin(&link, XHCI_SUSP_RUN_SUSPEND, 1, 0, 0, &wait);
     CHECK_EQ(XhciSuspEvidence(&link, XHCI_SUSP_EV_WAKE), 0,
-             "SUSPENDING: kept, not yet the event");
-    CHECK_EQ(link.WakeKept, 1, "kept");
+             "SUSPENDING at the gate: not the event");
+    CHECK_EQ(link.WakeKept, 0, "an old sample: not kept");
     while (step != XHCI_SUSP_STEP_U3) {
         step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 1, &wait);
+        (VOID)XhciSuspEvidence(&link, XHCI_SUSP_EV_WAKE);
+        CHECK_EQ(link.WakeKept, 0, "not kept before the U3 request");
     }
     step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 2, &wait);
-    CHECK_EQ(link.State, XHCI_SUSP_RESUMING, "woken: RESUMING, no observation");
+    CHECK_EQ(step, XHCI_SUSP_STEP_OBSERVE, "the new suspension is observed");
+    CHECK_EQ(link.State, XHCI_SUSP_SUSPENDING, "still SUSPENDING");
+
+    /* A hub wake classified during the observation, its C_PORT_SUSPEND
+     * acknowledged, then polls that read suspend clear with no change
+     * until the bound: taken, not RECOVERING (round 2, finding 3). */
+    CHECK_EQ(XhciSuspEvidence(&link, XHCI_SUSP_EV_WAKE), 0,
+             "during the observation: kept");
+    CHECK_EQ(link.WakeKept, 1, "kept");
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_TIMEOUT, 60, &wait);
+    CHECK_EQ(link.State, XHCI_SUSP_RESUMING, "woken: RESUMING");
     CHECK_EQ(step, XHCI_SUSP_STEP_RECOVERY, "hub: the hub timed it");
     CHECK_EQ(link.ClaimDue, 1, "the event taken");
 
     /* A disconnect kept while SUSPENDING outranks a kept wake. */
     XhciSuspLinkInit(&link, 1, 1);
     step = XhciSuspBegin(&link, XHCI_SUSP_RUN_SUSPEND, 0, 0, 0, &wait);
+    while (step != XHCI_SUSP_STEP_OBSERVE) {
+        step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 1, &wait);
+    }
     (VOID)XhciSuspEvidence(&link, XHCI_SUSP_EV_WAKE);
     (VOID)XhciSuspEvidence(&link, XHCI_SUSP_EV_DISCONNECT);
     CHECK_EQ(link.State, XHCI_SUSP_SUSPENDING, "kept for the step");
@@ -633,6 +647,28 @@ static void test_latch_and_rearm(void)
     f[0].Seq++;
     CHECK_EQ(XhciSuspDecide(&link, f, 1, 1, 0, &d), XHCI_SUSP_DO_SUSPEND,
              "slots changed: suspend again");
+    /* Refused again, with the latch taken in the hold that wrote ACTIVE;
+     * a D0 and a fresh D2 then land before the next decision: a change
+     * against that baseline (round 2, finding 4). */
+    XhciSuspLinkInit(&link, 1, 1);
+    func_init(&f[0], D2);
+    f[0].DxPended = 1;
+    f[0].DxEpoch = 1;
+    (VOID)XhciSuspDecide(&link, f, 1, 1, 0, &d);
+    step = XhciSuspBegin(&link, XHCI_SUSP_RUN_SUSPEND, 0, 0, 0, &wait);
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 1, &wait);
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_FAILED, 2, &wait);
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 20, &wait);
+    CHECK_EQ(link.LatchDue, 1, "refused: latch due");
+    XhciSuspLatch(&link, f, 1);
+    CHECK_EQ(link.Latched, 1, "latched in the same hold");
+    CHECK_EQ(link.LatchDue, 0, "no longer due");
+    XhciSuspLatch(&link, f, 1);
+    CHECK_EQ(link.Latched, 1, "a second call changes nothing");
+    f[0].Seq += 2;
+    CHECK_EQ(XhciSuspDecide(&link, f, 1, 1, 0, &d), XHCI_SUSP_DO_SUSPEND,
+             "changed after the baseline: suspend");
+
     /* A change while not all Dx spends the latch too. */
     link.LatchDue = 1;
     f[0].DxPended = 0;
@@ -742,6 +778,38 @@ static void test_woke_hold(void)
     f[0].Seq++;
     CHECK_EQ(XhciSuspDecide(&link, f, 2, 1, 0, &d), XHCI_SUSP_DO_SUSPEND,
              "and suspends again");
+
+    /* D0 and a fresh D2 with no decision between: dispatch's D0
+     * admission is where the hold ends (round 2, finding 2). */
+    {
+        XHCI_SUSP_ADMIT_IN in;
+        ULONG ns;
+
+        XhciSuspLinkInit(&link, 1, 1);
+        func_init(&f[0], D2);
+        func_init(&f[1], D2);
+        f[0].WokeHold = 1;
+        in.Eligible = 1;
+        in.Closed = 0;
+        in.PowerDown = 0;
+        in.Link = XHCI_SUSP_ACTIVE;
+        in.SiblingD0 = 0;
+        in.Requested = D0;
+        CHECK_EQ(XhciSuspAdmit(&in, f[0].PwrState, &ns),
+                 XHCI_SUSP_ADMIT_COMPLETE, "D0 at once");
+        CHECK_EQ(ns, D0, "written D0");
+        /* The executor's rule: PwrState D0 written, WokeHold cleared. */
+        f[0].PwrState = ns;
+        f[0].WokeHold = 0;
+        f[0].Seq++;
+        f[0].PwrState = D2;
+        f[0].PwrWanted = D2;
+        f[0].DxPended = 1;
+        f[0].DxEpoch = 1;
+        f[0].Seq++;
+        CHECK_EQ(XhciSuspDecide(&link, f, 2, 1, 0, &d), XHCI_SUSP_DO_SUSPEND,
+                 "the fresh Dx suspends");
+    }
 
     /* A woken function closed instead: the hold ends. */
     func_init(&f[0], D2);
