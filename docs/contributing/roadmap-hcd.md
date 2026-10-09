@@ -869,7 +869,7 @@ How it got here:
   - then the owner's check on the E7250 under XP x64 and Windows 7 x64, with no manual `D20IR` write, which verifies:
     - the mouse;
     - the stick hot-plugged and present at boot;
-    - `xpnoehci`'s case (the EHCI disabled);
+    - the EHCI disabled in Device Manager, read as delivered by the line interrupt (not moved to polling), with the backstop near idle;
     - S3 resume;
     - Windows 98 SE (PIC mode), and Windows 7 with `XhciInterruptMode` 1 (the line forced), with the routing fix repairing the route in both.
 
@@ -878,7 +878,8 @@ Checkpoint: `2.3.0.0` on the E7250 under XP x64 and Windows 7 x64, with
 - the xHCI's interrupts delivered by the ISR (the backstop near idle);
 - a device present at boot enumerated;
 - the stick mounted;
-- the controller working with the EHCI disabled;
+- the controller working with the EHCI disabled, its interrupts delivered
+  by the line rather than polled;
 - the route still correct after S3;
 - 36.13 passing, with its functional and regression legs on the `release`
   package and its fault-injection legs on the `qemu` flavour, kept apart.
