@@ -3658,6 +3658,39 @@ Task 36.22 changes only the first.
   later (`uasNotePolicy`). The adapter descriptor's `MaximumTransferLength` and
   `MaximumPhysicalPages` (bytes / page + 1) and every pipe's
   `MaximumTransferSize` read that one stored value.
+- **The device's own limit** (owner, 2026-10-09, after SweetLow's comment
+  on GitHub issue 17). Before it stores the bus's answer, `xhciuas.sys`
+  reads Microsoft's per-device value, `MaximumTransferLength`, a
+  `REG_DWORD` in bytes under
+  `HKLM\SYSTEM\CurrentControlSet\Control\usbstor\VVVVPPPP` (KB 2581464;
+  `VVVV` and `PPPP` the device descriptor's `idVendor` and `idProduct` in
+  uppercase hex) - the key Windows' own `usbstor.sys` reads and the
+  existing tools write - through `RtlQueryRegistryValues` with a routine
+  that records the type and length (`uas_fdo.c`, `uasReadLimit`). The rule
+  is pure (`UasDeviceLimit`, `uas_iu.c`, `test_uas`): taken only as a
+  four-byte `REG_DWORD` inside KB 2581464's range, 65535 to 2097120, and
+  only when the bus answered the question; then it replaces the bus's
+  answer for this device alone, above it or below it, and the controller's
+  `XhciMaxTransferKB` stays the default for every other device. Absent,
+  another type, out of range, or valid on a bus that did not answer
+  (which keeps 64 KiB) is ignored and noted. A taken value is rounded to
+  the **nearest 4 KiB, ties up**: the contract's grid (64 KiB to 2 MiB in
+  4 KiB steps) is what the bus's answer obeys and what the descriptor's
+  `MaximumPhysicalPages` (bytes / page + 1) is built for; the range's two
+  ends, 65535 and 2097120, are Microsoft's spellings of 64 KiB and 2 MiB,
+  and nearest is the only rounding that takes both there (down would make
+  2097120 into 2 MiB less 4 KiB, up would make every value just above a
+  boundary a page larger); no value moves more than 2 KiB, and the bridge
+  caps in use (64 KiB, 120 KiB = 240 sectors, 512 KiB, 1 MiB) are on the
+  grid and do not move. The note in the device's hardware key gains
+  `XhciUasDeviceLimit` (the value read, 0 when absent or not four bytes)
+  and `XhciUasDeviceLimitWhy` (0 absent, 1 used, 2 not a `REG_DWORD`, 3 out
+  of range, 4 valid but the bus did not answer), and
+  `XhciUasCommandSource` 5 says the size is the device's. On Windows 98
+  and ME the value is read as well and changes nothing that reaches the
+  device: `USBNTMAP.SYS` sends at most 64 KiB whatever the descriptor says
+  (36.21's reading). Like the controller's value it takes effect when the
+  storage stack next reads the descriptor, at the next restart.
 - **Activation.** A storage class driver keeps the descriptor it read and a
   UAS stop and start keeps the LUNs it knows, so a new value takes effect
   at the next reboot. An SRB sized to an older value is carried as it is:
