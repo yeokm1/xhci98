@@ -977,8 +977,9 @@ it, and its placeholder ids take that number then (owner, 2026-10-06; the
 decisions table), and a version only then too: `2.2.0.0` is Phase 35's
 (owner, 2026-10-06). Selective suspend is what remains, and it ends in a
 cut. Polled event delivery moved into Phase 36 on 2026-10-08 (owner).
-Issue 17's follow-up (the last section) is not a release of its own: it
-joins whichever phase the owner opens it in.
+Issue 17's follow-up is not a release of its own: it joins whichever phase
+the owner opens it in. The 1 MB transfers (the last section) were added on
+2026-10-09 (owner).
 
 ## Planned - Release: Selective Suspend, Standby Resume and the Cut
 
@@ -1065,3 +1066,87 @@ its own; it joins the phase the owner opens it in.
   is set, and what it reads. Code offered for it is taken only under
   `legal-provenance.md`'s rules: GPL-2.0-compatible, and not derived
   from Microsoft's binaries.
+
+## Planned - 1 MB transfers on bulk endpoints and UAS
+
+Goal: a bulk transfer of up to 1 MB goes to the controller as one TD, and
+`xhciuas.sys` offers 1 MB per command, where today both stop at 128 KB and
+64 KB (owner, 2026-10-09). 1 MB is the default, and a registry value sets
+it lower, down to today's 64 KB, for a device or controller that
+misbehaves at large transfers (owner, 2026-10-09), as Linux's per-device
+max-sectors quirks do. Linux's xHCI driver puts a request of any size
+on one TD over rings that grow by segments, and its storage drivers send
+512 KB to 1 MB per command at SuperSpeed.
+
+Status: not opened, unnumbered and unversioned. It joins, or becomes, the
+phase the owner opens it in.
+
+Why it is more than a constant. Four limits are sized together at 32 data
+TRBs (128 KB), and each has to change with the others:
+
+- each endpoint's transfer ring is 64 TRBs (1 KB), carved from the one
+  fixed common buffer at a 1 KB-aligned offset so that it cannot cross a
+  64 KB boundary (`xhci.h` `XHCI_POOL_RING_TRBS`, design record 04
+  section 4); a 1 MB TD needs at least 256 data TRBs, more where an
+  element crosses a 64 KB boundary, and a ring with room for the next TD
+  behind it;
+- each transfer record carries its scatter/gather list
+  (`hcd.h` `HCD_SG_ELEMENTS`, `More[32]`) so the submission path never
+  allocates;
+- the TRBs of a TD are built in arrays on the kernel stack
+  (`XHCI_XFER_MAX_CONTROL_TRBS`), which at 256 or more would not fit;
+- the pure core's caps: `XHCI_XFER_MAX_DATA_TRBS` (`xhci_xfer.h`),
+  `XHCI_PIPE_CHUNK_ELEMENTS` and `XHCI_PIPE_TD_MAX_BYTES` (`xhci_pipe.h`).
+
+A chunk is also bounded by the map registers the HAL grants
+(`hc->MapRegisters`); where those are bounce buffers (amd64 or PAE with
+memory above 4 GB) a smaller grant still chunks, and that path stays.
+
+- [ ] MB.0 the baseline, before any code: ATTO Disk Benchmark and a large
+  file copy over UAS and over Bulk-Only on the E460 and the P14s Gen 1
+  under Windows 98 SE and 7 (owner), at the `2.3.0.0` build, and the same
+  with `UAS_MAX_TRANSFER` at 124 KB (31 pages, always one chunk) as a
+  probe of what the chunking costs
+- [ ] MB.1 the design, reviewed to convergence before code: the ring
+  geometry (larger fixed rings from a larger common buffer, or rings
+  grown by linked segments as Linux does, for endpoint and stream rings
+  alike, and what either costs on Windows 98's allocations); where the
+  scatter/gather list lives (allocated with the pipe or the stream, not
+  per transfer); the TRBs built in place on the ring or in a per-pipe
+  buffer instead of on the stack; the map-register grant and the
+  fallback to chunks below it; the memory budget per device and per
+  controller; the registry value (a working name `XhciMaxTransferKB`, a
+  `DWORD` in the controller's driver key, default 1024: its range and
+  step, what an absent, mistyped or out-of-range value reads as, when it
+  is read, and how `xhciuas.sys` learns it - from the bus, so the two
+  drivers cannot disagree); `XhciForceBulkOnly`'s path (Windows' `usbstor.sys` keeps
+  its own limit) and what the storage stacks of 98 SE, ME, 2000, XP,
+  Vista and 7 do with a 1 MB `MaximumTransferLength`
+- [ ] MB.2 the pure core: the caps raised to 1 MB and the ring geometry
+  of MB.1, and the value's rule, with host vectors in `test_xfer`, `test_pipe` and
+  `test_membuf` (a 1 MB TD at every page offset, the 64 KB splits, a ring
+  that wraps mid-TD, a grant below 1 MB)
+- [ ] MB.3 the HCD: the rings, the records' lists, the TRB build and
+  `hcdPlanChunk` per MB.1; the snapshot and `XHCISNAP` where a size they
+  report changes
+- [ ] MB.4 `xhciuas.sys`: `UAS_MAX_TRANSFER` replaced by the size in
+  effect (1 MB by default, `uas.h`), the adapter descriptor's
+  `MaximumTransferLength` and `MaximumPhysicalPages` and the pipes'
+  `MaximumTransferSize` with it
+- [ ] MB.5 the value installed and documented: written by both INFs on
+  every path at its default under the don't-overwrite rule, the INF
+  gate's table, footprints and mutations, `XHCISNAP` reporting the value
+  read and the size in effect, the release notes, README and the packaged
+  readme
+- [ ] MB-V the legs: every guest, x86 and amd64, a SuperSpeed stick over
+  UAS and over Bulk-Only with file compares at 1 MB transfers and at
+  unaligned buffers, the value at its minimum, its default and out of
+  range, streams on, Windows 2000 SMP under Driver Verifier,
+  an amd64 guest with memory above 4 GB (the bounce-buffer grant), and
+  the matrix unchanged
+- [ ] MB-E the bench (owner): MB.0's readings repeated on the same
+  machines and devices
+
+Checkpoint: MB-V passing; MB-E read against MB.0, with 1 MB kept as the
+default only if it is no slower anywhere; otherwise the default becomes the
+fastest size read, and the value can still be set to 1 MB.
