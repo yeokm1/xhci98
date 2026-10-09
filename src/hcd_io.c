@@ -123,16 +123,23 @@ static ULONG hcdCpuId(VOID)
 #else
     ULONG b;
 
-    /* CPUID, 0F A2, which MSVC 6.0's assembler does not name either. The
-     * compiler saves the registers an __asm block names, and the emitted
-     * bytes name none: so ECX and EDX, which CPUID also writes, are named
-     * here as well. */
+    /* CPUID, 0F A2, which MSVC 6.0's assembler does not name either. CPUID
+     * writes EAX, EBX, ECX and EDX, and the emitted bytes tell the compiler
+     * none of that. EAX, ECX and EDX are scratch across a call. EBX is the
+     * caller's, and merely reading it here does not make MSVC 6.0 save it
+     * (the built function had no push of EBX). So it is saved and restored
+     * by hand: without that, HcdTscStamp's `raised`, which it keeps in EBX,
+     * read CPUID's EBX, and KeLowerIrql ran with an unset IRQL inside the
+     * event DPC - STOP 0xB8 on Windows 2000 at the first enumeration
+     * (p36-int smoke leg, 2026-10-09). */
     __asm {
+        push ebx
         mov eax, 1
         xor ecx, ecx
         _emit 0x0F
         _emit 0xA2
         mov b, ebx
+        pop ebx
         xor edx, edx
     }
     return (b >> 24) & 0xFFUL;
