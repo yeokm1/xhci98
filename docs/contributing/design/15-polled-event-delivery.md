@@ -1355,9 +1355,11 @@ automatic mode cannot see the dead line - section 4.2's watcher moves on
 `XhciInterruptMode` 2. Its message route is still named from the
 capability list, said as untested; and since an enabled MSI or MSI-X
 clears `IP` itself after its message (4.17.5), one found enabled (Message
-Control, read only) is named as a reason `IP` may not have been seen. Every path that installed
-the hook removes it before C4 returns,
-so C6 and C8 run with no live ISR. `--irq-selftest` gives the same outcome
+Control, read only) is named as a reason `IP` may not have been seen. A
+source that comes live late, `EINT` and `IP` both up after the first wait,
+goes on to the delivery test as a prompt one does (review round 3). Every
+path that installed the hook removes it before C4 returns, so C6 and C8 run
+with no live ISR. `--irq-selftest` gives the same outcome
 as "IRQ SELF-TEST: NO WORKING INTERRUPT", exit 3. The QEMU matrix reaches
 it through two test programs that rewrite the xHCI's Interrupt Line before
 the run (`xhciqual/README.md`, "What the matrix covers").
