@@ -3726,117 +3726,243 @@ Task 36.22 changes only the first.
 **Why.** With a 1 MiB command a URB is eight 128 KiB chunks, and between
 two of them the ring stands empty while software retires one chunk, gives
 its map registers back, plans and maps the next and publishes it. 36.21's
-readings in QEMU (`runs`-style notes under `out\p36-mb`, development host A,
-XP x64, UAS at SuperSpeed): the gap, retirement to publication, averaged
-84 to 120 us a boundary against a 27 to 34 us publication, the mapping
-9 to 22 us of it; the ring stood empty for all of it. Stage 2 (owner,
-2026-10-09: taken whatever the readings) puts the next chunk on the ring
-before the current one ends, so the controller goes from one to the next
-with no software between them.
+readings in QEMU (`out\p36-mb\xp64\notes.md`, development host A, XP x64,
+UAS at SuperSpeed): the gap, retirement to publication, averaged 84 to
+120 us a boundary against a 27 to 34 us publication, the mapping 9 to
+22 us of it; the ring stood empty for all of it. Stage 2 (owner,
+2026-10-09: taken whatever the readings) maps the whole URB once and keeps
+the next chunk on the ring before the current one ends, so the controller
+goes from one chunk to the next with no software between them and no
+mapping at all.
+
+The first draft of this section (two chunk slots, each mapped by its own
+channel request, the next one queued speculatively; review round 1 of
+36.24, thread `01a120f7`) is replaced: a second channel request per URB
+needs its own forward-progress design (map registers are a per-request
+ceiling, not credits), and two independently mapped slots need a
+concurrency design for their mappings and unmappings. One mapping per URB
+has neither.
 
 **What changes, and what does not.**
 
-1. **Depth two.** At most two TDs of one URB are on the ring at once: the
-   chunk the controller is moving and the next. A third is planned only
-   when the first has retired. Every other request on the pipe still
-   waits behind the URB (`Exclusive`, 11.3), which is unchanged.
-2. **Where.** Bulk pipes only (control, interrupt and isochronous keep one
-   TD per record), and by direction:
-   - **OUT on any bulk pipe.** A device cannot end an OUT data phase short;
-     an error halts the endpoint, after which the queued successor is never
-     fetched.
-   - **IN only on a stream** (UAS at SuperSpeed). After a Short Packet the
-     controller goes on to the next TD of the ring (xHCI 4.10.1.1). On a
-     stream the ring belongs to one command until its status IU returns,
-     so a successor a short leaves behind receives nothing and is taken off
-     before the URB completes (point 6). On a pipe without streams -
-     Bulk-Only, and High-Speed UAS, which this bus cannot tell apart - the
-     next packet after a short data phase may be the CSW or another
-     command's data, which a queued successor would take: those IN pipes
-     stay one chunk at a time.
-3. **Chunk size when two are queued.** A pipelined chunk spans at most
-   half the ring's usable TRBs (`XhciRingCapacity`): on a pool ring (64
-   TRBs, 62 usable) 31 TRBs, so 30 pages (an unaligned buffer spans one
-   page more), and on a stream ring (one page, 255 usable) the 32 pages a
-   record's SG list holds anyway. The pool ring's geometry is therefore
-   unchanged - no 128-TRB rings, no stride or isochronous change, which is
-   why the isochronous decoupling the roadmap ties to a pool ring change
-   is not part of this stage. A URB that cannot be pipelined keeps today's
-   32-page chunk.
-4. **Two chunk slots per record.** Everything per chunk leaves `HCD_XFER`
-   for a slot (`HCD_CHUNK`): the engine's `XHCI_TRANSFER` (first member),
-   the SG list, the map base and count, the chunk's offset and length,
-   its state and its list link, and a back pointer to the record. A
-   retired TD reaches its slot with `CONTAINING_RECORD` and the record
-   through the slot, where today it casts the transfer to the record
-   (`HcdIoRetired`, and `hcdCfgCancelPipe`'s cancel test, which reads the
-   record's `CancelRequested` through the slot instead). Slot 0 alone
-   serves every request that is not pipelined, so their paths change only
-   in where the fields live. The cancel walk's array grows to two TDs a
-   record.
-5. **Mapping and order.** Each slot is mapped by its own channel request
-   through the pump (`hcd_dma.c`: one request outstanding, first in first
-   out). The next chunk is planned and queued for mapping as soon as the
-   current one is **published**, when (a) the URB has data beyond it,
-   (b) the other slot is free, (c) the record is not cancelled and the pipe
-   neither paused nor closed, and (d) the grant covers both chunks' pages
-   (`MapRegisters` at least their sum). (d) is the forward-progress rule:
-   with a smaller grant the second channel request would wait in the pump,
-   ahead of every other pipe's mapping, for registers only the first
-   chunk's retirement gives back - not a deadlock, since the first is
-   already on the ring, but a stall of the controller's whole pump; such a
-   URB stays sequential. Publication order follows: the successor is
-   queued only after its predecessor was published, and the pump runs in
-   order; a successor that meets a paused pipe or a full ring is held
-   mapped on the pipe's `Held` list behind nothing of its own URB, and
-   released by the predecessor's retirement or the resume, as today's
-   isochronous ring wait is (`RingWait`).
-6. **A URB ends when both slots are free.** The URB's length is the sum of
-   the chunks in order; a chunk's bytes count only when every chunk before
-   it moved all it asked for. When a chunk ends early - short, an error,
-   a stop - with its successor already queued, the record is marked
-   **truncated** with the early chunk's status and length, and the
-   successor is taken off the ring by the thread exactly as a cancelled
-   request's TD is (`CancelPending`, `hcdCfgCancelPipe`: the endpoint
-   stopped, the TD made No Ops or skipped by Set TR Dequeue, its stream's
-   for a stream), then retired; the URB then completes with the early
-   chunk's status and the accumulated length, not as cancelled. A
-   successor that already moved data before the stop (it cannot on a
-   halted endpoint, and on a stream only if the device sent more for the
-   command, which a short says it will not) is ignored: its bytes lie past
-   the short and are not counted. Cancellation, abort, reset and removal
-   are unchanged in intent: the mark is the record's, and the drain takes
-   both slots' TDs off.
-7. **Telemetry.** The software-empty interval is stamped only when the
-   ring holds nothing of the URB at a retirement, so with a successor
-   queued it is not stamped at all: the readings show the overlap
-   directly, and the gap's first part shrinks to the retirement of a chunk
-   whose successor is already running. A counter of pipelined URBs and of
-   truncations is appended to `XHCI_XSTAT`.
+1. **Eligibility.** A URB is pipelined - two of its TDs on the ring at
+   once - only when all of these hold, judged once when its record is
+   filled (`hcdFill`) and never changed afterwards:
+   - a bulk pipe, not control, interrupt or isochronous;
+   - more than one chunk at today's plan (`hcdPlanChunk`), so a URB that
+     fits one TD is untouched;
+   - the direction rule: **OUT on any bulk pipe; IN only on a stream**
+     (UAS at SuperSpeed). After a Short Packet the controller goes on to
+     the next TD of its ring (xHCI 4.10.1.1). On a stream the ring belongs
+     to one command until `xhciuas.sys` has seen the command's status and
+     every data URB of the tag has completed (its tag is not reused before
+     that: `uas_xport.c`, the slot's idle rule), so a successor a short
+     leaves behind receives nothing; it is taken off before the URB
+     completes (point 6). On a pipe without streams - Bulk-Only, and
+     High-Speed UAS, which this bus cannot tell apart - the next packet
+     after a short data phase may be the CSW or another command's data,
+     which a queued successor would take: those IN pipes stay one chunk at
+     a time. A device cannot end an OUT data phase short; an OUT TD ends
+     early only by an error, which halts the endpoint (point 6);
+   - **a map grant that is not a scarce resource**: `MapRegisters` at least
+     `HCD_WIDE_GRANT_MIN` (4096 registers, 16 MiB). Where the HAL's map
+     registers are not real - x86 with every page below 4 GB, every
+     Windows 98 and ME machine, and the readings so far (524289 on 98 SE,
+     ME and XP x64 in QEMU) - the grant is the HAL's "no limit" and
+     `AllocateAdapterChannel` never waits for registers. Where they are
+     real (amd64 with memory above 4 GB, a bounce path), the grant is
+     small and the URB stays sequential, exactly as stage 1 sends it: no
+     request larger than today's is ever made against a real register
+     pool, so stage 2 adds no wait the pump can block on (point 4);
+   - a free entry of the **wide-map pool** (point 3).
 
-**The event burst (the roadmap's review, with this stage's ring).** One
-TD still ends with one event on success (its IOC), and a short adds at
-most the trailing event of its IOC TRB (4.10.1.1), which the engine's
-four remembered tails per queue cover (`XHCI_XFER_MID_TD_TAIL`): one URB
-has at most two TDs, so two tails, on one queue. An error halts the
-endpoint and the queued successor produces nothing. A stop produces one
-Stopped event per stream ring that held a TD. The worst case per UAS
-device is its data streams' TDs - 15 commands in flight (QEMU's grant;
-up to 30 on a device that grants 31 streams) times two - plus the status
-stream's 15 to 30, so at most 90 completion events and 60 tails at once,
-below the event ring's 256 entries; the drain takes up to
-`XHCI_DPC_MAX_EVENTS` (1024) a pass, and the interrupt moderation
-interval (`XhciImodInterval250ns`, 160 by default: 40 us) is unchanged:
-two TDs a URB complete at the controller's pace, not in a burst larger
-than today's 15-command queue already gives. Bulk-Only and High-Speed UAS
-IN, which stay sequential, add nothing.
+   Everything else - control, interrupt, isochronous, single-chunk URBs,
+   Bulk-Only and High-Speed UAS IN, any URB on a small grant or with no
+   free wide entry - keeps today's path unchanged, one chunk at a time,
+   each mapped by its own channel request.
+2. **One mapping per URB.** An eligible URB is mapped whole by one channel
+   request through the pump (`hcd_dma.c`, unchanged in kind: one request
+   per record, first in first out), into the wide entry's scatter/gather
+   list, before any TD of it is published; the registers are kept until
+   the URB ends and given back once, by one `FlushAdapterBuffers` and one
+   `FreeMapRegisters` over the whole buffer. No chunk is mapped or
+   unmapped on its own. The mapping is therefore one event in the record's
+   life, before its first publication and after its last retirement, as
+   today's single-chunk mapping is.
+3. **The wide-map pool.** `HCD_WIDE_ENTRIES` (8) entries, allocated with
+   the controller at its start from non-paged pool and freed at its stop,
+   each a scatter/gather list sized for the command size in effect (pages
+   + 1 elements: 257 at 1024, 513 at 2048; 24 bytes each on amd64, 12 KiB
+   at most) plus the second TD's `XHCI_TRANSFER` and two 31-element
+   per-TD lists. 8 entries at 2048 are under 120 KiB, at 1024 under 64 KiB;
+   if the allocation fails the pool is empty and every URB is sequential,
+   so a low-memory Windows 98 machine loses only the pipelining. An entry
+   is claimed under the controller lock when an eligible record is filled
+   and returned when it ends; the count of entries bounds everything stage
+   2 adds controller-wide (point 7).
+4. **Forward progress.** A pipelined URB holds its registers for its life
+   instead of a chunk's, which is safe only because it is pipelined only
+   where registers are not scarce (point 1). The pump's one-request rule
+   and its order are unchanged, so a waiting request blocks the pump no
+   more than today's; command and status traffic, which never pipelines,
+   maps exactly as before.
+5. **TDs from the wide list.** A TD is cut from the URB's list by the pure
+   planner (`XhciXpipePlan`, new in `xhci_xpipe.c`): from the next byte not
+   yet planned, at most **31 elements** - half the usable TRBs of every
+   ring this driver has, pool rings and stream rings alike (64 TRBs, 62
+   usable; `XhciRingCapacity`), so two TDs of one URB always fit an empty
+   ring - and, when it is not the URB's last, ending on a packet boundary
+   (a short packet inside one URB is not allowed, USB 2.0 5.8.3), which
+   may cut its last element short; the next TD starts inside that element.
+   Each element is one page or part of one (the mapper cuts at page
+   bounds), so one element is one data TRB and the 64 KiB rule never
+   splits one (`xhciXferEmitSgList`'s walk: one TRB per element here). The
+   TD's own list (at most 31 elements) is copied from the wide list into
+   the TD's slot, the first and last trimmed, and handed to
+   `XhciXferSubmitNormal` as today's chunk list is. A planned TD of 31
+   page-aligned elements carries 124 KiB, so a 1 MiB URB is 9 TDs aligned
+   (8.26) and 9 unaligned, 2 MiB 17.
+6. **The record's life** (all of it under the controller lock, except the
+   mapping, which precedes it, and the completion, which follows it):
+   - fields: `Planned` (bytes put in TDs so far), `Committed` (bytes of
+     TDs retired in full, in ring order), `OnRing` (0, 1 or 2 TDs of the
+     URB outstanding), `Ended` (a TD ended early: its status and the
+     committed length latched), `Seq` (the URB's own submission order,
+     unchanged by how many TDs it takes);
+   - **two TD slots**: slot 0 is the record's own `Xfer`, slot 1 the wide
+     entry's. Both carry the record as `TransferParameters`, which is how
+     the retire path, the cancel walk and the drain find the record from
+     either TD - `(PHCD_XFER)t` is gone wherever a TD of a pipelined
+     record can arrive (`HcdIoRetired`, `hcdCfgCancelPipe`, `hcdDrainOne`;
+     `HcdIoXferOf(t)` reads `t->TransferParameters`). The two slots
+     alternate; a slot is reused only after its TD has retired and been
+     accounted;
+   - **TDs of one ring retire in ring order** - the controller ends a TD
+     before it starts the next (4.10.1.1), and a stream's events come in
+     its ring's order - so retirement is accounting in order: a TD that
+     moved all it asked for adds its length to `Committed`; one that did
+     not latches `Ended` with its status, and `Committed` plus what it
+     moved is the URB's length;
+   - **refill**: when a TD retires in full and `Planned < Length`, the
+     next TD is planned and published **in the same retirement**, under
+     the same lock hold, after the engine's event result has been walked
+     (`hcdPipeResult` collects refills and publishes them after its
+     completion loop, so the engine's completed list is never touched
+     while being walked), unless the record is cancelled, `Ended`, the
+     pipe paused, closed or its device gone, or the ring refuses
+     (`XHCI_XFER_BUSY`: only another record's TD can be on the ring with
+     it, and its retirement retries). A refill held by a pause is
+     published by the resume (`HcdIoPipeRelease` walks the pipe's
+     pipelined records with `OnRing < 2` and room to plan, in `Seq`
+     order). Publication order is ring order, and only the record can
+     publish its own TDs, so no other request lands between two of them
+     (`Exclusive`, unchanged);
+   - **an early end with a successor on the ring**:
+     - an **error** (any completion but Success and Short Packet on a bulk
+       TD halts the endpoint, 4.10.2; a soft retry that diverts a
+       Transaction Error retires nothing, and its replay retires the TD
+       only once the thread has reset the endpoint, so it is Stopped then)
+       finds the endpoint not running. In the same lock hold the
+       successor's TRBs are made No Ops and it is taken off the queue,
+       retired with no length, and the pipe's software dequeue moves to
+       its enqueue (nothing of the pipe follows the URB's last TD on that
+       ring: `Exclusive`, or one command per stream). The recovery that
+       follows - `hcdCfgRecoverDequeue`'s Set TR Dequeue past the failed
+       TD, a sibling stream's quiesce, `PipeResume`, `StreamKick` - finds
+       nothing of the URB left to restart, whichever of them runs first
+       (review round 1, finding 1);
+     - a **short** (IN, so a stream) leaves the endpoint running with the
+       controller already on the successor. The successor cannot be edited
+       while it runs: the record is marked `Truncating`, the pipe's
+       `CancelPending` set and the thread woken, and the cancel service
+       takes the successor off exactly as it takes a cancelled request's
+       TD (the endpoint stopped, the TD made No Ops or skipped by Set TR
+       Dequeue). Until it does, no path may ring that stream's doorbell:
+       `hcdCfgStreamKick`, `hcdCfgCancelPipe`'s survivor doorbell and a
+       refill all skip a stream whose record is `Truncating`, so a
+       sibling's recovery cannot restart it either (round 1, finding 1).
+       A short successor that the device fed nonetheless (it may not: the
+       short ended the command's data) has its bytes ignored, never
+       counted;
+     - a **Stop** (`STOPPED`, `STOPPED_LENGTH_INVALID`,
+       `STOPPED_SHORT_PACKET`) is not an end: it latches progress as today
+       (`XhciXferQueueStopped`), and a TD that survives a sibling's stop
+       or a cancel of another record runs on when its stream is rung
+       again. Only a cancel of this record, an abort, a reset or a removal
+       ends it, and those take both TDs off by the record (the cancel
+       walk's array holds two TDs a record);
+   - **one finalizer**: the URB completes when `OnRing` is 0 and either
+     `Committed == Length`, or `Ended`, or the record is cancelled or its
+     pipe or device going. The retirement that makes `OnRing` 0 with one
+     of those true puts the record on the done list, once; no other path
+     does while `OnRing` is not 0. `HcdIoDeferred` then unmaps the whole
+     buffer once, returns the wide entry, and completes the IRP with
+     `Committed` (plus an ended TD's partial length) and the latched
+     status - a short as success with that length and the client's
+     `ShortOk` rule, as today; an error with its status; a cancel as
+     cancelled. A record never goes back to the done list before that.
+7. **Telemetry.** The 202-word HCD header is kept as it is; new counters
+   are appended after it (words 202 on), never inside `XHCI_XSTAT`, whose
+   serialized form is followed by fixed-offset UAS records (old readers
+   hard-code word 110): pipelined URBs (those that had two TDs outstanding
+   at once, counted when the second is published), early ends with a
+   successor on the ring by kind (error, short), successors taken off,
+   refills published in a retirement, refills held by a pause or a busy
+   ring, URBs that were eligible but found no wide entry, and the wide
+   pool's size and high-water mark. The gap is sampled per adjacent pair
+   of a URB's TDs: retirement to the next publication only when the next
+   TD was not yet on the ring at the retirement (the sequential path and a
+   held refill), and **overlap** - the next TD already on the ring when the
+   previous retired - counted apart, so the readings show how often the
+   controller had the next TD ready, not a negative gap. Software-empty is
+   stamped only when the ring holds nothing of the URB. Neither sees
+   hardware starvation before software handles the event, which stays
+   unmeasured (36.21).
 
-**Host vectors.** `test_td`: the planner's pipelined chunk bound (half the
-ring, the pool ring's 30 pages and an unaligned buffer's 31 TRBs, the
-stream ring's 32 pages) and the grant rule; `test_xfer`: two TDs of one
-URB on one queue retiring in order, a short on the first with the second
-queued, its removal and the length the URB reports; `test_ring`: two
-31-TRB TDs filling a 64-TRB ring exactly, and the wrap between them.
+**The event burst (the roadmap's review).** The event ring has 256 entries,
+controller-wide. Today no static bound keeps a burst inside it: four
+records on every pipe, two on every stream pipe, each with a TD that ends
+in at least one event, a short or an error adding the trailing event of
+its IOC TRB, can exceed 256 on a controller with several UAS devices, and
+commands, port changes and periodic traffic come on top. What keeps the
+ring from overflowing is the service, not a count: the drain takes up to
+1024 events a pass and publishes the dequeue pointer every 32 consumed
+(`xhci_evt.c`), and the moderation interval in force
+(`XhciImodInterval250ns`, 160 by the INF, the driver's own 4000 = 1 ms if
+the value is missing) bounds how long a burst accumulates before the
+interrupt. Stage 2 claims only that it **adds a bounded increment** to
+whatever today's burst is: one more outstanding TD for each record that
+holds a wide entry, so at most `HCD_WIDE_ENTRIES` (8) more TDs
+controller-wide, each ending in at most two events (completion plus a
+short's trailing event), and the removal of a successor adds one Stop
+event per stream ring that held a TD, as any cancel does - at most 16
+events more than today's worst case plus the stops already accounted to
+cancels. The engine's remembered tails (`XHCI_XFER_MID_TD_TAIL`, four a
+queue) are bookkeeping for a short's trailing event, not capacity; a
+stream queue holds at most two TDs of one URB, the first of which can
+leave a tail, and a tail evicted by four later shorts is counted
+(`MidTdTailEvicted`) as today. The static claim stops there; whether the
+ring overflows under a real multi-device load is a reading (36.26:
+storage on two UAS devices with audio and input running, the event-ring
+full count and the error codes read in `XHCISNAP`), not a guarantee this
+section makes.
+
+**Host vectors.** `test_xpipe` (new; the pure `xhci_xpipe.c`): eligibility
+by type, direction, stream, chunk count, grant and pool; the planner over
+wide lists aligned, unaligned, with a packet size that cuts an element,
+at 64 KiB, 1 MiB and 2 MiB, every TD at most 31 elements, every TD but the
+last packet-aligned, the TDs together covering the URB once; the record
+machine's sequences - in-order retirement and refill, a short on the first
+TD with the second on the ring (truncating, the length), an error with the
+successor (removed in the same step), cancel with two TDs, a refill held
+by a pause and by a busy ring, a Stop that is not an end, the soft retry
+that later succeeds and the one that ends in an error, the finalizer firing
+once. `test_xfer`: two TDs of one URB on one queue retiring in order, a
+short on the first with the second queued, its removal and the length the
+URB reports. `test_ring`: two 31-TRB TDs filling a 64-TRB ring exactly,
+and the wrap between them. `test_snap`: the header's new words appended
+after word 202 with the old offsets unchanged, and an older `XHCISNAP`
+reading a newer snapshot, as 36.21 did.
 
 ## 12. What Phase 25 leaves open, and where each item binds
 
