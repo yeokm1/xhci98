@@ -1197,15 +1197,21 @@ static BOOLEAN NTAPI hcdIsr(PKINTERRUPT Interrupt, PVOID Context)
     return TRUE;
 }
 
-/* IRQL: DIRQL. The message ISR (record 15 section 4.3): every message ID
- * runs the line ISR's body, which reads Interrupter 0's state and returns
+/* IRQL: DIRQL. The message ISR (record 15 section 4.3). Only Interrupter 0
+ * is enabled, so only message 0 is ever written by this controller; any
+ * other message ID a grant of several connects is declined before the
+ * controller is touched, so it can neither claim another device's shared
+ * message nor run the ISR body beside message 0's under another message's
+ * lock (each message has its own, SpinLock being NULL; Codex review of the
+ * 36.15 code, round 1). Message 0 runs the line ISR's body and returns
  * XhciIsr's answer - FALSE for an interrupt this controller did not raise,
  * since Windows permits shared message interrupts. */
 static BOOLEAN NTAPI hcdMsgIsr(PKINTERRUPT Interrupt, PVOID Context,
                                ULONG MessageId)
 {
-    UNREFERENCED_PARAMETER(MessageId);
-
+    if (MessageId != 0) {
+        return FALSE;
+    }
     return hcdIsr(Interrupt, Context);
 }
 
@@ -1214,9 +1220,11 @@ static BOOLEAN NTAPI hcdMsgIsr(PKINTERRUPT Interrupt, PVOID Context,
  * IoConnectInterruptEx pair by either architecture's caller - amd64's
  * MmGetSystemRoutineAddress, the x86 helper's answer - connects the message
  * grant and keeps the disconnect for the release. CONNECT_MESSAGE_BASED
- * with the line ISR as FallBackServiceRoutine; SpinLock NULL, so the
- * system's own lock at the messages' unified IRQL serves the ISR and
- * KeSynchronizeExecution, and SynchronizeIrql is ignored. On success
+ * with the line ISR as FallBackServiceRoutine; SpinLock NULL, so each
+ * message's interrupt object has its own lock and SynchronizeIrql is
+ * ignored - which is safe because only message 0 runs the ISR body
+ * (hcdMsgIsr) and nothing synchronizes with a message's ISR (the line's
+ * KeSynchronizeExecution users run under a line delivery only). On success
  * MsgVersion says what was connected: a message, its table kept; a line
  * Windows fell back to, its interrupt object kept as the line's.
  * IRQL: PASSIVE_LEVEL.

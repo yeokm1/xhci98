@@ -1706,6 +1706,12 @@ try {
     Assert-RuleFires "x86-msi-clobbers" "MSI-VALUES" {
         param($t) $t.Replace("MSISupported,0x00010003,1", "MSISupported,0x00010001,1")
     }
+    Assert-RuleFires "x86-msi-not-dword" "MSI-VALUES" {
+        param($t) $t.Replace("MSISupported,0x00010003,1", "MSISupported,0x00010002,1")
+    }
+    Assert-RuleFires "x86-msi-extra-modifier" "MSI-VALUES" {
+        param($t) $t.Replace("MSISupported,0x00010003,1", "MSISupported,0x0001000B,1")
+    }
     Assert-RuleFires "x86-msi-no-limit" "MSI-VALUES" {
         param($t) $t.Replace("HKR,""Interrupt Management\MessageSignaledInterruptProperties"",MessageNumberLimit,0x00010003,1`r`n", "")
     }

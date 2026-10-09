@@ -2207,7 +2207,7 @@ if (Test-SectionExists $inf $msiHw) {
             }
             $f = @($rows[0].Text -split ',' | ForEach-Object { $_.Trim() })
             $flags = ConvertTo-CopyFlags $f[3]
-            if ($null -eq $flags -or ($flags -band 0x00010000) -eq 0 -or ($flags -band 0x2) -eq 0 -or $f.Count -lt 5 -or $f[4] -ne "1") {
+            if ($null -eq $flags -or $flags -ne 0x00010003 -or $f.Count -ne 5 -or $f[4] -ne "1") {
                 Add-Failure "MSI-VALUES" ("[{0}] line {1}: {2} must be REG_DWORD 1 with FLG_ADDREG_NOCLOBBER (0x00010003), so a user's MSISupported 0 survives an update; found '{3}'." -f $ar, $rows[0].Line, $want, $rows[0].Text.Trim())
             }
         }

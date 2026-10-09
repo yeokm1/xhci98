@@ -705,10 +705,12 @@ no further third-party object in the image.
 
 **The connection.** Under a message grant, `IoConnectInterruptEx` with
 `Version = CONNECT_MESSAGE_BASED` (3): the PDO; the message ISR; the
-controller as context; `SpinLock` NULL, so the system's own lock at the
-messages' unified IRQL serves the ISR and any `KeSynchronizeExecution`,
-and `SynchronizeIrql` is ignored (as built: a driver lock would need the
-unified IRQL, which is known only after the connection);
+controller as context; `SpinLock` NULL, so each message's interrupt
+object has its own lock and `SynchronizeIrql` is ignored - safe because
+the message ISR declines every message ID but 0 before it touches the
+controller, and nothing synchronizes with a message's ISR (as built: a
+driver lock would need the unified IRQL, known only after the
+connection);
 `FloatingSave` FALSE; and `FallBackServiceRoutine` the line ISR, for a
 grant Windows turned back into a line. On success `Version` says which was
 connected: `CONNECT_MESSAGE_BASED` is a message delivery, with

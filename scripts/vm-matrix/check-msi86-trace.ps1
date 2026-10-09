@@ -62,44 +62,79 @@ function Read-M86 {
     param([string[]]$Lines)
     $records = New-Object System.Collections.ArrayList
     $bad = New-Object System.Collections.ArrayList
+    $want = @{ B = 7; C = 4; D = 10; E = 3; L = 3; S = 8 }
     $n = 0
     foreach ($l in $Lines) {
         $n++
-        if ($l -notmatch 'M86 ') { continue }
+        # Anything that looks like a record but is not a whole one is a
+        # failure, not a line to skip: a cut marker is evidence lost.
+        if ($l -notmatch 'M\s?8\s?6') { continue }
         $why = Test-M86Line $l
         if ($null -ne $why) { [void]$bad.Add("line ${n}: $why : $l"); continue }
         $rec = $l.Substring($l.IndexOf("M86 ")).TrimEnd()
         $parts = $rec.Split(' ')
         $fields = @()
         for ($k = 4; $k -lt $parts.Count - 1; $k++) { $fields += [Convert]::ToUInt32($parts[$k], 16) }
+        if ($fields.Count -ne $want[$parts[1]]) {
+            [void]$bad.Add("line ${n}: a $($parts[1]) record with $($fields.Count) fields, not $($want[$parts[1]])")
+            continue
+        }
         [void]$records.Add([pscustomobject]@{
             Line = $n; Kind = $parts[1]; Fdo = $parts[2]; Seq = $parts[3]; F = $fields })
     }
-    # Every list: B, then C and D records, then an E whose count matches.
+    # Every list: B, then for each configuration in order a C and exactly
+    # its declared D records in order, then an E whose totals match; every
+    # record of the list carries the B's FDO, filter sequence and list name.
     $open = $null
+    $lists = 0
     foreach ($r in $records) {
+        if ($r.Kind -in @("C", "D", "E")) {
+            if ($null -eq $open) { [void]$bad.Add("line $($r.Line): a $($r.Kind) record outside a list"); continue }
+            if ($r.Fdo -ne $open.Fdo -or $r.Seq -ne $open.Seq -or $r.F[0] -ne $open.Which) {
+                [void]$bad.Add("line $($r.Line): a $($r.Kind) record of another list (fdo $($r.Fdo) filter $($r.Seq)) inside the list opened at line $($open.Line)")
+                continue
+            }
+        }
         switch ($r.Kind) {
             "B" {
                 if ($null -ne $open) { [void]$bad.Add("line $($r.Line): a list begins inside the list opened at line $($open.Line)") }
-                $open = [pscustomobject]@{ Line = $r.Line; Which = $r.F[0]; D = 0; C = 0; Lists = $r.F[2]; Verdict = $r.F[3] }
+                $open = [pscustomobject]@{ Line = $r.Line; Fdo = $r.Fdo; Seq = $r.Seq; Which = $r.F[0]
+                                           Lists = $r.F[2]; Verdict = $r.F[3]; C = 0; D = 0; CfgWant = -1; CfgGot = 0 }
+                $lists++
             }
             "C" {
-                if ($null -eq $open) { [void]$bad.Add("line $($r.Line): a configuration outside a list"); break }
+                if ($open.CfgWant -ge 0 -and $open.CfgGot -ne $open.CfgWant) {
+                    [void]$bad.Add("line $($r.Line): configuration $($open.C - 1) declared $($open.CfgWant) descriptors, $($open.CfgGot) were read")
+                }
+                if (($r.F[1] -shr 16) -ne $open.C -or ($r.F[1] -band 0xFFFF) -ne $open.Lists) {
+                    [void]$bad.Add("line $($r.Line): configuration $($r.F[1] -shr 16) of $($r.F[1] -band 0xFFFF) out of order (expected $($open.C) of $($open.Lists))")
+                }
                 $open.C++
+                $open.CfgWant = $r.F[2]
+                $open.CfgGot = 0
             }
             "D" {
-                if ($null -eq $open) { [void]$bad.Add("line $($r.Line): a descriptor outside a list"); break }
+                if ($open.C -eq 0 -or ($r.F[1] -shr 16) -ne ($open.C - 1) -or ($r.F[1] -band 0xFFFF) -ne $open.CfgGot) {
+                    [void]$bad.Add("line $($r.Line): descriptor $($r.F[1] -shr 16).$($r.F[1] -band 0xFFFF) out of order")
+                }
+                $open.CfgGot++
                 $open.D++
             }
             "E" {
-                if ($null -eq $open) { [void]$bad.Add("line $($r.Line): a list end with no begin"); break }
-                if ($r.F[1] -ne $open.D) { [void]$bad.Add("line $($r.Line): the list says $($r.F[1]) descriptors, $($open.D) were read") }
-                if ($open.Verdict -eq 0 -and $open.C -ne $open.Lists) { [void]$bad.Add("line $($r.Line): the list says $($open.Lists) configurations, $($open.C) were read") }
+                if ($open.CfgWant -ge 0 -and $open.CfgGot -ne $open.CfgWant) {
+                    [void]$bad.Add("line $($r.Line): the last configuration declared $($open.CfgWant) descriptors, $($open.CfgGot) were read")
+                }
+                if ($r.F[1] -ne $open.D) { [void]$bad.Add("line $($r.Line): the list says $($r.F[1]) descriptors written, $($open.D) were read") }
+                if ($open.Verdict -eq 0) {
+                    if ($r.F[2] -ne $open.D) { [void]$bad.Add("line $($r.Line): the list walked $($r.F[2]) descriptors, $($open.D) were read") }
+                    if ($open.C -ne $open.Lists) { [void]$bad.Add("line $($r.Line): the list says $($open.Lists) configurations, $($open.C) were read") }
+                }
                 $open = $null
             }
         }
     }
     if ($null -ne $open) { [void]$bad.Add("line $($open.Line): a list with no end (cut)") }
+    if ($lists -eq 0) { [void]$bad.Add("no requirements list in the capture: nothing to read R1 or R2 from") }
     return [pscustomobject]@{ Records = $records; Bad = $bad }
 }
 
@@ -141,13 +176,22 @@ if ($SelfTest) {
     )
     $r = Read-M86 $clean
     if ($r.Bad.Count -ne 0) { "FAIL: a clean capture was refused: $($r.Bad -join '; ')"; $fails++ }
-    $inter = @($clean[0], $clean[1], ($clean[2].Substring(0, 30) + "Z" + $clean[2].Substring(30)), $clean[3])
-    if ((Read-M86 $inter).Bad.Count -eq 0) { "FAIL: an interleaved byte passed"; $fails++ }
-    $dropped = @($clean[0], $clean[1], $clean[3])
-    if ((Read-M86 $dropped).Bad.Count -eq 0) { "FAIL: a dropped D record passed"; $fails++ }
-    $cut = @($clean[0], $clean[1], $clean[2].Substring(0, 50))
-    if ((Read-M86 $cut).Bad.Count -eq 0) { "FAIL: a truncated line passed"; $fails++ }
-    if ($fails -eq 0) { "check-msi86-trace self-test: 4 cases, all passed"; exit 0 }
+    $cases = @(
+        @{ Name = "an interleaved byte"; Lines = @($clean[0], $clean[1], ($clean[2].Substring(0, 30) + "Z" + $clean[2].Substring(30)), $clean[3]) },
+        @{ Name = "a dropped D record"; Lines = @($clean[0], $clean[1], $clean[3]) },
+        @{ Name = "a truncated line"; Lines = @($clean[0], $clean[1], $clean[2].Substring(0, 50)) },
+        @{ Name = "a cut marker"; Lines = @($clean[0], $clean[1], ("xhci98: M8" + $clean[2].Substring(11)), $clean[3]) },
+        @{ Name = "an empty capture"; Lines = @("xhci98: nothing here") },
+        @{ Name = "a descriptor of another FDO"; Lines = @($clean[0], $clean[1], (New-M86 "M86 D 0009 0002 00000052 00000000 00000200 00000002 FFFFFFFE FFFFFFFE 00000000 00000000 00000000 00000000"), $clean[3]) },
+        @{ Name = "a duplicate descriptor"; Lines = @($clean[0], $clean[1], $clean[2], $clean[2], (New-M86 "M86 E 0001 0002 00000052 00000002 00000002")) },
+        @{ Name = "a configuration short of its count"; Lines = @($clean[0], (New-M86 "M86 C 0001 0002 00000052 00000001 00000002 00010001"), $clean[2], (New-M86 "M86 E 0001 0002 00000052 00000001 00000002")) },
+        @{ Name = "a walked total that disagrees"; Lines = @($clean[0], $clean[1], $clean[2], (New-M86 "M86 E 0001 0002 00000052 00000001 00000002")) },
+        @{ Name = "a record with a field missing"; Lines = @($clean[0], (New-M86 "M86 C 0001 0002 00000052 00000001 00000001"), $clean[2], $clean[3]) }
+    )
+    foreach ($c in $cases) {
+        if ((Read-M86 $c.Lines).Bad.Count -eq 0) { "FAIL: $($c.Name) passed"; $fails++ }
+    }
+    if ($fails -eq 0) { "check-msi86-trace self-test: $($cases.Count + 1) cases, all passed"; exit 0 }
     exit 1
 }
 

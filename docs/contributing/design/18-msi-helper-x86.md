@@ -1301,8 +1301,8 @@ differs from, or settles, what the sections above say:
   connection; the release disconnects through `IoDisconnectInterruptEx`
   whatever it connected, a line Windows fell back to included.
 - **The connection passes no spin lock** (record 15 section 4.3's revision
-  6): `SpinLock` NULL, so the system's own lock at the unified IRQL serves
-  the message ISR and `KeSynchronizeExecution`.
+  6): `SpinLock` NULL, so each message has its own lock; the message ISR
+  declines every message ID but 0 before touching the controller.
 - **The strip ships off** (`HCD_MSI_STRIP_DEFAULT` 0 in `hcd_msi86.c`)
   until R1 and R2 are read; the `qemu` flavour's `XhciMsi86NoStrip` keeps
   it off after the default is turned on, and `XhciMsi86InjNoLine` is H1a's

@@ -386,6 +386,12 @@ static VOID hcdMsi86Look(PHCD_CONTROLLER hc)
 step:
     act = XhciMsi86BindStep(&hc->Msi86Bind, event);
     HcdMsiTraceLife(hc, HCD_MSI_LIFE_LOOK, event, (ULONG)hc->Msi86Status);
+    /* The refusal's own event, with the acceptance test that failed, before
+     * the look's reference goes (Codex review of the 36.15 code, round 1). */
+    if (event == XHCI_MSI86_EV_LOOK_REFUSED) {
+        HcdMsiTraceLife(hc, HCD_MSI_LIFE_REFUSE, hc->Msi86Refusal,
+                        (ULONG)hc->Msi86Status);
+    }
     if ((act & XHCI_MSI86_ACT_DROP_LOOK) != 0 && file != NULL) {
         ObDereferenceObject(file);
         HcdMsiTraceLife(hc, HCD_MSI_LIFE_DROP, 0, 0);
@@ -400,9 +406,6 @@ step:
         hc->Msi86Flags = hc->Msi86Query.Flags;
         HcdMsiTraceLife(hc, HCD_MSI_LIFE_BIND, hc->Msi86HelperVersion,
                         hc->Msi86Flags);
-    } else if (event == XHCI_MSI86_EV_LOOK_REFUSED) {
-        HcdMsiTraceLife(hc, HCD_MSI_LIFE_REFUSE, hc->Msi86Refusal,
-                        (ULONG)status);
     }
 }
 
