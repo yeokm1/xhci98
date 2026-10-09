@@ -3670,19 +3670,24 @@ Task 36.22 changes only the first.
   is pure (`UasDeviceLimit`, `uas_iu.c`, `test_uas`): taken only as a
   four-byte `REG_DWORD` inside KB 2581464's range, 65535 to 2097120, and
   only when the bus answered the question; then it replaces the bus's
-  answer for this device alone, above it or below it, and the controller's
-  `XhciMaxTransferKB` stays the default for every other device. Absent,
-  another type, out of range, or valid on a bus that did not answer
-  (which keeps 64 KiB) is ignored and noted. A taken value is rounded to
+  answer, above it or below it, for every device with that `idVendor` and
+  `idProduct` - the key is per model, machine-wide, not per physical
+  drive, on any controller - and the controller's `XhciMaxTransferKB`
+  stays the default for every device without a valid value of its own.
+  Absent, another type, out of range, or valid on a bus that did not
+  answer (which keeps 64 KiB) is ignored and noted. A taken value is rounded to
   the **nearest 4 KiB, ties up**: the contract's grid (64 KiB to 2 MiB in
   4 KiB steps) is what the bus's answer obeys and what the descriptor's
-  `MaximumPhysicalPages` (bytes / page + 1) is built for; the range's two
-  ends, 65535 and 2097120, are Microsoft's spellings of 64 KiB and 2 MiB,
-  and nearest is the only rounding that takes both there (down would make
-  2097120 into 2 MiB less 4 KiB, up would make every value just above a
-  boundary a page larger); no value moves more than 2 KiB, and the bridge
-  caps in use (64 KiB, 120 KiB = 240 sectors, 512 KiB, 1 MiB) are on the
-  grid and do not move. The note in the device's hardware key gains
+  `MaximumPhysicalPages` (bytes / page + 1) is built for. Nearest moves a
+  value least - never more than 2048 bytes, a tie going up - and takes the
+  range's two ends, 65535 and 2097120, Microsoft's spellings of 64 KiB and
+  2 MiB, to exactly those (rounding down would make 2097120 into 2 MiB less
+  4 KiB). It is a normalisation onto the grid, not a byte ceiling: the size
+  taken can exceed the value by up to 2048 bytes. The bridge caps in use
+  (64 KiB, 120 KiB = 240 sectors, 512 KiB, 1 MiB) are on the grid and do
+  not move. 2097152 itself is outside KB 2581464's range and is refused,
+  though some tools write it for 2 MiB (the release notes say so). The
+  note in the device's hardware key gains
   `XhciUasDeviceLimit` (the value read, 0 when absent or not four bytes)
   and `XhciUasDeviceLimitWhy` (0 absent, 1 used, 2 not a `REG_DWORD`, 3 out
   of range, 4 valid but the bus did not answer), and

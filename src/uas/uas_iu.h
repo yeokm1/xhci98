@@ -233,12 +233,14 @@ ULONG UasPolicyValue(ULONG sent, const struct _XHCI98_TRANSFER_POLICY *reply,
  * 2097120, and only when the bus answered (XHCI98_TELE_SRC_BUS): an older
  * bus, or a question that failed, keeps 64 KiB whatever the value says. A
  * taken value is rounded to the nearest 4 KiB, ties up, so it lands on the
- * contract's grid of 64 KiB to 2 MiB in 4 KiB steps: the range's two ends,
- * 65535 and 2097120, are Microsoft's spellings of 64 KiB and 2 MiB, and
- * nearest is the one rounding that takes both there; no value moves by
- * more than 2 KiB, and the bridge caps in use - 64 KiB, 120 KiB (240
- * sectors), 512 KiB, 1 MiB, 2 MiB - are on the grid already and do not
- * move.
+ * contract's grid of 64 KiB to 2 MiB in 4 KiB steps: nearest moves a value
+ * least (never by more than 2048 bytes, a tie going up), and takes the
+ * range's two ends, 65535 and 2097120 - Microsoft's spellings of 64 KiB and
+ * 2 MiB - to 64 KiB and 2 MiB. It is a normalisation onto the grid, not a
+ * byte ceiling: the size taken can exceed the value by up to 2048 bytes.
+ * The bridge caps in use - 64 KiB, 120 KiB (240 sectors), 512 KiB, 1 MiB -
+ * are on the grid already and do not move. (2097152 itself is outside the
+ * range and is refused, UAS_DEVLIM_RANGE.)
  */
 #define UAS_DEVLIM_ABSENT           0UL /* no value: the bus's answer     */
 #define UAS_DEVLIM_USED             1UL /* taken for this device          */

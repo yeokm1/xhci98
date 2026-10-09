@@ -1177,9 +1177,10 @@ number already in the key - the old default included. To take a new
 release's default, delete `XhciMaxTransferKB` before updating the driver,
 or set the new number by hand, and restart.
 
-**One drive only: Microsoft's per-device value.** On Windows 2000 and
+**One model only: Microsoft's per-device value.** On Windows 2000 and
 later the UAS driver also honours the value Windows' own Bulk-Only driver
-uses for one device, so a drive can be set apart from the rest:
+uses for one kind of device, so a drive model can be set apart from the
+rest:
 
 | | |
 |---|---|
@@ -1187,14 +1188,18 @@ uses for one device, so a drive can be set apart from the rest:
 | Value | `MaximumTransferLength`, a `DWORD`, in **bytes** |
 | Accepted | `65535` to `2097120`, the range Microsoft's KB 2581464 gives |
 
-A value in range replaces `XhciMaxTransferKB` for that drive alone, larger
-or smaller; every other drive keeps the controller's value. It is rounded
-to the nearest 4 KiB, so `65535` is 64 KiB, `2097120` is 2 MiB, and
-`131072` (`20000` hex) is 128 KiB exactly. A value that is missing, not a
-`DWORD` or out of range is ignored. Restart Windows after setting it. It is
-the same key Windows' `usbstor.sys` reads for a Bulk-Only drive, so tools
-and guides written for that - Uwe Sieber's pages on `uwe-sieber.de` cover
-it - set it for a UAS drive too. The UAS device's hardware key (under
+A value in range replaces `XhciMaxTransferKB`, larger or smaller, for
+every drive with those vendor and product IDs - the key is per model, for
+the whole machine, not per physical drive - and every other drive keeps
+the controller's value. It is rounded to the nearest 4 KiB (at most 2048
+bytes either way), so `65535` is 64 KiB, `2097120` is 2 MiB, and `131072`
+(`20000` hex) is 128 KiB exactly. A value that is missing, not a `DWORD` or
+out of range is ignored. Restart Windows after setting it. It is the same
+key Windows' `usbstor.sys` reads for a Bulk-Only drive, so tools and
+guides written for that - Uwe Sieber's pages on `uwe-sieber.de` cover it -
+set it for a UAS drive too, with one exception: a tool that writes
+`2097152` for 2 MiB writes a value above the range, which is ignored
+(`XhciUasDeviceLimitWhy` `3`); change it to `2097120` by hand. The UAS device's hardware key (under
 `Enum\USB`, on Windows 2000 and later in its `Device Parameters`) shows
 what was taken: `XhciUasCommandBytes` the size in bytes,
 `XhciUasCommandSource` `1` for the controller's value and `5` for the
