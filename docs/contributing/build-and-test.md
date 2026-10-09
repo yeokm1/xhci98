@@ -3965,8 +3965,13 @@ and the value surviving a restart; the switchover at 0 and 1 is a bench
 reading on a listed Intel chipset, and the driver's treatment of an absent
 value is held by `test\test_psw.c`.
 
-Read 2026-10-09 on development host A (task 36.42): see roadmap-hcd 36.42
-for the guests and results.
+Read 2026-10-10 on development host A (task 36.42), on the `release`
+package: Windows 98 SE, 2000 SP4 and Windows 7 x64, each a fresh install
+showing `0 - off`, then 1 and 0 each kept across a restart; on 7 x64 the
+non-elevated path raised the elevation prompt. On 98 SE `regedit /e` from a
+batch file at a DOS prompt returns before the export is written (the script
+runs it through Script Host and waits), so a leg's own export needs a
+second `copy` a moment later.
 
 ### Recommended USB Host Chips for Comprehensive Testing
 
