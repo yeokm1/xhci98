@@ -14,7 +14,7 @@ list's begin, configuration and descriptor counts are held to its end
 record, and a capture with any failure is refused - to be retaken - before
 R1, R2 or the L legs are read from it.
 
-A record: "M86 K FFFF SSSS" then up to ten fields of eight hex digits, then
+A record: "M86 K FFFF SSSS NNNN" then up to ten fields of eight hex digits, then
 " cXX", XX the low byte of the byte sum of everything before " c". K is B
 (list begin: R/T/I, ListSize, lists, walk verdict, failing list, class,
 outcome), C (configuration: R/T/I, index << 16 | lists, count, version and
@@ -22,7 +22,9 @@ revision), D (descriptor: R/T/I, configuration << 16 | index, option | type
 << 8 | share << 16, flags, the six words of u), E (list end: R/T/I, D
 records written, descriptors walked), L (lifecycle: event, a, b) or S (the
 start's decision). FFFF is the FDO's serial and SSSS the filter sequence.
-The line may carry the channel's "xhci98: " prefix.
+NNNN is the record's running number, one more than the previous (1 after
+the driver loads), so a record lost anywhere is a gap. The line may carry
+the channel's "xhci98: " prefix.
 
 Prints the lists it read, one line per descriptor, so the R1/R2 readings
 are taken from this output. Exit 0 clean, 1 a refused capture.
@@ -47,7 +49,7 @@ function Test-M86Line {
     $i = $Line.IndexOf("M86 ")
     if ($i -lt 0) { return "no M86 marker" }
     $rec = $Line.Substring($i).TrimEnd()
-    if ($rec -notmatch '^M86 [BCDELS] [0-9A-F]{4} [0-9A-F]{4}( [0-9A-F]{8}){0,10} c[0-9A-F]{2}$') {
+    if ($rec -notmatch '^M86 [BCDELS] [0-9A-F]{4} [0-9A-F]{4} [0-9A-F]{4}( [0-9A-F]{8}){0,10} c[0-9A-F]{2}$') {
         return "layout"
     }
     $body = $rec.Substring(0, $rec.Length - 4)
@@ -63,18 +65,29 @@ function Read-M86 {
     $records = New-Object System.Collections.ArrayList
     $bad = New-Object System.Collections.ArrayList
     $want = @{ B = 7; C = 4; D = 10; E = 3; L = 3; S = 8 }
+    $script:lastNumber = $null
     $n = 0
     foreach ($l in $Lines) {
         $n++
         # Anything that looks like a record but is not a whole one is a
-        # failure, not a line to skip: a cut marker is evidence lost.
-        if ($l -notmatch 'M\s?8\s?6') { continue }
+        # failure, not a line to skip: a cut or damaged marker is evidence
+        # lost. A line that holds a record's body shape, or a channel line
+        # whose text starts like a marker, counts as one.
+        $fragment = ($l -match '(^|: )M\S{0,2}(8|86)?\s*$') -or ($l -match '\b[BCDELS] [0-9A-F]{4} [0-9A-F]{4} [0-9A-F]{4} ')
+        if ($l -notmatch 'M86 ' -and -not $fragment) { continue }
         $why = Test-M86Line $l
         if ($null -ne $why) { [void]$bad.Add("line ${n}: $why : $l"); continue }
         $rec = $l.Substring($l.IndexOf("M86 ")).TrimEnd()
         $parts = $rec.Split(' ')
         $fields = @()
-        for ($k = 4; $k -lt $parts.Count - 1; $k++) { $fields += [Convert]::ToUInt32($parts[$k], 16) }
+        for ($k = 5; $k -lt $parts.Count - 1; $k++) { $fields += [Convert]::ToUInt32($parts[$k], 16) }
+        $number = [Convert]::ToInt32($parts[4], 16)
+        # One more than the previous record, or a fresh image's first: a gap
+        # is a record lost, damaged, or reordered by a second writer.
+        if ($null -ne $script:lastNumber -and $number -ne 1 -and $number -ne (($script:lastNumber % 0xFFFF) + 1)) {
+            [void]$bad.Add("line ${n}: record number $number after $($script:lastNumber) (a record is missing or out of order)")
+        }
+        $script:lastNumber = $number
         if ($fields.Count -ne $want[$parts[1]]) {
             [void]$bad.Add("line ${n}: a $($parts[1]) record with $($fields.Count) fields, not $($want[$parts[1]])")
             continue
@@ -168,25 +181,29 @@ function New-M86 {
 if ($SelfTest) {
     $fails = 0
     $clean = @(
-        (New-M86 "M86 B 0001 0002 00000052 00000060 00000001 00000000 00000000 00000003 00000000"),
-        (New-M86 "M86 C 0001 0002 00000052 00000001 00000001 00010001"),
-        (New-M86 "M86 D 0001 0002 00000052 00000000 00000200 00000002 FFFFFFFE FFFFFFFE 00000000 00000000 00000000 00000000"),
-        (New-M86 "M86 E 0001 0002 00000052 00000001 00000001"),
-        (New-M86 "M86 L 0001 0002 00000001 00000009 00000000")
+        (New-M86 "M86 B 0001 0002 0001 00000052 00000060 00000001 00000000 00000000 00000003 00000000"),
+        (New-M86 "M86 C 0001 0002 0002 00000052 00000001 00000001 00010001"),
+        (New-M86 "M86 D 0001 0002 0003 00000052 00000000 00000200 00000002 FFFFFFFE FFFFFFFE 00000000 00000000 00000000 00000000"),
+        (New-M86 "M86 E 0001 0002 0004 00000052 00000001 00000001"),
+        (New-M86 "M86 L 0001 0002 0005 00000001 00000009 00000000"),
+        (New-M86 "M86 S 0001 0002 0006 00000000 00000002 00000003 00000003 00000004 00000003 0000000A 00000000")
     )
     $r = Read-M86 $clean
     if ($r.Bad.Count -ne 0) { "FAIL: a clean capture was refused: $($r.Bad -join '; ')"; $fails++ }
     $cases = @(
-        @{ Name = "an interleaved byte"; Lines = @($clean[0], $clean[1], ($clean[2].Substring(0, 30) + "Z" + $clean[2].Substring(30)), $clean[3]) },
-        @{ Name = "a dropped D record"; Lines = @($clean[0], $clean[1], $clean[3]) },
+        @{ Name = "an interleaved byte"; Lines = @($clean[0], $clean[1], ($clean[2].Substring(0, 30) + "Z" + $clean[2].Substring(30)), $clean[3], $clean[4], $clean[5]) },
+        @{ Name = "a dropped D record"; Lines = @($clean[0], $clean[1], $clean[3], $clean[4], $clean[5]) },
         @{ Name = "a truncated line"; Lines = @($clean[0], $clean[1], $clean[2].Substring(0, 50)) },
-        @{ Name = "a cut marker"; Lines = @($clean[0], $clean[1], ("xhci98: M8" + $clean[2].Substring(11)), $clean[3]) },
+        @{ Name = "a cut marker on a descriptor"; Lines = @($clean[0], $clean[1], ("xhci98: M8" + $clean[2].Substring(11)), $clean[3], $clean[4], $clean[5]) },
+        @{ Name = "a cut lifecycle record at the end"; Lines = @($clean[0], $clean[1], $clean[2], $clean[3], "xhci98: M8") },
+        @{ Name = "a damaged lifecycle marker"; Lines = @($clean[0], $clean[1], $clean[2], $clean[3], ("xhci98: MX" + $clean[4].Substring(10)), $clean[5]) },
+        @{ Name = "a dropped lifecycle record"; Lines = @($clean[0], $clean[1], $clean[2], $clean[3], $clean[5]) },
         @{ Name = "an empty capture"; Lines = @("xhci98: nothing here") },
-        @{ Name = "a descriptor of another FDO"; Lines = @($clean[0], $clean[1], (New-M86 "M86 D 0009 0002 00000052 00000000 00000200 00000002 FFFFFFFE FFFFFFFE 00000000 00000000 00000000 00000000"), $clean[3]) },
-        @{ Name = "a duplicate descriptor"; Lines = @($clean[0], $clean[1], $clean[2], $clean[2], (New-M86 "M86 E 0001 0002 00000052 00000002 00000002")) },
-        @{ Name = "a configuration short of its count"; Lines = @($clean[0], (New-M86 "M86 C 0001 0002 00000052 00000001 00000002 00010001"), $clean[2], (New-M86 "M86 E 0001 0002 00000052 00000001 00000002")) },
-        @{ Name = "a walked total that disagrees"; Lines = @($clean[0], $clean[1], $clean[2], (New-M86 "M86 E 0001 0002 00000052 00000001 00000002")) },
-        @{ Name = "a record with a field missing"; Lines = @($clean[0], (New-M86 "M86 C 0001 0002 00000052 00000001 00000001"), $clean[2], $clean[3]) }
+        @{ Name = "a descriptor of another FDO"; Lines = @($clean[0], $clean[1], (New-M86 "M86 D 0009 0002 0003 00000052 00000000 00000200 00000002 FFFFFFFE FFFFFFFE 00000000 00000000 00000000 00000000"), $clean[3]) },
+        @{ Name = "a duplicate descriptor"; Lines = @($clean[0], $clean[1], $clean[2], (New-M86 "M86 D 0001 0002 0004 00000052 00000000 00000200 00000002 FFFFFFFE FFFFFFFE 00000000 00000000 00000000 00000000"), (New-M86 "M86 E 0001 0002 0005 00000052 00000002 00000002")) },
+        @{ Name = "a configuration short of its count"; Lines = @($clean[0], (New-M86 "M86 C 0001 0002 0002 00000052 00000001 00000002 00010001"), $clean[2], (New-M86 "M86 E 0001 0002 0004 00000052 00000001 00000002")) },
+        @{ Name = "a walked total that disagrees"; Lines = @($clean[0], $clean[1], $clean[2], (New-M86 "M86 E 0001 0002 0004 00000052 00000001 00000002")) },
+        @{ Name = "a record with a field missing"; Lines = @($clean[0], (New-M86 "M86 C 0001 0002 0002 00000052 00000001 00000001"), $clean[2], $clean[3]) }
     )
     foreach ($c in $cases) {
         if ((Read-M86 $c.Lines).Bad.Count -eq 0) { "FAIL: $($c.Name) passed"; $fails++ }

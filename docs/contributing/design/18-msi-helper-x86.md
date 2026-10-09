@@ -1319,7 +1319,12 @@ differs from, or settles, what the sections above say:
   descriptors of 9 words); the start's log notes carry the summary
   (`msi.*`, `msi86.*`).
 - **The trace** is the `M86` record of section 9, one per line on the
-  `qemu` flavour's debug channel; a list's `B` record names it `R`
+  `qemu` flavour's debug channel, each also numbered (`M86 K FFFF SSSS
+  NNNN`: one more than the image's previous record, 1 after a load), so a
+  lost or damaged record of any kind - a lifecycle or start record too -
+  shows as a gap; the start-decision record `S` is written for every
+  start's outcome, success included (`HcdStartController`), and the
+  routines' source as a lifecycle record. A list's `B` record names it `R`
   (received), `I` (after the no-line rewrite) or `T` (returned), and
   `scripts\vm-matrix\check-msi86-trace.ps1` validates a capture and prints
   it (its `-SelfTest` runs in `build-driver.cmd`).

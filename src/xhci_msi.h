@@ -191,7 +191,7 @@ ULONG XhciMsi86BindStep(PXHCI_MSI86_BIND bind, ULONG event);
 /* ---- the trace (record 18 section 9) ---------------------------------- */
 
 #define XHCI_MSI_TRACE_FIELDS       10UL
-#define XHCI_MSI_TRACE_MAX          112UL   /* with its terminator        */
+#define XHCI_MSI_TRACE_MAX          120UL   /* with its terminator        */
 
 /* Record kinds. */
 #define XHCI_MSI_TRACE_BEGIN        'B'
@@ -202,13 +202,15 @@ ULONG XhciMsi86BindStep(PXHCI_MSI86_BIND bind, ULONG event);
 #define XHCI_MSI_TRACE_START        'S'
 
 /*
- * One record, "M86 K FFFF SSSS" then up to ten fields of eight hex digits
- * and " c" with two hex digits of the byte sum of everything before it.
- * Returns its length, the terminator not counted. The longest record is
- * under XHCI_MSI_TRACE_MAX by construction, which the debug channel's
- * 128-byte line with its 8-byte prefix holds.
+ * One record, "M86 K FFFF SSSS NNNN" then up to ten fields of eight hex
+ * digits and " c" with two hex digits of the byte sum of everything before
+ * it. NNNN is the record's number, one more than the previous record's
+ * from the same driver image (1 after a load), so a lost record of any
+ * kind shows as a gap. Returns its length, the terminator not counted. The
+ * longest record is under XHCI_MSI_TRACE_MAX by construction, which the
+ * debug channel's 128-byte line with its 8-byte prefix holds.
  */
 ULONG XhciMsiTraceFormat(char *line, char kind, ULONG fdo, ULONG sequence,
-                         const ULONG *fields, ULONG count);
+                         ULONG number, const ULONG *fields, ULONG count);
 
 #endif /* XHCI_MSI_H */

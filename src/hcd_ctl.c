@@ -1032,6 +1032,7 @@ static NTSTATUS hcdSettleDelivery(PHCD_CONTROLLER hc)
         hc->MsgRoutines = HcdMsiRoutines(hc, &hc->MsgConnectEx,
                                          &hc->MsgDisconnectEx);
         noLine = HcdMsiNoLineOffered(hc);
+        HcdMsiTraceLife(hc, HCD_MSI_LIFE_ROUTINES, hc->MsgRoutines, noLine);
     }
 
     pin = 0;
@@ -1083,8 +1084,6 @@ static NTSTATUS hcdSettleDelivery(PHCD_CONTROLLER hc)
     if (delivery == XHCI_POLL_DELIVERY_NONE) {
         status = haveInterrupt ? STATUS_DEVICE_CONFIGURATION_ERROR
                                : STATUS_INSUFFICIENT_RESOURCES;
-        HcdMsiTraceStart(hc, haveInterrupt ? (message ? 2UL : 1UL) : 0UL,
-                         status);
         return status;
     }
     return STATUS_SUCCESS;
@@ -1221,8 +1220,9 @@ static BOOLEAN NTAPI hcdMsgIsr(PKINTERRUPT Interrupt, PVOID Context,
  * MmGetSystemRoutineAddress, the x86 helper's answer - connects the message
  * grant and keeps the disconnect for the release. CONNECT_MESSAGE_BASED
  * with the line ISR as FallBackServiceRoutine; SpinLock NULL, so each
- * message's interrupt object has its own lock and SynchronizeIrql is
- * ignored - which is safe because only message 0 runs the ISR body
+ * message's interrupt object has its own lock, and SynchronizeIrql 0, so
+ * each runs at its own message's IRQL - which is safe because only message
+ * 0 runs the ISR body
  * (hcdMsgIsr) and nothing synchronizes with a message's ISR (the line's
  * KeSynchronizeExecution users run under a line delivery only). On success
  * MsgVersion says what was connected: a message, its table kept; a line
@@ -2513,6 +2513,13 @@ NTSTATUS HcdStartController(PHCD_CONTROLLER hc, PIRP irp)
 
     HcdDoorGateEnter(hc);
     status = hcdStartBody(hc, irp);
+    /* The start-decision event on every outcome (design record 18 section
+     * 9): the grant as the resources gave it (0 none, 1 line, 2 message),
+     * the final delivery and reason, and the status. */
+    HcdMsiTraceStart(hc,
+                     (hc->MsgDescriptors != 0) ? 2UL
+                                               : (hc->HaveInterrupt ? 1UL : 0UL),
+                     status);
     HcdDoorGateLeave(hc);
     return status;
 }

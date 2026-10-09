@@ -103,13 +103,24 @@ static ULONG hcdMsiVersion(VOID)
 /* ---- the trace (record 18 section 9) ---------------------------------- */
 
 #if defined(XHCI_FLAVOUR_QEMU)
+/* The records' running number, across every FDO of this image. */
+static LONG hcdMsiTraceNumber;
+
 static VOID hcdMsiTrace(PHCD_CONTROLLER hc, char kind, const ULONG *fields,
                         ULONG count)
 {
     char line[XHCI_MSI_TRACE_MAX];
+    ULONG number;
 
+    /* Numbered and emitted in one step per record; records from two FDOs
+     * at once may still reach the channel out of number order, which the
+     * validator reports as a failed capture to retake, never as a pass. */
+    number = (ULONG)InterlockedIncrement(&hcdMsiTraceNumber);
+    if ((number & 0xFFFFUL) == 0) {
+        number = (ULONG)InterlockedIncrement(&hcdMsiTraceNumber);
+    }
     (VOID)XhciMsiTraceFormat(line, kind, hc->FdoSerial,
-                             hc->MsiFilter.Sequence, fields, count);
+                             hc->MsiFilter.Sequence, number, fields, count);
     XHCI_DBG_TEXT(line);
 }
 

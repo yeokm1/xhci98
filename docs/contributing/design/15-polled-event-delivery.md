@@ -706,7 +706,8 @@ no further third-party object in the image.
 **The connection.** Under a message grant, `IoConnectInterruptEx` with
 `Version = CONNECT_MESSAGE_BASED` (3): the PDO; the message ISR; the
 controller as context; `SpinLock` NULL, so each message's interrupt
-object has its own lock and `SynchronizeIrql` is ignored - safe because
+object has its own lock, and `SynchronizeIrql` 0, so each runs at its own
+message's IRQL - safe because
 the message ISR declines every message ID but 0 before it touches the
 controller, and nothing synchronizes with a message's ISR (as built: a
 driver lock would need the unified IRQL, known only after the

@@ -544,7 +544,7 @@ static ULONG xhciMsiTraceHex(char *line, ULONG len, ULONG value,
 }
 
 ULONG XhciMsiTraceFormat(char *line, char kind, ULONG fdo, ULONG sequence,
-                         const ULONG *fields, ULONG count)
+                         ULONG number, const ULONG *fields, ULONG count)
 {
     ULONG len;
     ULONG i;
@@ -562,6 +562,8 @@ ULONG XhciMsiTraceFormat(char *line, char kind, ULONG fdo, ULONG sequence,
     len = xhciMsiTraceHex(line, 6, fdo & 0xFFFFUL, 4);
     line[len++] = ' ';
     len = xhciMsiTraceHex(line, len, sequence & 0xFFFFUL, 4);
+    line[len++] = ' ';
+    len = xhciMsiTraceHex(line, len, number & 0xFFFFUL, 4);
     for (i = 0; i < count; i++) {
         line[len++] = ' ';
         len = xhciMsiTraceHex(line, len, fields[i], 8);

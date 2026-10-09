@@ -645,7 +645,7 @@ static void test_trace(void)
     for (i = 0; i < XHCI_MSI_TRACE_FIELDS; i++) {
         f[i] = 0xFFFFFFFFUL;
     }
-    len = XhciMsiTraceFormat(line, 'D', 0x1234, 0xABCD, f,
+    len = XhciMsiTraceFormat(line, 'D', 0x1234, 0xABCD, 0xFFFF, f,
                              XHCI_MSI_TRACE_FIELDS);
     CHECK(len < XHCI_MSI_TRACE_MAX, "the longest record fits");
     CHECK(len + 8 + 1 < 128, "with the debug channel's prefix and newline");
@@ -656,7 +656,7 @@ static void test_trace(void)
     }
     CHECK_EQ(strtoul(line + len - 2, NULL, 16), sum & 0xFF,
              "the checksum is the byte sum before it");
-    len = XhciMsiTraceFormat(line, 'L', 1, 2, f, 99);
+    len = XhciMsiTraceFormat(line, 'L', 1, 2, 3, f, 99);
     CHECK(len < XHCI_MSI_TRACE_MAX, "a count past ten is held to ten");
 }
 
