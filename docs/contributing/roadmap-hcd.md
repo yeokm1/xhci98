@@ -777,9 +777,9 @@ How it got here:
     Then it writes `(old & ~7) | target` as a 16-bit write and reads it back.
   - **Which deliveries it serves:** every line delivery. That means Windows 98, ME, 2000 and XP, and Vista and 7 with `MSISupported` 0 in the controller's hardware key or without an MSI grant (36.15).
   - **Not active under MSI or polling** (owner, 2026-10-09): when the delivery in effect is a message interrupt (Vista and 7 with an MSI grant) or a poll (`XhciInterruptMode` 2, or mode 0 with no line), it writes nothing and only reports. It decides at each run, so a later start or D0 return on the line repairs the route then. A move to polling at run time (the dead-line rule, 36.7) does not undo a write already made. This replaces "under polling it still repairs, for a later start on the line".
-  - **Report-only** when no target can be derived, or the raw value is outside both ranges. The PIC-mode rule (owner, 2026-10-08) replaces an earlier "report-only in PIC mode", and gets its own Codex review.
-  - **The parser** keeps the raw interrupt resource (level, vector, flags, share), which it does not today (`hcd_ctl.c` ~524).
-  - **Reaching LPC config space:** a supported path to read `00:1F.0` on every target, which `HcdSvcConfigSpace` does not give (it targets the xHCI's own PDO). Settle it first (HalGetBusDataByOffset or equivalent, per OS, Windows 98 included). Not CF8/CFC.
+  - **Report-only** when no target can be derived, or the raw value is outside both ranges. The PIC-mode rule (owner, 2026-10-08) replaces an earlier "report-only in PIC mode"; its own review, in 36.3's Codex loop, led to the 98-and-ME-only write above.
+  - **The parser** keeps the raw interrupt resource (level, vector, flags, share) (`hc->IntRaw`).
+  - **Reaching LPC config space:** settled as `HAL.dll!HalGetBusData` over bus 0, from offset 0 (`hcd_ctl.c` `hcdPirqSlot`), since `HcdSvcConfigSpace` reaches only the xHCI's own PDO. It is exported on every NT target and named in 98 SE's `ntkern.vxd` (`legal-provenance.md` section 4, static); `...ByOffset` has no Windows 98 evidence. Whether 98 SE's and ME's answer with real data is the `qemu` flavour's probe, a VM leg still owed. Not CF8/CFC.
   - **Placement:** in the HCD layer.
     - At start: after IoConnectInterrupt and `XhciInitController`, before `XhciEnableInterrupts`.
     - On each D0 return: before `XhciResumeController`.

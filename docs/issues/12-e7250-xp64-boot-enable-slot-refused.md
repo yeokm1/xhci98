@@ -329,11 +329,15 @@ leaves the xHCI's PIRQ unrouted in PIC mode is unknown until then:
 - on every return to D0, before `XhciResumeController`. Whether the BIOS
   restores the bad value on S3 resume is untested.
 
-**It needs first:**
-- the raw interrupt resource kept by `hcdParseResources`;
-- a supported way to read the LPC's configuration space on every target.
-  `HcdSvcConfigSpace` reaches only the xHCI's own PDO, and CF8/CFC is not
-  acceptable.
+**What it rests on:**
+- the raw interrupt resource, kept by `hcdParseResources`;
+- the LPC's configuration space read through `HAL.dll!HalGetBusData` over
+  bus 0, from offset 0 (`hcd_ctl.c` `hcdPirqSlot`). `HcdSvcConfigSpace`
+  reaches only the xHCI's own PDO, and CF8/CFC is not acceptable. The
+  name is exported on every NT target and present in 98 SE's
+  `ntkern.vxd` (`legal-provenance.md` section 4, static); whether 98 SE
+  and ME answer it with real data is read by the `qemu` flavour's probe
+  in a guest, not yet run.
 
 **What it records:** what it found, decided, wrote and read back, in the
 snapshot and the note ring, decoded by `XHCISNAP`.
