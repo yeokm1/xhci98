@@ -712,23 +712,6 @@ How it got here:
   - The owner then added MSI on Vista and 7, for both architectures, as
     36.15 and 36.16. The builds and E7250 check moved to 36.17.
 
-**Renumbered twice on 2026-10-08 (owner).** First, the withdrawn and
-superseded tasks were removed from this list. Then polled event delivery
-joined the phase. Documents and commits written before the
-renumbering cite these numbers:
-
-| Then | Now |
-|---|---|
-| 36.1 to 36.3 (the withdrawn `2.2.0.1`: Finding 1 fix, diagnostics, interim build) | 36w.1 to 36w.3, removed; issue 12 section 3.2 |
-| 36.4, 36.5 (the check again, and what it left owed) | 36w.4, 36w.5, removed; superseded by the old 36.7 |
-| 36.6 to 36.12 | 36.1 to 36.7 (first renumbering) |
-| 36.4 (watchdog and BUSY retry) | 36.4, the BUSY retry alone; the watchdog is replaced by polling's dead-line rule (36.5, 36.7) |
-| 36.5 (`XHCIQUAL` routing report) | 36.11 |
-| 36.6 (RESET_PIPE order) | 36.12 |
-| 36.7 (the release builds and check) | 36.17 (36.15 until MSI joined as 36.15 and 36.16) |
-| `POLL.0` to `POLL.5` (planned work) | 36.5 to 36.10 |
-| `POLL-V`, `POLL-E` (planned work) | 36.13, 36.14 |
-
 - [x] 36.1 **done 2026-10-08** (`3d667f1`); **reverted 2026-10-08 (owner) after its read**: the code and the `XHCISNAP` decoder are removed, the tree is back to `2.2.0.0`, and the description is kept as the record (issue 12 section 3.3) - the diagnostic build, numbered `2.2.0.2` (owner, 2026-10-07), on `2.2.0.0`'s code with no change in behaviour (issue 12 section 3.3):
   - per open pipe of every slot: its flags, queue and oldest outstanding transfer (URB function, setup bytes, length, age, TD address), with the Output Endpoint Context's state, TR Dequeue and DCS read at dump time;
   - a timeline of the last RESET_PIPE, ABORT_PIPE, RESET_PORT and cancel requests: arrival, completion, endpoint, the CLEAR_FEATURE outcome, the commands and their status, and the slow-IRP depth;
