@@ -362,6 +362,11 @@ echo === VM matrix verdict self-tests ===
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\vm-matrix\selftest.ps1"
 if errorlevel 1 goto matrixtestfail
+rem The M86 trace validator (design record 18 section 9): a capture it
+rem accepts is what R1, R2 and the lifecycle legs are read from.
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\vm-matrix\check-msi86-trace.ps1" -SelfTest
+if errorlevel 1 goto matrixtestfail
 
 echo.
 echo === batch-file line endings ===

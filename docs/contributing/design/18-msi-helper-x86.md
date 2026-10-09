@@ -6,7 +6,8 @@ lines for this record's code and legs are the orchestrator's to number).
 Revision 1, 2026-10-09, written before any code, on branch `p36-msi86`;
 revision 2 the same day, after review round 1, revision 3 after round
 2, revision 4 after round 3, and revision 5 after round 4, which
-converged (section 14). **Revision 6** records the owner's answers to
+converged (section 14). **Revision 11, 2026-10-10**: section 12a, as
+built. **Revision 6** records the owner's answers to
 section 12 (2026-10-09): the import and the strip accepted, a reboot
 requested by the INF (section 5), and mode 1 failing the start where no
 line is offered and no helper is bound (section 4.3). **Revision 7**
@@ -1271,6 +1272,69 @@ edit them):
   strip off or no line offered); the x86 legs (the restart, R4, H1a, U1
   on both guests, the required 98 SE check); the down-level line "on
   Vista or 7 x86 a hand-set `MSISupported` 1 read as polling".
+
+## 12a. As built (code, 2026-10-10)
+
+Built on branch `p36-msi86` after 2.3.0.0 took p36-poll's 36.5 to 36.8,
+together with record 15 section 4.3 itself (the amd64 connection, the
+message ISR and the capability read had no code before). Where the code
+differs from, or settles, what the sections above say:
+
+- **Where the pure functions live.** The channel's two halves and the
+  version packing (`XhciMsi86Answer`, `XhciMsi86Accept`,
+  `XhciMsi86PackVersion`) are `src\xhci_msi86.c`, the one file the helper
+  and the HCD both compile (`XHCI_MSI86_HELPER` makes its header take its
+  types from `ntddk.h`). The rest is the HCD's alone, in `src\xhci_msi.c`:
+  the capability read (`XhciMsiCapRead`, record 15), the checked walk, the
+  class, the strip and the qemu no-line rewrite (`XhciMsiWalk`,
+  `XhciMsiClassify`, `XhciMsiStrip`, `XhciMsiInjNoLine`, `XhciMsiOutcome`),
+  the filter record (`XhciMsiFilterBegin`/`Publish`), the binding's state
+  machine (`XhciMsi86BindStep`) and the trace record
+  (`XhciMsiTraceFormat`). Both are host-tested by `test\test_msi.c`; the
+  sections above that name `xhci_msi86.c` for all of them mean the pair.
+- **The kernel half** is `src\hcd_msi86.c`: the mode cache
+  (`HcdMsiAddDevice`, `HcdMsiStartValues`), the filter (`HcdMsiFilter`),
+  the helper's look and remove (x86), `HcdMsiRoutines` (amd64's
+  `MmGetSystemRoutineAddress`, x86's binding), `HcdMsiNoLineOffered`, the
+  counters and the trace. The seam `hcdMsgConnect`, the message ISR and
+  the capability read are `src\hcd_ctl.c`'s, beside the line's
+  connection; the release disconnects through `IoDisconnectInterruptEx`
+  whatever it connected, a line Windows fell back to included.
+- **The connection passes no spin lock** (record 15 section 4.3's revision
+  6): `SpinLock` NULL, so the system's own lock at the unified IRQL serves
+  the message ISR and `KeSynchronizeExecution`.
+- **The strip ships off** (`HCD_MSI_STRIP_DEFAULT` 0 in `hcd_msi86.c`)
+  until R1 and R2 are read; the `qemu` flavour's `XhciMsi86NoStrip` keeps
+  it off after the default is turned on, and `XhciMsi86InjNoLine` is H1a's
+  stimulus. The admitted shapes are the classification's own: a run whose
+  members are not all of the head's type, or a list opening on an
+  alternative, is "unsupported shape" and kept.
+- **The counters**: eighteen words appended to `XHCIHC_COUNTERS` (114 in
+  all; `xhci_counters.h` names them): the routines' source, the messages
+  connected, the capability, the connection's status, the raw message
+  descriptors; the helper's state, looks, last status, refusal and
+  version; the last filter's sequence, class, outcome, mode as read, its
+  configurations, message and line members, and the descriptors a strip
+  removed. The bounded descriptor snapshot is `hc->FilterSnap` (12
+  descriptors of 9 words); the start's log notes carry the summary
+  (`msi.*`, `msi86.*`).
+- **The trace** is the `M86` record of section 9, one per line on the
+  `qemu` flavour's debug channel; a list's `B` record names it `R`
+  (received), `I` (after the no-line rewrite) or `T` (returned), and
+  `scripts\vm-matrix\check-msi86-trace.ps1` validates a capture and prints
+  it (its `-SelfTest` runs in `build-driver.cmd`).
+- **The helper's imports**: `wdmsec.lib`'s `IoCreateDeviceSecure` brings
+  31 `ntoskrnl.exe` pairs, all listed in `xhcimsi-imports.allow` from the
+  first link and gated by the `nt6x86` profile against the Vista SP2 and
+  7 SP1 x86 kernels; the checked builds add `RtlAssert`, the `qemu` build
+  `RtlQueryRegistryValues`.
+- **The pipeline**: `build-driver.cmd :buildmsi` (x86 runs); the import
+  gate's `-GateProfile nt6x86`; `source-stamp.ps1 -Driver xhcimsi`, whose
+  `SOURCES` parse now keeps path separators; the charset gate's skip;
+  `make-package.ps1 -MsiDriverPath`; `make-release.ps1`'s per-leg media
+  and publishable sets and `Assert-MsiHelperPublished`; `check-inf.ps1`'s
+  `MSI-*` and `MSIHLP-*` rules and `.HW`/directive footprint rows;
+  `check-txtsetup-oem.ps1` not counting the helper's service.
 
 ## 13. Files the code touches
 

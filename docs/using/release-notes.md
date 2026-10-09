@@ -873,6 +873,46 @@ The behaviours have not been seen to act on real hardware: no real
 controller has raised one of these faults under this driver yet, and the
 AM5 tester's machine has not run this release.
 
+## Windows Vista and 7: message-signalled interrupts (new in `2.3.0.0`)
+
+On Windows Vista and 7 the controller may now use a message-signalled
+interrupt (MSI or MSI-X) instead of its interrupt line, the way Windows'
+own drivers for newer controllers do. A message does not travel through
+the chipset's interrupt routing, so a BIOS routing fault such as the Dell
+E7250's cannot lose it. Windows 98, ME, 2000 and XP (32- and 64-bit) have
+no message-signalled interrupts and are unchanged.
+
+- **64-bit Vista and 7**: the driver asks Windows for one message in the
+  controller's hardware key, and connects it when Windows grants it.
+- **32-bit Vista and 7**: the one 32-bit `xhci98.sys` also runs on Windows
+  98, so it cannot itself use the Vista routine that connects a message.
+  The 32-bit package therefore carries a small second driver for these two
+  systems alone, `xhcimsi.sys`, which the INF installs as a service that
+  starts with Windows and which hands `xhci98.sys` that routine. **The
+  install and every update on 32-bit Vista and 7 ask you to restart**,
+  because that service starts only at boot; until you do, the controller
+  runs on its interrupt line, as on XP, and uses the message from the
+  next start of Windows on. If `xhcimsi.sys` is missing or does not load,
+  the controller keeps its interrupt line.
+- **Forcing the interrupt line** on Vista and 7: set `XhciInterruptMode` to
+  `1` and disable and enable the controller, or set `MSISupported` to `0`
+  under `Interrupt Management\MessageSignaledInterruptProperties` in the
+  controller's hardware key (Device Parameters) and restart. On 32-bit
+  Vista and 7 with no `xhcimsi.sys` running, a controller that offers no
+  interrupt line at all then fails to start under `XhciInterruptMode`
+  `1`, as it does on XP.
+- **Going back to an earlier version** on Vista or 7: the request for a
+  message stays in the hardware key, and releases before `2.3.0.0` do not
+  know what to do with a message. Before installing an older package,
+  uninstall the controller in Device Manager with "Delete the driver
+  software for this device" ticked, or set `MSISupported` to `0` first.
+- **Removing the 32-bit helper** after uninstalling the driver: it stays
+  installed as a service and does nothing on its own; `sc delete xhcimsi`
+  from an administrator's prompt, then a restart, removes it.
+
+`XHCISNAP` shows which delivery the controller uses. These behaviours have
+been read in QEMU guests only (the readings are listed in the run record).
+
 ## Registry settings
 
 Twelve values, each a `DWORD` in the controller's driver (software) key:
