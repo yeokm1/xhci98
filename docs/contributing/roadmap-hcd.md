@@ -67,6 +67,7 @@ table is the index.
 | `2.2.0.0` in three phases | Split on 2026-10-05 (owner), the day it opened: Phase 34 the registry values and the two Device Manager pages, Phase 35 polled event delivery, Phase 36 selective suspend, standby resume, the audio wedge, the docs and the cut. One release at the end; each phase closes on its own checkpoint. Task ids renumbered from the single Phase 34: 34c.N to 35.N, 34.4 to 36.1, 34.5 to 36.2, 34.6 to 36.3, 34.7 to 36.4, 34a and 34b to 36a and 36b. **Amended later the same day**: Phase 34 is cut on its own as `2.1.1.0` (the row below), and the four freed ids were taken again for Phase 34's new tasks - 34.4 the port switchover, 34.5 its docs, 34.6 its cut - no tracked file or published `readme.txt` having cited the old ones; renumbered 34.3, 34.4 and 34.5 when task 34.3 (the Vista/7 Advanced tab's bandwidth) was removed, below |
 | `2.1.1.0` at Phase 34 | An interim release cut at the end of Phase 34 (owner, 2026-10-05), amending the split's one release at the end: the registry values, the two Device Manager pages and the port switchover ship as `2.1.1.0`, and `2.2.0.0` carries Phases 35 and 36. Phase 34 takes its own docs (34.4) and cut (34.5); 36.3 and 36.4 cover Phases 35 and 36. **Amended 2026-10-06**: the row below ("Phases numbered when opened") takes the numbers 35 and 36 off polled event delivery and selective suspend; their ids 35.N, 36.N, 36a.N and 36b.N are now `POLL.N`, `SUSP.N`, `SUSPa.N` and `SUSPb.N` |
 | Phases numbered when opened | Owner, 2026-10-06: planned work carries no phase number until the owner starts it. Polled event delivery and selective suspend, drawn up as Phases 35 and 36 on 2026-10-05, become "Planned work" sections with placeholder ids (`POLL`, `SUSP`), still meant for `2.2.0.0`, and take the next free number when opened. Commits and memories before this change call them Phases 35 and 36 |
+| A phase's closing task is `<phase>.final` | Owner, 2026-10-09: the task that builds, checks and cuts a phase's release is named `<phase>.final` and stays last in the list; a task added later takes the next free number above it, so nothing is renumbered. Phase 36's is the first (`36.final`, 36.17 in commits before then); earlier phases keep their numbers |
 | Phase 35: SuperSpeed falling back to USB 2.0 on Sunrise Point | Owner, 2026-10-06, from the owner's E460 and a tester's HP EliteBook 850 G5, both Intel Sunrise Point-LP (`8086:9D2F`): SuperSpeed devices enumerate at High Speed or not at all, and a USB 3 hub shows only its USB 2.0 half; the P14s Gen 1 (`8086:02ED`) is unaffected. The Missing-CAS lead and its gate `XhciMissingCas` were planned first; 35.0's reading (owner, the same day) found the link trained and the device dropped by this driver's speed decoding instead, and the owner re-planned 35.1-35.4 around that fix, ungated, in `2.2.0.0`, the `XhciMissingCas` work dropped (issue 11). With it, `XhciIntelPortSwitch` 2 (35.5, the switchover row below). Planned as its own interim release, `2.1.2.0`, before the tolerance work joined the phase |
 | Phase 35: controller tolerance (`35-T`) | Owner, 2026-10-06, from a tester's AMD AM5 report (a HID mouse randomly stops; moving it to another port helps for longer) and the review of Linux's xHCI quirks that followed: no AM5 or X570 controller id but `43F7` carries a Linux quirk flag (and `43FC`/`43FD` go to a Promontory 21 glue driver the mirror lacks), so Linux's robustness on them is taken, as a hypothesis, to be behaviour it applies to every controller, where this driver is stricter and has lost usbport's URB timeout. Joins Phase 35 and ships with it, not a release of its own; all seven tolerant behaviours (35-T.1 to 35-T.7) land together, not one at a time after a diagnostic reading; spec-legal behaviours that cost nothing on a compliant controller are unconditional, and only the interrupt-interval cap is gated - on every AMD controller (vendor `1022`), wider than Linux's list, by `XhciIntervalCap` 0/1/2 as `XhciIntelPortSwitch` is; the Average TRB Length change is not made by default but offered as the switch `XhciAvgTrbEsit`, written by the INFs at 0, off, so a tester can compare (owner, the same day, after review); a code nothing claims and a halt with no TD cycle the device, a replug done by the bus, rather than recover the endpoint in place (owner, the same day, after review); the budgets and intervals are constants, not registry values, and one switch, `XhciTolerance` (1 default, 0 every unconditional 35-T behaviour off, back to `2.1.1.0` handling), is the field escape (owner, the same day); the lost-interrupt backstop (35-T.1) is this phase's, and the planned polled delivery reuses its peek. Each taken from options with a recommendation. Design record 17 |
 | Phase 35 is `2.2.0.0` | Owner, 2026-10-06, once the tolerance work joined it: the size of the change makes Phase 35 a minor release, `2.2.0.0`, not the interim `2.1.2.0`, and its branch is renamed `2.2.0.0` to match. Polled event delivery and selective suspend, meant for `2.2.0.0` until then, carry no version: each takes one when the owner opens it. The rows above that name `2.1.2.0` for Phase 35, or `2.2.0.0` for the planned work, record what was decided at the time |
@@ -139,7 +140,8 @@ values, the Device Manager pages and the Intel port switchover; Phase 35 is
 `2.2.0.0`: SuperSpeed devices falling back to USB 2.0 on Intel
 Sunrise Point, `XhciIntelPortSwitch` 2, and the controller tolerance work
 (35-T). Phase 36 is issue 12's E7250 interrupt routing, with polled event
-delivery, which joined it on 2026-10-08. Selective suspend is planned, and
+delivery, which joined it on 2026-10-08, MSI on Vista and 7, and three of
+issue 17's items (2026-10-09). Selective suspend is planned, and
 takes a phase number and version only when the owner opens it; its task
 ids are placeholders (`SUSP.n`) until then.
 The order is deliberate:
@@ -669,6 +671,9 @@ Goal:
   all, or a line proven dead at run time.
 - MSI on Vista and 7 bypasses PIRQ routing altogether wherever the OS
   offers it (36.15).
+- Three items from SweetLow's `2.x` testing (GitHub issue 17): the USB
+  device interface, the device's real speed in the hub queries, and
+  polling rates a client chooses (36.17 to 36.19).
 
 Status: opened 2026-10-07 (owner) from a user report against `2.2.0.0`,
 the first report of the HCD on real hardware under Windows XP x64 (issue
@@ -710,7 +715,17 @@ How it got here:
     section 4.2). That replaces the stalled-event watchdog 36.4 held, and
     36.4 keeps only the BUSY retry.
   - The owner then added MSI on Vista and 7, for both architectures, as
-    36.15 and 36.16. The builds and E7250 check moved to 36.17.
+    36.15 and 36.16. The builds and E7250 check moved to the end of the
+    list.
+- **2026-10-09.** The owner took three of issue 17's six items into this
+  phase as 36.17 to 36.19, item 6 in both its halves (36.18). The closing
+  task, the builds and E7250 check, was renamed `36.final` the same day
+  (owner), so a task added later goes above it and nothing is renumbered.
+  Commits before then call it 36.17, which is now the device interface
+  task. The 98 SE silent install
+  is planned work ("Issue 17 follow-up"). The `XhciIntelPortSwitch`
+  default waits on the reporter's reason, and the UAS figures are a report.
+  The owner tests these items and answers the issue after.
 
 - [x] 36.1 **done 2026-10-08** (`3d667f1`); **reverted 2026-10-08 (owner) after its read**: the code and the `XHCISNAP` decoder are removed, the tree is back to `2.2.0.0`, and the description is kept as the record (issue 12 section 3.3) - the diagnostic build, numbered `2.2.0.2` (owner, 2026-10-07), on `2.2.0.0`'s code with no change in behaviour (issue 12 section 3.3):
   - per open pipe of every slot: its flags, queue and oldest outstanding transfer (URB function, setup bytes, length, age, TD address), with the Output Endpoint Context's state, TR Dequeue and DCS read at dump time;
@@ -825,7 +840,29 @@ How it got here:
   - **Down-level:** 98 SE, 2000 and XP x86 and x64 reading as the release before it, with the line. The x86 binary loads on 98 and ME with the new code.
   - **The owner's E7250** under Windows 7 x64, with `XhciIntelIrqRoute` 0, read as MSI with the mouse and the stick working.
   - **The owner's E460 and P14s Gen 1** under Windows 7 if installed, read as MSI.
-- [ ] 36.17 the `2.3.0.0` builds, x86 and `-amd64`:
+- [ ] 36.17 `GUID_DEVINTERFACE_USB_DEVICE` (`{A5DCBF10-6530-11D2-901F-00C04FB951ED}`) on every device the bus presents (issue 17 item 3):
+  - **Where.** Every device PDO and every external hub's PDO, as usbhub registers it; not the root hub, on which usbport registers none.
+  - **A composite the bus splits** has no parent devnode, so the interface goes on its first function's PDO, the rule the door already uses for the connection's driver key (design record 13 section 8.10). Its path then carries `&MI_00`.
+  - **How.** `hcdInterfaceOn` at the PDO's start, `hcdInterfaceOff` at its stop and, releasing the string, at its removal, as `HcdDoorHubStart`, `HcdDoorHubStop` and `HcdDoorHubRemove` do for the hub interface. Best effort, as theirs: a failed registration is a missing interface, not a failed device.
+  - **Legs.** A SetupDi enumeration of the class on every guest, x86 and amd64: a device, a hub and a device behind it, a split composite, a hot-plug and a removal, and a disable and enable of the controller.
+- [ ] 36.18 the device's real speed on every hub door (issue 17 item 6), both halves (owner, 2026-10-09):
+  - **The `_EX` form's `Speed` byte** reads 3 for a SuperSpeed connection and 4 for SuperSpeedPlus, as Intel's USB 3 drivers for Windows 9x report it, on every target. 0 to 2 are unchanged. No Microsoft header defines 4, and the WDK 7.1 headers stop at 2, so design record 13 section 8.4 is amended to replace the High Speed ceiling.
+  - **`IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2`** (`0x0022045C`), new.
+  - **The structure.** `ConnectionIndex`, `Length`, `SupportedUsbProtocols` and `Flags`, 16 bytes, written byte by byte like the rest of the door. The protocols are what the port and device support (USB 1.1, 2.0, 3.0). The flags are SuperSpeed or higher operating and capable, and SuperSpeedPlus operating and capable, from the connection's speed class and the port's protocol.
+  - **Refused** for a buffer or `Length` short of the structure, or a port out of range. How Microsoft's hub treats the caller's `SupportedUsbProtocols` on input, and what it refuses, is read from the WDK's documentation before code.
+  - **Legs.**
+    - SweetLow's usbview (http://sweetlow.orgfree.com/download/usbview.zip) on 98 SE and 7: a SuperSpeed device on a root port and behind a USB 3 hub, a High Speed device, and a hub port with nothing on it.
+    - Microsoft's own pages with a SuperSpeed device attached, the risk of the 3 and 4: the hub's Power tab on 98 SE, ME, 2000 and XP, and the hub's Advanced tab on Vista and 7. Read by the owner. A page that misreads the value is a finding, and the `_EX` half is then gated rather than dropped.
+- [ ] 36.19 polling rates a client chooses: `XhciFastPollFsLs` 4 (issue 17 item 2; design record 13 section 13 gains a section for it):
+  - **The codes.** Under mode 4, an interrupt endpoint whose `bInterval` in the caller's descriptor is 128, 129 or 130 is programmed at Interval 2, 1 or 0 (2000, 4000 or 8000 Hz). Every other `bInterval` reads by Table 6-12. Mode 4 does not do modes 2 and 3's 16-63 mapping, and they do not honour the codes.
+  - **Why an opt-in.** 128 to 255 ms are legal Full- and Low-Speed values, so a device may declare a code. And a client that sends codes with the mode off gets what they legally mean: 128 ms at Full Speed. The procedure is mode 4 first, then hidusbf set to the codes, and the release notes say so.
+  - **The ceiling.** 125 us, Interval 0, at any speed; 131 and above are not codes.
+  - **Scope.** Full and Low Speed on a root port only, as modes 2 and 3; High Speed and SuperSpeed anywhere. Never isochronous, bulk, or a hub's own endpoint.
+  - **Keyed on the descriptor's byte** (`BInterval`), not on the Interval Table 6-12 derives from it: 10 at Full Speed, 15 after the High Speed clamp.
+  - **Applied before the interval cap** (35-T.7), which leaves Interval 2 or less unchanged. Today a capped endpoint is never fast-polled, so on an AMD controller the cap would otherwise silence every code.
+  - **A refusal falls back to Interval 3 (1 ms)**, not to Table 6-12's reading of the code, which would leave the device polled every 128 ms.
+  - **Host vectors** in `test_fast_poll`: 4 accepted and 5 off; each code at Low, Full and High Speed and SuperSpeed; 127, 131 and 255 untouched; Full Speed behind a hub untouched and High Speed behind one applied; isochronous and bulk untouched; the two conventions kept apart; no double application; the revert landing at 3. **Legs:** hidusbf set to the codes on 98 SE and 7 in QEMU, read in the `fastpoll.*` records; mode 4 with an unpatched device reading as the release before it.
+- [ ] 36.final the `2.3.0.0` builds, x86 and `-amd64`, after every task above:
   - the host suites and every gate;
   - a Codex review loop per task;
   - the QEMU regression legs (still owed from `2.2.0.2`);
@@ -850,12 +887,15 @@ Checkpoint: `2.3.0.0` on the E7250 under XP x64 and Windows 7 x64, with
 - `XhciInterruptMode` at 0 and at 1, on a controller whose line interrupt
   works, reading as the release before it on the down-level systems;
 - 36.16 passing: MSI on Vista and 7, and the x86 binary still loading on
-  98 and ME.
+  98 and ME;
+- 36.17 to 36.19's legs passing, and `XhciFastPollFsLs` 0 to 3 reading as
+  the release before it.
 
 The phase is cut as `2.3.0.0` (owner, 2026-10-08).
 
 Records: `docs/issues/12-e7250-xp64-boot-enable-slot-refused.md`;
-`design/15-polled-event-delivery.md`.
+`design/15-polled-event-delivery.md`; GitHub issue 17
+(https://github.com/yeokm1/xhci98/issues/17).
 
 ---
 
@@ -866,6 +906,8 @@ it, and its placeholder ids take that number then (owner, 2026-10-06; the
 decisions table), and a version only then too: `2.2.0.0` is Phase 35's
 (owner, 2026-10-06). Selective suspend is what remains, and it ends in a
 cut. Polled event delivery moved into Phase 36 on 2026-10-08 (owner).
+Issue 17's follow-up (the last section) is not a release of its own: it
+joins whichever phase the owner opens it in.
 
 ## Planned - Release: Selective Suspend, Standby Resume and the Cut
 
@@ -934,3 +976,22 @@ event delivery work closed; the ten install legs read from the asset.
 
 Records: `design/14-selective-suspend.md`; a run record, named for the
 phase when it is opened.
+
+## Planned - Issue 17 follow-up
+
+Goal: the one item of SweetLow's `2.x` testing (GitHub issue 17) that
+Phase 36 did not take (owner, 2026-10-09), waiting on something before it
+can be designed.
+
+Status: not opened, unnumbered and unversioned. It is not a release of
+its own; it joins the phase the owner opens it in.
+
+- [ ] I17.1 the Windows 98 SE silent install (issue 17 item 4): the
+  `SilentInstall` capability, today FALSE on every PDO
+  (`hcd_pdo.c`, `hcd_rh.c`, `uas_pdo.c`), reported TRUE where 98 SE's
+  `usbhub.sys` and SweetLow's `usbhub20.sys` report it, so a device
+  already installed does not bring back the New Hardware wizard on
+  another port. **Waits on** SweetLow's description of the rule: when it
+  is set, and what it reads. Code offered for it is taken only under
+  `legal-provenance.md`'s rules: GPL-2.0-compatible, and not derived
+  from Microsoft's binaries.

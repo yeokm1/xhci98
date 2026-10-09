@@ -299,7 +299,7 @@ what it found:
 The PIC-mode rule was added on 2026-10-08 at the owner's request, so that
 the E7250 also works under Windows 98 and ME. It replaces an earlier
 "report-only in PIC mode". It gets its own Codex review in 36.3, and the E7250
-check (36.17) runs under Windows 98 SE as well. Whether the E7250's BIOS
+check (36.final) runs under Windows 98 SE as well. Whether the E7250's BIOS
 leaves the xHCI's PIRQ unrouted in PIC mode is unknown until then:
 `XHCIQUAL` under DOS saw line 11.
 
@@ -361,7 +361,7 @@ and its open questions.
     behind P2SB;
   - Bay Trail and Braswell use the iLB.
 - **36.12:** RESET_PIPE in xHCI 4.6.8 order.
-- **36.17:** the `2.3.0.0` builds, the QEMU regression, and the owner's check
+- **36.final:** the `2.3.0.0` builds, the QEMU regression, and the owner's check
   on the E7250 under XP x64 and Windows 7 with no manual write. The check
   covers:
   - the mouse;
