@@ -3625,6 +3625,53 @@ cover the ring side, which the HCD keeps).
 - The common-buffer growth question of 11.2, in the phase that first hits a
   limit.
 
+### 11.5 The command size and its measurement (tasks 36.21 and 36.22)
+
+Two sizes are kept apart (`roadmap-hcd.md`, "The transfer size"): the
+**command size**, what one UAS command asks the device to move, which
+`xhciuas.sys` advertises in its adapter descriptor and so decides how
+large an SRB the storage class driver builds; and the **TD size**, how much
+of one data URB the HCD puts on the ring at once, which 11.3's chunking
+decides (at most 32 pages and the grant, packet-aligned when not the last).
+Task 36.22 changes only the first.
+
+- **The value.** `XhciMaxTransferKB`, a DWORD in the controller's driver
+  key: 64 to 2048 in steps of 4, default 1024; absent, of another type, out
+  of range or off a step reads as 1024, each noted (`xfer.max.value`,
+  `xfer.max.why`, `xfer.max.bytes`). Read at every controller start
+  (`hcd_ctl.c`, `hcdReadValues`; the rule is `XhciXpolValue` in
+  `xhci_xstat.c`). The INFs write 1024 under 34.1's don't-overwrite rule.
+- **The query.** `IOCTL_XHCI98_TRANSFER_POLICY` (`src\xhci98_xfer.h`), on
+  the device PDO, pointer-free: signature, version and size in, the
+  command size with the contract's range and step out, answered at once
+  from what the start latched and nothing else (`hcd_urb.c`,
+  `hcdPolicyIoctl`). `xhciuas.sys` sets 64 KiB, then asks at every start
+  before it selects its pipes and before any LUN exists (`uas_fdo.c`,
+  `uasAskPolicy`); an older bus (`STATUS_NOT_SUPPORTED`), a reply out of
+  contract and a request that failed in transport each leave 64 KiB,
+  counted apart, and the start goes on (`UasPolicyValue`, `uas_iu.c`,
+  `test_uas`). The adapter descriptor's `MaximumTransferLength` and
+  `MaximumPhysicalPages` (bytes / page + 1) and every pipe's
+  `MaximumTransferSize` read that one stored value.
+- **Activation.** A storage class driver keeps the descriptor it read and a
+  UAS stop and start keeps the LUNs it knows, so a new value takes effect
+  at the next reboot. An SRB sized to an older value is carried as it is:
+  neither driver cuts it short or refuses it, and the HCD chunks it.
+- **What 36.21 measures** (`xhci_xstat.h`; the snapshot's HCD region,
+  `XHCISNAP` "transfer size"): bulk data URBs by length and the chunks each
+  became, the map grant, the gap between two chunks of one URB in two parts
+  (retirement to the next publication, and the ring empty in software's
+  view with the URB unfinished), and the processor time of a publication
+  and a completion pass. The clock is the processor's time-stamp counter
+  (RDTSC, no import), converted by the start's and the snapshot's (counter,
+  system time) pairs; hardware starvation before software handles an event
+  is not measured. `xhciuas.sys` counts its commands by length and by the
+  number in flight, and hands the bus a bounded record once a second while
+  it moves data (`IOCTL_XHCI98_TELEMETRY`, copied whole into the bus's own
+  storage), so a dump shows both sides.
+- **The qemu flavour** adds `XhciQemuMapGrant`, a constrained grant for
+  the legs (`build-and-test.md`, the qemu test aids).
+
 ## 12. What Phase 25 leaves open, and where each item binds
 
 Phase 25 read contracts and built a scaffold; it ran nothing on a guest. Every

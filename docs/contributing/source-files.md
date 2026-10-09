@@ -197,7 +197,14 @@
 > `xhcisnap\xhcisnap.c` decodes them (`print_xstat`, `-selftest-xstat`).
 > The guest-side client `test\xfertest\` (`XFERTEST.EXE`, built by its own
 > `build.cmd`, in no package) moves data in requests of a given size and
-> times them. The tables below are the
+> times them. Task 36.22 adds no file: `XhciMaxTransferKB` is read in
+> `hcd_ctl.c` (`hcdReadValues`, the rule `XhciXpolValue` in `xhci_xstat.c`)
+> and answered through `xhci98_xfer.h`'s `IOCTL_XHCI98_TRANSFER_POLICY` in
+> `hcd_urb.c` (`hcdPolicyIoctl`); `xhciuas.sys` asks at its start
+> (`uasAskPolicy`, `uas_fdo.c`; the reply check `UasPolicyValue`,
+> `uas_iu.c`, `test_uas`) and its descriptor (`uas_pdo.c`) and pipes read
+> the answer; the qemu flavour's `XhciQemuMapGrant` constrains the grant
+> (`hcdXstatGrant`, `hcd_ctl.c`). The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name

@@ -1114,6 +1114,9 @@ typedef struct _HCD_CONTROLLER {
      * once the slot no longer names it), and InjOwnCmd across the layer's
      * own commands, which its command hook lets through. */
     ULONG QemuPsiE460;
+    /* Task 36.22: XhciQemuMapGrant as the start read it, 0 none; applied
+     * to MapRegisters once the adapter has given its grant (hcd_ctl.c). */
+    ULONG QemuMapGrant;
     /* Task 36.4: XhciQemuStartHold's end in tolerance ticks, latched at
      * each start (HcdInjStart), 0 none; ended early by HcdInjStartRelease. */
     volatile LONG InjStartHoldTicks;

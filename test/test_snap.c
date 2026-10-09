@@ -289,6 +289,51 @@ static void test_xstat_words(void)
              "TeleRefused last");
 }
 
+/* 36.22: XhciMaxTransferKB as each start takes it. */
+static void test_xpol(void)
+{
+    ULONG why;
+
+    CHECK_EQ(XhciXpolValue(XHCI_XPOL_FOUND_NONE, 0, &why), 1048576,
+             "absent: 1 MiB");
+    CHECK_EQ(why, XHCI_XPOL_WHY_ABSENT, "said as absent");
+    CHECK_EQ(XhciXpolValue(XHCI_XPOL_FOUND_OTHER, 64, &why), 1048576,
+             "another type: 1 MiB whatever it holds");
+    CHECK_EQ(why, XHCI_XPOL_WHY_TYPE, "said as the type");
+    CHECK_EQ(XhciXpolValue(XHCI_XPOL_FOUND_DWORD, 64, &why), 65536,
+             "64: 64 KiB, today's size");
+    CHECK_EQ(why, XHCI_XPOL_WHY_USED, "used");
+    CHECK_EQ(XhciXpolValue(XHCI_XPOL_FOUND_DWORD, 1024, &why), 1048576,
+             "1024: 1 MiB");
+    CHECK_EQ(XhciXpolValue(XHCI_XPOL_FOUND_DWORD, 2048, &why), 2097152,
+             "2048: 2 MiB");
+    CHECK_EQ(why, XHCI_XPOL_WHY_USED, "the top used");
+    CHECK_EQ(XhciXpolValue(XHCI_XPOL_FOUND_DWORD, 68, &why), 69632,
+             "68: a step above the bottom");
+    CHECK_EQ(XhciXpolValue(XHCI_XPOL_FOUND_DWORD, 60, &why), 1048576,
+             "60: below the range");
+    CHECK_EQ(why, XHCI_XPOL_WHY_RANGE, "said as range");
+    CHECK_EQ(XhciXpolValue(XHCI_XPOL_FOUND_DWORD, 0, &why), 1048576,
+             "0: below the range, not off");
+    CHECK_EQ(why, XHCI_XPOL_WHY_RANGE, "range");
+    CHECK_EQ(XhciXpolValue(XHCI_XPOL_FOUND_DWORD, 2052, &why), 1048576,
+             "2052: above it");
+    CHECK_EQ(XhciXpolValue(XHCI_XPOL_FOUND_DWORD, 0xFFFFFFFFUL, &why),
+             1048576, "all ones: above it, no overflow");
+    CHECK_EQ(why, XHCI_XPOL_WHY_RANGE, "range");
+    CHECK_EQ(XhciXpolValue(XHCI_XPOL_FOUND_DWORD, 1025, &why), 1048576,
+             "1025: off a step");
+    CHECK_EQ(why, XHCI_XPOL_WHY_STEP, "said as the step");
+    CHECK_EQ(XhciXpolValue(XHCI_XPOL_FOUND_DWORD, 66, &why), 1048576,
+             "66: off a step");
+    CHECK_EQ(XHCI_XPOL_MIN_KB * 1024, XHCI98_POLICY_MIN_BYTES,
+             "the bus's range is the interface's");
+    CHECK_EQ(XHCI_XPOL_MAX_KB * 1024, XHCI98_POLICY_MAX_BYTES, "its top");
+    CHECK_EQ(XHCI_XPOL_STEP_KB * 1024, XHCI98_POLICY_STEP_BYTES, "its step");
+    CHECK_EQ(XHCI_XPOL_DEFAULT_KB * 1024, XHCI98_POLICY_DEFAULT_BYTES,
+             "its default");
+}
+
 /* 36.21's arithmetic, as the driver calls it. */
 static void test_xstat_math(void)
 {
@@ -382,6 +427,7 @@ int main(void)
     test_pirq_words();
     test_xstat_words();
     test_xstat_math();
+    test_xpol();
     test_walk(0);
     test_walk(1);
     test_walk(18);

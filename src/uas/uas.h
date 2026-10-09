@@ -53,7 +53,9 @@
 
 #define UAS_MAX_LUNS            8
 #define UAS_STATUS_BUFFER       288     /* a SENSE IU with 252 sense bytes */
-#define UAS_MAX_TRANSFER        0x10000 /* what the adapter descriptor says */
+#define UAS_MAX_TRANSFER        0x10000 /* the command size until the bus
+                                         * answers, and whenever it cannot
+                                         * (task 36.22; CommandBytes) */
 #define UAS_DEFAULT_TIMEOUT     30      /* seconds, an SRB that names none */
 #define UAS_TMF_TIMEOUT_MS      3000
 
@@ -235,6 +237,10 @@ typedef struct _UAS_FDO {
      * stored value. */
     ULONG CommandBytes;
     ULONG PolicySource;
+    /* Starts whose question fell back to 64 KiB, by why, since load. */
+    ULONG PolicyUnsupported;
+    ULONG PolicyMalformed;
+    ULONG PolicyTransport;
     /* The record handed to the bus (IOCTL_XHCI98_TELEMETRY) from the timer
      * at most once a second when something moved: built under the lock,
      * sent after it with this driver's own IRP. TeleBusy (lock) from the

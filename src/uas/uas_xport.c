@@ -973,6 +973,9 @@ static BOOLEAN uasTeleBuild(PUAS_FDO fdo)
     for (i = 0; i < 8; i++) {
         w[XHCI98_TELE_COUNTERS + i] = fdo->Counters[i];
     }
+    w[XHCI98_TELE_UNSUPPORTED] = fdo->PolicyUnsupported;
+    w[XHCI98_TELE_MALFORMED] = fdo->PolicyMalformed;
+    w[XHCI98_TELE_TRANSPORT] = fdo->PolicyTransport;
     fdo->TeleBusy = TRUE;
     uasRef(fdo);
     return TRUE;

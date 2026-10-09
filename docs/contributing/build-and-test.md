@@ -6322,6 +6322,16 @@ the hold. (A switch of this name was in the
 withdrawn `2.2.0.1`, task 36w.3, and was reverted with it; this is its
 return, without that build's drain at interrupt enable.)
 
+**`XhciQemuMapGrant`** (roadmap-hcd task 36.22). A REG_DWORD read at every
+start: a number of map registers from 1 up, below the grant
+`IoGetDmaAdapter` gave, to which every chunk is planned (`hcdPlanChunk`
+reads it in place of the grant), so a leg sees a large command cut into
+more, smaller chunks than the adapter would force. Absent, another type, 0
+or a number at or above the real grant leaves the grant as given. The log
+ring notes `qemu.mapgrant` (the value read) and `qemu.mapgrant.applied`
+(the registers in force when it was applied); `XHCISNAP`'s "transfer size"
+section prints the grant in force. A change takes effect at the next start.
+
 **`XhciQemuInject`** (roadmap-hcd task 35-T.9, design record 17 section 5).
 A REG_DWORD the controller thread re-reads about once a second, so a script
 in the guest fires a fault at run time by writing it:

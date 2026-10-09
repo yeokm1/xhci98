@@ -147,6 +147,66 @@ static VOID uasReadSerial(PUAS_FDO fdo, UCHAR index)
     UasFree(buf);
 }
 
+/*
+ * Task 36.22: the command size, asked of the bus at every start before the
+ * pipes are selected and before any LUN is exposed, separate from the
+ * streams (a High-Speed device opens none). 64 KiB first, on this and every
+ * path; then the bus's answer if it keeps the contract (UasPolicyValue).
+ * An older bus, a reply out of contract and a request that failed each
+ * fall back to 64 KiB, counted apart, and the start goes on: its own
+ * failures (selection, streams) still fail it. The descriptor and the
+ * pipes read the one value stored here. PASSIVE_LEVEL, no lock held.
+ */
+static VOID uasAskPolicy(PUAS_FDO fdo)
+{
+    PXHCI98_TRANSFER_POLICY rq;
+    NTSTATUS status;
+    ULONG sent;
+    ULONG source;
+    ULONG bytes;
+    KIRQL irql;
+
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    fdo->CommandBytes = UAS_MAX_TRANSFER;
+    fdo->PolicySource = XHCI98_TELE_SRC_UNASKED;
+    KeReleaseSpinLock(&fdo->Lock, irql);
+
+    rq = (PXHCI98_TRANSFER_POLICY)UasAlloc(sizeof(XHCI98_TRANSFER_POLICY));
+    if (rq == NULL) {
+        sent = UAS_POLICY_SENT_FAILED;
+    } else {
+        UasZero(rq, sizeof(*rq));
+        rq->Signature = XHCI98_POLICY_SIGNATURE;
+        rq->Version = XHCI98_POLICY_VERSION;
+        rq->Size = sizeof(XHCI98_TRANSFER_POLICY);
+        status = uasInternalIoctl(fdo, IOCTL_XHCI98_TRANSFER_POLICY, rq);
+        if (NT_SUCCESS(status)) {
+            sent = UAS_POLICY_SENT_OK;
+        } else if (status == STATUS_NOT_SUPPORTED ||
+                   status == STATUS_INVALID_DEVICE_REQUEST) {
+            sent = UAS_POLICY_SENT_UNSUPPORTED;
+        } else if (status == STATUS_INVALID_PARAMETER) {
+            sent = UAS_POLICY_SENT_REFUSED;
+        } else {
+            sent = UAS_POLICY_SENT_FAILED;
+        }
+    }
+    bytes = UasPolicyValue(sent, rq, &source);
+    UasFree(rq);
+
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    fdo->CommandBytes = bytes;
+    fdo->PolicySource = source;
+    if (source == XHCI98_TELE_SRC_UNSUPPORTED) {
+        fdo->PolicyUnsupported++;
+    } else if (source == XHCI98_TELE_SRC_MALFORMED) {
+        fdo->PolicyMalformed++;
+    } else if (source == XHCI98_TELE_SRC_TRANSPORT) {
+        fdo->PolicyTransport++;
+    }
+    KeReleaseSpinLock(&fdo->Lock, irql);
+}
+
 /* SELECT_CONFIGURATION with the UAS alternate setting, and the four pipe
  * handles matched to the Pipe Usage descriptors by endpoint address. */
 static NTSTATUS uasSelect(PUAS_FDO fdo)
@@ -183,7 +243,7 @@ static NTSTATUS uasSelect(PUAS_FDO fdo)
     ii->AlternateSetting = (UCHAR)fdo->Info.AlternateSetting;
     ii->NumberOfPipes = pipes;
     for (i = 0; i < pipes; i++) {
-        ii->Pipes[i].MaximumTransferSize = UAS_MAX_TRANSFER;
+        ii->Pipes[i].MaximumTransferSize = fdo->CommandBytes;
         ii->Pipes[i].PipeFlags = 0;
     }
     status = UasSyncUrb(fdo, (PURB)sc);
@@ -350,6 +410,7 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
         }
     }
 
+    uasAskPolicy(fdo);
     status = uasSelect(fdo);
     if (!NT_SUCCESS(status)) {
         return status;

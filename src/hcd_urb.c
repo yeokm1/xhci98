@@ -1615,6 +1615,56 @@ static NTSTATUS hcdTelemetryIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
 }
 
+/*
+ * IOCTL_XHCI98_TRANSFER_POLICY (xhci98_xfer.h, task 36.22): the command
+ * size this controller's start latched from XhciMaxTransferKB, with the
+ * contract's range and step, answered at once. The reply depends on
+ * nothing but the start's read - not the device, its streams or the map
+ * registers of the moment. A request whose header is wrong is refused
+ * STATUS_INVALID_PARAMETER with Status saying so when its Size covers
+ * the field. IRQL: <= DISPATCH_LEVEL.
+ */
+static NTSTATUS hcdPolicyIoctl(PHCD_CONTROLLER hc, PIRP irp,
+                               PXHCI98_TRANSFER_POLICY rq)
+{
+    KIRQL oldIrql;
+    ULONG bytes;
+    ULONG i;
+
+    if (rq == NULL || rq->Size < sizeof(XHCI98_TRANSFER_POLICY)) {
+        return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
+    }
+    rq->CommandBytes = 0;
+    rq->MinBytes = 0;
+    rq->MaxBytes = 0;
+    rq->StepBytes = 0;
+    for (i = 0; i < 4; i++) {
+        rq->Reserved[i] = 0;
+    }
+    if (rq->Signature != XHCI98_POLICY_SIGNATURE ||
+        rq->Version != XHCI98_POLICY_VERSION) {
+        rq->Status = XHCI98_POLICY_INVALID;
+        return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
+    }
+    if (hc == NULL) {
+        return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    bytes = hc->Xstat.CommandBytes;
+    hc->Xstat.PolicyQueries++;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (bytes == 0) {
+        /* No start has read the value: the default, as the start would. */
+        bytes = XHCI98_POLICY_DEFAULT_BYTES;
+    }
+    rq->CommandBytes = bytes;
+    rq->MinBytes = XHCI98_POLICY_MIN_BYTES;
+    rq->MaxBytes = XHCI98_POLICY_MAX_BYTES;
+    rq->StepBytes = XHCI98_POLICY_STEP_BYTES;
+    rq->Status = XHCI98_POLICY_SUCCESS;
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+}
+
 /* The slot an internal IOCTL is traced under once: its function number, the
  * internal range (USB_IOCTL_INTERNAL_INDEX, 0) at 0..0x1F and the
  * USB_IOCTL_INDEX range (0xFF) above it, everything else in the last. */
@@ -1736,6 +1786,12 @@ NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp)
         status = hcdStreamsIoctl(pdo, hc, irp,
                                  (PXHCI98_STREAMS_REQUEST)
                                      stack->Parameters.Others.Argument1);
+        break;
+
+    case IOCTL_XHCI98_TRANSFER_POLICY:
+        status = hcdPolicyIoctl(hc, irp,
+                                (PXHCI98_TRANSFER_POLICY)
+                                    stack->Parameters.Others.Argument1);
         break;
 
     case IOCTL_XHCI98_TELEMETRY:
