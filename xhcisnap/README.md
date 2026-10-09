@@ -234,6 +234,28 @@ or another size than the driver declared is not decoded, and only the
 terminal reason is printed. `-selftest-tol` prints the decode over a canned
 image.
 
+From 2.3.0.0 the HCD region's header carries the interrupt routing quirk's
+record (`XhciIntelIrqRoute`, roadmap task 36.3) after the terminal reason,
+and the report names it in a section of its own, "interrupt routing":
+
+- **The value** as found, or "not set", and how the driver took it: 0 reports
+  and writes nothing, 1 writes on the verified E7250 only, 2 on any reviewed
+  xHCI and LPC pair.
+- **The counts** since the driver loaded: runs, D20IR writes, writes whose
+  read-back disagreed.
+- **The last run**: at the start or at a return to D0, its decision by name
+  and meaning (the run stops at the first check that fails), the delivery
+  (a line, a message interrupt, polled, none), and the raw interrupt
+  resource the OS gave (descriptors, level, vector, flags, share).
+- **What it read**, each "not read" past the check that ended the run: the
+  xHCI's id, subsystem and pin; 00:14.0's id; the LPC bridge's id, RCBA and
+  `PIRQA-H_ROUT` routes; D20IP's pin; D20IR before, the PIRQ that delivers
+  the IRQ the OS assigned, and D20IR read back after a write.
+
+A header from before 2.3.0.0 is reported as not serving the record, and a
+record count the header cannot hold is not decoded. `-selftest-pirq` prints
+the decode over canned headers.
+
 The PORTSC decode is printed on screen whatever the level, because that is what
 the bench reads on the spot. The headline test is per port: a port reporting a
 device connected with `PP` clear is Finding Q read off the register, whatever

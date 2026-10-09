@@ -2279,6 +2279,350 @@ static void print_tol(const unsigned char *hcd, unsigned long hcdBytes,
     }
 }
 
+/* ---- interrupt routing: XhciIntelIrqRoute's record, in the HCD header */
+
+/*
+ * Task 36.3: XHCI_PIRQ_STATE (src/xhci_pirq.h) is copied whole into the HCD
+ * region's header after the terminal reason - word 20 its count, the words
+ * from 21 in the structure's order. test\test_snap.c holds the driver to
+ * these positions; a count past the one known here is a later driver's
+ * appended words, read as before.
+ */
+#define SNAP_HCD_PIRQ_HEAD_WORDS    48UL
+#define SNAP_PIRQ_COUNT_AT          20UL
+#define SNAP_PIRQ_AT                21UL
+#define SNAP_PIRQ_WORDS             27UL
+#define SNAP_PIRQ_UNREAD            0xFFFFFFFFUL
+
+#define SNAP_PIRQ_RUNS              0UL
+#define SNAP_PIRQ_WRITES            1UL
+#define SNAP_PIRQ_WRITE_FAILURES    2UL
+#define SNAP_PIRQ_MODE              3UL
+#define SNAP_PIRQ_VALUE_FOUND       4UL
+#define SNAP_PIRQ_VALUE             5UL
+#define SNAP_PIRQ_WHEN              6UL
+#define SNAP_PIRQ_DELIVERY          7UL
+#define SNAP_PIRQ_DECISION          8UL
+#define SNAP_PIRQ_XHCI_ID           9UL
+#define SNAP_PIRQ_XHCI_SUBSYSTEM    10UL
+#define SNAP_PIRQ_XHCI_PIN          11UL
+#define SNAP_PIRQ_SLOT_ID           12UL
+#define SNAP_PIRQ_LPC_ID            13UL
+#define SNAP_PIRQ_RCBA              14UL
+#define SNAP_PIRQ_PIRQ_AD           15UL
+#define SNAP_PIRQ_PIRQ_EH           16UL
+#define SNAP_PIRQ_IRQ_COUNT         17UL
+#define SNAP_PIRQ_IRQ_LEVEL         18UL
+#define SNAP_PIRQ_IRQ_VECTOR        19UL
+#define SNAP_PIRQ_IRQ_FLAGS         20UL
+#define SNAP_PIRQ_IRQ_SHARE         21UL
+#define SNAP_PIRQ_IRQ_MODE          22UL
+#define SNAP_PIRQ_D20IP             23UL
+#define SNAP_PIRQ_D20IR             24UL
+#define SNAP_PIRQ_TARGET            25UL
+#define SNAP_PIRQ_D20IR_AFTER       26UL
+
+#define SNAP_PIRQ_DECISIONS         23UL
+
+/* XHCI_PIRQ_D_*, in the order the run checks: the name, then what it
+ * means. */
+static const char *const pirq_decision_name[SNAP_PIRQ_DECISIONS] = {
+    "NONE", "BAD_PARAM", "OWN_UNREAD", "NOT_REVIEWED", "SLOT_UNREAD",
+    "NOT_AT_SLOT", "LPC_UNREAD", "LPC_UNLISTED", "RCBA_INVALID",
+    "MAP_FAILED", "PIN", "D20IR_UNREAD", "MESSAGE", "POLL", "NO_INTERRUPT",
+    "IRQ_AMBIGUOUS", "IRQ_UNROUTABLE", "PIC_NO_PIRQ", "ROUTED", "OFF",
+    "NOT_ADMITTED", "WROTE", "WRITE_FAILED"
+};
+static const char *const pirq_decision_text[SNAP_PIRQ_DECISIONS] = {
+    "not run",
+    "the run was given no callbacks or no resource",
+    "the xHCI's own configuration space was not read",
+    "not a reviewed Intel xHCI; nothing else read",
+    "00:14.0 was not read through the HAL",
+    "00:14.0 is not this controller",
+    "00:1F.0 was not read through the HAL",
+    "the LPC bridge is not one this xHCI is reviewed with",
+    "RCBA disabled, zero or all-ones",
+    "RCBA+3000h could not be mapped",
+    "D20IP or the configuration pin is not INTA",
+    "D20IR was not read",
+    "a message interrupt: the route carries nothing; reported",
+    "polled: the route carries nothing; reported",
+    "no interrupt resource",
+    "not one raw interrupt, or its level and vector differ",
+    "the IRQ is in neither the APIC nor the PIC range",
+    "no routed PIRQx_ROUT names the IRQ",
+    "D20IR already routes INTA to the PIRQ that delivers the IRQ",
+    "value 0: a write was due, none made",
+    "value 1, not the verified E7250: a write was due, none made",
+    "D20IR written and read back",
+    "D20IR written; the read-back disagrees"
+};
+
+/* A record word, or "not read" for one the run did not reach. */
+static const char *pirq_word(unsigned long v, char *buf)
+{
+    if (v == SNAP_PIRQ_UNREAD) {
+        return "not read";
+    }
+    sprintf(buf, "%08lX", v);
+    return buf;
+}
+
+/* A PIRQ number 0-7 as its letter. */
+static char pirq_letter(unsigned long n)
+{
+    return (char)(n < 8 ? 'A' + (int)n : '?');
+}
+
+/* PIRQA-D_ROUT or PIRQE-H_ROUT, a byte each: bit 7 set leaves the PIRQ off
+ * the 8259, bits 3:0 name its IRQ. */
+static void pirq_routes(unsigned long v, unsigned long first)
+{
+    unsigned long i;
+    unsigned long b;
+
+    for (i = 0; i < 4; i++) {
+        b = (v >> (i * 8)) & 0xFFUL;
+        if ((b & 0x80UL) != 0) {
+            comp(" PIRQ%c off", pirq_letter(first + i));
+        } else {
+            comp(" PIRQ%c IRQ %lu", pirq_letter(first + i), b & 0x0FUL);
+        }
+        comp(i < 3 ? "," : "\n");
+    }
+}
+
+/*
+ * Task 36.3: the interrupt routing quirk's record named. It is the HCD's,
+ * not the extension's, so it is read from the header alone; the three
+ * counts cover every run since the driver loaded, the rest is the last
+ * run's, "not read" past the check that ended it.
+ */
+static void print_pirq(const unsigned char *hcd, unsigned long hcdBytes)
+{
+    static const char *const when_text[3] = {
+        "not run", "at the start", "at a return to D0"
+    };
+    static const char *const delivery_text[4] = {
+        "none", "a line (INTx)", "a message (MSI or MSI-X)", "polled"
+    };
+    static const char *const irq_text[3] = {
+        "neither", "APIC (16-23, PIRQ direct)", "PIC (through PIRQx_ROUT)"
+    };
+    unsigned long headBytes;
+    unsigned long count;
+    unsigned long v;
+    const unsigned char *p;
+    char buf[16];
+    char buf2[16];
+
+    if (hcdBytes < SNAP_HCD_HEAD_WORDS * 4 || get32(hcd, 0) == 0 ||
+        get32(hcd, 0) > SNAP_HCD_VERSION) {
+        return;
+    }
+    headBytes = get32(hcd, 4);
+    if (headBytes < SNAP_HCD_PIRQ_HEAD_WORDS * 4 ||
+        hcdBytes < SNAP_HCD_PIRQ_HEAD_WORDS * 4) {
+        comp("\ninterrupt routing (XhciIntelIrqRoute): not served by this "
+             "driver (an\n  xhci98.sys before 2.3.0.0's; its HCD region "
+             "header is %lu bytes).\n", headBytes);
+        return;
+    }
+    count = get32(hcd, SNAP_PIRQ_COUNT_AT * 4);
+    if (count < SNAP_PIRQ_WORDS ||
+        count > headBytes / 4 - SNAP_PIRQ_AT ||
+        count > hcdBytes / 4 - SNAP_PIRQ_AT) {
+        comp("\ninterrupt routing (XhciIntelIrqRoute): a record of %lu "
+             "words in a %lu-byte\n  header - not a shape this build reads; "
+             "not decoded.\n", count, headBytes);
+        return;
+    }
+    p = hcd + SNAP_PIRQ_AT * 4;
+#define PW(i) get32(p, (i) * 4)
+
+    comp("\ninterrupt routing (XhciIntelIrqRoute, task 36.3):\n");
+    v = PW(SNAP_PIRQ_MODE);
+    if (PW(SNAP_PIRQ_VALUE_FOUND) != 0) {
+        comp("  value            %lu", PW(SNAP_PIRQ_VALUE));
+    } else {
+        comp("  value            not set");
+    }
+    comp(" (taken as %lu: %s)\n", v,
+         v == 0 ? "off, reports and writes nothing"
+                : v == 1 ? "writes on the verified E7250 only"
+                : v == 2 ? "writes on any reviewed xHCI/LPC pair" : "?");
+    comp("  runs             %lu; D20IR writes %lu, %lu failed\n",
+         PW(SNAP_PIRQ_RUNS), PW(SNAP_PIRQ_WRITES),
+         PW(SNAP_PIRQ_WRITE_FAILURES));
+    v = PW(SNAP_PIRQ_WHEN);
+    comp("  last run         %s\n", v < 3 ? when_text[v] : "?");
+    if (v == 0) {
+        return;
+    }
+    v = PW(SNAP_PIRQ_DECISION);
+    if (v < SNAP_PIRQ_DECISIONS) {
+        comp("  decision         %lu %s\n                   %s\n", v,
+             pirq_decision_name[v], pirq_decision_text[v]);
+    } else {
+        comp("  decision         %lu (unknown to this build)\n", v);
+    }
+    v = PW(SNAP_PIRQ_DELIVERY);
+    comp("  delivery         %s\n", v < 4 ? delivery_text[v] : "?");
+    v = PW(SNAP_PIRQ_IRQ_COUNT);
+    if (v == SNAP_PIRQ_UNREAD) {
+        comp("  raw interrupt    not read\n");
+    } else if (v == 0) {
+        comp("  raw interrupt    none in the raw resource list\n");
+    } else {
+        comp("  raw interrupt    %lu descriptor(s); level %lu, vector %lu, "
+             "flags %lX, share %lu\n", v, PW(SNAP_PIRQ_IRQ_LEVEL),
+             PW(SNAP_PIRQ_IRQ_VECTOR), PW(SNAP_PIRQ_IRQ_FLAGS),
+             PW(SNAP_PIRQ_IRQ_SHARE));
+    }
+    v = PW(SNAP_PIRQ_IRQ_MODE);
+    if (v != SNAP_PIRQ_UNREAD) {
+        comp("  IRQ taken as     %s\n", v < 3 ? irq_text[v] : "?");
+    }
+    comp("  xHCI             id %s, subsystem %s",
+         pirq_word(PW(SNAP_PIRQ_XHCI_ID), buf),
+         pirq_word(PW(SNAP_PIRQ_XHCI_SUBSYSTEM), buf2));
+    v = PW(SNAP_PIRQ_XHCI_PIN);
+    if (v == SNAP_PIRQ_UNREAD) {
+        comp(", pin not read\n");
+    } else {
+        comp(", pin %lu%s\n", v, v == 1 ? " (INTA)" : "");
+    }
+    comp("  00:14.0          id %s\n", pirq_word(PW(SNAP_PIRQ_SLOT_ID), buf));
+    comp("  00:1F.0 (LPC)    id %s, RCBA %s\n",
+         pirq_word(PW(SNAP_PIRQ_LPC_ID), buf),
+         pirq_word(PW(SNAP_PIRQ_RCBA), buf2));
+    v = PW(SNAP_PIRQ_PIRQ_AD);
+    if (v != SNAP_PIRQ_UNREAD) {
+        comp("  PIRQx_ROUT      ");
+        pirq_routes(v, 0);
+        comp("                  ");
+        pirq_routes(PW(SNAP_PIRQ_PIRQ_EH), 4);
+    }
+    v = PW(SNAP_PIRQ_D20IP);
+    comp("  D20IP            %s", pirq_word(v, buf));
+    if (v != SNAP_PIRQ_UNREAD) {
+        comp(" (device 20 drives INT%c)",
+             (v & 0xFUL) >= 1 && (v & 0xFUL) <= 4
+                 ? (char)('A' + (int)(v & 0xFUL) - 1) : '?');
+    }
+    comp("\n");
+    v = PW(SNAP_PIRQ_D20IR);
+    comp("  D20IR before     %s", pirq_word(v, buf));
+    if (v != SNAP_PIRQ_UNREAD) {
+        comp(" (INTA -> PIRQ%c)", pirq_letter(v & 7UL));
+    }
+    comp("\n");
+    v = PW(SNAP_PIRQ_TARGET);
+    if (v != SNAP_PIRQ_UNREAD) {
+        comp("  PIRQ wanted      PIRQ%c, the one that delivers the IRQ the "
+             "OS assigned\n", pirq_letter(v));
+    }
+    v = PW(SNAP_PIRQ_D20IR_AFTER);
+    if (v != SNAP_PIRQ_UNREAD) {
+        comp("  D20IR after      %08lX (INTA -> PIRQ%c)\n", v,
+             pirq_letter(v & 7UL));
+    }
+#undef PW
+}
+
+/*
+ * `-selftest-pirq`: task 36.3's decode over canned HCD headers: the E7250's
+ * repair in APIC mode (IRQ 21, INTA moved from PIRQA to PIRQF), a reviewed
+ * pair at value 1 not admitted, a message interrupt, a non-Intel
+ * controller, a header from before 2.3.0.0, and a record count it cannot
+ * hold.
+ */
+static int selftest_pirq(void)
+{
+    static unsigned char hcd[SNAP_HCD_PIRQ_HEAD_WORDS * 4];
+    unsigned char *p;
+    unsigned long i;
+
+    memset(hcd, 0, sizeof(hcd));
+    put32(hcd, 0, 1);
+    put32(hcd, 4, SNAP_HCD_PIRQ_HEAD_WORDS * 4);
+    put32(hcd, SNAP_PIRQ_COUNT_AT * 4, SNAP_PIRQ_WORDS);
+    p = hcd + SNAP_PIRQ_AT * 4;
+    for (i = SNAP_PIRQ_WHEN; i < SNAP_PIRQ_WORDS; i++) {
+        put32(p, i * 4, SNAP_PIRQ_UNREAD);
+    }
+    put32(p, SNAP_PIRQ_RUNS * 4, 2);
+    put32(p, SNAP_PIRQ_WRITES * 4, 1);
+    put32(p, SNAP_PIRQ_MODE * 4, 1);
+    put32(p, SNAP_PIRQ_VALUE_FOUND * 4, 1);
+    put32(p, SNAP_PIRQ_VALUE * 4, 1);
+    put32(p, SNAP_PIRQ_WHEN * 4, 1);
+    put32(p, SNAP_PIRQ_DELIVERY * 4, 1);
+    put32(p, SNAP_PIRQ_DECISION * 4, 21);
+    put32(p, SNAP_PIRQ_XHCI_ID * 4, 0x9CB18086UL);
+    put32(p, SNAP_PIRQ_XHCI_SUBSYSTEM * 4, 0x062D1028UL);
+    put32(p, SNAP_PIRQ_XHCI_PIN * 4, 1);
+    put32(p, SNAP_PIRQ_SLOT_ID * 4, 0x9CB18086UL);
+    put32(p, SNAP_PIRQ_LPC_ID * 4, 0x9CC38086UL);
+    put32(p, SNAP_PIRQ_RCBA * 4, 0xFED1C001UL);
+    put32(p, SNAP_PIRQ_PIRQ_AD * 4, 0x0A0B0A0BUL);
+    put32(p, SNAP_PIRQ_PIRQ_EH * 4, 0x80808080UL);
+    put32(p, SNAP_PIRQ_IRQ_COUNT * 4, 1);
+    put32(p, SNAP_PIRQ_IRQ_LEVEL * 4, 21);
+    put32(p, SNAP_PIRQ_IRQ_VECTOR * 4, 21);
+    put32(p, SNAP_PIRQ_IRQ_FLAGS * 4, 0);
+    put32(p, SNAP_PIRQ_IRQ_SHARE * 4, 3);
+    put32(p, SNAP_PIRQ_IRQ_MODE * 4, 1);
+    put32(p, SNAP_PIRQ_D20IP * 4, 0x00000001UL);
+    put32(p, SNAP_PIRQ_D20IR * 4, 0x00003210UL);
+    put32(p, SNAP_PIRQ_TARGET * 4, 5);
+    put32(p, SNAP_PIRQ_D20IR_AFTER * 4, 0x00003215UL);
+    print_pirq(hcd, sizeof(hcd));
+
+    /* Another reviewed machine at value 1: a write due, not admitted. */
+    put32(p, SNAP_PIRQ_WRITES * 4, 0);
+    put32(p, SNAP_PIRQ_DECISION * 4, 20);
+    put32(p, SNAP_PIRQ_XHCI_SUBSYSTEM * 4, 0x22128086UL);
+    put32(p, SNAP_PIRQ_D20IR_AFTER * 4, SNAP_PIRQ_UNREAD);
+    print_pirq(hcd, sizeof(hcd));
+
+    /* A message interrupt at a return to D0: read as far as D20IR, then
+     * reported. */
+    put32(p, SNAP_PIRQ_WHEN * 4, 2);
+    put32(p, SNAP_PIRQ_DELIVERY * 4, 2);
+    put32(p, SNAP_PIRQ_DECISION * 4, 12);
+    put32(p, SNAP_PIRQ_IRQ_FLAGS * 4, 2);
+    put32(p, SNAP_PIRQ_IRQ_MODE * 4, SNAP_PIRQ_UNREAD);
+    put32(p, SNAP_PIRQ_TARGET * 4, SNAP_PIRQ_UNREAD);
+    print_pirq(hcd, sizeof(hcd));
+
+    /* Another vendor: nothing past its own space read, the value unset. */
+    for (i = SNAP_PIRQ_SLOT_ID; i < SNAP_PIRQ_WORDS; i++) {
+        if (i < SNAP_PIRQ_IRQ_COUNT || i > SNAP_PIRQ_IRQ_SHARE) {
+            put32(p, i * 4, SNAP_PIRQ_UNREAD);
+        }
+    }
+    put32(p, SNAP_PIRQ_WHEN * 4, 1);
+    put32(p, SNAP_PIRQ_DELIVERY * 4, 1);
+    put32(p, SNAP_PIRQ_IRQ_FLAGS * 4, 0);
+    put32(p, SNAP_PIRQ_VALUE_FOUND * 4, 0);
+    put32(p, SNAP_PIRQ_VALUE * 4, SNAP_PIRQ_UNREAD);
+    put32(p, SNAP_PIRQ_DECISION * 4, 3);
+    put32(p, SNAP_PIRQ_XHCI_ID * 4, 0x01941033UL);
+    print_pirq(hcd, sizeof(hcd));
+
+    /* A 2.2.0.0 driver's twenty-word header. */
+    put32(hcd, 4, SNAP_HCD_TOL_HEAD_WORDS * 4);
+    print_pirq(hcd, sizeof(hcd));
+
+    /* A count the header cannot hold. */
+    put32(hcd, 4, SNAP_HCD_PIRQ_HEAD_WORDS * 4);
+    put32(hcd, SNAP_PIRQ_COUNT_AT * 4, 40);
+    print_pirq(hcd, sizeof(hcd));
+    return 0;
+}
+
 /* `-selftest-hcd`: the HCD region's decode over a canned image, for
  * xhcisnap\selftest.cmd: 35.0's E460 port 13 Failed on the speed, a
  * working port 14, an empty port 1 left out, and two counters. */
@@ -4264,6 +4608,8 @@ int main(int argc, char **argv)
             return selftest_hcd();
         } else if (strcmp(argv[i], "-selftest-tol") == 0) {
             return selftest_tol();
+        } else if (strcmp(argv[i], "-selftest-pirq") == 0) {
+            return selftest_pirq();
         } else if (strcmp(argv[i], "-selftest-report") == 0 && i + 1 < argc) {
             /*
              * The report path on its own, with no device: open BASE.TXT, write
@@ -4614,6 +4960,8 @@ int main(int argc, char **argv)
                   (extMismatch || extBytes > sizeof(ext_image)) ? NULL
                                                                 : ext_image,
                   extBytes);
+        /* 36.3's interrupt routing record, from the header alone. */
+        print_pirq(hcd_image, hcdBytes);
     } else if (hcdState == 2) {
         comp("\nHCD region: not served by this driver (an xhci98.sys before "
              "2.2.0.0 has no\n  per-port enumeration region; the note ring "

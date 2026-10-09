@@ -207,6 +207,23 @@ if not errorlevel 1 (
     set FAILED=1
 )
 
+rem Task 36.3's interrupt routing record, named from canned HCD headers: the
+rem E7250's repair (INTA moved from PIRQA to PIRQF for IRQ 21), a reviewed
+rem pair not admitted at value 1, a message interrupt, another vendor; then a
+rem 2.2.0.0 header and a record count the header cannot hold.
+"%~dp0XHCISNAP.EXE" -selftest-pirq > "%BASE%.pirq.log"
+if errorlevel 1 (
+    echo FAIL: -selftest-pirq exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("decision         21 WROTE" "D20IR before     00003210 (INTA -> PIRQA)" "PIRQ wanted      PIRQF" "D20IR after      00003215 (INTA -> PIRQF)" "level 21, vector 21, flags 0, share 3" "APIC (16-23, PIRQ direct)" "PIRQA IRQ 11, PIRQB IRQ 10" "PIRQE off" "decision         20 NOT_ADMITTED" "decision         12 MESSAGE" "at a return to D0" "decision         3 NOT_REVIEWED" "00:14.0          id not read" "not set (taken as 1: writes on the verified E7250 only)" "xhci98.sys before 2.3.0.0's" "a record of 40 words") do (
+    findstr /C:%%S "%BASE%.pirq.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the routing decode does not say %%S
+        set FAILED=1
+    )
+)
+
 rd /s /q "%RUNDIR%" 2> nul
 rd out 2> nul
 
@@ -214,5 +231,5 @@ if "%FAILED%"=="1" (
     echo xhcisnap selftest FAILED
     exit /b 1
 )
-echo xhcisnap selftest: 9 cases, all passed
+echo xhcisnap selftest: 10 cases, all passed
 exit /b 0
