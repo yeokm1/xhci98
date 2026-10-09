@@ -35,8 +35,12 @@
  *
  * Neither primary's test guest sleeps (Windows 2000's runs acpi=off). What has
  * run is a shutdown on both (runs/run-26.md): the system IRP, the D3 it
- * requested, the suspend. A D0 resume, the work-item route and the
- * direct transition have not run on a guest.
+ * requested, the suspend. The D0 resume first ran on QEMU guests in task
+ * 36.28's part 1 (2026-10-09/10): XP and Vista hibernate, Windows ME
+ * standby and hibernate, each through XhciResumeController's
+ * reinitialization (QEMU's xHCI has no Force Save Context). Not yet
+ * distinguished: the work-item route against the inline one; never run:
+ * the direct transition.
  *
  * IRQL: dispatch at PASSIVE_LEVEL (the FDO is DO_POWER_PAGABLE); the
  * completion routines and the request callback at <= DISPATCH_LEVEL; the
