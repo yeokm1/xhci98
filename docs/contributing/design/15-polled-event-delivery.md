@@ -39,7 +39,10 @@ where the controller has one and polls where it has none.
 
 Not in this design: MSI or MSI-X (a value of 3 or above is reserved, and no
 phase schedules it), interrupters other than
-Interrupter 0, and any change to the line-interrupt path. On a controller
+Interrupter 0, and any change to the line-interrupt path. **Superseded in
+part** (2026-10-08 and 2026-10-09, section 4.3): MSI and single-message
+MSI-X are taken on Vista and 7, and 3 is now the same as 0; more than one
+interrupter stays out. On a controller
 with a line interrupt, the default must read as the Phase 34 build does.
 
 ## 2. State today (read 2026-10-05, and by review on revision 1)
@@ -134,7 +137,7 @@ with no interrupt.
 
 | Value | Default | Meaning | Out of range |
 |---|---|---|---|
-| `XhciInterruptMode` | 0 | 0 automatic; 1 the line interrupt; 2 polling; 3 and above reserved | 3 and above run as 0, the value read recorded (section 8) |
+| `XhciInterruptMode` | 0 | 0 automatic; 1 the line interrupt; 2 polling; 3 the same as 0 (2026-10-09, section 4.3); 4 and above reserved | 4 and above run as 0, the value read recorded (section 8) |
 | `XhciPollIdleMs` | 50 | The poll period when nothing is outstanding (section 6) | 0 runs as 50; above 5000 held to 5000 |
 | `XhciPollActiveMs` | 1 | The poll period while work is outstanding | 0 runs as 1; above the idle period held to it |
 
@@ -176,6 +179,11 @@ today a failed read with an interrupt resource present is accepted, the pin
 recorded as `0xFFFFFFFF` and the resource trusted (`xhci_init.c:4605-4617`),
 and that stays.
 
+This table is the line resource's: every target but Vista and 7 with a
+message granted. Where Windows granted a message (section 4.3), modes 0, 1
+and 3 take the message, the pin plays no part, a message connection that
+fails polls for that start, and mode 2 polls.
+
 | `XhciInterruptMode` | Interrupt resource | Pin | Delivery | Reason |
 |---|---|---|---|---|
 | 0, or 3 and above | present | not 0 | line | automatic |
@@ -186,7 +194,8 @@ and that stays.
 | 1 | present and pin 0, or absent | | none: the start fails as today | forced, no interrupt |
 | 2 | any | any | poll | forced |
 
-A value of 3 and above also records "reserved value N, run as automatic".
+A value of 4 and above also records "reserved value N, run as automatic"; 3
+is the same as 0 and records nothing extra.
 
 The delivery is held in the controller (`hc`) and copied into the core's
 extension after the start zeroes it, so the in-place recovery and every
@@ -343,7 +352,9 @@ under `PollLock`:
   so a disable and enable, or a start that failed and is retried,
   begins from a drained poller. The kick at the end of a successful start
   (section 5.3) then arms it. A start under a line delivery leaves it
-  CLOSED. A failed start runs the same release as a stop, which closes it
+  CLOSED in mode 1; in effective mode 0 it opens it the same way, in the
+  watch role of section 4.2 (2026-10-09), whose ownership, park, kick and
+  close are this section's and section 5.3's unchanged (designed in 36.5). A failed start runs the same release as a stop, which closes it
   from whatever state it reached.
 - **The DPC takes ownership** as it starts: under `PollLock`, ARMED becomes
   FIRING (CLOSING stays CLOSING), and `PollOwed` is cleared.
@@ -672,7 +683,9 @@ and that flavour is never published.
 - **Line against poll** on the same guest: a storage copy rate, audio
   continuity, and the guest's idle CPU load.
 - **The default on a pin**: mode 0 reading as the Phase 34 build
-  (the matrix unchanged), and mode 1 the same.
+  (the matrix unchanged), and mode 1 the same, on a target without MSI and
+  on Vista and 7 with `MSISupported` 0 (section 4.3); with a message
+  granted, both read as the message.
 
 Bench (POLL-E, owner): mode 2 on the E460 and the P14s Gen 1 under Windows 98
 SE, and an MSI-only controller if one is at hand. The synthetic no-interrupt
