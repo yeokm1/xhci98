@@ -235,6 +235,49 @@ static ULONG hcdCommandBusy(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
 }
 
 /*
+ * The wait for a submitted command's completion event, HCD_COMMAND_WAIT_MS,
+ * a slice at a time. Task 36.13 (record 15 section 11, the dead line under
+ * mode 1): the backstop runs on this thread and cannot drain while it waits
+ * here (issue 12 section 2), so on a line that delivers nothing - mode 1,
+ * which never moves to polling, or mode 0 before its move - the command's
+ * own completion would stand undrained until the wait expired and the
+ * controller was reset. Between slices the thread asks for a drain itself,
+ * only when an event stands at the dequeue and the drain is admitted
+ * (HcdDrainPending), and only at XhciTolerance 1: at 0 nothing but the ISR
+ * and the poller drains, as before. On a working line the ISR's drain has
+ * normally taken the event before the first slice ends. Returns whether the
+ * event was signalled. Thread only.
+ */
+static ULONG hcdCommandWaitDone(PHCD_CONTROLLER hc)
+{
+    KTIMER deadline;
+    LARGE_INTEGER due;
+    LARGE_INTEGER zero;
+    ULONG done;
+
+    KeInitializeTimer(&deadline);
+    HcdRelativeMs(&due, HCD_COMMAND_WAIT_MS);
+    (VOID)KeSetTimer(&deadline, due, NULL);
+    zero.QuadPart = 0;
+    done = 0;
+    for (;;) {
+        if (hcdWaitEvent(&hc->CmdDoneEvent, XHCI_ENUM_BUSY_SLICE_MS)) {
+            done = 1;
+            break;
+        }
+        if (KeWaitForSingleObject(&deadline, Executive, KernelMode, FALSE,
+                                  &zero) == STATUS_SUCCESS) {
+            break;
+        }
+        if (hc->Hc.Tol.Stats.Tolerance != 0 && HcdDrainPending(hc)) {
+            hc->EnumCommandWaitDrains++;
+        }
+    }
+    (VOID)KeCancelTimer(&deadline);
+    return done;
+}
+
+/*
  * Submit one command and wait for its own completion. Returns the completion
  * code, or 0 when it never completed (lost, refused or timed out); *control
  * receives the Command Completion Event's DW3. A busy engine is waited out
@@ -301,7 +344,7 @@ static ULONG hcdCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
 #endif
             return hc->CmdDoneCode;
         }
-        if (!hcdWaitEvent(&hc->CmdDoneEvent, HCD_COMMAND_WAIT_MS)) {
+        if (!hcdCommandWaitDone(hc)) {
             break;
         }
     }

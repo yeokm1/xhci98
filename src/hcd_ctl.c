@@ -1052,6 +1052,11 @@ static VOID hcdLogDelivery(PHCD_CONTROLLER hc)
     XhciLogNote(ext, "qemu.inj.nointerrupt", hc->QemuNoInterrupt);
     XhciLogNote(ext, "qemu.inj.pinunreadable", hc->QemuPinUnreadable);
     XhciLogNote(ext, "qemu.inj.deadline.value", hc->QemuDeadLine);
+    /* N = 0 latches before the connection (record 15 section 11): its
+     * latch note here, as hcdPollQemuLatch notes a delayed one. */
+    if (hc->QemuDeadLatched) {
+        XhciLogNote(ext, "qemu.inj.deadline", 1);
+    }
 #endif
 }
 

@@ -6342,11 +6342,17 @@ the start as a controller with no interrupt always did. `XhciQemuPinUnreadable`
 N ms after the start's grant (at once, before the connection, for a value of
 1): the ISR still acknowledges what it claims, so QEMU's level line does not
 storm, but queues no drain and withholds the claim from the watcher, and
-every watcher look reads asserted. Under mode 0 the log ring then shows
-`qemu.inj.deadline`, `intr.moved` (the stale pairs) and `intr.moved.masked`,
-and the counter block delivery 2 with reason 9; under mode 1 no move. The
+every watcher look reads asserted. The latch notes `qemu.inj.deadline` (at
+the start for a value of 1, when it falls for a larger one). Under mode 0
+the log ring then shows `intr.moved` (the stale pairs),
+`qemu.inj.deadline.isr` (the claims the latch withheld until then) and
+`intr.moved.masked`, and the counter block delivery 2 with reason 9; under
+mode 1 no move: the backstop carries the bus, and a command's completion
+is drained by the waiting controller thread itself (at `XhciTolerance` 1;
+the stop's `enum.cmd.wait.drains`). The
 start notes `qemu.inj.nointerrupt`, `qemu.inj.pinunreadable` and
-`qemu.inj.deadline.value`.
+`qemu.inj.deadline.value`, and the stop's counter dump
+`qemu.inj.deadline.isr`.
 
 **The delivery's log notes** (every flavour; design record 15 section 8). At
 start: `intr.mode.read`, `intr.mode`, `intr.delivery`, `intr.reason`,
