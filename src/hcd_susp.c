@@ -28,11 +28,11 @@
 #define HCD_SUSP_REQ_SET_FEATURE    0x03U
 #define HCD_SUSP_FEAT_REMOTE_WAKEUP 1U
 
-/* The PDOs of a device's chain the machine reads at once, on the stack
- * of a thread whose calls nest deep. A device with more functions is not
- * served: a decision over part of its chain could suspend it under a
- * function in D0. */
-#define HCD_SUSP_MAX_FUNCS          8UL
+/* The PDOs of a device's chain: one per function of a split device, at
+ * most XHCI_FUNC_MAX (xhci_func.c), else one. Read into the controller's
+ * scratch (hc->SuspFuncs), not onto the enum thread's stack (Codex review
+ * of 36.30, round 1, finding 4). */
+#define HCD_SUSP_MAX_FUNCS          XHCI_FUNC_MAX
 
 /* Decisions one device is given in one pass (3.10). */
 #define HCD_SUSP_PASSES             4UL
@@ -132,6 +132,9 @@ static ULONG hcdSuspServes(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         return 0;
     }
     if (hcdSuspChainLength(dev) > HCD_SUSP_MAX_FUNCS) {
+        /* Not reached: a split makes at most XHCI_FUNC_MAX functions. A
+         * decision over part of a chain could suspend the device under a
+         * function in D0, so a longer one is not served. */
         return 0;
     }
     /* The class decoded at the PDO's creation (hcd_pdo.c). */
@@ -375,27 +378,6 @@ static VOID hcdSuspGateOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     }
 }
 
-/* The deferred slow IRPs back to the head of the controller's queue, in
- * their order (3.3), once the device is ACTIVE. */
-static VOID hcdSuspUndefer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
-{
-    PLIST_ENTRY entry;
-    KIRQL oldIrql;
-    ULONG any;
-
-    any = 0;
-    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    while (!IsListEmpty(&dev->SlowDeferred)) {
-        entry = RemoveTailList(&dev->SlowDeferred);
-        InsertHeadList(&hc->SlowIrps, entry);
-        any = 1;
-    }
-    XhciControllerLockRelease(&hc->Hc, oldIrql);
-    if (any) {
-        HcdThreadWake(hc);
-    }
-}
-
 /* ------------------------------------------------------------------ */
 /* The steps                                                           */
 /* ------------------------------------------------------------------ */
@@ -444,17 +426,39 @@ static ULONG hcdSuspEp0Queued(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
  * milliseconds (3.9). */
 static ULONG hcdSuspArm(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG bound)
 {
-    ULONG waited;
+    KTIMER deadline;
+    LARGE_INTEGER due;
+    LARGE_INTEGER now;
+    ULONG drained;
 
-    waited = 0;
-    while (hcdSuspEp0Queued(hc, dev) != 0) {
-        if (waited >= bound) {
-            return XHCI_SUSP_RES_NOT_SENT;
+    if (hcdSuspEp0Queued(hc, dev) != 0 && bound == 0) {
+        return XHCI_SUSP_RES_NOT_SENT;
+    }
+    /* An elapsed-time bound, a timer polled with a zero wait, as
+     * hcdEp0Quiet's (Codex review of 36.30, round 1, finding 6). */
+    KeInitializeTimer(&deadline);
+    HcdRelativeMs(&due, bound);
+    (VOID)KeSetTimer(&deadline, due, NULL);
+    now.QuadPart = 0;
+    drained = 0;
+    for (;;) {
+        if (hcdSuspEp0Queued(hc, dev) == 0) {
+            drained = 1;
+            break;
+        }
+        if (KeWaitForSingleObject(&deadline, Executive, KernelMode, FALSE,
+                                  &now) == STATUS_SUCCESS) {
+            break;
         }
         hcdSuspDelay(hc, 1);
         HcdIoDeferred(hc);
-        waited++;
     }
+    (VOID)KeCancelTimer(&deadline);
+    if (!drained) {
+        return XHCI_SUSP_RES_NOT_SENT;
+    }
+    /* EP0 drained and its gate closed, so the request's own quiet wait
+     * finds nothing to wait for. */
     return hcdSuspControl(hc, dev, HCD_SUSP_REQ_SET_FEATURE);
 }
 
@@ -567,9 +571,13 @@ static ULONG hcdSuspPoll(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG verify,
                 }
                 break;
             }
-            if ((change & XHCI_HUB_C_PORT_SUSPEND) != 0) {
-                (VOID)HcdHubPortFeature(hc, q->Hub, q->Number, 0,
-                                        XHCI_HUB_FEAT_C_PORT_SUSPEND);
+            if ((change & XHCI_HUB_C_PORT_SUSPEND) != 0 &&
+                !HcdHubPortFeature(hc, q->Hub, q->Number, 0,
+                                   XHCI_HUB_FEAT_C_PORT_SUSPEND)) {
+                /* A transport failure stays uncertain whatever the sample
+                 * said (round 1, finding 7). */
+                answer = XHCI_SUSP_RES_TIMEOUT;
+                break;
             }
             answer = verify ? XhciSuspVerifyHub(status, change)
                             : XhciSuspObserveHub(status, change);
@@ -631,8 +639,6 @@ static ULONG hcdSuspU0(PHCD_CONTROLLER hc, PHCD_PORT q)
 static VOID hcdSuspEndLocked(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                              PHCD_SUSP_TAKEN t)
 {
-    PHCD_DEVICE_PDO pdos[HCD_SUSP_MAX_FUNCS];
-    XHCI_SUSP_FUNC funcs[HCD_SUSP_MAX_FUNCS];
     ULONG n;
 
     if (dev->Susp.State == XHCI_SUSP_ACTIVE &&
@@ -641,8 +647,8 @@ static VOID hcdSuspEndLocked(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         (VOID)hcdSuspClaimWakes(dev, 0, 0, t);
     }
     if (dev->Susp.LatchDue) {
-        n = hcdSuspRead(dev, pdos, funcs);
-        XhciSuspLatch(&dev->Susp, funcs, n);
+        n = hcdSuspRead(dev, hc->SuspPdos, hc->SuspFuncs);
+        XhciSuspLatch(&dev->Susp, hc->SuspFuncs, n);
     }
     hcdSuspClaimDue(hc, dev, t);
 }
@@ -727,12 +733,17 @@ static ULONG hcdSuspRun(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG step,
                        (dev->Susp.Outcome << 8) | dev->Susp.State);
     switch (dev->Susp.State) {
     case XHCI_SUSP_ACTIVE:
-        hcdSuspUndefer(hc, dev);
+        HcdCfgUndefer(hc, dev);
         break;
     case XHCI_SUSP_RECOVERING:
+    case XHCI_SUSP_GONE:
         if (!hcdSuspHalted(hc)) {
-            /* The device cycle re-establishes it (3.10); the old device
-             * is GONE and settled at its unlink. */
+            /* The device cycle re-establishes it, or takes a device the
+             * machine saw leave off its port when the port's own
+             * processing would not (a PED loss with CCS kept): either way
+             * the old device is dropped and its slots settled at the
+             * unlink (3.10; round 1, finding 3). Named by its PDO group,
+             * so a replacement is not touched. */
             group = hcdSuspPdo(dev->Pdo) != NULL
                         ? hcdSuspPdo(dev->Pdo)->Group
                         : 0;
@@ -756,8 +767,8 @@ static ULONG hcdSuspRun(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG step,
  */
 static ULONG hcdSuspDecideOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
-    PHCD_DEVICE_PDO pdos[HCD_SUSP_MAX_FUNCS];
-    XHCI_SUSP_FUNC funcs[HCD_SUSP_MAX_FUNCS];
+    PHCD_DEVICE_PDO *pdos;
+    PXHCI_SUSP_FUNC funcs;
     XHCI_SUSP_DECISION d;
     HCD_SUSP_TAKEN taken;
     PHCD_PORT q;
@@ -768,6 +779,8 @@ static ULONG hcdSuspDecideOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     ULONG n;
     ULONG i;
 
+    pdos = hc->SuspPdos;
+    funcs = hc->SuspFuncs;
     taken.Count = 0;
     step = XHCI_SUSP_STEP_END;
     wait = 0;
@@ -889,6 +902,13 @@ static VOID hcdSuspSample(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     hcdSuspFinish(&taken);
+    if (event == XHCI_SUSP_EV_DISCONNECT &&
+        dev->Susp.State == XHCI_SUSP_GONE && hcdSuspPdo(dev->Pdo) != NULL) {
+        /* Gone to the machine: dropped through the cycle, which an unplug
+         * the port's processing also sees makes no difference to, and
+         * which a PED loss with CCS kept needs (round 1, finding 3). */
+        HcdEnumCycle(hc, dev->Location, hcdSuspPdo(dev->Pdo)->Group);
+    }
     if (dev->SuspWakeDue) {
         HcdThreadWake(hc);
     }

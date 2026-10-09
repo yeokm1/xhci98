@@ -567,7 +567,11 @@ static ULONG hcdResetEp0(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     /* Not for a device being torn down: its freeze set Gone under this
      * lock (Codex review of d54eef0, finding 1). */
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    if (waiting && !dev->Gone) {
+    if (waiting && !dev->Gone && dev->Susp.State != XHCI_SUSP_SUSPENDED &&
+        dev->Susp.State != XHCI_SUSP_RECOVERING) {
+        /* Not on a suspended link, or one whose state is unknown: the
+         * survivors wait for selective suspend's restart (design record
+         * 14 section 3.2; Codex review of 36.30, round 1, finding 1). */
         XhciWriteDoorbell(&hc->Hc, dev->SlotId, 1);
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);

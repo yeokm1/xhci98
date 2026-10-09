@@ -555,7 +555,11 @@ static VOID hcdHubReleaseBelow(PHCD_CONTROLLER hc, PHCD_USB_DEVICE *devs,
             }
             state = hcdHubEpState(hc, dev, dci);
             XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-            if (!dev->Gone && state == XHCI_EP_STATE_STOPPED) {
+            if (!dev->Gone && state == XHCI_EP_STATE_STOPPED &&
+                !pipe->SuspendPause) {
+                /* Not a device selective suspend holds: its own restart
+                 * rings it (design record 14 section 3.2; Codex review of
+                 * 36.30, round 1, finding 5). */
                 if (pipe->Queue->Count != 0) {
                     pipe->SeqUsed = 1;
                     XhciWriteDoorbell(&hc->Hc, dev->SlotId, dci);

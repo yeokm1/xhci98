@@ -198,6 +198,8 @@ static VOID hcdCfgComplete(PHCD_USB_DEVICE dev, PIRP irp, PURB urb,
         irp->IoStatus.Status = STATUS_SUCCESS;
     } else if (usbd == HCD_USBD_DEVICE_GONE) {
         irp->IoStatus.Status = STATUS_NO_SUCH_DEVICE;
+    } else if (usbd == HCD_USBD_CANCELED) {
+        irp->IoStatus.Status = STATUS_CANCELLED;
     } else {
         irp->IoStatus.Status = STATUS_UNSUCCESSFUL;
     }
@@ -205,6 +207,114 @@ static VOID hcdCfgComplete(PHCD_USB_DEVICE dev, PIRP irp, PURB urb,
     IoCompleteRequest(irp, IO_NO_INCREMENT);
     (VOID)InterlockedDecrement(&pdo->UrbsPending);
     (VOID)InterlockedDecrement(&dev->Refs);
+}
+
+/*
+ * Selective suspend's deferral (design record 14 sections 3.3 and 3.10): a
+ * slow IRP that waits on its device while the link is not ACTIVE sits on
+ * dev->SlowDeferred, cancellable by 4.2's handshake: the cancel routine
+ * always completes it CANCELLED, and a claimer (the undeferral, the
+ * device's flush) takes only an IRP whose routine it cleared, leaving one
+ * a routine owns on the list for that routine (Codex review of 36.30,
+ * round 1, finding 2). The IRP keeps its UrbsPending count and device
+ * reference until hcdCfgComplete, whoever completes it.
+ */
+static ULONG hcdCfgDeferredHas(PHCD_USB_DEVICE dev, PIRP irp)
+{
+    PLIST_ENTRY entry;
+
+    for (entry = dev->SlowDeferred.Flink; entry != &dev->SlowDeferred;
+         entry = entry->Flink) {
+        if (entry == &irp->Tail.Overlay.ListEntry) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* IRQL: DISPATCH_LEVEL, called with the cancel spin lock, which it releases
+ * before the controller lock (record 13 section 5.4). */
+static VOID NTAPI hcdCfgDeferCancel(PDEVICE_OBJECT DeviceObject, PIRP irp)
+{
+    PHCD_USB_DEVICE dev;
+    PHCD_CONTROLLER hc;
+    KIRQL oldIrql;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+    IoReleaseCancelSpinLock(irp->CancelIrql);
+    dev = (PHCD_USB_DEVICE)irp->Tail.Overlay.DriverContext[0];
+    hc = dev->Controller;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (hcdCfgDeferredHas(dev, irp)) {
+        RemoveEntryList(&irp->Tail.Overlay.ListEntry);
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    hcdCfgComplete(dev, irp, hcdCfgUrbOf(irp), HCD_USBD_CANCELED);
+}
+
+/* Thread only. */
+static VOID hcdCfgDefer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PIRP irp)
+{
+    KIRQL oldIrql;
+    ULONG back;
+
+    back = 0;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    InsertTailList(&dev->SlowDeferred, &irp->Tail.Overlay.ListEntry);
+    (VOID)IoSetCancelRoutine(irp, hcdCfgDeferCancel);
+    if (irp->Cancel && IoSetCancelRoutine(irp, NULL) != NULL) {
+        /* Cancelled before it was published: taken back here. */
+        RemoveEntryList(&irp->Tail.Overlay.ListEntry);
+        back = 1;
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (back) {
+        hcdCfgComplete(dev, irp, hcdCfgUrbOf(irp), HCD_USBD_CANCELED);
+    }
+}
+
+/* The deferred IRPs this claimer owns, off the list onto `to`'s head in
+ * their order (`head` 1) or its tail (0). Controller lock held. */
+static ULONG hcdCfgDeferredTake(PHCD_USB_DEVICE dev, PLIST_ENTRY to,
+                                ULONG head)
+{
+    PLIST_ENTRY entry;
+    PLIST_ENTRY step;
+    PIRP irp;
+    ULONG any;
+
+    any = 0;
+    for (entry = head ? dev->SlowDeferred.Blink : dev->SlowDeferred.Flink;
+         entry != &dev->SlowDeferred; entry = step) {
+        step = head ? entry->Blink : entry->Flink;
+        irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
+        if (IoSetCancelRoutine(irp, NULL) == NULL) {
+            continue;       /* its cancel routine owns it */
+        }
+        RemoveEntryList(entry);
+        if (head) {
+            InsertHeadList(to, entry);
+        } else {
+            InsertTailList(to, entry);
+        }
+        any = 1;
+    }
+    return any;
+}
+
+/* The device's link is ACTIVE again (hcd_susp.c): its deferred IRPs back
+ * to the head of SlowIrps, in order. Thread only. */
+VOID HcdCfgUndefer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    KIRQL oldIrql;
+    ULONG any;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    any = hcdCfgDeferredTake(dev, &hc->SlowIrps, 1);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (any) {
+        HcdThreadWake(hc);
+    }
 }
 
 /*
@@ -264,11 +374,8 @@ VOID HcdCfgFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     InitializeListHead(&mine);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     /* Those selective suspend deferred first, in their order (design
-     * record 14 section 3.3). */
-    while (!IsListEmpty(&dev->SlowDeferred)) {
-        entry = RemoveHeadList(&dev->SlowDeferred);
-        InsertTailList(&mine, entry);
-    }
+     * record 14 section 3.3), but for any a cancel routine owns. */
+    (VOID)hcdCfgDeferredTake(dev, &mine, 0);
     for (entry = hc->SlowIrps.Flink; entry != &hc->SlowIrps; entry = next) {
         next = entry->Flink;
         irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
@@ -4059,9 +4166,7 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
             if (HcdSuspDefers(dev, urb != NULL &&
                                        urb->UrbHeader.Function ==
                                            HCD_URB_ABORT_PIPE)) {
-                XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-                InsertTailList(&dev->SlowDeferred, entry);
-                XhciControllerLockRelease(&hc->Hc, oldIrql);
+                hcdCfgDefer(hc, dev, irp);
                 continue;
             }
         }

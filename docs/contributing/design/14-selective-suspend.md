@@ -125,8 +125,8 @@ stopped (SP=1), and a slow IRP dequeued for it is split:
 - **Host side, served now:** ABORT_PIPE; the cancel and drain of a pipe (a
   ring edit and Set TR Dequeue on a stopped endpoint need no link); the
   host-side half of a function release - its endpoints' cancel, drain and
-  drop (Configure Endpoint). A client quiescing itself never forces a
-  resume.
+  drop (Configure Endpoint); 3.10 keeps the whole release owed instead. A
+  client quiescing itself never forces a resume.
 - **Device side, deferred:** the device-side half of a function release
   (SET_INTERFACE to alternate 0, `hcd_cfg.c:1653`), SELECT_CONFIGURATION,
   SELECT_INTERFACE, RESET_PIPE's clear-halt, GET_STATUS and every other
@@ -367,7 +367,9 @@ admission, capabilities, teardown, the controller's transitions). Until
 
 - **The pass** runs at the end of each powered service pass, with the
   switch on and the root hub started, over every addressed device that is
-  not a hub, not SuperSpeed, and has a PDO. In one controller-lock hold it
+  not a hub, not SuperSpeed, and has a PDO. A device's chain has at most
+  `XHCI_FUNC_MAX` (16) PDOs; the pass copies them into the controller's
+  own scratch, not onto the enum thread's stack. In one controller-lock hold it
   copies the PDO chain's slots, decides (`XhciSuspDecide`), writes back
   `WokeHold` and the D0s, claims every IRP the decision completes and, for
   a suspend, begins it (`XhciSuspBegin`, SUSPENDING); the claimed IRPs are
@@ -378,9 +380,9 @@ admission, capabilities, teardown, the controller's transitions). Until
   given a controller-wide millisecond count that advances by every delay
   the executor itself waits. Time that passes elsewhere is not counted, so
   every wait computed from it - the dwell after U3, SP=1's minimum - is
-  longer than asked, never shorter. A bounded poll (the observation, the
-  verification, the arm's drain) is bounded by a timer, as `hcdEp0Quiet`
-  is, and reports `EXPIRED` when it runs out.
+  longer than asked, never shorter. A bounded poll is bounded by a timer,
+  as `hcdEp0Quiet` is: the observation and the verification report
+  `EXPIRED` when it runs out, the repeated arm's drain NOT_SENT.
 - **The arm and the disarm** go through `HcdThreadControlOutcome`. The
   first arm is not sent while EP0's queue holds a client's transfer
   (NOT_SENT at once, no 5-second quiet wait); the repeated arm waits for
@@ -408,7 +410,11 @@ admission, capabilities, teardown, the controller's transitions). Until
   port ClearPortFeature(PORT_SUSPEND).
 - **The uncertain outcome's recovery** is the device cycle
   (`HcdEnumCycle` on the device's PDO group): the device is dropped as an
-  unplug drops it and enumerated afresh, a new device. That is the
+  unplug drops it and enumerated afresh, a new device. So is a device the
+  machine saw leave (a disconnect classified from a sample, or a sequence
+  ended GONE): the port's own processing may not drop it - a USB 2.0 port
+  that lost PED with CCS kept, at `XhciTolerance` 0 - and a cycle of a
+  device the port also dropped is no change, the group naming it alone. That is the
   existing path that re-establishes a device whose state is unknown; the
   old device is GONE and its slots settled at the unlink. A controller
   timeout leaves the device to the controller's recovery, which
@@ -417,7 +423,13 @@ admission, capabilities, teardown, the controller's transitions). Until
   context reads Stopped, is not Halted, holds TDs and whose pipe holds no
   pause but the machine's (`Paused` 1), once per stream with work, then
   opens the gate. Then the device's deferred slow IRPs go back to the head
-  of `SlowIrps`, in order, and the thread is woken.
+  of `SlowIrps`, in order, and the thread is woken. Every other doorbell
+  that could restart a held device's survivors respects the gate: EP0's
+  recovery (`hcdResetEp0`) rings nothing while the link is SUSPENDED or
+  RECOVERING, and a hub's release of its subtree (`hcdHubReleaseBelow`,
+  an ancestor port's resume) rings no endpoint whose pipe holds the
+  machine's pause; the publish paths, the isochronous restart, a cancel's
+  stream kick and the soft retry test `Paused` already.
 - **Root-port evidence.** `hcdPortChanged` hands the sample - PORTSC as
   read, the change bits it acknowledged, the location's `ConnectGen` - to
   the machine after the acknowledgement, for a device the machine owns. A
@@ -429,11 +441,15 @@ admission, capabilities, teardown, the controller's transitions). Until
   `ConnectGen`) to the machine instead of the quiesce, wait and release.
 - **Slow IRPs** (3.3). A slow IRP dequeued for a device whose link is not
   ACTIVE (SUSPENDED, or RECOVERING, whose device the cycle drops) is
-  served if it is ABORT_PIPE, else moved to `dev->SlowDeferred` in order.
-  A function release owed to such a device is kept owed whole, its
-  host-side half included, until the device is ACTIVE: simpler than
-  splitting it, and it forces no resume. A deferred IRP of a device that
-  leaves completes DEVICE_GONE with the queued ones (`HcdCfgFlushDevice`).
+  served if it is ABORT_PIPE, else moved to `dev->SlowDeferred` in order,
+  cancellable by 4.2's handshake there (its cancel routine completes it
+  CANCELLED; the undeferral and the flush take only what they cleared).
+  A function release owed to such a device is kept owed whole until the
+  device is ACTIVE - this replaces 3.3's split, whose host-side half (the
+  endpoints' cancel, drain and drop) is not run while suspended: simpler,
+  it forces no resume, and the release's endpoints are stopped meanwhile.
+  A deferred IRP of a device that leaves completes DEVICE_GONE with the
+  queued ones (`HcdCfgFlushDevice`).
   The survivor restart after a cancel rings no doorbell while the link is
   not ACTIVE; the machine's restart does.
 

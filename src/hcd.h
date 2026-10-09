@@ -1260,6 +1260,11 @@ typedef struct _HCD_CONTROLLER {
     ULONG PowerDown;
     ULONG WakeSeq;
     ULONG SuspClockMs;
+    /* The pass's copy of one device's slots, kept here rather than on the
+     * enum thread's stack (16 functions, XHCI_FUNC_MAX); thread only, one
+     * device at a time. */
+    struct _HCD_DEVICE_PDO *SuspPdos[XHCI_FUNC_MAX];
+    XHCI_SUSP_FUNC SuspFuncs[XHCI_FUNC_MAX];
 } HCD_CONTROLLER, *PHCD_CONTROLLER;
 
 /* The root hub's PDO, created by the controller FDO (hcd_rh.c; design record
@@ -1712,6 +1717,8 @@ VOID HcdSuspRootSample(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG portsc,
                        ULONG acked);
 VOID HcdSuspHubSample(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG status,
                       ULONG acked);
+/* hcd_cfg.c's half of 3.3's deferral */
+VOID HcdCfgUndefer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 
 /* hcd_pool.c */
 PVOID HcdPoolAlloc(ULONG bytes);
