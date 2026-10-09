@@ -865,7 +865,7 @@ AM5 tester's machine has not run this release.
 
 ## Registry settings
 
-Eleven values, each a `DWORD` in the controller's driver (software) key:
+Twelve values, each a `DWORD` in the controller's driver (software) key:
 
 | Windows | Key |
 |---|---|
@@ -878,12 +878,13 @@ controller was ever enumerated at another PCI slot can have more than one
 such key: the device's own `Driver` value, under `Enum\PCI`, names the one in
 use. `XHCISNAP -verbosity` finds it for you.
 
-The install writes all eleven: each at the driver's own default, except
+The install writes all twelve: each at the driver's own default, except
 `XhciImodInterval250ns` at `160`. Each is written only where it is missing,
 so a value you changed survives an install or update; to go back to the
 default, set it by hand, or delete the value and update the driver.
 `XhciTolerance`, `XhciIntervalCap` and `XhciAvgTrbEsit` are new in
-`2.2.0.0`, and an update over `2.1.1.0` adds them. The install has written
+`2.2.0.0`, and an update over `2.1.1.0` adds them; `XhciIntelIrqRoute` is
+new in `2.3.0.0`, and an update over `2.2.0.0` adds it. The install has written
 every value since `2.1.1.0`, which added `XhciIntelPortSwitch`. Of the
 seven before it, the
 `2.1.0.0` install wrote three, the two log values and
@@ -1032,6 +1033,47 @@ firmware puts them, and after a disable and enable they stay where the
 disable left them, with the USB 2.0 controller. Read on a Lenovo B490 under
 Windows 98 SE: at `0` and after a restart, a device on a blue connector
 stayed with the USB 2.0 controller.
+
+### XhciIntelIrqRoute: the Intel interrupt routing repair
+
+New in `2.3.0.0`; the install writes `1`. On the Intel 7-, 8- and 9-series
+and C610/X99 chipsets, two chipset registers decide which interrupt line the
+xHCI controller's interrupt reaches. Some firmware leaves them pointing at a
+different line from the one it tells Windows: the Dell Latitude E7250's
+sends the interrupt to IRQ 16 while Windows listens on IRQ 21, so the
+driver never hears from the controller and every device on it is slow or
+stops (docs/issues/12). At each start and each return from standby the
+driver reads those registers and, where the value allows it, points the
+controller's interrupt at the line Windows assigned. It changes nothing else.
+
+| Value | Effect |
+|---|---|
+| `0` | Off: the driver reads and reports, and writes nothing |
+| `1`, absent, any other number, or not a `DWORD` | On the Dell Latitude E7250 only (controller `8086:9CB1`, subsystem `1028:062D`, chipset `9CC3`); elsewhere it reads and reports |
+| `2` | On any of the six reviewed controller and chipset pairs: controller `1E31`, `8C31`, `9C31`, `8CB1`, `9CB1` or `8D31` with one of its own chipset ids (docs/issues/12 section 5.1) |
+
+**It does nothing on every other machine**, at any value: another vendor's
+controller, an Intel controller not in that list (every chipset from the
+100-series on included), a chipset id that does not match its controller,
+or a check of an id, a register or the interrupt Windows gave that
+fails. **It also does nothing
+when the controller's interrupt is a message (MSI) rather than a line**, as
+it can be on Windows Vista and 7, **and nothing when the driver is polling
+the controller instead of taking its interrupt**: neither goes through the
+line it would repair. It decides again at each start and return from
+standby, so a change takes effect at the next restart or at a disable and
+enable of the controller.
+
+What it logs. `XHCISNAP`'s report has a section "interrupt routing" with
+the value in effect, how many times it ran and wrote, and the last run's
+decision, what it read and, after a write, what the register read back;
+with `XhciLogVerbosity` at `2` or above the report also carries `pirq.`
+records. Send them with any report from one of these machines.
+
+What it rests on. On the owner's E7250 under Windows XP x64, the same
+register written by hand to the value this setting writes fixed the
+mouse at once and let a USB stick work. The driver's own write has not yet
+been read on any machine, and nor has any system but that one.
 
 ### XhciTolerance: the controller-fault handling, all together
 

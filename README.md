@@ -211,6 +211,7 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | `XhciFirstEnumWaitMs` | The longest wait for a hub's first report | `0` | `30000` | `5000` | `5000` |
 | `XhciFirstEnumPortMs` | The longest one port may hold that wait | `0` | `XhciFirstEnumWaitMs` | `2000` | `2000` |
 | `XhciIntelPortSwitch` | The Intel 7/8/9-series port switchover; `0` turns it off, `2` applies it to any Intel controller **at your own risk** | `0` | `2` | `1` | `1` |
+| `XhciIntelIrqRoute` | The Intel 7/8/9-series interrupt routing repair; `1` the Dell Latitude E7250 only, `2` any reviewed Intel chipset, `0` report only | `0` | `2` | `1` | `1` |
 | `XhciTolerance` | The handling of controller faults, all together; `0` turns most of it off (see "Controller faults") | `0` | `1` | `1` | `1` |
 | `XhciIntervalCap` | Interrupt endpoints polled at least every 32 ms: `1` on AMD controllers, `2` on every controller, `0` off | `0` | `2` | `1` | `1` |
 | `XhciAvgTrbEsit` | A comparison switch for interrupt endpoints; leave at `0` unless comparing | `0` | `1` | `0` | `0` |
@@ -284,6 +285,18 @@ Since `2.1.1.0` the driver moves them to the xHCI controller at each start and r
 - Since `2.2.0.0`, `XhciIntelPortSwitch` set to `2` does the switchover on any Intel xHCI controller, listed or not, for a chipset with the same switchable connectors that the list misses. On a listed controller `2` is the same as `1`.
 
 Setting `XhciIntelPortSwitch` to 2 writes Intel chipset registers on any Intel USB 3 controller. On one without them (every Intel chipset from the 100-series on, and any not yet read) it writes registers of unknown meaning, with unknown results. Use 2 only, at your own risk, for an unlisted Intel chipset with both EHCI and xHCI; everyone else should leave it at 1.
+
+### The Intel 7/8/9-series interrupt routing repair
+
+On the same Intel chipsets, two chipset registers decide which interrupt line the xHCI controller's interrupt reaches. Some firmware points them at a different line from the one it tells Windows: the Dell Latitude E7250 sends it to IRQ 16 while Windows listens on IRQ 21, so the driver never hears from the controller and every USB device on it is slow or stops ([issue 12](docs/issues/12-e7250-xp64-boot-enable-slot-refused.md)).
+
+Since `2.3.0.0` the driver reads those registers at each start and resume and, where `XhciIntelIrqRoute` allows it, points the interrupt at the line Windows assigned:
+
+- `1`, the default (also absent or any other value): only on the E7250 (`8086:9CB1`, subsystem `1028:062D`, chipset `9CC3`).
+- `2`: on any of the six Intel controllers listed above, each with one of its own chipset ids.
+- `0`: reads and reports only.
+
+It writes nothing on any other controller, nothing when the interrupt is a message (MSI) rather than a line, as it can be on Vista and 7, and nothing while the driver is polling the controller. `XHCISNAP`'s report has an "interrupt routing" section that says what it found and did.
 
 ### Controller faults
 

@@ -3539,8 +3539,8 @@ debug throughout, in its build scripts and its documentation alike.)
  9. REGISTRY SETTINGS
 ==============================================================================
 
-Every registry value this driver reads. There are eleven, all DWORDs. The
-install writes all eleven, each at the default it states below except
+Every registry value this driver reads. There are twelve, all DWORDs. The
+install writes all twelve, each at the default it states below except
 XhciImodInterval250ns, which it writes as 160. It writes each only where it is
 missing, so a value you changed survives an install or update; to go back to
 the default, set it by hand, or delete the value and update the driver. If
@@ -3701,6 +3701,32 @@ means the default each one states.
       value at 1.
 
   Value 2 has been read on no unlisted Intel controller.
+
+  XhciIntelIrqRoute  -  the Intel interrupt routing repair
+  ..............................................................
+
+  New in 2.3.0.0. On the same Intel chipsets two chipset registers decide
+  which interrupt line the xHCI controller's interrupt reaches, and some
+  firmware points them at a different line from the one it tells Windows.
+  The Dell Latitude E7250's sends it to IRQ 16 while Windows listens on IRQ
+  21, so the driver never hears from the controller and every USB device
+  on it is slow or stops. At each start and resume the driver reads those
+  registers and, where this value allows it, points the interrupt at the
+  line Windows assigned. It changes nothing else.
+
+      1   the default, and the meaning of absent or any other value: only
+          on the E7250 (controller 8086:9CB1, subsystem 1028:062D, chipset
+          9CC3); elsewhere it reads and reports.
+      2   on any of the six controllers listed under XhciIntelPortSwitch,
+          each with one of its own chipset ids.
+      0   reads and reports, writes nothing.
+
+  IT DOES NOTHING on any other controller, NOTHING when the interrupt is a
+  message (MSI) rather than a line, as it can be on Vista and 7, and
+  NOTHING while the driver is polling the controller. XHCISNAP's report
+  has an "interrupt routing" section saying what it found and did. The
+  same register written by hand fixed the E7250 under XP x64; the
+  driver's own write has not yet been read on any machine.
 
   XhciTolerance  -  the controller tolerance, all together
   ........................................................

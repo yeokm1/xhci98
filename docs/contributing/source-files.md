@@ -159,7 +159,20 @@
 > `xhci_snap.c`'s (`test_snap`). `hcd_urb.c` and `hcd_io.c` keep each
 > transfer's URB function, flags and claim and publish ticks for it;
 > `xhcisnap\xhcisnap.c` decodes all of it (`print_diag`). It records and
-> decides nothing. The tables below are the
+> decides nothing.
+> Task 36.3 (issue 12 section 5.1) adds the pure `xhci_pirq.c` /
+> `xhci_pirq.h` (the Intel PCH interrupt routing quirk: the
+> `XhciIntelIrqRoute` rule, the six reviewed xHCI/LPC pairs and the verified
+> E7250, the PIRQ that delivers the assigned IRQ in APIC and PIC mode, and
+> `XhciPirqRun`, which checks in order over caller-supplied configuration,
+> bus-data and register accessors and keeps `XHCI_PIRQ_STATE`; host suite
+> `test_pirq`), executed from `hcd_ctl.c` (`hcdPirqStart` at start, the
+> raw interrupt resource kept by the parser, the `HalGetBusData` and RCBA
+> accessors, the qemu flavour's `hcdPirqQemuProbe`) and from `hcd_power.c`
+> at each return to D0 (`HcdPirqResume`). The record is copied whole into
+> the HCD region's header (words 20 to 47, version unchanged; `xhci.h`'s
+> `XHCI_SNAPSHOT_HCD_PIRQ_*`, `test_snap`) by `hcd_door.c`, and
+> `xhcisnap\xhcisnap.c` names it (`print_pirq`, `-selftest-pirq`). The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name
