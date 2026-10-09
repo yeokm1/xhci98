@@ -173,7 +173,10 @@ name shown here or the name with `.BAT` appended. The batch files invoke
    ```
 
    This runs only the locked one-shot IRQ test after C1/C2/C3; C6/C8 are
-   skipped. Require `IRQ SELF-TEST PASS`, `Done.`, and `XIRQ.LOG`. Repeat it
+   skipped. Require `IRQ SELF-TEST PASS`, `Done.`, and `XIRQ.LOG` - or, since
+   2.2.0.3, `IRQ SELF-TEST: NO WORKING INTERRUPT` (exit 3): the controller
+   completed the command polled and needs polling; read its CAVEAT lines
+   (which polling mode, whether an MSI route exists) and continue. Repeat it
    across several cold boots on a machine that previously faulted. Archive
    the log and cold boot before continuing.
 
@@ -184,7 +187,9 @@ name shown here or the name with `.BAT` appended. The batch files invoke
    ```
 
    This is the first full ISR run; `--no-wait` keeps the no-external-device
-   pass bounded. Expect xHCI C4 `PASS`, normal completion, and `XEMPTY.LOG`.
+   pass bounded. Expect xHCI C4 `PASS`, normal completion, and `XEMPTY.LOG`;
+   on a controller with no working interrupt, C4 `POLL` and the verdict
+   QUALIFIED WITH CAVEATS (exit 3) instead, which also continues.
    Archive the log, then cold boot again.
 
 5. Attach an expendable USB 2.0 test device directly to the target connector,
@@ -641,7 +646,7 @@ remains clear, C4 FAIL reports `SOF set but PCI INTx did not assert (PCI
 | C2 FAIL | Cold boot and retry. A repeatable reset failure disqualifies that controller. |
 | C3 FAIL | DMA/schedule setup did not complete. Cold boot, verify no memory manager is loaded, and retain the full log. |
 | C3 SKIP | The tool could not run the test: out of conventional memory (a large scratchpad, or several controllers in one run) or PAGESIZE without 4 KB support. Not a controller fault and never a disqualification. Boot with more conventional memory free, or qualify one family at a time (`XHCIQUAL xhci`). |
-| xHCI C4 POLL | "Needs polling" (since 2.2.0.3, roadmap-hcd task 36.10): no working interrupt - Interrupt Pin 0, an Interrupt Line DOS cannot use, PCI Interrupt Disable stuck, or the No-Op's completion in the event ring with no interrupt - and the command completed polled. C6 and C8 still run, with the hook already removed, and a run that passes the rest is QUALIFIED WITH CAVEATS (exit 3): `xhci98.sys` polls such a controller (`XhciInterruptMode` 0 or 2), or an MSI-capable OS takes a message interrupt where the controller offers one; the verdict says which. Record the C4 note and the `PCI caps:` line. |
+| xHCI C4 POLL | "Needs polling" (since 2.2.0.3, roadmap-hcd task 36.10): no working interrupt - Interrupt Pin 0, an Interrupt Line DOS cannot use, PCI Interrupt Disable stuck, or the No-Op's completion in the event ring with no interrupt - and the command completed polled. C6 and C8 still run, with the hook already removed, and a run that passes the rest is QUALIFIED WITH CAVEATS (exit 3): `xhci98.sys` polls such a controller (`XhciInterruptMode` 0 or 2), or an MSI-capable OS takes a message interrupt where the controller offers one; the verdict says which. A controller that never raised IP gets `XhciInterruptMode` 2 named and no MSI route: automatic mode moves to polling only on a pending bit it can see. Record the C4 note and the `PCI caps:` line. |
 | xHCI/EHCI C4 FAIL | Polling may distinguish a live controller from broken PIC routing. A repeatable legacy-IRQ failure disqualifies the controller for Win98; for Win2000 under an APIC HAL it is suspicious rather than proven - see design doc 01, "What a C4 PASS proves for each target". |
 | OHCI C4 WARN | Expected partial proof. The note says whether PCI INTx status was observed or the PCI 2.3 status mechanism is unavailable; CPU delivery remains unproven. |
 | OHCI C4 FAIL | The controller never asserted SOF, or a PCI 2.3-capable function failed to assert INTx. |

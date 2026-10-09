@@ -551,6 +551,7 @@ typedef struct {
     int cleanup_failed;
     int irq_selftest;
     int irq_no_event;        /* C4: the No-Op never completed, even polled */
+    int irq_force_poll;      /* C4: POLL with IP never raised: mode 2 only */
     ROUTEINFO route;         /* task 36.11, read before any active test */
     long route_gsi;          /* --gsi N, or -1                           */
     char irq_note[80];

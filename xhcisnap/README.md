@@ -324,7 +324,7 @@ block's words 63 to 95 (named in the counter list too):
 A counter block of 63 words is a driver from before polling, reported as
 taking the line interrupt; a header shorter than 204 words places no
 extension words. `-selftest-intr` prints the decode over canned images.
-)
+
 The PORTSC decode is printed on screen whatever the level, because that is what
 the bench reads on the spot. The headline test is per port: a port reporting a
 device connected with `PP` clear is Finding Q read off the register, whatever

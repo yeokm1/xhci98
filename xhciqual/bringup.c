@@ -593,6 +593,7 @@ int qual_irq(CTRL *c)
 
     memset(&s, 0, sizeof(s));
     c->irq_no_event = 0;
+    c->irq_force_poll = 0;
     if (c->pci.ipin == 0)
         return c4_no_line(c, "Interrupt Pin = 0: no INTx");
     if (c->pci.iline == 0 || c->pci.iline > 15) {
@@ -660,6 +661,9 @@ int qual_irq(CTRL *c)
          * the controller failed the command, polled or not. */
         s.event_seen = got_evt;
         c->irq_no_event = got_evt ? 0 : 1;
+        /* IP never rose: the driver's automatic mode watches for IP
+         * before it moves a line to polling, so this one must be told. */
+        c->irq_force_poll = got_evt ? 1 : 0;
         c->v_irq = c4_verdict(&s);
         strcpy(c->irq_note, got_evt ?
                "No xHCI IP while PIC masked; event completed by polling" :

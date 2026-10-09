@@ -96,13 +96,36 @@ const char *msi_route_text(const PCIINFO *p, int broken_msi)
            "        only route";
 }
 
-/* The caveats, said in full wherever the outcome is reached. */
+/*
+ * The caveats, said in full wherever the outcome is reached. Which polling
+ * mode serves depends on what C4 saw (review round 1): the driver's
+ * automatic mode polls a controller with no pin or no interrupt resource,
+ * and moves a line to polling when it sees IMAN.IP asserted and nothing
+ * claimed (record 15 section 4.2) - so a controller that never raised IP
+ * at all is served only by XhciInterruptMode 2. Nor does such a controller
+ * offer a message route: xHCI sends an MSI or MSI-X from the same pending
+ * bit (xHCI 1.2c 4.17.5).
+ */
 void report_caveats(const CTRL *c)
 {
     const PCIINFO *p = &c->pci;
     int broken;
 
     broken = (c->quirk != 0 && (c->quirk->flags & QF_BROKEN_MSI) != 0);
+    if (c->irq_force_poll) {
+        qprintf("      CAVEAT: no working interrupt - the controller never "
+                "raised its pending\n"
+                "        bit (IMAN.IP), which xhci98.sys's automatic mode "
+                "must see before it\n"
+                "        moves to polling. Set XhciInterruptMode to 2 so it "
+                "polls: more CPU\n"
+                "        wake-ups, and an event can wait up to the poll "
+                "period (XhciPollIdleMs,\n"
+                "        50 ms by default, when idle). No message interrupt "
+                "is offered either:\n"
+                "        xHCI sends MSI from the same pending bit.\n");
+        return;
+    }
     qprintf("      CAVEAT: no working line interrupt, so xhci98.sys polls "
             "this controller\n"
             "        (XhciInterruptMode 0, automatic, or 2): more CPU "

@@ -1882,6 +1882,45 @@ static const char *const hcd_counter_names[SNAP_HCD_COUNTER_WORDS] = {
 };
 
 /*
+ * The HCD image's layout as its header gives it, checked against the bytes
+ * that arrived: 1 when every figure fits. print_hcd refuses a shape that
+ * fails (and says so), and the sections read from the same header
+ * (print_intr) decode nothing from it either, so one malformed header
+ * cannot be refused by one reader and believed by another (task 36.9's
+ * review round 1). The header lies inside the image, the records after it,
+ * and the counters after the header and inside the image, word-aligned.
+ */
+static int hcd_shape_ok(const unsigned char *image, unsigned long bytes)
+{
+    unsigned long version;
+    unsigned long headBytes;
+    unsigned long ports;
+    unsigned long portBytes;
+    unsigned long portsAt;
+    unsigned long counters;
+    unsigned long countersAt;
+
+    if (bytes < SNAP_HCD_HEAD_WORDS * 4) {
+        return 0;
+    }
+    version = get32(image, 0);
+    headBytes = get32(image, 4);
+    ports = get32(image, 8);
+    portBytes = get32(image, 12);
+    portsAt = get32(image, 16);
+    counters = get32(image, 20);
+    countersAt = get32(image, 24);
+    return !(version == 0 || version > SNAP_HCD_VERSION ||
+             headBytes < SNAP_HCD_HEAD_WORDS * 4 || headBytes > bytes ||
+             (headBytes & 3UL) != 0 ||
+             portBytes < SNAP_HCD_PORT_WORDS * 4 || (portBytes & 3UL) != 0 ||
+             portsAt < headBytes || portsAt > bytes || ports > 255 ||
+             ports > (bytes - portsAt) / portBytes || countersAt > bytes ||
+             countersAt < headBytes || (countersAt & 3UL) != 0 ||
+             counters > (bytes - countersAt) / 4);
+}
+
+/*
  * The image's own header says where everything is; each figure is checked
  * against the bytes that arrived before it is believed. A port is printed
  * only when it has something to say - a machine not Empty, a cause, a speed
@@ -1918,12 +1957,7 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
     portsAt = get32(image, 16);
     counters = get32(image, 20);
     countersAt = get32(image, 24);
-    if (version == 0 || version > SNAP_HCD_VERSION ||
-        headBytes < SNAP_HCD_HEAD_WORDS * 4 ||
-        portBytes < SNAP_HCD_PORT_WORDS * 4 || (portBytes & 3UL) != 0 ||
-        portsAt < headBytes || portsAt > bytes || ports > 255 ||
-        ports > (bytes - portsAt) / portBytes || countersAt > bytes ||
-        counters > (bytes - countersAt) / 4) {
+    if (!hcd_shape_ok(image, bytes)) {
         comp("\nHCD region: version %lu, header %lu bytes, %lu ports of %lu "
              "bytes at +%lu,\n  %lu counters at +%lu, in %lu bytes - not a "
              "shape this build reads\n  (it knows version %lu); not "
@@ -3027,8 +3061,9 @@ static void print_intr(const unsigned char *hcd, unsigned long hcdBytes,
     const unsigned char *k;
     const unsigned char *e;
 
-    if (hcdBytes < SNAP_HCD_HEAD_WORDS * 4 || get32(hcd, 0) == 0 ||
-        get32(hcd, 0) > SNAP_HCD_VERSION) {
+    if (!hcd_shape_ok(hcd, hcdBytes)) {
+        comp("\nevent delivery: the HCD region's header does not fit its "
+             "image; not decoded.\n");
         return;
     }
     headBytes = get32(hcd, 4);
@@ -3040,9 +3075,7 @@ static void print_intr(const unsigned char *hcd, unsigned long hcdBytes,
              "added the delivery's).\n", counters);
         return;
     }
-    if (counters < SNAP_HCD_COUNTER_WORDS || countersAt > hcdBytes ||
-        (countersAt & 3UL) != 0 ||
-        SNAP_HCD_COUNTER_WORDS > (hcdBytes - countersAt) / 4) {
+    if (counters < SNAP_HCD_COUNTER_WORDS) {
         comp("\nevent delivery: %lu counter words at +%lu in %lu bytes - "
              "not a shape this build\n  reads; not decoded.\n", counters,
              countersAt, hcdBytes);
@@ -3291,9 +3324,19 @@ static int selftest_intr(void)
     intr_image(hcd, 202, 63);
     print_intr(hcd, (202 + 63) * 4, ext, sizeof(ext));
 
-    /* A block the image cannot hold. */
+    /* Shapes refused as print_hcd refuses them (review round 1): a block
+     * the image cannot hold, a header longer than the image, and counters
+     * overlapping the header; and a block between the two sizes known. */
     intr_image(hcd, H, SNAP_HCD_COUNTER_WORDS);
     put32(hcd, 24, bytes - 4);
+    print_intr(hcd, bytes, ext, sizeof(ext));
+    intr_image(hcd, H, SNAP_HCD_COUNTER_WORDS);
+    put32(hcd, 4, bytes + 4);
+    print_intr(hcd, bytes, ext, sizeof(ext));
+    intr_image(hcd, H, SNAP_HCD_COUNTER_WORDS);
+    put32(hcd, 24, (H - 4) * 4);
+    print_intr(hcd, bytes, ext, sizeof(ext));
+    intr_image(hcd, H, 80);
     print_intr(hcd, bytes, ext, sizeof(ext));
     return 0;
 }

@@ -174,6 +174,21 @@ static void test_full_dead_line(void)
           "and this controller has none");
     CHECK(!has("Also with warnings"), "no warnings line");
 
+    /* IP never raised: automatic mode cannot see it, so mode 2 is named
+     * and no message route is offered (review round 1). */
+    c = full_pass();
+    c->v_irq = V_POLL;
+    c->irq_force_poll = 1;
+    c->pci.has_msix = 1;
+    strcpy(c->irq_note, "No xHCI IP while PIC masked; event completed by "
+                        "polling");
+    CHECK(final_verdict(c, 1) == VERDICT_CAVEATS,
+          "no IP, completed polled: still with caveats");
+    CHECK(has("Set XhciInterruptMode to 2"), "mode 2 named");
+    CHECK(!has("XhciInterruptMode 0, automatic"), "not automatic mode");
+    CHECK(has("No message interrupt is offered"), "and no MSI route");
+    CHECK(!has("since it offers MSI-X"), "even with MSI-X present");
+
     c = full_pass();
     c->v_irq = V_POLL;
     c->v_port = V_SKIP;
