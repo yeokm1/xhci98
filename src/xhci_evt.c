@@ -50,6 +50,7 @@
 #if defined(XHCI_FLAVOUR_QEMU)
 #include "hcd_svc.h"
 #endif
+#include "xhci_poll.h"
 
 /* XHCI_ISR_IMAN_READ_ATTEMPTS is in src/xhci_hw.h, with the contract it is part
  * of - the host vector for the literal fallback counts exactly that many reads. */
@@ -352,6 +353,18 @@ BOOLEAN XhciIsr(PXHCI_EXTENSION ext)
     }
 
     /*
+     * **A line moved to polling and retired** (design record 15 section
+     * 4.2): further assertion is proven prevented - by a masked
+     * acknowledgement, a verified PCI Interrupt Disable or a completed
+     * HCRST - so this controller cannot be the source, and declining is
+     * free. Before the USBSTS read, so a shared line's other devices cost
+     * this controller no register access.
+     */
+    if (ext->LineRetired) {
+        return FALSE;
+    }
+
+    /*
      * **Is this driver admitted**, and the answer is conditional on something
      * the gates themselves do not know. Declining is only free once this
      * controller can no longer be asserting the shared level-triggered line -
@@ -370,9 +383,15 @@ BOOLEAN XhciIsr(PXHCI_EXTENSION ext)
      * declined below anyway, so this cannot claim an interrupt for a controller
      * that is gone.
      */
+    /*
+     * While a moved line's retirement is owed (LineMoved, not LineRetired),
+     * this gate stays shut: a suspend's or a recovery's own mask would
+     * otherwise open it with the standing assertion unacknowledged (record
+     * 15 section 4.2).
+     */
     if (((ext->Flags & XHCI_EXT_FLAG_INITIALIZED) == 0 ||
          ext->ControllerFailed) &&
-        ext->InterruptDeliverySuppressed) {
+        ext->InterruptDeliverySuppressed && !ext->LineMoved) {
         return FALSE;
     }
 
@@ -770,6 +789,15 @@ ULONG XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts)
         return 0;
     }
     if ((ext->Flags & XHCI_EXT_FLAG_INITIALIZED) == 0) {
+        XhciControllerLockRelease(ext, oldIrql);
+        return 0;
+    }
+    /*
+     * Under a poll delivery the poller's own admission, in this same hold
+     * (design record 15 section 5.3): INITIALIZED is published before the
+     * controller runs, PollService only after the HCD has seen it running.
+     */
+    if (ext->EventDelivery == XHCI_POLL_DELIVERY_POLL && !ext->PollService) {
         XhciControllerLockRelease(ext, oldIrql);
         return 0;
     }

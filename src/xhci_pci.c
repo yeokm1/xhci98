@@ -171,7 +171,11 @@ VOID XhciWritePortsc(PXHCI_EXTENSION ext, ULONG port, ULONG value)
  * may be posted" (docs/usb-xhci-info/xhci-data-structures.md section 5) - a read here would
  * answer nothing and flush the write for no reason.
  *
- * IRQL: any.
+ * Under a poll delivery the HCD then promotes the poller and peeks the
+ * event ring (HcdSvcDoorbell; design record 15 section 6.2), which is why
+ * every caller holds the controller lock.
+ *
+ * IRQL: DISPATCH_LEVEL, controller lock held.
  */
 VOID XhciWriteDoorbell(PXHCI_EXTENSION ext, ULONG slot, ULONG value)
 {
@@ -186,6 +190,7 @@ VOID XhciWriteDoorbell(PXHCI_EXTENSION ext, ULONG slot, ULONG value)
     }
 #endif
     XhciWrite32(ext, ext->HcInfo.DoorbellOffset + slot * XHCI_DB_STRIDE, value);
+    HcdSvcDoorbell(ext, slot, value);
 }
 
 /*
@@ -230,7 +235,8 @@ MPSTATUS XhciReadPciConfig(PXHCI_EXTENSION ext,
 }
 
 /* IRQL: PASSIVE_LEVEL. See the contract in src/xhci_hw.h - this exists for the
- * quiesce path's Bus Master Enable fallback and nothing else. */
+ * quiesce path's Bus Master Enable fallback and the moved line's Interrupt
+ * Disable (design record 15 section 4.2), and nothing else. */
 MPSTATUS XhciWritePciConfig(PXHCI_EXTENSION ext,
                             ULONG offset,
                             PVOID buffer,

@@ -178,7 +178,19 @@
 > `XhciEnumNoteBusy` in `xhci_enum.c` (`test_enum`), its drain
 > `hcd_ctl.c`'s `HcdCommandDrain` under the backstop's admission
 > (`hcdDrainAdmitted`), and the qemu flavour's `XhciQemuStartHold` in
-> `hcd_inj.c` (`HcdInjStartHeld`, `HcdInjStartRelease`). The tables below are the
+> `hcd_inj.c` (`HcdInjStartHeld`, `HcdInjStartRelease`).
+> Tasks 36.6 to 36.8 (design record 15) add the pure `xhci_poll.c` /
+> `xhci_poll.h` (the three values, the delivery and its reason, the
+> poller's ownership machine and roles, promotion, park and kick, the
+> watcher's dead-line verdict, the adaptive period, the interval
+> observation and the line's retirement over register callbacks; host suite
+> `test_poll`) and the driver half `hcd_poll.c` (the poll timer and its DPC,
+> `PollLock`, the watcher's look and the move, the retirement under
+> `KeSynchronizeExecution`, `HcdPollContain`'s PCI Interrupt Disable, the
+> grant and revocation, the peeks and the doorbell hook `HcdSvcDoorbell`).
+> `hcd_ctl.c` settles the delivery at start (`hcdSettleDelivery`,
+> `hcdConnect`, the seam 36.15's MSI joins), and the counters are appended
+> to `XHCIHC_COUNTERS`. The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name

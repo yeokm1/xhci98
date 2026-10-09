@@ -57,6 +57,10 @@ rem                  XhciIntelPortSwitch rule, and the route and release over
 rem                  a modelled config space - write order, values, refusals;
 rem                  value 2's bypass, the accepted-write set and the
 rem                  lifetime that releases only it (task 35.5)
+rem   test_poll    - polled event delivery (src\xhci_poll.c, tasks 36.6 to
+rem                  36.8): the three values, the delivery and its reason,
+rem                  the deadlines, the poller's ownership machine and roles,
+rem                  the watcher's verdict, the period and the retirement
 rem   test_pirq    - the Intel PCH interrupt routing quirk (src\xhci_pirq.c,
 rem                  task 36.3): the XhciIntelIrqRoute rule, the reviewed
 rem                  pairs, the target PIRQ in APIC and PIC mode, the
@@ -319,6 +323,7 @@ call :run test_desc "test_desc.c ..\src\xhci_desc.c ..\src\xhci_ctx.c ..\src\xhc
 rem test_uas links nothing else: the UAS driver's information units, tags,
 rem descriptor walk and ids are pure computations over bytes (task 31-A.2).
 call :run test_uas "test_uas.c ..\src\uas\uas_iu.c"
+call :run test_poll "test_poll.c ..\src\xhci_poll.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64

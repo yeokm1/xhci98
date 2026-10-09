@@ -2114,6 +2114,7 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
     ULONG after;
     ULONG ok;
     PUCHAR s;
+    KIRQL oldIrql;
 
     s = (PUCHAR)hc->ScratchVa;
     switch (act->Kind) {
@@ -2129,6 +2130,12 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
         return 1;
 
     case XHCI_ENUM_ACT_RESET:
+        /* A reset's end is a Port Status Change Event with no doorbell
+         * before it: the poller is brought to its active period (design
+         * record 15 section 6.1). */
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        HcdPollPromoteLocked(hc, 0);
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
         speed = 0;
         if (p->Hub != NULL) {
             /* The machine takes the default ID of the class the hub
@@ -4581,6 +4588,29 @@ static VOID hcdCycleService(PHCD_CONTROLLER hc)
  * ports. Unpowered, only a detach runs; the rest stays marked. Only the
  * controller thread calls it.
  */
+/*
+ * The ports in reset or enumeration, counted by the thread that owns the
+ * machines and published under the controller lock for the poller's
+ * period (design record 15 section 6.1). IRQL: PASSIVE_LEVEL (the thread).
+ */
+static VOID hcdPollPortsPublish(PHCD_CONTROLLER hc)
+{
+    ULONG busy;
+    ULONG state;
+    ULONG i;
+
+    busy = 0;
+    for (i = 0; i < HCD_PORT_COUNT; i++) {
+        state = hc->Ports[i].Enum.State;
+        if ((state >= XHCI_ENUM_DEBOUNCE &&
+             state <= XHCI_ENUM_CONFIG_FULL) ||
+            state == XHCI_ENUM_BOS5 || state == XHCI_ENUM_BOS_FULL) {
+            busy++;
+        }
+    }
+    HcdPollPortsBusy(hc, busy);
+}
+
 VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
 {
     PXHCI_EXTENSION ext;
@@ -4777,6 +4807,7 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
     if (outstanding && !hcdHalted(hc)) {
         hcdSettleCheck(hc, asked);
     }
+    hcdPollPortsPublish(hc);
 }
 
 /*

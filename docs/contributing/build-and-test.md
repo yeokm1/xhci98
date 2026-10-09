@@ -6322,6 +6322,32 @@ the hold. (A switch of this name was in the
 withdrawn `2.2.0.1`, task 36w.3, and was reverted with it; this is its
 return, without that build's drain at interrupt enable.)
 
+**`XhciQemuNoInterrupt`, `XhciQemuPinUnreadable`, `XhciQemuDeadLine`**
+(roadmap-hcd tasks 36.7 and 36.13, design record 15 section 11). REG_DWORDs
+read at every start. `XhciQemuNoInterrupt` 1 makes the start see no
+interrupt resource and pin 0: mode 0 then polls with reason 4, mode 1 fails
+the start as a controller with no interrupt always did. `XhciQemuPinUnreadable`
+1 fails the HCD's pin read: modes 0 and 1 run the line with reason 2 or 6.
+`XhciQemuDeadLine` N + 1 (0 off, held to 600001) latches a stand-in dead line
+N ms after the start's grant (at once, before the connection, for a value of
+1): the ISR still acknowledges what it claims, so QEMU's level line does not
+storm, but queues no drain and withholds the claim from the watcher, and
+every watcher look reads asserted. Under mode 0 the log ring then shows
+`qemu.inj.deadline`, `intr.moved` (the stale pairs) and `intr.moved.masked`,
+and the counter block delivery 2 with reason 9; under mode 1 no move. The
+start notes `qemu.inj.nointerrupt`, `qemu.inj.pinunreadable` and
+`qemu.inj.deadline.value`.
+
+**The delivery's log notes** (every flavour; design record 15 section 8). At
+start: `intr.mode.read`, `intr.mode`, `intr.delivery`, `intr.reason`,
+`intr.pin`, `poll.idle.ms`, `poll.active.ms`; at a move `intr.moved`,
+`intr.moved.masked`; for the line's retirement `intr.retired` (1 by
+acknowledgement, 2 by PCI Interrupt Disable), `intr.retire.recover`,
+`intr.retire.uncontained`, `intr.contain.unpowered`; at a line start that
+cleared a leftover Interrupt Disable `intr.intxdisable.cleared` (or
+`intr.intxdisable.stuck`). The stop's counter dump adds `intr.*`, `poll.*`
+and `watch.*` lines for the counter block's new words.
+
 **`XhciQemuInject`** (roadmap-hcd task 35-T.9, design record 17 section 5).
 A REG_DWORD the controller thread re-reads about once a second, so a script
 in the guest fires a fault at run time by writing it:

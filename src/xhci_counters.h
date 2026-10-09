@@ -152,9 +152,56 @@ typedef struct _XHCIHC_COUNTERS {
     ULONG SsHubConfigErrors;
     ULONG SsHubDevicesPlus;
     ULONG SsHubRateUnmatched;
+
+    /* Event delivery (design record 15 section 8; roadmap-hcd.md 36.6 to
+     * 36.8), appended. The three values as read (XHCI_POLL_NOT_FOUND when
+     * not found) and in effect; the delivery and its reason
+     * (XHCI_POLL_DELIVERY_*, XHCI_POLL_R_*), set at start and again at the
+     * dead-line move; the pin's read status and value; the poller's role,
+     * the period it last armed and the bus state that chose it
+     * (XHCI_POLL_BUS_*); its runs and the runs that drained an event; the
+     * opportunistic peeks and their hits; promotions, parks and kicks; arms
+     * replaced as displaced; the shortest and longest interval between two
+     * runs (XHCI_POLL_NOT_FOUND until one) and the intervals discarded; the
+     * watcher's looks, asserted looks and stale pairs; the move (0 or 1);
+     * the attempts to retire the line and the retirement's state
+     * (XHCI_POLL_RETIRED_*); and a start that cleared a leftover PCI
+     * Interrupt Disable. Written at start before the poller runs, then
+     * under the controller lock. */
+    ULONG IntrModeRead;
+    ULONG IntrMode;
+    ULONG IntrDelivery;
+    ULONG IntrReason;
+    ULONG IntrPinStatus;
+    ULONG IntrPin;
+    ULONG PollIdleMsRead;
+    ULONG PollIdleMs;
+    ULONG PollActiveMsRead;
+    ULONG PollActiveMs;
+    ULONG PollRole;
+    ULONG PollPeriodLast;
+    ULONG PollStateLast;
+    ULONG PollRuns;
+    ULONG PollRunsWithEvents;
+    ULONG PollPeeks;
+    ULONG PollPeekHits;
+    ULONG PollPromotions;
+    ULONG PollParks;
+    ULONG PollKicks;
+    ULONG PollArmsDisplaced;
+    ULONG PollIntervalMinMs;
+    ULONG PollIntervalMaxMs;
+    ULONG PollIntervalsDiscarded;
+    ULONG WatchLooks;
+    ULONG WatchAsserted;
+    ULONG WatchStalePairs;
+    ULONG LineMoves;
+    ULONG LineRetireAttempts;
+    ULONG LineRetireState;
+    ULONG IntxDisableCleared;
 } XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 63 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 94 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */

@@ -89,6 +89,10 @@ ULONG HcdSvcArmTimer(PXHCI_EXTENSION ext, ULONG milliseconds, PVOID context,
 VOID HcdSvcRequestReset(PXHCI_EXTENSION ext);
 VOID HcdSvcDmaNotStopped(PXHCI_EXTENSION ext);
 PKSPIN_LOCK HcdSvcControllerLock(PXHCI_EXTENSION ext);
+/* Every doorbell, after the write (xhci_pci.c): under a poll delivery the
+ * poller's promotion and peek (hcd_poll.c; design record 15 sections 6.2
+ * and 7.1), nothing otherwise. DISPATCH_LEVEL, controller lock held. */
+VOID HcdSvcDoorbell(PXHCI_EXTENSION ext, ULONG slot, ULONG value);
 
 #if defined(XHCI_FLAVOUR_QEMU)
 /* The qemu flavour's test aids, never in a published image: task 35.4's
