@@ -6420,16 +6420,19 @@ Codes `13` to `16` (hex) are task 36.22's, for the transfer-size legs
 one-TRB interrupt TD. QEMU finishes a bulk TD inside its doorbell write, so
 each first **withholds the doorbells** of one bulk endpoint of a published
 device that is not a hub at the port (bits 15:8, 0 any) - the endpoint whose
-address is `arg`, or with `arg` 0 the first bulk IN - and so leaves the next
+address is `arg`, or with `arg` 0 the first bulk IN, which on a UAS device is
+likely its status pipe, so name the data pipe - and so leaves the next
 TD published on it sitting unstarted on its ring (`qemu.inj.bulk.armed`,
 then `qemu.inj.bulk` with the fault, stream, slot and DCI once one is
-there). One injection per command; `FF` CLEAR before that hands the
+there). A TD the controller had already fetched - QEMU's device wakeup can
+start a stream behind a withheld doorbell - is refused, not faulted, and
+every TD held is rung (`qemu.inj.abandon`). One injection per command; `FF` CLEAR before that hands the
 doorbells back at the next thread pass and rings every stream with a TD
 queued (`qemu.inj.bulk.cleared`).
 
 | Code | Fault | What follows the withheld doorbell |
 |---|---|---|
-| `13` | Timeout | nothing: the TD waits, as on a device that never answers, until the driver's own Stop Endpoint, Reset Endpoint or Set TR Dequeue for the endpoint (an abort or a cancel; the stop is skipped on an endpoint already Stopped) or a slot command takes it back; that command ends the withholding once it succeeds (`qemu.inj.bulk.released`). Streams too: every stream of the endpoint is held |
+| `13` | Timeout | a real stop with the TD confirmed unstarted at its dequeue, then the dequeue moved past it, so neither a doorbell nor QEMU's device wakeup - which starts a stream whatever its doorbell - can start it: the TD waits, as on a device that never answers, until the driver's own Stop Endpoint, Reset Endpoint or Set TR Dequeue for the endpoint (an abort or a cancel; the stop is skipped on an endpoint already Stopped) or a slot command takes it back; that command ends the withholding once it succeeds (`qemu.inj.bulk.released`). CLEAR puts the dequeue back at the TD first (`qemu.inj.bulk.restored`). Streams too: every stream of the endpoint is held |
 | `14` | Stop | a real stop with the TD confirmed at its dequeue, then a Stopped event for the TD handed to the driver - the controller's own when it reported one for the TD, else the one a stop at a TD's start gives (its first TRB, code 26, nothing moved), since QEMU reports none for a TD it never fetched (`qemu.inj.bulk.stopped`: bit 8 the controller reported one, bits 7:0 its code) - then every stream with a TD rung. Streams too |
 | `15` | Error | `08`'s path on this TD: a real stop, its dequeue confirmed (the stream's Stream Context for a stream), Halted answered and a Transaction Error delivered for the TD's first TRB, the driver's Reset Endpoint answered. Streams too |
 | `16` | Short | a real stop, the dequeue confirmed, a real Set TR Dequeue past the TD (the stream's, for a stream), then a Short Packet for the TD's last TRB with half that TRB's length left - one event, its IOC TRB, so no trailing event follows - and every stream with a TD rung. Streams too |

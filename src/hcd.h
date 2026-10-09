@@ -1153,6 +1153,9 @@ typedef struct _HCD_CONTROLLER {
     ULONG InjDci;
     ULONG InjOwnCmd;
     ULONG InjBulkStream;            /* 36.22: the held TD's stream, 0 none */
+    ULONG InjBulkFirstPA;           /* ... its first TRB, and that TRB's   */
+    ULONG InjBulkFirstCycle;        /* cycle, to put the dequeue back      */
+    ULONG InjBulkHidden;            /* BULK_TIMEOUT moved the dequeue past */
 #endif
     /* The door (hcd_door.c, 26-A.8; design record 13 section 8): the
      * FDO's name's number, \DosDevices\HCD<n>, the host controller
