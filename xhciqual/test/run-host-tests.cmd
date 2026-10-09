@@ -28,6 +28,16 @@ rem bare exe name in the working directory is not found.
 "%~dp0test_mmiodiag.exe"
 if errorlevel 1 goto testfail
 
+rem Task 36.11: the routing report, with the driver's reviewed-pair table
+rem (src\xhci_pirq.c) built as the driver's own host suites build it.
+if exist test_route.exe del test_route.exe
+wcl386 -bt=nt -q -zq -wx -za -otexan -DXHCI_HOST_TEST -fe=test_route.exe ^
+    test_route.c ..\route.c ..\..\src\xhci_pirq.c
+if errorlevel 1 goto builderr
+if not exist test_route.exe goto builderr
+"%~dp0test_route.exe"
+if errorlevel 1 goto testfail
+
 echo.
 echo Host tests PASSED.
 call :cleanup
@@ -52,4 +62,8 @@ exit /b 1
 if exist test_mmiodiag.exe del test_mmiodiag.exe
 if exist test_mmiodiag.obj del test_mmiodiag.obj
 if exist mmiodiag.obj del mmiodiag.obj
+if exist test_route.exe del test_route.exe
+if exist test_route.obj del test_route.obj
+if exist route.obj del route.obj
+if exist xhci_pirq.obj del xhci_pirq.obj
 goto :eof

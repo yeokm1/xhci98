@@ -74,7 +74,10 @@ a machine said on a day.
   `0C0310` (OHCI): VID/DID/rev, Command/BME, BAR0 below 4 GB, MSI/MSI-X caps,
   Interrupt Pin/Line, and VID/DID quirk lookup. The Intel `XUSB2PR` routing
   registers are reported here but are read by C7, which is Tier C, so
-  `--probe-only` shows no routing values.
+  `--probe-only` shows no routing values. The xHCI's interrupt routing in
+  an Intel PCH (`D20IP`, `D20IR`, `PIRQx_ROUT`) is a different thing, read
+  in every mode on the reviewed chipsets alone ("Intel PCH interrupt
+  routing" below).
 - Tier B: family-specific capability introspection. xHCI reports HCIVERSION,
   context size, slots/interrupters/ports, scratchpads, PPC, `HCCPARAMS2`
   (U3C/CMC/FSC), USBLEGSUP, and USB2/USB3 protocol topology with each
@@ -160,6 +163,12 @@ classifier, and (roadmap task 35.1) the speed-table and
 extended-capability printers, the first against the E460's real USB 3 PSI
 words, and the production extended-capability walk and raw recorder, driven
 through a fake reader that fails any read outside the window.
+`xhciqual/test/test_route.c` (roadmap task 36.11) covers the Intel PCH
+routing report's pure half, `route.c`, built with the driver's own
+`src/xhci_pirq.c` for its table of reviewed chipsets: what is in scope,
+the selected PIRQ, its `PIRQx_ROUT`, and the comparison against a GSI,
+with the Dell Latitude E7250's own reading pinned as the mismatch it
+shows.
 
 That code lives in its own translation unit so it can be tested here, because
 the QEMU matrix cannot reach the field-dependent branches. SeaBIOS leaves
@@ -388,6 +397,12 @@ no-argument quick scan (`opt_quick = (argc == 1)` in `main.c`), so
 - `--log [filename]`: save the report; the filename defaults to
   `XHCIQUAL.LOG`. No log file is created unless `--log` is present.
   `--log=filename` is also accepted.
+- `--gsi N`, also `--gsi=N` (N decimal, 0 to 255): compare the Intel PCH
+  routing against N, the interrupt Windows reports for the controller
+  ("Intel PCH interrupt routing" below). It is accepted only beside
+  `--quick` or `--probe-only`, and is otherwise a usage error (exit 2):
+  naming a read-only comparison must never be what starts an active run,
+  which `XHCIQUAL --gsi 21` alone would otherwise do.
 
 ### Poll-only active mode (`--poll-only`)
 
@@ -536,13 +551,15 @@ from a stock Win98 boot floppy by keeping only `IO.SYS`, `MSDOS.SYS`,
 
 ### What the matrix covers
 
-The matrix stands at 40 cases: one standalone-help case, the isolated xHCI
+The matrix stands at 42 cases: one standalone-help case, the isolated xHCI
 IRQ self-test, 27 controller/device cases, two `--probe-only` cases (one
 scanning xHCI alone, one scanning xHCI, EHCI and OHCI together), one
 read-only quick scan per controller-presence mask (none, each family, every
-pair, all three), and one that checks `--full` still reaches the old
-no-argument behaviour. The quick-scan cases matter because that path is the
-first thing a user runs.
+pair, all three), one that checks `--full` still reaches the old
+no-argument behaviour, and since task 36.11 two with `--gsi` (the quick
+scan and `--probe-only`), which read the routing report's `not
+applicable` on QEMU's xHCI. The quick-scan cases matter because that path
+is the first thing a user runs.
 
 The cases cover all eight controller presence masks, empty and attached
 variants, HS storage, FS HID, OHCI HID/storage, a USB hub, an unmanaged
@@ -863,3 +880,62 @@ controller's actual table rather than placeholders. A vector can carry only
 the dwords printed: a capability cut at the 32-dword bound says so on its
 line (`n of m dwords`). Roadmap task 35.2 takes the readings (E460, P14s Gen
 1, B490) and 35.1 writes the vectors from them.
+
+## Intel PCH interrupt routing
+
+Roadmap task 36.11, after issue 12 (`docs/issues/12-e7250-xp64-boot-enable-slot-refused.md`):
+the Dell Latitude E7250's BIOS routed the xHCI's INTA to PIRQA (GSI 16)
+while its ACPI tables told Windows GSI 21, so the driver's ISR never ran.
+`xhci98.sys` repairs that route itself (`XhciIntelIrqRoute`, task 36.3);
+this report shows what the firmware left, from DOS, before any driver.
+
+**Read only, and only where the registers exist.** It runs in every mode,
+before any active test, and writes nothing: configuration-space reads and
+one DPMI mapping of the page at RCBA+`3000h`, so `Probe safety` still
+counts zero writes. The registers are the 7, 8 and 9 series' and
+C610/X99's, so it reads past the xHCI's own header only for a reviewed
+xHCI at `00:14.0` - the pairs of issue 12 section 5.1, from the driver's
+own table (`src/xhci_pirq.c`) - and past the LPC bridge's id only when
+`00:1F.0` is that xHCI's reviewed LPC. Anywhere else the line reads
+`registers not applicable` and nothing more is read: the 100 series and
+later, and the Apollo Lake-class Atom SoCs, route through ITSS behind
+P2SB, Bay Trail and Braswell through the iLB, and other vendors have no
+equivalent. ITSS is not supported.
+
+What it reports, for a reviewed pair:
+
+- the LPC bridge's identity, RCBA (`F0h`: the base and its enable bit),
+  and the eight `PIRQx_ROUT` bytes (`60h`-`63h`, `68h`-`6Bh`);
+- `D20IP` (RCBA+`3128h`): the pin the xHCI drives, beside its own
+  Interrupt Pin (`3Dh`), and whether the two agree;
+- `D20IR` (RCBA+`3160h`) and the PIRQ it routes that pin to (INTA in bits
+  2:0, INTB 6:4, INTC 10:8, INTD 14:12), with that PIRQ's GSI in APIC mode
+  (PIRQA-H are I/O APIC inputs 16-23);
+- that PIRQ's `PIRQx_ROUT`, the PIC destination: its IRQ field (bits 3:0)
+  and its disable bit (IRQEN, bit 7; set means not routed to the 8259).
+
+**A mismatch is flagged only against a GSI given separately**, with
+`--gsi N` beside `--quick` or `--probe-only`, because DOS cannot know what
+Windows was told: N is the IRQ Device Manager shows for the controller
+under the system the question is about. 16-23 is compared as an I/O APIC
+input (PIRQA-H); 3-7, 9-12, 14 and 15 as an 8259 IRQ, which the PIRQ
+delivers only when its `PIRQx_ROUT` is enabled and names it (the PIC
+routing is as the BIOS left it under DOS, and Windows 98 programs its
+own); any other N is reported as not compared. Without `--gsi` the
+registers are reported and nothing is flagged. The E7250 under XP x64 would
+read:
+
+```
+XHCIQUAL --probe-only --gsi 21
+  Routing (Intel PCH, read only): LPC 00:1F.0 8086:9CC3
+    RCBA (F0h)=FED1C001: base FED1C000, enabled
+    ...
+    D20IR (RCBA+3160h)=3210
+    INTA -> PIRQA (GSI 16 in APIC mode)
+    GSI 21 given: MISMATCH - the pin reaches PIRQA (GSI 16), and GSI 21 is PIRQF
+```
+
+The quick scan puts the block in the log and on the serial line, and with
+`--gsi` one phrase on the screen under the controller's line. No QEMU
+controller has these registers, so the matrix reaches only `not
+applicable`; `test/test_route.c` is the coverage of the rest.

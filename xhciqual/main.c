@@ -48,6 +48,8 @@ static int opt_wait_secs   = 15;
 static int opt_family_mask = HC_MASK_ALL;
 static int opt_family_seen = 0;
 static const char *opt_log_name = 0;
+/* Task 36.11: the GSI to compare the Intel PCH routing against, -1 none. */
+static long opt_gsi         = -1;
 
 static int is_family_word(const char *name)
 {
@@ -154,6 +156,8 @@ static void print_usage(void)
            "  --serial           mirror output to COM1 115200 8N1\n"
            "  --log [filename]   save output (default: XHCIQUAL.LOG)\n"
            "  --done-flag FILE   create FILE only on normal completion\n"
+           "  --gsi N            with --quick or --probe-only: compare the\n"
+           "                     Intel PCH routing against GSI/IRQ N\n"
            "  --help, -h, /?     detailed standalone help\n",
            TOOL_VERSION);
 }
@@ -251,6 +255,14 @@ static void print_help(void)
             "  --done-flag FILE  delete FILE at start, recreate it only if\n"
             "                    the run finishes normally (crash-safe check\n"
             "                    for batch wrappers; no FIND.EXE needed)\n"
+            "  --gsi N           with --quick or --probe-only only: compare\n"
+            "                    the xHCI's Intel PCH interrupt routing\n"
+            "                    (D20IR, PIRQx_ROUT) against N, the GSI or\n"
+            "                    IRQ Windows reports for the controller\n"
+            "                    (16-23 an APIC input, below 16 a PIC IRQ).\n"
+            "                    The routing itself is reported on every\n"
+            "                    run, read only, on the reviewed Intel\n"
+            "                    7/8/9-series and C610 xHCIs alone\n"
             "  --help, -h, /?    show this help and return success\n\n");
     qprintf("OUTPUT AND EXIT CODES\n"
             "  FACT lines describe controllers; xHCI DEV lines describe USB.\n"
@@ -259,6 +271,26 @@ static void print_help(void)
             "  2 = usage error, or no selected controller found\n\n"
             "Keep all LOG files, BIOS settings, device model/speed, and a\n"
             "photo plus last printed line for any fault or freeze.\n");
+}
+
+/* A decimal GSI, 0 to 255; anything else is a usage error. */
+static int parse_gsi(const char *s)
+{
+    long v;
+
+    if (s == 0 || *s == '\0')
+        return 0;
+    v = 0;
+    while (*s >= '0' && *s <= '9') {
+        v = v * 10 + (*s - '0');
+        if (v > 255)
+            return 0;
+        s++;
+    }
+    if (*s != '\0')
+        return 0;
+    opt_gsi = v;
+    return 1;
 }
 
 static int parse_args(int argc, char **argv)
@@ -333,6 +365,16 @@ static int parse_args(int argc, char **argv)
             opt_done_flag = argv[++i];
         } else if (strncmp(a, "done-flag=", 10) == 0 && a[10] != '\0') {
             opt_done_flag = a + 10;
+        } else if (strcmp(a, "gsi") == 0) {
+            if (i + 1 >= argc || !parse_gsi(argv[++i])) {
+                print_usage();
+                return 0;
+            }
+        } else if (strncmp(a, "gsi=", 4) == 0) {
+            if (!parse_gsi(a + 4)) {
+                print_usage();
+                return 0;
+            }
         } else if (strcmp(a, "no-devid") == 0) {
             opt_no_devid = 1;
         } else if (strcmp(a, "no-page") == 0) {
@@ -358,6 +400,14 @@ static int parse_args(int argc, char **argv)
      * other (the 2026-09-17 audit's C5). */
     if (opt_quick && (opt_probe_only || opt_poll_only || opt_irq_selftest ||
                       opt_set_intel)) {
+        print_usage();
+        return 0;
+    }
+    /* Task 36.11: the comparison is read-only work, and naming it must
+     * never be what starts an active run - `XHCIQUAL --gsi 21` alone would
+     * otherwise take the full run, since only no arguments at all means
+     * the quick scan. So it is refused unless a read-only mode is named. */
+    if (opt_gsi >= 0 && !opt_quick && !opt_probe_only) {
         print_usage();
         return 0;
     }
@@ -497,6 +547,7 @@ static int run_quick_scan(void)
             memset(c, 0, sizeof(*c));
             c->pci = *p;
             c->quirk = quirk_find(p->vid, p->did);
+            route_read(p, &c->route);
             if (xhci_map(c)) {
                 xhci_read_caps(c);
                 mmio_ok = c->mmio_ok;
@@ -569,6 +620,14 @@ static int run_quick_scan(void)
         if (p->hctype == HC_XHCI && mmio_ok) {
             report_protocols(&ctrls[0], qlogprintf);
             report_xcap_dump(&ctrls[0], qlogprintf);
+        }
+        /* Task 36.11: the routing block in the log and on the serial line;
+         * the screen gets one phrase, and only when a GSI was asked about
+         * and the controller's own line is on it. */
+        if (p->hctype == HC_XHCI) {
+            report_route(&ctrls[0].route, opt_gsi, qlogprintf);
+            if (opt_gsi >= 0 && hidden == 0)
+                qprintf("     %s\n", route_summary(&ctrls[0].route, opt_gsi));
         }
     }
 
@@ -738,6 +797,9 @@ int main(int argc, char **argv)
             }
             pci_read_static(&c->pci);
             c->quirk = quirk_find(c->pci.vid, c->pci.did);
+            /* Before anything active: reads only (task 36.11). */
+            route_read(&c->pci, &c->route);
+            c->route_gsi = opt_gsi;
             enable_pci(&c->pci, active);
             if (!xhci_map(c)) {
                 qprintf("\n%s controller %04X:%04X at %02X:%02X.%X: "
