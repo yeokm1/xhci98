@@ -9,7 +9,10 @@ revision 2 the same day, after review round 1, revision 3 after round
 converged (section 14). **Revision 6** records the owner's answers to
 section 12 (2026-10-09): the import and the strip accepted, a reboot
 requested by the INF (section 5), and mode 1 failing the start where no
-line is offered and no helper is bound (section 4.3).
+line is offered and no helper is bound (section 4.3). **Revision 7**
+takes review round 5 and the owner's further decision of the same day:
+`XhciInterruptMode` 1 on its own forces the line on Vista and 7, x86
+and amd64, through the same filter (section 4.2).
 
 Design record 15 section 4.3 designs MSI for the HCD and fixes the seam
 this record plugs into: `hcdMsgConnect(hc, connect, disconnect)`, handed
@@ -52,9 +55,10 @@ Asked:
 Not asked, and not changed here: the connection itself, the message ISR,
 the one-message rule, the MSI/MSI-X capability read, the recorded fields
 and the down-level reasoning, which are record 15 section 4.3's and apply
-to x86 unchanged once the seam has the pair; amd64, which keeps
-`MmGetSystemRoutineAddress` and gets no helper; and more than one
-interrupter.
+to x86 unchanged once the seam has the pair; amd64's routines, which
+come from `MmGetSystemRoutineAddress` with no helper; and more than one
+interrupter. Since revision 7 the requirements filter (section 4.2) is
+not x86-only: it also serves mode 1 on amd64.
 
 ## 2. The helper
 
@@ -351,13 +355,34 @@ list's size allocates a replacement from **paged** pool, frees the list it
 replaces, and returns the replacement in `Information` with
 `STATUS_SUCCESS`.
 
-On the x86 image, NT 6 only, the filter:
+**Where it runs** (revision 7): on both images, NT 6 only
+(`IoIsWdmVersionAvailable(6, 0)`), never on 98, ME, 2000, XP or XP x64.
+**The strip is asked for** when either holds:
+
+- **x86, the helper not bound** after this filter's look (the helper's
+  purpose, sections 1 and 4); or
+- **the effective mode is 1**, on x86 or amd64 (owner, 2026-10-09):
+  mode 1 forces the line on Vista and 7 by itself, so a user no longer
+  needs `MSISupported` 0 for it. The filter reads `XhciInterruptMode`
+  itself, through the same reader and out-of-range rules the start uses
+  (record 15 section 3), since the start has not run yet. If the value
+  changes between the filter and the start, the start's own reading
+  governs and meets whatever was granted under record 15's tables and
+  section 4.3.
+
+Otherwise (amd64 in modes 0, 2 and 3; x86 with the helper bound in those
+modes) the filter walks, classifies and records the list (steps 1 to 5)
+and changes nothing: outcome "not asked". This is the same code in
+`xhci98.sys` on both images, and it does not depend on the helper. The
+helper look (step 2) is x86's alone.
+
+The filter:
 
 1. Forwards the IRP and waits (`HcdForwardAndWait`). If the lower status
    is a failure other than `STATUS_NOT_SUPPORTED`, it completes the IRP
    with that status and `Information` untouched, and records "lower
    failed".
-2. Looks for the helper (section 4.1) unless `BOUND`.
+2. On x86, looks for the helper (section 4.1) unless `BOUND`.
 3. If `Information` is NULL: completes with the lower status, records
    "no list", and dereferences nothing.
 4. **Walks the list's structure, checked, before anything else reads it**
@@ -376,16 +401,20 @@ On the x86 image, NT 6 only, the filter:
    descriptor size overflows, `AlternativeLists` larger than the bytes,
    and trailing bytes beyond the last configuration (accepted, ignored).
 5. Records the list (section 9), whatever the state.
-6. Computes the outcome (below). Every outcome but "replaced" completes
+6. Classifies the list (below) - always, whether or not the strip is
+   asked for or enabled - and keeps the class in `hc` for the start
+   (section 4.3). Then, if the strip is asked for, computes the outcome
+   (below); if not, the outcome is "not asked". Every outcome but "replaced" completes
    with the lower status and `Information` untouched; "replaced"
    allocates the replacement, writes it, frees the old list with
    `ExFreePool`, sets `Information` to the replacement and completes with
    `STATUS_SUCCESS`. A failed allocation turns "replaced" into "kept: no
    memory".
 
-Outcomes, recorded by name: **bound** (the helper is bound: nothing
-changes, Windows may grant the message); **disabled** (the strip is
-switched off, below); **no line offered**, **no interrupt**,
+Outcomes, recorded by name: **not asked** (the helper is bound and the
+mode is not 1, or amd64 in a mode other than 1: nothing changes, Windows
+may grant the message); **disabled** (the strip is switched off,
+below); **no line offered**, **no interrupt**,
 **unsupported shape**, **inconsistent** (each: kept as is, below);
 **no message** (nothing to strip: kept); **replaced**; **kept: no
 memory**.
@@ -399,8 +428,11 @@ at the start by record 15's tables (section 4 and 4.3) from the effective
 mode, the resource actually granted, the pin and the connection's
 result - forced polling, a line, a message connected through the bound
 helper's routines, the connection's own fallback to the line, a message
-with no routines ("message not connected", polling), or no interrupt
-resource at all (mode 1 failing its start as today).
+with no routines ("message not connected", polling - except under mode
+1 on x86 with no line offered, which fails the start, section 4.3), a
+message under mode 1 where no line was offered or the list was not
+replaced (record 15's "line asked for, message granted", logged), or no
+interrupt resource at all (mode 1 failing its start as today).
 
 **The allocation** is one new named site, `HcdPoolAllocRequirements` in
 `hcd_pool.c`, the HCD's only `PagedPool` allocation: the IRP's contract
@@ -452,11 +484,15 @@ and the outcome is:
   Pin` 0, or a controller with a pin whose list, against R1's
   expectation, offers no line). There is no line to give, and stripping
   would turn a message grant the start cannot connect into no interrupt
-  at all, or delete a requirement. Kept as is, and the outcome is kept in
-  `hc` for the start. There a message grant with the helper not bound
-  polls with "message not connected" under modes 0 and 3, as record 15
-  has it; under **mode 1 the start fails**, as XP fails a forced-line
-  start on a controller with no line (owner, 2026-10-09; section 4.3).
+  at all, or delete a requirement; an empty list is never returned.
+  Kept as is. The list's class, **NO-LINE** (message members and no
+  STRIPPABLE configuration), is what the start reads (section 4.3): a
+  message grant with the helper not bound polls with "message not
+  connected" under modes 0 and 3, as record 15 has it, and under **mode
+  1 on x86 the start fails**, as XP fails a forced-line start on a
+  controller with no line (owner, 2026-10-09). On amd64, and on x86 with
+  the helper bound, mode 1 with a NO-LINE list runs the message and logs
+  that the line was asked for (record 15's row).
 - **no interrupt**, when no configuration has an interrupt descriptor:
   kept as is; record 15's no-interrupt rows apply, as on XP.
 - **unsupported shape**, when some configuration has a message member and
@@ -495,10 +531,15 @@ read from the complete trace of section 9 on both guests; the shapes they
 show are written into this record as the admitted shapes, by a review
 round, before the code is taken as done, and any other shape takes
 "unsupported shape". If R1 shows that the PCI driver offers no line
-configuration for a controller with a pin, the strip is withdrawn, the
-helper-less start takes record 15's "message not connected" row and
-polls, and the owner is told that "exactly as on XP" cannot hold for a
-helper-less install with `MSISupported` 1.
+configuration for a controller with a pin, the strip is withdrawn: the
+switch's "disabled" becomes the shipped default, the class is still
+computed and recorded (so such a list is NO-LINE and section 4.3's
+mode-1 rule applies to it), the helper-less start takes record 15's
+"message not connected" row under modes 0 and 3, mode 1 can no longer
+force the line where `MSISupported` is 1, and the owner is told that
+"exactly as on XP" cannot hold for a helper-less install with
+`MSISupported` 1. The mode-1 strip and the helper-less strip are one
+mechanism and are enabled, admitted and withdrawn together.
 
 ### 4.3 The start
 
@@ -521,9 +562,9 @@ x86 image:
   "lower failed") or from a filter that never came; the record says which
   (section 9).
 - **Mode 1, no line, no helper: the start fails** (owner, 2026-10-09).
-  When the effective mode is 1, the resource is a message, the helper is
-  not bound after the start's look, and this FDO's last filter outcome
-  was "no line offered", the start fails as a forced-line start with no
+  When the image is x86, the effective mode is 1, the resource is a
+  message, the helper is not bound after the start's look, and this FDO's
+  last filter classified its list NO-LINE (section 4.2), the start fails as a forced-line start with no
   line fails on XP: reason "forced, no line offered", the delivery none,
   the release run, `STATUS_DEVICE_CONFIGURATION_ERROR` as record 15's
   "forced, no interrupt" row returns. The condition is narrow on purpose.
@@ -532,10 +573,21 @@ x86 image:
   R1/R2, an unadmitted shape, no memory, no list, inconsistent) or a
   filter that never ran - keeps record 15's row and polls, because a line
   existed or may have existed and the failure would then be this
-  driver's, not the controller's. A message grant with the helper bound
-  under mode 1 runs the message, as record 15 has it. A list with no
-  interrupt at all (outcome "no interrupt") already fails mode 1 through
-  record 15's "forced, no interrupt" row.
+  driver's, not the controller's. **A bound helper whose connection
+  fails still polls**, as record 15 has it, under every mode: the
+  exception is the unbound case alone. A message grant with the helper
+  bound and connected under mode 1 runs the message and logs it, as
+  record 15 has it. A list with no interrupt at all (outcome "no
+  interrupt") already fails mode 1 through record 15's "forced, no
+  interrupt" row.
+
+  The failed start is recorded before it returns: the start emits a
+  **start-decision event** (section 9, kind `S`) carrying the mode, the
+  grant (line, message, none), the binding state, the last filter's
+  class and outcome, the delivery, the reason and the status, before the
+  failure path runs, and the same fields are kept in `hc` (the counter
+  block of a start that failed is still read by the stop dump and
+  `HcdCountersPoll`, as the core's refused start is today).
 
   The decision stays in record 15's one pure function: `XhciPollDecide`
   (on p36-poll's head, `src/xhci_poll.c`) gains one input, "no line was
@@ -543,10 +595,27 @@ x86 image:
   on amd64 and on every other target), and returns
   `XHCI_POLL_DELIVERY_NONE` with a new reason,
   `XHCI_POLL_R_FORCED_NO_LINE_OFFERED` (appended to the reason list),
-  for mode 1 with a message not connected and that input TRUE. Vectors in
+  for mode 1 with a message not connected and that input TRUE, inside
+  its unconnected-message branch and after its forced-poll check. The
+  x86 caller passes TRUE only for the unbound NO-LINE case above, and
+  FALSE for a bound helper whose connection failed. Vectors in
   `test_poll`: mode 1 with the input TRUE fails; modes 0, 2 and 3 with it
   TRUE poll (2 as forced); mode 1 with it FALSE polls as today; mode 1
   with the message connected runs it whatever the input.
+
+### 4.3a Mode 1 forces the line (owner, 2026-10-09)
+
+With the strip enabled, mode 1 on Vista and 7 (x86 and amd64) asks the
+filter for the line, so the start under mode 1 normally receives a line
+resource and runs it with record 15's forced-line rows (the routing
+quirk, the watcher's mode-1 rule: no move). Record 15's "1 under a
+message grant runs as 0 and logs that the line was asked for" stays, as
+the fallback where a message is granted anyway: a NO-LINE list, the
+strip disabled or withdrawn, an unadmitted shape, no memory, no list, an
+inconsistent list, or a filter that never ran - except x86 with no helper
+bound and a NO-LINE list, which fails (section 4.3). Mode 1 never
+produces an empty list. `MSISupported` 0 keeps working as before, and
+on XP x64 and the down-level targets mode 1 is unchanged.
 
 Everything after the seam - the connection, its fallback to the line, the
 release through `IoDisconnectInterruptEx`, the ISR, the capability read -
@@ -558,11 +627,14 @@ offset checks ("for both architectures").
 
 ### 4.4 What is not changed on x86
 
-- The amd64 image has no look, no filter and no strip; it reaches the seam
-  through `MmGetSystemRoutineAddress` (record 15).
-- `XhciInterruptMode` keeps record 15's meaning. Mode 2 polls even with a
-  message granted; the filter does not consult the mode, so a mode change
-  needs no new resource assignment to take effect.
+- The amd64 image has no helper and no look; it reaches the seam through
+  `MmGetSystemRoutineAddress` (record 15). Since revision 7 it runs the
+  filter, and strips only under mode 1 (section 4.2).
+- `XhciInterruptMode` keeps record 15's meaning, with section 4.3a's
+  mode 1. Mode 2 polls even with a message granted. The filter consults
+  the mode for 1 alone; a change to or from 1 takes effect on the line
+  side at the next resource assignment (a disable and enable), and until
+  then the start's tables meet whatever was granted.
 - `MSISupported` 0, set by a user, removes the message descriptors before
   the HCD sees the list; the filter then has nothing to strip, and the
   line runs as on XP, helper or not.
@@ -784,6 +856,7 @@ by `make-package.ps1` anyway.
 | Source stamp | `source-stamp.ps1 -Driver` gains `xhcimsi` (`src\msi86`, `xhcimsi.srcstamp`, with `xhci_msi86.h` and `xhci_version.h` as parent headers). Its `SOURCES` parser today splits on every backslash (`source-stamp.ps1` ~108), which would break `..\xhci_msi86.c` into two tokens; it is changed to remove only line-continuation backslashes and keep path separators, so the stamp hashes the parent `src\xhci_msi86.c` itself. Mutations: a change to `src\xhci_msi86.c` alone invalidates both the helper's stamp and the HCD's; the existing stamps of `xhci98` and `xhciuas` are unchanged by the parser change |
 | Charset gate | `check-source-charset.ps1`'s object-directory skips gain `^src\\msi86\\obj` |
 | Version resource | `src\msi86\xhcimsi.rc` includes `../xhci_version.h`, `FILEVERSION`/`PRODUCTVERSION` from the macros, `VS_FF_DEBUG` for checked builds, names `xhcimsi.sys` |
+| INF gate, the bare directive | `MSIHLP-REBOOT` and the footprint must recognise `Reboot` as a bare directive: the existing `Get-Directive` helpers and the footprint's generic loop read only `key=value` entries, so both gain a bare-entry reader, with a mutation for a `Reboot` moved to another section and one for it removed |
 | `make-package.ps1` | `-Arch x86` stages `xhcimsi.sys` (the staging table; `$MsiDriverPath`), gated like the UAS pair: exists, flavour marker, import gate with the `nt6x86` profile; `-Arch amd64` refuses one |
 | `make-release.ps1` | **Media per leg, not per release.** Today the declared media are derived once, from the first published INF, for every upload leg, on the strength of the two INFs' equal `[SourceDisksFiles]` (~1351). That becomes per leg: each leg's publishable set and media layout come from that leg's own INF (x86 legs: `xhci98.inf`, `xhci98.sys`, `xhcimsi.sys`; x64 legs: as today), through upload assembly and `-UploadSetOnly`, and a historical release whose INFs declare no helper is reconstructed exactly as before. `Assert-MsiHelperPublished`, modelled on `Assert-UasPublished`, per x86 leg: the file exists, its `FileVersion` equals the version, `VS_FF_DEBUG` matches the flavour, the marker, bytes equal to `src\msi86\obj...\i386\xhcimsi.sys`, `source-stamp -Driver xhcimsi -Check`. An x64 leg holding a helper is refused. The readme and contents text name it |
 | `test-package.ps1` | Cases: an x86 package with the helper and an x64 one without, assembled in both leg orders; an x86 package missing the helper (refused); a helper in an x64 package (refused); a historical upload set without the helper (reconstructed unchanged); a helper of the wrong flavour (refused); a helper whose source stamp is stale, and one swapped for another build's bytes (refused) |
@@ -862,8 +935,11 @@ self-tests (a clean capture, an interleaved byte, a dropped `D`, a
 truncated line).
 
 **Lifecycle events**, `qemu` flavour, the same channel and record format
-(kind `L`), each with the FDO's serial: look (result), bind, refuse, the start's routine source,
-the disconnect, the reference dropped. They are the durable evidence of
+(kind `L`), each with the FDO's serial: look (result), bind, refuse, the
+start's routine source, the disconnect, the reference dropped; and the
+**start-decision event** (kind `S`, both images): mode, grant, binding,
+the last filter's class and outcome, delivery, reason and status,
+emitted before a failing start returns. They are the durable evidence of
 section 10's L legs, since a removed FDO's counter block goes with it and
 the HCD's last log flush at stop (`hcd_ctl.c` ~1912) precedes the
 reference drop at remove.
@@ -894,9 +970,18 @@ reboot that follows the install: record 15 section 4.3's x86 set -
 3; HID, Bulk-Only storage and audio; disable and enable, remove and
 rescan, a forced recovery, D3 and back; `XHCISNAP` naming the delivery,
 the helper `BOUND` with its version, and the snapshot. Then
-`MSISupported` 0, read as the line with nothing stripped; mode 1 under a
-grant, read as the message with its log note; a raised
+`MSISupported` 0, read as the line with nothing stripped; a raised
 `MessageNumberLimit`, read as several granted, served as one.
+
+**F - mode 1 forces the line** (section 4.3a), on Vista SP2 and 7 SP1,
+**x86 and x64**, `MSISupported` 1, after the strip is enabled: mode 1
+read as the line ("replaced", the requirement list without message
+choices, the line connected, no log note of a message); then the same
+with `XhciMsi86NoStrip` set (`qemu` package): the message with record
+15's "line asked for, message granted" note; then mode 1 on a NO-LINE
+list (`XhciMsi86InjNoLine`) on x64: the message with that note (x86's
+case is H1a); and back to mode 0 after a disable and enable: the
+message (x64; x86 with the helper bound).
 
 **L - lifetime**, on 7 x86 with the helper bound:
 
@@ -935,12 +1020,22 @@ before it is read:
   restart, R4's reading (the device started on section 4.2's choice with
   the helper `ABSENT`, or held for the restart with problem code 14);
   after the restart: MSI, `BOUND`;
-- H1a mode 1 on an MSI-only list without the helper (QEMU `qemu-xhci`
-  with its pin removed where the build offers that, else the
-  `qemu`-flavour list rewrite that drops the line configurations before
-  the filter sees them): the start fails with "forced, no line offered";
-  the same with mode 0: polling, "message not connected"; the same list
-  with the helper bound under mode 1: the message (section 4.3);
+- H1a mode 1 on a NO-LINE list without the helper, after the install's
+  restart: the stimulus is a `qemu`-flavour switch, `XhciMsi86InjNoLine`,
+  applied in the filter after the walk and before the classification: in
+  every configuration it removes each line member of an interrupt run
+  that also has a message member (so `[BAR, MSI|INTx]` becomes
+  `[BAR, MSI]`), and drops every configuration whose interrupt
+  requirements are all line-only, never leaving a run or the list empty;
+  the rewritten list is returned as a replacement exactly as the strip's
+  is, and it overrides `XhciMsi86NoStrip` and the admitted shapes (the
+  rewritten list is NO-LINE, so the strip has nothing to do). The
+  validated trace must show the received list, the rewritten one, class
+  NO-LINE, an actual message grant (the start's `S` event) and the
+  verdict: under mode 1 the start fails with "forced, no line offered"
+  and its status; under mode 0, polling with "message not connected";
+  with the helper bound under mode 1, the message with record 15's
+  "line asked for" note (section 4.3);
 - H2 `xhcimsi.sys` deleted, service left, reboot: `ABSENT`, the load
   failure in the event log, the boot normal;
 - H3 the service deleted, reboot: `ABSENT`;
@@ -953,9 +1048,9 @@ before it is read:
 
 **U - updates and mixed versions**, on 7 x86:
 
-- U1 a compatible helper update while the old helper is resident: a
-  second build of this package with a raised version installed over the
-  first; the restart prompt shown; before the restart the old helper is
+- U1 (Vista SP2 x86 and 7 SP1 x86) a compatible helper update while the
+  old helper is resident: a second build of this package with a raised
+  version installed over the first; the restart prompt shown; before the restart the old helper is
   still loaded and is read bound with its old `HelperVersion` (or R4's
   hold); after it, the new one;
 - U2 the downgrade: 2.2.0.2 installed over this package without
@@ -1040,7 +1135,14 @@ revision 5 put them as "orchestrator decision, owner to confirm".
 6. **Owner decision (2026-10-09), changed from revision 5:** mode 1 on a
    Vista or 7 x86 controller whose list offered no line, with no helper
    bound, **fails the start**, strictly, as XP does - it does not poll
-   (section 4.3).
+   (section 4.3). A bound helper's failed connection still polls.
+7. **Owner decision (2026-10-09):** `XhciInterruptMode` 1 on its own forces
+   the line on Vista and 7, x86 and amd64, through the same filter and
+   strip (sections 4.2 and 4.3a); it ships behind the same `qemu`-only
+   switch until R1 and R2 show the PCI driver offers a line beside the
+   message; it never leaves an empty list; where no line is offered mode
+   1 falls back to record 15's rule (the message runs, with the log
+   note), except x86 with no helper bound, which fails (decision 6).
 
 **For the orchestrator, to reconcile at merge** (this record does not
 edit them):
@@ -1053,12 +1155,48 @@ edit them):
   fails polls for that start") and its "Without the helper" bullet ("keep
   the line, the routing quirk and polling") take the same exception, and
   the latter the strip (decision 3) and the restart (decision 4).
-- `src/xhci_poll.c` `XhciPollDecide` and `test_poll` on p36-poll's head:
-  the added input, reason and vectors of section 4.3.
-- Roadmap 36.15's "A message connection that fails, or a message resource
-  with no `IoConnectInterruptEx` found, polls for that start" (the same
-  exception), its "The modes on Vista and 7" bullet for mode 1, and 36.16's
-  x86 legs (the restart, R4, H1a, the required 98 SE check).
+- Record 15 section 4.3, the decision paragraph's "1 under a message
+  grant runs as 0 and logs that the line was asked for" and "the line is
+  forced by `MSISupported` 0": mode 1 now forces the line itself through
+  the filter on x86 and amd64 (section 4.3a), and the message-under-mode-1
+  row becomes the fallback where no line was offered or the list was not
+  replaced; `MSISupported` 0 remains a second way.
+- Record 15 section 4.3's "nothing is added to the x86 image's imports"
+  (the "Why it is safe" paragraph) and the like: one import is added
+  (`IoGetDeviceObjectPointer`, section 3.4).
+- Record 15 section 4.3's unconditional helper-less statements - "a
+  message descriptor that reaches the x86 image with no helper answering
+  ... polls", the seam paragraph's "a message resource polls with
+  'message not connected'" when not found, and the legs' "Vista and 7 x86
+  without the helper ... read as polling with 'message not connected'":
+  each takes the strip (decision 3) and the mode-1 exception (decision 6).
+- Record 15 section 4.3's INF paragraph: the x86 `.HW` section and the
+  helper with it, the `Reboot` directive, and the downgrade note
+  (section 6).
+- Record 15 section 8's catalogue of reasons: the new
+  `XHCI_POLL_R_FORCED_NO_LINE_OFFERED`; section 9's `XHCISNAP` names for it
+  and for section 9's new fields here.
+- Record 15 section 11's regression line ("mode 1 the same, ... on Vista
+  and 7 with `MSISupported` 0"): mode 1 now forces the line on Vista and 7
+  with `MSISupported` 1 too.
+- p36-poll's code: `src/xhci_poll.c` `XhciPollDecide` (the new input and
+  branch), `src/xhci_poll.h` (the appended reason constant and the changed
+  declaration), the HCD's call site in `hcd_ctl.c` (the input, and the
+  `S` event before the failure return), `test_poll` (the vectors of
+  section 4.3), and the `XHCISNAP` decoding of the new reason.
+- Roadmap 36.15: "A message connection that fails, or a message resource
+  with no `IoConnectInterruptEx` found, polls for that start" (the
+  mode-1 exception; a bound helper's failed connection still polls);
+  "The modes on Vista and 7" bullet ("1 under a message grant runs as 0
+  and logs") and "Forcing the line ... is `MSISupported` 0" (mode 1 forces
+  it, section 4.3a); the "single x86 binary ... must not import these
+  routines" and "Amended in 36.5's review" lines where they still speak
+  of x86 without the helper.
+- Roadmap 36.16: "mode 1 under a grant, read as the message with its log
+  line" becomes leg F (the line, x86 and x64; the message only with the
+  strip off or no line offered); the x86 legs (the restart, R4, H1a, U1
+  on both guests, the required 98 SE check); the down-level line "on
+  Vista or 7 x86 a hand-set `MSISupported` 1 read as polling".
 
 ## 13. Files the code touches
 
@@ -1073,7 +1211,9 @@ Changed: `src\xhci98.inf`, `src\sources`, `src\hcd.h`, `src\hcd_pnp.c`
 (the filter and the remove), `src\hcd_ctl.c` (the x86 caller of
 `hcdMsgConnect`, the republication after `HcdCountersStart`),
 `src\hcd_entry.c` (the state at `AddDevice`), `src\hcd_pool.c` (the paged
-site), `src\xhci_poll.c` and `test\test_poll.c` (the mode-1 input and
+site, now in both images), `src\xhci98-amd64.inf` unchanged but the amd64
+image's filter (`src\hcd_msi86.c`'s filter part compiled for both; the
+helper look x86-only), `src\xhci_poll.c` and `test\test_poll.c` (the mode-1 input and
 reason, at merge with p36-poll), the counter block and log (`src\hcd_log.c`, `src\xhci.h` where
 record 15's fields live),
 `test\test_msi.c`; `scripts\build-driver.cmd`,
@@ -1161,3 +1301,19 @@ by the INF (section 5, R4, the `MSIHLP-REBOOT` rule, legs H1 and U1);
 decision 6 changed to mode 1 failing the start where no line was offered
 and no helper is bound (section 4.3, leg H1a), with the record 15 and
 roadmap wording to reconcile listed in section 12.
+
+### 14.6 Revision 6, and the owner's mode-1 decision
+
+Round 5 (`b502184`, same thread): 1 P2, 3 P3, all taken in revision 7,
+with the owner's decision 7. The `Reboot` mechanism, `SPSVCINST_STARTSERVICE`
+as the recorded alternative, and the narrow mode-1 rule were found sound.
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | P2: H1a had no stimulus that yields a message grant with no line offered, and the failure's reason had no durable record | Section 10, H1a: `XhciMsi86InjNoLine` defined (mixed runs, its interaction with `NoStrip` and the admitted shapes), run after the restart; section 4.3 and 9: the `S` event before the failure return, the fields kept in `hc` |
+| 2 | P3: the reconciliation list was incomplete | Section 12: `xhci_poll.h`, record 15's import statements, helper-less polling statements, reason catalogue, the call site, `XHCISNAP`; a bound helper's failed connection still polls |
+| 3 | P3: the general rule and the withdrawal paragraph contradicted the exception | Section 4.2: the class NO-LINE computed always and kept for the start; the rule names the exception; withdrawal makes "disabled" the default and keeps the class |
+| 4 | P3: R4's Vista update reading was outside U1 | Section 10, U1 on both guests |
+
+Also from round 5: `MSIHLP-REBOOT` must read a bare directive (section
+8.2).
