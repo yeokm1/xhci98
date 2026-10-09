@@ -71,6 +71,10 @@
 #define XHCI_POLL_R_AUTO_MESSAGE                10UL
 #define XHCI_POLL_R_MESSAGE_LINE_ASKED          11UL
 #define XHCI_POLL_R_MESSAGE_NOT_CONNECTED       12UL
+/* Mode 1 on Vista or 7 x86 with a message granted, no helper bound and the
+ * filter's list offering no line: the start fails as XP's forced-line start
+ * with no line (design record 18 section 4.3). */
+#define XHCI_POLL_R_FORCED_NO_LINE_OFFERED      13UL
 
 /* The pin's read. */
 #define XHCI_POLL_PIN_NOT_READ          0UL
@@ -171,7 +175,7 @@ VOID XhciPollValues(PXHCI_POLL_VALUES v, ULONG modeFound, ULONG mode,
                     ULONG active);
 ULONG XhciPollDecide(ULONG mode, ULONG haveInterrupt, ULONG message,
                      ULONG messageConnected, ULONG pinStatus, ULONG pin,
-                     PULONG reason);
+                     ULONG noLineOffered, PULONG reason);
 
 ULONG XhciPollEarlier(ULONG a, ULONG b);
 ULONG XhciPollArmMs(ULONG due, ULONG now, ULONG activeMs, ULONG idleMs,

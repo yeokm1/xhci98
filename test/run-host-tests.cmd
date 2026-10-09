@@ -61,6 +61,12 @@ rem   test_poll    - polled event delivery (src\xhci_poll.c, tasks 36.6 to
 rem                  36.8): the three values, the delivery and its reason,
 rem                  the deadlines, the poller's ownership machine and roles,
 rem                  the watcher's verdict, the period and the retirement
+rem   test_msi     - message-signalled interrupts (src\xhci_msi.c and
+rem                  src\xhci_msi86.c, task 36.15, design records 15 and
+rem                  18): the capability read, the requirements list's
+rem                  checked walk, class, strip and no-line rewrite, the
+rem                  filter record, the helper binding, the channel's two
+rem                  halves and the trace record
 rem   test_pirq    - the Intel PCH interrupt routing quirk (src\xhci_pirq.c,
 rem                  task 36.3): the XhciIntelIrqRoute rule, the reviewed
 rem                  pairs, the target PIRQ in APIC and PIC mode, the
@@ -291,6 +297,10 @@ call :run test_psw "test_psw.c ..\src\xhci_psw.c"
 rem test_pirq links nothing else: the value rule, the pair table, the
 rem target PIRQ and the run are pure, driven over a modelled PCH (36.3).
 call :run test_pirq "test_pirq.c ..\src\xhci_pirq.c"
+rem test_msi links nothing else: the capability read, the requirements
+rem list's walk, class and strip, the binding and both halves of the x86
+rem helper's channel are pure (36.15, design records 15 and 18).
+call :run test_msi "test_msi.c ..\src\xhci_msi.c ..\src\xhci_msi86.c"
 rem test_snap links xhci_xstat.c beside it: the snapshot's HCD region layout -
 rem where each word lies and what the header says - is pure (task 35.3), and
 rem so is the arithmetic of the transfer-size readings it carries (36.21).
