@@ -738,7 +738,15 @@ How it got here:
   single-message MSI-X admitted, the `_EX` Speed 3 and 4 on 98 and ME
   only, the poller's timer as the dead-line watcher, mode 4's loss across
   `SELECT_INTERFACE` documented, and the composite interface on the
-  first-interface function, following its state.
+  first-interface function, following its state. Rounds 2 to 4 followed
+  (`0bacda3`, `6cac234`, `ef7fbac`); round 4 was clean.
+- **Where it stands (end of 2026-10-09).** The plan is reviewed and no code
+  of this phase is written: 36.1 was reverted and 36.2 was a reading. Next
+  is 36.3, the routing quirk, which settles its LPC configuration-space path
+  first. 36.5 settles the WATCHING design and record 15's mode rules before
+  any polling code. After testing, the owner answers issue 17 on GitHub;
+  that reply says Speed 3 and 4 are 98 and ME only, and that the composite
+  interface follows the first-interface function.
 
 - [x] 36.1 **done 2026-10-08** (`3d667f1`); **reverted 2026-10-08 (owner) after its read**: the code and the `XHCISNAP` decoder are removed, the tree is back to `2.2.0.0`, and the description is kept as the record (issue 12 section 3.3) - the diagnostic build, numbered `2.2.0.2` (owner, 2026-10-07), on `2.2.0.0`'s code with no change in behaviour (issue 12 section 3.3):
   - per open pipe of every slot: its flags, queue and oldest outstanding transfer (URB function, setup bytes, length, age, TD address), with the Output Endpoint Context's state, TR Dequeue and DCS read at dump time;
