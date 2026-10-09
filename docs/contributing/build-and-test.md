@@ -6347,9 +6347,11 @@ the start for a value of 1, when it falls for a larger one). Under mode 0
 the log ring then shows `intr.moved` (the stale pairs),
 `qemu.inj.deadline.isr` (the claims the latch withheld until then) and
 `intr.moved.masked`, and the counter block delivery 2 with reason 9; under
-mode 1 no move: the backstop carries the bus, and a command's completion
-is drained by the waiting controller thread itself (at `XhciTolerance` 1;
-the stop's `enum.cmd.wait.drains`). The
+mode 1 no move: the backstop carries the bus, and while the controller
+thread waits for a completion of its own (a command's, an EP0
+transfer's) it queues the drain itself between the wait's slices (at
+`XhciTolerance` 1; the stop's `enum.wait.drains` counts the drains
+queued, not the events they took). The
 start notes `qemu.inj.nointerrupt`, `qemu.inj.pinunreadable` and
 `qemu.inj.deadline.value`, and the stop's counter dump
 `qemu.inj.deadline.isr`.

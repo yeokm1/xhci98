@@ -1044,10 +1044,10 @@ typedef struct _HCD_CONTROLLER {
     ULONG EnumCommandsBusy;
     ULONG EnumCommandsBusyCleared;
     ULONG EnumCommandBusyDrains;
-    /* Task 36.13: drains the thread queued for its own command's
-     * completion while it waited (hcd_enum.c, hcdCommandWaitDone).
-     * Thread only. */
-    ULONG EnumCommandWaitDrains;
+    /* Task 36.13: drains the thread queued while it waited for a
+     * completion of its own, a command's or an EP0 transfer's (hcd_enum.c,
+     * hcdThreadWaitDrain). Thread only. */
+    ULONG EnumWaitDrains;
     /* Removal and the TT (27-A.3; hcd_enum.c, hcd_hub.c): endpoints
      * stopped so a leaving device's URBs complete before its slot goes,
      * hub ports given up after their attempts, CLEAR_TT_BUFFER sent and
