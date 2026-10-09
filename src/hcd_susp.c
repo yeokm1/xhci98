@@ -1054,6 +1054,20 @@ static ULONG hcdSuspPdoEligible(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
                             0);
 }
 
+/* Whether a PDO whose controller is released was stage A's: the switch
+ * as it was at its creation or last START (4.2's released controller). */
+static ULONG hcdSuspPdoWasEligible(PHCD_DEVICE_PDO pdo)
+{
+    ULONG cls;
+
+    if (!pdo->PwrSwitch || pdo->Hub) {
+        return 0;
+    }
+    cls = pdo->SpeedClass;
+    return (cls == XHCI_SPEED_LOW || cls == XHCI_SPEED_FULL ||
+            cls == XHCI_SPEED_HIGH) ? 1UL : 0UL;
+}
+
 /* Windows 98 SE and ME: whether wake is disabled there (5.5). Not read
  * yet: 36.35's test client reads the WAIT_WAKE completion defect on both;
  * until then wake is offered. */
@@ -1133,7 +1147,9 @@ static VOID NTAPI hcdSuspWakeCancel(PDEVICE_OBJECT DeviceObject, PIRP irp)
  * IRP_MN_SET_POWER for a device state at a device PDO (4.2 to 4.4):
  * admitted by XhciSuspAdmit. Returns 0 when the switch is off or the PDO
  * is not stage A's - the caller then does today's - else 1 with *status.
- * IRQL: PASSIVE_LEVEL.
+ * The caller holds the PDO's Busy count across the call, the completion
+ * included, so a REMOVE cannot pass while this dispatch still runs (Codex
+ * review of 36.31, round 1, finding 1). IRQL: PASSIVE_LEVEL.
  */
 ULONG HcdSuspPdoSetPower(PHCD_DEVICE_PDO pdo, PIRP irp, NTSTATUS *status)
 {
@@ -1141,7 +1157,6 @@ ULONG HcdSuspPdoSetPower(PHCD_DEVICE_PDO pdo, PIRP irp, NTSTATUS *status)
     PHCD_CONTROLLER hc;
     PHCD_USB_DEVICE dev;
     XHCI_SUSP_ADMIT_IN in;
-    POWER_STATE state;
     KIRQL listIrql;
     KIRQL oldIrql;
     ULONG answer;
@@ -1152,14 +1167,20 @@ ULONG HcdSuspPdoSetPower(PHCD_DEVICE_PDO pdo, PIRP irp, NTSTATUS *status)
         stack->Parameters.Power.State.DeviceState > PowerDeviceD3) {
         return 0;
     }
-    (VOID)InterlockedIncrement(&pdo->Busy);
     hc = pdo->Controller;
     if (!hcdSuspPdoEligible(hc, pdo)) {
-        (VOID)InterlockedDecrement(&pdo->Busy);
         return 0;
     }
     in.Eligible = 1;
     in.Requested = (ULONG)stack->Parameters.Power.State.DeviceState;
+    if (in.Requested != XHCI_SUSP_D0) {
+        /* A Dx is effective at once (4.1), whatever the admission: its
+         * record made before the IRP can be claimed, so no completion
+         * overtakes it (Codex review of 36.31, round 1, finding 2). */
+        pdo->Common.DevicePower = stack->Parameters.Power.State.DeviceState;
+        (VOID)PoSetPowerState(pdo->Common.Self, DevicePowerState,
+                              stack->Parameters.Power.State);
+    }
     KeAcquireSpinLock(&hc->PdoListLock, &listIrql);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     dev = pdo->Device;
@@ -1184,21 +1205,15 @@ ULONG HcdSuspPdoSetPower(PHCD_DEVICE_PDO pdo, PIRP irp, NTSTATUS *status)
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     KeReleaseSpinLock(&hc->PdoListLock, listIrql);
     if (answer == XHCI_SUSP_ADMIT_PEND) {
-        if (in.Requested != XHCI_SUSP_D0) {
-            /* A Dx is effective at once (4.1). */
-            pdo->Common.DevicePower = (DEVICE_POWER_STATE)in.Requested;
-            state.DeviceState = (DEVICE_POWER_STATE)in.Requested;
-            (VOID)PoSetPowerState(pdo->Common.Self, DevicePowerState, state);
-        }
         HcdThreadWake(hc);
-        (VOID)InterlockedDecrement(&pdo->Busy);
         *status = STATUS_PENDING;
         return 1;
     }
-    (VOID)InterlockedDecrement(&pdo->Busy);
-    pdo->Common.DevicePower = (DEVICE_POWER_STATE)in.Requested;
-    (VOID)PoSetPowerState(pdo->Common.Self, DevicePowerState,
-                          stack->Parameters.Power.State);
+    if (in.Requested == XHCI_SUSP_D0) {
+        pdo->Common.DevicePower = PowerDeviceD0;
+        (VOID)PoSetPowerState(pdo->Common.Self, DevicePowerState,
+                              stack->Parameters.Power.State);
+    }
     PoStartNextPowerIrp(irp);
     *status = HcdCompleteIrp(irp, STATUS_SUCCESS, irp->IoStatus.Information);
     return 1;
@@ -1207,8 +1222,10 @@ ULONG HcdSuspPdoSetPower(PHCD_DEVICE_PDO pdo, PIRP irp, NTSTATUS *status)
 /*
  * IRP_MN_WAIT_WAKE at a device PDO (5.3): refused, or pended with a cancel
  * routine and stamped with hc->WakeSeq in the hold that fills the slot.
- * Returns 0 when the switch is off or the PDO is not stage A's (today's
- * STATUS_NOT_SUPPORTED), else 1 with *status. IRQL: PASSIVE_LEVEL.
+ * Returns 0 when the switch was off at the PDO's creation or the PDO is
+ * not stage A's (today's STATUS_NOT_SUPPORTED), else 1 with *status; a
+ * released controller refuses NO_SUCH_DEVICE (4.2). The caller holds the
+ * PDO's Busy count across the call. IRQL: PASSIVE_LEVEL.
  */
 ULONG HcdSuspPdoWaitWake(PHCD_DEVICE_PDO pdo, PIRP irp, NTSTATUS *status)
 {
@@ -1221,49 +1238,53 @@ ULONG HcdSuspPdoWaitWake(PHCD_DEVICE_PDO pdo, PIRP irp, NTSTATUS *status)
     NTSTATUS refusal;
 
     stack = IoGetCurrentIrpStackLocation(irp);
-    (VOID)InterlockedIncrement(&pdo->Busy);
     hc = pdo->Controller;
-    if (!hcdSuspPdoEligible(hc, pdo)) {
-        (VOID)InterlockedDecrement(&pdo->Busy);
+    back = 0;
+    in.Released = (hc == NULL) ? 1UL : 0UL;
+    if (in.Released ? !hcdSuspPdoWasEligible(pdo)
+                    : !hcdSuspPdoEligible(hc, pdo)) {
         return 0;
     }
-    back = 0;
-    in.Released = 0;
     in.Eligible = 1;
     in.RemoteWake = hcdSuspRemoteWake(pdo);
     in.WakeOff9x = hcdSuspWakeOff9x();
     in.SystemState = (ULONG)stack->Parameters.WaitWake.PowerState;
-    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    in.Closed = pdo->PwrClosed;
-    in.PwrState = pdo->PwrState;
-    in.Held = (pdo->WaitWakeIrp != NULL) ? 1UL : 0UL;
-    answer = XhciSuspWaitWakeAdmit(&in);
-    if (answer == XHCI_SUSP_ST_PENDING) {
-        pdo->WaitWakeIrp = irp;
-        pdo->WakeStamp = hc->WakeSeq++;
-        pdo->PwrSeq++;
-        (VOID)InterlockedIncrement(&pdo->PowerPending);
-        IoMarkIrpPending(irp);
-        (VOID)IoSetCancelRoutine(irp, hcdSuspWakeCancel);
-        if (XhciSuspPublish(irp->Cancel,
-                            irp->Cancel &&
-                                IoSetCancelRoutine(irp, NULL) != NULL) ==
-            XHCI_SUSP_PUB_TAKE_BACK) {
-            pdo->WaitWakeIrp = NULL;
-            back = 1;
+    in.Closed = 1;
+    in.PwrState = XHCI_SUSP_D3;
+    in.Held = 0;
+    if (in.Released) {
+        answer = XhciSuspWaitWakeAdmit(&in);
+    } else {
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        in.Closed = pdo->PwrClosed;
+        in.PwrState = pdo->PwrState;
+        in.Held = (pdo->WaitWakeIrp != NULL) ? 1UL : 0UL;
+        answer = XhciSuspWaitWakeAdmit(&in);
+        if (answer == XHCI_SUSP_ST_PENDING) {
+            pdo->WaitWakeIrp = irp;
+            pdo->WakeStamp = hc->WakeSeq++;
+            pdo->PwrSeq++;
+            (VOID)InterlockedIncrement(&pdo->PowerPending);
+            IoMarkIrpPending(irp);
+            (VOID)IoSetCancelRoutine(irp, hcdSuspWakeCancel);
+            if (XhciSuspPublish(irp->Cancel,
+                                irp->Cancel &&
+                                    IoSetCancelRoutine(irp, NULL) != NULL) ==
+                XHCI_SUSP_PUB_TAKE_BACK) {
+                pdo->WaitWakeIrp = NULL;
+                back = 1;
+            }
         }
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
     }
-    XhciControllerLockRelease(&hc->Hc, oldIrql);
     if (answer == XHCI_SUSP_ST_PENDING) {
         HcdThreadWake(hc);
-        (VOID)InterlockedDecrement(&pdo->Busy);
         if (back) {
             hcdSuspCompleteWake(pdo, irp, STATUS_CANCELLED);
         }
         *status = STATUS_PENDING;
         return 1;
     }
-    (VOID)InterlockedDecrement(&pdo->Busy);
     switch (answer) {
     case XHCI_SUSP_ST_INVALID_STATE:
         refusal = STATUS_INVALID_DEVICE_STATE;
@@ -1402,9 +1423,14 @@ VOID HcdSuspPdoReopen(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
     KIRQL listIrql;
     KIRQL oldIrql;
 
+    /* 4.4: once the earlier teardown's power rundown has finished - a
+     * WAIT_WAKE its stop left to a cancel routine completes first (Codex
+     * review of 36.31, round 1, finding 3). */
+    HcdSuspPdoRundown(pdo);
     KeAcquireSpinLock(&hc->PdoListLock, &listIrql);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     dev = pdo->Device;
+    pdo->PwrSwitch = hc->SuspOn;
     pdo->PwrClosed = 0;
     pdo->PwrWanted = XHCI_SUSP_D0;
     pdo->PwrSeq++;

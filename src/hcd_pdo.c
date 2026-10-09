@@ -741,6 +741,7 @@ static NTSTATUS hcdPdoNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
      * and acted on; the rest of it zero with the extension. */
     pdo->PwrWanted = XHCI_SUSP_D0;
     pdo->PwrState = XHCI_SUSP_D0;
+    pdo->PwrSwitch = hc->SuspOn;
     pdo->Serial = serial;
     pdo->Port = dev->Location;
     pdo->InstanceKey = XhciHubInstanceKey(dev->Port, dev->Route);
@@ -2656,7 +2657,23 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
     }
 }
 
+/* The dispatch under the PDO's Busy count, raised before its Controller is
+ * read and dropped once the IRP is completed or pended: the controller's
+ * release and the PDO's STOP and REMOVE wait it out (design record 14
+ * section 4.2). IRQL: PASSIVE_LEVEL. */
+static NTSTATUS hcdDevicePdoPowerBusy(PHCD_DEVICE_PDO pdo, PIRP irp);
+
 NTSTATUS HcdDevicePdoPower(PHCD_DEVICE_PDO pdo, PIRP irp)
+{
+    NTSTATUS status;
+
+    (VOID)InterlockedIncrement(&pdo->Busy);
+    status = hcdDevicePdoPowerBusy(pdo, irp);
+    (VOID)InterlockedDecrement(&pdo->Busy);
+    return status;
+}
+
+static NTSTATUS hcdDevicePdoPowerBusy(PHCD_DEVICE_PDO pdo, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
     NTSTATUS status;

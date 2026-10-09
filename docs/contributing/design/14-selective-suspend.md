@@ -475,7 +475,11 @@ a hub or SuperSpeed PDO, every answer is today's.
 
 - **Reaching the controller** (4.2): the PDO's `Busy` count is raised
   before `pdo->Controller` is read, as the URB dispatch does, and the
-  release waits it out. The slot is written under `PdoListLock` then the
+  release waits it out; the power dispatch holds it until the IRP is
+  completed or pended, so a STOP or REMOVE, which wait it out too, cannot
+  pass a completion still to run. A WAIT_WAKE at a PDO whose controller is
+  released is refused NO_SUCH_DEVICE when the switch was on at the PDO's
+  creation or last START. The slot is written under `PdoListLock` then the
   controller lock (4.1's order), so `pdo->Device` and the device's PDO
   chain (for the composite's sibling test) cannot be unlinked meanwhile.
 - **A D-IRP** (4.2 to 4.4): `XhciSuspAdmit` over the slot, the device's link
@@ -483,8 +487,9 @@ a hub or SuperSpeed PDO, every answer is today's.
   and the siblings. Every accepted D-IRP writes `PwrWanted`, `PwrState` as
   admitted, and one more `PwrSeq`; one that leaves `PwrState` D0 clears
   `WokeHold`. A pended IRP takes the slot, the epoch and a `PowerPending`
-  count, and wakes the thread; a pended Dx is effective at once
-  (`PoSetPowerState` at acceptance). A D-state outside D0 to D3 is today's.
+  count, and wakes the thread. A Dx is effective at once: its
+  `PoSetPowerState` is made before the slot is filled, so no completion
+  can overtake it. A D-state outside D0 to D3 is today's.
 - **WAIT_WAKE** (5.3): `XhciSuspWaitWakeAdmit` with the configuration's
   remote-wake bit and the IRP's system state; accepted under the
   controller lock with `hc->WakeSeq`'s next value as its stamp, one more
@@ -507,8 +512,10 @@ a hub or SuperSpeed PDO, every answer is today's.
 - **GONE at the unlink** (4.4): `HcdDevicePdoGone` claims and closes each
   PDO's slot in its `PdoListLock` hold and completes the claims after it
   (D-IRP SUCCESS, WAIT_WAKE NO_SUCH_DEVICE).
-- **START** (4.4, 3.9): admission reopened, D0 asked, `PwrState` D0 at once
-  on a powered ACTIVE link and otherwise the thread's.
+- **START** (4.4, 3.9): once the earlier teardown's power rundown has
+  finished (`PowerPending` 0: a WAIT_WAKE its stop left to a cancel
+  routine has completed), admission reopened, D0 asked, `PwrState` D0 at
+  once on a powered ACTIVE link and otherwise the thread's.
 - **The controller's transitions** (4.4): the D3 and the direct transition
   (`hcd_power.c`), the in-place recovery and the stop (`hcd_ctl.c`) move
   `PowerEpoch` and set `PowerDown` in one controller-lock hold; the
