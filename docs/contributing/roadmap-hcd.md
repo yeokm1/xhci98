@@ -1179,9 +1179,9 @@ ME actually send before anything is promised for them.
     fixed by `f22a42b`, here `fe76f91`); on 98 SE and ME the same clobber
     lowered the IRQL inside the controller lock, which is why those
     readings' HCD bulk-URB counts fell short of their chunk counts - their
-    sizes come from `xhciuas.sys`'s record, which it did not touch. Owed:
-    the bench (E460, P14s Gen 1, 98 SE and 7, ATTO and a large copy), and
-    the 98 SE counts re-read on the fixed build
+    sizes come from `xhciuas.sys`'s record, which it did not touch; re-read on
+    the fixed build, 98 SE's counts agree (3408 URBs, 3408 chunks). Owed:
+    the bench (E460, P14s Gen 1, 98 SE and 7, ATTO and a large copy)
 - [x] 36.22 (was MB.1) stage 1: the value and its query (the contract
   above), `xhciuas.sys`'s descriptor (`MaximumTransferLength`,
   `MaximumPhysicalPages` as bytes / page + 1) and pipes'
