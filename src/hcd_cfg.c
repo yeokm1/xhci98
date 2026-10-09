@@ -713,7 +713,6 @@ static VOID hcdCfgFastPoll(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 #define HCD_CFG_OWED_DONE       1UL     /* a reset finished both halves     */
 #define HCD_CFG_OWED_CONTEXT    2UL     /* the endpoint's context replaced  */
 #define HCD_CFG_OWED_STATE      3UL     /* the endpoint not Stopped: moot   */
-#define HCD_CFG_OWED_HOST       4UL     /* SYNC_RESET_PIPE: the client's    */
 
 /*
  * The device's half a RESET_PIPE owes (HCD_PIPE.ClearOwed, task 36.12)
@@ -2804,18 +2803,18 @@ static ULONG hcdCfgPipeBusy(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
  * (ReactOS usbport urb.c, USBPORT_ClearStall). An isochronous endpoint has
  * no halt to clear (the same skip as below). A failed request is the
  * client's to see; it says nothing about the controller's toggle, so no
- * recovery is asked for.
+ * recovery is asked for. An endpoint that owes its device's half (task
+ * 36.12) does not come here: hcdCfgReset finishes that reset.
  */
 static LONG hcdCfgClearStall(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                              PHCD_PIPE pipe)
 {
-    ULONG bytes;
-
     if (pipe->TransferType == XHCI_PIPE_XFER_ISOCH) {
         return XHCI_USBD_STATUS_SUCCESS;
     }
-    if (!HcdThreadControl(hc, dev, 0x02, 1, 0,
-                          (USHORT)pipe->EndpointAddress, 0, &bytes)) {
+    /* Through hcdCfgDeviceClearHalt, so the qemu flavour's fault 13 meets
+     * this clear too; any outcome but taken is REQUEST_FAILED, as ever. */
+    if (hcdCfgDeviceClearHalt(hc, dev, pipe) != HCD_CTL_DONE) {
         return (LONG)XHCI_PIPE_USBD_REQUEST_FAILED;
     }
     return XHCI_USBD_STATUS_SUCCESS;
@@ -2841,10 +2840,13 @@ static LONG hcdCfgClearStall(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  *             follows starts a new TD, not the failed one;
  *   Error     Set TR Dequeue alone (4.8.3), which moves it to Stopped;
  *   owed      Stopped by a RESET_PIPE whose device clear was not taken
- *             (task 36.12): the host's half is done but for the Set TR
- *             Dequeue, which that reset deferred - sent now, and the owed
- *             record ended, since this function leaves the device's toggle
- *             to its client by contract;
+ *             (task 36.12): the host's half is done already, so nothing is
+ *             sent and the answer is success, but the pipe stays paused
+ *             with the record - the host's toggle was restarted and the
+ *             device's was not, and nothing here can align them (Codex
+ *             review of 36.12, round 1, finding 1). The device's half is
+ *             still the next RESET_PIPE's or SYNC_CLEAR_STALL's, which the
+ *             usual SYNC_RESET_PIPE then SYNC_CLEAR_STALL pair sends;
  *   other     no halt to clear: nothing is sent, and no context is
  *             recreated - that would restart the toggle (4.6.8 p.118).
  *
@@ -2863,14 +2865,18 @@ static LONG hcdCfgResetHost(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         return HCD_USBD_ERROR_BUSY;
     }
     state = hcdCfgEpState(hc, dev, pipe->Dci);
-    if (pipe->ClearOwed && state != XHCI_EP_STATE_STOPPED) {
+    if (pipe->ClearOwed) {
+        if (state == XHCI_EP_STATE_STOPPED) {
+            HcdIoPipeResume(hc, pipe);      /* the record's pause stays */
+            return XHCI_USBD_STATUS_SUCCESS;
+        }
         hcdCfgOwedEnd(hc, dev, pipe, HCD_CFG_OWED_STATE);
     }
     ok = 1;
     if (state == XHCI_EP_STATE_HALTED) {
         ok = hcdCfgResetEndpoint(hc, dev, pipe, 1) &&
              hcdCfgSetDequeue(hc, dev, pipe);
-    } else if (state == XHCI_EP_STATE_ERROR || pipe->ClearOwed) {
+    } else if (state == XHCI_EP_STATE_ERROR) {
         ok = hcdCfgSetDequeue(hc, dev, pipe);
     }
     if (!ok) {
@@ -2878,7 +2884,6 @@ static LONG hcdCfgResetHost(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         return HCD_USBD_INTERNAL_HC_ERROR;
     }
     pipe->Halted = 0;
-    hcdCfgOwedEnd(hc, dev, pipe, HCD_CFG_OWED_HOST);
     HcdIoPipeResume(hc, pipe);
     return XHCI_USBD_STATUS_SUCCESS;
 }
