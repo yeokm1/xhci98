@@ -674,6 +674,9 @@ Goal:
 - Three items from SweetLow's `2.x` testing (GitHub issue 17): the USB
   device interface, the device's real speed in the hub queries, and
   polling rates a client chooses (36.17 to 36.19).
+- UAS commands of 1 MB by default, up to 2 MB by a registry value, with
+  the HCD's TDs grown only as far as measurement calls for (36.21 to
+  36.27).
 
 Status: opened 2026-10-07 (owner) from a user report against `2.2.0.0`,
 the first report of the HCD on real hardware under Windows XP x64 (issue
@@ -747,6 +750,9 @@ How it got here:
   any polling code. After testing, the owner answers issue 17 on GitHub;
   that reply says Speed 3 and 4 are 98 and ME only, and that the composite
   interface follows the first-interface function.
+- **2026-10-09, evening.** The owner moved the 1 MB transfer plan, drawn
+  up that day as planned work with a registry value reaching 2 MB and
+  reviewed once, into this phase as 36.21 to 36.27, above 36.final.
 
 - [x] 36.1 **done 2026-10-08** (`3d667f1`); **reverted 2026-10-08 (owner) after its read**: the code and the `XHCISNAP` decoder are removed, the tree is back to `2.2.0.0`, and the description is kept as the record (issue 12 section 3.3) - the diagnostic build, numbered `2.2.0.2` (owner, 2026-10-07), on `2.2.0.0`'s code with no change in behaviour (issue 12 section 3.3):
   - per open pipe of every slot: its flags, queue and oldest outstanding transfer (URB function, setup bytes, length, age, TD address), with the Output Endpoint Context's state, TR Dequeue and DCS read at dump time;
@@ -927,160 +933,17 @@ How it got here:
   - **Host vectors** in `test_fast_poll`: 4 accepted and 5 off; each code at Low, Full and High Speed and SuperSpeed; 127, 131 and 255 untouched; Full Speed behind a hub untouched and High Speed behind one applied; isochronous and bulk untouched; the two conventions kept apart; no double application; the revert landing at 3. **Legs:** hidusbf set to the codes on 98 SE and 7 in QEMU, read in the `fastpoll.*` records; mode 4 with an unpatched device reading as the release before it.
 - [ ] 36.20 the docs of what `2.3.0.0` ships, moved here from SUSP.3 because this phase cuts polling and MSI (Codex review of `7567dec`):
   - record 15 section 14's list: `implementation-invariants.md`'s "Interrupt Delivery" (a pin-0 controller polled, not refused), `architecture.md`'s line-based delivery, the release notes' "Controller" row and rows for the switches, the acceptance test's step 3 and its stop on the pin, `xhciqual/hardware-testing.md` and record 01's C4 note, record 13 where it describes the ISR, `source-files.md`, the locking record, `xhcisnap/README.md`;
-  - the MSI delivery, 36.3's `XhciIntelIrqRoute` and 36.17 to 36.19, in the release notes, `docs/using` and the records they amend;
+  - the MSI delivery, 36.3's `XhciIntelIrqRoute`, 36.17 to 36.19 and 36.22's transfer-size value, in the release notes, `docs/using` and the records they amend;
   - the user-facing statements of 36.15's decisions (record 15's own mode rules are reconciled in 36.5, before code).
-- [ ] 36.final the `2.3.0.0` builds, x86 and `-amd64`, after every task above:
-  - the host suites and every gate;
-  - a Codex review loop per task;
-  - the QEMU regression legs (still owed from `2.2.0.2`);
-  - the ten install legs read from the asset, with the update legs reading 36.3's and 36.6's values preserved across an update (34.1's rule), moved here from SUSP.4;
-  - then the owner's check on the E7250 under XP x64 and Windows 7 x64, with no manual `D20IR` write, which verifies:
-    - the mouse;
-    - the stick hot-plugged and present at boot;
-    - the EHCI disabled in Device Manager, read as delivered by the line interrupt (not moved to polling), with the backstop near idle;
-    - S3 resume;
-    - Windows 98 SE (PIC mode), and Windows 7 with `MSISupported` 0 (the line forced, 36.15), with the routing fix repairing the route in both;
-    - Windows 7 with MSI granted, and any target under `XhciInterruptMode` 2, with the routing fix reporting only and `D20IR` left as the BIOS set it.
-
-Checkpoint: `2.3.0.0` on the E7250 under XP x64 and Windows 7 x64, with
-`XhciIntelIrqRoute` at its default:
-- the xHCI's interrupts delivered by the ISR (the backstop near idle);
-- a device present at boot enumerated;
-- the stick mounted;
-- the controller working with the EHCI disabled, its interrupts delivered
-  by the line rather than polled;
-- the route still correct after S3;
-- 36.13 passing, with its functional and regression legs on the `release`
-  package and its fault-injection legs on the `qemu` flavour, kept apart.
-  The `qemu` flavour is never published;
-- 36.14 read by the owner;
-- `XhciInterruptMode` at 0 and at 1, on a controller whose line interrupt
-  works, reading as the release before it on the down-level systems;
-- 36.16 passing: MSI on Vista and 7, and the x86 binary still loading on
-  98 and ME;
-- 36.17 to 36.19's legs passing, and `XhciFastPollFsLs` 0 to 3 reading as
-  the release before it;
-- 36.20's docs done, and the ten install legs read from the asset.
-
-The phase is cut as `2.3.0.0` (owner, 2026-10-08).
-
-Records: `docs/issues/12-e7250-xp64-boot-enable-slot-refused.md`;
-`design/15-polled-event-delivery.md`; GitHub issue 17
-(https://github.com/yeokm1/xhci98/issues/17).
-
----
-
-# Planned work
-
-Not phases yet: each takes the next free phase number when the owner opens
-it, and its placeholder ids take that number then (owner, 2026-10-06; the
-decisions table), and a version only then too: `2.2.0.0` is Phase 35's
-(owner, 2026-10-06). Selective suspend is what remains, and it ends in a
-cut. Polled event delivery moved into Phase 36 on 2026-10-08 (owner).
-Issue 17's follow-up is not a release of its own: it joins whichever phase
-the owner opens it in. The 1 MB transfers (the last section) were added on
-2026-10-09 (owner).
-
-## Planned - Release: Selective Suspend, Standby Resume and the Cut
-
-Goal: the bus suspends a device when Windows asks for it - a function's
-D-state in S0, or the idle notification on XP onward - and wakes it on D0 or
-on the device's remote wake, never on a timer of its own; USB 2.0 devices
-(stage A) and SuperSpeed devices (stage B). With them, the first standby and
-hibernate resume readings under the HCD (SUSP.1), which the suspend design
-rests on, and the Windows 98 SE audio-load wedge re-measured against the
-new capabilities (SUSP.2). Then its docs (SUSP.3) and the cut (SUSP.4),
-its version given when the owner opens the work. Polled event delivery's
-docs and install legs moved to Phase 36 (36.20, 36.final) on 2026-10-09.
-
-Status: not opened, unnumbered and unversioned; follows Phase 36, its phase number, version and branches given when the owner
-opens it. Design record
-14 (`design/14-selective-suspend.md`) is the design; stage A's half
-converged over ten review rounds (`b2d03d5`). Stages A and B are
-to be built on branches of their own, both merged into the release's
-branch.
-
-Why a phase: it lifts the idle-policy limitation carried since `2.0.0.0`
-(decisions table, "The idle power policy (28.3)"), turns on code paths no
-release has run - port suspend, the PDO's power IRPs, WAIT_WAKE, the idle
-callback - and is on by default (`XhciSelectiveSuspend` 1, the owner's
-decision of 2026-10-05; record 14 section 7), so every user of the release
-runs it. Its legs also run once under a poll delivery (`XhciInterruptMode`
-2), since suspend and polling both touch the controller's power and
-teardown paths.
-
-Owner's decisions of 2026-10-05 (record 14 section 11): the switch defaults
-to 1; the test client is tracked under `test\`, never shipped, refused by the
-packaging gate; stage A's checkpoint includes the owner's bench reading;
-stage B ships in the same release, so the cut waits for it.
-
-The tasks are listed, and numbered, easiest first (owner, 2026-10-05):
-standby resume, which the suspend design rests on, then stage A and stage B
-in their own order, then the wedge, which is re-measured against stage A's
-capabilities and so waits for it, then the docs and the cut.
-
-- [ ] SUSP.1 system standby (S3) and hibernate (S4) resume, read for the first time under the HCD: the controller's D3 and D0 paths in `hcd_power.c` - the D0 resume, the work-item route and the direct transition - have never run on a guest (its header; neither primary's test guest sleeps, Windows 2000's runs `acpi=off`), and record 14 section 4.4 rests on them (pended D0s across a controller transition, a device's link still in U3 after a restore). Read on guests that sleep - QEMU with S3 enabled, ME (which hibernates on QEMU's power-down), and each target that can be made to - and on the E460 and the P14s Gen 1 (owner): standby and resume, hibernate and resume, with devices idle, devices suspended by SUSPa, and a D0 pended across it; a controller with and without Force Save Context (QEMU reads FSC 0); what breaks is fixed in this phase. The release notes' "a wake from standby" row moves from untested to read
-- [ ] SUSPa.1 the link machine in the pure core, `xhci_susp.c`, with host suite `test_susp`: states and outcomes, the composite last-Dx rule, D0 during SUSPENDING, epoch-stamped Dx, wake classification, the episode's arming and completion by stamp, and the interleavings record 14 section 10 lists
-- [ ] SUSPa.2 the gate and the thread: one `SuspendPause` per pipe, the survivor restart, per-device slow-IRP deferral, root-port suspend and resume, the full-sample handoff at the port acknowledgement, USB 2.0 hub port suspend and both branches of the hub port look (record 14 section 3)
-- [ ] SUSPa.3 the PDO's power: slots, claiming, the composite rule, capabilities, WAIT_WAKE, GONE at the unlink, teardown in its order, START reopening, `PowerDown` admission and the controller's transitions (section 4 and 5)
-- [ ] SUSPa.4 the idle notification on the bus's callback thread: batches, the three-way claim, the context's phases, settlement of every idle IRP, quarantine (section 6 and 4.4)
-- [ ] SUSPa.5 the switch, the counters in the counter block and `XHCISNAP`, the bounded log lines
-- [ ] SUSPa.6 the test client under `test\`, and the packaging gate refusing it
-- [ ] SUSPa-V stage A's legs (record 14 section 10): the test client on 98 SE, 2000 (SMP, Driver Verifier), ME and XP, with the 9x WAIT_WAKE completion read and wake disabled on 9x if the defect holds; hidusb's own idle on XP, Vista and 7; behind QEMU's hub; composite interleavings; unplug at each state; controller disable, enable, D3 and restart mid-transition; the fault-injection leg; `XhciSelectiveSuspend` at 0 reading as the build before it; the matrix unchanged; x86 and amd64 and every gate
-- [ ] SUSPa-E stage A's bench (owner): a real remote-wake HID device on a 98 SE machine and on the E460's Windows 7
-- [ ] SUSPb.1 stage B's design: record 14 section 8 grown into the record proper - Function Suspend with wake enable per interface, the function remote-wake capability, Function Wake Device Notifications (DNCTRL, the event, interface-to-function ownership), PLS=Resume on USB 3 root ports and the `xhci_link.c` classification, SuperSpeed hub ports (no C_PORT_LINK_STATE on a wake) - reviewed to convergence before code
-- [ ] SUSPb.2 stage B built on stage A's machine, with host vectors
-- [ ] SUSPb-V stage B's legs on QEMU (root ports only: QEMU has no SuperSpeed hub)
-- [ ] SUSPb-E stage B's bench (owner): a SuperSpeed device with remote wake on a root port and behind a USB 3 hub
-- [ ] SUSP.2 the Windows 98 SE audio-load wedge (carried since `2.0.0.0`, release notes' known limitations; 28.3): a USB audio device attached about 40 s after a cold boot wedged the guest 5 of 6 times (taskbar clock stopped), after 120 s none of 20; every IRP the bus was given had been answered, the wait is in the configuration manager after SELECT_INTERFACE to alternate 0 and QUERY_CAPABILITIES, and `1.2.0.0` showed it too. In this phase because SUSPa changes what QUERY_CAPABILITIES answers (D1/D2, wake): re-measure it on the SUSPa build first (better, worse or the same), then find where the configuration manager waits (a debug `VMM`/`CONFIGMG` or a trace of the devnode's state), and fix it if a bus answer is the cause; if it is Windows 98's own, it stays a documented limitation with the measurement refreshed
-- [ ] SUSP.3 the docs: record 13 sections 5, 6.5, 10.2 and 10.9; the release notes (the limitation replaced, the switch and its escape); this table's 28.3 row; `source-files.md`; the locking record; the run record. Phases 34, 35 and 36 take their own docs (34.4, 35.6, 36.20)
-- [ ] SUSP.4 the cut, and the ten install legs read from the asset
-
-Checkpoint: SUSPa-V and SUSPb-V passing - their functional and regression legs
-on the `release` package, and SUSPa-V's fault-injection leg on the `qemu`
-flavour, kept apart, the `qemu` flavour never published; SUSPa-V's functional
-legs on 98 SE and 2000 (SMP, Driver Verifier) and SUSPb-V's root-port legs
-run once more under `XhciInterruptMode` 2; SUSPa-E and SUSPb-E read by the owner; SUSP.1's resumes
-read on guests and the bench; SUSP.2 re-measured and, if bus-side, fixed;
-`XhciSelectiveSuspend` at 0 reading as the build before it; the ten
-install legs read from the asset.
-
-Records: `design/14-selective-suspend.md`; a run record, named for the
-phase when it is opened.
-
-## Planned - Issue 17 follow-up
-
-Goal: the one item of SweetLow's `2.x` testing (GitHub issue 17) that
-Phase 36 did not take (owner, 2026-10-09), waiting on something before it
-can be designed.
-
-Status: not opened, unnumbered and unversioned. It is not a release of
-its own; it joins the phase the owner opens it in.
-
-- [ ] I17.1 the Windows 98 SE silent install (issue 17 item 4): the
-  `SilentInstall` capability, today FALSE on every PDO
-  (`hcd_pdo.c`, `hcd_rh.c`, `uas_pdo.c`), reported TRUE where 98 SE's
-  `usbhub.sys` and SweetLow's `usbhub20.sys` report it, so a device
-  already installed does not bring back the New Hardware wizard on
-  another port. **Waits on** SweetLow's description of the rule: when it
-  is set, and what it reads. Code offered for it is taken only under
-  `legal-provenance.md`'s rules: GPL-2.0-compatible, and not derived
-  from Microsoft's binaries.
-
-## Planned - 1 MB transfers on bulk endpoints and UAS
-
-Goal: storage over UAS moves 1 MB per command by default, where today
-`xhciuas.sys` offers 64 KB, and a bulk transfer goes to the controller in
-as few TDs as measurement shows is worth it (today at most 128 KB each).
-A registry value sets the command size from 64 KB up to 2 MB (owner,
-2026-10-09): lower for a device or controller that misbehaves at large
-transfers, higher to try more. Everything below is sized for the 2 MB the
-value can reach, not the 1 MB default.
-
-Status: not opened, unnumbered and unversioned. It joins, or becomes, the
-phase the owner opens it in, after Phase 36's cut; MB.0's baseline is the
-`2.3.0.0` build. The plan was reviewed once (2026-10-09) and the findings
-below are folded in.
+**The transfer size (36.21 to 36.27; owner, 2026-10-09).** Storage over
+UAS moves 1 MB per command by default, where today `xhciuas.sys` offers
+64 KB, and a bulk transfer goes to the controller in as few TDs as
+measurement shows is worth it (today at most 128 KB each). A registry
+value sets the command size from 64 KB up to 2 MB: lower for a device
+or controller that misbehaves at large transfers, higher to try more.
+Everything below is sized for the 2 MB the value can reach, not the
+1 MB default. Drawn up as planned work and reviewed once before it was
+moved here; the findings are folded in.
 
 **Two sizes, not one.** The command size is what one UAS command IU asks
 the device to move: `xhciuas.sys` sends each SRB as one command and one
@@ -1172,27 +1035,27 @@ sense and status gathered), which is not planned.
 **Windows 98 and ME.** NUSB's storage path runs through `USBNTMAP.SYS`,
 read statically as doing its I/O through a 64 KB bounce MDL
 (`runs/run-31.md`, NUSB's storage path); if that holds, a larger
-descriptor changes nothing there. MB.0 measures the SRB sizes 98 SE and
+descriptor changes nothing there. 36.21 measures the SRB sizes 98 SE and
 ME actually send before anything is promised for them.
 
-- [ ] MB.0 instrumentation, then the baseline: counters of SRB length,
+- [ ] 36.21 (was MB.0) instrumentation, then the baseline: counters of SRB length,
   data URB length, chunks per URB, the map grant, outstanding commands
-  and ring-empty time, in the HCD snapshot and `XHCISNAP`. Then on the
-  `2.3.0.0` build plus that instrumentation, on the E460 and the P14s
+  and ring-empty time, in the HCD snapshot and `XHCISNAP`. Then on this
+  phase's build before 36.22, plus that instrumentation, on the E460 and the P14s
   Gen 1 under 98 SE and 7 (owner): ATTO Disk Benchmark and a large copy
   over UAS and Bulk-Only, recording the benchmark's version, queue depth,
   the device, connector, `XhciImodInterval250ns` in effect, flavour and
   repetitions
-- [ ] MB.1 stage 1: the value and its query, `xhciuas.sys`'s descriptor
+- [ ] 36.22 (was MB.1) stage 1: the value and its query, `xhciuas.sys`'s descriptor
   (`MaximumTransferLength`, `MaximumPhysicalPages` as bytes / page + 1)
   and pipes' `MaximumTransferSize` from it, the INF rows and gate, the
-  docs; host vectors in `test_uas`. MB.0 repeated at 64 KB, 1 MB and
+  docs; host vectors in `test_uas`. 36.21 repeated at 64 KB, 1 MB and
   2 MB
-- [ ] MB.2 the decision on stage 2, from MB.1's readings (owner): command
+- [ ] 36.23 (was MB.2) the decision on stage 2, from 36.22's readings (owner): command
   rate, chunk rate, ring-empty time, CPU cost and throughput
-- [ ] MB.3 stage 2, if taken: its design reviewed to convergence, then
+- [ ] 36.24 (was MB.3) stage 2, if taken: its design reviewed to convergence, then
   the code with host vectors in `test_td`, `test_xfer` and `test_ring`
-- [ ] MB.4 stage 3, if taken: its design reviewed to convergence (fixed
+- [ ] 36.25 (was MB.4) stage 3, if taken: its design reviewed to convergence (fixed
   rings placed by physical address, or a fixed set of page segments
   allocated with the pipe, sized from the table above and qualified on a
   low-memory Windows 98 machine and across repeated starts and
@@ -1202,7 +1065,7 @@ ME actually send before anything is promised for them.
   `test_snap`; the qemu flavour's injection extended to a large bulk and
   stream TD (short, stop and a constrained map grant), since today's
   endpoint faults target a one-TRB interrupt TD
-- [ ] MB-V the legs, two claims kept apart. Compatibility: every guest, x86
+- [ ] 36.26 (was MB-V) the legs, two claims kept apart. Compatibility: every guest, x86
   and amd64, UAS (streams, and High-Speed without them) and Bulk-Only,
   file compares, the value at 64, 1024, 2048 and out of range, Windows
   2000 SMP under Driver Verifier, stop and restart, D3 and resume,
@@ -1213,13 +1076,149 @@ ME actually send before anything is promised for them.
   wrap, a timeout, an abort and removal, and an amd64 guest whose source
   pages are shown above 4 GB with mapped addresses below it (the bounce
   path), or that leg recorded untested
-- [ ] MB-E the bench (owner): MB.0's readings repeated on the same
+- [ ] 36.27 (was MB-E) the bench (owner): 36.21's readings repeated on the same
   machines, devices and settings
+- [ ] 36.final the `2.3.0.0` builds, x86 and `-amd64`, after every task above:
+  - the host suites and every gate;
+  - a Codex review loop per task;
+  - the QEMU regression legs (still owed from `2.2.0.2`);
+  - the ten install legs read from the asset, with the update legs reading 36.3's, 36.6's and 36.22's values preserved across an update (34.1's rule), moved here from SUSP.4;
+  - then the owner's check on the E7250 under XP x64 and Windows 7 x64, with no manual `D20IR` write, which verifies:
+    - the mouse;
+    - the stick hot-plugged and present at boot;
+    - the EHCI disabled in Device Manager, read as delivered by the line interrupt (not moved to polling), with the backstop near idle;
+    - S3 resume;
+    - Windows 98 SE (PIC mode), and Windows 7 with `MSISupported` 0 (the line forced, 36.15), with the routing fix repairing the route in both;
+    - Windows 7 with MSI granted, and any target under `XhciInterruptMode` 2, with the routing fix reporting only and `D20IR` left as the BIOS set it.
 
-Checkpoint: MB-V passing at the default finally chosen; MB-E read against
-MB.0 with the same settings and repetitions. 1 MB stays the default only
-if it is no slower than 64 KB anywhere beyond the readings' own spread;
-otherwise the default becomes the size that is, and the INF's default
-changes with it (an existing installation keeps a value it already has,
-under the don't-overwrite rule, so the release notes say how to take the
-new one).
+Checkpoint: `2.3.0.0` on the E7250 under XP x64 and Windows 7 x64, with
+`XhciIntelIrqRoute` at its default:
+- the xHCI's interrupts delivered by the ISR (the backstop near idle);
+- a device present at boot enumerated;
+- the stick mounted;
+- the controller working with the EHCI disabled, its interrupts delivered
+  by the line rather than polled;
+- the route still correct after S3;
+- 36.13 passing, with its functional and regression legs on the `release`
+  package and its fault-injection legs on the `qemu` flavour, kept apart.
+  The `qemu` flavour is never published;
+- 36.14 read by the owner;
+- `XhciInterruptMode` at 0 and at 1, on a controller whose line interrupt
+  works, reading as the release before it on the down-level systems;
+- 36.16 passing: MSI on Vista and 7, and the x86 binary still loading on
+  98 and ME;
+- 36.17 to 36.19's legs passing, and `XhciFastPollFsLs` 0 to 3 reading as
+  the release before it;
+- 36.26 passing at the transfer-size default finally chosen, and 36.27
+  read against 36.21 with the same settings and repetitions: 1 MB stays
+  the default only if it is no slower than 64 KB anywhere beyond the
+  readings' own spread; otherwise the default becomes the size that is,
+  and the INF's default changes with it (an existing installation keeps
+  a value it already has, under the don't-overwrite rule, so the release
+  notes say how to take the new one);
+- 36.20's docs done, and the ten install legs read from the asset.
+
+The phase is cut as `2.3.0.0` (owner, 2026-10-08).
+
+Records: `docs/issues/12-e7250-xp64-boot-enable-slot-refused.md`;
+`design/15-polled-event-delivery.md`; GitHub issue 17
+(https://github.com/yeokm1/xhci98/issues/17).
+
+---
+
+# Planned work
+
+Not phases yet: each takes the next free phase number when the owner opens
+it, and its placeholder ids take that number then (owner, 2026-10-06; the
+decisions table), and a version only then too: `2.2.0.0` is Phase 35's
+(owner, 2026-10-06). Selective suspend is what remains, and it ends in a
+cut. Polled event delivery moved into Phase 36 on 2026-10-08 (owner).
+Issue 17's follow-up is not a release of its own: it joins whichever phase
+the owner opens it in. The 1 MB transfers, planned here on 2026-10-09, moved
+into Phase 36 the same day (owner).
+
+## Planned - Release: Selective Suspend, Standby Resume and the Cut
+
+Goal: the bus suspends a device when Windows asks for it - a function's
+D-state in S0, or the idle notification on XP onward - and wakes it on D0 or
+on the device's remote wake, never on a timer of its own; USB 2.0 devices
+(stage A) and SuperSpeed devices (stage B). With them, the first standby and
+hibernate resume readings under the HCD (SUSP.1), which the suspend design
+rests on, and the Windows 98 SE audio-load wedge re-measured against the
+new capabilities (SUSP.2). Then its docs (SUSP.3) and the cut (SUSP.4),
+its version given when the owner opens the work. Polled event delivery's
+docs and install legs moved to Phase 36 (36.20, 36.final) on 2026-10-09.
+
+Status: not opened, unnumbered and unversioned; follows Phase 36, its phase number, version and branches given when the owner
+opens it. Design record
+14 (`design/14-selective-suspend.md`) is the design; stage A's half
+converged over ten review rounds (`b2d03d5`). Stages A and B are
+to be built on branches of their own, both merged into the release's
+branch.
+
+Why a phase: it lifts the idle-policy limitation carried since `2.0.0.0`
+(decisions table, "The idle power policy (28.3)"), turns on code paths no
+release has run - port suspend, the PDO's power IRPs, WAIT_WAKE, the idle
+callback - and is on by default (`XhciSelectiveSuspend` 1, the owner's
+decision of 2026-10-05; record 14 section 7), so every user of the release
+runs it. Its legs also run once under a poll delivery (`XhciInterruptMode`
+2), since suspend and polling both touch the controller's power and
+teardown paths.
+
+Owner's decisions of 2026-10-05 (record 14 section 11): the switch defaults
+to 1; the test client is tracked under `test\`, never shipped, refused by the
+packaging gate; stage A's checkpoint includes the owner's bench reading;
+stage B ships in the same release, so the cut waits for it.
+
+The tasks are listed, and numbered, easiest first (owner, 2026-10-05):
+standby resume, which the suspend design rests on, then stage A and stage B
+in their own order, then the wedge, which is re-measured against stage A's
+capabilities and so waits for it, then the docs and the cut.
+
+- [ ] SUSP.1 system standby (S3) and hibernate (S4) resume, read for the first time under the HCD: the controller's D3 and D0 paths in `hcd_power.c` - the D0 resume, the work-item route and the direct transition - have never run on a guest (its header; neither primary's test guest sleeps, Windows 2000's runs `acpi=off`), and record 14 section 4.4 rests on them (pended D0s across a controller transition, a device's link still in U3 after a restore). Read on guests that sleep - QEMU with S3 enabled, ME (which hibernates on QEMU's power-down), and each target that can be made to - and on the E460 and the P14s Gen 1 (owner): standby and resume, hibernate and resume, with devices idle, devices suspended by SUSPa, and a D0 pended across it; a controller with and without Force Save Context (QEMU reads FSC 0); what breaks is fixed in this phase. The release notes' "a wake from standby" row moves from untested to read
+- [ ] SUSPa.1 the link machine in the pure core, `xhci_susp.c`, with host suite `test_susp`: states and outcomes, the composite last-Dx rule, D0 during SUSPENDING, epoch-stamped Dx, wake classification, the episode's arming and completion by stamp, and the interleavings record 14 section 10 lists
+- [ ] SUSPa.2 the gate and the thread: one `SuspendPause` per pipe, the survivor restart, per-device slow-IRP deferral, root-port suspend and resume, the full-sample handoff at the port acknowledgement, USB 2.0 hub port suspend and both branches of the hub port look (record 14 section 3)
+- [ ] SUSPa.3 the PDO's power: slots, claiming, the composite rule, capabilities, WAIT_WAKE, GONE at the unlink, teardown in its order, START reopening, `PowerDown` admission and the controller's transitions (section 4 and 5)
+- [ ] SUSPa.4 the idle notification on the bus's callback thread: batches, the three-way claim, the context's phases, settlement of every idle IRP, quarantine (section 6 and 4.4)
+- [ ] SUSPa.5 the switch, the counters in the counter block and `XHCISNAP`, the bounded log lines
+- [ ] SUSPa.6 the test client under `test\`, and the packaging gate refusing it
+- [ ] SUSPa-V stage A's legs (record 14 section 10): the test client on 98 SE, 2000 (SMP, Driver Verifier), ME and XP, with the 9x WAIT_WAKE completion read and wake disabled on 9x if the defect holds; hidusb's own idle on XP, Vista and 7; behind QEMU's hub; composite interleavings; unplug at each state; controller disable, enable, D3 and restart mid-transition; the fault-injection leg; `XhciSelectiveSuspend` at 0 reading as the build before it; the matrix unchanged; x86 and amd64 and every gate
+- [ ] SUSPa-E stage A's bench (owner): a real remote-wake HID device on a 98 SE machine and on the E460's Windows 7
+- [ ] SUSPb.1 stage B's design: record 14 section 8 grown into the record proper - Function Suspend with wake enable per interface, the function remote-wake capability, Function Wake Device Notifications (DNCTRL, the event, interface-to-function ownership), PLS=Resume on USB 3 root ports and the `xhci_link.c` classification, SuperSpeed hub ports (no C_PORT_LINK_STATE on a wake) - reviewed to convergence before code
+- [ ] SUSPb.2 stage B built on stage A's machine, with host vectors
+- [ ] SUSPb-V stage B's legs on QEMU (root ports only: QEMU has no SuperSpeed hub)
+- [ ] SUSPb-E stage B's bench (owner): a SuperSpeed device with remote wake on a root port and behind a USB 3 hub
+- [ ] SUSP.2 the Windows 98 SE audio-load wedge (carried since `2.0.0.0`, release notes' known limitations; 28.3): a USB audio device attached about 40 s after a cold boot wedged the guest 5 of 6 times (taskbar clock stopped), after 120 s none of 20; every IRP the bus was given had been answered, the wait is in the configuration manager after SELECT_INTERFACE to alternate 0 and QUERY_CAPABILITIES, and `1.2.0.0` showed it too. In this phase because SUSPa changes what QUERY_CAPABILITIES answers (D1/D2, wake): re-measure it on the SUSPa build first (better, worse or the same), then find where the configuration manager waits (a debug `VMM`/`CONFIGMG` or a trace of the devnode's state), and fix it if a bus answer is the cause; if it is Windows 98's own, it stays a documented limitation with the measurement refreshed
+- [ ] SUSP.3 the docs: record 13 sections 5, 6.5, 10.2 and 10.9; the release notes (the limitation replaced, the switch and its escape); this table's 28.3 row; `source-files.md`; the locking record; the run record. Phases 34, 35 and 36 take their own docs (34.4, 35.6, 36.20)
+- [ ] SUSP.4 the cut, and the ten install legs read from the asset
+
+Checkpoint: SUSPa-V and SUSPb-V passing - their functional and regression legs
+on the `release` package, and SUSPa-V's fault-injection leg on the `qemu`
+flavour, kept apart, the `qemu` flavour never published; SUSPa-V's functional
+legs on 98 SE and 2000 (SMP, Driver Verifier) and SUSPb-V's root-port legs
+run once more under `XhciInterruptMode` 2; SUSPa-E and SUSPb-E read by the owner; SUSP.1's resumes
+read on guests and the bench; SUSP.2 re-measured and, if bus-side, fixed;
+`XhciSelectiveSuspend` at 0 reading as the build before it; the ten
+install legs read from the asset.
+
+Records: `design/14-selective-suspend.md`; a run record, named for the
+phase when it is opened.
+
+## Planned - Issue 17 follow-up
+
+Goal: the one item of SweetLow's `2.x` testing (GitHub issue 17) that
+Phase 36 did not take (owner, 2026-10-09), waiting on something before it
+can be designed.
+
+Status: not opened, unnumbered and unversioned. It is not a release of
+its own; it joins the phase the owner opens it in.
+
+- [ ] I17.1 the Windows 98 SE silent install (issue 17 item 4): the
+  `SilentInstall` capability, today FALSE on every PDO
+  (`hcd_pdo.c`, `hcd_rh.c`, `uas_pdo.c`), reported TRUE where 98 SE's
+  `usbhub.sys` and SweetLow's `usbhub20.sys` report it, so a device
+  already installed does not bring back the New Hardware wizard on
+  another port. **Waits on** SweetLow's description of the rule: when it
+  is set, and what it reads. Code offered for it is taken only under
+  `legal-provenance.md`'s rules: GPL-2.0-compatible, and not derived
+  from Microsoft's binaries.
