@@ -1413,36 +1413,52 @@ VOID HcdSuspPdoRundown(PHCD_DEVICE_PDO pdo)
 
 /*
  * A successful START reopens admission (4.4, 3.9): PwrClosed 0 and D0
- * asked; PwrState D0 at once on a powered ACTIVE link (or with no device,
- * which the START refuses anyway), else left to the thread, which resumes
- * for it. The caller holds no lock. IRQL: PASSIVE_LEVEL.
+ * asked; PwrState D0 at once on a powered ACTIVE link, else left to the
+ * thread, which resumes for it. Returns 0, reopening nothing, for a PDO
+ * unlinked meanwhile: the START is then refused. The caller holds no
+ * lock. IRQL: PASSIVE_LEVEL.
  */
-VOID HcdSuspPdoReopen(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
+ULONG HcdSuspPdoReopen(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
 {
     PHCD_USB_DEVICE dev;
+    LARGE_INTEGER due;
     KIRQL listIrql;
     KIRQL oldIrql;
 
-    /* 4.4: once the earlier teardown's power rundown has finished - a
+    /* 4.4: once an earlier teardown's power rundown has finished - a
      * WAIT_WAKE its stop left to a cancel routine completes first (Codex
-     * review of 36.31, round 1, finding 3). */
-    HcdSuspPdoRundown(pdo);
+     * review of 36.31, round 1, finding 3). Only after a teardown, whose
+     * closed admission adds nothing: a START with admission open (the
+     * first, or one with no STOP before it) may have a live WAIT_WAKE,
+     * which nothing would end (round 2, finding 1). */
+    while (pdo->PwrClosed && pdo->PowerPending != 0) {
+        HcdRelativeMs(&due, 1);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
     KeAcquireSpinLock(&hc->PdoListLock, &listIrql);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     dev = pdo->Device;
+    if (!pdo->Listed || dev == NULL) {
+        /* Unlinked since the caller's check: its slot was settled and
+         * closed there, and stays closed; the START is refused (round 2,
+         * finding 2). */
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        KeReleaseSpinLock(&hc->PdoListLock, listIrql);
+        return 0;
+    }
     pdo->PwrSwitch = hc->SuspOn;
     pdo->PwrClosed = 0;
     pdo->PwrWanted = XHCI_SUSP_D0;
     pdo->PwrSeq++;
     pdo->WokeHold = 0;
-    if (dev == NULL || (dev->Susp.State == XHCI_SUSP_ACTIVE &&
-                        !hc->PowerDown)) {
+    if (dev->Susp.State == XHCI_SUSP_ACTIVE && !hc->PowerDown) {
         pdo->PwrState = XHCI_SUSP_D0;
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     KeReleaseSpinLock(&hc->PdoListLock, listIrql);
     pdo->Common.DevicePower = PowerDeviceD0;
     HcdThreadWake(hc);
+    return 1;
 }
 
 /*

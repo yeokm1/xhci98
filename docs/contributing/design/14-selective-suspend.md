@@ -512,10 +512,14 @@ a hub or SuperSpeed PDO, every answer is today's.
 - **GONE at the unlink** (4.4): `HcdDevicePdoGone` claims and closes each
   PDO's slot in its `PdoListLock` hold and completes the claims after it
   (D-IRP SUCCESS, WAIT_WAKE NO_SUCH_DEVICE).
-- **START** (4.4, 3.9): once the earlier teardown's power rundown has
-  finished (`PowerPending` 0: a WAIT_WAKE its stop left to a cancel
-  routine has completed), admission reopened, D0 asked, `PwrState` D0 at
-  once on a powered ACTIVE link and otherwise the thread's.
+- **START** (4.4, 3.9): after a teardown (admission closed), once its
+  power rundown has finished (`PowerPending` 0: a WAIT_WAKE its stop left
+  to a cancel routine has completed); a START with admission open waits
+  for nothing, since a live WAIT_WAKE may be pending. Then, in one
+  `PdoListLock` and controller-lock hold, a PDO still listed with its
+  device has admission reopened, D0 asked, `PwrState` D0 at once on a
+  powered ACTIVE link and otherwise the thread's; one unlinked meanwhile
+  stays closed and its START is refused.
 - **The controller's transitions** (4.4): the D3 and the direct transition
   (`hcd_power.c`), the in-place recovery and the stop (`hcd_ctl.c`) move
   `PowerEpoch` and set `PowerDown` in one controller-lock hold; the

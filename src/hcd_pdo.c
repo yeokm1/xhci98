@@ -2325,10 +2325,12 @@ static ULONG hcdPdoStarted(PHCD_DEVICE_PDO pdo)
     if (!listed) {
         return 0;
     }
-    pdo->Closing = 0;
     /* Selective suspend's admission reopened (design record 14 section
-     * 4.4, START). */
-    HcdSuspPdoReopen(hc, pdo);
+     * 4.4, START), unless the device left since the check above. */
+    if (!HcdSuspPdoReopen(hc, pdo)) {
+        return 0;
+    }
+    pdo->Closing = 0;
     /* A hub's port machine was told at once that its PDO started: the bus
      * serves a hub whether PnP has started it or not (task 33.4). */
     if (!pdo->Hub) {

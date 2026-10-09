@@ -1741,7 +1741,7 @@ ULONG HcdSuspPdoWaitWake(struct _HCD_DEVICE_PDO *pdo, PIRP irp,
 VOID HcdSuspPdoCaps(struct _HCD_DEVICE_PDO *pdo, PDEVICE_CAPABILITIES caps);
 VOID HcdSuspPdoClose(struct _HCD_DEVICE_PDO *pdo, ULONG removal);
 VOID HcdSuspPdoRundown(struct _HCD_DEVICE_PDO *pdo);
-VOID HcdSuspPdoReopen(PHCD_CONTROLLER hc, struct _HCD_DEVICE_PDO *pdo);
+ULONG HcdSuspPdoReopen(PHCD_CONTROLLER hc, struct _HCD_DEVICE_PDO *pdo);
 ULONG HcdSuspUnlinkLocked(PHCD_CONTROLLER hc, struct _HCD_DEVICE_PDO *pdo,
                           PHCD_SUSP_SETTLE out);
 VOID HcdSuspUnlinkFinish(PHCD_SUSP_SETTLE s);
