@@ -762,7 +762,28 @@ ULONG XhciEventDiscardStale(PXHCI_EXTENSION ext, PULONG fatalEvent)
  * interrupt enable/disable, and terminal failure while this bounded pass owns
  * the event and command-ring state.
  */
+static ULONG xhciEventDrain(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts,
+                            PULONG drainedOut);
+
 ULONG XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts)
+{
+    return xhciEventDrain(ext, enableInterrupts, NULL);
+}
+
+/*
+ * XhciEventDpc, also saying how many events this pass consumed, for the
+ * poller's own count (design record 15 section 8): another drain on
+ * another processor can move EventsTotal meanwhile. *drained is 0 when the
+ * pass was refused. IRQL: DISPATCH_LEVEL.
+ */
+ULONG XhciEventDpcDrained(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts,
+                          PULONG drained)
+{
+    return xhciEventDrain(ext, enableInterrupts, drained);
+}
+
+static ULONG xhciEventDrain(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts,
+                            PULONG drainedOut)
 {
     XHCI_TRB trb;
     ULONG drained;
@@ -773,6 +794,9 @@ ULONG XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts)
     ULONG report;
     KIRQL oldIrql;
 
+    if (drainedOut != NULL) {
+        *drainedOut = 0;
+    }
     if (ext == NULL || ext->Signature != XHCI_EXTENSION_SIGNATURE) {
         return 0;
     }
@@ -908,6 +932,9 @@ ULONG XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts)
      * instead would strand them permanently.
      */
     xhciPublishErdp(ext, 1);
+    if (drainedOut != NULL) {
+        *drainedOut = drained;
+    }
 
     if (bounded) {
         ext->DrainBoundHits++;

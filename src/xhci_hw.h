@@ -778,6 +778,8 @@ BOOLEAN XhciIsr(PXHCI_EXTENSION ext);
  * otherwise. IRQL: DISPATCH_LEVEL.
  */
 ULONG XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts);
+ULONG XhciEventDpcDrained(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts,
+                          PULONG drained);
 
 /*
  * Receive and discard whatever the event ring is already holding, returning how

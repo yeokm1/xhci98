@@ -699,7 +699,7 @@ static VOID NTAPI hcdPollDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
     ULONG claims;
     ULONG dead;
     ULONG pairs;
-    ULONG events;
+    ULONG drained;
     ULONG bounds;
     ULONG portEvents;
 
@@ -763,19 +763,19 @@ static VOID NTAPI hcdPollDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
 
     /* The service pass. An owed retirement is tried at its start. */
     (VOID)hcdPollRetireLocked(hc, NULL);
-    events = ext->EventsTotal;
     bounds = ext->DrainBoundHits;
     portEvents = hc->PortEvents;
     XhciControllerLockRelease(ext, oldIrql);
 
-    (VOID)XhciEventDpc(ext, FALSE);
+    drained = 0;
+    (VOID)XhciEventDpcDrained(ext, FALSE, &drained);
     if (hc->PortEvents != portEvents) {
         HcdThreadWake(hc);
     }
 
     XhciControllerLockAcquire(ext, &oldIrql);
     hc->Counters.PollRuns++;
-    if (ext->EventsTotal != events) {
+    if (drained != 0) {
         hc->Counters.PollRunsWithEvents++;
     }
     if (ext->EventsTotal != hc->PollLastEvents) {
@@ -811,6 +811,12 @@ epilogue:
     if (hc->Poll.Role == XHCI_POLL_ROLE_WATCH) {
         state = XHCI_POLL_BUS_WATCH;
     } else if (hc->Poll.ParkPending) {
+        state = XHCI_POLL_BUS_ACTIVE;
+    } else if (hc->Poll.State == XHCI_POLL_S_FIRING && hc->Poll.OwedValid &&
+               XhciPollEarlier(hc->Poll.Owed,
+                               now + decision * XHCI_POLL_TICKS_PER_MS)) {
+        /* A promotion owed during the pass wins the arm: its state is
+         * the active one (record 15 section 8). */
         state = XHCI_POLL_BUS_ACTIVE;
     }
     if (XhciPollEnd(&hc->Poll, decision, now, hc->PollValues.ActiveMs,
