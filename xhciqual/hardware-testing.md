@@ -731,10 +731,11 @@ follow. The same caution applies to the `XUSB2PR` section of
 [../docs/usb-xhci-info/xhci-programming.md](../docs/usb-xhci-info/xhci-programming.md),
 whose register table and BIOS-mode behaviour come from the same two sources.
 
-**Since `2.1.1.0` the driver routes the ports itself** on Intel 1E31, 8C31,
-9C31, 8CB1, 9CB1 and 8D31 (roadmap-hcd task 34.3, design record 16), unless
-`XhciIntelPortSwitch` is 0, and hands them back to EHCI when it stops and at
-shutdown. So on such a machine this tool, run from DOS before Windows, shows
+**Since `2.1.1.0` the driver can route the ports itself** on Intel 1E31,
+8C31, 9C31, 8CB1, 9CB1 and 8D31 (roadmap-hcd task 34.3, design record 16),
+since `2.3.0.0` only when `XhciIntelPortSwitch` is 1 (off by default, task
+36.42; `portsw.vbs` in the package sets it), and hands them back to EHCI
+when it stops and at shutdown. So on such a machine this tool, run from DOS before Windows, shows
 firmware's routing, not the driver's: a report from a cold boot says what
 the driver will start from, and one from the boot after a shutdown under
 the driver should read the routing at firmware's values again.
@@ -757,8 +758,8 @@ release notes carry applies in full:
 > not been read - it writes registers of unknown meaning, at every start,
 > resume, stop and shutdown, and the result is unknown. Use 2 only for an
 > Intel chipset that has both an EHCI and an xHCI controller and that this
-> driver does not list, and at your own risk. Everyone else should leave the
-> value at 1.
+> driver does not list, and at your own risk. Everyone else should use 0
+> or 1.
 
 Send the `PROBE.LOG` with any report of such a part, and an `XHCISNAP`
 report with `psw.mode` 2 and its route records, so the list can grow by its

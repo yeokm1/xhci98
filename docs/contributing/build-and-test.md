@@ -3931,6 +3931,42 @@ The leg passes on steps 4, 5 and 7; step 6's prompts are recorded, not
 failed. Until it has passed on a target, design record 13 section 5.6 stays
 `static` for that target and the release notes say so.
 
+### The port switchover script, `portsw.vbs` (roadmap-hcd task 36.42)
+
+Since task 36.42 every flavour directory of a package carries `portsw.vbs`
+at its root beside `xhci98.inf` (design record 16 section 5a). It shows
+`XhciIntelPortSwitch` on every xhci98 controller and sets it to 0 or 1;
+double-clicked it asks through a dialog, and from a command prompt it takes
+`show`, `1` or `0` and prints to the console, which is how a leg reads it:
+
+    cscript //nologo portsw.vbs show  > C:\PSW-SHOW.TXT
+    cscript //nologo portsw.vbs 1     > C:\PSW-1.TXT
+    (restart)
+    cscript //nologo portsw.vbs show  > C:\PSW-SHOW1.TXT
+    cscript //nologo portsw.vbs 0     > C:\PSW-0.TXT
+    (restart)
+    cscript //nologo portsw.vbs show  > C:\PSW-SHOW0.TXT
+
+The exit code is 0 on success, 1 when no controller was found or a write
+was refused, 2 for an unknown argument. A fresh install of the `release`
+package must show `0 - off`; a value deleted by hand shows `not set - off`.
+On Vista and 7 a non-elevated `1` or `0` starts the script again through
+the elevation prompt, and the result appears in a message box rather than
+on the console, so run the leg's prompt as administrator.
+
+What QEMU can and cannot show: its xHCI (`1B36:000D`) is not an Intel
+controller, so the driver never reads the value there (design record 16
+section 7a) - an `XHCISNAP` report at verbosity 2 shows `psw.gate=00000000`
+and no other `psw.` record whatever the value, and the `qemu` flavour's
+debug console prints "not an Intel xHCI, no config write". A guest leg
+therefore reads the script and the registry, the INF's 0 on a fresh install
+and the value surviving a restart; the switchover at 0 and 1 is a bench
+reading on a listed Intel chipset, and the driver's treatment of an absent
+value is held by `test\test_psw.c`.
+
+Read 2026-10-09 on development host A (task 36.42): see roadmap-hcd 36.42
+for the guests and results.
+
 ### Recommended USB Host Chips for Comprehensive Testing
 
 QEMU cannot exercise the quirk-handling code (see "QEMU coverage limits"), so

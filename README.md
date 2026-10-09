@@ -90,9 +90,10 @@ To submit logs with a [bug or hardware report](https://github.com/yeokm1/xhci98/
 
 ```
 release-x86\   xhci98.sys, xhci98.inf, xhciuas.sys, xhciuas.inf - 32-bit Windows
-               (98 SE, ME, 2000, XP, Vista, 7) - and txtsetup.oem, for F6
-debug-x86\     the same five files, built for troubleshooting
-release-x64\   the same five files for 64-bit Windows (XP x64, Vista x64, 7 x64)
+               (98 SE, ME, 2000, XP, Vista, 7) - txtsetup.oem, for F6, and
+               portsw.vbs, the Intel port switchover's switch
+debug-x86\     the same six files, built for troubleshooting
+release-x64\   the same six files for 64-bit Windows (XP x64, Vista x64, 7 x64)
 debug-x64\     the same, built for troubleshooting
 xhciqual\      XHCIQUAL.EXE, the DOS qualifier
 xhcisnap\      XHCISNAP.EXE, the log snapshot reader
@@ -210,7 +211,7 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | `XhciFastPollFsLs` | A root-port Low- or Full-Speed mouse polled above 1000 Hz | `0` | `3` | `0` | `0` |
 | `XhciFirstEnumWaitMs` | The longest wait for a hub's first report | `0` | `30000` | `5000` | `5000` |
 | `XhciFirstEnumPortMs` | The longest one port may hold that wait | `0` | `XhciFirstEnumWaitMs` | `2000` | `2000` |
-| `XhciIntelPortSwitch` | The Intel 7/8/9-series port switchover; `0` turns it off, `2` applies it to any Intel controller **at your own risk** | `0` | `2` | `1` | `1` |
+| `XhciIntelPortSwitch` | The Intel 7/8/9-series port switchover; `1` turns it on, `2` applies it to any Intel controller **at your own risk** (`portsw.vbs` sets `0` or `1`) | `0` | `2` | `0` | `0` |
 | `XhciIntelIrqRoute` | The Intel 7/8/9-series interrupt routing repair; `1` the Dell Latitude E7250 only, `2` any reviewed Intel chipset, `0` report only | `0` | `2` | `1` | `1` |
 | `XhciTolerance` | The handling of controller faults, all together; `0` turns most of it off (see "Controller faults") | `0` | `1` | `1` | `1` |
 | `XhciIntervalCap` | Interrupt endpoints polled at least every 32 ms: `1` on AMD controllers, `2` on every controller, `0` off | `0` | `2` | `1` | `1` |
@@ -278,13 +279,16 @@ With the defaults, the root hub's first report typically comes 20 to 30 ms after
 
 On Intel 7-, 8- and 9-series chipsets (Ivy Bridge to Broadwell) and C610/X99, each switchable connector, usually a blue one, is wired to both the USB 2.0 (EHCI) and the xHCI controller. With the firmware's USB 3.0 setting on Auto, or no setting at all, those connectors typically start on the USB 2.0 controller, so up to `2.1.0.0` this driver saw nothing on them.
 
-Since `2.1.1.0` the driver moves them to the xHCI controller at each start and resume, and hands them back to the USB 2.0 controller when its controller is disabled, removed or the machine shuts down. It does this only on Intel xHCI device ids `1E31`, `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`; every other controller is left alone unless `XhciIntelPortSwitch` is `2` (below). Since `2.2.0.0` the hand-back writes only the registers the driver itself wrote.
+Since `2.1.1.0` the driver can move them to the xHCI controller at each start and resume, and hand them back to the USB 2.0 controller when its controller is disabled, removed or the machine shuts down. It does this only on Intel xHCI device ids `1E31`, `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`; every other controller is left alone unless `XhciIntelPortSwitch` is `2` (below). Since `2.2.0.0` the hand-back writes only the registers the driver itself wrote.
+
+**Since `2.3.0.0` it is off unless you turn it on.** A connector left on the USB 2.0 controller works there whenever a USB 2.0 driver is loaded (NUSB's or SweetLow's on Windows 98 SE and ME, Windows' own elsewhere), only at USB 2.0 speed, so the driver no longer takes the connectors by default. `2.1.1.0` and `2.2.0.0` installed it at `1`, and an update keeps the value already there, so a machine updated from either stays on until you change it.
 
 - A device on a switchable connector under a running USB 2.0 driver (NUSB's, for example) is disconnected there when this driver starts and comes back under it. Do not have a drive busy on a blue connector at that moment.
-- `XhciIntelPortSwitch` set to `0` turns it off. Only `0` does; absent or any other number is on. It is read when the controller starts, so restart after changing it.
+- `XhciIntelPortSwitch` set to `1` turns it on; `0`, absent or not a `DWORD` is off. It is read when the controller starts, so restart after changing it.
+- `portsw.vbs`, beside the INF in each package directory, shows the value on every xhci98 controller and sets it to `1` or `0`, on every Windows this driver runs on with nothing to install: double-click it, or run `cscript //nologo portsw.vbs show` (or `1`, or `0`) as an administrator, then restart Windows.
 - Since `2.2.0.0`, `XhciIntelPortSwitch` set to `2` does the switchover on any Intel xHCI controller, listed or not, for a chipset with the same switchable connectors that the list misses. On a listed controller `2` is the same as `1`.
 
-Setting `XhciIntelPortSwitch` to 2 writes Intel chipset registers on any Intel USB 3 controller. On one without them (every Intel chipset from the 100-series on, and any not yet read) it writes registers of unknown meaning, with unknown results. Use 2 only, at your own risk, for an unlisted Intel chipset with both EHCI and xHCI; everyone else should leave it at 1.
+Setting `XhciIntelPortSwitch` to 2 writes Intel chipset registers on any Intel USB 3 controller. On one without them (every Intel chipset from the 100-series on, and any not yet read) it writes registers of unknown meaning, with unknown results. Use 2 only, at your own risk, for an unlisted Intel chipset with both EHCI and xHCI; everyone else should use 0 or 1.
 
 ### The Intel 7/8/9-series interrupt routing repair
 

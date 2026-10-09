@@ -457,6 +457,13 @@ found each once as well. Nothing was
 found again after that. A setting kept on such a device's own entry, such as
 hidusbf's polling rate, has to be applied again on the new entry.
 
+**An update keeps the Intel port switchover as it was.** Since `2.3.0.0` a
+new install writes `XhciIntelPortSwitch` at `0`, off; `2.1.1.0` and
+`2.2.0.0` wrote `1`, and an update never overwrites a value that is already
+there, so a machine updated from either keeps the switchover on. To take the
+new default, run `portsw.vbs 0` from the package and restart Windows
+("Intel 7-, 8- and 9-series chipsets: the port switchover").
+
 ### Updating xhciuas.sys over an older one
 
 When the package's `xhciuas.sys` carries the same `DriverVer` as the one
@@ -611,7 +618,14 @@ with no error and saw nothing on those connectors, and a SuperSpeed drive
 there ran at High Speed under the USB 2.0 controller, where a driver for
 that was loaded.
 
-Since `2.1.1.0` the driver moves them itself, in the order Linux does: each
+Since `2.1.1.0` the driver can move them itself, and since `2.3.0.0` it does
+so only when `XhciIntelPortSwitch` is `1` (or `2`, below): **it is off by
+default.** A connector left on the USB 2.0 controller is not lost - it works
+there, at USB 2.0 speed, wherever a driver for that controller is loaded
+(NUSB's or SweetLow's on Windows 98 SE and ME, Windows' own on 2000 and
+later) - so the driver no longer takes the connectors from it unasked
+(owner, 2026-10-09; `2.1.1.0` and `2.2.0.0` installed it at `1`). Turned on,
+it works in the order Linux does: each
 time the controller starts, and again each time it resumes from standby, it
 turns on the SuperSpeed side of every connector firmware lets it switch,
 then moves the USB 2.0 side of each to the xHCI controller. When the
@@ -638,13 +652,26 @@ controller. A standby or hibernate keeps them where they are.
   driver or enabling its controller. The reverse happens when the
   controller stops: the devices on those connectors go back to the USB 2.0
   controller, and work there if a driver for it is loaded.
-- **Turning it off.** Set `XhciIntelPortSwitch` to `0` ("Registry
-  settings") on a machine whose switchable connectors must stay with the
-  USB 2.0 controller, for example for a device that works better there.
+- **Turning it on, or off again: `portsw.vbs`.** Each package directory
+  (`release-x86\` and the others) carries `portsw.vbs`, a Windows Script Host
+  script that runs with nothing to install on every Windows this driver
+  supports. Double-click it: it shows `XhciIntelPortSwitch` on every xhci98
+  controller on the machine and asks for `1` (on) or `0` (off). From a
+  command prompt, `cscript //nologo portsw.vbs show`, `... portsw.vbs 1`
+  or `... portsw.vbs 0` does the same. Setting a value needs an
+  administrator (on Vista and 7 the script asks Windows for that itself).
+  **Restart Windows afterwards**: the value is read when the controller
+  starts. Turn it on for a machine whose blue connectors should run at
+  SuperSpeed under this driver; leave it off where the USB 2.0 controller
+  should keep them. The script never sets `2` (below); that is set by hand
+  ("Registry settings"). Read in virtual machines on Windows 98 SE, 2000
+  and Windows 7 x64, where it showed, set and cleared the value; QEMU's
+  controller is not an Intel one, so the switchover itself was not exercised
+  there.
 - **What it logs.** With `XhciLogVerbosity` at `2` or above, `XHCISNAP`'s
   report carries `psw.` records: `psw.gate` (`1` on a listed controller),
-  `psw.value` with `psw.value.found` (`psw.value` 0 means turned off only
-  when `psw.value.found` is 1), the two masks firmware allows and what each register read
+  `psw.value` with `psw.value.found` (`psw.value.found` 0 means the value
+  is absent or not a `DWORD`, which is off since `2.3.0.0`), the two masks firmware allows and what each register read
   back after the write, and `psw.route.step`, `0` when every step was
   accepted. Since `2.2.0.0` an Intel controller's report also carries
   `psw.mode`, the setting in effect (`0` off, `1` on a listed controller,
@@ -674,8 +701,8 @@ registers are there:
 > not been read - it writes registers of unknown meaning, at every start,
 > resume, stop and shutdown, and the result is unknown. Use 2 only for an
 > Intel chipset that has both an EHCI and an xHCI controller and that this
-> driver does not list, and at your own risk. Everyone else should leave the
-> value at 1.**
+> driver does not list, and at your own risk. Everyone else should use 0
+> or 1.**
 
 On a listed controller `2` does the same as `1`.
 
@@ -884,7 +911,10 @@ so a value you changed survives an install or update; to go back to the
 default, set it by hand, or delete the value and update the driver.
 `XhciTolerance`, `XhciIntervalCap` and `XhciAvgTrbEsit` are new in
 `2.2.0.0`, and an update over `2.1.1.0` adds them; `XhciIntelIrqRoute` is
-new in `2.3.0.0`, and an update over `2.2.0.0` adds it. The install has written
+new in `2.3.0.0`, and an update over `2.2.0.0` adds it. Since `2.3.0.0` the
+install writes `XhciIntelPortSwitch` at `0`, where `2.1.1.0` and `2.2.0.0`
+wrote `1`; an update keeps the `1` they wrote, and `portsw.vbs` changes it
+("XhciIntelPortSwitch", below). The install has written
 every value since `2.1.1.0`, which added `XhciIntelPortSwitch`. Of the
 seven before it, the
 `2.1.0.0` install wrote three, the two log values and
@@ -1013,19 +1043,22 @@ the driver's. Neither value was read set to anything but its default.
 
 ### XhciIntelPortSwitch: the Intel port switchover
 
-New in `2.1.1.0`; the install writes `1`. It matters only on the Intel
-chipsets listed in "Intel 7-, 8- and 9-series chipsets: the port
-switchover", unless it is `2`. Since `2.2.0.0` it is read on every Intel
-controller, and still on no other vendor's.
+New in `2.1.1.0`; since `2.3.0.0` the install writes `0` (`2.1.1.0` and
+`2.2.0.0` wrote `1`, and an update keeps a value already there). It matters
+only on the Intel chipsets listed in "Intel 7-, 8- and 9-series chipsets:
+the port switchover", unless it is `2`. Since `2.2.0.0` it is read on every
+Intel controller, and still on no other vendor's. `portsw.vbs`, in each
+package directory, shows it and sets it to `0` or `1` on every xhci98
+controller ("Turning it on, or off again" in that section).
 
 | Value | Effect |
 |---|---|
-| `0` | Off: the driver leaves the connectors where they are, as every release up to `2.1.0.0` did |
-| `1`, any other number but `2`, absent, or not a `DWORD` | On, on a listed controller: the driver moves the connectors to itself at each start and hands them back at each stop |
-| `2` (since `2.2.0.0`) | On, on every Intel controller, listed or not. **At your own risk**: on an Intel controller without the switch registers - every Intel chipset from the 100-series (Skylake) on, and any whose layout has not been read - it writes registers of unknown meaning at every start, resume, stop and shutdown, and the result is unknown. Use it only for an Intel chipset with both an EHCI and an xHCI controller that the list misses; everyone else should leave the value at `1`. See "Value 2" in that section |
+| `0`, absent, or not a `DWORD` | Off, the default since `2.3.0.0`: the driver leaves the connectors where they are, as every release up to `2.1.0.0` did. Up to `2.2.0.0` absent or not a `DWORD` was on |
+| `1`, or any other number but `2` | On, on a listed controller: the driver moves the connectors to itself at each start and hands them back at each stop |
+| `2` (since `2.2.0.0`) | On, on every Intel controller, listed or not. **At your own risk**: on an Intel controller without the switch registers - every Intel chipset from the 100-series (Skylake) on, and any whose layout has not been read - it writes registers of unknown meaning at every start, resume, stop and shutdown, and the result is unknown. Use it only for an Intel chipset with both an EHCI and an xHCI controller that the list misses; everyone else should use `0` or `1`. See "Value 2" in that section |
 
-Only an explicit `0` turns it off, and only an exact `2` goes past the
-list, so a mistyped value does neither. It is read
+Only a `DWORD` that is not `0` turns it on, and only an exact `2` goes past
+the list. It is read
 when the controller starts, so a change takes effect at the next restart or
 at a disable and enable of the controller in Device Manager. Setting `0`
 does not give the connectors back by itself: after a restart they are where
@@ -1301,7 +1334,8 @@ or says it was found by reading the code.
   Power tab, on every system: the value the page reads cannot count past
   510 mA. `XHCISNAP`'s report gives the exact figure. Same section. (Under
   `2.1.0.0` every SuperSpeed device read a quarter of its draw there.)
-- **Intel 7-, 8- and 9-series chipsets: a device on a blue connector moves
+- **Intel 7-, 8- and 9-series chipsets, with `XhciIntelPortSwitch` at `1`
+  (off by default since `2.3.0.0`): a device on a blue connector moves
   between the USB 2.0 controller and this driver when the controller starts
   or stops**: it is disconnected on one side and found again on the other.
   Read on a Lenovo B490 under Windows 98 SE with NUSB, with a mouse plugged

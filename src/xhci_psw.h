@@ -24,10 +24,11 @@
  * (owner, 2026-10-05). Nor every Intel xHCI: from the 100-series on there is
  * no EHCI, and what these offsets do there is unread. The one board Linux exempts by subsystem id, a Sony
  * VAIO T-series that "is not capable of switching ports", is exempted here
- * too. The switch is the XhciIntelPortSwitch value: only an explicit 0 turns
- * it off; absent, of another type or any other number, it is on (owner,
- * 2026-10-05). An exact 2 also routes on an Intel controller the list does
- * not name, at the user's own risk (task 35.5, design record 16 section 4a).
+ * too. The switch is the XhciIntelPortSwitch value: a DWORD of any nonzero
+ * number turns it on; 0, absent or of another type, it is off (owner,
+ * 2026-10-09, task 36.42, reversing the default on of 2026-10-05). An exact
+ * 2 also routes on an Intel controller the list does not name, at the
+ * user's own risk (task 35.5, design record 16 section 4a).
  *
  * The lifetime (record 16 section 7a) is here too: the start's decision,
  * and which of the two routing registers a route of this started lifetime
@@ -140,9 +141,9 @@ ULONG XhciPswIntel(ULONG vendorDevice);
  * switch (Sony 104D:90A8, Linux's one exemption). */
 ULONG XhciPswBoardRefused(ULONG subsystem);
 
-/* The XhciIntelPortSwitch rule: on a listed controller GATED unless the
- * value was found and is 0; on another Intel controller BYPASS only when
- * it was found and is exactly 2; on any other vendor OFF. */
+/* The XhciIntelPortSwitch rule: on a listed controller GATED when the
+ * value was found and is not 0; on another Intel controller BYPASS only
+ * when it was found and is exactly 2; otherwise OFF. */
 ULONG XhciPswMode(ULONG vendorDevice, ULONG found, ULONG value);
 
 /* Every switchable connector to xHCI, SuperSpeed terminations first.

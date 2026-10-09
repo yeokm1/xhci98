@@ -495,7 +495,7 @@ task. The miniport reads six values from its device key (`src\*.c`, the six
 | `XhciImodInterval250ns` | Carried over, same meaning and code default 4000; both INFs write 160 (40 us) on every install path since the owner's ruling of 2026-10-04 (`roadmap-hcd.md`, decisions table), 500 until then |
 | `XhciVirtualHSHub`, `XhciVirtualHSHubVid`, `XhciVirtualHSHubPid` | Not read and not written (owner, 2026-10-02); the INF gate refuses them in an HCD INF (`VAL-HCDVHUB`) |
 | `XhciFastPollFsLs` | New in `2.1.0.0` (task 33.8), the HCD's own: read at each controller start, written by no INF until task 34.1 and as 0 since, absent or 0 is off. Lets a Low- or Full-Speed interrupt endpoint on a root port be polled faster than 1 ms; section 13 |
-| `XhciIntelPortSwitch` | New in `2.1.1.0` (task 34.3), the HCD's own: read at each start of a controller the switchover's gate passes, and on no other; written as 1 by every controller install path under task 34.1's rule; only an explicit 0 turns the switchover off. Design record 16 section 5 |
+| `XhciIntelPortSwitch` | New in `2.1.1.0` (task 34.3), the HCD's own: read at each start of a controller the switchover's gate passes, and on no other; written as 1 by every controller install path under task 34.1's rule until `2.2.0.0`, and as 0 since task 36.42 (`2.3.0.0`), when absent or of another type became off too; a DWORD that is not 0 turns the switchover on. Design record 16 sections 5 and 5a |
 
 The root-hub sections write no value of the controller's: they carry the
 loader values on Windows 98 and the hub property-page registration on every
@@ -509,8 +509,8 @@ interval. Each is written with FLG_ADDREG_NOCLOBBER (`0x00010003`), so an
 install or update writes only a missing value and keeps one the user set; a
 later release therefore cannot change a default on a machine that already
 holds the old one. The gate's `VAL-*` rules hold all seven, flags included,
-and since task 34.3 an eighth, `XhciIntelPortSwitch` at 1, under the same
-flag.
+and since task 34.3 an eighth, `XhciIntelPortSwitch`, under the same
+flag (at 1; at 0 since task 36.42).
 
 The package is `xhci98-<version>.zip`, as the miniport's was - the published
 `releases\1.2.0.0` directory is never edited (`releases/README.md`) - staged by `make-package.ps1` from 26-A.1 and published by

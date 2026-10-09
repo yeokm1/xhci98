@@ -57,15 +57,17 @@ ULONG XhciPswIntel(ULONG vendorDevice)
 }
 
 /* Only an exact 2 reaches unlisted silicon, so it has to be typed on
- * purpose; any other number keeps the gated meaning (record 16 section 5). */
+ * purpose; any other nonzero number keeps the gated meaning (record 16
+ * section 5). Off unless found: an unrouted connector stays with EHCI and
+ * works there (owner, 2026-10-09; task 36.42). */
 ULONG XhciPswMode(ULONG vendorDevice, ULONG found, ULONG value)
 {
     if (!XhciPswIntel(vendorDevice)) {
         return XHCI_PSW_MODE_OFF;
     }
     if (XhciPswGate(vendorDevice)) {
-        return (found && value == 0) ? XHCI_PSW_MODE_OFF
-                                     : XHCI_PSW_MODE_GATED;
+        return (found && value != 0) ? XHCI_PSW_MODE_GATED
+                                     : XHCI_PSW_MODE_OFF;
     }
     return (found && value == 2) ? XHCI_PSW_MODE_BYPASS : XHCI_PSW_MODE_OFF;
 }
