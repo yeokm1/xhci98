@@ -655,7 +655,8 @@ ULONG XhciHubExV2Check(const UCHAR *buf, ULONG inLen, ULONG outLen)
         outLen < XHCI_HUB_EXV2_BYTES) {
         return XHCI_HUB_EXV2_TOO_SMALL;
     }
-    if (xhciHubGet32(buf, 4) != XHCI_HUB_EXV2_BYTES ||
+    if (inLen != XHCI_HUB_EXV2_BYTES ||
+        xhciHubGet32(buf, 4) != XHCI_HUB_EXV2_BYTES ||
         (xhciHubGet32(buf, 8) & XHCI_HUB_PROTO_USB300) == 0) {
         return XHCI_HUB_EXV2_INVALID;
     }

@@ -704,11 +704,12 @@ static VOID hcdCfgFastPoll(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 /*
  * One Configure Endpoint for `plan`, adding `add`'s pipes: built, issued,
  * and - when it fails with a code XhciPipeFastRetry names while a pipe it
- * adds was set below Table 6-12's range - those pipes put back at their
- * fallback Interval (Table 6-12's, or mode 4's 3), counted, and the command built and issued once more.
- * A refused command leaves the Output Device Context as it was (xHCI 1.2c
- * 4.6.6, p.112), so the second is the command the select would have issued
- * with the value off. `opening` counts the fast pipes a success opens: a
+ * adds is one fast polling changed (FastPoll) - those pipes put back at
+ * their FallbackInterval, counted, and the command built and issued once
+ * more. A refused command leaves the Output Device Context as it was (xHCI
+ * 1.2c 4.6.6, p.112), so under modes 2 and 3 the second is the command the
+ * select would have issued with the value off; under mode 4 the fallback is
+ * Interval 3, not the code's Table 6-12 reading (task 36.19). `opening` counts the fast pipes a success opens: a
  * select's, not a replay of pipes already open. Returns the completion
  * code, or HCD_CFG_NOT_ISSUED when nothing was issued. Thread only,
  * powered.

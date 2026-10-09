@@ -483,7 +483,8 @@ ULONG XhciHubExSpeed(ULONG connected, ULONG speedClass, ULONG plus,
 
 /* The request's own checks, before its port is looked at: TOO_SMALL for an
  * input or an output buffer, each checked apart, shorter than the
- * structure; INVALID for a Length that is not the structure's, or a request
+ * structure; INVALID for an input longer than it, a Length that is not the
+ * structure's, or a request
  * whose SupportedUsbProtocols does not ask about Usb300 (Windows 8 refuses
  * it so, by Microsoft's IOCTL page); else OK. */
 #define XHCI_HUB_EXV2_OK                0UL

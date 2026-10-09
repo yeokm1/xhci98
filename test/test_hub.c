@@ -700,6 +700,9 @@ static void test_hub_ex_v2(void)
     exv2_request(b, 1, 20, 7);
     CHECK_EQ(XhciHubExV2Check(b, 20, 20), XHCI_HUB_EXV2_INVALID,
              "Length long, buffers big enough");
+    exv2_request(b, 1, 16, 7);
+    CHECK_EQ(XhciHubExV2Check(b, 20, 32), XHCI_HUB_EXV2_INVALID,
+             "an input longer than the structure");
     exv2_request(b, 1, 16, 3);
     CHECK_EQ(XhciHubExV2Check(b, 16, 16), XHCI_HUB_EXV2_INVALID,
              "Usb300 not asked");

@@ -2001,7 +2001,8 @@ Speed ceiling above is replaced, in two halves:
   Microsoft's `usbioctl.h` reference pages (documentation, read
   2026-10-09), written byte by byte like the rest of the door.
   - **The request**: an input or output buffer shorter than 16 bytes is
-    `STATUS_BUFFER_TOO_SMALL`, each checked apart; a `Length` other than 16,
+    `STATUS_BUFFER_TOO_SMALL`, each checked apart; an input longer than 16
+    bytes, a `Length` other than 16,
     or an input `SupportedUsbProtocols` without `Usb300` (Windows 8 refuses
     that, by Microsoft's IOCTL page), is `STATUS_INVALID_PARAMETER`; a port
     out of range is refused as the `_EX` form refuses it. The answer is 16
@@ -3240,8 +3241,10 @@ below the class driver that rewrites `bInterval` (hidusbf) reaches a function
 as it already reached a whole device, whose select parses the caller's
 descriptor. Before this, a composite mouse's function ignored hidusbf's rate
 and `XhciFastPollFsLs` (section 13.5) saw the device's own `bInterval`.
-**Still the device's**: a SuperSpeed function's endpoints (their companion
-descriptors are read from the device's configuration), and a later
+**Still the device's**: a SuperSpeed function's companion fields (Max
+Burst, Mult, Max ESIT Payload, read from the device's configuration; since
+task 36.19 its `bInterval` is the caller's matched byte too, section 13.7),
+and a later
 `SELECT_INTERFACE` on a function, which reads the device's configuration -
 so a client that selects an interface after its configuration loses a
 rewritten interval (no HID class driver of any target does). Host vectors:
