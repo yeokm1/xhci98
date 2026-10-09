@@ -92,6 +92,7 @@ SOURCES=xhci_mem.c    \
         hcd_inj.c     \
         hcd_door.c    \
         hcd_log.c     \
+        xhci_susp.c   \
         xhci98.rc
 
 #
