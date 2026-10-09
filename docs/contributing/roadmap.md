@@ -129,9 +129,11 @@ there the same day.
 **Since then** (2026-10-09): `2.0.0.0` (Phase 32), `2.1.0.0` (Phase 33),
 `2.1.1.0` (Phase 34) and `2.2.0.0` (Phase 35) are cut. **The open phase is
 36**, release `2.3.0.0` on branch `2.3.0.0`: issue 12's E7250 interrupt
-routing, polled event delivery, MSI on Vista and 7, and three items of
-GitHub issue 17. Its plan was reviewed by Codex to a clean round at
-`ef7fbac`, and no code of it is written yet; the next task is 36.3.
+routing, polled event delivery, MSI on Vista and 7, three items of
+GitHub issue 17, and UAS commands of 1 MiB (36.21 to 36.27, a plan
+reviewed clean at `86db9a3`). Its plan was reviewed by Codex to a clean
+round at `ef7fbac`. 36.3, the routing quirk, is done (its VM legs owed);
+the next task is 36.4.
 [`roadmap-hcd.md`](roadmap-hcd.md), "Phase 36", is the record.
 
 ---

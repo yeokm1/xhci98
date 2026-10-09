@@ -761,7 +761,7 @@ How it got here:
 
   `XHCISNAP` decodes all of it. Host tests, every gate, a Codex review loop.
 - [x] 36.2 **done 2026-10-08** (issue 12 section 3) - the read (owner): `2.2.0.2` on the E7250 under Windows 7 x64 and XP x64, with the stick hot-plugged and present at boot, and with the EHCI disabled. Then RW-Everything reads of the PCI and PCH registers, and the live `D20IR` write. The root cause is found, and the fix (36.3) replaces the superseded check.
-- [ ] 36.3 the routing quirk, `XhciIntelIrqRoute` (REG_DWORD on the controller's software key; the full design, with the reviewed ID table, is issue 12 section 5.1):
+- [x] 36.3 the routing quirk, `XhciIntelIrqRoute` (REG_DWORD on the controller's software key; the full design, with the reviewed ID table, is issue 12 section 5.1):
   - **The values.**
     - **0**: no writes; report only.
     - **1** (default, also for missing, wrong-type or out-of-range values, logged): only xHCI `8086:9CB1` with subsystem `1028:062D` and LPC `8086:9CC3`.
@@ -785,6 +785,7 @@ How it got here:
     - On each D0 return: before `XhciResumeController`.
   - **What is recorded:** what it found, decided and wrote, in the snapshot and the note ring, decoded by `XHCISNAP`.
   - **Tests:** host tests of the pure policy, the delivery included. The INF and `docs/using` document the value, modelled on `XhciIntelPortSwitch`; copy its strict DWORD reader, not its "2 = unlisted Intel" meaning. `docs/using` says plainly that the value does nothing on Vista or 7 with MSI, or under polling.
+  - **Done 2026-10-09** (`b71bd64..95b2c31`, the Codex loop clean at its fourth round; built x86 and `-amd64`, all flavours, every gate and the host suites passing at `86db9a3`). Owed, in VM legs: the `qemu` flavour's probe on 98 SE and ME (`HalGetBusData` and the USHORT register accessors answering there, not only resolving); 2000, XP, Vista and 7, x86 and x64; a start the lower driver refuses, for the record's reset site. The E7250 itself is 36.final.
 - [ ] 36.4 the bounded BUSY retry: `hcdCommand` on `XHCI_CMD_BUSY` waits a bounded time for the engine to go idle, asking for a drain, and retries under one deadline, instead of failing the port at once. This is the start No Op case of issue 12 Finding 1. A small change of its own; the stalled-event watchdog that 36.4 also held is replaced by polling's dead-line rule (36.5, 36.7).
   - **Still needed after 36.3, polling and MSI** (Codex review of `7567dec`, and the owner's reading). They deliver completions; none guarantees that the start's asynchronous No Op has completed before the next submit, and `XhciCommandSubmit` also answers BUSY during an abort (`xhci_cmd.c` ~1004). Its remaining cases: a dead line inside the window before the dead-line rule moves to polling; mode 1, which never moves; a completion waiting for the next poll at the idle period; and any transient BUSY, which is never a device's failure.
   - **The rules.** One deadline across waiting and resubmission; a completion counts only by its own TRB, as now; the retry stops on controller failure or a change of reset generation; it resubmits only once the engine reads idle. It complements the dead-line detector and does not replace it.
