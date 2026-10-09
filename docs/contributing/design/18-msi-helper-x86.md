@@ -4,8 +4,8 @@ Design record for the x86 half of message-signalled interrupts on Windows
 Vista and Windows 7 (roadmap-hcd Phase 36, tasks 36.15 and 36.16; the task
 lines for this record's code and legs are the orchestrator's to number).
 Revision 1, 2026-10-09, written before any code, on branch `p36-msi86`;
-revision 2 the same day, after review round 1, and revision 3 after
-round 2 (section 14).
+revision 2 the same day, after review round 1, revision 3 after round
+2, and revision 4 after round 3 (section 14).
 
 Design record 15 section 4.3 designs MSI for the HCD and fixes the seam
 this record plugs into: `hcdMsgConnect(hc, connect, disconnect)`, handed
@@ -353,8 +353,23 @@ On the x86 image, NT 6 only, the filter:
 2. Looks for the helper (section 4.1) unless `BOUND`.
 3. If `Information` is NULL: completes with the lower status, records
    "no list", and dereferences nothing.
-4. Records the list (section 9), whatever the state.
-5. Computes the outcome (below). Every outcome but "replaced" completes
+4. **Walks the list's structure, checked, before anything else reads it**
+   (`XhciMsi86Walk`, shared `xhci_msi86.c`): the header's `ListSize`
+   against the fixed header size; then each configuration's header and
+   `Count` and each descriptor against the bytes remaining, in
+   overflow-safe arithmetic (a remaining-length counter decremented, never
+   an end pointer computed from a count). A failure stops the walk where
+   it fails: the outcome is "inconsistent", only the validated header
+   fields and the failing configuration and descriptor index are
+   recorded, nothing past the failure is read, and the IRP completes with
+   the lower status and `Information` untouched. The snapshot, the trace
+   and the strip only ever run over a list this walk accepted. Vectors: a
+   `ListSize` below the header, a configuration header cut short, a
+   `Count` larger than the bytes, a `Count` whose product with the
+   descriptor size overflows, `AlternativeLists` larger than the bytes,
+   and trailing bytes beyond the last configuration (accepted, ignored).
+5. Records the list (section 9), whatever the state.
+6. Computes the outcome (below). Every outcome but "replaced" completes
    with the lower status and `Information` untouched; "replaced"
    allocates the replacement, writes it, frees the old list with
    `ExFreePool`, sets `Information` to the replacement and completes with
@@ -366,9 +381,16 @@ changes, Windows may grant the message); **disabled** (the strip is
 switched off, below); **no line offered**, **no interrupt**,
 **unsupported shape**, **inconsistent** (each: kept as is, below);
 **no message** (nothing to strip: kept); **replaced**; **kept: no
-memory**. A kept list with a message in it meets
-the start with the helper not bound, and polls with "message not
-connected" (section 4.3) - never worse than that.
+memory**.
+
+**The rule that follows, used everywhere in this record:** a "replaced"
+outcome removes every message choice, so the controller is granted the
+line. Every other outcome leaves the list's choices as Windows built
+them, and delivery is then settled by what Windows actually grants and
+whether the helper is bound **at the start** (section 4.3): a line grant
+runs the line; a message grant with the helper bound runs the message;
+a message grant without it polls with "message not connected". None of
+these is worse than polling.
 
 **The allocation** is one new named site, `HcdPoolAllocRequirements` in
 `hcd_pool.c`, the HCD's only `PagedPool` allocation: the IRP's contract
@@ -445,14 +467,18 @@ declared with `C_ASSERT`s against the DDK's
 vectors in `test_msi` and each expected outcome stated: one configuration
 with a message-then-line run and one with a line-then-message run
 (replaced, the line heading the run); `[BAR, MSI]` and `[BAR, INTx]` in
-both orders (replaced, the first dropped); an MSI-X member; a message
-member with several messages; `[BAR, INTx, MSI]` as two requirements,
-alone (no line offered) and beside `[BAR, INTx]` (replaced, the two-
-requirement configuration dropped); a message-only list (no line
-offered); a NONE configuration beside a STRIPPABLE one (dropped); a list
-with no interrupt (no interrupt); a line-only list (replaced is not
-reached: nothing to strip, kept, outcome "no message"); an inconsistent
-list (inconsistent).
+both orders (replaced, the `[BAR, MSI]` configuration dropped whichever
+comes first); an MSI-X member; a message member with several messages;
+`[BAR, INTx, MSI]` as two requirements, alone (no line offered) and
+beside `[BAR, INTx]` (replaced, the two-requirement configuration
+dropped); a message-only list (no line offered); `[BAR]` (NONE) beside
+`[BAR, MSI|INTx]` (replaced, the NONE configuration dropped); `[BAR]`
+beside `[BAR, INTx]` with no message anywhere (no message, kept as is);
+a list with no interrupt (no interrupt); a line-only list (no message);
+the walk's failures (inconsistent). These are the transformation's own
+vectors. The admitted-shape check (below) has its own: each shape R1 and
+R2 admit, transformed; and a STRIPPABLE list of a shape not admitted
+(unsupported shape, kept as is).
 
 **The strip is enabled only after R1 and R2 are read** (section 11). The
 first build carries a `qemu`-only switch, `XhciMsi86NoStrip`, under which
@@ -532,9 +558,9 @@ that cost acceptable, and section 10's Driver Verifier leg reads it.
 **The race that remains** is the first install. SetupAPI does not start a
 boot-start service when it installs it, so on a fresh install (and on an
 update from a package without the helper) the helper is not running until
-the next boot: the controller's filter finds it `ABSENT` and takes
-section 4.2's outcome - on a controller whose list offers a line, the
-line, as on XP, for the rest of that session; on one that offers none,
+the next boot: the controller's filter finds it `ABSENT` and section
+4.2's rule settles that session's delivery - the line, as on XP, when the
+list is replaced; otherwise whatever Windows grants, a message grant
 polling - and MSI takes over at the next boot. Asking for a reboot from the INF was
 considered and not taken: the line is a working configuration, and a
 reboot prompt on every update is a cost for no correctness gain. The
@@ -561,8 +587,8 @@ versions. The cases:
 | Installed | Running | Result |
 |---|---|---|
 | this package, freshly | no helper until the next boot | section 4.2's helper-less outcome this session (the line where the list offers one); MSI after the boot (section 5) |
-| this package, updated from one with the helper | the old helper until the next boot (a boot-start image in use is replaced at reboot) | bound if its major is 1, else line until the boot |
-| a later package with interface major 2 | old HCD, new helper | the old HCD's V1 code is refused by a V2-only helper: line. A later helper that keeps answering V1 (the rule for a minor change) binds |
+| this package, updated from one with the helper | the old helper until the next boot (a boot-start image in use is replaced at reboot) | bound if its major is 1; else section 4.2's helper-less outcome until the boot |
+| a later package with interface major 2 | old HCD, new helper | the old HCD's V1 code is refused by a V2-only helper: section 4.2's helper-less outcome. A later helper that keeps answering V1 (the rule for a minor change) binds |
 | this HCD, the helper's file removed or its copy failed | none | section 4.2's helper-less outcome (the line where the list offers one), recorded `ABSENT` |
 | a package older than this one installed over it | old HCD, this helper still loaded | the helper idles; but see below |
 | the device uninstalled | the helper service remains, boot-start | it loads, idles, and answers nobody; removing it is a manual step the release notes give (`sc delete xhcimsi`, then reboot) |
@@ -692,7 +718,8 @@ by `make-package.ps1` anyway.
 | Import gate | A new profile `nt6x86` in `check-imports.ps1`: an x86 image checked against the export tables of Vista SP2 x86 and 7 SP1 x86 `ntoskrnl.exe`/`ntkrnlpa.exe` and `hal.dll` (a new `nt6x86-baselines.expected`, extracted by `extract-target-baselines.ps1`; `ntkrnlpa.exe` of both is to be extracted, today's `tools\vista-x86-extracted` and `win7-x86-extracted` carry `ntoskrnl.exe` only), with no Windows 2000 or Windows 98 evidence asked. `xhcimsi-imports.allow`: `IoConnectInterruptEx`, `IoDisconnectInterruptEx`, `IofCompleteRequest`, `IoIsWdmVersionAvailable`, `RtlInitUnicodeString` (`all`), the pairs `wdmsec.lib`'s `IoCreateDeviceSecure` object brings (listed from the first link's `dumpbin /imports`, each with its own evidence, none admitted by name in advance), `RtlQueryRegistryValues` (`qemu`), each tagged `vista-x86-export; win7-x86-export`; the profile refuses any `xhci98-imports.allow` row being reused for it. `xhci98-imports.allow` gains `ntoskrnl.exe!IoGetDeviceObjectPointer` (`all`, `w2k-export; win98-precedent 1394bus.sys 4.10.2222`), and `win98-evidence.list` gains `1394bus.sys`. Self-test mutations in `test-flavour-rules.ps1` for the profile (a Windows 2000-only pair passes nothing; a Vista pair in the HCD's x86 list fails) |
 | INF gate `check-inf.ps1` | New `MSIHLP-*` rules, x86 only: `MSIHLP-ONLYNT6` (the helper's service, copy section or file named anywhere but `Xhci.Dev6.NTx86`, `[SourceDisksFiles]` and `[DestinationDirs]`); `MSIHLP-SVC` (the second `AddService` on `Xhci.Dev6.NTx86.Services` only, flags 0, `ServiceType` 1, `StartType` 0, `ErrorControl` 1, `ServiceBinary=%12%\xhcimsi.sys`, copied by that section's own `CopyFiles`); `MSIHLP-HW` (on x86, record 15's `MSI-*` lines only in `Xhci.Dev6.NTx86.HW`, and only when `MSIHLP-SVC` holds); `MSIHLP-AMD64` (no helper in the 64-bit INF). `PATH-NT`'s "exactly one `AddService`, flag 0x2, `StartType` 3" is relaxed for that one section by exactly the helper's line. `BOTH-VERSION` reads `src\msi86\xhcimsi.rc` too. Mutations in `test-inf-checks.ps1` for each rule; the `Dev6` mutations rebased on the new section text. **The cross-architecture media rule:** `test-inf-checks.ps1`'s requirement that both INFs declare the same `[SourceDisksFiles]` (~2005) admits exactly one difference, `xhcimsi.sys` in the 32-bit file only, and a mutation proves any other difference still fails. **The footprint models `.HW`:** `-EmitFootprint` today emits a `.HW` section as unmodelled (`check-inf.ps1` ~2575); it is extended to walk a `.HW` section's `AddReg` and emit its values as **hardware-key** writes (distinct from the software-key `HKR` of the install section), with their flags, so `MSISupported`, `MessageNumberLimit` and `FLG_ADDREG_NOCLOBBER` appear in `expected-footprint.txt`; the helper's service appears as a service the package creates (its removal on uninstall is a reading, section 10, not a footprint claim). Mutations: each MSI value dropped, its NOCLOBBER flag dropped, the `.HW` section moved to the root hub. The amd64 footprint takes the same `.HW` modelling for record 15's lines (the orchestrator's to coordinate with record 15's own `MSI-*` rule) |
 | Flavour marker | The helper embeds `XHCI98_FLAVOUR_{RELEASE,DEBUG,QEMU}` as `uas_entry.c` does; `check-flavour-marker.ps1` unchanged |
-| Source stamp | `source-stamp.ps1 -Driver` gains `xhcimsi` (`src\msi86`, `xhcimsi.srcstamp`, with `xhci_msi86.h` and `xhci_version.h` as parent headers) |
+| Shared source | `src\xhci_msi86.c` is compiled into the HCD by `src\sources` and into the helper by `src\msi86\sources` as `..\xhci_msi86.c` (build.exe accepts a relative path in `SOURCES`), and into `test_msi` by the host build. It is C89 and DDK-free, so the 2000 DDK's MSVC 6 and WDK 7.1's compiler both take it |
+| Source stamp | `source-stamp.ps1 -Driver` gains `xhcimsi` (`src\msi86`, `xhcimsi.srcstamp`, with `xhci_msi86.h` and `xhci_version.h` as parent headers). Its `SOURCES` parser today splits on every backslash (`source-stamp.ps1` ~108), which would break `..\xhci_msi86.c` into two tokens; it is changed to remove only line-continuation backslashes and keep path separators, so the stamp hashes the parent `src\xhci_msi86.c` itself. Mutations: a change to `src\xhci_msi86.c` alone invalidates both the helper's stamp and the HCD's; the existing stamps of `xhci98` and `xhciuas` are unchanged by the parser change |
 | Charset gate | `check-source-charset.ps1`'s object-directory skips gain `^src\\msi86\\obj` |
 | Version resource | `src\msi86\xhcimsi.rc` includes `../xhci_version.h`, `FILEVERSION`/`PRODUCTVERSION` from the macros, `VS_FF_DEBUG` for checked builds, names `xhcimsi.sys` |
 | `make-package.ps1` | `-Arch x86` stages `xhcimsi.sys` (the staging table; `$MsiDriverPath`), gated like the UAS pair: exists, flavour marker, import gate with the `nt6x86` profile; `-Arch amd64` refuses one |
@@ -743,13 +770,37 @@ not evidence of what.
 
 **The complete trace, for R1 and R2:** the `qemu` flavour also writes
 every descriptor of every configuration of the list it received, and of
-the list it returned, as one debug-channel line each (the port-`0xE9`
-mirror, captured by the QEMU launcher to a host file), with the same
-fields and the FDO's serial. That capture is unbounded and survives the
-guest, so R1 and R2 are closed from it, never from a truncated snapshot.
+the list it returned, on the debug channel (the port-`0xE9` mirror,
+captured by the QEMU launcher to a host file, which survives the guest).
+That channel writes a byte at a time with no serialisation
+(`xhci_dbg.c` ~120) and formats into a 128-byte buffer, so the trace is
+built to be checked rather than trusted:
 
-**Lifecycle events**, `qemu` flavour, the same channel, each with the
-FDO's serial: look (result), bind, refuse, the start's routine source,
+- one record per line, fixed layout, `M86` then fields in hex:
+  record kind (`B` list begin, `C` configuration, `D` descriptor, `E` list
+  end, `L` lifecycle), the FDO serial, a per-FDO filter sequence number,
+  `R` or `T` (received or returned list), indices with their expected
+  counts (`3/5`), the descriptor's fields and six `u` words, and last a
+  two-digit checksum of the record's preceding bytes;
+- the longest record is under 128 bytes by construction, and a
+  `C_ASSERT` on the format's maximum keeps it so;
+- the `B` record carries the configuration count and `ListSize`, each
+  `C` its descriptor count, and `E` the total of `D` records written, so
+  a missing record is visible;
+- emitted from the filter at PASSIVE_LEVEL through the existing
+  `xhci_dbg.obj` writer only (the one `qemu` site the import gate admits
+  for `WRITE_PORT_UCHAR`), never from an ISR or DPC.
+
+A host validator (`scripts\vm-matrix\check-msi86-trace.ps1`) rejects a
+capture with any record whose checksum or layout fails, whose counts
+disagree, or that is cut, and reports interleaving with other writers'
+bytes as a failed record; a rejected capture is retaken, and R1, R2 and
+the L legs are closed only from a capture it accepts. The validator has
+self-tests (a clean capture, an interleaved byte, a dropped `D`, a
+truncated line).
+
+**Lifecycle events**, `qemu` flavour, the same channel and record format
+(kind `L`), each with the FDO's serial: look (result), bind, refuse, the start's routine source,
 the disconnect, the reference dropped. They are the durable evidence of
 section 10's L legs, since a removed FDO's counter block goes with it and
 the HCD's last log flush at stop (`hcd_ctl.c` ~1912) precedes the
@@ -796,10 +847,13 @@ grant, read as the message with its log note; a raised
   not reached on a guest. The binding's rules are host-tested either way:
   the per-FDO state machine is a pure function (`XhciMsi86BindStep`,
   shared `xhci_msi86.c`, `test_msi`) over the events filter, start, stop,
-  surprise removal, remove and look result, with vectors for stop then
-  filter then start (no new look, bound kept), remove (reference dropped
-  exactly once, after the disconnect), a refused answer (reference
-  dropped at once), and a look at each event while not bound;
+  surprise removal, remove and look result. Vectors: filter and start
+  while not bound ask for a look; filter and start while bound do not;
+  stop, surprise removal, remove and a look result never ask for one, in
+  any state; stop then filter then start keeps the binding with no new
+  look; remove drops an existing reference exactly once, after the
+  disconnect, and acquires none; a refused or failed look result drops
+  its reference at once and asks for no further look;
 - L3 surprise removal (QEMU `device_del` of the controller) after
   binding: the disconnect, then the reference dropped at remove, read
   from section 9's lifecycle trace;
@@ -857,16 +911,17 @@ before it is read:
 
 - **R1.** The requirements list Vista's and 7's PCI driver builds for a
   controller with a pin and `MSISupported` 1: how many configurations,
-  which of them LINE, MSG-ONLY or NONE, and, inside each, the order and
-  `Option` of the interrupt descriptors. Read from section 9's complete trace
-  with the strip disabled. It confirms or amends section 4.2's
-  transformation, and if no LINE configuration exists, section 4.2's
-  fallback applies.
+  which of them STRIPPABLE, MESSAGE-BOUND or NONE, and, inside each, the
+  requirements and the order and `Option` of their members. Read from
+  section 9's complete trace with the strip disabled. It fixes the
+  admitted shapes of section 4.2, and if no STRIPPABLE configuration is
+  offered for a controller with a pin, section 4.2's withdrawal applies.
 - **R2.** Whether a message descriptor is accompanied by a
-  `CmResourceTypeDevicePrivate` descriptor, and where; read from the same complete
-  snapshot, and taken as a fact about the readings, not inferred from
-  adjacency alone. If one is found inside a LINE configuration that keeps
-  it, the transformation is amended before the strip is enabled.
+  `CmResourceTypeDevicePrivate` descriptor, and where; read from the same
+  complete trace, and taken as a fact about the readings, not inferred
+  from adjacency alone. If one is found inside a STRIPPABLE configuration
+  that keeps it, the transformation is amended before the strip is
+  enabled.
 - **R3.** That an unsigned boot-start x86 driver loads on Vista SP2 and 7
   SP1 x86 on an ordinary boot (section 5). WDK guidance has the embedded
   signature optional for x86 boot-start drivers; the reading is what is
@@ -883,11 +938,11 @@ before it is read:
    `IRP_MN_FILTER_RESOURCE_REQUIREMENTS` so Windows grants the line where
    the list offers one (section 4.2). This refines record 15 section 4.3's
    statement that a helper-less x86 start with a message grant polls: with
-   the strip, that row is reached when the filter deliberately keeps a
-   message (no line offered, an unadmitted shape, the strip disabled or
-   out of memory) or never ran - not on a controller whose list offers a
-   line. Record 15 and roadmap 36.15/36.16 are the orchestrator's to
-   reconcile.
+   the strip, that row is reached when the list is not replaced (no line
+   offered, an unadmitted shape, the strip disabled, out of memory, no
+   list, an inconsistent list) and Windows then grants a message, or when
+   the filter never ran (section 4.2's rule). Record 15 and roadmap
+   36.15/36.16 are the orchestrator's to reconcile.
 4. **Orchestrator decision, owner to confirm:** a fresh install runs the
    line until the next boot rather than asking for a reboot (section 5).
 5. **Orchestrator decision, owner to confirm:** the strip's replacement
@@ -916,6 +971,7 @@ record 15's fields live),
 `test\test_msi.c`; `scripts\build-driver.cmd`,
 `scripts\import-gate\check-imports.ps1`, `xhci98-imports.allow`,
 `win98-evidence.list`, `extract-target-baselines.ps1`,
+`scripts\vm-matrix\check-msi86-trace.ps1` (new) and its self-test,
 `test-flavour-rules.ps1`, `scripts\inf-gate\check-inf.ps1`,
 `test-inf-checks.ps1`, `expected-footprint.txt`,
 `expected-footprint-amd64.txt` (the `.HW` modelling),
@@ -965,3 +1021,17 @@ revision 3. Round-1 findings 3, 5, 6 and 10 were confirmed closed.
 | 6 | P2: L4 expected no new look after a failed start; L2's host vectors unnamed; L3's evidence lost at remove | Section 10: L4 expects remove and a new FDO's look; `XhciMsi86BindStep` vectors; lifecycle events on the durable trace (section 9) |
 | 7 | P3: the fallback promises were broader than the algorithm | Sections 4.2, 4.3, 5, 6 and decision 3: outcomes "no line offered", "no interrupt" and the rest distinguished; results conditional on the list |
 | 8 | P3: the third interrupt word is `AffinityPolicy`, not affinity | Section 9: six raw words labelled by WDK 7.1's layout |
+
+### 14.3 Revision 3
+
+Round 3 (`f2fede5`, same thread): 4 P2, 2 P3, all taken in revision 4.
+Round-2 findings 1, 2, 3, 4 and 8 were confirmed closed; no new P1.
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | P2: the list was recorded before it was validated | Section 4.2, step 4: `XhciMsi86Walk`, overflow-safe, before any snapshot, trace or strip; vectors |
+| 2 | P2: the debug channel interleaves and truncates, so the trace was not provably complete | Section 9: fixed-layout checksummed records with counts, under 128 bytes, the existing writer only; a host validator that rejects bad captures |
+| 3 | P2: the binding vectors asked for looks during teardown | Section 10, L2: looks at filter and start while unbound only; negative vectors for stop, surprise removal, remove and look results |
+| 4 | P2: the shared C file was outside the helper's source stamp | Section 8.2: the shared source's build arrangement; `source-stamp.ps1`'s parser keeps path separators; mutations |
+| 5 | P3: fallback promises still exceeded the algorithm | Section 4.2's rule (replaced gives the line; otherwise the grant and the binding at start decide), used in sections 5, 6 and decision 3 |
+| 6 | P3: stale vector results and classification names | Section 4.2's vectors; section 11 renamed to STRIPPABLE / MESSAGE-BOUND / NONE and the complete trace |
