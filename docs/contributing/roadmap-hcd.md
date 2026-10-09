@@ -1072,11 +1072,12 @@ its own; it joins the phase the owner opens it in.
 Goal: a bulk transfer of up to 1 MB goes to the controller as one TD, and
 `xhciuas.sys` offers 1 MB per command, where today both stop at 128 KB and
 64 KB (owner, 2026-10-09). 1 MB is the default, and a registry value sets
-it lower, down to today's 64 KB, for a device or controller that
-misbehaves at large transfers (owner, 2026-10-09), as Linux's per-device
-max-sectors quirks do. Linux's xHCI driver puts a request of any size
-on one TD over rings that grow by segments, and its storage drivers send
-512 KB to 1 MB per command at SuperSpeed.
+it from today's 64 KB up to 2 MB (owner, 2026-10-09): lower for a device or
+controller that misbehaves at large transfers, as Linux's per-device
+max-sectors quirks do, higher to try more. Everything below is sized for
+the 2 MB the value can reach, not the 1 MB default. Linux's xHCI driver
+puts a request of any size on one TD over rings that grow by segments, and
+its storage drivers send 512 KB to 1 MB per command at SuperSpeed.
 
 Status: not opened, unnumbered and unversioned. It joins, or becomes, the
 phase the owner opens it in.
@@ -1087,7 +1088,7 @@ TRBs (128 KB), and each has to change with the others:
 - each endpoint's transfer ring is 64 TRBs (1 KB), carved from the one
   fixed common buffer at a 1 KB-aligned offset so that it cannot cross a
   64 KB boundary (`xhci.h` `XHCI_POOL_RING_TRBS`, design record 04
-  section 4); a 1 MB TD needs at least 256 data TRBs, more where an
+  section 4); a 2 MB TD needs at least 512 data TRBs, more where an
   element crosses a 64 KB boundary, and a ring with room for the next TD
   behind it;
 - each transfer record carries its scatter/gather list
@@ -1116,16 +1117,16 @@ memory above 4 GB) a smaller grant still chunks, and that path stays.
   buffer instead of on the stack; the map-register grant and the
   fallback to chunks below it; the memory budget per device and per
   controller; the registry value (a working name `XhciMaxTransferKB`, a
-  `DWORD` in the controller's driver key, default 1024: its range and
-  step, what an absent, mistyped or out-of-range value reads as, when it
+  `DWORD` in the controller's driver key, default 1024, range 64 to
+  2048: its step, what an absent, mistyped or out-of-range value reads as, when it
   is read, and how `xhciuas.sys` learns it - from the bus, so the two
   drivers cannot disagree); `XhciForceBulkOnly`'s path (Windows' `usbstor.sys` keeps
   its own limit) and what the storage stacks of 98 SE, ME, 2000, XP,
-  Vista and 7 do with a 1 MB `MaximumTransferLength`
-- [ ] MB.2 the pure core: the caps raised to 1 MB and the ring geometry
+  Vista and 7 do with a 1 MB and a 2 MB `MaximumTransferLength`
+- [ ] MB.2 the pure core: the caps raised to 2 MB and the ring geometry
   of MB.1, and the value's rule, with host vectors in `test_xfer`, `test_pipe` and
-  `test_membuf` (a 1 MB TD at every page offset, the 64 KB splits, a ring
-  that wraps mid-TD, a grant below 1 MB)
+  `test_membuf` (a 1 MB and a 2 MB TD at every page offset, the 64 KB
+  splits, a ring that wraps mid-TD, a grant below the size in effect)
 - [ ] MB.3 the HCD: the rings, the records' lists, the TRB build and
   `hcdPlanChunk` per MB.1; the snapshot and `XHCISNAP` where a size they
   report changes
@@ -1139,9 +1140,9 @@ memory above 4 GB) a smaller grant still chunks, and that path stays.
   read and the size in effect, the release notes, README and the packaged
   readme
 - [ ] MB-V the legs: every guest, x86 and amd64, a SuperSpeed stick over
-  UAS and over Bulk-Only with file compares at 1 MB transfers and at
-  unaligned buffers, the value at its minimum, its default and out of
-  range, streams on, Windows 2000 SMP under Driver Verifier,
+  UAS and over Bulk-Only with file compares at 1 MB and 2 MB transfers
+  and at unaligned buffers, the value at its minimum, its default, its
+  maximum and out of range, streams on, Windows 2000 SMP under Driver Verifier,
   an amd64 guest with memory above 4 GB (the bounce-buffer grant), and
   the matrix unchanged
 - [ ] MB-E the bench (owner): MB.0's readings repeated on the same
@@ -1149,4 +1150,5 @@ memory above 4 GB) a smaller grant still chunks, and that path stays.
 
 Checkpoint: MB-V passing; MB-E read against MB.0, with 1 MB kept as the
 default only if it is no slower anywhere; otherwise the default becomes the
-fastest size read, and the value can still be set to 1 MB.
+fastest size read, and the value can still be set to 1 MB or 2 MB.
+MB-E reads the value at 1 MB and at 2 MB.
