@@ -64,7 +64,7 @@ C4 proves two separable things: that the controller asserts INTx at all (spec 4.
 The last two rows are the real gap, and the ACPI multiprocessor row is the likely configuration: a modern multi-core machine installing Win2000 gets the multiprocessor ACPI HAL. Consequences to keep straight:
 
 - A C4 PASS says the controller asserts INTx and the PIC path works. For Win2000 on any APIC HAL (`halaacpi`, `halmacpi`, `halapic`, or `halmps`), treat the assertion as proven and the routing as unproven until the driver runs there.
-- A C4 FAIL is disqualifying as stated in section 8, but read the note. If the controller never asserts INTx (Interrupt Pin = 0, MSI-only) the machine is dead for both targets, because neither has an MSI path (NT gained MSI in Vista; see [`../implementation-invariants.md`](../implementation-invariants.md), "Interrupt Delivery"). If instead the assertion happens but PIC routing is broken on this firmware, that is Win98-fatal and only suspicious for Win2000 under an APIC HAL.
+- A C4 FAIL is disqualifying as stated in section 8, but read the note. Since `2.2.0.3` (roadmap-hcd task 36.10, design record 15 section 10) a controller with no working interrupt is not refused: the driver polls it. C4 reads POLL, "needs polling", when there is no line to arm (Interrupt Pin = 0, an Interrupt Line DOS cannot use, PCI Interrupt Disable stuck) or the No-Op's completion reaches the event ring while no interrupt arrives, and the command completes polled; such a controller, passing the rest, is QUALIFIED WITH CAVEATS (exit 3), and the verdict says whether an MSI-capable OS (Vista and 7) could take a message interrupt instead. A PIC-routing failure of that shape was Win98-fatal before polling; it is now the caveat. What stays a FAIL is the tool's own DPMI failure, an ISR entry the controller did not own, an ISR with no completion, and a command that never completes even polled.
 - Nothing in the tool distinguishes those two failure modes beyond the Interrupt Pin value and the C4 note. Record both from the log.
 
 ## 4. Environment and toolchain
@@ -99,7 +99,10 @@ tool source/
   irq.c        IVT hook, 8259 mask/EOI, ISR, poll-vs-interrupt differential   [needs extender]
   irqasm.asm   The ISR entry itself, in assembly - the one thing that cannot
                be written in C because it owns the interrupt frame
-  report.c     Per-controller fact sheet + PASS/FAIL verdict; console pager
+  report.c     Per-controller fact sheet; console pager
+  verdict.c    Task 36.10: C4's outcome (PASS, POLL "needs polling", FAIL),
+               the C6/C8 gate, the per-controller verdict with QUALIFIED
+               WITH CAVEATS, and the exit code; pure                [host-testable]
   mmiodiag.c   Pure PCIINFO -> report-text: the PM block and the two dead-MMIO
                classifiers. A translation unit of its own precisely so the host
                suite below can reach it                                [host-testable]
@@ -144,6 +147,8 @@ The QEMU matrix is not the whole of what runs per build. `xhciqual/build.cmd` ru
 `xhciqual/test/run-host-tests.cmd` builds and runs `xhciqual/test/test_mmiodiag.c` on the Windows build host in seconds, with no VM and no DOS. It covers `xhciqual/mmiodiag.c`, the pure `PCIINFO` -> report-text logic behind the PCI Power Management block and the two dead-MMIO classifiers.
 
 Since task 36.11 it also builds `xhciqual/test/test_route.c`, over `xhciqual/route.c` and the driver's `src/xhci_pirq.c`: the routing report on the reviewed Intel chipsets, which no QEMU controller has.
+
+Since task 36.10 it also builds `xhciqual/test/test_verdict.c`, over `xhciqual/verdict.c` and `mmiodiag.c`: C4's outcome, the C6/C8 gate, the verdict through each C4 outcome and the exit code. The matrix reaches the "needs polling" outcome only through two test programs that rewrite the Interrupt Line before the run.
 
 That code is a separate translation unit so it can be tested here, because the QEMU matrix cannot reach any of it. SeaBIOS always leaves Memory Space Enable set and the BAR assigned, so `mmio_ok` is always true and neither classifier runs, and no emulated USB controller exposes a PM capability, so only the "capability absent" branch executes. Without the host runner, every other branch would first execute on a field machine.
 
@@ -216,7 +221,7 @@ C1 is not a hard gate. Some firmware never clears the BIOS-Owned semaphore yet s
 
 A machine is disqualified if any of the following hold, regardless of other results:
 
-- Interrupt Pin = 0 / MSI-only, or C4 never fires -> neither target's line-based stack gets interrupts. Interrupt Pin = 0 disqualifies for both; a PIC-routing failure with a non-zero pin is Win98-fatal and unproven for Win2000 under an APIC HAL (section 3).
+- C4 FAIL (section 3's note): the No-Op never completed, even polled, or the interrupt test failed in a way polling does not answer. Until `2.2.0.3` Interrupt Pin = 0 and a C4 that never fired disqualified too; with polling (roadmap-hcd task 36.10) they read "needs polling" and the verdict QUALIFIED WITH CAVEATS (exit 3) when the command completes polled.
 - C3 never completes -> DMA/bus-mastering is broken.
 - BAR0 above 4 GB with no 32-bit alias -> incompatible with the driver's 32-bit addressing on both targets.
 - C2 halt/reset fails, or the controller reports no USB2 protocol ports.

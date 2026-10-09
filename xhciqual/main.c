@@ -6,7 +6,9 @@
  * See docs/contributing/design/01-hardware-qualification-tool.md.
  *
  * Exit codes: 0 = all controllers qualified, 1 = at least one not
- * qualified (or probe-only), 2 = no selected controller / usage error.
+ * qualified (or probe-only), 2 = no selected controller / usage error,
+ * 3 = none not qualified and at least one QUALIFIED WITH CAVEATS (no
+ * working interrupt: the driver polls it - task 36.10).
  */
 
 #include <stdio.h>
@@ -272,7 +274,9 @@ static void print_help(void)
             "  FACT lines describe controllers; xHCI DEV lines describe USB.\n"
             "  0 = active criteria met (OHCI may have documented C4 WARN)\n"
             "  1 = not qualified, or probe-only run\n"
-            "  2 = usage error, or no selected controller found\n\n"
+            "  2 = usage error, or no selected controller found\n"
+            "  3 = QUALIFIED WITH CAVEATS: no working interrupt, so\n"
+            "      xhci98.sys polls it (or an MSI-capable OS)\n\n"
             "Keep all LOG files, BIOS settings, device model/speed, and a\n"
             "photo plus last printed line for any fault or freeze.\n");
 }
@@ -454,6 +458,8 @@ static const char *quick_word(int outcome)
         return "DISQUALIFIED";
     if (outcome == QUICK_CANNOT_SAY)
         return "CANNOT SAY";
+    if (outcome == QUICK_CAVEATS)
+        return "LOOKS QUALIFIED WITH CAVEATS";
     return "LOOKS QUALIFIED";
 }
 
@@ -589,7 +595,7 @@ static int run_quick_scan(void)
         }
 
         outcome = quick_classify(p, mmio_ok, usb2_ports, 0);
-        if (outcome > worst)
+        if (quick_rank(outcome) > quick_rank(worst))
             worst = outcome;
 
         {
@@ -668,6 +674,13 @@ static int run_quick_scan(void)
     } else if (worst == QUICK_CANNOT_SAY) {
         qprintf("Verdict: CANNOT SAY - a state this read-only pass may not "
                 "change is in the way.\n");
+    } else if (worst == QUICK_CAVEATS) {
+        /* Task 36.10: a controller with no line interrupt is not refused;
+         * the driver polls it. The active run says the rest. */
+        qprintf("Verdict: LOOKS QUALIFIED WITH CAVEATS, subject to the "
+                "active tests (C2/C3/C4):\n"
+                "  no line interrupt, so xhci98.sys polls (or an "
+                "MSI-capable OS).\n");
     } else {
         qprintf("Verdict: LOOKS QUALIFIED, subject to the active tests "
                 "(C2/C3/C4), which this\n"
@@ -707,7 +720,7 @@ static void enable_pci(PCIINFO *p, int active)
 
 int main(int argc, char **argv)
 {
-    int n, i, nx, nl, all_qualified, active;
+    int n, i, nx, nl, all_qualified, any_caveats, active;
     const char *mode;
 
     prescan_done_flag(argc, argv);
@@ -784,6 +797,7 @@ int main(int argc, char **argv)
     qprintf("Found %d selected USB host controller(s).\n", n);
 
     all_qualified = 1;
+    any_caveats = 0;
     nx = 0;
     nl = 0;
     for (i = 0; i < n; i++) {
@@ -849,7 +863,7 @@ int main(int argc, char **argv)
                         report_flush();
                         if (opt_irq_selftest) {
                             qprintf("  C6 ports:   SKIP  %s\n", c->port_note);
-                        } else if (opt_poll_only || c->v_irq == V_PASS) {
+                        } else if (c4_lets_ports(c->v_irq, opt_poll_only)) {
                             qual_intel_ports(c, opt_set_intel);
                             qual_ports(c, opt_wait_secs);
                             qprintf("  C6 ports:   %-4s  %s\n",
@@ -891,8 +905,14 @@ int main(int argc, char **argv)
                             c->pci.cmd_orig);
             }
             report_controller(c, active && c->mmio_ok);
-            if (!final_verdict(c, active))
-                all_qualified = 0;
+            {
+                int v = final_verdict(c, active);
+
+                if (v == VERDICT_NOT)
+                    all_qualified = 0;
+                else if (v == VERDICT_CAVEATS)
+                    any_caveats = 1;
+            }
         } else {
             LEGACY_CTRL *c;
 
@@ -940,5 +960,5 @@ int main(int argc, char **argv)
         qprintf("\nDone.\n");
     report_close();
 
-    return finish_normally(all_qualified ? 0 : 1);
+    return finish_normally(run_exit_code(!all_qualified, any_caveats));
 }

@@ -1,8 +1,9 @@
 /*
  * report.c - output plumbing (screen + optional log file + optional COM1
- * for QEMU/serial capture) and the Tier D per-controller report: fact sheet
- * plus the section 8 go/no-go verdict. The FACT lines are the seed data
- * for the Phase 4 quirk/parameter tables.
+ * for QEMU/serial capture) and the Tier D per-controller report: the fact
+ * sheet. The section 8 go/no-go verdict is verdict.c's (task 36.10 moved it
+ * there so the host runner drives it). The FACT lines are the seed data for
+ * the Phase 4 quirk/parameter tables.
  */
 
 #include <stdio.h>
@@ -187,16 +188,6 @@ int report_logging(void)
     return (logf != 0 || serial_on) ? 1 : 0;
 }
 
-const char *verdict_name(int v)
-{
-    switch (v) {
-    case V_PASS: return "PASS";
-    case V_WARN: return "WARN";
-    case V_FAIL: return "FAIL";
-    default:     return "SKIP";
-    }
-}
-
 static const char *class_name(int pc)
 {
     switch (pc) {
@@ -236,7 +227,8 @@ static void print_quirks(const QUIRK *q)
     if (q->flags & QF_CMD_RETRY)
         qprintf("    - retry TRB Error command completions once\n");
     if (q->flags & QF_BROKEN_MSI)
-        qprintf("    - broken MSI (harmless: this project uses INTx)\n");
+        qprintf("    - broken MSI (Linux quirk: take the line or poll, "
+                "not MSI)\n");
     if (q->flags & QF_AVOID)
         qprintf("    - known-unreliable silicon: avoid as test platform\n");
 }
@@ -402,220 +394,4 @@ void report_controller(CTRL *c, int active_ran)
                     d->cls, d->sub, d->protocol,
                     d->icls, d->isub, d->iproto, d->mps0);
     }
-}
-
-int final_verdict(CTRL *c, int active_requested)
-{
-    int qualified = 1;
-    int warned = 0;
-    int disqualified = 0;
-    int tool_limited = 0;
-    int quick;
-
-    qprintf("\n---- Verdict for %04X:%04X ----\n", c->pci.vid, c->pci.did);
-
-    /*
-     * **The read-only half of this verdict is quick_classify's, not this
-     * function's** - task 11-V.8's "one verdict logic, printed two ways". Every
-     * condition below chooses *wording*; the decision that a controller is
-     * disqualified before any active test has run is made once, in
-     * xhciqual/mmiodiag.c, and both this function and the quick scan read it
-     * from there. A quick scan that said QUALIFIED where a full run did not
-     * would be worse than no quick scan at all, and two copies of these
-     * conditions is exactly how that happens.
-     */
-    quick = quick_classify(&c->pci, c->mmio_ok, c->usb2_ports,
-                           active_requested);
-    if (quick == QUICK_DISQUALIFIED) {
-        qualified = 0;
-        disqualified = 1;
-    } else if (quick == QUICK_CANNOT_SAY) {
-        qualified = 0;
-        tool_limited = 1;
-    }
-
-    if (c->pci.ipin == 0) {
-        qprintf("  DISQUALIFIED: Interrupt Pin = 0 - MSI-only; neither "
-                "target's line-based stack gets interrupts\n");
-    }
-    if (!c->mmio_ok) {
-        (void)report_mmio_unavailable(&c->pci, active_requested);
-        if (!active_requested)
-            qprintf("  Probe-only run: active tests (C1-C7) NOT run.\n");
-        qprintf("  ==> NOT QUALIFIED for cross-target Win98/Win2000 use\n");
-        if (tool_limited && !disqualified)
-            qprintf("      No controller fault was inferred from the "
-                    "temporary state above.\n");
-        return 0;
-    }
-    if (c->usb2_ports == 0) {
-        qprintf("  DISQUALIFIED: no USB2 protocol ports (B7 empty)\n");
-    }
-
-    if (!active_requested) {
-        qprintf("  Probe-only run: %s so far. Active tests (C1-C7) NOT "
-                "run - no qualification verdict.\n",
-                qualified ? "no disqualifiers" : "disqualified");
-        return 0;
-    }
-
-    if (c->irq_selftest) {
-        if (c->v_handoff == V_WARN)
-            warned = 1;
-        if (c->v_reset != V_PASS) {
-            qprintf("  IRQ SELF-TEST FAILURE: halt/reset (C2) failed\n");
-            qualified = 0;
-        } else if (c->v_dma == V_WARN) {
-            /* The full run treats a No Op that completed with a non-success
-             * code as warned-only; the self-test used to turn the same
-             * observation into a failure (roadmap Phase 20, smaller items). */
-            qprintf("  IRQ SELF-TEST WARNING: DMA round-trip (C3) was %s - "
-                    "%s\n", verdict_name(c->v_dma), c->dma_note);
-            warned = 1;
-        } else if (c->v_dma != V_PASS) {
-            qprintf("  IRQ SELF-TEST FAILURE: DMA round-trip (C3) was %s - "
-                    "%s\n", verdict_name(c->v_dma), c->dma_note);
-            qualified = 0;
-        }
-        if (c->v_reset == V_PASS &&
-            (c->v_dma == V_PASS || c->v_dma == V_WARN) &&
-            c->v_irq != V_PASS) {
-            qprintf("  IRQ SELF-TEST FAILURE: C4: %s\n", c->irq_note);
-            qualified = 0;
-        }
-        if (c->cleanup_failed) {
-            qprintf("  IRQ SELF-TEST FAILURE: cleanup: %s\n",
-                    c->cleanup_note);
-            qualified = 0;
-        }
-        if (qualified) {
-            qprintf("  ==> IRQ SELF-TEST PASS%s - locked one-shot ISR and "
-                    "teardown completed.\n",
-                    warned ? " WITH HANDOFF WARNING" : "");
-        } else if (c->cleanup_failed) {
-            qprintf("  ==> IRQ SELF-TEST FAILED - cleanup could not safely "
-                    "quiesce the controller.\n");
-        } else {
-            qprintf("  ==> IRQ SELF-TEST FAILED - controller is not "
-                    "disqualified by a tool/DPMI failure.\n");
-        }
-        qprintf("      C6/C8 and the full qualification verdict were not "
-                "run.\n");
-        return qualified;
-    }
-
-    if (c->poll_only) {
-        /* Poll-only exercised C1/C2/C3/C6 with no ISR. Separate a genuine
-         * controller failure (C2/C3) from the fact that the tool chose not
-         * to test C4 - the latter is a provisional non-verdict, not a
-         * disqualification. */
-        qprintf("  Poll-only run: no interrupt handler was installed.\n");
-        if (c->v_reset != V_PASS) {
-            qprintf("  CONTROLLER FAILURE: halt/reset (C2) failed\n");
-            qualified = 0;
-            disqualified = 1;
-        } else {
-            if (c->v_dma == V_FAIL) {
-                qprintf("  CONTROLLER FAILURE: DMA round-trip (C3) never "
-                        "completed - bus-mastering broken\n");
-                qualified = 0;
-                disqualified = 1;
-            } else if (c->v_dma == V_SKIP) {
-                qprintf("  TOOL LIMIT: C3 could not run - %s\n",
-                        c->dma_note);
-                qualified = 0;
-                tool_limited = 1;
-            }
-        }
-        if (c->cleanup_failed) {
-            qprintf("  CONTROLLER FAILURE: cleanup: %s\n",
-                    c->cleanup_note);
-            qualified = 0;
-            disqualified = 1;
-        }
-        if (!qualified) {
-            if (disqualified)
-                qprintf("  ==> NOT QUALIFIED - a controller/static "
-                        "disqualifier above was hit (C4 was not tested)\n");
-            else if (tool_limited)
-                qprintf("  ==> NOT QUALIFIED - the tool could not complete "
-                        "C3 (C4 was not tested)\n");
-        } else {
-            qprintf("  ==> PROVISIONAL - C2/C3%s completed with no ISR and "
-                    "no DOS/32A fault.\n"
-                    "      C4 interrupt delivery NOT tested; re-run without "
-                    "--poll-only to earn a verdict.\n",
-                    c->v_port == V_PASS ? "/C6 port reset" : "");
-        }
-        return 0;
-    }
-
-    if (c->v_handoff == V_WARN)
-        warned = 1;
-    if (c->v_reset != V_PASS) {
-        qprintf("  DISQUALIFIED: halt/reset (C2) failed\n");
-        qualified = 0;
-        disqualified = 1;
-    } else {
-        if (c->v_dma != V_PASS) {
-            if (c->v_dma == V_WARN) {
-                warned = 1;
-            } else if (c->v_dma == V_SKIP) {
-                /* The tool could not run C3 (memory, PAGESIZE) - that is not
-                 * evidence against the controller, but it is not a pass. */
-                qprintf("  NOT QUALIFIED: C3 could not run - %s\n",
-                        c->dma_note);
-                qualified = 0;
-                tool_limited = 1;
-            } else {
-                qprintf("  DISQUALIFIED: DMA round-trip (C3) never "
-                        "completed - bus-mastering broken\n");
-                qualified = 0;
-                disqualified = 1;
-            }
-        }
-        if ((c->v_dma == V_PASS || c->v_dma == V_WARN) &&
-            c->v_irq != V_PASS) {
-            if (c->v_irq == V_FAIL) {
-                qprintf("  DISQUALIFIED: no interrupt on legacy IRQ (C4): "
-                        "%s\n", c->irq_note);
-                qprintf("      Win98/PIC-HAL routing failed; Win2000 "
-                        "APIC-HAL routing remains inconclusive.\n");
-                disqualified = 1;
-            } else {
-                qprintf("  NOT QUALIFIED: C4 interrupt test was not run\n");
-                tool_limited = 1;
-            }
-            qualified = 0;
-        }
-    }
-    if (c->cleanup_failed) {
-        qprintf("  DISQUALIFIED: cleanup could not quiesce the controller: "
-                "%s\n", c->cleanup_note);
-        qualified = 0;
-        disqualified = 1;
-    }
-    /* Any C6 outcome short of PASS is a warning: SKIP means connect/reset
-     * was never exercised, FAIL means a connected port refused to reset.
-     * Neither is disqualifying, but neither may print a clean QUALIFIED. */
-    if (c->v_port != V_PASS)
-        warned = 1;
-
-    if (qualified) {
-        /* No APIC-HAL caveat here on purpose: it said the same thing on every
-         * machine this tool has ever qualified, which made it the one line in
-         * a per-machine report that carried no per-machine information. It
-         * lives in XHCIQUAL\readme.txt, xhciqual\README.md and
-         * xhciqual\hardware-testing.md instead. The FAIL branch's
-         * "remains inconclusive" sibling is conditional and stays. */
-        qprintf("  ==> CONTROLLER %s for cross-target driver development%s\n",
-                warned ? "QUALIFIED (with warnings)" : "QUALIFIED",
-                warned ? " - review WARN/SKIP lines above" : "");
-    } else {
-        qprintf("  ==> NOT QUALIFIED for cross-target Win98/Win2000 use\n");
-        if (tool_limited && !disqualified)
-            qprintf("      No controller fault was inferred from the tool "
-                    "limit above.\n");
-    }
-    return qualified;
 }

@@ -71,7 +71,7 @@ typedef struct {
     u8  bus, dev, fn;
     u16 vid, did;
     u8  rev;
-    u8  ipin;           /* config 0x3D - 0 means MSI-only: disqualifying */
+    u8  ipin;           /* config 0x3D - 0: no INTx, needs polling (36.10) */
     u8  iline;          /* config 0x3C - legacy 8259 IRQ */
     u16 cmd_orig;       /* PCI Command as found (restored on exit) */
     u16 cmd_effective;  /* after active enable; unchanged in probe-only */
@@ -186,7 +186,7 @@ void route_read(const PCIINFO *p, ROUTEINFO *r);
 #define QF_BULK64K    0x0080  /* keep bulk TRB chains under 64 KB */
 #define QF_AVOID      0x0100  /* known-unreliable silicon */
 #define QF_CMD_RETRY  0x0200  /* retry TRB Error command completions once */
-#define QF_BROKEN_MSI 0x0400  /* broken MSI (INTx anyway - harmless for us) */
+#define QF_BROKEN_MSI 0x0400  /* broken MSI (Linux XHCI_BROKEN_MSI)    */
 
 typedef struct {
     u16 vid, did;
@@ -457,6 +457,7 @@ typedef struct {
 #define V_PASS 1
 #define V_WARN 2
 #define V_FAIL 3
+#define V_POLL 4   /* C4: no working interrupt, completed polled (36.10) */
 
 const char *verdict_name(int v);
 
@@ -549,6 +550,7 @@ typedef struct {
     int v_dev;       /* C8 - informational, never disqualifying */
     int cleanup_failed;
     int irq_selftest;
+    int irq_no_event;        /* C4: the No-Op never completed, even polled */
     ROUTEINFO route;         /* task 36.11, read before any active test */
     long route_gsi;          /* --gsi N, or -1                           */
     char irq_note[80];
@@ -719,7 +721,36 @@ void qlogprintf(const char *fmt, ...);
 int  report_logging(void);             /* is any durable sink open? */
 void report_flush(void);               /* force log+console out to durable */
 void report_controller(CTRL *c, int active_ran);
-int  final_verdict(CTRL *c, int active_ran);   /* 1 qualified, 0 not */
+/* ------------------------------------------------------------------ */
+/* verdict.c - the xHCI verdict, pure (test/test_verdict.c)           */
+/* ------------------------------------------------------------------ */
+
+/* What C4 saw (task 36.10). no_line: nothing could be armed - Interrupt
+ * Pin 0, no usable IRQ, or PCI Interrupt Disable stuck set. tool_failed: a
+ * DPMI step failed. ip_seen: IP and EINT came up with the line masked.
+ * event_seen: the No-Op's completion was found in the event ring. */
+typedef struct {
+    int no_line;
+    int tool_failed;
+    int ip_seen;
+    int isr_fired;
+    int foreign;
+    int event_seen;
+} C4_SEEN;
+
+int  c4_verdict(const C4_SEEN *s);             /* V_PASS, V_POLL or V_FAIL */
+int  c4_lets_ports(int v_irq, int poll_only);  /* may C6 and C8 run */
+const char *msi_route_text(const PCIINFO *p, int broken_msi);
+                                               /* the message route, words */
+void report_caveats(const CTRL *c);             /* the caveats, in full */
+
+#define VERDICT_NOT        0
+#define VERDICT_QUALIFIED  1
+#define VERDICT_CAVEATS    2   /* QUALIFIED WITH CAVEATS: needs polling */
+
+int  final_verdict(CTRL *c, int active_ran);   /* VERDICT_* */
+/* 0 all qualified, 3 any with caveats and none not, 1 otherwise. */
+int  run_exit_code(int any_not, int any_caveats);
 /* ------------------------------------------------------------------ */
 /* mmiodiag.c - pure PCIINFO -> text diagnosis, host-testable (no MMIO,  */
 /* no port I/O, no DOS services; see xhciqual/test/test_mmiodiag.c)   */
@@ -771,6 +802,11 @@ void xcap_walk(CTRL *c, u32 xecp_off, u32 window, XCAP_RD_FN rd, void *ctx);
 #define QUICK_LOOKS_OK      0   /* subject to the active tests               */
 #define QUICK_DISQUALIFIED  1   /* a read-only pass genuinely sees this      */
 #define QUICK_CANNOT_SAY    2   /* a state this pass may not change          */
+#define QUICK_CAVEATS       3   /* needs polling: no line interrupt (36.10)  */
+
+/* Which of two outcomes the quick scan's verdict takes: LOOKS_OK, then
+ * CAVEATS, then DISQUALIFIED, then CANNOT_SAY. */
+int quick_rank(int outcome);
 
 int quick_classify(const PCIINFO *p, int mmio_ok, int usb2_ports,
                    int active_requested);

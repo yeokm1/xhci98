@@ -183,7 +183,7 @@ again from the `2.0.0.0` asset.
 | # | Do | Expected reading |
 |---|---|---|
 | 3.1 | Boot real DOS with `XHCIQUAL.EXE` from the download's `XHCIQUAL\` directory, keeping `XHCIQUAL.MAP` beside it. No EMM386, no V86 monitor or paging memory manager, and not a DOS box inside Windows | A prompt on a machine whose memory the qualifier can address one-to-one |
-| 3.2 | `XHCIQUAL` | One of three verdicts: `LOOKS QUALIFIED`, `DISQUALIFIED` or `CANNOT SAY`. `LOOKS QUALIFIED` is the one that continues |
+| 3.2 | `XHCIQUAL` | One of four verdicts: `LOOKS QUALIFIED`, `LOOKS QUALIFIED WITH CAVEATS` (no line interrupt: the driver polls the controller), `DISQUALIFIED` or `CANNOT SAY`. The first two continue |
 | 3.3 | `XHCIQUAL --probe-only --no-page --log PROBE.LOG` | Read-only, writes nothing to the machine, and leaves `PROBE.LOG`, the run's first artefact |
 | 3.4 | Read the controller `FACT` line out of `PROBE.LOG` | `hciver`, `ports`, `usb2ports` (the split between USB 2.0 and USB 3.x protocol ports; the `2.0.0.0` driver manages both), `pin`, `bar` and `irq`, each written down |
 

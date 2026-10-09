@@ -843,7 +843,8 @@ How it got here:
   - `Interrupt Pin = 0` no longer disqualifies: `quick_classify` and `quick_reason` say the controller needs polling. The other disqualifiers stand.
   - C4's "event in the ring, no interrupt" outcome reads "needs polling". Its tool failures, and a controller that fails even polled, do not.
   - The polled tests run after the interrupt hook is removed.
-  - `main.c`'s C6/C8 gate and `report.c`'s verdict and exit code learn the outcome, with vectors through the verdict, not only `test_mmiodiag`
+  - `main.c`'s C6/C8 gate and `report.c`'s verdict and exit code learn the outcome, with vectors through the verdict, not only `test_mmiodiag`.
+  - **Its own verdict** (owner, 2026-10-09): a controller with no working interrupt (pin 0, or C4's "event in the ring, no interrupt") that passes the rest is **QUALIFIED WITH CAVEATS** - not plain QUALIFIED, not "QUALIFIED (with warnings)", not a failure, not provisional - with its own exit code, 3. It prints the caveats: the driver polls (`XhciInterruptMode` 0 or 2: more wake-ups, latency up to the poll period), or an MSI-capable OS; and from the PCI capability list (05h MSI, 11h MSI-X) whether Vista and 7 can take a message interrupt (x64 directly, 32-bit with the `xhcimsi.sys` helper) or polling is the only route. Warnings, if any, beside it. Record 15 section 10, `xhciqual/README.md`, `hardware-testing.md` and the release notes say so.
 - [x] 36.11 `XHCIQUAL`'s routing report, read-only:
   - It reports the LPC identity, RCBA, D20IP and D20IR, the selected PIRQ, and the PIC destination and its disable bit.
   - It flags a mismatch only against a GSI supplied separately.

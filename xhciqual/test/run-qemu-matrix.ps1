@@ -42,6 +42,17 @@ if (-not (Ensure-Win98Image -BootImage $BootImage -Repo $repo -Url $BootImageUrl
 if (-not (Test-Path -LiteralPath (Join-Path $qualDir "xhciqual.exe"))) { throw "Build xhciqual.exe first" }
 New-Item -ItemType Directory -Path $hddDir -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $qualDir "xhciqual.exe") -Destination (Join-Path $hddDir "XHCIQUAL.EXE") -Force
+# Task 36.10: no emulated xHCI lacks a working interrupt, so two tiny .COM
+# programs rewrite the Interrupt Line register (config 3Ch) of the xHCI the
+# cases below place at 00:05.0 before XHCIQUAL reads it - IRQ 5, which no
+# device here drives (the line "never delivers"), and FFh, no usable IRQ.
+# Mechanism #1: mov dx,0CF8h; mov eax,8000283Ch; out dx,eax; mov dx,0CFCh;
+# mov al,NN; out dx,al; int 20h. Written fresh each run, like XHCIQUAL.EXE.
+foreach ($il in @(@("SETIL05.COM", 0x05), @("SETILFF.COM", 0xFF))) {
+    [byte[]]$com = 0xBA,0xF8,0x0C, 0x66,0xB8,0x3C,0x28,0x00,0x80, 0x66,0xEF,
+                   0xBA,0xFC,0x0C, 0xB0,$il[1], 0xEE, 0xCD,0x20
+    [IO.File]::WriteAllBytes((Join-Path $hddDir $il[0]), $com)
+}
 if (-not (Test-Path -LiteralPath $usbImage)) {
     $stream = [IO.File]::Create($usbImage)
     $stream.SetLength(8MB)
@@ -64,6 +75,7 @@ function Send-Text($writer, [string]$value) {
         elseif ($ch -eq "-") { $key = "minus" }
         elseif ($ch -eq ":") { $key = "shift-semicolon" }
         elseif ($ch -eq "=") { $key = "equal" }
+        elseif ($ch -eq ">") { $key = "shift-dot" }
         else { $key = [string]$ch }
         Send-Key $writer $key
     }
@@ -114,12 +126,21 @@ function Connect-Monitor([int]$port) {
 }
 
 function Case([string]$name, [array]$qemuArgs, [string]$command,
-              [array]$expect) {
+              [array]$expect, [string]$pre = "", [string]$post = "",
+              [int]$timeout = 0) {
+    # $pre is typed at C:\> before the command; $post after "Done.", for a
+    # line that reads the exit code (IF ERRORLEVEL ... ECHO ...>COM1) onto
+    # the serial log, where $expect is checked. $timeout, when above
+    # -TimeoutSeconds, is this case's: a C4 whose ISR never enters waits out
+    # its full second-long loops of delay(1), slow under TCG.
     [pscustomobject]@{
         Name=$name
         Args=$qemuArgs
         Command=$command
         Expect=$expect
+        Pre=$pre
+        Post=$post
+        Timeout=$timeout
     }
 }
 
@@ -216,7 +237,22 @@ $cases = @(
     (Case "quick_all" @("-device","qemu-xhci,id=xhci,msi=off,msix=off","-device","usb-ehci,id=ehci","-device","pci-ohci,id=ohci") $quick @("Found 3 USB host controller","xHCI ","EHCI ","OHCI ","Probe safety: PASS - no PCI configuration writes.")),
     # `--full` must still reach the old no-argument behaviour byte for byte,
     # which is the clause "break no existing invocation" turns on.
-    (Case "quick_full_is_the_old_default" @("-device","qemu-xhci,id=hc,msi=off,msix=off") ($cmd+" --full") @("Mode: FULL (active bring-up tests)","Families: xHCI EHCI OHCI","Found 1 selected","C3 DMA:      PASS","C4 IRQ:      PASS","Done."))
+    (Case "quick_full_is_the_old_default" @("-device","qemu-xhci,id=hc,msi=off,msix=off") ($cmd+" --full") @("Mode: FULL (active bring-up tests)","Families: xHCI EHCI OHCI","Found 1 selected","C3 DMA:      PASS","C4 IRQ:      PASS","Done.")),
+    #
+    # Task 36.10's no-working-interrupt outcomes (design record 15 section
+    # 10), which no emulated xHCI reaches unaided: SETIL05/SETILFF (written
+    # above) rewrite the controller's Interrupt Line at 00:05.0 first. IRQ 5
+    # is a line nothing drives, so IP comes up, the ISR never enters and the
+    # No-Op's completion is found by polling - issue 12's shape, needing
+    # polling; FFh is no usable IRQ at all, so nothing is installed and the
+    # polled No-Op decides. Each reads QUALIFIED WITH CAVEATS (the
+    # self-test, its own wording) and exit code 3, which the post line puts
+    # on the serial log. The MSI wording follows the msi/msix switches.
+    (Case "xhci_line_dead_mouse" @("-device","qemu-xhci,id=hc,p3=0,addr=5,msi=off,msix=off","-device","usb-mouse,bus=hc.0,port=1") ($cmd+" xhci") @("C4 IRQ:      POLL","ISR never fired on IRQ 5; event polled","C6 ports:    PASS","C8 devices:  PASS","NEEDS POLLING: C4:","==> CONTROLLER QUALIFIED WITH CAVEATS","CAVEAT: no working line interrupt","neither MSI nor MSI-X","exit3","Done.") "setil05" "if errorlevel 3 echo exit3>com1" 180),
+    (Case "xhci_no_irq_line" @("-device","qemu-xhci,id=hc,addr=5") ($cmd+" xhci") @("C4 IRQ:      POLL","Interrupt Line 255 unusable (not 1-15); No-Op completed polled","==> CONTROLLER QUALIFIED WITH CAVEATS","Also with warnings","since it offers MSI-X (x64","xhcimsi.sys","exit3","Done.") "setilff" "if errorlevel 3 echo exit3>com1"),
+    (Case "xhci_irq_selftest_line_dead" @("-device","qemu-xhci,id=hc,addr=5,msi=off,msix=off") ($cmd+" --irq-selftest") @("C4 IRQ:      POLL","IRQ SELF-TEST: NEEDS POLLING","NO WORKING INTERRUPT","exit3","Done.") "setil05" "if errorlevel 3 echo exit3>com1" 180),
+    # And a line that works still exits 0, not 3.
+    (Case "xhci_mouse_exit0" @("-device","qemu-xhci,id=hc,p3=0,addr=5,msi=off,msix=off","-device","usb-mouse,bus=hc.0,port=1") ($cmd+" xhci") @("C4 IRQ:      PASS","==> CONTROLLER QUALIFIED for","exit0","Done.") "" "if not errorlevel 1 echo exit0>com1")
 )
 if ($CaseName.Count -ne 0) {
     $cases = @($cases | Where-Object { $_.Name -in $CaseName })
@@ -249,8 +285,13 @@ for ($index=0; $index -lt $cases.Count; $index++) {
         Wait-Vga $writer $vgaPath "A:\\>" 45
         Send-Text $writer "c:"
         Wait-Vga $writer $vgaPath "C:\\>" 10
+        if ($case.Pre -ne "") {
+            Send-Text $writer $case.Pre
+            Start-Sleep -Milliseconds 1500
+        }
         Send-Text $writer $case.Command
-        $end = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+        $caseTimeout = [Math]::Max($TimeoutSeconds, $case.Timeout)
+        $end = [DateTime]::UtcNow.AddSeconds($caseTimeout)
         $serial = ""
         do {
             Start-Sleep -Milliseconds 200
@@ -259,6 +300,11 @@ for ($index=0; $index -lt $cases.Count; $index++) {
                 $serial -match "No selected USB host controller found" -or
                 $serial -match "photo plus last printed line") { break }
         } while ([DateTime]::UtcNow -lt $end)
+        if ($case.Post -ne "" -and $serial -match "Done\.") {
+            Start-Sleep -Milliseconds 1000
+            Send-Text $writer $case.Post
+            Start-Sleep -Milliseconds 1500
+        }
         $vga = Read-Vga $writer $vgaPath
         if (Test-Path -LiteralPath $serialPath) {
             Start-Sleep -Milliseconds 200

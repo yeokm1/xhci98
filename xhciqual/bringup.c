@@ -533,21 +533,71 @@ static int xhci_irq_source_off(CTRL *c)
     return ok;
 }
 
+/*
+ * Task 36.10: a No-Op on the command ring with the interrupter's enable
+ * clear and no hook installed, its completion looked for in the event ring
+ * for up to a second - what a polling driver would see. 1 if it completed.
+ */
+static int c4_polled_noop(CTRL *c)
+{
+    u32 trb_phys, ms;
+    int got_evt;
+
+    WR32(c->op + XOP_USBCMD, RD32(c->op + XOP_USBCMD) & ~CMD_INTE);
+    trb_phys = cmd_submit(c, 0, 0, TRB_TYPE(TRB_T_NOOP_CMD));
+    got_evt = 0;
+    for (ms = 0; ms < 1000 && !got_evt; ms++) {
+        TRB e;
+
+        while (evt_next(c, &e)) {
+            if (TRB_GET_TYPE(e.ctl) == TRB_T_CMD_DONE && e.p0 == trb_phys)
+                got_evt = 1;
+        }
+        if (!got_evt)
+            msleep(1);
+    }
+    return got_evt;
+}
+
+/*
+ * No line to arm (36.10): nothing is installed, and the polled No-Op says
+ * whether the controller needs polling or fails even polled. `why` is at
+ * most 45 characters, so the note fits its 80 bytes.
+ */
+static int c4_no_line(CTRL *c, const char *why)
+{
+    C4_SEEN s;
+
+    memset(&s, 0, sizeof(s));
+    s.no_line = 1;
+    s.event_seen = c4_polled_noop(c);
+    c->irq_no_event = s.event_seen ? 0 : 1;
+    c->v_irq = c4_verdict(&s);
+    sprintf(c->irq_note, "%s; No-Op %s", why,
+            s.event_seen ? "completed polled" : "not completed even polled");
+    return 0;
+}
+
+/*
+ * C4 settles on c4_verdict (verdict.c), which the host runner drives: PASS,
+ * POLL (no working interrupt, the command completed polled - task 36.10)
+ * or FAIL. Every path that installed the hook removes it before returning,
+ * so C6 and C8 - which run after a PASS or a POLL - run with no live ISR.
+ */
 int qual_irq(CTRL *c)
 {
     u32 trb_phys, ms, before;
     int got_evt, pending;
+    C4_SEEN s;
+    char why[48];
 
-    if (c->pci.ipin == 0) {
-        strcpy(c->irq_note, "Interrupt Pin = 0: MSI-only, no INTx");
-        c->v_irq = V_FAIL;
-        return 0;
-    }
+    memset(&s, 0, sizeof(s));
+    c->irq_no_event = 0;
+    if (c->pci.ipin == 0)
+        return c4_no_line(c, "Interrupt Pin = 0: no INTx");
     if (c->pci.iline == 0 || c->pci.iline > 15) {
-        sprintf(c->irq_note, "Interrupt Line %u unusable (not 1-15)",
-                c->pci.iline);
-        c->v_irq = V_FAIL;
-        return 0;
+        sprintf(why, "Interrupt Line %u unusable (not 1-15)", c->pci.iline);
+        return c4_no_line(c, why);
     }
     /* IRQ 2 is the PIC cascade and is refused HERE, with its own sentence (repo
      * audit D6). `irq_install` refuses it too, but through the same path as
@@ -555,12 +605,8 @@ int qual_irq(CTRL *c)
      * failed (AX=0000)" for a case in which no DPMI call was made and nothing
      * failed. A reader chasing that spent the time on an extender that was
      * working perfectly. */
-    if (c->pci.iline == 2) {
-        strcpy(c->irq_note,
-               "Interrupt Line 2 is the PIC cascade, not a usable IRQ");
-        c->v_irq = V_FAIL;
-        return 0;
-    }
+    if (c->pci.iline == 2)
+        return c4_no_line(c, "Interrupt Line 2 is the PIC cascade");
     /*
      * **PCI Command bit 10, Interrupt Disable, which the legacy path checks
      * and this one did not** (the 2026-09-16 audit's C5). It blocks INTx at
@@ -570,13 +616,8 @@ int qual_irq(CTRL *c)
      * costs one config read.
      */
     if (pci_read16(c->pci.bus, c->pci.dev, c->pci.fn, 0x04) &
-        PCI_CMD_INTX_OFF) {
-        /* irq_note is 80 bytes; this literal was 81 with its NUL. */
-        strcpy(c->irq_note, "PCI Interrupt Disable bit stuck set: INTx "
-               "blocked at the device, not misrouted");
-        c->v_irq = V_FAIL;
-        return 0;
-    }
+        PCI_CMD_INTX_OFF)
+        return c4_no_line(c, "PCI Interrupt Disable stuck set: INTx blocked");
     if (!irq_install(&c->pci, HC_XHCI, c->op, c->rt)) {
         sprintf(c->irq_note, "DPMI %s failed (AX=%04X)",
                 irq_error_step() ? irq_error_step() : "IRQ install",
@@ -615,13 +656,18 @@ int qual_irq(CTRL *c)
             if (!got_evt)
                 msleep(1);
         }
+        /* The event in the ring and no interrupt: needs polling. Neither:
+         * the controller failed the command, polled or not. */
+        s.event_seen = got_evt;
+        c->irq_no_event = got_evt ? 0 : 1;
+        c->v_irq = c4_verdict(&s);
         strcpy(c->irq_note, got_evt ?
                "No xHCI IP while PIC masked; event completed by polling" :
                "No xHCI IP or No-Op event while PIC masked");
-        c->v_irq = V_FAIL;
         xhci_irq_source_off(c);
         return 0;
     }
+    s.ip_seen = 1;
     if (!irq_unmask()) {
         sprintf(c->irq_note, "%s failed (AX=%04X)",
                 irq_error_step() ? irq_error_step() : "IRQ unmask",
@@ -652,27 +698,36 @@ int qual_irq(CTRL *c)
             msleep(1);
     }
 
-    if (irq_count != before && got_evt && irq_foreign == 0) {
+    s.isr_fired = (irq_count != before) ? 1 : 0;
+    s.foreign = (irq_foreign != 0) ? 1 : 0;
+    s.event_seen = got_evt;
+    c->v_irq = c4_verdict(&s);
+    c->irq_no_event = got_evt ? 0 : 1;
+    if (c->v_irq == V_PASS) {
         sprintf(c->irq_note, "one-shot ISR fired on IRQ %u (%s per ELCR)",
                 c->pci.iline,
                 irq_elcr_level(c->pci.iline) ? "level" : "edge");
-        c->v_irq = V_PASS;
         if (!xhci_irq_source_off(c))
             return 0;
         return 1;
     }
-    if (irq_foreign != 0) {
+    if (s.foreign) {
         sprintf(c->irq_note,
                 "IRQ %u entered without owned xHCI status; line masked",
                 c->pci.iline);
-    } else if (irq_count != before) {
+    } else if (s.isr_fired) {
         strcpy(c->irq_note, "ISR fired but matching No-Op event was absent");
+    } else if (got_evt) {
+        /* IP up, the ISR never entered, the completion in the ring: the
+         * line is not delivered (issue 12's shape) - needs polling. */
+        sprintf(c->irq_note,
+                "xHCI IP pending, ISR never fired on IRQ %u; event polled",
+                c->pci.iline);
     } else {
         sprintf(c->irq_note,
-                "xHCI IP pending but ISR never fired on IRQ %u",
+                "xHCI IP pending but ISR never fired on IRQ %u; no event",
                 c->pci.iline);
     }
-    c->v_irq = V_FAIL;
     xhci_irq_source_off(c);
     return 0;
 }

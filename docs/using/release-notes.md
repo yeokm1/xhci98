@@ -201,18 +201,31 @@ copies no file in use, so the first UAS device installs and works at once.
 
 `XHCIQUAL.EXE` is a DOS tool that reads the machine's xHCI controller and says
 whether the driver can work on it. Run it with no arguments for a read-only
-quick scan. It writes no PCI configuration register and prints one of three
+quick scan. It writes no PCI configuration register and prints one of four
 verdicts:
 
 | Verdict | Means |
 |---|---|
 | `LOOKS QUALIFIED` | nothing a read-only pass can see disqualifies this machine; the active tests still decide |
-| `DISQUALIFIED` | something a read-only pass genuinely sees: no `CC_0C0330` function, `Interrupt Pin = 0`, BAR0 unusable or above 4 GB, or no USB 2.0 protocol ports |
+| `LOOKS QUALIFIED WITH CAVEATS` | the same, but the controller has no line interrupt (`Interrupt Pin = 0`): the driver polls it, or an MSI-capable OS takes a message interrupt instead; the line says whether it offers MSI |
+| `DISQUALIFIED` | something a read-only pass genuinely sees: no `CC_0C0330` function, BAR0 unusable or above 4 GB, or no USB 2.0 protocol ports |
 | `CANNOT SAY` | a state this pass may not change is in the way: the controller is not in D0, or Memory Space Enable is clear |
 
 The qualifier is the same program the `1.x` releases carried, and its last
 criterion, no USB 2.0 protocol ports, is the miniport's; see the Controller
 row of "Requirements".
+
+The full active run (`xhciqual/hardware-testing.md`) ends on `QUALIFIED`,
+`NOT QUALIFIED`, or, since `2.2.0.3`, **`QUALIFIED WITH CAVEATS`**: a
+controller with no working interrupt - no interrupt pin, or an interrupt that
+never arrives while the controller's events reach memory - that passes the
+rest when polled. It is not refused, because the driver polls such a
+controller (`XhciInterruptMode` 0, automatic, or 2), at the cost of more CPU
+wake-ups and up to the poll period of event latency; or an MSI-capable OS
+takes a message interrupt, where the controller offers one (Windows Vista and
+7: x64 directly, 32-bit with the `xhcimsi.sys` helper). The verdict prints
+which applies. Its exit code is 3 (0 qualified, 1 not qualified, 2 a usage
+error or no controller).
 
 It is in the download's `xhciqual\` directory. **It must be run from real
 DOS**, not a DOS box inside Windows, booted without EMM386 or any other V86 or
