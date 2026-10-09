@@ -1155,7 +1155,14 @@ typedef struct _HCD_CONTROLLER {
     ULONG InjBulkStream;            /* 36.22: the held TD's stream, 0 none */
     ULONG InjBulkFirstPA;           /* ... its first TRB, and that TRB's   */
     ULONG InjBulkFirstCycle;        /* cycle, to put the dequeue back      */
-    ULONG InjBulkHidden;            /* BULK_TIMEOUT moved the dequeue past */
+    /* BULK_TIMEOUT (review round 5): armed to lose the target endpoint's
+     * next TD's completion events; once one is lost, every event inside
+     * that TD's TRBs. Controller lock (the drain's hook sets them). */
+    ULONG InjBulkLose;
+    ULONG InjBulkLost;
+    ULONG InjBulkLostFirst;
+    ULONG InjBulkLostLast;
+    ULONG InjBulkLostEvents;
 #endif
     /* The door (hcd_door.c, 26-A.8; design record 13 section 8): the
      * FDO's name's number, \DosDevices\HCD<n>, the host controller

@@ -80,15 +80,15 @@
 #define XHCI_INJ_RACE_RING       17UL /* TRANSACTION, a ring during the held
                                        * Reset Endpoint                      */
 #define XHCI_INJ_RACE_SECOND     18UL /* the same, then a second error       */
-/* Task 36.22's, on a bulk TD (a stream's too where it says so) of a
- * published device at root port bits 15:8 (0 any): `arg` is the endpoint
- * address (0: the first bulk IN), one injection per command. Each first
- * withholds the next doorbell of that endpoint, so a TD sits on its ring
- * unstarted - QEMU otherwise finishes a bulk TD inside the doorbell write -
- * then: */
-#define XHCI_INJ_BULK_TIMEOUT    19UL /* nothing more: the TD waits until the
-                                       * driver's own Stop Endpoint, Reset
-                                       * Endpoint or a slot command; streams
+/* Task 36.22's, on a bulk TD (a stream's too) of a published device at
+ * root port bits 15:8 (0 any): `arg` is the endpoint address (0: the first
+ * bulk IN), one injection per command. 20 to 22 first withhold the next
+ * doorbell of that endpoint, so a TD sits on its ring unstarted - QEMU
+ * otherwise finishes a bulk TD inside the doorbell write - then: */
+#define XHCI_INJ_BULK_TIMEOUT    19UL /* no doorbell withheld: the next TD's
+                                       * completion events are lost until the
+                                       * driver's own stop, reset or dequeue
+                                       * move, or a slot command; streams
                                        * too                                 */
 #define XHCI_INJ_BULK_STOP       20UL /* a real Stop Endpoint whose events
                                        * reach the driver, then the doorbell
