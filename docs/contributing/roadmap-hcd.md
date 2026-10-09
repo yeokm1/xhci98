@@ -1243,7 +1243,8 @@ Checkpoint: `2.3.0.0` on the E7250 under XP x64 and Windows 7 x64, with
   not shown named as untested; a passing default does not stand for a
   failing 2048. 36.27 read against 36.21 with the same settings and
   repetitions: 1 MiB stays
-  the default only if it is no slower than 64 KiB anywhere beyond the
+  the default (owner, 2026-10-09: measurement decides) only if it is
+  no slower than 64 KiB anywhere beyond the
   readings' own spread; otherwise the default becomes the size that is,
   and the INF's default changes with it (an existing installation keeps
   a value it already has, under the don't-overwrite rule, so the release

@@ -305,6 +305,10 @@ what it found:
     not proven. There the run derives and records the target and writes
     nothing, at every value (decision `STEERED_NT`). The driver tells the
     two apart by WDM version (`IoIsWdmVersionAvailable(1, 0x10)`, 2000's).
+    The PCH's OIC register (RCBA+`31FEh`, bit 8 AEN) is not read: AEN=0
+    would prove the 8259 path on NT too, but AEN=1 proves nothing, and
+    an NT system booted without the I/O APIC is rare, so the owner kept
+    `STEERED_NT` as it is (2026-10-09).
 - **Any other raw value**, or none: report only.
 
 **The write:**
