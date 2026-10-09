@@ -6,7 +6,10 @@ lines for this record's code and legs are the orchestrator's to number).
 Revision 1, 2026-10-09, written before any code, on branch `p36-msi86`;
 revision 2 the same day, after review round 1, revision 3 after round
 2, revision 4 after round 3, and revision 5 after round 4, which
-converged (section 14).
+converged (section 14). **Revision 6** records the owner's answers to
+section 12 (2026-10-09): the import and the strip accepted, a reboot
+requested by the INF (section 5), and mode 1 failing the start where no
+line is offered and no helper is bound (section 4.3).
 
 Design record 15 section 4.3 designs MSI for the HCD and fixes the seam
 this record plugs into: `hcdMsgConnect(hc, connect, disconnect)`, handed
@@ -288,9 +291,12 @@ reach a named device object from kernel mode are this routine or
 and `ZwOpenFile` has no stock Windows 98 SE precedent in the census), and
 a pointer published through the registry or any other store the HCD can
 already read is not a documented channel and would let whoever can write
-that store choose an address the kernel then calls. **Orchestrator
-decision, owner to confirm:** "imports unchanged" is read as "no import
-Windows 98 lacks", and the one evidenced pair is taken. Its row cites the
+that store choose an address the kernel then calls. **Owner decision
+(2026-10-09):** "imports unchanged" is read as "no import Windows 98
+lacks", and the one evidenced pair is taken; the owner checked that
+Windows 98 SE's `1394bus.sys` imports it and that `ntkern.vxd` carries the
+name. The import gate's row stays, and the Windows 98 SE install leg is a
+required check of it (section 10, D2). Its row cites the
 Windows 98 SE evidence above; `1394bus.sys` is a tier C file of record 13's
 census, so the gate's evidence list gains it (section 8.2).
 
@@ -401,8 +407,7 @@ resource at all (mode 1 failing its start as today).
 asks for paged pool, and the PnP manager frees it. This is an exception
 to design record 13 section 7.5's `NonPagedPool`-only rule, confined to
 that site and that IRP; the allowlist's `SITES=hcd_pool.obj` already
-covers it (the import is the same). **Orchestrator decision, owner to
-confirm.**
+covers it (the import is the same). **Owner decision (2026-10-09).**
 
 **The strip** works at both levels of choice a requirements list has. An
 `IO_RESOURCE_REQUIREMENTS_LIST` carries `AlternativeLists` complete
@@ -447,12 +452,11 @@ and the outcome is:
   Pin` 0, or a controller with a pin whose list, against R1's
   expectation, offers no line). There is no line to give, and stripping
   would turn a message grant the start cannot connect into no interrupt
-  at all, or delete a requirement. Kept as is; record 15's rows for a
-  message grant with no routines apply: the start polls with "message not
-  connected", under mode 1 too, since record 15 runs mode 1 under a
-  message grant as mode 0. On XP an MSI-only controller has no interrupt
-  resource, so mode 1 fails its start there; that one difference from XP
-  is recorded, not hidden (decision 6).
+  at all, or delete a requirement. Kept as is, and the outcome is kept in
+  `hc` for the start. There a message grant with the helper not bound
+  polls with "message not connected" under modes 0 and 3, as record 15
+  has it; under **mode 1 the start fails**, as XP fails a forced-line
+  start on a controller with no line (owner, 2026-10-09; section 4.3).
 - **no interrupt**, when no configuration has an interrupt descriptor:
   kept as is; record 15's no-interrupt rows apply, as on XP.
 - **unsupported shape**, when some configuration has a message member and
@@ -509,12 +513,40 @@ x86 image:
   the filter and the start, or a filter that never came); then
   `hcdMsgConnect(hc, ConnectEx, DisconnectEx)` with the accepted block's
   pair when `BOUND`, else `hcdMsgConnect(hc, NULL, NULL)`, which record 15
-  defines as "not found": that start polls with "message not connected".
-  A message grant **without a bound helper** comes from a list the
+  defines as "not found": that start polls with "message not connected"
+  - with one exception, below. A message grant **without a bound
+  helper** comes from a list the
   filter kept on purpose (outcomes "no line offered", "unsupported
   shape", "inconsistent", "disabled", "kept: no memory", "no list",
   "lower failed") or from a filter that never came; the record says which
   (section 9).
+- **Mode 1, no line, no helper: the start fails** (owner, 2026-10-09).
+  When the effective mode is 1, the resource is a message, the helper is
+  not bound after the start's look, and this FDO's last filter outcome
+  was "no line offered", the start fails as a forced-line start with no
+  line fails on XP: reason "forced, no line offered", the delivery none,
+  the release run, `STATUS_DEVICE_CONFIGURATION_ERROR` as record 15's
+  "forced, no interrupt" row returns. The condition is narrow on purpose.
+  Every other way a message grant meets an unbound helper under mode 1 -
+  a list that offered a line but was not replaced (the strip off before
+  R1/R2, an unadmitted shape, no memory, no list, inconsistent) or a
+  filter that never ran - keeps record 15's row and polls, because a line
+  existed or may have existed and the failure would then be this
+  driver's, not the controller's. A message grant with the helper bound
+  under mode 1 runs the message, as record 15 has it. A list with no
+  interrupt at all (outcome "no interrupt") already fails mode 1 through
+  record 15's "forced, no interrupt" row.
+
+  The decision stays in record 15's one pure function: `XhciPollDecide`
+  (on p36-poll's head, `src/xhci_poll.c`) gains one input, "no line was
+  offered" (TRUE only on the x86 image under the condition above, FALSE
+  on amd64 and on every other target), and returns
+  `XHCI_POLL_DELIVERY_NONE` with a new reason,
+  `XHCI_POLL_R_FORCED_NO_LINE_OFFERED` (appended to the reason list),
+  for mode 1 with a message not connected and that input TRUE. Vectors in
+  `test_poll`: mode 1 with the input TRUE fails; modes 0, 2 and 3 with it
+  TRUE poll (2 as forced); mode 1 with it FALSE polls as today; mode 1
+  with the message connected runs it whatever the input.
 
 Everything after the seam - the connection, its fallback to the line, the
 release through `IoDisconnectInterruptEx`, the ISR, the capability read -
@@ -559,16 +591,41 @@ in the helper's `DriverEntry` affects every boot; the helper's
 `DriverEntry` creates one device object and returns, which is what keeps
 that cost acceptable, and section 10's Driver Verifier leg reads it.
 
-**The race that remains** is the first install. SetupAPI does not start a
-boot-start service when it installs it, so on a fresh install (and on an
-update from a package without the helper) the helper is not running until
-the next boot: the controller's filter finds it `ABSENT` and section
-4.2's rule settles that session's delivery - the line, as on XP, when the
-list is replaced; otherwise whatever Windows grants, a message grant
-polling - and MSI takes over at the next boot. Asking for a reboot from the INF was
-considered and not taken: the line is a working configuration, and a
-reboot prompt on every update is a cost for no correctness gain. The
-release notes say so.
+**The first install, and the reboot it asks for** (owner, 2026-10-09).
+SetupAPI does not start a boot-start service when it installs it, so on a
+fresh install, and on an update from a package without the helper, the
+helper is not running until the next boot. **The INF therefore requests a
+reboot**, so that the helper is active from the next boot on.
+
+*The mechanism* is the documented `Reboot` directive of an install
+section: `[Xhci.Dev6.NTx86]` carries `Reboot`, which makes setup report
+that a restart is required (`DI_NEEDREBOOT`) and the user is asked to
+restart. It is that section's only, so Windows 98, ME, 2000 and XP (which
+never reach it) and the root hub's and hubs' sections never ask, and the
+64-bit INF does not change. The directive is unconditional: a plain INF
+cannot ask only when the helper is newly installed (that would need a
+co-installer, which this project does not ship), so **every** install and
+update through the Vista and 7 x86 controller section asks for a restart.
+That also covers the update whose helper changed, since a running helper
+is replaced only at the next boot (section 6). The copy and service flags
+were considered as a conditional mechanism and found none: no
+`AddService` flag asks for a reboot, and a kernel driver's image is not
+held open while it runs, so overwriting `xhcimsi.sys` does not make setup
+schedule one by itself. `SPSVCINST_STARTSERVICE` on the helper's
+`AddService` line (start a non-PnP service at once) would make the helper
+active without any restart; it is recorded here as the alternative and
+not taken, because the owner decided on the reboot.
+
+*Until the reboot* the controller keeps what section 4.2's rule gives it
+(the filter finds the helper `ABSENT`): the line when the list is
+replaced, otherwise the grant and record 15's rows decide. Whether
+Windows Vista and 7 start the device at all before the restart, or hold
+it with "restart required" (problem code 14) once setup has reported
+`DI_NEEDREBOOT`, is not documented in a form this project has read; it is
+reading R4 (section 11), taken on both guests for a fresh install and for
+an update. If R4 shows the device held until the restart, the record
+says so and the owner is told that the pre-reboot state is "not started"
+rather than line or polling; nothing else in the design changes.
 
 **Late arrival** is covered by the looks of section 4.1: a filter or
 start after the helper appears binds it, without a reboot, at the next
@@ -590,8 +647,8 @@ versions. The cases:
 
 | Installed | Running | Result |
 |---|---|---|
-| this package, freshly | no helper until the next boot | section 4.2's helper-less resource choice this session, delivery settled at the start; after the boot the helper is bound (section 5) |
-| this package, updated from one with the helper | the old helper until the next boot (a boot-start image in use is replaced at reboot) | bound if its major is 1; else section 4.2's helper-less outcome until the boot |
+| this package, freshly | no helper until the next boot | a restart requested; until it, section 4.2's helper-less resource choice with delivery settled at the start (or the device held for the restart, R4); after it the helper is bound (section 5) |
+| this package, updated from one with the helper | the old helper until the next boot (the new image is loaded at the next boot) | a restart requested; until it, bound to the old helper if its major is 1, else section 4.2's helper-less outcome |
 | a later package with interface major 2 | old HCD, new helper | the old HCD's V1 code is refused by a V2-only helper: section 4.2's helper-less outcome. A later helper that keeps answering V1 (the rule for a minor change) binds |
 | this HCD, the helper's file removed or its copy failed | none | section 4.2's helper-less resource choice, delivery settled at the start, recorded `ABSENT` |
 | a package older than this one installed over it | old HCD, this helper still loaded | the helper idles; but see below |
@@ -628,6 +685,7 @@ XhciMsi.CopyFiles=10,System32\Drivers
 [Xhci.Dev6.NTx86]
 AddReg=Xhci.AddReg.NT
 CopyFiles=Xhci.CopyFiles,XhciMsi.CopyFiles
+Reboot
 
 [Xhci.Dev6.NTx86.HW]
 AddReg=Xhci.Msi.AddReg
@@ -720,7 +778,7 @@ by `make-package.ps1` anyway.
 |---|---|
 | `scripts\build-driver.cmd` | `:buildmsi %FLAVOR%` after `:builduas`, x86 runs only: `DDKROOT` for that call is `tools\WinDDK71` (or `WDKROOT`), `setenv` args `x86 WLH no_oacr`, the same `ALTDIR`, `cd src\msi86 && build -cZ`; then the import gate with `-AllowPath xhcimsi-imports.allow -Profile nt6x86`, `check-flavour-marker.ps1`, `source-stamp.ps1 -Driver xhcimsi -Write`. An `-amd64` run builds no helper |
 | Import gate | A new profile `nt6x86` in `check-imports.ps1`: an x86 image checked against the export tables of Vista SP2 x86 and 7 SP1 x86 `ntoskrnl.exe`/`ntkrnlpa.exe` and `hal.dll` (a new `nt6x86-baselines.expected`, extracted by `extract-target-baselines.ps1`; `ntkrnlpa.exe` of both is to be extracted, today's `tools\vista-x86-extracted` and `win7-x86-extracted` carry `ntoskrnl.exe` only), with no Windows 2000 or Windows 98 evidence asked. `xhcimsi-imports.allow`: `IoConnectInterruptEx`, `IoDisconnectInterruptEx`, `IofCompleteRequest`, `IoIsWdmVersionAvailable`, `RtlInitUnicodeString` (`all`), the pairs `wdmsec.lib`'s `IoCreateDeviceSecure` object brings (listed from the first link's `dumpbin /imports`, each with its own evidence, none admitted by name in advance), `RtlQueryRegistryValues` (`qemu`), each tagged `vista-x86-export; win7-x86-export`; the profile refuses any `xhci98-imports.allow` row being reused for it. `xhci98-imports.allow` gains `ntoskrnl.exe!IoGetDeviceObjectPointer` (`all`, `w2k-export; win98-precedent 1394bus.sys 4.10.2222`), and `win98-evidence.list` gains `1394bus.sys`. Self-test mutations in `test-flavour-rules.ps1` for the profile (a Windows 2000-only pair passes nothing; a Vista pair in the HCD's x86 list fails) |
-| INF gate `check-inf.ps1` | New `MSIHLP-*` rules, x86 only: `MSIHLP-ONLYNT6` (the helper's service, copy section or file named anywhere but `Xhci.Dev6.NTx86`, `[SourceDisksFiles]` and `[DestinationDirs]`); `MSIHLP-SVC` (the second `AddService` on `Xhci.Dev6.NTx86.Services` only, flags 0, `ServiceType` 1, `StartType` 0, `ErrorControl` 1, `ServiceBinary=%12%\xhcimsi.sys`, copied by that section's own `CopyFiles`); `MSIHLP-HW` (on x86, record 15's `MSI-*` lines only in `Xhci.Dev6.NTx86.HW`, and only when `MSIHLP-SVC` holds); `MSIHLP-AMD64` (no helper in the 64-bit INF). `PATH-NT`'s "exactly one `AddService`, flag 0x2, `StartType` 3" is relaxed for that one section by exactly the helper's line. `BOTH-VERSION` reads `src\msi86\xhcimsi.rc` too. Mutations in `test-inf-checks.ps1` for each rule; the `Dev6` mutations rebased on the new section text. **The cross-architecture media rule:** `test-inf-checks.ps1`'s requirement that both INFs declare the same `[SourceDisksFiles]` (~2005) admits exactly one difference, `xhcimsi.sys` in the 32-bit file only, and a mutation proves any other difference still fails. **The footprint models `.HW`:** `-EmitFootprint` today emits a `.HW` section as unmodelled (`check-inf.ps1` ~2575); it is extended to walk a `.HW` section's `AddReg` and emit its values as **hardware-key** writes (distinct from the software-key `HKR` of the install section), with their flags, so `MSISupported`, `MessageNumberLimit` and `FLG_ADDREG_NOCLOBBER` appear in `expected-footprint.txt`; the helper's service appears as a service the package creates (its removal on uninstall is a reading, section 10, not a footprint claim). Mutations: each MSI value dropped, its NOCLOBBER flag dropped, the `.HW` section moved to the root hub. The amd64 footprint takes the same `.HW` modelling for record 15's lines (the orchestrator's to coordinate with record 15's own `MSI-*` rule) |
+| INF gate `check-inf.ps1` | New `MSIHLP-*` rules, x86 only: `MSIHLP-ONLYNT6` (the helper's service, copy section or file named anywhere but `Xhci.Dev6.NTx86`, `[SourceDisksFiles]` and `[DestinationDirs]`); `MSIHLP-SVC` (the second `AddService` on `Xhci.Dev6.NTx86.Services` only, flags 0, `ServiceType` 1, `StartType` 0, `ErrorControl` 1, `ServiceBinary=%12%\xhcimsi.sys`, copied by that section's own `CopyFiles`); `MSIHLP-HW` (on x86, record 15's `MSI-*` lines only in `Xhci.Dev6.NTx86.HW`, and only when `MSIHLP-SVC` holds); `MSIHLP-AMD64` (no helper in the 64-bit INF); `MSIHLP-REBOOT` (`Reboot` present in `Xhci.Dev6.NTx86` and in no other section of either INF, so no Windows 98, ME, 2000 or XP path and no hub section asks for a restart; the footprint records it). `PATH-NT`'s "exactly one `AddService`, flag 0x2, `StartType` 3" is relaxed for that one section by exactly the helper's line. `BOTH-VERSION` reads `src\msi86\xhcimsi.rc` too. Mutations in `test-inf-checks.ps1` for each rule; the `Dev6` mutations rebased on the new section text. **The cross-architecture media rule:** `test-inf-checks.ps1`'s requirement that both INFs declare the same `[SourceDisksFiles]` (~2005) admits exactly one difference, `xhcimsi.sys` in the 32-bit file only, and a mutation proves any other difference still fails. **The footprint models `.HW`:** `-EmitFootprint` today emits a `.HW` section as unmodelled (`check-inf.ps1` ~2575); it is extended to walk a `.HW` section's `AddReg` and emit its values as **hardware-key** writes (distinct from the software-key `HKR` of the install section), with their flags, so `MSISupported`, `MessageNumberLimit` and `FLG_ADDREG_NOCLOBBER` appear in `expected-footprint.txt`; the helper's service appears as a service the package creates (its removal on uninstall is a reading, section 10, not a footprint claim). Mutations: each MSI value dropped, its NOCLOBBER flag dropped, the `.HW` section moved to the root hub. The amd64 footprint takes the same `.HW` modelling for record 15's lines (the orchestrator's to coordinate with record 15's own `MSI-*` rule) |
 | Flavour marker | The helper embeds `XHCI98_FLAVOUR_{RELEASE,DEBUG,QEMU}` as `uas_entry.c` does; `check-flavour-marker.ps1` unchanged |
 | Shared source | `src\xhci_msi86.c` is compiled into the HCD by `src\sources` and into the helper by `src\msi86\sources` as `..\xhci_msi86.c` (build.exe accepts a relative path in `SOURCES`), and into `test_msi` by the host build. It is C89 and DDK-free, so the 2000 DDK's MSVC 6 and WDK 7.1's compiler both take it |
 | Source stamp | `source-stamp.ps1 -Driver` gains `xhcimsi` (`src\msi86`, `xhcimsi.srcstamp`, with `xhci_msi86.h` and `xhci_version.h` as parent headers). Its `SOURCES` parser today splits on every backslash (`source-stamp.ps1` ~108), which would break `..\xhci_msi86.c` into two tokens; it is changed to remove only line-continuation backslashes and keep path separators, so the stamp hashes the parent `src\xhci_msi86.c` itself. Mutations: a change to `src\xhci_msi86.c` alone invalidates both the helper's stamp and the HCD's; the existing stamps of `xhci98` and `xhciuas` are unchanged by the parser change |
@@ -873,8 +931,16 @@ with its detail. A running helper cannot be unloaded, so every change to
 the helper's file, service or injection value is followed by a reboot
 before it is read:
 
-- H1 fresh install, before the reboot (section 5): line, `ABSENT`; after
-  the reboot: MSI, `BOUND`;
+- H1 fresh install: the restart prompt shown (section 5); before the
+  restart, R4's reading (the device started on section 4.2's choice with
+  the helper `ABSENT`, or held for the restart with problem code 14);
+  after the restart: MSI, `BOUND`;
+- H1a mode 1 on an MSI-only list without the helper (QEMU `qemu-xhci`
+  with its pin removed where the build offers that, else the
+  `qemu`-flavour list rewrite that drops the line configurations before
+  the filter sees them): the start fails with "forced, no line offered";
+  the same with mode 0: polling, "message not connected"; the same list
+  with the helper bound under mode 1: the message (section 4.3);
 - H2 `xhcimsi.sys` deleted, service left, reboot: `ABSENT`, the load
   failure in the event log, the boot normal;
 - H3 the service deleted, reboot: `ABSENT`;
@@ -889,8 +955,9 @@ before it is read:
 
 - U1 a compatible helper update while the old helper is resident: a
   second build of this package with a raised version installed over the
-  first; before the reboot the old helper is still loaded and is read
-  bound with its old `HelperVersion`; after it, the new one;
+  first; the restart prompt shown; before the restart the old helper is
+  still loaded and is read bound with its old `HelperVersion` (or R4's
+  hold); after it, the new one;
 - U2 the downgrade: 2.2.0.2 installed over this package without
   uninstalling, read for what the older HCD does with the left-over grant
   (for the release notes, section 6); then the prescribed procedure -
@@ -903,8 +970,12 @@ before it is read:
 **D - down-level and other packages**:
 
 - D2 Windows 98 SE, ME, 2000 SP4 and XP SP3 x86: install from the new
-  media and read as the release before it (the line; no helper copied;
-  `IoGetDeviceObjectPointer` resolving at load on 98 SE and ME);
+  media and read as the release before it (the line; no helper copied; no
+  restart asked beyond what the release before it asked). **The Windows
+  98 SE install is a required check** (owner, 2026-10-09): the HCD loads
+  there with `IoGetDeviceObjectPointer` in its imports, read as the
+  driver started and the device working, not inferred from the gate; ME
+  likewise;
 - D3 Vista x64 and 7 x64: no helper in the package, MSI as record 15 has
   it (that leg is 36.16's; here only that the x64 package is unchanged by
   this record);
@@ -926,6 +997,11 @@ before it is read:
   from adjacency alone. If one is found inside a STRIPPABLE configuration
   that keeps it, the transformation is amended before the strip is
   enabled.
+- **R4.** Whether Vista SP2 and 7 SP1 x86 start the controller before the
+  restart the INF asks for (section 5), on a fresh install and on an
+  update, or hold it with problem code 14 until the restart; read in H1
+  and U1. It changes only what the release notes say about the time
+  before the restart.
 - **R3.** That an unsigned boot-start x86 driver loads on Vista SP2 and 7
   SP1 x86 on an ordinary boot (section 5). WDK guidance has the embedded
   signature optional for x86 boot-start drivers; the reading is what is
@@ -933,30 +1009,56 @@ before it is read:
 
 ## 12. Decisions
 
+All taken by the owner; items 2 to 6 were answered on 2026-10-09 after
+revision 5 put them as "orchestrator decision, owner to confirm".
+
 1. Option A, the helper (owner, 2026-10-09).
-2. **Orchestrator decision, owner to confirm:** the HCD's x86 image takes
-   one new import, `IoGetDeviceObjectPointer`, with Windows 2000 export and
-   stock Windows 98 SE evidence (section 3.4).
-3. **Orchestrator decision, owner to confirm:** without the helper the HCD
-   keeps only the line configurations in
-   `IRP_MN_FILTER_RESOURCE_REQUIREMENTS` so Windows grants the line where
-   the list offers one (section 4.2). This refines record 15 section 4.3's
+2. **Owner decision (2026-10-09), accepted as designed:** the named device
+   object, and the HCD's x86 image taking one new import,
+   `IoGetDeviceObjectPointer`, with Windows 2000 export and stock Windows
+   98 SE evidence (the owner checked `1394bus.sys` and `ntkern.vxd`); the
+   gate row stays and the Windows 98 SE install leg is a required check
+   (sections 3.4 and 10).
+3. **Owner decision (2026-10-09), accepted as designed:** without the
+   helper the HCD keeps only the line configurations in
+   `IRP_MN_FILTER_RESOURCE_REQUIREMENTS`, so Windows grants the line where
+   the list offers one (section 4.2); it ships off, behind the `qemu`-only
+   switch, until R1 and R2 are read. This refines record 15 section 4.3's
    statement that a helper-less x86 start with a message grant polls: with
-   the strip, that row is reached when the list is not replaced (no line
-   offered, an unadmitted shape, the strip disabled, out of memory, no
-   list, an inconsistent list) and Windows then grants a message, or when
-   the filter never ran (section 4.2's rule). Record 15 and roadmap
-   36.15/36.16 are the orchestrator's to reconcile.
-4. **Orchestrator decision, owner to confirm:** a fresh install takes
-   section 4.2's helper-less resource choice until the helper loads at the
-   next boot, rather than asking for a reboot (section 5).
-5. **Orchestrator decision, owner to confirm:** the strip's replacement
-   list is the HCD's one `PagedPool` allocation, at one named site, as the
-   IRP's contract asks (section 4.2).
-6. **Orchestrator decision, owner to confirm:** an MSI-only controller (no
-   STRIPPABLE configuration) without the helper keeps its message grant and
-   polls, so mode 1 polls there where XP would fail the start (section
-   4.2).
+   the strip, that row is reached when the list is not replaced and
+   Windows then grants a message, or when the filter never ran - except
+   under mode 1 with no line offered (decision 6).
+4. **Owner decision (2026-10-09), changed from revision 5:** the Vista
+   and 7 x86 controller install section requests a restart (`Reboot`), on
+   a fresh install and on every update through it, so the boot-start
+   helper is active from the next boot; until the restart the controller
+   keeps section 4.2's helper-less choice, or is held for the restart if
+   R4 shows that (section 5).
+5. **Owner decision (2026-10-09), accepted:** the strip's replacement list
+   is the HCD's one `PagedPool` allocation, at one named site in
+   `hcd_pool.c`, as the IRP's contract asks (section 4.2).
+6. **Owner decision (2026-10-09), changed from revision 5:** mode 1 on a
+   Vista or 7 x86 controller whose list offered no line, with no helper
+   bound, **fails the start**, strictly, as XP does - it does not poll
+   (section 4.3).
+
+**For the orchestrator, to reconcile at merge** (this record does not
+edit them):
+
+- Record 15 section 4's message table, the row "0 or 1 |
+  `IoConnectInterruptEx` not found, or the connection refused | poll |
+  message not connected": mode 1 with routines not found **and no line
+  offered** (x86, no helper) fails the start with "forced, no line
+  offered". Section 4.3's decision paragraph ("a message connection that
+  fails polls for that start") and its "Without the helper" bullet ("keep
+  the line, the routing quirk and polling") take the same exception, and
+  the latter the strip (decision 3) and the restart (decision 4).
+- `src/xhci_poll.c` `XhciPollDecide` and `test_poll` on p36-poll's head:
+  the added input, reason and vectors of section 4.3.
+- Roadmap 36.15's "A message connection that fails, or a message resource
+  with no `IoConnectInterruptEx` found, polls for that start" (the same
+  exception), its "The modes on Vista and 7" bullet for mode 1, and 36.16's
+  x86 legs (the restart, R4, H1a, the required 98 SE check).
 
 ## 13. Files the code touches
 
@@ -971,7 +1073,8 @@ Changed: `src\xhci98.inf`, `src\sources`, `src\hcd.h`, `src\hcd_pnp.c`
 (the filter and the remove), `src\hcd_ctl.c` (the x86 caller of
 `hcdMsgConnect`, the republication after `HcdCountersStart`),
 `src\hcd_entry.c` (the state at `AddDevice`), `src\hcd_pool.c` (the paged
-site), the counter block and log (`src\hcd_log.c`, `src\xhci.h` where
+site), `src\xhci_poll.c` and `test\test_poll.c` (the mode-1 input and
+reason, at merge with p36-poll), the counter block and log (`src\hcd_log.c`, `src\xhci.h` where
 record 15's fields live),
 `test\test_msi.c`; `scripts\build-driver.cmd`,
 `scripts\import-gate\check-imports.ps1`, `xhci98-imports.allow`,
@@ -1049,3 +1152,12 @@ Two P3s taken in revision 5: the delivery rule restated as a
 resource-choice rule that defers delivery to record 15's mode, pin and
 connection tables (section 4.2), and the last unconditional line promises
 removed (section 6, decisions 4 and 6). R1 to R3 stay runtime gates.
+
+### 14.5 Revision 6
+
+The owner's answers to section 12 (2026-10-09), written in: decisions 2,
+3 and 5 accepted as designed; decision 4 changed to a restart requested
+by the INF (section 5, R4, the `MSIHLP-REBOOT` rule, legs H1 and U1);
+decision 6 changed to mode 1 failing the start where no line was offered
+and no helper is bound (section 4.3, leg H1a), with the record 15 and
+roadmap wording to reconcile listed in section 12.
