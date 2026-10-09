@@ -333,6 +333,11 @@ VOID XhciSuspLatch(PXHCI_SUSP_LINK link, const XHCI_SUSP_FUNC *funcs,
 /* The device is gone (unplug, invalidation): GONE from any state. */
 VOID XhciSuspGone(PXHCI_SUSP_LINK link);
 
+/* Evidence outside a sequence leaves the link's state unknown (a hub's
+ * change acknowledgement that failed): RECOVERING, the outcome uncertain,
+ * nothing armed or due, until XhciSuspRecovered or XhciSuspGone. */
+VOID XhciSuspUncertain(PXHCI_SUSP_LINK link);
+
 /* ------------------------------------------------------------------ */
 /* Wake evidence (3.7, 3.8)                                            */
 /* ------------------------------------------------------------------ */

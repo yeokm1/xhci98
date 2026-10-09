@@ -579,6 +579,18 @@ VOID XhciSuspRecovered(PXHCI_SUSP_LINK link, ULONG ok)
     link->Outcome = XHCI_SUSP_OUT_GONE;
 }
 
+VOID XhciSuspUncertain(PXHCI_SUSP_LINK link)
+{
+    if (link->State == XHCI_SUSP_GONE) {
+        return;
+    }
+    link->State = XHCI_SUSP_RECOVERING;
+    link->Outcome = XHCI_SUSP_OUT_UNCERTAIN;
+    link->Step = 0;
+    link->Armed = 0;
+    link->ClaimDue = 0;
+}
+
 VOID XhciSuspGone(PXHCI_SUSP_LINK link)
 {
     link->State = XHCI_SUSP_GONE;

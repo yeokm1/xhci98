@@ -965,12 +965,20 @@ VOID HcdSuspHubSample(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG status,
 {
     PHCD_USB_DEVICE dev;
     PHCD_DEVICE_PDO pdo;
+    KIRQL oldIrql;
 
     dev = hcdSuspOwner(hc, q);
     if (dev == NULL) {
         return;
     }
     if (lost) {
+        /* RECOVERING first, in the hold the dispatch reads it under, so
+         * nothing resumes it or opens its gate before the cycle drops it
+         * (Codex review of 36.30, round 4, finding 1). */
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        XhciSuspUncertain(&dev->Susp);
+        dev->SuspWakeDue = 0;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
         pdo = hcdSuspPdo(dev->Pdo);
         if (pdo != NULL && !hcdSuspHalted(hc)) {
             HcdEnumCycle(hc, dev->Location, pdo->Group);

@@ -376,7 +376,9 @@ admission, capabilities, teardown, the controller's transitions). Until
   completed after the hold. A device that ended a sequence is decided
   again in the same pass, at most four times, so its last Dx, its D0s and
   an unclaimed wake's re-suspend are not left for a later wake-up.
-- **Time.** No clock read is on the import allowlist. The machine is
+- **Time.** The executor keeps its own clock rather than read the system
+  time (`KeQuerySystemTime` is allowlisted, but a step's minimum is what
+  matters, not a date). The machine is
   given a controller-wide millisecond count that advances only by the
   waits the protocol requires (the dwell, TDRSMDN, TRSMRCY, SP=1's
   minimum), and those are kept by `KeStallExecutionProcessor` in 50 us
@@ -448,7 +450,8 @@ admission, capabilities, teardown, the controller's transitions). Until
   back, and `ConnectGen`) to the machine instead of the quiesce, wait and
   release. A C_PORT_SUSPEND whose clear failed is no evidence, and since
   the hub may have taken it and report no more, the device is uncertain:
-  cycled, its gate kept closed.
+  RECOVERING at once (`XhciSuspUncertain`), so the pass neither resumes
+  nor rearms it, then cycled, its gate kept closed.
 - **Slow IRPs** (3.3). A slow IRP dequeued for a device whose link is not
   ACTIVE (SUSPENDED, or RECOVERING, whose device the cycle drops) is
   served if it is ABORT_PIPE, else moved to `dev->SlowDeferred` in order,

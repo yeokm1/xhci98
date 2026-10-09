@@ -962,6 +962,32 @@ static void test_gone(void)
     CHECK_EQ(link.State, XHCI_SUSP_SUSPENDING, "left to the step");
     XhciSuspGone(&link);
     CHECK_EQ(link.State, XHCI_SUSP_GONE, "gone");
+
+    /* Uncertain outside a sequence: RECOVERING, no resume begun, a D0
+     * pends; GONE stays GONE. */
+    {
+        XHCI_SUSP_FUNC f1[1];
+        XHCI_SUSP_DECISION d1;
+
+        XhciSuspLinkInit(&link, 0, 1);
+        link.State = XHCI_SUSP_SUSPENDED;
+        link.Armed = 1;
+        link.ClaimDue = 1;
+        XhciSuspUncertain(&link);
+        CHECK_EQ(link.State, XHCI_SUSP_RECOVERING, "uncertain: RECOVERING");
+        CHECK_EQ(link.Outcome, XHCI_SUSP_OUT_UNCERTAIN, "outcome uncertain");
+        CHECK_EQ(link.Armed, 0, "nothing armed");
+        CHECK_EQ(link.ClaimDue, 0, "nothing due");
+        func_init(&f1[0], D2);
+        f1[0].PwrWanted = D0;
+        f1[0].D0Pended = 1;
+        CHECK_EQ(XhciSuspDecide(&link, f1, 1, 1, 0, &d1), XHCI_SUSP_DO_NONE,
+                 "RECOVERING: no resume");
+        CHECK_EQ(f1[0].CompleteD0, 0, "the D0 pends");
+        XhciSuspGone(&link);
+        XhciSuspUncertain(&link);
+        CHECK_EQ(link.State, XHCI_SUSP_GONE, "GONE stays GONE");
+    }
 }
 
 static void test_digest(void)
