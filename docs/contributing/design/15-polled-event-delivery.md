@@ -433,7 +433,15 @@ the same controller-lock hold as the look that proved the line dead:
    modelled register file). `KeSynchronizeExecution` is in Windows 98
    SE's `ntkern.vxd` and imported by its own `uhcd.sys` and `openhci.sys`,
    so it takes an `all` allowlist row with that precedent. Its steps, each
-   a bounded number of attempts with no wait:
+   a bounded number of attempts with no wait. It is entered only while
+   the register layout is valid (`HcInfoStatus` OK, read under the
+   controller lock by its caller), and it writes nothing while a reset is
+   under way - `USBCMD.HCRST` or `USBSTS.CNR` read set, the guard
+   `XhciMaskInterrupts` keeps, since 5.4.1 forbids Operational and Runtime
+   writes then - nor derives a write from an operand that read all ones;
+   either case answers "not proven", and the PASSIVE containment below
+   goes on to its configuration-space step without touching MMIO (round
+   7).
    1. **Both enables down, proven.** `USBCMD.INTE` written 0 and
       `IMAN.IE` written 0 (`IP` written 0, so it is kept), then both read
       back, up to three times, until `INTE` and `IE` both read 0 - both,
@@ -467,7 +475,13 @@ the same controller-lock hold as the look that proved the line dead:
    2. **The PASSIVE containment**, `HcdPollContain(hc)`: one helper, called
       with the power gate held and no spin lock held, only while the
       controller is started and in D0 (its power state read under the
-      gate). It runs the DIRQL retirement once more and, if that does not
+      gate). **A lifecycle caller first revokes the poller's service** -
+      `PollService` 0 and `PollServiceGen` advanced, under the controller
+      lock (`HcdPollRevoke`) - and only then reads whether a retirement is
+      owed: the watcher moves only inside an admitted pass, holding the
+      controller lock from its look through the move, so after the
+      revocation no new obligation can appear behind the check (round 7).
+      It runs the DIRQL retirement once more and, if that does not
       prove, sets bit 10 of the PCI Command register (Interrupt Disable;
       PCI 3.0 6.2.2: "when set, the function is prevented from asserting
       INTx#", which on PCI Express sends Deassert_INTx), through the same
@@ -480,8 +494,9 @@ the same controller-lock hold as the look that proved the line dead:
       the retirement is owed; by the suspend paths in `hcd_power.c` before
       `XhciSuspendController`; by `hcdRecover` before
       `XhciRecoverController`; and by the stop, after `hcdThreadStop` and
-      before the release disconnects the interrupt, so a move made just
-      before a stop or a suspend is contained by that path itself. Outside
+      before the release disconnects the interrupt, each after its
+      revocation, so a move made just before a stop or a suspend is
+      contained by that path itself. Outside
       D0 it does nothing and records why (the controller is not powered,
       so it is not asserting).
    3. **The in-place recovery**, asked for through the existing
@@ -950,7 +965,12 @@ own window, where no grant has been made and nothing is armed; a park
 against a close asked after the DPC took ownership (CLOSING kept through
 the park, CLOSED only in the `PollLock`-only epilogue, nothing armed); a
 close and a grant each arriving after the parking decision and before
-the epilogue (CLOSED; ARMED by `KickOwed`, never armed twice); a retirement whose `IP` step
+the epilogue (CLOSED; ARMED by `KickOwed`, never armed twice); a watcher
+whose move would come between a suspend's containment check and its
+quiesce (the revocation first: no move, nothing owed missed); a
+containment after a recovery's HCRST timed out (HCRST or CNR read set:
+no MMIO written, the configuration step taken) and after a failed
+re-decode (`HcInfoStatus` bad: the same); a retirement whose `IP` step
 fails followed at once by a suspend and by a recovery (the ISR still
 claiming through it, the HCD's attempt before each, and the HCRST's
 proof); a
@@ -1486,6 +1506,13 @@ Round 6 (`ded0bbf`): 1 P1, 2 P2, all taken.
 | 1 | P1: clearing Interrupt Disable before the reset could re-expose a pending `IP` | Section 4.2: cleared only after `XhciInitController` succeeded, just before `XhciEnableInterrupts`, read back; left set on a failed start; a stuck bit handled per mode |
 | 2 | P2: stop and suspend could bypass the PCI step | Section 4.2: `HcdPollContain`, under the power gate in D0, called by the thread, both suspend paths, `hcdRecover` and the stop after the thread ends |
 | 3 | P2: "latched failed" did not enter the recovery machinery | Section 4.2: the recovery asked through `XhciRequestControllerReset`, its existing bounded retries and terminal kept; `LineRetired` set at HCRST completion |
+
+Round 7 (`8cee483`): 1 P1, 1 P2, both taken.
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | P1: containment could write MMIO during a reset or on a bad layout | Section 4.2, step 3: `HcInfoStatus` admission, HCRST/CNR and operand guards; the PCI step taken without MMIO |
+| 2 | P2: the watcher could create an obligation after a lifecycle check | Section 4.2, containment step 2: `HcdPollRevoke` before the check |
 
 ## 14. What changes in the documents
 
