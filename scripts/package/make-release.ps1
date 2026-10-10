@@ -4268,8 +4268,12 @@ A value that is absent means the default each one states.
 ==============================================================================
 
 GNU GPL v2 - see the LICENSE file in this directory, beside this readme. This
-applies to xhci98.sys, xhciuas.sys, the 32-bit helper xhcimsi.sys and their
-INFs, which are this project's own work.
+applies to this project's own code in xhci98.sys, xhciuas.sys and the 32-bit
+helper xhcimsi.sys, and to their INFs. The 64-bit xhci98.sys and xhcimsi.sys
+also carry a few small support routines that Microsoft's driver kit links in
+(a stack-cookie check, and in xhcimsi.sys a device-security helper), which
+are not this project's work; docs/contributing/legal-provenance.md, in the
+project's source repository, records them.
 
 No Microsoft file is in this download. The usbd.sys and usbui.dll the
 install needs are copied by Windows from your own Windows installation
