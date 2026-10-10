@@ -9819,3 +9819,20 @@ their I/O count, and the PDOs complete it with the status it came with.
 Rule. **An FDO passes down every major function it does not own, WMI
 included; a PDO completes one it does not handle with the status it came
 with. Run a boot under Driver Verifier on an NT 6 guest before a cut.**
+
+## QEMU's SDL display stalls the whole device model on this host, and an isochronous stream pays for every stall
+
+Early-warning matrix of Phase 36, 2026-10-11, development host A, QEMU
+11.1.0, Windows 7 guests. A 20 s tone over `usb-audio` played in 26 to 63 s
+on some runs and 20 s on others, on every driver build tried, and was first
+booked as a driver regression. QEMU's main loop was blocking for 160 to
+490 ms about once a second whenever the guest's screen changed, with the SDL
+display; with `-display none` it never did. During a stall no timer, doorbell
+or event of any device runs, and QEMU schedules each Start Isoch ASAP TD one
+Interval after the last one it ran, with no catch-up, so the stream lengthens
+by the stalls' sum (run-36, "Windows 7 slow audio in the early-warning
+matrix").
+
+Rule. **Time isochronous streams with `-display none` (screenshots through
+`screendump`). Before blaming a build for a timing reading, probe the
+emulator's main loop (an HMP round trip every 50 ms) and A/B the same build.**

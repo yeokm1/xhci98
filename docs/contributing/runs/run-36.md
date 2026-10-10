@@ -1074,3 +1074,74 @@ test client (`XHCIPM.SYS`), `XhciSelectiveSuspend` 1; raw texts in
 defect, now readable with the client bound since the entry no longer
 hangs); the rest of 36.35's legs in the combined matrix; the bench
 (36.36).
+
+## Windows 7 slow audio in the early-warning matrix: QEMU's display, not the driver (2026-10-11)
+
+**The report.** The early-warning matrix on `0b7c395` (agent E, AUD-W7,
+AUD-CTL-1, CP1) timed `TONE.WAV` (20 s) over QEMU's `usb-audio` on Windows 7
+x86 and x64 at about 63 s, sometimes 106 s, with fewer packets answered than
+the ~20,100 of a normal play; Vista on the same build played normally, and a
+6-play control of the wave 3 build (`2d0de39`) on a fresh overlay was 6/6
+normal, so the slowness was booked as a regression between `2d0de39` and
+`b1b20bf`. A qemu-flavour trace of a slow play (agent E, `tr3q-ts.log`)
+showed a mid-stream Ring Underrun, ~41 s with no driver line and no event,
+then usbaudio's ABORT_PIPE and SYNC_RESET_PIPE_AND_CLEAR_STALL and a normal
+replay.
+
+**Not a regression.** Six plays per build on one 7 x64 overlay (branch
+`p36-aud`, development host A, QEMU 11.1.0, amd64 `release` builds of the
+merge points): `2d0de39` (int3) 2 slow of 6 (50.0 s and 63.1 s, ~22,000
+packets each, the replay shape), `fc990da` 0/6, `d7d19ae` 0/6, `53cfb21` 1/6
+(48.7 s), `b1b20bf` 0/6 twice, the head `12e4b03` (qemu flavour) 0/10. The
+wave 3 build is not immune, and no merge flips the rate.
+
+**The mechanism.** A host-side probe of QEMU's main loop (an HMP `info
+status` round trip every 50 ms) finds it blocked for 160 to 490 ms about once
+a second on a Windows 7 guest whose screen is changing (a blinking cmd
+cursor is enough): 8 to 18 stalls per 20 s, none while the guest is
+paused, none on a still desktop, and the same with the xHCI controller
+disabled in the guest - so neither the driver nor the guest's USB traffic
+causes them. With `-display none` the probe reads 0 stalls over every run
+(max 1 ms). The stall stops the whole device model: a timestamped
+`usb_xhci_*` trace of a slow play has no doorbell, no kick and no event of
+any device for 0.2 to 0.5 s, about 20 times in a 27 s play. QEMU schedules a
+Start Isoch ASAP TD one Interval after the last one it ran
+(`xhci_calc_iso_kick`, `external\qemu\hcd-xhci.c`), with no catch-up after
+a late timer, so every stall is added to the stream's length. Win7's
+usbaudio sends ASAP URBs (SIA); and QEMU's controller reports CFC = 0
+(HCCPARAMS1 `0x00080001`), under which software may set a Frame ID only in
+a data flow's first TD and shall set SIA in the rest (xHCI 1.2c 4.11.2.5,
+p.199-200), so the driver cannot pace the stream by Frame IDs here. The
+63 s replay shape is a stall long enough for usbaudio to give up on the
+stream and reset the pipe; its 41 s length was not reproduced.
+
+**A/B on one build.** Head `release` (`a71a2bd3`, `out\p36-int5`), 7 x64,
+the same overlay, outputs and guest clock: with the SDL display 26.2 /
+27.1 / 27.7 / 27.5 / 26.5 / 27.0 s (6/6 slow, all ~20,100 packets); with
+`-display none` 20.4 / 20.2 / 20.2 / 20.2 / 20.2 / 20.2 s. The head qemu
+flavour the same way (SDL 24.1 to 28.0 s; none 20.2 to 20.8 s). 7 x86, head
+`release` x86 (`46329030`), fresh overlay, `-display none`: 21.2 / 20.3 /
+20.2 / 20.2 / 20.2 / 20.2 s. Moving the overlay delta, wav, debugcon and
+serial files out of the OneDrive tree, `-audiodev none` and a guest clock
+inside the activation grace period changed nothing on their own.
+
+**The driver's underrun path.** A Ring Underrun leaves an isoch endpoint
+Running and off the schedule until software rings its doorbell (xHCI 1.2c
+4.10.3.1, p.185). The bus rings the doorbell on every TD it publishes
+(`HcdIoMapped`, `hcd_io.c`) and on an underrun that leaves work queued
+(`hcdIsoEvent`, `hcd_dev.c`). Forced with the guest's vCPU threads
+suspended for 150 ms eight times in one play (`-display none`, head qemu
+flavour): eight underruns, each followed within milliseconds by usbaudio's
+abort and reset and a resumed stream; the play took 21.5 s, the next two
+20.2 s. One 400 ms suspension on the `release` build of `0b7c395`: the
+same recovery, 21.5 s.
+
+**Consequence.** No driver change. Audio timing legs (and any other leg that
+times isochronous streams) run with `-display none` - screenshots still come
+through the monitor's `screendump` - or are read as host-dependent. The
+early-warning AUD-W7 / AUD-CTL rows are harness readings, not a defect of
+`0b7c395`. Vista's normal plays on the same host were not examined.
+Raw texts: `out\p36-aud\legs\w7x64\*-times.txt`, `legs\w7x86\x86-h5r-times.txt`,
+traces `legs\w7x64\qtrace-{2,3,4}.log` and the local temp directory's
+`qtrace-8.log`; harness `out\p36-aud\kit` (`probe.ps1`, `stall.ps1`,
+`stallplay.ps1`, `launch.ps1 -Display`).
