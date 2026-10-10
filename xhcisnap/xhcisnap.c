@@ -4513,6 +4513,8 @@ static int selftest_msi(void)
  */
 #define SNAP_HCD_SSUSP_HEAD         237UL
 #define SNAP_HCD_SSUSP_HEAD_WORDS   306UL
+/* The stage B branch's own builds (p36-suspbc), never released: 273. */
+#define SNAP_HCD_SSUSP_BRANCH_WORDS 273UL
 static void print_ssusp(const unsigned char *image, unsigned long bytes)
 {
     static const char *const link_names[6] = {
@@ -4527,6 +4529,15 @@ static void print_ssusp(const unsigned char *image, unsigned long bytes)
     const unsigned char *r;
 
     headBytes = get32(image, 4);
+    if (headBytes == SNAP_HCD_SSUSP_BRANCH_WORDS * 4) {
+        comp("
+selective suspend, stage B: a %lu-byte header, a stage B "
+             "branch build's
+  (its words at 204, before the integration "
+             "moved them to 237); not decoded.
+", headBytes);
+        return;
+    }
     if (headBytes < SNAP_HCD_SSUSP_HEAD_WORDS * 4 || bytes < headBytes) {
         return;
     }
@@ -4801,8 +4812,14 @@ static void print_xpipe(const unsigned char *hcd, unsigned long hcdBytes)
              "before task 36.24).\n");
         return;
     }
+    /* A count past 64 or past the header is no stage 2 count: a stage B
+     * branch build's 273-word header held DNCTRL here (0xFFFFFFFF with
+     * the switch off; Codex review of p36-int4, round 1, finding 2). */
     if (hcdBytes < SNAP_HCD_XPIPE_HEAD_WORDS * 4 ||
-        get32(hcd, SNAP_XPIPE_COUNT_AT * 4) < SNAP_XPIPE_WORDS) {
+        get32(hcd, SNAP_XPIPE_COUNT_AT * 4) < SNAP_XPIPE_WORDS ||
+        get32(hcd, SNAP_XPIPE_COUNT_AT * 4) > 64UL ||
+        (SNAP_XPIPE_AT + get32(hcd, SNAP_XPIPE_COUNT_AT * 4)) * 4 >
+            headBytes) {
         comp("\nstage 2: %lu counters in a %lu-byte region - not a shape "
              "this build reads;\n  not decoded.\n",
              get32(hcd, SNAP_XPIPE_COUNT_AT * 4), hcdBytes);

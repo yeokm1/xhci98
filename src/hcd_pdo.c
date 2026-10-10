@@ -2337,6 +2337,7 @@ ULONG HcdDevicePdoRepresentFunctions(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     PHCD_DEVICE_PDO nu;
     NTSTATUS status;
     KIRQL oldIrql;
+    KIRQL ctlIrql;
     ULONG xportFlags;
     ULONG settles;
     ULONG done;
@@ -2429,7 +2430,17 @@ ULONG HcdDevicePdoRepresentFunctions(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         }
         /* Off the chain, so selective suspend's slot is settled now, as
          * HcdDevicePdoGone settles it (design record 14 section 4.4); the
-         * old PDO had its REMOVE, so normally nothing is owed. */
+         * old PDO had its REMOVE, so normally nothing is owed. Stage B's
+         * armed functions (FwArmed, record 14 section 8.5) go to the
+         * replacement first: the device stays configured, so a function
+         * the device took FUNCTION_SUSPEND options 03h for is still
+         * armed, and the resume's DISARM must still see it; the unlink
+         * clears only the old PDO's copy (Codex review of p36-int4,
+         * round 1, finding 1). Same interface mask, so the same
+         * ownership. */
+        XhciControllerLockAcquire(&hc->Hc, &ctlIrql);
+        nu->FwArmed = pdo->FwArmed;
+        XhciControllerLockRelease(&hc->Hc, ctlIrql);
         if (settles < XHCI_FUNC_MAX &&
             HcdSuspUnlinkLocked(hc, pdo, &settle[settles])) {
             settles++;
