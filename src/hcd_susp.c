@@ -443,6 +443,7 @@ typedef struct _HCD_SUSP_TAKEN {
 #define HCD_SUSP_TAKE_WAKE_NS   4UL     /* STATUS_NOT_SUPPORTED */
 #define HCD_SUSP_TAKE_REPORT    5UL     /* no IRP: a START's D0 reported */
 
+/* IRQL: any <= DISPATCH_LEVEL, any lock: fills the caller's own list. */
 static VOID hcdSuspTake(PHCD_SUSP_TAKEN t, PHCD_DEVICE_PDO pdo, PIRP irp,
                         ULONG kind)
 {
@@ -669,6 +670,8 @@ typedef struct _HCD_SUSP_ITAKEN {
     NTSTATUS Status[HCD_SUSP_ITAKE_MAX];
 } HCD_SUSP_ITAKEN, *PHCD_SUSP_ITAKEN;
 
+/* IRQL: any <= DISPATCH_LEVEL, any lock: fills the caller's own list
+ * (the idle cancel path's at DISPATCH_LEVEL too). */
 static VOID hcdSuspITake(PHCD_SUSP_ITAKEN t, PHCD_DEVICE_PDO pdo, PIRP irp,
                          NTSTATUS status)
 {
@@ -714,6 +717,7 @@ static VOID hcdSuspIFinishT(PHCD_CONTROLLER hc, PHCD_SUSP_ITAKEN t)
     t->Count = 0;
 }
 
+/* IRQL: any, any lock (a pure mapping). */
 static NTSTATUS hcdSuspIdleStatus(ULONG st)
 {
     switch (st) {
@@ -732,7 +736,8 @@ static NTSTATUS hcdSuspIdleStatus(ULONG st)
  * IRP: claimed by 4.2's handshake and taken with its status, or - its
  * callback running - owed to the callback's return, the strongest trigger
  * kept (the table's order). A cancel routine already running keeps the
- * IRP. Controller lock held.
+ * IRP. Controller lock held. IRQL: DISPATCH_LEVEL (the lock's; the idle
+ * cancel path reaches it too).
  */
 static VOID hcdSuspIdleTriggerLocked(PHCD_DEVICE_PDO pdo, ULONG trigger,
                                      PHCD_SUSP_ITAKEN t)
@@ -769,7 +774,8 @@ static VOID hcdSuspIdleTriggerLocked(PHCD_DEVICE_PDO pdo, ULONG trigger,
  * in D1 or D2. While a callback of the device runs, that settlement is its
  * return's (hcdSuspCbReturned), "after every RUNNING callback of the batch
  * has returned". The device's chain stable: the thread, or PdoListLock.
- * Controller lock held.
+ * Controller lock held. IRQL: DISPATCH_LEVEL (the lock's; the idle
+ * cancel path reaches it too).
  */
 static VOID hcdSuspIdleEndLocked(PHCD_USB_DEVICE dev, PHCD_SUSP_ITAKEN t)
 {
@@ -2759,8 +2765,9 @@ ULONG HcdSuspPdoReopen(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
          * device is powered - on a suspended link the thread reports it
          * when its resume reaches ACTIVE (hcdSuspReportD0) - and, inside
          * the PDO's report mutex, never after a newer Dx's report (round
-         * 4). A parent PDO is reported above; a SuperSpeed PDO and the
-         * switch at 0 keep today's START, which reports nothing. */
+         * 4). A parent PDO is reported above; a hub PDO and the switch
+         * at 0 keep today's START, which reports nothing. SuperSpeed is
+         * eligible since stage B (8.2) and reported like any other. */
         state.DeviceState = PowerDeviceD0;
         pdo->Common.DevicePower = PowerDeviceD0;
         (VOID)PoSetPowerState(pdo->Common.Self, DevicePowerState, state);
@@ -2947,9 +2954,10 @@ static VOID NTAPI hcdSuspIdleCancel(PDEVICE_OBJECT DeviceObject, PIRP irp)
 /*
  * IOCTL_INTERNAL_USB_SUBMIT_IDLE_NOTIFICATION at a stage A PDO (6.1 to
  * 6.4): refused, or held in HELD with its cancel routine, the callback
- * and its context copied. Returns 0 when the PDO is not stage A's - a
- * hub, SuperSpeed, or the switch at 0: today's hold (hcd_urb.c), its
- * callback never called. The caller holds the PDO's Busy count and has
+ * and its context copied. Returns 0 when the PDO is not eligible - a
+ * hub, a composite parent, an unknown speed class, or the switch at 0:
+ * today's hold (hcd_urb.c), its callback never called. SuperSpeed is
+ * eligible since stage B (design record 14 section 8.2). The caller holds the PDO's Busy count and has
  * checked the controller and the callback. IRQL: <= DISPATCH_LEVEL.
  */
 ULONG HcdSuspIdleSubmit(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc, PIRP irp,
