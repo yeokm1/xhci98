@@ -294,7 +294,31 @@
 > E820 and the DOS version) and `xhciqual\sysasm.asm` (CPUID, every
 > register it touches saved). Task 36.33's fix adds
 > `xhcisnap\check-counter-names.ps1`, which checks the built `XHCISNAP`'s
-> counter names against `xhci_counters.h` word by word. The tables below are the
+> counter names against `xhci_counters.h` word by word.
+> Two groups from before Phase 36 that this map did not name (added in
+> 36.20): strict mode, `xhci_strict.c` / `xhci_strict.h` (the xHCI 1.2
+> command precondition table: would a conforming controller accept this
+> command in this Slot and EP state; pure, host suite `test_strict`) and
+> its driver half `hcd_strict.c` (before each command `hcd_enum.c`'s
+> `hcdCommand` submits, it reads the states from the Output Device Context,
+> counts and traces a violation and still sends the command; it only
+> observes), compiled into the debug and `qemu` flavours and none of it
+> into `release`; and `src\uas\`, the UAS class driver `xhciuas.sys` (task
+> 31-A.2), built by its own `sources` and `makefile`: `uas.h` (the stack
+> and the transports), `uas_iu.c` / `uas_iu.h` (its pure core: the
+> information units, LUN encoding, tags, the configuration walk for the
+> UAS setting, REPORT LUNS, the status fold and the storage ids; host suite
+> `test_uas`), `uas_mem.c` (every pool, MDL and IRP-memory call, the import
+> allowlist's one site), `uas_streams.c` / `uas_streams.h` (the one
+> adapter to the bus's `IOCTL_XHCI98_OPEN_STREAMS` and `CLOSE_STREAMS`),
+> `uas_entry.c` (`DriverEntry`, `AddDevice`, the dispatch table),
+> `uas_fdo.c` (the FDO: PnP, the configuration and four pipes, the
+> transport choice, LUN discovery), `uas_pdo.c` (one PDO per logical unit:
+> its ids, SRBs and the storage IOCTLs), `uas_xport.c` (the transport
+> engine: queue, tags, the IUs streamed and streamless, timeouts, task
+> management, reset recovery), `xhciuas.rc` (the version resource) and the
+> two INFs, `xhciuas.inf` (32-bit) and `xhciuas-amd64.inf` (staged as
+> `xhciuas.inf` in the 64-bit package). The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name
