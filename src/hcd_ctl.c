@@ -72,6 +72,12 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
 /* Task 36.33: selective suspend, stages A and B (design record 14 section
  * 7). Default 0; the INF writes nothing. */
 #define HCD_VALUE_SELECTIVE_SUSPEND L"XhciSelectiveSuspend"
+/* Task 36.24: stage 2's whole-URB mapping (design record 13 section 11.6,
+ * point 2), written by no INF: a DWORD, 0 off and anything else on;
+ * absent or of another type is HCD_WIDE_MAP_DEFAULT. Read at every start;
+ * on Windows 2000 and later only, and only past the start's register-free
+ * check (hcd_dma.c, HcdDmaWideOpen). */
+#define HCD_VALUE_WIDE_MAP      L"XhciWideMap"
 #if defined(XHCI_FLAVOUR_QEMU)
 /* Task 36.22, qemu flavour only and written by no INF: the map grant a
  * chunk may use, held to this many registers (1 to the real grant), so a
@@ -312,11 +318,28 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     XhciLogNote(ext, "xfer.max.why", why);
     XhciLogNote(ext, "xfer.max.bytes", bytes);
 
+    /* 36.24. */
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_WIDE_MAP, &value);
+    hc->WideSwitch = NT_SUCCESS(status) ? (value != 0 ? 1UL : 0UL)
+                                        : HCD_WIDE_MAP_DEFAULT;
+    XhciControllerLockAcquire(ext, &oldIrql);
+    hc->Xpipe.Switch = NT_SUCCESS(status) ? value : 0xFFFFFFFFUL;
+    XhciControllerLockRelease(ext, oldIrql);
+    XhciLogNote(ext, "xfer.wide.value",
+                NT_SUCCESS(status) ? value : 0xFFFFFFFFUL);
+    XhciLogNote(ext, "xfer.wide.switch", hc->WideSwitch);
+
 #if defined(XHCI_FLAVOUR_QEMU)
     value = 0;
     status = hcdReadDword(hc, HCD_VALUE_QEMU_MAP_GRANT, &value);
     hc->QemuMapGrant = NT_SUCCESS(status) ? value : 0;
     XhciLogNote(ext, "qemu.mapgrant", hc->QemuMapGrant);
+
+    value = 0;
+    status = hcdReadDword(hc, L"XhciQemuBigRefuse", &value);
+    hc->QemuBigRefuse = (NT_SUCCESS(status) && value == 1) ? 1UL : 0UL;
+    XhciLogNote(ext, "qemu.bigrefuse", hc->QemuBigRefuse);
 
     value = 0;
     status = hcdReadDword(hc, HCD_VALUE_QEMU_PSI_E460, &value);
@@ -2203,6 +2226,7 @@ static VOID hcdRelease(PHCD_CONTROLLER hc)
     HcdTimersDrain(hc);
     XHCI_DBG_TEXT("hcd: release: DMA");
     HcdDmaMapDrain(hc);
+    HcdDmaWideClose(hc);
     HcdDmaClose(hc);
     XHCI_DBG_TEXT("hcd: release: BAR");
     if (hc->BarVa != NULL) {
@@ -2232,6 +2256,11 @@ static VOID hcdXstatStart(PHCD_CONTROLLER hc)
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     p = (PUCHAR)s;
     for (i = 0; i < sizeof(*s); i++) {
+        p[i] = 0;
+    }
+    /* 36.24's counters start again with it. */
+    p = (PUCHAR)&hc->Xpipe;
+    for (i = 0; i < sizeof(hc->Xpipe); i++) {
         p[i] = 0;
     }
     HcdTscRead(&s->TscStartLo, &s->TscStartHi);
@@ -2358,6 +2387,8 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     XhciLogNote(ext, "start.common.pa", ext->StartPA);
     XhciLogNote(ext, "start.mapregs", hc->MapRegisters);
     hcdXstatGrant(hc);
+    /* 36.24: after the grant, before anything is enumerated. */
+    HcdDmaWideOpen(hc);
     /* The design record 13 section 11.4 reading, on the debug channel
      * too: the log ring has no reader until 26-A.8. */
     XHCI_DBG_VALUE("hcd: start, map registers granted", hc->MapRegisters);

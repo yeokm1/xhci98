@@ -381,6 +381,7 @@ typedef struct _XHCI_XFER_BUILD_STATE {
      * non-control transfer's whole TD (task 7a-A.2 for interrupt, 8-A.1 for
      * bulk; the two are one shape here). */
     ULONG NormalOnly;
+    ULONG DataCap;          /* data TRBs at most (36.25)            */
 } XHCI_XFER_BUILD_STATE;
 
 static ULONG xhciXferEmitData(XHCI_XFER_BUILD_STATE *state,
@@ -391,7 +392,7 @@ static ULONG xhciXferEmitData(XHCI_XFER_BUILD_STATE *state,
     ULONG control;
 
     if (state->Count >= state->Capacity ||
-        state->DataCount >= XHCI_XFER_MAX_DATA_TRBS) {
+        state->DataCount >= state->DataCap) {
         return XHCI_XFER_TOO_MANY_TRBS;
     }
 
@@ -508,6 +509,8 @@ static ULONG xhciXferEmitSgList(XHCI_XFER_BUILD_STATE *state,
     ULONG consumed;
     ULONG i;
     ULONG status;
+    ULONG ordered;
+    ULONG running;
 
     if (sgList == NULL) {
         return XHCI_XFER_BAD_PARAM;
@@ -534,8 +537,27 @@ static ULONG xhciXferEmitSgList(XHCI_XFER_BUILD_STATE *state,
      * caller skips the Data Stage TD entirely, which is the routine enumeration
      * case (batch 6-0).
      */
-    if (sgList->SgElementCount > XHCI_XFER_MAX_DATA_TRBS) {
+    if (sgList->SgElementCount > state->DataCap) {
         return XHCI_XFER_TOO_MANY_TRBS;
+    }
+
+    /* Task 36.25: a list already in tiling order - each element's offset
+     * the sum of the lengths before it, none empty, as every list the HCD
+     * builds is - holds the cursor's element at the index of the elements
+     * consumed, and at no other (the offsets strictly increase), so it is
+     * taken there in one step; a scan from 0 would cost a 513-element list
+     * about 130,000 comparisons under the controller lock. Any other list
+     * is scanned as before, so the element chosen is the same either way. */
+    ordered = 1;
+    running = 0;
+    for (i = 0; i < sgList->SgElementCount && ordered; i++) {
+        if (sgList->SgElement[i].SgOffset != running ||
+            sgList->SgElement[i].SgTransferLength == 0 ||
+            sgList->SgElement[i].SgTransferLength > 0xFFFFFFFFUL - running) {
+            ordered = 0;
+        } else {
+            running += sgList->SgElement[i].SgTransferLength;
+        }
     }
 
     cursor = 0;
@@ -544,10 +566,16 @@ static ULONG xhciXferEmitSgList(XHCI_XFER_BUILD_STATE *state,
         const USBPORT_SCATTER_GATHER_ELEMENT *element;
 
         element = NULL;
-        for (i = 0; i < sgList->SgElementCount; i++) {
-            if (sgList->SgElement[i].SgOffset == cursor) {
-                element = &sgList->SgElement[i];
-                break;
+        if (ordered) {
+            if (consumed < sgList->SgElementCount) {
+                element = &sgList->SgElement[consumed];
+            }
+        } else {
+            for (i = 0; i < sgList->SgElementCount; i++) {
+                if (sgList->SgElement[i].SgOffset == cursor) {
+                    element = &sgList->SgElement[i];
+                    break;
+                }
             }
         }
         if (element == NULL) {
@@ -667,6 +695,7 @@ ULONG XhciXferBuildControl(const XHCI_CONTROL_REQUEST *request,
     state.MaxPacketSize = request->MaxPacketSize;
     state.DirectionIn = dataIn;
     state.NormalOnly = 0;
+    state.DataCap = XHCI_XFER_MAX_DATA_TRBS;
 
     /* --- Data Stage TD, if there is one. --- */
     if (dataStage) {
@@ -760,6 +789,9 @@ ULONG XhciXferBuildNormal(const XHCI_NORMAL_REQUEST *request,
     }
 
     *trbCount = 0;
+    if (request->MaxDataTrbs > XHCI_XFER_MAX_WIDE_DATA_TRBS) {
+        return XHCI_XFER_BAD_PARAM;
+    }
 
     state.Out = out;
     state.Capacity = capacity;
@@ -771,6 +803,8 @@ ULONG XhciXferBuildNormal(const XHCI_NORMAL_REQUEST *request,
     state.MaxPacketSize = request->MaxPacketSize;
     state.DirectionIn = request->DirectionIn ? 1UL : 0UL;
     state.NormalOnly = 1;
+    state.DataCap = (request->MaxDataTrbs == 0) ? XHCI_XFER_MAX_DATA_TRBS
+                                                : request->MaxDataTrbs;
 
     if (request->TransferLength == 0) {
         /*

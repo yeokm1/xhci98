@@ -2840,8 +2840,66 @@ static void test_ring_noop_rewrite(void)
              "with the second lap's Cycle Bit, not a constant");
 }
 
+/*
+ * 36.24 (design record 13 section 11.6, point 5): two TDs of one URB, each
+ * at most 31 TRBs - half the 62 a 64-TRB ring takes - fill an empty ring
+ * exactly, and a refill published as the older one retires always fits,
+ * however the two are placed against the Link TRB across repeated laps.
+ */
+static void test_two_halves(void)
+{
+    static XHCI_TRB mem[64];
+    XHCI_TRB td[31];
+    XHCI_TRB one;
+    XHCI_RING ring;
+    ULONG pa[2];
+    ULONG head;
+    ULONG tail;
+    ULONG k;
+    ULONG wraps;
+    ULONG start;
+    ULONG lap;
+
+    CHECK_EQ(XhciRingInit(&ring, mem, RING_PA, 64, XHCI_RING_KIND_ENDPOINT),
+             XHCI_RING_OK, "a 64-TRB ring");
+    CHECK_EQ(XhciRingCapacity(&ring), 62, "62 usable TRBs");
+    build_td(td, 31);
+    CHECK_EQ(XhciRingEnqueueTd(&ring, td, 31, &pa[0]), XHCI_RING_OK,
+             "TD 0, 31 TRBs");
+    CHECK_EQ(XhciRingEnqueueTd(&ring, td, 31, &pa[1]), XHCI_RING_OK,
+             "TD 1, 31 TRBs");
+    CHECK_EQ(XhciRingFree(&ring), 0, "the two fill the ring exactly");
+    XhciTrbNoOpCommand(&one);
+    CHECK(XhciRingEnqueue(&ring, &one, NULL) != XHCI_RING_OK,
+          "nothing else fits beside them");
+
+    /* Each round retires the older TD and publishes the next into its
+     * slot; every lap the pair straddles the Link TRB somewhere new. */
+    wraps = 0;
+    lap = ring.Cycle;
+    for (k = 0; k < 40; k++) {
+        CHECK_EQ(XhciRingIndexFromPA(&ring, pa[k & 1UL], &start),
+                 XHCI_RING_OK, "the older TD's head");
+        CHECK_EQ(XhciRingTdBounds(&ring, start, &head, &tail), XHCI_RING_OK,
+                 "its bounds");
+        CHECK_EQ(head, start, "a TD from its head");
+        CHECK_EQ(retire_success(&ring, XhciRingTrbPA(&ring, tail)),
+                 XHCI_RING_OK, "the older TD retired");
+        CHECK_EQ(XhciRingFree(&ring), 31, "room for exactly one more");
+        CHECK_EQ(XhciRingEnqueueTd(&ring, td, 31, &pa[k & 1UL]),
+                 XHCI_RING_OK, "the refill fits");
+        CHECK_EQ(XhciRingFree(&ring), 0, "full again");
+        if (ring.Cycle != lap) {
+            wraps++;
+            lap = ring.Cycle;
+        }
+    }
+    CHECK(wraps >= 10, "the refills wrapped the ring many times");
+}
+
 int main(void)
 {
+    test_two_halves();
     test_trb_fields();
     test_ring_init();
     test_ring_init_refusals();

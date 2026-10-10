@@ -224,6 +224,26 @@
 > `uas_iu.c`, `test_uas`) and its descriptor (`uas_pdo.c`) and pipes read
 > the answer; the qemu flavour's `XhciQemuMapGrant` constrains the grant
 > (`hcdXstatGrant`, `hcd_ctl.c`).
+> Task 36.24 adds the pure `xhci_xpipe.c` / `xhci_xpipe.h` (stage 2,
+> design record 13 section 11.6: the TD planner over a URB's wide list,
+> eligibility, the promotion gate, the wide mapper's run append, the
+> register-free check's comparison, the pipelined record's machine and
+> the `XHCI_XPIPE_STATS` counters; host suite `test_xpipe`, with
+> `test_td`, `test_xfer`, `test_ring` and `test_snap`). The driver half:
+> `hcd_dma.c` (`hcdMapWide`, the promotion in `hcdMapExecute`, the check
+> `hcdWideCheck` and the pool, `HcdDmaWideOpen` / `HcdDmaWideClose`),
+> `hcd_io.c` (`hcdWideClaim`, `hcdWidePump`, `hcdWideRetired`,
+> `HcdIoRefillFlush`, `HcdIoWideStop`), `hcd_cfg.c` (the cancel walk's
+> wider predicate and the doorbell gates), `hcd_ctl.c` (`XhciWideMap`),
+> `hcd_door.c` and `xhcisnap.c` (`print_xpipe`, `-selftest-xpipe`).
+> Task 36.25 (record 13 section 11.7) adds no file: the big stream layout
+> is `xhci_stream.c` (`XhciStreamBigBytes`, `XhciStreamLayoutPlaced`,
+> `test_stream`), its build and fallback `hcd_cfg.c`
+> (`hcdCfgStreamsBuild`, `hcdCfgBigWanted`), the one-TD publication
+> `hcd_io.c` (`hcdWideBigOne`) into the pool's scratch (`hcd_dma.c`), and
+> the engine's per-request cap and ordered-list path `xhci_xfer.c`
+> (`XHCI_NORMAL_REQUEST.MaxDataTrbs`, `xhciXferEmitSgList`; `test_xfer`,
+> `test_td`).
 > Tasks 36.6 to 36.8 (design record 15) add the pure `xhci_poll.c` /
 > `xhci_poll.h` (the three values, the delivery and its reason, the
 > poller's ownership machine and roles, promotion, park and kick, the

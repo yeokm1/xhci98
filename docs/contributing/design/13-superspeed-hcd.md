@@ -4263,9 +4263,11 @@ table slots and the import gate is what proves it did.
 Windows 98's adapter fills those slots was not read.
 
 The adapter is 32-bit on both architectures. `Dma32BitAddresses` and never
-`Dma64BitAddresses`, so every address the table hands back is below 4 GB and
-every hardware address field keeps its high half at zero, as `AGENTS.md`
-requires; on an amd64 machine with memory above 4 GB the map registers are
+`Dma64BitAddresses`, so every hardware address field keeps its high half at
+zero, as `AGENTS.md` requires. The adapter does not guarantee that every
+address `MapTransfer` returns is below 4 GB: with a NULL map register base a
+page above 4 GB comes back as it is (11.6.1). The HCD refuses such a run
+(`hcdMapExecute`, `HighPart` not 0) rather than program it; on an amd64 machine with memory above 4 GB the map registers are
 real and the HAL places the data below the line, which is what 11.3 relies
 on.
 
@@ -4413,8 +4415,10 @@ Task 36.22 changes only the first.
   existing tools write - through `RtlQueryRegistryValues` with a routine
   that records the type and length (`uas_fdo.c`, `uasReadLimit`). The rule
   is pure (`UasDeviceLimit`, `uas_iu.c`, `test_uas`): taken only as a
-  four-byte `REG_DWORD` inside KB 2581464's range, 65535 to 2097120, and
-  only when the bus answered the question; then it replaces the bus's
+  four-byte `REG_DWORD` from 65535 to 2097152 - KB 2581464's range, 65535
+  to 2097120, with its top widened to 2097152, which Uwe Sieber's tool and
+  others write for 2 MiB (owner, 2026-10-10) - and only when the bus
+  answered the question; then it replaces the bus's
   answer, above it or below it, for every device with that `idVendor` and
   `idProduct` - the key is per model, machine-wide, not per physical
   drive, on any controller - and the controller's `XhciMaxTransferKB`
@@ -4424,15 +4428,15 @@ Task 36.22 changes only the first.
   the **nearest 4 KiB, ties up**: the contract's grid (64 KiB to 2 MiB in
   4 KiB steps) is what the bus's answer obeys and what the descriptor's
   `MaximumPhysicalPages` (bytes / page + 1) is built for. Nearest moves a
-  value least - never more than 2048 bytes, a tie going up - and takes the
-  range's two ends, 65535 and 2097120, Microsoft's spellings of 64 KiB and
-  2 MiB, to exactly those (rounding down would make 2097120 into 2 MiB less
-  4 KiB). It is a normalisation onto the grid, not a byte ceiling: the size
+  value least - never more than 2048 bytes, a tie going up - and takes
+  65535 and 2097120, Microsoft's spellings of 64 KiB and 2 MiB, and the
+  tools' 2097152 to exactly those (rounding down would make 2097120 into
+  2 MiB less 4 KiB). It is a normalisation onto the grid, not a byte ceiling: the size
   taken can exceed the value by up to 2048 bytes. The bridge caps in use
   (64 KiB, 120 KiB = 240 sectors, 512 KiB, 1 MiB) are on the grid and do
-  not move. 2097152 itself is outside KB 2581464's range and is refused,
-  though some tools write it for 2 MiB (the release notes say so). The
-  note in the device's hardware key gains
+  not move. (Until 2026-10-10 the range stopped at 2097120 and refused
+  2097152; the owner widened it so a tool's 2 MiB is taken as written.)
+  The note in the device's hardware key gains
   `XhciUasDeviceLimit` (the value read, 0 when absent or not four bytes)
   and `XhciUasDeviceLimitWhy` (0 absent, 1 used, 2 not a `REG_DWORD`, 3 out
   of range, 4 valid but the bus did not answer), and
@@ -4534,10 +4538,13 @@ text answers all three: stage 2 never asks for more registers than stage
    eligible record asks the pump for exactly what stage 1 asks: today's
    first chunk (`hcdPlanChunk`, at most 32 pages). Inside that request's
    execution routine (`hcdMapExecute`) the record is **promoted** to a
-   whole-URB mapping only when both hold:
+   whole-URB mapping only when all three hold:
    - the HAL handed this request no map registers - `MapRegisterBase` is
      NULL, which is how a HAL says the adapter's transfers need no
-     translation and `MapTransfer` returns the pages' own addresses; and
+     translation and `MapTransfer` returns the pages' own addresses;
+   - the adapter's grant at this start (`hc->MapRegisters`, from
+     `IoGetDmaAdapter`) is exactly `0x80001`, the value every HAL read in
+     11.6.1 reports for a register-free adapter of this description; and
    - promotion is **enabled**, and the controller's **register-free
      check** passed at this start (both below).
 
@@ -4557,8 +4564,9 @@ text answers all three: stage 2 never asks for more registers than stage
    at stage 1 (round 3, finding 1: never ask for a whole URB to find out
    whether it is safe).
 
-   **Promotion is off by default, and stays off until the HAL readings
-   are recorded.** `MapTransfer`'s documented contract
+   **Promotion was off by default until the HAL readings were recorded;
+   it is on by default since they were (owner, 2026-10-10, on 11.6.1's
+   verdict).** `MapTransfer`'s documented contract
    (`PMAP_TRANSFER`, wdm.h) bounds a mapping by the registers the request
    was given ("the number of map registers that can be set up cannot
    exceed the maximum returned"), and says nothing of a NULL base; mapping
@@ -4576,18 +4584,30 @@ text answers all three: stage 2 never asks for more registers than stage
      register and does not consult the request's count, over any MDL,
      either direction and any span the contract allows. It is task 36.24's
      evidence step, done before the switch below may default on, and
-     recorded in this section as a table of HAL builds;
-   - until then promotion is reachable only through a switch,
-     `XhciWideMap` (a `DWORD` in the controller's key, default 0 = off,
-     read at start; not written by the INFs), so the code, its host
-     vectors and its legs exist and a reader can try it on a machine of
-     their own, and nothing changes for anyone who does not set it. With
-     it off every URB is sequential, exactly stage 1;
+     recorded in this section as a table of HAL builds (11.6.1,
+     2026-10-10: on every target HAL a NULL base is pure pass-through,
+     and every HAL or verifier that has real registers hands over a
+     non-NULL base; the default's scope is 11.6.1's verdict);
+   - the switch is `XhciWideMap`, a `DWORD` in the controller's key, read
+     at every start and not written by the INFs: absent or of another
+     type it is on (`HCD_WIDE_MAP_DEFAULT`, `hcd.h`, the one constant that
+     sets the default), 0 is off and any other number on. With it off every
+     URB is sequential, exactly stage 1, and the release notes give 0 as
+     the way back. On, the gates above still decide each start and each
+     URB: Windows 2000 or later, the adapter's grant exactly `0x80001`
+     (kept apart from the qemu flavour's constrained grant,
+     `hc->MapGrantRaw`), the register-free check below passed, the pool
+     allocated, and a NULL base for the URB's first request. The reading
+     covers the service packs in 11.6.1's table; HAL hotfixes after them
+     were not read, and those runtime gates are what stands for them.
+     Under Driver Verifier's DMA checks the base is never NULL (11.6.1),
+     so nothing is promoted there;
    - with the switch on, the start-time **register-free check** runs as a
      regression check, never as the capability detector: at the
      controller's start, on NT only (98 and ME never send a URB that
      would be promoted, so promotion stays off there whatever the switch
-     says), the HCD maps one 16-page non-paged buffer of its own twice
+     says), and only when the grant is `0x80001` (anything else leaves
+     promotion off without mapping anything; `xfer.wide.check` 8), the HCD maps one 16-page non-paged buffer of its own twice
      through the pump - by a 1-register request whose routine, handed a
      NULL base, maps all 16 pages, and by an ordinary 16-register request
      - and the two lists must name the same addresses and lengths element
@@ -4603,13 +4623,13 @@ text answers all three: stage 2 never asks for more registers than stage
    the controller at its start from non-paged pool (NT only, only with
    `XhciWideMap` on and the register-free check passed) and freed at its
    stop, each sized
-   for the contract's largest command whatever the value in effect: a list
-   of 513 elements (24 bytes each on both architectures, enforced in
-   `xhci_usbport.h`; 12,328 bytes with the x86 list header, 12,344 on
-   amd64), the second TD's `XHCI_TRANSFER`, two 31-element per-TD lists
-   (760 and 776 bytes each) and the entry's own fields - about 14 KiB an
-   entry and about 113 KiB for eight, the exact figure a `sizeof` that
-   `hcd.h` asserts below a stated bound. If the allocation fails the pool
+   for the contract's largest command whatever the value in effect: a
+   plain array of 513 elements (24 bytes each on both architectures,
+   enforced in `xhci_usbport.h`: 12,312 bytes), the second TD's
+   `XHCI_TRANSFER` and its 31-element list (the first TD's is the record's
+   own, which holds 32), and the entry's own fields - about 13 KiB an entry
+   and about 104 KiB for eight, `HCD_WIDE_ENTRY`'s `sizeof` asserted in
+   `hcd.h` at most 14 KiB. If the allocation fails the pool
    is empty and every URB is sequential. An entry is claimed under the
    controller lock when an eligible record is filled and returned at its
    finalization (point 6), or when its first mapping does not promote; the
@@ -4791,7 +4811,9 @@ text answers all three: stage 2 never asks for more registers than stage
      pipelined fourth with two TDs fit the ring together, round 3, finding
      4), with a vector that aborts exactly that.
 7. **Telemetry.** The 202-word HCD header is kept as it is; new counters
-   are appended after it (words 202 on), never inside `XHCI_XSTAT`, whose
+   are appended after it - after the two words task 36.9 takes (202 and
+   203): their count at word 204 and the 24 counters from 205
+   (`XHCI_XPIPE_STATS`, `xhci_xpipe.h`) - never inside `XHCI_XSTAT`, whose
    serialized form is followed by fixed-offset UAS records (old readers
    hard-code word 110): pipelined URBs (those that had two TDs outstanding
    at once, counted when the second is published), early ends with a
@@ -4866,13 +4888,564 @@ on the first with the second queued, its removal and the length the URB
 reports, and the cancel walk taking three one-TD records and a two-TD
 record together. `test_ring`: two 31-TRB TDs filling a 64-TRB ring exactly, and the
 wrap between them across repeated refills. `test_snap`: the header's new
-words appended after word 202 with the old offsets unchanged, and an older
+words appended after word 203 with the old offsets unchanged, and an older
 `XHCISNAP` reading a newer snapshot, as 36.21 did. The hand-off to the
 cancel service, the doorbell gates and the sibling-recovery interleaving
 are driver paths no pure suite reaches; they are 36.26's legs with the
 qemu bulk faults (`XhciQemuInject` 14 to 17 hex: a lost completion, a stop, an error
 and a short, aimed at a pipelined URB's first TD, with a sibling
 stream's cancel made to run first).
+
+#### 11.6.1 The HAL reading (task 36.24's evidence step, 2026-10-10)
+
+Point 2 keeps promotion off until each NT target's HAL has been read. This
+is that reading. **Method: static, a disassembly reading.** Every fact here
+was read from a shipped binary with `kd.exe -z` (WDK 7.1 `Debuggers`; it
+maps the image and executes none of it), with Microsoft's public symbol
+files where they exist. The Windows 2000 SP4 HALs have none (their
+`.dbg` files are not on the symbol server), so they were read from
+their exported names. None of this was observed at runtime, apart from
+the one corroboration marked as such. The listings stay in git-ignored
+`out\p36-hal\` on development host A and are not tracked. The binaries are
+in git-ignored `tools\hal-extracted\` and are identified in the table at
+the end of this section. `docs/contributing/legal-provenance.md` section 4
+carries the row.
+
+**What the HCD asks for.** `HcdDmaOpen` (`hcd_dma.c`) passes
+`IoGetDmaAdapter` a `DEVICE_DESCRIPTION` with `Version` 0, `Master`,
+`ScatterGather` and `Dma32BitAddresses` set, `Dma64BitAddresses` clear,
+`InterfaceType` `PCIBus` and `MaximumLength` `0xFFFFFFFF`. The
+description is the same on x86 and amd64. All addresses below are kd
+addresses. Every x86 HAL maps at `0x80010000` and the XP x64 HAL at
+`0x80010000`. kd placed Vista x64's at `0x7FF3C220000` and 7 x64's at
+`0x7FF346C0000`. An RVA is the address less the base.
+
+**The NULL-base path is the same everywhere.** In all 24 HAL files read
+(22 distinct images; `hal.dll` is `halmacpi.dll` on Vista and 7 x86), the three routines a promoted URB depends on behave the same way
+when `MapRegisterBase` is NULL:
+
+- **`MapTransfer` passes the address through.** `IoMapTransfer` tests
+  the base first and sends a non-NULL base to `HalpMapTransfer`. With a
+  NULL base it returns the MDL page's physical address plus the byte
+  offset as a full 64-bit value. The page is
+  `Mdl->PageFrames[(CurrentVa - Mdl->StartVa) >> 12]`.
+  - It extends the run while the next frame is the previous one plus
+    one, while the run stays shorter than `*Length`, and only within
+    the same 2^20-page (4 GB) region. It never merges across a 4 GB
+    line.
+  - It writes `*Length` only when the run is shorter than asked.
+  - It reads no adapter field and keeps no per-register state. It makes
+    no copy, applies no clamp other than contiguity, and never looks at
+    the request's register count.
+  - Mapping past the request's `NumberOfMapRegisters` therefore has no
+    effect.
+  - It can return an address above 4 GB if such a page exists. The HCD
+    already refuses that: `hcdMapExecute` fails a run whose `HighPart`
+    is not 0, and a promoted mapping uses the same test.
+- **`FlushAdapterBuffers` does nothing and returns TRUE** for a bus
+  master with a NULL base.
+- **`FreeMapRegisters` returns at once** when the base or the adapter's
+  master adapter is NULL.
+
+Addresses (`IoMapTransfer` / its helper's 4 GB test / the Flush NULL
+test / the Free NULL test):
+
+- 2000 `hal.dll`: `80012c52` / `80012ce9` / `8001310e` / `80012856`.
+- XP SP3 `halmacpi.dll`: `8001570a` (NULL test at `8001570f`) /
+  `HalpMapTransferHelper` `800150d4` (`and eax,0FFF00000h` at
+  `800150f9`) / `800157d4` / `800147b2` (`IoFreeMapRegisters` at
+  `80014792`).
+- Vista SP2 x86 `hal.dll`: `80015bb2` / `HalpMapTransferHelper`
+  `80015576` / `80015c78` / `80014792`.
+- XP x64: `8001d1a0` / `8001d633` (Flush) / `8001c81c` (Free).
+- Vista x64: RVA `0x5284` / `0x5670` / `0x49e0`.
+- 7 x64: RVA `0x53e4` / `0x5790` / `0x4b20`.
+
+How the builds compare:
+
+- **Windows 2000.** The eight HALs are instruction-for-instruction
+  identical in these routines after normalising for their export-only
+  names.
+- **XP SP3.** The seven HALs are identical after the addresses are
+  normalised.
+- **Vista and 7, x86.** Within each OS the routines differ only in
+  register allocation.
+- **amd64.** Vista's and 7's `IoMapTransfer` are identical. XP x64's has
+  the same logic in a different compilation.
+
+**When the base is NULL depends on the HAL.** This is where the HALs
+differ.
+
+`HalAllocateAdapterChannel` calls the execution routine with a NULL
+base, and sets the adapter's `MapRegisterBase` and register count to 0,
+in either of two cases:
+
+- the request asks for no registers; or
+- the adapter's "needs map registers" byte (`+0x55` on x86, `+0x125` on
+  amd64) is 0.
+
+The routine's addresses: 2000 `hal.dll` `80012a42`, with the tests at
+`80012a7d` and `80012a89`. XP SP3 `halmacpi.dll` `800155c2`, with the
+test at `8001560b`. Vista x86 `80015a6a`, with the tests at `80015aad`
+and `80015ab3`. XP x64 `8001cca0`, with the NULL path at `8001cd82`.
+
+The test that refuses a request larger than the adapter's
+`MapRegistersPerChannel` with `STATUS_INSUFFICIENT_RESOURCES` sits only on
+the needs-registers path. A NULL-base request never consults its count.
+
+`HalGetAdapter` sets the "needs map registers" byte. For this
+description it asks one question, and the answer differs by HAL:
+
+| HAL | No map registers (NULL base) when | Otherwise |
+|---|---|---|
+| 2000 SP4: `hal`, `halapic`, `halmps`, `halborg`, `halacpi`, `halaacpi`, `halmacpi` | the PAE kernel is not running: `cmp byte ptr ds:[0FFDF027Dh]` (`SharedUserData` `ProcessorFeatures[PF_PAE_ENABLED]`) at `8001c0aa` in `hal.dll`, then the `Dma64BitAddresses` test at `8001c0b7` | real registers: `min(pages + 1, 16, 32-bit map buffer >> 13)`, normally 16 |
+| 2000 SP4: `halsp` (Compaq SystemPro) | always: no PAE test | - |
+| XP SP3: all seven | always: `HalGetAdapter` `80027754` (`halmacpi`) zeroes the count for any scatter/gather PCI master at `80027815`-`80027828`. `HalpPhysicalMemoryMayAppearAbove4GB` is written at init (`8002d600`, `8002dcf9`) and read nowhere in the image | - |
+| Vista SP2 and 7 SP1 x86: `hal` (= `halmacpi`) and `halacpi` | `HalpPhysicalMemoryMayAppearAbove4GB` is 0: Vista `hal.dll` `HalGetAdapter` `80034162` reads it at `80034219`, tests it at `80034229`, and goes to the count at `8003422d` when `Dma64BitAddresses` is clear | real registers, `min(pages + 1, 16, MasterAdapter32 size >> 13)` (`8003425f`-`8003428e`) |
+| XP x64, Vista SP2 x64 and 7 SP1 x64: `hal` | `HalpPhysicalMemoryMayAppearAbove4GB` is 0: XP x64 `8005cdf9` | real registers from a local scatter pool of up to 256 pages; only pages above `0xFFFFFFFF` are bounced (`HalpDmaMapScatterTransfer`, `cmp [rbp+88h],rdx` at XP x64 `80019873`) |
+
+Notes on the table:
+
+- **The grant.** With no registers needed, `*NumberOfMapRegisters` is
+  the adapter's `MapRegistersPerChannel`, which is
+  `BYTES_TO_PAGES(MaximumLength & 0x7FFFFFFF) + 1`, that is `0x80001`. It
+  is the same on every HAL read. This driver's own counter reads a
+  "map grant 524289 registers" on the XP x64 QEMU guest (36.21's
+  serial logs, `out\p36-mb\xp64\`), so that number is a **runtime**
+  corroboration for XP x64 alone.
+- **Who sets the flag.** `HalpPhysicalMemoryMayAppearAbove4GB` is
+  written only during initialisation. Early writers set it to 1:
+  - a loader memory descriptor ending above page `0x100000`;
+  - an ACPI hot-plug memory range above 4 GB (`HalpSetupAcpiPhase0`).
+
+  `HalpDmaFinalizeDoubleBufferingDisposition`, called from
+  `HalReportResourceUsage` (Vista x86 call at `8003cfa8`), then has the
+  last word, and it differs by architecture:
+  - **x86 (Vista, 7).** It **overwrites** the flag with the byte at the
+    kernel's exported `Mm64BitPhysicalAddress` (Vista `8003b02c`-`8003b033`,
+    7 `8003d02a`-`8003d031`), which can turn an earlier 1 back to 0. When
+    it changes the flag from 0 to 1 it also allocates the `0x30000` map
+    buffer, bugchecking `0x5C` if that fails. So on x86 the value
+    `HalGetAdapter` reads after boot is the kernel's. When the kernel sets
+    `Mm64BitPhysicalAddress` was not read.
+  - **amd64.** It only sets the flag, and only from the `DynamicMemory`
+    value above 4.
+
+  That `HalReportResourceUsage` runs before any PnP driver starts is the
+  I/O manager's documented order, not read here.
+- **2000's PAE byte.** Of the four 2000 SP4 kernels, only the PAE
+  kernels write `ProcessorFeatures[PF_PAE_ENABLED]`: `ntkrnlpa.exe` at
+  `00551fe9` (base `0x400000`), and `ntkrpamp.exe` by the same byte
+  pattern at `00556735`, not disassembled. On 2000 the test therefore
+  means "the PAE kernel is running", not "memory exists above 4 GB".
+- **2000's map buffer.** The 2000 HAL allocates its 32-bit map buffer
+  (`0x30000`) only under PAE. If that allocation fails the count falls
+  to 0 and the base is NULL even under PAE. That is the one case where a
+  2000 NULL base can meet memory above 4 GB.
+- **A queued request on amd64.** On the three amd64 HALs, a request
+  that `IoFreeAdapterChannel` takes off the adapter's device queue gets
+  a NULL base only if it asked for no registers or the adapter has no
+  master adapter. It does not test the "needs" byte (XP x64 `8001c654`,
+  `8001c65a`), and these adapters always have a master adapter. Such a
+  request therefore receives a real, non-NULL base from the master pool.
+  - This happens only when two channel requests on one adapter overlap.
+    The HCD's pump never has two outstanding (section 11.3, `hcd_dma.c`).
+  - If it did happen, the gate would simply not promote, and the
+    non-NULL rule frees the registers as today.
+
+**Driver Verifier.**
+
+- **Windows 2000 SP4.** The kernels have no DMA verification.
+  - `IoGetDmaAdapter` (`004d3b49`, base `0x400000`) asks the PDO's
+    stack for `BUS_INTERFACE_STANDARD` (`IRP_MN_QUERY_INTERFACE`), calls
+    its `GetDmaAdapter`, and falls back to `HalDispatchTable+0x3C`. It
+    calls no verifier routine.
+  - It rewrites the description only when the `InterfaceType` is
+    `InterfaceTypeUndefined` or `PNPBus`.
+  - Neither of the XP verifier's two marker constants (`0xDEADF00D`,
+    `0xACEFD00D`) occurs in `ntoskrnl.exe` or `ntkrnlmp.exe`.
+  - `IoAllocateAdapterChannel` (`0041f01c`) fills in the device
+    object's wait block and calls the HAL with the count unchanged.
+  - So the 2000 SMP Driver Verifier leg sees the HAL's own behaviour.
+- **XP SP3** (`ntoskrnl.exe`; the same constants occur equally in the
+  PAE and MP kernels). With DMA verification on, `VfGetDmaAdapter`
+  (`0059a082`) hooks every adapter except one whose device description
+  is `PCI bus` (`VfIsPCIBus`, `0046cb65`).
+  - `VfAllocateAdapterChannel` (`0059b8c3`) substitutes its own callback
+    and, when double buffering is on, a map register file of the
+    request's size (`ViAllocateMapRegisterFile`, `0059b922`).
+  - `VfAdapterCallback` (`0059aaa2`) hands the driver either that file
+    (signature `0xACEFD00D`) or, for a HAL NULL base, the token
+    `0xDEADF00D` (`mov ebx,0DEADF00Dh` at `0059aace`). **It never hands
+    over NULL.**
+  - `VfMapTransfer` (`0059bc0e`) turns the token back into NULL before
+    calling the HAL (`0059bc47`), and maps a file's pages through
+    `ViMapDoubleBuffer`.
+  - So under XP's DMA verification promotion never fires, and the
+    register-free check fails because it requires two NULL bases. Every
+    URB stays sequential, exactly stage 1. A NULL base past the
+    request's count is never presented to the verifier.
+- **Vista SP2 and 7 SP1, x86 and x64** (`ntoskrnl.exe`, and
+  `ntkrnlpa.exe` on x86, read routine by routine; within each OS the two
+  x86 kernels differ only in stack layout).
+  - `IoGetDmaAdapter` rewrites nothing for `PCIBus` and leaves the
+    returned count alone (Vista x86 `ntkrnlpa` `00547aec`, 7 x86
+    `0058594b`).
+  - `IoAllocateAdapterChannel` passes the count unchanged.
+  - With DMA verification on, the verifier's thunk `VfGetDmaAdapter`
+    hooks the adapter (again sparing only a `PCI bus` device).
+    `ViAdapterCallback` then hands the routine one of three things, and
+    **never NULL**:
+    - a verifier map register file (`0xACEFD00D`);
+    - the token `0xDEADF00D` (`0xFFFFFFFFDEADF00D` on amd64) in place of
+      a HAL NULL base: Vista x86 `mov ebx,0DEADF00Dh` at `006e7b8f`; 7
+      x64 `1405240f0`;
+    - the HAL's real base.
+  - These kernels also count the bytes mapped on the adapter between
+    flushes against the outstanding registers times 4096
+    (`INCREASE_MAPPED_TRANSFER_BYTE_COUNT`, Vista x86 `004e2c9f`). The
+    count runs even on the token path. Exceeding it is
+    `DRIVER_VERIFIER_DMA_VIOLATION` (0xE6) with parameter 1 = 0x0D,
+    which on 7 reads `0xE6(0xD, bytes mapped, limit, 0)`.
+  - So a mapping past the request's registers **would** bugcheck under
+    these verifiers. It is never attempted, because the routine never
+    sees NULL and promotion does not happen. The register-free check
+    fails as it does on XP.
+  - DMA verification is on whenever flag 0x80 is set on 7. On Vista, at
+    boot, it runs without double buffering (`VfVerifyMode` is
+    `0xFFFFFFFF` in the image).
+- **XP SP3's verifier counts bytes the same way.** `VfMapTransfer` calls
+  `INCREASE_MAPPED_TRANSFER_BYTE_COUNT` at `0059bcbb`. The same
+  conclusion holds: no NULL base, no promotion, no overrun.
+- **The path to the HAL.** In both `pci.sys` builds read, the PCI bus
+  interface's `GetDmaAdapter` does one thing for a `PCIBus` description
+  before handing it up the tree with `IoGetDmaAdapter` on the parent
+  bus's device: it fills in `BusNumber`.
+  - XP SP3 `PciPnpGetDmaAdapter` `00015ec6` (base `0x10000`); 7 SP1 x86
+    `PciBusInterface_GetDmaAdapter` `000250ae`.
+  - On x86 the chain ends at the kernel's `HalDispatchTable` fallback,
+    which is the HAL's `HalGetAdapter` path above.
+  - The hop at the root bus (the ACPI or HAL bus driver that answers for
+    the root) was **not read**, nor was the amd64 `pci.sys`. The
+    `0x80001` grant read at runtime on XP x64 is the HAL formula and
+    corroborates that the description arrives unchanged there.
+
+**Per-HAL verdict: is a NULL base pure pass-through?**
+
+| OS, file | Version | NULL base pure pass-through | When the base is NULL for this adapter |
+|---|---|---|---|
+| 2000 SP4 `hal`, `halapic`, `halmps`, `halborg`, `halacpi`, `halaacpi`, `halmacpi` | 5.00.2195.6655 / .6691 | **yes** | non-PAE kernel (`ntoskrnl`, `ntkrnlmp`) always; PAE kernel only if the 32-bit map buffer could not be allocated |
+| 2000 SP4 `halsp` | 5.00.2195.6655 | **yes** | always |
+| XP SP3 `hal`, `halapic`, `halmps`, `halsp`, `halacpi`, `halaacpi`, `halmacpi` | 5.1.2600.5512 | **yes** | always, PAE or not (pages above 4 GB, if the kernel uses any, come back unbounced and the HCD refuses them) |
+| XP x64 `hal` | 5.2.3790.3959 | **yes** | no memory, hot-plug range or `DynamicMemory` above 4 GB; and a request that was not queued behind another |
+| Vista SP2 x86 `hal` (= `halmacpi`), `halacpi` | 6.0.6002.18005 | **yes** | the kernel's `Mm64BitPhysicalAddress` was 0 when the HAL finalised the flag |
+| Vista SP2 x64 `hal` | 6.0.6002.18005 | **yes** | as XP x64 |
+| 7 SP1 x86 `hal` (= `halmacpi`), `halacpi` | 6.1.7601.17514 | **yes** | as Vista x86 |
+| 7 SP1 x64 `hal` | 6.1.7601.17514 | **yes** | as XP x64 |
+
+**The verdict.** On every NT target HAL build read, a NULL
+`MapRegisterBase` means pure pass-through. Mapping a whole URB under a one-chunk request
+then touches nothing the request owns. Every HAL that has real registers
+for this adapter hands the routine a non-NULL base, and so does XP's DMA
+verifier, so the gate point 2 already has does not promote.
+Vista's and 7's verifiers behave the same way.
+
+The condition promotion keys on is the HAL's own signal, read at the
+moment it matters, so no separate probe of the OS, PAE or memory size is
+needed **for the builds read**. Two things are not established by this
+reading:
+
+- **HAL builds not in the table.** A HAL hotfix after these service
+  packs is a different binary. The reading says nothing about its NULL
+  semantics, and neither the gate nor point 2's 16-page check can stand
+  in for that (point 2, round 4).
+- **The adapter's route.** The route from the PDO to `HalGetAdapter`
+  is read only in part: the kernel's `IoGetDmaAdapter` on 2000, XP,
+  Vista and 7, and `pci.sys` on XP SP3 and 7 SP1 x86. The root bus's
+  bus driver and the amd64 `pci.sys` were not read. The `0x80001` grant
+  at runtime on XP x64 matches the HAL formula but does not identify the
+  `DMA_OPERATIONS` table.
+
+One more runtime fact narrows both, and costs nothing to test. On every
+HAL read, the adapter that yields a NULL base reports exactly `0x80001`
+map registers for this description (`MaximumLength` `0xFFFFFFFF`), while
+an adapter with real registers reports at most 16 on x86 and at most 256
+on amd64.
+That grant is already recorded at start (`hc->MapRegisters`). Requiring
+it as well as a NULL base keeps promotion to adapters that answer the
+way the read builds answer. It is still a fingerprint, not proof of an
+unread build's behaviour.
+
+So, by scope:
+
+- **The builds read** (2000 SP4, XP SP3, XP x64, Vista SP2 and 7 SP1,
+  x86 and amd64, as in the table). The evidence supports **`XhciWideMap`
+  defaulting to 1**, with the gate being a NULL base and a grant of
+  `0x80001`. The register-free check stays as point 2 describes it, a
+  regression check.
+- **Later HAL updates on those systems.** These are not covered. Whether
+  the default extends to them on lineage and the fingerprint, or
+  promotion stays opt-in until each is read, is the owner's call. The
+  driver does not identify the HAL file it runs on, so it cannot tell a
+  hotfix HAL from the one read.
+
+Pages above 4 GB under a NULL base (XP SP3 under PAE, 2000 with a failed
+map buffer) are refused by the HCD's existing `HighPart` test, and a URB
+holding one fails as it does at stage 1. Promotion adds nothing there.
+
+Changing the default is the code task's (36.24), not this record's.
+`XhciWideMap` stays at 0 until that change is made and reviewed.
+
+**The binaries read.** Expanded on development host A:
+
+- 2000 SP4 from `win2ksp4.ISO` `I386\SP4.CAB`, the same files as
+  `tools\win2ksp4-extracted\`;
+- XP SP3 from
+  `en_windows_xp_professional_with_service_pack_3_x86_cd_vl_x14-73974.iso`
+  `I386\SP3.CAB` (the `I386\*.DL_` copies are byte-identical);
+- XP x64 from `tools\winxp64-extracted\` (expanded from
+  `Win XP SP2 VL x64.iso`, design record 11);
+- Vista SP2 x86 and x64 and 7 SP1 x86 and x64 from each DVD's
+  `sources\install.wim`, image 1, `Windows\System32\`.
+
+The PDB identifiers are those `kd` loaded from the public symbol server.
+
+| File | Bytes | SHA-256 | PDB (`<GUID><age>`) |
+|---|---|---|---|
+| 2000 SP4 `hal.dll` 5.00.2195.6655 | 95,456 | `7c040e3792dbbbccab173e845da9a86bb8e753f2de07f007efba625a18be0d1a` | none (export names only) |
+| 2000 SP4 `halaacpi.dll` 5.00.2195.6691 | 82,176 | `7e8653957708367e0ae3dc6b915ab334a8da28f3d9ff451b53d9e59081306d7b` | none (export names only) |
+| 2000 SP4 `halacpi.dll` 5.00.2195.6691 | 66,848 | `3cd165f3db9e5037cf33b059b7116e4e8a2e5b9f7c73cbe31c5ff809b1867538` | none (export names only) |
+| 2000 SP4 `halapic.dll` 5.00.2195.6691 | 92,224 | `48ea42c382cad8c4a8e5ed887f8280a902875aade1fd317f6b76e9e075381c27` | none (export names only) |
+| 2000 SP4 `halborg.dll` 5.00.2195.6655 | 148,960 | `213b3d97696203788328a0e0374e7978d4bcac6ed02ed309c113177e7318b524` | none (export names only) |
+| 2000 SP4 `halmacpi.dll` 5.00.2195.6691 | 83,040 | `869542caf5780041f2f14d621c335d016155819d191440acc028bfe51eda8ca5` | none (export names only) |
+| 2000 SP4 `halmps.dll` 5.00.2195.6691 | 93,696 | `1a5d0ad6fc56a029980a634a6b3b275ce07afc0fd7816f517bf6258f6a0ca817` | none (export names only) |
+| 2000 SP4 `halsp.dll` 5.00.2195.6655 | 69,088 | `553c2f6f9833aaf565a81bea0e70f7381d5dbb9eae71c7e32b9f0b11e27840d9` | none (export names only) |
+| 2000 SP4 `ntoskrnl.exe` 5.00.2195.6717 | 1,719,056 | `80a8ccf2aa9dfb05408ac35d97fdb227c29f81cb329417eb1c43451f33b6271e` | none (export names only) |
+| 2000 SP4 `ntkrnlmp.exe` 5.00.2195.6717 | 1,694,976 | `4b7dfd1c2ad3213eeab5d70edab865d0a9a4d60344aa15ce3d70c04eab2dd16f` | not loaded (byte search and `norm.sh` comparison only) |
+| 2000 SP4 `ntkrnlpa.exe` 5.00.2195.6717 | 1,694,080 | `d2a76d8ebcb4b74e2c5c3c9e17a20d61d20d9e81046d685b9bfbe1d002379078` | not loaded (byte search and `norm.sh` comparison only) |
+| 2000 SP4 `ntkrpamp.exe` 5.00.2195.6717 | 1,715,008 | `83746ddbfca2b52f89a050d1b58613ec986cb3aa23086c7f325373df0d3d702a` | not loaded (byte search and `norm.sh` comparison only) |
+| XP SP3 `hal.dll` 5.1.2600.5512 | 105,344 | `77263ad2c7b56ca964f6055a21a303bf7f031794a8ab27d251d9d2888fe5cfba` | `hal.pdb/36D1EEBD32624718A02E68DABD3593DD1` |
+| XP SP3 `halaacpi.dll` 5.1.2600.5512 | 131,840 | `feba3100fedbd5197c0a67512ff11153c21adad356092bf8b8e197e66152bfcb` | `halaacpi.pdb/FCC14B4D76114FE7A8E9AEA280B60E401` |
+| XP SP3 `halacpi.dll` 5.1.2600.5512 | 81,152 | `a42d3849073b8c17b06122fbbcd91c9c81bda086bb60b7965a79de3a0896ed39` | `halacpi.pdb/52475CC399844839AD8ADF647D0AF71A1` |
+| XP SP3 `halapic.dll` 5.1.2600.5512 | 150,528 | `e97ee5347f46842e3bbb7f662fcb0ef9e799eccfa72633c0f73c323e1364cd20` | `halapic.pdb/A2EAA6A109F64591BCC54C567E7762391` |
+| XP SP3 `halmacpi.dll` 5.1.2600.5512 | 134,400 | `034f6e289d979189553f44b7cf92e4f5c7a761248d50e22c9dcde8313654b279` | `halmacpi.pdb/9875FD697ECA4BBB8A475825F6BF885E1` |
+| XP SP3 `halmps.dll` 5.1.2600.5512 | 152,576 | `e5a6b1fcd1a82161e4c9915ce2489112dacce985dbb3bd20b934ce253f7db143` | `halmps.pdb/8DBE522005AF47AB8CDE9370E08A61941` |
+| XP SP3 `halsp.dll` 5.1.2600.5512 | 77,696 | `979ad1195127da404ca446ead73bb3d571e7711aad61c328733005eff1aae767` | `halsp.pdb/49865CFBB8D943FDABB4C655A700E33D1` |
+| XP SP3 `ntoskrnl.exe` 5.1.2600.5512 | 2,188,928 | `6005a1a1db35481612ef76856a609954990f058bfc42dfa7b0d43402bf3f3dcf` | `ntoskrnl.pdb/47A5AC97343A4A7ABF14EFD9E99337722` |
+| XP SP3 `ntkrnlmp.exe` 5.1.2600.5512 | 2,145,280 | `f086434f85441b9c0245d9f17e2d41718fac810310e244839436554e852a70b8` | not loaded (byte search and `norm.sh` comparison only) |
+| XP SP3 `ntkrnlpa.exe` 5.1.2600.5512 | 2,065,792 | `7968d60617e6eef479de339c6895b4479eac79971d7cea58f9fafd66cc3b5914` | not loaded (byte search and `norm.sh` comparison only) |
+| XP SP3 `ntkrpamp.exe` 5.1.2600.5512 | 2,023,936 | `745f710fa3788db04e1f4370b75fee8b25bd64877fb2e4244a3c54eef061968e` | not loaded (byte search and `norm.sh` comparison only) |
+| XP x64 `hal.dll` 5.2.3790.3959 | 279,040 | `7b7671166cde8cbb8af9ede79d0c4cd38208f77a5b59e7ba661d839a870a101e` | `hal.pdb/786A0CD8B0CB4761BA7DC79BD10C215C1` |
+| XP x64 `ntoskrnl.exe` 5.2.3790.3959 | 4,496,896 | `0415fa7f9319bb0c57bea7d439a5b73244bb5838510631c18222fbd081c878c0` | `ntoskrnl.pdb/7362C1B15A0F49559DE8D0BFC1564A772` |
+| Vista SP2 x86 `hal.dll` 6.0.6002.18005 | 177,128 | `b6d9de353b13e61eaccdc41eb73043919b7f3cb232756233f0d732071023afe8` | `halmacpi.pdb/C215292B54434B3E95D7C087721276651` |
+| Vista SP2 x86 `halacpi.dll` 6.0.6002.18005 | 140,776 | `84ea2181d16c1d971d7c719603bab2f003ad611305ba9029eddd6bbd1aea275d` | `halacpi.pdb/9D9879AD5D124F2FB0871DDCA640FE0B1` |
+| Vista SP2 x86 `halmacpi.dll` 6.0.6002.18005 | 177,128 | `b6d9de353b13e61eaccdc41eb73043919b7f3cb232756233f0d732071023afe8` | (byte-identical to `hal.dll`) |
+| Vista SP2 x86 `ntkrnlpa.exe` 6.0.6002.18005 | 3,601,896 | `78c2a0b97f0b50db3edddb982791658c4916b227bba9bb444fbd336f30da79bc` | `ntkrpamp.pdb/109FACEC7E244C8FAC6D191457B5C7022` |
+| Vista SP2 x86 `ntoskrnl.exe` 6.0.6002.18005 | 3,549,672 | `45c9cb0604b9da7ba15e8824ff4b446064ab40ffa8412679a49ec16eaf36f7fc` | `ntkrnlmp.pdb/0F9B6FF39CAB48838BFF880777AC7D0E2` |
+| Vista SP2 x64 `hal.dll` 6.0.6002.18005 | 233,448 | `e47a7345a960ff3e5858c1b76e09425b5268737788eee669ce3edfd046469cc6` | `hal.pdb/5E5C6555035349D9950043A182DF64702` |
+| Vista SP2 x64 `ntoskrnl.exe` 6.0.6002.18005 | 4,699,608 | `dd8c36ac87b2db30d70b0ae9879608c52f4fc195f69abaac8032376b4786685b` | `ntkrnlmp.pdb/98C6BA00FE174241BA3FDB915995EA9C2` |
+| 7 SP1 x86 `hal.dll` 6.1.7601.17514 | 194,432 | `f8b007e41157452e8c2d262f37260eb662cb2099e22acffdf9d89836a6290264` | `halmacpi.pdb/AE605D6C59454802AE1D485E0B089A571` |
+| 7 SP1 x86 `halacpi.dll` 6.1.7601.17514 | 137,088 | `778d2c3afd587a2750a941cd98db4c51a7a9460e056c2cd3c432a7942e9524ce` | `halacpi.pdb/91622BAE6BA748EDACB711C581C8050C1` |
+| 7 SP1 x86 `halmacpi.dll` 6.1.7601.17514 | 194,432 | `f8b007e41157452e8c2d262f37260eb662cb2099e22acffdf9d89836a6290264` | (byte-identical to `hal.dll`) |
+| 7 SP1 x86 `ntkrnlpa.exe` 6.1.7601.17514 | 3,966,848 | `d44e8f8420ea50401d028f4e6de4f9e9d7dfa7de0601fba25e35c2cb581304e6` | `ntkrpamp.pdb/684DA42A30CC450F81C535B4D18944B12` |
+| 7 SP1 x86 `ntoskrnl.exe` 6.1.7601.17514 | 3,911,040 | `d74e389d1a3ed4c79ffc7c0af1c092102f13e67168ab66a9296cdde62a2c6cf8` | `ntkrnlmp.pdb/00625D7D36754CBEBA4533BA9A0F3FE22` |
+| 7 SP1 x64 `hal.dll` 6.1.7601.17514 | 263,040 | `9c113ae7f724369077a301ac97e4d3e8313fa965674fec401efd6e89b077bdcb` | `hal.pdb/A085D08B9C5D4BFDBA48AC285BDA03F22` |
+| 7 SP1 x64 `ntoskrnl.exe` 6.1.7601.17514 | 5,563,776 | `7fba129db114e8808a2ee5ae597f66176b7eb3c4077e0b5e9a3be3f74aa2e6a6` | `ntkrnlmp.pdb/3844DBB920174967BE7AA4A2C20430FA2` |
+| XP SP3 `pci.sys` 5.1.2600.5512 | 68,224 | `d4e6c360a1d2fca4d17c991b834d68bf20f5111dd06b1fab8b22984804cec269` | `pci.pdb/46927BAFB8E740B6B4BAC813675A82871` |
+| 7 SP1 x86 (symbol-server copy) `pci.sys` 6.1.7601.17514 | 153,984 | `1f81315664b8cbfdd569416c0ecce4c6251f34577313a0858ab46609781303b5` | `pci.pdb/2E2A912260694615A7E97AFBA3FA934E1` |
+
+### 11.7 Stage 3: one TD a URB on stream rings (task 36.25)
+
+**Why, and where.** Stage 2 keeps two TDs of a URB on the ring, but each
+TD is at most 31 page elements (124 KiB), so a 1 MiB URB is still 9 TDs
+and 2 MiB 17 or 18, each a publication, an event and a refill under the
+controller lock. Stage 3 (owner, 2026-10-09: taken whatever stage 2's
+readings) puts a promoted URB on the ring as **one TD**: 256 data TRBs for
+1 MiB page-aligned and 257 unaligned, 512 for 2 MiB page-aligned and 513
+unaligned, on rings large enough to hold it. It applies where stage 2's
+promotion applies and where the large commands arrive: **the stream rings
+of UAS at SuperSpeed** (the only pipes where an IN URB is eligible, section
+11.6 point 1, and where 36.22's 1 MiB and 2 MiB commands go). Every other
+ring keeps the size it has: the pool rings of the controller's block, 64
+TRBs (design record 04's layout, untouched - so no isochronous decoupling,
+no stride or pool change, no `test_membuf` change), EP0's and the command
+ring's 64, and the event ring's 256 entries.
+
+**Scope left out, and why (orchestrator decision, owner to confirm).**
+Bulk-Only and High-Speed UAS keep stage 2 (OUT pipelined in 31-element
+TDs, IN sequential). Their rings are pool rings in the controller's block;
+a large ring for one of them is an allocation of its own per pipe with the
+stream block's retirement rules repeated for it (`hcdCfgPipeFree`, the
+endpoint-drop reclaim, the device's going). Their IN path could take one
+large TD (a single TD has no successor for a short to strand), so this is a
+deferral of scope recorded in the roadmap, not a correctness limit.
+
+**What changes.**
+
+1. **The ring size.** When a streams endpoint is opened
+   (`hcdCfgStreamsBuild`) on a start with promotion enabled
+   (`hc->WideEnabled`, section 11.6 point 2), every stream's ring is
+   `XHCI_BIG_RING_TRBS` = 1024 TRBs (16 KiB, 1022 usable) instead of
+   `PoolRingTrbs` (64). The bus cannot tell UAS's status pipe from its data
+   pipes, so the status pipe's rings grow too, which costs memory and
+   nothing else. 1024 is the smallest power of two whose usable TRBs (1022)
+   hold the largest eligible URB as one TD (513 elements, eligibility's span
+   bound), so a promoted URB on a big ring never needs a second TD.
+2. **Placement by physical address.** A transfer ring segment must not
+   cross a 64 KiB boundary (`xhci-data-structures.md`, the alignment table
+   in section 1, "Transfer Ring segment", boundary 64 KB, xHCI 4.9.2 and
+   section 6's introduction; `XhciSegmentUsable` already refuses one that
+   does, as defence in depth). A 16 KiB segment whose physical address is a
+   multiple of 16 KiB lies inside one 64 KiB block. `AllocateCommonBuffer`
+   promises page alignment only, so the size is computed without the
+   address and the placement with it, both in the pure
+   `XhciStreamLayoutPlaced` (`xhci_stream.c`):
+   - **size**, address-independent: `16 KiB + streams * 16 KiB` (for 31
+     streams, 512 KiB, whole pages). The Primary Stream Context Array sits
+     at the block's start as today, 16-byte entries, at most 32 entries =
+     512 bytes, inside the block's first page; the first ring starts at the
+     first 16 KiB-aligned physical address at or past the array's end,
+     which for a page-aligned base is 4, 8, 12 or 16 KiB in, so the prefix
+     is at most 16 KiB.
+   - **placement**, on the address granted: `RingBase = align16K(paLow +
+     ArrayBytes) - paLow`, ring `i` at `RingBase + (i - 1) * 16 KiB`; refused
+     (the fallback, point 6) when `paLow + size - 1` wraps 32 bits or the
+     block's high part is not 0.
+   `test_stream` sweeps every page-aligned base across a 64 KiB window and
+   past 4 GiB's edge, 4 to 32 entries, 64 and 1024 TRBs: no ring crosses a
+   64 KiB line, rings overlap neither each other nor the array, all lies
+   inside the allocation, and a 64-TRB layout is today's byte for byte.
+3. **One TD a URB, its list the wide list itself.** On a big ring a
+   promoted URB is published as exactly one TD covering the whole URB, and
+   the TD's scatter/gather list is the entry's wide list: the entry's
+   array becomes a `USBPORT_SCATTER_GATHER_LIST` with room for 513
+   elements (its header and `More`), whose offsets the wide mapper already
+   writes from 0, so nothing is copied or trimmed and no 31-element slot
+   list is used. The planner (`XhciXpipePlan`, cap 31) is not used on a
+   big ring; on a 64-TRB ring - a start without the big block, or the
+   fallback - stage 2 runs unchanged. The pipe records which it has
+   (`pipe->BigRing`, set when its ring is built, cleared with it). With one
+   TD there is no successor: no refill, no truncation, no hand-off; an
+   early end is the URB's end. The machine (`XhciXpipeRec*`) runs as for
+   any one-TD URB.
+
+   **Suspension.** The wide paths follow the sequential ones on a
+   suspended controller: they have no rule of their own. Task 36.28's
+   attempt at one (nothing published while suspended, the settle draining
+   every client request at the controller's D3) was reverted by the
+   owner's decision on branch `p36-susp` (`9f20cfd`), since it did not
+   change the Windows ME hang it was written for; the integration branch
+   `p36-int3` took the revert over stage 2's copies of that rule as well
+   (`hcdWidePump`, `hcdWidePublishLocked`, `hcdWideMapped`, and the
+   pipelined-record clause of the settle that no longer exists).
+4. **The engine's cap and scratch.** `XhciXferBuildNormal` refuses more
+   than `XHCI_XFER_MAX_DATA_TRBS` (32) elements today, before reading any,
+   and again per TRB emitted. A normal request gains `MaxDataTrbs`, the cap
+   for both checks (0 meaning 32, so every existing caller - which zeroes
+   the request, or must: the host suites' `normal_request_init` and
+   `test_td`'s builders are changed to zero it - keeps today's behaviour);
+   the output capacity stays the caller's scratch count, apart from the
+   cap, since one element can still split at 64 KiB (none of the HCD's
+   page elements does). Control transfers keep 32. Stage 3's publication
+   passes `XHCI_XPIPE_WIDE_ELEMENTS` (513) and a scratch of 513 + 2 TRBs
+   (8,240 bytes) that lives in the wide pool's allocation, beside the
+   entries, used only under the controller lock (every publication holds
+   it); a pool kept by a fail-closed stop keeps its scratch with it, and a
+   publication with no current pool fails before the ring as any refusal.
+   The SG walk (`xhciXferEmitSgList`) looks for each next element first at
+   the index after the last one taken, then scans as today, so an ordered
+   list costs one step an element (513 elements would otherwise be about
+   130,000 comparisons under the lock); its result is unchanged for every
+   list, which `test_xfer` pins on ordered, reversed and shuffled lists.
+5. **TD Size, Link TRBs and the residual.** TD Size saturates at 31
+   packets remaining and is 0 on the last TRB (4.11.2.4), as the builder
+   does today (`test_build_td_size_saturates`); a TD that crosses the Link
+   TRB carries Chain on the Link as today's publication sets it. A short
+   packet's length is the inclusive prefix of the TD's TRB lengths up to
+   the named TRB less its residual (`XhciRingSumTrbLengths` walks the ring
+   with no TD-size bound), the tail never recomputing it. A halting error
+   on a big TD retires it as today; Stop and Set TR Dequeue address the
+   ring by its own geometry (`ring->Trbs`), and stream recovery still moves
+   only the failed stream (section 11.6, point 6).
+6. **The fallback.** If the big block cannot be allocated or placed (point
+   2), the endpoint opens with today's 64-TRB layout and stage 2's TDs,
+   counted (`BigRefused`); if that allocation fails too, the open fails as
+   today. Nothing else changes. On Windows 98 and ME promotion is never
+   enabled, so their stream rings, their allocations and their common
+   buffer use are today's.
+7. **Retirement.** The block keeps today's lifetime rules unchanged: it is
+   the stream block, retired to the device while its endpoint is not yet
+   Disabled (`StreamsRetired`, `hcdCfgRetiredReclaim`, `HcdCfgDeviceGone`);
+   `HCD_STREAMS` records the size and ring size it was built with, and
+   `hcdCfgStreamsFree` frees that size.
+8. **The event burst.** Section 11.6's 16 is the occupancy stage 2 *added*
+   (a second TD per wide entry), not the entries' total: eight entries with
+   two TDs each and up to two terminal events a TD is 32 events those TDs
+   can hold, and a halting error need not add a trailing event. Stage 3's
+   one TD a URB removes the second TD on big rings, so its addition over
+   stage 1 is none; the thread's stop and dequeue commands on a cancel are
+   as before. Fewer events per byte is credible; a lower worst-case drain
+   or lock hold is not claimed - a 513-TRB build and its residual walks are
+   longer - and is a reading (36.26).
+9. **Telemetry.** Eight counters appended to `XHCI_XPIPE_STATS` after its
+   24 words: big blocks built, big blocks refused, TDs published on big
+   rings, the largest TD published (data TRBs), and the counts of TDs of
+   exactly 256, 257, 512 and 513 data TRBs (four words). The structure
+   grows to 32 words, the count at header word 204 reads 32, the new words
+   are 229 to 236 and the header becomes 237 words; nothing before moves,
+   and the serializer's asserts, `test_snap` and `XHCISNAP` (which reads a
+   24-word block from an older driver as before) change together. The exact counts are what
+   36.26's geometry legs read to show a 257- or 513-TRB TD reached the
+   ring, apart from a merely large SRB.
+
+**Host vectors.**
+- `test_stream`: `XhciStreamLayoutPlaced` as in point 2.
+- `test_xfer`: `MaxDataTrbs` 0 (32), 513 accepted; three separate guards
+  - a request cap of 514 refused before the list is touched, a valid cap
+  with an element count above it refused with a readable header and
+  inaccessible elements, and an element count within the cap whose one
+  element crosses 64 KiB and expands past it (cap 1, two TRBs, scratch
+  enough) refused by the per-TRB guard; a 513-TRB TD published across the Link TRB on a 1024-TRB
+  ring with both cycle values; a short on its 400th TRB with the tail, the
+  same with the tail absent until an empty-drain settle, and swept by a
+  later TD's event (the first measured length kept); its removal by the
+  cancel walk and by a drain; Set TR Dequeue past it on a big ring with
+  both cycles; the SG walk's hint on ordered, reversed and shuffled lists.
+- `test_td`: the wide mapper's list over 1 MiB and 2 MiB at every page
+  offset and three layouts, handed as the TD's list to the engine at cap
+  513: one TRB an element, 256/257/512/513 as the alignment gives.
+- `test_xpipe`: the record machine over a one-TD URB - full, short, error,
+  cancel at each map state, drain - firing once with no refill and no
+  truncation.
+- `test_snap`: the appended words. `test_iso`, `test_membuf` and
+  `test_ring` pass unchanged (no pool or isochronous change).
+
+**What the legs show (36.26).** On XP x64 and 7 x64 with promotion on, 1
+MiB and 2 MiB SRBs at aligned and unaligned buffers produce TDs of exactly
+256, 257, 512 and 513 TRBs (the exact counters), apart from the SRB sizes;
+the fallback forced by the qemu flavour's `XhciQemuBigRefuse` and the
+64-TRB behaviour read; the suspend orderings - a mapping completing after
+the settle with its pipe paused (ends, never held), the same with
+the record already cancelled and with its device gone (`SavedStateValid`
+0 and `SuspendRefused` set either way, DEVICE_GONE kept as the status,
+no hold, publication or doorbell, one completion once the mapping allows), a big TD outstanding
+at a settle with the DMA-stop proof (drained once, the save given up), a
+settle without the proof (records and buffers kept), and a pipe paused and
+resumed while the controller runs (held, then published once); bulk faults 14 to 17 aimed at a big TD (the
+injection's own note says which TD and its TRB count); a stream's recovery
+with a sibling stream keeping its progress; streams opened and closed
+across repeated starts and hot-plugs, every block granted or refused into
+the fallback and the pool count back at its start value. **Low memory**:
+on NT, the big blocks in a guest with little memory and promotion
+enabled (XP x86 with 256 MiB), recording `Check`, `Enabled` and the big
+blocks built and refused; and Windows 2000 SMP under Driver Verifier's
+low-resources simulation, which has no DMA verification wrapper (11.6.1),
+so promotion may be enabled there and the allocations may fail - the leg
+records the same words and the configuration rather than assuming
+either; on Windows 98 SE, the roadmap's low-memory machine
+(a 64 MiB guest) shows its allocations unchanged by this stage - a
+regression leg, since nothing here runs there. The full 36.26
+compatibility and multi-device load matrix applies.
 
 ## 12. What Phase 25 leaves open, and where each item binds
 

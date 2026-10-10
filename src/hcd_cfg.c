@@ -1742,7 +1742,8 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         if (dev->Pipes[dci]->Interface == iface.InterfaceNumber) {
             old |= 1UL << dci;
             HcdIoPipePause(hc, dev->Pipes[dci]);
-            (VOID)HcdIoPipeCancelAll(hc, dev->Pipes[dci]);
+            (VOID)HcdIoPipeCancelAll(hc, dev->Pipes[dci],
+                                     HCD_USBD_CANCELED);
             if (hcdCfgQuiesce(hc, dev, dev->Pipes[dci]) ==
                 XHCI_EP_STATE_RUNNING) {
                 return hcdCfgCountEnd(hc, asked, HCD_USBD_INTERNAL_HC_ERROR);
@@ -1896,7 +1897,7 @@ static ULONG hcdCfgCloseFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         }
         old |= 1UL << dci;
         HcdIoPipePause(hc, pipe);
-        (VOID)HcdIoPipeCancelAll(hc, pipe);
+        (VOID)HcdIoPipeCancelAll(hc, pipe, HCD_USBD_CANCELED);
         if (hcdCfgQuiesce(hc, dev, pipe) == XHCI_EP_STATE_RUNNING) {
             return 0xFFFFFFFFUL;
         }
@@ -2783,7 +2784,8 @@ static ULONG hcdCfgDeconfigure(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
             continue;
         }
         HcdIoPipePause(hc, dev->Pipes[dci]);
-        (VOID)HcdIoPipeCancelAll(hc, dev->Pipes[dci]);
+        (VOID)HcdIoPipeCancelAll(hc, dev->Pipes[dci],
+                                 HCD_USBD_CANCELED);
         state = hcdCfgQuiesce(hc, dev, dev->Pipes[dci]);
         if (state == XHCI_EP_STATE_RUNNING) {
             return 0;
@@ -2880,8 +2882,10 @@ static VOID hcdCfgStreamKick(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     for (id = 1; ep->Streams != NULL && id <= ep->Streams->Count; id++) {
         p = ep->Streams->Pipe[id];
         if (p->Queue->Count != 0 && !p->Paused && !p->Closed &&
-            !dev->Gone) {
-            /* Its surviving TDs run again (round 6, finding 4). */
+            !dev->Gone && !p->TruncHeld) {
+            /* Its surviving TDs run again (round 6, finding 4) - not a
+             * stream whose pipelined record's successor waits to be taken
+             * off (36.24): its own cancel rings it once that is done. */
             ep->SeqUsed = 1;
             XhciWriteDoorbell(&hc->Hc, dev->SlotId,
                               XhciStreamDoorbell(p->Dci, p->StreamId));
@@ -2908,7 +2912,7 @@ static LONG hcdCfgAbortPaused(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG state;
     ULONG id;
 
-    (VOID)HcdIoPipeCancelAll(hc, pipe);
+    (VOID)HcdIoPipeCancelAll(hc, pipe, usbd);
     state = hcdCfgQuiesce(hc, dev, pipe);
     if (state == XHCI_EP_STATE_RUNNING) {
         return HCD_USBD_INTERNAL_HC_ERROR;
@@ -3266,7 +3270,9 @@ static LONG hcdCfgReset(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                              PHCD_PIPE pipe)
 {
-    PXHCI_TRANSFER cancelled[HCD_PIPE_XFERS];
+    /* Two TDs a record since 36.24: three one-TD records and a pipelined
+     * fourth fit the ring together (section 11.6, point 6). */
+    PXHCI_TRANSFER cancelled[2 * HCD_PIPE_XFERS];
     PXHCI_TRANSFER t;
     PXHCI_TRANSFER head;
     PXHCI_TRANSFER survivor;
@@ -3295,6 +3301,12 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         x = CONTAINING_RECORD(entry, HCD_XFER, Link);
         if (x->CancelRequested) {
             RemoveEntryList(entry);
+            if (x->Promoted) {
+                x->Mapped = 0;
+                x->State = HCD_XFER_ON_RING;
+                HcdIoWideStop(hc, x, HCD_USBD_CANCELED);
+                continue;
+            }
             x->Engine = 0;
             x->Status = HCD_USBD_CANCELED;
             x->State = HCD_XFER_DONE;
@@ -3305,9 +3317,12 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     survivor = NULL;
     count = 0;
     for (t = head; t != NULL; t = t->Next) {
+        /* A cancelled record's TD, or (36.24) the successor of a pipelined
+         * record whose early end retired: taken off alike, the latter
+         * retiring as truncated with its outcome kept (section 11.6). */
         if (t != &dev->Ep0Xfer && t != &dev->HubXfer &&
-            ((PHCD_XFER)t)->CancelRequested) {
-            if (count < HCD_PIPE_XFERS) {
+            (HcdIoXferOf(t)->CancelRequested || HcdIoTruncating(t))) {
+            if (count < 2 * HCD_PIPE_XFERS) {
                 cancelled[count++] = t;
             }
         } else if (survivor == NULL) {
@@ -3330,9 +3345,13 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         }
         (VOID)XhciXferQueueRemove(pipe->Queue, t);
         t->UsbdStatus = HCD_USBD_CANCELED;
+        if (!HcdIoXferOf(t)->CancelRequested) {
+            hc->Xpipe.Taken++;
+        }
         hc->Counters.TransfersCancelled++;
-        HcdIoRetired(hc, t);
+        HcdIoRemoved(hc, t);
     }
+    HcdIoRefillFlush(hc);
     if (move) {
         (VOID)XhciRingSetDequeue(
             pipe->Ring,
@@ -3351,7 +3370,7 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
      * reaches a device being torn down (finding 1). */
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     if (pipe->Queue->Count != 0 && state != XHCI_EP_STATE_DISABLED &&
-        !dev->Gone && HcdSuspLinkActive(dev)) {
+        !dev->Gone && !pipe->TruncHeld && HcdSuspLinkActive(dev)) {
         /* The survivors run again: the device's sequence moves (Codex
          * review of the Phase 28-31 integration, round 6, finding 4). */
         hcdCfgEndpointOf(pipe)->SeqUsed = 1;
@@ -3387,7 +3406,7 @@ static ULONG hcdCfgResetQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG control;
     ULONG code;
 
-    (VOID)HcdIoPipeCancelAll(hc, pipe);
+    (VOID)HcdIoPipeCancelAll(hc, pipe, HCD_USBD_CANCELED);
     if (hcdCfgEpState(hc, dev, pipe->Dci) == XHCI_EP_STATE_RUNNING) {
         code = 0;
         if (XhciTrbStopEndpoint(&trb, dev->SlotId, pipe->Dci, 0) ==
@@ -3588,6 +3607,36 @@ static ULONG hcdCfgStreamExponent(PHCD_USB_DEVICE dev, PHCD_PIPE pipe,
     return XHCI_STREAM_EP_NONE;
 }
 
+/* 36.25: a big block built (1) or refused into the fallback (0), counted
+ * under the controller lock. Thread only. */
+static VOID hcdCfgBigCount(PHCD_CONTROLLER hc, ULONG built)
+{
+    KIRQL oldIrql;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (built) {
+        hc->Xpipe.BigBuilt++;
+    } else {
+        hc->Xpipe.BigRefused++;
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
+/* 36.25: whether a big block is wanted at this open - not when the qemu
+ * flavour's XhciQemuBigRefuse forces the fallback for a leg. Thread only. */
+static ULONG hcdCfgBigWanted(PHCD_CONTROLLER hc)
+{
+#if defined(XHCI_FLAVOUR_QEMU)
+    if (hc->QemuBigRefuse) {
+        hcdCfgBigCount(hc, 0);
+        return 0;
+    }
+#else
+    UNREFERENCED_PARAMETER(hc);
+#endif
+    return 1;
+}
+
 /* A stream block and its pipes, built for `pipe` by `plan`, every stream's
  * ring empty and every stream's pipe paused once - the open resumes them
  * with the endpoint. NULL when memory or the common buffer runs out. */
@@ -3600,6 +3649,7 @@ static PHCD_STREAMS hcdCfgStreamsBuild(PHCD_CONTROLLER hc,
     PHCD_PIPE p;
     PUCHAR va;
     ULONG offset;
+    ULONG bytes;
     ULONG id;
     ULONG i;
 
@@ -3615,16 +3665,41 @@ static PHCD_STREAMS hcdCfgStreamsBuild(PHCD_CONTROLLER hc,
     st->Dci = pipe->Dci;
     st->Entries = plan->Entries;
     st->MaxPStreams = plan->MaxPStreams;
-    if (XhciStreamLayout(plan->Entries, plan->Streams,
-                         ext->Layout.PoolRingTrbs, &st->Layout) !=
-        XHCI_STREAM_OK) {
-        HcdPoolFree(st);
-        return NULL;
+    st->RingTrbs = ext->Layout.PoolRingTrbs;
+    /* 36.25 (design record 13 section 11.7): with promotion on, every
+     * stream's ring is 1024 TRBs, placed by the block's physical address;
+     * a block that cannot be had or placed falls back to today's. */
+    if (hc->WideEnabled && hcdCfgBigWanted(hc) &&
+        XhciStreamBigBytes(plan->Entries, plan->Streams, &bytes) ==
+            XHCI_STREAM_OK) {
+        st->Va = HcdDmaStreamAlloc(hc, bytes, &st->Pa);
+        if (st->Va != NULL &&
+            XhciStreamLayoutPlaced(plan->Entries, plan->Streams,
+                                   st->Pa.LowPart, (ULONG)st->Pa.HighPart,
+                                   &st->Layout) == XHCI_STREAM_OK) {
+            st->RingTrbs = XHCI_STREAM_BIG_RING_TRBS;
+        } else {
+            if (st->Va != NULL) {
+                HcdDmaStreamFree(hc, bytes, st->Pa, st->Va);
+                st->Va = NULL;
+            }
+            hcdCfgBigCount(hc, 0);
+        }
     }
-    st->Va = HcdDmaStreamAlloc(hc, st->Layout.TotalBytes, &st->Pa);
     if (st->Va == NULL) {
-        HcdPoolFree(st);
-        return NULL;
+        if (XhciStreamLayout(plan->Entries, plan->Streams,
+                             ext->Layout.PoolRingTrbs, &st->Layout) !=
+            XHCI_STREAM_OK) {
+            HcdPoolFree(st);
+            return NULL;
+        }
+        st->Va = HcdDmaStreamAlloc(hc, st->Layout.TotalBytes, &st->Pa);
+        if (st->Va == NULL) {
+            HcdPoolFree(st);
+            return NULL;
+        }
+    } else {
+        hcdCfgBigCount(hc, 1);
     }
     va = (PUCHAR)st->Va;
     for (i = 0; i < st->Layout.TotalBytes; i++) {
@@ -3656,10 +3731,11 @@ static PHCD_STREAMS hcdCfgStreamsBuild(PHCD_CONTROLLER hc,
         XhciXferQueueInit(&p->OwnQueue);
         offset = XhciStreamRingOffset(&st->Layout, id);
         if (XhciRingInit(&p->OwnRing, (volatile XHCI_TRB *)(va + offset),
-                         st->Pa.LowPart + offset, ext->Layout.PoolRingTrbs,
+                         st->Pa.LowPart + offset, st->RingTrbs,
                          XHCI_RING_KIND_ENDPOINT) != XHCI_RING_OK) {
             goto fail;
         }
+        p->BigRing = (st->RingTrbs == XHCI_STREAM_BIG_RING_TRBS) ? 1UL : 0UL;
         st->Ring[id] = &p->OwnRing;
     }
     return st;

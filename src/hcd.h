@@ -37,6 +37,7 @@
 #include "xhci_counters.h"
 #include "xhci_inj.h"
 #include "xhci_xstat.h"
+#include "xhci_xpipe.h"
 #include "xhci98_xfer.h"
 #include "xhci_poll.h"
 #include "xhci_msi.h"
@@ -253,11 +254,89 @@ typedef struct _HCD_XFER {
     ULONG ChunksPublished;
     XHCI_XSTAT_STAMP Retire;
     XHCI_XSTAT_STAMP MapQueued;
+    /* 36.24 (design record 13 section 11.6), controller lock: the wide
+     * entry an eligible record claimed when it was filled (hcdFill), given
+     * back when its first mapping does not promote or at its completion;
+     * Promoted once that mapping covered the whole URB, from when its TDs
+     * are cut from the entry's list (Cursor) two at a time and its life is
+     * Rec's - slot 0 is Xfer, slot 1 the entry's. A refill that could not
+     * be published waits (RefillHeld, HCD_REFILL_*) for the pipe's resume
+     * or another TD's retirement; RefillNext links the controller's list of
+     * refills to publish after a completion pass (HcdIoRefillFlush). Probe
+     * marks the register-free check's own two records (hcd_dma.c). */
+    struct _HCD_WIDE_ENTRY *Wide;
+    ULONG Promoted;
+    ULONG RefillHeld;
+    ULONG RefillQueued;
+    struct _HCD_XFER *RefillNext;
+    ULONG PipeCounted;
+    ULONG Probe;
+    XHCI_XPIPE_CURSOR Cursor;
+    XHCI_XPIPE_REC Rec;
     struct _HCD_XFER_SG {
         USBPORT_SCATTER_GATHER_LIST List;
         USBPORT_SCATTER_GATHER_ELEMENT More[HCD_SG_ELEMENTS];
     } Sg;
 } HCD_XFER, *PHCD_XFER;
+
+#define HCD_REFILL_NONE     0UL
+#define HCD_REFILL_PAUSE    1UL     /* the pipe paused, or a truncation   */
+#define HCD_REFILL_BUSY     2UL     /* the ring had no room               */
+
+/* The record a TD of the URB path belongs to: both TDs of a pipelined
+ * record carry it as their TransferParameters (section 11.6, point 6). */
+#define HcdIoXferOf(t)      ((PHCD_XFER)(t)->TransferParameters)
+
+/*
+ * Stage 2's wide entries (task 36.24; design record 13 section 11.6, point
+ * 3): HCD_WIDE_ENTRIES of them, allocated with the controller at its start
+ * when promotion is enabled and freed at its stop. Each holds one URB's
+ * whole mapping - up to XHCI_XPIPE_WIDE_ELEMENTS page elements, a 2 MiB URB
+ * at any alignment - its second TD and that TD's own list. Owner under the
+ * controller lock.
+ */
+#define HCD_WIDE_ENTRIES    8UL
+/*
+ * XhciWideMap when the value is absent: on (owner, 2026-10-10, on the HAL
+ * reading of record 13 section 11.6.1; 0 in the key turns it off). The one
+ * constant to flip. Promotion still needs Windows 2000 or later, the
+ * adapter's register-free grant (XHCI_XPIPE_FREE_GRANT), the start's
+ * register-free check (hcd_dma.c, HcdDmaWideOpen) and, per URB, a NULL
+ * map register base.
+ */
+#define HCD_WIDE_MAP_DEFAULT 1UL
+
+typedef struct _HCD_WIDE_ENTRY {
+    struct _HCD_XFER *Owner;        /* NULL: free                         */
+    ULONG Count;                    /* Wide's elements in use             */
+    XHCI_TRANSFER Xfer;             /* slot 1's TD                        */
+    struct _HCD_WIDE_SG {
+        USBPORT_SCATTER_GATHER_LIST List;
+        USBPORT_SCATTER_GATHER_ELEMENT More[XHCI_XPIPE_TD_ELEMENTS];
+    } Sg;                           /* slot 1's TD list                   */
+    /* The URB's whole mapping, offsets from 0, as a list (36.25): on a big
+     * ring it is the one TD's own list (record 13 section 11.7, point 3);
+     * elsewhere the planner cuts TDs from its elements. */
+    struct _HCD_WIDE_LIST {
+        USBPORT_SCATTER_GATHER_LIST List;
+        USBPORT_SCATTER_GATHER_ELEMENT More[XHCI_XPIPE_WIDE_ELEMENTS - 2];
+    } WideList;
+} HCD_WIDE_ENTRY, *PHCD_WIDE_ENTRY;
+
+/* The wide list's elements run on from the list's own two, as the
+ * record's do (hcd_sg_list_tail). */
+XHCI_C_ASSERT(hcd_wide_list_tail,
+              XHCI_OFFSET_OF(struct _HCD_WIDE_LIST, More) ==
+                  XHCI_OFFSET_OF(USBPORT_SCATTER_GATHER_LIST, SgElement) +
+                      2 * sizeof(USBPORT_SCATTER_GATHER_ELEMENT));
+
+/* 36.25: the TRB scratch a one-TD publication on a big ring builds into,
+ * beside the entries in the pool's one allocation (hcd_dma.c). */
+#define HCD_WIDE_SCRATCH_TRBS (XHCI_XPIPE_WIDE_ELEMENTS + 2UL)
+
+/* About 13 KiB an entry, about 104 KiB for the eight, on both
+ * architectures; the bound the record states (section 11.6, point 3). */
+XHCI_C_ASSERT(hcd_wide_entry_bytes, sizeof(HCD_WIDE_ENTRY) <= 14336);
 
 /* The same for the SG list: hcd_dma.c writes SgElement[n] for n up to
  * HCD_SG_ELEMENTS - 1, past the two the list declares. The list is
@@ -317,6 +396,13 @@ typedef struct _HCD_PIPE {
                                      * section 3.2); controller lock      */
     struct _HCD_XFER *Exclusive;    /* a request split into chunks: none
                                      * other is published until it ends   */
+    ULONG BigRing;                  /* 36.25: a stream's ring of
+                                     * XHCI_STREAM_BIG_RING_TRBS - a
+                                     * promoted URB goes as one TD        */
+    ULONG TruncHeld;                /* 36.24: a pipelined record's
+                                     * successor waits for the thread to
+                                     * take it off - nothing rings this
+                                     * pipe's doorbell; controller lock   */
     ULONG Seq;                      /* the last submission's order         */
     XHCI_PIPE_EP Ep;                /* its descriptor, decoded (xhci_pipe) */
     PHCD_ISO_BLOCK Iso;             /* isochronous: HCD_PIPE_XFERS blocks  */
@@ -370,6 +456,8 @@ typedef struct _HCD_STREAMS {
     PVOID Va;
     PHYSICAL_ADDRESS Pa;
     XHCI_STREAM_LAYOUT Layout;
+    ULONG RingTrbs;                 /* each stream's ring (36.25: 1024 on a
+                                     * big block, else the pool's 64)    */
     PXHCI_RING Ring[XHCI_STREAM_MAX_ENTRIES];
     struct _HCD_PIPE *Pipe[XHCI_STREAM_MAX_ENTRIES];
     struct _HCD_STREAMS *Next;      /* the device's StreamsRetired list    */
@@ -1016,6 +1104,8 @@ typedef struct _HCD_CONTROLLER {
     /* The DMA adapter and the common buffer (hcd_dma.c). */
     PDMA_ADAPTER Dma;
     ULONG MapRegisters;
+    ULONG MapGrantRaw;              /* IoGetDmaAdapter's grant, before any
+                                     * qemu constraint (36.24's gate)     */
     PVOID CommonVa;
     PHYSICAL_ADDRESS CommonPa;
     ULONG CommonBytes;
@@ -1102,6 +1192,22 @@ typedef struct _HCD_CONTROLLER {
     ULONG MapsSynchronous;          /* execution routine ran inside the call */
     ULONG MapsDeferred;             /* ... or later                          */
     LIST_ENTRY DoneList;
+    /* Stage 2 (task 36.24; hcd_dma.c, hcd_io.c). WideSwitch is XhciWideMap
+     * as the start read it (HCD_WIDE_MAP_DEFAULT when absent); WideEnabled
+     * is promotion on for this start - the switch, NT, the register-free
+     * check passed and the pool allocated - and only then is WidePool
+     * there. RefillHead lists the records whose next TD a completion pass
+     * publishes once its walk is done. The probe records and their event
+     * are the check's. Controller lock but the start's fields. */
+    ULONG WideSwitch;
+    ULONG WideEnabled;
+    PHCD_WIDE_ENTRY WidePool;
+    PXHCI_TRB WideScratch;          /* HCD_WIDE_SCRATCH_TRBS, after the
+                                     * entries; NULL without a pool       */
+    PHCD_XFER RefillHead;
+    HCD_XFER WideProbe[2];
+    KEVENT WideProbeEvent;
+    volatile LONG WideProbeLeft;
     /* URBs that need commands (SELECT_CONFIGURATION, ABORT_PIPE,
      * RESET_PIPE) and IOCTL_INTERNAL_USB_RESET_PORT, which carries no URB,
      * pended and served by the thread (hcd_cfg.c); linked
@@ -1333,6 +1439,9 @@ typedef struct _HCD_CONTROLLER {
     /* Task 36.22: XhciQemuMapGrant as the start read it, 0 none; applied
      * to MapRegisters once the adapter has given its grant (hcd_ctl.c). */
     ULONG QemuMapGrant;
+    /* Task 36.25: XhciQemuBigRefuse as the start read it - 1 refuses every
+     * big stream block, forcing 11.7's fallback for a leg. */
+    ULONG QemuBigRefuse;
     /* Task 36.4: XhciQemuStartHold's end in tolerance ticks, latched at
      * each start (HcdInjStart), 0 none; ended early by HcdInjStartRelease. */
     volatile LONG InjStartHoldTicks;
@@ -1547,6 +1656,7 @@ typedef struct _HCD_CONTROLLER {
      * across starts. Controller lock, but CommandBytes, which only a start
      * writes, before any device PDO can ask. */
     XHCI_XSTAT Xstat;
+    XHCI_XPIPE_STATS Xpipe;         /* 36.24; controller lock            */
     HCD_UAS_TELE UasTele[HCD_UAS_TELE_RECORDS];
 } HCD_CONTROLLER, *PHCD_CONTROLLER;
 
@@ -1940,7 +2050,8 @@ VOID HcdIoDrainPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd);
 VOID HcdIoPipeRelease(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoPipePause(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoPipeResume(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
-ULONG HcdIoPipeCancelAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
+/* `usbd`: what a promoted record the cancel ends reports (36.24). */
+ULONG HcdIoPipeCancelAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd);
 ULONG HcdIoPipeMarkAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd);
 VOID HcdIoCancelPdo(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                     struct _HCD_DEVICE_PDO *pdo);
@@ -1948,7 +2059,18 @@ VOID HcdIoPipeWaitCancelled(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoWaitPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok);
 VOID HcdIoRetired(PHCD_CONTROLLER hc, PXHCI_TRANSFER t);
+/* The same for a TD software took off the queue (36.24: a removal, not a
+ * device's end). */
+VOID HcdIoRemoved(PHCD_CONTROLLER hc, PXHCI_TRANSFER t);
 VOID HcdIoDeferred(PHCD_CONTROLLER hc);
+/* 36.24 (hcd_io.c), controller lock held: the refills a completion pass
+ * collected, published once its walk is done; a promoted record's stop (a
+ * cancel, an abort, a removal) offered to its machine; and whether a TD on
+ * a pipe's queue belongs to a record whose successor the thread takes off
+ * (hcd_cfg.c, hcdCfgCancelPipe). */
+VOID HcdIoRefillFlush(PHCD_CONTROLLER hc);
+VOID HcdIoWideStop(PHCD_CONTROLLER hc, PHCD_XFER x, LONG usbd);
+ULONG HcdIoTruncating(PXHCI_TRANSFER t);
 ULONG HcdIoDeviceDrain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 NTSTATUS HcdIoRefuseLater(struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb,
                           LONG usbd);
@@ -1976,6 +2098,10 @@ VOID HcdDmaMapQueue(PHCD_CONTROLLER hc, PHCD_XFER x);
 VOID HcdDmaMapKick(PHCD_CONTROLLER hc);
 VOID HcdDmaUnmap(PHCD_CONTROLLER hc, PHCD_XFER x);
 VOID HcdDmaMapDrain(PHCD_CONTROLLER hc);
+/* 36.24: the register-free check and the wide pool at a start, and their
+ * end at a stop (after HcdDmaMapDrain). IRQL: PASSIVE_LEVEL. */
+VOID HcdDmaWideOpen(PHCD_CONTROLLER hc);
+VOID HcdDmaWideClose(PHCD_CONTROLLER hc);
 PVOID HcdDmaStreamAlloc(PHCD_CONTROLLER hc, ULONG bytes, PPHYSICAL_ADDRESS pa);
 VOID HcdDmaStreamFree(PHCD_CONTROLLER hc, ULONG bytes, PHYSICAL_ADDRESS pa,
                       PVOID va);

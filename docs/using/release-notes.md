@@ -1338,20 +1338,18 @@ rest:
 |---|---|
 | Key | `HKLM\SYSTEM\CurrentControlSet\Control\usbstor\VVVVPPPP`, where `VVVV` and `PPPP` are the drive's vendor and product IDs as four uppercase hex digits each (`VID_0BDA&PID_9210` is `0BDA9210`) |
 | Value | `MaximumTransferLength`, a `DWORD`, in **bytes** |
-| Accepted | `65535` to `2097120`, the range Microsoft's KB 2581464 gives |
+| Accepted | `65535` to `2097152`: the range Microsoft's KB 2581464 gives, `65535` to `2097120`, with `2097152` - what tools write for 2 MiB - taken as 2 MiB as well |
 
 A value in range replaces `XhciMaxTransferKB`, larger or smaller, for
 every drive with those vendor and product IDs - the key is per model, for
 the whole machine, not per physical drive - and every other drive keeps
 the controller's value. It is rounded to the nearest 4 KiB (at most 2048
-bytes either way), so `65535` is 64 KiB, `2097120` is 2 MiB, and `131072`
+bytes either way), so `65535` is 64 KiB, `2097120` and `2097152` are both 2 MiB, and `131072`
 (`20000` hex) is 128 KiB exactly. A value that is missing, not a `DWORD` or
 out of range is ignored. Restart Windows after setting it. It is the same
 key Windows' `usbstor.sys` reads for a Bulk-Only drive, so tools and
 guides written for that - Uwe Sieber's pages on `uwe-sieber.de` cover it -
-set it for a UAS drive too, with one exception: a tool that writes
-`2097152` for 2 MiB writes a value above the range, which is ignored
-(`XhciUasDeviceLimitWhy` `3`); change it to `2097120` by hand. The UAS device's hardware key (under
+set it for a UAS drive too, 2 MiB included. The UAS device's hardware key (under
 `Enum\USB`, on Windows 2000 and later in its `Device Parameters`) shows
 what was taken: `XhciUasCommandBytes` the size in bytes,
 `XhciUasCommandSource` `1` for the controller's value and `5` for the
@@ -1366,6 +1364,36 @@ reaches the drive: Windows' mapping layer, `USBNTMAP.SYS`, sends at most
 machines on development host A, Windows 98 SE with NUSB and Windows ME,
 with `XhciMaxTransferKB` at `1024`: no command above 64 KiB, one at a
 time, and file reads no faster than at `64`.
+
+### XhciWideMap: two transfer pieces at once
+
+On Windows 2000 and later the controller driver gives a large bulk
+transfer to the controller two pieces at a time, the next one queued
+before the current one ends, where `2.2.0.x` gave one piece and waited.
+It does so only where the machine's DMA needs no translation - the
+check is made at every start, and again for each transfer - and the value
+turns it off:
+
+| | |
+|---|---|
+| Key | the controller's driver key, as for `XhciMaxTransferKB` |
+| Value | `XhciWideMap`, a `DWORD` |
+| Default | on: no install writes it, and a missing value means on |
+| Off | `0`, then restart |
+
+The decision rests on a reading of every Windows 2000, XP, Vista and 7 HAL
+of the service packs these notes name, x86 and x64. Later HAL hotfixes were
+not read; the checks made at each start and each transfer stand for them.
+Under Driver Verifier's DMA checks, and on a machine whose DMA does need
+translation (Windows 2000 running its PAE kernel; 32-bit Vista and 7, and
+every x64 system, where memory may lie above 4 GB), nothing changes: every transfer goes one piece at a time, as in `2.2.0.x`.
+Windows 98 SE and ME never send a transfer large enough for it to matter.
+On a UAS drive at SuperSpeed the same switch also lets one command's
+data go to the controller as a single piece of up to 2 MiB, on rings the
+driver makes larger for that drive's streams (about 1.5 MiB of memory per
+drive while it is attached; if that memory cannot be had the drive works
+as before). If a large copy misbehaves on `2.3.0.0` and not on `2.2.0.x`,
+set `0`, restart and report whether that changed it.
 
 ### XhciLogVerbosity and XhciLogDebugView: the log
 

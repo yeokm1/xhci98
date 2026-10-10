@@ -229,27 +229,28 @@ ULONG UasPolicyValue(ULONG sent, const struct _XHCI98_TRANSFER_POLICY *reply,
  * exists, `type` and `length` what it is, `value` its four bytes. Returns
  * the command size and sets *source (XHCI98_TELE_SRC_DEVICE when the value
  * was taken, else busSource) and *why (UAS_DEVLIM_*). A value is taken only
- * when it is a four-byte REG_DWORD inside KB 2581464's range, 65535 to
- * 2097120, and only when the bus answered (XHCI98_TELE_SRC_BUS): an older
+ * when it is a four-byte REG_DWORD from 65535 to 2097152 - KB 2581464's
+ * range, 65535 to 2097120, with its top widened to 2097152, which is what
+ * the existing tools write for 2 MiB (owner, 2026-10-10) - and only when
+ * the bus answered (XHCI98_TELE_SRC_BUS): an older
  * bus, or a question that failed, keeps 64 KiB whatever the value says. A
  * taken value is rounded to the nearest 4 KiB, ties up, so it lands on the
  * contract's grid of 64 KiB to 2 MiB in 4 KiB steps: nearest moves a value
- * least (never by more than 2048 bytes, a tie going up), and takes the
- * range's two ends, 65535 and 2097120 - Microsoft's spellings of 64 KiB and
- * 2 MiB - to 64 KiB and 2 MiB. It is a normalisation onto the grid, not a
+ * least (never by more than 2048 bytes, a tie going up), and takes
+ * 65535 and 2097120 - Microsoft's spellings of 64 KiB and 2 MiB - and
+ * 2097152 to 64 KiB and 2 MiB. It is a normalisation onto the grid, not a
  * byte ceiling: the size taken can exceed the value by up to 2048 bytes.
  * The bridge caps in use - 64 KiB, 120 KiB (240 sectors), 512 KiB, 1 MiB -
- * are on the grid already and do not move. (2097152 itself is outside the
- * range and is refused, UAS_DEVLIM_RANGE.)
+ * are on the grid already and do not move.
  */
 #define UAS_DEVLIM_ABSENT           0UL /* no value: the bus's answer     */
 #define UAS_DEVLIM_USED             1UL /* taken for this device          */
 #define UAS_DEVLIM_TYPE             2UL /* not a four-byte REG_DWORD      */
-#define UAS_DEVLIM_RANGE            3UL /* outside 65535 to 2097120       */
+#define UAS_DEVLIM_RANGE            3UL /* outside 65535 to 2097152       */
 #define UAS_DEVLIM_NO_BUS           4UL /* valid, but the bus did not
                                          * answer: 64 KiB stands          */
 #define UAS_DEVLIM_MIN_BYTES        65535UL
-#define UAS_DEVLIM_MAX_BYTES        2097120UL
+#define UAS_DEVLIM_MAX_BYTES        2097152UL
 #define UAS_DEVLIM_REG_DWORD        4UL /* REG_DWORD, for the pure core   */
 
 ULONG UasDeviceLimit(ULONG busBytes, ULONG busSource, ULONG found,

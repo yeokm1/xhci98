@@ -309,6 +309,21 @@ if errorlevel 1 (
     echo FAIL: XHCISNAP's counter names do not match src\xhci_counters.h
     set FAILED=1
 )
+rem Task 36.24's stage 2 counters from canned HCD headers: the switch on
+rem with traffic, the switch absent, Windows 98, a header from before 36.24
+rem and a count it cannot hold.
+"%~dp0XHCISNAP.EXE" -selftest-xpipe > "%BASE%.xpipe.log"
+if errorlevel 1 (
+    echo FAIL: -selftest-xpipe exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("XhciWideMap                 1" "promotion                   on; the register-free check passed" "wide entries                8, 0 in use; claimed 100" "URBs with two TDs at once   100; TDs 900, refills 700" "short 2, error 0, verdict 0; taken off 2" "next TD ready at retirement 650" "not set (the default)" "promotion                   off; the register-free check not run (XhciWideMap off)" "not run (Windows 98 or ME)" "not the register-free 0x80001" "not in this driver" "3 counters in a 948-byte region" "built 2, refused 1; one-TD URBs 300, the largest 513 TRBs" "TDs of 256/257/512/513 TRBs 100 / 101 / 50 / 49" "stage 3 (task 36.25)        not in this driver") do (
+    findstr /C:%%S "%BASE%.xpipe.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the stage 2 decode does not say %%S
+        set FAILED=1
+    )
+)
 
 rem Task 36.9's review: a header longer than its image is refused by
 rem print_hcd, and no other section decodes anything from it.
@@ -322,7 +337,7 @@ if errorlevel 1 (
     echo FAIL: the malformed header is not refused
     set FAILED=1
 )
-for %%S in ("controller tolerance" "interrupt routing" "transfer size" "event delivery" "message interrupts") do (
+for %%S in ("controller tolerance" "interrupt routing" "transfer size" "event delivery" "message interrupts" "stage 2") do (
     findstr /C:%%S "%BASE%.hcdbad.log" > nul
     if not errorlevel 1 (
         echo FAIL: a refused header was still decoded: %%S
@@ -423,5 +438,5 @@ if "%FAILED%"=="1" (
     echo xhcisnap selftest FAILED
     exit /b 1
 )
-echo xhcisnap selftest: 17 cases, all passed
+echo xhcisnap selftest: 18 cases, all passed
 exit /b 0

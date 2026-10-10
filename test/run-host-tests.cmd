@@ -265,13 +265,13 @@ rem produce TRBs and then read completion events back off the ring it wrote
 rem them to, so testing it against a stub ring would test neither half.
 rem It links xhci_tol.c as well, whose soft-retry decision (35-T.2) the
 rem engine's interception asks; so do the two suites below.
-call :run test_xfer "test_xfer.c ..\src\xhci_xfer.c ..\src\xhci_ring.c ..\src\xhci_tol.c"
+call :run test_xfer "test_xfer.c ..\src\xhci_xfer.c ..\src\xhci_ring.c ..\src\xhci_tol.c ..\src\xhci_xpipe.c"
 rem test_iso links the same three files and for the same reason.
 call :run test_iso "test_iso.c ..\src\xhci_xfer.c ..\src\xhci_ring.c ..\src\xhci_tol.c"
 rem test_td links xhci_pipe.c as well: hcd_io.c fills the isochronous block
 rem with its packet-length and fragment helpers, so the block the engine is
 rem given here is built by the same code that builds it in the driver.
-call :run test_td "test_td.c ..\src\xhci_xfer.c ..\src\xhci_ring.c ..\src\xhci_pipe.c ..\src\xhci_tol.c"
+call :run test_td "test_td.c ..\src\xhci_xfer.c ..\src\xhci_ring.c ..\src\xhci_pipe.c ..\src\xhci_tol.c ..\src\xhci_xpipe.c"
 rem test_enum links nothing else: the enumeration machine of design record 13
 rem section 5.3 is a pure transition function, driven here with no controller
 rem (task 26-A.9).

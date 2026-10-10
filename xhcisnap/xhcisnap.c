@@ -4488,6 +4488,8 @@ static int selftest_msi(void)
  * so no reader believes a header another refused. `ext` is NULL when the
  * extension image is short or not the driver's size.
  */
+static void print_xpipe(const unsigned char *hcd, unsigned long hcdBytes);
+
 static void print_hcd_sections(const unsigned char *hcd, unsigned long bytes,
                                const unsigned char *ext,
                                unsigned long extBytes)
@@ -4507,6 +4509,8 @@ static void print_hcd_sections(const unsigned char *hcd, unsigned long bytes,
     print_intr(hcd, bytes, ext, extBytes);
     /* 36.15: message-signalled interrupts, from the counters. */
     print_msi(hcd, bytes);
+    /* 36.24's stage 2 counters, from the header alone. */
+    print_xpipe(hcd, bytes);
 }
 
 /*
@@ -4666,6 +4670,153 @@ static int selftest_xstat(void)
     put32(hcd, SNAP_TELE_RECORDS_AT * 4, 3);
     put32(hcd, SNAP_TELE_WORDS_AT * 4, 0x55555573UL);
     print_xstat(hcd, sizeof(hcd));
+    return 0;
+}
+
+/*
+ * Task 36.24: stage 2's counters (src/xhci_xpipe.h, XHCI_XPIPE_STATS, in
+ * its field order), in the HCD header after the two words task 36.9 holds.
+ * test\test_snap.c holds the driver's layout to these numbers.
+ */
+#define SNAP_HCD_XPIPE_HEAD_WORDS   229UL
+#define SNAP_XPIPE_COUNT_AT         204UL
+#define SNAP_XPIPE_AT               205UL
+#define SNAP_XPIPE_WORDS            24UL
+/* Task 36.25's eight, appended: a count of 32 and a 237-word header. */
+#define SNAP_HCD_BIG_HEAD_WORDS     237UL
+#define SNAP_XPIPE_BIG_WORDS        32UL
+
+static void print_xpipe(const unsigned char *hcd, unsigned long hcdBytes)
+{
+    static const char *const check_text[9] = {
+        "not run (XhciWideMap off)", "passed", "a base was not NULL",
+        "the two lists differ", "a list fell short", "no memory",
+        "a channel request refused, or a grant under 16",
+        "not run (Windows 98 or ME)",
+        "not run (the grant is not the register-free 0x80001)"
+    };
+    unsigned long headBytes;
+    unsigned long v;
+    const unsigned char *s;
+
+    if (hcdBytes < SNAP_HCD_HEAD_WORDS * 4 || get32(hcd, 0) == 0 ||
+        get32(hcd, 0) > SNAP_HCD_VERSION) {
+        return;
+    }
+    headBytes = get32(hcd, 4);
+    if (headBytes < SNAP_HCD_XPIPE_HEAD_WORDS * 4) {
+        comp("\nstage 2 (XhciWideMap): not in this driver (an xhci98.sys "
+             "before task 36.24).\n");
+        return;
+    }
+    if (hcdBytes < SNAP_HCD_XPIPE_HEAD_WORDS * 4 ||
+        get32(hcd, SNAP_XPIPE_COUNT_AT * 4) < SNAP_XPIPE_WORDS) {
+        comp("\nstage 2: %lu counters in a %lu-byte region - not a shape "
+             "this build reads;\n  not decoded.\n",
+             get32(hcd, SNAP_XPIPE_COUNT_AT * 4), hcdBytes);
+        return;
+    }
+    s = hcd + SNAP_XPIPE_AT * 4;
+#define PW(i) get32(s, (i) * 4)
+    comp("\nstage 2, two TDs of one URB on the ring (task 36.24, since the "
+         "controller's start):\n");
+    v = PW(0);
+    if (v == 0xFFFFFFFFUL) {
+        comp("  XhciWideMap                 not set (the default)\n");
+    } else {
+        comp("  XhciWideMap                 %lu\n", v);
+    }
+    v = PW(2);
+    comp("  promotion                   %s; the register-free check %s\n",
+         PW(1) ? "on" : "off", v < 9 ? check_text[v] : "?");
+    comp("  wide entries                %lu, %lu in use; claimed %lu\n",
+         PW(3), PW(4), PW(5));
+    comp("  turned away                 over the span %lu, no entry %lu\n",
+         PW(6), PW(7));
+    comp("  first mappings              promoted %lu; not: registers handed "
+         "%lu, off or grant %lu, a run %lu\n", PW(8), PW(9), PW(10),
+         PW(11));
+    comp("  URBs with two TDs at once   %lu; TDs %lu, refills %lu (held: "
+         "pause %lu, busy %lu)\n", PW(12), PW(13), PW(14), PW(15), PW(16));
+    comp("  early ends with a successor short %lu, error %lu, verdict %lu; "
+         "taken off %lu\n", PW(17), PW(18), PW(19), PW(20));
+    comp("  next TD ready at retirement %lu; failures before the ring %lu; "
+         "out of order %lu\n", PW(21), PW(22), PW(23));
+    if (get32(hcd, SNAP_XPIPE_COUNT_AT * 4) >= SNAP_XPIPE_BIG_WORDS &&
+        headBytes >= SNAP_HCD_BIG_HEAD_WORDS * 4 &&
+        hcdBytes >= SNAP_HCD_BIG_HEAD_WORDS * 4) {
+        comp("  stage 3 big stream blocks   built %lu, refused %lu; one-TD "
+             "URBs %lu, the largest %lu TRBs\n", PW(24), PW(25), PW(26),
+             PW(27));
+        comp("  TDs of 256/257/512/513 TRBs %lu / %lu / %lu / %lu\n", PW(28),
+             PW(29), PW(30), PW(31));
+    } else {
+        comp("  stage 3 (task 36.25)        not in this driver\n");
+    }
+#undef PW
+}
+
+/*
+ * `-selftest-xpipe`: task 36.24's decode over canned HCD headers: the
+ * switch on and the check passed with traffic, the switch absent, a
+ * header from before 36.24, and a count it cannot hold.
+ */
+static int selftest_xpipe(void)
+{
+    static unsigned char hcd[SNAP_HCD_BIG_HEAD_WORDS * 4];
+    unsigned char *s;
+
+    memset(hcd, 0, sizeof(hcd));
+    put32(hcd, 0, 1);
+    put32(hcd, 4, SNAP_HCD_XPIPE_HEAD_WORDS * 4);
+    put32(hcd, SNAP_XPIPE_COUNT_AT * 4, SNAP_XPIPE_WORDS);
+    s = hcd + SNAP_XPIPE_AT * 4;
+    put32(s, 0 * 4, 1);
+    put32(s, 1 * 4, 1);
+    put32(s, 2 * 4, 1);
+    put32(s, 3 * 4, 8);
+    put32(s, 5 * 4, 100);
+    put32(s, 8 * 4, 100);
+    put32(s, 12 * 4, 100);
+    put32(s, 13 * 4, 900);
+    put32(s, 14 * 4, 700);
+    put32(s, 17 * 4, 2);
+    put32(s, 20 * 4, 2);
+    put32(s, 21 * 4, 650);
+    print_xpipe(hcd, sizeof(hcd));
+
+    /* 36.25's words: a 237-word header with a count of 32. */
+    put32(hcd, 4, SNAP_HCD_BIG_HEAD_WORDS * 4);
+    put32(hcd, SNAP_XPIPE_COUNT_AT * 4, SNAP_XPIPE_BIG_WORDS);
+    put32(s, 24 * 4, 2);
+    put32(s, 25 * 4, 1);
+    put32(s, 26 * 4, 300);
+    put32(s, 27 * 4, 513);
+    put32(s, 28 * 4, 100);
+    put32(s, 29 * 4, 101);
+    put32(s, 30 * 4, 50);
+    put32(s, 31 * 4, 49);
+    print_xpipe(hcd, sizeof(hcd));
+    put32(hcd, 4, SNAP_HCD_XPIPE_HEAD_WORDS * 4);
+    put32(hcd, SNAP_XPIPE_COUNT_AT * 4, SNAP_XPIPE_WORDS);
+
+    put32(s, 0 * 4, 0xFFFFFFFFUL);
+    put32(s, 1 * 4, 0);
+    put32(s, 2 * 4, 0);
+    print_xpipe(hcd, sizeof(hcd));
+
+    put32(s, 2 * 4, 7);
+    print_xpipe(hcd, sizeof(hcd));
+
+    put32(s, 2 * 4, 8);
+    print_xpipe(hcd, sizeof(hcd));
+
+    put32(hcd, 4, 202 * 4);
+    print_xpipe(hcd, sizeof(hcd));
+
+    put32(hcd, 4, SNAP_HCD_XPIPE_HEAD_WORDS * 4);
+    put32(hcd, SNAP_XPIPE_COUNT_AT * 4, 3);
+    print_xpipe(hcd, sizeof(hcd));
     return 0;
 }
 
@@ -6815,6 +6966,8 @@ int main(int argc, char **argv)
             /* Deferred like -selftest-report, so a -nosysinfo after it
              * still counts (Codex review of 36.47, round 6). */
             doSelftestSysinfo = 1;
+        } else if (strcmp(argv[i], "-selftest-xpipe") == 0) {
+            return selftest_xpipe();
         } else if (strcmp(argv[i], "-selftest-report") == 0 && i + 1 < argc) {
             /*
              * The report path on its own, with no device: open BASE.TXT, write
