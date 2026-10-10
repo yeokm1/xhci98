@@ -1499,33 +1499,48 @@ static void sys_load_names(void)
 }
 
 /*
- * Upper-case `in` into `out` in the machine's ANSI code page, so an accented
- * name matches in either case (round 3: `_strnicmp` folds ASCII only in the
- * C locale). LCMapStringA is KERNEL32 on 95 and later. Where it fails, an
- * ASCII fold stands in. Returns the length.
+ * Upper-case `in` into `out` in the ANSI code page of `sysFoldLcid` (the
+ * system's; the self-test names a fixed one), so an accented name matches in
+ * either case (round 3: `_strnicmp` folds ASCII only in the C locale).
+ * LCMapStringA is KERNEL32 on 95 and later. Its result is taken at the
+ * length it reports, which may differ from the input's (round 4). Only
+ * where it fails outright does a fold of the ASCII letters stand in, and that
+ * fold steps over a DBCS lead byte's trail byte rather than changing it.
+ * Both the names and the text go through here, so they fold alike. Returns
+ * the length.
  */
+static LCID sysFoldLcid = LOCALE_SYSTEM_DEFAULT;
+
 static size_t sys_upper(const char *in, char *out, size_t outBytes)
 {
     size_t len;
+    size_t i;
     int got;
 
     len = strlen(in);
     if (len >= outBytes) {
         len = outBytes - 1;
     }
-    got = 0;
-    if (len != 0) {
-        got = LCMapStringA(LOCALE_SYSTEM_DEFAULT, LCMAP_UPPERCASE, in,
-                           (int)len, out, (int)(outBytes - 1));
+    if (len == 0) {
+        out[0] = '\0';
+        return 0;
     }
-    if (got <= 0 || (size_t)got != len) {
-        size_t i;
+    got = LCMapStringA(sysFoldLcid, LCMAP_UPPERCASE, in, (int)len, out,
+                       (int)(outBytes - 1));
+    if (got > 0 && (size_t)got < outBytes) {
+        out[got] = '\0';
+        return (size_t)got;
+    }
+    for (i = 0; i < len; i++) {
+        char c = in[i];
 
-        for (i = 0; i < len; i++) {
-            char c = in[i];
-
-            out[i] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+        if (IsDBCSLeadByte((BYTE)c) && i + 1 < len) {
+            out[i] = c;
+            out[i + 1] = in[i + 1];
+            i++;
+            continue;
         }
+        out[i] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
     }
     out[len] = '\0';
     return len;
@@ -1921,6 +1936,11 @@ static int selftest_sysinfo(void)
     strcpy(sysNames[3], "PC");
     strcpy(sysNames[4], "M\xFCller");
     sysNamesLoaded = 1;
+    /* German (Germany), code page 1252, where FC and DC are u-umlaut in its
+     * two cases, so the accented fixture means the same on every build host
+     * whatever its own code page (round 4). */
+    sysFoldLcid = MAKELCID(MAKELANGID(LANG_GERMAN, SUBLANG_GERMAN),
+                           SORT_DEFAULT);
 
     for (i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++) {
         printf("os %lu %lu.%lu build %lu product %d arch %u: %s\n",
@@ -1946,8 +1966,9 @@ static int selftest_sysinfo(void)
     printf("clean %u chars, ends [%s]\n", (unsigned)strlen(out),
            out + strlen(out) - 4);
 
-    /* The live block under the machine's real names. */
+    /* The live block under the machine's real names and code page. */
     sysNamesLoaded = 0;
+    sysFoldLcid = LOCALE_SYSTEM_DEFAULT;
     write_companion_system();
     return 0;
 }
