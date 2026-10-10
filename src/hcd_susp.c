@@ -169,6 +169,7 @@ static PHCD_PORT hcdSuspPort(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     return &hc->Ports[dev->Location - 1];
 }
 
+/* IRQL: any, any lock. */
 static PHCD_DEVICE_PDO hcdSuspPdo(PDEVICE_OBJECT object)
 {
     return (object != NULL) ? (PHCD_DEVICE_PDO)object->DeviceExtension
@@ -218,7 +219,8 @@ static ULONG hcdSuspServes(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 }
 
 /* A SuperSpeed device's link, stage B's (8.4): its first PDO's class, which
- * every PDO of the device shares. */
+ * every PDO of the device shares. IRQL: <= DISPATCH_LEVEL (inside
+ * controller lock holds too); the chain stable: the thread, or PdoListLock. */
 static ULONG hcdSuspSs(PHCD_USB_DEVICE dev)
 {
     PHCD_DEVICE_PDO pdo;
@@ -229,7 +231,8 @@ static ULONG hcdSuspSs(PHCD_USB_DEVICE dev)
 
 /* A PDO's ownership mask (8.3). A composite parent owns no interface: it
  * is no function (task 36.43), and its Function of 0 would otherwise read
- * as an unsplit device's, owning every interface. */
+ * as an unsplit device's, owning every interface. IRQL: <= DISPATCH_LEVEL
+ * (inside controller lock holds too), any lock. */
 static ULONG hcdSuspOwn(PHCD_DEVICE_PDO pdo)
 {
     if (pdo->Composite) {
@@ -2271,7 +2274,8 @@ static ULONG hcdSuspRemoteWake(PHCD_DEVICE_PDO pdo)
 /* Whether a PDO is stage A's, its controller's switch on (5.1). A hub PDO
  * and a composite parent never are: the parent keeps today's capabilities,
  * its WAIT_WAKE is refused and its D-IRPs are recorded and completed at
- * once (task 36.43). */
+ * once (task 36.43). IRQL: <= DISPATCH_LEVEL (HcdSuspIdleSubmit's), any
+ * lock. */
 static ULONG hcdSuspPdoEligible(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
 {
     if (hc == NULL || !hc->SuspOn || pdo->Hub || pdo->Composite) {
@@ -2765,9 +2769,11 @@ ULONG HcdSuspPdoReopen(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
          * device is powered - on a suspended link the thread reports it
          * when its resume reaches ACTIVE (hcdSuspReportD0) - and, inside
          * the PDO's report mutex, never after a newer Dx's report (round
-         * 4). A parent PDO is reported above; a hub PDO and the switch
-         * at 0 keep today's START, which reports nothing. SuperSpeed is
-         * eligible since stage B (8.2) and reported like any other. */
+         * 4). A hub's or a composite parent's PDO (HcdPdoIsParent, set
+         * above) is reported whatever the switch; any other PDO only when
+         * eligible, so with the switch at 0 it keeps today's START, which
+         * reports nothing. SuperSpeed is eligible since stage B (8.2) and
+         * reported like any other. */
         state.DeviceState = PowerDeviceD0;
         pdo->Common.DevicePower = PowerDeviceD0;
         (VOID)PoSetPowerState(pdo->Common.Self, DevicePowerState, state);

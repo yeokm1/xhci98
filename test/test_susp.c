@@ -646,6 +646,39 @@ static void test_resume_outcomes(void)
     step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 60, &wait);
     step = XhciSuspAdvance(&link, XHCI_SUSP_RES_DISCONNECT, 70, &wait);
     CHECK_EQ(link.State, XHCI_SUSP_GONE, "unplug while resuming: GONE");
+
+    /* Whole-branch review, area 1 round 2: a recovery wait or a restart
+     * that did not run (the controller failed between steps) is
+     * uncertain, never ACTIVE. */
+    XhciSuspLinkInit(&link, 1, 1);
+    link.State = XHCI_SUSP_SUSPENDED;
+    step = XhciSuspBegin(&link, XHCI_SUSP_RUN_RESUME, 0, 0, 50, &wait);
+    while (step != XHCI_SUSP_STEP_RECOVERY) {
+        step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 60, &wait);
+    }
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_TIMEOUT, 70, &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_END, "recovery failed: ends");
+    CHECK_EQ(link.State, XHCI_SUSP_RECOVERING, "recovery failed: RECOVERING");
+    CHECK_EQ(link.Outcome, XHCI_SUSP_OUT_UNCERTAIN,
+             "recovery failed: uncertain");
+    XhciSuspLinkInit(&link, 1, 1);
+    link.State = XHCI_SUSP_SUSPENDED;
+    step = XhciSuspBegin(&link, XHCI_SUSP_RUN_RESUME, 0, 0, 50, &wait);
+    while (step != XHCI_SUSP_STEP_RESTART) {
+        step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 60, &wait);
+    }
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_TIMEOUT, 70, &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_END, "restart failed: ends");
+    CHECK_EQ(link.State, XHCI_SUSP_RECOVERING, "restart failed: RECOVERING");
+    CHECK_EQ(link.Outcome, XHCI_SUSP_OUT_UNCERTAIN,
+             "restart failed: uncertain");
+    /* And a refusal's restart that did not run. */
+    step = run_suspend_to(&link, 0, XHCI_SUSP_STEP_U3, XHCI_SUSP_RES_FAILED,
+                          &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_RESTART, "U3 refused: restart");
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_TIMEOUT, 70, &wait);
+    CHECK_EQ(link.State, XHCI_SUSP_RECOVERING,
+             "refusal's restart failed: RECOVERING");
 }
 
 static void test_latch_and_rearm(void)

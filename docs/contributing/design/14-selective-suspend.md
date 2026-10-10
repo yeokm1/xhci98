@@ -192,7 +192,10 @@ Device-initiated: no dwell; at a root port the thread waits out TDRSMDN from
 the PLC and writes U0; at a hub the hub has already timed it. Then TRSMRCY
 10 ms, disarm if armed, 3.2's restart, open the gate, ACTIVE. Never wait to
 *read* PLS=Resume after writing it (QEMU ignores the write; task 22.12(b)).
-A resume not verified is the uncertain outcome.
+A resume not verified is the uncertain outcome, and so is a recovery wait
+or a restart that did not run because the controller failed between steps
+(whole-branch review, 2026-10-10): the link never reads ACTIVE with its
+endpoints still stopped.
 
 ### 3.7 Wake evidence
 

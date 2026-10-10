@@ -682,6 +682,12 @@ ULONG XhciSuspAdvance(PXHCI_SUSP_LINK link, ULONG result, ULONG nowMs,
                             XHCI_SUSP_TRSMRCY_MS, nowMs, waitMs);
 
     case XHCI_SUSP_STEP_RECOVERY:
+        /* The executor's hold returns OK unless the controller failed or
+         * the port went away under it: then nothing after it ran. */
+        if (result != XHCI_SUSP_RES_OK) {
+            return xhciSuspEnd(link, XHCI_SUSP_RECOVERING,
+                               XHCI_SUSP_OUT_UNCERTAIN, waitMs);
+        }
         return xhciSuspAfterRecovery(link, nowMs, waitMs);
 
     case XHCI_SUSP_STEP_DISARM:
@@ -712,6 +718,13 @@ ULONG XhciSuspAdvance(PXHCI_SUSP_LINK link, ULONG result, ULONG nowMs,
         return xhciSuspStep(link, XHCI_SUSP_STEP_RESTART, 0, nowMs, waitMs);
 
     case XHCI_SUSP_STEP_RESTART:
+        /* A restart that did not run (the controller failed between steps,
+         * whole-branch review area 1 round 2) leaves the gate closed and
+         * the endpoints stopped: never ACTIVE, which would admit a D0. */
+        if (result != XHCI_SUSP_RES_OK) {
+            return xhciSuspEnd(link, XHCI_SUSP_RECOVERING,
+                               XHCI_SUSP_OUT_UNCERTAIN, waitMs);
+        }
         if (link->Reason != XHCI_SUSP_WHY_NONE) {
             link->LatchDue = 1;
             return xhciSuspEnd(link, XHCI_SUSP_ACTIVE, XHCI_SUSP_OUT_REFUSED,
