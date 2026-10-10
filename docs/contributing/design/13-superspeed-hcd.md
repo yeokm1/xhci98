@@ -4583,134 +4583,171 @@ The PDB identifiers are those `kd` loaded from the public symbol server.
 | XP SP3 `pci.sys` 5.1.2600.5512 | 68,224 | `d4e6c360a1d2fca4d17c991b834d68bf20f5111dd06b1fab8b22984804cec269` | `pci.pdb/46927BAFB8E740B6B4BAC813675A82871` |
 | 7 SP1 x86 (symbol-server copy) `pci.sys` 6.1.7601.17514 | 153,984 | `1f81315664b8cbfdd569416c0ecce4c6251f34577313a0858ab46609781303b5` | `pci.pdb/2E2A912260694615A7E97AFBA3FA934E1` |
 
-### 11.7 Stage 3: larger TDs on stream rings (task 36.25)
+### 11.7 Stage 3: one TD a URB on stream rings (task 36.25)
 
 **Why, and where.** Stage 2 keeps two TDs of a URB on the ring, but each
 TD is at most 31 page elements (124 KiB), so a 1 MiB URB is still 9 TDs
 and 2 MiB 17 or 18, each a publication, an event and a refill under the
 controller lock. Stage 3 (owner, 2026-10-09: taken whatever stage 2's
-readings) lets a promoted URB go to the controller as one TD - 257 TRBs
-for 1 MiB at any alignment, 512 or 513 for 2 MiB - on rings large enough
-to hold it. It applies where stage 2's promotion applies and where the
-large commands are: **the data streams of UAS at SuperSpeed**, the only
-pipes where an IN URB is eligible (section 11.6, point 1) and where 1 MiB
-and 2 MiB commands arrive (36.22). Every other ring keeps its 64 TRBs:
-the pool rings of the controller's block (design record 04's layout,
-untouched, so no isochronous decoupling, no stride or pool change and no
-`test_membuf` change is needed), EP0's, the command and event rings, and
-the status streams. Bulk-Only and High-Speed UAS stay at stage 2 (OUT
-pipelined in 31-element TDs, IN sequential): their rings are pool rings,
-a ring of their own outside the block would need its own allocation and
-retirement for each pipe, and their IN path cannot be pipelined anyway;
-this is recorded as a limit, not an oversight.
+readings) puts a promoted URB on the ring as **one TD**: 256 data TRBs for
+1 MiB page-aligned and 257 unaligned, 512 for 2 MiB page-aligned and 513
+unaligned, on rings large enough to hold it. It applies where stage 2's
+promotion applies and where the large commands arrive: **the stream rings
+of UAS at SuperSpeed** (the only pipes where an IN URB is eligible, section
+11.6 point 1, and where 36.22's 1 MiB and 2 MiB commands go). Every other
+ring keeps its 64 TRBs: the pool rings of the controller's block (design
+record 04's layout, untouched - so no isochronous decoupling, no stride or
+pool change, no `test_membuf` change), EP0's, the command and event rings.
+
+**Scope left out, and why (orchestrator decision, owner to confirm).**
+Bulk-Only and High-Speed UAS keep stage 2 (OUT pipelined in 31-element
+TDs, IN sequential). Their rings are pool rings in the controller's block;
+a large ring for one of them is an allocation of its own per pipe with the
+stream block's retirement rules repeated for it (`hcdCfgPipeFree`, the
+endpoint-drop reclaim, the device's going). Their IN path could take one
+large TD (a single TD has no successor for a short to strand), so this is a
+deferral of scope recorded in the roadmap, not a correctness limit.
 
 **What changes.**
 
-1. **The ring size.** When a streams endpoint is opened (`hcdCfgStreamsBuild`)
-   on a start with promotion enabled (`hc->WideEnabled`, section 11.6
-   point 2), each stream's ring is - on every streams endpoint, since the
-   bus cannot tell UAS's status pipe from its data pipes, so the status
-   pipe's rings grow too, at a cost in memory and nothing else -
+1. **The ring size.** When a streams endpoint is opened
+   (`hcdCfgStreamsBuild`) on a start with promotion enabled
+   (`hc->WideEnabled`, section 11.6 point 2), every stream's ring is
    `XHCI_BIG_RING_TRBS` = 1024 TRBs (16 KiB, 1022 usable) instead of
-   `PoolRingTrbs` (64). One size, fixed: 1024 holds a 2 MiB URB at any
-   alignment as two TDs (point 3) and a 1 MiB URB as one. 2048 would hold
-   2 MiB as one TD but doubles the block (about 1 MiB a data endpoint) for
-   one TD's difference at 2 MiB, which is not the default size (1024).
+   `PoolRingTrbs` (64). The bus cannot tell UAS's status pipe from its data
+   pipes, so the status pipe's rings grow too, which costs memory and
+   nothing else. 1024 is the smallest power of two whose usable TRBs (1022)
+   hold the largest eligible URB as one TD (513 elements, eligibility's span
+   bound), so a promoted URB on a big ring never needs a second TD.
 2. **Placement by physical address.** A transfer ring segment must not
-   cross a 64 KiB boundary (`xhci-data-structures.md` section 1's
-   alignment table, "Transfer Ring segment", boundary 64 KB, xHCI 4.9.2 and
-   section 6's introduction); today's one-page rings cannot,
-   by construction. A 16 KiB ring cannot either **if its physical address
-   is a multiple of 16 KiB**: 64 KiB is a multiple of 16 KiB, so an aligned
-   16 KiB block lies inside one 64 KiB block. `AllocateCommonBuffer` only
-   promises page alignment, so the stream block is allocated with one
-   ring's size of slack and the layout is computed from the block's
-   physical address: the Primary Stream Context Array at the block's start
-   as today (page-aligned, at most 512 bytes for 32 entries, so inside one
-   page), the first ring at the first 16 KiB-aligned physical address at
-   or past the array's end, the rest following at 16 KiB steps. The pure
-   layout (`XhciStreamLayoutPlaced`, `xhci_stream.c`) takes the block's
-   physical low dword and the ring size and returns the offsets and the
-   bytes to allocate - which it must compute before the address is known,
-   so the allocation size is the worst case (array page, 15 KiB of
-   padding at most, the rings) and the placement is done afterwards on the
-   address granted; `test_stream` sweeps base addresses page by page across
-   a 64 KiB window and checks no ring crosses a 64 KiB line, rings do not
-   overlap each other or the array, and everything fits the allocation.
-   For 31 streams that is 4 KiB + 15 KiB + 496 KiB, about 515 KiB of
-   contiguous common buffer per streams endpoint, three per UAS device -
-   about 1.5 MiB, the roadmap's figure.
-3. **The TD's size.** A promoted record's TD element cap is the pipe's,
-   `pipe->TdElements`: 31 on a 64-TRB ring (stage 2 unchanged), and on a
-   big ring `min(XHCI_XPIPE_WIDE_ELEMENTS, usable / 2)` = 511, so two TDs
-   of one URB still always fit an empty ring (stage 2's invariant). A
-   1 MiB URB (257 elements at worst) is then **one TD of 256 or 257
-   TRBs**; a 2 MiB URB (512 or 513 elements) is two, 511 and 1 or 2. The
-   planner is unchanged (`XhciXpipePlan` already takes the cap); a URB
-   that is one TD has no successor, so no early end can leave one, and the
-   truncation machinery is simply not reached.
-4. **The engine's caps.** `XhciXferBuildNormal` refuses more than
-   `XHCI_XFER_MAX_DATA_TRBS` (32) elements today. A normal request gains
-   a cap of its own (`XHCI_NORMAL_REQUEST.MaxDataTrbs`, 0 meaning today's
-   32), checked before any element is read as today's is, and the caller
-   supplies scratch for that many: stage 3's publications use one scratch
-   of `XHCI_BIG_TD_TRBS` (513 + 2) TRBs, about 8 KiB, allocated with the
-   wide pool and used only under the controller lock (every publication
-   holds it), never the stack. The SG walk (`xhciXferEmitSgList`) searches
-   each next element from the one after the last it took, falling back to
-   the whole list, so an ordered list costs one step an element instead of
-   a scan (513 elements would otherwise be about 130,000 comparisons under
-   the lock); `test_xfer` pins the result identical on ordered, reversed
-   and shuffled lists.
-5. **TD Size and the residual.** TD Size is five bits and saturates at 31
-   packets remaining (4.11.2.4), which the builder already does
-   (`test_build_td_size_saturates`); a short packet's residual is summed
-   over the TD's TRBs by `XhciRingSumTrbLengths`, which walks the ring and
-   has no TD-size bound. `test_xfer` adds a 513-TRB TD across the Link
-   TRB: built, published, a short on its 400th TRB with the trailing
-   event, and the length.
-6. **The fallback.** If the larger block cannot be allocated (or lands
-   above 4 GB, as today), the endpoint opens with today's 64-TRB rings and
-   stage 2's 31-element TDs, counted (`BigRefused`); nothing fails. On
-   Windows 98 and ME promotion is never enabled, so nothing here runs:
-   their stream rings stay 64 TRBs and their common buffer use is today's.
-   The "low-memory qualification" the roadmap asks for is therefore an NT
-   one: a guest with little memory (XP x86 with 256 MiB, and Windows 2000
-   SMP under Driver Verifier's low-resources simulation) opening and
-   closing streams across repeated starts and hot-plugs, every allocation
-   either granted or refused into the fallback, the pool count back at its
-   start value afterwards (36.26).
-7. **Retirement.** The block keeps today's lifetime rules unchanged: it
-   is the stream block, retired to the device when the endpoint is not yet
-   Disabled (`StreamsRetired`, `hcdCfgRetiredReclaim`) - only its size
-   changes, and `HCD_STREAMS` records the size it was allocated with.
-8. **The event burst.** A 1 MiB URB as one TD gives one completion event
-   where stage 2 gave nine; a short or an error still adds one trailing
-   event. Section 11.6's static bound (16 events of occupancy for the wide
-   entries) is unchanged, and the drain does less work per byte.
-9. **Telemetry.** Appended to `XHCI_XPIPE_STATS` after its 24 words (the
-   header grows; nothing before it moves): big blocks allocated and
-   refused, the largest TD published (TRBs), and TDs published by size
-   (at most 31, 32 to 256, 257 to 512, 513). The last two are what 36.26's
-   geometry legs read to tell a 257- or 513-TRB TD that really reached the
-   ring from a merely large SRB.
+   cross a 64 KiB boundary (`xhci-data-structures.md`, the alignment table
+   in section 1, "Transfer Ring segment", boundary 64 KB, xHCI 4.9.2 and
+   section 6's introduction; `XhciSegmentUsable` already refuses one that
+   does, as defence in depth). A 16 KiB segment whose physical address is a
+   multiple of 16 KiB lies inside one 64 KiB block. `AllocateCommonBuffer`
+   promises page alignment only, so the size is computed without the
+   address and the placement with it, both in the pure
+   `XhciStreamLayoutPlaced` (`xhci_stream.c`):
+   - **size**, address-independent: `16 KiB + streams * 16 KiB` (for 31
+     streams, 512 KiB, whole pages). The Primary Stream Context Array sits
+     at the block's start as today, 16-byte entries, at most 32 entries =
+     512 bytes, inside the block's first page; the first ring starts at the
+     first 16 KiB-aligned physical address at or past the array's end,
+     which for a page-aligned base is 4, 8, 12 or 16 KiB in, so the prefix
+     is at most 16 KiB.
+   - **placement**, on the address granted: `RingBase = align16K(paLow +
+     ArrayBytes) - paLow`, ring `i` at `RingBase + (i - 1) * 16 KiB`; refused
+     (the fallback, point 6) when `paLow + size - 1` wraps 32 bits or the
+     block's high part is not 0.
+   `test_stream` sweeps every page-aligned base across a 64 KiB window and
+   past 4 GiB's edge, 4 to 32 entries, 64 and 1024 TRBs: no ring crosses a
+   64 KiB line, rings overlap neither each other nor the array, all lies
+   inside the allocation, and a 64-TRB layout is today's byte for byte.
+3. **One TD a URB, its list the wide list itself.** On a big ring a
+   promoted URB is published as exactly one TD covering the whole URB, and
+   the TD's scatter/gather list is the entry's wide list: the entry's
+   array becomes a `USBPORT_SCATTER_GATHER_LIST` with room for 513
+   elements (its header and `More`), whose offsets the wide mapper already
+   writes from 0, so nothing is copied or trimmed and no 31-element slot
+   list is used. The planner (`XhciXpipePlan`, cap 31) is not used on a
+   big ring; on a 64-TRB ring - a start without the big block, or the
+   fallback - stage 2 runs unchanged. The pipe records which it has
+   (`pipe->BigRing`, set when its ring is built, cleared with it). With one
+   TD there is no successor: no refill, no truncation, no hand-off; an
+   early end is the URB's end. The machine (`XhciXpipeRec*`) runs as for
+   any one-TD URB.
+4. **The engine's cap and scratch.** `XhciXferBuildNormal` refuses more
+   than `XHCI_XFER_MAX_DATA_TRBS` (32) elements today, before reading any,
+   and again per TRB emitted. A normal request gains `MaxDataTrbs`, the cap
+   for both checks (0 meaning 32, so every existing caller - which zeroes
+   the request, or must: the host suites' `normal_request_init` and
+   `test_td`'s builders are changed to zero it - keeps today's behaviour);
+   the output capacity stays the caller's scratch count, apart from the
+   cap, since one element can still split at 64 KiB (none of the HCD's
+   page elements does). Control transfers keep 32. Stage 3's publication
+   passes `XHCI_XPIPE_WIDE_ELEMENTS` (513) and a scratch of 513 + 2 TRBs
+   (8,240 bytes) that lives in the wide pool's allocation, beside the
+   entries, used only under the controller lock (every publication holds
+   it); a pool kept by a fail-closed stop keeps its scratch with it, and a
+   publication with no current pool fails before the ring as any refusal.
+   The SG walk (`xhciXferEmitSgList`) looks for each next element first at
+   the index after the last one taken, then scans as today, so an ordered
+   list costs one step an element (513 elements would otherwise be about
+   130,000 comparisons under the lock); its result is unchanged for every
+   list, which `test_xfer` pins on ordered, reversed and shuffled lists.
+5. **TD Size, Link TRBs and the residual.** TD Size saturates at 31
+   packets remaining and is 0 on the last TRB (4.11.2.4), as the builder
+   does today (`test_build_td_size_saturates`); a TD that crosses the Link
+   TRB carries Chain on the Link as today's publication sets it. A short
+   packet's length is the inclusive prefix of the TD's TRB lengths up to
+   the named TRB less its residual (`XhciRingSumTrbLengths` walks the ring
+   with no TD-size bound), the tail never recomputing it. A halting error
+   on a big TD retires it as today; Stop and Set TR Dequeue address the
+   ring by its own geometry (`ring->Trbs`), and stream recovery still moves
+   only the failed stream (section 11.6, point 6).
+6. **The fallback.** If the big block cannot be allocated or placed (point
+   2), the endpoint opens with today's 64-TRB layout and stage 2's TDs,
+   counted (`BigRefused`); if that allocation fails too, the open fails as
+   today. Nothing else changes. On Windows 98 and ME promotion is never
+   enabled, so their stream rings, their allocations and their common
+   buffer use are today's.
+7. **Retirement.** The block keeps today's lifetime rules unchanged: it is
+   the stream block, retired to the device while its endpoint is not yet
+   Disabled (`StreamsRetired`, `hcdCfgRetiredReclaim`, `HcdCfgDeviceGone`);
+   `HCD_STREAMS` records the size and ring size it was built with, and
+   `hcdCfgStreamsFree` frees that size.
+8. **The event burst.** Section 11.6's 16 is the occupancy stage 2 *added*
+   (a second TD per wide entry), not the entries' total: eight entries with
+   two TDs each and up to two terminal events a TD is 32 events those TDs
+   can hold, and a halting error need not add a trailing event. Stage 3's
+   one TD a URB removes the second TD on big rings, so its addition over
+   stage 1 is none; the thread's stop and dequeue commands on a cancel are
+   as before. Fewer events per byte is credible; a lower worst-case drain
+   or lock hold is not claimed - a 513-TRB build and its residual walks are
+   longer - and is a reading (36.26).
+9. **Telemetry.** Appended to `XHCI_XPIPE_STATS` after its 24 words, so
+   header words 229 on (count at 204 grows to 31; nothing before moves):
+   big blocks built, big blocks refused, TDs published on big rings, the
+   largest TD published (data TRBs), and the counts of TDs of exactly 256,
+   257, 512 and 513 data TRBs (four words). The exact counts are what
+   36.26's geometry legs read to show a 257- or 513-TRB TD reached the
+   ring, apart from a merely large SRB.
 
-**Host vectors.** `test_stream`: `XhciStreamLayoutPlaced` at every page
-offset of a 64 KiB window, 4 to 32 entries, 64 and 1024 TRBs; no ring
-crosses 64 KiB, no overlap, inside the allocation. `test_xfer`: the
-request's own cap (0 is 32; 513 accepted; 514 refused before anything is
-read), the 513-TRB TD across the link with a short, the SG walk's hint on
-ordered and unordered lists. `test_xpipe`: the planner at a cap of 511
-over 1 MiB and 2 MiB at every alignment (one TD and two), and the record
-machine over a one-TD URB (no refill, no truncation). `test_snap`: the
-appended words. `test_iso`, `test_membuf` and `test_ring` are unaffected
-(no pool or iso change), and say so by passing unchanged.
+**Host vectors.**
+- `test_stream`: `XhciStreamLayoutPlaced` as in point 2.
+- `test_xfer`: `MaxDataTrbs` 0 (32), 513 accepted, 514 refused before any
+  element is read (an inaccessible list), a list over the cap refused per
+  TRB as well; a 513-TRB TD published across the Link TRB on a 1024-TRB
+  ring with both cycle values; a short on its 400th TRB with the tail, the
+  same with the tail absent until an empty-drain settle, and swept by a
+  later TD's event (the first measured length kept); its removal by the
+  cancel walk and by a drain; Set TR Dequeue past it on a big ring with
+  both cycles; the SG walk's hint on ordered, reversed and shuffled lists.
+- `test_td`: the wide mapper's list over 1 MiB and 2 MiB at every page
+  offset and three layouts, handed as the TD's list to the engine at cap
+  513: one TRB an element, 256/257/512/513 as the alignment gives.
+- `test_xpipe`: the record machine over a one-TD URB - full, short, error,
+  cancel at each map state, drain - firing once with no refill and no
+  truncation.
+- `test_snap`: the appended words. `test_iso`, `test_membuf` and
+  `test_ring` pass unchanged (no pool or isochronous change).
 
-**What the legs show (36.26).** A TD of 257 and of 513 TRBs observed on
-the ring through the new counters on XP x64 and 7 x64 with promotion on;
-the fallback forced (the qemu flavour's `XhciQemuBigRefuse` refuses the
-allocation) and the 64-TRB behaviour read; bulk faults 14 to 17 aimed at a
-big TD.
+**What the legs show (36.26).** On XP x64 and 7 x64 with promotion on, 1
+MiB and 2 MiB SRBs at aligned and unaligned buffers produce TDs of exactly
+256, 257, 512 and 513 TRBs (the exact counters), apart from the SRB sizes;
+the fallback forced by the qemu flavour's `XhciQemuBigRefuse` and the
+64-TRB behaviour read; bulk faults 14 to 17 aimed at a big TD (the
+injection's own note says which TD and its TRB count); a stream's recovery
+with a sibling stream keeping its progress; streams opened and closed
+across repeated starts and hot-plugs, every block granted or refused into
+the fallback and the pool count back at its start value. **Low memory**:
+on NT, the big blocks in a guest with little memory (XP x86 with 256 MiB,
+and Windows 2000 SMP under Driver Verifier's low-resources simulation, where
+promotion is off but the fallback path is not exercised - so the XP x86 leg
+is the qualification); on Windows 98 SE, the roadmap's low-memory machine
+(a 64 MiB guest) shows its allocations unchanged by this stage - a
+regression leg, since nothing here runs there. The full 36.26
+compatibility and multi-device load matrix applies.
 
 ## 12. What Phase 25 leaves open, and where each item binds
 
