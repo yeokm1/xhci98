@@ -530,6 +530,18 @@ typedef struct _HCD_USB_DEVICE {
      * batch formed for the device, 0 before the first; thread, under the
      * controller lock. */
     ULONG IdleBatch;
+    /* Stage B (section 8.3, 36.38): the first interface of every USB 3
+     * function of the active configuration (bit n: bInterfaceNumber n), and
+     * those whose GetStatus(interface) answered Function Remote Wake
+     * Capable. Written by the thread under the controller lock, cleared at
+     * a configuration change's entry and written at its exit
+     * (HcdSuspCfgExit); 0 for a new device and with the switch at 0. The
+     * notification latch lives in Susp (FwPending). */
+    ULONG FwFirsts;
+    ULONG FwCapable;
+    ULONG FwArmedAll;       /* the union of its PDOs' FwArmed, kept by the
+                             * thread under the controller lock for the
+                             * snapshot, which walks no PDO chain        */
 } HCD_USB_DEVICE, *PHCD_USB_DEVICE;
 
 /* Distinct pipe handles a PDO keeps an abort horizon for: more than any
@@ -747,6 +759,15 @@ typedef struct _HCD_DEVICE_PDO {
     volatile ULONG IdleQuarantined;
     volatile ULONG IdlePinned;      /* its callback was abandoned by a stop
                                      * without the DMA-halt proof         */
+    /* Stage B (design record 14 sections 8.4 and 8.5, 36.38), the thread's
+     * alone: FwArmed, its wake functions (bit n: first interface n) the
+     * device took SetFeature(FUNCTION_SUSPEND) options 03h for and has not
+     * taken options 0 for since; ArmNow, the decision's per-PDO arm intent,
+     * copied in the decision's hold for the ARM step. Both cleared at the
+     * unlink (HcdSuspUnlinkLocked) and in hcdDormantKeep; never by a STOP,
+     * REMOVE or START of a PDO whose device stays linked. */
+    ULONG FwArmed;
+    ULONG ArmNow;
 } HCD_DEVICE_PDO, *PHCD_DEVICE_PDO;
 
 /* Whether a PDO may use a pipe of its device: a device PDO any, a function
@@ -2093,6 +2114,14 @@ VOID HcdSuspRootSample(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG portsc,
                        ULONG acked);
 VOID HcdSuspHubSample(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG status,
                       ULONG acked, ULONG lost);
+/* 36.38, stage B (design record 14 section 8) */
+VOID HcdSuspSsHubSample(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG status,
+                        ULONG acked, ULONG lost);
+VOID HcdSuspCfgEnter(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+VOID HcdSuspCfgExit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                    const UCHAR *config, ULONG length, ULONG ok);
+VOID HcdSuspNotificationLocked(PHCD_CONTROLLER hc, ULONG slotId, ULONG type,
+                               ULONG iface);
 /* 36.31, dispatch's half (design record 14 section 3.11) */
 typedef struct _HCD_SUSP_SETTLE {
     struct _HCD_DEVICE_PDO *Pdo;

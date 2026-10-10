@@ -12,12 +12,18 @@
  * publication, during it and after it, against a claimer) and the
  * callback context's phases against teardown's handoff (a QUEUED and a
  * RUNNING callback followed by teardown, a callback that never returns).
+ * Stage B (task 36.38, record 14 section 8.11): the SuperSpeed order armed
+ * and unarmed, refusals before and after an arm, the strict disarm, the
+ * host resume and every wake branch at SuperSpeed, the notification
+ * window, per-function arming and rearm, the SuperSpeed hub port's
+ * observation, verification and evidence, and the notification's decode.
  */
 
 #include <stdio.h>
 #include <string.h>
 #include "../src/xhci.h"
 #include "../src/xhci_susp.h"
+#include "../src/xhci_sshub.h"
 #include "test_harness.h"
 
 #define D0 XHCI_SUSP_D0
@@ -54,10 +60,9 @@ static void test_switch_and_caps(void)
     CHECK_EQ(XhciSuspSwitch(1, 2), 0, "2 reads as 0");
     CHECK_EQ(XhciSuspSwitch(1, 0xFFFFFFFFUL), 0, "all ones reads as 0");
 
-    CHECK_EQ(XhciSuspEligible(1, 0, 0), 1, "USB 2.0 non-hub");
-    CHECK_EQ(XhciSuspEligible(0, 0, 0), 0, "switch off");
-    CHECK_EQ(XhciSuspEligible(1, 1, 0), 0, "SuperSpeed: stage B");
-    CHECK_EQ(XhciSuspEligible(1, 0, 1), 0, "hub");
+    CHECK_EQ(XhciSuspEligible(1, XHCI_SPEED_HIGH, 0), 1, "USB 2.0 non-hub");
+    CHECK_EQ(XhciSuspEligible(0, XHCI_SPEED_HIGH, 0), 0, "switch off");
+    CHECK_EQ(XhciSuspEligible(1, XHCI_SPEED_HIGH, 1), 0, "hub");
 
     XhciSuspCaps(0, 1, 0, &c);
     CHECK_EQ(c.Changed, 0, "not eligible: today's values");
@@ -2061,6 +2066,574 @@ static void test_episode_interleavings(void)
              XHCI_SUSP_ST_CANCELLED, "HELD, system to S3");
 }
 
+/* ------------------------------------------------------------------ */
+/* Stage B (task 36.38; design record 14 section 8, vectors 8.11)      */
+/* ------------------------------------------------------------------ */
+
+#define SSHUB_OK (XHCI_SSHUB_PORT_CONNECTION | XHCI_SSHUB_PORT_ENABLE | \
+                  XHCI_SSHUB_PORT_POWER)
+
+static ULONG sshub(ULONG link)
+{
+    return SSHUB_OK | (link << XHCI_SSHUB_PORT_LINK_SHIFT);
+}
+
+/* A SuperSpeed device's link record. */
+static void ss_init(PXHCI_SUSP_LINK link, ULONG root)
+{
+    XhciSuspLinkInit(link, root, 1);
+    link->Ss = 1;
+}
+
+static void test_ss_eligible(void)
+{
+    CHECK_EQ(XhciSuspEligible(1, XHCI_SPEED_SUPER, 0), 1,
+             "SuperSpeed: stage B");
+    CHECK_EQ(XhciSuspEligible(1, XHCI_SPEED_HIGH, 0), 1, "High: stage A");
+    CHECK_EQ(XhciSuspEligible(1, XHCI_SPEED_FULL, 0), 1, "Full");
+    CHECK_EQ(XhciSuspEligible(1, XHCI_SPEED_LOW, 0), 1, "Low");
+    CHECK_EQ(XhciSuspEligible(1, XHCI_SPEED_UNKNOWN, 0), 0,
+             "an unknown class stays out (8.2)");
+    CHECK_EQ(XhciSuspEligible(0, XHCI_SPEED_SUPER, 0), 0,
+             "the switch at 0: nothing");
+    CHECK_EQ(XhciSuspEligible(1, XHCI_SPEED_SUPER, 1), 0, "a SS hub: no");
+}
+
+/* Run an SS suspend through each step answering OK, recording the order;
+ * `arm` the arm intent, `armed` what the executor reports at the ARM. */
+static ULONG ss_order(PXHCI_SUSP_LINK link, ULONG arm, ULONG armed,
+                      ULONG *order, ULONG max)
+{
+    ULONG step;
+    ULONG wait;
+    ULONG n;
+    ULONG now;
+
+    now = 100;
+    n = 0;
+    step = XhciSuspBegin(link, XHCI_SUSP_RUN_SUSPEND, arm, 0, now, &wait);
+    while (step != XHCI_SUSP_STEP_END && n < max) {
+        order[n++] = step;
+        if (step == XHCI_SUSP_STEP_ARM) {
+            XhciSuspSsArmed(link, armed);
+        }
+        now++;
+        step = XhciSuspAdvance(link, XHCI_SUSP_RES_OK, now, &wait);
+    }
+    return n;
+}
+
+static void test_ss_order(void)
+{
+    XHCI_SUSP_LINK link;
+    ULONG order[16];
+    ULONG n;
+
+    ss_init(&link, 1);
+    n = ss_order(&link, 1, 1, order, 16);
+    CHECK_EQ(n, 6, "armed: six steps");
+    CHECK_EQ(order[0], XHCI_SUSP_STEP_GATE, "GATE");
+    CHECK_EQ(order[1], XHCI_SUSP_STEP_STOP_FUNCS, "STOP_FUNCS");
+    CHECK_EQ(order[2], XHCI_SUSP_STEP_ARM, "ARM, EP0 still running");
+    CHECK_EQ(order[3], XHCI_SUSP_STEP_STOP, "STOP (EP0)");
+    CHECK_EQ(order[4], XHCI_SUSP_STEP_U3, "U3");
+    CHECK_EQ(order[5], XHCI_SUSP_STEP_OBSERVE, "OBSERVE");
+    CHECK_EQ(link.State, XHCI_SUSP_SUSPENDED, "SUSPENDED");
+    CHECK_EQ(link.Armed, 1, "Armed from the report");
+
+    ss_init(&link, 1);
+    n = ss_order(&link, 0, 0, order, 16);
+    CHECK_EQ(n, 5, "unarmed: five steps");
+    CHECK_EQ(order[1], XHCI_SUSP_STEP_STOP_FUNCS, "STOP_FUNCS");
+    CHECK_EQ(order[2], XHCI_SUSP_STEP_STOP, "then STOP at once");
+    CHECK_EQ(link.Armed, 0, "unarmed");
+
+    /* An arm with nothing to send: OK, but unarmed (8.4). */
+    ss_init(&link, 1);
+    n = ss_order(&link, 1, 0, order, 16);
+    CHECK_EQ(n, 6, "the ARM step ran");
+    CHECK_EQ(link.State, XHCI_SUSP_SUSPENDED, "suspended");
+    CHECK_EQ(link.Armed, 0, "nothing armed: Armed stays 0");
+
+    /* USB 2.0 unchanged: no STOP_FUNCS. */
+    XhciSuspLinkInit(&link, 1, 1);
+    n = ss_order(&link, 1, 1, order, 16);
+    CHECK_EQ(n, 5, "USB 2.0: five steps");
+    CHECK_EQ(order[1], XHCI_SUSP_STEP_ARM, "USB 2.0: ARM after GATE");
+    CHECK_EQ(link.Armed, 1, "USB 2.0: OK sets Armed");
+    CHECK_EQ(XHCI_SUSP_STEP_STOP_FUNCS, 13, "appended after END (12)");
+}
+
+/* An SS suspend to step `fail`, the arm reporting `armed`; `result` there. */
+static ULONG ss_to(PXHCI_SUSP_LINK link, ULONG arm, ULONG armed, ULONG fail,
+                   ULONG result, ULONG now, PULONG wait)
+{
+    ULONG step;
+
+    ss_init(link, 1);
+    step = XhciSuspBegin(link, XHCI_SUSP_RUN_SUSPEND, arm, 0, now, wait);
+    while (step != XHCI_SUSP_STEP_END && step != fail) {
+        if (step == XHCI_SUSP_STEP_ARM) {
+            XhciSuspSsArmed(link, armed);
+        }
+        step = XhciSuspAdvance(link, XHCI_SUSP_RES_OK, now, wait);
+    }
+    if (step == XHCI_SUSP_STEP_END) {
+        return step;
+    }
+    if (step == XHCI_SUSP_STEP_ARM) {
+        XhciSuspSsArmed(link, armed);
+    }
+    return XhciSuspAdvance(link, result, now + 1, wait);
+}
+
+static void test_ss_refusals(void)
+{
+    XHCI_SUSP_LINK link;
+    ULONG wait;
+    ULONG step;
+
+    /* STOP_FUNCS failed: refused, after SP=1's 10 ms. */
+    step = ss_to(&link, 1, 0, XHCI_SUSP_STEP_STOP_FUNCS,
+                 XHCI_SUSP_RES_FAILED, 100, &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_RESTART, "functions' stop failed: restart");
+    CHECK_EQ(wait, XHCI_SUSP_STOP_MIN_MS, "SP=1's minimum from its stop");
+    CHECK_EQ(link.Reason, XHCI_SUSP_WHY_FAILED, "FAILED");
+    step = ss_to(&link, 1, 0, XHCI_SUSP_STEP_STOP_FUNCS,
+                 XHCI_SUSP_RES_TIMEOUT, 100, &wait);
+    CHECK_EQ(link.State, XHCI_SUSP_RECOVERING, "its timeout: uncertain");
+
+    /* The first arm request STALLed, nothing armed: stage A's STALL. */
+    step = ss_to(&link, 1, 0, XHCI_SUSP_STEP_ARM, XHCI_SUSP_RES_STALL, 100,
+                 &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_RESTART, "STALL, none armed: restart");
+    CHECK_EQ(link.Reason, XHCI_SUSP_WHY_STALL, "STALL");
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 200, &wait);
+    CHECK_EQ(link.Outcome, XHCI_SUSP_OUT_REFUSED, "refused");
+    CHECK_EQ(link.LatchDue, 1, "latched");
+
+    /* A later request STALLed after one function was armed: DISARM first,
+     * after SP=1's 10 ms from the last stop, then RESTART (8.4). */
+    step = ss_to(&link, 1, 1, XHCI_SUSP_STEP_ARM, XHCI_SUSP_RES_STALL, 100,
+                 &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_DISARM, "some armed: disarm first");
+    CHECK_EQ(wait, XHCI_SUSP_STOP_MIN_MS - 1, "SP=1's rest before EP0 rings");
+    CHECK_EQ(link.Reason, XHCI_SUSP_WHY_STALL, "the reason kept");
+    XhciSuspSsArmed(&link, 0);
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 120, &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_RESTART, "disarmed: restart");
+    CHECK_EQ(wait, 0, "SP=1's minimum already out");
+    CHECK_EQ(link.Armed, 0, "Armed cleared by the report");
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 121, &wait);
+    CHECK_EQ(link.State, XHCI_SUSP_ACTIVE, "ACTIVE");
+    CHECK_EQ(link.Outcome, XHCI_SUSP_OUT_REFUSED, "refused");
+
+    /* ...and that disarm failing: strict, uncertain (8.5). */
+    step = ss_to(&link, 1, 1, XHCI_SUSP_STEP_ARM, XHCI_SUSP_RES_FAILED, 100,
+                 &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_DISARM, "FAILED after an arm: disarm");
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_STALL, 120, &wait);
+    CHECK_EQ(link.State, XHCI_SUSP_RECOVERING, "a refused disarm: cycle");
+    CHECK_EQ(link.Outcome, XHCI_SUSP_OUT_UNCERTAIN, "uncertain");
+
+    /* NOT_SENT: one retry within 100 ms; twice, refused BUSY. */
+    step = ss_to(&link, 1, 0, XHCI_SUSP_STEP_ARM, XHCI_SUSP_RES_NOT_SENT, 100,
+                 &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_ARM, "retried");
+    CHECK_EQ(wait, XHCI_SUSP_BUSY_RETRY_MS, "bounded 100 ms");
+    XhciSuspSsArmed(&link, 1);
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_NOT_SENT, 200, &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_DISARM,
+             "busy twice with one armed between: disarm");
+    CHECK_EQ(link.Reason, XHCI_SUSP_WHY_BUSY, "BUSY");
+
+    /* The arm's timeout: uncertain. */
+    step = ss_to(&link, 1, 1, XHCI_SUSP_STEP_ARM, XHCI_SUSP_RES_TIMEOUT, 100,
+                 &wait);
+    CHECK_EQ(link.State, XHCI_SUSP_RECOVERING, "arm timeout: RECOVERING");
+    CHECK_EQ(link.Armed, 0, "and Armed cleared with it");
+
+    /* EP0's stop failing after an arm: DISARM, then RESTART. */
+    step = ss_to(&link, 1, 1, XHCI_SUSP_STEP_STOP, XHCI_SUSP_RES_FAILED, 100,
+                 &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_DISARM, "EP0 stop failed, armed: disarm");
+    step = ss_to(&link, 0, 0, XHCI_SUSP_STEP_STOP, XHCI_SUSP_RES_FAILED, 100,
+                 &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_RESTART, "unarmed: restart");
+
+    /* A disconnect at every step: GONE. */
+    step = ss_to(&link, 1, 1, XHCI_SUSP_STEP_STOP_FUNCS,
+                 XHCI_SUSP_RES_DISCONNECT, 100, &wait);
+    CHECK_EQ(link.State, XHCI_SUSP_GONE, "disconnect at STOP_FUNCS");
+}
+
+static void test_ss_resume(void)
+{
+    XHCI_SUSP_LINK link;
+    ULONG wait;
+    ULONG step;
+
+    /* Root, host-initiated: SIGNAL after the dwell, straight to VERIFY. */
+    ss_init(&link, 1);
+    link.State = XHCI_SUSP_SUSPENDED;
+    link.U3Ms = 1000;
+    link.Armed = 1;
+    step = XhciSuspBegin(&link, XHCI_SUSP_RUN_RESUME, 0, 0, 1004, &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_SIGNAL, "SIGNAL");
+    CHECK_EQ(wait, 6, "the dwell's remainder");
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 1010, &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_VERIFY, "no U0 step, no TDRSMDN");
+    CHECK_EQ(wait, XHCI_SUSP_VERIFY_MS, "verify bounded");
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 1011, &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_RECOVERY, "recovery");
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 1021, &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_DISARM, "armed: disarm");
+    XhciSuspSsArmed(&link, 1);
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_FAILED, 1022, &wait);
+    CHECK_EQ(link.State, XHCI_SUSP_RECOVERING,
+             "strict: a failed disarm is uncertain");
+
+    ss_init(&link, 1);
+    link.State = XHCI_SUSP_SUSPENDED;
+    link.Armed = 1;
+    step = XhciSuspBegin(&link, XHCI_SUSP_RUN_RESUME, 0, 0, 50, &wait);
+    while (step != XHCI_SUSP_STEP_DISARM) {
+        step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 60, &wait);
+    }
+    XhciSuspSsArmed(&link, 0);
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 61, &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_RESTART, "disarmed: restart");
+    CHECK_EQ(link.Armed, 0, "unarmed");
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 62, &wait);
+    CHECK_EQ(link.Outcome, XHCI_SUSP_OUT_ACTIVE, "ACTIVE");
+    CHECK_EQ(link.LatchDue, 0, "no latch");
+
+    /* A disarm the device took but with a function still armed by the
+     * report (a second PDO not reached) cannot happen: OK means all. A
+     * NOT_SENT or STALL disarm is uncertain too. */
+    ss_init(&link, 0);
+    link.State = XHCI_SUSP_SUSPENDED;
+    link.Armed = 1;
+    step = XhciSuspBegin(&link, XHCI_SUSP_RUN_RESUME, 0, 0, 50, &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_SIGNAL, "hub: SIGNAL");
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 60, &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_VERIFY, "hub: VERIFY");
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 61, &wait);
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 71, &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_DISARM, "disarm");
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_NOT_SENT, 72, &wait);
+    CHECK_EQ(link.State, XHCI_SUSP_RECOVERING, "NOT_SENT disarm: cycle");
+
+    /* USB 2.0's disarm stays best effort. */
+    XhciSuspLinkInit(&link, 1, 1);
+    link.State = XHCI_SUSP_SUSPENDED;
+    link.Armed = 1;
+    step = XhciSuspBegin(&link, XHCI_SUSP_RUN_RESUME, 0, 0, 50, &wait);
+    while (step != XHCI_SUSP_STEP_DISARM) {
+        step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 80, &wait);
+    }
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_STALL, 81, &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_RESTART, "USB 2.0: the resume goes on");
+}
+
+static void test_ss_wake_branch(void)
+{
+    XHCI_SUSP_LINK link;
+    ULONG wait;
+    ULONG step;
+
+    /* The root sample's wake long after U3: SIGNAL at once (0), VERIFY. */
+    ss_init(&link, 1);
+    link.State = XHCI_SUSP_SUSPENDED;
+    link.U3Ms = 0;
+    CHECK_EQ(XhciSuspEvidence(&link, XHCI_SUSP_EV_WAKE), 1, "the event");
+    step = XhciSuspBegin(&link, XHCI_SUSP_RUN_WAKE, 0, 0, 500, &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_SIGNAL, "SS wake: the host's resume");
+    CHECK_EQ(wait, 0, "long after U3: no dwell left");
+    CHECK_EQ(link.ClaimDue, 1, "claim due");
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 500, &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_VERIFY, "then VERIFY");
+
+    /* The observation's WAKE right after U3: SIGNAL after 10 ms. */
+    step = ss_to(&link, 0, 0, XHCI_SUSP_STEP_OBSERVE, XHCI_SUSP_RES_WAKE, 100,
+                 &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_SIGNAL, "observation's wake: SIGNAL");
+    CHECK_EQ(wait, XHCI_SUSP_U3_DWELL_MS, "the whole dwell");
+    CHECK_EQ(link.Kind, XHCI_SUSP_RUN_WAKE, "device-initiated");
+    CHECK_EQ(link.ClaimDue, 1, "claim due");
+
+    /* Hub: the same branch, never RECOVERY at once (stage A's hub wake). */
+    ss_init(&link, 0);
+    link.State = XHCI_SUSP_SUSPENDED;
+    link.U3Ms = 95;
+    (VOID)XhciSuspEvidence(&link, XHCI_SUSP_EV_WAKE);
+    step = XhciSuspBegin(&link, XHCI_SUSP_RUN_WAKE, 0, 0, 100, &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_SIGNAL, "hub: SIGNAL (PORT_LINK_STATE U0)");
+    CHECK_EQ(wait, 5, "the dwell's remainder");
+}
+
+static void test_ss_window(void)
+{
+    XHCI_SUSP_LINK link;
+    ULONG wait;
+    ULONG step;
+    ULONG bits;
+    ULONG beyond;
+
+    ss_init(&link, 1);
+    CHECK_EQ(XhciSuspFwReceive(&link, 2), 0, "ACTIVE: closed at receipt");
+    XhciSuspFwOpen(&link);
+    CHECK_EQ(link.FwWindow, 0, "opens only while SUSPENDING");
+
+    step = XhciSuspBegin(&link, XHCI_SUSP_RUN_SUSPEND, 1, 0, 0, &wait);
+    CHECK_EQ(XhciSuspFwReceive(&link, 2), 0,
+             "before the first arm request: dropped");
+    while (step != XHCI_SUSP_STEP_ARM) {
+        step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 1, &wait);
+    }
+    XhciSuspFwOpen(&link);
+    CHECK_EQ(link.FwWindow, 1, "opened before the first arm request");
+    CHECK_EQ(XhciSuspFwReceive(&link, 2), 1, "latched");
+    CHECK_EQ(XhciSuspFwReceive(&link, 40), 1, "past 31: latched far");
+    CHECK_EQ(link.FwPending, 1UL << 2, "bit 2");
+    CHECK_EQ(link.FwPendingFar, 1, "far");
+    XhciSuspSsArmed(&link, 1);
+    while (step != XHCI_SUSP_STEP_END) {
+        step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 2, &wait);
+    }
+    CHECK_EQ(link.State, XHCI_SUSP_SUSPENDED, "SUSPENDED");
+    CHECK_EQ(link.FwWindow, 1, "open while SUSPENDED");
+    CHECK_EQ(link.FwPending, 1UL << 2, "kept for consumption (a)");
+    /* (a): the decision takes it as the wake. */
+    CHECK_EQ(XhciSuspFwTake(&link, &bits, &beyond), 1, "taken");
+    CHECK_EQ(bits, 1UL << 2, "its bits");
+    CHECK_EQ(XhciSuspEvidence(&link, XHCI_SUSP_EV_WAKE), 1, "the wake event");
+    CHECK_EQ(link.FwWindow, 0, "the wake's hold closes it");
+    CHECK_EQ(XhciSuspFwReceive(&link, 2), 0, "a repeat: closed at receipt");
+    step = XhciSuspBegin(&link, XHCI_SUSP_RUN_WAKE, 0, 0, 50, &wait);
+    while (step != XHCI_SUSP_STEP_END) {
+        if (step == XHCI_SUSP_STEP_DISARM) {
+            XhciSuspSsArmed(&link, 0);
+        }
+        CHECK_EQ(XhciSuspFwReceive(&link, 2), 0, "RESUMING: dropped");
+        step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 60, &wait);
+    }
+    CHECK_EQ(link.State, XHCI_SUSP_ACTIVE, "ACTIVE");
+    CHECK_EQ(XhciSuspFwReceive(&link, 2), 0, "ACTIVE: dropped");
+
+    /* A resume, a rearm and a re-suspend in one pass: a notification
+     * received in each phase reaches the next suspension only if received
+     * after its first arm request. */
+    ss_init(&link, 1);
+    link.State = XHCI_SUSP_SUSPENDED;
+    link.FwWindow = 1;
+    step = XhciSuspBegin(&link, XHCI_SUSP_RUN_RESUME, 0, 1, 0, &wait);
+    CHECK_EQ(link.FwWindow, 0, "the resume's Begin closes it");
+    while (step != XHCI_SUSP_STEP_END) {
+        (VOID)XhciSuspFwReceive(&link, 3);
+        step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 20, &wait);
+    }
+    step = XhciSuspBegin(&link, XHCI_SUSP_RUN_SUSPEND, 1, 0, 30, &wait);
+    while (step != XHCI_SUSP_STEP_ARM) {
+        (VOID)XhciSuspFwReceive(&link, 3);
+        step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 31, &wait);
+    }
+    CHECK_EQ(link.FwPending, 0, "nothing from the resume or the gate");
+    XhciSuspFwOpen(&link);
+    (VOID)XhciSuspFwReceive(&link, 4);
+    CHECK_EQ(link.FwPending, 1UL << 4, "only the one after the arm request");
+
+    /* An unarmed suspension opens at the U3 request. */
+    ss_init(&link, 1);
+    step = XhciSuspBegin(&link, XHCI_SUSP_RUN_SUSPEND, 0, 0, 0, &wait);
+    while (step != XHCI_SUSP_STEP_U3) {
+        step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 1, &wait);
+    }
+    CHECK_EQ(link.FwWindow, 0, "closed until the U3 request");
+    XhciSuspFwOpen(&link);
+    CHECK_EQ(link.FwWindow, 1, "open at it");
+
+    /* (c): a refusal ends with the window closed and the latch kept for
+     * the end hold; an uncertain end drops it. */
+    step = ss_to(&link, 1, 1, XHCI_SUSP_STEP_STOP, XHCI_SUSP_RES_FAILED, 100,
+                 &wait);
+    XhciSuspFwOpen(&link);
+    (VOID)XhciSuspFwReceive(&link, 0);
+    XhciSuspSsArmed(&link, 0);
+    while (step != XHCI_SUSP_STEP_END) {
+        step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 120, &wait);
+    }
+    CHECK_EQ(link.Outcome, XHCI_SUSP_OUT_REFUSED, "refused");
+    CHECK_EQ(link.FwWindow, 0, "closed at the end");
+    CHECK_EQ(link.FwPending, 1, "the latch kept for (c)");
+    CHECK_EQ(XhciSuspFwTake(&link, &bits, &beyond), 1, "(c) takes it");
+    link.FwDropped = 0;
+    step = ss_to(&link, 0, 0, XHCI_SUSP_STEP_U3, XHCI_SUSP_RES_OK, 100,
+                 &wait);
+    XhciSuspFwOpen(&link);
+    (VOID)XhciSuspFwReceive(&link, 0);
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_EXPIRED, 160, &wait);
+    CHECK_EQ(link.State, XHCI_SUSP_RECOVERING, "uncertain");
+    CHECK_EQ(link.FwPending, 0, "dropped");
+    CHECK_EQ(link.FwDropped, 1, "and counted");
+    /* A Begin drops what an end left. */
+    ss_init(&link, 1);
+    link.FwPending = 0x5;
+    (VOID)XhciSuspBegin(&link, XHCI_SUSP_RUN_SUSPEND, 0, 0, 0, &wait);
+    CHECK_EQ(link.FwPending, 0, "emptied");
+    CHECK_EQ(link.FwDropped, 2, "two counted");
+}
+
+static void test_ss_decide(void)
+{
+    XHCI_SUSP_LINK link;
+    XHCI_SUSP_FUNC f[2];
+    XHCI_SUSP_DECISION d;
+
+    /* A WAIT_WAKE held, D2, but no wake function: not armed (8.8). */
+    ss_init(&link, 1);
+    func_init(&f[0], D2);
+    f[0].WaitWake = 1;
+    CHECK_EQ(XhciSuspDecide(&link, f, 1, 1, 0, &d), XHCI_SUSP_DO_SUSPEND,
+             "suspend");
+    CHECK_EQ(f[0].ArmNow, 0, "no wake function: no arm");
+    CHECK_EQ(d.ArmIntent, 0, "no intent");
+    func_init(&f[0], D2);
+    f[0].WaitWake = 1;
+    f[0].WakeFn = 1;
+    (VOID)XhciSuspDecide(&link, f, 1, 1, 0, &d);
+    CHECK_EQ(f[0].ArmNow, 1, "a wake function: ArmNow");
+    CHECK_EQ(d.ArmIntent, 1, "intent");
+
+    /* USB 2.0 ignores WakeFn. */
+    XhciSuspLinkInit(&link, 1, 1);
+    func_init(&f[0], D2);
+    f[0].WaitWake = 1;
+    (VOID)XhciSuspDecide(&link, f, 1, 1, 0, &d);
+    CHECK_EQ(d.ArmIntent, 1, "USB 2.0: D5's wake as before");
+
+    /* Per-function rearm: one PDO armed, a sibling's WAIT_WAKE arriving
+     * while SUSPENDED. */
+    ss_init(&link, 1);
+    link.State = XHCI_SUSP_SUSPENDED;
+    link.Armed = 1;
+    func_init(&f[0], D2);
+    f[0].WaitWake = 1;
+    f[0].WakeFn = 1;
+    f[0].Armed = 1;
+    func_init(&f[1], D2);
+    CHECK_EQ(XhciSuspDecide(&link, f, 2, 1, 0, &d), XHCI_SUSP_DO_NONE,
+             "only the armed one wants it: nothing");
+    f[1].WaitWake = 1;
+    f[1].WakeFn = 1;
+    CHECK_EQ(XhciSuspDecide(&link, f, 2, 1, 0, &d), XHCI_SUSP_DO_REARM,
+             "a sibling to arm: rearm");
+    f[1].WakeFn = 0;
+    CHECK_EQ(XhciSuspDecide(&link, f, 2, 1, 0, &d), XHCI_SUSP_DO_NONE,
+             "a sibling with no wake function: nothing");
+    /* Armed but no longer wanted: stays (5.4). */
+    f[0].WaitWake = 0;
+    CHECK_EQ(XhciSuspDecide(&link, f, 2, 1, 0, &d), XHCI_SUSP_DO_NONE,
+             "armed, not wanted: as stage A");
+    /* Digest: WakeFn moves it at SuperSpeed only. */
+    func_init(&f[0], D2);
+    func_init(&f[1], D2);
+    {
+        ULONG a;
+        ULONG b;
+
+        a = XhciSuspDigest(f, 2);
+        f[1].WakeFn = 1;
+        b = XhciSuspDigest(f, 2);
+        CHECK(a != b, "a wake function changes the digest");
+    }
+}
+
+static void test_ss_hub(void)
+{
+    XHCI_SUSP_LINK link;
+
+    CHECK_EQ(XhciSuspObserveSsHub(sshub(XHCI_SSHUB_LINK_U3), 0),
+             XHCI_SUSP_RES_OK, "U3, connected, enabled: OK");
+    CHECK_EQ(XhciSuspObserveSsHub(sshub(XHCI_SSHUB_LINK_U0), 0),
+             XHCI_SUSP_POLL_AGAIN, "U0: again");
+    CHECK_EQ(XhciSuspObserveSsHub(sshub(XHCI_SSHUB_LINK_U2), 0),
+             XHCI_SUSP_POLL_AGAIN, "U2: again");
+    CHECK_EQ(XhciSuspObserveSsHub(sshub(XHCI_SSHUB_LINK_RECOVERY), 0),
+             XHCI_SUSP_POLL_AGAIN, "Recovery: again");
+    CHECK_EQ(XhciSuspObserveSsHub(sshub(XHCI_SSHUB_LINK_U3) &
+                                      ~XHCI_SSHUB_PORT_CONNECTION, 0),
+             XHCI_SUSP_RES_DISCONNECT, "no connection");
+    CHECK_EQ(XhciSuspObserveSsHub(sshub(XHCI_SSHUB_LINK_U3),
+                                  XHCI_SSHUB_C_PORT_CONNECTION),
+             XHCI_SUSP_RES_DISCONNECT, "a connect change");
+    CHECK_EQ(XhciSuspObserveSsHub(sshub(XHCI_SSHUB_LINK_U3) &
+                                      ~XHCI_SSHUB_PORT_ENABLE, 0),
+             XHCI_SUSP_RES_DISCONNECT, "not enabled");
+    CHECK_EQ(XhciSuspObserveSsHub(sshub(XHCI_SSHUB_LINK_INACTIVE), 0),
+             XHCI_SUSP_RES_DISCONNECT, "eSS.Inactive");
+    CHECK_EQ(XhciSuspObserveSsHub(sshub(XHCI_SSHUB_LINK_RX_DETECT), 0),
+             XHCI_SUSP_RES_DISCONNECT, "Rx.Detect");
+    CHECK_EQ(XhciSuspObserveSsHub(sshub(XHCI_SSHUB_LINK_DISABLED), 0),
+             XHCI_SUSP_RES_DISCONNECT, "eSS.Disabled");
+    CHECK_EQ(XhciSuspObserveSsHub(sshub(XHCI_SSHUB_LINK_U0),
+                                  XHCI_SSHUB_C_PORT_LINK_STATE),
+             XHCI_SUSP_POLL_AGAIN, "a link change is no wake");
+
+    CHECK_EQ(XhciSuspVerifySsHub(sshub(XHCI_SSHUB_LINK_U0), 0),
+             XHCI_SUSP_RES_OK, "U0: verified");
+    CHECK_EQ(XhciSuspVerifySsHub(sshub(XHCI_SSHUB_LINK_U0),
+                                 XHCI_SSHUB_C_PORT_LINK_STATE),
+             XHCI_SUSP_RES_OK, "with C_PORT_LINK_STATE too");
+    CHECK_EQ(XhciSuspVerifySsHub(sshub(XHCI_SSHUB_LINK_U3), 0),
+             XHCI_SUSP_POLL_AGAIN, "still U3");
+    CHECK_EQ(XhciSuspVerifySsHub(sshub(XHCI_SSHUB_LINK_RX_DETECT), 0),
+             XHCI_SUSP_RES_DISCONNECT, "gone");
+
+    ss_init(&link, 0);
+    link.State = XHCI_SUSP_RESUMING;
+    CHECK_EQ(XhciSuspSsHubEvidence(&link, sshub(XHCI_SSHUB_LINK_U0),
+                                   XHCI_SSHUB_C_PORT_LINK_STATE, 1),
+             XHCI_SUSP_EV_RESUME_DONE, "C_PORT_LINK_STATE, U0, RESUMING");
+    CHECK_EQ(XhciSuspSsHubEvidence(&link, sshub(XHCI_SSHUB_LINK_U0),
+                                   XHCI_SSHUB_C_PORT_LINK_STATE |
+                                       XHCI_SSHUB_C_PORT_CONNECTION,
+                                   1),
+             XHCI_SUSP_EV_DISCONNECT, "a disconnect first");
+    CHECK_EQ(XhciSuspSsHubEvidence(&link, sshub(XHCI_SSHUB_LINK_U0),
+                                   XHCI_SSHUB_C_PORT_LINK_STATE, 2),
+             XHCI_SUSP_EV_STALE, "another generation");
+    link.State = XHCI_SUSP_SUSPENDED;
+    CHECK_EQ(XhciSuspSsHubEvidence(&link, sshub(XHCI_SSHUB_LINK_U0),
+                                   XHCI_SSHUB_C_PORT_LINK_STATE, 1),
+             XHCI_SUSP_EV_IGNORED, "never a wake (10.16.2.6.2)");
+    CHECK_EQ(XhciSuspSsHubEvidence(&link, sshub(XHCI_SSHUB_LINK_U0), 0, 1),
+             XHCI_SUSP_EV_IGNORED, "U0 with no change: ignored");
+}
+
+static void test_ss_dn_decode(void)
+{
+    ULONG slot;
+    ULONG type;
+    ULONG iface;
+
+    CHECK_EQ(XhciSuspDnDecode((3UL << 8) | (1UL << 4), 7UL << 24, &slot,
+                              &type, &iface),
+             1, "FUNCTION_WAKE");
+    CHECK_EQ(slot, 7, "slot from DW3 31:24");
+    CHECK_EQ(type, 1, "type from DW0 7:4");
+    CHECK_EQ(iface, 3, "interface from DW0 15:8");
+    CHECK_EQ(XhciSuspDnDecode((3UL << 8) | (2UL << 4), 7UL << 24, &slot,
+                              &type, &iface),
+             0, "another type");
+    CHECK_EQ(type, 2, "its type");
+    CHECK_EQ(XhciSuspDnDecode(0xFFFFFF1FUL, 0x01FFFFFFUL, &slot, &type,
+                              &iface),
+             1, "reserved bits ignored");
+    CHECK_EQ(slot, 1, "slot 1");
+    CHECK_EQ(iface, 0xFF, "interface 255");
+}
+
 int main(void)
 {
     test_switch_and_caps();
@@ -2089,6 +2662,15 @@ int main(void)
     test_phases();
     test_finalize();
     test_episode_interleavings();
+    test_ss_eligible();
+    test_ss_order();
+    test_ss_refusals();
+    test_ss_resume();
+    test_ss_wake_branch();
+    test_ss_window();
+    test_ss_decide();
+    test_ss_hub();
+    test_ss_dn_decode();
 
     printf("test_susp: %d checks, %d failures\n", checks, failures);
     return failures != 0;

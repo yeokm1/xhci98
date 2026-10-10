@@ -1207,6 +1207,17 @@ VOID XhciSlotAbortTransfer(PXHCI_EXTENSION ext,
 ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event);
 
 /*
+ * One Device Notification Event (xHCI 1.2c 6.4.2.7), from inside the event
+ * DPC's drain - the interrupt's or the poller's - after its per-type count:
+ * selective suspend's stage B latches a FUNCTION_WAKE for the device's
+ * suspension in progress (design record 14 section 8.7; the HCD's, in
+ * hcd_dev.c). With XhciSelectiveSuspend 0 it returns at once. The caller
+ * holds the controller lock; nothing here calls a usbport service.
+ * IRQL: DISPATCH_LEVEL.
+ */
+VOID XhciDeviceNotificationEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event);
+
+/*
  * Task 9-0.2. The end of a drain pass that found the event ring **empty**:
  * settle every transfer whose TD ended on a mid-TD short packet and whose
  * promised tail never arrived, and recheck the deferral partition.

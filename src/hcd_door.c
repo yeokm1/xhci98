@@ -850,6 +850,88 @@ static ULONG hcdDoorTeleWord(PHCD_CONTROLLER hc, ULONG index)
 }
 
 /*
+ * 36.38's header words (xhci.h, XHCI_SNAPSHOT_HCD_DNCTRL_LIVE onward;
+ * design record 14 section 8.10), `word` a header word from DNCTRL_LIVE:
+ * DNCTRL as read now - only with the switch on, so the switch at 0 adds no
+ * register access - the extension's two DNCTRL words, and the first eight
+ * devices' stage B records in Slot ID order. A device record leaves
+ * SlotDevice[] under this lock before it is freed, so each read here is of
+ * a live record; its link record and masks are written under this lock.
+ * Controller lock held. IRQL: DISPATCH_LEVEL.
+ */
+static ULONG hcdDoorSuspWord(PHCD_CONTROLLER hc, ULONG word)
+{
+    PHCD_USB_DEVICE dev;
+    ULONG record;
+    ULONG slot;
+    ULONG seen;
+    ULONG w;
+
+    switch (word) {
+    case XHCI_SNAPSHOT_HCD_DNCTRL_LIVE:
+        if (!hc->SuspOn || hc->Hc.HcInfoStatus != XHCI_HC_OK) {
+            return XHCI_SNAPSHOT_HCD_NOT_READ;
+        }
+        return XhciRead32(&hc->Hc, hc->Hc.HcInfo.OperationalOffset +
+                                       XHCI_OP_DNCTRL) &
+               XHCI_DNCTRL_DEFINED_MASK;
+    case XHCI_SNAPSHOT_HCD_DNCTRL_ENABLES:
+        return hc->Hc.DnctrlEnables;
+    case XHCI_SNAPSHOT_HCD_DNCTRL_READBACK:
+        return hc->Hc.DnctrlReadback;
+    default:
+        break;
+    }
+    if (word < XHCI_SNAPSHOT_HCD_SUSP_AT) {
+        return XhciSnapHcdHead(0, word);
+    }
+    record = (word - XHCI_SNAPSHOT_HCD_SUSP_AT) /
+             XHCI_SNAPSHOT_HCD_SUSP_RECORD_WORDS;
+    w = (word - XHCI_SNAPSHOT_HCD_SUSP_AT) %
+        XHCI_SNAPSHOT_HCD_SUSP_RECORD_WORDS;
+    dev = NULL;
+    seen = 0;
+    for (slot = 1; slot <= XHCI_MAX_SLOTS; slot++) {
+        if (hc->SlotDevice[slot] == NULL) {
+            continue;
+        }
+        if (seen == record) {
+            dev = hc->SlotDevice[slot];
+            break;
+        }
+        seen++;
+    }
+    if (dev == NULL) {
+        return 0;
+    }
+    switch (w) {
+    case XHCI_SNAPSHOT_HCD_SUSP_SLOT:
+        return dev->SlotId;
+    case XHCI_SNAPSHOT_HCD_SUSP_LINK:
+        return (dev->Susp.State & 0xFUL) |
+               (dev->Susp.Ss ? XHCI_SNAPSHOT_HCD_SL_SS : 0UL) |
+               (dev->Susp.FwWindow ? XHCI_SNAPSHOT_HCD_SL_WINDOW : 0UL) |
+               (dev->Susp.Armed ? XHCI_SNAPSHOT_HCD_SL_ARMED : 0UL) |
+               (dev->Susp.Root ? XHCI_SNAPSHOT_HCD_SL_ROOT : 0UL) |
+               ((dev->Susp.Step & 0xFFUL) << 16);
+    case XHCI_SNAPSHOT_HCD_SUSP_FIRSTS:
+        return dev->FwFirsts;
+    case XHCI_SNAPSHOT_HCD_SUSP_CAPABLE:
+        return dev->FwCapable;
+    case XHCI_SNAPSHOT_HCD_SUSP_PENDING:
+        return dev->Susp.FwPending;
+    case XHCI_SNAPSHOT_HCD_SUSP_FAR:
+        return dev->Susp.FwPendingFar;
+    case XHCI_SNAPSHOT_HCD_SUSP_ARMED:
+        return dev->FwArmedAll;
+    default:
+        return (dev->Susp.Outcome & 0xFFUL) |
+               ((dev->Susp.Reason & 0xFFUL) << 8) |
+               ((dev->Susp.Kind & 0xFFUL) << 16);
+    }
+}
+
+/*
  * The HCD region (xhci.h, XHCI_SNAPSHOT_REGION_HCD; task 35.3): built word
  * by word into the caller's window from where XhciSnapHcdLocate puts each
  * word, so no image of the whole exists and nothing in it is a pointer. The
@@ -912,6 +994,11 @@ static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
         case XHCI_SNAPSHOT_HCD_IN_HEAD:
             /* 36.21's readings and the class drivers' records are written
              * under this lock (hcd_io.c, hcd_urb.c). */
+            /* 36.38's words, past 36.9's pair. */
+            if (word >= XHCI_SNAPSHOT_HCD_DNCTRL_LIVE) {
+                value = hcdDoorSuspWord(hc, word);
+                break;
+            }
             /* 36.9's pair is layout, past the records. */
             if (word >= XHCI_SNAPSHOT_HCD_DELIVERY_AT) {
                 value = XhciSnapHcdHead(ports, word);

@@ -97,10 +97,11 @@ static VOID xhciPublishErdp(PXHCI_EXTENSION ext, ULONG ehb)
  * MiniportInterruptsSpinLock and the driver-image controller lock - a handler
  * that could block or spin would hold both while it did.
  *
- * **Four arms act**: Command Completion (task 7), Port Status Change, Transfer
- * Event and Host Controller Event. Every other one counts its type and says
- * which task or phase owns acting on it. *(Command Completion was the only one
- * that acted when this comment was written, and the sentence stayed as the
+ * **Five arms act**: Command Completion (task 7), Port Status Change, Transfer
+ * Event, Host Controller Event and, since roadmap-hcd 36.38, Device
+ * Notification (selective suspend's hook). Every other one counts its type and
+ * says which task or phase owns acting on it. *(Command Completion was the only
+ * one that acted when this comment was written, and the sentence stayed as the
  * other three were built out - the 2026-09-16 audit's B10. Counting each type
  * and naming the port is still what the Phase 4 checkpoint reads.)*
  *
@@ -198,6 +199,17 @@ static ULONG xhciHandleEvent(PXHCI_EXTENSION ext, const XHCI_TRB *trb)
                                XHCI_TRB_GET_COMPLETION(trb->Status));
         return XhciSlotTransferEvent(ext, trb);
 
+    case XHCI_TRB_TYPE_DEVICE_NOTIFICATION:
+        /*
+         * Roadmap-hcd 36.38 (design record 14 section 8.7): raised only for
+         * a type DNCTRL enables, which is FUNCTION_WAKE with
+         * XhciSelectiveSuspend 1 and none otherwise. Counted by type above
+         * as before; the hook latches it for the device's suspension, or
+         * returns at once with the switch at 0.
+         */
+        XhciDeviceNotificationEvent(ext, trb);
+        break;
+
     case XHCI_TRB_TYPE_HOST_CONTROLLER:
         /*
          * A controller-wide error - Event Ring Full is the one this driver can
@@ -264,7 +276,7 @@ static ULONG xhciHandleEvent(PXHCI_EXTENSION ext, const XHCI_TRB *trb)
 
     default:
         /*
-         * Doorbell, Device Notification, MFINDEX Wrap: all legal, none of them
+         * Doorbell and MFINDEX Wrap: legal, neither of them
          * produced by anything this driver does. The per-type counter above is
          * the record; this is the trace.
          *

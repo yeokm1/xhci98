@@ -6628,6 +6628,33 @@ PDO group, 19-16 the link state before, 15-12 after (`XHCI_SUSP_ACTIVE` 0,
 `susp.seq.epoch`; `idle.call` (the port) as a callback is called,
 `idle.abandon` and `idle.quarantine`.
 
+**Stage B (36.38; record 14 section 8).** With the switch at 1 a SuperSpeed
+device is served too, and DNCTRL enables FUNCTION_WAKE (`0002h`); at 0
+neither changes and DNCTRL is never written. Counters, words 142 to 159,
+dumped as `susp.ss.*`, `susp.fw.*` and `susp.dn.dropped` and named by
+`XHCISNAP`: functions armed (`SetFeature(FUNCTION_SUSPEND)` options 03h the
+device took) and arm steps refused; functions disarmed and disarms not taken
+(each cycles the device); SuperSpeed hub ports suspended and resumed;
+`GetStatus(interface)` reads answered and failed, the capable functions and
+configurations with a function past interface 31; Function Wake
+notifications received, dropped with the window closed, taken as the wake,
+taken by a hub port's observation or a refusal's end, ignored, and
+unattributed; Device Notifications dropped (another type, or no device); and
+WAIT_WAKEs a configuration left without a wake function. Log lines, in
+stage A's budget: `susp.ss.arm` and `susp.ss.disarm` (slot 31-24, interface
+23-16, the result `XHCI_SUSP_RES_*` 7-0) per request; `susp.ss.cap` (slot,
+the count of first interfaces, the count capable, the count failed, a byte
+each) after each configuration's reads; `susp.fw` (slot, interface - FF past
+31 - the PDO index - FF unattributed - the link state 7-4, the disposition
+3-0: 1 the wake, 2 a hub observation, 3 a refusal's end, 4 dropped, 5 closed
+at receipt, 8 or'ed unattributed) per notification; `susp.ss.hub` (hub
+index, port, the link state 15-12, the step 11-4, the result 3-0) per
+SuperSpeed hub port observation, signal and verification. `XHCISNAP`'s
+"selective suspend, stage B" section prints the HCD header's words 204 to
+272: DNCTRL as read (only at 1), `DnctrlEnables`, `DnctrlReadback`, and the
+first eight devices' link state, window, armed functions, `FwFirsts`,
+`FwCapable` and latch.
+
 **The test client** (`test\pmclient`; record 14 section 10, SUSPa.6). TEST
 ONLY: never shipped, and `scripts\package\make-release.ps1` refuses a
 release holding `XHCIPM.SYS`, `XHCIPM.INF`, `PMCTL.EXE` or any file carrying

@@ -1917,6 +1917,31 @@ static const char *const hcd_susp_counter_names[SNAP_HCD_SUSP_WORDS] = {
     "SuspNotesSuppressed",
 };
 
+/* Stage B's counters (task 36.38, design record 14 section 8.10), appended
+ * at word 142, contiguous after stage A's. */
+#define SNAP_HCD_SSUSP_AT           142UL
+#define SNAP_HCD_SSUSP_WORDS        18UL
+static const char *const hcd_ssusp_counter_names[SNAP_HCD_SSUSP_WORDS] = {
+    "SsSuspArms",
+    "SsSuspArmRefused",
+    "SsSuspDisarms",
+    "SsSuspDisarmFailed",
+    "SsSuspHubU3",
+    "SsSuspHubResumes",
+    "SsSuspCapReads",
+    "SsSuspCapFailed",
+    "SsSuspCapable",
+    "SsSuspFarInterfaces",
+    "FuncWakeEvents",
+    "FuncWakeClosed",
+    "FuncWakeAsEvent",
+    "FuncWakeInSequence",
+    "FuncWakeIgnored",
+    "FuncWakeUnattributed",
+    "DevNotifyDropped",
+    "SsSuspCapSettled",
+};
+
 /*
  * The HCD image's layout as its header gives it, checked against the bytes
  * that arrived: 1 when every figure fits. print_hcd refuses a shape that
@@ -2060,6 +2085,10 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
                    i < SNAP_HCD_SUSP_AT + SNAP_HCD_SUSP_WORDS) {
             comp("  %-26s %lu\n", hcd_susp_counter_names[i - SNAP_HCD_SUSP_AT],
                  v);
+        } else if (i >= SNAP_HCD_SSUSP_AT &&
+                   i < SNAP_HCD_SSUSP_AT + SNAP_HCD_SSUSP_WORDS) {
+            comp("  %-26s %lu\n",
+                 hcd_ssusp_counter_names[i - SNAP_HCD_SSUSP_AT], v);
         } else {
             comp("  counter %-18lu %lu\n", i, v);
         }
@@ -3405,6 +3434,73 @@ static int selftest_intr(void)
 }
 
 /*
+ * Task 36.38's header words (src/xhci.h, XHCI_SNAPSHOT_HCD_DNCTRL_LIVE
+ * onward; design record 14 section 8.10): DNCTRL as read when the window
+ * was cut (only with XhciSelectiveSuspend 1), the extension's enables and
+ * readback, and up to eight devices' stage B records. A header shorter than
+ * them is an earlier driver's, which enabled no notification.
+ */
+#define SNAP_HCD_SSUSP_HEAD         204UL
+#define SNAP_HCD_SSUSP_HEAD_WORDS   273UL
+static void print_ssusp(const unsigned char *image, unsigned long bytes)
+{
+    static const char *const link_names[6] = {
+        "ACTIVE", "SUSPENDING", "SUSPENDED", "RESUMING", "RECOVERING", "GONE"
+    };
+    unsigned long headBytes;
+    unsigned long records;
+    unsigned long words;
+    unsigned long at;
+    unsigned long i;
+    unsigned long v;
+    const unsigned char *r;
+
+    headBytes = get32(image, 4);
+    if (headBytes < SNAP_HCD_SSUSP_HEAD_WORDS * 4 || bytes < headBytes) {
+        return;
+    }
+    comp("\nselective suspend, stage B (task 36.38):\n");
+    v = get32(image, SNAP_HCD_SSUSP_HEAD * 4);
+    if (v == 0xFFFFFFFFUL) {
+        comp("  DNCTRL                     not read (XhciSelectiveSuspend "
+             "not 1)\n");
+    } else {
+        comp("  DNCTRL                     0x%04lX%s\n", v,
+             (v & 2UL) != 0 ? " (N1, FUNCTION_WAKE, enabled)" : "");
+    }
+    comp("  DnctrlEnables              0x%04lX\n",
+         get32(image, (SNAP_HCD_SSUSP_HEAD + 1) * 4));
+    comp("  DnctrlReadback             0x%04lX\n",
+         get32(image, (SNAP_HCD_SSUSP_HEAD + 2) * 4));
+    records = get32(image, (SNAP_HCD_SSUSP_HEAD + 3) * 4);
+    words = get32(image, (SNAP_HCD_SSUSP_HEAD + 4) * 4);
+    at = SNAP_HCD_SSUSP_HEAD + 5;
+    if (words < 8 || words > 64 || records > 64 ||
+        (at + records * words) * 4 > headBytes) {
+        comp("  device records: %lu of %lu words - not a shape this build "
+             "reads\n", records, words);
+        return;
+    }
+    comp("  slot  link        Ss win armed root step  firsts     capable    "
+         "pending    far armedfn    last\n");
+    for (i = 0; i < records; i++) {
+        r = image + (at + i * words) * 4;
+        if (get32(r, 0) == 0) {
+            continue;
+        }
+        v = get32(r, 4);
+        comp("  %4lu  %-10s  %2lu %3lu %5lu %4lu %4lu  0x%08lX 0x%08lX "
+             "0x%08lX %3lu 0x%08lX 0x%06lX\n",
+             get32(r, 0), (v & 0xFUL) < 6 ? link_names[v & 0xFUL] : "?",
+             (v >> 8) & 1UL, (v >> 9) & 1UL, (v >> 10) & 1UL,
+             (v >> 11) & 1UL, (v >> 16) & 0xFFUL, get32(r, 8),
+             get32(r, 12), get32(r, 16), get32(r, 20), get32(r, 24),
+             get32(r, 28));
+    }
+    comp("  (last: outcome in 7:0, reason in 15:8, kind in 23:16.)\n");
+}
+
+/*
  * The HCD region's report: the ports and counters, then every section read
  * from the same header. When the header does not fit its image print_hcd
  * says so and nothing else is decoded from it (task 36.9's review round 2),
@@ -3428,6 +3524,8 @@ static void print_hcd_sections(const unsigned char *hcd, unsigned long bytes,
     /* 36.9: the event delivery, from the counters and the extension words
      * the header places. */
     print_intr(hcd, bytes, ext, extBytes);
+    /* 36.38: selective suspend's stage B words, from the header alone. */
+    print_ssusp(hcd, bytes);
 }
 
 /*

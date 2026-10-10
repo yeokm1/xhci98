@@ -268,6 +268,31 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
     XhciLogAppend(log, "idle.abandoned", hc->Counters.IdleAbandoned, 1);
     XhciLogAppend(log, "idle.quarantined", hc->Counters.IdleQuarantined, 1);
     XhciLogAppend(log, "susp.notes.suppressed", hc->Counters.SuspNotesSuppressed, 1);
+    /* Stage B (36.38; design record 14 section 8.10). */
+    XhciLogAppend(log, "susp.ss.arms", hc->Counters.SsSuspArms, 1);
+    XhciLogAppend(log, "susp.ss.arm.refused",
+                  hc->Counters.SsSuspArmRefused, 1);
+    XhciLogAppend(log, "susp.ss.disarms", hc->Counters.SsSuspDisarms, 1);
+    XhciLogAppend(log, "susp.ss.disarm.failed",
+                  hc->Counters.SsSuspDisarmFailed, 1);
+    XhciLogAppend(log, "susp.ss.hub.u3", hc->Counters.SsSuspHubU3, 1);
+    XhciLogAppend(log, "susp.ss.hub.resumes",
+                  hc->Counters.SsSuspHubResumes, 1);
+    XhciLogAppend(log, "susp.ss.cap.reads", hc->Counters.SsSuspCapReads, 1);
+    XhciLogAppend(log, "susp.ss.cap.failed", hc->Counters.SsSuspCapFailed, 1);
+    XhciLogAppend(log, "susp.ss.capable", hc->Counters.SsSuspCapable, 1);
+    XhciLogAppend(log, "susp.ss.far", hc->Counters.SsSuspFarInterfaces, 1);
+    XhciLogAppend(log, "susp.fw.events", hc->Counters.FuncWakeEvents, 1);
+    XhciLogAppend(log, "susp.fw.closed", hc->Counters.FuncWakeClosed, 1);
+    XhciLogAppend(log, "susp.fw.as.event", hc->Counters.FuncWakeAsEvent, 1);
+    XhciLogAppend(log, "susp.fw.in.sequence",
+                  hc->Counters.FuncWakeInSequence, 1);
+    XhciLogAppend(log, "susp.fw.ignored", hc->Counters.FuncWakeIgnored, 1);
+    XhciLogAppend(log, "susp.fw.unattributed",
+                  hc->Counters.FuncWakeUnattributed, 1);
+    XhciLogAppend(log, "susp.dn.dropped", hc->Counters.DevNotifyDropped, 1);
+    XhciLogAppend(log, "susp.ss.cap.settled",
+                  hc->Counters.SsSuspCapSettled, 1);
     hcdLogTolLocked(ext, log);
 }
 

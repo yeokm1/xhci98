@@ -420,6 +420,30 @@ static VOID hcdTolCycleEvent(PHCD_CONTROLLER hc, ULONG slotId, ULONG dci,
  * caller must request a controller reset. IRQL: DISPATCH_LEVEL, controller
  * lock held.
  */
+/*
+ * The Device Notification Event's hook (xhci_hw.h; design record 14 section
+ * 8.7, roadmap-hcd 36.38): with XhciSelectiveSuspend 0 nothing - DNCTRL
+ * enables no type then, and an event a controller raised anyway stays only
+ * in its per-type count, as before. Otherwise decoded and handed to the
+ * suspend machine's latch (HcdSuspNotificationLocked). IRQL: DISPATCH_LEVEL,
+ * controller lock held.
+ */
+VOID XhciDeviceNotificationEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
+{
+    PHCD_CONTROLLER hc;
+    ULONG slotId;
+    ULONG type;
+    ULONG iface;
+
+    hc = HcdControllerFromExt(ext);
+    if (!hc->SuspOn) {
+        return;
+    }
+    (VOID)XhciSuspDnDecode(event->Param0, event->Control, &slotId, &type,
+                           &iface);
+    HcdSuspNotificationLocked(hc, slotId, type, iface);
+}
+
 ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
 {
     PHCD_CONTROLLER hc;

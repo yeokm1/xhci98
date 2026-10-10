@@ -65,7 +65,9 @@ is designed and built first.
 - Transfer mapping and doorbells are published under the controller lock
   (`hcd_io.c:1156`, `1208`).
 - DNCTRL enables no notification (`xhci_init.c:385`); Device Notification
-  events fall through (`xhci_evt.c:261`).
+  events fall through (`xhci_evt.c:261`). (History since 36.38: with
+  `XhciSelectiveSuspend` 1 DNCTRL enables FUNCTION_WAKE and the event has
+  its own arm, section 8.7; at 0 both read as this row says.)
 - The thread holds `PowerGate` across `HcdEnumService` (`hcd_ctl.c:492`).
 
 ## 3. The device's link machine (pure core, `xhci_susp.c`)
@@ -1648,6 +1650,34 @@ region), `DnctrlEnables`, and per device record, appended after stage A's
 fields: `Ss`, the window, `FwFirsts`, `FwCapable`, `FwPending` and the
 union of its PDOs' `FwArmed`. The offsets are appended at the end of
 their regions (the orchestrator reconciles them with 36.33's at merge).
+
+**As built (36.38).** The counters are words 142 to 159 of the counter
+block (160 words), in the table's order, with `hcd_log.c` labels
+`susp.ss.*`, `susp.fw.*` and `susp.dn.dropped`. Stage A had no per-device
+snapshot record, so the HCD header grows instead (version unchanged, 273
+words): word 204 DNCTRL 15:0 as the door reads it - only with the switch at
+1, `0xFFFFFFFF` (not read) at 0, so the switch at 0 adds no register
+access - 205 `DnctrlEnables`, 206 `DnctrlReadback` (DNCTRL read after the
+driver's own write, a second extension word appended beside the first so
+the amd64 tail parity `TrailingPad` keeps is unchanged), 207 and 208 the
+record count (8) and size (8 words), and from 209 eight records, the first
+eight devices in Slot ID order: Slot ID; the link word (state 3:0, `Ss` 8,
+the window 9, `Armed` 10, `Root` 11, the running step 23:16); `FwFirsts`;
+`FwCapable`; the latch (`FwPending`, `FwPendingFar`); the union of the
+PDOs' `FwArmed` (`dev->FwArmedAll`, kept by the thread, so the door walks
+no PDO chain); and the last outcome, reason and kind. **The latch lives in
+the link record** (`XHCI_SUSP_LINK.FwPending`, `FwPendingFar`, beside the
+window `FwWindow`), not in `HCD_USB_DEVICE` as 8.7 and 8.9 have it, so the
+pure core opens, closes and empties it with the window and its vectors
+cover it; a closing window counts what it dropped in `FwDropped`, which the
+executor moves to `FuncWakeIgnored` in the same hold. The log lines are
+bounded by stage A's budget; `susp.fw` packs slot, interface (FFh past 31),
+the PDO index (FFh unattributed), the link state and the disposition (1
+event, 2 observation, 3 refusal, 4 dropped, 5 closed at receipt; 8 or'ed
+unattributed). Two choices the text left open: a DNCTRL write the init
+path cannot make (no valid read-modify-write operand) is not the start's
+failure - only the readback stays 0; and the arm's first request is not
+sent behind a client's EP0 transfer, with stage A's one bounded retry.
 
 ### 8.11 Host vectors
 
