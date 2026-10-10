@@ -300,6 +300,14 @@ static ULONG hcdHubFeature(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
                          (USHORT)selector, (USHORT)n, 0, &bytes, &stalled);
 }
 
+/* SetPortFeature or ClearPortFeature(selector) on port n, for selective
+ * suspend's executor (hcd_susp.c). Thread only. */
+ULONG HcdHubPortFeature(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
+                        ULONG set, ULONG selector)
+{
+    return hcdHubFeature(hc, hub, n, set, selector);
+}
+
 /* GET_STATUS(port n): wPortStatus and wPortChange. */
 ULONG HcdHubPortStatus(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
                        PULONG status, PULONG change)
@@ -547,7 +555,11 @@ static VOID hcdHubReleaseBelow(PHCD_CONTROLLER hc, PHCD_USB_DEVICE *devs,
             }
             state = hcdHubEpState(hc, dev, dci);
             XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-            if (!dev->Gone && state == XHCI_EP_STATE_STOPPED) {
+            if (!dev->Gone && state == XHCI_EP_STATE_STOPPED &&
+                !pipe->SuspendPause) {
+                /* Not a device selective suspend holds: its own restart
+                 * rings it (design record 14 section 3.2; Codex review of
+                 * 36.30, round 1, finding 5). */
                 if (pipe->Queue->Count != 0) {
                     pipe->SeqUsed = 1;
                     XhciWriteDoorbell(&hc->Hc, dev->SlotId, dci);
@@ -774,6 +786,7 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     ULONG change;
     ULONG bit;
     ULONG selector;
+    ULONG acked;
 
     q = HcdHubPort(hc, hub, n);
     if (hub->Usb3) {
@@ -813,10 +826,12 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
         HcdTolLocObserve(hc, q, (status & XHCI_HUB_PORT_CONNECTION) != 0,
                          (status & XHCI_HUB_PORT_POWER) != 0,
                          (change & XHCI_HUB_C_PORT_CONNECTION) != 0);
+        acked = 0;
         for (bit = 1; bit <= XHCI_HUB_C_PORT_RESET; bit <<= 1) {
             selector = XhciHubClearSelector(bit);
-            if ((d->Clear & bit) != 0 && selector != 0) {
-                (VOID)hcdHubFeature(hc, hub, n, 0, selector);
+            if ((d->Clear & bit) != 0 && selector != 0 &&
+                hcdHubFeature(hc, hub, n, 0, selector)) {
+                acked |= bit;
             }
         }
         if (d->OverCurrent) {
@@ -829,6 +844,23 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
              * not re-arm a spent budget or release a hold (35-T.5). */
             HcdTolLocRecovery(hc, q);
             (VOID)hcdHubFeature(hc, hub, n, 1, XHCI_HUB_FEAT_PORT_POWER);
+        }
+        if (HcdSuspOwnsPort(hc, q)) {
+            /* A device selective suspend holds (design record 14 section
+             * 3.8): not resumed here, and a finished resume is the
+             * machine's evidence, not this look's to quiesce and release.
+             * Connection processing is unchanged. */
+            d->Resume = 0;
+            if (d->Suspended) {
+                /* Only the changes the hub took back are evidence: a
+                 * clear that failed leaves the transport uncertain, and
+                 * C_PORT_SUSPEND without its clear is no wake (Codex
+                 * review of 36.30, round 2, finding 4). */
+                d->Suspended = 0;
+                HcdSuspHubSample(hc, q, status, acked,
+                                 (d->Clear & XHCI_HUB_C_PORT_SUSPEND) != 0 &&
+                                     (acked & XHCI_HUB_C_PORT_SUSPEND) == 0);
+            }
         }
     }
     if (!d->Resume) {

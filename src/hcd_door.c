@@ -917,7 +917,8 @@ static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
                 value = xpipe[word - XHCI_SNAPSHOT_HCD_XPIPE_AT];
                 break;
             }
-            if (word >= XHCI_SNAPSHOT_HCD_TELE_END) {
+            /* 36.9's pair is layout, past the records. */
+            if (word >= XHCI_SNAPSHOT_HCD_DELIVERY_AT) {
                 value = XhciSnapHcdHead(ports, word);
                 break;
             }

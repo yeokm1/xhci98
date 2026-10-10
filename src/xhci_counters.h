@@ -205,9 +205,41 @@ typedef struct _XHCIHC_COUNTERS {
     /* The three values' read status apart from their values (record 15
      * section 3): XHCI_POLL_FOUND_* bits. */
     ULONG IntrValuesFound;
+
+    /* Message-signalled interrupts on Vista and 7 (design records 15
+     * section 4.3 and 18; roadmap-hcd.md 36.15), appended: where the
+     * IoConnectInterruptEx pair came from (HCD_MSI_ROUTINES_*); the
+     * messages connected and the capability read (XHCI_POLL_DELIVERY_*);
+     * the connection's NTSTATUS; the raw list's message descriptors; the
+     * x86 helper's binding (XHCI_MSI86_STATE_*), its looks, the last
+     * look's NTSTATUS and refusal (XHCI_MSI86_REFUSE_*) and the helper's
+     * version; the last requirements filter's sequence, the list's class
+     * (XHCI_MSI_CLASS_*), the outcome (XHCI_MSI_OUT_*), the mode it used
+     * as read (XHCI_POLL_NOT_FOUND when not found), its configurations,
+     * message and line members, and the descriptors a strip removed.
+     * Written at each start, after the counters are zeroed, from the
+     * controller's own record, and at each later filter. */
+    ULONG MsiRoutines;
+    ULONG MsiMessages;
+    ULONG MsiCapability;
+    ULONG MsiConnectStatus;
+    ULONG MsiDescriptors;
+    ULONG Msi86State;
+    ULONG Msi86Looks;
+    ULONG Msi86Status;
+    ULONG Msi86Refusal;
+    ULONG Msi86HelperVersion;
+    ULONG MsiFilterSeq;
+    ULONG MsiFilterClass;
+    ULONG MsiFilterOutcome;
+    ULONG MsiFilterMode;
+    ULONG MsiFilterLists;
+    ULONG MsiFilterMessages;
+    ULONG MsiFilterLines;
+    ULONG MsiFilterStripped;
 } XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 96 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 114 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */

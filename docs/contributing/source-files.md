@@ -187,7 +187,12 @@
 > `HCD_PIPE.ClearOwed`, ended by `hcdCfgOwedEnd`), its steps and verdict the
 > pure `XhciPipeResetSteps` and `XhciPipeClearVerdict` in `xhci_pipe.c`
 > (`test_pipe`), and the qemu flavour's fault 13 in `hcd_inj.c`
-> (`HcdInjClearHalt`; `xhci_inj.h`, `test_inj`).
+> (`HcdInjClearHalt`; `xhci_inj.h`, `test_inj`). Task 36.9 adds no file: the
+> HCD header's two delivery words are `xhci_snap.c`'s (`test_snap`) and
+> `XHCISNAP`'s decode is `xhcisnap.c`'s `print_intr`. Task 36.10 adds
+> `xhciqual\verdict.c` (C4's outcome, the C6/C8 gate, the verdict with
+> QUALIFIED WITH CAVEATS and the exit code, moved out of `report.c`; host
+> suite `xhciqual\test\test_verdict.c`).
 > Task 36.21 adds three files: the pure `xhci_xstat.c` / `xhci_xstat.h`
 > (the transfer-size readings `XHCI_XSTAT`: length, chunk and depth
 > buckets, the hand-carried 64-bit sums, the interval rule over the
@@ -237,7 +242,19 @@
 > grant and revocation, the peeks and the doorbell hook `HcdSvcDoorbell`).
 > `hcd_ctl.c` settles the delivery at start (`hcdSettleDelivery`,
 > `hcdConnect`, the seam 36.15's MSI joins), and the counters are appended
-> to `XHCIHC_COUNTERS`. The tables below are the
+> to `XHCIHC_COUNTERS`.
+> Task 36.15 (design records 15 section 4.3 and 18) adds MSI on Vista and 7:
+> the pure `xhci_msi.c` / `xhci_msi.h` (the MSI/MSI-X capability read, the
+> requirements list's checked walk, class, strip and qemu no-line rewrite,
+> the filter record, the x86 helper's binding state machine and the `M86`
+> trace record) and `xhci_msi86.c` / `xhci_msi86.h` (both ends of the x86
+> helper's channel, compiled into `xhci98.sys`, the helper and `test_msi`);
+> the driver half `hcd_msi86.c` (the mode cache, the requirements filter,
+> the helper's look and reference, the routines per architecture, the
+> counters and the trace); in `hcd_ctl.c` the seam `hcdMsgConnect`, the
+> message ISR and the capability read; and `src/msi86/` - `msi86_entry.c`,
+> `xhcimsi.rc`, `sources` and `makefile` - the NT 6 x86 helper
+> `xhcimsi.sys`, built with WDK 7.1 for x86. The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name
@@ -309,6 +326,7 @@ These need `ntddk.h` or a usbport service, take the controller lock, or derefere
 | `xhci98.rc` | The file version resource (task 8-A.4), so a binary recovered from a user's machine can be identified. Takes its fields from `xhci_version.h`; adds no import. |
 | `xhci98.inf` | The **32-bit** INF: one file for two setup engines. Windows 98 SE reads the undecorated sections and loads the driver through `NTKERN`; Windows 2000 SP4 reads the `.NTx86` sections and loads it as a kernel service. Both install sections copy the project's two files through the shared `Xhci.CopyFiles`, and each adds its own OS-supplied list (`Xhci.CopyW98`: `usbd.sys` and `usbhub.sys`; `Xhci.CopyNT`: those plus `usbport.sys`) that `LayoutFile` has the OS fetch from its own install source. Both also copy `usbui.dll` through `Xhci.CopyUI`, to dirid 11 rather than 10, since 1.0.2.0. Since 1.1.0.0 it carries a third install path for Windows Vista and Windows 7: `%Mfg%=XhciModels,NTx86.6.0` in `[Manufacturer]` leads NT 6.x to `[XhciModels.NTx86.6.0]` and `[Xhci.Dev6.NTx86]`, which copies `xhci98.sys` alone (those systems already carry the four OS-supplied files, and their file queue aborts on a `LayoutFile` copy). |
 | `xhci98-amd64.inf` | The **64-bit package's** INF, and it is a second file rather than a third path in the first (design record 11 section 12, decision 2): no Windows 98 path, a `[Manufacturer]` line decorated `NTamd64,NTamd64.6.0`, and two install paths - `[Xhci.Dev.NTamd64]` for Windows XP x64 and Server 2003 x64, which fetches the OS-supplied files from `Driver Cache\amd64`, and `[Xhci.Dev6.NTamd64]` for Vista x64 and Windows 7 x64, which copies `xhci98.sys` alone. Neither file may grow the other's sections - an undecorated or `.NT*` section here is one a 32-bit engine reaches, which would put an amd64 binary on a 32-bit machine, and the gate refuses it by name (`PATH-NO9X`, `PATH-MFGDEC`, `OS-DEFAULT`). The two are checked against each other by `scripts\inf-gate\test-inf-checks.ps1`, because the accepted cost of two files is that they can drift. |
+| `portsw.vbs` | The Intel port switchover's user script (roadmap-hcd task 36.42, design record 16 section 5a): Windows Script Host VBScript that shows `XhciIntelPortSwitch` on every xhci98 controller and sets it to 0 or 1, then says a restart is needed. Finds the controller's driver key among the `NNNN` subkeys of the USB class key (listed by WMI on NT, by a `regedit /e` export on 98 and ME, probed `0000` to `9999` only if neither answers) for this driver's `DriverDesc`; on Vista and 7 asks for elevation itself. Staged at every package root by `make-package.ps1`, published by `make-release.ps1`, held by the packager's self-tests and the source charset gate. |
 | `txtsetup.oem`, `txtsetup-amd64.oem` | The text-mode Setup driver descriptions (roadmap task 33.3, design record 13 section 5.6): what Windows 2000 and 32-bit XP (the first) and XP x64 (the second, staged under the first's name) read from drive A: when F6 is pressed, loading `xhci98.sys` as a `scsi` component and binding it to `PCI\CC_0C0330` and `XHCI98\ROOT_HUB`. Gated by `scripts\inf-gate\check-txtsetup-oem.ps1`, which holds both to the INF beside them and to each other. |
 
 ## Generated, not tracked

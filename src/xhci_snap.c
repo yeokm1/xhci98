@@ -33,7 +33,7 @@ XHCI_C_ASSERT(xhci_snap_hcd_pirq,
                   XHCI_SNAPSHOT_HCD_XSTAT_WORDS);
 
 /* 36.21's readings: the controller's whole, then the class driver records,
- * to the header's end. */
+ * up to 36.9's pair. */
 XHCI_C_ASSERT(xhci_snap_hcd_xstat,
               XHCI_SNAPSHOT_HCD_XSTAT_COUNT == XHCI_XSTAT_WORDS &&
               XHCI_SNAPSHOT_HCD_XSTAT_AT + XHCI_SNAPSHOT_HCD_XSTAT_COUNT ==
@@ -41,15 +41,23 @@ XHCI_C_ASSERT(xhci_snap_hcd_xstat,
               XHCI_SNAPSHOT_HCD_TELE_AT +
                       XHCI_SNAPSHOT_HCD_TELE_COUNT *
                           XHCI_SNAPSHOT_HCD_TELE_RECORD_WORDS ==
-                  XHCI_SNAPSHOT_HCD_TELE_END);
+                  XHCI_SNAPSHOT_HCD_DELIVERY_AT &&
+              XHCI_SNAPSHOT_HCD_DELIVERY_AT == XHCI_SNAPSHOT_HCD_TELE_END);
+
+/* 36.9: the delivery's six extension words are contiguous ULONGs, and
+ * the pair that places them comes before 36.24's counters. */
+XHCI_C_ASSERT(xhci_snap_hcd_delivery,
+              XHCI_FIELD_OFFSET(XHCI_EXTENSION, LineRetireState) ==
+                  XHCI_FIELD_OFFSET(XHCI_EXTENSION, EventDelivery) +
+                      (XHCI_SNAPSHOT_HCD_DELIVERY_COUNT - 1) * 4UL &&
+              XHCI_SNAPSHOT_HCD_DELIVERY_WORDS + 1 ==
+                  XHCI_SNAPSHOT_HCD_XPIPE_WORDS);
 
 /* 36.24's counters whole, after 36.9's two words, to the header's end. */
 XHCI_C_ASSERT(xhci_snap_hcd_xpipe,
               sizeof(XHCI_XPIPE_STATS) ==
                   XHCI_XPIPE_STATS_WORDS * sizeof(ULONG) &&
               XHCI_SNAPSHOT_HCD_XPIPE_COUNT == XHCI_XPIPE_STATS_WORDS &&
-              XHCI_SNAPSHOT_HCD_TELE_END + 2 ==
-                  XHCI_SNAPSHOT_HCD_XPIPE_WORDS &&
               XHCI_SNAPSHOT_HCD_XPIPE_AT + XHCI_SNAPSHOT_HCD_XPIPE_COUNT ==
                   XHCI_SNAPSHOT_HCD_HEAD_WORDS);
 
@@ -121,6 +129,10 @@ ULONG XhciSnapHcdHead(ULONG ports, ULONG word)
         return XHCI_SNAPSHOT_HCD_TELE_COUNT;
     case XHCI_SNAPSHOT_HCD_TELE_WORDS:
         return XHCI_SNAPSHOT_HCD_TELE_RECORD_WORDS;
+    case XHCI_SNAPSHOT_HCD_DELIVERY_AT:
+        return XHCI_FIELD_OFFSET(XHCI_EXTENSION, EventDelivery);
+    case XHCI_SNAPSHOT_HCD_DELIVERY_WORDS:
+        return XHCI_SNAPSHOT_HCD_DELIVERY_COUNT;
     case XHCI_SNAPSHOT_HCD_XPIPE_WORDS:
         return XHCI_SNAPSHOT_HCD_XPIPE_COUNT;
     default:

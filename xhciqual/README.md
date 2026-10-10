@@ -169,6 +169,12 @@ routing report's pure half, `route.c`, built with the driver's own
 the selected PIRQ, its `PIRQx_ROUT`, and the comparison against a GSI,
 with the Dell Latitude E7250's own reading pinned as the mismatch it
 shows.
+`xhciqual/test/test_verdict.c` (roadmap task 36.10) covers `verdict.c`:
+C4's outcome from what the interrupt test saw, the gate that lets C6 and
+C8 run, the per-controller verdict through each C4 outcome - QUALIFIED,
+QUALIFIED WITH CAVEATS, and the failures that stay failures - and the
+run's exit code. The matrix reaches "needs polling" only through two
+test programs that rewrite the Interrupt Line before the run (below).
 
 That code lives in its own translation unit so it can be tested here, because
 the QEMU matrix cannot reach the field-dependent branches. SeaBIOS leaves
@@ -225,13 +231,14 @@ reset, a 15-second wait for a plug, and device identification. That is the
 opposite of what the safety section in `hardware-testing.md` tells a
 first-time user to do. If you have older notes, `--full` is that behaviour.
 
-A read-only pass cannot observe C2, C3 or C4, so it has three outcomes. The
+A read-only pass cannot observe C2, C3 or C4, so it has four outcomes. The
 screen ends on the verdict and does not print a next command:
 
 | Outcome | Means |
 |---|---|
 | `LOOKS QUALIFIED` | no read-only disqualifier; the active tests still decide |
-| `DISQUALIFIED` | something a read-only pass genuinely sees: `Interrupt Pin = 0` (MSI-only, and neither target has an MSI path), no xHCI function at all, BAR0 above 4 GB or unassigned, a dead MMIO window with no excuse, or no USB2 protocol ports |
+| `LOOKS QUALIFIED WITH CAVEATS` | as above, but `Interrupt Pin = 0`: the controller has no line interrupt, so `xhci98.sys` polls it (or an MSI-capable OS takes a message interrupt); the line says whether it offers MSI. Since 2.2.0.3 (roadmap-hcd task 36.10) |
+| `DISQUALIFIED` | something a read-only pass genuinely sees: no xHCI function at all, BAR0 above 4 GB or unassigned, a dead MMIO window with no excuse, or no USB2 protocol ports. `Interrupt Pin = 0` was one until 2.2.0.3 |
 | `CANNOT SAY` | a state this pass may not change is in the way: the controller is not in D0, or Memory Space Enable is clear |
 
 The `Probe safety: PASS - no PCI configuration writes.` line is printed rather
@@ -243,7 +250,10 @@ qualification verdict was reached: only a full active run can qualify a
 controller, and only that run answers 0. So an exit code of 1 after a quick
 scan means "not qualified here", not "something went wrong", and a
 `LOOKS QUALIFIED` screen comes with it. **2** is a usage error: an argument
-this tool does not know, or a bad value for one. The batch wrappers bucket
+this tool does not know, or a bad value for one. **3** (from 2.2.0.3) is a
+full active run whose controllers were all qualified and at least one only
+**QUALIFIED WITH CAVEATS** - no working interrupt, so the driver polls it;
+see "What a verdict means". The batch wrappers bucket
 these with `IF ERRORLEVEL` and pair them with `--done-flag`, which is what
 separates a bad verdict from a crash - the flag is written on any normal exit,
 including a usage error. (Stated here because the audit of 2026-09-07 found
@@ -288,7 +298,7 @@ this directory (see "Build (Windows host)" above), or take it from the same
 place the driver package came from. That obligation is met by the "Before
 you install: check the machine" section of
 [`../docs/using/release-notes.md`](../docs/using/release-notes.md), which
-also carries the three quick-scan verdicts. Keep the two in step: that
+also carries the four quick-scan verdicts. Keep the two in step: that
 section is a rendering of this one, and this file is the normative copy.
 
 ### The staged procedure
@@ -458,8 +468,34 @@ WARNINGS when SOF assertion passes and PCI INTx status is either observed or
 unavailable on a pre-PCI-2.3 interface, because CPU ISR delivery is not
 claimed by the safe DOS/32A path.
 
-DISQUALIFIED on, from `report.c` (xHCI), `legacy.c` (EHCI/OHCI),
-`mmiodiag.c` and `main.c`: Interrupt Pin = 0 (MSI-only), C4 never fires, PCI
+QUALIFIED WITH CAVEATS (xHCI, from 2.2.0.3; roadmap-hcd task 36.10, design
+record 15 section 10) = everything QUALIFIED asks except a working interrupt,
+with the controller completing C4's No-Op command polled: C4 reads **POLL**,
+"needs polling". That covers `Interrupt Pin = 0`, an Interrupt Line DOS
+cannot use (0, 2, above 15), PCI Interrupt Disable stuck set, and a No-Op
+whose completion reached the event ring while no interrupt arrived (IP never
+raised, or raised and the ISR never entered). The polled tests, C6 and C8,
+then run with the tool's interrupt hook already removed. The verdict prints
+its caveats: the driver polls such a controller (`XhciInterruptMode` 0,
+automatic, or 2), which costs more CPU wake-ups and up to the poll period of
+event latency (`XhciPollIdleMs`, 50 ms by default, when idle); or an
+MSI-capable OS - the tool reads the PCI capability list (05h MSI, 11h MSI-X)
+and says whether Windows Vista and 7 can take a message interrupt instead
+(x64 directly, 32-bit with the `xhcimsi.sys` helper), or that polling is the
+only route. One case differs: a controller whose pending bit (IMAN.IP) was
+never seen, through both of C4's waits, is not one automatic mode can see -
+the driver moves a line to polling when it sees IP asserted and nothing
+claimed - so the verdict names `XhciInterruptMode` 2; the MSI route is still
+named from the capability list, as untested, and an MSI or MSI-X found
+enabled is named as a reason IP may not have been seen (an enabled message
+clears IP itself). Warnings, if any, are shown beside it. Exit code 3. Not a
+caveat but a failure: a DPMI step that failed (the tool's), an ISR entry the
+controller's status did not own, an ISR with no completion behind it, and a
+No-Op that never completed even polled. `--irq-selftest` reports the same
+outcome as "IRQ SELF-TEST: NO WORKING INTERRUPT", also exit 3.
+
+DISQUALIFIED on, from `verdict.c` (xHCI), `legacy.c` (EHCI/OHCI),
+`mmiodiag.c` and `main.c`: C4 fails (as above), PCI
 2.3 INTx status fails, C3 never completes, C2 reset fails, cleanup could not
 quiesce the controller, the controller reports no root ports, no USB2 protocol
 ports (B7 empty, xHCI only), BAR0 above 4 GB, BAR0 unassigned, PCI Memory
@@ -551,7 +587,7 @@ from a stock Win98 boot floppy by keeping only `IO.SYS`, `MSDOS.SYS`,
 
 ### What the matrix covers
 
-The matrix stands at 42 cases: one standalone-help case, the isolated xHCI
+The matrix stands at 46 cases: one standalone-help case, the isolated xHCI
 IRQ self-test, 27 controller/device cases, two `--probe-only` cases (one
 scanning xHCI alone, one scanning xHCI, EHCI and OHCI together), one
 read-only quick scan per controller-presence mask (none, each family, every
@@ -560,6 +596,20 @@ no-argument behaviour, and since task 36.11 two with `--gsi` (the quick
 scan and `--probe-only`), which read the routing report's `not
 applicable` on QEMU's xHCI. The quick-scan cases matter because that path
 is the first thing a user runs.
+
+Since task 36.10, four more read the no-working-interrupt outcome and the
+exit code, which QEMU's xHCI never reaches unaided. The harness writes two
+tiny programs into the staged C: drive, `SETIL05.COM` and `SETILFF.COM`,
+that rewrite the Interrupt Line register (config 3Ch) of the xHCI the cases
+place at 00:05.0 before XHCIQUAL reads it: IRQ 5, a line nothing drives
+(IP comes up, the ISR never enters, the completion is polled - issue 12's
+shape), and FFh, no usable IRQ. Three cases read C4 POLL and QUALIFIED WITH
+CAVEATS (a full run with a mouse, C6 and C8 passing after it; a full run
+with the MSI-X capability named; and `--irq-selftest`), and a fourth a
+working line's plain QUALIFIED; each then types `IF ERRORLEVEL ... ECHO
+... >COM1` so the exit code (3, or 0) lands on the serial log the case
+reads. The IRQ 5 cases take a case timeout of 180 s: C4's second-long
+waits run out in full, and `delay` is slow under TCG.
 
 The cases cover all eight controller presence masks, empty and attached
 variants, HS storage, FS HID, OHCI HID/storage, a USB hub, an unmanaged

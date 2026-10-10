@@ -79,8 +79,9 @@ What it checks, grouped by the failure each rule prevents:
            XhciFirstEnumPortMs at 2000, each the driver's own default, written
            so every value the driver reads is where a user looks for it
            (owner, 2026-10-05). Task 34.3 made it eight:
-           XhciIntelPortSwitch at 1, the Intel port switchover's opt-out
-           (owner, 2026-10-05). Task 35-T.7 made it eleven: XhciTolerance
+           XhciIntelPortSwitch, the Intel port switchover's switch, at 1
+           (owner, 2026-10-05) and at 0 since task 36.42 (owner,
+           2026-10-09). Task 35-T.7 made it eleven: XhciTolerance
            at 1, XhciIntervalCap at 1 and XhciAvgTrbEsit at 0 (design
            record 17 sections 4.7 and 4.11). Task 36.3 made it twelve:
            XhciIntelIrqRoute at 1, the Intel interrupt routing quirk
@@ -1058,7 +1059,11 @@ foreach ($m in $models) {
             Add-Failure "PATH-NT" ("[{0}] has no [{1}]. On Win2000 the device installs with no service: Device Manager shows it present and the driver never loads." -f $nt, $svcSection)
             continue
         }
-        $addSvc = @(Get-DirectiveRaw $inf $svcSection "AddService")
+        # The x86 MSI helper's own AddService on the Vista and 7 controller
+        # section is MSIHLP-SVC's (below), not this rule's: the function
+        # driver's line is still exactly one.
+        $addSvc = @(Get-DirectiveRaw $inf $svcSection "AddService" | Where-Object {
+            (($_.Value -split ',')[0].Trim()) -ine "xhcimsi" })
         if ($addSvc.Count -ne 1) {
             Add-Failure "PATH-NT" ("[{0}] must contain exactly one AddService; found {1}." -f $svcSection, $addSvc.Count)
             continue
@@ -1220,9 +1225,9 @@ $requiredValues = @(
     @{
         Name    = "XhciIntelPortSwitch"
         Type    = "0x00010003"
-        Default = "1"
-        Why     = "roadmap-hcd task 34.3's Intel EHCI-to-xHCI port switchover on the 7-, 8- and 9-series and C610 PCH, read at start on every Intel controller (roadmap-hcd task 35.5), where an exact 2 also routes on an unlisted one at the user's own risk; 0 leaves the routing as firmware set it. The INF writes the 1 so the opt-out is where a user looks for it, under 34.1's don't-overwrite rule so a user's 0 survives an update (owner, 2026-10-05)"
-        DefaultWhy = "1 is the driver's own default - absent, of another type or any number but 0 is on (owner, 2026-10-05); shipping 0 would leave the machines the task exists for with nothing on their switchable connectors"
+        Default = "0"
+        Why     = "roadmap-hcd task 34.3's Intel EHCI-to-xHCI port switchover on the 7-, 8- and 9-series and C610 PCH, read at start on every Intel controller (roadmap-hcd task 35.5): 1 routes on a listed controller, an exact 2 also on an unlisted one at the user's own risk, 0 leaves the routing as firmware set it. The INF writes the 0 so the switch is where a user looks for it, under 34.1's don't-overwrite rule so a user's 1 survives an update (owner, 2026-10-05; the default 0 since task 36.42, owner, 2026-10-09)"
+        DefaultWhy = "0 is the driver's own default since task 36.42 - absent, of another type or 0 is off (owner, 2026-10-09, after SweetLow's issue 17 comment: a connector left on EHCI works there); shipping 1 would move every switchable connector off a working USB 2.0 controller on an install nobody asked to"
     },
     @{
         Name    = "XhciIntelIrqRoute"
@@ -2134,6 +2139,191 @@ foreach ($secName in @($inf.SectionOrder)) {
     }
 }
 
+# ---- MSI-* and MSIHLP-* : message-signalled interrupts on Vista and 7 ------
+#
+# Design record 15 section 4.3 and design record 18 (task 36.15). The
+# controller's hardware key asks Windows for one message - the four lines of
+# [Xhci.Msi.AddReg] - on the Vista and 7 controller path of each file and
+# nowhere else; and on the 32-bit file that path alone also installs
+# xhcimsi.sys, the NT 6 x86 MSI helper, as a boot-start service, and asks
+# for a restart (owner, 2026-10-09), because the one x86 xhci98.sys cannot
+# reach IoConnectInterruptEx without it.
+#
+#   MSI-PLACE     an AddReg section writing MessageSignaledInterruptProperties
+#                 is reached from anything but the Vista and 7 controller's
+#                 .HW section, or a .HW section other than that one exists.
+#   MSI-VALUES    MSISupported and MessageNumberLimit are not both written,
+#                 REG_DWORD 1, with FLG_ADDREG_NOCLOBBER (a user's
+#                 MSISupported 0 must survive an update, 34.1's rule).
+#   MSIHLP-AMD64  the 64-bit file names the helper anywhere: the amd64 HCD
+#                 has none.
+#   MSIHLP-SVC    the helper's AddService is not exactly one line in the
+#                 Vista and 7 controller's .Services, flags 0, to an install
+#                 section with ServiceType 1, StartType 0 (boot), ErrorControl
+#                 1 and ServiceBinary %12%\xhcimsi.sys copied by that same
+#                 controller section.
+#   MSIHLP-ONLYNT6 a CopyFiles section that delivers xhcimsi.sys is named by
+#                 any section but the Vista and 7 controller's.
+#   MSIHLP-HW     the 32-bit file asks for a message without installing the
+#                 helper on the same section.
+#   MSIHLP-REBOOT a Reboot or Restart directive anywhere but the 32-bit Vista
+#                 and 7 controller section, or that section without one while
+#                 it installs the helper.
+#
+$msiHelperBinary = "xhcimsi.sys"
+$msiHelperService = "xhcimsi"
+$msiController = if ($Arch -eq "amd64") { "Xhci.Dev6.NTamd64" } else { "Xhci.Dev6.NTx86" }
+$msiHw = $msiController + ".HW"
+$msiAddRegSections = New-Object System.Collections.ArrayList
+foreach ($secName in @($inf.SectionOrder)) {
+    foreach ($e in @(Get-Section $inf $secName)) {
+        if ($null -eq $e) { continue }
+        if ($e.Text -match '(?i)MessageSignaledInterruptProperties') {
+            if (-not $msiAddRegSections.Contains($secName)) { [void]$msiAddRegSections.Add($secName) }
+        }
+    }
+}
+foreach ($secName in @($inf.SectionOrder)) {
+    if ($secName -match '(?i)\.HW$' -and $secName -ine $msiHw) {
+        Add-Failure "MSI-PLACE" ("[{0}] exists. The only hardware-key section this file may carry is [{1}], the Vista and 7 controller's (design record 15 section 4.3)." -f $secName, $msiHw)
+    }
+    foreach ($ar in @(Get-Directive $inf $secName "AddReg")) {
+        if ($msiAddRegSections -contains $ar -and $secName -ine $msiHw) {
+            Add-Failure "MSI-PLACE" ("[{0}] reaches [{1}], which asks for message-signalled interrupts. Only [{2}] may: the controller's hardware key on the Vista and 7 path alone (design record 15 section 4.3)." -f $secName, $ar, $msiHw)
+        }
+    }
+}
+$msiAsked = $false
+if (Test-SectionExists $inf $msiHw) {
+    foreach ($ar in @(Get-Directive $inf $msiHw "AddReg")) {
+        if (-not ($msiAddRegSections -contains $ar)) { continue }
+        $msiAsked = $true
+        foreach ($want in @("MSISupported", "MessageNumberLimit")) {
+            $rows = @(Get-Section $inf $ar | Where-Object {
+                $_.Text -match ('(?i)^\s*HKR\s*,\s*"?Interrupt Management\\MessageSignaledInterruptProperties"?\s*,\s*' + $want + '\s*,')
+            })
+            if ($rows.Count -ne 1) {
+                Add-Failure "MSI-VALUES" ("[{0}] must write {1} exactly once; found {2}." -f $ar, $want, $rows.Count)
+                continue
+            }
+            $f = @($rows[0].Text -split ',' | ForEach-Object { $_.Trim() })
+            $flags = ConvertTo-CopyFlags $f[3]
+            if ($null -eq $flags -or $flags -ne 0x00010003 -or $f.Count -ne 5 -or $f[4] -ne "1") {
+                Add-Failure "MSI-VALUES" ("[{0}] line {1}: {2} must be REG_DWORD 1 with FLG_ADDREG_NOCLOBBER (0x00010003), so a user's MSISupported 0 survives an update; found '{3}'." -f $ar, $rows[0].Line, $want, $rows[0].Text.Trim())
+            }
+        }
+    }
+}
+
+$msiHelperNamed = New-Object System.Collections.ArrayList
+foreach ($secName in @($inf.SectionOrder)) {
+    foreach ($e in @(Get-Section $inf $secName)) {
+        if ($null -eq $e) { continue }
+        if ($e.Text -match ('(?i)\b' + [regex]::Escape($msiHelperService) + '\b')) {
+            [void]$msiHelperNamed.Add(@{ Section = $secName; Line = $e.Line })
+        }
+    }
+}
+if ($Arch -eq "amd64") {
+    foreach ($n in $msiHelperNamed) {
+        Add-Failure "MSIHLP-AMD64" ("[{0}] line {1} names the x86 MSI helper. The amd64 HCD reaches IoConnectInterruptEx through MmGetSystemRoutineAddress and has no helper (design record 18)." -f $n.Section, $n.Line)
+    }
+} else {
+    $msiServices = "$msiController.Services"
+    $helperRows = @()
+    foreach ($secName in @($inf.SectionOrder)) {
+        foreach ($row in @(Get-DirectiveRaw $inf $secName "AddService")) {
+            $svc = ($row.Value -split ',')[0].Trim()
+            if ($svc -ieq $msiHelperService) {
+                if ($secName -ine $msiServices) {
+                    Add-Failure "MSIHLP-SVC" ("[{0}] line {1} installs the x86 MSI helper. Only [{2}] may: the helper is for 32-bit Vista and 7 alone (design record 18 section 7)." -f $secName, $row.Line, $msiServices)
+                } else {
+                    $helperRows += $row
+                }
+            }
+        }
+    }
+    if ($helperRows.Count -gt 1) {
+        Add-Failure "MSIHLP-SVC" ("[{0}] installs the x86 MSI helper {1} times; once." -f $msiServices, $helperRows.Count)
+    }
+    $helperInstalled = $false
+    if ($helperRows.Count -eq 1) {
+        $f = @($helperRows[0].Value -split ',' | ForEach-Object { $_.Trim() })
+        $hFlags = if ($f.Count -gt 1) { $f[1] } else { "" }
+        $hInstall = if ($f.Count -gt 2) { $f[2] } else { "" }
+        if ($hFlags -ne "" -and $hFlags -notmatch '^(0x0*0|0)$') {
+            Add-Failure "MSIHLP-SVC" ("the helper's AddService in [{0}] must pass no flags: it is not the device's function driver; found '{1}'." -f $msiServices, $hFlags)
+        }
+        if ($hInstall -eq "" -or -not (Test-SectionExists $inf $hInstall)) {
+            Add-Failure "MSIHLP-SVC" ("the helper's AddService in [{0}] names install section '{1}', which does not exist." -f $msiServices, $hInstall)
+        } else {
+            $helperInstalled = $true
+            foreach ($req in @(
+                @{ Name = "ServiceType"; Expected = 1; Meaning = "SERVICE_KERNEL_DRIVER" },
+                @{ Name = "StartType"; Expected = 0; Meaning = "SERVICE_BOOT_START, so it is loaded before the controller's AddDevice (design record 18 section 5)" },
+                @{ Name = "ErrorControl"; Expected = 1; Meaning = "SERVICE_ERROR_NORMAL" }
+            )) {
+                $value = @(Get-Directive $inf $hInstall $req.Name)
+                if ($value.Count -ne 1 -or $value[0] -notmatch ("^(0x0*{0}|{0})$" -f $req.Expected)) {
+                    Add-Failure "MSIHLP-SVC" ("[{0}] {1} must be {2} ({3})." -f $hInstall, $req.Name, $req.Expected, $req.Meaning)
+                }
+            }
+            $bin = @(Get-Directive $inf $hInstall "ServiceBinary")
+            if ($bin.Count -ne 1 -or $bin[0] -ine ('%12%\' + $msiHelperBinary)) {
+                Add-Failure "MSIHLP-SVC" ("[{0}] ServiceBinary must be %12%\{1}." -f $hInstall, $msiHelperBinary)
+            }
+            $deliveredBy = New-Object System.Collections.ArrayList
+            foreach ($cf in @(Get-Directive $inf $msiController "CopyFiles")) {
+                foreach ($e in @(Get-Section $inf $cf)) {
+                    if ($null -eq $e) { continue }
+                    if ((($e.Text -split ',')[0].Trim()) -ieq $msiHelperBinary) { [void]$deliveredBy.Add($cf) }
+                }
+            }
+            if ($deliveredBy.Count -eq 0) {
+                Add-Failure "MSIHLP-SVC" ("[{0}] installs the helper's service but its CopyFiles does not deliver {1}." -f $msiController, $msiHelperBinary)
+            }
+        }
+    }
+    foreach ($secName in @($inf.SectionOrder)) {
+        foreach ($cf in @(Get-Directive $inf $secName "CopyFiles")) {
+            $carries = $false
+            if ($cf.StartsWith('@')) {
+                $carries = ($cf.Substring(1).Trim() -ieq $msiHelperBinary)
+            } else {
+                foreach ($e in @(Get-Section $inf $cf)) {
+                    if ($null -eq $e) { continue }
+                    if ((($e.Text -split ',')[0].Trim()) -ieq $msiHelperBinary) { $carries = $true }
+                }
+            }
+            if ($carries -and $secName -ine $msiController) {
+                Add-Failure "MSIHLP-ONLYNT6" ("[{0}] copies {1}. Only [{2}] may: Windows 98, ME, 2000 and XP, the root hub and the hubs never get the helper (design record 18 section 7)." -f $secName, $msiHelperBinary, $msiController)
+            }
+        }
+    }
+    if ($msiAsked -and -not $helperInstalled) {
+        Add-Failure "MSIHLP-HW" ("[{0}] asks for a message on the 32-bit file without the helper installed on [{1}]: the x86 HCD could not connect it (design record 18 section 7)." -f $msiHw, $msiServices)
+    }
+}
+
+foreach ($secName in @($inf.SectionOrder)) {
+    foreach ($e in @(Get-Section $inf $secName)) {
+        if ($null -eq $e) { continue }
+        if ($e.Text -match '^\s*(Reboot|Restart)\s*$') {
+            if ($Arch -eq "amd64" -or $secName -ine $msiController) {
+                Add-Failure "MSIHLP-REBOOT" ("[{0}] line {1} asks for a restart. Only the 32-bit Vista and 7 controller section [Xhci.Dev6.NTx86] does, because the boot-start helper it installs starts at the next boot (design record 18 section 5); no other install of either file may." -f $secName, $e.Line)
+            }
+        }
+    }
+}
+if ($Arch -ne "amd64" -and (Test-SectionExists $inf $msiController)) {
+    $rebootRows = @(Get-Section $inf $msiController | Where-Object { $null -ne $_ -and $_.Text -match '^\s*Reboot\s*$' })
+    $installsHelper = @(Get-DirectiveRaw $inf "$msiController.Services" "AddService" | Where-Object {
+        (($_.Value -split ',')[0].Trim()) -ieq $msiHelperService }).Count -gt 0
+    if ($installsHelper -and $rebootRows.Count -ne 1) {
+        Add-Failure "MSIHLP-REBOOT" ("[{0}] installs the boot-start helper and must carry exactly one Reboot directive, so the helper is active from the next boot (owner, 2026-10-09; design record 18 section 5); found {1}." -f $msiController, $rebootRows.Count)
+    }
+}
+
 # ---- W98-DIRID12, part two: %12% outside ServiceBinary -------------
 
 $lineNo = 0
@@ -2223,6 +2413,9 @@ if ($EmitFootprint -ne "") {
         "# path|<os>|<kind>|<install section>",
         "# file|<os>|<copyfiles section>|<dirid>|<subdir>|<destination>|<media source>|<temp name>|<flags>|<verdict>",
         "# reg|<os>|<addreg section>|<root>|<subkey>|<value>|<flags>|<data>|<verdict>",
+        "# hwreg|<os>|<addreg section>|<root>|<subkey>|<value>|<flags>|<data>|<verdict>",
+        "#   (the same fields, written to the DEVICE's hardware key by <install>.HW)",
+        "# directive|<os>|<install section>|<bare directive, e.g. Reboot>",
         "# service|<os>|<service name>|<service install section>|<AddService flags>|<verdict>",
         "# servicevalue|<os>|<service name>|<service install section>|<directive>|<value>",
         "# unmodelled|<os>|<section>|<directive>",
@@ -2588,6 +2781,52 @@ if ($EmitFootprint -ne "") {
             }
         }
 
+        # The hardware key (design record 15 section 4.3, design record 18):
+        # a .HW section's AddReg writes the DEVICE's hardware key, not the
+        # driver's software key an install section's HKR names, so its rows
+        # are hwreg, not reg, with the same fields and verdicts.
+        $hwSection = $p.Install + ".HW"
+        if (Test-SectionExists $inf $hwSection) {
+            foreach ($ar in @(Get-Directive $inf $hwSection "AddReg")) {
+                $entries = Get-Section $inf $ar
+                if ($null -eq $entries) { continue }
+                foreach ($e in $entries) {
+                    $f = @($e.Text -split ',')
+                    $root = $f[0].Trim()
+                    $subkey = ""
+                    $value = ""
+                    $flags = ""
+                    $data = ""
+                    if ($f.Count -gt 1) { $subkey = $f[1].Trim() }
+                    if ($f.Count -gt 2) { $value = $f[2].Trim() }
+                    if ($f.Count -gt 3) { $flags = $f[3].Trim() }
+                    if ($f.Count -gt 4) { $data = (($f[4..($f.Count - 1)]) -join ',').Trim() }
+                    $verdict = Get-FootprintRegVerdict $root $flags
+                    $fpLines += ("hwreg|{0}|{1}|{2}|{3}|{4}|{5}|{6}|{7}" -f `
+                        $p.Os, $ar, $root, $subkey, $value, $flags, $data, $verdict)
+                    $fpRegRows++
+                }
+            }
+            foreach ($e in @(Get-Section $inf $hwSection)) {
+                if ($null -eq $e) { continue }
+                if ($e.Text -notmatch '^\s*([^=]+?)\s*=') { continue }
+                if ($matches[1].Trim() -ieq "AddReg") { continue }
+                $fpLines += ("unmodelled|{0}|{1}|{2}" -f $p.Os, $hwSection, $matches[1].Trim())
+            }
+        }
+
+        # A bare directive (no '=') the install section carries - Reboot on the
+        # 32-bit Vista and 7 controller section (design record 18 section 5)
+        # - is a claim about the install, so it is a row too.
+        $bareEntries = Get-Section $inf $p.Install
+        if ($null -ne $bareEntries) {
+            foreach ($e in $bareEntries) {
+                if ($e.Text -match '^\s*([A-Za-z]+)\s*$') {
+                    $fpLines += ("directive|{0}|{1}|{2}" -f $p.Os, $p.Install, $matches[1])
+                }
+            }
+        }
+
         # Anything else the install section directs. Emitted rather than
         # ignored: a DelReg or DelFiles added later would otherwise vanish from
         # a document whose entire job is to be complete. Include= and Needs=
@@ -2615,7 +2854,7 @@ if ($EmitFootprint -ne "") {
             if (-not $lower.StartsWith($installPrefix)) { continue }
             $suffix = $secName.Substring($installPrefix.Length)
             if ($suffix -eq "" -or $suffix.Contains(".")) { continue }
-            if ($suffix -ieq "Services" -or $suffix -match '^(?i)NT') { continue }
+            if ($suffix -ieq "Services" -or $suffix -ieq "HW" -or $suffix -match '^(?i)NT') { continue }
             $fpLines += ("unmodelled|{0}|{1}|{2}" -f $p.Os, $secName, "engine-implied sub-section")
         }
     }

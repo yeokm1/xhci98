@@ -16,6 +16,9 @@ is this project's two files and nothing else:
                    33.3; src\txtsetup-amd64.oem under this name for amd64),
                    read from A:\ when F6 is pressed in Windows 2000 and XP
                    text-mode Setup, so it sits at the root with xhci98.sys
+    portsw.vbs     the user's switch for XhciIntelPortSwitch (roadmap-hcd
+                   task 36.42), a Windows Script Host script: shows the
+                   value on every xhci98 controller and sets it to 0 or 1
 
 The Microsoft files the driver depends on, usbd.sys and usbhub.sys (both
 targets), usbport.sys (the NT targets; on Windows 98 the USB 2.0 stack
@@ -93,6 +96,16 @@ self-tests' stand-ins) stages the UAS pair only when it names -UasDriverPath
 too, so a stand-in package is not filled from whatever the last build left
 in src\uas.
 
+.PARAMETER MsiDriverPath
+The NT 6 x86 MSI helper to stage (design record 18; task 36.15), overriding
+`src\msi86\obj<flavour>\i386\xhcimsi.sys`. The 32-bit INF names it in
+[SourceDisksFiles], so the x86 package carries it whenever it is built from
+the default paths and a missing one is a refusal; a caller that names
+-DriverPath (the self-tests' stand-ins) names this too, or the INF's entry
+has no source. It is held to the flavour marker and, unless
+-SkipBinaryGates, to the import gate's nt6x86 profile. The amd64 package has
+no helper, and this parameter is refused there.
+
 .PARAMETER OemPath
 The text-mode Setup driver description to stage (task 33.3), overriding
 `src\txtsetup.oem` (x86) or `src\txtsetup-amd64.oem` (amd64). Staged as
@@ -101,6 +114,13 @@ scripts\inf-gate\check-txtsetup-oem.ps1 against the staged INF and package.
 Staged whenever the package is built from the default paths; a caller that
 names -DriverPath (the self-tests' stand-ins) stages it only when it names
 -OemPath too, as for the UAS pair.
+
+.PARAMETER PswScriptPath
+The port switchover's user script to stage (roadmap-hcd task 36.42),
+overriding `src\portsw.vbs`. Staged as `portsw.vbs` at the package root, the
+same file for both architectures. Staged whenever the package is built from
+the default paths; a caller that names -DriverPath stages it only when it
+names -PswScriptPath too, as for -OemPath.
 
 .PARAMETER SkipPackageGate
 Skip the post-staging check-inf.ps1 -PackageDir run only. The INF is gated
@@ -201,7 +221,9 @@ param(
     [string]$DriverPath = "",
     [string]$UasInfPath = "",
     [string]$UasDriverPath = "",
+    [string]$MsiDriverPath = "",
     [string]$OemPath = "",
+    [string]$PswScriptPath = "",
     [switch]$SkipPackageGate,
     [switch]$SkipBinaryGates,
     [switch]$NoTargetEvidence,
@@ -233,6 +255,22 @@ $stageUas = ($DriverPath -eq "") -or ($UasDriverPath -ne "")
 $stageOem = ($DriverPath -eq "") -or ($OemPath -ne "")
 if ($OemPath -eq "") {
     $OemPath = Join-Path $repo $(if ($Arch -eq "amd64") { "src\txtsetup-amd64.oem" } else { "src\txtsetup.oem" })
+}
+# The port switchover's user script (task 36.42), decided the same way.
+$stagePsw = ($DriverPath -eq "") -or ($PswScriptPath -ne "")
+if ($PswScriptPath -eq "") { $PswScriptPath = Join-Path $repo "src\portsw.vbs" }
+# The NT 6 x86 MSI helper (design record 18), the x86 package's alone.
+if ($Arch -eq "amd64" -and $MsiDriverPath -ne "") {
+    throw "-MsiDriverPath names the NT 6 x86 MSI helper, which the amd64 package does not carry: the amd64 HCD has no helper (design record 18)."
+}
+$stageMsi = ($Arch -eq "x86") -and (($DriverPath -eq "") -or ($MsiDriverPath -ne ""))
+if ($Arch -eq "x86" -and $MsiDriverPath -eq "") {
+    $msiObjDir = switch ($Flavor) {
+        "debug"   { "objchk" }
+        "qemu"    { "objchk_qemu" }
+        default   { "objfre" }
+    }
+    $MsiDriverPath = Join-Path $repo "src\msi86\$msiObjDir\i386\xhcimsi.sys"
 }
 $uasInfName = if ($Arch -eq "amd64") { "xhciuas-amd64.inf" } else { "xhciuas.inf" }
 $uasAllow = if ($Arch -eq "amd64") { "xhciuas-imports-amd64.allow" } else { "xhciuas-imports.allow" }
@@ -672,6 +710,41 @@ The package carries the UAS class driver. Build it first:
         Write-Warn "no UAS class driver staged: -DriverPath was named without -UasDriverPath (a stand-in package)."
     }
 
+    # --- the NT 6 x86 MSI helper, held to its own gates (design record 18) ---
+    if ($stageMsi) {
+        Write-Step ("NT 6 x86 MSI helper ({0})" -f $Flavor)
+        if (-not (Test-Path -LiteralPath $MsiDriverPath)) {
+            throw @"
+no $Flavor xhcimsi.sys at '$MsiDriverPath'.
+The x86 package carries the NT 6 x86 MSI helper its INF names. Build it first
+(it needs tools\WinDDK71):
+  scripts\build-driver.cmd $Flavor
+"@
+        }
+        $msiFlavour = Get-ImageFlavourMarker -Path $MsiDriverPath
+        if ($msiFlavour -ne $Flavor) {
+            throw "'$MsiDriverPath' carries the flavour marker '$msiFlavour', not $Flavor's. Rebuild: scripts\build-driver.cmd $Flavor"
+        }
+        if (-not $SkipBinaryGates) {
+            $savedEap = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                $msiGateArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                                 (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") "check-imports.ps1"),
+                                 "-Image", $MsiDriverPath, "-Flavor", $Flavor, "-Arch", "x86",
+                                 "-GateProfile", "nt6x86",
+                                 "-AllowPath", (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") "xhcimsi-imports.allow"))
+                if ($NoTargetEvidence) { $msiGateArgs += "-NoTargetEvidence" }
+                & powershell.exe @msiGateArgs
+                if ($LASTEXITCODE -ne 0) {
+                    throw "'$MsiDriverPath' failed the import gate's nt6x86 profile against xhcimsi-imports.allow."
+                }
+            } finally {
+                $ErrorActionPreference = $savedEap
+            }
+        }
+    }
+
     # --- where each file goes, from the gate's own parse ---------------------
     Write-Step "INF gate, and the media layout it derives"
 
@@ -701,6 +774,9 @@ The package carries the UAS class driver. Build it first:
     # for a file the package cannot contain. xhci98.inf is also staged at the
     # package root unconditionally - that is the file the user points setup at.
     $staging = @{ "xhci98.inf" = $InfPath; "xhci98.sys" = $DriverPath }
+    if ($stageMsi) {
+        $staging["xhcimsi.sys"] = $MsiDriverPath
+    }
 
     $unsourced = @($layout.Keys | Where-Object { -not $staging.ContainsKey($_) })
     if ($unsourced.Count -gt 0) {
@@ -740,6 +816,13 @@ usbhub.sys through the INF's LayoutFile, and the gate refuses them here.
             throw "no text-mode Setup description at '$OemPath'."
         }
         Copy-Item -LiteralPath $OemPath -Destination (Join-Path $stageDir "txtsetup.oem") -Force
+    }
+    # portsw.vbs at the root, beside the INF the user installs from.
+    if ($stagePsw) {
+        if (-not (Test-Path -LiteralPath $PswScriptPath)) {
+            throw "no port switchover script at '$PswScriptPath'."
+        }
+        Copy-Item -LiteralPath $PswScriptPath -Destination (Join-Path $stageDir "portsw.vbs") -Force
     }
     $rootInf = Join-Path $stageDir "xhci98.inf"
     if (-not (Test-Path -LiteralPath $rootInf)) {

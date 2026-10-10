@@ -1,0 +1,74 @@
+# xhcimsi.sys import allowlist - the NT 6 x86 MSI helper (design record 18;
+# roadmap-hcd.md tasks 36.15 and 36.16), built with WDK 7.1 for x86, Vista
+# target. scripts\build-driver.cmd passes it with -AllowPath and
+# -GateProfile nt6x86 on every x86 link of src\msi86. Format and rules:
+# xhci98-imports.allow's header, with the nt6x86 profile's evidence rule:
+#
+#   nt6-x86-export   in the export table of the authenticated Windows Vista
+#                    SP2 x86 AND Windows 7 SP1 x86 kernel or HAL
+#                    (nt6x86-vista-baselines.expected and
+#                    nt6x86-win7-baselines.expected); resolution against the
+#                    real export tables IS the evidence, as for amd64, and no
+#                    Windows 98 or Windows 2000 evidence is asked, because the
+#                    helper loads on Vista and 7 alone (the INF installs it on
+#                    no other path, and this table would stop it loading on
+#                    one). The ntkrnlpa.exe rows are owed (those manifests'
+#                    headers).
+#
+# Three groups. The helper's own calls are `required`. The pairs WDK 7.1's
+# wdmsec.lib brings with IoCreateDeviceSecure (design record 18 section 2:
+# the named device secured to the system alone) were listed from the first
+# link's `dumpbin /imports` on 2026-10-10, not admitted by name in advance,
+# and are `optional`, because they are that library object's choice and not
+# this source's. The /GS support (GsDriverEntry, BufferOverflowK.lib; record
+# 18 section 8.1) adds KeTickCount and KeBugCheckEx.
+
+[imports]
+
+# --- The helper's own calls ---
+ntoskrnl.exe!IoConnectInterruptEx           all    required  nt6-x86-export; the reason this binary exists - its address handed to xhci98.sys (record 18 section 3)
+ntoskrnl.exe!IoDisconnectInterruptEx        all    required  nt6-x86-export; the same
+ntoskrnl.exe!IofCompleteRequest             all    required  nt6-x86-export; every IRP completed at once
+ntoskrnl.exe!RtlInitUnicodeString           all    required  nt6-x86-export; the device name
+ntoskrnl.exe!IoIsWdmVersionAvailable        all    required  nt6-x86-export; DriverEntry's minimum-version test
+ntoskrnl.exe!RtlQueryRegistryValues         qemu   required  nt6-x86-export; XhciMsiInject (record 18 section 2.1), the qemu flavour only
+ntoskrnl.exe!RtlAssert                      debug  required  nt6-x86-export; WDK 7.1 checked-header ASSERTs only
+ntoskrnl.exe!RtlAssert                      qemu   required  nt6-x86-export; WDK 7.1 checked-header ASSERTs only
+
+# --- /GS (GsDriverEntry and BufferOverflowK.lib, the kit's default) ---
+ntoskrnl.exe!KeTickCount                    all    required  nt6-x86-export; the cookie's seed
+ntoskrnl.exe!KeBugCheckEx                   all    required  nt6-x86-export; __report_gsfailure only, bugcheck 0xF7
+
+# --- wdmsec.lib's IoCreateDeviceSecure (the wlh\i386 copy) ---
+ntoskrnl.exe!IoCreateDevice                 all    required  nt6-x86-export; called by IoCreateDeviceSecure
+ntoskrnl.exe!IoDeleteDevice                 all    optional  nt6-x86-export; wdmsec.lib, its failure path
+ntoskrnl.exe!IoDeviceObjectType             all    optional  nt6-x86-export; wdmsec.lib (a data import)
+ntoskrnl.exe!ObOpenObjectByPointer          all    optional  nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!ZwSetSecurityObject            all    optional  nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!ZwClose                        all    optional  nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!ZwOpenKey                      all    optional  nt6-x86-export; wdmsec.lib, the class key's override
+ntoskrnl.exe!ZwCreateKey                    all    optional  nt6-x86-export; wdmsec.lib, the same
+ntoskrnl.exe!ZwQueryValueKey                all    optional  nt6-x86-export; wdmsec.lib, the same
+ntoskrnl.exe!ZwSetValueKey                  all    optional  nt6-x86-export; wdmsec.lib, the same
+ntoskrnl.exe!MmGetSystemRoutineAddress      all    optional  nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!SeCaptureSecurityDescriptor    all    optional  nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!SeExports                      all    optional  nt6-x86-export; wdmsec.lib (a data import)
+ntoskrnl.exe!RtlCreateSecurityDescriptor    all    optional  nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!RtlSetDaclSecurityDescriptor   all    optional  nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!RtlGetDaclSecurityDescriptor   all    optional  nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!RtlGetSaclSecurityDescriptor   all    optional  nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!RtlGetGroupSecurityDescriptor  all    optional  nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!RtlGetOwnerSecurityDescriptor  all    optional  nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!RtlLengthSecurityDescriptor    all    optional  nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!RtlAbsoluteToSelfRelativeSD    all    optional  nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!RtlAddAccessAllowedAce         all    optional  nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!RtlLengthSid                   all    optional  nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!RtlFreeUnicodeString           all    optional  nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!ExAllocatePoolWithTag          all    optional  nt6-x86-export; wdmsec.lib's own pool (the helper allocates none)
+ntoskrnl.exe!ExFreePoolWithTag              all    optional  nt6-x86-export; wdmsec.lib's own pool
+ntoskrnl.exe!_snwprintf                     all    optional  nt6-x86-export; wdmsec.lib, the class key's name
+ntoskrnl.exe!_wcsnicmp                      all    optional  nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!wcschr                         all    optional  nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!memcpy                         all    optional  nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!memset                         all    optional  nt6-x86-export; wdmsec.lib
+

@@ -303,11 +303,10 @@ int report_mmio_unavailable(const PCIINFO *p, int active_requested)
  * touches MMIO at all, so those causes are proximate. Naming a D-state for a
  * window the tool never tried to map would name a cause that was never reached.
  *
- * `Interrupt Pin = 0` comes first and is unconditional. It is the one
- * disqualifier that needs no MMIO at all, and Phase 0's checkpoint makes it
- * absolute: neither target's USB stack has an MSI path, so a controller that
- * can only signal MSI delivers no interrupts to either of them however healthy
- * the rest of it is.
+ * `Interrupt Pin = 0` is no longer a disqualifier (task 36.10, design record
+ * 15 section 10): the driver polls a controller with no line interrupt, so
+ * quick_classify reports it as QUICK_CAVEATS, and only after every
+ * disqualifier here and the USB2 port count have had their say.
  */
 int quick_classify_mmio(const PCIINFO *p, int active_requested)
 {
@@ -345,16 +344,29 @@ int quick_classify_mmio(const PCIINFO *p, int active_requested)
 int quick_classify(const PCIINFO *p, int mmio_ok, int usb2_ports,
                    int active_requested)
 {
-    if (p->ipin == 0)
-        return QUICK_DISQUALIFIED;
-
     if (!mmio_ok)
         return quick_classify_mmio(p, active_requested);
 
     if (usb2_ports == 0)
         return QUICK_DISQUALIFIED;
 
+    /* Needs polling, not refused (36.10): the other outcomes win. */
+    if (p->ipin == 0)
+        return QUICK_CAVEATS;
+
     return QUICK_LOOKS_OK;
+}
+
+/* The quick scan's ordering of two controllers' outcomes. CAVEATS sits just
+ * above LOOKS_OK; the older three keep the order their values gave them. */
+int quick_rank(int outcome)
+{
+    switch (outcome) {
+    case QUICK_LOOKS_OK:     return 0;
+    case QUICK_CAVEATS:      return 1;
+    case QUICK_DISQUALIFIED: return 2;
+    default:                 return 3;
+    }
 }
 
 /* The wording for the outcome above, in one line. Deliberately a table of
@@ -364,9 +376,6 @@ int quick_classify(const PCIINFO *p, int mmio_ok, int usb2_ports,
 const char *quick_reason(const PCIINFO *p, int mmio_ok, int usb2_ports,
                          int active_requested)
 {
-    if (p->ipin == 0)
-        return "Interrupt Pin = 0, MSI only - neither target has an MSI path";
-
     if (!mmio_ok) {
         if (p->bar_hi != 0)
             return "BAR0 is above 4 GB";
@@ -401,6 +410,13 @@ const char *quick_reason(const PCIINFO *p, int mmio_ok, int usb2_ports,
 
     if (usb2_ports == 0)
         return "no USB2 protocol ports";
+
+    /* 36.10: the driver polls it; whether Vista and 7 have a message
+     * route instead is the capability list's answer. */
+    if (p->ipin == 0)
+        return (p->has_msi || p->has_msix)
+                   ? "needs polling: Interrupt Pin = 0; it offers MSI"
+                   : "needs polling: Interrupt Pin = 0; no MSI either";
 
     (void)active_requested;
     return "";

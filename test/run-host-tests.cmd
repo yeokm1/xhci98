@@ -61,6 +61,12 @@ rem   test_poll    - polled event delivery (src\xhci_poll.c, tasks 36.6 to
 rem                  36.8): the three values, the delivery and its reason,
 rem                  the deadlines, the poller's ownership machine and roles,
 rem                  the watcher's verdict, the period and the retirement
+rem   test_msi     - message-signalled interrupts (src\xhci_msi.c and
+rem                  src\xhci_msi86.c, task 36.15, design records 15 and
+rem                  18): the capability read, the requirements list's
+rem                  checked walk, class, strip and no-line rewrite, the
+rem                  filter record, the helper binding, the channel's two
+rem                  halves and the trace record
 rem   test_pirq    - the Intel PCH interrupt routing quirk (src\xhci_pirq.c,
 rem                  task 36.3): the XhciIntelIrqRoute rule, the reviewed
 rem                  pairs, the target PIRQ in APIC and PIC mode, the
@@ -113,6 +119,15 @@ rem                  9-A.2): which EP0 setup packets are worth capturing, the
 rem                  descriptor walk fed at every chunk size, the isochronous
 rem                  bInterval table with its alternate-setting conflicts, and
 rem                  the Table 6-12 conversion in src\xhci_ctx.c
+rem   test_susp    - selective suspend's pure half (src\xhci_susp.c, task
+rem                  36.29, design record 14): the switch and capabilities,
+rem                  D-IRP admission, the device's decision (composite
+rem                  last Dx, D0 during SUSPENDING, epoch-stamped Dx, the
+rem                  latch, START's reopening), the suspend and resume
+rem                  steps and every outcome, root and hub wake evidence,
+rem                  the claim by stamp, WAIT_WAKE, the idle notification's
+rem                  claim and settlement, and exhaustive interleavings of
+rem                  the cancel handshake and the callback phases
 rem   test_log     - the optional log ring (src\xhci_log.c, tasks 11-V.7 and
 rem                  11-V.9): the record shape byte for byte, the switch gating
 rem                  the append itself, the record cap, the wrap and which byte
@@ -294,6 +309,10 @@ call :run test_psw "test_psw.c ..\src\xhci_psw.c"
 rem test_pirq links nothing else: the value rule, the pair table, the
 rem target PIRQ and the run are pure, driven over a modelled PCH (36.3).
 call :run test_pirq "test_pirq.c ..\src\xhci_pirq.c"
+rem test_msi links nothing else: the capability read, the requirements
+rem list's walk, class and strip, the binding and both halves of the x86
+rem helper's channel are pure (36.15, design records 15 and 18).
+call :run test_msi "test_msi.c ..\src\xhci_msi.c ..\src\xhci_msi86.c"
 rem test_snap links xhci_xstat.c beside it: the snapshot's HCD region layout -
 rem where each word lies and what the header says - is pure (task 35.3), and
 rem so is the arithmetic of the transfer-size readings it carries (36.21).
@@ -310,6 +329,11 @@ rem test_inj links xhci_caps.c for the port map a PED or over-current is
 rem aimed by; the trigger and every register answer of the qemu flavour's
 rem fault injection are pure (35-T.9, design record 17 section 5).
 call :run test_inj "test_inj.c ..\src\xhci_inj.c ..\src\xhci_caps.c"
+rem test_susp links nothing else: selective suspend's decisions - the
+rem device's want, the sequences as steps, wake evidence, the idle
+rem notification's claim and settlement, the callback context's phases -
+rem are pure, and its interleavings are explored over small models (36.29).
+call :run test_susp "test_susp.c ..\src\xhci_susp.c"
 rem test_log links nothing else: task 11-V.7's ring is deliberately pure, so
 rem every decision it makes - the wrap, the record cap, the flush verdict, the
 rem drain's ordering - is drivable with no file system, no registry and no IRQL.

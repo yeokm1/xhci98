@@ -617,10 +617,11 @@ try {
                              "HKR,,XhciImodInterval250ns,,500`r`nHKR,,EnumPropPages32")
     }
 
-    # Roadmap-hcd task 34.3's opt-out, anchored on the interval after it on
-    # each path. **Its default is 1, not 0**: shipping 0 would be an INF edit
-    # that turns the switchover off on every machine it exists for, and the
-    # unconditional DWORD would write a user's 0 back to 1 at an update.
+    # Roadmap-hcd task 34.3's switch, anchored on the interval after it on
+    # each path. **Its default is 0 since task 36.42** (owner, 2026-10-09):
+    # shipping 1 again would be an INF edit that moves every switchable
+    # connector off a working USB 2.0 controller on install, and the
+    # unconditional DWORD would write a user's 1 back to 0 at an update.
     # Task 36.3's routing row and task 35-T.7's three rows sit between it and
     # the interval, so the anchor carries them; $tailFor9x and $tailForNt are
     # the same block ending in each path's own successor line, which keeps
@@ -628,20 +629,24 @@ try {
     $tolRows   = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`nHKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`nHKR,,XhciMaxTransferKB,0x00010003,1024`r`nHKR,,XhciInterruptMode,0x00010003,0`r`nHKR,,XhciPollIdleMs,0x00010003,50`r`nHKR,,XhciPollActiveMs,0x00010003,1`r`n"
     $tailFor9x = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]"
     $tailForNt = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32"
-    Write-Step "the Intel port switchover's opt-out, on both paths"
+    Write-Step "the Intel port switchover's switch, on both paths"
     Assert-RuleFires "portswitch-no-9x" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailFor9x, $tailFor9x)
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailFor9x, $tailFor9x)
     }
     Assert-RuleFires "portswitch-no-nt" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailForNt, $tailForNt)
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailForNt, $tailForNt)
     }
-    Assert-RuleFires "portswitch-default-off" "VAL-DEFAULT" {
-        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailForNt,
-                             "HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailForNt)
+    Assert-RuleFires "portswitch-default-on-nt" "VAL-DEFAULT" {
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailForNt,
+                             "HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailForNt)
+    }
+    Assert-RuleFires "portswitch-default-on-9x" "VAL-DEFAULT" {
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailFor9x,
+                             "HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailFor9x)
     }
     Assert-RuleFires "portswitch-clobber" "VAL-TYPE" {
-        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailFor9x,
-                             "HKR,,XhciIntelPortSwitch,0x00010001,1`r`n" + $tailFor9x)
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailFor9x,
+                             "HKR,,XhciIntelPortSwitch,0x00010001,0`r`n" + $tailFor9x)
     }
 
     # Roadmap-hcd task 35-T.7's three values (design record 17 sections 4.7
@@ -1272,7 +1277,7 @@ try {
     # plus "emove" and split the header into a line that was not a comment and
     # was not a row. This check is what noticed. It is also the net over any
     # future row type added to the emitter and not to the legend.
-    $knownRowTypes = @("path", "file", "reg", "service", "servicevalue", "unmodelled")
+    $knownRowTypes = @("path", "file", "reg", "hwreg", "directive", "service", "servicevalue", "unmodelled")
     $prodRows = Get-Footprint -Path $prodInf
     Assert-True ($null -ne $prodRows) "-EmitFootprint wrote no file for the production INF."
     foreach ($row in @($prodRows)) {
@@ -1534,6 +1539,8 @@ try {
         New-Item -ItemType Directory -Path $dir | Out-Null
         Copy-Item -LiteralPath $prodInf -Destination (Join-Path $dir "xhci98.inf")
         Set-Content -LiteralPath (Join-Path $dir "xhci98.sys") -Value "not a real driver" -Encoding ASCII
+        # The 32-bit media carries the x86 MSI helper since task 36.15.
+        Set-Content -LiteralPath (Join-Path $dir "xhcimsi.sys") -Value "not a real helper" -Encoding ASCII
         foreach ($e in $Extra) {
             Set-Content -LiteralPath (Join-Path $dir $e) -Value "stand-in $e" -Encoding ASCII
         }
@@ -1653,17 +1660,74 @@ try {
     Assert-RuleFires "x86-nt6-no-services" "PATH-NT" {
         param($t) $t.Replace("[Xhci.Dev6.NTx86.Services]", "[Xhci.Dev6.NTx86.Svc]")
     }
+    # Since task 36.15 the 32-bit Vista and 7 controller section also copies
+    # the x86 MSI helper (design record 18), so these mutations start from
+    # that line.
     Assert-RuleFires "x86-nt6-no-driver-copy" "PATH-NT" {
-        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
-                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`n")
+        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,XhciMsi.CopyFiles`r`n",
+                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=XhciMsi.CopyFiles`r`n")
     }
     Assert-RuleFires "x86-nt6-copies-usbd" "OS-ONNT6" {
-        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
-                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS`r`n")
+        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,XhciMsi.CopyFiles`r`n",
+                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,XhciMsi.CopyFiles,Xhci.CopyOS`r`n")
     }
     Assert-RuleFires "x86-nt6-copies-usbui" "OS-ONNT6" {
-        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
-                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyUI`r`n")
+        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,XhciMsi.CopyFiles`r`n",
+                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,XhciMsi.CopyFiles,Xhci.CopyUI`r`n")
+    }
+
+    # ---- MSI-* and MSIHLP-* (task 36.15; design records 15 and 18) ----
+    Assert-RuleFires "x86-msihlp-no-copy" "MSIHLP-SVC" {
+        param($t) $t.Replace("CopyFiles=Xhci.CopyFiles,XhciMsi.CopyFiles`r`n", "CopyFiles=Xhci.CopyFiles`r`n")
+    }
+    Assert-RuleFires "x86-msihlp-on-2000" "MSIHLP-ONLYNT6" {
+        param($t) $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,", "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=XhciMsi.CopyFiles,Xhci.CopyFiles,")
+    }
+    Assert-RuleFires "x86-msihlp-on-98" "MSIHLP-ONLYNT6" {
+        param($t) $t.Replace("[DefaultInstall]`r`nCopyFiles=Inf.CopyFiles,", "[DefaultInstall]`r`nCopyFiles=XhciMsi.CopyFiles,Inf.CopyFiles,")
+    }
+    Assert-RuleFires "x86-msihlp-svc-on-roothub" "MSIHLP-SVC" {
+        param($t) $t.Replace("[RootHub.Dev6.NTx86.Services]`r`nAddService=xhci98,0x00000002,Xhci.AddService`r`n",
+                             "[RootHub.Dev6.NTx86.Services]`r`nAddService=xhci98,0x00000002,Xhci.AddService`r`nAddService=xhcimsi,,XhciMsi.AddService`r`n")
+    }
+    Assert-RuleFires "x86-msihlp-demand-start" "MSIHLP-SVC" {
+        param($t) $t.Replace("StartType=0                         ; SERVICE_BOOT_START", "StartType=3                         ; SERVICE_DEMAND_START")
+    }
+    Assert-RuleFires "x86-msihlp-assocservice" "MSIHLP-SVC" {
+        param($t) $t.Replace("AddService=xhcimsi,,XhciMsi.AddService", "AddService=xhcimsi,0x00000002,XhciMsi.AddService")
+    }
+    Assert-RuleFires "x86-msihlp-twice" "MSIHLP-SVC" {
+        param($t) $t.Replace("AddService=xhcimsi,,XhciMsi.AddService`r`n", "AddService=xhcimsi,,XhciMsi.AddService`r`nAddService=xhcimsi,,XhciMsi.AddService`r`n")
+    }
+    Assert-RuleFires "x86-msihlp-hw-without-helper" "MSIHLP-HW" {
+        param($t) $t.Replace("AddService=xhcimsi,,XhciMsi.AddService`r`n", "")
+    }
+    Assert-RuleFires "x86-msi-hw-on-roothub" "MSI-PLACE" {
+        param($t) $t.Replace("[Xhci.Dev6.NTx86.HW]", "[RootHub.Dev6.NTx86.HW]")
+    }
+    Assert-RuleFires "x86-msi-addreg-in-install" "MSI-PLACE" {
+        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`n", "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.Msi.AddReg`r`n")
+    }
+    Assert-RuleFires "x86-msi-clobbers" "MSI-VALUES" {
+        param($t) $t.Replace("MSISupported,0x00010003,1", "MSISupported,0x00010001,1")
+    }
+    Assert-RuleFires "x86-msi-not-dword" "MSI-VALUES" {
+        param($t) $t.Replace("MSISupported,0x00010003,1", "MSISupported,0x00010002,1")
+    }
+    Assert-RuleFires "x86-msi-extra-modifier" "MSI-VALUES" {
+        param($t) $t.Replace("MSISupported,0x00010003,1", "MSISupported,0x0001000B,1")
+    }
+    Assert-RuleFires "x86-msi-no-limit" "MSI-VALUES" {
+        param($t) $t.Replace("HKR,""Interrupt Management\MessageSignaledInterruptProperties"",MessageNumberLimit,0x00010003,1`r`n", "")
+    }
+    Assert-RuleFires "x86-msihlp-no-reboot" "MSIHLP-REBOOT" {
+        param($t) $t.Replace("CopyFiles=Xhci.CopyFiles,XhciMsi.CopyFiles`r`nReboot`r`n", "CopyFiles=Xhci.CopyFiles,XhciMsi.CopyFiles`r`n")
+    }
+    Assert-RuleFires "x86-msihlp-reboot-on-roothub" "MSIHLP-REBOOT" {
+        param($t) $t.Replace("[RootHub.Dev6.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`n", "[RootHub.Dev6.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`nReboot`r`n")
+    }
+    Assert-RuleFires "x86-msihlp-reboot-on-2000" "MSIHLP-REBOOT" {
+        param($t) $t.Replace("[Xhci.Dev.NTx86]`r`n", "[Xhci.Dev.NTx86]`r`nReboot`r`n")
     }
     # There is no NT 6.x SUSP case here any more, and its absence is the point.
     # Until 1.0.2.0 "x86-nt6-no-susp" checked that [Xhci.Dev6.NTx86] delivered
@@ -1797,6 +1861,18 @@ try {
     } -Source $prodInfAmd64 -Arch amd64
     Assert-RuleFires "amd64-nt6-no-install-section" "PATH-NT" {
         param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`n", "[Xhci.Dev6.NTamd65]`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-msihlp-copied" "MSIHLP-AMD64" {
+        param($t) $t.Replace("[Xhci.CopyFiles]`r`nxhci98.sys`r`n", "[Xhci.CopyFiles]`r`nxhci98.sys`r`nxhcimsi.sys`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-msihlp-reboot" "MSIHLP-REBOOT" {
+        param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`n", "[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nReboot`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-msi-hw-on-xp64" "MSI-PLACE" {
+        param($t) $t.Replace("[Xhci.Dev6.NTamd64.HW]", "[Xhci.Dev.NTamd64.HW]")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-msi-clobbers" "MSI-VALUES" {
+        param($t) $t.Replace("MessageNumberLimit,0x00010003,1", "MessageNumberLimit,0x00010001,1")
     } -Source $prodInfAmd64 -Arch amd64
     Assert-RuleFires "amd64-nt6-no-driver-copy" "PATH-NT" {
         param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
@@ -1977,9 +2053,14 @@ try {
     }
 
     function Assert-InfsAgree {
-        param([string]$Section, [string]$Why, [string[]]$Only = @())
+        param([string]$Section, [string]$Why, [string[]]$Only = @(), [string[]]$Except = @())
         $a = @(Get-InfSection -Path $prodInf -Name $Section)
         $b = @(Get-InfSection -Path $prodInfAmd64 -Name $Section)
+        if ($Except.Count -gt 0) {
+            $drop = { param($rows) @($rows | Where-Object { $r = $_; @($Except | Where-Object { $r -imatch ('^\s*' + [regex]::Escape($_) + '\s*=') }).Count -eq 0 }) }
+            $a = & $drop $a
+            $b = & $drop $b
+        }
         if ($Only.Count -gt 0) {
             $keep = { param($rows) @($rows | Where-Object { $r = $_; @($Only | Where-Object { $r -imatch ('^\s*' + [regex]::Escape($_) + '\s*=') }).Count -gt 0 }) }
             $a = & $keep $a
@@ -2011,8 +2092,17 @@ try {
         -Why "The NT 5.x paths of both packages fetch usbd.sys from the OS by the same LayoutFile route with the same COPYFLG_NO_OVERWRITE."
     Assert-InfsAgree -Section "Xhci.CopyUI" `
         -Why "usbui.dll is on every install path of both packages since 1.0.2.0, to dirid 11, with flag 16."
-    Assert-InfsAgree -Section "SourceDisksFiles" `
-        -Why "Both media carry this project's two files and nothing else. A Microsoft file appearing on one of them is legal-provenance section 5's withdrawal being undone on one architecture."
+    # **One difference admitted, by name** (task 36.15; design record 18
+    # section 8.2): the 32-bit media also carries xhcimsi.sys, the NT 6 x86
+    # MSI helper, which the 64-bit package has no use for. Every other line
+    # must still agree.
+    Assert-InfsAgree -Section "SourceDisksFiles" -Except @("xhcimsi.sys") `
+        -Why "Both media carry this project's own files and nothing else, the x86 helper excepted. A Microsoft file appearing on one of them is legal-provenance section 5's withdrawal being undone on one architecture."
+    $sdf86 = @(Get-InfSection -Path $prodInf -Name "SourceDisksFiles")
+    $sdf64 = @(Get-InfSection -Path $prodInfAmd64 -Name "SourceDisksFiles")
+    Assert-True (@($sdf86 | Where-Object { $_ -imatch '^\s*xhcimsi\.sys\s*=' }).Count -eq 1) "INF-SYNC: the 32-bit media must declare xhcimsi.sys once."
+    Assert-True (@($sdf64 | Where-Object { $_ -imatch '^\s*xhcimsi\.sys\s*=' }).Count -eq 0) "INF-SYNC: the 64-bit media must not declare xhcimsi.sys."
+
     Assert-InfsAgree -Section "SourceDisksNames" `
         -Why "One disk, described the same way."
 

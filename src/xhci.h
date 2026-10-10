@@ -8631,14 +8631,23 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
     (XHCI_SNAPSHOT_HCD_TELE_BODY + XHCI_SNAPSHOT_HCD_TELE_BODY_WORDS)
 #define XHCI_SNAPSHOT_HCD_TELE_END      202 /* the records' end            */
 /*
- * Words 202 and 203 are task 36.9's (the event delivery's place in the
- * extension, XHCI_SNAPSHOT_HCD_DELIVERY_AT and _WORDS, on the branch that
- * carries it); this branch writes them 0 until the two meet.
- *
- * Appended by task 36.24, version unchanged: stage 2's counters (design
- * record 13 section 11.6, point 7; xhci_xpipe.h, XHCI_XPIPE_STATS) - their
- * count, then the words in the structure's order. A header shorter than
- * this is an earlier driver's, which has no stage 2.
+ * Appended by task 36.9, version unchanged: where the event delivery's six
+ * extension words lie (XHCI_EXTENSION.EventDelivery to LineRetireState,
+ * design record 15 section 9), in bytes from the extension's start, and
+ * how many there are, so XHCISNAP names them from the .BIN's own bytes as
+ * it does the tolerance state. A header shorter than this is an earlier
+ * driver's, which places no extension words; whether a driver has the
+ * polling counters is the counter block's size to say (63 words or 96).
+ */
+#define XHCI_SNAPSHOT_HCD_DELIVERY_AT   202 /* XHCI_EXTENSION.EventDelivery  */
+#define XHCI_SNAPSHOT_HCD_DELIVERY_WORDS 203 /* its words, in order          */
+#define XHCI_SNAPSHOT_HCD_DELIVERY_COUNT 6UL
+/*
+ * Appended by task 36.24, version unchanged, after 36.9's pair: stage 2's
+ * counters (design record 13 section 11.6, point 7; xhci_xpipe.h,
+ * XHCI_XPIPE_STATS) - their count, then the words in the structure's
+ * order. A header shorter than this is an earlier driver's, which has no
+ * stage 2.
  */
 #define XHCI_SNAPSHOT_HCD_XPIPE_WORDS   204 /* XHCI_XPIPE_STATS, in words    */
 #define XHCI_SNAPSHOT_HCD_XPIPE_AT      205 /* its first word                */
@@ -8675,7 +8684,7 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_F_UNREADABLE  0x00000004UL /* PORTSC read all ones */
 
 /* XHCIHC_COUNTERS in ULONGs (xhci_counters.h; asserted in xhci_snap.c). */
-#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 96UL
+#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 114UL
 
 /* Where a word of the image lies (XhciSnapHcdLocate). */
 #define XHCI_SNAPSHOT_HCD_IN_HEAD       0UL

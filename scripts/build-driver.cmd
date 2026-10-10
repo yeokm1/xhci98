@@ -362,6 +362,11 @@ echo === VM matrix verdict self-tests ===
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\vm-matrix\selftest.ps1"
 if errorlevel 1 goto matrixtestfail
+rem The M86 trace validator (design record 18 section 9): a capture it
+rem accepts is what R1, R2 and the lifecycle legs are read from.
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\vm-matrix\check-msi86-trace.ps1" -SelfTest
+if errorlevel 1 goto matrixtestfail
 
 echo.
 echo === batch-file line endings ===
@@ -581,8 +586,86 @@ if errorlevel 1 goto flavourfail
 call :builduas %FLAVOR%
 if errorlevel 1 goto uasfail
 
+rem xhcimsi.sys, the NT 6 x86 MSI helper (design record 18), with every x86
+rem flavour and never with -amd64: the amd64 HCD has no helper.
+if /i "%ARCH%"=="amd64" goto skipmsi
+call :buildmsi %FLAVOR%
+if errorlevel 1 goto msifail
+:skipmsi
+
 endlocal
 exit /b 0
+
+rem ------------------------------------------------------------------
+rem :buildmsi <release|debug|qemu>
+rem
+rem xhcimsi.sys, the NT 6 x86 MSI helper (design record 18 section 8.1):
+rem WDK 7.1, x86, Vista target (setenv <WDK> <flavor> x86 WLH no_oacr), the
+rem same BUILD_ALT_DIR as the x86 binaries just built, in src\msi86; then the
+rem import gate's nt6x86 profile against its own allowlist, the flavour
+rem marker check and the source stamp. An x86 build therefore needs
+rem tools\WinDDK71 (or WDKROOT) as well as MSVC 6 and the 2000 DDK, and fails
+rem without it: a package whose INF names xhcimsi.sys and does not carry it
+rem is refused by make-package.ps1 anyway, so there is no switch to skip it.
+rem ------------------------------------------------------------------
+:buildmsi
+setlocal
+set "FLAVOR=%~1"
+call :flavordirs %FLAVOR%
+if "%OBJDIR%"=="" goto badflavor
+set "MSIWDK=%REPO%\tools\WinDDK71"
+if not "%WDKROOT%"=="" set "MSIWDK=%WDKROOT%"
+if not exist "%MSIWDK%\bin\setenv.bat" goto msinowdk
+set "MSIALLOW=%REPO%\scripts\import-gate\xhcimsi-imports.allow"
+set "MSISYS=%REPO%\src\msi86\%OBJDIR%\i386\xhcimsi.sys"
+set "MSILOG=%REPO%\src\msi86\build%OBJDIR:obj=%"
+
+echo.
+echo === build %FLAVOR% xhcimsi.sys (WDK 7.1, x86, Vista target) ===
+if exist "%MSISYS%" del "%MSISYS%"
+if exist "%MSILOG%.err" del "%MSILOG%.err"
+cmd /c "call "%MSIWDK%\bin\setenv.bat" %MSIWDK% %DDKFLAVOR% x86 WLH no_oacr && set "BUILD_ALT_DIR=%ALTDIR%" && cd /d "%REPO%\src\msi86" && build -cZ"
+if errorlevel 1 goto msibuildfail
+if exist "%MSILOG%.err" goto msibuildfail
+if not exist "%MSISYS%" goto msibuildfail
+
+echo.
+echo === import gate (%FLAVOR% xhcimsi.sys, nt6x86) ===
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\import-gate\check-imports.ps1" -Image "%MSISYS%" -Flavor %FLAVOR% -Arch x86 -GateProfile nt6x86 -AllowPath "%MSIALLOW%" %GATEOPT%
+if errorlevel 1 goto msigatefail
+
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\check-flavour-marker.ps1" -Image "%MSISYS%" -Flavour %FLAVOR%
+if errorlevel 1 goto msigatefail
+
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\source-stamp.ps1" -Driver xhcimsi -Write "%REPO%\src\msi86\%OBJDIR%\i386"
+if errorlevel 1 goto msigatefail
+endlocal
+exit /b 0
+
+:msinowdk
+echo.
+echo ERROR: xhcimsi.sys, the NT 6 x86 MSI helper, builds with WDK 7.1 and none
+echo was found at "%MSIWDK%". Unpack it into tools\WinDDK71 or set WDKROOT
+echo (design record 18 section 8.1; docs\contributing\build-and-test.md).
+endlocal
+exit /b 1
+
+:msibuildfail
+echo.
+echo ERROR: the %FLAVOR% build of xhcimsi.sys failed. See "%MSILOG%.log" and
+echo "%MSILOG%.err".
+endlocal
+exit /b 1
+
+:msigatefail
+echo.
+echo ERROR: the %FLAVOR% xhcimsi.sys failed the import gate, carries the
+echo wrong flavour marker, or could not be stamped - see above. Do not deploy it.
+endlocal
+exit /b 1
 
 rem ------------------------------------------------------------------
 rem :builduas <release|debug|qemu>
@@ -714,6 +797,12 @@ exit /b 1
 :flavourfail
 echo.
 echo ERROR: the %FLAVOR% binary carries the wrong flavour marker - see above.
+endlocal
+exit /b 1
+
+:msifail
+echo.
+echo ERROR: the %FLAVOR% xhcimsi.sys, the x86 MSI helper, failed - see above.
 endlocal
 exit /b 1
 
