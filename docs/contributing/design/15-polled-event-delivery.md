@@ -735,8 +735,10 @@ first alone. It serves the grant as one instead: the controller enables
 only Interrupter 0, and an Interrupter asserts only if it is enabled
 (4.17, p.262); under MSI its vector is its index modulo the enabled
 message count, and under MSI-X its index names its table entry (4.17,
-pp.262-263), so only message 0 is ever written; every message ID the ISR is called with runs
-the same body, which reads Interrupter 0's state; and the record keeps the
+pp.262-263), so only message 0 is ever written; only message ID 0 runs the
+ISR body, which reads Interrupter 0's state, and any other ID is declined
+before it touches the controller (`hcdMsgIsr`, since 7212604), so no two
+bodies run under different messages' interrupt locks; and the record keeps the
 `MessageCount` the connection returned. A grant of more than one message is
 therefore recorded, not refused. More than one Interrupter stays out.
 
