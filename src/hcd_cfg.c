@@ -182,6 +182,8 @@ NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     return STATUS_PENDING;
 }
 
+/* IRQL: <= DISPATCH_LEVEL (the deferral's cancel routine calls it), no lock
+ * held: it completes the IRP. */
 static VOID hcdCfgComplete(PHCD_USB_DEVICE dev, PIRP irp, PURB urb,
                            LONG usbd)
 {
@@ -218,6 +220,9 @@ static VOID hcdCfgComplete(PHCD_USB_DEVICE dev, PIRP irp, PURB urb,
  * a routine owns on the list for that routine (Codex review of 36.30,
  * round 1, finding 2). The IRP keeps its UrbsPending count and device
  * reference until hcdCfgComplete, whoever completes it.
+ *
+ * hcdCfgDeferredHas: whether the IRP is still on the list. IRQL:
+ * DISPATCH_LEVEL, controller lock held.
  */
 static ULONG hcdCfgDeferredHas(PHCD_USB_DEVICE dev, PIRP irp)
 {
@@ -286,7 +291,8 @@ static VOID hcdCfgDefer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PIRP irp)
 }
 
 /* The deferred IRPs this claimer owns, off the list onto `to`'s head in
- * their order (`head` 1) or its tail (0). Controller lock held. */
+ * their order (`head` 1) or its tail (0). IRQL: DISPATCH_LEVEL,
+ * controller lock held. */
 static ULONG hcdCfgDeferredTake(PHCD_USB_DEVICE dev, PLIST_ENTRY to,
                                 ULONG head)
 {

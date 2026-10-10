@@ -4695,8 +4695,9 @@ text answers all three: stage 2 never asks for more registers than stage
    - the HAL handed this request no map registers - `MapRegisterBase` is
      NULL, which is how a HAL says the adapter's transfers need no
      translation and `MapTransfer` returns the pages' own addresses;
-   - the adapter's grant at this start (`hc->MapRegisters`, from
-     `IoGetDmaAdapter`) is exactly `0x80001`, the value every HAL read in
+   - the adapter's raw grant at this start (`hc->MapGrantRaw`, from
+     `IoGetDmaAdapter`, before any `XhciQemuMapGrant` constraint) is
+     exactly `0x80001`, the value every HAL read in
      11.6.1 reports for a register-free adapter of this description; and
    - promotion is **enabled**, and the controller's **register-free
      check** passed at this start (both below).
