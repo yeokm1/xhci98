@@ -1506,8 +1506,8 @@ high to low):
 XHCISNAP: the controller's DNCTRL as read (a register read in the HCD
 region), `DnctrlEnables`, and per device record, appended after stage A's
 fields: `Ss`, the window, `FwFirsts`, `FwCapable`, `FwPending` and the
-union of its PDOs' `FwArmed`. The offsets are appended at the end of their regions
-(the orchestrator reconciles them with 36.33's at merge).
+union of its PDOs' `FwArmed`. The offsets are appended at the end of
+their regions (the orchestrator reconciles them with 36.33's at merge).
 
 ### 8.11 Host vectors
 
@@ -1703,6 +1703,20 @@ Revision 9's review found 1; revision 10 takes it:
 | # | Finding | Answered in |
 |---|---|---|
 | 1 | Claimed entry before IN_CALLBACK can lose to EXITING | 4.4 the CLAIMING phase, held across dequeue and claim |
+
+Stage B's design (section 8, task 36.37) was reviewed from 2026-10-10.
+Round 1 found 8 (1 P1, 5 P2, 2 P3), all taken:
+
+| # | Finding | Answered in |
+|---|---|---|
+| 1 | A new Resume link class changes WANT_RESET and WANT_HOLD with the switch at 0 | 8.5 `xhci_link.c`: no new class, only WANT_RESUME; 8.11 |
+| 2 | An unsplit PDO's `InterfaceMask` is 0: no wake function | 8.3 the ownership mask |
+| 3 | Latched notifications cross suspensions | 8.7 the window, opened at the arm or U3 request, closed at every sequence boundary |
+| 4 | `FwArmed` has no lifetime across unlink and dormant revival | 8.5 `FwArmed`'s lifetime; 8.9 `hcd_pdo.c` |
+| 5 | A configuration change leaves WAIT_WAKEs without capability; an empty arm sets `Armed` | 8.3 the change of configuration; 8.4 `Armed` derived |
+| 6 | "A hot reset cannot start from U3" is wrong (xHCI 4.19.1.2.9) | 8.5, the claim withdrawn, the warm reset named policy |
+| 7 | Slot-reuse ordering stated backwards | 8.7 slot reuse |
+| 8 | D1 stated unconditional | 8.3 capabilities |
 
 ## 10. Tasks and verification (stage A)
 
