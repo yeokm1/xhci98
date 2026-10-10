@@ -291,7 +291,7 @@ ULONG XhciPipeZeroBandwidth(const XHCI_PIPE_EP *ep);
  * The XhciFastPollFsLs modes (design record 13 section 13). Numbered as
  * hidusbf numbers its PatchUSBXHCI value (its README.ENG.TXT, 2025/11/05),
  * because a user of that filter already chooses its rate in those terms:
- * OFF (0, absent, or any value but 1 to 3) and 1K (1) program every
+ * OFF (0, absent, or any value but 1 to 4) and 1K (1) program every
  * endpoint by Table 6-12, which already polls a Low-Speed endpoint at
  * 1 ms; 2K4K (2) and 4K8K (3) give the two slowest rates hidusbf offers,
  * bInterval 32-63 (its "31 Hz", Interval 8) and 16-31 ("62 Hz", Interval
@@ -300,6 +300,8 @@ ULONG XhciPipeZeroBandwidth(const XHCI_PIPE_EP *ep);
  *   mode   Interval 8 (bInterval 32-63)   Interval 7 (bInterval 16-31)
  *   2K4K   2, 500 us (2000 Hz)            1, 250 us (4000 Hz)
  *   4K8K   1, 250 us (4000 Hz)            0, 125 us (8000 Hz)
+ *
+ * Mode 4, CODES, is this driver's own, not hidusbf's (below).
  */
 #define XHCI_PIPE_FAST_OFF      0UL
 #define XHCI_PIPE_FAST_1K       1UL
@@ -376,8 +378,9 @@ ULONG XhciPipeFunctionEndpoint(const UCHAR *config, ULONG length,
 
 /*
  * Whether a Configure Endpoint that failed with `completionCode` while
- * adding an endpoint XhciPipeFastPoll changed is retried at the Table 6-12
- * Interval: Parameter Error (17, Table 6-90: "a Context parameter is
+ * adding an endpoint XhciPipeFastPoll changed is retried at its fallback
+ * Interval - Table 6-12's under modes 2 and 3, Interval 3 (1 ms) under
+ * mode 4: Parameter Error (17, Table 6-90: "a Context parameter is
  * invalid", which an Interval outside Table 6-12's range is) and Bandwidth
  * and Secondary Bandwidth Error (8 and 35), since a period eight or
  * sixty-four times shorter reserves that much more. Anything else is not

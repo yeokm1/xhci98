@@ -950,6 +950,9 @@ void rom_fill(SYSINFO *si, const u8 *date8, u8 model);
 /* The header block (one line per item), and the quick scan's two lines,
  * each at most 79 characters. */
 void report_sysinfo(const SYSINFO *si, QPRINTF_FN pf);
+/* Once every field is filled, before any report: both reports checked as
+ * printed against the identifiers smb_parse_table held, then wiped. */
+void sysinfo_seal(SYSINFO *si);
 void report_sysinfo_short(const SYSINFO *si, QPRINTF_FN pf);
 
 /* sysprobe.c: reads only - the BIOS area, one DPMI mapping of the table,

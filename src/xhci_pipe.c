@@ -747,8 +747,9 @@ ULONG XhciPipeCallerInterval(const UCHAR *config, ULONG length, ULONG offset,
  * an Interval below 3 is outside the range, which a controller may refuse
  * at Configure Endpoint ("Not all Input Endpoint Contexts identified by Add
  * Context flag fields = '1' are valid", p.112: Parameter Error) or run.
- * Opt-in only (XhciFastPollFsLs), and the caller retries at the Table 6-12
- * Interval on a refusal (XhciPipeFastRetry).
+ * Opt-in only (XhciFastPollFsLs), and the caller retries on a refusal at
+ * the fallback Interval (XhciPipeFastRetry): Table 6-12's under modes 2
+ * and 3, Interval 3 (1 ms) under mode 4.
  */
 ULONG XhciPipeFastMode(ULONG value)
 {

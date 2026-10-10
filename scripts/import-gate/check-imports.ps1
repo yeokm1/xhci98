@@ -1002,10 +1002,17 @@ function Test-Image {
                 # pair evidenced when the baselines were never loaded.
                 #
                 if ($null -eq $Win2k) {
-                    Add-Warning ("$($pair.Module)!$($pair.Symbol): the $BaselineLabel kernel/HAL " +
-                        "baselines are not staged in this working copy, so nothing checked that " +
-                        "this symbol resolves on a 64-bit target. Stage them with " +
-                        "scripts\import-gate\extract-target-baselines.ps1 -Amd64.")
+                    if ($ImageArch -eq "nt6x86") {
+                        Add-Warning ("$($pair.Module)!$($pair.Symbol): the $BaselineLabel kernel/HAL " +
+                            "baselines are not staged in this working copy, so nothing checked that " +
+                            "this symbol resolves on 32-bit Vista SP2 or 7 SP1. Stage the files " +
+                            "nt6x86-vista-baselines.expected and nt6x86-win7-baselines.expected name.")
+                    } else {
+                        Add-Warning ("$($pair.Module)!$($pair.Symbol): the $BaselineLabel kernel/HAL " +
+                            "baselines are not staged in this working copy, so nothing checked that " +
+                            "this symbol resolves on a 64-bit target. Stage them with " +
+                            "scripts\import-gate\extract-target-baselines.ps1 -Amd64.")
+                    }
                 }
                 continue
             }

@@ -236,4 +236,5 @@ void sysinfo_probe(SYSINFO *si)
     probe_cpu(si);
     probe_e820(si);
     probe_dos(si);
+    sysinfo_seal(si);
 }

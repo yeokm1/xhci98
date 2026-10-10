@@ -14,11 +14,13 @@
  * model, never the unit. The string and byte fields that identify one
  * machine - Type 1 serial number, UUID and SKU; Type 2 serial number and
  * asset tag; Type 3 serial number and asset tag; Type 4 serial number,
- * asset tag and part number - are never copied out of the table, so there
- * is nothing for a printer to leak. They are fetched into a local only to
- * withhold any printed string that repeats one (see scrub()), since an
- * allowed field can name the same string as a serial. The test suite
- * plants all of them, aliased too, and checks no line carries one.
+ * asset tag and part number - are never copied into SYSINFO, so there is
+ * nothing for a printer to leak. They are fetched only to withhold any
+ * printed string that repeats one (see scrub()), since an allowed field
+ * can name the same string as a serial, and held in this file's private
+ * list until sysinfo_seal has checked both reports as printed, then wiped
+ * (see hold_id). The test suite plants all of them, aliased too, and
+ * checks no line carries one.
  *
  * Bounds: every structure's formatted length is checked against the table,
  * every field offset against the formatted length, and every string walk
@@ -27,6 +29,7 @@
  * read before it, so a broken table cannot crash or hang the tool.
  */
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include "qual.h"
@@ -405,10 +408,40 @@ static int contains_nocase(const char *hay, const char *needle)
     return 0;
 }
 
-/* Does `shown` carry `id`: anywhere, ignoring case, whatever its length. */
+/* Whether some non-empty tail of `shown` is a head of `id`, ignoring case:
+ * all that is left of an identifier cut off by the display bound. */
+static int tail_heads(const char *shown, const char *id)
+{
+    size_t n, m, i;
+
+    n = strlen(shown);
+    m = strlen(id);
+    for (i = (n > m) ? n - m : 0; i < n; i++) {
+        size_t k;
+
+        for (k = 0; i + k < n && lower(shown[i + k]) == lower(id[k]); k++)
+            ;
+        if (i + k == n)
+            return 1;
+    }
+    return 0;
+}
+
+/* A shown string at the full bound may have been cut there (si_copy keeps
+ * SI_STR - 1 characters), and the cut can split an identifier: its head
+ * then ends the string, and the whole-value test below cannot see it. */
+static int at_bound(const char *shown)
+{
+    return strlen(shown) >= SI_STR - 1;
+}
+
+/* Does `shown` carry `id`: anywhere, ignoring case, whatever its length;
+ * and, if the bound may have cut `shown`, any head of `id` ending it. */
 static int carries(const char *shown, const char *id)
 {
-    return contains_nocase(shown, id);
+    if (contains_nocase(shown, id))
+        return 1;
+    return at_bound(shown) && tail_heads(shown, id);
 }
 
 /* Every printed SMBIOS string, for the scrubber and for withhold_all. */
@@ -436,6 +469,72 @@ static void withhold_if(char *shown, const char *id)
         return;
     if (carries(shown, id))
         strcpy(shown, WITHHELD);
+}
+
+/*
+ * The printers join fields into lines, and an identifier can span a join -
+ * a maker "ACME" and a product "12345678" print a serial "ACME 12345678"
+ * that neither field carries - or a field and the line's fixed words, or
+ * the field a 79-column cut leaves at the end of a short line; and one
+ * withholding can move that cut onto another identifier (whole-branch
+ * review, area 3, rounds 3 and 4). So the identifiers the scrubber fetches
+ * are also held here, in this file's own list, never in SYSINFO, until
+ * sysinfo_seal - run once every field is filled - has checked both
+ * reports exactly as printed, line by line, against all of them, and
+ * again after each withholding until nothing changes; then they are
+ * wiped. A list that overflows withholds every SMBIOS string.
+ */
+#define HELD_MAX        64
+#define HELD_UUIDS      8
+
+static char held[HELD_MAX][SI_STR];
+static int nheld;
+static int held_over;
+/* Every distinct UUID, raw and text order: a table may carry more than one
+ * Type 1 structure, and each one's UUID is an identifier. */
+static char held_raw[HELD_UUIDS][33], held_wire[HELD_UUIDS][33];
+static int nuuid;
+
+static void held_wipe(void)
+{
+    memset(held, 0, sizeof(held));
+    memset(held_raw, 0, sizeof(held_raw));
+    memset(held_wire, 0, sizeof(held_wire));
+    nheld = 0;
+    held_over = 0;
+    nuuid = 0;
+}
+
+static void hold_uuid(const char *raw, const char *wire)
+{
+    int i;
+
+    for (i = 0; i < nuuid; i++) {
+        if (strcmp(held_raw[i], raw) == 0)
+            return;
+    }
+    if (nuuid >= HELD_UUIDS) {
+        held_over = 1;
+        return;
+    }
+    strcpy(held_raw[nuuid], raw);
+    strcpy(held_wire[nuuid], wire);
+    nuuid++;
+}
+
+static void hold_id(const char *id)
+{
+    int i;
+
+    for (i = 0; i < nheld; i++) {
+        if (strcmp(held[i], id) == 0)
+            return;
+    }
+    if (nheld >= HELD_MAX) {
+        held_over = 1;
+        return;
+    }
+    strcpy(held[nheld++], id);
 }
 
 /* The UUID's 16 bytes as 32 uppercase hex digits: raw order, and the
@@ -494,10 +593,14 @@ static void scrub_uuid(const SMB_STRUCT *st, SYSINFO *si)
         return;                 /* "not present" / "not set" */
     uuid_hex(st->f + 0x08, raw, wire);
     for (i = 0; (f = shown_field(si, i)) != 0; i++) {
+        if (strcmp(f, WITHHELD) == 0)
+            continue;
         hex_only(f, hex, sizeof(hex));
-        if (strstr(hex, raw) != 0 || strstr(hex, wire) != 0)
+        if (strstr(hex, raw) != 0 || strstr(hex, wire) != 0 ||
+            (at_bound(f) && (tail_heads(hex, raw) || tail_heads(hex, wire))))
             strcpy(f, WITHHELD);
     }
+    hold_uuid(raw, wire);
     memset(raw, 0, sizeof(raw));
     memset(wire, 0, sizeof(wire));
 }
@@ -520,6 +623,7 @@ static void scrub(const SMB_STRUCT *st, u8 type, SYSINFO *si)
                 continue;
             for (j = 0; (f = shown_field(si, j)) != 0; j++)
                 withhold_if(f, id);
+            hold_id(id);
         }
     }
     memset(id, 0, sizeof(id));
@@ -610,6 +714,7 @@ void smb_parse_table(const u8 *t, u32 len, u16 count, SYSINFO *si)
 {
     int complete;
 
+    held_wipe();
     if (len > SMB_TABLE_MAX)
         len = SMB_TABLE_MAX;
     si->used_len = len;
@@ -706,6 +811,79 @@ static void cat_word(char *line, const char *s)
     strcat(line, s);
 }
 
+/* The SMBIOS lines the printers join, built in one place for both
+ * reports. Each fits 400 characters: at most four fields of SI_STR - 1
+ * and their fixed words. */
+
+/* The full report's "System:" text. */
+static void line_system(const SYSINFO *si, char *line)
+{
+    line[0] = '\0';
+    if (!si->seen_t1) {
+        strcpy(line, "(no SMBIOS system structure)");
+        return;
+    }
+    cat_word(line, si->sys_mfr);
+    cat_word(line, si->sys_product);
+    if (line[0] == '\0')
+        strcpy(line, "(maker and model not given)");
+    if (si->sys_version[0] != '\0') {
+        strcat(line, ", version ");
+        strcat(line, si->sys_version);
+    }
+    if (si->sys_family[0] != '\0') {
+        strcat(line, ", family ");
+        strcat(line, si->sys_family);
+    }
+}
+
+/* The full report's "Board:" text. */
+static void line_board(const SYSINFO *si, char *line)
+{
+    line[0] = '\0';
+    cat_word(line, si->board_mfr);
+    cat_word(line, si->board_product);
+    if (line[0] == '\0')
+        strcpy(line, "(not given)");
+}
+
+/* The full report's "BIOS:" text, before its SMBIOS suffix. */
+static void line_bios(const SYSINFO *si, char *line)
+{
+    line[0] = '\0';
+    if (!si->seen_t0) {
+        strcpy(line, "(no SMBIOS BIOS structure)");
+        return;
+    }
+    cat_word(line, si->bios_vendor);
+    cat_word(line, si->bios_version);
+    if (si->bios_date[0] != '\0') {
+        strcat(line, line[0] ? ", " : "");
+        strcat(line, si->bios_date);
+    }
+    if (line[0] == '\0')
+        strcpy(line, "(not given)");
+}
+
+/* The short report's "System:" line with a table read (pf79 cuts it). */
+static void line_short_smb(const SYSINFO *si, char *line)
+{
+    char part[400];
+
+    strcpy(line, "System:");
+    part[0] = '\0';
+    cat_word(part, si->sys_mfr);
+    cat_word(part, si->sys_product);
+    cat_word(line, part[0] ? part : "(not given)");
+    part[0] = '\0';
+    cat_word(part, si->bios_version);
+    cat_word(part, si->bios_date);
+    if (part[0] != '\0') {
+        strcat(line, "; BIOS ");
+        strcat(line, part);
+    }
+}
+
 static const char *ep_name(int kind)
 {
     if (kind == SMB_EP_64)
@@ -792,43 +970,13 @@ void report_sysinfo(const SYSINFO *si, QPRINTF_FN pf)
         return;
     }
     if (si->smb_state == SMB_OK) {
-        line[0] = '\0';
-        if (si->seen_t1) {
-            cat_word(line, si->sys_mfr);
-            cat_word(line, si->sys_product);
-            if (line[0] == '\0')
-                strcpy(line, "(maker and model not given)");
-            if (si->sys_version[0] != '\0') {
-                strcat(line, ", version ");
-                strcat(line, si->sys_version);
-            }
-            if (si->sys_family[0] != '\0') {
-                strcat(line, ", family ");
-                strcat(line, si->sys_family);
-            }
-        } else {
-            strcpy(line, "(no SMBIOS system structure)");
-        }
+        line_system(si, line);
         pf("System:  %s\n", line);
         if (si->seen_t2) {
-            line[0] = '\0';
-            cat_word(line, si->board_mfr);
-            cat_word(line, si->board_product);
-            pf("Board:   %s\n", line[0] ? line : "(not given)");
+            line_board(si, line);
+            pf("Board:   %s\n", line);
         }
-        line[0] = '\0';
-        if (si->seen_t0) {
-            cat_word(line, si->bios_vendor);
-            cat_word(line, si->bios_version);
-            if (si->bios_date[0] != '\0') {
-                strcat(line, line[0] ? ", " : "");
-                strcat(line, si->bios_date);
-            }
-            if (line[0] == '\0')
-                strcpy(line, "(not given)");
-        } else {
-            strcpy(line, "(no SMBIOS BIOS structure)");
-        }
+        line_bios(si, line);
         sprintf(part, "; SMBIOS %u.%u (%s at %05lXh, %d structures)",
                 si->smb_major, si->smb_minor, ep_name(si->smb_kind),
                 si->smb_ep_phys, si->nstructs);
@@ -926,17 +1074,7 @@ void report_sysinfo_short(const SYSINFO *si, QPRINTF_FN pf)
     }
     strcpy(line, "System:");
     if (si->smb_state == SMB_OK) {
-        part[0] = '\0';
-        cat_word(part, si->sys_mfr);
-        cat_word(part, si->sys_product);
-        cat_word(line, part[0] ? part : "(not given)");
-        part[0] = '\0';
-        cat_word(part, si->bios_version);
-        cat_word(part, si->bios_date);
-        if (part[0] != '\0') {
-            strcat(line, "; BIOS ");
-            strcat(line, part);
-        }
+        line_short_smb(si, line);
     } else {
         smb_problem(si, part);
         cat_word(line, part);
@@ -972,4 +1110,162 @@ void report_sysinfo_short(const SYSINFO *si, QPRINTF_FN pf)
         }
     }
     pf79(pf, line);
+}
+
+/* ------------------------------------------------------------------ */
+/* The seal: both reports checked as printed                           */
+/* ------------------------------------------------------------------ */
+
+static char cap_buf[4096];
+static size_t cap_len;
+static int cap_over;
+
+static void cap_pf(const char *fmt, ...)
+{
+    char tmp[700];
+    va_list ap;
+    int n;
+
+    va_start(ap, fmt);
+    n = vsprintf(tmp, fmt, ap);
+    va_end(ap);
+    if (n < 0 || cap_len + (size_t)n >= sizeof(cap_buf)) {
+        cap_over = 1;
+        return;
+    }
+    memcpy(cap_buf + cap_len, tmp, (size_t)n + 1);
+    cap_len += (size_t)n;
+}
+
+/* One printed line carries a held identifier: anywhere, ignoring case (the
+ * UUID as hex digits in either order), or - a short line at its 79-column
+ * cut - as a head ending it. */
+static int line_leaks(const char *line, int is_short)
+{
+    char digits[700];
+    int cut, i;
+
+    cut = is_short && strlen(line) >= 79;
+    for (i = 0; i < nheld; i++) {
+        if (contains_nocase(line, held[i]) ||
+            (cut && tail_heads(line, held[i])))
+            return 1;
+    }
+    if (nuuid > 0)
+        hex_only(line, digits, sizeof(digits));
+    for (i = 0; i < nuuid; i++) {
+        if (strstr(digits, held_raw[i]) != 0 ||
+            strstr(digits, held_wire[i]) != 0 ||
+            (cut && (tail_heads(digits, held_raw[i]) ||
+                     tail_heads(digits, held_wire[i]))))
+            return 1;
+    }
+    return 0;
+}
+
+/* The fields a printed line joins, by its label; 0 for a line that joins
+ * no SMBIOS string. */
+static int line_fields(const char *line, int is_short, int *f)
+{
+    if (!is_short) {
+        if (strncmp(line, "System:  ", 9) == 0) {
+            f[0] = 3; f[1] = 4; f[2] = 5; f[3] = 6;
+            return 4;
+        }
+        if (strncmp(line, "Board:   ", 9) == 0) {
+            f[0] = 7; f[1] = 8;
+            return 2;
+        }
+        if (strncmp(line, "BIOS:    ", 9) == 0) {
+            f[0] = 0; f[1] = 1; f[2] = 2;
+            return 3;
+        }
+        if (strncmp(line, "CPU:     ", 9) == 0) {
+            f[0] = 9; f[1] = 10;
+            return 2;
+        }
+        return 0;
+    }
+    if (strncmp(line, "System:", 7) == 0) {
+        f[0] = 3; f[1] = 4; f[2] = 1; f[3] = 2;
+        return 4;
+    }
+    if (strncmp(line, "CPU:", 4) == 0) {
+        f[0] = 10;
+        return 1;
+    }
+    return 0;
+}
+
+/* Withhold the fields every leaking line of one captured report joins.
+ * Returns 1 when a field changed, 0 when none did, -1 when the report did
+ * not fit the capture (nothing could be checked). A match left only in a
+ * line's fixed words or non-SMBIOS values once its fields are withheld
+ * carries nothing of the table, and is left. */
+static int seal_report(SYSINFO *si, int is_short)
+{
+    char *line, *nl;
+    int f[4], n, k, changed;
+    char *field;
+
+    cap_len = 0;
+    cap_over = 0;
+    cap_buf[0] = '\0';
+    if (is_short)
+        report_sysinfo_short(si, cap_pf);
+    else
+        report_sysinfo(si, cap_pf);
+    if (cap_over) {
+        memset(cap_buf, 0, sizeof(cap_buf));
+        return -1;
+    }
+    changed = 0;
+    for (line = cap_buf; *line != '\0'; line = nl + 1) {
+        nl = strchr(line, '\n');
+        if (nl != 0)
+            *nl = '\0';
+        if (line_leaks(line, is_short)) {
+            n = line_fields(line, is_short, f);
+            for (k = 0; k < n; k++) {
+                field = shown_field(si, f[k]);
+                if (field[0] != '\0' && strcmp(field, WITHHELD) != 0) {
+                    strcpy(field, WITHHELD);
+                    changed = 1;
+                }
+            }
+        }
+        if (nl == 0)
+            break;
+    }
+    memset(cap_buf, 0, sizeof(cap_buf));
+    return changed;
+}
+
+/* Run once every field is filled (sysinfo_probe's last step), before any
+ * report is printed. Each pass withholds at least one of the eleven
+ * strings or ends the loop, so it ends within twelve passes. */
+void sysinfo_seal(SYSINFO *si)
+{
+    int pass, a, b;
+
+    if (si->skipped) {
+        held_wipe();
+        return;
+    }
+    if (held_over) {
+        withhold_all(si);
+        held_wipe();
+        return;
+    }
+    for (pass = 0; pass < 16; pass++) {
+        a = seal_report(si, 0);
+        b = seal_report(si, 1);
+        if (a < 0 || b < 0) {
+            withhold_all(si);
+            break;
+        }
+        if (!a && !b)
+            break;
+    }
+    held_wipe();
 }

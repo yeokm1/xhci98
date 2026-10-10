@@ -1732,6 +1732,17 @@ try {
     Assert-RuleFires "x86-msihlp-no-copy" "MSIHLP-SVC" {
         param($t) $t.Replace("CopyFiles=Xhci.CopyFiles,XhciMsi.CopyFiles`r`n", "CopyFiles=Xhci.CopyFiles`r`n")
     }
+    # The helper is no function driver, so BOTH-DESTDIR's driver walk never
+    # saw its destination (whole-branch review, 2026-10-10).
+    Assert-RuleFires "x86-msihlp-wrong-dir" "MSIHLP-SVC" {
+        param($t) $t.Replace("XhciMsi.CopyFiles=10,System32\Drivers", "XhciMsi.CopyFiles=10,System32")
+    }
+    Assert-RuleFires "x86-msihlp-wrong-dirid" "MSIHLP-SVC" {
+        param($t) $t.Replace("XhciMsi.CopyFiles=10,System32\Drivers", "XhciMsi.CopyFiles=11")
+    }
+    Assert-RuleFires "x86-msihlp-wrong-subdir" "MSIHLP-SVC" {
+        param($t) $t.Replace("XhciMsi.CopyFiles=10,System32\Drivers", "XhciMsi.CopyFiles=10,System32\Drivers\Msi")
+    }
     Assert-RuleFires "x86-msihlp-on-2000" "MSIHLP-ONLYNT6" {
         param($t) $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,", "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=XhciMsi.CopyFiles,Xhci.CopyFiles,")
     }

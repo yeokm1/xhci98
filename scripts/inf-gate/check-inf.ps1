@@ -2228,7 +2228,9 @@ foreach ($secName in @($inf.SectionOrder)) {
 #                 Vista and 7 controller's .Services, flags 0, to an install
 #                 section with ServiceType 1, StartType 0 (boot), ErrorControl
 #                 1 and ServiceBinary %12%\xhcimsi.sys copied by that same
-#                 controller section.
+#                 controller section, to 10,System32\Drivers (the helper is
+#                 not a function driver, so BOTH-DESTDIR's driver-binary
+#                 walk does not see it; whole-branch review, 2026-10-10).
 #   MSIHLP-ONLYNT6 a CopyFiles section that delivers xhcimsi.sys is named by
 #                 any section but the Vista and 7 controller's.
 #   MSIHLP-HW     the 32-bit file asks for a message without installing the
@@ -2344,6 +2346,14 @@ if ($Arch -eq "amd64") {
                 foreach ($e in @(Get-Section $inf $cf)) {
                     if ($null -eq $e) { continue }
                     if ((($e.Text -split ',')[0].Trim()) -ieq $msiHelperBinary) { [void]$deliveredBy.Add($cf) }
+                }
+            }
+            foreach ($cf in $deliveredBy) {
+                $destKey = $cf.ToLowerInvariant()
+                if (-not $destDirs.ContainsKey($destKey)) { continue }   # BOTH-DESTDIR reports it
+                $hd = $destDirs[$destKey]
+                if ($hd.Dirid -ne "10" -or $hd.Subdir -ine "System32\Drivers") {
+                    Add-Failure "MSIHLP-SVC" ("[{0}] delivers {1} to '{2},{3}', not '10,System32\Drivers', where its ServiceBinary %12%\{1} loads it from." -f $cf, $msiHelperBinary, $hd.Dirid, $hd.Subdir)
                 }
             }
             if ($deliveredBy.Count -eq 0) {

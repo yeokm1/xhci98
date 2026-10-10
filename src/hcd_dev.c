@@ -444,16 +444,7 @@ static VOID hcdTolCycleEvent(PHCD_CONTROLLER hc, ULONG slotId, ULONG dci,
         HcdTolCycleMark(hc, dev, reason, dci);
     }
 }
-/*
- * A Transfer Event, matched by the transfer engine (xhci_xfer.c) against the
- * queue of the pipe its slot and endpoint name - EP0's, or one the
- * configuration opened: the engine checks the TRB address, the slot and the
- * endpoint, latches the short packet's residual, and says which records
- * retire (26-A.5, design record 13 section 6). An event for no open pipe is
- * counted, and escalated when its code is fatal. Returns nonzero when the
- * caller must request a controller reset. IRQL: DISPATCH_LEVEL, controller
- * lock held.
- */
+
 /*
  * The Device Notification Event's hook (xhci_hw.h; design record 14 section
  * 8.7, roadmap-hcd 36.38): with XhciSelectiveSuspend 0 nothing - DNCTRL
@@ -478,6 +469,16 @@ VOID XhciDeviceNotificationEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
     HcdSuspNotificationLocked(hc, slotId, type, iface);
 }
 
+/*
+ * A Transfer Event, matched by the transfer engine (xhci_xfer.c) against the
+ * queue of the pipe its slot and endpoint name - EP0's, or one the
+ * configuration opened: the engine checks the TRB address, the slot and the
+ * endpoint, latches the short packet's residual, and says which records
+ * retire (26-A.5, design record 13 section 6). An event for no open pipe is
+ * counted, and escalated when its code is fatal. Returns nonzero when the
+ * caller must request a controller reset. IRQL: DISPATCH_LEVEL, controller
+ * lock held.
+ */
 ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
 {
     PHCD_CONTROLLER hc;

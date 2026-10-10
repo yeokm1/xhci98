@@ -34,8 +34,9 @@
  * answers the same set for its own ports, \DosDevices\XHCI98HUB<serial> -
  * and a connection to it reads DeviceIsHub TRUE with that name; a hub that
  * has no PDO reads as a connected device, as before. A composite the bus
- * splits is one connection whose driver key is its first function's (section
- * 8.10, the two rows bound to task 26-A.8).
+ * splits is one connection whose driver key is its composite parent PDO's
+ * (task 36.43; before it, the first function's - section 8.10, the two rows
+ * bound to task 26-A.8).
  *
  * Every structure is written byte by byte at the offsets of usbioctl.h's
  * #pragma pack(1) layouts and usbuser.h's, because the Windows 2000 DDK the
@@ -830,7 +831,7 @@ static ULONG hcdDoorHcdPortWord(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG word)
 
 /* One word of the class driver records (task 36.21; xhci.h,
  * XHCI_SNAPSHOT_HCD_TELE_*), `index` from the first record's first word.
- * Controller lock held. */
+ * IRQL: DISPATCH_LEVEL, controller lock held. */
 static ULONG hcdDoorTeleWord(PHCD_CONTROLLER hc, ULONG index)
 {
     PHCD_UAS_TELE t;

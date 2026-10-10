@@ -487,8 +487,9 @@ XHCI_C_ASSERT(usbcmd_named_bits_are_defined,
 
 /*
  * A Device Notification Event TRB (6.4.2.7, p.447-448): the Notification
- * Type in DW0 7:4, and DW0 63:8 bytes 05h to 0Bh of the Device Notification
- * TP, so DW0 15:8 is the TP's byte 05h - a FUNCTION_WAKE TP's Interface,
+ * Type in DW0 7:4, and bits 63:8 of the 64-bit parameter field (DW1:DW0)
+ * hold bytes 05h to 0Bh of the Device Notification TP, so DW0 15:8 is the TP's
+ * byte 05h - a FUNCTION_WAKE TP's Interface,
  * "the first interface in the function that caused the device to perform a
  * remote wake" (USB 3.2 8.5.6.1, Table 8-19, p.238; 8.5.6.4, p.239). The
  * Slot ID is DW3 31:24 (XHCI_TRB_GET_SLOT_ID) and the completion code is

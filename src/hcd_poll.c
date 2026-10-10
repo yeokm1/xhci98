@@ -54,7 +54,8 @@ static VOID hcdPollArm(PHCD_CONTROLLER hc, ULONG ms, ULONG state)
     hc->Counters.PollStateLast = state;
 }
 
-/* The state a first arm (a kick, or a kick owed) stands for. */
+/* The state a first arm (a kick, or a kick owed) stands for. IRQL:
+ * DISPATCH_LEVEL, PollLock held. */
 static ULONG hcdPollFirstState(PHCD_CONTROLLER hc)
 {
     return (hc->Poll.Role == XHCI_POLL_ROLE_WATCH) ? XHCI_POLL_BUS_WATCH
@@ -225,6 +226,7 @@ static VOID hcdPollClearInte(PVOID context, ULONG usbcmd)
                      ~(XHCI_USBCMD_INTE | XHCI_USBCMD_HCRST)));
 }
 
+/* IRQL: DIRQL, under the interrupt object's lock (XhciPollRetire's). */
 static VOID hcdPollWriteIman(PVOID context, ULONG value)
 {
     XhciWriteIr0(&((PHCD_CONTROLLER)context)->Hc, XHCI_IR_IMAN, value);
@@ -693,6 +695,7 @@ static VOID hcdPollMove(PHCD_CONTROLLER hc, ULONG pairs)
     KeReleaseSpinLock(&hc->PollLock, pollIrql);
 }
 
+/* The poll timer's DPC. IRQL: DISPATCH_LEVEL, no lock held on entry. */
 static VOID NTAPI hcdPollDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
                              PVOID Arg2)
 {

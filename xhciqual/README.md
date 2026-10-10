@@ -1065,7 +1065,17 @@ exception for firmware fillers: no list can know that this unit's
 `123456789` is not its serial, so a serial of `0` or `Default string`
 withholds every printed string holding it, a BIOS date included. Type 1's UUID is
 compared as 32 hex digits in both byte orders, ignoring case, dashes and
-braces. A field added to `SYSINFO` is a field every pasted report
+braces. A string the 64-character cut (below) may have shortened is also
+withheld when it ends in any head of an identifier, the UUID's included, so
+a cut cannot print a serial less its last characters. And once every
+field is read, both reports are rendered and checked line by line, exactly
+as printed, against every identifier (held in the parser's private list,
+never in `SYSINFO`, and wiped after): a maker `ACME` and a product
+`12345678` would print a serial `ACME 12345678` that neither field holds,
+and a line's fixed words, the BIOS line's SMBIOS suffix or the short
+line's 79-column cut can complete or expose one too. A line that carries
+an identifier withholds every SMBIOS string it joins, and the check runs
+again until nothing changes, since one withholding can move a cut. A field added to `SYSINFO` is a field every pasted report
 publishes; the host suite and the QEMU cases plant every identifier,
 aliased too, and fail if one is printed.
 
