@@ -358,20 +358,21 @@ static ULONG hcdWidePump(PHCD_CONTROLLER hc, PHCD_XFER x)
     flags = 0;
     while (!x->Rec.NoMore && XhciXpipeOnRing(&x->Rec) < 2 &&
            x->Rec.Planned < x->Length) {
-        if (dev->Gone || pipe->Closed || x->CancelRequested) {
+        if ((hc->Hc.Flags & XHCI_EXT_FLAG_SUSPENDED) != 0) {
+            /* Task 36.28's rule for any publication (HcdIoMapped): nothing
+             * goes on a suspended controller's ring and the save is given
+             * up, whatever else ends the URB. */
+            hc->Hc.SavedStateValid = 0;
+            hc->SuspendRefused = 1;
             flags |= XhciXpipeRecStop(&x->Rec, XHCI_XPIPE_OUT_STOP,
                                       dev->Gone ? HCD_USBD_DEVICE_GONE
                                                 : HCD_USBD_CANCELED);
             break;
         }
-        if ((hc->Hc.Flags & XHCI_EXT_FLAG_SUSPENDED) != 0) {
-            /* Task 36.28's rule for any publication (HcdIoMapped): nothing
-             * goes on a suspended controller's ring; the URB ends now,
-             * cancelled, and the save is given up. */
-            hc->Hc.SavedStateValid = 0;
-            hc->SuspendRefused = 1;
+        if (dev->Gone || pipe->Closed || x->CancelRequested) {
             flags |= XhciXpipeRecStop(&x->Rec, XHCI_XPIPE_OUT_STOP,
-                                      HCD_USBD_CANCELED);
+                                      dev->Gone ? HCD_USBD_DEVICE_GONE
+                                                : HCD_USBD_CANCELED);
             break;
         }
         if (pipe->Paused || pipe->TruncHeld) {
@@ -453,21 +454,24 @@ static ULONG hcdWidePublishLocked(PHCD_CONTROLLER hc, PHCD_XFER x)
     PHCD_PIPE pipe;
     PHCD_USB_DEVICE dev;
     ULONG flags;
+    ULONG suspended;
 
     pipe = x->Pipe;
     dev = pipe->Device;
     x->State = HCD_XFER_ON_RING;
     x->Engine = 1;
-    if (dev->Gone || pipe->Closed || x->CancelRequested) {
+    suspended = (hc->Hc.Flags & XHCI_EXT_FLAG_SUSPENDED) != 0;
+    if (suspended) {
+        /* Task 36.28, as hcdGo and HcdIoMapped: nothing published while
+         * suspended, and the save given up whatever else ends the record
+         * (design review round 3: a cancel did not bypass it). */
+        hc->Hc.SavedStateValid = 0;
+        hc->SuspendRefused = 1;
+    }
+    if (dev->Gone || pipe->Closed || x->CancelRequested || suspended) {
         flags = XhciXpipeRecStop(&x->Rec, XHCI_XPIPE_OUT_STOP,
                                  dev->Gone ? HCD_USBD_DEVICE_GONE
                                            : HCD_USBD_CANCELED);
-    } else if ((hc->Hc.Flags & XHCI_EXT_FLAG_SUSPENDED) != 0) {
-        /* Task 36.28, as HcdIoMapped: nothing published while suspended. */
-        hc->Hc.SavedStateValid = 0;
-        hc->SuspendRefused = 1;
-        flags = XhciXpipeRecStop(&x->Rec, XHCI_XPIPE_OUT_STOP,
-                                 HCD_USBD_CANCELED);
     } else {
         flags = hcdWidePump(hc, x);
     }

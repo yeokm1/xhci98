@@ -4595,9 +4595,10 @@ unaligned, on rings large enough to hold it. It applies where stage 2's
 promotion applies and where the large commands arrive: **the stream rings
 of UAS at SuperSpeed** (the only pipes where an IN URB is eligible, section
 11.6 point 1, and where 36.22's 1 MiB and 2 MiB commands go). Every other
-ring keeps its 64 TRBs: the pool rings of the controller's block (design
-record 04's layout, untouched - so no isochronous decoupling, no stride or
-pool change, no `test_membuf` change), EP0's, the command and event rings.
+ring keeps the size it has: the pool rings of the controller's block, 64
+TRBs (design record 04's layout, untouched - so no isochronous decoupling,
+no stride or pool change, no `test_membuf` change), EP0's and the command
+ring's 64, and the event ring's 256 entries.
 
 **Scope left out, and why (orchestrator decision, owner to confirm).**
 Bulk-Only and High-Speed UAS keep stage 2 (OUT pipelined in 31-element
