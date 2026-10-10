@@ -621,17 +621,16 @@ SuperSpeed PDO, the idle IRP is held as before (`hcd_urb.c`, its own slot
   the thread (98 SE: a wake's WAIT_WAKE completed in the pass, the
   client's callback asked D0 and waited, and the thread never finished
   the resume). Every IRP they claim is completed at PASSIVE_LEVEL by a
-  system work item of its own (`hcdSuspDefer`, the item in the IRP's
-  `DriverContext`): a D0 on the critical queue; a Dx, a WAIT_WAKE and an
-  idle IRP on the delayed one - so a completion callback that asks for a D0
-  and waits (the pattern seen) never holds the queue the D0's completion
-  needs, and a D0 callback that asks for a Dx neither. The residual a
-  work item cannot close - its last instructions after the count that the
-  stop reads - is the one design record 18 section 14.8 records for every
-  ExQueueWorkItem of this driver; the stop's drain waits a further
-  interval after the count reaches 0. Its claimed status is fixed at the claim; the IRP keeps its
-  `PowerPending` or `IdlePending` count until the completion; the stop
-  waits for every item (`HcdSuspDoneDrain`).
+  system thread of its own (`hcdSuspDefer`), never a shared worker: a
+  completion callback that asks for a D0 and waits, whose D0 callback asks
+  for a Dx and waits, and so on, holds only its own thread, and the
+  completion it waits for always has one (a single worker, then the two
+  system work queues, could each be held by the callback waiting on them).
+  The stop joins every completion thread (`HcdSuspDoneDrain`) - on NT by
+  its thread object, on 9x by the flag it sets last - before the
+  controller's storage goes or the image can unload. The claimed status
+  is fixed at the claim; the IRP keeps its `PowerPending` or `IdlePending`
+  count until its completion has returned.
 - **The controller's stop** runs the handoff (`HcdSuspCbStop`) after the
   enum thread has exited and the devices are dropped (their slots settled
   at the unlink): steps (1) to (5) as 4.4 has them.
@@ -912,10 +911,10 @@ Teardown completes it `STATUS_NO_SUCH_DEVICE` (removal, GONE) or
   precedes it (signed 32-bit difference, so wraparound is harmless) and
   whose `PwrState` is D1 or D2, and **completes them `STATUS_SUCCESS`** -
   the claim and its status fixed in that hold, the completion itself made
-  by a work item of the IRP's own outside the thread (3.12, the thread's
+  by a system thread of the IRP's own (3.12, the thread's
   completions), so it may land before, during or after the resume - a WAIT_WAKE completes when the wake is
   signalled, as usbhub's do. Between the claim and that completion the
-  IRP is the work item's alone, its status already fixed, and a resume
+  IRP is its completion thread's alone, its status already fixed, and a resume
   that then fails or a GONE that follows changes nothing for it: the function's D0 pends until ACTIVE or GONE
   (4.3, 4.4). A WAIT_WAKE accepted while SUSPENDED and armed is stamped
   before the event and so is completed by it.

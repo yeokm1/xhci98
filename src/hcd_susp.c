@@ -320,82 +320,183 @@ static VOID hcdSuspTake(PHCD_SUSP_TAKEN t, PHCD_DEVICE_PDO pdo, PIRP irp,
  * client's code, which may ask for another power IRP and, on Windows 98,
  * wait for it; that IRP needs this very thread. So an IRP the thread (or
  * the power path, holding the gate) claims is completed at PASSIVE_LEVEL
- * by a system work item of its own, outside every gate and lock - one per
- * IRP, so a callback that waits for a D0 holds only its own item, never
- * the D0's completion (Codex review of the fix, round 1, finding 1): a
- * D-IRP's on the critical work queue, a WAIT_WAKE's and an idle IRP's on
- * the delayed one - refined: a D0 on the critical queue, a Dx with the
- * WAIT_WAKEs and idle IRPs on the delayed one - so a waiting callback cannot
- * hold up the D0 it waits for even where each queue has a single thread. The item lives in the
- * claimed IRP's DriverContext (its cancel routine, which used it, is
- * excluded by the claim); the kind and the controller ride in
- * Tail.Overlay.ListEntry and the status in IoStatus.Information until the
- * completion. The IRP keeps its PowerPending or IdlePending count until
- * then, which the PDO's REMOVE and rundown wait for, and SuspDoneBusy
- * counts the items, which the stop waits out (HcdSuspDoneDrain).
+ * by a system thread of its own, outside every gate and lock: no shared
+ * worker, so a callback that waits - for a D0, which waits for a Dx, and
+ * so on - holds only its own thread and never the completion it waits for
+ * (Codex review of the fix, rounds 1 to 3: a single worker, then the
+ * system work queues, can each be held by the callback waiting on them);
+ * and a thread the stop can join, so no completion is still running this
+ * image when the last device goes (round 2, finding 2). Each completion
+ * has a small context from pool on the controller's list (SuspDoneList,
+ * under SuspDoneLock); the stop joins every one (HcdSuspDoneDrain) - on NT
+ * by the thread object, on 9x by the flag the thread sets last, as the
+ * callback thread's join. Exited ones are reaped at the next hand-off.
+ * The IRP keeps its PowerPending or IdlePending count until its
+ * completion has returned, which the PDO's REMOVE and rundown wait for.
+ * Should the context or the thread not be had, the completion is made
+ *inline as before, traced - the wedge's old shape, for
+ * an out-of-resources moment only.
  */
 #define HCD_SUSP_DONE_POWER     1UL     /* a D-IRP; the value its D0 flag */
 #define HCD_SUSP_DONE_WAKE      2UL
 #define HCD_SUSP_DONE_IDLE      3UL
 
-static VOID NTAPI hcdSuspDoneWork(PVOID context)
-{
-    PHCD_CONTROLLER hc;
-    PHCD_DEVICE_PDO pdo;
-    PIRP irp;
-    ULONG kind;
-    ULONG_PTR value;
+typedef struct _HCD_SUSP_DONE {
+    LIST_ENTRY Link;
+    PIRP Irp;
+    PHCD_DEVICE_PDO Pdo;
+    ULONG Kind;
+    ULONG_PTR Value;
+    PVOID ThreadObject;         /* NT: referenced; 9x: NULL             */
+    volatile LONG Exited;       /* set just before PsTerminateSystemThread */
+} HCD_SUSP_DONE, *PHCD_SUSP_DONE;
 
-    irp = (PIRP)context;
-    kind = (ULONG)(ULONG_PTR)irp->Tail.Overlay.ListEntry.Flink;
-    hc = (PHCD_CONTROLLER)irp->Tail.Overlay.ListEntry.Blink;
-    value = irp->IoStatus.Information;
-    irp->IoStatus.Information = 0;
-    irp->Tail.Overlay.ListEntry.Flink = NULL;
-    irp->Tail.Overlay.ListEntry.Blink = NULL;
-    pdo = (PHCD_DEVICE_PDO)IoGetCurrentIrpStackLocation(irp)
-              ->DeviceObject->DeviceExtension;
-    switch (kind) {
+static VOID hcdSuspDoneComplete(PHCD_SUSP_DONE d)
+{
+    switch (d->Kind) {
     case HCD_SUSP_DONE_POWER:
-        hcdSuspCompletePower(pdo, irp, (ULONG)value);
+        hcdSuspCompletePower(d->Pdo, d->Irp, (ULONG)d->Value);
         break;
     case HCD_SUSP_DONE_WAKE:
-        hcdSuspCompleteWake(pdo, irp, (NTSTATUS)value);
+        hcdSuspCompleteWake(d->Pdo, d->Irp, (NTSTATUS)d->Value);
         break;
     default:
-        (VOID)HcdCompleteIrp(irp, (NTSTATUS)value, 0);
-        (VOID)InterlockedDecrement(&pdo->IdlePending);
+        (VOID)HcdCompleteIrp(d->Irp, (NTSTATUS)d->Value, 0);
+        (VOID)InterlockedDecrement(&d->Pdo->IdlePending);
         break;
     }
-    /* Last: the stop frees nothing of the controller before it reads 0. */
-    (VOID)InterlockedDecrement(&hc->SuspDoneBusy);
 }
 
-XHCI_C_ASSERT(susp_done_item,
-              sizeof(WORK_QUEUE_ITEM) <=
-                  sizeof(((PIRP)0)->Tail.Overlay.DriverContext));
+/* IRQL: PASSIVE_LEVEL (a system thread). */
+static VOID NTAPI hcdSuspDoneThread(PVOID context)
+{
+    PHCD_SUSP_DONE d;
 
-/* A claimed IRP handed to its own work item. `pdo` is the IRP's current
- * stack location's (the work item reads it back from there). IRQL: <=
- * DISPATCH_LEVEL. */
+    d = (PHCD_SUSP_DONE)context;
+    hcdSuspDoneComplete(d);
+    (VOID)InterlockedExchange((PLONG)&d->Exited, 1);
+    (VOID)PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+/* One completion's thread joined and its context freed: NT by its thread
+ * object (`wait` 0: only if it has already exited), 9x by its flag.
+ * Returns whether it was. IRQL: PASSIVE_LEVEL. */
+static ULONG hcdSuspDoneJoin(PHCD_SUSP_DONE d, ULONG wait)
+{
+    LARGE_INTEGER zero;
+    LARGE_INTEGER due;
+
+    if (d->ThreadObject != NULL) {
+        zero.QuadPart = 0;
+        while (KeWaitForSingleObject(d->ThreadObject, Executive, KernelMode,
+                                     FALSE, &zero) != STATUS_SUCCESS) {
+            if (!wait) {
+                return 0;
+            }
+            HcdRelativeMs(&due, 1);
+            (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+        }
+        ObDereferenceObject(d->ThreadObject);
+    } else {
+        while (d->Exited == 0) {
+            if (!wait) {
+                return 0;
+            }
+            HcdRelativeMs(&due, 1);
+            (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+        }
+    }
+    HcdPoolFree(d);
+    return 1;
+}
+
+/* Every completion thread that has exited, reaped (`wait` 0), or every one
+ * joined (`wait` 1, the stop). IRQL: PASSIVE_LEVEL. */
+static VOID hcdSuspDoneReap(PHCD_CONTROLLER hc, ULONG wait)
+{
+    PHCD_SUSP_DONE d;
+    PLIST_ENTRY entry;
+    PLIST_ENTRY next;
+    LIST_ENTRY mine;
+    KIRQL oldIrql;
+
+    InitializeListHead(&mine);
+    KeAcquireSpinLock(&hc->SuspDoneLock, &oldIrql);
+    for (entry = hc->SuspDoneList.Flink; entry != &hc->SuspDoneList;
+         entry = next) {
+        next = entry->Flink;
+        d = CONTAINING_RECORD(entry, HCD_SUSP_DONE, Link);
+        if (wait || d->Exited) {
+            RemoveEntryList(entry);
+            InsertTailList(&mine, entry);
+        }
+    }
+    KeReleaseSpinLock(&hc->SuspDoneLock, oldIrql);
+    while (!IsListEmpty(&mine)) {
+        entry = RemoveHeadList(&mine);
+        d = CONTAINING_RECORD(entry, HCD_SUSP_DONE, Link);
+        if (!hcdSuspDoneJoin(d, wait)) {
+            /* Flag set, the thread not yet gone (NT): next time. */
+            KeAcquireSpinLock(&hc->SuspDoneLock, &oldIrql);
+            InsertTailList(&hc->SuspDoneList, &d->Link);
+            KeReleaseSpinLock(&hc->SuspDoneLock, oldIrql);
+        }
+    }
+}
+
+/* A claimed IRP handed to a completion thread of its own. IRQL:
+ * PASSIVE_LEVEL (the thread's pass, the power path, the unlink). */
 static VOID hcdSuspDefer(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo, PIRP irp,
                          ULONG kind, ULONG_PTR value)
 {
-    PWORK_QUEUE_ITEM item;
+    PHCD_SUSP_DONE d;
+    HANDLE handle;
+    KIRQL oldIrql;
+    NTSTATUS status;
+    PUCHAR p;
+    ULONG i;
 
-    UNREFERENCED_PARAMETER(pdo);
-    irp->Tail.Overlay.ListEntry.Flink = (PLIST_ENTRY)(ULONG_PTR)kind;
-    irp->Tail.Overlay.ListEntry.Blink = (PLIST_ENTRY)hc;
-    irp->IoStatus.Information = value;
-    (VOID)InterlockedIncrement(&hc->SuspDoneBusy);
-    item = (PWORK_QUEUE_ITEM)&irp->Tail.Overlay.DriverContext[0];
-    ExInitializeWorkItem(item, hcdSuspDoneWork, irp);
-    /* A D0 on the critical queue, everything else on the delayed one: a
-     * callback that asks for a D0 and waits never holds the queue the D0
-     * needs (Codex review of the fix, round 2, finding 1). */
-    ExQueueWorkItem(item, (kind == HCD_SUSP_DONE_POWER && value != 0)
-                              ? CriticalWorkQueue
-                              : DelayedWorkQueue);
+    hcdSuspDoneReap(hc, 0);
+    d = (PHCD_SUSP_DONE)HcdPoolAlloc(sizeof(HCD_SUSP_DONE));
+    if (d != NULL) {
+        p = (PUCHAR)d;
+        for (i = 0; i < sizeof(HCD_SUSP_DONE); i++) {
+            p[i] = 0;
+        }
+        d->Irp = irp;
+        d->Pdo = pdo;
+        d->Kind = kind;
+        d->Value = value;
+        status = PsCreateSystemThread(&handle, THREAD_ALL_ACCESS, NULL, NULL,
+                                      NULL, hcdSuspDoneThread, d);
+        if (NT_SUCCESS(status)) {
+            if (IoIsWdmVersionAvailable(1, 0x10) &&
+                !NT_SUCCESS(ObReferenceObjectByHandle(handle,
+                                                      THREAD_ALL_ACCESS,
+                                                      NULL, KernelMode,
+                                                      &d->ThreadObject,
+                                                      NULL))) {
+                /* Joined by its flag instead (the 9x way). */
+                d->ThreadObject = NULL;
+            }
+            (VOID)ZwClose(handle);
+            KeAcquireSpinLock(&hc->SuspDoneLock, &oldIrql);
+            InsertTailList(&hc->SuspDoneList, &d->Link);
+            KeReleaseSpinLock(&hc->SuspDoneLock, oldIrql);
+            return;
+        }
+        HcdPoolFree(d);
+    }
+    XHCI_DBG_VALUE("hcd: completion thread not had, inline, kind", kind);
+    {
+        HCD_SUSP_DONE inl;
+
+        inl.Irp = irp;
+        inl.Pdo = pdo;
+        inl.Kind = kind;
+        inl.Value = value;
+        hcdSuspDoneComplete(&inl);
+    }
 }
 
 /* The thread's claims, deferred (a START's report, no IRP, made here). */
@@ -2106,22 +2207,15 @@ VOID HcdSuspUnlinkFinish(PHCD_CONTROLLER hc, PHCD_SUSP_SETTLE s)
     }
 }
 
-/* Every deferred completion done and the work item returned (the stop,
- * before the controller's storage can go). IRQL: PASSIVE_LEVEL. */
+/* Every completion thread joined (the stop, before the controller's
+ * storage can go and before the last device can let the image unload).
+ * IRQL: PASSIVE_LEVEL. */
 VOID HcdSuspDoneDrain(PHCD_CONTROLLER hc)
 {
-    LARGE_INTEGER due;
-
-    while (hc->SuspDoneBusy != 0) {
-        HcdRelativeMs(&due, 1);
-        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    if (hc->SuspDoneList.Flink == NULL) {
+        return;                 /* never initialized: no start ran */
     }
-    /* The last item's return after its decrement is not proven by the
-     * count (Codex review of the fix, round 2, finding 2; design record
-     * 18 section 14.8's residual for every ExQueueWorkItem here): a
-     * further interval narrows it. */
-    HcdRelativeMs(&due, 20);
-    (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    hcdSuspDoneReap(hc, 1);
 }
 
 /* ------------------------------------------------------------------ */
@@ -2795,9 +2889,10 @@ NTSTATUS HcdSuspCbStart(PHCD_CONTROLLER hc)
     InitializeListHead(&hc->IdleQueue);
     hc->SuspCb = NULL;
     hc->SuspNotes = 0;
-    /* The thread's deferred completions (hcdSuspDefer); the last stop
-     * drained them (HcdSuspDoneDrain). */
-    hc->SuspDoneBusy = 0;
+    /* The thread's completion threads (hcdSuspDefer); the last stop joined
+     * them (HcdSuspDoneDrain). */
+    KeInitializeSpinLock(&hc->SuspDoneLock);
+    InitializeListHead(&hc->SuspDoneList);
     if (!hc->SuspOn) {
         return STATUS_SUCCESS;
     }
