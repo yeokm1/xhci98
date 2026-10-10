@@ -262,7 +262,7 @@ inside the bus that the PnP manager never sees.
 | Root-hub PDO | WDM PDO, hardware id `XHCI98\ROOT_HUB`, no compatible ids (section 8) | the controller FDO, at its first start | the controller | a small PDO extension pointing back at the controller |
 | Root-hub FDO | WDM FDO, attached over the root-hub PDO | `AddDevice` again, for a PDO this driver did create - the role is decided by the PDO's own driver object | the root-hub PDO | the bus's view of the topology: the port objects, the hub objects inside the bus, the list of device and function PDOs |
 | Device PDO | WDM PDO, one per non-composite device and per non-hub device the bus does not split | the root-hub FDO, when enumeration (5.3) reaches a bindable device | the root hub, wherever the device is in the USB topology | the device's slot, its configuration and pipes, its ids |
-| Function PDO | WDM PDO, one per function of a split composite device (section 10) | the root-hub FDO | the root hub, beside the device PDOs | the function (its interface mask, its ids), its own filtered copy of the configuration descriptor (10.9), the group serial it shares with its siblings, and a pointer to the device record inside the bus, whose slot and pipes it shares, cleared when the device leaves (corrected 2026-10-03 from "a pointer to the parent device object inside the bus, whose pipes it shares", as 26-A.7 implements it) |
+| Function PDO | WDM PDO, one per function of a split composite device (section 10) | the root-hub FDO | the root hub, beside the device PDOs; **since 36.43 the device's composite-parent PDO (10.12)**, itself where a device PDO would be | the function (its interface mask, its ids), its own filtered copy of the configuration descriptor (10.9), the group serial it shares with its siblings, and a pointer to the device record inside the bus, whose slot and pipes it shares, cleared when the device leaves (corrected 2026-10-03 from "a pointer to the parent device object inside the bus, whose pipes it shares", as 26-A.7 implements it) |
 | Hub object | inside the bus, never a PDO | the root-hub FDO, when a hub enumerates (section 10) | - | its slot, its hub descriptor, its status-change pipe, its port objects |
 | Port object | inside the bus | the controller for a root port, a hub object for a hub port | - | the port shadow, the reset generation, the device attached, the hold state of 29-A.5 |
 | Device object (the bus's, not WDM's) | inside the bus | enumeration | - | one per addressed device, hub or not: slot id, speed, route string, TT fields, descriptors, the PDO(s) it is presented as |
@@ -274,6 +274,10 @@ Hub` in Device Manager, and the Power tab reports the budget the bus itself
 keeps (section 8). **Superseded 2026-10-04 by task 33.4 (section 10.11):**
 each hub the bus serves also has a PDO, bound to this driver as a hub FDO,
 and the devices behind it are its children; the bus still runs the hub.
+**And on 2026-10-10 by task 36.43 (section 10.12):** each composite device
+the bus splits has a composite-parent PDO under `XHCI98\COMPOSITE`, bound to
+this driver as a composite FDO - a fourth role - with its function PDOs as
+its children; the bus still splits, configures and routes.
 
 **The controller FDO's start and stop on an Intel 7-, 8- or 9-series PCH or
 C610/X99 also move the switchable connectors** (task 34.3, 2026-10-05): on
@@ -450,6 +454,39 @@ What is new has three layers, in this order from outermost to innermost:
    mark or copy the lists.
 3. **The controller lock**, innermost, as above.
 
+**Amended for `2.3.0.0` (roadmap-hcd 36.20).** Phase 36 adds, without
+changing the three layers:
+
+- **The event delivery** (design records 15 and 18). The ISR is one of
+  three ways the event ring is reached: the line interrupt
+  (`IoConnectInterrupt`, as above), a message interrupt on Vista and 7
+  (`IoConnectInterruptEx` on amd64, through the `xhcimsi.sys` helper on
+  x86; a message ISR of its own in `hcd_ctl.c`), or no interrupt at all
+  while the poller (`hcd_poll.c`'s timer and DPC) drains the ring. The
+  delivery is settled once per start. `PollLock`, a spin lock guarding the
+  poller's state, nests inside the controller lock: **the controller
+  lock, then `PollLock`, never the reverse**, neither held across a
+  drain, and `TimerLock` never taken with `PollLock` held (record 15
+  section 5.1). The line's retirement, when the watcher finds it dead,
+  runs under `KeSynchronizeExecution` (record 15 section 5).
+- **Selective suspend** (design record 14). Its per-device link machine
+  and each function PDO's power slot are under the controller lock
+  (record 14 section 4.1). The link machine's transitions are the enum
+  thread's alone; the one other writer is stage B's Function Wake
+  notification latch (`FwPending`, `FwPendingFar`), set from the event
+  DPC under the controller lock (`HcdSuspNotificationLocked`,
+  `XhciSuspFwReceive`; record 14 section 8.7);
+  `PdoListLock` before the controller lock where both are needed, the
+  cancel spin lock released before the controller lock is taken, as
+  above. The idle notification's callbacks run on a second system thread
+  per controller (record 14 section 6.1), one at a time, holding no bus
+  lock; the enum thread waits on it only through a bounded, deferring
+  rundown. No power or idle IRP is completed on the enum thread itself:
+  each goes to a work item (roadmap-hcd 36.35's fix).
+- **The door's descriptor reads** (36.45, section 8.11): a request pended
+  on the controller's door list under its cancel-safe rules and served by
+  the enum thread on the default endpoint.
+
 A function driver's IRP enters at the PDO at up to DISPATCH_LEVEL and touches
 the topology only through its own device object, whose lifetime 5.2 pins to
 the PDO's remove. It takes the controller lock to queue a transfer and nothing
@@ -511,6 +548,17 @@ later release therefore cannot change a default on a machine that already
 holds the old one. The gate's `VAL-*` rules hold all seven, flags included,
 and since task 34.3 an eighth, `XhciIntelPortSwitch`, under the same
 flag (at 1; at 0 since task 36.42).
+
+**Amended for `2.3.0.0` (roadmap-hcd 36.20).** The INFs write sixteen
+values under the same rule and flag: the eight above; `XhciTolerance`,
+`XhciIntervalCap` and `XhciAvgTrbEsit` (Phase 35, `2.2.0.0`);
+`XhciIntelIrqRoute` (36.3, at 1); `XhciMaxTransferKB` (36.22, at 1024);
+and `XhciInterruptMode`, `XhciPollIdleMs` and `XhciPollActiveMs` (36.8,
+at 0, 50 and 1; design record 15 section 3). Two more are read and
+written by no INF, so absent is their default: `XhciWideMap` (36.24,
+section 11.6; off when absent or 0, any other number on, owner 2026-10-10) and `XhciSelectiveSuspend`
+(36.33, design record 14 section 7; on only for a `REG_DWORD` of exactly 1). `txtsetup.oem` still
+writes none, so F6 Setup runs at the code defaults.
 
 The package is `xhci98-<version>.zip`, as the miniport's was - the published
 `releases\1.2.0.0` directory is never edited (`releases/README.md`) - staged by `make-package.ps1` from 26-A.1 and published by
@@ -1138,6 +1186,21 @@ target sends it; it does not mean the target's OS never does.
 | URB 0x2A | - | - | yes | yes | yes | yes | `hidusb` (`HumGetMsGenreDescriptor`) |
 | `usbd.sys` exports imported | `CreateConfigurationRequestEx`, `ParseConfigurationDescriptorEx`, `ParseDescriptors`, `GetUSBDIVersion` (ASIX) | same | same | first three | first three | first three | answered inside `usbd.sys`, never at the PDO |
 
+**The power rows since selective suspend (`2.3.0.0`, roadmap-hcd 36.28 to
+36.40, design record 14; amended in 36.20).** With `XhciSelectiveSuspend`
+0, the default, the PDO answers `QUERY_CAPABILITIES`, `WAIT_WAKE`,
+`SET_POWER` and `SUBMIT_IDLE_NOTIFICATION` as before: no D1/D2 and no wake
+in the capabilities, `WAIT_WAKE` refused, a D-IRP recorded and completed,
+the idle IRP held and its callback never called. With 1, an eligible
+non-hub device PDO (record 14 sections 5.1 and 8.2) reports D2, and
+where its configuration allows remote wake also D1 and wake from both
+(without it, D2 and no wake; record 14 sections 5.2 and 8.3); a Dx suspends
+the device's link once its last function leaves D0 and a D0 resumes it
+(record 14 sections 3 and 4); `WAIT_WAKE` arms the device (section 5);
+and the idle IRP's callback is called on the bus's own callback thread,
+in batches per composite device (section 6). Hub PDOs and composite-parent
+PDOs keep the switch-0 answers in either case.
+
 **Sent by no binary read on any target:** `GET_ROOTHUB_PDO`, `ENABLE_PORT`,
 `GET_HUB_COUNT`, `GET_HUB_NAME`, `GET_CONTROLLER_NAME`, `GET_BUSGUID_INFO`,
 `GET_PARENT_HUB_INFO`, `GET_DEVICE_HANDLE`, `GET_DEVICE_HANDLE_EX`,
@@ -1322,6 +1385,83 @@ At `XhciTolerance` `0` none of the above acts and every path is
 `2.1.1.0`'s (record 17 section 4.11). What each class driver then does is
 section 6.7's static reading; 35-V reads it at run time against the
 injected faults.
+
+### 6.9 An interface with more endpoint descriptors than bNumEndpoints (task 36.46, 2026-10-10)
+
+**The report** (GitHub issue 17 item 7, SweetLow, his `usbview` readings):
+a low-speed HID boot mouse, VID `073A` PID `2230`, `bcdUSB` 1.10,
+`bMaxPacketSize0` 8, one configuration of 41 bytes. Its interface 0 says
+`bNumEndpoints` 1 and carries two endpoint descriptors after its HID
+descriptor (9 + 9 + 9 + 7 + 7 = 41): `0x81` interrupt IN and `0x01`
+interrupt OUT, both 8 bytes at `bInterval` 10. Under the EHCI's companion
+stack it read Current Config Value 1 with one open pipe, `0x81`; under
+`xhci98` it read Current Config Value 0 and no open pipe: addressed (7) and
+described, never configured.
+
+**The one failure point**, found by running those exact bytes through every
+pure path as host vectors (`test_pipe` `test_walk_surplus`, `test_func`
+`test_ls_mouse_surplus`, `test_xfer` `test_build_ls_report_descriptor`):
+`XhciPipeFindInterface` refused the configuration as malformed when a
+second endpoint descriptor followed the one `bNumEndpoints` declared, so
+`hcdCfgSelect` answered `hidusb`'s SELECT_CONFIGURATION with
+`USBD_STATUS_INVALID_PARAMETER` before any Configure Endpoint or
+SET_CONFIGURATION, which is exactly the reading. The other paths take the
+device as Microsoft's stack does: enumeration reads the 9-byte head and the
+41 bytes without parsing them; one interface is never split (section 10.8),
+and as a composite's function the filtered descriptor (10.9) carries the
+interface's run, surplus included, to the same walk; the endpoint rules give
+the IN endpoint at Low Speed Interval 6 (`bInterval` 10 ms rounded down to
+8 ms, Table 6-12's FS/LS interrupt row), Max Packet Size 8, Max ESIT Payload
+8, CErr 3, and the plan adds DCI 3 alone; the never-opened OUT endpoint would
+be a legal Low-Speed interrupt OUT endpoint by the same rules (DCI 2,
+Interval 6); hidusbf's rewritten `bInterval` reaches the counted endpoint on
+both the whole-device and the function path (section 13.7); and the 239-byte
+report descriptor read over an 8-byte EP0 is one Data Stage TRB, or across
+a page a Data Stage TRB chained to a Normal TRB whose TD Size counts the
+8-byte packets left (14 then 0 for the tested 128/111-byte split), each
+with ISP set, the short-packet handling
+the control path already has.
+
+**The rule now.** An interface's endpoints are its first `bNumEndpoints`
+endpoint descriptors. Endpoint descriptors after those, up to the next
+interface descriptor, are surplus: counted (`EndpointSurplus`) and
+otherwise ignored, neither their numbers nor their DCIs checked, because
+nothing will be programmed from them. That is usbport's rule
+(`external/reactos/usbport/device.c`: `USBPORT_OpenInterface` opens
+`bNumEndpoints` pipes, taking the next endpoint descriptor for each, and
+`USBPORT_GetInterfaceLength` skips the rest to the next interface; reference
+source, not a disassembly), and the request a class driver sends is already
+sized by it, since `usbd.sys`'s `USBD_CreateConfigurationRequestEx` gives
+each interface `bNumEndpoints` pipe records; counting the surplus would have
+answered that request `USBD_STATUS_BUFFER_TOO_SMALL` instead. The class
+driver gets the same pipe set Microsoft's stack gave it. `xhciuas.sys`'s
+own walk (`UasParseConfig`, `src/uas/uas_iu.c`) keeps the same boundary:
+an endpoint past `bNumEndpoints`, and the companion and Pipe Usage
+descriptors after it, name no UAS pipe and make the setting no SuperSpeed
+one (`test_uas`).
+
+**What stays refused**, because usbport's tolerance there would program
+garbage or the walk could not be trusted: fewer endpoint descriptors than
+`bNumEndpoints` (usbport's walk would take the next interface's endpoints;
+this bus answers `INVALID_PARAMETER`), a `bNumEndpoints` above 30, a counted
+endpoint numbered 0 or repeating a DCI, and every structural length rule of
+the whole set - an endpoint descriptor shorter than 7 bytes refuses the
+configuration whether it is counted or surplus. No endpoint the xHC is
+given changes: the counted endpoints go through the endpoint rules
+unchanged.
+
+**The log.** A select that takes such an interface records, in every
+flavour, `cfg.ep.surplus.vidpid` (VID in the high half and PID in the low,
+as `dev.ss.vidpid` has them: `073A2230` for this mouse) and
+`cfg.ep.surplus` (slot, interface, alternate and the surplus count, one
+byte each), so an `XHCISNAP` report shows the tolerance taken - at
+`XhciLogVerbosity` 2 or above, where the note ring is on.
+
+**Owed.** QEMU cannot present this descriptor with its stock devices, so
+the legs are regression legs only (the QEMU mouse, tablet, keyboard and a
+stick on 98 SE and 7 x64); the device itself is a bench clause: the owner or
+SweetLow retests that mouse on `2.2.0.3`, expecting Current Config Value 1,
+one open pipe `0x81`, a moving pointer and the two log records.
 
 ## 7. The Windows 98 export evidence (task 25.3)
 
@@ -2035,7 +2175,7 @@ Root hub, NT paths - every NT target registers the same provider:
 |---|---|---|
 | 2000 SP4 `usb.inf` (5.00.2195.6717) | `[ROOTHUB2.AddReg.NT]` (for `USB\ROOT_HUB20`), `[StandardHub.AddReg.NT]` (`USB\ROOT_HUB`, `USB\CLASS_09`), `[Usb2Hub.AddReg.NT]` (`USB\HubClass`) | `HKR,,EnumPropPages32,,"usbui.dll,USBHubPropPageProvider"` |
 | XP SP3 `usbport.inf` (5.1.2600.5512) | `[ROOTHUB.AddReg.NT]` (`USB\ROOT_HUB` and `USB\ROOT_HUB20` both `=ROOTHUB.Dev`) | same |
-| XP SP3 `usb.inf` | `[StandardHub.AddReg.NT]` | same; `[Composite.DelReg.NT]` deletes `HKR,,EnumPropPages32` for composites |
+| XP SP3 `usb.inf` | `[StandardHub.AddReg.NT]` | same; `[Comp.DelReg.NT]` deletes `HKR,,EnumPropPages32` for composites |
 | XP x64 `usbport.inf` (5.2.3790.1830) | `[ROOTHUB.AddReg.NT]` | same |
 | Vista SP2 x86/x64 `usbport.inf` (6.0.6002.18005) | `[ROOTHUB.AddReg.NT]` | same; plus five `WMIInterface` lines in `[ROOTHUB.Dev.NT.WMI]` |
 | 7 SP1 x86/x64 `usbport.inf` (6.1.7601.17514) | `[ROOTHUB.AddReg.NT]` | same, plus `HKLM,System\CurrentControlSet\Services\usbhub,BootFlags,0x00010003,4`; `[ROOTHUB.Dev.NT]` also `AddPowerSetting=USBPowerSettings`; `.WMI` as Vista |
@@ -2049,7 +2189,7 @@ Root hub, 9x paths - the 16-bit `sysclass.dll` page:
 | NUSB 3.3 `USB2.INF` | `[ROOTHUB2]` `AddReg=Usb2Hub.AddReg` (`USB\ROOT_HUB20`), `[Usb2Hub.Dev]` (`USB\HubClass`) | `[Usb2Hub.AddReg]` `HKR,,DevLoader,,*NTKERN` / `HKR,,NTMPDriver,,usbhub20.sys` / `HKR,,EnumPropPages,,"sysclass.dll,USBHubPropPage"` |
 | NUSB 3.6 `USB2.INF` | same sections | the same three lines (81-84) |
 | NUSB 3.6 `USB.INF` | `[HUB.AddReg]`, the power section | `HKR,,NTMPDriver,,usbhub.sys`; `HKR,,EnumPropPages,,"sysclass.dll,USBHubPropPage"` (line 542) |
-| SweetLow `USB2.INF` | `[ROOTHUB2]` / `[Usb2Hub.Dev]` | the same three lines (76-79); `[Composite.DelReg]` deletes `HKR,,EnumPropPages` |
+| SweetLow `USB2.INF` | `[ROOTHUB2]` / `[Usb2Hub.Dev]` | the same three lines (76-79); `[Comp.DelReg]` deletes `HKR,,EnumPropPages` |
 
 Controller, as the OS INFs write it:
 
@@ -2203,7 +2343,7 @@ creates its PDOs.
 | Device Manager's view by connection on 98 and NT: that it uses only `CM_Get_Child` / `Sibling` is expected, not read. | 26-A.8 (or a guest reading in 26-V.1 / 26-V.2) |
 | A sweep of each target's whole `%windir%\inf` (and NUSB's and SweetLow's full file sets) for any row matching `XHCI98\ROOT_HUB`: impossible by construction, unchecked. | 26-A.4 |
 | **External hubs inside the bus against `DeviceIsHub`.** `usbui.dll` recurses into a connection with `DeviceIsHub` TRUE through `GET_NODE_CONNECTION_NAME` and `CreateFile("\\.\" + name)`. With no hub devnode the HCD either reports the devices behind a hub flat under the root hub's ports, or answers `DeviceIsHub` and serves a per-hub node through the root-hub interface link plus a suffix (`FileObject->FileName`). A design decision. **Closed 2026-10-04 by task 33.4 (10.11)**: each hub is a devnode with a door of its own, `DeviceIsHub` TRUE and its name returned | 26-A.8; 33.4 |
-| **Split composite devices**: `usbui.dll` maps a connection to one devnode through `GET_NODE_CONNECTION_DRIVERKEY_NAME`. With the bus splitting a composite into per-function PDOs there is no single connection devnode; which key to return (the first function's, or a failure) and what `usbui` then shows is unread. | 26-A.8, with 26-A.7 |
+| **Split composite devices**: `usbui.dll` maps a connection to one devnode through `GET_NODE_CONNECTION_DRIVERKEY_NAME`. With the bus splitting a composite into per-function PDOs there is no single connection devnode; which key to return (the first function's, or a failure) and what `usbui` then shows is unread. **Closed 2026-10-10 by task 36.43 (10.12)**: every split device has a composite-parent devnode, and the connection's driver key is the parent's | 26-A.8, with 26-A.7; 36.43 |
 | How Windows 98's engine treats a root-hub section whose `NTMPDriver` is the already-loaded controller driver, and NTKERN calling `AddDevice` a second time on that driver object (98's own `usbhub.sys` serves several devnodes, so it is expected to work). | 26-V.0 / 26-V.1 (a guest reading) |
 | The `ControllerFlavor` to report on Vista and 7 (1000 or above for USB 2.0 arithmetic; nothing in WDK 7.1 names xHCI). What usbport reported for the miniport was not read. | 26-A.8 |
 | Hub WMI on Vista and 7 (`GUID_USB_WMI_DEVICE_PERF_INFO`, `_HUB_DIAGNOSTICS`, the `_STD_DATA` notifications), and what `EnumerateHubPorts` does when the performance query fails. The popups (over-current, not enough power) are WMI-driven and belong to neither tab. | 26-A.8 (and 28-A.1 for Vista and 7) |
@@ -2217,7 +2357,10 @@ creates its PDOs.
 WDK 7.1 `usbiodef.h`) is registered on every device PDO and every external
 hub's PDO, as usbhub registers it, and not on the root hub, on which usbport
 registers none (`hcd_door.c`, `HcdDoorDeviceStart` and `HcdDoorDeviceStop`).
-A composite the bus splits has no parent devnode, so the interface goes on
+**Superseded 2026-10-10 by task 36.43 (10.12): the interface is on the
+composite parent's PDO, the device's own devnode, and on no function; the
+rest of this paragraph is the rule it replaced.** A composite the bus
+splits has no parent devnode, so the interface goes on
 one function's PDO: the function that owns the device's first interface,
 the group's first PDO, the one the door already answers the connection's
 driver key from (the split-composite row above), never a hard-coded
@@ -2234,6 +2377,249 @@ deletion after a disable, an orphan's deletion and Windows 98's deferred
 one, the parent's release), not left to `IoDeleteDevice`. Best effort, as
 the hub interface is: a failed registration is a missing interface, not a
 failed device.
+
+### 8.11 Descriptors the cache cannot answer (task 36.45)
+
+**What is asked (owner, 2026-10-10; GitHub issue 17 item 8).** Until this
+task `IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION` (`0x220410`) was answered
+from the descriptors the bus read at enumeration - the device descriptor and
+configuration 0 - and refused everything else `STATUS_NOT_SUPPORTED`, so no
+tool saw a string: usbview's Manufacturer, Product, Serial and interface
+strings stayed empty where Microsoft's hubs fill them. Now a request the cache
+cannot answer goes to the device as a real `GET_DESCRIPTOR` on its default
+endpoint, as usbhub sends it, and the bytes come back in the request's `Data`.
+
+**What usbhub does with it** (static, `legal-provenance.md` section 4, "How
+usbhub answers `0x220410`"; XP SP3 `usbhub.sys` with its PDB, 2000 SP4
+`USBHUB20.SYS` instruction for instruction the same, 98 SE `usbhub.sys`, 7
+SP1 x86 `usbhub.sys` with its PDB):
+
+| | XP SP3, 2000 SP4, 98 SE | 7 SP1 |
+|---|---|---|
+| Output shorter than the 12-byte request | `STATUS_BUFFER_TOO_SMALL` (input length never checked) | `STATUS_NO_SUCH_DEVICE`: its parameter check (input below 4, output below 13, the port) fails into that one status |
+| `wLength` above output - 12 | `STATUS_BUFFER_TOO_SMALL` | the same |
+| Port 0 or past the hub's ports, or no device on it | `STATUS_INVALID_PARAMETER` (98 SE: success, nothing returned) | `STATUS_NO_SUCH_DEVICE`; no device: success, nothing returned |
+| `bmRequest`, `bRequest` | carried in a reserved URB field and ignored: URB function `GET_DESCRIPTOR_FROM_DEVICE` (0x0B), so the bus sends 80h, 06h | forced to 80h and 06h, written back into the caller's buffer |
+| `wValue`, `wIndex` | passed through (`wIndex` as the language id) | passed through |
+| Cache | only `wValue` 0200h with `wLength` 9 (the Power tab's request) | none while the device is addressed; device and configuration descriptor only while it is not, anything else then `STATUS_UNSUCCESSFUL` |
+| Transfer | `wLength` bytes, to the child PDO, synchronous, cancelled after 5 s | the setup's own `wLength`, buffer room `OutLen - 12`, a 2 s timeout, to the bus with the device handle |
+| Device state | nothing checked: an unenumerated or suspended device is sent the request | a handle only in the addressed state; a suspended child is neither checked nor woken |
+| Status | the bus's, unmapped | the bus's, unmapped |
+| `Information` | 12 + bytes received, even on failure | 12 + bytes received on success only |
+
+**The HCD's answer.**
+
+1. **Checks** (`XhciHubDescPlan`, `xhci_hub.c`, host vectors in `test_hub`):
+   an input or output shorter than 12 bytes, or a `wLength` above
+   `OutputBufferLength - 12`, is `STATUS_BUFFER_TOO_SMALL`; a port outside
+   the node, or no device on it, `STATUS_INVALID_PARAMETER`, as XP's and
+   2000's hubs and as this door already answered. The input check is kept
+   where usbhub has none: `METHOD_BUFFERED` leaves the system buffer past
+   the input length unwritten. `bmRequest` and `bRequest` are ignored, as
+   both hub generations ignore them: the request is always `GET_DESCRIPTOR`
+   (80h, 06h). The value 0 every `usbui.dll` sends (8.3) therefore needs no
+   special case, and nothing the caller sent is rewritten.
+2. **The cache stays first, unchanged**: `wValue` 0100h (the device
+   descriptor) and 0200h (configuration 0) are answered from the bus's copy,
+   with task 34.2's Power-tab rewrite for request code 0. That is a superset
+   of XP's one cached request and what Windows 7 answers for a device it
+   cannot address; the bytes are the device's own either way, and the Power
+   tab and usbview's tree refresh send no EP0 traffic.
+3. **Everything else is forwarded**: any string (index 0, the language list,
+   included, with `wIndex` as the language id), another configuration
+   index, the BOS, and any other type. The setup is 80h, 06h, `wValue`,
+   `wIndex`, and `min(wLength, 4096)`: 4096 is the bus's EP0 scratch
+   (`HCD_SCRATCH_CONTROL_BYTES`). A request above it asks the device for
+   4096 bytes, so only a descriptor longer than 4096 bytes - none of the
+   kinds usbview reads in practice; configuration 0, the one that grows, is
+   cached whole - reads short. `wLength` 0 is sent as a transfer with no
+   data stage. `Information` is 12 plus the bytes received, on success
+   only.
+
+**IRQL and the path.** The IOCTL arrives at PASSIVE_LEVEL from user mode,
+inside the root-hub or hub FDO's I/O count. The transfer is not issued there:
+EP0 transfers the bus makes for itself (enumeration, the serial read,
+SET_CONFIGURATION, SET_INTERFACE, CLEAR_FEATURE for a client) are the
+controller thread's alone (`HcdThreadControlOutcome`), because the thread owns
+the scratch buffer and the device's EP0 pause. So the door **pends the IRP**,
+in section 5.4's lock order:
+
+1. Under `PdoListLock`, the PDO standing for the connection is found (the
+   match `hcdDoorConnection` makes) and, while that listed PDO still names
+   it, its device record is referenced - as a URB's dispatch references it
+   (`hcdDeviceRef`), not through a referenced PDO, whose `Device` could
+   change once the lock is dropped. A root port whose hub has no PDO
+   references the port's record under the controller lock instead, unless
+   it is `Gone`.
+2. Under the controller lock: the queue must be open and the record not
+   `Gone`, else the reference is given back and the request refused. In the
+   same hold the record goes in `DriverContext[0]` and the door FDO's I/O
+   count and its event in `[1]` and `[2]` (the dispatch's own node
+   description is not kept), the FDO's count is raised once more, the IRP is
+   marked pending, its cancel routine armed, and it is listed on the
+   controller's `DoorIrps`.
+3. The thread is woken. The dispatch returns `STATUS_PENDING` without
+   completing the IRP.
+
+The thread serves the list in its powered pass after the slow IRPs
+(`HcdCfgService`), in order, at most four a pass and none begun once 250 ms
+of the pass have gone, the controller's state looked at again before each
+(a single request is bounded by its own wait, below); a pass that leaves any
+wakes the thread again. Each IRP is completed from the thread when its
+transfer completes, then the device reference and last the FDO's count are
+given back. Completion and cancellation run at any IRQL up to
+DISPATCH_LEVEL.
+
+**Serialization with the function driver.** The forwarded request goes
+through the thread's own EP0 path, not a client's queue:
+`HcdThreadControlOutcome` pauses the EP0 pipe (client URBs wait at its gate),
+lets the client transfers already on the ring finish and recovers a STALL
+among them, then sends its own transfer and resumes the pipe. It never shares
+the ring with a client transfer, and it runs in sequence with everything else
+the thread does to the device - RESET_PORT, a select, a cycle - so a request
+can neither race nor land inside one. The function driver's bulk, interrupt
+and isochronous pipes are not touched; its own EP0 requests wait at the gate
+for the length of one transfer.
+
+**Timeout, cancellation and surprise removal.**
+- *Timeout:* the thread path's own bound, 5 s to quiet EP0 and 5 s for the
+  transfer (`HCD_TRANSFER_WAIT_MS`), usbhub's 5 s on XP. A client transfer
+  that keeps EP0 busy past its bound fails the request (`NOT_SENT`, nothing
+  sent, no recovery). A transfer the device never ends is **withdrawn**,
+  as usbhub's cancel leaves the device alone, rather than meeting the rule
+  of the thread's other transfers, which recover the controller because the
+  scratch may still be written (design record 07): an arbitrary descriptor
+  reaches firmware paths enumeration never does, and a diagnostic tool
+  should not drop every device on the controller. The withdrawal spares the
+  other devices when the device has no TT and every step succeeds; a device
+  behind a TT, and a withdrawal that fails, still cost the controller
+  recovery (below). The door's transfer
+  (`HcdThreadControlDoor`) differs from the others only at its deadline,
+  where `hcdEp0Withdraw` - EP0 still paused, so no client transfer is
+  behind it - stops EP0 (Stop Endpoint); if EP0 then reads Stopped and the
+  thread's record is the only one queued, the record leaves the engine's
+  queue and the dequeue moves to the enqueue position (Set TR Dequeue). A
+  stopped TD is not processed again (xHCI 4.6.9), so the scratch is free,
+  and the device drops the unfinished control transfer at the next SETUP.
+  A Stop Endpoint's own Transfer Event completes nothing (`hcd_dev.c`), so
+  a completion seen after the stop is the device's and is answered as one.
+  **A device behind a TT (a Full- or Low-Speed device behind a High-Speed
+  hub, `TtSlot` set) is not withdrawn**: its stopped split transaction may
+  hold the hub's TT buffer, and clearing it (`HcdHubClearTt`) is a second
+  device's EP0 transfer whose failure the helper only counts, so there is
+  no checked way to finish the withdrawal - such a device keeps the
+  controller recovery. Any step that fails - a command, EP0 Halted or in
+  Error, another record queued - falls back to the controller recovery too,
+  EP0 still paused and the scratch not reused, the rule as before. Under
+  XhciTolerance a cycle mark ends the wait as for any thread transfer
+  (35-T.3/4).
+- *How long a taken request is not cancellable:* no single deadline covers
+  it, and none is claimed. It is the sum of the thread path's separate
+  waits, each bounded on its own and each ending in the bus's existing
+  handling when it runs out: quieting EP0 (5 s for client transfers to
+  finish, plus whatever an EP0 halt found there costs to recover - its
+  commands and, behind a TT, the TT clear - which runs before that
+  deadline is next looked at), the transfer (5 s), and at the deadline the
+  withdrawal's two commands. Every command waits up to
+  `HCD_COMMAND_WAIT_MS` (5 s) for admission and again for its completion,
+  and a command that does not complete is the command engine's to recover
+  (the controller recovery). So a healthy device answers in milliseconds,
+  a hung one costs tens of seconds of the thread under the power gate, and
+  nothing is unbounded. Time spent queued is not counted; a queued request
+  stays cancellable.
+- *Cancellation:* while queued the IRP is cancellable (the cancel-safe queue
+  pattern of `hcd_io.c`'s waiting list: the thread takes an IRP only once it
+  has cleared its cancel routine, a routine already running takes the IRP
+  itself, counted in `CancelsRunning`), and completes `STATUS_CANCELLED`.
+  Once the thread has taken it, it is not cancellable: the transfer is
+  bounded as above. A handle's `IRP_MJ_CLEANUP` on the root-hub or a hub
+  FDO cancels the requests still queued through that handle (matched by
+  file object, claimed by the same handshake), leaving other handles'
+  alone, as the cleanup contract asks. It first marks the file object
+  (`FsContext2`, the target driver's field) under the controller lock, the
+  lock the pend's admission holds, so a request of that handle still in
+  dispatch on another processor is refused `STATUS_CANCELLED` instead of
+  being queued after the cleanup.
+- *Surprise removal and unplug:* a device leaving marks its record `Gone`
+  and drains it (`HcdIoDeviceDrain`), which now also completes its queued
+  door IRPs `STATUS_DEVICE_NOT_CONNECTED` (`HcdDoorFlushDevice`) - before
+  the pinned-buffer check, since a queued door IRP holds no DMA - so the
+  thread's wait for the record's references never waits on an IRP only the
+  thread completes. A transfer in flight ends with the device's
+  disconnection (a transaction error) and is answered with that status. An
+  FDO's REMOVE waits for its pended requests through its I/O count; a hub
+  FDO's STOP or surprise removal closes its door (`DoorOpen`) to new ones.
+- *The controller:* a pass that cannot serve - the controller not powered
+  (D3, or suspended in D0), halted, failed or with the scratch tainted -
+  completes every queued door IRP at once (`STATUS_DEVICE_NOT_READY`) rather
+  than holding a diagnostic request across a power transition or a
+  recovery; a pass with the scratch held for a cycle leaves them for the
+  next. **The queue's rundown** is the thread's last act before it signals
+  its exit and before any controller resource goes: under the controller
+  lock the queue is closed (the door queues nothing on a closed queue) and
+  the IRPs whose cancel routines it can clear are unlinked; the lock is
+  released, those IRPs are completed, and it then waits, outside every
+  lock, until the list is empty and `CancelsRunning` is 0 -
+  a cancel routine the close could not pre-empt unlinks its IRP itself and
+  may still be completing it, and it raises that count before it releases
+  the cancel lock and drops it as its very last access to the controller.
+  This holds whether or not the device records could be freed (a pinned
+  common buffer keeps them, `HcdIoDeviceDrain`), so it does not rest on the
+  device's free waiting the count out.
+
+**Statuses.** A transfer that completes: `STATUS_SUCCESS`. A STALL or
+another device error: `STATUS_UNSUCCESSFUL` (the URB status's NTSTATUS
+through `XhciPipeNtStatus`, as a client URB reads). Not sent within the
+bound, withdrawn at its deadline, or abandoned for a cycle:
+`STATUS_CANCELLED`, what usbhub's timeout cancel returns. Device gone:
+`STATUS_DEVICE_NOT_CONNECTED`. A queue that is closed, or a pass that
+cannot serve: `STATUS_DEVICE_NOT_READY`. A forwarded request that fails
+leaves the log note `door.desc.fail` (the thread outcome, `HCD_CTL_*`, in
+the top byte, `wValue` in the low word), and a withdrawal
+`door.ep0.withdrawn` (the slot); the counts `DoorForwarded`,
+`DoorForwardFailed` and `DoorWithdrawn` are kept in the controller
+extension, outside the counter block.
+
+**Devices not addressed, being reset, suspended.** The door forwards only
+for a device with a PDO (enumerated, addressed and published), or a hub the
+bus serves with none (the device record, 8.3's fallback); an empty port, a
+device still enumerating or one whose enumeration failed is refused as
+before, `STATUS_INVALID_PARAMETER`. A device being reset (RESET_PORT) or
+cycled is served after the reset, in the thread's order, or finds its
+record `Gone`. **A device the bus has suspended is refused, not woken**
+(`STATUS_UNSUCCESSFUL`, Windows 7's answer for a device it holds no handle
+for; neither hub generation wakes a child for this IOCTL): waking would
+spend the device's idle for a diagnostic read, and would have to drive the
+link machine's resume (record 14 section 3.6) from outside the function's
+power policy. With `XhciSelectiveSuspend` 0, the default, no device is ever
+suspended. Since the merge with stage A (integration branch `p36-int3`)
+the door's service tests the device's link state before the transfer
+(`hcdDoorServeOne`, `HcdSuspDoorServes`, the pure `XhciSuspDoorServes`
+with its vector in `test_susp`) and refuses anything but ACTIVE - a
+suspending, resuming or recovering link as well as a suspended one - with
+the log note `door.desc.suspended` (the link state); record 14 section 3.3 defers the
+thread's other device-side EP0 requests, and a diagnostic read is refused
+instead of deferred so a tool is not left waiting for a wake.
+
+**Windows 98 and ME.** The same code serves both: `usbui.dll` and
+`sysclass.dll` send only the cached configuration request (8.3), and a tool
+on 9x - SweetLow's usbview opens `\\.\HCD<n>` and the hub names - waits for
+a pended IRP as NT does (`DeviceIoControl` without overlap blocks until it
+completes). Nothing here is version-gated.
+
+**The composite parent (task 36.43, branch `p36-comp`).** The door resolves
+a connection to the PDO standing for it (`hcdDoorConnection`) and forwards
+to that PDO's device record, the USB device and not a function. Whichever
+PDO 36.43 makes the connection's - the composite parent's in place of the
+group's first function - names the same record, so the forwarding does not
+change, and the cache's configuration copy stays the device's whole one.
+
+**No strings cached at enumeration.** The bus reads only the serial string
+(33.2), for instance ids, and keeps the characters, not the descriptor. Reading
+iManufacturer, iProduct and the interface strings at every enumeration would
+add EP0 requests to every device's enumeration - the step where a device is
+least tolerant - for a diagnostic view, and XP's and 2000's hubs read none
+there either. Every string goes to the device when it is asked for.
 
 ## 9. The harness and the gates (task 25.5)
 
@@ -2500,7 +2886,10 @@ The owner's decision (section 4; the roadmap's decisions table, "Hub class
 and composite splitting") is that external hubs are **objects of the bus,
 not PDOs**, and that a composite device is **split by the bus into
 per-function PDOs**; there is no INF binding path for an external hub or a
-composite parent. This section is the design that follows: the hub class the
+composite parent. (Since `2.1.0.0` each external hub is also a devnode
+under a project-owned id, 10.11, and since task 36.43 each split composite
+device has a composite-parent devnode the same way, 10.12; neither binds
+an OS hub or composite driver.) This section is the design that follows: the hub class the
 bus speaks itself, the topology and removal it owns, and the ids, grouping
 and routing of the function PDOs it creates. It is consumed by 26-A.4 (ids),
 26-A.7 (composite splitting) and 27-A.1 to 27-A.3 (the hub class, topology
@@ -2625,7 +3014,11 @@ change (xHCI 5.4.8, p.371).
    behind a TT, software shall issue a ClearFeature(CLEAR_TT_BUFFER) request
    to TT in the HS hub").
 
-**Suspend and resume**, the minimum (selective suspend is not on the roadmap):
+**Suspend and resume**, the minimum (selective suspend was not on the
+roadmap when this was written; since `2.3.0.0` it is, off by default,
+design record 14, and its suspend and resume sequences at a root port and
+a USB 2.0 hub port, sections 3.4 to 3.6, apply the timings below; amended
+in 36.20):
 resume is signalled for at least 20 ms (`TDRSMDN`), and the xHC answers a
 device-initiated resume within 1 ms (`TURSM`), both quoted by xHCI p.256 from
 USB 2.0 7.1.7.7; after a port reports suspended (`PLS` = 3), wait at least 10
@@ -2660,7 +3053,12 @@ encoding, `C_PORT_LINK_STATE` on a host-directed U3 exit and `PORT_ENABLE`
 staying set in U3 were read from USB 3.2 r1.1 10.16.2.6 and 10.16.2.10
 (review of the merge, printed pp.446-454); no QEMU model has a SuperSpeed
 hub, so `test_sshub`'s `test_resume` vectors are the only evidence until
-the bench (30-E.1).
+the bench (30-E.1). Since roadmap-hcd 36.38 (selective suspend's stage B,
+design record 14 section 8.6), a device that selective suspend holds is the
+exception: with `XhciSelectiveSuspend` 1 its port's U3 is the machine's,
+neither `Resume` nor `Resumed` is acted on by the look, and a finished U3
+exit is handed to the machine as evidence; with the switch at 0 no device
+is held and this paragraph is unchanged.
 
 ### 10.3 The hub inside the bus
 
@@ -2894,7 +3292,9 @@ case-insensitive matching above, and the form most INF lines use.
 | `BusQueryCompatibleIDs` | `USB\Class_cc&SubClass_ss&Prot_pp`, `USB\Class_cc&SubClass_ss`, `USB\Class_cc`: from the interface when `bDeviceClass` is 0 and the configuration has exactly one interface, from the device descriptor otherwise - so a multi-interface device the bus does not split (10.8) reports its own triple, `00/00/00` when its class is 0, never its first interface's, which would bind a class driver to the whole device (corrected 2026-10-03 by 26-A.7 from "from the interface when `bDeviceClass` is 0"; Windows 2000's `usbaudio.sys` bound to a whole composite device bugchecks, guest leg c14, `runs/run-26.md`). Whether to add the `USB\DevClass_cc...` forms XP's `usbhub.sys` carries templates for (and Vista's and 7's `USB\DevClass_00&SubClass_00&Prot_00`) is open (10.9); no stock INF in the table above matches a `DevClass` id |
 | `BusQueryInstanceID` | the serial id when the device has a usable one that no present PDO of the same VID and PID carries already, with `UniqueID` TRUE in its capabilities: the NT instance path `USB\VID_0781&PID_5567\4C530001230920108174` (what Windows 98 SE and ME make of it is for task 33.2's guest legs to read); else the location key in decimal, `UniqueID` FALSE - root port 3 is `3`, and behind hubs the Route String sits above the port (`XhciHubInstanceKey`, route `0x31` over port 2 is `12546`). The rule is "Instance ids from the serial number" below (task 33.2; until `2.1.0.0` every device had the location form) |
 
-**A function PDO** (one per function of a split device):
+**A function PDO** (one per function of a split device; since task 36.43 a
+child of the device's composite-parent PDO, whose own ids are section
+10.12's; the function's ids below are unchanged by it):
 
 | Query | Strings, in order |
 |---|---|
@@ -3104,6 +3504,10 @@ parent driver: `usbhub.sys` on 98 SE and 2000, `usbccgp.sys` from XP on and on
 98 SE under NUSB 3.6 or SweetLow. Under the HCD the bus is the composite
 parent, so the id would bring one of those back on top of an already-split
 device, against the "no INF binding path for a composite parent" decision.
+**Amended 2026-10-10 (task 36.43, section 10.12):** the bus does now present
+a parent for every device it splits, under the project-owned
+`XHCI98\COMPOSITE`, bound by this package's own INFs to `xhci98.sys` -
+still never `USB\COMPOSITE`, for the reason above.
 Also never emitted: `USB\ROOT_HUB` and `USB\ROOT_HUB20` (the root hub is
 `XHCI98\ROOT_HUB`, section 8.6, and the INF gate's `HCD-ROOTHUB` refuses
 them), and `USB\CLASS_09*`, because a hub is never a PDO. `USB\MS_COMP_*` is
@@ -3137,7 +3541,10 @@ exists (`HcdCfgParentConfigure`): SET_CONFIGURATION with its one
 configuration, every interface at alternate 0, no endpoint open;
 `RESET_PORT` replays it. A function's `SELECT_CONFIGURATION` never sends
 SET_CONFIGURATION (10.9). A device the bus does not split is left Addressed
-for its function driver to configure.
+for its function driver to configure. **Since task 36.43 (10.12)** a split
+device is presented as a composite-parent PDO under `XHCI98\COMPOSITE` with
+its function PDOs beneath it, the parent first on the group's chain; when
+and how the bus splits is unchanged.
 
 **Grouping**, in this order, over the configuration's interfaces (alternate 0
 entries only); the functions are listed in the order of their first
@@ -3205,7 +3612,10 @@ interfaces' descriptors:
 
 The device - its slot, EP0, its endpoint contexts and its configuration -
 belongs to one bus-internal device record; each function PDO holds a pointer
-to it and the list of interface numbers it owns. Microsoft's parent has the
+to it and the list of interface numbers it owns. Since task 36.43 the
+functions are the children of a composite-parent devnode (10.12), which is
+presentation only: it is never on the data path, answers no internal IOCTL,
+and every row below is unchanged by it. Microsoft's parent has the
 same shape going by its public symbol names alone
 (`DispatchPdoUrbSelectConfiguration`, `DispatchPdoUrbGetDescriptorFromDevice`,
 `BuildFunctionConfigurationDescriptor`, `ParentSelectConfiguration`,
@@ -3225,7 +3635,7 @@ same shape going by its public symbol names alone
 | `IOCTL_INTERNAL_USB_CYCLE_PORT` | the whole device leaves and re-enumerates: every function PDO reported missing and recreated. The siblings share a group serial and leave together; the port re-enumerates only once the last of the group is deleted |
 | `IRP_MN_REMOVE_DEVICE` on a function PDO | only this function's requests are cancelled (EP0's included); then the thread closes its pipes, drops its endpoints and returns its interfaces to alternate 0 (`HcdCfgReleaseFunction`), so a removed audio function holds no periodic bandwidth; the siblings keep theirs (round 19, finding 4). The device record stays until the slot goes (5.2) |
 | `IOCTL_INTERNAL_USB_GET_PORT_STATUS`, `QUERY_INTERFACE` (`USB_BUS_INTERFACE_USBDI`) | the device's answers, identical for every function (section 6; 26-A.6) |
-| power | a function's D-state is its own; the device stays D0 while any function is D0 (selective suspend is outside the roadmap, 28.3) |
+| power | a function's D-state is its own; the device stays D0 while any function is D0 (selective suspend is outside the roadmap, 28.3). **Amended 2026-10-10 (36.43, 10.12):** the device's link follows its composite parent's children, the function PDOs; the parent PDO is not a voter, and under record 14's stage A it is excluded as a hub PDO is. **Amended 2026-10-10 (36.20):** "outside the roadmap" no longer holds - selective suspend ships in `2.3.0.0` behind `XhciSelectiveSuspend`, off by default (record 14 section 7); at 0 this row stands as written, and at 1 the device's link is suspended once its last function leaves D0 (record 14 section 4.3) |
 
 **A function's polling interval is the caller's** (2026-10-05, whole-branch
 review of `2.1.0.0`, area B, incidental 2). A function's
@@ -3514,8 +3924,11 @@ like the root hub FDO's, with `BusRelations` answered as above and
 `SURPRISE_REMOVAL` or `REMOVE` closes before going down, so no open handle
 keeps the PDO's `Busy` raised while its quiesce waits (round 1, finding 2);
 a `REMOVE` that only tears down the
-door and itself - it never detaches the bus. Power is passed down; the hub
-PDO answers it as a device PDO does. A hub PDO answers no internal IOCTL
+door and itself - it never detaches the bus. Power: the hub FDO is its
+stack's system-power policy owner, D3 on a sleep and D0 on the wake, and
+records and reports its device states (10.12, "Power", which this code
+shares since task 36.43's follow-up); the hub PDO answers power as a device
+PDO does. A hub PDO answers no internal IOCTL
 (the bus owns the hub; nothing above the hub FDO sends URBs).
 
 **The door on a hub FDO** (section 8's table, per hub): at its start
@@ -3561,6 +3974,417 @@ instance handling of a device re-parented under a hub; the 98 and ME
 "found new hardware" behaviour for the new devnode (read on the guests);
 what each page sends a non-root hub. The guest legs of 33.4 read them.
 
+### 10.12 Composite devices as devnodes (task 36.43, 2026-10-10)
+
+**The decision.** The owner, 2026-10-10, after SweetLow's comment on GitHub
+issue 17 ("You loose 1:1 mapping between devices on USB port of the HUB and
+devices in Device Manager as children of USB Hub"): every composite device
+the bus splits (10.8) gets a **composite-parent devnode** of its own, with
+its function PDOs as that devnode's children, so one hub port maps to one
+devnode, as on every Microsoft stack, where the composite device's own PDO
+carries `USB\COMPOSITE` and `usbccgp.sys` (or Windows 98's `usbhub.sys`)
+presents the functions beneath it. **The pattern is 10.11's**: the parent's
+PDO is presented under a project-owned id, `XHCI98\COMPOSITE`, bound by this
+package's own INFs to `xhci98.sys`, which attaches a **composite FDO** over
+it - this driver's fourth PnP role. **Still no binding of `usbccgp.sys` or of
+Windows 98's composite parent**, and the bus still splits, configures and
+routes exactly as 10.8 and 10.9 say; only the PnP presentation changes, as
+it did for hubs. This supersedes, wherever this record says it, "a
+composite device gets no PDO of its own" and "the bus never emits a parent"
+(5.2's object table, 10's introduction, 10.7's last paragraph, 10.9's power
+row, 8.10's split-composite row and its USB-device-interface paragraph), and
+the decisions table's "no INF binding path for ... a composite parent"
+(roadmap-hcd.md, amended the same day). Written before the code, on branch
+`p36-comp`.
+
+**What it buys, and what it costs.** One devnode per port in Device
+Manager's view by connection, `usbview` and the Power tab; one driver key
+for `GET_NODE_CONNECTION_DRIVERKEY_NAME` (closing 8.10's row); the USB
+device interface of task 36.17 on the device rather than on one function;
+a device-level devnode to disable, and where record 14's composite rule is
+stated. The cost: every composite device is one devnode more, installed
+from this package's INF once per device instance - with nothing to answer on
+Windows 98 SE and 2000, as the hubs were (10.11), but **with Windows XP's
+Found New Hardware wizard and unsigned-driver warning for each new
+composite device**, as each new hub brings there; and an update from
+`2.2.0.0` re-detects each composite device once (below). The release notes
+say both.
+
+**Object model.**
+
+| Object | Kind | Created by | Parent in the PnP tree | Carries |
+|---|---|---|---|---|
+| Composite-parent PDO | an `HCD_DEVICE_PDO` with `Composite` set | the controller thread, in `HcdDevicePdoCreate`, for every device `XhciFuncSplit` splits, with its function PDOs | the hub PDO the device is presented under, or the root hub (`ParentSerial`, 10.11) - the place a device PDO would have | the whole configuration descriptor, the device's ids under `XHCI98\COMPOSITE`, its instance id, text and capabilities (below); the group's serial (`Group` = its own `Serial`) |
+| Composite FDO | `HCD_KIND_COMPOSITE_FDO` over the parent PDO, the hub FDO's extension and code (`hcd_hubfdo.c`) | `AddDevice`, for a PDO of this driver's with `Composite` set | - | `BusRelations` of the functions; no door |
+| Function PDO | unchanged (`Function` set, 10.7 to 10.9) | the thread, with the parent | the composite parent: `ParentSerial` is the parent PDO's `Serial` | unchanged; `Group` is the parent's `Serial` |
+
+The group is the parent and its functions, in that order on the `Sibling`
+chain (`dev->Pdo` names the parent): created before any is listed, listed
+in one hold of `PdoListLock` and announced by one invalidation of the
+parent's own parent, as 26-A.7's group was; a failure to create any of them
+fails all of them, as before. A device the bus does not split is unchanged:
+one device PDO, no parent. QEMU's `usb-audio`, one audio function (10.8's
+legacy rule groups its AudioControl and AudioStreaming interfaces), is a
+composite: one parent with one function beneath it, as `usbccgp` presents
+the same device.
+
+**Ids** (project-owned; `XhciFuncParentId`, `xhci_func.c`, host vectors in
+`test_func`):
+
+| Query | Composite-parent PDO |
+|---|---|
+| `BusQueryDeviceID` | `XHCI98\COMPOSITE&VID_vvvv&PID_pppp` |
+| `BusQueryHardwareIDs` | `XHCI98\COMPOSITE&VID_vvvv&PID_pppp&REV_rrrr`, `XHCI98\COMPOSITE&VID_vvvv&PID_pppp`, `XHCI98\COMPOSITE` |
+| `BusQueryCompatibleIDs` | none |
+| `BusQueryInstanceID` | any PDO's rule (`hcdInstanceQueryId`, 33.2): the device's serial id when it has a usable one, `UniqueID` TRUE, else the location key in decimal, `UniqueID` FALSE - what the device would answer were it not split |
+| Device text | its `iProduct` (33.6, read once per enumeration and kept like any PDO's), else `USB Composite Device`, the name Microsoft's own INFs give the parent; the INF's model text replaces it once installed. Each PDO's strings are picked by its own function (`pdo->Func`, none for the parent), never by its place on the chain, which the parent now heads |
+
+Never `USB\COMPOSITE` (it would bring `usbccgp.sys` or Windows 98's
+`usbhub.sys` onto an already split device, 10.7), never `USB\VID_&PID_`
+(a vendor INF that lists the whole device would then bind a driver over the
+parent, above functions it cannot reach), never a `USB\Class_` id. So a
+vendor INF written for the whole device still matches nothing here, as
+before 36.43: under Microsoft's stack such an INF outranks `usbccgp`'s
+compatible-id match and takes the device whole; under this bus the device
+is always split. Recorded, not changed. The function PDOs' ids are 10.7's,
+unchanged - the device id `USB\VID_vvvv&PID_pppp&MI_nn`, the instance id
+the serial id and `&nn` or the location key and `nn` - so the class INFs
+bind them as before.
+
+**Capabilities.** The parent: `Removable` TRUE, `UniqueID` as its instance
+id, `Address` and `UINumber` its port on the parent it is presented under
+(`XhciHubPdoAddress`, as a device PDO's), and **`SurpriseRemovalOK` TRUE**,
+as a function and a hub answer it, so the XP-onward hot-plug applet lists
+no composite device, as before 36.43 (orchestrator decision, owner to
+confirm: `FALSE` would list every composite device - a keyboard with media
+keys, a headset - for safe removal, a change of what users see; the parent's
+devnode can still be disabled). D-states as a device PDO's. The functions:
+unchanged (`SurpriseRemovalOK` TRUE, `Address` the device's port, so a
+tool that asks a hub door for a function's `Address` still finds the
+device there).
+
+**The composite FDO** (`hcd_hubfdo.c`, the hub FDO's code with the role
+told apart by its kind): `AddDevice` for a parent PDO; `START` passed down
+first, then the in-place re-presentation below, then the settle generation
+of 5.7 asked, so its first `BusRelations` answer waits for both;
+`BusRelations` answered by `HcdDevicePdoRelations(hc, old, parent's
+Serial)`, as a hub FDO's; `REMOVE` lets go of the children PnP has removed
+(`HcdDevicePdoLetGo`, 10.11 item 4) and detaches; `STOP`,
+`SURPRISE_REMOVAL` and the queries passed down. Power: the system-power
+policy of "Power" below, shared with the hub FDO, and nothing requested in
+S0 (record 14). **No door**: no
+`\DosDevices\` name, no interface, `IRP_MJ_CREATE` and
+`IRP_MJ_DEVICE_CONTROL` refused `STATUS_NOT_SUPPORTED` - a composite device
+is a connection of its hub, which the hub's door already serves.
+
+**The parent PDO** answers PnP as a device PDO does (the lifecycle of 5.2
+and `hcd_pdo.c`, the dormant path, `START`'s refusal once gone) and **no
+internal IOCTL** (`STATUS_NOT_SUPPORTED`, as a hub PDO): nothing above the
+composite FDO sends a URB, and it answers no `USB_BUS_INTERFACE_USBDI`
+query. Its `START` feeds the port's machine `PDO_STARTED` (5.3), as a device
+PDO's does; the functions' starts feed it too, as before, and a second one
+in `Bound` is ignored.
+
+**URB routing** (10.9): unchanged. A function PDO's internal IOCTLs reach the
+device record directly, as before; the parent is never on the data path,
+which is what makes the change presentation only. PnP removes a parent's
+children before it, so no function sends a URB once its parent is gone.
+`RESET_PORT` from a function resets the whole device and keeps every
+sibling's pipe handles, as before, the parent untouched. `CYCLE_PORT` from a
+function, and a `RESET_PORT` that failed, take the whole group - the parent
+with its functions - away (`HcdEnumCycle` on the group's serial, which is
+now the parent's), and the device re-enumerates once the group has been
+reported missing, as before.
+
+**Relations and lifetime: 10.11's rules, with "hub PDO" read as "parent
+PDO"** - a hub's or a composite's (`HcdPdoIsParent`). The ancestor rule
+(`hcdAncestorGoneLocked`), invalidation of a started parent
+(`hcdInvalidateFor`), the dormant tier rule and the let-go rule each find a
+parent by its `Serial` whether it is a hub or a composite. In particular:
+
+1. **The device leaves** (unplug, hub teardown, controller stop): the group
+   is unlisted in one hold (`HcdDevicePdoGone`); the parent's own parent's
+   next answer omits the parent, and the same answer's sweep marks the
+   functions missing by the ancestor rule, so the port's wait on the group
+   ends with that one answer. NT surprise-removes the parent's subtree and
+   removes it leaf first; Windows 98 removes it.
+2. **A function disabled** in Device Manager: unchanged (a `REMOVE` while
+   listed; the PDO kept; its endpoints and alternates released, 10.9).
+3. **The parent disabled** (NT): PnP removes the functions, then the
+   composite FDO, then sends the parent PDO its `REMOVE` (listed, so kept:
+   the WDM rule). The FDO's `REMOVE` lets go of the functions
+   (`ParentLetGo`), since PnP forgets their devnodes with the parent's
+   (10.11 item 4); the device stays configured with no client. Each
+   function's own `REMOVE` **queued** the release of its endpoints and
+   alternates (`HcdCfgReleaseFunction` records `FuncRelease`; the thread
+   runs it, retrying a refused one a bounded number of times, 10.9), and
+   the release-before-reconfigure order `HcdCfgService` keeps puts that
+   release ahead of any later select of the same interfaces. **The enable
+   re-presents the functions in place**: the parent PDO's `START` makes it
+   PnP's again, and the composite FDO's `START` asks the thread
+   (`HcdEnumRepresent`, by port and group serial, so a request that outlives
+   its device does nothing) to build, for each let-go function, a new
+   function PDO from the device record's configuration - the same function,
+   ids, text, serial id, instance key, `Address`, transport and parent -
+   swap it into the group's chain, list it, and unlist the old one, which
+   is missing at once and, its `REMOVE` already seen, goes to `RemovedPdos`
+   (`HcdDevicePdoRepresentFunctions`). The next relations answer, of any
+   parent, deletes it while it builds its list - before PnP receives that
+   answer, which may be the first to carry its successor - so PnP never
+   meets two objects at one instance id, and finds the id it had on the
+   new one: the functions come back as the devnodes they were, with no
+   wizard. No re-enumeration and no reconfiguration: the device is never
+   reset, and each new function selects its configuration as any class
+   driver does. **Not the hub's cycle**: cycling the port, as a hub FDO's
+   start does for its children, would take the parent itself - which PnP
+   has just started - away and back.
+   **The request's life.** Posted before the FDO's start asks its settle
+   generation (5.7), it is taken by the thread's next pass, which reads
+   that generation first, so a pass that can settle it has already
+   re-presented; the settle may still have ended early (no wait configured,
+   or its deadline), so the thread also **invalidates the parent** once
+   it has listed a replacement, and PnP asks the composite FDO again
+   whenever that comes. A device no longer the group's when the pass runs
+   drops the request. A replacement that cannot be built (no pool, an
+   `IoCreateDevice` failure) leaves its function let go and absent - traced,
+   not retried - until the next start of a composite FDO on that parent (a
+   disable and enable) or the device's next plug; the others are
+   re-presented regardless. On Windows 98 SE and ME a disable may `STOP`
+   rather than remove, as for a hub; then nothing is let go and nothing
+   changes (read on the guests).
+4. **A composite behind a hub whose devnode is disabled**: the hub FDO's
+   `REMOVE` lets go of the parent (its direct child) and the composite FDO's
+   `REMOVE`, which PnP sends as part of the same subtree, lets go of the
+   functions; the hub FDO's next `START` cycles the parent's port
+   (`HcdDevicePdoRepresent`, 10.11 item 4), and the whole device comes back
+   as a new group under the same instance ids.
+5. **Windows 98 SE and ME's dormant path** (33.1, 10.11 item 6): the group,
+   parent included, is kept dormant whole when PnP has stopped every PDO of
+   it; a function the user disabled (removed while listed) is kept with its
+   group, as behind a hub, because its parent is the composite parent, not
+   the root hub; the parent disabled under the root hub is not kept, as a
+   lone device there is not. The sameness test compares the chains
+   position by position; a function's `ParentSerial` is not compared,
+   since it names the old parent, which revives with its `Serial`
+   unchanged, so the revived functions name the revived parent. A dormant
+   group retired whole - by a dormant PDO's `REMOVE` or its `START`'s wait
+   (`hcdDormantRemoved`, `hcdDormantWait`), which a function can be the one
+   to receive - invalidates the parent its **first PDO** is presented under
+   (`hcdGroupParentLocked`), never the function's own `ParentSerial`, which
+   names the composite parent just retired with it: behind a present hub
+   only that hub's answer reports the parent missing and ends its port's
+   wait.
+6. **The controller's stop and removal**: unchanged
+   (`HcdDevicePdoReleaseAll`); a composite FDO reaches the controller only
+   through its PDO's `Controller` inside the PDO's `Busy`, the hub FDO's
+   guard.
+
+**Serial ids** (33.2): a serial id is held by a **group's first PDO** - a
+lone device PDO, a hub PDO, or a composite parent - and the duplicate and
+dormant tests compare first PDOs only (`hcdSerialTakenLocked`): a
+function's `ParentSerial` names its own parent, a new one each plug, so
+comparing it would take every quickly moved composite device for a
+duplicate under "another parent". Functions carry the parent's serial id
+with `&nn` and lose it with the parent when it is a duplicate, as before.
+
+**The door** (section 8): a connection's devnode is the group's first PDO
+(`hcdDoorConnection`), which is now the parent. So
+`GET_NODE_CONNECTION_DRIVERKEY_NAME` returns the **parent's** driver key -
+the one devnode `usbui.dll` and `usbview` map the port to, closing 8.10's
+split-composite row; `GET_NODE_CONNECTION_INFORMATION`, its `_EX` and
+`_EX_V2` forms and the descriptor requests answer for the device, as
+before; `GET_NODE_CONNECTION_NAME` answers the empty name and
+`DeviceIsHub` FALSE, a composite not being a hub. A parent with no driver
+yet has no driver key, and the request fails as for any driverless device.
+
+**The USB device interface** (task 36.17, 8.10): `GUID_DEVINTERFACE_USB_DEVICE`
+moves to the **parent**, the device's own devnode, as `usbhub` registers it
+on the composite device's PDO, and no function carries it
+(`HcdDoorDeviceStart` refuses every function PDO). The owner's 2026-10-09
+rule for the split device - the interface on the function that owns the
+first interface, following that function's state - is superseded: the
+interface follows the parent's state, so disabling one function no longer
+takes it away, and disabling the parent does.
+
+**Power.** Without selective suspend (record 14's switch at 0, the default,
+and every build before stage A) nothing changes in S0: the parent PDO
+records a D-IRP and completes it, as a device PDO does, and the composite
+FDO requests nothing in S0, as the hub FDO does, so the parent's devnode
+stays D0 while its functions' class drivers move their own PDOs; the
+device's link is never suspended. (System power, which both FDOs do
+handle, is the last paragraph of this part.) **With stage A (record 14), the
+parent is the device's power object and the last-Dx rule is stated over
+its children:** the device's link follows the parent's children - the
+function PDOs - and leaves D0 only when the last of them has (record 14
+section 4.3, unchanged in substance); the parent itself is **not a voter**:
+it is excluded from stage A as a hub PDO is (record 14 section 5.1) - no
+D1/D2 or wake in its capabilities, `WAIT_WAKE` refused, a D-IRP recorded
+and completed at once, and an idle notification never reaching stage A at
+all, since the parent refuses every internal IOCTL `STATUS_NOT_SUPPORTED`
+(above; nothing above its FDO sends one) - so its own D0, which no
+client ever moves, can never hold the device up. The composite readiness of
+the idle batches (record 14 section 6.2, "as the composite parent does")
+stays the bus's, over the same children.
+
+**The parent stays D0 in S0 while stage A suspends its device (owner
+decision, 2026-10-10, accepting Codex's assessment of `2d0de39`).** The
+composite FDO requests no D-IRP for the parent in S0; the parent's devnode
+therefore reads D0 in Vista's and 7's power data while its device is
+suspended, and `XHCISNAP`'s link state is the reading. The question put to
+Codex was whether the parent should mirror its device (Dx once every
+function is Dx, D0 before a function's D0). Its findings: Microsoft's
+`usbccgp` does request D2 for its own parent stack once its functions have
+idled (static disassembly of XP 5.1.2600.5585, Vista 6.0.6000.16386 and 7
+6.1.7601.17514 - `ParentIdleNotificationCallback`, the parent `WAIT_WAKE`,
+and 7's `ParentSetD0` before a function's D0), but the general WDM
+parent/child rule is an ordering constraint, not an equality one: children
+stop depending on a parent before it powers down, and the parent is
+available before they resume; all children at Dx permits a parent's idle
+and does not compel it. Here the parent is a presentation object with no
+data path: it is not a voter (`hcdSuspRead`, `hcdSuspSiblingD0`,
+`hcdSuspIdleBatchLocked`, `hcdSuspPdoEligible` all pass it by), so its D0
+cannot hold the link up; a function's D0 waits for an ACTIVE link and an
+available controller (`XhciSuspAdmit`), which is the ordering that matters
+physically; a function's `WAIT_WAKE` ends at the HCD's own function PDO and
+never travels through the composite FDO; and wake is S0-only (record 14
+sections 1, 5.2 to 5.4), so mirroring would add no S3/S4 wake either.
+Mirroring would instead need one coordinated owner for parent D-IRPs
+against function transitions, link failures, controller power epochs and
+removal, `PoRequestPowerIrp` from contexts where its completion could
+depend on the enum thread or `PowerGate`, and the 9x costs (the
+same-state request that never delivers, PASSIVE_LEVEL only) - a second
+asynchronous transition for no capability stage A needs. No P1 or P2 was
+found in the parent staying D0; the two P3s are the next paragraph.
+Revisit if xhci98 ever idles a hub or the controller (record 14 excludes
+both): under Microsoft's stack a D0 composite stack would hold its hub up.
+
+**System power: each parent FDO is its stack's policy owner (2026-10-10,
+the two P3s of that assessment).** The hub FDO and the composite FDO
+(`hcd_hubfdo.c`, shared) used to pass every power IRP down untouched,
+recording nothing, and a parent PDO's `START` reported no initial D0
+(`HcdSuspPdoReopen` reports only a stage A PDO) - against the
+`PoSetPowerState` contract, which wants the initial D0 and every actual
+transition reported per device object; and the parent PDO's capabilities
+map every sleeping state to D3 (`hcdDeviceCapabilities`) while nothing in
+its stack ever asked for D3. Now: a system `SET_POWER` goes down first; on
+its way back up the FDO records the system state and requests, with
+`PoRequestPowerIrp` on its PDO, the device state the capabilities give -
+D3 for every sleeping state (hibernate and shutdown included), D0 for S0 -
+and completes the system IRP only from that request's callback; a device
+`SET_POWER` is recorded and reported (`PoSetPowerState`), a lower state
+before it goes down and D0 once it has come back up; `START` records D0
+and reports it, at the FDO and (inside `HcdSuspPdoReopen`'s report mutex,
+the switch at 0 too) at a hub's or a composite's PDO. The decision is the
+pure `XhciSuspParentWant` (`xhci_susp.c`; `test_susp`): no request after a
+failed system IRP or before a start; on 98 and ME none for the state the
+stack already has, while on NT that state is requested again, as WDM asks
+of a policy owner (an S0 reasserted after a sleep that failed; Codex
+review, round 1, P3 1). **Why the stack follows the capabilities and not
+the reverse:** the existing D3 mapping is the conservative one - a
+suspended USB device keeps no working state across a sleep, whether or not
+its port keeps VBUS (it may in S1 and S3) - and it is what `usbhub`
+reports for every hub and device on every target; changing the logical
+parents' capabilities (to D0, which claims the device stays working, or to
+unspecified, which marks the sleep state unsupported) would be a separate
+design choice that fixes nothing (round 1, P3 2). Implementing the
+mapping's policy owner is the WDM standard sequence, the one a
+hub driver runs (`usbhub` imports `PoRequestPowerIrp` on 98 SE, Appendix A
+row 53) and this driver's controller FDO already runs on every target
+(`hcd_power.c`), at one request per system transition. **Order:** on NT
+the power manager sends a sleep's system IRPs to children before their
+parent and a wake's to the parent first; holding the system IRP until the
+device IRP is done puts the parent's D3 after its children's system IRPs
+and its D0 before theirs. On 98 and ME the configuration manager's order
+is not read here and need not be: both parents' device states are logical
+- the bus serves a hub, and a composite's functions, whatever their
+parent PDO's D-state, and the physical order is kept at the controller
+(`PowerGate`, `hcd_power.c`) and at the link (`XhciSuspAdmit`). **The 9x
+rules** (win98-wdm.md, "Power Management"): no request for the present
+state there (the pure decision, told 9x by `IoIsWdmVersionAvailable(1,
+0x10)` as elsewhere in this driver), `PoSetPowerState`'s return never used, and the
+system IRP completed at PASSIVE_LEVEL - from the callback when it runs
+there, which it does under this driver's own PDO (every power IRP of a
+parent completed inline), else from a work item. The system IRP and a D0
+keep the FDO's I/O count until they complete, so a `REMOVE` waits for
+them. A failed request completes the system IRP with the stack's state
+unchanged (nothing physical waits on it). Not changed: the root-hub FDO
+(`hcd_rh.c`, `HcdRootHubFdoPower`), which passes power down the same way
+under the same D3 capabilities - left for its own task.
+
+**What stage A's code needs** (branch `p36-susp`, not edited
+here; the exact list is in the 36.43 report and the roadmap line): its
+chain walks that read the slots or form a batch (`hcdSuspRead`,
+`hcdSuspSiblingD0`, `hcdSuspIdleBatchLocked`) skip a `Composite` PDO; its
+eligibility tests (`hcdSuspPdoEligible`, `hcdSuspPdoWasEligible`) refuse
+one as they refuse a hub; its chain-length cap counts functions only (a
+parent makes a chain one longer than `XHCI_FUNC_MAX`); and a function PDO
+swapped out by the in-place re-presentation (item 3 above) has already had
+its teardown, so it needs no settlement there, but the swap runs on the
+thread under `PdoListLock` like the unlink, and a stage-A build calls the
+same unlink settlement on it to keep "a PDO off a chain is settled" true.
+Record 14's sections 4.3, 5.1 and 6.2 then say "function PDOs under the
+composite parent" where they say "function PDOs of the group".
+
+**Behind an external hub**: the parent is presented under the hub's PDO,
+as a device PDO there would be, and the functions under the parent: a
+two-level ancestor rule, which the sweep already repeats until nothing
+moves. The hub's door answers the parent at the device's port.
+
+**`XHCISNAP` and the counters.** Two counters, appended to the counter block
+(`XHCIHC_COUNTERS`, after the event-delivery words; `XHCISNAP` prints them
+by index until its name table catches up, as it does the event-delivery
+words): `CompositeParents`, parent PDOs created, and
+`CompositeRepresented`, function PDOs re-presented in place; and the same
+two in the stop's counter lines, `composite.parents` and
+`composite.represented`. The trace names each parent's port and function
+count at creation, and each re-presentation's port and count.
+
+**The INFs and the gates.** Each models section of both files carries one
+more model, `%CompositeDesc%` (`xHCI98 USB Composite Device`) under
+`XHCI98\COMPOSITE`, installed by `Comp.Dev` (98/ME: `DevLoader=*NTKERN`,
+`NTMPDriver=xhci98.sys`), `Comp.Dev.NTx86` / `.NTamd64` and
+`Comp.Dev6.*` (the service; a `DelReg` of `EnumPropPages32`, as XP's
+own `usb.inf` writes for its composite parent). **A composite section copies
+nothing**, for the hub's reason: the devnode exists only under a running
+`xhci98.sys`, and a device plugged in long after the install must not send
+the setup engine looking for the original media. And it registers **no
+property page** (no hub Power tab: a composite is not a hub). The INF gate
+holds all of it (`HCD-COMP`: the model in every models section, its id under
+`XHCI98\`, no `USB\COMPOSITE` on any line; `HCD-HUBCOPY` widened to the
+composite install; `HCD-COMPPAGE`: no `EnumPropPages`/`EnumPropPages32`
+written by a composite section), with self-tests; the footprints are
+re-emitted. **Text-mode Setup** (5.6): both `txtsetup.oem` files map
+`XHCI98\COMPOSITE` to `xhci98` beside the hub ids - without it a composite
+keyboard's functions would never appear under F6, the parent having no
+driver there - and `OEM-IDS` already holds the file to the INF's model ids.
+
+**Updating from `2.2.0.0`** (and from `2.1.0.0`). Each composite device
+re-detects once: its parent is a new devnode everywhere, installed from
+this package's INF (on XP with the wizard and the warning, above). Its
+functions on NT: a function with a serial id keeps its devnode (its
+instance path is unchanged and `UniqueID` TRUE, so PnP moves it under the
+new parent); a function on the location form is a new devnode once, since
+NT prefixes a `UniqueID` FALSE instance id with its parent's
+`ParentIdPrefix` and its parent changed - re-installed silently from the
+same class INF where that INF is signed, otherwise as its own driver
+installs. On Windows 98 SE and ME the configuration manager uses the
+instance id as given (unread for a re-parented devnode, as 10.11 left it);
+the guest legs read whether the functions keep their devnodes there. The
+old function devnodes stay behind as non-present devnodes on NT, as any
+re-identified device's do. The release notes say: composite devices are
+detected again once after the update, and work after it.
+
+**What 36.43 leaves open**: the hot-plug applet with a parent answering
+`SurpriseRemovalOK` FALSE (not taken); Windows 98's and ME's handling of the
+functions' devnodes when they gain a parent, and what a disable of the
+parent sends there; hidusbf's `Setup.exe` on a composite mouse, which looks
+for the hub door through the device's parent (10.11, "Address") and now
+meets the composite parent first - unread, and under Microsoft's stack it
+meets `usbccgp`'s devnode the same way; and every reading on a real
+multi-function device (QEMU has no keyboard-and-mouse composite; its
+`usb-audio` is a parent with one function), which needs a passthrough
+device or the bench. The guest legs of 36.43 read what QEMU can show.
+
 ## 11. The transfer-buffer policy (task 25.7)
 
 The roadmap put the question as direct DMA from the URB's MDL against bounce
@@ -3592,9 +4416,11 @@ table slots and the import gate is what proves it did.
 Windows 98's adapter fills those slots was not read.
 
 The adapter is 32-bit on both architectures. `Dma32BitAddresses` and never
-`Dma64BitAddresses`, so every address the table hands back is below 4 GB and
-every hardware address field keeps its high half at zero, as `AGENTS.md`
-requires; on an amd64 machine with memory above 4 GB the map registers are
+`Dma64BitAddresses`, so every hardware address field keeps its high half at
+zero, as `AGENTS.md` requires. The adapter does not guarantee that every
+address `MapTransfer` returns is below 4 GB: with a NULL map register base a
+page above 4 GB comes back as it is (11.6.1). The HCD refuses such a run
+(`hcdMapExecute`, `HighPart` not 0) rather than program it; on an amd64 machine with memory above 4 GB the map registers are
 real and the HAL places the data below the line, which is what 11.3 relies
 on.
 
@@ -3742,8 +4568,10 @@ Task 36.22 changes only the first.
   existing tools write - through `RtlQueryRegistryValues` with a routine
   that records the type and length (`uas_fdo.c`, `uasReadLimit`). The rule
   is pure (`UasDeviceLimit`, `uas_iu.c`, `test_uas`): taken only as a
-  four-byte `REG_DWORD` inside KB 2581464's range, 65535 to 2097120, and
-  only when the bus answered the question; then it replaces the bus's
+  four-byte `REG_DWORD` from 65535 to 2097152 - KB 2581464's range, 65535
+  to 2097120, with its top widened to 2097152, which Uwe Sieber's tool and
+  others write for 2 MiB (owner, 2026-10-10) - and only when the bus
+  answered the question; then it replaces the bus's
   answer, above it or below it, for every device with that `idVendor` and
   `idProduct` - the key is per model, machine-wide, not per physical
   drive, on any controller - and the controller's `XhciMaxTransferKB`
@@ -3753,15 +4581,15 @@ Task 36.22 changes only the first.
   the **nearest 4 KiB, ties up**: the contract's grid (64 KiB to 2 MiB in
   4 KiB steps) is what the bus's answer obeys and what the descriptor's
   `MaximumPhysicalPages` (bytes / page + 1) is built for. Nearest moves a
-  value least - never more than 2048 bytes, a tie going up - and takes the
-  range's two ends, 65535 and 2097120, Microsoft's spellings of 64 KiB and
-  2 MiB, to exactly those (rounding down would make 2097120 into 2 MiB less
-  4 KiB). It is a normalisation onto the grid, not a byte ceiling: the size
+  value least - never more than 2048 bytes, a tie going up - and takes
+  65535 and 2097120, Microsoft's spellings of 64 KiB and 2 MiB, and the
+  tools' 2097152 to exactly those (rounding down would make 2097120 into
+  2 MiB less 4 KiB). It is a normalisation onto the grid, not a byte ceiling: the size
   taken can exceed the value by up to 2048 bytes. The bridge caps in use
   (64 KiB, 120 KiB = 240 sectors, 512 KiB, 1 MiB) are on the grid and do
-  not move. 2097152 itself is outside KB 2581464's range and is refused,
-  though some tools write it for 2 MiB (the release notes say so). The
-  note in the device's hardware key gains
+  not move. (Until 2026-10-10 the range stopped at 2097120 and refused
+  2097152; the owner widened it so a tool's 2 MiB is taken as written.)
+  The note in the device's hardware key gains
   `XhciUasDeviceLimit` (the value read, 0 when absent or not four bytes)
   and `XhciUasDeviceLimitWhy` (0 absent, 1 used, 2 not a `REG_DWORD`, 3 out
   of range, 4 valid but the bus did not answer), and
@@ -3863,10 +4691,13 @@ text answers all three: stage 2 never asks for more registers than stage
    eligible record asks the pump for exactly what stage 1 asks: today's
    first chunk (`hcdPlanChunk`, at most 32 pages). Inside that request's
    execution routine (`hcdMapExecute`) the record is **promoted** to a
-   whole-URB mapping only when both hold:
+   whole-URB mapping only when all three hold:
    - the HAL handed this request no map registers - `MapRegisterBase` is
      NULL, which is how a HAL says the adapter's transfers need no
-     translation and `MapTransfer` returns the pages' own addresses; and
+     translation and `MapTransfer` returns the pages' own addresses;
+   - the adapter's grant at this start (`hc->MapRegisters`, from
+     `IoGetDmaAdapter`) is exactly `0x80001`, the value every HAL read in
+     11.6.1 reports for a register-free adapter of this description; and
    - promotion is **enabled**, and the controller's **register-free
      check** passed at this start (both below).
 
@@ -3886,8 +4717,20 @@ text answers all three: stage 2 never asks for more registers than stage
    at stage 1 (round 3, finding 1: never ask for a whole URB to find out
    whether it is safe).
 
-   **Promotion is off by default, and stays off until the HAL readings
-   are recorded.** `MapTransfer`'s documented contract
+   **Promotion is off by default (owner, 2026-10-10, for `2.2.0.3` and
+   `2.3.0.0`); `XhciWideMap` 1 opts in.** It was off until the HAL
+   readings were recorded and briefly on by default after them (11.6.1's
+   verdict); the owner turned the default back off after a focused Codex
+   review (session `01a124ef-74e0-73f1-a0b3-5c6f8e74e569`,
+   `.claude/codex-widemap-default-q1-result.txt` in the main checkout):
+   a regression is unlikely but unquantified - the HALs after the read
+   service packs are unread, and the gates (a NULL base, the grant
+   `0x80001`) are correlated outputs of one adapter implementation, not
+   independent proofs - the failure mode would be silent data corruption,
+   and the review found no defect in the gate code. Every gate below is
+   kept as it is; only the absent-value default changed. Eligibility
+   covers every qualifying bulk OUT transfer; bulk IN only on a stream
+   (point 1), so it is not UAS-only. `MapTransfer`'s documented contract
    (`PMAP_TRANSFER`, wdm.h) bounds a mapping by the registers the request
    was given ("the number of map registers that can be set up cannot
    exceed the maximum returned"), and says nothing of a NULL base; mapping
@@ -3905,18 +4748,30 @@ text answers all three: stage 2 never asks for more registers than stage
      register and does not consult the request's count, over any MDL,
      either direction and any span the contract allows. It is task 36.24's
      evidence step, done before the switch below may default on, and
-     recorded in this section as a table of HAL builds;
-   - until then promotion is reachable only through a switch,
-     `XhciWideMap` (a `DWORD` in the controller's key, default 0 = off,
-     read at start; not written by the INFs), so the code, its host
-     vectors and its legs exist and a reader can try it on a machine of
-     their own, and nothing changes for anyone who does not set it. With
-     it off every URB is sequential, exactly stage 1;
+     recorded in this section as a table of HAL builds (11.6.1,
+     2026-10-10: on every target HAL a NULL base is pure pass-through,
+     and every HAL or verifier that has real registers hands over a
+     non-NULL base; the default's scope is 11.6.1's verdict);
+   - the switch is `XhciWideMap`, a `DWORD` in the controller's key, read
+     at every start and not written by the INFs: absent or of another
+     type it is off (`HCD_WIDE_MAP_DEFAULT`, `hcd.h`, the one constant that
+     sets the default; owner, 2026-10-10), 0 is off and any other number
+     on. With it off every URB is sequential, exactly stage 1; the release
+     notes give 1 as the way in. On, the gates above still decide each start and each
+     URB: Windows 2000 or later, the adapter's grant exactly `0x80001`
+     (kept apart from the qemu flavour's constrained grant,
+     `hc->MapGrantRaw`), the register-free check below passed, the pool
+     allocated, and a NULL base for the URB's first request. The reading
+     covers the service packs in 11.6.1's table; HAL hotfixes after them
+     were not read, and those runtime gates are what stands for them.
+     Under Driver Verifier's DMA checks the base is never NULL (11.6.1),
+     so nothing is promoted there;
    - with the switch on, the start-time **register-free check** runs as a
      regression check, never as the capability detector: at the
      controller's start, on NT only (98 and ME never send a URB that
      would be promoted, so promotion stays off there whatever the switch
-     says), the HCD maps one 16-page non-paged buffer of its own twice
+     says), and only when the grant is `0x80001` (anything else leaves
+     promotion off without mapping anything; `xfer.wide.check` 8), the HCD maps one 16-page non-paged buffer of its own twice
      through the pump - by a 1-register request whose routine, handed a
      NULL base, maps all 16 pages, and by an ordinary 16-register request
      - and the two lists must name the same addresses and lengths element
@@ -3932,13 +4787,13 @@ text answers all three: stage 2 never asks for more registers than stage
    the controller at its start from non-paged pool (NT only, only with
    `XhciWideMap` on and the register-free check passed) and freed at its
    stop, each sized
-   for the contract's largest command whatever the value in effect: a list
-   of 513 elements (24 bytes each on both architectures, enforced in
-   `xhci_usbport.h`; 12,328 bytes with the x86 list header, 12,344 on
-   amd64), the second TD's `XHCI_TRANSFER`, two 31-element per-TD lists
-   (760 and 776 bytes each) and the entry's own fields - about 14 KiB an
-   entry and about 113 KiB for eight, the exact figure a `sizeof` that
-   `hcd.h` asserts below a stated bound. If the allocation fails the pool
+   for the contract's largest command whatever the value in effect: a
+   plain array of 513 elements (24 bytes each on both architectures,
+   enforced in `xhci_usbport.h`: 12,312 bytes), the second TD's
+   `XHCI_TRANSFER` and its 31-element list (the first TD's is the record's
+   own, which holds 32), and the entry's own fields - about 13 KiB an entry
+   and about 104 KiB for eight, `HCD_WIDE_ENTRY`'s `sizeof` asserted in
+   `hcd.h` at most 14 KiB. If the allocation fails the pool
    is empty and every URB is sequential. An entry is claimed under the
    controller lock when an eligible record is filled and returned at its
    finalization (point 6), or when its first mapping does not promote; the
@@ -4120,7 +4975,9 @@ text answers all three: stage 2 never asks for more registers than stage
      pipelined fourth with two TDs fit the ring together, round 3, finding
      4), with a vector that aborts exactly that.
 7. **Telemetry.** The 202-word HCD header is kept as it is; new counters
-   are appended after it (words 202 on), never inside `XHCI_XSTAT`, whose
+   are appended after it - after the two words task 36.9 takes (202 and
+   203): their count at word 204 and the 24 counters from 205
+   (`XHCI_XPIPE_STATS`, `xhci_xpipe.h`) - never inside `XHCI_XSTAT`, whose
    serialized form is followed by fixed-offset UAS records (old readers
    hard-code word 110): pipelined URBs (those that had two TDs outstanding
    at once, counted when the second is published), early ends with a
@@ -4195,13 +5052,563 @@ on the first with the second queued, its removal and the length the URB
 reports, and the cancel walk taking three one-TD records and a two-TD
 record together. `test_ring`: two 31-TRB TDs filling a 64-TRB ring exactly, and the
 wrap between them across repeated refills. `test_snap`: the header's new
-words appended after word 202 with the old offsets unchanged, and an older
+words appended after word 203 with the old offsets unchanged, and an older
 `XHCISNAP` reading a newer snapshot, as 36.21 did. The hand-off to the
 cancel service, the doorbell gates and the sibling-recovery interleaving
 are driver paths no pure suite reaches; they are 36.26's legs with the
 qemu bulk faults (`XhciQemuInject` 14 to 17 hex: a lost completion, a stop, an error
 and a short, aimed at a pipelined URB's first TD, with a sibling
 stream's cancel made to run first).
+
+#### 11.6.1 The HAL reading (task 36.24's evidence step, 2026-10-10)
+
+Point 2 keeps promotion off until each NT target's HAL has been read. This
+is that reading. **Method: static, a disassembly reading.** Every fact here
+was read from a shipped binary with `kd.exe -z` (WDK 7.1 `Debuggers`; it
+maps the image and executes none of it), with Microsoft's public symbol
+files where they exist. The Windows 2000 SP4 HALs have none (their
+`.dbg` files are not on the symbol server), so they were read from
+their exported names. None of this was observed at runtime, apart from
+the one corroboration marked as such. The listings stay in git-ignored
+`out\p36-hal\` on development host A and are not tracked. The binaries are
+in git-ignored `tools\hal-extracted\` and are identified in the table at
+the end of this section. `docs/contributing/legal-provenance.md` section 4
+carries the row.
+
+**What the HCD asks for.** `HcdDmaOpen` (`hcd_dma.c`) passes
+`IoGetDmaAdapter` a `DEVICE_DESCRIPTION` with `Version` 0, `Master`,
+`ScatterGather` and `Dma32BitAddresses` set, `Dma64BitAddresses` clear,
+`InterfaceType` `PCIBus` and `MaximumLength` `0xFFFFFFFF`. The
+description is the same on x86 and amd64. All addresses below are kd
+addresses. Every x86 HAL maps at `0x80010000` and the XP x64 HAL at
+`0x80010000`. kd placed Vista x64's at `0x7FF3C220000` and 7 x64's at
+`0x7FF346C0000`. An RVA is the address less the base.
+
+**The NULL-base path is the same everywhere.** In all 24 HAL files read
+(22 distinct images; `hal.dll` is `halmacpi.dll` on Vista and 7 x86), the three routines a promoted URB depends on behave the same way
+when `MapRegisterBase` is NULL:
+
+- **`MapTransfer` passes the address through.** `IoMapTransfer` tests
+  the base first and sends a non-NULL base to `HalpMapTransfer`. With a
+  NULL base it returns the MDL page's physical address plus the byte
+  offset as a full 64-bit value. The page is
+  `Mdl->PageFrames[(CurrentVa - Mdl->StartVa) >> 12]`.
+  - It extends the run while the next frame is the previous one plus
+    one, while the run stays shorter than `*Length`, and only within
+    the same 2^20-page (4 GB) region. It never merges across a 4 GB
+    line.
+  - It writes `*Length` only when the run is shorter than asked.
+  - It reads no adapter field and keeps no per-register state. It makes
+    no copy, applies no clamp other than contiguity, and never looks at
+    the request's register count.
+  - Mapping past the request's `NumberOfMapRegisters` therefore has no
+    effect.
+  - It can return an address above 4 GB if such a page exists. The HCD
+    already refuses that: `hcdMapExecute` fails a run whose `HighPart`
+    is not 0, and a promoted mapping uses the same test.
+- **`FlushAdapterBuffers` does nothing and returns TRUE** for a bus
+  master with a NULL base.
+- **`FreeMapRegisters` returns at once** when the base or the adapter's
+  master adapter is NULL.
+
+Addresses (`IoMapTransfer` / its helper's 4 GB test / the Flush NULL
+test / the Free NULL test):
+
+- 2000 `hal.dll`: `80012c52` / `80012ce9` / `8001310e` / `80012856`.
+- XP SP3 `halmacpi.dll`: `8001570a` (NULL test at `8001570f`) /
+  `HalpMapTransferHelper` `800150d4` (`and eax,0FFF00000h` at
+  `800150f9`) / `800157d4` / `800147b2` (`IoFreeMapRegisters` at
+  `80014792`).
+- Vista SP2 x86 `hal.dll`: `80015bb2` / `HalpMapTransferHelper`
+  `80015576` / `80015c78` / `80014792`.
+- XP x64: `8001d1a0` / `8001d633` (Flush) / `8001c81c` (Free).
+- Vista x64: RVA `0x5284` / `0x5670` / `0x49e0`.
+- 7 x64: RVA `0x53e4` / `0x5790` / `0x4b20`.
+
+How the builds compare:
+
+- **Windows 2000.** The eight HALs are instruction-for-instruction
+  identical in these routines after normalising for their export-only
+  names.
+- **XP SP3.** The seven HALs are identical after the addresses are
+  normalised.
+- **Vista and 7, x86.** Within each OS the routines differ only in
+  register allocation.
+- **amd64.** Vista's and 7's `IoMapTransfer` are identical. XP x64's has
+  the same logic in a different compilation.
+
+**When the base is NULL depends on the HAL.** This is where the HALs
+differ.
+
+`HalAllocateAdapterChannel` calls the execution routine with a NULL
+base, and sets the adapter's `MapRegisterBase` and register count to 0,
+in either of two cases:
+
+- the request asks for no registers; or
+- the adapter's "needs map registers" byte (`+0x55` on x86, `+0x125` on
+  amd64) is 0.
+
+The routine's addresses: 2000 `hal.dll` `80012a42`, with the tests at
+`80012a7d` and `80012a89`. XP SP3 `halmacpi.dll` `800155c2`, with the
+test at `8001560b`. Vista x86 `80015a6a`, with the tests at `80015aad`
+and `80015ab3`. XP x64 `8001cca0`, with the NULL path at `8001cd82`.
+
+The test that refuses a request larger than the adapter's
+`MapRegistersPerChannel` with `STATUS_INSUFFICIENT_RESOURCES` sits only on
+the needs-registers path. A NULL-base request never consults its count.
+
+`HalGetAdapter` sets the "needs map registers" byte. For this
+description it asks one question, and the answer differs by HAL:
+
+| HAL | No map registers (NULL base) when | Otherwise |
+|---|---|---|
+| 2000 SP4: `hal`, `halapic`, `halmps`, `halborg`, `halacpi`, `halaacpi`, `halmacpi` | the PAE kernel is not running: `cmp byte ptr ds:[0FFDF027Dh]` (`SharedUserData` `ProcessorFeatures[PF_PAE_ENABLED]`) at `8001c0aa` in `hal.dll`, then the `Dma64BitAddresses` test at `8001c0b7` | real registers: `min(pages + 1, 16, 32-bit map buffer >> 13)`, normally 16 |
+| 2000 SP4: `halsp` (Compaq SystemPro) | always: no PAE test | - |
+| XP SP3: all seven | always: `HalGetAdapter` `80027754` (`halmacpi`) zeroes the count for any scatter/gather PCI master at `80027815`-`80027828`. `HalpPhysicalMemoryMayAppearAbove4GB` is written at init (`8002d600`, `8002dcf9`) and read nowhere in the image | - |
+| Vista SP2 and 7 SP1 x86: `hal` (= `halmacpi`) and `halacpi` | `HalpPhysicalMemoryMayAppearAbove4GB` is 0: Vista `hal.dll` `HalGetAdapter` `80034162` reads it at `80034219`, tests it at `80034229`, and goes to the count at `8003422d` when `Dma64BitAddresses` is clear | real registers, `min(pages + 1, 16, MasterAdapter32 size >> 13)` (`8003425f`-`8003428e`) |
+| XP x64, Vista SP2 x64 and 7 SP1 x64: `hal` | `HalpPhysicalMemoryMayAppearAbove4GB` is 0: XP x64 `8005cdf9` | real registers from a local scatter pool of up to 256 pages; only pages above `0xFFFFFFFF` are bounced (`HalpDmaMapScatterTransfer`, `cmp [rbp+88h],rdx` at XP x64 `80019873`) |
+
+Notes on the table:
+
+- **The grant.** With no registers needed, `*NumberOfMapRegisters` is
+  the adapter's `MapRegistersPerChannel`, which is
+  `BYTES_TO_PAGES(MaximumLength & 0x7FFFFFFF) + 1`, that is `0x80001`. It
+  is the same on every HAL read. This driver's own counter reads a
+  "map grant 524289 registers" on the XP x64 QEMU guest (36.21's
+  serial logs, `out\p36-mb\xp64\`), so that number is a **runtime**
+  corroboration for XP x64 alone.
+- **Who sets the flag.** `HalpPhysicalMemoryMayAppearAbove4GB` is
+  written only during initialisation. Early writers set it to 1:
+  - a loader memory descriptor ending above page `0x100000`;
+  - an ACPI hot-plug memory range above 4 GB (`HalpSetupAcpiPhase0`).
+
+  `HalpDmaFinalizeDoubleBufferingDisposition`, called from
+  `HalReportResourceUsage` (Vista x86 call at `8003cfa8`), then has the
+  last word, and it differs by architecture:
+  - **x86 (Vista, 7).** It **overwrites** the flag with the byte at the
+    kernel's exported `Mm64BitPhysicalAddress` (Vista `8003b02c`-`8003b033`,
+    7 `8003d02a`-`8003d031`), which can turn an earlier 1 back to 0. When
+    it changes the flag from 0 to 1 it also allocates the `0x30000` map
+    buffer, bugchecking `0x5C` if that fails. So on x86 the value
+    `HalGetAdapter` reads after boot is the kernel's. When the kernel sets
+    `Mm64BitPhysicalAddress` was not read.
+  - **amd64.** It only sets the flag, and only from the `DynamicMemory`
+    value above 4.
+
+  That `HalReportResourceUsage` runs before any PnP driver starts is the
+  I/O manager's documented order, not read here.
+- **2000's PAE byte.** Of the four 2000 SP4 kernels, only the PAE
+  kernels write `ProcessorFeatures[PF_PAE_ENABLED]`: `ntkrnlpa.exe` at
+  `00551fe9` (base `0x400000`), and `ntkrpamp.exe` by the same byte
+  pattern at `00556735`, not disassembled. On 2000 the test therefore
+  means "the PAE kernel is running", not "memory exists above 4 GB".
+- **2000's map buffer.** The 2000 HAL allocates its 32-bit map buffer
+  (`0x30000`) only under PAE. If that allocation fails the count falls
+  to 0 and the base is NULL even under PAE. That is the one case where a
+  2000 NULL base can meet memory above 4 GB.
+- **A queued request on amd64.** On the three amd64 HALs, a request
+  that `IoFreeAdapterChannel` takes off the adapter's device queue gets
+  a NULL base only if it asked for no registers or the adapter has no
+  master adapter. It does not test the "needs" byte (XP x64 `8001c654`,
+  `8001c65a`), and these adapters always have a master adapter. Such a
+  request therefore receives a real, non-NULL base from the master pool.
+  - This happens only when two channel requests on one adapter overlap.
+    The HCD's pump never has two outstanding (section 11.3, `hcd_dma.c`).
+  - If it did happen, the gate would simply not promote, and the
+    non-NULL rule frees the registers as today.
+
+**Driver Verifier.**
+
+- **Windows 2000 SP4.** The kernels have no DMA verification.
+  - `IoGetDmaAdapter` (`004d3b49`, base `0x400000`) asks the PDO's
+    stack for `BUS_INTERFACE_STANDARD` (`IRP_MN_QUERY_INTERFACE`), calls
+    its `GetDmaAdapter`, and falls back to `HalDispatchTable+0x3C`. It
+    calls no verifier routine.
+  - It rewrites the description only when the `InterfaceType` is
+    `InterfaceTypeUndefined` or `PNPBus`.
+  - Neither of the XP verifier's two marker constants (`0xDEADF00D`,
+    `0xACEFD00D`) occurs in `ntoskrnl.exe` or `ntkrnlmp.exe`.
+  - `IoAllocateAdapterChannel` (`0041f01c`) fills in the device
+    object's wait block and calls the HAL with the count unchanged.
+  - So the 2000 SMP Driver Verifier leg sees the HAL's own behaviour.
+- **XP SP3** (`ntoskrnl.exe`; the same constants occur equally in the
+  PAE and MP kernels). With DMA verification on, `VfGetDmaAdapter`
+  (`0059a082`) hooks every adapter except one whose device description
+  is `PCI bus` (`VfIsPCIBus`, `0046cb65`).
+  - `VfAllocateAdapterChannel` (`0059b8c3`) substitutes its own callback
+    and, when double buffering is on, a map register file of the
+    request's size (`ViAllocateMapRegisterFile`, `0059b922`).
+  - `VfAdapterCallback` (`0059aaa2`) hands the driver either that file
+    (signature `0xACEFD00D`) or, for a HAL NULL base, the token
+    `0xDEADF00D` (`mov ebx,0DEADF00Dh` at `0059aace`). **It never hands
+    over NULL.**
+  - `VfMapTransfer` (`0059bc0e`) turns the token back into NULL before
+    calling the HAL (`0059bc47`), and maps a file's pages through
+    `ViMapDoubleBuffer`.
+  - So under XP's DMA verification promotion never fires, and the
+    register-free check fails because it requires two NULL bases. Every
+    URB stays sequential, exactly stage 1. A NULL base past the
+    request's count is never presented to the verifier.
+- **Vista SP2 and 7 SP1, x86 and x64** (`ntoskrnl.exe`, and
+  `ntkrnlpa.exe` on x86, read routine by routine; within each OS the two
+  x86 kernels differ only in stack layout).
+  - `IoGetDmaAdapter` rewrites nothing for `PCIBus` and leaves the
+    returned count alone (Vista x86 `ntkrnlpa` `00547aec`, 7 x86
+    `0058594b`).
+  - `IoAllocateAdapterChannel` passes the count unchanged.
+  - With DMA verification on, the verifier's thunk `VfGetDmaAdapter`
+    hooks the adapter (again sparing only a `PCI bus` device).
+    `ViAdapterCallback` then hands the routine one of three things, and
+    **never NULL**:
+    - a verifier map register file (`0xACEFD00D`);
+    - the token `0xDEADF00D` (`0xFFFFFFFFDEADF00D` on amd64) in place of
+      a HAL NULL base: Vista x86 `mov ebx,0DEADF00Dh` at `006e7b8f`; 7
+      x64 `1405240f0`;
+    - the HAL's real base.
+  - These kernels also count the bytes mapped on the adapter between
+    flushes against the outstanding registers times 4096
+    (`INCREASE_MAPPED_TRANSFER_BYTE_COUNT`, Vista x86 `004e2c9f`). The
+    count runs even on the token path. Exceeding it is
+    `DRIVER_VERIFIER_DMA_VIOLATION` (0xE6) with parameter 1 = 0x0D,
+    which on 7 reads `0xE6(0xD, bytes mapped, limit, 0)`.
+  - So a mapping past the request's registers **would** bugcheck under
+    these verifiers. It is never attempted, because the routine never
+    sees NULL and promotion does not happen. The register-free check
+    fails as it does on XP.
+  - DMA verification is on whenever flag 0x80 is set on 7. On Vista, at
+    boot, it runs without double buffering (`VfVerifyMode` is
+    `0xFFFFFFFF` in the image).
+- **XP SP3's verifier counts bytes the same way.** `VfMapTransfer` calls
+  `INCREASE_MAPPED_TRANSFER_BYTE_COUNT` at `0059bcbb`. The same
+  conclusion holds: no NULL base, no promotion, no overrun.
+- **The path to the HAL.** In both `pci.sys` builds read, the PCI bus
+  interface's `GetDmaAdapter` does one thing for a `PCIBus` description
+  before handing it up the tree with `IoGetDmaAdapter` on the parent
+  bus's device: it fills in `BusNumber`.
+  - XP SP3 `PciPnpGetDmaAdapter` `00015ec6` (base `0x10000`); 7 SP1 x86
+    `PciBusInterface_GetDmaAdapter` `000250ae`.
+  - On x86 the chain ends at the kernel's `HalDispatchTable` fallback,
+    which is the HAL's `HalGetAdapter` path above.
+  - The hop at the root bus (the ACPI or HAL bus driver that answers for
+    the root) was **not read**, nor was the amd64 `pci.sys`. The
+    `0x80001` grant read at runtime on XP x64 is the HAL formula and
+    corroborates that the description arrives unchanged there.
+
+**Per-HAL verdict: is a NULL base pure pass-through?**
+
+| OS, file | Version | NULL base pure pass-through | When the base is NULL for this adapter |
+|---|---|---|---|
+| 2000 SP4 `hal`, `halapic`, `halmps`, `halborg`, `halacpi`, `halaacpi`, `halmacpi` | 5.00.2195.6655 / .6691 | **yes** | non-PAE kernel (`ntoskrnl`, `ntkrnlmp`) always; PAE kernel only if the 32-bit map buffer could not be allocated |
+| 2000 SP4 `halsp` | 5.00.2195.6655 | **yes** | always |
+| XP SP3 `hal`, `halapic`, `halmps`, `halsp`, `halacpi`, `halaacpi`, `halmacpi` | 5.1.2600.5512 | **yes** | always, PAE or not (pages above 4 GB, if the kernel uses any, come back unbounced and the HCD refuses them) |
+| XP x64 `hal` | 5.2.3790.3959 | **yes** | no memory, hot-plug range or `DynamicMemory` above 4 GB; and a request that was not queued behind another |
+| Vista SP2 x86 `hal` (= `halmacpi`), `halacpi` | 6.0.6002.18005 | **yes** | the kernel's `Mm64BitPhysicalAddress` was 0 when the HAL finalised the flag |
+| Vista SP2 x64 `hal` | 6.0.6002.18005 | **yes** | as XP x64 |
+| 7 SP1 x86 `hal` (= `halmacpi`), `halacpi` | 6.1.7601.17514 | **yes** | as Vista x86 |
+| 7 SP1 x64 `hal` | 6.1.7601.17514 | **yes** | as XP x64 |
+
+**The verdict.** On every NT target HAL build read, a NULL
+`MapRegisterBase` means pure pass-through. Mapping a whole URB under a one-chunk request
+then touches nothing the request owns. Every HAL that has real registers
+for this adapter hands the routine a non-NULL base, and so does XP's DMA
+verifier, so the gate point 2 already has does not promote.
+Vista's and 7's verifiers behave the same way.
+
+The condition promotion keys on is the HAL's own signal, read at the
+moment it matters, so no separate probe of the OS, PAE or memory size is
+needed **for the builds read**. Two things are not established by this
+reading:
+
+- **HAL builds not in the table.** A HAL hotfix after these service
+  packs is a different binary. The reading says nothing about its NULL
+  semantics, and neither the gate nor point 2's 16-page check can stand
+  in for that (point 2, round 4).
+- **The adapter's route.** The route from the PDO to `HalGetAdapter`
+  is read only in part: the kernel's `IoGetDmaAdapter` on 2000, XP,
+  Vista and 7, and `pci.sys` on XP SP3 and 7 SP1 x86. The root bus's
+  bus driver and the amd64 `pci.sys` were not read. The `0x80001` grant
+  at runtime on XP x64 matches the HAL formula but does not identify the
+  `DMA_OPERATIONS` table.
+
+One more runtime fact narrows both, and costs nothing to test. On every
+HAL read, the adapter that yields a NULL base reports exactly `0x80001`
+map registers for this description (`MaximumLength` `0xFFFFFFFF`), while
+an adapter with real registers reports at most 16 on x86 and at most 256
+on amd64.
+That grant is already recorded at start (`hc->MapRegisters`). Requiring
+it as well as a NULL base keeps promotion to adapters that answer the
+way the read builds answer. It is still a fingerprint, not proof of an
+unread build's behaviour.
+
+So, by scope:
+
+- **The builds read** (2000 SP4, XP SP3, XP x64, Vista SP2 and 7 SP1,
+  x86 and amd64, as in the table). The evidence supports **`XhciWideMap`
+  defaulting to 1**, with the gate being a NULL base and a grant of
+  `0x80001`. The register-free check stays as point 2 describes it, a
+  regression check.
+- **Later HAL updates on those systems.** These are not covered. Whether
+  the default extends to them on lineage and the fingerprint, or
+  promotion stays opt-in until each is read, is the owner's call. The
+  driver does not identify the HAL file it runs on, so it cannot tell a
+  hotfix HAL from the one read.
+
+Pages above 4 GB under a NULL base (XP SP3 under PAE, 2000 with a failed
+map buffer) are refused by the HCD's existing `HighPart` test, and a URB
+holding one fails as it does at stage 1. Promotion adds nothing there.
+
+Changing the default is the code task's (36.24), not this record's.
+`XhciWideMap` stays at 0 until that change is made and reviewed.
+(36.24 made it 1; the owner returned it to 0 on 2026-10-10 - point 2 of
+section 11.6 says why. Value 1 opts in on the builds read.)
+
+**The binaries read.** Expanded on development host A:
+
+- 2000 SP4 from `win2ksp4.ISO` `I386\SP4.CAB`, the same files as
+  `tools\win2ksp4-extracted\`;
+- XP SP3 from
+  `en_windows_xp_professional_with_service_pack_3_x86_cd_vl_x14-73974.iso`
+  `I386\SP3.CAB` (the `I386\*.DL_` copies are byte-identical);
+- XP x64 from `tools\winxp64-extracted\` (expanded from
+  `Win XP SP2 VL x64.iso`, design record 11);
+- Vista SP2 x86 and x64 and 7 SP1 x86 and x64 from each DVD's
+  `sources\install.wim`, image 1, `Windows\System32\`.
+
+The PDB identifiers are those `kd` loaded from the public symbol server.
+
+| File | Bytes | SHA-256 | PDB (`<GUID><age>`) |
+|---|---|---|---|
+| 2000 SP4 `hal.dll` 5.00.2195.6655 | 95,456 | `7c040e3792dbbbccab173e845da9a86bb8e753f2de07f007efba625a18be0d1a` | none (export names only) |
+| 2000 SP4 `halaacpi.dll` 5.00.2195.6691 | 82,176 | `7e8653957708367e0ae3dc6b915ab334a8da28f3d9ff451b53d9e59081306d7b` | none (export names only) |
+| 2000 SP4 `halacpi.dll` 5.00.2195.6691 | 66,848 | `3cd165f3db9e5037cf33b059b7116e4e8a2e5b9f7c73cbe31c5ff809b1867538` | none (export names only) |
+| 2000 SP4 `halapic.dll` 5.00.2195.6691 | 92,224 | `48ea42c382cad8c4a8e5ed887f8280a902875aade1fd317f6b76e9e075381c27` | none (export names only) |
+| 2000 SP4 `halborg.dll` 5.00.2195.6655 | 148,960 | `213b3d97696203788328a0e0374e7978d4bcac6ed02ed309c113177e7318b524` | none (export names only) |
+| 2000 SP4 `halmacpi.dll` 5.00.2195.6691 | 83,040 | `869542caf5780041f2f14d621c335d016155819d191440acc028bfe51eda8ca5` | none (export names only) |
+| 2000 SP4 `halmps.dll` 5.00.2195.6691 | 93,696 | `1a5d0ad6fc56a029980a634a6b3b275ce07afc0fd7816f517bf6258f6a0ca817` | none (export names only) |
+| 2000 SP4 `halsp.dll` 5.00.2195.6655 | 69,088 | `553c2f6f9833aaf565a81bea0e70f7381d5dbb9eae71c7e32b9f0b11e27840d9` | none (export names only) |
+| 2000 SP4 `ntoskrnl.exe` 5.00.2195.6717 | 1,719,056 | `80a8ccf2aa9dfb05408ac35d97fdb227c29f81cb329417eb1c43451f33b6271e` | none (export names only) |
+| 2000 SP4 `ntkrnlmp.exe` 5.00.2195.6717 | 1,694,976 | `4b7dfd1c2ad3213eeab5d70edab865d0a9a4d60344aa15ce3d70c04eab2dd16f` | not loaded (byte search and `norm.sh` comparison only) |
+| 2000 SP4 `ntkrnlpa.exe` 5.00.2195.6717 | 1,694,080 | `d2a76d8ebcb4b74e2c5c3c9e17a20d61d20d9e81046d685b9bfbe1d002379078` | not loaded (byte search and `norm.sh` comparison only) |
+| 2000 SP4 `ntkrpamp.exe` 5.00.2195.6717 | 1,715,008 | `83746ddbfca2b52f89a050d1b58613ec986cb3aa23086c7f325373df0d3d702a` | not loaded (byte search and `norm.sh` comparison only) |
+| XP SP3 `hal.dll` 5.1.2600.5512 | 105,344 | `77263ad2c7b56ca964f6055a21a303bf7f031794a8ab27d251d9d2888fe5cfba` | `hal.pdb/36D1EEBD32624718A02E68DABD3593DD1` |
+| XP SP3 `halaacpi.dll` 5.1.2600.5512 | 131,840 | `feba3100fedbd5197c0a67512ff11153c21adad356092bf8b8e197e66152bfcb` | `halaacpi.pdb/FCC14B4D76114FE7A8E9AEA280B60E401` |
+| XP SP3 `halacpi.dll` 5.1.2600.5512 | 81,152 | `a42d3849073b8c17b06122fbbcd91c9c81bda086bb60b7965a79de3a0896ed39` | `halacpi.pdb/52475CC399844839AD8ADF647D0AF71A1` |
+| XP SP3 `halapic.dll` 5.1.2600.5512 | 150,528 | `e97ee5347f46842e3bbb7f662fcb0ef9e799eccfa72633c0f73c323e1364cd20` | `halapic.pdb/A2EAA6A109F64591BCC54C567E7762391` |
+| XP SP3 `halmacpi.dll` 5.1.2600.5512 | 134,400 | `034f6e289d979189553f44b7cf92e4f5c7a761248d50e22c9dcde8313654b279` | `halmacpi.pdb/9875FD697ECA4BBB8A475825F6BF885E1` |
+| XP SP3 `halmps.dll` 5.1.2600.5512 | 152,576 | `e5a6b1fcd1a82161e4c9915ce2489112dacce985dbb3bd20b934ce253f7db143` | `halmps.pdb/8DBE522005AF47AB8CDE9370E08A61941` |
+| XP SP3 `halsp.dll` 5.1.2600.5512 | 77,696 | `979ad1195127da404ca446ead73bb3d571e7711aad61c328733005eff1aae767` | `halsp.pdb/49865CFBB8D943FDABB4C655A700E33D1` |
+| XP SP3 `ntoskrnl.exe` 5.1.2600.5512 | 2,188,928 | `6005a1a1db35481612ef76856a609954990f058bfc42dfa7b0d43402bf3f3dcf` | `ntoskrnl.pdb/47A5AC97343A4A7ABF14EFD9E99337722` |
+| XP SP3 `ntkrnlmp.exe` 5.1.2600.5512 | 2,145,280 | `f086434f85441b9c0245d9f17e2d41718fac810310e244839436554e852a70b8` | not loaded (byte search and `norm.sh` comparison only) |
+| XP SP3 `ntkrnlpa.exe` 5.1.2600.5512 | 2,065,792 | `7968d60617e6eef479de339c6895b4479eac79971d7cea58f9fafd66cc3b5914` | not loaded (byte search and `norm.sh` comparison only) |
+| XP SP3 `ntkrpamp.exe` 5.1.2600.5512 | 2,023,936 | `745f710fa3788db04e1f4370b75fee8b25bd64877fb2e4244a3c54eef061968e` | not loaded (byte search and `norm.sh` comparison only) |
+| XP x64 `hal.dll` 5.2.3790.3959 | 279,040 | `7b7671166cde8cbb8af9ede79d0c4cd38208f77a5b59e7ba661d839a870a101e` | `hal.pdb/786A0CD8B0CB4761BA7DC79BD10C215C1` |
+| XP x64 `ntoskrnl.exe` 5.2.3790.3959 | 4,496,896 | `0415fa7f9319bb0c57bea7d439a5b73244bb5838510631c18222fbd081c878c0` | `ntoskrnl.pdb/7362C1B15A0F49559DE8D0BFC1564A772` |
+| Vista SP2 x86 `hal.dll` 6.0.6002.18005 | 177,128 | `b6d9de353b13e61eaccdc41eb73043919b7f3cb232756233f0d732071023afe8` | `halmacpi.pdb/C215292B54434B3E95D7C087721276651` |
+| Vista SP2 x86 `halacpi.dll` 6.0.6002.18005 | 140,776 | `84ea2181d16c1d971d7c719603bab2f003ad611305ba9029eddd6bbd1aea275d` | `halacpi.pdb/9D9879AD5D124F2FB0871DDCA640FE0B1` |
+| Vista SP2 x86 `halmacpi.dll` 6.0.6002.18005 | 177,128 | `b6d9de353b13e61eaccdc41eb73043919b7f3cb232756233f0d732071023afe8` | (byte-identical to `hal.dll`) |
+| Vista SP2 x86 `ntkrnlpa.exe` 6.0.6002.18005 | 3,601,896 | `78c2a0b97f0b50db3edddb982791658c4916b227bba9bb444fbd336f30da79bc` | `ntkrpamp.pdb/109FACEC7E244C8FAC6D191457B5C7022` |
+| Vista SP2 x86 `ntoskrnl.exe` 6.0.6002.18005 | 3,549,672 | `45c9cb0604b9da7ba15e8824ff4b446064ab40ffa8412679a49ec16eaf36f7fc` | `ntkrnlmp.pdb/0F9B6FF39CAB48838BFF880777AC7D0E2` |
+| Vista SP2 x64 `hal.dll` 6.0.6002.18005 | 233,448 | `e47a7345a960ff3e5858c1b76e09425b5268737788eee669ce3edfd046469cc6` | `hal.pdb/5E5C6555035349D9950043A182DF64702` |
+| Vista SP2 x64 `ntoskrnl.exe` 6.0.6002.18005 | 4,699,608 | `dd8c36ac87b2db30d70b0ae9879608c52f4fc195f69abaac8032376b4786685b` | `ntkrnlmp.pdb/98C6BA00FE174241BA3FDB915995EA9C2` |
+| 7 SP1 x86 `hal.dll` 6.1.7601.17514 | 194,432 | `f8b007e41157452e8c2d262f37260eb662cb2099e22acffdf9d89836a6290264` | `halmacpi.pdb/AE605D6C59454802AE1D485E0B089A571` |
+| 7 SP1 x86 `halacpi.dll` 6.1.7601.17514 | 137,088 | `778d2c3afd587a2750a941cd98db4c51a7a9460e056c2cd3c432a7942e9524ce` | `halacpi.pdb/91622BAE6BA748EDACB711C581C8050C1` |
+| 7 SP1 x86 `halmacpi.dll` 6.1.7601.17514 | 194,432 | `f8b007e41157452e8c2d262f37260eb662cb2099e22acffdf9d89836a6290264` | (byte-identical to `hal.dll`) |
+| 7 SP1 x86 `ntkrnlpa.exe` 6.1.7601.17514 | 3,966,848 | `d44e8f8420ea50401d028f4e6de4f9e9d7dfa7de0601fba25e35c2cb581304e6` | `ntkrpamp.pdb/684DA42A30CC450F81C535B4D18944B12` |
+| 7 SP1 x86 `ntoskrnl.exe` 6.1.7601.17514 | 3,911,040 | `d74e389d1a3ed4c79ffc7c0af1c092102f13e67168ab66a9296cdde62a2c6cf8` | `ntkrnlmp.pdb/00625D7D36754CBEBA4533BA9A0F3FE22` |
+| 7 SP1 x64 `hal.dll` 6.1.7601.17514 | 263,040 | `9c113ae7f724369077a301ac97e4d3e8313fa965674fec401efd6e89b077bdcb` | `hal.pdb/A085D08B9C5D4BFDBA48AC285BDA03F22` |
+| 7 SP1 x64 `ntoskrnl.exe` 6.1.7601.17514 | 5,563,776 | `7fba129db114e8808a2ee5ae597f66176b7eb3c4077e0b5e9a3be3f74aa2e6a6` | `ntkrnlmp.pdb/3844DBB920174967BE7AA4A2C20430FA2` |
+| XP SP3 `pci.sys` 5.1.2600.5512 | 68,224 | `d4e6c360a1d2fca4d17c991b834d68bf20f5111dd06b1fab8b22984804cec269` | `pci.pdb/46927BAFB8E740B6B4BAC813675A82871` |
+| 7 SP1 x86 (symbol-server copy) `pci.sys` 6.1.7601.17514 | 153,984 | `1f81315664b8cbfdd569416c0ecce4c6251f34577313a0858ab46609781303b5` | `pci.pdb/2E2A912260694615A7E97AFBA3FA934E1` |
+
+### 11.7 Stage 3: one TD a URB on stream rings (task 36.25)
+
+**Why, and where.** Stage 2 keeps two TDs of a URB on the ring, but each
+TD is at most 31 page elements (124 KiB), so a 1 MiB URB is still 9 TDs
+and 2 MiB 17 or 18, each a publication, an event and a refill under the
+controller lock. Stage 3 (owner, 2026-10-09: taken whatever stage 2's
+readings) puts a promoted URB on the ring as **one TD**: 256 data TRBs for
+1 MiB page-aligned and 257 unaligned, 512 for 2 MiB page-aligned and 513
+unaligned, on rings large enough to hold it. It applies where stage 2's
+promotion applies and where the large commands arrive: **the stream rings
+of UAS at SuperSpeed** (the only pipes where an IN URB is eligible, section
+11.6 point 1, and where 36.22's 1 MiB and 2 MiB commands go). Every other
+ring keeps the size it has: the pool rings of the controller's block, 64
+TRBs (design record 04's layout, untouched - so no isochronous decoupling,
+no stride or pool change, no `test_membuf` change), EP0's and the command
+ring's 64, and the event ring's 256 entries.
+
+**Scope left out, and why (orchestrator decision, owner to confirm).**
+Bulk-Only and High-Speed UAS keep stage 2 (OUT pipelined in 31-element
+TDs, IN sequential). Their rings are pool rings in the controller's block;
+a large ring for one of them is an allocation of its own per pipe with the
+stream block's retirement rules repeated for it (`hcdCfgPipeFree`, the
+endpoint-drop reclaim, the device's going). Their IN path could take one
+large TD (a single TD has no successor for a short to strand), so this is a
+deferral of scope recorded in the roadmap, not a correctness limit.
+
+**What changes.**
+
+1. **The ring size.** When a streams endpoint is opened
+   (`hcdCfgStreamsBuild`) on a start with promotion enabled
+   (`hc->WideEnabled`, section 11.6 point 2), every stream's ring is
+   `XHCI_BIG_RING_TRBS` = 1024 TRBs (16 KiB, 1022 usable) instead of
+   `PoolRingTrbs` (64). The bus cannot tell UAS's status pipe from its data
+   pipes, so the status pipe's rings grow too, which costs memory and
+   nothing else. 1024 is the smallest power of two whose usable TRBs (1022)
+   hold the largest eligible URB as one TD (513 elements, eligibility's span
+   bound), so a promoted URB on a big ring never needs a second TD.
+2. **Placement by physical address.** A transfer ring segment must not
+   cross a 64 KiB boundary (`xhci-data-structures.md`, the alignment table
+   in section 1, "Transfer Ring segment", boundary 64 KB, xHCI 4.9.2 and
+   section 6's introduction; `XhciSegmentUsable` already refuses one that
+   does, as defence in depth). A 16 KiB segment whose physical address is a
+   multiple of 16 KiB lies inside one 64 KiB block. `AllocateCommonBuffer`
+   promises page alignment only, so the size is computed without the
+   address and the placement with it, both in the pure
+   `XhciStreamLayoutPlaced` (`xhci_stream.c`):
+   - **size**, address-independent: `16 KiB + streams * 16 KiB` (for 31
+     streams, 512 KiB, whole pages). The Primary Stream Context Array sits
+     at the block's start as today, 16-byte entries, at most 32 entries =
+     512 bytes, inside the block's first page; the first ring starts at the
+     first 16 KiB-aligned physical address at or past the array's end,
+     which for a page-aligned base is 4, 8, 12 or 16 KiB in, so the prefix
+     is at most 16 KiB.
+   - **placement**, on the address granted: `RingBase = align16K(paLow +
+     ArrayBytes) - paLow`, ring `i` at `RingBase + (i - 1) * 16 KiB`; refused
+     (the fallback, point 6) when `paLow + size - 1` wraps 32 bits or the
+     block's high part is not 0.
+   `test_stream` sweeps every page-aligned base across a 64 KiB window and
+   past 4 GiB's edge, 4 to 32 entries, 64 and 1024 TRBs: no ring crosses a
+   64 KiB line, rings overlap neither each other nor the array, all lies
+   inside the allocation, and a 64-TRB layout is today's byte for byte.
+3. **One TD a URB, its list the wide list itself.** On a big ring a
+   promoted URB is published as exactly one TD covering the whole URB, and
+   the TD's scatter/gather list is the entry's wide list: the entry's
+   array becomes a `USBPORT_SCATTER_GATHER_LIST` with room for 513
+   elements (its header and `More`), whose offsets the wide mapper already
+   writes from 0, so nothing is copied or trimmed and no 31-element slot
+   list is used. The planner (`XhciXpipePlan`, cap 31) is not used on a
+   big ring; on a 64-TRB ring - a start without the big block, or the
+   fallback - stage 2 runs unchanged. The pipe records which it has
+   (`pipe->BigRing`, set when its ring is built, cleared with it). With one
+   TD there is no successor: no refill, no truncation, no hand-off; an
+   early end is the URB's end. The machine (`XhciXpipeRec*`) runs as for
+   any one-TD URB.
+
+   **Suspension.** The wide paths follow the sequential ones on a
+   suspended controller: they have no rule of their own. Task 36.28's
+   attempt at one (nothing published while suspended, the settle draining
+   every client request at the controller's D3) was reverted by the
+   owner's decision on branch `p36-susp` (`9f20cfd`), since it did not
+   change the Windows ME hang it was written for; the integration branch
+   `p36-int3` took the revert over stage 2's copies of that rule as well
+   (`hcdWidePump`, `hcdWidePublishLocked`, `hcdWideMapped`, and the
+   pipelined-record clause of the settle that no longer exists).
+4. **The engine's cap and scratch.** `XhciXferBuildNormal` refuses more
+   than `XHCI_XFER_MAX_DATA_TRBS` (32) elements today, before reading any,
+   and again per TRB emitted. A normal request gains `MaxDataTrbs`, the cap
+   for both checks (0 meaning 32, so every existing caller - which zeroes
+   the request, or must: the host suites' `normal_request_init` and
+   `test_td`'s builders are changed to zero it - keeps today's behaviour);
+   the output capacity stays the caller's scratch count, apart from the
+   cap, since one element can still split at 64 KiB (none of the HCD's
+   page elements does). Control transfers keep 32. Stage 3's publication
+   passes `XHCI_XPIPE_WIDE_ELEMENTS` (513) and a scratch of 513 + 2 TRBs
+   (8,240 bytes) that lives in the wide pool's allocation, beside the
+   entries, used only under the controller lock (every publication holds
+   it); a pool kept by a fail-closed stop keeps its scratch with it, and a
+   publication with no current pool fails before the ring as any refusal.
+   The SG walk (`xhciXferEmitSgList`) looks for each next element first at
+   the index after the last one taken, then scans as today, so an ordered
+   list costs one step an element (513 elements would otherwise be about
+   130,000 comparisons under the lock); its result is unchanged for every
+   list, which `test_xfer` pins on ordered, reversed and shuffled lists.
+5. **TD Size, Link TRBs and the residual.** TD Size saturates at 31
+   packets remaining and is 0 on the last TRB (4.11.2.4), as the builder
+   does today (`test_build_td_size_saturates`); a TD that crosses the Link
+   TRB carries Chain on the Link as today's publication sets it. A short
+   packet's length is the inclusive prefix of the TD's TRB lengths up to
+   the named TRB less its residual (`XhciRingSumTrbLengths` walks the ring
+   with no TD-size bound), the tail never recomputing it. A halting error
+   on a big TD retires it as today; Stop and Set TR Dequeue address the
+   ring by its own geometry (`ring->Trbs`), and stream recovery still moves
+   only the failed stream (section 11.6, point 6).
+6. **The fallback.** If the big block cannot be allocated or placed (point
+   2), the endpoint opens with today's 64-TRB layout and stage 2's TDs,
+   counted (`BigRefused`); if that allocation fails too, the open fails as
+   today. Nothing else changes. On Windows 98 and ME promotion is never
+   enabled, so their stream rings, their allocations and their common
+   buffer use are today's.
+7. **Retirement.** The block keeps today's lifetime rules unchanged: it is
+   the stream block, retired to the device while its endpoint is not yet
+   Disabled (`StreamsRetired`, `hcdCfgRetiredReclaim`, `HcdCfgDeviceGone`);
+   `HCD_STREAMS` records the size and ring size it was built with, and
+   `hcdCfgStreamsFree` frees that size.
+8. **The event burst.** Section 11.6's 16 is the occupancy stage 2 *added*
+   (a second TD per wide entry), not the entries' total: eight entries with
+   two TDs each and up to two terminal events a TD is 32 events those TDs
+   can hold, and a halting error need not add a trailing event. Stage 3's
+   one TD a URB removes the second TD on big rings, so its addition over
+   stage 1 is none; the thread's stop and dequeue commands on a cancel are
+   as before. Fewer events per byte is credible; a lower worst-case drain
+   or lock hold is not claimed - a 513-TRB build and its residual walks are
+   longer - and is a reading (36.26).
+9. **Telemetry.** Eight counters appended to `XHCI_XPIPE_STATS` after its
+   24 words: big blocks built, big blocks refused, TDs published on big
+   rings, the largest TD published (data TRBs), and the counts of TDs of
+   exactly 256, 257, 512 and 513 data TRBs (four words). The structure
+   grows to 32 words, the count at header word 204 reads 32, the new words
+   are 229 to 236 and the header becomes 237 words; nothing before moves,
+   and the serializer's asserts, `test_snap` and `XHCISNAP` (which reads a
+   24-word block from an older driver as before) change together. The exact counts are what
+   36.26's geometry legs read to show a 257- or 513-TRB TD reached the
+   ring, apart from a merely large SRB.
+
+**Host vectors.**
+- `test_stream`: `XhciStreamLayoutPlaced` as in point 2.
+- `test_xfer`: `MaxDataTrbs` 0 (32), 513 accepted; three separate guards
+  - a request cap of 514 refused before the list is touched, a valid cap
+  with an element count above it refused with a readable header and
+  inaccessible elements, and an element count within the cap whose one
+  element crosses 64 KiB and expands past it (cap 1, two TRBs, scratch
+  enough) refused by the per-TRB guard; a 513-TRB TD published across the Link TRB on a 1024-TRB
+  ring with both cycle values; a short on its 400th TRB with the tail, the
+  same with the tail absent until an empty-drain settle, and swept by a
+  later TD's event (the first measured length kept); its removal by the
+  cancel walk and by a drain; Set TR Dequeue past it on a big ring with
+  both cycles; the SG walk's hint on ordered, reversed and shuffled lists.
+- `test_td`: the wide mapper's list over 1 MiB and 2 MiB at every page
+  offset and three layouts, handed as the TD's list to the engine at cap
+  513: one TRB an element, 256/257/512/513 as the alignment gives.
+- `test_xpipe`: the record machine over a one-TD URB - full, short, error,
+  cancel at each map state, drain - firing once with no refill and no
+  truncation.
+- `test_snap`: the appended words. `test_iso`, `test_membuf` and
+  `test_ring` pass unchanged (no pool or isochronous change).
+
+**What the legs show (36.26).** On XP x64 and 7 x64 with promotion on, 1
+MiB and 2 MiB SRBs at aligned and unaligned buffers produce TDs of exactly
+256, 257, 512 and 513 TRBs (the exact counters), apart from the SRB sizes;
+the fallback forced by the qemu flavour's `XhciQemuBigRefuse` and the
+64-TRB behaviour read; a system standby or hibernate with a big TD
+outstanding, read as the sequential path's (11.7 point 3: the wide paths
+have no suspend rule of their own since the 36.28 settle was reverted),
+and a pipe paused and resumed while the controller runs (held, then
+published once); bulk faults 14 to 17 aimed at a big TD (the
+injection's own note says which TD and its TRB count); a stream's recovery
+with a sibling stream keeping its progress; streams opened and closed
+across repeated starts and hot-plugs, every block granted or refused into
+the fallback and the pool count back at its start value. **Low memory**:
+on NT, the big blocks in a guest with little memory and promotion
+enabled (XP x86 with 256 MiB), recording `Check`, `Enabled` and the big
+blocks built and refused; and Windows 2000 SMP under Driver Verifier's
+low-resources simulation, which has no DMA verification wrapper (11.6.1),
+so promotion may be enabled there and the allocations may fail - the leg
+records the same words and the configuration rather than assuming
+either; on Windows 98 SE, the roadmap's low-memory machine
+(a 64 MiB guest) shows its allocations unchanged by this stage - a
+regression leg, since nothing here runs there. The full 36.26
+compatibility and multi-device load matrix applies.
 
 ## 12. What Phase 25 leaves open, and where each item binds
 
@@ -4218,7 +5625,7 @@ the detail; this is the index.
 | Windows 98's map-register grant and whether its `AllocateAdapterChannel` runs the execution routine synchronously | 11 | 26-A.5 |
 | PCI configuration-space access on Windows 98 (`IRP_MN_READ_CONFIG` or `BUS_INTERFACE_STANDARD`; the `HalGetBusData` family has no Windows 98 precedent) | 7 | **Settled in 26-A.2 (2026-10-03): `IRP_MN_READ_CONFIG` / `WRITE_CONFIG` sent to the PCI PDO**, the route NUSB's `USBPORT.SYS` and 98 SE's `uhcd.sys` take (static, `legal-provenance.md` section 4) and the HCD's (`HcdSvcConfigSpace`). Runtime, QEMU, `qemu` build: on Windows 98 SE that IRP sent to the attached lower object was refused and `GUID_BUS_INTERFACE_STANDARD` answered `STATUS_NOT_IMPLEMENTED` (`C0000002`); sent to the PDO it read the vendor and device ids and the interrupt pin, and the start completed. On Windows 2000 both targets answered |
 | The PASSIVE context: a system thread (stock precedent `bt829.sys`) rather than work items, confirmed on both primaries | 5.4 | **Confirmed in 26-A.2 (2026-10-03)**: the controller thread starts with the controller on both primaries and stops cleanly across repeated disable/enable cycles - waited for on its thread object on NT and on an event on Windows 98, where the thread-object wait faulted (`runs/run-26.md`); its 100 ms health poll leaves no trace of its own yet, so that it ran is not an observation |
-| `DeviceIsHub` for hubs inside the bus, the driver key returned for a split composite device, and the `ControllerFlavor` value the HCD reports to Vista and Windows 7 `usbui.dll` | 8 | 26-A.8 |
+| `DeviceIsHub` for hubs inside the bus, the driver key returned for a split composite device, and the `ControllerFlavor` value the HCD reports to Vista and Windows 7 `usbui.dll` | 8 | 26-A.8; the hubs by 33.4 (10.11), the composite's driver key by 36.43 (10.12): the parent's |
 | The `SymbolicName` value and the device interfaces both devnodes must carry, so the property pages find them on every generation | 8 | 26-A.8 |
 | `XHCISNAP`'s software-key finder (it matches `xhci98.sys`) and its payload schema for the HCD's extension | 8, 9 | 26-A.8 |
 | `source-stamp.ps1` and staging in `make-package.ps1`; publishing in `make-release.ps1` | 9 | 26-A.1; 32.3 |

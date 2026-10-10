@@ -9764,3 +9764,58 @@ Rule. **When a pure helper's host vectors pass and the guest disagrees, read
 the driver build's disassembly of that helper before anything else**; and
 prefer a loop whose control variable is the shifted value itself over a
 count-down whose bound the compiler derives.
+## MSVC 6.0 inline `__asm` CPUID clobbers EBX: save it, or the caller's locals go wrong
+
+Task 36.21 (integration branch `p36-int`), 2026-10-10, development host A,
+QEMU guests. `hcdCpuId` ran `CPUID` in an MSVC 6.0 `__asm` block without
+saving EBX, which `CPUID` overwrites and which MSVC 6.0 treats as
+callee-saved (as it does ESI, EDI and EBP). On Windows 2000 the first
+Windows 2000 smoke leg stopped with STOP 0xB8. On Windows 98 SE and ME,
+uniprocessor, the clobbered register held the caller's `raised` flag, so
+`HcdTscStamp` called `KeLowerIrql` while the controller lock was held and
+the event DPC ran inside `HcdIoMapped`'s locked section: seen first as an
+undercounted URB counter, really a lock violation. Host tests could not see
+it, and nor could the XP x64 legs (the amd64 build has no inline asm); only
+an x86 guest leg did. Fixed in `f22a42b`: `hcdCpuId` saves and restores
+EBX around `CPUID`.
+
+Rule. **Every MSVC 6.0 `__asm` block saves and restores each of EBX, ESI,
+EDI and EBP it touches, an instruction's implicit outputs included; the
+review is asked to check clobbers, and an x86 98 SE and 2000 leg runs
+before any counter of that build is trusted.**
+
+## MSVC 6.0 /O2 compiled an inline two-table lookup in XHCISNAP against the wrong table's base
+
+Task 36.33 (branch `p36-susp`), 2026-10-10, development host A, the
+selective suspend legs. `XHCISNAP` named the selective suspend counters 18
+words off. `print_hcd` picked a counter's name inline with
+`i < 96 ? hcd_counter_names[i] : hcd_susp_counter_names[i - 114]`; MSVC 6.0
+at /O2 indexed the second table off the first table's base. The driver's
+layout was right, and the source-level host tests passed. Reproduced in a
+host harness on the real /O2 binary. Fixed in `abf5ee9`: one out-of-line
+`hcd_counter_name()` under `#pragma auto_inline(off)`, `test_snap` pinning
+each block's first word, and `xhcisnap\check-counter-names.ps1` guarding
+the names. The second MSVC 6.0 optimiser miscompile in this repo, after the
+count-down loop above.
+
+Rule. **Every multi-table name lookup in `XHCISNAP` goes through
+`hcd_counter_name()`; check name tables against the real /O2 binary
+(`check-counter-names.ps1`), not only at source level.**
+
+## A hub FDO must pass IRP_MJ_SYSTEM_CONTROL down: Driver Verifier stops with C9 0x220 otherwise
+
+Task 36.16 (finding D4, branch `p36-d4`), 2026-10-10, development host A,
+32-bit Windows 7 in QEMU under Driver Verifier. The guest seemed to hang at
+"Starting Windows" with interrupts off; a kernel debugger over the guest's
+serial port showed bugcheck C9 {0x220, ...}. Verifier's started-stack WMI
+test sends an `IRP_MJ_SYSTEM_CONTROL` down the root hub's stack, and the
+root-hub FDO completed it with `STATUS_NOT_SUPPORTED` instead of passing it
+to the PDO below. Not new: the published `2.2.0.0` under
+`verifier /standard /driver xhci98.sys` stops the same way, line interrupt
+and all; Verifier on `xhcimsi.sys` alone boots clean. Fixed in `32c4cf4`:
+the root-hub FDO and the hub FDO pass `IRP_MJ_SYSTEM_CONTROL` down inside
+their I/O count, and the PDOs complete it with the status it came with.
+
+Rule. **An FDO passes down every major function it does not own, WMI
+included; a PDO completes one it does not handle with the status it came
+with. Run a boot under Driver Verifier on an NT 6 guest before a cut.**

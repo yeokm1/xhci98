@@ -247,6 +247,10 @@ ULONG XhciXferSlotFatal(ULONG completionCode);
  * is 128 KB, comfortably above the 4 KB usbport uses for the default pipe.
  */
 #define XHCI_XFER_MAX_DATA_TRBS     32
+/* Task 36.25 (design record 13 section 11.7, point 4): the most data TRBs
+ * a normal request may ask for through MaxDataTrbs - a 2 MiB URB at any
+ * alignment, one TD of page elements. */
+#define XHCI_XFER_MAX_WIDE_DATA_TRBS 513
 #define XHCI_XFER_MAX_CONTROL_TRBS  (XHCI_XFER_MAX_DATA_TRBS + 2)
 
 /*
@@ -352,6 +356,15 @@ typedef struct _XHCI_NORMAL_REQUEST {
      * zero-length transfer, which is why it is consulted only when
      * TransferLength is nonzero (batch 6-0). */
     const USBPORT_SCATTER_GATHER_LIST *SgList;
+    /*
+     * Task 36.25: the cap on data TRBs, for the element count checked before
+     * any element is read and for the TRBs emitted alike. 0 is
+     * XHCI_XFER_MAX_DATA_TRBS, today's 32, so a caller that zeroes the
+     * request keeps today's behaviour; above XHCI_XFER_MAX_WIDE_DATA_TRBS is
+     * refused before the list is touched. The output capacity stays the
+     * caller's scratch count, apart from it.
+     */
+    ULONG MaxDataTrbs;
 } XHCI_NORMAL_REQUEST, *PXHCI_NORMAL_REQUEST;
 
 /*

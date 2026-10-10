@@ -1464,7 +1464,13 @@ and that flavour is never published.
   through every backstop drain. It is a stand-in, said as one, and the
   record names it (`qemu.inj.deadline`). Read under mode 0 as the move,
   with its reason and `intr.moved`, and devices working after it; under
-  mode 1 as no move, the backstop alone carrying the bus. Two legs, each
+  mode 1 as no move, the backstop carrying the bus and, while the
+  controller thread waits for a completion of its own (a command's, an
+  EP0 transfer's), the thread queuing the drain itself between the
+  wait's slices at `XhciTolerance` 1 (`enum.wait.drains`, the drains
+  queued, not the events they took; added by 36.13's legs, which found
+  such a wait otherwise expiring into a reset, since the backstop runs on
+  the waiting thread). Two legs, each
   with its expected evidence stated for the drains that compete:
   - **N = 0, a line dead from the first No Op**, a device present at
     boot. For N = 0 the latch is set before the interrupt is connected
@@ -1478,7 +1484,9 @@ and that flavour is never published.
     retry's drain (`hcdCommandBusy` asks for one), or the move's first
     service pass - and the leg records which (`enum.cmd.busy.drains`,
     `tol.backstop.drains`, `poll.runs.events`); the pass is the device
-    enumerating with no `cmd.timeout`, whichever drained it.
+    enumerating with no `cmd.timeout`, whichever drained it. The
+    commands after it may also be drained by the thread's own wait
+    (`enum.wait.drains`), which counts drains queued, not the No Op's.
   - **N inside a command wait**: N chosen to fall after the grant and
     before a hot-plugged device's Enable Slot completes, with
     `XhciTolerance` 0 so the backstop cannot drain it. The pass is the

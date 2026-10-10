@@ -30,10 +30,12 @@
 #include "xhci_version.h"
 #include "xhci_dbg.h"
 
-/* Record 18 section 4.2: the strip is enabled once R1 and R2 have been
- * read on Vista and 7, x86 and x64 (section 11); the qemu flavour's
- * XhciMsi86NoStrip turns it off for those readings. */
-#define HCD_MSI_STRIP_DEFAULT       0UL
+/* Record 18 section 4.2: the strip is enabled, R1 and R2 having been read
+ * on Vista SP2 and 7 SP1, x86 and x64 (section 11; the same list on all
+ * four, so one default serves every NT 6 target), for the admitted shape
+ * alone (XhciMsiAdmitted); the qemu flavour's XhciMsi86NoStrip still turns
+ * it off. */
+#define HCD_MSI_STRIP_DEFAULT       1UL
 
 /* The DDK's layouts are the pure walk's (xhci_msi.h). */
 XHCI_C_ASSERT(msi_rrl_list,
@@ -673,6 +675,11 @@ NTSTATUS HcdMsiFilter(PHCD_CONTROLLER hc, PIRP irp)
         outcome = XHCI_MSI_OUT_DISABLED;
     } else {
         outcome = XhciMsiOutcome(hc->FilterClassify.Class);
+        /* Only the shape R1 and R2 read is replaced (section 4.2). */
+        if (outcome == XHCI_MSI_OUT_REPLACED &&
+            !XhciMsiAdmitted(list, &hc->FilterWalk)) {
+            outcome = XHCI_MSI_OUT_UNSUPPORTED;
+        }
         if (outcome == XHCI_MSI_OUT_REPLACED) {
             size = XhciMsiStrip(list, &hc->FilterWalk, &hc->FilterClassify,
                                 NULL, 0);

@@ -42,6 +42,7 @@
 #include <stdio.h>
 #include "../src/xhci_xfer.h"
 #include "../src/xhci_pipe.h"
+#include "../src/xhci_xpipe.h"
 #include "test_harness.h"
 
 #define PAGE            4096UL
@@ -436,6 +437,7 @@ static void normal_transfer(ULONG vo, ULONG length, ULONG mps, ULONG regs,
             req.DirectionIn = in;
             req.MaxPacketSize = mps;
             req.SgList = &sg.List;
+            req.MaxDataTrbs = 0;
             count = 0;
             answer = XhciXferBuildNormal(&req, in, out,
                                          XHCI_XFER_MAX_CONTROL_TRBS, &count);
@@ -540,6 +542,7 @@ static void test_normal_pinned(void)
     req.DirectionIn = 1;
     req.MaxPacketSize = 512;
     req.SgList = &sg.List;
+    req.MaxDataTrbs = 0;
     CHECK_EQ(XhciXferBuildNormal(&req, 1, out, XHCI_XFER_MAX_CONTROL_TRBS,
                                  &count), XHCI_XFER_OK, "built");
     CHECK_EQ(count, 32, "32 TRBs");
@@ -737,6 +740,7 @@ static void test_submit_and_short(void)
     req.DirectionIn = 1;
     req.MaxPacketSize = 512;
     req.SgList = &sg.List;
+    req.MaxDataTrbs = 0;
 
     bad = 0;
     for (k = 0; k < 32; k++) {
@@ -1156,9 +1160,215 @@ static void test_iso_ceiling(void)
              "large, not truncated");
 }
 
+/*
+ * 36.24's wide mapper (hcd_dma.c, hcdMapWide, over XhciXpipeAppendRun):
+ * the HAL's runs for a whole URB - one per physically contiguous stretch,
+ * modelled here at three layouts - appended into one list, then the TDs
+ * cut from it by the planner and each built for the engine. Every element
+ * is one page or part of one, so the list never exceeds the URB's page
+ * span (at most 513 for 2 MiB at any alignment), and every TD it yields
+ * builds into Normal TRBs with no 64 KiB split, one TRB an element.
+ */
+static USBPORT_SCATTER_GATHER_ELEMENT tdWide[XHCI_XPIPE_WIDE_ELEMENTS];
+
+static struct {
+    USBPORT_SCATTER_GATHER_LIST List;
+    USBPORT_SCATTER_GATHER_ELEMENT More[XHCI_XPIPE_TD_ELEMENTS];
+} tdOwn;
+
+/* The HAL's run starting at URB byte `done` of a buffer `offset` into its
+ * first page: contiguous, page-scattered, or in 8-page stretches. */
+static ULONG wide_run(ULONG layout, ULONG offset, ULONG done, ULONG left,
+                      PULONG pa)
+{
+    ULONG page;
+    ULONG in;
+    ULONG run;
+
+    page = (offset + done) / 4096UL;
+    in = (offset + done) % 4096UL;
+    if (layout == 0) {
+        *pa = 0x00800000UL + offset + done;
+        return left;
+    }
+    if (layout == 1) {
+        *pa = 0x01000000UL + page * 5UL * 4096UL + in;
+        run = 4096UL - in;
+    } else {
+        *pa = 0x02000000UL + (page / 8UL) * 64UL * 4096UL +
+              (page % 8UL) * 4096UL + in;
+        run = (8UL - page % 8UL) * 4096UL - in;
+    }
+    return run < left ? run : left;
+}
+
+static void test_wide_mapper_sweep(void)
+{
+    static const ULONG offs[] = { 0, 1, 512, 4095 };
+    static const ULONG lens[] = { 0x20001UL, 0x100000UL, 0x1FFFFFUL,
+                                  0x200000UL };
+    XHCI_XPIPE_CURSOR cur;
+    XHCI_XPIPE_TD xtd;
+    XHCI_NORMAL_REQUEST req;
+    XHCI_TRB out[XHCI_XFER_MAX_CONTROL_TRBS];
+    ULONG layout;
+    ULONG a;
+    ULONG b;
+    ULONG n;
+    ULONG done;
+    ULONG run;
+    ULONG pa;
+    ULONG span;
+    ULONG planned;
+    ULONG count;
+    ULONG ok;
+    ULONG tds;
+
+    for (layout = 0; layout < 3; layout++) {
+        for (a = 0; a < sizeof(offs) / sizeof(offs[0]); a++) {
+            for (b = 0; b < sizeof(lens) / sizeof(lens[0]); b++) {
+                n = 0;
+                done = 0;
+                ok = 1;
+                while (done < lens[b] && ok) {
+                    run = wide_run(layout, offs[a], done, lens[b] - done,
+                                   &pa);
+                    ok = XhciXpipeAppendRun(tdWide, &n,
+                                            XHCI_XPIPE_WIDE_ELEMENTS, pa,
+                                            run, done);
+                    done += run;
+                }
+                CHECK(ok, "the whole URB maps into one wide list");
+                span = (offs[a] + lens[b] + 4095UL) / 4096UL;
+                CHECK_EQ(n, span, "one element a page it touches");
+                CHECK(n <= XHCI_XPIPE_WIDE_ELEMENTS, "inside 513");
+
+                cur.Element = 0;
+                cur.Skip = 0;
+                planned = 0;
+                tds = 0;
+                while (ok && XhciXpipePlan(tdWide, n, lens[b], planned,
+                                           512, XHCI_XPIPE_TD_ELEMENTS,
+                                           &cur, &xtd) == XHCI_XPIPE_OK) {
+                    tds++;
+                    if (XhciXpipeBuild(tdWide, n, &xtd, &tdOwn.List,
+                                       XHCI_XPIPE_TD_ELEMENTS) != xtd.Count) {
+                        ok = 0;
+                        break;
+                    }
+                    req.TransferLength = xtd.Bytes;
+                    req.DirectionIn = 1;
+                    req.MaxPacketSize = 512;
+                    req.SgList = &tdOwn.List;
+                    req.MaxDataTrbs = 0;
+                    count = 0;
+                    if (XhciXferBuildNormal(&req, 1, out,
+                                            XHCI_XFER_MAX_CONTROL_TRBS,
+                                            &count) != XHCI_XFER_OK ||
+                        count != xtd.Count) {
+                        ok = 0;
+                        break;
+                    }
+                    planned += xtd.Bytes;
+                }
+                CHECK(ok, "every TD builds, one TRB an element");
+                CHECK_EQ(planned, lens[b], "the TDs cover the URB");
+                CHECK(tds >= (lens[b] + 31UL * 4096UL - 1UL) /
+                                 (31UL * 4096UL),
+                      "no TD above 31 pages");
+            }
+        }
+    }
+    /* Past 513 the list refuses rather than overflows. */
+    n = 0;
+    CHECK_EQ(XhciXpipeAppendRun(tdWide, &n, XHCI_XPIPE_WIDE_ELEMENTS,
+                                0x00800800UL, 0x200000UL, 0), 1,
+             "2 MiB at 2048 bytes in: 513 elements");
+    CHECK_EQ(n, 513, "exactly the entry's size");
+    CHECK_EQ(XhciXpipeAppendRun(tdWide, &n, XHCI_XPIPE_WIDE_ELEMENTS,
+                                0x00A00800UL, 1, 0x200000UL), 0,
+             "one byte more is refused");
+}
+
+/*
+ * 36.25 (record 13 section 11.7, points 3 and 4): on a big ring the wide
+ * list itself is the one TD's list, built at the engine's cap of 513 into
+ * a 515-TRB scratch - one TRB an element, so 1 MiB is 256 TRBs page-aligned
+ * and 257 not, 2 MiB 512 and 513, at every page offset and three layouts.
+ */
+static struct {
+    USBPORT_SCATTER_GATHER_LIST List;
+    USBPORT_SCATTER_GATHER_ELEMENT More[XHCI_XPIPE_WIDE_ELEMENTS - 2];
+} oneTd;
+
+static XHCI_TRB oneOut[XHCI_XPIPE_WIDE_ELEMENTS + 2];
+
+static void test_wide_one_td(void)
+{
+    static const ULONG lens[] = { 0x100000UL, 0x200000UL };
+    XHCI_NORMAL_REQUEST req;
+    ULONG layout;
+    ULONG off;
+    ULONG b;
+    ULONG n;
+    ULONG done;
+    ULONG run;
+    ULONG pa;
+    ULONG count;
+    ULONG want;
+    ULONG ok;
+    ULONG seen[4];
+
+    seen[0] = seen[1] = seen[2] = seen[3] = 0;
+    for (layout = 0; layout < 3; layout++) {
+        for (off = 0; off < 4096UL; off++) {
+            for (b = 0; b < 2; b++) {
+                n = 0;
+                done = 0;
+                ok = 1;
+                while (done < lens[b] && ok) {
+                    run = wide_run(layout, off, done, lens[b] - done, &pa);
+                    ok = XhciXpipeAppendRun(oneTd.List.SgElement, &n,
+                                            XHCI_XPIPE_WIDE_ELEMENTS, pa,
+                                            run, done);
+                    done += run;
+                }
+                oneTd.List.SgElementCount = n;
+                req.TransferLength = lens[b];
+                req.DirectionIn = 1;
+                req.MaxPacketSize = 1024;
+                req.SgList = &oneTd.List;
+                req.MaxDataTrbs = XHCI_XFER_MAX_WIDE_DATA_TRBS;
+                count = 0;
+                if (ok) {
+                    ok = XhciXferBuildNormal(&req, 1, oneOut,
+                                             XHCI_XPIPE_WIDE_ELEMENTS + 2,
+                                             &count) == XHCI_XFER_OK;
+                }
+                want = lens[b] / 4096UL + ((off != 0) ? 1UL : 0UL);
+                CHECK(ok, "the whole URB builds as one TD");
+                CHECK_EQ(count, want, "one TRB an element, as aligned");
+                if (count == 256) {
+                    seen[0]++;
+                } else if (count == 257) {
+                    seen[1]++;
+                } else if (count == 512) {
+                    seen[2]++;
+                } else if (count == 513) {
+                    seen[3]++;
+                }
+            }
+        }
+    }
+    CHECK(seen[0] && seen[1] && seen[2] && seen[3],
+          "256, 257, 512 and 513 all reached");
+}
+
 int main(void)
 {
     test_normal_pinned();
+    test_wide_mapper_sweep();
+    test_wide_one_td();
     test_normal_sweep();
     test_control_sweep();
     test_submit_and_short();

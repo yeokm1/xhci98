@@ -23,6 +23,15 @@
  * orphans the PDO. Busy is never held across a call down the stack: the
  * PDO's own STOP and REMOVE wait for it (hcd_pdo.c, hcdPdoQuiesce).
  *
+ * A composite device's FDO, the fourth role (task 36.43; design record 13
+ * section 10.12), is this code too, told apart by its kind
+ * (HCD_KIND_COMPOSITE_FDO): attached over a composite-parent PDO
+ * (XHCI98\COMPOSITE), its BusRelations are the device's function PDOs, and
+ * it has no door - no name, no interface, no IOCTL (hcd_entry.c refuses
+ * them). Its remove lets go of the functions as a hub FDO's lets go of its
+ * children, but its start re-presents them in place (HcdDevicePdoRepresentAsk)
+ * rather than cycling the port, which would take the parent itself away.
+ *
  * IRQL: PASSIVE_LEVEL throughout (PnP, power on DO_POWER_PAGABLE objects,
  * and IRP_MJ_DEVICE_CONTROL from user mode), except where a function says
  * otherwise.
@@ -95,8 +104,11 @@ static NTSTATUS NTAPI hcdHubSignal(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
-/* AddDevice for a hub's PDO. Anything else of this driver's own that is not
- * the root hub's is refused. */
+/* Whether this FDO is a composite device's (task 36.43). */
+#define hcdIsComposite(fdo) ((fdo)->Common.Kind == HCD_KIND_COMPOSITE_FDO)
+
+/* AddDevice for a hub's PDO, or a composite device's (task 36.43). Anything
+ * else of this driver's own that is not the root hub's is refused. */
 NTSTATUS HcdHubAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
 {
     PHCD_DEVICE_PDO pdoExt;
@@ -105,7 +117,8 @@ NTSTATUS HcdHubAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
     NTSTATUS status;
 
     pdoExt = (PHCD_DEVICE_PDO)pdo->DeviceExtension;
-    if (pdoExt->Common.Kind != HCD_KIND_DEVICE_PDO || !pdoExt->Hub) {
+    if (pdoExt->Common.Kind != HCD_KIND_DEVICE_PDO ||
+        !HcdPdoIsParent(pdoExt)) {
         return STATUS_NOT_SUPPORTED;
     }
     status = IoCreateDevice(driver, sizeof(HCD_HUB_FDO), NULL,
@@ -114,7 +127,8 @@ NTSTATUS HcdHubAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
         return status;
     }
     ext = (PHCD_HUB_FDO)fdo->DeviceExtension;
-    ext->Common.Kind = HCD_KIND_HUB_FDO;
+    ext->Common.Kind =
+        pdoExt->Composite ? HCD_KIND_COMPOSITE_FDO : HCD_KIND_HUB_FDO;
     ext->Common.Self = fdo;
     ext->Common.PnpState = HCD_PNP_ADDED;
     ext->Common.DevicePower = PowerDeviceD0;
@@ -130,22 +144,32 @@ NTSTATUS HcdHubAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
     }
     fdo->Flags |= DO_POWER_PAGABLE;
     fdo->Flags &= ~DO_DEVICE_INITIALIZING;
-    XHCI_DBG_VALUE("hcd: hub FDO attached, hub PDO serial", pdoExt->Serial);
+    XHCI_DBG_VALUE(pdoExt->Composite
+                       ? "hcd: composite FDO attached, parent PDO serial"
+                       : "hcd: hub FDO attached, hub PDO serial",
+                   pdoExt->Serial);
     return STATUS_SUCCESS;
 }
 
 /* The door's names, at a start that succeeded below, and the settle the
- * first answer after it waits for (task 33.3). */
+ * first answer after it waits for (task 33.3). A composite FDO has no door,
+ * and re-presents its let-go functions in place (task 36.43). */
 static VOID hcdHubStarted(PHCD_HUB_FDO fdo)
 {
     PHCD_CONTROLLER hc;
 
     hc = hcdHubControllerEnter(fdo);
-    HcdDoorHubStart(fdo, hc);
+    if (!hcdIsComposite(fdo)) {
+        HcdDoorHubStart(fdo, hc);
+    }
     if (hc != NULL) {
         /* Before the settle is asked, so the pass that settles it has
          * re-enumerated what an earlier FDO's removal let go of. */
-        (VOID)HcdDevicePdoRepresent(hc, hcdHubPdoOf(fdo)->Serial);
+        if (hcdIsComposite(fdo)) {
+            (VOID)HcdDevicePdoRepresentAsk(hc, hcdHubPdoOf(fdo)->Serial);
+        } else {
+            (VOID)HcdDevicePdoRepresent(hc, hcdHubPdoOf(fdo)->Serial);
+        }
     }
     fdo->SettleTarget = (hc != NULL) ? HcdEnumSettleAsk(hc) : 0;
     fdo->SettlePending = fdo->SettleTarget != 0;
@@ -211,6 +235,7 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
     PHCD_CONTROLLER hc;
     PDEVICE_RELATIONS old;
     PDEVICE_RELATIONS rel;
+    POWER_STATE d0;
     KEVENT done;
     NTSTATUS status;
 
@@ -232,7 +257,9 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
         if (hc != NULL) {
             (VOID)HcdDevicePdoLetGo(hc, hcdHubPdoOf(fdo)->Serial);
         }
-        HcdDoorHubRemove(fdo, hc);
+        if (!hcdIsComposite(fdo)) {
+            HcdDoorHubRemove(fdo, hc);
+        }
         hcdHubControllerLeave(fdo, hc);
         irp->IoStatus.Status = STATUS_SUCCESS;
         status = hcdHubPassDown(fdo, irp);
@@ -257,8 +284,15 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
         status = irp->IoStatus.Status;
         if (NT_SUCCESS(status)) {
             fdo->Common.PnpState = HCD_PNP_STARTED;
+            /* A started device is in D0, and says so (the PoSetPowerState
+             * contract; design record 13 section 10.12). */
+            fdo->Common.DevicePower = PowerDeviceD0;
+            d0.DeviceState = PowerDeviceD0;
+            (VOID)PoSetPowerState(fdo->Common.Self, DevicePowerState, d0);
             hcdHubStarted(fdo);
-            (VOID)InterlockedExchange((PLONG)&fdo->DoorOpen, 1);
+            if (!hcdIsComposite(fdo)) {
+                (VOID)InterlockedExchange((PLONG)&fdo->DoorOpen, 1);
+            }
         }
         status = HcdCompleteIrp(irp, status, 0);
         hcdHubIoLeave(fdo);
@@ -270,14 +304,18 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
         (VOID)InterlockedExchange((PLONG)&fdo->DoorOpen, 0);
         fdo->Common.PnpState = HCD_PNP_STOPPED;
         fdo->SettlePending = 0;
-        HcdDoorHubStop(fdo);
+        if (!hcdIsComposite(fdo)) {
+            HcdDoorHubStop(fdo);
+        }
         irp->IoStatus.Status = STATUS_SUCCESS;
         break;
     case IRP_MN_SURPRISE_REMOVAL:
         (VOID)InterlockedExchange((PLONG)&fdo->DoorOpen, 0);
         fdo->Common.PnpState = HCD_PNP_SURPRISE_REMOVED;
         fdo->SettlePending = 0;
-        HcdDoorHubStop(fdo);
+        if (!hcdIsComposite(fdo)) {
+            HcdDoorHubStop(fdo);
+        }
         irp->IoStatus.Status = STATUS_SUCCESS;
         break;
     case IRP_MN_QUERY_STOP_DEVICE:
@@ -300,7 +338,10 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
                       : NULL;
             hcdHubControllerLeave(fdo, hc);
             if (rel != NULL) {
-                XHCI_DBG_VALUE("hcd: hub FDO relations, count", rel->Count);
+                XHCI_DBG_VALUE(hcdIsComposite(fdo)
+                                   ? "hcd: composite FDO relations, count"
+                                   : "hcd: hub FDO relations, count",
+                               rel->Count);
                 if (old != NULL) {
                     HcdPoolFreeForeign(old);
                 }
@@ -317,17 +358,210 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
     return status;
 }
 
+/*
+ * Power (design record 13 section 10.12, "Power"). The FDO is its stack's
+ * power policy owner for system power only - selective suspend asks nothing
+ * of it (record 14 section 5.1), and it never requests a state of its own
+ * in S0:
+ *
+ *   - a system SET_POWER goes down first; on its way back up the FDO
+ *     requests the device state its PDO's capabilities give for it - D3
+ *     for every sleep state, D0 for S0 (XhciSuspParentWant) - and the
+ *     system IRP completes only from that request's callback. The power
+ *     manager sends a sleep's system IRPs to children before their parent
+ *     and a wake's to the parent first, so the parent reaches D3 after its
+ *     children's system IRPs and D0 before theirs;
+ *   - a device SET_POWER is recorded and reported (PoSetPowerState): a
+ *     lower state before it goes down, D0 once it has come back up;
+ *   - the rest goes down untouched.
+ *
+ * The Windows 98 rules (win98-wdm.md, "Power Management"): no request for
+ * the state the stack is already in on 98 and ME (on NT that state is
+ * requested again, as WDM asks); PoSetPowerState's return unused; the
+ * system IRP completed at PASSIVE_LEVEL - through the work item when the
+ * device IRP finished above it, which this driver's own PDO, completing
+ * every power IRP of a hub or a composite inline, never does. The system
+ * IRP and a D0 keep the FDO's I/O count until they complete, so a remove
+ * waits for them.
+ */
+
+/* IRQL: PASSIVE_LEVEL. */
+static VOID hcdHubSystemComplete(PHCD_HUB_FDO fdo)
+{
+    PIRP irp;
+
+    irp = fdo->PendingSystemIrp;
+    fdo->PendingSystemIrp = NULL;
+    PoStartNextPowerIrp(irp);
+    IoCompleteRequest(irp, IO_NO_INCREMENT);
+    hcdHubIoLeave(fdo);
+}
+
+/* IRQL: PASSIVE_LEVEL (a system worker thread). */
+static VOID NTAPI hcdHubPowerWork(PVOID Context)
+{
+    hcdHubSystemComplete((PHCD_HUB_FDO)Context);
+}
+
+/* The device IRP the system IRP asked for has finished: the system IRP may
+ * now complete. IRQL: <= DISPATCH_LEVEL. */
+static VOID NTAPI hcdHubSystemDeviceDone(PDEVICE_OBJECT DeviceObject,
+                                         UCHAR MinorFunction,
+                                         POWER_STATE PowerState,
+                                         PVOID Context,
+                                         PIO_STATUS_BLOCK IoStatus)
+{
+    PHCD_HUB_FDO fdo;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+    UNREFERENCED_PARAMETER(MinorFunction);
+    UNREFERENCED_PARAMETER(PowerState);
+    UNREFERENCED_PARAMETER(IoStatus);
+
+    fdo = (PHCD_HUB_FDO)Context;
+    if (KeGetCurrentIrql() == PASSIVE_LEVEL) {
+        hcdHubSystemComplete(fdo);
+    } else {
+        ExInitializeWorkItem(&fdo->PowerWork, hcdHubPowerWork, fdo);
+        ExQueueWorkItem(&fdo->PowerWork, DelayedWorkQueue);
+    }
+}
+
+/* IRQL: <= DISPATCH_LEVEL. */
+static NTSTATUS NTAPI hcdHubSystemDone(PDEVICE_OBJECT DeviceObject,
+                                       PIRP Irp, PVOID Context)
+{
+    PHCD_HUB_FDO fdo;
+    PIO_STACK_LOCATION stack;
+    POWER_STATE state;
+    ULONG want;
+    ULONG ok;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    fdo = (PHCD_HUB_FDO)Context;
+    stack = IoGetCurrentIrpStackLocation(Irp);
+    ok = NT_SUCCESS(Irp->IoStatus.Status) ? 1UL : 0UL;
+    if (ok) {
+        fdo->Common.SystemPower = stack->Parameters.Power.State.SystemState;
+    }
+    want = XhciSuspParentWant(
+        ok, fdo->Common.PnpState == HCD_PNP_STARTED ? 1UL : 0UL,
+        fdo->Common.SystemPower == PowerSystemWorking ? 1UL : 0UL,
+        (ULONG)fdo->Common.DevicePower,
+        IoIsWdmVersionAvailable(1, 0x10) ? 1UL : 0UL);
+    XHCI_DBG_VALUE("hcd: parent FDO system state, device state asked",
+                   ((ULONG)fdo->Common.SystemPower << 8) | want);
+    if (want != 0) {
+        /* Set before the request: the callback may run inside it. */
+        fdo->PendingSystemIrp = Irp;
+        state.DeviceState = (DEVICE_POWER_STATE)want;
+        if (NT_SUCCESS(PoRequestPowerIrp(fdo->Pdo, IRP_MN_SET_POWER, state,
+                                         hcdHubSystemDeviceDone, fdo,
+                                         NULL))) {
+            return STATUS_MORE_PROCESSING_REQUIRED;
+        }
+        /* No device IRP and no callback follow: the system IRP completes
+         * now, the stack's state unchanged - a logical one, no hardware
+         * waits on it. */
+        fdo->PendingSystemIrp = NULL;
+    }
+    PoStartNextPowerIrp(Irp);
+    hcdHubIoLeave(fdo);
+    return STATUS_SUCCESS;
+}
+
+/* IRQL: <= DISPATCH_LEVEL. */
+static NTSTATUS NTAPI hcdHubD0Done(PDEVICE_OBJECT DeviceObject, PIRP Irp,
+                                   PVOID Context)
+{
+    PHCD_HUB_FDO fdo;
+    POWER_STATE state;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    fdo = (PHCD_HUB_FDO)Context;
+    if (Irp->PendingReturned) {
+        IoMarkIrpPending(Irp);
+    }
+    if (NT_SUCCESS(Irp->IoStatus.Status)) {
+        fdo->Common.DevicePower = PowerDeviceD0;
+        state.DeviceState = PowerDeviceD0;
+        (VOID)PoSetPowerState(fdo->Common.Self, DevicePowerState, state);
+    }
+    PoStartNextPowerIrp(Irp);
+    hcdHubIoLeave(fdo);
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS HcdHubFdoPower(PHCD_HUB_FDO fdo, PIRP irp)
 {
+    PIO_STACK_LOCATION stack;
     NTSTATUS status;
 
     if (!hcdHubIoEnter(fdo)) {
         PoStartNextPowerIrp(irp);
         return HcdCompleteIrp(irp, STATUS_DELETE_PENDING, 0);
     }
+    stack = IoGetCurrentIrpStackLocation(irp);
+    if (stack->MinorFunction == IRP_MN_SET_POWER &&
+        stack->Parameters.Power.Type == SystemPowerState) {
+        /* The count is held until the system IRP completes. */
+        IoMarkIrpPending(irp);
+        IoCopyCurrentIrpStackLocationToNext(irp);
+        HCD_SET_COMPLETION_ALWAYS(irp, hcdHubSystemDone, fdo);
+        (VOID)PoCallDriver(fdo->LowerDevice, irp);
+        return STATUS_PENDING;
+    }
+    if (stack->MinorFunction == IRP_MN_SET_POWER &&
+        stack->Parameters.Power.State.DeviceState == PowerDeviceD0) {
+        /* Reported once the stack below has it; the count is held until
+         * then. */
+        IoCopyCurrentIrpStackLocationToNext(irp);
+        HCD_SET_COMPLETION_ALWAYS(irp, hcdHubD0Done, fdo);
+        return PoCallDriver(fdo->LowerDevice, irp);
+    }
+    if (stack->MinorFunction == IRP_MN_SET_POWER) {
+        fdo->Common.DevicePower = stack->Parameters.Power.State.DeviceState;
+        (VOID)PoSetPowerState(fdo->Common.Self, DevicePowerState,
+                              stack->Parameters.Power.State);
+    }
     PoStartNextPowerIrp(irp);
     IoSkipCurrentIrpStackLocation(irp);
     status = PoCallDriver(fdo->LowerDevice, irp);
+    hcdHubIoLeave(fdo);
+    return status;
+}
+
+/* IRP_MJ_CLEANUP on a hub FDO: what the closing handle queued at the door
+ * is cancelled (task 36.45), inside the FDO's I/O count and the PDO's
+ * Busy, as a request is - whatever the door's state, since a closed door
+ * may still hold requests it queued while open. */
+NTSTATUS HcdHubFdoCleanup(PHCD_HUB_FDO fdo, PIRP irp)
+{
+    PHCD_CONTROLLER hc;
+
+    if (!hcdHubIoEnter(fdo)) {
+        return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+    }
+    hc = hcdHubControllerEnter(fdo);
+    HcdDoorCleanup(hc, irp);
+    hcdHubControllerLeave(fdo, hc);
+    hcdHubIoLeave(fdo);
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+}
+
+/* IRP_MJ_SYSTEM_CONTROL on a hub FDO: no WMI provider here either, so the
+ * request goes down to the hub's device PDO, inside the FDO's I/O count
+ * (finding D4, as HcdRootHubFdoSystemControl). */
+NTSTATUS HcdHubFdoSystemControl(PHCD_HUB_FDO fdo, PIRP irp)
+{
+    NTSTATUS status;
+
+    if (!hcdHubIoEnter(fdo)) {
+        return HcdCompleteIrp(irp, STATUS_DELETE_PENDING, 0);
+    }
+    status = hcdHubPassDown(fdo, irp);
     hcdHubIoLeave(fdo);
     return status;
 }
@@ -352,7 +586,8 @@ NTSTATUS HcdHubFdoDeviceControl(PHCD_HUB_FDO fdo, PIRP irp)
         return HcdCompleteIrp(irp, STATUS_DEVICE_NOT_CONNECTED, 0);
     }
     hc = hcdHubControllerEnter(fdo);
-    status = HcdDoorHubIoctl(hc, hcdHubPdoOf(fdo), irp);
+    status = HcdDoorHubIoctl(hc, hcdHubPdoOf(fdo), irp, &fdo->OutstandingIo,
+                             &fdo->RemoveEvent);
     hcdHubControllerLeave(fdo, hc);
     hcdHubIoLeave(fdo);
     return status;

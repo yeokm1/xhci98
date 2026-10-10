@@ -277,9 +277,48 @@ typedef struct _XHCIHC_COUNTERS {
     ULONG IdleAbandoned;
     ULONG IdleQuarantined;
     ULONG SuspNotesSuppressed;
+    /* Selective suspend, stage B (design record 14 section 8.10; roadmap-hcd
+     * 36.38), appended contiguous at word 142: FUNCTION_SUSPEND with options
+     * 03h the device took and arm steps whose request was not taken; options
+     * 0 taken and disarms not taken (the device cycled); SuperSpeed hub
+     * ports observed in U3 and verified back in U0; GetStatus(interface)
+     * answered, failed (a STALL, failure or short answer) and the capable
+     * bits they found; configurations with a function past interface 31;
+     * FUNCTION_WAKE notifications received for a device, dropped at receipt
+     * with the window closed, taken as a suspension's wake, taken by a hub
+     * port's observation or a refusal's end, emptied by a closing window or
+     * taken for a device not suspended, and naming no PDO's first interface
+     * or one past 31; Device Notifications dropped with the switch on (another
+     * type, or a slot with no device); and WAIT_WAKEs a configuration left
+     * without a wake function. The DPC's under the controller lock, the
+     * thread's plainly or under it. */
+    ULONG SsSuspArms;
+    ULONG SsSuspArmRefused;
+    ULONG SsSuspDisarms;
+    ULONG SsSuspDisarmFailed;
+    ULONG SsSuspHubU3;
+    ULONG SsSuspHubResumes;
+    ULONG SsSuspCapReads;
+    ULONG SsSuspCapFailed;
+    ULONG SsSuspCapable;
+    ULONG SsSuspFarInterfaces;
+    ULONG FuncWakeEvents;
+    ULONG FuncWakeClosed;
+    ULONG FuncWakeAsEvent;
+    ULONG FuncWakeInSequence;
+    ULONG FuncWakeIgnored;
+    ULONG FuncWakeUnattributed;
+    ULONG DevNotifyDropped;
+    ULONG SsSuspCapSettled;
+    /* Composite devices as devnodes (task 36.43; design record 13 section
+     * 10.12), appended at word 160: composite-parent PDOs created, and
+     * function PDOs re-presented in place at a composite FDO's start. The
+     * thread's plain writes. */
+    ULONG CompositeParents;
+    ULONG CompositeRepresented;
 } XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 142 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 162 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */

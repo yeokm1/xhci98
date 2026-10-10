@@ -1,6 +1,10 @@
 /*
  * hcd_susp.c - selective suspend's thread executor (roadmap-hcd.md task
- * 36.30; design record 14 sections 3, 3.9 and 3.10).
+ * 36.30; design record 14 sections 3, 3.9 and 3.10), and stage B's for
+ * SuperSpeed devices (36.38; section 8): the functions' stop, Function
+ * Suspend with wake per function, the strict disarm, U3 at a SuperSpeed hub
+ * port, the Function Wake notification's latch and its consumers, and the
+ * configuration transaction's capability reads.
  *
  * The enum thread's half of selective suspend: the admission gate on a
  * device's pipes and the restart that reopens it (3.2), the suspend and
@@ -27,6 +31,28 @@
 #define HCD_SUSP_REQ_CLEAR_FEATURE  0x01U
 #define HCD_SUSP_REQ_SET_FEATURE    0x03U
 #define HCD_SUSP_FEAT_REMOTE_WAKEUP 1U
+
+/* USB 3.2 9.4.9 and Table 9-7 (record 14 section 8.1): SetFeature(
+ * FUNCTION_SUSPEND), selector 0, to the function's first interface, its
+ * Suspend Options in wIndex 15:8 - bit 0 Low Power Suspend, bit 1 Function
+ * Remote Wake - and GetStatus() to that interface (9.4.5): bit 0 Function
+ * Remote Wake Capable. */
+#define HCD_SUSP_RT_IFACE_OUT       0x01U
+#define HCD_SUSP_RT_IFACE_IN        0x81U
+#define HCD_SUSP_REQ_GET_STATUS     0x00U
+#define HCD_SUSP_FEAT_FUNC_SUSPEND  0U
+#define HCD_SUSP_FS_ARM             0x03UL
+#define HCD_SUSP_FS_DISARM          0x00UL
+#define HCD_SUSP_FWR_CAPABLE        0x01U
+
+/* The susp.fw line's dispositions (record 14 section 8.10). */
+#define HCD_SUSP_FW_EVENT           1UL /* the suspension's wake (a)      */
+#define HCD_SUSP_FW_OBSERVE         2UL /* a hub port's observation (b)   */
+#define HCD_SUSP_FW_REFUSAL         3UL /* a refusal's end (c)            */
+#define HCD_SUSP_FW_DROPPED         4UL /* a device not suspended, or an
+                                         * end not a refusal's            */
+#define HCD_SUSP_FW_CLOSED          5UL /* the window closed at receipt   */
+#define HCD_SUSP_FW_UNATTRIBUTED    0x8UL /* or'ed: no PDO's function     */
 
 /* The PDOs of a device's chain: one per function of a split device, at
  * most XHCI_FUNC_MAX (xhci_func.c), else one. Read into the controller's
@@ -65,6 +91,19 @@ static VOID hcdSuspNote(PHCD_CONTROLLER hc, const char *label, ULONG value)
 {
     if (InterlockedIncrement(&hc->SuspNotes) <= HCD_SUSP_NOTE_BUDGET) {
         XhciLogNote(&hc->Hc, label, value);
+    } else {
+        (VOID)InterlockedIncrement(
+            (PLONG)&hc->Counters.SuspNotesSuppressed);
+    }
+}
+
+/* The same, from inside the controller lock (stage B's notification lines,
+ * the DPC's among them). IRQL: DISPATCH_LEVEL, controller lock held. */
+static VOID hcdSuspNoteLocked(PHCD_CONTROLLER hc, const char *label,
+                              ULONG value)
+{
+    if (InterlockedIncrement(&hc->SuspNotes) <= HCD_SUSP_NOTE_BUDGET) {
+        XhciLogNoteLocked(&hc->Hc, label, value);
     } else {
         (VOID)InterlockedIncrement(
             (PLONG)&hc->Counters.SuspNotesSuppressed);
@@ -136,7 +175,11 @@ static PHCD_DEVICE_PDO hcdSuspPdo(PDEVICE_OBJECT object)
                             : NULL;
 }
 
-/* The PDOs on the device's chain (the thread is its writer). */
+/* The function PDOs on the device's chain (the thread is its writer). A
+ * composite parent (task 36.43; design record 13 section 10.12) heads a
+ * split device's chain and is no voter: it carries no client, so nothing
+ * moves its D-state from D0, and the device's link follows its children
+ * alone. Every walk that votes skips it. */
 static ULONG hcdSuspChainLength(PHCD_USB_DEVICE dev)
 {
     PHCD_DEVICE_PDO pdo;
@@ -144,17 +187,18 @@ static ULONG hcdSuspChainLength(PHCD_USB_DEVICE dev)
 
     n = 0;
     for (pdo = hcdSuspPdo(dev->Pdo); pdo != NULL; pdo = pdo->Sibling) {
-        n++;
+        if (!pdo->Composite) {
+            n++;
+        }
     }
     return n;
 }
 
-/* Whether the machine serves the device: the switch on, a USB 2.0 device
- * that is not a hub, with a PDO (5.1). */
+/* Whether the machine serves the device: the switch on, a USB 2.0 or
+ * (stage B, 8.2) SuperSpeed device that is not a hub, with a PDO (5.1). */
 static ULONG hcdSuspServes(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     PHCD_DEVICE_PDO pdo;
-    ULONG cls;
 
     if (!hc->SuspOn || dev->Gone || dev->Hub != NULL) {
         return 0;
@@ -170,15 +214,106 @@ static ULONG hcdSuspServes(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         return 0;
     }
     /* The class decoded at the PDO's creation (hcd_pdo.c). */
-    cls = pdo->SpeedClass;
-    return XhciSuspEligible(1, !(cls == XHCI_SPEED_LOW ||
-                                 cls == XHCI_SPEED_FULL ||
-                                 cls == XHCI_SPEED_HIGH),
-                            0);
+    return XhciSuspEligible(1, pdo->SpeedClass, 0);
 }
 
-/* The device's PDOs into funcs[] (at most HCD_SUSP_MAX_FUNCS), and their
- * count. Controller lock held. */
+/* A SuperSpeed device's link, stage B's (8.4): its first PDO's class, which
+ * every PDO of the device shares. */
+static ULONG hcdSuspSs(PHCD_USB_DEVICE dev)
+{
+    PHCD_DEVICE_PDO pdo;
+
+    pdo = hcdSuspPdo(dev->Pdo);
+    return (pdo != NULL && pdo->SpeedClass == XHCI_SPEED_SUPER) ? 1UL : 0UL;
+}
+
+/* A PDO's ownership mask (8.3). A composite parent owns no interface: it
+ * is no function (task 36.43), and its Function of 0 would otherwise read
+ * as an unsplit device's, owning every interface. */
+static ULONG hcdSuspOwn(PHCD_DEVICE_PDO pdo)
+{
+    if (pdo->Composite) {
+        return 0;
+    }
+    return XhciFuncOwnership(pdo->Function, pdo->InterfaceMask);
+}
+
+/* The union of the device's PDOs' FwArmed, kept in FwArmedAll for the
+ * snapshot. Thread; controller lock held for the write. */
+static ULONG hcdSuspArmedAll(PHCD_USB_DEVICE dev)
+{
+    PHCD_DEVICE_PDO pdo;
+    ULONG all;
+
+    all = 0;
+    for (pdo = hcdSuspPdo(dev->Pdo); pdo != NULL; pdo = pdo->Sibling) {
+        all |= pdo->FwArmed;
+    }
+    dev->FwArmedAll = all;
+    return all;
+}
+
+/* Notifications a closing window dropped (XHCI_SUSP_LINK.FwDropped) into
+ * the counter. Controller lock held. */
+static VOID hcdSuspFwDrain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    hc->Counters.FuncWakeIgnored += dev->Susp.FwDropped;
+    dev->Susp.FwDropped = 0;
+}
+
+/*
+ * One consumer's latched notifications (8.7): each interface mapped to the
+ * PDO whose ownership mask holds it - the function that woke - counted
+ * unattributed when it is no first interface of the configuration, no PDO
+ * holds it, or it is past 31, and each logged (susp.fw: slot, interface,
+ * link state, PDO index, disposition). Returns how many. The chain stable
+ * (the thread); controller lock held.
+ */
+static ULONG hcdSuspFwNote(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                           ULONG bits, ULONG beyond, ULONG disposition)
+{
+    PHCD_DEVICE_PDO pdo;
+    ULONG masks[HCD_SUSP_MAX_FUNCS];
+    ULONG count;
+    ULONG index;
+    ULONG iface;
+    ULONG n;
+    ULONG d;
+
+    count = 0;
+    for (pdo = hcdSuspPdo(dev->Pdo); pdo != NULL && count < HCD_SUSP_MAX_FUNCS;
+         pdo = pdo->Sibling) {
+        if (pdo->Composite) {
+            continue;   /* indexed as hcdSuspRead indexes the functions */
+        }
+        masks[count++] = hcdSuspOwn(pdo);
+    }
+    n = 0;
+    for (iface = 0; iface < 33; iface++) {
+        if (iface < 32 ? (bits & (1UL << iface)) == 0 : !beyond) {
+            continue;
+        }
+        n++;
+        index = XhciFuncOwnerOf(masks, count, iface);
+        d = disposition;
+        if (iface >= 32 || (dev->FwFirsts & (1UL << iface)) == 0 ||
+            index >= count) {
+            hc->Counters.FuncWakeUnattributed++;
+            d |= HCD_SUSP_FW_UNATTRIBUTED;
+            index = 0xFF;
+        }
+        hcdSuspNoteLocked(hc, "susp.fw",
+                          ((dev->SlotId & 0xFFUL) << 24) |
+                              (((iface < 32) ? iface : 0xFFUL) << 16) |
+                              ((index & 0xFFUL) << 8) |
+                              ((dev->Susp.State & 0xFUL) << 4) | (d & 0xFUL));
+    }
+    return n;
+}
+
+/* The device's function PDOs into funcs[] (at most HCD_SUSP_MAX_FUNCS),
+ * pdos[] aligned with it, and their count; a composite parent is skipped
+ * (hcdSuspChainLength). Controller lock held. */
 static ULONG hcdSuspRead(PHCD_USB_DEVICE dev, PHCD_DEVICE_PDO *pdos,
                          PXHCI_SUSP_FUNC funcs)
 {
@@ -188,6 +323,9 @@ static ULONG hcdSuspRead(PHCD_USB_DEVICE dev, PHCD_DEVICE_PDO *pdos,
     n = 0;
     for (pdo = hcdSuspPdo(dev->Pdo); pdo != NULL && n < HCD_SUSP_MAX_FUNCS;
          pdo = pdo->Sibling) {
+        if (pdo->Composite) {
+            continue;
+        }
         pdos[n] = pdo;
         funcs[n].PwrState = pdo->PwrState;
         funcs[n].PwrWanted = pdo->PwrWanted;
@@ -203,6 +341,11 @@ static ULONG hcdSuspRead(PHCD_USB_DEVICE dev, PHCD_DEVICE_PDO *pdos,
         funcs[n].CompleteDx = 0;
         funcs[n].ToD0 = 0;
         funcs[n].CompleteD0 = 0;
+        /* Stage B (8.3, 8.8): a wake function, and armed. Both 0 for a
+         * USB 2.0 device, whose FwCapable and FwArmed are never set. */
+        funcs[n].WakeFn = (dev->FwCapable & hcdSuspOwn(pdo)) != 0 ? 1UL : 0UL;
+        funcs[n].Armed = (pdo->FwArmed != 0) ? 1UL : 0UL;
+        funcs[n].ArmNow = 0;
         n++;
     }
     return n;
@@ -876,6 +1019,9 @@ static ULONG hcdSuspIdleBatchLocked(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     n = 0;
     for (pdo = hcdSuspPdo(dev->Pdo); pdo != NULL && n < HCD_SUSP_MAX_FUNCS;
          pdo = pdo->Sibling) {
+        if (pdo->Composite) {
+            continue;
+        }
         f[n].Started = pdo->PwrStarted;
         f[n].Closed = pdo->PwrClosed;
         f[n].IdleState = pdo->IdleState;
@@ -893,7 +1039,7 @@ static ULONG hcdSuspIdleBatchLocked(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         dev->IdleBatch = 1;
     }
     for (pdo = hcdSuspPdo(dev->Pdo); pdo != NULL; pdo = pdo->Sibling) {
-        if (!pdo->PwrStarted || pdo->PwrClosed) {
+        if (pdo->Composite || !pdo->PwrStarted || pdo->PwrClosed) {
             continue;
         }
         pdo->IdleState = XHCI_SUSP_IDLE_QUEUED;
@@ -1026,17 +1172,17 @@ static VOID hcdSuspGateOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 /* The steps                                                           */
 /* ------------------------------------------------------------------ */
 
-/* One device request through the thread's control path, its outcome as a
- * step result (3.10). */
-static ULONG hcdSuspControl(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
-                            UCHAR request)
+/* One request through the thread's control path, its outcome as a step
+ * result (3.10). */
+static ULONG hcdSuspRequest(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                            UCHAR type, UCHAR request, USHORT value,
+                            USHORT index)
 {
     ULONG bytes;
     ULONG outcome;
 
-    outcome = HcdThreadControlOutcome(hc, dev, HCD_SUSP_RT_DEVICE_OUT,
-                                      request, HCD_SUSP_FEAT_REMOTE_WAKEUP,
-                                      0, 0, &bytes);
+    outcome = HcdThreadControlOutcome(hc, dev, type, request, value, index,
+                                      0, &bytes);
     switch (outcome) {
     case HCD_CTL_DONE:
         return XHCI_SUSP_RES_OK;
@@ -1054,6 +1200,14 @@ static ULONG hcdSuspControl(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                          : XHCI_SUSP_RES_FAILED;
 }
 
+/* SET/CLEAR_FEATURE(DEVICE_REMOTE_WAKEUP), stage A's arm and disarm. */
+static ULONG hcdSuspControl(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                            UCHAR request)
+{
+    return hcdSuspRequest(hc, dev, HCD_SUSP_RT_DEVICE_OUT, request,
+                          HCD_SUSP_FEAT_REMOTE_WAKEUP, 0);
+}
+
 /* EP0 busy for the arm: a client's transfer queued, or a stall whose
  * recovery (hcdEp0Quiet's Reset Endpoint) would run past the arm's bound -
  * that recovery is the next pass's, the device ACTIVE again after the
@@ -1069,10 +1223,11 @@ static ULONG hcdSuspEp0Queued(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     return busy;
 }
 
-/* The arm (3.4 (2)): a first attempt is not sent behind a client's
+/* The arm's EP0 (3.4 (2)): a first attempt is not sent behind a client's
  * transfer; a repeated one waits for EP0's queue to drain within `bound`
- * milliseconds (3.9). */
-static ULONG hcdSuspArm(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG bound)
+ * milliseconds (3.9). OK when the arm may be sent, else NOT_SENT. */
+static ULONG hcdSuspArmDrain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                             ULONG bound)
 {
     KTIMER deadline;
     LARGE_INTEGER due;
@@ -1102,8 +1257,17 @@ static ULONG hcdSuspArm(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG bound)
         HcdIoDeferred(hc);
     }
     (VOID)KeCancelTimer(&deadline);
-    if (!drained) {
-        return XHCI_SUSP_RES_NOT_SENT;
+    return drained ? XHCI_SUSP_RES_OK : XHCI_SUSP_RES_NOT_SENT;
+}
+
+/* Stage A's arm: DEVICE_REMOTE_WAKEUP. */
+static ULONG hcdSuspArm(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG bound)
+{
+    ULONG result;
+
+    result = hcdSuspArmDrain(hc, dev, bound);
+    if (result != XHCI_SUSP_RES_OK) {
+        return result;
     }
     /* EP0 drained and its gate closed, so the request's own quiet wait
      * finds nothing to wait for. */
@@ -1200,16 +1364,125 @@ static VOID hcdSuspStopUnwatch(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     XhciControllerLockRelease(&hc->Hc, oldIrql);
 }
 
-/* Stop Endpoint with SP=1 on every endpoint the context reads Running
- * (3.4 (3)), each rewound where its stop lost a TD (hcdSuspRewind). */
-static ULONG hcdSuspStop(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+/* SetFeature(FUNCTION_SUSPEND) to first interface `iface` with `options`
+ * (8.1), logged. */
+static ULONG hcdSuspFuncSuspend(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                ULONG iface, ULONG options)
+{
+    ULONG result;
+
+    result = hcdSuspRequest(hc, dev, HCD_SUSP_RT_IFACE_OUT,
+                            HCD_SUSP_REQ_SET_FEATURE,
+                            HCD_SUSP_FEAT_FUNC_SUSPEND,
+                            (USHORT)(iface | (options << 8)));
+    hcdSuspNote(hc, (options != HCD_SUSP_FS_DISARM) ? "susp.ss.arm"
+                                                    : "susp.ss.disarm",
+                ((dev->SlotId & 0xFFUL) << 24) | (iface << 16) | result);
+    return result;
+}
+
+/*
+ * Stage B's arm (8.4 step 3): EP0 as stage A's arm, then for each PDO the
+ * decision marked ArmNow, each of its wake functions not yet armed, in
+ * ascending interface order: SetFeature(FUNCTION_SUSPEND) with options
+ * 03h. Each the device takes sets its bit in the PDO's FwArmed; the first
+ * not taken ends the step with its result. The notification window opens
+ * in a hold just before the first request (8.7). Nothing to send is OK:
+ * the report of FwArmed (XhciSuspSsArmed) then leaves it unarmed.
+ */
+static ULONG hcdSuspSsArm(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                          ULONG bound)
+{
+    PHCD_DEVICE_PDO pdo;
+    KIRQL oldIrql;
+    ULONG result;
+    ULONG want;
+    ULONG iface;
+    ULONG opened;
+
+    result = hcdSuspArmDrain(hc, dev, bound);
+    if (result != XHCI_SUSP_RES_OK) {
+        return result;
+    }
+    opened = 0;
+    for (pdo = hcdSuspPdo(dev->Pdo); pdo != NULL; pdo = pdo->Sibling) {
+        if (!pdo->ArmNow) {
+            continue;
+        }
+        want = dev->FwCapable & dev->FwFirsts & hcdSuspOwn(pdo) &
+               ~pdo->FwArmed;
+        for (iface = 0; iface < 32; iface++) {
+            if ((want & (1UL << iface)) == 0) {
+                continue;
+            }
+            if (!opened) {
+                XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+                XhciSuspFwOpen(&dev->Susp);
+                XhciControllerLockRelease(&hc->Hc, oldIrql);
+                opened = 1;
+            }
+            result = hcdSuspFuncSuspend(hc, dev, iface, HCD_SUSP_FS_ARM);
+            if (result != XHCI_SUSP_RES_OK) {
+                hc->Counters.SsSuspArmRefused++;
+                /* A request that reached the device and failed otherwise
+                 * than by STALL (a status stage's transaction error among
+                 * them) may have been applied: the function may be in
+                 * Function Suspend with no FwArmed bit to disarm it by, so
+                 * it is uncertain and the device is cycled. STALL and
+                 * NOT_SENT stay refusals (Codex review of 36.38, round 1,
+                 * finding 1). */
+                return (result == XHCI_SUSP_RES_FAILED)
+                           ? XHCI_SUSP_RES_TIMEOUT
+                           : result;
+            }
+            pdo->FwArmed |= 1UL << iface;
+            hc->Counters.SsSuspArms++;
+        }
+    }
+    return XHCI_SUSP_RES_OK;
+}
+
+/*
+ * Stage B's disarm (8.5): for every PDO with FwArmed, each armed function,
+ * SetFeature(FUNCTION_SUSPEND) with options 0; a request the device takes
+ * clears its bit. The first not taken ends the step: strict, the machine
+ * makes it uncertain and the device is cycled.
+ */
+static ULONG hcdSuspSsDisarm(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    PHCD_DEVICE_PDO pdo;
+    ULONG result;
+    ULONG iface;
+
+    for (pdo = hcdSuspPdo(dev->Pdo); pdo != NULL; pdo = pdo->Sibling) {
+        for (iface = 0; iface < 32; iface++) {
+            if ((pdo->FwArmed & (1UL << iface)) == 0) {
+                continue;
+            }
+            result = hcdSuspFuncSuspend(hc, dev, iface, HCD_SUSP_FS_DISARM);
+            if (result != XHCI_SUSP_RES_OK) {
+                hc->Counters.SsSuspDisarmFailed++;
+                return result;
+            }
+            pdo->FwArmed &= ~(1UL << iface);
+            hc->Counters.SsSuspDisarms++;
+        }
+    }
+    return XHCI_SUSP_RES_OK;
+}
+
+/* Stop Endpoint with SP=1 on every endpoint from DCI `first` the context
+ * reads Running (3.4 (3)): 1 for every one, 2 for stage B's STOP_FUNCS,
+ * every one but EP0 (8.4); each rewound where its stop lost a TD
+ * (hcdSuspRewind). */
+static ULONG hcdSuspStop(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG first)
 {
     XHCI_TRB trb;
     ULONG control;
     ULONG code;
     ULONG dci;
 
-    for (dci = 1; dci < 32; dci++) {
+    for (dci = first; dci < 32; dci++) {
         if (hcdSuspPipe(dev, dci) == NULL ||
             hcdSuspEpState(hc, dev, dci) != XHCI_EP_STATE_RUNNING) {
             continue;
@@ -1245,6 +1518,19 @@ static ULONG hcdSuspHubFailed(PHCD_CONTROLLER hc, PHCD_HUB hub)
     return XHCI_SUSP_RES_FAILED;
 }
 
+/* Stage B's window opened just before the U3 request when no arm request
+ * opened it (8.7): after the stale change is acknowledged, so nothing of an
+ * earlier suspension read meanwhile can be latched (Codex review of 36.38,
+ * round 2, finding 1). */
+static VOID hcdSuspFwOpenNow(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    KIRQL oldIrql;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    XhciSuspFwOpen(&dev->Susp);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
 /* The U3 request (3.4 (4)), its stale change acknowledged first. */
 static ULONG hcdSuspU3(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                        PHCD_PORT q)
@@ -1253,6 +1539,27 @@ static ULONG hcdSuspU3(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG status;
     ULONG change;
 
+    if (q->Hub != NULL && dev->Susp.Ss) {
+        /* A SuperSpeed hub port (8.6): a stale C_PORT_LINK_STATE cleared,
+         * then SetPortFeature(PORT_LINK_STATE) with U3 in wIndex 15:8. */
+        if (!HcdHubPortStatus(hc, q->Hub, q->Number, &status, &change)) {
+            return hcdSuspHubFailed(hc, q->Hub);
+        }
+        if ((change & XHCI_SSHUB_C_PORT_LINK_STATE) != 0 &&
+            !HcdHubPortFeature(hc, q->Hub, q->Number, 0,
+                               XHCI_SSHUB_FEAT_C_PORT_LINK_STATE)) {
+            return hcdSuspHubFailed(hc, q->Hub);
+        }
+        hcdSuspFwOpenNow(hc, dev);
+        XhciSuspU3Issued(&dev->Susp);
+        if (!HcdHubPortFeature(hc, q->Hub,
+                               q->Number | (XHCI_SSHUB_LINK_U3 << 8), 1,
+                               XHCI_SSHUB_FEAT_PORT_LINK_STATE)) {
+            /* May have taken effect: uncertain, as stage A's. */
+            return XHCI_SUSP_RES_TIMEOUT;
+        }
+        return XHCI_SUSP_RES_OK;
+    }
     if (q->Hub == NULL) {
         portsc = XhciReadPortsc(&hc->Hc, q->PortId);
         if (portsc == 0xFFFFFFFFUL) {
@@ -1262,6 +1569,9 @@ static ULONG hcdSuspU3(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             XhciWritePortsc(&hc->Hc, q->PortId,
                             XhciPortscClearChanges(portsc, XHCI_PORTSC_PLC));
             portsc = XhciReadPortsc(&hc->Hc, q->PortId);
+        }
+        if (dev->Susp.Ss) {
+            hcdSuspFwOpenNow(hc, dev);
         }
         XhciWritePortsc(&hc->Hc, q->PortId, XhciPortscSuspend(portsc));
         XhciSuspU3Issued(&dev->Susp);
@@ -1289,16 +1599,19 @@ static ULONG hcdSuspU3(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 
 /* The observation (3.4 (5)) or the verification (3.6), polled within
  * `bound` milliseconds by an elapsed-time timer. */
-static ULONG hcdSuspPoll(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG verify,
-                         ULONG bound)
+static ULONG hcdSuspPoll(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                         PHCD_PORT q, ULONG verify, ULONG bound)
 {
     KTIMER deadline;
     LARGE_INTEGER due;
     LARGE_INTEGER now;
+    KIRQL oldIrql;
     ULONG answer;
     ULONG portsc;
     ULONG status;
     ULONG change;
+    ULONG bits;
+    ULONG beyond;
 
     KeInitializeTimer(&deadline);
     HcdRelativeMs(&due, bound);
@@ -1313,6 +1626,50 @@ static ULONG hcdSuspPoll(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG verify,
             }
             answer = verify ? XhciSuspVerifyRoot(portsc)
                             : XhciSuspObserveRoot(portsc);
+        } else if (dev->Susp.Ss) {
+            /* A SuperSpeed hub port (8.6): a C_PORT_LINK_STATE read is
+             * cleared, its clear failing a timeout; a wake is read only
+             * from the latch, emptied at each poll of the observation
+             * (8.7 (b)), a disconnect ahead of it. */
+            if (!HcdHubPortStatus(hc, q->Hub, q->Number, &status, &change)) {
+                answer = XHCI_SUSP_RES_TIMEOUT;
+                break;
+            }
+            if ((change & XHCI_SSHUB_C_PORT_LINK_STATE) != 0 &&
+                !HcdHubPortFeature(hc, q->Hub, q->Number, 0,
+                                   XHCI_SSHUB_FEAT_C_PORT_LINK_STATE)) {
+                answer = XHCI_SUSP_RES_TIMEOUT;
+                break;
+            }
+            answer = verify ? XhciSuspVerifySsHub(status, change)
+                            : XhciSuspObserveSsHub(status, change);
+            if (!verify && answer != XHCI_SUSP_RES_DISCONNECT) {
+                XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+                if (XhciSuspFwTake(&dev->Susp, &bits, &beyond)) {
+                    hc->Counters.FuncWakeInSequence +=
+                        hcdSuspFwNote(hc, dev, bits, beyond,
+                                      HCD_SUSP_FW_OBSERVE);
+                    answer = XHCI_SUSP_RES_WAKE;
+                }
+                XhciControllerLockRelease(&hc->Hc, oldIrql);
+            }
+            if (answer != XHCI_SUSP_POLL_AGAIN) {
+                hcdSuspNote(hc, "susp.ss.hub",
+                            ((q->Hub->Index & 0xFFUL) << 24) |
+                                ((q->Number & 0xFFUL) << 16) |
+                                ((XhciSsHubLinkState(status) & 0xFUL) << 12) |
+                                ((verify ? XHCI_SUSP_STEP_VERIFY
+                                         : XHCI_SUSP_STEP_OBSERVE)
+                                 << 4) |
+                                (answer & 0xFUL));
+                if (answer == XHCI_SUSP_RES_OK) {
+                    if (verify) {
+                        hc->Counters.SsSuspHubResumes++;
+                    } else {
+                        hc->Counters.SsSuspHubU3++;
+                    }
+                }
+            }
         } else {
             if (!HcdHubPortStatus(hc, q->Hub, q->Number, &status, &change)) {
                 answer = hcdSuspHubFailed(hc, q->Hub);
@@ -1348,10 +1705,41 @@ static ULONG hcdSuspPoll(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG verify,
 
 /* The resume's signal (3.6): PLS=Resume at a root port, or
  * ClearPortFeature(PORT_SUSPEND) at a hub port. */
-static ULONG hcdSuspSignal(PHCD_CONTROLLER hc, PHCD_PORT q)
+static ULONG hcdSuspSignal(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                           PHCD_PORT q)
 {
+    XHCI_LINK_ACTION act;
     ULONG portsc;
 
+    if (dev->Susp.Ss) {
+        /* 8.5, 8.6: the one U0 write. At a root port for a link in U3 (a
+         * host resume) or in Resume (a device's exit the xHC holds); a port
+         * in neither is left to VERIFY, which reads U0 or not. At a
+         * SuperSpeed hub port SetPortFeature(PORT_LINK_STATE) with U0,
+         * which the hub ignores on a link already in U0. */
+        if (q->Hub == NULL) {
+            portsc = XhciReadPortsc(&hc->Hc, q->PortId);
+            if (portsc == 0xFFFFFFFFUL) {
+                return XHCI_SUSP_RES_TIMEOUT;
+            }
+            if (XhciLinkDecide(&q->Link, portsc, XHCI_LINK_WANT_RESUME,
+                               &act) == XHCI_LINK_ACT_SET_U0) {
+                XhciWritePortsc(&hc->Hc, q->PortId,
+                                XhciPortscResumeDone(portsc));
+            }
+            return XHCI_SUSP_RES_OK;
+        }
+        if (!HcdHubPortFeature(hc, q->Hub,
+                               q->Number | (XHCI_SSHUB_LINK_U0 << 8), 1,
+                               XHCI_SSHUB_FEAT_PORT_LINK_STATE)) {
+            return hcdSuspHubFailed(hc, q->Hub);
+        }
+        hcdSuspNote(hc, "susp.ss.hub",
+                    ((q->Hub->Index & 0xFFUL) << 24) |
+                        ((q->Number & 0xFFUL) << 16) |
+                        (XHCI_SUSP_STEP_SIGNAL << 4));
+        return XHCI_SUSP_RES_OK;
+    }
     if (q->Hub == NULL) {
         portsc = XhciReadPortsc(&hc->Hc, q->PortId);
         if (portsc == 0xFFFFFFFFUL) {
@@ -1390,8 +1778,32 @@ static ULONG hcdSuspU0(PHCD_CONTROLLER hc, PHCD_PORT q)
 static VOID hcdSuspEndLocked(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                              PHCD_SUSP_TAKEN t, PHCD_SUSP_ITAKEN it)
 {
+    ULONG claimed;
+    ULONG bits;
+    ULONG beyond;
     ULONG n;
 
+    /* 8.4, 8.7 (c): what the window latched, first. A refusal's latch is
+     * the wake's claim as 5.4's, ahead of a STALL's claim and the latch;
+     * any other end that is not SUSPENDED drops it. */
+    if (dev->Susp.State != XHCI_SUSP_SUSPENDED &&
+        XhciSuspFwTake(&dev->Susp, &bits, &beyond)) {
+        if (dev->Susp.State == XHCI_SUSP_ACTIVE &&
+            dev->Susp.Outcome == XHCI_SUSP_OUT_REFUSED) {
+            hc->Counters.FuncWakeInSequence +=
+                hcdSuspFwNote(hc, dev, bits, beyond, HCD_SUSP_FW_REFUSAL);
+            claimed = hcdSuspClaimWakes(dev, 1, hc->WakeSeq, t);
+            hc->Counters.SuspWakeEvents++;
+            if (claimed == 0) {
+                hc->Counters.SuspWakeUnclaimed++;
+            }
+            hc->Counters.SuspWaitWakesCompleted += claimed;
+        } else {
+            hc->Counters.FuncWakeIgnored +=
+                hcdSuspFwNote(hc, dev, bits, beyond, HCD_SUSP_FW_DROPPED);
+        }
+    }
+    hcdSuspFwDrain(hc, dev);
     if (dev->Susp.State == XHCI_SUSP_ACTIVE &&
         dev->Susp.Outcome == XHCI_SUSP_OUT_REFUSED &&
         dev->Susp.Reason == XHCI_SUSP_WHY_STALL) {
@@ -1439,37 +1851,51 @@ static ULONG hcdSuspRun(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG step,
                 hcdSuspGateClose(hc, dev);
                 result = XHCI_SUSP_RES_OK;
                 break;
+            case XHCI_SUSP_STEP_STOP_FUNCS:
+                result = hcdSuspStop(hc, dev, 2);
+                break;
             case XHCI_SUSP_STEP_ARM:
+                if (dev->Susp.Ss) {
+                    result = hcdSuspSsArm(hc, dev, wait);
+                    break;
+                }
                 result = hcdSuspArm(hc, dev, wait);
                 if (result == XHCI_SUSP_RES_OK) {
                     hc->Counters.SuspArms++;
                 }
                 break;
             case XHCI_SUSP_STEP_STOP:
-                result = hcdSuspStop(hc, dev);
+                result = hcdSuspStop(hc, dev, 1);
                 break;
             case XHCI_SUSP_STEP_U3:
                 result = hcdSuspU3(hc, dev, q);
                 break;
             case XHCI_SUSP_STEP_OBSERVE:
-                result = hcdSuspPoll(hc, q, 0, wait);
+                result = hcdSuspPoll(hc, dev, q, 0, wait);
                 break;
             case XHCI_SUSP_STEP_SIGNAL:
                 hcdSuspHold(hc, wait);
-                result = hcdSuspSignal(hc, q);
+                result = hcdSuspSignal(hc, dev, q);
                 break;
             case XHCI_SUSP_STEP_U0:
                 hcdSuspHold(hc, wait);
                 result = hcdSuspU0(hc, q);
                 break;
             case XHCI_SUSP_STEP_VERIFY:
-                result = hcdSuspPoll(hc, q, 1, wait);
+                result = hcdSuspPoll(hc, dev, q, 1, wait);
                 break;
             case XHCI_SUSP_STEP_RECOVERY:
                 hcdSuspHold(hc, wait);
                 result = XHCI_SUSP_RES_OK;
                 break;
             case XHCI_SUSP_STEP_DISARM:
+                if (dev->Susp.Ss) {
+                    /* The refusal's disarm waits out SP=1's minimum first,
+                     * since it rings EP0 (8.4); the resume's wait is 0. */
+                    hcdSuspHold(hc, wait);
+                    result = hcdSuspSsDisarm(hc, dev);
+                    break;
+                }
                 result = hcdSuspControl(hc, dev, HCD_SUSP_REQ_CLEAR_FEATURE);
                 if (result == XHCI_SUSP_RES_OK) {
                     hc->Counters.SuspDisarms++;
@@ -1485,11 +1911,17 @@ static ULONG hcdSuspRun(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG step,
             }
         }
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        if (dev->Susp.Ss) {
+            /* 8.4: at SuperSpeed Armed is the PDOs' FwArmed, reported
+             * before the step's result, whatever the step. */
+            XhciSuspSsArmed(&dev->Susp, hcdSuspArmedAll(dev) != 0);
+        }
         step = XhciSuspAdvance(&dev->Susp, result, hc->SuspClockMs, &wait);
         if (step == XHCI_SUSP_STEP_END) {
             hcdSuspEndLocked(hc, dev, &taken, &itaken);
         } else {
             hcdSuspClaimDue(hc, dev, &taken);
+            hcdSuspFwDrain(hc, dev);
         }
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         hcdSuspFinishT(hc, &taken);
@@ -1577,6 +2009,8 @@ static ULONG hcdSuspDecideOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     ULONG kind;
     ULONG batch;
     ULONG old;
+    ULONG bits;
+    ULONG beyond;
     ULONG n;
     ULONG i;
 
@@ -1590,6 +2024,24 @@ static ULONG hcdSuspDecideOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     kind = 0;
     q = hcdSuspPort(hc, dev);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    dev->Susp.Ss = hcdSuspSs(dev);
+    /* 8.7 (a): the latch first, before the slots are read. Bits for a
+     * SUSPENDED device are its wake event, claimed in this hold, and the
+     * wake begins below in the same hold, so a D0 that arrived meanwhile
+     * cannot begin a resume that would close the window over it. */
+    if (XhciSuspFwTake(&dev->Susp, &bits, &beyond)) {
+        if (dev->Susp.State == XHCI_SUSP_SUSPENDED &&
+            XhciSuspEvidence(&dev->Susp, XHCI_SUSP_EV_WAKE)) {
+            hc->Counters.FuncWakeAsEvent +=
+                hcdSuspFwNote(hc, dev, bits, beyond, HCD_SUSP_FW_EVENT);
+            hcdSuspClaimDue(hc, dev, &taken);
+            dev->SuspWakeDue = 1;
+        } else {
+            hc->Counters.FuncWakeIgnored +=
+                hcdSuspFwNote(hc, dev, bits, beyond, HCD_SUSP_FW_DROPPED);
+        }
+    }
+    hcdSuspFwDrain(hc, dev);
     if (dev->SuspWakeDue && dev->Susp.State == XHCI_SUSP_SUSPENDED) {
         /* A wake event taken at the acknowledgement or the hub look. */
         dev->SuspWakeDue = 0;
@@ -1597,7 +2049,9 @@ static ULONG hcdSuspDecideOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         hc->Counters.SuspWakesBegun++;
         old = dev->Susp.State;
         step = XhciSuspBegin(&dev->Susp, kind, 0, 0, hc->SuspClockMs, &wait);
+        hcdSuspFwDrain(hc, dev);
         XhciControllerLockRelease(&hc->Hc, oldIrql);
+        hcdSuspFinishT(hc, &taken);
         (VOID)hcdSuspRun(hc, dev, step, wait, old);
         return 1;
     }
@@ -1607,6 +2061,7 @@ static ULONG hcdSuspDecideOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
                          hc->PowerDown, &d);
     for (i = 0; i < n; i++) {
         pdos[i]->WokeHold = funcs[i].WokeHold;
+        pdos[i]->ArmNow = funcs[i].ArmNow;
         if (funcs[i].ToD0) {
             if (pdos[i]->PwrState != XHCI_SUSP_D0) {
                 /* 6.5: having been Dx, D0 at ACTIVE. */
@@ -1648,6 +2103,7 @@ static ULONG hcdSuspDecideOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
          * holds (it asks the link ACTIVE). */
         batch = hcdSuspIdleBatchLocked(hc, dev);
     }
+    hcdSuspFwDrain(hc, dev);
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     hcdSuspFinishT(hc, &taken);
     hcdSuspIFinishT(hc, &itaken);
@@ -1728,6 +2184,7 @@ static VOID hcdSuspSample(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         hcdSuspClaimDue(hc, dev, &taken);
         dev->SuspWakeDue = 1;
     }
+    hcdSuspFwDrain(hc, dev);
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     hcdSuspFinishT(hc, &taken);
     if (event == XHCI_SUSP_EV_DISCONNECT &&
@@ -1782,6 +2239,7 @@ VOID HcdSuspHubSample(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG status,
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
         XhciSuspUncertain(&dev->Susp);
         dev->SuspWakeDue = 0;
+        hcdSuspFwDrain(hc, dev);
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         pdo = hcdSuspPdo(dev->Pdo);
         if (pdo != NULL && !hcdSuspHalted(hc)) {
@@ -1794,6 +2252,75 @@ VOID HcdSuspHubSample(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG status,
                                       q->ConnectGen));
 }
 
+/* A SuperSpeed hub port's sample handed over by its look (8.6): `acked`
+ * the change bits whose clear the hub took. A finished U3 exit is never a
+ * wake here; a C_PORT_LINK_STATE whose clear failed (`lost`) leaves the
+ * link's state unknown - uncertain at once, then the cycle - as stage A's
+ * lost C_PORT_SUSPEND. */
+VOID HcdSuspSsHubSample(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG status,
+                        ULONG acked, ULONG lost)
+{
+    PHCD_USB_DEVICE dev;
+    PHCD_DEVICE_PDO pdo;
+    KIRQL oldIrql;
+
+    dev = hcdSuspOwner(hc, q);
+    if (dev == NULL) {
+        return;
+    }
+    if (lost) {
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        XhciSuspUncertain(&dev->Susp);
+        dev->SuspWakeDue = 0;
+        hcdSuspFwDrain(hc, dev);
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        pdo = hcdSuspPdo(dev->Pdo);
+        if (pdo != NULL && !hcdSuspHalted(hc)) {
+            HcdEnumCycle(hc, dev->Location, pdo->Group);
+        }
+        return;
+    }
+    hcdSuspSample(hc, dev,
+                  XhciSuspSsHubEvidence(&dev->Susp, status, acked,
+                                        q->ConnectGen));
+}
+
+/*
+ * A Device Notification Event for slot `slotId` (8.7), from the DPC hook
+ * (hcd_dev.c) with the switch on: a FUNCTION_WAKE for a device record is
+ * latched while its window is open and the thread woken, or counted as
+ * closed at receipt and dropped; another type, or a slot with no record,
+ * is dropped. The record is the one SlotDevice[] names now, under this
+ * lock: a record leaves it under the lock before it is freed, and a new
+ * device's is entered only after its Enable Slot (8.7, slot reuse).
+ * IRQL: DISPATCH_LEVEL, controller lock held.
+ */
+VOID HcdSuspNotificationLocked(PHCD_CONTROLLER hc, ULONG slotId, ULONG type,
+                               ULONG iface)
+{
+    PHCD_USB_DEVICE dev;
+
+    dev = NULL;
+    if (slotId >= 1 && slotId <= XHCI_MAX_SLOTS &&
+        slotId <= hc->Hc.Layout.MaxSlotsEn) {
+        dev = hc->SlotDevice[slotId];
+    }
+    if (type != XHCI_DN_TYPE_FUNCTION_WAKE || dev == NULL) {
+        hc->Counters.DevNotifyDropped++;
+        return;
+    }
+    hc->Counters.FuncWakeEvents++;
+    if (XhciSuspFwReceive(&dev->Susp, iface)) {
+        HcdThreadWake(hc);
+        return;
+    }
+    hc->Counters.FuncWakeClosed++;
+    hcdSuspNoteLocked(hc, "susp.fw",
+                      ((slotId & 0xFFUL) << 24) | ((iface & 0xFFUL) << 16) |
+                          (0xFFUL << 8) | ((dev->Susp.State & 0xFUL) << 4) |
+                          HCD_SUSP_FW_CLOSED);
+}
+
 /* ------------------------------------------------------------------ */
 /* For the rest of the bus                                             */
 /* ------------------------------------------------------------------ */
@@ -1804,6 +2331,9 @@ VOID HcdSuspDeviceInit(PHCD_USB_DEVICE dev, PHCD_PORT port)
     XhciSuspLinkInit(&dev->Susp, port->Hub == NULL, port->ConnectGen);
     InitializeListHead(&dev->SlowDeferred);
     dev->SuspWakeDue = 0;
+    dev->FwFirsts = 0;
+    dev->FwCapable = 0;
+    dev->FwArmedAll = 0;
 }
 
 /* Whether the device's link is ACTIVE: the survivor restart's doorbell and
@@ -1811,6 +2341,13 @@ VOID HcdSuspDeviceInit(PHCD_USB_DEVICE dev, PHCD_PORT port)
 ULONG HcdSuspLinkActive(PHCD_USB_DEVICE dev)
 {
     return dev->Susp.State == XHCI_SUSP_ACTIVE;
+}
+
+/* Whether the door forwards a descriptor request to the device (36.45;
+ * design record 13 section 8.11): its link ACTIVE. Thread only. */
+ULONG HcdSuspDoorServes(PHCD_USB_DEVICE dev)
+{
+    return XhciSuspDoorServes(dev->Susp.State);
 }
 
 /* Whether a slow IRP for the device waits (3.3): the link not ACTIVE -
@@ -1828,6 +2365,163 @@ VOID HcdSuspDeviceGone(PHCD_USB_DEVICE dev)
 {
     XhciSuspGone(&dev->Susp);
     dev->SuspWakeDue = 0;
+    /* What the closing window dropped is counted now: the device may be
+     * freed with no further pass (Codex review of 36.38, round 2, finding
+     * 2). The callers hold the controller lock. */
+    if (dev->Controller != NULL) {
+        hcdSuspFwDrain(dev->Controller, dev);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Stage B's configuration transaction (36.38; record 14 section 8.3)  */
+/* ------------------------------------------------------------------ */
+
+/* The bits set in a mask. */
+static ULONG hcdSuspCount(ULONG mask)
+{
+    ULONG n;
+
+    n = 0;
+    while (mask != 0) {
+        mask &= mask - 1;
+        n++;
+    }
+    return n;
+}
+
+/* Whether a configuration change of the device is stage B's: the switch
+ * on, a SuperSpeed device that is not a hub - its class decoded as its
+ * PDOs' will be, since the bus's own configuration of a split device comes
+ * before any PDO. Thread only. */
+static ULONG hcdSuspCfgServes(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    ULONG cls;
+
+    if (!hc->SuspOn || dev->Gone || dev->Hub != NULL) {
+        return 0;
+    }
+    cls = XHCI_SPEED_UNKNOWN;
+    (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, dev->Port, dev->Speed, &cls);
+    return (cls == XHCI_SPEED_SUPER) ? 1UL : 0UL;
+}
+
+/* The entry (8.3): both masks cleared under the controller lock, so a
+ * WAIT_WAKE that arrives while the configuration changes is refused. With
+ * the switch at 0, or for a device not SuperSpeed, nothing. Thread only. */
+VOID HcdSuspCfgEnter(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    KIRQL oldIrql;
+
+    if (!hcdSuspCfgServes(hc, dev)) {
+        return;
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    dev->FwFirsts = 0;
+    dev->FwCapable = 0;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
+/*
+ * The exit, from every return (8.3). `ok` the transaction configured the
+ * device with the nonzero configuration `config` (`length` bytes, the one
+ * SET_CONFIGURATION sent): the first interface of each of its USB 3
+ * functions is read with one GetStatus(interface) - the device ACTIVE, a
+ * configuration change being a device-side slow IRP - and the capable ones
+ * kept. Any other exit leaves both masks 0. Either way, in the hold that
+ * writes them, every PDO of the device that holds a WAIT_WAKE and is left
+ * with no wake function has it claimed (4.2's handshake) and completed
+ * STATUS_NOT_SUPPORTED after the hold - a machine completion, no PwrSeq.
+ * Thread only, PASSIVE_LEVEL.
+ */
+VOID HcdSuspCfgExit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                    const UCHAR *config, ULONG length, ULONG ok)
+{
+    HCD_SUSP_TAKEN taken;
+    PHCD_DEVICE_PDO pdo;
+    PUCHAR s;
+    KIRQL oldIrql;
+    PIRP irp;
+    ULONG firsts;
+    ULONG beyond;
+    ULONG capable;
+    ULONG failed;
+    ULONG reads;
+    ULONG bytes;
+    ULONG outcome;
+    ULONG iface;
+
+    if (!hcdSuspCfgServes(hc, dev)) {
+        return;
+    }
+    taken.Count = 0;
+    firsts = 0;
+    beyond = 0;
+    capable = 0;
+    failed = 0;
+    reads = 0;
+    if (ok && config != NULL &&
+        XhciFuncFirsts(config, length, &firsts, &beyond) != XHCI_FUNC_OK) {
+        firsts = 0;
+        beyond = 0;
+    }
+    if (!ok) {
+        firsts = 0;
+        beyond = 0;
+    }
+    if (beyond) {
+        hc->Counters.SsSuspFarInterfaces++;
+    }
+    s = (PUCHAR)hc->ScratchVa;
+    for (iface = 0; iface < 32; iface++) {
+        if ((firsts & (1UL << iface)) == 0) {
+            continue;
+        }
+        if (dev->Ep0Stuck || hcdSuspHalted(hc)) {
+            /* A timeout follows the thread's ordinary EP0 rules: nothing
+             * more is sent, and what was not read is not capable. */
+            failed++;
+            continue;
+        }
+        bytes = 0;
+        outcome = HcdThreadControlOutcome(hc, dev, HCD_SUSP_RT_IFACE_IN,
+                                          HCD_SUSP_REQ_GET_STATUS, 0,
+                                          (USHORT)iface, 2, &bytes);
+        if (outcome == HCD_CTL_DONE && bytes >= 2) {
+            reads++;
+            if ((s[0] & HCD_SUSP_FWR_CAPABLE) != 0) {
+                capable |= 1UL << iface;
+            }
+        } else {
+            /* A STALL, a failure or a short answer: not capable. */
+            failed++;
+        }
+    }
+    hc->Counters.SsSuspCapReads += reads;
+    hc->Counters.SsSuspCapFailed += failed;
+    hc->Counters.SsSuspCapable += hcdSuspCount(capable);
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    dev->FwFirsts = firsts;
+    dev->FwCapable = capable;
+    for (pdo = hcdSuspPdo(dev->Pdo); pdo != NULL; pdo = pdo->Sibling) {
+        irp = pdo->WaitWakeIrp;
+        if (irp == NULL || (capable & hcdSuspOwn(pdo)) != 0) {
+            continue;
+        }
+        if (!XhciSuspClaim(1, IoSetCancelRoutine(irp, NULL) != NULL)) {
+            continue;
+        }
+        pdo->WaitWakeIrp = NULL;
+        hcdSuspTake(&taken, pdo, irp, HCD_SUSP_TAKE_WAKE_NS);
+        hc->Counters.SsSuspCapSettled++;
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    hcdSuspFinishT(hc, &taken);
+    hcdSuspNote(hc, "susp.ss.cap",
+                ((dev->SlotId & 0xFFUL) << 24) |
+                    ((hcdSuspCount(firsts) & 0xFFUL) << 16) |
+                    ((hcdSuspCount(capable) & 0xFFUL) << 8) |
+                    (failed & 0xFFUL));
 }
 
 /* ------------------------------------------------------------------ */
@@ -1843,33 +2537,26 @@ static ULONG hcdSuspRemoteWake(PHCD_DEVICE_PDO pdo)
             (pdo->Config[7] & 0x20) != 0) ? 1UL : 0UL;
 }
 
-/* Whether a PDO is stage A's, its controller's switch on (5.1). */
+/* Whether a PDO is stage A's, its controller's switch on (5.1). A hub PDO
+ * and a composite parent never are: the parent keeps today's capabilities,
+ * its WAIT_WAKE is refused and its D-IRPs are recorded and completed at
+ * once (task 36.43). */
 static ULONG hcdSuspPdoEligible(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
 {
-    ULONG cls;
-
-    if (hc == NULL || !hc->SuspOn || pdo->Hub) {
+    if (hc == NULL || !hc->SuspOn || pdo->Hub || pdo->Composite) {
         return 0;
     }
-    cls = pdo->SpeedClass;
-    return XhciSuspEligible(1, !(cls == XHCI_SPEED_LOW ||
-                                 cls == XHCI_SPEED_FULL ||
-                                 cls == XHCI_SPEED_HIGH),
-                            0);
+    return XhciSuspEligible(1, pdo->SpeedClass, 0);
 }
 
 /* Whether a PDO whose controller is released was stage A's: the switch
  * as it was at its creation or last START (4.2's released controller). */
 static ULONG hcdSuspPdoWasEligible(PHCD_DEVICE_PDO pdo)
 {
-    ULONG cls;
-
-    if (!pdo->PwrSwitch || pdo->Hub) {
+    if (pdo->Composite) {
         return 0;
     }
-    cls = pdo->SpeedClass;
-    return (cls == XHCI_SPEED_LOW || cls == XHCI_SPEED_FULL ||
-            cls == XHCI_SPEED_HIGH) ? 1UL : 0UL;
+    return XhciSuspEligible(pdo->PwrSwitch, pdo->SpeedClass, pdo->Hub);
 }
 
 /* Windows 98 SE and ME: whether wake is disabled there (5.5). Not read
@@ -1880,14 +2567,15 @@ static ULONG hcdSuspWakeOff9x(VOID)
     return 0;
 }
 
-/* Another PDO of the device has PwrState D0 (4.3). PdoListLock and the
- * controller lock held. */
+/* Another function PDO of the device has PwrState D0 (4.3); a composite
+ * parent, D0 for ever, is not one. PdoListLock and the controller lock
+ * held. */
 static ULONG hcdSuspSiblingD0(PHCD_USB_DEVICE dev, PHCD_DEVICE_PDO self)
 {
     PHCD_DEVICE_PDO pdo;
 
     for (pdo = hcdSuspPdo(dev->Pdo); pdo != NULL; pdo = pdo->Sibling) {
-        if (pdo != self && pdo->PwrState == XHCI_SUSP_D0) {
+        if (pdo != self && !pdo->Composite && pdo->PwrState == XHCI_SUSP_D0) {
             return 1;
         }
     }
@@ -2055,7 +2743,9 @@ ULONG HcdSuspPdoWaitWake(PHCD_DEVICE_PDO pdo, PIRP irp, NTSTATUS *status)
 {
     PIO_STACK_LOCATION stack;
     PHCD_CONTROLLER hc;
+    PHCD_USB_DEVICE dev;
     XHCI_SUSP_WW_IN in;
+    KIRQL listIrql;
     KIRQL oldIrql;
     ULONG answer;
     ULONG back;
@@ -2079,7 +2769,21 @@ ULONG HcdSuspPdoWaitWake(PHCD_DEVICE_PDO pdo, PIRP irp, NTSTATUS *status)
     if (in.Released) {
         answer = XhciSuspWaitWakeAdmit(&in);
     } else {
+        /* PdoListLock too, so pdo->Device and its record cannot be
+         * unlinked while a SuperSpeed PDO's wake functions are read
+         * (4.1's order). */
+        KeAcquireSpinLock(&hc->PdoListLock, &listIrql);
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        if (pdo->SpeedClass == XHCI_SPEED_SUPER) {
+            /* 8.3: a wake function in place of the configuration's D5 - 0
+             * for a device unconfigured, mid-configuration (the masks are
+             * cleared at its entry) or with no capable function. */
+            dev = pdo->Device;
+            in.RemoteWake = (dev != NULL &&
+                             (dev->FwCapable & hcdSuspOwn(pdo)) != 0)
+                                ? 1UL
+                                : 0UL;
+        }
         in.Closed = pdo->PwrClosed;
         in.PwrState = pdo->PwrState;
         in.Held = (pdo->WaitWakeIrp != NULL) ? 1UL : 0UL;
@@ -2100,6 +2804,7 @@ ULONG HcdSuspPdoWaitWake(PHCD_DEVICE_PDO pdo, PIRP irp, NTSTATUS *status)
             }
         }
         XhciControllerLockRelease(&hc->Hc, oldIrql);
+        KeReleaseSpinLock(&hc->PdoListLock, listIrql);
     }
     if (answer == XHCI_SUSP_ST_PENDING) {
         HcdThreadWake(hc);
@@ -2315,6 +3020,12 @@ ULONG HcdSuspPdoReopen(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
         pdo->PwrState = XHCI_SUSP_D0;
         report = hcdSuspPdoEligible(hc, pdo);
     }
+    /* A hub's or a composite parent's PDO is a logical power object
+     * whatever its link: started is D0, reported here, with the switch at
+     * 0 too (design record 13 section 10.12). */
+    if (HcdPdoIsParent(pdo)) {
+        report = 1;
+    }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     KeReleaseSpinLock(&hc->PdoListLock, listIrql);
     if (report) {
@@ -2323,8 +3034,8 @@ ULONG HcdSuspPdoReopen(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
          * device is powered - on a suspended link the thread reports it
          * when its resume reaches ACTIVE (hcdSuspReportD0) - and, inside
          * the PDO's report mutex, never after a newer Dx's report (round
-         * 4). A hub, a SuperSpeed PDO and the switch at 0 keep today's
-         * START, which reports nothing. */
+         * 4). A parent PDO is reported above; a SuperSpeed PDO and the
+         * switch at 0 keep today's START, which reports nothing. */
         state.DeviceState = PowerDeviceD0;
         pdo->Common.DevicePower = PowerDeviceD0;
         (VOID)PoSetPowerState(pdo->Common.Self, DevicePowerState, state);
@@ -2348,6 +3059,9 @@ ULONG HcdSuspUnlinkLocked(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo,
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     hcdSuspSlotCloseLocked(pdo, out);
+    /* 8.5: the hardware's wake enable did not survive the device. */
+    pdo->FwArmed = 0;
+    pdo->ArmNow = 0;
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     return (out->Pwr != NULL || out->Wake != NULL || out->Idle != NULL ||
             out->IdleEntry)

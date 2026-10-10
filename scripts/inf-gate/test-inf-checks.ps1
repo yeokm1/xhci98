@@ -204,7 +204,7 @@ try {
     # root-hub installs are exempt from the controller's VAL-*/PROP-*/OS-*
     # rules: [RootHub.AddReg] and [RootHub.AddReg.NT] write none of the log or
     # moderation values and copy no OS file.
-    Assert-True ($baseline.Output -match "models: 8\b") ("src\xhci98.inf: expected the gate to gather eight models (controller, root hub and the two external-hub ids of task 33.4, in the undecorated section and NTx86.6.0). Output:`n" + $baseline.Output)
+    Assert-True ($baseline.Output -match "models: 10\b") ("src\xhci98.inf: expected the gate to gather ten models (controller, root hub, the two external-hub ids of task 33.4 and the composite parent of task 36.43, in the undecorated section and NTx86.6.0). Output:`n" + $baseline.Output)
 
     Write-Step "file format"
     Assert-RuleFires "utf16" "FILE-ENCODING" { param($t) $t } -Utf16
@@ -920,6 +920,58 @@ try {
         param($t) $t.Replace("[Hub.Dev.NTamd64]`r`nAddReg=RootHub.AddReg.NT`r`n", "[Hub.Dev.NTamd64]`r`nAddReg=RootHub.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n")
     }
 
+    # ---- HCD-COMP, HCD-COMPPAGE: composite devices as devnodes (36.43) ----
+    #
+    # Every models section carries the composite model under the project's
+    # own id only; no line names USB\COMPOSITE; a composite install copies
+    # nothing, loads only the controller's driver and registers no page.
+    Write-Step "the composite parents' models, copies and pages"
+    Assert-RuleFires "hcd-no-composite-9x" "HCD-COMP" {
+        param($t) $t.Replace("%CompositeDesc%=Comp.Dev,XHCI98\COMPOSITE`r`n", "")
+    }
+    Assert-RuleFires "hcd-no-composite-nt6" "HCD-COMP" {
+        param($t) $t.Replace("%CompositeDesc%=Comp.Dev6,XHCI98\COMPOSITE`r`n", "")
+    }
+    Assert-RuleFires "hcd-composite-os-id" "HCD-COMP" {
+        param($t) $t.Replace("Comp.Dev,XHCI98\COMPOSITE`r`n", "Comp.Dev,XHCI98\COMPOSITE,USB\COMPOSITE`r`n")
+    }
+    Assert-RuleFires "hcd-composite-vidpid-id" "HCD-COMP" {
+        param($t) $t.Replace("Comp.Dev6,XHCI98\COMPOSITE`r`n", "Comp.Dev6,XHCI98\COMPOSITE,USB\VID_0D8C&PID_0014`r`n")
+    }
+    Assert-RuleFires "hcd-composite-on-controller" "HCD-COMP" {
+        param($t) $t.Replace("Xhci.Dev,PCI\CC_0C0330", "Xhci.Dev,PCI\CC_0C0330,USB\COMPOSITE")
+    }
+    Assert-RuleFires "hcd-composite-copies-9x" "HCD-HUBCOPY" {
+        param($t) $t.Replace("[Comp.Dev]`r`nAddReg=Comp.AddReg`r`n", "[Comp.Dev]`r`nAddReg=Comp.AddReg`r`nCopyFiles=Xhci.CopyFiles`r`n")
+    }
+    Assert-RuleFires "hcd-composite-copies-nt" "HCD-HUBCOPY" {
+        param($t) $t.Replace("[Comp.Dev.NTx86]`r`nDelReg=Comp.DelReg.NT`r`n", "[Comp.Dev.NTx86]`r`nDelReg=Comp.DelReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n")
+    }
+    Assert-RuleFires "hcd-composite-needs" "HCD-HUBCOPY" {
+        param($t) $t.Replace("[Comp.Dev6.NTx86]`r`nDelReg=Comp.DelReg.NT`r`n", "[Comp.Dev6.NTx86]`r`nDelReg=Comp.DelReg.NT`r`nInclude=usb.inf`r`nNeeds=Comp.Dev.NT`r`n")
+    }
+    Assert-RuleFires "hcd-composite-other-driver" "HCD-HUBCOPY" {
+        param($t) $t.Replace("[Comp.AddReg]`r`nHKR,,DevLoader,,*NTKERN`r`nHKR,,NTMPDriver,,xhci98.sys", "[Comp.AddReg]`r`nHKR,,DevLoader,,*NTKERN`r`nHKR,,NTMPDriver,,usbccgp.sys")
+    }
+    Assert-RuleFires "hcd-composite-hubpage-9x" "HCD-COMPPAGE" {
+        param($t) $t.Replace("[Comp.AddReg]`r`nHKR,,DevLoader,,*NTKERN`r`nHKR,,NTMPDriver,,xhci98.sys`r`n", "[Comp.AddReg]`r`nHKR,,DevLoader,,*NTKERN`r`nHKR,,NTMPDriver,,xhci98.sys`r`nHKR,,EnumPropPages,,`"sysclass.dll,USBHubPropPage`"`r`n")
+    }
+    Assert-RuleFires "hcd-composite-hubpage-nt" "HCD-COMPPAGE" {
+        param($t) $t.Replace("[Comp.Dev.NTx86]`r`nDelReg=Comp.DelReg.NT`r`n", "[Comp.Dev.NTx86]`r`nDelReg=Comp.DelReg.NT`r`nAddReg=RootHub.AddReg.NT`r`n")
+    }
+    Assert-RuleFires "hcd-composite-no-service-nt" "PATH-NT" {
+        param($t) $t.Replace("[Comp.Dev.NTx86.Services]", "[Comp.Dev.NTx86.Svc]")
+    }
+    Assert-RuleFires "hcd-no-composite-amd64" "HCD-COMP" -Source $prodInfAmd64 -Arch amd64 {
+        param($t) $t.Replace("%CompositeDesc%=Comp.Dev6,XHCI98\COMPOSITE`r`n", "")
+    }
+    Assert-RuleFires "hcd-composite-copies-amd64" "HCD-HUBCOPY" -Source $prodInfAmd64 -Arch amd64 {
+        param($t) $t.Replace("[Comp.Dev.NTamd64]`r`nDelReg=Comp.DelReg.NT`r`n", "[Comp.Dev.NTamd64]`r`nDelReg=Comp.DelReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n")
+    }
+    Assert-RuleFires "hcd-composite-hubpage-amd64" "HCD-COMPPAGE" -Source $prodInfAmd64 -Arch amd64 {
+        param($t) $t.Replace("[Comp.Dev6.NTamd64]`r`nDelReg=Comp.DelReg.NT`r`n", "[Comp.Dev6.NTamd64]`r`nDelReg=Comp.DelReg.NT`r`nAddReg=RootHub.AddReg.NT`r`n")
+    }
+
     Write-Step "the two install paths"
     Assert-RuleFires "no-ntx86" "PATH-NT" {
         param($t) $t.Replace("[Xhci.Dev.NTx86]", "[Xhci.Dev.Win2000]")
@@ -1393,16 +1445,16 @@ try {
         @{ Name = "ServiceBinary";  Value = "%12%\xhci98.sys" },
         @{ Name = "LoadOrderGroup"; Value = "Base" }
     )) {
-        # Four times: the controller's install, the root hub's and the two
-        # external hubs' (task 33.4) all name the one service (one binary,
-        # three device roles).
+        # Five times: the controller's install, the root hub's, the two
+        # external hubs' (task 33.4) and the composite parent's (task 36.43)
+        # all name the one service (one binary, four device roles).
         $want = "servicevalue|Windows 2000|xhci98|Xhci.AddService|" + $v.Name + "|" + $v.Value
-        Assert-True (@($fp | Where-Object { $_ -eq $want }).Count -eq 4) (
+        Assert-True (@($fp | Where-Object { $_ -eq $want }).Count -eq 5) (
             "expected footprint row '$want'. Rows:`n" + ($fp -join "`n"))
     }
 
     # AddService's own flags field was dropped entirely by the first two drafts.
-    Assert-True (@($fp | Where-Object { $_ -eq "service|Windows 2000|xhci98|Xhci.AddService|0x00000002|remove" }).Count -eq 4) (
+    Assert-True (@($fp | Where-Object { $_ -eq "service|Windows 2000|xhci98|Xhci.AddService|0x00000002|remove" }).Count -eq 5) (
         "the service row must carry the AddService flags field. Rows:`n" + ($fp -join "`n"))
 
     # Task 11-V.6's fix, asserted against the production INF - and inverted
@@ -1601,7 +1653,7 @@ try {
     # whole install path behind it - never checked: "models: 1" over a file with
     # two. Passing says nothing about a path the rules did not walk.
     #
-    Assert-True ($baseline64.Output -match "models: 8\b") ("src\xhci98-amd64.inf: expected the gate to gather eight models (controller, root hub and the two external-hub ids of task 33.4, in NT 5.2's section and NT 6.x's). Output:`n" + $baseline64.Output)
+    Assert-True ($baseline64.Output -match "models: 10\b") ("src\xhci98-amd64.inf: expected the gate to gather ten models (controller, root hub, the two external-hub ids of task 33.4 and the composite parent of task 36.43, in NT 5.2's section and NT 6.x's). Output:`n" + $baseline64.Output)
 
     #
     # **Each file must be REFUSED under the other's profile**, and this is the
@@ -2115,7 +2167,7 @@ try {
     # match is what the engine binds on and the install section it binds to.
     $idX86 = @(Get-InfSection -Path $prodInf -Name "XhciModels")
     $id64  = @(Get-InfSection -Path $prodInfAmd64 -Name "XhciModels.NTamd64")
-    Assert-True ($idX86.Count -eq 4 -and $id64.Count -eq 4) "INF-SYNC: each file's NT 5.x / 9x models section must have exactly four lines (controller, root hub, and the two external-hub ids of task 33.4)."
+    Assert-True ($idX86.Count -eq 5 -and $id64.Count -eq 5) "INF-SYNC: each file's NT 5.x / 9x models section must have exactly five lines (controller, root hub, the two external-hub ids of task 33.4, and the composite parent of task 36.43)."
     Assert-True ((($idX86 -join "`n")) -eq (($id64 -join "`n"))) (
         "INF-SYNC: the two INFs bind different hardware. One package, one controller id and one root-hub id." +
         "`n  src\xhci98.inf        $($idX86 -join ' | ')" +
@@ -2125,8 +2177,8 @@ try {
     # own - and they must be the same ones, or Vista and Windows 7 bind
     # something no other target does.
     $id64nt6 = @(Get-InfSection -Path $prodInfAmd64 -Name "XhciModels.NTamd64.6.0")
-    Assert-True ($id64nt6.Count -eq 4) "INF-SYNC: src\xhci98-amd64.inf must have exactly four NT 6.x models lines."
-    if ($id64nt6.Count -eq 4 -and $idX86.Count -eq 4) {
+    Assert-True ($id64nt6.Count -eq 5) "INF-SYNC: src\xhci98-amd64.inf must have exactly five NT 6.x models lines."
+    if ($id64nt6.Count -eq 5 -and $idX86.Count -eq 5) {
         $hwOf = { param($rows) @($rows | ForEach-Object { (($_ -split '=', 2)[1] -split ',', 2)[1].Trim() }) -join "," }
         Assert-True ((& $hwOf $idX86) -eq (& $hwOf $id64nt6)) (
             "INF-SYNC: the NT 6.x models lines bind different hardware from every other target." +
@@ -2136,8 +2188,8 @@ try {
     # And the two NT 6.x models sections agree with each other whole, because
     # they are one path on two architectures.
     $idX86nt6 = @(Get-InfSection -Path $prodInf -Name "XhciModels.NTx86.6.0")
-    Assert-True ($idX86nt6.Count -eq 4) "INF-SYNC: src\xhci98.inf must have exactly four NT 6.x models lines."
-    if ($idX86nt6.Count -eq 4 -and $id64nt6.Count -eq 4) {
+    Assert-True ($idX86nt6.Count -eq 5) "INF-SYNC: src\xhci98.inf must have exactly five NT 6.x models lines."
+    if ($idX86nt6.Count -eq 5 -and $id64nt6.Count -eq 5) {
         Assert-True ((($idX86nt6 -join "`n")) -eq (($id64nt6 -join "`n"))) (
             "INF-SYNC: the two INFs' NT 6.x models sections differ." +
             "`n  src\xhci98.inf        (NTx86.6.0)     $($idX86nt6 -join ' | ')" +

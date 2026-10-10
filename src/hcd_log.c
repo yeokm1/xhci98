@@ -188,6 +188,7 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
     XhciLogAppend(log, "enum.cmd.busy.cleared", hc->EnumCommandsBusyCleared,
                   1);
     XhciLogAppend(log, "enum.cmd.busy.drains", hc->EnumCommandBusyDrains, 1);
+    XhciLogAppend(log, "enum.wait.drains", hc->EnumWaitDrains, 1);
     XhciLogAppend(log, "enum.xfer.timedout", hc->EnumTransfersTimedOut, 1);
     XhciLogAppend(log, "serial.ids", hc->SerialIdsTaken, 1);
     XhciLogAppend(log, "serial.refused", hc->SerialIdsRefused, 1);
@@ -239,6 +240,12 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
     XhciLogAppend(log, "intr.retire.state", ext->LineRetireState, 1);
     XhciLogAppend(log, "intr.moved.masked", hc->Counters.LineMoveMasked, 1);
     XhciLogAppend(log, "intr.values.found", hc->Counters.IntrValuesFound, 1);
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* The stand-in dead line's withheld claims (record 15 section 11), at
+     * every stop: mode 1 under the latch has no move to note them at. */
+    XhciLogAppend(log, "qemu.inj.deadline.isr", (ULONG)hc->QemuDeadClaims,
+                  1);
+#endif
     /* Selective suspend (design record 14; 36.33). */
     XhciLogAppend(log, "susp.switch.read", hc->Counters.SuspSwitchRead, 1);
     XhciLogAppend(log, "susp.switch", hc->Counters.SuspSwitch, 1);
@@ -268,6 +275,36 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
     XhciLogAppend(log, "idle.abandoned", hc->Counters.IdleAbandoned, 1);
     XhciLogAppend(log, "idle.quarantined", hc->Counters.IdleQuarantined, 1);
     XhciLogAppend(log, "susp.notes.suppressed", hc->Counters.SuspNotesSuppressed, 1);
+    /* Stage B (36.38; design record 14 section 8.10). */
+    XhciLogAppend(log, "susp.ss.arms", hc->Counters.SsSuspArms, 1);
+    XhciLogAppend(log, "susp.ss.arm.refused",
+                  hc->Counters.SsSuspArmRefused, 1);
+    XhciLogAppend(log, "susp.ss.disarms", hc->Counters.SsSuspDisarms, 1);
+    XhciLogAppend(log, "susp.ss.disarm.failed",
+                  hc->Counters.SsSuspDisarmFailed, 1);
+    XhciLogAppend(log, "susp.ss.hub.u3", hc->Counters.SsSuspHubU3, 1);
+    XhciLogAppend(log, "susp.ss.hub.resumes",
+                  hc->Counters.SsSuspHubResumes, 1);
+    XhciLogAppend(log, "susp.ss.cap.reads", hc->Counters.SsSuspCapReads, 1);
+    XhciLogAppend(log, "susp.ss.cap.failed", hc->Counters.SsSuspCapFailed, 1);
+    XhciLogAppend(log, "susp.ss.capable", hc->Counters.SsSuspCapable, 1);
+    XhciLogAppend(log, "susp.ss.far", hc->Counters.SsSuspFarInterfaces, 1);
+    XhciLogAppend(log, "susp.fw.events", hc->Counters.FuncWakeEvents, 1);
+    XhciLogAppend(log, "susp.fw.closed", hc->Counters.FuncWakeClosed, 1);
+    XhciLogAppend(log, "susp.fw.as.event", hc->Counters.FuncWakeAsEvent, 1);
+    XhciLogAppend(log, "susp.fw.in.sequence",
+                  hc->Counters.FuncWakeInSequence, 1);
+    XhciLogAppend(log, "susp.fw.ignored", hc->Counters.FuncWakeIgnored, 1);
+    XhciLogAppend(log, "susp.fw.unattributed",
+                  hc->Counters.FuncWakeUnattributed, 1);
+    XhciLogAppend(log, "susp.dn.dropped", hc->Counters.DevNotifyDropped, 1);
+    XhciLogAppend(log, "susp.ss.cap.settled",
+                  hc->Counters.SsSuspCapSettled, 1);
+    /* Composite devices as devnodes (task 36.43). */
+    XhciLogAppend(log, "composite.parents", hc->Counters.CompositeParents,
+                  1);
+    XhciLogAppend(log, "composite.represented",
+                  hc->Counters.CompositeRepresented, 1);
     hcdLogTolLocked(ext, log);
 }
 

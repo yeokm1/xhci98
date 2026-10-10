@@ -15,7 +15,11 @@ rem checks the exit codes and the summary lines. A fifth case checks that
 rem `-probe` beside an implied `-dump` is refused before any device is opened
 rem (the 2026-09-17 audit's C4), which needs no controller either.
 rem
-rem Exit code 0 = all five cases behaved. Run it after build.cmd.
+rem The cases after those drive each decode over canned data, and the last
+rem (task 36.47) the system block, which must not carry the computer or user
+rem name.
+rem
+rem Exit code 0 = every case behaved. Run it after build.cmd.
 setlocal
 cd /d "%~dp0"
 
@@ -259,6 +263,84 @@ for %%S in ("value 2; in effect 2 (polling)" "reason               forced pollin
     )
 )
 
+rem Task 36.15's message interrupts from canned HCD images: 7 x86 with the
+rem helper bound on MSI, the helper absent and the list stripped, a refused
+rem helper, 98 SE with no filter (not applicable), a driver from before MSI
+rem and a block between the two sizes.
+"%~dp0XHCISNAP.EXE" -selftest-msi > "%BASE%.msi.log"
+if errorlevel 1 (
+    echo FAIL: -selftest-msi exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("the helper xhcimsi.sys (32-bit)" "4 (the connection's table; one is served); capability MSI" "message descriptors in the grant 1" "capability MSI-X" "MmGetSystemRoutineAddress (64-bit)" "REFUSED (its answer failed a check)" "a message with a line beside it" "BOUND; looks 1" "helper version       2.2.0.0" "not asked (helper bound, or 64-bit, and mode not 1)" "not set (mode 0's default)" "no IRP for the query); looks 2, last status C0000034" "REPLACED: the message choices stripped, the line left" "1 configuration(s), 1 message and 1 line member(s); 1 stripped" "mode as read         0" "refused for          the answer's identity" "none has run: not applicable" "messages connected     0 (no message connected)" "this driver predates MSI" "100 counter words - not a shape") do (
+    findstr /C:%%S "%BASE%.msi.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the message interrupt decode does not say %%S
+        set FAILED=1
+    )
+)
+rem The 63-word block and the truncated block print nothing of their own:
+rem six sections in all (four decoded, the pre-MSI line, the refused shape).
+findstr /C:"[end]" "%BASE%.msi.log" > nul
+if errorlevel 1 (
+    echo FAIL: the message interrupt selftest did not run to its end
+    set FAILED=1
+)
+set MSICOUNT=0
+for /f %%N in ('findstr /C:"message interrupts" "%BASE%.msi.log" ^| find /c /v ""') do set MSICOUNT=%%N
+if not "%MSICOUNT%"=="6" (
+    echo FAIL: expected 6 message interrupt sections, got %MSICOUNT%
+    set FAILED=1
+)
+
+rem Every counter word named as the dump prints it (task 36.35's 18-word
+rem shift, an MSVC 6.0 /O2 miscompile of an inline two-table lookup): a
+rem canned image whose word i holds i + 1, checked word by word against
+rem XHCIHC_COUNTERS in src\xhci_counters.h - each field by name and value,
+rem any reserved words not printed, the words past the block as
+rem "counter N".
+"%~dp0XHCISNAP.EXE" -selftest-counters > "%BASE%.counters.log"
+if errorlevel 1 (
+    echo FAIL: -selftest-counters exited %errorlevel%, expected 0
+    set FAILED=1
+)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0check-counter-names.ps1" -Log "%BASE%.counters.log"
+if errorlevel 1 (
+    echo FAIL: XHCISNAP's counter names do not match src\xhci_counters.h
+    set FAILED=1
+)
+rem Task 36.24's stage 2 counters from canned HCD headers: the switch on
+rem with traffic, the switch absent, Windows 98, a header from before 36.24
+rem and a count it cannot hold.
+"%~dp0XHCISNAP.EXE" -selftest-xpipe > "%BASE%.xpipe.log"
+if errorlevel 1 (
+    echo FAIL: -selftest-xpipe exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("XhciWideMap                 1" "promotion                   on; the register-free check passed" "wide entries                8, 0 in use; claimed 100" "URBs with two TDs at once   100; TDs 900, refills 700" "short 2, error 0, verdict 0; taken off 2" "next TD ready at retirement 650" "not set (the default)" "promotion                   off; the register-free check not run (XhciWideMap off)" "not run (Windows 98 or ME)" "not the register-free 0x80001" "not in this driver" "3 counters in a 948-byte region" "built 2, refused 1; one-TD URBs 300, the largest 513 TRBs" "TDs of 256/257/512/513 TRBs 100 / 101 / 50 / 49" "stage 3 (task 36.25)        not in this driver") do (
+    findstr /C:%%S "%BASE%.xpipe.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the stage 2 decode does not say %%S
+        set FAILED=1
+    )
+)
+
+rem p36-int4: stage B's header words at 237 to 305 after 36.24's stage 2
+rem counters, from a canned header whose word i holds i + 1 (each value
+rem names its word), and a stage B branch build's 273-word header refused.
+"%~dp0XHCISNAP.EXE" -selftest-ssusp > "%BASE%.ssusp.log"
+if errorlevel 1 (
+    echo FAIL: -selftest-ssusp exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("XhciWideMap                 206" "DNCTRL                     0x00EE (N1, FUNCTION_WAKE, enabled)" "DnctrlEnables              0x00EF" "DnctrlReadback             0x00F0" "   243  RECOVERING" "   299  ?" "a 1092-byte header, a stage B branch build's" "4294967295 counters in a 1092-byte region") do (
+    findstr /C:%%S "%BASE%.ssusp.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the stage B header decode does not say %%S
+        set FAILED=1
+    )
+)
+
 rem Task 36.9's review: a header longer than its image is refused by
 rem print_hcd, and no other section decodes anything from it.
 "%~dp0XHCISNAP.EXE" -selftest-hcd-bad > "%BASE%.hcdbad.log"
@@ -271,7 +353,7 @@ if errorlevel 1 (
     echo FAIL: the malformed header is not refused
     set FAILED=1
 )
-for %%S in ("controller tolerance" "interrupt routing" "transfer size" "event delivery") do (
+for %%S in ("controller tolerance" "interrupt routing" "transfer size" "event delivery" "message interrupts" "stage 2") do (
     findstr /C:%%S "%BASE%.hcdbad.log" > nul
     if not errorlevel 1 (
         echo FAIL: a refused header was still decoded: %%S
@@ -280,6 +362,91 @@ for %%S in ("controller tolerance" "interrupt routing" "transfer size" "event de
 )
 
 
+rem Task 36.47's system block: the OS names over canned GetVersionEx answers,
+rem the cleaning of registry text, then this host's own block as a dump's
+rem header writes it.
+"%~dp0XHCISNAP.EXE" -selftest-sysinfo > "%BASE%.sysinfo.log"
+if errorlevel 1 (
+    echo FAIL: -selftest-sysinfo exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("build 950 product 0 arch 65535: Windows 95" "build 1998 product 0 arch 65535: Windows 98" "build 2222 product 0 arch 65535: Windows 98 SE" "4.90 build 3000 product 0 arch 65535: Windows ME" "build 2195 product 1 arch 65535: Windows 2000" "build 2600 product 1 arch 0: Windows XP" "product 1 arch 9: Windows XP x64" "product 3 arch 0: Windows Server 2003" "product 0 arch 65535: Windows Server 2003 or XP x64" "build 6002 product 1 arch 0: Windows Vista" "build 7601 product 1 arch 9: Windows 7" "product 3 arch 9: Windows Server 2008 R2" "Windows 8 or later" "3.51 build 1057 product 0 arch 65535: unknown" "clean [Intel(R) Core(TM) i7-6500U CPU @ 2.50GHz]" "clean [LENOVO 20F5S0??]" "clean 99 chars, ends [x...]" "clean 98 chars, ends [x...]" "clean [Standard PC (i440FX + PIIX, 1996)]" "  captured on - this machine" "    OS                    Windows" "    bitness               " "    CPU                   " "    RAM                   ") do (
+    findstr /C:%%S "%BASE%.sysinfo.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the system block does not say %%S
+        set FAILED=1
+    )
+)
+rem The withholding over canned names (SNAPTEST-PC7, jdoe, CORPDOM, a
+rem non-ASCII name, and PC, which is under three characters and not
+rem compared): six strings are withheld (the non-ASCII one in both cases), one of them with the name past the
+rem 96-character cut, and the QEMU product string is kept. It is deterministic, so no
+rem host name is searched for (Codex review of 36.47, round 1: a host search
+rem matched the block's own fixed words and missed values under other labels).
+set WITHHELD=0
+for /f "delims=" %%L in ('findstr /C:"clean [(withheld: it contains" "%BASE%.sysinfo.log"') do set /a WITHHELD+=1
+if not "%WITHHELD%"=="6" (
+    echo FAIL: the system block withheld %WITHHELD% canned strings, expected 6
+    set FAILED=1
+)
+
+rem Task 36.47's -nosysinfo (owner, 2026-10-10): the report path with the
+rem option says the details were skipped and prints none of them; without it
+rem the same report carries the block; on its own the option is refused.
+"%~dp0XHCISNAP.EXE" -selftest-report "%BASE%-sys" > "%BASE%.sys-on.log"
+if errorlevel 1 (
+    echo FAIL: a report with the system block exited %errorlevel%, expected 0
+    set FAILED=1
+)
+findstr /C:"captured on - this machine" "%BASE%-sys.TXT" > nul
+if errorlevel 1 (
+    echo FAIL: the report does not carry the system block by default
+    set FAILED=1
+)
+"%~dp0XHCISNAP.EXE" -nosysinfo -selftest-report "%BASE%-nosys" > "%BASE%.sys-off.log"
+if errorlevel 1 (
+    echo FAIL: a report with -nosysinfo exited %errorlevel%, expected 0
+    set FAILED=1
+)
+findstr /C:"system details were skipped by -nosysinfo" "%BASE%-nosys.TXT" > nul
+if errorlevel 1 (
+    echo FAIL: the -nosysinfo report does not say the details were skipped
+    set FAILED=1
+)
+for %%S in ("captured on - this machine" "    OS " "    CPU " "    RAM ") do (
+    findstr /C:%%S "%BASE%-nosys.TXT" > nul
+    if not errorlevel 1 (
+        echo FAIL: the -nosysinfo report still says %%S
+        set FAILED=1
+    )
+)
+rem -selftest-sysinfo honours the option on either side of it: the live
+rem block is skipped, the canned decodes still run.
+"%~dp0XHCISNAP.EXE" -selftest-sysinfo -nosysinfo > "%BASE%.sys-after.log"
+"%~dp0XHCISNAP.EXE" -nosysinfo -selftest-sysinfo > "%BASE%.sys-before.log"
+for %%F in ("%BASE%.sys-after.log" "%BASE%.sys-before.log") do (
+    findstr /C:"system details were skipped by -nosysinfo" %%F > nul
+    if errorlevel 1 (
+        echo FAIL: -selftest-sysinfo with -nosysinfo did not skip the block: %%F
+        set FAILED=1
+    )
+    findstr /C:"    RAM " %%F > nul
+    if not errorlevel 1 (
+        echo FAIL: -selftest-sysinfo with -nosysinfo still read the system: %%F
+        set FAILED=1
+    )
+    findstr /C:"build 2222 product 0 arch 65535: Windows 98 SE" %%F > nul
+    if errorlevel 1 (
+        echo FAIL: -selftest-sysinfo with -nosysinfo dropped the canned decodes: %%F
+        set FAILED=1
+    )
+)
+"%~dp0XHCISNAP.EXE" -nosysinfo > "%BASE%.sys-alone.log"
+if not "%errorlevel%"=="2" (
+    echo FAIL: -nosysinfo on its own exited %errorlevel%, expected 2
+    set FAILED=1
+)
+
 rd /s /q "%RUNDIR%" 2> nul
 rd out 2> nul
 
@@ -287,5 +454,5 @@ if "%FAILED%"=="1" (
     echo xhcisnap selftest FAILED
     exit /b 1
 )
-echo xhcisnap selftest: 13 cases, all passed
+echo xhcisnap selftest: 19 cases, all passed
 exit /b 0

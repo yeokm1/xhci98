@@ -436,9 +436,80 @@ static void test_find(void)
     CHECK_EQ(XhciStreamFind(NULL, 5, 0x00010000UL), 0UL, "no table");
 }
 
+/* 36.25 (design record 13 section 11.7, point 2): the big layout, sized
+ * before the address and placed on it, at every page-aligned base across
+ * a 64 KiB window and at 4 GiB's edge. */
+static void test_layout_placed(void)
+{
+    static const ULONG ents[] = { 4, 8, 16, 32 };
+    XHCI_STREAM_LAYOUT l;
+    ULONG bytes;
+    ULONG e;
+    ULONG s;
+    ULONG pa;
+    ULONG id;
+    ULONG ring;
+    ULONG bad;
+
+    CHECK_EQ(XhciStreamBigBytes(32, 31, &bytes), XHCI_STREAM_OK, "31 rings");
+    CHECK_EQ(bytes, 512UL * 1024UL, "16 KiB + 31 x 16 KiB = 512 KiB");
+    CHECK_EQ(XhciStreamBigBytes(4, 3, &bytes), XHCI_STREAM_OK, "3 rings");
+    CHECK_EQ(bytes, 64UL * 1024UL, "16 KiB + 3 x 16 KiB");
+    CHECK_EQ(XhciStreamBigBytes(4, 4, &bytes), XHCI_STREAM_BAD_PARAM,
+             "streams below the entries");
+    CHECK_EQ(XhciStreamBigBytes(3, 2, &bytes), XHCI_STREAM_BAD_PARAM,
+             "entries a power of two");
+    bad = 0;
+    for (e = 0; e < sizeof(ents) / sizeof(ents[0]); e++) {
+        s = ents[e] - 1UL;
+        (VOID)XhciStreamBigBytes(ents[e], s, &bytes);
+        for (pa = 0x10000000UL; pa < 0x10000000UL + 0x10000UL;
+             pa += 4096UL) {
+            if (XhciStreamLayoutPlaced(ents[e], s, pa, 0, &l) !=
+                XHCI_STREAM_OK) {
+                bad++;
+                continue;
+            }
+            if (l.RingBytes != 16384UL || l.TotalBytes != bytes ||
+                l.RingBase < l.ArrayBytes || l.RingBase > 16384UL) {
+                bad++;
+            }
+            for (id = 1; id <= s; id++) {
+                ring = pa + XhciStreamRingOffset(&l, id);
+                if ((ring & 0xFFFFUL) + l.RingBytes > 0x10000UL ||
+                    (ring % 16384UL) != 0 ||
+                    XhciStreamRingOffset(&l, id) + l.RingBytes >
+                        l.TotalBytes) {
+                    bad++;
+                }
+            }
+        }
+    }
+    CHECK_EQ(bad, 0UL, "every base: rings aligned, inside 64 KiB lines, "
+             "after the array, inside the block");
+    CHECK_EQ(XhciStreamLayoutPlaced(32, 31, 0x10000000UL, 0, &l),
+             XHCI_STREAM_OK, "a 64 KiB-aligned base");
+    CHECK_EQ(l.RingBase, 16384UL, "the array's page, then the padding");
+    CHECK_EQ(XhciStreamLayoutPlaced(32, 31, 0x1000F000UL, 0, &l),
+             XHCI_STREAM_OK, "a base 4 KiB short of a 16 KiB line");
+    CHECK_EQ(l.RingBase, 4096UL, "the first ring 4 KiB in");
+    CHECK_EQ(XhciStreamLayoutPlaced(32, 31, 0xFFF80000UL, 0, &l),
+             XHCI_STREAM_OK, "a block that ends exactly at 4 GiB");
+    CHECK_EQ(XhciStreamLayoutPlaced(32, 31, 0xFFF81000UL, 0, &l),
+             XHCI_STREAM_BAD_PARAM, "one that would wrap 32 bits");
+    CHECK_EQ(XhciStreamLayoutPlaced(32, 31, 0x10000000UL, 1, &l),
+             XHCI_STREAM_BAD_PARAM, "a block above 4 GiB");
+    CHECK_EQ(XhciStreamLayoutPlaced(32, 31, 0x10000800UL, 0, &l),
+             XHCI_STREAM_BAD_PARAM, "a base not page-aligned");
+    /* The 64-TRB layout is today's, untouched. */
+    CHECK_EQ(XhciStreamLayout(32, 31, 64, &l), XHCI_STREAM_OK, "64 TRBs");
+    CHECK_EQ(l.TotalBytes, 32768UL, "as before");
+}
+
 int main(void)
 {
     test_hc_entries();
+    test_layout_placed();
     test_companion();
     test_plan();
     test_layout();

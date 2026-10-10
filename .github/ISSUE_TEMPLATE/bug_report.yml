@@ -162,6 +162,12 @@ body:
         internal addresses). Keep the matching .BIN files and attach them only
         if a maintainer asks. The log cannot capture a crash; for a crash, the
         photo above and the XHCIQUAL report below are what helps.
+        From 2.3.0.0 the top of the .TXT names the Windows version, the
+        processor, the memory and, where Windows records them, the make, model
+        and BIOS. It does not print the computer name, your user name or the
+        domain, and withholds a firmware string that contains one (names of
+        three characters or more); if your firmware strings were customised,
+        read the top of the .TXT before attaching it.
     validations:
       required: false
 

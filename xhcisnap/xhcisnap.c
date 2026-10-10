@@ -390,6 +390,24 @@ static const unsigned long snap_guid[4] = {
 #define SNAP_POLL_PIN_UNREADABLE    2UL
 #define SNAP_POLL_RETIRED_STATES    6UL
 /*
+ * Message-signalled interrupts on Vista and 7 (2.2.0.3 on, task 36.15;
+ * design records 15 section 4.3 and 18 section 9). The counter block grew
+ * from 96 words to 114: where the IoConnectInterruptEx pair came from, the
+ * messages connected, the capability, the connection's status, the x86
+ * helper's binding, and the last IRP_MN_FILTER_RESOURCE_REQUIREMENTS's
+ * record. The codes are src/hcd.h's HCD_MSI_ROUTINES_*, src/xhci_msi.h's
+ * XHCI_MSI_CLASS_*, XHCI_MSI_OUT_* and XHCI_MSI86_STATE_*, and
+ * src/xhci_msi86.h's XHCI_MSI86_REFUSE_*, duplicated and held to them by
+ * test_snap. A block of 96 words is a driver from before MSI.
+ */
+#define SNAP_MSI_FIRST              96UL    /* MsiRoutines' word            */
+#define SNAP_MSI_WORDS              18UL
+#define SNAP_MSI_ROUTINES           4UL
+#define SNAP_MSI_STATES             5UL
+#define SNAP_MSI_REFUSALS           5UL
+#define SNAP_MSI_CLASSES            7UL
+#define SNAP_MSI_OUTCOMES           12UL
+/*
  * Controller tolerance (2.2.0.0 on, task 35-T.8; design record 17 section
  * 4.8). Its state stays in the extension, and the HCD region's header grew
  * twelve words (version unchanged) that say where it lies in the extension
@@ -1242,6 +1260,752 @@ static const char *driver_file_version(void)
     return text;
 }
 
+/*
+ * ---- the machine the dump was taken on (roadmap task 36.47) --------------
+ *
+ * Owner, 2026-10-10: the header block - the part of the `.TXT` written at
+ * every level, which is what a user pastes into a GitHub issue - names the
+ * operating system and the machine, so a report says what it came from
+ * without a second round trip to ask.
+ *
+ * **PRIVACY RULE: this block NEVER prints the computer name, the user name,
+ * the domain, or any serial number, UUID, asset tag or SystemSKU-like
+ * identifier.** The `.TXT` is meant to be pasted publicly. So the values read
+ * are a fixed allow list, named one by one below; nothing here enumerates a
+ * key and prints what it finds, and a value added to the list has to be one
+ * that names a make, a model, a firmware or a processor, never one machine.
+ * Those values are still free text, so sys_clean withholds any of them that
+ * contains this machine's own names (sys_has_name, below). README.md ("The
+ * machine it was captured on") states the same rule.
+ *
+ * **It is read from the running machine at the time of the dump, never from
+ * the dump.** This tool does not decode a saved `.BIN` (that is the
+ * maintainer's offset-table route, `counters.py`), so the only machine it can
+ * describe is the one it is running on, which is the one the driver answered
+ * on. The heading says "captured on" and that it is not in the `.BIN`, so
+ * nobody reads the block as something the driver recorded.
+ *
+ * Everything is Win95-era or looked up at run time: GetVersionExA, the
+ * Reg* calls, GetSystemInfo and GlobalMemoryStatus are KERNEL32 and ADVAPI32
+ * on every target; IsWow64Process (XP SP2 and later), GetNativeSystemInfo
+ * (XP) and GlobalMemoryStatusEx (2000) are resolved with GetProcAddress, so
+ * the EXE still loads on 98 SE, ME and 2000 and its import table keeps naming
+ * only KERNEL32.dll and ADVAPI32.dll (make-release.ps1's notice relies on it).
+ * The structures those three take are written out here because MSVC 6.0's
+ * headers predate them. HKLM\HARDWARE is not redirected under WOW64, so the
+ * x86 tool reads the same keys on a 64-bit Windows as a native one would.
+ */
+typedef struct {
+    DWORD dwOSVersionInfoSize;
+    DWORD dwMajorVersion;
+    DWORD dwMinorVersion;
+    DWORD dwBuildNumber;
+    DWORD dwPlatformId;
+    CHAR  szCSDVersion[128];
+    WORD  wServicePackMajor;
+    WORD  wServicePackMinor;
+    WORD  wSuiteMask;
+    BYTE  wProductType;
+    BYTE  wReserved;
+} SYS_OSVERSIONINFOEXA;
+
+typedef struct {
+    DWORD dwLength;
+    DWORD dwMemoryLoad;
+    unsigned __int64 ullTotalPhys;
+    unsigned __int64 ullAvailPhys;
+    unsigned __int64 ullTotalPageFile;
+    unsigned __int64 ullAvailPageFile;
+    unsigned __int64 ullTotalVirtual;
+    unsigned __int64 ullAvailVirtual;
+    unsigned __int64 ullAvailExtendedVirtual;
+} SYS_MEMORYSTATUSEX;
+
+typedef BOOL (WINAPI *PFN_ISWOW64)(HANDLE, PBOOL);
+typedef void (WINAPI *PFN_GNSI)(LPSYSTEM_INFO);
+typedef BOOL (WINAPI *PFN_GMSEX)(SYS_MEMORYSTATUSEX *);
+
+#define SYS_PLATFORM_9X         1UL     /* VER_PLATFORM_WIN32_WINDOWS */
+#define SYS_PLATFORM_NT         2UL     /* VER_PLATFORM_WIN32_NT      */
+#define SYS_PRODUCT_UNKNOWN     0       /* no OSVERSIONINFOEX: 9x, 2000 RTM-less */
+#define SYS_PRODUCT_WORKSTATION 1       /* VER_NT_WORKSTATION */
+#define SYS_ARCH_X86            0       /* PROCESSOR_ARCHITECTURE_INTEL */
+#define SYS_ARCH_IA64           6       /* PROCESSOR_ARCHITECTURE_IA64  */
+#define SYS_ARCH_AMD64          9       /* PROCESSOR_ARCHITECTURE_AMD64 */
+#define SYS_ARCH_UNKNOWN        0xFFFF
+
+#define SYS_LABEL "    %-22s"
+#define SYS_HANG  "                          "
+#define SYS_TEXT_MAX 96
+
+/*
+ * The name for a GetVersionEx answer. Pure, so `-selftest-sysinfo` can drive
+ * it over canned answers. `build` is the whole dwBuildNumber: on 9x its high
+ * word repeats the version and only the low word is the build. `product` is
+ * OSVERSIONINFOEX's wProductType, SYS_PRODUCT_UNKNOWN where the EX form was
+ * refused; `nativeArch` is GetNativeSystemInfo's, SYS_ARCH_UNKNOWN where that
+ * does not exist.
+ */
+static const char *sys_os_name(unsigned long platform, unsigned long major,
+                               unsigned long minor, unsigned long build,
+                               int product, unsigned nativeArch)
+{
+    if (platform == SYS_PLATFORM_9X && major == 4) {
+        if (minor == 0) {
+            return "Windows 95";
+        }
+        if (minor == 10) {
+            return ((build & 0xFFFFUL) >= 2222) ? "Windows 98 SE" : "Windows 98";
+        }
+        if (minor == 90) {
+            return "Windows ME";
+        }
+    }
+    if (platform == SYS_PLATFORM_NT) {
+        if (major == 5 && minor == 0) {
+            return "Windows 2000";
+        }
+        if (major == 5 && minor == 1) {
+            return "Windows XP";
+        }
+        if (major == 5 && minor == 2) {
+            /* XP x64 is the 5.2 workstation; every other 5.2 is a 2003. */
+            if (product == SYS_PRODUCT_UNKNOWN) {
+                return "Windows Server 2003 or XP x64";
+            }
+            if (product == SYS_PRODUCT_WORKSTATION &&
+                nativeArch == SYS_ARCH_AMD64) {
+                return "Windows XP x64";
+            }
+            if (product == SYS_PRODUCT_WORKSTATION) {
+                return "Windows Server 2003 or XP x64";
+            }
+            return "Windows Server 2003";
+        }
+        if (major == 6 && minor == 0) {
+            if (product == SYS_PRODUCT_UNKNOWN) {
+                return "Windows Vista or Server 2008";
+            }
+            return (product == SYS_PRODUCT_WORKSTATION)
+                       ? "Windows Vista" : "Windows Server 2008";
+        }
+        if (major == 6 && minor == 1) {
+            if (product == SYS_PRODUCT_UNKNOWN) {
+                return "Windows 7 or Server 2008 R2";
+            }
+            return (product == SYS_PRODUCT_WORKSTATION)
+                       ? "Windows 7" : "Windows Server 2008 R2";
+        }
+        if (major == 6 && minor == 2) {
+            /* Windows 8 and every later Windows tell a program with no
+             * compatibility manifest 6.2, which this one has not. */
+            return "Windows 8 or later (all report 6.2 to this tool)";
+        }
+    }
+    return "unknown";
+}
+
+/*
+ * **The machine's own names, read only to keep them out.** A value on the
+ * allow list is the firmware's free text (QEMU's `-smbios type=1,product=`
+ * takes anything, and an integrator can write a machine's name or tag into
+ * SystemProductName), so naming the values is not by itself a guarantee
+ * (Codex review of 36.47, round 1). Every registry string printed passes
+ * through sys_clean, and sys_clean withholds the whole string when it
+ * contains this machine's computer name, the user's name, the domain or the
+ * workgroup, compared without case, on the string as the registry gave it
+ * and again as printed (round 2: a name cut by the truncation, or one with a
+ * byte the cleaning turns into '?', must not slip through). The domain is
+ * taken three ways, since the environment alone can be missing it (round 2):
+ * USERDOMAIN; NetGetJoinInformation (2000 and later: the domain or workgroup
+ * joined), from netapi32.dll loaded at run time; and GetComputerNameExA's
+ * DNS domain (2000 and later), looked up at run time. 98 SE and ME give
+ * theirs in VNETSUP. The names are never printed; a name under three
+ * characters is not compared, since it would withhold "PC" out of every QEMU
+ * product string while hiding nothing. What it cannot catch is an
+ * identifier that is none of those - a serial typed into a product string -
+ * and README.md says so. GetComputerNameA and GetEnvironmentVariableA are
+ * KERNEL32 and GetUserNameA ADVAPI32 on every target, so the import table
+ * does not change.
+ */
+#define SYS_NAMES 7
+#define SYS_NAME_BYTES 260
+#define SYS_WITHHELD "(withheld: it contains this machine's computer, user, " \
+                     "domain or workgroup name)"
+
+static char sysNames[SYS_NAMES][SYS_NAME_BYTES];
+static int sysNamesLoaded;
+
+static void sys_load_names(void)
+{
+    DWORD n;
+    HKEY key;
+    DWORD type;
+
+    if (sysNamesLoaded) {
+        return;
+    }
+    sysNamesLoaded = 1;
+    memset(sysNames, 0, sizeof(sysNames));
+    n = SYS_NAME_BYTES - 1;
+    if (!GetComputerNameA(sysNames[0], &n)) {
+        sysNames[0][0] = '\0';
+    }
+    n = SYS_NAME_BYTES - 1;
+    if (!GetUserNameA(sysNames[1], &n)) {
+        sysNames[1][0] = '\0';
+    }
+    n = GetEnvironmentVariableA("USERDOMAIN", sysNames[2], SYS_NAME_BYTES - 1);
+    if (n == 0 || n >= SYS_NAME_BYTES - 1) {
+        sysNames[2][0] = '\0';
+    }
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+                      "System\\CurrentControlSet\\Services\\VxD\\VNETSUP", 0,
+                      KEY_READ, &key) == ERROR_SUCCESS) {
+        n = SYS_NAME_BYTES - 1;
+        if (RegQueryValueExA(key, "Workgroup", NULL, &type,
+                             (LPBYTE)sysNames[3], &n) != ERROR_SUCCESS ||
+            type != REG_SZ) {
+            sysNames[3][0] = '\0';
+        }
+        n = SYS_NAME_BYTES - 1;
+        if (RegQueryValueExA(key, "ComputerName", NULL, &type,
+                             (LPBYTE)sysNames[4], &n) != ERROR_SUCCESS ||
+            type != REG_SZ) {
+            sysNames[4][0] = '\0';
+        }
+        RegCloseKey(key);
+    }
+    {
+        typedef DWORD (WINAPI *PFN_NGJI)(LPCWSTR, LPWSTR *, DWORD *);
+        typedef DWORD (WINAPI *PFN_NABF)(LPVOID);
+        typedef BOOL (WINAPI *PFN_GCNEX)(int, LPSTR, LPDWORD);
+        HMODULE net;
+        HMODULE k32;
+        PFN_NGJI ngji;
+        PFN_NABF nabf;
+        PFN_GCNEX gcnex;
+        LPWSTR joined;
+        DWORD status;
+
+        net = LoadLibraryA("netapi32.dll");
+        if (net != NULL) {
+            ngji = (PFN_NGJI)GetProcAddress(net, "NetGetJoinInformation");
+            nabf = (PFN_NABF)GetProcAddress(net, "NetApiBufferFree");
+            joined = NULL;
+            status = 0;
+            if (ngji != NULL && nabf != NULL &&
+                ngji(NULL, &joined, &status) == 0 && joined != NULL) {
+                if (WideCharToMultiByte(CP_ACP, 0, joined, -1, sysNames[5],
+                                        SYS_NAME_BYTES - 1, NULL, NULL) == 0) {
+                    sysNames[5][0] = '\0';
+                }
+                nabf(joined);
+            }
+            FreeLibrary(net);
+        }
+        k32 = GetModuleHandleA("kernel32.dll");
+        gcnex = (k32 != NULL)
+                    ? (PFN_GCNEX)GetProcAddress(k32, "GetComputerNameExA")
+                    : NULL;
+        n = SYS_NAME_BYTES - 1;
+        /* 2 is ComputerNameDnsDomain. */
+        if (gcnex == NULL || !gcnex(2, sysNames[6], &n)) {
+            sysNames[6][0] = '\0';
+        }
+    }
+}
+
+/*
+ * Upper-case `in` into `out` in the ANSI code page of `sysFoldLcid` (the
+ * system's; the self-test names a fixed one), so an accented name matches in
+ * either case (round 3: `_strnicmp` folds ASCII only in the C locale).
+ * LCMapStringA is KERNEL32 on 95 and later. Its result is taken at the
+ * length it reports, which may differ from the input's (round 4). Only
+ * where it fails outright does a fold of the ASCII letters stand in, and that
+ * fold steps over a DBCS lead byte's trail byte rather than changing it.
+ * Both the names and the text go through here, so they fold alike. Returns
+ * the length.
+ */
+static LCID sysFoldLcid = LOCALE_SYSTEM_DEFAULT;
+
+static size_t sys_upper(const char *in, char *out, size_t outBytes)
+{
+    size_t len;
+    size_t i;
+    int got;
+
+    len = strlen(in);
+    if (len >= outBytes) {
+        len = outBytes - 1;
+    }
+    if (len == 0) {
+        out[0] = '\0';
+        return 0;
+    }
+    got = LCMapStringA(sysFoldLcid, LCMAP_UPPERCASE, in, (int)len, out,
+                       (int)(outBytes - 1));
+    if (got > 0 && (size_t)got < outBytes) {
+        out[got] = '\0';
+        return (size_t)got;
+    }
+    for (i = 0; i < len; i++) {
+        char c = in[i];
+
+        if (IsDBCSLeadByte((BYTE)c) && i + 1 < len) {
+            out[i] = c;
+            out[i + 1] = in[i + 1];
+            i++;
+            continue;
+        }
+        out[i] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+    }
+    out[len] = '\0';
+    return len;
+}
+
+/* Whether `text` holds any loaded name (three characters or more), with
+ * case ignored in the ANSI code page. */
+static int sys_has_name(const char *text)
+{
+    static char textUp[2048];
+    char nameUp[SYS_NAME_BYTES];
+    int i;
+
+    sys_load_names();
+    sys_upper(text, textUp, sizeof(textUp));
+    for (i = 0; i < SYS_NAMES; i++) {
+        size_t len = sys_upper(sysNames[i], nameUp, sizeof(nameUp));
+
+        if (len < 3) {
+            continue;
+        }
+        if (strstr(textUp, nameUp) != NULL) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * A registry string made safe to paste: printable ASCII only (anything else,
+ * a control byte or a byte from the machine's code page, becomes '?', since
+ * the charset is the reader's and not this machine's), leading and trailing
+ * blanks dropped (Intel pads ProcessorNameString on the left), runs of blanks
+ * folded to one, cut at SYS_TEXT_MAX with "..." so one vendor's long string
+ * cannot push the block about. A REG_MULTI_SZ arrives with its NULs already
+ * turned into " / " by the caller. Then the whole string is withheld if it
+ * holds one of the machine's names (sys_has_name). The self-test loads canned
+ * names, so it is pure there.
+ */
+static void sys_clean(const char *in, char *out, size_t outBytes)
+{
+    size_t n;
+    int space;
+    int raw;
+
+    if (outBytes < 8) {
+        if (outBytes != 0) {
+            out[0] = '\0';
+        }
+        return;
+    }
+    /* As the registry gave it, before any byte is changed or cut. */
+    raw = sys_has_name(in);
+    n = 0;
+    space = 0;
+    while (*in == ' ' || *in == '\t') {
+        in++;
+    }
+    for (; *in != '\0'; in++) {
+        unsigned char c = (unsigned char)*in;
+
+        if (c == ' ' || c == '\t') {
+            space = 1;
+            continue;
+        }
+        /* The text itself stays within SYS_TEXT_MAX, a pending blank
+         * counted; "..." and the terminator go beyond it, inside the
+         * buffer (Codex round 1, P3). */
+        if (n + ((space && n > 0) ? 2 : 1) > SYS_TEXT_MAX ||
+            n + 6 > outBytes) {
+            break;
+        }
+        if (space && n > 0) {
+            out[n++] = ' ';
+        }
+        space = 0;
+        out[n++] = (c >= 0x20 && c < 0x7F) ? (char)c : '?';
+    }
+    if (*in != '\0') {
+        out[n++] = '.';
+        out[n++] = '.';
+        out[n++] = '.';
+    }
+    out[n] = '\0';
+    if ((raw || sys_has_name(out)) && strlen(SYS_WITHHELD) < outBytes) {
+        strcpy(out, SYS_WITHHELD);
+    }
+}
+
+/*
+ * One named value as text. 1 read (cleaned into `out`), 0 absent, -1 present
+ * but not text or longer than the buffer (and `out` says which). A
+ * REG_MULTI_SZ's strings are joined with " / ".
+ */
+static int sys_reg_text(const char *keyPath, const char *name, char *out,
+                        size_t outBytes)
+{
+    char raw[1024];
+    HKEY key;
+    DWORD type;
+    DWORD bytes;
+    DWORD i;
+    LONG rc;
+    char joined[1100];
+    size_t n;
+
+    out[0] = '\0';
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, keyPath, 0, KEY_READ, &key) !=
+        ERROR_SUCCESS) {
+        return 0;
+    }
+    memset(raw, 0, sizeof(raw));
+    bytes = sizeof(raw) - 2;
+    type = 0;
+    rc = RegQueryValueExA(key, name, NULL, &type, (LPBYTE)raw, &bytes);
+    RegCloseKey(key);
+    if (rc == ERROR_MORE_DATA) {
+        _snprintf(out, outBytes - 1, "(longer than %lu bytes, not read)",
+                  (unsigned long)(sizeof(raw) - 2));
+        out[outBytes - 1] = '\0';
+        return -1;
+    }
+    if (rc != ERROR_SUCCESS) {
+        return 0;
+    }
+    if (type != REG_SZ && type != REG_EXPAND_SZ && type != REG_MULTI_SZ) {
+        _snprintf(out, outBytes - 1, "(registry type %lu, not text)",
+                  (unsigned long)type);
+        out[outBytes - 1] = '\0';
+        return -1;
+    }
+    if (bytes > sizeof(raw) - 2) {
+        bytes = sizeof(raw) - 2;
+    }
+    raw[bytes] = '\0';
+    n = 0;
+    for (i = 0; i < bytes && raw[i] != '\0'; ) {
+        size_t len = strlen(raw + i);
+
+        if (n != 0 && n + 3 < sizeof(joined)) {
+            memcpy(joined + n, " / ", 3);
+            n += 3;
+        }
+        if (n + len >= sizeof(joined)) {
+            len = sizeof(joined) - n - 1;
+        }
+        memcpy(joined + n, raw + i, len);
+        n += len;
+        if (type != REG_MULTI_SZ) {
+            break;
+        }
+        i += (DWORD)strlen(raw + i) + 1;
+    }
+    joined[n] = '\0';
+    sys_clean(joined, out, outBytes);
+    return 1;
+}
+
+static void sys_line(const char *label, const char *fmt, ...)
+{
+    char buf[512];
+    char lead[64];
+    va_list ap;
+
+    va_start(ap, fmt);
+    _vsnprintf(buf, sizeof(buf) - 1, fmt, ap);
+    va_end(ap);
+    buf[sizeof(buf) - 1] = '\0';
+    _snprintf(lead, sizeof(lead) - 1, SYS_LABEL, label);
+    lead[sizeof(lead) - 1] = '\0';
+    put_wrapped_to((companion != NULL) ? companion : stdout, lead, SYS_HANG,
+                   buf);
+}
+
+/* Print each of `names` found under `keyPath`; returns how many were. */
+static int sys_values(const char *keyPath, const char *const *names)
+{
+    char text[SYS_TEXT_MAX + 8];
+    int found;
+    int i;
+
+    found = 0;
+    for (i = 0; names[i] != NULL; i++) {
+        if (sys_reg_text(keyPath, names[i], text, sizeof(text)) != 0) {
+            sys_line(names[i], "%s", (text[0] != '\0') ? text : "(empty)");
+            found++;
+        }
+    }
+    return found;
+}
+
+#define SYS_KEY_SYSTEM "HARDWARE\\DESCRIPTION\\System"
+#define SYS_KEY_BIOS   "HARDWARE\\DESCRIPTION\\System\\BIOS"
+#define SYS_KEY_CPU0   "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0"
+#define SYS_KEY_9XBIOS "Enum\\Root\\*PNP0C01\\0000"
+
+/* The allow lists. SystemSKU, the serial numbers and the UUIDs are left out
+ * on purpose - see the privacy rule above. */
+static const char *const sys_nt6_names[] = {
+    "SystemManufacturer", "SystemProductName", "SystemFamily",
+    "SystemVersion", "BaseBoardManufacturer", "BaseBoardProduct",
+    "BIOSVendor", "BIOSVersion", "BIOSReleaseDate", NULL
+};
+static const char *const sys_nt5_names[] = {
+    "SystemBiosVersion", "SystemBiosDate", NULL
+};
+static const char *const sys_9x_names[] = {
+    "BIOSName", "BIOSVersion", "BIOSDate", NULL
+};
+
+/*
+ * `-nosysinfo` (owner, 2026-10-10): a machine on which the probing itself
+ * misbehaves - a GetVersionEx, a registry read or a memory query - can
+ * still be dumped. With it set, nothing below runs: no GetVersionEx, no
+ * registry read for the BIOS, the CPU or the names, no processor or memory
+ * query; the header says the details were skipped, and the rest of the
+ * report is as it was. Reading is on unless the option is given.
+ */
+static int sysinfoOff;
+
+static void write_companion_system(void)
+{
+    SYS_OSVERSIONINFOEXA v;
+    SYSTEM_INFO si;
+    HMODULE k32;
+    PFN_ISWOW64 isWow64;
+    PFN_GNSI gnsi;
+    PFN_GMSEX gmsex;
+    unsigned nativeArch;
+    int product;
+    int haveVersion;
+    BOOL wow;
+    char csd[SYS_TEXT_MAX + 8];
+    char text[SYS_TEXT_MAX + 8];
+
+    if (sysinfoOff) {
+        comp("\n  captured on - not read: the system details were skipped by "
+             "-nosysinfo.\n");
+        return;
+    }
+    comp("\n  captured on - this machine, read by xhcisnap at the time of the "
+         "dump (not\n  in the .BIN):\n");
+
+    k32 = GetModuleHandleA("kernel32.dll");
+    isWow64 = NULL;
+    gnsi = NULL;
+    gmsex = NULL;
+    if (k32 != NULL) {
+        isWow64 = (PFN_ISWOW64)GetProcAddress(k32, "IsWow64Process");
+        gnsi = (PFN_GNSI)GetProcAddress(k32, "GetNativeSystemInfo");
+        gmsex = (PFN_GMSEX)GetProcAddress(k32, "GlobalMemoryStatusEx");
+    }
+    nativeArch = SYS_ARCH_UNKNOWN;
+    if (gnsi != NULL) {
+        memset(&si, 0, sizeof(si));
+        gnsi(&si);
+        nativeArch = si.wProcessorArchitecture;
+    }
+
+    /* The EX form first (NT 4 SP6 and later); 9x refuses its size, and then
+     * the plain form answers with no product type. */
+    memset(&v, 0, sizeof(v));
+    v.dwOSVersionInfoSize = sizeof(v);
+    product = SYS_PRODUCT_UNKNOWN;
+    haveVersion = GetVersionExA((LPOSVERSIONINFOA)&v) ? 1 : 0;
+    if (haveVersion) {
+        product = v.wProductType;
+    } else {
+        memset(&v, 0, sizeof(v));
+        v.dwOSVersionInfoSize = sizeof(OSVERSIONINFOA);
+        haveVersion = GetVersionExA((LPOSVERSIONINFOA)&v) ? 1 : 0;
+    }
+    if (!haveVersion) {
+        sys_line("OS", "unknown (GetVersionEx failed, error %lu)",
+                 (unsigned long)GetLastError());
+    } else {
+        v.szCSDVersion[sizeof(v.szCSDVersion) - 1] = '\0';
+        sys_clean(v.szCSDVersion, csd, sizeof(csd));
+        sys_line("OS", "%s: platform %lu, version %lu.%lu, build %lu%s%s",
+                 sys_os_name(v.dwPlatformId, v.dwMajorVersion,
+                             v.dwMinorVersion, v.dwBuildNumber, product,
+                             nativeArch),
+                 (unsigned long)v.dwPlatformId,
+                 (unsigned long)v.dwMajorVersion,
+                 (unsigned long)v.dwMinorVersion,
+                 (unsigned long)((v.dwPlatformId == SYS_PLATFORM_9X)
+                                     ? (v.dwBuildNumber & 0xFFFFUL)
+                                     : v.dwBuildNumber),
+                 (csd[0] != '\0') ? ", " : "", csd);
+    }
+
+    /* This tool is an x86 program on every target; on a 64-bit Windows it
+     * runs under WOW64 and says so. */
+    wow = FALSE;
+    if (isWow64 != NULL && isWow64(GetCurrentProcess(), &wow) && wow) {
+        sys_line("bitness", "64-bit Windows (%s); this x86 tool ran under "
+                 "WOW64",
+                 (nativeArch == SYS_ARCH_AMD64) ? "x64" :
+                 (nativeArch == SYS_ARCH_IA64) ? "Itanium" : "64-bit");
+    } else {
+        sys_line("bitness", "x86 (32-bit Windows)");
+    }
+
+    if (haveVersion && v.dwPlatformId == SYS_PLATFORM_NT) {
+        if (v.dwMajorVersion >= 6 && sys_values(SYS_KEY_BIOS, sys_nt6_names)
+            != 0) {
+            /* Vista SP1 and later: the SMBIOS strings, by name. */
+        } else {
+            sys_line("make/model", "%s",
+                     (v.dwMajorVersion >= 6)
+                         ? "not in this Windows' registry (Vista before SP1 "
+                           "does not record it)"
+                         : "not available on this OS");
+            if (sys_values(SYS_KEY_SYSTEM, sys_nt5_names) == 0) {
+                sys_line("BIOS", "not in the registry");
+            }
+        }
+    } else {
+        sys_line("make/model", "not available on this OS");
+        if (sys_values(SYS_KEY_9XBIOS, sys_9x_names) == 0) {
+            sys_line("BIOS", "not in the registry");
+        }
+    }
+
+    memset(&si, 0, sizeof(si));
+    GetSystemInfo(&si);
+    if (sys_reg_text(SYS_KEY_CPU0, "ProcessorNameString", text,
+                     sizeof(text)) == 1 && text[0] != '\0') {
+        sys_line("CPU", "%s; %lu processor(s)", text,
+                 (unsigned long)si.dwNumberOfProcessors);
+    } else if (sys_reg_text(SYS_KEY_CPU0, "Identifier", text,
+                            sizeof(text)) == 1 && text[0] != '\0') {
+        sys_line("CPU", "%s; %lu processor(s)", text,
+                 (unsigned long)si.dwNumberOfProcessors);
+    } else {
+        sys_line("CPU", "not named in the registry; %lu processor(s)",
+                 (unsigned long)si.dwNumberOfProcessors);
+    }
+
+    {
+        SYS_MEMORYSTATUSEX mx;
+        MEMORYSTATUS m;
+
+        memset(&mx, 0, sizeof(mx));
+        mx.dwLength = sizeof(mx);
+        if (gmsex != NULL && gmsex(&mx)) {
+            sys_line("RAM", "%lu MB physical",
+                     (unsigned long)(mx.ullTotalPhys / (1024 * 1024)));
+        } else {
+            memset(&m, 0, sizeof(m));
+            m.dwLength = sizeof(m);
+            GlobalMemoryStatus(&m);
+            sys_line("RAM", "%lu MB physical",
+                     (unsigned long)(m.dwTotalPhys / (1024UL * 1024UL)));
+        }
+    }
+}
+
+/*
+ * `-selftest-sysinfo`: the OS names over canned GetVersionEx answers, the
+ * cleaning over canned strings, then this machine's block as a dump would
+ * write it (to the screen, since no report is open).
+ */
+static int selftest_sysinfo(void)
+{
+    static const struct {
+        unsigned long platform, major, minor, build;
+        int product;
+        unsigned arch;
+    } cases[] = {
+        { 1, 4,  0, 0x040003B6UL, 0, SYS_ARCH_UNKNOWN },
+        { 1, 4, 10, 0x040A07CEUL, 0, SYS_ARCH_UNKNOWN },
+        { 1, 4, 10, 0x040A08AEUL, 0, SYS_ARCH_UNKNOWN },
+        { 1, 4, 90, 0x045A0BB8UL, 0, SYS_ARCH_UNKNOWN },
+        { 2, 5,  0, 2195, 1, SYS_ARCH_UNKNOWN },
+        { 2, 5,  1, 2600, 1, SYS_ARCH_X86 },
+        { 2, 5,  2, 3790, 1, SYS_ARCH_AMD64 },
+        { 2, 5,  2, 3790, 3, SYS_ARCH_X86 },
+        { 2, 5,  2, 3790, 0, SYS_ARCH_UNKNOWN },
+        { 2, 6,  0, 6002, 1, SYS_ARCH_X86 },
+        { 2, 6,  1, 7601, 1, SYS_ARCH_AMD64 },
+        { 2, 6,  1, 7601, 3, SYS_ARCH_AMD64 },
+        { 2, 6,  2, 9200, 1, SYS_ARCH_AMD64 },
+        { 2, 3, 51, 1057, 0, SYS_ARCH_UNKNOWN }
+    };
+    static const char *const dirty[] = {
+        "       Intel(R) Core(TM) i7-6500U CPU @ 2.50GHz",
+        "LENOVO\t  20F5S0\x01\xE9 ",
+        "Acme Desktop snaptest-pc7 rev 2",
+        "Built for JDoe",
+        "CorpDom fleet image",
+        "Standard PC (i440FX + PIIX, 1996)",
+        "Owner M\xFCller",
+        "Owner M\xDCLLER",
+        "BIOS xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        "xxxxxxxxxxxxxxxxxxxSNAPTEST-PC7",
+        NULL
+    };
+    char out[SYS_TEXT_MAX + 8];
+    char longIn[200];
+    int i;
+
+    /* Canned names, so the withholding is tested the same on every host. */
+    memset(sysNames, 0, sizeof(sysNames));
+    strcpy(sysNames[0], "SNAPTEST-PC7");
+    strcpy(sysNames[1], "jdoe");
+    strcpy(sysNames[2], "CORPDOM");
+    strcpy(sysNames[3], "PC");
+    strcpy(sysNames[4], "M\xFCller");
+    sysNamesLoaded = 1;
+    /* German (Germany), code page 1252, where FC and DC are u-umlaut in its
+     * two cases, so the accented fixture means the same on every build host
+     * whatever its own code page (round 4). */
+    sysFoldLcid = MAKELCID(MAKELANGID(LANG_GERMAN, SUBLANG_GERMAN),
+                           SORT_DEFAULT);
+
+    for (i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++) {
+        printf("os %lu %lu.%lu build %lu product %d arch %u: %s\n",
+               cases[i].platform, cases[i].major, cases[i].minor,
+               cases[i].build & 0xFFFFUL, cases[i].product, cases[i].arch,
+               sys_os_name(cases[i].platform, cases[i].major, cases[i].minor,
+                           cases[i].build, cases[i].product, cases[i].arch));
+    }
+    for (i = 0; dirty[i] != NULL; i++) {
+        sys_clean(dirty[i], out, sizeof(out));
+        printf("clean [%s]\n", out);
+    }
+    memset(longIn, 'x', sizeof(longIn) - 1);
+    longIn[sizeof(longIn) - 1] = '\0';
+    sys_clean(longIn, out, sizeof(out));
+    printf("clean %u chars, ends [%s]\n", (unsigned)strlen(out),
+           out + strlen(out) - 4);
+    /* 95 characters, a blank, then one more: the blank and the y would
+     * make 97, so the text stops at 95 and says it was cut. */
+    memset(longIn, 'x', 95);
+    strcpy(longIn + 95, " y");
+    sys_clean(longIn, out, sizeof(out));
+    printf("clean %u chars, ends [%s]\n", (unsigned)strlen(out),
+           out + strlen(out) - 4);
+
+    /* The live block under the machine's real names and code page. */
+    sysNamesLoaded = 0;
+    sysFoldLcid = LOCALE_SYSTEM_DEFAULT;
+    write_companion_system();
+    return 0;
+}
+
 static void write_companion_header(const SNAP_HEADER *h)
 {
     comp("\nxhci98 snapshot - the part a maintainer can read without an offset "
@@ -1258,6 +2022,7 @@ static void write_companion_header(const SNAP_HEADER *h)
     put_wrapped_to((companion != NULL) ? companion : stdout,
                    "  driver file        ", "                     ",
                    driver_file_version());
+    write_companion_system();
     comp("  schema             %lu, %lu-byte header\n",
          h->SchemaVersion, h->HeaderBytes);
     comp("  build flavour      %s\n", flavour_text(h->Flavour));
@@ -1881,9 +2646,17 @@ static const char *const hcd_counter_names[SNAP_HCD_COUNTER_WORDS] = {
     "IntxDisableCleared", "LineMoveMasked", "IntrValuesFound"
 };
 
+/* Words 96 to 113 (36.15), named apart so a 96-word block still reads. */
+static const char *const msi_counter_names[SNAP_MSI_WORDS] = {
+    "MsiRoutines", "MsiMessages", "MsiCapability", "MsiConnectStatus",
+    "MsiDescriptors", "Msi86State", "Msi86Looks", "Msi86Status",
+    "Msi86Refusal", "Msi86HelperVersion", "MsiFilterSeq", "MsiFilterClass",
+    "MsiFilterOutcome", "MsiFilterMode", "MsiFilterLists",
+    "MsiFilterMessages", "MsiFilterLines", "MsiFilterStripped"
+};
+
 /* Selective suspend's counters (task 36.33), appended at word 114 after
- * the words of the branches merged before them, which print as "counter
- * N" until they are named here. */
+ * the MSI words above. */
 #define SNAP_HCD_SUSP_AT            114UL
 #define SNAP_HCD_SUSP_WORDS         28UL
 static const char *const hcd_susp_counter_names[SNAP_HCD_SUSP_WORDS] = {
@@ -1915,6 +2688,38 @@ static const char *const hcd_susp_counter_names[SNAP_HCD_SUSP_WORDS] = {
     "IdleAbandoned",
     "IdleQuarantined",
     "SuspNotesSuppressed",
+};
+
+/* Stage B's counters (task 36.38, design record 14 section 8.10), appended
+ * at word 142, contiguous after stage A's. */
+#define SNAP_HCD_SSUSP_AT           142UL
+#define SNAP_HCD_SSUSP_WORDS        18UL
+static const char *const hcd_ssusp_counter_names[SNAP_HCD_SSUSP_WORDS] = {
+    "SsSuspArms",
+    "SsSuspArmRefused",
+    "SsSuspDisarms",
+    "SsSuspDisarmFailed",
+    "SsSuspHubU3",
+    "SsSuspHubResumes",
+    "SsSuspCapReads",
+    "SsSuspCapFailed",
+    "SsSuspCapable",
+    "SsSuspFarInterfaces",
+    "FuncWakeEvents",
+    "FuncWakeClosed",
+    "FuncWakeAsEvent",
+    "FuncWakeInSequence",
+    "FuncWakeIgnored",
+    "FuncWakeUnattributed",
+    "DevNotifyDropped",
+    "SsSuspCapSettled",
+};
+
+/* The composite parent's two (task 36.43) follow at 160. */
+#define SNAP_COMP_AT                160UL
+#define SNAP_COMP_WORDS             2UL
+static const char *const comp_counter_names[SNAP_COMP_WORDS] = {
+    "CompositeParents", "CompositeRepresented"
 };
 
 /*
@@ -1961,35 +2766,86 @@ static int hcd_shape_ok(const unsigned char *image, unsigned long bytes)
 }
 
 /*
- * The image's own header says where everything is; each figure is checked
- * against the bytes that arrived before it is believed. A port is printed
- * only when it has something to say - a machine not Empty, a cause, a speed
- * ID, a link's warm resets or give-up, refused notes, a flag - and the
- * counters only when nonzero.
+ * The name of counter word i: snap_counter_reserved for a word reserved
+ * for a later block (none now: stage B filled 142 to 159 in place at
+ * p36-int4), NULL for a word this tool
+ * does not know, which prints as "counter N". Every block's lookup is
+ * here, in a function of its own that is never inlined: MSVC 6.0 /O2
+ * compiled a multi-table lookup written inline in print_hcd's loop as an
+ * index into a later table off the FIRST table's base, so word 114 printed
+ * as stage A's entry 18 (task 36.35's legs; a host harness reproduced it).
+ * Each table is reached by an offset from its block's own first word, the
+ * blocks tested in ascending order. -selftest-counters prints every word.
  */
-/*
- * The name of counter word i, or NULL. A function of its own, not inlined:
- * MSVC 6.0 /O2 compiled the two-table lookup written inline in print_hcd's
- * loop as an index into the second table off the FIRST table's base, so
- * word 114 printed as the second table's entry 18 (task 36.35's legs, a
- * host harness reproduced it).
- */
+static const char snap_counter_reserved[] = "(reserved)";
+
 #pragma auto_inline(off)
 static const char *hcd_counter_name(unsigned long i)
 {
     if (i < SNAP_HCD_COUNTER_WORDS) {
         return hcd_counter_names[i];
     }
+    if (i >= SNAP_MSI_FIRST && i - SNAP_MSI_FIRST < SNAP_MSI_WORDS) {
+        return msi_counter_names[i - SNAP_MSI_FIRST];
+    }
     if (i >= SNAP_HCD_SUSP_AT && i - SNAP_HCD_SUSP_AT < SNAP_HCD_SUSP_WORDS) {
         return hcd_susp_counter_names[i - SNAP_HCD_SUSP_AT];
     }
+    if (i >= SNAP_HCD_SSUSP_AT &&
+        i - SNAP_HCD_SSUSP_AT < SNAP_HCD_SSUSP_WORDS) {
+        return hcd_ssusp_counter_names[i - SNAP_HCD_SSUSP_AT];
+    }
+    if (i >= SNAP_COMP_AT && i - SNAP_COMP_AT < SNAP_COMP_WORDS) {
+        return comp_counter_names[i - SNAP_COMP_AT];
+    }
     return NULL;
+}
+
+/*
+ * The counter block, `counters` words at countersAt (checked by the
+ * caller), nonzero words only; a reserved word is skipped even when
+ * nonzero. Out of line for the same reason as hcd_counter_name.
+ */
+static void print_hcd_counters(const unsigned char *image,
+                               unsigned long countersAt,
+                               unsigned long counters)
+{
+    const char *name;
+    unsigned long shown;
+    unsigned long i;
+    unsigned long v;
+
+    comp("\ncontroller counters (XHCIHC_COUNTERS), nonzero only:\n");
+    shown = 0;
+    for (i = 0; i < counters; i++) {
+        v = get32(image, countersAt + i * 4);
+        if (v == 0) {
+            continue;
+        }
+        name = hcd_counter_name(i);
+        if (name == snap_counter_reserved) {
+            continue;
+        }
+        if (name != NULL) {
+            comp("  %-26s %lu\n", name, v);
+        } else {
+            comp("  counter %-18lu %lu\n", i, v);
+        }
+        shown++;
+    }
+    comp("  (%lu of %lu nonzero.)\n", shown, counters);
 }
 #pragma auto_inline(on)
 
+/*
+ * The image's own header says where everything is; each figure is checked
+ * against the bytes that arrived before it is believed. A port is printed
+ * only when it has something to say - a machine not Empty, a cause, a speed
+ * ID, a link's warm resets or give-up, refused notes, a flag - and the
+ * counters only when nonzero.
+ */
 static void print_hcd(const unsigned char *image, unsigned long bytes)
 {
-    const char *name;
     static const char *const cause_short[8] = {
         "none", "reset", "no slot", "Address Device", "device descriptor",
         "configuration", "PDO", "speed (no EP0 size)"
@@ -2068,22 +2924,7 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
          "noted.\n   ID is the raw speed ID the port's last reset read.)\n",
          shown, ports);
 
-    comp("\ncontroller counters (XHCIHC_COUNTERS), nonzero only:\n");
-    shown = 0;
-    for (i = 0; i < counters; i++) {
-        v = get32(image, countersAt + i * 4);
-        if (v == 0) {
-            continue;
-        }
-        name = hcd_counter_name(i);
-        if (name != NULL) {
-            comp("  %-26s %lu\n", name, v);
-        } else {
-            comp("  counter %-18lu %lu\n", i, v);
-        }
-        shown++;
-    }
-    comp("  (%lu of %lu nonzero.)\n", shown, counters);
+    print_hcd_counters(image, countersAt, counters);
 }
 
 /* ---- controller tolerance: the extension's Tol, placed by the HCD header */
@@ -3422,6 +4263,322 @@ static int selftest_intr(void)
     return 0;
 }
 
+/* ---- message-signalled interrupts (task 36.15) ------------------------- */
+
+static const char *const msi_routines_text[SNAP_MSI_ROUTINES] = {
+    "not looked for (not Vista or 7, or no message granted)",
+    "MmGetSystemRoutineAddress (64-bit)",
+    "the helper xhcimsi.sys (32-bit)",
+    "looked for, NOT found"
+};
+
+static const char *const msi_state_text[SNAP_MSI_STATES] = {
+    "not looked for yet",
+    "ABSENT (not opened - not loaded or not installed - or no IRP for "
+    "the query)",
+    "REFUSED (its answer failed a check)",
+    "BOUND",
+    "released (the controller was removed)"
+};
+
+static const char *const msi_refusal_text[SNAP_MSI_REFUSALS] = {
+    "none",
+    "the query failed",
+    "the answer's length",
+    "the answer's identity (magic or interface version)",
+    "the routines (NULL, or both the same)"
+};
+
+static const char *const msi_class_text[SNAP_MSI_CLASSES] = {
+    "not classified",
+    "no interrupt offered",
+    "no message offered (the line alone)",
+    "a message with a line beside it",
+    "a message and NO usable line-only configuration offered",
+    "a shape this driver does not handle",
+    "inconsistent (the walk refused it)"
+};
+
+static const char *const msi_outcome_text[SNAP_MSI_OUTCOMES] = {
+    "no filter has run",
+    "kept: the lower driver failed it",
+    "kept: no list",
+    "kept: inconsistent",
+    "not asked (helper bound, or 64-bit, and mode not 1): left alone",
+    "kept: the strip switched off (XhciMsi86NoStrip)",
+    "kept: no usable line-only configuration offered",
+    "kept: no interrupt",
+    "kept: no message to strip",
+    "kept: a shape not admitted",
+    "REPLACED: the message choices stripped, the line left",
+    "kept: no memory for the replacement"
+};
+
+/* A capability word: 0 not read, else a delivery code. */
+static const char *msi_capability(unsigned long v)
+{
+    if (v == 0) {
+        return "not read";
+    }
+    return poll_code(poll_delivery_text, SNAP_POLL_DELIVERIES, v);
+}
+
+/*
+ * Words 96 to 113 of the counter block, as the last start and the last
+ * requirements filter wrote them (design record 18 section 9). The filter
+ * runs on Vista and 7 only: on Windows 98, ME, 2000 and XP its sequence
+ * stays 0 and its mode word reads FFFFFFFF (XHCI_POLL_NOT_FOUND, no
+ * filter's value), which is "not applicable" here, not a mode.
+ */
+static void print_msi(const unsigned char *hcd, unsigned long hcdBytes)
+{
+    unsigned long counters;
+    unsigned long countersAt;
+    unsigned long v;
+    const unsigned char *k;
+
+    if (!hcd_shape_ok(hcd, hcdBytes)) {
+        return;
+    }
+    counters = get32(hcd, 20);
+    countersAt = get32(hcd, 24);
+    if (counters <= SNAP_MSI_FIRST) {
+        if (counters > SNAP_POLL_FIRST) {
+            comp("\nmessage interrupts: none - this driver predates MSI "
+                 "(its counter block is %lu\n  words; 2.2.0.3 added "
+                 "MSI's).\n", counters);
+        }
+        return;
+    }
+    if (counters < SNAP_MSI_FIRST + SNAP_MSI_WORDS) {
+        comp("\nmessage interrupts: %lu counter words - not a shape this "
+             "build reads; not decoded.\n", counters);
+        return;
+    }
+    k = hcd + countersAt + SNAP_MSI_FIRST * 4;
+
+    comp("\nmessage interrupts (design records 15 and 18), as the last "
+         "start and filter set them:\n");
+    comp("  routines               %s\n",
+         poll_code(msi_routines_text, SNAP_MSI_ROUTINES, get32(k, 0)));
+    comp("  messages connected     %lu%s; capability %s\n", get32(k, 1 * 4),
+         get32(k, 1 * 4) != 0 ? " (the connection's table; one is served)"
+                              : " (no message connected)",
+         msi_capability(get32(k, 2 * 4)));
+    comp("    connection status    %08lX; message descriptors in the "
+         "grant %lu\n", get32(k, 3 * 4), get32(k, 4 * 4));
+    v = get32(k, 5 * 4);
+    if (v == 0 && get32(k, 6 * 4) == 0) {
+        comp("  x86 helper             not looked for\n");
+    } else {
+        comp("  x86 helper             %s; looks %lu, last status %08lX\n",
+             poll_code(msi_state_text, SNAP_MSI_STATES, v),
+             get32(k, 6 * 4), get32(k, 7 * 4));
+        if (get32(k, 8 * 4) != 0) {
+            comp("    refused for          %s\n",
+                 poll_code(msi_refusal_text, SNAP_MSI_REFUSALS,
+                           get32(k, 8 * 4)));
+        }
+        v = get32(k, 9 * 4);
+        if (v != 0) {
+            comp("    helper version       %lu.%lu.%lu.%lu\n",
+                 (v >> 24) & 0xFFUL, (v >> 16) & 0xFFUL, (v >> 8) & 0xFFUL,
+                 v & 0xFFUL);
+        }
+    }
+    if (get32(k, 10 * 4) == 0) {
+        comp("  requirements filter    none has run: not applicable (it runs "
+             "on Vista and 7\n                         only; Windows 98, ME, "
+             "2000 and XP never send one)\n");
+        return;
+    }
+    comp("  requirements filter    #%lu: %s\n", get32(k, 10 * 4),
+         poll_code(msi_class_text, SNAP_MSI_CLASSES, get32(k, 11 * 4)));
+    comp("    outcome              %s\n",
+         poll_code(msi_outcome_text, SNAP_MSI_OUTCOMES, get32(k, 12 * 4)));
+    v = get32(k, 13 * 4);
+    if (v == SNAP_POLL_NOT_FOUND) {
+        comp("    mode as read         not set (mode 0's default)\n");
+    } else {
+        comp("    mode as read         %lu\n", v);
+    }
+    comp("    the list             %lu configuration(s), %lu message and "
+         "%lu line member(s); %lu stripped\n", get32(k, 14 * 4),
+         get32(k, 15 * 4), get32(k, 16 * 4), get32(k, 17 * 4));
+}
+
+/*
+ * `-selftest-msi`: task 36.15's decode over canned HCD images: 7 x86 with
+ * the helper bound on MSI; 7 x86 with the helper absent, the list stripped,
+ * on the line; a refused helper; 98 SE (no filter: not applicable); a
+ * driver from before MSI; and a block between the two sizes.
+ */
+static void msi_word(unsigned char *hcd, unsigned long headWords,
+                     unsigned long index, unsigned long value)
+{
+    put32(hcd, headWords * 4 + (SNAP_MSI_FIRST + index) * 4, value);
+}
+
+static int selftest_msi(void)
+{
+    static unsigned char hcd[(SNAP_HCD_DELIVERY_HEAD_WORDS + SNAP_MSI_FIRST +
+                              SNAP_MSI_WORDS) * 4];
+    const unsigned long H = SNAP_HCD_DELIVERY_HEAD_WORDS;
+    const unsigned long W = SNAP_MSI_FIRST + SNAP_MSI_WORDS;
+    const unsigned long bytes = sizeof(hcd);
+
+    companion = NULL;
+
+    /* 7 x86, the helper bound, MSI connected (a raised
+     * MessageNumberLimit: four messages, one descriptor), the filter not
+     * asked. */
+    memset(hcd, 0, sizeof(hcd));
+    intr_image(hcd, H, W);
+    msi_word(hcd, H, 0, 2);
+    msi_word(hcd, H, 1, 4);
+    msi_word(hcd, H, 2, 3);
+    msi_word(hcd, H, 4, 1);
+    msi_word(hcd, H, 5, 3);
+    msi_word(hcd, H, 6, 1);
+    msi_word(hcd, H, 9, 0x02020000UL);
+    msi_word(hcd, H, 10, 1);
+    msi_word(hcd, H, 11, 3);
+    msi_word(hcd, H, 12, 4);
+    msi_word(hcd, H, 13, SNAP_POLL_NOT_FOUND);
+    msi_word(hcd, H, 14, 1);
+    msi_word(hcd, H, 15, 1);
+    msi_word(hcd, H, 16, 1);
+    print_msi(hcd, bytes);
+
+    /* 7 x86, the helper absent: the list stripped, the line granted. */
+    memset(hcd, 0, sizeof(hcd));
+    intr_image(hcd, H, W);
+    msi_word(hcd, H, 5, 1);
+    msi_word(hcd, H, 6, 2);
+    msi_word(hcd, H, 7, 0xC0000034UL);
+    msi_word(hcd, H, 10, 1);
+    msi_word(hcd, H, 11, 3);
+    msi_word(hcd, H, 12, 10);
+    msi_word(hcd, H, 13, 0);
+    msi_word(hcd, H, 14, 1);
+    msi_word(hcd, H, 15, 1);
+    msi_word(hcd, H, 16, 1);
+    msi_word(hcd, H, 17, 1);
+    print_msi(hcd, bytes);
+
+    /* A refused helper (a wrong magic): the identity test; 64-bit's
+     * routines, MSI-X. */
+    memset(hcd, 0, sizeof(hcd));
+    intr_image(hcd, H, W);
+    msi_word(hcd, H, 0, 1);
+    msi_word(hcd, H, 2, 4);
+    msi_word(hcd, H, 5, 2);
+    msi_word(hcd, H, 6, 1);
+    msi_word(hcd, H, 8, 3);
+    msi_word(hcd, H, 10, 1);
+    msi_word(hcd, H, 11, 3);
+    msi_word(hcd, H, 12, 10);
+    print_msi(hcd, bytes);
+
+    /* 98 SE: no filter ever, the mode word FFFFFFFF. */
+    memset(hcd, 0, sizeof(hcd));
+    intr_image(hcd, H, W);
+    msi_word(hcd, H, 13, SNAP_POLL_NOT_FOUND);
+    print_msi(hcd, bytes);
+
+    /* A driver from before MSI (96 words), a block of 100, a 2.2.0.2
+     * block of 63 (silent here), and a 114-word block the image cannot
+     * hold (refused by the shape check, silent here). */
+    memset(hcd, 0, sizeof(hcd));
+    intr_image(hcd, H, SNAP_MSI_FIRST);
+    print_msi(hcd, bytes);
+    intr_image(hcd, H, 100);
+    print_msi(hcd, bytes);
+    comp("[63 words follow]\n");
+    intr_image(hcd, H, 63);
+    print_msi(hcd, bytes);
+    comp("[a truncated block follows]\n");
+    intr_image(hcd, H, W);
+    print_msi(hcd, bytes - 4);
+    comp("[end]\n");
+    return 0;
+}
+
+/*
+ * Task 36.38's header words (src/xhci.h, XHCI_SNAPSHOT_HCD_DNCTRL_LIVE
+ * onward; design record 14 section 8.10): DNCTRL as read when the window
+ * was cut (only with XhciSelectiveSuspend 1), the extension's enables and
+ * readback, and up to eight devices' stage B records. A header shorter than
+ * them is an earlier driver's, which enabled no notification.
+ */
+#define SNAP_HCD_SSUSP_HEAD         237UL
+#define SNAP_HCD_SSUSP_HEAD_WORDS   306UL
+/* The stage B branch's own builds (p36-suspbc), never released: 273. */
+#define SNAP_HCD_SSUSP_BRANCH_WORDS 273UL
+static void print_ssusp(const unsigned char *image, unsigned long bytes)
+{
+    static const char *const link_names[6] = {
+        "ACTIVE", "SUSPENDING", "SUSPENDED", "RESUMING", "RECOVERING", "GONE"
+    };
+    unsigned long headBytes;
+    unsigned long records;
+    unsigned long words;
+    unsigned long at;
+    unsigned long i;
+    unsigned long v;
+    const unsigned char *r;
+
+    headBytes = get32(image, 4);
+    if (headBytes == SNAP_HCD_SSUSP_BRANCH_WORDS * 4) {
+        comp("\nselective suspend, stage B: a %lu-byte header, a stage B "
+             "branch build's\n  (its words at 204, before the integration "
+             "moved them to 237); not decoded.\n", headBytes);
+        return;
+    }
+    if (headBytes < SNAP_HCD_SSUSP_HEAD_WORDS * 4 || bytes < headBytes) {
+        return;
+    }
+    comp("\nselective suspend, stage B (task 36.38):\n");
+    v = get32(image, SNAP_HCD_SSUSP_HEAD * 4);
+    if (v == 0xFFFFFFFFUL) {
+        comp("  DNCTRL                     not read (selective suspend off, "
+             "or no MMIO)\n");
+    } else {
+        comp("  DNCTRL                     0x%04lX%s\n", v,
+             (v & 2UL) != 0 ? " (N1, FUNCTION_WAKE, enabled)" : "");
+    }
+    comp("  DnctrlEnables              0x%04lX\n",
+         get32(image, (SNAP_HCD_SSUSP_HEAD + 1) * 4));
+    comp("  DnctrlReadback             0x%04lX\n",
+         get32(image, (SNAP_HCD_SSUSP_HEAD + 2) * 4));
+    records = get32(image, (SNAP_HCD_SSUSP_HEAD + 3) * 4);
+    words = get32(image, (SNAP_HCD_SSUSP_HEAD + 4) * 4);
+    at = SNAP_HCD_SSUSP_HEAD + 5;
+    if (words < 8 || words > 64 || records > 64 ||
+        (at + records * words) * 4 > headBytes) {
+        comp("  device records: %lu of %lu words - not a shape this build "
+             "reads\n", records, words);
+        return;
+    }
+    comp("  slot  link        Ss win armed root step  firsts     capable    "
+         "pending    far armedfn    last\n");
+    for (i = 0; i < records; i++) {
+        r = image + (at + i * words) * 4;
+        if (get32(r, 0) == 0) {
+            continue;
+        }
+        v = get32(r, 4);
+        comp("  %4lu  %-10s  %2lu %3lu %5lu %4lu %4lu  0x%08lX 0x%08lX "
+             "0x%08lX %3lu 0x%08lX 0x%06lX\n",
+             get32(r, 0), (v & 0xFUL) < 6 ? link_names[v & 0xFUL] : "?",
+             (v >> 8) & 1UL, (v >> 9) & 1UL, (v >> 10) & 1UL,
+             (v >> 11) & 1UL, (v >> 16) & 0xFFUL, get32(r, 8),
+             get32(r, 12), get32(r, 16), get32(r, 20), get32(r, 24),
+             get32(r, 28));
+    }
+    comp("  (last: outcome in 7:0, reason in 15:8, kind in 23:16.)\n");
+}
+
 /*
  * The HCD region's report: the ports and counters, then every section read
  * from the same header. When the header does not fit its image print_hcd
@@ -3429,6 +4586,8 @@ static int selftest_intr(void)
  * so no reader believes a header another refused. `ext` is NULL when the
  * extension image is short or not the driver's size.
  */
+static void print_xpipe(const unsigned char *hcd, unsigned long hcdBytes);
+
 static void print_hcd_sections(const unsigned char *hcd, unsigned long bytes,
                                const unsigned char *ext,
                                unsigned long extBytes)
@@ -3446,6 +4605,12 @@ static void print_hcd_sections(const unsigned char *hcd, unsigned long bytes,
     /* 36.9: the event delivery, from the counters and the extension words
      * the header places. */
     print_intr(hcd, bytes, ext, extBytes);
+    /* 36.15: message-signalled interrupts, from the counters. */
+    print_msi(hcd, bytes);
+    /* 36.24's stage 2 counters, from the header alone. */
+    print_xpipe(hcd, bytes);
+    /* 36.38: selective suspend's stage B words, from the header alone. */
+    print_ssusp(hcd, bytes);
 }
 
 /*
@@ -3466,6 +4631,38 @@ static int selftest_hcd_bad(void)
     put32(hcd, 80, 27);
     put32(hcd, 48 * 4, 59);
     print_hcd_sections(hcd, bytes, NULL, 0);
+    return 0;
+}
+
+/*
+ * `-selftest-counters`: every counter word named through print_hcd, as the
+ * dump prints it, over a canned image whose word i holds i + 1 (so every
+ * word is nonzero and its value names its place): 0 to 161 and two words
+ * past the last block. selftest.cmd compares each printed name and value
+ * with the field order of src\xhci_counters.h, so a lookup that the
+ * compiler turns into the wrong table or offset fails there (task 36.35's
+ * 18-word shift under MSVC 6.0 /O2).
+ */
+#define SNAP_COUNTERS_TEST_WORDS    (SNAP_COMP_AT + SNAP_COMP_WORDS + 2UL)
+static int selftest_counters(void)
+{
+    static unsigned char image[32 + SNAP_COUNTERS_TEST_WORDS * 4];
+    unsigned long i;
+
+    memset(image, 0, sizeof(image));
+    put32(image, 0, 1);
+    put32(image, 4, 32);
+    put32(image, 8, 0);
+    put32(image, 12, 64);
+    put32(image, 16, 32);
+    put32(image, 20, SNAP_COUNTERS_TEST_WORDS);
+    put32(image, 24, 32);
+    for (i = 0; i < SNAP_COUNTERS_TEST_WORDS; i++) {
+        put32(image, 32 + i * 4, i + 1);
+    }
+    companion = NULL;
+    print_hcd(image, sizeof(image));
+    comp("[end]\n");
     return 0;
 }
 
@@ -3573,6 +4770,192 @@ static int selftest_xstat(void)
     put32(hcd, SNAP_TELE_RECORDS_AT * 4, 3);
     put32(hcd, SNAP_TELE_WORDS_AT * 4, 0x55555573UL);
     print_xstat(hcd, sizeof(hcd));
+    return 0;
+}
+
+/*
+ * Task 36.24: stage 2's counters (src/xhci_xpipe.h, XHCI_XPIPE_STATS, in
+ * its field order), in the HCD header after the two words task 36.9 holds.
+ * test\test_snap.c holds the driver's layout to these numbers.
+ */
+#define SNAP_HCD_XPIPE_HEAD_WORDS   229UL
+#define SNAP_XPIPE_COUNT_AT         204UL
+#define SNAP_XPIPE_AT               205UL
+#define SNAP_XPIPE_WORDS            24UL
+/* Task 36.25's eight, appended: a count of 32 and a 237-word header. */
+#define SNAP_HCD_BIG_HEAD_WORDS     237UL
+#define SNAP_XPIPE_BIG_WORDS        32UL
+
+static void print_xpipe(const unsigned char *hcd, unsigned long hcdBytes)
+{
+    static const char *const check_text[9] = {
+        "not run (XhciWideMap off)", "passed", "a base was not NULL",
+        "the two lists differ", "a list fell short", "no memory",
+        "a channel request refused, or a grant under 16",
+        "not run (Windows 98 or ME)",
+        "not run (the grant is not the register-free 0x80001)"
+    };
+    unsigned long headBytes;
+    unsigned long v;
+    const unsigned char *s;
+
+    if (hcdBytes < SNAP_HCD_HEAD_WORDS * 4 || get32(hcd, 0) == 0 ||
+        get32(hcd, 0) > SNAP_HCD_VERSION) {
+        return;
+    }
+    headBytes = get32(hcd, 4);
+    if (headBytes < SNAP_HCD_XPIPE_HEAD_WORDS * 4) {
+        comp("\nstage 2 (XhciWideMap): not in this driver (an xhci98.sys "
+             "before task 36.24).\n");
+        return;
+    }
+    /* A count past 64 or past the header is no stage 2 count: a stage B
+     * branch build's 273-word header held DNCTRL here (0xFFFFFFFF with
+     * the switch off; Codex review of p36-int4, round 1, finding 2). */
+    if (hcdBytes < SNAP_HCD_XPIPE_HEAD_WORDS * 4 ||
+        get32(hcd, SNAP_XPIPE_COUNT_AT * 4) < SNAP_XPIPE_WORDS ||
+        get32(hcd, SNAP_XPIPE_COUNT_AT * 4) > 64UL ||
+        (SNAP_XPIPE_AT + get32(hcd, SNAP_XPIPE_COUNT_AT * 4)) * 4 >
+            headBytes) {
+        comp("\nstage 2: %lu counters in a %lu-byte region - not a shape "
+             "this build reads;\n  not decoded.\n",
+             get32(hcd, SNAP_XPIPE_COUNT_AT * 4), hcdBytes);
+        return;
+    }
+    s = hcd + SNAP_XPIPE_AT * 4;
+#define PW(i) get32(s, (i) * 4)
+    comp("\nstage 2, two TDs of one URB on the ring (task 36.24, since the "
+         "controller's start):\n");
+    v = PW(0);
+    if (v == 0xFFFFFFFFUL) {
+        comp("  XhciWideMap                 not set (the default)\n");
+    } else {
+        comp("  XhciWideMap                 %lu\n", v);
+    }
+    v = PW(2);
+    comp("  promotion                   %s; the register-free check %s\n",
+         PW(1) ? "on" : "off", v < 9 ? check_text[v] : "?");
+    comp("  wide entries                %lu, %lu in use; claimed %lu\n",
+         PW(3), PW(4), PW(5));
+    comp("  turned away                 over the span %lu, no entry %lu\n",
+         PW(6), PW(7));
+    comp("  first mappings              promoted %lu; not: registers handed "
+         "%lu, off or grant %lu, a run %lu\n", PW(8), PW(9), PW(10),
+         PW(11));
+    comp("  URBs with two TDs at once   %lu; TDs %lu, refills %lu (held: "
+         "pause %lu, busy %lu)\n", PW(12), PW(13), PW(14), PW(15), PW(16));
+    comp("  early ends with a successor short %lu, error %lu, verdict %lu; "
+         "taken off %lu\n", PW(17), PW(18), PW(19), PW(20));
+    comp("  next TD ready at retirement %lu; failures before the ring %lu; "
+         "out of order %lu\n", PW(21), PW(22), PW(23));
+    if (get32(hcd, SNAP_XPIPE_COUNT_AT * 4) >= SNAP_XPIPE_BIG_WORDS &&
+        headBytes >= SNAP_HCD_BIG_HEAD_WORDS * 4 &&
+        hcdBytes >= SNAP_HCD_BIG_HEAD_WORDS * 4) {
+        comp("  stage 3 big stream blocks   built %lu, refused %lu; one-TD "
+             "URBs %lu, the largest %lu TRBs\n", PW(24), PW(25), PW(26),
+             PW(27));
+        comp("  TDs of 256/257/512/513 TRBs %lu / %lu / %lu / %lu\n", PW(28),
+             PW(29), PW(30), PW(31));
+    } else {
+        comp("  stage 3 (task 36.25)        not in this driver\n");
+    }
+#undef PW
+}
+
+/*
+ * `-selftest-xpipe`: task 36.24's decode over canned HCD headers: the
+ * switch on and the check passed with traffic, the switch absent, a
+ * header from before 36.24, and a count it cannot hold.
+ */
+/*
+ * p36-int4: stage B's header words where the integration put them (237 to
+ * 305, after 36.24's stage 2 counters), read through the real build: a
+ * canned 306-word header whose word i holds i + 1, but for the layout
+ * words (version, header size, the stage 2 count 32 at 204, the record
+ * count and size 8 at 240 and 241). Each printed value names the word it
+ * came from, so a reader off by a word shows here. Then a stage B branch
+ * build's 273-word header, with DNCTRL's not-read 0xFFFFFFFF at 204, which
+ * both readers refuse.
+ */
+static int selftest_ssusp(void)
+{
+    static unsigned char hcd[SNAP_HCD_SSUSP_HEAD_WORDS * 4];
+    unsigned long i;
+
+    for (i = 0; i < SNAP_HCD_SSUSP_HEAD_WORDS; i++) {
+        put32(hcd, i * 4, i + 1);
+    }
+    put32(hcd, 0, 1);
+    put32(hcd, 4, SNAP_HCD_SSUSP_HEAD_WORDS * 4);
+    put32(hcd, SNAP_XPIPE_COUNT_AT * 4, SNAP_XPIPE_BIG_WORDS);
+    put32(hcd, (SNAP_HCD_SSUSP_HEAD + 3) * 4, 8);
+    put32(hcd, (SNAP_HCD_SSUSP_HEAD + 4) * 4, 8);
+    print_xpipe(hcd, sizeof(hcd));
+    print_ssusp(hcd, sizeof(hcd));
+
+    put32(hcd, 4, SNAP_HCD_SSUSP_BRANCH_WORDS * 4);
+    put32(hcd, SNAP_XPIPE_COUNT_AT * 4, 0xFFFFFFFFUL);
+    print_xpipe(hcd, SNAP_HCD_SSUSP_BRANCH_WORDS * 4);
+    print_ssusp(hcd, SNAP_HCD_SSUSP_BRANCH_WORDS * 4);
+    return 0;
+}
+
+static int selftest_xpipe(void)
+{
+    static unsigned char hcd[SNAP_HCD_BIG_HEAD_WORDS * 4];
+    unsigned char *s;
+
+    memset(hcd, 0, sizeof(hcd));
+    put32(hcd, 0, 1);
+    put32(hcd, 4, SNAP_HCD_XPIPE_HEAD_WORDS * 4);
+    put32(hcd, SNAP_XPIPE_COUNT_AT * 4, SNAP_XPIPE_WORDS);
+    s = hcd + SNAP_XPIPE_AT * 4;
+    put32(s, 0 * 4, 1);
+    put32(s, 1 * 4, 1);
+    put32(s, 2 * 4, 1);
+    put32(s, 3 * 4, 8);
+    put32(s, 5 * 4, 100);
+    put32(s, 8 * 4, 100);
+    put32(s, 12 * 4, 100);
+    put32(s, 13 * 4, 900);
+    put32(s, 14 * 4, 700);
+    put32(s, 17 * 4, 2);
+    put32(s, 20 * 4, 2);
+    put32(s, 21 * 4, 650);
+    print_xpipe(hcd, sizeof(hcd));
+
+    /* 36.25's words: a 237-word header with a count of 32. */
+    put32(hcd, 4, SNAP_HCD_BIG_HEAD_WORDS * 4);
+    put32(hcd, SNAP_XPIPE_COUNT_AT * 4, SNAP_XPIPE_BIG_WORDS);
+    put32(s, 24 * 4, 2);
+    put32(s, 25 * 4, 1);
+    put32(s, 26 * 4, 300);
+    put32(s, 27 * 4, 513);
+    put32(s, 28 * 4, 100);
+    put32(s, 29 * 4, 101);
+    put32(s, 30 * 4, 50);
+    put32(s, 31 * 4, 49);
+    print_xpipe(hcd, sizeof(hcd));
+    put32(hcd, 4, SNAP_HCD_XPIPE_HEAD_WORDS * 4);
+    put32(hcd, SNAP_XPIPE_COUNT_AT * 4, SNAP_XPIPE_WORDS);
+
+    put32(s, 0 * 4, 0xFFFFFFFFUL);
+    put32(s, 1 * 4, 0);
+    put32(s, 2 * 4, 0);
+    print_xpipe(hcd, sizeof(hcd));
+
+    put32(s, 2 * 4, 7);
+    print_xpipe(hcd, sizeof(hcd));
+
+    put32(s, 2 * 4, 8);
+    print_xpipe(hcd, sizeof(hcd));
+
+    put32(hcd, 4, 202 * 4);
+    print_xpipe(hcd, sizeof(hcd));
+
+    put32(hcd, 4, SNAP_HCD_XPIPE_HEAD_WORDS * 4);
+    put32(hcd, SNAP_XPIPE_COUNT_AT * 4, 3);
+    print_xpipe(hcd, sizeof(hcd));
     return 0;
 }
 
@@ -5223,6 +6606,8 @@ static unsigned char ext_image[EXT_IMAGE_MAX];
 
 /*
  * **The short usage is 22 lines and that is a hard budget, not a target.**
+ * (`-nosysinfo`, task 36.47, took the blank line that stood before THE
+ * FOUR STEPS, so the count is still 22.)
  * *(Project owner: "since Win98 console cannot scroll, I think we
  * need to make best effort to keep everything within one vertical screen.
  * Especially for the initial screen if no or wrong command line arguments are
@@ -5254,9 +6639,9 @@ static void usage(void)
 "  -c N     controller index, opens \\\\.\\HCDN (default 0)\n"
 "  -o BASE  output basename (default XHCISNAP)\n"
 "  -force   write to a key matched by value NAME alone\n"
+"  -nosysinfo  with a dump: skip reading the OS, BIOS, CPU and RAM\n"
 "\n"
 "Exit 0 = the .TXT is complete.  3 = it is NOT: send the .BIN and say so.\n"
-"\n"
 "THE FOUR STEPS, and none of them is regedit:\n"
 "  1. xhcisnap -verbosity 2     0 off, 1 counters, 2 +note ring THE LOG,\n"
 "  2. restart the machine       3 +PORTSC table, 4 +everything\n"
@@ -5320,6 +6705,11 @@ static void usage_long(void)
 "                alone.  Only needed on a machine whose key has been edited\n"
 "                by hand; the tool says so when it wants this.\n"
 "  -probe        four controls on the route, for when nothing came back.\n"
+"  -nosysinfo    with a dump: do not read the system details the report's\n"
+"                header names (Windows version, BIOS, CPU, memory).  They are\n"
+"                read by default; use this only if reading them causes a\n"
+"                problem on your machine.  The header then says they were\n"
+"                skipped.\n"
 "\n"
 "WHAT A DUMP WRITES:\n"
 "  BASENAME.BIN  the raw extension image.  Send this to the maintainer - it\n"
@@ -5528,6 +6918,9 @@ static int selftest_report(const char *base)
                        "the incomplete-report branch can be driven on a host "
                        "with no controller: XHCISNAP_FAULT=write fails the "
                        "writes, XHCISNAP_FAULT=close fails the close.");
+    /* The header's system block, or its -nosysinfo line, through the
+     * same writers (task 36.47). */
+    write_companion_system();
     comp("end of self-test report\n");
     complete = finish_companion();
 
@@ -5581,8 +6974,12 @@ int main(int argc, char **argv)
     int doDisable;
     int force;
     int i;
+    const char *selftestReport;
+    int doSelftestSysinfo;
 
     controller = 0;
+    selftestReport = NULL;
+    doSelftestSysinfo = 0;
     base = "XHCISNAP";
     probeOnly = 0;
     doDump = 0;
@@ -5698,8 +7095,20 @@ int main(int argc, char **argv)
             return selftest_hcd_bad();
         } else if (strcmp(argv[i], "-selftest-intr") == 0) {
             return selftest_intr();
+        } else if (strcmp(argv[i], "-selftest-msi") == 0) {
+            return selftest_msi();
+        } else if (strcmp(argv[i], "-selftest-counters") == 0) {
+            return selftest_counters();
         } else if (strcmp(argv[i], "-selftest-xstat") == 0) {
             return selftest_xstat();
+        } else if (strcmp(argv[i], "-selftest-sysinfo") == 0) {
+            /* Deferred like -selftest-report, so a -nosysinfo after it
+             * still counts (Codex review of 36.47, round 6). */
+            doSelftestSysinfo = 1;
+        } else if (strcmp(argv[i], "-selftest-xpipe") == 0) {
+            return selftest_xpipe();
+        } else if (strcmp(argv[i], "-selftest-ssusp") == 0) {
+            return selftest_ssusp();
         } else if (strcmp(argv[i], "-selftest-report") == 0 && i + 1 < argc) {
             /*
              * The report path on its own, with no device: open BASE.TXT, write
@@ -5710,7 +7119,9 @@ int main(int argc, char **argv)
              * which is how the incomplete-report branch is driven on a host
              * with no controller and no full disk (roadmap Phase 20, F5).
              */
-            return selftest_report(argv[++i]);
+            selftestReport = argv[++i];
+        } else if (strcmp(argv[i], "-nosysinfo") == 0) {
+            sysinfoOff = 1;
         } else if (strcmp(argv[i], "-disable") == 0) {
             doDisable = 1;
         } else if (strcmp(argv[i], "-force") == 0) {
@@ -5784,6 +7195,24 @@ int main(int argc, char **argv)
      * same surprise the bare-invocation refusal above exists to prevent (the
      * 2026-09-16 audit's C4).
      */
+    /* -selftest-sysinfo and -selftest-report are acted on once every
+     * argument is read, so that -nosysinfo beside them counts wherever it
+     * stands. */
+    if (doSelftestSysinfo) {
+        return selftest_sysinfo();
+    }
+    if (selftestReport != NULL) {
+        return selftest_report(selftestReport);
+    }
+    /* `-nosysinfo` is a modifier on a dump and nothing else, as `-force` is
+     * on the registry write: on its own, or beside -probe, -verbosity or
+     * -disable, it asks for nothing. */
+    if (sysinfoOff && !doDump) {
+        printf("-nosysinfo only has meaning beside a dump (-dump, -o or -c), "
+               "where it skips\nreading the system details. On its own it "
+               "asks for nothing.\n");
+        return 2;
+    }
     if (force && !doSetLevel && !doDisable) {
         printf("-force only has meaning beside -verbosity or -disable, where "
                "it allows a write to\na key matched by value name alone. On "

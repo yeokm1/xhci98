@@ -253,6 +253,119 @@ static ULONG xhciFuncKeeps(const UCHAR *config, ULONG offset,
     return keep;
 }
 
+/* ------------------------------------------------------------------ */
+/* USB 3 functions for selective suspend's stage B (36.38)             */
+/* ------------------------------------------------------------------ */
+
+ULONG XhciFuncFirsts(const UCHAR *config, ULONG length, PULONG firsts,
+                     PULONG beyond)
+{
+    ULONG present[8];               /* alternate 0 seen, by number       */
+    ULONG covered[8];               /* taken by an IAD                   */
+    ULONG first[8];                 /* a function's first interface      */
+    ULONG range[8];
+    ULONG total;
+    ULONG offset;
+    ULONG n;
+    ULONG f;
+    ULONG c;
+    ULONG j;
+    ULONG overlap;
+    ULONG any;
+
+    if (config == NULL || firsts == NULL || beyond == NULL) {
+        return XHCI_FUNC_BAD_PARAM;
+    }
+    *firsts = 0;
+    *beyond = 0;
+    total = xhciFuncTotal(config, length);
+    if (total == 0 || !xhciFuncSound(config, total)) {
+        return XHCI_FUNC_MALFORMED;
+    }
+    for (j = 0; j < 8; j++) {
+        present[j] = 0;
+        covered[j] = 0;
+        first[j] = 0;
+    }
+    for (offset = (ULONG)config[0]; offset < total;
+         offset += (ULONG)config[offset]) {
+        if ((ULONG)config[offset + 1] != XHCI_FUNC_DT_INTERFACE ||
+            config[offset + 3] != 0) {
+            continue;
+        }
+        n = (ULONG)config[offset + 2];
+        if ((present[n >> 5] & XHCI_FUNC_BIT(n)) != 0) {
+            return XHCI_FUNC_MALFORMED;
+        }
+        present[n >> 5] |= XHCI_FUNC_BIT(n);
+    }
+    /* A function is an IAD's interfaces (its bFirstInterface the first) or
+     * one interface no IAD covers (USB 3.2 9.6.4). An IAD whose first
+     * interface is absent, or which overlaps an earlier one, is ignored, as
+     * XhciFuncSplit ignores it. */
+    for (offset = (ULONG)config[0]; offset < total;
+         offset += (ULONG)config[offset]) {
+        if ((ULONG)config[offset + 1] != XHCI_FUNC_DT_IAD) {
+            continue;
+        }
+        f = (ULONG)config[offset + 2];
+        c = (ULONG)config[offset + 3];
+        if ((present[f >> 5] & XHCI_FUNC_BIT(f)) == 0) {
+            continue;
+        }
+        for (j = 0; j < 8; j++) {
+            range[j] = 0;
+        }
+        for (n = f; n < f + c && n < 256UL; n++) {
+            range[n >> 5] |= XHCI_FUNC_BIT(n);
+        }
+        overlap = 0;
+        for (j = 0; j < 8; j++) {
+            range[j] &= present[j];
+            if ((range[j] & covered[j]) != 0) {
+                overlap = 1;
+            }
+        }
+        if (overlap) {
+            continue;
+        }
+        for (j = 0; j < 8; j++) {
+            covered[j] |= range[j];
+        }
+        first[f >> 5] |= XHCI_FUNC_BIT(f);
+    }
+    any = 0;
+    for (j = 0; j < 8; j++) {
+        first[j] |= present[j] & ~covered[j];
+        if (j != 0 && first[j] != 0) {
+            any = 1;
+        }
+    }
+    *firsts = first[0];
+    *beyond = any;
+    return XHCI_FUNC_OK;
+}
+
+ULONG XhciFuncOwnership(ULONG function, ULONG interfaceMask)
+{
+    return function ? interfaceMask : 0xFFFFFFFFUL;
+}
+
+ULONG XhciFuncOwnerOf(const ULONG *masks, ULONG count, ULONG iface)
+{
+    ULONG i;
+
+    if (masks == NULL || iface >= 32UL) {
+        return count;
+    }
+    for (i = 0; i < count; i++) {
+        if ((masks[i] & XHCI_FUNC_BIT(iface)) != 0) {
+            return i;
+        }
+    }
+    return count;
+}
+
 ULONG XhciFuncConfig(const UCHAR *config, ULONG length, const XHCI_FUNC *func,
                      UCHAR *out, ULONG capacity, PULONG total)
 {
@@ -452,6 +565,53 @@ ULONG XhciFuncId(const UCHAR *device, const XHCI_FUNC *func, ULONG port,
         xhciFuncChar(&t, 0);
         break;
     default:
+        return XHCI_FUNC_BAD_PARAM;
+    }
+    *used = t.Used;
+    return (t.Used > capacity) ? XHCI_FUNC_TOO_SMALL : XHCI_FUNC_OK;
+}
+
+static VOID xhciFuncParentVidPid(XHCI_FUNC_TEXT *t, const UCHAR *device)
+{
+    xhciFuncStr(t, "XHCI98\\COMPOSITE&VID_");
+    xhciFuncHexN(t, xhciFuncWord(device + 8), 4);
+    xhciFuncStr(t, "&PID_");
+    xhciFuncHexN(t, xhciFuncWord(device + 10), 4);
+}
+
+/* IRQL: any. */
+ULONG XhciFuncParentId(const UCHAR *device, ULONG which, char *out,
+                       ULONG capacity, PULONG used)
+{
+    XHCI_FUNC_TEXT t;
+
+    if (device == NULL || used == NULL || (out == NULL && capacity != 0)) {
+        return XHCI_FUNC_BAD_PARAM;
+    }
+    t.Out = out;
+    t.Capacity = capacity;
+    t.Used = 0;
+    switch (which) {
+    case XHCI_FUNC_ID_DEVICE:
+        xhciFuncParentVidPid(&t, device);
+        xhciFuncChar(&t, 0);
+        break;
+    case XHCI_FUNC_ID_HARDWARE:
+        xhciFuncParentVidPid(&t, device);
+        xhciFuncStr(&t, "&REV_");
+        xhciFuncHexN(&t, xhciFuncWord(device + 12), 4);
+        xhciFuncChar(&t, 0);
+        xhciFuncParentVidPid(&t, device);
+        xhciFuncChar(&t, 0);
+        xhciFuncStr(&t, "XHCI98\\COMPOSITE");
+        xhciFuncChar(&t, 0);
+        xhciFuncChar(&t, 0);
+        break;
+    default:
+        /* No compatible id, by design (section 10.12): USB\COMPOSITE would
+         * bring an OS composite parent back over a split device. The
+         * instance id is any PDO's (XhciFuncInstanceId). */
+        *used = 0;
         return XHCI_FUNC_BAD_PARAM;
     }
     *used = t.Used;

@@ -427,6 +427,63 @@ ULONG XhciMsiInjNoLine(const UCHAR *list, const XHCI_MSI_WALK *walk,
     return xhciMsiRewrite(list, walk, 1, out, capacity);
 }
 
+ULONG XhciMsiAdmitted(const UCHAR *list, const XHCI_MSI_WALK *walk)
+{
+    const UCHAR *cfg;
+    const UCHAR *d;
+    ULONG count;
+    ULONG i;
+    ULONG runs;
+    ULONG inRun;
+    ULONG msg;
+    ULONG line;
+    ULONG option;
+
+    if (walk->Verdict != XHCI_MSI_WALK_OK || walk->Lists != 1) {
+        return 0;
+    }
+    cfg = list + XHCI_MSI_RRL_HEADER;
+    count = xhciMsiRd32(cfg + XHCI_MSI_RL_COUNT);
+    runs = 0;
+    inRun = 0;
+    msg = 0;
+    line = 0;
+    for (i = 0; i < count; i++) {
+        d = cfg + XHCI_MSI_RL_HEADER + i * XHCI_MSI_RD_SIZE;
+        option = (ULONG)d[XHCI_MSI_RD_OPTION];
+        if ((option & XHCI_MSI_OPTION_ALTERNATIVE) == 0) {
+            /* A head: the interrupt run, if this is one, begins here. */
+            inRun = ((ULONG)d[XHCI_MSI_RD_TYPE] == XHCI_MSI_TYPE_INTERRUPT)
+                        ? 1UL
+                        : 0UL;
+            if (inRun) {
+                runs++;
+                if (!xhciMsiIsMessage(d)) {
+                    return 0;   /* the run is not headed by the message */
+                }
+            }
+        }
+        if ((ULONG)d[XHCI_MSI_RD_TYPE] != XHCI_MSI_TYPE_INTERRUPT) {
+            if (inRun) {
+                return 0;       /* another type inside the interrupt run */
+            }
+            continue;
+        }
+        if (!inRun) {
+            return 0;           /* an interrupt alternative of another run */
+        }
+        if (xhciMsiIsMessage(d)) {
+            if (line != 0) {
+                return 0;       /* a message after a line */
+            }
+            msg++;
+        } else {
+            line++;
+        }
+    }
+    return (runs == 1 && msg != 0 && line != 0) ? 1UL : 0UL;
+}
+
 ULONG XhciMsiOutcome(ULONG listClass)
 {
     switch (listClass) {

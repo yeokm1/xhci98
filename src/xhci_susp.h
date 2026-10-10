@@ -1,16 +1,16 @@
 /*
- * xhci_susp.h - selective suspend's pure half (roadmap-hcd.md task 36.29;
- * design record 14, section 3.9 for this file's split, sections 3 to 6
- * for the rules).
+ * xhci_susp.h - selective suspend's pure half (roadmap-hcd.md tasks 36.29
+ * and 36.38; design record 14, section 3.9 for this file's split, sections
+ * 3 to 6 for the rules, section 8 for stage B's SuperSpeed devices).
  *
- * The bus suspends a USB 2.0 device when Windows asks - a function's
- * D-state in S0, or the idle notification on XP onward - and wakes it on a
- * D0 or the device's remote wake. Three states are kept apart: the
+ * The bus suspends a USB 2.0 or SuperSpeed device when Windows asks - a
+ * function's D-state in S0, or the idle notification on XP onward - and wakes
+ * it on a D0 or the device's remote wake. Three states are kept apart: the
  * device's link (one per device, XHCI_SUSP_LINK), each function PDO's power
- * (its slot, XHCI_SUSP_FUNC) and the device's wake episode. Everything
- * here is a decision over values: the executors (hcd_enum.c, hcd_hub.c,
- * hcd_pdo.c, hcd_urb.c) read the values under the controller lock, ask,
- * and perform the one step asked.
+ * (its slot, XHCI_SUSP_FUNC) and the device's wake episode. Everything here is
+ * a decision over values: the executors (hcd_enum.c, hcd_hub.c, hcd_pdo.c,
+ * hcd_urb.c) read the values under the controller lock, ask, and perform the
+ * one step asked.
  *
  * DDK-free: part of the pure core. C89. IRQL: any. Nothing here takes a
  * lock, touches a register or calls a kernel service; the link record is
@@ -72,9 +72,10 @@
  * the default; 1 turns stage A on; any other value reads as 0. */
 ULONG XhciSuspSwitch(ULONG present, ULONG value);
 
-/* Whether a device PDO is stage A's: the switch on, a USB 2.0 device (not
- * SuperSpeed), not a hub (5.1, 6.1). */
-ULONG XhciSuspEligible(ULONG switchOn, ULONG superSpeed, ULONG hub);
+/* Whether a device PDO is the machine's: the switch on, not a hub (5.1,
+ * 6.1), and its speed class (XHCI_SPEED_*) Low, Full, High (stage A) or
+ * SuperSpeed (stage B, record 14 section 8.2); XHCI_SPEED_UNKNOWN is not. */
+ULONG XhciSuspEligible(ULONG switchOn, ULONG speedClass, ULONG hub);
 
 /* ------------------------------------------------------------------ */
 /* Capabilities (5.2)                                                  */
@@ -130,6 +131,15 @@ typedef struct _XHCI_SUSP_FUNC {
                              * reopened the PDO, 3.9)                    */
     ULONG CompleteD0;       /* ...and claim and complete the pended D0,
                              * SUCCESS                                   */
+    /* Stage B (record 14 section 8.8), read only on a SuperSpeed link
+     * (XHCI_SUSP_LINK.Ss): */
+    ULONG WakeFn;           /* in: the PDO has a wake function - its
+                             * ownership mask meets the device's
+                             * FwCapable (8.3)                           */
+    ULONG Armed;            /* in: the PDO's FwArmed is not 0            */
+    ULONG ArmNow;           /* out: arm its wake functions at this
+                             * suspend - a WAIT_WAKE held, D1 or D2, and
+                             * (at SuperSpeed) a wake function           */
 } XHCI_SUSP_FUNC, *PXHCI_SUSP_FUNC;
 
 /* ------------------------------------------------------------------ */
@@ -190,6 +200,21 @@ typedef struct _XHCI_SUSP_LINK {
                              * WAIT_WAKEs now, then XhciSuspWakeCount    */
     ULONG Outcome;          /* XHCI_SUSP_OUT_* of the last sequence      */
     ULONG Reason;           /* XHCI_SUSP_WHY_* of the last refusal       */
+    /* Stage B (record 14 section 8). Ss: a SuperSpeed device's USB3
+     * protocol link, set by the executor before the decision. Armed is
+     * then derived from the PDOs' FwArmed (XhciSuspSsArmed), never from a
+     * step's OK. The Function Wake notification window and its latch
+     * (8.7): FwWindow open, FwPending the interfaces (bit n: interface n)
+     * whose notification arrived while it was open, FwPendingFar one past
+     * interface 31; FwDropped counts latched notifications a closing
+     * window emptied, for the executor to add to its counter and zero.
+     * All under the controller lock: the notification's DPC hook writes
+     * the latch (XhciSuspFwReceive). */
+    ULONG Ss;
+    ULONG FwWindow;
+    ULONG FwPending;
+    ULONG FwPendingFar;
+    ULONG FwDropped;
 } XHCI_SUSP_LINK, *PXHCI_SUSP_LINK;
 
 /* A new device's record: ACTIVE, unarmed. */
@@ -210,15 +235,18 @@ typedef struct _XHCI_SUSP_DECISION {
     ULONG Do;               /* XHCI_SUSP_DO_*                            */
     ULONG AllDx;            /* every PDO's PwrState is below D0          */
     ULONG WantD0;           /* some PDO wants D0                         */
-    ULONG ArmIntent;        /* 5.4: a WAIT_WAKE held by a D1/D2 function */
+    ULONG ArmIntent;        /* 5.4: a WAIT_WAKE held by a D1/D2 function;
+                             * at SuperSpeed, any PDO's ArmNow (8.8)     */
     ULONG Completions;      /* CompleteDx/CompleteD0 flags set           */
 } XHCI_SUSP_DECISION, *PXHCI_SUSP_DECISION;
 
 /*
  * One pass over one device's slots, read in one controller-lock hold with
- * `epoch` the controller's PowerEpoch. Sets each slot's CompleteDx and
- * CompleteD0 and returns what to begin. A DO_SUSPEND is to be begun
- * (XhciSuspBegin, which writes SUSPENDING) in the same hold.
+ * `epoch` the controller's PowerEpoch. Sets each slot's CompleteDx,
+ * CompleteD0 and ArmNow and returns what to begin. At SuperSpeed (link->Ss)
+ * a PDO is ArmNow only with a wake function, and a SUSPENDED device is
+ * rearmed when some PDO is ArmNow and not Armed (8.8). A DO_SUSPEND is to
+ * be begun (XhciSuspBegin, which writes SUSPENDING) in the same hold.
  * `powerDown`: the controller is leaving D0 - nothing is begun.
  */
 ULONG XhciSuspDecide(PXHCI_SUSP_LINK link, PXHCI_SUSP_FUNC funcs,
@@ -259,6 +287,17 @@ ULONG XhciSuspDecide(PXHCI_SUSP_LINK link, PXHCI_SUSP_FUNC funcs,
                                           * the rings holding TDs (3.2),
                                           * then open the gate            */
 #define XHCI_SUSP_STEP_END          12UL /* the sequence is over          */
+/* Stage B, appended so no step is renumbered (record 14 section 8.4):
+ * Stop Endpoint SP=1 on every Running endpoint but EP0, before the arm. At
+ * SuperSpeed the other steps change meaning thus: ARM is
+ * SetFeature(FUNCTION_SUSPEND) with options 03h per wake function of each
+ * PDO the decision marked ArmNow; STOP stops what still runs (EP0); U3 at
+ * a hub port is SetPortFeature(PORT_LINK_STATE) with U3; SIGNAL is the
+ * one U0 write (root: PLS=U0 with LWS, for a port in U3 or Resume; hub:
+ * SetPortFeature(PORT_LINK_STATE) with U0) and goes straight to VERIFY -
+ * there is no U0 step; DISARM is SetFeature(FUNCTION_SUSPEND) with options
+ * 0 per armed function, and any result but OK is uncertain (8.5). */
+#define XHCI_SUSP_STEP_STOP_FUNCS   13UL
 
 /* A step's result, as the executor reports it. */
 #define XHCI_SUSP_RES_OK            0UL
@@ -294,7 +333,8 @@ ULONG XhciSuspDecide(PXHCI_SUSP_LINK link, PXHCI_SUSP_FUNC funcs,
 /*
  * Begin a sequence of `kind` at `nowMs`; `armWanted` is the decision's
  * ArmIntent (a suspend arms only with it), `internal` marks 5.4's cycles.
- * Writes SUSPENDING or RESUMING and returns the first step.
+ * Writes SUSPENDING or RESUMING and returns the first step. The
+ * notification window closes and its latch is emptied (8.7).
  */
 ULONG XhciSuspBegin(PXHCI_SUSP_LINK link, ULONG kind, ULONG armWanted,
                     ULONG internal, ULONG nowMs, PULONG waitMs);
@@ -339,6 +379,32 @@ VOID XhciSuspGone(PXHCI_SUSP_LINK link);
 VOID XhciSuspUncertain(PXHCI_SUSP_LINK link);
 
 /* ------------------------------------------------------------------ */
+/* Stage B: the arm's report and the notification window (8.4, 8.7)   */
+/* ------------------------------------------------------------------ */
+
+/* At SuperSpeed, before the executor reports an ARM or a DISARM step: does
+ * any PDO of the device still have FwArmed? That alone sets or clears
+ * Armed (8.4). Does nothing on a USB 2.0 link. */
+VOID XhciSuspSsArmed(PXHCI_SUSP_LINK link, ULONG someArmed);
+
+/* The window opens (8.7): in a hold the executor takes just before it
+ * sends the first arm request of the ARM step, or, with nothing to arm,
+ * just before the U3 request. Only while SUSPENDING; opening an open
+ * window changes nothing. */
+VOID XhciSuspFwOpen(PXHCI_SUSP_LINK link);
+
+/* A Function Wake notification for interface `iface` reached the device
+ * (the DPC hook, controller lock held): latched when the window is open
+ * (returns 1), else dropped at receipt (returns 0). An interface past 31
+ * sets FwPendingFar. */
+ULONG XhciSuspFwReceive(PXHCI_SUSP_LINK link, ULONG iface);
+
+/* The latch emptied by one of its three consumers (8.7 (a) to (c)): its
+ * bits in *bits and *beyond, and whether it held any. The window is left as
+ * it is. */
+ULONG XhciSuspFwTake(PXHCI_SUSP_LINK link, PULONG bits, PULONG beyond);
+
+/* ------------------------------------------------------------------ */
 /* Wake evidence (3.7, 3.8)                                            */
 /* ------------------------------------------------------------------ */
 
@@ -365,7 +431,8 @@ ULONG XhciSuspHubEvidence(const XHCI_SUSP_LINK *link, ULONG status,
  * then, in the same hold, reads hc->WakeSeq as the watermark, claims the
  * WAIT_WAKEs XhciSuspWakeClaims names (setting each claimed PDO's
  * WokeHold) and reports how many with XhciSuspWakeCount, and begins
- * RUN_WAKE. A wake sample while SUSPENDING counts only once the U3
+ * RUN_WAKE; the notification window closes in that hold (8.7). A wake
+ * sample while SUSPENDING counts only once the U3
  * request is issued (before it, it is an earlier suspension's): it is kept
  * (WakeKept) and taken when the observation reports OK, WAKE or EXPIRED -
  * never a TIMEOUT, a transport failure that stays the uncertain outcome,
@@ -384,6 +451,13 @@ ULONG XhciSuspWakeClaims(ULONG stamp, ULONG watermark, ULONG pwrState);
 /* The wake event's claims: `claimed` WAIT_WAKEs completed SUCCESS. */
 VOID XhciSuspWakeCount(PXHCI_SUSP_LINK link, ULONG claimed);
 
+/* Whether the door forwards a descriptor request to a device whose link is
+ * in `state` (design record 13 section 8.11, task 36.45): ACTIVE only. A
+ * suspended device is refused rather than woken, and so is one on its way
+ * down, up or through a recovery, so a diagnostic read never drives the
+ * link machine. */
+ULONG XhciSuspDoorServes(ULONG state);
+
 /* The observation at step 5, from one sample: OK (U3 or PORT_SUSPEND
  * set), WAKE, DISCONNECT, or XHCI_SUSP_POLL_AGAIN. */
 #define XHCI_SUSP_POLL_AGAIN        0xFFUL
@@ -395,6 +469,34 @@ ULONG XhciSuspObserveHub(ULONG status, ULONG change);
 ULONG XhciSuspVerifyRoot(ULONG portsc);
 ULONG XhciSuspVerifyHub(ULONG status, ULONG change);
 
+/*
+ * A SuperSpeed hub port (8.6), its wPortStatus and wPortChange as
+ * xhci_sshub.h has them. A disconnect is no PORT_CONNECTION, a
+ * C_PORT_CONNECTION, PORT_ENABLE clear, or the link in eSS.Inactive,
+ * Rx.Detect or eSS.Disabled. The observation: OK on the link in U3,
+ * DISCONNECT, or POLL_AGAIN - a wake cannot be read here (the hub raises no
+ * change for it), only from the notification latch. The verification: OK
+ * on the link in U0, with or without C_PORT_LINK_STATE; DISCONNECT; or
+ * POLL_AGAIN.
+ */
+ULONG XhciSuspObserveSsHub(ULONG status, ULONG change);
+ULONG XhciSuspVerifySsHub(ULONG status, ULONG change);
+
+/* A SuperSpeed hub port's sample in the port look (8.6), the change bits
+ * the hub took back in `acked`: DISCONNECT first, then STALE for another
+ * generation, then RESUME_DONE for a C_PORT_LINK_STATE with the link in U0
+ * while RESUMING; anything else IGNORED - never a wake (USB 3.2
+ * 10.16.2.6.2: a remote-wake U3 exit sets no C_PORT_LINK_STATE). */
+ULONG XhciSuspSsHubEvidence(const XHCI_SUSP_LINK *link, ULONG status,
+                            ULONG acked, ULONG generation);
+
+/* A Device Notification Event TRB's fields (xHCI 1.2c 6.4.2.7): the Slot
+ * ID (DW3 31:24), the Notification Type (DW0 7:4) and the FUNCTION_WAKE
+ * TP's Interface (DW0 15:8, the TP's byte 05h). Returns whether it is a
+ * FUNCTION_WAKE (XHCI_DN_TYPE_FUNCTION_WAKE). */
+ULONG XhciSuspDnDecode(ULONG param0, ULONG control, PULONG slotId,
+                       PULONG type, PULONG iface);
+
 /* ------------------------------------------------------------------ */
 /* WAIT_WAKE (5.3)                                                     */
 /* ------------------------------------------------------------------ */
@@ -402,7 +504,8 @@ ULONG XhciSuspVerifyHub(ULONG status, ULONG change);
 typedef struct _XHCI_SUSP_WW_IN {
     ULONG Released;         /* the controller is released (4.2)          */
     ULONG Eligible;
-    ULONG RemoteWake;       /* the configuration's bit 5                 */
+    ULONG RemoteWake;       /* the configuration's bit 5; at SuperSpeed,
+                             * the PDO has a wake function (8.3)         */
     ULONG WakeOff9x;
     ULONG Closed;           /* PwrClosed                                 */
     ULONG SystemState;      /* the IRP's: 1 = S0 (PowerSystemWorking)    */
@@ -567,5 +670,22 @@ typedef struct _XHCI_SUSP_FIN_IN {
 } XHCI_SUSP_FIN_IN, *PXHCI_SUSP_FIN_IN;
 
 ULONG XhciSuspFinalize(const XHCI_SUSP_FIN_IN *in);
+
+/* ------------------------------------------------------------------ */
+/* A parent stack's system power (design record 13 section 10.12)      */
+/* ------------------------------------------------------------------ */
+
+/* The device state a hub's or a composite device's FDO requests for its
+ * own stack once a system SET_POWER has come back up its stack: D0 for
+ * S0 (systemWorking), D3 for every other system state - the DeviceState[]
+ * its PDO's capabilities give - and 0, no request, when the system IRP
+ * failed, the FDO is not started, or - on Windows 98 and ME only (`nt`
+ * 0) - the stack is already in that state (their PoRequestPowerIrp for
+ * the present state pends and never delivers). On NT the same state is
+ * requested again, as WDM asks of a policy owner (an S0 reasserted after
+ * a failed sleep). `current` is the FDO's recorded state,
+ * XHCI_SUSP_D0..D3. Not stage A's: it holds with the switch at 0 too. */
+ULONG XhciSuspParentWant(ULONG irpOk, ULONG started, ULONG systemWorking,
+                         ULONG current, ULONG nt);
 
 #endif /* XHCI_SUSP_H */

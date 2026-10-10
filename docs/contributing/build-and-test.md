@@ -6388,6 +6388,40 @@ ring notes `qemu.mapgrant` (the value read) and `qemu.mapgrant.applied`
 (the registers in force when it was applied); `XHCISNAP`'s "transfer size"
 section prints the grant in force. A change takes effect at the next start.
 
+With a constrained grant the controller's real grant is still what stage
+2's gate reads (`hc->MapGrantRaw`, task 36.24): a grant of 16 or more
+leaves promotion as the adapter decides it, below 16 the start's
+register-free check is not run (`xfer.wide.check` 6).
+
+**`XhciQemuBigRefuse`** (roadmap-hcd task 36.25, design record 13 section
+11.7; qemu flavour only, written by no INF). A REG_DWORD read at every
+start: 1 refuses every big stream block, so each streams endpoint opens
+with 64-TRB rings and stage 2's TDs (the fallback); anything else leaves
+the blocks to the allocation. The log ring notes `qemu.bigrefuse`;
+`XHCISNAP`'s "stage 2" section counts the blocks built and refused, the
+one-TD URBs, the largest TD and the TDs of exactly 256, 257, 512 and 513
+TRBs. A change takes effect at the next start.
+
+**`XhciWideMap`** (roadmap-hcd task 36.24, design record 13 section 11.6;
+every flavour, not only qemu). A REG_DWORD in the controller's key, read at
+every start and written by no INF: 0 keeps every bulk URB sequential (stage
+1), anything else allows a whole-URB mapping and two TDs of one URB on the
+ring - every qualifying bulk OUT URB, and bulk IN only on a stream; absent
+or of another type it is off (`HCD_WIDE_MAP_DEFAULT`; owner, 2026-10-10:
+off in `2.2.0.3` and `2.3.0.0`, 1 opts in; record 13 section 11.6). The
+combined matrix's WideMap legs set 1 in the registry; its default legs run
+with promotion off. On, a
+start enables promotion only on Windows 2000 and later, with the adapter's
+grant exactly `0x80001`, the register-free check passed and the eight wide
+entries allocated. The log ring notes `xfer.wide.value` (the value read,
+`FFFFFFFF` absent), `xfer.wide.switch`, `xfer.wide.check` (0 not run - the
+switch off, 1 passed, 2 a base was not NULL, 3 the lists differ, 4 a list
+fell short, 5 no memory, 6 a channel request refused or a constrained grant
+under 16, 7 Windows 98 or ME, 8 a grant other than `0x80001`),
+`xfer.wide.check.waiting` (seconds the check waited for its two requests)
+and `xfer.wide.enabled`; `XHCISNAP` prints the counters as "stage 2". A
+change takes effect at the next start.
+
 **`XhciQemuNoInterrupt`, `XhciQemuPinUnreadable`, `XhciQemuDeadLine`**
 (roadmap-hcd tasks 36.7 and 36.13, design record 15 section 11). REG_DWORDs
 read at every start. `XhciQemuNoInterrupt` 1 makes the start see no
@@ -6398,11 +6432,19 @@ the start as a controller with no interrupt always did. `XhciQemuPinUnreadable`
 N ms after the start's grant (at once, before the connection, for a value of
 1): the ISR still acknowledges what it claims, so QEMU's level line does not
 storm, but queues no drain and withholds the claim from the watcher, and
-every watcher look reads asserted. Under mode 0 the log ring then shows
-`qemu.inj.deadline`, `intr.moved` (the stale pairs) and `intr.moved.masked`,
-and the counter block delivery 2 with reason 9; under mode 1 no move. The
+every watcher look reads asserted. The latch notes `qemu.inj.deadline` (at
+the start for a value of 1, when it falls for a larger one). Under mode 0
+the log ring then shows `intr.moved` (the stale pairs),
+`qemu.inj.deadline.isr` (the claims the latch withheld until then) and
+`intr.moved.masked`, and the counter block delivery 2 with reason 9; under
+mode 1 no move: the backstop carries the bus, and while the controller
+thread waits for a completion of its own (a command's, an EP0
+transfer's) it queues the drain itself between the wait's slices (at
+`XhciTolerance` 1; the stop's `enum.wait.drains` counts the drains
+queued, not the events they took). The
 start notes `qemu.inj.nointerrupt`, `qemu.inj.pinunreadable` and
-`qemu.inj.deadline.value`.
+`qemu.inj.deadline.value`, and the stop's counter dump
+`qemu.inj.deadline.isr`.
 
 **`XhciQemuMsgConnectFail`, `XhciMsi86NoStrip`, `XhciMsi86InjNoLine`**
 (task 36.15; design records 15 section 4.3 and 18). REG_DWORDs in the
@@ -6411,7 +6453,9 @@ controller's driver key, the first read at every start, the other two at
 takes effect at a disable and enable. `XhciQemuMsgConnectFail` 1 fails a
 message connection without calling `IoConnectInterruptEx`: the start polls
 with reason 12. `XhciMsi86NoStrip` 1 keeps the requirements filter from
-stripping (outcome 5, "disabled"), for R1 and R2's readings.
+stripping (outcome 5, "disabled"), as the first build did by default for
+R1 and R2's readings; the strip is on by default since 2026-10-10 (leg F
+reads mode 1 with it set, as the message).
 `XhciMsi86InjNoLine` 1 rewrites the requirements list before it is
 classified - every line member of an interrupt run that also holds a
 message removed, every line-only configuration dropped - so the list
@@ -6627,6 +6671,33 @@ PDO group, 19-16 the link state before, 15-12 after (`XHCI_SUSP_ACTIVE` 0,
 (`XHCI_SUSP_OUT_*`), 3-0 the refusal's reason (`XHCI_SUSP_WHY_*`) - then
 `susp.seq.epoch`; `idle.call` (the port) as a callback is called,
 `idle.abandon` and `idle.quarantine`.
+
+**Stage B (36.38; record 14 section 8).** With the switch at 1 a SuperSpeed
+device is served too, and DNCTRL enables FUNCTION_WAKE (`0002h`); at 0
+neither changes and DNCTRL is never written. Counters, words 142 to 159,
+dumped as `susp.ss.*`, `susp.fw.*` and `susp.dn.dropped` and named by
+`XHCISNAP`: functions armed (`SetFeature(FUNCTION_SUSPEND)` options 03h the
+device took) and arm steps refused; functions disarmed and disarms not taken
+(each cycles the device); SuperSpeed hub ports suspended and resumed;
+`GetStatus(interface)` reads answered and failed, the capable functions and
+configurations with a function past interface 31; Function Wake
+notifications received, dropped with the window closed, taken as the wake,
+taken by a hub port's observation or a refusal's end, ignored, and
+unattributed; Device Notifications dropped (another type, or no device); and
+WAIT_WAKEs a configuration left without a wake function. Log lines, in
+stage A's budget: `susp.ss.arm` and `susp.ss.disarm` (slot 31-24, interface
+23-16, the result `XHCI_SUSP_RES_*` 7-0) per request; `susp.ss.cap` (slot,
+the count of first interfaces, the count capable, the count failed, a byte
+each) after each configuration's reads; `susp.fw` (slot, interface - FF past
+31 - the PDO index - FF unattributed - the link state 7-4, the disposition
+3-0: 1 the wake, 2 a hub observation, 3 a refusal's end, 4 dropped, 5 closed
+at receipt, 8 or'ed unattributed) per notification; `susp.ss.hub` (hub
+index, port, the link state 15-12, the step 11-4, the result 3-0) per
+SuperSpeed hub port observation, signal and verification. `XHCISNAP`'s
+"selective suspend, stage B" section prints the HCD header's words 237 to
+305 (after 36.24's stage 2 counters; placed at integration wave 4): DNCTRL as read (only at 1), `DnctrlEnables`, `DnctrlReadback`, and the
+first eight devices' link state, window, armed functions, `FwFirsts`,
+`FwCapable` and latch.
 
 **The test client** (`test\pmclient`; record 14 section 10, SUSPa.6). TEST
 ONLY: never shipped, and `scripts\package\make-release.ps1` refuses a

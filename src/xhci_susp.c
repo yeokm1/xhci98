@@ -1,13 +1,15 @@
 /*
- * xhci_susp.c - selective suspend's pure half (roadmap-hcd.md task 36.29;
- * design record 14 section 3.9). The contract of every function is in
- * xhci_susp.h; the rules are the record's, each cited where it is taken.
+ * xhci_susp.c - selective suspend's pure half (roadmap-hcd.md tasks 36.29
+ * and 36.38; design record 14 sections 3.9 and 8). The contract of every
+ * function is in xhci_susp.h; the rules are the record's, each cited where
+ * it is taken.
  *
  * DDK-free: part of the pure core. C89. IRQL: any.
  */
 
 #include "xhci_susp.h"
 #include "xhci.h"
+#include "xhci_sshub.h"
 
 /* ------------------------------------------------------------------ */
 /* The switch, eligibility, capabilities                               */
@@ -18,9 +20,16 @@ ULONG XhciSuspSwitch(ULONG present, ULONG value)
     return (present && value == 1UL) ? 1UL : 0UL;
 }
 
-ULONG XhciSuspEligible(ULONG switchOn, ULONG superSpeed, ULONG hub)
+ULONG XhciSuspEligible(ULONG switchOn, ULONG speedClass, ULONG hub)
 {
-    return (switchOn && !superSpeed && !hub) ? 1UL : 0UL;
+    if (!switchOn || hub) {
+        return 0;
+    }
+    /* Stage B admits SuperSpeed (and SuperSpeedPlus, one class) with stage
+     * A's USB 2.0 classes; an unknown class is neither (8.2). */
+    return (speedClass == XHCI_SPEED_LOW || speedClass == XHCI_SPEED_FULL ||
+            speedClass == XHCI_SPEED_HIGH ||
+            speedClass == XHCI_SPEED_SUPER) ? 1UL : 0UL;
 }
 
 VOID XhciSuspCaps(ULONG eligible, ULONG remoteWake, ULONG wakeOff9x,
@@ -126,6 +135,11 @@ VOID XhciSuspLinkInit(PXHCI_SUSP_LINK link, ULONG root, ULONG generation)
     link->ClaimDue = 0;
     link->Outcome = XHCI_SUSP_OUT_NONE;
     link->Reason = XHCI_SUSP_WHY_NONE;
+    link->Ss = 0;
+    link->FwWindow = 0;
+    link->FwPending = 0;
+    link->FwPendingFar = 0;
+    link->FwDropped = 0;
 }
 
 ULONG XhciSuspDigest(const XHCI_SUSP_FUNC *funcs, ULONG count)
@@ -146,6 +160,9 @@ ULONG XhciSuspDigest(const XHCI_SUSP_FUNC *funcs, ULONG count)
                   ((funcs[i].Closed ? 1UL : 0UL) << 8) |
                   (i << 9))) * 0x01000193UL;
         d = (d ^ funcs[i].Seq) * 0x01000193UL;
+        /* Stage B's wake function, 0 on every USB 2.0 PDO, so stage A's
+         * digest is unchanged. */
+        d ^= (funcs[i].WakeFn ? 1UL : 0UL) << 31;
     }
     return d;
 }
@@ -166,6 +183,7 @@ ULONG XhciSuspDecide(PXHCI_SUSP_LINK link, PXHCI_SUSP_FUNC funcs,
     ULONG allDx;
     ULONG held;
     ULONG digest;
+    ULONG rearm;
 
     out->Do = XHCI_SUSP_DO_NONE;
     out->AllDx = 0;
@@ -181,6 +199,7 @@ ULONG XhciSuspDecide(PXHCI_SUSP_LINK link, PXHCI_SUSP_FUNC funcs,
         funcs[i].ToD0 = 0;
         funcs[i].CompleteDx = 0;
         funcs[i].CompleteD0 = 0;
+        funcs[i].ArmNow = 0;
         if (funcs[i].PwrWanted == XHCI_SUSP_D0 &&
             (funcs[i].PwrState != XHCI_SUSP_D0 || funcs[i].D0Pended)) {
             out->WantD0 = 1;
@@ -192,7 +211,11 @@ ULONG XhciSuspDecide(PXHCI_SUSP_LINK link, PXHCI_SUSP_FUNC funcs,
                 funcs[i].CompleteD0 = 1;
             }
         }
-        if (funcs[i].WaitWake && xhciSuspIsWakeState(funcs[i].PwrState)) {
+        /* 5.4's armed intent, per PDO; at SuperSpeed only a PDO with a
+         * wake function is armed (8.8). */
+        if (funcs[i].WaitWake && xhciSuspIsWakeState(funcs[i].PwrState) &&
+            (!link->Ss || funcs[i].WakeFn)) {
+            funcs[i].ArmNow = 1;
             out->ArmIntent = 1;
         }
     }
@@ -259,7 +282,21 @@ ULONG XhciSuspDecide(PXHCI_SUSP_LINK link, PXHCI_SUSP_FUNC funcs,
         }
         if (out->WantD0) {
             out->Do = XHCI_SUSP_DO_RESUME;
-        } else if (out->ArmIntent && !link->Armed) {
+            break;
+        }
+        if (link->Ss) {
+            /* 8.8's per-function rearm: some PDO to arm that is not armed
+             * - a sibling's WAIT_WAKE that arrived while SUSPENDED. */
+            rearm = 0;
+            for (i = 0; i < count; i++) {
+                if (funcs[i].ArmNow && !funcs[i].Armed) {
+                    rearm = 1;
+                }
+            }
+        } else {
+            rearm = (out->ArmIntent && !link->Armed) ? 1UL : 0UL;
+        }
+        if (rearm) {
             out->Do = XHCI_SUSP_DO_REARM;
         }
         break;
@@ -276,6 +313,68 @@ ULONG XhciSuspDecide(PXHCI_SUSP_LINK link, PXHCI_SUSP_FUNC funcs,
         }
     }
     return out->Do;
+}
+
+/* ------------------------------------------------------------------ */
+/* Stage B: the notification window and the arm's report (8.4, 8.7)   */
+/* ------------------------------------------------------------------ */
+
+static ULONG xhciSuspBits(ULONG mask)
+{
+    ULONG n;
+
+    n = 0;
+    while (mask != 0) {
+        mask &= mask - 1;
+        n++;
+    }
+    return n;
+}
+
+/* The window closes and whatever it latched is dropped, counted. */
+static VOID xhciSuspFwClose(PXHCI_SUSP_LINK link)
+{
+    link->FwWindow = 0;
+    link->FwDropped += xhciSuspBits(link->FwPending) +
+                       (link->FwPendingFar ? 1UL : 0UL);
+    link->FwPending = 0;
+    link->FwPendingFar = 0;
+}
+
+VOID XhciSuspFwOpen(PXHCI_SUSP_LINK link)
+{
+    if (link->State == XHCI_SUSP_SUSPENDING) {
+        link->FwWindow = 1;
+    }
+}
+
+ULONG XhciSuspFwReceive(PXHCI_SUSP_LINK link, ULONG iface)
+{
+    if (!link->FwWindow) {
+        return 0;
+    }
+    if (iface < 32) {
+        link->FwPending |= 1UL << iface;
+    } else {
+        link->FwPendingFar = 1;
+    }
+    return 1;
+}
+
+ULONG XhciSuspFwTake(PXHCI_SUSP_LINK link, PULONG bits, PULONG beyond)
+{
+    *bits = link->FwPending;
+    *beyond = link->FwPendingFar;
+    link->FwPending = 0;
+    link->FwPendingFar = 0;
+    return (*bits != 0 || *beyond != 0) ? 1UL : 0UL;
+}
+
+VOID XhciSuspSsArmed(PXHCI_SUSP_LINK link, ULONG someArmed)
+{
+    if (link->Ss) {
+        link->Armed = someArmed ? 1UL : 0UL;
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -305,8 +404,15 @@ static ULONG xhciSuspEnd(PXHCI_SUSP_LINK link, ULONG state, ULONG outcome,
     link->Outcome = outcome;
     link->Step = XHCI_SUSP_STEP_END;
     if (state == XHCI_SUSP_GONE || state == XHCI_SUSP_RECOVERING) {
-        /* The device's feature does not outlive a reset or an unplug. */
+        /* The device's feature does not outlive a reset or an unplug, and
+         * a notification latched meanwhile is dropped with it (8.4). */
         link->Armed = 0;
+        xhciSuspFwClose(link);
+    } else if (state != XHCI_SUSP_SUSPENDED) {
+        /* Closed; what it latched is the end hold's to take first - a
+         * refusal's wake (8.4, 8.7 (c)) - in the hold this end is made
+         * in, and the next Begin drops whatever is left. */
+        link->FwWindow = 0;
     }
     *waitMs = 0;
     return XHCI_SUSP_STEP_END;
@@ -321,21 +427,35 @@ static ULONG xhciSuspStep(PXHCI_SUSP_LINK link, ULONG step, ULONG wait,
     return step;
 }
 
+/* SP=1's minimum left since the last stop (3.5, xHCI 1.2c 6.4.3.8). */
+static ULONG xhciSuspStopWait(const XHCI_SUSP_LINK *link, ULONG nowMs)
+{
+    return link->Stopped ? xhciSuspRemaining(link->StopMs,
+                                             XHCI_SUSP_STOP_MIN_MS, nowMs)
+                         : 0;
+}
+
 /* A refusal: back to ACTIVE through the restart, which waits out SP=1's
- * minimum when endpoints were stopped (3.5). */
+ * minimum when endpoints were stopped (3.5). At SuperSpeed with a function
+ * armed the disarm comes first, its control transfer after the same
+ * minimum since it rings EP0: Function Suspend under an ACTIVE device would
+ * hold its I/O (8.4). */
 static ULONG xhciSuspRefuse(PXHCI_SUSP_LINK link, ULONG why, ULONG nowMs,
                             PULONG waitMs)
 {
-    ULONG wait;
-
     link->Reason = why;
-    wait = link->Stopped ? xhciSuspRemaining(link->StopMs,
-                                             XHCI_SUSP_STOP_MIN_MS, nowMs)
-                         : 0;
-    return xhciSuspStep(link, XHCI_SUSP_STEP_RESTART, wait, nowMs, waitMs);
+    if (link->Ss && link->Armed) {
+        return xhciSuspStep(link, XHCI_SUSP_STEP_DISARM,
+                            xhciSuspStopWait(link, nowMs), nowMs, waitMs);
+    }
+    return xhciSuspStep(link, XHCI_SUSP_STEP_RESTART,
+                        xhciSuspStopWait(link, nowMs), nowMs, waitMs);
 }
 
-/* The device is waking (3.4 (5), 3.6 device-initiated): RESUMING. */
+/* The device is waking (3.4 (5), 3.6 device-initiated): RESUMING, the
+ * notification window closed in the hold the wake is taken in (8.7). At
+ * SuperSpeed every wake branch is the host's resume: SIGNAL after what is
+ * left of the dwell since U3 was observed, then VERIFY (8.5). */
 static ULONG xhciSuspWakeBranch(PXHCI_SUSP_LINK link, ULONG nowMs,
                                 PULONG waitMs)
 {
@@ -344,6 +464,13 @@ static ULONG xhciSuspWakeBranch(PXHCI_SUSP_LINK link, ULONG nowMs,
     if (!link->WakeTaken) {
         link->WakeTaken = 1;
         link->ClaimDue = 1;
+    }
+    xhciSuspFwClose(link);
+    if (link->Ss) {
+        return xhciSuspStep(link, XHCI_SUSP_STEP_SIGNAL,
+                            xhciSuspRemaining(link->U3Ms,
+                                              XHCI_SUSP_U3_DWELL_MS, nowMs),
+                            nowMs, waitMs);
     }
     if (link->Root) {
         return xhciSuspStep(link, XHCI_SUSP_STEP_U0, XHCI_SUSP_TDRSMDN_MS,
@@ -360,6 +487,10 @@ ULONG XhciSuspBegin(PXHCI_SUSP_LINK link, ULONG kind, ULONG armWanted,
     link->Internal = internal ? 1UL : 0UL;
     link->Outcome = XHCI_SUSP_OUT_NONE;
     link->Reason = XHCI_SUSP_WHY_NONE;
+    /* 8.7: any sequence's beginning closes the window; a notification
+     * received before the next suspension's first arm request (or U3
+     * request) is never consumed against it. */
+    xhciSuspFwClose(link);
     if (kind == XHCI_SUSP_RUN_SUSPEND) {
         link->ClaimDue = 0;
         link->State = XHCI_SUSP_SUSPENDING;
@@ -423,14 +554,41 @@ ULONG XhciSuspAdvance(PXHCI_SUSP_LINK link, ULONG result, ULONG nowMs,
         if (result != XHCI_SUSP_RES_OK) {
             return xhciSuspRefuse(link, XHCI_SUSP_WHY_FAILED, nowMs, waitMs);
         }
+        if (link->Ss) {
+            /* 8.4: the functions' endpoints stop before Function Suspend
+             * (xHCI 1.2c 4.15.1.2); EP0 runs on for the arm. */
+            return xhciSuspStep(link, XHCI_SUSP_STEP_STOP_FUNCS, 0, nowMs,
+                                waitMs);
+        }
         if (link->ArmWanted) {
             return xhciSuspStep(link, XHCI_SUSP_STEP_ARM, 0, nowMs, waitMs);
         }
         return xhciSuspStep(link, XHCI_SUSP_STEP_STOP, 0, nowMs, waitMs);
 
+    case XHCI_SUSP_STEP_STOP_FUNCS:
+        link->Stopped = 1;
+        link->StopMs = nowMs;
+        if (result == XHCI_SUSP_RES_OK) {
+            if (link->ArmWanted) {
+                return xhciSuspStep(link, XHCI_SUSP_STEP_ARM, 0, nowMs,
+                                    waitMs);
+            }
+            return xhciSuspStep(link, XHCI_SUSP_STEP_STOP, 0, nowMs, waitMs);
+        }
+        if (result == XHCI_SUSP_RES_TIMEOUT) {
+            return xhciSuspEnd(link, XHCI_SUSP_RECOVERING,
+                               XHCI_SUSP_OUT_UNCERTAIN, waitMs);
+        }
+        return xhciSuspRefuse(link, XHCI_SUSP_WHY_FAILED, nowMs, waitMs);
+
     case XHCI_SUSP_STEP_ARM:
         if (result == XHCI_SUSP_RES_OK) {
-            link->Armed = 1;
+            /* At SuperSpeed Armed is what the executor reported of the
+             * PDOs' FwArmed (XhciSuspSsArmed): an arm that found nothing
+             * to send leaves the suspension unarmed (8.4). */
+            if (!link->Ss) {
+                link->Armed = 1;
+            }
             return xhciSuspStep(link, XHCI_SUSP_STEP_STOP, 0, nowMs, waitMs);
         }
         if (result == XHCI_SUSP_RES_STALL) {
@@ -498,7 +656,9 @@ ULONG XhciSuspAdvance(PXHCI_SUSP_LINK link, ULONG result, ULONG nowMs,
             return xhciSuspEnd(link, XHCI_SUSP_RECOVERING,
                                XHCI_SUSP_OUT_UNCERTAIN, waitMs);
         }
-        if (link->Root) {
+        /* At SuperSpeed the signal was the one U0 write: no TDRSMDN, no
+         * second write (8.1, xHCI 1.2c 4.15.2). */
+        if (link->Root && !link->Ss) {
             return xhciSuspStep(link, XHCI_SUSP_STEP_U0,
                                 XHCI_SUSP_TDRSMDN_MS, nowMs, waitMs);
         }
@@ -525,6 +685,20 @@ ULONG XhciSuspAdvance(PXHCI_SUSP_LINK link, ULONG result, ULONG nowMs,
         return xhciSuspAfterRecovery(link, nowMs, waitMs);
 
     case XHCI_SUSP_STEP_DISARM:
+        if (link->Ss) {
+            /* Strict (8.5): Function Suspend outlives the U3 exit, so a
+             * function the device did not take out of it would hold its
+             * client's I/O under an ACTIVE device. Anything but OK is
+             * uncertain, and the cycle re-enumerates it. Armed is the
+             * executor's report (XhciSuspSsArmed). */
+            if (result != XHCI_SUSP_RES_OK) {
+                return xhciSuspEnd(link, XHCI_SUSP_RECOVERING,
+                                   XHCI_SUSP_OUT_UNCERTAIN, waitMs);
+            }
+            return xhciSuspStep(link, XHCI_SUSP_STEP_RESTART,
+                                xhciSuspStopWait(link, nowMs), nowMs,
+                                waitMs);
+        }
         if (result == XHCI_SUSP_RES_TIMEOUT) {
             return xhciSuspEnd(link, XHCI_SUSP_RECOVERING,
                                XHCI_SUSP_OUT_UNCERTAIN, waitMs);
@@ -568,6 +742,7 @@ VOID XhciSuspRecovered(PXHCI_SUSP_LINK link, ULONG ok)
 {
     link->Step = 0;
     link->Armed = 0;
+    xhciSuspFwClose(link);
     if (ok) {
         link->State = XHCI_SUSP_ACTIVE;
         link->Outcome = XHCI_SUSP_OUT_ACTIVE;
@@ -589,6 +764,7 @@ VOID XhciSuspUncertain(PXHCI_SUSP_LINK link)
     link->Step = 0;
     link->Armed = 0;
     link->ClaimDue = 0;
+    xhciSuspFwClose(link);
 }
 
 VOID XhciSuspGone(PXHCI_SUSP_LINK link)
@@ -597,6 +773,7 @@ VOID XhciSuspGone(PXHCI_SUSP_LINK link)
     link->Step = 0;
     link->Armed = 0;
     link->ClaimDue = 0;
+    xhciSuspFwClose(link);
 }
 
 /* ------------------------------------------------------------------ */
@@ -692,6 +869,8 @@ ULONG XhciSuspEvidence(PXHCI_SUSP_LINK link, ULONG event)
     if (link->State == XHCI_SUSP_SUSPENDED && !link->WakeTaken) {
         link->WakeTaken = 1;
         link->ClaimDue = 1;
+        /* 8.7: the hold a wake event is taken in closes the window. */
+        xhciSuspFwClose(link);
         return 1;
     }
     return 0;
@@ -711,6 +890,11 @@ VOID XhciSuspWakeCount(PXHCI_SUSP_LINK link, ULONG claimed)
      * (3.9); the count is the log's. */
     (VOID)claimed;
     link->ClaimDue = 0;
+}
+
+ULONG XhciSuspDoorServes(ULONG state)
+{
+    return (state == XHCI_SUSP_ACTIVE) ? 1UL : 0UL;
 }
 
 static ULONG xhciSuspRootGone(ULONG portsc)
@@ -780,6 +964,75 @@ ULONG XhciSuspVerifyHub(ULONG status, ULONG change)
         return XHCI_SUSP_RES_OK;
     }
     return XHCI_SUSP_POLL_AGAIN;
+}
+
+/* A SuperSpeed hub port's PORT_LINK_STATE (USB 3.2 Table 10-13), read
+ * here as xhci_sshub.c reads it, so the pure core links nothing else. */
+static ULONG xhciSuspSsLink(ULONG status)
+{
+    return (status & XHCI_SSHUB_PORT_LINK_MASK) >> XHCI_SSHUB_PORT_LINK_SHIFT;
+}
+
+/* A SuperSpeed hub port's link gone (8.6). */
+static ULONG xhciSuspSsHubGone(ULONG status, ULONG change)
+{
+    ULONG link;
+
+    link = xhciSuspSsLink(status);
+    return ((status & XHCI_SSHUB_PORT_CONNECTION) == 0 ||
+            (change & XHCI_SSHUB_C_PORT_CONNECTION) != 0 ||
+            (status & XHCI_SSHUB_PORT_ENABLE) == 0 ||
+            link == XHCI_SSHUB_LINK_INACTIVE ||
+            link == XHCI_SSHUB_LINK_RX_DETECT ||
+            link == XHCI_SSHUB_LINK_DISABLED) ? 1UL : 0UL;
+}
+
+ULONG XhciSuspObserveSsHub(ULONG status, ULONG change)
+{
+    if (xhciSuspSsHubGone(status, change)) {
+        return XHCI_SUSP_RES_DISCONNECT;
+    }
+    if (xhciSuspSsLink(status) == XHCI_SSHUB_LINK_U3) {
+        return XHCI_SUSP_RES_OK;
+    }
+    return XHCI_SUSP_POLL_AGAIN;
+}
+
+ULONG XhciSuspVerifySsHub(ULONG status, ULONG change)
+{
+    if (xhciSuspSsHubGone(status, change)) {
+        return XHCI_SUSP_RES_DISCONNECT;
+    }
+    if (xhciSuspSsLink(status) == XHCI_SSHUB_LINK_U0) {
+        return XHCI_SUSP_RES_OK;
+    }
+    return XHCI_SUSP_POLL_AGAIN;
+}
+
+ULONG XhciSuspSsHubEvidence(const XHCI_SUSP_LINK *link, ULONG status,
+                            ULONG acked, ULONG generation)
+{
+    if (xhciSuspSsHubGone(status, acked)) {
+        return XHCI_SUSP_EV_DISCONNECT;
+    }
+    if (generation != link->Generation) {
+        return XHCI_SUSP_EV_STALE;
+    }
+    if ((acked & XHCI_SSHUB_C_PORT_LINK_STATE) != 0 &&
+        xhciSuspSsLink(status) == XHCI_SSHUB_LINK_U0 &&
+        link->State == XHCI_SUSP_RESUMING) {
+        return XHCI_SUSP_EV_RESUME_DONE;
+    }
+    return XHCI_SUSP_EV_IGNORED;
+}
+
+ULONG XhciSuspDnDecode(ULONG param0, ULONG control, PULONG slotId,
+                       PULONG type, PULONG iface)
+{
+    *slotId = XHCI_TRB_GET_SLOT_ID(control);
+    *type = XHCI_DN_GET_TYPE(param0);
+    *iface = XHCI_DN_GET_INTERFACE(param0);
+    return (*type == XHCI_DN_TYPE_FUNCTION_WAKE) ? 1UL : 0UL;
 }
 
 /* ------------------------------------------------------------------ */
@@ -997,4 +1250,20 @@ ULONG XhciSuspFinalize(const XHCI_SUSP_FIN_IN *in)
         return XHCI_SUSP_FIN_QUARANTINE;
     }
     return XHCI_SUSP_FIN_WAIT;
+}
+
+/* ------------------------------------------------------------------ */
+/* A parent stack's system power (design record 13 section 10.12)      */
+/* ------------------------------------------------------------------ */
+
+ULONG XhciSuspParentWant(ULONG irpOk, ULONG started, ULONG systemWorking,
+                         ULONG current, ULONG nt)
+{
+    ULONG want;
+
+    if (!irpOk || !started) {
+        return 0;
+    }
+    want = systemWorking ? XHCI_SUSP_D0 : XHCI_SUSP_D3;
+    return (!nt && want == current) ? 0UL : want;
 }

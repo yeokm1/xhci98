@@ -142,6 +142,18 @@ ULONG XhciMsiInjNoLine(const UCHAR *list, const XHCI_MSI_WALK *walk,
  * enabled: REPLACED for a REPLACEABLE list, else the kept outcome. */
 ULONG XhciMsiOutcome(ULONG listClass);
 
+/*
+ * The admitted shape (record 18 section 4.2, read in R1 and R2 on Vista SP2
+ * and 7 SP1, x86 and x64, the same list on all four): one configuration
+ * holding exactly one interrupt run, that run headed by a message member,
+ * every message member before every line member and at least one line
+ * member; the configuration's other descriptors, of any other type, are
+ * copied by the strip unchanged. Returns 1 for a list the walk accepted
+ * with that shape, else 0; the filter takes "unsupported shape" for a
+ * REPLACEABLE list that is not admitted.
+ */
+ULONG XhciMsiAdmitted(const UCHAR *list, const XHCI_MSI_WALK *walk);
+
 /* The filter record (section 4.2, step 0): the class is UNKNOWN from
  * AddDevice and from every filter's entry until that filter publishes. */
 typedef struct _XHCI_MSI_FILTER_RECORD {

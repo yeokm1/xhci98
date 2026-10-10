@@ -726,3 +726,44 @@ VOID XhciHubExV2Fill(UCHAR *buf, ULONG protocols, ULONG flags)
     xhciHubPut32(buf, 8, protocols);
     xhciHubPut32(buf, 12, flags);
 }
+
+/* IRQL: any. */
+ULONG XhciHubDescPlan(const UCHAR *buf, ULONG inLen, ULONG outLen, ULONG cap,
+                      XHCI_HUB_DESC_PLAN *plan)
+{
+    plan->Port = 0;
+    plan->Value = 0;
+    plan->Index = 0;
+    plan->Length = 0;
+    plan->Send = 0;
+    if (buf == NULL || inLen < XHCI_HUB_DR_REQUEST_BYTES ||
+        outLen < XHCI_HUB_DR_REQUEST_BYTES) {
+        return XHCI_HUB_DR_TOO_SMALL;
+    }
+    plan->Port = xhciHubGet32(buf, 0);
+    plan->Value = (ULONG)buf[6] | ((ULONG)buf[7] << 8);
+    plan->Index = (ULONG)buf[8] | ((ULONG)buf[9] << 8);
+    plan->Length = (ULONG)buf[10] | ((ULONG)buf[11] << 8);
+    if (plan->Length > outLen - XHCI_HUB_DR_REQUEST_BYTES) {
+        plan->Length = 0;
+        return XHCI_HUB_DR_TOO_SMALL;
+    }
+    plan->Send = plan->Length;
+    if (plan->Value == 0x0100UL) {
+        return XHCI_HUB_DR_DEVICE;
+    }
+    if (plan->Value == 0x0200UL) {
+        return XHCI_HUB_DR_CONFIG;
+    }
+    if (plan->Send > cap) {
+        plan->Send = cap;
+    }
+    return XHCI_HUB_DR_FORWARD;
+}
+
+/* IRQL: any. */
+ULONG XhciHubDescInfo(const XHCI_HUB_DESC_PLAN *plan, ULONG received)
+{
+    return XHCI_HUB_DR_REQUEST_BYTES +
+           ((received < plan->Send) ? received : plan->Send);
+}

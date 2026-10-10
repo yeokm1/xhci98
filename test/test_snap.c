@@ -17,7 +17,10 @@
 #include "../src/xhci_pirq.h"
 #include "../src/xhci_xstat.h"
 #include "../src/xhci_poll.h"
+#include "../src/xhci_msi.h"
+#include "../src/xhci_msi86.h"
 #include "../src/xhci98_xfer.h"
+#include "../src/xhci_xpipe.h"
 #include "test_harness.h"
 
 #define H XHCI_SNAPSHOT_HCD_HEAD_WORDS
@@ -26,19 +29,19 @@ static void test_header(void)
 {
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_VERSION_AT), 1,
              "version 1");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_BYTES), 816,
-             "a 204-word header (35-T.8 appended twelve, 36.3 28, 36.21 "
-             "154, 36.9 two)");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_BYTES), 1224,
+             "a 306-word header (35-T.8 appended twelve, 36.3 28, 36.21 "
+             "154, 36.9 two, 36.24 and 36.25 33, 36.38 69)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS), 18,
              "the E460's eighteen root ports");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORT_BYTES), 64,
              "a sixteen-word record");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 816,
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 1224,
              "records right after the header");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 142,
-             "the whole counter block");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 162,
+             "the whole counter block (36.38: 142 to 159 stage B's)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS_AT),
-             816 + 18 * 64, "counters after the last record");
+             1224 + 18 * 64, "counters after the last record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_NOTE_BUDGET),
              XHCI_ENUM_NOTE_BUDGET, "the notes' budget");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_WORDS), 0,
@@ -57,8 +60,8 @@ static void test_header(void)
              "selective suspend's block at word 114");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspNotesSuppressed) / 4, 141,
              "selective suspend's last word at 141");
-    CHECK_EQ(XhciSnapHcdWords(18), 204 + 18 * 16 + 142, "the E460's image");
-    CHECK_EQ(XhciSnapHcdWords(0), 204 + 142,
+    CHECK_EQ(XhciSnapHcdWords(18), 306 + 18 * 16 + 162, "the E460's image");
+    CHECK_EQ(XhciSnapHcdWords(0), 306 + 162,
              "no ports: a header and the counters");
     CHECK_EQ(XhciSnapHcdWords(1000), XhciSnapHcdWords(XHCI_MAX_ROOT_PORTS),
              "ports held to the root port maximum");
@@ -266,6 +269,30 @@ static void test_xstat_words(void)
     CHECK_EQ(XHCI_SNAPSHOT_HCD_TELE_AT, 51 + 59, "the records after");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_TELE_AT + 2 * 46, XHCI_SNAPSHOT_HCD_DELIVERY_AT,
              "and 36.9's pair follows them");
+    /* 36.24: 36.9's two words, then stage 2's counters,
+     * appended with every offset before them unchanged. */
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_TELE_END, 202, "36.21's end unmoved");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_DELIVERY_AT, 202, "36.9's pair at 202");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_DELIVERY_WORDS, 203, "and 203");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_XPIPE_WORDS, 204, "stage 2's count at 204");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_XPIPE_WORDS), 32,
+             "thirty-two counters: 36.24's 24, 36.25's eight");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_XPIPE_AT, 205, "from 205");
+    CHECK_EQ(sizeof(XHCI_XPIPE_STATS), 32 * 4, "the whole of the stats");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_XPIPE_AT + 32, XHCI_SNAPSHOT_HCD_DNCTRL_LIVE,
+             "then 36.38's words, which end the header");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_XPIPE_AT), 0,
+             "the counters are the door's");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XPIPE_STATS, Check), 2 * 4,
+             "the check's verdict third");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XPIPE_STATS, Pipelined), 12 * 4,
+             "pipelined URBs thirteenth");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XPIPE_STATS, Order), 23 * 4,
+             "the order anomaly last of 36.24's");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XPIPE_STATS, BigBuilt), 24 * 4,
+             "36.25's first at word 229");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XPIPE_STATS, Td513), 31 * 4,
+             "and its last at 236");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_XSTAT_AT), 0,
              "the readings are the door's, not layout");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_TELE_AT), 0,
@@ -315,7 +342,8 @@ static void test_delivery_words(void)
 {
     CHECK_EQ(XHCI_SNAPSHOT_HCD_DELIVERY_AT, 202, "after the records");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_DELIVERY_WORDS, 203, "then the count");
-    CHECK_EQ(XHCI_SNAPSHOT_HCD_HEAD_WORDS, 204, "which ends the header");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_XPIPE_WORDS, 204,
+             "and 36.24's counters follow");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_DELIVERY_AT),
              XHCI_FIELD_OFFSET(XHCI_EXTENSION, EventDelivery),
              "EventDelivery's place in the extension");
@@ -385,6 +413,86 @@ static void test_delivery_words(void)
     CHECK_EQ(XHCI_POLL_ROLE_SERVE, 2, "roles, last");
     CHECK_EQ(XHCI_POLL_BUS_WATCH, 4, "bus states, last");
     CHECK_EQ(XHCI_POLL_RETIRED_OWED, 5, "retirement states, last");
+}
+
+/* 36.15: message-signalled interrupts. XHCISNAP names the counter words
+ * from 96 by these places and decodes them by these codes (xhcisnap.c,
+ * msi_counter_names, SNAP_MSI_* and the msi_*_text tables), so a field
+ * moved or a code renumbered fails here until the tool follows. The
+ * routines' codes (hcd.h's HCD_MSI_ROUTINES_*: 0 none, 1 system, 2 the
+ * helper, 3 not found) are the DDK half's and are not reachable from here. */
+static void test_msi_words(void)
+{
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiRoutines), 96 * 4,
+             "MsiRoutines at 96");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiMessages), 97 * 4,
+             "MsiMessages");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiCapability), 98 * 4,
+             "MsiCapability");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiConnectStatus), 99 * 4,
+             "MsiConnectStatus");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiDescriptors), 100 * 4,
+             "MsiDescriptors");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, Msi86State), 101 * 4,
+             "Msi86State");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, Msi86Looks), 102 * 4,
+             "Msi86Looks");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, Msi86Status), 103 * 4,
+             "Msi86Status");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, Msi86Refusal), 104 * 4,
+             "Msi86Refusal");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, Msi86HelperVersion), 105 * 4,
+             "Msi86HelperVersion");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiFilterSeq), 106 * 4,
+             "MsiFilterSeq");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiFilterClass), 107 * 4,
+             "MsiFilterClass");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiFilterOutcome), 108 * 4,
+             "MsiFilterOutcome");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiFilterMode), 109 * 4,
+             "MsiFilterMode");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiFilterLists), 110 * 4,
+             "MsiFilterLists");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiFilterMessages), 111 * 4,
+             "MsiFilterMessages");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiFilterLines), 112 * 4,
+             "MsiFilterLines");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiFilterStripped), 113 * 4,
+             "MsiFilterStripped last");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspSwitchRead), 114 * 4,
+             "stage A's words follow at 114");
+
+    CHECK_EQ(XHCI_MSI86_STATE_UNSEEN, 0, "helper states");
+    CHECK_EQ(XHCI_MSI86_STATE_ABSENT, 1, "helper states");
+    CHECK_EQ(XHCI_MSI86_STATE_REFUSED, 2, "helper states");
+    CHECK_EQ(XHCI_MSI86_STATE_BOUND, 3, "helper states");
+    CHECK_EQ(XHCI_MSI86_STATE_REMOVED, 4, "helper states, last");
+    CHECK_EQ(XHCI_MSI86_ACCEPTED, 0, "no refusal");
+    CHECK_EQ(XHCI_MSI86_REFUSE_STATUS, 1, "refusals");
+    CHECK_EQ(XHCI_MSI86_REFUSE_LENGTH, 2, "refusals");
+    CHECK_EQ(XHCI_MSI86_REFUSE_IDENTITY, 3, "refusals");
+    CHECK_EQ(XHCI_MSI86_REFUSE_ROUTINES, 4, "refusals, last");
+    CHECK_EQ(XHCI_MSI_CLASS_UNKNOWN, 0, "classes");
+    CHECK_EQ(XHCI_MSI_CLASS_NO_INTERRUPT, 1, "classes");
+    CHECK_EQ(XHCI_MSI_CLASS_NO_MESSAGE, 2, "classes");
+    CHECK_EQ(XHCI_MSI_CLASS_REPLACEABLE, 3, "classes");
+    CHECK_EQ(XHCI_MSI_CLASS_NO_LINE, 4, "classes");
+    CHECK_EQ(XHCI_MSI_CLASS_UNSUPPORTED, 5, "classes");
+    CHECK_EQ(XHCI_MSI_CLASS_INCONSISTENT, 6, "classes, last");
+    CHECK_EQ(XHCI_POLL_DELIVERY_MSI, 3, "the capability: MSI");
+    CHECK_EQ(XHCI_POLL_DELIVERY_MSIX, 4, "the capability: MSI-X");
+    CHECK_EQ(XHCI_MSI_OUT_NONE, 0, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_LOWER_FAILED, 1, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_NO_LIST, 2, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_INCONSISTENT, 3, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_NOT_ASKED, 4, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_DISABLED, 5, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_NO_LINE, 6, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_NO_INTERRUPT, 7, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_NO_MESSAGE, 8, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_UNSUPPORTED, 9, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_REPLACED, 10, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_NO_MEMORY, 11, "outcomes, last");
 }
 
 /* 36.22: XhciMaxTransferKB as each start takes it. */
@@ -556,6 +664,63 @@ static void test_xstat_math(void)
           "by chunk count");
 }
 
+/* The counter block's tail after the MSI words: stage A at 114 to 141
+ * (36.33), stage B at 142 to 159 (36.38, filling the words reserved for
+ * it in place), the composite parent's two at 160 (36.43). XHCISNAP names
+ * them by these places (xhcisnap.c, SNAP_HCD_SUSP_AT, SNAP_SUSPB_*,
+ * SNAP_COMP_*). */
+static void test_counter_tail(void)
+{
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspSwitchRead), 114 * 4,
+             "SuspSwitchRead at 114");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspNotesSuppressed),
+             141 * 4, "SuspNotesSuppressed at 141, stage A's last");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SsSuspArms), 142 * 4,
+             "stage B's first, SsSuspArms, at 142");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SsSuspCapSettled), 159 * 4,
+             "stage B's last, SsSuspCapSettled, at 159");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, CompositeParents), 160 * 4,
+             "CompositeParents at 160");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, CompositeRepresented),
+             161 * 4, "CompositeRepresented at 161");
+    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 162 * 4, "162 words in all");
+}
+
+/* 36.38: selective suspend's stage B header words and the counters
+ * XHCISNAP names from word 142 (xhcisnap.c, hcd_ssusp_counter_names and
+ * print_ssusp, which read these places). */
+static void test_ssusp_words(void)
+{
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_DNCTRL_LIVE, 237,
+             "after 36.24's counters, the header's old end");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_DNCTRL_ENABLES, 238, "DnctrlEnables");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_DNCTRL_READBACK, 239, "DnctrlReadback");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_SUSP_RECORDS, 240, "the record count");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_SUSP_WORDS, 241, "the record size");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_SUSP_AT, 242, "the records");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_SUSP_RECORDS), 8,
+             "eight records");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_SUSP_WORDS), 8,
+             "of eight words");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_DNCTRL_LIVE), 0,
+             "DNCTRL is a reading, the door's");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_SUSP_AT + 8 * 8, XHCI_SNAPSHOT_HCD_HEAD_WORDS,
+             "the records end the header");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SsSuspArms), 142 * 4,
+             "SsSuspArms at word 142");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, FuncWakeEvents), 152 * 4,
+             "FuncWakeEvents at 152");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SsSuspCapSettled), 159 * 4,
+             "SsSuspCapSettled last, 159");
+    CHECK_EQ(XHCI_DNCTRL_FUNCTION_WAKE, 2, "N1");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_EXTENSION, DnctrlReadback),
+             XHCI_FIELD_OFFSET(XHCI_EXTENSION, DnctrlEnables) + 4,
+             "the two DNCTRL words together");
+    CHECK(XHCI_FIELD_OFFSET(XHCI_EXTENSION, DnctrlEnables) >
+              XHCI_FIELD_OFFSET(XHCI_EXTENSION, LineRetireState),
+          "appended after the delivery words");
+}
+
 int main(void)
 {
     test_header();
@@ -563,6 +728,9 @@ int main(void)
     test_pirq_words();
     test_xstat_words();
     test_delivery_words();
+    test_msi_words();
+    test_counter_tail();
+    test_ssusp_words();
     test_xstat_math();
     test_xpol();
     test_walk(0);

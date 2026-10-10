@@ -666,6 +666,28 @@ code:
 
 ## Interrupt Delivery
 
+**Since `2.3.0.0` (roadmap-hcd Phase 36; design records 15 and 18;
+amended in 36.20): a controller with Interrupt Pin 0 is polled, not
+refused, and Vista and 7 may take a message.** The HCD connects its own
+interrupt, and each start settles one delivery, once, in the pure
+`XhciPollDecide` (`xhci_poll.c`, `test_poll`) from `XhciInterruptMode`, the
+resource list and the pin: the line (INTx) where it works; polling
+(`hcd_poll.c`'s timer and DPC) where the pin is 0 or Windows gave no
+interrupt resource, under mode 2, or after the watcher finds a line that
+never arrives; and on Vista and 7 a message (MSI or MSI-X) where Windows
+grants one - through `IoConnectInterruptEx` on amd64 and through the
+`xhcimsi.sys` helper on x86. Mode 1 asks for the line and keeps the
+refusal below for a controller that has none, on 98 SE to XP and on x86
+Vista and 7 with no helper bound and no line offered; on Vista and 7 a
+message granted anyway is used, and one that cannot be connected polls
+(record 15 section 4). Windows programs and enables the
+MSI or MSI-X capability on a message grant; the driver only reads it. A
+pin that cannot be read is still not a pin of zero. The bullets below are
+the miniport's (`1.2.0.0`) rules and its reasoning about the targets'
+`usbport.sys`, kept as its record; "abort with a diagnostic" on pin 0 and
+"do not program MSI" are superseded for the HCD as just described, and
+the second still holds in that the driver itself writes no MSI register.
+
 - The driver depends on line-based (INTx) interrupt delivery on both targets. Neither Win98/NUSB `usbport.sys` + the 9x PCI driver nor Win2000's native `usbport.sys` + NT5 PCI driver has an MSI/MSI-X path, so Interrupter 0's INTx# assertion is the only way events reach software.
 - INTx is optional in xHCI (spec section 4.17.3: "PCI Interrupt Pins are optional"). At init, read the PCI Interrupt Pin register (config 0x3D); if it is 0 the controller is MSI/MSI-X-only and is unsupported on both targets - abort with a diagnostic rather than binding to a controller that will never deliver an interrupt.
 - **A pin that cannot be read is not a pin of zero.** The gate refuses pin 0; a failed config read of the Interrupt Pin register is logged and does not refuse. PCI derives a device's interrupt resource from that register, so a controller with no pin never receives the `USBPORT_RESOURCES_INTERRUPT` bit the resource check before this one already requires, and turning a service failure into a hard refusal would decline a working controller on no evidence.

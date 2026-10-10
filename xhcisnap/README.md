@@ -55,6 +55,9 @@ XHCISNAP -help           the long help; bare XHCISNAP prints the short one
 XHCISNAP -force ...      write to a key matched by value NAME alone. It is a
                          modifier on -verbosity / -disable only: on its own it
                          asks for nothing and is refused with exit 2
+XHCISNAP -nosysinfo -o C:\MYDUMP   a dump whose header skips reading the
+                         system details (from 2.3.0.0; see "The machine it was
+                         captured on"). A modifier on a dump only
 ```
 
 The ladder: 0 off; 1 the channel with counters only and the ring still off;
@@ -122,6 +125,73 @@ tool deletes both final raw names **and the old `.TXT`** and says no dump was
 published, so what is left is an absence and not a mixture. (The `.TXT` was
 left standing on that branch until the 2026-09-16 audit, which made the newest
 file in the directory a report of a set that had just been deleted.)
+
+### The machine it was captured on (2.3.0.0)
+
+From 2.3.0.0 (roadmap-hcd.md task 36.47) the `.TXT`'s header block, which
+is written at every level and is the part users paste into an issue, also
+names the system the dump was taken on, under "captured on":
+
+- **OS**: `GetVersionEx`'s platform, version, build and service pack
+  (`szCSDVersion`), with a name: Windows 95, 98, 98 SE, ME, 2000, XP,
+  XP x64 or Server 2003 (told apart by the product type and the native
+  processor), Vista or Server 2008, 7 or Server 2008 R2, "Windows 8 or
+  later" (every later Windows reports 6.2 to a program with no
+  compatibility manifest), or "unknown".
+- **Bitness**: x86, or 64-bit Windows with this x86 tool under WOW64
+  (`IsWow64Process` and `GetNativeSystemInfo`, looked up at run time so the
+  EXE still loads on 98 SE, ME and 2000). The tool is x86 on every target.
+- **The machine**, only where the OS records it in the registry: on Vista
+  SP1 and later `HKLM\HARDWARE\DESCRIPTION\System\BIOS`'s
+  `SystemManufacturer`, `SystemProductName`, `SystemFamily`, `SystemVersion`,
+  `BaseBoardManufacturer`, `BaseBoardProduct`, `BIOSVendor`, `BIOSVersion`
+  and `BIOSReleaseDate`; on 2000, XP and XP x64 (and a Vista without that
+  key) `HKLM\HARDWARE\DESCRIPTION\System`'s `SystemBiosVersion` and
+  `SystemBiosDate`, with "make/model: not available on this OS"; on 98 SE
+  and ME `HKLM\Enum\Root\*PNP0C01\0000`'s `BIOSName`, `BIOSVersion` and
+  `BIOSDate`, which is what the system board's devnode carries there. Each
+  value is printed only where it exists: on QEMU's SeaBIOS, ME's devnode
+  holds `BIOSVersion` and `BIOSDate` and no `BIOSName`, and 2000's key holds
+  `SystemBiosDate` and no `SystemBiosVersion` (2026-10-10 guest exports).
+- **CPU**: `ProcessorNameString`, else `Identifier`, from
+  `HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0`, and the processor
+  count (`GetSystemInfo`).
+- **RAM**: the physical memory, from `GlobalMemoryStatusEx` where it exists
+  and `GlobalMemoryStatus` before it.
+
+**It never prints the computer name, the user name or the domain as a
+field, and never reads a serial number, UUID, asset tag or SKU value.** The
+values printed are a fixed allow list named in the source, never a key's
+whole contents, and each one names a make, a model, a firmware or a
+processor rather than one machine. Those are still the firmware's free text,
+which an integrator (or QEMU's `-smbios`) can fill with anything, so a
+second guard stands behind the list: the tool reads the computer name, the
+user's name, the domain (`USERDOMAIN`, the domain or workgroup joined, the
+DNS domain) and on 98 SE and ME the workgroup, for this comparison only,
+and prints any registry string that contains one of them (without case,
+before and after cleaning) as "withheld". A name of one or two characters is
+not compared, so it is not withheld. What no tool can catch is
+an identifier that is none of those, typed into a product string; on a
+machine whose firmware strings were customised, read the block before
+posting it. Registry text is printed as plain ASCII (any other byte becomes
+`?`) and cut at 96 characters with `...`. `-selftest-sysinfo` drives the
+withholding over canned names.
+
+`-nosysinfo` beside a dump (`XHCISNAP -nosysinfo -o C:\MYDUMP`) skips all
+of it, for a machine on which the reading itself causes a problem: no
+`GetVersionEx`, no registry read for the BIOS, the CPU or the names, no
+processor or memory query. The header then says "captured on - not read:
+the system details were skipped by -nosysinfo", and the rest of the report
+is unchanged. Reading is on unless the option is given; on its own, or
+beside `-probe`, `-verbosity` or `-disable`, the option is refused with
+exit 2.
+
+It is read from the running machine when the dump is taken, never from the
+dump: the driver does not record it and the `.BIN` does not carry it. This
+tool does not decode a saved `.BIN` (that is the maintainer's offset-table
+route), so the block always describes the machine the driver answered on.
+`-selftest-sysinfo` prints the names over canned `GetVersionEx` answers and
+then the block for the machine it runs on.
 
 The `.TXT` also carries, from a 2.0.0.0 driver and at every level, one line per
 device the driver holds a slot for: its Slot ID, root port, Route String and
@@ -324,6 +394,50 @@ block's words 63 to 95 (named in the counter list too):
 A counter block of 63 words is a driver from before polling, reported as
 taking the line interrupt; a header shorter than 204 words places no
 extension words. `-selftest-intr` prints the decode over canned images.
+
+**Message interrupts** (2.2.0.3 on, task 36.15; design records 15 section
+4.3 and 18 section 9). Counter words 96 to 113 are named
+(`MsiRoutines` to `MsiFilterStripped`) and decoded in their own section:
+where the `IoConnectInterruptEx` pair came from (the 64-bit
+`MmGetSystemRoutineAddress`, the 32-bit helper `xhcimsi.sys`, or not
+found), the messages connected and granted, the capability (MSI or MSI-X)
+and the connection's status; the 32-bit helper's state (ABSENT, REFUSED
+with the check that failed, BOUND with its version); and the last
+`IRP_MN_FILTER_RESOURCE_REQUIREMENTS`'s record: the list's class, the
+outcome ("not asked", "REPLACED" when the message choices were stripped so
+the line is granted, or why the list was kept), the `XhciInterruptMode`
+it read, and the list's members. The filter runs on Vista and 7 only, so on
+Windows 98, ME, 2000 and XP its sequence is 0 and the section says "not
+applicable" (the raw `MsiFilterMode` word there reads FFFFFFFF, no value).
+A block of 96 words is a driver from before MSI. `-selftest-msi` prints
+the decode over canned images.
+
+After the MSI words come selective suspend's (114 to 141, `SuspSwitchRead`
+to `SuspNotesSuppressed`), its stage B's eighteen (142 to 159,
+`SsSuspArms` to `SsSuspCapSettled`, reserved and unprinted before task
+36.38 filled them) and the composite parent's two (160 and 161,
+`CompositeParents` and `CompositeRepresented`). `-selftest-counters`
+prints every word of a canned block whose word i holds i + 1, and
+`selftest.cmd` checks it word by word against `src\xhci_counters.h`
+(`check-counter-names.ps1`), on the built EXE: an inline lookup over two
+of these tables was once compiled by MSVC 6.0 to name the selective
+suspend words 18 places off.
+
+Two more sections come from the HCD header of a `2.3.0.0` driver (amended
+in roadmap-hcd 36.20). **"stage 2, two TDs of one URB on the ring"**
+(task 36.24, design record 13 section 11.6; `-selftest-xpipe`):
+`XhciWideMap` as read ("not set (the default)" when absent), whether
+promotion is on and what the register-free check found (or why it did not
+run: the value off, Windows 98 or ME, a grant that is not register-free),
+and the wide mapper's and the pipelined record's counts; with task 36.25,
+stage 3's big stream blocks and their TD sizes. A driver from before it
+says "not in this driver". **"selective suspend, stage B"** (task 36.38,
+design record 14 section 8.10): `DNCTRL` as read when the window was cut
+("not read" unless `XhciSelectiveSuspend` is 1), the enables written and
+read back, and the records of the first eight devices in slot order, of
+any speed (a USB 2.0 device takes a record too, so a later SuperSpeed
+device can be left out; the `Ss` column marks SuperSpeed) - slot, link state,
+the window, armed functions and the last step's outcome.
 
 The PORTSC decode is printed on screen whatever the level, because that is what
 the bench reads on the spot. The headline test is per port: a port reporting a
@@ -572,6 +686,10 @@ xhcisnap\selftest.cmd
 The second runs the report path four times with no controller present (no
 fault, a failing write, a failing close, a `.TXT` that cannot be created) and
 checks the exit codes and summary lines; see "Three files" above.
+
+It also drives every `-selftest-*` decode over canned data, and from 2.3.0.0
+`-selftest-sysinfo`, which withholds canned names, and the report path with
+and without `-nosysinfo`.
 
 MSVC 6.0 in place from `tools\MSVC600`; nothing is installed machine-wide and
 `MSVC6` overrides the location. `/Za` is not used here even though the driver

@@ -383,8 +383,10 @@ static ULONG xhciWriteConfig(PXHCI_EXTENSION ext, ULONG maxSlotsEn)
     return 1;
 }
 
-/* DNCTRL. This driver enables no Device Notification type, so the defined half
- * is always zero and the whole call is about 31:16. */
+/* DNCTRL. The defined half is ext->DnctrlEnables's: 0 unless selective
+ * suspend's stage B enabled FUNCTION_WAKE (design record 14 section 8.7), so
+ * with XhciSelectiveSuspend 0 the call is still only about 31:16. The defined
+ * half is read back into ext->DnctrlReadback for the snapshot. */
 static ULONG xhciWriteDnctrl(PXHCI_EXTENSION ext, ULONG notificationEnables)
 {
     if (!xhciWriteRsvdP(ext, ext->HcInfo.OperationalOffset + XHCI_OP_DNCTRL,
@@ -392,6 +394,11 @@ static ULONG xhciWriteDnctrl(PXHCI_EXTENSION ext, ULONG notificationEnables)
                         notificationEnables & XHCI_DNCTRL_DEFINED_MASK)) {
         XHCI_DBG_TEXT("DNCTRL: no valid operand for a read-modify-write");
         return 0;
+    }
+    if (notificationEnables != 0) {
+        ext->DnctrlReadback =
+            XhciRead32(ext, ext->HcInfo.OperationalOffset + XHCI_OP_DNCTRL) &
+            XHCI_DNCTRL_DEFINED_MASK;
     }
     return 1;
 }
@@ -3474,7 +3481,7 @@ static ULONG xhciRestoreState(PXHCI_EXTENSION ext)
      * DCBAAP and ERDP stay plain writes - DCBAAP's low six bits are RsvdZ (Table
      * 5-25, p.369) and ERDP has no reserved field (Table 5-42, p.394).
      */
-    if (!xhciWriteDnctrl(ext, 0)) {
+    if (!xhciWriteDnctrl(ext, ext->DnctrlEnables)) {
         ext->RestoreFailures++;
         return 0;
     }
@@ -5073,6 +5080,20 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
     if (status != XHCI_LAYOUT_OK) {
         return xhciInitFailed(ext, XHCI_INIT_STEP_DCBAA, status,
                               MP_STATUS_NO_RESOURCES);
+    }
+
+    /*
+     * DNCTRL, before R/S, only when selective suspend's stage B asks for a
+     * notification type (design record 14 section 8.7): after the HCRST every
+     * type is disabled (5.4.4, p.366), so a 0 is never written and the switch
+     * at 0 adds no access. A refusal is not the start's failure - the
+     * notifications are a wake's evidence behind a SuperSpeed hub only - and
+     * is left in the readback, which stays 0.
+     */
+    ext->DnctrlReadback = 0;
+    if (ext->DnctrlEnables != 0 &&
+        !xhciWriteDnctrl(ext, ext->DnctrlEnables)) {
+        XHCI_DBG_TEXT("DNCTRL: FUNCTION_WAKE not enabled");
     }
 
     /* Step 9. */

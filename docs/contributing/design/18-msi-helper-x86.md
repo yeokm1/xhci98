@@ -1170,6 +1170,101 @@ before it is read:
   signature optional for x86 boot-start drivers; the reading is what is
   relied on.
 
+### 11.1 The readings (2026-10-10)
+
+Read on QEMU guests on development host A, the `qemu` package of
+`445f08d`'s build with the strip off (it shipped off, section 12a), from
+section 9's trace validated by `check-msi86-trace.ps1`; Vista SP2 x86, 7
+SP1 x86, Vista SP2 x64 and 7 SP1 x64, each with `qemu-xhci`
+`msi=on,msix=off`, `msi=off,msix=on` and the launchers' default.
+
+- **R1: one shape, the same on all four.** Every list received under
+  `MSISupported` 1 was one configuration of five descriptors: `[0.0]`
+  the memory BAR (option 0x01, preferred), `[0.1]` its alternative
+  (0x08), `[0.2]` a device-private (type 0x81, option 0, its own
+  requirement), `[0.3]` the message (type 2, flags 0x0003, share 1,
+  option 0x01, heading the interrupt run), `[0.4]` the line (type 2,
+  flags 0, share 3, option 0x08, the message's alternative). Class
+  REPLACEABLE: STRIPPABLE, a line is offered for this controller with a
+  pin. The three `qemu-xhci` variants gave the same list (the message
+  descriptor does not say MSI from MSI-X). Section 4.2's withdrawal does
+  not apply.
+- **R2: the device-private is the device's, not the message's.** With
+  `MSISupported` 0 (read on all four: 7 x64 and Vista x64 first, then 7
+  SP1 x86 and Vista SP2 x86 with the helper bound, the hardware key's
+  value set to 0 and the controller disabled and enabled) Windows built
+  one configuration of four, the same on each: the same `[0.0]` to `[0.2]`, the device-private included, and
+  the line heading its run (option 0, share 3). So the device-private
+  stays whatever the interrupt is, and the strip, which copies it, needs
+  no amendment. The strip of R1's list is that list as the trace shows
+  it, every descriptor's option, type, share, flags and data words
+  (`test_msi`'s `test_r1`, built from the readings; the list header and
+  the descriptors' spare bytes are not traced).
+- **Admitted** (section 4.2; the four captures identical, so one shape
+  for every OS and architecture, stated here with them): one
+  configuration with exactly one interrupt run, headed by a message
+  member, every message member before every line member and at least one
+  line member, the configuration's other descriptors of other types
+  (`XhciMsiAdmitted`, vectors in `test_msi`'s `test_admit`). A
+  REPLACEABLE list of any other shape (two configurations, a line heading
+  the run, a message after the line, two interrupt runs, another type
+  inside the run) takes "unsupported shape" and is kept; its class stays
+  REPLACEABLE for the start. The strip is enabled (section 12a).
+- **R3: read.** On 7 SP1 x86 and Vista SP2 x86, after the install's
+  restart, an ordinary boot (no test-signing, no debugger, `NOEXECUTE=OPTIN`
+  alone, PAE on, so `ntkrnlpa.exe`): `xhcimsi` running as a boot driver,
+  `xhci98` running, the helper `BOUND` (its version word
+  `0x02020000`), the message connected.
+- **R4: held, not problem code 14.** A fresh install on 7 SP1 x86 shows
+  "will not work until you restart" and the restart prompt; until the
+  restart the controller is not started, with problem code 28 ("drivers
+  not installed", restart needed) on 7 and problem code 1 on Vista, the
+  helper's service created and stopped, `xhci98` stopped, the `.HW`
+  values written, and a device plugged in then not served; no filter ran
+  before the restart. So on Vista and 7 x86 the controller stays held
+  until the restart the INF's `Reboot` asks for anyway: the release notes
+  say the USB 3 ports work after the restart, not before. Vista SP2 x64
+  and 7 SP1 x64 ask for no restart and start the controller at once. The
+  update case (U1) is read separately.
+
+### 11.2 The legs on the enabled strip (2026-10-10)
+
+QEMU guests on development host A, the packages of `71790cd`'s build (the
+strip on; `qemu` x86 `xhci98.sys` SHA-256 `f39115d9...`, release
+`8d39d614...`). Raw readings under `out\p36-msi86\legs\<guest>\`
+(`notes-H.txt`, `notes-F.txt`, `notes-L.txt`, `notes-U.txt`). The run was
+stopped before every leg was reached; a leg not run is **owed to the
+matrix**.
+
+| Leg | Guest | Result | Reading |
+|---|---|---|---|
+| R2x | 7 x86, Vista x86 | PASS | `MSISupported` 0 list as on x64 (section 11.1) |
+| H1 | 7 x86 | PASS | restart prompt; Code 28 before it; after it `BOUND`, MSI |
+| H1 | Vista x86 | PASS | installed with `pnputil`: no restart dialog on that route; Code 1 until the restart; then `BOUND`, MSI |
+| F1 mode 1 | 7 x86, Vista x86 | PASS | list replaced (108 = 10, 113 = 1), the line, reason 5, no message connected |
+| F1r mode 1, release | Vista x86 | PASS | 65 = 1, 108 = 10; mode 0 back to MSI |
+| F2 `NoStrip` | 7 x86, Vista x86 | PASS | 108 = 5, MSI, reason 11 |
+| F4 mode 0 | 7 x86, Vista x86 | PASS | MSI, 108 = 4 |
+| F (all) | 7 x64, Vista x64 | owed to the matrix | not reached |
+| F3 `InjNoLine` | 7 x64, Vista x64 | owed to the matrix | not reached |
+| H1a | 7 x86 | PASS | helper absent, mode 1, no line: Code 10, reason 13 (outcome 6); mode 0 polls, reason 12; helper bound, mode 1: message, reason 11 |
+| H0' helper absent | 7 x86 | PASS | 101 = 1, 108 = 10, the line |
+| H2 file deleted | 7 x86 | PASS | event 7026, `ABSENT`, the line |
+| H3 service deleted | 7 x86 | PASS | `ABSENT`, the line |
+| H2, H3 | Vista x86 | owed to the matrix | not reached |
+| H4-H9 `XhciMsiInject` 1-6 | 7 x86 | PASS | 1 `ABSENT`; 2-6 `REFUSED` with refusal 1, 3, 2, 4, 3; each on the line, devices working |
+| H10 connection fails | 7 x86 | PASS | polled, reason 12, status C0000001 |
+| L1 two controllers | 7 x86 | PASS | each FDO looks and binds on its own; a disable and enable of one leaves the other running. Finding: a removed and rescanned instance is held with Code 1 until a restart (the INF's `Reboot`), then binds |
+| L2 rebalance | 7 x86 | not reached on a guest | no Resources tab offered; the state machine is host-tested |
+| L3 removal | 7 x86 | PASS (orderly) | QEMU's `device_del` is an orderly eject (query remove, remove), not a surprise removal: disconnect, reference dropped, remove; no bugcheck. A true surprise removal is owed to the matrix |
+| L4 failed start | 7 x86 | PASS | mode 1 + no interrupt: Code 10, the reference dropped at remove; values cleared: a new FDO looks and binds (its serial reads 0001 again, the image having been reloaded) |
+| D4 Driver Verifier | 7 x86 | FAIL, then **fixed; PASS** | release package, `verifier /standard /driver xhci98.sys xhcimsi.sys`: the next boot failed (automatic restart, then Startup Repair; with F8 "start normally", both vCPUs spun with interrupts off at "Starting Windows"). Read under a kernel debugger (`kd` on COM1, `bcdedit /debug on`): stop C9 0x220, "IRP_MJ_SYSTEM_CONTROL has been completed by someone other than the ProviderId" - Verifier's started-stack WMI test (`VfWmiTestStartedPdoStack`) sent `IRP_MJ_SYSTEM_CONTROL` to the root hub's stack and the root-hub FDO completed it with `STATUS_NOT_SUPPORTED` instead of passing it to its PDO. Not this record's code: the published 2.2.0.0 under Verifier on `xhci98.sys` alone stops the same way, and Verifier on `xhcimsi.sys` alone boots clean. Fixed on `p36-d4` (`32c4cf4`): the root-hub FDO and a hub FDO pass `IRP_MJ_SYSTEM_CONTROL` down, the root-hub PDO and a device PDO complete it untouched. With the fix: the desktop under Verifier on both drivers, MSI (65 = 3, 101 = 3), mouse and stick (`fc /b` clean), a disable and enable (MSI again), `device_del xhci` with no bugcheck. Vista x86 and 7 x64 under Verifier owed to the matrix. Raw readings `out\p36-d4\notes.txt` |
+| U1 update | 7 x86 | PASS | 2.2.0.9 over 2.2.0.0: restart prompt; before it the controller keeps running on the old image with the old helper (`BOUND`, 0x02020000), files replaced on disk; after it the new helper (0x02020009), MSI |
+| U1 update | Vista x86 | owed to the matrix | not reached |
+| U2 downgrade | 7 x86 | owed to the matrix | this package installed and read (MSI, bound); 2.2.0.2 over it not reached |
+| U3 uninstall | 7 x86 | PASS | the helper service stays, running, at the next boot; `sc delete` and a restart remove the service, the file stays. Finding: "Delete the driver software" removed only the package in use; an older package left in the driver store would be reinstalled by the next detection |
+| D2 98 SE, ME, 2000, XP | | PASS | wave 1, the first package (section 11.1's build) |
+
 ## 12. Decisions
 
 All taken by the owner; items 2 to 6 were answered on 2026-10-09 after
@@ -1303,12 +1398,18 @@ differs from, or settles, what the sections above say:
 - **The connection passes no spin lock** (record 15 section 4.3's revision
   6): `SpinLock` NULL, so each message has its own lock; the message ISR
   declines every message ID but 0 before touching the controller.
-- **The strip ships off** (`HCD_MSI_STRIP_DEFAULT` 0 in `hcd_msi86.c`)
-  until R1 and R2 are read; the `qemu` flavour's `XhciMsi86NoStrip` keeps
-  it off after the default is turned on, and `XhciMsi86InjNoLine` is H1a's
-  stimulus. The admitted shapes are the classification's own: a run whose
-  members are not all of the head's type, or a list opening on an
-  alternative, is "unsupported shape" and kept.
+- **The strip is on** (`HCD_MSI_STRIP_DEFAULT` 1 in `hcd_msi86.c`, one
+  default for Vista and 7, x86 and x64, since 2026-10-10). It shipped off
+  (0) in the first build until R1 and R2 were read (section 11.1: one
+  shape, identical on all four, a line offered beside the message, the
+  device-private the device's own). The `qemu` flavour's
+  `XhciMsi86NoStrip` still turns it off, and `XhciMsi86InjNoLine` is
+  H1a's stimulus. The classification alone sorts the shapes it cannot
+  handle (a run whose members are not all of the head's type, or a list
+  opening on an alternative: class UNSUPPORTED); on top of it the filter
+  replaces only R1's admitted shape (`XhciMsiAdmitted`, section 11.1) and
+  takes "unsupported shape" for any other REPLACEABLE list, kept as
+  Windows built it.
 - **The counters**: eighteen words appended to `XHCIHC_COUNTERS` (114 in
   all; `xhci_counters.h` names them): the routines' source, the messages
   connected, the capability, the connection's status, the raw message

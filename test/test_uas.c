@@ -334,6 +334,33 @@ static void test_config(void)
 
     CHECK_EQ(UasParseConfig(hsCfg, 8, &info), UAS_CFG_MALFORMED,
              "shorter than a configuration descriptor");
+
+    /* Task 36.46: an endpoint past bNumEndpoints, with a companion and a
+     * Pipe Usage after it, is no pipe of the setting (the bus opens four)
+     * and lends it neither SuperSpeed nor a usage (Codex round 1). */
+    {
+        static const UCHAR tail[] = {
+            0x07, 0x05, 0x05, 0x02, 0x00, 0x02, 0x00,
+            0x06, 0x30, 0x00, 0x00, 0x00, 0x00,
+            0x04, 0x24, 0x03, 0x00 };
+        UCHAR more[sizeof(hsCfg) + sizeof(tail)];
+
+        memcpy(more, hsCfg, sizeof(hsCfg));
+        memcpy(more + sizeof(hsCfg), tail, sizeof(tail));
+        more[2] = (UCHAR)sizeof(more);
+        CHECK_EQ(UasParseConfig(more, sizeof(more), &info), UAS_CFG_OK,
+                 "36.46: a surplus endpoint after the four");
+        CHECK(!info.SuperSpeed, "its companion is not the setting's");
+        CHECK_EQ(info.EndpointAddress[UAS_PIPE_DATA_IN - 1], 0x83,
+                 "its usage does not rename data-in");
+
+        /* bNumEndpoints 3: data-out is surplus, so no pipe is named
+         * data-out, as the bus would open only three. */
+        memcpy(more, hsCfg, sizeof(hsCfg));
+        more[32 + 4] = 3;
+        CHECK_EQ(UasParseConfig(more, sizeof(hsCfg), &info),
+                 UAS_CFG_BAD_PIPES, "36.46: data-out past bNumEndpoints 3");
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -648,8 +675,9 @@ static void test_devlim(void)
     CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 0x180000UL, &src, &why),
              0x180000UL, "1.5 MiB above the bus's 1 MiB: the device's wins");
     CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 0x200000UL, &src, &why),
-             0x100000UL, "2097152 itself is past KB 2581464's 2097120");
-    CHECK_EQ(why, UAS_DEVLIM_RANGE, "so out of range");
+             0x200000UL, "2097152, the tools' 2 MiB, is 2 MiB (owner)");
+    CHECK_EQ(why, UAS_DEVLIM_USED, "so in range");
+    CHECK_EQ(src, XHCI98_TELE_SRC_DEVICE, "the device's");
     CHECK_EQ(devlim(0x10000UL, BUS, 1, D, 4, 0x100000UL, &src, &why),
              0x100000UL, "1 MiB above a 64 KiB bus value");
     CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 0x1E000UL, &src, &why),
@@ -667,7 +695,14 @@ static void test_devlim(void)
     CHECK_EQ(why, UAS_DEVLIM_RANGE, "said out of range");
     CHECK_EQ(src, BUS, "the bus's source kept");
     CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 2097121UL, &src, &why),
-             0x100000UL, "2097121 is above it");
+             0x200000UL, "2097121, between the two spellings, is 2 MiB");
+    CHECK_EQ(why, UAS_DEVLIM_USED, "inside the widened range");
+    CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 2097153UL, &src, &why),
+             0x100000UL, "2097153 is above it");
+    CHECK_EQ(why, UAS_DEVLIM_RANGE, "out of range");
+    CHECK_EQ(src, BUS, "the bus's source kept");
+    CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 0x400000UL, &src, &why),
+             0x100000UL, "4 MiB is above it");
     CHECK_EQ(why, UAS_DEVLIM_RANGE, "out of range");
     CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 0UL, &src, &why), 0x100000UL,
              "0 is out of range, not off");

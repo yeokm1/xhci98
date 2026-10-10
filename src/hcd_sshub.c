@@ -31,7 +31,9 @@
  *     hcd_enum.c has fed the disconnect and the old device and its subtree
  *     are torn down; a link found in U3 under a held device, or a finished
  *     U3 exit, is resumed or held through its recovery by hcd_hub.c's
- *     USB 2.0 hub-port resume (suspend handled, never initiated);
+ *     USB 2.0 hub-port resume (suspend handled, never initiated) - except
+ *     under a device selective suspend holds (36.38, stage B), whose U3 the
+ *     look leaves alone and whose finished exit it hands to the machine;
  *   the Protocol Speed ID of a device behind it (HcdSsHubPsiv), for
  *     HcdHubPlace: SuperSpeed's, or a SuperSpeedPlus rate's from the
  *     extended status - and after Address Device the controller's own
@@ -87,19 +89,25 @@ static ULONG hcdSsHubFeature(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
                               &stalled);
 }
 
-/* Each XHCI_SSHUB_C_* bit of `bits` cleared with its own selector. */
-static VOID hcdSsHubClear(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
-                          ULONG bits)
+/* Each XHCI_SSHUB_C_* bit of `bits` cleared with its own selector; returns
+ * the bits whose clear the hub took (selective suspend's evidence, design
+ * record 14 section 8.6). */
+static ULONG hcdSsHubClear(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
+                           ULONG bits)
 {
     ULONG bit;
     ULONG selector;
+    ULONG acked;
 
+    acked = 0;
     for (bit = 1; bit <= XHCI_SSHUB_C_PORT_CONFIG_ERROR; bit <<= 1) {
         selector = XhciSsHubClearSelector(bit);
-        if ((bits & bit) != 0 && selector != 0) {
-            (VOID)hcdSsHubFeature(hc, hub, n, 0, selector);
+        if ((bits & bit) != 0 && selector != 0 &&
+            hcdSsHubFeature(hc, hub, n, 0, selector)) {
+            acked |= bit;
         }
     }
+    return acked;
 }
 
 /* ----------------------------------------------------------------------- */
@@ -437,10 +445,10 @@ ULONG HcdSsHubPortReset(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
                                      ? HCD_SSHUB_WARM_WAIT_MS
                                      : HCD_SSHUB_HOT_WAIT_MS,
                                  &status, &change, &warmSeen);
-    hcdSsHubClear(hc, hub, n,
-                  XhciSsHubResetClears(change,
-                                       kind == XHCI_SSHUB_RESET_WARM ||
-                                           warmSeen));
+    (VOID)hcdSsHubClear(hc, hub, n,
+                        XhciSsHubResetClears(change,
+                                             kind == XHCI_SSHUB_RESET_WARM ||
+                                                 warmSeen));
     if (progress != XHCI_HUB_RESET_ENABLED) {
         XHCI_DBG_VALUE("hcd: SS hub port reset failed, port/status",
                        (n << 16) | status);
@@ -483,6 +491,7 @@ ULONG HcdSsHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     PHCD_PORT q;
     ULONG status;
     ULONG change;
+    ULONG acked;
 
     d->Clear = 0;
     d->Disconnect = 0;
@@ -499,7 +508,24 @@ ULONG HcdSsHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     }
     q = HcdHubPort(hc, hub, n);
     XhciSsHubPortDecide(state, status, change, &sd);
-    hcdSsHubClear(hc, hub, n, sd.Clear);
+    acked = hcdSsHubClear(hc, hub, n, sd.Clear);
+    if (HcdSuspOwnsPort(hc, q)) {
+        /* A device selective suspend holds (design record 14 section 8.6,
+         * stage B): its link in U3 is not resumed here, and a finished U3
+         * exit is the machine's evidence - the change bits the hub took
+         * back, and a C_PORT_LINK_STATE whose clear failed as lost - not
+         * this look's to hold through a recovery. Connection, over-current,
+         * configuration-error and link-error processing are unchanged. */
+        sd.Resume = 0;
+        if (sd.Resumed) {
+            sd.Resumed = 0;
+            HcdSuspSsHubSample(hc, q, status, acked,
+                               (sd.Clear & XHCI_SSHUB_C_PORT_LINK_STATE) !=
+                                       0 &&
+                                   (acked & XHCI_SSHUB_C_PORT_LINK_STATE) ==
+                                       0);
+        }
+    }
     if ((status & XHCI_SSHUB_PORT_CONNECTION) != 0) {
         q->HubSsSeen = 1;
     }
@@ -600,7 +626,7 @@ ULONG HcdSsHubPortRecover(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
     warmSeen = 0;
     progress = hcdSsHubResetWait(hc, hub, n, HCD_SSHUB_WARM_WAIT_MS,
                                  &status, &change, &warmSeen);
-    hcdSsHubClear(hc, hub, n, XhciSsHubResetClears(change, 1));
+    (VOID)hcdSsHubClear(hc, hub, n, XhciSsHubResetClears(change, 1));
     if (progress == XHCI_HUB_RESET_ENABLED) {
         q->Link.WarmResets = 0;
         q->Link.GaveUp = 0;

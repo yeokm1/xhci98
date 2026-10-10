@@ -45,6 +45,7 @@ $testDir  = $PSScriptRoot
 $qualDir  = Split-Path -Parent $testDir
 $buildCmd = Join-Path $qualDir "build.cmd"
 $mmioSrc  = Join-Path $qualDir "mmiodiag.c"
+$sysSrc   = Join-Path $qualDir "sysinfo.c"
 $runner   = Join-Path $testDir "run-host-tests.cmd"
 $exePath  = Join-Path $qualDir "xhciqual.exe"
 
@@ -52,8 +53,12 @@ $exePath  = Join-Path $qualDir "xhciqual.exe"
 # exactly one host check fail while the file still compiles. If it ever
 # disappears this script fails loudly rather than silently passing.
 $mutationAnchor = "  PCI PM: capability absent"
+# Task 36.48: removing smb_parse_table's 64 KB cap makes test_sysinfo read
+# past its guard page - an access violation, whose exit code (C0000005h,
+# negative) "if errorlevel 1" does not see. The build must still fail.
+$crashAnchor = "    if (len > SMB_TABLE_MAX)`r`n        len = SMB_TABLE_MAX;`r`n    si->used_len = len;"
 
-foreach ($required in @($buildCmd, $mmioSrc, $runner)) {
+foreach ($required in @($buildCmd, $mmioSrc, $sysSrc, $runner)) {
     if (-not (Test-Path -LiteralPath $required)) {
         throw "missing $required"
     }
@@ -131,6 +136,7 @@ function Test-Case {
 }
 
 $mmioOriginal   = [IO.File]::ReadAllBytes($mmioSrc)
+$sysOriginal    = [IO.File]::ReadAllBytes($sysSrc)
 $runnerOriginal = [IO.File]::ReadAllBytes($runner)
 
 try {
@@ -157,6 +163,17 @@ try {
               -ExitCode (Invoke-Build) -WantExe $false
     [IO.File]::WriteAllBytes($mmioSrc, $mmioOriginal)
 
+    # A host test that CRASHES (access violation) must fail the build too.
+    $text = [Text.Encoding]::UTF8.GetString($sysOriginal)
+    if (-not $text.Contains($crashAnchor)) {
+        throw "crash anchor not found in sysinfo.c"
+    }
+    [IO.File]::WriteAllText($sysSrc, $text.Replace($crashAnchor, "    si->used_len = len; /* mutated-by-regression-check */"))
+    Remove-BuildOutput
+    Test-Case -Name "crashing host test fails the build" `
+              -ExitCode (Invoke-Build) -WantExe $false
+    [IO.File]::WriteAllBytes($sysSrc, $sysOriginal)
+
     # Same contract when the runner itself fails to run rather than a check
     # failing - the propagation path is what is being asserted.
     [IO.File]::WriteAllText($runner, "@echo off`r`necho stub runner failing on purpose`r`nexit /b 1`r`n")
@@ -170,6 +187,7 @@ try {
               -ExitCode (Invoke-Build -BuildArgs @("no-such-target"))
 } finally {
     [IO.File]::WriteAllBytes($mmioSrc, $mmioOriginal)
+    [IO.File]::WriteAllBytes($sysSrc, $sysOriginal)
     [IO.File]::WriteAllBytes($runner, $runnerOriginal)
     Remove-BuildOutput
 
@@ -179,6 +197,9 @@ try {
     $restoreFailures = @()
     if (-not (Test-FileMatchesSnapshot -Path $mmioSrc -Expected $mmioOriginal)) {
         $restoreFailures += $mmioSrc
+    }
+    if (-not (Test-FileMatchesSnapshot -Path $sysSrc -Expected $sysOriginal)) {
+        $restoreFailures += $sysSrc
     }
     if (-not (Test-FileMatchesSnapshot -Path $runner -Expected $runnerOriginal)) {
         $restoreFailures += $runner
@@ -192,7 +213,7 @@ try {
 
 Write-Host ""
 if ($failures.Count -eq 0) {
-    Write-Host ("build.cmd exit codes: {0} cases passed" -f 5)
+    Write-Host ("build.cmd exit codes: {0} cases passed" -f 6)
     exit 0
 }
 Write-Host ("build.cmd exit codes: {0} failed - {1}" -f $failures.Count, ($failures -join "; ")) -ForegroundColor Red

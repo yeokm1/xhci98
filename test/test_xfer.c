@@ -41,7 +41,9 @@
  */
 
 #include <stdio.h>
+#include <string.h>
 #include "../src/xhci_xfer.h"
+#include "../src/xhci_xpipe.h"
 #include "test_harness.h"
 
 #define RING_PA 0x0F001000UL
@@ -590,6 +592,52 @@ static void test_build_td_size_saturates(void)
 }
 
 /*
+ * Task 36.46 (GitHub issue 17 item 7): hidusb's read of a 239-byte HID
+ * report descriptor (GET_DESCRIPTOR from the interface, type 22h) from a
+ * low-speed mouse, whose EP0 is 8 bytes: 30 packets, the last of 7 bytes.
+ * Once in one page, once across a page boundary, where the TD Size of the
+ * first TRB counts the 8-byte packets still to come (4.11.2.4).
+ */
+static void test_build_ls_report_descriptor(void)
+{
+    XHCI_CONTROL_REQUEST req;
+    XHCI_CONTROL_LAYOUT layout;
+    XHCI_TRB out[XHCI_XFER_MAX_CONTROL_TRBS];
+    SG_BUFFER sg;
+
+    sg_init(&sg);
+    sg_add(&sg, 0x0C000100UL, 239, 0);
+    request_init(&req, 0x81, 0x06, 0x2200, 0, 239, 239, 8, &sg);
+    CHECK_EQ(XhciXferBuildControl(&req, out, XHCI_XFER_MAX_CONTROL_TRBS,
+                                  &layout),
+             XHCI_XFER_OK, "239 bytes at MPS 8, one page");
+    CHECK_EQ(layout.TrbCount, 3, "Setup, one Data, Status");
+    CHECK_EQ(XHCI_TRB_GET_LENGTH(out[1].Status), 239, "the whole read");
+    CHECK_EQ(XHCI_TRB_GET_TD_SIZE(out[1].Status), 0, "last TRB: TD Size 0");
+    CHECK_EQ(out[1].Control & XHCI_TRB_ISP, XHCI_TRB_ISP,
+             "ISP: a shorter answer reports itself");
+    CHECK_EQ(out[1].Control & XHCI_TRB_DIR_IN, XHCI_TRB_DIR_IN, "IN");
+    CHECK_EQ(out[2].Control & XHCI_TRB_DIR_IN, 0, "Status stage OUT");
+
+    sg_init(&sg);
+    sg_add(&sg, 0x0C000F80UL, 128, 0);
+    sg_add(&sg, 0x0C002000UL, 111, 128);
+    request_init(&req, 0x81, 0x06, 0x2200, 0, 239, 239, 8, &sg);
+    CHECK_EQ(XhciXferBuildControl(&req, out, XHCI_XFER_MAX_CONTROL_TRBS,
+                                  &layout),
+             XHCI_XFER_OK, "239 bytes at MPS 8, across a page");
+    CHECK_EQ(layout.DataCount, 2, "two data TRBs");
+    CHECK_EQ(XHCI_TRB_GET_LENGTH(out[1].Status), 128, "first fragment");
+    CHECK_EQ(XHCI_TRB_GET_TD_SIZE(out[1].Status), 14,
+             "30 packets less the 16 the first TRB holds");
+    CHECK_EQ(XHCI_TRB_GET_LENGTH(out[2].Status), 111, "second fragment");
+    CHECK_EQ(XHCI_TRB_GET_TD_SIZE(out[2].Status), 0, "last TRB: 0");
+    CHECK_EQ(out[1].Control & XHCI_TRB_CH, XHCI_TRB_CH, "chained");
+    CHECK_EQ(out[2].Control & XHCI_TRB_CH, 0, "the TD ends");
+    CHECK_EQ(out[2].Control & XHCI_TRB_ISP, XHCI_TRB_ISP, "ISP on both");
+}
+
+/*
  * "If a physical data buffer spans a 64KB boundary, software shall chain
  * multiple TRBs to describe the buffer" (spec 6.4.1 note). Keeping the length
  * under 64 KB is not sufficient - an element may start anywhere.
@@ -1063,6 +1111,7 @@ static void normal_request_init(XHCI_NORMAL_REQUEST *req,
     req->DirectionIn = directionIn;
     req->MaxPacketSize = mps;
     req->SgList = (sg != NULL) ? &sg->List : NULL;
+    req->MaxDataTrbs = 0;
 }
 
 static void test_build_normal_single(void)
@@ -4221,14 +4270,561 @@ static void test_event_high_pointer_refused(void)
     CHECK_EQ(fix.queue.ForeignEvents, 1, "neither counted");
 }
 
+/* ------------------------------------------------------------------ */
+/* 36.24: two TDs of one URB on one queue (record 13 section 11.6)      */
+/* ------------------------------------------------------------------ */
+
+typedef struct _PIPE64 {
+    XHCI_TRB mem[64];
+    XHCI_RING ring;
+    XHCI_TRANSFER_QUEUE queue;
+    XHCI_TRB scratch[XHCI_XFER_MAX_CONTROL_TRBS];
+    XHCI_TRANSFER td[6];
+    SG_BUFFER sg;
+} PIPE64;
+
+static PIPE64 p64;
+
+/* A bulk IN TD of `pages` page elements for slot `which`, its pages from
+ * `base`; the URB's record is the same parameters pointer for both TDs. */
+static ULONG p64_submit(ULONG which, ULONG pages, ULONG base, PVOID urb)
+{
+    XHCI_NORMAL_REQUEST req;
+    ULONG i;
+
+    sg_init(&p64.sg);
+    for (i = 0; i < pages; i++) {
+        sg_add(&p64.sg, base + i * 0x3000UL, 4096, i * 4096UL);
+    }
+    normal_request_init(&req, pages * 4096UL, 1, 1024, &p64.sg);
+    return XhciXferSubmitNormal(&p64.queue, &p64.ring, &req, 1,
+                                &p64.td[which], urb, p64.scratch,
+                                XHCI_XFER_MAX_CONTROL_TRBS);
+}
+
+static ULONG p64_event(ULONG index, ULONG code, ULONG residual,
+                       PXHCI_XFER_EVENT_RESULT result)
+{
+    return XhciXferEvent(&p64.queue, &p64.ring, FIX_SLOT, FIX_DCI,
+                         XhciRingTrbPA(&p64.ring, index),
+                         event_dw2(code, residual),
+                         event_dw3(FIX_SLOT, FIX_DCI), result);
+}
+
+static void p64_init(void)
+{
+    CHECK_EQ(XhciRingInit(&p64.ring, p64.mem, RING_PA, 64,
+                          XHCI_RING_KIND_ENDPOINT),
+             XHCI_RING_OK, "a 64-TRB ring");
+    XhciXferQueueInit(&p64.queue);
+}
+
+/* The engine's completed list through the record machine, in its order,
+ * as hcd_io.c's hcdWideRetired does: slot 0 is td[s0], slot 1 td[s1].
+ * Returns the finalizer's firings. */
+static ULONG p64_account(PXHCI_XPIPE_REC r, PXHCI_TRANSFER t, ULONG s0,
+                         ULONG removed)
+{
+    ULONG fires;
+    ULONG f;
+
+    fires = 0;
+    for (; t != NULL; t = t->Next) {
+        f = XhciXpipeRecRetire(r, (t == &p64.td[s0]) ? 0UL : 1UL,
+                               t->BytesTransferred, t->UsbdStatus, removed);
+        CHECK(!(f & XHCI_XPIPE_F_ORDER), "accounted in ring order");
+        if (f & XHCI_XPIPE_F_FINAL) {
+            fires++;
+        }
+    }
+    return fires;
+}
+
+static void test_xpipe_two_tds(void)
+{
+    XHCI_XFER_EVENT_RESULT result;
+    XHCI_XPIPE_REC rec;
+    PXHCI_TRANSFER list;
+    PVOID urb;
+    ULONG count;
+    ULONG fires;
+    ULONG k;
+
+    urb = (PVOID)0x7000UL;
+
+    /* Two 31-TRB TDs of one URB queued; they retire in ring order, the
+     * retired slot refilled each time, across many laps; the machine
+     * counts every byte and finalizes once. */
+    p64_init();
+    XhciXpipeRecInit(&rec, 22UL * 31UL * 4096UL, XHCI_XPIPE_MAP_ALLOCATED);
+    CHECK_EQ(p64_submit(0, 31, 0x10000000UL, urb), XHCI_XFER_OK, "TD 0");
+    (VOID)XhciXpipeRecPublish(&rec, 31UL * 4096UL);
+    CHECK_EQ(p64_submit(1, 31, 0x20000000UL, urb), XHCI_XFER_OK, "TD 1");
+    (VOID)XhciXpipeRecPublish(&rec, 31UL * 4096UL);
+    CHECK_EQ(p64.queue.Count, 2, "both on one queue");
+    CHECK_EQ(p64.td[0].TransferParameters, urb, "TD 0 names the URB");
+    CHECK_EQ(p64.td[1].TransferParameters, urb, "and so does TD 1");
+    CHECK_EQ(p64_submit(2, 1, 0x30000000UL, urb), XHCI_XFER_BUSY,
+             "nothing else fits beside them");
+    fires = 0;
+    for (k = 0; k < 22; k++) {
+        CHECK_EQ(p64_event(p64.td[k & 1UL].LastIndex, XHCI_CC_SUCCESS, 0,
+                           &result), XHCI_XFER_OK, "the older TD's event");
+        CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "it completes");
+        CHECK_EQ(result.CompletedCount, 1, "alone");
+        CHECK_EQ(result.Completed, &p64.td[k & 1UL], "the older, in order");
+        fires += p64_account(&rec, result.Completed, 0, 0);
+        if (k + 2 < 22) {
+            CHECK_EQ(p64_submit(k & 1UL, 31, 0x10000000UL + k * 0x100000UL,
+                                urb), XHCI_XFER_OK,
+                     "the refill reuses the retired slot");
+            (VOID)XhciXpipeRecPublish(&rec, 31UL * 4096UL);
+        }
+    }
+    CHECK_EQ(fires, 1, "the finalizer once");
+    CHECK_EQ(rec.Committed, 22UL * 31UL * 4096UL, "every byte");
+
+    /* Both in one event pass: a mid-TD short on TD 0 defers, then TD 1's
+     * own event sweeps it - two ordered completions, TD 0 with its
+     * measured length. The short sealed the boundary at TD 0, so TD 1's
+     * bytes - the device fed it - are not counted. */
+    p64_init();
+    XhciXpipeRecInit(&rec, 60UL * 4096UL, XHCI_XPIPE_MAP_ALLOCATED);
+    CHECK_EQ(p64_submit(0, 20, 0x10000000UL, urb), XHCI_XFER_OK, "TD 0");
+    (VOID)XhciXpipeRecPublish(&rec, 20UL * 4096UL);
+    CHECK_EQ(p64_submit(1, 20, 0x20000000UL, urb), XHCI_XFER_OK, "TD 1");
+    (VOID)XhciXpipeRecPublish(&rec, 20UL * 4096UL);
+    CHECK_EQ(p64_event(p64.td[0].FirstIndex + 5, XHCI_CC_SHORT_PACKET, 96,
+                       &result), XHCI_XFER_OK, "a short inside TD 0");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE, "deferred");
+    CHECK_EQ(p64_event(p64.td[1].LastIndex, XHCI_CC_SUCCESS, 0, &result),
+             XHCI_XFER_OK, "TD 1's event");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "completes");
+    CHECK_EQ(result.CompletedCount, 2, "both, in one pass");
+    CHECK_EQ(result.Completed, &p64.td[0], "TD 0 first, in ring order");
+    CHECK_EQ(result.Completed->Next, &p64.td[1], "then TD 1");
+    CHECK_EQ(p64.td[0].BytesTransferred, 6UL * 4096UL - 96UL,
+             "TD 0's measured length");
+    fires = p64_account(&rec, result.Completed, 0, 0);
+    CHECK_EQ(fires, 1, "final once, in that pass");
+    CHECK_EQ(rec.Committed, 6UL * 4096UL - 96UL, "the length before the "
+             "boundary");
+    CHECK_EQ(XhciXpipeRecStatus(&rec, 1, (LONG)0xC0000012L,
+                                      (LONG)WANT_USBD_CANCELED), 0,
+             "a short, success under ShortOk");
+
+    /* A short at TD 0's end with TD 1 queued: TD 0 completes, TD 1 stays
+     * queued - no ring edited - and the machine hands it over; the thread
+     * takes it off (XhciXferQueueRemove, as hcdCfgCancelPipe does) and its
+     * removal finalizes the URB with TD 0's length. */
+    p64_init();
+    XhciXpipeRecInit(&rec, 62UL * 4096UL, XHCI_XPIPE_MAP_ALLOCATED);
+    CHECK_EQ(p64_submit(0, 31, 0x10000000UL, urb), XHCI_XFER_OK, "TD 0");
+    (VOID)XhciXpipeRecPublish(&rec, 31UL * 4096UL);
+    CHECK_EQ(p64_submit(1, 31, 0x20000000UL, urb), XHCI_XFER_OK, "TD 1");
+    (VOID)XhciXpipeRecPublish(&rec, 31UL * 4096UL);
+    CHECK_EQ(p64_event(p64.td[0].LastIndex, XHCI_CC_SHORT_PACKET, 1000,
+                       &result), XHCI_XFER_OK, "a short at TD 0's end");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "TD 0 completes");
+    CHECK_EQ(result.CompletedCount, 1, "only TD 0");
+    CHECK_EQ(p64.td[0].BytesTransferred, 31UL * 4096UL - 1000UL,
+             "with the bytes the device moved");
+    CHECK_EQ(XhciXpipeRecRetire(&rec, 0, p64.td[0].BytesTransferred,
+                                p64.td[0].UsbdStatus, 0) &
+                 (XHCI_XPIPE_F_TRUNCATE | XHCI_XPIPE_F_FINAL),
+             XHCI_XPIPE_F_TRUNCATE, "the successor handed over, not final");
+    CHECK_EQ(p64.queue.Head, &p64.td[1], "TD 1 still queued, at the head");
+    CHECK_EQ(XhciXferQueueRemove(&p64.queue, &p64.td[1]), 1,
+             "the thread takes it off");
+    p64.td[1].UsbdStatus = (LONG)WANT_USBD_CANCELED;
+    p64.td[1].Next = NULL;
+    CHECK_EQ(p64_account(&rec, &p64.td[1], 0, 1), 1, "final on its removal");
+    CHECK_EQ(rec.Committed, 31UL * 4096UL - 1000UL, "TD 0's length");
+    CHECK_EQ(p64.queue.Count, 0, "the queue empty");
+
+    /* The cancel walk's capacity: three one-TD records and a pipelined
+     * fourth with two TDs on one ring together - five TDs, more than the
+     * four records a walk sized by records could hold. All five taken off
+     * (a drain, as hcdDrainOne), the pipelined record's two through its
+     * machine: final once, nothing counted. A full-size refill beside
+     * them would have waited for room (HCD_REFILL_BUSY). */
+    p64_init();
+    for (k = 0; k < 3; k++) {
+        CHECK_EQ(p64_submit(k, 1, 0x40000000UL + k * 0x10000UL,
+                            (PVOID)(0x7100UL + k)),
+                 XHCI_XFER_OK, "a one-TD record");
+    }
+    XhciXpipeRecInit(&rec, 58UL * 4096UL + 4096UL, XHCI_XPIPE_MAP_ALLOCATED);
+    CHECK_EQ(p64_submit(3, 29, 0x10000000UL, urb), XHCI_XFER_OK,
+             "the pipelined record's TD 0");
+    (VOID)XhciXpipeRecPublish(&rec, 29UL * 4096UL);
+    CHECK_EQ(p64_submit(4, 29, 0x20000000UL, urb), XHCI_XFER_OK,
+             "and its TD 1");
+    (VOID)XhciXpipeRecPublish(&rec, 29UL * 4096UL);
+    CHECK_EQ(p64.queue.Count, 5, "five TDs: more than four records");
+    CHECK(p64.queue.Count <= 2UL * 4UL,
+          "inside the walk's 2 * HCD_PIPE_XFERS");
+    CHECK_EQ(p64_submit(5, 31, 0x50000000UL, urb), XHCI_XFER_BUSY,
+             "a full-size refill waits for room");
+    (VOID)XhciXpipeRecStop(&rec, XHCI_XPIPE_OUT_STOP,
+                           (LONG)WANT_USBD_CANCELED);
+    list = XhciXferQueueDrain(&p64.queue, (LONG)WANT_USBD_CANCELED, &count);
+    CHECK_EQ(count, 5, "all five come back");
+    fires = 0;
+    for (; list != NULL; list = list->Next) {
+        if (list->TransferParameters == urb) {
+            k = XhciXpipeRecRetire(&rec, (list == &p64.td[3]) ? 0UL : 1UL,
+                                   list->BytesTransferred, list->UsbdStatus,
+                                   1);
+            CHECK(!(k & XHCI_XPIPE_F_ORDER), "in ring order");
+            if (k & XHCI_XPIPE_F_FINAL) {
+                fires++;
+            }
+        }
+    }
+    CHECK_EQ(fires, 1, "the pipelined record final once");
+    CHECK_EQ(rec.Committed, 0, "nothing moved, nothing counted");
+    CHECK_EQ(XhciXpipeRecStatus(&rec, 1, (LONG)0xC0000012L,
+                                      (LONG)WANT_USBD_CANCELED),
+             (LONG)WANT_USBD_CANCELED, "cancelled");
+}
+
+/* ------------------------------------------------------------------ */
+/* 36.25: the per-request cap, a 513-TRB TD, the ordered-list path      */
+/* ------------------------------------------------------------------ */
+
+typedef struct _SG_WIDE {
+    USBPORT_SCATTER_GATHER_LIST List;
+    USBPORT_SCATTER_GATHER_ELEMENT More[XHCI_XFER_MAX_WIDE_DATA_TRBS];
+} SG_WIDE;
+
+static SG_WIDE wsg;
+static XHCI_TRB wout[XHCI_XFER_MAX_WIDE_DATA_TRBS + 4];
+static XHCI_TRB wout2[XHCI_XFER_MAX_WIDE_DATA_TRBS + 4];
+
+/* `n` page elements from `firstLen` bytes into a page, scattered, in
+ * tiling order; returns the bytes. */
+static ULONG wsg_build(ULONG n, ULONG firstLen)
+{
+    ULONG i;
+    ULONG off;
+    ULONG len;
+
+    memset(&wsg, 0, sizeof(wsg));
+    off = 0;
+    for (i = 0; i < n; i++) {
+        len = (i == 0) ? firstLen : 4096UL;
+        wsg.List.SgElement[i].SgPhysicalAddressLo =
+            0x20000000UL + i * 3UL * 4096UL + ((i == 0) ? 4096UL - len : 0);
+        wsg.List.SgElement[i].SgTransferLength = len;
+        wsg.List.SgElement[i].SgOffset = off;
+        off += len;
+    }
+    wsg.List.SgElementCount = n;
+    return off;
+}
+
+static ULONG wbuild(ULONG cap, ULONG length, XHCI_TRB *out, ULONG *count)
+{
+    XHCI_NORMAL_REQUEST req;
+
+    memset(&req, 0, sizeof(req));
+    req.TransferLength = length;
+    req.DirectionIn = 1;
+    req.MaxPacketSize = 1024;
+    req.SgList = &wsg.List;
+    req.MaxDataTrbs = cap;
+    *count = 0;
+    return XhciXferBuildNormal(&req, 1, out, XHCI_XFER_MAX_WIDE_DATA_TRBS + 4,
+                               count);
+}
+
+static void test_wide_cap(void)
+{
+    XHCI_NORMAL_REQUEST req;
+    USBPORT_SCATTER_GATHER_LIST tiny;
+    ULONG count;
+    ULONG len;
+    ULONG i;
+    ULONG same;
+
+    /* 0 is today's 32; 513 accepted; 33 elements refused at 0. */
+    len = wsg_build(32, 4096);
+    CHECK_EQ(wbuild(0, len, wout, &count), XHCI_XFER_OK, "32 at cap 0");
+    len = wsg_build(33, 4096);
+    CHECK_EQ(wbuild(0, len, wout, &count), XHCI_XFER_TOO_MANY_TRBS,
+             "33 refused at cap 0, as today");
+    len = wsg_build(513, 512);
+    CHECK_EQ(wbuild(513, len, wout, &count), XHCI_XFER_OK, "513 at cap 513");
+    CHECK_EQ(count, 513, "one TRB an element");
+    CHECK_EQ(len, 512UL * 4096UL + 512UL, "2 MiB less 3.5 KiB");
+
+    /* Guard 1: a cap above 513, before the list is touched. */
+    memset(&req, 0, sizeof(req));
+    req.TransferLength = 4096;
+    req.DirectionIn = 1;
+    req.MaxPacketSize = 1024;
+    req.SgList = (const USBPORT_SCATTER_GATHER_LIST *)0x10;
+    req.MaxDataTrbs = 514;
+    CHECK_EQ(XhciXferBuildNormal(&req, 1, wout, 600, &count),
+             XHCI_XFER_BAD_PARAM, "cap 514 refused, the list unread");
+    /* Guard 2: a count above a valid cap, elements past the header never
+     * read (the list declares two). */
+    memset(&tiny, 0, sizeof(tiny));
+    tiny.SgElementCount = 600;
+    req.SgList = &tiny;
+    req.MaxDataTrbs = 513;
+    CHECK_EQ(XhciXferBuildNormal(&req, 1, wout, 600, &count),
+             XHCI_XFER_TOO_MANY_TRBS, "600 elements over 513, unread");
+    /* Guard 3: within the cap, but one element crosses 64 KiB and needs
+     * two TRBs - the per-TRB guard. */
+    memset(&wsg, 0, sizeof(wsg));
+    wsg.List.SgElement[0].SgPhysicalAddressLo = 0x2000F000UL;
+    wsg.List.SgElement[0].SgTransferLength = 8192;
+    wsg.List.SgElementCount = 1;
+    CHECK_EQ(wbuild(1, 8192, wout, &count), XHCI_XFER_TOO_MANY_TRBS,
+             "cap 1, one element as two TRBs: refused per TRB");
+    CHECK_EQ(wbuild(2, 8192, wout, &count), XHCI_XFER_OK, "cap 2 takes it");
+
+    /* The ordered path and the scan give the same TRBs: an ordered list,
+     * then the same elements reversed and shuffled. */
+    len = wsg_build(40, 4096);
+    CHECK_EQ(wbuild(40, len, wout, &count), XHCI_XFER_OK, "ordered");
+    for (i = 0; i < 20; i++) {
+        USBPORT_SCATTER_GATHER_ELEMENT t;
+
+        t = wsg.List.SgElement[i];
+        wsg.List.SgElement[i] = wsg.List.SgElement[39 - i];
+        wsg.List.SgElement[39 - i] = t;
+    }
+    CHECK_EQ(wbuild(40, len, wout2, &count), XHCI_XFER_OK, "reversed");
+    same = memcmp(wout, wout2, 40 * sizeof(XHCI_TRB)) == 0;
+    CHECK(same, "reversed: the same TRBs");
+    for (i = 0; i < 40; i += 3) {
+        USBPORT_SCATTER_GATHER_ELEMENT t;
+
+        t = wsg.List.SgElement[i];
+        wsg.List.SgElement[i] = wsg.List.SgElement[(i * 7UL) % 40UL];
+        wsg.List.SgElement[(i * 7UL) % 40UL] = t;
+    }
+    memset(wout2, 0, sizeof(wout2));
+    CHECK_EQ(wbuild(40, len, wout2, &count), XHCI_XFER_OK, "shuffled");
+    same = memcmp(wout, wout2, 40 * sizeof(XHCI_TRB)) == 0;
+    CHECK(same, "shuffled: the same TRBs");
+}
+
+/* A 513-TRB TD on a 1024-TRB ring, across the Link TRB, on both laps'
+ * cycles; a short at its 400th TRB with the tail, without it (settled),
+ * and swept by a later TD; removal; Set TR Dequeue past it. */
+static struct {
+    XHCI_TRB mem[1024];
+    XHCI_RING ring;
+    XHCI_TRANSFER_QUEUE queue;
+    XHCI_TRANSFER td[3];
+} big;
+
+static XHCI_TRB bscratch[XHCI_XFER_MAX_WIDE_DATA_TRBS + 2];
+
+static ULONG big_submit(ULONG which, ULONG n)
+{
+    XHCI_NORMAL_REQUEST req;
+    ULONG len;
+
+    len = wsg_build(n, 4096);
+    memset(&req, 0, sizeof(req));
+    req.TransferLength = len;
+    req.DirectionIn = 1;
+    req.MaxPacketSize = 1024;
+    req.SgList = &wsg.List;
+    req.MaxDataTrbs = XHCI_XFER_MAX_WIDE_DATA_TRBS;
+    return XhciXferSubmitNormal(&big.queue, &big.ring, &req, 1,
+                                &big.td[which], (PVOID)0x9000UL, bscratch,
+                                XHCI_XFER_MAX_WIDE_DATA_TRBS + 2);
+}
+
+static ULONG big_event(ULONG index, ULONG code, ULONG residual,
+                       PXHCI_XFER_EVENT_RESULT result)
+{
+    return XhciXferEvent(&big.queue, &big.ring, FIX_SLOT, FIX_DCI,
+                         XhciRingTrbPA(&big.ring, index),
+                         event_dw2(code, residual),
+                         event_dw3(FIX_SLOT, FIX_DCI), result);
+}
+
+static void big_fill(ULONG at)
+{
+    XHCI_TD_COMPLETION completion;
+    XHCI_NORMAL_REQUEST req;
+    ULONG len;
+
+    while (big.ring.Enqueue != at) {
+        len = wsg_build(1, 4096);
+        memset(&req, 0, sizeof(req));
+        req.TransferLength = len;
+        req.DirectionIn = 1;
+        req.MaxPacketSize = 1024;
+        req.SgList = &wsg.List;
+        (VOID)XhciXferSubmitNormal(&big.queue, &big.ring, &req, 1,
+                                   &big.td[2], (PVOID)0x9100UL, bscratch,
+                                   XHCI_XFER_MAX_WIDE_DATA_TRBS + 2);
+        (VOID)XhciRingClassifyEvent(&big.ring,
+                                    XhciRingTrbPA(&big.ring,
+                                                  big.td[2].LastIndex),
+                                    XHCI_CC_SUCCESS, &completion);
+        (VOID)XhciRingRetireTd(&big.ring, &completion);
+        XhciXferQueueInit(&big.queue);
+    }
+}
+
+static void big_park(ULONG at)
+{
+    CHECK_EQ(XhciRingInit(&big.ring, big.mem, RING_PA, 1024,
+                          XHCI_RING_KIND_ENDPOINT),
+             XHCI_RING_OK, "a 1024-TRB ring");
+    XhciXferQueueInit(&big.queue);
+    big_fill(at);
+}
+
+static void test_wide_td(void)
+{
+    XHCI_XFER_EVENT_RESULT result;
+    ULONG lap;
+    ULONG at;
+    ULONG idx;
+    ULONG k;
+
+    for (lap = 0; lap < 2; lap++) {
+        /* Parked so the TD crosses the Link TRB; the second lap after one
+         * whole wrap, on the other cycle. */
+        big_park(800);
+        if (lap == 1) {
+            CHECK_EQ(big_submit(0, 513), XHCI_XFER_OK, "a first lap's TD");
+            CHECK_EQ(big_event(big.td[0].LastIndex, XHCI_CC_SUCCESS, 0,
+                               &result), XHCI_XFER_OK, "retired");
+            XhciXferQueueInit(&big.queue);
+            big_fill(800);
+            CHECK_EQ(big.ring.Cycle, 0, "the second lap's cycle");
+        }
+        at = big.ring.Enqueue;
+        CHECK_EQ(big_submit(0, 513), XHCI_XFER_OK,
+                 "a 513-TRB TD across the Link TRB");
+        CHECK_EQ(big.td[0].DataTrbCount, 513, "513 data TRBs");
+        CHECK(big.td[0].LastIndex < at, "it wraps");
+        CHECK(big.mem[1023].Control & XHCI_TRB_CH,
+              "the Link carries Chain inside the TD");
+        /* A short at its 400th TRB, then the tail: TD 0's length is the
+         * prefix up to TRB 400 less the residual. */
+        idx = big.td[0].FirstIndex;
+        for (k = 0; k < 399; k++) {
+            idx = XhciRingNextIndex(&big.ring, idx);
+        }
+        CHECK_EQ(big_event(idx, XHCI_CC_SHORT_PACKET, 1000, &result),
+                 XHCI_XFER_OK, "a short at TRB 400");
+        CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE, "deferred");
+        CHECK_EQ(big_event(big.td[0].LastIndex, XHCI_CC_SHORT_PACKET, 0,
+                           &result), XHCI_XFER_OK, "the tail");
+        CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "completes");
+        CHECK_EQ(big.td[0].BytesTransferred, 400UL * 4096UL - 1000UL,
+                 "the prefix less the residual, kept by the tail");
+        CHECK_EQ(XhciRingFree(&big.ring), XhciRingCapacity(&big.ring),
+                 "every TRB back");
+    }
+
+    /* The tail absent: an empty-drain settle completes it. */
+    big_park(100);
+    CHECK_EQ(big_submit(0, 300), XHCI_XFER_OK, "a 300-TRB TD");
+    idx = big.td[0].FirstIndex + 99;
+    CHECK_EQ(big_event(idx, XHCI_CC_SHORT_PACKET, 96, &result), XHCI_XFER_OK,
+             "a short at TRB 100");
+    CHECK_EQ(XhciXferDrainSettled(&big.queue, &big.ring, &result),
+             XHCI_XFER_OK, "the settle");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "completes it");
+    CHECK_EQ(big.td[0].BytesTransferred, 100UL * 4096UL - 96UL,
+             "its first measured length");
+
+    /* Swept by a later TD's event. */
+    big_park(10);
+    CHECK_EQ(big_submit(0, 300), XHCI_XFER_OK, "TD 0, 300 TRBs");
+    CHECK_EQ(big_submit(1, 300), XHCI_XFER_OK, "TD 1, 300 TRBs");
+    CHECK_EQ(big_event(big.td[0].FirstIndex + 9, XHCI_CC_SHORT_PACKET, 4,
+                       &result), XHCI_XFER_OK, "a short in TD 0");
+    CHECK_EQ(big_event(big.td[1].LastIndex, XHCI_CC_SUCCESS, 0, &result),
+             XHCI_XFER_OK, "TD 1's event");
+    CHECK_EQ(result.CompletedCount, 2, "both");
+    CHECK_EQ(big.td[0].BytesTransferred, 10UL * 4096UL - 4UL,
+             "TD 0 keeps its measured length");
+
+    /* Removal with a survivor behind it, as the cancel walk does it: the
+     * wrapped 513-TRB head taken off and Set TR Dequeue to the survivor's
+     * first TRB, the command's pointer and DCS read from the ring, on both
+     * laps' cycles. */
+    for (lap = 0; lap < 2; lap++) {
+        XHCI_TRB cmd;
+        ULONG dcs;
+
+        big_park(900);
+        if (lap == 1) {
+            CHECK_EQ(big_submit(0, 513), XHCI_XFER_OK, "a first lap's TD");
+            CHECK_EQ(big_event(big.td[0].LastIndex, XHCI_CC_SUCCESS, 0,
+                               &result), XHCI_XFER_OK, "retired");
+            XhciXferQueueInit(&big.queue);
+            big_fill(900);
+        }
+        CHECK_EQ(big_submit(0, 513), XHCI_XFER_OK, "a wrapped 513-TRB TD");
+        CHECK_EQ(big_submit(1, 4), XHCI_XFER_OK, "a survivor behind it");
+        CHECK_EQ(XhciXferQueueRemove(&big.queue, &big.td[0]), 1,
+                 "the head taken off");
+        CHECK_EQ(XhciRingSetDequeue(&big.ring,
+                                    XhciRingTrbPA(&big.ring,
+                                                  big.td[1].FirstIndex)),
+                 XHCI_RING_OK, "the dequeue moved to the survivor");
+        dcs = XhciRingDequeueCycle(&big.ring);
+        CHECK_EQ(XhciTrbSetTrDequeue(&cmd, FIX_SLOT, FIX_DCI,
+                                     XhciRingDequeuePA(&big.ring), dcs),
+                 XHCI_RING_OK, "the command built");
+        CHECK_EQ(cmd.Param0 & ~0xFUL,
+                 XhciRingTrbPA(&big.ring, big.td[1].FirstIndex),
+                 "its pointer is the survivor's first TRB");
+        CHECK_EQ(cmd.Param0 & 1UL, (big.mem[big.td[1].FirstIndex].Control &
+                                    XHCI_TRB_CYCLE),
+                 "its DCS is the survivor's cycle");
+        CHECK_EQ(big_event(big.td[1].LastIndex, XHCI_CC_SUCCESS, 0, &result),
+                 XHCI_XFER_OK, "the survivor completes");
+        CHECK_EQ(result.Completed, &big.td[1], "alone");
+        CHECK_EQ(XhciRingFree(&big.ring), XhciRingCapacity(&big.ring),
+                 "the ring empty again");
+    }
+
+    /* A drain takes a big TD and a survivor alike, the ring untouched. */
+    big_park(500);
+    CHECK_EQ(big_submit(0, 513), XHCI_XFER_OK, "a 513-TRB TD");
+    CHECK_EQ(big_submit(1, 4), XHCI_XFER_OK, "and another");
+    {
+        PXHCI_TRANSFER list;
+        ULONG count;
+        ULONG enq;
+
+        enq = big.ring.Enqueue;
+        list = XhciXferQueueDrain(&big.queue, (LONG)WANT_USBD_CANCELED,
+                                  &count);
+        CHECK_EQ(count, 2, "both drained");
+        CHECK_EQ(list, &big.td[0], "the big one first");
+        CHECK_EQ(big.ring.Enqueue, enq, "the ring untouched");
+    }
+}
+
 int main(void)
 {
+    test_xpipe_two_tds();
+    test_wide_cap();
+    test_wide_td();
     test_completion_code_mapping();
     test_build_no_data();
     test_build_in_data();
     test_build_out_data();
     test_build_td_size();
     test_build_td_size_saturates();
+    test_build_ls_report_descriptor();
     test_build_64k_split();
     test_build_sg_order();
     test_build_refusals();

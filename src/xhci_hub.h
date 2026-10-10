@@ -513,4 +513,38 @@ ULONG XhciHubExV2Flags(ULONG connected, ULONG speedClass, ULONG plus,
  * ConnectionIndex kept, Length the structure's, then the two words. */
 VOID XhciHubExV2Fill(UCHAR *buf, ULONG protocols, ULONG flags);
 
+/*
+ * IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION (0x00220410; task 36.45,
+ * design record 13 section 8.11): the 12-byte USB_DESCRIPTOR_REQUEST -
+ * ULONG ConnectionIndex, then bmRequest, bRequest, wValue, wIndex, wLength
+ * (usbioctl.h, #pragma pack(1)) - and Data after it. usbhub's checks
+ * (static, legal-provenance.md section 4): TOO_SMALL for an input or an
+ * output shorter than the request, or a wLength above the output's room;
+ * bmRequest and bRequest are not read, the request is always GET_DESCRIPTOR.
+ * Then DEVICE for the device descriptor (wValue 0100h) and CONFIG for
+ * configuration 0 (0200h), which the bus's copies answer, and FORWARD for
+ * anything else, sent to the device. The plan's Send is the setup's
+ * wLength: Length, held to `cap` - the bus's EP0 scratch - when forwarded.
+ */
+#define XHCI_HUB_DR_REQUEST_BYTES     12UL
+#define XHCI_HUB_DR_TOO_SMALL         1UL
+#define XHCI_HUB_DR_DEVICE            2UL
+#define XHCI_HUB_DR_CONFIG            3UL
+#define XHCI_HUB_DR_FORWARD           4UL
+
+typedef struct _XHCI_HUB_DESC_PLAN {
+    ULONG Port;                     /* ConnectionIndex                   */
+    ULONG Value;                    /* wValue: type << 8 | index         */
+    ULONG Index;                    /* wIndex: a string's language id    */
+    ULONG Length;                   /* wLength, within the output's room */
+    ULONG Send;                     /* the setup's wLength               */
+} XHCI_HUB_DESC_PLAN;
+
+ULONG XhciHubDescPlan(const UCHAR *buf, ULONG inLen, ULONG outLen, ULONG cap,
+                      XHCI_HUB_DESC_PLAN *plan);
+
+/* IoStatus.Information for a request answered with `received` bytes: the
+ * request and the bytes, never more than the setup asked for. */
+ULONG XhciHubDescInfo(const XHCI_HUB_DESC_PLAN *plan, ULONG received);
+
 #endif /* XHCI_HUB_H */
