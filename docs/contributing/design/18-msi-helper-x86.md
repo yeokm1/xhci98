@@ -1190,8 +1190,10 @@ SP1 x86, Vista SP2 x64 and 7 SP1 x64, each with `qemu-xhci`
   descriptor does not say MSI from MSI-X). Section 4.2's withdrawal does
   not apply.
 - **R2: the device-private is the device's, not the message's.** With
-  `MSISupported` 0 (7 x64 and Vista x64) Windows built one configuration
-  of four: the same `[0.0]` to `[0.2]`, the device-private included, and
+  `MSISupported` 0 (read on all four: 7 x64 and Vista x64 first, then 7
+  SP1 x86 and Vista SP2 x86 with the helper bound, the hardware key's
+  value set to 0 and the controller disabled and enabled) Windows built
+  one configuration of four, the same on each: the same `[0.0]` to `[0.2]`, the device-private included, and
   the line heading its run (option 0, share 3). So the device-private
   stays whatever the interrupt is, and the strip, which copies it, needs
   no amendment. The strip of R1's list is that list as the trace shows
