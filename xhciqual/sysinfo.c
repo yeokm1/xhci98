@@ -354,12 +354,11 @@ static void take(const SMB_STRUCT *st, u8 type, SYSINFO *si)
  * orders, ignoring case and separators. The identifier itself is never
  * stored in SYSINFO.
  *
- * **Except a firmware placeholder** (review round 3, P1; orchestrator
- * decision, owner to confirm): a value the same on every unit identifies
- * none, and matching it would withhold most of a header - a serial of "0"
- * appears in every BIOS date. A placeholder is a WHOLE value on the closed
- * list below (review round 4); anything else of any length is matched as
- * a substring.
+ * **No exception for firmware placeholders** (review rounds 3 to 5): a
+ * list of "fillers" cannot know that this unit's "123456789" is not its
+ * serial, and the rule is absolute. So a serial of "0" or "Default string"
+ * withholds every printed string holding it, a BIOS date included; a
+ * header with "(withheld)" in it is the price.
  *
  * And when the walk cannot finish - a malformed structure, or a table
  * longer than SMB_TABLE_MAX or 4096 structures - an identifier in the
@@ -406,43 +405,9 @@ static int contains_nocase(const char *hay, const char *needle)
     return 0;
 }
 
-/* Stock firmware fillers (review round 4: a closed list, each matched as
- * the WHOLE value, ignoring case - never a substring, never a pattern, so
- * "Serial Number: SN-123" or "77777777" is an identifier like any other).
- * Each is a string vendors ship unchanged on every unit. */
-static const char *const fillers[] = {
-    "0", "1", "00000000", "0000000000", "123456789", "1234567890",
-    "0123456789", "FFFFFFFF", "XXXXXXXX", "None", "N/A", "NA", "Unknown",
-    "Default", "Default string", "OEM", "O.E.M.", "To Be Filled By O.E.M.",
-    "To be filled by O.E.M.", "Fill By OEM", "Not Specified",
-    "Not Available", "Not Applicable", "Not Defined", "Serial Number",
-    "System Serial Number", "Chassis Serial Number",
-    "Base Board Serial Number", "Type2 - Board Serial Number",
-    "Type3 - Chassis Serial Number", "Asset Tag", "No Asset Tag",
-    "No Asset Information", "Asset-1234567890", "Type2 - Board Asset Tag",
-    "Type3 - Chassis Asset Tag", "SKU", "System SKUNumber",
-    "Default SKU", 0
-};
-
-static int is_placeholder(const char *id)
-{
-    size_t n;
-    int i;
-
-    n = strlen(id);
-    for (i = 0; fillers[i] != 0; i++) {
-        if (strlen(fillers[i]) == n && contains_nocase(id, fillers[i]))
-            return 1;
-    }
-    return 0;
-}
-
-/* Does `shown` carry `id`: anywhere, ignoring case, unless id is a
- * placeholder. */
+/* Does `shown` carry `id`: anywhere, ignoring case, whatever its length. */
 static int carries(const char *shown, const char *id)
 {
-    if (id[0] == '\0' || is_placeholder(id))
-        return 0;
     return contains_nocase(shown, id);
 }
 

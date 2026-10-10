@@ -1058,13 +1058,10 @@ may point a manufacturer at the serial's string, or put a serial's text in
 a product name, so after the walk each identifier string (those above, and
 Type 17's serial, asset tag and part number) is compared with every string
 the header prints, and one that contains it anywhere, ignoring case,
-prints `(withheld)`. The one exception is a firmware placeholder, a value
-the same on every unit and so no identifier: a closed list in `sysinfo.c`
-(`0`, `00000000`, `FFFFFFFF`, `System Serial Number`, `To Be Filled By
-O.E.M.`, `Default string`, `Not Specified`, `None` and the like), each
-matched as the whole value only, so `Serial Number: SN-123` or `77777777`
-is an identifier like any other. Matching the fillers would withhold every
-BIOS date that holds a 0 (orchestrator decision, owner to confirm). Type 1's UUID is
+prints `(withheld)`, whatever the identifier's length. There is no
+exception for firmware fillers: no list can know that this unit's
+`123456789` is not its serial, so a serial of `0` or `Default string`
+withholds every printed string holding it, a BIOS date included. Type 1's UUID is
 compared as 32 hex digits in both byte orders, ignoring case, dashes and
 braces. A field added to `SYSINFO` is a field every pasted report
 publishes; the host suite and the QEMU cases plant every identifier,

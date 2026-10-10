@@ -962,7 +962,8 @@ static void test_aliasing2(void)
     render_short(&si);
     CHECK(!has("A12") && !has("a12"), "short serial: not in the short lines");
 
-    /* A one-character placeholder serial "0" does not eat dates. */
+    /* A one-character serial "0" (review round 5: no placeholder exception)
+     * withholds every string holding a 0. */
     tlen = 0;
     memset(tab, 0, sizeof(tab));
     {
@@ -976,11 +977,12 @@ static void test_aliasing2(void)
     add(127, f, 4, 0);
     memset(&si, 0, sizeof(si));
     smb_parse_table(tab, tlen, 0, &si);
-    CHECK(strcmp(si.sys_mfr, "Maker 0") == 0 &&
-          strcmp(si.sys_product, "01/02/2026") == 0 &&
-          strcmp(si.sys_version, "1.0") == 0, "placeholder \"0\": all kept");
+    CHECK(strcmp(si.sys_mfr, "(withheld)") == 0 &&
+          strcmp(si.sys_product, "(withheld)") == 0 &&
+          strcmp(si.sys_version, "(withheld)") == 0, "serial \"0\": withheld");
 
-    /* A stock filler as the serial does not withhold the same filler. */
+    /* A stock filler as the serial (and an allowed field naming it, review
+     * round 5) is withheld like any value. */
     tlen = 0;
     memset(tab, 0, sizeof(tab));
     {
@@ -994,8 +996,8 @@ static void test_aliasing2(void)
     add(127, f, 4, 0);
     memset(&si, 0, sizeof(si));
     smb_parse_table(tab, tlen, 0, &si);
-    CHECK(strcmp(si.sys_product, "System Serial Number") == 0,
-          "filler serial: kept");
+    CHECK(strcmp(si.sys_product, "(withheld)") == 0 &&
+          strcmp(si.sys_mfr, "Maker") == 0, "filler serial: withheld");
 
     /* Review round 4: a labelled or repeated-digit serial is no filler. */
     {
