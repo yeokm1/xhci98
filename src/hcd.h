@@ -1747,6 +1747,12 @@ typedef struct _HCD_HUB_FDO {
      * the settle generation the start asked for. */
     ULONG SettlePending;
     ULONG SettleTarget;
+    /* System power (design record 13 section 10.12): the system IRP held
+     * while the device IRP it asked for runs, and the work item that
+     * completes it at PASSIVE_LEVEL when that IRP finished above it. One
+     * system IRP at a time - the power manager serializes them. */
+    PIRP PendingSystemIrp;
+    WORK_QUEUE_ITEM PowerWork;
 } HCD_HUB_FDO, *PHCD_HUB_FDO;
 
 #define HcdControllerFromExt(ext) \
