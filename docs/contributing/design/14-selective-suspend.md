@@ -622,9 +622,14 @@ SuperSpeed PDO, the idle IRP is held as before (`hcd_urb.c`, its own slot
   client's callback asked D0 and waited, and the thread never finished
   the resume). Every IRP they claim is completed at PASSIVE_LEVEL by a
   system work item of its own (`hcdSuspDefer`, the item in the IRP's
-  `DriverContext`): D-IRPs on the critical queue, WAIT_WAKEs and idle IRPs
-  on the delayed one, so a callback waiting for a D0 never holds the D0's
-  completion. Its claimed status is fixed at the claim; the IRP keeps its
+  `DriverContext`): a D0 on the critical queue; a Dx, a WAIT_WAKE and an
+  idle IRP on the delayed one - so a completion callback that asks for a D0
+  and waits (the pattern seen) never holds the queue the D0's completion
+  needs, and a D0 callback that asks for a Dx neither. The residual a
+  work item cannot close - its last instructions after the count that the
+  stop reads - is the one design record 18 section 14.8 records for every
+  ExQueueWorkItem of this driver; the stop's drain waits a further
+  interval after the count reaches 0. Its claimed status is fixed at the claim; the IRP keeps its
   `PowerPending` or `IdlePending` count until the completion; the stop
   waits for every item (`HcdSuspDoneDrain`).
 - **The controller's stop** runs the handoff (`HcdSuspCbStop`) after the
@@ -909,9 +914,9 @@ Teardown completes it `STATUS_NO_SUCH_DEVICE` (removal, GONE) or
   the claim and its status fixed in that hold, the completion itself made
   by a work item of the IRP's own outside the thread (3.12, the thread's
   completions), so it may land before, during or after the resume - a WAIT_WAKE completes when the wake is
-  signalled, as usbhub's do. There is no interval between claim and
-  completion to own, and a resume that then fails or a GONE that follows
-  changes nothing for them: the function's D0 pends until ACTIVE or GONE
+  signalled, as usbhub's do. Between the claim and that completion the
+  IRP is the work item's alone, its status already fixed, and a resume
+  that then fails or a GONE that follows changes nothing for it: the function's D0 pends until ACTIVE or GONE
   (4.3, 4.4). A WAIT_WAKE accepted while SUSPENDED and armed is stamped
   before the event and so is completed by it.
 - **Unarmed but now wanted.** A WAIT_WAKE accepted while the device is

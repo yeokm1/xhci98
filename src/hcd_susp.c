@@ -324,8 +324,9 @@ static VOID hcdSuspTake(PHCD_SUSP_TAKEN t, PHCD_DEVICE_PDO pdo, PIRP irp,
  * IRP, so a callback that waits for a D0 holds only its own item, never
  * the D0's completion (Codex review of the fix, round 1, finding 1): a
  * D-IRP's on the critical work queue, a WAIT_WAKE's and an idle IRP's on
- * the delayed one, so a waiting callback cannot hold up the D-IRP it waits
- * for even where each queue has a single thread. The item lives in the
+ * the delayed one - refined: a D0 on the critical queue, a Dx with the
+ * WAIT_WAKEs and idle IRPs on the delayed one - so a waiting callback cannot
+ * hold up the D0 it waits for even where each queue has a single thread. The item lives in the
  * claimed IRP's DriverContext (its cancel routine, which used it, is
  * excluded by the claim); the kind and the controller ride in
  * Tail.Overlay.ListEntry and the status in IoStatus.Information until the
@@ -389,8 +390,12 @@ static VOID hcdSuspDefer(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo, PIRP irp,
     (VOID)InterlockedIncrement(&hc->SuspDoneBusy);
     item = (PWORK_QUEUE_ITEM)&irp->Tail.Overlay.DriverContext[0];
     ExInitializeWorkItem(item, hcdSuspDoneWork, irp);
-    ExQueueWorkItem(item, (kind == HCD_SUSP_DONE_POWER) ? CriticalWorkQueue
-                                                         : DelayedWorkQueue);
+    /* A D0 on the critical queue, everything else on the delayed one: a
+     * callback that asks for a D0 and waits never holds the queue the D0
+     * needs (Codex review of the fix, round 2, finding 1). */
+    ExQueueWorkItem(item, (kind == HCD_SUSP_DONE_POWER && value != 0)
+                              ? CriticalWorkQueue
+                              : DelayedWorkQueue);
 }
 
 /* The thread's claims, deferred (a START's report, no IRP, made here). */
@@ -2111,6 +2116,12 @@ VOID HcdSuspDoneDrain(PHCD_CONTROLLER hc)
         HcdRelativeMs(&due, 1);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
     }
+    /* The last item's return after its decrement is not proven by the
+     * count (Codex review of the fix, round 2, finding 2; design record
+     * 18 section 14.8's residual for every ExQueueWorkItem here): a
+     * further interval narrows it. */
+    HcdRelativeMs(&due, 20);
+    (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
 }
 
 /* ------------------------------------------------------------------ */
