@@ -11,10 +11,14 @@ each change was read. Where this file and
 copy to fix.
 
 **TEST 2.2.0.3, bench pending.** The text marked "new in `2.3.0.0`"
-describes the next release, and `2.2.0.3` is a local test build of it for
-the owner's bench, not a release. Its changes were read in QEMU virtual
-machines only; the bench readings on real hardware are pending, and
-`2.3.0.0` is cut after them. "What `2.3.0.0` changes", below, lists them.
+describes the next release, and `2.2.0.3` (`DriverVer`
+`10/10/2026,2.2.0.3`) is a local test build of it for the owner's bench,
+not a release: it is not published, and `releases/history.md` has no entry
+for it. Its changes were read in QEMU virtual machines, or rest on host
+tests where QEMU models no such device or controller; none has been read
+on real hardware. The bench readings are pending, and `2.3.0.0` is cut
+after them.
+"What `2.3.0.0` changes", below, lists them.
 
 The notes for `1.2.0.0`, the last release of the USB 2.0-only miniport, stay
 as they were published: on the `1.2.0.0` branch,
@@ -1852,6 +1856,16 @@ or says it was found by reading the code.
   unplugged meanwhile is seen until then; closing the wizard brings them
   all at once. Keys typed into the abandoned wizard wedged the machine.
   The same happens on Windows 98 SE's own USB stack and under `2.2.0.0`.
+- **Windows 98 SE: Stand by is untested on real hardware; remove USB disks
+  before Stand by.** It has been read only in QEMU virtual machines, where
+  Windows 98 SE itself does not resume reliably: after the wake, a program
+  run at an MS-DOS prompt, or Ctrl+Alt+Del, can stop with a fatal exception
+  0E in `KERNEL32` even with no USB controller in the machine, and with a USB
+  disk attached the resume stops before the desktop returns, under this
+  driver and under NUSB's USB 2.0 (EHCI) driver alike; Windows 98 SE's own
+  UHCI driver did not resume at all there. With only a USB mouse attached,
+  at a root port or behind a hub, the resume completed and the mouse
+  worked through this driver.
 - **Windows 98 shows no driver version on the Driver tab**, only the file
   date; the four-part version is under Driver File Details, which also lists
   `xhci98.tmp`, a leftover of the install's temporary copy (cosmetic).
@@ -1903,14 +1917,21 @@ or says it was found by reading the code.
   machine ends it. Seen in virtual machines on Windows 98 SE and 2000 with
   the fault made on purpose. Restart the machine instead of disabling the
   controller. A later release may release what is kept at the stop.
-- **Windows 2000: after the driver recovers the controller, a USB drive
-  whose volume was mounted may come back at Code 31** (same section). The
+- **Windows 2000: after the driver recovers the controller, or after a
+  resume from hibernation, a USB drive whose volume was mounted may come
+  back at Code 31** (same section). The
   mouse and other devices come back; the drive stays at Code 31 until it
   is unplugged and plugged in again, or the controller is disabled and
   enabled in Device Manager. Seen in a virtual machine (five times of five
   with the volume mounted); Windows 98 SE did not show it. The recovery
   path is the one `2.1.1.0` has, but `2.2.0.0` recovers the controller on
-  more faults.
+  more faults. Seen again in `2.3.0.0`'s virtual-machine tests on Windows
+  2000: after a recovery with the controller polled (`XhciInterruptMode`
+  `2`), and after a resume from hibernation. A controller that lost its
+  state across the hibernation, as QEMU's does, is started afresh, and the
+  driver then finds every device again as on a recovery. Each time, a
+  restart of the drive's own device cleared it (read with a command-line
+  device restart, not in Device Manager).
 - **Windows 98 SE and ME: a device name with characters outside plain ASCII
   shows them as `?`.** See "Devices and hubs in Device Manager".
 - **Windows XP and XP x64 installed with the F6 floppy: GUI-mode Setup asks
@@ -1964,7 +1985,7 @@ what `2.3.0.0` adds:
 | Windows 98 SE: USB audio could stutter while a drive was read at full speed | Not re-measured under `2.0.0.0` |
 | Windows 2000: a newer package over an older one was refused; disabling the controller with an audio device attached asked for a restart | The upgrade from `1.2.0.0` installs in place on Windows 2000. The disable with an audio device attached was not re-measured |
 | Windows 98: a driver that failed while starting the controller stopped the machine with a protection error | Not re-measured: no failing start was provoked under `2.0.0.0` |
-| On a controller without Force Save Context, a wake from standby rebuilt the bus | Under `2.0.0.0`: untested, the power handlers had not run. Since `2.3.0.0` (read in QEMU, which has no Force Save Context): hibernate and resume on XP, Vista and 7, and standby and hibernate on ME, idle, rebuild the bus through the controller's reinitialization and every device is found again; with a copy running on a stick on XP, Vista and 7, the copy's requests fail for about 10 s while the stick is found again, then work. Open: Windows ME hangs on a standby or hibernate with a copy running on an xHCI stick, and Windows 98 SE's idle standby leaves USB dead after the wake. Standby on the other systems, and with devices suspended, is not yet read |
+| On a controller without Force Save Context, a wake from standby rebuilt the bus | Under `2.0.0.0`: untested, the power handlers had not run. Since `2.3.0.0` (read in QEMU, which has no Force Save Context): hibernate and resume on XP, Vista and 7, and standby and hibernate on ME, idle, rebuild the bus through the controller's reinitialization and every device is found again; with a copy running on a stick on XP, Vista and 7, the copy's requests fail for about 10 s while the stick is found again, then work. Open: Windows ME hangs on a standby or hibernate with a copy running on an xHCI stick. Windows 98 SE's standby resumed with a USB mouse at a root port or behind a hub, and stopped with a USB disk attached, as it does under NUSB's EHCI driver; QEMU's Windows 98 SE does not resume reliably with no USB controller either (the 98 SE Stand by entry in "Known limitations"). Standby on the other systems, and with devices suspended, is not yet read |
 | The virtual High-Speed hub switch and its costs. It also did nothing unless `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid` were set beside `XhciVirtualHSHub`, since `1.2.0.0` has no default for either (reported on GitHub issue 4, 2026-10-03) | No switch: all three values have no effect (see "Registry settings") |
 
 ## Untested ground

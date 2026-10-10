@@ -2788,6 +2788,9 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $contents += ("      {0}" -f $s.UasSha256)
         $contents += "      txtsetup.oem (for Windows 2000 and XP Setup's F6 prompt)"
         $contents += "      portsw.vbs   (turns XhciIntelPortSwitch on or off; section 9)"
+        if ($leg.Arch -eq "x86") {
+            $contents += "      xhcimsi.sys  (the MSI helper for 32-bit Vista and 7; section 4)"
+        }
         $contents += ""
     }
     if ($multiArch) {
@@ -2998,15 +3001,21 @@ disk, and run ONE command:
       XHCIQUAL
 
 That is it - no arguments. It is read-only: it takes ownership of nothing and
-writes no PCI configuration register. It prints one of three verdicts:
+writes no PCI configuration register. It prints one of four verdicts:
 
   LOOKS QUALIFIED   nothing a read-only pass can see disqualifies this
                     machine. Go ahead and install.
 
+  LOOKS QUALIFIED WITH CAVEATS
+                    the same, but the controller has no interrupt pin. The
+                    driver reads its events on a timer instead (polling),
+                    or on Vista and 7 may take a message-signalled
+                    interrupt; the line says whether the controller offers
+                    one. Go ahead and install.
+
   DISQUALIFIED      something it can see rules the machine out: no xHCI
-                    controller, NO LEGACY INTERRUPT PIN, the controller's
-                    memory window is unusable or sits above 4 GB, or there
-                    are no USB 2.0 ports.
+                    controller, the controller's memory window is unusable
+                    or sits above 4 GB, or there are no USB 2.0 ports.
 
   CANNOT SAY        something it is not allowed to change is in the way -
                     the controller is powered down, or its memory access is
@@ -3042,6 +3051,11 @@ the safety notes spelled out.
                         has already switched it on, and switches nothing on
                         itself
       --no-active       another name for --probe-only
+      --gsi N           (also --gsi=N, N decimal 0-255) compare an Intel
+                        chipset's interrupt routing against N, the IRQ
+                        Device Manager shows for the controller under the
+                        system in question. Accepted only beside --quick or
+                        --probe-only; alone it is a usage error
 
   MODIFIERS - these say what to do with the report, not what to run.
   ON THEIR OWN THEY DO NOT MAKE THE RUN READ-ONLY. Any argument at all
@@ -3057,6 +3071,9 @@ the safety notes spelled out.
                         both
       --done-flag FILE  create FILE only if the run finishes normally, so a
                         batch file can tell a crash apart from a bad verdict
+      --no-sysinfo      do not read the machine's description (SMBIOS,
+                        processor, memory, DOS version) for the report's
+                        header; the header then says it was skipped
       --help, -h, /?    a longer help text, printed by the program itself
 
   ACTIVE OPTIONS - THESE TAKE OVER THE CONTROLLER, reset it, and reset its
@@ -3087,12 +3104,16 @@ being tested:
       XHCIQUAL --log FULL.LOG
 
 Send FULL.LOG if the full run finished; only if it did not, send PROBE.LOG.
+The report's header names the machine it ran on - make, model and BIOS,
+processor, memory and DOS version - and never a serial number, a UUID or an
+asset tag, so a log can be posted publicly as it is.
 
 It returns 0 if the active tests passed, 1 if the machine is not qualified or
 the run was read-only - which cannot pass tests it does not run, so 1 is the
-normal result of every read-only command above - and 2 if the command line was
-wrong or no controller of that kind is here. The verdict on screen is what to
-read; those codes are for batch files.
+normal result of every read-only command above - 2 if the command line was
+wrong or no controller of that kind is here, and 3 if the full run passed a
+controller only WITH CAVEATS (no working interrupt, so the driver polls
+it). The verdict on screen is what to read; those codes are for batch files.
 
 >> IT MUST BE RUN FROM REAL DOS, NOT A DOS WINDOW INSIDE WINDOWS. <<
 
@@ -3121,10 +3142,11 @@ read; those codes are for batch files.
    controller being tested can stop responding mid-run; and do not boot or
    write a log through that same controller.
 
-A controller reporting no interrupt pin cannot be driven at all, on any of
-these systems. There is no software workaround: the driver uses the legacy
-interrupt pin and has no path for the newer mechanism (MSI) that such a
-controller would require.
+A controller reporting no interrupt pin is still driven: the driver reads
+its events on a timer instead (polling, XhciInterruptMode in section 9),
+and on Windows Vista and 7 it may use a message-signalled interrupt (MSI)
+in place of the pin. A controller whose interrupt line the driver sees
+raised and never delivered is polled the same way.
 
 The checker's last criterion, "no USB 2.0 ports", dates from the earlier,
 USB 2.0-only releases. This driver accepts a controller with no USB 2.0
@@ -3156,15 +3178,16 @@ tested.
   On Windows 2000,   Nothing to install. DO NOT install NUSB on these.
   XP, Vista and 7
 
-  Controller         xHCI, PCI class code 0C0330, a memory window below
-                     4 GB, and a legacy interrupt pin.
+  Controller         xHCI, PCI class code 0C0330, and a memory window
+                     below 4 GB. No interrupt pin is needed: a controller
+                     without one is polled (section 9, XhciInterruptMode).
 
 
 ==============================================================================
  3. THE FILES WINDOWS SUPPLIES, AND USB STORAGE ON WINDOWS 98 SE
 ==============================================================================
 
-The package's own files are five, and they are in:
+The package's own files are in:
 
       {DIRLIST}
 
@@ -3172,6 +3195,12 @@ The package's own files are five, and they are in:
   xhciuas.inf, xhciuas.sys   the UAS storage driver
   txtsetup.oem               the driver description Windows 2000 and XP
                              Setup read when F6 is pressed (section 4)
+  portsw.vbs                 shows and sets the Intel port switchover
+                             (section 9, XhciIntelPortSwitch)
+  xhcimsi.sys                in the -X86 directories only: the helper that
+                             gives 32-bit Vista and 7 a message-signalled
+                             interrupt. The install puts it on those two
+                             systems and no other
 
 Nothing else is in the package, and there is nothing to complete.
 
@@ -3298,8 +3327,11 @@ CD, a shared folder - then:
           Update Driver Software -> Browse my computer for driver software
       and point it at the RELEASE-X86\ directory. If Windows warns that it
       cannot verify the publisher, install the driver anyway. Use Device
-      Manager, not a right-click on the INF. Both have only been run in
-      virtual machines.{ARCHINSTALL}
+      Manager, not a right-click on the INF. RESTART WHEN ASKED: the install
+      and every update ask for one, for xhcimsi.sys, and after a first
+      install the controller does not start until then (Device Manager
+      shows code 28 on 7, code 1 on Vista meanwhile). Both have only been
+      run in virtual machines.{ARCHINSTALL}
 
 It installs as "xHCI98 USB 3.x eXtensible Host Controller", with "xHCI98
 USB 3.x Root Hub" underneath it. Neither should carry a warning mark.
@@ -3379,9 +3411,26 @@ virtual machines:
   suitable driver is already installed and keeps the earlier release. Use
   "Display a list of the known drivers" -> Have Disk, as below.
 
-  WINDOWS XP, XP X64, VISTA AND 7: the update took effect at once, with no
-  restart. (Read with a command-line driver update rather than Device
-  Manager.)
+  WINDOWS XP, XP X64, AND 64-BIT VISTA AND 7: the update took effect at
+  once, with no restart. (Read with a command-line driver update rather
+  than Device Manager.)
+
+  32-BIT WINDOWS VISTA AND 7: RESTART WHEN ASKED. Every update asks for
+  one, for the helper xhcimsi.sys (above).
+
+  GOING BACK TO AN OLDER RELEASE ON VISTA OR 7: the controller's request
+  for a message-signalled interrupt stays in its hardware key, and an
+  older driver does not know what to do with one. First uninstall the
+  controller in Device Manager with "Delete the driver software for this
+  device" ticked, or set MSISupported to 0 in its hardware key, under
+  Device Parameters, Interrupt Management,
+  MessageSignaledInterruptProperties. That tick removes only the package
+  in use: older xhci98 packages stay in the driver store, and Windows may
+  install one of them the next time it finds the controller. From an
+  administrator's prompt pnputil -e lists the store; remove each
+  oemNN.inf whose provider is "Yeo Kheng Meng" and class "Universal Serial
+  Bus controllers" with pnputil -d oemNN.inf. The downgrade itself has not
+  been read.
 
   THE ROOT HUB'S DRIVER TAB STILL SHOWS THE EARLIER VERSION (on 98 SE and
   ME, its date), although it runs the new file. To change it, run Update
@@ -3501,9 +3550,15 @@ Things specific to this driver, worth knowing in advance:
     kept on the device's Device Manager entry, so it has to be applied
     again whenever the device is found as new hardware.
 
-  * IDLE DEVICES ARE NEVER PUT TO SLEEP. The driver never starts selective
-    suspend, of a device or of a hub port, so an idle device draws its
-    normal power. There is no switch for it.
+  * IDLE DEVICES ARE NOT PUT TO SLEEP UNLESS YOU TURN IT ON. With
+    XhciSelectiveSuspend at 1 (section 9) a device is suspended when
+    Windows asks; hubs, the root hub and the controller never are, and the
+    driver never suspends anything on a timer of its own. Off, the
+    default, an idle device draws its normal power.
+
+  * A COMPOSITE DEVICE HAS AN ENTRY OF ITS OWN in Device Manager, with its
+    functions beneath it, and USBView shows a device's manufacturer,
+    product, serial number and interface names.
 
   UPDATING xhciuas.sys OVER AN OLDER COPY
   .......................................
@@ -3629,11 +3684,20 @@ being unsigned, and no change to this driver can remove them:
     DRIVER BEFORE THE USB KEYBOARD WORKS. A PS/2 or built-in laptop
     keyboard answers it (section 4).
 
+  * WINDOWS VISTA AND 7: DELETING THE DRIVER KEEPS THE OLDER PACKAGES.
+    "Delete the driver software for this device" removes only the package
+    in use, and Windows may install an older one the next time it finds
+    the controller. Section 4, "Going back to an older release", says how
+    to remove them with pnputil.
+
 May be addressed in a later release:
 
-  * THE DRIVER NEVER STARTS SELECTIVE SUSPEND (section 5). Idle devices and
-    hub ports are never suspended to save power. A suspend or resume a hub
-    reports is handled.
+  * SELECTIVE SUSPEND IS OFF UNLESS YOU TURN IT ON, AND HUBS ARE NEVER
+    SUSPENDED (sections 5 and 9).
+
+  * 32-BIT WINDOWS VISTA AND 7: THE INSTALL ASKS FOR A RESTART, and the
+    controller does not start until it is done, because the helper
+    xhcimsi.sys starts only at boot (section 4).
 
   * WINDOWS ME: A UAS DRIVE AS THE FIRST USB STORAGE DEVICE SHOWS CODE 2.
     ME has not yet copied its own USBNTMAP.SYS and USBMPHLP.PDR, which it
@@ -3667,13 +3731,15 @@ May be addressed in a later release:
     instead.
 
   * WINDOWS 2000: A MOUNTED USB DRIVE MAY COME BACK AT CODE 31 AFTER A
-    CONTROLLER RECOVERY. After the driver recovers the controller in place
-    (a halted controller, or a failed endpoint reset), a USB drive whose
+    CONTROLLER RECOVERY OR A RESUME FROM HIBERNATION. After the driver
+    recovers the controller in place (a halted controller, or a failed
+    endpoint reset), or after a hibernation on a controller that lost its
+    state, where the driver finds every device again, a USB drive whose
     volume was mounted may stay at Code 31 until it is unplugged and
     plugged in again, or the controller is disabled and enabled in Device
-    Manager. Other devices come back. Seen in a virtual machine; not on
-    Windows 98 SE. The path is older than this release, which recovers on
-    more faults.
+    Manager; a restart of the drive's own device also cleared it. Other
+    devices come back. Seen in virtual machines, with the controller
+    polled as well; not on Windows 98 SE.
 
 Untested ground:
 
@@ -3690,8 +3756,20 @@ Untested ground:
     controller has been held.
 
   * POLLING ABOVE 1000 HZ (XhciFastPollFsLs, section 9). Outside the xHCI
-    specification, and read on no real controller and in no virtual
-    machine.
+    specification, and read on no real controller; value 4's programming
+    was read in virtual machines only.
+
+  * STAND BY ON WINDOWS 98 SE. Read only in QEMU virtual machines, where
+    Windows 98 SE itself does not resume reliably, with no USB controller
+    as well. With a USB disk attached the resume stopped before the
+    desktop under this driver and under NUSB's EHCI driver alike; with a
+    USB mouse alone, or behind a hub, it completed and the mouse worked.
+    Untested on real hardware: REMOVE USB DISKS BEFORE STAND BY.
+
+  * LOW- AND FULL-SPEED DEVICES BEHIND A BUILT-IN HUB WHOSE USB 2.0 SPEED
+    TABLE LISTS ONLY HIGH SPEED, as on the VIA VL805
+    (XhciUsb2HubSpeedFallback, section 9). Built from the specification
+    and never run on such a controller.
 
   * XhciIntelPortSwitch AT 2 (section 9). Read on no unlisted Intel
     controller, and at your own risk.
@@ -3709,9 +3787,11 @@ Untested ground:
 ==============================================================================
 
 {CONTENTS}
-Every driver binary in this download is called xhci98.sys or xhciuas.sys
-and every one carries driver version {VERSION}, so a copy taken out of its
-directory cannot be identified by name or by version.
+Both drivers are called xhci98.sys and xhciuas.sys in every directory, and
+every copy carries driver version {VERSION}, so a copy taken out of its
+directory cannot be identified by name or by version. (The -X86 directories
+also hold xhcimsi.sys, the 32-bit Vista and 7 helper, which has no 64-bit
+twin.)
 {TELLAPART}
 
 (In Windows driver-kit terms, RELEASE is what the DDK calls a "free" build
@@ -3723,14 +3803,16 @@ debug throughout, in its build scripts and its documentation alike.)
  9. REGISTRY SETTINGS
 ==============================================================================
 
-Every registry value this driver reads. There are twelve, all DWORDs. The
-install writes all twelve, each at the default it states below except
-XhciImodInterval250ns, which it writes as 160. It writes each only where it is
-missing, so a value you changed survives an install or update; to go back to
-the default, set it by hand, or delete the value and update the driver. If
-an earlier install left XhciImodInterval250ns at 500, the update keeps it;
-set it to 160 by hand. A value that is absent
-means the default each one states.
+Every value this driver reads from the controller's driver key. There are
+nineteen, all DWORDs. The install writes sixteen, each at the default it
+states below except XhciImodInterval250ns, which it writes as 160;
+XhciWideMap, XhciSelectiveSuspend and XhciUsb2HubSpeedFallback are written
+by no install, and are read only when you add them yourself. The install
+writes each only where it is missing, so a value you changed survives an
+install or update; to go back to the default, set it by hand, or delete
+the value and update the driver. If an earlier install left
+XhciImodInterval250ns at 500, the update keeps it; set it to 160 by hand.
+A value that is absent means the default each one states.
 
   YOU SHOULD NOT NEED THIS SECTION FOR A LOG. If the maintainer asks for one,
   XHCISNAP -verbosity 2 sets the value that matters, on every controller, and
@@ -3813,17 +3895,34 @@ means the default each one states.
       2      "31 Hz" becomes 2000 Hz, "62 Hz" becomes 4000 Hz
       3      "31 Hz" becomes 4000 Hz, "62 Hz" becomes 8000 Hz
 
-  Any other value is off. A device behind a hub keeps its normal rate.
+  4 is described below; any other value is off. With 2 or 3 a device
+  behind a hub keeps its normal rate.
 
   THIS IS OUTSIDE THE xHCI SPECIFICATION, which sets 1 ms as the shortest
-  interval for these devices. A controller that refuses it is caught: the
-  device runs at its normal rate, and XHCISNAP's report counts it as
-  fastpoll.fallbacks. A controller that accepts it and then misbehaves
+  interval for these devices. With 2 or 3, a controller that refuses it is
+  caught: the device runs at its normal rate, and XHCISNAP's report counts
+  it as fastpoll.fallbacks. A controller that accepts it and then misbehaves
   cannot be caught; if anything misbehaves, delete the value and restart.
-  While it is set, ANY Low- or Full-Speed device on a root port that asks
-  for 16 to 63 ms is polled faster too. Read when the controller starts, so
-  restart after changing it. It has been read on no real controller and
-  in no virtual machine yet.
+  While 2 or 3 is set, ANY Low- or Full-Speed device on a root port that
+  asks for 16 to 63 ms is polled faster too. Read when the controller
+  starts, so restart after changing it. The faster rates of 2 and 3 have
+  been measured on no real controller and in no virtual machine; in
+  virtual machines 2 and 3 were read only ignoring value 4's codes.
+
+  Set to 4, it does something else: the rate the client driver chooses.
+  An interrupt endpoint whose polling interval in the configuration
+  Windows selects is 128, 129 or 130 is polled at 2000, 4000 or 8000 Hz;
+  every other interval is polled as the specification reads it, so 4 does
+  not speed up 16 to 63 ms, and 2 and 3 do not honour these codes. It
+  applies to a Low- or Full-Speed device on a root port only, and to a
+  High- or SuperSpeed device at a root port or behind a hub. Set the value
+  first and restart, then have hidusbf (or another filter) write 128, 129
+  or 130. A device that itself asks for 128 to 130 ms is polled that fast
+  too while it is 4; a code written while the value is not 4 means what
+  the number says (128 ms, or 4.096 s at High Speed and SuperSpeed; 32 ms
+  instead where XhciIntervalCap applies). A controller that refuses a code
+  is caught and the device polled every 1 ms. Value 4's programming was
+  read in virtual machines only.
 
   XhciFirstEnumWaitMs, XhciFirstEnumPortMs  -  the first report's wait
   ....................................................................
@@ -3864,9 +3963,9 @@ means the default each one states.
   under it, and the reverse at a stop: do not have a drive busy there then.
 
   At 0, absent or not a DWORD, the driver leaves the connectors where
-  firmware put them; 1 or any other number but 2 is on. Up to 2.2.0.0 the
-  default was 1, and an update KEEPS the value already there, so a machine
-  updated from 2.1.1.0 or 2.2.0.0 stays at 1 until it is changed.
+  firmware put them; 1 or any other number but 2 is on. Earlier releases
+  wrote 1, and an update KEEPS the value already there, so a machine
+  updated from one of them stays at 1 until it is changed.
 
   PORTSW.VBS, beside the INF in each RELEASE and DEBUG directory, shows
   and sets it on every xhci98 controller, with nothing to install, on
@@ -3898,7 +3997,7 @@ means the default each one states.
   XhciIntelIrqRoute  -  the Intel interrupt routing repair
   ..............................................................
 
-  New in 2.3.0.0. On the same Intel chipsets two chipset registers decide
+  On the same Intel chipsets two chipset registers decide
   which interrupt line the xHCI controller's interrupt reaches, and some
   firmware points them at a different line from the one it tells Windows.
   The Dell Latitude E7250's sends it to IRQ 16 while Windows listens on IRQ
@@ -3987,7 +4086,91 @@ means the default each one states.
   machine whose USB devices misbehave can be compared both ways; leave it
   at 0 otherwise. Read when the controller starts.
 
-  THOSE ELEVEN ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
+  XhciInterruptMode, XhciPollIdleMs, XhciPollActiveMs  -  how events arrive
+  .........................................................................
+
+  XhciInterruptMode, default 0: automatic. The interrupt line where it
+  works; a controller with no interrupt pin, or whose line the driver sees
+  raised and never delivered, is polled - the driver reads its events on a
+  timer. On Vista and 7 a message-signalled interrupt is used where Windows
+  grants one. 1 asks for the line: on Vista and 7 a message Windows grants
+  anyway is still used, and one that cannot be connected is polled; a
+  controller with no line fails to start (Code 10) on 98 SE to XP, and on
+  32-bit Vista and 7 when no line is offered and xhcimsi.sys is not
+  running. 2 polls always, at the cost of more processor wake-ups. Any
+  other value is 0.
+  Read when the controller starts: disable and enable it, or restart.
+
+  While polling, XhciPollIdleMs (default 50, held to 5000; 0 is 50) is how
+  often in ms the driver looks with nothing outstanding, and
+  XhciPollActiveMs (default 1, held to the idle period; 0 is 1) how often
+  with transfers outstanding - except that when only a mouse's or
+  keyboard's periodic transfers are outstanding it looks at that
+  endpoint's interval, held between the two. Windows runs the timer no
+  faster than its clock tick, so 1 means as often as Windows allows.
+  Polling adds up to one period to each transfer's completion. Neither
+  value matters while the interrupt works.
+
+  XhciMaxTransferKB  -  the UAS command size
+  ..........................................
+
+  Default 1024: the most one UAS command asks the drive to move, in KiB.
+  Any multiple of 4 from 64 to 2048 is taken; anything else is 1024. 64 is
+  what earlier releases always used - set it for a drive that misbehaves
+  at large commands. Bulk-Only devices keep Windows' own limits, and on
+  Windows 98 SE and ME Windows' mapping layer sends at most 64 KiB at a
+  time whatever this says. Windows reads the size when the drive starts,
+  so RESTART WINDOWS after changing it. An update keeps the number already
+  in the key.
+
+  ONE DRIVE MODEL CAN BE SET APART, on Windows 2000 and later, with the
+  value Windows' own Bulk-Only driver reads: MaximumTransferLength, a
+  DWORD in BYTES, under
+    HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\usbstor\VVVVPPPP
+  (the drive's vendor and product IDs, four uppercase hex digits each).
+  65535 to 2097152 is taken, rounded to 4 KiB, and REPLACES
+  XhciMaxTransferKB for every drive of that model - so if you lower
+  XhciMaxTransferKB to test a drive, change or delete that value too.
+  Restart after setting it.
+
+  XhciWideMap  -  two transfer pieces at once
+  ...........................................
+
+  NOT WRITTEN BY THE INSTALL; absent or 0 is off. Set to 1 and restart
+  Windows, and on Windows 2000 and later the driver gives a large bulk
+  write on any device, and a large bulk read on a UAS drive's streams, to
+  the controller two pieces at a time; a UAS drive at SuperSpeed may also
+  take one command's data as a single piece of up to 2 MiB. It does so
+  only where the machine's DMA needs no translation, which it checks at
+  every start and for each transfer; under Driver Verifier's DMA checks,
+  or where the DMA does need translation, every transfer goes one piece
+  at a time as before. It is off by default because a fault, though
+  unlikely, would show as wrong data rather than an error: if a large
+  copy misbehaves with it on, set 0 and restart.
+
+  XhciSelectiveSuspend  -  putting idle devices to sleep
+  ......................................................
+
+  NOT WRITTEN BY THE INSTALL; absent, 0 or any number but 1 is off, and
+  the driver then suspends no device. Set to 1 and restart, and a USB 2.0
+  or SuperSpeed device is suspended when Windows asks and woken when
+  Windows asks again or the device signals a remote wake. Hubs, the root
+  hub, a composite device's own entry and the controller are never
+  suspended. Read in virtual machines only so far; leave it off unless
+  you are testing it, and if a device misbehaves with it on, set 0.
+
+  XhciUsb2HubSpeedFallback  -  Low- and Full-Speed IDs behind a hub
+  .................................................................
+
+  NOT WRITTEN BY THE INSTALL; absent, 1 or any number but 0 is on. Some
+  controllers - the VIA VL805 is one - list only High Speed in the speed
+  table of the USB 2.0 port their built-in hub hangs from. With this on, a
+  Low- or Full-Speed device behind such a hub gets the standard speed ID
+  where the table names neither that speed nor that ID; a table that names
+  them is followed. Set 0 and restart to refuse such a device instead. It
+  has never run on a VL805.
+
+  THOSE NINETEEN ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
   XhciVirtualHSHubVid and XhciVirtualHSHubPid are not read: a copy left in
   the key by an earlier install has no effect, because this driver reports
   every device at its true speed with no virtual hub in the way. Delete
@@ -4263,13 +4446,16 @@ WHAT THE VERDICT MEANS
       controller is being hidden from you - it is a limit of testing from
       DOS, and the same limit applies to every machine.
 
+  LOOKS QUALIFIED WITH CAVEATS
+      The same, but the controller has no interrupt pin. The driver reads
+      its events on a timer instead (polling), or on Windows Vista and 7
+      may take a message-signalled interrupt; the line says whether the
+      controller offers one. Go ahead and install.
+
   DISQUALIFIED
       Something it can see rules the machine out. It will say which:
 
         - no xHCI controller present
-        - NO LEGACY INTERRUPT PIN. This is the one that cannot be worked
-          around. Neither Windows 98 nor Windows 2000 can use the modern
-          interrupt mechanism such a controller would need.
         - the controller's memory window is unusable, or sits above 4 GB
         - no USB 2.0 ports on the controller
 
@@ -4314,6 +4500,11 @@ READ-ONLY MODES - these change nothing on the machine
                     controller's memory window only if the firmware has
                     already switched it on, and switches nothing on itself
   --no-active       another name for --probe-only
+  --gsi N           (also --gsi=N, N decimal 0-255) compare an Intel
+                    chipset's interrupt routing against N, the IRQ Device
+                    Manager shows for the controller under the system in
+                    question. Accepted only beside --quick or --probe-only;
+                    alone it is a usage error
 
 
 MODIFIERS - these say what to do with the report, not what to run
@@ -4330,6 +4521,9 @@ MODIFIERS - these say what to do with the report, not what to run
                     name the file explicitly if you pass both
   --done-flag FILE  create FILE only if the run finishes normally, so a
                     batch file can tell a crash apart from a bad verdict
+  --no-sysinfo      do not read the machine's description (SMBIOS,
+                    processor, memory, DOS version) for the report's
+                    header; the header then says it was skipped
   --help, -h, /?    a longer help text, printed by the program itself
 
 
@@ -4373,8 +4567,14 @@ WHAT IT RETURNS TO DOS
   1   not qualified, or a read-only run - which cannot pass tests it does
       not run, so 1 is the normal result of the commands above
   2   the command line was wrong, or no controller of that kind is here
+  3   a full active run whose controllers all qualified, at least one only
+      WITH CAVEATS (no working interrupt, so the driver polls it)
 
   The verdict on screen is what to read. These are for batch files.
+
+  The report's header names the machine it ran on - make, model and BIOS,
+  processor, memory and DOS version - and never a serial number, a UUID
+  or an asset tag, so a log can be posted publicly as it is.
 
 
 THE .MAP FILE
@@ -4606,6 +4806,11 @@ Level 2 is the one to use. The others exist and a maintainer may ask for one:
                against the exact build you are running; nobody else can. Send
                it as an attachment if asked.
   MYDUMP.PSC   The raw port register values, for the same audience.
+
+The report's header names the system it was taken on - the Windows
+version, BIOS, processor and memory - and never a serial number or a
+name. If reading those details causes a problem on your machine, add
+-nosysinfo to step 4; the header then says they were skipped.
 
 
  IF NOTHING COMES BACK
