@@ -266,9 +266,11 @@ separates a bad verdict from a crash - the flag is written on any normal exit,
 including a usage error. (Stated here because the audit of 2026-09-07 found
 this file describing it two ways.)
 
-"One screen" was measured in QEMU: three controllers print 11 lines under 4
-rows of DOS/32A startup plus the command line, 16 of the pager's 23 usable
-rows (`PAGE_ROWS`, `report.c`). Each controller is one line, and from the
+"One screen" was measured in QEMU: three controllers print 13 lines (11
+before task 36.48's two-line system summary) under 4 rows of DOS/32A
+startup plus the command line, 18 of the pager's 23 usable rows
+(`PAGE_ROWS`, `report.c`; re-measured 2026-10-10 on the `quick_all`
+case's screen). Each controller is one line, and from the
 seventh controller the output ends in an `N more controller(s) not shown.`
 tail (or `N more controller(s) - the full list is in the log.` when one is
 open) rather than scrolling; `--probe-only` lists them all. The real-console count on a multi-controller machine
@@ -1089,5 +1091,21 @@ and the full block in the log and on the serial line. In QEMU, with
 SKU and asset tags set too and not printed):
 
 ```
-SAMPLE_PLACEHOLDER
+XHCIQUAL 2.2.0.0 (build Oct 10 2026 10:58:40) - USB host controller qualification
+System:  XQ-Test-Maker XQ-Test-Model, version XQ-Rev-A, family XQ-Family
+Board:   XQ-Board-Maker XQ-Board-7
+BIOS:    XQ-BIOS-Vendor XQ-BIOS-1.0, 10/10/2026; SMBIOS 2.8 (32-bit entry at F5270h, 10 structures)
+CPU:     QEMU Virtual CPU version 2.5+ (AuthenticAMD family 0Fh model 6Bh stepping 1), socket CPU 0
+RAM:     63 MB usable (INT 15h E820, 2 ranges)
+DOS:     7.10 (Microsoft); not under Windows
+Mode: PROBE-ONLY (read-only)
+```
+
+The quick scan's screen on QEMU's defaults (the `quick_all` case):
+
+```
+XHCIQUAL 2.2.0.0 - quick scan (read-only)
+System: QEMU Standard PC (i440FX + PIIX, 1996); BIOS rel-1.17.0-0-gb52ca86e094d
+CPU: QEMU Virtual CPU version 2.5+; RAM 63 MB; DOS 7.10
+Found 3 USB host controller(s).
 ```
