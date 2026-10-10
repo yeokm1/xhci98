@@ -1118,6 +1118,93 @@ static void test_cut_identifier(void)
     CHECK(!has("SN-123") && !has("5a5a5a5a"), "cut: not printed");
 }
 
+/* Whole-branch review (area 3, round 3, P1): an identifier that spans the
+ * join of two printed fields - maker "ACME", product "12345678", serial
+ * "ACME 12345678" - is withheld from both reports; so is a UUID split
+ * across fields, and the head of an identifier the short line's 79-column
+ * cut leaves at its end. */
+static void test_joined_identifier(void)
+{
+    SYSINFO si;
+    u8 f[0x40];
+    static const char *j1[] = { "ACME", "12345678", "1.0",
+                                "ACME 12345678", 0 };
+    static const char *j2[] = { "Maker 5a5a5a5a-3412", "2143-8765-0123456789ab",
+                                "v", 0 };
+    static const char *j3[] = { "Maker", "X", "2", "X, version 2", 0 };
+    static char longmfr[80];
+    static const u8 uuid[16] = { 0x5a, 0x5a, 0x5a, 0x5a, 0x12, 0x34, 0x43,
+                                 0x21, 0x87, 0x65, 0x01, 0x23, 0x45, 0x67,
+                                 0x89, 0xab };
+
+    /* Maker and product join into the serial. */
+    tlen = 0;
+    memset(tab, 0, sizeof(tab));
+    build_t1(4, j1, 0);
+    memset(f, 0, sizeof(f));
+    add(127, f, 4, 0);
+    memset(&si, 0, sizeof(si));
+    smb_parse_table(tab, tlen, 0, &si);
+    CHECK(strcmp(si.sys_mfr, "(withheld)") == 0 &&
+          strcmp(si.sys_product, "(withheld)") == 0,
+          "joined: maker and product withheld");
+    si.smb_state = SMB_OK;
+    si.seen_t1 = 1;
+    render(&si);
+    CHECK(!has("ACME 12345678") && !has("acme 12345678"),
+          "joined: not in the full report");
+    render_short(&si);
+    CHECK(!has("ACME 12345678"), "joined: not in the short report");
+
+    /* A UUID split across maker and product. */
+    tlen = 0;
+    memset(tab, 0, sizeof(tab));
+    build_t1(0, j2, uuid);
+    memset(f, 0, sizeof(f));
+    add(127, f, 4, 0);
+    memset(&si, 0, sizeof(si));
+    smb_parse_table(tab, tlen, 0, &si);
+    CHECK(strcmp(si.sys_mfr, "(withheld)") == 0 &&
+          strcmp(si.sys_product, "(withheld)") == 0,
+          "joined: a UUID across two fields withheld");
+
+    /* A serial completed by the full line's fixed words. */
+    tlen = 0;
+    memset(tab, 0, sizeof(tab));
+    build_t1(4, j3, 0);
+    memset(f, 0, sizeof(f));
+    add(127, f, 4, 0);
+    memset(&si, 0, sizeof(si));
+    smb_parse_table(tab, tlen, 0, &si);
+    si.smb_state = SMB_OK;
+    si.seen_t1 = 1;
+    render(&si);
+    CHECK(!has("X, version 2"), "joined: fixed words do not complete it");
+
+    /* The short line's 79-column cut leaves a head of the serial: "System:"
+     * and a 68-character maker leave the product's first two characters,
+     * "PR", which no field test sees (the product only starts like the
+     * serial). */
+    memset(longmfr, 'M', 68);
+    longmfr[68] = '\0';
+    {
+        static const char *j5[] = { longmfr, "PRD-99 Laptop", "v",
+                                    "PRD-998877", 0 };
+        tlen = 0;
+        memset(tab, 0, sizeof(tab));
+        build_t1(4, j5, 0);
+        memset(f, 0, sizeof(f));
+        add(127, f, 4, 0);
+        memset(&si, 0, sizeof(si));
+        smb_parse_table(tab, tlen, 0, &si);
+        si.smb_state = SMB_OK;
+        si.seen_t1 = 1;
+        render_short(&si);
+        CHECK(strcmp(si.sys_product, "(withheld)") == 0,
+              "short cut: the product whose head the cut leaves withheld");
+    }
+}
+
 /* Review round 3, P3: the 4096-structure limit, well under 64 KB. */
 static void test_struct_limit(void)
 {
@@ -1178,6 +1265,7 @@ int main(void)
     test_aliasing();
     test_aliasing2();
     test_cut_identifier();
+    test_joined_identifier();
     test_skip();
     test_struct_limit();
     test_ep_order();

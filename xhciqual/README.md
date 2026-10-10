@@ -1067,7 +1067,11 @@ withholds every printed string holding it, a BIOS date included. Type 1's UUID i
 compared as 32 hex digits in both byte orders, ignoring case, dashes and
 braces. A string the 64-character cut (below) may have shortened is also
 withheld when it ends in any head of an identifier, the UUID's included, so
-a cut cannot print a serial less its last characters. A field added to `SYSINFO` is a field every pasted report
+a cut cannot print a serial less its last characters. Each printed line is
+also checked whole, as its printer joins it (the short line as cut at 79
+columns): a maker `ACME` and a product `12345678` would print a serial
+`ACME 12345678` that neither field holds, so a line that carries an
+identifier withholds every field it joins. A field added to `SYSINFO` is a field every pasted report
 publishes; the host suite and the QEMU cases plant every identifier,
 aliased too, and fail if one is printed.
 

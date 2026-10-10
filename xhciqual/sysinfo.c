@@ -468,6 +468,100 @@ static void withhold_if(char *shown, const char *id)
         strcpy(shown, WITHHELD);
 }
 
+/*
+ * The printers join fields into lines (report_sysinfo, report_sysinfo_short),
+ * and an identifier can span a join - a maker "ACME" and a product
+ * "12345678" print a serial "ACME 12345678" that neither field carries
+ * (whole-branch review, area 3 round 3). So each printed line is built here
+ * the way its printer builds it and checked as a whole, as printed: the
+ * short line is cut at 79 characters, and a head of an identifier ending
+ * the cut line is caught as at the field bound. A line that carries one
+ * withholds every field it joins.
+ */
+#define LINE_MAX_CHARS  400
+#define SHORT_CUT       79
+
+static void cat_word(char *line, const char *s);
+static void hex_only(const char *s, char *out, size_t size);
+static void line_system(const SYSINFO *si, char *line);
+static void line_board(const SYSINFO *si, char *line);
+static void line_bios(const SYSINFO *si, char *line);
+static void line_short_smb(const SYSINFO *si, char *line);
+
+typedef struct LINE_GROUP {
+    void (*build)(const SYSINFO *si, char *line);
+    size_t cut;                 /* printed width, 0 for the whole line   */
+    int nf;
+    int field[4];               /* the shown_field indexes it joins      */
+} LINE_GROUP;
+
+static const LINE_GROUP line_groups[] = {
+    { line_system,    0,         4, { 3, 4, 5, 6 } },
+    { line_board,     0,         2, { 7, 8, 0, 0 } },
+    { line_bios,      0,         3, { 0, 1, 2, 0 } },
+    { line_short_smb, SHORT_CUT, 4, { 3, 4, 1, 2 } }
+};
+
+/* `line` as printed (its first `cut` characters, or all of it with cut 0)
+ * carries `id`, or ends, cut, in a head of it. `hex` compares the hex
+ * digits alone, as the UUID is compared. */
+static int line_carries(const char *line, size_t cut, const char *id,
+                        int hex)
+{
+    char shown[LINE_MAX_CHARS];
+    char digits[LINE_MAX_CHARS];
+    size_t n;
+    int was_cut;
+
+    n = strlen(line);
+    was_cut = (cut != 0 && n > cut);
+    if (was_cut)
+        n = cut;
+    if (n >= sizeof(shown))
+        n = sizeof(shown) - 1;
+    memcpy(shown, line, n);
+    shown[n] = '\0';
+    if (hex) {
+        hex_only(shown, digits, sizeof(digits));
+        return strstr(digits, id) != 0 ||
+               (was_cut && tail_heads(digits, id));
+    }
+    return contains_nocase(shown, id) || (was_cut && tail_heads(shown, id));
+}
+
+/* Every line that carries `id` (or, given, `id2`) withholds the fields it
+ * joins, until no line does or nothing is left to withhold. */
+static void withhold_lines(SYSINFO *si, const char *id, const char *id2,
+                           int hex)
+{
+    char line[LINE_MAX_CHARS];
+    unsigned g;
+    int k, pass, changed;
+    char *f;
+
+    for (pass = 0; pass < 8; pass++) {
+        changed = 0;
+        for (g = 0; g < sizeof(line_groups) / sizeof(line_groups[0]); g++) {
+            line[0] = '\0';
+            line_groups[g].build(si, line);
+            if (!line_carries(line, line_groups[g].cut, id, hex) &&
+                (id2 == 0 ||
+                 !line_carries(line, line_groups[g].cut, id2, hex)))
+                continue;
+            for (k = 0; k < line_groups[g].nf; k++) {
+                f = shown_field(si, line_groups[g].field[k]);
+                if (f[0] != '\0' && strcmp(f, WITHHELD) != 0) {
+                    strcpy(f, WITHHELD);
+                    changed = 1;
+                }
+            }
+        }
+        if (!changed)
+            break;
+    }
+    memset(line, 0, sizeof(line));
+}
+
 /* The UUID's 16 bytes as 32 uppercase hex digits: raw order, and the
  * SMBIOS 2.6+ text order (first three fields little-endian). */
 static void uuid_hex(const u8 *u, char *raw, char *wire)
@@ -531,6 +625,7 @@ static void scrub_uuid(const SMB_STRUCT *st, SYSINFO *si)
             (at_bound(f) && (tail_heads(hex, raw) || tail_heads(hex, wire))))
             strcpy(f, WITHHELD);
     }
+    withhold_lines(si, raw, wire, 1);
     memset(raw, 0, sizeof(raw));
     memset(wire, 0, sizeof(wire));
 }
@@ -553,6 +648,7 @@ static void scrub(const SMB_STRUCT *st, u8 type, SYSINFO *si)
                 continue;
             for (j = 0; (f = shown_field(si, j)) != 0; j++)
                 withhold_if(f, id);
+            withhold_lines(si, id, 0, 0);
         }
     }
     memset(id, 0, sizeof(id));
@@ -739,6 +835,79 @@ static void cat_word(char *line, const char *s)
     strcat(line, s);
 }
 
+/* The lines the printers join, built in one place so that the scrubber
+ * checks exactly what is printed (withhold_lines). Each fits
+ * LINE_MAX_CHARS: at most four fields of SI_STR - 1 and their fixed words. */
+
+/* The full report's "System:" text. */
+static void line_system(const SYSINFO *si, char *line)
+{
+    line[0] = '\0';
+    if (!si->seen_t1) {
+        strcpy(line, "(no SMBIOS system structure)");
+        return;
+    }
+    cat_word(line, si->sys_mfr);
+    cat_word(line, si->sys_product);
+    if (line[0] == '\0')
+        strcpy(line, "(maker and model not given)");
+    if (si->sys_version[0] != '\0') {
+        strcat(line, ", version ");
+        strcat(line, si->sys_version);
+    }
+    if (si->sys_family[0] != '\0') {
+        strcat(line, ", family ");
+        strcat(line, si->sys_family);
+    }
+}
+
+/* The full report's "Board:" text. */
+static void line_board(const SYSINFO *si, char *line)
+{
+    line[0] = '\0';
+    cat_word(line, si->board_mfr);
+    cat_word(line, si->board_product);
+    if (line[0] == '\0')
+        strcpy(line, "(not given)");
+}
+
+/* The full report's "BIOS:" text, before its SMBIOS suffix. */
+static void line_bios(const SYSINFO *si, char *line)
+{
+    line[0] = '\0';
+    if (!si->seen_t0) {
+        strcpy(line, "(no SMBIOS BIOS structure)");
+        return;
+    }
+    cat_word(line, si->bios_vendor);
+    cat_word(line, si->bios_version);
+    if (si->bios_date[0] != '\0') {
+        strcat(line, line[0] ? ", " : "");
+        strcat(line, si->bios_date);
+    }
+    if (line[0] == '\0')
+        strcpy(line, "(not given)");
+}
+
+/* The short report's "System:" line with a table read (pf79 cuts it). */
+static void line_short_smb(const SYSINFO *si, char *line)
+{
+    char part[LINE_MAX_CHARS];
+
+    strcpy(line, "System:");
+    part[0] = '\0';
+    cat_word(part, si->sys_mfr);
+    cat_word(part, si->sys_product);
+    cat_word(line, part[0] ? part : "(not given)");
+    part[0] = '\0';
+    cat_word(part, si->bios_version);
+    cat_word(part, si->bios_date);
+    if (part[0] != '\0') {
+        strcat(line, "; BIOS ");
+        strcat(line, part);
+    }
+}
+
 static const char *ep_name(int kind)
 {
     if (kind == SMB_EP_64)
@@ -825,43 +994,13 @@ void report_sysinfo(const SYSINFO *si, QPRINTF_FN pf)
         return;
     }
     if (si->smb_state == SMB_OK) {
-        line[0] = '\0';
-        if (si->seen_t1) {
-            cat_word(line, si->sys_mfr);
-            cat_word(line, si->sys_product);
-            if (line[0] == '\0')
-                strcpy(line, "(maker and model not given)");
-            if (si->sys_version[0] != '\0') {
-                strcat(line, ", version ");
-                strcat(line, si->sys_version);
-            }
-            if (si->sys_family[0] != '\0') {
-                strcat(line, ", family ");
-                strcat(line, si->sys_family);
-            }
-        } else {
-            strcpy(line, "(no SMBIOS system structure)");
-        }
+        line_system(si, line);
         pf("System:  %s\n", line);
         if (si->seen_t2) {
-            line[0] = '\0';
-            cat_word(line, si->board_mfr);
-            cat_word(line, si->board_product);
-            pf("Board:   %s\n", line[0] ? line : "(not given)");
+            line_board(si, line);
+            pf("Board:   %s\n", line);
         }
-        line[0] = '\0';
-        if (si->seen_t0) {
-            cat_word(line, si->bios_vendor);
-            cat_word(line, si->bios_version);
-            if (si->bios_date[0] != '\0') {
-                strcat(line, line[0] ? ", " : "");
-                strcat(line, si->bios_date);
-            }
-            if (line[0] == '\0')
-                strcpy(line, "(not given)");
-        } else {
-            strcpy(line, "(no SMBIOS BIOS structure)");
-        }
+        line_bios(si, line);
         sprintf(part, "; SMBIOS %u.%u (%s at %05lXh, %d structures)",
                 si->smb_major, si->smb_minor, ep_name(si->smb_kind),
                 si->smb_ep_phys, si->nstructs);
@@ -959,17 +1098,7 @@ void report_sysinfo_short(const SYSINFO *si, QPRINTF_FN pf)
     }
     strcpy(line, "System:");
     if (si->smb_state == SMB_OK) {
-        part[0] = '\0';
-        cat_word(part, si->sys_mfr);
-        cat_word(part, si->sys_product);
-        cat_word(line, part[0] ? part : "(not given)");
-        part[0] = '\0';
-        cat_word(part, si->bios_version);
-        cat_word(part, si->bios_date);
-        if (part[0] != '\0') {
-            strcat(line, "; BIOS ");
-            strcat(line, part);
-        }
+        line_short_smb(si, line);
     } else {
         smb_problem(si, part);
         cat_word(line, part);
