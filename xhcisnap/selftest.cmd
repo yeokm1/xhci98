@@ -312,6 +312,42 @@ if not "%WITHHELD%"=="6" (
     set FAILED=1
 )
 
+rem Task 36.47's -nosysinfo (owner, 2026-10-10): the report path with the
+rem option says the details were skipped and prints none of them; without it
+rem the same report carries the block; on its own the option is refused.
+"%~dp0XHCISNAP.EXE" -selftest-report "%BASE%-sys" > "%BASE%.sys-on.log"
+if errorlevel 1 (
+    echo FAIL: a report with the system block exited %errorlevel%, expected 0
+    set FAILED=1
+)
+findstr /C:"captured on - this machine" "%BASE%-sys.TXT" > nul
+if errorlevel 1 (
+    echo FAIL: the report does not carry the system block by default
+    set FAILED=1
+)
+"%~dp0XHCISNAP.EXE" -nosysinfo -selftest-report "%BASE%-nosys" > "%BASE%.sys-off.log"
+if errorlevel 1 (
+    echo FAIL: a report with -nosysinfo exited %errorlevel%, expected 0
+    set FAILED=1
+)
+findstr /C:"system details were skipped by -nosysinfo" "%BASE%-nosys.TXT" > nul
+if errorlevel 1 (
+    echo FAIL: the -nosysinfo report does not say the details were skipped
+    set FAILED=1
+)
+for %%S in ("captured on - this machine" "    OS " "    CPU " "    RAM ") do (
+    findstr /C:%%S "%BASE%-nosys.TXT" > nul
+    if not errorlevel 1 (
+        echo FAIL: the -nosysinfo report still says %%S
+        set FAILED=1
+    )
+)
+"%~dp0XHCISNAP.EXE" -nosysinfo > "%BASE%.sys-alone.log"
+if not "%errorlevel%"=="2" (
+    echo FAIL: -nosysinfo on its own exited %errorlevel%, expected 2
+    set FAILED=1
+)
+
 rd /s /q "%RUNDIR%" 2> nul
 rd out 2> nul
 
@@ -319,5 +355,5 @@ if "%FAILED%"=="1" (
     echo xhcisnap selftest FAILED
     exit /b 1
 )
-echo xhcisnap selftest: 14 cases, all passed
+echo xhcisnap selftest: 15 cases, all passed
 exit /b 0

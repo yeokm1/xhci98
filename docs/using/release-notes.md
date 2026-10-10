@@ -1461,7 +1461,9 @@ the domain, and does not read any serial number; it reads those names only
 to withhold a firmware string that contains one (a name of three characters
 or more). The file is meant to be pasted into a public issue as it is, but
 if your machine's firmware strings were customised, read the top of the
-file first.
+file first. If reading those details causes a problem on your machine, add
+`-nosysinfo` to step 4 (`XHCISNAP -nosysinfo -o C:\MYDUMP`): the report
+then says they were skipped and is otherwise the same.
 
 | Value | What it does |
 |---|---|

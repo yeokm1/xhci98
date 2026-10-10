@@ -1751,6 +1751,16 @@ static const char *const sys_9x_names[] = {
     "BIOSName", "BIOSVersion", "BIOSDate", NULL
 };
 
+/*
+ * `-nosysinfo` (owner, 2026-10-10): a machine on which the probing itself
+ * misbehaves - a GetVersionEx, a registry read or a memory query - can
+ * still be dumped. With it set, nothing below runs: no GetVersionEx, no
+ * registry read for the BIOS, the CPU or the names, no processor or memory
+ * query; the header says the details were skipped, and the rest of the
+ * report is as it was. Reading is on unless the option is given.
+ */
+static int sysinfoOff;
+
 static void write_companion_system(void)
 {
     SYS_OSVERSIONINFOEXA v;
@@ -1766,6 +1776,11 @@ static void write_companion_system(void)
     char csd[SYS_TEXT_MAX + 8];
     char text[SYS_TEXT_MAX + 8];
 
+    if (sysinfoOff) {
+        comp("\n  captured on - not read: the system details were skipped by "
+             "-nosysinfo.\n");
+        return;
+    }
     comp("\n  captured on - this machine, read by xhcisnap at the time of the "
          "dump (not\n  in the .BIN):\n");
 
@@ -5897,6 +5912,8 @@ static unsigned char ext_image[EXT_IMAGE_MAX];
 
 /*
  * **The short usage is 22 lines and that is a hard budget, not a target.**
+ * (`-nosysinfo`, task 36.47, took the blank line that stood before THE
+ * FOUR STEPS, so the count is still 22.)
  * *(Project owner: "since Win98 console cannot scroll, I think we
  * need to make best effort to keep everything within one vertical screen.
  * Especially for the initial screen if no or wrong command line arguments are
@@ -5928,9 +5945,9 @@ static void usage(void)
 "  -c N     controller index, opens \\\\.\\HCDN (default 0)\n"
 "  -o BASE  output basename (default XHCISNAP)\n"
 "  -force   write to a key matched by value NAME alone\n"
+"  -nosysinfo  with a dump: skip reading the OS, BIOS, CPU and RAM\n"
 "\n"
 "Exit 0 = the .TXT is complete.  3 = it is NOT: send the .BIN and say so.\n"
-"\n"
 "THE FOUR STEPS, and none of them is regedit:\n"
 "  1. xhcisnap -verbosity 2     0 off, 1 counters, 2 +note ring THE LOG,\n"
 "  2. restart the machine       3 +PORTSC table, 4 +everything\n"
@@ -5994,6 +6011,11 @@ static void usage_long(void)
 "                alone.  Only needed on a machine whose key has been edited\n"
 "                by hand; the tool says so when it wants this.\n"
 "  -probe        four controls on the route, for when nothing came back.\n"
+"  -nosysinfo    with a dump: do not read the system details the report's\n"
+"                header names (Windows version, BIOS, CPU, memory).  They are\n"
+"                read by default; use this only if reading them causes a\n"
+"                problem on your machine.  The header then says they were\n"
+"                skipped.\n"
 "\n"
 "WHAT A DUMP WRITES:\n"
 "  BASENAME.BIN  the raw extension image.  Send this to the maintainer - it\n"
@@ -6202,6 +6224,9 @@ static int selftest_report(const char *base)
                        "the incomplete-report branch can be driven on a host "
                        "with no controller: XHCISNAP_FAULT=write fails the "
                        "writes, XHCISNAP_FAULT=close fails the close.");
+    /* The header's system block, or its -nosysinfo line, through the
+     * same writers (task 36.47). */
+    write_companion_system();
     comp("end of self-test report\n");
     complete = finish_companion();
 
@@ -6255,8 +6280,10 @@ int main(int argc, char **argv)
     int doDisable;
     int force;
     int i;
+    const char *selftestReport;
 
     controller = 0;
+    selftestReport = NULL;
     base = "XHCISNAP";
     probeOnly = 0;
     doDump = 0;
@@ -6386,7 +6413,9 @@ int main(int argc, char **argv)
              * which is how the incomplete-report branch is driven on a host
              * with no controller and no full disk (roadmap Phase 20, F5).
              */
-            return selftest_report(argv[++i]);
+            selftestReport = argv[++i];
+        } else if (strcmp(argv[i], "-nosysinfo") == 0) {
+            sysinfoOff = 1;
         } else if (strcmp(argv[i], "-disable") == 0) {
             doDisable = 1;
         } else if (strcmp(argv[i], "-force") == 0) {
@@ -6460,6 +6489,20 @@ int main(int argc, char **argv)
      * same surprise the bare-invocation refusal above exists to prevent (the
      * 2026-09-16 audit's C4).
      */
+    /* -selftest-report is acted on once every argument is read, so that
+     * -nosysinfo beside it counts wherever it stands. */
+    if (selftestReport != NULL) {
+        return selftest_report(selftestReport);
+    }
+    /* `-nosysinfo` is a modifier on a dump and nothing else, as `-force` is
+     * on the registry write: on its own, or beside -probe, -verbosity or
+     * -disable, it asks for nothing. */
+    if (sysinfoOff && !doDump) {
+        printf("-nosysinfo only has meaning beside a dump (-dump, -o or -c), "
+               "where it skips\nreading the system details. On its own it "
+               "asks for nothing.\n");
+        return 2;
+    }
     if (force && !doSetLevel && !doDisable) {
         printf("-force only has meaning beside -verbosity or -disable, where "
                "it allows a write to\na key matched by value name alone. On "

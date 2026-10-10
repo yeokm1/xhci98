@@ -55,6 +55,9 @@ XHCISNAP -help           the long help; bare XHCISNAP prints the short one
 XHCISNAP -force ...      write to a key matched by value NAME alone. It is a
                          modifier on -verbosity / -disable only: on its own it
                          asks for nothing and is refused with exit 2
+XHCISNAP -nosysinfo -o C:\MYDUMP   a dump whose header skips reading the
+                         system details (from 2.3.0.0; see "The machine it was
+                         captured on"). A modifier on a dump only
 ```
 
 The ladder: 0 off; 1 the channel with counters only and the ring still off;
@@ -170,6 +173,15 @@ machine whose firmware strings were customised, read the block before
 posting it. Registry text is printed as plain ASCII (any other byte becomes
 `?`) and cut at 96 characters with `...`. `-selftest-sysinfo` drives the
 withholding over canned names.
+
+`-nosysinfo` beside a dump (`XHCISNAP -nosysinfo -o C:\MYDUMP`) skips all
+of it, for a machine on which the reading itself causes a problem: no
+`GetVersionEx`, no registry read for the BIOS, the CPU or the names, no
+processor or memory query. The header then says "captured on - not read:
+the system details were skipped by -nosysinfo", and the rest of the report
+is unchanged. Reading is on unless the option is given; on its own, or
+beside `-probe`, `-verbosity` or `-disable`, the option is refused with
+exit 2.
 
 It is read from the running machine when the dump is taken, never from the
 dump: the driver does not record it and the `.BIN` does not carry it. This
@@ -629,8 +641,8 @@ fault, a failing write, a failing close, a `.TXT` that cannot be created) and
 checks the exit codes and summary lines; see "Three files" above.
 
 It also drives every `-selftest-*` decode over canned data, and from 2.3.0.0
-`-selftest-sysinfo`, whose live block must not carry the host's computer or
-user name.
+`-selftest-sysinfo`, which withholds canned names, and the report path with
+and without `-nosysinfo`.
 
 MSVC 6.0 in place from `tools\MSVC600`; nothing is installed machine-wide and
 `MSVC6` overrides the location. `/Za` is not used here even though the driver
