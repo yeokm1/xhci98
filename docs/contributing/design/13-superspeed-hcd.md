@@ -2312,6 +2312,246 @@ one, the parent's release), not left to `IoDeleteDevice`. Best effort, as
 the hub interface is: a failed registration is a missing interface, not a
 failed device.
 
+### 8.11 Descriptors the cache cannot answer (task 36.45)
+
+**What is asked (owner, 2026-10-10; GitHub issue 17 item 8).** Until this
+task `IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION` (`0x220410`) was answered
+from the descriptors the bus read at enumeration - the device descriptor and
+configuration 0 - and refused everything else `STATUS_NOT_SUPPORTED`, so no
+tool saw a string: usbview's Manufacturer, Product, Serial and interface
+strings stayed empty where Microsoft's hubs fill them. Now a request the cache
+cannot answer goes to the device as a real `GET_DESCRIPTOR` on its default
+endpoint, as usbhub sends it, and the bytes come back in the request's `Data`.
+
+**What usbhub does with it** (static, `legal-provenance.md` section 4, "How
+usbhub answers `0x220410`"; XP SP3 `usbhub.sys` with its PDB, 2000 SP4
+`USBHUB20.SYS` instruction for instruction the same, 98 SE `usbhub.sys`, 7
+SP1 x86 `usbhub.sys` with its PDB):
+
+| | XP SP3, 2000 SP4, 98 SE | 7 SP1 |
+|---|---|---|
+| Output shorter than the 12-byte request | `STATUS_BUFFER_TOO_SMALL` (input length never checked) | `STATUS_NO_SUCH_DEVICE`: its parameter check (input below 4, output below 13, the port) fails into that one status |
+| `wLength` above output - 12 | `STATUS_BUFFER_TOO_SMALL` | the same |
+| Port 0 or past the hub's ports, or no device on it | `STATUS_INVALID_PARAMETER` (98 SE: success, nothing returned) | `STATUS_NO_SUCH_DEVICE`; no device: success, nothing returned |
+| `bmRequest`, `bRequest` | carried in a reserved URB field and ignored: URB function `GET_DESCRIPTOR_FROM_DEVICE` (0x0B), so the bus sends 80h, 06h | forced to 80h and 06h, written back into the caller's buffer |
+| `wValue`, `wIndex` | passed through (`wIndex` as the language id) | passed through |
+| Cache | only `wValue` 0200h with `wLength` 9 (the Power tab's request) | none while the device is addressed; device and configuration descriptor only while it is not, anything else then `STATUS_UNSUCCESSFUL` |
+| Transfer | `wLength` bytes, to the child PDO, synchronous, cancelled after 5 s | the setup's own `wLength`, buffer room `OutLen - 12`, a 2 s timeout, to the bus with the device handle |
+| Device state | nothing checked: an unenumerated or suspended device is sent the request | a handle only in the addressed state; a suspended child is neither checked nor woken |
+| Status | the bus's, unmapped | the bus's, unmapped |
+| `Information` | 12 + bytes received, even on failure | 12 + bytes received on success only |
+
+**The HCD's answer.**
+
+1. **Checks** (`XhciHubDescPlan`, `xhci_hub.c`, host vectors in `test_hub`):
+   an input or output shorter than 12 bytes, or a `wLength` above
+   `OutputBufferLength - 12`, is `STATUS_BUFFER_TOO_SMALL`; a port outside
+   the node, or no device on it, `STATUS_INVALID_PARAMETER`, as XP's and
+   2000's hubs and as this door already answered. The input check is kept
+   where usbhub has none: `METHOD_BUFFERED` leaves the system buffer past
+   the input length unwritten. `bmRequest` and `bRequest` are ignored, as
+   both hub generations ignore them: the request is always `GET_DESCRIPTOR`
+   (80h, 06h). The value 0 every `usbui.dll` sends (8.3) therefore needs no
+   special case, and nothing the caller sent is rewritten.
+2. **The cache stays first, unchanged**: `wValue` 0100h (the device
+   descriptor) and 0200h (configuration 0) are answered from the bus's copy,
+   with task 34.2's Power-tab rewrite for request code 0. That is a superset
+   of XP's one cached request and what Windows 7 answers for a device it
+   cannot address; the bytes are the device's own either way, and the Power
+   tab and usbview's tree refresh send no EP0 traffic.
+3. **Everything else is forwarded**: any string (index 0, the language list,
+   included, with `wIndex` as the language id), another configuration
+   index, the BOS, and any other type. The setup is 80h, 06h, `wValue`,
+   `wIndex`, and `min(wLength, 4096)`: 4096 is the bus's EP0 scratch
+   (`HCD_SCRATCH_CONTROL_BYTES`). A request above it asks the device for
+   4096 bytes, so only a descriptor longer than 4096 bytes - none of the
+   kinds usbview reads in practice; configuration 0, the one that grows, is
+   cached whole - reads short. `wLength` 0 is sent as a transfer with no
+   data stage. `Information` is 12 plus the bytes received, on success
+   only.
+
+**IRQL and the path.** The IOCTL arrives at PASSIVE_LEVEL from user mode,
+inside the root-hub or hub FDO's I/O count. The transfer is not issued there:
+EP0 transfers the bus makes for itself (enumeration, the serial read,
+SET_CONFIGURATION, SET_INTERFACE, CLEAR_FEATURE for a client) are the
+controller thread's alone (`HcdThreadControlOutcome`), because the thread owns
+the scratch buffer and the device's EP0 pause. So the door **pends the IRP**,
+in section 5.4's lock order:
+
+1. Under `PdoListLock`, the PDO standing for the connection is found (the
+   match `hcdDoorConnection` makes) and, while that listed PDO still names
+   it, its device record is referenced - as a URB's dispatch references it
+   (`hcdDeviceRef`), not through a referenced PDO, whose `Device` could
+   change once the lock is dropped. A root port whose hub has no PDO
+   references the port's record under the controller lock instead, unless
+   it is `Gone`.
+2. Under the controller lock: the queue must be open and the record not
+   `Gone`, else the reference is given back and the request refused. In the
+   same hold the record goes in `DriverContext[0]` and the door FDO's I/O
+   count and its event in `[1]` and `[2]` (the dispatch's own node
+   description is not kept), the FDO's count is raised once more, the IRP is
+   marked pending, its cancel routine armed, and it is listed on the
+   controller's `DoorIrps`.
+3. The thread is woken. The dispatch returns `STATUS_PENDING` without
+   completing the IRP.
+
+The thread serves the list in its powered pass after the slow IRPs
+(`HcdCfgService`), in order, at most four a pass and none begun once 250 ms
+of the pass have gone, the controller's state looked at again before each
+(a single request is bounded by its own wait, below); a pass that leaves any
+wakes the thread again. Each IRP is completed from the thread when its
+transfer completes, then the device reference and last the FDO's count are
+given back. Completion and cancellation run at any IRQL up to
+DISPATCH_LEVEL.
+
+**Serialization with the function driver.** The forwarded request goes
+through the thread's own EP0 path, not a client's queue:
+`HcdThreadControlOutcome` pauses the EP0 pipe (client URBs wait at its gate),
+lets the client transfers already on the ring finish and recovers a STALL
+among them, then sends its own transfer and resumes the pipe. It never shares
+the ring with a client transfer, and it runs in sequence with everything else
+the thread does to the device - RESET_PORT, a select, a cycle - so a request
+can neither race nor land inside one. The function driver's bulk, interrupt
+and isochronous pipes are not touched; its own EP0 requests wait at the gate
+for the length of one transfer.
+
+**Timeout, cancellation and surprise removal.**
+- *Timeout:* the thread path's own bound, 5 s to quiet EP0 and 5 s for the
+  transfer (`HCD_TRANSFER_WAIT_MS`), usbhub's 5 s on XP. A client transfer
+  that keeps EP0 busy past its bound fails the request (`NOT_SENT`, nothing
+  sent, no recovery). A transfer the device never ends is **withdrawn**,
+  as usbhub's cancel leaves the device alone, rather than meeting the rule
+  of the thread's other transfers, which recover the controller because the
+  scratch may still be written (design record 07): an arbitrary descriptor
+  reaches firmware paths enumeration never does, and a diagnostic tool
+  should not drop every device on the controller. The withdrawal spares the
+  other devices when the device has no TT and every step succeeds; a device
+  behind a TT, and a withdrawal that fails, still cost the controller
+  recovery (below). The door's transfer
+  (`HcdThreadControlDoor`) differs from the others only at its deadline,
+  where `hcdEp0Withdraw` - EP0 still paused, so no client transfer is
+  behind it - stops EP0 (Stop Endpoint); if EP0 then reads Stopped and the
+  thread's record is the only one queued, the record leaves the engine's
+  queue and the dequeue moves to the enqueue position (Set TR Dequeue). A
+  stopped TD is not processed again (xHCI 4.6.9), so the scratch is free,
+  and the device drops the unfinished control transfer at the next SETUP.
+  A Stop Endpoint's own Transfer Event completes nothing (`hcd_dev.c`), so
+  a completion seen after the stop is the device's and is answered as one.
+  **A device behind a TT (a Full- or Low-Speed device behind a High-Speed
+  hub, `TtSlot` set) is not withdrawn**: its stopped split transaction may
+  hold the hub's TT buffer, and clearing it (`HcdHubClearTt`) is a second
+  device's EP0 transfer whose failure the helper only counts, so there is
+  no checked way to finish the withdrawal - such a device keeps the
+  controller recovery. Any step that fails - a command, EP0 Halted or in
+  Error, another record queued - falls back to the controller recovery too,
+  EP0 still paused and the scratch not reused, the rule as before. Under
+  XhciTolerance a cycle mark ends the wait as for any thread transfer
+  (35-T.3/4).
+- *How long a taken request is not cancellable:* no single deadline covers
+  it, and none is claimed. It is the sum of the thread path's separate
+  waits, each bounded on its own and each ending in the bus's existing
+  handling when it runs out: quieting EP0 (5 s for client transfers to
+  finish, plus whatever an EP0 halt found there costs to recover - its
+  commands and, behind a TT, the TT clear - which runs before that
+  deadline is next looked at), the transfer (5 s), and at the deadline the
+  withdrawal's two commands. Every command waits up to
+  `HCD_COMMAND_WAIT_MS` (5 s) for admission and again for its completion,
+  and a command that does not complete is the command engine's to recover
+  (the controller recovery). So a healthy device answers in milliseconds,
+  a hung one costs tens of seconds of the thread under the power gate, and
+  nothing is unbounded. Time spent queued is not counted; a queued request
+  stays cancellable.
+- *Cancellation:* while queued the IRP is cancellable (the cancel-safe queue
+  pattern of `hcd_io.c`'s waiting list: the thread takes an IRP only once it
+  has cleared its cancel routine, a routine already running takes the IRP
+  itself, counted in `CancelsRunning`), and completes `STATUS_CANCELLED`.
+  Once the thread has taken it, it is not cancellable: the transfer is
+  bounded as above. A handle's `IRP_MJ_CLEANUP` on the root-hub or a hub
+  FDO cancels the requests still queued through that handle (matched by
+  file object, claimed by the same handshake), leaving other handles'
+  alone, as the cleanup contract asks. It first marks the file object
+  (`FsContext2`, the target driver's field) under the controller lock, the
+  lock the pend's admission holds, so a request of that handle still in
+  dispatch on another processor is refused `STATUS_CANCELLED` instead of
+  being queued after the cleanup.
+- *Surprise removal and unplug:* a device leaving marks its record `Gone`
+  and drains it (`HcdIoDeviceDrain`), which now also completes its queued
+  door IRPs `STATUS_DEVICE_NOT_CONNECTED` (`HcdDoorFlushDevice`) - before
+  the pinned-buffer check, since a queued door IRP holds no DMA - so the
+  thread's wait for the record's references never waits on an IRP only the
+  thread completes. A transfer in flight ends with the device's
+  disconnection (a transaction error) and is answered with that status. An
+  FDO's REMOVE waits for its pended requests through its I/O count; a hub
+  FDO's STOP or surprise removal closes its door (`DoorOpen`) to new ones.
+- *The controller:* a pass that cannot serve - the controller not powered
+  (D3, or suspended in D0), halted, failed or with the scratch tainted -
+  completes every queued door IRP at once (`STATUS_DEVICE_NOT_READY`) rather
+  than holding a diagnostic request across a power transition or a
+  recovery; a pass with the scratch held for a cycle leaves them for the
+  next. **The queue's rundown** is the thread's last act before it signals
+  its exit and before any controller resource goes: under the controller
+  lock the queue is closed (the door queues nothing on a closed queue) and
+  the IRPs whose cancel routines it can clear are unlinked; the lock is
+  released, those IRPs are completed, and it then waits, outside every
+  lock, until the list is empty and `CancelsRunning` is 0 -
+  a cancel routine the close could not pre-empt unlinks its IRP itself and
+  may still be completing it, and it raises that count before it releases
+  the cancel lock and drops it as its very last access to the controller.
+  This holds whether or not the device records could be freed (a pinned
+  common buffer keeps them, `HcdIoDeviceDrain`), so it does not rest on the
+  device's free waiting the count out.
+
+**Statuses.** A transfer that completes: `STATUS_SUCCESS`. A STALL or
+another device error: `STATUS_UNSUCCESSFUL` (the URB status's NTSTATUS
+through `XhciPipeNtStatus`, as a client URB reads). Not sent within the
+bound, withdrawn at its deadline, or abandoned for a cycle:
+`STATUS_CANCELLED`, what usbhub's timeout cancel returns. Device gone:
+`STATUS_DEVICE_NOT_CONNECTED`. A queue that is closed, or a pass that
+cannot serve: `STATUS_DEVICE_NOT_READY`. A forwarded request that fails
+leaves the log note `door.desc.fail` (the thread outcome, `HCD_CTL_*`, in
+the top byte, `wValue` in the low word), and a withdrawal
+`door.ep0.withdrawn` (the slot); the counts `DoorForwarded`,
+`DoorForwardFailed` and `DoorWithdrawn` are kept in the controller
+extension, outside the counter block.
+
+**Devices not addressed, being reset, suspended.** The door forwards only
+for a device with a PDO (enumerated, addressed and published), or a hub the
+bus serves with none (the device record, 8.3's fallback); an empty port, a
+device still enumerating or one whose enumeration failed is refused as
+before, `STATUS_INVALID_PARAMETER`. A device being reset (RESET_PORT) or
+cycled is served after the reset, in the thread's order, or finds its
+record `Gone`. **A device the bus has suspended is refused, not woken**
+(`STATUS_UNSUCCESSFUL`, Windows 7's answer for a device it holds no handle
+for; neither hub generation wakes a child for this IOCTL): waking would
+spend the device's idle for a diagnostic read, and would have to drive the
+link machine's resume (record 14 section 3.6) from outside the function's
+power policy. With `XhciSelectiveSuspend` 0, the default, no device is ever
+suspended. Stage A's link machine is on its own branch (36.29 to 36.31): at
+the merge the door's service tests the device's link state before the
+transfer and refuses anything but ACTIVE; record 14 section 3.3 defers the
+thread's other device-side EP0 requests, and a diagnostic read is refused
+instead of deferred so a tool is not left waiting for a wake.
+
+**Windows 98 and ME.** The same code serves both: `usbui.dll` and
+`sysclass.dll` send only the cached configuration request (8.3), and a tool
+on 9x - SweetLow's usbview opens `\\.\HCD<n>` and the hub names - waits for
+a pended IRP as NT does (`DeviceIoControl` without overlap blocks until it
+completes). Nothing here is version-gated.
+
+**The composite parent (task 36.43, branch `p36-comp`).** The door resolves
+a connection to the PDO standing for it (`hcdDoorConnection`) and forwards
+to that PDO's device record, the USB device and not a function. Whichever
+PDO 36.43 makes the connection's - the composite parent's in place of the
+group's first function - names the same record, so the forwarding does not
+change, and the cache's configuration copy stays the device's whole one.
+
+**No strings cached at enumeration.** The bus reads only the serial string
+(33.2), for instance ids, and keeps the characters, not the descriptor. Reading
+iManufacturer, iProduct and the interface strings at every enumeration would
+add EP0 requests to every device's enumeration - the step where a device is
+least tolerant - for a diagnostic view, and XP's and 2000's hubs read none
+there either. Every string goes to the device when it is asked for.
+
 ## 9. The harness and the gates (task 25.5)
 
 Every script that builds, gates, packages or measures the driver was written

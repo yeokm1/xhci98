@@ -43,6 +43,11 @@
  * build's WDK 7.1 headers would otherwise give the two architectures two
  * different definitions of one wire format.
  *
+ * A descriptor the bus's copies cannot answer - a string above all - is read
+ * from the device (task 36.45, section 8.11): the request is pended for the
+ * controller thread, which sends it through its own EP0 path and completes
+ * it (HcdDoorService).
+ *
  * IRQL: PASSIVE_LEVEL throughout (IRP_MJ_DEVICE_CONTROL from user mode, and
  * PnP), except where a function says otherwise.
  */
@@ -179,6 +184,8 @@ typedef struct _HCD_DOOR_NODE {
     ULONG SpeedClass;
     ULONG MttCapable;
     ULONG MttOn;
+    PLONG Io;                       /* the door FDO's I/O count and its   */
+    PKEVENT IoDone;                 /* event, held by a pended request    */
 } HCD_DOOR_NODE, *PHCD_DOOR_NODE;
 
 /* ----------------------------------------------------------------------- */
@@ -639,8 +646,10 @@ VOID HcdDoorHubRemove(PHCD_HUB_FDO fdo, PHCD_CONTROLLER hc)
     fdo->LinkMade = 0;
 }
 
-/* IRP_MJ_CREATE, CLOSE and CLEANUP on either FDO: no work and no access
- * check, as usbport completes them (section 8.8). */
+/* IRP_MJ_CREATE and CLOSE on every door FDO, and CLEANUP on the controller's:
+ * no work and no access check, as usbport completes them (section 8.8). A
+ * hub door's CLEANUP cancels its handle's queued requests (HcdDoorCleanup,
+ * task 36.45). */
 NTSTATUS HcdDoorCreateClose(PIRP irp)
 {
     return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
@@ -1638,46 +1647,449 @@ static NTSTATUS hcdDoorConnInfoV2(PHCD_CONTROLLER hc,
     return STATUS_SUCCESS;
 }
 
-/*
- * USB_DESCRIPTOR_REQUEST, answered from the descriptors the bus read at
- * enumeration: the device descriptor, and configuration 0 (the one the bus
- * reads, and the one usbui.dll takes bMaxPower from). Anything else - a
- * string above all - would be a control transfer on the device's EP0, which
- * this door does not issue. bRequest 0 is taken as GET_DESCRIPTOR: every
- * target's usbui.dll zero-fills the request and sets only ConnectionIndex,
- * wValue and wLength (UsbItem::GetConfigDescriptor, static, section 8.3),
- * and refusing it left every device's power "unknown".
- * IRQL: <= DISPATCH_LEVEL.
- */
-static NTSTATUS hcdDoorDescriptor(PHCD_CONTROLLER hc,
-                                  const HCD_DOOR_NODE *node, PUCHAR buf,
-                                  ULONG inLen, ULONG outLen, PULONG_PTR info)
-{
-    HCD_DOOR_CONN c;
-    ULONG port;
-    ULONG request;
-    ULONG value;
-    ULONG length;
-    ULONG room;
-    ULONG n;
+/* ----------------------------------------------------------------------- */
+/* Descriptors from the device (task 36.45)                                 */
+/* ----------------------------------------------------------------------- */
 
-    if (inLen < HCD_DESC_REQUEST_BYTES || outLen < HCD_DESC_REQUEST_BYTES) {
-        return STATUS_BUFFER_TOO_SMALL;
+/* A hub door's file object once its CLEANUP has begun (in FsContext2, the
+ * target device's driver's to use): a request still in dispatch for it is
+ * refused rather than queued (task 36.45). */
+static const UCHAR hcdDoorCleanedMark = 0;
+
+/* What one thread pass spends on door requests before it lets port
+ * service run: at most four, and none begun past 250 ms (100 ns units, the
+ * system time's low word). A single request is bounded by its own wait. */
+#define HCD_DOOR_SERVE_PER_PASS    4UL
+#define HCD_DOOR_SERVE_BUDGET      2500000UL
+
+/*
+ * The device record behind connection `location` of `parent`, referenced -
+ * the PDO standing for it (hcdDoorConnection's match), taken under
+ * PdoListLock while the listed PDO still names it, as a URB's dispatch takes
+ * it; or, at a root port whose hub has no PDO, the port's record under the
+ * controller lock unless Gone (hcdDoorHubConnection's fallback). NULL when
+ * nothing addressed and published is there. IRQL: <= DISPATCH_LEVEL.
+ */
+static PHCD_USB_DEVICE hcdDoorDeviceRef(PHCD_CONTROLLER hc, ULONG parent,
+                                        ULONG location)
+{
+    PHCD_DEVICE_PDO pdo;
+    PHCD_USB_DEVICE dev;
+    KIRQL oldIrql;
+    KIRQL lockIrql;
+
+    if (location == 0) {
+        return NULL;
     }
-    port = hcdGet32(buf, 0);
-    request = buf[5];
-    value = (ULONG)buf[6] | ((ULONG)buf[7] << 8);
-    length = (ULONG)buf[10] | ((ULONG)buf[11] << 8);
-    if (!hcdDoorPortValid(node, port) || (request != 0 && request != 6)) {
+    dev = NULL;
+    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    for (pdo = hc->DevicePdos; pdo != NULL; pdo = pdo->Next) {
+        if (pdo->Port == location && pdo->Group == pdo->Serial &&
+            pdo->ParentSerial == parent) {
+            break;
+        }
+    }
+    if (pdo != NULL && pdo->Listed && pdo->Device != NULL) {
+        dev = pdo->Device;
+        (VOID)InterlockedIncrement(&dev->Refs);
+    }
+    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    if (pdo != NULL || parent != 0 || location > XHCI_MAX_ROOT_PORTS) {
+        return dev;
+    }
+    XhciControllerLockAcquire(&hc->Hc, &lockIrql);
+    dev = hc->Ports[location - 1].Device;
+    if (dev != NULL && (dev->Gone || dev->Hub == NULL)) {
+        dev = NULL;
+    }
+    if (dev != NULL) {
+        (VOID)InterlockedIncrement(&dev->Refs);
+    }
+    XhciControllerLockRelease(&hc->Hc, lockIrql);
+    return dev;
+}
+
+/*
+ * A pended door request's end: completed, then its device reference and
+ * its count on the door FDO's I/O given back - the count last, since the
+ * FDO's REMOVE may delete it once the count is out. IRQL: <= DISPATCH_LEVEL.
+ */
+static VOID hcdDoorFinish(PIRP irp, NTSTATUS status, ULONG_PTR info)
+{
+    PHCD_USB_DEVICE dev;
+    PLONG io;
+    PKEVENT ioDone;
+
+    dev = (PHCD_USB_DEVICE)irp->Tail.Overlay.DriverContext[0];
+    io = (PLONG)irp->Tail.Overlay.DriverContext[1];
+    ioDone = (PKEVENT)irp->Tail.Overlay.DriverContext[2];
+    irp->IoStatus.Status = status;
+    irp->IoStatus.Information = NT_SUCCESS(status) ? info : 0;
+    IoCompleteRequest(irp, IO_NO_INCREMENT);
+    (VOID)InterlockedDecrement(&dev->Refs);
+    if (InterlockedDecrement(io) == 0) {
+        (VOID)KeSetEvent(ioDone, IO_NO_INCREMENT, FALSE);
+    }
+}
+
+/*
+ * The cancel routine of a queued request. Counted in CancelsRunning while
+ * the cancel lock still holds the IRP, as hcd_io.c's routines are, so the
+ * record (whose references the device's free waits out with the count) and
+ * the controller stay while it runs; it takes the IRP off the list itself -
+ * a taker leaves an IRP whose routine it could not clear (hcdDoorTake).
+ * IRQL: DISPATCH_LEVEL.
+ */
+static VOID NTAPI hcdDoorCancel(PDEVICE_OBJECT DeviceObject, PIRP Irp)
+{
+    PHCD_USB_DEVICE dev;
+    PHCD_CONTROLLER hc;
+    KIRQL oldIrql;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+    dev = (PHCD_USB_DEVICE)Irp->Tail.Overlay.DriverContext[0];
+    hc = dev->Controller;
+    (VOID)InterlockedIncrement(&hc->CancelsRunning);
+    IoReleaseCancelSpinLock(Irp->CancelIrql);
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    RemoveEntryList(&Irp->Tail.Overlay.ListEntry);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    hcdDoorFinish(Irp, STATUS_CANCELLED, 0);
+    (VOID)InterlockedDecrement(&hc->CancelsRunning);
+}
+
+/*
+ * Pend the request for the thread (section 8.11): the device referenced,
+ * one more count on the door FDO's I/O, the cancel routine armed, and the
+ * IRP listed in the same controller-lock hold that finds the queue open and
+ * the record not Gone - the hold the device's drain sets Gone under before
+ * it flushes the list (HcdDoorFlushDevice). Returns STATUS_PENDING, the IRP
+ * then the thread's or its cancel routine's, or a refusal the caller
+ * completes. IRQL: <= DISPATCH_LEVEL.
+ */
+static NTSTATUS hcdDoorPend(PHCD_CONTROLLER hc, const HCD_DOOR_NODE *node,
+                            ULONG location, PIRP irp)
+{
+    PHCD_USB_DEVICE dev;
+    PFILE_OBJECT file;
+    KIRQL oldIrql;
+    NTSTATUS refusal;
+
+    file = IoGetCurrentIrpStackLocation(irp)->FileObject;
+    dev = hcdDoorDeviceRef(hc, node->Parent, location);
+    if (dev == NULL) {
         return STATUS_INVALID_PARAMETER;
     }
-    room = outLen - HCD_DESC_REQUEST_BYTES;
-    if (room > length) {
-        room = length;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    refusal = STATUS_SUCCESS;
+    if (!hc->DoorQueueOpen) {
+        refusal = STATUS_DEVICE_NOT_READY;
+    } else if (file != NULL &&
+               file->FsContext2 == (PVOID)&hcdDoorCleanedMark) {
+        /* Its handle's CLEANUP ran while this dispatch was on its way:
+         * nothing more is queued for it (HcdDoorCleanup). */
+        refusal = STATUS_CANCELLED;
+    } else if (dev->Gone) {
+        refusal = STATUS_DEVICE_NOT_CONNECTED;
     }
-    if ((value >> 8) == 2 && (value & 0xFFUL) == 0) {
-        hcdDoorConnection(hc, node->Parent, hcdDoorLocation(node, port), &c,
-                          buf + HCD_DESC_REQUEST_BYTES, room, 0);
+    if (refusal != STATUS_SUCCESS) {
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        (VOID)InterlockedDecrement(&dev->Refs);
+        return refusal;
+    }
+    irp->IoStatus.Status = STATUS_PENDING;
+    irp->IoStatus.Information = 0;
+    irp->Tail.Overlay.DriverContext[0] = dev;
+    irp->Tail.Overlay.DriverContext[1] = node->Io;
+    irp->Tail.Overlay.DriverContext[2] = node->IoDone;
+    (VOID)InterlockedIncrement(node->Io);
+    IoMarkIrpPending(irp);
+    (VOID)IoSetCancelRoutine(irp, hcdDoorCancel);
+    if (irp->Cancel && IoSetCancelRoutine(irp, NULL) != NULL) {
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        hcdDoorFinish(irp, STATUS_CANCELLED, 0);
+        return STATUS_PENDING;
+    }
+    /* Listed even when the routine is already running: it waits for this
+     * lock and then takes the IRP off the list. */
+    InsertTailList(&hc->DoorIrps, &irp->Tail.Overlay.ListEntry);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    HcdThreadWake(hc);
+    return STATUS_PENDING;
+}
+
+/* The first queued IRP - of `dev`, and opened through `file`, each when
+ * not NULL - whose cancel routine this call cleared, off the list; NULL
+ * when none can be taken. IRQL: DISPATCH_LEVEL, controller lock held. */
+static PIRP hcdDoorTake(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                        PFILE_OBJECT file)
+{
+    PLIST_ENTRY entry;
+    PIRP irp;
+
+    for (entry = hc->DoorIrps.Flink; entry != &hc->DoorIrps;
+         entry = entry->Flink) {
+        irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
+        if (dev != NULL && irp->Tail.Overlay.DriverContext[0] != dev) {
+            continue;
+        }
+        if (file != NULL &&
+            IoGetCurrentIrpStackLocation(irp)->FileObject != file) {
+            continue;
+        }
+        if (IoSetCancelRoutine(irp, NULL) != NULL) {
+            RemoveEntryList(entry);
+            return irp;
+        }
+    }
+    return NULL;
+}
+
+/* Every queued IRP that can be taken - of `dev` and `file`, each when not
+ * NULL - completed with `status` once the lock is released. IRQL: <=
+ * DISPATCH_LEVEL. */
+static VOID hcdDoorRefuseOf(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                            PFILE_OBJECT file, NTSTATUS status)
+{
+    LIST_ENTRY mine;
+    PLIST_ENTRY entry;
+    PIRP irp;
+    KIRQL oldIrql;
+
+    InitializeListHead(&mine);
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    while ((irp = hcdDoorTake(hc, dev, file)) != NULL) {
+        InsertTailList(&mine, &irp->Tail.Overlay.ListEntry);
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    while (!IsListEmpty(&mine)) {
+        entry = RemoveHeadList(&mine);
+        irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
+        hcdDoorFinish(irp, status, 0);
+    }
+}
+
+static VOID hcdDoorRefuse(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                          NTSTATUS status)
+{
+    hcdDoorRefuseOf(hc, dev, NULL, status);
+}
+
+/* IRP_MJ_CLEANUP on a door FDO (hcd_rh.c, hcd_hubfdo.c): the file object
+ * is marked under the controller lock - the lock a dispatch queues under,
+ * so one still on its way is refused (hcdDoorPend) - and the requests
+ * already queued through it are cancelled, as the cleanup contract asks;
+ * other handles' stay, and one the thread has already taken ends with its
+ * transfer. `hc` NULL (an orphaned door) queues nothing. IRQL:
+ * PASSIVE_LEVEL. */
+VOID HcdDoorCleanup(PHCD_CONTROLLER hc, PIRP irp)
+{
+    PFILE_OBJECT file;
+    KIRQL oldIrql;
+
+    file = IoGetCurrentIrpStackLocation(irp)->FileObject;
+    if (hc == NULL || file == NULL) {
+        return;
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    file->FsContext2 = (PVOID)&hcdDoorCleanedMark;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    hcdDoorRefuseOf(hc, NULL, file, STATUS_CANCELLED);
+}
+
+/* A device leaving (HcdIoDeviceDrain, after Gone is set): its queued
+ * requests complete now, since the thread that serves them is the one that
+ * waits for their references. IRQL: PASSIVE_LEVEL. */
+VOID HcdDoorFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    hcdDoorRefuse(hc, dev, STATUS_DEVICE_NOT_CONNECTED);
+}
+
+/* The queue opens once the thread runs (hcdThreadStart) and closes as it
+ * leaves its loop: what is left is refused, and the close returns only
+ * when the list is empty and no cancel routine is still running - one
+ * whose IRP a taker could not claim unlinks it itself, and may still be
+ * completing it - so nothing touches the controller after the thread has
+ * gone, whether or not the device records could be freed. IRQL:
+ * PASSIVE_LEVEL. */
+VOID HcdDoorQueueOpen(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->DoorQueueOpen = 1;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
+VOID HcdDoorQueueClose(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+    LARGE_INTEGER due;
+    ULONG empty;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->DoorQueueOpen = 0;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    for (;;) {
+        hcdDoorRefuse(hc, NULL, STATUS_DEVICE_NOT_READY);
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        empty = IsListEmpty(&hc->DoorIrps);
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        if (empty && hc->CancelsRunning == 0) {
+            break;
+        }
+        HcdRelativeMs(&due, 1);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
+}
+
+/*
+ * One request, through the thread's EP0 path (HcdThreadControlOutcome:
+ * client URBs held at EP0's gate, those on the ring let finish, then this
+ * transfer into the scratch), and completed. The plan is read again from
+ * the system buffer, which nothing has written since the dispatch. Thread
+ * only, powered.
+ */
+static VOID hcdDoorServeOne(PHCD_CONTROLLER hc, PIRP irp)
+{
+    PIO_STACK_LOCATION stack;
+    PHCD_USB_DEVICE dev;
+    XHCI_HUB_DESC_PLAN plan;
+    PUCHAR buf;
+    ULONG outcome;
+    ULONG bytes;
+    ULONG n;
+    ULONG_PTR info;
+    NTSTATUS status;
+
+    stack = IoGetCurrentIrpStackLocation(irp);
+    buf = (PUCHAR)irp->AssociatedIrp.SystemBuffer;
+    dev = (PHCD_USB_DEVICE)irp->Tail.Overlay.DriverContext[0];
+    info = 0;
+    (VOID)XhciHubDescPlan(buf, stack->Parameters.DeviceIoControl.InputBufferLength,
+                          stack->Parameters.DeviceIoControl.OutputBufferLength,
+                          HCD_SCRATCH_CONTROL_BYTES, &plan);
+    if (dev->Gone) {
+        hcdDoorFinish(irp, STATUS_DEVICE_NOT_CONNECTED, 0);
+        return;
+    }
+    hc->DoorForwarded++;
+    bytes = 0;
+    outcome = HcdThreadControlDoor(hc, dev, (USHORT)plan.Value,
+                                   (USHORT)plan.Index, plan.Send, &bytes);
+    switch (outcome) {
+    case HCD_CTL_DONE:
+        n = (bytes < plan.Send) ? bytes : plan.Send;
+        hcdCopy(buf + XHCI_HUB_DR_REQUEST_BYTES, (const UCHAR *)hc->ScratchVa,
+                n);
+        info = XhciHubDescInfo(&plan, n);
+        status = STATUS_SUCCESS;
+        break;
+    case HCD_CTL_STALLED:
+    case HCD_CTL_FAILED:
+        /* The URB status's NTSTATUS, as a client's URB reads it. */
+        status = (NTSTATUS)XhciPipeNtStatus(
+            (ULONG)dev->Ep0Xfer.UsbdStatus);
+        if (NT_SUCCESS(status)) {
+            status = STATUS_UNSUCCESSFUL;
+        }
+        break;
+    default:
+        /* Not sent within the bound, or abandoned for a cycle: what
+         * usbhub's timeout cancel answers. */
+        status = dev->Gone ? STATUS_DEVICE_NOT_CONNECTED : STATUS_CANCELLED;
+        break;
+    }
+    if (!NT_SUCCESS(status)) {
+        hc->DoorForwardFailed++;
+        XhciLogNote(&hc->Hc, "door.desc.fail",
+                    (outcome << 24) | (plan.Value & 0xFFFFUL));
+    }
+    hcdDoorFinish(irp, status, info);
+}
+
+/*
+ * The thread's pass (HcdEnumService). `serve` 0 - the controller not
+ * powered, or halted - refuses every queued request STATUS_DEVICE_NOT_READY
+ * rather than holding a diagnostic read across a power transition or a
+ * recovery; so does a failed controller or a tainted scratch, each looked
+ * at again before every request. A scratch held for a cycle, or the thread
+ * told to stop, leaves them for the next pass or the close. Otherwise
+ * requests are served in order within HCD_DOOR_SERVE_PER_PASS and
+ * HCD_DOOR_SERVE_BUDGET, and a pass that leaves any asks for another.
+ * Thread only.
+ */
+VOID HcdDoorService(PHCD_CONTROLLER hc, ULONG serve)
+{
+    PIRP irp;
+    KIRQL oldIrql;
+    ULONG start;
+    ULONG more;
+    ULONG i;
+
+    start = HcdEnumSettleClock();
+    for (i = 0; i < HCD_DOOR_SERVE_PER_PASS; i++) {
+        if (!serve || hc->Hc.ControllerFailed || hc->ScratchTainted) {
+            hcdDoorRefuse(hc, NULL, STATUS_DEVICE_NOT_READY);
+            return;
+        }
+        if (hc->ScratchHeld != 0 || hc->ThreadStop) {
+            return;
+        }
+        if (i != 0 && HcdEnumSettleClock() - start > HCD_DOOR_SERVE_BUDGET) {
+            break;
+        }
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        irp = hcdDoorTake(hc, NULL, NULL);
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        if (irp == NULL) {
+            return;
+        }
+        hcdDoorServeOne(hc, irp);
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    more = !IsListEmpty(&hc->DoorIrps);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (more) {
+        HcdThreadWake(hc);
+    }
+}
+
+/*
+ * USB_DESCRIPTOR_REQUEST (section 8.11; XhciHubDescPlan's checks): the
+ * device descriptor and configuration 0 from the descriptors the bus read
+ * at enumeration, anything else read from the device (hcdDoorPend).
+ * bmRequest and bRequest are not read, as usbhub reads neither: every
+ * target's usbui.dll zero-fills the request and sets only ConnectionIndex,
+ * wValue and wLength (UsbItem::GetConfigDescriptor, static, section 8.3).
+ * Returns STATUS_PENDING for a request pended. IRQL: PASSIVE_LEVEL.
+ */
+static NTSTATUS hcdDoorDescriptor(PHCD_CONTROLLER hc,
+                                  const HCD_DOOR_NODE *node, PIRP irp,
+                                  PUCHAR buf, ULONG inLen, ULONG outLen,
+                                  PULONG_PTR info)
+{
+    HCD_DOOR_CONN c;
+    XHCI_HUB_DESC_PLAN plan;
+    ULONG kind;
+    ULONG location;
+    ULONG n;
+
+    kind = XhciHubDescPlan(buf, inLen, outLen, HCD_SCRATCH_CONTROL_BYTES,
+                           &plan);
+    if (kind == XHCI_HUB_DR_TOO_SMALL) {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    if (!hcdDoorPortValid(node, plan.Port)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    location = hcdDoorLocation(node, plan.Port);
+    if (kind == XHCI_HUB_DR_FORWARD) {
+        return hcdDoorPend(hc, node, location, irp);
+    }
+    if (kind == XHCI_HUB_DR_CONFIG) {
+        hcdDoorConnection(hc, node->Parent, location, &c,
+                          buf + XHCI_HUB_DR_REQUEST_BYTES, plan.Length, 0);
         if (c.Status != HCD_CONN_CONNECTED || c.ConfigTotal == 0) {
             return STATUS_INVALID_PARAMETER;
         }
@@ -1686,24 +2098,21 @@ static NTSTATUS hcdDoorDescriptor(PHCD_CONTROLLER hc,
          * times 2 at every speed, so a SuperSpeed device read a quarter of
          * its current. Its copy alone is rewritten; GET_DESCRIPTOR (6), the
          * cached descriptor and the length returned are the device's own. */
-        if (request == 0 && n > XHCI_DESC_OFF_MAX_POWER) {
-            buf[HCD_DESC_REQUEST_BYTES + XHCI_DESC_OFF_MAX_POWER] =
+        if (buf[5] == 0 && n > XHCI_DESC_OFF_MAX_POWER) {
+            buf[XHCI_HUB_DR_REQUEST_BYTES + XHCI_DESC_OFF_MAX_POWER] =
                 (UCHAR)XhciDescPowerTabByte(
-                    buf[HCD_DESC_REQUEST_BYTES + XHCI_DESC_OFF_MAX_POWER],
+                    buf[XHCI_HUB_DR_REQUEST_BYTES + XHCI_DESC_OFF_MAX_POWER],
                     c.SpeedClass);
         }
-    } else if (value == 0x0100UL) {
-        hcdDoorConnection(hc, node->Parent, hcdDoorLocation(node, port), &c,
-                          NULL, 0, 0);
+    } else {
+        hcdDoorConnection(hc, node->Parent, location, &c, NULL, 0, 0);
         if (c.Status != HCD_CONN_CONNECTED) {
             return STATUS_INVALID_PARAMETER;
         }
-        n = (room < 18) ? room : 18;
-        hcdCopy(buf + HCD_DESC_REQUEST_BYTES, c.DeviceDesc, n);
-    } else {
-        return STATUS_NOT_SUPPORTED;
+        n = (plan.Length < 18) ? plan.Length : 18;
+        hcdCopy(buf + XHCI_HUB_DR_REQUEST_BYTES, c.DeviceDesc, n);
     }
-    *info = HCD_DESC_REQUEST_BYTES + n;
+    *info = XhciHubDescInfo(&plan, n);
     return STATUS_SUCCESS;
 }
 
@@ -1776,7 +2185,8 @@ static NTSTATUS hcdDoorConnName(PHCD_CONTROLLER hc,
  * The hub IOCTLs of section 8.3 for one node, the root hub's or an external
  * hub's (task 33.4), as `node` describes it: node information, the capabilities and the meaning of 0x220408 are
  * the node's own; the connection requests are answered alike. RESET_HUB is
- * refused, as section 8.7 allows. IRQL: PASSIVE_LEVEL.
+ * refused, as section 8.7 allows. A descriptor read from the device returns
+ * pending, the IRP the thread's (task 36.45). IRQL: PASSIVE_LEVEL.
  */
 static NTSTATUS hcdDoorNodeIoctl(PHCD_CONTROLLER hc,
                                  const HCD_DOOR_NODE *node, PIRP irp)
@@ -1828,7 +2238,10 @@ static NTSTATUS hcdDoorNodeIoctl(PHCD_CONTROLLER hc,
         break;
 
     case HCD_IOCTL_CONN_DESCRIPTOR:
-        status = hcdDoorDescriptor(hc, node, buf, inLen, outLen, &info);
+        status = hcdDoorDescriptor(hc, node, irp, buf, inLen, outLen, &info);
+        if (status == STATUS_PENDING) {
+            return status;
+        }
         break;
 
     case HCD_IOCTL_CONN_NAME:
@@ -1896,7 +2309,8 @@ static NTSTATUS hcdDoorNodeIoctl(PHCD_CONTROLLER hc,
  * an orphaned root hub, which answers nothing. IRQL: PASSIVE_LEVEL, the
  * caller inside the root-hub FDO's I/O count.
  */
-NTSTATUS HcdDoorRootHubIoctl(PHCD_CONTROLLER hc, PIRP irp)
+NTSTATUS HcdDoorRootHubIoctl(PHCD_CONTROLLER hc, PIRP irp, PLONG io,
+                             PKEVENT ioDone)
 {
     HCD_DOOR_NODE node;
 
@@ -1912,6 +2326,8 @@ NTSTATUS HcdDoorRootHubIoctl(PHCD_CONTROLLER hc, PIRP irp)
     node.SpeedClass = XHCI_SPEED_HIGH;
     node.MttCapable = 1;
     node.MttOn = 1;
+    node.Io = io;
+    node.IoDone = ioDone;
     return hcdDoorNodeIoctl(hc, &node, irp);
 }
 
@@ -1922,7 +2338,8 @@ NTSTATUS HcdDoorRootHubIoctl(PHCD_CONTROLLER hc, PIRP irp)
  * answers nothing. IRQL: PASSIVE_LEVEL, the caller inside the hub FDO's
  * I/O count and its PDO's Busy.
  */
-NTSTATUS HcdDoorHubIoctl(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO hub, PIRP irp)
+NTSTATUS HcdDoorHubIoctl(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO hub, PIRP irp,
+                         PLONG io, PKEVENT ioDone)
 {
     HCD_DOOR_NODE node;
     KIRQL oldIrql;
@@ -1941,5 +2358,7 @@ NTSTATUS HcdDoorHubIoctl(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO hub, PIRP irp)
     node.MttCapable = hub->HubMttCapable;
     node.MttOn = hub->HubMttOn;
     KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    node.Io = io;
+    node.IoDone = ioDone;
     return hcdDoorNodeIoctl(hc, &node, irp);
 }

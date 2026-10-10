@@ -748,10 +748,104 @@ static void test_hub_ex_v2(void)
     CHECK_EQ(exv2_word(b, 12), 0xB, "flags written");
 }
 
+
+/* A USB_DESCRIPTOR_REQUEST (task 36.45): bmRequest and bRequest as given. */
+static void desc_request(UCHAR *b, ULONG port, ULONG rt, ULONG req,
+                         ULONG value, ULONG index, ULONG length)
+{
+    b[0] = (UCHAR)port; b[1] = (UCHAR)(port >> 8); b[2] = 0; b[3] = 0;
+    b[4] = (UCHAR)rt; b[5] = (UCHAR)req;
+    b[6] = (UCHAR)value; b[7] = (UCHAR)(value >> 8);
+    b[8] = (UCHAR)index; b[9] = (UCHAR)(index >> 8);
+    b[10] = (UCHAR)length; b[11] = (UCHAR)(length >> 8);
+}
+
+static void test_hub_desc_plan(void)
+{
+    UCHAR b[12];
+    XHCI_HUB_DESC_PLAN p;
+
+    /* usbui.dll's Power-tab request: zero-filled, bRequest 0, 0x15 bytes. */
+    desc_request(b, 2, 0, 0, 0x0200, 0, 9);
+    CHECK_EQ(XhciHubDescPlan(b, 0x15, 0x15, 4096, &p), XHCI_HUB_DR_CONFIG,
+             "usbui's configuration request is the cache's");
+    CHECK_EQ(p.Port, 2, "port");
+    CHECK_EQ(p.Length, 9, "length");
+    CHECK_EQ(XhciHubDescInfo(&p, 9), 0x15, "0x15 bytes back, as usbui wants");
+
+    desc_request(b, 1, 0x80, 6, 0x0100, 0, 18);
+    CHECK_EQ(XhciHubDescPlan(b, 12, 30, 4096, &p), XHCI_HUB_DR_DEVICE,
+             "the device descriptor is the cache's");
+
+    /* usbview's string reads. */
+    desc_request(b, 3, 0x80, 6, 0x0300, 0, 255);
+    CHECK_EQ(XhciHubDescPlan(b, 12, 12 + 255, 4096, &p),
+             XHCI_HUB_DR_FORWARD, "the language list is forwarded");
+    CHECK_EQ(p.Value, 0x0300, "string 0");
+    CHECK_EQ(p.Send, 255, "sent as asked");
+    CHECK_EQ(XhciHubDescInfo(&p, 4), 16, "12 and the bytes received");
+    desc_request(b, 3, 0x80, 6, 0x0302, 0x0409, 255);
+    CHECK_EQ(XhciHubDescPlan(b, 12, 12 + 255, 4096, &p),
+             XHCI_HUB_DR_FORWARD, "a string");
+    CHECK_EQ(p.Index, 0x0409, "the language id from wIndex");
+    CHECK_EQ(XhciHubDescInfo(&p, 300), 12 + 255,
+             "never more than the setup asked for");
+
+    /* bmRequest and bRequest are not read, as usbhub reads neither. */
+    desc_request(b, 3, 0x21, 9, 0x0302, 0x0409, 64);
+    CHECK_EQ(XhciHubDescPlan(b, 76, 76, 4096, &p), XHCI_HUB_DR_FORWARD,
+             "any bRequest is GET_DESCRIPTOR");
+
+    /* Other configurations, the BOS, other types, a cache value with an
+     * index other than 0. */
+    desc_request(b, 1, 0x80, 6, 0x0201, 0, 9);
+    CHECK_EQ(XhciHubDescPlan(b, 21, 21, 4096, &p), XHCI_HUB_DR_FORWARD,
+             "configuration 1");
+    desc_request(b, 1, 0x80, 6, 0x0F00, 0, 5);
+    CHECK_EQ(XhciHubDescPlan(b, 17, 17, 4096, &p), XHCI_HUB_DR_FORWARD,
+             "the BOS");
+    desc_request(b, 1, 0x80, 6, 0x0101, 0, 18);
+    CHECK_EQ(XhciHubDescPlan(b, 30, 30, 4096, &p), XHCI_HUB_DR_FORWARD,
+             "device descriptor index 1 is not the cache's");
+    desc_request(b, 1, 0x80, 6, 0x2200, 0, 64);
+    CHECK_EQ(XhciHubDescPlan(b, 76, 76, 4096, &p), XHCI_HUB_DR_FORWARD,
+             "any other type");
+
+    /* Lengths: usbhub's TOO_SMALL rules. */
+    desc_request(b, 1, 0x80, 6, 0x0300, 0, 255);
+    CHECK_EQ(XhciHubDescPlan(b, 12, 12 + 254, 4096, &p),
+             XHCI_HUB_DR_TOO_SMALL, "wLength past the room");
+    CHECK_EQ(XhciHubDescPlan(b, 11, 300, 4096, &p), XHCI_HUB_DR_TOO_SMALL,
+             "short input");
+    CHECK_EQ(XhciHubDescPlan(b, 300, 11, 4096, &p), XHCI_HUB_DR_TOO_SMALL,
+             "short output");
+    CHECK_EQ(XhciHubDescPlan(NULL, 12, 12, 4096, &p),
+             XHCI_HUB_DR_TOO_SMALL, "NULL");
+    desc_request(b, 1, 0x80, 6, 0x0300, 0, 0);
+    CHECK_EQ(XhciHubDescPlan(b, 12, 12, 4096, &p), XHCI_HUB_DR_FORWARD,
+             "wLength 0 in a bare request");
+    CHECK_EQ(p.Send, 0, "no data stage");
+    CHECK_EQ(XhciHubDescInfo(&p, 0), 12, "the request alone");
+
+    /* The scratch: a forwarded request above it asks for the scratch. */
+    desc_request(b, 1, 0x80, 6, 0x0201, 0, 0xFFFF);
+    CHECK_EQ(XhciHubDescPlan(b, 12, 12 + 0xFFFF, 4096, &p),
+             XHCI_HUB_DR_FORWARD, "64 KiB - 1");
+    CHECK_EQ(p.Length, 0xFFFF, "asked");
+    CHECK_EQ(p.Send, 4096, "held to the scratch");
+    CHECK_EQ(XhciHubDescInfo(&p, 4096), 12 + 4096, "at most the scratch");
+    desc_request(b, 1, 0x80, 6, 0x0200, 0, 0xFFFF);
+    CHECK_EQ(XhciHubDescPlan(b, 12, 12 + 0xFFFF, 4096, &p),
+             XHCI_HUB_DR_CONFIG, "the cached configuration");
+    CHECK_EQ(p.Send, 0xFFFF, "a cached answer is not held to the scratch");
+    CHECK_EQ(XhciHubDescInfo(&p, 5000), 12 + 5000, "a long cached copy");
+}
+
 int main(void)
 {
     test_hub_ex_speed();
     test_hub_ex_v2();
+    test_hub_desc_plan();
     test_hub_pdo_ids();
     test_hub_presented_parent();
     test_hub_port_location();

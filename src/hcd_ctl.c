@@ -1407,6 +1407,7 @@ VOID HcdControllerInitObjects(PHCD_CONTROLLER hc)
     KeInitializeEvent(&hc->XferDoneEvent, NotificationEvent, FALSE);
     KeInitializeEvent(&hc->EnumDetachDone, NotificationEvent, TRUE);
     KeInitializeEvent(&hc->DoorGate, SynchronizationEvent, TRUE);
+    InitializeListHead(&hc->DoorIrps);
     /* Task 36.3: the routing record's unread marks, not zeros, before
      * any start (a zero Mode would read as value 0). */
     XhciPirqReset(&hc->Pirq);
@@ -2030,6 +2031,8 @@ static VOID NTAPI hcdThread(PVOID Context)
         HcdLogFlush(hc, XHCI_LOG_REASON_PERIODIC, 0);
     }
     XHCI_DBG_TEXT("hcd: controller thread leaving its loop");
+    /* No door request waits for a thread that is gone (task 36.45). */
+    HcdDoorQueueClose(hc);
     /* The only arming party leaves: no timer of the controller's stays
      * queued past its storage (task 33.3). */
     (VOID)KeCancelTimer(&hc->LinkRecoverTimer);
@@ -2108,6 +2111,7 @@ static NTSTATUS hcdThreadStart(PHCD_CONTROLLER hc)
         return status;
     }
     hc->ThreadRunning = 1;
+    HcdDoorQueueOpen(hc);
     return STATUS_SUCCESS;
 }
 
