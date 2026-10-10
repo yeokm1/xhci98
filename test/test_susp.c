@@ -2634,6 +2634,51 @@ static void test_ss_dn_decode(void)
     CHECK_EQ(iface, 0xFF, "interface 255");
 }
 
+/* A device-initiated resume at a SuperSpeed root port ends at U0 by the
+ * bus's own write (8.5; the 98 SE defect stage A's legs found, where a port
+ * left in Resume was never driven on, must not recur here): the PLC with
+ * PLS=Resume is the event, the wake branch is SIGNAL - the U0 write the
+ * executor makes for a port in Resume with CCS and PED (test_link,
+ * WANT_RESUME) - and VERIFY polls until the port reads U0; a port still in
+ * Resume is polled again, never taken as verified. */
+static void test_ss_device_resume_to_u0(void)
+{
+    XHCI_SUSP_LINK link;
+    ULONG wait;
+    ULONG step;
+
+    ss_init(&link, 1);
+    link.State = XHCI_SUSP_SUSPENDED;
+    link.U3Ms = 0;
+    CHECK_EQ(XhciSuspRootEvidence(&link, portsc(XHCI_PLS_RESUME),
+                                  XHCI_PORTSC_PLC, 1),
+             XHCI_SUSP_EV_WAKE, "PLC with Resume: the device's wake");
+    CHECK_EQ(XhciSuspEvidence(&link, XHCI_SUSP_EV_WAKE), 1, "taken");
+    step = XhciSuspBegin(&link, XHCI_SUSP_RUN_WAKE, 0, 0, 1000, &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_SIGNAL, "the bus writes U0 itself");
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 1000, &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_VERIFY, "then verifies");
+    CHECK_EQ(XhciSuspVerifyRoot(portsc(XHCI_PLS_RESUME)), XHCI_SUSP_POLL_AGAIN,
+             "still in Resume: not verified");
+    CHECK_EQ(XhciSuspVerifyRoot(portsc(XHCI_PLS_U0)), XHCI_SUSP_RES_OK,
+             "U0: verified");
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 1001, &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_RECOVERY, "recovery");
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 1011, &wait);
+    CHECK_EQ(step, XHCI_SUSP_STEP_RESTART, "unarmed: restart");
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 1012, &wait);
+    CHECK_EQ(link.State, XHCI_SUSP_ACTIVE, "ACTIVE");
+    /* Resume never reaching U0 within the bound: uncertain, cycled - never
+     * left SUSPENDED or RESUMING. */
+    ss_init(&link, 1);
+    link.State = XHCI_SUSP_SUSPENDED;
+    (VOID)XhciSuspEvidence(&link, XHCI_SUSP_EV_WAKE);
+    step = XhciSuspBegin(&link, XHCI_SUSP_RUN_WAKE, 0, 0, 1000, &wait);
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_OK, 1000, &wait);
+    step = XhciSuspAdvance(&link, XHCI_SUSP_RES_EXPIRED, 1050, &wait);
+    CHECK_EQ(link.State, XHCI_SUSP_RECOVERING, "not verified: RECOVERING");
+}
+
 int main(void)
 {
     test_switch_and_caps();
@@ -2671,6 +2716,7 @@ int main(void)
     test_ss_decide();
     test_ss_hub();
     test_ss_dn_decode();
+    test_ss_device_resume_to_u0();
 
     printf("test_susp: %d checks, %d failures\n", checks, failures);
     return failures != 0;
