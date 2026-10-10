@@ -1003,3 +1003,19 @@ ULONG XhciSuspFinalize(const XHCI_SUSP_FIN_IN *in)
     }
     return XHCI_SUSP_FIN_WAIT;
 }
+
+/* ------------------------------------------------------------------ */
+/* A parent stack's system power (design record 13 section 10.12)      */
+/* ------------------------------------------------------------------ */
+
+ULONG XhciSuspParentWant(ULONG irpOk, ULONG started, ULONG systemWorking,
+                         ULONG current)
+{
+    ULONG want;
+
+    if (!irpOk || !started) {
+        return 0;
+    }
+    want = systemWorking ? XHCI_SUSP_D0 : XHCI_SUSP_D3;
+    return (want == current) ? 0UL : want;
+}

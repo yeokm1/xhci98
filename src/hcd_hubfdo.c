@@ -235,6 +235,7 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
     PHCD_CONTROLLER hc;
     PDEVICE_RELATIONS old;
     PDEVICE_RELATIONS rel;
+    POWER_STATE d0;
     KEVENT done;
     NTSTATUS status;
 
@@ -283,6 +284,11 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
         status = irp->IoStatus.Status;
         if (NT_SUCCESS(status)) {
             fdo->Common.PnpState = HCD_PNP_STARTED;
+            /* A started device is in D0, and says so (the PoSetPowerState
+             * contract; design record 13 section 10.12). */
+            fdo->Common.DevicePower = PowerDeviceD0;
+            d0.DeviceState = PowerDeviceD0;
+            (VOID)PoSetPowerState(fdo->Common.Self, DevicePowerState, d0);
             hcdHubStarted(fdo);
             if (!hcdIsComposite(fdo)) {
                 (VOID)InterlockedExchange((PLONG)&fdo->DoorOpen, 1);
@@ -352,13 +358,171 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
     return status;
 }
 
+/*
+ * Power (design record 13 section 10.12, "Power"). The FDO is its stack's
+ * power policy owner for system power only - selective suspend asks nothing
+ * of it (record 14 section 5.1), and it never requests a state of its own
+ * in S0:
+ *
+ *   - a system SET_POWER goes down first; on its way back up the FDO
+ *     requests the device state its PDO's capabilities give for it - D3
+ *     for every sleep state, D0 for S0 (XhciSuspParentWant) - and the
+ *     system IRP completes only from that request's callback. The power
+ *     manager sends a sleep's system IRPs to children before their parent
+ *     and a wake's to the parent first, so the parent reaches D3 after its
+ *     children's system IRPs and D0 before theirs;
+ *   - a device SET_POWER is recorded and reported (PoSetPowerState): a
+ *     lower state before it goes down, D0 once it has come back up;
+ *   - the rest goes down untouched.
+ *
+ * The Windows 98 rules (win98-wdm.md, "Power Management"): no request for
+ * the state the stack is already in; PoSetPowerState's return unused; the
+ * system IRP completed at PASSIVE_LEVEL - through the work item when the
+ * device IRP finished above it, which this driver's own PDO, completing
+ * every power IRP of a hub or a composite inline, never does. The system
+ * IRP and a D0 keep the FDO's I/O count until they complete, so a remove
+ * waits for them.
+ */
+
+/* IRQL: PASSIVE_LEVEL. */
+static VOID hcdHubSystemComplete(PHCD_HUB_FDO fdo)
+{
+    PIRP irp;
+
+    irp = fdo->PendingSystemIrp;
+    fdo->PendingSystemIrp = NULL;
+    PoStartNextPowerIrp(irp);
+    IoCompleteRequest(irp, IO_NO_INCREMENT);
+    hcdHubIoLeave(fdo);
+}
+
+/* IRQL: PASSIVE_LEVEL (a system worker thread). */
+static VOID NTAPI hcdHubPowerWork(PVOID Context)
+{
+    hcdHubSystemComplete((PHCD_HUB_FDO)Context);
+}
+
+/* The device IRP the system IRP asked for has finished: the system IRP may
+ * now complete. IRQL: <= DISPATCH_LEVEL. */
+static VOID NTAPI hcdHubSystemDeviceDone(PDEVICE_OBJECT DeviceObject,
+                                         UCHAR MinorFunction,
+                                         POWER_STATE PowerState,
+                                         PVOID Context,
+                                         PIO_STATUS_BLOCK IoStatus)
+{
+    PHCD_HUB_FDO fdo;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+    UNREFERENCED_PARAMETER(MinorFunction);
+    UNREFERENCED_PARAMETER(PowerState);
+    UNREFERENCED_PARAMETER(IoStatus);
+
+    fdo = (PHCD_HUB_FDO)Context;
+    if (KeGetCurrentIrql() == PASSIVE_LEVEL) {
+        hcdHubSystemComplete(fdo);
+    } else {
+        ExInitializeWorkItem(&fdo->PowerWork, hcdHubPowerWork, fdo);
+        ExQueueWorkItem(&fdo->PowerWork, DelayedWorkQueue);
+    }
+}
+
+/* IRQL: <= DISPATCH_LEVEL. */
+static NTSTATUS NTAPI hcdHubSystemDone(PDEVICE_OBJECT DeviceObject,
+                                       PIRP Irp, PVOID Context)
+{
+    PHCD_HUB_FDO fdo;
+    PIO_STACK_LOCATION stack;
+    POWER_STATE state;
+    ULONG want;
+    ULONG ok;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    fdo = (PHCD_HUB_FDO)Context;
+    stack = IoGetCurrentIrpStackLocation(Irp);
+    ok = NT_SUCCESS(Irp->IoStatus.Status) ? 1UL : 0UL;
+    if (ok) {
+        fdo->Common.SystemPower = stack->Parameters.Power.State.SystemState;
+    }
+    want = XhciSuspParentWant(
+        ok, fdo->Common.PnpState == HCD_PNP_STARTED ? 1UL : 0UL,
+        fdo->Common.SystemPower == PowerSystemWorking ? 1UL : 0UL,
+        (ULONG)fdo->Common.DevicePower);
+    XHCI_DBG_VALUE("hcd: parent FDO system state, device state asked",
+                   ((ULONG)fdo->Common.SystemPower << 8) | want);
+    if (want != 0) {
+        /* Set before the request: the callback may run inside it. */
+        fdo->PendingSystemIrp = Irp;
+        state.DeviceState = (DEVICE_POWER_STATE)want;
+        if (NT_SUCCESS(PoRequestPowerIrp(fdo->Pdo, IRP_MN_SET_POWER, state,
+                                         hcdHubSystemDeviceDone, fdo,
+                                         NULL))) {
+            return STATUS_MORE_PROCESSING_REQUIRED;
+        }
+        /* No device IRP and no callback follow: the system IRP completes
+         * now, the stack's state unchanged - a logical one, no hardware
+         * waits on it. */
+        fdo->PendingSystemIrp = NULL;
+    }
+    PoStartNextPowerIrp(Irp);
+    hcdHubIoLeave(fdo);
+    return STATUS_SUCCESS;
+}
+
+/* IRQL: <= DISPATCH_LEVEL. */
+static NTSTATUS NTAPI hcdHubD0Done(PDEVICE_OBJECT DeviceObject, PIRP Irp,
+                                   PVOID Context)
+{
+    PHCD_HUB_FDO fdo;
+    POWER_STATE state;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    fdo = (PHCD_HUB_FDO)Context;
+    if (Irp->PendingReturned) {
+        IoMarkIrpPending(Irp);
+    }
+    if (NT_SUCCESS(Irp->IoStatus.Status)) {
+        fdo->Common.DevicePower = PowerDeviceD0;
+        state.DeviceState = PowerDeviceD0;
+        (VOID)PoSetPowerState(fdo->Common.Self, DevicePowerState, state);
+    }
+    PoStartNextPowerIrp(Irp);
+    hcdHubIoLeave(fdo);
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS HcdHubFdoPower(PHCD_HUB_FDO fdo, PIRP irp)
 {
+    PIO_STACK_LOCATION stack;
     NTSTATUS status;
 
     if (!hcdHubIoEnter(fdo)) {
         PoStartNextPowerIrp(irp);
         return HcdCompleteIrp(irp, STATUS_DELETE_PENDING, 0);
+    }
+    stack = IoGetCurrentIrpStackLocation(irp);
+    if (stack->MinorFunction == IRP_MN_SET_POWER &&
+        stack->Parameters.Power.Type == SystemPowerState) {
+        /* The count is held until the system IRP completes. */
+        IoMarkIrpPending(irp);
+        IoCopyCurrentIrpStackLocationToNext(irp);
+        HCD_SET_COMPLETION_ALWAYS(irp, hcdHubSystemDone, fdo);
+        (VOID)PoCallDriver(fdo->LowerDevice, irp);
+        return STATUS_PENDING;
+    }
+    if (stack->MinorFunction == IRP_MN_SET_POWER &&
+        stack->Parameters.Power.State.DeviceState == PowerDeviceD0) {
+        /* Reported once the stack below has it; the count is held until
+         * then. */
+        IoCopyCurrentIrpStackLocationToNext(irp);
+        HCD_SET_COMPLETION_ALWAYS(irp, hcdHubD0Done, fdo);
+        return PoCallDriver(fdo->LowerDevice, irp);
+    }
+    if (stack->MinorFunction == IRP_MN_SET_POWER) {
+        fdo->Common.DevicePower = stack->Parameters.Power.State.DeviceState;
+        (VOID)PoSetPowerState(fdo->Common.Self, DevicePowerState,
+                              stack->Parameters.Power.State);
     }
     PoStartNextPowerIrp(irp);
     IoSkipCurrentIrpStackLocation(irp);

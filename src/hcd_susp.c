@@ -2065,6 +2065,12 @@ ULONG HcdSuspPdoReopen(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
         pdo->PwrState = XHCI_SUSP_D0;
         report = hcdSuspPdoEligible(hc, pdo);
     }
+    /* A hub's or a composite parent's PDO is a logical power object
+     * whatever its link: started is D0, reported here, with the switch at
+     * 0 too (design record 13 section 10.12). */
+    if (HcdPdoIsParent(pdo)) {
+        report = 1;
+    }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     KeReleaseSpinLock(&hc->PdoListLock, listIrql);
     if (report) {
@@ -2073,8 +2079,8 @@ ULONG HcdSuspPdoReopen(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
          * device is powered - on a suspended link the thread reports it
          * when its resume reaches ACTIVE (hcdSuspReportD0) - and, inside
          * the PDO's report mutex, never after a newer Dx's report (round
-         * 4). A hub, a SuperSpeed PDO and the switch at 0 keep today's
-         * START, which reports nothing. */
+         * 4). A parent PDO is reported above; a SuperSpeed PDO and the
+         * switch at 0 keep today's START, which reports nothing. */
         state.DeviceState = PowerDeviceD0;
         pdo->Common.DevicePower = PowerDeviceD0;
         (VOID)PoSetPowerState(pdo->Common.Self, DevicePowerState, state);

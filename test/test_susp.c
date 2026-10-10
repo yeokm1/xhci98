@@ -2142,6 +2142,26 @@ static void test_door_serves(void)
     CHECK_EQ(XhciSuspDoorServes(99), 0, "an unknown state is refused");
 }
 
+/* A parent stack's system power (design record 13 section 10.12): the
+ * hub or composite FDO asks D3 for any sleep state and D0 for S0, never
+ * the state its stack already has, and nothing after a failed system IRP
+ * or when not started. */
+static void test_parent_want(void)
+{
+    CHECK_EQ(XhciSuspParentWant(1, 1, 0, D0), D3, "S0 to Sx from D0: D3");
+    CHECK_EQ(XhciSuspParentWant(1, 1, 1, D3), D0, "Sx to S0 from D3: D0");
+    CHECK_EQ(XhciSuspParentWant(1, 1, 0, D3), 0,
+             "Sx already at D3: no same-state request (9x)");
+    CHECK_EQ(XhciSuspParentWant(1, 1, 1, D0), 0,
+             "S0 already at D0: no same-state request (9x)");
+    CHECK_EQ(XhciSuspParentWant(1, 1, 0, D2), D3, "Sx from D2: D3");
+    CHECK_EQ(XhciSuspParentWant(1, 1, 1, D2), D0, "S0 from D2: D0");
+    CHECK_EQ(XhciSuspParentWant(0, 1, 0, D0), 0, "failed system IRP");
+    CHECK_EQ(XhciSuspParentWant(0, 1, 1, D3), 0, "failed system IRP at S0");
+    CHECK_EQ(XhciSuspParentWant(1, 0, 0, D0), 0, "not started");
+    CHECK_EQ(XhciSuspParentWant(1, 0, 1, D3), 0, "not started at S0");
+}
+
 int main(void)
 {
     test_switch_and_caps();
@@ -2172,6 +2192,7 @@ int main(void)
     test_episode_interleavings();
     test_door_serves();
     test_composite_parent_not_voter();
+    test_parent_want();
 
     printf("test_susp: %d checks, %d failures\n", checks, failures);
     return failures != 0;

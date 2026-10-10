@@ -3856,8 +3856,11 @@ like the root hub FDO's, with `BusRelations` answered as above and
 `SURPRISE_REMOVAL` or `REMOVE` closes before going down, so no open handle
 keeps the PDO's `Busy` raised while its quiesce waits (round 1, finding 2);
 a `REMOVE` that only tears down the
-door and itself - it never detaches the bus. Power is passed down; the hub
-PDO answers it as a device PDO does. A hub PDO answers no internal IOCTL
+door and itself - it never detaches the bus. Power: the hub FDO is its
+stack's system-power policy owner, D3 on a sleep and D0 on the wake, and
+records and reports its device states (10.12, "Power", which this code
+shares since task 36.43's follow-up); the hub PDO answers power as a device
+PDO does. A hub PDO answers no internal IOCTL
 (the bus owns the hub; nothing above the hub FDO sends URBs).
 
 **The door on a hub FDO** (section 8's table, per hub): at its start
@@ -3999,8 +4002,9 @@ of 5.7 asked, so its first `BusRelations` answer waits for both;
 `BusRelations` answered by `HcdDevicePdoRelations(hc, old, parent's
 Serial)`, as a hub FDO's; `REMOVE` lets go of the children PnP has removed
 (`HcdDevicePdoLetGo`, 10.11 item 4) and detaches; `STOP`,
-`SURPRISE_REMOVAL` and the queries passed down. Power passed down, nothing
-requested (the hub FDO's rule; record 14 below). **No door**: no
+`SURPRISE_REMOVAL` and the queries passed down. Power: the system-power
+policy of "Power" below, shared with the hub FDO, and nothing requested in
+S0 (record 14). **No door**: no
 `\DosDevices\` name, no interface, `IRP_MJ_CREATE` and
 `IRP_MJ_DEVICE_CONTROL` refused `STATUS_NOT_SUPPORTED` - a composite device
 is a connection of its hub, which the hub's door already serves.
@@ -4135,11 +4139,12 @@ interface follows the parent's state, so disabling one function no longer
 takes it away, and disabling the parent does.
 
 **Power.** Without selective suspend (record 14's switch at 0, the default,
-and every build before stage A) nothing changes: the parent PDO records a
-D-IRP and completes it, as a device PDO does, and the composite FDO passes
-power down and requests nothing, as the hub FDO does, so the parent's
-devnode stays D0 while its functions' class drivers move their own PDOs;
-the device's link is never suspended. **With stage A (record 14), the
+and every build before stage A) nothing changes in S0: the parent PDO
+records a D-IRP and completes it, as a device PDO does, and the composite
+FDO requests nothing in S0, as the hub FDO does, so the parent's devnode
+stays D0 while its functions' class drivers move their own PDOs; the
+device's link is never suspended. (System power, which both FDOs do
+handle, is the last paragraph of this part.) **With stage A (record 14), the
 parent is the device's power object and the last-Dx rule is stated over
 its children:** the device's link follows the parent's children - the
 function PDOs - and leaves D0 only when the last of them has (record 14
@@ -4151,14 +4156,88 @@ all, since the parent refuses every internal IOCTL `STATUS_NOT_SUPPORTED`
 (above; nothing above its FDO sends one) - so its own D0, which no
 client ever moves, can never hold the device up. The composite readiness of
 the idle batches (record 14 section 6.2, "as the composite parent does")
-stays the bus's, over the same children. The composite FDO does not become
-a power policy owner that requests D-IRPs for the parent (orchestrator
-decision, owner to confirm: that is `usbccgp`'s model, and taking it would
-move record 14's batches and wake arming into the FDO and send
-`PoRequestPowerIrp` from it, which stage A deliberately never does on a
-child's behalf); the parent's devnode therefore reads D0 in Vista's and 7's
-power data while its device is suspended, and `XHCISNAP`'s link state is
-the reading. **What stage A's code needs** (branch `p36-susp`, not edited
+stays the bus's, over the same children.
+
+**The parent stays D0 in S0 while stage A suspends its device (owner
+decision, 2026-10-10, accepting Codex's assessment of `2d0de39`).** The
+composite FDO requests no D-IRP for the parent in S0; the parent's devnode
+therefore reads D0 in Vista's and 7's power data while its device is
+suspended, and `XHCISNAP`'s link state is the reading. The question put to
+Codex was whether the parent should mirror its device (Dx once every
+function is Dx, D0 before a function's D0). Its findings: Microsoft's
+`usbccgp` does request D2 for its own parent stack once its functions have
+idled (static disassembly of XP 5.1.2600.5585, Vista 6.0.6000.16386 and 7
+6.1.7601.17514 - `ParentIdleNotificationCallback`, the parent `WAIT_WAKE`,
+and 7's `ParentSetD0` before a function's D0), but the general WDM
+parent/child rule is an ordering constraint, not an equality one: children
+stop depending on a parent before it powers down, and the parent is
+available before they resume; all children at Dx permits a parent's idle
+and does not compel it. Here the parent is a presentation object with no
+data path: it is not a voter (`hcdSuspRead`, `hcdSuspSiblingD0`,
+`hcdSuspIdleBatchLocked`, `hcdSuspPdoEligible` all pass it by), so its D0
+cannot hold the link up; a function's D0 waits for an ACTIVE link and an
+available controller (`XhciSuspAdmit`), which is the ordering that matters
+physically; a function's `WAIT_WAKE` ends at the HCD's own function PDO and
+never travels through the composite FDO; and wake is S0-only (record 14
+sections 1, 5.2 to 5.4), so mirroring would add no S3/S4 wake either.
+Mirroring would instead need one coordinated owner for parent D-IRPs
+against function transitions, link failures, controller power epochs and
+removal, `PoRequestPowerIrp` from contexts where its completion could
+depend on the enum thread or `PowerGate`, and the 9x costs (the
+same-state request that never delivers, PASSIVE_LEVEL only) - a second
+asynchronous transition for no capability stage A needs. No P1 or P2 was
+found in the parent staying D0; the two P3s are the next paragraph.
+Revisit if xhci98 ever idles a hub or the controller (record 14 excludes
+both): under Microsoft's stack a D0 composite stack would hold its hub up.
+
+**System power: each parent FDO is its stack's policy owner (2026-10-10,
+the two P3s of that assessment).** The hub FDO and the composite FDO
+(`hcd_hubfdo.c`, shared) used to pass every power IRP down untouched,
+recording nothing, and a parent PDO's `START` reported no initial D0
+(`HcdSuspPdoReopen` reports only a stage A PDO) - against the
+`PoSetPowerState` contract, which wants the initial D0 and every actual
+transition reported per device object; and the parent PDO's capabilities
+map every sleeping state to D3 (`hcdDeviceCapabilities`) while nothing in
+its stack ever asked for D3. Now: a system `SET_POWER` goes down first; on
+its way back up the FDO records the system state and requests, with
+`PoRequestPowerIrp` on its PDO, the device state the capabilities give -
+D3 for every sleeping state (hibernate and shutdown included), D0 for S0 -
+and completes the system IRP only from that request's callback; a device
+`SET_POWER` is recorded and reported (`PoSetPowerState`), a lower state
+before it goes down and D0 once it has come back up; `START` records D0
+and reports it, at the FDO and (inside `HcdSuspPdoReopen`'s report mutex,
+the switch at 0 too) at a hub's or a composite's PDO. The decision is the
+pure `XhciSuspParentWant` (`xhci_susp.c`; `test_susp`): no request after a
+failed system IRP or before a start, and none for the state the stack
+already has. **Why the stack follows the capabilities and not the
+reverse:** the other way to make them agree would be `DeviceState[Sx]`
+reading D0 (or unspecified) - a claim no USB device can keep, its bus being
+unpowered in every sleep state, shown in Device Manager's power data, and
+unlike what `usbhub` reports for every hub and device on every target -
+whereas the request is the WDM policy owner's standard sequence, the one a
+hub driver runs (`usbhub` imports `PoRequestPowerIrp` on 98 SE, Appendix A
+row 53) and this driver's controller FDO already runs on every target
+(`hcd_power.c`), at one request per system transition. **Order:** on NT
+the power manager sends a sleep's system IRPs to children before their
+parent and a wake's to the parent first; holding the system IRP until the
+device IRP is done puts the parent's D3 after its children's system IRPs
+and its D0 before theirs. On 98 and ME the configuration manager's order
+is not read here and need not be: both parents' device states are logical
+- the bus serves a hub, and a composite's functions, whatever their
+parent PDO's D-state, and the physical order is kept at the controller
+(`PowerGate`, `hcd_power.c`) and at the link (`XhciSuspAdmit`). **The 9x
+rules** (win98-wdm.md, "Power Management"): no request for the present
+state (the pure decision), `PoSetPowerState`'s return never used, and the
+system IRP completed at PASSIVE_LEVEL - from the callback when it runs
+there, which it does under this driver's own PDO (every power IRP of a
+parent completed inline), else from a work item. The system IRP and a D0
+keep the FDO's I/O count until they complete, so a `REMOVE` waits for
+them. A failed request completes the system IRP with the stack's state
+unchanged (nothing physical waits on it). Not changed: the root-hub FDO
+(`hcd_rh.c`, `HcdRootHubFdoPower`), which passes power down the same way
+under the same D3 capabilities - left for its own task.
+
+**What stage A's code needs** (branch `p36-susp`, not edited
 here; the exact list is in the 36.43 report and the roadmap line): its
 chain walks that read the slots or form a batch (`hcdSuspRead`,
 `hcdSuspSiblingD0`, `hcdSuspIdleBatchLocked`) skip a `Composite` PDO; its
