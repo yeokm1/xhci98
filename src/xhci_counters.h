@@ -205,9 +205,15 @@ typedef struct _XHCIHC_COUNTERS {
     /* The three values' read status apart from their values (record 15
      * section 3): XHCI_POLL_FOUND_* bits. */
     ULONG IntrValuesFound;
+    /* Composite devices as devnodes (task 36.43; design record 13 section
+     * 10.12), appended: composite-parent PDOs created, and function PDOs
+     * re-presented in place at a composite FDO's start. The thread's
+     * plain writes. */
+    ULONG CompositeParents;
+    ULONG CompositeRepresented;
 } XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 96 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 98 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */

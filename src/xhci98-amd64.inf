@@ -35,12 +35,14 @@ DriverVer=10/07/2026,2.2.0.0
 %RootHubDesc%=RootHub.Dev,XHCI98\ROOT_HUB
 %HubDesc%=Hub.Dev,XHCI98\HUB
 %Hub30Desc%=Hub.Dev,XHCI98\HUB30
+%CompositeDesc%=Comp.Dev,XHCI98\COMPOSITE
 
 [XhciModels.NTamd64.6.0]
 %XhciDesc%=Xhci.Dev6,PCI\CC_0C0330
 %RootHubDesc%=RootHub.Dev6,XHCI98\ROOT_HUB
 %HubDesc%=Hub.Dev6,XHCI98\HUB
 %Hub30Desc%=Hub.Dev6,XHCI98\HUB30
+%CompositeDesc%=Comp.Dev6,XHCI98\COMPOSITE
 
 [SourceDisksNames]
 1=%DiskName%,xhci98.sys,,
@@ -100,6 +102,26 @@ AddReg=RootHub.AddReg.NT
 [Hub.Dev6.NTamd64.Services]
 AddService=xhci98,0x00000002,Xhci.AddService
 
+; A composite device (task 36.43; design record 13, section 10.12): its
+; function PDOs beneath a devnode of its own under XHCI98\COMPOSITE, bound to
+; xhci98.sys again. Copies NOTHING (HCD-HUBCOPY) and registers no property
+; page (HCD-COMPPAGE); the hub page an earlier driver may have left goes, as
+; XP's own usb.inf installs its composite parent.
+[Comp.Dev.NTamd64]
+DelReg=Comp.DelReg.NT
+
+[Comp.Dev.NTamd64.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
+[Comp.Dev6.NTamd64]
+DelReg=Comp.DelReg.NT
+
+[Comp.Dev6.NTamd64.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
+[Comp.DelReg.NT]
+HKR,,EnumPropPages32
+
 [Xhci.AddService]
 DisplayName=%XhciSvcDesc%
 ServiceType=1                       ; SERVICE_KERNEL_DRIVER
@@ -152,4 +174,5 @@ XhciDesc="xHCI98 USB 3.x eXtensible Host Controller"
 RootHubDesc="xHCI98 USB 3.x Root Hub"
 HubDesc="xHCI98 USB Hub"
 Hub30Desc="xHCI98 USB 3.x Hub"
+CompositeDesc="xHCI98 USB Composite Device"
 XhciSvcDesc="xHCI98 USB 3.x eXtensible Host Controller Driver (xhci98)"

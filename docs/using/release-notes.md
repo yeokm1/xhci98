@@ -526,10 +526,27 @@ under "Targets and their standing" lists them per system.
   a program that finds USB devices through it (`SetupDiGetClassDevs` with
   that interface, or `RegisterDeviceNotification` for its arrivals and
   removals) finds them. The root hub has none, as under Microsoft's stack.
-  A composite device the driver splits into parts has no entry of its own,
-  so the interface is on the part that holds the device's first interface:
-  while that part is disabled, has no driver or fails to start, the device
-  has no interface, although its other parts work.
+  A composite device has it on its own entry (below), not on its parts, as
+  under Microsoft's stack.
+- **A composite device has an entry of its own** (new in `2.3.0.0`; GitHub
+  issue 17). A device the driver splits into parts - a headset's audio and
+  its buttons, a keyboard with media keys, a mouse with a second interface,
+  and QEMU's own audio device - appears as "xHCI98 USB Composite Device"
+  beneath the port it is plugged into, with its parts beneath it, so each
+  port of a hub has one entry, as on Microsoft's own stacks (there the
+  entry is "USB Composite Device"). USBView and the hub pages name that
+  entry for the port. The driver still splits, configures and drives the
+  device itself; Windows' own composite driver is not used. The entry
+  installs from the driver already installed: TODO(36.43 legs: per system,
+  as the hub entry's sentence above). Disabling it in Device Manager stops
+  every part, and enabling it brings them back without the device being
+  plugged again; disabling one part leaves the others working. **After an
+  update from an earlier `2.y.y.y` each composite device is found once more
+  as new hardware**, exactly once: its own entry is new, and on the NT
+  systems a part that the device has no usable serial number for is found
+  again too, under its new parent; Windows installs each from the drivers
+  it used before. TODO(36.43 legs: what each system showed, and any setting
+  that has to be applied again).
 
 ## SweetLow's hidusbf: a mouse's polling rate
 

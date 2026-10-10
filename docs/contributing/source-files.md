@@ -45,7 +45,12 @@
 > (an external hub's FDO, the third PnP role: each hub the bus serves is a
 > devnode under `XHCI98\HUB` or `XHCI98\HUB30`, design record 13 section 10.11)
 > and the hub PDO's pure half in `xhci_hub.c` (its ids, the presented parent,
-> node information; host suite `test_hub`). Task 34.3 adds the pure
+> node information; host suite `test_hub`). Task 36.43 gives `hcd_hubfdo.c` a
+> fourth PnP role, a composite device's FDO over its composite-parent PDO
+> (`XHCI98\COMPOSITE`, design record 13 section 10.12), with the parent's ids
+> in the pure `xhci_func.c` (`XhciFuncParentId`, host suite `test_func`) and
+> the parent, its functions and their in-place re-presentation in
+> `hcd_pdo.c`. Task 34.3 adds the pure
 > `xhci_psw.c` / `xhci_psw.h` (the Intel EHCI-to-xHCI port switchover: the
 > device-id gate, the board exemption, the `XhciIntelPortSwitch` rule, and the
 > route and release sequences over two caller-supplied configuration-space
