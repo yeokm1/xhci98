@@ -2485,6 +2485,13 @@ static ULONG hcdCfgSetDequeue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     return 1;
 }
 
+/* Selective suspend's rewind after its stop (hcd_susp.c, hcdSuspRewind):
+ * Set TR Dequeue to the ring's software dequeue. Thread only. */
+ULONG HcdCfgRewind(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PHCD_PIPE pipe)
+{
+    return hcdCfgSetDequeue(hc, dev, pipe);
+}
+
 /* The endpoint a pipe belongs to: a stream's endpoint, or the pipe. */
 static PHCD_PIPE hcdCfgEndpointOf(PHCD_PIPE pipe)
 {

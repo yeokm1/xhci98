@@ -1828,9 +1828,10 @@ or says it was found by reading the code.
   Windows 98 SE's own USB stack on a UHCI controller, with this driver not
   loaded, wedges the same way at about the same rate (14 of 30 tries,
   against 23 of 39 under this driver, attaching 40, 120 and 300 seconds
-  after the boot), and `1.2.0.0` and `2.2.0.0` showed it too. Waiting
-  after the boot did not avoid it in these readings, though an earlier
-  reading had suggested two minutes would. Only a restart ends it.
+  after the boot, with selective suspend on or off), and `1.2.0.0` and
+  `2.2.0.0` showed it too. Waiting after the boot did not avoid it in
+  these readings, though an earlier reading had suggested two minutes
+  would. Only a restart ends it.
   Likewise, USBView walked and closed while a USB audio device was
   attached froze the machine, or stopped it with a fatal exception in
   `USBAUDIO`, about half the time, on Windows' own stack as well; with no

@@ -396,6 +396,11 @@ typedef struct _HCD_PIPE {
     ULONG SuspendPause;             /* one of Paused is selective
                                      * suspend's gate (design record 14
                                      * section 3.2); controller lock      */
+    ULONG SuspStopWatch;            /* the suspend's Stop Endpoint is out:
+                                     * its Stopped event is read for     */
+    ULONG SuspStopUntouched;        /* positive evidence that the head TD
+                                     * moved nothing (hcd_dev.c); both
+                                     * controller lock (36.35's rewind)  */
     struct _HCD_XFER *Exclusive;    /* a request split into chunks: none
                                      * other is published until it ends   */
     ULONG BigRing;                  /* 36.25: a stream's ring of
@@ -1682,10 +1687,24 @@ typedef struct _HCD_CONTROLLER {
      * thread's), bounded by HCD_HUB_SPEED_NOTE_BUDGET. */
     ULONG HubSpeedFallback;
     ULONG HubSpeedNotes;
-    /* The thread's claimed IRPs, each completed by a system work item of
-     * its own (hcd_susp.c, hcdSuspDefer): the items queued and not yet
-     * returned, which the stop waits out. */
-    volatile LONG SuspDoneBusy;
+    /* The thread's claimed IRPs, completed by a pool of parked workers
+     * (hcd_susp.c, hcdSuspDefer; record 14 section 3.12): the workers'
+     * contexts and the pending IRPs, under SuspDoneLock; provisioned by
+     * the start, grown by the grower only when every one is held, joined
+     * by the stop.
+     * Initialized by each start. */
+    KSPIN_LOCK SuspDoneLock;
+    LIST_ENTRY SuspDoneList;        /* every worker                      */
+    LIST_ENTRY SuspDonePending;     /* claimed IRPs awaiting a worker     */
+    ULONG SuspDoneCount;            /* workers on SuspDoneList            */
+    ULONG SuspDoneIdle;             /* of them, parked                    */
+    ULONG SuspDoneStop;             /* the stop: leave once none pending  */
+    ULONG SuspDoneStalled;          /* the grower's stall watch ...       */
+    ULONG SuspDoneStallSince;       /* ... from (system time low word)    */
+    struct _HCD_SUSP_DONE *SuspGrower;  /* the thread that makes workers  */
+    ULONG SuspGrowStop;
+    volatile LONG SuspDoneHolds;    /* settles between claim and hand-off */
+    volatile LONG SuspDoneClosed;   /* the stop's drain: no more of them  */
     /* The transfer size (tasks 36.21 and 36.22; xhci_xstat.h, hcd_io.c):
      * the readings since the start, zeroed and the value latched by each
      * start (hcd_ctl.c), and the class drivers' records (hcd_urb.c), kept
@@ -2346,6 +2365,7 @@ ULONG HcdSuspUnlinkLocked(PHCD_CONTROLLER hc, struct _HCD_DEVICE_PDO *pdo,
                           PHCD_SUSP_SETTLE out);
 VOID HcdSuspUnlinkFinish(PHCD_CONTROLLER hc, PHCD_SUSP_SETTLE s);
 VOID HcdSuspDoneDrain(PHCD_CONTROLLER hc);
+VOID HcdSuspDoneStart(PHCD_CONTROLLER hc);
 VOID HcdSuspControllerDownLocked(PHCD_CONTROLLER hc);
 VOID HcdSuspControllerUp(PHCD_CONTROLLER hc);
 VOID HcdSuspSettleStale(PHCD_CONTROLLER hc);
@@ -2361,6 +2381,7 @@ VOID HcdSuspDriverInit(VOID);
 VOID HcdSuspDriverUnload(VOID);
 /* hcd_cfg.c's half of 3.3's deferral */
 VOID HcdCfgUndefer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+ULONG HcdCfgRewind(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PHCD_PIPE pipe);
 VOID HcdCfgFlushPdoDeferred(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                             struct _HCD_DEVICE_PDO *pdo);
 

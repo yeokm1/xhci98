@@ -353,6 +353,32 @@ the stage A package, `XhciSelectiveSuspend` 0 and 1, against the rows
 above. A rate that differs from the UHCI control's would make stage A's
 answers a suspect; one that matches leaves the limitation where it is.
 
+### 36.41's qualifying re-measure on stage A's build (2026-10-10)
+
+Development host A, QEMU 11.1.0, the same kit (copied to
+`out\p36-susp\audio`) and bases; the `release` x86 package of branch
+`p36-susp` at `4282007` (`xhci98.sys` 240,391 bytes, SHA-256
+`b462112b...`), selective suspend's stage A built in. `XhciSelectiveSuspend`
+absent (0) on the base `w98-audio-xhci-base`; set to 1 on an overlay of it
+made a base of its own (`vm\t36sau\w98-audio-xhci-ss1-base.qcow2`), so the
+usb-audio device's QUERY_CAPABILITIES carries stage A's answers (D1, D2,
+wake from D2) there. Three batches in parallel slots; verdicts as the
+baseline's (`out\p36-susp\audio\reps.txt`, `reps-run1.txt`; two
+repetitions failed in the kit, an overlay race and an admission timeout,
+and are not counted).
+
+| Attach after t0 | switch 0 | switch 1 | baseline `xhci98` | UHCI control |
+|---|---|---|---|---|
+| 120 s | 6 of 9 wedged | 5 of 9 | 14 of 20 | 7 of 12 |
+| 300 s | 3 of 3 | 2 of 2 | 7 of 13 | 4 of 12 |
+
+**Verdict.** The same: stage A's capabilities change nothing a count this
+size can see (7 of 11 at switch 1 against 9 of 12 at 0, 21 of 33 for the
+baseline and 11 of 24 for the UHCI control with no `xhci98` at all). The
+wedge stays Windows 98 SE's own, a documented limitation; waiting longer
+before attaching does not avoid it on this vehicle, so the release notes
+no longer advise it.
+
 ## 98 SE hot-plug hangs
 
 Task 36.44. During 36.17-36.19's legs (`out\p36-i17\legs\report.md`,
@@ -996,3 +1022,55 @@ New Hardware wizard finished before the next device is removed (on 98 SE
 the `usb-kbd` leg after L5, or left out: its second-stage install did not
 come up in the matrix). The release notes' known limitation now says the
 hold covers every port, not only the device's own.
+
+## 36.35 - stage A's completion pool: the 98 SE shutdown hang (2026-10-10)
+
+**The defect.** With `XhciSelectiveSuspend` 1 and the test client bound
+in D0, Windows 98 SE hung at "Windows is shutting down" (`8d5baa1`, both
+flavours; with no client device bound the shutdown took 7 s). Traced
+with temporary lines (`out\p36-susp\legs\w98\tmp-shutdown-traces.patch`,
+not committed): the PDO's S5 SET_POWER, the client's D3, the Dx pended,
+the suspend sequence, the Dx claimed and handed off, the enum thread
+leaving the gate - then `PsCreateSystemThread` in the hand-off's thread
+creation (`HcdSuspDoneLaunch`), and nothing after it. The client
+completes its system IRP only in its D3 callback, so the shutdown
+waited for ever. It was the wake-wedge fix's per-IRP completion thread,
+created at completion time.
+
+**The fix** (record 14 section 3.12; `a8ffc73`, `8201e2d`, `8b9a272`,
+`14166b6`): the claimed IRPs are completed by a pool of parked workers
+that the PnP start provisions (two, and a grower thread, while the switch
+is on; one not had turns the switch off for that start). No completion
+and no enum pass waits on a thread's creation; the grower adds a worker
+only after an IRP has waited 500 ms with none parked. Codex thread
+`01a12620`: round 1 four P1s (growth on the enum thread, a ceiling that
+deadlocks a deep chain, the drain racing a power-path hand-off, the 9x
+flag join), round 2 one P1 (the drain's power-gate barrier rests on an
+event wait 9x may leave unsatisfied) and one P3, round 3 clean. Two
+residuals are stated in the record, not closed: a chain deeper than the
+spares during a 9x transition needs a creation the transition may block,
+and the 9x flag join proves the context's last use, not the image's exit.
+
+**Readings.** Development host A, QEMU 11.1.0, the `release` x86 package
+of `14166b6` (`xhci98.sys` 268,183 bytes, SHA-256 `8951b850...`), the
+test client (`XHCIPM.SYS`), `XhciSelectiveSuspend` 1; raw texts in
+`out\p36-susp\legs\w98\notes-W3.txt` and `legs\w7x86\`.
+
+| Guest | Leg | Reading | Verdict |
+|---|---|---|---|
+| 98 SE | the start | `susp.done.pool` 2, `susp.switch` 1 | as designed |
+| 98 SE | S3 suspend | WAIT_WAKE held, D2: `susp.seq` `00102110`, `SuspSuspended` 1, `SuspArms` 1 | pass |
+| 98 SE | S4 remote wake | the WAIT_WAKE completed `0` and its callback ran, the client's D0, reads 6 to 14; `00120350`, `SuspWakeEvents` 1, `SuspDisarms` 1 | pass |
+| 98 SE | S5 host resume | D2 then D0: `00102110`, `00120250`, `SuspResumesBegun` 1, reads 14 to 20 | pass |
+| 98 SE | shutdown, the client in D0, reads running | off in 7 s (was a hang) | pass |
+| 98 SE | standby, the client in D0 | S3 reached (no hang on entry); at `system_wakeup` the guest reset | entry pass; resume is 36.28 part 2's |
+| 98 SE | standby, no USB device (control) | S3 and back to the desktop; a console program then run stopped with fatal exception 0E at `BFF9DFFF`, the address 36.28 part 1 read after a 98 SE standby on `ebe3ec9` | the open post-standby defect, not this fix |
+| 7 x86 | the start | `susp.done.pool` 2 | as designed |
+| 7 x86 | S3, S4, S5 | `00202110`, then `00220350` (wake: WAIT_WAKE `0`, callback, D0, reads 6 to 14), then `00202110`, `00220250` (reads 14 to 20) | pass |
+| 7 x86 | shutdown, the client in D0 | off in 18 s | pass |
+| 7 x86 | hidusb's own idle (brief C1) | a `usb-mouse` with `SelectiveSuspendEnabled` 01 in its Device Parameters, replugged, four minutes untouched: no idle IRP reached the bus | Windows 7's hidusb does not idle QEMU's mouse on that value alone |
+
+**Owed.** 98 SE standby's resume (36.28 part 2, the open post-standby
+defect, now readable with the client bound since the entry no longer
+hangs); the rest of 36.35's legs in the combined matrix; the bench
+(36.36).
