@@ -1056,10 +1056,20 @@ static VOID hcdGo(PHCD_CONTROLLER hc, PHCD_XFER x)
     dev = pipe->Device;
     hcdCancelOn(x->Irp, x);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    if (x->CancelRequested || pipe->Closed || dev->Gone) {
+    if (x->CancelRequested || pipe->Closed || dev->Gone ||
+        (hc->Hc.Flags & XHCI_EXT_FLAG_SUSPENDED) != 0) {
         /* Cancelled, or its pipe or device going, while it was being
          * filled in: it completes now and is never held, so no drain the
-         * thread has already passed can miss it (round 4, finding 2). */
+         * thread has already passed can miss it (round 4, finding 2).
+         * Likewise on a suspended controller (task 36.28): held there it
+         * would wait for the resume, past the settle's drain (Codex review
+         * of 36.28, round 1, finding 1); and the refusal gives the saved
+         * state up, so the resume enumerates afresh rather than restore a
+         * class stack its failure may have left in recovery (finding 2). */
+        if ((hc->Hc.Flags & XHCI_EXT_FLAG_SUSPENDED) != 0) {
+            hc->Hc.SavedStateValid = 0;
+            hc->SuspendRefused = 1;
+        }
         x->Engine = 0;
         x->Status = dev->Gone ? HCD_USBD_DEVICE_GONE : HCD_USBD_CANCELED;
         x->State = HCD_XFER_DONE;
@@ -1308,6 +1318,18 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
         x->Status = HCD_USBD_INVALID_PARAMETER;
     }
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (ok && (hc->Hc.Flags & XHCI_EXT_FLAG_SUSPENDED) != 0) {
+        /* Task 36.28: nothing is published on a suspended controller. A
+         * TD left there could end only in the resume, and Windows ME
+         * holds the resume behind its own I/O (HcdIoSuspendSettle); the
+         * request fails now instead, as one in flight at the suspend
+         * did, and the save is given up as for any refusal while
+         * suspended (hcdGo). */
+        ok = 0;
+        x->Status = HCD_USBD_CANCELED;
+        hc->Hc.SavedStateValid = 0;
+        hc->SuspendRefused = 1;
+    }
     if (ok && !dev->Gone && !pipe->Closed && !x->CancelRequested &&
         (pipe->Paused ||
          (pipe->Exclusive != NULL && pipe->Exclusive != x &&
@@ -2060,6 +2082,124 @@ static VOID hcdDrainOne(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd)
     HcdIoDeferred(hc);
 }
 
+/*
+ * Task 36.28: the controller has just been suspended for a system sleep or
+ * a D3 (hcd_power.c), and its halt read back. Whatever a client still has
+ * in flight - on a ring, held, or waiting for a record - would complete
+ * only in the resume: from the reinitialization, which drops every device,
+ * or from a restore. Windows ME delivers the wake's S0 only after its own
+ * I/O path has settled, so a USB disk's transfer left there hung the guest
+ * after a standby with a copy running, and stopped a hibernate before the
+ * file was written (36.28's reading). So every such request completes now,
+ * CANCELED, as an abort's would, and the slow IRPs queued for the thread
+ * with them, DEVICE_GONE, as a leaving device's; the saved state, if any,
+ * is given up - the rings now name TDs whose records are gone - so the
+ * resume reinitializes, as it does on any controller without Force Save
+ * Context, and the devices are enumerated afresh. A hub's own
+ * status-change record is not a client's and stays (hubs are skipped);
+ * the thread's EP0 record, not running behind the power gate, is detached
+ * with the rest but never completed as a client's (hcdDrainOne). Nothing in flight: nothing done, the save kept. With neither the
+ * halt read back nor bus mastering confirmed off, the rings may still be
+ * followed, and nothing is touched.
+ * IRQL: PASSIVE_LEVEL, the power gate held, so the thread is not inside a
+ * service pass.
+ */
+static ULONG hcdSuspendOwedOne(PHCD_PIPE p, PXHCI_TRANSFER own)
+{
+    PXHCI_TRANSFER t;
+
+    if (!IsListEmpty(&p->Held) || !IsListEmpty(&p->Waiting)) {
+        return 1;
+    }
+    for (t = p->Queue->Head; t != NULL; t = t->Next) {
+        if (t != own) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* A client's request on the pipe or any of its streams; the thread's own
+ * EP0 record is not one. Controller lock held. */
+static ULONG hcdSuspendOwed(PHCD_PIPE pipe)
+{
+    PHCD_PIPE p;
+    ULONG id;
+
+    if (hcdSuspendOwedOne(pipe, &pipe->Device->Ep0Xfer)) {
+        return 1;
+    }
+    for (id = 1; (p = hcdStreamAt(pipe, id)) != NULL; id++) {
+        if (hcdSuspendOwedOne(p, NULL)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+VOID HcdIoSuspendSettle(PHCD_CONTROLLER hc, ULONG dmaStopped)
+{
+    PHCD_USB_DEVICE dev;
+    PHCD_PIPE pipe;
+    KIRQL oldIrql;
+    ULONG owed;
+    ULONG slot;
+    ULONG dci;
+
+    if ((hc->Hc.Flags & XHCI_EXT_FLAG_SUSPENDED) == 0 ||
+        hc->Hc.HcInfoStatus != XHCI_HC_OK) {
+        return;
+    }
+    if (!dmaStopped) {
+        /* The suspend's quiesce did not prove DMA stopped - neither a halt
+         * nor a verified BME clear (XhciSuspendController counted a
+         * failure): the rings may still be followed, and nothing is
+         * touched (Codex review of 36.28, rounds 1 and 2). With the proof,
+         * a restore refuses a controller that is not halted and the
+         * reinitialization resets it before giving BME back, so no stale
+         * TD runs. */
+        return;
+    }
+    owed = 0;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    for (slot = 1; slot <= XHCI_MAX_SLOTS && !owed; slot++) {
+        dev = hc->SlotDevice[slot];
+        if (dev == NULL || dev->Gone || dev->Hub != NULL) {
+            continue;
+        }
+        for (dci = 1; dci < 32 && !owed; dci++) {
+            pipe = (dci == 1) ? &dev->Ep0Pipe : dev->Pipes[dci];
+            if (pipe != NULL && hcdSuspendOwed(pipe)) {
+                owed = 1;
+            }
+        }
+    }
+    if (!owed) {
+        owed = HcdCfgSlowQueued(hc);
+    }
+    if (owed) {
+        hc->Hc.SavedStateValid = 0;
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (!owed) {
+        return;
+    }
+    XhciLogNote(&hc->Hc, "power.suspend.drained", 1);
+    for (slot = 1; slot <= XHCI_MAX_SLOTS; slot++) {
+        dev = hc->SlotDevice[slot];
+        if (dev == NULL || dev->Gone || dev->Hub != NULL) {
+            continue;
+        }
+        HcdCfgFlushDevice(hc, dev);
+        for (dci = 1; dci < 32; dci++) {
+            pipe = (dci == 1) ? &dev->Ep0Pipe : dev->Pipes[dci];
+            if (pipe != NULL) {
+                HcdIoDrainPipe(hc, pipe, HCD_USBD_CANCELED);
+            }
+        }
+    }
+}
+
 VOID HcdIoDrainPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd)
 {
     PHCD_PIPE p;
@@ -2138,6 +2278,7 @@ ULONG HcdIoDeviceDrain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     dev->Gone = 1;
+    HcdSuspDeviceGone(dev);
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     if (hc->CommonBufferPinned) {
         /* The controller could not be proven to have stopped mastering:

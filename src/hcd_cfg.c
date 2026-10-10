@@ -168,6 +168,21 @@ NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         }
         return HcdIoRefuseLater(pdo, irp, urb, HCD_USBD_DEVICE_GONE);
     }
+    if ((hc->Hc.Flags & XHCI_EXT_FLAG_SUSPENDED) != 0) {
+        /* Task 36.28: not queued behind a suspended controller, whose
+         * resume a client may be holding up (hcd_io.c,
+         * HcdIoSuspendSettle); refused as a leaving device's are, and the
+         * save given up so the resume enumerates afresh (hcd_io.c,
+         * hcdGo). */
+        hc->Hc.SavedStateValid = 0;
+        hc->SuspendRefused = 1;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        (VOID)InterlockedDecrement(&dev->Refs);
+        if (urb == NULL) {
+            return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+        }
+        return HcdIoRefuseLater(pdo, irp, urb, HCD_USBD_DEVICE_GONE);
+    }
     /* The dispatch stamp (HcdIoStamp) moves to DriverContext[1], unused
      * while queued, so a hold of it (hcdCfgHoldUnreadable) is measured
      * against an abort in the order the two were submitted. */
@@ -198,6 +213,8 @@ static VOID hcdCfgComplete(PHCD_USB_DEVICE dev, PIRP irp, PURB urb,
         irp->IoStatus.Status = STATUS_SUCCESS;
     } else if (usbd == HCD_USBD_DEVICE_GONE) {
         irp->IoStatus.Status = STATUS_NO_SUCH_DEVICE;
+    } else if (usbd == HCD_USBD_CANCELED) {
+        irp->IoStatus.Status = STATUS_CANCELLED;
     } else {
         irp->IoStatus.Status = STATUS_UNSUCCESSFUL;
     }
@@ -205,6 +222,114 @@ static VOID hcdCfgComplete(PHCD_USB_DEVICE dev, PIRP irp, PURB urb,
     IoCompleteRequest(irp, IO_NO_INCREMENT);
     (VOID)InterlockedDecrement(&pdo->UrbsPending);
     (VOID)InterlockedDecrement(&dev->Refs);
+}
+
+/*
+ * Selective suspend's deferral (design record 14 sections 3.3 and 3.10): a
+ * slow IRP that waits on its device while the link is not ACTIVE sits on
+ * dev->SlowDeferred, cancellable by 4.2's handshake: the cancel routine
+ * always completes it CANCELLED, and a claimer (the undeferral, the
+ * device's flush) takes only an IRP whose routine it cleared, leaving one
+ * a routine owns on the list for that routine (Codex review of 36.30,
+ * round 1, finding 2). The IRP keeps its UrbsPending count and device
+ * reference until hcdCfgComplete, whoever completes it.
+ */
+static ULONG hcdCfgDeferredHas(PHCD_USB_DEVICE dev, PIRP irp)
+{
+    PLIST_ENTRY entry;
+
+    for (entry = dev->SlowDeferred.Flink; entry != &dev->SlowDeferred;
+         entry = entry->Flink) {
+        if (entry == &irp->Tail.Overlay.ListEntry) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* IRQL: DISPATCH_LEVEL, called with the cancel spin lock, which it releases
+ * before the controller lock (record 13 section 5.4). */
+static VOID NTAPI hcdCfgDeferCancel(PDEVICE_OBJECT DeviceObject, PIRP irp)
+{
+    PHCD_USB_DEVICE dev;
+    PHCD_CONTROLLER hc;
+    KIRQL oldIrql;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+    IoReleaseCancelSpinLock(irp->CancelIrql);
+    dev = (PHCD_USB_DEVICE)irp->Tail.Overlay.DriverContext[0];
+    hc = dev->Controller;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (hcdCfgDeferredHas(dev, irp)) {
+        RemoveEntryList(&irp->Tail.Overlay.ListEntry);
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    hcdCfgComplete(dev, irp, hcdCfgUrbOf(irp), HCD_USBD_CANCELED);
+}
+
+/* Thread only. */
+static VOID hcdCfgDefer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PIRP irp)
+{
+    KIRQL oldIrql;
+    ULONG back;
+
+    back = 0;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    InsertTailList(&dev->SlowDeferred, &irp->Tail.Overlay.ListEntry);
+    (VOID)IoSetCancelRoutine(irp, hcdCfgDeferCancel);
+    if (irp->Cancel && IoSetCancelRoutine(irp, NULL) != NULL) {
+        /* Cancelled before it was published: taken back here. */
+        RemoveEntryList(&irp->Tail.Overlay.ListEntry);
+        back = 1;
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (back) {
+        hcdCfgComplete(dev, irp, hcdCfgUrbOf(irp), HCD_USBD_CANCELED);
+    }
+}
+
+/* The deferred IRPs this claimer owns, off the list onto `to`'s head in
+ * their order (`head` 1) or its tail (0). Controller lock held. */
+static ULONG hcdCfgDeferredTake(PHCD_USB_DEVICE dev, PLIST_ENTRY to,
+                                ULONG head)
+{
+    PLIST_ENTRY entry;
+    PLIST_ENTRY step;
+    PIRP irp;
+    ULONG any;
+
+    any = 0;
+    for (entry = head ? dev->SlowDeferred.Blink : dev->SlowDeferred.Flink;
+         entry != &dev->SlowDeferred; entry = step) {
+        step = head ? entry->Blink : entry->Flink;
+        irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
+        if (IoSetCancelRoutine(irp, NULL) == NULL) {
+            continue;       /* its cancel routine owns it */
+        }
+        RemoveEntryList(entry);
+        if (head) {
+            InsertHeadList(to, entry);
+        } else {
+            InsertTailList(to, entry);
+        }
+        any = 1;
+    }
+    return any;
+}
+
+/* The device's link is ACTIVE again (hcd_susp.c): its deferred IRPs back
+ * to the head of SlowIrps, in order. Thread only. */
+VOID HcdCfgUndefer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    KIRQL oldIrql;
+    ULONG any;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    any = hcdCfgDeferredTake(dev, &hc->SlowIrps, 1);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (any) {
+        HcdThreadWake(hc);
+    }
 }
 
 /*
@@ -250,6 +375,25 @@ static VOID hcdCfgHoldUnreadable(PHCD_USB_DEVICE dev, PIRP irp, PURB urb)
     (VOID)InterlockedDecrement(&dev->Refs);
 }
 
+/* Whether any slow IRP is queued for the thread, or deferred on a device
+ * (task 36.28, HcdIoSuspendSettle). Controller lock held. */
+ULONG HcdCfgSlowQueued(PHCD_CONTROLLER hc)
+{
+    PHCD_USB_DEVICE dev;
+    ULONG slot;
+
+    if (!IsListEmpty(&hc->SlowIrps)) {
+        return 1;
+    }
+    for (slot = 1; slot <= XHCI_MAX_SLOTS; slot++) {
+        dev = hc->SlotDevice[slot];
+        if (dev != NULL && !IsListEmpty(&dev->SlowDeferred)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* A device leaving (hcd_io.c, HcdIoDeviceGone): its queued slow URBs
  * complete as DEVICE_GONE here, since only this thread serves them and it
  * is the one waiting for their references. Thread only. */
@@ -263,6 +407,9 @@ VOID HcdCfgFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 
     InitializeListHead(&mine);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    /* Those selective suspend deferred first, in their order (design
+     * record 14 section 3.3), but for any a cancel routine owns. */
+    (VOID)hcdCfgDeferredTake(dev, &mine, 0);
     for (entry = hc->SlowIrps.Flink; entry != &hc->SlowIrps; entry = next) {
         next = entry->Flink;
         irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
@@ -1988,7 +2135,10 @@ static VOID hcdCfgReleases(PHCD_CONTROLLER hc)
             break;
         }
         dev = hc->SlotDevice[slot];
-        if (dev == NULL) {
+        if (dev == NULL || !HcdSuspLinkActive(dev)) {
+            /* A device whose link selective suspend holds keeps its
+             * release owed, whole, until it is ACTIVE (design record 14
+             * section 3.10). */
             continue;
         }
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
@@ -3157,7 +3307,7 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
      * reaches a device being torn down (finding 1). */
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     if (pipe->Queue->Count != 0 && state != XHCI_EP_STATE_DISABLED &&
-        !dev->Gone) {
+        !dev->Gone && HcdSuspLinkActive(dev)) {
         /* The survivors run again: the device's sequence moves (Codex
          * review of the Phase 28-31 integration, round 6, finding 4). */
         hcdCfgEndpointOf(pipe)->SeqUsed = 1;
@@ -4169,6 +4319,20 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
         if (dev->Gone) {
             hcdCfgComplete(dev, irp, urb, HCD_USBD_DEVICE_GONE);
             continue;
+        }
+        if (!HcdSuspLinkActive(dev)) {
+            /* Selective suspend holds the link (design record 14 sections
+             * 3.3, 3.10): its release stays owed; an ABORT_PIPE, host side
+             * only, is served; anything else waits on the device, in
+             * order, until it is ACTIVE. */
+            hcdCfgReleaseAgain(hc, dev, release);
+            release = 0;
+            if (HcdSuspDefers(dev, urb != NULL &&
+                                       urb->UrbHeader.Function ==
+                                           HCD_URB_ABORT_PIPE)) {
+                hcdCfgDefer(hc, dev, irp);
+                continue;
+            }
         }
         owed = hcdCfgReleaseOne(hc, dev, release);
         held = 0;

@@ -119,6 +119,15 @@ rem                  9-A.2): which EP0 setup packets are worth capturing, the
 rem                  descriptor walk fed at every chunk size, the isochronous
 rem                  bInterval table with its alternate-setting conflicts, and
 rem                  the Table 6-12 conversion in src\xhci_ctx.c
+rem   test_susp    - selective suspend's pure half (src\xhci_susp.c, task
+rem                  36.29, design record 14): the switch and capabilities,
+rem                  D-IRP admission, the device's decision (composite
+rem                  last Dx, D0 during SUSPENDING, epoch-stamped Dx, the
+rem                  latch, START's reopening), the suspend and resume
+rem                  steps and every outcome, root and hub wake evidence,
+rem                  the claim by stamp, WAIT_WAKE, the idle notification's
+rem                  claim and settlement, and exhaustive interleavings of
+rem                  the cancel handshake and the callback phases
 rem   test_log     - the optional log ring (src\xhci_log.c, tasks 11-V.7 and
 rem                  11-V.9): the record shape byte for byte, the switch gating
 rem                  the append itself, the record cap, the wrap and which byte
@@ -320,6 +329,11 @@ rem test_inj links xhci_caps.c for the port map a PED or over-current is
 rem aimed by; the trigger and every register answer of the qemu flavour's
 rem fault injection are pure (35-T.9, design record 17 section 5).
 call :run test_inj "test_inj.c ..\src\xhci_inj.c ..\src\xhci_caps.c"
+rem test_susp links nothing else: selective suspend's decisions - the
+rem device's want, the sequences as steps, wake evidence, the idle
+rem notification's claim and settlement, the callback context's phases -
+rem are pure, and its interleavings are explored over small models (36.29).
+call :run test_susp "test_susp.c ..\src\xhci_susp.c"
 rem test_log links nothing else: task 11-V.7's ring is deliberately pure, so
 rem every decision it makes - the wrap, the record cap, the flush verdict, the
 rem drain's ordering - is drivable with no file system, no registry and no IRQL.
