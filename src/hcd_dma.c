@@ -725,21 +725,44 @@ VOID HcdDmaWideOpen(PHCD_CONTROLLER hc)
     XhciLogNote(&hc->Hc, "xfer.wide.enabled", hc->WideEnabled);
 }
 
-/* At a stop, after HcdDmaMapDrain: every record has completed, so no
- * entry is held. IRQL: PASSIVE_LEVEL. */
+/*
+ * At a stop, after HcdDmaMapDrain. Every record has normally completed and
+ * no entry is owned. A stop that could not prove the controller stopped
+ * mastering (CommonBufferPinned) keeps its devices' records instead
+ * (HcdIoDeviceDrain), and one of them may still own an entry and be
+ * finalized by a late cancel: then the pool is detached from admission and
+ * kept for the life of the system, as the records it serves are (review
+ * round 3), and counted as a kept buffer is. IRQL: PASSIVE_LEVEL.
+ */
 VOID HcdDmaWideClose(PHCD_CONTROLLER hc)
 {
     KIRQL oldIrql;
     PHCD_WIDE_ENTRY pool;
+    ULONG owned;
+    ULONG i;
 
+    owned = 0;
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     pool = hc->WidePool;
     hc->WidePool = NULL;
     hc->WideEnabled = 0;
-    hc->RefillHead = NULL;
     hc->Xpipe.Pool = 0;
-    XhciControllerLockRelease(&hc->Hc, oldIrql);
-    if (pool != NULL) {
-        HcdPoolFree(pool);
+    for (i = 0; pool != NULL && i < HCD_WIDE_ENTRIES; i++) {
+        if (pool[i].Owner != NULL) {
+            owned = 1;
+        }
     }
+    if (!owned) {
+        hc->RefillHead = NULL;
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (pool == NULL) {
+        return;
+    }
+    if (owned) {
+        hc->CommonBuffersKept++;
+        XhciLogNote(&hc->Hc, "xfer.wide.kept", 1);
+        return;
+    }
+    HcdPoolFree(pool);
 }
