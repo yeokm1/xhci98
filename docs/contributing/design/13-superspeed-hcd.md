@@ -3592,9 +3592,11 @@ table slots and the import gate is what proves it did.
 Windows 98's adapter fills those slots was not read.
 
 The adapter is 32-bit on both architectures. `Dma32BitAddresses` and never
-`Dma64BitAddresses`, so every address the table hands back is below 4 GB and
-every hardware address field keeps its high half at zero, as `AGENTS.md`
-requires; on an amd64 machine with memory above 4 GB the map registers are
+`Dma64BitAddresses`, so every hardware address field keeps its high half at
+zero, as `AGENTS.md` requires. The adapter does not guarantee that every
+address `MapTransfer` returns is below 4 GB: with a NULL map register base a
+page above 4 GB comes back as it is (11.6.1). The HCD refuses such a run
+(`hcdMapExecute`, `HighPart` not 0) rather than program it; on an amd64 machine with memory above 4 GB the map registers are
 real and the HAL places the data below the line, which is what 11.3 relies
 on.
 
@@ -3908,7 +3910,7 @@ text answers all three: stage 2 never asks for more registers than stage
      recorded in this section as a table of HAL builds (11.6.1,
      2026-10-10: on every target HAL a NULL base is pure pass-through,
      and every HAL or verifier that has real registers hands over a
-     non-NULL base);
+     non-NULL base; the default's scope is 11.6.1's verdict);
    - until then promotion is reachable only through a switch,
      `XhciWideMap` (a `DWORD` in the controller's key, default 0 = off,
      read at start; not written by the INFs), so the code, its host
@@ -4230,8 +4232,8 @@ addresses. Every x86 HAL maps at `0x80010000` and the XP x64 HAL at
 `0x80010000`. kd placed Vista x64's at `0x7FF3C220000` and 7 x64's at
 `0x7FF346C0000`. An RVA is the address less the base.
 
-**The NULL-base path is the same everywhere.** In all 25 HAL binaries
-read, the three routines a promoted URB depends on behave the same way
+**The NULL-base path is the same everywhere.** In all 24 HAL files read
+(22 distinct images; `hal.dll` is `halmacpi.dll` on Vista and 7 x86), the three routines a promoted URB depends on behave the same way
 when `MapRegisterBase` is NULL:
 
 - **`MapTransfer` passes the address through.** `IoMapTransfer` tests
@@ -4324,13 +4326,30 @@ Notes on the table:
   serial logs, `out\p36-mb\xp64\`), so that number is a **runtime**
   corroboration for XP x64 alone.
 - **Who sets the flag.** `HalpPhysicalMemoryMayAppearAbove4GB` is
-  written only at initialisation, and only ever to 1. Three things set
-  it:
+  written only during initialisation. Early writers set it to 1:
   - a loader memory descriptor ending above page `0x100000`;
-  - an ACPI hot-plug memory range above 4 GB (`HalpSetupAcpiPhase0`);
-  - on amd64, and per the Vista x86 reading, the kernel's own
-    physical-address state or the `DynamicMemory` value
-    (`HalpDmaFinalizeDoubleBufferingDisposition`).
+  - an ACPI hot-plug memory range above 4 GB (`HalpSetupAcpiPhase0`).
+
+  `HalpDmaFinalizeDoubleBufferingDisposition`, called from
+  `HalReportResourceUsage` (Vista x86 call at `8003cfa8`), then has the
+  last word, and it differs by architecture:
+  - **x86 (Vista, 7).** It **overwrites** the flag with the byte at the
+    kernel's exported `Mm64BitPhysicalAddress` (Vista `8003b02c`-`8003b033`,
+    7 `8003d02a`-`8003d031`), which can turn an earlier 1 back to 0. When
+    it changes the flag from 0 to 1 it also allocates the `0x30000` map
+    buffer, bugchecking `0x5C` if that fails. So on x86 the value
+    `HalGetAdapter` reads after boot is the kernel's. When the kernel sets
+    `Mm64BitPhysicalAddress` was not read.
+  - **amd64.** It only sets the flag, and only from the `DynamicMemory`
+    value above 4.
+
+  That `HalReportResourceUsage` runs before any PnP driver starts is the
+  I/O manager's documented order, not read here.
+- **2000's PAE byte.** Of the four 2000 SP4 kernels, only the PAE
+  kernels write `ProcessorFeatures[PF_PAE_ENABLED]`: `ntkrnlpa.exe` at
+  `00551fe9` (base `0x400000`), and `ntkrpamp.exe` by the same byte
+  pattern at `00556735`, not disassembled. On 2000 the test therefore
+  means "the PAE kernel is running", not "memory exists above 4 GB".
 - **2000's map buffer.** The 2000 HAL allocates its 32-bit map buffer
   (`0x30000`) only under PAE. If that allocation fails the count falls
   to 0 and the base is NULL even under PAE. That is the one case where a
@@ -4431,35 +4450,60 @@ Notes on the table:
 | 2000 SP4 `halsp` | 5.00.2195.6655 | **yes** | always |
 | XP SP3 `hal`, `halapic`, `halmps`, `halsp`, `halacpi`, `halaacpi`, `halmacpi` | 5.1.2600.5512 | **yes** | always, PAE or not (pages above 4 GB, if the kernel uses any, come back unbounced and the HCD refuses them) |
 | XP x64 `hal` | 5.2.3790.3959 | **yes** | no memory, hot-plug range or `DynamicMemory` above 4 GB; and a request that was not queued behind another |
-| Vista SP2 x86 `hal` (= `halmacpi`), `halacpi` | 6.0.6002.18005 | **yes** | no memory or hot-plug range above 4 GB |
+| Vista SP2 x86 `hal` (= `halmacpi`), `halacpi` | 6.0.6002.18005 | **yes** | the kernel's `Mm64BitPhysicalAddress` was 0 when the HAL finalised the flag |
 | Vista SP2 x64 `hal` | 6.0.6002.18005 | **yes** | as XP x64 |
 | 7 SP1 x86 `hal` (= `halmacpi`), `halacpi` | 6.1.7601.17514 | **yes** | as Vista x86 |
 | 7 SP1 x64 `hal` | 6.1.7601.17514 | **yes** | as XP x64 |
 
-**The verdict.** On every NT target HAL read, a NULL `MapRegisterBase`
-means pure pass-through. Mapping a whole URB under a one-chunk request
+**The verdict.** On every NT target HAL build read, a NULL
+`MapRegisterBase` means pure pass-through. Mapping a whole URB under a one-chunk request
 then touches nothing the request owns. Every HAL that has real registers
 for this adapter hands the routine a non-NULL base, and so does XP's DMA
 verifier, so the gate point 2 already has does not promote.
 Vista's and 7's verifiers behave the same way.
 
 The condition promotion keys on is the HAL's own signal, read at the
-moment it matters. That makes the gate itself the safe runtime detection:
-no separate probe of the OS, PAE or memory size is needed. **`XhciWideMap`
-can default to 1 on every NT target** (2000 SP4, XP SP3, XP x64, Vista
-SP2 and 7 SP1, x86 and amd64). The register-free check stays as point 2
-describes it, a regression check.
+moment it matters, so no separate probe of the OS, PAE or memory size is
+needed **for the builds read**. Two things are not established by this
+reading:
 
-Two limits remain:
+- **HAL builds not in the table.** A HAL hotfix after these service
+  packs is a different binary. The reading says nothing about its NULL
+  semantics, and neither the gate nor point 2's 16-page check can stand
+  in for that (point 2, round 4).
+- **The adapter's route.** The route from the PDO to `HalGetAdapter`
+  is read only in part: the kernel's `IoGetDmaAdapter` on 2000, XP,
+  Vista and 7, and `pci.sys` on XP SP3 and 7 SP1 x86. The root bus's
+  bus driver and the amd64 `pci.sys` were not read. The `0x80001` grant
+  at runtime on XP x64 matches the HAL formula but does not identify the
+  `DMA_OPERATIONS` table.
 
-- The reading covers the builds in the table below. A later HAL update
-  (a hotfix after these service packs) is a different binary, and this
-  reading does not cover it. The gate still fails safe there only if
-  that HAL keeps "NULL base means no translation".
-- Pages above 4 GB under a NULL base (XP SP3 under PAE, 2000 with a
-  failed map buffer) are refused by the HCD's existing `HighPart` test,
-  and a URB holding one fails as it does at stage 1. Promotion adds
-  nothing there.
+One more runtime fact narrows both, and costs nothing to test. On every
+HAL read, the adapter that yields a NULL base reports exactly `0x80001`
+map registers for this description (`MaximumLength` `0xFFFFFFFF`), while
+an adapter with real registers reports at most 16 on x86 and at most 256
+on amd64.
+That grant is already recorded at start (`hc->MapRegisters`). Requiring
+it as well as a NULL base keeps promotion to adapters that answer the
+way the read builds answer. It is still a fingerprint, not proof of an
+unread build's behaviour.
+
+So, by scope:
+
+- **The builds read** (2000 SP4, XP SP3, XP x64, Vista SP2 and 7 SP1,
+  x86 and amd64, as in the table). The evidence supports **`XhciWideMap`
+  defaulting to 1**, with the gate being a NULL base and a grant of
+  `0x80001`. The register-free check stays as point 2 describes it, a
+  regression check.
+- **Later HAL updates on those systems.** These are not covered. Whether
+  the default extends to them on lineage and the fingerprint, or
+  promotion stays opt-in until each is read, is the owner's call. The
+  driver does not identify the HAL file it runs on, so it cannot tell a
+  hotfix HAL from the one read.
+
+Pages above 4 GB under a NULL base (XP SP3 under PAE, 2000 with a failed
+map buffer) are refused by the HCD's existing `HighPart` test, and a URB
+holding one fails as it does at stage 1. Promotion adds nothing there.
 
 Changing the default is the code task's (36.24), not this record's.
 `XhciWideMap` stays at 0 until that change is made and reviewed.
@@ -4489,6 +4533,9 @@ The PDB identifiers are those `kd` loaded from the public symbol server.
 | 2000 SP4 `halmps.dll` 5.00.2195.6691 | 93,696 | `1a5d0ad6fc56a029980a634a6b3b275ce07afc0fd7816f517bf6258f6a0ca817` | none (export names only) |
 | 2000 SP4 `halsp.dll` 5.00.2195.6655 | 69,088 | `553c2f6f9833aaf565a81bea0e70f7381d5dbb9eae71c7e32b9f0b11e27840d9` | none (export names only) |
 | 2000 SP4 `ntoskrnl.exe` 5.00.2195.6717 | 1,719,056 | `80a8ccf2aa9dfb05408ac35d97fdb227c29f81cb329417eb1c43451f33b6271e` | none (export names only) |
+| 2000 SP4 `ntkrnlmp.exe` 5.00.2195.6717 | 1,694,976 | `4b7dfd1c2ad3213eeab5d70edab865d0a9a4d60344aa15ce3d70c04eab2dd16f` | not loaded (byte search and `norm.sh` comparison only) |
+| 2000 SP4 `ntkrnlpa.exe` 5.00.2195.6717 | 1,694,080 | `d2a76d8ebcb4b74e2c5c3c9e17a20d61d20d9e81046d685b9bfbe1d002379078` | not loaded (byte search and `norm.sh` comparison only) |
+| 2000 SP4 `ntkrpamp.exe` 5.00.2195.6717 | 1,715,008 | `83746ddbfca2b52f89a050d1b58613ec986cb3aa23086c7f325373df0d3d702a` | not loaded (byte search and `norm.sh` comparison only) |
 | XP SP3 `hal.dll` 5.1.2600.5512 | 105,344 | `77263ad2c7b56ca964f6055a21a303bf7f031794a8ab27d251d9d2888fe5cfba` | `hal.pdb/36D1EEBD32624718A02E68DABD3593DD1` |
 | XP SP3 `halaacpi.dll` 5.1.2600.5512 | 131,840 | `feba3100fedbd5197c0a67512ff11153c21adad356092bf8b8e197e66152bfcb` | `halaacpi.pdb/FCC14B4D76114FE7A8E9AEA280B60E401` |
 | XP SP3 `halacpi.dll` 5.1.2600.5512 | 81,152 | `a42d3849073b8c17b06122fbbcd91c9c81bda086bb60b7965a79de3a0896ed39` | `halacpi.pdb/52475CC399844839AD8ADF647D0AF71A1` |
@@ -4497,6 +4544,9 @@ The PDB identifiers are those `kd` loaded from the public symbol server.
 | XP SP3 `halmps.dll` 5.1.2600.5512 | 152,576 | `e5a6b1fcd1a82161e4c9915ce2489112dacce985dbb3bd20b934ce253f7db143` | `halmps.pdb/8DBE522005AF47AB8CDE9370E08A61941` |
 | XP SP3 `halsp.dll` 5.1.2600.5512 | 77,696 | `979ad1195127da404ca446ead73bb3d571e7711aad61c328733005eff1aae767` | `halsp.pdb/49865CFBB8D943FDABB4C655A700E33D1` |
 | XP SP3 `ntoskrnl.exe` 5.1.2600.5512 | 2,188,928 | `6005a1a1db35481612ef76856a609954990f058bfc42dfa7b0d43402bf3f3dcf` | `ntoskrnl.pdb/47A5AC97343A4A7ABF14EFD9E99337722` |
+| XP SP3 `ntkrnlmp.exe` 5.1.2600.5512 | 2,145,280 | `f086434f85441b9c0245d9f17e2d41718fac810310e244839436554e852a70b8` | not loaded (byte search and `norm.sh` comparison only) |
+| XP SP3 `ntkrnlpa.exe` 5.1.2600.5512 | 2,065,792 | `7968d60617e6eef479de339c6895b4479eac79971d7cea58f9fafd66cc3b5914` | not loaded (byte search and `norm.sh` comparison only) |
+| XP SP3 `ntkrpamp.exe` 5.1.2600.5512 | 2,023,936 | `745f710fa3788db04e1f4370b75fee8b25bd64877fb2e4244a3c54eef061968e` | not loaded (byte search and `norm.sh` comparison only) |
 | XP x64 `hal.dll` 5.2.3790.3959 | 279,040 | `7b7671166cde8cbb8af9ede79d0c4cd38208f77a5b59e7ba661d839a870a101e` | `hal.pdb/786A0CD8B0CB4761BA7DC79BD10C215C1` |
 | XP x64 `ntoskrnl.exe` 5.2.3790.3959 | 4,496,896 | `0415fa7f9319bb0c57bea7d439a5b73244bb5838510631c18222fbd081c878c0` | `ntoskrnl.pdb/7362C1B15A0F49559DE8D0BFC1564A772` |
 | Vista SP2 x86 `hal.dll` 6.0.6002.18005 | 177,128 | `b6d9de353b13e61eaccdc41eb73043919b7f3cb232756233f0d732071023afe8` | `halmacpi.pdb/C215292B54434B3E95D7C087721276651` |
