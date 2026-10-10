@@ -431,6 +431,34 @@ static ULONG hcdWidePump(PHCD_CONTROLLER hc, PHCD_XFER x)
     return flags;
 }
 
+/* The publication half, the record on no list: stopped if its device,
+ * pipe or IRP went, else its first TDs published; put on the done list if
+ * that finalizes it. Returns 1 then. Controller lock held. */
+static ULONG hcdWidePublishLocked(PHCD_CONTROLLER hc, PHCD_XFER x)
+{
+    PHCD_PIPE pipe;
+    PHCD_USB_DEVICE dev;
+    ULONG flags;
+
+    pipe = x->Pipe;
+    dev = pipe->Device;
+    x->State = HCD_XFER_ON_RING;
+    x->Engine = 1;
+    if (dev->Gone || pipe->Closed || x->CancelRequested) {
+        flags = XhciXpipeRecStop(&x->Rec, XHCI_XPIPE_OUT_STOP,
+                                 dev->Gone ? HCD_USBD_DEVICE_GONE
+                                           : HCD_USBD_CANCELED);
+    } else {
+        flags = hcdWidePump(hc, x);
+    }
+    if (flags & XHCI_XPIPE_F_FINAL) {
+        x->State = HCD_XFER_DONE;
+        InsertTailList(&hc->DoneList, &x->Link);
+        return 1;
+    }
+    return 0;
+}
+
 /*
  * A promoted record's mapping is in hand (its routine, or a held record's
  * release): its first TDs published, or the record held as any mapped
@@ -443,35 +471,24 @@ static VOID hcdWideMapped(PHCD_CONTROLLER hc, PHCD_XFER x)
     PHCD_PIPE pipe;
     PHCD_USB_DEVICE dev;
     KIRQL oldIrql;
-    ULONG flags;
+    ULONG final;
 
     pipe = x->Pipe;
     dev = pipe->Device;
-    flags = 0;
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    if (dev->Gone || pipe->Closed || x->CancelRequested) {
-        flags = XhciXpipeRecStop(&x->Rec, XHCI_XPIPE_OUT_STOP,
-                                 dev->Gone ? HCD_USBD_DEVICE_GONE
-                                           : HCD_USBD_CANCELED);
-    } else if (pipe->Paused || pipe->TruncHeld ||
-               (pipe->Exclusive != NULL && pipe->Exclusive != x &&
-                x->Seq > pipe->Exclusive->Seq)) {
+    if (!dev->Gone && !pipe->Closed && !x->CancelRequested &&
+        (pipe->Paused || pipe->TruncHeld ||
+         (pipe->Exclusive != NULL && pipe->Exclusive != x &&
+          x->Seq > pipe->Exclusive->Seq))) {
         x->State = HCD_XFER_HELD;
         x->Mapped = 1;
         InsertTailList(&pipe->Held, &x->Link);
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         return;
-    } else {
-        x->State = HCD_XFER_ON_RING;
-        x->Engine = 1;
-        flags = hcdWidePump(hc, x);
     }
-    if (flags & XHCI_XPIPE_F_FINAL) {
-        x->State = HCD_XFER_DONE;
-        InsertTailList(&hc->DoneList, &x->Link);
-    }
+    final = hcdWidePublishLocked(hc, x);
     XhciControllerLockRelease(&hc->Hc, oldIrql);
-    if (flags & XHCI_XPIPE_F_FINAL) {
+    if (final) {
         HcdIoDeferred(hc);
     }
 }
@@ -484,14 +501,15 @@ static VOID hcdWideMapped(PHCD_CONTROLLER hc, PHCD_XFER x)
  * dropped - and no ring is edited here; a full TD with bytes left queues
  * the refill for after the walk. Controller lock held.
  */
-static VOID hcdWideRetired(PHCD_CONTROLLER hc, PHCD_XFER x, PXHCI_TRANSFER t)
+static VOID hcdWideRetired(PHCD_CONTROLLER hc, PHCD_XFER x, PXHCI_TRANSFER t,
+                           ULONG removed)
 {
     PHCD_PIPE pipe;
     ULONG flags;
 
     pipe = x->Pipe;
     flags = XhciXpipeRecRetire(&x->Rec, (t == &x->Xfer) ? 0UL : 1UL,
-                               t->BytesTransferred, t->UsbdStatus);
+                               t->BytesTransferred, t->UsbdStatus, removed);
     if (flags & XHCI_XPIPE_F_ORDER) {
         hc->Xpipe.Order++;
     }
@@ -1858,6 +1876,20 @@ VOID HcdIoPipeRelease(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
             next = entry->Flink;
             x = CONTAINING_RECORD(entry, HCD_XFER, Link);
             owner = pipe->Exclusive;
+            if (x->Promoted) {
+                /* 36.24: a promoted record held mapped is published here,
+                 * in this hold of the lock: once it leaves the held list
+                 * it is the machine's, and a cancel may finalize it the
+                 * moment the lock is dropped (review round 1, finding 1).
+                 * It is the pipe's owner, so nothing orders it after
+                 * another. */
+                RemoveEntryList(entry);
+                x->Mapped = 0;
+                x->State = HCD_XFER_ON_RING;
+                hcdWidePublishLocked(hc, x);
+                done = 1;
+                continue;
+            }
             if (x->Mapped) {
                 if (owner != NULL && x != owner && x->Seq > owner->Seq) {
                     continue;
@@ -1954,7 +1986,7 @@ VOID HcdIoPipeResume(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
  * done list now (the ring's are the caller's to take off once the endpoint
  * is stopped). Returns how many were marked. Controller lock NOT held.
  */
-static ULONG hcdCancelAllOne(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
+static ULONG hcdCancelAllOne(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd)
 {
     PHCD_XFER x;
     PLIST_ENTRY entry;
@@ -1973,14 +2005,17 @@ static ULONG hcdCancelAllOne(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
         x = &pipe->Xfers[i];
         if (x->State != HCD_XFER_FREE && x->Irp != NULL) {
             x->CancelRequested = 1;
-            HcdIoWideStop(hc, x, HCD_USBD_CANCELED);
+            /* The operation's own status, not CANCELED: an abort for a
+             * fault drains with an error a promoted record must report
+             * (review round 1, finding 2). */
+            HcdIoWideStop(hc, x, usbd);
             marked++;
         }
     }
     while (!IsListEmpty(&pipe->Held)) {
         entry = RemoveHeadList(&pipe->Held);
         x = CONTAINING_RECORD(entry, HCD_XFER, Link);
-        if (hcdWideHeldEnd(hc, x, HCD_USBD_CANCELED)) {
+        if (hcdWideHeldEnd(hc, x, usbd)) {
             continue;
         }
         x->Engine = 0;
@@ -2038,15 +2073,15 @@ ULONG HcdIoPipeMarkAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd)
     return marked;
 }
 
-ULONG HcdIoPipeCancelAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
+ULONG HcdIoPipeCancelAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd)
 {
     PHCD_PIPE p;
     ULONG marked;
     ULONG id;
 
-    marked = hcdCancelAllOne(hc, pipe);
+    marked = hcdCancelAllOne(hc, pipe, usbd);
     for (id = 1; (p = hcdStreamAt(pipe, id)) != NULL; id++) {
-        marked += hcdCancelAllOne(hc, p);
+        marked += hcdCancelAllOne(hc, p, usbd);
     }
     return marked;
 }
@@ -2201,15 +2236,16 @@ VOID HcdIoPipeWaitCancelled(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
 /* ----------------------------------------------------------------------- */
 
 /* The engine retired one of the URB path's records (hcd_dev.c, from the
- * event DPC or a settle). Controller lock held. */
-VOID HcdIoRetired(PHCD_CONTROLLER hc, PXHCI_TRANSFER t)
+ * event DPC or a settle), or (`removed`) software took it off the queue
+ * (the cancel walk, a drain). Controller lock held. */
+static VOID hcdIoRetire(PHCD_CONTROLLER hc, PXHCI_TRANSFER t, ULONG removed)
 {
     PHCD_XFER x;
     PHCD_XFER owner;
 
     x = HcdIoXferOf(t);
     if (x->Promoted) {
-        hcdWideRetired(hc, x, t);
+        hcdWideRetired(hc, x, t, removed);
         return;
     }
     /* 36.24: a refill the ring had no room for waits for another TD of the
@@ -2236,6 +2272,16 @@ VOID HcdIoRetired(PHCD_CONTROLLER hc, PXHCI_TRANSFER t)
             x->Pipe->Empty = x->Retire;
         }
     }
+}
+
+VOID HcdIoRetired(PHCD_CONTROLLER hc, PXHCI_TRANSFER t)
+{
+    hcdIoRetire(hc, t, 0);
+}
+
+VOID HcdIoRemoved(PHCD_CONTROLLER hc, PXHCI_TRANSFER t)
+{
+    hcdIoRetire(hc, t, 1);
 }
 
 /*
@@ -2520,7 +2566,7 @@ static VOID hcdDrainOne(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd)
         } else if (t != &pipe->Device->Ep0Xfer) {
             t->UsbdStatus = usbd;
             hc->Counters.TransfersCancelled++;
-            HcdIoRetired(hc, t);
+            HcdIoRemoved(hc, t);
         }
         t = next;
     }

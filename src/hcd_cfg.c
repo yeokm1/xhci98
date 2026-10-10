@@ -1552,7 +1552,8 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         if (dev->Pipes[dci]->Interface == iface.InterfaceNumber) {
             old |= 1UL << dci;
             HcdIoPipePause(hc, dev->Pipes[dci]);
-            (VOID)HcdIoPipeCancelAll(hc, dev->Pipes[dci]);
+            (VOID)HcdIoPipeCancelAll(hc, dev->Pipes[dci],
+                                     HCD_USBD_CANCELED);
             if (hcdCfgQuiesce(hc, dev, dev->Pipes[dci]) ==
                 XHCI_EP_STATE_RUNNING) {
                 return hcdCfgCountEnd(hc, asked, HCD_USBD_INTERNAL_HC_ERROR);
@@ -1706,7 +1707,7 @@ static ULONG hcdCfgCloseFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         }
         old |= 1UL << dci;
         HcdIoPipePause(hc, pipe);
-        (VOID)HcdIoPipeCancelAll(hc, pipe);
+        (VOID)HcdIoPipeCancelAll(hc, pipe, HCD_USBD_CANCELED);
         if (hcdCfgQuiesce(hc, dev, pipe) == XHCI_EP_STATE_RUNNING) {
             return 0xFFFFFFFFUL;
         }
@@ -2589,7 +2590,8 @@ static ULONG hcdCfgDeconfigure(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
             continue;
         }
         HcdIoPipePause(hc, dev->Pipes[dci]);
-        (VOID)HcdIoPipeCancelAll(hc, dev->Pipes[dci]);
+        (VOID)HcdIoPipeCancelAll(hc, dev->Pipes[dci],
+                                 HCD_USBD_CANCELED);
         state = hcdCfgQuiesce(hc, dev, dev->Pipes[dci]);
         if (state == XHCI_EP_STATE_RUNNING) {
             return 0;
@@ -2716,7 +2718,7 @@ static LONG hcdCfgAbortPaused(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG state;
     ULONG id;
 
-    (VOID)HcdIoPipeCancelAll(hc, pipe);
+    (VOID)HcdIoPipeCancelAll(hc, pipe, usbd);
     state = hcdCfgQuiesce(hc, dev, pipe);
     if (state == XHCI_EP_STATE_RUNNING) {
         return HCD_USBD_INTERNAL_HC_ERROR;
@@ -3153,7 +3155,7 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             hc->Xpipe.Taken++;
         }
         hc->Counters.TransfersCancelled++;
-        HcdIoRetired(hc, t);
+        HcdIoRemoved(hc, t);
     }
     HcdIoRefillFlush(hc);
     if (move) {
@@ -3210,7 +3212,7 @@ static ULONG hcdCfgResetQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG control;
     ULONG code;
 
-    (VOID)HcdIoPipeCancelAll(hc, pipe);
+    (VOID)HcdIoPipeCancelAll(hc, pipe, HCD_USBD_CANCELED);
     if (hcdCfgEpState(hc, dev, pipe->Dci) == XHCI_EP_STATE_RUNNING) {
         code = 0;
         if (XhciTrbStopEndpoint(&trb, dev->SlotId, pipe->Dci, 0) ==

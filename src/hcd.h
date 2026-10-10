@@ -1809,7 +1809,8 @@ VOID HcdIoDrainPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd);
 VOID HcdIoPipeRelease(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoPipePause(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoPipeResume(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
-ULONG HcdIoPipeCancelAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
+/* `usbd`: what a promoted record the cancel ends reports (36.24). */
+ULONG HcdIoPipeCancelAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd);
 ULONG HcdIoPipeMarkAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd);
 VOID HcdIoCancelPdo(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                     struct _HCD_DEVICE_PDO *pdo);
@@ -1817,6 +1818,9 @@ VOID HcdIoPipeWaitCancelled(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoWaitPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok);
 VOID HcdIoRetired(PHCD_CONTROLLER hc, PXHCI_TRANSFER t);
+/* The same for a TD software took off the queue (36.24: a removal, not a
+ * device's end). */
+VOID HcdIoRemoved(PHCD_CONTROLLER hc, PXHCI_TRANSFER t);
 VOID HcdIoDeferred(PHCD_CONTROLLER hc);
 /* 36.24 (hcd_io.c), controller lock held: the refills a completion pass
  * collected, published once its walk is done; a promoted record's stop (a

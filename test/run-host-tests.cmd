@@ -250,7 +250,7 @@ rem produce TRBs and then read completion events back off the ring it wrote
 rem them to, so testing it against a stub ring would test neither half.
 rem It links xhci_tol.c as well, whose soft-retry decision (35-T.2) the
 rem engine's interception asks; so do the two suites below.
-call :run test_xfer "test_xfer.c ..\src\xhci_xfer.c ..\src\xhci_ring.c ..\src\xhci_tol.c"
+call :run test_xfer "test_xfer.c ..\src\xhci_xfer.c ..\src\xhci_ring.c ..\src\xhci_tol.c ..\src\xhci_xpipe.c"
 rem test_iso links the same three files and for the same reason.
 call :run test_iso "test_iso.c ..\src\xhci_xfer.c ..\src\xhci_ring.c ..\src\xhci_tol.c"
 rem test_td links xhci_pipe.c as well: hcd_io.c fills the isochronous block

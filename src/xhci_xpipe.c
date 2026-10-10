@@ -318,7 +318,7 @@ ULONG XhciXpipeRecPublish(PXHCI_XPIPE_REC r, ULONG bytes)
 }
 
 ULONG XhciXpipeRecRetire(PXHCI_XPIPE_REC r, ULONG slot, ULONG moved,
-                         LONG status)
+                         LONG status, ULONG removed)
 {
     ULONG flags;
     ULONG n;
@@ -345,8 +345,9 @@ ULONG XhciXpipeRecRetire(PXHCI_XPIPE_REC r, ULONG slot, ULONG moved,
             r->Limit = n + 1UL;
             r->NoMore = 1;
             flags |= XHCI_XPIPE_F_SEALED;
-            xpipeOffer(r, XHCI_XPIPE_OUT_END, n, status);
-            if (XhciXpipeOnRing(r) != 0 && !r->Truncating) {
+            xpipeOffer(r, removed ? XHCI_XPIPE_OUT_STOP : XHCI_XPIPE_OUT_END,
+                       n, status);
+            if (!removed && XhciXpipeOnRing(r) != 0 && !r->Truncating) {
                 r->Truncating = 1;
                 flags |= XHCI_XPIPE_F_TRUNCATE;
             }

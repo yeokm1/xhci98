@@ -42,6 +42,7 @@
 
 #include <stdio.h>
 #include "../src/xhci_xfer.h"
+#include "../src/xhci_xpipe.h"
 #include "test_harness.h"
 
 #define RING_PA 0x0F001000UL
@@ -4270,91 +4271,172 @@ static void p64_init(void)
     XhciXferQueueInit(&p64.queue);
 }
 
+/* The engine's completed list through the record machine, in its order,
+ * as hcd_io.c's hcdWideRetired does: slot 0 is td[s0], slot 1 td[s1].
+ * Returns the finalizer's firings. */
+static ULONG p64_account(PXHCI_XPIPE_REC r, PXHCI_TRANSFER t, ULONG s0,
+                         ULONG removed)
+{
+    ULONG fires;
+    ULONG f;
+
+    fires = 0;
+    for (; t != NULL; t = t->Next) {
+        f = XhciXpipeRecRetire(r, (t == &p64.td[s0]) ? 0UL : 1UL,
+                               t->BytesTransferred, t->UsbdStatus, removed);
+        CHECK(!(f & XHCI_XPIPE_F_ORDER), "accounted in ring order");
+        if (f & XHCI_XPIPE_F_FINAL) {
+            fires++;
+        }
+    }
+    return fires;
+}
+
 static void test_xpipe_two_tds(void)
 {
     XHCI_XFER_EVENT_RESULT result;
+    XHCI_XPIPE_REC rec;
+    PXHCI_TRANSFER list;
     PVOID urb;
+    ULONG count;
+    ULONG fires;
     ULONG k;
 
     urb = (PVOID)0x7000UL;
 
     /* Two 31-TRB TDs of one URB queued; they retire in ring order, the
-     * second's slot refilled as the first leaves, across many laps. */
+     * retired slot refilled each time, across many laps; the machine
+     * counts every byte and finalizes once. */
     p64_init();
+    XhciXpipeRecInit(&rec, 22UL * 31UL * 4096UL, XHCI_XPIPE_MAP_ALLOCATED);
     CHECK_EQ(p64_submit(0, 31, 0x10000000UL, urb), XHCI_XFER_OK, "TD 0");
+    (VOID)XhciXpipeRecPublish(&rec, 31UL * 4096UL);
     CHECK_EQ(p64_submit(1, 31, 0x20000000UL, urb), XHCI_XFER_OK, "TD 1");
+    (VOID)XhciXpipeRecPublish(&rec, 31UL * 4096UL);
     CHECK_EQ(p64.queue.Count, 2, "both on one queue");
     CHECK_EQ(p64.td[0].TransferParameters, urb, "TD 0 names the URB");
     CHECK_EQ(p64.td[1].TransferParameters, urb, "and so does TD 1");
     CHECK_EQ(p64_submit(2, 1, 0x30000000UL, urb), XHCI_XFER_BUSY,
              "nothing else fits beside them");
-    for (k = 0; k < 20; k++) {
+    fires = 0;
+    for (k = 0; k < 22; k++) {
         CHECK_EQ(p64_event(p64.td[k & 1UL].LastIndex, XHCI_CC_SUCCESS, 0,
                            &result), XHCI_XFER_OK, "the older TD's event");
         CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "it completes");
         CHECK_EQ(result.CompletedCount, 1, "alone");
         CHECK_EQ(result.Completed, &p64.td[k & 1UL], "the older, in order");
-        CHECK_EQ(result.Completed->BytesTransferred, 31UL * 4096UL,
-                 "all of it");
-        CHECK_EQ(p64.queue.Head, &p64.td[(k + 1) & 1UL],
-                 "the other TD is the head now");
-        CHECK_EQ(p64_submit(k & 1UL, 31, 0x10000000UL + k * 0x100000UL, urb),
-                 XHCI_XFER_OK, "the refill reuses the retired slot");
+        fires += p64_account(&rec, result.Completed, 0, 0);
+        if (k + 2 < 22) {
+            CHECK_EQ(p64_submit(k & 1UL, 31, 0x10000000UL + k * 0x100000UL,
+                                urb), XHCI_XFER_OK,
+                     "the refill reuses the retired slot");
+            (VOID)XhciXpipeRecPublish(&rec, 31UL * 4096UL);
+        }
     }
+    CHECK_EQ(fires, 1, "the finalizer once");
+    CHECK_EQ(rec.Committed, 22UL * 31UL * 4096UL, "every byte");
 
-    /* Both in one event pass: the second TD's event sweeps the first (its
-     * completion lost), and the completed list is in ring order. */
+    /* Both in one event pass: a mid-TD short on TD 0 defers, then TD 1's
+     * own event sweeps it - two ordered completions, TD 0 with its
+     * measured length. The short sealed the boundary at TD 0, so TD 1's
+     * bytes - the device fed it - are not counted. */
     p64_init();
+    XhciXpipeRecInit(&rec, 60UL * 4096UL, XHCI_XPIPE_MAP_ALLOCATED);
     CHECK_EQ(p64_submit(0, 20, 0x10000000UL, urb), XHCI_XFER_OK, "TD 0");
+    (VOID)XhciXpipeRecPublish(&rec, 20UL * 4096UL);
     CHECK_EQ(p64_submit(1, 20, 0x20000000UL, urb), XHCI_XFER_OK, "TD 1");
+    (VOID)XhciXpipeRecPublish(&rec, 20UL * 4096UL);
+    CHECK_EQ(p64_event(p64.td[0].FirstIndex + 5, XHCI_CC_SHORT_PACKET, 96,
+                       &result), XHCI_XFER_OK, "a short inside TD 0");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE, "deferred");
     CHECK_EQ(p64_event(p64.td[1].LastIndex, XHCI_CC_SUCCESS, 0, &result),
              XHCI_XFER_OK, "TD 1's event");
     CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "completes");
-    CHECK(result.CompletedCount >= 1, "at least TD 1");
-    if (result.CompletedCount == 2) {
-        CHECK_EQ(result.Completed, &p64.td[0], "TD 0 first, in ring order");
-        CHECK_EQ(result.Completed->Next, &p64.td[1], "then TD 1");
-    }
+    CHECK_EQ(result.CompletedCount, 2, "both, in one pass");
+    CHECK_EQ(result.Completed, &p64.td[0], "TD 0 first, in ring order");
+    CHECK_EQ(result.Completed->Next, &p64.td[1], "then TD 1");
+    CHECK_EQ(p64.td[0].BytesTransferred, 6UL * 4096UL - 96UL,
+             "TD 0's measured length");
+    fires = p64_account(&rec, result.Completed, 0, 0);
+    CHECK_EQ(fires, 1, "final once, in that pass");
+    CHECK_EQ(rec.Committed, 6UL * 4096UL - 96UL, "the length before the "
+             "boundary");
+    CHECK_EQ(XhciXpipeRecStatus(&rec, 1, (LONG)0xC0000012L), 0,
+             "a short, success under ShortOk");
 
-    /* A short on the first with the second queued: TD 0 completes with its
-     * length, TD 1 is left queued - no ring edited - until the thread takes
-     * it off (XhciXferQueueRemove, as hcdCfgCancelPipe does). */
+    /* A short at TD 0's end with TD 1 queued: TD 0 completes, TD 1 stays
+     * queued - no ring edited - and the machine hands it over; the thread
+     * takes it off (XhciXferQueueRemove, as hcdCfgCancelPipe does) and its
+     * removal finalizes the URB with TD 0's length. */
     p64_init();
+    XhciXpipeRecInit(&rec, 62UL * 4096UL, XHCI_XPIPE_MAP_ALLOCATED);
     CHECK_EQ(p64_submit(0, 31, 0x10000000UL, urb), XHCI_XFER_OK, "TD 0");
+    (VOID)XhciXpipeRecPublish(&rec, 31UL * 4096UL);
     CHECK_EQ(p64_submit(1, 31, 0x20000000UL, urb), XHCI_XFER_OK, "TD 1");
+    (VOID)XhciXpipeRecPublish(&rec, 31UL * 4096UL);
     CHECK_EQ(p64_event(p64.td[0].LastIndex, XHCI_CC_SHORT_PACKET, 1000,
                        &result), XHCI_XFER_OK, "a short at TD 0's end");
     CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "TD 0 completes");
-    CHECK_EQ(result.Completed, &p64.td[0], "only TD 0");
+    CHECK_EQ(result.CompletedCount, 1, "only TD 0");
     CHECK_EQ(p64.td[0].BytesTransferred, 31UL * 4096UL - 1000UL,
              "with the bytes the device moved");
-    CHECK_EQ(p64.queue.Count, 1, "TD 1 still queued");
-    CHECK_EQ(p64.queue.Head, &p64.td[1], "at the head");
+    CHECK_EQ(XhciXpipeRecRetire(&rec, 0, p64.td[0].BytesTransferred,
+                                p64.td[0].UsbdStatus, 0) &
+                 (XHCI_XPIPE_F_TRUNCATE | XHCI_XPIPE_F_FINAL),
+             XHCI_XPIPE_F_TRUNCATE, "the successor handed over, not final");
+    CHECK_EQ(p64.queue.Head, &p64.td[1], "TD 1 still queued, at the head");
     CHECK_EQ(XhciXferQueueRemove(&p64.queue, &p64.td[1]), 1,
              "the thread takes it off");
+    p64.td[1].UsbdStatus = (LONG)WANT_USBD_CANCELED;
+    p64.td[1].Next = NULL;
+    CHECK_EQ(p64_account(&rec, &p64.td[1], 0, 1), 1, "final on its removal");
+    CHECK_EQ(rec.Committed, 31UL * 4096UL - 1000UL, "TD 0's length");
     CHECK_EQ(p64.queue.Count, 0, "the queue empty");
 
     /* The cancel walk's capacity: three one-TD records and a pipelined
-     * fourth with two TDs on one ring together - five TDs, which a walk
-     * sized by records (four) could not hold. A 31-TRB refill beside them
-     * is refused for room, which holds it (HCD_REFILL_BUSY). */
+     * fourth with two TDs on one ring together - five TDs, more than the
+     * four records a walk sized by records could hold. All five taken off
+     * (a drain, as hcdDrainOne), the pipelined record's two through its
+     * machine: final once, nothing counted. A full-size refill beside
+     * them would have waited for room (HCD_REFILL_BUSY). */
     p64_init();
     for (k = 0; k < 3; k++) {
         CHECK_EQ(p64_submit(k, 1, 0x40000000UL + k * 0x10000UL,
                             (PVOID)(0x7100UL + k)),
                  XHCI_XFER_OK, "a one-TD record");
     }
+    XhciXpipeRecInit(&rec, 58UL * 4096UL + 4096UL, XHCI_XPIPE_MAP_ALLOCATED);
     CHECK_EQ(p64_submit(3, 29, 0x10000000UL, urb), XHCI_XFER_OK,
              "the pipelined record's TD 0");
+    (VOID)XhciXpipeRecPublish(&rec, 29UL * 4096UL);
     CHECK_EQ(p64_submit(4, 29, 0x20000000UL, urb), XHCI_XFER_OK,
              "and its TD 1");
+    (VOID)XhciXpipeRecPublish(&rec, 29UL * 4096UL);
     CHECK_EQ(p64.queue.Count, 5, "five TDs: more than four records");
     CHECK(p64.queue.Count <= 2UL * 4UL,
           "inside the walk's 2 * HCD_PIPE_XFERS");
-    CHECK_EQ(XhciXferQueueRemove(&p64.queue, &p64.td[3]), 1,
-             "the walk takes TD 0 off");
-    CHECK_EQ(p64_submit(3, 31, 0x50000000UL, urb), XHCI_XFER_BUSY,
+    CHECK_EQ(p64_submit(5, 31, 0x50000000UL, urb), XHCI_XFER_BUSY,
              "a full-size refill waits for room");
+    (VOID)XhciXpipeRecStop(&rec, XHCI_XPIPE_OUT_STOP,
+                           (LONG)WANT_USBD_CANCELED);
+    list = XhciXferQueueDrain(&p64.queue, (LONG)WANT_USBD_CANCELED, &count);
+    CHECK_EQ(count, 5, "all five come back");
+    fires = 0;
+    for (; list != NULL; list = list->Next) {
+        if (list->TransferParameters == urb) {
+            k = XhciXpipeRecRetire(&rec, (list == &p64.td[3]) ? 0UL : 1UL,
+                                   list->BytesTransferred, list->UsbdStatus,
+                                   1);
+            CHECK(!(k & XHCI_XPIPE_F_ORDER), "in ring order");
+            if (k & XHCI_XPIPE_F_FINAL) {
+                fires++;
+            }
+        }
+    }
+    CHECK_EQ(fires, 1, "the pipelined record final once");
+    CHECK_EQ(rec.Committed, 0, "nothing moved, nothing counted");
+    CHECK_EQ(XhciXpipeRecStatus(&rec, 1, (LONG)0xC0000012L),
+             (LONG)WANT_USBD_CANCELED, "cancelled");
 }
 
 int main(void)

@@ -204,9 +204,14 @@ VOID XhciXpipeRecInit(PXHCI_XPIPE_REC r, ULONG length, ULONG mapState);
  * changed) when two are on the ring, NoMore is set or the bytes do not
  * fit what is left. */
 ULONG XhciXpipeRecPublish(PXHCI_XPIPE_REC r, ULONG bytes);
-/* The oldest TD retired with `moved` bytes and `status` (0 success). */
+/* The oldest TD retired with `moved` bytes and `status` (0 success).
+ * `removed` is 1 when software took it off (the thread's cancel walk, a
+ * drain) rather than the engine ending it: its progress counts and a TD
+ * that did not finish still seals the boundary, but its status is offered
+ * as a stop's - it never replaces a publication failure as a device's end
+ * would - and it hands no successor over: the remover takes the rest. */
 ULONG XhciXpipeRecRetire(PXHCI_XPIPE_REC r, ULONG slot, ULONG moved,
-                         LONG status);
+                         LONG status, ULONG removed);
 /* A cancel, abort, reset or removal (XHCI_XPIPE_OUT_STOP), or a failure
  * before the ring (XHCI_XPIPE_OUT_PREFAIL), with its status. */
 ULONG XhciXpipeRecStop(PXHCI_XPIPE_REC r, ULONG kind, LONG status);

@@ -221,6 +221,7 @@ static VOID hcdMapStart(PHCD_CONTROLLER hc)
         if (x->Probe) {
             /* The register-free check's own record: nothing acquired. */
             x->Mapped = 0;
+            x->Status = HCD_USBD_NO_MEMORY;
             if (InterlockedDecrement(&hc->WideProbeLeft) == 0) {
                 (VOID)KeSetEvent(&hc->WideProbeEvent, IO_NO_INCREMENT,
                                  FALSE);
@@ -604,6 +605,7 @@ static ULONG hcdWideCheck(PHCD_CONTROLLER hc)
         x->MapCount = (i == 0) ? 1UL : HCD_PROBE_PAGES;
         x->In = 0;
         x->Mapped = 0;
+        x->Status = 0;
         x->Sg.List.SgElementCount = 0;
     }
     HcdDmaMapQueue(hc, &hc->WideProbe[0]);
@@ -622,7 +624,16 @@ static ULONG hcdWideCheck(PHCD_CONTROLLER hc)
         waited++;
         XhciLogNote(&hc->Hc, "xfer.wide.check.waiting", waited);
     }
-    check = XhciXpipeCheckCompare(
+    /* The event is set inside the second routine; that routine and its
+     * caller have returned only once the pump's release DPC has run, so
+     * nothing it was given goes back before then (review round 1,
+     * finding 4). */
+    HcdDmaMapDrain(hc);
+    if (hc->WideProbe[0].Status != 0 ||
+        hc->WideProbe[1].Status != 0) {
+        check = XHCI_XPIPE_CHECK_CHANNEL;
+    } else {
+        check = XhciXpipeCheckCompare(
         hc->WideProbe[0].Sg.List.SgElement,
         hc->WideProbe[0].Mapped ? hc->WideProbe[0].Sg.List.SgElementCount
                                 : 0,
@@ -631,6 +642,7 @@ static ULONG hcdWideCheck(PHCD_CONTROLLER hc)
         hc->WideProbe[1].Mapped ? hc->WideProbe[1].Sg.List.SgElementCount
                                 : 0,
         hc->WideProbe[1].MapBase == NULL, HCD_PROBE_PAGES * PAGE_SIZE);
+    }
     for (i = 0; i < 2; i++) {
         x = &hc->WideProbe[i];
         if (x->MapBase != NULL) {
@@ -647,8 +659,6 @@ static ULONG hcdWideCheck(PHCD_CONTROLLER hc)
         }
         x->Mdl = NULL;
     }
-    /* The pump's own release of the second request runs from its DPC. */
-    HcdDmaMapDrain(hc);
     HcdPoolMdlFree(mdl);
     HcdPoolFree(buffer);
     return check;

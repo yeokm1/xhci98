@@ -391,7 +391,8 @@ static ULONG ret(PXHCI_XPIPE_REC r, ULONG moved, LONG status)
 {
     ULONG f;
 
-    f = XhciXpipeRecRetire(r, r->Retired & 1UL, moved, status);
+    f = XhciXpipeRecRetire(r, r->Retired & 1UL, moved, status,
+                           status == ST_CAN);
     if (f & XHCI_XPIPE_F_FINAL) {
         finals++;
     }
@@ -457,10 +458,10 @@ static void test_rec_flow(void)
 
     /* Order: a retirement with nothing on the ring changes nothing. */
     XhciXpipeRecInit(&r, 100, XHCI_XPIPE_MAP_ALLOCATED);
-    CHECK_EQ(XhciXpipeRecRetire(&r, 0, 0, ST_OK), XHCI_XPIPE_F_ORDER,
+    CHECK_EQ(XhciXpipeRecRetire(&r, 0, 0, ST_OK, 0), XHCI_XPIPE_F_ORDER,
              "nothing on the ring");
     (VOID)pub(&r, 100);
-    f = XhciXpipeRecRetire(&r, 1, 100, ST_OK);
+    f = XhciXpipeRecRetire(&r, 1, 100, ST_OK, 0);
     CHECK(f & XHCI_XPIPE_F_ORDER, "the wrong slot is counted");
     CHECK(f & XHCI_XPIPE_F_FINAL, "and the oldest retired");
 }
@@ -617,6 +618,34 @@ static void test_rec_prefail(void)
     CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX), ST_ERR,
              "the error replaces the failure");
     CHECK_EQ(r.Committed, 110, "with its bytes");
+    /* Review round 1, finding 3: a refill fails with its predecessor still
+     * queued, then a cancel; the thread's walk takes the predecessor off
+     * with its stopped progress (a removal, not a device's end), so the
+     * publication failure stays the status. */
+    XhciXpipeRecInit(&r, 400, XHCI_XPIPE_MAP_ALLOCATED);
+    (VOID)pub(&r, 100);
+    (VOID)pub(&r, 100);
+    (VOID)ret(&r, 100, ST_OK);
+    (VOID)XhciXpipeRecStop(&r, XHCI_XPIPE_OUT_PREFAIL, ST_HC);
+    (VOID)XhciXpipeRecStop(&r, XHCI_XPIPE_OUT_STOP, ST_CAN);
+    f = XhciXpipeRecRetire(&r, 1, 30, ST_CAN, 1);
+    CHECK(f & XHCI_XPIPE_F_FINAL, "final once taken off");
+    CHECK_EQ(r.Committed, 130, "the predecessor's stopped progress counts");
+    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX), ST_HC,
+             "the failure stays: a removal is not the device's end");
+    /* A removal with nothing latched (a drain at a device's going) gives
+     * the drain's status, and hands no successor over. */
+    XhciXpipeRecInit(&r, 400, XHCI_XPIPE_MAP_ALLOCATED);
+    (VOID)pub(&r, 100);
+    (VOID)pub(&r, 100);
+    f = XhciXpipeRecRetire(&r, 0, 10, (LONG)0xC0000013L, 1);
+    CHECK(!(f & XHCI_XPIPE_F_TRUNCATE), "no hand-off: the drain takes both");
+    f = XhciXpipeRecRetire(&r, 1, 0, (LONG)0xC0000013L, 1);
+    CHECK(f & XHCI_XPIPE_F_FINAL, "final");
+    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX), (LONG)0xC0000013L,
+             "the drain's status");
+    CHECK_EQ(r.Committed, 10, "with the bytes moved");
+
     /* A cancel after a publication failure keeps the failure. */
     XhciXpipeRecInit(&r, 400, XHCI_XPIPE_MAP_ALLOCATED);
     (VOID)pub(&r, 100);
@@ -723,14 +752,14 @@ static void test_rec_sweep(void)
                 break;
             }
             if (n == endAt) {
-                f = XhciXpipeRecRetire(&r, r.Retired & 1UL, 1000, ST_OK);
+                f = XhciXpipeRecRetire(&r, r.Retired & 1UL, 1000, ST_OK, 0);
                 want += 1000;
             } else if (n > endAt) {
-                f = XhciXpipeRecRetire(&r, r.Retired & 1UL, 0, ST_CAN);
+                f = XhciXpipeRecRetire(&r, r.Retired & 1UL, 0, ST_CAN, 1);
             } else {
                 want += r.TdBytes[r.Retired & 1UL];
                 f = XhciXpipeRecRetire(&r, r.Retired & 1UL,
-                                       r.TdBytes[r.Retired & 1UL], ST_OK);
+                                       r.TdBytes[r.Retired & 1UL], ST_OK, 0);
             }
             if (f & XHCI_XPIPE_F_FINAL) {
                 fires++;
