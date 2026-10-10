@@ -2099,7 +2099,7 @@ try {
            Why  = "the publisher no longer tells the packager which architecture to build, so every leg would stage the x86 package" },
         @{ Find = 'throw "the release and debug $a binaries are identical - one build was packaged twice."';
            Why  = "the identical-binary refusal no longer compares within an architecture, where it is the only place a collision could happen" },
-        @{ Find = 'foreach ($name in ($publishable + $uasPublishable + $oemPublishable + $pswPublishable)) {';
+        @{ Find = 'foreach ($name in ($declaredPublishable[$leg.Arch] + $uasPublishable + $oemPublishable + $pswPublishable)) {';
            Why  = "a cut no longer publishes portsw.vbs, the port switchover's user script, beside the INF (roadmap-hcd task 36.42)" },
         @{ Find = '$pswPublishable = @("portsw.vbs")';
            Why  = "the port switchover's user script is no longer one of the files a flavour directory may carry" }
