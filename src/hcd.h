@@ -286,12 +286,14 @@ typedef struct _HCD_XFER {
  */
 #define HCD_WIDE_ENTRIES    8UL
 /*
- * XhciWideMap when the value is absent (owner, 2026-10-10: off until each
- * NT HAL's NULL-base MapTransfer is read and recorded). The one constant to
- * flip; promotion still needs Windows 2000 or later and the start's
- * register-free check (hcd_dma.c, HcdDmaWideOpen).
+ * XhciWideMap when the value is absent: on (owner, 2026-10-10, on the HAL
+ * reading of record 13 section 11.6.1; 0 in the key turns it off). The one
+ * constant to flip. Promotion still needs Windows 2000 or later, the
+ * adapter's register-free grant (XHCI_XPIPE_FREE_GRANT), the start's
+ * register-free check (hcd_dma.c, HcdDmaWideOpen) and, per URB, a NULL
+ * map register base.
  */
-#define HCD_WIDE_MAP_DEFAULT 0UL
+#define HCD_WIDE_MAP_DEFAULT 1UL
 
 typedef struct _HCD_WIDE_ENTRY {
     struct _HCD_XFER *Owner;        /* NULL: free                         */
@@ -992,6 +994,8 @@ typedef struct _HCD_CONTROLLER {
     /* The DMA adapter and the common buffer (hcd_dma.c). */
     PDMA_ADAPTER Dma;
     ULONG MapRegisters;
+    ULONG MapGrantRaw;              /* IoGetDmaAdapter's grant, before any
+                                     * qemu constraint (36.24's gate)     */
     PVOID CommonVa;
     PHYSICAL_ADDRESS CommonPa;
     ULONG CommonBytes;

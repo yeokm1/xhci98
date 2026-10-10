@@ -98,12 +98,19 @@ ULONG XhciXpipeEligible(ULONG bulk, ULONG in, ULONG stream, ULONG chunk,
                         ULONG length, ULONG span, ULONG grant,
                         ULONG entryFree);
 
-/* Promotion (point 2), inside the first channel request's routine. */
+/*
+ * Promotion (point 2), inside the first channel request's routine: a NULL
+ * base, the adapter's grant at this start exactly XHCI_XPIPE_FREE_GRANT -
+ * the register-free adapter's signature on every HAL read (11.6.1:
+ * BYTES_TO_PAGES(0x7FFFFFFF) + 1) - and promotion enabled.
+ */
+#define XHCI_XPIPE_FREE_GRANT       0x80001UL
 #define XHCI_XPIPE_PROMOTE          0UL
 #define XHCI_XPIPE_PROMOTE_BASE     1UL /* the HAL handed registers      */
 #define XHCI_XPIPE_PROMOTE_OFF      2UL /* not enabled at this start     */
+#define XHCI_XPIPE_PROMOTE_GRANT    3UL /* another grant: not register-free */
 
-ULONG XhciXpipePromote(ULONG baseNull, ULONG enabled);
+ULONG XhciXpipePromote(ULONG baseNull, ULONG grant, ULONG enabled);
 
 /*
  * One physically contiguous run the HAL mapped, appended to a list cut at
@@ -127,6 +134,8 @@ ULONG XhciXpipeAppendRun(PUSBPORT_SCATTER_GATHER_ELEMENT el, PULONG count,
 #define XHCI_XPIPE_CHECK_NO_MEMORY  5UL /* the buffer, its MDL, the pool */
 #define XHCI_XPIPE_CHECK_CHANNEL    6UL /* a request refused or late     */
 #define XHCI_XPIPE_CHECK_NOT_NT     7UL /* Windows 98 or ME: never runs  */
+#define XHCI_XPIPE_CHECK_GRANT      8UL /* the grant is not 0x80001: no
+                                         * mapping tried                 */
 
 ULONG XhciXpipeCheckCompare(const USBPORT_SCATTER_GATHER_ELEMENT *a,
                             ULONG na, ULONG baseANull,
@@ -226,7 +235,8 @@ typedef struct _XHCI_XPIPE_STATS {
     ULONG AwayPool;             /* eligible but no free entry           */
     ULONG Promoted;             /* whole-URB mappings                   */
     ULONG NoPromoteBase;        /* first mapping handed registers       */
-    ULONG NoPromoteOff;         /* promotion not enabled                */
+    ULONG NoPromoteOff;         /* promotion not enabled, or the grant
+                                 * not the register-free one           */
     ULONG NoPromoteRun;         /* a run of the whole URB did not map   */
     ULONG Pipelined;            /* URBs with two TDs outstanding once   */
     ULONG Tds;                  /* TDs cut from wide lists              */

@@ -2964,11 +2964,12 @@ static int selftest_xstat(void)
 
 static void print_xpipe(const unsigned char *hcd, unsigned long hcdBytes)
 {
-    static const char *const check_text[8] = {
+    static const char *const check_text[9] = {
         "not run (XhciWideMap off)", "passed", "a base was not NULL",
         "the two lists differ", "a list fell short", "no memory",
         "a channel request refused, or a grant under 16",
-        "not run (Windows 98 or ME)"
+        "not run (Windows 98 or ME)",
+        "not run (the grant is not the register-free 0x80001)"
     };
     unsigned long headBytes;
     unsigned long v;
@@ -3003,13 +3004,14 @@ static void print_xpipe(const unsigned char *hcd, unsigned long hcdBytes)
     }
     v = PW(2);
     comp("  promotion                   %s; the register-free check %s\n",
-         PW(1) ? "on" : "off", v < 8 ? check_text[v] : "?");
+         PW(1) ? "on" : "off", v < 9 ? check_text[v] : "?");
     comp("  wide entries                %lu, %lu in use; claimed %lu\n",
          PW(3), PW(4), PW(5));
     comp("  turned away                 over the span %lu, no entry %lu\n",
          PW(6), PW(7));
     comp("  first mappings              promoted %lu; not: registers handed "
-         "%lu, off %lu, a run %lu\n", PW(8), PW(9), PW(10), PW(11));
+         "%lu, off or grant %lu, a run %lu\n", PW(8), PW(9), PW(10),
+         PW(11));
     comp("  URBs with two TDs at once   %lu; TDs %lu, refills %lu (held: "
          "pause %lu, busy %lu)\n", PW(12), PW(13), PW(14), PW(15), PW(16));
     comp("  early ends with a successor short %lu, error %lu, verdict %lu; "
@@ -3054,6 +3056,9 @@ static int selftest_xpipe(void)
     print_xpipe(hcd, sizeof(hcd));
 
     put32(s, 2 * 4, 7);
+    print_xpipe(hcd, sizeof(hcd));
+
+    put32(s, 2 * 4, 8);
     print_xpipe(hcd, sizeof(hcd));
 
     put32(hcd, 4, 202 * 4);

@@ -48,6 +48,7 @@ NTSTATUS HcdDmaOpen(PHCD_CONTROLLER hc)
         return STATUS_INSUFFICIENT_RESOURCES;
     }
     hc->MapRegisters = mapRegisters;
+    hc->MapGrantRaw = mapRegisters;
 
     va = hc->Dma->DmaOperations->AllocateCommonBuffer(
         hc->Dma, XHCI_HC_RESOURCES_SIZE, &pa, TRUE);
@@ -403,7 +404,8 @@ static IO_ALLOCATION_ACTION NTAPI hcdMapExecute(PDEVICE_OBJECT DeviceObject,
     }
     promoted = 0;
     if (x->Wide != NULL) {
-        decision = XhciXpipePromote(MapRegisterBase == NULL, hc->WideEnabled);
+        decision = XhciXpipePromote(MapRegisterBase == NULL,
+                                    hc->MapGrantRaw, hc->WideEnabled);
         if (decision == XHCI_XPIPE_PROMOTE) {
             promoted = hcdMapWide(hc, x);
         }
@@ -421,7 +423,8 @@ static IO_ALLOCATION_ACTION NTAPI hcdMapExecute(PDEVICE_OBJECT DeviceObject,
             hc->Xpipe.Promoted++;
         } else if (decision == XHCI_XPIPE_PROMOTE_BASE) {
             hc->Xpipe.NoPromoteBase++;
-        } else if (decision == XHCI_XPIPE_PROMOTE_OFF) {
+        } else if (decision == XHCI_XPIPE_PROMOTE_OFF ||
+                   decision == XHCI_XPIPE_PROMOTE_GRANT) {
             hc->Xpipe.NoPromoteOff++;
         } else {
             hc->Xpipe.NoPromoteRun++;
@@ -654,8 +657,9 @@ static ULONG hcdWideCheck(PHCD_CONTROLLER hc)
 /*
  * At a start, after the grant is known (hcd_ctl.c): promotion is enabled
  * only with XhciWideMap on, on Windows 2000 or later (98 and ME never send
- * a URB that would be promoted, 36.21), with a grant of at least the
- * check's 16 pages, the check passed and the pool allocated. Anything else
+ * a URB that would be promoted, 36.21), with the adapter's register-free
+ * grant of 0x80001 (and, under the qemu flavour's constraint, at least the
+ * check's 16 pages), the check passed and the pool allocated. Anything else
  * leaves every URB sequential - stage 1 - counted and noted
  * (xfer.wide.*). IRQL: PASSIVE_LEVEL.
  */
@@ -674,7 +678,14 @@ VOID HcdDmaWideOpen(PHCD_CONTROLLER hc)
         check = XHCI_XPIPE_CHECK_NOT_RUN;
     } else if (!IoIsWdmVersionAvailable(1, 0x10)) {
         check = XHCI_XPIPE_CHECK_NOT_NT;
-    } else if (hc->Dma == NULL || hc->MapRegisters < HCD_PROBE_PAGES) {
+    } else if (hc->Dma == NULL || hc->MapGrantRaw != XHCI_XPIPE_FREE_GRANT) {
+        /* Record 13 section 11.6.1: 0x80001 is the register-free adapter
+         * on every HAL read; anything else - real registers (2000 under
+         * PAE, Vista and 7 x86 with memory that may lie above 4 GB) - maps
+         * nothing here. */
+        check = XHCI_XPIPE_CHECK_GRANT;
+    } else if (hc->MapRegisters < HCD_PROBE_PAGES) {
+        /* The qemu flavour's constrained grant (XhciQemuMapGrant). */
         check = XHCI_XPIPE_CHECK_CHANNEL;
     } else {
         check = hcdWideCheck(hc);

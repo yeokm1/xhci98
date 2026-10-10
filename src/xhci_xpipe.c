@@ -154,10 +154,13 @@ ULONG XhciXpipeEligible(ULONG bulk, ULONG in, ULONG stream, ULONG chunk,
     return XHCI_XPIPE_ELIG_OK;
 }
 
-ULONG XhciXpipePromote(ULONG baseNull, ULONG enabled)
+ULONG XhciXpipePromote(ULONG baseNull, ULONG grant, ULONG enabled)
 {
     if (!enabled) {
         return XHCI_XPIPE_PROMOTE_OFF;
+    }
+    if (grant != XHCI_XPIPE_FREE_GRANT) {
+        return XHCI_XPIPE_PROMOTE_GRANT;
     }
     if (!baseNull) {
         return XHCI_XPIPE_PROMOTE_BASE;

@@ -3893,8 +3893,9 @@ text answers all three: stage 2 never asks for more registers than stage
    at stage 1 (round 3, finding 1: never ask for a whole URB to find out
    whether it is safe).
 
-   **Promotion is off by default, and stays off until the HAL readings
-   are recorded.** `MapTransfer`'s documented contract
+   **Promotion was off by default until the HAL readings were recorded;
+   it is on by default since they were (owner, 2026-10-10, on 11.6.1's
+   verdict).** `MapTransfer`'s documented contract
    (`PMAP_TRANSFER`, wdm.h) bounds a mapping by the registers the request
    was given ("the number of map registers that can be set up cannot
    exceed the maximum returned"), and says nothing of a NULL base; mapping
@@ -3916,18 +3917,26 @@ text answers all three: stage 2 never asks for more registers than stage
      2026-10-10: on every target HAL a NULL base is pure pass-through,
      and every HAL or verifier that has real registers hands over a
      non-NULL base; the default's scope is 11.6.1's verdict);
-   - until then promotion is reachable only through a switch,
-     `XhciWideMap` (a `DWORD` in the controller's key, default 0 = off,
-     read at start; not written by the INFs), so the code, its host
-     vectors and its legs exist and a reader can try it on a machine of
-     their own, and nothing changes for anyone who does not set it. With
-     it off every URB is sequential, exactly stage 1;
+   - the switch is `XhciWideMap`, a `DWORD` in the controller's key, read
+     at every start and not written by the INFs: absent or of another
+     type it is on (`HCD_WIDE_MAP_DEFAULT`, `hcd.h`, the one constant that
+     sets the default), 0 is off and any other number on. With it off every
+     URB is sequential, exactly stage 1, and the release notes give 0 as
+     the way back. On, the gates above still decide each start and each
+     URB: Windows 2000 or later, the adapter's grant exactly `0x80001`
+     (kept apart from the qemu flavour's constrained grant,
+     `hc->MapGrantRaw`), the register-free check below passed, the pool
+     allocated, and a NULL base for the URB's first request. The reading
+     covers the service packs in 11.6.1's table; HAL hotfixes after them
+     were not read, and those runtime gates are what stands for them.
+     Under Driver Verifier's DMA checks the base is never NULL (11.6.1),
+     so nothing is promoted there;
    - with the switch on, the start-time **register-free check** runs as a
      regression check, never as the capability detector: at the
      controller's start, on NT only (98 and ME never send a URB that
      would be promoted, so promotion stays off there whatever the switch
      says), and only when the grant is `0x80001` (anything else leaves
-     promotion off without mapping anything), the HCD maps one 16-page non-paged buffer of its own twice
+     promotion off without mapping anything; `xfer.wide.check` 8), the HCD maps one 16-page non-paged buffer of its own twice
      through the pump - by a 1-register request whose routine, handed a
      NULL base, maps all 16 pages, and by an ordinary 16-register request
      - and the two lists must name the same addresses and lengths element
@@ -3943,13 +3952,13 @@ text answers all three: stage 2 never asks for more registers than stage
    the controller at its start from non-paged pool (NT only, only with
    `XhciWideMap` on and the register-free check passed) and freed at its
    stop, each sized
-   for the contract's largest command whatever the value in effect: a list
-   of 513 elements (24 bytes each on both architectures, enforced in
-   `xhci_usbport.h`; 12,328 bytes with the x86 list header, 12,344 on
-   amd64), the second TD's `XHCI_TRANSFER`, two 31-element per-TD lists
-   (760 and 776 bytes each) and the entry's own fields - about 14 KiB an
-   entry and about 113 KiB for eight, the exact figure a `sizeof` that
-   `hcd.h` asserts below a stated bound. If the allocation fails the pool
+   for the contract's largest command whatever the value in effect: a
+   plain array of 513 elements (24 bytes each on both architectures,
+   enforced in `xhci_usbport.h`: 12,312 bytes), the second TD's
+   `XHCI_TRANSFER` and its 31-element list (the first TD's is the record's
+   own, which holds 32), and the entry's own fields - about 13 KiB an entry
+   and about 104 KiB for eight, `HCD_WIDE_ENTRY`'s `sizeof` asserted in
+   `hcd.h` at most 14 KiB. If the allocation fails the pool
    is empty and every URB is sequential. An entry is claimed under the
    controller lock when an eligible record is filled and returned at its
    finalization (point 6), or when its first mapping does not promote; the
@@ -4131,7 +4140,9 @@ text answers all three: stage 2 never asks for more registers than stage
      pipelined fourth with two TDs fit the ring together, round 3, finding
      4), with a vector that aborts exactly that.
 7. **Telemetry.** The 202-word HCD header is kept as it is; new counters
-   are appended after it (words 202 on), never inside `XHCI_XSTAT`, whose
+   are appended after it - after the two words task 36.9 takes (202 and
+   203): their count at word 204 and the 24 counters from 205
+   (`XHCI_XPIPE_STATS`, `xhci_xpipe.h`) - never inside `XHCI_XSTAT`, whose
    serialized form is followed by fixed-offset UAS records (old readers
    hard-code word 110): pipelined URBs (those that had two TDs outstanding
    at once, counted when the second is published), early ends with a
@@ -4206,7 +4217,7 @@ on the first with the second queued, its removal and the length the URB
 reports, and the cancel walk taking three one-TD records and a two-TD
 record together. `test_ring`: two 31-TRB TDs filling a 64-TRB ring exactly, and the
 wrap between them across repeated refills. `test_snap`: the header's new
-words appended after word 202 with the old offsets unchanged, and an older
+words appended after word 203 with the old offsets unchanged, and an older
 `XHCISNAP` reading a newer snapshot, as 36.21 did. The hand-off to the
 cancel service, the doorbell gates and the sibling-recovery interleaving
 are driver paths no pure suite reaches; they are 36.26's legs with the

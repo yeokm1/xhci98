@@ -6332,6 +6332,27 @@ ring notes `qemu.mapgrant` (the value read) and `qemu.mapgrant.applied`
 (the registers in force when it was applied); `XHCISNAP`'s "transfer size"
 section prints the grant in force. A change takes effect at the next start.
 
+With a constrained grant the controller's real grant is still what stage
+2's gate reads (`hc->MapGrantRaw`, task 36.24): a grant of 16 or more
+leaves promotion as the adapter decides it, below 16 the start's
+register-free check is not run (`xfer.wide.check` 6).
+
+**`XhciWideMap`** (roadmap-hcd task 36.24, design record 13 section 11.6;
+every flavour, not only qemu). A REG_DWORD in the controller's key, read at
+every start and written by no INF: 0 keeps every bulk URB sequential (stage
+1), anything else allows a whole-URB mapping and two TDs of one URB on the
+ring; absent or of another type it is on (`HCD_WIDE_MAP_DEFAULT`). On, a
+start enables promotion only on Windows 2000 and later, with the adapter's
+grant exactly `0x80001`, the register-free check passed and the eight wide
+entries allocated. The log ring notes `xfer.wide.value` (the value read,
+`FFFFFFFF` absent), `xfer.wide.switch`, `xfer.wide.check` (0 not run - the
+switch off, 1 passed, 2 a base was not NULL, 3 the lists differ, 4 a list
+fell short, 5 no memory, 6 a channel request refused or a constrained grant
+under 16, 7 Windows 98 or ME, 8 a grant other than `0x80001`),
+`xfer.wide.check.waiting` (seconds the check waited for its two requests)
+and `xfer.wide.enabled`; `XHCISNAP` prints the counters as "stage 2". A
+change takes effect at the next start.
+
 **`XhciQemuNoInterrupt`, `XhciQemuPinUnreadable`, `XhciQemuDeadLine`**
 (roadmap-hcd tasks 36.7 and 36.13, design record 15 section 11). REG_DWORDs
 read at every start. `XhciQemuNoInterrupt` 1 makes the start see no

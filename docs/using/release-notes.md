@@ -1260,6 +1260,32 @@ machines on development host A, Windows 98 SE with NUSB and Windows ME,
 with `XhciMaxTransferKB` at `1024`: no command above 64 KiB, one at a
 time, and file reads no faster than at `64`.
 
+### XhciWideMap: two transfer pieces at once
+
+On Windows 2000 and later the controller driver gives a large bulk
+transfer to the controller two pieces at a time, the next one queued
+before the current one ends, where `2.2.0.x` gave one piece and waited.
+It does so only where the machine's DMA needs no translation - the
+check is made at every start, and again for each transfer - and the value
+turns it off:
+
+| | |
+|---|---|
+| Key | the controller's driver key, as for `XhciMaxTransferKB` |
+| Value | `XhciWideMap`, a `DWORD` |
+| Default | on: no install writes it, and a missing value means on |
+| Off | `0`, then restart |
+
+The decision rests on a reading of every Windows 2000, XP, Vista and 7 HAL
+of the service packs these notes name, x86 and x64. Later HAL hotfixes were
+not read; the checks made at each start and each transfer stand for them.
+Under Driver Verifier's DMA checks, and on a machine whose DMA does need
+translation (Windows 2000 running its PAE kernel; 32-bit Vista and 7, and
+every x64 system, where memory may lie above 4 GB), nothing changes: every transfer goes one piece at a time, as in `2.2.0.x`.
+Windows 98 SE and ME never send a transfer large enough for it to matter.
+If a large copy misbehaves on `2.3.0.0` and not on `2.2.0.x`, set `0`,
+restart and report whether that changed it.
+
 ### XhciLogVerbosity and XhciLogDebugView: the log
 
 See "The log, and how to send one". Both default to `0`.

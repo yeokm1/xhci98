@@ -302,11 +302,19 @@ static void test_eligible(void)
     CHECK_EQ(XhciXpipeEligible(1, 0, 0, 0x20000UL, MB, 256, 4096, 0),
              XHCI_XPIPE_ELIG_NO_ENTRY, "no free entry");
 
-    CHECK_EQ(XhciXpipePromote(1, 1), XHCI_XPIPE_PROMOTE, "NULL base, on");
-    CHECK_EQ(XhciXpipePromote(0, 1), XHCI_XPIPE_PROMOTE_BASE,
+    CHECK_EQ(XhciXpipePromote(1, 0x80001UL, 1), XHCI_XPIPE_PROMOTE,
+             "NULL base, the register-free grant, on");
+    CHECK_EQ(XhciXpipePromote(0, 0x80001UL, 1), XHCI_XPIPE_PROMOTE_BASE,
              "registers handed: never");
-    CHECK_EQ(XhciXpipePromote(1, 0), XHCI_XPIPE_PROMOTE_OFF, "off");
-    CHECK_EQ(XhciXpipePromote(0, 0), XHCI_XPIPE_PROMOTE_OFF, "off first");
+    CHECK_EQ(XhciXpipePromote(1, 16, 1), XHCI_XPIPE_PROMOTE_GRANT,
+             "a grant of 16 (2000 PAE, Vista/7 above 4 GB): never, even "
+             "with a NULL base");
+    CHECK_EQ(XhciXpipePromote(1, 0x80000UL, 1), XHCI_XPIPE_PROMOTE_GRANT,
+             "only exactly 0x80001");
+    CHECK_EQ(XhciXpipePromote(1, 0x80001UL, 0), XHCI_XPIPE_PROMOTE_OFF,
+             "off");
+    CHECK_EQ(XhciXpipePromote(0, 16, 0), XHCI_XPIPE_PROMOTE_OFF,
+             "off first");
 }
 
 static void test_append(void)

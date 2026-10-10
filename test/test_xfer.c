@@ -4221,8 +4221,145 @@ static void test_event_high_pointer_refused(void)
     CHECK_EQ(fix.queue.ForeignEvents, 1, "neither counted");
 }
 
+/* ------------------------------------------------------------------ */
+/* 36.24: two TDs of one URB on one queue (record 13 section 11.6)      */
+/* ------------------------------------------------------------------ */
+
+typedef struct _PIPE64 {
+    XHCI_TRB mem[64];
+    XHCI_RING ring;
+    XHCI_TRANSFER_QUEUE queue;
+    XHCI_TRB scratch[XHCI_XFER_MAX_CONTROL_TRBS];
+    XHCI_TRANSFER td[6];
+    SG_BUFFER sg;
+} PIPE64;
+
+static PIPE64 p64;
+
+/* A bulk IN TD of `pages` page elements for slot `which`, its pages from
+ * `base`; the URB's record is the same parameters pointer for both TDs. */
+static ULONG p64_submit(ULONG which, ULONG pages, ULONG base, PVOID urb)
+{
+    XHCI_NORMAL_REQUEST req;
+    ULONG i;
+
+    sg_init(&p64.sg);
+    for (i = 0; i < pages; i++) {
+        sg_add(&p64.sg, base + i * 0x3000UL, 4096, i * 4096UL);
+    }
+    normal_request_init(&req, pages * 4096UL, 1, 1024, &p64.sg);
+    return XhciXferSubmitNormal(&p64.queue, &p64.ring, &req, 1,
+                                &p64.td[which], urb, p64.scratch,
+                                XHCI_XFER_MAX_CONTROL_TRBS);
+}
+
+static ULONG p64_event(ULONG index, ULONG code, ULONG residual,
+                       PXHCI_XFER_EVENT_RESULT result)
+{
+    return XhciXferEvent(&p64.queue, &p64.ring, FIX_SLOT, FIX_DCI,
+                         XhciRingTrbPA(&p64.ring, index),
+                         event_dw2(code, residual),
+                         event_dw3(FIX_SLOT, FIX_DCI), result);
+}
+
+static void p64_init(void)
+{
+    CHECK_EQ(XhciRingInit(&p64.ring, p64.mem, RING_PA, 64,
+                          XHCI_RING_KIND_ENDPOINT),
+             XHCI_RING_OK, "a 64-TRB ring");
+    XhciXferQueueInit(&p64.queue);
+}
+
+static void test_xpipe_two_tds(void)
+{
+    XHCI_XFER_EVENT_RESULT result;
+    PVOID urb;
+    ULONG k;
+
+    urb = (PVOID)0x7000UL;
+
+    /* Two 31-TRB TDs of one URB queued; they retire in ring order, the
+     * second's slot refilled as the first leaves, across many laps. */
+    p64_init();
+    CHECK_EQ(p64_submit(0, 31, 0x10000000UL, urb), XHCI_XFER_OK, "TD 0");
+    CHECK_EQ(p64_submit(1, 31, 0x20000000UL, urb), XHCI_XFER_OK, "TD 1");
+    CHECK_EQ(p64.queue.Count, 2, "both on one queue");
+    CHECK_EQ(p64.td[0].TransferParameters, urb, "TD 0 names the URB");
+    CHECK_EQ(p64.td[1].TransferParameters, urb, "and so does TD 1");
+    CHECK_EQ(p64_submit(2, 1, 0x30000000UL, urb), XHCI_XFER_BUSY,
+             "nothing else fits beside them");
+    for (k = 0; k < 20; k++) {
+        CHECK_EQ(p64_event(p64.td[k & 1UL].LastIndex, XHCI_CC_SUCCESS, 0,
+                           &result), XHCI_XFER_OK, "the older TD's event");
+        CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "it completes");
+        CHECK_EQ(result.CompletedCount, 1, "alone");
+        CHECK_EQ(result.Completed, &p64.td[k & 1UL], "the older, in order");
+        CHECK_EQ(result.Completed->BytesTransferred, 31UL * 4096UL,
+                 "all of it");
+        CHECK_EQ(p64.queue.Head, &p64.td[(k + 1) & 1UL],
+                 "the other TD is the head now");
+        CHECK_EQ(p64_submit(k & 1UL, 31, 0x10000000UL + k * 0x100000UL, urb),
+                 XHCI_XFER_OK, "the refill reuses the retired slot");
+    }
+
+    /* Both in one event pass: the second TD's event sweeps the first (its
+     * completion lost), and the completed list is in ring order. */
+    p64_init();
+    CHECK_EQ(p64_submit(0, 20, 0x10000000UL, urb), XHCI_XFER_OK, "TD 0");
+    CHECK_EQ(p64_submit(1, 20, 0x20000000UL, urb), XHCI_XFER_OK, "TD 1");
+    CHECK_EQ(p64_event(p64.td[1].LastIndex, XHCI_CC_SUCCESS, 0, &result),
+             XHCI_XFER_OK, "TD 1's event");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "completes");
+    CHECK(result.CompletedCount >= 1, "at least TD 1");
+    if (result.CompletedCount == 2) {
+        CHECK_EQ(result.Completed, &p64.td[0], "TD 0 first, in ring order");
+        CHECK_EQ(result.Completed->Next, &p64.td[1], "then TD 1");
+    }
+
+    /* A short on the first with the second queued: TD 0 completes with its
+     * length, TD 1 is left queued - no ring edited - until the thread takes
+     * it off (XhciXferQueueRemove, as hcdCfgCancelPipe does). */
+    p64_init();
+    CHECK_EQ(p64_submit(0, 31, 0x10000000UL, urb), XHCI_XFER_OK, "TD 0");
+    CHECK_EQ(p64_submit(1, 31, 0x20000000UL, urb), XHCI_XFER_OK, "TD 1");
+    CHECK_EQ(p64_event(p64.td[0].LastIndex, XHCI_CC_SHORT_PACKET, 1000,
+                       &result), XHCI_XFER_OK, "a short at TD 0's end");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "TD 0 completes");
+    CHECK_EQ(result.Completed, &p64.td[0], "only TD 0");
+    CHECK_EQ(p64.td[0].BytesTransferred, 31UL * 4096UL - 1000UL,
+             "with the bytes the device moved");
+    CHECK_EQ(p64.queue.Count, 1, "TD 1 still queued");
+    CHECK_EQ(p64.queue.Head, &p64.td[1], "at the head");
+    CHECK_EQ(XhciXferQueueRemove(&p64.queue, &p64.td[1]), 1,
+             "the thread takes it off");
+    CHECK_EQ(p64.queue.Count, 0, "the queue empty");
+
+    /* The cancel walk's capacity: three one-TD records and a pipelined
+     * fourth with two TDs on one ring together - five TDs, which a walk
+     * sized by records (four) could not hold. A 31-TRB refill beside them
+     * is refused for room, which holds it (HCD_REFILL_BUSY). */
+    p64_init();
+    for (k = 0; k < 3; k++) {
+        CHECK_EQ(p64_submit(k, 1, 0x40000000UL + k * 0x10000UL,
+                            (PVOID)(0x7100UL + k)),
+                 XHCI_XFER_OK, "a one-TD record");
+    }
+    CHECK_EQ(p64_submit(3, 29, 0x10000000UL, urb), XHCI_XFER_OK,
+             "the pipelined record's TD 0");
+    CHECK_EQ(p64_submit(4, 29, 0x20000000UL, urb), XHCI_XFER_OK,
+             "and its TD 1");
+    CHECK_EQ(p64.queue.Count, 5, "five TDs: more than four records");
+    CHECK(p64.queue.Count <= 2UL * 4UL,
+          "inside the walk's 2 * HCD_PIPE_XFERS");
+    CHECK_EQ(XhciXferQueueRemove(&p64.queue, &p64.td[3]), 1,
+             "the walk takes TD 0 off");
+    CHECK_EQ(p64_submit(3, 31, 0x50000000UL, urb), XHCI_XFER_BUSY,
+             "a full-size refill waits for room");
+}
+
 int main(void)
 {
+    test_xpipe_two_tds();
     test_completion_code_mapping();
     test_build_no_data();
     test_build_in_data();
