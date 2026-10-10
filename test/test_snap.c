@@ -367,7 +367,8 @@ static void test_delivery_words(void)
     CHECK_EQ(XHCI_POLL_R_AUTO_PIN0, 3, "reason codes");
     CHECK_EQ(XHCI_POLL_R_FORCED_POLL, 8, "reason codes");
     CHECK_EQ(XHCI_POLL_R_AUTO_LINE_DEAD, 9, "reason codes");
-    CHECK_EQ(XHCI_POLL_R_MESSAGE_NOT_CONNECTED, 12, "reason codes, last");
+    CHECK_EQ(XHCI_POLL_R_MESSAGE_NOT_CONNECTED, 12, "reason codes");
+    CHECK_EQ(XHCI_POLL_R_FORCED_NO_LINE_OFFERED, 13, "reason codes, last");
     CHECK_EQ(XHCI_POLL_PIN_UNREADABLE, 2, "pin status, last");
     CHECK_EQ(XHCI_POLL_ROLE_SERVE, 2, "roles, last");
     CHECK_EQ(XHCI_POLL_BUS_WATCH, 4, "bus states, last");

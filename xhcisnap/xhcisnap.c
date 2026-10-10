@@ -385,7 +385,7 @@ static const unsigned long snap_guid[4] = {
 #define SNAP_POLL_FOUND_ACTIVE      0x4UL
 #define SNAP_POLL_DELIVERY_POLL     2UL
 #define SNAP_POLL_DELIVERIES        6UL
-#define SNAP_POLL_REASONS           13UL
+#define SNAP_POLL_REASONS           14UL
 #define SNAP_POLL_PIN_READ          1UL
 #define SNAP_POLL_PIN_UNREADABLE    2UL
 #define SNAP_POLL_RETIRED_STATES    6UL
@@ -2946,7 +2946,9 @@ static const char *const poll_reason_text[SNAP_POLL_REASONS] = {
     "automatic: the line interrupt went dead; moved to polling at run time",
     "automatic: a message interrupt was granted",
     "the line asked for (XhciInterruptMode 1), a message granted",
-    "a message granted but not connected, so polled"
+    "a message granted but not connected, so polled",
+    "forced line, a message granted, no helper and no line offered: the "
+    "start fails"
 };
 
 static const char *const poll_role_text[3] = {
@@ -3303,6 +3305,17 @@ static int selftest_intr(void)
     memset(ext, 0, sizeof(ext));
     put32(ext, 32, 1);
     print_intr(hcd, bytes, ext, sizeof(ext));
+
+    /* Vista or 7 x86 forced to the line (mode 1), a message granted, no
+     * helper bound and no line offered: the start fails (design record 18
+     * section 4.3; reason 13, appended by 36.15). */
+    intr_image(hcd, H, SNAP_HCD_COUNTER_WORDS);
+    intr_word(hcd, H, 0, 1);
+    intr_word(hcd, H, 1, 1);
+    intr_word(hcd, H, 2, 0);
+    intr_word(hcd, H, 3, 13);
+    intr_word(hcd, H, 32, SNAP_POLL_FOUND_MODE);
+    print_intr(hcd, bytes, NULL, 0);
 
     /* A reserved mode run as 0 on the line; the active period held to
      * the idle one; a header from 36.21 that places no extension words. */
