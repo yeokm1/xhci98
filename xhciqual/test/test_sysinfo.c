@@ -19,6 +19,8 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
+#include <stdlib.h>
+#include <windows.h>     /* VirtualAlloc: the guard page */
 #include "../qual.h"
 
 static char out[8192];
@@ -92,6 +94,10 @@ static void put32(u8 *f, int at, u32 v)
 
 /* Append a structure: formatted area f[flen] (type and length filled in
  * here), then the strings (NULL-terminated list) and the double NUL. */
+/* Where each structure added since the last reset ends. */
+static u32 ends[32];
+static int nends;
+
 static void add(u8 type, u8 *f, u8 flen, const char **strs)
 {
     int i;
@@ -103,14 +109,51 @@ static void add(u8 type, u8 *f, u8 flen, const char **strs)
     if (strs == 0 || strs[0] == 0) {
         tab[tlen++] = 0;
         tab[tlen++] = 0;
-        return;
+    } else {
+        for (i = 0; strs[i] != 0; i++) {
+            size_t n = strlen(strs[i]);
+            memcpy(tab + tlen, strs[i], n + 1);
+            tlen += (u32)n + 1;
+        }
+        tab[tlen++] = 0;
     }
-    for (i = 0; strs[i] != 0; i++) {
-        size_t n = strlen(strs[i]);
-        memcpy(tab + tlen, strs[i], n + 1);
-        tlen += (u32)n + 1;
+    if (nends < 32)
+        ends[nends++] = tlen;
+}
+
+/*
+ * A window that ends at an inaccessible page (review round 1, P2): any read
+ * past the length handed to the parser faults the test instead of passing
+ * it. Two committed regions of 64 KB, each followed by a PAGE_NOACCESS page.
+ */
+#define GUARD_SPAN 0x10000UL
+static u8 *guard_base;
+
+static u8 *guard_end(void)
+{
+    if (guard_base == 0) {
+        DWORD old;
+
+        guard_base = (u8 *)VirtualAlloc(0, GUARD_SPAN + 0x1000,
+                                        MEM_RESERVE | MEM_COMMIT,
+                                        PAGE_READWRITE);
+        if (guard_base == 0 ||
+            !VirtualProtect(guard_base + GUARD_SPAN, 0x1000, PAGE_NOACCESS,
+                            &old)) {
+            printf("FAIL: guard page not set up\n");
+            exit(100);
+        }
     }
-    tab[tlen++] = 0;
+    return guard_base + GUARD_SPAN;
+}
+
+/* Copy n bytes so they end exactly at the guard page; return the start. */
+static const u8 *at_guard(const u8 *src, u32 n)
+{
+    u8 *p = guard_end() - n;
+
+    memcpy(p, src, n);
+    return p;
 }
 
 static int ram17_mb;
@@ -134,6 +177,7 @@ static void build_table(int with_end)
     int i;
 
     tlen = 0;
+    nends = 0;
     memset(tab, 0, sizeof(tab));
 
     memset(f, 0, sizeof(f));
@@ -531,13 +575,28 @@ static void test_broken_tables(void)
         u32 l;
         int ok = 1;
 
+        int k, done, at_end;
+
+        /* Each window ends at the guard page, so a read past l faults;
+         * the structures counted are exactly those that end within l,
+         * and damage is reported unless l falls on a boundary. */
         for (l = 0; l <= full; l++) {
+            done = 0;
+            at_end = (l == 0);
+            for (k = 0; k < nends; k++) {
+                if (ends[k] <= l)
+                    done++;
+                if (ends[k] == l)
+                    at_end = 1;
+            }
             memset(&si, 0, sizeof(si));
-            smb_parse_table(tab, l, 0, &si);
-            if (si.nstructs > 10)
+            smb_parse_table(at_guard(tab, l), l, 0, &si);
+            if (si.nstructs != done || si.broken != !at_end ||
+                si.seen_t1 != (l >= ends[1]))
                 ok = 0;
         }
-        CHECK(ok, "every truncation length terminates");
+        CHECK(nends == 10, "ten structure ends recorded");
+        CHECK(ok, "every truncation length: exact structures, no overread");
     }
 
     /* A structure length below 4. */
@@ -592,10 +651,50 @@ static void test_broken_tables(void)
         CHECK(ok, "garbled tables: bounded strings, no hang");
     }
 
-    /* A table longer than the cap is walked to the cap only. */
-    memset(&si, 0, sizeof(si));
-    smb_parse_table(tab, 0x20000UL, 0, &si);
-    CHECK(si.used_len == SMB_TABLE_MAX, "length capped at SMB_TABLE_MAX");
+    /* A table that really reaches the cap: 256 structures of 256 bytes
+     * (Type 126, inactive) fill 64 KB exactly, ending at the guard page,
+     * and the entry point claims twice that. The walk must stop at the
+     * cap without touching the guard. */
+    {
+        static u8 big[SMB_TABLE_MAX];
+        u32 o;
+
+        memset(big, 0, sizeof(big));
+        for (o = 0; o < SMB_TABLE_MAX; o += 256) {
+            big[o] = 126;
+            big[o + 1] = 254;           /* + "\0\0" = 256 */
+        }
+        memset(&si, 0, sizeof(si));
+        smb_parse_table(at_guard(big, SMB_TABLE_MAX), 0x20000UL, 0, &si);
+        CHECK(si.used_len == SMB_TABLE_MAX && si.nstructs == 256 &&
+              !si.broken, "cap: 256 structures to the 64 KB boundary");
+        /* The last structure cut by the cap: damage, not an overread. */
+        big[SMB_TABLE_MAX - 256 + 1] = 255;
+        memset(&si, 0, sizeof(si));
+        smb_parse_table(at_guard(big, SMB_TABLE_MAX), 0x20000UL, 0, &si);
+        CHECK(si.nstructs == 255 && si.broken &&
+              si.broken_at == SMB_TABLE_MAX - 256,
+              "cap: a structure crossing it is damage");
+    }
+
+    /* Entry-point anchors in the last paragraphs of a window that ends at
+     * the guard page. */
+    {
+        static u8 w[GUARD_SPAN];
+
+        memset(w, 0, sizeof(w));
+        memcpy(w + GUARD_SPAN - 16, "_SM_", 4);
+        memcpy(w + GUARD_SPAN - 32, "_SM3_", 5);
+        w[GUARD_SPAN - 32 + 6] = 0xFF;  /* a length past the window */
+        memset(&si, 0, sizeof(si));
+        CHECK(smb_scan(at_guard(w, GUARD_SPAN), GUARD_SPAN, 0xF0000UL, &si)
+              == 0 && si.other_ep_bad, "anchors at the window's end");
+        memset(w + GUARD_SPAN - 32, 0, 32);
+        memcpy(w + GUARD_SPAN - 16, "_DMI_", 5);
+        memset(&si, 0, sizeof(si));
+        (void)smb_scan(at_guard(w, GUARD_SPAN), GUARD_SPAN, 0xF0000UL, &si);
+        CHECK(1, "_DMI_ in the last paragraph: no overread");
+    }
 
     /* Zero padding after the last structure (no type 127) is not damage. */
     build_table(0);
@@ -726,8 +825,90 @@ static void test_cpu(void)
     CHECK(has("CPU: CPUID 05h/04h/3\n"), "short: no vendor, no brand");
 }
 
+/* Review round 1, P1: an allowed field naming the same string as an
+ * identifier, or carrying an identifier's text, prints "(withheld)". */
+static void test_aliasing(void)
+{
+    SYSINFO si;
+    u8 f[0x40];
+    static const char *s1[] = { "SER-T1-SECRET", "Model Y", "SKU-T1-SECRET",
+                                0 };
+    static const char *s2[] = { "Board SER-T3-SECRET rev", "SER-T2-SECRET",
+                                0 };
+    static const char *s3[] = { "SER-T3-SECRET", 0 };
+    static const char *s4[] = { "PART-T4-SECRET", "SER-T4-SECRET", 0 };
+    static const char *s17[] = { "DIMM0", "Test BIOS 9", 0 };
+    static const char *s0[] = { "Test BIOS 9", "1.0", 0 };
+
+    tlen = 0;
+    nends = 0;
+    memset(tab, 0, sizeof(tab));
+    /* Type 0 whose vendor is a Type 17 serial (text, another structure) */
+    memset(f, 0, sizeof(f));
+    put8(f, 0x04, 1); put8(f, 0x05, 2);
+    add(0, f, 0x18, s0);
+    /* Type 1: manufacturer and serial both string 1; family is the SKU */
+    memset(f, 0, sizeof(f));
+    put8(f, 0x04, 1); put8(f, 0x05, 2); put8(f, 0x07, 1);
+    put8(f, 0x19, 3); put8(f, 0x1A, 3);
+    add(1, f, 0x1B, s1);
+    /* Type 2: product contains Type 3's serial; asset tag is its own */
+    memset(f, 0, sizeof(f));
+    put8(f, 0x04, 2); put8(f, 0x05, 1); put8(f, 0x07, 2); put8(f, 0x08, 2);
+    add(2, f, 0x0F, s2);
+    memset(f, 0, sizeof(f));
+    put8(f, 0x07, 1);
+    add(3, f, 0x15, s3);
+    /* Type 4: version is its part number's string, socket its serial */
+    memset(f, 0, sizeof(f));
+    put8(f, 0x04, 2); put8(f, 0x10, 1); put8(f, 0x18, 0x41);
+    put8(f, 0x20, 2); put8(f, 0x22, 1);
+    add(4, f, 0x2A, s4);
+    memset(f, 0, sizeof(f));
+    put16(f, 0x0C, 1024);
+    put8(f, 0x10, 1); put8(f, 0x18, 2);
+    add(17, f, 0x22, s17);
+    memset(f, 0, sizeof(f));
+    add(127, f, 4, 0);
+
+    memset(&si, 0, sizeof(si));
+    si.smb_state = SMB_OK;
+    smb_parse_table(tab, tlen, 0, &si);
+    CHECK(strcmp(si.sys_mfr, "(withheld)") == 0, "T1 maker = serial index");
+    CHECK(strcmp(si.sys_product, "Model Y") == 0, "T1 product kept");
+    CHECK(strcmp(si.sys_family, "(withheld)") == 0, "T1 family = SKU");
+    CHECK(strcmp(si.board_product, "(withheld)") == 0,
+          "T2 product contains T3 serial");
+    CHECK(strcmp(si.board_mfr, "(withheld)") == 0, "T2 maker = its serial");
+    CHECK(strcmp(si.cpu_version, "(withheld)") == 0, "T4 version = part");
+    CHECK(strcmp(si.cpu_socket, "(withheld)") == 0, "T4 socket = serial");
+    CHECK(strcmp(si.bios_vendor, "(withheld)") == 0, "T0 vendor = T17 serial");
+    CHECK(strcmp(si.bios_version, "1.0") == 0, "T0 version kept");
+    render(&si);
+    check_no_secrets("aliased");
+    CHECK(!has("Test BIOS 9"), "aliased: the DIMM serial not printed");
+    render_short(&si);
+    check_no_secrets("aliased short");
+    CHECK(!has("Test BIOS 9"), "aliased short: the DIMM serial");
+}
+
+/* Review round 1, P3: an unusable 3.0 entry does not hide a legacy one. */
+static void test_ep_order(void)
+{
+    SYSINFO si;
+
+    memset(area, 0, sizeof(area));
+    put_ep3(0x2000, 3, 2, 0, 1, 0x100);
+    put_dmi(0x3000, 0xE0000UL, 0x100, 3, 0x20);
+    memset(&si, 0, sizeof(si));
+    CHECK(smb_scan(area, sizeof(area), 0xF0000UL, &si) == SMB_EP_DMI &&
+          si.smb_state == SMB_OK, "legacy DMI before an above-4-GB 3.0");
+}
+
 int main(void)
 {
+    test_aliasing();
+    test_ep_order();
     test_valid_2x();
     test_valid_30();
     test_bad_entries();

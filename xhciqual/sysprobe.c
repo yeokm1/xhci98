@@ -47,6 +47,9 @@ static int rm_int(u8 intno, RMREGS *rm)
     return r.w.cflag == 0;
 }
 
+/* A table straddling 1 MB, assembled from its two halves. */
+static u8 straddle[SMB_TABLE_MAX];
+
 static void probe_smbios(SYSINFO *si)
 {
     const u8 *t;
@@ -70,8 +73,26 @@ static void probe_smbios(SYSINFO *si)
         smb_parse_table((const u8 *)si->table_lo, len, si->table_count, si);
         return;
     }
-    /* Above 1 MB: one page-aligned DPMI mapping, as for BAR0. A table
-     * straddling 1 MB is mapped whole. */
+    if (si->table_lo < LOW_MEM_END) {
+        /* Straddling 1 MB (review round 1, P2): DPMI 0800h refuses an
+         * address below 1 MB, so the low part is copied directly and only
+         * the part from 100000h is mapped, into one bounded buffer. */
+        u32 low;
+
+        low = LOW_MEM_END - si->table_lo;
+        map = dpmi_map_phys(LOW_MEM_END, (len - low + 0xFFFUL) & ~0xFFFUL);
+        if (map == 0) {
+            si->smb_state = SMB_MAP_FAILED;
+            rom_fill(si, (const u8 *)0xFFFF5UL, *(const u8 *)0xFFFFEUL);
+            return;
+        }
+        memcpy(straddle, (const u8 *)si->table_lo, low);
+        memcpy(straddle + low, map, len - low);
+        dpmi_unmap_phys(map);
+        smb_parse_table(straddle, len, si->table_count, si);
+        return;
+    }
+    /* Above 1 MB: one page-aligned DPMI mapping, as for BAR0. */
     base = si->table_lo & ~0xFFFUL;
     off = si->table_lo - base;
     size = (off + len + 0xFFFUL) & ~0xFFFUL;

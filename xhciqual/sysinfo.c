@@ -15,8 +15,10 @@
  * machine - Type 1 serial number, UUID and SKU; Type 2 serial number and
  * asset tag; Type 3 serial number and asset tag; Type 4 serial number,
  * asset tag and part number - are never copied out of the table, so there
- * is nothing for a printer to leak. Type 3 is not read at all. The test
- * suite plants all of them and checks no line carries one.
+ * is nothing for a printer to leak. They are fetched into a local only to
+ * withhold any printed string that repeats one (see scrub()), since an
+ * allowed field can name the same string as a serial. The test suite
+ * plants all of them, aliased too, and checks no line carries one.
  *
  * Bounds: every structure's formatted length is checked against the table,
  * every field offset against the formatted length, and every string walk
@@ -155,18 +157,9 @@ int smb_scan(const u8 *area, u32 len, u32 area_phys, SYSINFO *si)
         si->table_lo = rd32(p + 0x18);
         si->table_hi = 0;
         si->table_count = rd16(p + 0x1C);
-    } else if (got3) {
-        const u8 *p = area + off3;
-
-        si->smb_kind = SMB_EP_64;
-        si->smb_ep_phys = area_phys + off3;
-        si->smb_major = p[7];
-        si->smb_minor = p[8];
-        si->table_len = rd32(p + 0x0C);
-        si->table_lo = rd32(p + 0x10);
-        si->table_hi = rd32(p + 0x14);
-        si->table_count = 0;
     } else if (gotd) {
+        /* Before an unusable 3.0 entry: a legacy table below 4 GB can
+         * still be read (review round 1, P3). */
         const u8 *p = area + offd;
 
         si->smb_kind = SMB_EP_DMI;
@@ -177,6 +170,18 @@ int smb_scan(const u8 *area, u32 len, u32 area_phys, SYSINFO *si)
         si->table_lo = rd32(p + 8);
         si->table_hi = 0;
         si->table_count = rd16(p + 0x0C);
+    } else if (got3) {
+        /* Kept only to say why nothing was read (above 4 GB). */
+        const u8 *p = area + off3;
+
+        si->smb_kind = SMB_EP_64;
+        si->smb_ep_phys = area_phys + off3;
+        si->smb_major = p[7];
+        si->smb_minor = p[8];
+        si->table_len = rd32(p + 0x0C);
+        si->table_lo = rd32(p + 0x10);
+        si->table_hi = rd32(p + 0x14);
+        si->table_count = 0;
     } else {
         return 0;
     }
@@ -335,14 +340,80 @@ static void take(const SMB_STRUCT *st, u8 type, SYSINFO *si)
     }
 }
 
-void smb_parse_table(const u8 *t, u32 len, u16 count, SYSINFO *si)
+/*
+ * **Identifiers by value, not only by field** (review round 1, P1). Not
+ * copying the serial's field is not enough: a Type 1 whose manufacturer and
+ * serial number name the same string index, or a product string whose text
+ * is the board's serial, prints the identifier through an allowed field.
+ * So after the walk every identifier string in the table - Type 1 serial
+ * and SKU, Type 2 and 3 serial and asset tag, Type 4 serial, asset tag and
+ * part number, Type 17 serial, asset tag and part number - is fetched into
+ * a local and every string the header would print is compared with it:
+ * equal, or containing it when it is 4 characters or more, and the field
+ * prints "(withheld)". The identifier itself is never stored in SYSINFO.
+ */
+#define WITHHELD "(withheld)"
+
+typedef struct {
+    u8 type;
+    u8 nfield;
+    u8 field[3];
+} SMB_IDS;
+
+static const SMB_IDS id_fields[] = {
+    {  1, 2, { 0x07, 0x19, 0 } },
+    {  2, 2, { 0x07, 0x08, 0 } },
+    {  3, 2, { 0x07, 0x08, 0 } },
+    {  4, 3, { 0x20, 0x21, 0x22 } },
+    { 17, 3, { 0x18, 0x19, 0x1A } }
+};
+
+static void withhold_if(char *shown, const char *id)
+{
+    if (shown[0] == '\0' || strcmp(shown, WITHHELD) == 0)
+        return;
+    if (strcmp(shown, id) == 0 ||
+        (strlen(id) >= 4 && strstr(shown, id) != 0))
+        strcpy(shown, WITHHELD);
+}
+
+static void scrub(const SMB_STRUCT *st, u8 type, SYSINFO *si)
+{
+    unsigned i, k;
+    char id[SI_STR];
+
+    for (i = 0; i < sizeof(id_fields) / sizeof(id_fields[0]); i++) {
+        if (id_fields[i].type != type)
+            continue;
+        for (k = 0; k < id_fields[i].nfield; k++) {
+            fstr(st, id_fields[i].field[k], id);
+            if (id[0] == '\0')
+                continue;
+            withhold_if(si->bios_vendor, id);
+            withhold_if(si->bios_version, id);
+            withhold_if(si->bios_date, id);
+            withhold_if(si->sys_mfr, id);
+            withhold_if(si->sys_product, id);
+            withhold_if(si->sys_version, id);
+            withhold_if(si->sys_family, id);
+            withhold_if(si->board_mfr, id);
+            withhold_if(si->board_product, id);
+            withhold_if(si->cpu_socket, id);
+            withhold_if(si->cpu_version, id);
+        }
+    }
+    memset(id, 0, sizeof(id));
+}
+
+typedef void (*SMB_VISIT)(const SMB_STRUCT *st, u8 type, SYSINFO *si);
+
+/* One bounded walk; returns the structures visited. */
+static int walk(const u8 *t, u32 len, u16 count, SMB_VISIT visit,
+                SYSINFO *si)
 {
     u32 off;
     int n;
 
-    if (len > SMB_TABLE_MAX)
-        len = SMB_TABLE_MAX;
-    si->used_len = len;
     si->broken = 0;
     off = 0;
     n = 0;
@@ -380,13 +451,23 @@ void smb_parse_table(const u8 *t, u32 len, u16 count, SYSINFO *si)
         }
         st.s = t + off + st.flen;
         st.slen = j + 2 - (off + st.flen);
-        take(&st, type, si);
+        visit(&st, type, si);
         n++;
         if (type == 127)        /* End-of-Table */
             break;
         off = j + 2;
     }
-    si->nstructs = n;
+    return n;
+}
+
+void smb_parse_table(const u8 *t, u32 len, u16 count, SYSINFO *si)
+{
+    if (len > SMB_TABLE_MAX)
+        len = SMB_TABLE_MAX;
+    si->used_len = len;
+    si->nstructs = walk(t, len, count, take, si);
+    /* The same bounds, so the same structures (and the same damage). */
+    (void)walk(t, len, count, scrub, si);
 }
 
 /* ------------------------------------------------------------------ */

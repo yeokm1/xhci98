@@ -51,9 +51,14 @@ if errorlevel 1 goto testfail
 rem Task 36.48: the system description - SMBIOS entry points and tables
 rem (valid, 3.0, truncated, garbled, strings missing), CPUID text, and no
 rem serial, UUID, asset tag, SKU or part number in any printed line.
+rem The code under test is built -za (strict C89) as the others are; the
+rem test itself is not, because it includes windows.h for the guard page
+rem (VirtualAlloc/VirtualProtect) that makes any read past a window fault.
 if exist test_sysinfo.exe del test_sysinfo.exe
-wcl386 -bt=nt -q -zq -wx -za -otexan -fe=test_sysinfo.exe ^
-    test_sysinfo.c ..\sysinfo.c
+wcc386 -bt=nt -q -zq -wx -za -otexan -fo=sysinfo.obj ..\sysinfo.c
+if errorlevel 1 goto builderr
+wcl386 -bt=nt -q -zq -wx -otexan -fe=test_sysinfo.exe ^
+    test_sysinfo.c sysinfo.obj
 if errorlevel 1 goto builderr
 if not exist test_sysinfo.exe goto builderr
 "%~dp0test_sysinfo.exe"

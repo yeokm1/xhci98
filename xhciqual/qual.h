@@ -869,8 +869,9 @@ const char *route_summary(const ROUTEINFO *r, long gsi);
  * never names the unit: SMBIOS serial numbers, UUIDs, asset tags, SKU and
  * part numbers (Type 1 serial/UUID/SKU, Type 2 serial/asset, Type 3
  * serial/asset, Type 4 serial/asset/part) are not read into SYSINFO at
- * all, so no printer can leak them. Keep it that way: a field added here is
- * a field every pasted report publishes.
+ * all, so no printer can leak them; and a printed string that repeats one
+ * of them (the same string index, or the same text) is withheld. Keep it
+ * that way: a field added here is a field every pasted report publishes.
  */
 #define SI_STR 65               /* 64 characters and the terminator      */
 

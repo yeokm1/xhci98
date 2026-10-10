@@ -1021,7 +1021,9 @@ PCI configuration writes):
   when its table lies below 4 GB, else `_SM_` (2.1 and later), else a
   legacy `_DMI_` - with every checksum checked. The structure table is read
   directly below 1 MB and through one DPMI `0800h` mapping above it, the
-  same mechanism as BAR0, and at most 64 KB of it is walked. Printed: Type 0
+  same mechanism as BAR0 (a table straddling 1 MB is assembled from a
+  direct copy and a mapping from `100000h`, since DPMI `0800h` refuses
+  addresses below 1 MB), and at most 64 KB of it is walked. Printed: Type 0
   BIOS vendor, version and date with the SMBIOS version; Type 1 maker,
   product, version and family; Type 2 board maker and product; Type 4's
   socket, and its version string where CPUID has no brand string.
@@ -1041,10 +1043,15 @@ PCI configuration writes):
 **No identifiers.** The header names the make and model, never the unit:
 SMBIOS serial numbers, UUIDs, asset tags, SKU and part numbers (Type 1
 serial, UUID and SKU; Type 2 serial and asset tag; Type 3 serial and asset
-tag, Type 3 being not read at all; Type 4 serial, asset tag and part number)
-are never copied out of the table, so no printer can leak them. A field
-added to `SYSINFO` is a field every pasted report publishes; the host suite
-and the QEMU cases plant every one of them and fail if one is printed.
+tag; Type 4 serial, asset tag and part number) are never copied into
+`SYSINFO`, so no printer can leak them. Nor can an allowed field: firmware
+may point a manufacturer at the serial's string, or put a serial's text in
+a product name, so after the walk each identifier string (those above, and
+Type 17's serial, asset tag and part number) is compared with every string
+the header prints, and one that equals it, or contains it when it is four
+characters or more, prints `(withheld)`. A field added to `SYSINFO` is a
+field every pasted report publishes; the host suite and the QEMU cases
+plant every identifier, aliased too, and fail if one is printed.
 
 **Bounds.** Every structure's length is checked against the table, every
 field against its structure, every string against its string set; a
