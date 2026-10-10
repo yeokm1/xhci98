@@ -5,7 +5,7 @@
 # image whose word i holds i + 1. This script reads XHCIHC_COUNTERS from
 # src\xhci_counters.h - the driver's own field order, which XHCISNAP's
 # tables only copy - and requires, for every word: a field's line with
-# its name and the value i + 1; a reserved array (stage B's SuspBReserved)
+# its name and the value i + 1; a reserved array (none since stage B filled SuspBReserved)
 # not printed at all; and each word past the struct printed as
 # "counter N". So a name table out of step with the header, or a lookup
 # the compiler places off the wrong base, fails here on the built EXE.

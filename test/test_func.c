@@ -1306,6 +1306,92 @@ static void test_parent_ids(void)
              XHCI_FUNC_BAD_PARAM, "parent: no length out");
 }
 
+/* Task 36.38 (design record 14 section 8.3): the first interface of each
+ * USB 3 function, and the ownership mask with its mapping. */
+static void test_firsts(void)
+{
+    UCHAR cfg[160];
+    ULONG firsts;
+    ULONG beyond;
+    ULONG masks[3];
+    ULONG at;
+
+    CHECK_EQ(XhciFuncFirsts(iadCfg, sizeof(iadCfg), &firsts, &beyond),
+             XHCI_FUNC_OK, "IADs and a lone interface");
+    CHECK_EQ(firsts, 0x15, "if0 (CDC IAD), if2 (UAC IAD), if4 (alone)");
+    CHECK_EQ(beyond, 0, "nothing past 31");
+    CHECK_EQ(XhciFuncFirsts(kbCfg, sizeof(kbCfg), &firsts, &beyond),
+             XHCI_FUNC_OK, "two lone interfaces");
+    CHECK_EQ(firsts, 0x3, "each its own function");
+    CHECK_EQ(XhciFuncFirsts(cmCfg, sizeof(cmCfg), &firsts, &beyond),
+             XHCI_FUNC_OK, "alternates: alternate 0 counts once");
+    CHECK_EQ(firsts, 0xF, "four single-interface functions, no IAD");
+    CHECK_EQ(XhciFuncFirsts(iadAudioCfg, sizeof(iadAudioCfg), &firsts, &beyond),
+             XHCI_FUNC_OK, "an IAD over audio");
+
+    /* Interface numbers 31 and 32: the first named, the second far. */
+    at = 0;
+    cfg[at++] = 0x09; cfg[at++] = 0x02; cfg[at++] = 9 + 9 + 9; cfg[at++] = 0;
+    cfg[at++] = 2; cfg[at++] = 1; cfg[at++] = 0; cfg[at++] = 0xA0;
+    cfg[at++] = 0x32;
+    cfg[at++] = 0x09; cfg[at++] = 0x04; cfg[at++] = 31; cfg[at++] = 0;
+    cfg[at++] = 0; cfg[at++] = 0xFF; cfg[at++] = 0; cfg[at++] = 0;
+    cfg[at++] = 0;
+    cfg[at++] = 0x09; cfg[at++] = 0x04; cfg[at++] = 32; cfg[at++] = 0;
+    cfg[at++] = 0; cfg[at++] = 0xFF; cfg[at++] = 0; cfg[at++] = 0;
+    cfg[at++] = 0;
+    CHECK_EQ(XhciFuncFirsts(cfg, at, &firsts, &beyond), XHCI_FUNC_OK,
+             "31 and 32");
+    CHECK_EQ(firsts, 0x80000000UL, "31 named");
+    CHECK_EQ(beyond, 1, "32 cannot be: far");
+
+    /* An IAD naming an absent first interface is ignored. */
+    memcpy(cfg, iadCfg, sizeof(iadCfg));
+    cfg[66 + 2] = 9;
+    CHECK_EQ(XhciFuncFirsts(cfg, sizeof(iadCfg), &firsts, &beyond),
+             XHCI_FUNC_OK, "a stray IAD");
+    CHECK_EQ(firsts, 0x1D, "if2 and if3 alone again");
+
+    /* An IAD overlapping an earlier one is ignored. */
+    memcpy(cfg, iadCfg, sizeof(iadCfg));
+    cfg[66 + 2] = 1;
+    CHECK_EQ(XhciFuncFirsts(cfg, sizeof(iadCfg), &firsts, &beyond),
+             XHCI_FUNC_OK, "an overlapping IAD");
+    CHECK_EQ(firsts, 0x1D, "the second IAD ignored: if2, if3 lone");
+
+    /* Malformed: as XhciFuncSplit. */
+    memcpy(cfg, kbCfg, sizeof(kbCfg));
+    cfg[18] = 0;
+    CHECK_EQ(XhciFuncFirsts(cfg, sizeof(kbCfg), &firsts, &beyond),
+             XHCI_FUNC_MALFORMED, "a bLength of 0");
+    CHECK_EQ(firsts, 0, "nothing named");
+    memcpy(cfg, kbCfg, sizeof(kbCfg));
+    cfg[36] = 0x00;
+    CHECK_EQ(XhciFuncFirsts(cfg, sizeof(kbCfg), &firsts, &beyond),
+             XHCI_FUNC_MALFORMED, "two alternate-0 descriptors");
+    CHECK_EQ(XhciFuncFirsts(NULL, 9, &firsts, &beyond), XHCI_FUNC_BAD_PARAM,
+             "no descriptor");
+
+    /* The ownership mask and the mapping. */
+    CHECK_EQ(XhciFuncOwnership(1, 0x0C), 0x0C, "a function PDO: its mask");
+    CHECK_EQ(XhciFuncOwnership(0, 0), 0xFFFFFFFFUL,
+             "an unsplit PDO: every interface");
+    masks[0] = 0x03;
+    masks[1] = 0x0C;
+    masks[2] = 0x10;
+    CHECK_EQ(XhciFuncOwnerOf(masks, 3, 2), 1, "if2: the UAC PDO");
+    CHECK_EQ(XhciFuncOwnerOf(masks, 3, 0), 0, "if0: the CDC PDO");
+    CHECK_EQ(XhciFuncOwnerOf(masks, 3, 4), 2, "if4: the HID PDO");
+    CHECK_EQ(XhciFuncOwnerOf(masks, 3, 5), 3, "if5: no PDO");
+    CHECK_EQ(XhciFuncOwnerOf(masks, 3, 32), 3, "past 31: no PDO");
+    /* A positional-audio PDO owning several single-interface functions. */
+    masks[0] = 0x07;
+    masks[1] = 0x08;
+    CHECK_EQ(XhciFuncOwnerOf(masks, 2, 1), 0, "if1 in the audio group");
+    masks[0] = XhciFuncOwnership(0, 0);
+    CHECK_EQ(XhciFuncOwnerOf(masks, 1, 31), 0, "unsplit: owns 31 too");
+}
+
 int main(void)
 {
     test_cmedia();
@@ -1326,6 +1412,7 @@ int main(void)
     test_revive();
     test_text_picks();
     test_text();
+    test_firsts();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

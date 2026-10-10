@@ -297,7 +297,7 @@ rem Every counter word named as the dump prints it (task 36.35's 18-word
 rem shift, an MSVC 6.0 /O2 miscompile of an inline two-table lookup): a
 rem canned image whose word i holds i + 1, checked word by word against
 rem XHCIHC_COUNTERS in src\xhci_counters.h - each field by name and value,
-rem stage B's reserved words not printed, the words past the block as
+rem any reserved words not printed, the words past the block as
 rem "counter N".
 "%~dp0XHCISNAP.EXE" -selftest-counters > "%BASE%.counters.log"
 if errorlevel 1 (

@@ -47,7 +47,8 @@
  *     its USB 2.0 path (USB 3.2 7.5.1.2 and 10.18.1, USB 3.2 p.162-163 and
  *     p.456, verified: a peripheral's upstream port that cannot train
  *     reaches eSS.Disabled and connects on USB 2.0), and 29-A.5 counts it;
- *   - a resume from U3 is one PLS = U0 write, not USB2's Resume-then-U0;
+ *   - a resume from U3 is one PLS = U0 write, not USB2's Resume-then-U0,
+ *     and so is the end of a device-initiated exit the port holds in Resume;
  *   - a hold writes PED = 1 on a trained link; a release writes PLS =
  *     RxDetect on a Disabled one, and never a warm reset, which does not act
  *     on a Disabled port (29-A.5).
@@ -216,6 +217,18 @@ ULONG XhciLinkDecide(PXHCI_LINK_PORT link, ULONG portsc, ULONG want,
 
     case XHCI_LINK_WANT_RESUME:
         if (state == XHCI_LINK_SUSPENDED) {
+            return xhciLinkAct(action, XHCI_LINK_ACT_SET_U0, 0);
+        }
+        /* A device-initiated U3 exit the xHC holds for software: PLS =
+         * Resume with CCS and PED, which software ends by writing U0 at once
+         * (xHCI 1.2c 4.15.2.1, p.255-256). Read from the PORTSC given, not
+         * from a class: XhciLinkClassify keeps Resume as UNKNOWN for every
+         * other want (design record 14 section 8.5; roadmap-hcd 36.38). */
+        if (portsc != 0xFFFFFFFFUL && (portsc & XHCI_PORTSC_PP) != 0 &&
+            (portsc & XHCI_PORTSC_PR) == 0 &&
+            (portsc & XHCI_PORTSC_CCS) != 0 &&
+            (portsc & XHCI_PORTSC_PED) != 0 &&
+            XHCI_PORTSC_GET_PLS(portsc) == XHCI_PLS_RESUME) {
             return xhciLinkAct(action, XHCI_LINK_ACT_SET_U0, 0);
         }
         return XHCI_LINK_ACT_NONE;

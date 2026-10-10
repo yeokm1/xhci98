@@ -92,6 +92,30 @@ ULONG XhciFuncSplit(const UCHAR *device, const UCHAR *config, ULONG length,
 ULONG XhciFuncConfig(const UCHAR *config, ULONG length, const XHCI_FUNC *func,
                      UCHAR *out, ULONG capacity, PULONG total);
 
+/*
+ * Selective suspend's stage B (roadmap-hcd.md 36.38; design record 14
+ * section 8.3). The first interface of every USB 3 function of the whole
+ * configuration `config` of `length` bytes - each IAD's bFirstInterface,
+ * and every interface (alternate 0) no IAD covers (USB 3.2 9.6.4) - as a
+ * mask in *firsts (bit n: bInterfaceNumber n). A first interface above 31
+ * cannot be named there, so its function is never armed: *beyond is then 1.
+ * An IAD whose bFirstInterface has no interface, or which overlaps an
+ * earlier IAD, is ignored, as XhciFuncSplit ignores it. XHCI_FUNC_OK, or
+ * XHCI_FUNC_MALFORMED (both 0) for XhciFuncSplit's malformations,
+ * XHCI_FUNC_BAD_PARAM.
+ */
+ULONG XhciFuncFirsts(const UCHAR *config, ULONG length, PULONG firsts,
+                     PULONG beyond);
+
+/* A PDO's ownership mask (8.3): a function PDO's InterfaceMask, every
+ * interface (all 32 bits) for the one PDO of an unsplit device. */
+ULONG XhciFuncOwnership(ULONG function, ULONG interfaceMask);
+
+/* The index in masks[0..count-1] of the first ownership mask holding
+ * interface `iface`, or `count` when none does or iface is past 31: the
+ * interface-to-function mapping of a Function Wake notification (8.7). */
+ULONG XhciFuncOwnerOf(const ULONG *masks, ULONG count, ULONG iface);
+
 /* 1 when the 8-byte SETUP may go to the device from the function whose
  * interfaces are `interfaceMask`, of the device's `deviceMask`: a standard
  * or class request with interface recipient may not name a sibling's

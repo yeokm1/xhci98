@@ -2432,6 +2432,13 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
         hc->IntDelivery = XHCI_PIRQ_DELIVERY_POLL;
     }
 
+    /* 36.38: stage B's Function Wake notifications (design record 14
+     * section 8.7), enabled only with XhciSelectiveSuspend 1, read above;
+     * at 0 DNCTRL keeps its reset value and is never written. The in-place
+     * reinitializations (a resume's, a recovery's HCRST) keep it: only this
+     * start zeroes the extension. */
+    ext->DnctrlEnables = hc->SuspOn ? XHCI_DNCTRL_FUNCTION_WAKE : 0UL;
+
     /* The poller beside the timers (record 15 section 5.2): served under a
      * poll delivery, watching under a line in mode 0 - never a message,
      * whose IP the message write clears (section 4.1) - closed otherwise.

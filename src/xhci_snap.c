@@ -53,12 +53,31 @@ XHCI_C_ASSERT(xhci_snap_hcd_delivery,
               XHCI_SNAPSHOT_HCD_DELIVERY_WORDS + 1 ==
                   XHCI_SNAPSHOT_HCD_XPIPE_WORDS);
 
-/* 36.24's counters whole, after 36.9's two words, to the header's end. */
+/* 36.24's counters whole, after 36.9's two words, then 36.38's words. */
 XHCI_C_ASSERT(xhci_snap_hcd_xpipe,
               sizeof(XHCI_XPIPE_STATS) ==
                   XHCI_XPIPE_STATS_WORDS * sizeof(ULONG) &&
               XHCI_SNAPSHOT_HCD_XPIPE_COUNT == XHCI_XPIPE_STATS_WORDS &&
               XHCI_SNAPSHOT_HCD_XPIPE_AT + XHCI_SNAPSHOT_HCD_XPIPE_COUNT ==
+                  XHCI_SNAPSHOT_HCD_DNCTRL_LIVE);
+
+/* 36.38: three DNCTRL words, the record count and size, then the records,
+ * which end the header. */
+XHCI_C_ASSERT(xhci_snap_hcd_susp,
+              XHCI_SNAPSHOT_HCD_DNCTRL_LIVE + 1 ==
+                  XHCI_SNAPSHOT_HCD_DNCTRL_ENABLES &&
+              XHCI_SNAPSHOT_HCD_DNCTRL_ENABLES + 1 ==
+                  XHCI_SNAPSHOT_HCD_DNCTRL_READBACK &&
+              XHCI_SNAPSHOT_HCD_DNCTRL_READBACK + 1 ==
+                  XHCI_SNAPSHOT_HCD_SUSP_RECORDS &&
+              XHCI_SNAPSHOT_HCD_SUSP_RECORDS + 1 ==
+                  XHCI_SNAPSHOT_HCD_SUSP_WORDS &&
+              XHCI_SNAPSHOT_HCD_SUSP_WORDS + 1 == XHCI_SNAPSHOT_HCD_SUSP_AT &&
+              XHCI_SNAPSHOT_HCD_SUSP_LAST + 1 ==
+                  XHCI_SNAPSHOT_HCD_SUSP_RECORD_WORDS &&
+              XHCI_SNAPSHOT_HCD_SUSP_AT +
+                      XHCI_SNAPSHOT_HCD_SUSP_COUNT *
+                          XHCI_SNAPSHOT_HCD_SUSP_RECORD_WORDS ==
                   XHCI_SNAPSHOT_HCD_HEAD_WORDS);
 
 /* The image carries the counter block whole, word for word. */
@@ -135,10 +154,15 @@ ULONG XhciSnapHcdHead(ULONG ports, ULONG word)
         return XHCI_SNAPSHOT_HCD_DELIVERY_COUNT;
     case XHCI_SNAPSHOT_HCD_XPIPE_WORDS:
         return XHCI_SNAPSHOT_HCD_XPIPE_COUNT;
+    case XHCI_SNAPSHOT_HCD_SUSP_RECORDS:
+        return XHCI_SNAPSHOT_HCD_SUSP_COUNT;
+    case XHCI_SNAPSHOT_HCD_SUSP_WORDS:
+        return XHCI_SNAPSHOT_HCD_SUSP_RECORD_WORDS;
     default:
         /* XHCI_SNAPSHOT_HCD_TERMINAL, the routing record, the transfer
-         * readings and the class driver records are readings, not layout:
-         * the door fills them (hcd_door.c). */
+         * readings, the class driver records, and 36.38's DNCTRL words and
+         * device records are readings, not layout: the door fills them
+         * (hcd_door.c). */
         return 0;
     }
 }

@@ -2990,7 +2990,12 @@ encoding, `C_PORT_LINK_STATE` on a host-directed U3 exit and `PORT_ENABLE`
 staying set in U3 were read from USB 3.2 r1.1 10.16.2.6 and 10.16.2.10
 (review of the merge, printed pp.446-454); no QEMU model has a SuperSpeed
 hub, so `test_sshub`'s `test_resume` vectors are the only evidence until
-the bench (30-E.1).
+the bench (30-E.1). Since roadmap-hcd 36.38 (selective suspend's stage B,
+design record 14 section 8.6), a device that selective suspend holds is the
+exception: with `XhciSelectiveSuspend` 1 its port's U3 is the machine's,
+neither `Resume` nor `Resumed` is acted on by the look, and a finished U3
+exit is handed to the machine as evidence; with the switch at 0 no device
+is held and this paragraph is unchanged.
 
 ### 10.3 The hub inside the bus
 

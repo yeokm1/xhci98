@@ -58,7 +58,7 @@
 /* What the thread wants of the link (XhciLinkDecide). */
 #define XHCI_LINK_WANT_SERVICE      1UL /* a change was seen: recover if owed */
 #define XHCI_LINK_WANT_RESET        2UL /* enumeration's port reset           */
-#define XHCI_LINK_WANT_RESUME       3UL
+#define XHCI_LINK_WANT_RESUME       3UL /* U3, or Resume with CCS and PED */
 #define XHCI_LINK_WANT_SUSPEND      4UL
 #define XHCI_LINK_WANT_HOLD         5UL /* 29-A.5: send it to SS.Disabled     */
 #define XHCI_LINK_WANT_RELEASE      6UL /* 29-A.5: re-arm a held port         */

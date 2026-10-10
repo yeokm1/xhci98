@@ -1279,7 +1279,8 @@ PHCD_PIPE HcdCfgPipe(PHCD_USB_DEVICE dev, PVOID handle)
  * client's (ConfigValue, Alternate). Returns 0 with the device left as it
  * was when the request fails. Thread only, powered.
  */
-ULONG HcdCfgParentConfigure(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+static ULONG hcdCfgParentConfigureOnce(PHCD_CONTROLLER hc,
+                                       PHCD_USB_DEVICE dev)
 {
     ULONG bytes;
     ULONG i;
@@ -1313,6 +1314,20 @@ ULONG HcdCfgParentConfigure(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     XHCI_DBG_VALUE("hcd: split device configured, port/slot/value",
                    (dev->Port << 16) | (dev->SlotId << 8) | dev->ConfigValue);
     return 1;
+}
+
+/* The bus's configuration as one transaction for selective suspend's stage
+ * B (design record 14 section 8.3): the wake masks cleared at its entry,
+ * read again at its exit when it configured the device. */
+ULONG HcdCfgParentConfigure(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    ULONG ok;
+
+    HcdSuspCfgEnter(hc, dev);
+    ok = hcdCfgParentConfigureOnce(hc, dev);
+    HcdSuspCfgExit(hc, dev, dev->Selected, dev->SelectedLength,
+                   ok && dev->ConfigValue != 0);
+    return ok;
 }
 
 /*
@@ -1400,7 +1415,8 @@ static VOID hcdCfgNeedLength(PUSBD_INTERFACE_INFORMATION ii,
                               sizeof(USBD_PIPE_INFORMATION));
 }
 
-static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
+static LONG hcdCfgSelectOnce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                             PURB urb)
 {
     struct _URB_SELECT_CONFIGURATION *sc;
     PUSB_CONFIGURATION_DESCRIPTOR cd;
@@ -1625,6 +1641,21 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
                    (dev->SlotId << 24) | (mask >> 8));
     XHCI_DBG_VALUE("hcd: configured, DCI mask", mask);
     return hcdCfgCountEnd(hc, asked, XHCI_USBD_STATUS_SUCCESS);
+}
+
+/* The client's select of an unsplit device as one transaction for
+ * selective suspend's stage B (design record 14 section 8.3): its entry
+ * before the deconfigure clears the wake masks; every exit reads them
+ * again after a nonzero configuration, and leaves them 0 otherwise. */
+static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
+{
+    LONG usbd;
+
+    HcdSuspCfgEnter(hc, dev);
+    usbd = hcdCfgSelectOnce(hc, dev, urb);
+    HcdSuspCfgExit(hc, dev, dev->Selected, dev->SelectedLength,
+                   usbd == XHCI_USBD_STATUS_SUCCESS && dev->ConfigValue != 0);
+    return usbd;
 }
 
 /* ----------------------------------------------------------------------- */

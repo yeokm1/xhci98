@@ -1041,6 +1041,11 @@ static VOID hcdDormantKeep(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         for (pdo = first; pdo != NULL; pdo = pdo->Sibling) {
             pdo->Device = NULL;
             pdo->Dormant = 1;
+            /* Stage B's wake enable did not survive the device (design
+             * record 14 section 8.5): the enum thread has exited, so
+             * nothing else writes these. */
+            pdo->FwArmed = 0;
+            pdo->ArmNow = 0;
         }
         dev->Pdo = NULL;
     }
@@ -1466,6 +1471,11 @@ static ULONG hcdDormantRevive(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             a->HubIndex = b->HubIndex;
             a->HubDesc = b->HubDesc;
             a->HubMttOn = b->HubMttOn;
+            /* Zero since hcdDormantKeep (design record 14 section 8.5);
+             * made so again rather than trusted, so a revived PDO never
+             * carries an old device's arm into the new one. */
+            a->FwArmed = 0;
+            a->ArmNow = 0;
             a->Dormant = 0;
         }
         dev->Pdo = old->Common.Self;

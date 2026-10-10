@@ -700,6 +700,71 @@ static void test_e460_port13(void)
     CHECK_EQ(la.Kind, XHCI_LINK_ACT_NONE, "nor asks for a write");
 }
 
+/* Task 36.38 (design record 14 section 8.5): WANT_RESUME also answers a
+ * device-initiated U3 exit the xHC holds in Resume with CCS and PED; every
+ * other want reads Resume exactly as before (the switch-at-0 set), and
+ * the classification of Resume is unchanged. */
+static void test_resume_from_resume(void)
+{
+    XHCI_LINK_PORT l;
+    XHCI_LINK_ACTION a;
+    ULONG wants[5];
+    ULONG answers[5];
+    ULONG feed;
+    ULONG i;
+
+    XhciLinkInit(&l);
+    CHECK_EQ(XhciLinkDecide(&l, portsc(XHCI_PLS_RESUME, ENAB),
+                            XHCI_LINK_WANT_RESUME, &a),
+             XHCI_LINK_ACT_SET_U0, "Resume with CCS and PED: U0 at once");
+    CHECK_EQ(a.Kind, XHCI_LINK_ACT_SET_U0, "the action says so");
+    CHECK_EQ(l.LastState, XHCI_LINK_UNKNOWN, "LastState as before");
+    CHECK_EQ(XhciLinkDecide(&l, portsc(XHCI_PLS_RESUME, CONN),
+                            XHCI_LINK_WANT_RESUME, &a),
+             XHCI_LINK_ACT_NONE, "Resume without PED: nothing");
+    CHECK_EQ(XhciLinkDecide(&l, portsc(XHCI_PLS_RESUME, XHCI_PORTSC_PED),
+                            XHCI_LINK_WANT_RESUME, &a),
+             XHCI_LINK_ACT_NONE, "Resume without CCS: nothing");
+    CHECK_EQ(XhciLinkDecide(&l, portsc(XHCI_PLS_RESUME, 0),
+                            XHCI_LINK_WANT_RESUME, &a),
+             XHCI_LINK_ACT_NONE, "Resume, neither: nothing");
+    CHECK_EQ(XhciLinkDecide(&l, portsc(XHCI_PLS_RESUME,
+                                       ENAB | XHCI_PORTSC_PR),
+                            XHCI_LINK_WANT_RESUME, &a),
+             XHCI_LINK_ACT_NONE, "Resume under a reset: nothing");
+    CHECK_EQ(XhciLinkDecide(&l, (XHCI_PLS_RESUME << XHCI_PORTSC_PLS_SHIFT) |
+                                    ENAB,
+                            XHCI_LINK_WANT_RESUME, &a),
+             XHCI_LINK_ACT_NONE, "unpowered: nothing");
+    CHECK_EQ(XhciLinkDecide(&l, 0xFFFFFFFFUL, XHCI_LINK_WANT_RESUME, &a),
+             XHCI_LINK_ACT_NONE, "all ones: nothing");
+    CHECK_EQ(XhciLinkClassify(portsc(XHCI_PLS_RESUME, ENAB)),
+             XHCI_LINK_UNKNOWN, "Resume still classifies UNKNOWN");
+
+    wants[0] = XHCI_LINK_WANT_SERVICE;
+    answers[0] = XHCI_LINK_ACT_NONE;
+    wants[1] = XHCI_LINK_WANT_RESET;
+    answers[1] = XHCI_LINK_ACT_NONE;
+    wants[2] = XHCI_LINK_WANT_SUSPEND;
+    answers[2] = XHCI_LINK_ACT_NONE;
+    wants[3] = XHCI_LINK_WANT_HOLD;
+    answers[3] = XHCI_LINK_ACT_NONE;
+    wants[4] = XHCI_LINK_WANT_RELEASE;
+    answers[4] = XHCI_LINK_ACT_NONE;
+    for (i = 0; i < 5; i++) {
+        XhciLinkInit(&l);
+        CHECK_EQ(XhciLinkDecide(&l, portsc(XHCI_PLS_RESUME, ENAB), wants[i],
+                                &a),
+                 answers[i], "every other want on Resume: as before");
+        CHECK_EQ(l.WarmResets, 0, "and no warm reset spent");
+    }
+    XhciLinkInit(&l);
+    feed = XhciLinkPortFeed(&l, 1, portsc(XHCI_PLS_RESUME, ENAB),
+                            XHCI_ENUM_BOUND, &a);
+    CHECK_EQ(feed, 0, "the inspection feeds nothing for a port in Resume");
+    CHECK_EQ(a.Kind, XHCI_LINK_ACT_NONE, "and writes nothing");
+}
+
 int main(void)
 {
     test_classify();
@@ -711,6 +776,7 @@ int main(void)
     test_port_feed();
     test_hold_portsc();
     test_e460_port13();
+    test_resume_from_resume();
 
     printf("%d checks, %d failures\n", checks, failures);
     return failures;

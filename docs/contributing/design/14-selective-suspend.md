@@ -65,7 +65,9 @@ is designed and built first.
 - Transfer mapping and doorbells are published under the controller lock
   (`hcd_io.c:1156`, `1208`).
 - DNCTRL enables no notification (`xhci_init.c:385`); Device Notification
-  events fall through (`xhci_evt.c:261`).
+  events fall through (`xhci_evt.c:261`). (History since 36.38: with
+  `XhciSelectiveSuspend` 1 DNCTRL enables FUNCTION_WAKE and the event has
+  its own arm, section 8.7; at 0 both read as this row says.)
 - The thread holds `PowerGate` across `HcdEnumService` (`hcd_ctl.c:492`).
 
 ## 3. The device's link machine (pure core, `xhci_susp.c`)
@@ -1051,18 +1053,763 @@ B on together; absent, 0, any other number or another type is off. The
 read and the value in effect are counters (`SuspSwitchRead`,
 `SuspSwitch`) and notes (`susp.switch.value`, `susp.switch`).
 
-## 8. Stage B outline (SuperSpeed), designed after stage A's readings
+## 8. Stage B: SuperSpeed devices (36.37 to 36.40)
 
-USB 3 suspend is the link to U3 plus, for wake, SET_FEATURE(FUNCTION_SUSPEND)
-with the wake-enable option per interface (USB 3.2 9.4.5) and the device's
-function remote-wake capability (GET_STATUS). A device wakes by driving the
-link to Resume (root: PLS=Resume with PLC; software writes U0 to complete the
-LFPS handshake, xHCI 1.2c 4.15.2.1) and sending a FUNCTION_WAKE Device
-Notification, which needs DNCTRL bit 1 and Device Notification event handling
-with interface-to-function ownership; behind an SS hub the exit sets no
-C_PORT_LINK_STATE (record 13 section 10.2), so the notification is the only
-signal. `xhci_link.c`'s Resume classification and `WANT_RESUME` are fixed
-there. QEMU has no SS hub, so SUSPb's hub half is bench-only.
+Stage B extends sections 3 to 6 to a SuperSpeed device - one whose PDO's
+`SpeedClass` is `XHCI_SPEED_SUPER` (SuperSpeed and SuperSpeedPlus share it)
+- on a USB3 protocol root port or behind a SuperSpeed hub. It is built on
+stage A's machine as it stands after 36.31 (`xhci_susp.c` and `hcd_susp.c`
+at `1194d9e`): the slots, the admission, the decision pass, the gate, the
+deferral, the episode, the idle notification and every teardown rule are
+stage A's unchanged. What differs is how the link is suspended and resumed,
+how wake is armed and disarmed, and where wake evidence comes from. A
+device that enumerated on a USB 2.0 port, the USB 2.0 half of a USB 3 hub
+included, is stage A's whatever it could do at SuperSpeed. Hubs stay
+excluded (5.1), so every ancestor stays in U0.
+
+### 8.1 What USB 3 changes (the references)
+
+- **Device Suspend is the link in U3 and nothing else** (USB 3.2 9.1.1.6,
+  printed p.322; 9.2.5, p.325). There is no device-level wake
+  feature: DEVICE_REMOTE_WAKEUP "is ignored and not used by Enhanced
+  SuperSpeed devices", and remote wake is enabled "when any function within
+  a device is enabled for function remote wakeup" (9.2.5.4, p.326). The
+  device status's Remote Wakeup bit is reserved at SuperSpeed (9.4.5,
+  p.337).
+- **Function Suspend and function remote wake are one feature**:
+  SetFeature(FUNCTION_SUSPEND), selector 0 with an interface recipient
+  (bmRequestType 01h; Table 9-7, p.333), wIndex's low byte the **first
+  interface of the function**, its high byte the Suspend Options of Table
+  9-9 (p.343): bit 0 Low Power Suspend state, bit 1 Function Remote Wake
+  enabled, bits 7:2 reserved (9.4.9, p.342-343). SetFeature with options
+  0 returns the function to normal operation and disables its remote wake;
+  the bus never sends ClearFeature(FUNCTION_SUSPEND). Function Suspend is
+  kept through Device Suspend's entry and exit (9.2.5.3, p.326), so a
+  function put there stays there after U0 until the bus takes it out.
+- **The capability is per function**: GetStatus() to the function's first
+  interface (bmRequestType 81h, wValue 0, wIndex the interface, wLength 2)
+  answers Function Remote Wake Capable in bit 0 and Function Remote Wakeup
+  (enabled) in bit 1; any other interface of a function answers zeros, and
+  the enable resets to 0 when the function is reset (9.4.5, Figure 9-5,
+  p.338). Only a Configured device answers an interface recipient (Address
+  state: Request Error, p.337). The configuration descriptor's
+  bmAttributes D5 still says whether the configuration supports remote
+  wakeup (9.6.3, p.361).
+- **A function** is an IAD's interfaces or a single interface; a function
+  of more than one interface must have an IAD (9.6.4, p.361-362).
+- **The wake**: a suspended device drives the link out of U3 (LFPS, 7.5.9.2,
+  p.193: a handshake not answered in 10 ms leaves it in U3 and it tries
+  again 100 ms later) and then sends a FUNCTION_WAKE Device Notification
+  TP whose Interface field is "the first interface in the function that
+  caused the device to perform a remote wake" (8.5.6.1, Table 8-19,
+  p.238; 8.5.6.4, p.239). A function repeats the notification every
+  tNotification until it is accessed, and each function that wakes sends
+  its own (9.2.5.2, p.325; 9.2.5.4, p.326; 8.13, Table 8-36, names
+  tNotification, p.314).
+- **The xHC reports the notification only when asked**: DNCTRL (xHCI 1.2c
+  5.4.4, p.366-367) enables one Device Notification type per bit, N1 being
+  FUNCTION_WAKE; "only under debug conditions would software write the
+  DNCTRL register with a value other than 0002h"; after reset all are
+  disabled. A received FUNCTION_WAKE TP then raises a Device Notification
+  Event TRB (type 38; 6.4.2.7, p.447-448): Slot ID in DW3 31:24,
+  Notification Type in DW0 7:4, and DW0 15:8 (TRB byte 01h = the TP's byte
+  05h) the Interface field; its completion code is always Success. It goes
+  to the event ring the slot's Interrupter Target names (4.13, p.229-230;
+  4.13.2, p.232).
+- **A USB3 root port's resume is one write.** Host-initiated: PLS=U0 with
+  LWS from U3, no Resume write and no TDRSMDN (4.15.2.2, p.256-257).
+  Device-initiated: the port enters Resume (PLS 15) with PLC and the xHC
+  holds the LFPS handshake "until directed by software", which writes U0 at
+  once - no TDRSMDN (4.15.2.1, p.255-256). Either ends in U0 with PLC.
+  Software resumes a port it suspended only once it reads PED 1 and PLS 3
+  (4.15.2.2), and not sooner than 10 ms after it did (6.4.3.8, p.454).
+- **Stop before Function Suspend.** "Software shall stop the endpoints of a
+  device associated with the function by using the Stop Endpoint Command
+  and setting the Suspend (SP) flag to '1' prior to issuing a
+  SetFeature(FUNCTION_SUSPEND)", and ring them again after the function
+  resumes (4.15.1.2, p.255); an endpoint stopped with SP=1 "shall be
+  stopped for at least 10 ms" (6.4.3.8, p.454).
+- **A SuperSpeed hub port** suspends with SetPortFeature(PORT_LINK_STATE)
+  and U3 in wIndex 15:8, and resumes with the same request and U0; the hub
+  drives the U3 exit (USB 3.2 10.10, p.423). C_PORT_LINK_STATE is set when
+  a U3 -> U0 the request asked for completes, and **not** for one a
+  device's remote wake caused (10.16.2.6.2, p.449; record 13 section
+  10.2). A hub whose upstream link is not in U3 - the bus never suspends a
+  hub - answers its device's wake signalling on the downstream link itself
+  (10.10, p.423). So behind a SuperSpeed hub the device's Function Wake
+  notification is the only wake evidence the bus receives. The hub's
+  PORT_REMOTE_WAKE_MASK concerns the hub's own wake on connect, disconnect
+  and over-current and is not used (data-structures section 11.7).
+- **No resume recovery interval at SuperSpeed**: the device may be
+  accessed at once (9.2.6.2, p.327).
+
+### 8.2 Eligibility and the switch
+
+`XhciSelectiveSuspend` 1 turns on both stages; there is no separate
+SuperSpeed value (orchestrator decision, owner to confirm, 8.13). With the
+switch at 0 nothing of this section runs: capabilities and WAIT_WAKE are
+today's, DNCTRL keeps its reset value 0 (the restore writes 0, as today),
+no GetStatus(interface) is sent, and a Device Notification Event, should
+a controller raise one, is counted by type and dropped as today. With the
+switch at 1, `XhciSuspEligible` admits a SuperSpeed device PDO that is
+not a hub; `XHCI_SPEED_UNKNOWN` stays excluded (today `hcdSuspServes`
+reads every class but Low, Full and High as SuperSpeed).
+
+### 8.3 Functions, interfaces and the capability
+
+The bus's function PDOs (record 13 section 10.8) and USB 3's functions do
+not always coincide: a PDO split by IAD is one USB 3 function, but a PDO
+grouped by the positional audio rule spans several single-interface
+functions, and an unsplit device's one PDO spans every function of its
+configuration. So the device keeps two interface masks (bit n =
+bInterfaceNumber n, as `XHCI_FUNC.InterfaceMask`), written by the thread
+under the controller lock:
+
+- `dev->FwFirsts`: the first interface of every USB 3 function of the
+  active configuration - each IAD's bFirstInterface, and every interface
+  (alternate 0) no IAD covers. A pure helper beside `XhciFuncSplit`
+  computes it from the configuration descriptor; an interface number above
+  31 cannot be named by the mask, so its function is never armed and the
+  configuration is counted (8.10).
+- `dev->FwCapable`: the subset whose GetStatus(interface) answered bit 0
+  set. **Read by the thread after every SET_CONFIGURATION with a nonzero
+  value it completes** in a configuration transaction (below) - the
+  client's SELECT_CONFIGURATION of an unsplit device and the bus's own
+  configuration of a device it splits; RESET_PORT's replay keeps the
+  masks unread (below) - one GetStatus per bit of `FwFirsts`, through
+  `HcdThreadControlOutcome` while the device is ACTIVE. A STALL, a failure
+  or a short answer is "not capable" and counted; a timeout follows the
+  thread's ordinary EP0 rules. A new device starts with both masks 0.
+
+**The change of configuration** is one transaction with one entry and
+one exit, for each of the two paths that send SET_CONFIGURATION:
+
+- the client's select of an unsplit device (`hcdCfgSelect`): its
+  **entry** is the top of the function, before `hcdCfgDeconfigure` and
+  before `ConfigValue` and `Selected` are cleared; its **exit** is every
+  return, success or failure;
+- the bus's configuration of a device it splits
+  (`HcdCfgParentConfigure`), before any function PDO exists: entry and
+  every return likewise.
+
+At the entry, both masks are cleared under the controller lock, so a
+WAIT_WAKE that arrives while the configuration changes is refused
+(below). At a successful exit after a nonzero configuration, the reads
+are made and both masks written; at any other exit (a failure anywhere,
+or SET_CONFIGURATION(0)) they stay 0 - the device's configuration is not
+one the bus can vouch for. Either way, in the hold that writes (or
+confirms) them, every PDO of the device that holds a WAIT_WAKE and is
+left with no wake function has it claimed (4.2's handshake) and
+completed `STATUS_NOT_SUPPORTED` after the hold - a machine completion,
+which adds nothing to `PwrSeq` (3.9). A function PDO's own select
+(`hcdCfgSelectFunction`) and SELECT_INTERFACE send no SET_CONFIGURATION
+and leave the masks alone. **RESET_PORT** (`hcdCfgResetPort`) replays the
+configuration on the same device - its device descriptor compared byte
+for byte - so the masks are kept and not re-read: a function's remote-
+wake capability is a property of the configuration, which the replay
+does not change, and only its enable resets with the device (9.4.5). A
+replay that fails cycles the device, and the new device starts with 0. A
+configuration change and a RESET_PORT run only on an ACTIVE link (they
+are device-side slow IRPs, deferred otherwise, 3.3), so neither meets an
+armed function (8.5).
+
+**The mapping.** A PDO's **ownership mask** is its `InterfaceMask` when it
+is a function PDO (`pdo->Function`, set by the split), and every interface
+(all 32 bits) when it is the PDO of an unsplit device, whose
+`InterfaceMask` is 0 (`hcdPdoNew`). A PDO's functions are `FwFirsts` and
+its ownership mask; its **wake functions** `FwCapable` and its ownership
+mask. The split makes the function PDOs' masks disjoint, and an unsplit
+device has one PDO, so an interface names at most one PDO. A PDO grouped
+by the positional audio rule owns several single-interface functions and
+arms each that is capable.
+
+- **Capabilities** (5.2) are stage A's `XhciSuspCaps`, unchanged, from the
+  configuration's D5, since QUERY_CAPABILITIES may come before any
+  configuration: `DeviceD2` TRUE; with D5, `DeviceD1` TRUE and wake from
+  D1 and D2 (`DeviceWake` D2, `SystemWake` S0), unless 9x's wake is off
+  (5.5); without D5, `DeviceD1` FALSE and no wake. No GetStatus is sent
+  for them.
+- **WAIT_WAKE** (5.3) at a SuperSpeed PDO takes, for `XHCI_SUSP_WW_IN`'s
+  `RemoteWake`, whether the PDO has a wake function - read in the
+  admission's controller-lock hold - in place of D5: a PDO of an
+  unconfigured device, of a device whose configuration is changing, or
+  none of whose functions is capable, is refused `STATUS_NOT_SUPPORTED`.
+  The mismatch this allows (D5 set, no function capable) answers a
+  client's wake request with a legal refusal. 9x follows 5.5 unchanged.
+
+### 8.4 The suspend sequence at SuperSpeed
+
+The link record gains `Ss` (the device's link is a USB3 protocol link: a
+SuperSpeed device is always on one), set with `Root` when a sequence
+begins. 3.4's sequence becomes, at SuperSpeed:
+
+1. the gate closed (3.2), as stage A;
+2. **stop the functions' endpoints**: Stop Endpoint with SP=1 on every
+   endpoint the device context reads Running **except EP0**, streams'
+   endpoints included - a new step, `XHCI_SUSP_STEP_STOP_FUNCS`, appended
+   after `XHCI_SUSP_STEP_END`'s value so no step is renumbered (4.15.1.2);
+   it records `Stopped` and the stop's time as STOP does;
+3. **arm**, when the decision's intent says so (5.4, per function below):
+   for each PDO the decision marked `ArmNow` (a WAIT_WAKE held, D1 or D2,
+   and at least one wake function, 8.8), and for each of its wake
+   functions in ascending interface order,
+   SetFeature(FUNCTION_SUSPEND) with options 03h (Low Power Suspend and
+   Function Remote Wake enabled), through `HcdThreadControlOutcome` on EP0,
+   which is still running. Each request the device takes sets that
+   interface's bit in the PDO's `FwArmed` (a thread-only mask). At
+   SuperSpeed `Armed` is derived, never assumed: before reporting the
+   step's result the executor tells the pure core whether any PDO of the
+   device has `FwArmed` set, and that alone sets or clears `Armed` - the
+   step's OK does not, so an arm that found nothing to send (the masks
+   changed since the decision) leaves the suspension unarmed and the next
+   decision recomputes. The first request not taken ends the step with its
+   result, mapped as stage A's arm (3.10): STALL, NOT_SENT (with the one
+   retry after EP0 drains, bounded 100 ms), FAILED, or a timeout. A
+   function without WAIT_WAKE is sent nothing: Function Suspend is used
+   here only to carry the wake enable, and Device Suspend suspends every
+   function anyway (9.2.5, p.325);
+4. **stop EP0**: stage A's STOP step, which stops whatever the context still
+   reads Running - EP0 at this point;
+5. U3, the observation and SUSPENDED: at a root port stage A's steps
+   unchanged (PLS=U3 with LWS after a stale PLC is acknowledged; the
+   observation reads PLS U3, or Resume as a wake); at a SuperSpeed hub port,
+   8.6.
+
+An unarmed suspend runs steps 2 and 4 back to back; one stop path serves
+both. The refusals (3.5) are stage A's with one addition: **a refusal at
+SuperSpeed after some function was armed disarms before the restart.**
+Stage A leaves DEVICE_REMOTE_WAKEUP set after such a refusal because the
+feature is harmless on an awake device; Function Suspend is not - a function
+left in it under an ACTIVE device holds its I/O. So the refusal's path is
+DISARM (8.5's disarm, its control transfer waiting out SP=1's 10 ms from
+the last stop, since it rings EP0) and then RESTART. A STALL at any
+function's arm is stage A's STALL refusal for the device: every held
+WAIT_WAKE of the device that a latched wake has not claimed first (below)
+completes `STATUS_NOT_SUPPORTED` (the device said
+in GetStatus that the function could wake, and then refused; it is not
+offered again until the slots change, 3.9's latch). Function Wake
+notifications latched during a suspension that ends in a refusal are
+taken in the hold that makes ACTIVE visible (8.7, consumption (c)), in
+this order: the latch is emptied and, if it held any, the wake's claim is
+made as 5.4's (every WAIT_WAKE stamped before the watermark read then,
+its PDO D1 or D2, `STATUS_SUCCESS`, `WokeHold` set); then a STALL's
+claim takes what remains (`STATUS_NOT_SUPPORTED`); then `XhciSuspLatch`.
+`hcdSuspEndLocked` gains the first of the three ahead of the two it has.
+The device is awake, so nothing more is owed to the link. A suspension
+that ends uncertain or GONE drops its latch: the cycle or the unplug
+completes the device's WAIT_WAKEs `STATUS_NO_SUCH_DEVICE` at the unlink
+(4.4).
+
+### 8.5 Resume, wake and the disarm at a root port
+
+- **Host-initiated** (a D0, or a rearm): the dwell (10 ms after U3 was
+  observed), then the SIGNAL step writes PLS=U0 with LWS - `XhciLinkDecide`
+  with `XHCI_LINK_WANT_RESUME` asks `XHCI_LINK_ACT_SET_U0` for a port in
+  U3, or in Resume if the device began its own wake meanwhile (below) -
+  and the sequence goes straight to
+  VERIFY: there is no U0 step and no TDRSMDN at SuperSpeed.
+- **Device-initiated**: a PLC with PLS=Resume is the wake event exactly as
+  in stage A (3.7, the root sample), with its claim (5.4). **At SuperSpeed
+  every wake branch is the host's resume**: whatever took the event - the
+  root sample, the observation reading Resume, or a Function Wake
+  notification (8.7) - the sequence goes to the SIGNAL step after what is
+  left of the dwell since U3 was observed, then VERIFY. At a root port
+  SIGNAL writes U0 whether the port reads U3 or Resume (WANT_RESUME,
+  below): in Resume it completes the device's LFPS handshake (4.15.2.1
+  step (d)), in U3 it is a host-initiated resume (4.15.2.2), and the
+  dwell keeps 6.4.3.8's 10 ms in either case - a notification can be
+  sent before U3 by an armed function (9.2.5.4), so it proves nothing
+  about the link. The cost is at most 10 ms on a wake that follows U3 at
+  once.
+- **VERIFY** at a SuperSpeed root port reads PLS U0 with CCS and PED (the
+  bus programs no U1 or U2 timeout, so U0 is the only enabled state a
+  resumed link reads); its disconnect test is stage A's (a link that falls
+  to SS.Inactive has CCS 0, data-structures 10.4).
+- **RECOVERY** keeps stage A's 10 ms, a policy margin: USB 3.2 asks for none
+  (9.2.6.2).
+- **The disarm**: for every PDO of the device with `FwArmed`, for each set
+  bit, SetFeature(FUNCTION_SUSPEND) with options 0; a request the device
+  takes clears its bit, and `Armed` clears when no PDO has one left. Since
+  Function Suspend outlives the U3 exit (9.2.5.3), **at SuperSpeed the
+  disarm is not best effort**: any result but OK - STALL, NOT_SENT, FAILED
+  or a timeout - is the uncertain outcome (RECOVERING, the device cycled,
+  3.10), because a function left suspended under an ACTIVE device would
+  hold its client's I/O with nothing to end it; a cycle re-enumerates it
+  with every function in normal operation (Function Remote Wakeup resets
+  with the function, 9.4.5). Stage A's best-effort disarm stays for USB
+  2.0. With the disarm strict, no PDO keeps `FwArmed` while its device
+  is ACTIVE, so a RESET_PORT or a SET_CONFIGURATION (which may reset a
+  function's wake enable) never meets an armed function.
+- **`FwArmed`'s lifetime.** It describes the device the PDO is linked to.
+  Besides a disarm the device took, it and `ArmNow` are cleared when the
+  PDO is unlinked from its device (GONE, in the hold that settles its
+  slot, 4.4) - an unplug, a cycle, the controller's invalidation - since
+  the hardware's wake enable did not survive the device; and a dormant
+  PDO revived for a new device (98 and ME's `hcdDormantRevive`) has both
+  zero: they are cleared in `hcdDormantKeep`'s detach loop, where
+  `pdo->Device` is cleared at the controller's stop (the enum thread has
+  exited, so nothing else writes them), and asserted zero where the
+  revived PDO's admission reopens. A PDO's STOP, REMOVE or
+  START on a device that stays linked clears nothing: the device may be
+  SUSPENDED with that function armed, the hardware's enable stays set,
+  and the device's next resume disarms it through the PDO's `FwArmed`
+  whether the PDO is started or not (the disarm is the thread's, on the
+  chain it owns, 3.1).
+- Then RESTART, the gate opening at ACTIVE (3.2): 4.15.1.2's "ring an
+  endpoint's doorbell to restart it" is 3.2's restart.
+
+**`xhci_link.c`.** `XhciLinkClassify` reads PLS=Resume on a USB3 port as
+`XHCI_LINK_UNKNOWN` (Resume was a USB2 encoding when it was written), and
+`XHCI_LINK_WANT_RESUME` accepts only SUSPENDED. The classification stays
+as it is: every caller that runs with the switch at 0 - the enumeration's
+reset (`hcdUsb3ResetWrite`, WANT_RESET), the inspection
+(`XhciLinkPortFeed`, WANT_SERVICE), the hold (WANT_HOLD, WANT_RELEASE) -
+keeps today's answer for a port in Resume (none), and `LastState`, which
+the logs and the snapshot read, keeps today's value. The one change is in
+WANT_RESUME, which nothing calls before stage B: it also answers SET_U0
+for a port whose PORTSC reads PLS=Resume with CCS and PED (a device-
+initiated U3 exit the xHC holds for software, 4.15.2.1), read from the
+PORTSC it is given, not from a new class. The driver's choice of a warm
+reset for a link in U3 under the enumeration's reset is unchanged and is
+policy: xHCI 1.2c 4.19.1.2.9 (p.286) lets PR or WPR start from any Enabled
+substate.
+
+### 8.6 SuperSpeed hub ports
+
+The hub half follows stage A's USB 2.0 hub path (3.4 to 3.8, 3.10) with
+the SuperSpeed hub's requests and status (data-structures sections 11.4
+and 11.5; `xhci_sshub.h`):
+
+- **U3**: a stale C_PORT_LINK_STATE is cleared first (stage A clears a
+  stale C_PORT_SUSPEND), the window opened if no arm opened it (8.7),
+  `XhciSuspU3Issued`, then
+  SetPortFeature(PORT_LINK_STATE) with U3 in wIndex 15:8. The request
+  failing is a timeout, as stage A's.
+- **The observation**, GET_STATUS(port) every 10 ms within 50 ms: the link
+  state U3 with PORT_CONNECTION and PORT_ENABLE (which stays set in U3) is
+  OK; no connection, C_PORT_CONNECTION, PORT_ENABLE clear, or the link in
+  eSS.Inactive, Rx.Detect or eSS.Disabled is a disconnect; anything else
+  polls again. A wake cannot be read here - the hub raises no change for
+  it - so a wake during the observation is the Function Wake notification
+  (8.7). The observation empties the device's latch at each poll (8.7,
+  consumption (b)); any bit ends it with WAKE, which is the wake branch -
+  at SuperSpeed the host's resume (8.5), so it is right whether the link
+  is still in U3 (a notification an armed function sent before the U3
+  request took effect) or back in U0. An observation that expires with
+  the link in U0 and nothing latched is uncertain (RECOVERING, the
+  cycle), as stage A's.
+- **Host resume**: the dwell, then SetPortFeature(PORT_LINK_STATE) with U0
+  (the SIGNAL step), then VERIFY: GET_STATUS until the link reads U0 with
+  PORT_CONNECTION and PORT_ENABLE, with or without C_PORT_LINK_STATE (a
+  device that woke itself meanwhile leaves the link in U0 and sets no
+  change, and the hub ignores a U0 request on a U0 link); a
+  C_PORT_LINK_STATE read is cleared, and its clear failing is a timeout,
+  as stage A's C_PORT_SUSPEND. Then RECOVERY, the disarm (8.5), RESTART.
+- **Device-initiated**: the notification is the event (8.7), and the wake
+  branch is the host resume above (dwell, SetPortFeature(PORT_LINK_STATE)
+  with U0, VERIFY): the hub ignores the request on a link the device's
+  wake already brought to U0, and resumes one still in U3. Stage A's
+  hub wake branch (RECOVERY at once) stays for USB 2.0.
+- **The hub port look** (3.8 at SuperSpeed). `HcdHubPortLook`'s SuperSpeed
+  branch gets stage A's owned-port rule: for a port whose device the
+  machine owns, `XhciSsHubPortDecide`'s `Resume` (a link in U3 under a held
+  device, record 13 section 10.2) is skipped, and its `Resumed` (a
+  C_PORT_LINK_STATE with the link back in U0) hands the sample - the
+  status, the change bits whose clear the hub took (`hcdSsHubClear` reports
+  them), the generation - to the machine instead of the look's quiesce,
+  wait and release. A new pure classifier, `XhciSuspSsHubEvidence`, reads
+  it: a disconnect as above first; another generation stale; a
+  C_PORT_LINK_STATE with the link in U0 while RESUMING is the host's
+  resume complete, and is never a wake (10.16.2.6.2); a C_PORT_LINK_STATE
+  whose clear failed is stage A's lost change (`XhciSuspUncertain`, then
+  the cycle). Connection, over-current, configuration-error and link-error
+  processing are unchanged; a warm reset on a held device's port is the
+  existing recovery's and ends the device (the cycle), which is what
+  `XhciSsHubResetKind` already sends from U3.
+- QEMU has no SuperSpeed hub model, so this half is read on the bench only
+  (36.40); its host vectors stand for it until then.
+
+### 8.7 Function Wake Device Notifications
+
+- **DNCTRL.** `XHCI_EXTENSION` gains `DnctrlEnables`, 0 unless the switch is
+  1, when the controller start sets it to N1 (`XHCI_DNCTRL_FUNCTION_WAKE`,
+  0002h) **before** `XhciInitController`, so 36.33's read of the switch
+  must precede the controller's initialization. The init path writes it
+  through `xhciWriteDnctrl` after the HCRST when it is nonzero (a zero is
+  the reset value and is not written, so the switch at 0 adds no write);
+  the restore path (`xhci_init.c`, which writes 0 today) writes
+  `DnctrlEnables`; every reinitialization (the resume's, the recovery's
+  HCRST) goes through one of the two.
+- **The event.** `xhciHandleEvent` (`xhci_evt.c`) gains an arm for
+  `XHCI_TRB_TYPE_DEVICE_NOTIFICATION` that calls a new hook,
+  `XhciDeviceNotificationEvent(ext, trb)` (`xhci_hw.h`; the HCD's in
+  `hcd_dev.c`), at DISPATCH_LEVEL with the controller lock the drain holds.
+  The event stays counted by type first, as today. The hook decodes the
+  Slot ID, the Notification Type and the Interface (8.1; `xhci.h` gains
+  the field macros and `XHCI_DN_TYPE_FUNCTION_WAKE` 1). With the switch at
+  0 it returns at once. A type other than FUNCTION_WAKE, a slot outside
+  1 to MaxSlots, or a slot with no device record (`hc->SlotDevice`, the
+  transfer event's resolution) is counted and dropped. Otherwise it reads
+  the device's **window** (below) and, when it is open, sets the
+  Interface's bit in `dev->FwPending` (an interface above 31 sets
+  `dev->FwPendingFar` instead) and wakes the thread; when it is closed the
+  notification is counted (ignored at receipt) and dropped. A polled drain
+  (`XhciInterruptMode` 2) runs the same arm.
+- **The window.** A field of the link record, written only by pure-core
+  calls the executor makes under the controller lock and read by the hook
+  under the same lock, says whether a notification arriving now belongs
+  to the suspension in progress:
+  - it **opens** (`XhciSuspFwOpen`) in a hold the executor takes just
+    before it sends the first arm request of the ARM step (8.4) - before,
+    so a notification the device sends while it is still answering that
+    request is not lost - or, for a suspension with nothing to arm, just
+    before the U3 request (8.4, 8.6);
+  - it **closes**, and the latch is emptied (the bits counted as ignored),
+    in the hold that begins any sequence (`XhciSuspBegin`: a suspend, a
+    host resume, a wake), in the hold in which a wake event is taken from
+    any evidence (5.4), and in the hold that ends a sequence in any state
+    but SUSPENDED, after consumption (c) below.
+  So the latch only ever holds notifications received between this
+  suspension's first arm request (or U3 request) and its wake or end: one
+  received while the device is RESUMING or ACTIVE, or before the next
+  suspension's arm, is dropped at receipt and can never be consumed
+  against a later suspension, whatever passes the thread runs in between.
+- **Slot reuse.** The hook writes only into the record `SlotDevice[]`
+  names at the drain, under the lock. A record leaves `SlotDevice[]`
+  under this lock when it is freed (`hcdDeviceFree`, `hcd_enum.c`), after
+  its slot is disabled or the HCRST has taken it, and a record for a new
+  device is entered only once that device's Enable Slot has completed
+  (`hcdDeviceNew`) - after which the old device, whose slot the controller
+  disabled (xHCI 1.2c 4.6.4, p.97: doorbell disabled, slot activity
+  terminated), sends nothing more through it. A notification for the slot
+  drained in between finds no record and is dropped; one drained after
+  finds the new device's record with its window closed (a new device is
+  ACTIVE). Either way no notification reaches a device that did not send
+  it.
+- **Consumption.** The latch (`FwPending`, `FwPendingFar`) is emptied by
+  the thread under the controller lock at three points, and nowhere else
+  but the window's closing:
+  - (a) **the decision's hold** (`hcdSuspDecideOne`), first, before the
+    slots are read: bits for a device SUSPENDED are handed to the machine
+    as one `XHCI_SUSP_EV_WAKE`, which `XhciSuspEvidence` takes as the
+    suspension's wake event exactly as stage A's (the claim in this hold,
+    5.4, the window closing) and the decision begins the wake branch in
+    the same hold - so a D0 that arrived meanwhile does not begin a
+    resume that would close the window over an unclaimed wake;
+  - (b) **each poll of a SuperSpeed hub port's observation** (8.6): any
+    bit ends the observation with WAKE;
+  - (c) **the hold that ends a sequence** in any state but SUSPENDED: for
+    a refusal, 8.4's claim; otherwise dropped.
+  A root port's observation does not take the latch: bits latched during
+  it are taken at (a) once the device is SUSPENDED, or at (c). At each
+  point every bit is mapped to the PDO whose ownership mask (8.3) holds it
+  - **the interface-to-function mapping**: the PDO named is the one whose
+  function woke, which the log line names. A bit no PDO holds, a bit not
+  in `FwFirsts` (a device naming a function's other interface), and
+  `FwPendingFar` are counted (unattributed) and logged, but still count
+  as the device's wake: the device is awake whoever it names.
+  A device-initiated wake at a root port usually raises its PLC first,
+  which takes the event and closes the window, so a notification sent
+  after the bus's U0 write is dropped at receipt and only counted; one an
+  armed function sends before the U3 request took effect is latched and
+  taken at (a) or (c). Behind a SuperSpeed hub the notification is the
+  only evidence. A repeat (every tNotification until the function is
+  accessed) arriving after the window closed is dropped at receipt; one
+  arriving after the next suspension's first arm request is
+  indistinguishable from a new wake of that function and is taken as
+  one.
+- **A lost or never-sent notification** behind a hub leaves the device awake
+  in U0 while the record reads SUSPENDED: its client I/O is held by the
+  gate, its WAIT_WAKEs stay pending, and the device repeats the
+  notification every tNotification until accessed. A host resume meanwhile
+  verifies U0 at once (8.6). Nothing waits on the notification.
+
+### 8.8 Composite rules
+
+Stage A's composite rules (4.3, 5.4, 6.2) hold unchanged; at SuperSpeed:
+
+- **The link is suspended only when every PDO is below D0** (4.3). A
+  function that idles while a sibling stays in D0 is in logical Dx on an
+  ACTIVE link, as in stage A: the bus does not put that one function into
+  Function Suspend while the device runs, so it cannot signal a wake until
+  its siblings are idle too and the device suspends (orchestrator decision,
+  owner to confirm, 8.13: per-function suspend of a running device is left
+  to a later phase).
+- **Arming is per function**: 5.4's armed intent is computed per PDO - a
+  WAIT_WAKE held, `PwrState` D1 or D2, and at least one wake function
+  (8.3) - and only that PDO's wake functions are armed. `XHCI_SUSP_FUNC`
+  gains `WakeFn` (in: the PDO has a wake function), `Armed` (in: the PDO
+  has `FwArmed`) and `ArmNow` (out: arm it at this suspend); the device's
+  `ArmIntent` is any `ArmNow`. The thread copies
+  `ArmNow` into a thread-only per-PDO field in the decision's hold and the
+  ARM step reads it. 5.4's rearm becomes, at SuperSpeed: SUSPENDED with
+  some PDO's `ArmNow` set and its `Armed` clear - resume, arm, suspend
+  again (an internal cycle); "armed but no longer wanted" is stage A's (a
+  wake that claims nothing, resume, disarm, suspend again).
+- **One wake completes every armed function's WAIT_WAKE**, as in stage A
+  (5.4: every WAIT_WAKE stamped before the watermark whose PDO is D1 or
+  D2), not only the function the notification names (orchestrator
+  decision, owner to confirm, 8.13). At a root port the event is the PLC,
+  which names no function; using the notification only behind hubs would
+  make the claim depend on the topology. A function woken this way
+  without having signalled sends its D0, finds its device awake and idles
+  again by its own driver's policy. `WokeHold` (3.9) is set on every
+  claimed PDO as in stage A. The notification's function is logged.
+- The idle notification (section 6) is stage A's for a SuperSpeed PDO:
+  batches, claims and settlement do not depend on the speed.
+
+### 8.9 What 36.38 builds, and where
+
+36.38 builds the above on stage A's code; the switch, the counters' block
+and XHCISNAP's records being 36.33's, stage B appends to them.
+
+- `src/xhci_susp.c`, `xhci_susp.h` - the pure core: SuperSpeed eligibility;
+  `Ss` in `XHCI_SUSP_LINK`; `XHCI_SUSP_STEP_STOP_FUNCS` (appended); the
+  SuperSpeed order of 8.4 in `XhciSuspBegin`/`XhciSuspAdvance`; the arm's
+  "some armed" report deriving `Armed`; the refusal's DISARM at
+  SuperSpeed and its SP=1 wait; the strict disarm of 8.5; the root
+  SIGNAL straight to VERIFY; every SuperSpeed wake branch as the host's
+  resume (SIGNAL after the dwell's remainder, 8.5); `XhciSuspObserveSsHub`,
+  `XhciSuspVerifySsHub`, `XhciSuspSsHubEvidence`; `WakeFn`, `Armed` and
+  `ArmNow` per function in `XhciSuspDecide` and the per-function rearm;
+  the notification window (8.7) as a field of the link record, opened by
+  `XhciSuspFwOpen` and closed by `XhciSuspBegin`, by the wake event's
+  taking in `XhciSuspEvidence`/`XhciSuspAdvance`, and by an end not
+  SUSPENDED - all called under the controller lock.
+- `src/xhci_link.c`, `xhci_link.h` - WANT_RESUME's SET_U0 for a port in
+  Resume with CCS and PED (8.5); no new class.
+- `src/xhci_func.c`, `xhci_func.h` - the first interfaces of a
+  configuration's USB 3 functions (8.3).
+- `src/xhci_evt.c`, `src/xhci_hw.h` - the Device Notification arm and the
+  hook's prototype.
+- `src/xhci_init.c`, `src/xhci.h` - DNCTRL from `DnctrlEnables` (init and
+  restore); `XHCI_DNCTRL_FUNCTION_WAKE`, the Device Notification Event
+  field macros, `XHCI_DN_TYPE_FUNCTION_WAKE`; the `DnctrlEnables` field
+  appended to `XHCI_EXTENSION` (a layout XHCISNAP's extension window
+  reads: appended at the end, never inserted).
+- `src/hcd_dev.c` - `XhciDeviceNotificationEvent`.
+- `src/hcd_susp.c` - the executor: `hcdSuspServes` and the PDO
+  eligibility for SuperSpeed; the STOP_FUNCS step (EP0 excepted); the
+  per-function arm and disarm (FUNCTION_SUSPEND, interface recipient);
+  the root SIGNAL and U0 at SuperSpeed through `XhciLinkDecide`; the
+  SuperSpeed hub port U3, observation, signal and verification
+  (PORT_LINK_STATE, C_PORT_LINK_STATE); the notification's consumption;
+  the WAIT_WAKE admission's `RemoteWake` from the PDO's wake functions; a
+  SuperSpeed hub sample hook beside `HcdSuspHubSample`; the latch's three
+  consumption points (8.7) - `hcdSuspDecideOne`'s hold, the hub
+  observation's poll, and `hcdSuspEndLocked`, which gains the refusal's
+  wake claim ahead of the STALL's claim and the latch (8.4).
+- `src/hcd_hub.c`, `src/hcd_sshub.c` - the owned-port rule in the
+  SuperSpeed branch of the port look; the clears the hub took reported.
+- `src/hcd_cfg.c` - the configuration transaction of 8.3 in
+  `hcdCfgSelect` and `HcdCfgParentConfigure` (masks cleared at entry,
+  `FwFirsts` and the GetStatus(interface) reads at a successful exit, the
+  settlement of WAIT_WAKEs left without a wake function at every exit);
+  `hcdCfgResetPort` unchanged.
+- `src/hcd_pdo.c` - the ownership mask of an unsplit PDO (8.3);
+  `FwArmed`/`ArmNow` cleared in `hcdDormantKeep` and asserted zero at
+  `hcdDormantRevive` (8.5); their clearing at the unlink is in
+  `hcd_susp.c`'s `HcdSuspUnlinkLocked`.
+- `src/hcd_ctl.c` - `DnctrlEnables` from the switch before
+  `XhciInitController`.
+- `src/hcd.h` - the device's `FwFirsts`, `FwCapable`, `FwPending`,
+  `FwPendingFar`; the PDO's `FwArmed` and `ArmNow`.
+- `src/xhci_counters.h`, `src/hcd_log.c` - 8.10's counters, appended
+  after 36.33's, and their labels.
+- `src/hcd_door.c`, `xhcisnap\` - 8.10's snapshot fields, appended.
+- `test\test_susp.c`, `test\test_link.c`, `test\test_func.c` (and the
+  test lists) - 8.11; `scripts\vm-matrix` offsets regenerated for the
+  appended counters.
+- Docs: this record (section 2's DNCTRL and Device Notification rows read
+  as history), record 13 section 10.2 (a held device's U3 at a SuperSpeed
+  hub port is now the machine's), release notes (SuperSpeed suspend, what
+  is read on QEMU and what only on the bench), `build-and-test.md` (8.10's
+  log lines), `source-files.md`.
+
+### 8.10 Counters, log lines and XHCISNAP
+
+Counters, appended to the counter block after stage A's (36.33), each a
+ULONG, the thread's written plainly and the DPC's under the controller
+lock, with `hcd_log.c` labels in the `superspeed suspend:` family:
+
+| Field | Label | Counts |
+|---|---|---|
+| `SsSuspArms` | functions armed | FUNCTION_SUSPEND with options 03h the device took |
+| `SsSuspArmRefused` | arms refused | an arm step's first request not taken (any result) |
+| `SsSuspDisarms` | functions disarmed | FUNCTION_SUSPEND with options 0 the device took |
+| `SsSuspDisarmFailed` | disarms failed | a disarm not taken: the device cycled (8.5) |
+| `SsSuspHubU3` | hub ports suspended | PORT_LINK_STATE U3 observed at a SuperSpeed hub port |
+| `SsSuspHubResumes` | hub ports resumed | a verified U0 after PORT_LINK_STATE U0 |
+| `SsSuspCapReads` | capability reads | GetStatus(interface) answered |
+| `SsSuspCapFailed` | capability reads failed | a STALL, failure or short answer |
+| `SsSuspCapable` | capable functions | bits set in `FwCapable`, summed over reads |
+| `SsSuspFarInterfaces` | interfaces past 31 | configurations with a function the masks cannot name |
+| `FuncWakeEvents` | function wake notifications | FUNCTION_WAKE events received for a device (DPC) |
+| `FuncWakeClosed` | function wakes outside the window | dropped at receipt, the window closed (8.7) |
+| `FuncWakeAsEvent` | function wakes taken as the wake | a notification that was a suspension's wake event |
+| `FuncWakeInSequence` | function wakes during a suspend | latched bits taken by a hub port's observation (b) or a refusal's end (c) |
+| `FuncWakeIgnored` | function wakes ignored | latched bits emptied by a closing window, or taken for a device not served or not suspended |
+| `FuncWakeUnattributed` | function wakes unattributed | an interface no PDO holds, not a first interface, or past 31 |
+| `DevNotifyDropped` | device notifications dropped | with the switch at 1: another type, or a slot with no device (at 0 the hook returns at once and only today's per-type count moves) |
+| `SsSuspCapSettled` | wake requests settled by a configuration | WAIT_WAKEs completed NOT_SUPPORTED when a configuration left their PDO no wake function |
+
+The stage A counters (requests, outcomes, refusals by reason, wake events,
+claims) count SuperSpeed devices too; stage B adds none of those twice.
+
+Log lines (`XhciLogNote`, bounded as 36.33's are; a value packs its fields
+high to low):
+
+- `susp.ss.arm`: slot, interface, result (an `XHCI_SUSP_RES_*`) - each arm
+  request;
+- `susp.ss.disarm`: slot, interface, result - each disarm request;
+- `susp.ss.cap`: slot, the count of first interfaces, the count capable,
+  the count failed - after each configuration's reads;
+- `susp.fw`: slot, interface, the link state when taken, and the
+  disposition (event, observation, refusal, dropped, unattributed; closed
+  at receipt) -
+  each notification;
+- `susp.ss.hub`: hub index, port, the link state read, and the step - each
+  SuperSpeed hub port U3, signal and verification outcome.
+
+XHCISNAP: the controller's DNCTRL as read (a register read in the HCD
+region), `DnctrlEnables`, and per device record, appended after stage A's
+fields: `Ss`, the window, `FwFirsts`, `FwCapable`, `FwPending` and the
+union of its PDOs' `FwArmed`. The offsets are appended at the end of
+their regions (the orchestrator reconciles them with 36.33's at merge).
+
+**As built (36.38).** The counters are words 142 to 159 of the counter
+block, in the table's order (filling the 18 words integration wave 3
+reserved for them in place, so the composite parent's two stay at 160 and
+the block 162 words), with `hcd_log.c` labels
+`susp.ss.*`, `susp.fw.*` and `susp.dn.dropped`. Stage A had no per-device
+snapshot record, so the HCD header grows instead (version unchanged, 306
+words; appended after 36.24's stage 2 counters at 204 to 236 when the
+branches met at integration wave 4 - built at 204 to 272 on its branch):
+word 237 DNCTRL 15:0 as the door reads it - only with the switch at
+1, `0xFFFFFFFF` (not read) at 0, so the switch at 0 adds no register
+access - 238 `DnctrlEnables`, 239 `DnctrlReadback` (DNCTRL read after the
+driver's own write, a second extension word appended beside the first so
+the amd64 tail parity `TrailingPad` keeps is unchanged), 240 and 241 the
+record count (8) and size (8 words), and from 242 to 305 eight records, the first
+eight devices in Slot ID order: Slot ID; the link word (state 3:0, `Ss` 8,
+the window 9, `Armed` 10, `Root` 11, the running step 23:16); `FwFirsts`;
+`FwCapable`; the latch (`FwPending`, `FwPendingFar`); the union of the
+PDOs' `FwArmed` (`dev->FwArmedAll`, kept by the thread, so the door walks
+no PDO chain); and the last outcome, reason and kind. **The latch lives in
+the link record** (`XHCI_SUSP_LINK.FwPending`, `FwPendingFar`, beside the
+window `FwWindow`), not in `HCD_USB_DEVICE` as 8.7 and 8.9 have it, so the
+pure core opens, closes and empties it with the window and its vectors
+cover it; a closing window counts what it dropped in `FwDropped`, which the
+executor moves to `FuncWakeIgnored` in the same hold. The log lines are
+bounded by stage A's budget; `susp.fw` packs slot, interface (FFh past 31),
+the PDO index (FFh unattributed), the link state and the disposition (1
+event, 2 observation, 3 refusal, 4 dropped, 5 closed at receipt; 8 or'ed
+unattributed). Two choices the text left open: a DNCTRL write the init
+path cannot make (no valid read-modify-write operand) is not the start's
+failure - only the readback stays 0; and the arm's first request is not
+sent behind a client's EP0 transfer, with stage A's one bounded retry.
+
+### 8.11 Host vectors
+
+- `test_susp`: the SuperSpeed order (GATE, STOP_FUNCS, ARM, STOP, U3,
+  OBSERVE) armed and unarmed; each step's results at SuperSpeed, a
+  refusal before and after some function was armed (DISARM after SP=1's
+  10 ms from the last stop, then RESTART; a disarm failure uncertain); the
+  root host resume straight to VERIFY and the root wake branch as SIGNAL
+  after the dwell's remainder, then VERIFY; the strict disarm;
+  `XhciSuspObserveSsHub` and `XhciSuspVerifySsHub` over every link state,
+  connection and enable bit and C_PORT_LINK_STATE; `XhciSuspSsHubEvidence`'s precedence
+  (disconnect, stale, resume done, never a wake); a notification as
+  evidence for a SUSPENDED device; the SuperSpeed wake branch from the
+  root sample, the observation's WAKE and a notification, each going to
+  SIGNAL after the dwell's remainder (0 long after U3, 10 ms at once
+  after it); the window's opening and closing at every transition 8.7
+  names, and a resume, a rearm and a re-suspend in one pass with a
+  notification received in each phase (none reaches the next suspension
+  unless received after its first arm request); `WakeFn`, `Armed`,
+  `ArmNow`, an arm with nothing to send, and the per-function rearm (one
+  PDO armed, a sibling's WAIT_WAKE arriving while SUSPENDED); USB 2.0
+  vectors unchanged (a stage A regression set run with `Ss` 0).
+- `test_link`: WANT_RESUME on Resume with and without CCS and PED; every
+  other want on a port in Resume answering exactly as before (the
+  switch-at-0 regression set); `XhciLinkClassify` of Resume unchanged.
+- `test_func`: the first interfaces - IADs, lone interfaces, an IAD and
+  lone interfaces mixed, alternates, interface numbers 31 and 32, a
+  malformed configuration; the ownership mask of a function PDO, a
+  positional-audio PDO and an unsplit PDO, and an interface mapped to
+  each.
+- The Device Notification Event's decode (type, interface, slot) as a
+  pure helper's vectors, with a TRB of another notification type.
+- Executor-level (36.39's test client on QEMU cannot raise a
+  notification, so these are the bench's or a fault-injection hook's in
+  the `qemu` flavour, which 36.38 adds if it is cheap): a notification
+  between a taken and a failed arm request, ending in a refusal whose
+  wake claim precedes the STALL's and the latch; a configuration change
+  that fails after its entry, with a WAIT_WAKE held.
+
+### 8.12 The legs
+
+**36.39, QEMU** (version pinned in the run sheet; development host A).
+What QEMU 11.1.0's `hw/usb/hcd-xhci.c` models, read for this design:
+DNCTRL is stored and read back but never consulted, and no Device
+Notification Event is ever generated; a PLS=U3 write moves the port to U3
+**without PLC**; a PLS=U0 write from U3 moves it to U0 **with** PLC; a
+PLS=Resume write is ignored; a device's wakeup moves a port in U3 to
+Resume with PLC. QEMU has no SuperSpeed hub. So on QEMU, at a USB3 root
+port with a SuperSpeed device model bound to the test client (36.34; the
+device model and the client's INF match are chosen in 36.39):
+
+- Dx/D0 unarmed: STOP_FUNCS and STOP, U3 observed and held (PORTSC read
+  in XHCISNAP over a sustained interval), the host resume's single U0
+  write and its PLC, transfers resumed;
+- an armed suspend: what QEMU's device model answers
+  SetFeature(FUNCTION_SUSPEND) is read and recorded - if it STALLs, the
+  refusal path is the reading (every held WAIT_WAKE completed
+  NOT_SUPPORTED, the latch, ACTIVE); if it accepts, the arm, the disarm
+  after the resume, and a device-initiated wake if the model signals one;
+- DNCTRL read back as 0002h with the switch at 1 and 0 with it at 0, and
+  the function wake counters at 0 (QEMU sends none);
+- the GetStatus(interface) reads and their answers;
+- unplug at each state, controller disable, enable, D3 and restart
+  mid-transition, as 36.35;
+- on 98 SE, 2000 (SMP, Driver Verifier), XP and 7; once more under
+  `XhciInterruptMode` 2 (the roadmap's checkpoint);
+- `XhciSelectiveSuspend` at 0 reading as the build before it, and the
+  matrix unchanged;
+- x86 and amd64, every gate.
+
+What QEMU cannot show - the Function Wake notification, a SuperSpeed hub
+port, a real device's arm and wake - is named in the release notes as read
+only on the bench.
+
+**36.40, the bench (owner).** A SuperSpeed device whose driver idles and
+arms wake - for example a USB 3 Ethernet adapter whose Windows 7 driver
+uses selective suspend and wake - on the E460's Windows 7, at a USB3 root
+port and behind a USB 3 hub, with `XhciSelectiveSuspend` 1: the arm
+(`susp.ss.arm`), U3 held, a wake (the adapter's link event), the
+notification (`susp.fw` and the counters) - at the root port after the
+PLC, behind the hub as the event - the WAIT_WAKE's completion, D0, the
+disarm and traffic resumed; and a composite or multi-function SuperSpeed
+device if one is at hand. Owed until the owner reads it; never claimed
+from a guest.
+
+### 8.13 Decisions taken here (orchestrator decision, owner to confirm)
+
+- `XhciSelectiveSuspend` 1 turns on stages A and B together; there is no
+  value for stage A alone. The default stays 0 (owner, 2026-10-09), and 0
+  changes nothing, DNCTRL included.
+- Function Suspend is used only to carry the wake enable while the whole
+  device suspends; a function idle under a running device stays in logical
+  Dx (stage A's composite rule), not in Function Suspend.
+- A device wake completes every armed function's WAIT_WAKE (stage A's
+  claim), not only the function a notification names; the notification
+  is evidence and log, and the wake event behind a SuperSpeed hub.
+- At SuperSpeed a disarm the device does not take cycles the device,
+  where stage A's disarm is best effort.
+- A STALL at any function's arm refuses the device's suspend and completes
+  every held WAIT_WAKE `STATUS_NOT_SUPPORTED`, as stage A's STALL - but
+  for those a notification latched during that suspension claimed first
+  (`STATUS_SUCCESS`, 8.4).
 
 ## 9. Review of revision 1 (2026-10-05), where each finding is taken
 
@@ -1164,6 +1911,36 @@ Revision 9's review found 1; revision 10 takes it:
 | # | Finding | Answered in |
 |---|---|---|
 | 1 | Claimed entry before IN_CALLBACK can lose to EXITING | 4.4 the CLAIMING phase, held across dequeue and claim |
+
+Stage B's design (section 8, task 36.37) was reviewed from 2026-10-10.
+Round 1 found 8 (1 P1, 5 P2, 2 P3), all taken:
+
+| # | Finding | Answered in |
+|---|---|---|
+| 1 | A new Resume link class changes WANT_RESET and WANT_HOLD with the switch at 0 | 8.5 `xhci_link.c`: no new class, only WANT_RESUME; 8.11 |
+| 2 | An unsplit PDO's `InterfaceMask` is 0: no wake function | 8.3 the ownership mask |
+| 3 | Latched notifications cross suspensions | 8.7 the window, opened at the arm or U3 request, closed at every sequence boundary |
+| 4 | `FwArmed` has no lifetime across unlink and dormant revival | 8.5 `FwArmed`'s lifetime; 8.9 `hcd_pdo.c` |
+| 5 | A configuration change leaves WAIT_WAKEs without capability; an empty arm sets `Armed` | 8.3 the change of configuration; 8.4 `Armed` derived |
+| 6 | "A hot reset cannot start from U3" is wrong (xHCI 4.19.1.2.9) | 8.5, the claim withdrawn, the warm reset named policy |
+| 7 | Slot-reuse ordering stated backwards | 8.7 slot reuse |
+| 8 | D1 stated unconditional | 8.3 capabilities |
+
+Round 2 found 6 (1 P1, 4 P2, 1 P3), all taken:
+
+| # | Finding | Answered in |
+|---|---|---|
+| 1 | A notification sent before U3 taken as proof the link resumed: no dwell, no U0 restored | 8.5 every SuperSpeed wake branch is the host's resume after the dwell; 8.6 |
+| 2 | The window opened after the first arm request loses a notification sent while the device answers it | 8.7 the window opens before the first arm request |
+| 3 | A refusal's kept wake misses bits still in the latch; order against the STALL claim and the latch | 8.4 the refusal's order; 8.7 consumption (c) |
+| 4 | The configuration change's failure exits and RESET_PORT interval undefined | 8.3 one transaction per path, entry and every exit; RESET_PORT keeps the masks |
+| 5 | Dormant detachment bypasses the unlink that clears `FwArmed` | 8.5 cleared in `hcdDormantKeep` |
+| 6 | `DevNotifyDropped` counted with the switch at 0 | 8.10 |
+
+Round 3 found 3 (0 P1, 0 P2, 3 P3), all taken: RESET_PORT dropped from
+the read rule (8.3), the root wake vector restated (8.11), the STALL's
+settlement qualified by the wake's claim (8.4, 8.13). The review ended
+there, the first round with no P1 or P2.
 
 ## 10. Tasks and verification (stage A)
 

@@ -476,6 +476,27 @@ XHCI_C_ASSERT(usbcmd_named_bits_are_defined,
  */
 #define XHCI_DNCTRL_DEFINED_MASK 0x0000FFFFUL
 #define XHCI_DNCTRL_RSVDP_MASK   0xFFFF0000UL
+/*
+ * N1, FUNCTION_WAKE's enable (5.4.4, p.366-367: "only under debug conditions
+ * would software write the DNCTRL register with a value other than 0002h").
+ * Selective suspend's stage B writes it, and only with XhciSelectiveSuspend
+ * 1 (design record 14 section 8.7, XHCI_EXTENSION.DnctrlEnables); with the
+ * switch at 0 DNCTRL keeps its reset value 0, as before.
+ */
+#define XHCI_DNCTRL_FUNCTION_WAKE 0x00000002UL
+
+/*
+ * A Device Notification Event TRB (6.4.2.7, p.447-448): the Notification
+ * Type in DW0 7:4, and DW0 63:8 bytes 05h to 0Bh of the Device Notification
+ * TP, so DW0 15:8 is the TP's byte 05h - a FUNCTION_WAKE TP's Interface,
+ * "the first interface in the function that caused the device to perform a
+ * remote wake" (USB 3.2 8.5.6.1, Table 8-19, p.238; 8.5.6.4, p.239). The
+ * Slot ID is DW3 31:24 (XHCI_TRB_GET_SLOT_ID) and the completion code is
+ * always Success. Type 1 is FUNCTION_WAKE (USB 3.2 Table 8-18).
+ */
+#define XHCI_DN_GET_TYPE(dw0)       ((((ULONG)(dw0)) >> 4) & 0xFUL)
+#define XHCI_DN_GET_INTERFACE(dw0)  ((((ULONG)(dw0)) >> 8) & 0xFFUL)
+#define XHCI_DN_TYPE_FUNCTION_WAKE  1UL
 
 #define XHCI_CRCR_RCS           0x00000001UL
 #define XHCI_CRCR_CS            0x00000002UL    /* RW1S */
@@ -8347,6 +8368,21 @@ typedef struct _XHCI_EXTENSION {
     volatile ULONG LineRetired;
     ULONG LineRetireState;
 
+    /*
+     * Selective suspend's stage B (design record 14 section 8.7; roadmap-hcd
+     * 36.38): the Device Notification types DNCTRL enables, 0 unless
+     * XhciSelectiveSuspend is 1, when the controller's start sets it to
+     * XHCI_DNCTRL_FUNCTION_WAKE before XhciInitController. The init path
+     * writes it after the HCRST only when it is not 0 (0 is the reset value,
+     * so the switch at 0 adds no write) and the restore path writes it in
+     * place of its 0. DnctrlReadback: DNCTRL's defined half as read after
+     * that write, or after the HCRST when nothing was written, so a dump
+     * shows what the controller holds. Appended after the delivery words,
+     * two ULONGs, so the parity TrailingPad keeps is unchanged.
+     */
+    ULONG DnctrlEnables;
+    ULONG DnctrlReadback;
+
     ULONG TrailingPad;
 
     ULONG TrailingSignature;
@@ -8652,7 +8688,45 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_XPIPE_WORDS   204 /* XHCI_XPIPE_STATS, in words    */
 #define XHCI_SNAPSHOT_HCD_XPIPE_AT      205 /* its first word                */
 #define XHCI_SNAPSHOT_HCD_XPIPE_COUNT   32UL /* 24 to 36.24, 36.25's eight after */
-#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    237UL
+/*
+ * Appended by task 36.38, version unchanged, after 36.24's stage 2
+ * counters: selective suspend's stage B
+ * (design record 14 section 8.10). DNCTRL's defined half as the door reads
+ * it when the window is cut - only with XhciSelectiveSuspend 1, so the
+ * switch at 0 adds no register access: XHCI_SNAPSHOT_HCD_NOT_READ then -
+ * the extension's DnctrlEnables and DnctrlReadback, then up to eight
+ * device records, the first eight devices in Slot ID order, each the
+ * words below, all 0 past the last device. A header shorter than this is
+ * an earlier driver's, which enabled no notification.
+ */
+#define XHCI_SNAPSHOT_HCD_DNCTRL_LIVE   237 /* DNCTRL 15:0, or NOT_READ      */
+#define XHCI_SNAPSHOT_HCD_DNCTRL_ENABLES 238 /* XHCI_EXTENSION.DnctrlEnables */
+#define XHCI_SNAPSHOT_HCD_DNCTRL_READBACK 239 /* ...DnctrlReadback           */
+#define XHCI_SNAPSHOT_HCD_SUSP_RECORDS  240 /* device records               */
+#define XHCI_SNAPSHOT_HCD_SUSP_WORDS    241 /* one record, in words         */
+#define XHCI_SNAPSHOT_HCD_SUSP_AT       242 /* the first record's first word */
+#define XHCI_SNAPSHOT_HCD_SUSP_COUNT    8UL
+#define XHCI_SNAPSHOT_HCD_SUSP_SLOT     0   /* Slot ID, 0: no record         */
+#define XHCI_SNAPSHOT_HCD_SUSP_LINK     1   /* XHCI_SNAPSHOT_HCD_SL_*       */
+#define XHCI_SNAPSHOT_HCD_SUSP_FIRSTS   2   /* dev->FwFirsts                 */
+#define XHCI_SNAPSHOT_HCD_SUSP_CAPABLE  3   /* dev->FwCapable                */
+#define XHCI_SNAPSHOT_HCD_SUSP_PENDING  4   /* the latch, FwPending          */
+#define XHCI_SNAPSHOT_HCD_SUSP_FAR      5   /* FwPendingFar                  */
+#define XHCI_SNAPSHOT_HCD_SUSP_ARMED    6   /* the union of its PDOs' FwArmed */
+#define XHCI_SNAPSHOT_HCD_SUSP_LAST     7   /* XHCI_SNAPSHOT_HCD_SL_LAST_*  */
+#define XHCI_SNAPSHOT_HCD_SUSP_RECORD_WORDS 8UL
+#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    306UL /* the records end the header */
+#define XHCI_SNAPSHOT_HCD_NOT_READ      0xFFFFFFFFUL
+
+/* A device record's link word: the link state (XHCI_SUSP_*) in 3:0, Ss in
+ * 8, the window in 9, Armed in 10, Root in 11, the running step
+ * (XHCI_SUSP_STEP_*, 0 none) in 23:16. Its last word: the last sequence's
+ * outcome (XHCI_SUSP_OUT_*) in 7:0, its reason (XHCI_SUSP_WHY_*) in 15:8,
+ * its kind (XHCI_SUSP_RUN_*) in 23:16. */
+#define XHCI_SNAPSHOT_HCD_SL_SS         0x00000100UL
+#define XHCI_SNAPSHOT_HCD_SL_WINDOW     0x00000200UL
+#define XHCI_SNAPSHOT_HCD_SL_ARMED      0x00000400UL
+#define XHCI_SNAPSHOT_HCD_SL_ROOT       0x00000800UL
 
 #define XHCI_SNAPSHOT_HCD_TELE_S_NONE     0UL /* no send has come          */
 #define XHCI_SNAPSHOT_HCD_TELE_S_LIVE     1UL /* its device is present     */
