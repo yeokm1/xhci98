@@ -92,6 +92,7 @@ XHCI_C_ASSERT(hcd_uas_tele_words,
 #define HCD_KIND_ROOTHUB_FDO    0x46524448UL /* 'HDRF' */
 #define HCD_KIND_DEVICE_PDO     0x50444448UL /* 'HDDP' */
 #define HCD_KIND_HUB_FDO        0x46484448UL /* 'HDHF' (task 33.4)  */
+#define HCD_KIND_COMPOSITE_FDO  0x46434448UL /* 'HDCF' (task 36.43) */
 
 /* The PnP state the dispatch routines gate on. Windows 98 can deliver a
  * REMOVE as the first PnP IRP after START (no SURPRISE_REMOVAL before it;
@@ -747,7 +748,16 @@ typedef struct _HCD_DEVICE_PDO {
     volatile ULONG IdleQuarantined;
     volatile ULONG IdlePinned;      /* its callback was abandoned by a stop
                                      * without the DMA-halt proof         */
+    /* A composite device's own PDO (task 36.43; design record 13 section
+     * 10.12): the parent of its function PDOs, the group's first PDO, under
+     * XHCI98\COMPOSITE, bound to this driver as a composite FDO. Fixed at
+     * creation. Presentation only: it carries no pipe and takes no URB. */
+    ULONG Composite;
 } HCD_DEVICE_PDO, *PHCD_DEVICE_PDO;
+
+/* A PDO other PDOs are presented under (ParentSerial): a hub's (task 33.4)
+ * or a composite device's (task 36.43). */
+#define HcdPdoIsParent(pdo) ((pdo)->Hub || (pdo)->Composite)
 
 /* Whether a PDO may use a pipe of its device: a device PDO any, a function
  * PDO the shared EP0 and its own interfaces' (design record 13 section
@@ -1163,6 +1173,11 @@ typedef struct _HCD_CONTROLLER {
      * serial stands for. */
     ULONG PortCycle[HCD_PORT_WORDS];
     ULONG PortCycleSerial[HCD_PORT_COUNT];
+    /* A composite FDO's start (HcdEnumRepresent, task 36.43): the let-go
+     * function PDOs of the port's device re-presented in place, if it is
+     * still the one that group serial stands for. */
+    ULONG PortRepresent[HCD_PORT_WORDS];
+    ULONG PortRepresentSerial[HCD_PORT_COUNT];
     /* Thread requests (hcd_enum.c), under the controller lock. */
     ULONG SlotsInvalidated;         /* HCRST took every slot              */
     /* An invalidation raised without proof the controller stopped (its
@@ -1572,7 +1587,10 @@ typedef struct _HCD_ROOTHUB_FDO {
 /* An external hub's FDO, this driver's third role (task 33.4; design record
  * 13 section 10.11), attached over a hub's device PDO by AddDevice. Its
  * BusRelations are the PDOs presented under that hub; it reaches the
- * controller only through the PDO (HcdHubFdoController), never by a copy. */
+ * controller only through the PDO (HcdHubFdoController), never by a copy.
+ * The same extension serves a composite device's FDO, the fourth role
+ * (task 36.43, section 10.12; Common.Kind HCD_KIND_COMPOSITE_FDO): its
+ * BusRelations are the device's function PDOs, and it has no door. */
 typedef struct _HCD_HUB_FDO {
     HCD_COMMON Common;
     PDEVICE_OBJECT Pdo;
@@ -1776,6 +1794,10 @@ ULONG HcdDeviceReadText(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                         const ULONG *indexes, ULONG count, ULONG flags,
                         PHCD_TEXT_READ state, WCHAR *out);
 VOID HcdEnumCycle(PHCD_CONTROLLER hc, ULONG port, ULONG serial);
+/* Task 36.43: ask the thread to re-present in place the let-go function
+ * PDOs of the device on `port` whose group is `serial` (a composite FDO's
+ * start; HcdDevicePdoRepresentFunctions). IRQL: <= DISPATCH_LEVEL. */
+VOID HcdEnumRepresent(PHCD_CONTROLLER hc, ULONG port, ULONG serial);
 
 /* hcd_hub.c */
 VOID HcdDeviceSlotParams(PHCD_USB_DEVICE dev, ULONG withHub,
@@ -1887,6 +1909,8 @@ PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
 VOID HcdDevicePdoReleaseAll(PHCD_CONTROLLER hc);
 ULONG HcdDevicePdoLetGo(PHCD_CONTROLLER hc, ULONG hubSerial);
 ULONG HcdDevicePdoRepresent(PHCD_CONTROLLER hc, ULONG hubSerial);
+ULONG HcdDevicePdoRepresentAsk(PHCD_CONTROLLER hc, ULONG parentSerial);
+ULONG HcdDevicePdoRepresentFunctions(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 VOID HcdPdoRetireInit(VOID);
 VOID HcdSerialInit(VOID);
 VOID HcdSerialControllerAdd(PHCD_CONTROLLER hc);

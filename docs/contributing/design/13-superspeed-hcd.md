@@ -262,7 +262,7 @@ inside the bus that the PnP manager never sees.
 | Root-hub PDO | WDM PDO, hardware id `XHCI98\ROOT_HUB`, no compatible ids (section 8) | the controller FDO, at its first start | the controller | a small PDO extension pointing back at the controller |
 | Root-hub FDO | WDM FDO, attached over the root-hub PDO | `AddDevice` again, for a PDO this driver did create - the role is decided by the PDO's own driver object | the root-hub PDO | the bus's view of the topology: the port objects, the hub objects inside the bus, the list of device and function PDOs |
 | Device PDO | WDM PDO, one per non-composite device and per non-hub device the bus does not split | the root-hub FDO, when enumeration (5.3) reaches a bindable device | the root hub, wherever the device is in the USB topology | the device's slot, its configuration and pipes, its ids |
-| Function PDO | WDM PDO, one per function of a split composite device (section 10) | the root-hub FDO | the root hub, beside the device PDOs | the function (its interface mask, its ids), its own filtered copy of the configuration descriptor (10.9), the group serial it shares with its siblings, and a pointer to the device record inside the bus, whose slot and pipes it shares, cleared when the device leaves (corrected 2026-10-03 from "a pointer to the parent device object inside the bus, whose pipes it shares", as 26-A.7 implements it) |
+| Function PDO | WDM PDO, one per function of a split composite device (section 10) | the root-hub FDO | the root hub, beside the device PDOs; **since 36.43 the device's composite-parent PDO (10.12)**, itself where a device PDO would be | the function (its interface mask, its ids), its own filtered copy of the configuration descriptor (10.9), the group serial it shares with its siblings, and a pointer to the device record inside the bus, whose slot and pipes it shares, cleared when the device leaves (corrected 2026-10-03 from "a pointer to the parent device object inside the bus, whose pipes it shares", as 26-A.7 implements it) |
 | Hub object | inside the bus, never a PDO | the root-hub FDO, when a hub enumerates (section 10) | - | its slot, its hub descriptor, its status-change pipe, its port objects |
 | Port object | inside the bus | the controller for a root port, a hub object for a hub port | - | the port shadow, the reset generation, the device attached, the hold state of 29-A.5 |
 | Device object (the bus's, not WDM's) | inside the bus | enumeration | - | one per addressed device, hub or not: slot id, speed, route string, TT fields, descriptors, the PDO(s) it is presented as |
@@ -274,6 +274,10 @@ Hub` in Device Manager, and the Power tab reports the budget the bus itself
 keeps (section 8). **Superseded 2026-10-04 by task 33.4 (section 10.11):**
 each hub the bus serves also has a PDO, bound to this driver as a hub FDO,
 and the devices behind it are its children; the bus still runs the hub.
+**And on 2026-10-10 by task 36.43 (section 10.12):** each composite device
+the bus splits has a composite-parent PDO under `XHCI98\COMPOSITE`, bound to
+this driver as a composite FDO - a fourth role - with its function PDOs as
+its children; the bus still splits, configures and routes.
 
 **The controller FDO's start and stop on an Intel 7-, 8- or 9-series PCH or
 C610/X99 also move the switchable connectors** (task 34.3, 2026-10-05): on
@@ -2112,7 +2116,7 @@ Root hub, NT paths - every NT target registers the same provider:
 |---|---|---|
 | 2000 SP4 `usb.inf` (5.00.2195.6717) | `[ROOTHUB2.AddReg.NT]` (for `USB\ROOT_HUB20`), `[StandardHub.AddReg.NT]` (`USB\ROOT_HUB`, `USB\CLASS_09`), `[Usb2Hub.AddReg.NT]` (`USB\HubClass`) | `HKR,,EnumPropPages32,,"usbui.dll,USBHubPropPageProvider"` |
 | XP SP3 `usbport.inf` (5.1.2600.5512) | `[ROOTHUB.AddReg.NT]` (`USB\ROOT_HUB` and `USB\ROOT_HUB20` both `=ROOTHUB.Dev`) | same |
-| XP SP3 `usb.inf` | `[StandardHub.AddReg.NT]` | same; `[Composite.DelReg.NT]` deletes `HKR,,EnumPropPages32` for composites |
+| XP SP3 `usb.inf` | `[StandardHub.AddReg.NT]` | same; `[Comp.DelReg.NT]` deletes `HKR,,EnumPropPages32` for composites |
 | XP x64 `usbport.inf` (5.2.3790.1830) | `[ROOTHUB.AddReg.NT]` | same |
 | Vista SP2 x86/x64 `usbport.inf` (6.0.6002.18005) | `[ROOTHUB.AddReg.NT]` | same; plus five `WMIInterface` lines in `[ROOTHUB.Dev.NT.WMI]` |
 | 7 SP1 x86/x64 `usbport.inf` (6.1.7601.17514) | `[ROOTHUB.AddReg.NT]` | same, plus `HKLM,System\CurrentControlSet\Services\usbhub,BootFlags,0x00010003,4`; `[ROOTHUB.Dev.NT]` also `AddPowerSetting=USBPowerSettings`; `.WMI` as Vista |
@@ -2126,7 +2130,7 @@ Root hub, 9x paths - the 16-bit `sysclass.dll` page:
 | NUSB 3.3 `USB2.INF` | `[ROOTHUB2]` `AddReg=Usb2Hub.AddReg` (`USB\ROOT_HUB20`), `[Usb2Hub.Dev]` (`USB\HubClass`) | `[Usb2Hub.AddReg]` `HKR,,DevLoader,,*NTKERN` / `HKR,,NTMPDriver,,usbhub20.sys` / `HKR,,EnumPropPages,,"sysclass.dll,USBHubPropPage"` |
 | NUSB 3.6 `USB2.INF` | same sections | the same three lines (81-84) |
 | NUSB 3.6 `USB.INF` | `[HUB.AddReg]`, the power section | `HKR,,NTMPDriver,,usbhub.sys`; `HKR,,EnumPropPages,,"sysclass.dll,USBHubPropPage"` (line 542) |
-| SweetLow `USB2.INF` | `[ROOTHUB2]` / `[Usb2Hub.Dev]` | the same three lines (76-79); `[Composite.DelReg]` deletes `HKR,,EnumPropPages` |
+| SweetLow `USB2.INF` | `[ROOTHUB2]` / `[Usb2Hub.Dev]` | the same three lines (76-79); `[Comp.DelReg]` deletes `HKR,,EnumPropPages` |
 
 Controller, as the OS INFs write it:
 
@@ -2280,7 +2284,7 @@ creates its PDOs.
 | Device Manager's view by connection on 98 and NT: that it uses only `CM_Get_Child` / `Sibling` is expected, not read. | 26-A.8 (or a guest reading in 26-V.1 / 26-V.2) |
 | A sweep of each target's whole `%windir%\inf` (and NUSB's and SweetLow's full file sets) for any row matching `XHCI98\ROOT_HUB`: impossible by construction, unchecked. | 26-A.4 |
 | **External hubs inside the bus against `DeviceIsHub`.** `usbui.dll` recurses into a connection with `DeviceIsHub` TRUE through `GET_NODE_CONNECTION_NAME` and `CreateFile("\\.\" + name)`. With no hub devnode the HCD either reports the devices behind a hub flat under the root hub's ports, or answers `DeviceIsHub` and serves a per-hub node through the root-hub interface link plus a suffix (`FileObject->FileName`). A design decision. **Closed 2026-10-04 by task 33.4 (10.11)**: each hub is a devnode with a door of its own, `DeviceIsHub` TRUE and its name returned | 26-A.8; 33.4 |
-| **Split composite devices**: `usbui.dll` maps a connection to one devnode through `GET_NODE_CONNECTION_DRIVERKEY_NAME`. With the bus splitting a composite into per-function PDOs there is no single connection devnode; which key to return (the first function's, or a failure) and what `usbui` then shows is unread. | 26-A.8, with 26-A.7 |
+| **Split composite devices**: `usbui.dll` maps a connection to one devnode through `GET_NODE_CONNECTION_DRIVERKEY_NAME`. With the bus splitting a composite into per-function PDOs there is no single connection devnode; which key to return (the first function's, or a failure) and what `usbui` then shows is unread. **Closed 2026-10-10 by task 36.43 (10.12)**: every split device has a composite-parent devnode, and the connection's driver key is the parent's | 26-A.8, with 26-A.7; 36.43 |
 | How Windows 98's engine treats a root-hub section whose `NTMPDriver` is the already-loaded controller driver, and NTKERN calling `AddDevice` a second time on that driver object (98's own `usbhub.sys` serves several devnodes, so it is expected to work). | 26-V.0 / 26-V.1 (a guest reading) |
 | The `ControllerFlavor` to report on Vista and 7 (1000 or above for USB 2.0 arithmetic; nothing in WDK 7.1 names xHCI). What usbport reported for the miniport was not read. | 26-A.8 |
 | Hub WMI on Vista and 7 (`GUID_USB_WMI_DEVICE_PERF_INFO`, `_HUB_DIAGNOSTICS`, the `_STD_DATA` notifications), and what `EnumerateHubPorts` does when the performance query fails. The popups (over-current, not enough power) are WMI-driven and belong to neither tab. | 26-A.8 (and 28-A.1 for Vista and 7) |
@@ -2294,7 +2298,10 @@ creates its PDOs.
 WDK 7.1 `usbiodef.h`) is registered on every device PDO and every external
 hub's PDO, as usbhub registers it, and not on the root hub, on which usbport
 registers none (`hcd_door.c`, `HcdDoorDeviceStart` and `HcdDoorDeviceStop`).
-A composite the bus splits has no parent devnode, so the interface goes on
+**Superseded 2026-10-10 by task 36.43 (10.12): the interface is on the
+composite parent's PDO, the device's own devnode, and on no function; the
+rest of this paragraph is the rule it replaced.** A composite the bus
+splits has no parent devnode, so the interface goes on
 one function's PDO: the function that owns the device's first interface,
 the group's first PDO, the one the door already answers the connection's
 driver key from (the split-composite row above), never a hard-coded
@@ -2817,7 +2824,10 @@ The owner's decision (section 4; the roadmap's decisions table, "Hub class
 and composite splitting") is that external hubs are **objects of the bus,
 not PDOs**, and that a composite device is **split by the bus into
 per-function PDOs**; there is no INF binding path for an external hub or a
-composite parent. This section is the design that follows: the hub class the
+composite parent. (Since `2.1.0.0` each external hub is also a devnode
+under a project-owned id, 10.11, and since task 36.43 each split composite
+device has a composite-parent devnode the same way, 10.12; neither binds
+an OS hub or composite driver.) This section is the design that follows: the hub class the
 bus speaks itself, the topology and removal it owns, and the ids, grouping
 and routing of the function PDOs it creates. It is consumed by 26-A.4 (ids),
 26-A.7 (composite splitting) and 27-A.1 to 27-A.3 (the hub class, topology
@@ -3211,7 +3221,9 @@ case-insensitive matching above, and the form most INF lines use.
 | `BusQueryCompatibleIDs` | `USB\Class_cc&SubClass_ss&Prot_pp`, `USB\Class_cc&SubClass_ss`, `USB\Class_cc`: from the interface when `bDeviceClass` is 0 and the configuration has exactly one interface, from the device descriptor otherwise - so a multi-interface device the bus does not split (10.8) reports its own triple, `00/00/00` when its class is 0, never its first interface's, which would bind a class driver to the whole device (corrected 2026-10-03 by 26-A.7 from "from the interface when `bDeviceClass` is 0"; Windows 2000's `usbaudio.sys` bound to a whole composite device bugchecks, guest leg c14, `runs/run-26.md`). Whether to add the `USB\DevClass_cc...` forms XP's `usbhub.sys` carries templates for (and Vista's and 7's `USB\DevClass_00&SubClass_00&Prot_00`) is open (10.9); no stock INF in the table above matches a `DevClass` id |
 | `BusQueryInstanceID` | the serial id when the device has a usable one that no present PDO of the same VID and PID carries already, with `UniqueID` TRUE in its capabilities: the NT instance path `USB\VID_0781&PID_5567\4C530001230920108174` (what Windows 98 SE and ME make of it is for task 33.2's guest legs to read); else the location key in decimal, `UniqueID` FALSE - root port 3 is `3`, and behind hubs the Route String sits above the port (`XhciHubInstanceKey`, route `0x31` over port 2 is `12546`). The rule is "Instance ids from the serial number" below (task 33.2; until `2.1.0.0` every device had the location form) |
 
-**A function PDO** (one per function of a split device):
+**A function PDO** (one per function of a split device; since task 36.43 a
+child of the device's composite-parent PDO, whose own ids are section
+10.12's; the function's ids below are unchanged by it):
 
 | Query | Strings, in order |
 |---|---|
@@ -3421,6 +3433,10 @@ parent driver: `usbhub.sys` on 98 SE and 2000, `usbccgp.sys` from XP on and on
 98 SE under NUSB 3.6 or SweetLow. Under the HCD the bus is the composite
 parent, so the id would bring one of those back on top of an already-split
 device, against the "no INF binding path for a composite parent" decision.
+**Amended 2026-10-10 (task 36.43, section 10.12):** the bus does now present
+a parent for every device it splits, under the project-owned
+`XHCI98\COMPOSITE`, bound by this package's own INFs to `xhci98.sys` -
+still never `USB\COMPOSITE`, for the reason above.
 Also never emitted: `USB\ROOT_HUB` and `USB\ROOT_HUB20` (the root hub is
 `XHCI98\ROOT_HUB`, section 8.6, and the INF gate's `HCD-ROOTHUB` refuses
 them), and `USB\CLASS_09*`, because a hub is never a PDO. `USB\MS_COMP_*` is
@@ -3454,7 +3470,10 @@ exists (`HcdCfgParentConfigure`): SET_CONFIGURATION with its one
 configuration, every interface at alternate 0, no endpoint open;
 `RESET_PORT` replays it. A function's `SELECT_CONFIGURATION` never sends
 SET_CONFIGURATION (10.9). A device the bus does not split is left Addressed
-for its function driver to configure.
+for its function driver to configure. **Since task 36.43 (10.12)** a split
+device is presented as a composite-parent PDO under `XHCI98\COMPOSITE` with
+its function PDOs beneath it, the parent first on the group's chain; when
+and how the bus splits is unchanged.
 
 **Grouping**, in this order, over the configuration's interfaces (alternate 0
 entries only); the functions are listed in the order of their first
@@ -3522,7 +3541,10 @@ interfaces' descriptors:
 
 The device - its slot, EP0, its endpoint contexts and its configuration -
 belongs to one bus-internal device record; each function PDO holds a pointer
-to it and the list of interface numbers it owns. Microsoft's parent has the
+to it and the list of interface numbers it owns. Since task 36.43 the
+functions are the children of a composite-parent devnode (10.12), which is
+presentation only: it is never on the data path, answers no internal IOCTL,
+and every row below is unchanged by it. Microsoft's parent has the
 same shape going by its public symbol names alone
 (`DispatchPdoUrbSelectConfiguration`, `DispatchPdoUrbGetDescriptorFromDevice`,
 `BuildFunctionConfigurationDescriptor`, `ParentSelectConfiguration`,
@@ -3542,7 +3564,7 @@ same shape going by its public symbol names alone
 | `IOCTL_INTERNAL_USB_CYCLE_PORT` | the whole device leaves and re-enumerates: every function PDO reported missing and recreated. The siblings share a group serial and leave together; the port re-enumerates only once the last of the group is deleted |
 | `IRP_MN_REMOVE_DEVICE` on a function PDO | only this function's requests are cancelled (EP0's included); then the thread closes its pipes, drops its endpoints and returns its interfaces to alternate 0 (`HcdCfgReleaseFunction`), so a removed audio function holds no periodic bandwidth; the siblings keep theirs (round 19, finding 4). The device record stays until the slot goes (5.2) |
 | `IOCTL_INTERNAL_USB_GET_PORT_STATUS`, `QUERY_INTERFACE` (`USB_BUS_INTERFACE_USBDI`) | the device's answers, identical for every function (section 6; 26-A.6) |
-| power | a function's D-state is its own; the device stays D0 while any function is D0 (selective suspend is outside the roadmap, 28.3) |
+| power | a function's D-state is its own; the device stays D0 while any function is D0 (selective suspend is outside the roadmap, 28.3). **Amended 2026-10-10 (36.43, 10.12):** the device's link follows its composite parent's children, the function PDOs; the parent PDO is not a voter, and under record 14's stage A it is excluded as a hub PDO is |
 
 **A function's polling interval is the caller's** (2026-10-05, whole-branch
 review of `2.1.0.0`, area B, incidental 2). A function's
@@ -3877,6 +3899,335 @@ and holds the hub sections to the hub page (`HCD-HUBPAGE`).
 instance handling of a device re-parented under a hub; the 98 and ME
 "found new hardware" behaviour for the new devnode (read on the guests);
 what each page sends a non-root hub. The guest legs of 33.4 read them.
+
+### 10.12 Composite devices as devnodes (task 36.43, 2026-10-10)
+
+**The decision.** The owner, 2026-10-10, after SweetLow's comment on GitHub
+issue 17 ("You loose 1:1 mapping between devices on USB port of the HUB and
+devices in Device Manager as children of USB Hub"): every composite device
+the bus splits (10.8) gets a **composite-parent devnode** of its own, with
+its function PDOs as that devnode's children, so one hub port maps to one
+devnode, as on every Microsoft stack, where the composite device's own PDO
+carries `USB\COMPOSITE` and `usbccgp.sys` (or Windows 98's `usbhub.sys`)
+presents the functions beneath it. **The pattern is 10.11's**: the parent's
+PDO is presented under a project-owned id, `XHCI98\COMPOSITE`, bound by this
+package's own INFs to `xhci98.sys`, which attaches a **composite FDO** over
+it - this driver's fourth PnP role. **Still no binding of `usbccgp.sys` or of
+Windows 98's composite parent**, and the bus still splits, configures and
+routes exactly as 10.8 and 10.9 say; only the PnP presentation changes, as
+it did for hubs. This supersedes, wherever this record says it, "a
+composite device gets no PDO of its own" and "the bus never emits a parent"
+(5.2's object table, 10's introduction, 10.7's last paragraph, 10.9's power
+row, 8.10's split-composite row and its USB-device-interface paragraph), and
+the decisions table's "no INF binding path for ... a composite parent"
+(roadmap-hcd.md, amended the same day). Written before the code, on branch
+`p36-comp`.
+
+**What it buys, and what it costs.** One devnode per port in Device
+Manager's view by connection, `usbview` and the Power tab; one driver key
+for `GET_NODE_CONNECTION_DRIVERKEY_NAME` (closing 8.10's row); the USB
+device interface of task 36.17 on the device rather than on one function;
+a device-level devnode to disable, and where record 14's composite rule is
+stated. The cost: every composite device is one devnode more, installed
+from this package's INF once per device instance - with nothing to answer on
+Windows 98 SE and 2000, as the hubs were (10.11), but **with Windows XP's
+Found New Hardware wizard and unsigned-driver warning for each new
+composite device**, as each new hub brings there; and an update from
+`2.2.0.0` re-detects each composite device once (below). The release notes
+say both.
+
+**Object model.**
+
+| Object | Kind | Created by | Parent in the PnP tree | Carries |
+|---|---|---|---|---|
+| Composite-parent PDO | an `HCD_DEVICE_PDO` with `Composite` set | the controller thread, in `HcdDevicePdoCreate`, for every device `XhciFuncSplit` splits, with its function PDOs | the hub PDO the device is presented under, or the root hub (`ParentSerial`, 10.11) - the place a device PDO would have | the whole configuration descriptor, the device's ids under `XHCI98\COMPOSITE`, its instance id, text and capabilities (below); the group's serial (`Group` = its own `Serial`) |
+| Composite FDO | `HCD_KIND_COMPOSITE_FDO` over the parent PDO, the hub FDO's extension and code (`hcd_hubfdo.c`) | `AddDevice`, for a PDO of this driver's with `Composite` set | - | `BusRelations` of the functions; no door |
+| Function PDO | unchanged (`Function` set, 10.7 to 10.9) | the thread, with the parent | the composite parent: `ParentSerial` is the parent PDO's `Serial` | unchanged; `Group` is the parent's `Serial` |
+
+The group is the parent and its functions, in that order on the `Sibling`
+chain (`dev->Pdo` names the parent): created before any is listed, listed
+in one hold of `PdoListLock` and announced by one invalidation of the
+parent's own parent, as 26-A.7's group was; a failure to create any of them
+fails all of them, as before. A device the bus does not split is unchanged:
+one device PDO, no parent. QEMU's `usb-audio`, one audio function (10.8's
+legacy rule groups its AudioControl and AudioStreaming interfaces), is a
+composite: one parent with one function beneath it, as `usbccgp` presents
+the same device.
+
+**Ids** (project-owned; `XhciFuncParentId`, `xhci_func.c`, host vectors in
+`test_func`):
+
+| Query | Composite-parent PDO |
+|---|---|
+| `BusQueryDeviceID` | `XHCI98\COMPOSITE&VID_vvvv&PID_pppp` |
+| `BusQueryHardwareIDs` | `XHCI98\COMPOSITE&VID_vvvv&PID_pppp&REV_rrrr`, `XHCI98\COMPOSITE&VID_vvvv&PID_pppp`, `XHCI98\COMPOSITE` |
+| `BusQueryCompatibleIDs` | none |
+| `BusQueryInstanceID` | any PDO's rule (`hcdInstanceQueryId`, 33.2): the device's serial id when it has a usable one, `UniqueID` TRUE, else the location key in decimal, `UniqueID` FALSE - what the device would answer were it not split |
+| Device text | its `iProduct` (33.6, read once per enumeration and kept like any PDO's), else `USB Composite Device`, the name Microsoft's own INFs give the parent; the INF's model text replaces it once installed. Each PDO's strings are picked by its own function (`pdo->Func`, none for the parent), never by its place on the chain, which the parent now heads |
+
+Never `USB\COMPOSITE` (it would bring `usbccgp.sys` or Windows 98's
+`usbhub.sys` onto an already split device, 10.7), never `USB\VID_&PID_`
+(a vendor INF that lists the whole device would then bind a driver over the
+parent, above functions it cannot reach), never a `USB\Class_` id. So a
+vendor INF written for the whole device still matches nothing here, as
+before 36.43: under Microsoft's stack such an INF outranks `usbccgp`'s
+compatible-id match and takes the device whole; under this bus the device
+is always split. Recorded, not changed. The function PDOs' ids are 10.7's,
+unchanged - the device id `USB\VID_vvvv&PID_pppp&MI_nn`, the instance id
+the serial id and `&nn` or the location key and `nn` - so the class INFs
+bind them as before.
+
+**Capabilities.** The parent: `Removable` TRUE, `UniqueID` as its instance
+id, `Address` and `UINumber` its port on the parent it is presented under
+(`XhciHubPdoAddress`, as a device PDO's), and **`SurpriseRemovalOK` TRUE**,
+as a function and a hub answer it, so the XP-onward hot-plug applet lists
+no composite device, as before 36.43 (orchestrator decision, owner to
+confirm: `FALSE` would list every composite device - a keyboard with media
+keys, a headset - for safe removal, a change of what users see; the parent's
+devnode can still be disabled). D-states as a device PDO's. The functions:
+unchanged (`SurpriseRemovalOK` TRUE, `Address` the device's port, so a
+tool that asks a hub door for a function's `Address` still finds the
+device there).
+
+**The composite FDO** (`hcd_hubfdo.c`, the hub FDO's code with the role
+told apart by its kind): `AddDevice` for a parent PDO; `START` passed down
+first, then the in-place re-presentation below, then the settle generation
+of 5.7 asked, so its first `BusRelations` answer waits for both;
+`BusRelations` answered by `HcdDevicePdoRelations(hc, old, parent's
+Serial)`, as a hub FDO's; `REMOVE` lets go of the children PnP has removed
+(`HcdDevicePdoLetGo`, 10.11 item 4) and detaches; `STOP`,
+`SURPRISE_REMOVAL` and the queries passed down. Power passed down, nothing
+requested (the hub FDO's rule; record 14 below). **No door**: no
+`\DosDevices\` name, no interface, `IRP_MJ_CREATE` and
+`IRP_MJ_DEVICE_CONTROL` refused `STATUS_NOT_SUPPORTED` - a composite device
+is a connection of its hub, which the hub's door already serves.
+
+**The parent PDO** answers PnP as a device PDO does (the lifecycle of 5.2
+and `hcd_pdo.c`, the dormant path, `START`'s refusal once gone) and **no
+internal IOCTL** (`STATUS_NOT_SUPPORTED`, as a hub PDO): nothing above the
+composite FDO sends a URB, and it answers no `USB_BUS_INTERFACE_USBDI`
+query. Its `START` feeds the port's machine `PDO_STARTED` (5.3), as a device
+PDO's does; the functions' starts feed it too, as before, and a second one
+in `Bound` is ignored.
+
+**URB routing** (10.9): unchanged. A function PDO's internal IOCTLs reach the
+device record directly, as before; the parent is never on the data path,
+which is what makes the change presentation only. PnP removes a parent's
+children before it, so no function sends a URB once its parent is gone.
+`RESET_PORT` from a function resets the whole device and keeps every
+sibling's pipe handles, as before, the parent untouched. `CYCLE_PORT` from a
+function, and a `RESET_PORT` that failed, take the whole group - the parent
+with its functions - away (`HcdEnumCycle` on the group's serial, which is
+now the parent's), and the device re-enumerates once the group has been
+reported missing, as before.
+
+**Relations and lifetime: 10.11's rules, with "hub PDO" read as "parent
+PDO"** - a hub's or a composite's (`HcdPdoIsParent`). The ancestor rule
+(`hcdAncestorGoneLocked`), invalidation of a started parent
+(`hcdInvalidateFor`), the dormant tier rule and the let-go rule each find a
+parent by its `Serial` whether it is a hub or a composite. In particular:
+
+1. **The device leaves** (unplug, hub teardown, controller stop): the group
+   is unlisted in one hold (`HcdDevicePdoGone`); the parent's own parent's
+   next answer omits the parent, and the same answer's sweep marks the
+   functions missing by the ancestor rule, so the port's wait on the group
+   ends with that one answer. NT surprise-removes the parent's subtree and
+   removes it leaf first; Windows 98 removes it.
+2. **A function disabled** in Device Manager: unchanged (a `REMOVE` while
+   listed; the PDO kept; its endpoints and alternates released, 10.9).
+3. **The parent disabled** (NT): PnP removes the functions, then the
+   composite FDO, then sends the parent PDO its `REMOVE` (listed, so kept:
+   the WDM rule). The FDO's `REMOVE` lets go of the functions
+   (`ParentLetGo`), since PnP forgets their devnodes with the parent's
+   (10.11 item 4); the device stays configured with no client. Each
+   function's own `REMOVE` **queued** the release of its endpoints and
+   alternates (`HcdCfgReleaseFunction` records `FuncRelease`; the thread
+   runs it, retrying a refused one a bounded number of times, 10.9), and
+   the release-before-reconfigure order `HcdCfgService` keeps puts that
+   release ahead of any later select of the same interfaces. **The enable
+   re-presents the functions in place**: the parent PDO's `START` makes it
+   PnP's again, and the composite FDO's `START` asks the thread
+   (`HcdEnumRepresent`, by port and group serial, so a request that outlives
+   its device does nothing) to build, for each let-go function, a new
+   function PDO from the device record's configuration - the same function,
+   ids, text, serial id, instance key, `Address`, transport and parent -
+   swap it into the group's chain, list it, and unlist the old one, which
+   is missing at once and, its `REMOVE` already seen, goes to `RemovedPdos`
+   (`HcdDevicePdoRepresentFunctions`). The next relations answer, of any
+   parent, deletes it while it builds its list - before PnP receives that
+   answer, which may be the first to carry its successor - so PnP never
+   meets two objects at one instance id, and finds the id it had on the
+   new one: the functions come back as the devnodes they were, with no
+   wizard. No re-enumeration and no reconfiguration: the device is never
+   reset, and each new function selects its configuration as any class
+   driver does. **Not the hub's cycle**: cycling the port, as a hub FDO's
+   start does for its children, would take the parent itself - which PnP
+   has just started - away and back.
+   **The request's life.** Posted before the FDO's start asks its settle
+   generation (5.7), it is taken by the thread's next pass, which reads
+   that generation first, so a pass that can settle it has already
+   re-presented; the settle may still have ended early (no wait configured,
+   or its deadline), so the thread also **invalidates the parent** once
+   it has listed a replacement, and PnP asks the composite FDO again
+   whenever that comes. A device no longer the group's when the pass runs
+   drops the request. A replacement that cannot be built (no pool, an
+   `IoCreateDevice` failure) leaves its function let go and absent - traced,
+   not retried - until the next start of a composite FDO on that parent (a
+   disable and enable) or the device's next plug; the others are
+   re-presented regardless. On Windows 98 SE and ME a disable may `STOP`
+   rather than remove, as for a hub; then nothing is let go and nothing
+   changes (read on the guests).
+4. **A composite behind a hub whose devnode is disabled**: the hub FDO's
+   `REMOVE` lets go of the parent (its direct child) and the composite FDO's
+   `REMOVE`, which PnP sends as part of the same subtree, lets go of the
+   functions; the hub FDO's next `START` cycles the parent's port
+   (`HcdDevicePdoRepresent`, 10.11 item 4), and the whole device comes back
+   as a new group under the same instance ids.
+5. **Windows 98 SE and ME's dormant path** (33.1, 10.11 item 6): the group,
+   parent included, is kept dormant whole when PnP has stopped every PDO of
+   it; a function the user disabled (removed while listed) is kept with its
+   group, as behind a hub, because its parent is the composite parent, not
+   the root hub; the parent disabled under the root hub is not kept, as a
+   lone device there is not. The sameness test compares the chains
+   position by position; a function's `ParentSerial` is not compared,
+   since it names the old parent, which revives with its `Serial`
+   unchanged, so the revived functions name the revived parent. A dormant
+   group retired whole - by a dormant PDO's `REMOVE` or its `START`'s wait
+   (`hcdDormantRemoved`, `hcdDormantWait`), which a function can be the one
+   to receive - invalidates the parent its **first PDO** is presented under
+   (`hcdGroupParentLocked`), never the function's own `ParentSerial`, which
+   names the composite parent just retired with it: behind a present hub
+   only that hub's answer reports the parent missing and ends its port's
+   wait.
+6. **The controller's stop and removal**: unchanged
+   (`HcdDevicePdoReleaseAll`); a composite FDO reaches the controller only
+   through its PDO's `Controller` inside the PDO's `Busy`, the hub FDO's
+   guard.
+
+**Serial ids** (33.2): a serial id is held by a **group's first PDO** - a
+lone device PDO, a hub PDO, or a composite parent - and the duplicate and
+dormant tests compare first PDOs only (`hcdSerialTakenLocked`): a
+function's `ParentSerial` names its own parent, a new one each plug, so
+comparing it would take every quickly moved composite device for a
+duplicate under "another parent". Functions carry the parent's serial id
+with `&nn` and lose it with the parent when it is a duplicate, as before.
+
+**The door** (section 8): a connection's devnode is the group's first PDO
+(`hcdDoorConnection`), which is now the parent. So
+`GET_NODE_CONNECTION_DRIVERKEY_NAME` returns the **parent's** driver key -
+the one devnode `usbui.dll` and `usbview` map the port to, closing 8.10's
+split-composite row; `GET_NODE_CONNECTION_INFORMATION`, its `_EX` and
+`_EX_V2` forms and the descriptor requests answer for the device, as
+before; `GET_NODE_CONNECTION_NAME` answers the empty name and
+`DeviceIsHub` FALSE, a composite not being a hub. A parent with no driver
+yet has no driver key, and the request fails as for any driverless device.
+
+**The USB device interface** (task 36.17, 8.10): `GUID_DEVINTERFACE_USB_DEVICE`
+moves to the **parent**, the device's own devnode, as `usbhub` registers it
+on the composite device's PDO, and no function carries it
+(`HcdDoorDeviceStart` refuses every function PDO). The owner's 2026-10-09
+rule for the split device - the interface on the function that owns the
+first interface, following that function's state - is superseded: the
+interface follows the parent's state, so disabling one function no longer
+takes it away, and disabling the parent does.
+
+**Power.** Without selective suspend (record 14's switch at 0, the default,
+and every build before stage A) nothing changes: the parent PDO records a
+D-IRP and completes it, as a device PDO does, and the composite FDO passes
+power down and requests nothing, as the hub FDO does, so the parent's
+devnode stays D0 while its functions' class drivers move their own PDOs;
+the device's link is never suspended. **With stage A (record 14), the
+parent is the device's power object and the last-Dx rule is stated over
+its children:** the device's link follows the parent's children - the
+function PDOs - and leaves D0 only when the last of them has (record 14
+section 4.3, unchanged in substance); the parent itself is **not a voter**:
+it is excluded from stage A as a hub PDO is (record 14 section 5.1) - no
+D1/D2 or wake in its capabilities, `WAIT_WAKE` refused, a D-IRP recorded
+and completed at once, and an idle notification never reaching stage A at
+all, since the parent refuses every internal IOCTL `STATUS_NOT_SUPPORTED`
+(above; nothing above its FDO sends one) - so its own D0, which no
+client ever moves, can never hold the device up. The composite readiness of
+the idle batches (record 14 section 6.2, "as the composite parent does")
+stays the bus's, over the same children. The composite FDO does not become
+a power policy owner that requests D-IRPs for the parent (orchestrator
+decision, owner to confirm: that is `usbccgp`'s model, and taking it would
+move record 14's batches and wake arming into the FDO and send
+`PoRequestPowerIrp` from it, which stage A deliberately never does on a
+child's behalf); the parent's devnode therefore reads D0 in Vista's and 7's
+power data while its device is suspended, and `XHCISNAP`'s link state is
+the reading. **What stage A's code needs** (branch `p36-susp`, not edited
+here; the exact list is in the 36.43 report and the roadmap line): its
+chain walks that read the slots or form a batch (`hcdSuspRead`,
+`hcdSuspSiblingD0`, `hcdSuspIdleBatchLocked`) skip a `Composite` PDO; its
+eligibility tests (`hcdSuspPdoEligible`, `hcdSuspPdoWasEligible`) refuse
+one as they refuse a hub; its chain-length cap counts functions only (a
+parent makes a chain one longer than `XHCI_FUNC_MAX`); and a function PDO
+swapped out by the in-place re-presentation (item 3 above) has already had
+its teardown, so it needs no settlement there, but the swap runs on the
+thread under `PdoListLock` like the unlink, and a stage-A build calls the
+same unlink settlement on it to keep "a PDO off a chain is settled" true.
+Record 14's sections 4.3, 5.1 and 6.2 then say "function PDOs under the
+composite parent" where they say "function PDOs of the group".
+
+**Behind an external hub**: the parent is presented under the hub's PDO,
+as a device PDO there would be, and the functions under the parent: a
+two-level ancestor rule, which the sweep already repeats until nothing
+moves. The hub's door answers the parent at the device's port.
+
+**`XHCISNAP` and the counters.** Two counters, appended to the counter block
+(`XHCIHC_COUNTERS`, after the event-delivery words; `XHCISNAP` prints them
+by index until its name table catches up, as it does the event-delivery
+words): `CompositeParents`, parent PDOs created, and
+`CompositeRepresented`, function PDOs re-presented in place; and the same
+two in the stop's counter lines, `composite.parents` and
+`composite.represented`. The trace names each parent's port and function
+count at creation, and each re-presentation's port and count.
+
+**The INFs and the gates.** Each models section of both files carries one
+more model, `%CompositeDesc%` (`xHCI98 USB Composite Device`) under
+`XHCI98\COMPOSITE`, installed by `Comp.Dev` (98/ME: `DevLoader=*NTKERN`,
+`NTMPDriver=xhci98.sys`), `Comp.Dev.NTx86` / `.NTamd64` and
+`Comp.Dev6.*` (the service; a `DelReg` of `EnumPropPages32`, as XP's
+own `usb.inf` writes for its composite parent). **A composite section copies
+nothing**, for the hub's reason: the devnode exists only under a running
+`xhci98.sys`, and a device plugged in long after the install must not send
+the setup engine looking for the original media. And it registers **no
+property page** (no hub Power tab: a composite is not a hub). The INF gate
+holds all of it (`HCD-COMP`: the model in every models section, its id under
+`XHCI98\`, no `USB\COMPOSITE` on any line; `HCD-HUBCOPY` widened to the
+composite install; `HCD-COMPPAGE`: no `EnumPropPages`/`EnumPropPages32`
+written by a composite section), with self-tests; the footprints are
+re-emitted. **Text-mode Setup** (5.6): both `txtsetup.oem` files map
+`XHCI98\COMPOSITE` to `xhci98` beside the hub ids - without it a composite
+keyboard's functions would never appear under F6, the parent having no
+driver there - and `OEM-IDS` already holds the file to the INF's model ids.
+
+**Updating from `2.2.0.0`** (and from `2.1.0.0`). Each composite device
+re-detects once: its parent is a new devnode everywhere, installed from
+this package's INF (on XP with the wizard and the warning, above). Its
+functions on NT: a function with a serial id keeps its devnode (its
+instance path is unchanged and `UniqueID` TRUE, so PnP moves it under the
+new parent); a function on the location form is a new devnode once, since
+NT prefixes a `UniqueID` FALSE instance id with its parent's
+`ParentIdPrefix` and its parent changed - re-installed silently from the
+same class INF where that INF is signed, otherwise as its own driver
+installs. On Windows 98 SE and ME the configuration manager uses the
+instance id as given (unread for a re-parented devnode, as 10.11 left it);
+the guest legs read whether the functions keep their devnodes there. The
+old function devnodes stay behind as non-present devnodes on NT, as any
+re-identified device's do. The release notes say: composite devices are
+detected again once after the update, and work after it.
+
+**What 36.43 leaves open**: the hot-plug applet with a parent answering
+`SurpriseRemovalOK` FALSE (not taken); Windows 98's and ME's handling of the
+functions' devnodes when they gain a parent, and what a disable of the
+parent sends there; hidusbf's `Setup.exe` on a composite mouse, which looks
+for the hub door through the device's parent (10.11, "Address") and now
+meets the composite parent first - unread, and under Microsoft's stack it
+meets `usbccgp`'s devnode the same way; and every reading on a real
+multi-function device (QEMU has no keyboard-and-mouse composite; its
+`usb-audio` is a parent with one function), which needs a passthrough
+device or the bench. The guest legs of 36.43 read what QEMU can show.
 
 ## 11. The transfer-buffer policy (task 25.7)
 
@@ -4535,7 +4886,7 @@ the detail; this is the index.
 | Windows 98's map-register grant and whether its `AllocateAdapterChannel` runs the execution routine synchronously | 11 | 26-A.5 |
 | PCI configuration-space access on Windows 98 (`IRP_MN_READ_CONFIG` or `BUS_INTERFACE_STANDARD`; the `HalGetBusData` family has no Windows 98 precedent) | 7 | **Settled in 26-A.2 (2026-10-03): `IRP_MN_READ_CONFIG` / `WRITE_CONFIG` sent to the PCI PDO**, the route NUSB's `USBPORT.SYS` and 98 SE's `uhcd.sys` take (static, `legal-provenance.md` section 4) and the HCD's (`HcdSvcConfigSpace`). Runtime, QEMU, `qemu` build: on Windows 98 SE that IRP sent to the attached lower object was refused and `GUID_BUS_INTERFACE_STANDARD` answered `STATUS_NOT_IMPLEMENTED` (`C0000002`); sent to the PDO it read the vendor and device ids and the interrupt pin, and the start completed. On Windows 2000 both targets answered |
 | The PASSIVE context: a system thread (stock precedent `bt829.sys`) rather than work items, confirmed on both primaries | 5.4 | **Confirmed in 26-A.2 (2026-10-03)**: the controller thread starts with the controller on both primaries and stops cleanly across repeated disable/enable cycles - waited for on its thread object on NT and on an event on Windows 98, where the thread-object wait faulted (`runs/run-26.md`); its 100 ms health poll leaves no trace of its own yet, so that it ran is not an observation |
-| `DeviceIsHub` for hubs inside the bus, the driver key returned for a split composite device, and the `ControllerFlavor` value the HCD reports to Vista and Windows 7 `usbui.dll` | 8 | 26-A.8 |
+| `DeviceIsHub` for hubs inside the bus, the driver key returned for a split composite device, and the `ControllerFlavor` value the HCD reports to Vista and Windows 7 `usbui.dll` | 8 | 26-A.8; the hubs by 33.4 (10.11), the composite's driver key by 36.43 (10.12): the parent's |
 | The `SymbolicName` value and the device interfaces both devnodes must carry, so the property pages find them on every generation | 8 | 26-A.8 |
 | `XHCISNAP`'s software-key finder (it matches `xhci98.sys`) and its payload schema for the HCD's extension | 8, 9 | 26-A.8 |
 | `source-stamp.ps1` and staging in `make-package.ps1`; publishing in `make-release.ps1` | 9 | 26-A.1; 32.3 |

@@ -12,7 +12,8 @@
  *     GET_DESCRIPTOR(CONFIGURATION) (section 10.9);
  *   - whether a SETUP packet may leave a function PDO (an interface
  *     recipient must be one of its interfaces);
- *   - the function PDO's ids (section 10.7), as ASCII multi-strings;
+ *   - the function PDO's ids (section 10.7), and its composite parent's
+ *     (section 10.12), as ASCII multi-strings;
  *   - every PDO's instance id: the serial number string when it is
  *     usable, else the location (task 33.2);
  *   - and every PDO's device text: which string it is named by, and that
@@ -110,6 +111,18 @@ ULONG XhciFuncSetupAllowed(const UCHAR *setup, ULONG interfaceMask,
  * whole answer's length, NULs included, even when it did not fit. */
 ULONG XhciFuncId(const UCHAR *device, const XHCI_FUNC *func, ULONG port,
                  ULONG which, char *out, ULONG capacity, PULONG used);
+
+/*
+ * A composite-parent PDO's ids (task 36.43; design record 13 section
+ * 10.12), project-owned so no OS INF matches: XHCI_FUNC_ID_DEVICE
+ * XHCI98\COMPOSITE&VID_vvvv&PID_pppp; XHCI_FUNC_ID_HARDWARE that with
+ * &REV_rrrr, then without, then XHCI98\COMPOSITE alone, as a multi-string.
+ * No compatible id (XHCI_FUNC_BAD_PARAM, *used 0); the instance id is
+ * XhciFuncInstanceId's with XHCI_INSTANCE_NO_MI. As XhciFuncId: upper-case
+ * hex, *used the whole length even when it did not fit.
+ */
+ULONG XhciFuncParentId(const UCHAR *device, ULONG which, char *out,
+                       ULONG capacity, PULONG used);
 
 /*
  * Instance ids from the serial number (roadmap-hcd.md task 33.2; design

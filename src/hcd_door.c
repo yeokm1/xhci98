@@ -595,18 +595,17 @@ VOID HcdDoorHubStop(PHCD_HUB_FDO fdo)
 /*
  * GUID_DEVINTERFACE_USB_DEVICE on a device PDO (task 36.17; design record
  * 13 section 8.10): every device PDO and every external hub's PDO, as
- * usbhub registers it, and of a composite the bus splits only the function
- * that owns the device's first interface - the group's first PDO, whose
- * Group is its own Serial, the one the door already answers the
- * connection's driver key from (hcdDoorConnection). That function's state
- * is the interface's: with it disabled, failed or driverless the device has
- * none while its siblings run (owner, 2026-10-09). Registered once, at the
- * first successful start, and enabled at every one; best effort, as the hub
- * interface is. IRQL: PASSIVE_LEVEL.
+ * usbhub registers it, and of a composite the bus splits its composite
+ * parent's PDO (task 36.43, section 10.12) - the device's own devnode, the
+ * group's first PDO, the one the door answers the connection's driver key
+ * from (hcdDoorConnection) - and no function, as usbhub registers it on the
+ * composite device's PDO. The parent's state is the interface's.
+ * Registered once, at the first successful start, and enabled at every
+ * one; best effort, as the hub interface is. IRQL: PASSIVE_LEVEL.
  */
 VOID HcdDoorDeviceStart(PHCD_DEVICE_PDO pdo)
 {
-    if (pdo->Function && pdo->Group != pdo->Serial) {
+    if (pdo->Function) {
         return;
     }
     hcdInterfaceOn(pdo->Common.Self, &hcdGuidUsbDevice, &pdo->UsbInterface,
@@ -1429,7 +1428,8 @@ static ULONG hcdDoorHubConnection(PHCD_CONTROLLER hc, ULONG port,
  * What the bus knows about the device at port location `location` presented
  * under `parent` (0 the root hub, else a hub PDO's Serial; task 33.4): the
  * PDO standing for it (a lone device PDO, a hub's PDO, or a split device's
- * first function, whose Group is its own Serial), copied under PdoListLock
+ * composite parent - task 36.43 - the group's first, whose Group is its own
+ * Serial), copied under PdoListLock
  * and, for the open pipes, the controller lock inside it - the order of
  * design record 13 section 5.4. `config`, when not NULL, receives up to
  * `configCap` bytes of the whole configuration descriptor. `wantPdo`

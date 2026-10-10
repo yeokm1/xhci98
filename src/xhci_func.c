@@ -458,6 +458,53 @@ ULONG XhciFuncId(const UCHAR *device, const XHCI_FUNC *func, ULONG port,
     return (t.Used > capacity) ? XHCI_FUNC_TOO_SMALL : XHCI_FUNC_OK;
 }
 
+static VOID xhciFuncParentVidPid(XHCI_FUNC_TEXT *t, const UCHAR *device)
+{
+    xhciFuncStr(t, "XHCI98\\COMPOSITE&VID_");
+    xhciFuncHexN(t, xhciFuncWord(device + 8), 4);
+    xhciFuncStr(t, "&PID_");
+    xhciFuncHexN(t, xhciFuncWord(device + 10), 4);
+}
+
+/* IRQL: any. */
+ULONG XhciFuncParentId(const UCHAR *device, ULONG which, char *out,
+                       ULONG capacity, PULONG used)
+{
+    XHCI_FUNC_TEXT t;
+
+    if (device == NULL || used == NULL || (out == NULL && capacity != 0)) {
+        return XHCI_FUNC_BAD_PARAM;
+    }
+    t.Out = out;
+    t.Capacity = capacity;
+    t.Used = 0;
+    switch (which) {
+    case XHCI_FUNC_ID_DEVICE:
+        xhciFuncParentVidPid(&t, device);
+        xhciFuncChar(&t, 0);
+        break;
+    case XHCI_FUNC_ID_HARDWARE:
+        xhciFuncParentVidPid(&t, device);
+        xhciFuncStr(&t, "&REV_");
+        xhciFuncHexN(&t, xhciFuncWord(device + 12), 4);
+        xhciFuncChar(&t, 0);
+        xhciFuncParentVidPid(&t, device);
+        xhciFuncChar(&t, 0);
+        xhciFuncStr(&t, "XHCI98\\COMPOSITE");
+        xhciFuncChar(&t, 0);
+        xhciFuncChar(&t, 0);
+        break;
+    default:
+        /* No compatible id, by design (section 10.12): USB\COMPOSITE would
+         * bring an OS composite parent back over a split device. The
+         * instance id is any PDO's (XhciFuncInstanceId). */
+        *used = 0;
+        return XHCI_FUNC_BAD_PARAM;
+    }
+    *used = t.Used;
+    return (t.Used > capacity) ? XHCI_FUNC_TOO_SMALL : XHCI_FUNC_OK;
+}
+
 /* ----------------------------------------------------------------------- */
 /* Instance ids (task 33.2)                                                 */
 /* ----------------------------------------------------------------------- */

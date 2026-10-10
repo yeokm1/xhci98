@@ -8,7 +8,10 @@
 # the one class F6 offers, and binds it by the ids below: the xHCI
 # controller's PCI class code, the root hub the driver creates under a
 # project-owned id, and the external hubs it presents under two more
-# (XHCI98\HUB, XHCI98\HUB30; task 33.4). The devices behind the root hub are then bound by Setup's
+# (XHCI98\HUB, XHCI98\HUB30; task 33.4), and the composite devices' parents
+# under one more (XHCI98\COMPOSITE; task 36.43) - without it a composite
+# keyboard's functions would never appear here. The devices behind the root
+# hub are then bound by Setup's
 # own HID and storage drivers (hidusb, kbdhid, mouhid, usbstor) through
 # txtsetup.sif's own hardware-id table, with usbd.sys, hidclass.sys and
 # hidparse.sys loaded from Setup's own source; none of them is on this disk.
@@ -37,3 +40,4 @@ id = "PCI\CC_0C0330", "xhci98"
 id = "XHCI98\ROOT_HUB", "xhci98"
 id = "XHCI98\HUB", "xhci98"
 id = "XHCI98\HUB30", "xhci98"
+id = "XHCI98\COMPOSITE", "xhci98"

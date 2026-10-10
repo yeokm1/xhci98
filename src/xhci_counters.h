@@ -277,9 +277,20 @@ typedef struct _XHCIHC_COUNTERS {
     ULONG IdleAbandoned;
     ULONG IdleQuarantined;
     ULONG SuspNotesSuppressed;
+    /* Words 142 to 159 are selective suspend stage B's (task 36.38; design
+     * record 14 section 8.10), reserved here so the words after them stay
+     * where they are when stage B fills them in place. Always zero until
+     * then; XHCISNAP does not print them. */
+    ULONG SuspBReserved[18];
+    /* Composite devices as devnodes (task 36.43; design record 13 section
+     * 10.12), appended at word 160: composite-parent PDOs created, and
+     * function PDOs re-presented in place at a composite FDO's start. The
+     * thread's plain writes. */
+    ULONG CompositeParents;
+    ULONG CompositeRepresented;
 } XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 142 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 162 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */

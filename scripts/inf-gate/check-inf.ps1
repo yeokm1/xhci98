@@ -261,10 +261,17 @@ $ErrorActionPreference = "Stop"
 #                          record 13 section 10.11): a model with one is a
 #                          HUB install, which copies nothing (HCD-HUBCOPY),
 #                          and the controller-only rules do not apply to it.
+#   CompositeId            the hardware id of the composite-parent devnode the
+#                          HCD presents for every device it splits, since
+#                          task 36.43 (design record 13 section 10.12): a
+#                          model with it is a COMPOSITE install, which copies
+#                          nothing either (HCD-HUBCOPY) and registers no
+#                          property page (HCD-COMPPAGE).
 #
 $prod = @{ VerHeader = "xhci_version.h"; VerPrefix = "XHCI"; RcName = "xhci98.rc";
            Binary = "xhci98.sys"; RootHubId = "XHCI98\ROOT_HUB";
-           HubIds = @("XHCI98\HUB", "XHCI98\HUB30") }
+           HubIds = @("XHCI98\HUB", "XHCI98\HUB30");
+           CompositeId = "XHCI98\COMPOSITE" }
 
 $script:failures = @()
 $script:warnings = @()
@@ -784,6 +791,7 @@ foreach ($ms in $modelSections) {
         $role = "controller"
         if ($prod.RootHubId -ne "" -and $fields[1] -ieq $prod.RootHubId) { $role = "roothub" }
         foreach ($hid in $prod.HubIds) { if ($fields[1] -ieq $hid) { $role = "hub" } }
+        if ($fields[1] -ieq $prod.CompositeId) { $role = "composite" }
         [void]$models.Add(@{ Section = $fields[0]; Id = $fields[1]; Desc = $desc; Line = $e.Line; Decoration = $ms.Decoration; Role = $role; Ids = @($fields | Select-Object -Skip 1) })
     }
 }
@@ -857,6 +865,37 @@ foreach ($m in $models) {
 }
 
 #
+# ---- HCD-COMP: composite devices as devnodes (task 36.43) ---------------
+#
+# Since task 36.43 the bus presents every composite device it splits as a
+# devnode of its own under the project-owned XHCI98\COMPOSITE, bound to
+# xhci98.sys again, with the function PDOs beneath it (design record 13
+# section 10.12). A models section without that model leaves every composite
+# device a devnode with no driver on its path - and its functions, which only
+# a started parent reports, absent. Every id on the line is the project's
+# own, and no line anywhere may name USB\COMPOSITE: that id brings the OS's
+# own composite parent (usbccgp.sys, or Windows 98's usbhub.sys), which the
+# bus replaces, and a model for it would compete for every other stack's
+# composite devices on the machine.
+#
+foreach ($ms in $modelSections) {
+    $here = @($models | Where-Object { $_.Decoration -eq $ms.Decoration })
+    if (@($here | Where-Object { $_.Role -eq "composite" }).Count -eq 0) {
+        Add-Failure "HCD-COMP" ("models section [{0}] has no composite model under '{1}'. The HCD presents each composite device it splits as a devnode under that id and binds it to itself through this INF; without the model that devnode has no driver on this path and its functions never appear." -f $ms.Section, $prod.CompositeId)
+    }
+}
+foreach ($m in $models) {
+    foreach ($id in $m.Ids) {
+        if ($id -match '^USB\\COMPOSITE$') {
+            Add-Failure "HCD-COMP" ("models line {0} matches '{1}', which brings the OS composite parent the HCD replaces. The HCD's composite parent is '{2}'." -f $m.Line, $id, $prod.CompositeId)
+        }
+        if ($m.Role -eq "composite" -and $id -notmatch '^XHCI98\\') {
+            Add-Failure "HCD-COMP" ("composite models line {0} carries '{1}'. A composite parent's ids are the project's own, under XHCI98\, so no OS or vendor INF can match the devnode." -f $m.Line, $id)
+        }
+    }
+}
+
+#
 # ---- HCD-HUBCOPY: a hub install copies nothing (task 33.4) --------------
 #
 # A hub devnode exists only under a running xhci98.sys, so the binary is on
@@ -867,9 +906,10 @@ foreach ($m in $models) {
 # install section, on every path, has no CopyFiles at all, and the loader
 # value or service binary it writes names the driver the controller's own
 # install delivers - which is why PATH-W98's and PATH-NT's "its own
-# CopyFiles delivers it" checks stand aside for this role.
+# CopyFiles delivers it" checks stand aside for this role. A composite
+# parent's install (task 36.43) is held the same way, for the same reason.
 #
-foreach ($m in @($models | Where-Object { $_.Role -eq "hub" })) {
+foreach ($m in @($models | Where-Object { $_.Role -eq "hub" -or $_.Role -eq "composite" })) {
     foreach ($ap in @(Get-ModelPaths $m)) {
         $install = $m.Section + $ap.Suffix
         if (-not (Test-SectionExists $inf $install)) { continue }  # PATH-* said so
@@ -882,12 +922,12 @@ foreach ($m in @($models | Where-Object { $_.Role -eq "hub" })) {
         foreach ($hs in $hubSections) {
             $hubCopy = @(Get-Directive $inf $hs "CopyFiles")
             if ($hubCopy.Count -gt 0) {
-                Add-Failure "HCD-HUBCOPY" ("the {0} hub install's [{1}] has CopyFiles={2}. A hub section copies nothing: its devnode exists only under a running {3}, and a copy would ask a user who plugs a hub in later for the original media." -f $ap.Os, $hs, ($hubCopy -join ','), $prod.Binary)
+                Add-Failure "HCD-HUBCOPY" ("the {0} {4} install's [{1}] has CopyFiles={2}. A {4} section copies nothing: its devnode exists only under a running {3}, and a copy would ask a user who plugs the device in later for the original media." -f $ap.Os, $hs, ($hubCopy -join ','), $prod.Binary, $m.Role)
             }
             foreach ($ind in @("Include", "Needs")) {
                 $hubInd = @(Get-Directive $inf $hs $ind)
                 if ($hubInd.Count -gt 0) {
-                    Add-Failure "HCD-HUBCOPY" ("the {0} hub install's [{1}] has {2}={3}. A hub install is this INF's sections alone, so this gate can hold it to copying nothing." -f $ap.Os, $hs, $ind, ($hubInd -join ','))
+                    Add-Failure "HCD-HUBCOPY" ("the {0} {4} install's [{1}] has {2}={3}. A {4} install is this INF's sections alone, so this gate can hold it to copying nothing." -f $ap.Os, $hs, $ind, ($hubInd -join ','), $m.Role)
                 }
             }
         }
@@ -978,11 +1018,12 @@ foreach ($m in $models) {
                     }
                 }
                 foreach ($d in $ntmpFiles) {
-                    if ($m.Role -eq "hub") {
-                        # HCD-HUBCOPY: a hub copies nothing and loads the
-                        # driver the controller's install delivered.
+                    if ($m.Role -eq "hub" -or $m.Role -eq "composite") {
+                        # HCD-HUBCOPY: a hub (or a composite parent, task
+                        # 36.43) copies nothing and loads the driver the
+                        # controller's install delivered.
                         if ($d -ine $prod.Binary) {
-                            Add-Failure "HCD-HUBCOPY" ("[{0}] sets NTMPDriver to '{1}'. A hub section copies nothing, so it may name only {2}, which the controller's install delivers." -f $base, $d, $prod.Binary)
+                            Add-Failure "HCD-HUBCOPY" ("[{0}] sets NTMPDriver to '{1}'. A {3} section copies nothing, so it may name only {2}, which the controller's install delivers." -f $base, $d, $prod.Binary, $m.Role)
                         }
                         continue
                     }
@@ -1101,11 +1142,12 @@ foreach ($m in $models) {
                         if ($dst -ne "") { [void]$delivered.Add($dst.ToLowerInvariant()) }
                     }
                 }
-                if ($m.Role -eq "hub") {
-                    # HCD-HUBCOPY: a hub copies nothing and runs the
-                    # controller's service binary.
+                if ($m.Role -eq "hub" -or $m.Role -eq "composite") {
+                    # HCD-HUBCOPY: a hub (or a composite parent, task 36.43)
+                    # copies nothing and runs the controller's service
+                    # binary.
                     if ($svcFile -ine $prod.Binary) {
-                        Add-Failure "HCD-HUBCOPY" ("[{0}] ServiceBinary is '{1}'. A hub section copies nothing, so its service may run only {2}, which the controller's install delivers." -f $svcInstall, $svcFile, $prod.Binary)
+                        Add-Failure "HCD-HUBCOPY" ("[{0}] ServiceBinary is '{1}'. A {3} section copies nothing, so its service may run only {2}, which the controller's install delivers." -f $svcInstall, $svcFile, $prod.Binary, $m.Role)
                     }
                 } elseif (-not $delivered.Contains($svcFile.ToLowerInvariant())) {
                     Add-Failure "PATH-NT" ("[{0}] ServiceBinary is '{1}' but the CopyFiles of [{2}] delivers ({3}). Win2000 would create a service pointing at a file the install never copied." -f $svcInstall, $svcFile, $nt, ($delivered -join ', '))
@@ -1574,6 +1616,31 @@ foreach ($m in @($models | Where-Object { $_.Role -eq "roothub" -or $_.Role -eq 
             }
             if ($v.Data -ine $want.Data) {
                 Add-Failure "HCD-HUBPAGE" ("the {0} root-hub install [{1}] writes '{2}' as {3}, not {4}." -f $p.Os, $install, $want.Name, $v.Data, $want.Data)
+            }
+        }
+    }
+}
+
+# ---- HCD-COMPPAGE: a composite parent registers no page (task 36.43) ----
+#
+# A composite device is not a hub: its parent devnode has no Power tab, and
+# neither the 9x nor the NT hub page provider may be registered for it - the
+# provider would open a hub door the composite FDO does not have. XP's own
+# usb.inf deletes EnumPropPages32 for its composite parent; this INF does the
+# same, and may write neither value on any composite path, through any AddReg
+# section the install or a section beside it names.
+#
+foreach ($m in @($models | Where-Object { $_.Role -eq "composite" })) {
+    foreach ($p in @(Get-ModelPaths $m)) {
+        $install = $m.Section + $p.Suffix
+        if (-not (Test-SectionExists $inf $install)) { continue }  # PATH-* said so
+        $compSections = @($install) + @($inf.SectionOrder | Where-Object { $_.ToLowerInvariant().StartsWith(($install + ".").ToLowerInvariant()) })
+        foreach ($cs in $compSections) {
+            foreach ($name in @("EnumPropPages", "EnumPropPages32")) {
+                $vals = @(Get-AddRegValues $inf @(Get-Directive $inf $cs "AddReg") $name)
+                foreach ($v in $vals) {
+                    Add-Failure "HCD-COMPPAGE" ("the {0} composite install's [{1}] writes '{2}' ([{3}] line {4}). A composite parent is not a hub and has no page; the provider would open a door its FDO does not have." -f $p.Os, $cs, $name, $v.Section, $v.Line)
+                }
             }
         }
     }
@@ -2059,7 +2126,7 @@ foreach ($m in $models) {
 # the self-test probed it a root-hub section fetching usbhub.sys passed - and
 # that is the likeliest place for an editor to put the hub driver back.
 #
-foreach ($m in @($models | Where-Object { $_.Role -eq "roothub" -or $_.Role -eq "hub" })) {
+foreach ($m in @($models | Where-Object { $_.Role -eq "roothub" -or $_.Role -eq "hub" -or $_.Role -eq "composite" })) {
     foreach ($p in @(Get-ModelPaths $m)) {
         $install = $m.Section + $p.Suffix
         if (-not (Test-SectionExists $inf $install)) { continue }  # PATH-* said so

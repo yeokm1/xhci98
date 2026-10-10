@@ -275,6 +275,11 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
     XhciLogAppend(log, "idle.abandoned", hc->Counters.IdleAbandoned, 1);
     XhciLogAppend(log, "idle.quarantined", hc->Counters.IdleQuarantined, 1);
     XhciLogAppend(log, "susp.notes.suppressed", hc->Counters.SuspNotesSuppressed, 1);
+    /* Composite devices as devnodes (task 36.43). */
+    XhciLogAppend(log, "composite.parents", hc->Counters.CompositeParents,
+                  1);
+    XhciLogAppend(log, "composite.represented",
+                  hc->Counters.CompositeRepresented, 1);
     hcdLogTolLocked(ext, log);
 }
 

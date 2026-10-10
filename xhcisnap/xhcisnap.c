@@ -1943,6 +1943,17 @@ static const char *const hcd_susp_counter_names[SNAP_HCD_SUSP_WORDS] = {
     "SuspNotesSuppressed",
 };
 
+/* Words 142 to 159 are reserved for selective suspend stage B (task
+ * 36.38), zero until it fills them; not printed. The composite parent's
+ * two (task 36.43) follow at 160. */
+#define SNAP_SUSPB_AT               142UL
+#define SNAP_SUSPB_WORDS            18UL
+#define SNAP_COMP_AT                160UL
+#define SNAP_COMP_WORDS             2UL
+static const char *const comp_counter_names[SNAP_COMP_WORDS] = {
+    "CompositeParents", "CompositeRepresented"
+};
+
 /*
  * The HCD image's layout as its header gives it, checked against the bytes
  * that arrived: 1 when every figure fits. print_hcd refuses a shape that
@@ -2088,6 +2099,10 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
                    i < SNAP_HCD_SUSP_AT + SNAP_HCD_SUSP_WORDS) {
             comp("  %-26s %lu\n", hcd_susp_counter_names[i - SNAP_HCD_SUSP_AT],
                  v);
+        } else if (i >= SNAP_SUSPB_AT && i < SNAP_SUSPB_AT + SNAP_SUSPB_WORDS) {
+            continue;
+        } else if (i >= SNAP_COMP_AT && i < SNAP_COMP_AT + SNAP_COMP_WORDS) {
+            comp("  %-26s %lu\n", comp_counter_names[i - SNAP_COMP_AT], v);
         } else {
             comp("  counter %-18lu %lu\n", i, v);
         }

@@ -23,6 +23,15 @@
  * orphans the PDO. Busy is never held across a call down the stack: the
  * PDO's own STOP and REMOVE wait for it (hcd_pdo.c, hcdPdoQuiesce).
  *
+ * A composite device's FDO, the fourth role (task 36.43; design record 13
+ * section 10.12), is this code too, told apart by its kind
+ * (HCD_KIND_COMPOSITE_FDO): attached over a composite-parent PDO
+ * (XHCI98\COMPOSITE), its BusRelations are the device's function PDOs, and
+ * it has no door - no name, no interface, no IOCTL (hcd_entry.c refuses
+ * them). Its remove lets go of the functions as a hub FDO's lets go of its
+ * children, but its start re-presents them in place (HcdDevicePdoRepresentAsk)
+ * rather than cycling the port, which would take the parent itself away.
+ *
  * IRQL: PASSIVE_LEVEL throughout (PnP, power on DO_POWER_PAGABLE objects,
  * and IRP_MJ_DEVICE_CONTROL from user mode), except where a function says
  * otherwise.
@@ -95,8 +104,11 @@ static NTSTATUS NTAPI hcdHubSignal(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
-/* AddDevice for a hub's PDO. Anything else of this driver's own that is not
- * the root hub's is refused. */
+/* Whether this FDO is a composite device's (task 36.43). */
+#define hcdIsComposite(fdo) ((fdo)->Common.Kind == HCD_KIND_COMPOSITE_FDO)
+
+/* AddDevice for a hub's PDO, or a composite device's (task 36.43). Anything
+ * else of this driver's own that is not the root hub's is refused. */
 NTSTATUS HcdHubAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
 {
     PHCD_DEVICE_PDO pdoExt;
@@ -105,7 +117,8 @@ NTSTATUS HcdHubAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
     NTSTATUS status;
 
     pdoExt = (PHCD_DEVICE_PDO)pdo->DeviceExtension;
-    if (pdoExt->Common.Kind != HCD_KIND_DEVICE_PDO || !pdoExt->Hub) {
+    if (pdoExt->Common.Kind != HCD_KIND_DEVICE_PDO ||
+        !HcdPdoIsParent(pdoExt)) {
         return STATUS_NOT_SUPPORTED;
     }
     status = IoCreateDevice(driver, sizeof(HCD_HUB_FDO), NULL,
@@ -114,7 +127,8 @@ NTSTATUS HcdHubAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
         return status;
     }
     ext = (PHCD_HUB_FDO)fdo->DeviceExtension;
-    ext->Common.Kind = HCD_KIND_HUB_FDO;
+    ext->Common.Kind =
+        pdoExt->Composite ? HCD_KIND_COMPOSITE_FDO : HCD_KIND_HUB_FDO;
     ext->Common.Self = fdo;
     ext->Common.PnpState = HCD_PNP_ADDED;
     ext->Common.DevicePower = PowerDeviceD0;
@@ -130,22 +144,32 @@ NTSTATUS HcdHubAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
     }
     fdo->Flags |= DO_POWER_PAGABLE;
     fdo->Flags &= ~DO_DEVICE_INITIALIZING;
-    XHCI_DBG_VALUE("hcd: hub FDO attached, hub PDO serial", pdoExt->Serial);
+    XHCI_DBG_VALUE(pdoExt->Composite
+                       ? "hcd: composite FDO attached, parent PDO serial"
+                       : "hcd: hub FDO attached, hub PDO serial",
+                   pdoExt->Serial);
     return STATUS_SUCCESS;
 }
 
 /* The door's names, at a start that succeeded below, and the settle the
- * first answer after it waits for (task 33.3). */
+ * first answer after it waits for (task 33.3). A composite FDO has no door,
+ * and re-presents its let-go functions in place (task 36.43). */
 static VOID hcdHubStarted(PHCD_HUB_FDO fdo)
 {
     PHCD_CONTROLLER hc;
 
     hc = hcdHubControllerEnter(fdo);
-    HcdDoorHubStart(fdo, hc);
+    if (!hcdIsComposite(fdo)) {
+        HcdDoorHubStart(fdo, hc);
+    }
     if (hc != NULL) {
         /* Before the settle is asked, so the pass that settles it has
          * re-enumerated what an earlier FDO's removal let go of. */
-        (VOID)HcdDevicePdoRepresent(hc, hcdHubPdoOf(fdo)->Serial);
+        if (hcdIsComposite(fdo)) {
+            (VOID)HcdDevicePdoRepresentAsk(hc, hcdHubPdoOf(fdo)->Serial);
+        } else {
+            (VOID)HcdDevicePdoRepresent(hc, hcdHubPdoOf(fdo)->Serial);
+        }
     }
     fdo->SettleTarget = (hc != NULL) ? HcdEnumSettleAsk(hc) : 0;
     fdo->SettlePending = fdo->SettleTarget != 0;
@@ -232,7 +256,9 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
         if (hc != NULL) {
             (VOID)HcdDevicePdoLetGo(hc, hcdHubPdoOf(fdo)->Serial);
         }
-        HcdDoorHubRemove(fdo, hc);
+        if (!hcdIsComposite(fdo)) {
+            HcdDoorHubRemove(fdo, hc);
+        }
         hcdHubControllerLeave(fdo, hc);
         irp->IoStatus.Status = STATUS_SUCCESS;
         status = hcdHubPassDown(fdo, irp);
@@ -258,7 +284,9 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
         if (NT_SUCCESS(status)) {
             fdo->Common.PnpState = HCD_PNP_STARTED;
             hcdHubStarted(fdo);
-            (VOID)InterlockedExchange((PLONG)&fdo->DoorOpen, 1);
+            if (!hcdIsComposite(fdo)) {
+                (VOID)InterlockedExchange((PLONG)&fdo->DoorOpen, 1);
+            }
         }
         status = HcdCompleteIrp(irp, status, 0);
         hcdHubIoLeave(fdo);
@@ -270,14 +298,18 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
         (VOID)InterlockedExchange((PLONG)&fdo->DoorOpen, 0);
         fdo->Common.PnpState = HCD_PNP_STOPPED;
         fdo->SettlePending = 0;
-        HcdDoorHubStop(fdo);
+        if (!hcdIsComposite(fdo)) {
+            HcdDoorHubStop(fdo);
+        }
         irp->IoStatus.Status = STATUS_SUCCESS;
         break;
     case IRP_MN_SURPRISE_REMOVAL:
         (VOID)InterlockedExchange((PLONG)&fdo->DoorOpen, 0);
         fdo->Common.PnpState = HCD_PNP_SURPRISE_REMOVED;
         fdo->SettlePending = 0;
-        HcdDoorHubStop(fdo);
+        if (!hcdIsComposite(fdo)) {
+            HcdDoorHubStop(fdo);
+        }
         irp->IoStatus.Status = STATUS_SUCCESS;
         break;
     case IRP_MN_QUERY_STOP_DEVICE:
@@ -300,7 +332,10 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
                       : NULL;
             hcdHubControllerLeave(fdo, hc);
             if (rel != NULL) {
-                XHCI_DBG_VALUE("hcd: hub FDO relations, count", rel->Count);
+                XHCI_DBG_VALUE(hcdIsComposite(fdo)
+                                   ? "hcd: composite FDO relations, count"
+                                   : "hcd: hub FDO relations, count",
+                               rel->Count);
                 if (old != NULL) {
                     HcdPoolFreeForeign(old);
                 }

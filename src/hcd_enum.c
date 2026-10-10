@@ -1742,6 +1742,22 @@ VOID HcdEnumCycle(PHCD_CONTROLLER hc, ULONG port, ULONG serial)
     HcdThreadWake(hc);
 }
 
+/* hcd.h (task 36.43): CYCLE_PORT's request shape, taken by
+ * hcdRepresentService. IRQL: <= DISPATCH_LEVEL. */
+VOID HcdEnumRepresent(PHCD_CONTROLLER hc, ULONG port, ULONG serial)
+{
+    KIRQL oldIrql;
+
+    if (port == 0 || port > HCD_PORT_COUNT || serial == 0) {
+        return;
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->PortRepresent[(port - 1) / 32UL] |= 1UL << ((port - 1) % 32UL);
+    hc->PortRepresentSerial[port - 1] = serial;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    HcdThreadWake(hc);
+}
+
 /* hcd.h. The generation is read here, under the lock its writer takes
  * (hcdConnectGen), so the thread can tell a mark made for this device at
  * this location from one that outlived a connect or a disconnect. */
@@ -4351,6 +4367,7 @@ static VOID hcdDetach(PHCD_CONTROLLER hc, ULONG powered)
         hc->PortPdoStarted[i] = 0;
         hc->PortPdoRemoved[i] = 0;
         hc->PortCycle[i] = 0;
+        hc->PortRepresent[i] = 0;
     }
     hc->EnumDetachRequested = 0;
     XhciControllerLockRelease(&hc->Hc, oldIrql);
@@ -4777,6 +4794,43 @@ static VOID hcdCycleService(PHCD_CONTROLLER hc)
 }
 
 /*
+ * A composite FDO's start (task 36.43; HcdEnumRepresent): the let-go
+ * function PDOs of each marked port's device re-presented in place, when
+ * that device is still the one the request's group serial stands for
+ * (hcdCycleOwns, CYCLE_PORT's own test). Before this pass's settle check,
+ * so a start that asked before its settle generation finds them listed in
+ * its first answer. Thread only, powered, root hub started.
+ */
+static VOID hcdRepresentService(PHCD_CONTROLLER hc)
+{
+    ULONG bits[HCD_PORT_WORDS];
+    KIRQL oldIrql;
+    ULONG serial;
+    ULONG port;
+    ULONG i;
+    PHCD_PORT p;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    for (i = 0; i < HCD_PORT_WORDS; i++) {
+        bits[i] = hc->PortRepresent[i];
+        hc->PortRepresent[i] = 0;
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    for (port = 1; port <= HCD_PORT_COUNT && !hcdHalted(hc); port++) {
+        if ((bits[(port - 1) / 32UL] & (1UL << ((port - 1) % 32UL))) == 0) {
+            continue;
+        }
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        serial = hc->PortRepresentSerial[port - 1];
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        p = &hc->Ports[port - 1];
+        if (hcdCycleOwns(p, serial)) {
+            (VOID)HcdDevicePdoRepresentFunctions(hc, p->Device);
+        }
+    }
+}
+
+/*
  * The thread's port service, under the power gate; `powered` is the
  * controller's state read under it (Codex review of batch (b), round 1,
  * finding 5). In order: an invalidation HCRST left, a detach the root hub
@@ -4934,6 +4988,8 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
          * cycle runs in this pass. */
         hcdSlotFatalService(hc);
         hcdCycleService(hc);
+        /* Task 36.43: a composite FDO's start re-presents its functions. */
+        hcdRepresentService(hc);
     }
 
     XhciControllerLockAcquire(ext, &oldIrql);
@@ -5301,6 +5357,7 @@ VOID HcdEnumInit(PHCD_CONTROLLER hc)
         hc->PortPdoStarted[i] = 0;
         hc->PortPdoRemoved[i] = 0;
         hc->PortCycle[i] = 0;
+        hc->PortRepresent[i] = 0;
     }
     hc->SlotsInvalidated = 0;
     hc->SlotsUnproven = 0;

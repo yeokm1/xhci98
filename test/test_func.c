@@ -1223,6 +1223,89 @@ static void test_text(void)
              XHCI_FUNC_BAD_PARAM, "text: no count");
 }
 
+/*
+ * A composite-parent PDO's ids (task 36.43; design record 13 section
+ * 10.12): XHCI98\COMPOSITE with the device's VID, PID and REV, upper-case
+ * hex, no compatible id and no instance id of its own (any PDO's rule);
+ * the size query, a buffer one byte short written to its end and not past,
+ * and the parameter refusals.
+ */
+static void parent_id_is(ULONG which, const char *want, ULONG wantLength,
+                         const char *what)
+{
+    char out[160];
+    ULONG used;
+
+    memset(out, 'x', sizeof(out));
+    used = 0;
+    CHECK_EQ(XhciFuncParentId(dev, which, out, sizeof(out), &used),
+             XHCI_FUNC_OK, what);
+    CHECK_EQ(used, wantLength, what);
+    CHECK_EQ(memcmp(out, want, wantLength), 0, what);
+    CHECK_EQ(out[wantLength], 'x', what);
+}
+
+static void test_parent_ids(void)
+{
+    static const char devId[] = "XHCI98\\COMPOSITE&VID_0D8C&PID_0014";
+    static const char hwIds[] =
+        "XHCI98\\COMPOSITE&VID_0D8C&PID_0014&REV_0100\0"
+        "XHCI98\\COMPOSITE&VID_0D8C&PID_0014\0"
+        "XHCI98\\COMPOSITE\0";
+    static const char hexIds[] =
+        "XHCI98\\COMPOSITE&VID_ABCD&PID_EF01&REV_A2B3\0"
+        "XHCI98\\COMPOSITE&VID_ABCD&PID_EF01\0"
+        "XHCI98\\COMPOSITE\0";
+    char small[40];
+    ULONG used;
+
+    copy_dev(cmDev);
+    parent_id_is(XHCI_FUNC_ID_DEVICE, devId, sizeof(devId),
+                 "parent device id, its NUL included");
+    CHECK_EQ(sizeof(devId), 35, "parent device id: 35 with its NUL");
+    parent_id_is(XHCI_FUNC_ID_HARDWARE, hwIds, sizeof(hwIds),
+                 "parent hardware ids, the multi-string's NUL included");
+    CHECK_EQ(sizeof(hwIds), 97, "parent hardware ids: 97 with both NULs");
+
+    dev[8] = 0xCD;
+    dev[9] = 0xAB;
+    dev[10] = 0x01;
+    dev[11] = 0xEF;
+    dev[12] = 0xB3;
+    dev[13] = 0xA2;
+    parent_id_is(XHCI_FUNC_ID_HARDWARE, hexIds, sizeof(hexIds),
+                 "parent hardware ids: hex A-F in every field");
+
+    used = 0;
+    CHECK_EQ(XhciFuncParentId(dev, XHCI_FUNC_ID_HARDWARE, NULL, 0, &used),
+             XHCI_FUNC_TOO_SMALL, "parent hardware ids: size query");
+    CHECK_EQ(used, sizeof(hexIds), "parent hardware ids: size needed");
+    memset(small, 'x', sizeof(small));
+    CHECK_EQ(XhciFuncParentId(dev, XHCI_FUNC_ID_DEVICE, small, 34, &used),
+             XHCI_FUNC_TOO_SMALL, "parent device id one byte short");
+    CHECK_EQ(used, 35, "parent device id: 35 needed");
+    CHECK_EQ(memcmp(small, "XHCI98\\COMPOSITE&VID_ABCD&PID_EF01", 34), 0,
+             "parent device id: written up to the end of the buffer");
+    CHECK_EQ(small[34], 'x', "parent device id: nothing past the buffer");
+
+    used = 7;
+    CHECK_EQ(XhciFuncParentId(dev, XHCI_FUNC_ID_COMPATIBLE, small,
+                              sizeof(small), &used),
+             XHCI_FUNC_BAD_PARAM, "parent: no compatible id");
+    CHECK_EQ(used, 0, "parent: no compatible id, nothing used");
+    CHECK_EQ(XhciFuncParentId(dev, XHCI_FUNC_ID_INSTANCE, small,
+                              sizeof(small), &used),
+             XHCI_FUNC_BAD_PARAM, "parent: the instance id is any PDO's");
+    CHECK_EQ(XhciFuncParentId(NULL, XHCI_FUNC_ID_DEVICE, small,
+                              sizeof(small), &used),
+             XHCI_FUNC_BAD_PARAM, "parent: no device descriptor");
+    CHECK_EQ(XhciFuncParentId(dev, XHCI_FUNC_ID_DEVICE, NULL, 9, &used),
+             XHCI_FUNC_BAD_PARAM, "parent: a capacity with no buffer");
+    CHECK_EQ(XhciFuncParentId(dev, XHCI_FUNC_ID_DEVICE, small,
+                              sizeof(small), NULL),
+             XHCI_FUNC_BAD_PARAM, "parent: no length out");
+}
+
 int main(void)
 {
     test_cmedia();
@@ -1237,6 +1320,7 @@ int main(void)
     test_setup();
     test_ids();
     test_id_edges();
+    test_parent_ids();
     test_serial_ids();
     test_instance_ids();
     test_revive();

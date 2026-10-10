@@ -37,7 +37,7 @@ static void test_header(void)
              "a sixteen-word record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 816,
              "records right after the header");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 142,
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 162,
              "the whole counter block");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS_AT),
              816 + 18 * 64, "counters after the last record");
@@ -47,8 +47,8 @@ static void test_header(void)
              "past the header reads 0");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_COUNTER_WORDS * sizeof(ULONG),
              sizeof(XHCIHC_COUNTERS), "the counters word for word");
-    CHECK_EQ(XhciSnapHcdWords(18), 204 + 18 * 16 + 142, "the E460's image");
-    CHECK_EQ(XhciSnapHcdWords(0), 204 + 142,
+    CHECK_EQ(XhciSnapHcdWords(18), 204 + 18 * 16 + 162, "the E460's image");
+    CHECK_EQ(XhciSnapHcdWords(0), 204 + 162,
              "no ports: a header and the counters");
     CHECK_EQ(XhciSnapHcdWords(1000), XhciSnapHcdWords(XHCI_MAX_ROOT_PORTS),
              "ports held to the root port maximum");
@@ -421,7 +421,8 @@ static void test_msi_words(void)
              "MsiFilterLines");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiFilterStripped), 113 * 4,
              "MsiFilterStripped last");
-    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 114 * 4, "114 words in all");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspSwitchRead), 114 * 4,
+             "stage A's words follow at 114");
 
     CHECK_EQ(XHCI_MSI86_STATE_UNSEEN, 0, "helper states");
     CHECK_EQ(XHCI_MSI86_STATE_ABSENT, 1, "helper states");
@@ -625,6 +626,28 @@ static void test_xstat_math(void)
           "by chunk count");
 }
 
+/* The counter block's tail after the MSI words: stage A at 114 to 141
+ * (36.33), words 142 to 159 reserved for stage B (36.38) so it fills them
+ * in place, the composite parent's two at 160 (36.43). XHCISNAP names
+ * them by these places (xhcisnap.c, SNAP_HCD_SUSP_AT, SNAP_SUSPB_*,
+ * SNAP_COMP_*). */
+static void test_counter_tail(void)
+{
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspSwitchRead), 114 * 4,
+             "SuspSwitchRead at 114");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspNotesSuppressed),
+             141 * 4, "SuspNotesSuppressed at 141, stage A's last");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspBReserved), 142 * 4,
+             "stage B's reservation at 142");
+    CHECK_EQ(sizeof(((XHCIHC_COUNTERS *)0)->SuspBReserved), 18 * 4,
+             "eighteen words reserved, 142 to 159");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, CompositeParents), 160 * 4,
+             "CompositeParents at 160");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, CompositeRepresented),
+             161 * 4, "CompositeRepresented at 161");
+    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 162 * 4, "162 words in all");
+}
+
 int main(void)
 {
     test_header();
@@ -633,6 +656,7 @@ int main(void)
     test_xstat_words();
     test_delivery_words();
     test_msi_words();
+    test_counter_tail();
     test_xstat_math();
     test_xpol();
     test_walk(0);
