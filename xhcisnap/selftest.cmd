@@ -325,6 +325,22 @@ for %%S in ("XhciWideMap                 1" "promotion                   on; the
     )
 )
 
+rem p36-int4: stage B's header words at 237 to 305 after 36.24's stage 2
+rem counters, from a canned header whose word i holds i + 1 (each value
+rem names its word), and a stage B branch build's 273-word header refused.
+"%~dp0XHCISNAP.EXE" -selftest-ssusp > "%BASE%.ssusp.log"
+if errorlevel 1 (
+    echo FAIL: -selftest-ssusp exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("XhciWideMap                 206" "DNCTRL                     0x00EE (N1, FUNCTION_WAKE, enabled)" "DnctrlEnables              0x00EF" "DnctrlReadback             0x00F0" "   243  RECOVERING" "   299  ?" "a 1092-byte header, a stage B branch build's" "4294967295 counters in a 1092-byte region") do (
+    findstr /C:%%S "%BASE%.ssusp.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the stage B header decode does not say %%S
+        set FAILED=1
+    )
+)
+
 rem Task 36.9's review: a header longer than its image is refused by
 rem print_hcd, and no other section decodes anything from it.
 "%~dp0XHCISNAP.EXE" -selftest-hcd-bad > "%BASE%.hcdbad.log"
@@ -438,5 +454,5 @@ if "%FAILED%"=="1" (
     echo xhcisnap selftest FAILED
     exit /b 1
 )
-echo xhcisnap selftest: 18 cases, all passed
+echo xhcisnap selftest: 19 cases, all passed
 exit /b 0

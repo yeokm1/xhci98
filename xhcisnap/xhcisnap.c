@@ -4867,6 +4867,39 @@ static void print_xpipe(const unsigned char *hcd, unsigned long hcdBytes)
  * switch on and the check passed with traffic, the switch absent, a
  * header from before 36.24, and a count it cannot hold.
  */
+/*
+ * p36-int4: stage B's header words where the integration put them (237 to
+ * 305, after 36.24's stage 2 counters), read through the real build: a
+ * canned 306-word header whose word i holds i + 1, but for the layout
+ * words (version, header size, the stage 2 count 32 at 204, the record
+ * count and size 8 at 240 and 241). Each printed value names the word it
+ * came from, so a reader off by a word shows here. Then a stage B branch
+ * build's 273-word header, with DNCTRL's not-read 0xFFFFFFFF at 204, which
+ * both readers refuse.
+ */
+static int selftest_ssusp(void)
+{
+    static unsigned char hcd[SNAP_HCD_SSUSP_HEAD_WORDS * 4];
+    unsigned long i;
+
+    for (i = 0; i < SNAP_HCD_SSUSP_HEAD_WORDS; i++) {
+        put32(hcd, i * 4, i + 1);
+    }
+    put32(hcd, 0, 1);
+    put32(hcd, 4, SNAP_HCD_SSUSP_HEAD_WORDS * 4);
+    put32(hcd, SNAP_XPIPE_COUNT_AT * 4, SNAP_XPIPE_BIG_WORDS);
+    put32(hcd, (SNAP_HCD_SSUSP_HEAD + 3) * 4, 8);
+    put32(hcd, (SNAP_HCD_SSUSP_HEAD + 4) * 4, 8);
+    print_xpipe(hcd, sizeof(hcd));
+    print_ssusp(hcd, sizeof(hcd));
+
+    put32(hcd, 4, SNAP_HCD_SSUSP_BRANCH_WORDS * 4);
+    put32(hcd, SNAP_XPIPE_COUNT_AT * 4, 0xFFFFFFFFUL);
+    print_xpipe(hcd, SNAP_HCD_SSUSP_BRANCH_WORDS * 4);
+    print_ssusp(hcd, SNAP_HCD_SSUSP_BRANCH_WORDS * 4);
+    return 0;
+}
+
 static int selftest_xpipe(void)
 {
     static unsigned char hcd[SNAP_HCD_BIG_HEAD_WORDS * 4];
@@ -7074,6 +7107,8 @@ int main(int argc, char **argv)
             doSelftestSysinfo = 1;
         } else if (strcmp(argv[i], "-selftest-xpipe") == 0) {
             return selftest_xpipe();
+        } else if (strcmp(argv[i], "-selftest-ssusp") == 0) {
+            return selftest_ssusp();
         } else if (strcmp(argv[i], "-selftest-report") == 0 && i + 1 < argc) {
             /*
              * The report path on its own, with no device: open BASE.TXT, write
