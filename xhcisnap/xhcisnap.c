@@ -1769,6 +1769,57 @@ static const char *const sys_9x_names[] = {
     "BIOSName", "BIOSVersion", "BIOSDate", NULL
 };
 
+/* How many of `names` exist under `keyPath`, printing none of them. */
+static int sys_count(const char *keyPath, const char *const *names)
+{
+    char text[SYS_TEXT_MAX + 8];
+    int found;
+    int i;
+
+    found = 0;
+    for (i = 0; names[i] != NULL; i++) {
+        if (sys_reg_text(keyPath, names[i], text, sizeof(text)) != 0) {
+            found++;
+        }
+    }
+    return found;
+}
+
+/*
+ * **Where an NT machine's lines come from** (36.47; wave 3 matrix, M-3).
+ * Vista SP1 and later: the BIOS key's SMBIOS strings first. Otherwise the
+ * System key's SystemBiosVersion/SystemBiosDate, as on 2000 and XP. XP x64
+ * (NT 5.2.3790 SP2) has neither SystemBios value: it keeps the SMBIOS
+ * strings in the BIOS key, as Vista SP1 does (matrix guest export,
+ * 2026-10-10), so an NT 5 with no SystemBios value falls back to that key,
+ * read through the same allow list. The existing sources keep their order;
+ * the BIOS key is read before NT 6 only where they hold nothing.
+ */
+#define SYS_SRC_SMBIOS 1
+#define SYS_SRC_NT5    2
+#define SYS_SRC_NONE   3
+
+static int sys_nt_source(unsigned long major, int haveBiosKey, int haveNt5)
+{
+    if (major >= 6 && haveBiosKey) {
+        return SYS_SRC_SMBIOS;
+    }
+    if (haveNt5) {
+        return SYS_SRC_NT5;
+    }
+    if (haveBiosKey) {
+        return SYS_SRC_SMBIOS;
+    }
+    return SYS_SRC_NONE;
+}
+
+static const char *sys_source_name(int source)
+{
+    return (source == SYS_SRC_SMBIOS) ? "the BIOS key's SMBIOS strings" :
+           (source == SYS_SRC_NT5) ? "SystemBiosVersion/SystemBiosDate" :
+                                     "none";
+}
+
 /*
  * `-nosysinfo` (owner, 2026-10-10): a machine on which the probing itself
  * misbehaves - a GetVersionEx, a registry read or a memory query - can
@@ -1863,9 +1914,18 @@ static void write_companion_system(void)
     }
 
     if (haveVersion && v.dwPlatformId == SYS_PLATFORM_NT) {
-        if (v.dwMajorVersion >= 6 && sys_values(SYS_KEY_BIOS, sys_nt6_names)
-            != 0) {
-            /* Vista SP1 and later: the SMBIOS strings, by name. */
+        int haveBiosKey;
+        int haveNt5;
+
+        haveBiosKey = (sys_count(SYS_KEY_BIOS, sys_nt6_names) != 0);
+        haveNt5 = (v.dwMajorVersion >= 6 && haveBiosKey)
+                      ? 0
+                      : (sys_count(SYS_KEY_SYSTEM, sys_nt5_names) != 0);
+        if (sys_nt_source(v.dwMajorVersion, haveBiosKey, haveNt5) ==
+                SYS_SRC_SMBIOS &&
+            sys_values(SYS_KEY_BIOS, sys_nt6_names) != 0) {
+            /* The SMBIOS strings, by name: Vista SP1 and later, and an
+             * XP x64 with no SystemBios value. */
         } else {
             sys_line("make/model", "%s",
                      (v.dwMajorVersion >= 6)
@@ -1998,6 +2058,22 @@ static int selftest_sysinfo(void)
     sys_clean(longIn, out, sizeof(out));
     printf("clean %u chars, ends [%s]\n", (unsigned)strlen(out),
            out + strlen(out) - 4);
+
+    /* Where an NT machine's lines come from (M-3: XP x64 has only the BIOS
+     * key). Arguments: major version, BIOS key values, SystemBios values. */
+    {
+        static const unsigned char src[][3] = {
+            { 6, 1, 0 }, { 6, 1, 1 }, { 6, 0, 1 }, { 6, 0, 0 },
+            { 5, 1, 1 }, { 5, 0, 1 }, { 5, 1, 0 }, { 5, 0, 0 }
+        };
+
+        for (i = 0; i < (int)(sizeof(src) / sizeof(src[0])); i++) {
+            printf("biossrc nt %u key %u systembios %u: %s\n", src[i][0],
+                   src[i][1], src[i][2],
+                   sys_source_name(sys_nt_source(src[i][0], src[i][1],
+                                                 src[i][2])));
+        }
+    }
 
     /* The live block under the machine's real names and code page. */
     sysNamesLoaded = 0;
