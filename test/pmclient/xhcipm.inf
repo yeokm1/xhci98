@@ -1,0 +1,73 @@
+; xhcipm.inf - selective suspend's test client, XHCIPM.SYS (roadmap-hcd.md
+; task 36.34; test\pmclient\pmclient.c). TEST ONLY, NEVER SHIPPED:
+; scripts\package\make-release.ps1 refuses a release that carries it.
+; Marker: XHCI98_TEST_CLIENT_DO_NOT_SHIP
+;
+; Binds the client, as the device's function driver, to QEMU's USB HID
+; devices (usb-mouse, usb-tablet and usb-kbd all answer VID_0627&PID_0001;
+; their configuration sets remote wakeup), by hardware id, which outranks
+; the HID class's compatible-id match. On a leg, give the guest a PS/2
+; mouse and keyboard for its own input, add one QEMU USB HID device on the
+; xHCI controller, and install this INF for it (98/ME: copy it to
+; \WINDOWS\INF first, or point the Add New Hardware wizard at it; NT:
+; Update Driver, Have Disk). PMCTL.EXE then drives it.
+;
+; ASCII only, CRLF line endings.
+
+[Version]
+Signature="$CHICAGO$"
+Class=USB
+ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
+Provider=%Provider%
+DriverVer=10/10/2026,0.0.0.1
+
+[Manufacturer]
+%Mfg%=PmModels
+
+[PmModels]
+%PmDesc%=Pm.Dev,USB\VID_0627&PID_0001
+
+[SourceDisksNames]
+1=%DiskName%,xhcipm.sys,,
+
+[SourceDisksFiles]
+xhcipm.sys=1
+
+[DestinationDirs]
+DefaultDestDir=10
+Pm.CopyFiles=10,System32\Drivers
+
+; --- Windows 98 SE and ME ---------------------------------------------------
+
+[Pm.Dev]
+AddReg=Pm.AddReg
+CopyFiles=Pm.CopyFiles
+
+[Pm.AddReg]
+HKR,,DevLoader,,*NTKERN
+HKR,,NTMPDriver,,xhcipm.sys
+
+; --- Windows 2000 and XP ----------------------------------------------------
+
+[Pm.Dev.NTx86]
+CopyFiles=Pm.CopyFiles
+
+[Pm.Dev.NTx86.Services]
+AddService=xhcipm,0x00000002,Pm.AddService
+
+[Pm.AddService]
+DisplayName=%PmSvcDesc%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\xhcipm.sys
+
+[Pm.CopyFiles]
+xhcipm.sys
+
+[Strings]
+Provider="xHCI98 test"
+Mfg="xHCI98 test"
+DiskName="xHCI98 selective suspend test client"
+PmDesc="xHCI98 selective suspend test client (TEST ONLY)"
+PmSvcDesc="xHCI98 selective suspend test client (xhcipm, TEST ONLY)"

@@ -526,6 +526,10 @@ typedef struct _HCD_USB_DEVICE {
     XHCI_SUSP_LINK Susp;
     LIST_ENTRY SlowDeferred;
     ULONG SuspWakeDue;
+    /* The idle notification's batch count (section 6.2, 36.32): the last
+     * batch formed for the device, 0 before the first; thread, under the
+     * controller lock. */
+    ULONG IdleBatch;
 } HCD_USB_DEVICE, *PHCD_USB_DEVICE;
 
 /* Distinct pipe handles a PDO keeps an abort horizon for: more than any
@@ -714,6 +718,35 @@ typedef struct _HCD_DEVICE_PDO {
                                      * PDO's power reports
                                      * (PoSetPowerState) with its D-IRP
                                      * admission (hcd_susp.c); PASSIVE  */
+    /* The idle notification (design record 14 sections 4.4 and 6; task
+     * 36.32, hcd_susp.c), under the controller lock: stage A's held IRP
+     * (today's stays IdleIrp, above) and its state (XHCI_SUSP_IDLE_*), the
+     * callback and its context copied at submission, the batch the PDO is
+     * in (0: none), its callback-queue entry with the batch and epoch it
+     * was queued in, whether that entry is on the queue and whether it is
+     * owned at all (queued, or claimed by the callback thread), and the
+     * strongest settlement trigger (XHCI_SUSP_SET_*) that reached the IRP
+     * while its callback ran. PwrStarted: started and not torn down since
+     * (6.2's "started"). IdleRunning: a callback of the PDO's has not
+     * returned; IdleQuarantined: its rundown could not finish, so the
+     * object is kept (4.4's quarantine); both read without the lock by
+     * the rundown. IdlePending (above) counts this IRP and its entry. */
+    PIRP IdleSlot;
+    ULONG IdleState;
+    PVOID IdleCb;
+    PVOID IdleCbContext;
+    ULONG IdleBatchCur;
+    LIST_ENTRY IdleEntry;
+    ULONG IdleQueued;
+    ULONG IdleEntryOwned;
+    ULONG IdleEntryBatch;
+    ULONG IdleEntryEpoch;
+    ULONG IdleOwed;
+    ULONG PwrStarted;
+    volatile ULONG IdleRunning;
+    volatile ULONG IdleQuarantined;
+    volatile ULONG IdlePinned;      /* its callback was abandoned by a stop
+                                     * without the DMA-halt proof         */
 } HCD_DEVICE_PDO, *PHCD_DEVICE_PDO;
 
 /* Whether a PDO may use a pipe of its device: a device PDO any, a function
@@ -1143,11 +1176,6 @@ typedef struct _HCD_CONTROLLER {
      * save gate armed (hcd_dev.c, XhciSlotSaveBusy; hcd_io.c,
      * HcdIoMapped): the saved image is not committed, or not restored. */
     ULONG SavePublished;
-    /* Task 36.28: a request was refused while the controller was
-     * suspended, in this suspend episode (cleared before the suspend
-     * begins, hcd_power.c): the save may not be committed or restored, so
-     * the resume enumerates afresh. Controller lock. */
-    ULONG SuspendRefused;
     ULONG EnumDetachRequested;      /* the root hub is going               */
     KEVENT EnumDetachDone;
     ULONG ScratchTainted;           /* a timed-out EP0 transfer may DMA    */
@@ -1486,6 +1514,18 @@ typedef struct _HCD_CONTROLLER {
      * device at a time. */
     struct _HCD_DEVICE_PDO *SuspPdos[XHCI_FUNC_MAX];
     XHCI_SUSP_FUNC SuspFuncs[XHCI_FUNC_MAX];
+    XHCI_SUSP_IDLE_FUNC SuspIdle[XHCI_FUNC_MAX];
+    /* The idle notification (section 6, 36.32): the callback queue of PDO
+     * entries (IdleEntry), under the controller lock; the callback
+     * thread's context, its own allocation (4.4), set by the start while
+     * the switch is on and cleared by the stop's handoff. Its counts are
+     * in Counters (36.33). */
+    LIST_ENTRY IdleQueue;
+    struct _HCD_SUSP_CB *SuspCb;
+    /* 36.33's bounded log lines: notes taken this start (hcdSuspNote), and
+     * the port of the callback just claimed, noted outside the lock. */
+    volatile LONG SuspNotes;
+    ULONG SuspNoteCallPort;
     /* The transfer size (tasks 36.21 and 36.22; xhci_xstat.h, hcd_io.c):
      * the readings since the start, zeroed and the value latched by each
      * start (hcd_ctl.c), and the class drivers' records (hcd_urb.c), kept
@@ -1828,7 +1868,6 @@ NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 VOID HcdCfgReleaseFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                            ULONG interfaceMask);
 VOID HcdCfgFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
-ULONG HcdCfgSlowQueued(PHCD_CONTROLLER hc);
 VOID HcdCfgService(PHCD_CONTROLLER hc);
 VOID HcdCfgCancelService(PHCD_CONTROLLER hc);
 VOID HcdCfgRetryService(PHCD_CONTROLLER hc);
@@ -1874,7 +1913,6 @@ NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                      struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb,
                      const HCD_IO_REQUEST *req);
 VOID HcdIoDrainPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd);
-VOID HcdIoSuspendSettle(PHCD_CONTROLLER hc, ULONG dmaStopped);
 VOID HcdIoPipeRelease(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoPipePause(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoPipeResume(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
@@ -2087,6 +2125,8 @@ typedef struct _HCD_SUSP_SETTLE {
     PIRP Pwr;
     ULONG PwrD0;
     PIRP Wake;
+    PIRP Idle;                      /* 36.32: completed CANCELLED        */
+    ULONG IdleEntry;                /* a queued entry's reference to drop */
 } HCD_SUSP_SETTLE, *PHCD_SUSP_SETTLE;
 ULONG HcdSuspPdoSetPower(struct _HCD_DEVICE_PDO *pdo, PIRP irp,
                          NTSTATUS *status);
@@ -2102,8 +2142,20 @@ VOID HcdSuspUnlinkFinish(PHCD_SUSP_SETTLE s);
 VOID HcdSuspControllerDownLocked(PHCD_CONTROLLER hc);
 VOID HcdSuspControllerUp(PHCD_CONTROLLER hc);
 VOID HcdSuspSettleStale(PHCD_CONTROLLER hc);
+/* 36.32, the idle notification (design record 14 sections 4.4, 6, 3.12) */
+ULONG HcdSuspIdleSubmit(struct _HCD_DEVICE_PDO *pdo, PHCD_CONTROLLER hc,
+                        PIRP irp, PVOID callback, PVOID context,
+                        NTSTATUS *status);
+ULONG HcdSuspIdleSystem(struct _HCD_DEVICE_PDO *pdo, SYSTEM_POWER_STATE state);
+ULONG HcdSuspIdleRundown(struct _HCD_DEVICE_PDO *pdo, ULONG mayWaitCallback);
+NTSTATUS HcdSuspCbStart(PHCD_CONTROLLER hc);
+VOID HcdSuspCbStop(PHCD_CONTROLLER hc);
+VOID HcdSuspDriverInit(VOID);
+VOID HcdSuspDriverUnload(VOID);
 /* hcd_cfg.c's half of 3.3's deferral */
 VOID HcdCfgUndefer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+VOID HcdCfgFlushPdoDeferred(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                            struct _HCD_DEVICE_PDO *pdo);
 
 /* hcd_pool.c */
 PVOID HcdPoolAlloc(ULONG bytes);

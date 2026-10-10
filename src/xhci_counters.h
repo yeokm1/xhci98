@@ -237,9 +237,49 @@ typedef struct _XHCIHC_COUNTERS {
     ULONG MsiFilterMessages;
     ULONG MsiFilterLines;
     ULONG MsiFilterStripped;
+    /* Selective suspend, stage A (design record 14; roadmap-hcd.md 36.33),
+     * appended contiguous at word 114, after the MSI words, so stage B's (record 14 section 8.10)
+     * follow them: the switch as read (0 absent, 1 a DWORD, 2 another
+     * type) and in effect; the sequences begun by kind and how they ended,
+     * the last refusal's reason (XHCI_SUSP_WHY_*); the remote-wake feature
+     * set and cleared; wake events, those that claimed nothing and the
+     * WAIT_WAKEs they completed; samples of another device generation;
+     * D-IRPs pended, stale-epoch Dx completed and slow IRPs deferred; the
+     * idle notification's batches, callbacks called and returned, entries
+     * skipped, client cancels, callbacks abandoned and PDOs quarantined;
+     * and log lines past the start's budget (hcd_susp.c). Thread plainly,
+     * dispatch interlocked or under the controller lock, as above. */
+    ULONG SuspSwitchRead;
+    ULONG SuspSwitch;
+    ULONG SuspSuspendsBegun;
+    ULONG SuspResumesBegun;
+    ULONG SuspWakesBegun;
+    ULONG SuspSuspended;
+    ULONG SuspActive;
+    ULONG SuspRefused;
+    ULONG SuspRefusedReason;
+    ULONG SuspUncertain;
+    ULONG SuspGone;
+    ULONG SuspArms;
+    ULONG SuspDisarms;
+    ULONG SuspWakeEvents;
+    ULONG SuspWakeUnclaimed;
+    ULONG SuspWaitWakesCompleted;
+    ULONG SuspStaleSamples;
+    ULONG SuspDxPended;
+    ULONG SuspDxStale;
+    ULONG SuspSlowDeferred;
+    ULONG IdleBatches;
+    ULONG IdleCalls;
+    ULONG IdleReturns;
+    ULONG IdleSkips;
+    ULONG IdleCancels;
+    ULONG IdleAbandoned;
+    ULONG IdleQuarantined;
+    ULONG SuspNotesSuppressed;
 } XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 114 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 142 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */

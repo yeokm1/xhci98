@@ -503,12 +503,18 @@ static VOID hcdPortNotify(PHCD_CONTROLLER hc, PULONG bits, ULONG port)
  * and touches no controller (Codex review of batch (b), round 2, finding 1). */
 static VOID hcdDeletePdo(PHCD_DEVICE_PDO pdo)
 {
+    ULONG keep;
+
     /* Its refusal timer and DPC live in the extension (hcd_io.c), as do
      * the IRPs a departed device left held. */
     pdo->Closing = 1;
     (VOID)HcdIoParkedRelease(pdo, 0);
     HcdIoRefusedDrain(pdo);
     HcdUrbIdleDrain(pdo);
+    /* The idle rundown, never waiting on a callback here (design record
+     * 14 section 4.4; hcd_susp.c): one still owed is the quarantine, and
+     * the object is kept with its records. */
+    keep = !HcdSuspIdleRundown(pdo, 0);
     /* Its interface context forgets it before the extension goes, and no
      * interface call is inside it then (Codex review of 28-A.1, round 1,
      * finding 3). */
@@ -518,6 +524,9 @@ static VOID hcdDeletePdo(PHCD_DEVICE_PDO pdo)
     HcdDoorDeviceStop(pdo, 1);
     pdo->Deleted = 1;
     pdo->Controller = NULL;
+    if (keep) {
+        return;
+    }
     HcdPoolFree(pdo->Config);
     pdo->Config = NULL;
     IoDeleteDevice(pdo->Common.Self);
@@ -1298,7 +1307,7 @@ static PHCD_DEVICE_PDO hcdDormantFindLocked(PHCD_CONTROLLER hc,
         same = 1;
         for (a = old, b = first; a != NULL || b != NULL;
              a = a->Sibling, b = b->Sibling) {
-            if (a == NULL || b == NULL || !a->Dormant ||
+            if (a == NULL || b == NULL || !a->Dormant || a->IdleQuarantined ||
                 !hcdDormantSame(a, b)) {
                 same = 0;
                 break;
@@ -2215,14 +2224,16 @@ static VOID hcdPdoQuiesce(PHCD_DEVICE_PDO pdo, ULONG removing)
      * (design record 14 section 4.4 (a), (c)). */
     HcdSuspPdoClose(pdo, removing || pdo->Surprised);
     /* A held idle notification (hcd_urb.c, task 28-A.1) is no URB: it
-     * completes here, and its completion has returned, before the
-     * client's stop or removal goes on (Codex review of 28-A.1, round 1,
-     * finding 2). */
+     * completes here (stage A's with the slot, above: 4.4 (d)), and its
+     * completion has returned, before the client's stop or removal goes
+     * on (Codex review of 28-A.1, round 1, finding 2) - waited for after
+     * the URBs below, since a callback may wait on them (4.4 (b), (e)). */
     HcdUrbIdleDrain(pdo);
     /* What a departed device left held here completes now, CANCELED; with
      * Closing set nothing more is held (hcd_io.c, HcdIoPark). */
     (VOID)HcdIoParkedRelease(pdo, 0);
     if (pdo->UrbsPending == 0) {
+        (VOID)HcdSuspIdleRundown(pdo, 1);
         hcdPdoRefusalsWait(pdo, removing);
         return;
     }
@@ -2238,6 +2249,9 @@ static VOID hcdPdoQuiesce(PHCD_DEVICE_PDO pdo, ULONG removing)
         }
         KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
         if (dev != NULL) {
+            /* 4.4 (b): what selective suspend deferred for this PDO
+             * behind a suspended link (hcd_cfg.c). */
+            HcdCfgFlushPdoDeferred(hc, dev, pdo);
             if (pdo->Function) {
                 /* Its own requests only, EP0's included: its siblings
                  * share the device and keep running (design record 13
@@ -2260,6 +2274,9 @@ static VOID hcdPdoQuiesce(PHCD_DEVICE_PDO pdo, ULONG removing)
         HcdRelativeMs(&due, 1);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
     }
+    /* 4.4 (e): the idle rundown, or the quarantine without the DMA-halt
+     * proof (hcd_susp.c). */
+    (VOID)HcdSuspIdleRundown(pdo, 1);
     hcdPdoRefusalsWait(pdo, removing);
 }
 
@@ -2707,8 +2724,14 @@ static NTSTATUS hcdDevicePdoPowerBusy(PHCD_DEVICE_PDO pdo, PIRP irp)
             (VOID)PoSetPowerState(pdo->Common.Self, DevicePowerState,
                                   stack->Parameters.Power.State);
         } else {
-            pdo->Common.SystemPower =
-                stack->Parameters.Power.State.SystemState;
+            /* 6.5: a system state other than S0 settles a stage A idle
+             * IRP and ends its episode; the state is published in the
+             * same controller-lock hold (hcd_susp.c). */
+            if (!HcdSuspIdleSystem(pdo,
+                                   stack->Parameters.Power.State.SystemState)) {
+                pdo->Common.SystemPower =
+                    stack->Parameters.Power.State.SystemState;
+            }
         }
         status = STATUS_SUCCESS;
     } else if (stack->MinorFunction == IRP_MN_QUERY_POWER) {

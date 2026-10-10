@@ -2182,6 +2182,85 @@ try {
                 $c.Reported, $c.Declared, $got, $c.Want, $c.Why)
     }
 
+    # --- selective suspend's test client is refused in a release (36.34) ----
+    #
+    # Design record 14 section 11: the test client under test\pmclient is
+    # never shipped, and the packaging gate refuses it. The matcher is
+    # EXECUTED, loaded from make-release.ps1's text and driven with fixture
+    # directories: clean media passes; the client's binary, its INF or its
+    # tool by name, and a copy renamed but still carrying the marker, are
+    # each refused (the negative tests). Then both call sites are held to
+    # their places before the publish swap.
+    Write-Step "selective suspend's test client is refused in a release"
+    $tcAt = $releaserText.IndexOf('function Find-TestClientFiles')
+    $tcAssertAt = $releaserText.IndexOf('function Assert-NoTestClient')
+    Assert-True ($tcAt -ge 0 -and $tcAssertAt -ge 0) "make-release.ps1 no longer has Find-TestClientFiles / Assert-NoTestClient, so a release can carry the test client."
+    if ($tcAt -ge 0 -and $tcAssertAt -ge 0) {
+        $fnEnd = $releaserText.IndexOf("`n}", $tcAt)
+        Invoke-Expression $releaserText.Substring($tcAt, $fnEnd - $tcAt + 2)
+        $fnEnd = $releaserText.IndexOf("`n}", $tcAssertAt)
+        Invoke-Expression $releaserText.Substring($tcAssertAt, $fnEnd - $tcAssertAt + 2)
+        $tcRoot = Join-Path $script:work "testclient"
+        $tcCases = @(
+            @{ Name = "clean";    File = $null;                          Bytes = $null;                                         Want = 0 },
+            @{ Name = "sys";      File = "release\XHCIPM.SYS";            Bytes = "MZ";                                          Want = 1 },
+            @{ Name = "inf";      File = "xhcipm.inf";                    Bytes = "; inf";                                       Want = 1 },
+            @{ Name = "tool";     File = "xhcisnap\PmCtl.exe";            Bytes = "MZ";                                          Want = 1 },
+            @{ Name = "renamed";  File = "release\usbhelp.sys";           Bytes = "MZ..XHCI98_TEST_CLIENT_DO_NOT_SHIP..";         Want = 1 },
+            @{ Name = "nearmiss"; File = "release\notes.txt";             Bytes = "XHCI98_TEST_CLIENT_DO_NOT_SHI";                Want = 0 }
+        )
+        foreach ($c in $tcCases) {
+            $dir = Join-Path $tcRoot $c.Name
+            New-Item -ItemType Directory -Force -Path (Join-Path $dir "release") | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $dir "release\xhci98.sys"), "MZ this project's driver")
+            [System.IO.File]::WriteAllText((Join-Path $dir "release\xhci98.inf"), "; this project's INF")
+            if ($null -ne $c.File) {
+                $path = Join-Path $dir $c.File
+                New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null
+                [System.IO.File]::WriteAllText($path, $c.Bytes)
+            }
+            $hits = @(Find-TestClientFiles -Root $dir)
+            Assert-True ($hits.Count -eq $c.Want) ("Find-TestClientFiles found {0} file(s) in the '{1}' fixture, not {2}: {3}" -f $hits.Count, $c.Name, $c.Want, ($hits -join ' | '))
+            $refused = $false
+            try { Assert-NoTestClient -Root $dir -What "fixture $($c.Name)" } catch { $refused = $true }
+            Assert-True ($refused -eq ($c.Want -ne 0)) ("Assert-NoTestClient on the '{0}' fixture: refused={1}, expected {2}." -f $c.Name, $refused, ($c.Want -ne 0))
+        }
+    }
+    $tcMarks = @(
+        @{ Name = "the package's test-client check";    Find = 'Assert-NoTestClient -Root $pkgDir' },
+        @{ Name = "the staged release's test-client check"; Find = 'Assert-NoTestClient -Root $destRoot' },
+        @{ Name = "the -Force aside";                   Find = 'Move-Item -LiteralPath $finalRoot -Destination $asideRoot' },
+        @{ Name = "the publish swap";                   Find = 'Move-Item -LiteralPath $destRoot -Destination $finalRoot' }
+    )
+    $tcAt2 = @()
+    foreach ($m in $tcMarks) {
+        $i = $releaserText.IndexOf($m.Find)
+        Assert-True ($i -ge 0) ("make-release.ps1 no longer contains " + $m.Name + " as this test recognises it.")
+        $tcAt2 += $i
+    }
+    if (@($tcAt2 | Where-Object { $_ -lt 0 }).Count -eq 0) {
+        for ($i = 1; $i -lt $tcMarks.Count; $i++) {
+            Assert-True ($tcAt2[$i - 1] -lt $tcAt2[$i]) `
+                ("$($tcMarks[$i - 1].Name) must come before $($tcMarks[$i].Name) in make-release.ps1.")
+        }
+        # Not inside the -SkipUploadSet branch: the staged-release check
+        # runs on every cut (round 1, finding 6). Its line is not indented
+        # under an `if (-not $SkipUploadSet)`.
+        $line = ($releaserText.Substring(0, $tcAt2[1]) -split "`n")[-1]
+        Assert-True ($line.TrimEnd("`r") -eq '    ') "the staged release's test-client check is not at the publish step's own level."
+    }
+    # A renamed tool carrying the marker in a tools directory is refused.
+    if ($tcAt -ge 0 -and $tcAssertAt -ge 0) {
+        $dir = Join-Path $tcRoot "renamedtool"
+        New-Item -ItemType Directory -Force -Path (Join-Path $dir "xhcisnap") | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $dir "xhcisnap\XHCISNAP.EXE"), "MZ XHCI98_TEST_CLIENT_DO_NOT_SHIP")
+        $refused = $false
+        try { Assert-NoTestClient -Root $dir -What "fixture renamedtool" } catch { $refused = $true }
+        Assert-True $refused "a test tool renamed XHCISNAP.EXE in a staged release's tools directory is not refused."
+    }
+    Assert-True ($releaserText.Contains('Assert-NoTestClient -Root $uploadRoot')) `
+        "make-release.ps1's upload assembly no longer refuses the test client."
+
 } finally {
     if (Test-Path -LiteralPath $script:work) {
         Remove-Item -LiteralPath $script:work -Recurse -Force -ErrorAction SilentlyContinue

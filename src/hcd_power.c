@@ -89,28 +89,21 @@ static ULONG hcdResumeContained(PHCD_CONTROLLER hc)
 }
 
 /*
- * The controller suspended, then what clients still have in flight
- * completed now, not in the resume (task 36.28; hcd_io.c,
- * HcdIoSuspendSettle), on the strength of this suspend's own quiesce: a
- * failed one counts in SuspendFailures. The episode's refusal flag is
- * cleared first, under the lock the refusals set it under, before
- * SUSPENDED is published. The power gate held; IRQL: PASSIVE_LEVEL.
+ * The controller suspended: selective suspend's epoch moves and PowerDown
+ * is set first, under the controller lock (from then until the thread
+ * serves the controller powered again, admission completes every Dx at
+ * once), then XhciSuspendController, then a Dx pended before it is settled
+ * (design record 14 section 4.4).
+ * The power gate held; IRQL: PASSIVE_LEVEL.
  */
 static VOID hcdSuspendSettled(PHCD_CONTROLLER hc)
 {
     KIRQL oldIrql;
-    ULONG failures;
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    hc->SuspendRefused = 0;
-    /* Selective suspend's admission completes every Dx at once from here
-     * until the thread serves the controller powered again, and a Dx
-     * pended before it is settled below (design record 14 section 4.4). */
     HcdSuspControllerDownLocked(hc);
     XhciControllerLockRelease(&hc->Hc, oldIrql);
-    failures = hc->Hc.SuspendFailures;
     XhciSuspendController(&hc->Hc);
-    HcdIoSuspendSettle(hc, hc->Hc.SuspendFailures == failures);
     HcdSuspSettleStale(hc);
 }
 

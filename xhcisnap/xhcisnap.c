@@ -1908,6 +1908,41 @@ static const char *const msi_counter_names[SNAP_MSI_WORDS] = {
     "MsiFilterMessages", "MsiFilterLines", "MsiFilterStripped"
 };
 
+/* Selective suspend's counters (task 36.33), appended at word 114 after
+ * the MSI words above. */
+#define SNAP_HCD_SUSP_AT            114UL
+#define SNAP_HCD_SUSP_WORDS         28UL
+static const char *const hcd_susp_counter_names[SNAP_HCD_SUSP_WORDS] = {
+    "SuspSwitchRead",
+    "SuspSwitch",
+    "SuspSuspendsBegun",
+    "SuspResumesBegun",
+    "SuspWakesBegun",
+    "SuspSuspended",
+    "SuspActive",
+    "SuspRefused",
+    "SuspRefusedReason",
+    "SuspUncertain",
+    "SuspGone",
+    "SuspArms",
+    "SuspDisarms",
+    "SuspWakeEvents",
+    "SuspWakeUnclaimed",
+    "SuspWaitWakesCompleted",
+    "SuspStaleSamples",
+    "SuspDxPended",
+    "SuspDxStale",
+    "SuspSlowDeferred",
+    "IdleBatches",
+    "IdleCalls",
+    "IdleReturns",
+    "IdleSkips",
+    "IdleCancels",
+    "IdleAbandoned",
+    "IdleQuarantined",
+    "SuspNotesSuppressed",
+};
+
 /*
  * The HCD image's layout as its header gives it, checked against the bytes
  * that arrived: 1 when every figure fits. print_hcd refuses a shape that
@@ -2049,6 +2084,10 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
             comp("  %-26s %lu\n", hcd_counter_names[i], v);
         } else if (i < SNAP_MSI_FIRST + SNAP_MSI_WORDS) {
             comp("  %-26s %lu\n", msi_counter_names[i - SNAP_MSI_FIRST], v);
+        } else if (i >= SNAP_HCD_SUSP_AT &&
+                   i < SNAP_HCD_SUSP_AT + SNAP_HCD_SUSP_WORDS) {
+            comp("  %-26s %lu\n", hcd_susp_counter_names[i - SNAP_HCD_SUSP_AT],
+                 v);
         } else {
             comp("  counter %-18lu %lu\n", i, v);
         }

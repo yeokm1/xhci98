@@ -37,7 +37,7 @@ static void test_header(void)
              "a sixteen-word record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 816,
              "records right after the header");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 114,
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 142,
              "the whole counter block");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS_AT),
              816 + 18 * 64, "counters after the last record");
@@ -47,8 +47,8 @@ static void test_header(void)
              "past the header reads 0");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_COUNTER_WORDS * sizeof(ULONG),
              sizeof(XHCIHC_COUNTERS), "the counters word for word");
-    CHECK_EQ(XhciSnapHcdWords(18), 204 + 18 * 16 + 114, "the E460's image");
-    CHECK_EQ(XhciSnapHcdWords(0), 204 + 114,
+    CHECK_EQ(XhciSnapHcdWords(18), 204 + 18 * 16 + 142, "the E460's image");
+    CHECK_EQ(XhciSnapHcdWords(0), 204 + 142,
              "no ports: a header and the counters");
     CHECK_EQ(XhciSnapHcdWords(1000), XhciSnapHcdWords(XHCI_MAX_ROOT_PORTS),
              "ports held to the root port maximum");

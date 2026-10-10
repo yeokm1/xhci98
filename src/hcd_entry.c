@@ -89,6 +89,7 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     HcdDriverObject = DriverObject;
     HcdUrbInit();
     HcdPdoRetireInit();
+    HcdSuspDriverInit();
     HcdSerialInit();
     for (i = 0; i <= IRP_MJ_MAXIMUM_FUNCTION; i++) {
         DriverObject->MajorFunction[i] = hcdDispatchOther;
@@ -103,6 +104,9 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 static VOID NTAPI hcdUnload(PDRIVER_OBJECT DriverObject)
 {
     UNREFERENCED_PARAMETER(DriverObject);
+    /* An idle callback thread a stop abandoned leaves the image only
+     * after its callback has returned (design record 14 section 4.4). */
+    HcdSuspDriverUnload();
 }
 
 static NTSTATUS NTAPI hcdAddDevice(PDRIVER_OBJECT DriverObject,

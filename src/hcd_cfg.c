@@ -168,21 +168,6 @@ NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         }
         return HcdIoRefuseLater(pdo, irp, urb, HCD_USBD_DEVICE_GONE);
     }
-    if ((hc->Hc.Flags & XHCI_EXT_FLAG_SUSPENDED) != 0) {
-        /* Task 36.28: not queued behind a suspended controller, whose
-         * resume a client may be holding up (hcd_io.c,
-         * HcdIoSuspendSettle); refused as a leaving device's are, and the
-         * save given up so the resume enumerates afresh (hcd_io.c,
-         * hcdGo). */
-        hc->Hc.SavedStateValid = 0;
-        hc->SuspendRefused = 1;
-        XhciControllerLockRelease(&hc->Hc, oldIrql);
-        (VOID)InterlockedDecrement(&dev->Refs);
-        if (urb == NULL) {
-            return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
-        }
-        return HcdIoRefuseLater(pdo, irp, urb, HCD_USBD_DEVICE_GONE);
-    }
     /* The dispatch stamp (HcdIoStamp) moves to DriverContext[1], unused
      * while queued, so a hold of it (hcdCfgHoldUnreadable) is measured
      * against an abort in the order the two were submitted. */
@@ -267,14 +252,26 @@ static VOID NTAPI hcdCfgDeferCancel(PDEVICE_OBJECT DeviceObject, PIRP irp)
     hcdCfgComplete(dev, irp, hcdCfgUrbOf(irp), HCD_USBD_CANCELED);
 }
 
-/* Thread only. */
+/* Thread only. An IRP of a PDO being torn down is not deferred but
+ * completed CANCELLED: its quiesce has detached, or is about to detach,
+ * that PDO's deferred IRPs (HcdCfgFlushPdoDeferred), and Closing is set
+ * before that detachment takes the lock (Codex review of 36.32, round 1,
+ * finding 1). */
 static VOID hcdCfgDefer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PIRP irp)
 {
+    PHCD_DEVICE_PDO pdo;
     KIRQL oldIrql;
     ULONG back;
 
     back = 0;
+    pdo = (PHCD_DEVICE_PDO)irp->Tail.Overlay.DriverContext[2];
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (pdo->Closing) {
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        hcdCfgComplete(dev, irp, hcdCfgUrbOf(irp), HCD_USBD_CANCELED);
+        return;
+    }
+    hc->Counters.SuspSlowDeferred++;
     InsertTailList(&dev->SlowDeferred, &irp->Tail.Overlay.ListEntry);
     (VOID)IoSetCancelRoutine(irp, hcdCfgDeferCancel);
     if (irp->Cancel && IoSetCancelRoutine(irp, NULL) != NULL) {
@@ -315,6 +312,44 @@ static ULONG hcdCfgDeferredTake(PHCD_USB_DEVICE dev, PLIST_ENTRY to,
         any = 1;
     }
     return any;
+}
+
+/*
+ * A PDO's teardown (hcd_pdo.c, hcdPdoQuiesce; design record 14 section 4.4
+ * (b), initiate): its slow IRPs deferred behind a suspended link are
+ * detached - but any a cancel routine owns - and completed CANCELLED
+ * outside the lock, since nothing resumes the link for a function being
+ * torn down and its URB count would never drain. Closing is set first.
+ * The caller holds a device reference. IRQL: PASSIVE_LEVEL.
+ */
+VOID HcdCfgFlushPdoDeferred(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                            PHCD_DEVICE_PDO pdo)
+{
+    LIST_ENTRY mine;
+    PLIST_ENTRY entry;
+    PLIST_ENTRY next;
+    PIRP irp;
+    KIRQL oldIrql;
+
+    InitializeListHead(&mine);
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    for (entry = dev->SlowDeferred.Flink; entry != &dev->SlowDeferred;
+         entry = next) {
+        next = entry->Flink;
+        irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
+        if (irp->Tail.Overlay.DriverContext[2] != pdo ||
+            IoSetCancelRoutine(irp, NULL) == NULL) {
+            continue;
+        }
+        RemoveEntryList(entry);
+        InsertTailList(&mine, entry);
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    while (!IsListEmpty(&mine)) {
+        entry = RemoveHeadList(&mine);
+        irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
+        hcdCfgComplete(dev, irp, hcdCfgUrbOf(irp), HCD_USBD_CANCELED);
+    }
 }
 
 /* The device's link is ACTIVE again (hcd_susp.c): its deferred IRPs back
@@ -373,25 +408,6 @@ static VOID hcdCfgHoldUnreadable(PHCD_USB_DEVICE dev, PIRP irp, PURB urb)
         (VOID)InterlockedDecrement(&pdo->UrbsPending);
     }
     (VOID)InterlockedDecrement(&dev->Refs);
-}
-
-/* Whether any slow IRP is queued for the thread, or deferred on a device
- * (task 36.28, HcdIoSuspendSettle). Controller lock held. */
-ULONG HcdCfgSlowQueued(PHCD_CONTROLLER hc)
-{
-    PHCD_USB_DEVICE dev;
-    ULONG slot;
-
-    if (!IsListEmpty(&hc->SlowIrps)) {
-        return 1;
-    }
-    for (slot = 1; slot <= XHCI_MAX_SLOTS; slot++) {
-        dev = hc->SlotDevice[slot];
-        if (dev != NULL && !IsListEmpty(&dev->SlowDeferred)) {
-            return 1;
-        }
-    }
-    return 0;
 }
 
 /* A device leaving (hcd_io.c, HcdIoDeviceGone): its queued slow URBs

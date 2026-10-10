@@ -246,6 +246,35 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
     XhciLogAppend(log, "qemu.inj.deadline.isr", (ULONG)hc->QemuDeadClaims,
                   1);
 #endif
+    /* Selective suspend (design record 14; 36.33). */
+    XhciLogAppend(log, "susp.switch.read", hc->Counters.SuspSwitchRead, 1);
+    XhciLogAppend(log, "susp.switch", hc->Counters.SuspSwitch, 1);
+    XhciLogAppend(log, "susp.suspends", hc->Counters.SuspSuspendsBegun, 1);
+    XhciLogAppend(log, "susp.resumes", hc->Counters.SuspResumesBegun, 1);
+    XhciLogAppend(log, "susp.wakes", hc->Counters.SuspWakesBegun, 1);
+    XhciLogAppend(log, "susp.out.suspended", hc->Counters.SuspSuspended, 1);
+    XhciLogAppend(log, "susp.out.active", hc->Counters.SuspActive, 1);
+    XhciLogAppend(log, "susp.out.refused", hc->Counters.SuspRefused, 1);
+    XhciLogAppend(log, "susp.refused.reason", hc->Counters.SuspRefusedReason, 1);
+    XhciLogAppend(log, "susp.out.uncertain", hc->Counters.SuspUncertain, 1);
+    XhciLogAppend(log, "susp.out.gone", hc->Counters.SuspGone, 1);
+    XhciLogAppend(log, "susp.arms", hc->Counters.SuspArms, 1);
+    XhciLogAppend(log, "susp.disarms", hc->Counters.SuspDisarms, 1);
+    XhciLogAppend(log, "susp.wake.events", hc->Counters.SuspWakeEvents, 1);
+    XhciLogAppend(log, "susp.wake.unclaimed", hc->Counters.SuspWakeUnclaimed, 1);
+    XhciLogAppend(log, "susp.waitwake.done", hc->Counters.SuspWaitWakesCompleted, 1);
+    XhciLogAppend(log, "susp.stale", hc->Counters.SuspStaleSamples, 1);
+    XhciLogAppend(log, "susp.dirp.pended", hc->Counters.SuspDxPended, 1);
+    XhciLogAppend(log, "susp.dx.stale", hc->Counters.SuspDxStale, 1);
+    XhciLogAppend(log, "susp.slow.deferred", hc->Counters.SuspSlowDeferred, 1);
+    XhciLogAppend(log, "idle.batches", hc->Counters.IdleBatches, 1);
+    XhciLogAppend(log, "idle.calls", hc->Counters.IdleCalls, 1);
+    XhciLogAppend(log, "idle.returns", hc->Counters.IdleReturns, 1);
+    XhciLogAppend(log, "idle.skips", hc->Counters.IdleSkips, 1);
+    XhciLogAppend(log, "idle.cancels", hc->Counters.IdleCancels, 1);
+    XhciLogAppend(log, "idle.abandoned", hc->Counters.IdleAbandoned, 1);
+    XhciLogAppend(log, "idle.quarantined", hc->Counters.IdleQuarantined, 1);
+    XhciLogAppend(log, "susp.notes.suppressed", hc->Counters.SuspNotesSuppressed, 1);
     hcdLogTolLocked(ext, log);
 }
 
