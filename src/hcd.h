@@ -1239,6 +1239,16 @@ typedef struct _HCD_CONTROLLER {
     KEVENT DoorGate;
     ULONG DoorRequests;
     ULONG DoorPassThru;
+    /* Task 36.45: GET_DESCRIPTOR_FROM_NODE_CONNECTION requests the cache
+     * cannot answer, pended for the thread (hcd_door.c); linked through
+     * Tail.Overlay.ListEntry, the device record referenced in
+     * DriverContext[0], the door FDO's I/O count and its event in [1] and
+     * [2]. Open while the thread runs. Controller lock. */
+    LIST_ENTRY DoorIrps;
+    ULONG DoorQueueOpen;
+    ULONG DoorForwarded;            /* sent to the device                  */
+    ULONG DoorForwardFailed;        /* ... and not answered with success   */
+    ULONG DoorWithdrawn;            /* past the deadline, taken off EP0    */
     /* Root-hub FDO requests inside this controller (hcd_rh.c): raised under
      * the root-hub PDO's ControllerLock while it still names this
      * controller, and drained by the orphaning before the storage goes. */
@@ -1568,6 +1578,9 @@ ULONG HcdThreadControlOutcome(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                               UCHAR requestType, UCHAR request,
                               USHORT value, USHORT index, ULONG length,
                               PULONG bytes);
+ULONG HcdThreadControlDoor(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                           USHORT value, USHORT index, ULONG length,
+                           PULONG bytes);
 ULONG HcdThreadReaddress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 /* dev->SerialState (33.2): not read yet, no iSerialNumber, a usable serial
  * id, a string read that is no instance id, every read try failed. */
@@ -1786,11 +1799,17 @@ VOID HcdDoorRootHubStop(PHCD_ROOTHUB_FDO fdo);
 VOID HcdDoorRootHubRemove(PHCD_ROOTHUB_FDO fdo, PHCD_CONTROLLER hc);
 NTSTATUS HcdDoorCreateClose(PIRP irp);
 NTSTATUS HcdDoorControllerIoctl(PHCD_CONTROLLER hc, PIRP irp);
-NTSTATUS HcdDoorRootHubIoctl(PHCD_CONTROLLER hc, PIRP irp);
+NTSTATUS HcdDoorRootHubIoctl(PHCD_CONTROLLER hc, PIRP irp, PLONG io,
+                             PKEVENT ioDone);
 VOID HcdDoorHubStart(PHCD_HUB_FDO fdo, PHCD_CONTROLLER hc);
 VOID HcdDoorHubStop(PHCD_HUB_FDO fdo);
 VOID HcdDoorHubRemove(PHCD_HUB_FDO fdo, PHCD_CONTROLLER hc);
-NTSTATUS HcdDoorHubIoctl(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO hub, PIRP irp);
+NTSTATUS HcdDoorHubIoctl(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO hub, PIRP irp,
+                         PLONG io, PKEVENT ioDone);
+VOID HcdDoorService(PHCD_CONTROLLER hc, ULONG serve);
+VOID HcdDoorFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+VOID HcdDoorQueueOpen(PHCD_CONTROLLER hc);
+VOID HcdDoorQueueClose(PHCD_CONTROLLER hc);
 VOID HcdDoorDeviceStart(PHCD_DEVICE_PDO pdo);
 VOID HcdDoorDeviceStop(PHCD_DEVICE_PDO pdo, ULONG release);
 

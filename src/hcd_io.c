@@ -2139,6 +2139,10 @@ ULONG HcdIoDeviceDrain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     dev->Gone = 1;
     XhciControllerLockRelease(&hc->Hc, oldIrql);
+    /* A queued door request holds a reference and no DMA: completed even
+     * when the record must be kept, so neither the thread's wait for the
+     * references nor a door FDO's REMOVE waits on it (task 36.45). */
+    HcdDoorFlushDevice(hc, dev);
     if (hc->CommonBufferPinned) {
         /* The controller could not be proven to have stopped mastering:
          * its rings still name the clients' buffers, so none goes back.

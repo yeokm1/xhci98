@@ -576,6 +576,82 @@ static ULONG hcdResetEp0(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     return 1;
 }
 
+/* What hcdEp0Withdraw did with the thread's own transfer. */
+#define HCD_EP0_NOT_WITHDRAWN   0UL /* left to the controller recovery    */
+#define HCD_EP0_WITHDRAWN       1UL /* off the ring, the scratch free     */
+#define HCD_EP0_COMPLETED       2UL /* it completed before the stop       */
+
+/*
+ * A door transfer (task 36.45, design record 13 section 8.11) the device
+ * has not ended by its deadline, taken back without the controller
+ * recovery the thread's other transfers fall to: EP0 stopped (Stop
+ * Endpoint), and once it reads Stopped with the thread's record the only
+ * one queued - the quiet wait let every client transfer finish and EP0's
+ * gate holds the rest - the record leaves the engine's queue and the
+ * dequeue moves to the enqueue position (Set TR Dequeue). A stopped TD is
+ * not processed again (xHCI 4.6.9), so the scratch is free; the device
+ * drops the unfinished control transfer at the next SETUP. A Stop
+ * Endpoint's own Transfer Event completes nothing (hcd_dev.c), so an
+ * Ep0Done read after it is a real completion. A device behind a TT is not
+ * withdrawn: its stopped split may hold the hub's TT buffer, and the clear
+ * that frees it reports no failure (HcdHubClearTt), so the withdrawal could
+ * not be finished checked. That, and anything else - a command failing,
+ * EP0 Halted or in Error, another record queued - is left to the caller's
+ * recovery, EP0 still paused. Thread only, powered, EP0 paused.
+ */
+static ULONG hcdEp0Withdraw(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    XHCI_TRB trb;
+    KIRQL oldIrql;
+    ULONG control;
+    ULONG code;
+    ULONG state;
+    ULONG pa;
+    ULONG dcs;
+    ULONG ok;
+
+    if (dev->TtSlot != 0) {
+        return HCD_EP0_NOT_WITHDRAWN;
+    }
+    state = hcdEp0State(hc, dev);
+    if (state == XHCI_EP_STATE_RUNNING) {
+        code = 0;
+        if (XhciTrbStopEndpoint(&trb, dev->SlotId, 1, 0) == XHCI_RING_OK) {
+            code = hcdCommand(hc, &trb, &control);
+        }
+        if (code != XHCI_CC_SUCCESS && code != XHCI_CC_CONTEXT_STATE_ERROR) {
+            return HCD_EP0_NOT_WITHDRAWN;
+        }
+        state = hcdEp0State(hc, dev);
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (dev->Ep0Done) {
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        return HCD_EP0_COMPLETED;
+    }
+    ok = state == XHCI_EP_STATE_STOPPED && !dev->Gone &&
+         dev->Ep0Queue.Head == &dev->Ep0Xfer && dev->Ep0Xfer.Next == NULL &&
+         XhciXferQueueRemove(&dev->Ep0Queue, &dev->Ep0Xfer) &&
+         XhciRingSetDequeue(&dev->Ep0, XhciRingTrbPA(&dev->Ep0,
+                                                     dev->Ep0.Enqueue)) ==
+             XHCI_RING_OK;
+    pa = XhciRingDequeuePA(&dev->Ep0);
+    dcs = XhciRingDequeueCycle(&dev->Ep0);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (!ok) {
+        return HCD_EP0_NOT_WITHDRAWN;
+    }
+    if (XhciTrbSetTrDequeue(&trb, dev->SlotId, 1, pa, dcs) != XHCI_RING_OK ||
+        hcdCommand(hc, &trb, &control) != XHCI_CC_SUCCESS) {
+        /* Off the queue but not repositioned: the controller keeps the old
+         * dequeue, which the recovery's HCRST settles. */
+        return HCD_EP0_NOT_WITHDRAWN;
+    }
+    hc->DoorWithdrawn++;
+    XhciLogNote(&hc->Hc, "door.ep0.withdrawn", dev->SlotId);
+    return HCD_EP0_WITHDRAWN;
+}
+
 /*
  * The records an unpowered root-hub detach left Abandoned - off their
  * ports, their slots still enabled - get their Disable Slot at the first
@@ -941,7 +1017,11 @@ static ULONG hcdEp0Quiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                    UCHAR requestType, UCHAR request,
                                    USHORT value, USHORT index, ULONG length,
-                                   PULONG bytes);
+                                   ULONG soft, PULONG bytes);
+static ULONG hcdThreadControlAny(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                 UCHAR requestType, UCHAR request,
+                                 USHORT value, USHORT index, ULONG length,
+                                 ULONG soft, PULONG bytes);
 
 ULONG HcdThreadControl(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                        UCHAR requestType, UCHAR request, USHORT value,
@@ -979,6 +1059,27 @@ ULONG HcdThreadControlOutcome(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                               UCHAR requestType, UCHAR request,
                               USHORT value, USHORT index, ULONG length,
                               PULONG bytes)
+{
+    return hcdThreadControlAny(hc, dev, requestType, request, value, index,
+                               length, 0, bytes);
+}
+
+/* The door's GET_DESCRIPTOR (task 36.45): the same, and a transfer past its
+ * deadline is withdrawn from EP0 (hcdEp0Withdraw) rather than recovered
+ * with the controller, where that can be done; NOT_SENT either way. Thread
+ * only. */
+ULONG HcdThreadControlDoor(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                           USHORT value, USHORT index, ULONG length,
+                           PULONG bytes)
+{
+    return hcdThreadControlAny(hc, dev, 0x80, 6, value, index, length, 1,
+                               bytes);
+}
+
+static ULONG hcdThreadControlAny(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                 UCHAR requestType, UCHAR request,
+                                 USHORT value, USHORT index, ULONG length,
+                                 ULONG soft, PULONG bytes)
 {
     ULONG outcome;
 
@@ -1025,7 +1126,7 @@ ULONG HcdThreadControlOutcome(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         return HCD_CTL_NOT_SENT;
     }
     outcome = hcdThreadControlQuiet(hc, dev, requestType, request, value,
-                                    index, length, bytes);
+                                    index, length, soft, bytes);
     if (!dev->Ep0Stuck) {
         /* A timed-out one leaves EP0 paused for the reset it requested. */
         HcdIoPipeResume(hc, &dev->Ep0Pipe);
@@ -1033,11 +1134,13 @@ ULONG HcdThreadControlOutcome(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     return outcome;
 }
 
-/* The transfer itself, on a quiet EP0; HCD_CTL_*. Thread only. */
+/* The transfer itself, on a quiet EP0; HCD_CTL_*. `soft`: a door transfer,
+ * withdrawn at its deadline where it can be (hcdEp0Withdraw). Thread
+ * only. */
 static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                    UCHAR requestType, UCHAR request,
                                    USHORT value, USHORT index, ULONG length,
-                                   PULONG bytes)
+                                   ULONG soft, PULONG bytes)
 {
     XHCI_CONTROL_REQUEST req;
     XHCI_TRB trbs[XHCI_XFER_MAX_CONTROL_TRBS];
@@ -1204,6 +1307,17 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         hc->ScratchHeld = dev->SlotId;
         XhciLogNote(&hc->Hc, "tol.cycle.wait", dev->SlotId);
         return HCD_CTL_ABANDONED;
+    }
+    if (!done && soft) {
+        switch (hcdEp0Withdraw(hc, dev)) {
+        case HCD_EP0_WITHDRAWN:
+            return HCD_CTL_NOT_SENT;
+        case HCD_EP0_COMPLETED:
+            done = 1;
+            break;
+        default:
+            break;
+        }
     }
     if (!done) {
         /* The TD is still on the ring and may yet DMA into the scratch:
@@ -4688,6 +4802,8 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
         hcdDetach(hc, powered);
     }
     if (!powered) {
+        /* Task 36.45: a diagnostic read is not held across D3. */
+        HcdDoorService(hc, 0);
         return;
     }
     if (!outstanding) {
@@ -4713,6 +4829,11 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
         HcdCfgCancelService(hc);
         /* The URBs that need commands (hcd_cfg.c). */
         HcdCfgService(hc);
+        /* Then the door's descriptor reads (task 36.45). */
+        HcdDoorService(hc, 1);
+    }
+    if (hcdHalted(hc)) {
+        HcdDoorService(hc, 0);
     }
     if (!hcdHalted(hc)) {
         /* 29-A.5's send-backs, after the URBs that may have asked for

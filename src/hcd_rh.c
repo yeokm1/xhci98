@@ -742,7 +742,8 @@ NTSTATUS HcdRootHubFdoDeviceControl(PHCD_ROOTHUB_FDO fdo, PIRP irp)
         return HcdCompleteIrp(irp, STATUS_DELETE_PENDING, 0);
     }
     hc = hcdRhControllerEnter(fdo);
-    status = HcdDoorRootHubIoctl(hc, irp);
+    status = HcdDoorRootHubIoctl(hc, irp, &fdo->OutstandingIo,
+                                 &fdo->RemoveEvent);
     hcdRhControllerLeave(hc);
     hcdRhIoLeave(fdo);
     return status;

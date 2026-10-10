@@ -352,7 +352,8 @@ NTSTATUS HcdHubFdoDeviceControl(PHCD_HUB_FDO fdo, PIRP irp)
         return HcdCompleteIrp(irp, STATUS_DEVICE_NOT_CONNECTED, 0);
     }
     hc = hcdHubControllerEnter(fdo);
-    status = HcdDoorHubIoctl(hc, hcdHubPdoOf(fdo), irp);
+    status = HcdDoorHubIoctl(hc, hcdHubPdoOf(fdo), irp, &fdo->OutstandingIo,
+                             &fdo->RemoveEvent);
     hcdHubControllerLeave(fdo, hc);
     hcdHubIoLeave(fdo);
     return status;

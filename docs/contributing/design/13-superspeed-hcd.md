@@ -2346,8 +2346,11 @@ for the length of one transfer.
   as usbhub's cancel leaves the device alone, rather than meeting the rule
   of the thread's other transfers, which recover the controller because the
   scratch may still be written (design record 07): an arbitrary descriptor
-  reaches firmware paths enumeration never does, and a diagnostic tool must
-  not drop every device on the controller. The door's transfer
+  reaches firmware paths enumeration never does, and a diagnostic tool
+  should not drop every device on the controller. The withdrawal spares the
+  other devices when the device has no TT and every step succeeds; a device
+  behind a TT, and a withdrawal that fails, still cost the controller
+  recovery (below). The door's transfer
   (`HcdThreadControlDoor`) differs from the others only at its deadline,
   where `hcdEp0Withdraw` - EP0 still paused, so no client transfer is
   behind it - stops EP0 (Stop Endpoint); if EP0 then reads Stopped and the
@@ -2367,12 +2370,20 @@ for the length of one transfer.
   EP0 still paused and the scratch not reused, the rule as before. Under
   XhciTolerance a cycle mark ends the wait as for any thread transfer
   (35-T.3/4).
-- *The bound a taken request is not cancellable for:* up to 5 s quieting
-  EP0, up to 5 s for the transfer, and, at its deadline, the withdrawal's
-  two commands, each bounded by the command engine's own wait
-  (`HCD_COMMAND_WAIT_MS`, 5 s, after which the engine recovers the
-  controller): about 20 s at the worst, under the power gate. Time spent
-  queued is not counted in it; a queued request stays cancellable.
+- *How long a taken request is not cancellable:* no single deadline covers
+  it, and none is claimed. It is the sum of the thread path's separate
+  waits, each bounded on its own and each ending in the bus's existing
+  handling when it runs out: quieting EP0 (5 s for client transfers to
+  finish, plus whatever an EP0 halt found there costs to recover - its
+  commands and, behind a TT, the TT clear - which runs before that
+  deadline is next looked at), the transfer (5 s), and at the deadline the
+  withdrawal's two commands. Every command waits up to
+  `HCD_COMMAND_WAIT_MS` (5 s) for admission and again for its completion,
+  and a command that does not complete is the command engine's to recover
+  (the controller recovery). So a healthy device answers in milliseconds,
+  a hung one costs tens of seconds of the thread under the power gate, and
+  nothing is unbounded. Time spent queued is not counted; a queued request
+  stays cancellable.
 - *Cancellation:* while queued the IRP is cancellable (the cancel-safe queue
   pattern of `hcd_io.c`'s waiting list: the thread takes an IRP only once it
   has cleared its cancel routine, a routine already running takes the IRP
@@ -2412,7 +2423,12 @@ through `XhciPipeNtStatus`, as a client URB reads). Not sent within the
 bound, withdrawn at its deadline, or abandoned for a cycle:
 `STATUS_CANCELLED`, what usbhub's timeout cancel returns. Device gone:
 `STATUS_DEVICE_NOT_CONNECTED`. A queue that is closed, or a pass that
-cannot serve: `STATUS_DEVICE_NOT_READY`.
+cannot serve: `STATUS_DEVICE_NOT_READY`. A forwarded request that fails
+leaves the log note `door.desc.fail` (the thread outcome, `HCD_CTL_*`, in
+the top byte, `wValue` in the low word), and a withdrawal
+`door.ep0.withdrawn` (the slot); the counts `DoorForwarded`,
+`DoorForwardFailed` and `DoorWithdrawn` are kept in the controller
+extension, outside the counter block.
 
 **Devices not addressed, being reset, suspended.** The door forwards only
 for a device with a PDO (enumerated, addressed and published), or a hub the
