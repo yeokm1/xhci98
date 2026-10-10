@@ -2352,15 +2352,27 @@ for the length of one transfer.
   where `hcdEp0Withdraw` - EP0 still paused, so no client transfer is
   behind it - stops EP0 (Stop Endpoint); if EP0 then reads Stopped and the
   thread's record is the only one queued, the record leaves the engine's
-  queue, the dequeue moves to the enqueue position (Set TR Dequeue), and
-  behind a TT the hub's buffer is cleared. A stopped TD is not processed
-  again (xHCI 4.6.9), so the scratch is free, and the device drops the
-  unfinished control transfer at the next SETUP. A Stop Endpoint's own
-  Transfer Event completes nothing (`hcd_dev.c`), so a completion seen
-  after the stop is the device's and is answered as one. Any step that
-  fails - a command, EP0 Halted or in Error, another record queued - falls
-  back to the controller recovery, the rule as before. Under XhciTolerance
-  a cycle mark ends the wait as for any thread transfer (35-T.3/4).
+  queue and the dequeue moves to the enqueue position (Set TR Dequeue). A
+  stopped TD is not processed again (xHCI 4.6.9), so the scratch is free,
+  and the device drops the unfinished control transfer at the next SETUP.
+  A Stop Endpoint's own Transfer Event completes nothing (`hcd_dev.c`), so
+  a completion seen after the stop is the device's and is answered as one.
+  **A device behind a TT (a Full- or Low-Speed device behind a High-Speed
+  hub, `TtSlot` set) is not withdrawn**: its stopped split transaction may
+  hold the hub's TT buffer, and clearing it (`HcdHubClearTt`) is a second
+  device's EP0 transfer whose failure the helper only counts, so there is
+  no checked way to finish the withdrawal - such a device keeps the
+  controller recovery. Any step that fails - a command, EP0 Halted or in
+  Error, another record queued - falls back to the controller recovery too,
+  EP0 still paused and the scratch not reused, the rule as before. Under
+  XhciTolerance a cycle mark ends the wait as for any thread transfer
+  (35-T.3/4).
+- *The bound a taken request is not cancellable for:* up to 5 s quieting
+  EP0, up to 5 s for the transfer, and, at its deadline, the withdrawal's
+  two commands, each bounded by the command engine's own wait
+  (`HCD_COMMAND_WAIT_MS`, 5 s, after which the engine recovers the
+  controller): about 20 s at the worst, under the power gate. Time spent
+  queued is not counted in it; a queued request stays cancellable.
 - *Cancellation:* while queued the IRP is cancellable (the cancel-safe queue
   pattern of `hcd_io.c`'s waiting list: the thread takes an IRP only once it
   has cleared its cancel routine, a routine already running takes the IRP
@@ -2383,9 +2395,10 @@ for the length of one transfer.
   recovery; a pass with the scratch held for a cycle leaves them for the
   next. **The queue's rundown** is the thread's last act before it signals
   its exit and before any controller resource goes: under the controller
-  lock the queue is closed (the door queues nothing on a closed queue), the
-  IRPs whose cancel routines it can clear are completed, and it then waits,
-  outside every lock, until the list is empty and `CancelsRunning` is 0 -
+  lock the queue is closed (the door queues nothing on a closed queue) and
+  the IRPs whose cancel routines it can clear are unlinked; the lock is
+  released, those IRPs are completed, and it then waits, outside every
+  lock, until the list is empty and `CancelsRunning` is 0 -
   a cancel routine the close could not pre-empt unlinks its IRP itself and
   may still be completing it, and it raises that count before it releases
   the cancel lock and drops it as its very last access to the controller.
