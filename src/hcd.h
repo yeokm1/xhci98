@@ -2136,6 +2136,7 @@ VOID HcdSuspDriverInit(VOID);
 VOID HcdSuspDriverUnload(VOID);
 /* hcd_cfg.c's half of 3.3's deferral */
 VOID HcdCfgUndefer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+ULONG HcdCfgRewind(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PHCD_PIPE pipe);
 VOID HcdCfgFlushPdoDeferred(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                             struct _HCD_DEVICE_PDO *pdo);
 
