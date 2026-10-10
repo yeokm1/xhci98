@@ -2533,6 +2533,9 @@ static VOID hcdStopBody(PHCD_CONTROLLER hc)
      * and the devices' slots are settled at their unlink (design record 14
      * section 4.4). */
     HcdSuspCbStop(hc);
+    /* The thread's deferred completions done before anything of the
+     * controller goes (hcd_susp.c). */
+    HcdSuspDoneDrain(hc);
     (VOID)XhciControllerUpdateFlags(ext,
                                     XHCI_EXT_FLAG_STARTED |
                                         XHCI_EXT_FLAG_INTERRUPTS |
