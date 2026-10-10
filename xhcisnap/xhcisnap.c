@@ -4530,12 +4530,9 @@ static void print_ssusp(const unsigned char *image, unsigned long bytes)
 
     headBytes = get32(image, 4);
     if (headBytes == SNAP_HCD_SSUSP_BRANCH_WORDS * 4) {
-        comp("
-selective suspend, stage B: a %lu-byte header, a stage B "
-             "branch build's
-  (its words at 204, before the integration "
-             "moved them to 237); not decoded.
-", headBytes);
+        comp("\nselective suspend, stage B: a %lu-byte header, a stage B "
+             "branch build's\n  (its words at 204, before the integration "
+             "moved them to 237); not decoded.\n", headBytes);
         return;
     }
     if (headBytes < SNAP_HCD_SSUSP_HEAD_WORDS * 4 || bytes < headBytes) {
