@@ -111,6 +111,7 @@ ULONG XhciPipeFindInterface(const UCHAR *config, ULONG length,
     inTarget = 0;
     matched = 0;
     found.EndpointCount = 0;
+    found.EndpointSurplus = 0;
     offset = (ULONG)config[0];
     while (offset < total) {
         /* A one-byte tail cannot even hold bDescriptorType. */
@@ -148,10 +149,10 @@ ULONG XhciPipeFindInterface(const UCHAR *config, ULONG length,
             if (bLength < XHCI_PIPE_ENDPOINT_BYTES) {
                 return XHCI_PIPE_MALFORMED;
             }
-            if (inTarget) {
-                if (found.EndpointCount >= declared) {
-                    return XHCI_PIPE_MALFORMED;
-                }
+            if (inTarget && found.EndpointCount >= declared) {
+                /* Past bNumEndpoints: usbport never reads it (header). */
+                found.EndpointSurplus++;
+            } else if (inTarget) {
                 dci = XhciPipeDci((ULONG)config[offset + 2]);
                 if (dci == 0 || (seen & XHCI_PIPE_DCI_BIT(dci)) != 0) {
                     return XHCI_PIPE_MALFORMED;

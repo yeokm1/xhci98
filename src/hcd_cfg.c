@@ -478,6 +478,31 @@ static VOID hcdCfgCountAsked(PHCD_CONTROLLER hc, PULONG asked, ULONG n)
     hc->Counters.SelectEndpointsRequested += n;
 }
 
+/* Task 36.46: an interface carrying endpoint descriptors past its
+ * bNumEndpoints is opened with bNumEndpoints pipes, as usbport opens it
+ * (XhciPipeFindInterface), and says so in the log in every flavour so a
+ * report shows the tolerance taken. Thread only; no lock held. */
+static VOID hcdCfgNoteSurplus(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                              const XHCI_PIPE_IFACE *iface)
+{
+    ULONG surplus;
+
+    if (iface->EndpointSurplus == 0) {
+        return;
+    }
+    surplus = iface->EndpointSurplus > 0xFFUL ? 0xFFUL
+                                              : iface->EndpointSurplus;
+    XhciLogNote(&hc->Hc, "cfg.ep.surplus.vidpid",
+                ((ULONG)dev->DeviceDesc[9] << 24) |
+                    ((ULONG)dev->DeviceDesc[8] << 16) |
+                    ((ULONG)dev->DeviceDesc[11] << 8) |
+                    (ULONG)dev->DeviceDesc[10]);
+    XhciLogNote(&hc->Hc, "cfg.ep.surplus",
+                ((dev->SlotId & 0xFFUL) << 24) |
+                    ((iface->InterfaceNumber & 0xFFUL) << 16) |
+                    ((iface->AlternateSetting & 0xFFUL) << 8) | surplus);
+}
+
 static LONG hcdCfgCountEnd(PHCD_CONTROLLER hc, ULONG asked, LONG usbd)
 {
     if (usbd == XHCI_USBD_STATUS_SUCCESS) {
@@ -1457,6 +1482,7 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
             usbd = HCD_USBD_INVALID_PARAMETER;
         } else {
             hcdCfgCountAsked(hc, &asked, iface.EndpointCount);
+            hcdCfgNoteSurplus(hc, dev, &iface);
             if (ii->Length < fixed + iface.EndpointCount *
                                          sizeof(USBD_PIPE_INFORMATION)) {
                 usbd = HCD_USBD_BUFFER_TOO_SMALL;
@@ -1671,6 +1697,7 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         return HCD_USBD_INVALID_PARAMETER;
     }
     hcdCfgCountAsked(hc, &asked, iface.EndpointCount);
+    hcdCfgNoteSurplus(hc, dev, &iface);
     if (ii->Length < fixed + iface.EndpointCount *
                                  sizeof(USBD_PIPE_INFORMATION)) {
         XHCI_DBG_VALUE("hcd: select interface too small, length/number/alt",
@@ -2227,6 +2254,7 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             return hcdCfgCountEnd(hc, asked, HCD_USBD_INVALID_PARAMETER);
         }
         hcdCfgCountAsked(hc, &asked, iface.EndpointCount);
+        hcdCfgNoteSurplus(hc, dev, &iface);
         if (ii->Length < fixed + iface.EndpointCount *
                                      sizeof(USBD_PIPE_INFORMATION)) {
             XHCI_DBG_VALUE("hcd: function select too small, length/number/alt",

@@ -111,12 +111,15 @@ typedef struct _XHCI_PIPE_IFACE {
     ULONG InterfaceProtocol;
     ULONG EndpointCount;        /* = bNumEndpoints, checked              */
     ULONG EndpointOffset[XHCI_PIPE_MAX_ENDPOINTS];
+    ULONG EndpointSurplus;      /* endpoint descriptors past bNumEndpoints,
+                                 * ignored (task 36.46)                   */
 } XHCI_PIPE_IFACE, *PXHCI_PIPE_IFACE;
 
 /*
  * Find interface `interfaceNumber`, alternate `alternate`, in the whole
  * configuration descriptor `config` of `length` bytes, and list the offsets
- * of its endpoint descriptors in the order the device gives them.
+ * of its first bNumEndpoints endpoint descriptors in the order the device
+ * gives them.
  *
  * The walk covers wTotalLength bytes and checks the whole set, not just the
  * interface asked for, because one bad length makes every later offset a
@@ -124,10 +127,21 @@ typedef struct _XHCI_PIPE_IFACE {
  * descriptor, a wTotalLength below 9 or above `length`, any descriptor whose
  * bLength is below 2 or runs past wTotalLength, an interface descriptor
  * shorter than 9 or an endpoint descriptor shorter than 7 bytes, and - in the
- * interface asked for - an endpoint count that disagrees with bNumEndpoints,
- * more than 30 endpoints, an endpoint numbered 0, or two endpoint descriptors
+ * interface asked for - fewer endpoint descriptors than bNumEndpoints, a
+ * bNumEndpoints above 30, an endpoint numbered 0, or two endpoint descriptors
  * naming the same DCI. XHCI_PIPE_NOT_FOUND when the set is sound and the pair
  * is absent. The first match is taken if a device repeats a pair.
+ *
+ * Endpoint descriptors past bNumEndpoints, up to the next interface
+ * descriptor, are not the interface's: they are counted in EndpointSurplus
+ * and otherwise ignored, numbers and DCIs unchecked, as usbport ignores them
+ * (it opens bNumEndpoints pipes, taking the next endpoint descriptor for
+ * each, and skips the rest to the next interface: external/reactos/usbport/
+ * device.c, USBPORT_OpenInterface and USBPORT_GetInterfaceLength) and as
+ * usbd.sys's USBD_CreateConfigurationRequestEx sizes the request from
+ * bNumEndpoints. A low-speed mouse declaring one endpoint and carrying two
+ * opened one pipe under Microsoft's stack and was refused here (GitHub issue
+ * 17 item 7; task 36.46; design record 13 section 6.9).
  */
 ULONG XhciPipeFindInterface(const UCHAR *config, ULONG length,
                             ULONG interfaceNumber, ULONG alternate,

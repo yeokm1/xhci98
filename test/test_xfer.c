@@ -590,6 +590,52 @@ static void test_build_td_size_saturates(void)
 }
 
 /*
+ * Task 36.46 (GitHub issue 17 item 7): hidusb's read of a 239-byte HID
+ * report descriptor (GET_DESCRIPTOR from the interface, type 22h) from a
+ * low-speed mouse, whose EP0 is 8 bytes: 30 packets, the last of 7 bytes.
+ * Once in one page, once across a page boundary, where the TD Size of the
+ * first TRB counts the 8-byte packets still to come (4.11.2.4).
+ */
+static void test_build_ls_report_descriptor(void)
+{
+    XHCI_CONTROL_REQUEST req;
+    XHCI_CONTROL_LAYOUT layout;
+    XHCI_TRB out[XHCI_XFER_MAX_CONTROL_TRBS];
+    SG_BUFFER sg;
+
+    sg_init(&sg);
+    sg_add(&sg, 0x0C000100UL, 239, 0);
+    request_init(&req, 0x81, 0x06, 0x2200, 0, 239, 239, 8, &sg);
+    CHECK_EQ(XhciXferBuildControl(&req, out, XHCI_XFER_MAX_CONTROL_TRBS,
+                                  &layout),
+             XHCI_XFER_OK, "239 bytes at MPS 8, one page");
+    CHECK_EQ(layout.TrbCount, 3, "Setup, one Data, Status");
+    CHECK_EQ(XHCI_TRB_GET_LENGTH(out[1].Status), 239, "the whole read");
+    CHECK_EQ(XHCI_TRB_GET_TD_SIZE(out[1].Status), 0, "last TRB: TD Size 0");
+    CHECK_EQ(out[1].Control & XHCI_TRB_ISP, XHCI_TRB_ISP,
+             "ISP: a shorter answer reports itself");
+    CHECK_EQ(out[1].Control & XHCI_TRB_DIR_IN, XHCI_TRB_DIR_IN, "IN");
+    CHECK_EQ(out[2].Control & XHCI_TRB_DIR_IN, 0, "Status stage OUT");
+
+    sg_init(&sg);
+    sg_add(&sg, 0x0C000F80UL, 128, 0);
+    sg_add(&sg, 0x0C002000UL, 111, 128);
+    request_init(&req, 0x81, 0x06, 0x2200, 0, 239, 239, 8, &sg);
+    CHECK_EQ(XhciXferBuildControl(&req, out, XHCI_XFER_MAX_CONTROL_TRBS,
+                                  &layout),
+             XHCI_XFER_OK, "239 bytes at MPS 8, across a page");
+    CHECK_EQ(layout.DataCount, 2, "two data TRBs");
+    CHECK_EQ(XHCI_TRB_GET_LENGTH(out[1].Status), 128, "first fragment");
+    CHECK_EQ(XHCI_TRB_GET_TD_SIZE(out[1].Status), 14,
+             "30 packets less the 16 the first TRB holds");
+    CHECK_EQ(XHCI_TRB_GET_LENGTH(out[2].Status), 111, "second fragment");
+    CHECK_EQ(XHCI_TRB_GET_TD_SIZE(out[2].Status), 0, "last TRB: 0");
+    CHECK_EQ(out[1].Control & XHCI_TRB_CH, XHCI_TRB_CH, "chained");
+    CHECK_EQ(out[2].Control & XHCI_TRB_CH, 0, "the TD ends");
+    CHECK_EQ(out[2].Control & XHCI_TRB_ISP, XHCI_TRB_ISP, "ISP on both");
+}
+
+/*
  * "If a physical data buffer spans a 64KB boundary, software shall chain
  * multiple TRBs to describe the buffer" (spec 6.4.1 note). Keeping the length
  * under 64 KB is not sufficient - an element may start anywhere.
@@ -4229,6 +4275,7 @@ int main(void)
     test_build_out_data();
     test_build_td_size();
     test_build_td_size_saturates();
+    test_build_ls_report_descriptor();
     test_build_64k_split();
     test_build_sg_order();
     test_build_refusals();
