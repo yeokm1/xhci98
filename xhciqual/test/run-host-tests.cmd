@@ -25,8 +25,11 @@ if not exist test_mmiodiag.exe goto builderr
 
 rem Absolute path: this host sets NoDefaultCurrentDirectoryInExePath, so a
 rem bare exe name in the working directory is not found.
+rem The exact test below is on purpose: a test that crashes exits with a
+rem negative code (an access violation is C0000005h), which IF ERRORLEVEL 1
+rem does not see (task 36.48; check-build-exit-codes.ps1 asserts it).
 "%~dp0test_mmiodiag.exe"
-if errorlevel 1 goto testfail
+if not "%errorlevel%"=="0" goto testfail
 
 rem Task 36.10: the xHCI verdict, C4's outcome, the C6/C8 gate and the exit
 rem code (verdict.c), with the classifier it consults (mmiodiag.c).
@@ -36,7 +39,7 @@ wcl386 -bt=nt -q -zq -wx -za -otexan -fe=test_verdict.exe ^
 if errorlevel 1 goto builderr
 if not exist test_verdict.exe goto builderr
 "%~dp0test_verdict.exe"
-if errorlevel 1 goto testfail
+if not "%errorlevel%"=="0" goto testfail
 
 rem Task 36.11: the routing report, with the driver's reviewed-pair table
 rem (src\xhci_pirq.c) built as the driver's own host suites build it.
@@ -46,7 +49,7 @@ wcl386 -bt=nt -q -zq -wx -za -otexan -DXHCI_HOST_TEST -fe=test_route.exe ^
 if errorlevel 1 goto builderr
 if not exist test_route.exe goto builderr
 "%~dp0test_route.exe"
-if errorlevel 1 goto testfail
+if not "%errorlevel%"=="0" goto testfail
 
 rem Task 36.48: the system description - SMBIOS entry points and tables
 rem (valid, 3.0, truncated, garbled, strings missing), CPUID text, and no
@@ -62,7 +65,7 @@ wcl386 -bt=nt -q -zq -wx -otexan -fe=test_sysinfo.exe ^
 if errorlevel 1 goto builderr
 if not exist test_sysinfo.exe goto builderr
 "%~dp0test_sysinfo.exe"
-if errorlevel 1 goto testfail
+if not "%errorlevel%"=="0" goto testfail
 
 echo.
 echo Host tests PASSED.

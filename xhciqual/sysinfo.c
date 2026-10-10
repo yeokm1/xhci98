@@ -349,8 +349,22 @@ static void take(const SMB_STRUCT *st, u8 type, SYSINFO *si)
  * and SKU, Type 2 and 3 serial and asset tag, Type 4 serial, asset tag and
  * part number, Type 17 serial, asset tag and part number - is fetched into
  * a local and every string the header would print is compared with it:
- * equal, or containing it when it is 4 characters or more, and the field
- * prints "(withheld)". The identifier itself is never stored in SYSINFO.
+ * equal, containing it, or (for an identifier under 4 characters)
+ * containing it as a whole word, and the field prints "(withheld)". Type
+ * 1's UUID is compared as 32 hex digits in both byte orders, ignoring case
+ * and separators. The identifier itself is never stored in SYSINFO.
+ *
+ * Why a short identifier matches only as a word (review round 2, P1,
+ * answered): firmware fills serials with "0", "1" or " ", and a plain
+ * substring rule would withhold every BIOS date and version containing a
+ * 0. A short serial printed as its own word ("Model A12") is caught; one
+ * inside a longer run of letters and digits ("ModelA12x") is not an
+ * identifier a reader can recover.
+ *
+ * And when the walk cannot finish - a malformed structure, or a table
+ * longer than SMB_TABLE_MAX - an identifier in the unread part could
+ * match an earlier printed string, so every SMBIOS string is withheld
+ * (review round 2, P1); the version, memory sums and the rest still print.
  */
 #define WITHHELD "(withheld)"
 
@@ -368,20 +382,135 @@ static const SMB_IDS id_fields[] = {
     { 17, 3, { 0x18, 0x19, 0x1A } }
 };
 
+/* A word's edge: the string's ends, a space, or bracketing punctuation.
+ * Not '.', '/', '-' or ':', which join a version, date or part number into
+ * one word ("1.0", "01/02/2026"). */
+static int is_edge(char c)
+{
+    return c == '\0' || c == ' ' || c == '(' || c == ')' || c == '[' ||
+           c == ']' || c == '{' || c == '}' || c == ',' || c == ';' ||
+           c == '"' || c == '\'' || c == '#' || c == '=';
+}
+
+/* Does `shown` carry `id`: anywhere when id is 4 characters or more,
+ * else as a whole word. */
+static int carries(const char *shown, const char *id)
+{
+    size_t n;
+    const char *p;
+
+    n = strlen(id);
+    if (n == 0)
+        return 0;
+    if (n >= 4)
+        return strstr(shown, id) != 0;
+    for (p = strstr(shown, id); p != 0; p = strstr(p + 1, id)) {
+        if ((p == shown || is_edge(p[-1])) && is_edge(p[n]))
+            return 1;
+    }
+    return 0;
+}
+
+/* Every printed SMBIOS string, for the scrubber and for withhold_all. */
+static char *shown_field(SYSINFO *si, int i)
+{
+    switch (i) {
+    case 0:  return si->bios_vendor;
+    case 1:  return si->bios_version;
+    case 2:  return si->bios_date;
+    case 3:  return si->sys_mfr;
+    case 4:  return si->sys_product;
+    case 5:  return si->sys_version;
+    case 6:  return si->sys_family;
+    case 7:  return si->board_mfr;
+    case 8:  return si->board_product;
+    case 9:  return si->cpu_socket;
+    case 10: return si->cpu_version;
+    default: return 0;
+    }
+}
+
 static void withhold_if(char *shown, const char *id)
 {
     if (shown[0] == '\0' || strcmp(shown, WITHHELD) == 0)
         return;
-    if (strcmp(shown, id) == 0 ||
-        (strlen(id) >= 4 && strstr(shown, id) != 0))
+    if (carries(shown, id))
         strcpy(shown, WITHHELD);
+}
+
+/* The UUID's 16 bytes as 32 uppercase hex digits: raw order, and the
+ * SMBIOS 2.6+ text order (first three fields little-endian). */
+static void uuid_hex(const u8 *u, char *raw, char *wire)
+{
+    static const char hx[] = "0123456789ABCDEF";
+    static const u8 order[16] = { 3, 2, 1, 0, 5, 4, 7, 6,
+                                  8, 9, 10, 11, 12, 13, 14, 15 };
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        raw[i * 2] = hx[u[i] >> 4];
+        raw[i * 2 + 1] = hx[u[i] & 0x0F];
+        wire[i * 2] = hx[u[order[i]] >> 4];
+        wire[i * 2 + 1] = hx[u[order[i]] & 0x0F];
+    }
+    raw[32] = '\0';
+    wire[32] = '\0';
+}
+
+/* A printed string's hex digits alone, upper case: what a UUID written
+ * with dashes, braces or in lower case reduces to. */
+static void hex_only(const char *s, char *out, size_t size)
+{
+    size_t o;
+
+    o = 0;
+    for (; *s != '\0' && o + 1 < size; s++) {
+        char c = *s;
+
+        if (c >= 'a' && c <= 'f')
+            c = (char)(c - 'a' + 'A');
+        if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'))
+            out[o++] = c;
+    }
+    out[o] = '\0';
+}
+
+static void scrub_uuid(const SMB_STRUCT *st, SYSINFO *si)
+{
+    char raw[33], wire[33], hex[SI_STR];
+    int i, all00, allff;
+    char *f;
+
+    if (st->flen < 0x18)
+        return;
+    all00 = allff = 1;
+    for (i = 0; i < 16; i++) {
+        if (st->f[0x08 + i] != 0x00)
+            all00 = 0;
+        if (st->f[0x08 + i] != 0xFF)
+            allff = 0;
+    }
+    if (all00 || allff)
+        return;                 /* "not present" / "not set" */
+    uuid_hex(st->f + 0x08, raw, wire);
+    for (i = 0; (f = shown_field(si, i)) != 0; i++) {
+        hex_only(f, hex, sizeof(hex));
+        if (strstr(hex, raw) != 0 || strstr(hex, wire) != 0)
+            strcpy(f, WITHHELD);
+    }
+    memset(raw, 0, sizeof(raw));
+    memset(wire, 0, sizeof(wire));
 }
 
 static void scrub(const SMB_STRUCT *st, u8 type, SYSINFO *si)
 {
     unsigned i, k;
+    int j;
     char id[SI_STR];
+    char *f;
 
+    if (type == 1)
+        scrub_uuid(st, si);
     for (i = 0; i < sizeof(id_fields) / sizeof(id_fields[0]); i++) {
         if (id_fields[i].type != type)
             continue;
@@ -389,32 +518,37 @@ static void scrub(const SMB_STRUCT *st, u8 type, SYSINFO *si)
             fstr(st, id_fields[i].field[k], id);
             if (id[0] == '\0')
                 continue;
-            withhold_if(si->bios_vendor, id);
-            withhold_if(si->bios_version, id);
-            withhold_if(si->bios_date, id);
-            withhold_if(si->sys_mfr, id);
-            withhold_if(si->sys_product, id);
-            withhold_if(si->sys_version, id);
-            withhold_if(si->sys_family, id);
-            withhold_if(si->board_mfr, id);
-            withhold_if(si->board_product, id);
-            withhold_if(si->cpu_socket, id);
-            withhold_if(si->cpu_version, id);
+            for (j = 0; (f = shown_field(si, j)) != 0; j++)
+                withhold_if(f, id);
         }
     }
     memset(id, 0, sizeof(id));
 }
 
+static void withhold_all(SYSINFO *si)
+{
+    int j;
+    char *f;
+
+    for (j = 0; (f = shown_field(si, j)) != 0; j++) {
+        if (f[0] != '\0')
+            strcpy(f, WITHHELD);
+    }
+}
+
 typedef void (*SMB_VISIT)(const SMB_STRUCT *st, u8 type, SYSINFO *si);
 
-/* One bounded walk; returns the structures visited. */
+/* One bounded walk; returns the structures visited. *complete is 1 when
+ * the walk saw the whole table: End-of-Table, the entry point's count,
+ * zero padding, or the table's own end (not the SMB_TABLE_MAX cap). */
 static int walk(const u8 *t, u32 len, u16 count, SMB_VISIT visit,
-                SYSINFO *si)
+                SYSINFO *si, int *complete)
 {
     u32 off;
     int n;
 
     si->broken = 0;
+    *complete = 0;
     off = 0;
     n = 0;
     while (off < len && n < 4096) {
@@ -422,15 +556,20 @@ static int walk(const u8 *t, u32 len, u16 count, SMB_VISIT visit,
         u8 type;
         u32 j;
 
-        if (count != 0 && n >= (int)count)
-            break;
+        if (count != 0 && n >= (int)count) {
+            *complete = 1;
+            return n;
+        }
         if (len - off >= 2 && t[off] == 0 && t[off + 1] == 0) {
             /* Zero padding past the last structure is not damage. A real
              * Type 0 has a formatted length of at least 12h. */
             for (j = off; j < len && t[j] == 0; j++)
                 ;
-            if (j == len)
-                break;
+            if (j == len) {
+                /* ...unless the cap cut the table inside it. */
+                *complete = (si->table_len <= len);
+                return n;
+            }
         }
         if (len - off < 4 || t[off + 1] < 4 || t[off + 1] > len - off) {
             si->broken = 1;
@@ -453,21 +592,33 @@ static int walk(const u8 *t, u32 len, u16 count, SMB_VISIT visit,
         st.slen = j + 2 - (off + st.flen);
         visit(&st, type, si);
         n++;
-        if (type == 127)        /* End-of-Table */
-            break;
+        if (type == 127) {      /* End-of-Table */
+            *complete = 1;
+            return n;
+        }
         off = j + 2;
     }
+    /* Out of bytes: whole only if these were all the table's bytes. A
+     * count reached exactly at the end is whole as well. */
+    if (off >= len && (si->table_len <= len ||
+                       (count != 0 && n >= (int)count)))
+        *complete = 1;
     return n;
 }
 
 void smb_parse_table(const u8 *t, u32 len, u16 count, SYSINFO *si)
 {
+    int complete;
+
     if (len > SMB_TABLE_MAX)
         len = SMB_TABLE_MAX;
     si->used_len = len;
-    si->nstructs = walk(t, len, count, take, si);
+    si->nstructs = walk(t, len, count, take, si, &complete);
     /* The same bounds, so the same structures (and the same damage). */
-    (void)walk(t, len, count, scrub, si);
+    (void)walk(t, len, count, scrub, si, &complete);
+    si->ids_unchecked = !complete;
+    if (!complete)
+        withhold_all(si);
 }
 
 /* ------------------------------------------------------------------ */
@@ -668,6 +819,12 @@ void report_sysinfo(const SYSINFO *si, QPRINTF_FN pf)
         if (si->broken)
             pf("         SMBIOS table malformed at offset %lu; the "
                "rest was not read\n", si->broken_at);
+        else if (si->ids_unchecked)
+            pf("         SMBIOS table longer than %lu KB; the rest was "
+               "not read\n", SMB_TABLE_MAX >> 10);
+        if (si->ids_unchecked)
+            pf("         strings withheld: identifiers in the unread "
+               "part could not be checked\n");
     } else {
         smb_problem(si, line);
         rom_text(si, part);

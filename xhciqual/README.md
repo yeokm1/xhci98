@@ -1048,17 +1048,24 @@ tag; Type 4 serial, asset tag and part number) are never copied into
 may point a manufacturer at the serial's string, or put a serial's text in
 a product name, so after the walk each identifier string (those above, and
 Type 17's serial, asset tag and part number) is compared with every string
-the header prints, and one that equals it, or contains it when it is four
-characters or more, prints `(withheld)`. A field added to `SYSINFO` is a
-field every pasted report publishes; the host suite and the QEMU cases
-plant every identifier, aliased too, and fail if one is printed.
+the header prints, and one that contains it prints `(withheld)` - anywhere
+when the identifier is four characters or more, as a whole word when it is
+shorter (firmware fills serials with `0` or `1`, and a plain match would
+withhold every date and version containing one). Type 1's UUID is
+compared as 32 hex digits in both byte orders, ignoring case, dashes and
+braces. A field added to `SYSINFO` is a field every pasted report
+publishes; the host suite and the QEMU cases plant every identifier,
+aliased too, and fail if one is printed.
 
 **Bounds.** Every structure's length is checked against the table, every
 field against its structure, every string against its string set; a
-malformed structure ends the walk, keeps what was read before it, and adds
+malformed structure ends the walk, keeps the memory sums read before it, adds
 a `SMBIOS table malformed at offset N` line. Strings are cut at 64
 characters, control and non-ASCII bytes print as `?`, and runs of spaces
-collapse.
+collapse. A walk that cannot finish (a malformed structure, or a table
+longer than 64 KB) leaves identifiers in the unread part unchecked, so
+every SMBIOS string is then withheld and a line says so; the SMBIOS
+version, the memory sums, CPU, RAM and DOS still print.
 
 The full run and `--probe-only` print the block under the build line. The
 quick scan keeps its one screen: two summary lines (`System:` with the

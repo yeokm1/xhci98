@@ -900,6 +900,7 @@ typedef struct {
     int nstructs;
     int broken;                 /* the walk stopped on a malformed entry  */
     u32 broken_at;              /* its offset in the table               */
+    int ids_unchecked;          /* walk incomplete: strings withheld     */
     char bios_vendor[SI_STR], bios_version[SI_STR], bios_date[SI_STR];
     char sys_mfr[SI_STR], sys_product[SI_STR], sys_version[SI_STR];
     char sys_family[SI_STR];

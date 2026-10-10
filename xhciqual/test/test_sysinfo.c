@@ -892,6 +892,133 @@ static void test_aliasing(void)
     CHECK(!has("Test BIOS 9"), "aliased short: the DIMM serial");
 }
 
+/* Review round 2: the UUID as text, short identifiers, and a walk that
+ * cannot finish. */
+static void build_t1(u8 serial_idx, const char **strs, const u8 *uuid)
+{
+    u8 f[0x40];
+
+    memset(f, 0, sizeof(f));
+    put8(f, 0x04, 1); put8(f, 0x05, 2); put8(f, 0x06, 3);
+    put8(f, 0x07, serial_idx);
+    if (uuid != 0)
+        memcpy(f + 0x08, uuid, 16);
+    add(1, f, 0x1B, strs);
+}
+
+static void test_aliasing2(void)
+{
+    SYSINFO si;
+    u8 f[0x40];
+    static const u8 uuid[16] = { 0x5a, 0x5a, 0x5a, 0x5a, 0x12, 0x34, 0x43,
+                                 0x21, 0x87, 0x65, 0x01, 0x23, 0x45, 0x67,
+                                 0x89, 0xab };
+    /* SMBIOS 2.6 text order: 5A5A5A5A-3412-2143-8765-0123456789AB */
+    static const char *u1[] = { "Maker", "{5a5a5a5a-3412-2143-8765-0123456789ab}",
+                                "5A5A5A5A12344321876501234567 89AB", 0 };
+    static const char *s1[] = { "Maker", "Model A12", "ModelA12x", "A12",
+                                0 };
+    static const char *z1[] = { "Maker 0", "01/02/2026", "1.0", "0", 0 };
+    static const char *s3[] = { "SER-T3-SECRET", 0 };
+    static const char *p1[] = { "Maker", "Product SER-T3-SECRET", "v", 0 };
+
+    /* The UUID in both byte orders, with braces, dashes, a space, case. */
+    tlen = 0;
+    memset(tab, 0, sizeof(tab));
+    build_t1(0, u1, uuid);
+    memset(f, 0, sizeof(f));
+    add(127, f, 4, 0);
+    memset(&si, 0, sizeof(si));
+    smb_parse_table(tab, tlen, 0, &si);
+    CHECK(strcmp(si.sys_mfr, "Maker") == 0, "uuid: maker kept");
+    CHECK(strcmp(si.sys_product, "(withheld)") == 0,
+          "uuid: wire-order text withheld");
+    CHECK(strcmp(si.sys_version, "(withheld)") == 0,
+          "uuid: raw-order text withheld");
+
+    /* A three-character serial: as a word withheld, inside a word not. */
+    tlen = 0;
+    memset(tab, 0, sizeof(tab));
+    {
+        u8 g[0x40];
+        memset(g, 0, sizeof(g));
+        put8(g, 0x04, 1); put8(g, 0x05, 2); put8(g, 0x06, 3);
+        put8(g, 0x07, 4);
+        add(1, g, 0x1B, s1);
+    }
+    memset(f, 0, sizeof(f));
+    add(127, f, 4, 0);
+    memset(&si, 0, sizeof(si));
+    smb_parse_table(tab, tlen, 0, &si);
+    CHECK(strcmp(si.sys_product, "(withheld)") == 0, "short serial as word");
+    CHECK(strcmp(si.sys_version, "ModelA12x") == 0,
+          "short serial inside a word: kept");
+    render(&si);
+    CHECK(!has("Model A12"), "short serial: not printed");
+
+    /* A one-character placeholder serial "0" does not eat dates. */
+    tlen = 0;
+    memset(tab, 0, sizeof(tab));
+    {
+        u8 g[0x40];
+        memset(g, 0, sizeof(g));
+        put8(g, 0x04, 1); put8(g, 0x05, 2); put8(g, 0x06, 3);
+        put8(g, 0x07, 4);
+        add(1, g, 0x1B, z1);
+    }
+    memset(f, 0, sizeof(f));
+    add(127, f, 4, 0);
+    memset(&si, 0, sizeof(si));
+    smb_parse_table(tab, tlen, 0, &si);
+    CHECK(strcmp(si.sys_mfr, "(withheld)") == 0, "\"0\" as a word: withheld");
+    CHECK(strcmp(si.sys_product, "01/02/2026") == 0 &&
+          strcmp(si.sys_version, "1.0") == 0, "\"0\" inside words: kept");
+
+    /* A cross-structure alias whose identifier sits in a structure the
+     * walk cannot finish: everything SMBIOS is withheld. */
+    tlen = 0;
+    memset(tab, 0, sizeof(tab));
+    build_t1(0, p1, 0);
+    memset(f, 0, sizeof(f));
+    put8(f, 0x07, 1);
+    add(3, f, 0x15, s3);
+    memset(&si, 0, sizeof(si));
+    smb_parse_table(tab, tlen - 1, 0, &si);     /* Type 3 lacks its NUL */
+    CHECK(si.broken && si.ids_unchecked, "unfinished walk: flagged");
+    CHECK(strcmp(si.sys_product, "(withheld)") == 0 &&
+          strcmp(si.sys_mfr, "(withheld)") == 0, "unfinished walk: withheld");
+    si.smb_state = SMB_OK;
+    render(&si);
+    check_no_secrets("unfinished walk");
+    CHECK(has("strings withheld: identifiers in the unread part"),
+          "unfinished walk: said so");
+    render_short(&si);
+    check_no_secrets("unfinished walk short");
+
+    /* A table longer than the cap: the walk ends at the cap, incomplete. */
+    {
+        static u8 big[SMB_TABLE_MAX];
+        u32 o;
+
+        memset(big, 0, sizeof(big));
+        build_table(1);
+        memcpy(big, tab, tlen - 6);             /* drop the End-of-Table */
+        for (o = tlen - 6; o + 256 <= SMB_TABLE_MAX; o += 256) {
+            big[o] = 126;
+            big[o + 1] = 254;
+        }
+        memset(&si, 0, sizeof(si));
+        si.table_len = 0x20000UL;
+        smb_parse_table(at_guard(big, SMB_TABLE_MAX), 0x20000UL, 0, &si);
+        CHECK(si.ids_unchecked && !si.broken &&
+              strcmp(si.sys_mfr, "(withheld)") == 0, "capped walk: withheld");
+        si.smb_state = SMB_OK;
+        render(&si);
+        CHECK(has("SMBIOS table longer than 64 KB"), "capped: said so");
+        check_no_secrets("capped");
+    }
+}
+
 /* Review round 1, P3: an unusable 3.0 entry does not hide a legacy one. */
 static void test_ep_order(void)
 {
@@ -908,6 +1035,7 @@ static void test_ep_order(void)
 int main(void)
 {
     test_aliasing();
+    test_aliasing2();
     test_ep_order();
     test_valid_2x();
     test_valid_30();
