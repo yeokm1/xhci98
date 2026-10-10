@@ -1227,6 +1227,44 @@ SP1 x86, Vista SP2 x64 and 7 SP1 x64, each with `qemu-xhci`
   and 7 SP1 x64 ask for no restart and start the controller at once. The
   update case (U1) is read separately.
 
+### 11.2 The legs on the enabled strip (2026-10-10)
+
+QEMU guests on development host A, the packages of `71790cd`'s build (the
+strip on; `qemu` x86 `xhci98.sys` SHA-256 `f39115d9...`, release
+`8d39d614...`). Raw readings under `out\p36-msi86\legs\<guest>\`
+(`notes-H.txt`, `notes-F.txt`, `notes-L.txt`, `notes-U.txt`). The run was
+stopped before every leg was reached; a leg not run is **owed to the
+matrix**.
+
+| Leg | Guest | Result | Reading |
+|---|---|---|---|
+| R2x | 7 x86, Vista x86 | PASS | `MSISupported` 0 list as on x64 (section 11.1) |
+| H1 | 7 x86 | PASS | restart prompt; Code 28 before it; after it `BOUND`, MSI |
+| H1 | Vista x86 | PASS | installed with `pnputil`: no restart dialog on that route; Code 1 until the restart; then `BOUND`, MSI |
+| F1 mode 1 | 7 x86, Vista x86 | PASS | list replaced (108 = 10, 113 = 1), the line, reason 5, no message connected |
+| F1r mode 1, release | Vista x86 | PASS | 65 = 1, 108 = 10; mode 0 back to MSI |
+| F2 `NoStrip` | 7 x86, Vista x86 | PASS | 108 = 5, MSI, reason 11 |
+| F4 mode 0 | 7 x86, Vista x86 | PASS | MSI, 108 = 4 |
+| F (all) | 7 x64, Vista x64 | owed to the matrix | not reached |
+| F3 `InjNoLine` | 7 x64, Vista x64 | owed to the matrix | not reached |
+| H1a | 7 x86 | PASS | helper absent, mode 1, no line: Code 10, reason 13 (outcome 6); mode 0 polls, reason 12; helper bound, mode 1: message, reason 11 |
+| H0' helper absent | 7 x86 | PASS | 101 = 1, 108 = 10, the line |
+| H2 file deleted | 7 x86 | PASS | event 7026, `ABSENT`, the line |
+| H3 service deleted | 7 x86 | PASS | `ABSENT`, the line |
+| H2, H3 | Vista x86 | owed to the matrix | not reached |
+| H4-H9 `XhciMsiInject` 1-6 | 7 x86 | PASS | 1 `ABSENT`; 2-6 `REFUSED` with refusal 1, 3, 2, 4, 3; each on the line, devices working |
+| H10 connection fails | 7 x86 | PASS | polled, reason 12, status C0000001 |
+| L1 two controllers | 7 x86 | PASS | each FDO looks and binds on its own; a disable and enable of one leaves the other running. Finding: a removed and rescanned instance is held with Code 1 until a restart (the INF's `Reboot`), then binds |
+| L2 rebalance | 7 x86 | not reached on a guest | no Resources tab offered; the state machine is host-tested |
+| L3 removal | 7 x86 | PASS (orderly) | QEMU's `device_del` is an orderly eject (query remove, remove), not a surprise removal: disconnect, reference dropped, remove; no bugcheck. A true surprise removal is owed to the matrix |
+| L4 failed start | 7 x86 | PASS | mode 1 + no interrupt: Code 10, the reference dropped at remove; values cleared: a new FDO looks and binds (its serial reads 0001 again, the image having been reloaded) |
+| D4 Driver Verifier | 7 x86 | **FAIL, open** | release package, `verifier /standard /driver xhci98.sys xhcimsi.sys`: the next boot failed (automatic restart, then Startup Repair; with F8 "start normally", both vCPUs spun with interrupts off at "Starting Windows"). The stop code was not captured; the retake with `AutoReboot` 0 did not run. Owed to the matrix, and a finding until read |
+| U1 update | 7 x86 | PASS | 2.2.0.9 over 2.2.0.0: restart prompt; before it the controller keeps running on the old image with the old helper (`BOUND`, 0x02020000), files replaced on disk; after it the new helper (0x02020009), MSI |
+| U1 update | Vista x86 | owed to the matrix | not reached |
+| U2 downgrade | 7 x86 | owed to the matrix | this package installed and read (MSI, bound); 2.2.0.2 over it not reached |
+| U3 uninstall | 7 x86 | PASS | the helper service stays, running, at the next boot; `sc delete` and a restart remove the service, the file stays. Finding: "Delete the driver software" removed only the package in use; an older package left in the driver store would be reinstalled by the next detection |
+| D2 98 SE, ME, 2000, XP | | PASS | wave 1, the first package (section 11.1's build) |
+
 ## 12. Decisions
 
 All taken by the owner; items 2 to 6 were answered on 2026-10-09 after
