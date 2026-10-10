@@ -6411,7 +6411,9 @@ controller's driver key, the first read at every start, the other two at
 takes effect at a disable and enable. `XhciQemuMsgConnectFail` 1 fails a
 message connection without calling `IoConnectInterruptEx`: the start polls
 with reason 12. `XhciMsi86NoStrip` 1 keeps the requirements filter from
-stripping (outcome 5, "disabled"), for R1 and R2's readings.
+stripping (outcome 5, "disabled"), as the first build did by default for
+R1 and R2's readings; the strip is on by default since 2026-10-10 (leg F
+reads mode 1 with it set, as the message).
 `XhciMsi86InjNoLine` 1 rewrites the requirements list before it is
 classified - every line member of an interrupt run that also holds a
 message removed, every line-only configuration dropped - so the list

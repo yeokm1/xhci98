@@ -1170,6 +1170,63 @@ before it is read:
   signature optional for x86 boot-start drivers; the reading is what is
   relied on.
 
+### 11.1 The readings (2026-10-10)
+
+Read on QEMU guests on development host A, the `qemu` package of
+`445f08d`'s build with the strip off (it shipped off, section 12a), from
+section 9's trace validated by `check-msi86-trace.ps1`; Vista SP2 x86, 7
+SP1 x86, Vista SP2 x64 and 7 SP1 x64, each with `qemu-xhci`
+`msi=on,msix=off`, `msi=off,msix=on` and the launchers' default.
+
+- **R1: one shape, the same on all four.** Every list received under
+  `MSISupported` 1 was one configuration of five descriptors: `[0.0]`
+  the memory BAR (option 0x01, preferred), `[0.1]` its alternative
+  (0x08), `[0.2]` a device-private (type 0x81, option 0, its own
+  requirement), `[0.3]` the message (type 2, flags 0x0003, share 1,
+  option 0x01, heading the interrupt run), `[0.4]` the line (type 2,
+  flags 0, share 3, option 0x08, the message's alternative). Class
+  REPLACEABLE: STRIPPABLE, a line is offered for this controller with a
+  pin. The three `qemu-xhci` variants gave the same list (the message
+  descriptor does not say MSI from MSI-X). Section 4.2's withdrawal does
+  not apply.
+- **R2: the device-private is the device's, not the message's.** With
+  `MSISupported` 0 (read on all four: 7 x64 and Vista x64 first, then 7
+  SP1 x86 and Vista SP2 x86 with the helper bound, the hardware key's
+  value set to 0 and the controller disabled and enabled) Windows built
+  one configuration of four, the same on each: the same `[0.0]` to `[0.2]`, the device-private included, and
+  the line heading its run (option 0, share 3). So the device-private
+  stays whatever the interrupt is, and the strip, which copies it, needs
+  no amendment. The strip of R1's list is that list as the trace shows
+  it, every descriptor's option, type, share, flags and data words
+  (`test_msi`'s `test_r1`, built from the readings; the list header and
+  the descriptors' spare bytes are not traced).
+- **Admitted** (section 4.2; the four captures identical, so one shape
+  for every OS and architecture, stated here with them): one
+  configuration with exactly one interrupt run, headed by a message
+  member, every message member before every line member and at least one
+  line member, the configuration's other descriptors of other types
+  (`XhciMsiAdmitted`, vectors in `test_msi`'s `test_admit`). A
+  REPLACEABLE list of any other shape (two configurations, a line heading
+  the run, a message after the line, two interrupt runs, another type
+  inside the run) takes "unsupported shape" and is kept; its class stays
+  REPLACEABLE for the start. The strip is enabled (section 12a).
+- **R3: read.** On 7 SP1 x86 and Vista SP2 x86, after the install's
+  restart, an ordinary boot (no test-signing, no debugger, `NOEXECUTE=OPTIN`
+  alone, PAE on, so `ntkrnlpa.exe`): `xhcimsi` running as a boot driver,
+  `xhci98` running, the helper `BOUND` (its version word
+  `0x02020000`), the message connected.
+- **R4: held, not problem code 14.** A fresh install on 7 SP1 x86 shows
+  "will not work until you restart" and the restart prompt; until the
+  restart the controller is not started, with problem code 28 ("drivers
+  not installed", restart needed) on 7 and problem code 1 on Vista, the
+  helper's service created and stopped, `xhci98` stopped, the `.HW`
+  values written, and a device plugged in then not served; no filter ran
+  before the restart. So on Vista and 7 x86 the controller stays held
+  until the restart the INF's `Reboot` asks for anyway: the release notes
+  say the USB 3 ports work after the restart, not before. Vista SP2 x64
+  and 7 SP1 x64 ask for no restart and start the controller at once. The
+  update case (U1) is read separately.
+
 ## 12. Decisions
 
 All taken by the owner; items 2 to 6 were answered on 2026-10-09 after
@@ -1303,12 +1360,18 @@ differs from, or settles, what the sections above say:
 - **The connection passes no spin lock** (record 15 section 4.3's revision
   6): `SpinLock` NULL, so each message has its own lock; the message ISR
   declines every message ID but 0 before touching the controller.
-- **The strip ships off** (`HCD_MSI_STRIP_DEFAULT` 0 in `hcd_msi86.c`)
-  until R1 and R2 are read; the `qemu` flavour's `XhciMsi86NoStrip` keeps
-  it off after the default is turned on, and `XhciMsi86InjNoLine` is H1a's
-  stimulus. The admitted shapes are the classification's own: a run whose
-  members are not all of the head's type, or a list opening on an
-  alternative, is "unsupported shape" and kept.
+- **The strip is on** (`HCD_MSI_STRIP_DEFAULT` 1 in `hcd_msi86.c`, one
+  default for Vista and 7, x86 and x64, since 2026-10-10). It shipped off
+  (0) in the first build until R1 and R2 were read (section 11.1: one
+  shape, identical on all four, a line offered beside the message, the
+  device-private the device's own). The `qemu` flavour's
+  `XhciMsi86NoStrip` still turns it off, and `XhciMsi86InjNoLine` is
+  H1a's stimulus. The classification alone sorts the shapes it cannot
+  handle (a run whose members are not all of the head's type, or a list
+  opening on an alternative: class UNSUPPORTED); on top of it the filter
+  replaces only R1's admitted shape (`XhciMsiAdmitted`, section 11.1) and
+  takes "unsupported shape" for any other REPLACEABLE list, kept as
+  Windows built it.
 - **The counters**: eighteen words appended to `XHCIHC_COUNTERS` (114 in
   all; `xhci_counters.h` names them): the routines' source, the messages
   connected, the capability, the connection's status, the raw message

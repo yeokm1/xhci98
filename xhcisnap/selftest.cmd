@@ -259,6 +259,36 @@ for %%S in ("value 2; in effect 2 (polling)" "reason               forced pollin
     )
 )
 
+rem Task 36.15's message interrupts from canned HCD images: 7 x86 with the
+rem helper bound on MSI, the helper absent and the list stripped, a refused
+rem helper, 98 SE with no filter (not applicable), a driver from before MSI
+rem and a block between the two sizes.
+"%~dp0XHCISNAP.EXE" -selftest-msi > "%BASE%.msi.log"
+if errorlevel 1 (
+    echo FAIL: -selftest-msi exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("the helper xhcimsi.sys (32-bit)" "4 (the connection's table; one is served); capability MSI" "message descriptors in the grant 1" "capability MSI-X" "MmGetSystemRoutineAddress (64-bit)" "REFUSED (its answer failed a check)" "a message with a line beside it" "BOUND; looks 1" "helper version       2.2.0.0" "not asked (helper bound, or 64-bit, and mode not 1)" "not set (mode 0's default)" "no IRP for the query); looks 2, last status C0000034" "REPLACED: the message choices stripped, the line left" "1 configuration(s), 1 message and 1 line member(s); 1 stripped" "mode as read         0" "refused for          the answer's identity" "none has run: not applicable" "messages connected     0 (no message connected)" "this driver predates MSI" "100 counter words - not a shape") do (
+    findstr /C:%%S "%BASE%.msi.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the message interrupt decode does not say %%S
+        set FAILED=1
+    )
+)
+rem The 63-word block and the truncated block print nothing of their own:
+rem six sections in all (four decoded, the pre-MSI line, the refused shape).
+findstr /C:"[end]" "%BASE%.msi.log" > nul
+if errorlevel 1 (
+    echo FAIL: the message interrupt selftest did not run to its end
+    set FAILED=1
+)
+set MSICOUNT=0
+for /f %%N in ('findstr /C:"message interrupts" "%BASE%.msi.log" ^| find /c /v ""') do set MSICOUNT=%%N
+if not "%MSICOUNT%"=="6" (
+    echo FAIL: expected 6 message interrupt sections, got %MSICOUNT%
+    set FAILED=1
+)
+
 rem Task 36.9's review: a header longer than its image is refused by
 rem print_hcd, and no other section decodes anything from it.
 "%~dp0XHCISNAP.EXE" -selftest-hcd-bad > "%BASE%.hcdbad.log"
@@ -271,7 +301,7 @@ if errorlevel 1 (
     echo FAIL: the malformed header is not refused
     set FAILED=1
 )
-for %%S in ("controller tolerance" "interrupt routing" "transfer size" "event delivery") do (
+for %%S in ("controller tolerance" "interrupt routing" "transfer size" "event delivery" "message interrupts") do (
     findstr /C:%%S "%BASE%.hcdbad.log" > nul
     if not errorlevel 1 (
         echo FAIL: a refused header was still decoded: %%S
@@ -287,5 +317,5 @@ if "%FAILED%"=="1" (
     echo xhcisnap selftest FAILED
     exit /b 1
 )
-echo xhcisnap selftest: 13 cases, all passed
+echo xhcisnap selftest: 14 cases, all passed
 exit /b 0

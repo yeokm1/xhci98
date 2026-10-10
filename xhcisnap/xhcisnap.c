@@ -390,6 +390,24 @@ static const unsigned long snap_guid[4] = {
 #define SNAP_POLL_PIN_UNREADABLE    2UL
 #define SNAP_POLL_RETIRED_STATES    6UL
 /*
+ * Message-signalled interrupts on Vista and 7 (2.2.0.3 on, task 36.15;
+ * design records 15 section 4.3 and 18 section 9). The counter block grew
+ * from 96 words to 114: where the IoConnectInterruptEx pair came from, the
+ * messages connected, the capability, the connection's status, the x86
+ * helper's binding, and the last IRP_MN_FILTER_RESOURCE_REQUIREMENTS's
+ * record. The codes are src/hcd.h's HCD_MSI_ROUTINES_*, src/xhci_msi.h's
+ * XHCI_MSI_CLASS_*, XHCI_MSI_OUT_* and XHCI_MSI86_STATE_*, and
+ * src/xhci_msi86.h's XHCI_MSI86_REFUSE_*, duplicated and held to them by
+ * test_snap. A block of 96 words is a driver from before MSI.
+ */
+#define SNAP_MSI_FIRST              96UL    /* MsiRoutines' word            */
+#define SNAP_MSI_WORDS              18UL
+#define SNAP_MSI_ROUTINES           4UL
+#define SNAP_MSI_STATES             5UL
+#define SNAP_MSI_REFUSALS           5UL
+#define SNAP_MSI_CLASSES            7UL
+#define SNAP_MSI_OUTCOMES           12UL
+/*
  * Controller tolerance (2.2.0.0 on, task 35-T.8; design record 17 section
  * 4.8). Its state stays in the extension, and the HCD region's header grew
  * twelve words (version unchanged) that say where it lies in the extension
@@ -1881,6 +1899,15 @@ static const char *const hcd_counter_names[SNAP_HCD_COUNTER_WORDS] = {
     "IntxDisableCleared", "LineMoveMasked", "IntrValuesFound"
 };
 
+/* Words 96 to 113 (36.15), named apart so a 96-word block still reads. */
+static const char *const msi_counter_names[SNAP_MSI_WORDS] = {
+    "MsiRoutines", "MsiMessages", "MsiCapability", "MsiConnectStatus",
+    "MsiDescriptors", "Msi86State", "Msi86Looks", "Msi86Status",
+    "Msi86Refusal", "Msi86HelperVersion", "MsiFilterSeq", "MsiFilterClass",
+    "MsiFilterOutcome", "MsiFilterMode", "MsiFilterLists",
+    "MsiFilterMessages", "MsiFilterLines", "MsiFilterStripped"
+};
+
 /*
  * The HCD image's layout as its header gives it, checked against the bytes
  * that arrived: 1 when every figure fits. print_hcd refuses a shape that
@@ -2020,6 +2047,8 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
         }
         if (i < SNAP_HCD_COUNTER_WORDS) {
             comp("  %-26s %lu\n", hcd_counter_names[i], v);
+        } else if (i < SNAP_MSI_FIRST + SNAP_MSI_WORDS) {
+            comp("  %-26s %lu\n", msi_counter_names[i - SNAP_MSI_FIRST], v);
         } else {
             comp("  counter %-18lu %lu\n", i, v);
         }
@@ -3364,6 +3393,247 @@ static int selftest_intr(void)
     return 0;
 }
 
+/* ---- message-signalled interrupts (task 36.15) ------------------------- */
+
+static const char *const msi_routines_text[SNAP_MSI_ROUTINES] = {
+    "not looked for (not Vista or 7, or no message granted)",
+    "MmGetSystemRoutineAddress (64-bit)",
+    "the helper xhcimsi.sys (32-bit)",
+    "looked for, NOT found"
+};
+
+static const char *const msi_state_text[SNAP_MSI_STATES] = {
+    "not looked for yet",
+    "ABSENT (not opened - not loaded or not installed - or no IRP for "
+    "the query)",
+    "REFUSED (its answer failed a check)",
+    "BOUND",
+    "released (the controller was removed)"
+};
+
+static const char *const msi_refusal_text[SNAP_MSI_REFUSALS] = {
+    "none",
+    "the query failed",
+    "the answer's length",
+    "the answer's identity (magic or interface version)",
+    "the routines (NULL, or both the same)"
+};
+
+static const char *const msi_class_text[SNAP_MSI_CLASSES] = {
+    "not classified",
+    "no interrupt offered",
+    "no message offered (the line alone)",
+    "a message with a line beside it",
+    "a message and NO usable line-only configuration offered",
+    "a shape this driver does not handle",
+    "inconsistent (the walk refused it)"
+};
+
+static const char *const msi_outcome_text[SNAP_MSI_OUTCOMES] = {
+    "no filter has run",
+    "kept: the lower driver failed it",
+    "kept: no list",
+    "kept: inconsistent",
+    "not asked (helper bound, or 64-bit, and mode not 1): left alone",
+    "kept: the strip switched off (XhciMsi86NoStrip)",
+    "kept: no usable line-only configuration offered",
+    "kept: no interrupt",
+    "kept: no message to strip",
+    "kept: a shape not admitted",
+    "REPLACED: the message choices stripped, the line left",
+    "kept: no memory for the replacement"
+};
+
+/* A capability word: 0 not read, else a delivery code. */
+static const char *msi_capability(unsigned long v)
+{
+    if (v == 0) {
+        return "not read";
+    }
+    return poll_code(poll_delivery_text, SNAP_POLL_DELIVERIES, v);
+}
+
+/*
+ * Words 96 to 113 of the counter block, as the last start and the last
+ * requirements filter wrote them (design record 18 section 9). The filter
+ * runs on Vista and 7 only: on Windows 98, ME, 2000 and XP its sequence
+ * stays 0 and its mode word reads FFFFFFFF (XHCI_POLL_NOT_FOUND, no
+ * filter's value), which is "not applicable" here, not a mode.
+ */
+static void print_msi(const unsigned char *hcd, unsigned long hcdBytes)
+{
+    unsigned long counters;
+    unsigned long countersAt;
+    unsigned long v;
+    const unsigned char *k;
+
+    if (!hcd_shape_ok(hcd, hcdBytes)) {
+        return;
+    }
+    counters = get32(hcd, 20);
+    countersAt = get32(hcd, 24);
+    if (counters <= SNAP_MSI_FIRST) {
+        if (counters > SNAP_POLL_FIRST) {
+            comp("\nmessage interrupts: none - this driver predates MSI "
+                 "(its counter block is %lu\n  words; 2.2.0.3 added "
+                 "MSI's).\n", counters);
+        }
+        return;
+    }
+    if (counters < SNAP_MSI_FIRST + SNAP_MSI_WORDS) {
+        comp("\nmessage interrupts: %lu counter words - not a shape this "
+             "build reads; not decoded.\n", counters);
+        return;
+    }
+    k = hcd + countersAt + SNAP_MSI_FIRST * 4;
+
+    comp("\nmessage interrupts (design records 15 and 18), as the last "
+         "start and filter set them:\n");
+    comp("  routines               %s\n",
+         poll_code(msi_routines_text, SNAP_MSI_ROUTINES, get32(k, 0)));
+    comp("  messages connected     %lu%s; capability %s\n", get32(k, 1 * 4),
+         get32(k, 1 * 4) != 0 ? " (the connection's table; one is served)"
+                              : " (no message connected)",
+         msi_capability(get32(k, 2 * 4)));
+    comp("    connection status    %08lX; message descriptors in the "
+         "grant %lu\n", get32(k, 3 * 4), get32(k, 4 * 4));
+    v = get32(k, 5 * 4);
+    if (v == 0 && get32(k, 6 * 4) == 0) {
+        comp("  x86 helper             not looked for\n");
+    } else {
+        comp("  x86 helper             %s; looks %lu, last status %08lX\n",
+             poll_code(msi_state_text, SNAP_MSI_STATES, v),
+             get32(k, 6 * 4), get32(k, 7 * 4));
+        if (get32(k, 8 * 4) != 0) {
+            comp("    refused for          %s\n",
+                 poll_code(msi_refusal_text, SNAP_MSI_REFUSALS,
+                           get32(k, 8 * 4)));
+        }
+        v = get32(k, 9 * 4);
+        if (v != 0) {
+            comp("    helper version       %lu.%lu.%lu.%lu\n",
+                 (v >> 24) & 0xFFUL, (v >> 16) & 0xFFUL, (v >> 8) & 0xFFUL,
+                 v & 0xFFUL);
+        }
+    }
+    if (get32(k, 10 * 4) == 0) {
+        comp("  requirements filter    none has run: not applicable (it runs "
+             "on Vista and 7\n                         only; Windows 98, ME, "
+             "2000 and XP never send one)\n");
+        return;
+    }
+    comp("  requirements filter    #%lu: %s\n", get32(k, 10 * 4),
+         poll_code(msi_class_text, SNAP_MSI_CLASSES, get32(k, 11 * 4)));
+    comp("    outcome              %s\n",
+         poll_code(msi_outcome_text, SNAP_MSI_OUTCOMES, get32(k, 12 * 4)));
+    v = get32(k, 13 * 4);
+    if (v == SNAP_POLL_NOT_FOUND) {
+        comp("    mode as read         not set (mode 0's default)\n");
+    } else {
+        comp("    mode as read         %lu\n", v);
+    }
+    comp("    the list             %lu configuration(s), %lu message and "
+         "%lu line member(s); %lu stripped\n", get32(k, 14 * 4),
+         get32(k, 15 * 4), get32(k, 16 * 4), get32(k, 17 * 4));
+}
+
+/*
+ * `-selftest-msi`: task 36.15's decode over canned HCD images: 7 x86 with
+ * the helper bound on MSI; 7 x86 with the helper absent, the list stripped,
+ * on the line; a refused helper; 98 SE (no filter: not applicable); a
+ * driver from before MSI; and a block between the two sizes.
+ */
+static void msi_word(unsigned char *hcd, unsigned long headWords,
+                     unsigned long index, unsigned long value)
+{
+    put32(hcd, headWords * 4 + (SNAP_MSI_FIRST + index) * 4, value);
+}
+
+static int selftest_msi(void)
+{
+    static unsigned char hcd[(SNAP_HCD_DELIVERY_HEAD_WORDS + SNAP_MSI_FIRST +
+                              SNAP_MSI_WORDS) * 4];
+    const unsigned long H = SNAP_HCD_DELIVERY_HEAD_WORDS;
+    const unsigned long W = SNAP_MSI_FIRST + SNAP_MSI_WORDS;
+    const unsigned long bytes = sizeof(hcd);
+
+    companion = NULL;
+
+    /* 7 x86, the helper bound, MSI connected (a raised
+     * MessageNumberLimit: four messages, one descriptor), the filter not
+     * asked. */
+    memset(hcd, 0, sizeof(hcd));
+    intr_image(hcd, H, W);
+    msi_word(hcd, H, 0, 2);
+    msi_word(hcd, H, 1, 4);
+    msi_word(hcd, H, 2, 3);
+    msi_word(hcd, H, 4, 1);
+    msi_word(hcd, H, 5, 3);
+    msi_word(hcd, H, 6, 1);
+    msi_word(hcd, H, 9, 0x02020000UL);
+    msi_word(hcd, H, 10, 1);
+    msi_word(hcd, H, 11, 3);
+    msi_word(hcd, H, 12, 4);
+    msi_word(hcd, H, 13, SNAP_POLL_NOT_FOUND);
+    msi_word(hcd, H, 14, 1);
+    msi_word(hcd, H, 15, 1);
+    msi_word(hcd, H, 16, 1);
+    print_msi(hcd, bytes);
+
+    /* 7 x86, the helper absent: the list stripped, the line granted. */
+    memset(hcd, 0, sizeof(hcd));
+    intr_image(hcd, H, W);
+    msi_word(hcd, H, 5, 1);
+    msi_word(hcd, H, 6, 2);
+    msi_word(hcd, H, 7, 0xC0000034UL);
+    msi_word(hcd, H, 10, 1);
+    msi_word(hcd, H, 11, 3);
+    msi_word(hcd, H, 12, 10);
+    msi_word(hcd, H, 13, 0);
+    msi_word(hcd, H, 14, 1);
+    msi_word(hcd, H, 15, 1);
+    msi_word(hcd, H, 16, 1);
+    msi_word(hcd, H, 17, 1);
+    print_msi(hcd, bytes);
+
+    /* A refused helper (a wrong magic): the identity test; 64-bit's
+     * routines, MSI-X. */
+    memset(hcd, 0, sizeof(hcd));
+    intr_image(hcd, H, W);
+    msi_word(hcd, H, 0, 1);
+    msi_word(hcd, H, 2, 4);
+    msi_word(hcd, H, 5, 2);
+    msi_word(hcd, H, 6, 1);
+    msi_word(hcd, H, 8, 3);
+    msi_word(hcd, H, 10, 1);
+    msi_word(hcd, H, 11, 3);
+    msi_word(hcd, H, 12, 10);
+    print_msi(hcd, bytes);
+
+    /* 98 SE: no filter ever, the mode word FFFFFFFF. */
+    memset(hcd, 0, sizeof(hcd));
+    intr_image(hcd, H, W);
+    msi_word(hcd, H, 13, SNAP_POLL_NOT_FOUND);
+    print_msi(hcd, bytes);
+
+    /* A driver from before MSI (96 words), a block of 100, a 2.2.0.2
+     * block of 63 (silent here), and a 114-word block the image cannot
+     * hold (refused by the shape check, silent here). */
+    memset(hcd, 0, sizeof(hcd));
+    intr_image(hcd, H, SNAP_MSI_FIRST);
+    print_msi(hcd, bytes);
+    intr_image(hcd, H, 100);
+    print_msi(hcd, bytes);
+    comp("[63 words follow]\n");
+    intr_image(hcd, H, 63);
+    print_msi(hcd, bytes);
+    comp("[a truncated block follows]\n");
+    intr_image(hcd, H, W);
+    print_msi(hcd, bytes - 4);
+    comp("[end]\n");
+    return 0;
+}
+
 /*
  * The HCD region's report: the ports and counters, then every section read
  * from the same header. When the header does not fit its image print_hcd
@@ -3388,6 +3658,8 @@ static void print_hcd_sections(const unsigned char *hcd, unsigned long bytes,
     /* 36.9: the event delivery, from the counters and the extension words
      * the header places. */
     print_intr(hcd, bytes, ext, extBytes);
+    /* 36.15: message-signalled interrupts, from the counters. */
+    print_msi(hcd, bytes);
 }
 
 /*
@@ -5640,6 +5912,8 @@ int main(int argc, char **argv)
             return selftest_hcd_bad();
         } else if (strcmp(argv[i], "-selftest-intr") == 0) {
             return selftest_intr();
+        } else if (strcmp(argv[i], "-selftest-msi") == 0) {
+            return selftest_msi();
         } else if (strcmp(argv[i], "-selftest-xstat") == 0) {
             return selftest_xstat();
         } else if (strcmp(argv[i], "-selftest-report") == 0 && i + 1 < argc) {

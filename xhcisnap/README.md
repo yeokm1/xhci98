@@ -325,6 +325,23 @@ A counter block of 63 words is a driver from before polling, reported as
 taking the line interrupt; a header shorter than 204 words places no
 extension words. `-selftest-intr` prints the decode over canned images.
 
+**Message interrupts** (2.2.0.3 on, task 36.15; design records 15 section
+4.3 and 18 section 9). Counter words 96 to 113 are named
+(`MsiRoutines` to `MsiFilterStripped`) and decoded in their own section:
+where the `IoConnectInterruptEx` pair came from (the 64-bit
+`MmGetSystemRoutineAddress`, the 32-bit helper `xhcimsi.sys`, or not
+found), the messages connected and granted, the capability (MSI or MSI-X)
+and the connection's status; the 32-bit helper's state (ABSENT, REFUSED
+with the check that failed, BOUND with its version); and the last
+`IRP_MN_FILTER_RESOURCE_REQUIREMENTS`'s record: the list's class, the
+outcome ("not asked", "REPLACED" when the message choices were stripped so
+the line is granted, or why the list was kept), the `XhciInterruptMode`
+it read, and the list's members. The filter runs on Vista and 7 only, so on
+Windows 98, ME, 2000 and XP its sequence is 0 and the section says "not
+applicable" (the raw `MsiFilterMode` word there reads FFFFFFFF, no value).
+A block of 96 words is a driver from before MSI. `-selftest-msi` prints
+the decode over canned images.
+
 The PORTSC decode is printed on screen whatever the level, because that is what
 the bench reads on the spot. The headline test is per port: a port reporting a
 device connected with `PP` clear is Finding Q read off the register, whatever
