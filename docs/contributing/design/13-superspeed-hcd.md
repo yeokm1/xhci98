@@ -2392,7 +2392,11 @@ for the length of one transfer.
   bounded as above. A handle's `IRP_MJ_CLEANUP` on the root-hub or a hub
   FDO cancels the requests still queued through that handle (matched by
   file object, claimed by the same handshake), leaving other handles'
-  alone, as the cleanup contract asks.
+  alone, as the cleanup contract asks. It first marks the file object
+  (`FsContext2`, the target driver's field) under the controller lock, the
+  lock the pend's admission holds, so a request of that handle still in
+  dispatch on another processor is refused `STATUS_CANCELLED` instead of
+  being queued after the cleanup.
 - *Surprise removal and unplug:* a device leaving marks its record `Gone`
   and drains it (`HcdIoDeviceDrain`), which now also completes its queued
   door IRPs `STATUS_DEVICE_NOT_CONNECTED` (`HcdDoorFlushDevice`) - before

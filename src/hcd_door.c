@@ -1644,6 +1644,11 @@ static NTSTATUS hcdDoorConnInfoV2(PHCD_CONTROLLER hc,
 /* Descriptors from the device (task 36.45)                                 */
 /* ----------------------------------------------------------------------- */
 
+/* A hub door's file object once its CLEANUP has begun (in FsContext2, the
+ * target device's driver's to use): a request still in dispatch for it is
+ * refused rather than queued (task 36.45). */
+static const UCHAR hcdDoorCleanedMark = 0;
+
 /* What one thread pass spends on door requests before it lets port
  * service run: at most four, and none begun past 250 ms (100 ns units, the
  * system time's low word). A single request is bounded by its own wait. */
@@ -1759,9 +1764,11 @@ static NTSTATUS hcdDoorPend(PHCD_CONTROLLER hc, const HCD_DOOR_NODE *node,
                             ULONG location, PIRP irp)
 {
     PHCD_USB_DEVICE dev;
+    PFILE_OBJECT file;
     KIRQL oldIrql;
     NTSTATUS refusal;
 
+    file = IoGetCurrentIrpStackLocation(irp)->FileObject;
     dev = hcdDoorDeviceRef(hc, node->Parent, location);
     if (dev == NULL) {
         return STATUS_INVALID_PARAMETER;
@@ -1770,6 +1777,11 @@ static NTSTATUS hcdDoorPend(PHCD_CONTROLLER hc, const HCD_DOOR_NODE *node,
     refusal = STATUS_SUCCESS;
     if (!hc->DoorQueueOpen) {
         refusal = STATUS_DEVICE_NOT_READY;
+    } else if (file != NULL &&
+               file->FsContext2 == (PVOID)&hcdDoorCleanedMark) {
+        /* Its handle's CLEANUP ran while this dispatch was on its way:
+         * nothing more is queued for it (HcdDoorCleanup). */
+        refusal = STATUS_CANCELLED;
     } else if (dev->Gone) {
         refusal = STATUS_DEVICE_NOT_CONNECTED;
     }
@@ -1856,19 +1868,26 @@ static VOID hcdDoorRefuse(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     hcdDoorRefuseOf(hc, dev, NULL, status);
 }
 
-/* IRP_MJ_CLEANUP on a door FDO (hcd_rh.c, hcd_hubfdo.c): the requests
- * still queued through the closing handle are cancelled, as the cleanup
- * contract asks; other handles' stay, and one the thread has already taken
- * ends with its transfer. `hc` NULL (an orphaned door) queues nothing.
- * IRQL: PASSIVE_LEVEL. */
+/* IRP_MJ_CLEANUP on a door FDO (hcd_rh.c, hcd_hubfdo.c): the file object
+ * is marked under the controller lock - the lock a dispatch queues under,
+ * so one still on its way is refused (hcdDoorPend) - and the requests
+ * already queued through it are cancelled, as the cleanup contract asks;
+ * other handles' stay, and one the thread has already taken ends with its
+ * transfer. `hc` NULL (an orphaned door) queues nothing. IRQL:
+ * PASSIVE_LEVEL. */
 VOID HcdDoorCleanup(PHCD_CONTROLLER hc, PIRP irp)
 {
     PFILE_OBJECT file;
+    KIRQL oldIrql;
 
     file = IoGetCurrentIrpStackLocation(irp)->FileObject;
-    if (hc != NULL && file != NULL) {
-        hcdDoorRefuseOf(hc, NULL, file, STATUS_CANCELLED);
+    if (hc == NULL || file == NULL) {
+        return;
     }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    file->FsContext2 = (PVOID)&hcdDoorCleanedMark;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    hcdDoorRefuseOf(hc, NULL, file, STATUS_CANCELLED);
 }
 
 /* A device leaving (HcdIoDeviceDrain, after Gone is set): its queued
