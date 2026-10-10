@@ -319,10 +319,12 @@ the safety notes, and how to read each result.
 
 ## Installing
 
-Each flavour directory of the package holds five files: `xhci98.inf` and
-`xhci98.sys`, the host controller driver, `xhciuas.inf` and `xhciuas.sys`,
-the UAS driver, and `txtsetup.oem`, which only Windows 2000 and XP Setup read
-(below). `release-x86\` is the one to install on 32-bit
+Each x64 flavour directory of the package holds six files: `xhci98.inf`
+and `xhci98.sys`, the host controller driver, `xhciuas.inf` and
+`xhciuas.sys`, the UAS driver, `txtsetup.oem`, which only Windows 2000 and
+XP Setup read (below), and `portsw.vbs`, the Intel port switchover's
+script. Each x86 flavour directory holds a seventh, `xhcimsi.sys`, the MSI
+helper the INF installs on 32-bit Vista and 7 only. `release-x86\` is the one to install on 32-bit
 Windows and `release-x64\` on 64-bit Windows; the `debug-` directories are the
 same drivers built for troubleshooting. No Microsoft file is in the package.
 
@@ -341,8 +343,11 @@ same drivers built for troubleshooting. No Microsoft file is in the package.
      install the driver anyway. Use Device Manager rather than right-clicking
      the INF.
 3. It installs as "xHCI98 USB 3.x eXtensible Host Controller" with "xHCI98
-   USB 3.x Root Hub" beneath it, and neither should carry a warning mark.
-   Restart if asked: Windows 98 SE asks once, after the controller's install.
+   USB 3.x Root Hub" beneath it. Restart if asked: Windows 98 SE asks once,
+   after the controller's install, and 32-bit Vista and 7 ask, for the MSI
+   helper, holding the controller (Code 28 on 7, Code 1 on Vista) until
+   the restart. After any restart asked for, neither entry should carry a
+   warning mark.
 4. The first UAS device brings the Found New Hardware wizard for "xHCI98 USB
    Attached SCSI Storage"; point it at the same directory.
 5. An external hub installs as "xHCI98 USB Hub" from the driver already
@@ -1070,8 +1075,10 @@ no message-signalled interrupts and are unchanged.
   ports work from the next start of Windows on, with the message. If
   `xhcimsi.sys` is missing or does not load, the controller keeps its
   interrupt line.
-- **Forcing the interrupt line** on Vista and 7: set `XhciInterruptMode` to
-  `1` and disable and enable the controller, or set `MSISupported` to `0`
+- **Asking for the interrupt line** on Vista and 7: set `XhciInterruptMode`
+  to `1` and disable and enable the controller (a message Windows grants
+  anyway is still used, and one that cannot be connected polls; see
+  "XhciInterruptMode, XhciPollIdleMs and XhciPollActiveMs"), or set `MSISupported` to `0`
   under `Interrupt Management\MessageSignaledInterruptProperties` in the
   controller's hardware key (Device Parameters) and restart. On 32-bit
   Vista and 7 with no `xhcimsi.sys` running, a controller that offers no
@@ -1112,6 +1119,8 @@ Manager also shows it: the controller's Properties, Details tab, the
 "Driver key" property, whose value ends in that `NNNN`. A change takes
 effect when the driver next starts: restart Windows (or, for the values
 that say so, disable and enable the controller in Device Manager).
+`XhciForceBulkOnly` is the exception: it is read as each device is
+enumerated ("XhciForceBulkOnly").
 
 The install writes all sixteen: each at the driver's own default, except
 `XhciImodInterval250ns` at `160`. Each is written only where it is missing,

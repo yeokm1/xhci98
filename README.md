@@ -110,8 +110,8 @@ readme.txt     the release notes in plain text
 2. Install the prerequisites above. On Windows 98 SE the order for a fresh install is NUSB, then xhci98, then the UAS disk.
 3. In Device Manager, find the unrecognised xHCI controller. It sits unclaimed with a yellow mark, usually under "Other devices" such as "Universal Serial Bus Controller".
 4. Properties -> Driver -> Update Driver -> Specify a location/Have Disk -> the `release-x86\` or `release-x64\` directory.
-5. It installs as "xHCI98 USB 3.x eXtensible Host Controller" with "xHCI98 USB 3.x Root Hub" underneath it, and neither should carry a warning mark. Windows 98 SE may ask for its CD for `usbd.sys`.
-6. Reboot if requested.
+5. It installs as "xHCI98 USB 3.x eXtensible Host Controller" with "xHCI98 USB 3.x Root Hub" underneath it. Windows 98 SE may ask for its CD for `usbd.sys`.
+6. Reboot if requested: Windows 98 SE asks, and so do 32-bit Vista and 7 (for the MSI helper `xhcimsi.sys`; the controller waits for the restart). After it, neither entry should carry a warning mark.
 7. Plug in a UAS disk, and when the wizard asks for "xHCI98 USB Attached SCSI Storage", point it at the same directory. No restart is needed for `xhciuas.sys`.
 8. An external hub installs as "xHCI98 USB Hub" from the driver already installed. On Windows 98 SE and 2000 it installs with nothing to answer. On Windows XP every newly plugged hub brings the Found New Hardware wizard and the unsigned-driver warning (Continue Anyway).
 
@@ -163,7 +163,7 @@ On every system, update the "USB 2.0 eXtensible Host Controller (xhci98)" entry 
 - **Windows XP**: Driver -> Update Driver: "No, not this time", "Install from a list or specific location", "Don't search. I will choose the driver to install", Have Disk -> the package directory, "xHCI98 USB 3.x eXtensible Host Controller", Continue Anyway.
 
   A second wizard follows for "xHCI98 USB 3.x Root Hub": "No, not this time", "Install the software automatically", Continue Anyway, Finish. No restart.
-- **Windows Vista and 7**: Update Driver Software -> "Browse my computer for driver software" -> "Let me pick from a list of device drivers on my computer" -> Have Disk -> the package directory -> "xHCI98 USB 3.x eXtensible Host Controller" -> "Install this driver software anyway". No restart on x64; on 32-bit Vista and 7 the install asks for one, for the MSI helper `xhcimsi.sys`, and the controller waits for it (Code 28 on 7, Code 1 on Vista until then).
+- **Windows Vista and 7**: Update Driver Software -> "Browse my computer for driver software" -> "Let me pick from a list of device drivers on my computer" -> Have Disk -> the package directory -> "xHCI98 USB 3.x eXtensible Host Controller" -> "Install this driver software anyway". No restart on x64; on 32-bit Vista and 7 it asks for one, for the MSI helper `xhcimsi.sys`; restart when asked.
 
   Do not just type the folder into the search box: Windows answers that the best driver is already installed and keeps the old one.
 
