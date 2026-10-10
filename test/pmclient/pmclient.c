@@ -58,7 +58,10 @@ typedef struct _PM_EXT {
     volatile ULONG Open;
     LONG Busy;
     LONG Outstanding;
-    ULONG PowerTarget;      /* the D-state a request in flight asks, 0 none */
+    ULONG PowerTarget;      /* the D-state the SET in flight asks, 0 none */
+    PIRP DeferredSIrp;      /* a system SET held behind it (pmPowerRelease) */
+    ULONG DeferredSState;
+    ULONG DeferredD;        /* a wake's or idle completion's D0 behind it */
     /* WAIT_WAKE: WakeBusy reserves this client's one request until its
      * callback; WakeIrp/WakeRef track it as it passes down through this
      * FDO, WakeRef 1 for the IRP, +1 while a canceller holds it (the
@@ -385,47 +388,53 @@ static VOID pmConfigure(PPM_EXT ext)
 /* Power requests                                                      */
 /* ------------------------------------------------------------------ */
 
+/*
+ * The device transitions, serialized (Codex review of 36.34, rounds 3 and
+ * 4): one SET in flight at a time, its slot PowerTarget owned by the
+ * request that took it and let go only by that request's callback or
+ * refusal (pmPowerRelease). A request for the confirmed current state with
+ * no SET in flight is answered here, its result accounted with no slot
+ * touched (9x may pend a same-state request and never call back). A
+ * request that finds the slot taken is, for an explicit PMCTL command or
+ * the idle callback, refused BUSY; for the transitions the policy owner
+ * must make - a system SET's device state, the D0 after a wake or an idle
+ * completion - deferred and started when the slot is let go: DeferredSIrp
+ * (the system IRP, held, counted in Outstanding) first, then DeferredD.
+ * A QUERY takes no slot.
+ */
+#define PM_POWER_GO         0
+#define PM_POWER_LOCAL      1
+#define PM_POWER_BUSY       2
+#define PM_POWER_DEFERRED   3
+
+#define PM_DEFER_NONE       0
+#define PM_DEFER_D          1   /* DeferredD                         */
+#define PM_DEFER_SIRP       2   /* DeferredSIrp with DeferredSState  */
+
+static VOID NTAPI pmSystemDevDone(PDEVICE_OBJECT dev, UCHAR minor,
+                                  POWER_STATE state, PVOID ctx,
+                                  PIO_STATUS_BLOCK io);
 static VOID NTAPI pmPowerDone(PDEVICE_OBJECT dev, UCHAR minor,
                               POWER_STATE state, PVOID ctx,
-                              PIO_STATUS_BLOCK io)
-{
-    PPM_EXT ext;
-    KIRQL irql;
+                              PIO_STATUS_BLOCK io);
 
-    UNREFERENCED_PARAMETER(dev);
-    UNREFERENCED_PARAMETER(minor);
-    ext = (PPM_EXT)ctx;
-    KeAcquireSpinLock(&ext->Lock, &irql);
-    ext->St.PowerCallbacks++;
-    ext->St.PowerLastStatus = io->Status;
-    ext->St.PowerLastState = state.DeviceState;
-    if (ext->PowerTarget == (ULONG)state.DeviceState) {
-        /* Ours: a LOCAL answer's state is the current one, never a
-         * slot's target. */
-        ext->PowerTarget = 0;
-    }
-    KeReleaseSpinLock(&ext->Lock, irql);
-    InterlockedDecrement(&ext->Outstanding);
-}
-
-/* The device transitions, serialized (Codex review of 36.34, round 3,
- * finding 1): one SET in flight at a time (PowerTarget, cleared by its
- * callback alone); a request while one is in flight is refused BUSY; a
- * request for the confirmed current state, with none in flight, is
- * answered here (9x may pend such a request and never call back). A
- * QUERY takes no slot and leaves PowerTarget alone. */
-#define PM_POWER_GO     0
-#define PM_POWER_LOCAL  1
-#define PM_POWER_BUSY   2
-
-static ULONG pmPowerBegin(PPM_EXT ext, UCHAR minor, DEVICE_POWER_STATE d)
+static ULONG pmPowerBegin(PPM_EXT ext, UCHAR minor, DEVICE_POWER_STATE d,
+                          ULONG defer, PIRP sirp)
 {
     KIRQL irql;
     ULONG answer;
 
     KeAcquireSpinLock(&ext->Lock, &irql);
-    if (ext->PowerTarget != 0) {
+    if (minor == IRP_MN_SET_POWER && ext->PowerTarget != 0) {
         answer = PM_POWER_BUSY;
+        if (defer == PM_DEFER_SIRP && ext->DeferredSIrp == NULL) {
+            ext->DeferredSIrp = sirp;
+            ext->DeferredSState = (ULONG)d;
+            answer = PM_POWER_DEFERRED;
+        } else if (defer == PM_DEFER_D) {
+            ext->DeferredD = (ULONG)d;
+            answer = PM_POWER_DEFERRED;
+        }
     } else if ((ULONG)d == ext->St.DevicePower) {
         answer = PM_POWER_LOCAL;
     } else {
@@ -438,70 +447,148 @@ static ULONG pmPowerBegin(PPM_EXT ext, UCHAR minor, DEVICE_POWER_STATE d)
     return answer;
 }
 
-/* A SET that PoRequestPowerIrp refused: its slot let go. */
-static VOID pmPowerAbandon(PPM_EXT ext, UCHAR minor)
+/* A SET's result counted; no slot is touched. */
+static VOID pmPowerAccount(PPM_EXT ext, ULONG d, NTSTATUS status, ULONG idle)
 {
     KIRQL irql;
 
-    if (minor != IRP_MN_SET_POWER) {
-        return;
-    }
     KeAcquireSpinLock(&ext->Lock, &irql);
-    ext->PowerTarget = 0;
+    ext->St.PowerCallbacks++;
+    ext->St.PowerLastStatus = status;
+    ext->St.PowerLastState = d;
+    if (idle) {
+        ext->St.IdleCallbackPowerStatus = status;
+    }
     KeReleaseSpinLock(&ext->Lock, irql);
 }
 
-/* A D-IRP requested; `done` NULL counts it with pmPowerDone. Every request
- * holds Outstanding until its callback has run, which REMOVE waits for.
- * pmPowerBegin's answer decides: BUSY is returned (the callback is not
- * called), LOCAL is answered here with its callback called at once (on
- * Windows 98 and ME PoRequestPowerIrp for the current device state may
- * return PENDING and never deliver an IRP or call back: Codex review of
- * 36.34, round 2, finding 1). */
-static NTSTATUS pmRequestPower(PPM_EXT ext, DEVICE_POWER_STATE d,
-                               PREQUEST_POWER_COMPLETE done, PVOID ctx)
+static VOID pmPowerRelease(PPM_EXT ext);
+
+/* A SET whose slot the caller owns, sent; a refusal lets the slot go. */
+static NTSTATUS pmPowerSend(PPM_EXT ext, ULONG d,
+                            PREQUEST_POWER_COMPLETE done, PVOID ctx)
 {
     POWER_STATE state;
-    IO_STATUS_BLOCK io;
     NTSTATUS status;
+    KIRQL irql;
+
+    state.DeviceState = (DEVICE_POWER_STATE)d;
+    InterlockedIncrement(&ext->Outstanding);
+    status = PoRequestPowerIrp(ext->Pdo, IRP_MN_SET_POWER, state, done, ctx,
+                               NULL);
+    if (status != STATUS_PENDING && !NT_SUCCESS(status)) {
+        KeAcquireSpinLock(&ext->Lock, &irql);
+        ext->St.PowerRefused++;
+        ext->St.PowerLastStatus = status;
+        KeReleaseSpinLock(&ext->Lock, irql);
+        pmPowerRelease(ext);
+        InterlockedDecrement(&ext->Outstanding);
+    }
+    return status;
+}
+
+/* The slot let go by its owner, and one deferred transition started: the
+ * held system IRP's first (completed at once when its state is already
+ * the device's, or when its request is refused), else the deferred D.
+ * IRQL: <= DISPATCH_LEVEL. */
+static VOID pmPowerRelease(PPM_EXT ext)
+{
+    KIRQL irql;
+    PIRP sirp;
+    ULONG sd;
+    ULONG wd;
+    ULONG go;
+
+    KeAcquireSpinLock(&ext->Lock, &irql);
+    ext->PowerTarget = 0;
+    sirp = ext->DeferredSIrp;
+    sd = ext->DeferredSState;
+    wd = 0;
+    go = 0;
+    if (sirp != NULL) {
+        ext->DeferredSIrp = NULL;
+        if (sd != ext->St.DevicePower) {
+            ext->PowerTarget = sd;
+            go = 1;
+        }
+    } else if (ext->DeferredD != 0) {
+        wd = ext->DeferredD;
+        ext->DeferredD = 0;
+        if (wd != ext->St.DevicePower && ext->Open) {
+            ext->PowerTarget = wd;
+            go = 1;
+        }
+    }
+    KeReleaseSpinLock(&ext->Lock, irql);
+    if (sirp != NULL) {
+        if (!go || !NT_SUCCESS(pmPowerSend(ext, sd, pmSystemDevDone, sirp))) {
+            PoStartNextPowerIrp(sirp);
+            IoCompleteRequest(sirp, IO_NO_INCREMENT);
+        }
+        /* The hold's own count (pmSystemDone), after the send's. */
+        InterlockedDecrement(&ext->Outstanding);
+        return;
+    }
+    if (go) {
+        (VOID)pmPowerSend(ext, wd, pmPowerDone, ext);
+    }
+}
+
+/* A sent SET's callback: its owner, so it lets the slot go. */
+static VOID NTAPI pmPowerDone(PDEVICE_OBJECT dev, UCHAR minor,
+                              POWER_STATE state, PVOID ctx,
+                              PIO_STATUS_BLOCK io)
+{
+    PPM_EXT ext;
+
+    UNREFERENCED_PARAMETER(dev);
+    UNREFERENCED_PARAMETER(minor);
+    ext = (PPM_EXT)ctx;
+    pmPowerAccount(ext, state.DeviceState, io->Status, 0);
+    pmPowerRelease(ext);
+    InterlockedDecrement(&ext->Outstanding);
+}
+
+static VOID NTAPI pmIdlePowerDone(PDEVICE_OBJECT dev, UCHAR minor,
+                                  POWER_STATE state, PVOID ctx,
+                                  PIO_STATUS_BLOCK io);
+
+/* A D-IRP requested. `defer` (PM_DEFER_D) for a transition the policy
+ * owner must make: deferred behind a SET in flight rather than refused.
+ * `idle` the idle callback's own (its callback pmIdlePowerDone, which
+ * releases its waiter). Every request holds Outstanding until its
+ * callback has run, which REMOVE waits for. Returns SUCCESS (answered
+ * here, or deferred), PENDING (sent), or a refusal. */
+static NTSTATUS pmRequestPower(PPM_EXT ext, DEVICE_POWER_STATE d,
+                               ULONG defer, ULONG idle)
+{
     KIRQL irql;
     ULONG answer;
 
-    state.DeviceState = d;
     KeAcquireSpinLock(&ext->Lock, &irql);
     ext->St.PowerRequests++;
     KeReleaseSpinLock(&ext->Lock, irql);
-    answer = pmPowerBegin(ext, IRP_MN_SET_POWER, d);
-    if (answer == PM_POWER_BUSY) {
+    answer = pmPowerBegin(ext, IRP_MN_SET_POWER, d, defer, NULL);
+    switch (answer) {
+    case PM_POWER_BUSY:
         KeAcquireSpinLock(&ext->Lock, &irql);
         ext->St.PowerRefused++;
         ext->St.PowerLastStatus = STATUS_DEVICE_BUSY;
         KeReleaseSpinLock(&ext->Lock, irql);
         return STATUS_DEVICE_BUSY;
-    }
-    InterlockedIncrement(&ext->Outstanding);
-    if (answer == PM_POWER_LOCAL) {
-        io.Status = STATUS_SUCCESS;
-        io.Information = 0;
-        if (done != NULL) {
-            done(ext->Pdo, IRP_MN_SET_POWER, state, ctx, &io);
-        } else {
-            pmPowerDone(ext->Pdo, IRP_MN_SET_POWER, state, ext, &io);
+    case PM_POWER_DEFERRED:
+        return STATUS_SUCCESS;
+    case PM_POWER_LOCAL:
+        pmPowerAccount(ext, (ULONG)d, STATUS_SUCCESS, idle);
+        if (idle) {
+            InterlockedExchange(&ext->IdlePowerDone, 1);
         }
         return STATUS_SUCCESS;
+    default:
+        break;
     }
-    status = PoRequestPowerIrp(ext->Pdo, IRP_MN_SET_POWER, state,
-                               done != NULL ? done : pmPowerDone,
-                               done != NULL ? ctx : ext, NULL);
-    if (status != STATUS_PENDING && !NT_SUCCESS(status)) {
-        InterlockedDecrement(&ext->Outstanding);
-        KeAcquireSpinLock(&ext->Lock, &irql);
-        ext->St.PowerRefused++;
-        ext->St.PowerLastStatus = status;
-        KeReleaseSpinLock(&ext->Lock, irql);
-        pmPowerAbandon(ext, IRP_MN_SET_POWER);
-    }
-    return status;
+    return pmPowerSend(ext, (ULONG)d, idle ? pmIdlePowerDone : pmPowerDone,
+                       ext);
 }
 
 /* The requester's WAIT_WAKE callback (5.5's 9x defect is this never being
@@ -526,7 +613,7 @@ static VOID NTAPI pmWakeDone(PDEVICE_OBJECT dev, UCHAR minor,
     ext->St.WakeLastStatus = status;
     KeReleaseSpinLock(&ext->Lock, irql);
     if (NT_SUCCESS(status) && ext->Open) {
-        (VOID)pmRequestPower(ext, PowerDeviceD0, NULL, NULL);
+        (VOID)pmRequestPower(ext, PowerDeviceD0, PM_DEFER_D, 0);
     }
     InterlockedDecrement(&ext->Outstanding);
 }
@@ -614,28 +701,20 @@ static VOID pmWakeCancel(PPM_EXT ext)
 /* The idle notification                                               */
 /* ------------------------------------------------------------------ */
 
+/* The idle callback's sent SET: its owner, so it lets the slot go; its
+ * waiter released. */
 static VOID NTAPI pmIdlePowerDone(PDEVICE_OBJECT dev, UCHAR minor,
                                   POWER_STATE state, PVOID ctx,
                                   PIO_STATUS_BLOCK io)
 {
     PPM_EXT ext;
-    KIRQL irql;
 
     UNREFERENCED_PARAMETER(dev);
     UNREFERENCED_PARAMETER(minor);
     ext = (PPM_EXT)ctx;
-    KeAcquireSpinLock(&ext->Lock, &irql);
-    ext->St.PowerCallbacks++;
-    ext->St.PowerLastStatus = io->Status;
-    ext->St.PowerLastState = state.DeviceState;
-    ext->St.IdleCallbackPowerStatus = io->Status;
-    if (ext->PowerTarget == (ULONG)state.DeviceState) {
-        /* Ours: a LOCAL answer's state is the current one, never a
-         * slot's target. */
-        ext->PowerTarget = 0;
-    }
-    KeReleaseSpinLock(&ext->Lock, irql);
+    pmPowerAccount(ext, state.DeviceState, io->Status, 1);
     InterlockedExchange(&ext->IdlePowerDone, 1);
+    pmPowerRelease(ext);
     InterlockedDecrement(&ext->Outstanding);
 }
 
@@ -663,7 +742,7 @@ static VOID NTAPI pmIdleCallback(PVOID context)
         (VOID)pmRequestWake(ext);
     }
     InterlockedExchange(&ext->IdlePowerDone, 0);
-    if (pmRequestPower(ext, d, pmIdlePowerDone, ext) == STATUS_PENDING) {
+    if (pmRequestPower(ext, d, PM_DEFER_NONE, 1) == STATUS_PENDING) {
         /* LOCAL called the callback already; BUSY and a refusal never
          * will. */
         pmWaitNonZero(&ext->IdlePowerDone);
@@ -695,7 +774,7 @@ static NTSTATUS NTAPI pmIdleDone(PDEVICE_OBJECT dev, PIRP irp, PVOID ctx)
     KeReleaseSpinLock(&ext->Lock, irql);
     if (NT_SUCCESS(status) && (ext->IdleFlags & PM_IDLE_AUTO_D0) &&
         ext->Open) {
-        (VOID)pmRequestPower(ext, PowerDeviceD0, NULL, NULL);
+        (VOID)pmRequestPower(ext, PowerDeviceD0, PM_DEFER_D, 0);
     }
     if (InterlockedDecrement(&ext->IdleRef) == 0) {
         pmIdleRetire(ext, irp);
@@ -983,7 +1062,8 @@ static NTSTATUS NTAPI pmIoctl(PDEVICE_OBJECT dev, PIRP irp)
             status = STATUS_INVALID_PARAMETER;
             break;
         }
-        status = pmRequestPower(ext, (DEVICE_POWER_STATE)*in, NULL, NULL);
+        status = pmRequestPower(ext, (DEVICE_POWER_STATE)*in,
+                                PM_DEFER_NONE, 0);
         if (status == STATUS_PENDING) {
             status = STATUS_SUCCESS;
         }
@@ -1155,46 +1235,46 @@ static NTSTATUS NTAPI pmSetPowerDone(PDEVICE_OBJECT dev, PIRP irp,
 }
 
 /* The device request a system IRP asked for has completed: the system IRP
- * completes now (the policy owner's order). */
+ * completes now (the policy owner's order); a SET's callback owns its
+ * slot and lets it go. */
 static VOID NTAPI pmSystemDevDone(PDEVICE_OBJECT dev, UCHAR minor,
                                   POWER_STATE state, PVOID ctx,
                                   PIO_STATUS_BLOCK io)
 {
     PIRP sirp;
     PPM_EXT ext;
-    KIRQL irql;
 
+    UNREFERENCED_PARAMETER(dev);
     sirp = (PIRP)ctx;
     ext = (PPM_EXT)IoGetCurrentIrpStackLocation(sirp)
               ->DeviceObject->DeviceExtension;
-    UNREFERENCED_PARAMETER(dev);
-    UNREFERENCED_PARAMETER(state);
-    if (minor == IRP_MN_SET_POWER) {
-        KeAcquireSpinLock(&ext->Lock, &irql);
-        ext->PowerTarget = 0;
-        KeReleaseSpinLock(&ext->Lock, irql);
-    }
     if (minor == IRP_MN_QUERY_POWER) {
         /* The device query's verdict is the system query's. */
         sirp->IoStatus.Status = io->Status;
+    } else {
+        pmPowerAccount(ext, state.DeviceState, io->Status, 0);
     }
     PoStartNextPowerIrp(sirp);
     IoCompleteRequest(sirp, IO_NO_INCREMENT);
+    if (minor == IRP_MN_SET_POWER) {
+        pmPowerRelease(ext);
+    }
     InterlockedDecrement(&ext->Outstanding);
 }
 
 /* A system SET_POWER or QUERY_POWER the stack below has taken: as the
  * device's power policy owner, the client asks the device state it maps
  * to - D0 for S0, D3 below it - with the same minor, and completes the
- * system IRP when that one completes (Codex review of 36.34, round 1,
- * finding 7). */
+ * system IRP when that one completes (Codex review of 36.34, rounds 1 to
+ * 4). A system SET finding a device transition in flight is held and its
+ * device request started when that one ends; a QUERY then is refused
+ * BUSY. */
 static NTSTATUS NTAPI pmSystemDone(PDEVICE_OBJECT dev, PIRP irp, PVOID ctx)
 {
     PPM_EXT ext;
     PIO_STACK_LOCATION stack;
     POWER_STATE d;
     NTSTATUS status;
-    KIRQL irql;
     ULONG answer;
 
     UNREFERENCED_PARAMETER(ctx);
@@ -1211,31 +1291,41 @@ static NTSTATUS NTAPI pmSystemDone(PDEVICE_OBJECT dev, PIRP irp, PVOID ctx)
     if (stack->MinorFunction == IRP_MN_SET_POWER) {
         ext->St.SystemPower = stack->Parameters.Power.State.SystemState;
     }
+    /* Counted before the hold is visible, so a release that takes it at
+     * once finds its count (pmPowerRelease drops it). */
+    InterlockedIncrement(&ext->Outstanding);
     answer = pmPowerBegin(ext, stack->MinorFunction,
-                          (DEVICE_POWER_STATE)d.DeviceState);
+                          (DEVICE_POWER_STATE)d.DeviceState,
+                          (stack->MinorFunction == IRP_MN_SET_POWER)
+                              ? PM_DEFER_SIRP
+                              : PM_DEFER_NONE,
+                          irp);
+    if (answer == PM_POWER_DEFERRED) {
+        return STATUS_MORE_PROCESSING_REQUIRED;
+    }
+    InterlockedDecrement(&ext->Outstanding);
     if (answer == PM_POWER_LOCAL) {
         /* Already there (the 9x same-state request is never sent). */
         PoStartNextPowerIrp(irp);
         return STATUS_SUCCESS;
     }
     if (answer == PM_POWER_BUSY) {
-        /* A transition of this client's is in flight: a query is refused
-         * BUSY; a set goes on without its device request, counted. */
-        KeAcquireSpinLock(&ext->Lock, &irql);
-        ext->St.PowerRefused++;
-        KeReleaseSpinLock(&ext->Lock, irql);
-        if (stack->MinorFunction == IRP_MN_QUERY_POWER) {
-            irp->IoStatus.Status = STATUS_DEVICE_BUSY;
-        }
+        /* A query while a transition is in flight. */
+        irp->IoStatus.Status = STATUS_DEVICE_BUSY;
         PoStartNextPowerIrp(irp);
         return STATUS_SUCCESS;
     }
-    InterlockedIncrement(&ext->Outstanding);
-    status = PoRequestPowerIrp(ext->Pdo, stack->MinorFunction, d,
-                               pmSystemDevDone, irp, NULL);
+    if (stack->MinorFunction == IRP_MN_SET_POWER) {
+        status = pmPowerSend(ext, d.DeviceState, pmSystemDevDone, irp);
+    } else {
+        InterlockedIncrement(&ext->Outstanding);
+        status = PoRequestPowerIrp(ext->Pdo, IRP_MN_QUERY_POWER, d,
+                                   pmSystemDevDone, irp, NULL);
+        if (status != STATUS_PENDING && !NT_SUCCESS(status)) {
+            InterlockedDecrement(&ext->Outstanding);
+        }
+    }
     if (status != STATUS_PENDING && !NT_SUCCESS(status)) {
-        InterlockedDecrement(&ext->Outstanding);
-        pmPowerAbandon(ext, stack->MinorFunction);
         if (stack->MinorFunction == IRP_MN_QUERY_POWER) {
             /* No device query follows, so the system query fails with
              * the request (Codex review of 36.34, round 3, finding 3). */
