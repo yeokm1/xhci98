@@ -55,6 +55,22 @@ static ULONG hcdSuspHalted(PHCD_CONTROLLER hc)
     return hc->Hc.ControllerFailed || hc->ScratchTainted;
 }
 
+/* The bounded log lines (36.33): at most HCD_SUSP_NOTE_BUDGET notes per
+ * start, the rest counted in SuspNotesSuppressed, so a device that
+ * suspends and wakes all day cannot flood the note ring. IRQL: PASSIVE_LEVEL
+ * or DISPATCH_LEVEL with no lock held. */
+#define HCD_SUSP_NOTE_BUDGET        64L
+
+static VOID hcdSuspNote(PHCD_CONTROLLER hc, const char *label, ULONG value)
+{
+    if (InterlockedIncrement(&hc->SuspNotes) <= HCD_SUSP_NOTE_BUDGET) {
+        XhciLogNote(&hc->Hc, label, value);
+    } else {
+        (VOID)InterlockedIncrement(
+            (PLONG)&hc->Counters.SuspNotesSuppressed);
+    }
+}
+
 /*
  * A wait the machine requires - the dwell, TDRSMDN, TRSMRCY, SP=1's
  * minimum - and only these advance its clock (3.10). Before Windows 8 a
@@ -372,6 +388,11 @@ static VOID hcdSuspClaimDue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     }
     claimed = hcdSuspClaimWakes(dev, 1, hc->WakeSeq, t);
     XhciSuspWakeCount(&dev->Susp, claimed);
+    hc->Counters.SuspWakeEvents++;
+    if (claimed == 0) {
+        hc->Counters.SuspWakeUnclaimed++;
+    }
+    hc->Counters.SuspWaitWakesCompleted += claimed;
 }
 
 /* ------------------------------------------------------------------ */
@@ -581,7 +602,7 @@ static ULONG hcdSuspIdleBatchLocked(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         (VOID)InterlockedIncrement(&pdo->IdlePending);
         InsertTailList(&hc->IdleQueue, &pdo->IdleEntry);
     }
-    hc->IdleBatches++;
+    hc->Counters.IdleBatches++;
     return 1;
 }
 
@@ -1002,10 +1023,12 @@ static ULONG hcdSuspRun(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG step,
     KIRQL oldIrql;
     ULONG result;
     ULONG group;
+    ULONG old;
 
     taken.Count = 0;
     itaken.Count = 0;
     q = hcdSuspPort(hc, dev);
+    old = dev->Susp.State;
     while (step != XHCI_SUSP_STEP_END) {
         result = XHCI_SUSP_RES_TIMEOUT;
         if (q == NULL || hcdSuspHalted(hc)) {
@@ -1018,6 +1041,9 @@ static ULONG hcdSuspRun(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG step,
                 break;
             case XHCI_SUSP_STEP_ARM:
                 result = hcdSuspArm(hc, dev, wait);
+                if (result == XHCI_SUSP_RES_OK) {
+                    hc->Counters.SuspArms++;
+                }
                 break;
             case XHCI_SUSP_STEP_STOP:
                 result = hcdSuspStop(hc, dev);
@@ -1045,6 +1071,9 @@ static ULONG hcdSuspRun(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG step,
                 break;
             case XHCI_SUSP_STEP_DISARM:
                 result = hcdSuspControl(hc, dev, HCD_SUSP_REQ_CLEAR_FEATURE);
+                if (result == XHCI_SUSP_RES_OK) {
+                    hc->Counters.SuspDisarms++;
+                }
                 break;
             case XHCI_SUSP_STEP_RESTART:
                 hcdSuspHold(hc, wait);
@@ -1069,6 +1098,37 @@ static ULONG hcdSuspRun(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG step,
     XHCI_DBG_VALUE("hcd: suspend sequence, slot/kind/outcome/state",
                    (dev->SlotId << 24) | (dev->Susp.Kind << 16) |
                        (dev->Susp.Outcome << 8) | dev->Susp.State);
+    switch (dev->Susp.Outcome) {
+    case XHCI_SUSP_OUT_SUSPENDED:
+        hc->Counters.SuspSuspended++;
+        break;
+    case XHCI_SUSP_OUT_ACTIVE:
+        hc->Counters.SuspActive++;
+        break;
+    case XHCI_SUSP_OUT_REFUSED:
+        hc->Counters.SuspRefused++;
+        hc->Counters.SuspRefusedReason = dev->Susp.Reason;
+        break;
+    case XHCI_SUSP_OUT_UNCERTAIN:
+        hc->Counters.SuspUncertain++;
+        break;
+    case XHCI_SUSP_OUT_GONE:
+        hc->Counters.SuspGone++;
+        break;
+    default:
+        break;
+    }
+    /* 36.33's line: the PDO group, the old and new link state, the kind,
+     * the outcome and the reason, then the controller's epoch. */
+    hcdSuspNote(hc, "susp.seq",
+                ((hcdSuspPdo(dev->Pdo) != NULL
+                      ? hcdSuspPdo(dev->Pdo)->Group & 0xFFFUL
+                      : 0UL) << 20) |
+                    ((old & 0xFUL) << 16) | ((dev->Susp.State & 0xFUL) << 12) |
+                    ((dev->Susp.Kind & 0xFUL) << 8) |
+                    ((dev->Susp.Outcome & 0xFUL) << 4) |
+                    (dev->Susp.Reason & 0xFUL));
+    hcdSuspNote(hc, "susp.seq.epoch", hc->PowerEpoch);
     switch (dev->Susp.State) {
     case XHCI_SUSP_ACTIVE:
         HcdCfgUndefer(hc, dev);
@@ -1133,6 +1193,7 @@ static ULONG hcdSuspDecideOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         /* A wake event taken at the acknowledgement or the hub look. */
         dev->SuspWakeDue = 0;
         kind = XHCI_SUSP_RUN_WAKE;
+        hc->Counters.SuspWakesBegun++;
         step = XhciSuspBegin(&dev->Susp, kind, 0, 0, hc->SuspClockMs, &wait);
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         (VOID)hcdSuspRun(hc, dev, step, wait);
@@ -1168,10 +1229,12 @@ static ULONG hcdSuspDecideOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         dev->Susp.Root = (q->Hub == NULL) ? 1UL : 0UL;
         if (d.Do == XHCI_SUSP_DO_SUSPEND) {
             kind = XHCI_SUSP_RUN_SUSPEND;
+            hc->Counters.SuspSuspendsBegun++;
             step = XhciSuspBegin(&dev->Susp, kind, d.ArmIntent, 0,
                                  hc->SuspClockMs, &wait);
         } else {
             kind = XHCI_SUSP_RUN_RESUME;
+            hc->Counters.SuspResumesBegun++;
             step = XhciSuspBegin(&dev->Susp, kind, 0,
                                  d.Do == XHCI_SUSP_DO_REARM ? 1UL : 0UL,
                                  hc->SuspClockMs, &wait);
@@ -1255,6 +1318,9 @@ static VOID hcdSuspSample(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 
     taken.Count = 0;
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (event == XHCI_SUSP_EV_STALE) {
+        hc->Counters.SuspStaleSamples++;
+    }
     if (XhciSuspEvidence(&dev->Susp, event)) {
         hcdSuspClaimDue(hc, dev, &taken);
         dev->SuspWakeDue = 1;
@@ -1547,6 +1613,7 @@ ULONG HcdSuspPdoSetPower(PHCD_DEVICE_PDO pdo, PIRP irp, NTSTATUS *status)
         hcdSuspIdleOwnD0Locked(dev, pdo, &itaken);
     }
     if (answer == XHCI_SUSP_ADMIT_PEND) {
+        hc->Counters.SuspDxPended++;
         pdo->PwrIrp = irp;
         pdo->PwrDxEpoch = hc->PowerEpoch;
         (VOID)InterlockedIncrement(&pdo->PowerPending);
@@ -1944,6 +2011,7 @@ VOID HcdSuspSettleStale(PHCD_CONTROLLER hc)
              pdo = pdo->Sibling) {
             if (pdo->PwrIrp != NULL && pdo->PwrWanted != XHCI_SUSP_D0 &&
                 XhciSuspDxStale(pdo->PwrDxEpoch, hc->PowerEpoch)) {
+                hc->Counters.SuspDxStale++;
                 hcdSuspTake(&taken, pdo, pdo->PwrIrp, HCD_SUSP_TAKE_DX);
                 pdo->PwrIrp = NULL;
             }
@@ -1986,7 +2054,7 @@ static VOID NTAPI hcdSuspIdleCancel(PDEVICE_OBJECT DeviceObject, PIRP irp)
             prev = pdo->IdleState;
             pdo->IdleSlot = NULL;
             pdo->IdleState = XHCI_SUSP_IDLE_NONE;
-            hc->IdleCancels++;
+            hc->Counters.IdleCancels++;
             if ((prev == XHCI_SUSP_IDLE_QUEUED ||
                  prev == XHCI_SUSP_IDLE_RETURNED) &&
                 pdo->Device != NULL &&
@@ -2139,7 +2207,9 @@ ULONG HcdSuspIdleRundown(PHCD_DEVICE_PDO pdo, ULONG mayWaitCallback)
         if (keep && !pdo->IdleQuarantined) {
             pdo->IdleQuarantined = 1;
             if (hc != NULL) {
-                hc->IdleQuarantined++;
+                (VOID)InterlockedIncrement(
+                    (PLONG)&hc->Counters.IdleQuarantined);
+                hcdSuspNote(hc, "idle.quarantine", pdo->Port);
             }
             XHCI_DBG_VALUE("hcd: idle rundown unfinished, PDO kept, port",
                            pdo->Port);
@@ -2265,13 +2335,14 @@ static ULONG hcdSuspCbClaim(PHCD_CONTROLLER hc, PHCD_SUSP_CB cb,
         cb->Batch = pdo->IdleEntryBatch;
         cb->Callback = (HCD_SUSP_IDLE_CALLBACK)pdo->IdleCb;
         cb->Context = pdo->IdleCbContext;
-        hc->IdleCalls++;
+        hc->Counters.IdleCalls++;
+        hc->SuspNoteCallPort = pdo->Port;
     } else {
         pdo->IdleEntryOwned = 0;
         if (answer == XHCI_SUSP_CLAIM_SKIP) {
             pdo->IdleSlot = NULL;
             pdo->IdleState = XHCI_SUSP_IDLE_NONE;
-            hc->IdleSkips++;
+            hc->Counters.IdleSkips++;
             hcdSuspITake(t, pdo, irp, STATUS_CANCELLED);
             if (pdo->Device != NULL &&
                 XhciSuspEpisodeEnds(XHCI_SUSP_EPI_SKIP)) {
@@ -2312,7 +2383,7 @@ static VOID hcdSuspCbReturned(PHCD_CONTROLLER hc, PHCD_SUSP_CB cb,
     ended = 0;
     KeAcquireSpinLock(&hc->PdoListLock, &listIrql);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    hc->IdleReturns++;
+    hc->Counters.IdleReturns++;
     pdo->IdleRunning = 0;
     pdo->IdleEntryOwned = 0;
     trigger = irp->Cancel ? XHCI_SUSP_SET_CANCEL : pdo->IdleOwed;
@@ -2400,6 +2471,7 @@ static VOID NTAPI hcdSuspCbThread(PVOID context)
             more = (answer != 0) ? 1UL : 0UL;
             continue;
         }
+        hcdSuspNote(hc, "idle.call", hc->SuspNoteCallPort);
         (VOID)hcdSuspCbMove(cb, XHCI_SUSP_ACTOR_THREAD,
                             XHCI_SUSP_PH_CLAIMING, XHCI_SUSP_PH_IN_CALLBACK);
         cb->Callback(cb->Context);
@@ -2554,6 +2626,7 @@ NTSTATUS HcdSuspCbStart(PHCD_CONTROLLER hc)
 
     InitializeListHead(&hc->IdleQueue);
     hc->SuspCb = NULL;
+    hc->SuspNotes = 0;
     if (!hc->SuspOn) {
         return STATUS_SUCCESS;
     }
@@ -2636,9 +2709,8 @@ VOID HcdSuspCbStop(PHCD_CONTROLLER hc)
             }
             hcdSuspCbDetach(hc);
             hc->SuspCb = NULL;
-            hc->IdleAbandoned++;
-            XHCI_DBG_VALUE("hcd: idle callback abandoned by the stop, count",
-                           hc->IdleAbandoned);
+            hc->Counters.IdleAbandoned++;
+            hcdSuspNote(hc, "idle.abandon", hc->Counters.IdleAbandoned);
             KeAcquireSpinLock(&hcdSuspAbandonLock, &oldIrql);
             cb->Next = hcdSuspAbandoned;
             hcdSuspAbandoned = cb;

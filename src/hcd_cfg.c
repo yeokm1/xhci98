@@ -271,6 +271,7 @@ static VOID hcdCfgDefer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PIRP irp)
         hcdCfgComplete(dev, irp, hcdCfgUrbOf(irp), HCD_USBD_CANCELED);
         return;
     }
+    hc->Counters.SuspSlowDeferred++;
     InsertTailList(&dev->SlowDeferred, &irp->Tail.Overlay.ListEntry);
     (VOID)IoSetCancelRoutine(irp, hcdCfgDeferCancel);
     if (irp->Cancel && IoSetCancelRoutine(irp, NULL) != NULL) {

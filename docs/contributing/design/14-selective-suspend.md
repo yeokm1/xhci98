@@ -922,8 +922,10 @@ Dx with resume on D0 remains.
 
 ### 6.1 Eligibility and the callback thread
 
-A non-hub USB 2.0 device PDO in stage A. A SuperSpeed or hub PDO's idle IRP
-is held exactly as today, its callback never called. Callbacks run on a
+A non-hub USB 2.0 device PDO in stage A, and a SuperSpeed device PDO with
+stage B (section 8.8; task 36.38). A hub PDO's idle IRP is held exactly as
+today, its callback never called - and so is a SuperSpeed PDO's until stage
+B's code is built. Callbacks run on a
 thread of the bus's own, one per controller, separate from the enum thread
 and from the system worker pool (a callback may block on its D-IRP; pool
 threads are few on 98), one at a time, at PASSIVE_LEVEL, holding no bus
@@ -1016,7 +1018,12 @@ WAIT_WAKE refused, idle callbacks never called, Dx recorded only), so the
 release that carries sections 3 to 6 changes nothing for a user who does
 not set the value, and 1 turns them on - what the release notes tell a user
 who wants it. The INF writes nothing; the
-INF gate's SUSP-* rules stand.
+INF gate's SUSP-* rules stand. Built in 36.33: read in the start's value
+pass, before `XhciInitController`, so stage B's controller setup (DNCTRL)
+follows it as well; only a REG_DWORD of 1 is on, and it turns stages A and
+B on together; absent, 0, any other number or another type is off. The
+read and the value in effect are counters (`SuspSwitchRead`,
+`SuspSwitch`) and notes (`susp.switch.value`, `susp.switch`).
 
 ## 8. Stage B outline (SuperSpeed), designed after stage A's readings
 

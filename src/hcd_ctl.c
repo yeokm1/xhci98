@@ -69,6 +69,9 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * at every start; a change reaches the class driver at its next start, and
  * its storage stack at the next reboot. */
 #define HCD_VALUE_MAX_TRANSFER  L"XhciMaxTransferKB"
+/* Task 36.33: selective suspend, stages A and B (design record 14 section
+ * 7). Default 0; the INF writes nothing. */
+#define HCD_VALUE_SELECTIVE_SUSPEND L"XhciSelectiveSuspend"
 #if defined(XHCI_FLAVOUR_QEMU)
 /* Task 36.22, qemu flavour only and written by no INF: the map grant a
  * chunk may use, held to this many registers (1 to the real grant), so a
@@ -265,6 +268,23 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     XhciLogNote(ext, "tol.cap.mode", ext->Tol.Stats.CapMode);
     XhciLogNote(ext, "tol.avgtrb.value", avgFound ? avgValue : 0xFFFFFFFFUL);
     XhciLogNote(ext, "tol.avgtrb.mode", ext->Tol.Stats.AvgTrbMode);
+
+    /* 36.33: selective suspend's switch (design record 14 section 7),
+     * read here, before XhciInitController, so stage B's DNCTRL follows
+     * it too. Only a DWORD 1 turns stages A and B on; absent, 0, another
+     * value or another type is off - today's behaviour bit for bit. The
+     * INF writes nothing. */
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_SELECTIVE_SUSPEND, &value);
+    hc->Counters.SuspSwitchRead =
+        NT_SUCCESS(status) ? 1UL
+        : (status == STATUS_OBJECT_TYPE_MISMATCH) ? 2UL
+                                                 : 0UL;
+    hc->SuspOn = (NT_SUCCESS(status) && value == 1) ? 1UL : 0UL;
+    hc->Counters.SuspSwitch = hc->SuspOn;
+    XhciLogNote(ext, "susp.switch.value",
+                NT_SUCCESS(status) ? value : 0xFFFFFFFFUL);
+    XhciLogNote(ext, "susp.switch", hc->SuspOn);
 
     /* 36.22: absent, another type, out of range or off a step is the
      * default, each noted apart (the type refusal is hcdTakeDword's). */

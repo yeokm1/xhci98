@@ -1431,20 +1431,14 @@ typedef struct _HCD_CONTROLLER {
     /* The idle notification (section 6, 36.32): the callback queue of PDO
      * entries (IdleEntry), under the controller lock; the callback
      * thread's context, its own allocation (4.4), set by the start while
-     * the switch is on and cleared by the stop's handoff; and counts never
-     * zeroed: batches formed, callbacks called and returned, entries
-     * skipped at the claim, idle IRPs cancelled by their clients, callbacks
-     * abandoned by a teardown and PDOs quarantined. The counts under the
-     * controller lock but Abandoned and Quarantined (PASSIVE_LEVEL). */
+     * the switch is on and cleared by the stop's handoff. Its counts are
+     * in Counters (36.33). */
     LIST_ENTRY IdleQueue;
     struct _HCD_SUSP_CB *SuspCb;
-    ULONG IdleBatches;
-    ULONG IdleCalls;
-    ULONG IdleReturns;
-    ULONG IdleSkips;
-    ULONG IdleCancels;
-    ULONG IdleAbandoned;
-    ULONG IdleQuarantined;
+    /* 36.33's bounded log lines: notes taken this start (hcdSuspNote), and
+     * the port of the callback just claimed, noted outside the lock. */
+    volatile LONG SuspNotes;
+    ULONG SuspNoteCallPort;
     /* The transfer size (tasks 36.21 and 36.22; xhci_xstat.h, hcd_io.c):
      * the readings since the start, zeroed and the value latched by each
      * start (hcd_ctl.c), and the class drivers' records (hcd_urb.c), kept
