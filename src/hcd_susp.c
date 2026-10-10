@@ -1755,7 +1755,7 @@ static ULONG hcdSuspDecideOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         step = XhciSuspBegin(&dev->Susp, kind, 0, 0, hc->SuspClockMs, &wait);
         hcdSuspFwDrain(hc, dev);
         XhciControllerLockRelease(&hc->Hc, oldIrql);
-        hcdSuspFinish(&taken);
+        hcdSuspFinishT(hc, &taken);
         (VOID)hcdSuspRun(hc, dev, step, wait, old);
         return 1;
     }
@@ -2213,7 +2213,7 @@ VOID HcdSuspCfgExit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         hc->Counters.SsSuspCapSettled++;
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
-    hcdSuspFinish(&taken);
+    hcdSuspFinishT(hc, &taken);
     hcdSuspNote(hc, "susp.ss.cap",
                 ((dev->SlotId & 0xFFUL) << 24) |
                     ((hcdSuspCount(firsts) & 0xFFUL) << 16) |
