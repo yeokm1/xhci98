@@ -332,6 +332,24 @@ NTSTATUS HcdHubFdoPower(PHCD_HUB_FDO fdo, PIRP irp)
     return status;
 }
 
+/* IRP_MJ_CLEANUP on a hub FDO: what the closing handle queued at the door
+ * is cancelled (task 36.45), inside the FDO's I/O count and the PDO's
+ * Busy, as a request is - whatever the door's state, since a closed door
+ * may still hold requests it queued while open. */
+NTSTATUS HcdHubFdoCleanup(PHCD_HUB_FDO fdo, PIRP irp)
+{
+    PHCD_CONTROLLER hc;
+
+    if (!hcdHubIoEnter(fdo)) {
+        return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+    }
+    hc = hcdHubControllerEnter(fdo);
+    HcdDoorCleanup(hc, irp);
+    hcdHubControllerLeave(fdo, hc);
+    hcdHubIoLeave(fdo);
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+}
+
 /* IRP_MJ_DEVICE_CONTROL on a hub FDO: the hub IOCTLs of the Power tab for
  * this hub's own ports (hcd_door.c), inside the FDO's I/O count and the
  * PDO's Busy. */

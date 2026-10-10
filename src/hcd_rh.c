@@ -731,6 +731,23 @@ NTSTATUS HcdRootHubFdoPower(PHCD_ROOTHUB_FDO fdo, PIRP irp)
     return status;
 }
 
+/* IRP_MJ_CLEANUP on the root-hub FDO: what the closing handle queued at the
+ * door is cancelled (task 36.45), inside the FDO's I/O count and the
+ * controller's RootHubUsers, as a request is. */
+NTSTATUS HcdRootHubFdoCleanup(PHCD_ROOTHUB_FDO fdo, PIRP irp)
+{
+    PHCD_CONTROLLER hc;
+
+    if (!hcdRhIoEnter(fdo)) {
+        return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+    }
+    hc = hcdRhControllerEnter(fdo);
+    HcdDoorCleanup(hc, irp);
+    hcdRhControllerLeave(hc);
+    hcdRhIoLeave(fdo);
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+}
+
 /* IRP_MJ_DEVICE_CONTROL on the root-hub FDO: the hub IOCTLs of the Power tab
  * (hcd_door.c), inside the FDO's I/O count so its remove waits them out. */
 NTSTATUS HcdRootHubFdoDeviceControl(PHCD_ROOTHUB_FDO fdo, PIRP irp)

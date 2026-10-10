@@ -2389,7 +2389,10 @@ for the length of one transfer.
   has cleared its cancel routine, a routine already running takes the IRP
   itself, counted in `CancelsRunning`), and completes `STATUS_CANCELLED`.
   Once the thread has taken it, it is not cancellable: the transfer is
-  bounded as above.
+  bounded as above. A handle's `IRP_MJ_CLEANUP` on the root-hub or a hub
+  FDO cancels the requests still queued through that handle (matched by
+  file object, claimed by the same handshake), leaving other handles'
+  alone, as the cleanup contract asks.
 - *Surprise removal and unplug:* a device leaving marks its record `Gone`
   and drains it (`HcdIoDeviceDrain`), which now also completes its queued
   door IRPs `STATUS_DEVICE_NOT_CONNECTED` (`HcdDoorFlushDevice`) - before

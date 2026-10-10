@@ -248,6 +248,14 @@ static NTSTATUS NTAPI hcdDispatchOther(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         /* The function-driver contract (hcd_urb.c, 26-A.5). */
         return HcdDevicePdoInternalIoctl((PHCD_DEVICE_PDO)common, Irp);
     }
+    /* A hub door's CLEANUP cancels what its closing handle has queued
+     * (task 36.45). */
+    if (common->Kind == HCD_KIND_ROOTHUB_FDO && major == IRP_MJ_CLEANUP) {
+        return HcdRootHubFdoCleanup((PHCD_ROOTHUB_FDO)common, Irp);
+    }
+    if (common->Kind == HCD_KIND_HUB_FDO && major == IRP_MJ_CLEANUP) {
+        return HcdHubFdoCleanup((PHCD_HUB_FDO)common, Irp);
+    }
     if ((common->Kind == HCD_KIND_CONTROLLER_FDO ||
          common->Kind == HCD_KIND_ROOTHUB_FDO ||
          common->Kind == HCD_KIND_HUB_FDO) &&

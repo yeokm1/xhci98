@@ -1778,6 +1778,8 @@ static NTSTATUS hcdDoorPend(PHCD_CONTROLLER hc, const HCD_DOOR_NODE *node,
         (VOID)InterlockedDecrement(&dev->Refs);
         return refusal;
     }
+    irp->IoStatus.Status = STATUS_PENDING;
+    irp->IoStatus.Information = 0;
     irp->Tail.Overlay.DriverContext[0] = dev;
     irp->Tail.Overlay.DriverContext[1] = node->Io;
     irp->Tail.Overlay.DriverContext[2] = node->IoDone;
@@ -1797,10 +1799,11 @@ static NTSTATUS hcdDoorPend(PHCD_CONTROLLER hc, const HCD_DOOR_NODE *node,
     return STATUS_PENDING;
 }
 
-/* The first queued IRP - of `dev` when not NULL - whose cancel routine
- * this call cleared, off the list; NULL when none can be taken. Controller
- * lock held. */
-static PIRP hcdDoorTake(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+/* The first queued IRP - of `dev`, and opened through `file`, each when
+ * not NULL - whose cancel routine this call cleared, off the list; NULL
+ * when none can be taken. IRQL: DISPATCH_LEVEL, controller lock held. */
+static PIRP hcdDoorTake(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                        PFILE_OBJECT file)
 {
     PLIST_ENTRY entry;
     PIRP irp;
@@ -1811,6 +1814,10 @@ static PIRP hcdDoorTake(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         if (dev != NULL && irp->Tail.Overlay.DriverContext[0] != dev) {
             continue;
         }
+        if (file != NULL &&
+            IoGetCurrentIrpStackLocation(irp)->FileObject != file) {
+            continue;
+        }
         if (IoSetCancelRoutine(irp, NULL) != NULL) {
             RemoveEntryList(entry);
             return irp;
@@ -1819,10 +1826,11 @@ static PIRP hcdDoorTake(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     return NULL;
 }
 
-/* Every queued IRP that can be taken - of `dev` when not NULL - completed
- * with `status`. IRQL: <= DISPATCH_LEVEL. */
-static VOID hcdDoorRefuse(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
-                          NTSTATUS status)
+/* Every queued IRP that can be taken - of `dev` and `file`, each when not
+ * NULL - completed with `status` once the lock is released. IRQL: <=
+ * DISPATCH_LEVEL. */
+static VOID hcdDoorRefuseOf(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                            PFILE_OBJECT file, NTSTATUS status)
 {
     LIST_ENTRY mine;
     PLIST_ENTRY entry;
@@ -1831,7 +1839,7 @@ static VOID hcdDoorRefuse(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 
     InitializeListHead(&mine);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    while ((irp = hcdDoorTake(hc, dev)) != NULL) {
+    while ((irp = hcdDoorTake(hc, dev, file)) != NULL) {
         InsertTailList(&mine, &irp->Tail.Overlay.ListEntry);
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
@@ -1839,6 +1847,27 @@ static VOID hcdDoorRefuse(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         entry = RemoveHeadList(&mine);
         irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
         hcdDoorFinish(irp, status, 0);
+    }
+}
+
+static VOID hcdDoorRefuse(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                          NTSTATUS status)
+{
+    hcdDoorRefuseOf(hc, dev, NULL, status);
+}
+
+/* IRP_MJ_CLEANUP on a door FDO (hcd_rh.c, hcd_hubfdo.c): the requests
+ * still queued through the closing handle are cancelled, as the cleanup
+ * contract asks; other handles' stay, and one the thread has already taken
+ * ends with its transfer. `hc` NULL (an orphaned door) queues nothing.
+ * IRQL: PASSIVE_LEVEL. */
+VOID HcdDoorCleanup(PHCD_CONTROLLER hc, PIRP irp)
+{
+    PFILE_OBJECT file;
+
+    file = IoGetCurrentIrpStackLocation(irp)->FileObject;
+    if (hc != NULL && file != NULL) {
+        hcdDoorRefuseOf(hc, NULL, file, STATUS_CANCELLED);
     }
 }
 
@@ -1985,7 +2014,7 @@ VOID HcdDoorService(PHCD_CONTROLLER hc, ULONG serve)
             break;
         }
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-        irp = hcdDoorTake(hc, NULL);
+        irp = hcdDoorTake(hc, NULL, NULL);
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         if (irp == NULL) {
             return;

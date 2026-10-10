@@ -1810,6 +1810,9 @@ VOID HcdDoorService(PHCD_CONTROLLER hc, ULONG serve);
 VOID HcdDoorFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 VOID HcdDoorQueueOpen(PHCD_CONTROLLER hc);
 VOID HcdDoorQueueClose(PHCD_CONTROLLER hc);
+VOID HcdDoorCleanup(PHCD_CONTROLLER hc, PIRP irp);
+NTSTATUS HcdRootHubFdoCleanup(PHCD_ROOTHUB_FDO fdo, PIRP irp);
+NTSTATUS HcdHubFdoCleanup(PHCD_HUB_FDO fdo, PIRP irp);
 VOID HcdDoorDeviceStart(PHCD_DEVICE_PDO pdo);
 VOID HcdDoorDeviceStop(PHCD_DEVICE_PDO pdo, ULONG release);
 
