@@ -466,41 +466,47 @@ static VOID hcdSuspTake(PHCD_SUSP_TAKEN t, PHCD_DEVICE_PDO pdo, PIRP irp,
  * by a completion worker, outside every gate and lock: a system thread of
  * the controller's, parked between completions (record 14 section 3.12).
  *
- * No thread is created to complete an IRP: the per-IRP thread this
- * replaced was created by the enum thread, and on Windows 98 SE its
- * PsCreateSystemThread never returned during the S5 transition (switch 1,
- * a client in D0 asking D3 at shutdown) - the machine hung at "Windows is
- * shutting down". The start makes HCD_SUSP_DONE_SPARE workers while the
- * switch is on; a hand-off queues the IRP through its own storage and
- * wakes a parked worker; a worker completes pending IRPs until none is
- * left, then parks. A callback that waits for another IRP holds only its
- * own worker, and the IRP it waits for is completed by another (Codex
+ * Neither the hand-off nor the enum thread creates a thread: the per-IRP
+ * thread this replaced was created by the enum thread, and on Windows 98
+ * SE its PsCreateSystemThread never returned during the S5 transition
+ * (switch 1, a client in D0 asking D3 at shutdown) - "Windows is shutting
+ * down" for ever. The start provisions HCD_SUSP_DONE_SPARE workers and a
+ * grower while the switch is on, or turns the switch off for that start
+ * (HcdSuspDoneStart). A hand-off queues the IRP through its own storage
+ * and wakes a parked worker; a worker completes pending IRPs until none
+ * is left, then parks. A callback that waits for another IRP holds only
+ * its own worker, and the IRP it waits for is completed by another (Codex
  * review of the first fix, rounds 1 to 3: a single worker, then the
  * system work queues, could each be held by the callback waiting on
- * them). The pool grows only when an IRP has waited HCD_SUSP_DONE_STALL_MS
- * with no worker parked - every one held, when only a new thread lets
- * anything progress (HcdSuspDoneGrow). Workers leave only at the stop,
- * which joins every one (HcdSuspDoneDrain) - on NT by the thread object,
- * on 9x by the flag the worker sets last, as the callback thread's join.
- * The IRP keeps its PowerPending or IdlePending count until its
- * completion has returned, which the PDO's REMOVE and rundown wait for.
- * NT is given the same pool: its thread creation is not known to block
- * in a transition, but one path serves both and neither creates a thread
- * then.
+ * them). When an IRP has waited HCD_SUSP_DONE_STALL_MS with no worker
+ * parked, the grower - a thread of its own, holding nothing - makes one
+ * more; a creation that does not return then blocks the grower alone.
+ * There is no ceiling: growth needs a pending IRP and no parked worker,
+ * so the workers never outnumber the claimed IRPs held in completions at
+ * once plus the spares, and the claimed IRPs are bounded by the PDOs (one
+ * D-IRP, one WAIT_WAKE, one idle IRP each). Workers and the grower leave
+ * only at the stop (HcdSuspDoneDrain), which joins each - on NT by the
+ * thread object, on 9x by the flag the thread sets last, as the enum and
+ * callback threads are joined there. The IRP keeps its PowerPending or
+ * IdlePending count until its completion has returned, which the PDO's
+ * REMOVE and rundown wait for. NT is given the same pool: its thread
+ * creation is not known to block in a transition, but one path serves
+ * both.
  */
 #define HCD_SUSP_DONE_POWER     1UL     /* a D-IRP; the value its D0 flag */
 #define HCD_SUSP_DONE_WAKE      2UL
 #define HCD_SUSP_DONE_IDLE      3UL
 
-#define HCD_SUSP_DONE_SPARE     2UL     /* made by the start              */
-#define HCD_SUSP_DONE_MAX       16UL
+#define HCD_SUSP_DONE_SPARE     2UL     /* provisioned by the start       */
 #define HCD_SUSP_DONE_STALL_MS  500UL
+#define HCD_SUSP_DONE_WATCH_MS  100UL   /* the grower's look while stalled */
 
+/* A worker's or the grower's context. */
 typedef struct _HCD_SUSP_DONE {
-    LIST_ENTRY Link;            /* SuspDoneList, under SuspDoneLock      */
+    LIST_ENTRY Link;            /* SuspDoneList (workers), SuspDoneLock  */
     PHCD_CONTROLLER Hc;
-    KEVENT Kick;                /* set by whoever unparks the worker    */
-    ULONG Parked;               /* under SuspDoneLock                   */
+    KEVENT Kick;                /* set by whoever unparks or wakes it   */
+    ULONG Parked;               /* a worker, under SuspDoneLock         */
     PVOID ThreadObject;         /* NT: referenced; 9x: NULL             */
     HANDLE Handle;              /* NT, while the reference is still owed */
     volatile LONG Exited;       /* set just before PsTerminateSystemThread */
@@ -567,6 +573,13 @@ static ULONG hcdSuspDoneKickLocked(PHCD_CONTROLLER hc)
     return 0;
 }
 
+/* The flag set last and the thread gone. IRQL: PASSIVE_LEVEL. */
+static VOID hcdSuspDoneExit(PHCD_SUSP_DONE w)
+{
+    (VOID)InterlockedExchange((PLONG)&w->Exited, 1);
+    (VOID)PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
 /*
  * A worker: every pending IRP completed, one after another, then parked
  * until unparked; once the stop has asked and none is pending, gone. A
@@ -606,30 +619,19 @@ static VOID NTAPI hcdSuspDoneThread(PVOID context)
         (VOID)KeWaitForSingleObject(&w->Kick, Executive, KernelMode, FALSE,
                                     NULL);
     }
-    (VOID)InterlockedExchange((PLONG)&w->Exited, 1);
-    (VOID)PsTerminateSystemThread(STATUS_SUCCESS);
+    hcdSuspDoneExit(w);
 }
 
-/*
- * One worker made and put on the list - on the list, counted and not
- * parked, before its thread exists, so the thread finds itself there; a
- * thread not had takes it off again. On NT its object referenced, or the
- * handle kept and the reference retried at the join (Codex review of the
- * first fix, round 4, finding 3). Returns whether it was made. IRQL:
- * PASSIVE_LEVEL, a system thread (the start, the enum thread, the stop).
- */
-static ULONG hcdSuspDoneNew(PHCD_CONTROLLER hc)
+/* A context zeroed, for a worker or the grower. IRQL: PASSIVE_LEVEL. */
+static PHCD_SUSP_DONE hcdSuspDoneAlloc(PHCD_CONTROLLER hc)
 {
     PHCD_SUSP_DONE w;
-    HANDLE handle;
-    KIRQL oldIrql;
-    NTSTATUS status;
     PUCHAR p;
     ULONG i;
 
     w = (PHCD_SUSP_DONE)HcdPoolAlloc(sizeof(HCD_SUSP_DONE));
     if (w == NULL) {
-        return 0;
+        return NULL;
     }
     p = (PUCHAR)w;
     for (i = 0; i < sizeof(HCD_SUSP_DONE); i++) {
@@ -637,21 +639,21 @@ static ULONG hcdSuspDoneNew(PHCD_CONTROLLER hc)
     }
     w->Hc = hc;
     KeInitializeEvent(&w->Kick, SynchronizationEvent, FALSE);
-    KeAcquireSpinLock(&hc->SuspDoneLock, &oldIrql);
-    InsertTailList(&hc->SuspDoneList, &w->Link);
-    hc->SuspDoneCount++;
-    KeReleaseSpinLock(&hc->SuspDoneLock, oldIrql);
+    return w;
+}
+
+/* `w`'s thread created; on NT its object referenced, or the handle kept
+ * and the reference retried at the join (Codex review of the first fix,
+ * round 4, finding 3). IRQL: PASSIVE_LEVEL, a system thread. */
+static NTSTATUS hcdSuspDoneCreate(PHCD_SUSP_DONE w, PKSTART_ROUTINE routine)
+{
+    HANDLE handle;
+    NTSTATUS status;
+
     status = PsCreateSystemThread(&handle, THREAD_ALL_ACCESS, NULL, NULL,
-                                  NULL, hcdSuspDoneThread, w);
+                                  NULL, routine, w);
     if (!NT_SUCCESS(status)) {
-        KeAcquireSpinLock(&hc->SuspDoneLock, &oldIrql);
-        RemoveEntryList(&w->Link);
-        hc->SuspDoneCount--;
-        KeReleaseSpinLock(&hc->SuspDoneLock, oldIrql);
-        HcdPoolFree(w);
-        XHCI_DBG_VALUE("hcd: completion worker not had, status",
-                       (ULONG)status);
-        return 0;
+        return status;
     }
     if (IoIsWdmVersionAvailable(1, 0x10)) {
         if (NT_SUCCESS(ObReferenceObjectByHandle(handle, THREAD_ALL_ACCESS,
@@ -665,11 +667,53 @@ static ULONG hcdSuspDoneNew(PHCD_CONTROLLER hc)
     } else {
         (VOID)ZwClose(handle);
     }
+    return STATUS_SUCCESS;
+}
+
+/*
+ * One worker made and put on the list - on the list, counted and not
+ * parked, before its thread exists, so the thread finds itself there; a
+ * thread not had takes it off again. Returns whether it was made. IRQL:
+ * PASSIVE_LEVEL, the start, the grower or the stop - never the enum
+ * thread and never a hand-off.
+ */
+static ULONG hcdSuspDoneNew(PHCD_CONTROLLER hc)
+{
+    PHCD_SUSP_DONE w;
+    KIRQL oldIrql;
+    NTSTATUS status;
+
+    w = hcdSuspDoneAlloc(hc);
+    if (w == NULL) {
+        return 0;
+    }
+    KeAcquireSpinLock(&hc->SuspDoneLock, &oldIrql);
+    InsertTailList(&hc->SuspDoneList, &w->Link);
+    hc->SuspDoneCount++;
+    KeReleaseSpinLock(&hc->SuspDoneLock, oldIrql);
+    status = hcdSuspDoneCreate(w, hcdSuspDoneThread);
+    if (!NT_SUCCESS(status)) {
+        KeAcquireSpinLock(&hc->SuspDoneLock, &oldIrql);
+        RemoveEntryList(&w->Link);
+        hc->SuspDoneCount--;
+        KeReleaseSpinLock(&hc->SuspDoneLock, oldIrql);
+        HcdPoolFree(w);
+        XHCI_DBG_VALUE("hcd: completion worker not had, status",
+                       (ULONG)status);
+        return 0;
+    }
     return 1;
 }
 
-/* One worker joined and its context freed: NT by its thread object, 9x by
- * its flag. The worker is off the list. IRQL: PASSIVE_LEVEL, the stop. */
+/*
+ * One thread joined and its context freed: NT by its thread object; 9x by
+ * its flag, then a short grace. The flag is set just before the thread's
+ * call into PsTerminateSystemThread, so on 9x it proves the context's last
+ * use, not that the thread has left the image: the same standing as the
+ * enum thread's and the callback thread's joins (hcd_ctl.c, hcdThreadStart;
+ * a Windows 98 stop unloads nothing, and the remove that would has not
+ * been measured against that window). IRQL: PASSIVE_LEVEL, the stop.
+ */
 static VOID hcdSuspDoneJoin(PHCD_SUSP_DONE w)
 {
     LARGE_INTEGER due;
@@ -696,78 +740,45 @@ static VOID hcdSuspDoneJoin(PHCD_SUSP_DONE w)
             HcdRelativeMs(&due, 1);
             (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
         }
+        HcdRelativeMs(&due, 10);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
     }
     HcdPoolFree(w);
 }
 
 /*
- * A claimed IRP handed over for completion: queued on the controller's
- * pending list through its own storage (Tail.Overlay.ListEntry; the kind,
- * value and PDO in DriverContext), so the hand-off itself needs nothing
- * and cannot fail, and a parked worker unparked. With none parked the
- * enum thread is woken to watch for the stall (HcdSuspDoneGrow): a busy
- * worker takes the IRP when its completion returns. IRQL: <=
- * DISPATCH_LEVEL.
+ * The growth rule: one worker more when an IRP is pending with no worker
+ * parked and that has lasted HCD_SUSP_DONE_STALL_MS - every worker held,
+ * as by a callback waiting for another of this pool's IRPs - or at once
+ * with no worker at all. Returns whether a stall is being watched (the
+ * grower looks again soon). The system time's low word: a clock jump can
+ * make a growth early, which costs a parked thread. IRQL: PASSIVE_LEVEL,
+ * the grower or the stop.
  */
-static VOID hcdSuspDefer(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo, PIRP irp,
-                         ULONG kind, ULONG_PTR value)
-{
-    KIRQL oldIrql;
-    ULONG kicked;
-
-    irp->Tail.Overlay.DriverContext[0] = (PVOID)(ULONG_PTR)kind;
-    irp->Tail.Overlay.DriverContext[1] = (PVOID)value;
-    irp->Tail.Overlay.DriverContext[2] = pdo;
-    KeAcquireSpinLock(&hc->SuspDoneLock, &oldIrql);
-    InsertTailList(&hc->SuspDonePending, &irp->Tail.Overlay.ListEntry);
-    kicked = hcdSuspDoneKickLocked(hc);
-    KeReleaseSpinLock(&hc->SuspDoneLock, oldIrql);
-    if (!kicked) {
-        HcdThreadWake(hc);
-    }
-}
-
-/*
- * The pool grown by one when an IRP is pending with no worker parked and
- * that has lasted HCD_SUSP_DONE_STALL_MS - every worker held by a
- * callback - or at once with no worker at all; never past
- * HCD_SUSP_DONE_MAX. Never in the hand-off: a thread's creation did not
- * return in a Windows 98 SE system transition, so one is made only when
- * nothing else can progress. The enum thread after each pass, outside the
- * power gate; the stop once that thread has gone. IRQL: PASSIVE_LEVEL, a
- * system thread.
- */
-VOID HcdSuspDoneGrow(PHCD_CONTROLLER hc)
+static ULONG hcdSuspDoneGrowStep(PHCD_CONTROLLER hc)
 {
     KIRQL oldIrql;
     ULONG now;
     ULONG count;
 
-    if (hc->SuspDonePending.Flink == NULL) {
-        return;                 /* never initialized: no start ran */
-    }
     now = hcdSuspDoneNow();
     KeAcquireSpinLock(&hc->SuspDoneLock, &oldIrql);
     if (IsListEmpty(&hc->SuspDonePending) || hc->SuspDoneIdle != 0) {
         hc->SuspDoneStalled = 0;
         KeReleaseSpinLock(&hc->SuspDoneLock, oldIrql);
-        return;
-    }
-    if (hc->SuspDoneCount >= HCD_SUSP_DONE_MAX) {
-        KeReleaseSpinLock(&hc->SuspDoneLock, oldIrql);
-        return;
+        return 0;
     }
     if (hc->SuspDoneCount != 0) {
         if (!hc->SuspDoneStalled) {
             hc->SuspDoneStalled = 1;
             hc->SuspDoneStallSince = now;
             KeReleaseSpinLock(&hc->SuspDoneLock, oldIrql);
-            return;
+            return 1;
         }
         if (now - hc->SuspDoneStallSince <
             HCD_SUSP_DONE_STALL_MS * 10000UL) {
             KeReleaseSpinLock(&hc->SuspDoneLock, oldIrql);
-            return;
+            return 1;
         }
     }
     hc->SuspDoneStalled = 0;
@@ -778,6 +789,64 @@ VOID HcdSuspDoneGrow(PHCD_CONTROLLER hc)
         KeReleaseSpinLock(&hc->SuspDoneLock, oldIrql);
         hcdSuspNote(hc, "susp.done.grow", count);
     }
+    return 1;
+}
+
+/*
+ * The grower: the growth rule applied when woken (a hand-off found no
+ * worker parked) and every HCD_SUSP_DONE_WATCH_MS while a stall is
+ * watched; gone at the stop's word. It holds no lock, gate or IRP, so a
+ * creation that does not return blocks nothing but itself. IRQL:
+ * PASSIVE_LEVEL (a system thread).
+ */
+static VOID NTAPI hcdSuspGrowThread(PVOID context)
+{
+    PHCD_SUSP_DONE g;
+    PHCD_CONTROLLER hc;
+    LARGE_INTEGER due;
+    ULONG watch;
+
+    g = (PHCD_SUSP_DONE)context;
+    hc = g->Hc;
+    for (;;) {
+        if (hc->SuspGrowStop) {
+            break;
+        }
+        watch = hcdSuspDoneGrowStep(hc);
+        if (watch) {
+            HcdRelativeMs(&due, HCD_SUSP_DONE_WATCH_MS);
+            (VOID)KeWaitForSingleObject(&g->Kick, Executive, KernelMode,
+                                        FALSE, &due);
+        } else {
+            (VOID)KeWaitForSingleObject(&g->Kick, Executive, KernelMode,
+                                        FALSE, NULL);
+        }
+    }
+    hcdSuspDoneExit(g);
+}
+
+/*
+ * A claimed IRP handed over for completion: queued on the controller's
+ * pending list through its own storage (Tail.Overlay.ListEntry; the kind,
+ * value and PDO in DriverContext), so the hand-off itself needs nothing
+ * and cannot fail, and a parked worker unparked. With none parked the
+ * grower is woken to watch for the stall: a busy worker takes the IRP when
+ * its completion returns. IRQL: <= DISPATCH_LEVEL.
+ */
+static VOID hcdSuspDefer(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo, PIRP irp,
+                         ULONG kind, ULONG_PTR value)
+{
+    KIRQL oldIrql;
+
+    irp->Tail.Overlay.DriverContext[0] = (PVOID)(ULONG_PTR)kind;
+    irp->Tail.Overlay.DriverContext[1] = (PVOID)value;
+    irp->Tail.Overlay.DriverContext[2] = pdo;
+    KeAcquireSpinLock(&hc->SuspDoneLock, &oldIrql);
+    InsertTailList(&hc->SuspDonePending, &irp->Tail.Overlay.ListEntry);
+    if (!hcdSuspDoneKickLocked(hc) && hc->SuspGrower != NULL) {
+        (VOID)KeSetEvent(&hc->SuspGrower->Kick, IO_NO_INCREMENT, FALSE);
+    }
+    KeReleaseSpinLock(&hc->SuspDoneLock, oldIrql);
 }
 
 /* The thread's claims, deferred (a START's report, no IRP, made here). */
@@ -3158,12 +3227,70 @@ VOID HcdSuspUnlinkFinish(PHCD_CONTROLLER hc, PHCD_SUSP_SETTLE s)
 }
 
 /*
- * Every completion worker gone (the stop, before the controller's storage
- * can go and before the last device can let the image unload): told to
- * leave once none is pending and the parked ones unparked; while IRPs
- * still wait, the pool grown by HcdSuspDoneGrow's rule (the stop runs in
- * the PnP manager's system thread, the enum thread gone); then each
- * joined. IRQL: PASSIVE_LEVEL.
+ * The pool provisioned (the PnP start, before DNCTRL is chosen): the lists
+ * and counts initialized and, while the switch is on, the grower and
+ * HCD_SUSP_DONE_SPARE workers made - here, so that no completion and no
+ * enum pass ever waits on a thread's creation (record 14 section 3.12).
+ * One not had turns selective suspend off for this start, every thread
+ * already made joined: with the switch off nothing is claimed, so nothing
+ * needs a worker. IRQL: PASSIVE_LEVEL, the start.
+ */
+VOID HcdSuspDoneStart(PHCD_CONTROLLER hc)
+{
+    PHCD_SUSP_DONE g;
+    ULONG made;
+
+    KeInitializeSpinLock(&hc->SuspDoneLock);
+    InitializeListHead(&hc->SuspDoneList);
+    InitializeListHead(&hc->SuspDonePending);
+    hc->SuspDoneCount = 0;
+    hc->SuspDoneIdle = 0;
+    hc->SuspDoneStop = 0;
+    hc->SuspDoneStalled = 0;
+    hc->SuspDoneStallSince = 0;
+    hc->SuspGrower = NULL;
+    hc->SuspGrowStop = 0;
+    if (!hc->SuspOn) {
+        return;
+    }
+    made = 0;
+    g = hcdSuspDoneAlloc(hc);
+    if (g != NULL) {
+        if (NT_SUCCESS(hcdSuspDoneCreate(g, hcdSuspGrowThread))) {
+            hc->SuspGrower = g;
+        } else {
+            HcdPoolFree(g);
+        }
+    }
+    if (hc->SuspGrower != NULL) {
+        while (made < HCD_SUSP_DONE_SPARE && hcdSuspDoneNew(hc)) {
+            made++;
+        }
+    }
+    XhciLogNote(&hc->Hc, "susp.done.pool", made);
+    if (made < HCD_SUSP_DONE_SPARE) {
+        HcdSuspDoneDrain(hc);
+        hc->SuspOn = 0;
+        hc->Counters.SuspSwitch = 0;
+        XhciLogNote(&hc->Hc, "susp.switch", 0);
+    }
+}
+
+/*
+ * Every completion worker and the grower gone (the stop, before the
+ * controller's storage can go and before the last device can let the
+ * image unload; a refused start after HcdSuspDoneStart). First the power
+ * gate entered and left: the enum thread has been joined and the devices
+ * dropped, each slot's SlotDevice cleared at its unlink, so the only hand-
+ * off still to come is from a power path that claimed under the gate
+ * before the drop and has not yet left it (HcdSuspSettleStale, whose
+ * hand-off is inside the gate); after the gate, a later holder finds no
+ * device to claim from (Codex review of the pool, round 1, finding 3).
+ * Then the grower stopped and joined, every worker told to leave once none
+ * is pending and the parked ones unparked; while IRPs still wait, the pool
+ * grown by the same rule from here (the PnP manager's system thread, no
+ * transition); then each worker joined. IRQL: PASSIVE_LEVEL, the power
+ * gate not held.
  */
 VOID HcdSuspDoneDrain(PHCD_CONTROLLER hc)
 {
@@ -3175,6 +3302,19 @@ VOID HcdSuspDoneDrain(PHCD_CONTROLLER hc)
 
     if (hc->SuspDoneList.Flink == NULL) {
         return;                 /* never initialized: no start ran */
+    }
+    HcdPowerGateEnter(hc);
+    HcdPowerGateLeave(hc);
+    KeAcquireSpinLock(&hc->SuspDoneLock, &oldIrql);
+    w = hc->SuspGrower;
+    hc->SuspGrower = NULL;
+    hc->SuspGrowStop = 1;
+    if (w != NULL) {
+        (VOID)KeSetEvent(&w->Kick, IO_NO_INCREMENT, FALSE);
+    }
+    KeReleaseSpinLock(&hc->SuspDoneLock, oldIrql);
+    if (w != NULL) {
+        hcdSuspDoneJoin(w);
     }
     KeAcquireSpinLock(&hc->SuspDoneLock, &oldIrql);
     hc->SuspDoneStop = 1;
@@ -3188,7 +3328,7 @@ VOID HcdSuspDoneDrain(PHCD_CONTROLLER hc)
         if (!pending) {
             break;
         }
-        HcdSuspDoneGrow(hc);
+        (VOID)hcdSuspDoneGrowStep(hc);
         HcdRelativeMs(&due, 10);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
     }
@@ -3877,28 +4017,9 @@ NTSTATUS HcdSuspCbStart(PHCD_CONTROLLER hc)
     InitializeListHead(&hc->IdleQueue);
     hc->SuspCb = NULL;
     hc->SuspNotes = 0;
-    /* The thread's completion workers (hcdSuspDefer); the last stop joined
-     * them (HcdSuspDoneDrain). While the switch is on the spares are made
-     * here, in the PnP start, so that no completion waits on a thread's
-     * creation (record 14 section 3.12); one not had is made when first
-     * wanted (HcdSuspDoneGrow). */
-    KeInitializeSpinLock(&hc->SuspDoneLock);
-    InitializeListHead(&hc->SuspDoneList);
-    InitializeListHead(&hc->SuspDonePending);
-    hc->SuspDoneCount = 0;
-    hc->SuspDoneIdle = 0;
-    hc->SuspDoneStop = 0;
-    hc->SuspDoneStalled = 0;
-    hc->SuspDoneStallSince = 0;
     if (!hc->SuspOn) {
         return STATUS_SUCCESS;
     }
-    for (i = 0; i < HCD_SUSP_DONE_SPARE; i++) {
-        if (!hcdSuspDoneNew(hc)) {
-            break;
-        }
-    }
-    hcdSuspNote(hc, "susp.done.pool", i);
     cb = (PHCD_SUSP_CB)HcdPoolAlloc(sizeof(HCD_SUSP_CB));
     if (cb == NULL) {
         return STATUS_INSUFFICIENT_RESOURCES;

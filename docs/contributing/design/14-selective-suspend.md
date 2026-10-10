@@ -626,50 +626,69 @@ SuperSpeed PDO, the idle IRP is held as before (`hcd_urb.c`, its own slot
   **completion worker** (`hcdSuspDefer`): a system thread of the
   controller's that parks between completions, never the enum thread and
   never a system work queue.
-- **No thread is created to complete an IRP.** The first form of the fix
-  gave each claimed IRP a system thread of its own, created by the enum
-  thread after its pass. Windows 98 SE then hung at "Windows is shutting
-  down" with the switch at 1 and a client bound in D0: the client asked
-  D3 at S5, the thread claimed the Dx, and the `PsCreateSystemThread`
-  that was to complete it never returned during the transition (36.35's
-  legs, traced; why Windows 98 does not create the thread then is not
-  established, and standby is taken to share it). So the workers are a
-  pool made before they are needed:
-  - the start creates `HCD_SUSP_DONE_SPARE` (2) while the switch is on,
-    beside the callback thread (`HcdSuspCbStart`), in the PnP start, the
-    context the enum and callback threads have always been created in;
-  - the hand-off queues the IRP on the controller's pending list through
-    the IRP's own storage (it needs nothing and cannot fail) and, under
-    `SuspDoneLock`, takes a parked worker and sets its event; a worker
-    completes pending IRPs one after another until the list is empty,
-    then parks again. A callback that asks for another power IRP and
-    waits holds only its own worker, and the IRP it waits for is
-    completed by another, parked one - the property the per-IRP threads
-    had, kept for a chain one deeper than the spare count by the growth
-    below;
-  - the pool grows only when an IRP has waited `HCD_SUSP_DONE_STALL_MS`
-    (500 ms) with no worker parked: every worker held by a callback, the
-    one case in which only a new thread lets anything progress, so a
-    creation that might not return in a transition is never the
-    difference between finishing and hanging. The enum thread checks
-    after each pass, outside the gate, up to `HCD_SUSP_DONE_MAX` (16)
-    workers; with none at all (the start could not create them, or the
-    switch is off and something was claimed) the first IRP is given one
-    at once. Each growth is noted (`susp.done.grow`, the pool's size);
-  - workers never exit before the stop. The stop sets `SuspDoneStop`
-    and wakes every parked worker; each leaves once the pending list is
-    empty. The stop grows the pool by the same rule while IRPs wait and
-    then joins every worker (`HcdSuspDoneDrain`) - on NT by its thread
-    object, on 9x by the flag it sets last - before the controller's
-    storage goes or the image can unload.
+- **No completion and no enum pass waits on a thread's creation.** The
+  first form of the fix gave each claimed IRP a system thread of its own,
+  created by the enum thread after its pass. Windows 98 SE then hung at
+  "Windows is shutting down" with the switch at 1 and a client bound in
+  D0: the client asked D3 at S5, the thread claimed the Dx, and the
+  `PsCreateSystemThread` that was to complete it never returned during
+  the transition (36.35's legs, traced; why Windows 98 does not create the
+  thread then is not established, and standby is taken to share it). So
+  the completion capacity is provisioned before it is needed:
+  - **the start** (`HcdSuspDoneStart`, in the PnP start before DNCTRL is
+    chosen, the context the enum and callback threads have always been
+    created in) makes, while the switch is on, a **grower** thread and
+    `HCD_SUSP_DONE_SPARE` (2) workers. If any is not had, selective
+    suspend is off for that start (`susp.done.pool` notes the workers
+    made; `susp.switch` 0 follows), the threads already made are joined,
+    and with the switch off nothing is claimed, so nothing needs a worker;
+  - **the hand-off** queues the IRP on the controller's pending list
+    through the IRP's own storage (it needs nothing and cannot fail) and,
+    under `SuspDoneLock`, takes a parked worker and sets its event; a
+    worker completes pending IRPs one after another until the list is
+    empty, then parks again. A callback that asks for another power IRP
+    and waits holds only its own worker, and the IRP it waits for is
+    completed by another, parked one;
+  - **growth** keeps that property for a chain deeper than the spares:
+    when an IRP has waited `HCD_SUSP_DONE_STALL_MS` (500 ms) with no worker
+    parked, the grower makes one more worker (`susp.done.grow`, the pool's
+    size). The grower is woken by a hand-off that found no worker parked
+    and looks every 100 ms while it watches a stall. It holds no lock, gate
+    or IRP, so a creation that does not return - in a Windows 98
+    transition - blocks the grower alone, never the enum thread and never
+    a completion. The 500 ms is a heuristic, not a proof that every worker
+    is held for good: a growth it starts early costs a parked thread, and
+    in the 98 SE shutdown the D3 completion returns at once, so the two
+    spares are never all held there. Whether a transition with every spare
+    held by a callback waiting on another of this pool's IRPs can finish on
+    Windows 98 depends on a creation the transition may block; no client
+    seen does that (a D-IRP's callback completes the system IRP and
+    returns). There is no ceiling: growth needs a pending IRP and no
+    parked worker, so the workers never outnumber the claimed IRPs held in
+    completions at once plus the spares, and those are bounded by the PDOs
+    (one D-IRP, one WAIT_WAKE and one idle IRP each);
+  - **the stop** (`HcdSuspDoneDrain`, after the enum thread is joined and
+    the devices dropped) first enters and leaves the power gate: the only
+    hand-off still to come is from a power path that claimed under the
+    gate before the drop (`HcdSuspSettleStale`, which hands off inside the
+    gate), and a later holder finds no device to claim from, each slot's
+    `SlotDevice` having been cleared at its unlink. It then stops and joins
+    the grower, sets `SuspDoneStop` and wakes every parked worker; each
+    leaves once the pending list is empty. While IRPs still wait it grows
+    the pool by the same rule itself, and then joins every worker - on NT
+    by its thread object, on 9x by the flag the worker sets just before
+    `PsTerminateSystemThread` and a short grace - before the controller's
+    storage goes. On 9x the flag proves the context's last use, not that
+    the thread has left the image: the standing the enum and callback
+    threads' joins already have (a Windows 98 stop unloads nothing, and a
+    remove that would has not been measured against that window).
 
   NT is given the same pool. Its `PsCreateSystemThread` makes a thread
   of the System process without user mode's help and is not known to
   block in a system power transition, so NT did not need the change; but
-  one code path serves both targets, neither creates a thread in a
-  transition, and a completion no longer pays for a thread. The claimed
-  status is fixed at the claim; the IRP keeps its `PowerPending` or
-  `IdlePending` count until its completion has returned.
+  one code path serves both targets and a completion no longer pays for a
+  thread. The claimed status is fixed at the claim; the IRP keeps its
+  `PowerPending` or `IdlePending` count until its completion has returned.
 - **The controller's stop** runs the handoff (`HcdSuspCbStop`) after the
   enum thread has exited and the devices are dropped (their slots settled
   at the unlink): steps (1) to (5) as 4.4 has them.

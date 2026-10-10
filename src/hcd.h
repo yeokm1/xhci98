@@ -1680,8 +1680,9 @@ typedef struct _HCD_CONTROLLER {
     ULONG SuspNoteCallPort;
     /* The thread's claimed IRPs, completed by a pool of parked workers
      * (hcd_susp.c, hcdSuspDefer; record 14 section 3.12): the workers'
-     * contexts and the pending IRPs, under SuspDoneLock; the workers made
-     * by the start, grown only when every one is held, joined by the stop.
+     * contexts and the pending IRPs, under SuspDoneLock; provisioned by
+     * the start, grown by the grower only when every one is held, joined
+     * by the stop.
      * Initialized by each start. */
     KSPIN_LOCK SuspDoneLock;
     LIST_ENTRY SuspDoneList;        /* every worker                      */
@@ -1689,8 +1690,10 @@ typedef struct _HCD_CONTROLLER {
     ULONG SuspDoneCount;            /* workers on SuspDoneList            */
     ULONG SuspDoneIdle;             /* of them, parked                    */
     ULONG SuspDoneStop;             /* the stop: leave once none pending  */
-    ULONG SuspDoneStalled;          /* the enum thread's stall watch ...  */
+    ULONG SuspDoneStalled;          /* the grower's stall watch ...       */
     ULONG SuspDoneStallSince;       /* ... from (system time low word)    */
+    struct _HCD_SUSP_DONE *SuspGrower;  /* the thread that makes workers  */
+    ULONG SuspGrowStop;
     /* The transfer size (tasks 36.21 and 36.22; xhci_xstat.h, hcd_io.c):
      * the readings since the start, zeroed and the value latched by each
      * start (hcd_ctl.c), and the class drivers' records (hcd_urb.c), kept
@@ -2348,7 +2351,7 @@ ULONG HcdSuspUnlinkLocked(PHCD_CONTROLLER hc, struct _HCD_DEVICE_PDO *pdo,
                           PHCD_SUSP_SETTLE out);
 VOID HcdSuspUnlinkFinish(PHCD_CONTROLLER hc, PHCD_SUSP_SETTLE s);
 VOID HcdSuspDoneDrain(PHCD_CONTROLLER hc);
-VOID HcdSuspDoneGrow(PHCD_CONTROLLER hc);
+VOID HcdSuspDoneStart(PHCD_CONTROLLER hc);
 VOID HcdSuspControllerDownLocked(PHCD_CONTROLLER hc);
 VOID HcdSuspControllerUp(PHCD_CONTROLLER hc);
 VOID HcdSuspSettleStale(PHCD_CONTROLLER hc);

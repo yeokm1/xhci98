@@ -2068,9 +2068,6 @@ static VOID NTAPI hcdThread(PVOID Context)
                                hc->Common.DevicePower == PowerDeviceD0 &&
                                !hc->SuspendedInD0);
         HcdPowerGateLeave(hc);
-        /* Selective suspend's completion workers grown, outside the gate,
-         * only when every one is held (hcd_susp.c). */
-        HcdSuspDoneGrow(hc);
         /* The continuous sink (26-A.8): whatever the producers recorded
          * since the last wake, emitted here at PASSIVE_LEVEL and nowhere
          * nearer a DPC. */
@@ -2440,6 +2437,9 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
      * at 0 DNCTRL keeps its reset value and is never written. The in-place
      * reinitializations (a resume's, a recovery's HCRST) keep it: only this
      * start zeroes the extension. */
+    /* Selective suspend's completion workers provisioned first (design
+     * record 14 section 3.12): one not had turns the switch off here. */
+    HcdSuspDoneStart(hc);
     ext->DnctrlEnables = hc->SuspOn ? XHCI_DNCTRL_FUNCTION_WAKE : 0UL;
 
     /* The poller beside the timers (record 15 section 5.2): served under a
@@ -2470,6 +2470,8 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
         /* A refused controller drives nothing: the connectors go back. */
         hcdPswEnd(hc);
         hcdRelease(hc);
+        /* The pool HcdSuspDoneStart provisioned (hcd_susp.c). */
+        HcdSuspDoneDrain(hc);
         /* No thread ever ran to poll, and the half-built start's fatal
          * status or its stop's mask failure is the reading a refused start
          * leaves; the mirrors are embedded scalars, so the poll is safe
