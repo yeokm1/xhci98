@@ -592,11 +592,20 @@ SuperSpeed PDO, the idle IRP is held as before (`hcd_urb.c`, its own slot
   references and leaves; its context, with its thread object on NT, stays
   on a driver-wide list that the unload waits out and frees (4.4's
   "driver-global list"; the context is not freed by the thread itself).
+  A join waits on the thread object on NT and, on 9x, polls a flag the
+  thread sets just before `PsTerminateSystemThread`, since an event wait
+  there may return unsatisfied (`win98-wdm.md`). The system state a batch
+  and a claim read is published under the controller lock in the hold
+  that applies the system trigger (`HcdSuspIdleSystem`).
 - **Teardown** of a PDO keeps 4.4's order: (a), (c) and (d) together
-  (`HcdSuspPdoClose`), then (b) (the URB drain as before), then (e)
-  (`HcdSuspIdleRundown`): a PnP caller waits for `IdlePending` 0 unless the
-  DMA-halt proof is absent (`CommonBufferPinned`) or the controller is
-  released while a callback of the PDO's still runs - then the PDO is
+  (`HcdSuspPdoClose`), then (b) (the URB drain as before, after the PDO's
+  slow IRPs deferred behind a suspended link are detached and completed
+  CANCELLED, `HcdCfgFlushPdoDeferred`; a Closing PDO's IRP is never
+  deferred again), then (e)
+  (`HcdSuspIdleRundown`): a PnP caller waits for `IdlePending` 0 unless a
+  callback of the PDO's still runs without the DMA-halt proof
+  (`CommonBufferPinned` now, or `IdlePinned`, the verdict of the stop that
+  abandoned it) - then the PDO is
   quarantined (`IdleQuarantined`, counted): kept, never revived
   (`hcdDormantFindLocked`), never started again. 4.4 (b)'s three-way split
   of the URB drain is not needed by this tree: every deletion
