@@ -59,7 +59,7 @@ VOID XhciPollValues(PXHCI_POLL_VALUES v, ULONG modeFound, ULONG mode,
  */
 ULONG XhciPollDecide(ULONG mode, ULONG haveInterrupt, ULONG message,
                      ULONG messageConnected, ULONG pinStatus, ULONG pin,
-                     PULONG reason)
+                     ULONG noLineOffered, PULONG reason)
 {
     ULONG unreadable;
 
@@ -70,6 +70,15 @@ ULONG XhciPollDecide(ULONG mode, ULONG haveInterrupt, ULONG message,
     }
     if (haveInterrupt && message) {
         if (!messageConnected) {
+            /* Design record 18 section 4.3: mode 1, the message not
+             * connectable and no line offered fails as XP's forced line
+             * with no line does. The caller sets noLineOffered on x86
+             * alone, with no helper bound; a bound helper whose
+             * connection fails is never here with it set. */
+            if (mode == XHCI_POLL_MODE_LINE && noLineOffered) {
+                *reason = XHCI_POLL_R_FORCED_NO_LINE_OFFERED;
+                return XHCI_POLL_DELIVERY_NONE;
+            }
             *reason = XHCI_POLL_R_MESSAGE_NOT_CONNECTED;
             return XHCI_POLL_DELIVERY_POLL;
         }

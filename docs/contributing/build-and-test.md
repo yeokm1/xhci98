@@ -418,6 +418,20 @@ scripts\build-driver.cmd qemu       REM the emulator-only third flavour
 scripts\build-driver.cmd all        REM all three - what a release cut gates
 ```
 
+**Every x86 run also builds `xhcimsi.sys`**, the NT 6 x86 MSI helper
+(design record 18; task 36.15), in `src\msi86\`, with **WDK 7.1 for x86,
+Vista target** (`setenv <WDK> <flavour> x86 WLH no_oacr`), because only that
+kit declares `IoConnectInterruptEx`. So an x86 build needs `tools\WinDDK71`
+(or `WDKROOT`) as well as MSVC 6.0 and the Windows 2000 DDK, and fails
+without it. The helper is gated by the import gate's `nt6x86` profile
+(`-GateProfile nt6x86 -AllowPath scripts\import-gate\xhcimsi-imports.allow`,
+against the Vista SP2 and 7 SP1 x86 kernels of
+`nt6x86-vista-baselines.expected` and `nt6x86-win7-baselines.expected`),
+the flavour marker check and `source-stamp.ps1 -Driver xhcimsi`; its output
+is `src\msi86\obj<flavour>\i386\xhcimsi.sys`, which `make-package.ps1`
+stages into the x86 package (`-MsiDriverPath` overrides it). An `-amd64`
+run builds no helper.
+
 **`-amd64` is a second axis, not a fourth flavour**, and it goes after the
 flavour word:
 
@@ -3931,6 +3945,48 @@ The leg passes on steps 4, 5 and 7; step 6's prompts are recorded, not
 failed. Until it has passed on a target, design record 13 section 5.6 stays
 `static` for that target and the release notes say so.
 
+### The port switchover script, `portsw.vbs` (roadmap-hcd task 36.42)
+
+Since task 36.42 every flavour directory of a package carries `portsw.vbs`
+at its root beside `xhci98.inf` (design record 16 section 5a). It shows
+`XhciIntelPortSwitch` on every xhci98 controller and sets it to 0 or 1;
+double-clicked it asks through a dialog, and from a command prompt it takes
+`show`, `1` or `0` and prints to the console, which is how a leg reads it:
+
+    cscript //nologo portsw.vbs show  > C:\PSW-SHOW.TXT
+    cscript //nologo portsw.vbs 1     > C:\PSW-1.TXT
+    (restart)
+    cscript //nologo portsw.vbs show  > C:\PSW-SHOW1.TXT
+    cscript //nologo portsw.vbs 0     > C:\PSW-0.TXT
+    (restart)
+    cscript //nologo portsw.vbs show  > C:\PSW-SHOW0.TXT
+
+The exit code is 0 on success, 1 when no controller was found or a write
+was refused, 2 for an unknown argument, and 3 when it handed the write to an
+elevated copy of itself (Vista and 7), whose result it does not see. A fresh install of the `release`
+package must show `0 - off`; a value deleted by hand shows `not set - off`.
+On Vista and 7 a non-elevated `1` or `0` starts the script again through
+the elevation prompt, and the result appears in a message box rather than
+on the console, so run the leg's prompt as administrator.
+
+What QEMU can and cannot show: its xHCI (`1B36:000D`) is not an Intel
+controller, so the driver never reads the value there (design record 16
+section 7a) - an `XHCISNAP` report at verbosity 2 shows `psw.gate=00000000`
+and no other `psw.` record whatever the value, and the `qemu` flavour's
+debug console prints "not an Intel xHCI, no config write". A guest leg
+therefore reads the script and the registry, the INF's 0 on a fresh install
+and the value surviving a restart; the switchover at 0 and 1 is a bench
+reading on a listed Intel chipset, and the driver's treatment of an absent
+value is held by `test\test_psw.c`.
+
+Read 2026-10-10 on development host A (task 36.42), on the `release`
+package: Windows 98 SE, 2000 SP4 and Windows 7 x64, each a fresh install
+showing `0 - off`, then 1 and 0 each kept across a restart; on 7 x64 the
+non-elevated path raised the elevation prompt. On 98 SE `regedit /e` from a
+batch file at a DOS prompt returns before the export is written (the script
+runs it through Script Host and waits), so a leg's own export needs a
+second `copy` a moment later.
+
 ### Recommended USB Host Chips for Comprehensive Testing
 
 QEMU cannot exercise the quirk-handling code (see "QEMU coverage limits"), so
@@ -6348,6 +6404,50 @@ and the counter block delivery 2 with reason 9; under mode 1 no move. The
 start notes `qemu.inj.nointerrupt`, `qemu.inj.pinunreadable` and
 `qemu.inj.deadline.value`.
 
+**`XhciQemuMsgConnectFail`, `XhciMsi86NoStrip`, `XhciMsi86InjNoLine`**
+(task 36.15; design records 15 section 4.3 and 18). REG_DWORDs in the
+controller's driver key, the first read at every start, the other two at
+`AddDevice` and every start for the next requirements filter, so a change
+takes effect at a disable and enable. `XhciQemuMsgConnectFail` 1 fails a
+message connection without calling `IoConnectInterruptEx`: the start polls
+with reason 12. `XhciMsi86NoStrip` 1 keeps the requirements filter from
+stripping (outcome 5, "disabled"), for R1 and R2's readings.
+`XhciMsi86InjNoLine` 1 rewrites the requirements list before it is
+classified - every line member of an interrupt run that also holds a
+message removed, every line-only configuration dropped - so the list
+offers no line (record 18 leg H1a). **`XhciMsiInject`** is the helper's own,
+in `HKLM\SYSTEM\CurrentControlSet\Services\xhcimsi\Parameters`, read once
+in its `DriverEntry` (so a change needs a reboot): 1 fails `DriverEntry`,
+2 refuses the query, 3 answers interface major 2, 4 a short answer, 5 a
+NULL `IoDisconnectInterruptEx`, 6 a wrong magic (record 18 section 2.1).
+
+**The `M86` trace** (`qemu` flavour; record 18 section 9). The
+requirements filter writes every list it receives (`R`), rewrites (`I`)
+and returns (`T`), and the helper binding and the start's decision write
+lifecycle (`L`) and decision (`S`) records, one per line on the port-0xE9
+channel, each with a checksum. `scripts\vm-matrix\check-msi86-trace.ps1
+-Path <debugcon log>` validates a capture - a cut or interleaved record, a
+dropped descriptor, a count that disagrees, all refuse it - and prints the
+lists; R1, R2 and the lifecycle legs are read only from a capture it
+accepts.
+
+**The MSI log notes and counters** (every flavour). At start
+`msi.descriptors`, `msi.raw.count`, `msi.routines` (0 none, 1 amd64's
+`MmGetSystemRoutineAddress`, 2 the x86 helper, 3 not found),
+`msi86.state` (0 unseen, 1 absent, 2 refused, 3 bound), `msi86.status`,
+`msi86.refusal` (the acceptance test that failed), `msi86.helper.version`,
+`msi.filter.seq`, `msi.filter.class` (0 unknown, 1 no interrupt, 2 no
+message, 3 replaceable, 4 no line offered, 5 unsupported shape, 6
+inconsistent), `msi.filter.outcome` (1 lower failed, 2 no list, 3
+inconsistent, 4 not asked, 5 disabled, 6 no line offered, 7 no interrupt,
+8 no message, 9 unsupported, 10 replaced, 11 no memory),
+`msi.filter.mode.raw`, `msi.filter.mode.from`, `msi.filter.lists`,
+`msi.filter.messages`, `msi.filter.lines`; after the connection
+`msi.connect.status`, `msi.connect.version`, `msi.connected` and the
+delivery and reason again. The counter block's words 96 to 113 carry the
+same (`src\xhci_counters.h`); delivery 3 MSI, 4 MSI-X, 5 a message whose
+capability was not read; reason 13 "forced, no line offered".
+
 **The delivery's log notes** (every flavour; design record 15 section 8). At
 start: `intr.mode.read`, `intr.mode`, `intr.delivery`, `intr.reason`,
 `intr.pin`, `poll.idle.ms`, `poll.active.ms`; at a move `intr.moved`,
@@ -6508,7 +6608,7 @@ effect at the next start. The log ring notes `susp.switch.value` (the value
 read, `FFFFFFFF` when absent) and `susp.switch`.
 
 **Counters.** Words 114 to 141 of the counter block (`src\xhci_counters.h`;
-words 96 to 113 are reserved for the MSI work's), dumped at the stop as
+after the MSI words 96 to 113), dumped at the stop as
 `susp.*` and `idle.*` lines and printed by name by `XHCISNAP`: the switch as
 read and in effect; suspends, host resumes and device wakes begun; how the
 sequences ended (`SuspSuspended`, `SuspActive`, `SuspRefused` with

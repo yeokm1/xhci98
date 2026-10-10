@@ -51,11 +51,30 @@ function Get-StandInSha {
 }
 
 function Invoke-Packager {
-    param([string[]]$Arguments, [switch]$WithBinaryGates)
+    param([string[]]$Arguments, [switch]$WithBinaryGates, [switch]$NoMsiStandIn)
     # The stand-in "driver" is a text file, so the packager's pre-staging host
     # test suite and import gate are skipped for every case except the one
     # that is about them.
     if (-not $WithBinaryGates) { $Arguments = $Arguments + @("-SkipBinaryGates") }
+    #
+    # The 32-bit INF names xhcimsi.sys, the NT 6 x86 MSI helper, since task
+    # 36.15 (design record 18), so an x86 stand-in package needs a stand-in
+    # helper too, carrying the flavour the run asks for. Every case gets one
+    # unless it names its own or is about the helper's absence; the amd64
+    # package carries none.
+    $isAmd64 = $false
+    $flavour = "debug"
+    for ($i = 0; $i -lt $Arguments.Count; $i++) {
+        if ($Arguments[$i] -eq "-Arch" -and $i + 1 -lt $Arguments.Count -and $Arguments[$i + 1] -eq "amd64") { $isAmd64 = $true }
+        if ($Arguments[$i] -eq "-Flavor" -and $i + 1 -lt $Arguments.Count) { $flavour = $Arguments[$i + 1] }
+    }
+    if (-not $NoMsiStandIn -and -not $isAmd64 -and ($Arguments -notcontains "-MsiDriverPath")) {
+        $standIn = Join-Path $script:work ("xhcimsi-" + $flavour + ".sys")
+        if (-not (Test-Path -LiteralPath $standIn)) {
+            Set-Content -LiteralPath $standIn -Value ("not a real helper XHCI98_FLAVOUR_" + $flavour.ToUpperInvariant()) -Encoding ASCII
+        }
+        $Arguments = $Arguments + @("-MsiDriverPath", $standIn)
+    }
     $psArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $packager) + $Arguments
     # ErrorActionPreference relaxed across the call, as
     # `scripts\import-gate\check-imports.ps1` relaxes it for dumpbin (repo audit
@@ -131,9 +150,24 @@ try {
     $flatOut = Join-Path $script:work "pkg-flat"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $flatOut)
     Assert-True ($r.ExitCode -eq 0) ("the baseline package was rejected:`n" + $r.Output)
-    foreach ($f in @("xhci98.inf", "xhci98.sys")) {
+    foreach ($f in @("xhci98.inf", "xhci98.sys", "xhcimsi.sys")) {
         Assert-True (Test-Path -LiteralPath (Join-Path $flatOut $f)) "'$f' is missing from the flat package."
     }
+
+    # --- the NT 6 x86 MSI helper (task 36.15, design record 18) -------------
+    Write-Step "the x86 package carries the MSI helper its INF names, of its own flavour"
+    $r = Invoke-Packager -NoMsiStandIn -Arguments @("-InfPath", $plainInf, "-DriverPath", $driver,
+        "-OutDir", (Join-Path $script:work "pkg-no-helper"))
+    Assert-True ($r.ExitCode -ne 0) "an x86 package was built with no xhcimsi.sys for its INF's entry."
+    Assert-True ($r.Output -match "xhcimsi\.sys") ("expected the refusal to name xhcimsi.sys. Output:`n" + $r.Output)
+    $wrongHelper = Join-Path $script:work "xhcimsi-wrong.sys"
+    Set-Content -LiteralPath $wrongHelper -Value "not a real helper XHCI98_FLAVOUR_QEMU" -Encoding ASCII
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-MsiDriverPath", $wrongHelper,
+        "-OutDir", (Join-Path $script:work "pkg-wrong-helper"))
+    Assert-True ($r.ExitCode -ne 0) "a qemu-flavour helper was staged into a debug package."
+    $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", (Join-Path $repo "src\xhci98-amd64.inf"),
+        "-DriverPath", $driver, "-MsiDriverPath", $wrongHelper, "-OutDir", (Join-Path $script:work "pkg-amd64-helper"))
+    Assert-True ($r.ExitCode -ne 0) "an amd64 package accepted -MsiDriverPath."
 
     # --- txtsetup.oem (roadmap task 33.3) -----------------------------------
     #
@@ -160,6 +194,53 @@ try {
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
         "-OemPath", (Join-Path $repo "src\txtsetup-amd64.oem"), "-OutDir", (Join-Path $script:work "pkg-oem-arch"))
     Assert-True ($r.ExitCode -ne 0) "the amd64 txtsetup.oem was staged into an x86 package."
+
+    # --- portsw.vbs (roadmap-hcd task 36.42) --------------------------------
+    #
+    # The port switchover's user script: staged at the package root, byte
+    # for byte, when named (and always from the default paths); a stand-in
+    # package that does not name it does not carry it; a missing one is
+    # refused. The script finds the controller's key by DriverDesc, so the
+    # string it matches is held to both INFs' XhciDesc, and the text a
+    # Windows 98 WSH reads is held to ASCII with CRLF line endings.
+    Write-Step "portsw.vbs is staged at the root and matches the INFs"
+    $pswSrc = Join-Path $repo "src\portsw.vbs"
+    $pswOut = Join-Path $script:work "pkg-psw"
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
+        "-PswScriptPath", $pswSrc, "-OutDir", $pswOut)
+    Assert-True ($r.ExitCode -eq 0) ("a package with portsw.vbs was rejected:`n" + $r.Output)
+    $pswStaged = Join-Path $pswOut "portsw.vbs"
+    Assert-True (Test-Path -LiteralPath $pswStaged) "portsw.vbs is not at the package root."
+    if (Test-Path -LiteralPath $pswStaged) {
+        Assert-True ((Get-StandInSha ([System.IO.File]::ReadAllBytes($pswStaged))) -eq
+                     (Get-StandInSha ([System.IO.File]::ReadAllBytes($pswSrc)))) `
+            "the staged portsw.vbs differs from src\portsw.vbs."
+    }
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $flatOut "portsw.vbs"))) `
+        "a stand-in package that did not name -PswScriptPath carries portsw.vbs."
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
+        "-PswScriptPath", (Join-Path $script:work "no-such.vbs"), "-OutDir", (Join-Path $script:work "pkg-psw-missing"))
+    Assert-True ($r.ExitCode -ne 0) "a missing portsw.vbs was not refused."
+    $pswBytes = [System.IO.File]::ReadAllBytes($pswSrc)
+    $pswBad = @($pswBytes | Where-Object { $_ -ge 0x80 -or ($_ -lt 0x20 -and $_ -ne 9 -and $_ -ne 10 -and $_ -ne 13) })
+    Assert-True ($pswBad.Count -eq 0) "src\portsw.vbs holds a byte outside printable ASCII, TAB, CR and LF."
+    $pswText = [System.IO.File]::ReadAllText($pswSrc)
+    Assert-True (-not ($pswText -match "(?<!`r)`n")) "src\portsw.vbs has a line not ended by CRLF."
+    foreach ($infName in @("src\xhci98.inf", "src\xhci98-amd64.inf")) {
+        $infText = [System.IO.File]::ReadAllText((Join-Path $repo $infName))
+        $descMatch = [regex]::Match($infText, '(?m)^XhciDesc="([^"]*)"')
+        Assert-True $descMatch.Success "$infName has no XhciDesc string this test can read."
+        if ($descMatch.Success) {
+            Assert-True ($pswText.Contains('Const XHCI_DESC = "' + $descMatch.Groups[1].Value + '"')) `
+                "src\portsw.vbs does not look for $infName's XhciDesc, so it would find no controller."
+        }
+    }
+    foreach ($needle in @('"XhciIntelPortSwitch"', '"REG_DWORD"',
+                          'HKLM\System\CurrentControlSet\Services\Class\USB\',
+                          'HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\',
+                          'RESTART WINDOWS')) {
+        Assert-True ($pswText.Contains($needle)) "src\portsw.vbs no longer contains $needle."
+    }
 
     # --- a diagnostic probe driver must never become install media ----------
     Write-Step "a diagnostic probe driver is refused"
@@ -727,9 +808,11 @@ try {
     Write-Step "a relative -OutDir resolves against the caller's location"
     $cwd = Join-Path $script:work "cwd"
     New-Item -ItemType Directory -Path $cwd | Out-Null
+    $msiStandInDebug = Join-Path $script:work "xhcimsi-relpkg.sys"
+    Set-Content -LiteralPath $msiStandInDebug -Value "not a real helper XHCI98_FLAVOUR_DEBUG" -Encoding ASCII
     $script = @(
         "Set-Location -LiteralPath '$cwd'",
-        "& '$packager' -InfPath '$plainInf' -DriverPath '$driver' -OutDir 'relpkg' -SkipBinaryGates | Out-Null",
+        "& '$packager' -InfPath '$plainInf' -DriverPath '$driver' -MsiDriverPath '$msiStandInDebug' -OutDir 'relpkg' -SkipBinaryGates | Out-Null",
         "exit `$LASTEXITCODE"
     ) -join "; "
     $savedEap = $ErrorActionPreference
@@ -792,6 +875,10 @@ try {
             Ensure-Directory $pubFlavour
             [System.IO.File]::WriteAllBytes((Join-Path $pubFlavour "xhci98.sys"), $flavourBytes[$fl])
             Copy-Item -LiteralPath $plainInf -Destination (Join-Path $pubFlavour "xhci98.inf") -Force
+            # The x86 media's third file of this project's own since task
+            # 36.15 (design record 18), published beside xhci98.sys.
+            Set-Content -LiteralPath (Join-Path $pubFlavour "xhcimsi.sys") -Encoding ASCII `
+                        -Value "stand-in xhcimsi.sys, $fl flavour, $relVersion"
 
             # The gated package: the same two files byte for byte, and since
             # 1.0.0.1 nothing else.
@@ -799,6 +886,8 @@ try {
             Ensure-Directory $pkgFlavour
             [System.IO.File]::WriteAllBytes((Join-Path $pkgFlavour "xhci98.sys"), $flavourBytes[$fl])
             Copy-Item -LiteralPath $plainInf -Destination (Join-Path $pkgFlavour "xhci98.inf") -Force
+            Set-Content -LiteralPath (Join-Path $pkgFlavour "xhcimsi.sys") -Encoding ASCII `
+                        -Value "stand-in xhcimsi.sys, $fl flavour, $relVersion"
         }
         Set-Content -LiteralPath (Join-Path $pubRoot "readme.txt") -Encoding ASCII `
                     -Value "stand-in per-version readme"
@@ -829,7 +918,7 @@ try {
         # The files the INF names, in one directory, per flavour. This is the
         # assertion the malformed asset would have failed.
         foreach ($fl in @("release", "debug")) {
-            foreach ($name in @("xhci98.sys", "xhci98.inf")) {
+            foreach ($name in @("xhci98.sys", "xhci98.inf", "xhcimsi.sys")) {
                 Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\$name")) `
                     "'$name' is missing from the upload set's $fl\ directory; a user pointing Windows at it gets an incomplete install."
             }
@@ -1068,6 +1157,11 @@ try {
             # it is is said by the directory, which is the whole reason the
             # architecture has to be carried alongside the name.
             Copy-Item -LiteralPath $leg.Inf -Destination (Join-Path $d "xhci98.inf") -Force
+            # The x86 media's helper (design record 18); the x64 media has none.
+            if ($leg.Dir -like "*-x86") {
+                Set-Content -LiteralPath (Join-Path $d "xhcimsi.sys") -Encoding ASCII `
+                            -Value "stand-in xhcimsi.sys, $($leg.Dir), $relVersion"
+            }
         }
         Set-Content -LiteralPath (Join-Path $pubRoot4 "readme.txt") -Encoding ASCII `
                     -Value "stand-in per-version readme"
@@ -1888,6 +1982,8 @@ try {
             [System.IO.File]::WriteAllBytes((Join-Path $d "xhci98.sys"),
                 [System.Text.Encoding]::ASCII.GetBytes("stand-in xhci98.sys, $fl, $newVersion"))
             Copy-Item -LiteralPath $newInf -Destination (Join-Path $d "xhci98.inf") -Force
+            Set-Content -LiteralPath (Join-Path $d "xhcimsi.sys") -Encoding ASCII `
+                        -Value "stand-in xhcimsi.sys, $fl, $newVersion"
         }
         Set-Content -LiteralPath (Join-Path $newPubRoot "readme.txt") -Encoding ASCII `
                     -Value "stand-in per-version readme"
@@ -2002,7 +2098,11 @@ try {
         @{ Find = '$makePackage, "-Flavor", $f, "-Arch", $leg.PkgArch,';
            Why  = "the publisher no longer tells the packager which architecture to build, so every leg would stage the x86 package" },
         @{ Find = 'throw "the release and debug $a binaries are identical - one build was packaged twice."';
-           Why  = "the identical-binary refusal no longer compares within an architecture, where it is the only place a collision could happen" }
+           Why  = "the identical-binary refusal no longer compares within an architecture, where it is the only place a collision could happen" },
+        @{ Find = 'foreach ($name in ($declaredPublishable[$leg.Arch] + $uasPublishable + $oemPublishable + $pswPublishable)) {';
+           Why  = "a cut no longer publishes portsw.vbs, the port switchover's user script, beside the INF (roadmap-hcd task 36.42)" },
+        @{ Find = '$pswPublishable = @("portsw.vbs")';
+           Why  = "the port switchover's user script is no longer one of the files a flavour directory may carry" }
     )) {
         Assert-True ($releaserText.Contains($anchor.Find)) `
             ("make-release.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + ".")
@@ -2039,7 +2139,7 @@ try {
         "make-release.ps1's Get-DeclaredMediaLayout no longer passes -Arch to the INF gate, so the amd64 INF would be parsed under the gate's x86 profile and refuse the cut."
     Assert-True ($releaserText -match [regex]::Escape('Get-DeclaredMediaLayout -InfPath $archInf -Arch $archPkgName[$a]')) `
         "make-release.ps1's pre-build layout loop no longer tells Get-DeclaredMediaLayout which architecture each INF is, so both legs would be gated as x86."
-    Assert-True ($releaserText -match [regex]::Escape('-Arch $LegArches[$Flavors[0]]')) `
+    Assert-True ($releaserText -match [regex]::Escape('-Arch $LegArches[$legDir]')) `
         "make-release.ps1's upload assembly no longer derives the media layout under the published directory's own architecture."
     Assert-True ($releaserText -match [regex]::Escape('"-InfPath", $flavorInf, "-Arch", $LegArches[$f],')) `
         "make-release.ps1 no longer passes -Arch to the per-directory INF gate in the upload assembly, so an assembled release-x64\ would be gated as x86 - after the publish swap."

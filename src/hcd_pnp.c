@@ -107,6 +107,10 @@ static NTSTATUS hcdRemove(PHCD_CONTROLLER hc, PIRP irp)
     }
     /* Before the IRP goes down: the interface belongs to the PCI PDO. */
     HcdDoorControllerRemove(hc);
+    /* After the stop's release disconnected any message: the x86 helper's
+     * reference held for this FDO dropped, once (design record 18 section
+     * 3.3). */
+    HcdMsiRemove(hc);
 
     irp->IoStatus.Status = STATUS_SUCCESS;
     status = HcdPassDown(hc, irp);
@@ -190,6 +194,14 @@ NTSTATUS HcdControllerPnp(PHCD_CONTROLLER hc, PIRP irp)
                 ->SurpriseRemovalOK = FALSE;
         }
         status = HcdCompleteIrp(irp, status, irp->IoStatus.Information);
+        break;
+
+    case IRP_MN_FILTER_RESOURCE_REQUIREMENTS:
+        /* Design record 18 section 4.2: on Vista and 7 the message choices
+         * are kept from a start that could not connect them, or that mode
+         * 1 forces onto the line; every other target passes it down as
+         * before. */
+        status = HcdMsiFilter(hc, irp);
         break;
 
     case IRP_MN_QUERY_DEVICE_RELATIONS:

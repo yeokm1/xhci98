@@ -39,6 +39,15 @@
 #include "xhci_xstat.h"
 #include "xhci98_xfer.h"
 #include "xhci_poll.h"
+#include "xhci_msi.h"
+#include "xhci_msi86.h"
+
+/* Message-signalled interrupts (design records 15 section 4.3 and 18): the
+ * qemu flavour's failed message connection, its switch that keeps the
+ * requirements filter from stripping, and its no-line rewrite. */
+#define HCD_VALUE_QEMU_MSG_FAIL L"XhciQemuMsgConnectFail"
+#define HCD_VALUE_QEMU_NO_STRIP L"XhciMsi86NoStrip"
+#define HCD_VALUE_QEMU_NO_LINE  L"XhciMsi86InjNoLine"
 
 /*
  * The processor's time-stamp counter (task 36.21; xhci_xstat.h): the only
@@ -1207,6 +1216,70 @@ typedef struct _HCD_CONTROLLER {
     ULONG PollContainAsked;
     ULONG PollOwedState;            /* XHCI_POLL_BUS_* of Poll.Owed; PollLock */
 
+    /* Message-signalled interrupts on Vista and 7 (design record 15
+     * section 4.3, task 36.15). The raw list's message descriptors and the
+     * MessageCount the first carries (hcdParseResources); where the
+     * IoConnectInterruptEx pair came from (HCD_MSI_ROUTINES_*) and the pair;
+     * the connection IoConnectInterruptEx made - MsgVersion 0 for none,
+     * else the CONNECT_* it returned - with its context, kept for
+     * IoDisconnectInterruptEx at the release; the messages connected, the
+     * capability read and the connection's status. Settled at each start,
+     * outside the zeroed extension. */
+    ULONG MsgDescriptors;
+    ULONG MsgRawCount;
+    ULONG MsgRoutines;
+    PVOID MsgConnectEx;
+    PVOID MsgDisconnectEx;
+    ULONG MsgVersion;
+    PVOID MsgContext;
+    ULONG MsgConnected;
+    ULONG MsgCapability;
+    NTSTATUS MsgConnectStatus;
+    ULONG QemuMsgFail;
+
+    /* The requirements filter (design record 18 section 4.2): the mode as
+     * read at AddDevice and refreshed at each start (both system-thread
+     * contexts), with the qemu switches beside it; the filter's record -
+     * its sequence, the list's class and the outcome - with the mode it
+     * used copied from that cache; and the last walk and classification.
+     * PnP sends one PnP IRP at a time to a devnode, so the filter and the
+     * start never run together. */
+    ULONG ModeCacheRaw;
+    ULONG ModeCacheFound;
+    ULONG ModeCacheFrom;            /* HCD_MSI_FROM_*                      */
+    ULONG QemuNoStrip;
+    ULONG QemuInjNoLine;
+    XHCI_MSI_FILTER_RECORD MsiFilter;
+    ULONG FilterModeRaw;
+    ULONG FilterModeFound;
+    ULONG FilterModeFrom;
+    ULONG FilterMode;
+    XHCI_MSI_WALK FilterWalk;
+    XHCI_MSI_CLASSIFY FilterClassify;
+    ULONG FilterStripped;           /* descriptors removed by a REPLACED   */
+    /* The last filter's received list, bounded (record 18 section 9):
+     * HCD_MSI_SNAP_DESCRIPTORS descriptors of HCD_MSI_SNAP_WORDS words -
+     * configuration << 16 | index, Option | Type << 8 | ShareDisposition
+     * << 16, Flags, and the six words of u raw - and how many there were. */
+    ULONG FilterSnapCount;
+    ULONG FilterSnap[12][9];
+
+    /* The x86 helper (design record 18 sections 3 and 4.1): the binding,
+     * the last look's detail (its NTSTATUS, or the acceptance test that
+     * refused it), the accepted answer, its routines and the file object
+     * whose reference is held while BOUND. The block is the query sent,
+     * in this nonpaged extension. */
+    XHCI_MSI86_BIND Msi86Bind;
+    NTSTATUS Msi86Status;
+    ULONG Msi86Refusal;
+    XHCI_MSI86_QUERY Msi86Query;
+    PFILE_OBJECT Msi86File;
+    PVOID Msi86ConnectEx;
+    PVOID Msi86DisconnectEx;
+    ULONG Msi86HelperVersion;
+    ULONG Msi86HelperMinor;
+    ULONG Msi86Flags;
+
 #if DBG
     /* Strict mode (hcd_strict.c): the command preconditions a conforming
      * xHC enforces and QEMU does not, checked before each command. Thread
@@ -1904,6 +1977,111 @@ VOID HcdLogFlush(PHCD_CONTROLLER hc, ULONG reason, ULONG counters);
 VOID HcdCountersStart(PHCD_CONTROLLER hc);
 VOID HcdCountersPoll(PHCD_CONTROLLER hc);
 
+NTSTATUS HcdReadValueDword(PHCD_CONTROLLER hc, PCWSTR name, PULONG value);
+
+/* hcd_msi86.c: message-signalled interrupts' kernel half (design records
+ * 15 section 4.3 and 18). */
+#define HCD_MSI_ROUTINES_NONE       0UL     /* not looked for, or not NT 6 */
+#define HCD_MSI_ROUTINES_SYSTEM     1UL     /* amd64: MmGetSystemRoutineAddress */
+#define HCD_MSI_ROUTINES_HELPER     2UL     /* x86: the helper's answer    */
+#define HCD_MSI_ROUTINES_NOT_FOUND  3UL     /* looked for, not found       */
+
+#define HCD_MSI_FROM_NONE           0UL
+#define HCD_MSI_FROM_ADDDEVICE      1UL
+#define HCD_MSI_FROM_START          2UL
+
+/* The x86 seam's routine types, WDK 7.1's (wdm.h), restated here because
+ * the Windows 2000 DDK has none of them. */
+#define HCD_CONNECT_LINE_BASED      2UL
+#define HCD_CONNECT_MESSAGE_BASED   3UL
+
+typedef BOOLEAN (NTAPI *HCD_MESSAGE_SERVICE_ROUTINE)(PKINTERRUPT Interrupt,
+                                                     PVOID Context,
+                                                     ULONG MessageId);
+
+typedef struct _HCD_IO_CONNECT_MESSAGE_BASED {
+    PDEVICE_OBJECT PhysicalDeviceObject;
+    PVOID *ConnectionContext;
+    HCD_MESSAGE_SERVICE_ROUTINE MessageServiceRoutine;
+    PVOID ServiceContext;
+    PKSPIN_LOCK SpinLock;
+    KIRQL SynchronizeIrql;
+    BOOLEAN FloatingSave;
+    PKSERVICE_ROUTINE FallBackServiceRoutine;
+} HCD_IO_CONNECT_MESSAGE_BASED;
+
+/* IO_CONNECT_INTERRUPT_FULLY_SPECIFIED_PARAMETERS, the union's largest
+ * member, so the whole union's size is WDK 7.1's. */
+typedef struct _HCD_IO_CONNECT_FULLY_SPECIFIED {
+    PDEVICE_OBJECT PhysicalDeviceObject;
+    PKINTERRUPT *InterruptObject;
+    PKSERVICE_ROUTINE ServiceRoutine;
+    PVOID ServiceContext;
+    PKSPIN_LOCK SpinLock;
+    KIRQL SynchronizeIrql;
+    BOOLEAN FloatingSave;
+    BOOLEAN ShareVector;
+    ULONG Vector;
+    KIRQL Irql;
+    KINTERRUPT_MODE InterruptMode;
+    KAFFINITY ProcessorEnableMask;
+    USHORT Group;
+} HCD_IO_CONNECT_FULLY_SPECIFIED;
+
+typedef struct _HCD_IO_CONNECT_PARAMETERS {
+    ULONG Version;
+    union {
+        HCD_IO_CONNECT_FULLY_SPECIFIED FullySpecified;
+        HCD_IO_CONNECT_MESSAGE_BASED MessageBased;
+    } u;
+} HCD_IO_CONNECT_PARAMETERS, *PHCD_IO_CONNECT_PARAMETERS;
+
+typedef struct _HCD_IO_DISCONNECT_PARAMETERS {
+    ULONG Version;
+    PVOID ConnectionContext;
+} HCD_IO_DISCONNECT_PARAMETERS, *PHCD_IO_DISCONNECT_PARAMETERS;
+
+typedef struct _HCD_IO_MESSAGE_INFO_ENTRY {
+    PHYSICAL_ADDRESS MessageAddress;
+    KAFFINITY TargetProcessorSet;
+    PKINTERRUPT InterruptObject;
+    ULONG MessageData;
+    ULONG Vector;
+    KIRQL Irql;
+    ULONG Mode;
+    ULONG Polarity;
+} HCD_IO_MESSAGE_INFO_ENTRY;
+
+typedef struct _HCD_IO_MESSAGE_INFO {
+    KIRQL UnifiedIrql;
+    ULONG MessageCount;
+    HCD_IO_MESSAGE_INFO_ENTRY MessageInfo[1];
+} HCD_IO_MESSAGE_INFO, *PHCD_IO_MESSAGE_INFO;
+
+typedef NTSTATUS (NTAPI *HCD_CONNECT_EX)(PHCD_IO_CONNECT_PARAMETERS p);
+typedef VOID (NTAPI *HCD_DISCONNECT_EX)(PHCD_IO_DISCONNECT_PARAMETERS p);
+
+VOID HcdMsiAddDevice(PHCD_CONTROLLER hc);
+VOID HcdMsiStartValues(PHCD_CONTROLLER hc, ULONG modeFound, ULONG mode);
+NTSTATUS HcdMsiFilter(PHCD_CONTROLLER hc, PIRP irp);
+VOID HcdMsiStartLook(PHCD_CONTROLLER hc);
+ULONG HcdMsiRoutines(PHCD_CONTROLLER hc, PVOID *connect, PVOID *disconnect);
+ULONG HcdMsiNoLineOffered(PHCD_CONTROLLER hc);
+VOID HcdMsiRemove(PHCD_CONTROLLER hc);
+VOID HcdMsiCountersStart(PHCD_CONTROLLER hc);
+VOID HcdMsiTraceStart(PHCD_CONTROLLER hc, ULONG grant, NTSTATUS status);
+VOID HcdMsiTraceLife(PHCD_CONTROLLER hc, ULONG event, ULONG a, ULONG b);
+
+/* The lifecycle events' codes (record 18 section 9, kind L). */
+#define HCD_MSI_LIFE_LOOK           1UL
+#define HCD_MSI_LIFE_BIND           2UL
+#define HCD_MSI_LIFE_REFUSE         3UL
+#define HCD_MSI_LIFE_ROUTINES       4UL
+#define HCD_MSI_LIFE_CONNECT        5UL
+#define HCD_MSI_LIFE_DISCONNECT     6UL
+#define HCD_MSI_LIFE_DROP           7UL
+#define HCD_MSI_LIFE_REMOVE         8UL
+#define HCD_MSI_LIFE_FILTER         9UL
 /* hcd_susp.c (task 36.30; design record 14 section 3.10) */
 VOID HcdSuspService(PHCD_CONTROLLER hc);
 VOID HcdSuspDeviceInit(PHCD_USB_DEVICE dev, PHCD_PORT port);
@@ -1955,6 +2133,7 @@ VOID HcdCfgFlushPdoDeferred(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 
 /* hcd_pool.c */
 PVOID HcdPoolAlloc(ULONG bytes);
+PVOID HcdPoolAllocRequirements(ULONG bytes);
 VOID HcdPoolFree(PVOID p);
 ULONG HcdPoolOutstandingCount(VOID);
 PVOID HcdPoolAllocHandedOff(ULONG bytes);

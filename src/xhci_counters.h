@@ -205,13 +205,40 @@ typedef struct _XHCIHC_COUNTERS {
     /* The three values' read status apart from their values (record 15
      * section 3): XHCI_POLL_FOUND_* bits. */
     ULONG IntrValuesFound;
-    /* Words 96 to 113 are p36-msi86's (MSI and MSI-X delivery), not yet on
-     * this branch: reserved here so selective suspend's words below keep
-     * the offsets they will have when both are merged (integrator: replace
-     * this array with that branch's eighteen fields). */
-    ULONG ReservedMsi86[18];
+
+    /* Message-signalled interrupts on Vista and 7 (design records 15
+     * section 4.3 and 18; roadmap-hcd.md 36.15), appended: where the
+     * IoConnectInterruptEx pair came from (HCD_MSI_ROUTINES_*); the
+     * messages connected and the capability read (XHCI_POLL_DELIVERY_*);
+     * the connection's NTSTATUS; the raw list's message descriptors; the
+     * x86 helper's binding (XHCI_MSI86_STATE_*), its looks, the last
+     * look's NTSTATUS and refusal (XHCI_MSI86_REFUSE_*) and the helper's
+     * version; the last requirements filter's sequence, the list's class
+     * (XHCI_MSI_CLASS_*), the outcome (XHCI_MSI_OUT_*), the mode it used
+     * as read (XHCI_POLL_NOT_FOUND when not found), its configurations,
+     * message and line members, and the descriptors a strip removed.
+     * Written at each start, after the counters are zeroed, from the
+     * controller's own record, and at each later filter. */
+    ULONG MsiRoutines;
+    ULONG MsiMessages;
+    ULONG MsiCapability;
+    ULONG MsiConnectStatus;
+    ULONG MsiDescriptors;
+    ULONG Msi86State;
+    ULONG Msi86Looks;
+    ULONG Msi86Status;
+    ULONG Msi86Refusal;
+    ULONG Msi86HelperVersion;
+    ULONG MsiFilterSeq;
+    ULONG MsiFilterClass;
+    ULONG MsiFilterOutcome;
+    ULONG MsiFilterMode;
+    ULONG MsiFilterLists;
+    ULONG MsiFilterMessages;
+    ULONG MsiFilterLines;
+    ULONG MsiFilterStripped;
     /* Selective suspend, stage A (design record 14; roadmap-hcd.md 36.33),
-     * appended contiguous at word 114 so stage B's (record 14 section 8.10)
+     * appended contiguous at word 114, after the MSI words, so stage B's (record 14 section 8.10)
      * follow them: the switch as read (0 absent, 1 a DWORD, 2 another
      * type) and in effect; the sequences begun by kind and how they ended,
      * the last refusal's reason (XHCI_SUSP_WHY_*); the remote-wake feature

@@ -8629,7 +8629,19 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_TELE_BODY_WORDS 41UL
 #define XHCI_SNAPSHOT_HCD_TELE_RECORD_WORDS                                  \
     (XHCI_SNAPSHOT_HCD_TELE_BODY + XHCI_SNAPSHOT_HCD_TELE_BODY_WORDS)
-#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    202UL
+/*
+ * Appended by task 36.9, version unchanged: where the event delivery's six
+ * extension words lie (XHCI_EXTENSION.EventDelivery to LineRetireState,
+ * design record 15 section 9), in bytes from the extension's start, and
+ * how many there are, so XHCISNAP names them from the .BIN's own bytes as
+ * it does the tolerance state. A header shorter than this is an earlier
+ * driver's, which places no extension words; whether a driver has the
+ * polling counters is the counter block's size to say (63 words or 96).
+ */
+#define XHCI_SNAPSHOT_HCD_DELIVERY_AT   202 /* XHCI_EXTENSION.EventDelivery  */
+#define XHCI_SNAPSHOT_HCD_DELIVERY_WORDS 203 /* its words, in order          */
+#define XHCI_SNAPSHOT_HCD_DELIVERY_COUNT 6UL
+#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    204UL
 
 #define XHCI_SNAPSHOT_HCD_TELE_S_NONE     0UL /* no send has come          */
 #define XHCI_SNAPSHOT_HCD_TELE_S_LIVE     1UL /* its device is present     */

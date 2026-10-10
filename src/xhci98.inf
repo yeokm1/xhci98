@@ -56,11 +56,13 @@ DriverVer=10/07/2026,2.2.0.0
 
 [SourceDisksFiles]
 xhci98.sys=1
+xhcimsi.sys=1
 xhci98.inf=1
 
 [DestinationDirs]
 DefaultDestDir=10
 Xhci.CopyFiles=10,System32\Drivers
+XhciMsi.CopyFiles=10,System32\Drivers
 Xhci.CopyOS=10,System32\Drivers
 Xhci.CopyUI=11
 Inf.CopyFiles=17
@@ -81,7 +83,7 @@ HKR,,XhciForceBulkOnly,0x00010003,0
 HKR,,XhciFastPollFsLs,0x00010003,0
 HKR,,XhciFirstEnumWaitMs,0x00010003,5000
 HKR,,XhciFirstEnumPortMs,0x00010003,2000
-HKR,,XhciIntelPortSwitch,0x00010003,1
+HKR,,XhciIntelPortSwitch,0x00010003,0
 HKR,,XhciIntelIrqRoute,0x00010003,1
 HKR,,XhciTolerance,0x00010003,1
 HKR,,XhciIntervalCap,0x00010003,1
@@ -133,7 +135,7 @@ HKR,,XhciForceBulkOnly,0x00010003,0
 HKR,,XhciFastPollFsLs,0x00010003,0
 HKR,,XhciFirstEnumWaitMs,0x00010003,5000
 HKR,,XhciFirstEnumPortMs,0x00010003,2000
-HKR,,XhciIntelPortSwitch,0x00010003,1
+HKR,,XhciIntelPortSwitch,0x00010003,0
 HKR,,XhciIntelIrqRoute,0x00010003,1
 HKR,,XhciTolerance,0x00010003,1
 HKR,,XhciIntervalCap,0x00010003,1
@@ -166,12 +168,23 @@ AddService=xhci98,0x00000002,Xhci.AddService
 
 ; --- 32-bit Vista and Windows 7 ---------------------------------------------
 
+; The controller on 32-bit Vista and 7 also gets xhcimsi.sys, the NT 6 x86
+; MSI helper (design record 18): a boot-start service that hands
+; IoConnectInterruptEx to xhci98.sys, which also loads on Windows 98 and so
+; cannot import it. A boot-start service starts at the next boot, so this
+; section asks for a restart (Reboot; owner, 2026-10-09). No other section
+; of this file names the helper, its service or a restart.
 [Xhci.Dev6.NTx86]
 AddReg=Xhci.AddReg.NT
-CopyFiles=Xhci.CopyFiles
+CopyFiles=Xhci.CopyFiles,XhciMsi.CopyFiles
+Reboot
+
+[Xhci.Dev6.NTx86.HW]
+AddReg=Xhci.Msi.AddReg
 
 [Xhci.Dev6.NTx86.Services]
 AddService=xhci98,0x00000002,Xhci.AddService
+AddService=xhcimsi,,XhciMsi.AddService
 
 [RootHub.Dev6.NTx86]
 AddReg=RootHub.AddReg.NT
@@ -197,6 +210,27 @@ LoadOrderGroup=Base
 [Xhci.CopyFiles]
 xhci98.sys,,xhci98.tmp
 
+[XhciMsi.AddService]
+DisplayName=%XhciMsiSvcDesc%
+ServiceType=1                       ; SERVICE_KERNEL_DRIVER
+StartType=0                         ; SERVICE_BOOT_START
+ErrorControl=1                      ; SERVICE_ERROR_NORMAL
+ServiceBinary=%12%\xhcimsi.sys
+
+[XhciMsi.CopyFiles]
+xhcimsi.sys,,xhcimsi.tmp
+
+; Message-signalled interrupts on Vista and 7 (design record 15 section
+; 4.3, task 36.15): one message asked for in the controller's hardware key.
+; NOCLOBBER keeps a user's MSISupported 0 - the way to force the line besides
+; XhciInterruptMode 1 - across an update; the driver, not this limit, holds
+; the delivery to Interrupter 0's one message.
+[Xhci.Msi.AddReg]
+HKR,"Interrupt Management",,0x00000010
+HKR,"Interrupt Management\MessageSignaledInterruptProperties",,0x00000010
+HKR,"Interrupt Management\MessageSignaledInterruptProperties",MSISupported,0x00010003,1
+HKR,"Interrupt Management\MessageSignaledInterruptProperties",MessageNumberLimit,0x00010003,1
+
 [Xhci.CopyOS]
 usbd.sys,,,16
 
@@ -221,3 +255,4 @@ RootHubDesc="xHCI98 USB 3.x Root Hub"
 HubDesc="xHCI98 USB Hub"
 Hub30Desc="xHCI98 USB 3.x Hub"
 XhciSvcDesc="xHCI98 USB 3.x eXtensible Host Controller Driver (xhci98)"
+XhciMsiSvcDesc="xHCI98 MSI helper for 32-bit Vista and 7 (xhcimsi)"

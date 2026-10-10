@@ -4,7 +4,9 @@
  *
  * The pair is ExAllocatePoolWithTag + ExFreePool, never the untagged
  * ExAllocatePool and never ExFreePoolWithTag (no Windows 98 evidence for
- * either). NonPagedPool only. The import gate's SITES= rows hold every one of
+ * either). NonPagedPool only, but for the requirements list (design record
+ * 18 section 4.2), which that IRP's contract puts in PagedPool. The import
+ * gate's SITES= rows hold every one of
  * these imports to this object file, so a call anywhere else fails the
  * build. The outstanding count is what XHCISNAP's door reports and what reads
  * 0 after the controller's remove (rule 6).
@@ -64,8 +66,27 @@ PVOID HcdPoolAllocHandedOff(ULONG bytes)
     return p;
 }
 
+/*
+ * The replacement IO_RESOURCE_REQUIREMENTS_LIST of IRP_MN_FILTER_RESOURCE_
+ * REQUIREMENTS (design record 18 section 4.2): the one PagedPool allocation
+ * in the HCD, as that IRP's contract asks, handed to the PnP manager, which
+ * frees it. The owner's exception to rule 1 (2026-10-09), confined to this
+ * site and that IRP. IRQL: PASSIVE_LEVEL.
+ */
+PVOID HcdPoolAllocRequirements(ULONG bytes)
+{
+    PVOID p;
+
+    p = ExAllocatePoolWithTag(PagedPool, bytes, HCD_POOL_TAG);
+    if (p != NULL) {
+        (VOID)InterlockedIncrement(&HcdPoolHandedOff);
+    }
+    return p;
+}
+
 /* A relations list a lower or earlier driver allocated, which this driver
- * replaces with a longer one. */
+ * replaces with a longer one; and a requirements list the filter
+ * replaces. */
 VOID HcdPoolFreeForeign(PVOID p)
 {
     if (p != NULL) {

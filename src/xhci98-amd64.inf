@@ -66,6 +66,9 @@ AddService=xhci98,0x00000002,Xhci.AddService
 AddReg=Xhci.AddReg.NT
 CopyFiles=Xhci.CopyFiles
 
+[Xhci.Dev6.NTamd64.HW]
+AddReg=Xhci.Msi.AddReg
+
 [Xhci.Dev6.NTamd64.Services]
 AddService=xhci98,0x00000002,Xhci.AddService
 
@@ -100,6 +103,17 @@ AddReg=RootHub.AddReg.NT
 [Hub.Dev6.NTamd64.Services]
 AddService=xhci98,0x00000002,Xhci.AddService
 
+; Message-signalled interrupts on Vista and 7 (design record 15 section
+; 4.3, task 36.15): one message asked for in the controller's hardware key.
+; NOCLOBBER keeps a user's MSISupported 0 - the way to force the line besides
+; XhciInterruptMode 1 - across an update; the driver, not this limit, holds
+; the delivery to Interrupter 0's one message.
+[Xhci.Msi.AddReg]
+HKR,"Interrupt Management",,0x00000010
+HKR,"Interrupt Management\MessageSignaledInterruptProperties",,0x00000010
+HKR,"Interrupt Management\MessageSignaledInterruptProperties",MSISupported,0x00010003,1
+HKR,"Interrupt Management\MessageSignaledInterruptProperties",MessageNumberLimit,0x00010003,1
+
 [Xhci.AddService]
 DisplayName=%XhciSvcDesc%
 ServiceType=1                       ; SERVICE_KERNEL_DRIVER
@@ -115,7 +129,7 @@ HKR,,XhciForceBulkOnly,0x00010003,0
 HKR,,XhciFastPollFsLs,0x00010003,0
 HKR,,XhciFirstEnumWaitMs,0x00010003,5000
 HKR,,XhciFirstEnumPortMs,0x00010003,2000
-HKR,,XhciIntelPortSwitch,0x00010003,1
+HKR,,XhciIntelPortSwitch,0x00010003,0
 HKR,,XhciIntelIrqRoute,0x00010003,1
 HKR,,XhciTolerance,0x00010003,1
 HKR,,XhciIntervalCap,0x00010003,1

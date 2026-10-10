@@ -1,0 +1,229 @@
+<#
+.SYNOPSIS
+Validates the qemu flavour's M86 trace in a debug-channel capture (design
+record 18 section 9; roadmap-hcd.md 36.15 and 36.16).
+
+.DESCRIPTION
+The qemu flavour of xhci98.sys writes the requirements filter's lists, the
+helper binding's lifecycle and the start's decision as M86 records on the
+port-0xE9 debug channel, which QEMU captures to a host file. That channel
+writes a byte at a time with no serialisation, so a record can be cut or
+interleaved with another writer's bytes. This script is what makes the
+capture evidence: every record's layout and checksum are checked, every
+list's begin, configuration and descriptor counts are held to its end
+record, and a capture with any failure is refused - to be retaken - before
+R1, R2 or the L legs are read from it.
+
+A record: "M86 K FFFF SSSS NNNN" then up to ten fields of eight hex digits, then
+" cXX", XX the low byte of the byte sum of everything before " c". K is B
+(list begin: R/T/I, ListSize, lists, walk verdict, failing list, class,
+outcome), C (configuration: R/T/I, index << 16 | lists, count, version and
+revision), D (descriptor: R/T/I, configuration << 16 | index, option | type
+<< 8 | share << 16, flags, the six words of u), E (list end: R/T/I, D
+records written, descriptors walked), L (lifecycle: event, a, b) or S (the
+start's decision). FFFF is the FDO's serial and SSSS the filter sequence.
+NNNN is the record's running number, one more than the previous (1 after
+the driver loads), so a record lost anywhere is a gap. The line may carry
+the channel's "xhci98: " prefix.
+
+Prints the lists it read, one line per descriptor, so the R1/R2 readings
+are taken from this output. Exit 0 clean, 1 a refused capture.
+
+.PARAMETER Path
+The debugcon capture.
+
+.PARAMETER SelfTest
+Runs the script's own cases and exits.
+#>
+param(
+    [string]$Path = "",
+    [switch]$SelfTest
+)
+
+$ErrorActionPreference = "Stop"
+Set-StrictMode -Version 2.0
+
+function Test-M86Line {
+    # Returns $null for a good record, else why it is not.
+    param([string]$Line)
+    $i = $Line.IndexOf("M86 ")
+    if ($i -lt 0) { return "no M86 marker" }
+    $rec = $Line.Substring($i).TrimEnd()
+    if ($rec -notmatch '^M86 [BCDELS] [0-9A-F]{4} [0-9A-F]{4} [0-9A-F]{4}( [0-9A-F]{8}){0,10} c[0-9A-F]{2}$') {
+        return "layout"
+    }
+    $body = $rec.Substring(0, $rec.Length - 4)
+    $sum = 0
+    foreach ($ch in $body.ToCharArray()) { $sum += [int][char]$ch }
+    $want = [Convert]::ToInt32($rec.Substring($rec.Length - 2), 16)
+    if (($sum -band 0xFF) -ne $want) { return "checksum" }
+    return $null
+}
+
+function Read-M86 {
+    param([string[]]$Lines)
+    $records = New-Object System.Collections.ArrayList
+    $bad = New-Object System.Collections.ArrayList
+    $want = @{ B = 7; C = 4; D = 10; E = 3; L = 3; S = 8 }
+    $script:lastNumber = $null
+    $n = 0
+    foreach ($l in $Lines) {
+        $n++
+        # Anything that looks like a record but is not a whole one is a
+        # failure, not a line to skip: a cut or damaged marker is evidence
+        # lost. A line that holds a record's body shape, or a channel line
+        # whose text starts like a marker, counts as one.
+        $fragment = ($l -match '(^|: )M\S{0,2}(8|86)?\s*$') -or ($l -match '\b[BCDELS] [0-9A-F]{4} [0-9A-F]{4} [0-9A-F]{4} ')
+        if ($l -notmatch 'M86 ' -and -not $fragment) { continue }
+        $why = Test-M86Line $l
+        if ($null -ne $why) { [void]$bad.Add("line ${n}: $why : $l"); continue }
+        $rec = $l.Substring($l.IndexOf("M86 ")).TrimEnd()
+        $parts = $rec.Split(' ')
+        $fields = @()
+        for ($k = 5; $k -lt $parts.Count - 1; $k++) { $fields += [Convert]::ToUInt32($parts[$k], 16) }
+        $number = [Convert]::ToInt32($parts[4], 16)
+        # One more than the previous record, or a fresh image's first: a gap
+        # is a record lost, damaged, or reordered by a second writer.
+        if ($null -ne $script:lastNumber -and $number -ne 1 -and $number -ne (($script:lastNumber % 0xFFFF) + 1)) {
+            [void]$bad.Add("line ${n}: record number $number after $($script:lastNumber) (a record is missing or out of order)")
+        }
+        $script:lastNumber = $number
+        if ($fields.Count -ne $want[$parts[1]]) {
+            [void]$bad.Add("line ${n}: a $($parts[1]) record with $($fields.Count) fields, not $($want[$parts[1]])")
+            continue
+        }
+        [void]$records.Add([pscustomobject]@{
+            Line = $n; Kind = $parts[1]; Fdo = $parts[2]; Seq = $parts[3]; F = $fields })
+    }
+    # Every list: B, then for each configuration in order a C and exactly
+    # its declared D records in order, then an E whose totals match; every
+    # record of the list carries the B's FDO, filter sequence and list name.
+    $open = $null
+    $lists = 0
+    foreach ($r in $records) {
+        if ($r.Kind -in @("C", "D", "E")) {
+            if ($null -eq $open) { [void]$bad.Add("line $($r.Line): a $($r.Kind) record outside a list"); continue }
+            if ($r.Fdo -ne $open.Fdo -or $r.Seq -ne $open.Seq -or $r.F[0] -ne $open.Which) {
+                [void]$bad.Add("line $($r.Line): a $($r.Kind) record of another list (fdo $($r.Fdo) filter $($r.Seq)) inside the list opened at line $($open.Line)")
+                continue
+            }
+        }
+        switch ($r.Kind) {
+            "B" {
+                if ($null -ne $open) { [void]$bad.Add("line $($r.Line): a list begins inside the list opened at line $($open.Line)") }
+                $open = [pscustomobject]@{ Line = $r.Line; Fdo = $r.Fdo; Seq = $r.Seq; Which = $r.F[0]
+                                           Lists = $r.F[2]; Verdict = $r.F[3]; C = 0; D = 0; CfgWant = -1; CfgGot = 0 }
+                $lists++
+            }
+            "C" {
+                if ($open.CfgWant -ge 0 -and $open.CfgGot -ne $open.CfgWant) {
+                    [void]$bad.Add("line $($r.Line): configuration $($open.C - 1) declared $($open.CfgWant) descriptors, $($open.CfgGot) were read")
+                }
+                if (($r.F[1] -shr 16) -ne $open.C -or ($r.F[1] -band 0xFFFF) -ne $open.Lists) {
+                    [void]$bad.Add("line $($r.Line): configuration $($r.F[1] -shr 16) of $($r.F[1] -band 0xFFFF) out of order (expected $($open.C) of $($open.Lists))")
+                }
+                $open.C++
+                $open.CfgWant = $r.F[2]
+                $open.CfgGot = 0
+            }
+            "D" {
+                if ($open.C -eq 0 -or ($r.F[1] -shr 16) -ne ($open.C - 1) -or ($r.F[1] -band 0xFFFF) -ne $open.CfgGot) {
+                    [void]$bad.Add("line $($r.Line): descriptor $($r.F[1] -shr 16).$($r.F[1] -band 0xFFFF) out of order")
+                }
+                $open.CfgGot++
+                $open.D++
+            }
+            "E" {
+                if ($open.CfgWant -ge 0 -and $open.CfgGot -ne $open.CfgWant) {
+                    [void]$bad.Add("line $($r.Line): the last configuration declared $($open.CfgWant) descriptors, $($open.CfgGot) were read")
+                }
+                if ($r.F[1] -ne $open.D) { [void]$bad.Add("line $($r.Line): the list says $($r.F[1]) descriptors written, $($open.D) were read") }
+                if ($open.Verdict -eq 0) {
+                    if ($r.F[2] -ne $open.D) { [void]$bad.Add("line $($r.Line): the list walked $($r.F[2]) descriptors, $($open.D) were read") }
+                    if ($open.C -ne $open.Lists) { [void]$bad.Add("line $($r.Line): the list says $($open.Lists) configurations, $($open.C) were read") }
+                }
+                $open = $null
+            }
+        }
+    }
+    if ($null -ne $open) { [void]$bad.Add("line $($open.Line): a list with no end (cut)") }
+    if ($lists -eq 0) { [void]$bad.Add("no requirements list in the capture: nothing to read R1 or R2 from") }
+    return [pscustomobject]@{ Records = $records; Bad = $bad }
+}
+
+function Show-M86 {
+    param($Read)
+    foreach ($r in $Read.Records) {
+        $which = ""
+        if ($r.F.Count -gt 0 -and $r.Kind -in @("B", "C", "D", "E")) { $which = [string][char]$r.F[0] }
+        switch ($r.Kind) {
+            "B" { "fdo {0} filter {1} list {2}: ListSize {3:X} lists {4} walk {5} class {6} outcome {7}" -f $r.Fdo, $r.Seq, $which, $r.F[1], $r.F[2], $r.F[3], $r.F[5], $r.F[6] }
+            "C" { "  configuration {0} of {1}: {2} descriptors" -f ($r.F[1] -shr 16), ($r.F[1] -band 0xFFFF), $r.F[2] }
+            "D" {
+                $opt = $r.F[2] -band 0xFF; $type = ($r.F[2] -shr 8) -band 0xFF; $share = ($r.F[2] -shr 16) -band 0xFF
+                "    [{0}.{1}] option {2:X2} type {3:X2} share {4} flags {5:X4} u {6:X8} {7:X8} {8:X8} {9:X8} {10:X8} {11:X8}" -f `
+                    ($r.F[1] -shr 16), ($r.F[1] -band 0xFFFF), $opt, $type, $share, $r.F[3], $r.F[4], $r.F[5], $r.F[6], $r.F[7], $r.F[8], $r.F[9]
+            }
+            "E" { "  end: {0} descriptors written of {1}" -f $r.F[1], $r.F[2] }
+            "L" { "fdo {0} filter {1} lifecycle event {2} a {3:X} b {4:X}" -f $r.Fdo, $r.Seq, $r.F[0], $r.F[1], $r.F[2] }
+            "S" { "fdo {0} START mode {1} grant {2} bind {3} class {4} outcome {5} delivery {6} reason {7} status {8:X8}" -f $r.Fdo, $r.F[0], $r.F[1], $r.F[2], $r.F[3], $r.F[4], $r.F[5], $r.F[6], $r.F[7] }
+        }
+    }
+}
+
+function New-M86 {
+    param([string]$Body)
+    $sum = 0
+    foreach ($ch in $Body.ToCharArray()) { $sum += [int][char]$ch }
+    return ("xhci98: " + $Body + (" c{0:X2}" -f ($sum -band 0xFF)))
+}
+
+if ($SelfTest) {
+    $fails = 0
+    $clean = @(
+        (New-M86 "M86 B 0001 0002 0001 00000052 00000060 00000001 00000000 00000000 00000003 00000000"),
+        (New-M86 "M86 C 0001 0002 0002 00000052 00000001 00000001 00010001"),
+        (New-M86 "M86 D 0001 0002 0003 00000052 00000000 00000200 00000002 FFFFFFFE FFFFFFFE 00000000 00000000 00000000 00000000"),
+        (New-M86 "M86 E 0001 0002 0004 00000052 00000001 00000001"),
+        (New-M86 "M86 L 0001 0002 0005 00000001 00000009 00000000"),
+        (New-M86 "M86 S 0001 0002 0006 00000000 00000002 00000003 00000003 00000004 00000003 0000000A 00000000")
+    )
+    $r = Read-M86 $clean
+    if ($r.Bad.Count -ne 0) { "FAIL: a clean capture was refused: $($r.Bad -join '; ')"; $fails++ }
+    $cases = @(
+        @{ Name = "an interleaved byte"; Lines = @($clean[0], $clean[1], ($clean[2].Substring(0, 30) + "Z" + $clean[2].Substring(30)), $clean[3], $clean[4], $clean[5]) },
+        @{ Name = "a dropped D record"; Lines = @($clean[0], $clean[1], $clean[3], $clean[4], $clean[5]) },
+        @{ Name = "a truncated line"; Lines = @($clean[0], $clean[1], $clean[2].Substring(0, 50)) },
+        @{ Name = "a cut marker on a descriptor"; Lines = @($clean[0], $clean[1], ("xhci98: M8" + $clean[2].Substring(11)), $clean[3], $clean[4], $clean[5]) },
+        @{ Name = "a cut lifecycle record at the end"; Lines = @($clean[0], $clean[1], $clean[2], $clean[3], "xhci98: M8") },
+        @{ Name = "a damaged lifecycle marker"; Lines = @($clean[0], $clean[1], $clean[2], $clean[3], ("xhci98: MX" + $clean[4].Substring(10)), $clean[5]) },
+        @{ Name = "a dropped lifecycle record"; Lines = @($clean[0], $clean[1], $clean[2], $clean[3], $clean[5]) },
+        @{ Name = "an empty capture"; Lines = @("xhci98: nothing here") },
+        @{ Name = "a descriptor of another FDO"; Lines = @($clean[0], $clean[1], (New-M86 "M86 D 0009 0002 0003 00000052 00000000 00000200 00000002 FFFFFFFE FFFFFFFE 00000000 00000000 00000000 00000000"), $clean[3]) },
+        @{ Name = "a duplicate descriptor"; Lines = @($clean[0], $clean[1], $clean[2], (New-M86 "M86 D 0001 0002 0004 00000052 00000000 00000200 00000002 FFFFFFFE FFFFFFFE 00000000 00000000 00000000 00000000"), (New-M86 "M86 E 0001 0002 0005 00000052 00000002 00000002")) },
+        @{ Name = "a configuration short of its count"; Lines = @($clean[0], (New-M86 "M86 C 0001 0002 0002 00000052 00000001 00000002 00010001"), $clean[2], (New-M86 "M86 E 0001 0002 0004 00000052 00000001 00000002")) },
+        @{ Name = "a walked total that disagrees"; Lines = @($clean[0], $clean[1], $clean[2], (New-M86 "M86 E 0001 0002 0004 00000052 00000001 00000002")) },
+        @{ Name = "a record with a field missing"; Lines = @($clean[0], (New-M86 "M86 C 0001 0002 0002 00000052 00000001 00000001"), $clean[2], $clean[3]) }
+    )
+    foreach ($c in $cases) {
+        if ((Read-M86 $c.Lines).Bad.Count -eq 0) { "FAIL: $($c.Name) passed"; $fails++ }
+    }
+    if ($fails -eq 0) { "check-msi86-trace self-test: $($cases.Count + 1) cases, all passed"; exit 0 }
+    exit 1
+}
+
+if ($Path -eq "" -or -not (Test-Path -LiteralPath $Path)) {
+    throw "-Path names no capture."
+}
+$lines = Get-Content -LiteralPath $Path
+$read = Read-M86 $lines
+Show-M86 $read
+if ($read.Bad.Count -gt 0) {
+    ""
+    "REFUSED: $($read.Bad.Count) bad record(s) - retake the capture:"
+    $read.Bad | ForEach-Object { "  $_" }
+    exit 1
+}
+""
+"OK: $($read.Records.Count) M86 record(s), every one checked"
+exit 0
