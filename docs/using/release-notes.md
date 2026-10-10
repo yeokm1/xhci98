@@ -115,13 +115,15 @@ Windows XP x64, do not refuse unsigned drivers.
 
 ## What `2.3.0.0` changes (test build `2.2.0.3`)
 
-**TEST 2.2.0.3, bench pending.** Each item was read in QEMU virtual
-machines on development host A; none has been read on real hardware yet.
-The sections named give the detail.
+**TEST 2.2.0.3, bench pending.** None of these has been read on real
+hardware yet. Most were read in QEMU virtual machines on development host
+A; the Low-Speed mouse fix rests on host tests of that mouse's descriptors
+alone, since QEMU models no such device. The sections named give the
+detail, and what each rests on.
 
 - **A controller with no working interrupt is polled, not refused.** A
-  controller with no interrupt pin, or whose interrupt never arrives, has
-  its events read on a timer instead (`XhciInterruptMode`, `XhciPollIdleMs`,
+  controller with no interrupt pin, or whose line the driver sees raised
+  and never delivered, has its events read on a timer instead (`XhciInterruptMode`, `XhciPollIdleMs`,
   `XhciPollActiveMs`; "XhciInterruptMode, XhciPollIdleMs and
   XhciPollActiveMs: how the controller's events arrive").
 - **Message-signalled interrupts on Windows Vista and 7**: on x64 directly,
@@ -154,8 +156,10 @@ The sections named give the detail.
   interface declares and ignores the rest, as Microsoft's stack does. Read
   with that mouse's descriptors in the host tests; the mouse itself is on
   the bench.
-- **A device's speed on the hub pages** of Windows 98 SE and ME reads
-  SuperSpeed where it is ("A device's speed on the hub pages"), and
+- **A device's speed in USBView** on Windows 98 SE and ME: the newer
+  connection query that tools such as SweetLow's USBView send reads
+  SuperSpeed where it is; Windows' own hub pages are unchanged ("A
+  device's speed on the hub pages"), and
   `XhciFastPollFsLs` `4` polls at the rate the client asks for.
 - **`XHCIQUAL` passes a controller with no working interrupt as
   `QUALIFIED WITH CAVEATS`**, exit code 3 ("Before you install: check the
@@ -208,7 +212,7 @@ those need is the bench's, or is untested ground.
 |---|---|
 | Operating system | Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows ME (4.90.3000), 32-bit Windows XP (SP3), Windows XP x64 (SP2), and Windows Vista (SP2) and Windows 7 (SP1) in both architectures, in virtual machines only. Vista x64 and Windows 7 x64 load the drivers only while driver signature enforcement is disabled. Nothing after Windows 7 |
 | USB stack | None. The driver replaces the port and hub drivers on every target. Windows 98 SE needs no USB 2.0 stack for the controller, hubs, HID or audio; **storage needs NUSB's mass-storage component** (next section). Windows ME: every Windows ME reading was taken under SweetLow's USB 2.0 stack; Windows ME without it has not been tested under the host controller driver. Do not install NUSB on Windows ME, 2000, XP, Vista or 7 |
-| Controller | An xHCI controller presenting PCI class code `0C0330`, with a BAR0 mapped below 4 GB. Since `2.3.0.0` an interrupt pin is no longer required: a controller reporting `Interrupt Pin = 0`, or whose interrupt never arrives, is polled, and on Windows Vista and 7 a controller may use a message-signalled interrupt instead of its pin ("XhciInterruptMode, XhciPollIdleMs and XhciPollActiveMs"). Up to `2.2.0.0` such a controller could not be driven at all. A controller with no USB 2.0 protocol port at all is accepted, built from the specification and untested: no such controller has been held |
+| Controller | An xHCI controller presenting PCI class code `0C0330`, with a BAR0 mapped below 4 GB. Since `2.3.0.0` an interrupt pin is no longer required: a controller reporting `Interrupt Pin = 0` is polled, as is one whose line the driver sees raised and never delivered (another kind of dead interrupt needs `XhciInterruptMode` `2`), and on Windows Vista and 7 a controller may use a message-signalled interrupt instead of its pin ("XhciInterruptMode, XhciPollIdleMs and XhciPollActiveMs"). Up to `2.2.0.0` such a controller could not be driven at all. A controller with no USB 2.0 protocol port at all is accepted, built from the specification and untested: no such controller has been held |
 | Install media | Windows 98 SE on an xHCI-only machine: the Windows 98 SE installation CD at hand, or the Windows CABs on the hard disk. Windows ME: the same, from the Windows ME CD or the CABs its Setup leaves on the disk. The NT targets take what they need from their own driver cache and ask for nothing |
 
 Run the qualifier before installing anything; it answers the controller
@@ -1157,14 +1161,14 @@ Vista and 7: message-signalled interrupts").
 
 | `XhciInterruptMode` | Effect |
 |---|---|
-| `0`, absent, not a `DWORD`, `3`, or `4` and above | Automatic, the default. The interrupt line where it works. A controller with no interrupt pin, or given no interrupt by Windows, is polled; one whose interrupt never arrives after the start is moved to polling by the driver itself. On Vista and 7, a message-signalled interrupt where Windows grants one |
-| `1` | The interrupt line only, as `2.2.0.0`. A controller that has none fails to start (Device Manager: Code 10). On Vista and 7 the driver asks Windows for the line instead of a message |
+| `0`, absent, not a `DWORD`, `3`, or `4` and above | Automatic, the default. The interrupt line where it works. A controller with no interrupt pin, or given no interrupt by Windows, is polled. A line the driver sees the controller raise and that never reaches it is detected after the start, and the controller moved to polling by the driver itself; an interrupt that fails in a way the driver cannot see (no sign of it in the controller's registers) is not, and needs `2`. On Vista and 7, a message-signalled interrupt where Windows grants one |
+| `1` | The interrupt line, as `2.2.0.0`. On Vista and 7 the driver asks Windows for the line rather than a message; if Windows grants a message anyway it is used, and if a message cannot be connected the controller is polled. A controller with no line fails to start (Device Manager: Code 10): on Windows 98 SE to XP, and on 32-bit Vista and 7 when no line is offered and `xhcimsi.sys` is not running |
 | `2` | Polling always, even where the line works. For a controller whose interrupt misbehaves; it costs more processor wake-ups |
 
 | Value | Default | Effect |
 |---|---|---|
 | `XhciPollIdleMs` | `50` | While polling, how often (in ms) the driver looks when nothing is outstanding. `0` runs as `50`; above `5000` is held to `5000`. A device plugged in waits at most this long to be seen |
-| `XhciPollActiveMs` | `1` | While polling, how often (in ms) it looks while transfers are outstanding. `0` runs as `1`; a value above the idle period is held to it. Windows runs the timer no faster than its clock tick, so `1` means "as often as Windows allows": 8 ms was read on every system in QEMU with a mouse attached, and 1 ms on a busy XP, Vista and 7 |
+| `XhciPollActiveMs` | `1` | While polling, how often (in ms) it looks while transfers are outstanding. `0` runs as `1`; a value above the idle period is held to it. When the only transfers outstanding are periodic ones (a mouse's or keyboard's interrupt endpoint), the driver looks at that endpoint's interval instead, held between the active and the idle period: 8 ms with QEMU's mouse, on every system. Windows runs the timer no faster than its clock tick, so `1` means "as often as Windows allows"; 1 ms was read with transfers outstanding on a busy XP, Vista and 7 in QEMU |
 
 Neither period matters while the controller has a working interrupt line
 or a message. Polling adds up to one period of delay to each completed
@@ -1287,9 +1291,13 @@ same alternate setting, as with `2` and `3`; HID class drivers do not.
 The value is read when the controller starts, so a change takes effect
 after a restart.
 
-**Untested ground**: it has been read on no real controller and in no
-virtual machine. The bench reading on the ThinkPad E460 and P14s Gen 1 was
-not taken for this release.
+**Untested ground on real controllers**: it has been read on none. In
+QEMU (since `2.3.0.0`, on 32-bit Windows 7 and Windows 98 SE) value `4`
+programmed the intervals the codes ask for, `2` and `3` ignored the
+codes, a mouse behind a hub kept its rate and the mouse moved
+throughout; that shows what the driver asks of the controller, not how
+a real controller and device behave at those rates. The bench reading on
+the ThinkPad E460 and P14s Gen 1 was not taken for this release.
 
 ### XhciFirstEnumWaitMs and XhciFirstEnumPortMs: the first report's wait
 
@@ -1886,7 +1894,8 @@ next section.
 
 `1.2.0.0`'s own notes (linked at the top) list its limitations. Each was
 re-measured, or answered by the design, under `2.0.0.0`. No change since
-`2.0.0.0` answers a row differently:
+`2.0.0.0` answers a row differently, except the standby row, which says
+what `2.3.0.0` adds:
 
 | `1.2.0.0` limitation | Under `2.0.0.0` |
 |---|---|
@@ -1899,7 +1908,7 @@ re-measured, or answered by the design, under `2.0.0.0`. No change since
 | Windows 98 SE: USB audio could stutter while a drive was read at full speed | Not re-measured under `2.0.0.0` |
 | Windows 2000: a newer package over an older one was refused; disabling the controller with an audio device attached asked for a restart | The upgrade from `1.2.0.0` installs in place on Windows 2000. The disable with an audio device attached was not re-measured |
 | Windows 98: a driver that failed while starting the controller stopped the machine with a protection error | Not re-measured: no failing start was provoked under `2.0.0.0` |
-| On a controller without Force Save Context, a wake from standby rebuilt the bus | Untested: the power handlers have not run |
+| On a controller without Force Save Context, a wake from standby rebuilt the bus | Under `2.0.0.0`: untested, the power handlers had not run. Since `2.3.0.0` (read in QEMU, which has no Force Save Context): hibernate and resume on XP, Vista and 7, and standby and hibernate on ME, idle, rebuild the bus through the controller's reinitialization and every device is found again; with a copy running on a stick on XP, Vista and 7, the copy's requests fail for about 10 s while the stick is found again, then work. Open: Windows ME hangs on a standby or hibernate with a copy running on an xHCI stick, and Windows 98 SE's idle standby leaves USB dead after the wake. Standby on the other systems, and with devices suspended, is not yet read |
 | The virtual High-Speed hub switch and its costs. It also did nothing unless `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid` were set beside `XhciVirtualHSHub`, since `1.2.0.0` has no default for either (reported on GitHub issue 4, 2026-10-03) | No switch: all three values have no effect (see "Registry settings") |
 
 ## Untested ground
@@ -1916,7 +1925,7 @@ information.
 | SuperSpeed hubs, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only; no virtual machine models one. On Windows 2000, which has no bench, built from the specification and untested |
 | High-Speed hubs, single- and multi-TT, and Full and Low Speed devices behind them, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only. Virtual machines model only a Full-Speed hub, so on every other target the High-Speed paths rest on host tests |
 | A UAS-only device at SuperSpeed on a controller that cannot stream | Built from the specification against host tests; no such controller held |
-| Low- and Full-Speed polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification, built against host tests; read on no real controller and in no virtual machine |
+| Low- and Full-Speed polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification, built against host tests; read on no real controller. Value `4`'s programming was read in QEMU on 32-bit Windows 7 and Windows 98 SE ("XhciFastPollFsLs") |
 | The Intel port switchover beyond one machine | Read on one `1E31` machine under Windows 98 SE ("Intel 7-, 8- and 9-series chipsets: the port switchover"). Device ids `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`, every other system, and a standby and resume rest on Linux's handling of the same chipsets and on host tests of the sequence |
 | `XhciIntelPortSwitch` `2` on an unlisted Intel controller | Built and host-tested; read on no unlisted Intel controller. At your own risk: on one without the switch registers it writes registers of unknown meaning ("Value 2") |
 | The controller-fault handling on real hardware | Each fault was made on purpose at a root port in QEMU virtual machines, under Windows 98 SE and Windows 2000; QEMU has no SuperSpeed hub, so nothing was read behind one. No real controller has raised one under this driver yet, so none of the behaviours has been seen to act on real hardware ("Controller faults: what the driver does about them") |

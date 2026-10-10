@@ -434,7 +434,9 @@ stage 3's big stream blocks and their TD sizes. A driver from before it
 says "not in this driver". **"selective suspend, stage B"** (task 36.38,
 design record 14 section 8.10): `DNCTRL` as read when the window was cut
 ("not read" unless `XhciSelectiveSuspend` is 1), the enables written and
-read back, and up to eight SuperSpeed devices' records - slot, link state,
+read back, and the records of the first eight devices in slot order, of
+any speed (a USB 2.0 device takes a record too, so a later SuperSpeed
+device can be left out; the `Ss` column marks SuperSpeed) - slot, link state,
 the window, armed functions and the last step's outcome.
 
 The PORTSC decode is printed on screen whatever the level, because that is what

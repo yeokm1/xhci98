@@ -471,7 +471,11 @@ changing the three layers:
   runs under `KeSynchronizeExecution` (record 15 section 5).
 - **Selective suspend** (design record 14). Its per-device link machine
   and each function PDO's power slot are under the controller lock
-  (record 14 section 4.1), the link record the enum thread's alone;
+  (record 14 section 4.1). The link machine's transitions are the enum
+  thread's alone; the one other writer is stage B's Function Wake
+  notification latch (`FwPending`, `FwPendingFar`), set from the event
+  DPC under the controller lock (`HcdSuspNotificationLocked`,
+  `XhciSuspFwReceive`; record 14 section 8.7);
   `PdoListLock` before the controller lock where both are needed, the
   cancel spin lock released before the controller lock is taken, as
   above. The idle notification's callbacks run on a second system thread
@@ -552,8 +556,8 @@ values under the same rule and flag: the eight above; `XhciTolerance`,
 and `XhciInterruptMode`, `XhciPollIdleMs` and `XhciPollActiveMs` (36.8,
 at 0, 50 and 1; design record 15 section 3). Two more are read and
 written by no INF, so absent is their default: `XhciWideMap` (36.24,
-section 11.6; off unless 1, owner 2026-10-10) and `XhciSelectiveSuspend`
-(36.33, design record 14 section 7; off unless 1). `txtsetup.oem` still
+section 11.6; off when absent or 0, any other number on, owner 2026-10-10) and `XhciSelectiveSuspend`
+(36.33, design record 14 section 7; on only for a `REG_DWORD` of exactly 1). `txtsetup.oem` still
 writes none, so F6 Setup runs at the code defaults.
 
 The package is `xhci98-<version>.zip`, as the miniport's was - the published
@@ -1188,8 +1192,9 @@ target sends it; it does not mean the target's OS never does.
 `SET_POWER` and `SUBMIT_IDLE_NOTIFICATION` as before: no D1/D2 and no wake
 in the capabilities, `WAIT_WAKE` refused, a D-IRP recorded and completed,
 the idle IRP held and its callback never called. With 1, an eligible
-non-hub device PDO (record 14 sections 5.1 and 8.2) reports D1/D2 and,
-where its configuration allows remote wake, wake from them; a Dx suspends
+non-hub device PDO (record 14 sections 5.1 and 8.2) reports D2, and
+where its configuration allows remote wake also D1 and wake from both
+(without it, D2 and no wake; record 14 sections 5.2 and 8.3); a Dx suspends
 the device's link once its last function leaves D0 and a D0 resumes it
 (record 14 sections 3 and 4); `WAIT_WAKE` arms the device (section 5);
 and the idle IRP's callback is called on the bus's own callback thread,
