@@ -15,7 +15,11 @@ rem checks the exit codes and the summary lines. A fifth case checks that
 rem `-probe` beside an implied `-dump` is refused before any device is opened
 rem (the 2026-09-17 audit's C4), which needs no controller either.
 rem
-rem Exit code 0 = all five cases behaved. Run it after build.cmd.
+rem The cases after those drive each decode over canned data, and the last
+rem (task 36.47) the system block, which must not carry the computer or user
+rem name.
+rem
+rem Exit code 0 = every case behaved. Run it after build.cmd.
 setlocal
 cd /d "%~dp0"
 
@@ -310,6 +314,91 @@ for %%S in ("controller tolerance" "interrupt routing" "transfer size" "event de
 )
 
 
+rem Task 36.47's system block: the OS names over canned GetVersionEx answers,
+rem the cleaning of registry text, then this host's own block as a dump's
+rem header writes it.
+"%~dp0XHCISNAP.EXE" -selftest-sysinfo > "%BASE%.sysinfo.log"
+if errorlevel 1 (
+    echo FAIL: -selftest-sysinfo exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("build 950 product 0 arch 65535: Windows 95" "build 1998 product 0 arch 65535: Windows 98" "build 2222 product 0 arch 65535: Windows 98 SE" "4.90 build 3000 product 0 arch 65535: Windows ME" "build 2195 product 1 arch 65535: Windows 2000" "build 2600 product 1 arch 0: Windows XP" "product 1 arch 9: Windows XP x64" "product 3 arch 0: Windows Server 2003" "product 0 arch 65535: Windows Server 2003 or XP x64" "build 6002 product 1 arch 0: Windows Vista" "build 7601 product 1 arch 9: Windows 7" "product 3 arch 9: Windows Server 2008 R2" "Windows 8 or later" "3.51 build 1057 product 0 arch 65535: unknown" "clean [Intel(R) Core(TM) i7-6500U CPU @ 2.50GHz]" "clean [LENOVO 20F5S0??]" "clean 99 chars, ends [x...]" "clean 98 chars, ends [x...]" "clean [Standard PC (i440FX + PIIX, 1996)]" "  captured on - this machine" "    OS                    Windows" "    bitness               " "    CPU                   " "    RAM                   ") do (
+    findstr /C:%%S "%BASE%.sysinfo.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the system block does not say %%S
+        set FAILED=1
+    )
+)
+rem The withholding over canned names (SNAPTEST-PC7, jdoe, CORPDOM, a
+rem non-ASCII name, and PC, which is under three characters and not
+rem compared): six strings are withheld (the non-ASCII one in both cases), one of them with the name past the
+rem 96-character cut, and the QEMU product string is kept. It is deterministic, so no
+rem host name is searched for (Codex review of 36.47, round 1: a host search
+rem matched the block's own fixed words and missed values under other labels).
+set WITHHELD=0
+for /f "delims=" %%L in ('findstr /C:"clean [(withheld: it contains" "%BASE%.sysinfo.log"') do set /a WITHHELD+=1
+if not "%WITHHELD%"=="6" (
+    echo FAIL: the system block withheld %WITHHELD% canned strings, expected 6
+    set FAILED=1
+)
+
+rem Task 36.47's -nosysinfo (owner, 2026-10-10): the report path with the
+rem option says the details were skipped and prints none of them; without it
+rem the same report carries the block; on its own the option is refused.
+"%~dp0XHCISNAP.EXE" -selftest-report "%BASE%-sys" > "%BASE%.sys-on.log"
+if errorlevel 1 (
+    echo FAIL: a report with the system block exited %errorlevel%, expected 0
+    set FAILED=1
+)
+findstr /C:"captured on - this machine" "%BASE%-sys.TXT" > nul
+if errorlevel 1 (
+    echo FAIL: the report does not carry the system block by default
+    set FAILED=1
+)
+"%~dp0XHCISNAP.EXE" -nosysinfo -selftest-report "%BASE%-nosys" > "%BASE%.sys-off.log"
+if errorlevel 1 (
+    echo FAIL: a report with -nosysinfo exited %errorlevel%, expected 0
+    set FAILED=1
+)
+findstr /C:"system details were skipped by -nosysinfo" "%BASE%-nosys.TXT" > nul
+if errorlevel 1 (
+    echo FAIL: the -nosysinfo report does not say the details were skipped
+    set FAILED=1
+)
+for %%S in ("captured on - this machine" "    OS " "    CPU " "    RAM ") do (
+    findstr /C:%%S "%BASE%-nosys.TXT" > nul
+    if not errorlevel 1 (
+        echo FAIL: the -nosysinfo report still says %%S
+        set FAILED=1
+    )
+)
+rem -selftest-sysinfo honours the option on either side of it: the live
+rem block is skipped, the canned decodes still run.
+"%~dp0XHCISNAP.EXE" -selftest-sysinfo -nosysinfo > "%BASE%.sys-after.log"
+"%~dp0XHCISNAP.EXE" -nosysinfo -selftest-sysinfo > "%BASE%.sys-before.log"
+for %%F in ("%BASE%.sys-after.log" "%BASE%.sys-before.log") do (
+    findstr /C:"system details were skipped by -nosysinfo" %%F > nul
+    if errorlevel 1 (
+        echo FAIL: -selftest-sysinfo with -nosysinfo did not skip the block: %%F
+        set FAILED=1
+    )
+    findstr /C:"    RAM " %%F > nul
+    if not errorlevel 1 (
+        echo FAIL: -selftest-sysinfo with -nosysinfo still read the system: %%F
+        set FAILED=1
+    )
+    findstr /C:"build 2222 product 0 arch 65535: Windows 98 SE" %%F > nul
+    if errorlevel 1 (
+        echo FAIL: -selftest-sysinfo with -nosysinfo dropped the canned decodes: %%F
+        set FAILED=1
+    )
+)
+"%~dp0XHCISNAP.EXE" -nosysinfo > "%BASE%.sys-alone.log"
+if not "%errorlevel%"=="2" (
+    echo FAIL: -nosysinfo on its own exited %errorlevel%, expected 2
+    set FAILED=1
+)
+
 rd /s /q "%RUNDIR%" 2> nul
 rd out 2> nul
 
@@ -317,5 +406,5 @@ if "%FAILED%"=="1" (
     echo xhcisnap selftest FAILED
     exit /b 1
 )
-echo xhcisnap selftest: 14 cases, all passed
+echo xhcisnap selftest: 16 cases, all passed
 exit /b 0
