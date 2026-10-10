@@ -736,6 +736,8 @@ typedef struct _HCD_DEVICE_PDO {
     ULONG PwrStarted;
     volatile ULONG IdleRunning;
     volatile ULONG IdleQuarantined;
+    volatile ULONG IdlePinned;      /* its callback was abandoned by a stop
+                                     * without the DMA-halt proof         */
 } HCD_DEVICE_PDO, *PHCD_DEVICE_PDO;
 
 /* Whether a PDO may use a pipe of its device: a device PDO any, a function
@@ -1946,7 +1948,7 @@ VOID HcdSuspSettleStale(PHCD_CONTROLLER hc);
 ULONG HcdSuspIdleSubmit(struct _HCD_DEVICE_PDO *pdo, PHCD_CONTROLLER hc,
                         PIRP irp, PVOID callback, PVOID context,
                         NTSTATUS *status);
-VOID HcdSuspIdleSystem(struct _HCD_DEVICE_PDO *pdo, SYSTEM_POWER_STATE state);
+ULONG HcdSuspIdleSystem(struct _HCD_DEVICE_PDO *pdo, SYSTEM_POWER_STATE state);
 ULONG HcdSuspIdleRundown(struct _HCD_DEVICE_PDO *pdo, ULONG mayWaitCallback);
 NTSTATUS HcdSuspCbStart(PHCD_CONTROLLER hc);
 VOID HcdSuspCbStop(PHCD_CONTROLLER hc);
@@ -1954,6 +1956,8 @@ VOID HcdSuspDriverInit(VOID);
 VOID HcdSuspDriverUnload(VOID);
 /* hcd_cfg.c's half of 3.3's deferral */
 VOID HcdCfgUndefer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+VOID HcdCfgFlushPdoDeferred(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                            struct _HCD_DEVICE_PDO *pdo);
 
 /* hcd_pool.c */
 PVOID HcdPoolAlloc(ULONG bytes);

@@ -252,14 +252,25 @@ static VOID NTAPI hcdCfgDeferCancel(PDEVICE_OBJECT DeviceObject, PIRP irp)
     hcdCfgComplete(dev, irp, hcdCfgUrbOf(irp), HCD_USBD_CANCELED);
 }
 
-/* Thread only. */
+/* Thread only. An IRP of a PDO being torn down is not deferred but
+ * completed CANCELLED: its quiesce has detached, or is about to detach,
+ * that PDO's deferred IRPs (HcdCfgFlushPdoDeferred), and Closing is set
+ * before that detachment takes the lock (Codex review of 36.32, round 1,
+ * finding 1). */
 static VOID hcdCfgDefer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PIRP irp)
 {
+    PHCD_DEVICE_PDO pdo;
     KIRQL oldIrql;
     ULONG back;
 
     back = 0;
+    pdo = (PHCD_DEVICE_PDO)irp->Tail.Overlay.DriverContext[2];
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (pdo->Closing) {
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        hcdCfgComplete(dev, irp, hcdCfgUrbOf(irp), HCD_USBD_CANCELED);
+        return;
+    }
     InsertTailList(&dev->SlowDeferred, &irp->Tail.Overlay.ListEntry);
     (VOID)IoSetCancelRoutine(irp, hcdCfgDeferCancel);
     if (irp->Cancel && IoSetCancelRoutine(irp, NULL) != NULL) {
@@ -300,6 +311,44 @@ static ULONG hcdCfgDeferredTake(PHCD_USB_DEVICE dev, PLIST_ENTRY to,
         any = 1;
     }
     return any;
+}
+
+/*
+ * A PDO's teardown (hcd_pdo.c, hcdPdoQuiesce; design record 14 section 4.4
+ * (b), initiate): its slow IRPs deferred behind a suspended link are
+ * detached - but any a cancel routine owns - and completed CANCELLED
+ * outside the lock, since nothing resumes the link for a function being
+ * torn down and its URB count would never drain. Closing is set first.
+ * The caller holds a device reference. IRQL: PASSIVE_LEVEL.
+ */
+VOID HcdCfgFlushPdoDeferred(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                            PHCD_DEVICE_PDO pdo)
+{
+    LIST_ENTRY mine;
+    PLIST_ENTRY entry;
+    PLIST_ENTRY next;
+    PIRP irp;
+    KIRQL oldIrql;
+
+    InitializeListHead(&mine);
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    for (entry = dev->SlowDeferred.Flink; entry != &dev->SlowDeferred;
+         entry = next) {
+        next = entry->Flink;
+        irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
+        if (irp->Tail.Overlay.DriverContext[2] != pdo ||
+            IoSetCancelRoutine(irp, NULL) == NULL) {
+            continue;
+        }
+        RemoveEntryList(entry);
+        InsertTailList(&mine, entry);
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    while (!IsListEmpty(&mine)) {
+        entry = RemoveHeadList(&mine);
+        irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
+        hcdCfgComplete(dev, irp, hcdCfgUrbOf(irp), HCD_USBD_CANCELED);
+    }
 }
 
 /* The device's link is ACTIVE again (hcd_susp.c): its deferred IRPs back

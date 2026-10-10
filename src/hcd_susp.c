@@ -603,6 +603,9 @@ typedef struct _HCD_SUSP_CB {
     PHCD_CONTROLLER Hc;
     KEVENT Wake;                /* synchronization: work, or EXITING     */
     KEVENT Exited;              /* notification: the thread leaves       */
+    volatile LONG ExitFlag;     /* set just before PsTerminateSystemThread:
+                                 * what a 9x join polls, since a wait there
+                                 * may return unsatisfied (win98-wdm.md)  */
     PVOID ThreadObject;         /* NT: referenced; 9x: NULL (Exited)     */
     PHCD_DEVICE_PDO Pdo;
     PIRP Irp;
@@ -1804,7 +1807,10 @@ ULONG HcdSuspPdoReopen(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
     }
     /* The idle rundown too (4.4, 36.32): a quarantined PDO is never
      * started again. */
-    if (pdo->PwrClosed && !HcdSuspIdleRundown(pdo, 1)) {
+    if (pdo->IdleQuarantined ||
+        (pdo->PwrClosed && !HcdSuspIdleRundown(pdo, 1))) {
+        /* Sticky: never started again, whatever its count reads now
+         * (Codex review of 36.32, round 1, finding 5). */
         return 0;
     }
     hcdSuspReportEnter(pdo);
@@ -2062,10 +2068,15 @@ ULONG HcdSuspIdleSubmit(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc, PIRP irp,
     return 1;
 }
 
-/* A system power IRP at the PDO for a state other than S0 (6.5's third
- * trigger): its idle IRP settled CANCELLED, and the device's episode
- * ends. The caller holds the PDO's Busy count. IRQL: PASSIVE_LEVEL. */
-VOID HcdSuspIdleSystem(PHCD_DEVICE_PDO pdo, SYSTEM_POWER_STATE state)
+/* A system power IRP at the PDO: its state published under the
+ * controller lock, the lock batch formation and the claim read it under,
+ * and - a state other than S0 (6.5's third trigger) - in the same hold its
+ * idle IRP settled CANCELLED and the device's episode ended, so no fresh
+ * idle IRP is batched or called on the old S0 (Codex review of 36.32,
+ * round 1, finding 4). Returns 0, publishing nothing, when the controller
+ * is released (the caller then writes the state). The caller holds the
+ * PDO's Busy count. IRQL: PASSIVE_LEVEL. */
+ULONG HcdSuspIdleSystem(PHCD_DEVICE_PDO pdo, SYSTEM_POWER_STATE state)
 {
     PHCD_CONTROLLER hc;
     HCD_SUSP_ITAKEN taken;
@@ -2073,34 +2084,43 @@ VOID HcdSuspIdleSystem(PHCD_DEVICE_PDO pdo, SYSTEM_POWER_STATE state)
     KIRQL oldIrql;
 
     hc = pdo->Controller;
-    if (state == PowerSystemWorking || hc == NULL) {
-        return;
+    if (hc == NULL) {
+        return 0;
     }
     taken.Count = 0;
     KeAcquireSpinLock(&hc->PdoListLock, &listIrql);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    hcdSuspIdleTriggerLocked(pdo, XHCI_SUSP_SET_SYSTEM, &taken);
-    if (pdo->Device != NULL && XhciSuspEpisodeEnds(XHCI_SUSP_EPI_SYSTEM)) {
-        hcdSuspIdleEndLocked(pdo->Device, &taken);
+    pdo->Common.SystemPower = state;
+    if (state != PowerSystemWorking) {
+        hcdSuspIdleTriggerLocked(pdo, XHCI_SUSP_SET_SYSTEM, &taken);
+        if (pdo->Device != NULL &&
+            XhciSuspEpisodeEnds(XHCI_SUSP_EPI_SYSTEM)) {
+            hcdSuspIdleEndLocked(pdo->Device, &taken);
+        }
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     KeReleaseSpinLock(&hc->PdoListLock, listIrql);
     hcdSuspIFinish(&taken);
+    return 1;
 }
 
 /*
  * Teardown's (e): every idle IRP and entry of the PDO's has let go of it
  * (IdlePending 0), after (a) to (d) have settled what is the bus's to
- * settle. A PnP caller (`mayWaitCallback`) waits for a running callback,
- * which with the DMA-halt proof has nothing left in the bus to wait on; a
- * deletion does not (it follows a REMOVE whose rundown finished, or is of
- * a PDO PnP never saw, which had no client to submit one). Without the
- * proof (CommonBufferPinned), with the controller released while a
- * callback of the PDO's still runs (an abandoned one), or a callback a
- * deletion will not wait for: quarantine - 0 is returned, the PDO marked
- * and counted, and the caller keeps the object (4.4). What remains
- * otherwise is a completion already under way, waited out as before.
- * IRQL: PASSIVE_LEVEL.
+ * settle. What is left but a running callback is a completion already
+ * under way - today's idle IRP's included - and is waited out as before. A
+ * PnP caller (`mayWaitCallback`) waits for a running callback too, which
+ * with the DMA-halt proof has nothing left in the bus to wait on - an
+ * abandoned one, its controller released, included; a deletion does not
+ * (it follows a REMOVE whose rundown finished, or is of a PDO PnP never
+ * saw, which had no client to submit one). A running callback without the
+ * proof (CommonBufferPinned now, or at the stop that abandoned it), or one
+ * a deletion will not wait for: quarantine - 0 is returned, the PDO marked
+ * and counted, and the caller keeps the object (4.4). The client cannot
+ * be unloading under it then: a client lets go of its idle IRP before it
+ * passes its REMOVE down, and that IRP completes only at the callback's
+ * return (Codex review of 36.32, round 1, finding 2). IRQL:
+ * PASSIVE_LEVEL.
  */
 ULONG HcdSuspIdleRundown(PHCD_DEVICE_PDO pdo, ULONG mayWaitCallback)
 {
@@ -2111,8 +2131,9 @@ ULONG HcdSuspIdleRundown(PHCD_DEVICE_PDO pdo, ULONG mayWaitCallback)
     while (pdo->IdlePending != 0) {
         (VOID)InterlockedIncrement(&pdo->Busy);
         hc = pdo->Controller;
-        keep = ((hc != NULL && hc->CommonBufferPinned) ||
-                (pdo->IdleRunning && (hc == NULL || !mayWaitCallback)))
+        keep = (pdo->IdleRunning &&
+                ((hc != NULL && hc->CommonBufferPinned) || pdo->IdlePinned ||
+                 !mayWaitCallback))
                    ? 1UL
                    : 0UL;
         if (keep && !pdo->IdleQuarantined) {
@@ -2372,7 +2393,34 @@ static VOID NTAPI hcdSuspCbThread(PVOID context)
         more = 1;
     }
     (VOID)KeSetEvent(&cb->Exited, IO_NO_INCREMENT, FALSE);
+    (VOID)InterlockedExchange((PLONG)&cb->ExitFlag, 1);
     (VOID)PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+/* The thread's exit waited for (Codex review of 36.32, round 1, finding
+ * 3): on NT its object; on 9x, where a thread-object wait faults and an
+ * event wait may return 0xFFFFFFFF unsatisfied (win98-wdm.md), the flag
+ * the thread sets last, polled at 1 ms - as the controller thread's stop
+ * leaves only the thread's call into PsTerminateSystemThread after it.
+ * IRQL: PASSIVE_LEVEL. */
+static VOID hcdSuspCbExitWait(PHCD_SUSP_CB cb)
+{
+    LARGE_INTEGER due;
+
+    if (cb->ThreadObject != NULL) {
+        while (KeWaitForSingleObject(cb->ThreadObject, Executive, KernelMode,
+                                     FALSE, NULL) != STATUS_SUCCESS) {
+            HcdRelativeMs(&due, 1);
+            (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+        }
+        ObDereferenceObject(cb->ThreadObject);
+        cb->ThreadObject = NULL;
+        return;
+    }
+    while (cb->ExitFlag == 0) {
+        HcdRelativeMs(&due, 1);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
 }
 
 /* Contexts whose thread a teardown abandoned in a callback, each with its
@@ -2404,14 +2452,7 @@ VOID HcdSuspDriverUnload(VOID)
         if (cb == NULL) {
             return;
         }
-        if (cb->ThreadObject != NULL) {
-            (VOID)KeWaitForSingleObject(cb->ThreadObject, Executive,
-                                        KernelMode, FALSE, NULL);
-            ObDereferenceObject(cb->ThreadObject);
-        } else {
-            (VOID)KeWaitForSingleObject(&cb->Exited, Executive, KernelMode,
-                                        FALSE, NULL);
-        }
+        hcdSuspCbExitWait(cb);
         HcdPoolFree(cb);
     }
 }
@@ -2421,15 +2462,7 @@ VOID HcdSuspDriverUnload(VOID)
 static VOID hcdSuspCbJoin(PHCD_SUSP_CB cb)
 {
     (VOID)KeSetEvent(&cb->Wake, IO_NO_INCREMENT, FALSE);
-    if (cb->ThreadObject != NULL) {
-        (VOID)KeWaitForSingleObject(cb->ThreadObject, Executive, KernelMode,
-                                    FALSE, NULL);
-        ObDereferenceObject(cb->ThreadObject);
-        cb->ThreadObject = NULL;
-    } else {
-        (VOID)KeWaitForSingleObject(&cb->Exited, Executive, KernelMode,
-                                    FALSE, NULL);
-    }
+    hcdSuspCbExitWait(cb);
     HcdPoolFree(cb);
 }
 
@@ -2567,6 +2600,13 @@ VOID HcdSuspCbStop(PHCD_CONTROLLER hc)
             hcdSuspCbJoin(cb);
             return;
         case XHCI_SUSP_HAND_ABANDON:
+            /* The callback's PDO is held by its references while the
+             * thread is IN_CALLBACK; whether the stop proved DMA halted
+             * is recorded for its rundown, which no longer reaches the
+             * controller. */
+            if (hc->CommonBufferPinned) {
+                cb->Pdo->IdlePinned = 1;
+            }
             if (!hcdSuspCbMove(cb, XHCI_SUSP_ACTOR_TEARDOWN, phase,
                                XHCI_SUSP_PH_ABANDONED)) {
                 continue;

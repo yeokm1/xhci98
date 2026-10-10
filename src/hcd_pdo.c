@@ -2249,6 +2249,9 @@ static VOID hcdPdoQuiesce(PHCD_DEVICE_PDO pdo, ULONG removing)
         }
         KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
         if (dev != NULL) {
+            /* 4.4 (b): what selective suspend deferred for this PDO
+             * behind a suspended link (hcd_cfg.c). */
+            HcdCfgFlushPdoDeferred(hc, dev, pdo);
             if (pdo->Function) {
                 /* Its own requests only, EP0's included: its siblings
                  * share the device and keep running (design record 13
@@ -2722,10 +2725,13 @@ static NTSTATUS hcdDevicePdoPowerBusy(PHCD_DEVICE_PDO pdo, PIRP irp)
                                   stack->Parameters.Power.State);
         } else {
             /* 6.5: a system state other than S0 settles a stage A idle
-             * IRP and ends its episode (hcd_susp.c). */
-            HcdSuspIdleSystem(pdo, stack->Parameters.Power.State.SystemState);
-            pdo->Common.SystemPower =
-                stack->Parameters.Power.State.SystemState;
+             * IRP and ends its episode; the state is published in the
+             * same controller-lock hold (hcd_susp.c). */
+            if (!HcdSuspIdleSystem(pdo,
+                                   stack->Parameters.Power.State.SystemState)) {
+                pdo->Common.SystemPower =
+                    stack->Parameters.Power.State.SystemState;
+            }
         }
         status = STATUS_SUCCESS;
     } else if (stack->MinorFunction == IRP_MN_QUERY_POWER) {
