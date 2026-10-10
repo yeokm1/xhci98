@@ -413,14 +413,29 @@ A block of 96 words is a driver from before MSI. `-selftest-msi` prints
 the decode over canned images.
 
 After the MSI words come selective suspend's (114 to 141, `SuspSwitchRead`
-to `SuspNotesSuppressed`), eighteen words reserved for its stage B (142 to
-159, not printed) and the composite parent's two (160 and 161,
+to `SuspNotesSuppressed`), its stage B's eighteen (142 to 159,
+`SsSuspArms` to `SsSuspCapSettled`, reserved and unprinted before task
+36.38 filled them) and the composite parent's two (160 and 161,
 `CompositeParents` and `CompositeRepresented`). `-selftest-counters`
 prints every word of a canned block whose word i holds i + 1, and
 `selftest.cmd` checks it word by word against `src\xhci_counters.h`
 (`check-counter-names.ps1`), on the built EXE: an inline lookup over two
 of these tables was once compiled by MSVC 6.0 to name the selective
 suspend words 18 places off.
+
+Two more sections come from the HCD header of a `2.3.0.0` driver (amended
+in roadmap-hcd 36.20). **"stage 2, two TDs of one URB on the ring"**
+(task 36.24, design record 13 section 11.6; `-selftest-xpipe`):
+`XhciWideMap` as read ("not set (the default)" when absent), whether
+promotion is on and what the register-free check found (or why it did not
+run: the value off, Windows 98 or ME, a grant that is not register-free),
+and the wide mapper's and the pipelined record's counts; with task 36.25,
+stage 3's big stream blocks and their TD sizes. A driver from before it
+says "not in this driver". **"selective suspend, stage B"** (task 36.38,
+design record 14 section 8.10): `DNCTRL` as read when the window was cut
+("not read" unless `XhciSelectiveSuspend` is 1), the enables written and
+read back, and up to eight SuperSpeed devices' records - slot, link state,
+the window, armed functions and the last step's outcome.
 
 The PORTSC decode is printed on screen whatever the level, because that is what
 the bench reads on the spot. The headline test is per port: a port reporting a
