@@ -748,6 +748,22 @@ NTSTATUS HcdRootHubFdoCleanup(PHCD_ROOTHUB_FDO fdo, PIRP irp)
     return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
 }
 
+/* IRP_MJ_SYSTEM_CONTROL on the root-hub FDO: this FDO is no WMI provider,
+ * so the request goes down to the root-hub PDO, inside the FDO's I/O count.
+ * Completing it here is Driver Verifier's stop C9 0x220 at the first boot
+ * under Verifier (finding D4, design record 18 section 11.2). */
+NTSTATUS HcdRootHubFdoSystemControl(PHCD_ROOTHUB_FDO fdo, PIRP irp)
+{
+    NTSTATUS status;
+
+    if (!hcdRhIoEnter(fdo)) {
+        return HcdCompleteIrp(irp, STATUS_DELETE_PENDING, 0);
+    }
+    status = hcdRhPassDown(fdo, irp);
+    hcdRhIoLeave(fdo);
+    return status;
+}
+
 /* IRP_MJ_DEVICE_CONTROL on the root-hub FDO: the hub IOCTLs of the Power tab
  * (hcd_door.c), inside the FDO's I/O count so its remove waits them out. */
 NTSTATUS HcdRootHubFdoDeviceControl(PHCD_ROOTHUB_FDO fdo, PIRP irp)

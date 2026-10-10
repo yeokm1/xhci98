@@ -239,7 +239,8 @@ static NTSTATUS NTAPI hcdDispatchPower(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 /* Everything that is neither PnP nor power. The door (hcd_door.c, 26-A.8)
  * takes CREATE, CLOSE, CLEANUP and DEVICE_CONTROL on both FDOs; the
  * controller FDO forwards the rest to the PCI stack (IRP_MJ_SYSTEM_CONTROL is
- * the one that arrives there). */
+ * the one that arrives there); IRP_MJ_SYSTEM_CONTROL on the other kinds is
+ * passed down by an FDO and completed untouched by a PDO. */
 static NTSTATUS NTAPI hcdDispatchOther(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 {
     PHCD_COMMON common;
@@ -275,6 +276,27 @@ static NTSTATUS NTAPI hcdDispatchOther(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         (major == IRP_MJ_CREATE || major == IRP_MJ_CLOSE ||
          major == IRP_MJ_CLEANUP)) {
         return HcdDoorCreateClose(Irp);
+    }
+    /* WMI (finding D4): this driver registers no WMI provider, so its FDOs
+     * pass IRP_MJ_SYSTEM_CONTROL down - the controller's below, with the
+     * rest - and its PDOs complete it with the status it came with. Driver
+     * Verifier's started-stack WMI test stops with C9 0x220 when an FDO
+     * completes it instead. */
+    if (major == IRP_MJ_SYSTEM_CONTROL) {
+        if (common->Kind == HCD_KIND_ROOTHUB_FDO) {
+            return HcdRootHubFdoSystemControl((PHCD_ROOTHUB_FDO)common, Irp);
+        }
+        /* A composite FDO (task 36.43) is hcd_hubfdo.c's code too and no
+         * WMI provider either: down to the composite parent's PDO. */
+        if (common->Kind == HCD_KIND_HUB_FDO ||
+            common->Kind == HCD_KIND_COMPOSITE_FDO) {
+            return HcdHubFdoSystemControl((PHCD_HUB_FDO)common, Irp);
+        }
+        if (common->Kind == HCD_KIND_ROOTHUB_PDO ||
+            common->Kind == HCD_KIND_DEVICE_PDO) {
+            return HcdCompleteIrp(Irp, Irp->IoStatus.Status,
+                                  Irp->IoStatus.Information);
+        }
     }
     if (common->Kind == HCD_KIND_ROOTHUB_FDO &&
         major == IRP_MJ_DEVICE_CONTROL) {

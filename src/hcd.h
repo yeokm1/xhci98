@@ -1772,6 +1772,7 @@ NTSTATUS HcdRootHubAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo);
 NTSTATUS HcdRootHubFdoPnp(PHCD_ROOTHUB_FDO fdo, PIRP irp);
 NTSTATUS HcdRootHubFdoPower(PHCD_ROOTHUB_FDO fdo, PIRP irp);
 NTSTATUS HcdRootHubFdoDeviceControl(PHCD_ROOTHUB_FDO fdo, PIRP irp);
+NTSTATUS HcdRootHubFdoSystemControl(PHCD_ROOTHUB_FDO fdo, PIRP irp);
 
 /* hcd_entry.c */
 extern PDRIVER_OBJECT HcdDriverObject;
@@ -2173,6 +2174,7 @@ NTSTATUS HcdHubAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo);
 NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp);
 NTSTATUS HcdHubFdoPower(PHCD_HUB_FDO fdo, PIRP irp);
 NTSTATUS HcdHubFdoDeviceControl(PHCD_HUB_FDO fdo, PIRP irp);
+NTSTATUS HcdHubFdoSystemControl(PHCD_HUB_FDO fdo, PIRP irp);
 /* hcd_log.c */
 VOID HcdLogFlush(PHCD_CONTROLLER hc, ULONG reason, ULONG counters);
 VOID HcdCountersStart(PHCD_CONTROLLER hc);
