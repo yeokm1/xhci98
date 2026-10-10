@@ -1323,6 +1323,77 @@ At `XhciTolerance` `0` none of the above acts and every path is
 section 6.7's static reading; 35-V reads it at run time against the
 injected faults.
 
+### 6.9 An interface with more endpoint descriptors than bNumEndpoints (task 36.46, 2026-10-10)
+
+**The report** (GitHub issue 17 item 7, SweetLow, his `usbview` readings):
+a low-speed HID boot mouse, VID `073A` PID `2230`, `bcdUSB` 1.10,
+`bMaxPacketSize0` 8, one configuration of 41 bytes. Its interface 0 says
+`bNumEndpoints` 1 and carries two endpoint descriptors after its HID
+descriptor (9 + 9 + 9 + 7 + 7 = 41): `0x81` interrupt IN and `0x01`
+interrupt OUT, both 8 bytes at `bInterval` 10. Under the EHCI's companion
+stack it read Current Config Value 1 with one open pipe, `0x81`; under
+`xhci98` it read Current Config Value 0 and no open pipe: addressed (7) and
+described, never configured.
+
+**The one failure point**, found by running those exact bytes through every
+pure path as host vectors (`test_pipe` `test_walk_surplus`, `test_func`
+`test_ls_mouse_surplus`, `test_xfer` `test_build_ls_report_descriptor`):
+`XhciPipeFindInterface` refused the configuration as malformed when a
+second endpoint descriptor followed the one `bNumEndpoints` declared, so
+`hcdCfgSelect` answered `hidusb`'s SELECT_CONFIGURATION with
+`USBD_STATUS_INVALID_PARAMETER` before any Configure Endpoint or
+SET_CONFIGURATION, which is exactly the reading. The other paths take the
+device as Microsoft's stack does: enumeration reads the 9-byte head and the
+41 bytes without parsing them; one interface is never split (section 10.8),
+and as a composite's function the filtered descriptor (10.9) carries the
+interface's run, surplus included, to the same walk; the endpoint rules give
+the IN endpoint at Low Speed Interval 6 (`bInterval` 10 ms rounded down to
+8 ms, Table 6-12's FS/LS interrupt row), Max Packet Size 8, Max ESIT Payload
+8, CErr 3, and the plan adds DCI 3 alone; the never-opened OUT endpoint would
+be a legal Low-Speed interrupt OUT endpoint by the same rules (DCI 2,
+Interval 6); hidusbf's rewritten `bInterval` reaches the counted endpoint on
+both the whole-device and the function path (section 13.7); and the 239-byte
+report descriptor read over an 8-byte EP0 is one Data Stage TRB (or two
+across a page, TD Size 14 then 0) with ISP set, the short-packet handling
+the control path already has.
+
+**The rule now.** An interface's endpoints are its first `bNumEndpoints`
+endpoint descriptors. Endpoint descriptors after those, up to the next
+interface descriptor, are surplus: counted (`EndpointSurplus`) and
+otherwise ignored, neither their numbers nor their DCIs checked, because
+nothing will be programmed from them. That is usbport's rule
+(`external/reactos/usbport/device.c`: `USBPORT_OpenInterface` opens
+`bNumEndpoints` pipes, taking the next endpoint descriptor for each, and
+`USBPORT_GetInterfaceLength` skips the rest to the next interface; reference
+source, not a disassembly), and the request a class driver sends is already
+sized by it, since `usbd.sys`'s `USBD_CreateConfigurationRequestEx` gives
+each interface `bNumEndpoints` pipe records; counting the surplus would have
+answered that request `USBD_STATUS_BUFFER_TOO_SMALL` instead. The class
+driver gets the same pipe set Microsoft's stack gave it.
+
+**What stays refused**, because usbport's tolerance there would program
+garbage or the walk could not be trusted: fewer endpoint descriptors than
+`bNumEndpoints` (usbport's walk would take the next interface's endpoints;
+this bus answers `INVALID_PARAMETER`), a `bNumEndpoints` above 30, a counted
+endpoint numbered 0 or repeating a DCI, and every structural length rule of
+the whole set - an endpoint descriptor shorter than 7 bytes refuses the
+configuration whether it is counted or surplus. No endpoint the xHC is
+given changes: the counted endpoints go through the endpoint rules
+unchanged.
+
+**The log.** A select that takes such an interface records, in every
+flavour, `cfg.ep.surplus.vidpid` (VID in the high half and PID in the low,
+as `dev.ss.vidpid` has them: `073A2230` for this mouse) and
+`cfg.ep.surplus` (slot, interface, alternate and the surplus count, one
+byte each), so an `XHCISNAP` report shows the tolerance taken - at
+`XhciLogVerbosity` 2 or above, where the note ring is on.
+
+**Owed.** QEMU cannot present this descriptor with its stock devices, so
+the legs are regression legs only (the QEMU mouse, tablet, keyboard and a
+stick on 98 SE and 7 x64); the device itself is a bench clause: the owner or
+SweetLow retests that mouse on `2.2.0.3`, expecting Current Config Value 1,
+one open pipe `0x81`, a moving pointer and the two log records.
+
 ## 7. The Windows 98 export evidence (task 25.3)
 
 The miniport imported almost nothing because `usbport.sys` did the work; the

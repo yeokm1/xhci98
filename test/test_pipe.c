@@ -562,9 +562,13 @@ static void test_walk_malformed(void)
     c[13] = 2;
     CHECK_EQ(XhciPipeFindInterface(c, sizeof(mouse), 0, 0, &f),
              XHCI_PIPE_MALFORMED, "bNumEndpoints 2, one present");
+    /* Task 36.46: one present past bNumEndpoints 0 is surplus, as usbport
+     * takes it (test_walk_surplus). */
     c[13] = 0;
     CHECK_EQ(XhciPipeFindInterface(c, sizeof(mouse), 0, 0, &f),
-             XHCI_PIPE_MALFORMED, "bNumEndpoints 0, one present");
+             XHCI_PIPE_OK, "bNumEndpoints 0, one present: surplus");
+    CHECK_EQ(f.EndpointCount, 0, "no pipe");
+    CHECK_EQ(f.EndpointSurplus, 1, "one ignored");
     c[13] = 31;
     CHECK_EQ(XhciPipeFindInterface(c, sizeof(mouse), 0, 0, &f),
              XHCI_PIPE_MALFORMED, "bNumEndpoints 31");
@@ -2607,6 +2611,201 @@ static void test_reset_steps(void)
              XHCI_PIPE_CLEAR_GO, "taken first: go on");
 }
 
+/* ------------------------------------------------------------------ */
+/* Endpoint descriptors past bNumEndpoints (task 36.46)                 */
+/* ------------------------------------------------------------------ */
+
+/* GitHub issue 17 item 7 (SweetLow): a low-speed HID boot mouse, VID 073A
+ * PID 2230, as his usbview read it. Interface 0 declares one endpoint and
+ * carries two: 9 + 9 + 9 + 7 + 7 = 41 = wTotalLength. Microsoft's stack
+ * opened one pipe, 0x81; this bus refused the select. */
+static const UCHAR ls_mouse[41] = {
+    0x09, 0x02, 0x29, 0x00, 0x01, 0x01, 0x00, 0xA0, 0x32,
+    0x09, 0x04, 0x00, 0x00, 0x01, 0x03, 0x01, 0x02, 0x00,
+    0x09, 0x21, 0x10, 0x01, 0x00, 0x01, 0x22, 0xEF, 0x00,
+    0x07, 0x05, 0x81, 0x03, 0x08, 0x00, 0x0A,
+    0x07, 0x05, 0x01, 0x03, 0x08, 0x00, 0x0A
+};
+
+static void test_walk_surplus(void)
+{
+    /* The mouse, then an interface 1 of one interrupt IN endpoint, to show
+     * the surplus stops at the next interface descriptor. */
+    static const UCHAR two[] = {
+        0x09, 0x02, 0x39, 0x00, 0x02, 0x01, 0x00, 0xA0, 0x32,
+        0x09, 0x04, 0x00, 0x00, 0x01, 0x03, 0x01, 0x02, 0x00,
+        0x09, 0x21, 0x10, 0x01, 0x00, 0x01, 0x22, 0xEF, 0x00,
+        0x07, 0x05, 0x81, 0x03, 0x08, 0x00, 0x0A,
+        0x07, 0x05, 0x01, 0x03, 0x08, 0x00, 0x0A,
+        0x09, 0x04, 0x01, 0x00, 0x01, 0x03, 0x00, 0x00, 0x00,
+        0x07, 0x05, 0x82, 0x03, 0x08, 0x00, 0x0A
+    };
+    XHCI_PIPE_IFACE f;
+    XHCI_PIPE_PLAN plan;
+    XHCI_PIPE_EP ep;
+    UCHAR c[64];
+    UCHAR caller[sizeof(ls_mouse)];
+    ULONG n;
+
+    /* The walk: one pipe, the IN endpoint, the OUT one surplus. */
+    CHECK_EQ(XhciPipeFindInterface(ls_mouse, sizeof(ls_mouse), 0, 0, &f),
+             XHCI_PIPE_OK, "36.46: bNumEndpoints 1, two present");
+    CHECK_EQ(f.EndpointCount, 1, "bNumEndpoints honoured");
+    CHECK_EQ(f.EndpointOffset[0], 27, "the first endpoint, 0x81");
+    CHECK_EQ(f.EndpointSurplus, 1, "0x01 OUT counted as surplus");
+    CHECK_EQ(f.InterfaceClass, 3, "HID");
+    CHECK_EQ(f.InterfaceSubClass, 1, "boot");
+    CHECK_EQ(f.InterfaceProtocol, 2, "mouse");
+
+    /* The endpoint the select opens, at Low Speed: Table 6-12's FS/LS
+     * interrupt row, bInterval 10 ms -> floor(log2(80)) = 6, 2^6 x 125 us
+     * = 8 ms, within 3-10. */
+    CHECK_EQ(XhciPipeEndpointParamsAt(ls_mouse, sizeof(ls_mouse),
+                                      f.EndpointOffset[0],
+                                      XHCI_PIPE_SPEED_LOW, 0, &ep),
+             XHCI_PIPE_OK, "LS interrupt IN, MPS 8");
+    CHECK_EQ(ep.Dci, 3, "0x81 DCI 3");
+    CHECK_EQ(ep.EpType, XHCI_PIPE_EPT_INTERRUPT_IN, "Interrupt IN");
+    CHECK_EQ(ep.MaxPacketSize, 8, "MPS 8");
+    CHECK_EQ(ep.MaxBurstSize, 0, "no burst below High Speed");
+    CHECK_EQ(ep.Mult, 0, "Mult 0");
+    CHECK_EQ(ep.Interval, 6, "bInterval 10 at LS -> Interval 6");
+    CHECK_EQ(ep.IntervalClamped, 0, "in range");
+    CHECK_EQ(ep.BInterval, 10, "the descriptor's byte kept");
+    CHECK_EQ(ep.MaxEsitPayload, 8, "Max ESIT Payload = MPS x 1");
+    CHECK_EQ(ep.ErrorCount, 3, "CErr 3");
+    CHECK_EQ(ep.AverageTrbLength, 1024, "interrupt Average TRB Length");
+
+    /* The Configure Endpoint the select issues: DCI 3 alone. */
+    CHECK_EQ(XhciPipeConfigurePlan(0, 0, B(ep.Dci), &plan), XHCI_PIPE_OK,
+             "the mouse's plan");
+    CHECK_EQ(plan.AddFlags, 0x09, "A0 + A3, no A2 for the surplus OUT");
+    CHECK_EQ(plan.DropFlags, 0, "nothing dropped");
+    CHECK_EQ(plan.ContextEntries, 3, "Context Entries 3");
+
+    /* The surplus endpoint, never opened, is still a legal LS interrupt
+     * OUT endpoint by itself: the rule that would program it. */
+    CHECK_EQ(XhciPipeEndpointParams(ls_mouse + 34, XHCI_PIPE_SPEED_LOW, &ep),
+             XHCI_PIPE_OK, "LS interrupt OUT, MPS 8");
+    CHECK_EQ(ep.Dci, 2, "0x01 DCI 2");
+    CHECK_EQ(ep.EpType, XHCI_PIPE_EPT_INTERRUPT_OUT, "Interrupt OUT");
+    CHECK_EQ(ep.Interval, 6, "Interval 6");
+    CHECK_EQ(ep.MaxEsitPayload, 8, "Max ESIT Payload 8");
+
+    /* LS bInterval edges: 1 (hidusbf's 1000 Hz) and 255, both inside
+     * Table 6-12's 3-10 by the rounding; 0 clamped up. */
+    copy_bytes(c, ls_mouse, sizeof(ls_mouse));
+    c[33] = 1;
+    CHECK_EQ(XhciPipeEndpointParams(c + 27, XHCI_PIPE_SPEED_LOW, &ep),
+             XHCI_PIPE_OK, "LS bInterval 1");
+    CHECK_EQ(ep.Interval, 3, "Interval 3");
+    c[33] = 255;
+    CHECK_EQ(XhciPipeEndpointParams(c + 27, XHCI_PIPE_SPEED_LOW, &ep),
+             XHCI_PIPE_OK, "LS bInterval 255");
+    CHECK_EQ(ep.Interval, 10, "Interval 10");
+    c[33] = 0;
+    CHECK_EQ(XhciPipeEndpointParams(c + 27, XHCI_PIPE_SPEED_LOW, &ep),
+             XHCI_PIPE_OK, "LS bInterval 0");
+    CHECK_EQ(ep.Interval, 3, "clamped to 1 ms, Interval 3");
+    CHECK_EQ(ep.IntervalClamped, 1, "and said so");
+    c[33] = 10;
+    c[31] = 9;
+    CHECK_EQ(XhciPipeEndpointParams(c + 27, XHCI_PIPE_SPEED_LOW, &ep),
+             XHCI_PIPE_MALFORMED, "LS interrupt MPS 9 still refused");
+
+    /* hidusbf rewrites bInterval in the descriptor the class driver hands
+     * the select (a whole device's select reads that copy): the walk of the
+     * rewritten copy is the same, and the counted endpoint takes the byte. */
+    copy_bytes(caller, ls_mouse, sizeof(ls_mouse));
+    caller[33] = 1;
+    caller[40] = 1;
+    CHECK_EQ(XhciPipeFindInterface(caller, sizeof(caller), 0, 0, &f),
+             XHCI_PIPE_OK, "hidusbf's copy walks");
+    CHECK_EQ(f.EndpointCount, 1, "still one pipe");
+    CHECK_EQ(XhciPipeEndpointParamsAt(caller, sizeof(caller),
+                                      f.EndpointOffset[0],
+                                      XHCI_PIPE_SPEED_LOW, 0, &ep),
+             XHCI_PIPE_OK, "hidusbf's IN endpoint");
+    CHECK_EQ(ep.Interval, 3, "1000 Hz asked: Interval 3, 1 ms");
+    /* And a composite function's path, which keeps the device's bytes and
+     * takes the caller's bInterval (XhciPipeFunctionEndpoint). */
+    CHECK_EQ(XhciPipeFunctionEndpoint(ls_mouse, sizeof(ls_mouse), 27, caller,
+                                      0, 0, XHCI_PIPE_SPEED_LOW, 0, &ep),
+             XHCI_PIPE_OK, "the function path with hidusbf's copy");
+    CHECK_EQ(ep.Interval, 3, "the caller's bInterval");
+    CHECK_EQ(ep.BInterval, 1, "byte 1");
+    /* Only the surplus endpoint rewritten: nothing the select opens moves. */
+    copy_bytes(caller, ls_mouse, sizeof(ls_mouse));
+    caller[40] = 1;
+    CHECK_EQ(XhciPipeFunctionEndpoint(ls_mouse, sizeof(ls_mouse), 27, caller,
+                                      0, 0, XHCI_PIPE_SPEED_LOW, 0, &ep),
+             XHCI_PIPE_OK, "surplus rewritten only");
+    CHECK_EQ(ep.Interval, 6, "the device's bInterval");
+
+    /* The surplus is not checked: a repeat of the counted endpoint's
+     * address, or an endpoint numbered 0, is ignored as usbport ignores
+     * it. */
+    copy_bytes(c, ls_mouse, sizeof(ls_mouse));
+    c[36] = 0x81;
+    CHECK_EQ(XhciPipeFindInterface(c, sizeof(ls_mouse), 0, 0, &f),
+             XHCI_PIPE_OK, "a surplus repeating DCI 3");
+    CHECK_EQ(f.EndpointCount, 1, "one pipe");
+    c[36] = 0x80;
+    CHECK_EQ(XhciPipeFindInterface(c, sizeof(ls_mouse), 0, 0, &f),
+             XHCI_PIPE_OK, "a surplus numbered 0");
+    CHECK_EQ(f.EndpointSurplus, 1, "counted");
+    /* Its length is still the walk's: a 6-byte endpoint descriptor
+     * anywhere refuses the set, surplus or not. */
+    copy_bytes(c, ls_mouse, sizeof(ls_mouse));
+    c[34] = 6;
+    set_total(c, 40);
+    CHECK_EQ(XhciPipeFindInterface(c, 40, 0, 0, &f), XHCI_PIPE_MALFORMED,
+             "a 6-byte surplus endpoint descriptor");
+    /* The counted endpoint keeps every check. */
+    copy_bytes(c, ls_mouse, sizeof(ls_mouse));
+    c[29] = 0x80;
+    CHECK_EQ(XhciPipeFindInterface(c, sizeof(ls_mouse), 0, 0, &f),
+             XHCI_PIPE_MALFORMED, "the counted endpoint numbered 0");
+    /* And fewer than declared is still refused. */
+    copy_bytes(c, ls_mouse, sizeof(ls_mouse));
+    c[13] = 3;
+    CHECK_EQ(XhciPipeFindInterface(c, sizeof(ls_mouse), 0, 0, &f),
+             XHCI_PIPE_MALFORMED, "bNumEndpoints 3, two present");
+    c[13] = 2;
+    CHECK_EQ(XhciPipeFindInterface(c, sizeof(ls_mouse), 0, 0, &f),
+             XHCI_PIPE_OK, "bNumEndpoints 2, two present");
+    CHECK_EQ(f.EndpointCount, 2, "both pipes");
+    CHECK_EQ(f.EndpointSurplus, 0, "no surplus");
+
+    /* The surplus ends at the next interface, whose own endpoint is its. */
+    CHECK_EQ(XhciPipeFindInterface(two, sizeof(two), 0, 0, &f), XHCI_PIPE_OK,
+             "interface 0 of two");
+    CHECK_EQ(f.EndpointCount, 1, "one pipe");
+    CHECK_EQ(f.EndpointSurplus, 1, "one surplus, not two");
+    CHECK_EQ(XhciPipeFindInterface(two, sizeof(two), 1, 0, &f), XHCI_PIPE_OK,
+             "interface 1 of two");
+    CHECK_EQ(f.EndpointCount, 1, "its own endpoint");
+    CHECK_EQ(f.EndpointOffset[0], 50, "0x82");
+    CHECK_EQ(f.EndpointSurplus, 0, "no surplus");
+
+    /* SuperSpeed: a surplus endpoint and its companion follow the counted
+     * one; the counted endpoint still reads its own companion. */
+    n = ss_config(c, 2, 1024, 0, 15, 0, 0, 1, 0);
+    c[n++] = 7; c[n++] = 5; c[n++] = 0x02; c[n++] = 2;
+    c[n++] = 0x00; c[n++] = 0x04; c[n++] = 0;
+    c[n++] = 6; c[n++] = 0x30; c[n++] = 3; c[n++] = 0; c[n++] = 0;
+    c[n++] = 0;
+    set_total(c, n);
+    CHECK_EQ(XhciPipeFindInterface(c, n, 0, 0, &f), XHCI_PIPE_OK,
+             "SS: bNumEndpoints 1, two present");
+    CHECK_EQ(f.EndpointCount, 1, "one pipe");
+    CHECK_EQ(f.EndpointSurplus, 1, "the companion is not an endpoint");
+    CHECK_EQ(XhciPipeEndpointParamsAt(c, n, f.EndpointOffset[0],
+                                      XHCI_PIPE_SPEED_SUPER, 0, &ep),
+             XHCI_PIPE_OK, "the counted SS bulk endpoint");
+    CHECK_EQ(ep.MaxBurstSize, 15, "its own companion's burst");
+}
+
 int main(void)
 {
     test_seq();
@@ -2638,6 +2837,7 @@ int main(void)
     test_fast_codes();
     test_rebase();
     test_caller_interval();
+    test_walk_surplus();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

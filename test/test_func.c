@@ -313,6 +313,55 @@ static void test_no_split(void)
              "one interface: whole");
 }
 
+/* Task 36.46 (GitHub issue 17 item 7): SweetLow's low-speed mouse, VID 073A
+ * PID 2230, whose interface 0 declares one endpoint and carries two. One
+ * interface, so it is presented whole and its select reads its own
+ * descriptor (test_pipe's test_walk_surplus); as a composite's function the
+ * filtered descriptor carries the surplus through unchanged, for the same
+ * walk to ignore. */
+static void test_ls_mouse_surplus(void)
+{
+    static const UCHAR lsDev[18] = {
+        0x12, 0x01, 0x10, 0x01, 0x00, 0x00, 0x00, 0x08,
+        0x3A, 0x07, 0x30, 0x22, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01
+    };
+    static const UCHAR lsCfg[41] = {
+        0x09, 0x02, 0x29, 0x00, 0x01, 0x01, 0x00, 0xA0, 0x32,
+        0x09, 0x04, 0x00, 0x00, 0x01, 0x03, 0x01, 0x02, 0x00,
+        0x09, 0x21, 0x10, 0x01, 0x00, 0x01, 0x22, 0xEF, 0x00,
+        0x07, 0x05, 0x81, 0x03, 0x08, 0x00, 0x0A,
+        0x07, 0x05, 0x01, 0x03, 0x08, 0x00, 0x0A
+    };
+    /* The same, with a keyboard interface 1 after it. */
+    static const UCHAR lsTwo[57] = {
+        0x09, 0x02, 0x39, 0x00, 0x02, 0x01, 0x00, 0xA0, 0x32,
+        0x09, 0x04, 0x00, 0x00, 0x01, 0x03, 0x01, 0x02, 0x00,
+        0x09, 0x21, 0x10, 0x01, 0x00, 0x01, 0x22, 0xEF, 0x00,
+        0x07, 0x05, 0x81, 0x03, 0x08, 0x00, 0x0A,
+        0x07, 0x05, 0x01, 0x03, 0x08, 0x00, 0x0A,
+        0x09, 0x04, 0x01, 0x00, 0x01, 0x03, 0x01, 0x01, 0x00,
+        0x07, 0x05, 0x82, 0x03, 0x08, 0x00, 0x0A
+    };
+    XHCI_FUNC_SET set;
+
+    copy_dev(lsDev);
+    CHECK_EQ(XhciFuncSplit(dev, lsCfg, sizeof(lsCfg), &set),
+             XHCI_FUNC_NO_SPLIT, "36.46: the LS mouse is one device");
+    CHECK_EQ(set.Count, 0, "no functions");
+
+    CHECK_EQ(XhciFuncSplit(dev, lsTwo, sizeof(lsTwo), &set), XHCI_FUNC_OK,
+             "36.46: with a second interface it splits");
+    CHECK_EQ(set.Count, 2, "two functions");
+    check_func(&set.Func[0], 0, 0x1, 1, 3, 1, 2, 0, "the mouse function",
+               __LINE__);
+    check_func(&set.Func[1], 1, 0x2, 1, 3, 1, 1, 0, "the keyboard function",
+               __LINE__);
+    check_filtered(lsTwo, sizeof(lsTwo), &set.Func[0], 41, 1, 9, 32,
+                   "the mouse's run, surplus endpoint included", __LINE__);
+    check_filtered(lsTwo, sizeof(lsTwo), &set.Func[1], 25, 1, 41, 16,
+                   "the keyboard's run, no surplus of the mouse's", __LINE__);
+}
+
 /* A 9-byte header and `n` interface descriptors (no endpoints), each class
  * cls[i] / subclass sub[i], numbered 0..n-1. */
 static ULONG build_ifaces(UCHAR *out, ULONG n, const UCHAR *cls,
@@ -1182,6 +1231,7 @@ int main(void)
     test_iad_audio();
     test_iad_ids();
     test_no_split();
+    test_ls_mouse_surplus();
     test_positional();
     test_malformed();
     test_setup();
