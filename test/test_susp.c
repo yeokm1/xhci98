@@ -2109,6 +2109,20 @@ static void test_composite_parent_not_voter(void)
     idle[2].IdleState = XHCI_SUSP_IDLE_NONE;
     CHECK_EQ(XhciSuspIdleBatchReady(idle, 3, XHCI_SUSP_ACTIVE, 1), 0,
              "a parent counted: no batch ever");
+
+    /* A function re-presented in place on a suspended device
+     * (HcdDevicePdoRepresentFunctions): created at D0 it would never ask
+     * the resume; created at D3 with D0 wanted, it does (Codex review of
+     * p36-int3, round 1). */
+    XhciSuspLinkInit(&link, 1, 7);
+    link.State = XHCI_SUSP_SUSPENDED;
+    func_init(&f[0], D0);
+    CHECK_EQ(XhciSuspDecide(&link, f, 1, 1, 0, &d), XHCI_SUSP_DO_NONE,
+             "a new function at D0 on a suspended link asks nothing");
+    func_init(&f[0], D3);
+    f[0].PwrWanted = D0;
+    CHECK_EQ(XhciSuspDecide(&link, f, 1, 1, 0, &d), XHCI_SUSP_DO_RESUME,
+             "at D3 with D0 wanted: the resume");
 }
 
 /* 36.45 at the merge with stage A (design record 13 section 8.11): the

@@ -2387,6 +2387,19 @@ ULONG HcdDevicePdoRepresentFunctions(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         for (k = 0; k < XHCI_TEXT_WCHARS; k++) {
             nu->Text[k] = olds[i]->Text[k];
         }
+        /* The device is kept, and selective suspend may hold its link
+         * down: hcdPdoNew's D0 would then be a function in D0 on a
+         * suspended device, and its START (HcdSuspPdoReopen) leaves the
+         * state alone off ACTIVE, so no resume would ever be asked and
+         * its first request would wait in SlowDeferred for good. Off
+         * ACTIVE it starts at D3 with D0 wanted, so the decision resumes
+         * the link and writes D0 at ACTIVE (XhciSuspDecide's WantD0;
+         * Codex review of p36-int3, round 1). The thread is the link
+         * machine's, so the state cannot move under this read. */
+        if (!HcdSuspLinkActive(dev)) {
+            nu->PwrState = XHCI_SUSP_D3;
+            nu->PwrWanted = XHCI_SUSP_D0;
+        }
         made[i] = nu;
     }
     done = 0;
