@@ -1992,8 +1992,33 @@ static int hcd_shape_ok(const unsigned char *image, unsigned long bytes)
  * ID, a link's warm resets or give-up, refused notes, a flag - and the
  * counters only when nonzero.
  */
+/*
+ * The name of counter word i, or NULL. A function of its own, not inlined:
+ * MSVC 6.0 /O2 compiled the two-table lookup written inline in print_hcd's
+ * loop as an index into the second table off the FIRST table's base, so
+ * word 114 printed as the second table's entry 18 (task 36.35's legs, a
+ * host harness reproduced it).
+ */
+#pragma auto_inline(off)
+static const char *hcd_counter_name(unsigned long i)
+{
+    if (i < SNAP_HCD_COUNTER_WORDS) {
+        return hcd_counter_names[i];
+    }
+    if (i >= SNAP_HCD_SUSP_AT && i - SNAP_HCD_SUSP_AT < SNAP_HCD_SUSP_WORDS) {
+        return hcd_susp_counter_names[i - SNAP_HCD_SUSP_AT];
+    }
+    if (i >= SNAP_HCD_SSUSP_AT &&
+        i - SNAP_HCD_SSUSP_AT < SNAP_HCD_SSUSP_WORDS) {
+        return hcd_ssusp_counter_names[i - SNAP_HCD_SSUSP_AT];
+    }
+    return NULL;
+}
+#pragma auto_inline(on)
+
 static void print_hcd(const unsigned char *image, unsigned long bytes)
 {
+    const char *name;
     static const char *const cause_short[8] = {
         "none", "reset", "no slot", "Address Device", "device descriptor",
         "configuration", "PDO", "speed (no EP0 size)"
@@ -2079,16 +2104,9 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
         if (v == 0) {
             continue;
         }
-        if (i < SNAP_HCD_COUNTER_WORDS) {
-            comp("  %-26s %lu\n", hcd_counter_names[i], v);
-        } else if (i >= SNAP_HCD_SUSP_AT &&
-                   i < SNAP_HCD_SUSP_AT + SNAP_HCD_SUSP_WORDS) {
-            comp("  %-26s %lu\n", hcd_susp_counter_names[i - SNAP_HCD_SUSP_AT],
-                 v);
-        } else if (i >= SNAP_HCD_SSUSP_AT &&
-                   i < SNAP_HCD_SSUSP_AT + SNAP_HCD_SSUSP_WORDS) {
-            comp("  %-26s %lu\n",
-                 hcd_ssusp_counter_names[i - SNAP_HCD_SSUSP_AT], v);
+        name = hcd_counter_name(i);
+        if (name != NULL) {
+            comp("  %-26s %lu\n", name, v);
         } else {
             comp("  counter %-18lu %lu\n", i, v);
         }

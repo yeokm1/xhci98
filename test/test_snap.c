@@ -45,6 +45,18 @@ static void test_header(void)
              "past the header reads 0");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_COUNTER_WORDS * sizeof(ULONG),
              sizeof(XHCIHC_COUNTERS), "the counters word for word");
+    /* Each appended block's first word, pinned (task 36.35: XHCISNAP named
+     * the selective suspend block 18 words off; the driver's layout was
+     * right, and this keeps it so): polling 63, MSI 96, selective suspend
+     * 114 to 141. */
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, IntrModeRead) / 4, 63,
+             "polling's block at word 63");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiRoutines) / 4, 96,
+             "MSI's block at word 96");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspSwitchRead) / 4, 114,
+             "selective suspend's block at word 114");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspNotesSuppressed) / 4, 141,
+             "selective suspend's last word at 141");
     CHECK_EQ(XhciSnapHcdWords(18), 273 + 18 * 16 + 160, "the E460's image");
     CHECK_EQ(XhciSnapHcdWords(0), 273 + 160,
              "no ports: a header and the counters");
