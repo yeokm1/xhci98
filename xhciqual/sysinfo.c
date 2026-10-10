@@ -348,23 +348,24 @@ static void take(const SMB_STRUCT *st, u8 type, SYSINFO *si)
  * So after the walk every identifier string in the table - Type 1 serial
  * and SKU, Type 2 and 3 serial and asset tag, Type 4 serial, asset tag and
  * part number, Type 17 serial, asset tag and part number - is fetched into
- * a local and every string the header would print is compared with it:
- * equal, containing it, or (for an identifier under 4 characters)
- * containing it as a whole word, and the field prints "(withheld)". Type
- * 1's UUID is compared as 32 hex digits in both byte orders, ignoring case
- * and separators. The identifier itself is never stored in SYSINFO.
+ * a local and every string the header would print is compared with it: a
+ * printed string containing it anywhere, ignoring case, prints
+ * "(withheld)". Type 1's UUID is compared as 32 hex digits in both byte
+ * orders, ignoring case and separators. The identifier itself is never
+ * stored in SYSINFO.
  *
- * Why a short identifier matches only as a word (review round 2, P1,
- * answered): firmware fills serials with "0", "1" or " ", and a plain
- * substring rule would withhold every BIOS date and version containing a
- * 0. A short serial printed as its own word ("Model A12") is caught; one
- * inside a longer run of letters and digits ("ModelA12x") is not an
- * identifier a reader can recover.
+ * **Except a firmware placeholder** (review round 3, P1; orchestrator
+ * decision, owner to confirm): a value the same on every unit identifies
+ * none, and matching it would withhold most of a header - a serial of "0"
+ * appears in every BIOS date. A placeholder is one character repeated
+ * ("0", "00000000", "FFFFFFFF", " ") or one of the stock phrases below;
+ * anything else of any length is matched as a substring.
  *
  * And when the walk cannot finish - a malformed structure, or a table
- * longer than SMB_TABLE_MAX - an identifier in the unread part could
- * match an earlier printed string, so every SMBIOS string is withheld
- * (review round 2, P1); the version, memory sums and the rest still print.
+ * longer than SMB_TABLE_MAX or 4096 structures - an identifier in the
+ * unread part could match an earlier printed string, so every SMBIOS
+ * string is withheld (review round 2, P1); the version, memory sums and
+ * the rest still print.
  */
 #define WITHHELD "(withheld)"
 
@@ -382,33 +383,69 @@ static const SMB_IDS id_fields[] = {
     { 17, 3, { 0x18, 0x19, 0x1A } }
 };
 
-/* A word's edge: the string's ends, a space, or bracketing punctuation.
- * Not '.', '/', '-' or ':', which join a version, date or part number into
- * one word ("1.0", "01/02/2026"). */
-static int is_edge(char c)
+static char lower(char c)
 {
-    return c == '\0' || c == ' ' || c == '(' || c == ')' || c == '[' ||
-           c == ']' || c == '{' || c == '}' || c == ',' || c == ';' ||
-           c == '"' || c == '\'' || c == '#' || c == '=';
+    return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
 }
 
-/* Does `shown` carry `id`: anywhere when id is 4 characters or more,
- * else as a whole word. */
-static int carries(const char *shown, const char *id)
+/* strstr, ignoring ASCII case. */
+static int contains_nocase(const char *hay, const char *needle)
 {
-    size_t n;
-    const char *p;
+    size_t i, n;
 
-    n = strlen(id);
+    n = strlen(needle);
     if (n == 0)
         return 0;
-    if (n >= 4)
-        return strstr(shown, id) != 0;
-    for (p = strstr(shown, id); p != 0; p = strstr(p + 1, id)) {
-        if ((p == shown || is_edge(p[-1])) && is_edge(p[n]))
+    for (; *hay != '\0'; hay++) {
+        for (i = 0; i < n && hay[i] != '\0' &&
+             lower(hay[i]) == lower(needle[i]); i++)
+            ;
+        if (i == n)
             return 1;
     }
     return 0;
+}
+
+/* Stock firmware fillers, compared ignoring case; a value CONTAINING one
+ * of the first group is a filler too ("Chassis Serial Number"). */
+static const char *const filler_part[] = {
+    "serial number", "o.e.m.", "filled by", "not specified",
+    "default string", "not available", "not applicable", "asset tag",
+    "no asset", "unknown", 0
+};
+static const char *const filler_whole[] = {
+    "none", "n/a", "na", "default", "oem", "sku", "123456789",
+    "1234567890", "0123456789", 0
+};
+
+static int is_placeholder(const char *id)
+{
+    const char *p;
+    int i;
+
+    for (p = id + 1; *p != '\0' && *p == id[0]; p++)
+        ;
+    if (*p == '\0')
+        return 1;                       /* one character repeated */
+    for (i = 0; filler_part[i] != 0; i++) {
+        if (contains_nocase(id, filler_part[i]))
+            return 1;
+    }
+    for (i = 0; filler_whole[i] != 0; i++) {
+        if (strlen(id) == strlen(filler_whole[i]) &&
+            contains_nocase(id, filler_whole[i]))
+            return 1;
+    }
+    return 0;
+}
+
+/* Does `shown` carry `id`: anywhere, ignoring case, unless id is a
+ * placeholder. */
+static int carries(const char *shown, const char *id)
+{
+    if (id[0] == '\0' || is_placeholder(id))
+        return 0;
+    return contains_nocase(shown, id);
 }
 
 /* Every printed SMBIOS string, for the scrubber and for withhold_all. */
@@ -837,8 +874,9 @@ void report_sysinfo(const SYSINFO *si, QPRINTF_FN pf)
             pf("         SMBIOS table malformed at offset %lu; the "
                "rest was not read\n", si->broken_at);
         else if (si->ids_unchecked)
-            pf("         SMBIOS table longer than %lu KB; the rest was "
-               "not read\n", SMB_TABLE_MAX >> 10);
+            pf("         SMBIOS table past this tool's limit (%lu KB or "
+               "4096 structures); the rest was not read\n",
+               SMB_TABLE_MAX >> 10);
         if (si->ids_unchecked)
             pf("         strings withheld: identifiers in the unread "
                "part could not be checked\n");

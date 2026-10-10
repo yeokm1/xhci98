@@ -916,8 +916,10 @@ static void test_aliasing2(void)
     /* SMBIOS 2.6 text order: 5A5A5A5A-3412-2143-8765-0123456789AB */
     static const char *u1[] = { "Maker", "{5a5a5a5a-3412-2143-8765-0123456789ab}",
                                 "5A5A5A5A12344321876501234567 89AB", 0 };
-    static const char *s1[] = { "Maker", "Model A12", "ModelA12x", "A12",
+    static const char *s1[] = { "S/N:A12", "Serial-a12", "ModelA12x", "A12",
                                 0 };
+    static const char *f1[] = { "Maker", "System Serial Number", "1.0",
+                                "System Serial Number", 0 };
     static const char *z1[] = { "Maker 0", "01/02/2026", "1.0", "0", 0 };
     static const char *s3[] = { "SER-T3-SECRET", 0 };
     static const char *p1[] = { "Maker", "Product SER-T3-SECRET", "v", 0 };
@@ -936,7 +938,7 @@ static void test_aliasing2(void)
     CHECK(strcmp(si.sys_version, "(withheld)") == 0,
           "uuid: raw-order text withheld");
 
-    /* A three-character serial: as a word withheld, inside a word not. */
+    /* A three-character serial (review round 3): anywhere, any case. */
     tlen = 0;
     memset(tab, 0, sizeof(tab));
     {
@@ -950,11 +952,15 @@ static void test_aliasing2(void)
     add(127, f, 4, 0);
     memset(&si, 0, sizeof(si));
     smb_parse_table(tab, tlen, 0, &si);
-    CHECK(strcmp(si.sys_product, "(withheld)") == 0, "short serial as word");
-    CHECK(strcmp(si.sys_version, "ModelA12x") == 0,
-          "short serial inside a word: kept");
+    CHECK(strcmp(si.sys_mfr, "(withheld)") == 0, "short serial after ':'");
+    CHECK(strcmp(si.sys_product, "(withheld)") == 0,
+          "short serial after '-', other case");
+    CHECK(strcmp(si.sys_version, "(withheld)") == 0,
+          "short serial inside a word");
     render(&si);
-    CHECK(!has("Model A12"), "short serial: not printed");
+    CHECK(!has("A12") && !has("a12"), "short serial: not printed");
+    render_short(&si);
+    CHECK(!has("A12") && !has("a12"), "short serial: not in the short lines");
 
     /* A one-character placeholder serial "0" does not eat dates. */
     tlen = 0;
@@ -970,9 +976,26 @@ static void test_aliasing2(void)
     add(127, f, 4, 0);
     memset(&si, 0, sizeof(si));
     smb_parse_table(tab, tlen, 0, &si);
-    CHECK(strcmp(si.sys_mfr, "(withheld)") == 0, "\"0\" as a word: withheld");
-    CHECK(strcmp(si.sys_product, "01/02/2026") == 0 &&
-          strcmp(si.sys_version, "1.0") == 0, "\"0\" inside words: kept");
+    CHECK(strcmp(si.sys_mfr, "Maker 0") == 0 &&
+          strcmp(si.sys_product, "01/02/2026") == 0 &&
+          strcmp(si.sys_version, "1.0") == 0, "placeholder \"0\": all kept");
+
+    /* A stock filler as the serial does not withhold the same filler. */
+    tlen = 0;
+    memset(tab, 0, sizeof(tab));
+    {
+        u8 g[0x40];
+        memset(g, 0, sizeof(g));
+        put8(g, 0x04, 1); put8(g, 0x05, 2); put8(g, 0x06, 3);
+        put8(g, 0x07, 4);
+        add(1, g, 0x1B, f1);
+    }
+    memset(f, 0, sizeof(f));
+    add(127, f, 4, 0);
+    memset(&si, 0, sizeof(si));
+    smb_parse_table(tab, tlen, 0, &si);
+    CHECK(strcmp(si.sys_product, "System Serial Number") == 0,
+          "filler serial: kept");
 
     /* A cross-structure alias whose identifier sits in a structure the
      * walk cannot finish: everything SMBIOS is withheld. */
@@ -1014,9 +1037,32 @@ static void test_aliasing2(void)
               strcmp(si.sys_mfr, "(withheld)") == 0, "capped walk: withheld");
         si.smb_state = SMB_OK;
         render(&si);
-        CHECK(has("SMBIOS table longer than 64 KB"), "capped: said so");
+        CHECK(has("SMBIOS table past this tool's limit (64 KB or 4096"),
+              "capped: said so");
         check_no_secrets("capped");
     }
+}
+
+/* Review round 3, P3: the 4096-structure limit, well under 64 KB. */
+static void test_struct_limit(void)
+{
+    static u8 t[4097 * 6];
+    SYSINFO si;
+    u32 o;
+
+    memset(t, 0, sizeof(t));
+    for (o = 0; o < sizeof(t); o += 6) {
+        t[o] = 126;
+        t[o + 1] = 4;
+    }
+    memset(&si, 0, sizeof(si));
+    smb_parse_table(at_guard(t, sizeof(t)), sizeof(t), 0, &si);
+    CHECK(si.nstructs == 4096 && !si.broken && si.ids_unchecked,
+          "4097 structures: stopped at 4096, incomplete");
+    si.smb_state = SMB_OK;
+    render(&si);
+    CHECK(has("past this tool's limit (64 KB or 4096 structures)"),
+          "structure limit: said so");
 }
 
 /* --no-sysinfo (owner, 2026-10-10): one line, nothing else, even over a
@@ -1057,6 +1103,7 @@ int main(void)
     test_aliasing();
     test_aliasing2();
     test_skip();
+    test_struct_limit();
     test_ep_order();
     test_valid_2x();
     test_valid_30();
