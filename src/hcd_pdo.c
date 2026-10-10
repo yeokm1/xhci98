@@ -1824,7 +1824,9 @@ ULONG HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     PHCD_DEVICE_PDO pdo;
     PHCD_DEVICE_PDO next;
     PHCD_DEVICE_PDO doomed;
-    HCD_SUSP_SETTLE settle[XHCI_FUNC_MAX];
+    /* A split device's chain is its composite parent (task 36.43) and up
+     * to XHCI_FUNC_MAX functions. */
+    HCD_SUSP_SETTLE settle[XHCI_FUNC_MAX + 1];
     KIRQL oldIrql;
     ULONG settles;
     ULONG waits;
@@ -1851,7 +1853,7 @@ ULONG HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         next = pdo->Sibling;
         /* Selective suspend's slot settled at the unlink, never at a
          * REMOVE (design record 14 section 4.4). */
-        if (settles < XHCI_FUNC_MAX &&
+        if (settles < XHCI_FUNC_MAX + 1 &&
             HcdSuspUnlinkLocked(hc, pdo, &settle[settles])) {
             settles++;
         }
@@ -2318,6 +2320,7 @@ ULONG HcdDevicePdoRepresentFunctions(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     XHCI_FUNC_SET set;
     PHCD_DEVICE_PDO olds[XHCI_FUNC_MAX];
     PHCD_DEVICE_PDO made[XHCI_FUNC_MAX];
+    HCD_SUSP_SETTLE settle[XHCI_FUNC_MAX];
     PHCD_DEVICE_PDO parent;
     PHCD_DEVICE_PDO prev;
     PHCD_DEVICE_PDO pdo;
@@ -2325,6 +2328,7 @@ ULONG HcdDevicePdoRepresentFunctions(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     NTSTATUS status;
     KIRQL oldIrql;
     ULONG xportFlags;
+    ULONG settles;
     ULONG done;
     ULONG n;
     ULONG i;
@@ -2386,6 +2390,7 @@ ULONG HcdDevicePdoRepresentFunctions(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         made[i] = nu;
     }
     done = 0;
+    settles = 0;
     KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
     for (i = 0; i < n; i++) {
         nu = made[i];
@@ -2398,6 +2403,13 @@ ULONG HcdDevicePdoRepresentFunctions(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         }
         if (prev->Sibling != pdo) {
             continue;
+        }
+        /* Off the chain, so selective suspend's slot is settled now, as
+         * HcdDevicePdoGone settles it (design record 14 section 4.4); the
+         * old PDO had its REMOVE, so normally nothing is owed. */
+        if (settles < XHCI_FUNC_MAX &&
+            HcdSuspUnlinkLocked(hc, pdo, &settle[settles])) {
+            settles++;
         }
         nu->Sibling = pdo->Sibling;
         prev->Sibling = nu;
@@ -2421,6 +2433,9 @@ ULONG HcdDevicePdoRepresentFunctions(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         done++;
     }
     KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    for (i = 0; i < settles; i++) {
+        HcdSuspUnlinkFinish(&settle[i]);
+    }
     for (i = 0; i < n; i++) {
         if (made[i] != NULL) {
             hcdDeletePdo(made[i]);

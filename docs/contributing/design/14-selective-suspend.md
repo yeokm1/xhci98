@@ -684,8 +684,12 @@ lock first, then takes the controller lock to mark.
 
 ### 4.3 Composite (record 13 section 10.9)
 
-A function's Dx completes at once while any sibling's `PwrState` is D0. The
-last function to leave D0 has its D-IRP pended; the thread suspends and
+The functions are the function PDOs under the device's composite parent
+(record 13 section 10.12, task 36.43): the parent heads the chain, carries
+no client and stays D0, and is no voter here or in 6.2 - every walk that
+reads the functions' states skips it, and the chain cap counts functions
+only. A function's Dx completes at once while any sibling function's
+`PwrState` is D0. The last function to leave D0 has its D-IRP pended; the thread suspends and
 completes it when the machine ends (any outcome). A function's D0 is pended
 unless the link is ACTIVE; the thread resumes and completes every pended D0
 of the device at ACTIVE. A D0 arriving during SUSPENDING waits for it to end,
@@ -857,9 +861,14 @@ once (5.4 reconciles wake). D0 never completes before ACTIVE, except on GONE
 
 A USB 2.0 device that is not a hub, at any depth - on a root port or behind
 any number of hubs, a USB 3 hub's USB 2.0 half included - whose
-configuration sets bmAttributes bit 5. Hub PDOs (task 33.4) are excluded
-from capabilities, WAIT_WAKE, idle callbacks and suspend requests, so every
-ancestor stays active; the devices behind them are not excluded.
+configuration sets bmAttributes bit 5. Hub PDOs (task 33.4) and
+composite-parent PDOs (task 36.43) are excluded from capabilities,
+WAIT_WAKE, idle callbacks and suspend requests, so every ancestor stays
+active; the devices behind them, and a composite parent's functions, are
+not excluded. A composite parent's D-IRPs are recorded and completed at
+once; nothing above its FDO asks one, so its devnode reads D0 while its
+device is suspended (the batches stay the bus's - orchestrator decision,
+owner to confirm).
 
 ### 5.2 Capabilities
 
@@ -935,8 +944,10 @@ bounded, deferring rundown of 4.4.
 
 ### 6.2 Batches (composite readiness, as the composite parent does)
 
-The thread forms a **batch** for a device when every started function PDO of
-its group holds an idle IRP and has `PwrState` D0: it increments the
+The thread forms a **batch** for a device when every started function PDO
+under the device's composite parent (record 13 section 10.12; the parent
+itself is skipped) - or the device's one PDO when it is not split - holds
+an idle IRP and has `PwrState` D0: it increments the
 device's `IdleBatch` and writes the new number into **each PDO's**
 `IdleBatchCur` and each entry's `Batch` (controller lock), then queues the
 entries. A claim (6.3) compares the entry's `Batch` with its own PDO's

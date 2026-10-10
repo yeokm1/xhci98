@@ -136,7 +136,11 @@ static PHCD_DEVICE_PDO hcdSuspPdo(PDEVICE_OBJECT object)
                             : NULL;
 }
 
-/* The PDOs on the device's chain (the thread is its writer). */
+/* The function PDOs on the device's chain (the thread is its writer). A
+ * composite parent (task 36.43; design record 13 section 10.12) heads a
+ * split device's chain and is no voter: it carries no client, so nothing
+ * moves its D-state from D0, and the device's link follows its children
+ * alone. Every walk that votes skips it. */
 static ULONG hcdSuspChainLength(PHCD_USB_DEVICE dev)
 {
     PHCD_DEVICE_PDO pdo;
@@ -144,7 +148,9 @@ static ULONG hcdSuspChainLength(PHCD_USB_DEVICE dev)
 
     n = 0;
     for (pdo = hcdSuspPdo(dev->Pdo); pdo != NULL; pdo = pdo->Sibling) {
-        n++;
+        if (!pdo->Composite) {
+            n++;
+        }
     }
     return n;
 }
@@ -177,8 +183,9 @@ static ULONG hcdSuspServes(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
                             0);
 }
 
-/* The device's PDOs into funcs[] (at most HCD_SUSP_MAX_FUNCS), and their
- * count. Controller lock held. */
+/* The device's function PDOs into funcs[] (at most HCD_SUSP_MAX_FUNCS),
+ * pdos[] aligned with it, and their count; a composite parent is skipped
+ * (hcdSuspChainLength). Controller lock held. */
 static ULONG hcdSuspRead(PHCD_USB_DEVICE dev, PHCD_DEVICE_PDO *pdos,
                          PXHCI_SUSP_FUNC funcs)
 {
@@ -188,6 +195,9 @@ static ULONG hcdSuspRead(PHCD_USB_DEVICE dev, PHCD_DEVICE_PDO *pdos,
     n = 0;
     for (pdo = hcdSuspPdo(dev->Pdo); pdo != NULL && n < HCD_SUSP_MAX_FUNCS;
          pdo = pdo->Sibling) {
+        if (pdo->Composite) {
+            continue;
+        }
         pdos[n] = pdo;
         funcs[n].PwrState = pdo->PwrState;
         funcs[n].PwrWanted = pdo->PwrWanted;
@@ -573,6 +583,9 @@ static ULONG hcdSuspIdleBatchLocked(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     n = 0;
     for (pdo = hcdSuspPdo(dev->Pdo); pdo != NULL && n < HCD_SUSP_MAX_FUNCS;
          pdo = pdo->Sibling) {
+        if (pdo->Composite) {
+            continue;
+        }
         f[n].Started = pdo->PwrStarted;
         f[n].Closed = pdo->PwrClosed;
         f[n].IdleState = pdo->IdleState;
@@ -590,7 +603,7 @@ static ULONG hcdSuspIdleBatchLocked(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         dev->IdleBatch = 1;
     }
     for (pdo = hcdSuspPdo(dev->Pdo); pdo != NULL; pdo = pdo->Sibling) {
-        if (!pdo->PwrStarted || pdo->PwrClosed) {
+        if (pdo->Composite || !pdo->PwrStarted || pdo->PwrClosed) {
             continue;
         }
         pdo->IdleState = XHCI_SUSP_IDLE_QUEUED;
@@ -1449,12 +1462,15 @@ static ULONG hcdSuspRemoteWake(PHCD_DEVICE_PDO pdo)
             (pdo->Config[7] & 0x20) != 0) ? 1UL : 0UL;
 }
 
-/* Whether a PDO is stage A's, its controller's switch on (5.1). */
+/* Whether a PDO is stage A's, its controller's switch on (5.1). A hub PDO
+ * and a composite parent never are: the parent keeps today's capabilities,
+ * its WAIT_WAKE is refused and its D-IRPs are recorded and completed at
+ * once (task 36.43). */
 static ULONG hcdSuspPdoEligible(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
 {
     ULONG cls;
 
-    if (hc == NULL || !hc->SuspOn || pdo->Hub) {
+    if (hc == NULL || !hc->SuspOn || pdo->Hub || pdo->Composite) {
         return 0;
     }
     cls = pdo->SpeedClass;
@@ -1470,7 +1486,7 @@ static ULONG hcdSuspPdoWasEligible(PHCD_DEVICE_PDO pdo)
 {
     ULONG cls;
 
-    if (!pdo->PwrSwitch || pdo->Hub) {
+    if (!pdo->PwrSwitch || pdo->Hub || pdo->Composite) {
         return 0;
     }
     cls = pdo->SpeedClass;
@@ -1486,14 +1502,15 @@ static ULONG hcdSuspWakeOff9x(VOID)
     return 0;
 }
 
-/* Another PDO of the device has PwrState D0 (4.3). PdoListLock and the
- * controller lock held. */
+/* Another function PDO of the device has PwrState D0 (4.3); a composite
+ * parent, D0 for ever, is not one. PdoListLock and the controller lock
+ * held. */
 static ULONG hcdSuspSiblingD0(PHCD_USB_DEVICE dev, PHCD_DEVICE_PDO self)
 {
     PHCD_DEVICE_PDO pdo;
 
     for (pdo = hcdSuspPdo(dev->Pdo); pdo != NULL; pdo = pdo->Sibling) {
-        if (pdo != self && pdo->PwrState == XHCI_SUSP_D0) {
+        if (pdo != self && !pdo->Composite && pdo->PwrState == XHCI_SUSP_D0) {
             return 1;
         }
     }

@@ -2061,6 +2061,56 @@ static void test_episode_interleavings(void)
              XHCI_SUSP_ST_CANCELLED, "HELD, system to S3");
 }
 
+/* 36.43 at the merge with stage A (design record 14 sections 4.3, 6.2;
+ * record 13 section 10.12): a split device's chain is headed by its
+ * composite parent, which carries no client and stays D0 with no idle IRP.
+ * The executor's walks (hcd_susp.c: hcdSuspRead, hcdSuspIdleBatchLocked,
+ * hcdSuspSiblingD0) skip it; these are the decisions it would otherwise
+ * block for ever. */
+static void test_composite_parent_not_voter(void)
+{
+    XHCI_SUSP_LINK link;
+    XHCI_SUSP_FUNC f[3];
+    XHCI_SUSP_DECISION d;
+    XHCI_SUSP_IDLE_FUNC idle[3];
+    ULONG i;
+
+    XhciSuspLinkInit(&link, 1, 7);
+    /* The functions alone: the last Dx pended, the device suspends. */
+    func_init(&f[0], D2);
+    func_init(&f[1], D2);
+    f[1].DxPended = 1;
+    f[1].DxEpoch = 1;
+    CHECK_EQ(XhciSuspDecide(&link, f, 2, 1, 0, &d), XHCI_SUSP_DO_SUSPEND,
+             "functions only: the last Dx suspends");
+    /* The parent's permanent D0 counted as a sibling: never suspends. */
+    func_init(&f[0], D0);
+    func_init(&f[1], D2);
+    func_init(&f[2], D2);
+    f[2].DxPended = 1;
+    f[2].DxEpoch = 1;
+    CHECK_EQ(XhciSuspDecide(&link, f, 3, 1, 0, &d), XHCI_SUSP_DO_NONE,
+             "a parent counted would hold the device for ever");
+    CHECK_EQ(f[2].CompleteDx, 1, "and the last Dx would complete at once");
+    /* A chain of the parent alone (functions not presented yet). */
+    CHECK_EQ(XhciSuspDecide(&link, f, 0, 1, 0, &d), XHCI_SUSP_DO_NONE,
+             "a parent alone: no functions, nothing");
+
+    /* The idle batch: both functions holding idle IRPs at D0 is ready;
+     * a started parent with no idle IRP counted would never be. */
+    for (i = 0; i < 3; i++) {
+        idle[i].Started = 1;
+        idle[i].Closed = 0;
+        idle[i].IdleState = XHCI_SUSP_IDLE_HELD;
+        idle[i].PwrState = D0;
+    }
+    CHECK_EQ(XhciSuspIdleBatchReady(idle, 2, XHCI_SUSP_ACTIVE, 1), 1,
+             "functions only: a batch");
+    idle[2].IdleState = XHCI_SUSP_IDLE_NONE;
+    CHECK_EQ(XhciSuspIdleBatchReady(idle, 3, XHCI_SUSP_ACTIVE, 1), 0,
+             "a parent counted: no batch ever");
+}
+
 /* 36.45 at the merge with stage A (design record 13 section 8.11): the
  * door forwards a descriptor request only to an ACTIVE link. */
 static void test_door_serves(void)
@@ -2107,6 +2157,7 @@ int main(void)
     test_finalize();
     test_episode_interleavings();
     test_door_serves();
+    test_composite_parent_not_voter();
 
     printf("test_susp: %d checks, %d failures\n", checks, failures);
     return failures != 0;
