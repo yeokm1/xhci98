@@ -1517,6 +1517,7 @@ typedef struct _HCD_CONTROLLER {
      * joined by the stop. Initialized by each start. */
     KSPIN_LOCK SuspDoneLock;
     LIST_ENTRY SuspDoneList;
+    LIST_ENTRY SuspDonePending;     /* claimed IRPs awaiting their thread */
     /* The transfer size (tasks 36.21 and 36.22; xhci_xstat.h, hcd_io.c):
      * the readings since the start, zeroed and the value latched by each
      * start (hcd_ctl.c), and the class drivers' records (hcd_urb.c), kept
@@ -2119,6 +2120,7 @@ ULONG HcdSuspUnlinkLocked(PHCD_CONTROLLER hc, struct _HCD_DEVICE_PDO *pdo,
                           PHCD_SUSP_SETTLE out);
 VOID HcdSuspUnlinkFinish(PHCD_CONTROLLER hc, PHCD_SUSP_SETTLE s);
 VOID HcdSuspDoneDrain(PHCD_CONTROLLER hc);
+ULONG HcdSuspDoneLaunch(PHCD_CONTROLLER hc);
 VOID HcdSuspControllerDownLocked(PHCD_CONTROLLER hc);
 VOID HcdSuspControllerUp(PHCD_CONTROLLER hc);
 VOID HcdSuspSettleStale(PHCD_CONTROLLER hc);

@@ -2039,6 +2039,10 @@ static VOID NTAPI hcdThread(PVOID Context)
                                hc->Common.DevicePower == PowerDeviceD0 &&
                                !hc->SuspendedInD0);
         HcdPowerGateLeave(hc);
+        /* Selective suspend's claimed IRPs each given a completion thread
+         * of their own, from this system thread and outside the gate
+         * (hcd_susp.c). */
+        (VOID)HcdSuspDoneLaunch(hc);
         /* The continuous sink (26-A.8): whatever the producers recorded
          * since the last wake, emitted here at PASSIVE_LEVEL and nowhere
          * nearer a DPC. */

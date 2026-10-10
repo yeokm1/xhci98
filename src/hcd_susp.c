@@ -333,9 +333,9 @@ static VOID hcdSuspTake(PHCD_SUSP_TAKEN t, PHCD_DEVICE_PDO pdo, PIRP irp,
  * callback thread's join. Exited ones are reaped at the next hand-off.
  * The IRP keeps its PowerPending or IdlePending count until its
  * completion has returned, which the PDO's REMOVE and rundown wait for.
- * Should the context or the thread not be had, the completion is made
- *inline as before, traced - the wedge's old shape, for
- * an out-of-resources moment only.
+ * The threads are created by the enum thread (a system thread) outside
+ * the gate, and a context or thread not had leaves the IRP pending for a
+ * retry (HcdSuspDoneLaunch).
  */
 #define HCD_SUSP_DONE_POWER     1UL     /* a D-IRP; the value its D0 flag */
 #define HCD_SUSP_DONE_WAKE      2UL
@@ -348,6 +348,7 @@ typedef struct _HCD_SUSP_DONE {
     ULONG Kind;
     ULONG_PTR Value;
     PVOID ThreadObject;         /* NT: referenced; 9x: NULL             */
+    HANDLE Handle;              /* NT, while the reference is still owed */
     volatile LONG Exited;       /* set just before PsTerminateSystemThread */
 } HCD_SUSP_DONE, *PHCD_SUSP_DONE;
 
@@ -386,6 +387,22 @@ static ULONG hcdSuspDoneJoin(PHCD_SUSP_DONE d, ULONG wait)
     LARGE_INTEGER zero;
     LARGE_INTEGER due;
 
+    /* NT, the reference still owed: retried until had - never the 9x flag
+     * on NT (Codex review of the fix, round 4, finding 3). */
+    while (d->Handle != NULL) {
+        if (NT_SUCCESS(ObReferenceObjectByHandle(d->Handle, THREAD_ALL_ACCESS,
+                                                 NULL, KernelMode,
+                                                 &d->ThreadObject, NULL))) {
+            (VOID)ZwClose(d->Handle);
+            d->Handle = NULL;
+            break;
+        }
+        if (!wait) {
+            return 0;
+        }
+        HcdRelativeMs(&due, 10);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
     if (d->ThreadObject != NULL) {
         zero.QuadPart = 0;
         while (KeWaitForSingleObject(d->ThreadObject, Executive, KernelMode,
@@ -444,58 +461,111 @@ static VOID hcdSuspDoneReap(PHCD_CONTROLLER hc, ULONG wait)
     }
 }
 
-/* A claimed IRP handed to a completion thread of its own. IRQL:
- * PASSIVE_LEVEL (the thread's pass, the power path, the unlink). */
+/*
+ * A claimed IRP handed over for completion: queued on the controller's
+ * pending list through its own storage (Tail.Overlay.ListEntry; the kind,
+ * value and PDO in DriverContext), so the hand-off itself needs nothing
+ * and cannot fail, and the enum thread is woken. The threads are created
+ * by the enum thread, a system thread, outside the power gate
+ * (HcdSuspDoneLaunch) - never in a power dispatch's arbitrary process
+ * context (Codex review of the fix, round 4, finding 2) - and by the stop
+ * once that thread has gone. IRQL: <= DISPATCH_LEVEL.
+ */
 static VOID hcdSuspDefer(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo, PIRP irp,
                          ULONG kind, ULONG_PTR value)
 {
+    KIRQL oldIrql;
+
+    irp->Tail.Overlay.DriverContext[0] = (PVOID)(ULONG_PTR)kind;
+    irp->Tail.Overlay.DriverContext[1] = (PVOID)value;
+    irp->Tail.Overlay.DriverContext[2] = pdo;
+    KeAcquireSpinLock(&hc->SuspDoneLock, &oldIrql);
+    InsertTailList(&hc->SuspDonePending, &irp->Tail.Overlay.ListEntry);
+    KeReleaseSpinLock(&hc->SuspDoneLock, oldIrql);
+    HcdThreadWake(hc);
+}
+
+/*
+ * Each pending IRP given its completion thread. A context or a thread not
+ * had now leaves the IRP pending, owned and counted, for the next call -
+ * never a completion made here (round 4, finding 1). Returns whether IRPs
+ * are still pending. The enum thread after each pass, outside the power
+ * gate; the stop once that thread has gone. IRQL: PASSIVE_LEVEL, a system
+ * thread.
+ */
+ULONG HcdSuspDoneLaunch(PHCD_CONTROLLER hc)
+{
     PHCD_SUSP_DONE d;
+    PLIST_ENTRY entry;
     HANDLE handle;
     KIRQL oldIrql;
     NTSTATUS status;
+    PIRP irp;
     PUCHAR p;
     ULONG i;
 
-    hcdSuspDoneReap(hc, 0);
-    d = (PHCD_SUSP_DONE)HcdPoolAlloc(sizeof(HCD_SUSP_DONE));
-    if (d != NULL) {
-        p = (PUCHAR)d;
-        for (i = 0; i < sizeof(HCD_SUSP_DONE); i++) {
-            p[i] = 0;
-        }
-        d->Irp = irp;
-        d->Pdo = pdo;
-        d->Kind = kind;
-        d->Value = value;
-        status = PsCreateSystemThread(&handle, THREAD_ALL_ACCESS, NULL, NULL,
-                                      NULL, hcdSuspDoneThread, d);
-        if (NT_SUCCESS(status)) {
-            if (IoIsWdmVersionAvailable(1, 0x10) &&
-                !NT_SUCCESS(ObReferenceObjectByHandle(handle,
-                                                      THREAD_ALL_ACCESS,
-                                                      NULL, KernelMode,
-                                                      &d->ThreadObject,
-                                                      NULL))) {
-                /* Joined by its flag instead (the 9x way). */
-                d->ThreadObject = NULL;
-            }
-            (VOID)ZwClose(handle);
-            KeAcquireSpinLock(&hc->SuspDoneLock, &oldIrql);
-            InsertTailList(&hc->SuspDoneList, &d->Link);
-            KeReleaseSpinLock(&hc->SuspDoneLock, oldIrql);
-            return;
-        }
-        HcdPoolFree(d);
+    if (hc->SuspDonePending.Flink == NULL) {
+        return 0;               /* never initialized: no start ran */
     }
-    XHCI_DBG_VALUE("hcd: completion thread not had, inline, kind", kind);
-    {
-        HCD_SUSP_DONE inl;
-
-        inl.Irp = irp;
-        inl.Pdo = pdo;
-        inl.Kind = kind;
-        inl.Value = value;
-        hcdSuspDoneComplete(&inl);
+    hcdSuspDoneReap(hc, 0);
+    for (;;) {
+        KeAcquireSpinLock(&hc->SuspDoneLock, &oldIrql);
+        if (IsListEmpty(&hc->SuspDonePending)) {
+            KeReleaseSpinLock(&hc->SuspDoneLock, oldIrql);
+            return 0;
+        }
+        entry = RemoveHeadList(&hc->SuspDonePending);
+        KeReleaseSpinLock(&hc->SuspDoneLock, oldIrql);
+        irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
+        d = (PHCD_SUSP_DONE)HcdPoolAlloc(sizeof(HCD_SUSP_DONE));
+        status = STATUS_INSUFFICIENT_RESOURCES;
+        if (d != NULL) {
+            p = (PUCHAR)d;
+            for (i = 0; i < sizeof(HCD_SUSP_DONE); i++) {
+                p[i] = 0;
+            }
+            d->Irp = irp;
+            d->Kind = (ULONG)(ULONG_PTR)irp->Tail.Overlay.DriverContext[0];
+            d->Value = (ULONG_PTR)irp->Tail.Overlay.DriverContext[1];
+            d->Pdo = (PHCD_DEVICE_PDO)irp->Tail.Overlay.DriverContext[2];
+            irp->Tail.Overlay.DriverContext[0] = NULL;
+            irp->Tail.Overlay.DriverContext[1] = NULL;
+            irp->Tail.Overlay.DriverContext[2] = NULL;
+            status = PsCreateSystemThread(&handle, THREAD_ALL_ACCESS, NULL,
+                                          NULL, NULL, hcdSuspDoneThread, d);
+        }
+        if (!NT_SUCCESS(status)) {
+            if (d != NULL) {
+                irp->Tail.Overlay.DriverContext[0] = (PVOID)(ULONG_PTR)d->Kind;
+                irp->Tail.Overlay.DriverContext[1] = (PVOID)d->Value;
+                irp->Tail.Overlay.DriverContext[2] = d->Pdo;
+                HcdPoolFree(d);
+            }
+            KeAcquireSpinLock(&hc->SuspDoneLock, &oldIrql);
+            InsertHeadList(&hc->SuspDonePending, &irp->Tail.Overlay.ListEntry);
+            KeReleaseSpinLock(&hc->SuspDoneLock, oldIrql);
+            XHCI_DBG_VALUE("hcd: completion thread not had, retried, status",
+                           (ULONG)status);
+            return 1;
+        }
+        if (IoIsWdmVersionAvailable(1, 0x10)) {
+            if (NT_SUCCESS(ObReferenceObjectByHandle(handle,
+                                                     THREAD_ALL_ACCESS, NULL,
+                                                     KernelMode,
+                                                     &d->ThreadObject,
+                                                     NULL))) {
+                (VOID)ZwClose(handle);
+            } else {
+                /* Kept, its reference retried at the join. */
+                d->ThreadObject = NULL;
+                d->Handle = handle;
+            }
+        } else {
+            (VOID)ZwClose(handle);
+        }
+        KeAcquireSpinLock(&hc->SuspDoneLock, &oldIrql);
+        InsertTailList(&hc->SuspDoneList, &d->Link);
+        KeReleaseSpinLock(&hc->SuspDoneLock, oldIrql);
     }
 }
 
@@ -2212,8 +2282,17 @@ VOID HcdSuspUnlinkFinish(PHCD_CONTROLLER hc, PHCD_SUSP_SETTLE s)
  * IRQL: PASSIVE_LEVEL. */
 VOID HcdSuspDoneDrain(PHCD_CONTROLLER hc)
 {
+    LARGE_INTEGER due;
+
     if (hc->SuspDoneList.Flink == NULL) {
         return;                 /* never initialized: no start ran */
+    }
+    /* What the enum thread left pending, launched here (the stop runs in
+     * the PnP manager's system thread), retried until every one has its
+     * thread; then every thread joined. */
+    while (HcdSuspDoneLaunch(hc)) {
+        HcdRelativeMs(&due, 10);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
     }
     hcdSuspDoneReap(hc, 1);
 }
@@ -2893,6 +2972,7 @@ NTSTATUS HcdSuspCbStart(PHCD_CONTROLLER hc)
      * them (HcdSuspDoneDrain). */
     KeInitializeSpinLock(&hc->SuspDoneLock);
     InitializeListHead(&hc->SuspDoneList);
+    InitializeListHead(&hc->SuspDonePending);
     if (!hc->SuspOn) {
         return STATUS_SUCCESS;
     }
