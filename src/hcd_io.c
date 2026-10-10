@@ -280,15 +280,19 @@ static VOID hcdWideClaim(PHCD_CONTROLLER hc, PHCD_XFER x)
 }
 
 /* The entry back: its first mapping did not promote, or the URB ended.
- * Controller lock held. */
+ * Only an entry of this start's pool counts against InUse: one of a pool
+ * a fail-closed stop kept (HcdDmaWideClose) is not this start's (review
+ * round 4). Controller lock held. */
 static VOID hcdWideRelease(PHCD_CONTROLLER hc, PHCD_XFER x)
 {
     if (x->Wide != NULL) {
-        x->Wide->Owner = NULL;
-        x->Wide = NULL;
-        if (hc->Xpipe.InUse != 0) {
+        if (hc->WidePool != NULL && x->Wide >= hc->WidePool &&
+            x->Wide < hc->WidePool + HCD_WIDE_ENTRIES &&
+            hc->Xpipe.InUse != 0) {
             hc->Xpipe.InUse--;
         }
+        x->Wide->Owner = NULL;
+        x->Wide = NULL;
     }
 }
 
