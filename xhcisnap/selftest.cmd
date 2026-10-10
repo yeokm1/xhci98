@@ -342,6 +342,27 @@ for %%S in ("captured on - this machine" "    OS " "    CPU " "    RAM ") do (
         set FAILED=1
     )
 )
+rem -selftest-sysinfo honours the option on either side of it: the live
+rem block is skipped, the canned decodes still run.
+"%~dp0XHCISNAP.EXE" -selftest-sysinfo -nosysinfo > "%BASE%.sys-after.log"
+"%~dp0XHCISNAP.EXE" -nosysinfo -selftest-sysinfo > "%BASE%.sys-before.log"
+for %%F in ("%BASE%.sys-after.log" "%BASE%.sys-before.log") do (
+    findstr /C:"system details were skipped by -nosysinfo" %%F > nul
+    if errorlevel 1 (
+        echo FAIL: -selftest-sysinfo with -nosysinfo did not skip the block: %%F
+        set FAILED=1
+    )
+    findstr /C:"    RAM " %%F > nul
+    if not errorlevel 1 (
+        echo FAIL: -selftest-sysinfo with -nosysinfo still read the system: %%F
+        set FAILED=1
+    )
+    findstr /C:"build 2222 product 0 arch 65535: Windows 98 SE" %%F > nul
+    if errorlevel 1 (
+        echo FAIL: -selftest-sysinfo with -nosysinfo dropped the canned decodes: %%F
+        set FAILED=1
+    )
+)
 "%~dp0XHCISNAP.EXE" -nosysinfo > "%BASE%.sys-alone.log"
 if not "%errorlevel%"=="2" (
     echo FAIL: -nosysinfo on its own exited %errorlevel%, expected 2

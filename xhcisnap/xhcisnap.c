@@ -6281,9 +6281,11 @@ int main(int argc, char **argv)
     int force;
     int i;
     const char *selftestReport;
+    int doSelftestSysinfo;
 
     controller = 0;
     selftestReport = NULL;
+    doSelftestSysinfo = 0;
     base = "XHCISNAP";
     probeOnly = 0;
     doDump = 0;
@@ -6402,7 +6404,9 @@ int main(int argc, char **argv)
         } else if (strcmp(argv[i], "-selftest-xstat") == 0) {
             return selftest_xstat();
         } else if (strcmp(argv[i], "-selftest-sysinfo") == 0) {
-            return selftest_sysinfo();
+            /* Deferred like -selftest-report, so a -nosysinfo after it
+             * still counts (Codex review of 36.47, round 6). */
+            doSelftestSysinfo = 1;
         } else if (strcmp(argv[i], "-selftest-report") == 0 && i + 1 < argc) {
             /*
              * The report path on its own, with no device: open BASE.TXT, write
@@ -6489,8 +6493,12 @@ int main(int argc, char **argv)
      * same surprise the bare-invocation refusal above exists to prevent (the
      * 2026-09-16 audit's C4).
      */
-    /* -selftest-report is acted on once every argument is read, so that
-     * -nosysinfo beside it counts wherever it stands. */
+    /* -selftest-sysinfo and -selftest-report are acted on once every
+     * argument is read, so that -nosysinfo beside them counts wherever it
+     * stands. */
+    if (doSelftestSysinfo) {
+        return selftest_sysinfo();
+    }
     if (selftestReport != NULL) {
         return selftest_report(selftestReport);
     }
