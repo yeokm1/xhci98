@@ -1095,21 +1095,27 @@ static ULONG hcdSuspHubFailed(PHCD_CONTROLLER hc, PHCD_HUB hub)
     return XHCI_SUSP_RES_FAILED;
 }
 
+/* Stage B's window opened just before the U3 request when no arm request
+ * opened it (8.7): after the stale change is acknowledged, so nothing of an
+ * earlier suspension read meanwhile can be latched (Codex review of 36.38,
+ * round 2, finding 1). */
+static VOID hcdSuspFwOpenNow(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    KIRQL oldIrql;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    XhciSuspFwOpen(&dev->Susp);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
 /* The U3 request (3.4 (4)), its stale change acknowledged first. */
 static ULONG hcdSuspU3(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                        PHCD_PORT q)
 {
-    KIRQL oldIrql;
     ULONG portsc;
     ULONG status;
     ULONG change;
 
-    if (dev->Susp.Ss) {
-        /* 8.7: opened here if no arm request opened it. */
-        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-        XhciSuspFwOpen(&dev->Susp);
-        XhciControllerLockRelease(&hc->Hc, oldIrql);
-    }
     if (q->Hub != NULL && dev->Susp.Ss) {
         /* A SuperSpeed hub port (8.6): a stale C_PORT_LINK_STATE cleared,
          * then SetPortFeature(PORT_LINK_STATE) with U3 in wIndex 15:8. */
@@ -1121,6 +1127,7 @@ static ULONG hcdSuspU3(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                XHCI_SSHUB_FEAT_C_PORT_LINK_STATE)) {
             return hcdSuspHubFailed(hc, q->Hub);
         }
+        hcdSuspFwOpenNow(hc, dev);
         XhciSuspU3Issued(&dev->Susp);
         if (!HcdHubPortFeature(hc, q->Hub,
                                q->Number | (XHCI_SSHUB_LINK_U3 << 8), 1,
@@ -1139,6 +1146,9 @@ static ULONG hcdSuspU3(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             XhciWritePortsc(&hc->Hc, q->PortId,
                             XhciPortscClearChanges(portsc, XHCI_PORTSC_PLC));
             portsc = XhciReadPortsc(&hc->Hc, q->PortId);
+        }
+        if (dev->Susp.Ss) {
+            hcdSuspFwOpenNow(hc, dev);
         }
         XhciWritePortsc(&hc->Hc, q->PortId, XhciPortscSuspend(portsc));
         XhciSuspU3Issued(&dev->Susp);
@@ -1925,6 +1935,12 @@ VOID HcdSuspDeviceGone(PHCD_USB_DEVICE dev)
 {
     XhciSuspGone(&dev->Susp);
     dev->SuspWakeDue = 0;
+    /* What the closing window dropped is counted now: the device may be
+     * freed with no further pass (Codex review of 36.38, round 2, finding
+     * 2). The callers hold the controller lock. */
+    if (dev->Controller != NULL) {
+        hcdSuspFwDrain(dev->Controller, dev);
+    }
 }
 
 /* ------------------------------------------------------------------ */
