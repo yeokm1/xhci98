@@ -3051,6 +3051,11 @@ the safety notes spelled out.
                         has already switched it on, and switches nothing on
                         itself
       --no-active       another name for --probe-only
+      --gsi N           (also --gsi=N, N decimal 0-255) compare an Intel
+                        chipset's interrupt routing against N, the IRQ
+                        Device Manager shows for the controller under the
+                        system in question. Accepted only beside --quick or
+                        --probe-only; alone it is a usage error
 
   MODIFIERS - these say what to do with the report, not what to run.
   ON THEIR OWN THEY DO NOT MAKE THE RUN READ-ONLY. Any argument at all
@@ -3900,8 +3905,9 @@ A value that is absent means the default each one states.
   cannot be caught; if anything misbehaves, delete the value and restart.
   While 2 or 3 is set, ANY Low- or Full-Speed device on a root port that
   asks for 16 to 63 ms is polled faster too. Read when the controller
-  starts, so restart after changing it. Values 2 and 3 have been read on
-  no real controller and in no virtual machine yet.
+  starts, so restart after changing it. The faster rates of 2 and 3 have
+  been measured on no real controller and in no virtual machine; in
+  virtual machines 2 and 3 were read only ignoring value 4's codes.
 
   Set to 4, it does something else: the rate the client driver chooses.
   An interrupt endpoint whose polling interval in the configuration
@@ -3913,9 +3919,10 @@ A value that is absent means the default each one states.
   first and restart, then have hidusbf (or another filter) write 128, 129
   or 130. A device that itself asks for 128 to 130 ms is polled that fast
   too while it is 4; a code written while the value is not 4 means what
-  the number says (128 ms, or 4.096 s at High Speed and SuperSpeed). A
-  controller that refuses a code is caught and the device polled every
-  1 ms. Value 4's programming was read in virtual machines only.
+  the number says (128 ms, or 4.096 s at High Speed and SuperSpeed; 32 ms
+  instead where XhciIntervalCap applies). A controller that refuses a code
+  is caught and the device polled every 1 ms. Value 4's programming was
+  read in virtual machines only.
 
   XhciFirstEnumWaitMs, XhciFirstEnumPortMs  -  the first report's wait
   ....................................................................
@@ -4086,9 +4093,12 @@ A value that is absent means the default each one states.
   works; a controller with no interrupt pin, or whose line the driver sees
   raised and never delivered, is polled - the driver reads its events on a
   timer. On Vista and 7 a message-signalled interrupt is used where Windows
-  grants one. 1 asks for the line (a controller with none then fails to
-  start, Code 10, unless Vista or 7 grants it a message); 2 polls
-  always, at the cost of more processor wake-ups. Any other value is 0.
+  grants one. 1 asks for the line: on Vista and 7 a message Windows grants
+  anyway is still used, and one that cannot be connected is polled; a
+  controller with no line fails to start (Code 10) on 98 SE to XP, and on
+  32-bit Vista and 7 when no line is offered and xhcimsi.sys is not
+  running. 2 polls always, at the cost of more processor wake-ups. Any
+  other value is 0.
   Read when the controller starts: disable and enable it, or restart.
 
   While polling, XhciPollIdleMs (default 50, held to 5000; 0 is 50) is how
@@ -4490,6 +4500,11 @@ READ-ONLY MODES - these change nothing on the machine
                     controller's memory window only if the firmware has
                     already switched it on, and switches nothing on itself
   --no-active       another name for --probe-only
+  --gsi N           (also --gsi=N, N decimal 0-255) compare an Intel
+                    chipset's interrupt routing against N, the IRQ Device
+                    Manager shows for the controller under the system in
+                    question. Accepted only beside --quick or --probe-only;
+                    alone it is a usage error
 
 
 MODIFIERS - these say what to do with the report, not what to run
