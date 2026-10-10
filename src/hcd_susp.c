@@ -1412,6 +1412,13 @@ ULONG HcdSuspLinkActive(PHCD_USB_DEVICE dev)
     return dev->Susp.State == XHCI_SUSP_ACTIVE;
 }
 
+/* Whether the door forwards a descriptor request to the device (36.45;
+ * design record 13 section 8.11): its link ACTIVE. Thread only. */
+ULONG HcdSuspDoorServes(PHCD_USB_DEVICE dev)
+{
+    return XhciSuspDoorServes(dev->Susp.State);
+}
+
 /* Whether a slow IRP for the device waits (3.3): the link not ACTIVE -
  * SUSPENDED, or RECOVERING, whose device the cycle drops - and the request
  * not a host-side one. `abortOnly` the request is ABORT_PIPE. Thread

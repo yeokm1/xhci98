@@ -1973,6 +1973,16 @@ static VOID hcdDoorServeOne(PHCD_CONTROLLER hc, PIRP irp)
         hcdDoorFinish(irp, STATUS_DEVICE_NOT_CONNECTED, 0);
         return;
     }
+    /* A device the bus has suspended (or is suspending, resuming or
+     * recovering) is refused, not woken: Windows 7's answer for a device
+     * it holds no handle for (section 8.11). The thread runs both this and
+     * the link machine, so the state cannot change before the transfer. */
+    if (!HcdSuspDoorServes(dev)) {
+        hc->DoorForwardFailed++;
+        XhciLogNote(&hc->Hc, "door.desc.suspended", dev->Susp.State);
+        hcdDoorFinish(irp, STATUS_UNSUCCESSFUL, 0);
+        return;
+    }
     hc->DoorForwarded++;
     bytes = 0;
     outcome = HcdThreadControlDoor(hc, dev, (USHORT)plan.Value,

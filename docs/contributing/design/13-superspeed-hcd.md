@@ -2533,9 +2533,12 @@ for; neither hub generation wakes a child for this IOCTL): waking would
 spend the device's idle for a diagnostic read, and would have to drive the
 link machine's resume (record 14 section 3.6) from outside the function's
 power policy. With `XhciSelectiveSuspend` 0, the default, no device is ever
-suspended. Stage A's link machine is on its own branch (36.29 to 36.31): at
-the merge the door's service tests the device's link state before the
-transfer and refuses anything but ACTIVE; record 14 section 3.3 defers the
+suspended. Since the merge with stage A (integration branch `p36-int3`)
+the door's service tests the device's link state before the transfer
+(`hcdDoorServeOne`, `HcdSuspDoorServes`, the pure `XhciSuspDoorServes`
+with its vector in `test_susp`) and refuses anything but ACTIVE - a
+suspending, resuming or recovering link as well as a suspended one - with
+the log note `door.desc.suspended` (the link state); record 14 section 3.3 defers the
 thread's other device-side EP0 requests, and a diagnostic read is refused
 instead of deferred so a tool is not left waiting for a wake.
 

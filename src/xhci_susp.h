@@ -384,6 +384,13 @@ ULONG XhciSuspWakeClaims(ULONG stamp, ULONG watermark, ULONG pwrState);
 /* The wake event's claims: `claimed` WAIT_WAKEs completed SUCCESS. */
 VOID XhciSuspWakeCount(PXHCI_SUSP_LINK link, ULONG claimed);
 
+/* Whether the door forwards a descriptor request to a device whose link is
+ * in `state` (design record 13 section 8.11, task 36.45): ACTIVE only. A
+ * suspended device is refused rather than woken, and so is one on its way
+ * down, up or through a recovery, so a diagnostic read never drives the
+ * link machine. */
+ULONG XhciSuspDoorServes(ULONG state);
+
 /* The observation at step 5, from one sample: OK (U3 or PORT_SUSPEND
  * set), WAKE, DISCONNECT, or XHCI_SUSP_POLL_AGAIN. */
 #define XHCI_SUSP_POLL_AGAIN        0xFFUL

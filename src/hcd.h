@@ -2137,6 +2137,7 @@ VOID HcdSuspService(PHCD_CONTROLLER hc);
 VOID HcdSuspDeviceInit(PHCD_USB_DEVICE dev, PHCD_PORT port);
 VOID HcdSuspDeviceGone(PHCD_USB_DEVICE dev);
 ULONG HcdSuspLinkActive(PHCD_USB_DEVICE dev);
+ULONG HcdSuspDoorServes(PHCD_USB_DEVICE dev);
 ULONG HcdSuspDefers(PHCD_USB_DEVICE dev, ULONG abortOnly);
 ULONG HcdSuspOwnsPort(PHCD_CONTROLLER hc, PHCD_PORT q);
 VOID HcdSuspRootSample(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG portsc,

@@ -713,6 +713,11 @@ VOID XhciSuspWakeCount(PXHCI_SUSP_LINK link, ULONG claimed)
     link->ClaimDue = 0;
 }
 
+ULONG XhciSuspDoorServes(ULONG state)
+{
+    return (state == XHCI_SUSP_ACTIVE) ? 1UL : 0UL;
+}
+
 static ULONG xhciSuspRootGone(ULONG portsc)
 {
     return ((portsc & XHCI_PORTSC_CCS) == 0 ||

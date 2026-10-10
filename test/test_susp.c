@@ -2061,6 +2061,23 @@ static void test_episode_interleavings(void)
              XHCI_SUSP_ST_CANCELLED, "HELD, system to S3");
 }
 
+/* 36.45 at the merge with stage A (design record 13 section 8.11): the
+ * door forwards a descriptor request only to an ACTIVE link. */
+static void test_door_serves(void)
+{
+    CHECK_EQ(XhciSuspDoorServes(XHCI_SUSP_ACTIVE), 1, "ACTIVE is served");
+    CHECK_EQ(XhciSuspDoorServes(XHCI_SUSP_SUSPENDING), 0,
+             "SUSPENDING is refused");
+    CHECK_EQ(XhciSuspDoorServes(XHCI_SUSP_SUSPENDED), 0,
+             "SUSPENDED is refused, not woken");
+    CHECK_EQ(XhciSuspDoorServes(XHCI_SUSP_RESUMING), 0,
+             "RESUMING is refused");
+    CHECK_EQ(XhciSuspDoorServes(XHCI_SUSP_RECOVERING), 0,
+             "RECOVERING is refused");
+    CHECK_EQ(XhciSuspDoorServes(XHCI_SUSP_GONE), 0, "GONE is refused");
+    CHECK_EQ(XhciSuspDoorServes(99), 0, "an unknown state is refused");
+}
+
 int main(void)
 {
     test_switch_and_caps();
@@ -2089,6 +2106,7 @@ int main(void)
     test_phases();
     test_finalize();
     test_episode_interleavings();
+    test_door_serves();
 
     printf("test_susp: %d checks, %d failures\n", checks, failures);
     return failures != 0;
