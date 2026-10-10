@@ -103,8 +103,9 @@ record 15 section 11 ("with a message granted, modes 0, 1 and 3 read as
 the message") are 36.16's.
 
 **The controller's D3 and back without system standby**: no guest offers
-one, so (record 15 section 11) the forced recovery below reads park and
-kick, and the disable and enable rows above read the close.
+one, so (record 15 section 11) the forced recovery below is read in its
+place - park and kick where an expiry falls inside it (finding 3) - and
+the disable and enable rows above read the close.
 
 ### Measurements: line against poll on the same guest
 
@@ -197,6 +198,20 @@ the driver - it stayed with the controller disabled).
    read them; 98 SE (one processor) and 7 x64 did not, and their pollers
    kept running. Not a defect; the record's "the recovery alone reads
    park and kick" holds where an expiry falls in the window.
+   **Settled 2026-10-10 (wave 3 matrix, M-2): the expectation was wrong,
+   not the code.** The matrix's 2000 `qemu` P8 read the same (parks 0,
+   kicks 1 unchanged, `PollServiceGen` 2 to 6, runs 3482 to 41577, the
+   mouse back). The window is wider than this finding said - from the
+   health poll's `ControllerFailed` to the grant, all in one controller
+   thread pass, and on one processor a tick inside the raised stretch
+   runs its DPC as the IRQL drops, still before the grant - but on QEMU
+   it is still far shorter than the poller's one-tick period, so most
+   recoveries fall between two expiries. Record 15 sections 5.3 and 11
+   now say so: park and kick are read where they happen, and the leg's
+   pass is the service restored (generation, `PollService` 1, runs
+   advancing, devices working). The Bulk-Only stick at Code 31 after the
+   same recovery is run-35's known Windows 2000 limitation (the release
+   notes' "Known limitations"), not polling's.
 
 ### The reread on the fixed build (`824a6c7`)
 

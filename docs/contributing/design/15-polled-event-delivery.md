@@ -981,7 +981,9 @@ run bit is written, so neither proves the controller runs.
   `ControllerFailed` 0 and the drain admission the backstop uses
   (`hcdDrainAdmitted`: the window decoded, D0, the DPC open, the event ring
   present), read in one controller-lock hold. A failed controller is not
-  served: its DPC parks, and the recovery that clears the failure kicks.
+  served: a DPC that runs while the failure stands parks, and the recovery
+  that clears the failure kicks it. A failure that is recovered before any
+  expiry's DPC runs leaves nothing parked and nothing to kick (section 11).
 - **Checked inside the drain's own locked admission**, under a poll
   delivery only: `XhciEventDpc` refuses a drain while `PollService` is 0,
   under the same controller-lock hold in which it would drain, not in a
@@ -1434,10 +1436,31 @@ and that flavour is never published.
   (the `qemu` flavour's existing way to provoke one, or a new switch) with
   devices working after it, and the controller's D3 and back where a guest
   offers one without system standby: the park and kick read in the
-  counters. Where no guest does, the recovery alone reads park and kick, and
-  a Device Manager disable and enable reads the close (section 5.2). System
-  standby and hibernate under a poll delivery are read in the planned
-  selective suspend work, with task SUSP.1.
+  counters where they happen. Where no guest offers D3, the recovery is
+  read instead, and a Device Manager disable and enable reads the close
+  (section 5.2). System standby and hibernate under a poll delivery are
+  read in the planned selective suspend work, with task SUSP.1.
+
+  **A recovery parks only when an expiry falls inside it** (corrected
+  2026-10-10 from "the recovery alone reads park and kick", after 36.13's
+  legs and the wave 3 matrix). The poller is unadmitted from the moment
+  the controller is marked failed (`ControllerFailed`, raised by the
+  controller thread's own health poll) until the recovery's grant, and
+  `hcdRecover` runs in that same thread pass with `XhciRecoverController`
+  at DISPATCH_LEVEL. A DPC that runs inside that window parks and the grant
+  kicks it (`PollParks` and `PollKicks` each up by one); on one processor a
+  tick that falls inside the raised stretch runs its DPC as the IRQL drops,
+  still before the grant. On QEMU the whole window is far shorter than the
+  poller's period (about one clock tick, 10 ms and more on these kernels),
+  so most recoveries complete between two expiries: the timer stays ARMED,
+  the grant finds nothing parked, and `PollParks` and `PollKicks` do not
+  move. Both readings are correct. What the leg proves either way is the
+  service restored: `PollServiceGen` advanced past the revocation and the
+  grant, `PollService` 1, `PollRuns` advancing after the recovery, and the
+  devices working. Read so far: parks and kicks on 2000 and XP (36.13); none
+  on 98 SE and 7 x64 (36.13) and on 2000 in the wave 3 matrix (`PollServiceGen`
+  2 to 6, runs 3482 to 41577). A park and kick across a recovery is
+  deterministic only in `test_poll` (section 5.3's vectors).
 - **The races, on the Windows 2000 SMP guest under Driver Verifier**: a
   submission storm against the timer's re-arm (promotion never lost, never
   pushed later), close during a peek storm and a timer expiry (no DPC after
