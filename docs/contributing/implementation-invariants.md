@@ -676,8 +676,11 @@ resource list and the pin: the line (INTx) where it works; polling
 interrupt resource, under mode 2, or after the watcher finds a line that
 never arrives; and on Vista and 7 a message (MSI or MSI-X) where Windows
 grants one - through `IoConnectInterruptEx` on amd64 and through the
-`xhcimsi.sys` helper on x86. Mode 1 forces the line and keeps the refusal
-below for a controller that has none. Windows programs and enables the
+`xhcimsi.sys` helper on x86. Mode 1 asks for the line and keeps the
+refusal below for a controller that has none, on 98 SE to XP and on x86
+Vista and 7 with no helper bound and no line offered; on Vista and 7 a
+message granted anyway is used, and one that cannot be connected polls
+(record 15 section 4). Windows programs and enables the
 MSI or MSI-X capability on a message grant; the driver only reads it. A
 pin that cannot be read is still not a pin of zero. The bullets below are
 the miniport's (`1.2.0.0`) rules and its reasoning about the targets'

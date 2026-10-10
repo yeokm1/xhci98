@@ -90,10 +90,12 @@ To submit logs with a [bug or hardware report](https://github.com/yeokm1/xhci98/
 
 ```
 release-x86\   xhci98.sys, xhci98.inf, xhciuas.sys, xhciuas.inf - 32-bit Windows
-               (98 SE, ME, 2000, XP, Vista, 7) - txtsetup.oem, for F6, and
-               portsw.vbs, the Intel port switchover's switch
-debug-x86\     the same six files, built for troubleshooting
-release-x64\   the same six files for 64-bit Windows (XP x64, Vista x64, 7 x64)
+               (98 SE, ME, 2000, XP, Vista, 7) - txtsetup.oem, for F6,
+               portsw.vbs, the Intel port switchover's switch, and
+               xhcimsi.sys, the MSI helper for 32-bit Vista and 7 only
+debug-x86\     the same seven files, built for troubleshooting
+release-x64\   the same files but xhcimsi.sys, for 64-bit Windows (XP x64,
+               Vista x64, 7 x64)
 debug-x64\     the same, built for troubleshooting
 xhciqual\      XHCIQUAL.EXE, the DOS qualifier
 xhcisnap\      XHCISNAP.EXE, the log snapshot reader
@@ -161,7 +163,7 @@ On every system, update the "USB 2.0 eXtensible Host Controller (xhci98)" entry 
 - **Windows XP**: Driver -> Update Driver: "No, not this time", "Install from a list or specific location", "Don't search. I will choose the driver to install", Have Disk -> the package directory, "xHCI98 USB 3.x eXtensible Host Controller", Continue Anyway.
 
   A second wizard follows for "xHCI98 USB 3.x Root Hub": "No, not this time", "Install the software automatically", Continue Anyway, Finish. No restart.
-- **Windows Vista and 7**: Update Driver Software -> "Browse my computer for driver software" -> "Let me pick from a list of device drivers on my computer" -> Have Disk -> the package directory -> "xHCI98 USB 3.x eXtensible Host Controller" -> "Install this driver software anyway". No restart.
+- **Windows Vista and 7**: Update Driver Software -> "Browse my computer for driver software" -> "Let me pick from a list of device drivers on my computer" -> Have Disk -> the package directory -> "xHCI98 USB 3.x eXtensible Host Controller" -> "Install this driver software anyway". No restart on x64; on 32-bit Vista and 7 the install asks for one, for the MSI helper `xhcimsi.sys`, and the controller waits for it (Code 28 on 7, Code 1 on Vista until then).
 
   Do not just type the folder into the search box: Windows answers that the best driver is already installed and keeps the old one.
 
@@ -176,7 +178,7 @@ Install the new version over the old one with Update Driver on "xHCI98 USB 3.x e
 
 - **Windows 98 SE and ME: restart afterwards, although Windows does not ask.** The new file waits to replace the old one at the next start, and until then the old driver keeps running. Under SweetLow's stack the controller may show a problem for a minute or two after Finish. On ME it shows one until the restart, while the devices keep working.
 - **Windows 2000: use Have Disk.** Letting Windows search answers that a suitable driver is already installed and keeps the old one. Use "Display a list of the known drivers" -> Have Disk, as in the steps above.
-- **XP, XP x64, Vista and 7**: the update takes effect at once with no restart, after one unsigned-driver warning.
+- **XP, XP x64, Vista and 7**: the update takes effect at once with no restart, after one unsigned-driver warning; except on 32-bit Vista and 7, where an update to `2.3.0.0` or later asks for a restart, for the MSI helper `xhcimsi.sys`.
 
 Afterwards the root hub's Driver tab still shows the old version (on 98 SE and ME, its date), although it runs the new file. To change it, run Update Driver on "xHCI98 USB 3.x Root Hub" too:
 
@@ -217,9 +219,9 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | `XhciIntervalCap` | Interrupt endpoints polled at least every 32 ms: `1` on AMD controllers, `2` on every controller, `0` off | `0` | `2` | `1` | `1` |
 | `XhciAvgTrbEsit` | A comparison switch for interrupt endpoints; leave at `0` unless comparing | `0` | `1` | `0` | `0` |
 | `XhciMaxTransferKB` | The largest UAS command, in KiB (a multiple of `4`) | `64` | `2048` | `1024` | `1024` |
-| `XhciInterruptMode` | How the controller's events arrive: `0` automatic, `1` the interrupt line only, `2` polling | `0` | `2` | `0` | `0` |
+| `XhciInterruptMode` | How the controller's events arrive: `0` automatic, `1` ask for the interrupt line (on Vista and 7 a message Windows grants anyway is still used), `2` polling | `0` | `2` | `0` | `0` |
 | `XhciPollIdleMs` | While polling, the period with nothing outstanding, in ms | `1` | `5000` | `50` | `50` |
-| `XhciPollActiveMs` | While polling, the period with transfers outstanding, in ms | `1` | `XhciPollIdleMs` | `1` | `1` |
+| `XhciPollActiveMs` | While polling, the shortest period with transfers outstanding, in ms (with only a mouse's or keyboard's periodic transfers outstanding, the endpoint's interval is used, held between this and the idle period) | `1` | `XhciPollIdleMs` | `1` | `1` |
 | `XhciWideMap` | Two pieces of a large bulk transfer on the controller at once (2000 to 7) | `0` | `1` | `0` | not written |
 | `XhciSelectiveSuspend` | Selective suspend of idle devices when Windows asks | `0` | `1` | `0` | not written |
 | `XhciLogVerbosity` | The driver's log, read by `XHCISNAP` | `0` | `4` | `0` | `0` |
@@ -227,7 +229,7 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 
 An install or update writes a value only where it is missing, so a value you changed stays as you set it. To go back to the table's value, set it by hand, or delete the value and update the driver. A machine updated straight from `1.2.0.0` keeps that release's `XhciImodInterval250ns` of `500`; set it to `160` by hand.
 
-The two log values are described in the [release notes](docs/using/release-notes.md), "The log, and how to send one". `XhciWideMap` and `XhciSelectiveSuspend` are written by no install: add them by hand in the same key. Each value is read when the controller starts, so restart Windows after changing one. The others are described below, and all of them in the release notes' "Registry settings".
+The two log values are described in the [release notes](docs/using/release-notes.md), "The log, and how to send one". `XhciWideMap` and `XhciSelectiveSuspend` are written by no install: add them by hand in the same key. Each value but `XhciForceBulkOnly` (read as each device is enumerated; see below) is read when the controller starts, so restart Windows after changing one. The others are described below, and all of them in the release notes' "Registry settings".
 
 ### The interrupt moderation interval
 

@@ -291,7 +291,9 @@ The full active run (`xhciqual/hardware-testing.md`) ends on `QUALIFIED`,
 controller with no working interrupt - no interrupt pin, or an interrupt that
 never arrives while the controller's events reach memory - that passes the
 rest when polled. It is not refused, because the driver polls such a
-controller (`XhciInterruptMode` 0, automatic, or 2), at the cost of more CPU
+controller: with no pin under `XhciInterruptMode` 0, automatic; with an
+interrupt that never arrives under `0` only where the driver sees the
+controller raise it, otherwise under `2`, which the verdict names; at the cost of more CPU
 wake-ups and up to the poll period of event latency; or an MSI-capable OS
 takes a message interrupt, where the controller offers one (Windows Vista and
 7: x64 directly, 32-bit with the `xhcimsi.sys` helper). The verdict prints
@@ -1518,8 +1520,9 @@ what was taken: `XhciUasCommandBytes` the size in bytes,
 `XhciUasCommandSource` `1` for the controller's value and `5` for the
 drive's own, `XhciUasDeviceLimit` the value read and
 `XhciUasDeviceLimitWhy` `0` absent, `1` used, `2` not a `DWORD`, `3` out of
-range. Behind a `2.2.0.x` controller driver the UAS driver keeps 64 KiB and
-the drive's value is not used (`XhciUasDeviceLimitWhy` `4`).
+range. Behind a controller driver that does not answer the transfer-size
+query (`2.2.0.0` and earlier) the UAS driver keeps 64 KiB and the drive's
+value is not used (`XhciUasDeviceLimitWhy` `4`).
 
 **Windows 98 SE and ME.** Both values are read, and neither changes what
 reaches the drive: Windows' mapping layer, `USBNTMAP.SYS`, sends at most
@@ -1532,7 +1535,7 @@ time, and file reads no faster than at `64`.
 
 On Windows 2000 and later the controller driver gives a large bulk
 transfer to the controller two pieces at a time, the next one queued
-before the current one ends, where `2.2.0.x` gave one piece and waited -
+before the current one ends, where `2.2.0.0` and earlier gave one piece and waited -
 when this value turns it on. It is **off unless you set it**. It applies to
 large bulk writes on any device, and to large bulk reads only on a UAS
 drive's streams. It does so only where the machine's DMA needs no
@@ -1551,7 +1554,7 @@ of the service packs these notes name, x86 and x64. Later HAL hotfixes were
 not read; the checks made at each start and each transfer stand for them.
 Under Driver Verifier's DMA checks, and on a machine whose DMA does need
 translation (Windows 2000 running its PAE kernel; 32-bit Vista and 7, and
-every x64 system, where memory may lie above 4 GB), nothing changes: every transfer goes one piece at a time, as in `2.2.0.x`.
+every x64 system, where memory may lie above 4 GB), nothing changes: every transfer goes one piece at a time, as in `2.2.0.0`.
 Windows 98 SE and ME never send a transfer large enough for it to matter.
 On a UAS drive at SuperSpeed the same switch also lets one command's
 data go to the controller as a single piece of up to 2 MiB, on rings the

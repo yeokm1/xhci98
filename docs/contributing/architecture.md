@@ -309,12 +309,14 @@ needs at most `ceil(N / 4096) + 1` data TRBs.
 **Since `2.3.0.0` (amended in roadmap-hcd 36.20).** This section is the
 miniport's. The HCD that replaced it from `2.0.0.0` connects its own
 interrupt, and from `2.3.0.0` is no longer line-only: a controller with
-Interrupt Pin 0, or whose line never arrives, is polled on a timer of the
-driver's own, and on Windows Vista and 7 the controller may take a
+Interrupt Pin 0 is polled on a timer of the driver's own, and on Windows Vista and 7 the controller may take a
 message-signalled interrupt (MSI or MSI-X), on amd64 directly and on x86
-through the helper `xhcimsi.sys`. `XhciInterruptMode` chooses (0
-automatic, 1 the line only, 2 polling); the start settles the delivery
-once. `docs/contributing/implementation-invariants.md`, "Interrupt
+through the helper `xhcimsi.sys`. Automatic polling covers a pin of 0, no
+interrupt resource, and a line the driver sees raised and never
+delivered; another dead interrupt needs mode 2. `XhciInterruptMode`
+chooses (0 automatic; 1 asks for the line, though on Vista and 7 a
+message Windows grants anyway is used and an unconnected one polls; 2
+polling); the start settles the delivery once. `docs/contributing/implementation-invariants.md`, "Interrupt
 Delivery", and design records 15 and 18 have the rules; design record 13
 section 5.4 the HCD's locks around them.
 
