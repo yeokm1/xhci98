@@ -103,3 +103,29 @@ the stage A reading is taken.
 the stage A package, `XhciSelectiveSuspend` 0 and 1, against the rows
 above. A rate that differs from the UHCI control's would make stage A's
 answers a suspect; one that matches leaves the limitation where it is.
+
+### 36.41's qualifying re-measure on stage A's build (2026-10-10)
+
+Development host A, QEMU 11.1.0, the same kit (copied to
+`out\p36-susp\audio`) and bases; the `release` x86 package of branch
+`p36-susp` at `4282007` (`xhci98.sys` 240,391 bytes, SHA-256
+`b462112b...`), selective suspend's stage A built in. `XhciSelectiveSuspend`
+absent (0) on the base `w98-audio-xhci-base`; set to 1 on an overlay of it
+made a base of its own (`vm\t36sau\w98-audio-xhci-ss1-base.qcow2`), so the
+usb-audio device's QUERY_CAPABILITIES carries stage A's answers (D1, D2,
+wake from D2) there. Three batches in parallel slots; verdicts as the
+baseline's (`out\p36-susp\audio\reps.txt`, `reps-run1.txt`; two
+repetitions failed in the kit, an overlay race and an admission timeout,
+and are not counted).
+
+| Attach after t0 | switch 0 | switch 1 | baseline `xhci98` | UHCI control |
+|---|---|---|---|---|
+| 120 s | 6 of 9 wedged | 5 of 9 | 14 of 20 | 7 of 12 |
+| 300 s | 3 of 3 | 2 of 2 | 7 of 13 | 4 of 12 |
+
+**Verdict.** The same: stage A's capabilities change nothing a count this
+size can see (7 of 11 at switch 1 against 9 of 12 at 0, 21 of 33 for the
+baseline and 11 of 24 for the UHCI control with no `xhci98` at all). The
+wedge stays Windows 98 SE's own, a documented limitation; waiting longer
+before attaching does not avoid it on this vehicle, so the release notes
+no longer advise it.

@@ -1499,12 +1499,15 @@ or says it was found by reading the code.
   disabled** at every start, or the controller sits at Code 39 and nothing on
   it works. See "What this is".
 - **Windows 98 SE: a USB audio device can wedge the machine as it loads.**
-  After a cold boot, attaching a USB audio device about 40 seconds after the
-  boot wedged the guest in 5 of 6 tries, with the taskbar clock
-  stopped; after a 120-second wait it wedged in none of 20. Every request
-  the driver was given had been answered: the wait is above it, in Windows
-  98's configuration manager, and `1.2.0.0` showed the same intermittent
-  wedge. Plug a USB audio device in once the machine has settled.
+  In a QEMU virtual machine, attaching a USB audio device after a cold boot
+  wedged Windows 98 SE in about half to two thirds of the tries (taskbar
+  clock stopped, Start menu dead) whether it was attached 40 seconds, two
+  minutes or five minutes after the boot, and with selective suspend on or
+  off. Windows 98 SE's own UHCI stack, with this driver not loaded at all,
+  wedges the same way at a similar rate: the wait is in Windows 98, not in
+  this driver, every request of which was answered. Waiting before plugging
+  the device in does not avoid it; if it happens, restart the machine with
+  the device attached.
 - **Windows 98 SE in a virtual machine cannot play USB audio** through
   Windows 98's own `USBAUDIO.VXD`; that is QEMU's emulated device and the
   VxD, through this driver and through a UHCI controller alike. On real
