@@ -2129,6 +2129,7 @@ try {
     $tcMarks = @(
         @{ Name = "the package's test-client check";    Find = 'Assert-NoTestClient -Root $pkgDir' },
         @{ Name = "the staged release's test-client check"; Find = 'Assert-NoTestClient -Root $destRoot' },
+        @{ Name = "the -Force aside";                   Find = 'Move-Item -LiteralPath $finalRoot -Destination $asideRoot' },
         @{ Name = "the publish swap";                   Find = 'Move-Item -LiteralPath $destRoot -Destination $finalRoot' }
     )
     $tcAt2 = @()

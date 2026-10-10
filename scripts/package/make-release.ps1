@@ -4666,6 +4666,11 @@ after checkout. Restore it with:  git checkout -- LICENSE
     # transaction: `Move-Item` within one volume is a rename, and `releases\` is
     # one directory, so the aside and the staging tree are both on the same
     # volume as the destination by construction.
+    # The whole staged release, the tools' directories included, whatever
+    # -SkipUploadSet says (Codex review of 36.34, round 1, finding 6), and
+    # before -Force moves an existing release aside (round 2, finding 4),
+    # so a refusal leaves releases\ as it was.
+    Assert-NoTestClient -Root $destRoot -What "the staged release '$destRoot'"
     $asideRoot = $null
     if (Test-Path -LiteralPath $finalRoot) {
         Write-Warn ("-Force: replacing the existing {0}" -f $finalRoot)
@@ -4676,9 +4681,6 @@ after checkout. Restore it with:  git checkout -- LICENSE
         Move-Item -LiteralPath $finalRoot -Destination $asideRoot
     }
 
-    # The whole staged release, the tools' directories included, whatever
-    # -SkipUploadSet says (Codex review of 36.34, round 1, finding 6).
-    Assert-NoTestClient -Root $destRoot -What "the staged release '$destRoot'"
     try {
         Move-Item -LiteralPath $destRoot -Destination $finalRoot
     } catch {
