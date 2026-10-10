@@ -230,7 +230,19 @@
 > grant and revocation, the peeks and the doorbell hook `HcdSvcDoorbell`).
 > `hcd_ctl.c` settles the delivery at start (`hcdSettleDelivery`,
 > `hcdConnect`, the seam 36.15's MSI joins), and the counters are appended
-> to `XHCIHC_COUNTERS`. The tables below are the
+> to `XHCIHC_COUNTERS`.
+> Task 36.15 (design records 15 section 4.3 and 18) adds MSI on Vista and 7:
+> the pure `xhci_msi.c` / `xhci_msi.h` (the MSI/MSI-X capability read, the
+> requirements list's checked walk, class, strip and qemu no-line rewrite,
+> the filter record, the x86 helper's binding state machine and the `M86`
+> trace record) and `xhci_msi86.c` / `xhci_msi86.h` (both ends of the x86
+> helper's channel, compiled into `xhci98.sys`, the helper and `test_msi`);
+> the driver half `hcd_msi86.c` (the mode cache, the requirements filter,
+> the helper's look and reference, the routines per architecture, the
+> counters and the trace); in `hcd_ctl.c` the seam `hcdMsgConnect`, the
+> message ISR and the capability read; and `src/msi86/` - `msi86_entry.c`,
+> `xhcimsi.rc`, `sources` and `makefile` - the NT 6 x86 helper
+> `xhcimsi.sys`, built with WDK 7.1 for x86. The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name

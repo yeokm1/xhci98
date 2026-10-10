@@ -38,6 +38,15 @@ section 4.1 checked against the spec, the inputs and hooks of sections 6
 and 7.1 named, and section 4.3 designed in full for 36.15, so the MSI code
 has a reviewed design. Reviewed in 36.5's loop (section 13.5).
 
+**Revision 6, 2026-10-10 (task 36.15, as built).** Section 4.3 reconciled
+with design record 18 - the NT 6 x86 MSI helper and the owner's decisions
+of 2026-10-09 written into it (its section 12) - and with the code: x86
+reaches `IoConnectInterruptEx` through `xhcimsi.sys`; the requirements
+filter keeps only the line configurations where x86 has no helper bound,
+and wherever the effective mode is 1, on both architectures; mode 1 on x86
+with no line offered and no helper fails the start; the connection passes
+no spin lock of its own. Sections 3, 4, 8 and 11 follow.
+
 ## 1. What is asked, and what is not
 
 A registry switch chooses how the bus learns that the controller has written
@@ -144,7 +153,10 @@ The tools and the documents:
 
 ## 3. The three values
 
-Read from the controller's driver key at each start, as `REG_DWORD`, and
+Read from the controller's driver key at each start, as `REG_DWORD` (and,
+on Vista and 7, `XhciInterruptMode` also at `AddDevice`, for the
+requirements filter that runs before the start: design record 18 section
+4.2), and
 written by both INFs on every install path with `FLG_ADDREG_NOCLOBBER`
 (`0x00010003`) under task 34.1's rule: each is where a user looks for it, and
 an update keeps a value the user set. Text-mode Setup's `txtsetup.oem` writes
@@ -242,12 +254,16 @@ grant:
 | 0 | the message connected | MSI or MSI-X | automatic: message |
 | 1 | the message connected | MSI or MSI-X | line asked for, message granted |
 | 0 or 1 | `IoConnectInterruptEx` not found, or the connection refused | poll | message not connected |
+| 1 | x86, no helper bound, and the requirements filter found no line offered (design record 18 section 4.3) | none: the start fails | forced, no line offered |
 | 2 | (nothing connected) | poll | forced |
 
-The pin plays no part under a message grant. Until 36.15's code is in,
-`IoConnectInterruptEx` is never looked for, so a message resource reaches
-the "not connected" row: a machine whose `MSISupported` was set by hand
-polls rather than handing `IoConnectInterrupt` a message vector.
+The pin plays no part under a message grant. A bound x86 helper whose
+connection fails, and amd64 in every case, keep the "message not
+connected" row under mode 1 too; the failing row is x86's with no helper
+and no line offered alone, as XP fails a forced line with no line. With
+the requirements filter enabled (design record 18 section 4.2), mode 1
+asks Windows for the line before the start, so the mode-1 message rows are
+the fallback where no line was offered or the list was not replaced.
 
 A value of 4 and above is recorded as "reserved value N, run as
 automatic"; 3 is the same as 0 and records nothing extra.
@@ -576,12 +592,17 @@ resubmitted once the drain has run.
 the controller may take a message-signalled interrupt. It needs one
 message, for Interrupter 0. Decided 2026-10-09 (roadmap 36.15 has the full
 list): mode 0 takes a message where Windows granted one, else the line,
-else polling; 3 reads as 0; 1 under a message grant runs as 0 and logs
-that the line was asked for; the line is forced by `MSISupported` 0 in the
-controller's hardware key; a message connection that fails polls for that
-start; single-message MSI-X is admitted; the dead-line rule is the line's
-only; the routing quirk is not active under a message; XP x64 ignores the
-key and keeps the line.
+else polling; 3 reads as 0; **mode 1 forces the line by itself** - the
+requirements filter of design record 18 section 4.2 keeps only the line
+configurations, on x86 and amd64 - and where a message is granted anyway
+(no line offered, the filter disabled or not replacing the list), mode 1
+runs it as 0 and logs that the line was asked for, except on x86 with no
+helper bound and no line offered, where the start fails as XP's does; the
+line is also forced by `MSISupported` 0 in the controller's hardware key;
+a message connection that fails polls for that start; single-message
+MSI-X is admitted; the dead-line rule is the line's only; the routing
+quirk is not active under a message; XP x64 ignores the key and keeps the
+line.
 
 **How each architecture reaches `IoConnectInterruptEx`** (36.5's review;
 owner, 2026-10-09). Four review rounds found no way for the one x86
@@ -592,30 +613,42 @@ to the running image by the driver's own imports, proves where those
 imports are but not where `IoConnectInterruptEx` is (round 4). So:
 
 - **amd64** calls `MmGetSystemRoutineAddress` (below).
-- **x86** gets them from **a small NT 6-only x86 helper driver**, installed
-  only by the Vista and 7 x86 INF section, which imports
-  `IoConnectInterruptEx` and `IoDisconnectInterruptEx` normally and hands
-  them to `xhci98.sys` over a documented channel, so `xhci98.sys`'s x86
-  imports stay unchanged (owner, 2026-10-09, option A). The helper is
-  designed and built separately, in its own design record (task branch
-  `p36-msi86`); this record does not design it, and fixes only the seam it
-  plugs into (the connection, below).
+- **x86** gets them from **`xhcimsi.sys`, a small NT 6-only x86 helper
+  driver** (design record 18), installed only by the Vista and 7 x86 INF
+  section, which imports `IoConnectInterruptEx` and
+  `IoDisconnectInterruptEx` normally and hands them to `xhci98.sys` over
+  a named device and a versioned internal device control (owner,
+  2026-10-09, option A). `xhci98.sys`'s x86 image gains no import Windows
+  98 lacks: the one import the channel adds, `IoGetDeviceObjectPointer`,
+  has stock Windows 98 SE precedent (record 18 section 3.4; owner,
+  2026-10-09). This record fixes only the seam the helper plugs into (the
+  connection, below); record 18 is the helper's.
 - **Without the helper** - not installed, not loaded, or its channel not
-  answering - Vista and 7 x86 keep the line, the routing quirk and
-  polling, exactly as on XP: the rows below for a routine not found apply.
+  answering - the requirements filter (record 18 section 4.2) keeps only
+  the configurations offering a line, so Windows grants the line and Vista
+  and 7 x86 keep the line, the routing quirk and polling exactly as on XP.
+  Where the list is not replaced (no line offered, the filter disabled,
+  an unadmitted shape, no memory) a message grant meets the rows below for
+  a routine not found, with record 18 section 4.3's mode-1 exception.
+- **After a fresh install or an update** on Vista and 7 x86 the INF asks
+  for a restart (`Reboot`; owner, 2026-10-09): the helper is boot-start
+  and active from the next boot (record 18 section 5).
 
 **Why it is safe on the down-level targets.** Windows 98, ME, 2000 and XP
 (and XP x64) never grant a message: their PnP managers do not read the
 key, and no message descriptor reaches the parser. Every step below is
 taken only when `IoIsWdmVersionAvailable(6, 0)` is TRUE, the test the
-driver already uses for NT 6.x's other paths, and nothing is added to the
-x86 image's imports. A message descriptor that reaches the x86 image with
-no helper answering takes section 4's "message not connected" row and
-polls.
+driver already uses for NT 6.x's other paths, and the x86 image's one new
+import, `IoGetDeviceObjectPointer`, is a Windows 2000 export with stock
+Windows 98 SE precedent (`1394bus.sys`), called on NT 6 only. A message
+descriptor that reaches the x86 image with no helper answering takes
+section 4's "message not connected" row and polls, or under mode 1 with no
+line offered fails the start (record 18 section 4.3).
 
 **The INF.** On the `Xhci.Dev6.NTamd64` path of `src/xhci98-amd64.inf`
-(Vista and 7 x64), in the hardware key (the `Xhci.Dev6.NTx86` path's
-equivalent, with the helper, is the helper's design record's):
+(Vista and 7 x64), and on the `Xhci.Dev6.NTx86` path of `src/xhci98.inf`
+together with the helper's boot-start service and `Reboot` (design record
+18 section 7), in the hardware key:
 
 ```
 [Xhci.Dev6.NTamd64.HW]
@@ -633,18 +666,25 @@ under 34.1's rule; it also keeps a larger `MessageNumberLimit` a user set,
 which is why the driver, not the INF, is what holds the delivery to one
 message (below). The XP x64 path (`Xhci.Dev.NTamd64`) and the 98, ME,
 2000 and XP paths get no `.HW` section, and the gate refuses these lines
-anywhere but the NT 6 sections (a new `MSI-*` rule in `check-inf.ps1`, with
-self-test mutations).
+anywhere but the NT 6 controller sections (`MSI-PLACE`, `MSI-VALUES`, and
+on the 32-bit file `MSIHLP-HW`, which refuses them without the helper;
+with self-test mutations), and models the `.HW` writes as hardware-key
+rows in the footprint.
+
+**Going back to an older package.** `MSISupported` 1 stays in the hardware
+key when a package older than 2.3.0.0 is installed over this one, and an
+older HCD does not know a message resource. Uninstalling the device with
+its driver software, or setting `MSISupported` 0 first, is the way back
+(design record 18 section 6; the release notes).
 
 **The resources.** `hcdParseResources` already keeps the first raw
 interrupt descriptor and its message flag (36.3). For a message grant it
-now walks the whole translated and raw lists and records how many message
-descriptors there are and the message count each raw one carries (WDK
-7.1's `u.MessageInterrupt.Raw`: a reserved `USHORT`, then `MessageCount`,
-then `Vector` and `Affinity`; translated: `Level`, `Vector`, `Affinity`).
-The 32-bit headers of the Windows 2000 DDK lack the message member, so the
-driver declares the WDK 7.1 layout itself where the headers lack it, with
-a compile-time size check against the partial descriptor it overlays.
+now walks the whole raw list and records how many message descriptors
+there are and the message count the first carries (WDK 7.1's
+`u.MessageInterrupt.Raw`: a reserved `USHORT`, then `MessageCount`, read
+as the upper half of the interrupt member's `Level` word, which that
+layout overlays - the Windows 2000 DDK's headers lack the message
+member); the translated list's interrupt member is used as before.
 
 **Finding `IoConnectInterruptEx`.** The amd64 image imports
 `MmGetSystemRoutineAddress` and asks it for `IoConnectInterruptEx` and
@@ -665,8 +705,13 @@ no further third-party object in the image.
 
 **The connection.** Under a message grant, `IoConnectInterruptEx` with
 `Version = CONNECT_MESSAGE_BASED` (3): the PDO; the message ISR; the
-controller as context; a spin lock of the driver's own (one `KSPIN_LOCK`
-in `hc`, initialised once); `SynchronizeIrql` 0, the system's choice;
+controller as context; `SpinLock` NULL, so each message's interrupt
+object has its own lock, and `SynchronizeIrql` 0, so each runs at its own
+message's IRQL - safe because
+the message ISR declines every message ID but 0 before it touches the
+controller, and nothing synchronizes with a message's ISR (as built: a
+driver lock would need the unified IRQL, known only after the
+connection);
 `FloatingSave` FALSE; and `FallBackServiceRoutine` the line ISR, for a
 grant Windows turned back into a line. On success `Version` says which was
 connected: `CONNECT_MESSAGE_BASED` is a message delivery, with
@@ -738,9 +783,10 @@ as MSI, MSI-X and whatever Windows granted; `MSISupported` 0 read as the
 line; mode 1 under a grant read as the message with its log note; a
 `qemu`-flavour failed connection read as polling with its reason; a
 `MessageNumberLimit` raised by hand, read as a grant of several served as
-one; and the down-level targets, and Vista and 7 x86 without the helper,
-reading as the release before it, with a message grant there read as
-polling with "message not connected".
+one; mode 1 with `MSISupported` 1 read as the line, x86 and x64, once the
+requirements filter is enabled (record 18 leg F); and the down-level
+targets, and Vista and 7 x86 without the helper, reading as the release
+before it (the filter's line), with record 18's legs H, L, U, D and R.
 
 ## 5. The poller's lifecycle
 
@@ -1223,7 +1269,9 @@ automatic, 2 automatic with the pin unreadable, 3 automatic: interrupt pin
 0, 4 automatic: no interrupt resource, 5 forced line, 6 forced line with
 the pin unreadable, 7 forced, no interrupt (the start fails), 8 forced
 poll, 9 automatic: line interrupt not delivered (the move), 10 automatic:
-message, 11 line asked for, message granted, 12 message not connected; pin
+message, 11 line asked for, message granted, 12 message not connected, 13
+forced, no line offered (x86 with no helper bound: the start fails; design
+record 18 section 4.3); pin
 status 0 not read, 1 read, 2 unreadable.
 
 The log ring's notes: at start `intr.mode.read`, `intr.mode`,
@@ -1449,8 +1497,10 @@ and that flavour is never published.
 - **The default on a pin**: mode 0 reading as the release before it (the
   matrix unchanged; on Vista and 7, where the INF now asks for
   MSI, with `MSISupported` 0), and mode 1 the same, on a target without
-  MSI and on Vista and 7 with `MSISupported` 0 (section 4.3); with a
-  message granted, modes 0, 1 and 3 read as the message.
+  MSI and on Vista and 7 with `MSISupported` 0 or, with the requirements
+  filter enabled, `MSISupported` 1 (section 4.3); with a message granted,
+  modes 0 and 3 read as the message, and mode 1 too where no line was
+  offered.
 
 Bench (POLL-E, owner): mode 2 on the E460 and the P14s Gen 1 under Windows 98
 SE, and an MSI-only controller if one is at hand. The synthetic no-interrupt

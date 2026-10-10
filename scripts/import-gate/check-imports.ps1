@@ -147,7 +147,30 @@ param(
     # the failure mode above cannot recur silently if either path is ever
     # rewired.
     [ValidateSet("auto", "x86", "amd64")]
-    [string]$Arch = "auto"
+    [string]$Arch = "auto",
+
+    # **The nt6x86 profile: xhcimsi.sys, the NT 6 x86 MSI helper** (design
+    # record 18 section 8.2). That binary loads on Windows Vista SP2 and 7 SP1
+    # x86 alone and imports IoConnectInterruptEx, which neither Windows 2000
+    # nor Windows 98 has, so the default x86 rules - every pair exported by
+    # Windows 2000 SP4 and evidenced on Windows 98 - would refuse it for the
+    # very thing it exists to do. Under this profile an x86 image is held to
+    # its own allowlist (which -AllowPath must name: no default allowlist
+    # applies) and to the export tables of the Vista SP2 and 7 SP1 x86 kernels
+    # and HALs (nt6x86-vista-baselines.expected, nt6x86-win7-baselines.expected),
+    # and the Windows 98 rule does not apply. The profile refuses an amd64
+    # image, and the default profile keeps refusing every Vista-only pair in
+    # xhci98.sys's x86 image as before.
+    [ValidateSet("default", "nt6x86")]
+    [string]$GateProfile = "default",
+
+    # The two NT 6 x86 manifests and the directories their files are staged
+    # in. Defaults: beside this script, and tools\vista-x86-extracted and
+    # tools\win7-x86-extracted.
+    [string]$Nt6VistaManifestPath = "",
+    [string]$Nt6Win7ManifestPath = "",
+    [string]$Nt6VistaDir = "",
+    [string]$Nt6Win7Dir = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -182,6 +205,18 @@ if ($Win2kManifestPath -eq "") {
 }
 if ($Win98EvidenceList -eq "") {
     $Win98EvidenceList = Join-Path $PSScriptRoot "win98-evidence.list"
+}
+if ($Nt6VistaManifestPath -eq "") {
+    $Nt6VistaManifestPath = Join-Path $PSScriptRoot "nt6x86-vista-baselines.expected"
+}
+if ($Nt6Win7ManifestPath -eq "") {
+    $Nt6Win7ManifestPath = Join-Path $PSScriptRoot "nt6x86-win7-baselines.expected"
+}
+if ($Nt6VistaDir -eq "") {
+    $Nt6VistaDir = Join-Path $repo "tools\vista-x86-extracted"
+}
+if ($Nt6Win7Dir -eq "") {
+    $Nt6Win7Dir = Join-Path $repo "tools\win7-x86-extracted"
 }
 
 $script:failures = @()
@@ -902,7 +937,7 @@ function Test-Image {
                 if ($absent.Count -gt 0) {
                     Add-Failure "$($pair.Module)!$($pair.Symbol) is not exported by $BaselineLabel $($absent -join ', ') - the driver cannot load on that target."
                 } else {
-                    $evidence += if ($ImageArch -eq "amd64") { "nt52-amd64-export" } else { "w2k-export" }
+                    $evidence += if ($ImageArch -eq "amd64") { "nt52-amd64-export" } elseif ($ImageArch -eq "nt6x86") { "nt6-x86-export" } else { "w2k-export" }
                 }
             }
         }
@@ -950,7 +985,7 @@ function Test-Image {
         # the refusal above has already failed it.)
         #
         if ($pair.Module -ieq "ntoskrnl.exe" -or $pair.Module -ieq "hal.dll") {
-            if ($ImageArch -eq "amd64") {
+            if ($ImageArch -eq "amd64" -or $ImageArch -eq "nt6x86") {
                 #
                 # **THE amd64 RULE, AND IT IS STRONGER THAN THE WINDOWS 98 ONE
                 # RATHER THAN A RELAXATION OF IT** (the owner's decision,
@@ -1073,7 +1108,70 @@ try {
     $precedent = $null
     $ntkernText = $null
 
-    if ($NoTargetEvidence) {
+    if ($GateProfile -eq "nt6x86") {
+        #
+        # The helper's run (design record 18 section 8.2): its own allowlist,
+        # the Vista SP2 and 7 SP1 x86 export tables, no Windows 2000 or 98
+        # evidence asked - and nothing else in this script changes.
+        #
+        if (-not $script:allowPathPinned) {
+            throw "-GateProfile nt6x86 needs -AllowPath: no default allowlist applies to the NT 6 x86 helper (scripts\import-gate\xhcimsi-imports.allow)."
+        }
+        if ($Arch -eq "amd64") {
+            throw "-GateProfile nt6x86 is an x86 profile: the amd64 HCD has no helper (design record 18)."
+        }
+        $nt6Rules = Read-AllowFile -Path $AllowPath
+        Write-Ok ("nt6x86 allowlist: {0} pairs, {1} denied symbols" -f $nt6Rules.Allow.Count, $nt6Rules.Deny.Count)
+        $nt6Dumpbin = Initialize-Dumpbin -ForArch "x86"
+        $nt6 = $null
+        if (-not $NoTargetEvidence) {
+            $merged = @{ "ntoskrnl.exe" = @{}; "hal.dll" = @{} }
+            $loaded = 0
+            foreach ($set in @(
+                @{ Label = "Windows Vista SP2 x86"; Dir = $Nt6VistaDir; Manifest = $Nt6VistaManifestPath; Tag = "vista" },
+                @{ Label = "Windows 7 SP1 x86"; Dir = $Nt6Win7Dir; Manifest = $Nt6Win7ManifestPath; Tag = "win7" })) {
+                $rows = @(Read-Win2kBaselineManifest -Path $set.Manifest)
+                $one = Get-Win2kBaseline -Dir $set.Dir -Dumpbin $nt6Dumpbin -ManifestRows $rows `
+                    -Label $set.Label -ExtractSwitch "(stage the files the manifest names)"
+                if ($null -eq $one) {
+                    Add-Warning "none of the authenticated $($set.Label) kernel/HAL baselines are present in '$($set.Dir)' - that half of the nt6x86 gate did not run."
+                    continue
+                }
+                foreach ($provider in @("ntoskrnl.exe", "hal.dll")) {
+                    foreach ($binary in $one[$provider].Keys) {
+                        $merged[$provider]["$($set.Tag) $binary"] = $one[$provider][$binary]
+                    }
+                }
+                $loaded++
+            }
+            if ($loaded -gt 0) {
+                $nt6 = $merged
+                Write-Ok ("NT 6 x86 baseline: {0} (versions, lengths and SHA256 authenticated)" -f `
+                    ((@($merged["ntoskrnl.exe"].Keys) + @($merged["hal.dll"].Keys) | Sort-Object) -join ", "))
+            }
+        } else {
+            Add-Warning "-NoTargetEvidence: only the committed allowlist was enforced for the nt6x86 image."
+        }
+        foreach ($path in $images) {
+            $imageFlavor = $Flavor
+            if ($imageFlavor -eq "auto") {
+                $objDir = Split-Path -Leaf (Split-Path -Parent (Split-Path -Parent $path))
+                switch ($objDir) {
+                    "objfre"      { $imageFlavor = "release" }
+                    "objchk"      { $imageFlavor = "debug" }
+                    "objchk_qemu" { $imageFlavor = "qemu" }
+                    default {
+                        throw "cannot infer the build flavor of '$path'. Pass -Flavor release, -Flavor debug or -Flavor qemu."
+                    }
+                }
+            }
+            Test-DumperMachine -Path $path -ExpectedArch "x86"
+            Test-Image -Path $path -ImageFlavor $imageFlavor -Rules $nt6Rules -Dumpbin $nt6Dumpbin `
+                -Win2k $nt6 -BaselineLabel "Windows Vista SP2 / 7 SP1 x86" `
+                -Precedent $null -NtkernText $null -ImageArch "nt6x86"
+        }
+        $images = @()
+    } elseif ($NoTargetEvidence) {
         # The evidence manifests are not even read here: -NoTargetEvidence must
         # work on a host that has no target files at all, and this switch is the
         # allowlist-only path. test-evidence-manifests.ps1 keeps those tracked

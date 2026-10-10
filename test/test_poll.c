@@ -61,6 +61,20 @@ static void test_values(void)
     CHECK_EQ(v.ActiveMs, 1, "active 1 kept");
 }
 
+static void decide_nl(ULONG mode, ULONG have, ULONG msg, ULONG conn,
+                      ULONG pinStatus, ULONG pin, ULONG noLine, ULONG wantD,
+                      ULONG wantR, const char *what)
+{
+    ULONG reason;
+    ULONG d;
+
+    reason = 0xEEEEEEEEUL;
+    d = XhciPollDecide(mode, have, msg, conn, pinStatus, pin, noLine,
+                       &reason);
+    check_eq_impl(d, wantD, what, __FILE__, __LINE__);
+    check_eq_impl(reason, wantR, what, __FILE__, __LINE__);
+}
+
 static void decide(ULONG mode, ULONG have, ULONG msg, ULONG conn,
                    ULONG pinStatus, ULONG pin, ULONG wantD, ULONG wantR,
                    const char *what)
@@ -69,7 +83,7 @@ static void decide(ULONG mode, ULONG have, ULONG msg, ULONG conn,
     ULONG d;
 
     reason = 0xEEEEEEEEUL;
-    d = XhciPollDecide(mode, have, msg, conn, pinStatus, pin, &reason);
+    d = XhciPollDecide(mode, have, msg, conn, pinStatus, pin, 0, &reason);
     check_eq_impl(d, wantD, what, __FILE__, __LINE__);
     check_eq_impl(reason, wantR, what, __FILE__, __LINE__);
 }
@@ -112,6 +126,31 @@ static void test_decide(void)
            XHCI_POLL_R_MESSAGE_NOT_CONNECTED, "1, message not connected");
     decide(2, 1, 1, 1, XHCI_POLL_PIN_READ, 1, XHCI_POLL_DELIVERY_POLL,
            XHCI_POLL_R_FORCED_POLL, "2, message");
+    /* Design record 18 section 4.3: no line offered and no helper. */
+    decide_nl(1, 1, 1, 0, XHCI_POLL_PIN_READ, 0, 1, XHCI_POLL_DELIVERY_NONE,
+              XHCI_POLL_R_FORCED_NO_LINE_OFFERED,
+              "1, message not connected, no line offered: fails");
+    decide_nl(0, 1, 1, 0, XHCI_POLL_PIN_READ, 0, 1, XHCI_POLL_DELIVERY_POLL,
+              XHCI_POLL_R_MESSAGE_NOT_CONNECTED, "0, the same: polls");
+    decide_nl(3, 1, 1, 0, XHCI_POLL_PIN_READ, 0, 1, XHCI_POLL_DELIVERY_POLL,
+              XHCI_POLL_R_MESSAGE_NOT_CONNECTED, "3, the same: polls");
+    decide_nl(2, 1, 1, 0, XHCI_POLL_PIN_READ, 0, 1, XHCI_POLL_DELIVERY_POLL,
+              XHCI_POLL_R_FORCED_POLL, "2, the same: forced poll");
+    decide_nl(1, 1, 1, 0, XHCI_POLL_PIN_READ, 1, 0, XHCI_POLL_DELIVERY_POLL,
+              XHCI_POLL_R_MESSAGE_NOT_CONNECTED,
+              "1, not connected, a line offered: polls as before");
+    decide_nl(1, 1, 1, 1, XHCI_POLL_PIN_READ, 0, 1,
+              XHCI_POLL_DELIVERY_MESSAGE, XHCI_POLL_R_MESSAGE_LINE_ASKED,
+              "1, connected: the message whatever the input");
+    /* The mode moving between the filter and the start (record 18
+     * section 4.2): the start's own mode decides what was granted. */
+    decide(0, 1, 0, 0, XHCI_POLL_PIN_READ, 1, XHCI_POLL_DELIVERY_LINE,
+           XHCI_POLL_R_AUTO, "1 then 0: the granted line, automatic");
+    decide(1, 1, 1, 1, XHCI_POLL_PIN_READ, 1, XHCI_POLL_DELIVERY_MESSAGE,
+           XHCI_POLL_R_MESSAGE_LINE_ASKED,
+           "0 then 1: a message granted, the fallback");
+    decide(2, 1, 0, 0, XHCI_POLL_PIN_READ, 1, XHCI_POLL_DELIVERY_POLL,
+           XHCI_POLL_R_FORCED_POLL, "1 then 2: polls despite the line");
 }
 
 /* ------------------------------------------------------------------ */

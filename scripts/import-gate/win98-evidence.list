@@ -82,6 +82,7 @@ tools\win98se-extracted\wdm\hidclass.sys       4.10.2222        23520 2432B4D46C
 tools\win98se-extracted\wdm\ks.sys             4.10.2222        98432 3548733A21060B88D6CAB8DF822D0F68C0B98F6B9C207A8EC63BDCA76F67A35C Win98 SE CD - Kernel CSA Library; layout.inf "ks.sys=5,,98432"
 tools\win98se-extracted\wdm\ohci1394.sys       4.10.2222        35648 37F690E9135360B8082C12E8E4E9BF9A08D33D1FE877AA523C7D1BB46F30E365 Win98 SE CD - 1394 OpenHci Port Driver; layout.inf "ohci1394.sys=5,,35648"
 tools\win98se-extracted\wdm\sbp2port.sys       4.10.2222        32592 14CC37722AF4690E34110A2C1371EDB3A54241F137F1C92E1E3E2BC4E2121E46 Win98 SE CD - 1394 Bus Device Driver; layout2.inf "sbp2port.sys=5,,32592"
+tools\win98se-extracted\wdm\1394bus.sys        4.10.2222        37328 F1CCA2D7B7A07786CD002C66EA452C1D0A33BCD8774C4C5BEC2A447927128803 Win98 SE CD - 1394 Bus Device Driver; the stock precedent for IoGetDeviceObjectPointer (task 36.15, design record 18 section 3.4; design record 13 Appendix A row 43)
 tools\win98se-extracted\wdm\wdmaud.sys         4.10.2222        68096 014CA5DF60B6840FCFEFB8B83FCD611B5C8C6F93BE77615E759AD2AAE6B424F4 Win98 SE CD - MMSYSTEM Wave/Midi API mapper; layout.inf "wdmaud.sys=20,,68096"
 
 [nametable]

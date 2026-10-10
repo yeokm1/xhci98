@@ -165,6 +165,9 @@ static NTSTATUS NTAPI hcdAddDevice(PDRIVER_OBJECT DriverObject,
     hc->OutstandingIo = 1;
     KeInitializeEvent(&hc->RemoveEvent, NotificationEvent, FALSE);
     HcdControllerInitObjects(hc);
+    /* The requirements filter's mode, read here in AddDevice's system
+     * thread for this FDO's first filter (design record 18 section 4.2). */
+    HcdMsiAddDevice(hc);
 
     hc->LowerDevice = IoAttachDeviceToDeviceStack(fdo, Pdo);
     if (hc->LowerDevice == NULL) {

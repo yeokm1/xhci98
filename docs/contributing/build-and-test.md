@@ -418,6 +418,20 @@ scripts\build-driver.cmd qemu       REM the emulator-only third flavour
 scripts\build-driver.cmd all        REM all three - what a release cut gates
 ```
 
+**Every x86 run also builds `xhcimsi.sys`**, the NT 6 x86 MSI helper
+(design record 18; task 36.15), in `src\msi86\`, with **WDK 7.1 for x86,
+Vista target** (`setenv <WDK> <flavour> x86 WLH no_oacr`), because only that
+kit declares `IoConnectInterruptEx`. So an x86 build needs `tools\WinDDK71`
+(or `WDKROOT`) as well as MSVC 6.0 and the Windows 2000 DDK, and fails
+without it. The helper is gated by the import gate's `nt6x86` profile
+(`-GateProfile nt6x86 -AllowPath scripts\import-gate\xhcimsi-imports.allow`,
+against the Vista SP2 and 7 SP1 x86 kernels of
+`nt6x86-vista-baselines.expected` and `nt6x86-win7-baselines.expected`),
+the flavour marker check and `source-stamp.ps1 -Driver xhcimsi`; its output
+is `src\msi86\obj<flavour>\i386\xhcimsi.sys`, which `make-package.ps1`
+stages into the x86 package (`-MsiDriverPath` overrides it). An `-amd64`
+run builds no helper.
+
 **`-amd64` is a second axis, not a fourth flavour**, and it goes after the
 flavour word:
 
@@ -6389,6 +6403,50 @@ every watcher look reads asserted. Under mode 0 the log ring then shows
 and the counter block delivery 2 with reason 9; under mode 1 no move. The
 start notes `qemu.inj.nointerrupt`, `qemu.inj.pinunreadable` and
 `qemu.inj.deadline.value`.
+
+**`XhciQemuMsgConnectFail`, `XhciMsi86NoStrip`, `XhciMsi86InjNoLine`**
+(task 36.15; design records 15 section 4.3 and 18). REG_DWORDs in the
+controller's driver key, the first read at every start, the other two at
+`AddDevice` and every start for the next requirements filter, so a change
+takes effect at a disable and enable. `XhciQemuMsgConnectFail` 1 fails a
+message connection without calling `IoConnectInterruptEx`: the start polls
+with reason 12. `XhciMsi86NoStrip` 1 keeps the requirements filter from
+stripping (outcome 5, "disabled"), for R1 and R2's readings.
+`XhciMsi86InjNoLine` 1 rewrites the requirements list before it is
+classified - every line member of an interrupt run that also holds a
+message removed, every line-only configuration dropped - so the list
+offers no line (record 18 leg H1a). **`XhciMsiInject`** is the helper's own,
+in `HKLM\SYSTEM\CurrentControlSet\Services\xhcimsi\Parameters`, read once
+in its `DriverEntry` (so a change needs a reboot): 1 fails `DriverEntry`,
+2 refuses the query, 3 answers interface major 2, 4 a short answer, 5 a
+NULL `IoDisconnectInterruptEx`, 6 a wrong magic (record 18 section 2.1).
+
+**The `M86` trace** (`qemu` flavour; record 18 section 9). The
+requirements filter writes every list it receives (`R`), rewrites (`I`)
+and returns (`T`), and the helper binding and the start's decision write
+lifecycle (`L`) and decision (`S`) records, one per line on the port-0xE9
+channel, each with a checksum. `scripts\vm-matrix\check-msi86-trace.ps1
+-Path <debugcon log>` validates a capture - a cut or interleaved record, a
+dropped descriptor, a count that disagrees, all refuse it - and prints the
+lists; R1, R2 and the lifecycle legs are read only from a capture it
+accepts.
+
+**The MSI log notes and counters** (every flavour). At start
+`msi.descriptors`, `msi.raw.count`, `msi.routines` (0 none, 1 amd64's
+`MmGetSystemRoutineAddress`, 2 the x86 helper, 3 not found),
+`msi86.state` (0 unseen, 1 absent, 2 refused, 3 bound), `msi86.status`,
+`msi86.refusal` (the acceptance test that failed), `msi86.helper.version`,
+`msi.filter.seq`, `msi.filter.class` (0 unknown, 1 no interrupt, 2 no
+message, 3 replaceable, 4 no line offered, 5 unsupported shape, 6
+inconsistent), `msi.filter.outcome` (1 lower failed, 2 no list, 3
+inconsistent, 4 not asked, 5 disabled, 6 no line offered, 7 no interrupt,
+8 no message, 9 unsupported, 10 replaced, 11 no memory),
+`msi.filter.mode.raw`, `msi.filter.mode.from`, `msi.filter.lists`,
+`msi.filter.messages`, `msi.filter.lines`; after the connection
+`msi.connect.status`, `msi.connect.version`, `msi.connected` and the
+delivery and reason again. The counter block's words 96 to 113 carry the
+same (`src\xhci_counters.h`); delivery 3 MSI, 4 MSI-X, 5 a message whose
+capability was not read; reason 13 "forced, no line offered".
 
 **The delivery's log notes** (every flavour; design record 15 section 8). At
 start: `intr.mode.read`, `intr.mode`, `intr.delivery`, `intr.reason`,

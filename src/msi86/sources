@@ -1,0 +1,62 @@
+#
+# sources - WDK 7.1 build description for xhcimsi.sys, the NT 6 x86 MSI
+# helper (design record 18; roadmap-hcd.md tasks 36.15 and 36.16), a third
+# binary beside xhci98.sys and xhciuas.sys, installed only by the Vista and
+# 7 x86 install path of xhci98.inf.
+#
+# WDK 7.1, x86, Vista target - `setenv <WDK> fre|chk x86 WLH no_oacr` - and
+# nothing else: the x86 HCD and xhciuas.sys stay on MSVC 6 and the Windows
+# 2000 DDK. The helper imports IoConnectInterruptEx and
+# IoDisconnectInterruptEx, which only WDK 7.1's wlh\i386 ntoskrnl.lib and
+# wdm.h declare (design record 18 section 8.1). Built by
+# scripts\build-driver.cmd for every x86 flavour, after xhciuas.sys, and
+# checked by the import gate's nt6x86 profile against
+# scripts\import-gate\xhcimsi-imports.allow. Output: src\msi86\objfre\i386\
+# xhcimsi.sys (release), objchk (debug), objchk_qemu (qemu).
+#
+# The /GS cookie stays on, the kit's default: the wdmsec.lib members that
+# IoCreateDeviceSecure brings are compiled with cookie checks, so the image
+# initialises the cookie through GsDriverEntry (record 18 section 8.1).
+#
+# ..\xhci_msi86.c is the channel's pure half, shared with xhci98.sys and the
+# host suite (test\test_msi.c); XHCI_MSI86_HELPER makes its header take its
+# types from ntddk.h rather than xhci_compat.h.
+#
+
+TARGETNAME=xhcimsi
+TARGETTYPE=DRIVER
+TARGETPATH=obj
+
+INCLUDES=$(DDK_INC_PATH)
+
+C_DEFINES=$(C_DEFINES) -DXHCI_MSI86_HELPER
+
+TARGETLIBS=$(DDK_LIB_PATH)\wdmsec.lib
+
+SOURCES=msi86_entry.c     \
+        ..\xhci_msi86.c   \
+        xhcimsi.rc
+
+!IF "$(XHCI_EXTRA_DEFINES)" != ""
+!ERROR XHCI_EXTRA_DEFINES is set, and xhcimsi.sys has no diagnostic builds. Clear it before building.
+!ENDIF
+
+#
+# The three flavours, derived from BUILD_ALT_DIR exactly as src\sources
+# derives them for xhci98.sys (design record 08), so the same flavour
+# marker check and packaging refusals apply to this binary. The qemu flavour
+# adds the XhciMsiInject switch (record 18 section 2.1) and nothing else.
+#
+!IF "$(BUILD_ALT_DIR)" == "chk_qemu"
+C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_QEMU
+!ELSEIF "$(BUILD_ALT_DIR)" == "chk"
+C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_DEBUG
+!ELSEIF "$(BUILD_ALT_DIR)" == "fre"
+C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_RELEASE
+!ELSE
+!ERROR BUILD_ALT_DIR is "$(BUILD_ALT_DIR)" and this tree knows exactly three flavours - fre (release), chk (debug) and chk_qemu (qemu). Build through scripts\build-driver.cmd.
+!ENDIF
+
+!IF "$(_BUILDARCH)" != "x86"
+!ERROR xhcimsi.sys is the x86 helper alone (design record 18): the amd64 HCD reaches IoConnectInterruptEx through MmGetSystemRoutineAddress and has no helper.
+!ENDIF
