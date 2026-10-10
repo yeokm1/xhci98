@@ -482,7 +482,9 @@ changing the three layers:
   per controller (record 14 section 6.1), one at a time, holding no bus
   lock; the enum thread waits on it only through a bounded, deferring
   rundown. No power or idle IRP is completed on the enum thread itself:
-  each goes to a work item (roadmap-hcd 36.35's fix).
+  each is queued to a pool of the controller's parked completion workers,
+  provisioned with a grower thread at the PnP start (record 14 section
+  3.12; roadmap-hcd 36.35's fix).
 - **The door's descriptor reads** (36.45, section 8.11): a request pended
   on the controller's door list under its cancel-safe rules and served by
   the enum thread on the default endpoint.
