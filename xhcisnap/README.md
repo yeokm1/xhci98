@@ -412,6 +412,16 @@ applicable" (the raw `MsiFilterMode` word there reads FFFFFFFF, no value).
 A block of 96 words is a driver from before MSI. `-selftest-msi` prints
 the decode over canned images.
 
+After the MSI words come selective suspend's (114 to 141, `SuspSwitchRead`
+to `SuspNotesSuppressed`), eighteen words reserved for its stage B (142 to
+159, not printed) and the composite parent's two (160 and 161,
+`CompositeParents` and `CompositeRepresented`). `-selftest-counters`
+prints every word of a canned block whose word i holds i + 1, and
+`selftest.cmd` checks it word by word against `src\xhci_counters.h`
+(`check-counter-names.ps1`), on the built EXE: an inline lookup over two
+of these tables was once compiled by MSVC 6.0 to name the selective
+suspend words 18 places off.
+
 The PORTSC decode is printed on screen whatever the level, because that is what
 the bench reads on the spot. The headline test is per port: a port reporting a
 device connected with `PP` clear is Finding Q read off the register, whatever

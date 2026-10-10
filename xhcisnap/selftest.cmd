@@ -293,6 +293,23 @@ if not "%MSICOUNT%"=="6" (
     set FAILED=1
 )
 
+rem Every counter word named as the dump prints it (task 36.35's 18-word
+rem shift, an MSVC 6.0 /O2 miscompile of an inline two-table lookup): a
+rem canned image whose word i holds i + 1, checked word by word against
+rem XHCIHC_COUNTERS in src\xhci_counters.h - each field by name and value,
+rem stage B's reserved words not printed, the words past the block as
+rem "counter N".
+"%~dp0XHCISNAP.EXE" -selftest-counters > "%BASE%.counters.log"
+if errorlevel 1 (
+    echo FAIL: -selftest-counters exited %errorlevel%, expected 0
+    set FAILED=1
+)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0check-counter-names.ps1" -Log "%BASE%.counters.log"
+if errorlevel 1 (
+    echo FAIL: XHCISNAP's counter names do not match src\xhci_counters.h
+    set FAILED=1
+)
+
 rem Task 36.9's review: a header longer than its image is refused by
 rem print_hcd, and no other section decodes anything from it.
 "%~dp0XHCISNAP.EXE" -selftest-hcd-bad > "%BASE%.hcdbad.log"
@@ -406,5 +423,5 @@ if "%FAILED%"=="1" (
     echo xhcisnap selftest FAILED
     exit /b 1
 )
-echo xhcisnap selftest: 16 cases, all passed
+echo xhcisnap selftest: 17 cases, all passed
 exit /b 0

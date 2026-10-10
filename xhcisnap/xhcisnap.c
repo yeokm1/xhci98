@@ -2745,6 +2745,76 @@ static int hcd_shape_ok(const unsigned char *image, unsigned long bytes)
 }
 
 /*
+ * The name of counter word i: snap_counter_reserved for a word reserved
+ * for a later block (142 to 159, stage B's), NULL for a word this tool
+ * does not know, which prints as "counter N". Every block's lookup is
+ * here, in a function of its own that is never inlined: MSVC 6.0 /O2
+ * compiled a multi-table lookup written inline in print_hcd's loop as an
+ * index into a later table off the FIRST table's base, so word 114 printed
+ * as stage A's entry 18 (task 36.35's legs; a host harness reproduced it).
+ * Each table is reached by an offset from its block's own first word, the
+ * blocks tested in ascending order. -selftest-counters prints every word.
+ */
+static const char snap_counter_reserved[] = "(reserved)";
+
+#pragma auto_inline(off)
+static const char *hcd_counter_name(unsigned long i)
+{
+    if (i < SNAP_HCD_COUNTER_WORDS) {
+        return hcd_counter_names[i];
+    }
+    if (i >= SNAP_MSI_FIRST && i - SNAP_MSI_FIRST < SNAP_MSI_WORDS) {
+        return msi_counter_names[i - SNAP_MSI_FIRST];
+    }
+    if (i >= SNAP_HCD_SUSP_AT && i - SNAP_HCD_SUSP_AT < SNAP_HCD_SUSP_WORDS) {
+        return hcd_susp_counter_names[i - SNAP_HCD_SUSP_AT];
+    }
+    if (i >= SNAP_SUSPB_AT && i - SNAP_SUSPB_AT < SNAP_SUSPB_WORDS) {
+        return snap_counter_reserved;
+    }
+    if (i >= SNAP_COMP_AT && i - SNAP_COMP_AT < SNAP_COMP_WORDS) {
+        return comp_counter_names[i - SNAP_COMP_AT];
+    }
+    return NULL;
+}
+
+/*
+ * The counter block, `counters` words at countersAt (checked by the
+ * caller), nonzero words only; a reserved word is skipped even when
+ * nonzero. Out of line for the same reason as hcd_counter_name.
+ */
+static void print_hcd_counters(const unsigned char *image,
+                               unsigned long countersAt,
+                               unsigned long counters)
+{
+    const char *name;
+    unsigned long shown;
+    unsigned long i;
+    unsigned long v;
+
+    comp("\ncontroller counters (XHCIHC_COUNTERS), nonzero only:\n");
+    shown = 0;
+    for (i = 0; i < counters; i++) {
+        v = get32(image, countersAt + i * 4);
+        if (v == 0) {
+            continue;
+        }
+        name = hcd_counter_name(i);
+        if (name == snap_counter_reserved) {
+            continue;
+        }
+        if (name != NULL) {
+            comp("  %-26s %lu\n", name, v);
+        } else {
+            comp("  counter %-18lu %lu\n", i, v);
+        }
+        shown++;
+    }
+    comp("  (%lu of %lu nonzero.)\n", shown, counters);
+}
+#pragma auto_inline(on)
+
+/*
  * The image's own header says where everything is; each figure is checked
  * against the bytes that arrived before it is believed. A port is printed
  * only when it has something to say - a machine not Empty, a cause, a speed
@@ -2831,31 +2901,7 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
          "noted.\n   ID is the raw speed ID the port's last reset read.)\n",
          shown, ports);
 
-    comp("\ncontroller counters (XHCIHC_COUNTERS), nonzero only:\n");
-    shown = 0;
-    for (i = 0; i < counters; i++) {
-        v = get32(image, countersAt + i * 4);
-        if (v == 0) {
-            continue;
-        }
-        if (i < SNAP_HCD_COUNTER_WORDS) {
-            comp("  %-26s %lu\n", hcd_counter_names[i], v);
-        } else if (i < SNAP_MSI_FIRST + SNAP_MSI_WORDS) {
-            comp("  %-26s %lu\n", msi_counter_names[i - SNAP_MSI_FIRST], v);
-        } else if (i >= SNAP_HCD_SUSP_AT &&
-                   i < SNAP_HCD_SUSP_AT + SNAP_HCD_SUSP_WORDS) {
-            comp("  %-26s %lu\n", hcd_susp_counter_names[i - SNAP_HCD_SUSP_AT],
-                 v);
-        } else if (i >= SNAP_SUSPB_AT && i < SNAP_SUSPB_AT + SNAP_SUSPB_WORDS) {
-            continue;
-        } else if (i >= SNAP_COMP_AT && i < SNAP_COMP_AT + SNAP_COMP_WORDS) {
-            comp("  %-26s %lu\n", comp_counter_names[i - SNAP_COMP_AT], v);
-        } else {
-            comp("  counter %-18lu %lu\n", i, v);
-        }
-        shown++;
-    }
-    comp("  (%lu of %lu nonzero.)\n", shown, counters);
+    print_hcd_counters(image, countersAt, counters);
 }
 
 /* ---- controller tolerance: the extension's Tol, placed by the HCD header */
@@ -4481,6 +4527,38 @@ static int selftest_hcd_bad(void)
     put32(hcd, 80, 27);
     put32(hcd, 48 * 4, 59);
     print_hcd_sections(hcd, bytes, NULL, 0);
+    return 0;
+}
+
+/*
+ * `-selftest-counters`: every counter word named through print_hcd, as the
+ * dump prints it, over a canned image whose word i holds i + 1 (so every
+ * word is nonzero and its value names its place): 0 to 161 and two words
+ * past the last block. selftest.cmd compares each printed name and value
+ * with the field order of src\xhci_counters.h, so a lookup that the
+ * compiler turns into the wrong table or offset fails there (task 36.35's
+ * 18-word shift under MSVC 6.0 /O2).
+ */
+#define SNAP_COUNTERS_TEST_WORDS    (SNAP_COMP_AT + SNAP_COMP_WORDS + 2UL)
+static int selftest_counters(void)
+{
+    static unsigned char image[32 + SNAP_COUNTERS_TEST_WORDS * 4];
+    unsigned long i;
+
+    memset(image, 0, sizeof(image));
+    put32(image, 0, 1);
+    put32(image, 4, 32);
+    put32(image, 8, 0);
+    put32(image, 12, 64);
+    put32(image, 16, 32);
+    put32(image, 20, SNAP_COUNTERS_TEST_WORDS);
+    put32(image, 24, 32);
+    for (i = 0; i < SNAP_COUNTERS_TEST_WORDS; i++) {
+        put32(image, 32 + i * 4, i + 1);
+    }
+    companion = NULL;
+    print_hcd(image, sizeof(image));
+    comp("[end]\n");
     return 0;
 }
 
@@ -6729,6 +6807,8 @@ int main(int argc, char **argv)
             return selftest_intr();
         } else if (strcmp(argv[i], "-selftest-msi") == 0) {
             return selftest_msi();
+        } else if (strcmp(argv[i], "-selftest-counters") == 0) {
+            return selftest_counters();
         } else if (strcmp(argv[i], "-selftest-xstat") == 0) {
             return selftest_xstat();
         } else if (strcmp(argv[i], "-selftest-sysinfo") == 0) {
