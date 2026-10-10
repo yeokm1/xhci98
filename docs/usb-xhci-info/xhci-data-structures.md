@@ -1637,6 +1637,24 @@ SuperSpeed-class rate above 5 Gb/s as SuperSpeedPlus whatever LP says, and LP
 = 1 as SuperSpeedPlus whatever the rate (`XhciPortRate`); 1.2c does not say
 which LP a Gen 1 x2 PSI carries, so that rule is the driver's.
 
+A USB 2.0 group may publish a table too, and what it describes is the
+root port's own link, not every speed below it. The note under Table 7-10
+(xHCI 1.2c 7.2.1, p.482-483) lets "an xHC implementation that employs an
+Integrated Hub to provide USB Full-speed and Low-speed support and only
+provided a USB 2.0 High-speed BI" publish a single PSI DWORD, PSIC = 1,
+"PSIV = 3, PLT = 0, PFD = 0, PSIE = 2, and PSIM = 480" (`01E00023`), and
+the group's protocol-defined bits say so: bit 17 HSO, "High-speed only",
+and bit 18 IHI, "Integrated Hub Implemented" (Table 7-15, p.488). A
+device behind that integrated hub is still Full or Low Speed, and its Slot
+Context Speed is "Defined by downstream facing port attached to the
+device" (4.5.2, p.84); the specification names no other ID for it than
+Table 7-13's 1 and 2. The VIA VL805 (`1106:3483`) publishes exactly this
+(issue 13, GitHub issue 18): the driver writes 1 or 2 for such a device
+where the table names neither the speed nor the ID, and decodes a root
+port's PORTSC strictly by the table as before
+(`implementation-invariants.md`, "Port Speed Decoding", the downstream
+exception; `XhciPortPsivForHubChild`).
+
 ### 10.2 PORTSC, PORTLI and HCCPARAMS2 for a USB3 protocol port (xHCI 5.4.8, 5.4.10, 5.3.9)
 
 PORTSC's bit table is section 3's; these are the USB3 meanings of its

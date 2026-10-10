@@ -355,3 +355,15 @@ stands in for it.
 
 The Licence limits section above applies to these as well: Intel's
 documents are fetched per machine, never tracked.
+
+## VIA Labs VL805 datasheet (issue 13, GitHub issue 18)
+
+Cited by issue 13 (`docs/issues/13-via-vl805-usb2-integrated-hub-speed-ids.md`)
+for the VL805's architecture and one register. No official download URL is
+recorded: the owner's copy was placed on the maintainer's disk on
+2026-10-10, outside this directory, and it is not redistributed. Its text
+was extracted with `pdftotext -layout`; the extract is not authoritative.
+
+| Name | Version | SHA-256 | What it settles |
+|---|---|---|---|
+| `DS_VLI_VL805_093.pdf` | VIA Labs, "VL805 4-Port USB 3.0 Host Controller" datasheet, Revision 0.93, Sep. 4, 2014 (28 pages) | `be2d93a38e80331596da351dbb9a70c34ee61afa252fb4e0608d4cbf991bf305` | Four downstream ports of every speed, section 1 p.4; the four USB 2.0 pin pairs `USB2D1`-`USB2D4`, section 4 p.8; PCI configuration `50-53h` "XHCI MCU Firmware Version" (`FW_VERSION`, RO), section 6 p.14; `HCSPARAMS1` default `05000420h`, section 7 p.18; `HCCPARAMS` default `002841EBh`, p.20. It says nothing about speed tables |
