@@ -1070,6 +1070,55 @@ git-ignored and outside releases\; out\ is the default.
     }
 }
 
+function Find-TestClientFiles {
+    # Selective suspend's test client (roadmap-hcd.md task 36.34; design
+    # record 14 section 11: tracked under test\, never shipped, and this gate
+    # refuses it in a release). Every file under $Root whose name is one of
+    # the client's - XHCIPM.SYS, XHCIPM.INF, PMCTL.EXE - or whose bytes carry
+    # its marker XHCI98_TEST_CLIENT_DO_NOT_SHIP, wherever it sits and
+    # whatever it is renamed to: the names catch the ordinary mistake, the
+    # marker a renamed copy. Returns the relative paths; empty when clean.
+    param([string]$Root)
+
+    $names = @('xhcipm.sys', 'xhcipm.inf', 'pmctl.exe')
+    $marker = [System.Text.Encoding]::ASCII.GetBytes('XHCI98_TEST_CLIENT_DO_NOT_SHIP')
+    $hits = @()
+    foreach ($item in (Get-ChildItem -LiteralPath $Root -File -Recurse)) {
+        $relative = $item.FullName.Substring($Root.TrimEnd('\').Length).TrimStart('\')
+        if ($item.Name.ToLowerInvariant() -in $names) {
+            $hits += $relative
+            continue
+        }
+        $bytes = [System.IO.File]::ReadAllBytes($item.FullName)
+        $last = $bytes.Length - $marker.Length
+        for ($i = 0; $i -le $last; $i++) {
+            if ($bytes[$i] -ne $marker[0]) { continue }
+            $j = 1
+            while ($j -lt $marker.Length -and $bytes[$i + $j] -eq $marker[$j]) { $j++ }
+            if ($j -eq $marker.Length) {
+                $hits += $relative
+                break
+            }
+        }
+    }
+    return $hits
+}
+
+function Assert-NoTestClient {
+    param([string]$Root, [string]$What)
+
+    $hits = @(Find-TestClientFiles -Root $Root)
+    if ($hits.Count -gt 0) {
+        throw @"
+$What holds selective suspend's test client (test\pmclient, roadmap-hcd.md
+task 36.34), which is never shipped:
+  - $($hits -join "`n  - ")
+It is a test driver for the VM legs only. Take it out; a release carries
+this project's own files and nothing from test\.
+"@
+    }
+}
+
 function Assert-PackageMatchesDeclaredMedia {
     # Nothing in the package may be unaccounted for. Both halves matter: a file
     # the INF does not name must not be published, and a declared file must not
@@ -1556,6 +1605,9 @@ $gateOut
     # every published release declares once, so -UploadSetOnly dates an old
     # release by that release; noon keeps the day whatever an unpacker makes
     # of the archive's zoneless times. The bytes are untouched.
+    # The test client (task 36.34) anywhere in the asset, the tools'
+    # directories included, before anything is dated or zipped.
+    Assert-NoTestClient -Root $uploadRoot -What "the upload set '$uploadRoot'"
     $infDates = @(Get-ChildItem -LiteralPath $uploadRoot -Filter '*.inf' -File -Recurse |
                   ForEach-Object { Get-InfDriverDate -Path $_.FullName } | Sort-Object -Unique)
     if ($infDates.Count -ne 1) {
@@ -2103,6 +2155,7 @@ runs are what stand between a broken binary and a guest that cannot boot.
                                            -PublishedPaths $declaredPublished[$leg.Arch] `
                                            -InfName "xhci98.inf" -Flavor $leg.Id `
                                            -Also ($uasPublishable + $oemPublishable)
+        Assert-NoTestClient -Root $pkgDir -What "the package '$pkgDir'"
 
         $sys = Join-Path $destDir "xhci98.sys"
         $info = (Get-Item -LiteralPath $sys).VersionInfo

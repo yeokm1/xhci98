@@ -6497,6 +6497,74 @@ reading the result. The expected outcome of each fault, transient and
 persistent, is record 17 section 5's second table; the 35-V legs read them
 with a HID device and a Bulk-Only copy running.
 
+### Selective suspend: the switch, its counters and the test client (36.33, 36.34)
+
+**`XhciSelectiveSuspend`** (design record 14 section 7). A REG_DWORD in the
+controller's driver key (the keys above), read at every start before the
+controller is initialized: exactly 1 turns selective suspend on - stage A,
+and stage B once it is built - and absent, 0, any other number or another
+type is off, today's behaviour bit for bit. No INF writes it. A change takes
+effect at the next start. The log ring notes `susp.switch.value` (the value
+read, `FFFFFFFF` when absent) and `susp.switch`.
+
+**Counters.** Words 114 to 141 of the counter block (`src\xhci_counters.h`;
+words 96 to 113 are reserved for the MSI work's), dumped at the stop as
+`susp.*` and `idle.*` lines and printed by name by `XHCISNAP`: the switch as
+read and in effect; suspends, host resumes and device wakes begun; how the
+sequences ended (`SuspSuspended`, `SuspActive`, `SuspRefused` with
+`SuspRefusedReason`, `SuspUncertain`, `SuspGone`); remote wake set and
+cleared; wake events, unclaimed wakes and the WAIT_WAKEs they completed;
+samples of another device generation; D-IRPs pended, stale-epoch Dx
+completed, slow IRPs deferred; idle batches, callbacks called and returned,
+entries skipped, client cancels, callbacks abandoned by a stop, PDOs
+quarantined; and `SuspNotesSuppressed`.
+
+**Log lines.** At most 64 per start (the rest counted in
+`SuspNotesSuppressed`): `susp.seq` at each sequence's end - bits 31-20 the
+PDO group, 19-16 the link state before, 15-12 after (`XHCI_SUSP_ACTIVE` 0,
+`SUSPENDING` 1, `SUSPENDED` 2, `RESUMING` 3, `RECOVERING` 4, `GONE` 5),
+11-8 the kind (1 suspend, 2 host resume, 3 device wake), 7-4 the outcome
+(`XHCI_SUSP_OUT_*`), 3-0 the refusal's reason (`XHCI_SUSP_WHY_*`) - then
+`susp.seq.epoch`; `idle.call` (the port) as a callback is called,
+`idle.abandon` and `idle.quarantine`.
+
+**The test client** (`test\pmclient`; record 14 section 10, SUSPa.6). TEST
+ONLY: never shipped, and `scripts\package\make-release.ps1` refuses a
+release holding `XHCIPM.SYS`, `XHCIPM.INF`, `PMCTL.EXE` or any file carrying
+the marker `XHCI98_TEST_CLIENT_DO_NOT_SHIP` (`Find-TestClientFiles`, with
+fixture tests in `test-package.ps1`). `test\pmclient\build.cmd` builds
+`out\XHCIPM.SYS` (Windows 2000 DDK, checked, x86) and `out\PMCTL.EXE` (MSVC
+6.0) and copies `out\XHCIPM.INF`; copy the three to the guest's transfer
+drive.
+
+- *What it binds.* `XHCIPM.INF` names `USB\VID_0627&PID_0001`, the id QEMU's
+  `usb-mouse`, `usb-tablet` and `usb-kbd` all answer (their configuration
+  sets remote wakeup). Give the guest a PS/2 mouse and keyboard for its own
+  input, add one QEMU USB HID device on the xHCI controller, and install the
+  INF for it: on 98 SE and ME copy it to `\WINDOWS\INF` before the device
+  arrives (or point the Add New Hardware wizard at it); on 2000 and XP
+  Update Driver, Have Disk. It is the device's function driver and its
+  power policy owner; the device answers nothing to Windows' HID stack.
+- *What it does.* `PMCTL STATUS` prints its counts (D-IRPs requested and
+  their callbacks; WAIT_WAKE requested, its requester's callback - the 9x
+  defect of record 14 section 5.5 is this never coming - and the IRP's
+  completion seen through the FDO; idle submissions, callbacks and
+  completions with what the callback's D-IRP returned; the interrupt IN
+  reads; the configuration's attributes). `PMCTL D0|D1|D2|D3` requests a
+  device state; `WW` and `WWCANCEL` a WAIT_WAKE; `IDLE [flags]` and
+  `IDLECANCEL` the idle notification (flags: 1 arm wake in the callback, 2
+  do nothing in it, 4 ask D3, 8 request D0 when it completes); `READS ON|OFF`
+  keeps a read posted, which shows transfers resuming after a wake; `RESET`
+  zeroes the counts; `WATCH n` prints the status once a second. `-n N`
+  picks `\\.\XHCIPM<N>` when more than one device is bound.
+- *A wake.* With the switch at 1: `PMCTL WW`, then `PMCTL D2` - the bus arms
+  remote wake and suspends the port (`SuspArms`, `SuspSuspended`); move the
+  QEMU device (HMP `mouse_move` after `mouse_set` to it) and the device
+  signals wake: `SuspWakeEvents`, the WAIT_WAKE's callback, the client's D0
+  and `SuspActive`; QEMU changes U3 and U0 at once and wakes an endpoint
+  whether remote wake was enabled or not, so each step is read separately
+  (record 14 section 10).
+
 ### Getting a trace off a bare-metal machine
 
 Two different things are covered here, and the distinction matters. The trace
