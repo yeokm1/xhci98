@@ -3646,7 +3646,7 @@ the same device.
 | `BusQueryHardwareIDs` | `XHCI98\COMPOSITE&VID_vvvv&PID_pppp&REV_rrrr`, `XHCI98\COMPOSITE&VID_vvvv&PID_pppp`, `XHCI98\COMPOSITE` |
 | `BusQueryCompatibleIDs` | none |
 | `BusQueryInstanceID` | any PDO's rule (`hcdInstanceQueryId`, 33.2): the device's serial id when it has a usable one, `UniqueID` TRUE, else the location key in decimal, `UniqueID` FALSE - what the device would answer were it not split |
-| Device text | its `iProduct` (33.6, read once per enumeration and kept like any PDO's), else `USB Composite Device`, the name Microsoft's own INFs give the parent; the INF's model text replaces it once installed |
+| Device text | its `iProduct` (33.6, read once per enumeration and kept like any PDO's), else `USB Composite Device`, the name Microsoft's own INFs give the parent; the INF's model text replaces it once installed. Each PDO's strings are picked by its own function (`pdo->Func`, none for the parent), never by its place on the chain, which the parent now heads |
 
 Never `USB\COMPOSITE` (it would bring `usbccgp.sys` or Windows 98's
 `usbhub.sys` onto an already split device, 10.7), never `USB\VID_&PID_`
@@ -3722,24 +3722,42 @@ parent by its `Serial` whether it is a hub or a composite. In particular:
    composite FDO, then sends the parent PDO its `REMOVE` (listed, so kept:
    the WDM rule). The FDO's `REMOVE` lets go of the functions
    (`ParentLetGo`), since PnP forgets their devnodes with the parent's
-   (10.11 item 4); the device stays configured with no client, every
-   function's own `REMOVE` having released its endpoints. **The enable
+   (10.11 item 4); the device stays configured with no client. Each
+   function's own `REMOVE` **queued** the release of its endpoints and
+   alternates (`HcdCfgReleaseFunction` records `FuncRelease`; the thread
+   runs it, retrying a refused one a bounded number of times, 10.9), and
+   the release-before-reconfigure order `HcdCfgService` keeps puts that
+   release ahead of any later select of the same interfaces. **The enable
    re-presents the functions in place**: the parent PDO's `START` makes it
    PnP's again, and the composite FDO's `START` asks the thread
    (`HcdEnumRepresent`, by port and group serial, so a request that outlives
    its device does nothing) to build, for each let-go function, a new
    function PDO from the device record's configuration - the same function,
-   ids, text, serial id, instance key and `Address` - swap it into the
-   group's chain, list it, and unlist the old one, which is missing at once
-   and, its `REMOVE` already seen, deleted at the next relations answer,
-   before the first answer that carries its successor
-   (`HcdDevicePdoRepresentFunctions`). PnP finds the instance ids it had,
-   so the functions come back as the devnodes they were, with no wizard.
-   No re-enumeration and no reconfiguration: the device is never reset,
-   and each new function selects its configuration as any class driver
-   does. **Not the hub's cycle**: cycling the port, as a hub FDO's start
-   does for its children, would take the parent itself - which PnP has just
-   started - away and back. On Windows 98 SE and ME a disable may `STOP`
+   ids, text, serial id, instance key, `Address`, transport and parent -
+   swap it into the group's chain, list it, and unlist the old one, which
+   is missing at once and, its `REMOVE` already seen, goes to `RemovedPdos`
+   (`HcdDevicePdoRepresentFunctions`). The next relations answer, of any
+   parent, deletes it while it builds its list - before PnP receives that
+   answer, which may be the first to carry its successor - so PnP never
+   meets two objects at one instance id, and finds the id it had on the
+   new one: the functions come back as the devnodes they were, with no
+   wizard. No re-enumeration and no reconfiguration: the device is never
+   reset, and each new function selects its configuration as any class
+   driver does. **Not the hub's cycle**: cycling the port, as a hub FDO's
+   start does for its children, would take the parent itself - which PnP
+   has just started - away and back.
+   **The request's life.** Posted before the FDO's start asks its settle
+   generation (5.7), it is taken by the thread's next pass, which reads
+   that generation first, so a pass that can settle it has already
+   re-presented; the settle may still have ended early (no wait configured,
+   or its deadline), so the thread also **invalidates the parent** once
+   it has listed a replacement, and PnP asks the composite FDO again
+   whenever that comes. A device no longer the group's when the pass runs
+   drops the request. A replacement that cannot be built (no pool, an
+   `IoCreateDevice` failure) leaves its function let go and absent - traced,
+   not retried - until the next start of a composite FDO on that parent (a
+   disable and enable) or the device's next plug; the others are
+   re-presented regardless. On Windows 98 SE and ME a disable may `STOP`
    rather than remove, as for a hub; then nothing is let go and nothing
    changes (read on the guests).
 4. **A composite behind a hub whose devnode is disabled**: the hub FDO's
@@ -3756,7 +3774,14 @@ parent by its `Serial` whether it is a hub or a composite. In particular:
    lone device there is not. The sameness test compares the chains
    position by position; a function's `ParentSerial` is not compared,
    since it names the old parent, which revives with its `Serial`
-   unchanged, so the revived functions name the revived parent.
+   unchanged, so the revived functions name the revived parent. A dormant
+   group retired whole - by a dormant PDO's `REMOVE` or its `START`'s wait
+   (`hcdDormantRemoved`, `hcdDormantWait`), which a function can be the one
+   to receive - invalidates the parent its **first PDO** is presented under
+   (`hcdGroupParentLocked`), never the function's own `ParentSerial`, which
+   names the composite parent just retired with it: behind a present hub
+   only that hub's answer reports the parent missing and ends its port's
+   wait.
 6. **The controller's stop and removal**: unchanged
    (`HcdDevicePdoReleaseAll`); a composite FDO reaches the controller only
    through its PDO's `Controller` inside the PDO's `Busy`, the hub FDO's
