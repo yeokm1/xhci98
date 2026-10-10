@@ -52,30 +52,41 @@ typedef struct _PM_EXT {
     ULONG LinkMade;
     KSPIN_LOCK Lock;
     PM_STATUS St;
-    /* WAIT_WAKE as it passes down through this FDO: held here so a cancel
-     * can reach it; WakeRef 1 for the IRP, +1 while a canceller holds it
-     * (the completion routine keeps the IRP while a canceller does). */
+    /* Admission: Open from a successful START to the next STOP, SURPRISE
+     * or REMOVE; Busy counts PMCTL's dispatches inside; Outstanding every
+     * power request whose callback has not run, which REMOVE waits out. */
+    volatile ULONG Open;
+    LONG Busy;
+    LONG Outstanding;
+    /* WAIT_WAKE: WakeBusy reserves this client's one request until its
+     * callback; WakeIrp/WakeRef track it as it passes down through this
+     * FDO, WakeRef 1 for the IRP, +1 while a canceller holds it (the
+     * completion routine keeps the IRP while a canceller does). */
+    LONG WakeBusy;
     PIRP WakeIrp;
-    volatile LONG WakeRef;
-    /* The idle IRP, this driver's own: IdleRef 1 for its completion, +1
-     * while a canceller holds it; the last to let go frees it. */
+    LONG WakeRef;
+    /* The idle IRP, this driver's own: IdleBusy reserves it until its last
+     * reference is let go; IdleRef 1 for its completion, +1 while a
+     * canceller holds it; the last frees it. IdlePowerDone: the callback's
+     * D-IRP has completed. */
+    LONG IdleBusy;
     PIRP IdleIrp;
-    volatile LONG IdleRef;
+    LONG IdleRef;
     ULONG IdleFlags;
     PM_IDLE_INFO IdleInfo;
-    KEVENT IdleGone;
-    /* The read loop: one IRP and URB at a time, the same reference rule. */
+    LONG IdlePowerDone;
+    /* The read loop (pmReadPost): wanted, posted, the IRP and its
+     * reference, the last completion's verdict. */
     USBD_PIPE_HANDLE InPipe;
     ULONG InMax;
+    ULONG ReadWanted;
+    LONG ReadBusy;
     PIRP ReadIrp;
-    volatile LONG ReadRef;
+    LONG ReadRef;
+    ULONG ReadOk;
     PURB ReadUrb;
     UCHAR ReadBuf[64];
-    KEVENT ReadGone;
-    /* The idle callback's D-IRP, waited for in the callback. */
-    KEVENT IdlePowerDone;
     UCHAR Config[512];
-    ULONG Removed;
 } PM_EXT, *PPM_EXT;
 
 static ULONG pmNextIndex;
@@ -87,7 +98,6 @@ static NTSTATUS NTAPI pmIoctl(PDEVICE_OBJECT dev, PIRP irp);
 static NTSTATUS NTAPI pmPnp(PDEVICE_OBJECT dev, PIRP irp);
 static NTSTATUS NTAPI pmPower(PDEVICE_OBJECT dev, PIRP irp);
 static NTSTATUS NTAPI pmPass(PDEVICE_OBJECT dev, PIRP irp);
-static VOID pmReadStart(PPM_EXT ext);
 
 NTSTATUS NTAPI DriverEntry(PDRIVER_OBJECT driver, PUNICODE_STRING path)
 {
@@ -153,9 +163,6 @@ static NTSTATUS NTAPI pmAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
     ext->Pdo = pdo;
     ext->Index = index;
     KeInitializeSpinLock(&ext->Lock);
-    KeInitializeEvent(&ext->IdleGone, NotificationEvent, TRUE);
-    KeInitializeEvent(&ext->ReadGone, NotificationEvent, TRUE);
-    KeInitializeEvent(&ext->IdlePowerDone, NotificationEvent, FALSE);
     ext->St.Size = sizeof(PM_STATUS);
     ext->St.Version = 1;
     ext->St.DevicePower = PowerDeviceD0;
@@ -325,6 +332,34 @@ static VOID pmConfigure(PPM_EXT ext)
 }
 
 /* ------------------------------------------------------------------ */
+/* Rundown of the control path                                         */
+/* ------------------------------------------------------------------ */
+
+static VOID pmSleepMs(ULONG ms)
+{
+    LARGE_INTEGER due;
+
+    due.QuadPart = -(LONGLONG)ms * 10000;
+    (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+}
+
+/* Until `*count` reads 0, polled at 1 ms: an event wait on Windows 98 may
+ * return unsatisfied (docs\usb-xhci-info\win98-wdm.md). PASSIVE_LEVEL. */
+static VOID pmWaitZero(volatile LONG *count)
+{
+    while (*count != 0) {
+        pmSleepMs(1);
+    }
+}
+
+static VOID pmWaitNonZero(volatile LONG *flag)
+{
+    while (*flag == 0) {
+        pmSleepMs(1);
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Power requests                                                      */
 /* ------------------------------------------------------------------ */
 
@@ -343,8 +378,11 @@ static VOID NTAPI pmPowerDone(PDEVICE_OBJECT dev, UCHAR minor,
     ext->St.PowerLastStatus = io->Status;
     ext->St.PowerLastState = state.DeviceState;
     KeReleaseSpinLock(&ext->Lock, irql);
+    InterlockedDecrement(&ext->Outstanding);
 }
 
+/* A D-IRP requested; `done` NULL counts it with pmPowerDone. Every request
+ * holds Outstanding until its callback has run, which REMOVE waits for. */
 static NTSTATUS pmRequestPower(PPM_EXT ext, DEVICE_POWER_STATE d,
                                PREQUEST_POWER_COMPLETE done, PVOID ctx)
 {
@@ -356,10 +394,12 @@ static NTSTATUS pmRequestPower(PPM_EXT ext, DEVICE_POWER_STATE d,
     KeAcquireSpinLock(&ext->Lock, &irql);
     ext->St.PowerRequests++;
     KeReleaseSpinLock(&ext->Lock, irql);
+    InterlockedIncrement(&ext->Outstanding);
     status = PoRequestPowerIrp(ext->Pdo, IRP_MN_SET_POWER, state,
                                done != NULL ? done : pmPowerDone,
                                done != NULL ? ctx : ext, NULL);
     if (status != STATUS_PENDING && !NT_SUCCESS(status)) {
+        InterlockedDecrement(&ext->Outstanding);
         KeAcquireSpinLock(&ext->Lock, &irql);
         ext->St.PowerRefused++;
         ext->St.PowerLastStatus = status;
@@ -369,8 +409,8 @@ static NTSTATUS pmRequestPower(PPM_EXT ext, DEVICE_POWER_STATE d,
 }
 
 /* The requester's WAIT_WAKE callback (5.5's 9x defect is this never being
- * called): counted, and a wake that completed SUCCESS brings the device
- * back to D0, as a class driver does. */
+ * called): counted, the reservation released, and a wake that completed
+ * SUCCESS brings the device back to D0, as a class driver does. */
 static VOID NTAPI pmWakeDone(PDEVICE_OBJECT dev, UCHAR minor,
                              POWER_STATE state, PVOID ctx,
                              PIO_STATUS_BLOCK io)
@@ -388,24 +428,33 @@ static VOID NTAPI pmWakeDone(PDEVICE_OBJECT dev, UCHAR minor,
     ext->St.WakeCallbacks++;
     ext->St.WakeLastStatus = status;
     KeReleaseSpinLock(&ext->Lock, irql);
-    if (NT_SUCCESS(status) && !ext->Removed) {
+    if (NT_SUCCESS(status) && ext->Open) {
         (VOID)pmRequestPower(ext, PowerDeviceD0, NULL, NULL);
     }
+    InterlockedExchange(&ext->WakeBusy, 0);
+    InterlockedDecrement(&ext->Outstanding);
 }
 
+/* One WAIT_WAKE at a time: reserved here, released by its callback. */
 static NTSTATUS pmRequestWake(PPM_EXT ext)
 {
     POWER_STATE state;
     NTSTATUS status;
     KIRQL irql;
 
+    if (InterlockedExchange(&ext->WakeBusy, 1) != 0) {
+        return STATUS_DEVICE_BUSY;
+    }
     state.SystemState = PowerSystemWorking;
     KeAcquireSpinLock(&ext->Lock, &irql);
     ext->St.WakeRequests++;
     KeReleaseSpinLock(&ext->Lock, irql);
+    InterlockedIncrement(&ext->Outstanding);
     status = PoRequestPowerIrp(ext->Pdo, IRP_MN_WAIT_WAKE, state, pmWakeDone,
                                ext, NULL);
     if (status != STATUS_PENDING && !NT_SUCCESS(status)) {
+        InterlockedDecrement(&ext->Outstanding);
+        InterlockedExchange(&ext->WakeBusy, 0);
         KeAcquireSpinLock(&ext->Lock, &irql);
         ext->St.WakeLastStatus = status;
         KeReleaseSpinLock(&ext->Lock, irql);
@@ -431,7 +480,7 @@ static NTSTATUS NTAPI pmWakeIrpDone(PDEVICE_OBJECT dev, PIRP irp, PVOID ctx)
     ext->St.WakeHeld = 0;
     ext->WakeIrp = NULL;
     KeReleaseSpinLock(&ext->Lock, irql);
-    if (InterlockedDecrement((PLONG)&ext->WakeRef) != 0) {
+    if (InterlockedDecrement(&ext->WakeRef) != 0) {
         return STATUS_MORE_PROCESSING_REQUIRED;
     }
     return STATUS_SUCCESS;
@@ -445,14 +494,14 @@ static VOID pmWakeCancel(PPM_EXT ext)
     KeAcquireSpinLock(&ext->Lock, &irql);
     irp = ext->WakeIrp;
     if (irp != NULL) {
-        InterlockedIncrement((PLONG)&ext->WakeRef);
+        InterlockedIncrement(&ext->WakeRef);
     }
     KeReleaseSpinLock(&ext->Lock, irql);
     if (irp == NULL) {
         return;
     }
     (VOID)IoCancelIrp(irp);
-    if (InterlockedDecrement((PLONG)&ext->WakeRef) == 0) {
+    if (InterlockedDecrement(&ext->WakeRef) == 0) {
         IoCompleteRequest(irp, IO_NO_INCREMENT);
     }
 }
@@ -477,7 +526,8 @@ static VOID NTAPI pmIdlePowerDone(PDEVICE_OBJECT dev, UCHAR minor,
     ext->St.PowerLastState = state.DeviceState;
     ext->St.IdleCallbackPowerStatus = io->Status;
     KeReleaseSpinLock(&ext->Lock, irql);
-    KeSetEvent(&ext->IdlePowerDone, IO_NO_INCREMENT, FALSE);
+    InterlockedExchange(&ext->IdlePowerDone, 1);
+    InterlockedDecrement(&ext->Outstanding);
 }
 
 /* The bus's idle callback, at PASSIVE_LEVEL on its thread: what XP's
@@ -497,17 +547,24 @@ static VOID NTAPI pmIdleCallback(PVOID context)
     ext->St.IdleCallbacks++;
     ext->St.IdleCallbackPower = (flags & PM_IDLE_NO_POWER) ? 0 : d;
     KeReleaseSpinLock(&ext->Lock, irql);
-    if (flags & PM_IDLE_NO_POWER) {
+    if ((flags & PM_IDLE_NO_POWER) || !ext->Open) {
         return;
     }
-    if ((flags & PM_IDLE_ARM_WAKE) && !ext->St.WakeHeld) {
+    if (flags & PM_IDLE_ARM_WAKE) {
         (VOID)pmRequestWake(ext);
     }
-    KeClearEvent(&ext->IdlePowerDone);
+    InterlockedExchange(&ext->IdlePowerDone, 0);
     if (pmRequestPower(ext, d, pmIdlePowerDone, ext) == STATUS_PENDING) {
-        (VOID)KeWaitForSingleObject(&ext->IdlePowerDone, Executive,
-                                    KernelMode, FALSE, NULL);
+        pmWaitNonZero(&ext->IdlePowerDone);
     }
+}
+
+/* The idle IRP's last reference let go: freed, the reservation released.
+ * IRQL: <= DISPATCH_LEVEL. */
+static VOID pmIdleRetire(PPM_EXT ext, PIRP irp)
+{
+    IoFreeIrp(irp);
+    InterlockedExchange(&ext->IdleBusy, 0);
 }
 
 static NTSTATUS NTAPI pmIdleDone(PDEVICE_OBJECT dev, PIRP irp, PVOID ctx)
@@ -526,30 +583,29 @@ static NTSTATUS NTAPI pmIdleDone(PDEVICE_OBJECT dev, PIRP irp, PVOID ctx)
     ext->IdleIrp = NULL;
     KeReleaseSpinLock(&ext->Lock, irql);
     if (NT_SUCCESS(status) && (ext->IdleFlags & PM_IDLE_AUTO_D0) &&
-        !ext->Removed) {
+        ext->Open) {
         (VOID)pmRequestPower(ext, PowerDeviceD0, NULL, NULL);
     }
-    if (InterlockedDecrement((PLONG)&ext->IdleRef) == 0) {
-        IoFreeIrp(irp);
-        KeSetEvent(&ext->IdleGone, IO_NO_INCREMENT, FALSE);
+    if (InterlockedDecrement(&ext->IdleRef) == 0) {
+        pmIdleRetire(ext, irp);
     }
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
+/* One idle IRP at a time: IdleBusy is reserved until its last reference
+ * is let go (pmIdleRetire), so nothing of it is reused before then. */
 static NTSTATUS pmIdleSubmit(PPM_EXT ext, ULONG flags)
 {
     PIRP irp;
     PIO_STACK_LOCATION next;
     KIRQL irql;
 
-    KeAcquireSpinLock(&ext->Lock, &irql);
-    if (ext->IdleIrp != NULL) {
-        KeReleaseSpinLock(&ext->Lock, irql);
+    if (InterlockedExchange(&ext->IdleBusy, 1) != 0) {
         return STATUS_DEVICE_BUSY;
     }
-    KeReleaseSpinLock(&ext->Lock, irql);
     irp = IoAllocateIrp(ext->Lower->StackSize, FALSE);
     if (irp == NULL) {
+        InterlockedExchange(&ext->IdleBusy, 0);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
     ext->IdleFlags = flags;
@@ -565,7 +621,6 @@ static NTSTATUS pmIdleSubmit(PPM_EXT ext, ULONG flags)
     next->Parameters.Others.Argument1 = &ext->IdleInfo;
     irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
     IoSetCompletionRoutine(irp, pmIdleDone, ext, TRUE, TRUE, TRUE);
-    KeClearEvent(&ext->IdleGone);
     KeAcquireSpinLock(&ext->Lock, &irql);
     ext->IdleRef = 1;
     ext->IdleIrp = irp;
@@ -584,16 +639,15 @@ static VOID pmIdleCancel(PPM_EXT ext)
     KeAcquireSpinLock(&ext->Lock, &irql);
     irp = ext->IdleIrp;
     if (irp != NULL) {
-        InterlockedIncrement((PLONG)&ext->IdleRef);
+        InterlockedIncrement(&ext->IdleRef);
     }
     KeReleaseSpinLock(&ext->Lock, irql);
     if (irp == NULL) {
         return;
     }
     (VOID)IoCancelIrp(irp);
-    if (InterlockedDecrement((PLONG)&ext->IdleRef) == 0) {
-        IoFreeIrp(irp);
-        KeSetEvent(&ext->IdleGone, IO_NO_INCREMENT, FALSE);
+    if (InterlockedDecrement(&ext->IdleRef) == 0) {
+        pmIdleRetire(ext, irp);
     }
 }
 
@@ -601,16 +655,50 @@ static VOID pmIdleCancel(PPM_EXT ext)
 /* The read loop                                                       */
 /* ------------------------------------------------------------------ */
 
+/*
+ * One interrupt IN read at a time. ReadWanted is the request (READS ON);
+ * ReadBusy says a read is posted or being posted, and holds until its IRP
+ * is retired; both under the lock. A post publishes its IRP only while the
+ * read is still wanted and the device open, in the hold a stop clears
+ * ReadWanted in, so a stop either cancels the IRP it finds or the post
+ * finds the stop and retires itself.
+ */
+static VOID pmReadPost(PPM_EXT ext);
+
+/* The IRP's last reference let go: freed, and either the next posted or
+ * the loop ended. IRQL: <= DISPATCH_LEVEL. */
+static VOID pmReadRetire(PPM_EXT ext, PIRP irp, ULONG ok)
+{
+    KIRQL irql;
+    ULONG again;
+
+    IoFreeIrp(irp);
+    KeAcquireSpinLock(&ext->Lock, &irql);
+    if (!ok) {
+        ext->ReadWanted = 0;
+    }
+    again = ext->ReadWanted && ext->Open;
+    if (!again) {
+        ext->ReadBusy = 0;
+        ext->St.ReadsOn = 0;
+    }
+    KeReleaseSpinLock(&ext->Lock, irql);
+    if (again) {
+        pmReadPost(ext);
+    }
+}
+
 static NTSTATUS NTAPI pmReadDone(PDEVICE_OBJECT dev, PIRP irp, PVOID ctx)
 {
     PPM_EXT ext;
     KIRQL irql;
-    ULONG again;
+    ULONG ok;
 
     UNREFERENCED_PARAMETER(dev);
     ext = (PPM_EXT)ctx;
+    ok = NT_SUCCESS(irp->IoStatus.Status) ? 1UL : 0UL;
     KeAcquireSpinLock(&ext->Lock, &irql);
-    if (NT_SUCCESS(irp->IoStatus.Status)) {
+    if (ok) {
         ext->St.ReadsCompleted++;
     } else {
         ext->St.ReadsFailed++;
@@ -618,81 +706,104 @@ static NTSTATUS NTAPI pmReadDone(PDEVICE_OBJECT dev, PIRP irp, PVOID ctx)
     ext->St.ReadLastStatus = irp->IoStatus.Status;
     ext->St.ReadLastUsbd = (ULONG)ext->ReadUrb->UrbHeader.Status;
     ext->ReadIrp = NULL;
-    again = ext->St.ReadsOn && NT_SUCCESS(irp->IoStatus.Status) &&
-            !ext->Removed;
+    ext->ReadOk = ok;
     KeReleaseSpinLock(&ext->Lock, irql);
-    if (InterlockedDecrement((PLONG)&ext->ReadRef) == 0) {
-        IoFreeIrp(irp);
-        if (again) {
-            pmReadStart(ext);
-        } else {
-            KeSetEvent(&ext->ReadGone, IO_NO_INCREMENT, FALSE);
-        }
+    if (InterlockedDecrement(&ext->ReadRef) == 0) {
+        pmReadRetire(ext, irp, ok);
     }
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
-/* One interrupt IN read posted. IRQL: <= DISPATCH_LEVEL. */
-static VOID pmReadStart(PPM_EXT ext)
+/* IRQL: <= DISPATCH_LEVEL; ReadBusy set by the caller. */
+static VOID pmReadPost(PPM_EXT ext)
 {
     PIRP irp;
     PIO_STACK_LOCATION next;
     struct _URB_BULK_OR_INTERRUPT_TRANSFER *u;
     KIRQL irql;
+    ULONG go;
 
-    irp = (ext->InPipe != NULL)
-              ? IoAllocateIrp(ext->Lower->StackSize, FALSE)
-              : NULL;
-    if (irp == NULL) {
+    irp = IoAllocateIrp(ext->Lower->StackSize, FALSE);
+    u = &ext->ReadUrb->UrbBulkOrInterruptTransfer;
+    if (irp != NULL) {
+        pmZero(u, sizeof(*u));
+        u->Hdr.Length = sizeof(*u);
+        u->Hdr.Function = URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER;
+        u->PipeHandle = ext->InPipe;
+        u->TransferFlags =
+            USBD_TRANSFER_DIRECTION_IN | USBD_SHORT_TRANSFER_OK;
+        u->TransferBuffer = ext->ReadBuf;
+        u->TransferBufferLength = (ext->InMax != 0 && ext->InMax <= 64)
+                                      ? ext->InMax
+                                      : 64;
+        next = IoGetNextIrpStackLocation(irp);
+        next->MajorFunction = IRP_MJ_INTERNAL_DEVICE_CONTROL;
+        next->Parameters.DeviceIoControl.IoControlCode =
+            IOCTL_INTERNAL_USB_SUBMIT_URB;
+        next->Parameters.Others.Argument1 = ext->ReadUrb;
+        IoSetCompletionRoutine(irp, pmReadDone, ext, TRUE, TRUE, TRUE);
+    }
+    KeAcquireSpinLock(&ext->Lock, &irql);
+    go = (irp != NULL && ext->ReadWanted && ext->Open) ? 1UL : 0UL;
+    if (go) {
+        ext->ReadRef = 1;
+        ext->ReadIrp = irp;
+    } else {
+        ext->ReadWanted = 0;
+        ext->ReadBusy = 0;
         ext->St.ReadsOn = 0;
-        KeSetEvent(&ext->ReadGone, IO_NO_INCREMENT, FALSE);
+    }
+    KeReleaseSpinLock(&ext->Lock, irql);
+    if (!go) {
+        if (irp != NULL) {
+            IoFreeIrp(irp);
+        }
         return;
     }
-    u = &ext->ReadUrb->UrbBulkOrInterruptTransfer;
-    pmZero(u, sizeof(*u));
-    u->Hdr.Length = sizeof(*u);
-    u->Hdr.Function = URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER;
-    u->PipeHandle = ext->InPipe;
-    u->TransferFlags = USBD_TRANSFER_DIRECTION_IN | USBD_SHORT_TRANSFER_OK;
-    u->TransferBuffer = ext->ReadBuf;
-    u->TransferBufferLength = (ext->InMax != 0 && ext->InMax <= 64)
-                                  ? ext->InMax
-                                  : 64;
-    next = IoGetNextIrpStackLocation(irp);
-    next->MajorFunction = IRP_MJ_INTERNAL_DEVICE_CONTROL;
-    next->Parameters.DeviceIoControl.IoControlCode =
-        IOCTL_INTERNAL_USB_SUBMIT_URB;
-    next->Parameters.Others.Argument1 = ext->ReadUrb;
-    IoSetCompletionRoutine(irp, pmReadDone, ext, TRUE, TRUE, TRUE);
-    KeAcquireSpinLock(&ext->Lock, &irql);
-    ext->ReadRef = 1;
-    ext->ReadIrp = irp;
-    KeReleaseSpinLock(&ext->Lock, irql);
     (VOID)IoCallDriver(ext->Lower, irp);
 }
 
+static VOID pmReadStart(PPM_EXT ext)
+{
+    KIRQL irql;
+    ULONG go;
+
+    KeAcquireSpinLock(&ext->Lock, &irql);
+    go = (!ext->ReadBusy && ext->Open && ext->InPipe != NULL &&
+          ext->ReadUrb != NULL) ? 1UL : 0UL;
+    if (go) {
+        ext->ReadBusy = 1;
+        ext->ReadWanted = 1;
+        ext->St.ReadsOn = 1;
+    }
+    KeReleaseSpinLock(&ext->Lock, irql);
+    if (go) {
+        pmReadPost(ext);
+    }
+}
+
+/* READS OFF, and every stop: the read cancelled; `wait` until the loop has
+ * retired its IRP (PASSIVE_LEVEL). */
 static VOID pmReadStop(PPM_EXT ext, ULONG wait)
 {
     PIRP irp;
     KIRQL irql;
 
     KeAcquireSpinLock(&ext->Lock, &irql);
-    ext->St.ReadsOn = 0;
+    ext->ReadWanted = 0;
     irp = ext->ReadIrp;
     if (irp != NULL) {
-        InterlockedIncrement((PLONG)&ext->ReadRef);
+        InterlockedIncrement(&ext->ReadRef);
     }
     KeReleaseSpinLock(&ext->Lock, irql);
     if (irp != NULL) {
         (VOID)IoCancelIrp(irp);
-        if (InterlockedDecrement((PLONG)&ext->ReadRef) == 0) {
-            IoFreeIrp(irp);
-            KeSetEvent(&ext->ReadGone, IO_NO_INCREMENT, FALSE);
+        if (InterlockedDecrement(&ext->ReadRef) == 0) {
+            pmReadRetire(ext, irp, ext->ReadOk);
         }
     }
     if (wait) {
-        (VOID)KeWaitForSingleObject(&ext->ReadGone, Executive, KernelMode,
-                                    FALSE, NULL);
+        pmWaitZero(&ext->ReadBusy);
     }
 }
 
@@ -707,6 +818,7 @@ static NTSTATUS NTAPI pmIoctl(PDEVICE_OBJECT dev, PIRP irp)
     PULONG in;
     ULONG inLen;
     ULONG outLen;
+    ULONG code;
     ULONG_PTR info;
     NTSTATUS status;
     KIRQL irql;
@@ -716,9 +828,21 @@ static NTSTATUS NTAPI pmIoctl(PDEVICE_OBJECT dev, PIRP irp)
     in = (PULONG)irp->AssociatedIrp.SystemBuffer;
     inLen = stack->Parameters.DeviceIoControl.InputBufferLength;
     outLen = stack->Parameters.DeviceIoControl.OutputBufferLength;
+    code = stack->Parameters.DeviceIoControl.IoControlCode;
     info = 0;
     status = STATUS_SUCCESS;
-    switch (stack->Parameters.DeviceIoControl.IoControlCode) {
+    /* Admission (Codex review of 36.34, round 1, finding 4): every request
+     * but STATUS needs the device open, and runs inside Busy, which a stop
+     * waits out after closing admission. */
+    InterlockedIncrement(&ext->Busy);
+    if (code != PM_IOCTL_STATUS && !ext->Open) {
+        InterlockedDecrement(&ext->Busy);
+        irp->IoStatus.Status = STATUS_DEVICE_NOT_READY;
+        irp->IoStatus.Information = 0;
+        IoCompleteRequest(irp, IO_NO_INCREMENT);
+        return STATUS_DEVICE_NOT_READY;
+    }
+    switch (code) {
     case PM_IOCTL_STATUS:
         if (outLen < sizeof(PM_STATUS)) {
             status = STATUS_BUFFER_TOO_SMALL;
@@ -758,11 +882,7 @@ static NTSTATUS NTAPI pmIoctl(PDEVICE_OBJECT dev, PIRP irp)
         break;
     case PM_IOCTL_READS:
         if (inLen >= sizeof(ULONG) && *in != 0) {
-            if (!ext->St.ReadsOn && ext->InPipe != NULL) {
-                ext->St.ReadsOn = 1;
-                KeClearEvent(&ext->ReadGone);
-                pmReadStart(ext);
-            }
+            pmReadStart(ext);
         } else {
             pmReadStop(ext, 0);
         }
@@ -782,6 +902,7 @@ static NTSTATUS NTAPI pmIoctl(PDEVICE_OBJECT dev, PIRP irp)
         status = STATUS_INVALID_DEVICE_REQUEST;
         break;
     }
+    InterlockedDecrement(&ext->Busy);
     irp->IoStatus.Status = status;
     irp->IoStatus.Information = info;
     IoCompleteRequest(irp, IO_NO_INCREMENT);
@@ -804,12 +925,15 @@ static NTSTATUS pmForwardSync(PPM_EXT ext, PIRP irp)
     return irp->IoStatus.Status;
 }
 
+/* Admission closed, the dispatches inside waited out, then the read, the
+ * idle IRP and the WAIT_WAKE let go of. PASSIVE_LEVEL. */
 static VOID pmQuiesce(PPM_EXT ext)
 {
+    ext->Open = 0;
+    pmWaitZero(&ext->Busy);
     pmReadStop(ext, 1);
     pmIdleCancel(ext);
-    (VOID)KeWaitForSingleObject(&ext->IdleGone, Executive, KernelMode, FALSE,
-                                NULL);
+    pmWaitZero(&ext->IdleBusy);
     pmWakeCancel(ext);
 }
 
@@ -824,13 +948,17 @@ static NTSTATUS NTAPI pmPnp(PDEVICE_OBJECT dev, PIRP irp)
     switch (stack->MinorFunction) {
     case IRP_MN_START_DEVICE:
         status = pmForwardSync(ext, irp);
+        if (NT_SUCCESS(status) && ext->ReadUrb == NULL) {
+            ext->ReadUrb = (PURB)ExAllocatePool(
+                NonPagedPool, sizeof(struct _URB_BULK_OR_INTERRUPT_TRANSFER));
+            if (ext->ReadUrb == NULL) {
+                status = STATUS_INSUFFICIENT_RESOURCES;
+            }
+        }
         if (NT_SUCCESS(status)) {
             ext->St.Started = 1;
-            if (ext->ReadUrb == NULL) {
-                ext->ReadUrb = (PURB)ExAllocatePool(
-                    NonPagedPool, sizeof(struct _URB_BULK_OR_INTERRUPT_TRANSFER));
-            }
             pmConfigure(ext);
+            ext->Open = 1;
         }
         irp->IoStatus.Status = status;
         IoCompleteRequest(irp, IO_NO_INCREMENT);
@@ -842,17 +970,20 @@ static NTSTATUS NTAPI pmPnp(PDEVICE_OBJECT dev, PIRP irp)
         irp->IoStatus.Status = STATUS_SUCCESS;
         return pmPass(dev, irp);
     case IRP_MN_REMOVE_DEVICE:
-        ext->Removed = 1;
         ext->St.Started = 0;
         pmQuiesce(ext);
         irp->IoStatus.Status = STATUS_SUCCESS;
         IoSkipCurrentIrpStackLocation(irp);
         status = IoCallDriver(ext->Lower, irp);
+        /* The bus settles a held WAIT_WAKE and every D-IRP at its own
+         * REMOVE: each callback has run before the extension goes. */
+        pmWaitZero(&ext->Outstanding);
         if (ext->LinkMade) {
             (VOID)IoDeleteSymbolicLink(&ext->Link);
         }
         if (ext->ReadUrb != NULL) {
             ExFreePool(ext->ReadUrb);
+            ext->ReadUrb = NULL;
         }
         IoDetachDevice(ext->Lower);
         IoDeleteDevice(dev);
@@ -881,16 +1012,67 @@ static NTSTATUS NTAPI pmSetPowerDone(PDEVICE_OBJECT dev, PIRP irp,
         IoMarkIrpPending(irp);
     }
     if (NT_SUCCESS(irp->IoStatus.Status)) {
-        if (stack->Parameters.Power.Type == DevicePowerState) {
-            ext->St.DevicePower = stack->Parameters.Power.State.DeviceState;
-            (VOID)PoSetPowerState(dev, DevicePowerState,
-                                  stack->Parameters.Power.State);
-        } else {
-            ext->St.SystemPower = stack->Parameters.Power.State.SystemState;
-        }
+        ext->St.DevicePower = stack->Parameters.Power.State.DeviceState;
+        (VOID)PoSetPowerState(dev, DevicePowerState,
+                              stack->Parameters.Power.State);
     }
     PoStartNextPowerIrp(irp);
     return STATUS_SUCCESS;
+}
+
+/* The device request a system IRP asked for has completed: the system IRP
+ * completes now (the policy owner's order). */
+static VOID NTAPI pmSystemDevDone(PDEVICE_OBJECT dev, UCHAR minor,
+                                  POWER_STATE state, PVOID ctx,
+                                  PIO_STATUS_BLOCK io)
+{
+    PIRP sirp;
+    PPM_EXT ext;
+
+    UNREFERENCED_PARAMETER(minor);
+    UNREFERENCED_PARAMETER(state);
+    UNREFERENCED_PARAMETER(io);
+    sirp = (PIRP)ctx;
+    ext = (PPM_EXT)IoGetCurrentIrpStackLocation(sirp)
+              ->DeviceObject->DeviceExtension;
+    UNREFERENCED_PARAMETER(dev);
+    PoStartNextPowerIrp(sirp);
+    IoCompleteRequest(sirp, IO_NO_INCREMENT);
+    InterlockedDecrement(&ext->Outstanding);
+}
+
+/* A system SET_POWER the stack below has taken: as the device's power
+ * policy owner, the client asks the device state it maps to - D0 for S0,
+ * D3 below it - and completes the system IRP when that one completes
+ * (Codex review of 36.34, round 1, finding 7). */
+static NTSTATUS NTAPI pmSystemDone(PDEVICE_OBJECT dev, PIRP irp, PVOID ctx)
+{
+    PPM_EXT ext;
+    PIO_STACK_LOCATION stack;
+    POWER_STATE d;
+    NTSTATUS status;
+
+    UNREFERENCED_PARAMETER(ctx);
+    ext = (PPM_EXT)dev->DeviceExtension;
+    stack = IoGetCurrentIrpStackLocation(irp);
+    if (!NT_SUCCESS(irp->IoStatus.Status)) {
+        PoStartNextPowerIrp(irp);
+        return STATUS_SUCCESS;
+    }
+    ext->St.SystemPower = stack->Parameters.Power.State.SystemState;
+    d.DeviceState = (stack->Parameters.Power.State.SystemState ==
+                     PowerSystemWorking)
+                        ? PowerDeviceD0
+                        : PowerDeviceD3;
+    InterlockedIncrement(&ext->Outstanding);
+    status = PoRequestPowerIrp(ext->Pdo, IRP_MN_SET_POWER, d,
+                               pmSystemDevDone, irp, NULL);
+    if (status != STATUS_PENDING && !NT_SUCCESS(status)) {
+        InterlockedDecrement(&ext->Outstanding);
+        PoStartNextPowerIrp(irp);
+        return STATUS_SUCCESS;
+    }
+    return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
 static NTSTATUS NTAPI pmPower(PDEVICE_OBJECT dev, PIRP irp)
@@ -898,23 +1080,41 @@ static NTSTATUS NTAPI pmPower(PDEVICE_OBJECT dev, PIRP irp)
     PPM_EXT ext;
     PIO_STACK_LOCATION stack;
     KIRQL irql;
+    ULONG track;
 
     ext = (PPM_EXT)dev->DeviceExtension;
     stack = IoGetCurrentIrpStackLocation(irp);
+    if (stack->MinorFunction == IRP_MN_SET_POWER &&
+        stack->Parameters.Power.Type == SystemPowerState) {
+        IoMarkIrpPending(irp);
+        IoCopyCurrentIrpStackLocationToNext(irp);
+        IoSetCompletionRoutine(irp, pmSystemDone, NULL, TRUE, TRUE, TRUE);
+        (VOID)PoCallDriver(ext->Lower, irp);
+        return STATUS_PENDING;
+    }
     if (stack->MinorFunction == IRP_MN_SET_POWER) {
         IoCopyCurrentIrpStackLocationToNext(irp);
         IoSetCompletionRoutine(irp, pmSetPowerDone, NULL, TRUE, TRUE, TRUE);
         return PoCallDriver(ext->Lower, irp);
     }
     if (stack->MinorFunction == IRP_MN_WAIT_WAKE) {
+        /* Tracked only when none is: this client requests one at a time
+         * (pmRequestWake), so a second is never its own. */
         KeAcquireSpinLock(&ext->Lock, &irql);
-        ext->WakeIrp = irp;
-        ext->WakeRef = 1;
-        ext->St.WakeHeld = 1;
+        track = (ext->WakeIrp == NULL && ext->WakeRef == 0) ? 1UL : 0UL;
+        if (track) {
+            ext->WakeIrp = irp;
+            ext->WakeRef = 1;
+            ext->St.WakeHeld = 1;
+        }
         KeReleaseSpinLock(&ext->Lock, irql);
+        PoStartNextPowerIrp(irp);
+        if (!track) {
+            IoSkipCurrentIrpStackLocation(irp);
+            return PoCallDriver(ext->Lower, irp);
+        }
         IoCopyCurrentIrpStackLocationToNext(irp);
         IoSetCompletionRoutine(irp, pmWakeIrpDone, NULL, TRUE, TRUE, TRUE);
-        PoStartNextPowerIrp(irp);
         return PoCallDriver(ext->Lower, irp);
     }
     PoStartNextPowerIrp(irp);

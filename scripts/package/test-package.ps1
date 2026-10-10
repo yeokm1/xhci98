@@ -2128,6 +2128,7 @@ try {
     }
     $tcMarks = @(
         @{ Name = "the package's test-client check";    Find = 'Assert-NoTestClient -Root $pkgDir' },
+        @{ Name = "the staged release's test-client check"; Find = 'Assert-NoTestClient -Root $destRoot' },
         @{ Name = "the publish swap";                   Find = 'Move-Item -LiteralPath $destRoot -Destination $finalRoot' }
     )
     $tcAt2 = @()
@@ -2137,7 +2138,24 @@ try {
         $tcAt2 += $i
     }
     if (@($tcAt2 | Where-Object { $_ -lt 0 }).Count -eq 0) {
-        Assert-True ($tcAt2[0] -lt $tcAt2[1]) "the package's test-client check must come before the publish swap in make-release.ps1."
+        for ($i = 1; $i -lt $tcMarks.Count; $i++) {
+            Assert-True ($tcAt2[$i - 1] -lt $tcAt2[$i]) `
+                ("$($tcMarks[$i - 1].Name) must come before $($tcMarks[$i].Name) in make-release.ps1.")
+        }
+        # Not inside the -SkipUploadSet branch: the staged-release check
+        # runs on every cut (round 1, finding 6). Its line is not indented
+        # under an `if (-not $SkipUploadSet)`.
+        $line = ($releaserText.Substring(0, $tcAt2[1]) -split "`n")[-1]
+        Assert-True ($line.TrimEnd("`r") -eq '    ') "the staged release's test-client check is not at the publish step's own level."
+    }
+    # A renamed tool carrying the marker in a tools directory is refused.
+    if ($tcAt -ge 0 -and $tcAssertAt -ge 0) {
+        $dir = Join-Path $tcRoot "renamedtool"
+        New-Item -ItemType Directory -Force -Path (Join-Path $dir "xhcisnap") | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $dir "xhcisnap\XHCISNAP.EXE"), "MZ XHCI98_TEST_CLIENT_DO_NOT_SHIP")
+        $refused = $false
+        try { Assert-NoTestClient -Root $dir -What "fixture renamedtool" } catch { $refused = $true }
+        Assert-True $refused "a test tool renamed XHCISNAP.EXE in a staged release's tools directory is not refused."
     }
     Assert-True ($releaserText.Contains('Assert-NoTestClient -Root $uploadRoot')) `
         "make-release.ps1's upload assembly no longer refuses the test client."

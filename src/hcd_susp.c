@@ -1011,11 +1011,12 @@ static VOID hcdSuspEndLocked(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 
 /*
  * Run the sequence whose first step `step` (with its wait `wait`) the
- * caller began, to its end. Returns the outcome. The IRPs a claim takes
+ * caller began from link state `old` (read before XhciSuspBegin, for the
+ * log line), to its end. Returns the outcome. The IRPs a claim takes
  * are completed between steps, outside the lock.
  */
 static ULONG hcdSuspRun(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG step,
-                        ULONG wait)
+                        ULONG wait, ULONG old)
 {
     HCD_SUSP_TAKEN taken;
     HCD_SUSP_ITAKEN itaken;
@@ -1023,12 +1024,10 @@ static ULONG hcdSuspRun(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG step,
     KIRQL oldIrql;
     ULONG result;
     ULONG group;
-    ULONG old;
 
     taken.Count = 0;
     itaken.Count = 0;
     q = hcdSuspPort(hc, dev);
-    old = dev->Susp.State;
     while (step != XHCI_SUSP_STEP_END) {
         result = XHCI_SUSP_RES_TIMEOUT;
         if (q == NULL || hcdSuspHalted(hc)) {
@@ -1176,6 +1175,7 @@ static ULONG hcdSuspDecideOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     ULONG wait;
     ULONG kind;
     ULONG batch;
+    ULONG old;
     ULONG n;
     ULONG i;
 
@@ -1194,9 +1194,10 @@ static ULONG hcdSuspDecideOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         dev->SuspWakeDue = 0;
         kind = XHCI_SUSP_RUN_WAKE;
         hc->Counters.SuspWakesBegun++;
+        old = dev->Susp.State;
         step = XhciSuspBegin(&dev->Susp, kind, 0, 0, hc->SuspClockMs, &wait);
         XhciControllerLockRelease(&hc->Hc, oldIrql);
-        (VOID)hcdSuspRun(hc, dev, step, wait);
+        (VOID)hcdSuspRun(hc, dev, step, wait, old);
         return 1;
     }
     dev->SuspWakeDue = 0;
@@ -1224,6 +1225,7 @@ static ULONG hcdSuspDecideOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
             pdos[i]->PwrIrp = NULL;
         }
     }
+    old = dev->Susp.State;
     if (q != NULL && d.Do != XHCI_SUSP_DO_NONE) {
         dev->Susp.Generation = q->ConnectGen;
         dev->Susp.Root = (q->Hub == NULL) ? 1UL : 0UL;
@@ -1254,7 +1256,7 @@ static ULONG hcdSuspDecideOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     if (kind == 0) {
         return 0;
     }
-    (VOID)hcdSuspRun(hc, dev, step, wait);
+    (VOID)hcdSuspRun(hc, dev, step, wait, old);
     return 1;
 }
 

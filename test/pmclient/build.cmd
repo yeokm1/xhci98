@@ -29,7 +29,17 @@ if not exist out mkdir out
 if exist out\XHCIPM.SYS del out\XHCIPM.SYS
 if exist out\PMCTL.EXE del out\PMCTL.EXE
 
+if exist objchk\i386\xhcipm.sys del objchk\i386\xhcipm.sys
+if exist buildchk.err del buildchk.err
 cmd /c "set "PATH=%MSVC6%\VC98\Bin;%MSVC6%\Common\MSDev98\Bin;%PATH%" && call "%DDK%\bin\setenv.bat" %DDK% checked && cd /d "%~dp0" && build -cZ"
+if errorlevel 1 (
+    echo ERROR: the DDK build failed - see buildchk.log / buildchk.err
+    exit /b 1
+)
+if exist buildchk.err (
+    echo ERROR: the DDK build reported errors - see buildchk.err
+    exit /b 1
+)
 if not exist objchk\i386\xhcipm.sys (
     echo ERROR: XHCIPM.SYS did not build - see buildchk.log / buildchk.err
     exit /b 1

@@ -4676,6 +4676,9 @@ after checkout. Restore it with:  git checkout -- LICENSE
         Move-Item -LiteralPath $finalRoot -Destination $asideRoot
     }
 
+    # The whole staged release, the tools' directories included, whatever
+    # -SkipUploadSet says (Codex review of 36.34, round 1, finding 6).
+    Assert-NoTestClient -Root $destRoot -What "the staged release '$destRoot'"
     try {
         Move-Item -LiteralPath $destRoot -Destination $finalRoot
     } catch {
