@@ -168,21 +168,6 @@ NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         }
         return HcdIoRefuseLater(pdo, irp, urb, HCD_USBD_DEVICE_GONE);
     }
-    if ((hc->Hc.Flags & XHCI_EXT_FLAG_SUSPENDED) != 0) {
-        /* Task 36.28: not queued behind a suspended controller, whose
-         * resume a client may be holding up (hcd_io.c,
-         * HcdIoSuspendSettle); refused as a leaving device's are, and the
-         * save given up so the resume enumerates afresh (hcd_io.c,
-         * hcdGo). */
-        hc->Hc.SavedStateValid = 0;
-        hc->SuspendRefused = 1;
-        XhciControllerLockRelease(&hc->Hc, oldIrql);
-        (VOID)InterlockedDecrement(&dev->Refs);
-        if (urb == NULL) {
-            return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
-        }
-        return HcdIoRefuseLater(pdo, irp, urb, HCD_USBD_DEVICE_GONE);
-    }
     /* The dispatch stamp (HcdIoStamp) moves to DriverContext[1], unused
      * while queued, so a hold of it (hcdCfgHoldUnreadable) is measured
      * against an abort in the order the two were submitted. */
@@ -373,25 +358,6 @@ static VOID hcdCfgHoldUnreadable(PHCD_USB_DEVICE dev, PIRP irp, PURB urb)
         (VOID)InterlockedDecrement(&pdo->UrbsPending);
     }
     (VOID)InterlockedDecrement(&dev->Refs);
-}
-
-/* Whether any slow IRP is queued for the thread, or deferred on a device
- * (task 36.28, HcdIoSuspendSettle). Controller lock held. */
-ULONG HcdCfgSlowQueued(PHCD_CONTROLLER hc)
-{
-    PHCD_USB_DEVICE dev;
-    ULONG slot;
-
-    if (!IsListEmpty(&hc->SlowIrps)) {
-        return 1;
-    }
-    for (slot = 1; slot <= XHCI_MAX_SLOTS; slot++) {
-        dev = hc->SlotDevice[slot];
-        if (dev != NULL && !IsListEmpty(&dev->SlowDeferred)) {
-            return 1;
-        }
-    }
-    return 0;
 }
 
 /* A device leaving (hcd_io.c, HcdIoDeviceGone): its queued slow URBs

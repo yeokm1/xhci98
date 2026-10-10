@@ -749,9 +749,7 @@ ULONG XhciSlotSaveCommit(PXHCI_EXTENSION ext)
 
     hc = HcdControllerFromExt(ext);
     XhciControllerLockAcquire(ext, &oldIrql);
-    /* Nor if a request was refused while suspended (task 36.28): the
-     * resume must then enumerate afresh (hcd_io.c, hcdGo). */
-    valid = XhciTolSaveCommit(hc->SavePublished || hc->SuspendRefused);
+    valid = XhciTolSaveCommit(hc->SavePublished);
     ext->SavedStateValid = valid;
     XhciControllerLockRelease(ext, oldIrql);
     return valid;
@@ -770,7 +768,7 @@ ULONG XhciSlotSaveSpoiled(PXHCI_EXTENSION ext)
 
     hc = HcdControllerFromExt(ext);
     XhciControllerLockAcquire(ext, &oldIrql);
-    spoiled = (hc->SavePublished || hc->SuspendRefused) ? 1UL : 0UL;
+    spoiled = hc->SavePublished;
     XhciControllerLockRelease(ext, oldIrql);
     return spoiled;
 }
