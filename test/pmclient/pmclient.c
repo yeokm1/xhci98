@@ -425,13 +425,25 @@ static ULONG pmPowerBegin(PPM_EXT ext, UCHAR minor, DEVICE_POWER_STATE d,
     ULONG answer;
 
     KeAcquireSpinLock(&ext->Lock, &irql);
-    if (minor == IRP_MN_SET_POWER && ext->PowerTarget != 0) {
+    if (defer == PM_DEFER_D && ext->St.SystemPower != PowerSystemWorking) {
+        /* A wake's or idle completion's D0 has no place below S0: the
+         * system's own transition decides the device state then (Codex
+         * review of 36.34, round 5, finding 2). */
         answer = PM_POWER_BUSY;
-        if (defer == PM_DEFER_SIRP && ext->DeferredSIrp == NULL) {
+    } else if (ext->PowerTarget != 0) {
+        /* A QUERY too: never answered against a state about to change
+         * (round 5, finding 3); only a SET may be deferred. */
+        answer = PM_POWER_BUSY;
+        if (minor == IRP_MN_SET_POWER && defer == PM_DEFER_SIRP &&
+            ext->DeferredSIrp == NULL) {
             ext->DeferredSIrp = sirp;
             ext->DeferredSState = (ULONG)d;
+            if ((ULONG)d != PowerDeviceD0) {
+                /* A sleep supersedes a queued wake D0. */
+                ext->DeferredD = 0;
+            }
             answer = PM_POWER_DEFERRED;
-        } else if (defer == PM_DEFER_D) {
+        } else if (minor == IRP_MN_SET_POWER && defer == PM_DEFER_D) {
             ext->DeferredD = (ULONG)d;
             answer = PM_POWER_DEFERRED;
         }
@@ -487,10 +499,12 @@ static NTSTATUS pmPowerSend(PPM_EXT ext, ULONG d,
     return status;
 }
 
-/* The slot let go by its owner, and one deferred transition started: the
- * held system IRP's first (completed at once when its state is already
- * the device's, or when its request is refused), else the deferred D.
- * IRQL: <= DISPATCH_LEVEL. */
+/* The slot let go by its owner, and the deferred work drained in order:
+ * the held system IRP first (completed at once when its state is already
+ * the device's, or when its request is refused), then the deferred D - a
+ * wake's D0 only while the system is in S0 and the device open - until
+ * one request is sent, which then owns the slot, or nothing is left
+ * (Codex review of 36.34, round 5, finding 1). IRQL: <= DISPATCH_LEVEL. */
 static VOID pmPowerRelease(PPM_EXT ext)
 {
     KIRQL irql;
@@ -501,36 +515,54 @@ static VOID pmPowerRelease(PPM_EXT ext)
 
     KeAcquireSpinLock(&ext->Lock, &irql);
     ext->PowerTarget = 0;
-    sirp = ext->DeferredSIrp;
-    sd = ext->DeferredSState;
-    wd = 0;
-    go = 0;
-    if (sirp != NULL) {
-        ext->DeferredSIrp = NULL;
-        if (sd != ext->St.DevicePower) {
-            ext->PowerTarget = sd;
-            go = 1;
+    for (;;) {
+        sirp = ext->DeferredSIrp;
+        sd = ext->DeferredSState;
+        wd = 0;
+        go = 0;
+        if (sirp != NULL) {
+            ext->DeferredSIrp = NULL;
+            if (sd != ext->St.DevicePower) {
+                ext->PowerTarget = sd;
+                go = 1;
+            }
+        } else if (ext->DeferredD != 0) {
+            wd = ext->DeferredD;
+            ext->DeferredD = 0;
+            if (wd != ext->St.DevicePower && ext->Open &&
+                ext->St.SystemPower == PowerSystemWorking) {
+                ext->PowerTarget = wd;
+                go = 1;
+            }
+        } else {
+            KeReleaseSpinLock(&ext->Lock, irql);
+            return;
         }
-    } else if (ext->DeferredD != 0) {
-        wd = ext->DeferredD;
-        ext->DeferredD = 0;
-        if (wd != ext->St.DevicePower && ext->Open) {
-            ext->PowerTarget = wd;
-            go = 1;
+        KeReleaseSpinLock(&ext->Lock, irql);
+        if (sirp != NULL) {
+            if (!go ||
+                !NT_SUCCESS(pmPowerSend(ext, sd, pmSystemDevDone, sirp))) {
+                /* Satisfied already, or refused (pmPowerSend let the slot
+                 * go and drained on): completed here. */
+                PoStartNextPowerIrp(sirp);
+                IoCompleteRequest(sirp, IO_NO_INCREMENT);
+                /* The hold's own count (pmSystemDone). */
+                InterlockedDecrement(&ext->Outstanding);
+                if (go) {
+                    return;
+                }
+                KeAcquireSpinLock(&ext->Lock, &irql);
+                continue;
+            }
+            InterlockedDecrement(&ext->Outstanding);
+            return;
         }
-    }
-    KeReleaseSpinLock(&ext->Lock, irql);
-    if (sirp != NULL) {
-        if (!go || !NT_SUCCESS(pmPowerSend(ext, sd, pmSystemDevDone, sirp))) {
-            PoStartNextPowerIrp(sirp);
-            IoCompleteRequest(sirp, IO_NO_INCREMENT);
+        if (go) {
+            /* Sent, or refused with its own drain (pmPowerSend). */
+            (VOID)pmPowerSend(ext, wd, pmPowerDone, ext);
+            return;
         }
-        /* The hold's own count (pmSystemDone), after the send's. */
-        InterlockedDecrement(&ext->Outstanding);
-        return;
-    }
-    if (go) {
-        (VOID)pmPowerSend(ext, wd, pmPowerDone, ext);
+        KeAcquireSpinLock(&ext->Lock, &irql);
     }
 }
 
