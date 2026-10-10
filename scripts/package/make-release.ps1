@@ -4268,8 +4268,8 @@ A value that is absent means the default each one states.
 ==============================================================================
 
 GNU GPL v2 - see the LICENSE file in this directory, beside this readme. This
-applies to xhci98.sys, xhciuas.sys and their INFs, which are this project's
-own work.
+applies to xhci98.sys, xhciuas.sys, the 32-bit helper xhcimsi.sys and their
+INFs, which are this project's own work.
 
 No Microsoft file is in this download. The usbd.sys and usbui.dll the
 install needs are copied by Windows from your own Windows installation

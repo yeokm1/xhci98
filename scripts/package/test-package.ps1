@@ -1213,6 +1213,7 @@ try {
         foreach ($bad in @(
             @{ Args = @("-TestLabel", "bench pending");                            Says = "never published" },
             @{ Args = @("-TestLabel", ("x" * 51), "-ReleasesDir", $relRoot);       Says = "printable ASCII" },
+            @{ Args = @("-TestLabel", "bench`tpending", "-ReleasesDir", $relRoot); Says = "printable ASCII" },
             @{ Args = ($relArgs + @("-TestLabel", "bench pending"));               Says = "renders none" }
         )) {
             $r = Invoke-Releaser $bad.Args
