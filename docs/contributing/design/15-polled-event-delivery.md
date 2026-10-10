@@ -1453,9 +1453,10 @@ and that flavour is never published.
   already pending on that processor can read the revoked service there. A
   DPC that does parks, and the grant kicks it (`PollParks` and
   `PollKicks` each up by one). A DPC that takes the lock before the
-  failure or after the grant does not park: then the timer stays ARMED
-  across the recovery, the grant finds nothing parked, and neither counter
-  moves. Which one happens depends on when the DPC takes the lock, which
+  failure or after the grant does not park: the armed timer, or a DPC
+  already FIRING, keeps ownership and serves or re-arms without a kick
+  (section 5.3: the grant does nothing in ARMED, or in FIRING without
+  `ParkPending`), and neither counter moves. Which one happens depends on when the DPC takes the lock, which
   no leg controls; both readings are correct. No timing of the window has
   been measured; that it is short beside the poller's period on QEMU is a
   likely reason, not a reading, for the recoveries that parked nothing.

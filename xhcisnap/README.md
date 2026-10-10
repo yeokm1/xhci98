@@ -195,8 +195,8 @@ dump: the driver does not record it and the `.BIN` does not carry it. This
 tool does not decode a saved `.BIN` (that is the maintainer's offset-table
 route), so the block always describes the machine the driver answered on.
 `-selftest-sysinfo` prints the names over canned `GetVersionEx` answers, the
-NT source choice above over canned key contents, and then the block for the
-machine it runs on.
+NT source choice above over canned source-presence combinations, and then
+the block for the machine it runs on.
 
 The `.TXT` also carries, from a 2.0.0.0 driver and at every level, one line per
 device the driver holds a slot for: its Slot ID, root port, Route String and
