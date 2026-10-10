@@ -1242,6 +1242,511 @@ static const char *driver_file_version(void)
     return text;
 }
 
+/*
+ * ---- the machine the dump was taken on (roadmap task 36.47) --------------
+ *
+ * Owner, 2026-10-10: the header block - the part of the `.TXT` written at
+ * every level, which is what a user pastes into a GitHub issue - names the
+ * operating system and the machine, so a report says what it came from
+ * without a second round trip to ask.
+ *
+ * **PRIVACY RULE: this block NEVER prints the computer name, the user name,
+ * the domain, or any serial number, UUID, asset tag or SystemSKU-like
+ * identifier.** The `.TXT` is meant to be pasted publicly. So the values read
+ * are a fixed allow list, named one by one below; nothing here enumerates a
+ * key and prints what it finds, and a value added to the list has to be one
+ * that names a make, a model, a firmware or a processor, never one machine.
+ * README.md ("The machine it was captured on") states the same rule.
+ *
+ * **It is read from the running machine at the time of the dump, never from
+ * the dump.** This tool does not decode a saved `.BIN` (that is the
+ * maintainer's offset-table route, `counters.py`), so the only machine it can
+ * describe is the one it is running on, which is the one the driver answered
+ * on. The heading says "captured on" and that it is not in the `.BIN`, so
+ * nobody reads the block as something the driver recorded.
+ *
+ * Everything is Win95-era or looked up at run time: GetVersionExA, the
+ * Reg* calls, GetSystemInfo and GlobalMemoryStatus are KERNEL32 and ADVAPI32
+ * on every target; IsWow64Process (XP SP2 and later), GetNativeSystemInfo
+ * (XP) and GlobalMemoryStatusEx (2000) are resolved with GetProcAddress, so
+ * the EXE still loads on 98 SE, ME and 2000 and its import table keeps naming
+ * only KERNEL32.dll and ADVAPI32.dll (make-release.ps1's notice relies on it).
+ * The structures those three take are written out here because MSVC 6.0's
+ * headers predate them. HKLM\HARDWARE is not redirected under WOW64, so the
+ * x86 tool reads the same keys on a 64-bit Windows as a native one would.
+ */
+typedef struct {
+    DWORD dwOSVersionInfoSize;
+    DWORD dwMajorVersion;
+    DWORD dwMinorVersion;
+    DWORD dwBuildNumber;
+    DWORD dwPlatformId;
+    CHAR  szCSDVersion[128];
+    WORD  wServicePackMajor;
+    WORD  wServicePackMinor;
+    WORD  wSuiteMask;
+    BYTE  wProductType;
+    BYTE  wReserved;
+} SYS_OSVERSIONINFOEXA;
+
+typedef struct {
+    DWORD dwLength;
+    DWORD dwMemoryLoad;
+    unsigned __int64 ullTotalPhys;
+    unsigned __int64 ullAvailPhys;
+    unsigned __int64 ullTotalPageFile;
+    unsigned __int64 ullAvailPageFile;
+    unsigned __int64 ullTotalVirtual;
+    unsigned __int64 ullAvailVirtual;
+    unsigned __int64 ullAvailExtendedVirtual;
+} SYS_MEMORYSTATUSEX;
+
+typedef BOOL (WINAPI *PFN_ISWOW64)(HANDLE, PBOOL);
+typedef void (WINAPI *PFN_GNSI)(LPSYSTEM_INFO);
+typedef BOOL (WINAPI *PFN_GMSEX)(SYS_MEMORYSTATUSEX *);
+
+#define SYS_PLATFORM_9X         1UL     /* VER_PLATFORM_WIN32_WINDOWS */
+#define SYS_PLATFORM_NT         2UL     /* VER_PLATFORM_WIN32_NT      */
+#define SYS_PRODUCT_UNKNOWN     0       /* no OSVERSIONINFOEX: 9x, 2000 RTM-less */
+#define SYS_PRODUCT_WORKSTATION 1       /* VER_NT_WORKSTATION */
+#define SYS_ARCH_X86            0       /* PROCESSOR_ARCHITECTURE_INTEL */
+#define SYS_ARCH_IA64           6       /* PROCESSOR_ARCHITECTURE_IA64  */
+#define SYS_ARCH_AMD64          9       /* PROCESSOR_ARCHITECTURE_AMD64 */
+#define SYS_ARCH_UNKNOWN        0xFFFF
+
+#define SYS_LABEL "    %-22s"
+#define SYS_HANG  "                          "
+#define SYS_TEXT_MAX 96
+
+/*
+ * The name for a GetVersionEx answer. Pure, so `-selftest-sysinfo` can drive
+ * it over canned answers. `build` is the whole dwBuildNumber: on 9x its high
+ * word repeats the version and only the low word is the build. `product` is
+ * OSVERSIONINFOEX's wProductType, SYS_PRODUCT_UNKNOWN where the EX form was
+ * refused; `nativeArch` is GetNativeSystemInfo's, SYS_ARCH_UNKNOWN where that
+ * does not exist.
+ */
+static const char *sys_os_name(unsigned long platform, unsigned long major,
+                               unsigned long minor, unsigned long build,
+                               int product, unsigned nativeArch)
+{
+    if (platform == SYS_PLATFORM_9X && major == 4) {
+        if (minor == 0) {
+            return "Windows 95";
+        }
+        if (minor == 10) {
+            return ((build & 0xFFFFUL) >= 2222) ? "Windows 98 SE" : "Windows 98";
+        }
+        if (minor == 90) {
+            return "Windows ME";
+        }
+    }
+    if (platform == SYS_PLATFORM_NT) {
+        if (major == 5 && minor == 0) {
+            return "Windows 2000";
+        }
+        if (major == 5 && minor == 1) {
+            return "Windows XP";
+        }
+        if (major == 5 && minor == 2) {
+            /* XP x64 is the 5.2 workstation; every other 5.2 is a 2003. */
+            if (product == SYS_PRODUCT_UNKNOWN) {
+                return "Windows Server 2003 or XP x64";
+            }
+            if (product == SYS_PRODUCT_WORKSTATION &&
+                nativeArch == SYS_ARCH_AMD64) {
+                return "Windows XP x64";
+            }
+            if (product == SYS_PRODUCT_WORKSTATION) {
+                return "Windows Server 2003 or XP x64";
+            }
+            return "Windows Server 2003";
+        }
+        if (major == 6 && minor == 0) {
+            if (product == SYS_PRODUCT_UNKNOWN) {
+                return "Windows Vista or Server 2008";
+            }
+            return (product == SYS_PRODUCT_WORKSTATION)
+                       ? "Windows Vista" : "Windows Server 2008";
+        }
+        if (major == 6 && minor == 1) {
+            if (product == SYS_PRODUCT_UNKNOWN) {
+                return "Windows 7 or Server 2008 R2";
+            }
+            return (product == SYS_PRODUCT_WORKSTATION)
+                       ? "Windows 7" : "Windows Server 2008 R2";
+        }
+        if (major == 6 && minor == 2) {
+            /* Windows 8 and every later Windows tell a program with no
+             * compatibility manifest 6.2, which this one has not. */
+            return "Windows 8 or later (all report 6.2 to this tool)";
+        }
+    }
+    return "unknown";
+}
+
+/*
+ * A registry string made safe to paste: printable ASCII only (anything else,
+ * a control byte or a byte from the machine's code page, becomes '?', since
+ * the charset is the reader's and not this machine's), leading and trailing
+ * blanks dropped (Intel pads ProcessorNameString on the left), runs of blanks
+ * folded to one, cut at SYS_TEXT_MAX with "..." so one vendor's long string
+ * cannot push the block about. A REG_MULTI_SZ arrives with its NULs already
+ * turned into " / " by the caller. Pure, for the self-test.
+ */
+static void sys_clean(const char *in, char *out, size_t outBytes)
+{
+    size_t n;
+    int space;
+
+    if (outBytes < 8) {
+        if (outBytes != 0) {
+            out[0] = '\0';
+        }
+        return;
+    }
+    n = 0;
+    space = 0;
+    while (*in == ' ' || *in == '\t') {
+        in++;
+    }
+    for (; *in != '\0'; in++) {
+        unsigned char c = (unsigned char)*in;
+
+        if (c == ' ' || c == '\t') {
+            space = 1;
+            continue;
+        }
+        /* Room for a blank, this byte, "..." and the terminator. */
+        if (n >= SYS_TEXT_MAX || n + 6 > outBytes) {
+            break;
+        }
+        if (space && n > 0) {
+            out[n++] = ' ';
+        }
+        space = 0;
+        out[n++] = (c >= 0x20 && c < 0x7F) ? (char)c : '?';
+    }
+    if (*in != '\0') {
+        out[n++] = '.';
+        out[n++] = '.';
+        out[n++] = '.';
+    }
+    out[n] = '\0';
+}
+
+/*
+ * One named value as text. 1 read (cleaned into `out`), 0 absent, -1 present
+ * but not text or longer than the buffer (and `out` says which). A
+ * REG_MULTI_SZ's strings are joined with " / ".
+ */
+static int sys_reg_text(const char *keyPath, const char *name, char *out,
+                        size_t outBytes)
+{
+    char raw[1024];
+    HKEY key;
+    DWORD type;
+    DWORD bytes;
+    DWORD i;
+    LONG rc;
+    char joined[1100];
+    size_t n;
+
+    out[0] = '\0';
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, keyPath, 0, KEY_READ, &key) !=
+        ERROR_SUCCESS) {
+        return 0;
+    }
+    memset(raw, 0, sizeof(raw));
+    bytes = sizeof(raw) - 2;
+    type = 0;
+    rc = RegQueryValueExA(key, name, NULL, &type, (LPBYTE)raw, &bytes);
+    RegCloseKey(key);
+    if (rc == ERROR_MORE_DATA) {
+        _snprintf(out, outBytes - 1, "(longer than %lu bytes, not read)",
+                  (unsigned long)(sizeof(raw) - 2));
+        out[outBytes - 1] = '\0';
+        return -1;
+    }
+    if (rc != ERROR_SUCCESS) {
+        return 0;
+    }
+    if (type != REG_SZ && type != REG_EXPAND_SZ && type != REG_MULTI_SZ) {
+        _snprintf(out, outBytes - 1, "(registry type %lu, not text)",
+                  (unsigned long)type);
+        out[outBytes - 1] = '\0';
+        return -1;
+    }
+    if (bytes > sizeof(raw) - 2) {
+        bytes = sizeof(raw) - 2;
+    }
+    raw[bytes] = '\0';
+    n = 0;
+    for (i = 0; i < bytes && raw[i] != '\0'; ) {
+        size_t len = strlen(raw + i);
+
+        if (n != 0 && n + 3 < sizeof(joined)) {
+            memcpy(joined + n, " / ", 3);
+            n += 3;
+        }
+        if (n + len >= sizeof(joined)) {
+            len = sizeof(joined) - n - 1;
+        }
+        memcpy(joined + n, raw + i, len);
+        n += len;
+        if (type != REG_MULTI_SZ) {
+            break;
+        }
+        i += (DWORD)strlen(raw + i) + 1;
+    }
+    joined[n] = '\0';
+    sys_clean(joined, out, outBytes);
+    return 1;
+}
+
+static void sys_line(const char *label, const char *fmt, ...)
+{
+    char buf[512];
+    char lead[64];
+    va_list ap;
+
+    va_start(ap, fmt);
+    _vsnprintf(buf, sizeof(buf) - 1, fmt, ap);
+    va_end(ap);
+    buf[sizeof(buf) - 1] = '\0';
+    _snprintf(lead, sizeof(lead) - 1, SYS_LABEL, label);
+    lead[sizeof(lead) - 1] = '\0';
+    put_wrapped_to((companion != NULL) ? companion : stdout, lead, SYS_HANG,
+                   buf);
+}
+
+/* Print each of `names` found under `keyPath`; returns how many were. */
+static int sys_values(const char *keyPath, const char *const *names)
+{
+    char text[SYS_TEXT_MAX + 8];
+    int found;
+    int i;
+
+    found = 0;
+    for (i = 0; names[i] != NULL; i++) {
+        if (sys_reg_text(keyPath, names[i], text, sizeof(text)) != 0) {
+            sys_line(names[i], "%s", (text[0] != '\0') ? text : "(empty)");
+            found++;
+        }
+    }
+    return found;
+}
+
+#define SYS_KEY_SYSTEM "HARDWARE\\DESCRIPTION\\System"
+#define SYS_KEY_BIOS   "HARDWARE\\DESCRIPTION\\System\\BIOS"
+#define SYS_KEY_CPU0   "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0"
+#define SYS_KEY_9XBIOS "Enum\\Root\\*PNP0C01\\0000"
+
+/* The allow lists. SystemSKU, the serial numbers and the UUIDs are left out
+ * on purpose - see the privacy rule above. */
+static const char *const sys_nt6_names[] = {
+    "SystemManufacturer", "SystemProductName", "SystemFamily",
+    "SystemVersion", "BaseBoardManufacturer", "BaseBoardProduct",
+    "BIOSVendor", "BIOSVersion", "BIOSReleaseDate", NULL
+};
+static const char *const sys_nt5_names[] = {
+    "SystemBiosVersion", "SystemBiosDate", NULL
+};
+static const char *const sys_9x_names[] = {
+    "BIOSName", "BIOSVersion", "BIOSDate", NULL
+};
+
+static void write_companion_system(void)
+{
+    SYS_OSVERSIONINFOEXA v;
+    SYSTEM_INFO si;
+    HMODULE k32;
+    PFN_ISWOW64 isWow64;
+    PFN_GNSI gnsi;
+    PFN_GMSEX gmsex;
+    unsigned nativeArch;
+    int product;
+    int haveVersion;
+    BOOL wow;
+    char csd[SYS_TEXT_MAX + 8];
+    char text[SYS_TEXT_MAX + 8];
+
+    comp("\n  captured on - this machine, read by xhcisnap at the time of the "
+         "dump (not\n  in the .BIN); no computer, user or domain name, no "
+         "serial number or UUID:\n");
+
+    k32 = GetModuleHandleA("kernel32.dll");
+    isWow64 = NULL;
+    gnsi = NULL;
+    gmsex = NULL;
+    if (k32 != NULL) {
+        isWow64 = (PFN_ISWOW64)GetProcAddress(k32, "IsWow64Process");
+        gnsi = (PFN_GNSI)GetProcAddress(k32, "GetNativeSystemInfo");
+        gmsex = (PFN_GMSEX)GetProcAddress(k32, "GlobalMemoryStatusEx");
+    }
+    nativeArch = SYS_ARCH_UNKNOWN;
+    if (gnsi != NULL) {
+        memset(&si, 0, sizeof(si));
+        gnsi(&si);
+        nativeArch = si.wProcessorArchitecture;
+    }
+
+    /* The EX form first (NT 4 SP6 and later); 9x refuses its size, and then
+     * the plain form answers with no product type. */
+    memset(&v, 0, sizeof(v));
+    v.dwOSVersionInfoSize = sizeof(v);
+    product = SYS_PRODUCT_UNKNOWN;
+    haveVersion = GetVersionExA((LPOSVERSIONINFOA)&v) ? 1 : 0;
+    if (haveVersion) {
+        product = v.wProductType;
+    } else {
+        memset(&v, 0, sizeof(v));
+        v.dwOSVersionInfoSize = sizeof(OSVERSIONINFOA);
+        haveVersion = GetVersionExA((LPOSVERSIONINFOA)&v) ? 1 : 0;
+    }
+    if (!haveVersion) {
+        sys_line("OS", "unknown (GetVersionEx failed, error %lu)",
+                 (unsigned long)GetLastError());
+    } else {
+        v.szCSDVersion[sizeof(v.szCSDVersion) - 1] = '\0';
+        sys_clean(v.szCSDVersion, csd, sizeof(csd));
+        sys_line("OS", "%s: platform %lu, version %lu.%lu, build %lu%s%s",
+                 sys_os_name(v.dwPlatformId, v.dwMajorVersion,
+                             v.dwMinorVersion, v.dwBuildNumber, product,
+                             nativeArch),
+                 (unsigned long)v.dwPlatformId,
+                 (unsigned long)v.dwMajorVersion,
+                 (unsigned long)v.dwMinorVersion,
+                 (unsigned long)((v.dwPlatformId == SYS_PLATFORM_9X)
+                                     ? (v.dwBuildNumber & 0xFFFFUL)
+                                     : v.dwBuildNumber),
+                 (csd[0] != '\0') ? ", " : "", csd);
+    }
+
+    /* This tool is an x86 program on every target; on a 64-bit Windows it
+     * runs under WOW64 and says so. */
+    wow = FALSE;
+    if (isWow64 != NULL && isWow64(GetCurrentProcess(), &wow) && wow) {
+        sys_line("bitness", "64-bit Windows (%s); this x86 tool ran under "
+                 "WOW64",
+                 (nativeArch == SYS_ARCH_AMD64) ? "x64" :
+                 (nativeArch == SYS_ARCH_IA64) ? "Itanium" : "64-bit");
+    } else {
+        sys_line("bitness", "x86 (32-bit Windows)");
+    }
+
+    if (haveVersion && v.dwPlatformId == SYS_PLATFORM_NT) {
+        if (v.dwMajorVersion >= 6 && sys_values(SYS_KEY_BIOS, sys_nt6_names)
+            != 0) {
+            /* Vista SP1 and later: the SMBIOS strings, by name. */
+        } else {
+            sys_line("make/model", "%s",
+                     (v.dwMajorVersion >= 6)
+                         ? "not in this Windows' registry (Vista before SP1 "
+                           "does not record it)"
+                         : "not available on this OS");
+            if (sys_values(SYS_KEY_SYSTEM, sys_nt5_names) == 0) {
+                sys_line("BIOS", "not in the registry");
+            }
+        }
+    } else {
+        sys_line("make/model", "not available on this OS");
+        if (sys_values(SYS_KEY_9XBIOS, sys_9x_names) == 0) {
+            sys_line("BIOS", "not in the registry");
+        }
+    }
+
+    memset(&si, 0, sizeof(si));
+    GetSystemInfo(&si);
+    if (sys_reg_text(SYS_KEY_CPU0, "ProcessorNameString", text,
+                     sizeof(text)) == 1 && text[0] != '\0') {
+        sys_line("CPU", "%s; %lu processor(s)", text,
+                 (unsigned long)si.dwNumberOfProcessors);
+    } else if (sys_reg_text(SYS_KEY_CPU0, "Identifier", text,
+                            sizeof(text)) == 1 && text[0] != '\0') {
+        sys_line("CPU", "%s; %lu processor(s)", text,
+                 (unsigned long)si.dwNumberOfProcessors);
+    } else {
+        sys_line("CPU", "not named in the registry; %lu processor(s)",
+                 (unsigned long)si.dwNumberOfProcessors);
+    }
+
+    {
+        SYS_MEMORYSTATUSEX mx;
+        MEMORYSTATUS m;
+
+        memset(&mx, 0, sizeof(mx));
+        mx.dwLength = sizeof(mx);
+        if (gmsex != NULL && gmsex(&mx)) {
+            sys_line("RAM", "%lu MB physical",
+                     (unsigned long)(mx.ullTotalPhys / (1024 * 1024)));
+        } else {
+            memset(&m, 0, sizeof(m));
+            m.dwLength = sizeof(m);
+            GlobalMemoryStatus(&m);
+            sys_line("RAM", "%lu MB physical",
+                     (unsigned long)(m.dwTotalPhys / (1024UL * 1024UL)));
+        }
+    }
+}
+
+/*
+ * `-selftest-sysinfo`: the OS names over canned GetVersionEx answers, the
+ * cleaning over canned strings, then this machine's block as a dump would
+ * write it (to the screen, since no report is open).
+ */
+static int selftest_sysinfo(void)
+{
+    static const struct {
+        unsigned long platform, major, minor, build;
+        int product;
+        unsigned arch;
+    } cases[] = {
+        { 1, 4,  0, 0x040003B6UL, 0, SYS_ARCH_UNKNOWN },
+        { 1, 4, 10, 0x040A07CEUL, 0, SYS_ARCH_UNKNOWN },
+        { 1, 4, 10, 0x040A08AEUL, 0, SYS_ARCH_UNKNOWN },
+        { 1, 4, 90, 0x045A0BB8UL, 0, SYS_ARCH_UNKNOWN },
+        { 2, 5,  0, 2195, 1, SYS_ARCH_UNKNOWN },
+        { 2, 5,  1, 2600, 1, SYS_ARCH_X86 },
+        { 2, 5,  2, 3790, 1, SYS_ARCH_AMD64 },
+        { 2, 5,  2, 3790, 3, SYS_ARCH_X86 },
+        { 2, 5,  2, 3790, 0, SYS_ARCH_UNKNOWN },
+        { 2, 6,  0, 6002, 1, SYS_ARCH_X86 },
+        { 2, 6,  1, 7601, 1, SYS_ARCH_AMD64 },
+        { 2, 6,  1, 7601, 3, SYS_ARCH_AMD64 },
+        { 2, 6,  2, 9200, 1, SYS_ARCH_AMD64 },
+        { 2, 3, 51, 1057, 0, SYS_ARCH_UNKNOWN }
+    };
+    static const char *const dirty[] = {
+        "       Intel(R) Core(TM) i7-6500U CPU @ 2.50GHz",
+        "LENOVO\t  20F5S0\x01\xE9 ",
+        NULL
+    };
+    char out[SYS_TEXT_MAX + 8];
+    char longIn[200];
+    int i;
+
+    for (i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++) {
+        printf("os %lu %lu.%lu build %lu product %d arch %u: %s\n",
+               cases[i].platform, cases[i].major, cases[i].minor,
+               cases[i].build & 0xFFFFUL, cases[i].product, cases[i].arch,
+               sys_os_name(cases[i].platform, cases[i].major, cases[i].minor,
+                           cases[i].build, cases[i].product, cases[i].arch));
+    }
+    for (i = 0; dirty[i] != NULL; i++) {
+        sys_clean(dirty[i], out, sizeof(out));
+        printf("clean [%s]\n", out);
+    }
+    memset(longIn, 'x', sizeof(longIn) - 1);
+    longIn[sizeof(longIn) - 1] = '\0';
+    sys_clean(longIn, out, sizeof(out));
+    printf("clean %u chars, ends [%s]\n", (unsigned)strlen(out),
+           out + strlen(out) - 4);
+
+    write_companion_system();
+    return 0;
+}
+
 static void write_companion_header(const SNAP_HEADER *h)
 {
     comp("\nxhci98 snapshot - the part a maintainer can read without an offset "
@@ -1258,6 +1763,7 @@ static void write_companion_header(const SNAP_HEADER *h)
     put_wrapped_to((companion != NULL) ? companion : stdout,
                    "  driver file        ", "                     ",
                    driver_file_version());
+    write_companion_system();
     comp("  schema             %lu, %lu-byte header\n",
          h->SchemaVersion, h->HeaderBytes);
     comp("  build flavour      %s\n", flavour_text(h->Flavour));
@@ -5642,6 +6148,8 @@ int main(int argc, char **argv)
             return selftest_intr();
         } else if (strcmp(argv[i], "-selftest-xstat") == 0) {
             return selftest_xstat();
+        } else if (strcmp(argv[i], "-selftest-sysinfo") == 0) {
+            return selftest_sysinfo();
         } else if (strcmp(argv[i], "-selftest-report") == 0 && i + 1 < argc) {
             /*
              * The report path on its own, with no device: open BASE.TXT, write

@@ -1452,6 +1452,14 @@ settings when it starts. **Use the `XHCISNAP.EXE` from this download**, not
 a copy kept from an earlier release: one from before `2.2.0.0` neither
 decodes the enumeration records nor reads the per-port section below.
 
+From `2.3.0.0` the top of `MYDUMP.TXT` also says which system it came from:
+the Windows version, build and service pack, 32-bit or 64-bit, the
+processor, the memory, and the make, model and BIOS where that Windows
+records them (on Vista and 7 the make and model; on 2000 and XP, 98 SE and
+ME the BIOS only). It never includes the computer's name, your user name,
+a domain, or any serial number, so the file is safe to paste into a public
+issue as it is.
+
 | Value | What it does |
 |---|---|
 | `XhciLogVerbosity` | `0` off (the driver does not answer `XHCISNAP` at all); `1` counters only; `2` adds the log of what happened (use this one); `3` adds the USB port register table; `4` everything, including internal addresses in the plain-text report. A value outside `0`-`4` is treated as `0` |

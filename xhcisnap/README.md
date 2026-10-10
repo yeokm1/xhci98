@@ -123,6 +123,51 @@ published, so what is left is an absence and not a mixture. (The `.TXT` was
 left standing on that branch until the 2026-09-16 audit, which made the newest
 file in the directory a report of a set that had just been deleted.)
 
+### The machine it was captured on (2.3.0.0)
+
+From 2.3.0.0 (roadmap-hcd.md task 36.47) the `.TXT`'s header block, which
+is written at every level and is the part users paste into an issue, also
+names the system the dump was taken on, under "captured on":
+
+- **OS**: `GetVersionEx`'s platform, version, build and service pack
+  (`szCSDVersion`), with a name: Windows 95, 98, 98 SE, ME, 2000, XP,
+  XP x64 or Server 2003 (told apart by the product type and the native
+  processor), Vista or Server 2008, 7 or Server 2008 R2, "Windows 8 or
+  later" (every later Windows reports 6.2 to a program with no
+  compatibility manifest), or "unknown".
+- **Bitness**: x86, or 64-bit Windows with this x86 tool under WOW64
+  (`IsWow64Process` and `GetNativeSystemInfo`, looked up at run time so the
+  EXE still loads on 98 SE, ME and 2000). The tool is x86 on every target.
+- **The machine**, only where the OS records it in the registry: on Vista
+  SP1 and later `HKLM\HARDWARE\DESCRIPTION\System\BIOS`'s
+  `SystemManufacturer`, `SystemProductName`, `SystemFamily`, `SystemVersion`,
+  `BaseBoardManufacturer`, `BaseBoardProduct`, `BIOSVendor`, `BIOSVersion`
+  and `BIOSReleaseDate`; on 2000, XP and XP x64 (and a Vista without that
+  key) `HKLM\HARDWARE\DESCRIPTION\System`'s `SystemBiosVersion` and
+  `SystemBiosDate`, with "make/model: not available on this OS"; on 98 SE
+  and ME `HKLM\Enum\Root\*PNP0C01\0000`'s `BIOSName`, `BIOSVersion` and
+  `BIOSDate`, which is what the system board's devnode carries there.
+- **CPU**: `ProcessorNameString`, else `Identifier`, from
+  `HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0`, and the processor
+  count (`GetSystemInfo`).
+- **RAM**: the physical memory, from `GlobalMemoryStatusEx` where it exists
+  and `GlobalMemoryStatus` before it.
+
+**It never prints the computer name, the user name, the domain, or any
+serial number, UUID, asset tag or SKU value.** The values read are a fixed
+allow list named in the source, never a key's whole contents, and each one
+names a make, a model, a firmware or a processor rather than one machine.
+Registry text is printed as plain ASCII (any other byte becomes `?`) and cut
+at 96 characters. `selftest.cmd` checks the block on the build host against
+that host's own computer and user names.
+
+It is read from the running machine when the dump is taken, never from the
+dump: the driver does not record it and the `.BIN` does not carry it. This
+tool does not decode a saved `.BIN` (that is the maintainer's offset-table
+route), so the block always describes the machine the driver answered on.
+`-selftest-sysinfo` prints the names over canned `GetVersionEx` answers and
+then the block for the machine it runs on.
+
 The `.TXT` also carries, from a 2.0.0.0 driver and at every level, one line per
 device the driver holds a slot for: its Slot ID, root port, Route String and
 tier, the Output Slot Context's state and Speed field (the raw PSIV, xHCI
@@ -572,6 +617,10 @@ xhcisnap\selftest.cmd
 The second runs the report path four times with no controller present (no
 fault, a failing write, a failing close, a `.TXT` that cannot be created) and
 checks the exit codes and summary lines; see "Three files" above.
+
+It also drives every `-selftest-*` decode over canned data, and from 2.3.0.0
+`-selftest-sysinfo`, whose live block must not carry the host's computer or
+user name.
 
 MSVC 6.0 in place from `tools\MSVC600`; nothing is installed machine-wide and
 `MSVC6` overrides the location. `/Za` is not used here even though the driver
