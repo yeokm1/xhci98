@@ -164,8 +164,10 @@ body:
         photo above and the XHCIQUAL report below are what helps.
         From 2.3.0.0 the top of the .TXT names the Windows version, the
         processor, the memory and, where Windows records them, the make, model
-        and BIOS; it does not read the computer name, your user name or a
-        serial number, and it withholds a string that contains either name.
+        and BIOS. It does not print the computer name, your user name or the
+        domain, and withholds a firmware string that contains one (names of
+        three characters or more); if your firmware strings were customised,
+        read the top of the .TXT before attaching it.
     validations:
       required: false
 

@@ -1394,16 +1394,23 @@ static const char *sys_os_name(unsigned long platform, unsigned long major,
  * SystemProductName), so naming the values is not by itself a guarantee
  * (Codex review of 36.47, round 1). Every registry string printed passes
  * through sys_clean, and sys_clean withholds the whole string when it
- * contains this machine's computer name, the user's name, the domain (NT's
- * USERDOMAIN) or the workgroup (9x's VNETSUP), compared without case. The
- * names are never printed; a name under three characters is not compared,
- * since it would withhold "PC" out of every QEMU product string while
- * hiding nothing. What it cannot catch is an identifier that is none of
- * those - a serial typed into a product string - and README.md says so.
- * GetComputerNameA and GetEnvironmentVariableA are KERNEL32 and GetUserNameA
- * ADVAPI32 on every target, so the import table does not change.
+ * contains this machine's computer name, the user's name, the domain or the
+ * workgroup, compared without case, on the string as the registry gave it
+ * and again as printed (round 2: a name cut by the truncation, or one with a
+ * byte the cleaning turns into '?', must not slip through). The domain is
+ * taken three ways, since the environment alone can be missing it (round 2):
+ * USERDOMAIN; NetGetJoinInformation (2000 and later: the domain or workgroup
+ * joined), from netapi32.dll loaded at run time; and GetComputerNameExA's
+ * DNS domain (2000 and later), looked up at run time. 98 SE and ME give
+ * theirs in VNETSUP. The names are never printed; a name under three
+ * characters is not compared, since it would withhold "PC" out of every QEMU
+ * product string while hiding nothing. What it cannot catch is an
+ * identifier that is none of those - a serial typed into a product string -
+ * and README.md says so. GetComputerNameA and GetEnvironmentVariableA are
+ * KERNEL32 and GetUserNameA ADVAPI32 on every target, so the import table
+ * does not change.
  */
-#define SYS_NAMES 5
+#define SYS_NAMES 7
 #define SYS_NAME_BYTES 260
 #define SYS_WITHHELD "(withheld: it contains this machine's computer, user, " \
                      "domain or workgroup name)"
@@ -1451,6 +1458,44 @@ static void sys_load_names(void)
         }
         RegCloseKey(key);
     }
+    {
+        typedef DWORD (WINAPI *PFN_NGJI)(LPCWSTR, LPWSTR *, DWORD *);
+        typedef DWORD (WINAPI *PFN_NABF)(LPVOID);
+        typedef BOOL (WINAPI *PFN_GCNEX)(int, LPSTR, LPDWORD);
+        HMODULE net;
+        HMODULE k32;
+        PFN_NGJI ngji;
+        PFN_NABF nabf;
+        PFN_GCNEX gcnex;
+        LPWSTR joined;
+        DWORD status;
+
+        net = LoadLibraryA("netapi32.dll");
+        if (net != NULL) {
+            ngji = (PFN_NGJI)GetProcAddress(net, "NetGetJoinInformation");
+            nabf = (PFN_NABF)GetProcAddress(net, "NetApiBufferFree");
+            joined = NULL;
+            status = 0;
+            if (ngji != NULL && nabf != NULL &&
+                ngji(NULL, &joined, &status) == 0 && joined != NULL) {
+                if (WideCharToMultiByte(CP_ACP, 0, joined, -1, sysNames[5],
+                                        SYS_NAME_BYTES - 1, NULL, NULL) == 0) {
+                    sysNames[5][0] = '\0';
+                }
+                nabf(joined);
+            }
+            FreeLibrary(net);
+        }
+        k32 = GetModuleHandleA("kernel32.dll");
+        gcnex = (k32 != NULL)
+                    ? (PFN_GCNEX)GetProcAddress(k32, "GetComputerNameExA")
+                    : NULL;
+        n = SYS_NAME_BYTES - 1;
+        /* 2 is ComputerNameDnsDomain. */
+        if (gcnex == NULL || !gcnex(2, sysNames[6], &n)) {
+            sysNames[6][0] = '\0';
+        }
+    }
 }
 
 /* Whether `text` holds any loaded name (three characters or more), with
@@ -1492,6 +1537,7 @@ static void sys_clean(const char *in, char *out, size_t outBytes)
 {
     size_t n;
     int space;
+    int raw;
 
     if (outBytes < 8) {
         if (outBytes != 0) {
@@ -1499,6 +1545,8 @@ static void sys_clean(const char *in, char *out, size_t outBytes)
         }
         return;
     }
+    /* As the registry gave it, before any byte is changed or cut. */
+    raw = sys_has_name(in);
     n = 0;
     space = 0;
     while (*in == ' ' || *in == '\t') {
@@ -1530,7 +1578,7 @@ static void sys_clean(const char *in, char *out, size_t outBytes)
         out[n++] = '.';
     }
     out[n] = '\0';
-    if (sys_has_name(out) && strlen(SYS_WITHHELD) < outBytes) {
+    if ((raw || sys_has_name(out)) && strlen(SYS_WITHHELD) < outBytes) {
         strcpy(out, SYS_WITHHELD);
     }
 }
@@ -1823,6 +1871,9 @@ static int selftest_sysinfo(void)
         "Built for JDoe",
         "CorpDom fleet image",
         "Standard PC (i440FX + PIIX, 1996)",
+        "Owner M\xFCller",
+        "BIOS xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        "xxxxxxxxxxxxxxxxxxxSNAPTEST-PC7",
         NULL
     };
     char out[SYS_TEXT_MAX + 8];
@@ -1835,6 +1886,7 @@ static int selftest_sysinfo(void)
     strcpy(sysNames[1], "jdoe");
     strcpy(sysNames[2], "CORPDOM");
     strcpy(sysNames[3], "PC");
+    strcpy(sysNames[4], "M\xFCller");
     sysNamesLoaded = 1;
 
     for (i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++) {

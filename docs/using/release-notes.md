@@ -1456,11 +1456,12 @@ From `2.3.0.0` the top of `MYDUMP.TXT` also says which system it came from:
 the Windows version, build and service pack, 32-bit or 64-bit, the
 processor, the memory, and the make, model and BIOS where that Windows
 records them (on Vista and 7 the make and model; on 2000 and XP, 98 SE and
-ME the BIOS only). It never reads the computer's name, your user name, a
-domain or any serial number, and it withholds any of those strings that
-contains the computer's, your user or the domain's name, so the file is
-meant to be pasted into a public issue as it is. If your machine's firmware
-strings were customised, read the top of the file first.
+ME the BIOS only). It does not print the computer's name, your user name or
+the domain, and does not read any serial number; it reads those names only
+to withhold a firmware string that contains one (a name of three characters
+or more). The file is meant to be pasted into a public issue as it is, but
+if your machine's firmware strings were customised, read the top of the
+file first.
 
 | Value | What it does |
 |---|---|

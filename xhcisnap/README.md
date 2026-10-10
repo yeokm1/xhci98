@@ -153,16 +153,18 @@ names the system the dump was taken on, under "captured on":
 - **RAM**: the physical memory, from `GlobalMemoryStatusEx` where it exists
   and `GlobalMemoryStatus` before it.
 
-**It never reads the computer name, the user name, the domain, or any
-serial number, UUID, asset tag or SKU value.** The values read are a fixed
-allow list named in the source, never a key's whole contents, and each one
-names a make, a model, a firmware or a processor rather than one machine.
-Those are still the firmware's free text, which an integrator (or QEMU's
-`-smbios`) can fill with anything, so a second guard stands behind the list:
-any registry string that contains this machine's computer name, the user's
-name, the NT domain or the 9x workgroup (compared without case, names of
-three characters or more) is printed as "withheld" instead. The names are
-read for that comparison only and never printed. What no tool can catch is
+**It never prints the computer name, the user name or the domain as a
+field, and never reads a serial number, UUID, asset tag or SKU value.** The
+values printed are a fixed allow list named in the source, never a key's
+whole contents, and each one names a make, a model, a firmware or a
+processor rather than one machine. Those are still the firmware's free text,
+which an integrator (or QEMU's `-smbios`) can fill with anything, so a
+second guard stands behind the list: the tool reads the computer name, the
+user's name, the domain (`USERDOMAIN`, the domain or workgroup joined, the
+DNS domain) and on 98 SE and ME the workgroup, for this comparison only,
+and prints any registry string that contains one of them (without case,
+before and after cleaning) as "withheld". A name of one or two characters is
+not compared, so it is not withheld. What no tool can catch is
 an identifier that is none of those, typed into a product string; on a
 machine whose firmware strings were customised, read the block before
 posting it. Registry text is printed as plain ASCII (any other byte becomes

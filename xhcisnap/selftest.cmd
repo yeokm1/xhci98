@@ -299,15 +299,16 @@ for %%S in ("build 950 product 0 arch 65535: Windows 95" "build 1998 product 0 a
         set FAILED=1
     )
 )
-rem The withholding over canned names (SNAPTEST-PC7, jdoe, CORPDOM, and PC,
-rem which is under three characters and not compared): three strings are
-rem withheld and the QEMU product string is kept. It is deterministic, so no
+rem The withholding over canned names (SNAPTEST-PC7, jdoe, CORPDOM, a
+rem non-ASCII name, and PC, which is under three characters and not
+rem compared): five strings are withheld, one of them with the name past the
+rem 96-character cut, and the QEMU product string is kept. It is deterministic, so no
 rem host name is searched for (Codex review of 36.47, round 1: a host search
 rem matched the block's own fixed words and missed values under other labels).
 set WITHHELD=0
 for /f "delims=" %%L in ('findstr /C:"clean [(withheld: it contains" "%BASE%.sysinfo.log"') do set /a WITHHELD+=1
-if not "%WITHHELD%"=="3" (
-    echo FAIL: the system block withheld %WITHHELD% canned strings, expected 3
+if not "%WITHHELD%"=="5" (
+    echo FAIL: the system block withheld %WITHHELD% canned strings, expected 5
     set FAILED=1
 )
 
