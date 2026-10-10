@@ -2272,14 +2272,18 @@ ULONG HcdDevicePdoRepresentAsk(PHCD_CONTROLLER hc, ULONG parentSerial)
  * Address, transport and parent - so PnP, which forgot the old object with
  * the parent's devnode and would never start it again (10.11 item 4), finds
  * the instance id it had on a new one. The device is not touched: still
- * configured, each old function's REMOVE having released its endpoints
- * (10.9), the new function selecting its own when its driver loads. The new
+ * configured, each old function's REMOVE having queued the release of its
+ * endpoints and alternates (HcdCfgReleaseFunction, 10.9), which the
+ * release-before-reconfigure order of HcdCfgService runs ahead of the new
+ * function's select when its driver loads. The new
  * PDOs are built first, outside the lock; then, in one hold of PdoListLock,
  * each takes its old PDO's place on the group's chain and the list, and
  * the old one - removed by PnP already - is missing at once and goes to
- * RemovedPdos, deleted by the next relations answer, before any answer
- * carries its successor. A function whose new PDO cannot be made stays let
- * go, absent until the device is plugged again, and is traced. Returns how
+ * RemovedPdos, deleted inside the next relations answer before PnP
+ * receives it, though that answer may be the first to carry its
+ * successor. A function whose new PDO cannot be made stays let
+ * go, absent until the next composite FDO start on the parent (a disable
+ * and enable) or the device's next plug, and is traced. Returns how
  * many were re-presented. Thread only (the chain's writer), PASSIVE_LEVEL.
  */
 ULONG HcdDevicePdoRepresentFunctions(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
