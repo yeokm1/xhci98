@@ -3563,6 +3563,36 @@ static ULONG hcdCfgStreamExponent(PHCD_USB_DEVICE dev, PHCD_PIPE pipe,
     return XHCI_STREAM_EP_NONE;
 }
 
+/* 36.25: a big block built (1) or refused into the fallback (0), counted
+ * under the controller lock. Thread only. */
+static VOID hcdCfgBigCount(PHCD_CONTROLLER hc, ULONG built)
+{
+    KIRQL oldIrql;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (built) {
+        hc->Xpipe.BigBuilt++;
+    } else {
+        hc->Xpipe.BigRefused++;
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
+/* 36.25: whether a big block is wanted at this open - not when the qemu
+ * flavour's XhciQemuBigRefuse forces the fallback for a leg. Thread only. */
+static ULONG hcdCfgBigWanted(PHCD_CONTROLLER hc)
+{
+#if defined(XHCI_FLAVOUR_QEMU)
+    if (hc->QemuBigRefuse) {
+        hcdCfgBigCount(hc, 0);
+        return 0;
+    }
+#else
+    UNREFERENCED_PARAMETER(hc);
+#endif
+    return 1;
+}
+
 /* A stream block and its pipes, built for `pipe` by `plan`, every stream's
  * ring empty and every stream's pipe paused once - the open resumes them
  * with the endpoint. NULL when memory or the common buffer runs out. */
@@ -3575,6 +3605,7 @@ static PHCD_STREAMS hcdCfgStreamsBuild(PHCD_CONTROLLER hc,
     PHCD_PIPE p;
     PUCHAR va;
     ULONG offset;
+    ULONG bytes;
     ULONG id;
     ULONG i;
 
@@ -3590,16 +3621,41 @@ static PHCD_STREAMS hcdCfgStreamsBuild(PHCD_CONTROLLER hc,
     st->Dci = pipe->Dci;
     st->Entries = plan->Entries;
     st->MaxPStreams = plan->MaxPStreams;
-    if (XhciStreamLayout(plan->Entries, plan->Streams,
-                         ext->Layout.PoolRingTrbs, &st->Layout) !=
-        XHCI_STREAM_OK) {
-        HcdPoolFree(st);
-        return NULL;
+    st->RingTrbs = ext->Layout.PoolRingTrbs;
+    /* 36.25 (design record 13 section 11.7): with promotion on, every
+     * stream's ring is 1024 TRBs, placed by the block's physical address;
+     * a block that cannot be had or placed falls back to today's. */
+    if (hc->WideEnabled && hcdCfgBigWanted(hc) &&
+        XhciStreamBigBytes(plan->Entries, plan->Streams, &bytes) ==
+            XHCI_STREAM_OK) {
+        st->Va = HcdDmaStreamAlloc(hc, bytes, &st->Pa);
+        if (st->Va != NULL &&
+            XhciStreamLayoutPlaced(plan->Entries, plan->Streams,
+                                   st->Pa.LowPart, (ULONG)st->Pa.HighPart,
+                                   &st->Layout) == XHCI_STREAM_OK) {
+            st->RingTrbs = XHCI_STREAM_BIG_RING_TRBS;
+        } else {
+            if (st->Va != NULL) {
+                HcdDmaStreamFree(hc, bytes, st->Pa, st->Va);
+                st->Va = NULL;
+            }
+            hcdCfgBigCount(hc, 0);
+        }
     }
-    st->Va = HcdDmaStreamAlloc(hc, st->Layout.TotalBytes, &st->Pa);
     if (st->Va == NULL) {
-        HcdPoolFree(st);
-        return NULL;
+        if (XhciStreamLayout(plan->Entries, plan->Streams,
+                             ext->Layout.PoolRingTrbs, &st->Layout) !=
+            XHCI_STREAM_OK) {
+            HcdPoolFree(st);
+            return NULL;
+        }
+        st->Va = HcdDmaStreamAlloc(hc, st->Layout.TotalBytes, &st->Pa);
+        if (st->Va == NULL) {
+            HcdPoolFree(st);
+            return NULL;
+        }
+    } else {
+        hcdCfgBigCount(hc, 1);
     }
     va = (PUCHAR)st->Va;
     for (i = 0; i < st->Layout.TotalBytes; i++) {
@@ -3631,10 +3687,11 @@ static PHCD_STREAMS hcdCfgStreamsBuild(PHCD_CONTROLLER hc,
         XhciXferQueueInit(&p->OwnQueue);
         offset = XhciStreamRingOffset(&st->Layout, id);
         if (XhciRingInit(&p->OwnRing, (volatile XHCI_TRB *)(va + offset),
-                         st->Pa.LowPart + offset, ext->Layout.PoolRingTrbs,
+                         st->Pa.LowPart + offset, st->RingTrbs,
                          XHCI_RING_KIND_ENDPOINT) != XHCI_RING_OK) {
             goto fail;
         }
+        p->BigRing = (st->RingTrbs == XHCI_STREAM_BIG_RING_TRBS) ? 1UL : 0UL;
         st->Ring[id] = &p->OwnRing;
     }
     return st;

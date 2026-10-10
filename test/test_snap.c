@@ -27,27 +27,27 @@ static void test_header(void)
 {
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_VERSION_AT), 1,
              "version 1");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_BYTES), 916,
-             "a 229-word header (35-T.8 appended twelve, 36.3 28, 36.21 "
-             "154, 36.9 two, 36.24 25)");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_BYTES), 948,
+             "a 237-word header (35-T.8 appended twelve, 36.3 28, 36.21 "
+             "154, 36.9 two, 36.24 and 36.25 33)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS), 18,
              "the E460's eighteen root ports");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORT_BYTES), 64,
              "a sixteen-word record");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 916,
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 948,
              "records right after the header");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 114,
              "the whole counter block");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS_AT),
-             916 + 18 * 64, "counters after the last record");
+             948 + 18 * 64, "counters after the last record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_NOTE_BUDGET),
              XHCI_ENUM_NOTE_BUDGET, "the notes' budget");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_WORDS), 0,
              "past the header reads 0");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_COUNTER_WORDS * sizeof(ULONG),
              sizeof(XHCIHC_COUNTERS), "the counters word for word");
-    CHECK_EQ(XhciSnapHcdWords(18), 229 + 18 * 16 + 114, "the E460's image");
-    CHECK_EQ(XhciSnapHcdWords(0), 229 + 114,
+    CHECK_EQ(XhciSnapHcdWords(18), 237 + 18 * 16 + 114, "the E460's image");
+    CHECK_EQ(XhciSnapHcdWords(0), 237 + 114,
              "no ports: a header and the counters");
     CHECK_EQ(XhciSnapHcdWords(1000), XhciSnapHcdWords(XHCI_MAX_ROOT_PORTS),
              "ports held to the root port maximum");
@@ -261,11 +261,11 @@ static void test_xstat_words(void)
     CHECK_EQ(XHCI_SNAPSHOT_HCD_DELIVERY_AT, 202, "36.9's pair at 202");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_DELIVERY_WORDS, 203, "and 203");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_XPIPE_WORDS, 204, "stage 2's count at 204");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_XPIPE_WORDS), 24,
-             "twenty-four counters");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_XPIPE_WORDS), 32,
+             "thirty-two counters: 36.24's 24, 36.25's eight");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_XPIPE_AT, 205, "from 205");
-    CHECK_EQ(sizeof(XHCI_XPIPE_STATS), 24 * 4, "the whole of the stats");
-    CHECK_EQ(XHCI_SNAPSHOT_HCD_XPIPE_AT + 24, XHCI_SNAPSHOT_HCD_HEAD_WORDS,
+    CHECK_EQ(sizeof(XHCI_XPIPE_STATS), 32 * 4, "the whole of the stats");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_XPIPE_AT + 32, XHCI_SNAPSHOT_HCD_HEAD_WORDS,
              "to the header's end");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_XPIPE_AT), 0,
              "the counters are the door's");
@@ -274,7 +274,11 @@ static void test_xstat_words(void)
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XPIPE_STATS, Pipelined), 12 * 4,
              "pipelined URBs thirteenth");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XPIPE_STATS, Order), 23 * 4,
-             "the order anomaly last");
+             "the order anomaly last of 36.24's");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XPIPE_STATS, BigBuilt), 24 * 4,
+             "36.25's first at word 229");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XPIPE_STATS, Td513), 31 * 4,
+             "and its last at 236");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_XSTAT_AT), 0,
              "the readings are the door's, not layout");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_TELE_AT), 0,

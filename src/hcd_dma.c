@@ -306,7 +306,8 @@ static ULONG hcdMapWide(PHCD_CONTROLLER hc, PHCD_XFER x)
                                                  va + done, &run,
                                                  (BOOLEAN)!x->In);
         if (run == 0 || run > x->Length - done || pa.HighPart != 0 ||
-            !XhciXpipeAppendRun(w->Wide, &n, XHCI_XPIPE_WIDE_ELEMENTS,
+            !XhciXpipeAppendRun(w->WideList.List.SgElement, &n,
+                                XHCI_XPIPE_WIDE_ELEMENTS,
                                 pa.LowPart, run, done)) {
             return 0;
         }
@@ -682,6 +683,7 @@ VOID HcdDmaWideOpen(PHCD_CONTROLLER hc)
 
     hc->WideEnabled = 0;
     hc->WidePool = NULL;
+    hc->WideScratch = NULL;
     hc->RefillHead = NULL;
     pool = NULL;
     if (!hc->WideSwitch) {
@@ -701,8 +703,11 @@ VOID HcdDmaWideOpen(PHCD_CONTROLLER hc)
         check = hcdWideCheck(hc);
     }
     if (check == XHCI_XPIPE_CHECK_PASS) {
+        /* The entries, then 36.25's TRB scratch, one allocation: a pool a
+         * fail-closed stop keeps keeps its scratch with it. */
         pool = (PHCD_WIDE_ENTRY)HcdPoolAlloc(
-            HCD_WIDE_ENTRIES * (ULONG)sizeof(HCD_WIDE_ENTRY));
+            HCD_WIDE_ENTRIES * (ULONG)sizeof(HCD_WIDE_ENTRY) +
+            HCD_WIDE_SCRATCH_TRBS * (ULONG)sizeof(XHCI_TRB));
         if (pool == NULL) {
             check = XHCI_XPIPE_CHECK_NO_MEMORY;
         } else {
@@ -716,6 +721,7 @@ VOID HcdDmaWideOpen(PHCD_CONTROLLER hc)
     hc->Xpipe.Check = check;
     if (pool != NULL) {
         hc->WidePool = pool;
+        hc->WideScratch = (PXHCI_TRB)(pool + HCD_WIDE_ENTRIES);
         hc->WideEnabled = 1;
         hc->Xpipe.Pool = HCD_WIDE_ENTRIES;
     }
@@ -745,6 +751,7 @@ VOID HcdDmaWideClose(PHCD_CONTROLLER hc)
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     pool = hc->WidePool;
     hc->WidePool = NULL;
+    hc->WideScratch = NULL;
     hc->WideEnabled = 0;
     hc->Xpipe.Pool = 0;
     for (i = 0; pool != NULL && i < HCD_WIDE_ENTRIES; i++) {

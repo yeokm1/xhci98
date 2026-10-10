@@ -313,8 +313,25 @@ typedef struct _HCD_WIDE_ENTRY {
         USBPORT_SCATTER_GATHER_LIST List;
         USBPORT_SCATTER_GATHER_ELEMENT More[XHCI_XPIPE_TD_ELEMENTS];
     } Sg;                           /* slot 1's TD list                   */
-    USBPORT_SCATTER_GATHER_ELEMENT Wide[XHCI_XPIPE_WIDE_ELEMENTS];
+    /* The URB's whole mapping, offsets from 0, as a list (36.25): on a big
+     * ring it is the one TD's own list (record 13 section 11.7, point 3);
+     * elsewhere the planner cuts TDs from its elements. */
+    struct _HCD_WIDE_LIST {
+        USBPORT_SCATTER_GATHER_LIST List;
+        USBPORT_SCATTER_GATHER_ELEMENT More[XHCI_XPIPE_WIDE_ELEMENTS - 2];
+    } WideList;
 } HCD_WIDE_ENTRY, *PHCD_WIDE_ENTRY;
+
+/* The wide list's elements run on from the list's own two, as the
+ * record's do (hcd_sg_list_tail). */
+XHCI_C_ASSERT(hcd_wide_list_tail,
+              XHCI_OFFSET_OF(struct _HCD_WIDE_LIST, More) ==
+                  XHCI_OFFSET_OF(USBPORT_SCATTER_GATHER_LIST, SgElement) +
+                      2 * sizeof(USBPORT_SCATTER_GATHER_ELEMENT));
+
+/* 36.25: the TRB scratch a one-TD publication on a big ring builds into,
+ * beside the entries in the pool's one allocation (hcd_dma.c). */
+#define HCD_WIDE_SCRATCH_TRBS (XHCI_XPIPE_WIDE_ELEMENTS + 2UL)
 
 /* About 13 KiB an entry, about 104 KiB for the eight, on both
  * architectures; the bound the record states (section 11.6, point 3). */
@@ -378,6 +395,9 @@ typedef struct _HCD_PIPE {
                                      * section 3.2); controller lock      */
     struct _HCD_XFER *Exclusive;    /* a request split into chunks: none
                                      * other is published until it ends   */
+    ULONG BigRing;                  /* 36.25: a stream's ring of
+                                     * XHCI_STREAM_BIG_RING_TRBS - a
+                                     * promoted URB goes as one TD        */
     ULONG TruncHeld;                /* 36.24: a pipelined record's
                                      * successor waits for the thread to
                                      * take it off - nothing rings this
@@ -435,6 +455,8 @@ typedef struct _HCD_STREAMS {
     PVOID Va;
     PHYSICAL_ADDRESS Pa;
     XHCI_STREAM_LAYOUT Layout;
+    ULONG RingTrbs;                 /* each stream's ring (36.25: 1024 on a
+                                     * big block, else the pool's 64)    */
     PXHCI_RING Ring[XHCI_STREAM_MAX_ENTRIES];
     struct _HCD_PIPE *Pipe[XHCI_STREAM_MAX_ENTRIES];
     struct _HCD_STREAMS *Next;      /* the device's StreamsRetired list    */
@@ -1137,6 +1159,8 @@ typedef struct _HCD_CONTROLLER {
     ULONG WideSwitch;
     ULONG WideEnabled;
     PHCD_WIDE_ENTRY WidePool;
+    PXHCI_TRB WideScratch;          /* HCD_WIDE_SCRATCH_TRBS, after the
+                                     * entries; NULL without a pool       */
     PHCD_XFER RefillHead;
     HCD_XFER WideProbe[2];
     KEVENT WideProbeEvent;
@@ -1368,6 +1392,9 @@ typedef struct _HCD_CONTROLLER {
     /* Task 36.22: XhciQemuMapGrant as the start read it, 0 none; applied
      * to MapRegisters once the adapter has given its grant (hcd_ctl.c). */
     ULONG QemuMapGrant;
+    /* Task 36.25: XhciQemuBigRefuse as the start read it - 1 refuses every
+     * big stream block, forcing 11.7's fallback for a leg. */
+    ULONG QemuBigRefuse;
     /* Task 36.4: XhciQemuStartHold's end in tolerance ticks, latched at
      * each start (HcdInjStart), 0 none; ended early by HcdInjStartRelease. */
     volatile LONG InjStartHoldTicks;

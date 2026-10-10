@@ -437,6 +437,7 @@ static void normal_transfer(ULONG vo, ULONG length, ULONG mps, ULONG regs,
             req.DirectionIn = in;
             req.MaxPacketSize = mps;
             req.SgList = &sg.List;
+            req.MaxDataTrbs = 0;
             count = 0;
             answer = XhciXferBuildNormal(&req, in, out,
                                          XHCI_XFER_MAX_CONTROL_TRBS, &count);
@@ -541,6 +542,7 @@ static void test_normal_pinned(void)
     req.DirectionIn = 1;
     req.MaxPacketSize = 512;
     req.SgList = &sg.List;
+    req.MaxDataTrbs = 0;
     CHECK_EQ(XhciXferBuildNormal(&req, 1, out, XHCI_XFER_MAX_CONTROL_TRBS,
                                  &count), XHCI_XFER_OK, "built");
     CHECK_EQ(count, 32, "32 TRBs");
@@ -738,6 +740,7 @@ static void test_submit_and_short(void)
     req.DirectionIn = 1;
     req.MaxPacketSize = 512;
     req.SgList = &sg.List;
+    req.MaxDataTrbs = 0;
 
     bad = 0;
     for (k = 0; k < 32; k++) {
@@ -1257,6 +1260,7 @@ static void test_wide_mapper_sweep(void)
                     req.DirectionIn = 1;
                     req.MaxPacketSize = 512;
                     req.SgList = &tdOwn.List;
+                    req.MaxDataTrbs = 0;
                     count = 0;
                     if (XhciXferBuildNormal(&req, 1, out,
                                             XHCI_XFER_MAX_CONTROL_TRBS,
@@ -1286,10 +1290,85 @@ static void test_wide_mapper_sweep(void)
              "one byte more is refused");
 }
 
+/*
+ * 36.25 (record 13 section 11.7, points 3 and 4): on a big ring the wide
+ * list itself is the one TD's list, built at the engine's cap of 513 into
+ * a 515-TRB scratch - one TRB an element, so 1 MiB is 256 TRBs page-aligned
+ * and 257 not, 2 MiB 512 and 513, at every page offset and three layouts.
+ */
+static struct {
+    USBPORT_SCATTER_GATHER_LIST List;
+    USBPORT_SCATTER_GATHER_ELEMENT More[XHCI_XPIPE_WIDE_ELEMENTS - 2];
+} oneTd;
+
+static XHCI_TRB oneOut[XHCI_XPIPE_WIDE_ELEMENTS + 2];
+
+static void test_wide_one_td(void)
+{
+    static const ULONG lens[] = { 0x100000UL, 0x200000UL };
+    XHCI_NORMAL_REQUEST req;
+    ULONG layout;
+    ULONG off;
+    ULONG b;
+    ULONG n;
+    ULONG done;
+    ULONG run;
+    ULONG pa;
+    ULONG count;
+    ULONG want;
+    ULONG ok;
+    ULONG seen[4];
+
+    seen[0] = seen[1] = seen[2] = seen[3] = 0;
+    for (layout = 0; layout < 3; layout++) {
+        for (off = 0; off < 4096UL; off += 512UL) {
+            for (b = 0; b < 2; b++) {
+                n = 0;
+                done = 0;
+                ok = 1;
+                while (done < lens[b] && ok) {
+                    run = wide_run(layout, off, done, lens[b] - done, &pa);
+                    ok = XhciXpipeAppendRun(oneTd.List.SgElement, &n,
+                                            XHCI_XPIPE_WIDE_ELEMENTS, pa,
+                                            run, done);
+                    done += run;
+                }
+                oneTd.List.SgElementCount = n;
+                req.TransferLength = lens[b];
+                req.DirectionIn = 1;
+                req.MaxPacketSize = 1024;
+                req.SgList = &oneTd.List;
+                req.MaxDataTrbs = XHCI_XFER_MAX_WIDE_DATA_TRBS;
+                count = 0;
+                if (ok) {
+                    ok = XhciXferBuildNormal(&req, 1, oneOut,
+                                             XHCI_XPIPE_WIDE_ELEMENTS + 2,
+                                             &count) == XHCI_XFER_OK;
+                }
+                want = lens[b] / 4096UL + ((off != 0) ? 1UL : 0UL);
+                CHECK(ok, "the whole URB builds as one TD");
+                CHECK_EQ(count, want, "one TRB an element, as aligned");
+                if (count == 256) {
+                    seen[0]++;
+                } else if (count == 257) {
+                    seen[1]++;
+                } else if (count == 512) {
+                    seen[2]++;
+                } else if (count == 513) {
+                    seen[3]++;
+                }
+            }
+        }
+    }
+    CHECK(seen[0] && seen[1] && seen[2] && seen[3],
+          "256, 257, 512 and 513 all reached");
+}
+
 int main(void)
 {
     test_normal_pinned();
     test_wide_mapper_sweep();
+    test_wide_one_td();
     test_normal_sweep();
     test_control_sweep();
     test_submit_and_short();

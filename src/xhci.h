@@ -8651,8 +8651,8 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
  */
 #define XHCI_SNAPSHOT_HCD_XPIPE_WORDS   204 /* XHCI_XPIPE_STATS, in words    */
 #define XHCI_SNAPSHOT_HCD_XPIPE_AT      205 /* its first word                */
-#define XHCI_SNAPSHOT_HCD_XPIPE_COUNT   24UL
-#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    229UL
+#define XHCI_SNAPSHOT_HCD_XPIPE_COUNT   32UL /* 24 to 36.24, 36.25's eight after */
+#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    237UL
 
 #define XHCI_SNAPSHOT_HCD_TELE_S_NONE     0UL /* no send has come          */
 #define XHCI_SNAPSHOT_HCD_TELE_S_LIVE     1UL /* its device is present     */

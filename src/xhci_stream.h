@@ -140,6 +140,26 @@ ULONG XhciStreamLayout(ULONG entries, ULONG streams, ULONG ringTrbs,
 /* Stream `streamId`'s ring offset in the block; only for 1..streams. */
 ULONG XhciStreamRingOffset(const XHCI_STREAM_LAYOUT *layout, ULONG streamId);
 
+/*
+ * Task 36.25 (design record 13 section 11.7, point 2): the big layout, one
+ * ring of XHCI_STREAM_BIG_RING_TRBS (16 KiB) a stream. A segment must not
+ * cross a 64 KiB line; a 16 KiB one at a physical address that is a
+ * multiple of 16 KiB cannot. The block's size is fixed before its address
+ * is known - XHCI_STREAM_BIG_ALIGN for the array and the padding to the
+ * first aligned ring, then the rings (`XhciStreamBigBytes`) - and the rings
+ * are placed on the address granted (`XhciStreamLayoutPlaced`): the array
+ * at offset 0 as in XhciStreamLayout, the first ring at the first 16 KiB-
+ * aligned physical address at or past the array's end. Refused when the
+ * base is not page-aligned, lies above 4 GB (`paHigh`) or the block would
+ * wrap 32 bits.
+ */
+#define XHCI_STREAM_BIG_RING_TRBS   1024UL
+#define XHCI_STREAM_BIG_ALIGN       16384UL
+
+ULONG XhciStreamBigBytes(ULONG entries, ULONG streams, PULONG bytes);
+ULONG XhciStreamLayoutPlaced(ULONG entries, ULONG streams, ULONG paLow,
+                             ULONG paHigh, PXHCI_STREAM_LAYOUT layout);
+
 /* ------------------------------------------------------------------ */
 /* Encoders                                                             */
 /* ------------------------------------------------------------------ */

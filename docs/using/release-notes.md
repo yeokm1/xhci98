@@ -1369,8 +1369,12 @@ Under Driver Verifier's DMA checks, and on a machine whose DMA does need
 translation (Windows 2000 running its PAE kernel; 32-bit Vista and 7, and
 every x64 system, where memory may lie above 4 GB), nothing changes: every transfer goes one piece at a time, as in `2.2.0.x`.
 Windows 98 SE and ME never send a transfer large enough for it to matter.
-If a large copy misbehaves on `2.3.0.0` and not on `2.2.0.x`, set `0`,
-restart and report whether that changed it.
+On a UAS drive at SuperSpeed the same switch also lets one command's
+data go to the controller as a single piece of up to 2 MiB, on rings the
+driver makes larger for that drive's streams (about 1.5 MiB of memory per
+drive while it is attached; if that memory cannot be had the drive works
+as before). If a large copy misbehaves on `2.3.0.0` and not on `2.2.0.x`,
+set `0`, restart and report whether that changed it.
 
 ### XhciLogVerbosity and XhciLogDebugView: the log
 

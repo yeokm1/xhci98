@@ -41,6 +41,7 @@
  */
 
 #include <stdio.h>
+#include <string.h>
 #include "../src/xhci_xfer.h"
 #include "../src/xhci_xpipe.h"
 #include "test_harness.h"
@@ -1064,6 +1065,7 @@ static void normal_request_init(XHCI_NORMAL_REQUEST *req,
     req->DirectionIn = directionIn;
     req->MaxPacketSize = mps;
     req->SgList = (sg != NULL) ? &sg->List : NULL;
+    req->MaxDataTrbs = 0;
 }
 
 static void test_build_normal_single(void)
@@ -4441,9 +4443,287 @@ static void test_xpipe_two_tds(void)
              (LONG)WANT_USBD_CANCELED, "cancelled");
 }
 
+/* ------------------------------------------------------------------ */
+/* 36.25: the per-request cap, a 513-TRB TD, the ordered-list path      */
+/* ------------------------------------------------------------------ */
+
+typedef struct _SG_WIDE {
+    USBPORT_SCATTER_GATHER_LIST List;
+    USBPORT_SCATTER_GATHER_ELEMENT More[XHCI_XFER_MAX_WIDE_DATA_TRBS];
+} SG_WIDE;
+
+static SG_WIDE wsg;
+static XHCI_TRB wout[XHCI_XFER_MAX_WIDE_DATA_TRBS + 4];
+static XHCI_TRB wout2[XHCI_XFER_MAX_WIDE_DATA_TRBS + 4];
+
+/* `n` page elements from `firstLen` bytes into a page, scattered, in
+ * tiling order; returns the bytes. */
+static ULONG wsg_build(ULONG n, ULONG firstLen)
+{
+    ULONG i;
+    ULONG off;
+    ULONG len;
+
+    memset(&wsg, 0, sizeof(wsg));
+    off = 0;
+    for (i = 0; i < n; i++) {
+        len = (i == 0) ? firstLen : 4096UL;
+        wsg.List.SgElement[i].SgPhysicalAddressLo =
+            0x20000000UL + i * 3UL * 4096UL + ((i == 0) ? 4096UL - len : 0);
+        wsg.List.SgElement[i].SgTransferLength = len;
+        wsg.List.SgElement[i].SgOffset = off;
+        off += len;
+    }
+    wsg.List.SgElementCount = n;
+    return off;
+}
+
+static ULONG wbuild(ULONG cap, ULONG length, XHCI_TRB *out, ULONG *count)
+{
+    XHCI_NORMAL_REQUEST req;
+
+    memset(&req, 0, sizeof(req));
+    req.TransferLength = length;
+    req.DirectionIn = 1;
+    req.MaxPacketSize = 1024;
+    req.SgList = &wsg.List;
+    req.MaxDataTrbs = cap;
+    *count = 0;
+    return XhciXferBuildNormal(&req, 1, out, XHCI_XFER_MAX_WIDE_DATA_TRBS + 4,
+                               count);
+}
+
+static void test_wide_cap(void)
+{
+    XHCI_NORMAL_REQUEST req;
+    USBPORT_SCATTER_GATHER_LIST tiny;
+    ULONG count;
+    ULONG len;
+    ULONG i;
+    ULONG same;
+
+    /* 0 is today's 32; 513 accepted; 33 elements refused at 0. */
+    len = wsg_build(32, 4096);
+    CHECK_EQ(wbuild(0, len, wout, &count), XHCI_XFER_OK, "32 at cap 0");
+    len = wsg_build(33, 4096);
+    CHECK_EQ(wbuild(0, len, wout, &count), XHCI_XFER_TOO_MANY_TRBS,
+             "33 refused at cap 0, as today");
+    len = wsg_build(513, 512);
+    CHECK_EQ(wbuild(513, len, wout, &count), XHCI_XFER_OK, "513 at cap 513");
+    CHECK_EQ(count, 513, "one TRB an element");
+    CHECK_EQ(len, 512UL * 4096UL + 512UL, "2 MiB less 3.5 KiB");
+
+    /* Guard 1: a cap above 513, before the list is touched. */
+    memset(&req, 0, sizeof(req));
+    req.TransferLength = 4096;
+    req.DirectionIn = 1;
+    req.MaxPacketSize = 1024;
+    req.SgList = (const USBPORT_SCATTER_GATHER_LIST *)0x10;
+    req.MaxDataTrbs = 514;
+    CHECK_EQ(XhciXferBuildNormal(&req, 1, wout, 600, &count),
+             XHCI_XFER_BAD_PARAM, "cap 514 refused, the list unread");
+    /* Guard 2: a count above a valid cap, elements past the header never
+     * read (the list declares two). */
+    memset(&tiny, 0, sizeof(tiny));
+    tiny.SgElementCount = 600;
+    req.SgList = &tiny;
+    req.MaxDataTrbs = 513;
+    CHECK_EQ(XhciXferBuildNormal(&req, 1, wout, 600, &count),
+             XHCI_XFER_TOO_MANY_TRBS, "600 elements over 513, unread");
+    /* Guard 3: within the cap, but one element crosses 64 KiB and needs
+     * two TRBs - the per-TRB guard. */
+    memset(&wsg, 0, sizeof(wsg));
+    wsg.List.SgElement[0].SgPhysicalAddressLo = 0x2000F000UL;
+    wsg.List.SgElement[0].SgTransferLength = 8192;
+    wsg.List.SgElementCount = 1;
+    CHECK_EQ(wbuild(1, 8192, wout, &count), XHCI_XFER_TOO_MANY_TRBS,
+             "cap 1, one element as two TRBs: refused per TRB");
+    CHECK_EQ(wbuild(2, 8192, wout, &count), XHCI_XFER_OK, "cap 2 takes it");
+
+    /* The ordered path and the scan give the same TRBs: an ordered list,
+     * then the same elements reversed and shuffled. */
+    len = wsg_build(40, 4096);
+    CHECK_EQ(wbuild(40, len, wout, &count), XHCI_XFER_OK, "ordered");
+    for (i = 0; i < 20; i++) {
+        USBPORT_SCATTER_GATHER_ELEMENT t;
+
+        t = wsg.List.SgElement[i];
+        wsg.List.SgElement[i] = wsg.List.SgElement[39 - i];
+        wsg.List.SgElement[39 - i] = t;
+    }
+    CHECK_EQ(wbuild(40, len, wout2, &count), XHCI_XFER_OK, "reversed");
+    same = memcmp(wout, wout2, 40 * sizeof(XHCI_TRB)) == 0;
+    CHECK(same, "reversed: the same TRBs");
+    for (i = 0; i < 40; i += 3) {
+        USBPORT_SCATTER_GATHER_ELEMENT t;
+
+        t = wsg.List.SgElement[i];
+        wsg.List.SgElement[i] = wsg.List.SgElement[(i * 7UL) % 40UL];
+        wsg.List.SgElement[(i * 7UL) % 40UL] = t;
+    }
+    memset(wout2, 0, sizeof(wout2));
+    CHECK_EQ(wbuild(40, len, wout2, &count), XHCI_XFER_OK, "shuffled");
+    same = memcmp(wout, wout2, 40 * sizeof(XHCI_TRB)) == 0;
+    CHECK(same, "shuffled: the same TRBs");
+}
+
+/* A 513-TRB TD on a 1024-TRB ring, across the Link TRB, on both laps'
+ * cycles; a short at its 400th TRB with the tail, without it (settled),
+ * and swept by a later TD; removal; Set TR Dequeue past it. */
+static struct {
+    XHCI_TRB mem[1024];
+    XHCI_RING ring;
+    XHCI_TRANSFER_QUEUE queue;
+    XHCI_TRANSFER td[3];
+} big;
+
+static XHCI_TRB bscratch[XHCI_XFER_MAX_WIDE_DATA_TRBS + 2];
+
+static ULONG big_submit(ULONG which, ULONG n)
+{
+    XHCI_NORMAL_REQUEST req;
+    ULONG len;
+
+    len = wsg_build(n, 4096);
+    memset(&req, 0, sizeof(req));
+    req.TransferLength = len;
+    req.DirectionIn = 1;
+    req.MaxPacketSize = 1024;
+    req.SgList = &wsg.List;
+    req.MaxDataTrbs = XHCI_XFER_MAX_WIDE_DATA_TRBS;
+    return XhciXferSubmitNormal(&big.queue, &big.ring, &req, 1,
+                                &big.td[which], (PVOID)0x9000UL, bscratch,
+                                XHCI_XFER_MAX_WIDE_DATA_TRBS + 2);
+}
+
+static ULONG big_event(ULONG index, ULONG code, ULONG residual,
+                       PXHCI_XFER_EVENT_RESULT result)
+{
+    return XhciXferEvent(&big.queue, &big.ring, FIX_SLOT, FIX_DCI,
+                         XhciRingTrbPA(&big.ring, index),
+                         event_dw2(code, residual),
+                         event_dw3(FIX_SLOT, FIX_DCI), result);
+}
+
+static void big_fill(ULONG at)
+{
+    XHCI_TD_COMPLETION completion;
+    XHCI_NORMAL_REQUEST req;
+    ULONG len;
+
+    while (big.ring.Enqueue != at) {
+        len = wsg_build(1, 4096);
+        memset(&req, 0, sizeof(req));
+        req.TransferLength = len;
+        req.DirectionIn = 1;
+        req.MaxPacketSize = 1024;
+        req.SgList = &wsg.List;
+        (VOID)XhciXferSubmitNormal(&big.queue, &big.ring, &req, 1,
+                                   &big.td[2], (PVOID)0x9100UL, bscratch,
+                                   XHCI_XFER_MAX_WIDE_DATA_TRBS + 2);
+        (VOID)XhciRingClassifyEvent(&big.ring,
+                                    XhciRingTrbPA(&big.ring,
+                                                  big.td[2].LastIndex),
+                                    XHCI_CC_SUCCESS, &completion);
+        (VOID)XhciRingRetireTd(&big.ring, &completion);
+        XhciXferQueueInit(&big.queue);
+    }
+}
+
+static void big_park(ULONG at)
+{
+    CHECK_EQ(XhciRingInit(&big.ring, big.mem, RING_PA, 1024,
+                          XHCI_RING_KIND_ENDPOINT),
+             XHCI_RING_OK, "a 1024-TRB ring");
+    XhciXferQueueInit(&big.queue);
+    big_fill(at);
+}
+
+static void test_wide_td(void)
+{
+    XHCI_XFER_EVENT_RESULT result;
+    ULONG lap;
+    ULONG at;
+    ULONG idx;
+    ULONG k;
+
+    for (lap = 0; lap < 2; lap++) {
+        /* Parked so the TD crosses the Link TRB; the second lap after one
+         * whole wrap, on the other cycle. */
+        big_park(800);
+        if (lap == 1) {
+            CHECK_EQ(big_submit(0, 513), XHCI_XFER_OK, "a first lap's TD");
+            CHECK_EQ(big_event(big.td[0].LastIndex, XHCI_CC_SUCCESS, 0,
+                               &result), XHCI_XFER_OK, "retired");
+            XhciXferQueueInit(&big.queue);
+            big_fill(800);
+            CHECK_EQ(big.ring.Cycle, 0, "the second lap's cycle");
+        }
+        at = big.ring.Enqueue;
+        CHECK_EQ(big_submit(0, 513), XHCI_XFER_OK,
+                 "a 513-TRB TD across the Link TRB");
+        CHECK_EQ(big.td[0].DataTrbCount, 513, "513 data TRBs");
+        CHECK(big.td[0].LastIndex < at, "it wraps");
+        CHECK(big.mem[1023].Control & XHCI_TRB_CH,
+              "the Link carries Chain inside the TD");
+        /* A short at its 400th TRB, then the tail: TD 0's length is the
+         * prefix up to TRB 400 less the residual. */
+        idx = big.td[0].FirstIndex;
+        for (k = 0; k < 399; k++) {
+            idx = XhciRingNextIndex(&big.ring, idx);
+        }
+        CHECK_EQ(big_event(idx, XHCI_CC_SHORT_PACKET, 1000, &result),
+                 XHCI_XFER_OK, "a short at TRB 400");
+        CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE, "deferred");
+        CHECK_EQ(big_event(big.td[0].LastIndex, XHCI_CC_SHORT_PACKET, 0,
+                           &result), XHCI_XFER_OK, "the tail");
+        CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "completes");
+        CHECK_EQ(big.td[0].BytesTransferred, 400UL * 4096UL - 1000UL,
+                 "the prefix less the residual, kept by the tail");
+        CHECK_EQ(XhciRingFree(&big.ring), XhciRingCapacity(&big.ring),
+                 "every TRB back");
+    }
+
+    /* The tail absent: an empty-drain settle completes it. */
+    big_park(100);
+    CHECK_EQ(big_submit(0, 300), XHCI_XFER_OK, "a 300-TRB TD");
+    idx = big.td[0].FirstIndex + 99;
+    CHECK_EQ(big_event(idx, XHCI_CC_SHORT_PACKET, 96, &result), XHCI_XFER_OK,
+             "a short at TRB 100");
+    CHECK_EQ(XhciXferDrainSettled(&big.queue, &big.ring, &result),
+             XHCI_XFER_OK, "the settle");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "completes it");
+    CHECK_EQ(big.td[0].BytesTransferred, 100UL * 4096UL - 96UL,
+             "its first measured length");
+
+    /* Swept by a later TD's event. */
+    big_park(10);
+    CHECK_EQ(big_submit(0, 300), XHCI_XFER_OK, "TD 0, 300 TRBs");
+    CHECK_EQ(big_submit(1, 300), XHCI_XFER_OK, "TD 1, 300 TRBs");
+    CHECK_EQ(big_event(big.td[0].FirstIndex + 9, XHCI_CC_SHORT_PACKET, 4,
+                       &result), XHCI_XFER_OK, "a short in TD 0");
+    CHECK_EQ(big_event(big.td[1].LastIndex, XHCI_CC_SUCCESS, 0, &result),
+             XHCI_XFER_OK, "TD 1's event");
+    CHECK_EQ(result.CompletedCount, 2, "both");
+    CHECK_EQ(big.td[0].BytesTransferred, 10UL * 4096UL - 4UL,
+             "TD 0 keeps its measured length");
+
+    /* Removal, and Set TR Dequeue past it. */
+    big_park(900);
+    CHECK_EQ(big_submit(0, 513), XHCI_XFER_OK, "a 513-TRB TD");
+    CHECK_EQ(XhciXferQueueRemove(&big.queue, &big.td[0]), 1, "taken off");
+    CHECK_EQ(XhciRingSetDequeue(&big.ring,
+                                XhciRingTrbPA(&big.ring, big.ring.Enqueue)),
+             XHCI_RING_OK, "the dequeue set past it");
+    CHECK_EQ(XhciRingFree(&big.ring), XhciRingCapacity(&big.ring),
+             "the ring empty again");
+}
+
 int main(void)
 {
     test_xpipe_two_tds();
+    test_wide_cap();
+    test_wide_td();
     test_completion_code_mapping();
     test_build_no_data();
     test_build_in_data();

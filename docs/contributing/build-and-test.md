@@ -6393,6 +6393,15 @@ With a constrained grant the controller's real grant is still what stage
 leaves promotion as the adapter decides it, below 16 the start's
 register-free check is not run (`xfer.wide.check` 6).
 
+**`XhciQemuBigRefuse`** (roadmap-hcd task 36.25, design record 13 section
+11.7; qemu flavour only, written by no INF). A REG_DWORD read at every
+start: 1 refuses every big stream block, so each streams endpoint opens
+with 64-TRB rings and stage 2's TDs (the fallback); anything else leaves
+the blocks to the allocation. The log ring notes `qemu.bigrefuse`;
+`XHCISNAP`'s "stage 2" section counts the blocks built and refused, the
+one-TD URBs, the largest TD and the TDs of exactly 256, 257, 512 and 513
+TRBs. A change takes effect at the next start.
+
 **`XhciWideMap`** (roadmap-hcd task 36.24, design record 13 section 11.6;
 every flavour, not only qemu). A REG_DWORD in the controller's key, read at
 every start and written by no INF: 0 keeps every bulk URB sequential (stage

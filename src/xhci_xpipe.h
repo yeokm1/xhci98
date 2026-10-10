@@ -257,8 +257,20 @@ typedef struct _XHCI_XPIPE_STATS {
     ULONG Overlap;              /* the next TD ready as one retired     */
     ULONG PreRing;              /* failures before a TD reached it      */
     ULONG Order;                /* retirements out of ring order        */
+    /* Task 36.25 (record 13 section 11.7, point 9), appended: big stream
+     * blocks built and refused, TDs published on big rings, the largest
+     * TD published (data TRBs), and TDs of exactly 256, 257, 512 and 513
+     * data TRBs. */
+    ULONG BigBuilt;
+    ULONG BigRefused;
+    ULONG BigTds;
+    ULONG TdMaxTrbs;
+    ULONG Td256;
+    ULONG Td257;
+    ULONG Td512;
+    ULONG Td513;
 } XHCI_XPIPE_STATS, *PXHCI_XPIPE_STATS;
 
-#define XHCI_XPIPE_STATS_WORDS      24UL
+#define XHCI_XPIPE_STATS_WORDS      32UL
 
 #endif /* XHCI_XPIPE_H */

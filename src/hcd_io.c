@@ -327,6 +327,93 @@ static VOID hcdWideDoorbell(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
 }
 
 /*
+ * 36.25 (record 13 section 11.7, points 3 and 4): a promoted URB on a big
+ * stream ring as one TD - the whole URB, whose list is the entry's wide
+ * list (offsets from 0), built into the pool's scratch with the engine's
+ * cap at 513. A ring with no room holds it while another record's TD is on
+ * it, as a refill is held; any other refusal, or no current pool's
+ * scratch, is a failure before the ring. Returns the machine's flags.
+ * Controller lock held.
+ */
+XHCI_C_ASSERT(hcd_wide_cap, XHCI_XFER_MAX_WIDE_DATA_TRBS ==
+                                 XHCI_XPIPE_WIDE_ELEMENTS);
+
+static ULONG hcdWideBigOne(PHCD_CONTROLLER hc, PHCD_XFER x)
+{
+    PHCD_PIPE pipe;
+    PHCD_WIDE_ENTRY w;
+    PUSBPORT_SCATTER_GATHER_LIST sg;
+    XHCI_NORMAL_REQUEST nreq;
+    XHCI_XSTAT_STAMP entered;
+    ULONG answer;
+    ULONG i;
+
+    pipe = x->Pipe;
+    w = x->Wide;
+    HcdTscStamp(&entered);
+    if (hc->WideScratch == NULL || w->Count == 0 ||
+        w->Count > XHCI_XPIPE_WIDE_ELEMENTS) {
+        hc->Xpipe.PreRing++;
+        return XhciXpipeRecStop(&x->Rec, XHCI_XPIPE_OUT_PREFAIL,
+                                HCD_USBD_INTERNAL_HC_ERROR);
+    }
+    sg = &w->WideList.List;
+    for (i = 0; i < sizeof(*sg) - sizeof(sg->SgElement); i++) {
+        ((PUCHAR)sg)[i] = 0;
+    }
+    sg->SgElementCount = w->Count;
+    for (i = 0; i < sizeof(nreq); i++) {
+        ((PUCHAR)&nreq)[i] = 0;
+    }
+    nreq.TransferLength = x->Length;
+    nreq.DirectionIn = (pipe->EndpointAddress & 0x80UL) != 0;
+    nreq.MaxPacketSize = pipe->MaxPacketSize;
+    nreq.SgList = sg;
+    nreq.MaxDataTrbs = XHCI_XFER_MAX_WIDE_DATA_TRBS;
+    answer = XhciXferSubmitNormal(pipe->Queue, pipe->Ring, &nreq, x->In,
+                                  &x->Xfer, x, hc->WideScratch,
+                                  HCD_WIDE_SCRATCH_TRBS);
+    if (answer == XHCI_XFER_BUSY && pipe->Queue->Count != 0) {
+        if (x->RefillHeld != HCD_REFILL_BUSY) {
+            x->RefillHeld = HCD_REFILL_BUSY;
+            hc->Xpipe.HeldBusy++;
+        }
+        return 0;
+    }
+    if (answer != XHCI_XFER_OK) {
+        hc->Xpipe.PreRing++;
+        return XhciXpipeRecStop(&x->Rec, XHCI_XPIPE_OUT_PREFAIL,
+                                HCD_USBD_INTERNAL_HC_ERROR);
+    }
+    x->RefillHeld = HCD_REFILL_NONE;
+    (VOID)XhciXpipeRecPublish(&x->Rec, x->Length);
+    hc->Xpipe.Tds++;
+    hc->Xpipe.BigTds++;
+    if (x->Xfer.DataTrbCount > hc->Xpipe.TdMaxTrbs) {
+        hc->Xpipe.TdMaxTrbs = x->Xfer.DataTrbCount;
+    }
+    switch (x->Xfer.DataTrbCount) {
+    case 256:
+        hc->Xpipe.Td256++;
+        break;
+    case 257:
+        hc->Xpipe.Td257++;
+        break;
+    case 512:
+        hc->Xpipe.Td512++;
+        break;
+    case 513:
+        hc->Xpipe.Td513++;
+        break;
+    default:
+        break;
+    }
+    hcdWideDoorbell(hc, pipe);
+    hcdChunkPublished(hc, pipe, x, &entered);
+    return 0;
+}
+
+/*
  * Publish a promoted record's next TDs, up to two on the ring (points 5
  * and 6): each cut from the wide list by the planner, copied into its
  * slot's list and handed to the engine as a chunk is. A pause, or a
@@ -383,6 +470,12 @@ static ULONG hcdWidePump(PHCD_CONTROLLER hc, PHCD_XFER x)
             break;
         }
         HcdTscStamp(&entered);
+        if (pipe->BigRing) {
+            /* 36.25 (record 13 section 11.7, point 3): one TD, the whole
+             * URB, its list the wide list itself. */
+            flags |= hcdWideBigOne(hc, x);
+            break;
+        }
         saved = x->Cursor;
         slot = x->Rec.Published & 1UL;
         if (slot == 0) {
@@ -395,10 +488,11 @@ static ULONG hcdWidePump(PHCD_CONTROLLER hc, PHCD_XFER x)
         for (i = 0; i < sizeof(*sg) - sizeof(sg->SgElement); i++) {
             ((PUCHAR)sg)[i] = 0;
         }
-        if (XhciXpipePlan(w->Wide, w->Count, x->Length, x->Rec.Planned,
-                          pipe->MaxPacketSize, XHCI_XPIPE_TD_ELEMENTS,
-                          &x->Cursor, &td) != XHCI_XPIPE_OK ||
-            XhciXpipeBuild(w->Wide, w->Count, &td, sg,
+        if (XhciXpipePlan(w->WideList.List.SgElement, w->Count, x->Length,
+                          x->Rec.Planned, pipe->MaxPacketSize,
+                          XHCI_XPIPE_TD_ELEMENTS, &x->Cursor,
+                          &td) != XHCI_XPIPE_OK ||
+            XhciXpipeBuild(w->WideList.List.SgElement, w->Count, &td, sg,
                            XHCI_XPIPE_TD_ELEMENTS) != td.Count) {
             x->Cursor = saved;
             hc->Xpipe.PreRing++;

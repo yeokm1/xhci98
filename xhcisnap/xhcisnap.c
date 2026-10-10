@@ -3531,6 +3531,9 @@ static int selftest_xstat(void)
 #define SNAP_XPIPE_COUNT_AT         204UL
 #define SNAP_XPIPE_AT               205UL
 #define SNAP_XPIPE_WORDS            24UL
+/* Task 36.25's eight, appended: a count of 32 and a 237-word header. */
+#define SNAP_HCD_BIG_HEAD_WORDS     237UL
+#define SNAP_XPIPE_BIG_WORDS        32UL
 
 static void print_xpipe(const unsigned char *hcd, unsigned long hcdBytes)
 {
@@ -3588,6 +3591,17 @@ static void print_xpipe(const unsigned char *hcd, unsigned long hcdBytes)
          "taken off %lu\n", PW(17), PW(18), PW(19), PW(20));
     comp("  next TD ready at retirement %lu; failures before the ring %lu; "
          "out of order %lu\n", PW(21), PW(22), PW(23));
+    if (get32(hcd, SNAP_XPIPE_COUNT_AT * 4) >= SNAP_XPIPE_BIG_WORDS &&
+        headBytes >= SNAP_HCD_BIG_HEAD_WORDS * 4 &&
+        hcdBytes >= SNAP_HCD_BIG_HEAD_WORDS * 4) {
+        comp("  stage 3 big stream blocks   built %lu, refused %lu; one-TD "
+             "URBs %lu, the largest %lu TRBs\n", PW(24), PW(25), PW(26),
+             PW(27));
+        comp("  TDs of 256/257/512/513 TRBs %lu / %lu / %lu / %lu\n", PW(28),
+             PW(29), PW(30), PW(31));
+    } else {
+        comp("  stage 3 (task 36.25)        not in this driver\n");
+    }
 #undef PW
 }
 
@@ -3598,7 +3612,7 @@ static void print_xpipe(const unsigned char *hcd, unsigned long hcdBytes)
  */
 static int selftest_xpipe(void)
 {
-    static unsigned char hcd[SNAP_HCD_XPIPE_HEAD_WORDS * 4];
+    static unsigned char hcd[SNAP_HCD_BIG_HEAD_WORDS * 4];
     unsigned char *s;
 
     memset(hcd, 0, sizeof(hcd));
@@ -3619,6 +3633,21 @@ static int selftest_xpipe(void)
     put32(s, 20 * 4, 2);
     put32(s, 21 * 4, 650);
     print_xpipe(hcd, sizeof(hcd));
+
+    /* 36.25's words: a 237-word header with a count of 32. */
+    put32(hcd, 4, SNAP_HCD_BIG_HEAD_WORDS * 4);
+    put32(hcd, SNAP_XPIPE_COUNT_AT * 4, SNAP_XPIPE_BIG_WORDS);
+    put32(s, 24 * 4, 2);
+    put32(s, 25 * 4, 1);
+    put32(s, 26 * 4, 300);
+    put32(s, 27 * 4, 513);
+    put32(s, 28 * 4, 100);
+    put32(s, 29 * 4, 101);
+    put32(s, 30 * 4, 50);
+    put32(s, 31 * 4, 49);
+    print_xpipe(hcd, sizeof(hcd));
+    put32(hcd, 4, SNAP_HCD_XPIPE_HEAD_WORDS * 4);
+    put32(hcd, SNAP_XPIPE_COUNT_AT * 4, SNAP_XPIPE_WORDS);
 
     put32(s, 0 * 4, 0xFFFFFFFFUL);
     put32(s, 1 * 4, 0);

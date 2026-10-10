@@ -799,6 +799,47 @@ static void test_rec_sweep(void)
     }
 }
 
+/* 36.25: a URB that is one TD (a big ring) - no refill, no truncation, the
+ * finalizer once on every end. */
+static void test_rec_one_td(void)
+{
+    XHCI_XPIPE_REC r;
+    ULONG f;
+
+    XhciXpipeRecInit(&r, 0x100000UL, XHCI_XPIPE_MAP_IN_ROUTINE);
+    CHECK_EQ(pub(&r, 0x100000UL), 0, "the whole URB in slot 0");
+    CHECK_EQ(pub(&r, 1), XHCI_XPIPE_NO_SLOT, "nothing left to publish");
+    f = XhciXpipeRecRetire(&r, 0, 0x100000UL, ST_OK, 0);
+    CHECK(!(f & (XHCI_XPIPE_F_REFILL | XHCI_XPIPE_F_TRUNCATE)),
+          "no refill, no truncation");
+    CHECK(!(f & XHCI_XPIPE_F_FINAL), "the routine still holds it");
+    CHECK(XhciXpipeRecMapState(&r, XHCI_XPIPE_MAP_ALLOCATED) &
+              XHCI_XPIPE_F_FINAL, "final once it returns");
+
+    XhciXpipeRecInit(&r, 0x100000UL, XHCI_XPIPE_MAP_ALLOCATED);
+    (VOID)pub(&r, 0x100000UL);
+    f = XhciXpipeRecRetire(&r, 0, 5000, ST_OK, 0);
+    CHECK(!(f & XHCI_XPIPE_F_TRUNCATE), "a short with no successor");
+    CHECK(f & XHCI_XPIPE_F_FINAL, "final at once");
+    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX, ST_CAN), ST_OK, "short");
+
+    XhciXpipeRecInit(&r, 0x100000UL, XHCI_XPIPE_MAP_ALLOCATED);
+    (VOID)pub(&r, 0x100000UL);
+    f = XhciXpipeRecRetire(&r, 0, 7000, ST_ERR, 0);
+    CHECK(f & XHCI_XPIPE_F_FINAL, "an error: final");
+    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX, ST_CAN), ST_ERR, "error");
+
+    XhciXpipeRecInit(&r, 0x100000UL, XHCI_XPIPE_MAP_ALLOCATED);
+    (VOID)pub(&r, 0x100000UL);
+    CHECK(!(XhciXpipeRecStop(&r, XHCI_XPIPE_OUT_STOP, ST_CAN) &
+            XHCI_XPIPE_F_FINAL), "a cancel: its TD on the ring");
+    f = XhciXpipeRecRetire(&r, 0, 8192, ST_CAN, 1);
+    CHECK(f & XHCI_XPIPE_F_FINAL, "final when taken off");
+    CHECK_EQ(r.Committed, 8192, "its stopped progress");
+    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX, ST_CAN), ST_CAN,
+             "cancelled");
+}
+
 int main(void)
 {
     test_counts();
@@ -812,6 +853,7 @@ int main(void)
     test_rec_prefail();
     test_rec_mapstates();
     test_rec_sweep();
+    test_rec_one_td();
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;
 }

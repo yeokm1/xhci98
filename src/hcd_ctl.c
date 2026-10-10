@@ -317,6 +317,11 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     XhciLogNote(ext, "qemu.mapgrant", hc->QemuMapGrant);
 
     value = 0;
+    status = hcdReadDword(hc, L"XhciQemuBigRefuse", &value);
+    hc->QemuBigRefuse = (NT_SUCCESS(status) && value == 1) ? 1UL : 0UL;
+    XhciLogNote(ext, "qemu.bigrefuse", hc->QemuBigRefuse);
+
+    value = 0;
     status = hcdReadDword(hc, HCD_VALUE_QEMU_PSI_E460, &value);
     hc->QemuPsiE460 = (NT_SUCCESS(status) && value == 1) ? 1UL : 0UL;
     XhciLogNote(ext, "qemu.psi.e460", hc->QemuPsiE460);

@@ -231,6 +231,14 @@
 > `HcdIoRefillFlush`, `HcdIoWideStop`), `hcd_cfg.c` (the cancel walk's
 > wider predicate and the doorbell gates), `hcd_ctl.c` (`XhciWideMap`),
 > `hcd_door.c` and `xhcisnap.c` (`print_xpipe`, `-selftest-xpipe`).
+> Task 36.25 (record 13 section 11.7) adds no file: the big stream layout
+> is `xhci_stream.c` (`XhciStreamBigBytes`, `XhciStreamLayoutPlaced`,
+> `test_stream`), its build and fallback `hcd_cfg.c`
+> (`hcdCfgStreamsBuild`, `hcdCfgBigWanted`), the one-TD publication
+> `hcd_io.c` (`hcdWideBigOne`) into the pool's scratch (`hcd_dma.c`), and
+> the engine's per-request cap and ordered-list path `xhci_xfer.c`
+> (`XHCI_NORMAL_REQUEST.MaxDataTrbs`, `xhciXferEmitSgList`; `test_xfer`,
+> `test_td`).
 > Tasks 36.6 to 36.8 (design record 15) add the pure `xhci_poll.c` /
 > `xhci_poll.h` (the three values, the delivery and its reason, the
 > poller's ownership machine and roles, promotion, park and kick, the
