@@ -2953,6 +2953,119 @@ static int selftest_xstat(void)
 }
 
 /*
+ * Task 36.24: stage 2's counters (src/xhci_xpipe.h, XHCI_XPIPE_STATS, in
+ * its field order), in the HCD header after the two words task 36.9 holds.
+ * test\test_snap.c holds the driver's layout to these numbers.
+ */
+#define SNAP_HCD_XPIPE_HEAD_WORDS   229UL
+#define SNAP_XPIPE_COUNT_AT         204UL
+#define SNAP_XPIPE_AT               205UL
+#define SNAP_XPIPE_WORDS            24UL
+
+static void print_xpipe(const unsigned char *hcd, unsigned long hcdBytes)
+{
+    static const char *const check_text[8] = {
+        "not run (XhciWideMap off)", "passed", "a base was not NULL",
+        "the two lists differ", "a list fell short", "no memory",
+        "a channel request refused, or a grant under 16",
+        "not run (Windows 98 or ME)"
+    };
+    unsigned long headBytes;
+    unsigned long v;
+    const unsigned char *s;
+
+    if (hcdBytes < SNAP_HCD_HEAD_WORDS * 4 || get32(hcd, 0) == 0 ||
+        get32(hcd, 0) > SNAP_HCD_VERSION) {
+        return;
+    }
+    headBytes = get32(hcd, 4);
+    if (headBytes < SNAP_HCD_XPIPE_HEAD_WORDS * 4) {
+        comp("\nstage 2 (XhciWideMap): not in this driver (an xhci98.sys "
+             "before task 36.24).\n");
+        return;
+    }
+    if (hcdBytes < SNAP_HCD_XPIPE_HEAD_WORDS * 4 ||
+        get32(hcd, SNAP_XPIPE_COUNT_AT * 4) < SNAP_XPIPE_WORDS) {
+        comp("\nstage 2: %lu counters in a %lu-byte region - not a shape "
+             "this build reads;\n  not decoded.\n",
+             get32(hcd, SNAP_XPIPE_COUNT_AT * 4), hcdBytes);
+        return;
+    }
+    s = hcd + SNAP_XPIPE_AT * 4;
+#define PW(i) get32(s, (i) * 4)
+    comp("\nstage 2, two TDs of one URB on the ring (task 36.24, since the "
+         "controller's start):\n");
+    v = PW(0);
+    if (v == 0xFFFFFFFFUL) {
+        comp("  XhciWideMap                 not set (the default)\n");
+    } else {
+        comp("  XhciWideMap                 %lu\n", v);
+    }
+    v = PW(2);
+    comp("  promotion                   %s; the register-free check %s\n",
+         PW(1) ? "on" : "off", v < 8 ? check_text[v] : "?");
+    comp("  wide entries                %lu, %lu in use; claimed %lu\n",
+         PW(3), PW(4), PW(5));
+    comp("  turned away                 over the span %lu, no entry %lu\n",
+         PW(6), PW(7));
+    comp("  first mappings              promoted %lu; not: registers handed "
+         "%lu, off %lu, a run %lu\n", PW(8), PW(9), PW(10), PW(11));
+    comp("  URBs with two TDs at once   %lu; TDs %lu, refills %lu (held: "
+         "pause %lu, busy %lu)\n", PW(12), PW(13), PW(14), PW(15), PW(16));
+    comp("  early ends with a successor short %lu, error %lu, verdict %lu; "
+         "taken off %lu\n", PW(17), PW(18), PW(19), PW(20));
+    comp("  next TD ready at retirement %lu; failures before the ring %lu; "
+         "out of order %lu\n", PW(21), PW(22), PW(23));
+#undef PW
+}
+
+/*
+ * `-selftest-xpipe`: task 36.24's decode over canned HCD headers: the
+ * switch on and the check passed with traffic, the switch absent, a
+ * header from before 36.24, and a count it cannot hold.
+ */
+static int selftest_xpipe(void)
+{
+    static unsigned char hcd[SNAP_HCD_XPIPE_HEAD_WORDS * 4];
+    unsigned char *s;
+
+    memset(hcd, 0, sizeof(hcd));
+    put32(hcd, 0, 1);
+    put32(hcd, 4, SNAP_HCD_XPIPE_HEAD_WORDS * 4);
+    put32(hcd, SNAP_XPIPE_COUNT_AT * 4, SNAP_XPIPE_WORDS);
+    s = hcd + SNAP_XPIPE_AT * 4;
+    put32(s, 0 * 4, 1);
+    put32(s, 1 * 4, 1);
+    put32(s, 2 * 4, 1);
+    put32(s, 3 * 4, 8);
+    put32(s, 5 * 4, 100);
+    put32(s, 8 * 4, 100);
+    put32(s, 12 * 4, 100);
+    put32(s, 13 * 4, 900);
+    put32(s, 14 * 4, 700);
+    put32(s, 17 * 4, 2);
+    put32(s, 20 * 4, 2);
+    put32(s, 21 * 4, 650);
+    print_xpipe(hcd, sizeof(hcd));
+
+    put32(s, 0 * 4, 0xFFFFFFFFUL);
+    put32(s, 1 * 4, 0);
+    put32(s, 2 * 4, 0);
+    print_xpipe(hcd, sizeof(hcd));
+
+    put32(s, 2 * 4, 7);
+    print_xpipe(hcd, sizeof(hcd));
+
+    put32(hcd, 4, 202 * 4);
+    print_xpipe(hcd, sizeof(hcd));
+
+    put32(hcd, 4, SNAP_HCD_XPIPE_HEAD_WORDS * 4);
+    put32(hcd, SNAP_XPIPE_COUNT_AT * 4, 3);
+    print_xpipe(hcd, sizeof(hcd));
+    return 0;
+}
+
+/*
  * `-selftest-pirq`: task 36.3's decode over canned HCD headers: the E7250's
  * repair over the direct path (IRQ 21, INTA moved from PIRQA to PIRQF), a
  * reviewed pair at value 1 not admitted, a message grant in its own
@@ -5072,6 +5185,8 @@ int main(int argc, char **argv)
             return selftest_pirq();
         } else if (strcmp(argv[i], "-selftest-xstat") == 0) {
             return selftest_xstat();
+        } else if (strcmp(argv[i], "-selftest-xpipe") == 0) {
+            return selftest_xpipe();
         } else if (strcmp(argv[i], "-selftest-report") == 0 && i + 1 < argc) {
             /*
              * The report path on its own, with no device: open BASE.TXT, write
@@ -5426,6 +5541,8 @@ int main(int argc, char **argv)
         print_pirq(hcd_image, hcdBytes);
         /* 36.21's transfer-size readings, from the header alone. */
         print_xstat(hcd_image, hcdBytes);
+        /* 36.24's stage 2 counters, likewise. */
+        print_xpipe(hcd_image, hcdBytes);
     } else if (hcdState == 2) {
         comp("\nHCD region: not served by this driver (an xhci98.sys before "
              "2.2.0.0 has no\n  per-port enumeration region; the note ring "

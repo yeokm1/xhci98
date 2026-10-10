@@ -23,6 +23,7 @@
 #include "xhci_enum.h"
 #include "xhci_pirq.h"
 #include "xhci_xstat.h"
+#include "xhci_xpipe.h"
 
 /* The header carries the routing quirk's record whole, after its count. */
 XHCI_C_ASSERT(xhci_snap_hcd_pirq,
@@ -40,6 +41,16 @@ XHCI_C_ASSERT(xhci_snap_hcd_xstat,
               XHCI_SNAPSHOT_HCD_TELE_AT +
                       XHCI_SNAPSHOT_HCD_TELE_COUNT *
                           XHCI_SNAPSHOT_HCD_TELE_RECORD_WORDS ==
+                  XHCI_SNAPSHOT_HCD_TELE_END);
+
+/* 36.24's counters whole, after 36.9's two words, to the header's end. */
+XHCI_C_ASSERT(xhci_snap_hcd_xpipe,
+              sizeof(XHCI_XPIPE_STATS) ==
+                  XHCI_XPIPE_STATS_WORDS * sizeof(ULONG) &&
+              XHCI_SNAPSHOT_HCD_XPIPE_COUNT == XHCI_XPIPE_STATS_WORDS &&
+              XHCI_SNAPSHOT_HCD_TELE_END + 2 ==
+                  XHCI_SNAPSHOT_HCD_XPIPE_WORDS &&
+              XHCI_SNAPSHOT_HCD_XPIPE_AT + XHCI_SNAPSHOT_HCD_XPIPE_COUNT ==
                   XHCI_SNAPSHOT_HCD_HEAD_WORDS);
 
 /* The image carries the counter block whole, word for word. */
@@ -110,6 +121,8 @@ ULONG XhciSnapHcdHead(ULONG ports, ULONG word)
         return XHCI_SNAPSHOT_HCD_TELE_COUNT;
     case XHCI_SNAPSHOT_HCD_TELE_WORDS:
         return XHCI_SNAPSHOT_HCD_TELE_RECORD_WORDS;
+    case XHCI_SNAPSHOT_HCD_XPIPE_WORDS:
+        return XHCI_SNAPSHOT_HCD_XPIPE_COUNT;
     default:
         /* XHCI_SNAPSHOT_HCD_TERMINAL, the routing record, the transfer
          * readings and the class driver records are readings, not layout:

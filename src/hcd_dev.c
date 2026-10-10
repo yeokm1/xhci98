@@ -199,6 +199,7 @@ static ULONG hcdEp0Result(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                 HcdIoRetired(hc, t);
             }
         }
+        HcdIoRefillFlush(hc);
     }
     return 0;
 }
@@ -248,6 +249,9 @@ static ULONG hcdPipeResult(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
             hc->Counters.TransfersCompleted++;
             HcdIoRetired(hc, t);
         }
+        /* 36.24: refills after the walk, never inside it (record 13
+         * section 11.6, point 6). */
+        HcdIoRefillFlush(hc);
     }
     return 0;
 }

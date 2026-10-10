@@ -871,6 +871,7 @@ static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
     const ULONG *counters;
     const ULONG *pirq;
     const ULONG *xstat;
+    const ULONG *xpipe;
     LARGE_INTEGER now;
     ULONG ports;
     ULONG total;
@@ -907,9 +908,19 @@ static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
     hc->Xstat.TimeNowLo = now.LowPart;
     hc->Xstat.TimeNowHi = (ULONG)now.HighPart;
     xstat = (const ULONG *)&hc->Xstat;
+    xpipe = (const ULONG *)&hc->Xpipe;
     for (i = 0; i < count; i++) {
         switch (XhciSnapHcdLocate(ports, first + i, &record, &word)) {
         case XHCI_SNAPSHOT_HCD_IN_HEAD:
+            /* 36.24's counters, under this lock (hcd_io.c, hcd_dma.c). */
+            if (word >= XHCI_SNAPSHOT_HCD_XPIPE_AT) {
+                value = xpipe[word - XHCI_SNAPSHOT_HCD_XPIPE_AT];
+                break;
+            }
+            if (word >= XHCI_SNAPSHOT_HCD_TELE_END) {
+                value = XhciSnapHcdHead(ports, word);
+                break;
+            }
             /* 36.21's readings and the class drivers' records are written
              * under this lock (hcd_io.c, hcd_urb.c). */
             if (word >= XHCI_SNAPSHOT_HCD_TELE_AT) {

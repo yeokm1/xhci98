@@ -8629,7 +8629,21 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_TELE_BODY_WORDS 41UL
 #define XHCI_SNAPSHOT_HCD_TELE_RECORD_WORDS                                  \
     (XHCI_SNAPSHOT_HCD_TELE_BODY + XHCI_SNAPSHOT_HCD_TELE_BODY_WORDS)
-#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    202UL
+#define XHCI_SNAPSHOT_HCD_TELE_END      202 /* the records' end            */
+/*
+ * Words 202 and 203 are task 36.9's (the event delivery's place in the
+ * extension, XHCI_SNAPSHOT_HCD_DELIVERY_AT and _WORDS, on the branch that
+ * carries it); this branch writes them 0 until the two meet.
+ *
+ * Appended by task 36.24, version unchanged: stage 2's counters (design
+ * record 13 section 11.6, point 7; xhci_xpipe.h, XHCI_XPIPE_STATS) - their
+ * count, then the words in the structure's order. A header shorter than
+ * this is an earlier driver's, which has no stage 2.
+ */
+#define XHCI_SNAPSHOT_HCD_XPIPE_WORDS   204 /* XHCI_XPIPE_STATS, in words    */
+#define XHCI_SNAPSHOT_HCD_XPIPE_AT      205 /* its first word                */
+#define XHCI_SNAPSHOT_HCD_XPIPE_COUNT   24UL
+#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    229UL
 
 #define XHCI_SNAPSHOT_HCD_TELE_S_NONE     0UL /* no send has come          */
 #define XHCI_SNAPSHOT_HCD_TELE_S_LIVE     1UL /* its device is present     */

@@ -2686,8 +2686,10 @@ static VOID hcdCfgStreamKick(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     for (id = 1; ep->Streams != NULL && id <= ep->Streams->Count; id++) {
         p = ep->Streams->Pipe[id];
         if (p->Queue->Count != 0 && !p->Paused && !p->Closed &&
-            !dev->Gone) {
-            /* Its surviving TDs run again (round 6, finding 4). */
+            !dev->Gone && !p->TruncHeld) {
+            /* Its surviving TDs run again (round 6, finding 4) - not a
+             * stream whose pipelined record's successor waits to be taken
+             * off (36.24): its own cancel rings it once that is done. */
             ep->SeqUsed = 1;
             XhciWriteDoorbell(&hc->Hc, dev->SlotId,
                               XhciStreamDoorbell(p->Dci, p->StreamId));
@@ -3072,7 +3074,9 @@ static LONG hcdCfgReset(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                              PHCD_PIPE pipe)
 {
-    PXHCI_TRANSFER cancelled[HCD_PIPE_XFERS];
+    /* Two TDs a record since 36.24: three one-TD records and a pipelined
+     * fourth fit the ring together (section 11.6, point 6). */
+    PXHCI_TRANSFER cancelled[2 * HCD_PIPE_XFERS];
     PXHCI_TRANSFER t;
     PXHCI_TRANSFER head;
     PXHCI_TRANSFER survivor;
@@ -3101,6 +3105,12 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         x = CONTAINING_RECORD(entry, HCD_XFER, Link);
         if (x->CancelRequested) {
             RemoveEntryList(entry);
+            if (x->Promoted) {
+                x->Mapped = 0;
+                x->State = HCD_XFER_ON_RING;
+                HcdIoWideStop(hc, x, HCD_USBD_CANCELED);
+                continue;
+            }
             x->Engine = 0;
             x->Status = HCD_USBD_CANCELED;
             x->State = HCD_XFER_DONE;
@@ -3111,9 +3121,12 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     survivor = NULL;
     count = 0;
     for (t = head; t != NULL; t = t->Next) {
+        /* A cancelled record's TD, or (36.24) the successor of a pipelined
+         * record whose early end retired: taken off alike, the latter
+         * retiring as truncated with its outcome kept (section 11.6). */
         if (t != &dev->Ep0Xfer && t != &dev->HubXfer &&
-            ((PHCD_XFER)t)->CancelRequested) {
-            if (count < HCD_PIPE_XFERS) {
+            (HcdIoXferOf(t)->CancelRequested || HcdIoTruncating(t))) {
+            if (count < 2 * HCD_PIPE_XFERS) {
                 cancelled[count++] = t;
             }
         } else if (survivor == NULL) {
@@ -3136,9 +3149,13 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         }
         (VOID)XhciXferQueueRemove(pipe->Queue, t);
         t->UsbdStatus = HCD_USBD_CANCELED;
+        if (!HcdIoXferOf(t)->CancelRequested) {
+            hc->Xpipe.Taken++;
+        }
         hc->Counters.TransfersCancelled++;
         HcdIoRetired(hc, t);
     }
+    HcdIoRefillFlush(hc);
     if (move) {
         (VOID)XhciRingSetDequeue(
             pipe->Ring,
@@ -3157,7 +3174,7 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
      * reaches a device being torn down (finding 1). */
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     if (pipe->Queue->Count != 0 && state != XHCI_EP_STATE_DISABLED &&
-        !dev->Gone) {
+        !dev->Gone && !pipe->TruncHeld) {
         /* The survivors run again: the device's sequence moves (Codex
          * review of the Phase 28-31 integration, round 6, finding 4). */
         hcdCfgEndpointOf(pipe)->SeqUsed = 1;

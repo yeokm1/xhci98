@@ -242,6 +242,22 @@ for %%S in ("XhciMaxTransferKB           used as set (1024)" "command size in ef
     )
 )
 
+rem Task 36.24's stage 2 counters from canned HCD headers: the switch on
+rem with traffic, the switch absent, Windows 98, a header from before 36.24
+rem and a count it cannot hold.
+"%~dp0XHCISNAP.EXE" -selftest-xpipe > "%BASE%.xpipe.log"
+if errorlevel 1 (
+    echo FAIL: -selftest-xpipe exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("XhciWideMap                 1" "promotion                   on; the register-free check passed" "wide entries                8, 0 in use; claimed 100" "URBs with two TDs at once   100; TDs 900, refills 700" "short 2, error 0, verdict 0; taken off 2" "next TD ready at retirement 650" "not set (the default)" "promotion                   off; the register-free check not run (XhciWideMap off)" "not run (Windows 98 or ME)" "not in this driver" "3 counters in a 916-byte region") do (
+    findstr /C:%%S "%BASE%.xpipe.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the stage 2 decode does not say %%S
+        set FAILED=1
+    )
+)
+
 rd /s /q "%RUNDIR%" 2> nul
 rd out 2> nul
 

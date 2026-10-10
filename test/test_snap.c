@@ -17,6 +17,7 @@
 #include "../src/xhci_pirq.h"
 #include "../src/xhci_xstat.h"
 #include "../src/xhci98_xfer.h"
+#include "../src/xhci_xpipe.h"
 #include "test_harness.h"
 
 #define H XHCI_SNAPSHOT_HCD_HEAD_WORDS
@@ -25,27 +26,27 @@ static void test_header(void)
 {
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_VERSION_AT), 1,
              "version 1");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_BYTES), 808,
-             "a 202-word header (35-T.8 appended twelve, 36.3 28, 36.21 "
-             "154)");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_BYTES), 916,
+             "a 229-word header (35-T.8 appended twelve, 36.3 28, 36.21 "
+             "154, 36.9 two, 36.24 25)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS), 18,
              "the E460's eighteen root ports");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORT_BYTES), 64,
              "a sixteen-word record");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 808,
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 916,
              "records right after the header");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 96,
              "the whole counter block");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS_AT),
-             808 + 18 * 64, "counters after the last record");
+             916 + 18 * 64, "counters after the last record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_NOTE_BUDGET),
              XHCI_ENUM_NOTE_BUDGET, "the notes' budget");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_WORDS), 0,
              "past the header reads 0");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_COUNTER_WORDS * sizeof(ULONG),
              sizeof(XHCIHC_COUNTERS), "the counters word for word");
-    CHECK_EQ(XhciSnapHcdWords(18), 202 + 18 * 16 + 96, "the E460's image");
-    CHECK_EQ(XhciSnapHcdWords(0), 202 + 96,
+    CHECK_EQ(XhciSnapHcdWords(18), 229 + 18 * 16 + 96, "the E460's image");
+    CHECK_EQ(XhciSnapHcdWords(0), 229 + 96,
              "no ports: a header and the counters");
     CHECK_EQ(XhciSnapHcdWords(1000), XhciSnapHcdWords(XHCI_MAX_ROOT_PORTS),
              "ports held to the root port maximum");
@@ -251,8 +252,28 @@ static void test_xstat_words(void)
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_TELE_WORDS), 46,
              "five words of the bus's, then the record");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_TELE_AT, 51 + 59, "the records after");
-    CHECK_EQ(XHCI_SNAPSHOT_HCD_TELE_AT + 2 * 46, XHCI_SNAPSHOT_HCD_HEAD_WORDS,
-             "and they end the header");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_TELE_AT + 2 * 46, XHCI_SNAPSHOT_HCD_TELE_END,
+             "and they end 36.21's words, at 202 as before");
+    /* 36.24: two words for 36.9 (its branch), then stage 2's counters,
+     * appended with every offset before them unchanged. */
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_TELE_END, 202, "36.21's end unmoved");
+    CHECK_EQ(XhciSnapHcdHead(18, 202), 0, "36.9's first word reads 0 here");
+    CHECK_EQ(XhciSnapHcdHead(18, 203), 0, "and its second");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_XPIPE_WORDS, 204, "stage 2's count at 204");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_XPIPE_WORDS), 24,
+             "twenty-four counters");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_XPIPE_AT, 205, "from 205");
+    CHECK_EQ(sizeof(XHCI_XPIPE_STATS), 24 * 4, "the whole of the stats");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_XPIPE_AT + 24, XHCI_SNAPSHOT_HCD_HEAD_WORDS,
+             "to the header's end");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_XPIPE_AT), 0,
+             "the counters are the door's");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XPIPE_STATS, Check), 2 * 4,
+             "the check's verdict third");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XPIPE_STATS, Pipelined), 12 * 4,
+             "pipelined URBs thirteenth");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XPIPE_STATS, Order), 23 * 4,
+             "the order anomaly last");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_XSTAT_AT), 0,
              "the readings are the door's, not layout");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_TELE_AT), 0,
