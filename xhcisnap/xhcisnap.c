@@ -3491,8 +3491,9 @@ static void print_msi(const unsigned char *hcd, unsigned long hcdBytes)
          "start and filter set them:\n");
     comp("  routines               %s\n",
          poll_code(msi_routines_text, SNAP_MSI_ROUTINES, get32(k, 0)));
-    comp("  messages connected     %lu (the connection's table; one is "
-         "served); capability %s\n", get32(k, 1 * 4),
+    comp("  messages connected     %lu%s; capability %s\n", get32(k, 1 * 4),
+         get32(k, 1 * 4) != 0 ? " (the connection's table; one is served)"
+                              : " (no message connected)",
          msi_capability(get32(k, 2 * 4)));
     comp("    connection status    %08lX; message descriptors in the "
          "grant %lu\n", get32(k, 3 * 4), get32(k, 4 * 4));
