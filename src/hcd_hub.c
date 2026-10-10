@@ -155,8 +155,7 @@ ULONG HcdDevicePipeSpeed(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     ULONG cls;
 
-    cls = XHCI_SPEED_UNKNOWN;
-    (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, dev->Port, dev->Speed, &cls);
+    cls = HcdDeviceSpeedClass(hc, dev);
     if (cls == XHCI_SPEED_SUPER) {
         /* The class alone cannot tell SuperSpeedPlus from SuperSpeed
          * (XhciPipeSpeedFromClass answers neither): the trained rate
@@ -164,6 +163,54 @@ ULONG HcdDevicePipeSpeed(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         return dev->Plus ? XHCI_PIPE_SPEED_SUPER_PLUS : XHCI_PIPE_SPEED_SUPER;
     }
     return XhciPipeSpeedFromClass(cls);
+}
+
+/*
+ * A PSIV of this device's decoded as XHCI_SPEED_* - its own (dev->Speed) or
+ * one its Slot Context reads back - with its provenance: a device HcdHubPlace
+ * gave issue 18's default ID is read by that rule, every other one by the
+ * root port's table as before (implementation-invariants.md, "Port Speed
+ * Decoding"). Every decode of a device's speed asks this, never the bare
+ * XhciPortSpeedClass, so the ID it was given and the class it is read as
+ * agree. IRQL: any.
+ */
+ULONG HcdDeviceSpeedClassOf(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                            ULONG psiv)
+{
+    ULONG cls;
+
+    cls = XHCI_SPEED_UNKNOWN;
+    (VOID)XhciPortSpeedClassFor(&hc->Hc.PortMap, dev->Port, psiv,
+                                dev->SpeedFallback, &cls);
+    return cls;
+}
+
+/* IRQL: any. */
+ULONG HcdDeviceSpeedClass(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    return HcdDeviceSpeedClassOf(hc, dev, dev->Speed);
+}
+
+/*
+ * Issue 18's notes for one behind-hub placement that did not take the
+ * table's own answer: at most HCD_HUB_SPEED_NOTE_BUDGET pairs a start, the
+ * counters counting every one. Thread only.
+ */
+#define HCD_HUB_SPEED_NOTE_BUDGET   16UL
+
+static VOID hcdHubSpeedNote(PHCD_CONTROLLER hc, PHCD_HUB hub, PHCD_PORT p,
+                            const XHCI_TOPO_CHILD *child, ULONG speedClass,
+                            ULONG psiv, ULONG outcome)
+{
+    if (hc->HubSpeedNotes >= HCD_HUB_SPEED_NOTE_BUDGET) {
+        return;
+    }
+    hc->HubSpeedNotes++;
+    XhciLogNote(&hc->Hc, "hub.speed.place",
+                XhciHubSpeedNotePlace(child->RootPort, hub->SlotId,
+                                      p->Number, speedClass, outcome));
+    XhciLogNote(&hc->Hc, "hub.speed.route",
+                XhciHubSpeedNoteRoute(psiv, child->Route));
 }
 
 /*
@@ -175,8 +222,12 @@ ULONG HcdDevicePipeSpeed(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
  * its subtree hangs from (XhciTopoTtFor). An all-Full-Speed path has no TT
  * and every TT field stays 0. Returns 0 when the place cannot be given -
  * a parent the graph does not hold, a path past the Route String's five
- * tiers (counted), a speed the root port's protocol has no ID for - and the
- * caller gives the slot back. Counts the open of a behind-hub position.
+ * tiers (counted), a speed the root port's protocol has no ID for (counted,
+ * TopoBehindHubNoSpeed) - and the caller gives the slot back. A Full- or
+ * Low-Speed device on a USB 2.0 root port whose table names no such speed
+ * takes the default ID by issue 18's rule (XhciPortPsivForHubChild), with
+ * the switch on, and carries that in dev->SpeedFallback. Counts the open of
+ * a behind-hub position.
  */
 ULONG HcdHubPlace(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG speedClass,
                   PHCD_USB_DEVICE dev)
@@ -186,6 +237,8 @@ ULONG HcdHubPlace(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG speedClass,
     XHCI_TOPO_TT tt;
     PHCD_HUB hub;
     ULONG psiv;
+    ULONG outcome;
+    ULONG ok;
 
     hub = p->Hub;
     topo = &hc->Hc.Topology;
@@ -201,11 +254,29 @@ ULONG HcdHubPlace(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG speedClass,
         return 0;
     }
     psiv = 0;
-    if (hub->Usb3 ? !HcdSsHubPsiv(hc, p, child.RootPort, &psiv)
-                  : XhciPortPsivForSpeed(&hc->Hc.PortMap, child.RootPort,
-                                         speedClass, &psiv) != XHCI_CAPS_OK) {
-        XHCI_DBG_VALUE("hcd: no speed ID behind hub, class", speedClass);
+    outcome = XHCI_HUB_SPEED_TABLE;
+    if (hub->Usb3) {
+        ok = HcdSsHubPsiv(hc, p, child.RootPort, &psiv);
+        if (!ok) {
+            outcome = XHCI_HUB_SPEED_NO_MAPPING;
+        }
+    } else {
+        ok = XhciPortPsivForHubChild(&hc->Hc.PortMap, child.RootPort,
+                                     speedClass, hc->HubSpeedFallback,
+                                     &psiv, &outcome) == XHCI_CAPS_OK;
+    }
+    if (!ok) {
+        hc->Counters.TopoBehindHubNoSpeed++;
+        hcdHubSpeedNote(hc, hub, p, &child, speedClass, 0, outcome);
+        XHCI_DBG_VALUE("hcd: no speed ID behind hub, class/outcome",
+                       (speedClass << 8) | outcome);
         return 0;
+    }
+    dev->SpeedFallback = 0;
+    if (outcome == XHCI_HUB_SPEED_FALLBACK) {
+        dev->SpeedFallback = 1;
+        hc->Counters.Usb2HubSpeedFallbacks++;
+        hcdHubSpeedNote(hc, hub, p, &child, speedClass, psiv, outcome);
     }
     dev->Port = child.RootPort;
     dev->Route = child.Route;
@@ -1665,8 +1736,7 @@ ULONG HcdHubStart(PHCD_CONTROLLER hc, PHCD_PORT p, PHCD_USB_DEVICE dev)
     ULONG i;
 
     topo = &hc->Hc.Topology;
-    cls = XHCI_SPEED_UNKNOWN;
-    (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, dev->Port, dev->Speed, &cls);
+    cls = HcdDeviceSpeedClass(hc, dev);
     dropped = topo->Dropped;
     if (p->Hub == NULL) {
         ok = XhciTopoAttachRoot(topo, dev->SlotId, dev->Port, 0, cls);

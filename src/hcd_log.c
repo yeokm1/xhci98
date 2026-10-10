@@ -305,6 +305,11 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
                   1);
     XhciLogAppend(log, "composite.represented",
                   hc->Counters.CompositeRepresented, 1);
+    /* Issue 18's behind-hub speed IDs. */
+    XhciLogAppend(log, "hub.speed.nospeed",
+                  hc->Counters.TopoBehindHubNoSpeed, 1);
+    XhciLogAppend(log, "hub.speed.fallbacks",
+                  hc->Counters.Usb2HubSpeedFallbacks, 1);
     hcdLogTolLocked(ext, log);
 }
 

@@ -1016,21 +1016,53 @@ Why there is no MSI on either target. MSI is an interrupt delivered as a memory 
   ever enumerated there. A listed entry still wins, even one this driver cannot
   decode - the P14s Gen 1 lists 6 and 7 as SSIC rates, where the defaults would
   read Gen 1x2 and Gen 2x2 - and every other unlisted ID, and every unlisted ID
-  on a USB 2.0 protocol, stays unknown. `XhciPortSpeedSource` says which rule
+  a USB 2.0 root port reports, stays unknown. `XhciPortSpeedSource` says which rule
   named an ID (listed, default with no table, or this fallback).
-- **A device behind a hub has no PORTSC to read a PSIV from, and usbport reports
-  a speed class, so its Protocol Speed ID is looked up by inverting the same
-  PSI table** (`XhciPortPsivForSpeed`) - refusing rather than defaulting when
-  the table has no entry for that class. "3 means High Speed" is what a
-  controller that reordered its IDs would break. The exception reaches this
-  direction only as far as SuperSpeed's own ID: 4, where a USB 3.x table lists
-  no 5 Gb/s entry and does not list 4. A SuperSpeedPlus child of such a table
-  is never given an unlisted 5 to 7 - writing an ID the controller never
-  named is not decoding one it reported. It takes a listed entry at its
-  aggregate rate, else one at its lane rate (unmatched), and only when both
-  searches fail SuperSpeed's 4, unmatched; after Address Device a usable
-  output Slot Context speed is adopted (`XhciSsHubPsiv`,
+- **Two directions, and they are not one rule.** *Root-port PORTSC decoding*
+  reads the PSIV a root port reports for the device on it, and follows the
+  bullets above exactly. *Downstream device speed mapping* chooses the PSIV
+  written into the Slot Context of a device behind a hub, which has no PORTSC
+  of its own, and every later decode of that device's speed (endpoint policy,
+  rate, the readdress check, the topology graph, the PDO's and the door's
+  answers) must read it the same way it was chosen.
+- **A device behind a hub has no PORTSC to read a PSIV from, and the hub
+  reports a speed class, so its Protocol Speed ID is looked up by inverting
+  the same PSI table** (`XhciPortPsivForSpeed`), refusing rather than
+  defaulting when the table has no entry for that class, but for the two
+  exceptions here. "3 means High Speed" is what a controller that reordered
+  its IDs would break. The USB 3.x exception above
+  reaches this direction only as far as SuperSpeed's own ID: 4, where a USB
+  3.x table lists no 5 Gb/s entry and does not list 4. A SuperSpeedPlus child
+  of such a table is never given an unlisted 5 to 7 - writing an ID the
+  controller never named is not decoding one it reported. It takes a listed
+  entry at its aggregate rate, else one at its lane rate (unmatched), and
+  only when both searches fail SuperSpeed's 4, unmatched; after Address
+  Device a usable output Slot Context speed is adopted (`XhciSsHubPsiv`,
   `XhciSsHubAdoptSpeed`).
+- **The downstream exception (issue 18, `docs/issues/13-via-vl805-usb2-integrated-hub-speed-ids.md`):
+  a Full- or Low-Speed device behind a hub on a USB 2.0 protocol whose table
+  (PSIC > 0) has no entry of that speed takes the default ID - 1 for Full
+  Speed, 2 for Low Speed (xHCI 1.2c Table 7-13) - when, and only when, both
+  hold:** the table has no entry decoding to that class, **and** the default
+  ID itself is not listed (a table that names ID 1 as High Speed keeps ID 1
+  High Speed, and the device is refused as before). Explicit entries always
+  win, including ones this driver cannot decode. The VIA VL805 (`1106:3483`)
+  lists only High Speed on its USB 2.0 port, as xHCI 1.2c 7.2.1 permits an
+  xHC with an integrated hub to do; the driver's error was reading the root
+  port's table as the vocabulary of the speeds *below* that hub. The switch
+  `XhciUsb2HubSpeedFallback` (absent or any value but `0` on, `0` off) is
+  read once per controller start; off, the refusal stands as before.
+- **The fallback is carried as provenance, never as a change to the table or
+  to the shared decoder's rules.** The captured PSI dwords stay verbatim (the
+  preflight and post-reset port-map comparison reads them), root-port
+  decoding never takes the fallback, and the device record carries whether
+  its PSIV came from it (`SpeedFallback`); every decode of that device's
+  speed goes through the device-aware wrappers (`HcdDeviceSpeedClass`,
+  `XhciPortSpeedClassFor`, `XhciPortRateFor`) with that flag, so a device
+  placed by the fallback is never later read as unknown. Task 35.1's USB 3.x
+  rule is unchanged by it. Every refusal behind a hub counts
+  `TopoBehindHubNoSpeed`; each placement that takes the fallback counts
+  `Usb2HubSpeedFallbacks`.
 
 ## DMA Teardown
 

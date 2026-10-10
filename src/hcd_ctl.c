@@ -78,6 +78,11 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * on Windows 2000 and later only, and only past the start's register-free
  * check (hcd_dma.c, HcdDmaWideOpen). */
 #define HCD_VALUE_WIDE_MAP      L"XhciWideMap"
+/* Issue 18: the default speed IDs for a Full- or Low-Speed device behind a
+ * hub on a USB 2.0 root port whose speed table names no such speed
+ * (XhciPortPsivForHubChild), written by no INF: only a DWORD 0 turns it
+ * off; absent, another number or another type is on. Read at every start. */
+#define HCD_VALUE_HUB_SPEED     L"XhciUsb2HubSpeedFallback"
 #if defined(XHCI_FLAVOUR_QEMU)
 /* Task 36.22, qemu flavour only and written by no INF: the map grant a
  * chunk may use, held to this many registers (1 to the real grant), so a
@@ -330,6 +335,20 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
                 NT_SUCCESS(status) ? value : 0xFFFFFFFFUL);
     XhciLogNote(ext, "xfer.wide.switch", hc->WideSwitch);
 
+    /* Issue 18. */
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_HUB_SPEED, &value);
+    hc->Counters.Usb2HubSpeedSwitchRead =
+        NT_SUCCESS(status) ? 1UL
+        : (status == STATUS_OBJECT_TYPE_MISMATCH) ? 2UL
+                                                 : 0UL;
+    hc->HubSpeedFallback = (NT_SUCCESS(status) && value == 0) ? 0UL : 1UL;
+    hc->Counters.Usb2HubSpeedFallbackOn = hc->HubSpeedFallback;
+    hc->HubSpeedNotes = 0;
+    XhciLogNote(ext, "hub.speed.value",
+                NT_SUCCESS(status) ? value : 0xFFFFFFFFUL);
+    XhciLogNote(ext, "hub.speed.fallback", hc->HubSpeedFallback);
+
 #if defined(XHCI_FLAVOUR_QEMU)
     value = 0;
     status = hcdReadDword(hc, HCD_VALUE_QEMU_MAP_GRANT, &value);
@@ -374,6 +393,30 @@ static VOID hcdTolApplies(PHCD_CONTROLLER hc)
     ext->Tol.Stats.CapApplied = XhciTolCapApplies(ext->Tol.Stats.CapMode,
                                                   ext->PciVendorDevice);
     XhciLogNote(ext, "tol.cap.applied", ext->Tol.Stats.CapApplied);
+}
+
+/* Issue 18: a controller's own firmware version where its configuration
+ * space has one this driver knows of (XhciPciFirmwareOffset) - the VIA
+ * VL805's, which decides a downstream TT quirk other drivers carry - read
+ * once and noted, so a start's dump answers it. A read, never a write.
+ * IRQL: PASSIVE_LEVEL. */
+static VOID hcdFirmwareNote(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+    ULONG offset;
+    ULONG value;
+
+    ext = &hc->Hc;
+    offset = XhciPciFirmwareOffset(ext->PciVendorDevice);
+    if (offset == 0) {
+        return;
+    }
+    value = 0xFFFFFFFFUL;
+    if (XhciReadPciConfig(ext, offset, &value, sizeof(value)) !=
+        MP_STATUS_SUCCESS) {
+        value = 0xFFFFFFFFUL;
+    }
+    XhciLogNote(ext, "pci.vl805.fw", value);
 }
 /*
  * The force-Bulk-Only value (roadmap-hcd.md 31-A.3): 1 when XhciForceBulkOnly
@@ -2475,6 +2518,7 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
     hcdTolApplies(hc);
+    hcdFirmwareNote(hc);
     /* Task 36.3: the route repaired before the first interrupt is enabled. */
     hcdPirqStart(hc);
     /* Before the thread runs, so no backstop pass reads it mid-write. */

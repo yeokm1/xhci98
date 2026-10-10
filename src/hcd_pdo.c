@@ -811,9 +811,7 @@ static NTSTATUS hcdPdoNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     pdo->RootPort = dev->Port;
     pdo->Route = dev->Route;
     pdo->Speed = dev->Speed;
-    pdo->SpeedClass = XHCI_SPEED_UNKNOWN;
-    (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, dev->Port, dev->Speed,
-                             &pdo->SpeedClass);
+    pdo->SpeedClass = HcdDeviceSpeedClass(hc, dev);
     for (i = 0; i < sizeof(pdo->DeviceDesc); i++) {
         pdo->DeviceDesc[i] = dev->DeviceDesc[i];
     }
