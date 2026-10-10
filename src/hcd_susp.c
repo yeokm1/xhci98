@@ -1112,18 +1112,23 @@ static ULONG hcdSuspArm(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG bound)
 
 /*
  * After the stop, an endpoint whose context's TR Dequeue Pointer has moved
- * past a TD that moved no data is rewound to the ring's software dequeue
- * (the head TD's first TRB) by Set TR Dequeue Pointer (36.35's legs on
- * 2000 and XP: an interrupt IN read pending across a suspend never
- * completed after the wake or the host resume, while a read posted after it
- * did). The xHCI stop keeps the stopped TRB as the dequeue (4.6.9), so on
- * such a controller the two agree and nothing is sent; QEMU's stop drops a
- * TD in flight and leaves the dequeue past it ("data might be lost"), so
- * the restart's doorbell would find no TD. A TD that moved data is left as
- * the controller has it: rewinding it would repeat the transfer. Stream
- * endpoints keep their rings as they are. Thread only.
+ * past a TD this stop's own Stopped event shows untouched (hcd_dev.c,
+ * hcdDevStopUntouched: a bulk or interrupt TD, the event at its first TRB
+ * with nothing moved) is rewound to the ring's software dequeue (that TD's
+ * first TRB) by Set TR Dequeue Pointer (36.35's legs on 2000 and XP: an
+ * interrupt IN read pending across a suspend never completed after the
+ * wake or the host resume, while a read posted after it did). The xHCI
+ * stop keeps the stopped TRB as the dequeue (4.6.9), so on such a
+ * controller the two agree and nothing is sent; QEMU's stop drops a TD in
+ * flight and leaves the dequeue past it ("data might be lost"), so the
+ * restart's doorbell would find no TD. Without the evidence - control,
+ * isochronous, a TD already measured, an event elsewhere or none - the
+ * endpoint is left as the controller has it (Codex review of the rewind,
+ * round 1, finding 1). Returns 0 when a rewind was due and refused: the
+ * TD would be stranded again, so the stop reports the uncertain outcome
+ * and the device is cycled (finding 2). Thread only.
  */
-static VOID hcdSuspRewind(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG dci)
+static ULONG hcdSuspRewind(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG dci)
 {
     PHCD_PIPE pipe;
     KIRQL oldIrql;
@@ -1132,28 +1137,67 @@ static VOID hcdSuspRewind(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG dci)
     ULONG rewind;
 
     pipe = hcdSuspPipe(dev, dci);
-    if (pipe == NULL || pipe->Streams != NULL ||
-        XhciEndpointContextOffset(&hc->Hc.Layout, dev->SlotId, dci,
-                                  &offset) != XHCI_LAYOUT_OK) {
-        return;
+    if (pipe == NULL) {
+        return 1;
     }
     rewind = 0;
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    if (pipe->Queue->Count != 0 && pipe->Queue->Head != NULL &&
-        pipe->Queue->Head->BytesTransferred == 0) {
+    if (pipe->SuspStopUntouched && pipe->Streams == NULL && dci != 1 &&
+        pipe->Queue->Count != 0 && pipe->Queue->Head != NULL &&
+        XhciEndpointContextOffset(&hc->Hc.Layout, dev->SlotId, dci,
+                                  &offset) == XHCI_LAYOUT_OK) {
         /* Endpoint Context dword 2: TR Dequeue Pointer low, DCS in bit 0. */
         ctxPa = XhciCommonAt(&hc->Hc, offset)[2] & ~0xFUL;
         rewind = (ctxPa != XhciRingDequeuePA(pipe->Ring)) ? 1UL : 0UL;
     }
+    pipe->SuspStopWatch = 0;
+    pipe->SuspStopUntouched = 0;
     XhciControllerLockRelease(&hc->Hc, oldIrql);
-    if (rewind) {
-        XHCI_DBG_VALUE("hcd: suspend stop rewound, slot/dci",
-                       (dev->SlotId << 8) | dci);
-        if (!HcdCfgRewind(hc, dev, pipe)) {
-            XHCI_DBG_VALUE("hcd: suspend stop rewind refused, slot/dci",
-                           (dev->SlotId << 8) | dci);
-        }
+    if (!rewind) {
+        return 1;
     }
+    XHCI_DBG_VALUE("hcd: suspend stop rewound, slot/dci",
+                   (dev->SlotId << 8) | dci);
+    if (!HcdCfgRewind(hc, dev, pipe)) {
+        XHCI_DBG_VALUE("hcd: suspend stop rewind refused, slot/dci",
+                       (dev->SlotId << 8) | dci);
+        return 0;
+    }
+    return 1;
+}
+
+/* The pipe's Stopped event watched for while its stop is out, and the
+ * watch ended. Thread only. */
+static VOID hcdSuspStopWatch(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                             ULONG dci)
+{
+    PHCD_PIPE pipe;
+    KIRQL oldIrql;
+
+    pipe = hcdSuspPipe(dev, dci);
+    if (pipe == NULL) {
+        return;
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    pipe->SuspStopWatch = 1;
+    pipe->SuspStopUntouched = 0;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
+static VOID hcdSuspStopUnwatch(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                               ULONG dci)
+{
+    PHCD_PIPE pipe;
+    KIRQL oldIrql;
+
+    pipe = hcdSuspPipe(dev, dci);
+    if (pipe == NULL) {
+        return;
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    pipe->SuspStopWatch = 0;
+    pipe->SuspStopUntouched = 0;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
 }
 
 /* Stop Endpoint with SP=1 on every endpoint the context reads Running
@@ -1171,13 +1215,17 @@ static ULONG hcdSuspStop(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
             continue;
         }
         code = 0;
+        hcdSuspStopWatch(hc, dev, dci);
         if (XhciTrbStopEndpoint(&trb, dev->SlotId, dci, 1) == XHCI_RING_OK) {
             code = HcdThreadCommand(hc, &trb, &control);
         }
         if (code == XHCI_CC_SUCCESS) {
-            hcdSuspRewind(hc, dev, dci);
+            if (!hcdSuspRewind(hc, dev, dci)) {
+                return XHCI_SUSP_RES_TIMEOUT;
+            }
             continue;
         }
+        hcdSuspStopUnwatch(hc, dev, dci);
         if (code == XHCI_CC_CONTEXT_STATE_ERROR) {
             continue;
         }

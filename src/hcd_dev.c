@@ -346,6 +346,36 @@ static PHCD_PIPE hcdEventStream(PHCD_PIPE pipe, ULONG trbPA)
     return id == 0 ? NULL : s->Pipe[id];
 }
 
+/* Whether a Stopped event shows the pipe's head TD untouched: a bulk or
+ * interrupt TD with nothing latched, the event at its first TRB, with that
+ * TRB's whole length left or the length invalid. Controller lock held. */
+static ULONG hcdDevStopUntouched(PHCD_PIPE pipe, const XHCI_TRB *event,
+                                 ULONG cc)
+{
+    PXHCI_TRANSFER head;
+    ULONG index;
+    ULONG length;
+
+    head = pipe->Queue->Head;
+    if (head == NULL ||
+        (pipe->TransferType != XHCI_PIPE_XFER_BULK &&
+         pipe->TransferType != XHCI_PIPE_XFER_INTERRUPT) ||
+        (head->Flags & (XHCI_XFER_FLAG_LENGTH_FIXED |
+                        XHCI_XFER_FLAG_ISOCH)) != 0 ||
+        XhciRingIndexFromPA(pipe->Ring, event->Param0 & ~0xFUL, &index) !=
+            XHCI_RING_OK ||
+        index != head->FirstIndex) {
+        return 0;
+    }
+    if (cc == XHCI_CC_STOPPED_LENGTH_INVALID) {
+        return 1;
+    }
+    return (cc == XHCI_CC_STOPPED &&
+            XhciRingSumTrbLengths(pipe->Ring, index, index, &length) ==
+                XHCI_RING_OK &&
+            XHCI_TRB_GET_RESIDUAL(event->Status) == length) ? 1UL : 0UL;
+}
+
 /*
  * Controller tolerance's counting of one Transfer Event (35-T.8, design
  * record 17 section 4.8): every completion code into the histogram, and an
@@ -514,6 +544,14 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
          * for the abort or cancel that follows (round 2, finding 12). */
         (VOID)XhciXferQueueStopped(pipe->Queue, pipe->Ring, event->Param0,
                                    event->Status);
+        /* Selective suspend's stop (36.35): positive evidence that the
+         * head TD moved nothing - the event names its first TRB with the
+         * whole of that TRB left (Stopped) or no length (Stopped - Length
+         * Invalid) - is what alone lets the suspend rewind it
+         * (hcd_susp.c, hcdSuspRewind). */
+        if (pipe->SuspStopWatch) {
+            pipe->SuspStopUntouched = hcdDevStopUntouched(pipe, event, cc);
+        }
         return 0;
     }
     errors = pipe->Queue->Errors;

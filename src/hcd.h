@@ -314,6 +314,11 @@ typedef struct _HCD_PIPE {
     ULONG SuspendPause;             /* one of Paused is selective
                                      * suspend's gate (design record 14
                                      * section 3.2); controller lock      */
+    ULONG SuspStopWatch;            /* the suspend's Stop Endpoint is out:
+                                     * its Stopped event is read for     */
+    ULONG SuspStopUntouched;        /* positive evidence that the head TD
+                                     * moved nothing (hcd_dev.c); both
+                                     * controller lock (36.35's rewind)  */
     struct _HCD_XFER *Exclusive;    /* a request split into chunks: none
                                      * other is published until it ends   */
     ULONG Seq;                      /* the last submission's order         */
