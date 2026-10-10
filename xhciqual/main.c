@@ -18,6 +18,8 @@
 static PCIINFO pcis[MAX_CONTROLLERS];
 static CTRL ctrls[MAX_CONTROLLERS];
 static LEGACY_CTRL legacy_ctrls[MAX_CONTROLLERS];
+/* Task 36.48: the machine, named in the header (never a serial or UUID). */
+static SYSINFO sysinfo;
 
 /*
  * Task 11-V.8. Running XHCIQUAL with no arguments used to start the **most
@@ -480,6 +482,11 @@ static int run_quick_scan(void)
     int worst;
 
     qprintf("XHCIQUAL %s - quick scan (read-only)\n", TOOL_VERSION);
+    /* Task 36.48: two lines on the screen, the full block in the log and
+     * on the serial line. Reads only, like everything in this pass. */
+    sysinfo_probe(&sysinfo);
+    report_sysinfo_short(&sysinfo, qconprintf);
+    report_sysinfo(&sysinfo, qlogprintf);
 
     n = pci_scan_usb(pcis, MAX_CONTROLLERS, HC_MASK_ALL);
     if (n == 0) {
@@ -774,6 +781,10 @@ int main(int argc, char **argv)
 
     qprintf("XHCIQUAL %s (build %s) - USB host controller qualification\n",
             TOOL_VERSION, TOOL_BUILD);
+    /* Task 36.48: which machine this report came from. Reads only (the
+     * BIOS area, CPUID, E820, DOS), before any controller is touched. */
+    sysinfo_probe(&sysinfo);
+    report_sysinfo(&sysinfo, qprintf);
     if (!active)
         mode = "PROBE-ONLY (read-only)";
     else if (opt_poll_only)

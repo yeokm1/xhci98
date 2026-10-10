@@ -858,4 +858,107 @@ void report_route(const ROUTEINFO *r, long gsi, QPRINTF_FN pf);
 /* One phrase for the quick scan's screen. Never NULL. */
 const char *route_summary(const ROUTEINFO *r, long gsi);
 
+/* ------------------------------------------------------------------ */
+/* sysinfo.c (pure, host-tested) and sysprobe.c (DOS): the system     */
+/* description in the report header (roadmap-hcd.md task 36.48)      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * **NO IDENTIFIERS.** The header names the machine - maker, model, board,
+ * BIOS, CPU, memory, DOS - so a pasted report says what it came from. It
+ * never names the unit: SMBIOS serial numbers, UUIDs, asset tags, SKU and
+ * part numbers (Type 1 serial/UUID/SKU, Type 2 serial/asset, Type 3
+ * serial/asset, Type 4 serial/asset/part) are not read into SYSINFO at
+ * all, so no printer can leak them. Keep it that way: a field added here is
+ * a field every pasted report publishes.
+ */
+#define SI_STR 65               /* 64 characters and the terminator      */
+
+#define SMB_NONE        0       /* no entry point found                  */
+#define SMB_OK          1       /* entry point valid, table read         */
+#define SMB_ABOVE_4G    2       /* table above 4 GB: not mappable here   */
+#define SMB_MAP_FAILED  3       /* DPMI would not map the table          */
+#define SMB_EMPTY       4       /* entry point names an empty table      */
+
+#define SMB_EP_DMI      1       /* legacy "_DMI_" alone (DMI 2.0)        */
+#define SMB_EP_32       2       /* "_SM_" 32-bit entry point (2.1+)      */
+#define SMB_EP_64       3       /* "_SM3_" 64-bit entry point (3.0+)     */
+
+typedef struct {
+    /* SMBIOS entry point (smb_scan) */
+    int smb_state;
+    int smb_kind;
+    u32 smb_ep_phys;            /* where the anchor was found            */
+    u8  smb_major, smb_minor;
+    u32 table_lo, table_hi;     /* structure table physical address      */
+    u32 table_len;              /* as the entry point gives it           */
+    u16 table_count;            /* 2.x structure count; 0 for 3.0        */
+    int other_ep_bad;           /* an anchor whose checksum failed       */
+    /* the structure table (smb_parse_table) */
+    u32 used_len;               /* bytes walked (capped at SMB_TABLE_MAX) */
+    int nstructs;
+    int broken;                 /* the walk stopped on a malformed entry  */
+    u32 broken_at;              /* its offset in the table               */
+    char bios_vendor[SI_STR], bios_version[SI_STR], bios_date[SI_STR];
+    char sys_mfr[SI_STR], sys_product[SI_STR], sys_version[SI_STR];
+    char sys_family[SI_STR];
+    char board_mfr[SI_STR], board_product[SI_STR];
+    char cpu_socket[SI_STR], cpu_version[SI_STR];
+    int seen_t0, seen_t1, seen_t2, seen_t4;
+    u32 mem17_kb;  int mem17_n;  /* summed module sizes                   */
+    u32 mem19_kb;  int mem19_n;  /* summed mapped ranges                  */
+    /* no SMBIOS: the ROM's own date (F000:FFF5) and model byte (FFFE) */
+    char rom_date[9];
+    u8  rom_model;
+    int rom_read;
+    /* CPUID */
+    int has_cpuid;
+    char cpu_vendor[13];
+    char cpu_brand[49];
+    u32 cpu_sig;                /* leaf 1 EAX                            */
+    u32 cpu_family, cpu_model, cpu_stepping;
+    /* memory */
+    u32 e820_kb;  int e820_n;   /* usable ranges and their count         */
+    /* DOS */
+    int dos_read;
+    u8  dos_major, dos_minor, dos_oem;
+    int dos_true;               /* AX=3306h answered (DOS 5+)            */
+    u8  dos_true_major, dos_true_minor;
+    int win_state;              /* 0 none, 1 Windows/386 2.x, 2 version  */
+    u8  win_major, win_minor;
+} SYSINFO;
+
+#define SMB_TABLE_MAX 0x10000UL /* bytes of structure table walked       */
+
+/* Pure: the F0000h-FFFFFh image (or any window) at `area`, physical base
+ * `area_phys`. Fills the entry-point fields of `si`; returns smb_kind or 0.
+ * A valid "_SM3_" with a table below 4 GB wins; else "_SM_"; else "_DMI_". */
+int  smb_scan(const u8 *area, u32 len, u32 area_phys, SYSINFO *si);
+/* Pure: walk `len` bytes of structure table. Every length and string is
+ * bounds-checked; a malformed entry ends the walk (si->broken) and keeps
+ * what was read before it. */
+void smb_parse_table(const u8 *t, u32 len, u16 count, SYSINFO *si);
+/* Pure: CPUID results to text. Registers in the order EAX, EBX, ECX, EDX. */
+void cpu_fill_vendor(SYSINFO *si, const u32 leaf0[4]);
+void cpu_fill_signature(SYSINFO *si, u32 eax1);
+void cpu_fill_brand(SYSINFO *si, const u32 brand[12]);
+/* Pure: the ROM date bytes (8) and model byte, for the no-SMBIOS line. */
+void rom_fill(SYSINFO *si, const u8 *date8, u8 model);
+/* The header block (one line per item), and the quick scan's two lines,
+ * each at most 79 characters. */
+void report_sysinfo(const SYSINFO *si, QPRINTF_FN pf);
+void report_sysinfo_short(const SYSINFO *si, QPRINTF_FN pf);
+
+/* sysprobe.c: reads only - the BIOS area, one DPMI mapping of the table,
+ * CPUID, INT 15h E820, INT 21h 30h/3306h, INT 2Fh 1600h. */
+void sysinfo_probe(SYSINFO *si);
+/* sysasm.asm: EFLAGS.ID toggles (1) or not; CPUID with every register but
+ * EAX saved and restored (lesson-cpuid-ebx: CPUID clobbers EBX, which
+ * Watcom's register convention, like MSVC's, expects preserved). */
+int  sys_has_cpuid(void);
+void sys_cpuid(u32 leaf, u32 *out4);
+/* report.c: the console alone (paged), for the quick scan's screen lines
+ * whose full form goes to the log and serial line through qlogprintf. */
+void qconprintf(const char *fmt, ...);
+
 #endif /* QUAL_H */

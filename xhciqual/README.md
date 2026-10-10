@@ -175,6 +175,13 @@ C8 run, the per-controller verdict through each C4 outcome - QUALIFIED,
 QUALIFIED WITH CAVEATS, and the failures that stay failures - and the
 run's exit code. The matrix reaches "needs polling" only through two
 test programs that rewrite the Interrupt Line before the run (below).
+`xhciqual/test/test_sysinfo.c` (roadmap task 36.48) covers `sysinfo.c`,
+the system description in the header: SMBIOS entry points (2.x, 3.0, the
+legacy DMI one, bad checksums, a table above 4 GB), structure tables
+(valid, truncated at every length, garbled, strings missing or out of
+range), the memory sums, CPUID decoding and the no-SMBIOS fallback. Every
+table plants a serial number, UUID, asset tag, SKU and part number, and
+every printed line is checked for each.
 
 That code lives in its own translation unit so it can be tested here, because
 the QEMU matrix cannot reach the field-dependent branches. SeaBIOS leaves
@@ -587,7 +594,7 @@ from a stock Win98 boot floppy by keeping only `IO.SYS`, `MSDOS.SYS`,
 
 ### What the matrix covers
 
-The matrix stands at 46 cases: one standalone-help case, the isolated xHCI
+The matrix stands at 49 cases: one standalone-help case, the isolated xHCI
 IRQ self-test, 27 controller/device cases, two `--probe-only` cases (one
 scanning xHCI alone, one scanning xHCI, EHCI and OHCI together), one
 read-only quick scan per controller-presence mask (none, each family, every
@@ -610,6 +617,13 @@ working line's plain QUALIFIED; each then types `IF ERRORLEVEL ... ECHO
 ... >COM1` so the exit code (3, or 0) lands on the serial log the case
 reads. The IRQ 5 cases take a case timeout of 180 s: C4's second-long
 waits run out in full, and `delay` is slow under TCG.
+
+Since task 36.48, three read the system description with QEMU's `-smbios`
+strings set, every identifier included: `--probe-only` on the 32-bit and
+on the 3.0 (64-bit) entry point, and the quick scan, whose two summary
+lines are checked on the screen. Each fails if a serial number, the UUID,
+the SKU, an asset tag or the part number appears on the serial line or the
+screen.
 
 The cases cover all eight controller presence masks, empty and attached
 variants, HS storage, FS HID, OHCI HID/storage, a USB hub, an unmanaged
@@ -993,3 +1007,59 @@ The quick scan puts the block in the log and on the serial line, and with
 `--gsi` one phrase on the screen under the controller's line. No QEMU
 controller has these registers, so the matrix reaches only `not
 applicable`; `test/test_route.c` is the coverage of the rest.
+
+## The system description in the header
+
+Roadmap task 36.48 (owner, 2026-10-10), the DOS counterpart of
+`XHCISNAP`'s (36.47): the report header names the machine, so a pasted
+report says what it came from. It is read in every mode, before any
+controller is touched, and writes nothing (`Probe safety` still counts zero
+PCI configuration writes):
+
+- **SMBIOS** (`sysprobe.c` reads, `sysinfo.c` parses): the entry point on a
+  16-byte boundary in `F0000h`-`FFFFFh` - `_SM3_` (3.0, 64-bit) preferred
+  when its table lies below 4 GB, else `_SM_` (2.1 and later), else a
+  legacy `_DMI_` - with every checksum checked. The structure table is read
+  directly below 1 MB and through one DPMI `0800h` mapping above it, the
+  same mechanism as BAR0, and at most 64 KB of it is walked. Printed: Type 0
+  BIOS vendor, version and date with the SMBIOS version; Type 1 maker,
+  product, version and family; Type 2 board maker and product; Type 4's
+  socket, and its version string where CPUID has no brand string.
+- **No SMBIOS** (an old machine, or a table that cannot be read): the ROM's
+  own date at `F000:FFF5` and model byte at `F000:FFFE`, labelled `no
+  SMBIOS` with the reason.
+- **CPU**: CPUID's vendor, brand string, family, model and stepping
+  (`sysasm.asm`, which saves every register but the result's, after the
+  2026-10-10 lesson where an unsaved EBX across CPUID stopped Windows 2000).
+- **RAM**: the usable total from INT 15h `E820`; where E820 answers nothing,
+  the SMBIOS Type 17 module sizes, else the Type 19 mapped ranges. The line
+  says which.
+- **DOS**: INT 21h `30h` (version and OEM), `3306h` (the true version, which
+  SETVER cannot change), and INT 2Fh `1600h`, which says whether the tool is
+  running in a Windows 3.x/9x DOS box and which version.
+
+**No identifiers.** The header names the make and model, never the unit:
+SMBIOS serial numbers, UUIDs, asset tags, SKU and part numbers (Type 1
+serial, UUID and SKU; Type 2 serial and asset tag; Type 3 serial and asset
+tag, Type 3 being not read at all; Type 4 serial, asset tag and part number)
+are never copied out of the table, so no printer can leak them. A field
+added to `SYSINFO` is a field every pasted report publishes; the host suite
+and the QEMU cases plant every one of them and fail if one is printed.
+
+**Bounds.** Every structure's length is checked against the table, every
+field against its structure, every string against its string set; a
+malformed structure ends the walk, keeps what was read before it, and adds
+a `SMBIOS table malformed at offset N` line. Strings are cut at 64
+characters, control and non-ASCII bytes print as `?`, and runs of spaces
+collapse.
+
+The full run and `--probe-only` print the block under the build line. The
+quick scan keeps its one screen: two summary lines (`System:` with the
+BIOS, `CPU:` with RAM and DOS), each at most 79 characters, on the screen,
+and the full block in the log and on the serial line. In QEMU, with
+`-smbios` strings set (the matrix's `smbios_header` case; serial, UUID,
+SKU and asset tags set too and not printed):
+
+```
+SAMPLE_PLACEHOLDER
+```

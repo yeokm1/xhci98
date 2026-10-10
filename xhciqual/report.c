@@ -181,6 +181,23 @@ void qlogprintf(const char *fmt, ...)
     }
 }
 
+/*
+ * The console alone (task 36.48): the quick scan's two-line system summary,
+ * whose full block goes to the log and serial line through qlogprintf, so
+ * neither sink carries the same machine twice.
+ */
+void qconprintf(const char *fmt, ...)
+{
+    char buf[1024];
+    va_list ap;
+
+    va_start(ap, fmt);
+    _vsnprintf(buf, sizeof(buf), fmt, ap);   /* bounded: never overrun buf */
+    va_end(ap);
+    buf[sizeof(buf) - 1] = '\0';             /* _vsnprintf may not terminate */
+    console_out(buf);
+}
+
 /* Is there a durable sink at all? The quick scan asks so that it can say
  * "the full list is in the log" only when the full list really went there. */
 int report_logging(void)

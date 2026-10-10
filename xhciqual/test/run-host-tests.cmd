@@ -48,6 +48,17 @@ if not exist test_route.exe goto builderr
 "%~dp0test_route.exe"
 if errorlevel 1 goto testfail
 
+rem Task 36.48: the system description - SMBIOS entry points and tables
+rem (valid, 3.0, truncated, garbled, strings missing), CPUID text, and no
+rem serial, UUID, asset tag, SKU or part number in any printed line.
+if exist test_sysinfo.exe del test_sysinfo.exe
+wcl386 -bt=nt -q -zq -wx -za -otexan -fe=test_sysinfo.exe ^
+    test_sysinfo.c ..\sysinfo.c
+if errorlevel 1 goto builderr
+if not exist test_sysinfo.exe goto builderr
+"%~dp0test_sysinfo.exe"
+if errorlevel 1 goto testfail
+
 echo.
 echo Host tests PASSED.
 call :cleanup
@@ -79,4 +90,7 @@ if exist test_verdict.exe del test_verdict.exe
 if exist test_verdict.obj del test_verdict.obj
 if exist verdict.obj del verdict.obj
 if exist xhci_pirq.obj del xhci_pirq.obj
+if exist test_sysinfo.exe del test_sysinfo.exe
+if exist test_sysinfo.obj del test_sysinfo.obj
+if exist sysinfo.obj del sysinfo.obj
 goto :eof
