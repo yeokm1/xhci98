@@ -1074,3 +1074,164 @@ test client (`XHCIPM.SYS`), `XhciSelectiveSuspend` 1; raw texts in
 defect, now readable with the client bound since the entry no longer
 hangs); the rest of 36.35's legs in the combined matrix; the bench
 (36.36).
+
+## Matrix (early warning, p36-int5 0b7c395)
+
+**Superseded by the full matrix on the stamped `2.2.0.3` build.** This
+was an early-warning pass only (owner, 2026-10-10): the high-risk rows
+nobody had read yet, run on the integration build before stage A's tail
+and the VIA fix were merged. Every row it dropped, and every row below,
+is read again on the stamped build.
+
+Development host A, QEMU 11.1.0 (TCG), 2026-10-10 22:50 to 2026-10-11.
+Build: `p36-int5` at `0b7c395`, built unchanged on branch `p36-mtx2`
+(x86 all and amd64 all, every gate, host suites, `XHCISNAP` selftest
+19 cases with all 162 counter names agreeing). Hashes (`out\p36-mtx2\hashes.txt`):
+`release` x86 `xhci98.sys` `6865c333...`, `xhcimsi.sys` `161d0104...`,
+`xhciuas.sys` `41299702...`; `release` amd64 `xhci98.sys` `4dc2b799...`,
+`xhciuas.sys` `2e0ddd57...`; `qemu` x86 `xhci98.sys` `1bd66412...`,
+amd64 `310f2f75...`; `XHCISNAP.EXE` `b789222a...`, from the same tree.
+Kit, checklist and evidence: `out\p36-mtx2\` (kit `kit\`, `checklist.md`,
+per-guest notes, texts and shots in `legs\<guest>\`).
+
+Rows kept: stage B SB1-SB7 (36.39); Driver Verifier V1 on Windows 7
+x64, Vista x86 and Vista x64, and the Windows 2000 SMP Driver Verifier
+leg; CP1, the composite-parent and hub FDO power under S3/S4 (the
+comppwr work); the `XhciWideMap=1` registry leg with the promotion
+counter. Each guest also read the install and the counter alignment
+(I1-I4) that the rows rest on.
+
+**Reading the CP1 trace.** The line "hcd: parent FDO system state,
+device state asked" logs `(system state << 8) | device state`, once per
+parent FDO (composite parent and hub). The checklist's "4 on sleep, 1
+on wake" names the device state asked: D3 = 4, D0 = 1. So `00000404`
+(S3) or `00000504` (S4) on sleep, and `00000101` on wake, once per
+parent, is the expected reading. ME's `00000100` on wake is a parent
+already in D0 with no device state asked, which is 9x's same-state
+suppression by design. The leg agents first scored the line count (2
+and 2, not 4 and 1) as a failure. Those rows are PASS (orchestrator
+ruling).
+
+**Summary.** These rows passed on every guest that reached them:
+- the install and INF values, with `XhciSelectiveSuspend` and `XhciWideMap` absent;
+- the counter alignment;
+- `XhciWideMap` default off ("not set (the default); promotion off");
+- stage B on 98 SE, ME, 2000, 2000 SMP + Verifier, XP and 7 x86/x64:
+  - switch 0 reads as before;
+  - switch 1 gives DNCTRL `0x0002`, one `susp.ss.cap` per configuration, and the QEMU GetStatus STALL counted;
+  - the test client's D2/D0 (U3 held, U0 back) works, under mode 2 as well;
+  - removals and controller disable/enable while suspended do not hang;
+  - Function Wake and SuperSpeed-hub counters read 0, as QEMU allows;
+- Driver Verifier on Vista x86 (with `xhcimsi.sys`), Vista x64, 7 x64 and 2000 SMP (0x1B): no violation, `AllocationsFailed` 0;
+- S4 with a composite device and a hub (with a device behind it) on 2000 SMP, XP, XP x64, Vista x86/x64 and 7 x86/x64, plus ME standby and hibernate;
+- `XhciWideMap=1` on XP, XP x64 and 7 x64: promoted 1024 or 256, the register-free check passed, VERIFY clean at 1 MiB and 2 MiB.
+
+**Failures and findings** (evidence under `out\p36-mtx2\legs\<guest>\`):
+- **Windows 7 audio, regression lead and pre-existing defect.** On 7
+  x86 and 7 x64 a 20 s `TONE.WAV` played in about 63 s or 106 s.
+  - Packet counts: about 6,300 `IsoPacketsAnswered` per play instead of about 20,100. On a quiet host it was 0 of 6 at normal speed.
+  - The cause the trace shows: a mid-stream isochronous Ring Underrun stalls the endpoint for about 41 s, until `usbaudio` aborts and resets the pipe (host-timestamped `qemu` trace `w7x64\tr3q-ts.log`).
+  - Control: integration wave 3 (`2d0de39`, `release` `2931f8dc...`) on the same guest and procedure played 6 of 6 at normal speed. But wave 3's `qemu` build also stalled once in two plays, so the defect predates this build and later merges made it much more frequent.
+  - Vista x86 and x64 on this build played at normal speed.
+  - Evidence: `w7x64\aud1.txt`, `ctl-mtx2-times.txt`, `ctl-int3-times.txt`, `tr3q-ts.log`; `w7x86\cp1.txt`.
+  - Routed to worker p36-aud. Attribution: driver.
+- **98 SE CP1 standby (pre-existing, not a regression of this build).**
+  After `system_wakeup` USB is dead and the desktop does not come back.
+  The trace stops after "slots invalidated, dropping every device" and
+  "hub leaving". With `usb-audio`, a later fatal exception 0E follows
+  at `BFF9DFFF`. This is the open 36.28 part 2 standby defect. Evidence:
+  `w98\debugcon-6.log`, `debugcon-7.log`, `wake-eips.txt`,
+  `shots\w75-w80.png`. Routed to worker p36-sby.
+- **2000 S4, Bulk-Only stick Code 31 after the resume (a known-limitation
+  extension, not a new defect).**
+  - The resume takes the reinit branch because QEMU's controller saves no state (no FSC). The driver then drops and re-creates every device, and the stick's new PDO comes up with the same instance id while the old storage stack is still open.
+  - Windows 2000 shows Code 31 until a device restart. This is the same family as the release notes' Windows 2000 Code 31 after a recovery.
+  - Composite audio, hub, tablet and mouse came back fine.
+  - Evidence: `w2k\res-ls.txt`, `q-res-ls.txt`, `debugcon-4.log` lines 72-94.
+- **2000 SMP + Verifier, warm restart under `XhciInterruptMode` 2
+  (attribution open).**
+  - A guest Restart under mode 2 boots very slowly: about 10.5 min with switch 0, against about 5 min under mode 0, and more than 14 min with switch 1 under host load.
+  - It first read as a hang at "Starting up". There was no bugcheck, and `AllocationsFailed` stayed 0.
+  - A cold launch of the same overlay boots normally.
+  - Evidence: `smp\hang1-regs.txt` to `hang4-regs.txt`, `wr-ls.txt`, `wr-end.txt`, shots `wr6`-`wr8`.
+  - To re-measure on a quiet host in the stamped matrix.
+- **SB4 mid-D2 removal: read on 2000 SMP only.** The SMP guest caught
+  one removal 0.3 s into a D2: `susp.seq=00405140` (outcome GONE),
+  `SuspGone` 1, no hang (`smp\sb4c.txt`). On XP and 7 x86, four tries
+  each found the D2 already finished: QEMU enters U3 faster than a
+  `device_del` lands, so this is NOT MAKEABLE there. `SuspGone` counts
+  only a sequence that ends gone, by design.
+- Not makeable: standby on 2000 SMP (the Cirrus display driver vetoes
+  it; hibernate was read instead); S3 on Vista and 7 (VGAPNP; hibernate
+  only). Vista/7 Device Manager power data were not read.
+
+| Guest | Check | Package | Result | Observed |
+|---|---|---|---|---|
+| 98 SE | I1-I4 | rel | PASS | BC no differences; `XHCI98.TMP` left beside `XHCI98.SYS` (known); INF values, `XhciSelectiveSuspend` and `XhciWideMap` absent; delivery/reason 1/1, `psw.gate` 0; 24 of 162 counters nonzero, all named; stage 2 "promotion off" (`i3.txt`) |
+| 98 SE | SB1 | rel | PASS | `susp.switch` 0, "DNCTRL not read", enables/readback 0, 114-159 all 0, no `susp.ss.cap`; stick fc clean (`i3.txt`) |
+| 98 SE | CP1 Stand by | rel | FAIL (pre-existing 36.28 part 2 defect; routed to p36-sby) | standby entered; after `system_wakeup` the desktop never returned (CPU looping in VMM, `wake-eips.txt`, `w75-w80.png`); audio playback before sleep not makeable (`USBAUDIO` fatal exception 00, `w60.png`) |
+| 98 SE | CP1 trace | qemu | FAIL (same defect) | with audio + hub: `00000404` x2 on sleep, `00000101` x2 on wake (correct), then exception 0E at Ctrl+Alt+Del; hub/mouse only: one sleep line, the resume stops after "slots invalidated" / "hub leaving" (`debugcon-6.log`, `debugcon-7.log`) |
+| ME | I1-I4 | rel | PASS | restart for the WININIT rename (known), no `.TMP`; BC clean; values as 98 SE; delivery/reason 1/1; 24 of 162 named; "promotion off" (`i3.txt`) |
+| ME | SB1 | rel | PASS | as 98 SE; stage B record slot 1 ACTIVE Ss 0 (`i3.txt`) |
+| ME | CP1 Stand by | rel | PASS | sleep and wake; `TONE.WAV` 20 s without gaps before and after; hub stick fc clean, hub mouse clicks Start; `CompositeParents` 1 (`h1.txt`) |
+| ME | CP1 Hibernate | rel | PASS | hibernate and resume on the same overlay; `TONE.WAV` 20 s, hub stick and root stick fc clean, hub mouse works (`m78.png`) |
+| ME | CP1 trace | qemu | PASS (ruling: D-state reading) | sleep `00000404` x2; wake `00000101` and `00000100` (parent already D0, 9x same-state suppression); hub mouse after (`debugcon-6.log`, `q27.png`) |
+| 2000 SP4 | I1-I4 | rel | PASS | Have Disk install, no prompt, bc clean; values (`rk1.txt`), both switches absent; delivery/reason 1/1, `psw.gate` 0 (`s0.txt`); `SuspSwitchRead` named on switch 1 (`i4s1.txt`); `CompositeParents` 1 (`cp1pre.txt`) |
+| 2000 SP4 | SB1 | rel | PASS | `-verbosity 3`: "DNCTRL not read", 114-159 zero, no `susp.ss.cap`; fc clean (`sb1.txt`, `sb1-fc.txt`) |
+| 2000 SP4 | CP1 S4 | rel | PASS, stick Code 31 (known-limitation extension) | hibernate and resume, no hang; composite + audio function, hub, tablet 4.1 and mouse started; `TONE.WAV` full 20 s (`audio-2.wav`); BOT stick Code 31 until a device restart (`res-ls.txt`, `res-restart.txt`) |
+| 2000 SP4 | CP1 trace + stick | qemu | PASS (ruling); Code 31 reproduced | sleep `00000504` x2, wake `00000101` x2 (`cp1-trace.txt`); stick re-created with the same instance id under the open stack (`debugcon-4.log` 72-94, `q-res-ls.txt`) |
+| 2000 SMP + Verifier | parallelism, verifier start | rel | PASS | 2 vCPUs on distinct threads (`parallelism-check.txt`); Level 1B (`verifier-start.txt`) |
+| 2000 SMP + Verifier | I1-I4, SB1 | rel | PASS | Have Disk over the base driver, bc clean (`inst1.txt`); values (`rk1.txt`); delivery/reason 1/1 (`s0.txt`); switch 0 reads as before; switch 1: `SuspSwitchRead` 1, DNCTRL `0x0002`, `susp.ss.cap=01010001` (`sw1-ec.txt`) |
+| 2000 SMP + Verifier | SB3 | rel | PASS | WW `0xC00000BB`; D2: `susp.seq=00102110`, PLS 3 in readings 12 s apart (`sb3a.txt`, `sb3b.txt`); D0: `00120250`, PLS 0 (`sb3c.txt`) |
+| 2000 SMP + Verifier | SB4 | rel | PASS | ACTIVE and SUSPENDED removals clean; mid-D2 caught once: `00405140` GONE, `SuspGone` 1, no hang (`sb4a.txt`, `sb4b.txt`, `sb4c.txt`) |
+| 2000 SMP + Verifier | SB5, SB6, SB7 | rel | PASS | dc/ec while SUSPENDED: back, D2/D0 again (`sb5.txt`); mode 2: delivery 2 reason 8, PLS 3 held, D0 back (`sb6a-c.txt`); Function Wake / SS hub counters 0 |
+| 2000 SMP + Verifier | CP1 S3 | rel | NOT MAKEABLE | the Cirrus display driver vetoes standby (`sby2`) |
+| 2000 SMP + Verifier | CP1 S4 | rel | PASS | hibernate and resume; composite, hub, tablet, mouse started (`hb-ls.txt`); `TONE.WAV` full 20 s after; tablet reports flow; no Verifier stop |
+| 2000 SMP + Verifier | warm restart, mode 2 | rel | OPEN (very slow boot) | mode 2 + switch 1: > 14 min at "Starting up"; mode 2 alone 10.5 min, mode 0 5 min; cold launch normal (`hang*-regs.txt`, `wr-ls.txt`) |
+| 2000 SMP + Verifier | verifier end | rel | PASS | 136 allocations, all special pool, `AllocationsFailed` 0, no violation, no bugcheck (`verifier-end.txt`, `wr-end.txt`) |
+| XP SP3 | I1-I4, SB1 | rel | PASS | i.bat install, bc clean (`i1.txt`); values (`rk-r.txt`); delivery/reason 1/1; 26 of 162 named; "promotion off"; stage B "not read", fc clean (`i3.txt`, `sb1f.txt`) |
+| XP SP3 | WideMap=1 | rel | PASS | default: promoted 0, stage-1 chunks (`b3w0.txt`); `XhciWideMap` 1: check passed, promoted 1024, big blocks 3, Td512/513 0/0 at 1 MiB, VERIFY 1M and 2M `-skew 512` 0 bad |
+| XP SP3 | SB2 | rel | PASS | DNCTRL `0x0002`; `susp.ss.cap` per SuperSpeed configuration (UAS, BOT); `SsSuspCapFailed` 2; Ss 1; fc and UAS VERIFY clean (`sb2.txt`) |
+| XP SP3 | SB3 | rel | PASS | client on 46F4:0001; WW `0xC00000BB`; D2 `00102110`, PLS 3 at two readings 74 ticks apart; D0 `00120250`, PLS 0 (`sb3a-c.txt`) |
+| XP SP3 | SB4 | rel | PASS (ACTIVE, SUSPENDED); mid-D2 NOT MAKEABLE | clean removals; four mid-D2 tries all found D2 finished (`sb4a-f.txt`) |
+| XP SP3 | SB5, SB6, SB7 | rel | PASS | dc/ec while SUSPENDED, back (`sb5a.txt`, `sb5b.txt`); mode 2 D2/D0 (`sb6.txt`); bench-only counters 0 |
+| XP SP3 | CP1 S4 | rel (Cirrus, -Tag h) | PASS | hibernate and resume; 8 devnodes started, `CompositeParents` 2; mouse and hub tablet move; `TONE.WAV` full 20 s after (`cp1post.txt`) |
+| XP SP3 | CP1 trace | qemu | PASS (ruling) | `00000504` x2 on sleep (`debugcon-4.log`), `00000101` x2 on wake (`debugcon-5.log`); all started (`qpost.txt`) |
+| XP x64 | I1-I4 | rel | PASS | install, bc clean (`i1.txt`); values (`rk-r.txt`); delivery/reason 1/1; extension 132944 bytes matches; 26 of 162 named; "promotion off" (`i3.txt`) |
+| XP x64 | WideMap=1 | rel | PASS | default promoted 0 (`b3w0.txt`); at 1: check passed, promoted 1024, big blocks 3, VERIFY 1M / 2M `-skew 512` / 2M 0 bad |
+| XP x64 | CP1 S4 | rel | PASS | hibernate offered with standard VGA; resume, all started, fc clean, `CompositeParents` 2; tablet and mouse move; `TONE.WAV` full 20 s (`audio-2.wav`) |
+| Vista x86 | I1-I4 | rel | PASS | pnputil, restart asked as documented, bc clean (`i1-post.txt`); values; MSI delivery 3 reason 0A; `MsiRoutines` 2, `MsiMessages` 1; "promotion off" (`i3.txt`) |
+| Vista x86 | CP1 S4 | rel | PASS | hibernate only offered; resume, all started, `CompositeParents` 1 to 2, MSI kept, no failure counter |
+| Vista x86 | V1 | rel | PASS | Verifier on `xhci98.sys` + `xhcimsi.sys` with audio + hub (mouse behind) at boot: desktop, MSI, fc clean, mouse, dc/ec, no bugcheck; `AllocationsFailed` 0 (`v-after.txt`) |
+| Vista x86 | CP1 trace | qemu | PASS | D3 asked on sleep and D0 on wake per parent FDO (`q-sleep-trace.txt`); all started after (`q-ls-after.txt`) |
+| Vista x64 | I1-I4 | rel | PASS | pnputil under F8, no restart, bc clean; MSI delivery 3; `MsiRoutines` 1, `MsiMessages` 1 (`i3.txt`) |
+| Vista x64 | CP1 S4 | rel | PASS | hibernate; resume, all started, `CompositeParents` 1 to 2, MSI kept |
+| Vista x64 | V1 | rel | PASS | Verifier on `xhci98.sys` with audio + hub at boot: desktop, MSI, fc clean, dc/ec, no bugcheck; `AllocationsFailed` 0 (`v-after.txt`) |
+| Vista x64 | CP1 trace | qemu | PASS | D3/D0 per parent FDO; all started, hub mouse moves (`q-ls-after.txt`) |
+| 7 x86 | I1-I4, SB1 | rel | PASS | pnputil, Code 28 until the restart (known), bc clean both files; MSI delivery 3, `MsiRoutines` 2; switch 0 as before (`i1-post.txt`, `i3.txt`) |
+| 7 x86 | CP1 S4 | rel | PASS (audio speed: see AUD-W7) | hibernate; resume, devices and hub tablet work, MSI kept (`cp1.txt`) |
+| 7 x86 | SB3-SB7 | rel | PASS (SB4 mid-D2 NOT MAKEABLE) | D2 `00102110` PLS 3 held 26 s, D0 `00120250` (`sb3c`); clean removals, dc/ec while D2 (`sb5-after.txt`), mode 2 (`sb6a-c`); bench-only counters 0 |
+| 7 x86 | CP1 trace | qemu | PASS (ruling) | `00000504` x2, `00000101` x2; all started, fc clean (`qcp1-post.txt`) |
+| 7 x86 | AUD-W7 | rel | FAIL (routed to p36-aud) | `TONE.WAV` 20 s took 63 s; 3 plays `IsoPacketsAnswered` 14546, Ring Underrun 11 (`cp1.txt`) |
+| 7 x64 | I1-I4, SB1, SB2 | rel | PASS | install under F8, bc clean; MSI delivery 3, `MsiRoutines` 1; switch 0 as before; switch 1: DNCTRL `0x0002`, one `susp.ss.cap`, `SsSuspCapFailed` 1, Ss 1, `SuspSwitchRead` named (`sb2.txt`) |
+| 7 x64 | WideMap=1 | rel | PASS | check passed, promoted 256, wide entries 8; VERIFY clean at 1 MiB and 2 MiB (`wm-*.txt`) |
+| 7 x64 | CP1 S4 | rel | PASS | hibernate; all started, fc clean, hub tablet moves; `TONE.WAV` 20.6 s right after |
+| 7 x64 | V1 | rel | PASS | Verifier /standard on `xhci98.sys` with audio + hub at boot: desktop, MSI, fc clean, dc/ec, no bugcheck, 206119 allocations, 0 failed (`v1-after.txt`) |
+| 7 x64 | CP1 trace | qemu | PASS (ruling) | `00000504` x2, `00000101` x2 (`debugcon-4.log` 74-75); all started (`qcp1-post.txt`) |
+| 7 x64 | AUD-W7 | rel | FAIL (routed to p36-aud) | 20 s tone in 106 s, 8290 packets (`aud1.txt`); quiet host 0 of 6 normal (`ctl-mtx2-times.txt`) |
+| 7 x64 | AUD-CTL (wave 3 `2d0de39`) | rel / qemu | normal on rel, 1 slow of 2 on qemu | `release` 6 of 6 at about 20 s, about 20100 packets each (`ctl-int3-times.txt`); `qemu` trace of a slow play: Ring Underrun, then a 41 s stall (`tr3q-ts.log`) |
+
+**Owed to the stamped run** (the full matrix): every row this pass
+dropped, which is all of the checklist's rows except those above. These
+include:
+- `XhciWideMap` default 0 against 1 on every guest, and 36.26 set 5b;
+- B11 with the `Control\usbstor` path (M-4) and the XP x64 `XHCISNAP` dump (M-3);
+- 98 SE 36.46 L5 with every wizard finished;
+- wave 3's not-run rows;
+- Verifier V1 on 7 x86;
+- the Vista/7 Device Manager power data.
+
+It also owes stage A's 36.35 rows, 36.28 part 2, the 36.41 re-measure,
+and the VIA fix's rows. On top of those: the 98 SE standby and Windows 7
+audio rows again after their fixes, and the 2000 SMP mode-2 warm restart
+on a quiet host.
