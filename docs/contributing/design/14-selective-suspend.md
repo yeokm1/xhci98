@@ -614,6 +614,19 @@ SuperSpeed PDO, the idle IRP is held as before (`hcd_urb.c`, its own slot
   thread, which deletes only the latter, never waits on a callback, and a
   rundown found unfinished at a deletion is the quarantine (the object is
   kept) rather than a deferred-delete list.
+- **The thread's completions** (36.35's fix): the enum thread, and the
+  power path holding the power gate, complete no power or idle IRP
+  themselves. A completion runs the client's code, which on Windows 98
+  may ask for another power IRP and wait for it - and that IRP may need
+  the thread (98 SE: a wake's WAIT_WAKE completed in the pass, the
+  client's callback asked D0 and waited, and the thread never finished
+  the resume). Every IRP they claim is completed at PASSIVE_LEVEL by a
+  system work item of its own (`hcdSuspDefer`, the item in the IRP's
+  `DriverContext`): D-IRPs on the critical queue, WAIT_WAKEs and idle IRPs
+  on the delayed one, so a callback waiting for a D0 never holds the D0's
+  completion. Its claimed status is fixed at the claim; the IRP keeps its
+  `PowerPending` or `IdlePending` count until the completion; the stop
+  waits for every item (`HcdSuspDoneDrain`).
 - **The controller's stop** runs the handoff (`HcdSuspCbStop`) after the
   enum thread has exited and the devices are dropped (their slots settled
   at the unlink): steps (1) to (5) as 4.4 has them.
@@ -901,8 +914,10 @@ Teardown completes it `STATUS_NO_SUCH_DEVICE` (removal, GONE) or
   event, the thread reads `hc->WakeSeq` as the event's watermark and claims
   (4.2's handshake) every WAIT_WAKE of the device's PDOs whose stamp
   precedes it (signed 32-bit difference, so wraparound is harmless) and
-  whose `PwrState` is D1 or D2, and **completes them `STATUS_SUCCESS` at
-  once**, before the resume - a WAIT_WAKE completes when the wake is
+  whose `PwrState` is D1 or D2, and **completes them `STATUS_SUCCESS`** -
+  the claim and its status fixed in that hold, the completion itself made
+  by a work item of the IRP's own outside the thread (3.12, the thread's
+  completions), so it may land before, during or after the resume - a WAIT_WAKE completes when the wake is
   signalled, as usbhub's do. There is no interval between claim and
   completion to own, and a resume that then fails or a GONE that follows
   changes nothing for them: the function's D0 pends until ACTIVE or GONE

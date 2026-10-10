@@ -321,6 +321,116 @@ static VOID hcdSuspTake(PHCD_SUSP_TAKEN t, PHCD_DEVICE_PDO pdo, PIRP irp,
     }
 }
 
+/*
+ * The enum thread never completes a power or idle IRP itself (36.35's
+ * 98 SE reading: after a remote wake the thread completed the WAIT_WAKE
+ * inside its pass, the client's callback asked D0 at once, and the thread
+ * never came back to finish the resume - the port left in Resume, the
+ * door blocked on the power gate the pass holds). A completion runs the
+ * client's code, which may ask for another power IRP and, on Windows 98,
+ * wait for it; that IRP needs this very thread. So an IRP the thread (or
+ * the power path, holding the gate) claims is completed at PASSIVE_LEVEL
+ * by a system work item of its own, outside every gate and lock - one per
+ * IRP, so a callback that waits for a D0 holds only its own item, never
+ * the D0's completion (Codex review of the fix, round 1, finding 1): a
+ * D-IRP's on the critical work queue, a WAIT_WAKE's and an idle IRP's on
+ * the delayed one, so a waiting callback cannot hold up the D-IRP it waits
+ * for even where each queue has a single thread. The item lives in the
+ * claimed IRP's DriverContext (its cancel routine, which used it, is
+ * excluded by the claim); the kind and the controller ride in
+ * Tail.Overlay.ListEntry and the status in IoStatus.Information until the
+ * completion. The IRP keeps its PowerPending or IdlePending count until
+ * then, which the PDO's REMOVE and rundown wait for, and SuspDoneBusy
+ * counts the items, which the stop waits out (HcdSuspDoneDrain).
+ */
+#define HCD_SUSP_DONE_POWER     1UL     /* a D-IRP; the value its D0 flag */
+#define HCD_SUSP_DONE_WAKE      2UL
+#define HCD_SUSP_DONE_IDLE      3UL
+
+static VOID NTAPI hcdSuspDoneWork(PVOID context)
+{
+    PHCD_CONTROLLER hc;
+    PHCD_DEVICE_PDO pdo;
+    PIRP irp;
+    ULONG kind;
+    ULONG_PTR value;
+
+    irp = (PIRP)context;
+    kind = (ULONG)(ULONG_PTR)irp->Tail.Overlay.ListEntry.Flink;
+    hc = (PHCD_CONTROLLER)irp->Tail.Overlay.ListEntry.Blink;
+    value = irp->IoStatus.Information;
+    irp->IoStatus.Information = 0;
+    irp->Tail.Overlay.ListEntry.Flink = NULL;
+    irp->Tail.Overlay.ListEntry.Blink = NULL;
+    pdo = (PHCD_DEVICE_PDO)IoGetCurrentIrpStackLocation(irp)
+              ->DeviceObject->DeviceExtension;
+    switch (kind) {
+    case HCD_SUSP_DONE_POWER:
+        hcdSuspCompletePower(pdo, irp, (ULONG)value);
+        break;
+    case HCD_SUSP_DONE_WAKE:
+        hcdSuspCompleteWake(pdo, irp, (NTSTATUS)value);
+        break;
+    default:
+        (VOID)HcdCompleteIrp(irp, (NTSTATUS)value, 0);
+        (VOID)InterlockedDecrement(&pdo->IdlePending);
+        break;
+    }
+    /* Last: the stop frees nothing of the controller before it reads 0. */
+    (VOID)InterlockedDecrement(&hc->SuspDoneBusy);
+}
+
+XHCI_C_ASSERT(susp_done_item,
+              sizeof(WORK_QUEUE_ITEM) <=
+                  sizeof(((PIRP)0)->Tail.Overlay.DriverContext));
+
+/* A claimed IRP handed to its own work item. `pdo` is the IRP's current
+ * stack location's (the work item reads it back from there). IRQL: <=
+ * DISPATCH_LEVEL. */
+static VOID hcdSuspDefer(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo, PIRP irp,
+                         ULONG kind, ULONG_PTR value)
+{
+    PWORK_QUEUE_ITEM item;
+
+    UNREFERENCED_PARAMETER(pdo);
+    irp->Tail.Overlay.ListEntry.Flink = (PLIST_ENTRY)(ULONG_PTR)kind;
+    irp->Tail.Overlay.ListEntry.Blink = (PLIST_ENTRY)hc;
+    irp->IoStatus.Information = value;
+    (VOID)InterlockedIncrement(&hc->SuspDoneBusy);
+    item = (PWORK_QUEUE_ITEM)&irp->Tail.Overlay.DriverContext[0];
+    ExInitializeWorkItem(item, hcdSuspDoneWork, irp);
+    ExQueueWorkItem(item, (kind == HCD_SUSP_DONE_POWER) ? CriticalWorkQueue
+                                                         : DelayedWorkQueue);
+}
+
+/* The thread's claims, deferred (a START's report, no IRP, made here). */
+static VOID hcdSuspFinishT(PHCD_CONTROLLER hc, PHCD_SUSP_TAKEN t)
+{
+    ULONG i;
+
+    for (i = 0; i < t->Count; i++) {
+        switch (t->Kind[i]) {
+        case HCD_SUSP_TAKE_DX:
+        case HCD_SUSP_TAKE_D0:
+            hcdSuspDefer(hc, t->Pdo[i], t->Irp[i], HCD_SUSP_DONE_POWER,
+                         (t->Kind[i] == HCD_SUSP_TAKE_D0) ? 1 : 0);
+            break;
+        case HCD_SUSP_TAKE_WAKE_OK:
+            hcdSuspDefer(hc, t->Pdo[i], t->Irp[i], HCD_SUSP_DONE_WAKE,
+                         (ULONG_PTR)STATUS_SUCCESS);
+            break;
+        case HCD_SUSP_TAKE_REPORT:
+            hcdSuspReportD0(t->Pdo[i]);
+            break;
+        default:
+            hcdSuspDefer(hc, t->Pdo[i], t->Irp[i], HCD_SUSP_DONE_WAKE,
+                         (ULONG_PTR)STATUS_NOT_SUPPORTED);
+            break;
+        }
+    }
+    t->Count = 0;
+}
+
 static VOID hcdSuspFinish(PHCD_SUSP_TAKEN t)
 {
     ULONG i;
@@ -450,6 +560,23 @@ static VOID hcdSuspIFinish(PHCD_SUSP_ITAKEN t)
             (VOID)HcdCompleteIrp(t->Irp[i], t->Status[i], 0);
         }
         (VOID)InterlockedDecrement(&t->Pdo[i]->IdlePending);
+    }
+    t->Count = 0;
+}
+
+/* The thread's idle settlements, deferred as hcdSuspFinishT's; an entry's
+ * reference is let go here (its IRP keeps its own until completed). */
+static VOID hcdSuspIFinishT(PHCD_CONTROLLER hc, PHCD_SUSP_ITAKEN t)
+{
+    ULONG i;
+
+    for (i = 0; i < t->Count; i++) {
+        if (t->Irp[i] != NULL) {
+            hcdSuspDefer(hc, t->Pdo[i], t->Irp[i], HCD_SUSP_DONE_IDLE,
+                         (ULONG_PTR)t->Status[i]);
+        } else {
+            (VOID)InterlockedDecrement(&t->Pdo[i]->IdlePending);
+        }
     }
     t->Count = 0;
 }
@@ -1104,8 +1231,8 @@ static ULONG hcdSuspRun(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG step,
             hcdSuspClaimDue(hc, dev, &taken);
         }
         XhciControllerLockRelease(&hc->Hc, oldIrql);
-        hcdSuspFinish(&taken);
-        hcdSuspIFinish(&itaken);
+        hcdSuspFinishT(hc, &taken);
+        hcdSuspIFinishT(hc, &itaken);
     }
     XHCI_DBG_VALUE("hcd: suspend sequence, slot/kind/outcome/state",
                    (dev->SlotId << 24) | (dev->Susp.Kind << 16) |
@@ -1261,8 +1388,8 @@ static ULONG hcdSuspDecideOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         batch = hcdSuspIdleBatchLocked(hc, dev);
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
-    hcdSuspFinish(&taken);
-    hcdSuspIFinish(&itaken);
+    hcdSuspFinishT(hc, &taken);
+    hcdSuspIFinishT(hc, &itaken);
     if (batch) {
         hcdSuspCbKick(hc);
     }
@@ -1341,7 +1468,7 @@ static VOID hcdSuspSample(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         dev->SuspWakeDue = 1;
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
-    hcdSuspFinish(&taken);
+    hcdSuspFinishT(hc, &taken);
     if (event == XHCI_SUSP_EV_DISCONNECT &&
         dev->Susp.State == XHCI_SUSP_GONE && hcdSuspPdo(dev->Pdo) != NULL) {
         /* Gone to the machine: dropped through the cycle, which an unplug
@@ -1978,10 +2105,36 @@ ULONG HcdSuspUnlinkLocked(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo,
                : 0UL;
 }
 
-/* IRQL: PASSIVE_LEVEL. */
-VOID HcdSuspUnlinkFinish(PHCD_SUSP_SETTLE s)
+/* The unlink's claims, deferred: the thread (or the stop's device drop)
+ * completes nothing itself. IRQL: PASSIVE_LEVEL. */
+VOID HcdSuspUnlinkFinish(PHCD_CONTROLLER hc, PHCD_SUSP_SETTLE s)
 {
-    hcdSuspSlotFinish(s, STATUS_NO_SUCH_DEVICE);
+    if (s->Pwr != NULL) {
+        hcdSuspDefer(hc, s->Pdo, s->Pwr, HCD_SUSP_DONE_POWER, s->PwrD0);
+    }
+    if (s->Wake != NULL) {
+        hcdSuspDefer(hc, s->Pdo, s->Wake, HCD_SUSP_DONE_WAKE,
+                     (ULONG_PTR)STATUS_NO_SUCH_DEVICE);
+    }
+    if (s->Idle != NULL) {
+        hcdSuspDefer(hc, s->Pdo, s->Idle, HCD_SUSP_DONE_IDLE,
+                     (ULONG_PTR)STATUS_CANCELLED);
+    }
+    if (s->IdleEntry) {
+        (VOID)InterlockedDecrement(&s->Pdo->IdlePending);
+    }
+}
+
+/* Every deferred completion done and the work item returned (the stop,
+ * before the controller's storage can go). IRQL: PASSIVE_LEVEL. */
+VOID HcdSuspDoneDrain(PHCD_CONTROLLER hc)
+{
+    LARGE_INTEGER due;
+
+    while (hc->SuspDoneBusy != 0) {
+        HcdRelativeMs(&due, 1);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -2044,7 +2197,9 @@ VOID HcdSuspSettleStale(PHCD_CONTROLLER hc)
         }
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         KeReleaseSpinLock(&hc->PdoListLock, listIrql);
-        hcdSuspFinish(&taken);
+        /* Under the power gate: completed by work items, as the thread's
+         * (Codex review of the fix, round 1, finding 2). */
+        hcdSuspFinishT(hc, &taken);
     }
 }
 
@@ -2653,6 +2808,9 @@ NTSTATUS HcdSuspCbStart(PHCD_CONTROLLER hc)
     InitializeListHead(&hc->IdleQueue);
     hc->SuspCb = NULL;
     hc->SuspNotes = 0;
+    /* The thread's deferred completions (hcdSuspDefer); the last stop
+     * drained them (HcdSuspDoneDrain). */
+    hc->SuspDoneBusy = 0;
     if (!hc->SuspOn) {
         return STATUS_SUCCESS;
     }

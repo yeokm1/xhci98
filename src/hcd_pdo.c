@@ -1887,7 +1887,7 @@ ULONG HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     }
     KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
     for (i = 0; i < settles; i++) {
-        HcdSuspUnlinkFinish(&settle[i]);
+        HcdSuspUnlinkFinish(hc, &settle[i]);
     }
 
     while (doomed != NULL) {
