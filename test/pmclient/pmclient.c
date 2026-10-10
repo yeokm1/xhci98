@@ -516,6 +516,13 @@ static VOID pmPowerRelease(PPM_EXT ext)
     KeAcquireSpinLock(&ext->Lock, &irql);
     ext->PowerTarget = 0;
     for (;;) {
+        if (ext->PowerTarget != 0) {
+            /* Another request took the slot while this drain completed
+             * satisfied work unlocked: the rest is its owner's (Codex
+             * review of 36.34, round 6). */
+            KeReleaseSpinLock(&ext->Lock, irql);
+            return;
+        }
         sirp = ext->DeferredSIrp;
         sd = ext->DeferredSState;
         wd = 0;
