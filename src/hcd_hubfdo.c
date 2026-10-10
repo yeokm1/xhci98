@@ -376,7 +376,8 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
  *   - the rest goes down untouched.
  *
  * The Windows 98 rules (win98-wdm.md, "Power Management"): no request for
- * the state the stack is already in; PoSetPowerState's return unused; the
+ * the state the stack is already in on 98 and ME (on NT that state is
+ * requested again, as WDM asks); PoSetPowerState's return unused; the
  * system IRP completed at PASSIVE_LEVEL - through the work item when the
  * device IRP finished above it, which this driver's own PDO, completing
  * every power IRP of a hub or a composite inline, never does. The system
@@ -447,7 +448,8 @@ static NTSTATUS NTAPI hcdHubSystemDone(PDEVICE_OBJECT DeviceObject,
     want = XhciSuspParentWant(
         ok, fdo->Common.PnpState == HCD_PNP_STARTED ? 1UL : 0UL,
         fdo->Common.SystemPower == PowerSystemWorking ? 1UL : 0UL,
-        (ULONG)fdo->Common.DevicePower);
+        (ULONG)fdo->Common.DevicePower,
+        IoIsWdmVersionAvailable(1, 0x10) ? 1UL : 0UL);
     XHCI_DBG_VALUE("hcd: parent FDO system state, device state asked",
                    ((ULONG)fdo->Common.SystemPower << 8) | want);
     if (want != 0) {

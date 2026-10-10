@@ -4208,13 +4208,18 @@ before it goes down and D0 once it has come back up; `START` records D0
 and reports it, at the FDO and (inside `HcdSuspPdoReopen`'s report mutex,
 the switch at 0 too) at a hub's or a composite's PDO. The decision is the
 pure `XhciSuspParentWant` (`xhci_susp.c`; `test_susp`): no request after a
-failed system IRP or before a start, and none for the state the stack
-already has. **Why the stack follows the capabilities and not the
-reverse:** the other way to make them agree would be `DeviceState[Sx]`
-reading D0 (or unspecified) - a claim no USB device can keep, its bus being
-unpowered in every sleep state, shown in Device Manager's power data, and
-unlike what `usbhub` reports for every hub and device on every target -
-whereas the request is the WDM policy owner's standard sequence, the one a
+failed system IRP or before a start; on 98 and ME none for the state the
+stack already has, while on NT that state is requested again, as WDM asks
+of a policy owner (an S0 reasserted after a sleep that failed; Codex
+review, round 1, P3 1). **Why the stack follows the capabilities and not
+the reverse:** the existing D3 mapping is the conservative one - a
+suspended USB device keeps no working state across a sleep, whether or not
+its port keeps VBUS (it may in S1 and S3) - and it is what `usbhub`
+reports for every hub and device on every target; changing the logical
+parents' capabilities (to D0, which claims the device stays working, or to
+unspecified, which marks the sleep state unsupported) would be a separate
+design choice that fixes nothing (round 1, P3 2). Implementing the
+mapping's policy owner is the WDM standard sequence, the one a
 hub driver runs (`usbhub` imports `PoRequestPowerIrp` on 98 SE, Appendix A
 row 53) and this driver's controller FDO already runs on every target
 (`hcd_power.c`), at one request per system transition. **Order:** on NT
@@ -4227,7 +4232,8 @@ is not read here and need not be: both parents' device states are logical
 parent PDO's D-state, and the physical order is kept at the controller
 (`PowerGate`, `hcd_power.c`) and at the link (`XhciSuspAdmit`). **The 9x
 rules** (win98-wdm.md, "Power Management"): no request for the present
-state (the pure decision), `PoSetPowerState`'s return never used, and the
+state there (the pure decision, told 9x by `IoIsWdmVersionAvailable(1,
+0x10)` as elsewhere in this driver), `PoSetPowerState`'s return never used, and the
 system IRP completed at PASSIVE_LEVEL - from the callback when it runs
 there, which it does under this driver's own PDO (every power IRP of a
 parent completed inline), else from a work item. The system IRP and a D0

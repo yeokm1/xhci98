@@ -2143,23 +2143,34 @@ static void test_door_serves(void)
 }
 
 /* A parent stack's system power (design record 13 section 10.12): the
- * hub or composite FDO asks D3 for any sleep state and D0 for S0, never
- * the state its stack already has, and nothing after a failed system IRP
- * or when not started. */
+ * hub or composite FDO asks D3 for any sleep state and D0 for S0; on 9x
+ * never the state its stack already has, on NT that state again (Codex
+ * round 1, P3 1); nothing after a failed system IRP or when not started. */
 static void test_parent_want(void)
 {
-    CHECK_EQ(XhciSuspParentWant(1, 1, 0, D0), D3, "S0 to Sx from D0: D3");
-    CHECK_EQ(XhciSuspParentWant(1, 1, 1, D3), D0, "Sx to S0 from D3: D0");
-    CHECK_EQ(XhciSuspParentWant(1, 1, 0, D3), 0,
-             "Sx already at D3: no same-state request (9x)");
-    CHECK_EQ(XhciSuspParentWant(1, 1, 1, D0), 0,
-             "S0 already at D0: no same-state request (9x)");
-    CHECK_EQ(XhciSuspParentWant(1, 1, 0, D2), D3, "Sx from D2: D3");
-    CHECK_EQ(XhciSuspParentWant(1, 1, 1, D2), D0, "S0 from D2: D0");
-    CHECK_EQ(XhciSuspParentWant(0, 1, 0, D0), 0, "failed system IRP");
-    CHECK_EQ(XhciSuspParentWant(0, 1, 1, D3), 0, "failed system IRP at S0");
-    CHECK_EQ(XhciSuspParentWant(1, 0, 0, D0), 0, "not started");
-    CHECK_EQ(XhciSuspParentWant(1, 0, 1, D3), 0, "not started at S0");
+    ULONG nt;
+
+    for (nt = 0; nt <= 1; nt++) {
+        CHECK_EQ(XhciSuspParentWant(1, 1, 0, D0, nt), D3,
+                 "S0 to Sx from D0: D3");
+        CHECK_EQ(XhciSuspParentWant(1, 1, 1, D3, nt), D0,
+                 "Sx to S0 from D3: D0");
+        CHECK_EQ(XhciSuspParentWant(1, 1, 0, D2, nt), D3, "Sx from D2: D3");
+        CHECK_EQ(XhciSuspParentWant(1, 1, 1, D2, nt), D0, "S0 from D2: D0");
+        CHECK_EQ(XhciSuspParentWant(0, 1, 0, D0, nt), 0, "failed system IRP");
+        CHECK_EQ(XhciSuspParentWant(0, 1, 1, D3, nt), 0,
+                 "failed system IRP at S0");
+        CHECK_EQ(XhciSuspParentWant(1, 0, 0, D0, nt), 0, "not started");
+        CHECK_EQ(XhciSuspParentWant(1, 0, 1, D3, nt), 0, "not started at S0");
+    }
+    CHECK_EQ(XhciSuspParentWant(1, 1, 0, D3, 0), 0,
+             "9x, Sx already at D3: no same-state request");
+    CHECK_EQ(XhciSuspParentWant(1, 1, 1, D0, 0), 0,
+             "9x, S0 already at D0: no same-state request");
+    CHECK_EQ(XhciSuspParentWant(1, 1, 0, D3, 1), D3,
+             "NT, Sx already at D3: D3 reasserted");
+    CHECK_EQ(XhciSuspParentWant(1, 1, 1, D0, 1), D0,
+             "NT, S0 after a failed sleep: D0 reasserted");
 }
 
 int main(void)

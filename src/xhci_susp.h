@@ -583,11 +583,13 @@ ULONG XhciSuspFinalize(const XHCI_SUSP_FIN_IN *in);
  * own stack once a system SET_POWER has come back up its stack: D0 for
  * S0 (systemWorking), D3 for every other system state - the DeviceState[]
  * its PDO's capabilities give - and 0, no request, when the system IRP
- * failed, the FDO is not started, or the stack is already in that state
- * (Windows 98's PoRequestPowerIrp for the present state pends and never
- * delivers). `current` is the FDO's recorded state, XHCI_SUSP_D0..D3. Not
- * stage A's: it holds with the switch at 0 too. */
+ * failed, the FDO is not started, or - on Windows 98 and ME only (`nt`
+ * 0) - the stack is already in that state (their PoRequestPowerIrp for
+ * the present state pends and never delivers). On NT the same state is
+ * requested again, as WDM asks of a policy owner (an S0 reasserted after
+ * a failed sleep). `current` is the FDO's recorded state,
+ * XHCI_SUSP_D0..D3. Not stage A's: it holds with the switch at 0 too. */
 ULONG XhciSuspParentWant(ULONG irpOk, ULONG started, ULONG systemWorking,
-                         ULONG current);
+                         ULONG current, ULONG nt);
 
 #endif /* XHCI_SUSP_H */

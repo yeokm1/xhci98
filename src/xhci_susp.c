@@ -1009,7 +1009,7 @@ ULONG XhciSuspFinalize(const XHCI_SUSP_FIN_IN *in)
 /* ------------------------------------------------------------------ */
 
 ULONG XhciSuspParentWant(ULONG irpOk, ULONG started, ULONG systemWorking,
-                         ULONG current)
+                         ULONG current, ULONG nt)
 {
     ULONG want;
 
@@ -1017,5 +1017,5 @@ ULONG XhciSuspParentWant(ULONG irpOk, ULONG started, ULONG systemWorking,
         return 0;
     }
     want = systemWorking ? XHCI_SUSP_D0 : XHCI_SUSP_D3;
-    return (want == current) ? 0UL : want;
+    return (!nt && want == current) ? 0UL : want;
 }
