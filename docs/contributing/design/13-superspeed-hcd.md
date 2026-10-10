@@ -1353,8 +1353,10 @@ the IN endpoint at Low Speed Interval 6 (`bInterval` 10 ms rounded down to
 be a legal Low-Speed interrupt OUT endpoint by the same rules (DCI 2,
 Interval 6); hidusbf's rewritten `bInterval` reaches the counted endpoint on
 both the whole-device and the function path (section 13.7); and the 239-byte
-report descriptor read over an 8-byte EP0 is one Data Stage TRB (or two
-across a page, TD Size 14 then 0) with ISP set, the short-packet handling
+report descriptor read over an 8-byte EP0 is one Data Stage TRB, or across
+a page a Data Stage TRB chained to a Normal TRB whose TD Size counts the
+8-byte packets left (14 then 0 for the tested 128/111-byte split), each
+with ISP set, the short-packet handling
 the control path already has.
 
 **The rule now.** An interface's endpoints are its first `bNumEndpoints`
@@ -1369,7 +1371,11 @@ source, not a disassembly), and the request a class driver sends is already
 sized by it, since `usbd.sys`'s `USBD_CreateConfigurationRequestEx` gives
 each interface `bNumEndpoints` pipe records; counting the surplus would have
 answered that request `USBD_STATUS_BUFFER_TOO_SMALL` instead. The class
-driver gets the same pipe set Microsoft's stack gave it.
+driver gets the same pipe set Microsoft's stack gave it. `xhciuas.sys`'s
+own walk (`UasParseConfig`, `src/uas/uas_iu.c`) keeps the same boundary:
+an endpoint past `bNumEndpoints`, and the companion and Pipe Usage
+descriptors after it, name no UAS pipe and make the setting no SuperSpeed
+one (`test_uas`).
 
 **What stays refused**, because usbport's tolerance there would program
 garbage or the walk could not be trusted: fewer endpoint descriptors than

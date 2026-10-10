@@ -334,6 +334,33 @@ static void test_config(void)
 
     CHECK_EQ(UasParseConfig(hsCfg, 8, &info), UAS_CFG_MALFORMED,
              "shorter than a configuration descriptor");
+
+    /* Task 36.46: an endpoint past bNumEndpoints, with a companion and a
+     * Pipe Usage after it, is no pipe of the setting (the bus opens four)
+     * and lends it neither SuperSpeed nor a usage (Codex round 1). */
+    {
+        static const UCHAR tail[] = {
+            0x07, 0x05, 0x05, 0x02, 0x00, 0x02, 0x00,
+            0x06, 0x30, 0x00, 0x00, 0x00, 0x00,
+            0x04, 0x24, 0x03, 0x00 };
+        UCHAR more[sizeof(hsCfg) + sizeof(tail)];
+
+        memcpy(more, hsCfg, sizeof(hsCfg));
+        memcpy(more + sizeof(hsCfg), tail, sizeof(tail));
+        more[2] = (UCHAR)sizeof(more);
+        CHECK_EQ(UasParseConfig(more, sizeof(more), &info), UAS_CFG_OK,
+                 "36.46: a surplus endpoint after the four");
+        CHECK(!info.SuperSpeed, "its companion is not the setting's");
+        CHECK_EQ(info.EndpointAddress[UAS_PIPE_DATA_IN - 1], 0x83,
+                 "its usage does not rename data-in");
+
+        /* bNumEndpoints 3: data-out is surplus, so no pipe is named
+         * data-out, as the bus would open only three. */
+        memcpy(more, hsCfg, sizeof(hsCfg));
+        more[32 + 4] = 3;
+        CHECK_EQ(UasParseConfig(more, sizeof(hsCfg), &info),
+                 UAS_CFG_BAD_PIPES, "36.46: data-out past bNumEndpoints 3");
+    }
 }
 
 /* ------------------------------------------------------------------ */

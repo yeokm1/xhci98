@@ -256,7 +256,10 @@ ULONG UasIuParse(const UCHAR *buf, ULONG length, PUAS_IU_INFO info)
  * Pipe Usage descriptor, which follows the endpoint (after its SuperSpeed
  * companion, when there is one). A companion's bmAttributes bits 4:0 are
  * MaxStreams, the exponent of the streams the endpoint supports. The walk
- * stops at the next interface descriptor.
+ * stops at the next interface descriptor. Only the first bNumEndpoints
+ * endpoint descriptors are the setting's, as the bus opens them (task
+ * 36.46, XhciPipeFindInterface): one past them, and the companion and Pipe
+ * Usage descriptors that follow it, describe no pipe and are ignored.
  */
 ULONG UasParseConfig(const UCHAR *cfg, ULONG length, PUAS_CONFIG_INFO info)
 {
@@ -264,6 +267,7 @@ ULONG UasParseConfig(const UCHAR *cfg, ULONG length, PUAS_CONFIG_INFO info)
     ULONG len;
     ULONG type;
     ULONG found;
+    ULONG endpoints;
     ULONG lastEp;
     ULONG lastPacket;
     ULONG lastStreams;
@@ -278,6 +282,7 @@ ULONG UasParseConfig(const UCHAR *cfg, ULONG length, PUAS_CONFIG_INFO info)
     }
     at = cfg[0];
     found = 0;
+    endpoints = 0;
     haveEp = 0;
     lastEp = 0;
     lastPacket = 0;
@@ -300,7 +305,11 @@ ULONG UasParseConfig(const UCHAR *cfg, ULONG length, PUAS_CONFIG_INFO info)
                 info->AlternateSetting = cfg[at + 3];
                 info->EndpointCount = cfg[at + 4];
             }
+        } else if (found && type == UAS_DESC_ENDPOINT && len >= 7 &&
+                   endpoints >= info->EndpointCount) {
+            haveEp = 0;
         } else if (found && type == UAS_DESC_ENDPOINT && len >= 7) {
+            endpoints++;
             haveEp = 1;
             lastEp = cfg[at + 2];
             lastPacket = ((ULONG)cfg[at + 5] << 8 | cfg[at + 4]) & 0x7FF;
