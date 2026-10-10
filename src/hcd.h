@@ -1512,15 +1512,9 @@ typedef struct _HCD_CONTROLLER {
      * the port of the callback just claimed, noted outside the lock. */
     volatile LONG SuspNotes;
     ULONG SuspNoteCallPort;
-    /* The thread's claimed IRPs, completed by a system work item
-     * (hcd_susp.c, hcdSuspDefer): the list under SuspDoneLock, linked
-     * through each IRP; SuspDoneQueued while the item is queued or runs;
-     * SuspDoneBusy counts the IRPs on the list and the item itself.
-     * Initialized at the driver's AddDevice-time zeroing and each start. */
-    KSPIN_LOCK SuspDoneLock;
-    LIST_ENTRY SuspDone;
-    WORK_QUEUE_ITEM SuspDoneItem;
-    ULONG SuspDoneQueued;
+    /* The thread's claimed IRPs, each completed by a system work item of
+     * its own (hcd_susp.c, hcdSuspDefer): the items queued and not yet
+     * returned, which the stop waits out. */
     volatile LONG SuspDoneBusy;
     /* The transfer size (tasks 36.21 and 36.22; xhci_xstat.h, hcd_io.c):
      * the readings since the start, zeroed and the value latched by each

@@ -318,87 +318,79 @@ static VOID hcdSuspTake(PHCD_SUSP_TAKEN t, PHCD_DEVICE_PDO pdo, PIRP irp,
  * never came back to finish the resume - the port left in Resume, the
  * door blocked on the power gate the pass holds). A completion runs the
  * client's code, which may ask for another power IRP and, on Windows 98,
- * wait for it; that IRP needs this very thread. So an IRP the thread
- * claims goes to the controller's completion list, completed at
- * PASSIVE_LEVEL by a system work item, outside every gate and lock; the
- * IRP keeps its PowerPending or IdlePending count until then, which the
- * PDO's REMOVE and rundown wait for, and the stop waits for the list to
- * empty (HcdSuspDoneDrain). The list is linked through the claimed IRP's
- * Tail.Overlay.ListEntry; DriverContext holds its PDO, kind and status.
+ * wait for it; that IRP needs this very thread. So an IRP the thread (or
+ * the power path, holding the gate) claims is completed at PASSIVE_LEVEL
+ * by a system work item of its own, outside every gate and lock - one per
+ * IRP, so a callback that waits for a D0 holds only its own item, never
+ * the D0's completion (Codex review of the fix, round 1, finding 1): a
+ * D-IRP's on the critical work queue, a WAIT_WAKE's and an idle IRP's on
+ * the delayed one, so a waiting callback cannot hold up the D-IRP it waits
+ * for even where each queue has a single thread. The item lives in the
+ * claimed IRP's DriverContext (its cancel routine, which used it, is
+ * excluded by the claim); the kind and the controller ride in
+ * Tail.Overlay.ListEntry and the status in IoStatus.Information until the
+ * completion. The IRP keeps its PowerPending or IdlePending count until
+ * then, which the PDO's REMOVE and rundown wait for, and SuspDoneBusy
+ * counts the items, which the stop waits out (HcdSuspDoneDrain).
  */
-#define HCD_SUSP_DONE_POWER     1UL     /* a D-IRP; status the D0 flag    */
+#define HCD_SUSP_DONE_POWER     1UL     /* a D-IRP; the value its D0 flag */
 #define HCD_SUSP_DONE_WAKE      2UL
 #define HCD_SUSP_DONE_IDLE      3UL
 
 static VOID NTAPI hcdSuspDoneWork(PVOID context)
 {
     PHCD_CONTROLLER hc;
-    PLIST_ENTRY entry;
     PHCD_DEVICE_PDO pdo;
-    KIRQL oldIrql;
     PIRP irp;
     ULONG kind;
     ULONG_PTR value;
 
-    hc = (PHCD_CONTROLLER)context;
-    for (;;) {
-        KeAcquireSpinLock(&hc->SuspDoneLock, &oldIrql);
-        if (IsListEmpty(&hc->SuspDone)) {
-            hc->SuspDoneQueued = 0;
-            KeReleaseSpinLock(&hc->SuspDoneLock, oldIrql);
-            break;
-        }
-        entry = RemoveHeadList(&hc->SuspDone);
-        KeReleaseSpinLock(&hc->SuspDoneLock, oldIrql);
-        irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
-        pdo = (PHCD_DEVICE_PDO)irp->Tail.Overlay.DriverContext[0];
-        kind = (ULONG)(ULONG_PTR)irp->Tail.Overlay.DriverContext[1];
-        value = (ULONG_PTR)irp->Tail.Overlay.DriverContext[2];
-        irp->Tail.Overlay.DriverContext[0] = NULL;
-        irp->Tail.Overlay.DriverContext[1] = NULL;
-        irp->Tail.Overlay.DriverContext[2] = NULL;
-        switch (kind) {
-        case HCD_SUSP_DONE_POWER:
-            hcdSuspCompletePower(pdo, irp, (ULONG)value);
-            break;
-        case HCD_SUSP_DONE_WAKE:
-            hcdSuspCompleteWake(pdo, irp, (NTSTATUS)value);
-            break;
-        default:
-            (VOID)HcdCompleteIrp(irp, (NTSTATUS)value, 0);
-            (VOID)InterlockedDecrement(&pdo->IdlePending);
-            break;
-        }
-        (VOID)InterlockedDecrement(&hc->SuspDoneBusy);
+    irp = (PIRP)context;
+    kind = (ULONG)(ULONG_PTR)irp->Tail.Overlay.ListEntry.Flink;
+    hc = (PHCD_CONTROLLER)irp->Tail.Overlay.ListEntry.Blink;
+    value = irp->IoStatus.Information;
+    irp->IoStatus.Information = 0;
+    irp->Tail.Overlay.ListEntry.Flink = NULL;
+    irp->Tail.Overlay.ListEntry.Blink = NULL;
+    pdo = (PHCD_DEVICE_PDO)IoGetCurrentIrpStackLocation(irp)
+              ->DeviceObject->DeviceExtension;
+    switch (kind) {
+    case HCD_SUSP_DONE_POWER:
+        hcdSuspCompletePower(pdo, irp, (ULONG)value);
+        break;
+    case HCD_SUSP_DONE_WAKE:
+        hcdSuspCompleteWake(pdo, irp, (NTSTATUS)value);
+        break;
+    default:
+        (VOID)HcdCompleteIrp(irp, (NTSTATUS)value, 0);
+        (VOID)InterlockedDecrement(&pdo->IdlePending);
+        break;
     }
-    /* The work item's own count, last: the stop frees nothing of the
-     * controller before it reads 0. */
+    /* Last: the stop frees nothing of the controller before it reads 0. */
     (VOID)InterlockedDecrement(&hc->SuspDoneBusy);
 }
 
-/* A claimed IRP handed to the completion list. IRQL: <= DISPATCH_LEVEL. */
+XHCI_C_ASSERT(susp_done_item,
+              sizeof(WORK_QUEUE_ITEM) <=
+                  sizeof(((PIRP)0)->Tail.Overlay.DriverContext));
+
+/* A claimed IRP handed to its own work item. `pdo` is the IRP's current
+ * stack location's (the work item reads it back from there). IRQL: <=
+ * DISPATCH_LEVEL. */
 static VOID hcdSuspDefer(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo, PIRP irp,
                          ULONG kind, ULONG_PTR value)
 {
-    KIRQL oldIrql;
-    ULONG queue;
+    PWORK_QUEUE_ITEM item;
 
-    irp->Tail.Overlay.DriverContext[0] = pdo;
-    irp->Tail.Overlay.DriverContext[1] = (PVOID)(ULONG_PTR)kind;
-    irp->Tail.Overlay.DriverContext[2] = (PVOID)value;
+    UNREFERENCED_PARAMETER(pdo);
+    irp->Tail.Overlay.ListEntry.Flink = (PLIST_ENTRY)(ULONG_PTR)kind;
+    irp->Tail.Overlay.ListEntry.Blink = (PLIST_ENTRY)hc;
+    irp->IoStatus.Information = value;
     (VOID)InterlockedIncrement(&hc->SuspDoneBusy);
-    KeAcquireSpinLock(&hc->SuspDoneLock, &oldIrql);
-    InsertTailList(&hc->SuspDone, &irp->Tail.Overlay.ListEntry);
-    queue = hc->SuspDoneQueued ? 0UL : 1UL;
-    hc->SuspDoneQueued = 1;
-    if (queue) {
-        (VOID)InterlockedIncrement(&hc->SuspDoneBusy);
-    }
-    KeReleaseSpinLock(&hc->SuspDoneLock, oldIrql);
-    if (queue) {
-        ExInitializeWorkItem(&hc->SuspDoneItem, hcdSuspDoneWork, hc);
-        ExQueueWorkItem(&hc->SuspDoneItem, DelayedWorkQueue);
-    }
+    item = (PWORK_QUEUE_ITEM)&irp->Tail.Overlay.DriverContext[0];
+    ExInitializeWorkItem(item, hcdSuspDoneWork, irp);
+    ExQueueWorkItem(item, (kind == HCD_SUSP_DONE_POWER) ? CriticalWorkQueue
+                                                         : DelayedWorkQueue);
 }
 
 /* The thread's claims, deferred (a START's report, no IRP, made here). */
@@ -2181,7 +2173,9 @@ VOID HcdSuspSettleStale(PHCD_CONTROLLER hc)
         }
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         KeReleaseSpinLock(&hc->PdoListLock, listIrql);
-        hcdSuspFinish(&taken);
+        /* Under the power gate: completed by work items, as the thread's
+         * (Codex review of the fix, round 1, finding 2). */
+        hcdSuspFinishT(hc, &taken);
     }
 }
 
@@ -2790,11 +2784,8 @@ NTSTATUS HcdSuspCbStart(PHCD_CONTROLLER hc)
     InitializeListHead(&hc->IdleQueue);
     hc->SuspCb = NULL;
     hc->SuspNotes = 0;
-    /* The thread's completion list (hcdSuspDefer); the last stop drained
-     * it (HcdSuspDoneDrain). */
-    KeInitializeSpinLock(&hc->SuspDoneLock);
-    InitializeListHead(&hc->SuspDone);
-    hc->SuspDoneQueued = 0;
+    /* The thread's deferred completions (hcdSuspDefer); the last stop
+     * drained them (HcdSuspDoneDrain). */
     hc->SuspDoneBusy = 0;
     if (!hc->SuspOn) {
         return STATUS_SUCCESS;
