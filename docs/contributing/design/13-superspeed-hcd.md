@@ -5424,14 +5424,11 @@ deferral of scope recorded in the roadmap, not a correctness limit.
 MiB and 2 MiB SRBs at aligned and unaligned buffers produce TDs of exactly
 256, 257, 512 and 513 TRBs (the exact counters), apart from the SRB sizes;
 the fallback forced by the qemu flavour's `XhciQemuBigRefuse` and the
-64-TRB behaviour read; the suspend orderings - a mapping completing after
-the settle with its pipe paused (ends, never held), the same with
-the record already cancelled and with its device gone (`SavedStateValid`
-0 and `SuspendRefused` set either way, DEVICE_GONE kept as the status,
-no hold, publication or doorbell, one completion once the mapping allows), a big TD outstanding
-at a settle with the DMA-stop proof (drained once, the save given up), a
-settle without the proof (records and buffers kept), and a pipe paused and
-resumed while the controller runs (held, then published once); bulk faults 14 to 17 aimed at a big TD (the
+64-TRB behaviour read; a system standby or hibernate with a big TD
+outstanding, read as the sequential path's (11.7 point 3: the wide paths
+have no suspend rule of their own since the 36.28 settle was reverted),
+and a pipe paused and resumed while the controller runs (held, then
+published once); bulk faults 14 to 17 aimed at a big TD (the
 injection's own note says which TD and its TRB count); a stream's recovery
 with a sibling stream keeping its progress; streams opened and closed
 across repeated starts and hot-plugs, every block granted or refused into
