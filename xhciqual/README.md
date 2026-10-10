@@ -406,6 +406,13 @@ no-argument quick scan (`opt_quick = (argc == 1)` in `main.c`), so
   `docs/usb-xhci-info/xhci-programming.md`.
 - `--no-wait`: skip the C6 plug prompt.
 - `--no-devid`: skip C8 device identification.
+- `--no-sysinfo`: do not read the system description in the header (roadmap
+  task 36.48, owner 2026-10-10): no SMBIOS scan, no physical mapping of
+  the table, no CPUID, no E820, no DOS or Windows query. For a machine
+  where that probing itself misbehaves. The header says
+  `System:  not read - skipped by --no-sysinfo` instead; the verdict and the
+  exit code are unchanged. A modifier like the others: alone it does not
+  make the run read-only, so pair it with `--quick` or `--probe-only`.
 - `--no-page`: do not pause the screen every page. The report is paginated
   by default so it can be read on bare metal; press any key to continue, ESC
   to stop pausing.
@@ -594,7 +601,7 @@ from a stock Win98 boot floppy by keeping only `IO.SYS`, `MSDOS.SYS`,
 
 ### What the matrix covers
 
-The matrix stands at 49 cases: one standalone-help case, the isolated xHCI
+The matrix stands at 50 cases: one standalone-help case, the isolated xHCI
 IRQ self-test, 27 controller/device cases, two `--probe-only` cases (one
 scanning xHCI alone, one scanning xHCI, EHCI and OHCI together), one
 read-only quick scan per controller-presence mask (none, each family, every
@@ -618,12 +625,14 @@ working line's plain QUALIFIED; each then types `IF ERRORLEVEL ... ECHO
 reads. The IRQ 5 cases take a case timeout of 180 s: C4's second-long
 waits run out in full, and `delay` is slow under TCG.
 
-Since task 36.48, three read the system description with QEMU's `-smbios`
+Since task 36.48, four read the system description with QEMU's `-smbios`
 strings set, every identifier included: `--probe-only` on the 32-bit and
 on the 3.0 (64-bit) entry point, and the quick scan, whose two summary
 lines are checked on the screen. Each fails if a serial number, the UUID,
 the SKU, an asset tag or the part number appears on the serial line or the
-screen.
+screen. The fourth passes `--no-sysinfo` with the same strings set and
+requires the one "skipped" line and none of the machine's strings, CPU,
+RAM or DOS lines.
 
 The cases cover all eight controller presence masks, empty and attached
 variants, HS storage, FS HID, OHCI HID/storage, a USB hub, an unmanaged
@@ -1066,6 +1075,10 @@ collapse. A walk that cannot finish (a malformed structure, or a table
 longer than 64 KB) leaves identifiers in the unread part unchecked, so
 every SMBIOS string is then withheld and a line says so; the SMBIOS
 version, the memory sums, CPU, RAM and DOS still print.
+
+`--no-sysinfo` (owner, 2026-10-10) turns all of this off for a machine
+where the probing itself causes trouble: nothing above is read, and the
+header prints one line, `System:  not read - skipped by --no-sysinfo`.
 
 The full run and `--probe-only` print the block under the build line. The
 quick scan keeps its one screen: two summary lines (`System:` with the

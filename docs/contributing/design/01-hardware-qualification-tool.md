@@ -121,7 +121,7 @@ tool source/
   main.c       Sequencing, family selection (default all), CLI flags
                (--probe-only/--no-active, --poll-only, --irq-selftest, --set-intel-ports,
                --no-wait, --no-devid, --no-page, --serial, --log [filename],
-               --done-flag FILE, --gsi N)
+               --done-flag FILE, --gsi N, --no-sysinfo)
 ```
 
 `--probe-only` runs Tier A and any Tier B reads the firmware's existing PCI state permits. It is read-only: it never enables MSE, clears INTx Disable, writes PMCSR, or takes ownership. If MSE is clear, the report records that Tier B was unavailable and leaves the bit unchanged. The default runs the full suite.
@@ -138,9 +138,9 @@ Register offsets below are relative to BAR0 unless noted. Capability regs at BAR
 
 The detailed matrix below is the xHCI matrix. EHCI/OHCI reuse its C1/C2/C3/C4/C5/C6 meanings with the family-specific mechanisms described in section 2. C7 and C8 remain xHCI-only.
 
-### Automated QEMU regression matrix (49 cases)
+### Automated QEMU regression matrix (50 cases)
 
-`xhciqual/test/run-qemu-matrix.ps1` cold-boots a fresh Win98SE (MS-DOS 7.1) QEMU process per case, the same DOS the field procedure uses. The matrix stood at 40 cases as of v0.11, at 42 since task 36.11's two `--gsi` cases, at 46 since task 36.10's four no-working-interrupt cases, and at 49 since task 36.48's three `-smbios` cases, which also fail if a serial number, UUID, SKU, asset tag or part number is printed (`xhciqual/README.md` carries the version history). The `HCCPARAMS2` line (row B9) is pinned in the `xhci_probe_only` case, so a regression in the read-only U3C/CMC/FSC report fails the matrix.
+`xhciqual/test/run-qemu-matrix.ps1` cold-boots a fresh Win98SE (MS-DOS 7.1) QEMU process per case, the same DOS the field procedure uses. The matrix stood at 40 cases as of v0.11, at 42 since task 36.11's two `--gsi` cases, at 46 since task 36.10's four no-working-interrupt cases, and at 50 since task 36.48's four `-smbios` cases, which also fail if a serial number, UUID, SKU, asset tag or part number is printed (one with `--no-sysinfo`, which must print none of the machine) (`xhciqual/README.md` carries the version history). The `HCCPARAMS2` line (row B9) is pinned in the `xhci_probe_only` case, so a regression in the read-only U3C/CMC/FSC report fails the matrix.
 
 The cases are: standalone help, an isolated locked xHCI IRQ self-test, two `--probe-only` cases, and the controller/device cases. Controller presence is exhaustive across the requested families: none, xHCI, EHCI, OHCI, xHCI+EHCI, xHCI+OHCI, EHCI+OHCI, and all three. Empty and attached-device variants cover xHCI HS storage, FS HID, a hub with downstream HID, and an unmanaged SuperSpeed-only placement; EHCI HS storage and FS HID; OHCI HID and storage; pairwise mixed attachments; and all-three mixed attachments. It also covers default-all scanning, combined selectors, selecting an absent family, and --log ohci log-name/selector disambiguation.
 
@@ -214,7 +214,7 @@ During development, enabling OHCI SOF at the protected-mode vector caused a repe
 
 Emit a per-controller qualification report: the overall verdict plus every fact gathered (CSZ, slot/port counts, scratchpad count, USB2 topology, IRQ, quirks, and PASS/FAIL for handoff/reset/DMA/IRQ). This is not only go/no-go; it is the seed for the Phase 4 quirk and parameter tables.
 
-Since task 36.48 the report header names the machine it came from, read in every mode before any controller is touched and with no PCI write: SMBIOS Type 0 (BIOS vendor, version, date, and the SMBIOS version), Type 1 (maker, product, version, family), Type 2 (board maker and product) and Type 4 (socket; its version where CPUID has no brand string); CPUID's vendor, brand, family, model and stepping; the RAM from INT 15h E820, else SMBIOS Type 17, else Type 19, saying which; and the DOS version with whether it runs in a Windows DOS box. With no SMBIOS it prints the ROM date (F000:FFF5) and model byte (F000:FFFE). It never prints an identifier of the unit: SMBIOS serial numbers, UUIDs, asset tags, SKU and part numbers are not read out of the table at all. Every length and string is bounds-checked, so a broken table ends the walk rather than the run. The quick scan keeps its one screen with a two-line summary there and the full block in the log. `xhciqual/README.md`, "The system description in the header", is the full statement.
+Since task 36.48 the report header names the machine it came from, read in every mode before any controller is touched and with no PCI write: SMBIOS Type 0 (BIOS vendor, version, date, and the SMBIOS version), Type 1 (maker, product, version, family), Type 2 (board maker and product) and Type 4 (socket; its version where CPUID has no brand string); CPUID's vendor, brand, family, model and stepping; the RAM from INT 15h E820, else SMBIOS Type 17, else Type 19, saying which; and the DOS version with whether it runs in a Windows DOS box. With no SMBIOS it prints the ROM date (F000:FFF5) and model byte (F000:FFFE). It never prints an identifier of the unit: SMBIOS serial numbers, UUIDs, asset tags, SKU and part numbers are not read out of the table at all. Every length and string is bounds-checked, so a broken table ends the walk rather than the run. The quick scan keeps its one screen with a two-line summary there and the full block in the log. `--no-sysinfo` (owner, 2026-10-10) skips all of it - no SMBIOS scan or mapping, no CPUID, no E820, no DOS query - for a machine where the probing itself misbehaves; the header then says so in one line, and the verdict and exit code are unchanged. `xhciqual/README.md`, "The system description in the header", is the full statement.
 
 ## 7. Silent-death gates (why Phase 0 pays for itself)
 

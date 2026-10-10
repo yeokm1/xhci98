@@ -163,7 +163,7 @@ $smbiosSecrets = @("XQSERIAL123","XQSKU456","5a5a5a5a","5A5A5A5A","0123456789ab"
     "0123456789AB","XQBSERIAL789","XQBASSET012","XQCSERIAL345","XQCASSET678",
     "XQPSERIAL901","XQPASSET234","XQPART567")
 $cases = @(
-    (Case "help" @() "xhciqual --serial --no-page --help" @("PURPOSE","SAFETY - READ BEFORE AN ACTIVE RUN","RECOMMENDED TEST ORDER","RECOMMENDED DEVICES","OHCI WARN proves SOF; its note says if PCI INTx was seen","OUTPUT AND EXIT CODES","photo plus last printed line")),
+    (Case "help" @() "xhciqual --serial --no-page --help" @("PURPOSE","SAFETY - READ BEFORE AN ACTIVE RUN","RECOMMENDED TEST ORDER","RECOMMENDED DEVICES","OHCI WARN proves SOF; its note says if PCI INTx was seen","OUTPUT AND EXIT CODES","--no-sysinfo","photo plus last printed line")),
     (Case "none_default" @() $cmd @("Families: xHCI EHCI OHCI","No selected USB host controller found")),
     (Case "xhci_irq_selftest" @("-device","qemu-xhci,id=hc,msi=off,msix=off") ($cmd+" --irq-selftest") @("IRQ-SELFTEST","Families: xHCI","C3 DMA:      PASS","C4 IRQ:      PASS","C6 ports:    SKIP","IRQ SELF-TEST PASS","Done.")),
     # HCCPARAMS2/FSC: qemu-xhci reports CAPLENGTH 40h, so the register is
@@ -279,7 +279,11 @@ $cases = @(
     # the two-line summary and whose serial line has the full block.
     (Case "smbios_header" ($smbiosArgs + @("-machine","smbios-entry-point-type=32","-device","qemu-xhci,id=hc,msi=off,msix=off")) "xhciqual --serial --no-page xhci --probe-only" @("System:  XQ-Test-Maker XQ-Test-Model, version XQ-Rev-A, family XQ-Family","Board:   XQ-Board-Maker XQ-Board-7","BIOS:    XQ-BIOS-Vendor XQ-BIOS-1.0, 10/10/2026; SMBIOS 2.","32-bit entry at F","CPU:     ","RAM:     ","MB usable (INT 15h E820","DOS:     7.10 (Microsoft); not under Windows","Probe safety: PASS - no PCI configuration writes.","Done.") "" "" 0 $smbiosSecrets),
     (Case "smbios_header_30" ($smbiosArgs + @("-machine","smbios-entry-point-type=64","-device","qemu-xhci,id=hc,msi=off,msix=off")) "xhciqual --serial --no-page xhci --probe-only" @("System:  XQ-Test-Maker XQ-Test-Model, version XQ-Rev-A, family XQ-Family","BIOS:    XQ-BIOS-Vendor XQ-BIOS-1.0, 10/10/2026; SMBIOS 3.","64-bit entry at F","Done.") "" "" 0 $smbiosSecrets),
-    (Case "smbios_quick" ($smbiosArgs + @("-device","qemu-xhci,id=hc,msi=off,msix=off")) $quick @("System:  XQ-Test-Maker XQ-Test-Model","Board:   XQ-Board-Maker XQ-Board-7","LOOKS QUALIFIED","Probe safety: PASS - no PCI configuration writes.") "" "" 0 $smbiosSecrets @("System: XQ-Test-Maker XQ-Test-Model; BIOS XQ-BIOS-1.0 10/10/2026","CPU: ","; DOS 7.10"))
+    # The owner's --no-sysinfo: with the same strings set, nothing of the
+    # machine is read or printed - one line says the option skipped it -
+    # and the run is otherwise unchanged.
+    (Case "smbios_no_sysinfo" ($smbiosArgs + @("-device","qemu-xhci,id=hc,msi=off,msix=off")) "xhciqual --serial --no-page xhci --probe-only --no-sysinfo" @("System:  not read - skipped by --no-sysinfo","PROBE-ONLY (read-only)","Probe safety: PASS - no PCI configuration writes.","Done.") "" "" 0 ($smbiosSecrets + @("XQ-Test-Maker","XQ-BIOS-Vendor","CPU:     ","RAM:     ","DOS:     ","SMBIOS 2.","SMBIOS 3."))),
+    (Case "smbios_quick"($smbiosArgs + @("-device","qemu-xhci,id=hc,msi=off,msix=off")) $quick @("System:  XQ-Test-Maker XQ-Test-Model","Board:   XQ-Board-Maker XQ-Board-7","LOOKS QUALIFIED","Probe safety: PASS - no PCI configuration writes.") "" "" 0 $smbiosSecrets @("System: XQ-Test-Maker XQ-Test-Model; BIOS XQ-BIOS-1.0 10/10/2026","CPU: ","; DOS 7.10"))
 )
 if ($CaseName.Count -ne 0) {
     $cases = @($cases | Where-Object { $_.Name -in $CaseName })

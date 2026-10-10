@@ -1019,6 +1019,26 @@ static void test_aliasing2(void)
     }
 }
 
+/* --no-sysinfo (owner, 2026-10-10): one line, nothing else, even over a
+ * SYSINFO that held data before. */
+static void test_skip(void)
+{
+    SYSINFO si;
+
+    memset(&si, 0, sizeof(si));
+    fill_cpu_dos(&si);
+    strcpy(si.sys_mfr, "Should Not Print");
+    sysinfo_skip(&si);
+    CHECK(si.skipped && si.has_cpuid == 0 && si.sys_mfr[0] == '\0' &&
+          si.e820_n == 0 && si.dos_read == 0, "skip: everything cleared");
+    render(&si);
+    CHECK(strcmp(out, "System:  not read - skipped by --no-sysinfo (no "
+                      "SMBIOS, CPUID, E820)\n") == 0, "skip: one line");
+    render_short(&si);
+    CHECK(strcmp(out, "System: not read (--no-sysinfo)\n") == 0,
+          "skip: one short line");
+}
+
 /* Review round 1, P3: an unusable 3.0 entry does not hide a legacy one. */
 static void test_ep_order(void)
 {
@@ -1036,6 +1056,7 @@ int main(void)
 {
     test_aliasing();
     test_aliasing2();
+    test_skip();
     test_ep_order();
     test_valid_2x();
     test_valid_30();

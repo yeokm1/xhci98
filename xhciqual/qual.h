@@ -886,6 +886,7 @@ const char *route_summary(const ROUTEINFO *r, long gsi);
 #define SMB_EP_64       3       /* "_SM3_" 64-bit entry point (3.0+)     */
 
 typedef struct {
+    int skipped;                /* --no-sysinfo: nothing was read        */
     /* SMBIOS entry point (smb_scan) */
     int smb_state;
     int smb_kind;
@@ -954,6 +955,9 @@ void report_sysinfo_short(const SYSINFO *si, QPRINTF_FN pf);
 /* sysprobe.c: reads only - the BIOS area, one DPMI mapping of the table,
  * CPUID, INT 15h E820, INT 21h 30h/3306h, INT 2Fh 1600h. */
 void sysinfo_probe(SYSINFO *si);
+/* sysinfo.c, pure: the --no-sysinfo state (owner, 2026-10-10) - nothing
+ * read, and the header says the option skipped it. */
+void sysinfo_skip(SYSINFO *si);
 /* sysasm.asm: EFLAGS.ID toggles (1) or not; CPUID with every register but
  * EAX saved and restored (lesson-cpuid-ebx: CPUID clobbers EBX, which
  * Watcom's register convention, like MSVC's, expects preserved). */

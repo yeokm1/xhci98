@@ -672,6 +672,19 @@ void cpu_fill_brand(SYSINFO *si, const u32 brand[12])
     si_copy(si->cpu_brand, sizeof(si->cpu_brand), b, 48);
 }
 
+/* --no-sysinfo (owner, 2026-10-10): for a machine where the probing itself
+ * misbehaves. Nothing is read; one line says the option skipped it, on
+ * the screen and in the log alike. Each under 80 characters. */
+#define SKIPPED_LINE \
+    "System:  not read - skipped by --no-sysinfo (no SMBIOS, CPUID, E820)\n"
+#define SKIPPED_SHORT "System: not read (--no-sysinfo)\n"
+
+void sysinfo_skip(SYSINFO *si)
+{
+    memset(si, 0, sizeof(*si));
+    si->skipped = 1;
+}
+
 void rom_fill(SYSINFO *si, const u8 *date8, u8 model)
 {
     si_copy(si->rom_date, sizeof(si->rom_date), date8, 8);
@@ -774,6 +787,10 @@ void report_sysinfo(const SYSINFO *si, QPRINTF_FN pf)
     char line[400];
     char part[160];
 
+    if (si->skipped) {
+        pf(SKIPPED_LINE);
+        return;
+    }
     if (si->smb_state == SMB_OK) {
         line[0] = '\0';
         if (si->seen_t1) {
@@ -902,6 +919,10 @@ void report_sysinfo_short(const SYSINFO *si, QPRINTF_FN pf)
     char line[400];
     char part[160];
 
+    if (si->skipped) {
+        pf(SKIPPED_SHORT);
+        return;
+    }
     strcpy(line, "System:");
     if (si->smb_state == SMB_OK) {
         part[0] = '\0';

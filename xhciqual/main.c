@@ -45,6 +45,8 @@ static int opt_irq_selftest = 0;
 static int opt_set_intel   = 0;
 static int opt_serial      = 0;
 static int opt_no_devid    = 0;
+/* Task 36.48 (owner): skip the system description's probing entirely. */
+static int opt_no_sysinfo  = 0;
 static int opt_no_page     = 0;
 static int opt_help        = 0;
 static const char *opt_done_flag = 0;
@@ -159,6 +161,7 @@ static void print_usage(void)
            "  --set-intel-ports  xHCI C7: try USB2 routing; verify readback\n"
            "  --no-wait          do not wait for a device plug in C6\n"
            "  --no-devid         skip xHCI C8 device identification\n"
+           "  --no-sysinfo       do not read SMBIOS, CPUID, memory or DOS\n"
            "  --no-page          do not pause the screen every page\n"
            "  --serial           mirror output to COM1 115200 8N1\n"
            "  --log [filename]   save output (default: XHCIQUAL.LOG)\n"
@@ -256,6 +259,9 @@ static void print_help(void)
             "                    reported as success or failure)\n"
             "  --no-wait         do not wait 15 seconds for a C6 plug\n"
             "  --no-devid        skip informational xHCI C8 identification\n"
+            "  --no-sysinfo      do not read the system description (SMBIOS,\n"
+            "                    CPUID, E820, DOS) - for a machine where that\n"
+            "                    probing itself misbehaves\n"
             "  --no-page         disable screen pagination\n"
             "  --serial          mirror output to COM1 115200 8N1\n"
             "  --log [FILE]      save report; default XHCIQUAL.LOG\n"
@@ -387,6 +393,8 @@ static int parse_args(int argc, char **argv)
             }
         } else if (strcmp(a, "no-devid") == 0) {
             opt_no_devid = 1;
+        } else if (strcmp(a, "no-sysinfo") == 0) {
+            opt_no_sysinfo = 1;
         } else if (strcmp(a, "no-page") == 0) {
             opt_no_page = 1;
         } else if (strcmp(a, "no-wait") == 0) {
@@ -484,7 +492,10 @@ static int run_quick_scan(void)
     qprintf("XHCIQUAL %s - quick scan (read-only)\n", TOOL_VERSION);
     /* Task 36.48: two lines on the screen, the full block in the log and
      * on the serial line. Reads only, like everything in this pass. */
-    sysinfo_probe(&sysinfo);
+    if (opt_no_sysinfo)
+        sysinfo_skip(&sysinfo);
+    else
+        sysinfo_probe(&sysinfo);
     report_sysinfo_short(&sysinfo, qconprintf);
     report_sysinfo(&sysinfo, qlogprintf);
 
@@ -783,7 +794,10 @@ int main(int argc, char **argv)
             TOOL_VERSION, TOOL_BUILD);
     /* Task 36.48: which machine this report came from. Reads only (the
      * BIOS area, CPUID, E820, DOS), before any controller is touched. */
-    sysinfo_probe(&sysinfo);
+    if (opt_no_sysinfo)
+        sysinfo_skip(&sysinfo);
+    else
+        sysinfo_probe(&sysinfo);
     report_sysinfo(&sysinfo, qprintf);
     if (!active)
         mode = "PROBE-ONLY (read-only)";
