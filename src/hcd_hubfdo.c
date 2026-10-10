@@ -332,6 +332,21 @@ NTSTATUS HcdHubFdoPower(PHCD_HUB_FDO fdo, PIRP irp)
     return status;
 }
 
+/* IRP_MJ_SYSTEM_CONTROL on a hub FDO: no WMI provider here either, so the
+ * request goes down to the hub's device PDO, inside the FDO's I/O count
+ * (finding D4, as HcdRootHubFdoSystemControl). */
+NTSTATUS HcdHubFdoSystemControl(PHCD_HUB_FDO fdo, PIRP irp)
+{
+    NTSTATUS status;
+
+    if (!hcdHubIoEnter(fdo)) {
+        return HcdCompleteIrp(irp, STATUS_DELETE_PENDING, 0);
+    }
+    status = hcdHubPassDown(fdo, irp);
+    hcdHubIoLeave(fdo);
+    return status;
+}
+
 /* IRP_MJ_DEVICE_CONTROL on a hub FDO: the hub IOCTLs of the Power tab for
  * this hub's own ports (hcd_door.c), inside the FDO's I/O count and the
  * PDO's Busy. */
