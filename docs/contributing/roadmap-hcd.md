@@ -1258,12 +1258,13 @@ ME actually send before anything is promised for them.
     2.0, a next chunk's mapping 22 us (9 at 2048); throughput as 36.22
     above, 1 MiB reads 343 MB/s at 64 KiB commands, 593 at 1024, 696 at
     2048
-- [ ] 36.24 (was MB.3) stage 2, if taken: its design reviewed to
+- [x] 36.24 (was MB.3) stage 2, if taken: its design reviewed to
   convergence, the event-burst review included whatever the ring, then
   the code with host vectors in `test_td`, `test_xfer` and `test_ring`.
   If it grows the pool ring, also the isochronous decoupling, the stride
   assert, `test_iso`, `test_membuf`, `test_stream` and `test_snap`
-- [ ] 36.25 (was MB.4) stage 3, if taken: its design reviewed to convergence (fixed
+  - **Done 2026-10-10, legs owed to 36.26** (design `b76c16f..6aa2ae2`; the HAL reading, branch `p36-hal`, merged at `bb007ed`; code `b26f5c8`, `9b0c85f`, review fixes to `297d42a`, clean at round 4, thread `01a1236a`; the suspended-controller ordering `f9c02ec`). Record 13 section 11.6: `XhciWideMap` on by default (owner, 2026-10-10, on 11.6.1), 0 off; promotion only on NT, at the grant `0x80001`, past the start's register-free check and on a NULL base. Built x86 and `-amd64`, every gate and the host suites passing. Smoke (XP x64 in QEMU, development host A, `out\p36-mb\xp64\notes.md`): promotion fires at the default and not at 0, VERIFY clean either way
+- [x] 36.25 (was MB.4) stage 3, if taken: its design reviewed to convergence (fixed
   rings placed by physical address, or a fixed set of page segments
   allocated with the pipe, sized from the table above and qualified on a
   low-memory Windows 98 machine and across repeated starts and
@@ -1272,6 +1273,7 @@ ME actually send before anything is promised for them.
   `test_xfer`, `test_ring`, `test_stream`, `test_iso`, `test_membuf` and
   `test_snap`, for whatever 36.24 did not already cover; the injection
   reaching a 257- and 513-TRB TD
+  - **Done 2026-10-10, legs owed to 36.26** (design, record 13 section 11.7, `8ee1c0d..cb4f0b0`, clean at round 4, thread `01a1239f`; code `a008b3e`, `520e0f5`, clean at round 1, thread `01a123f9`). One TD a URB on 1024-TRB stream rings placed by physical address; built x86 and `-amd64`, every gate and the host suites passing. Smoke (XP x64 in QEMU): three big blocks built, 1 MiB URBs as one TD of 256 TRBs (257 unaligned), VERIFY clean, 1 MiB reads 861 MB/s against 665 with `XhciWideMap` 0
   - **Design scope (record 13 section 11.7; orchestrator decision, owner
     to confirm):** the fixed rings placed by physical address are the
     **stream rings** of a streams endpoint (UAS at SuperSpeed), 1024 TRBs
