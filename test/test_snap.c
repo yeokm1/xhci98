@@ -17,6 +17,8 @@
 #include "../src/xhci_pirq.h"
 #include "../src/xhci_xstat.h"
 #include "../src/xhci_poll.h"
+#include "../src/xhci_msi.h"
+#include "../src/xhci_msi86.h"
 #include "../src/xhci98_xfer.h"
 #include "test_harness.h"
 
@@ -375,6 +377,81 @@ static void test_delivery_words(void)
     CHECK_EQ(XHCI_POLL_RETIRED_OWED, 5, "retirement states, last");
 }
 
+/* 36.15: message-signalled interrupts. XHCISNAP names the counter words
+ * from 96 by these places and decodes them by these codes (xhcisnap.c,
+ * msi_counter_names, SNAP_MSI_* and the msi_*_text tables), so a field
+ * moved or a code renumbered fails here until the tool follows. The
+ * routines' codes (hcd.h's HCD_MSI_ROUTINES_*: 0 none, 1 system, 2 the
+ * helper, 3 not found) are the DDK half's and are not reachable from here. */
+static void test_msi_words(void)
+{
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiRoutines), 96 * 4,
+             "MsiRoutines at 96");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiMessages), 97 * 4,
+             "MsiMessages");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiCapability), 98 * 4,
+             "MsiCapability");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiConnectStatus), 99 * 4,
+             "MsiConnectStatus");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiDescriptors), 100 * 4,
+             "MsiDescriptors");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, Msi86State), 101 * 4,
+             "Msi86State");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, Msi86Looks), 102 * 4,
+             "Msi86Looks");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, Msi86Status), 103 * 4,
+             "Msi86Status");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, Msi86Refusal), 104 * 4,
+             "Msi86Refusal");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, Msi86HelperVersion), 105 * 4,
+             "Msi86HelperVersion");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiFilterSeq), 106 * 4,
+             "MsiFilterSeq");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiFilterClass), 107 * 4,
+             "MsiFilterClass");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiFilterOutcome), 108 * 4,
+             "MsiFilterOutcome");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiFilterMode), 109 * 4,
+             "MsiFilterMode");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiFilterLists), 110 * 4,
+             "MsiFilterLists");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiFilterMessages), 111 * 4,
+             "MsiFilterMessages");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiFilterLines), 112 * 4,
+             "MsiFilterLines");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, MsiFilterStripped), 113 * 4,
+             "MsiFilterStripped last");
+    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 114 * 4, "114 words in all");
+
+    CHECK_EQ(XHCI_MSI86_STATE_UNSEEN, 0, "helper states");
+    CHECK_EQ(XHCI_MSI86_STATE_ABSENT, 1, "helper states");
+    CHECK_EQ(XHCI_MSI86_STATE_REFUSED, 2, "helper states");
+    CHECK_EQ(XHCI_MSI86_STATE_BOUND, 3, "helper states");
+    CHECK_EQ(XHCI_MSI86_STATE_REMOVED, 4, "helper states, last");
+    CHECK_EQ(XHCI_MSI86_REFUSE_STATUS, 1, "refusals");
+    CHECK_EQ(XHCI_MSI86_REFUSE_LENGTH, 2, "refusals");
+    CHECK_EQ(XHCI_MSI86_REFUSE_IDENTITY, 3, "refusals");
+    CHECK_EQ(XHCI_MSI86_REFUSE_ROUTINES, 4, "refusals, last");
+    CHECK_EQ(XHCI_MSI_CLASS_NO_INTERRUPT, 1, "classes");
+    CHECK_EQ(XHCI_MSI_CLASS_NO_MESSAGE, 2, "classes");
+    CHECK_EQ(XHCI_MSI_CLASS_REPLACEABLE, 3, "classes");
+    CHECK_EQ(XHCI_MSI_CLASS_NO_LINE, 4, "classes");
+    CHECK_EQ(XHCI_MSI_CLASS_UNSUPPORTED, 5, "classes");
+    CHECK_EQ(XHCI_MSI_CLASS_INCONSISTENT, 6, "classes, last");
+    CHECK_EQ(XHCI_MSI_OUT_NONE, 0, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_LOWER_FAILED, 1, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_NO_LIST, 2, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_INCONSISTENT, 3, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_NOT_ASKED, 4, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_DISABLED, 5, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_NO_LINE, 6, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_NO_INTERRUPT, 7, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_NO_MESSAGE, 8, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_UNSUPPORTED, 9, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_REPLACED, 10, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_NO_MEMORY, 11, "outcomes, last");
+}
+
 /* 36.22: XhciMaxTransferKB as each start takes it. */
 static void test_xpol(void)
 {
@@ -551,6 +628,7 @@ int main(void)
     test_pirq_words();
     test_xstat_words();
     test_delivery_words();
+    test_msi_words();
     test_xstat_math();
     test_xpol();
     test_walk(0);
