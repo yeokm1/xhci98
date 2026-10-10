@@ -6398,11 +6398,19 @@ the start as a controller with no interrupt always did. `XhciQemuPinUnreadable`
 N ms after the start's grant (at once, before the connection, for a value of
 1): the ISR still acknowledges what it claims, so QEMU's level line does not
 storm, but queues no drain and withholds the claim from the watcher, and
-every watcher look reads asserted. Under mode 0 the log ring then shows
-`qemu.inj.deadline`, `intr.moved` (the stale pairs) and `intr.moved.masked`,
-and the counter block delivery 2 with reason 9; under mode 1 no move. The
+every watcher look reads asserted. The latch notes `qemu.inj.deadline` (at
+the start for a value of 1, when it falls for a larger one). Under mode 0
+the log ring then shows `intr.moved` (the stale pairs),
+`qemu.inj.deadline.isr` (the claims the latch withheld until then) and
+`intr.moved.masked`, and the counter block delivery 2 with reason 9; under
+mode 1 no move: the backstop carries the bus, and while the controller
+thread waits for a completion of its own (a command's, an EP0
+transfer's) it queues the drain itself between the wait's slices (at
+`XhciTolerance` 1; the stop's `enum.wait.drains` counts the drains
+queued, not the events they took). The
 start notes `qemu.inj.nointerrupt`, `qemu.inj.pinunreadable` and
-`qemu.inj.deadline.value`.
+`qemu.inj.deadline.value`, and the stop's counter dump
+`qemu.inj.deadline.isr`.
 
 **`XhciQemuMsgConnectFail`, `XhciMsi86NoStrip`, `XhciMsi86InjNoLine`**
 (task 36.15; design records 15 section 4.3 and 18). REG_DWORDs in the

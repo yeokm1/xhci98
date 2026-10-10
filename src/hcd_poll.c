@@ -673,6 +673,12 @@ static VOID hcdPollMove(PHCD_CONTROLLER hc, ULONG pairs)
     hc->IntDelivery = XHCI_PIRQ_DELIVERY_POLL;
     hc->Counters.LineMoves = 1;
     XhciLogNoteLocked(ext, "intr.moved", pairs);
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* The claims the stand-in dead line withheld up to the move (record 15
+     * section 11): what the ISR acknowledged and queued no drain for. */
+    XhciLogNoteLocked(ext, "qemu.inj.deadline.isr",
+                      (ULONG)hc->QemuDeadClaims);
+#endif
     (VOID)hcdPollRetireLocked(hc, &result);
     /* The mask's own outcome, apart from the IP step's (record 15 section
      * 8): both enables proven down unless the first step failed. */

@@ -188,6 +188,7 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
     XhciLogAppend(log, "enum.cmd.busy.cleared", hc->EnumCommandsBusyCleared,
                   1);
     XhciLogAppend(log, "enum.cmd.busy.drains", hc->EnumCommandBusyDrains, 1);
+    XhciLogAppend(log, "enum.wait.drains", hc->EnumWaitDrains, 1);
     XhciLogAppend(log, "enum.xfer.timedout", hc->EnumTransfersTimedOut, 1);
     XhciLogAppend(log, "serial.ids", hc->SerialIdsTaken, 1);
     XhciLogAppend(log, "serial.refused", hc->SerialIdsRefused, 1);
@@ -239,6 +240,12 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
     XhciLogAppend(log, "intr.retire.state", ext->LineRetireState, 1);
     XhciLogAppend(log, "intr.moved.masked", hc->Counters.LineMoveMasked, 1);
     XhciLogAppend(log, "intr.values.found", hc->Counters.IntrValuesFound, 1);
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* The stand-in dead line's withheld claims (record 15 section 11), at
+     * every stop: mode 1 under the latch has no move to note them at. */
+    XhciLogAppend(log, "qemu.inj.deadline.isr", (ULONG)hc->QemuDeadClaims,
+                  1);
+#endif
     hcdLogTolLocked(ext, log);
 }
 
