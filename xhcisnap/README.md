@@ -149,7 +149,10 @@ names the system the dump was taken on, under "captured on":
   key) `HKLM\HARDWARE\DESCRIPTION\System`'s `SystemBiosVersion` and
   `SystemBiosDate`, with "make/model: not available on this OS"; on 98 SE
   and ME `HKLM\Enum\Root\*PNP0C01\0000`'s `BIOSName`, `BIOSVersion` and
-  `BIOSDate`, which is what the system board's devnode carries there.
+  `BIOSDate`, which is what the system board's devnode carries there. Each
+  value is printed only where it exists: on QEMU's SeaBIOS, ME's devnode
+  holds `BIOSVersion` and `BIOSDate` and no `BIOSName`, and 2000's key holds
+  `SystemBiosDate` and no `SystemBiosVersion` (2026-10-10 guest exports).
 - **CPU**: `ProcessorNameString`, else `Identifier`, from
   `HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0`, and the processor
   count (`GetSystemInfo`).
