@@ -1118,11 +1118,30 @@ static void test_cut_identifier(void)
     CHECK(!has("SN-123") && !has("5a5a5a5a"), "cut: not printed");
 }
 
-/* Whole-branch review (area 3, round 3, P1): an identifier that spans the
- * join of two printed fields - maker "ACME", product "12345678", serial
- * "ACME 12345678" - is withheld from both reports; so is a UUID split
- * across fields, and the head of an identifier the short line's 79-column
- * cut leaves at its end. */
+/* Parse the table built so far (End-of-Table added), mark it read, and
+ * seal it as sysinfo_probe does once every field is filled. */
+static void parse_and_seal(SYSINFO *si, int cpuid)
+{
+    u8 f[0x40];
+
+    memset(f, 0, sizeof(f));
+    add(127, f, 4, 0);
+    memset(si, 0, sizeof(*si));
+    smb_parse_table(tab, tlen, 0, si);
+    si->smb_state = SMB_OK;
+    si->smb_major = 2;
+    si->smb_minor = 8;
+    if (cpuid)
+        fill_cpu_dos(si);
+    sysinfo_seal(si);
+}
+
+/* Whole-branch review (area 3, rounds 3 and 4, P1s): an identifier that
+ * only a printed line carries - across a join of two fields, a field and
+ * the line's fixed words (the BIOS line's SMBIOS suffix, the CPU line's
+ * "(no CPUID), socket"), or the head a short line's 79-column cut leaves,
+ * including a cut another withholding moved - is withheld from both
+ * reports by sysinfo_seal. */
 static void test_joined_identifier(void)
 {
     SYSINFO si;
@@ -1132,7 +1151,13 @@ static void test_joined_identifier(void)
     static const char *j2[] = { "Maker 5a5a5a5a-3412", "2143-8765-0123456789ab",
                                 "v", 0 };
     static const char *j3[] = { "Maker", "X", "2", "X, version 2", 0 };
-    static char longmfr[80];
+    static const char *b0[] = { "Vendor", "1.0", "11/22/33", 0 };
+    static const char *b1[] = { "Maker", "Model", "v",
+                                "11/22/33; SMBIOS 2.8", 0 };
+    static const char *c4[] = { "SOCKET-X", "CPU-X", 0 };
+    static const char *c1[] = { "Maker", "Model", "v",
+                                "CPU-X (no CPUID), socket SOCKET-X", 0 };
+    static char longmfr[80], amfr[80], qprod[80];
     static const u8 uuid[16] = { 0x5a, 0x5a, 0x5a, 0x5a, 0x12, 0x34, 0x43,
                                  0x21, 0x87, 0x65, 0x01, 0x23, 0x45, 0x67,
                                  0x89, 0xab };
@@ -1141,15 +1166,10 @@ static void test_joined_identifier(void)
     tlen = 0;
     memset(tab, 0, sizeof(tab));
     build_t1(4, j1, 0);
-    memset(f, 0, sizeof(f));
-    add(127, f, 4, 0);
-    memset(&si, 0, sizeof(si));
-    smb_parse_table(tab, tlen, 0, &si);
+    parse_and_seal(&si, 1);
     CHECK(strcmp(si.sys_mfr, "(withheld)") == 0 &&
           strcmp(si.sys_product, "(withheld)") == 0,
           "joined: maker and product withheld");
-    si.smb_state = SMB_OK;
-    si.seen_t1 = 1;
     render(&si);
     CHECK(!has("ACME 12345678") && !has("acme 12345678"),
           "joined: not in the full report");
@@ -1160,10 +1180,7 @@ static void test_joined_identifier(void)
     tlen = 0;
     memset(tab, 0, sizeof(tab));
     build_t1(0, j2, uuid);
-    memset(f, 0, sizeof(f));
-    add(127, f, 4, 0);
-    memset(&si, 0, sizeof(si));
-    smb_parse_table(tab, tlen, 0, &si);
+    parse_and_seal(&si, 1);
     CHECK(strcmp(si.sys_mfr, "(withheld)") == 0 &&
           strcmp(si.sys_product, "(withheld)") == 0,
           "joined: a UUID across two fields withheld");
@@ -1172,19 +1189,42 @@ static void test_joined_identifier(void)
     tlen = 0;
     memset(tab, 0, sizeof(tab));
     build_t1(4, j3, 0);
-    memset(f, 0, sizeof(f));
-    add(127, f, 4, 0);
-    memset(&si, 0, sizeof(si));
-    smb_parse_table(tab, tlen, 0, &si);
-    si.smb_state = SMB_OK;
-    si.seen_t1 = 1;
+    parse_and_seal(&si, 1);
     render(&si);
     CHECK(!has("X, version 2"), "joined: fixed words do not complete it");
 
-    /* The short line's 79-column cut leaves a head of the serial: "System:"
-     * and a 68-character maker leave the product's first two characters,
-     * "PR", which no field test sees (the product only starts like the
-     * serial). */
+    /* The BIOS line's SMBIOS suffix completes a serial. */
+    tlen = 0;
+    memset(tab, 0, sizeof(tab));
+    memset(f, 0, sizeof(f));
+    put8(f, 0x04, 1); put8(f, 0x05, 2); put8(f, 0x08, 3);
+    add(0, f, 0x12, b0);
+    build_t1(4, b1, 0);
+    parse_and_seal(&si, 1);
+    CHECK(strcmp(si.bios_date, "(withheld)") == 0,
+          "suffix: the BIOS date withheld");
+    render(&si);
+    CHECK(!has("11/22/33; SMBIOS 2.8"), "suffix: not in the full report");
+
+    /* With no CPUID, the CPU line's fixed words join version and socket. */
+    tlen = 0;
+    memset(tab, 0, sizeof(tab));
+    memset(f, 0, sizeof(f));
+    put8(f, 0x04, 1); put8(f, 0x10, 2); put8(f, 0x18, 0x41);
+    add(4, f, 0x1A, c4);
+    build_t1(4, c1, 0);
+    parse_and_seal(&si, 0);
+    CHECK(strcmp(si.cpu_version, "(withheld)") == 0 &&
+          strcmp(si.cpu_socket, "(withheld)") == 0,
+          "no CPUID: version and socket withheld");
+    render(&si);
+    CHECK(!has("CPU-X (no CPUID), socket SOCKET-X"),
+          "no CPUID: not in the full report");
+
+    /* The short line's 79-column cut leaves a head of the serial. The
+     * maker is cut to 64 characters, so "System:", a space, the 64 and a
+     * space leave the product's first six characters, "PRD-99", which no
+     * field test sees (the product only starts like the serial). */
     memset(longmfr, 'M', 68);
     longmfr[68] = '\0';
     {
@@ -1193,15 +1233,38 @@ static void test_joined_identifier(void)
         tlen = 0;
         memset(tab, 0, sizeof(tab));
         build_t1(4, j5, 0);
-        memset(f, 0, sizeof(f));
-        add(127, f, 4, 0);
-        memset(&si, 0, sizeof(si));
-        smb_parse_table(tab, tlen, 0, &si);
-        si.smb_state = SMB_OK;
-        si.seen_t1 = 1;
-        render_short(&si);
+        parse_and_seal(&si, 1);
         CHECK(strcmp(si.sys_product, "(withheld)") == 0,
               "short cut: the product whose head the cut leaves withheld");
+        render_short(&si);
+        CHECK(!has("PRD-99"), "short cut: no head printed");
+    }
+
+    /* A later withholding moves the cut onto an earlier identifier: the
+     * SKU (the maker's own text) withholds the maker, which shortens the
+     * short line so the cut no longer hides the product's "PRD-99". */
+    memset(amfr, 'A', 64);
+    amfr[64] = '\0';
+    memset(qprod, 'Q', 54);
+    strcpy(qprod + 54, "PRD-99 Device");
+    {
+        static const char *o1[] = { amfr, qprod, "v", "PRD-998877", amfr,
+                                    0 };
+        u8 g[0x40];
+
+        tlen = 0;
+        memset(tab, 0, sizeof(tab));
+        memset(g, 0, sizeof(g));
+        put8(g, 0x04, 1); put8(g, 0x05, 2); put8(g, 0x06, 3);
+        put8(g, 0x07, 4);                   /* serial */
+        put8(g, 0x19, 5);                   /* SKU: the maker's text */
+        add(1, g, 0x1B, o1);
+        parse_and_seal(&si, 1);
+        CHECK(strcmp(si.sys_mfr, "(withheld)") == 0, "order: maker withheld");
+        render_short(&si);
+        CHECK(!has("PRD-99"), "order: the moved cut shows no head");
+        render(&si);
+        CHECK(!has("PRD-99"), "order: nor does the full report");
     }
 }
 

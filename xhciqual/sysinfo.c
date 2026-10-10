@@ -14,11 +14,13 @@
  * model, never the unit. The string and byte fields that identify one
  * machine - Type 1 serial number, UUID and SKU; Type 2 serial number and
  * asset tag; Type 3 serial number and asset tag; Type 4 serial number,
- * asset tag and part number - are never copied out of the table, so there
- * is nothing for a printer to leak. They are fetched into a local only to
- * withhold any printed string that repeats one (see scrub()), since an
- * allowed field can name the same string as a serial. The test suite
- * plants all of them, aliased too, and checks no line carries one.
+ * asset tag and part number - are never copied into SYSINFO, so there is
+ * nothing for a printer to leak. They are fetched only to withhold any
+ * printed string that repeats one (see scrub()), since an allowed field
+ * can name the same string as a serial, and held in this file's private
+ * list until sysinfo_seal has checked both reports as printed, then wiped
+ * (see hold_id). The test suite plants all of them, aliased too, and
+ * checks no line carries one.
  *
  * Bounds: every structure's formatted length is checked against the table,
  * every field offset against the formatted length, and every string walk
@@ -27,6 +29,7 @@
  * read before it, so a broken table cannot crash or hang the tool.
  */
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include "qual.h"
@@ -469,97 +472,49 @@ static void withhold_if(char *shown, const char *id)
 }
 
 /*
- * The printers join fields into lines (report_sysinfo, report_sysinfo_short),
- * and an identifier can span a join - a maker "ACME" and a product
- * "12345678" print a serial "ACME 12345678" that neither field carries
- * (whole-branch review, area 3 round 3). So each printed line is built here
- * the way its printer builds it and checked as a whole, as printed: the
- * short line is cut at 79 characters, and a head of an identifier ending
- * the cut line is caught as at the field bound. A line that carries one
- * withholds every field it joins.
+ * The printers join fields into lines, and an identifier can span a join -
+ * a maker "ACME" and a product "12345678" print a serial "ACME 12345678"
+ * that neither field carries - or a field and the line's fixed words, or
+ * the field a 79-column cut leaves at the end of a short line; and one
+ * withholding can move that cut onto another identifier (whole-branch
+ * review, area 3, rounds 3 and 4). So the identifiers the scrubber fetches
+ * are also held here, in this file's own list, never in SYSINFO, until
+ * sysinfo_seal - run once every field is filled - has checked both
+ * reports exactly as printed, line by line, against all of them, and
+ * again after each withholding until nothing changes; then they are
+ * wiped. A list that overflows withholds every SMBIOS string.
  */
-#define LINE_MAX_CHARS  400
-#define SHORT_CUT       79
+#define HELD_MAX        64
 
-static void cat_word(char *line, const char *s);
-static void hex_only(const char *s, char *out, size_t size);
-static void line_system(const SYSINFO *si, char *line);
-static void line_board(const SYSINFO *si, char *line);
-static void line_bios(const SYSINFO *si, char *line);
-static void line_short_smb(const SYSINFO *si, char *line);
+static char held[HELD_MAX][SI_STR];
+static int nheld;
+static int held_over;
+static char held_raw[33], held_wire[33];
+static int held_uuid;
 
-typedef struct LINE_GROUP {
-    void (*build)(const SYSINFO *si, char *line);
-    size_t cut;                 /* printed width, 0 for the whole line   */
-    int nf;
-    int field[4];               /* the shown_field indexes it joins      */
-} LINE_GROUP;
-
-static const LINE_GROUP line_groups[] = {
-    { line_system,    0,         4, { 3, 4, 5, 6 } },
-    { line_board,     0,         2, { 7, 8, 0, 0 } },
-    { line_bios,      0,         3, { 0, 1, 2, 0 } },
-    { line_short_smb, SHORT_CUT, 4, { 3, 4, 1, 2 } }
-};
-
-/* `line` as printed (its first `cut` characters, or all of it with cut 0)
- * carries `id`, or ends, cut, in a head of it. `hex` compares the hex
- * digits alone, as the UUID is compared. */
-static int line_carries(const char *line, size_t cut, const char *id,
-                        int hex)
+static void held_wipe(void)
 {
-    char shown[LINE_MAX_CHARS];
-    char digits[LINE_MAX_CHARS];
-    size_t n;
-    int was_cut;
-
-    n = strlen(line);
-    was_cut = (cut != 0 && n > cut);
-    if (was_cut)
-        n = cut;
-    if (n >= sizeof(shown))
-        n = sizeof(shown) - 1;
-    memcpy(shown, line, n);
-    shown[n] = '\0';
-    if (hex) {
-        hex_only(shown, digits, sizeof(digits));
-        return strstr(digits, id) != 0 ||
-               (was_cut && tail_heads(digits, id));
-    }
-    return contains_nocase(shown, id) || (was_cut && tail_heads(shown, id));
+    memset(held, 0, sizeof(held));
+    memset(held_raw, 0, sizeof(held_raw));
+    memset(held_wire, 0, sizeof(held_wire));
+    nheld = 0;
+    held_over = 0;
+    held_uuid = 0;
 }
 
-/* Every line that carries `id` (or, given, `id2`) withholds the fields it
- * joins, until no line does or nothing is left to withhold. */
-static void withhold_lines(SYSINFO *si, const char *id, const char *id2,
-                           int hex)
+static void hold_id(const char *id)
 {
-    char line[LINE_MAX_CHARS];
-    unsigned g;
-    int k, pass, changed;
-    char *f;
+    int i;
 
-    for (pass = 0; pass < 8; pass++) {
-        changed = 0;
-        for (g = 0; g < sizeof(line_groups) / sizeof(line_groups[0]); g++) {
-            line[0] = '\0';
-            line_groups[g].build(si, line);
-            if (!line_carries(line, line_groups[g].cut, id, hex) &&
-                (id2 == 0 ||
-                 !line_carries(line, line_groups[g].cut, id2, hex)))
-                continue;
-            for (k = 0; k < line_groups[g].nf; k++) {
-                f = shown_field(si, line_groups[g].field[k]);
-                if (f[0] != '\0' && strcmp(f, WITHHELD) != 0) {
-                    strcpy(f, WITHHELD);
-                    changed = 1;
-                }
-            }
-        }
-        if (!changed)
-            break;
+    for (i = 0; i < nheld; i++) {
+        if (strcmp(held[i], id) == 0)
+            return;
     }
-    memset(line, 0, sizeof(line));
+    if (nheld >= HELD_MAX) {
+        held_over = 1;
+        return;
+    }
+    strcpy(held[nheld++], id);
 }
 
 /* The UUID's 16 bytes as 32 uppercase hex digits: raw order, and the
@@ -625,7 +580,9 @@ static void scrub_uuid(const SMB_STRUCT *st, SYSINFO *si)
             (at_bound(f) && (tail_heads(hex, raw) || tail_heads(hex, wire))))
             strcpy(f, WITHHELD);
     }
-    withhold_lines(si, raw, wire, 1);
+    strcpy(held_raw, raw);
+    strcpy(held_wire, wire);
+    held_uuid = 1;
     memset(raw, 0, sizeof(raw));
     memset(wire, 0, sizeof(wire));
 }
@@ -648,7 +605,7 @@ static void scrub(const SMB_STRUCT *st, u8 type, SYSINFO *si)
                 continue;
             for (j = 0; (f = shown_field(si, j)) != 0; j++)
                 withhold_if(f, id);
-            withhold_lines(si, id, 0, 0);
+            hold_id(id);
         }
     }
     memset(id, 0, sizeof(id));
@@ -739,6 +696,7 @@ void smb_parse_table(const u8 *t, u32 len, u16 count, SYSINFO *si)
 {
     int complete;
 
+    held_wipe();
     if (len > SMB_TABLE_MAX)
         len = SMB_TABLE_MAX;
     si->used_len = len;
@@ -835,9 +793,9 @@ static void cat_word(char *line, const char *s)
     strcat(line, s);
 }
 
-/* The lines the printers join, built in one place so that the scrubber
- * checks exactly what is printed (withhold_lines). Each fits
- * LINE_MAX_CHARS: at most four fields of SI_STR - 1 and their fixed words. */
+/* The SMBIOS lines the printers join, built in one place for both
+ * reports. Each fits 400 characters: at most four fields of SI_STR - 1
+ * and their fixed words. */
 
 /* The full report's "System:" text. */
 static void line_system(const SYSINFO *si, char *line)
@@ -892,7 +850,7 @@ static void line_bios(const SYSINFO *si, char *line)
 /* The short report's "System:" line with a table read (pf79 cuts it). */
 static void line_short_smb(const SYSINFO *si, char *line)
 {
-    char part[LINE_MAX_CHARS];
+    char part[400];
 
     strcpy(line, "System:");
     part[0] = '\0';
@@ -1134,4 +1092,160 @@ void report_sysinfo_short(const SYSINFO *si, QPRINTF_FN pf)
         }
     }
     pf79(pf, line);
+}
+
+/* ------------------------------------------------------------------ */
+/* The seal: both reports checked as printed                           */
+/* ------------------------------------------------------------------ */
+
+static char cap_buf[4096];
+static size_t cap_len;
+static int cap_over;
+
+static void cap_pf(const char *fmt, ...)
+{
+    char tmp[700];
+    va_list ap;
+    int n;
+
+    va_start(ap, fmt);
+    n = vsprintf(tmp, fmt, ap);
+    va_end(ap);
+    if (n < 0 || cap_len + (size_t)n >= sizeof(cap_buf)) {
+        cap_over = 1;
+        return;
+    }
+    memcpy(cap_buf + cap_len, tmp, (size_t)n + 1);
+    cap_len += (size_t)n;
+}
+
+/* One printed line carries a held identifier: anywhere, ignoring case (the
+ * UUID as hex digits in either order), or - a short line at its 79-column
+ * cut - as a head ending it. */
+static int line_leaks(const char *line, int is_short)
+{
+    char digits[700];
+    int cut, i;
+
+    cut = is_short && strlen(line) >= 79;
+    for (i = 0; i < nheld; i++) {
+        if (contains_nocase(line, held[i]) ||
+            (cut && tail_heads(line, held[i])))
+            return 1;
+    }
+    if (held_uuid) {
+        hex_only(line, digits, sizeof(digits));
+        if (strstr(digits, held_raw) != 0 || strstr(digits, held_wire) != 0 ||
+            (cut && (tail_heads(digits, held_raw) ||
+                     tail_heads(digits, held_wire))))
+            return 1;
+    }
+    return 0;
+}
+
+/* The fields a printed line joins, by its label; 0 for a line that joins
+ * no SMBIOS string. */
+static int line_fields(const char *line, int is_short, int *f)
+{
+    if (!is_short) {
+        if (strncmp(line, "System:  ", 9) == 0) {
+            f[0] = 3; f[1] = 4; f[2] = 5; f[3] = 6;
+            return 4;
+        }
+        if (strncmp(line, "Board:   ", 9) == 0) {
+            f[0] = 7; f[1] = 8;
+            return 2;
+        }
+        if (strncmp(line, "BIOS:    ", 9) == 0) {
+            f[0] = 0; f[1] = 1; f[2] = 2;
+            return 3;
+        }
+        if (strncmp(line, "CPU:     ", 9) == 0) {
+            f[0] = 9; f[1] = 10;
+            return 2;
+        }
+        return 0;
+    }
+    if (strncmp(line, "System:", 7) == 0) {
+        f[0] = 3; f[1] = 4; f[2] = 1; f[3] = 2;
+        return 4;
+    }
+    if (strncmp(line, "CPU:", 4) == 0) {
+        f[0] = 10;
+        return 1;
+    }
+    return 0;
+}
+
+/* Withhold the fields every leaking line of one captured report joins.
+ * Returns 1 when a field changed, 0 when none did, -1 when the report did
+ * not fit the capture (nothing could be checked). A match left only in a
+ * line's fixed words or non-SMBIOS values once its fields are withheld
+ * carries nothing of the table, and is left. */
+static int seal_report(SYSINFO *si, int is_short)
+{
+    char *line, *nl;
+    int f[4], n, k, changed;
+    char *field;
+
+    cap_len = 0;
+    cap_over = 0;
+    cap_buf[0] = '\0';
+    if (is_short)
+        report_sysinfo_short(si, cap_pf);
+    else
+        report_sysinfo(si, cap_pf);
+    if (cap_over) {
+        memset(cap_buf, 0, sizeof(cap_buf));
+        return -1;
+    }
+    changed = 0;
+    for (line = cap_buf; *line != '\0'; line = nl + 1) {
+        nl = strchr(line, '\n');
+        if (nl != 0)
+            *nl = '\0';
+        if (line_leaks(line, is_short)) {
+            n = line_fields(line, is_short, f);
+            for (k = 0; k < n; k++) {
+                field = shown_field(si, f[k]);
+                if (field[0] != '\0' && strcmp(field, WITHHELD) != 0) {
+                    strcpy(field, WITHHELD);
+                    changed = 1;
+                }
+            }
+        }
+        if (nl == 0)
+            break;
+    }
+    memset(cap_buf, 0, sizeof(cap_buf));
+    return changed;
+}
+
+/* Run once every field is filled (sysinfo_probe's last step), before any
+ * report is printed. Each pass withholds at least one of the eleven
+ * strings or ends the loop, so it ends within twelve passes. */
+void sysinfo_seal(SYSINFO *si)
+{
+    int pass, a, b;
+
+    if (si->skipped) {
+        held_wipe();
+        return;
+    }
+    if (held_over) {
+        withhold_all(si);
+        held_wipe();
+        return;
+    }
+    for (pass = 0; pass < 16; pass++) {
+        a = seal_report(si, 0);
+        b = seal_report(si, 1);
+        if (a < 0 || b < 0) {
+            withhold_all(si);
+            break;
+        }
+        if (!a && !b)
+            break;
+    }
+    held_wipe();
 }
