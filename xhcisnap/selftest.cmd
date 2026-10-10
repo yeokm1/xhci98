@@ -268,12 +268,25 @@ if errorlevel 1 (
     echo FAIL: -selftest-msi exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("the helper xhcimsi.sys (32-bit)" "1 of 1 granted; capability MSI" "BOUND; looks 1" "helper version       2.2.0.0" "not asked (helper bound, or 64-bit, and mode not 1)" "not set (mode 0's default)" "ABSENT (not loaded, or not installed); looks 2, last status C0000034" "REPLACED: the message choices stripped, the line left" "1 configuration(s), 1 message and 1 line member(s); 1 stripped" "mode as read         0" "refused for          the answer's identity" "none has run: not applicable" "this driver predates MSI" "100 counter words - not a shape") do (
+for %%S in ("the helper xhcimsi.sys (32-bit)" "4 (the connection's table; one is served); capability MSI" "message descriptors in the grant 1" "capability MSI-X" "MmGetSystemRoutineAddress (64-bit)" "REFUSED (its answer failed a check)" "a message with a line beside it" "BOUND; looks 1" "helper version       2.2.0.0" "not asked (helper bound, or 64-bit, and mode not 1)" "not set (mode 0's default)" "no IRP for the query); looks 2, last status C0000034" "REPLACED: the message choices stripped, the line left" "1 configuration(s), 1 message and 1 line member(s); 1 stripped" "mode as read         0" "refused for          the answer's identity" "none has run: not applicable" "this driver predates MSI" "100 counter words - not a shape") do (
     findstr /C:%%S "%BASE%.msi.log" > nul
     if errorlevel 1 (
         echo FAIL: the message interrupt decode does not say %%S
         set FAILED=1
     )
+)
+rem The 63-word block and the truncated block print nothing of their own:
+rem six sections in all (four decoded, the pre-MSI line, the refused shape).
+findstr /C:"[end]" "%BASE%.msi.log" > nul
+if errorlevel 1 (
+    echo FAIL: the message interrupt selftest did not run to its end
+    set FAILED=1
+)
+set MSICOUNT=0
+for /f %%N in ('findstr /C:"message interrupts" "%BASE%.msi.log" ^| find /c /v ""') do set MSICOUNT=%%N
+if not "%MSICOUNT%"=="6" (
+    echo FAIL: expected 6 message interrupt sections, got %MSICOUNT%
+    set FAILED=1
 )
 
 rem Task 36.9's review: a header longer than its image is refused by

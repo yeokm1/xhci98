@@ -3404,7 +3404,8 @@ static const char *const msi_routines_text[SNAP_MSI_ROUTINES] = {
 
 static const char *const msi_state_text[SNAP_MSI_STATES] = {
     "not looked for yet",
-    "ABSENT (not loaded, or not installed)",
+    "ABSENT (not opened - not loaded or not installed - or no IRP for "
+    "the query)",
     "REFUSED (its answer failed a check)",
     "BOUND",
     "released (the controller was removed)"
@@ -3423,7 +3424,7 @@ static const char *const msi_class_text[SNAP_MSI_CLASSES] = {
     "no interrupt offered",
     "no message offered (the line alone)",
     "a message with a line beside it",
-    "a message and NO line offered",
+    "a message and NO usable line-only configuration offered",
     "a shape this driver does not handle",
     "inconsistent (the walk refused it)"
 };
@@ -3435,7 +3436,7 @@ static const char *const msi_outcome_text[SNAP_MSI_OUTCOMES] = {
     "kept: inconsistent",
     "not asked (helper bound, or 64-bit, and mode not 1): left alone",
     "kept: the strip switched off (XhciMsi86NoStrip)",
-    "kept: no line offered",
+    "kept: no usable line-only configuration offered",
     "kept: no interrupt",
     "kept: no message to strip",
     "kept: a shape not admitted",
@@ -3490,9 +3491,11 @@ static void print_msi(const unsigned char *hcd, unsigned long hcdBytes)
          "start and filter set them:\n");
     comp("  routines               %s\n",
          poll_code(msi_routines_text, SNAP_MSI_ROUTINES, get32(k, 0)));
-    comp("  messages connected     %lu of %lu granted; capability %s; "
-         "status %08lX\n", get32(k, 1 * 4), get32(k, 4 * 4),
-         msi_capability(get32(k, 2 * 4)), get32(k, 3 * 4));
+    comp("  messages connected     %lu (the connection's table; one is "
+         "served); capability %s\n", get32(k, 1 * 4),
+         msi_capability(get32(k, 2 * 4)));
+    comp("    connection status    %08lX; message descriptors in the "
+         "grant %lu\n", get32(k, 3 * 4), get32(k, 4 * 4));
     v = get32(k, 5 * 4);
     if (v == 0 && get32(k, 6 * 4) == 0) {
         comp("  x86 helper             not looked for\n");
@@ -3555,11 +3558,13 @@ static int selftest_msi(void)
 
     companion = NULL;
 
-    /* 7 x86, the helper bound, MSI connected, the filter not asked. */
+    /* 7 x86, the helper bound, MSI connected (a raised
+     * MessageNumberLimit: four messages, one descriptor), the filter not
+     * asked. */
     memset(hcd, 0, sizeof(hcd));
     intr_image(hcd, H, W);
     msi_word(hcd, H, 0, 2);
-    msi_word(hcd, H, 1, 1);
+    msi_word(hcd, H, 1, 4);
     msi_word(hcd, H, 2, 3);
     msi_word(hcd, H, 4, 1);
     msi_word(hcd, H, 5, 3);
@@ -3590,9 +3595,12 @@ static int selftest_msi(void)
     msi_word(hcd, H, 17, 1);
     print_msi(hcd, bytes);
 
-    /* A refused helper (a wrong magic): the identity test. */
+    /* A refused helper (a wrong magic): the identity test; 64-bit's
+     * routines, MSI-X. */
     memset(hcd, 0, sizeof(hcd));
     intr_image(hcd, H, W);
+    msi_word(hcd, H, 0, 1);
+    msi_word(hcd, H, 2, 4);
     msi_word(hcd, H, 5, 2);
     msi_word(hcd, H, 6, 1);
     msi_word(hcd, H, 8, 3);
@@ -3607,12 +3615,21 @@ static int selftest_msi(void)
     msi_word(hcd, H, 13, SNAP_POLL_NOT_FOUND);
     print_msi(hcd, bytes);
 
-    /* A driver from before MSI (96 words), and a block of 100. */
+    /* A driver from before MSI (96 words), a block of 100, a 2.2.0.2
+     * block of 63 (silent here), and a 114-word block the image cannot
+     * hold (refused by the shape check, silent here). */
     memset(hcd, 0, sizeof(hcd));
     intr_image(hcd, H, SNAP_MSI_FIRST);
     print_msi(hcd, bytes);
     intr_image(hcd, H, 100);
     print_msi(hcd, bytes);
+    comp("[63 words follow]\n");
+    intr_image(hcd, H, 63);
+    print_msi(hcd, bytes);
+    comp("[a truncated block follows]\n");
+    intr_image(hcd, H, W);
+    print_msi(hcd, bytes - 4);
+    comp("[end]\n");
     return 0;
 }
 
