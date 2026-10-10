@@ -1801,13 +1801,15 @@ or says it was found by reading the code.
   hub.
 - **Windows 98 SE: a device at a location the system has not seen before
   raises the Add New Hardware Wizard, and holds that port until it is
-  answered.** That is per port and by design of Windows 98. **Finish the
+  answered.** While the device stays plugged in, that hold is per port and
+  by design of Windows 98. **Finish the
   wizard before unplugging the device.** A device unplugged while its
-  wizard is open stays held: Windows does not look at the port again
-  until the wizard is closed, so the same device plugged back in is not
-  seen until then, and keys typed into the abandoned wizard wedged the
-  machine. The same happens on Windows 98 SE's own USB stack and under
-  `2.2.0.0`.
+  wizard is open holds more than its port: Windows asks the bus about no
+  port again until the wizard is closed, so neither that device plugged
+  back in nor a device plugged in, at any port, where another was
+  unplugged meanwhile is seen until then; closing the wizard brings them
+  all at once. Keys typed into the abandoned wizard wedged the machine.
+  The same happens on Windows 98 SE's own USB stack and under `2.2.0.0`.
 - **Windows 98 shows no driver version on the Driver tab**, only the file
   date; the four-part version is under Driver File Details, which also lists
   `xhci98.tmp`, a leftover of the install's temporary copy (cosmetic).
