@@ -3462,8 +3462,8 @@ static void print_ssusp(const unsigned char *image, unsigned long bytes)
     comp("\nselective suspend, stage B (task 36.38):\n");
     v = get32(image, SNAP_HCD_SSUSP_HEAD * 4);
     if (v == 0xFFFFFFFFUL) {
-        comp("  DNCTRL                     not read (XhciSelectiveSuspend "
-             "not 1)\n");
+        comp("  DNCTRL                     not read (selective suspend off, "
+             "or no MMIO)\n");
     } else {
         comp("  DNCTRL                     0x%04lX%s\n", v,
              (v & 2UL) != 0 ? " (N1, FUNCTION_WAKE, enabled)" : "");
