@@ -306,6 +306,20 @@ needs at most `ceil(N / 4096) + 1` data TRBs.
 
 ## IRQ and DPC Model
 
+**Since `2.3.0.0` (amended in roadmap-hcd 36.20).** This section is the
+miniport's. The HCD that replaced it from `2.0.0.0` connects its own
+interrupt, and from `2.3.0.0` is no longer line-only: a controller with
+Interrupt Pin 0 is polled on a timer of the driver's own, and on Windows Vista and 7 the controller may take a
+message-signalled interrupt (MSI or MSI-X), on amd64 directly and on x86
+through the helper `xhcimsi.sys`. Automatic polling covers a pin of 0, no
+interrupt resource, and a line the driver sees raised and never
+delivered; another dead interrupt needs mode 2. `XhciInterruptMode`
+chooses (0 automatic; 1 asks for the line, though on Vista and 7 a
+message Windows grants anyway is used and an unconnected one polls; 2
+polling); the start settles the delivery once. `docs/contributing/implementation-invariants.md`, "Interrupt
+Delivery", and design records 15 and 18 have the rules; design record 13
+section 5.4 the HCD's locks around them.
+
 - Both targets are line-based, not MSI: Win98/NUSB `usbport.sys` with the 9x PCI driver, and Win2000's native `usbport.sys` with the NT5 PCI driver (the NT kernel gained MSI only in Vista). The driver relies on the controller's PCI INTx# interrupt (shared or dedicated); Interrupter 0 asserts INTx# whenever MSI/MSI-X is not enabled (xHCI spec section 4.17.3).
 - INTx is optional in xHCI (section 4.17.3: "PCI Interrupt Pins are optional"). A controller may be MSI/MSI-X-only and report PCI Interrupt Pin (config 0x3D) = 0, in which case neither target's line-based stack gets interrupts. Treat Interrupt Pin != 0 as a prerequisite; most real PCH/discrete xHCI controllers satisfy it. On PCIe the "pin" is emulated via in-band Assert/Deassert_INTx messages routed to a legacy IRQ, which is transparent to both. Where the routing of that assertion differs (PIC on Win98 and Win2000's `hal.dll`/`halacpi.dll`, IOAPIC on Win2000's uniprocessor and multiprocessor APIC HALs), `usbport.sys` and the HAL absorb it; the miniport sees the same ISR callback either way.
 - The miniport does not call `IoConnectInterrupt` itself. `usbport.sys` owns the interrupt object and dispatches to the miniport's ISR callback.

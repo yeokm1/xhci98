@@ -454,6 +454,39 @@ What is new has three layers, in this order from outermost to innermost:
    mark or copy the lists.
 3. **The controller lock**, innermost, as above.
 
+**Amended for `2.3.0.0` (roadmap-hcd 36.20).** Phase 36 adds, without
+changing the three layers:
+
+- **The event delivery** (design records 15 and 18). The ISR is one of
+  three ways the event ring is reached: the line interrupt
+  (`IoConnectInterrupt`, as above), a message interrupt on Vista and 7
+  (`IoConnectInterruptEx` on amd64, through the `xhcimsi.sys` helper on
+  x86; a message ISR of its own in `hcd_ctl.c`), or no interrupt at all
+  while the poller (`hcd_poll.c`'s timer and DPC) drains the ring. The
+  delivery is settled once per start. `PollLock`, a spin lock guarding the
+  poller's state, nests inside the controller lock: **the controller
+  lock, then `PollLock`, never the reverse**, neither held across a
+  drain, and `TimerLock` never taken with `PollLock` held (record 15
+  section 5.1). The line's retirement, when the watcher finds it dead,
+  runs under `KeSynchronizeExecution` (record 15 section 5).
+- **Selective suspend** (design record 14). Its per-device link machine
+  and each function PDO's power slot are under the controller lock
+  (record 14 section 4.1). The link machine's transitions are the enum
+  thread's alone; the one other writer is stage B's Function Wake
+  notification latch (`FwPending`, `FwPendingFar`), set from the event
+  DPC under the controller lock (`HcdSuspNotificationLocked`,
+  `XhciSuspFwReceive`; record 14 section 8.7);
+  `PdoListLock` before the controller lock where both are needed, the
+  cancel spin lock released before the controller lock is taken, as
+  above. The idle notification's callbacks run on a second system thread
+  per controller (record 14 section 6.1), one at a time, holding no bus
+  lock; the enum thread waits on it only through a bounded, deferring
+  rundown. No power or idle IRP is completed on the enum thread itself:
+  each goes to a work item (roadmap-hcd 36.35's fix).
+- **The door's descriptor reads** (36.45, section 8.11): a request pended
+  on the controller's door list under its cancel-safe rules and served by
+  the enum thread on the default endpoint.
+
 A function driver's IRP enters at the PDO at up to DISPATCH_LEVEL and touches
 the topology only through its own device object, whose lifetime 5.2 pins to
 the PDO's remove. It takes the controller lock to queue a transfer and nothing
@@ -515,6 +548,17 @@ later release therefore cannot change a default on a machine that already
 holds the old one. The gate's `VAL-*` rules hold all seven, flags included,
 and since task 34.3 an eighth, `XhciIntelPortSwitch`, under the same
 flag (at 1; at 0 since task 36.42).
+
+**Amended for `2.3.0.0` (roadmap-hcd 36.20).** The INFs write sixteen
+values under the same rule and flag: the eight above; `XhciTolerance`,
+`XhciIntervalCap` and `XhciAvgTrbEsit` (Phase 35, `2.2.0.0`);
+`XhciIntelIrqRoute` (36.3, at 1); `XhciMaxTransferKB` (36.22, at 1024);
+and `XhciInterruptMode`, `XhciPollIdleMs` and `XhciPollActiveMs` (36.8,
+at 0, 50 and 1; design record 15 section 3). Two more are read and
+written by no INF, so absent is their default: `XhciWideMap` (36.24,
+section 11.6; off when absent or 0, any other number on, owner 2026-10-10) and `XhciSelectiveSuspend`
+(36.33, design record 14 section 7; on only for a `REG_DWORD` of exactly 1). `txtsetup.oem` still
+writes none, so F6 Setup runs at the code defaults.
 
 The package is `xhci98-<version>.zip`, as the miniport's was - the published
 `releases\1.2.0.0` directory is never edited (`releases/README.md`) - staged by `make-package.ps1` from 26-A.1 and published by
@@ -1141,6 +1185,21 @@ target sends it; it does not mean the target's OS never does.
 | URB 0x28 | yes | yes | yes | yes | yes | yes | `hidusb`; `usbstor` to XP SP3 |
 | URB 0x2A | - | - | yes | yes | yes | yes | `hidusb` (`HumGetMsGenreDescriptor`) |
 | `usbd.sys` exports imported | `CreateConfigurationRequestEx`, `ParseConfigurationDescriptorEx`, `ParseDescriptors`, `GetUSBDIVersion` (ASIX) | same | same | first three | first three | first three | answered inside `usbd.sys`, never at the PDO |
+
+**The power rows since selective suspend (`2.3.0.0`, roadmap-hcd 36.28 to
+36.40, design record 14; amended in 36.20).** With `XhciSelectiveSuspend`
+0, the default, the PDO answers `QUERY_CAPABILITIES`, `WAIT_WAKE`,
+`SET_POWER` and `SUBMIT_IDLE_NOTIFICATION` as before: no D1/D2 and no wake
+in the capabilities, `WAIT_WAKE` refused, a D-IRP recorded and completed,
+the idle IRP held and its callback never called. With 1, an eligible
+non-hub device PDO (record 14 sections 5.1 and 8.2) reports D2, and
+where its configuration allows remote wake also D1 and wake from both
+(without it, D2 and no wake; record 14 sections 5.2 and 8.3); a Dx suspends
+the device's link once its last function leaves D0 and a D0 resumes it
+(record 14 sections 3 and 4); `WAIT_WAKE` arms the device (section 5);
+and the idle IRP's callback is called on the bus's own callback thread,
+in batches per composite device (section 6). Hub PDOs and composite-parent
+PDOs keep the switch-0 answers in either case.
 
 **Sent by no binary read on any target:** `GET_ROOTHUB_PDO`, `ENABLE_PORT`,
 `GET_HUB_COUNT`, `GET_HUB_NAME`, `GET_CONTROLLER_NAME`, `GET_BUSGUID_INFO`,
@@ -2955,7 +3014,11 @@ change (xHCI 5.4.8, p.371).
    behind a TT, software shall issue a ClearFeature(CLEAR_TT_BUFFER) request
    to TT in the HS hub").
 
-**Suspend and resume**, the minimum (selective suspend is not on the roadmap):
+**Suspend and resume**, the minimum (selective suspend was not on the
+roadmap when this was written; since `2.3.0.0` it is, off by default,
+design record 14, and its suspend and resume sequences at a root port and
+a USB 2.0 hub port, sections 3.4 to 3.6, apply the timings below; amended
+in 36.20):
 resume is signalled for at least 20 ms (`TDRSMDN`), and the xHC answers a
 device-initiated resume within 1 ms (`TURSM`), both quoted by xHCI p.256 from
 USB 2.0 7.1.7.7; after a port reports suspended (`PLS` = 3), wait at least 10
@@ -3572,7 +3635,7 @@ same shape going by its public symbol names alone
 | `IOCTL_INTERNAL_USB_CYCLE_PORT` | the whole device leaves and re-enumerates: every function PDO reported missing and recreated. The siblings share a group serial and leave together; the port re-enumerates only once the last of the group is deleted |
 | `IRP_MN_REMOVE_DEVICE` on a function PDO | only this function's requests are cancelled (EP0's included); then the thread closes its pipes, drops its endpoints and returns its interfaces to alternate 0 (`HcdCfgReleaseFunction`), so a removed audio function holds no periodic bandwidth; the siblings keep theirs (round 19, finding 4). The device record stays until the slot goes (5.2) |
 | `IOCTL_INTERNAL_USB_GET_PORT_STATUS`, `QUERY_INTERFACE` (`USB_BUS_INTERFACE_USBDI`) | the device's answers, identical for every function (section 6; 26-A.6) |
-| power | a function's D-state is its own; the device stays D0 while any function is D0 (selective suspend is outside the roadmap, 28.3). **Amended 2026-10-10 (36.43, 10.12):** the device's link follows its composite parent's children, the function PDOs; the parent PDO is not a voter, and under record 14's stage A it is excluded as a hub PDO is |
+| power | a function's D-state is its own; the device stays D0 while any function is D0 (selective suspend is outside the roadmap, 28.3). **Amended 2026-10-10 (36.43, 10.12):** the device's link follows its composite parent's children, the function PDOs; the parent PDO is not a voter, and under record 14's stage A it is excluded as a hub PDO is. **Amended 2026-10-10 (36.20):** "outside the roadmap" no longer holds - selective suspend ships in `2.3.0.0` behind `XhciSelectiveSuspend`, off by default (record 14 section 7); at 0 this row stands as written, and at 1 the device's link is suspended once its last function leaves D0 (record 14 section 4.3) |
 
 **A function's polling interval is the caller's** (2026-10-05, whole-branch
 review of `2.1.0.0`, area B, incidental 2). A function's

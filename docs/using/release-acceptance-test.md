@@ -52,7 +52,7 @@ characterisation record for the hardware this project holds, and
 
 | # | What | The property that matters |
 |---|---|---|
-| 1 | An xHCI machine | PCI class code `0C0330`, a memory window below 4 GB, and a legacy interrupt pin. Step 3 confirms them. A controller with no interrupt pin cannot be driven on any target, and there is no software workaround |
+| 1 | An xHCI machine | PCI class code `0C0330` and a memory window below 4 GB. Step 3 confirms them. Since `2.2.0.3` an interrupt pin is not required: a controller with none is polled, or takes a message-signalled interrupt on Vista and 7, and `XHCIQUAL` says so (`QUALIFIED WITH CAVEATS`) |
 | 2 | One target OS, already installed and working | Windows 98 SE (4.10.2222) or Windows 2000 SP4; for the VM-only rows, Windows ME (4.90.3000) (4.5, 7.7-7.8), 32-bit Windows XP SP3 (4.6, 7.9-7.12), Windows XP Professional x64 SP2 (4.8, 7.13-7.16), 32-bit Windows Vista SP2 or Windows 7 SP1 (4.9, 7.17-7.19), or Windows Vista x64 SP2 or Windows 7 x64 SP1 (4.10, 7.17-7.20). **On Windows 98 SE, NUSB 3.3 or 3.6 installed** if the storage clauses (5.2, 5.7, 5.8) are to be taken: storage there needs NUSB's mass-storage component, and without it those clauses are a SKIP with that reason (4.1). Do not install NUSB on any other target. The two 64-bit rows take a different package: separate 64-bit builds in their own directories (step 2); and on Vista x64 and Windows 7 x64 the drivers load only on a boot where driver signature enforcement was disabled, at every start (4.10). One OS per run: a dual-boot machine is two runs and two records |
 | 3 | A PS/2 or built-in keyboard and pointing device | A USB keyboard on the controller under test is unusable during the DOS pass and can stop responding mid-run. On a laptop the built-in keyboard is normally i8042-attached, but that is per machine; confirm it rather than assuming (`docs/contributing/build-and-test.md`, "Bootstrapping xHCI-only machines") |
 | 4 | A real-DOS boot medium, and a way to get a file off it | MS-DOS or FreeDOS on floppy, CD or USB key, booted without EMM386, a V86 monitor or a paging memory manager, but with `HIMEM.SYS` available, which is not one of those and which the qualifier may need (step 3). Not a DOS box inside Windows: the qualifier needs memory it can address one-to-one. Step 3 leaves `PROBE.LOG` on it, and that file is the run's first artefact |
@@ -199,9 +199,15 @@ program that never started has produced no verdict, which is a different
 record from `DISQUALIFIED`; say which one this was.
 (`xhciqual/hardware-testing.md`, "Safety and preparation" step 1.)
 
-`DISQUALIFIED` on the interrupt pin is a stop: the driver has no MSI path, and
-there is no software workaround. Record the verdict, complete the record, and
-stop. `DISQUALIFIED` on "no USB 2.0 ports" is the qualifier's criterion from
+`Interrupt Pin = 0` is no longer a stop: since `2.2.0.3` the quick scan
+reads `LOOKS QUALIFIED WITH CAVEATS` and the full run `QUALIFIED WITH
+CAVEATS` (exit code 3), because the driver polls such a controller
+(`XhciInterruptMode` `0` or `2`), or takes a message-signalled interrupt on
+Vista and 7 where the controller offers one. Record the caveat and the
+line saying which applies, and continue to step 4; at step 8, check in
+`XHCISNAP`'s report that the delivery is the one the line named (polling,
+or MSI). Up to `2.2.0.0` it was
+`DISQUALIFIED` and a stop. `DISQUALIFIED` on "no USB 2.0 ports" is the qualifier's criterion from
 the `1.x` releases; record it and continue to step 4 (the `2.0.0.0` driver
 accepts such a controller, built from the specification and untested).
 
@@ -229,7 +235,7 @@ run sheets cite them.
 | 4.5 | Windows ME | SweetLow's USB 2.0 stack first (every Windows ME reading was taken under it); then the Windows 98 SE route of 4.1 | Completes, with a request to restart. In the virtual machines no CD was asked for. This target is supported in virtual machines only |
 | 4.6 | Windows XP | Device Manager, the controller, Properties -> Driver -> Update Driver -> Have Disk -> `RELEASE-X86\`; Continue Anyway at the unsigned-driver warning | Completes with no file prompt. This target is supported in virtual machines only |
 | 4.8 | Windows XP x64 | The Windows 2000 route of 4.2, pointed at `RELEASE-X64\`; Continue Anyway at the unsigned-driver warning | Completes with Windows' signature and Logo prompts only, no file prompt and no restart. `RELEASE-X86\` offers this machine no driver at all, which is what a wrong pick looks like. This target is supported in virtual machines only |
-| 4.9 | Windows Vista, Windows 7 (32-bit) | Device Manager, the unrecognised xHCI device, Update Driver Software -> Browse my computer for driver software -> `RELEASE-X86\`. Use Device Manager rather than right-clicking an INF. If Windows warns that the driver is not signed or its publisher cannot be verified, choose to install it anyway, and write down the prompt's wording | Completes with no file prompt: the INF's `Xhci.Dev6` path copies `xhci98.sys` alone. 32-bit Vista and Windows 7 do not enforce kernel-mode signing, so the driver starts on the ordinary boot. This target is supported in virtual machines only |
+| 4.9 | Windows Vista, Windows 7 (32-bit) | Device Manager, the unrecognised xHCI device, Update Driver Software -> Browse my computer for driver software -> `RELEASE-X86\`. Use Device Manager rather than right-clicking an INF. If Windows warns that the driver is not signed or its publisher cannot be verified, choose to install it anyway, and write down the prompt's wording | Completes with no file prompt: the INF's `Xhci.Dev6` path copies `xhci98.sys` and, since `2.3.0.0`, the MSI helper `xhcimsi.sys`. Since `2.3.0.0` it then asks for a restart, and until the restart the controller shows Code 28 (Windows 7) or Code 1 (Vista); 4.3 is read after it. 32-bit Vista and Windows 7 do not enforce kernel-mode signing, so the driver starts on the ordinary boot. This target is supported in virtual machines only |
 | 4.10 | Windows Vista x64, Windows 7 x64 | The route of 4.9, pointed at `RELEASE-X64\`. Then restart with driver signature enforcement disabled (the Advanced Boot Options menu); that lasts one boot, and every later boot that is to have working USB needs it again | Completes with no file prompt. The drivers start only on a boot with enforcement disabled; on any other boot Device Manager shows Code 39 on the controller and nothing on it works. This target is supported in virtual machines only, and the package is not signed |
 | 4.3 | All seven | Look at Device Manager when the install is done | The two nodes below, and neither carries a warning mark. On Vista x64 and Windows 7 x64, on the boot of 4.10 |
 | 4.4 | Windows 98 SE | Record only: open the controller's Driver File Details and the Driver tab | Driver File Details lists `xhci98.tmp` (the `release` legs, under NUSB and under SweetLow's stack). Under `1.x`, `xhci98.tmp` was left in `System32\Drivers` and listed there (cosmetic), and the Driver tab showed a date but no version; the `2.0.0.0` INF keeps the same temporary-copy line |

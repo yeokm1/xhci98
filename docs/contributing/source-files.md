@@ -267,7 +267,58 @@
 > counters and the trace); in `hcd_ctl.c` the seam `hcdMsgConnect`, the
 > message ISR and the capability read; and `src/msi86/` - `msi86_entry.c`,
 > `xhcimsi.rc`, `sources` and `makefile` - the NT 6 x86 helper
-> `xhcimsi.sys`, built with WDK 7.1 for x86. The tables below are the
+> `xhcimsi.sys`, built with WDK 7.1 for x86.
+> Tasks 36.28 to 36.40 (design record 14) add selective suspend: the pure
+> `xhci_susp.c` / `xhci_susp.h` (the switch, eligibility and capabilities,
+> the device's link machine, each function's power slot, the wake episode,
+> the idle notification's batches and claims, and stage B's Function
+> Suspend, wake arming and SuperSpeed hub port decisions; host suite
+> `test_susp`) and the driver half `hcd_susp.c` (the enum thread's
+> executor: the admission gate on a device's pipes, the suspend and resume
+> sequences at a root port and a hub port, U3 and Function Suspend at
+> SuperSpeed, the decision pass and the wake evidence). Dispatch's half
+> (D-IRPs, WAIT_WAKE, the idle notification) is in `hcd_pdo.c` and
+> `hcd_urb.c`; `XhciSelectiveSuspend` is read in `hcd_ctl.c`; all of it is
+> inert while the value is not 1. Task 36.45 adds no file: an uncached
+> descriptor is read from the device through the door (`hcd_door.c`, its
+> request's checks the pure half in `xhci_hub.c`, `test_hub`; the EP0 path
+> in `hcd_enum.c`; record 13 section 8.11). Task 36.46 adds no file: a
+> select honours `bNumEndpoints` and ignores surplus endpoint descriptors
+> (`xhci_pipe.c`, `test_pipe`, applied in `hcd_cfg.c`; `uas_iu.c`'s
+> `UasParseConfig` keeps the same boundary). Task 36.47 adds no file: `XHCISNAP`'s "captured on" header
+> and `-nosysinfo` are `xhcisnap\xhcisnap.c`'s. Task 36.48 adds
+> `xhciqual\sysinfo.c` (the system description's pure half: the SMBIOS
+> entry point and table walk with its identifiers never copied, CPUID
+> text, the printer; host suite `xhciqual\test\test_sysinfo.c`),
+> `xhciqual\sysprobe.c` (its DOS half: the BIOS area, the DPMI mapping,
+> E820 and the DOS version) and `xhciqual\sysasm.asm` (CPUID, every
+> register it touches saved). Task 36.33's fix adds
+> `xhcisnap\check-counter-names.ps1`, which checks the built `XHCISNAP`'s
+> counter names against `xhci_counters.h` word by word.
+> Two groups from before Phase 36 that this map did not name (added in
+> 36.20): strict mode, `xhci_strict.c` / `xhci_strict.h` (the xHCI 1.2
+> command precondition table: would a conforming controller accept this
+> command in this Slot and EP state; pure, host suite `test_strict`) and
+> its driver half `hcd_strict.c` (before each command `hcd_enum.c`'s
+> `hcdCommand` submits, it reads the states from the Output Device Context,
+> counts and traces a violation and still sends the command; it only
+> observes), compiled into the debug and `qemu` flavours and none of it
+> into `release`; and `src\uas\`, the UAS class driver `xhciuas.sys` (task
+> 31-A.2), built by its own `sources` and `makefile`: `uas.h` (the stack
+> and the transports), `uas_iu.c` / `uas_iu.h` (its pure core: the
+> information units, LUN encoding, tags, the configuration walk for the
+> UAS setting, REPORT LUNS, the status fold and the storage ids; host suite
+> `test_uas`), `uas_mem.c` (every pool, MDL and IRP-memory call, the import
+> allowlist's one site), `uas_streams.c` / `uas_streams.h` (the one
+> adapter to the bus's `IOCTL_XHCI98_OPEN_STREAMS` and `CLOSE_STREAMS`),
+> `uas_entry.c` (`DriverEntry`, `AddDevice`, the dispatch table),
+> `uas_fdo.c` (the FDO: PnP, the configuration and four pipes, the
+> transport choice, LUN discovery), `uas_pdo.c` (one PDO per logical unit:
+> its ids, SRBs and the storage IOCTLs), `uas_xport.c` (the transport
+> engine: queue, tags, the IUs streamed and streamless, timeouts, task
+> management, reset recovery), `xhciuas.rc` (the version resource) and the
+> two INFs, `xhciuas.inf` (32-bit) and `xhciuas-amd64.inf` (staged as
+> `xhciuas.inf` in the 64-bit package). The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name
