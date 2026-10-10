@@ -65,7 +65,7 @@ On Windows 98 SE, storage of any kind, UAS included, needs NUSB's mass-storage c
 
 On an xHCI-only Windows 98 SE or ME machine, **have the Windows installation CD at hand** or its contents on disk. Windows may ask for files from it while installing the driver or the USB devices plugged in afterwards.
 
-Optional but recommended: boot real DOS (not a DOS box inside Windows) and run `XHCIQUAL` from the `XHCIQUAL\` folder. A controller reporting no legacy interrupt pin cannot be driven on either system and there is no software workaround, so find out before you install anything.
+Optional but recommended: boot real DOS (not a DOS box inside Windows) and run `XHCIQUAL` from the `XHCIQUAL\` folder. It says whether the driver can work on the machine before you install anything. Since `2.3.0.0` a controller reporting no legacy interrupt pin is no longer refused: the driver polls it, or takes a message-signalled interrupt on Vista and 7, and `XHCIQUAL` reports it as `QUALIFIED WITH CAVEATS`.
 
 <img src="images/xhci98-xhciqual-basic.jpg" width="800">
 
@@ -208,7 +208,7 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 |---|---|---|---|---|---|
 | `XhciImodInterval250ns` | The interrupt moderation interval | `10` | `4000` | `4000` | `160` |
 | `XhciForceBulkOnly` | Bulk-Only instead of UAS | `0` | `1` | `0` | `0` |
-| `XhciFastPollFsLs` | A root-port Low- or Full-Speed mouse polled above 1000 Hz | `0` | `3` | `0` | `0` |
+| `XhciFastPollFsLs` | A root-port Low- or Full-Speed mouse polled above 1000 Hz | `0` | `4` | `0` | `0` |
 | `XhciFirstEnumWaitMs` | The longest wait for a hub's first report | `0` | `30000` | `5000` | `5000` |
 | `XhciFirstEnumPortMs` | The longest one port may hold that wait | `0` | `XhciFirstEnumWaitMs` | `2000` | `2000` |
 | `XhciIntelPortSwitch` | The Intel 7/8/9-series port switchover; `1` turns it on, `2` applies it to any Intel controller **at your own risk** (`portsw.vbs` sets `0` or `1`) | `0` | `2` | `0` | `0` |
@@ -216,12 +216,18 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | `XhciTolerance` | The handling of controller faults, all together; `0` turns most of it off (see "Controller faults") | `0` | `1` | `1` | `1` |
 | `XhciIntervalCap` | Interrupt endpoints polled at least every 32 ms: `1` on AMD controllers, `2` on every controller, `0` off | `0` | `2` | `1` | `1` |
 | `XhciAvgTrbEsit` | A comparison switch for interrupt endpoints; leave at `0` unless comparing | `0` | `1` | `0` | `0` |
+| `XhciMaxTransferKB` | The largest UAS command, in KiB (a multiple of `4`) | `64` | `2048` | `1024` | `1024` |
+| `XhciInterruptMode` | How the controller's events arrive: `0` automatic, `1` the interrupt line only, `2` polling | `0` | `2` | `0` | `0` |
+| `XhciPollIdleMs` | While polling, the period with nothing outstanding, in ms | `1` | `5000` | `50` | `50` |
+| `XhciPollActiveMs` | While polling, the period with transfers outstanding, in ms | `1` | `XhciPollIdleMs` | `1` | `1` |
+| `XhciWideMap` | Two pieces of a large bulk transfer on the controller at once (2000 to 7) | `0` | `1` | `0` | not written |
+| `XhciSelectiveSuspend` | Selective suspend of idle devices when Windows asks | `0` | `1` | `0` | not written |
 | `XhciLogVerbosity` | The driver's log, read by `XHCISNAP` | `0` | `4` | `0` | `0` |
 | `XhciLogDebugView` | The log sent to DebugView as well | `0` | `1` | `0` | `0` |
 
 An install or update writes a value only where it is missing, so a value you changed stays as you set it. To go back to the table's value, set it by hand, or delete the value and update the driver. A machine updated straight from `1.2.0.0` keeps that release's `XhciImodInterval250ns` of `500`; set it to `160` by hand.
 
-The two log values are described in the [release notes](docs/using/release-notes.md), "The log, and how to send one". The others are described below.
+The two log values are described in the [release notes](docs/using/release-notes.md), "The log, and how to send one". `XhciWideMap` and `XhciSelectiveSuspend` are written by no install: add them by hand in the same key. Each value is read when the controller starts, so restart Windows after changing one. The others are described below, and all of them in the release notes' "Registry settings".
 
 ### The interrupt moderation interval
 
@@ -302,6 +308,18 @@ Since `2.3.0.0` the driver reads those registers at each start and resume and, w
 
 It writes nothing on any other controller, nothing when the interrupt is a message (MSI) rather than a line, as it can be on Vista and 7, nothing while the driver is polling the controller, and on 2000 to 7 nothing when Windows gave the controller an interrupt below 16. `XHCISNAP`'s report has an "interrupt routing" section that says what it found and did.
 
+### Polling and message-signalled interrupts
+
+Since `2.3.0.0` a controller with no interrupt pin, or whose interrupt never arrives, is polled instead of refused, and on Windows Vista and 7 the controller may use a message-signalled interrupt (MSI or MSI-X) instead of its line: on x64 directly, on 32-bit through a small helper driver in the package, `xhcimsi.sys`. **The install and every update on 32-bit Vista and 7 ask for a restart**, because the helper starts only at boot. `XhciInterruptMode` `0` (automatic) chooses; `1` forces the line (a controller with none then fails to start, Code 10), `2` forces polling. `XhciPollIdleMs` and `XhciPollActiveMs` set the polling periods. `XHCISNAP`'s report says which delivery is in use. The release notes' "Windows Vista and 7: message-signalled interrupts" and "XhciInterruptMode, XhciPollIdleMs and XhciPollActiveMs" have the details.
+
+### UAS command size and two transfer pieces at once
+
+Since `2.3.0.0` a UAS command moves up to 1 MiB, where earlier releases sent 64 KiB: `XhciMaxTransferKB`, `64` to `2048`, sets it for every UAS drive on the controller, and Microsoft's per-device `MaximumTransferLength` under `HKLM\SYSTEM\CurrentControlSet\Control\usbstor\VVVVPPPP` (`65535` to `2097152` bytes) sets it for one drive model. Restart after changing either. `XhciWideMap` set to `1` lets the driver keep two pieces of a large bulk transfer on the controller at once on Windows 2000 to 7; it is **off by default** in `2.3.0.0`, because a regression would show as wrong data rather than an error. See the release notes, "XhciMaxTransferKB" and "XhciWideMap".
+
+### Selective suspend
+
+Since `2.3.0.0` the driver can suspend an idle device when Windows asks, and wake it on Windows' request or the device's own remote wake: USB 2.0 and SuperSpeed devices, never hubs or the controller. It is **off by default**; `XhciSelectiveSuspend` set to `1` turns it on, then restart. It has been read only in virtual machines, so leave it off unless you are testing it. See the release notes, "XhciSelectiveSuspend: putting idle devices to sleep".
+
 ### Controller faults
 
 Since `2.2.0.0` the driver no longer leaves a device dead until it is replugged after a transfer, port or controller fault. This follows a tester's report from an AMD AM5 board of a mouse that stops at random. In short:
@@ -377,7 +395,7 @@ These come from Windows, NUSB or the driver being unsigned, and no change to thi
 
 | Limitation | Detail |
 |---|---|
-| The driver never starts selective suspend | Idle devices and hub ports are never suspended to save power. A suspend or resume a hub reports is handled. |
+| Selective suspend is off by default, and hubs are never suspended | With `XhciSelectiveSuspend` at its default `0`, idle devices are never suspended to save power, as in earlier releases. At `1` a device is suspended when Windows asks; hubs, the root hub and the controller never are. See "Selective suspend" above. |
 | Windows 2000: a mounted USB drive may come back at Code 31 after a controller recovery | After the driver recovers the controller in place (a halted controller, or a failed endpoint reset), a USB drive whose volume was mounted may stay at Code 31 until it is unplugged and plugged in again, or the controller is disabled and enabled. Other devices come back. Seen in a virtual machine; not on Windows 98 SE. The path predates `2.2.0.0`, which recovers on more faults. |
 | A UAS drive as the first USB storage device on Windows ME | On a fresh Windows ME installation whose first USB storage device is a UAS drive, the drive shows Code 2 (NTKERN.VXD device loader(s) could not load). ME has not yet copied its own `USBNTMAP.SYS` and `USBMPHLP.PDR`, which it installs only when its first ordinary USB stick is plugged in. To recover, plug in any ordinary USB stick once, then unplug the UAS drive and plug it back in. No Remove and no restart are needed. |
 
