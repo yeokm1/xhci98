@@ -218,11 +218,13 @@ ULONG XhciXpipeRecStop(PXHCI_XPIPE_REC r, ULONG kind, LONG status);
 /* The mapping moved to `mapState`; XHCI_XPIPE_F_FINAL when that makes it
  * final. */
 ULONG XhciXpipeRecMapState(PXHCI_XPIPE_REC r, ULONG mapState);
-/* The status the URB reports: the latched outcome - a stop that moved
- * everything is success - and a success short of the length the client
- * did not allow is `shortStatus`. */
+/* The status the URB reports: the latched outcome - a cancel (a stop
+ * whose status is `cancelStatus`) that raced every byte's move is
+ * success, as today's path reports it; any other stop keeps its status
+ * (a removal at a device's going, a fault's abort) - and a success short
+ * of the length the client did not allow is `shortStatus`. */
 LONG XhciXpipeRecStatus(const XHCI_XPIPE_REC *r, ULONG shortOk,
-                        LONG shortStatus);
+                        LONG shortStatus, LONG cancelStatus);
 
 /*
  * Stage 2's counters (point 7), in the snapshot's HCD header after the

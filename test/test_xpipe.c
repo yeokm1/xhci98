@@ -428,7 +428,7 @@ static void test_rec_flow(void)
     f = XhciXpipeRecMapState(&r, XHCI_XPIPE_MAP_ALLOCATED);
     CHECK(f & XHCI_XPIPE_F_FINAL, "final once the routine returned");
     CHECK_EQ(r.Committed, 300, "every byte");
-    CHECK_EQ(XhciXpipeRecStatus(&r, 0, ST_SHORTX), ST_OK, "success");
+    CHECK_EQ(XhciXpipeRecStatus(&r, 0, ST_SHORTX, ST_CAN), ST_OK, "success");
     CHECK_EQ(XhciXpipeRecMapState(&r, XHCI_XPIPE_MAP_ALLOCATED), 0,
              "the finalizer fires once");
 
@@ -488,9 +488,9 @@ static void test_rec_early(void)
     CHECK(f & XHCI_XPIPE_F_TRUNC_END, "the successor has left");
     CHECK(f & XHCI_XPIPE_F_FINAL, "final");
     CHECK_EQ(r.Committed, 40, "the short's bytes");
-    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX), ST_OK,
+    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX, ST_CAN), ST_OK,
              "a short completes as success when allowed");
-    CHECK_EQ(XhciXpipeRecStatus(&r, 0, ST_SHORTX), ST_SHORTX,
+    CHECK_EQ(XhciXpipeRecStatus(&r, 0, ST_SHORTX, ST_CAN), ST_SHORTX,
              "the client's short rule");
 
     /* The successor already retired when the thread looks: the device fed
@@ -512,7 +512,7 @@ static void test_rec_early(void)
     f = ret(&r, 60, ST_ERR);
     CHECK(f & XHCI_XPIPE_F_TRUNCATE, "an error hands the successor over");
     (VOID)ret(&r, 0, ST_CAN);
-    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX), ST_ERR, "its status");
+    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX, ST_CAN), ST_ERR, "its status");
     CHECK_EQ(r.Committed, 60, "its bytes");
     XhciXpipeRecInit(&r, 300, XHCI_XPIPE_MAP_ALLOCATED);
     (VOID)pub(&r, 100);
@@ -523,7 +523,7 @@ static void test_rec_early(void)
     CHECK(f & XHCI_XPIPE_F_TRUNCATE, "a verdict on a full TD ends too");
     (VOID)ret(&r, 30, ST_CAN);
     CHECK_EQ(r.Committed, 200, "TD 2's stopped progress not counted");
-    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX), ST_HC, "the verdict");
+    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX, ST_CAN), ST_HC, "the verdict");
 
     /* A cancel racing the early end: the end first, the cancel after. */
     XhciXpipeRecInit(&r, 300, XHCI_XPIPE_MAP_ALLOCATED);
@@ -532,7 +532,7 @@ static void test_rec_early(void)
     (VOID)ret(&r, 40, ST_OK);
     (VOID)XhciXpipeRecStop(&r, XHCI_XPIPE_OUT_STOP, ST_CAN);
     (VOID)ret(&r, 0, ST_CAN);
-    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX), ST_OK,
+    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX, ST_CAN), ST_OK,
              "the end latched first: a short, never cancelled");
     /* The cancel first, the short after. */
     XhciXpipeRecInit(&r, 300, XHCI_XPIPE_MAP_ALLOCATED);
@@ -542,7 +542,7 @@ static void test_rec_early(void)
     CHECK(!(f & XHCI_XPIPE_F_FINAL), "two still on the ring");
     (VOID)ret(&r, 40, ST_OK);
     (VOID)ret(&r, 0, ST_CAN);
-    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX), ST_CAN,
+    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX, ST_CAN), ST_CAN,
              "the cancel latched first");
     CHECK_EQ(r.Committed, 40, "with the short's bytes");
 
@@ -558,14 +558,40 @@ static void test_rec_early(void)
     f = ret(&r, 0, ST_CAN);
     CHECK(f & XHCI_XPIPE_F_FINAL, "final");
     CHECK_EQ(r.Committed, 170, "TD 0 and TD 1's stopped progress");
-    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX), ST_CAN, "cancelled");
+    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX, ST_CAN), ST_CAN, "cancelled");
     /* A cancel after everything moved is success. */
     XhciXpipeRecInit(&r, 100, XHCI_XPIPE_MAP_ALLOCATED);
     (VOID)pub(&r, 100);
     (VOID)XhciXpipeRecStop(&r, XHCI_XPIPE_OUT_STOP, ST_CAN);
     (VOID)ret(&r, 100, ST_OK);
-    CHECK_EQ(XhciXpipeRecStatus(&r, 0, ST_SHORTX), ST_OK,
+    CHECK_EQ(XhciXpipeRecStatus(&r, 0, ST_SHORTX, ST_CAN), ST_OK,
              "a stop that moved every byte is success");
+    /* Review round 2, finding 2: only a cancel racing the last byte is
+     * success; a removal at a device's going or a fault's abort with full
+     * progress keeps its status (DEVICE_GONE is what parks the IRP). */
+    XhciXpipeRecInit(&r, 200, XHCI_XPIPE_MAP_ALLOCATED);
+    (VOID)pub(&r, 100);
+    (VOID)ret(&r, 100, ST_OK);
+    (VOID)pub(&r, 100);
+    (VOID)XhciXpipeRecStop(&r, XHCI_XPIPE_OUT_STOP, (LONG)0xC0000013L);
+    (VOID)XhciXpipeRecRetire(&r, 1, 100, (LONG)0xC0000013L, 1);
+    CHECK_EQ(r.Committed, 200, "every byte had moved");
+    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX, ST_CAN),
+             (LONG)0xC0000013L, "the device's going is kept");
+    XhciXpipeRecInit(&r, 200, XHCI_XPIPE_MAP_ALLOCATED);
+    (VOID)pub(&r, 100);
+    (VOID)pub(&r, 100);
+    (VOID)ret(&r, 100, ST_OK);
+    (VOID)XhciXpipeRecRetire(&r, 1, 100, ST_HC, 1);
+    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX, ST_CAN), ST_HC,
+             "a fault's removal with full progress keeps the fault");
+    XhciXpipeRecInit(&r, 200, XHCI_XPIPE_MAP_ALLOCATED);
+    (VOID)pub(&r, 100);
+    (VOID)pub(&r, 100);
+    (VOID)ret(&r, 100, ST_OK);
+    (VOID)XhciXpipeRecRetire(&r, 1, 100, ST_CAN, 1);
+    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX, ST_CAN), ST_OK,
+             "a cancel's removal after the last byte moved is success");
 }
 
 static void test_rec_prefail(void)
@@ -580,7 +606,7 @@ static void test_rec_prefail(void)
     CHECK(!(f & XHCI_XPIPE_F_FINAL), "the routine still runs");
     f = XhciXpipeRecMapState(&r, XHCI_XPIPE_MAP_ALLOCATED);
     CHECK(f & XHCI_XPIPE_F_FINAL, "final as the routine returns");
-    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX), ST_HC, "its status");
+    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX, ST_CAN), ST_HC, "its status");
 
     /* A refill that fails after TD 0 completed with TD 1 running: TD 1's
      * bytes still count when it retires. */
@@ -594,7 +620,7 @@ static void test_rec_prefail(void)
     f = ret(&r, 100, ST_OK);
     CHECK(f & XHCI_XPIPE_F_FINAL, "final");
     CHECK_EQ(r.Committed, 200, "A's and B's bytes");
-    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX), ST_HC,
+    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX, ST_CAN), ST_HC,
              "and the failure's status");
 
     /* The refill's failure, then its predecessor's short: the device ended
@@ -606,7 +632,7 @@ static void test_rec_prefail(void)
     (VOID)XhciXpipeRecStop(&r, XHCI_XPIPE_OUT_PREFAIL, ST_HC);
     (VOID)ret(&r, 30, ST_OK);
     CHECK_EQ(r.Committed, 130, "the shorter length");
-    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX), ST_OK,
+    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX, ST_CAN), ST_OK,
              "the short replaces the failure");
     /* ... and its predecessor's error. */
     XhciXpipeRecInit(&r, 400, XHCI_XPIPE_MAP_ALLOCATED);
@@ -615,7 +641,7 @@ static void test_rec_prefail(void)
     (VOID)ret(&r, 100, ST_OK);
     (VOID)XhciXpipeRecStop(&r, XHCI_XPIPE_OUT_PREFAIL, ST_HC);
     (VOID)ret(&r, 10, ST_ERR);
-    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX), ST_ERR,
+    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX, ST_CAN), ST_ERR,
              "the error replaces the failure");
     CHECK_EQ(r.Committed, 110, "with its bytes");
     /* Review round 1, finding 3: a refill fails with its predecessor still
@@ -631,7 +657,7 @@ static void test_rec_prefail(void)
     f = XhciXpipeRecRetire(&r, 1, 30, ST_CAN, 1);
     CHECK(f & XHCI_XPIPE_F_FINAL, "final once taken off");
     CHECK_EQ(r.Committed, 130, "the predecessor's stopped progress counts");
-    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX), ST_HC,
+    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX, ST_CAN), ST_HC,
              "the failure stays: a removal is not the device's end");
     /* A removal with nothing latched (a drain at a device's going) gives
      * the drain's status, and hands no successor over. */
@@ -642,7 +668,7 @@ static void test_rec_prefail(void)
     CHECK(!(f & XHCI_XPIPE_F_TRUNCATE), "no hand-off: the drain takes both");
     f = XhciXpipeRecRetire(&r, 1, 0, (LONG)0xC0000013L, 1);
     CHECK(f & XHCI_XPIPE_F_FINAL, "final");
-    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX), (LONG)0xC0000013L,
+    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX, ST_CAN), (LONG)0xC0000013L,
              "the drain's status");
     CHECK_EQ(r.Committed, 10, "with the bytes moved");
 
@@ -652,7 +678,7 @@ static void test_rec_prefail(void)
     (VOID)XhciXpipeRecStop(&r, XHCI_XPIPE_OUT_PREFAIL, ST_HC);
     (VOID)XhciXpipeRecStop(&r, XHCI_XPIPE_OUT_STOP, ST_CAN);
     (VOID)ret(&r, 100, ST_OK);
-    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX), ST_HC,
+    CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX, ST_CAN), ST_HC,
              "the first latched");
 }
 
@@ -700,7 +726,7 @@ static void test_rec_mapstates(void)
             CHECK_EQ(fires, 1, "the finalizer fires exactly once");
             f = XhciXpipeRecMapState(&r, XHCI_XPIPE_MAP_ALLOCATED);
             CHECK(!(f & XHCI_XPIPE_F_FINAL), "and never again");
-            CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX),
+            CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX, ST_CAN),
                      k ? (LONG)0xC0000013L : ST_CAN, "the stop's status");
         }
     }

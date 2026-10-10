@@ -389,12 +389,13 @@ ULONG XhciXpipeRecMapState(PXHCI_XPIPE_REC r, ULONG mapState)
 }
 
 LONG XhciXpipeRecStatus(const XHCI_XPIPE_REC *r, ULONG shortOk,
-                        LONG shortStatus)
+                        LONG shortStatus, LONG cancelStatus)
 {
     LONG s;
 
     s = (r->OutcomeKind == XHCI_XPIPE_OUT_NONE) ? 0 : r->Outcome;
-    if (r->OutcomeKind == XHCI_XPIPE_OUT_STOP && r->Committed == r->Length) {
+    if (r->OutcomeKind == XHCI_XPIPE_OUT_STOP && r->Outcome == cancelStatus &&
+        r->Committed == r->Length) {
         s = 0;
     }
     if (s == 0 && r->Committed < r->Length && !shortOk) {

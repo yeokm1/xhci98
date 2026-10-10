@@ -1858,9 +1858,12 @@ VOID HcdIoPipeRelease(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
     PHCD_XFER x;
     KIRQL oldIrql;
     ULONG done;
+    ULONG more;
 
-    InitializeListHead(&mine);
     done = 0;
+again:
+    InitializeListHead(&mine);
+    more = 0;
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     if (!pipe->Paused && !pipe->TruncHeld) {
         /* 36.24: the owner's refill a pause held (section 11.6, point 6). */
@@ -1881,8 +1884,13 @@ VOID HcdIoPipeRelease(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
                  * in this hold of the lock: once it leaves the held list
                  * it is the machine's, and a cancel may finalize it the
                  * moment the lock is dropped (review round 1, finding 1).
-                 * It is the pipe's owner, so nothing orders it after
-                 * another. */
+                 * Records listed before it go first, as the walk orders
+                 * every record: it stays held until they are published,
+                 * and the walk runs again (review round 2, finding 1). */
+                if (!IsListEmpty(&mine)) {
+                    more = 1;
+                    break;
+                }
                 RemoveEntryList(entry);
                 x->Mapped = 0;
                 x->State = HCD_XFER_ON_RING;
@@ -1919,6 +1927,9 @@ VOID HcdIoPipeRelease(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
         } else {
             hcdStart(hc, x);
         }
+    }
+    if (more) {
+        goto again;
     }
 }
 
@@ -2353,7 +2364,8 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
             XhciControllerLockRelease(&hc->Hc, oldIrql);
             engine = x->Rec.Published != 0;
             status = XhciXpipeRecStatus(&x->Rec, x->ShortOk,
-                                        HCD_USBD_ERROR_SHORT_TRANSFER);
+                                        HCD_USBD_ERROR_SHORT_TRANSFER,
+                                        HCD_USBD_CANCELED);
             x->Offset = x->Rec.Committed;
         } else if (x->Isoch) {
             status = hcdIsoComplete(x, engine, status, &bytes);

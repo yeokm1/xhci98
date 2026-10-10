@@ -4361,7 +4361,8 @@ static void test_xpipe_two_tds(void)
     CHECK_EQ(fires, 1, "final once, in that pass");
     CHECK_EQ(rec.Committed, 6UL * 4096UL - 96UL, "the length before the "
              "boundary");
-    CHECK_EQ(XhciXpipeRecStatus(&rec, 1, (LONG)0xC0000012L), 0,
+    CHECK_EQ(XhciXpipeRecStatus(&rec, 1, (LONG)0xC0000012L,
+                                      (LONG)WANT_USBD_CANCELED), 0,
              "a short, success under ShortOk");
 
     /* A short at TD 0's end with TD 1 queued: TD 0 completes, TD 1 stays
@@ -4435,7 +4436,8 @@ static void test_xpipe_two_tds(void)
     }
     CHECK_EQ(fires, 1, "the pipelined record final once");
     CHECK_EQ(rec.Committed, 0, "nothing moved, nothing counted");
-    CHECK_EQ(XhciXpipeRecStatus(&rec, 1, (LONG)0xC0000012L),
+    CHECK_EQ(XhciXpipeRecStatus(&rec, 1, (LONG)0xC0000012L,
+                                      (LONG)WANT_USBD_CANCELED),
              (LONG)WANT_USBD_CANCELED, "cancelled");
 }
 
