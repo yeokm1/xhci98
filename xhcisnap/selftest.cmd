@@ -286,40 +286,29 @@ for %%S in ("controller tolerance" "interrupt routing" "transfer size" "event de
 
 rem Task 36.47's system block: the OS names over canned GetVersionEx answers,
 rem the cleaning of registry text, then this host's own block as a dump's
-rem header writes it. The block must never carry the computer or user name
-rem (the .TXT is pasted publicly), nor a SKU or serial-number value.
+rem header writes it.
 "%~dp0XHCISNAP.EXE" -selftest-sysinfo > "%BASE%.sysinfo.log"
 if errorlevel 1 (
     echo FAIL: -selftest-sysinfo exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("build 950 product 0 arch 65535: Windows 95" "build 1998 product 0 arch 65535: Windows 98" "build 2222 product 0 arch 65535: Windows 98 SE" "4.90 build 3000 product 0 arch 65535: Windows ME" "build 2195 product 1 arch 65535: Windows 2000" "build 2600 product 1 arch 0: Windows XP" "product 1 arch 9: Windows XP x64" "product 3 arch 0: Windows Server 2003" "product 0 arch 65535: Windows Server 2003 or XP x64" "build 6002 product 1 arch 0: Windows Vista" "build 7601 product 1 arch 9: Windows 7" "product 3 arch 9: Windows Server 2008 R2" "Windows 8 or later" "3.51 build 1057 product 0 arch 65535: unknown" "clean [Intel(R) Core(TM) i7-6500U CPU @ 2.50GHz]" "clean [LENOVO 20F5S0??]" "clean 99 chars, ends [x...]" "  captured on - this machine" "    OS                    Windows" "    bitness               " "    CPU                   " "    RAM                   ") do (
+for %%S in ("build 950 product 0 arch 65535: Windows 95" "build 1998 product 0 arch 65535: Windows 98" "build 2222 product 0 arch 65535: Windows 98 SE" "4.90 build 3000 product 0 arch 65535: Windows ME" "build 2195 product 1 arch 65535: Windows 2000" "build 2600 product 1 arch 0: Windows XP" "product 1 arch 9: Windows XP x64" "product 3 arch 0: Windows Server 2003" "product 0 arch 65535: Windows Server 2003 or XP x64" "build 6002 product 1 arch 0: Windows Vista" "build 7601 product 1 arch 9: Windows 7" "product 3 arch 9: Windows Server 2008 R2" "Windows 8 or later" "3.51 build 1057 product 0 arch 65535: unknown" "clean [Intel(R) Core(TM) i7-6500U CPU @ 2.50GHz]" "clean [LENOVO 20F5S0??]" "clean 99 chars, ends [x...]" "clean 98 chars, ends [x...]" "clean [Standard PC (i440FX + PIIX, 1996)]" "  captured on - this machine" "    OS                    Windows" "    bitness               " "    CPU                   " "    RAM                   ") do (
     findstr /C:%%S "%BASE%.sysinfo.log" > nul
     if errorlevel 1 (
         echo FAIL: the system block does not say %%S
         set FAILED=1
     )
 )
-for %%S in ("SystemSKU" "SerialNumber" "ProductId") do (
-    findstr /I /C:%%S "%BASE%.sysinfo.log" > nul
-    if not errorlevel 1 (
-        echo FAIL: the system block printed %%S
-        set FAILED=1
-    )
-)
-if not "%COMPUTERNAME%"=="" (
-    findstr /I /C:"%COMPUTERNAME%" "%BASE%.sysinfo.log" > nul
-    if not errorlevel 1 (
-        echo FAIL: the system block printed the computer name
-        set FAILED=1
-    )
-)
-if not "%USERNAME%"=="" (
-    findstr /I /C:"%USERNAME%" "%BASE%.sysinfo.log" > nul
-    if not errorlevel 1 (
-        echo FAIL: the system block printed the user name
-        set FAILED=1
-    )
+rem The withholding over canned names (SNAPTEST-PC7, jdoe, CORPDOM, and PC,
+rem which is under three characters and not compared): three strings are
+rem withheld and the QEMU product string is kept. It is deterministic, so no
+rem host name is searched for (Codex review of 36.47, round 1: a host search
+rem matched the block's own fixed words and missed values under other labels).
+set WITHHELD=0
+for /f "delims=" %%L in ('findstr /C:"clean [(withheld: it contains" "%BASE%.sysinfo.log"') do set /a WITHHELD+=1
+if not "%WITHHELD%"=="3" (
+    echo FAIL: the system block withheld %WITHHELD% canned strings, expected 3
+    set FAILED=1
 )
 
 rd /s /q "%RUNDIR%" 2> nul

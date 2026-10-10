@@ -1256,7 +1256,9 @@ static const char *driver_file_version(void)
  * are a fixed allow list, named one by one below; nothing here enumerates a
  * key and prints what it finds, and a value added to the list has to be one
  * that names a make, a model, a firmware or a processor, never one machine.
- * README.md ("The machine it was captured on") states the same rule.
+ * Those values are still free text, so sys_clean withholds any of them that
+ * contains this machine's own names (sys_has_name, below). README.md ("The
+ * machine it was captured on") states the same rule.
  *
  * **It is read from the running machine at the time of the dump, never from
  * the dump.** This tool does not decode a saved `.BIN` (that is the
@@ -1386,13 +1388,105 @@ static const char *sys_os_name(unsigned long platform, unsigned long major,
 }
 
 /*
+ * **The machine's own names, read only to keep them out.** A value on the
+ * allow list is the firmware's free text (QEMU's `-smbios type=1,product=`
+ * takes anything, and an integrator can write a machine's name or tag into
+ * SystemProductName), so naming the values is not by itself a guarantee
+ * (Codex review of 36.47, round 1). Every registry string printed passes
+ * through sys_clean, and sys_clean withholds the whole string when it
+ * contains this machine's computer name, the user's name, the domain (NT's
+ * USERDOMAIN) or the workgroup (9x's VNETSUP), compared without case. The
+ * names are never printed; a name under three characters is not compared,
+ * since it would withhold "PC" out of every QEMU product string while
+ * hiding nothing. What it cannot catch is an identifier that is none of
+ * those - a serial typed into a product string - and README.md says so.
+ * GetComputerNameA and GetEnvironmentVariableA are KERNEL32 and GetUserNameA
+ * ADVAPI32 on every target, so the import table does not change.
+ */
+#define SYS_NAMES 5
+#define SYS_NAME_BYTES 260
+#define SYS_WITHHELD "(withheld: it contains this machine's computer, user, " \
+                     "domain or workgroup name)"
+
+static char sysNames[SYS_NAMES][SYS_NAME_BYTES];
+static int sysNamesLoaded;
+
+static void sys_load_names(void)
+{
+    DWORD n;
+    HKEY key;
+    DWORD type;
+
+    if (sysNamesLoaded) {
+        return;
+    }
+    sysNamesLoaded = 1;
+    memset(sysNames, 0, sizeof(sysNames));
+    n = SYS_NAME_BYTES - 1;
+    if (!GetComputerNameA(sysNames[0], &n)) {
+        sysNames[0][0] = '\0';
+    }
+    n = SYS_NAME_BYTES - 1;
+    if (!GetUserNameA(sysNames[1], &n)) {
+        sysNames[1][0] = '\0';
+    }
+    n = GetEnvironmentVariableA("USERDOMAIN", sysNames[2], SYS_NAME_BYTES - 1);
+    if (n == 0 || n >= SYS_NAME_BYTES - 1) {
+        sysNames[2][0] = '\0';
+    }
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+                      "System\\CurrentControlSet\\Services\\VxD\\VNETSUP", 0,
+                      KEY_READ, &key) == ERROR_SUCCESS) {
+        n = SYS_NAME_BYTES - 1;
+        if (RegQueryValueExA(key, "Workgroup", NULL, &type,
+                             (LPBYTE)sysNames[3], &n) != ERROR_SUCCESS ||
+            type != REG_SZ) {
+            sysNames[3][0] = '\0';
+        }
+        n = SYS_NAME_BYTES - 1;
+        if (RegQueryValueExA(key, "ComputerName", NULL, &type,
+                             (LPBYTE)sysNames[4], &n) != ERROR_SUCCESS ||
+            type != REG_SZ) {
+            sysNames[4][0] = '\0';
+        }
+        RegCloseKey(key);
+    }
+}
+
+/* Whether `text` holds any loaded name (three characters or more), with
+ * case ignored. */
+static int sys_has_name(const char *text)
+{
+    int i;
+
+    sys_load_names();
+    for (i = 0; i < SYS_NAMES; i++) {
+        const char *name = sysNames[i];
+        size_t len = strlen(name);
+        const char *t;
+
+        if (len < 3) {
+            continue;
+        }
+        for (t = text; *t != '\0'; t++) {
+            if (_strnicmp(t, name, len) == 0) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/*
  * A registry string made safe to paste: printable ASCII only (anything else,
  * a control byte or a byte from the machine's code page, becomes '?', since
  * the charset is the reader's and not this machine's), leading and trailing
  * blanks dropped (Intel pads ProcessorNameString on the left), runs of blanks
  * folded to one, cut at SYS_TEXT_MAX with "..." so one vendor's long string
  * cannot push the block about. A REG_MULTI_SZ arrives with its NULs already
- * turned into " / " by the caller. Pure, for the self-test.
+ * turned into " / " by the caller. Then the whole string is withheld if it
+ * holds one of the machine's names (sys_has_name). The self-test loads canned
+ * names, so it is pure there.
  */
 static void sys_clean(const char *in, char *out, size_t outBytes)
 {
@@ -1417,8 +1511,11 @@ static void sys_clean(const char *in, char *out, size_t outBytes)
             space = 1;
             continue;
         }
-        /* Room for a blank, this byte, "..." and the terminator. */
-        if (n >= SYS_TEXT_MAX || n + 6 > outBytes) {
+        /* The text itself stays within SYS_TEXT_MAX, a pending blank
+         * counted; "..." and the terminator go beyond it, inside the
+         * buffer (Codex round 1, P3). */
+        if (n + ((space && n > 0) ? 2 : 1) > SYS_TEXT_MAX ||
+            n + 6 > outBytes) {
             break;
         }
         if (space && n > 0) {
@@ -1433,6 +1530,9 @@ static void sys_clean(const char *in, char *out, size_t outBytes)
         out[n++] = '.';
     }
     out[n] = '\0';
+    if (sys_has_name(out) && strlen(SYS_WITHHELD) < outBytes) {
+        strcpy(out, SYS_WITHHELD);
+    }
 }
 
 /*
@@ -1572,8 +1672,7 @@ static void write_companion_system(void)
     char text[SYS_TEXT_MAX + 8];
 
     comp("\n  captured on - this machine, read by xhcisnap at the time of the "
-         "dump (not\n  in the .BIN); no computer, user or domain name, no "
-         "serial number or UUID:\n");
+         "dump (not\n  in the .BIN):\n");
 
     k32 = GetModuleHandleA("kernel32.dll");
     isWow64 = NULL;
@@ -1720,11 +1819,23 @@ static int selftest_sysinfo(void)
     static const char *const dirty[] = {
         "       Intel(R) Core(TM) i7-6500U CPU @ 2.50GHz",
         "LENOVO\t  20F5S0\x01\xE9 ",
+        "Acme Desktop snaptest-pc7 rev 2",
+        "Built for JDoe",
+        "CorpDom fleet image",
+        "Standard PC (i440FX + PIIX, 1996)",
         NULL
     };
     char out[SYS_TEXT_MAX + 8];
     char longIn[200];
     int i;
+
+    /* Canned names, so the withholding is tested the same on every host. */
+    memset(sysNames, 0, sizeof(sysNames));
+    strcpy(sysNames[0], "SNAPTEST-PC7");
+    strcpy(sysNames[1], "jdoe");
+    strcpy(sysNames[2], "CORPDOM");
+    strcpy(sysNames[3], "PC");
+    sysNamesLoaded = 1;
 
     for (i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++) {
         printf("os %lu %lu.%lu build %lu product %d arch %u: %s\n",
@@ -1742,7 +1853,16 @@ static int selftest_sysinfo(void)
     sys_clean(longIn, out, sizeof(out));
     printf("clean %u chars, ends [%s]\n", (unsigned)strlen(out),
            out + strlen(out) - 4);
+    /* 95 characters, a blank, then one more: the blank and the y would
+     * make 97, so the text stops at 95 and says it was cut. */
+    memset(longIn, 'x', 95);
+    strcpy(longIn + 95, " y");
+    sys_clean(longIn, out, sizeof(out));
+    printf("clean %u chars, ends [%s]\n", (unsigned)strlen(out),
+           out + strlen(out) - 4);
 
+    /* The live block under the machine's real names. */
+    sysNamesLoaded = 0;
     write_companion_system();
     return 0;
 }
