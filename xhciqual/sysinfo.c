@@ -405,10 +405,40 @@ static int contains_nocase(const char *hay, const char *needle)
     return 0;
 }
 
-/* Does `shown` carry `id`: anywhere, ignoring case, whatever its length. */
+/* Whether some non-empty tail of `shown` is a head of `id`, ignoring case:
+ * all that is left of an identifier cut off by the display bound. */
+static int tail_heads(const char *shown, const char *id)
+{
+    size_t n, m, i;
+
+    n = strlen(shown);
+    m = strlen(id);
+    for (i = (n > m) ? n - m : 0; i < n; i++) {
+        size_t k;
+
+        for (k = 0; i + k < n && lower(shown[i + k]) == lower(id[k]); k++)
+            ;
+        if (i + k == n)
+            return 1;
+    }
+    return 0;
+}
+
+/* A shown string at the full bound may have been cut there (si_copy keeps
+ * SI_STR - 1 characters), and the cut can split an identifier: its head
+ * then ends the string, and the whole-value test below cannot see it. */
+static int at_bound(const char *shown)
+{
+    return strlen(shown) >= SI_STR - 1;
+}
+
+/* Does `shown` carry `id`: anywhere, ignoring case, whatever its length;
+ * and, if the bound may have cut `shown`, any head of `id` ending it. */
 static int carries(const char *shown, const char *id)
 {
-    return contains_nocase(shown, id);
+    if (contains_nocase(shown, id))
+        return 1;
+    return at_bound(shown) && tail_heads(shown, id);
 }
 
 /* Every printed SMBIOS string, for the scrubber and for withhold_all. */
@@ -494,8 +524,11 @@ static void scrub_uuid(const SMB_STRUCT *st, SYSINFO *si)
         return;                 /* "not present" / "not set" */
     uuid_hex(st->f + 0x08, raw, wire);
     for (i = 0; (f = shown_field(si, i)) != 0; i++) {
+        if (strcmp(f, WITHHELD) == 0)
+            continue;
         hex_only(f, hex, sizeof(hex));
-        if (strstr(hex, raw) != 0 || strstr(hex, wire) != 0)
+        if (strstr(hex, raw) != 0 || strstr(hex, wire) != 0 ||
+            (at_bound(f) && (tail_heads(hex, raw) || tail_heads(hex, wire))))
             strcpy(f, WITHHELD);
     }
     memset(raw, 0, sizeof(raw));

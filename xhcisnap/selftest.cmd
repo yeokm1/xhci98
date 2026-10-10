@@ -19,6 +19,11 @@ rem The cases after those drive each decode over canned data, and the last
 rem (task 36.47) the system block, which must not carry the computer or user
 rem name.
 rem
+rem A case that expects exit 0 tests for exactly 0: a crash exits with a
+rem negative code (an access violation is C0000005h), which IF ERRORLEVEL 1
+rem does not see, and the output checks after it could still pass on what
+rem was written before the crash.
+rem
 rem Exit code 0 = every case behaved. Run it after build.cmd.
 setlocal
 cd /d "%~dp0"
@@ -57,7 +62,7 @@ set FAILED=0
 
 set "XHCISNAP_FAULT="
 "%~dp0XHCISNAP.EXE" -selftest-report "%BASE%" > "%BASE%.no-fault.log"
-if errorlevel 1 (
+if not "%errorlevel%"=="0" (
     echo FAIL: a report with no fault injected exited %errorlevel%, expected 0
     set FAILED=1
 )
@@ -132,7 +137,7 @@ rem The slots region's decode (2.0.0.0): the Slot Context Speed in words over
 rem canned records - SuperSpeed with its rate and lanes, SuperSpeedPlus by its
 rem rate, High and Low Speed, and a slot whose context could not be read.
 "%~dp0XHCISNAP.EXE" -selftest-slots > "%BASE%.slots.log"
-if errorlevel 1 (
+if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-slots exited %errorlevel%, expected 0
     set FAILED=1
 )
@@ -148,7 +153,7 @@ rem Task 35.3's root port enumeration notes, decoded over a canned ring: 35.0's
 rem E460 failure as 2.1.1.0 met it, the same link with 35.1's fallback, and a
 rem spent budget.
 "%~dp0XHCISNAP.EXE" -selftest-notes > "%BASE%.notes.log"
-if errorlevel 1 (
+if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-notes exited %errorlevel%, expected 0
     set FAILED=1
 )
@@ -169,7 +174,7 @@ rem Task 35.3's HCD region decoded over a canned image: a port Failed on the
 rem speed, a working SuperSpeed port by the fallback, an empty port left out,
 rem and the nonzero counters by name.
 "%~dp0XHCISNAP.EXE" -selftest-hcd > "%BASE%.hcd.log"
-if errorlevel 1 (
+if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-hcd exited %errorlevel%, expected 0
     set FAILED=1
 )
@@ -187,7 +192,7 @@ rem terminal reason and window, the counters and completion codes by name, a
 rem held root port and a re-armed hub port; then a 35.3 header, a state past
 rem the image, and no image at all.
 "%~dp0XHCISNAP.EXE" -selftest-tol > "%BASE%.tol.log"
-if errorlevel 1 (
+if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-tol exited %errorlevel%, expected 0
     set FAILED=1
 )
@@ -217,7 +222,7 @@ rem pair not admitted at value 1, a message grant, IRQ 11 on NT, another vendor,
 rem refused before the routing step; then a 2.2.0.0 header, an image cut
 rem short and a record count the header cannot hold.
 "%~dp0XHCISNAP.EXE" -selftest-pirq > "%BASE%.pirq.log"
-if errorlevel 1 (
+if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-pirq exited %errorlevel%, expected 0
     set FAILED=1
 )
@@ -234,7 +239,7 @@ rem UAS copy at 1 MiB commands over 128 KiB chunks with one class driver
 rem record, a value out of range with no clock yet; then a header from before
 rem 36.21, an image cut short and a record count the header cannot hold.
 "%~dp0XHCISNAP.EXE" -selftest-xstat > "%BASE%.xstat.log"
-if errorlevel 1 (
+if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-xstat exited %errorlevel%, expected 0
     set FAILED=1
 )
@@ -251,7 +256,7 @@ rem poll, a pin-0 controller polled automatically with its periods replaced,
 rem a line proven dead and moved, a reserved mode on a header that places no
 rem extension words, a driver from before polling, and a block past the image.
 "%~dp0XHCISNAP.EXE" -selftest-intr > "%BASE%.intr.log"
-if errorlevel 1 (
+if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-intr exited %errorlevel%, expected 0
     set FAILED=1
 )
@@ -268,7 +273,7 @@ rem helper bound on MSI, the helper absent and the list stripped, a refused
 rem helper, 98 SE with no filter (not applicable), a driver from before MSI
 rem and a block between the two sizes.
 "%~dp0XHCISNAP.EXE" -selftest-msi > "%BASE%.msi.log"
-if errorlevel 1 (
+if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-msi exited %errorlevel%, expected 0
     set FAILED=1
 )
@@ -300,7 +305,7 @@ rem XHCIHC_COUNTERS in src\xhci_counters.h - each field by name and value,
 rem any reserved words not printed, the words past the block as
 rem "counter N".
 "%~dp0XHCISNAP.EXE" -selftest-counters > "%BASE%.counters.log"
-if errorlevel 1 (
+if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-counters exited %errorlevel%, expected 0
     set FAILED=1
 )
@@ -313,7 +318,7 @@ rem Task 36.24's stage 2 counters from canned HCD headers: the switch on
 rem with traffic, the switch absent, Windows 98, a header from before 36.24
 rem and a count it cannot hold.
 "%~dp0XHCISNAP.EXE" -selftest-xpipe > "%BASE%.xpipe.log"
-if errorlevel 1 (
+if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-xpipe exited %errorlevel%, expected 0
     set FAILED=1
 )
@@ -329,7 +334,7 @@ rem p36-int4: stage B's header words at 237 to 305 after 36.24's stage 2
 rem counters, from a canned header whose word i holds i + 1 (each value
 rem names its word), and a stage B branch build's 273-word header refused.
 "%~dp0XHCISNAP.EXE" -selftest-ssusp > "%BASE%.ssusp.log"
-if errorlevel 1 (
+if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-ssusp exited %errorlevel%, expected 0
     set FAILED=1
 )
@@ -344,7 +349,7 @@ for %%S in ("XhciWideMap                 206" "DNCTRL                     0x00EE
 rem Task 36.9's review: a header longer than its image is refused by
 rem print_hcd, and no other section decodes anything from it.
 "%~dp0XHCISNAP.EXE" -selftest-hcd-bad > "%BASE%.hcdbad.log"
-if errorlevel 1 (
+if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-hcd-bad exited %errorlevel%, expected 0
     set FAILED=1
 )
@@ -366,7 +371,7 @@ rem Task 36.47's system block: the OS names over canned GetVersionEx answers,
 rem the cleaning of registry text, then this host's own block as a dump's
 rem header writes it.
 "%~dp0XHCISNAP.EXE" -selftest-sysinfo > "%BASE%.sysinfo.log"
-if errorlevel 1 (
+if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-sysinfo exited %errorlevel%, expected 0
     set FAILED=1
 )
@@ -404,7 +409,7 @@ rem Task 36.47's -nosysinfo (owner, 2026-10-10): the report path with the
 rem option says the details were skipped and prints none of them; without it
 rem the same report carries the block; on its own the option is refused.
 "%~dp0XHCISNAP.EXE" -selftest-report "%BASE%-sys" > "%BASE%.sys-on.log"
-if errorlevel 1 (
+if not "%errorlevel%"=="0" (
     echo FAIL: a report with the system block exited %errorlevel%, expected 0
     set FAILED=1
 )
@@ -414,7 +419,7 @@ if errorlevel 1 (
     set FAILED=1
 )
 "%~dp0XHCISNAP.EXE" -nosysinfo -selftest-report "%BASE%-nosys" > "%BASE%.sys-off.log"
-if errorlevel 1 (
+if not "%errorlevel%"=="0" (
     echo FAIL: a report with -nosysinfo exited %errorlevel%, expected 0
     set FAILED=1
 )
@@ -433,7 +438,15 @@ for %%S in ("captured on - this machine" "    OS " "    CPU " "    RAM ") do (
 rem -selftest-sysinfo honours the option on either side of it: the live
 rem block is skipped, the canned decodes still run.
 "%~dp0XHCISNAP.EXE" -selftest-sysinfo -nosysinfo > "%BASE%.sys-after.log"
+if not "%errorlevel%"=="0" (
+    echo FAIL: -selftest-sysinfo -nosysinfo exited %errorlevel%, expected 0
+    set FAILED=1
+)
 "%~dp0XHCISNAP.EXE" -nosysinfo -selftest-sysinfo > "%BASE%.sys-before.log"
+if not "%errorlevel%"=="0" (
+    echo FAIL: -nosysinfo -selftest-sysinfo exited %errorlevel%, expected 0
+    set FAILED=1
+)
 for %%F in ("%BASE%.sys-after.log" "%BASE%.sys-before.log") do (
     findstr /C:"system details were skipped by -nosysinfo" %%F > nul
     if errorlevel 1 (

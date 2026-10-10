@@ -1065,7 +1065,9 @@ exception for firmware fillers: no list can know that this unit's
 `123456789` is not its serial, so a serial of `0` or `Default string`
 withholds every printed string holding it, a BIOS date included. Type 1's UUID is
 compared as 32 hex digits in both byte orders, ignoring case, dashes and
-braces. A field added to `SYSINFO` is a field every pasted report
+braces. A string the 64-character cut (below) may have shortened is also
+withheld when it ends in any head of an identifier, the UUID's included, so
+a cut cannot print a serial less its last characters. A field added to `SYSINFO` is a field every pasted report
 publishes; the host suite and the QEMU cases plant every identifier,
 aliased too, and fail if one is printed.
 

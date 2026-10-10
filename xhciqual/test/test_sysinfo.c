@@ -1075,6 +1075,49 @@ static void test_aliasing2(void)
     }
 }
 
+/* Whole-branch review (area 3, round 1, P1): an identifier the 64-character
+ * display bound cuts is still withheld - its head ends the shown string. */
+static void test_cut_identifier(void)
+{
+    SYSINFO si;
+    u8 f[0x40];
+    static char prod[80], ver[80], longok[80];
+    static const char *strs[] = { "Maker", prod, ver, "SN-1234567890",
+                                  longok, 0 };
+    static const u8 uuid[16] = { 0x5a, 0x5a, 0x5a, 0x5a, 0x12, 0x34, 0x43,
+                                 0x21, 0x87, 0x65, 0x01, 0x23, 0x45, 0x67,
+                                 0x89, 0xab };
+
+    memset(prod, 'M', 52);
+    strcpy(prod + 52, "SN-1234567890");         /* cut to ...SN-123456789 */
+    memset(ver, 'Q', 50);
+    strcpy(ver + 50, "5a5a5a5a-3412-2143");     /* cut inside the UUID */
+    memset(longok, 'M', 70);
+    longok[70] = '\0';                          /* cut, carries no head */
+    tlen = 0;
+    memset(tab, 0, sizeof(tab));
+    memset(f, 0, sizeof(f));
+    put8(f, 0x04, 1); put8(f, 0x05, 2); put8(f, 0x06, 3);
+    put8(f, 0x07, 4);
+    put8(f, 0x1A, 5);                           /* family: the long one */
+    memcpy(f + 0x08, uuid, 16);
+    add(1, f, 0x1B, strs);
+    memset(f, 0, sizeof(f));
+    add(127, f, 4, 0);
+    memset(&si, 0, sizeof(si));
+    smb_parse_table(tab, tlen, 0, &si);
+    CHECK(strcmp(si.sys_mfr, "Maker") == 0, "cut: maker kept");
+    CHECK(strcmp(si.sys_product, "(withheld)") == 0,
+          "cut: serial split by the bound withheld");
+    CHECK(strcmp(si.sys_version, "(withheld)") == 0,
+          "cut: UUID split by the bound withheld");
+    CHECK(strlen(si.sys_family) == SI_STR - 1 && si.sys_family[0] == 'M',
+          "cut: a long string with no identifier head kept");
+    si.smb_state = SMB_OK;
+    render(&si);
+    CHECK(!has("SN-123") && !has("5a5a5a5a"), "cut: not printed");
+}
+
 /* Review round 3, P3: the 4096-structure limit, well under 64 KB. */
 static void test_struct_limit(void)
 {
@@ -1134,6 +1177,7 @@ int main(void)
 {
     test_aliasing();
     test_aliasing2();
+    test_cut_identifier();
     test_skip();
     test_struct_limit();
     test_ep_order();
