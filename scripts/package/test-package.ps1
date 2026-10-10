@@ -1203,6 +1203,24 @@ try {
                 ("expected $($bad.Switch) to be refused on its own terms. Output:`n" + $r.Output)
         }
 
+        # --- a TEST build (-TestLabel, 36.final's 2.2.0.3) ------------------
+        #
+        # Refused before anything is built, so these run on the stand-ins: a
+        # test build is never cut into the repository's own releases\ (the
+        # default -ReleasesDir), a label must fit the readme's banner, and
+        # -UploadSetOnly renders no readme to label.
+        Write-Step "-TestLabel refuses releases\, an unprintable or long label, and -UploadSetOnly"
+        foreach ($bad in @(
+            @{ Args = @("-TestLabel", "bench pending");                            Says = "never published" },
+            @{ Args = @("-TestLabel", ("x" * 51), "-ReleasesDir", $relRoot);       Says = "printable ASCII" },
+            @{ Args = ($relArgs + @("-TestLabel", "bench pending"));               Says = "renders none" }
+        )) {
+            $r = Invoke-Releaser $bad.Args
+            Assert-True ($r.ExitCode -ne 0) "make-release.ps1 accepted $($bad.Args -join ' ')."
+            Assert-True ($r.Output -match [regex]::Escape($bad.Says)) `
+                ("expected '$($bad.Says)' in the -TestLabel refusal. Output:`n" + $r.Output)
+        }
+
         # --- a flavour the run was not asked to complete ---------------------
         #
         # Review finding 1. The published tree is copied whole, so

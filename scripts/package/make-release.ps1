@@ -242,6 +242,18 @@ Where the gated `pkg-<flavour>\` directories are read from and written to by an
 ordinary cut. Defaults to `out\` in the repository, which is where
 `make-package.ps1` writes them. Not read under `-UploadSetOnly`.
 
+.PARAMETER TestLabel
+Cut a TEST build rather than a release: the generated readme.txt opens with a
+banner reading "TEST <version>, <label>." and saying the build is not
+published, so the person who unpacks it sees that before anything else. The
+label is the build's state in a few words, for example `bench pending` (roadmap
+Phase 36's 36.final cut 2.2.0.3 as "TEST 2.2.0.3, bench pending"). Printable
+ASCII, at most 50 characters. A test build is never published, so the cut
+refuses to write it under the repository's own `releases\`: pass `-ReleasesDir`
+and `-UploadDir` under the git-ignored `out\`. Refused with `-UploadSetOnly`,
+which renders no readme. Empty (the default) cuts an ordinary release and
+renders no banner.
+
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1
 
@@ -270,7 +282,8 @@ param(
     [string]$PackageRoot = "",
     [switch]$Force,
     [switch]$NoTargetEvidence,
-    [switch]$AllowUnstampedDriver
+    [switch]$AllowUnstampedDriver,
+    [string]$TestLabel = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -1808,6 +1821,36 @@ If what you want really is to re-cut the published version, drop -UploadSetOnly.
 "@
     }
 
+    # --- a TEST build: labelled in the readme, never under releases\ --------
+    #
+    # A test build (36.final's 2.2.0.3) is cut through this same script so that
+    # every gate runs, but it is not a release: its readme says so in its
+    # first lines, and it is never written where a release lives. The check is
+    # on the arguments alone, so it refuses before anything is built.
+    if ($TestLabel -ne "") {
+        if ($UploadSetOnly) {
+            throw "-TestLabel labels the readme a cut renders, and -UploadSetOnly renders none: it re-assembles an already published tree."
+        }
+        if ($TestLabel -notmatch '^[\x20-\x7E]{1,50}$' -or $TestLabel -ne $TestLabel.Trim()) {
+            throw "-TestLabel '$TestLabel' must be 1 to 50 printable ASCII characters with no leading or trailing space; it is printed in a 78-column plain-text readme."
+        }
+        # $ReleasesDir is already absolute and separator-normalised
+        # (Resolve-DirectoryArgument), and defaults to releases\ itself. The
+        # upload directory needs no check of its own: the assembly refuses one
+        # inside any releases\ already, and its default is out\.
+        $repoReleases = (Join-Path $repo "releases").TrimEnd('\')
+        $rd = $ReleasesDir.TrimEnd('\')
+        if ($rd -eq $repoReleases -or
+            $rd.StartsWith($repoReleases + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw @"
+a TEST build (-TestLabel) is never published, so it is not cut into the
+repository's own releases\ ('$ReleasesDir'): pass -ReleasesDir at a directory
+under the git-ignored out\, holding a history.md that carries the build's entry.
+"@
+        }
+        Write-Warn ("TEST build ('{0}'): the readme opens with the TEST banner; this cut is not a release" -f $TestLabel)
+    }
+
     # --- the version, from the INF ------------------------------------------
     $infVersion = Get-InfDriverVersion -Path $infPath
     if ($Version -eq "") {
@@ -2938,7 +2981,7 @@ other.
                               x h c i 9 8   {VERSION}
     USB 3.x for Windows 98 SE, ME, 2000, XP, Vista and 7 on xHCI machines
 ==============================================================================
-
+{TESTBANNER}
 Released {DATE}.{INCOMPLETE}
 
 Most PCs made from the mid 2010s onward have only USB 3.x (xHCI)
@@ -4329,7 +4372,26 @@ $(($missingTools | ForEach-Object { "      " + $_ }) -join "`r`n")
 "@
     }
 
+    # **A TEST build says so in the readme's first lines** (-TestLabel). The
+    # placeholder sits alone on the blank line under the title box, so an
+    # ordinary cut renders that blank line exactly as before; a test cut puts
+    # the banner there, between two blank lines.
+    $testBanner = ""
+    if ($TestLabel -ne "") {
+        $testBanner = @"
+
+******************************************************************************
+ TEST $Version, $TestLabel.
+ This is a test build, not a release. It is not published, and a later
+ release replaces it. Section 10, its release history entry, says what it
+ is for and what it changes.
+******************************************************************************
+
+"@
+    }
+
     $readme = $template.
+        Replace("{TESTBANNER}", $testBanner).
         Replace("{VERSION}", $Version).
         Replace("{DATE}", $today).
         Replace("{RELEASEDIR}", $readmeReleaseDir).

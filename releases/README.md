@@ -431,3 +431,12 @@ and both print their version into what a user sends back, and
 `make-release.ps1` throws on a staged tool older than the header or on a tool
 source that has stopped expanding it. `docs/contributing/build-and-test.md`,
 "Versioning the driver", is the authority.
+
+A TEST build is cut by the same script with `-TestLabel`, for example
+`-TestLabel "bench pending"`: the generated `readme.txt` then opens with a
+banner reading "TEST <version>, bench pending." and saying the build is not
+published. A test build never goes under this directory: the script refuses
+`-TestLabel` unless `-ReleasesDir` points elsewhere (under the git-ignored
+`out\`, with a `history.md` copy carrying the build's entry), because this
+`history.md` holds published versions only. Roadmap-hcd Phase 36's 36.final
+cut `2.2.0.3` that way.
