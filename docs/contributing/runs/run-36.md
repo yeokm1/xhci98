@@ -1141,7 +1141,7 @@ ruling).
   "hub leaving". With `usb-audio`, a later fatal exception 0E follows
   at `BFF9DFFF`. This is the open 36.28 part 2 standby defect. Evidence:
   `w98\debugcon-6.log`, `debugcon-7.log`, `wake-eips.txt`,
-  `shots\w75-w80.png`. Routed to worker p36-sby.
+  `shots\w75-w80.png`. Settled 2026-10-11: not the bus's - see "## 36.28 part 2" below.
 - **2000 S4, Bulk-Only stick Code 31 after the resume (a known-limitation
   extension, not a new defect).**
   - The resume takes the reinit branch because QEMU's controller saves no state (no FSC). The driver then drops and re-creates every device, and the stick's new PDO comes up with the same instance id while the old storage stack is still open.
@@ -1169,7 +1169,7 @@ ruling).
 |---|---|---|---|---|
 | 98 SE | I1-I4 | rel | PASS | BC no differences; `XHCI98.TMP` left beside `XHCI98.SYS` (known); INF values, `XhciSelectiveSuspend` and `XhciWideMap` absent; delivery/reason 1/1, `psw.gate` 0; 24 of 162 counters nonzero, all named; stage 2 "promotion off" (`i3.txt`) |
 | 98 SE | SB1 | rel | PASS | `susp.switch` 0, "DNCTRL not read", enables/readback 0, 114-159 all 0, no `susp.ss.cap`; stick fc clean (`i3.txt`) |
-| 98 SE | CP1 Stand by | rel | FAIL (pre-existing 36.28 part 2 defect; routed to p36-sby) | standby entered; after `system_wakeup` the desktop never returned (CPU looping in VMM, `wake-eips.txt`, `w75-w80.png`); audio playback before sleep not makeable (`USBAUDIO` fatal exception 00, `w60.png`) |
+| 98 SE | CP1 Stand by | rel | FAIL (pre-existing; settled 2026-10-11 as Windows 98 SE under QEMU, not the bus - "## 36.28 part 2") | standby entered; after `system_wakeup` the desktop never returned (CPU looping in VMM, `wake-eips.txt`, `w75-w80.png`); audio playback before sleep not makeable (`USBAUDIO` fatal exception 00, `w60.png`) |
 | 98 SE | CP1 trace | qemu | FAIL (same defect) | with audio + hub: `00000404` x2 on sleep, `00000101` x2 on wake (correct), then exception 0E at Ctrl+Alt+Del; hub/mouse only: one sleep line, the resume stops after "slots invalidated" / "hub leaving" (`debugcon-6.log`, `debugcon-7.log`) |
 | ME | I1-I4 | rel | PASS | restart for the WININIT rename (known), no `.TMP`; BC clean; values as 98 SE; delivery/reason 1/1; 24 of 162 named; "promotion off" (`i3.txt`) |
 | ME | SB1 | rel | PASS | as 98 SE; stage B record slot 1 ACTIVE Ss 0 (`i3.txt`) |
@@ -1235,3 +1235,69 @@ It also owes stage A's 36.35 rows, 36.28 part 2, the 36.41 re-measure,
 and the VIA fix's rows. On top of those: the 98 SE standby and Windows 7
 audio rows again after their fixes, and the 2000 SMP mode-2 warm restart
 on a quiet host.
+
+## 36.28 part 2 - 98 SE standby resume
+
+2026-10-11, development host A, QEMU 11.1.0 (`-machine pc,smm=off`, TCG,
+one Pentium III, 256 MB, `-device VGA`), Windows 98 SE from the matrix's
+`win98-gold` lineage (a copy of the early-warning qemu overlay, never the
+base). Build: branch `p36-sby` at `p36-int5` `12e4b03`, `qemu` flavour,
+with temporary traces on every power IRP of the controller FDO, the
+root-hub FDO and PDO, the hub FDOs and the device PDOs, on the D0 route
+and the system IRP's request, and on every internal IOCTL a device PDO
+received after its first D-IRP. The traces were never committed. Kit and
+evidence (not tracked): `out\p36-sby\kit` (`sb.sh` standby/wake helper),
+`out\p36-sby\legs\w98`, `out\p36-sby\legs\w98u`.
+
+**What the controller does on a 98 SE resume.** Every resume took
+`hcdD0Finish` inline: the D0's completion routine ran at PASSIVE_LEVEL
+(`irql` 0) and the work item was never used; the D0 then went through
+`XhciResumeController`'s reinitialization (QEMU has no Force Save
+Context), dropped every device and completed. The system IRP's
+`PoRequestPowerIrp` callback ran at PASSIVE_LEVEL too. The direct
+transition never ran. Two orders were seen: S0 first and its requested D0
+after (a mouse alone, a hub and a mouse), or a D0 sent alone with no S0
+before it (whenever a USB stick was attached, and in the early-warning
+matrix's runs 6 and 7, which had one).
+
+| Run | Devices | What happened after `system_wakeup` | Reading |
+|---|---|---|---|
+| xHCI 1 | a mouse on a root port | S0, D0, reinitialization, the mouse re-enumerated; the pointer moves | resume passes |
+| xHCI 1 (cont.) | the same | an MS-DOS prompt, then XHCISNAP: fatal exception 0E at `016F:BFF9DFFF` | the post-standby fault reproduced |
+| xHCI 7 | a hub, a mouse behind it | S0, D0, the hub FDO's S0 and its requested D0 (`asked` `00000101`), the hub and the mouse re-enumerated; the pointer moves through the hub | resume passes |
+| xHCI 5, 6 | a SuperSpeed stick (with or without a hub and mouse) | D0 first; the controller, the root-hub FDO and the stick's PDO each completed theirs (`dev PDO power completed=00000000`); then nothing reached the bus again - no S0 to any object of this driver, no internal IOCTL on the stick's PDO, no request held; the No Op self-test still completed, so the controller and its thread were live; black screen, VMM idle EIPs `C00036xx`, `C000A6E7`/`A881`, `C0051551` | Windows stops after the stick's D0 |
+| xHCI 9 | the stick, with the bus's re-enumeration held until S0 (temporary experiment) | the same stop after the stick's D0, with no device dropped and nothing reported missing | the stop is not caused by the bus dropping the stick |
+| none 4, 14 | no USB controller at all | standby and back to the desktop; an MS-DOS prompt then reads "There is not enough memory available to display the program"; XHCISNAP in it: fatal exception 0E at `0167:BFF87EDE`; Ctrl+Alt+Del then: 0E at `0167:BFF9DB34` | the 0E in KERNEL32 needs no USB stack |
+| UHCI 1, 2 | 98 SE's own `uhcd.sys` (NUSB 3.3 above it): a stick; then a mouse alone | both: black screen after the wake, the CPU spinning at `C002F1B0` | 98 SE's own controller driver does not resume on this vehicle either |
+| EHCI 12, 13 | NUSB 3.3's EHCI stack: a stick; then a mouse alone | the stick: black screen after the wake, spinning at `C002F1FD`; the mouse: standby refused ("a device driver or program won't allow it") | the stick's stop is not this HCD's |
+
+(Run numbers are the kit's launch counters; `none 4` was a fresh boot.
+Two vehicle artefacts were seen on the way: a Windows restarted from
+MS-DOS mode came back from standby to a black screen with no USB
+controller at all, and one `system_wakeup` reset the guest before any
+driver code ran - stage A's 36.35 table read the same reset.)
+
+**Verdict: not this driver.** The fatal exception 0E in KERNEL32
+(`BFF9DFFF` and its neighbours) follows a Windows 98 SE standby on QEMU
+with no USB host controller in the machine; the stop after a USB stick's
+D0 happens with this driver idle and owing nothing, unchanged when the
+bus defers its re-enumeration, and the same stick stops a resume under
+NUSB's EHCI stack; 98 SE's own UHCI driver does not resume at all. With
+only HID devices and hubs on the bus, the resume completes and the
+devices work through this driver. No code change. ME-1 (ME standby or
+hibernate with a copy running) is not touched by this reading.
+
+**Release-notes wording (draft, for 36.20):** "Stand by on Windows 98
+SE has been read only in QEMU virtual machines, where Windows 98 SE
+itself does not resume reliably: a console program or Ctrl+Alt+Del after
+the wake can stop with a fatal exception 0E in KERNEL32 even with no USB
+controller in the machine, and with a USB disk attached the resume stops
+before the desktop returns under this driver and under NUSB's EHCI
+driver alike. With only USB mice, keyboards and hubs attached, the
+resume completed and the devices worked. On real hardware Stand by is
+untested; remove USB disks before Stand by."
+
+**Owed.** 36.28's part 2 on the bench (E460, P14s Gen 1: standby with a
+stick); the stage A, pended-D0 and `XhciInterruptMode` 2 resumes of
+part 2 on guests that resume (ME standby, the NT hibernates) in the
+combined matrix.
