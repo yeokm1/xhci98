@@ -890,10 +890,12 @@ no message-signalled interrupts and are unchanged.
   systems alone, `xhcimsi.sys`, which the INF installs as a service that
   starts with Windows and which hands `xhci98.sys` that routine. **The
   install and every update on 32-bit Vista and 7 ask you to restart**,
-  because that service starts only at boot; until you do, the controller
-  runs on its interrupt line, as on XP, and uses the message from the
-  next start of Windows on. If `xhcimsi.sys` is missing or does not load,
-  the controller keeps its interrupt line.
+  because that service starts only at boot. After a first install the
+  controller does not start until you restart (Device Manager shows it
+  waiting for the restart: code 28 on 7, code 1 on Vista), so its USB 3
+  ports work from the next start of Windows on, with the message. If
+  `xhcimsi.sys` is missing or does not load, the controller keeps its
+  interrupt line.
 - **Forcing the interrupt line** on Vista and 7: set `XhciInterruptMode` to
   `1` and disable and enable the controller, or set `MSISupported` to `0`
   under `Interrupt Management\MessageSignaledInterruptProperties` in the
