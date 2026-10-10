@@ -880,6 +880,7 @@ How it got here:
   - **Regression:** modes 0 and 1 on a pin reading as the release before it.
   - **Visibility:** the delivery and its reason read in `XHCISNAP` and in DebugView for each of modes 0, 1 and 2, for the no-interrupt start and for the dead-line move.
   - x86 and amd64, and every gate
+  - **Read 2026-10-10, not done** (`runs/run-36.md`, "36.13"; fixes `5bca7bd`, `824a6c7`). Every leg on `bfec7b0` passed on 98 SE, ME, 2000, the 2000 SMP guest under Driver Verifier, XP, XP x64, Vista and 7 x86 and x64, except the dead line under mode 1: a command or EP0 wait expired into a reset, since the backstop runs on the waiting thread. Fixed: the waiting thread queues the drain itself at `XhciTolerance` 1 (`enum.wait.drains`); one Codex loop, clean at round 2; built x86 and `-amd64`, every gate and the host suites passing at `824a6c7`. Read on the fixed build on 2000 and 98 SE. Owed to the matrix: the fixed build's dead-line legs on XP, XP x64 and 7 x64, and its `release` smoke on 7 x64.
 - [ ] 36.14 (was POLL-E) the polling bench (owner):
   - mode 2 on the E460 and the P14s Gen 1 under Windows 98 SE;
   - an MSI-only controller if one is at hand (the synthetic no-interrupt leg does not wait for one);
