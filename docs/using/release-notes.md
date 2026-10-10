@@ -915,7 +915,7 @@ AM5 tester's machine has not run this release.
 
 ## Registry settings
 
-Twelve values, each a `DWORD` in the controller's driver (software) key:
+Thirteen values, each a `DWORD` in the controller's driver (software) key:
 
 | Windows | Key |
 |---|---|
@@ -928,13 +928,14 @@ controller was ever enumerated at another PCI slot can have more than one
 such key: the device's own `Driver` value, under `Enum\PCI`, names the one in
 use. `XHCISNAP -verbosity` finds it for you.
 
-The install writes all twelve: each at the driver's own default, except
+The install writes all thirteen: each at the driver's own default, except
 `XhciImodInterval250ns` at `160`. Each is written only where it is missing,
 so a value you changed survives an install or update; to go back to the
 default, set it by hand, or delete the value and update the driver.
 `XhciTolerance`, `XhciIntervalCap` and `XhciAvgTrbEsit` are new in
-`2.2.0.0`, and an update over `2.1.1.0` adds them; `XhciIntelIrqRoute` is
-new in `2.3.0.0`, and an update over `2.2.0.0` adds it. Since `2.3.0.0` the
+`2.2.0.0`, and an update over `2.1.1.0` adds them; `XhciIntelIrqRoute` and
+`XhciMaxTransferKB` are new in `2.3.0.0`, and an update over `2.2.0.0` adds
+them. Since `2.3.0.0` the
 install writes `XhciIntelPortSwitch` at `0`, where `2.1.1.0` and `2.2.0.0`
 wrote `1`; an update keeps the `1` they wrote, and `portsw.vbs` changes it
 ("XhciIntelPortSwitch", below). The install has written
@@ -1227,6 +1228,85 @@ bandwidth reckoning, so it is not changed by default; the switch exists so
 that a machine whose devices misbehave can be compared with it set, and
 nothing ties it to the AMD report. Leave it at `0` unless you are
 comparing. It is read when the controller starts.
+
+### XhciMaxTransferKB: the UAS command size
+
+New in `2.3.0.0`; the install writes `1024`. In **KiB**: the most one UAS
+command asks the drive to move, which the UAS driver tells Windows' storage
+class driver as the largest request it takes. `2.2.0.0` and earlier always
+said 64 KiB. Fewer, larger commands mean fewer command and status
+exchanges per megabyte; the controller still moves each command in pieces
+of at most 128 KiB, one after another.
+
+| Value | Effect |
+|---|---|
+| `1024`, absent, not a `DWORD`, outside `64`-`2048`, or not a multiple of `4` | 1 MiB commands (`XHCISNAP`'s report notes why a value was not used) |
+| `64` | 64 KiB commands, as `2.2.0.0` and earlier |
+| `2048` | 2 MiB commands, the largest |
+| any multiple of `4` from `64` to `2048` | that size |
+
+It applies to every UAS device on that controller; Bulk-Only devices keep
+Windows' own `usbstor.sys` limits whatever it says. Windows reads the size
+when the storage device starts and keeps it, so **a change takes effect at
+the next restart of Windows**. `XHCISNAP`'s report shows the value read and
+the command size in effect, and each UAS device's hardware key records the
+size it took (`XhciUasCommandBytes`, in bytes).
+
+**Trying `2048` by hand.** Set `XhciMaxTransferKB` to `2048` (decimal; `800`
+hex) in the driver key above, with `regedit` or a `.reg` file, and restart
+Windows. To go back, set `1024`, or `64` for a drive that misbehaves at
+large commands, and restart again. Linux's UAS driver sends commands of up
+to 512 KiB, and its Bulk-Only driver 120 KiB, or 1 MiB at SuperSpeed, with
+64 KiB or 120 KiB for drives known to misbehave; Windows 7's Bulk-Only
+driver sends 64 KiB, raised per device up to 2 MiB by Microsoft's KB 2581464.
+So `1024` is within what drives already see elsewhere, and `2048` beyond
+most of it. A drive that fails at a larger size usually fails at its first
+large read or write: if copies fail or the drive drops off after raising
+the value, set `64`.
+
+**A later release with another default.** The install writes the value
+only where it is missing, like every value here, so an update keeps the
+number already in the key - the old default included. To take a new
+release's default, delete `XhciMaxTransferKB` before updating the driver,
+or set the new number by hand, and restart.
+
+**One model only: Microsoft's per-device value.** On Windows 2000 and
+later the UAS driver also honours the value Windows' own Bulk-Only driver
+uses for one kind of device, so a drive model can be set apart from the
+rest:
+
+| | |
+|---|---|
+| Key | `HKLM\SYSTEM\CurrentControlSet\Control\usbstor\VVVVPPPP`, where `VVVV` and `PPPP` are the drive's vendor and product IDs as four uppercase hex digits each (`VID_0BDA&PID_9210` is `0BDA9210`) |
+| Value | `MaximumTransferLength`, a `DWORD`, in **bytes** |
+| Accepted | `65535` to `2097120`, the range Microsoft's KB 2581464 gives |
+
+A value in range replaces `XhciMaxTransferKB`, larger or smaller, for
+every drive with those vendor and product IDs - the key is per model, for
+the whole machine, not per physical drive - and every other drive keeps
+the controller's value. It is rounded to the nearest 4 KiB (at most 2048
+bytes either way), so `65535` is 64 KiB, `2097120` is 2 MiB, and `131072`
+(`20000` hex) is 128 KiB exactly. A value that is missing, not a `DWORD` or
+out of range is ignored. Restart Windows after setting it. It is the same
+key Windows' `usbstor.sys` reads for a Bulk-Only drive, so tools and
+guides written for that - Uwe Sieber's pages on `uwe-sieber.de` cover it -
+set it for a UAS drive too, with one exception: a tool that writes
+`2097152` for 2 MiB writes a value above the range, which is ignored
+(`XhciUasDeviceLimitWhy` `3`); change it to `2097120` by hand. The UAS device's hardware key (under
+`Enum\USB`, on Windows 2000 and later in its `Device Parameters`) shows
+what was taken: `XhciUasCommandBytes` the size in bytes,
+`XhciUasCommandSource` `1` for the controller's value and `5` for the
+drive's own, `XhciUasDeviceLimit` the value read and
+`XhciUasDeviceLimitWhy` `0` absent, `1` used, `2` not a `DWORD`, `3` out of
+range. Behind a `2.2.0.x` controller driver the UAS driver keeps 64 KiB and
+the drive's value is not used (`XhciUasDeviceLimitWhy` `4`).
+
+**Windows 98 SE and ME.** Both values are read, and neither changes what
+reaches the drive: Windows' mapping layer, `USBNTMAP.SYS`, sends at most
+64 KiB at a time whatever the UAS driver offers. Read in QEMU virtual
+machines on development host A, Windows 98 SE with NUSB and Windows ME,
+with `XhciMaxTransferKB` at `1024`: no command above 64 KiB, one at a
+time, and file reads no faster than at `64`.
 
 ### XhciLogVerbosity and XhciLogDebugView: the log
 

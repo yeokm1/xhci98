@@ -112,6 +112,7 @@ typedef struct _XHCI98_TRANSFER_POLICY {
 #define XHCI98_TELE_SRC_UNSUPPORTED 2UL /* an older bus: 64 KiB             */
 #define XHCI98_TELE_SRC_MALFORMED   3UL /* a reply out of contract: 64 KiB  */
 #define XHCI98_TELE_SRC_TRANSPORT   4UL /* removal or no memory: 64 KiB     */
+#define XHCI98_TELE_SRC_DEVICE      5UL /* the device's own usbstor limit  */
 
 typedef struct _XHCI98_TELEMETRY {
     ULONG Word[XHCI98_TELE_WORDS];

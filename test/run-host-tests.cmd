@@ -125,6 +125,9 @@ rem                  13-L.2 retired the ring-0 file sink and those functions
 rem                  with it, and test_log.c had said so for
 rem                  two days while this summary had not.)
 rem
+rem   test_xpipe   - stage 2's TD planner (src\xhci_xpipe.c, task 36.24):
+rem                  TDs of at most 31 elements cut from one wide
+rem                  mapping of a URB, packet-aligned but the last
 rem   test_uas     - the pure core of xhciuas.sys, the UAS class driver
 rem                  (src\uas\uas_iu.c, task 31-A.2): the COMMAND and TASK
 rem                  MANAGEMENT IU encoders and the SENSE, RESPONSE and READY
@@ -324,6 +327,9 @@ call :run test_desc "test_desc.c ..\src\xhci_desc.c ..\src\xhci_ctx.c ..\src\xhc
 rem test_uas links nothing else: the UAS driver's information units, tags,
 rem descriptor walk and ids are pure computations over bytes (task 31-A.2).
 call :run test_uas "test_uas.c ..\src\uas\uas_iu.c"
+rem test_xpipe links nothing else: stage 2's TD planner over a URB's wide
+rem mapping (task 36.24, design record 13 section 11.6) is pure.
+call :run test_xpipe "test_xpipe.c ..\src\xhci_xpipe.c"
 call :run test_poll "test_poll.c ..\src\xhci_poll.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".

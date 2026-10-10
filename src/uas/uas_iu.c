@@ -751,3 +751,41 @@ ULONG UasPolicyValue(ULONG sent, const XHCI98_TRANSFER_POLICY *reply,
     *source = XHCI98_TELE_SRC_BUS;
     return reply->CommandBytes;
 }
+
+ULONG UasDeviceLimit(ULONG busBytes, ULONG busSource, ULONG found,
+                     ULONG type, ULONG length, ULONG value, PULONG source,
+                     PULONG why)
+{
+    ULONG bytes;
+
+    *source = busSource;
+    if (!found) {
+        *why = UAS_DEVLIM_ABSENT;
+        return busBytes;
+    }
+    if (type != UAS_DEVLIM_REG_DWORD || length != 4UL) {
+        *why = UAS_DEVLIM_TYPE;
+        return busBytes;
+    }
+    if (value < UAS_DEVLIM_MIN_BYTES || value > UAS_DEVLIM_MAX_BYTES) {
+        *why = UAS_DEVLIM_RANGE;
+        return busBytes;
+    }
+    if (busSource != XHCI98_TELE_SRC_BUS) {
+        *why = UAS_DEVLIM_NO_BUS;
+        return busBytes;
+    }
+    /* Nearest 4 KiB, ties up; inside the range no overflow is possible
+     * and the result is 64 KiB to 2 MiB already (uas_iu.h). */
+    bytes = (value + XHCI98_POLICY_STEP_BYTES / 2UL) &
+            ~(XHCI98_POLICY_STEP_BYTES - 1UL);
+    if (bytes < XHCI98_POLICY_MIN_BYTES) {
+        bytes = XHCI98_POLICY_MIN_BYTES;
+    }
+    if (bytes > XHCI98_POLICY_MAX_BYTES) {
+        bytes = XHCI98_POLICY_MAX_BYTES;
+    }
+    *why = UAS_DEVLIM_USED;
+    *source = XHCI98_TELE_SRC_DEVICE;
+    return bytes;
+}

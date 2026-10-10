@@ -1129,7 +1129,7 @@ read statically as doing its I/O through a 64 KiB bounce MDL
 descriptor changes nothing there. 36.21 measures the SRB sizes 98 SE and
 ME actually send before anything is promised for them.
 
-- [ ] 36.21 (was MB.0) instrumentation, then the baseline. Each counter has a
+- [x] 36.21 (was MB.0) instrumentation, then the baseline. Each counter has a
   named producer:
   - `xhciuas.sys` counts SRB lengths and commands outstanding (beside
     its `Counters[]`, `uas.h` ~219, which nothing reports today) and
@@ -1163,7 +1163,30 @@ ME actually send before anything is promised for them.
   `XhciImodInterval250ns` in effect, flavour and repetitions. The SRB
   sizes Windows ME sends are read in its QEMU guest, a VM leg of this
   task
-- [ ] 36.22 (was MB.1) stage 1: the value and its query (the contract
+  - **Done 2026-10-09, bench clause owed (2.2.0.3)** (`f3a395c`, review
+    fixes `ac5bbd0`; built x86 and `-amd64`, all
+    flavours, every gate and the host suites passing). `xhci_xstat.c`
+    (stamps by the time-stamp counter with the processor's APIC ID, the
+    gap's two parts, publication, completion and mapping costs);
+    `xhciuas.sys`'s record over `IOCTL_XHCI98_TELEMETRY`; the HCD header
+    appended to 202 words and decoded by `XHCISNAP`; `releases\2.2.0.0`'s
+    `XHCISNAP` read the newer snapshot with the new words absent. The
+    QEMU baseline (development host A, `out\p36-mb\xp64\notes.md`): XP
+    x64, UAS at SuperSpeed, raw reads at 64 KiB commands 214 / 281 / 343 /
+    353 MB/s at 64 KiB / 256 KiB / 1 MiB / 2 MiB requests, every SRB at
+    most 64 KiB; Bulk-Only 210 / 340 / 373. Windows 98 SE (NUSB) and ME,
+    read in their QEMU guests (`out\p36-mb\w98n`, `out\p36-mb\me`): no
+    SRB above 64 KiB reaches `xhciuas.sys` or the HCD, one at a time,
+    whatever the descriptor says (`USBNTMAP.SYS`), and file reads no faster
+    at 1024 than at 64. The x86 `hcdCpuId` did not preserve EBX around
+    CPUID (STOP 0xB8 on Windows 2000, found by the integration smoke leg;
+    fixed by `f22a42b`, here `fe76f91`); on 98 SE and ME the same clobber
+    lowered the IRQL inside the controller lock, which is why those
+    readings' HCD bulk-URB counts fell short of their chunk counts - their
+    sizes come from `xhciuas.sys`'s record, which it did not touch; re-read on
+    the fixed build, 98 SE's counts agree (3408 URBs, 3408 chunks). Owed:
+    the bench (E460, P14s Gen 1, 98 SE and 7, ATTO and a large copy)
+- [x] 36.22 (was MB.1) stage 1: the value and its query (the contract
   above), `xhciuas.sys`'s descriptor (`MaximumTransferLength`,
   `MaximumPhysicalPages` as bytes / page + 1) and pipes'
   `MaximumTransferSize` from its one stored value, the INF rows and gate,
@@ -1176,8 +1199,43 @@ ME actually send before anything is promised for them.
     one-TRB interrupt TD (`hcd_inj.c` ~36, ~710).
 
   36.21 repeated at 64 KiB, 1 MiB and 2 MiB
-- [ ] 36.23 (was MB.2) the decision on stage 2, from 36.22's readings (owner): command
+  - **Done 2026-10-09** (`4909421`, review rounds to `ac5bbd0`, clean at
+    round 7, thread `01a1209e`; the device's own limit `8a7c21b..90c625c`,
+    clean at round 2, thread `01a12143`; built x86 and `-amd64`, all
+    flavours, gates and host suites passing). `XhciMaxTransferKB`
+    (`hcd_ctl.c`, `XhciXpolValue`), `IOCTL_XHCI98_TRANSFER_POLICY`
+    (`hcdPolicyIoctl`; `uasAskPolicy`, `UasPolicyValue`, `test_uas`), the
+    note in the UAS device's hardware key, the INF rows and gate. Owner,
+    2026-10-09: the default stays 1024 in both INFs; and `xhciuas.sys`
+    also honours Microsoft's per-device `usbstor\VVVVPPPP`
+    `MaximumTransferLength` (65535 to 2097120, nearest 4 KiB; record 13
+    section 11.5, `UasDeviceLimit`). The test client is
+    `test\xfertest`; the constrained grant `XhciQemuMapGrant`; the qemu
+    bulk faults 14 to 17 hex (`build-and-test.md`). 36.21 repeated (XP x64,
+    QEMU): at 1024, 134 / 394 / 593 / 600 MB/s at 64 KiB / 256 KiB / 1 MiB
+    / 2 MiB requests, a 1 MiB URB 8 chunks (9 unaligned); at 2048, 1 MiB
+    696, 2 MiB 711 (550 unaligned), 16 chunks (17); at 64, 177 / 264 /
+    243; VERIFY clean at each; 4096 noted out of range and 1024 used.
+    The device's own value read on XP x64 in QEMU (`out\p36-mb\xp64\notes.md`):
+    none, 1 MiB commands; 65535, 64 KiB commands (source 5); 2097120, 2 MiB
+    commands with the controller at 1024; 2097152, refused (reason 3) and
+    1 MiB, with another model's key ignored. Owed in 36.26: the rest of the
+    geometry legs
+- [x] 36.23 (was MB.2) the decision on stage 2, from 36.22's readings (owner): command
   rate, chunk rate, the gap's two parts, CPU cost and throughput
+  - **Taken by owner decision 2026-10-09**: stages 2 and 3 are taken
+    whatever the readings, and the decision does not choose the default
+    (it stays 1024). The readings, recorded anyway (XP x64 in QEMU,
+    development host A, guest QPC under TCG, so large run-to-run variance):
+    command rate at 1 MiB reads 566 commands/s at 1024 against 5230 at 64
+    KiB commands (baseline, 343 MB/s); chunk rate 4524 chunks/s at 1024
+    (8 a URB); the gap, retirement to the next chunk's publication, 120 us
+    mean at 1024 and 84 us at 2048, the software-empty interval the same
+    (the ring empty for all of it); CPU cost a publication 34 us at 1024
+    (27 at 2048) against 14 us at 64 KiB, a completion pass 3.8 us against
+    2.0, a next chunk's mapping 22 us (9 at 2048); throughput as 36.22
+    above, 1 MiB reads 343 MB/s at 64 KiB commands, 593 at 1024, 696 at
+    2048
 - [ ] 36.24 (was MB.3) stage 2, if taken: its design reviewed to
   convergence, the event-burst review included whatever the ring, then
   the code with host vectors in `test_td`, `test_xfer` and `test_ring`.

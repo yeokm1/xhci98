@@ -2759,9 +2759,10 @@ static void print_xstat(const unsigned char *hcd, unsigned long hcdBytes)
         "not a DWORD: the default", "out of 64-2048: the default",
         "not a multiple of 4: the default"
     };
-    static const char *const source_text[5] = {
+    static const char *const source_text[6] = {
         "not asked yet", "the bus's answer", "an older bus: 64 KiB",
-        "a reply out of contract: 64 KiB", "the request failed: 64 KiB"
+        "a reply out of contract: 64 KiB", "the request failed: 64 KiB",
+        "the device's own usbstor MaximumTransferLength"
     };
     static const char *const chunk_names[5] = {
         "1:", "2:", "3-8:", "9-16:", "17+:"
@@ -2891,7 +2892,7 @@ static void print_xstat(const unsigned char *hcd, unsigned long hcdBytes)
         comp("    send %lu: command size %lu bytes (%s), %s, depth %lu, in "
              "flight %lu (most %lu)\n", get32(b, SNAP_TL_SEQUENCE * 4),
              get32(b, SNAP_TL_COMMAND_BYTES * 4),
-             v < 5 ? source_text[v] : "?",
+             v < 6 ? source_text[v] : "?",
              get32(b, SNAP_TL_STREAMED * 4) ? "streamed" : "streamless",
              get32(b, SNAP_TL_QUEUE_DEPTH * 4), get32(b, SNAP_TL_ACTIVE * 4),
              get32(b, SNAP_TL_ACTIVE_MAX * 4));
