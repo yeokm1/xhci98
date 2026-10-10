@@ -297,14 +297,16 @@ typedef struct _HCD_XFER {
  */
 #define HCD_WIDE_ENTRIES    8UL
 /*
- * XhciWideMap when the value is absent: on (owner, 2026-10-10, on the HAL
- * reading of record 13 section 11.6.1; 0 in the key turns it off). The one
- * constant to flip. Promotion still needs Windows 2000 or later, the
+ * XhciWideMap when the value is absent: off (owner, 2026-10-10, for 2.2.0.3
+ * and 2.3.0.0, after Codex session 01a124ef: regression unlikely but
+ * unquantified, a silent-corruption failure mode, no gate-code defect;
+ * record 13 section 11.6). 1 in the key opts in. The one constant to
+ * flip. Promotion still needs Windows 2000 or later, the
  * adapter's register-free grant (XHCI_XPIPE_FREE_GRANT), the start's
  * register-free check (hcd_dma.c, HcdDmaWideOpen) and, per URB, a NULL
  * map register base.
  */
-#define HCD_WIDE_MAP_DEFAULT 1UL
+#define HCD_WIDE_MAP_DEFAULT 0UL
 
 typedef struct _HCD_WIDE_ENTRY {
     struct _HCD_XFER *Owner;        /* NULL: free                         */

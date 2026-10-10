@@ -775,7 +775,8 @@ How it got here:
   `XHCIQUAL`'s reports (36.47, 36.48). Also decided: MSI on Vista and 7
   x86 through an NT 6-only helper driver (design record 18), mode 1
   forcing the line, a per-device `MaximumTransferLength`, and stage 2's
-  `XhciWideMap` on by default after a reading of every target's HAL.
+  `XhciWideMap` read for every target's HAL, then off by default
+  (owner, 2026-10-10: 1 opts in).
   `2.2.0.3` is a local test build for the owner's bench; `2.3.0.0` is cut
   after it.
 
@@ -1265,7 +1266,7 @@ ME actually send before anything is promised for them.
   the code with host vectors in `test_td`, `test_xfer` and `test_ring`.
   If it grows the pool ring, also the isochronous decoupling, the stride
   assert, `test_iso`, `test_membuf`, `test_stream` and `test_snap`
-  - **Done 2026-10-10, legs owed to 36.26** (design `b76c16f..6aa2ae2`; the HAL reading, branch `p36-hal`, merged at `bb007ed`; code `b26f5c8`, `9b0c85f`, review fixes to `297d42a`, clean at round 4, thread `01a1236a`; the suspended-controller ordering `f9c02ec`). Record 13 section 11.6: `XhciWideMap` on by default (owner, 2026-10-10, on 11.6.1), 0 off; promotion only on NT, at the grant `0x80001`, past the start's register-free check and on a NULL base. Built x86 and `-amd64`, every gate and the host suites passing. Smoke (XP x64 in QEMU, development host A, `out\p36-mb\xp64\notes.md`): promotion fires at the default and not at 0, VERIFY clean either way
+  - **Done 2026-10-10, legs owed to 36.26** (design `b76c16f..6aa2ae2`; the HAL reading, branch `p36-hal`, merged at `bb007ed`; code `b26f5c8`, `9b0c85f`, review fixes to `297d42a`, clean at round 4, thread `01a1236a`; the suspended-controller ordering `f9c02ec`). Record 13 section 11.6: `XhciWideMap` on by default (owner, 2026-10-10, on 11.6.1), 0 off - **then off by default, 1 opts in (owner decision 2026-10-10, after Codex session `01a124ef`; p36-int4)**; eligibility: every qualifying bulk OUT URB, bulk IN only on a stream; promotion only on NT, at the grant `0x80001`, past the start's register-free check and on a NULL base. Built x86 and `-amd64`, every gate and the host suites passing. Smoke (XP x64 in QEMU, development host A, `out\p36-mb\xp64\notes.md`): promotion fires at the default and not at 0, VERIFY clean either way
 - [x] 36.25 (was MB.4) stage 3, if taken: its design reviewed to convergence (fixed
   rings placed by physical address, or a fixed set of page segments
   allocated with the pipe, sized from the table above and qualified on a

@@ -6406,7 +6406,11 @@ TRBs. A change takes effect at the next start.
 every flavour, not only qemu). A REG_DWORD in the controller's key, read at
 every start and written by no INF: 0 keeps every bulk URB sequential (stage
 1), anything else allows a whole-URB mapping and two TDs of one URB on the
-ring; absent or of another type it is on (`HCD_WIDE_MAP_DEFAULT`). On, a
+ring - every qualifying bulk OUT URB, and bulk IN only on a stream; absent
+or of another type it is off (`HCD_WIDE_MAP_DEFAULT`; owner, 2026-10-10:
+off in `2.2.0.3` and `2.3.0.0`, 1 opts in; record 13 section 11.6). The
+combined matrix's WideMap legs set 1 in the registry; its default legs run
+with promotion off. On, a
 start enables promotion only on Windows 2000 and later, with the adapter's
 grant exactly `0x80001`, the register-free check passed and the eight wide
 entries allocated. The log ring notes `xfer.wide.value` (the value read,

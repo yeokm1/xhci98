@@ -1369,17 +1369,19 @@ time, and file reads no faster than at `64`.
 
 On Windows 2000 and later the controller driver gives a large bulk
 transfer to the controller two pieces at a time, the next one queued
-before the current one ends, where `2.2.0.x` gave one piece and waited.
-It does so only where the machine's DMA needs no translation - the
-check is made at every start, and again for each transfer - and the value
-turns it off:
+before the current one ends, where `2.2.0.x` gave one piece and waited -
+when this value turns it on. It is **off unless you set it**. It applies to
+large bulk writes on any device, and to large bulk reads only on a UAS
+drive's streams. It does so only where the machine's DMA needs no
+translation - the check is made at every start, and again for each
+transfer:
 
 | | |
 |---|---|
 | Key | the controller's driver key, as for `XhciMaxTransferKB` |
 | Value | `XhciWideMap`, a `DWORD` |
-| Default | on: no install writes it, and a missing value means on |
-| Off | `0`, then restart |
+| Default | off: no install writes it, and a missing value means off |
+| On | `1`, then restart (`0` or deleting the value turns it off again) |
 
 The decision rests on a reading of every Windows 2000, XP, Vista and 7 HAL
 of the service packs these notes name, x86 and x64. Later HAL hotfixes were
@@ -1392,8 +1394,10 @@ On a UAS drive at SuperSpeed the same switch also lets one command's
 data go to the controller as a single piece of up to 2 MiB, on rings the
 driver makes larger for that drive's streams (about 1.5 MiB of memory per
 drive while it is attached; if that memory cannot be had the drive works
-as before). If a large copy misbehaves on `2.3.0.0` and not on `2.2.0.x`,
-set `0`, restart and report whether that changed it.
+as before). It is off by default because a regression, though unlikely,
+would show as silently wrong data rather than an error. If you turn it on
+and a large copy misbehaves, set `0`, restart and report whether that
+changed it.
 
 ### XhciLogVerbosity and XhciLogDebugView: the log
 

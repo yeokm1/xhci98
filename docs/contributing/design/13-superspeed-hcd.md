@@ -4569,9 +4569,20 @@ text answers all three: stage 2 never asks for more registers than stage
    at stage 1 (round 3, finding 1: never ask for a whole URB to find out
    whether it is safe).
 
-   **Promotion was off by default until the HAL readings were recorded;
-   it is on by default since they were (owner, 2026-10-10, on 11.6.1's
-   verdict).** `MapTransfer`'s documented contract
+   **Promotion is off by default (owner, 2026-10-10, for `2.2.0.3` and
+   `2.3.0.0`); `XhciWideMap` 1 opts in.** It was off until the HAL
+   readings were recorded and briefly on by default after them (11.6.1's
+   verdict); the owner turned the default back off after a focused Codex
+   review (session `01a124ef-74e0-73f1-a0b3-5c6f8e74e569`,
+   `.claude/codex-widemap-default-q1-result.txt` in the main checkout):
+   a regression is unlikely but unquantified - the HALs after the read
+   service packs are unread, and the gates (a NULL base, the grant
+   `0x80001`) are correlated outputs of one adapter implementation, not
+   independent proofs - the failure mode would be silent data corruption,
+   and the review found no defect in the gate code. Every gate below is
+   kept as it is; only the absent-value default changed. Eligibility
+   covers every qualifying bulk OUT transfer; bulk IN only on a stream
+   (point 1), so it is not UAS-only. `MapTransfer`'s documented contract
    (`PMAP_TRANSFER`, wdm.h) bounds a mapping by the registers the request
    was given ("the number of map registers that can be set up cannot
    exceed the maximum returned"), and says nothing of a NULL base; mapping
@@ -4595,10 +4606,10 @@ text answers all three: stage 2 never asks for more registers than stage
      non-NULL base; the default's scope is 11.6.1's verdict);
    - the switch is `XhciWideMap`, a `DWORD` in the controller's key, read
      at every start and not written by the INFs: absent or of another
-     type it is on (`HCD_WIDE_MAP_DEFAULT`, `hcd.h`, the one constant that
-     sets the default), 0 is off and any other number on. With it off every
-     URB is sequential, exactly stage 1, and the release notes give 0 as
-     the way back. On, the gates above still decide each start and each
+     type it is off (`HCD_WIDE_MAP_DEFAULT`, `hcd.h`, the one constant that
+     sets the default; owner, 2026-10-10), 0 is off and any other number
+     on. With it off every URB is sequential, exactly stage 1; the release
+     notes give 1 as the way in. On, the gates above still decide each start and each
      URB: Windows 2000 or later, the adapter's grant exactly `0x80001`
      (kept apart from the qemu flavour's constrained grant,
      `hc->MapGrantRaw`), the register-free check below passed, the pool
@@ -5200,6 +5211,8 @@ holding one fails as it does at stage 1. Promotion adds nothing there.
 
 Changing the default is the code task's (36.24), not this record's.
 `XhciWideMap` stays at 0 until that change is made and reviewed.
+(36.24 made it 1; the owner returned it to 0 on 2026-10-10 - point 2 of
+section 11.6 says why. Value 1 opts in on the builds read.)
 
 **The binaries read.** Expanded on development host A:
 
