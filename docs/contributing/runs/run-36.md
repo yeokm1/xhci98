@@ -588,3 +588,63 @@ rewording, not this task): on Windows 98 SE, leave the Add New Hardware
 wizard of a device before unplugging it - a device unplugged under its
 wizard, and anything plugged into that port, waits for the wizard, on
 every USB stack.
+
+## M-1: the 98 SE re-attach behind the hub (matrix wave 3, 36.46 L5)
+
+The wave 3 matrix's one Windows 98 SE failure (`## Matrix (wave 3)`,
+"98 SE, 36.46 L5"): a mouse attached at QEMU hub port 4.1, after that
+port's tablet had been removed during the usbview refresh hammer, was
+never addressed. Defect M-1 asked whether the bus's hub port-change path
+loses it.
+
+**Verdict: not the bus's.** It is Hang 1's mechanism above, met from
+another device: while Windows 98 SE's configuration manager holds an
+install for a device that has gone, it sends no `QUERY_DEVICE_RELATIONS`
+to any bus, so every port whose device left after that waits in Gone
+(`hcdPortQuiet`, `hcd_enum.c`, design record 13's rule) and a device
+plugged into it is not enumerated - until Windows asks, when the bus
+catches up at once. Hang 1 showed it on the gone device's own port; it
+holds every port. No code changed, so there was no review loop and no
+build.
+
+**The matrix leg's evidence** (`out\p36-matrix\legs\w98`, `2.3.0.0` at
+`2d0de39`, `release`): the leg's `usb-kbd` at 4.2 had its first-stage
+install (`HIDDEV.INF`) driven with the tablet, after which no keyboard
+install came up and the pointer stayed an hourglass from 16:52 to 16:58
+(`kb8.png`, `kb14.png`, `kb16.png`); the keyboard was then removed under
+it. In both later snapshots (`l5.txt`, `l5b.txt`, 60 s apart) root port 6,
+whose mouse had been removed before the re-attach, is still **Gone**: the
+root hub got no relations query either, so the hold was not the hub's.
+
+**The reproduction** (2026-10-10, development host A, QEMU, TCG, 98 SE
+from `vm\t26\win98-gold.qcow2` on an own overlay, `qemu-xhci,p2=4,p3=4`;
+`2.3.0.0` at `b1b20bf`, x86 `qemu` flavour, `xhci98.sys` SHA-256
+`818b3888...b776`; kit, notes and debug log in `out\p36-m1\legs\w98`):
+- **The matrix's sequence, nothing pending:** hub at root port 4, tablet
+  at 4.1, usbview open on that port, F5 every 2 s with the mouse moving,
+  the tablet removed at the eighth refresh; the hub's relations query
+  (count 0) and the tablet PDO's `REMOVE` came at once; the root-port
+  mouse removed (its relations query too); a mouse at 4.1 was reset,
+  given a slot, addressed, its PDO created and bound. **Passes.** A
+  keyboard at 4.2, its wizard finished and then removed, also got its
+  query and `REMOVE` at once (no hourglass came this time).
+- **One install held:** a tablet at 4.3 with its Add New Hardware wizard
+  left open and the tablet removed under it; then the 4.1 mouse removed
+  and another attached at 4.1. The debug log shows the two teardowns and
+  nothing else - no relations query, no `REMOVE` - and QEMU lists the new
+  mouse as "Device 0.0, Port 4.1" (never addressed): **M-1's signature.**
+- **Released:** Esc on the wizard brought, at once, the gone tablet PDO's
+  `REMOVE`, the hub's relations query (count 0), the 4.1 port's reset,
+  Enable Slot, Address Device and PDO, a second query (count 1), and the
+  mouse started, configured and bound with no wizard.
+
+Hang 1's controls above (Windows 98 SE's own UHCI stack, and `2.2.0.0`)
+show the configuration manager holding the same way with no `xhci98`
+loaded. Addressing the device early would change nothing a user sees: a
+PDO the bus created could not reach Windows until the same query came.
+
+**For the final combined matrix:** 98 SE 36.46 L5 again, with every Add
+New Hardware wizard finished before the next device is removed (on 98 SE
+the `usb-kbd` leg after L5, or left out: its second-stage install did not
+come up in the matrix). The release notes' known limitation now says the
+hold covers every port, not only the device's own.
