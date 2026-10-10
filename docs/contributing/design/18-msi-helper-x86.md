@@ -1194,8 +1194,10 @@ SP1 x86, Vista SP2 x64 and 7 SP1 x64, each with `qemu-xhci`
   of four: the same `[0.0]` to `[0.2]`, the device-private included, and
   the line heading its run (option 0, share 3). So the device-private
   stays whatever the interrupt is, and the strip, which copies it, needs
-  no amendment. The strip of R1's list is that list byte for byte
-  (`test_msi`'s `test_r1`, built from the readings).
+  no amendment. The strip of R1's list is that list as the trace shows
+  it, every descriptor's option, type, share, flags and data words
+  (`test_msi`'s `test_r1`, built from the readings; the list header and
+  the descriptors' spare bytes are not traced).
 - **Admitted** (section 4.2; the four captures identical, so one shape
   for every OS and architecture, stated here with them): one
   configuration with exactly one interrupt run, headed by a message

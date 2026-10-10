@@ -29,6 +29,7 @@
 #define D_MA    6
 #define D_PA    7
 #define D_CFG   8   /* starts the next configuration */
+#define D_BA    9   /* a BAR's alternative */
 
 static UCHAR in[BUF];
 static UCHAR out[BUF];
@@ -56,6 +57,7 @@ static void put_desc(UCHAR *d, int code, ULONG tag)
     }
     switch (code) {
     case D_B:
+    case D_BA:
         d[XHCI_MSI_RD_TYPE] = 3;
         break;
     case D_L:
@@ -72,7 +74,7 @@ static void put_desc(UCHAR *d, int code, ULONG tag)
         d[XHCI_MSI_RD_TYPE] = (UCHAR)XHCI_MSI_TYPE_DEVPRIVATE;
         break;
     }
-    if (code == D_LA || code == D_MA || code == D_PA) {
+    if (code == D_LA || code == D_MA || code == D_PA || code == D_BA) {
         d[XHCI_MSI_RD_OPTION] = (UCHAR)XHCI_MSI_OPTION_ALTERNATIVE;
     }
     put32(d + XHCI_MSI_RD_U, tag);
@@ -392,8 +394,11 @@ static void test_strip(void)
  * alternative, a device-private, then the interrupt run: the message
  * (preferred) heading it and the line its alternative. With MSISupported 0
  * Windows builds the same list without the message, the line heading its
- * run with option 0. The strip of the first must be the second, byte for
- * byte: the BAR pair and the device-private kept, the line kept as head.
+ * run with option 0. The strip of the first must be the second as the
+ * trace shows it (each descriptor's Option, Type, ShareDisposition, Flags
+ * and u words; the list header and the descriptors' spare bytes are not in
+ * the trace and are reconstructed alike): the BAR pair and the
+ * device-private kept, the line kept as head.
  */
 typedef struct _R1_DESC {
     UCHAR Option;
@@ -489,7 +494,7 @@ static void test_r1(void)
             same = 0;
         }
     }
-    CHECK(same, "the strip is Windows' MSISupported 0 list, byte for byte");
+    CHECK(same, "the strip is Windows' MSISupported 0 list as traced");
     CHECK_EQ(out[want], 0xCC, "nothing written past it");
     XhciMsiWalk(out, &w);
     XhciMsiClassify(out, &w, &c);
@@ -513,7 +518,8 @@ static ULONG admitted(const int *codes)
 
 static void test_admit(void)
 {
-    static const int r1[] = { D_B, D_B, D_P, D_M, D_LA, D_END };
+    static const int r1[] = { D_B, D_BA, D_P, D_M, D_LA, D_END };
+    static const int intAfterBar[] = { D_B, D_MA, D_LA, D_END };
     static const int r1Plain[] = { D_B, D_M, D_LA, D_END };
     static const int privAfter[] = { D_B, D_M, D_LA, D_P, D_END };
     static const int twoMsg[] = { D_B, D_M, D_MA, D_LA, D_END };
@@ -535,6 +541,8 @@ static void test_admit(void)
     CHECK_EQ(admitted(twoCfg), 0, "two configurations: not read");
     CHECK_EQ(admitted(twoRuns), 0, "two interrupt runs: not read");
     CHECK_EQ(admitted(privInRun), 0, "another type inside the run");
+    CHECK_EQ(admitted(intAfterBar), 0,
+             "interrupt alternatives of a BAR's run");
     CHECK_EQ(admitted(msgOnly), 0, "no line");
     CHECK_EQ(admitted(lineOnly), 0, "no message");
     w.Verdict = XHCI_MSI_WALK_COUNT;
