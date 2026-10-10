@@ -1185,6 +1185,27 @@ static void test_joined_identifier(void)
           strcmp(si.sys_product, "(withheld)") == 0,
           "joined: a UUID across two fields withheld");
 
+    /* Round 5: a second Type 1 with another UUID does not displace the
+     * first, whose split text the first record's fields carry. */
+    {
+        static const u8 uuid2[16] = { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
+                                      0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
+                                      0xdd, 0xee, 0xff, 0x01 };
+        static const char *k2[] = { "Other", "Thing", "v", 0 };
+
+        tlen = 0;
+        memset(tab, 0, sizeof(tab));
+        build_t1(0, j2, uuid);
+        build_t1(0, k2, uuid2);
+        parse_and_seal(&si, 1);
+        CHECK(strcmp(si.sys_mfr, "(withheld)") == 0 &&
+              strcmp(si.sys_product, "(withheld)") == 0,
+              "two Type 1s: the first UUID still withheld");
+        render(&si);
+        CHECK(!has("5a5a5a5a-3412 2143") && !has("5a5a5a5a"),
+              "two Type 1s: not printed");
+    }
+
     /* A serial completed by the full line's fixed words. */
     tlen = 0;
     memset(tab, 0, sizeof(tab));

@@ -485,12 +485,15 @@ static void withhold_if(char *shown, const char *id)
  * wiped. A list that overflows withholds every SMBIOS string.
  */
 #define HELD_MAX        64
+#define HELD_UUIDS      8
 
 static char held[HELD_MAX][SI_STR];
 static int nheld;
 static int held_over;
-static char held_raw[33], held_wire[33];
-static int held_uuid;
+/* Every distinct UUID, raw and text order: a table may carry more than one
+ * Type 1 structure, and each one's UUID is an identifier. */
+static char held_raw[HELD_UUIDS][33], held_wire[HELD_UUIDS][33];
+static int nuuid;
 
 static void held_wipe(void)
 {
@@ -499,7 +502,24 @@ static void held_wipe(void)
     memset(held_wire, 0, sizeof(held_wire));
     nheld = 0;
     held_over = 0;
-    held_uuid = 0;
+    nuuid = 0;
+}
+
+static void hold_uuid(const char *raw, const char *wire)
+{
+    int i;
+
+    for (i = 0; i < nuuid; i++) {
+        if (strcmp(held_raw[i], raw) == 0)
+            return;
+    }
+    if (nuuid >= HELD_UUIDS) {
+        held_over = 1;
+        return;
+    }
+    strcpy(held_raw[nuuid], raw);
+    strcpy(held_wire[nuuid], wire);
+    nuuid++;
 }
 
 static void hold_id(const char *id)
@@ -580,9 +600,7 @@ static void scrub_uuid(const SMB_STRUCT *st, SYSINFO *si)
             (at_bound(f) && (tail_heads(hex, raw) || tail_heads(hex, wire))))
             strcpy(f, WITHHELD);
     }
-    strcpy(held_raw, raw);
-    strcpy(held_wire, wire);
-    held_uuid = 1;
+    hold_uuid(raw, wire);
     memset(raw, 0, sizeof(raw));
     memset(wire, 0, sizeof(wire));
 }
@@ -1133,11 +1151,13 @@ static int line_leaks(const char *line, int is_short)
             (cut && tail_heads(line, held[i])))
             return 1;
     }
-    if (held_uuid) {
+    if (nuuid > 0)
         hex_only(line, digits, sizeof(digits));
-        if (strstr(digits, held_raw) != 0 || strstr(digits, held_wire) != 0 ||
-            (cut && (tail_heads(digits, held_raw) ||
-                     tail_heads(digits, held_wire))))
+    for (i = 0; i < nuuid; i++) {
+        if (strstr(digits, held_raw[i]) != 0 ||
+            strstr(digits, held_wire[i]) != 0 ||
+            (cut && (tail_heads(digits, held_raw[i]) ||
+                     tail_heads(digits, held_wire[i]))))
             return 1;
     }
     return 0;
