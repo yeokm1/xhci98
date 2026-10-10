@@ -646,8 +646,10 @@ VOID HcdDoorHubRemove(PHCD_HUB_FDO fdo, PHCD_CONTROLLER hc)
     fdo->LinkMade = 0;
 }
 
-/* IRP_MJ_CREATE, CLOSE and CLEANUP on either FDO: no work and no access
- * check, as usbport completes them (section 8.8). */
+/* IRP_MJ_CREATE and CLOSE on every door FDO, and CLEANUP on the controller's:
+ * no work and no access check, as usbport completes them (section 8.8). A
+ * hub door's CLEANUP cancels its handle's queued requests (HcdDoorCleanup,
+ * task 36.45). */
 NTSTATUS HcdDoorCreateClose(PIRP irp)
 {
     return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
