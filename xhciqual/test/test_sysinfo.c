@@ -997,6 +997,36 @@ static void test_aliasing2(void)
     CHECK(strcmp(si.sys_product, "System Serial Number") == 0,
           "filler serial: kept");
 
+    /* Review round 4: a labelled or repeated-digit serial is no filler. */
+    {
+        static const char *l1[] = { "Serial Number: SN-123",
+                                    "Board Serial Number: SN-123 rev",
+                                    "Model 77777777", "77777777", 0 };
+        u8 g[0x40];
+
+        tlen = 0;
+        memset(tab, 0, sizeof(tab));
+        memset(g, 0, sizeof(g));
+        put8(g, 0x04, 1); put8(g, 0x05, 2); put8(g, 0x06, 3);
+        put8(g, 0x07, 1);                   /* serial: the labelled one */
+        put8(g, 0x19, 4);                   /* SKU: 77777777 */
+        add(1, g, 0x1B, l1);
+        memset(f, 0, sizeof(f));
+        add(127, f, 4, 0);
+        memset(&si, 0, sizeof(si));
+        smb_parse_table(tab, tlen, 0, &si);
+        CHECK(strcmp(si.sys_mfr, "(withheld)") == 0 &&
+              strcmp(si.sys_product, "(withheld)") == 0,
+              "labelled serial: withheld");
+        CHECK(strcmp(si.sys_version, "(withheld)") == 0,
+              "repeated-digit SKU: withheld");
+        si.smb_state = SMB_OK;
+        render(&si);
+        CHECK(!has("SN-123") && !has("77777777"), "labelled/repeated: full");
+        render_short(&si);
+        CHECK(!has("SN-123") && !has("77777777"), "labelled/repeated: short");
+    }
+
     /* A cross-structure alias whose identifier sits in a structure the
      * walk cannot finish: everything SMBIOS is withheld. */
     tlen = 0;

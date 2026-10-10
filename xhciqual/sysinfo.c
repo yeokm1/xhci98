@@ -357,9 +357,9 @@ static void take(const SMB_STRUCT *st, u8 type, SYSINFO *si)
  * **Except a firmware placeholder** (review round 3, P1; orchestrator
  * decision, owner to confirm): a value the same on every unit identifies
  * none, and matching it would withhold most of a header - a serial of "0"
- * appears in every BIOS date. A placeholder is one character repeated
- * ("0", "00000000", "FFFFFFFF", " ") or one of the stock phrases below;
- * anything else of any length is matched as a substring.
+ * appears in every BIOS date. A placeholder is a WHOLE value on the closed
+ * list below (review round 4); anything else of any length is matched as
+ * a substring.
  *
  * And when the walk cannot finish - a malformed structure, or a table
  * longer than SMB_TABLE_MAX or 4096 structures - an identifier in the
@@ -406,34 +406,32 @@ static int contains_nocase(const char *hay, const char *needle)
     return 0;
 }
 
-/* Stock firmware fillers, compared ignoring case; a value CONTAINING one
- * of the first group is a filler too ("Chassis Serial Number"). */
-static const char *const filler_part[] = {
-    "serial number", "o.e.m.", "filled by", "not specified",
-    "default string", "not available", "not applicable", "asset tag",
-    "no asset", "unknown", 0
-};
-static const char *const filler_whole[] = {
-    "none", "n/a", "na", "default", "oem", "sku", "123456789",
-    "1234567890", "0123456789", 0
+/* Stock firmware fillers (review round 4: a closed list, each matched as
+ * the WHOLE value, ignoring case - never a substring, never a pattern, so
+ * "Serial Number: SN-123" or "77777777" is an identifier like any other).
+ * Each is a string vendors ship unchanged on every unit. */
+static const char *const fillers[] = {
+    "0", "1", "00000000", "0000000000", "123456789", "1234567890",
+    "0123456789", "FFFFFFFF", "XXXXXXXX", "None", "N/A", "NA", "Unknown",
+    "Default", "Default string", "OEM", "O.E.M.", "To Be Filled By O.E.M.",
+    "To be filled by O.E.M.", "Fill By OEM", "Not Specified",
+    "Not Available", "Not Applicable", "Not Defined", "Serial Number",
+    "System Serial Number", "Chassis Serial Number",
+    "Base Board Serial Number", "Type2 - Board Serial Number",
+    "Type3 - Chassis Serial Number", "Asset Tag", "No Asset Tag",
+    "No Asset Information", "Asset-1234567890", "Type2 - Board Asset Tag",
+    "Type3 - Chassis Asset Tag", "SKU", "System SKUNumber",
+    "Default SKU", 0
 };
 
 static int is_placeholder(const char *id)
 {
-    const char *p;
+    size_t n;
     int i;
 
-    for (p = id + 1; *p != '\0' && *p == id[0]; p++)
-        ;
-    if (*p == '\0')
-        return 1;                       /* one character repeated */
-    for (i = 0; filler_part[i] != 0; i++) {
-        if (contains_nocase(id, filler_part[i]))
-            return 1;
-    }
-    for (i = 0; filler_whole[i] != 0; i++) {
-        if (strlen(id) == strlen(filler_whole[i]) &&
-            contains_nocase(id, filler_whole[i]))
+    n = strlen(id);
+    for (i = 0; fillers[i] != 0; i++) {
+        if (strlen(fillers[i]) == n && contains_nocase(id, fillers[i]))
             return 1;
     }
     return 0;
