@@ -132,9 +132,12 @@ there the same day.
 routing, polled event delivery, MSI on Vista and 7, three items of
 GitHub issue 17, UAS commands of 1 MiB (36.21 to 36.27, a plan
 reviewed clean at `86db9a3`), and selective suspend, off by default
-(36.28 to 36.41, joined 2026-10-09). Its plan was reviewed to a clean
-round at `ef7fbac`. 36.3, the routing quirk, and 36.4, the bounded BUSY
-retry, are done (their VM legs owed); the next task is 36.5.
+(36.28 to 36.41, joined 2026-10-09), and 36.42 to 36.48 taken in during
+the phase (the port switchover off by default, composite devices as
+devnodes, the 98 SE hot-plug hangs, string descriptors, a surplus-endpoint
+mouse, and the system named in the tools' reports). Its plan was reviewed
+to a clean round at `ef7fbac`. A local test build, `2.2.0.3`, goes to the
+owner's bench before `2.3.0.0` is cut.
 [`roadmap-hcd.md`](roadmap-hcd.md), "Phase 36", is the record.
 
 ---

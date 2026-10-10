@@ -14,12 +14,19 @@ rem FIND.EXE is needed on the boot medium.
 set XQRC=0
 if errorlevel 1 set XQRC=1
 if errorlevel 2 set XQRC=2
+if errorlevel 3 set XQRC=3
 if not exist XIRQ.LOG goto logerr
 if not exist XIRQ.FLG goto abnormal
+if "%XQRC%"=="3" goto caveats
 if not "%XQRC%"=="0" goto failed
 echo.
 echo XIRQ.LOG completed normally with IRQ SELF-TEST PASS.
 echo Cold boot, disconnect external devices, then run 4XEMPTY.BAT.
+goto end
+:caveats
+echo XIRQ.LOG completed normally: NO WORKING INTERRUPT - the controller
+echo completed the command polled, so xhci98.sys will poll it (exit 3).
+echo Read the CAVEAT lines in the log. Cold boot, then run 4XEMPTY.BAT.
 goto end
 :failed
 echo XIRQ.LOG completed normally but the IRQ self-test FAILED (exit %XQRC%).

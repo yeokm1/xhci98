@@ -28,6 +28,16 @@ rem bare exe name in the working directory is not found.
 "%~dp0test_mmiodiag.exe"
 if errorlevel 1 goto testfail
 
+rem Task 36.10: the xHCI verdict, C4's outcome, the C6/C8 gate and the exit
+rem code (verdict.c), with the classifier it consults (mmiodiag.c).
+if exist test_verdict.exe del test_verdict.exe
+wcl386 -bt=nt -q -zq -wx -za -otexan -fe=test_verdict.exe ^
+    test_verdict.c ..\verdict.c ..\mmiodiag.c
+if errorlevel 1 goto builderr
+if not exist test_verdict.exe goto builderr
+"%~dp0test_verdict.exe"
+if errorlevel 1 goto testfail
+
 rem Task 36.11: the routing report, with the driver's reviewed-pair table
 rem (src\xhci_pirq.c) built as the driver's own host suites build it.
 if exist test_route.exe del test_route.exe
@@ -65,5 +75,8 @@ if exist mmiodiag.obj del mmiodiag.obj
 if exist test_route.exe del test_route.exe
 if exist test_route.obj del test_route.obj
 if exist route.obj del route.obj
+if exist test_verdict.exe del test_verdict.exe
+if exist test_verdict.obj del test_verdict.obj
+if exist verdict.obj del verdict.obj
 if exist xhci_pirq.obj del xhci_pirq.obj
 goto :eof

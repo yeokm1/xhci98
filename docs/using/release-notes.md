@@ -201,18 +201,31 @@ copies no file in use, so the first UAS device installs and works at once.
 
 `XHCIQUAL.EXE` is a DOS tool that reads the machine's xHCI controller and says
 whether the driver can work on it. Run it with no arguments for a read-only
-quick scan. It writes no PCI configuration register and prints one of three
+quick scan. It writes no PCI configuration register and prints one of four
 verdicts:
 
 | Verdict | Means |
 |---|---|
 | `LOOKS QUALIFIED` | nothing a read-only pass can see disqualifies this machine; the active tests still decide |
-| `DISQUALIFIED` | something a read-only pass genuinely sees: no `CC_0C0330` function, `Interrupt Pin = 0`, BAR0 unusable or above 4 GB, or no USB 2.0 protocol ports |
+| `LOOKS QUALIFIED WITH CAVEATS` | the same, but the controller has no line interrupt (`Interrupt Pin = 0`): the driver polls it, or an MSI-capable OS takes a message interrupt instead; the line says whether it offers MSI |
+| `DISQUALIFIED` | something a read-only pass genuinely sees: no `CC_0C0330` function, BAR0 unusable or above 4 GB, or no USB 2.0 protocol ports |
 | `CANNOT SAY` | a state this pass may not change is in the way: the controller is not in D0, or Memory Space Enable is clear |
 
 The qualifier is the same program the `1.x` releases carried, and its last
 criterion, no USB 2.0 protocol ports, is the miniport's; see the Controller
 row of "Requirements".
+
+The full active run (`xhciqual/hardware-testing.md`) ends on `QUALIFIED`,
+`NOT QUALIFIED`, or, since `2.2.0.3`, **`QUALIFIED WITH CAVEATS`**: a
+controller with no working interrupt - no interrupt pin, or an interrupt that
+never arrives while the controller's events reach memory - that passes the
+rest when polled. It is not refused, because the driver polls such a
+controller (`XhciInterruptMode` 0, automatic, or 2), at the cost of more CPU
+wake-ups and up to the poll period of event latency; or an MSI-capable OS
+takes a message interrupt, where the controller offers one (Windows Vista and
+7: x64 directly, 32-bit with the `xhcimsi.sys` helper). The verdict prints
+which applies. Its exit code is 3 (0 qualified, 1 not qualified, 2 a usage
+error or no controller).
 
 It is in the download's `xhciqual\` directory. **It must be run from real
 DOS**, not a DOS box inside Windows, booted without EMM386 or any other V86 or
@@ -457,6 +470,13 @@ found each once as well. Nothing was
 found again after that. A setting kept on such a device's own entry, such as
 hidusbf's polling rate, has to be applied again on the new entry.
 
+**An update keeps the Intel port switchover as it was.** Since `2.3.0.0` a
+new install writes `XhciIntelPortSwitch` at `0`, off; `2.1.1.0` and
+`2.2.0.0` wrote `1`, and an update never overwrites a value that is already
+there, so a machine updated from either keeps the switchover on. To take the
+new default, run `portsw.vbs 0` from the package and restart Windows
+("Intel 7-, 8- and 9-series chipsets: the port switchover").
+
 ### Updating xhciuas.sys over an older one
 
 When the package's `xhciuas.sys` carries the same `DriverVer` as the one
@@ -621,7 +641,14 @@ with no error and saw nothing on those connectors, and a SuperSpeed drive
 there ran at High Speed under the USB 2.0 controller, where a driver for
 that was loaded.
 
-Since `2.1.1.0` the driver moves them itself, in the order Linux does: each
+Since `2.1.1.0` the driver can move them itself, and since `2.3.0.0` it does
+so only when `XhciIntelPortSwitch` is `1` (or `2`, below): **it is off by
+default.** A connector left on the USB 2.0 controller is not lost - it works
+there, at USB 2.0 speed, wherever a driver for that controller is loaded
+(NUSB's or SweetLow's on Windows 98 SE and ME, Windows' own on 2000 and
+later) - so the driver no longer takes the connectors from it unasked
+(owner, 2026-10-09; `2.1.1.0` and `2.2.0.0` installed it at `1`). Turned on,
+it works in the order Linux does: each
 time the controller starts, and again each time it resumes from standby, it
 turns on the SuperSpeed side of every connector firmware lets it switch,
 then moves the USB 2.0 side of each to the xHCI controller. When the
@@ -648,13 +675,26 @@ controller. A standby or hibernate keeps them where they are.
   driver or enabling its controller. The reverse happens when the
   controller stops: the devices on those connectors go back to the USB 2.0
   controller, and work there if a driver for it is loaded.
-- **Turning it off.** Set `XhciIntelPortSwitch` to `0` ("Registry
-  settings") on a machine whose switchable connectors must stay with the
-  USB 2.0 controller, for example for a device that works better there.
+- **Turning it on, or off again: `portsw.vbs`.** Each package directory
+  (`release-x86\` and the others) carries `portsw.vbs`, a Windows Script Host
+  script that runs with nothing to install on every Windows this driver
+  supports. Double-click it: it shows `XhciIntelPortSwitch` on every xhci98
+  controller on the machine and asks for `1` (on) or `0` (off). From a
+  command prompt, `cscript //nologo portsw.vbs show`, `... portsw.vbs 1`
+  or `... portsw.vbs 0` does the same. Setting a value needs an
+  administrator (on Vista and 7 the script asks Windows for that itself).
+  **Restart Windows afterwards**: the value is read when the controller
+  starts. Turn it on for a machine whose blue connectors should run at
+  SuperSpeed under this driver; leave it off where the USB 2.0 controller
+  should keep them. The script never sets `2` (below); that is set by hand
+  ("Registry settings"). Read in virtual machines on Windows 98 SE, 2000
+  and Windows 7 x64, where it showed, set and cleared the value; QEMU's
+  controller is not an Intel one, so the switchover itself was not exercised
+  there.
 - **What it logs.** With `XhciLogVerbosity` at `2` or above, `XHCISNAP`'s
   report carries `psw.` records: `psw.gate` (`1` on a listed controller),
-  `psw.value` with `psw.value.found` (`psw.value` 0 means turned off only
-  when `psw.value.found` is 1), the two masks firmware allows and what each register read
+  `psw.value` with `psw.value.found` (`psw.value.found` 0 means the value
+  is absent or not a `DWORD`, which is off since `2.3.0.0`), the two masks firmware allows and what each register read
   back after the write, and `psw.route.step`, `0` when every step was
   accepted. Since `2.2.0.0` an Intel controller's report also carries
   `psw.mode`, the setting in effect (`0` off, `1` on a listed controller,
@@ -684,8 +724,8 @@ registers are there:
 > not been read - it writes registers of unknown meaning, at every start,
 > resume, stop and shutdown, and the result is unknown. Use 2 only for an
 > Intel chipset that has both an EHCI and an xHCI controller and that this
-> driver does not list, and at your own risk. Everyone else should leave the
-> value at 1.**
+> driver does not list, and at your own risk. Everyone else should use 0
+> or 1.**
 
 On a listed controller `2` does the same as `1`.
 
@@ -917,7 +957,7 @@ been read in QEMU guests only (the readings are listed in the run record).
 
 ## Registry settings
 
-Twelve values, each a `DWORD` in the controller's driver (software) key:
+Thirteen values, each a `DWORD` in the controller's driver (software) key:
 
 | Windows | Key |
 |---|---|
@@ -930,13 +970,17 @@ controller was ever enumerated at another PCI slot can have more than one
 such key: the device's own `Driver` value, under `Enum\PCI`, names the one in
 use. `XHCISNAP -verbosity` finds it for you.
 
-The install writes all twelve: each at the driver's own default, except
+The install writes all thirteen: each at the driver's own default, except
 `XhciImodInterval250ns` at `160`. Each is written only where it is missing,
 so a value you changed survives an install or update; to go back to the
 default, set it by hand, or delete the value and update the driver.
 `XhciTolerance`, `XhciIntervalCap` and `XhciAvgTrbEsit` are new in
-`2.2.0.0`, and an update over `2.1.1.0` adds them; `XhciIntelIrqRoute` is
-new in `2.3.0.0`, and an update over `2.2.0.0` adds it. The install has written
+`2.2.0.0`, and an update over `2.1.1.0` adds them; `XhciIntelIrqRoute` and
+`XhciMaxTransferKB` are new in `2.3.0.0`, and an update over `2.2.0.0` adds
+them. Since `2.3.0.0` the
+install writes `XhciIntelPortSwitch` at `0`, where `2.1.1.0` and `2.2.0.0`
+wrote `1`; an update keeps the `1` they wrote, and `portsw.vbs` changes it
+("XhciIntelPortSwitch", below). The install has written
 every value since `2.1.1.0`, which added `XhciIntelPortSwitch`. Of the
 seven before it, the
 `2.1.0.0` install wrote three, the two log values and
@@ -1101,19 +1145,22 @@ the driver's. Neither value was read set to anything but its default.
 
 ### XhciIntelPortSwitch: the Intel port switchover
 
-New in `2.1.1.0`; the install writes `1`. It matters only on the Intel
-chipsets listed in "Intel 7-, 8- and 9-series chipsets: the port
-switchover", unless it is `2`. Since `2.2.0.0` it is read on every Intel
-controller, and still on no other vendor's.
+New in `2.1.1.0`; since `2.3.0.0` the install writes `0` (`2.1.1.0` and
+`2.2.0.0` wrote `1`, and an update keeps a value already there). It matters
+only on the Intel chipsets listed in "Intel 7-, 8- and 9-series chipsets:
+the port switchover", unless it is `2`. Since `2.2.0.0` it is read on every
+Intel controller, and still on no other vendor's. `portsw.vbs`, in each
+package directory, shows it and sets it to `0` or `1` on every xhci98
+controller ("Turning it on, or off again" in that section).
 
 | Value | Effect |
 |---|---|
-| `0` | Off: the driver leaves the connectors where they are, as every release up to `2.1.0.0` did |
-| `1`, any other number but `2`, absent, or not a `DWORD` | On, on a listed controller: the driver moves the connectors to itself at each start and hands them back at each stop |
-| `2` (since `2.2.0.0`) | On, on every Intel controller, listed or not. **At your own risk**: on an Intel controller without the switch registers - every Intel chipset from the 100-series (Skylake) on, and any whose layout has not been read - it writes registers of unknown meaning at every start, resume, stop and shutdown, and the result is unknown. Use it only for an Intel chipset with both an EHCI and an xHCI controller that the list misses; everyone else should leave the value at `1`. See "Value 2" in that section |
+| `0`, absent, or not a `DWORD` | Off, the default since `2.3.0.0`: the driver leaves the connectors where they are, as every release up to `2.1.0.0` did. Up to `2.2.0.0` absent or not a `DWORD` was on |
+| `1`, or any other number but `2` | On, on a listed controller: the driver moves the connectors to itself at each start and hands them back at each stop |
+| `2` (since `2.2.0.0`) | On, on every Intel controller, listed or not. **At your own risk**: on an Intel controller without the switch registers - every Intel chipset from the 100-series (Skylake) on, and any whose layout has not been read - it writes registers of unknown meaning at every start, resume, stop and shutdown, and the result is unknown. Use it only for an Intel chipset with both an EHCI and an xHCI controller that the list misses; everyone else should use `0` or `1`. See "Value 2" in that section |
 
-Only an explicit `0` turns it off, and only an exact `2` goes past the
-list, so a mistyped value does neither. It is read
+Only a `DWORD` that is not `0` turns it on, and only an exact `2` goes past
+the list. It is read
 when the controller starts, so a change takes effect at the next restart or
 at a disable and enable of the controller in Device Manager. Setting `0`
 does not give the connectors back by itself: after a restart they are where
@@ -1223,6 +1270,85 @@ bandwidth reckoning, so it is not changed by default; the switch exists so
 that a machine whose devices misbehave can be compared with it set, and
 nothing ties it to the AMD report. Leave it at `0` unless you are
 comparing. It is read when the controller starts.
+
+### XhciMaxTransferKB: the UAS command size
+
+New in `2.3.0.0`; the install writes `1024`. In **KiB**: the most one UAS
+command asks the drive to move, which the UAS driver tells Windows' storage
+class driver as the largest request it takes. `2.2.0.0` and earlier always
+said 64 KiB. Fewer, larger commands mean fewer command and status
+exchanges per megabyte; the controller still moves each command in pieces
+of at most 128 KiB, one after another.
+
+| Value | Effect |
+|---|---|
+| `1024`, absent, not a `DWORD`, outside `64`-`2048`, or not a multiple of `4` | 1 MiB commands (`XHCISNAP`'s report notes why a value was not used) |
+| `64` | 64 KiB commands, as `2.2.0.0` and earlier |
+| `2048` | 2 MiB commands, the largest |
+| any multiple of `4` from `64` to `2048` | that size |
+
+It applies to every UAS device on that controller; Bulk-Only devices keep
+Windows' own `usbstor.sys` limits whatever it says. Windows reads the size
+when the storage device starts and keeps it, so **a change takes effect at
+the next restart of Windows**. `XHCISNAP`'s report shows the value read and
+the command size in effect, and each UAS device's hardware key records the
+size it took (`XhciUasCommandBytes`, in bytes).
+
+**Trying `2048` by hand.** Set `XhciMaxTransferKB` to `2048` (decimal; `800`
+hex) in the driver key above, with `regedit` or a `.reg` file, and restart
+Windows. To go back, set `1024`, or `64` for a drive that misbehaves at
+large commands, and restart again. Linux's UAS driver sends commands of up
+to 512 KiB, and its Bulk-Only driver 120 KiB, or 1 MiB at SuperSpeed, with
+64 KiB or 120 KiB for drives known to misbehave; Windows 7's Bulk-Only
+driver sends 64 KiB, raised per device up to 2 MiB by Microsoft's KB 2581464.
+So `1024` is within what drives already see elsewhere, and `2048` beyond
+most of it. A drive that fails at a larger size usually fails at its first
+large read or write: if copies fail or the drive drops off after raising
+the value, set `64`.
+
+**A later release with another default.** The install writes the value
+only where it is missing, like every value here, so an update keeps the
+number already in the key - the old default included. To take a new
+release's default, delete `XhciMaxTransferKB` before updating the driver,
+or set the new number by hand, and restart.
+
+**One model only: Microsoft's per-device value.** On Windows 2000 and
+later the UAS driver also honours the value Windows' own Bulk-Only driver
+uses for one kind of device, so a drive model can be set apart from the
+rest:
+
+| | |
+|---|---|
+| Key | `HKLM\SYSTEM\CurrentControlSet\Control\usbstor\VVVVPPPP`, where `VVVV` and `PPPP` are the drive's vendor and product IDs as four uppercase hex digits each (`VID_0BDA&PID_9210` is `0BDA9210`) |
+| Value | `MaximumTransferLength`, a `DWORD`, in **bytes** |
+| Accepted | `65535` to `2097120`, the range Microsoft's KB 2581464 gives |
+
+A value in range replaces `XhciMaxTransferKB`, larger or smaller, for
+every drive with those vendor and product IDs - the key is per model, for
+the whole machine, not per physical drive - and every other drive keeps
+the controller's value. It is rounded to the nearest 4 KiB (at most 2048
+bytes either way), so `65535` is 64 KiB, `2097120` is 2 MiB, and `131072`
+(`20000` hex) is 128 KiB exactly. A value that is missing, not a `DWORD` or
+out of range is ignored. Restart Windows after setting it. It is the same
+key Windows' `usbstor.sys` reads for a Bulk-Only drive, so tools and
+guides written for that - Uwe Sieber's pages on `uwe-sieber.de` cover it -
+set it for a UAS drive too, with one exception: a tool that writes
+`2097152` for 2 MiB writes a value above the range, which is ignored
+(`XhciUasDeviceLimitWhy` `3`); change it to `2097120` by hand. The UAS device's hardware key (under
+`Enum\USB`, on Windows 2000 and later in its `Device Parameters`) shows
+what was taken: `XhciUasCommandBytes` the size in bytes,
+`XhciUasCommandSource` `1` for the controller's value and `5` for the
+drive's own, `XhciUasDeviceLimit` the value read and
+`XhciUasDeviceLimitWhy` `0` absent, `1` used, `2` not a `DWORD`, `3` out of
+range. Behind a `2.2.0.x` controller driver the UAS driver keeps 64 KiB and
+the drive's value is not used (`XhciUasDeviceLimitWhy` `4`).
+
+**Windows 98 SE and ME.** Both values are read, and neither changes what
+reaches the drive: Windows' mapping layer, `USBNTMAP.SYS`, sends at most
+64 KiB at a time whatever the UAS driver offers. Read in QEMU virtual
+machines on development host A, Windows 98 SE with NUSB and Windows ME,
+with `XhciMaxTransferKB` at `1024`: no command above 64 KiB, one at a
+time, and file reads no faster than at `64`.
 
 ### XhciLogVerbosity and XhciLogDebugView: the log
 
@@ -1408,7 +1534,8 @@ or says it was found by reading the code.
   Power tab, on every system: the value the page reads cannot count past
   510 mA. `XHCISNAP`'s report gives the exact figure. Same section. (Under
   `2.1.0.0` every SuperSpeed device read a quarter of its draw there.)
-- **Intel 7-, 8- and 9-series chipsets: a device on a blue connector moves
+- **Intel 7-, 8- and 9-series chipsets, with the switchover turned on
+  (`XhciIntelPortSwitch` `1` or `2`; off by default since `2.3.0.0`): a device on a blue connector moves
   between the USB 2.0 controller and this driver when the controller starts
   or stops**: it is disconnected on one side and found again on the other.
   Read on a Lenovo B490 under Windows 98 SE with NUSB, with a mouse plugged

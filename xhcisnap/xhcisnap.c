@@ -358,8 +358,37 @@ static const unsigned long snap_guid[4] = {
 #define SNAP_HCD_VERSION            1UL
 #define SNAP_HCD_HEAD_WORDS         8UL
 #define SNAP_HCD_PORT_WORDS         16UL
-#define SNAP_HCD_COUNTER_WORDS      63UL
+#define SNAP_HCD_COUNTER_WORDS      96UL
 #define SNAP_HCD_MAX_BYTES          32768UL
+/*
+ * Polled event delivery (2.2.0.3 on, tasks 36.6 to 36.9; design record 15
+ * sections 8 and 9). The counter block grew from 63 words to 96: the three
+ * values as read and in effect, the delivery and its reason, the pin, the
+ * poller's and the watcher's counts, the dead-line move. And the HCD
+ * header grew two words, 202 and 203, that place the extension's six
+ * delivery words (EventDelivery to LineRetireState). The codes are
+ * src/xhci_poll.h's, duplicated for the reason the ladder below is and
+ * held to it by test_snap. A block of 63 words is an earlier driver's,
+ * which always took the line interrupt.
+ */
+#define SNAP_POLL_FIRST             63UL    /* IntrModeRead's word          */
+#define SNAP_HCD_DELIVERY_HEAD_WORDS 204UL
+#define SNAP_HCD_DELIVERY_AT        202UL
+#define SNAP_HCD_DELIVERY_WORDS     203UL
+#define SNAP_POLL_EXT_WORDS         6UL
+#define SNAP_POLL_NOT_FOUND         0xFFFFFFFFUL
+#define SNAP_POLL_IDLE_DEFAULT      50UL
+#define SNAP_POLL_IDLE_MAX          5000UL
+#define SNAP_POLL_ACTIVE_DEFAULT    1UL
+#define SNAP_POLL_FOUND_MODE        0x1UL
+#define SNAP_POLL_FOUND_IDLE        0x2UL
+#define SNAP_POLL_FOUND_ACTIVE      0x4UL
+#define SNAP_POLL_DELIVERY_POLL     2UL
+#define SNAP_POLL_DELIVERIES        6UL
+#define SNAP_POLL_REASONS           14UL
+#define SNAP_POLL_PIN_READ          1UL
+#define SNAP_POLL_PIN_UNREADABLE    2UL
+#define SNAP_POLL_RETIRED_STATES    6UL
 /*
  * Controller tolerance (2.2.0.0 on, task 35-T.8; design record 17 section
  * 4.8). Its state stays in the extension, and the HCD region's header grew
@@ -1840,8 +1869,60 @@ static const char *const hcd_counter_names[SNAP_HCD_COUNTER_WORDS] = {
     "HoldCompanionOthers", "HoldRequestsRefused", "HoldsDropped",
     "SsHubsStarted", "SsHubPairs", "SsHubDepthRefused", "SsHubWarmResets",
     "SsHubLinksGivenUp", "SsHubConfigErrors", "SsHubDevicesPlus",
-    "SsHubRateUnmatched"
+    "SsHubRateUnmatched",
+    "IntrModeRead", "IntrMode", "IntrDelivery", "IntrReason",
+    "IntrPinStatus", "IntrPin", "PollIdleMsRead", "PollIdleMs",
+    "PollActiveMsRead", "PollActiveMs", "PollRole", "PollPeriodLast",
+    "PollStateLast", "PollRuns", "PollRunsWithEvents", "PollPeeks",
+    "PollPeekHits", "PollPromotions", "PollParks", "PollKicks",
+    "PollArmsDisplaced", "PollIntervalMinMs", "PollIntervalMaxMs",
+    "PollIntervalsDiscarded", "WatchLooks", "WatchAsserted",
+    "WatchStalePairs", "LineMoves", "LineRetireAttempts", "LineRetireState",
+    "IntxDisableCleared", "LineMoveMasked", "IntrValuesFound"
 };
+
+/*
+ * The HCD image's layout as its header gives it, checked against the bytes
+ * that arrived: 1 when every figure fits. print_hcd refuses a shape that
+ * fails (and says so), and the sections read from the same header
+ * (print_intr) decode nothing from it either, so one malformed header
+ * cannot be refused by one reader and believed by another (task 36.9's
+ * review rounds 1 and 2). The header lies inside the image, the records
+ * after it, and the counters after the records and inside the image,
+ * word-aligned. The products cannot wrap: ports * portBytes is bounded by
+ * the bytes after portsAt before it is compared.
+ */
+static int hcd_shape_ok(const unsigned char *image, unsigned long bytes)
+{
+    unsigned long version;
+    unsigned long headBytes;
+    unsigned long ports;
+    unsigned long portBytes;
+    unsigned long portsAt;
+    unsigned long counters;
+    unsigned long countersAt;
+
+    if (bytes < SNAP_HCD_HEAD_WORDS * 4) {
+        return 0;
+    }
+    version = get32(image, 0);
+    headBytes = get32(image, 4);
+    ports = get32(image, 8);
+    portBytes = get32(image, 12);
+    portsAt = get32(image, 16);
+    counters = get32(image, 20);
+    countersAt = get32(image, 24);
+    return !(version == 0 || version > SNAP_HCD_VERSION ||
+             headBytes < SNAP_HCD_HEAD_WORDS * 4 || headBytes > bytes ||
+             (headBytes & 3UL) != 0 ||
+             portBytes < SNAP_HCD_PORT_WORDS * 4 || (portBytes & 3UL) != 0 ||
+             portsAt < headBytes || portsAt > bytes || ports > 255 ||
+             ports > (bytes - portsAt) / portBytes || countersAt > bytes ||
+             countersAt < headBytes || (countersAt & 3UL) != 0 ||
+             countersAt < portsAt ||
+             countersAt - portsAt < ports * portBytes ||
+             counters > (bytes - countersAt) / 4);
+}
 
 /*
  * The image's own header says where everything is; each figure is checked
@@ -1880,12 +1961,7 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
     portsAt = get32(image, 16);
     counters = get32(image, 20);
     countersAt = get32(image, 24);
-    if (version == 0 || version > SNAP_HCD_VERSION ||
-        headBytes < SNAP_HCD_HEAD_WORDS * 4 ||
-        portBytes < SNAP_HCD_PORT_WORDS * 4 || (portBytes & 3UL) != 0 ||
-        portsAt < headBytes || portsAt > bytes || ports > 255 ||
-        ports > (bytes - portsAt) / portBytes || countersAt > bytes ||
-        counters > (bytes - countersAt) / 4) {
+    if (!hcd_shape_ok(image, bytes)) {
         comp("\nHCD region: version %lu, header %lu bytes, %lu ports of %lu "
              "bytes at +%lu,\n  %lu counters at +%lu, in %lu bytes - not a "
              "shape this build reads\n  (it knows version %lu); not "
@@ -2683,9 +2759,10 @@ static void print_xstat(const unsigned char *hcd, unsigned long hcdBytes)
         "not a DWORD: the default", "out of 64-2048: the default",
         "not a multiple of 4: the default"
     };
-    static const char *const source_text[5] = {
+    static const char *const source_text[6] = {
         "not asked yet", "the bus's answer", "an older bus: 64 KiB",
-        "a reply out of contract: 64 KiB", "the request failed: 64 KiB"
+        "a reply out of contract: 64 KiB", "the request failed: 64 KiB",
+        "the device's own usbstor MaximumTransferLength"
     };
     static const char *const chunk_names[5] = {
         "1:", "2:", "3-8:", "9-16:", "17+:"
@@ -2815,7 +2892,7 @@ static void print_xstat(const unsigned char *hcd, unsigned long hcdBytes)
         comp("    send %lu: command size %lu bytes (%s), %s, depth %lu, in "
              "flight %lu (most %lu)\n", get32(b, SNAP_TL_SEQUENCE * 4),
              get32(b, SNAP_TL_COMMAND_BYTES * 4),
-             v < 5 ? source_text[v] : "?",
+             v < 6 ? source_text[v] : "?",
              get32(b, SNAP_TL_STREAMED * 4) ? "streamed" : "streamless",
              get32(b, SNAP_TL_QUEUE_DEPTH * 4), get32(b, SNAP_TL_ACTIVE * 4),
              get32(b, SNAP_TL_ACTIVE_MAX * 4));
@@ -2842,6 +2919,496 @@ static void print_xstat(const unsigned char *hcd, unsigned long hcdBytes)
              get32(b, SNAP_TL_MALFORMED * 4), get32(b, SNAP_TL_TRANSPORT * 4));
     }
 #undef XW
+}
+
+/* ---- event delivery: the line, a message, or a poll (task 36.9) -------- */
+
+static const char *const poll_delivery_text[SNAP_POLL_DELIVERIES] = {
+    "none (no start has settled it, or the start failed)",
+    "the line interrupt",
+    "POLLING",
+    "MSI",
+    "MSI-X",
+    "a message interrupt (its capability not read)"
+};
+
+/* Section 8's reasons, so an automatic poll and a forced one read apart. */
+static const char *const poll_reason_text[SNAP_POLL_REASONS] = {
+    "none recorded",
+    "automatic: the line interrupt is there",
+    "automatic: the line, with the Interrupt Pin unreadable",
+    "automatic: Interrupt Pin 0, the controller has no line interrupt",
+    "automatic: no interrupt resource was granted",
+    "forced line (XhciInterruptMode 1)",
+    "forced line, with the Interrupt Pin unreadable",
+    "forced line, but no interrupt: the start fails",
+    "forced polling (XhciInterruptMode 2)",
+    "automatic: the line interrupt went dead; moved to polling at run time",
+    "automatic: a message interrupt was granted",
+    "the line asked for (XhciInterruptMode 1), a message granted",
+    "a message granted but not connected, so polled",
+    "forced line, a message granted, no helper and no line offered: the "
+    "start fails"
+};
+
+static const char *const poll_role_text[3] = {
+    "none", "watching the line", "serving the event ring"
+};
+
+static const char *const poll_bus_text[5] = {
+    "none", "active", "periodic", "idle", "a watcher's look"
+};
+
+static const char *const poll_retired_text[SNAP_POLL_RETIRED_STATES] = {
+    "nothing owed",
+    "proven by a masked acknowledgement",
+    "proven by PCI Interrupt Disable",
+    "UNCONTAINED - a stop came with it owed",
+    "proven by a completed HCRST",
+    "owed - moved, not yet proven"
+};
+
+static const char *poll_code(const char *const *table, unsigned long n,
+                             unsigned long v)
+{
+    return (v < n) ? table[v] : "unknown code";
+}
+
+/*
+ * The three values as write_companion_imod reports the moderation interval:
+ * found or not, the value as read, the value in effect, and the rule that
+ * made them differ, in words. The ranges are src/xhci_poll.c's
+ * XhciPollValues, duplicated (SNAP_POLL_*).
+ */
+static void print_intr_values(const unsigned char *k)
+{
+    static const char *const mode_text[3] = {
+        "automatic", "the line interrupt", "polling"
+    };
+    unsigned long found;
+    unsigned long read;
+    unsigned long used;
+    unsigned long nominal;
+
+    found = get32(k, 32 * 4);
+    read = get32(k, 0);
+    used = get32(k, 1 * 4);
+    if ((found & SNAP_POLL_FOUND_MODE) == 0) {
+        comp("  XhciInterruptMode      not found; in effect %lu (%s), the "
+             "default\n", used, poll_code(mode_text, 3, used));
+    } else {
+        comp("  XhciInterruptMode      value %lu; in effect %lu (%s)\n",
+             read, used, poll_code(mode_text, 3, used));
+        if (read == 3) {
+            comp("        ^ 3 is the same as 0.\n");
+        } else if (read > 3) {
+            comp("        ^ %lu is reserved, so it runs as 0.\n", read);
+        }
+    }
+
+    read = get32(k, 6 * 4);
+    used = get32(k, 7 * 4);
+    if ((found & SNAP_POLL_FOUND_IDLE) == 0) {
+        comp("  XhciPollIdleMs         not found; in effect %lu ms, the "
+             "default\n", used);
+    } else {
+        comp("  XhciPollIdleMs         value %lu; in effect %lu ms\n", read,
+             used);
+        if (read == 0) {
+            comp("        ^ 0 is not allowed, so the driver used its "
+                 "default, %lu.\n", SNAP_POLL_IDLE_DEFAULT);
+        } else if (read > SNAP_POLL_IDLE_MAX) {
+            comp("        ^ %lu is above %lu, so the driver held it to "
+                 "%lu.\n", read, SNAP_POLL_IDLE_MAX, SNAP_POLL_IDLE_MAX);
+        }
+    }
+
+    read = get32(k, 8 * 4);
+    used = get32(k, 9 * 4);
+    if ((found & SNAP_POLL_FOUND_ACTIVE) == 0) {
+        comp("  XhciPollActiveMs       not found; in effect %lu ms, the "
+             "default\n", used);
+        nominal = SNAP_POLL_ACTIVE_DEFAULT;
+    } else {
+        comp("  XhciPollActiveMs       value %lu; in effect %lu ms\n", read,
+             used);
+        if (read == 0) {
+            comp("        ^ 0 is not allowed, so the driver used its "
+                 "default, %lu.\n", SNAP_POLL_ACTIVE_DEFAULT);
+            nominal = SNAP_POLL_ACTIVE_DEFAULT;
+        } else {
+            nominal = read;
+        }
+    }
+    if (used < nominal) {
+        comp("        ^ held to the idle period, %lu ms.\n", used);
+    }
+}
+
+/*
+ * Record 15 sections 8 and 9: the delivery in effect and its reason, the
+ * pin, the poller's and the watcher's counts, the dead-line move, and the
+ * extension's six words where the header places them. The counters are
+ * found by the HCD header's own sizes, as print_hcd walks them; a block
+ * of 63 words is a driver from before polling, which is said and not
+ * decoded.
+ */
+static void print_intr(const unsigned char *hcd, unsigned long hcdBytes,
+                       const unsigned char *ext, unsigned long extBytes)
+{
+    unsigned long headBytes;
+    unsigned long counters;
+    unsigned long countersAt;
+    unsigned long delivery;
+    unsigned long status;
+    unsigned long pin;
+    unsigned long at;
+    unsigned long words;
+    unsigned long v;
+    const unsigned char *k;
+    const unsigned char *e;
+
+    if (!hcd_shape_ok(hcd, hcdBytes)) {
+        comp("\nevent delivery: the HCD region's header does not fit its "
+             "image; not decoded.\n");
+        return;
+    }
+    headBytes = get32(hcd, 4);
+    counters = get32(hcd, 20);
+    countersAt = get32(hcd, 24);
+    if (counters <= SNAP_POLL_FIRST) {
+        comp("\nevent delivery: the line interrupt - this driver predates "
+             "polled delivery\n  (its counter block is %lu words; 2.2.0.3 "
+             "added the delivery's).\n", counters);
+        return;
+    }
+    if (counters < SNAP_HCD_COUNTER_WORDS) {
+        comp("\nevent delivery: %lu counter words at +%lu in %lu bytes - "
+             "not a shape this build\n  reads; not decoded.\n", counters,
+             countersAt, hcdBytes);
+        return;
+    }
+    k = hcd + countersAt + SNAP_POLL_FIRST * 4;
+    delivery = get32(k, 2 * 4);
+
+    comp("\nevent delivery (design record 15), as the last start or the "
+         "dead-line move set it:\n");
+    print_intr_values(k);
+    comp("  delivery in effect     %s\n",
+         poll_code(poll_delivery_text, SNAP_POLL_DELIVERIES, delivery));
+    comp("    reason               %s\n",
+         poll_code(poll_reason_text, SNAP_POLL_REASONS, get32(k, 3 * 4)));
+    status = get32(k, 4 * 4);
+    pin = get32(k, 5 * 4);
+    if (status == SNAP_POLL_PIN_READ) {
+        if (pin == 0) {
+            comp("  Interrupt Pin          0 - no line interrupt\n");
+        } else if (pin <= 4) {
+            comp("  Interrupt Pin          INT%c\n", (char)('A' + pin - 1));
+        } else {
+            comp("  Interrupt Pin          %lu - not a valid pin\n", pin);
+        }
+    } else if (status == SNAP_POLL_PIN_UNREADABLE) {
+        comp("  Interrupt Pin          unreadable\n");
+    } else {
+        comp("  Interrupt Pin          not read\n");
+    }
+    if (delivery == SNAP_POLL_DELIVERY_POLL) {
+        comp("        ^ polled: XhciImodInterval250ns has no effect, since "
+             "nothing interrupts;\n          an event waits for the next "
+             "poll, at most the period below.\n");
+    }
+
+    comp("  poller                 %s; last armed %lu ms (%s)\n",
+         poll_code(poll_role_text, 3, get32(k, 10 * 4)), get32(k, 11 * 4),
+         poll_code(poll_bus_text, 5, get32(k, 12 * 4)));
+    comp("  poll runs              %lu, %lu of them found an event; peeks "
+         "%lu, %lu hits\n", get32(k, 13 * 4), get32(k, 14 * 4),
+         get32(k, 15 * 4), get32(k, 16 * 4));
+    comp("  promotions %lu, parks %lu, kicks %lu, arms displaced %lu\n",
+         get32(k, 17 * 4), get32(k, 18 * 4), get32(k, 19 * 4),
+         get32(k, 20 * 4));
+    v = get32(k, 21 * 4);
+    if (v == SNAP_POLL_NOT_FOUND) {
+        comp("  interval between runs  none observed yet (%lu discarded)\n",
+             get32(k, 23 * 4));
+    } else {
+        comp("  interval between runs  %lu to %lu ms (%lu discarded)\n", v,
+             get32(k, 22 * 4), get32(k, 23 * 4));
+    }
+    comp("  watcher                looks %lu, asserted %lu, stale pairs "
+         "%lu\n", get32(k, 24 * 4), get32(k, 25 * 4), get32(k, 26 * 4));
+    if (get32(k, 27 * 4) != 0) {
+        comp("  dead-line move         MOVED to polling; the interrupter's "
+             "mask %s at the move\n",
+             get32(k, 31 * 4) != 0 ? "read back down"
+                                   : "was NOT proven down");
+    } else {
+        comp("  dead-line move         none\n");
+    }
+    comp("    line's retirement    %s; attempts %lu\n",
+         poll_code(poll_retired_text, SNAP_POLL_RETIRED_STATES,
+                   get32(k, 29 * 4)),
+         get32(k, 28 * 4));
+    if (get32(k, 30 * 4) != 0) {
+        comp("  PCI Interrupt Disable  found set and cleared by a start "
+             "(%lu)\n", get32(k, 30 * 4));
+    }
+
+    if (headBytes < SNAP_HCD_DELIVERY_HEAD_WORDS * 4 ||
+        hcdBytes < SNAP_HCD_DELIVERY_HEAD_WORDS * 4) {
+        comp("  extension words        not placed by this driver's HCD "
+             "header (%lu bytes)\n", headBytes);
+        return;
+    }
+    at = get32(hcd, SNAP_HCD_DELIVERY_AT * 4);
+    words = get32(hcd, SNAP_HCD_DELIVERY_WORDS * 4);
+    if (ext == NULL) {
+        comp("  extension words        the extension image is not in hand\n");
+        return;
+    }
+    if (words < SNAP_POLL_EXT_WORDS || (at & 3UL) != 0 || at > extBytes ||
+        SNAP_POLL_EXT_WORDS > (extBytes - at) / 4) {
+        comp("  extension words        %lu at +%lu of a %lu-byte extension "
+             "- not a shape this build\n                         reads; not "
+             "decoded\n", words, at, extBytes);
+        return;
+    }
+    e = ext + at;
+    comp("  extension words        EventDelivery %lu (%s),\n"
+         "                         PollService %lu, PollServiceGen %lu, "
+         "LineMoved %lu,\n"
+         "                         LineRetired %lu, "
+         "LineRetireState %lu (%s)\n",
+         get32(e, 0),
+         poll_code(poll_delivery_text, SNAP_POLL_DELIVERIES, get32(e, 0)),
+         get32(e, 4), get32(e, 8), get32(e, 12), get32(e, 16),
+         get32(e, 20),
+         poll_code(poll_retired_text, SNAP_POLL_RETIRED_STATES,
+                   get32(e, 20)));
+    if (get32(e, 0) != delivery) {
+        comp("        ^ the extension and the counter block name different "
+             "deliveries: the two\n          regions were read at different "
+             "times (see the coherence line).\n");
+    }
+}
+
+/*
+ * `-selftest-intr`: task 36.9's decode over canned HCD images: 98 SE forced
+ * to poll; a pin-0 controller polled automatically, its periods out of
+ * range; a line proven dead and moved, the extension read before the move;
+ * a reserved mode on a 36.21-era header that places no extension words; a
+ * driver from before polling; and a counter block past the image.
+ */
+static void intr_image(unsigned char *hcd, unsigned long headWords,
+                       unsigned long counters)
+{
+    memset(hcd, 0, (SNAP_HCD_DELIVERY_HEAD_WORDS + SNAP_HCD_COUNTER_WORDS) *
+                       4);
+    put32(hcd, 0, 1);
+    put32(hcd, 4, headWords * 4);
+    put32(hcd, 12, SNAP_HCD_PORT_WORDS * 4);
+    put32(hcd, 16, headWords * 4);
+    put32(hcd, 20, counters);
+    put32(hcd, 24, headWords * 4);
+    if (headWords >= SNAP_HCD_DELIVERY_HEAD_WORDS) {
+        put32(hcd, SNAP_HCD_DELIVERY_AT * 4, 32);
+        put32(hcd, SNAP_HCD_DELIVERY_WORDS * 4, SNAP_POLL_EXT_WORDS);
+    }
+}
+
+static void intr_word(unsigned char *hcd, unsigned long headWords,
+                      unsigned long index, unsigned long value)
+{
+    put32(hcd, headWords * 4 + (SNAP_POLL_FIRST + index) * 4, value);
+}
+
+static int selftest_intr(void)
+{
+    static unsigned char hcd[(SNAP_HCD_DELIVERY_HEAD_WORDS +
+                              SNAP_HCD_COUNTER_WORDS) * 4];
+    static unsigned char ext[32 + SNAP_POLL_EXT_WORDS * 4];
+    const unsigned long H = SNAP_HCD_DELIVERY_HEAD_WORDS;
+    const unsigned long bytes = sizeof(hcd);
+
+    companion = NULL;
+
+    /* 98 SE with XhciInterruptMode 2: polled by force, serving, idle. */
+    intr_image(hcd, H, SNAP_HCD_COUNTER_WORDS);
+    intr_word(hcd, H, 0, 2);
+    intr_word(hcd, H, 1, 2);
+    intr_word(hcd, H, 2, 2);
+    intr_word(hcd, H, 3, 8);
+    intr_word(hcd, H, 4, 1);
+    intr_word(hcd, H, 5, 1);
+    intr_word(hcd, H, 6, SNAP_POLL_NOT_FOUND);
+    intr_word(hcd, H, 7, 50);
+    intr_word(hcd, H, 8, SNAP_POLL_NOT_FOUND);
+    intr_word(hcd, H, 9, 1);
+    intr_word(hcd, H, 10, 2);
+    intr_word(hcd, H, 11, 50);
+    intr_word(hcd, H, 12, 3);
+    intr_word(hcd, H, 13, 1234);
+    intr_word(hcd, H, 14, 56);
+    intr_word(hcd, H, 15, 78);
+    intr_word(hcd, H, 16, 9);
+    intr_word(hcd, H, 17, 12);
+    intr_word(hcd, H, 18, 3);
+    intr_word(hcd, H, 19, 3);
+    intr_word(hcd, H, 20, 1);
+    intr_word(hcd, H, 21, 49);
+    intr_word(hcd, H, 22, 63);
+    intr_word(hcd, H, 23, 2);
+    intr_word(hcd, H, 32, SNAP_POLL_FOUND_MODE);
+    memset(ext, 0, sizeof(ext));
+    put32(ext, 32, 2);
+    put32(ext, 36, 1);
+    put32(ext, 40, 7);
+    print_intr(hcd, bytes, ext, sizeof(ext));
+
+    /* No interrupt pin: polled automatically; 9000 and 0 replaced. */
+    intr_image(hcd, H, SNAP_HCD_COUNTER_WORDS);
+    intr_word(hcd, H, 0, SNAP_POLL_NOT_FOUND);
+    intr_word(hcd, H, 2, 2);
+    intr_word(hcd, H, 3, 3);
+    intr_word(hcd, H, 4, 1);
+    intr_word(hcd, H, 6, 9000);
+    intr_word(hcd, H, 7, 5000);
+    intr_word(hcd, H, 8, 0);
+    intr_word(hcd, H, 9, 1);
+    intr_word(hcd, H, 10, 2);
+    intr_word(hcd, H, 21, SNAP_POLL_NOT_FOUND);
+    intr_word(hcd, H, 32, SNAP_POLL_FOUND_IDLE | SNAP_POLL_FOUND_ACTIVE);
+    print_intr(hcd, bytes, NULL, 0);
+
+    /* A line proven dead in mode 0 and moved; its retirement by INTx
+     * Disable; the extension read before the move, so the two disagree. */
+    intr_image(hcd, H, SNAP_HCD_COUNTER_WORDS);
+    intr_word(hcd, H, 0, 0);
+    intr_word(hcd, H, 2, 2);
+    intr_word(hcd, H, 3, 9);
+    intr_word(hcd, H, 4, 1);
+    intr_word(hcd, H, 5, 1);
+    intr_word(hcd, H, 7, 50);
+    intr_word(hcd, H, 9, 1);
+    intr_word(hcd, H, 10, 2);
+    intr_word(hcd, H, 21, SNAP_POLL_NOT_FOUND);
+    intr_word(hcd, H, 24, 31);
+    intr_word(hcd, H, 25, 4);
+    intr_word(hcd, H, 26, 3);
+    intr_word(hcd, H, 27, 1);
+    intr_word(hcd, H, 28, 1);
+    intr_word(hcd, H, 29, 2);
+    intr_word(hcd, H, 30, 1);
+    intr_word(hcd, H, 31, 1);
+    intr_word(hcd, H, 32, SNAP_POLL_FOUND_MODE);
+    memset(ext, 0, sizeof(ext));
+    put32(ext, 32, 1);
+    print_intr(hcd, bytes, ext, sizeof(ext));
+
+    /* Vista or 7 x86 forced to the line (mode 1), a message granted, no
+     * helper bound and no line offered: the start fails (design record 18
+     * section 4.3; reason 13, appended by 36.15). */
+    intr_image(hcd, H, SNAP_HCD_COUNTER_WORDS);
+    intr_word(hcd, H, 0, 1);
+    intr_word(hcd, H, 1, 1);
+    intr_word(hcd, H, 2, 0);
+    intr_word(hcd, H, 3, 13);
+    intr_word(hcd, H, 32, SNAP_POLL_FOUND_MODE);
+    print_intr(hcd, bytes, NULL, 0);
+
+    /* A reserved mode run as 0 on the line; the active period held to
+     * the idle one; a header from 36.21 that places no extension words. */
+    intr_image(hcd, 202, SNAP_HCD_COUNTER_WORDS);
+    intr_word(hcd, 202, 0, 7);
+    intr_word(hcd, 202, 2, 1);
+    intr_word(hcd, 202, 3, 1);
+    intr_word(hcd, 202, 4, 1);
+    intr_word(hcd, 202, 5, 2);
+    intr_word(hcd, 202, 6, 20);
+    intr_word(hcd, 202, 7, 20);
+    intr_word(hcd, 202, 8, 40);
+    intr_word(hcd, 202, 9, 20);
+    intr_word(hcd, 202, 10, 1);
+    intr_word(hcd, 202, 11, 100);
+    intr_word(hcd, 202, 12, 4);
+    intr_word(hcd, 202, 21, SNAP_POLL_NOT_FOUND);
+    intr_word(hcd, 202, 24, 77);
+    intr_word(hcd, 202, 32, SNAP_POLL_FOUND_MODE | SNAP_POLL_FOUND_IDLE |
+                                SNAP_POLL_FOUND_ACTIVE);
+    print_intr(hcd, (202 + SNAP_HCD_COUNTER_WORDS) * 4, ext, sizeof(ext));
+
+    /* 2.2.0.2: 63 counter words. */
+    intr_image(hcd, 202, 63);
+    print_intr(hcd, (202 + 63) * 4, ext, sizeof(ext));
+
+    /* Shapes refused as print_hcd refuses them (review round 1): a block
+     * the image cannot hold, a header longer than the image, and counters
+     * overlapping the header; and a block between the two sizes known. */
+    intr_image(hcd, H, SNAP_HCD_COUNTER_WORDS);
+    put32(hcd, 24, bytes - 4);
+    print_intr(hcd, bytes, ext, sizeof(ext));
+    intr_image(hcd, H, SNAP_HCD_COUNTER_WORDS);
+    put32(hcd, 4, bytes + 4);
+    print_intr(hcd, bytes, ext, sizeof(ext));
+    intr_image(hcd, H, SNAP_HCD_COUNTER_WORDS);
+    put32(hcd, 24, (H - 4) * 4);
+    print_intr(hcd, bytes, ext, sizeof(ext));
+    /* One port record at the header's end and the counters on top of it
+     * (review round 2). */
+    intr_image(hcd, H, SNAP_HCD_COUNTER_WORDS);
+    put32(hcd, 8, 1);
+    print_intr(hcd, bytes, ext, sizeof(ext));
+    intr_image(hcd, H, 80);
+    print_intr(hcd, bytes, ext, sizeof(ext));
+    return 0;
+}
+
+/*
+ * The HCD region's report: the ports and counters, then every section read
+ * from the same header. When the header does not fit its image print_hcd
+ * says so and nothing else is decoded from it (task 36.9's review round 2),
+ * so no reader believes a header another refused. `ext` is NULL when the
+ * extension image is short or not the driver's size.
+ */
+static void print_hcd_sections(const unsigned char *hcd, unsigned long bytes,
+                               const unsigned char *ext,
+                               unsigned long extBytes)
+{
+    print_hcd(hcd, bytes);
+    if (!hcd_shape_ok(hcd, bytes)) {
+        return;
+    }
+    /* 35-T.8's tolerance state, from the extension image. */
+    print_tol(hcd, bytes, ext, extBytes);
+    /* 36.3's interrupt routing record, from the header alone. */
+    print_pirq(hcd, bytes);
+    /* 36.21's transfer-size readings, from the header alone. */
+    print_xstat(hcd, bytes);
+    /* 36.9: the event delivery, from the counters and the extension words
+     * the header places. */
+    print_intr(hcd, bytes, ext, extBytes);
+}
+
+/*
+ * `-selftest-hcd-bad`: one image whose header claims more bytes than came
+ * back, its tolerance, routing and transfer-size words otherwise valid.
+ * Only print_hcd's refusal may print (xhcisnap\selftest.cmd checks that no
+ * other section does).
+ */
+static int selftest_hcd_bad(void)
+{
+    static unsigned char hcd[(SNAP_HCD_DELIVERY_HEAD_WORDS +
+                              SNAP_HCD_COUNTER_WORDS) * 4];
+    unsigned long bytes = sizeof(hcd);
+
+    companion = NULL;
+    intr_image(hcd, SNAP_HCD_DELIVERY_HEAD_WORDS, SNAP_HCD_COUNTER_WORDS);
+    put32(hcd, 4, bytes + 4);
+    put32(hcd, 80, 27);
+    put32(hcd, 48 * 4, 59);
+    print_hcd_sections(hcd, bytes, NULL, 0);
+    return 0;
 }
 
 /*
@@ -5069,6 +5636,10 @@ int main(int argc, char **argv)
             return selftest_tol();
         } else if (strcmp(argv[i], "-selftest-pirq") == 0) {
             return selftest_pirq();
+        } else if (strcmp(argv[i], "-selftest-hcd-bad") == 0) {
+            return selftest_hcd_bad();
+        } else if (strcmp(argv[i], "-selftest-intr") == 0) {
+            return selftest_intr();
         } else if (strcmp(argv[i], "-selftest-xstat") == 0) {
             return selftest_xstat();
         } else if (strcmp(argv[i], "-selftest-report") == 0 && i + 1 < argc) {
@@ -5414,17 +5985,11 @@ int main(int argc, char **argv)
      * states, causes and counts carry no address.
      */
     if (hcdState == 1) {
-        print_hcd(hcd_image, hcdBytes);
-        /* 35-T.8's tolerance state, from the extension image: not from an
-         * image that is short or that the driver says is another size. */
-        print_tol(hcd_image, hcdBytes,
-                  (extMismatch || extBytes > sizeof(ext_image)) ? NULL
-                                                                : ext_image,
-                  extBytes);
-        /* 36.3's interrupt routing record, from the header alone. */
-        print_pirq(hcd_image, hcdBytes);
-        /* 36.21's transfer-size readings, from the header alone. */
-        print_xstat(hcd_image, hcdBytes);
+        print_hcd_sections(hcd_image, hcdBytes,
+                           (extMismatch || extBytes > sizeof(ext_image))
+                               ? NULL
+                               : ext_image,
+                           extBytes);
     } else if (hcdState == 2) {
         comp("\nHCD region: not served by this driver (an xhci98.sys before "
              "2.2.0.0 has no\n  per-port enumeration region; the note ring "
@@ -5442,9 +6007,10 @@ int main(int argc, char **argv)
     /*
      * **What equality proves and what it does not**, said in the file rather
      * than left to a reader's assumption. The detector is a sum of four
-     * monotonic counters - usbport's health check, the interrupt DPC, and both
-     * halves of the log's producer accounting - so it moves for everything that
-     * ordinarily runs. It is not a counter behind every field, so:
+     * monotonic counters - the health check, the event drain (interrupt or
+     * polled, record 15 section 9), and both halves of the log's producer
+     * accounting - so it moves for everything that ordinarily runs. It is not
+     * a counter behind every field, so:
      *
      *   unequal  PROVES the dump is torn.
      *   equal    is strong evidence and not a proof.
@@ -5457,8 +6023,9 @@ int main(int argc, char **argv)
                          "CHANGED between windows - the controller was serviced "
                          "while this dump was taken, so any counter in it may "
                          "be a mixture. The detector counts health-check calls, "
-                         "interrupt DPCs and both halves of the log's producer "
-                         "accounting, so the size of that step is how much ran.",
+                         "event drains (interrupt or polled) and both halves of "
+                         "the log's producer accounting, so the size of that "
+                         "step is how much ran.",
                      tearFirst, tearLast, tearLast - tearFirst);
     } else {
         comp_wrapped("", "\ncoherence: tear detector %lu, unchanged across "

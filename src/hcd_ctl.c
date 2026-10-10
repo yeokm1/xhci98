@@ -49,10 +49,10 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * they are absent and the same defaults stand. */
 #define HCD_VALUE_SETTLE_TOTAL  L"XhciFirstEnumWaitMs"
 #define HCD_VALUE_SETTLE_PORT   L"XhciFirstEnumPortMs"
-/* Task 34.3: the Intel port switchover, on a listed controller unless the
- * value is 0 (absent is on: txtsetup.oem writes none); an exact 2 also on
- * an unlisted Intel one (task 35.5). Read at start, on every Intel
- * controller and no other. */
+/* Task 34.3: the Intel port switchover, on a listed controller when the
+ * value is a nonzero DWORD; absent, another type or 0 is off (task 36.42;
+ * txtsetup.oem writes none); an exact 2 also on an unlisted Intel one
+ * (task 35.5). Read at start, on every Intel controller and no other. */
 #define HCD_VALUE_PORT_SWITCH   L"XhciIntelPortSwitch"
 /* Task 36.3: the Intel PCH interrupt routing quirk; absent, another type
  * or another number than 0 to 2 is 1, the verified E7250 only
@@ -1553,6 +1553,9 @@ static VOID hcdRecover(PHCD_CONTROLLER hc)
     }
     if (go) {
         ext->RecoveryRequested = 0;
+        /* Selective suspend's epoch (design record 14 section 4.4): the
+         * thread's next powered pass settles a Dx pended before it. */
+        HcdSuspControllerDownLocked(hc);
         /* 35-T.6's window (record 17 section 4.6), charged as a recovery
          * begins, retries included: a fourth inside ten minutes is not
          * begun, and the request is dropped. Window.Refused, cleared only
@@ -2447,9 +2450,15 @@ static VOID hcdStopBody(PHCD_CONTROLLER hc)
 {
     PXHCI_EXTENSION ext;
     KIRQL raised;
+    KIRQL oldIrql;
 
     XHCI_DBG_TEXT("hcd: stop controller");
     ext = &hc->Hc;
+    XhciControllerLockAcquire(ext, &oldIrql);
+    /* Selective suspend's epoch and admission (design record 14 section
+     * 4.4): the stop's device teardown settles every slot at its unlink. */
+    HcdSuspControllerDownLocked(hc);
+    XhciControllerLockRelease(ext, oldIrql);
     hcdThreadStop(hc);
     /* Record 15 section 4.2: the poller's service revoked and a moved
      * line's owed retirement contained by the stop itself, before anything

@@ -1325,6 +1325,18 @@ every drain, polled or not (`xhci_evt.c:774`).
 - The header grows under the snapshot's existing schema rule, and the tool
   still reads a `2.1.0.0` or earlier header.
 
+**As built (task 36.9, 2026-10-10).** The values, delivery, reason, pin
+and poller counters are the counter block's words 63 to 95, which the HCD
+region already carries whole; `XHCISNAP` names them in its counter list and
+decodes them in a section of its own, "event delivery". The window header
+(schema 5) is unchanged. The HCD region's header grows two words, version
+unchanged, as 35-T.8's tolerance words did: 202 is `EventDelivery`'s byte
+offset in the extension image and 203 the count of the six delivery words
+(`EventDelivery` to `LineRetireState`, asserted contiguous), so the tool
+names them from the `.BIN`'s own bytes. Older layouts still read: a 63-word
+counter block is a driver from before polling, reported as taking the line;
+a header of 202 words places no extension words.
+
 ## 10. `XHCIQUAL` (task POLL.5)
 
 A controller is no longer disqualified for `Interrupt Pin = 0`:
@@ -1346,6 +1358,59 @@ provisional; both learn the "needs polling" outcome, so such a controller
 runs C6 and C8 and gets a definite verdict, with the exit code to match.
 Vectors at the classification level (`test_mmiodiag`) and for each C4
 outcome through the verdict, which `test_mmiodiag` alone cannot reach.
+
+**The verdict "QUALIFIED WITH CAVEATS" (owner, 2026-10-09).** "Needs
+polling" is not folded into plain QUALIFIED, nor into "QUALIFIED (with
+warnings)", nor made a failure or a provisional result: a controller with
+no working interrupt that passes the rest gets a verdict of its own,
+`QUALIFIED WITH CAVEATS`, with its own exit code, **3** (0 stays all
+qualified, 1 any not qualified or a read-only run, 2 a usage error or no
+controller; 1 wins over 3 across controllers). The verdict prints its
+caveats: there is no working line interrupt, so `xhci98.sys` polls the
+controller (`XhciInterruptMode` 0, automatic, or 2), at the cost of more CPU
+wake-ups and an event latency of up to the poll period; or an MSI-capable
+OS takes a message interrupt. For the second route the tool reads the PCI
+capability list it already walks (05h MSI, 11h MSI-X) and says, when one
+is present, that Windows Vista and 7 can take a message interrupt instead
+(x64 directly; 32-bit through the `xhcimsi.sys` helper, design record 18),
+and when none is, that polling is the only route; a controller in the
+quirk table as `XHCI_BROKEN_MSI` is told polling. Warnings, if the run also
+has any, are said beside the caveats. The quick scan's pin-0 outcome is
+`LOOKS QUALIFIED WITH CAVEATS`, ranked above `LOOKS QUALIFIED` and below the
+other outcomes; its reason names whether an MSI capability is offered.
+
+**As built (task 36.10, 2026-10-10).** The decisions are pure and
+host-tested in `xhciqual/verdict.c` (`test/test_verdict.c`), moved out of
+`report.c`: `c4_verdict` turns what C4 saw into PASS, **POLL** or FAIL;
+`c4_lets_ports` lets C6 and C8 run after PASS or POLL; `final_verdict`
+prints and returns the verdict; `run_exit_code` makes the exit code. C4
+reads POLL when there is no line to arm - `Interrupt Pin = 0`, an Interrupt
+Line DOS cannot use (0, 2, above 15) or PCI Interrupt Disable stuck set -
+and a No-Op issued with the interrupter's enable clear and no hook installed
+completes polled; or when the hooked No-Op's completion reaches the event
+ring and no interrupt arrives, whether `IP` never came up with the line
+masked or came up and the ISR never entered (issue 12's shape). The
+unusable-line and stuck-disable cases are this task's reading of "no
+working interrupt" beside the two the section names: in each no interrupt
+can arrive, and the polled completion is the same evidence. FAIL stays for
+a DPMI step that failed, an ISR entry the controller's status did not own,
+an ISR with no completion behind it, and a No-Op that never completed even
+polled, which the verdict words as the command's failure rather than the
+line's. One POLL differs in its advice (review rounds 1 and 2): when `IP`
+was never seen, at any look through both of C4's waits, the driver's
+automatic mode cannot see the dead line - section 4.2's watcher moves on
+`IP` asserted with nothing claimed - so the caveat names
+`XhciInterruptMode` 2. Its message route is still named from the
+capability list, said as untested; and since an enabled MSI or MSI-X
+clears `IP` itself after its message (4.17.5), one found enabled (Message
+Control, read only) is named as a reason `IP` may not have been seen. A
+source that comes live late, `EINT` and `IP` both up after the first wait,
+goes on to the delivery test as a prompt one does (review round 3). Every
+path that installed the hook removes it before C4 returns, so C6 and C8 run
+with no live ISR. `--irq-selftest` gives the same outcome
+as "IRQ SELF-TEST: NO WORKING INTERRUPT", exit 3. The QEMU matrix reaches
+it through two test programs that rewrite the xHCI's Interrupt Line before
+the run (`xhciqual/README.md`, "What the matrix covers").
 
 ## 11. Readings (task POLL-V)
 

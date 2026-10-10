@@ -740,6 +740,11 @@ static NTSTATUS hcdPdoNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     pdo->Common.SystemPower = PowerSystemWorking;
     pdo->Controller = hc;
     pdo->Device = dev;
+    /* Selective suspend's slot (design record 14 section 4.1): D0 asked
+     * and acted on; the rest of it zero with the extension. */
+    pdo->PwrWanted = XHCI_SUSP_D0;
+    pdo->PwrState = XHCI_SUSP_D0;
+    pdo->PwrSwitch = hc->SuspOn;
     pdo->Serial = serial;
     pdo->Port = dev->Location;
     pdo->InstanceKey = XhciHubInstanceKey(dev->Port, dev->Route);
@@ -1695,14 +1700,18 @@ ULONG HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     PHCD_DEVICE_PDO pdo;
     PHCD_DEVICE_PDO next;
     PHCD_DEVICE_PDO doomed;
+    HCD_SUSP_SETTLE settle[XHCI_FUNC_MAX];
     KIRQL oldIrql;
+    ULONG settles;
     ULONG waits;
     ULONG group;
     ULONG parent;
+    ULONG i;
 
     if (dev == NULL || dev->Pdo == NULL) {
         return 0;
     }
+    settles = 0;
     pdo = (PHCD_DEVICE_PDO)dev->Pdo->DeviceExtension;
     dev->Pdo = NULL;
     group = pdo->Group;
@@ -1716,6 +1725,12 @@ ULONG HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
     for (; pdo != NULL; pdo = next) {
         next = pdo->Sibling;
+        /* Selective suspend's slot settled at the unlink, never at a
+         * REMOVE (design record 14 section 4.4). */
+        if (settles < XHCI_FUNC_MAX &&
+            HcdSuspUnlinkLocked(hc, pdo, &settle[settles])) {
+            settles++;
+        }
         pdo->Sibling = NULL;
         hcdUnlinkLocked(&hc->DevicePdos, pdo);
         pdo->Listed = 0;
@@ -1745,6 +1760,9 @@ ULONG HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         }
     }
     KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    for (i = 0; i < settles; i++) {
+        HcdSuspUnlinkFinish(&settle[i]);
+    }
 
     while (doomed != NULL) {
         pdo = doomed;
@@ -2193,6 +2211,9 @@ static VOID hcdPdoQuiesce(PHCD_DEVICE_PDO pdo, ULONG removing)
         HcdRelativeMs(&due, 1);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
     }
+    /* Selective suspend's admission closed and the slot's IRPs settled
+     * (design record 14 section 4.4 (a), (c)). */
+    HcdSuspPdoClose(pdo, removing || pdo->Surprised);
     /* A held idle notification (hcd_urb.c, task 28-A.1) is no URB: it
      * completes here, and its completion has returned, before the
      * client's stop or removal goes on (Codex review of 28-A.1, round 1,
@@ -2305,6 +2326,11 @@ static ULONG hcdPdoStarted(PHCD_DEVICE_PDO pdo)
     }
     KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
     if (!listed) {
+        return 0;
+    }
+    /* Selective suspend's admission reopened (design record 14 section
+     * 4.4, START), unless the device left since the check above. */
+    if (!HcdSuspPdoReopen(hc, pdo)) {
         return 0;
     }
     pdo->Closing = 0;
@@ -2455,6 +2481,9 @@ static NTSTATUS hcdDeviceCapabilities(PHCD_DEVICE_PDO pdo, PIRP irp)
     }
     caps->SystemWake = PowerSystemUnspecified;
     caps->DeviceWake = PowerDeviceUnspecified;
+    /* A stage A PDO's power capabilities, with the switch on (design
+     * record 14 section 5.2); today's values otherwise. */
+    HcdSuspPdoCaps(pdo, caps);
     return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
 }
 
@@ -2571,6 +2600,7 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
         pdo->Common.PnpState = HCD_PNP_REMOVED;
         HcdDoorDeviceStop(pdo, 0);
         hcdPdoQuiesce(pdo, 1);
+        HcdSuspPdoRundown(pdo);
         hcdPdoFunctionRelease(pdo);
         HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
         hcdPdoRemoved(pdo);
@@ -2635,13 +2665,41 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
     }
 }
 
+/* The dispatch under the PDO's Busy count, raised before its Controller is
+ * read and dropped once the IRP is completed or pended: the controller's
+ * release and the PDO's STOP and REMOVE wait it out (design record 14
+ * section 4.2). IRQL: PASSIVE_LEVEL. */
+static NTSTATUS hcdDevicePdoPowerBusy(PHCD_DEVICE_PDO pdo, PIRP irp);
+
 NTSTATUS HcdDevicePdoPower(PHCD_DEVICE_PDO pdo, PIRP irp)
+{
+    NTSTATUS status;
+
+    (VOID)InterlockedIncrement(&pdo->Busy);
+    status = hcdDevicePdoPowerBusy(pdo, irp);
+    (VOID)InterlockedDecrement(&pdo->Busy);
+    return status;
+}
+
+static NTSTATUS hcdDevicePdoPowerBusy(PHCD_DEVICE_PDO pdo, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
     NTSTATUS status;
 
     stack = IoGetCurrentIrpStackLocation(irp);
     status = irp->IoStatus.Status;
+    /* Selective suspend (design record 14 sections 4 and 5; hcd_susp.c):
+     * a stage A PDO's D-IRP and WAIT_WAKE, with the switch on. Otherwise
+     * today's answers below. */
+    if (stack->MinorFunction == IRP_MN_SET_POWER &&
+        stack->Parameters.Power.Type == DevicePowerState &&
+        HcdSuspPdoSetPower(pdo, irp, &status)) {
+        return status;
+    }
+    if (stack->MinorFunction == IRP_MN_WAIT_WAKE &&
+        HcdSuspPdoWaitWake(pdo, irp, &status)) {
+        return status;
+    }
     if (stack->MinorFunction == IRP_MN_SET_POWER) {
         if (stack->Parameters.Power.Type == DevicePowerState) {
             pdo->Common.DevicePower =

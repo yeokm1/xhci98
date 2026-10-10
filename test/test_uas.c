@@ -619,11 +619,114 @@ static void test_policy(void)
     CHECK_EQ(src, XHCI98_TELE_SRC_MALFORMED, "out of contract");
 }
 
+/* The device's own usbstor MaximumTransferLength (KB 2581464) over the
+ * bus's answer: taken only valid and only with the bus's answer, rounded
+ * to the nearest 4 KiB (uas_iu.h). */
+static ULONG devlim(ULONG busBytes, ULONG busSource, ULONG found, ULONG type,
+                    ULONG length, ULONG value, PULONG src, PULONG why)
+{
+    return UasDeviceLimit(busBytes, busSource, found, type, length, value,
+                          src, why);
+}
+
+static void test_devlim(void)
+{
+    const ULONG D = UAS_DEVLIM_REG_DWORD;
+    const ULONG BUS = XHCI98_TELE_SRC_BUS;
+    ULONG src;
+    ULONG why;
+
+    CHECK_EQ(devlim(0x100000UL, BUS, 0, 0, 0, 0, &src, &why), 0x100000UL,
+             "absent: the bus's 1 MiB");
+    CHECK_EQ(why, UAS_DEVLIM_ABSENT, "said absent");
+    CHECK_EQ(src, BUS, "the bus's still");
+
+    CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 0x10000UL, &src, &why),
+             0x10000UL, "64 KiB for this device under a 1 MiB bus");
+    CHECK_EQ(why, UAS_DEVLIM_USED, "said used");
+    CHECK_EQ(src, XHCI98_TELE_SRC_DEVICE, "the device's");
+    CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 0x180000UL, &src, &why),
+             0x180000UL, "1.5 MiB above the bus's 1 MiB: the device's wins");
+    CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 0x200000UL, &src, &why),
+             0x100000UL, "2097152 itself is past KB 2581464's 2097120");
+    CHECK_EQ(why, UAS_DEVLIM_RANGE, "so out of range");
+    CHECK_EQ(devlim(0x10000UL, BUS, 1, D, 4, 0x100000UL, &src, &why),
+             0x100000UL, "1 MiB above a 64 KiB bus value");
+    CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 0x1E000UL, &src, &why),
+             0x1E000UL, "120 KiB (240 sectors) on the grid, unmoved");
+
+    /* KB 2581464's ends: Microsoft's spellings of 64 KiB and 2 MiB. */
+    CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 65535UL, &src, &why),
+             0x10000UL, "65535 is 64 KiB");
+    CHECK_EQ(why, UAS_DEVLIM_USED, "the range's low end is in it");
+    CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 2097120UL, &src, &why),
+             0x200000UL, "2097120 is 2 MiB");
+    CHECK_EQ(why, UAS_DEVLIM_USED, "the range's high end is in it");
+    CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 65534UL, &src, &why),
+             0x100000UL, "65534 is below the range: the bus's");
+    CHECK_EQ(why, UAS_DEVLIM_RANGE, "said out of range");
+    CHECK_EQ(src, BUS, "the bus's source kept");
+    CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 2097121UL, &src, &why),
+             0x100000UL, "2097121 is above it");
+    CHECK_EQ(why, UAS_DEVLIM_RANGE, "out of range");
+    CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 0UL, &src, &why), 0x100000UL,
+             "0 is out of range, not off");
+    CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 0xFFFFFFFFUL, &src, &why),
+             0x100000UL, "all ones");
+
+    /* Nearest 4 KiB, ties up; never more than 2 KiB moved. */
+    CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 0x80000UL + 2047UL, &src,
+                    &why), 0x80000UL, "2047 over 512 KiB rounds down");
+    CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 0x80000UL + 2048UL, &src,
+                    &why), 0x81000UL, "a tie rounds up");
+    CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 0x80000UL - 2048UL, &src,
+                    &why), 0x80000UL, "2048 under rounds up to it");
+    CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 0x80000UL - 2049UL, &src,
+                    &why), 0x7F000UL, "2049 under rounds down");
+    CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 1000000UL, &src, &why),
+             999424UL, "a decimal megabyte: 1000000 to 244 pages");
+    CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 66000UL, &src, &why),
+             0x10000UL, "66000 rounds to 64 KiB");
+    CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 2095000UL, &src, &why),
+             0x1FF000UL, "2095000 rounds to 2 MiB less 4 KiB");
+
+    /* Only a four-byte REG_DWORD. */
+    CHECK_EQ(devlim(0x100000UL, BUS, 1, 1UL, 4, 0x10000UL, &src, &why),
+             0x100000UL, "a REG_SZ is ignored");
+    CHECK_EQ(why, UAS_DEVLIM_TYPE, "said its type");
+    CHECK_EQ(devlim(0x100000UL, BUS, 1, 3UL, 4, 0x10000UL, &src, &why),
+             0x100000UL, "four bytes of REG_BINARY are not a DWORD");
+    CHECK_EQ(devlim(0x100000UL, BUS, 1, 11UL, 8, 0, &src, &why), 0x100000UL,
+             "a REG_QWORD is ignored");
+    CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 2, 0, &src, &why), 0x100000UL,
+             "a short DWORD is ignored");
+    CHECK_EQ(why, UAS_DEVLIM_TYPE, "said its type");
+
+    /* No bus answer: 64 KiB stands whatever the device's value says. */
+    CHECK_EQ(devlim(0x10000UL, XHCI98_TELE_SRC_UNSUPPORTED, 1, D, 4,
+                    2097120UL, &src, &why), 0x10000UL,
+             "an older bus keeps 64 KiB");
+    CHECK_EQ(why, UAS_DEVLIM_NO_BUS, "said not applied");
+    CHECK_EQ(src, XHCI98_TELE_SRC_UNSUPPORTED, "the older bus's source");
+    CHECK_EQ(devlim(0x10000UL, XHCI98_TELE_SRC_TRANSPORT, 1, D, 4,
+                    0x10000UL, &src, &why), 0x10000UL,
+             "a failed question keeps 64 KiB");
+    CHECK_EQ(why, UAS_DEVLIM_NO_BUS, "not applied either");
+    CHECK_EQ(devlim(0x10000UL, XHCI98_TELE_SRC_MALFORMED, 1, D, 4,
+                    0x100000UL, &src, &why), 0x10000UL,
+             "a reply out of contract keeps 64 KiB");
+    CHECK_EQ(devlim(0x10000UL, XHCI98_TELE_SRC_UNSUPPORTED, 1, D, 4,
+                    0x10UL, &src, &why), 0x10000UL,
+             "an invalid value on an older bus is said invalid");
+    CHECK_EQ(why, UAS_DEVLIM_RANGE, "range before the bus");
+}
+
 int main(void)
 {
     test_tags();
     test_tele();
     test_policy();
+    test_devlim();
     test_command_iu();
     test_task_iu();
     test_parse();

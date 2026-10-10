@@ -119,6 +119,15 @@ rem                  9-A.2): which EP0 setup packets are worth capturing, the
 rem                  descriptor walk fed at every chunk size, the isochronous
 rem                  bInterval table with its alternate-setting conflicts, and
 rem                  the Table 6-12 conversion in src\xhci_ctx.c
+rem   test_susp    - selective suspend's pure half (src\xhci_susp.c, task
+rem                  36.29, design record 14): the switch and capabilities,
+rem                  D-IRP admission, the device's decision (composite
+rem                  last Dx, D0 during SUSPENDING, epoch-stamped Dx, the
+rem                  latch, START's reopening), the suspend and resume
+rem                  steps and every outcome, root and hub wake evidence,
+rem                  the claim by stamp, WAIT_WAKE, the idle notification's
+rem                  claim and settlement, and exhaustive interleavings of
+rem                  the cancel handshake and the callback phases
 rem   test_log     - the optional log ring (src\xhci_log.c, tasks 11-V.7 and
 rem                  11-V.9): the record shape byte for byte, the switch gating
 rem                  the append itself, the record cap, the wrap and which byte
@@ -131,6 +140,9 @@ rem                  13-L.2 retired the ring-0 file sink and those functions
 rem                  with it, and test_log.c had said so for
 rem                  two days while this summary had not.)
 rem
+rem   test_xpipe   - stage 2's TD planner (src\xhci_xpipe.c, task 36.24):
+rem                  TDs of at most 31 elements cut from one wide
+rem                  mapping of a URB, packet-aligned but the last
 rem   test_uas     - the pure core of xhciuas.sys, the UAS class driver
 rem                  (src\uas\uas_iu.c, task 31-A.2): the COMMAND and TASK
 rem                  MANAGEMENT IU encoders and the SENSE, RESPONSE and READY
@@ -317,6 +329,11 @@ rem test_inj links xhci_caps.c for the port map a PED or over-current is
 rem aimed by; the trigger and every register answer of the qemu flavour's
 rem fault injection are pure (35-T.9, design record 17 section 5).
 call :run test_inj "test_inj.c ..\src\xhci_inj.c ..\src\xhci_caps.c"
+rem test_susp links nothing else: selective suspend's decisions - the
+rem device's want, the sequences as steps, wake evidence, the idle
+rem notification's claim and settlement, the callback context's phases -
+rem are pure, and its interleavings are explored over small models (36.29).
+call :run test_susp "test_susp.c ..\src\xhci_susp.c"
 rem test_log links nothing else: task 11-V.7's ring is deliberately pure, so
 rem every decision it makes - the wrap, the record cap, the flush verdict, the
 rem drain's ordering - is drivable with no file system, no registry and no IRQL.
@@ -334,6 +351,9 @@ call :run test_desc "test_desc.c ..\src\xhci_desc.c ..\src\xhci_ctx.c ..\src\xhc
 rem test_uas links nothing else: the UAS driver's information units, tags,
 rem descriptor walk and ids are pure computations over bytes (task 31-A.2).
 call :run test_uas "test_uas.c ..\src\uas\uas_iu.c"
+rem test_xpipe links nothing else: stage 2's TD planner over a URB's wide
+rem mapping (task 36.24, design record 13 section 11.6) is pure.
+call :run test_xpipe "test_xpipe.c ..\src\xhci_xpipe.c"
 call :run test_poll "test_poll.c ..\src\xhci_poll.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".

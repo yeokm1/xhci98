@@ -16,6 +16,7 @@
 #include "../src/xhci_enum.h"
 #include "../src/xhci_pirq.h"
 #include "../src/xhci_xstat.h"
+#include "../src/xhci_poll.h"
 #include "../src/xhci98_xfer.h"
 #include "test_harness.h"
 
@@ -25,27 +26,27 @@ static void test_header(void)
 {
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_VERSION_AT), 1,
              "version 1");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_BYTES), 808,
-             "a 202-word header (35-T.8 appended twelve, 36.3 28, 36.21 "
-             "154)");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_BYTES), 816,
+             "a 204-word header (35-T.8 appended twelve, 36.3 28, 36.21 "
+             "154, 36.9 two)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS), 18,
              "the E460's eighteen root ports");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORT_BYTES), 64,
              "a sixteen-word record");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 808,
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 816,
              "records right after the header");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 114,
              "the whole counter block");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS_AT),
-             808 + 18 * 64, "counters after the last record");
+             816 + 18 * 64, "counters after the last record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_NOTE_BUDGET),
              XHCI_ENUM_NOTE_BUDGET, "the notes' budget");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_WORDS), 0,
              "past the header reads 0");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_COUNTER_WORDS * sizeof(ULONG),
              sizeof(XHCIHC_COUNTERS), "the counters word for word");
-    CHECK_EQ(XhciSnapHcdWords(18), 202 + 18 * 16 + 114, "the E460's image");
-    CHECK_EQ(XhciSnapHcdWords(0), 202 + 114,
+    CHECK_EQ(XhciSnapHcdWords(18), 204 + 18 * 16 + 114, "the E460's image");
+    CHECK_EQ(XhciSnapHcdWords(0), 204 + 114,
              "no ports: a header and the counters");
     CHECK_EQ(XhciSnapHcdWords(1000), XhciSnapHcdWords(XHCI_MAX_ROOT_PORTS),
              "ports held to the root port maximum");
@@ -251,8 +252,8 @@ static void test_xstat_words(void)
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_TELE_WORDS), 46,
              "five words of the bus's, then the record");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_TELE_AT, 51 + 59, "the records after");
-    CHECK_EQ(XHCI_SNAPSHOT_HCD_TELE_AT + 2 * 46, XHCI_SNAPSHOT_HCD_HEAD_WORDS,
-             "and they end the header");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_TELE_AT + 2 * 46, XHCI_SNAPSHOT_HCD_DELIVERY_AT,
+             "and 36.9's pair follows them");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_XSTAT_AT), 0,
              "the readings are the door's, not layout");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_TELE_AT), 0,
@@ -291,6 +292,87 @@ static void test_xstat_words(void)
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_XSTAT, Crossed), 58 * 4, "Crossed last");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_TELE_STATE, 4, "a record's state at 4");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_TELE_BODY, 5, "its body at 5");
+}
+
+/* 36.9: the event delivery. XHCISNAP names the counter words from 63 by
+ * these places and decodes them by these codes (xhcisnap.c,
+ * hcd_counter_names and SNAP_POLL_*), and finds the six extension words by
+ * the header's pair, so a field moved or a code renumbered fails here until
+ * the tool follows. */
+static void test_delivery_words(void)
+{
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_DELIVERY_AT, 202, "after the records");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_DELIVERY_WORDS, 203, "then the count");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_HEAD_WORDS, 204, "which ends the header");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_DELIVERY_AT),
+             XHCI_FIELD_OFFSET(XHCI_EXTENSION, EventDelivery),
+             "EventDelivery's place in the extension");
+    CHECK_EQ(XhciSnapHcdHead(0, XHCI_SNAPSHOT_HCD_DELIVERY_AT),
+             XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_DELIVERY_AT),
+             "whatever the ports");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_DELIVERY_WORDS), 6,
+             "six words");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_EXTENSION, PollService),
+             XHCI_FIELD_OFFSET(XHCI_EXTENSION, EventDelivery) + 4,
+             "PollService second");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_EXTENSION, PollServiceGen),
+             XHCI_FIELD_OFFSET(XHCI_EXTENSION, EventDelivery) + 8,
+             "PollServiceGen third");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_EXTENSION, LineMoved),
+             XHCI_FIELD_OFFSET(XHCI_EXTENSION, EventDelivery) + 12,
+             "LineMoved fourth");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_EXTENSION, LineRetired),
+             XHCI_FIELD_OFFSET(XHCI_EXTENSION, EventDelivery) + 16,
+             "LineRetired fifth");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCI_EXTENSION, LineRetireState),
+             XHCI_FIELD_OFFSET(XHCI_EXTENSION, EventDelivery) + 20,
+             "LineRetireState last");
+    CHECK(XHCI_FIELD_OFFSET(XHCI_EXTENSION, LineRetireState) + 4 <=
+              sizeof(XHCI_EXTENSION),
+          "inside the extension image");
+
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, IntrModeRead), 63 * 4,
+             "IntrModeRead at 63");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, IntrDelivery), 65 * 4,
+             "IntrDelivery");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, IntrPin), 68 * 4, "IntrPin");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, PollActiveMs), 72 * 4,
+             "PollActiveMs");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, PollStateLast), 75 * 4,
+             "PollStateLast");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, PollIntervalMinMs), 84 * 4,
+             "PollIntervalMinMs");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, WatchLooks), 87 * 4,
+             "WatchLooks");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, LineMoves), 90 * 4,
+             "LineMoves");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, LineRetireState), 92 * 4,
+             "LineRetireState");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, IntxDisableCleared), 93 * 4,
+             "IntxDisableCleared");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, LineMoveMasked), 94 * 4,
+             "LineMoveMasked");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, IntrValuesFound), 95 * 4,
+             "IntrValuesFound last");
+
+    CHECK_EQ(XHCI_POLL_NOT_FOUND, 0xFFFFFFFFUL, "not found");
+    CHECK_EQ(XHCI_POLL_IDLE_DEFAULT_MS, 50, "idle default");
+    CHECK_EQ(XHCI_POLL_IDLE_MAX_MS, 5000, "idle bound");
+    CHECK_EQ(XHCI_POLL_ACTIVE_DEFAULT_MS, 1, "active default");
+    CHECK_EQ(XHCI_POLL_FOUND_MODE, 1, "found bits");
+    CHECK_EQ(XHCI_POLL_FOUND_IDLE, 2, "found bits");
+    CHECK_EQ(XHCI_POLL_FOUND_ACTIVE, 4, "found bits");
+    CHECK_EQ(XHCI_POLL_DELIVERY_POLL, 2, "delivery codes");
+    CHECK_EQ(XHCI_POLL_DELIVERY_MESSAGE, 5, "delivery codes, last");
+    CHECK_EQ(XHCI_POLL_R_AUTO_PIN0, 3, "reason codes");
+    CHECK_EQ(XHCI_POLL_R_FORCED_POLL, 8, "reason codes");
+    CHECK_EQ(XHCI_POLL_R_AUTO_LINE_DEAD, 9, "reason codes");
+    CHECK_EQ(XHCI_POLL_R_MESSAGE_NOT_CONNECTED, 12, "reason codes");
+    CHECK_EQ(XHCI_POLL_R_FORCED_NO_LINE_OFFERED, 13, "reason codes, last");
+    CHECK_EQ(XHCI_POLL_PIN_UNREADABLE, 2, "pin status, last");
+    CHECK_EQ(XHCI_POLL_ROLE_SERVE, 2, "roles, last");
+    CHECK_EQ(XHCI_POLL_BUS_WATCH, 4, "bus states, last");
+    CHECK_EQ(XHCI_POLL_RETIRED_OWED, 5, "retirement states, last");
 }
 
 /* 36.22: XhciMaxTransferKB as each start takes it. */
@@ -468,6 +550,7 @@ int main(void)
     test_tol_words();
     test_pirq_words();
     test_xstat_words();
+    test_delivery_words();
     test_xstat_math();
     test_xpol();
     test_walk(0);

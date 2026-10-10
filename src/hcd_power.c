@@ -35,8 +35,12 @@
  *
  * Neither primary's test guest sleeps (Windows 2000's runs acpi=off). What has
  * run is a shutdown on both (runs/run-26.md): the system IRP, the D3 it
- * requested, the suspend. A D0 resume, the work-item route and the
- * direct transition have not run on a guest.
+ * requested, the suspend. The D0 resume first ran on QEMU guests in task
+ * 36.28's part 1 (2026-10-09/10): XP and Vista hibernate, Windows ME
+ * standby and hibernate, each through XhciResumeController's
+ * reinitialization (QEMU's xHCI has no Force Save Context). Not yet
+ * distinguished: the work-item route against the inline one; never run:
+ * the direct transition.
  *
  * IRQL: dispatch at PASSIVE_LEVEL (the FDO is DO_POWER_PAGABLE); the
  * completion routines and the request callback at <= DISPATCH_LEVEL; the
@@ -82,6 +86,32 @@ static ULONG hcdResumeContained(PHCD_CONTROLLER hc)
     }
     XhciLogNote(ext, "resume.terminal", terminal);
     return 1;
+}
+
+/*
+ * The controller suspended, then what clients still have in flight
+ * completed now, not in the resume (task 36.28; hcd_io.c,
+ * HcdIoSuspendSettle), on the strength of this suspend's own quiesce: a
+ * failed one counts in SuspendFailures. The episode's refusal flag is
+ * cleared first, under the lock the refusals set it under, before
+ * SUSPENDED is published. The power gate held; IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdSuspendSettled(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+    ULONG failures;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->SuspendRefused = 0;
+    /* Selective suspend's admission completes every Dx at once from here
+     * until the thread serves the controller powered again, and a Dx
+     * pended before it is settled below (design record 14 section 4.4). */
+    HcdSuspControllerDownLocked(hc);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    failures = hc->Hc.SuspendFailures;
+    XhciSuspendController(&hc->Hc);
+    HcdIoSuspendSettle(hc, hc->Hc.SuspendFailures == failures);
+    HcdSuspSettleStale(hc);
 }
 
 /* The resume half of a D0, then the IRP's completion. IRQL: PASSIVE_LEVEL. */
@@ -157,7 +187,7 @@ static VOID hcdDirectTransitionGated(PHCD_CONTROLLER hc)
              * retirement, before the controller is suspended. */
             HcdPollRevoke(hc);
             (VOID)HcdPollContain(hc);
-            XhciSuspendController(&hc->Hc);
+            hcdSuspendSettled(hc);
             hc->SuspendedInD0 = 1;
         }
         if (hc->Common.SystemPower == PowerSystemShutdown) {
@@ -361,7 +391,7 @@ NTSTATUS HcdControllerPower(PHCD_CONTROLLER hc, PIRP irp)
              * retirement, before the controller is suspended. */
             HcdPollRevoke(hc);
             (VOID)HcdPollContain(hc);
-            XhciSuspendController(&hc->Hc);
+            hcdSuspendSettled(hc);
         }
         /* Task 34.3: the shutdown's D3 hands the connectors back to EHCI,
          * as Linux's xhci_shutdown does on these chipsets; a sleep keeps

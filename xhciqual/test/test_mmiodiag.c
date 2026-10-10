@@ -523,9 +523,10 @@ static void test_tool_limit_is_not_a_disqualification(void)
      * reached - and printed it beside a CANNOT SAY. Two answers to one
      * question, in the one place a user reads both on the same line.
      */
-    /* `ipin` non-zero, because Interrupt Pin = 0 is answered before the MMIO
-     * question and would mask what this is about. The mapper sets the reason
-     * and the flag together, so the vectors do too. */
+    /* `ipin` non-zero, so the pin plays no part (before task 36.10 Interrupt
+     * Pin = 0 was answered first and would have masked what this is about).
+     * The mapper sets the reason and the flag together, so the vectors do
+     * too. */
     base_pci(&p);
     p.ipin = 1;
     p.mmio_tool_limit = 1;
@@ -808,10 +809,9 @@ static void test_quick_healthy(void)
 }
 
 /*
- * The unconditional one. Phase 0's checkpoint makes Interrupt Pin = 0 a
- * disqualifier whatever else is true, because neither target's USB stack has an
- * MSI path - so it must beat a perfectly healthy window rather than being
- * checked after it.
+ * Task 36.10 (design record 15 section 10): Interrupt Pin = 0 no longer
+ * disqualifies - the driver polls such a controller - so it reads "needs
+ * polling", QUICK_CAVEATS, and every other disqualifier still wins over it.
  */
 static void test_quick_no_interrupt_pin(void)
 {
@@ -819,16 +819,44 @@ static void test_quick_no_interrupt_pin(void)
 
     base_pci(&p);
     p.ipin = 0;
-    CHECK(quick_classify(&p, 1, 4, 0) == QUICK_DISQUALIFIED,
-          "Interrupt Pin = 0 disqualifies a controller that is otherwise fine");
-    CHECK(strstr(quick_reason(&p, 1, 4, 0), "Interrupt Pin") != 0,
+    CHECK(quick_classify(&p, 1, 4, 0) == QUICK_CAVEATS,
+          "Interrupt Pin = 0 on an otherwise fine controller needs polling");
+    CHECK(strstr(quick_reason(&p, 1, 4, 0), "needs polling") != 0,
           "and says so");
+    CHECK(strstr(quick_reason(&p, 1, 4, 0), "no MSI either") != 0,
+          "and that it has no MSI either");
+    p.has_msix = 1;
+    CHECK(strstr(quick_reason(&p, 1, 4, 0), "it offers MSI") != 0,
+          "an MSI-X capability is named");
+    p.has_msix = 0;
+    CHECK(quick_classify(&p, 1, 4, 1) == QUICK_CAVEATS,
+          "an active run's read-only half says the same");
 
-    /* And it is not softened by an active run, nor by a dead window on top. */
-    CHECK(quick_classify(&p, 1, 4, 1) == QUICK_DISQUALIFIED,
-          "an active run does not soften it");
+    /* The other disqualifiers stand, and win over it. */
+    CHECK(quick_classify(&p, 1, 0, 0) == QUICK_DISQUALIFIED,
+          "no USB2 ports still disqualifies a pin-0 controller");
+    CHECK(strstr(quick_reason(&p, 1, 0, 0), "USB2") != 0,
+          "and the reason is the ports'");
+    p.bar_hi = 1;
     CHECK(quick_classify(&p, 0, 0, 0) == QUICK_DISQUALIFIED,
-          "and it still decides when the window is dead too");
+          "a BAR above 4 GB still disqualifies a pin-0 controller");
+    CHECK(strstr(quick_reason(&p, 0, 0, 0), "4 GB") != 0,
+          "and the reason is the BAR's");
+    base_pci(&p);
+    p.ipin = 0;
+    p.bar_phys = 0;
+    CHECK(quick_classify(&p, 0, 0, 0) == QUICK_DISQUALIFIED,
+          "so does an unassigned BAR");
+    base_pci(&p);
+    p.ipin = 0;
+    p.bar_lo = 1;
+    CHECK(quick_classify(&p, 0, 0, 0) == QUICK_DISQUALIFIED,
+          "and an I/O-space BAR");
+
+    CHECK(quick_rank(QUICK_LOOKS_OK) < quick_rank(QUICK_CAVEATS) &&
+          quick_rank(QUICK_CAVEATS) < quick_rank(QUICK_DISQUALIFIED) &&
+          quick_rank(QUICK_DISQUALIFIED) < quick_rank(QUICK_CANNOT_SAY),
+          "the quick scan ranks caveats just above looks-qualified");
 }
 
 /* No USB2 protocol ports: the driver manages only those, so a controller with

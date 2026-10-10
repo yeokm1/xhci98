@@ -617,10 +617,11 @@ try {
                              "HKR,,XhciImodInterval250ns,,500`r`nHKR,,EnumPropPages32")
     }
 
-    # Roadmap-hcd task 34.3's opt-out, anchored on the interval after it on
-    # each path. **Its default is 1, not 0**: shipping 0 would be an INF edit
-    # that turns the switchover off on every machine it exists for, and the
-    # unconditional DWORD would write a user's 0 back to 1 at an update.
+    # Roadmap-hcd task 34.3's switch, anchored on the interval after it on
+    # each path. **Its default is 0 since task 36.42** (owner, 2026-10-09):
+    # shipping 1 again would be an INF edit that moves every switchable
+    # connector off a working USB 2.0 controller on install, and the
+    # unconditional DWORD would write a user's 1 back to 0 at an update.
     # Task 36.3's routing row and task 35-T.7's three rows sit between it and
     # the interval, so the anchor carries them; $tailFor9x and $tailForNt are
     # the same block ending in each path's own successor line, which keeps
@@ -628,20 +629,24 @@ try {
     $tolRows   = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`nHKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`nHKR,,XhciMaxTransferKB,0x00010003,1024`r`nHKR,,XhciInterruptMode,0x00010003,0`r`nHKR,,XhciPollIdleMs,0x00010003,50`r`nHKR,,XhciPollActiveMs,0x00010003,1`r`n"
     $tailFor9x = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]"
     $tailForNt = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32"
-    Write-Step "the Intel port switchover's opt-out, on both paths"
+    Write-Step "the Intel port switchover's switch, on both paths"
     Assert-RuleFires "portswitch-no-9x" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailFor9x, $tailFor9x)
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailFor9x, $tailFor9x)
     }
     Assert-RuleFires "portswitch-no-nt" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailForNt, $tailForNt)
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailForNt, $tailForNt)
     }
-    Assert-RuleFires "portswitch-default-off" "VAL-DEFAULT" {
-        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailForNt,
-                             "HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailForNt)
+    Assert-RuleFires "portswitch-default-on-nt" "VAL-DEFAULT" {
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailForNt,
+                             "HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailForNt)
+    }
+    Assert-RuleFires "portswitch-default-on-9x" "VAL-DEFAULT" {
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailFor9x,
+                             "HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailFor9x)
     }
     Assert-RuleFires "portswitch-clobber" "VAL-TYPE" {
-        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailFor9x,
-                             "HKR,,XhciIntelPortSwitch,0x00010001,1`r`n" + $tailFor9x)
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailFor9x,
+                             "HKR,,XhciIntelPortSwitch,0x00010001,0`r`n" + $tailFor9x)
     }
 
     # Roadmap-hcd task 35-T.7's three values (design record 17 sections 4.7
