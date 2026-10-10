@@ -663,16 +663,23 @@ SuperSpeed PDO, the idle IRP is held as before (`hcd_urb.c`, its own slot
     held by a callback waiting on another of this pool's IRPs can finish on
     Windows 98 depends on a creation the transition may block; no client
     seen does that (a D-IRP's callback completes the system IRP and
-    returns). There is no ceiling: growth needs a pending IRP and no
-    parked worker, so the workers never outnumber the claimed IRPs held in
-    completions at once plus the spares, and those are bounded by the PDOs
-    (one D-IRP, one WAIT_WAKE and one idle IRP each);
+    returns). There is no ceiling - a ceiling deadlocks a chain one deeper
+    than it - and none is claimed from the PDOs: a claim clears the PDO's
+    slot before its completion returns, so a callback can ask the next
+    transition while its worker is still held. Growth needs a pending IRP
+    and no parked worker, so each worker made was wanted by an IRP no
+    worker could take; the pool keeps what it grew until the stop, as
+    resources allow;
   - **the stop** (`HcdSuspDoneDrain`, after the enum thread is joined and
-    the devices dropped) first enters and leaves the power gate: the only
-    hand-off still to come is from a power path that claimed under the
-    gate before the drop (`HcdSuspSettleStale`, which hands off inside the
-    gate), and a later holder finds no device to claim from, each slot's
-    `SlotDevice` having been cleared at its unlink. It then stops and joins
+    the devices dropped) first runs the producers down: the only hand-off
+    still to come is from the power path's `HcdSuspSettleStale`, which
+    claims and hands off inside one count (`SuspDoneHolds`). The drain sets
+    `SuspDoneClosed` and waits the count to 0; a settle that counted itself
+    after the close sees it and claims nothing (and would find no device:
+    each slot's `SlotDevice` was cleared at its unlink). Both sides are
+    interlocked, so one always sees the other; the power gate's event wait,
+    which may return unsatisfied on 9x (`win98-wdm.md`), is not relied on.
+    It then stops and joins
     the grower, sets `SuspDoneStop` and wakes every parked worker; each
     leaves once the pending list is empty. While IRPs still wait it grows
     the pool by the same rule itself, and then joins every worker - on NT

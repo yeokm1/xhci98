@@ -1694,6 +1694,8 @@ typedef struct _HCD_CONTROLLER {
     ULONG SuspDoneStallSince;       /* ... from (system time low word)    */
     struct _HCD_SUSP_DONE *SuspGrower;  /* the thread that makes workers  */
     ULONG SuspGrowStop;
+    volatile LONG SuspDoneHolds;    /* settles between claim and hand-off */
+    volatile LONG SuspDoneClosed;   /* the stop's drain: no more of them  */
     /* The transfer size (tasks 36.21 and 36.22; xhci_xstat.h, hcd_io.c):
      * the readings since the start, zeroed and the value latched by each
      * start (hcd_ctl.c), and the class drivers' records (hcd_urb.c), kept

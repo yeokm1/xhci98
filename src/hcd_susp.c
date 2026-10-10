@@ -481,10 +481,10 @@ static VOID hcdSuspTake(PHCD_SUSP_TAKEN t, PHCD_DEVICE_PDO pdo, PIRP irp,
  * them). When an IRP has waited HCD_SUSP_DONE_STALL_MS with no worker
  * parked, the grower - a thread of its own, holding nothing - makes one
  * more; a creation that does not return then blocks the grower alone.
- * There is no ceiling: growth needs a pending IRP and no parked worker,
- * so the workers never outnumber the claimed IRPs held in completions at
- * once plus the spares, and the claimed IRPs are bounded by the PDOs (one
- * D-IRP, one WAIT_WAKE, one idle IRP each). Workers and the grower leave
+ * There is no ceiling (a ceiling deadlocks a chain one deeper than it):
+ * growth needs a pending IRP and no parked worker, so each worker made
+ * was wanted by an IRP no worker could take; the pool keeps what it grew
+ * until the stop, as resources allow. Workers and the grower leave
  * only at the stop (HcdSuspDoneDrain), which joins each - on NT by the
  * thread object, on 9x by the flag the thread sets last, as the enum and
  * callback threads are joined there. The IRP keeps its PowerPending or
@@ -3250,6 +3250,8 @@ VOID HcdSuspDoneStart(PHCD_CONTROLLER hc)
     hc->SuspDoneStallSince = 0;
     hc->SuspGrower = NULL;
     hc->SuspGrowStop = 0;
+    hc->SuspDoneHolds = 0;
+    hc->SuspDoneClosed = 0;
     if (!hc->SuspOn) {
         return;
     }
@@ -3279,18 +3281,22 @@ VOID HcdSuspDoneStart(PHCD_CONTROLLER hc)
 /*
  * Every completion worker and the grower gone (the stop, before the
  * controller's storage can go and before the last device can let the
- * image unload; a refused start after HcdSuspDoneStart). First the power
- * gate entered and left: the enum thread has been joined and the devices
+ * image unload; a refused start after HcdSuspDoneStart). First the
+ * producers' rundown: the enum thread has been joined and the devices
  * dropped, each slot's SlotDevice cleared at its unlink, so the only hand-
- * off still to come is from a power path that claimed under the gate
- * before the drop and has not yet left it (HcdSuspSettleStale, whose
- * hand-off is inside the gate); after the gate, a later holder finds no
- * device to claim from (Codex review of the pool, round 1, finding 3).
+ * off still to come is from HcdSuspSettleStale, the power path's, which
+ * claims and hands off inside one SuspDoneHolds count. SuspDoneClosed set,
+ * then the count waited to 0: a settle that counted itself before the
+ * close is waited for; one after it sees the close and claims nothing
+ * (and would find no device). Each side reads after its own locked
+ * operation, a full barrier on x86 and amd64, so one always sees the
+ * other (Codex review of the pool, round 1, finding 3; round 2, finding
+ * 1: the power gate's event wait, which may return unsatisfied on 9x, is
+ * not relied on).
  * Then the grower stopped and joined, every worker told to leave once none
  * is pending and the parked ones unparked; while IRPs still wait, the pool
  * grown by the same rule from here (the PnP manager's system thread, no
- * transition); then each worker joined. IRQL: PASSIVE_LEVEL, the power
- * gate not held.
+ * transition); then each worker joined. IRQL: PASSIVE_LEVEL.
  */
 VOID HcdSuspDoneDrain(PHCD_CONTROLLER hc)
 {
@@ -3303,8 +3309,11 @@ VOID HcdSuspDoneDrain(PHCD_CONTROLLER hc)
     if (hc->SuspDoneList.Flink == NULL) {
         return;                 /* never initialized: no start ran */
     }
-    HcdPowerGateEnter(hc);
-    HcdPowerGateLeave(hc);
+    (VOID)InterlockedExchange((PLONG)&hc->SuspDoneClosed, 1);
+    while (hc->SuspDoneHolds != 0) {
+        HcdRelativeMs(&due, 1);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
     KeAcquireSpinLock(&hc->SuspDoneLock, &oldIrql);
     w = hc->SuspGrower;
     hc->SuspGrower = NULL;
@@ -3378,8 +3387,10 @@ VOID HcdSuspControllerUp(PHCD_CONTROLLER hc)
  * The pended Dx of an older epoch completed SUCCESS (4.4): by the power
  * path once the controller is quiesced, at PASSIVE_LEVEL, since the enum
  * service does not run unpowered. One device at a time, its chain read
- * under PdoListLock and the controller lock. IRQL: PASSIVE_LEVEL, the
- * power gate held (the thread is not in a pass).
+ * under PdoListLock and the controller lock. The claims and their hand-
+ * offs inside one SuspDoneHolds count, closed by the stop's drain
+ * (HcdSuspDoneDrain). IRQL: PASSIVE_LEVEL, the power gate held (the
+ * thread is not in a pass).
  */
 VOID HcdSuspSettleStale(PHCD_CONTROLLER hc)
 {
@@ -3390,6 +3401,14 @@ VOID HcdSuspSettleStale(PHCD_CONTROLLER hc)
     KIRQL oldIrql;
     ULONG slot;
 
+    if (hc->SuspDoneList.Flink == NULL) {
+        return;                 /* never initialized: no start ran */
+    }
+    (VOID)InterlockedIncrement((PLONG)&hc->SuspDoneHolds);
+    if (hc->SuspDoneClosed != 0) {
+        (VOID)InterlockedDecrement((PLONG)&hc->SuspDoneHolds);
+        return;
+    }
     for (slot = 1; slot <= XHCI_MAX_SLOTS; slot++) {
         taken.Count = 0;
         KeAcquireSpinLock(&hc->PdoListLock, &listIrql);
@@ -3406,10 +3425,11 @@ VOID HcdSuspSettleStale(PHCD_CONTROLLER hc)
         }
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         KeReleaseSpinLock(&hc->PdoListLock, listIrql);
-        /* Under the power gate: completed by work items, as the thread's
+        /* Under the power gate: completed by the workers, as the thread's
          * (Codex review of the fix, round 1, finding 2). */
         hcdSuspFinishT(hc, &taken);
     }
+    (VOID)InterlockedDecrement((PLONG)&hc->SuspDoneHolds);
 }
 
 /* ------------------------------------------------------------------ */
