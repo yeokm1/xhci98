@@ -2,7 +2,9 @@
  * xhci_func.c - composite splitting, the pure half (xhci_func.h; roadmap-hcd.md
  * task 26-A.7; design record 13 sections 10.7 to 10.9).
  *
- * DDK-free: part of the pure core.
+ * DDK-free: part of the pure core. IRQL: any, no lock of its own - every
+ * function reads and writes only the storage its caller supplies, and the
+ * caller keeps that storage stable for the call.
  */
 
 #include "xhci_func.h"
@@ -301,8 +303,11 @@ ULONG XhciFuncFirsts(const UCHAR *config, ULONG length, PULONG firsts,
     }
     /* A function is an IAD's interfaces (its bFirstInterface the first) or
      * one interface no IAD covers (USB 3.2 9.6.4). An IAD whose first
-     * interface is absent, or which overlaps an earlier one, is ignored, as
-     * XhciFuncSplit ignores it. */
+     * interface is absent, or which overlaps an earlier one, is ignored
+     * here, each interface it names then its own function. XhciFuncSplit's
+     * policy for the absent first interface differs: it keeps the present
+     * interfaces of the IAD's range as one group. Only a malformed
+     * descriptor tells the two apart. */
     for (offset = (ULONG)config[0]; offset < total;
          offset += (ULONG)config[offset]) {
         if ((ULONG)config[offset + 1] != XHCI_FUNC_DT_IAD) {

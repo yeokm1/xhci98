@@ -757,6 +757,7 @@ static VOID hcdPirqRun(PHCD_CONTROLLER hc, ULONG when)
 }
 
 #if defined(XHCI_FLAVOUR_QEMU)
+/* IRQL: any (a pure read of the caller's bytes). */
 static ULONG hcdPirqLe32(const UCHAR *b, ULONG offset)
 {
     return (ULONG)b[offset] | ((ULONG)b[offset + 1] << 8) |

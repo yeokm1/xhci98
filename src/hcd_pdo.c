@@ -1485,12 +1485,12 @@ static ULONG hcdDormantRevive(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     return same;
 }
 
-/* REMOVE on a dormant PDO: its group reported gone. IRQL: PASSIVE_LEVEL. */
 /* The parent `pdo`'s group is presented under: its first PDO's (task
  * 36.43). A function's own ParentSerial names its composite parent, which
  * a retirement of the group takes away with it, so the answer that reports
  * the group missing is the first PDO's parent's. PdoListLock held, before
- * the group is retired (the first PDO is still listed). */
+ * the group is retired (the first PDO is still listed). IRQL:
+ * DISPATCH_LEVEL (the lock's). */
 static ULONG hcdGroupParentLocked(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
 {
     PHCD_DEVICE_PDO head;
@@ -1506,6 +1506,7 @@ static ULONG hcdGroupParentLocked(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
     return pdo->ParentSerial;
 }
 
+/* REMOVE on a dormant PDO: its group reported gone. IRQL: PASSIVE_LEVEL. */
 static VOID hcdDormantRemoved(PHCD_DEVICE_PDO pdo)
 {
     PHCD_CONTROLLER hc;

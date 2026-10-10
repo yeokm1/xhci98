@@ -55,6 +55,8 @@ static ULONG hcdHubIoEnter(PHCD_HUB_FDO fdo)
     return 1;
 }
 
+/* IRQL: <= DISPATCH_LEVEL (the D0 and system power completion routines
+ * call it). */
 static VOID hcdHubIoLeave(PHCD_HUB_FDO fdo)
 {
     if (InterlockedDecrement(&fdo->OutstandingIo) == 0) {
