@@ -2174,6 +2174,33 @@ static ULONG hcdSuspCbMove(PHCD_SUSP_CB cb, ULONG actor, ULONG from,
     return moved;
 }
 
+/* Teardown's IN_CALLBACK -> ABANDONED, with the stop's DMA-halt verdict
+ * recorded on the callback's PDO in the same hold of the context's lock:
+ * the thread's IN_CALLBACK -> RETURNING takes that lock, so the PDO's two
+ * references hold it while it is written (Codex review of 36.32, round
+ * 2, finding 1). IRQL: PASSIVE_LEVEL. */
+static ULONG hcdSuspCbAbandon(PHCD_SUSP_CB cb, ULONG pinned)
+{
+    KIRQL oldIrql;
+    ULONG moved;
+
+    KeAcquireSpinLock(&cb->Lock, &oldIrql);
+    moved = (cb->Phase == XHCI_SUSP_PH_IN_CALLBACK &&
+             XhciSuspPhaseAllowed(XHCI_SUSP_ACTOR_TEARDOWN,
+                                  XHCI_SUSP_PH_IN_CALLBACK,
+                                  XHCI_SUSP_PH_ABANDONED))
+                ? 1UL
+                : 0UL;
+    if (moved) {
+        if (pinned) {
+            cb->Pdo->IdlePinned = 1;
+        }
+        cb->Phase = XHCI_SUSP_PH_ABANDONED;
+    }
+    KeReleaseSpinLock(&cb->Lock, oldIrql);
+    return moved;
+}
+
 static ULONG hcdSuspCbPhase(PHCD_SUSP_CB cb)
 {
     KIRQL oldIrql;
@@ -2379,8 +2406,12 @@ static VOID NTAPI hcdSuspCbThread(PVOID context)
         if (!hcdSuspCbMove(cb, XHCI_SUSP_ACTOR_THREAD,
                            XHCI_SUSP_PH_IN_CALLBACK,
                            XHCI_SUSP_PH_RETURNING)) {
-            /* ABANDONED (4.4): nothing of the controller is touched. */
+            /* ABANDONED (4.4): nothing of the controller is touched. The
+             * callback has returned, so the rundown waits for the
+             * completion below rather than quarantine past it (Codex
+             * review of 36.32, round 2, finding 2). */
             pdo = cb->Pdo;
+            pdo->IdleRunning = 0;
             (VOID)HcdCompleteIrp(cb->Irp, STATUS_CANCELLED, 0);
             (VOID)InterlockedDecrement(&pdo->IdlePending);
             (VOID)InterlockedDecrement(&pdo->IdlePending);
@@ -2600,15 +2631,7 @@ VOID HcdSuspCbStop(PHCD_CONTROLLER hc)
             hcdSuspCbJoin(cb);
             return;
         case XHCI_SUSP_HAND_ABANDON:
-            /* The callback's PDO is held by its references while the
-             * thread is IN_CALLBACK; whether the stop proved DMA halted
-             * is recorded for its rundown, which no longer reaches the
-             * controller. */
-            if (hc->CommonBufferPinned) {
-                cb->Pdo->IdlePinned = 1;
-            }
-            if (!hcdSuspCbMove(cb, XHCI_SUSP_ACTOR_TEARDOWN, phase,
-                               XHCI_SUSP_PH_ABANDONED)) {
+            if (!hcdSuspCbAbandon(cb, hc->CommonBufferPinned)) {
                 continue;
             }
             hcdSuspCbDetach(hc);
