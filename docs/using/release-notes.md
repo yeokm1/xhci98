@@ -14,8 +14,10 @@ copy to fix.
 describes the next release, and `2.2.0.3` (`DriverVer`
 `10/10/2026,2.2.0.3`) is a local test build of it for the owner's bench,
 not a release: it is not published, and `releases/history.md` has no entry
-for it. Its changes were read in QEMU virtual machines only; the bench
-readings on real hardware are pending, and `2.3.0.0` is cut after them.
+for it. Its changes were read in QEMU virtual machines, or rest on host
+tests where QEMU models no such device or controller; none has been read
+on real hardware. The bench readings are pending, and `2.3.0.0` is cut
+after them.
 "What `2.3.0.0` changes", below, lists them.
 
 The notes for `1.2.0.0`, the last release of the USB 2.0-only miniport, stay
