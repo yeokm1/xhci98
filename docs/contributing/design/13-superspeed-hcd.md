@@ -3742,8 +3742,10 @@ Task 36.22 changes only the first.
   existing tools write - through `RtlQueryRegistryValues` with a routine
   that records the type and length (`uas_fdo.c`, `uasReadLimit`). The rule
   is pure (`UasDeviceLimit`, `uas_iu.c`, `test_uas`): taken only as a
-  four-byte `REG_DWORD` inside KB 2581464's range, 65535 to 2097120, and
-  only when the bus answered the question; then it replaces the bus's
+  four-byte `REG_DWORD` from 65535 to 2097152 - KB 2581464's range, 65535
+  to 2097120, with its top widened to 2097152, which Uwe Sieber's tool and
+  others write for 2 MiB (owner, 2026-10-10) - and only when the bus
+  answered the question; then it replaces the bus's
   answer, above it or below it, for every device with that `idVendor` and
   `idProduct` - the key is per model, machine-wide, not per physical
   drive, on any controller - and the controller's `XhciMaxTransferKB`
@@ -3753,15 +3755,15 @@ Task 36.22 changes only the first.
   the **nearest 4 KiB, ties up**: the contract's grid (64 KiB to 2 MiB in
   4 KiB steps) is what the bus's answer obeys and what the descriptor's
   `MaximumPhysicalPages` (bytes / page + 1) is built for. Nearest moves a
-  value least - never more than 2048 bytes, a tie going up - and takes the
-  range's two ends, 65535 and 2097120, Microsoft's spellings of 64 KiB and
-  2 MiB, to exactly those (rounding down would make 2097120 into 2 MiB less
-  4 KiB). It is a normalisation onto the grid, not a byte ceiling: the size
+  value least - never more than 2048 bytes, a tie going up - and takes
+  65535 and 2097120, Microsoft's spellings of 64 KiB and 2 MiB, and the
+  tools' 2097152 to exactly those (rounding down would make 2097120 into
+  2 MiB less 4 KiB). It is a normalisation onto the grid, not a byte ceiling: the size
   taken can exceed the value by up to 2048 bytes. The bridge caps in use
   (64 KiB, 120 KiB = 240 sectors, 512 KiB, 1 MiB) are on the grid and do
-  not move. 2097152 itself is outside KB 2581464's range and is refused,
-  though some tools write it for 2 MiB (the release notes say so). The
-  note in the device's hardware key gains
+  not move. (Until 2026-10-10 the range stopped at 2097120 and refused
+  2097152; the owner widened it so a tool's 2 MiB is taken as written.)
+  The note in the device's hardware key gains
   `XhciUasDeviceLimit` (the value read, 0 when absent or not four bytes)
   and `XhciUasDeviceLimitWhy` (0 absent, 1 used, 2 not a `REG_DWORD`, 3 out
   of range, 4 valid but the bus did not answer), and

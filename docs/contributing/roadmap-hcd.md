@@ -1205,7 +1205,8 @@ ME actually send before anything is promised for them.
     2026-10-09: the default stays 1024 in both INFs; and `xhciuas.sys`
     also honours Microsoft's per-device `usbstor\VVVVPPPP`
     `MaximumTransferLength` (65535 to 2097120, nearest 4 KiB; record 13
-    section 11.5, `UasDeviceLimit`). The test client is
+    section 11.5, `UasDeviceLimit`); widened by the owner on 2026-10-10 to
+    65535 to 2097152, so the 2097152 tools write is 2 MiB (with 36.24). The test client is
     `test\xfertest`; the constrained grant `XhciQemuMapGrant`; the qemu
     bulk faults 14 to 17 hex (`build-and-test.md`). 36.21 repeated (XP x64,
     QEMU): at 1024, 134 / 394 / 593 / 600 MB/s at 64 KiB / 256 KiB / 1 MiB

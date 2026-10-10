@@ -648,8 +648,9 @@ static void test_devlim(void)
     CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 0x180000UL, &src, &why),
              0x180000UL, "1.5 MiB above the bus's 1 MiB: the device's wins");
     CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 0x200000UL, &src, &why),
-             0x100000UL, "2097152 itself is past KB 2581464's 2097120");
-    CHECK_EQ(why, UAS_DEVLIM_RANGE, "so out of range");
+             0x200000UL, "2097152, the tools' 2 MiB, is 2 MiB (owner)");
+    CHECK_EQ(why, UAS_DEVLIM_USED, "so in range");
+    CHECK_EQ(src, XHCI98_TELE_SRC_DEVICE, "the device's");
     CHECK_EQ(devlim(0x10000UL, BUS, 1, D, 4, 0x100000UL, &src, &why),
              0x100000UL, "1 MiB above a 64 KiB bus value");
     CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 0x1E000UL, &src, &why),
@@ -667,7 +668,14 @@ static void test_devlim(void)
     CHECK_EQ(why, UAS_DEVLIM_RANGE, "said out of range");
     CHECK_EQ(src, BUS, "the bus's source kept");
     CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 2097121UL, &src, &why),
-             0x100000UL, "2097121 is above it");
+             0x200000UL, "2097121, between the two spellings, is 2 MiB");
+    CHECK_EQ(why, UAS_DEVLIM_USED, "inside the widened range");
+    CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 2097153UL, &src, &why),
+             0x100000UL, "2097153 is above it");
+    CHECK_EQ(why, UAS_DEVLIM_RANGE, "out of range");
+    CHECK_EQ(src, BUS, "the bus's source kept");
+    CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 0x400000UL, &src, &why),
+             0x100000UL, "4 MiB is above it");
     CHECK_EQ(why, UAS_DEVLIM_RANGE, "out of range");
     CHECK_EQ(devlim(0x100000UL, BUS, 1, D, 4, 0UL, &src, &why), 0x100000UL,
              "0 is out of range, not off");
