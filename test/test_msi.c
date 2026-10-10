@@ -385,6 +385,163 @@ static void test_strip(void)
     }
 }
 
+/*
+ * R1 and R2 (record 18 section 11), as read on Vista SP2 and 7 SP1, x86 and
+ * x64, qemu-xhci with msi=on,msix=off, msi=off,msix=on and the default: one
+ * configuration of five descriptors - the BAR (preferred) and its
+ * alternative, a device-private, then the interrupt run: the message
+ * (preferred) heading it and the line its alternative. With MSISupported 0
+ * Windows builds the same list without the message, the line heading its
+ * run with option 0. The strip of the first must be the second, byte for
+ * byte: the BAR pair and the device-private kept, the line kept as head.
+ */
+typedef struct _R1_DESC {
+    UCHAR Option;
+    UCHAR Type;
+    UCHAR Share;
+    USHORT Flags;
+    ULONG U[6];
+} R1_DESC;
+
+static const R1_DESC r1Mixed[] = {
+    { 0x01, 0x03, 1, 0x0080,
+      { 0x00004000, 0x00000001, 0xFEBF0000, 0, 0xFEBF3FFF, 0 } },
+    { 0x08, 0x03, 1, 0x0080,
+      { 0x00004000, 0x00004000, 0, 0, 0xFFFFFFFF, 0xFFFFFFFF } },
+    { 0x00, 0x81, 1, 0x0000, { 0x00000001, 0, 0, 0, 0, 0 } },
+    { 0x01, 0x02, 1, 0x0003, { 0xFFFFFFFE, 0xFFFFFFFE, 0, 0, 0, 0 } },
+    { 0x08, 0x02, 3, 0x0000, { 0x00000000, 0xFFFFFFFF, 0, 0, 0, 0 } },
+};
+
+static const R1_DESC r1Line[] = {
+    { 0x01, 0x03, 1, 0x0080,
+      { 0x00004000, 0x00000001, 0xFEBF0000, 0, 0xFEBF3FFF, 0 } },
+    { 0x08, 0x03, 1, 0x0080,
+      { 0x00004000, 0x00004000, 0, 0, 0xFFFFFFFF, 0xFFFFFFFF } },
+    { 0x00, 0x81, 1, 0x0000, { 0x00000001, 0, 0, 0, 0, 0 } },
+    { 0x00, 0x02, 3, 0x0000, { 0x00000000, 0xFFFFFFFF, 0, 0, 0, 0 } },
+};
+
+static ULONG r1_build(UCHAR *list, const R1_DESC *d, ULONG n)
+{
+    ULONG size;
+    ULONG i;
+    ULONG k;
+    UCHAR *p;
+
+    for (i = 0; i < BUF; i++) {
+        list[i] = 0;
+    }
+    put32(list + 4, 5);         /* InterfaceType PCIBus */
+    put32(list + 12, 0x20);     /* SlotNumber           */
+    put32(list + XHCI_MSI_RRL_ALTERNATIVES, 1);
+    put32(list + XHCI_MSI_RRL_HEADER, 0x00010001UL);
+    put32(list + XHCI_MSI_RRL_HEADER + XHCI_MSI_RL_COUNT, n);
+    size = XHCI_MSI_RRL_HEADER + XHCI_MSI_RL_HEADER;
+    for (i = 0; i < n; i++) {
+        p = list + size;
+        p[XHCI_MSI_RD_OPTION] = d[i].Option;
+        p[XHCI_MSI_RD_TYPE] = d[i].Type;
+        p[XHCI_MSI_RD_SHARE] = d[i].Share;
+        p[XHCI_MSI_RD_FLAGS] = (UCHAR)d[i].Flags;
+        p[XHCI_MSI_RD_FLAGS + 1] = (UCHAR)(d[i].Flags >> 8);
+        for (k = 0; k < 6; k++) {
+            put32(p + XHCI_MSI_RD_U + k * 4, d[i].U[k]);
+        }
+        size += XHCI_MSI_RD_SIZE;
+    }
+    put32(list, size);
+    return size;
+}
+
+static void test_r1(void)
+{
+    static UCHAR expect[BUF];
+    XHCI_MSI_WALK w;
+    XHCI_MSI_CLASSIFY c;
+    ULONG size;
+    ULONG want;
+    ULONG i;
+    ULONG same;
+
+    CHECK_EQ(r1_build(in, r1Mixed, 5), 0xC8, "R1's list is 0xC8 bytes");
+    want = r1_build(expect, r1Line, 4);
+    CHECK_EQ(want, 0xA8, "MSISupported 0's list is 0xA8 bytes");
+    XhciMsiWalk(in, &w);
+    CHECK_EQ(w.Verdict, XHCI_MSI_WALK_OK, "R1's list walks");
+    XhciMsiClassify(in, &w, &c);
+    CHECK_EQ(c.Class, XHCI_MSI_CLASS_REPLACEABLE, "R1's list is replaceable");
+    CHECK_EQ(c.MessageMembers, 1, "one message member");
+    CHECK_EQ(c.LineMembers, 1, "one line member");
+    CHECK_EQ(c.DevicePrivate, 1, "one device-private (R2)");
+    CHECK_EQ(c.Unsupported, 0, "an admitted shape");
+    CHECK_EQ(XhciMsiOutcome(c.Class), XHCI_MSI_OUT_REPLACED,
+             "outcome replaced");
+    size = XhciMsiStrip(in, &w, &c, NULL, 0);
+    CHECK_EQ(size, want, "sized as Windows' own line-only list");
+    for (i = 0; i < BUF; i++) {
+        out[i] = 0xCC;
+    }
+    CHECK_EQ(XhciMsiStrip(in, &w, &c, out, BUF), want, "written");
+    same = 1;
+    for (i = 0; i < want; i++) {
+        if (out[i] != expect[i]) {
+            same = 0;
+        }
+    }
+    CHECK(same, "the strip is Windows' MSISupported 0 list, byte for byte");
+    CHECK_EQ(out[want], 0xCC, "nothing written past it");
+    XhciMsiWalk(out, &w);
+    XhciMsiClassify(out, &w, &c);
+    CHECK_EQ(c.Class, XHCI_MSI_CLASS_NO_MESSAGE,
+             "the stripped list offers the line alone");
+    (void)r1_build(in, r1Mixed, 5);
+    XhciMsiWalk(in, &w);
+    CHECK_EQ(XhciMsiAdmitted(in, &w), 1, "R1's shape is admitted");
+}
+
+/* Admitted is R1's shape alone; any other REPLACEABLE list is kept as an
+ * unsupported shape by the filter. */
+static ULONG admitted(const int *codes)
+{
+    XHCI_MSI_WALK w;
+
+    (void)build(codes);
+    XhciMsiWalk(in, &w);
+    return XhciMsiAdmitted(in, &w);
+}
+
+static void test_admit(void)
+{
+    static const int r1[] = { D_B, D_B, D_P, D_M, D_LA, D_END };
+    static const int r1Plain[] = { D_B, D_M, D_LA, D_END };
+    static const int privAfter[] = { D_B, D_M, D_LA, D_P, D_END };
+    static const int twoMsg[] = { D_B, D_M, D_MA, D_LA, D_END };
+    static const int lineThenMsg[] = { D_B, D_L, D_MA, D_END };
+    static const int msgLineMsg[] = { D_B, D_M, D_LA, D_MA, D_END };
+    static const int twoCfg[] = { D_B, D_M, D_LA, D_CFG, D_B, D_L, D_END };
+    static const int twoRuns[] = { D_B, D_M, D_LA, D_L, D_END };
+    static const int privInRun[] = { D_B, D_M, D_PA, D_LA, D_END };
+    static const int msgOnly[] = { D_B, D_M, D_END };
+    static const int lineOnly[] = { D_B, D_L, D_END };
+    XHCI_MSI_WALK w;
+
+    CHECK_EQ(admitted(r1), 1, "BAR pair, device-private, message|line");
+    CHECK_EQ(admitted(r1Plain), 1, "the same without the extras");
+    CHECK_EQ(admitted(privAfter), 1, "a device-private after the run");
+    CHECK_EQ(admitted(twoMsg), 1, "two messages heading the line");
+    CHECK_EQ(admitted(lineThenMsg), 0, "a line heading the run: not read");
+    CHECK_EQ(admitted(msgLineMsg), 0, "a message after the line: not read");
+    CHECK_EQ(admitted(twoCfg), 0, "two configurations: not read");
+    CHECK_EQ(admitted(twoRuns), 0, "two interrupt runs: not read");
+    CHECK_EQ(admitted(privInRun), 0, "another type inside the run");
+    CHECK_EQ(admitted(msgOnly), 0, "no line");
+    CHECK_EQ(admitted(lineOnly), 0, "no message");
+    w.Verdict = XHCI_MSI_WALK_COUNT;
+    w.Lists = 1;
+    CHECK_EQ(XhciMsiAdmitted(in, &w), 0, "a list the walk refused");
+}
+
 static void test_inj(void)
 {
     static const int mixed[] = { D_B, D_M, D_LA, D_END };
@@ -674,6 +831,8 @@ int main(void)
     test_cap();
     test_walk();
     test_strip();
+    test_r1();
+    test_admit();
     test_inj();
     test_record();
     test_bind();
