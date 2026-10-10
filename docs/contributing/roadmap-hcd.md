@@ -1272,6 +1272,17 @@ ME actually send before anything is promised for them.
   `test_xfer`, `test_ring`, `test_stream`, `test_iso`, `test_membuf` and
   `test_snap`, for whatever 36.24 did not already cover; the injection
   reaching a 257- and 513-TRB TD
+  - **Design scope (record 13 section 11.7; orchestrator decision, owner
+    to confirm):** the fixed rings placed by physical address are the
+    **stream rings** of a streams endpoint (UAS at SuperSpeed), 1024 TRBs
+    each, on NT starts where 36.24's promotion is enabled; Bulk-Only and
+    High-Speed UAS keep 64-TRB pool rings and stage 2 - their large TDs
+    are deferred, not refused. The TRB scratch is one per controller
+    beside the wide pool, not per pipe, since every publication holds the
+    controller lock. The low-memory qualification becomes an NT one (the
+    big blocks, granted or refused into the fallback) plus a Windows 98 SE
+    low-memory regression leg showing its allocations unchanged, since
+    nothing of stage 3 runs on 98 or ME
 - [ ] 36.26 (was MB-V) the legs, two claims kept apart. Compatibility: every guest, x86
   and amd64, UAS (streams, and High-Speed without them) and Bulk-Only,
   file compares, the value at 64, 1024, 2048 and out of range, the

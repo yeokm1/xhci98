@@ -462,6 +462,12 @@ static ULONG hcdWidePublishLocked(PHCD_CONTROLLER hc, PHCD_XFER x)
         flags = XhciXpipeRecStop(&x->Rec, XHCI_XPIPE_OUT_STOP,
                                  dev->Gone ? HCD_USBD_DEVICE_GONE
                                            : HCD_USBD_CANCELED);
+    } else if ((hc->Hc.Flags & XHCI_EXT_FLAG_SUSPENDED) != 0) {
+        /* Task 36.28, as HcdIoMapped: nothing published while suspended. */
+        hc->Hc.SavedStateValid = 0;
+        hc->SuspendRefused = 1;
+        flags = XhciXpipeRecStop(&x->Rec, XHCI_XPIPE_OUT_STOP,
+                                 HCD_USBD_CANCELED);
     } else {
         flags = hcdWidePump(hc, x);
     }
@@ -490,7 +496,11 @@ static VOID hcdWideMapped(PHCD_CONTROLLER hc, PHCD_XFER x)
     pipe = x->Pipe;
     dev = pipe->Device;
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    /* A suspended controller refuses before any hold (36.28; record 13
+     * section 11.7, point 3): a mapping completing after the suspend's
+     * settle must not wait on the held list for the resume. */
     if (!dev->Gone && !pipe->Closed && !x->CancelRequested &&
+        (hc->Hc.Flags & XHCI_EXT_FLAG_SUSPENDED) == 0 &&
         (pipe->Paused || pipe->TruncHeld ||
          (pipe->Exclusive != NULL && pipe->Exclusive != x &&
           x->Seq > pipe->Exclusive->Seq))) {

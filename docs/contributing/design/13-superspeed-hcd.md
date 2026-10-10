@@ -4656,6 +4656,18 @@ deferral of scope recorded in the roadmap, not a correctness limit.
    TD there is no successor: no refill, no truncation, no hand-off; an
    early end is the URB's end. The machine (`XhciXpipeRec*`) runs as for
    any one-TD URB.
+
+   **Suspension** (task 36.28, merged from `2.3.0.0`). Nothing is
+   published on a suspended controller, on either ring size: the check
+   comes **before** any held-list branch, so a mapping that completes after
+   the suspend's settle - its pipe paused or not - never waits for the
+   resume on the held list; it ends at once through the machine (a stop,
+   CANCELED) once its mapping state allows, with no publication or
+   doorbell, `SavedStateValid` given up and `SuspendRefused` set, as
+   `HcdIoMapped` does for any record. A promoted record between TDs counts
+   as owed to the settle (`hcdSuspendOwedOne`), whose drain, given its
+   DMA-stop proof, ends it once; without the proof nothing is touched and
+   the records and their buffers stay, as for any record.
 4. **The engine's cap and scratch.** `XhciXferBuildNormal` refuses more
    than `XHCI_XFER_MAX_DATA_TRBS` (32) elements today, before reading any,
    and again per TRB emitted. A normal request gains `MaxDataTrbs`, the cap
@@ -4705,19 +4717,25 @@ deferral of scope recorded in the roadmap, not a correctness limit.
    as before. Fewer events per byte is credible; a lower worst-case drain
    or lock hold is not claimed - a 513-TRB build and its residual walks are
    longer - and is a reading (36.26).
-9. **Telemetry.** Appended to `XHCI_XPIPE_STATS` after its 24 words, so
-   header words 229 on (count at 204 grows to 31; nothing before moves):
-   big blocks built, big blocks refused, TDs published on big rings, the
-   largest TD published (data TRBs), and the counts of TDs of exactly 256,
-   257, 512 and 513 data TRBs (four words). The exact counts are what
+9. **Telemetry.** Eight counters appended to `XHCI_XPIPE_STATS` after its
+   24 words: big blocks built, big blocks refused, TDs published on big
+   rings, the largest TD published (data TRBs), and the counts of TDs of
+   exactly 256, 257, 512 and 513 data TRBs (four words). The structure
+   grows to 32 words, the count at header word 204 reads 32, the new words
+   are 229 to 236 and the header becomes 237 words; nothing before moves,
+   and the serializer's asserts, `test_snap` and `XHCISNAP` (which reads a
+   24-word block from an older driver as before) change together. The exact counts are what
    36.26's geometry legs read to show a 257- or 513-TRB TD reached the
    ring, apart from a merely large SRB.
 
 **Host vectors.**
 - `test_stream`: `XhciStreamLayoutPlaced` as in point 2.
-- `test_xfer`: `MaxDataTrbs` 0 (32), 513 accepted, 514 refused before any
-  element is read (an inaccessible list), a list over the cap refused per
-  TRB as well; a 513-TRB TD published across the Link TRB on a 1024-TRB
+- `test_xfer`: `MaxDataTrbs` 0 (32), 513 accepted; three separate guards
+  - a request cap of 514 refused before the list is touched, a valid cap
+  with an element count above it refused with a readable header and
+  inaccessible elements, and an element count within the cap whose one
+  element crosses 64 KiB and expands past it (cap 1, two TRBs, scratch
+  enough) refused by the per-TRB guard; a 513-TRB TD published across the Link TRB on a 1024-TRB
   ring with both cycle values; a short on its 400th TRB with the tail, the
   same with the tail absent until an empty-drain settle, and swept by a
   later TD's event (the first measured length kept); its removal by the
@@ -4736,15 +4754,22 @@ deferral of scope recorded in the roadmap, not a correctness limit.
 MiB and 2 MiB SRBs at aligned and unaligned buffers produce TDs of exactly
 256, 257, 512 and 513 TRBs (the exact counters), apart from the SRB sizes;
 the fallback forced by the qemu flavour's `XhciQemuBigRefuse` and the
-64-TRB behaviour read; bulk faults 14 to 17 aimed at a big TD (the
+64-TRB behaviour read; the suspend orderings - a mapping completing after
+the settle with its pipe paused (ends, never held), a big TD outstanding
+at a settle with the DMA-stop proof (drained once, the save given up), a
+settle without the proof (records and buffers kept), and a pipe paused and
+resumed while the controller runs (held, then published once); bulk faults 14 to 17 aimed at a big TD (the
 injection's own note says which TD and its TRB count); a stream's recovery
 with a sibling stream keeping its progress; streams opened and closed
 across repeated starts and hot-plugs, every block granted or refused into
 the fallback and the pool count back at its start value. **Low memory**:
-on NT, the big blocks in a guest with little memory (XP x86 with 256 MiB,
-and Windows 2000 SMP under Driver Verifier's low-resources simulation, where
-promotion is off but the fallback path is not exercised - so the XP x86 leg
-is the qualification); on Windows 98 SE, the roadmap's low-memory machine
+on NT, the big blocks in a guest with little memory and promotion
+enabled (XP x86 with 256 MiB), recording `Check`, `Enabled` and the big
+blocks built and refused; and Windows 2000 SMP under Driver Verifier's
+low-resources simulation, which has no DMA verification wrapper (11.6.1),
+so promotion may be enabled there and the allocations may fail - the leg
+records the same words and the configuration rather than assuming
+either; on Windows 98 SE, the roadmap's low-memory machine
 (a 64 MiB guest) shows its allocations unchanged by this stage - a
 regression leg, since nothing here runs there. The full 36.26
 compatibility and multi-device load matrix applies.
