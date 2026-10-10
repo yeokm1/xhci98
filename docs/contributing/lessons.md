@@ -9819,3 +9819,30 @@ their I/O count, and the PDOs complete it with the status it came with.
 Rule. **An FDO passes down every major function it does not own, WMI
 included; a PDO completes one it does not handle with the status it came
 with. Run a boot under Driver Verifier on an NT 6 guest before a cut.**
+
+## Windows 98 SE does not resume reliably from Stand by in QEMU: read a 98 SE standby against a guest with no USB controller first
+
+Task 36.28 part 2, 2026-10-11, development host A, QEMU 11.1.0. Three
+readings had put a 98 SE standby failure on this driver's open list: USB
+dead after the wake, a black screen, and a fatal exception 0E at
+`016F:BFF9DFFF` when a console program or Ctrl+Alt+Del followed. A trace
+of every power IRP the driver received showed each one completed and the
+bus idle afterwards, and the controls placed the rest outside it: with no
+USB controller in the guest at all, a standby and a console program still
+end in fatal exception 0E in KERNEL32 (`0167:BFF87EDE`, then
+`0167:BFF9DB34` at Ctrl+Alt+Del) and an MS-DOS prompt reports too little
+memory to display; 98 SE's own UHCI driver does not come back from the
+wake even with only a mouse; and with a USB stick attached Windows stops
+after the stick's D0 under NUSB's EHCI stack as it does under this one,
+the HCD owing nothing. With mice and hubs alone the resume completes
+through this driver. Two more vehicle traps: a Windows restarted from
+MS-DOS mode comes back from standby to a black screen with no USB at all,
+and one `system_wakeup` in a few resets the guest before any driver code
+runs. The Shut Down dialog remembers its last choice and its radio buttons
+wrap, so a fixed number of arrow presses can pick Restart in MS-DOS mode;
+`Alt+S` selects Shut down, and one Up from there is Stand by.
+
+Rule. **On Windows 98 SE in QEMU, a standby defect is the driver's only
+when the same steps pass with no USB controller and with the class of
+device removed; read the power IRPs the driver received, and whether any
+request is still held, before attributing a hang that follows the wake.**
