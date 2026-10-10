@@ -853,13 +853,15 @@ static ULONG hcdDoorTeleWord(PHCD_CONTROLLER hc, ULONG index)
  * 36.38's header words (xhci.h, XHCI_SNAPSHOT_HCD_DNCTRL_LIVE onward;
  * design record 14 section 8.10), `word` a header word from DNCTRL_LIVE:
  * DNCTRL as read now - only with the switch on, so the switch at 0 adds no
- * register access - the extension's two DNCTRL words, and the first eight
- * devices' stage B records in Slot ID order. A device record leaves
+ * register access, and only while the door's own MMIO predicate holds
+ * (`mmio`: started, mapped, in D0; Codex review of 36.38, round 1, finding
+ * 2) - the extension's two DNCTRL words, and the first eight devices'
+ * stage B records in Slot ID order. A device record leaves
  * SlotDevice[] under this lock before it is freed, so each read here is of
  * a live record; its link record and masks are written under this lock.
  * Controller lock held. IRQL: DISPATCH_LEVEL.
  */
-static ULONG hcdDoorSuspWord(PHCD_CONTROLLER hc, ULONG word)
+static ULONG hcdDoorSuspWord(PHCD_CONTROLLER hc, ULONG word, ULONG mmio)
 {
     PHCD_USB_DEVICE dev;
     ULONG record;
@@ -869,7 +871,7 @@ static ULONG hcdDoorSuspWord(PHCD_CONTROLLER hc, ULONG word)
 
     switch (word) {
     case XHCI_SNAPSHOT_HCD_DNCTRL_LIVE:
-        if (!hc->SuspOn || hc->Hc.HcInfoStatus != XHCI_HC_OK) {
+        if (!hc->SuspOn || !mmio) {
             return XHCI_SNAPSHOT_HCD_NOT_READ;
         }
         return XhciRead32(&hc->Hc, hc->Hc.HcInfo.OperationalOffset +
@@ -948,7 +950,8 @@ static ULONG hcdDoorSuspWord(PHCD_CONTROLLER hc, ULONG word)
  * the same as the slots region. IRQL: DISPATCH_LEVEL.
  */
 static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
-                       PUCHAR payload, ULONG capacity, ULONG offset)
+                       PUCHAR payload, ULONG capacity, ULONG offset,
+                       ULONG mmio)
 {
     const ULONG *counters;
     const ULONG *pirq;
@@ -996,7 +999,7 @@ static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
              * under this lock (hcd_io.c, hcd_urb.c). */
             /* 36.38's words, past 36.9's pair. */
             if (word >= XHCI_SNAPSHOT_HCD_DNCTRL_LIVE) {
-                value = hcdDoorSuspWord(hc, word);
+                value = hcdDoorSuspWord(hc, word, mmio);
                 break;
             }
             /* 36.9's pair is layout, past the records. */
@@ -1223,7 +1226,7 @@ static ULONG hcdDoorSnapshot(PHCD_CONTROLLER hc, const UCHAR *guid,
     } else if (requestRegion == XHCI_SNAPSHOT_REGION_SLOTS) {
         hcdDoorSlots(hc, header, payload, capacity, requestOffset);
     } else if (requestRegion == XHCI_SNAPSHOT_REGION_HCD) {
-        hcdDoorHcd(hc, header, payload, capacity, requestOffset);
+        hcdDoorHcd(hc, header, payload, capacity, requestOffset, mmio);
     } else {
         header->Status |= XHCI_SNAPSHOT_S_BAD_REGION;
     }

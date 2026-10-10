@@ -1010,7 +1010,16 @@ static ULONG hcdSuspSsArm(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             result = hcdSuspFuncSuspend(hc, dev, iface, HCD_SUSP_FS_ARM);
             if (result != XHCI_SUSP_RES_OK) {
                 hc->Counters.SsSuspArmRefused++;
-                return result;
+                /* A request that reached the device and failed otherwise
+                 * than by STALL (a status stage's transaction error among
+                 * them) may have been applied: the function may be in
+                 * Function Suspend with no FwArmed bit to disarm it by, so
+                 * it is uncertain and the device is cycled. STALL and
+                 * NOT_SENT stay refusals (Codex review of 36.38, round 1,
+                 * finding 1). */
+                return (result == XHCI_SUSP_RES_FAILED)
+                           ? XHCI_SUSP_RES_TIMEOUT
+                           : result;
             }
             pdo->FwArmed |= 1UL << iface;
             hc->Counters.SsSuspArms++;
