@@ -164,12 +164,13 @@ The sections named give the detail.
   taken on, with no serial numbers or names; `XHCISNAP -nosysinfo` and
   `XHCIQUAL --no-sysinfo` skip it ("The log, and how to send one", and
   "Before you install: check the machine").
-- **Driver Verifier no longer stops the machine at boot.** Under
-  `verifier /standard /driver xhci98.sys`, `2.2.0.0` stopped Windows with
-  bugcheck C9 (0x220) as the root hub started, because the root hub
-  answered a WMI request itself instead of passing it on; on 32-bit Windows
-  7 it looked like a hang at "Starting Windows". The hubs now pass it on.
-  Read on 32-bit Windows 7 under Driver Verifier on both drivers.
+- **Driver Verifier no longer stops the machine at boot.** On 32-bit
+  Windows 7 under `verifier /standard /driver xhci98.sys`, `2.2.0.0`
+  stopped Windows with bugcheck C9 (0x220) as the root hub started,
+  because the root hub answered a WMI request itself instead of passing it
+  on; with no debugger it looked like a hang at "Starting Windows". The
+  hubs now pass it on. Read on 32-bit Windows 7 under Driver Verifier on
+  both drivers; 32-bit Vista and 7 x64 are still to be read.
 
 ## Targets and their standing
 
