@@ -1498,25 +1498,57 @@ static void sys_load_names(void)
     }
 }
 
+/*
+ * Upper-case `in` into `out` in the machine's ANSI code page, so an accented
+ * name matches in either case (round 3: `_strnicmp` folds ASCII only in the
+ * C locale). LCMapStringA is KERNEL32 on 95 and later. Where it fails, an
+ * ASCII fold stands in. Returns the length.
+ */
+static size_t sys_upper(const char *in, char *out, size_t outBytes)
+{
+    size_t len;
+    int got;
+
+    len = strlen(in);
+    if (len >= outBytes) {
+        len = outBytes - 1;
+    }
+    got = 0;
+    if (len != 0) {
+        got = LCMapStringA(LOCALE_SYSTEM_DEFAULT, LCMAP_UPPERCASE, in,
+                           (int)len, out, (int)(outBytes - 1));
+    }
+    if (got <= 0 || (size_t)got != len) {
+        size_t i;
+
+        for (i = 0; i < len; i++) {
+            char c = in[i];
+
+            out[i] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+        }
+    }
+    out[len] = '\0';
+    return len;
+}
+
 /* Whether `text` holds any loaded name (three characters or more), with
- * case ignored. */
+ * case ignored in the ANSI code page. */
 static int sys_has_name(const char *text)
 {
+    static char textUp[2048];
+    char nameUp[SYS_NAME_BYTES];
     int i;
 
     sys_load_names();
+    sys_upper(text, textUp, sizeof(textUp));
     for (i = 0; i < SYS_NAMES; i++) {
-        const char *name = sysNames[i];
-        size_t len = strlen(name);
-        const char *t;
+        size_t len = sys_upper(sysNames[i], nameUp, sizeof(nameUp));
 
         if (len < 3) {
             continue;
         }
-        for (t = text; *t != '\0'; t++) {
-            if (_strnicmp(t, name, len) == 0) {
-                return 1;
-            }
+        if (strstr(textUp, nameUp) != NULL) {
+            return 1;
         }
     }
     return 0;
@@ -1872,6 +1904,7 @@ static int selftest_sysinfo(void)
         "CorpDom fleet image",
         "Standard PC (i440FX + PIIX, 1996)",
         "Owner M\xFCller",
+        "Owner M\xDCLLER",
         "BIOS xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
         "xxxxxxxxxxxxxxxxxxxSNAPTEST-PC7",
         NULL
