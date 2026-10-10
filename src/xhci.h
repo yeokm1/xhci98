@@ -2137,12 +2137,25 @@ ULONG XhciPortSlotType(const XHCI_PORT_MAP *map, ULONG port, ULONG *slotType);
  * the port. A listed entry wins; the default IDs apply when the group
  * advertises no PSI table, and on a USB 3.x group to an unlisted ID 4 to 7
  * (task 35.1, issue 11); any other PSIV absent from a non-empty table decodes
- * as XHCI_SPEED_UNKNOWN. IRQL: any.
+ * as XHCI_SPEED_UNKNOWN. This is the root-port rule. IRQL: any.
  */
 ULONG XhciPortSpeedClass(const XHCI_PORT_MAP *map,
                          ULONG port,
                          ULONG psiv,
                          ULONG *speedClass);
+
+/*
+ * The same decode for a device's own PSIV, with its provenance (issue 18):
+ * `hubFallback` nonzero only for a device XhciPortPsivForHubChild placed by
+ * XHCI_HUB_SPEED_FALLBACK, and then an unlisted 1 or 2 on a USB 2.0 group
+ * with a table decodes as Full or Low Speed. 0 is XhciPortSpeedClass.
+ * IRQL: any.
+ */
+ULONG XhciPortSpeedClassFor(const XHCI_PORT_MAP *map,
+                            ULONG port,
+                            ULONG psiv,
+                            ULONG hubFallback,
+                            ULONG *speedClass);
 
 /*
  * Where a PSIV's meaning on this port comes from (task 35.1): NONE when this
@@ -2156,6 +2169,9 @@ ULONG XhciPortSpeedClass(const XHCI_PORT_MAP *map,
 #define XHCI_PSI_SOURCE_LISTED      1
 #define XHCI_PSI_SOURCE_DEFAULT     2
 #define XHCI_PSI_SOURCE_FALLBACK    3
+/* Issue 18's downstream fallback; only the device-aware decodes (the For
+ * forms) ever name it, never XhciPortSpeedSource. */
+#define XHCI_PSI_SOURCE_HUB_FALLBACK 4
 ULONG XhciPortSpeedSource(const XHCI_PORT_MAP *map, ULONG port, ULONG psiv);
 
 /*
@@ -2176,12 +2192,63 @@ ULONG XhciPortSpeedSource(const XHCI_PORT_MAP *map, ULONG port, ULONG psiv);
  * reason the decode direction has one. Falls back to the default IDs when the
  * group advertises no table at all, and for SuperSpeed to ID 4 when a USB 3.x
  * group's table lists no 5 Gbit/s entry and does not list 4 (task 35.1).
- * IRQL: any.
+ * A USB 2.0 device behind a hub is placed by XhciPortPsivForHubChild, which
+ * asks this first. IRQL: any.
  */
 ULONG XhciPortPsivForSpeed(const XHCI_PORT_MAP *map,
                            ULONG port,
                            ULONG speedClass,
                            ULONG *psiv);
+
+/*
+ * The PSIV for a device behind a hub (issue 18;
+ * docs/contributing/implementation-invariants.md, "Port Speed Decoding",
+ * the downstream exception). XhciPortPsivForSpeed's answer when it has one
+ * (*outcome TABLE). Otherwise, for Full or Low Speed on a USB 2.0 group whose
+ * PSI table (PSIC > 0) has no entry of that speed: the default ID (1 Full, 2
+ * Low; xHCI 1.2c Table 7-13) when the table does not list that ID and
+ * `allowFallback` is nonzero (FALLBACK, XHCI_CAPS_OK); a refusal naming why
+ * when the table lists the ID as something else (CONFLICT) or the switch is
+ * off (DISABLED); NO_MAPPING for every other refusal. *psiv is written only
+ * on XHCI_CAPS_OK. The table is never changed. IRQL: any.
+ */
+#define XHCI_HUB_SPEED_TABLE        0
+#define XHCI_HUB_SPEED_FALLBACK     1
+#define XHCI_HUB_SPEED_DISABLED     2
+#define XHCI_HUB_SPEED_CONFLICT     3
+#define XHCI_HUB_SPEED_NO_MAPPING   4
+ULONG XhciPortPsivForHubChild(const XHCI_PORT_MAP *map,
+                              ULONG port,
+                              ULONG speedClass,
+                              ULONG allowFallback,
+                              ULONG *psiv,
+                              ULONG *outcome);
+
+/*
+ * Issue 18's two log notes, packed here so the host suite checks the
+ * layouts. Every field is masked to its width.
+ *   hub.speed.place  31:24 root port   23:16 parent hub's Slot ID
+ *                    15:8  hub port    7:4 requested class (XHCI_SPEED_*)
+ *                    3:0   outcome (XHCI_HUB_SPEED_*)
+ *   hub.speed.route  31:28 the PSIV given (0 none)   27:20 0
+ *                    19:0  Route String
+ * IRQL: any.
+ */
+ULONG XhciHubSpeedNotePlace(ULONG rootPort, ULONG parentSlot, ULONG hubPort,
+                            ULONG speedClass, ULONG outcome);
+ULONG XhciHubSpeedNoteRoute(ULONG psiv, ULONG route);
+
+/*
+ * The configuration-space offset of a controller's firmware version, for the
+ * one controller this driver knows to publish one there: the VIA VL805
+ * (1106:3483), dword 50h, "XHCI MCU Firmware Version" (the VL805 datasheet,
+ * docs/issues/13-via-vl805-usb2-integrated-hub-speed-ids.md). 0 for every
+ * other `pciVendorDevice` (Device ID 31:16, Vendor ID 15:0). Read and noted
+ * at start (pci.vl805.fw), never written. IRQL: any.
+ */
+#define XHCI_PCI_ID_VIA_VL805       0x34831106UL
+#define XHCI_PCI_VL805_FW_VERSION   0x50UL
+ULONG XhciPciFirmwareOffset(ULONG pciVendorDevice);
 
 /*
  * The rate a raw Port Speed value means on this port, kept apart from the
@@ -2201,6 +2268,15 @@ ULONG XhciPortRate(const XHCI_PORT_MAP *map,
                    ULONG psiv,
                    ULONG *kbps,
                    ULONG *plus);
+
+/* The same with a device's provenance, as XhciPortSpeedClassFor (issue 18).
+ * IRQL: any. */
+ULONG XhciPortRateFor(const XHCI_PORT_MAP *map,
+                      ULONG port,
+                      ULONG psiv,
+                      ULONG hubFallback,
+                      ULONG *kbps,
+                      ULONG *plus);
 
 /* Whether a port is one of a USB 3.x protocol group (a SuperSpeed link). */
 ULONG XhciPortIsUsb3(const XHCI_PORT_MAP *map, ULONG port);
@@ -8758,7 +8834,9 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_F_UNREADABLE  0x00000004UL /* PORTSC read all ones */
 
 /* XHCIHC_COUNTERS in ULONGs (xhci_counters.h; asserted in xhci_snap.c). */
-#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 162UL
+#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 167UL
+/* Usb2HubSpeedFallbackSlots' word, which the door computes (issue 18). */
+#define XHCI_SNAPSHOT_HCD_HUB_SPEED_SLOTS 166UL
 
 /* Where a word of the image lies (XhciSnapHcdLocate). */
 #define XHCI_SNAPSHOT_HCD_IN_HEAD       0UL

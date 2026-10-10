@@ -316,9 +316,23 @@ typedef struct _XHCIHC_COUNTERS {
      * thread's plain writes. */
     ULONG CompositeParents;
     ULONG CompositeRepresented;
+    /* USB 2.0 speed IDs behind a hub (issue 18; implementation-invariants
+     * "Port Speed Decoding", the downstream exception), appended at word
+     * 162: XhciUsb2HubSpeedFallback as read (0 absent, 1 a DWORD, 2 another
+     * type) and the policy in effect (1 on); every behind-hub placement
+     * refused for want of a speed ID, USB 2.0 or SuperSpeed hub alike; each
+     * placement that took the default ID; and the Slot IDs that hold a
+     * device placed so, bit (Slot ID - 1) - not kept here (this word stays
+     * 0) but computed by the door from the live records as it copies the
+     * block (hcd_door.c). The start's writes and the thread's plain ones. */
+    ULONG Usb2HubSpeedSwitchRead;
+    ULONG Usb2HubSpeedFallbackOn;
+    ULONG TopoBehindHubNoSpeed;
+    ULONG Usb2HubSpeedFallbacks;
+    ULONG Usb2HubSpeedFallbackSlots;
 } XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 162 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 167 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */

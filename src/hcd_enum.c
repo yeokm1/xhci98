@@ -866,16 +866,15 @@ static VOID hcdCountAddressed(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     ext = &hc->Hc;
     c = &hc->Counters;
     c->DevicesAddressed++;
-    portClass = XHCI_SPEED_UNKNOWN;
     slotClass = XHCI_SPEED_UNKNOWN;
-    (VOID)XhciPortSpeedClass(&ext->PortMap, dev->Port, dev->Speed,
-                             &portClass);
+    /* By the device's provenance both (issue 18): a default ID given
+     * behind a hub reads as the class it was given for. */
+    portClass = HcdDeviceSpeedClass(hc, dev);
     if (XhciInputSlotContextOffset(&ext->Layout, &isc) == XHCI_LAYOUT_OK) {
         slot = XhciCommonAt(ext, isc);
-        (VOID)XhciPortSpeedClass(&ext->PortMap, dev->Port,
-                                 (slot[0] & XHCI_SLOT_SPEED_MASK) >>
-                                     XHCI_SLOT_SPEED_SHIFT,
-                                 &slotClass);
+        slotClass = HcdDeviceSpeedClassOf(hc, dev,
+                                          (slot[0] & XHCI_SLOT_SPEED_MASK) >>
+                                              XHCI_SLOT_SPEED_SHIFT);
     }
     hcdCountSpeed(portClass, &c->PortSpeedSuper, &c->PortSpeedHigh,
                   &c->PortSpeedFull, &c->PortSpeedLow);
@@ -888,8 +887,8 @@ static VOID hcdCountAddressed(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
      * accepted at its trained rate and counted by it. */
     dev->RateKbps = 0;
     dev->Plus = 0;
-    (VOID)XhciPortRate(&ext->PortMap, dev->Port, dev->Speed, &dev->RateKbps,
-                       &dev->Plus);
+    (VOID)XhciPortRateFor(&ext->PortMap, dev->Port, dev->Speed,
+                          dev->SpeedFallback, &dev->RateKbps, &dev->Plus);
     if (portClass == XHCI_SPEED_SUPER && dev->Plus) {
         c->PortSpeedSuperPlus++;
     }
@@ -1660,8 +1659,7 @@ ULONG HcdThreadReaddress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     ext = &hc->Hc;
     layout = &ext->Layout;
     speed = XHCI_SPEED_UNKNOWN;
-    was = XHCI_SPEED_UNKNOWN;
-    (VOID)XhciPortSpeedClass(&ext->PortMap, dev->Port, dev->Speed, &was);
+    was = HcdDeviceSpeedClass(hc, dev);
     if (hcdHalted(hc) || dev->Ep0Stuck || dev->Location == 0 ||
         dev->Location > HCD_PORT_COUNT ||
         !hcdPortReset(hc, &hc->Ports[dev->Location - 1], &speed) ||
@@ -2476,9 +2474,7 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
             /* Task 34.2: the Power tab cannot show a SuperSpeed device's
              * current above 510 mA, so XHCISNAP's log carries the exact
              * one, after the device's ids. */
-            speedClass = XHCI_SPEED_UNKNOWN;
-            (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, p->Device->Port,
-                                     p->Device->Speed, &speedClass);
+            speedClass = HcdDeviceSpeedClass(hc, p->Device);
             if (speedClass == XHCI_SPEED_SUPER &&
                 bytes > XHCI_DESC_OFF_MAX_POWER) {
                 XhciLogNote(&hc->Hc, "dev.ss.vidpid",

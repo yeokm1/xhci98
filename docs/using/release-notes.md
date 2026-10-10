@@ -175,6 +175,18 @@ detail, and what each rests on.
   on; with no debugger it looked like a hang at "Starting Windows". The
   hubs now pass it on. Read on 32-bit Windows 7 under Driver Verifier on
   both drivers; 32-bit Vista and 7 x64 are still to be read.
+- **Low- and Full-Speed devices behind the VIA VL805's built-in hub**
+  (`1106:3483`, GitHub issue 18). The card's USB 2.0 port lists only High
+  Speed in its speed table, which the xHCI specification allows for a
+  controller whose built-in hub serves the slower speeds, and `2.2.0.0`
+  refused every mouse, keyboard or other Low- or Full-Speed device behind
+  that hub. Such a device now gets the standard speed ID. The fix was built
+  without the hardware: it rests on the specification, the reporter's logs
+  and what Linux, FreeBSD and Haiku do, and it has never run on a VL805. It
+  is on by default, on any controller, because without it every Low- and
+  Full-Speed device on such a controller fails; set
+  `XhciUsb2HubSpeedFallback` to `0` to turn it off ("XhciUsb2HubSpeedFallback:
+  Low- and Full-Speed IDs behind a hub").
 
 ## Targets and their standing
 
@@ -1102,8 +1114,9 @@ been read in QEMU guests only (the readings are listed in the run record).
 ## Registry settings
 
 Each value is a `DWORD` in the controller's driver (software) key. The
-install writes sixteen; two more, `XhciWideMap` and `XhciSelectiveSuspend`,
-are read only when you add them yourself, in the same key:
+install writes sixteen; three more, `XhciWideMap`, `XhciSelectiveSuspend`
+and `XhciUsb2HubSpeedFallback`, are read only when you add them yourself,
+in the same key:
 
 | Windows | Key |
 |---|---|
@@ -1614,6 +1627,34 @@ and their reread is pending. So leave it off unless you are testing it.
 If a device misbehaves
 with it on, set `0`, restart and report whether that changed it.
 
+### XhciUsb2HubSpeedFallback: Low- and Full-Speed IDs behind a hub
+
+New in `2.3.0.0`, and **on unless you set it to `0`**. A device behind a hub
+has no port of the controller's own to report its speed, so the driver
+writes a speed ID for it, looked up in the controller's speed table for the
+USB 2.0 port the hub hangs from. Some controllers - the VIA VL805
+(`1106:3483`) is one - list only High Speed there, the link to their own
+built-in hub, and `2.2.0.0` refused every Low- or Full-Speed device behind
+that hub. With this value on, such a device gets the standard ID (1 for
+Full Speed, 2 for Low Speed) where the table names neither that speed nor
+that ID; a table that names them is followed as before, and devices on the
+controller's own ports are not affected.
+
+| | |
+|---|---|
+| Key | the controller's driver key ("Registry settings", above) |
+| Value | `XhciUsb2HubSpeedFallback`, a `DWORD`; no install writes it |
+| Absent, `1`, any other number or not a `DWORD` | On, the default |
+| `0` | Off: such a device is refused, as in `2.2.0.0` |
+
+Read at each start of the controller: restart Windows after changing it.
+Built without the hardware and never run on a VL805; in QEMU virtual
+machines, whose controller lists no speed table, devices behind a hub read
+as before. `XHCISNAP`'s report says whether it is on, how many devices it
+gave an ID and which slots hold one, and on the VL805 the card's firmware
+version (`pci.vl805.fw`). If a Low- or Full-Speed device behind such a hub
+misbehaves with it on, set `0`, restart and report whether that changed it.
+
 ### XhciLogVerbosity and XhciLogDebugView: the log
 
 See "The log, and how to send one". Both default to `0`.
@@ -1938,6 +1979,7 @@ information.
 | SuperSpeedPlus hubs | Built from the specification against host tests; no vehicle |
 | SuperSpeed hubs, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only; no virtual machine models one. On Windows 2000, which has no bench, built from the specification and untested |
 | High-Speed hubs, single- and multi-TT, and Full and Low Speed devices behind them, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only. Virtual machines model only a Full-Speed hub, so on every other target the High-Speed paths rest on host tests |
+| Low- and Full-Speed devices behind a built-in hub whose USB 2.0 speed table lists only High Speed (`XhciUsb2HubSpeedFallback`; the VIA VL805, GitHub issue 18) | Built from the specification, the reporter's logs and other systems' practice against host tests; never run on a VL805 or on any controller with such a table. QEMU's controller lists no table, so its legs read only that nothing else changed |
 | A UAS-only device at SuperSpeed on a controller that cannot stream | Built from the specification against host tests; no such controller held |
 | Low- and Full-Speed polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification, built against host tests; read on no real controller. Value `4`'s programming was read in QEMU on 32-bit Windows 7 and Windows 98 SE ("XhciFastPollFsLs") |
 | The Intel port switchover beyond one machine | Read on one `1E31` machine under Windows 98 SE ("Intel 7-, 8- and 9-series chipsets: the port switchover"). Device ids `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`, every other system, and a standby and resume rest on Linux's handling of the same chipsets and on host tests of the sequence |

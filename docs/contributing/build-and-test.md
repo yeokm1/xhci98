@@ -6736,6 +6736,48 @@ drive.
   whether remote wake was enabled or not, so each step is read separately
   (record 14 section 10).
 
+### USB 2.0 speed IDs behind a hub (36.49, issue 18)
+
+**`XhciUsb2HubSpeedFallback`** (`implementation-invariants.md`, "Port Speed
+Decoding", the downstream exception; issue 13). A REG_DWORD in the
+controller's driver key, read at every start: only a DWORD 0 turns the
+fallback off; absent, 1, any other number or another type is on. No INF
+writes it. The log ring notes `hub.speed.value` (the value read,
+`FFFFFFFF` when absent) and `hub.speed.fallback` (1 on).
+
+**Counters.** Words 162 to 166 of the counter block, named by `XHCISNAP`,
+which also prints a "USB 2.0 speed IDs behind a hub" section:
+`Usb2HubSpeedSwitchRead` (0 absent, 1 a DWORD, 2 another type),
+`Usb2HubSpeedFallbackOn`, `TopoBehindHubNoSpeed` (every behind-hub
+placement refused for want of a speed ID, USB 2.0 or SuperSpeed hub),
+`Usb2HubSpeedFallbacks` (each placement given the default ID), and
+`Usb2HubSpeedFallbackSlots`, a bitmap (bit Slot ID - 1) the door computes
+from the live device records - the stored word stays 0, so the stop's
+counter dump does not carry it; the stop dumps the two counts as
+`hub.speed.nospeed` and `hub.speed.fallbacks`.
+
+**Log lines.** At most 16 pairs per start, for each refusal or fallback
+behind a hub (an ordinary placement by the table notes nothing):
+`hub.speed.place` - root port 31-24, the parent hub's Slot ID 23-16, the
+hub port 15-8, the requested class 7-4 (`XHCI_SPEED_*`: 1 Low, 2 Full, 3
+High, 4 Super), the outcome 3-0 (`XHCI_HUB_SPEED_*`: 1 fallback taken, 2
+the switch off, 3 the default ID listed as another speed, 4 no mapping) -
+then `hub.speed.route` - the ID given 31-28 (0 for a refusal), the Route
+String 19-0. On the VIA VL805 (`1106:3483`) only, `pci.vl805.fw` at start:
+PCI configuration dword `50h`, the controller's firmware version
+(`FFFFFFFF` if the read failed).
+
+**Reading it in QEMU.** `qemu-xhci` publishes no speed table, so the
+fallback is never taken there and its legs are regression legs (QEMU's hub with Full-Speed devices behind it - a mouse
+and a keyboard - enumerating as before, `Usb2HubSpeedFallbacks` 0; QEMU
+models no Low-Speed device, so Low Speed rests on host vectors alone). No QEMU leg can present a VL805-like table:
+QEMU's only hub, `usb-hub`, is a Full-Speed hub that sits on a root port
+itself, so a USB 2.0 table of High Speed alone (what task 35.4's
+`XhciPortMapOverridePsi` could install on the `qemu` flavour) would leave
+that hub's own PORTSC ID unknown and refuse the hub before any device
+behind it is placed. The fallback rests on host vectors
+(`test\test_caps.c`, `test_replay_vl805` and `test_hub_child_fallback`).
+
 ### Getting a trace off a bare-metal machine
 
 Two different things are covered here, and the distinction matters. The trace

@@ -420,8 +420,16 @@ the decode over canned images.
 After the MSI words come selective suspend's (114 to 141, `SuspSwitchRead`
 to `SuspNotesSuppressed`), its stage B's eighteen (142 to 159,
 `SsSuspArms` to `SsSuspCapSettled`, reserved and unprinted before task
-36.38 filled them) and the composite parent's two (160 and 161,
-`CompositeParents` and `CompositeRepresented`). `-selftest-counters`
+36.38 filled them), the composite parent's two (160 and 161,
+`CompositeParents` and `CompositeRepresented`) and issue 18's five (162 to
+166, `Usb2HubSpeedSwitchRead` to `Usb2HubSpeedFallbackSlots`; roadmap-hcd
+36.49). Those five also get a section of their own, **"USB 2.0 speed IDs
+behind a hub"**: whether `XhciUsb2HubSpeedFallback` was read and the
+default IDs are on, the placements refused for want of an ID and those
+given the default ID, and the Slot IDs holding such a device (the slots
+list's speed column decodes their speed by the same rule). A block shorter
+than 167 words is a driver from before it, and the section is not printed.
+`-selftest-counters`
 prints every word of a canned block whose word i holds i + 1, and
 `selftest.cmd` checks it word by word against `src\xhci_counters.h`
 (`check-counter-names.ps1`), on the built EXE: an inline lookup over two

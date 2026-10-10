@@ -755,7 +755,7 @@ static VOID hcdDoorSlots(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
                    : (dw0 & XHCI_SLOT_SPEED_MASK) >> XHCI_SLOT_SPEED_SHIFT;
         cls = XHCI_SPEED_UNKNOWN;
         if (psiv != 0xFFFFFFFFUL) {
-            (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, dev->Port, psiv, &cls);
+            cls = HcdDeviceSpeedClassOf(hc, dev, psiv);
         }
         hcdPut32(r, XHCI_SNAPSHOT_SLOT_ID * 4, i);
         hcdPut32(r, XHCI_SNAPSHOT_SLOT_PORT * 4, dev->Port);
@@ -942,6 +942,25 @@ static ULONG hcdDoorSuspWord(PHCD_CONTROLLER hc, ULONG word, ULONG mmio)
 }
 
 /*
+ * Usb2HubSpeedFallbackSlots (issue 18): bit (Slot ID - 1) for each live
+ * record HcdHubPlace gave the default ID, from SlotDevice[] as the slots
+ * region reads it. Controller lock held. IRQL: DISPATCH_LEVEL.
+ */
+static ULONG hcdDoorFallbackSlots(PHCD_CONTROLLER hc)
+{
+    ULONG bits;
+    ULONG i;
+
+    bits = 0;
+    for (i = 1; i <= XHCI_MAX_SLOTS && i <= 32; i++) {
+        if (hc->SlotDevice[i] != NULL && hc->SlotDevice[i]->SpeedFallback) {
+            bits |= 1UL << (i - 1);
+        }
+    }
+    return bits;
+}
+
+/*
  * The HCD region (xhci.h, XHCI_SNAPSHOT_REGION_HCD; task 35.3): built word
  * by word into the caller's window from where XhciSnapHcdLocate puts each
  * word, so no image of the whole exists and nothing in it is a pointer. The
@@ -1053,7 +1072,9 @@ static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
             value = hcdDoorHcdPortWord(hc, &hc->Ports[record], word);
             break;
         case XHCI_SNAPSHOT_HCD_IN_COUNTERS:
-            value = counters[word];
+            value = (word == XHCI_SNAPSHOT_HCD_HUB_SPEED_SLOTS)
+                        ? hcdDoorFallbackSlots(hc)
+                        : counters[word];
             break;
         default:
             value = 0;
@@ -1070,6 +1091,14 @@ typedef char hcdSnapshotCounters[sizeof(XHCIHC_COUNTERS) ==
                                              sizeof(ULONG)
                                      ? 1
                                      : -1];
+
+/* ... and the word the door computes is Usb2HubSpeedFallbackSlots. */
+typedef char hcdSnapshotFallbackSlots[FIELD_OFFSET(XHCIHC_COUNTERS,
+                                                   Usb2HubSpeedFallbackSlots) ==
+                                              XHCI_SNAPSHOT_HCD_HUB_SPEED_SLOTS *
+                                                  sizeof(ULONG)
+                                          ? 1
+                                          : -1];
 
 /* XHCISNAP keeps the whole extension in one 256 KB image to print the note
  * ring from it (xhcisnap.c, EXT_IMAGE_MAX) and refuses a larger one, on
@@ -1504,8 +1533,7 @@ static ULONG hcdDoorHubConnection(PHCD_CONTROLLER hc, ULONG port,
     }
     c->Status = HCD_CONN_CONNECTED;
     hcdCopy(c->DeviceDesc, dev->DeviceDesc, sizeof(c->DeviceDesc));
-    cls = XHCI_SPEED_UNKNOWN;
-    (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, dev->Port, dev->Speed, &cls);
+    cls = HcdDeviceSpeedClass(hc, dev);
     c->SpeedClass = cls;
     c->ConfigValue = dev->ConfigValue;
     if (dev->Config != NULL) {

@@ -2798,6 +2798,18 @@ static const char *const comp_counter_names[SNAP_COMP_WORDS] = {
     "CompositeParents", "CompositeRepresented"
 };
 
+/* Issue 18's five (USB 2.0 speed IDs behind a hub) follow at 162. The
+ * last is a bitmap of Slot IDs (bit Slot ID - 1), shown by print_hcd_hubspeed
+ * rather than as a count. */
+#define SNAP_HUBSPEED_AT            162UL
+#define SNAP_HUBSPEED_WORDS         5UL
+#define SNAP_HUBSPEED_SLOTS         166UL
+static const char *const hubspeed_counter_names[SNAP_HUBSPEED_WORDS] = {
+    "Usb2HubSpeedSwitchRead", "Usb2HubSpeedFallbackOn",
+    "TopoBehindHubNoSpeed", "Usb2HubSpeedFallbacks",
+    "Usb2HubSpeedFallbackSlots"
+};
+
 /*
  * The HCD image's layout as its header gives it, checked against the bytes
  * that arrived: 1 when every figure fits. print_hcd refuses a shape that
@@ -2874,7 +2886,51 @@ static const char *hcd_counter_name(unsigned long i)
     if (i >= SNAP_COMP_AT && i - SNAP_COMP_AT < SNAP_COMP_WORDS) {
         return comp_counter_names[i - SNAP_COMP_AT];
     }
+    if (i >= SNAP_HUBSPEED_AT &&
+        i - SNAP_HUBSPEED_AT < SNAP_HUBSPEED_WORDS) {
+        return hubspeed_counter_names[i - SNAP_HUBSPEED_AT];
+    }
     return NULL;
+}
+
+/*
+ * Issue 18's policy and provenance, from the counter block when it is long
+ * enough to hold them (a driver before 2.2.0.3's issue 18 work sends fewer
+ * words, and nothing is printed). Out of line, as hcd_counter_name.
+ */
+static void print_hcd_hubspeed(const unsigned char *image,
+                               unsigned long countersAt,
+                               unsigned long counters)
+{
+    unsigned long read;
+    unsigned long bits;
+    unsigned long i;
+
+    if (counters < SNAP_HUBSPEED_AT + SNAP_HUBSPEED_WORDS) {
+        return;
+    }
+    read = get32(image, countersAt + SNAP_HUBSPEED_AT * 4);
+    comp("\nUSB 2.0 speed IDs behind a hub (issue 18):\n");
+    comp("  XhciUsb2HubSpeedFallback  %s; the default IDs %s\n",
+         read == 1 ? "read" : read == 2 ? "not a DWORD, ignored"
+                                        : "absent",
+         get32(image, countersAt + (SNAP_HUBSPEED_AT + 1) * 4) != 0
+             ? "ON (1 Full, 2 Low where the table names neither)"
+             : "OFF (such a device is refused, as before)");
+    comp("  refused for want of an ID %lu; given the default ID %lu\n",
+         get32(image, countersAt + (SNAP_HUBSPEED_AT + 2) * 4),
+         get32(image, countersAt + (SNAP_HUBSPEED_AT + 3) * 4));
+    bits = get32(image, countersAt + SNAP_HUBSPEED_SLOTS * 4);
+    comp("  slots holding a default ID:");
+    if (bits == 0) {
+        comp(" none");
+    }
+    for (i = 0; i < 32; i++) {
+        if ((bits & (1UL << i)) != 0) {
+            comp(" %lu", i + 1);
+        }
+    }
+    comp("\n");
 }
 
 /*
@@ -3001,6 +3057,7 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
          shown, ports);
 
     print_hcd_counters(image, countersAt, counters);
+    print_hcd_hubspeed(image, countersAt, counters);
 }
 
 /* ---- controller tolerance: the extension's Tol, placed by the HCD header */
@@ -4713,13 +4770,13 @@ static int selftest_hcd_bad(void)
 /*
  * `-selftest-counters`: every counter word named through print_hcd, as the
  * dump prints it, over a canned image whose word i holds i + 1 (so every
- * word is nonzero and its value names its place): 0 to 161 and two words
+ * word is nonzero and its value names its place): 0 to 166 and two words
  * past the last block. selftest.cmd compares each printed name and value
  * with the field order of src\xhci_counters.h, so a lookup that the
  * compiler turns into the wrong table or offset fails there (task 36.35's
  * 18-word shift under MSVC 6.0 /O2).
  */
-#define SNAP_COUNTERS_TEST_WORDS    (SNAP_COMP_AT + SNAP_COMP_WORDS + 2UL)
+#define SNAP_COUNTERS_TEST_WORDS    (SNAP_HUBSPEED_AT + SNAP_HUBSPEED_WORDS + 2UL)
 static int selftest_counters(void)
 {
     static unsigned char image[32 + SNAP_COUNTERS_TEST_WORDS * 4];

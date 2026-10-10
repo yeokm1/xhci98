@@ -2126,8 +2126,7 @@ static ULONG hcdSuspCfgServes(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     if (!hc->SuspOn || dev->Gone || dev->Hub != NULL) {
         return 0;
     }
-    cls = XHCI_SPEED_UNKNOWN;
-    (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, dev->Port, dev->Speed, &cls);
+    cls = HcdDeviceSpeedClass(hc, dev);
     return (cls == XHCI_SPEED_SUPER) ? 1UL : 0UL;
 }
 

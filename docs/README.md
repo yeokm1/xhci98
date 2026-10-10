@@ -112,7 +112,10 @@ source comments, scripts, and other docs use these same locations.
   lock, and Windows ME's controller re-enable stopping on PDOs the HCD had
   replaced rather than kept across the stop, and Windows XP's GUI-mode
   Setup leaving the USB keyboard dead after an F6 install because Setup
-  copies Windows' own HID files only with its own host controllers), with a list of the next candidates. Narratives distilled from `lessons.md` and the run sheets;
+  copies Windows' own HID files only with its own host controllers, and
+  two controllers' speed tables read too strictly - Intel Sunrise Point's
+  USB 3 table (issue 11) and the VIA VL805's USB 2.0 table, which names
+  only its integrated hub's link (issue 13)), with a list of the next candidates. Narratives distilled from `lessons.md` and the run sheets;
   those remain the evidence.
 
 ## Future plans

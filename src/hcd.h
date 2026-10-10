@@ -476,6 +476,10 @@ typedef struct _HCD_USB_DEVICE {
     ULONG SlotId;
     ULONG Speed;            /* the Protocol Speed ID: PORTSC's on a root
                              * port, looked up for its class behind a hub */
+    ULONG SpeedFallback;    /* Speed is issue 18's default ID, given behind
+                             * a hub where the root port's USB 2.0 table
+                             * names no such speed (HcdHubPlace); every
+                             * decode of it asks HcdDeviceSpeedClass     */
     /* Its place behind hubs (27-A.2; design record 13 section 10.4), fixed
      * at Enable Slot and written into every Slot Context it is given
      * (HcdDeviceSlotParams): all 0 on a root port. */
@@ -1673,6 +1677,11 @@ typedef struct _HCD_CONTROLLER {
      * the port of the callback just claimed, noted outside the lock. */
     volatile LONG SuspNotes;
     ULONG SuspNoteCallPort;
+    /* Issue 18: XhciUsb2HubSpeedFallback as the start latched it (1 on),
+     * and the behind-hub speed notes taken this start (HcdHubPlace, the
+     * thread's), bounded by HCD_HUB_SPEED_NOTE_BUDGET. */
+    ULONG HubSpeedFallback;
+    ULONG HubSpeedNotes;
     /* The thread's claimed IRPs, each completed by a system work item of
      * its own (hcd_susp.c, hcdSuspDefer): the items queued and not yet
      * returned, which the stop waits out. */
@@ -1947,6 +1956,9 @@ VOID HcdEnumRepresent(PHCD_CONTROLLER hc, ULONG port, ULONG serial);
 VOID HcdDeviceSlotParams(PHCD_USB_DEVICE dev, ULONG withHub,
                          PXHCI_SLOT_PARAMS sp);
 ULONG HcdDevicePipeSpeed(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+ULONG HcdDeviceSpeedClass(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+ULONG HcdDeviceSpeedClassOf(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                            ULONG psiv);
 ULONG HcdHubPlace(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG speedClass,
                   PHCD_USB_DEVICE dev);
 ULONG HcdHubStart(PHCD_CONTROLLER hc, PHCD_PORT p, PHCD_USB_DEVICE dev);

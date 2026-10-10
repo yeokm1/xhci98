@@ -38,8 +38,8 @@ static void test_header(void)
              "a sixteen-word record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 1224,
              "records right after the header");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 162,
-             "the whole counter block (36.38: 142 to 159 stage B's)");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 167,
+             "the whole counter block (issue 18: 162 to 166)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS_AT),
              1224 + 18 * 64, "counters after the last record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_NOTE_BUDGET),
@@ -60,8 +60,8 @@ static void test_header(void)
              "selective suspend's block at word 114");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspNotesSuppressed) / 4, 141,
              "selective suspend's last word at 141");
-    CHECK_EQ(XhciSnapHcdWords(18), 306 + 18 * 16 + 162, "the E460's image");
-    CHECK_EQ(XhciSnapHcdWords(0), 306 + 162,
+    CHECK_EQ(XhciSnapHcdWords(18), 306 + 18 * 16 + 167, "the E460's image");
+    CHECK_EQ(XhciSnapHcdWords(0), 306 + 167,
              "no ports: a header and the counters");
     CHECK_EQ(XhciSnapHcdWords(1000), XhciSnapHcdWords(XHCI_MAX_ROOT_PORTS),
              "ports held to the root port maximum");
@@ -683,7 +683,21 @@ static void test_counter_tail(void)
              "CompositeParents at 160");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, CompositeRepresented),
              161 * 4, "CompositeRepresented at 161");
-    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 162 * 4, "162 words in all");
+    /* Issue 18's five (xhcisnap.c, hubspeed_counter_names and
+     * print_hcd_hubspeed; the door computes the last). */
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, Usb2HubSpeedSwitchRead),
+             162 * 4, "Usb2HubSpeedSwitchRead at 162");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, Usb2HubSpeedFallbackOn),
+             163 * 4, "Usb2HubSpeedFallbackOn at 163");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, TopoBehindHubNoSpeed),
+             164 * 4, "TopoBehindHubNoSpeed at 164");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, Usb2HubSpeedFallbacks),
+             165 * 4, "Usb2HubSpeedFallbacks at 165");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, Usb2HubSpeedFallbackSlots),
+             XHCI_SNAPSHOT_HCD_HUB_SPEED_SLOTS * 4,
+             "Usb2HubSpeedFallbackSlots at the door's computed word");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_HUB_SPEED_SLOTS, 166, "word 166");
+    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 167 * 4, "167 words in all");
 }
 
 /* 36.38: selective suspend's stage B header words and the counters
