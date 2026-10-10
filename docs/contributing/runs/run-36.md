@@ -103,8 +103,9 @@ record 15 section 11 ("with a message granted, modes 0, 1 and 3 read as
 the message") are 36.16's.
 
 **The controller's D3 and back without system standby**: no guest offers
-one, so (record 15 section 11) the forced recovery below reads park and
-kick, and the disable and enable rows above read the close.
+one, so (record 15 section 11) the forced recovery below is read in its
+place - park and kick where the poll DPC reads it (finding 3) - and
+the disable and enable rows above read the close.
 
 ### Measurements: line against poll on the same guest
 
@@ -197,6 +198,23 @@ the driver - it stayed with the controller disabled).
    read them; 98 SE (one processor) and 7 x64 did not, and their pollers
    kept running. Not a defect; the record's "the recovery alone reads
    park and kick" holds where an expiry falls in the window.
+   **Settled 2026-10-10 (wave 3 matrix, M-2): the expectation was wrong,
+   not the code.** The matrix's 2000 `qemu` P8 read the same (parks 0,
+   kicks 1 unchanged, `PollServiceGen` 2 to 6, runs 3482 to 41577, the
+   mouse back). The condition is not an expiry inside the raised
+   stretch but the timer's DPC reading the service failed or revoked
+   under the controller lock, anywhere from the health poll's
+   `ControllerFailed` to the grant (one controller thread pass; a DPC
+   pending on that processor can run at `KeLowerIrql`, before the
+   grant). A DPC that takes the lock before or after that parks nothing.
+   No timing of the window was measured, so why these recoveries parked
+   nothing is a likely reason (a window short beside the period), not a
+   reading. Record 15 sections 5.3 and 11 now say so: park and kick are
+   read where they happen, and the leg's
+   pass is the service restored (generation, `PollService` 1, runs
+   advancing, devices working). The Bulk-Only stick at Code 31 after the
+   same recovery is run-35's known Windows 2000 limitation (the release
+   notes' "Known limitations"), not polling's.
 
 ### The reread on the fixed build (`824a6c7`)
 
@@ -641,12 +659,17 @@ ME)").
   as in 36.13's Q5 on 98 SE and 7 x64; and the Bulk-Only stick came back
   with Code 31 until `pnpctl restart` (as 36.13's Q5 on 2000). `p8pre.txt`,
   `p8.txt`, `debugcon-2.log` lines 1015-1120. Route: 36.13 (poll) and the
-  recovery's re-enumeration.
+  recovery's re-enumeration. **Settled 2026-10-10 (M-2): the expectation
+  was wrong, not the code** - see 36.13 finding 3 and record 15 sections
+  5.3 and 11; the row below is re-scored PASS. The Code 31 is the known
+  Windows 2000 limitation of the release notes (run-35).
 - XP x64, 36.47 header (tool or expectation): no SystemBios lines - this
   XP x64 keeps the BIOS strings in `HARDWARE\DESCRIPTION\System\BIOS`, not
   in `SystemBiosVersion`/`SystemBiosDate`, and `XHCISNAP` reads only the
   latter there ("BIOS not in the registry"). Everything else as expected.
-  `i3k6.txt`. Route: 36.47.
+  `i3k6.txt`. Route: 36.47. **Fixed 2026-10-10 (M-3, `126a7e9`):**
+  `XHCISNAP` falls back to that key when both values are missing; the
+  XP x64 dump is owed again on the integrated build.
 - XP x64, B11 (not a driver result): the per-device
   `MaximumTransferLength` was written under `Services\usbstor` - the
   checklist's wrong path; `xhciuas` reads `Control\usbstor` (2000 read it
@@ -734,7 +757,7 @@ ME)").
 | 2000 SP4 | I4 | rel | PASS | hashes: xhci98.sys c6d6786aa4b8820928b2e69e82736f5b8c25bba2aa1e872b5ff8671035ce4d36 (built 15:11:30) and XHCISNAP.EXE 6e126db317c87cee459525dff4c89bdfbf753554d2c22aa5836d04dc61e8ab0c (built 15:01:24), both out\p36-int... |
 | 2000 SP4 | K1 | rel | PASS (read only) | cscript //nologo E:\portsw.vbs: dialog "XhciIntelPortSwitch on each xhci98 controller: ...\0000  0 - off", Cancel -> "Nothing was changed.", exit=0 (shots k1a, k1b); 1/0 + restart toggle not repeated here (already PAS... |
 | 2000 SP4 | K5 | rel | PASS | mouse port 2 (HS) moved throughout; tablet 4.1 enumerated, HID started, strings read (K4); usb-kbd port 4: "HID Keyboard Device" started problem=0 (k5-ls.txt), typed line echoed (shot k5b); BOT sticks ports 1 and 4.2 ... |
-| 2000 SP4 | P8 | w2k | FAIL (81 = 0 and 82 not increased - finding vs record 15 section 11 "park expected", as Q5 on 98 SE / 7 x64; plus stick Code 31 after recovery) | mode 2 (p8pre.txt: 2/8, PollRole 2, PollKicks 1, PollParks 0); debugcon-2.log: "qemu inject: fired=01050000", "controller halted itself, USBSTS=00000009", controller reset, init complete, "slots invalidated, dropping ... |
+| 2000 SP4 | P8 | w2k | PASS (re-scored 2026-10-10, M-2: read FAIL against record 15 section 11's old "park expected", which was wrong - 81 = 0 and 82 unmoved are correct when no poll DPC lands in the failed/revoked window; service came back, PollServiceGen 2 to 6; stick Code 31 after recovery is the known 2000 limitation) | mode 2 (p8pre.txt: 2/8, PollRole 2, PollKicks 1, PollParks 0); debugcon-2.log: "qemu inject: fired=01050000", "controller halted itself, USBSTS=00000009", controller reset, init complete, "slots invalidated, dropping ... |
 | 2000 SP4 | P5 | w2k | PASS (channel: DebugView, the "M86 S" start line; XHCISNAP cannot reach a failed controller) | setv XhciInterruptMode 1 + XhciQemuNoInterrupt 1, DebugView (DBGVIEW /f /l C:\dv5.log, XhciLogDebugView 1) then dc/ec: controller "not started HAS_PROBLEM problem=10", pnpctl enable "OK REBOOT-NEEDED" (shot p5-state).... |
 | 2000 SMP + Verifier | check-smp-parallelism.ps1 | rel | PASS | 2 vCPUs, thread ids 35888/34164, affinity 0xFFFFFFFF (32 of 32), exit 0 (parallelism-check.txt) |
 | 2000 SMP + Verifier | verifier /query at start | rel | PASS | 17:38: Level 0000001B, xhci98.sys loads 1 unloads 0 (the base's old driver), AllocationsFailed 0 (verifier-start.txt) |

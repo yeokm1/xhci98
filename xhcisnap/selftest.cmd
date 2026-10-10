@@ -377,6 +377,16 @@ for %%S in ("build 950 product 0 arch 65535: Windows 95" "build 1998 product 0 a
         set FAILED=1
     )
 )
+rem Where an NT machine's lines come from (wave 3 matrix, M-3): NT 6 takes
+rem the BIOS key first; NT 5 takes SystemBios values and, with none (XP x64),
+rem the BIOS key.
+for %%S in ("biossrc nt 6 key 1 systembios 0: the BIOS key" "biossrc nt 6 key 1 systembios 1: the BIOS key" "biossrc nt 6 key 0 systembios 1: SystemBiosVersion" "biossrc nt 6 key 0 systembios 0: none" "biossrc nt 5 key 1 systembios 1: SystemBiosVersion" "biossrc nt 5 key 0 systembios 1: SystemBiosVersion" "biossrc nt 5 key 1 systembios 0: the BIOS key" "biossrc nt 5 key 0 systembios 0: none") do (
+    findstr /C:%%S "%BASE%.sysinfo.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the BIOS source choice does not say %%S
+        set FAILED=1
+    )
+)
 rem The withholding over canned names (SNAPTEST-PC7, jdoe, CORPDOM, a
 rem non-ASCII name, and PC, which is under three characters and not
 rem compared): six strings are withheld (the non-ASCII one in both cases), one of them with the name past the

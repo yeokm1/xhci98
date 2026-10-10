@@ -145,10 +145,14 @@ names the system the dump was taken on, under "captured on":
   SP1 and later `HKLM\HARDWARE\DESCRIPTION\System\BIOS`'s
   `SystemManufacturer`, `SystemProductName`, `SystemFamily`, `SystemVersion`,
   `BaseBoardManufacturer`, `BaseBoardProduct`, `BIOSVendor`, `BIOSVersion`
-  and `BIOSReleaseDate`; on 2000, XP and XP x64 (and a Vista without that
-  key) `HKLM\HARDWARE\DESCRIPTION\System`'s `SystemBiosVersion` and
-  `SystemBiosDate`, with "make/model: not available on this OS"; on 98 SE
-  and ME `HKLM\Enum\Root\*PNP0C01\0000`'s `BIOSName`, `BIOSVersion` and
+  and `BIOSReleaseDate`; on 2000 and XP (and a Vista without that key)
+  `HKLM\HARDWARE\DESCRIPTION\System`'s `SystemBiosVersion` and
+  `SystemBiosDate`, with "make/model: not available on this OS"; on XP x64,
+  which has neither of those two values and keeps the SMBIOS strings in the
+  `BIOS` key as Vista SP1 does (2026-10-10 matrix guest export), that key's
+  values through the same allow list - 2000, XP and XP x64 read the `BIOS`
+  key only when `SystemBiosVersion` and `SystemBiosDate` are both absent; on
+  98 SE and ME `HKLM\Enum\Root\*PNP0C01\0000`'s `BIOSName`, `BIOSVersion` and
   `BIOSDate`, which is what the system board's devnode carries there. Each
   value is printed only where it exists: on QEMU's SeaBIOS, ME's devnode
   holds `BIOSVersion` and `BIOSDate` and no `BIOSName`, and 2000's key holds
@@ -190,8 +194,9 @@ It is read from the running machine when the dump is taken, never from the
 dump: the driver does not record it and the `.BIN` does not carry it. This
 tool does not decode a saved `.BIN` (that is the maintainer's offset-table
 route), so the block always describes the machine the driver answered on.
-`-selftest-sysinfo` prints the names over canned `GetVersionEx` answers and
-then the block for the machine it runs on.
+`-selftest-sysinfo` prints the names over canned `GetVersionEx` answers, the
+NT source choice above over canned source-presence combinations, and then
+the block for the machine it runs on.
 
 The `.TXT` also carries, from a 2.0.0.0 driver and at every level, one line per
 device the driver holds a slot for: its Slot ID, root port, Route String and
