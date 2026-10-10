@@ -242,6 +242,44 @@ for %%S in ("XhciMaxTransferKB           used as set (1024)" "command size in ef
     )
 )
 
+rem Task 36.9's event delivery from canned HCD images: 98 SE forced to
+rem poll, a pin-0 controller polled automatically with its periods replaced,
+rem a line proven dead and moved, a reserved mode on a header that places no
+rem extension words, a driver from before polling, and a block past the image.
+"%~dp0XHCISNAP.EXE" -selftest-intr > "%BASE%.intr.log"
+if errorlevel 1 (
+    echo FAIL: -selftest-intr exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("value 2; in effect 2 (polling)" "reason               forced polling (XhciInterruptMode 2)" "XhciImodInterval250ns has no effect" "1234, 56 of them found an event; peeks 78, 9 hits" "49 to 63 ms (2 discarded)" "PollService 1, PollServiceGen 7, LineMoved 0," "Interrupt Pin 0, the controller has no line interrupt" "9000 is above 5000, so the driver held it to 5000." "0 is not allowed, so the driver used its default, 1." "went dead; moved to polling at run time" "mask read back down at the move" "proven by PCI Interrupt Disable; attempts 1" "name different deliveries" "7 is reserved, so it runs as 0." "held to the idle period, 20 ms." "watching the line; last armed 100 ms (a watcher's look)" "not placed by this driver's HCD header (808 bytes)" "predates polled delivery" "does not fit its image" "80 counter words at +816 in 1200 bytes") do (
+    findstr /C:%%S "%BASE%.intr.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the event delivery decode does not say %%S
+        set FAILED=1
+    )
+)
+
+rem Task 36.9's review: a header longer than its image is refused by
+rem print_hcd, and no other section decodes anything from it.
+"%~dp0XHCISNAP.EXE" -selftest-hcd-bad > "%BASE%.hcdbad.log"
+if errorlevel 1 (
+    echo FAIL: -selftest-hcd-bad exited %errorlevel%, expected 0
+    set FAILED=1
+)
+findstr /C:"not a shape this build" "%BASE%.hcdbad.log" > nul
+if errorlevel 1 (
+    echo FAIL: the malformed header is not refused
+    set FAILED=1
+)
+for %%S in ("controller tolerance" "interrupt routing" "transfer size" "event delivery") do (
+    findstr /C:%%S "%BASE%.hcdbad.log" > nul
+    if not errorlevel 1 (
+        echo FAIL: a refused header was still decoded: %%S
+        set FAILED=1
+    )
+)
+
+
 rd /s /q "%RUNDIR%" 2> nul
 rd out 2> nul
 
@@ -249,5 +287,5 @@ if "%FAILED%"=="1" (
     echo xhcisnap selftest FAILED
     exit /b 1
 )
-echo xhcisnap selftest: 11 cases, all passed
+echo xhcisnap selftest: 13 cases, all passed
 exit /b 0

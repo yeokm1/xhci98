@@ -912,6 +912,11 @@ static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
         case XHCI_SNAPSHOT_HCD_IN_HEAD:
             /* 36.21's readings and the class drivers' records are written
              * under this lock (hcd_io.c, hcd_urb.c). */
+            /* 36.9's pair is layout, past the records. */
+            if (word >= XHCI_SNAPSHOT_HCD_DELIVERY_AT) {
+                value = XhciSnapHcdHead(ports, word);
+                break;
+            }
             if (word >= XHCI_SNAPSHOT_HCD_TELE_AT) {
                 value = hcdDoorTeleWord(hc, word - XHCI_SNAPSHOT_HCD_TELE_AT);
                 break;

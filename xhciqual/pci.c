@@ -193,7 +193,14 @@ void pci_read_static(PCIINFO *p)
                     (pci_read16(p->bus, p->dev, p->fn, (u8)(capptr + 2)) & 1);
                 break;
             case 0x10: p->has_pcie = 1; break;
-            case 0x11: p->has_msix = 1; break;
+            case 0x11:
+                /* Message Control bit 15, MSI-X Enable (task 36.10): an
+                 * enabled message clears IMAN.IP itself, so C4 says so. */
+                p->has_msix = 1;
+                p->msix_enabled =
+                    ((pci_read16(p->bus, p->dev, p->fn, (u8)(capptr + 2)) &
+                      0x8000) != 0);
+                break;
             default: break;
             }
             /* The same lower bound on every hop, not only the first: a

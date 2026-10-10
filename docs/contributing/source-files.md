@@ -187,7 +187,12 @@
 > `HCD_PIPE.ClearOwed`, ended by `hcdCfgOwedEnd`), its steps and verdict the
 > pure `XhciPipeResetSteps` and `XhciPipeClearVerdict` in `xhci_pipe.c`
 > (`test_pipe`), and the qemu flavour's fault 13 in `hcd_inj.c`
-> (`HcdInjClearHalt`; `xhci_inj.h`, `test_inj`).
+> (`HcdInjClearHalt`; `xhci_inj.h`, `test_inj`). Task 36.9 adds no file: the
+> HCD header's two delivery words are `xhci_snap.c`'s (`test_snap`) and
+> `XHCISNAP`'s decode is `xhcisnap.c`'s `print_intr`. Task 36.10 adds
+> `xhciqual\verdict.c` (C4's outcome, the C6/C8 gate, the verdict with
+> QUALIFIED WITH CAVEATS and the exit code, moved out of `report.c`; host
+> suite `xhciqual\test\test_verdict.c`).
 > Task 36.21 adds three files: the pure `xhci_xstat.c` / `xhci_xstat.h`
 > (the transfer-size readings `XHCI_XSTAT`: length, chunk and depth
 > buckets, the hand-carried 64-bit sums, the interval rule over the

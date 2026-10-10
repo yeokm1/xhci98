@@ -140,8 +140,8 @@ Neither is in the extension, so neither is in the `.BIN`: each root port's
 enumeration machine - its state, why it failed, the attempts it used, its slot,
 the raw speed ID its last reset read with the class and meaning the driver
 gave it, its USB 3 link's warm resets and give-up, and its enumeration notes'
-budget and refusals - and `XHCIHC_COUNTERS`, the 63 counters the device matrix
-reads. A port is printed only when it has something to say, the counters only
+budget and refusals - and `XHCIHC_COUNTERS`, the counters the device matrix
+reads (63 words up to 2.2.0.2, 96 from 2.2.0.3). A port is printed only when it has something to say, the counters only
 when nonzero, by name. A driver before 2.2.0.0 does not serve the region and
 the report says so. `-selftest-hcd` prints the decode over a canned image.
 
@@ -288,6 +288,43 @@ From the same release the header also carries the transfer-size readings
 A header from before 36.21 is reported as not measuring it. `-selftest-xstat`
 prints the decode over canned headers.
 
+From 2.2.0.3 (roadmap tasks 36.6 to 36.9, design record 15) the controller
+may take its events by polling instead of the line interrupt, and the report
+says which, in a section of its own, "event delivery", read from the counter
+block's words 63 to 95 (named in the counter list too):
+
+- **The three values** `XhciInterruptMode`, `XhciPollIdleMs` and
+  `XhciPollActiveMs`, as `XhciImodInterval250ns` is reported: found or not,
+  the value as read, the value in effect, and in words the rule that made
+  them differ (a reserved mode run as 0, a period of 0 replaced by its
+  default, an idle period above 5000 ms held to it, an active period held to
+  the idle one).
+- **The delivery in effect and its reason**: the line interrupt, polling,
+  MSI or MSI-X; and why - automatic with the line there, automatic with
+  Interrupt Pin 0 or no interrupt resource, forced line, forced polling, or
+  the line gone dead at run time and moved to polling. So a machine that
+  polls automatically and one forced to poll read apart. Under polling the
+  report says that `XhciImodInterval250ns` has no effect.
+- **The Interrupt Pin** and whether it could be read.
+- **The poller**: its role (watching the line, or serving the event ring),
+  the period it last armed and the bus state that chose it, its runs and the
+  runs that found an event, the opportunistic peeks and their hits,
+  promotions, parks, kicks, arms displaced, and the shortest and longest
+  interval observed between two runs.
+- **The watcher and the dead-line move**: looks, asserted looks, stale pairs;
+  whether the line was moved and whether the interrupter's mask was proven
+  down; the line's retirement and its attempts; and a start that found PCI
+  Interrupt Disable set and cleared it.
+- **The extension's six delivery words** (`EventDelivery` to
+  `LineRetireState`), which the HCD header's words 202 and 203 place in the
+  extension image as the tolerance words place `Tol`; a mismatch between
+  the extension's delivery and the counter block's is said, since the two
+  regions are read at different times.
+
+A counter block of 63 words is a driver from before polling, reported as
+taking the line interrupt; a header shorter than 204 words places no
+extension words. `-selftest-intr` prints the decode over canned images.
+
 The PORTSC decode is printed on screen whatever the level, because that is what
 the bench reads on the spot. The headline test is per port: a port reporting a
 device connected with `PP` clear is Finding Q read off the register, whatever
@@ -418,7 +455,7 @@ It is windowed, so it can tear. usbport refuses `ParameterLength > 0x10000`
 before the miniport is ever reached, and the extension is larger than that
 (over 90,000 bytes; the `SIZEOF` line of a regenerated `offsets.txt` is the
 exact figure), so a dump is several IOCTLs and the driver runs between them. Every window carries a tear detector, the sum of
-`CheckCallbacks`, `DpcCount` and both halves of the log's producer accounting,
+`CheckCallbacks`, `DpcCount` (every event drain, interrupt or polled) and both halves of the log's producer accounting,
 read inside the driver's lock, and the tool reports whether they all agreed. A
 torn dump is not wrong, but any counter in it may be a mixture, and the last
 line of output says which you have. A torn one prints the pair, `first ->

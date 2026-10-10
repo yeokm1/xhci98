@@ -117,11 +117,14 @@ a read-only quick scan: no PCI configuration writes, no ownership taken, one
 screen, no log file. It answers "is this machine worth the rest of this
 procedure" and it cannot disturb the machine while answering.
 
-It has three outcomes, because a read-only pass cannot observe C2, C3 or C4:
-`LOOKS QUALIFIED` (subject to the active tests), `DISQUALIFIED` (something a
-read-only pass genuinely sees, above all `Interrupt Pin = 0`, which no BIOS
-setting can work around on either target), and `CANNOT SAY` (the controller
-is not in D0, or Memory Space Enable is clear). Each ends with the next
+It has four outcomes, because a read-only pass cannot observe C2, C3 or C4:
+`LOOKS QUALIFIED` (subject to the active tests), `LOOKS QUALIFIED WITH
+CAVEATS` (the same, but `Interrupt Pin = 0`: no line interrupt, so the driver
+polls the controller, or an MSI-capable OS takes a message interrupt - since
+2.2.0.3, roadmap-hcd task 36.10; until then it disqualified), `DISQUALIFIED`
+(something a read-only pass genuinely sees: no xHCI function, BAR0 unusable or
+above 4 GB, no USB2 protocol ports), and `CANNOT SAY` (the controller is not
+in D0, or Memory Space Enable is clear). Each ends with the next
 command to run.
 
 **A `DISQUALIFIED` here ends the session for that controller.** Nothing in
@@ -170,7 +173,10 @@ name shown here or the name with `.BAT` appended. The batch files invoke
    ```
 
    This runs only the locked one-shot IRQ test after C1/C2/C3; C6/C8 are
-   skipped. Require `IRQ SELF-TEST PASS`, `Done.`, and `XIRQ.LOG`. Repeat it
+   skipped. Require `IRQ SELF-TEST PASS`, `Done.`, and `XIRQ.LOG` - or, since
+   2.2.0.3, `IRQ SELF-TEST: NO WORKING INTERRUPT` (exit 3): the controller
+   completed the command polled and needs polling; read its CAVEAT lines
+   (which polling mode, whether an MSI route exists) and continue. Repeat it
    across several cold boots on a machine that previously faulted. Archive
    the log and cold boot before continuing.
 
@@ -181,7 +187,9 @@ name shown here or the name with `.BAT` appended. The batch files invoke
    ```
 
    This is the first full ISR run; `--no-wait` keeps the no-external-device
-   pass bounded. Expect xHCI C4 `PASS`, normal completion, and `XEMPTY.LOG`.
+   pass bounded. Expect xHCI C4 `PASS`, normal completion, and `XEMPTY.LOG`;
+   on a controller with no working interrupt, C4 `POLL` and the verdict
+   QUALIFIED WITH CAVEATS (exit 3) instead, which also continues.
    Archive the log, then cold boot again.
 
 5. Attach an expendable USB 2.0 test device directly to the target connector,
@@ -203,7 +211,8 @@ completion flag with `IF EXIST` (the flag is written on a normal exit,
 including a usage error) and bucket the exit code with `IF ERRORLEVEL`, so
 they preserve a partial log after an abnormal termination and separate a
 normal run whose test passed from a normal run whose test failed from an
-abnormal termination - three buckets, not the
+abnormal termination, and since 2.2.0.3 a fourth, exit 3, a run that passed
+with the caveat that the controller needs polling - buckets, not the
 qualified/provisional/failed verdict words, which are the log's and not the
 exit code's. `1PROBE` and `2XPOLL` do not pass the flag and only check that
 their log exists; read the log's `Done.` line yourself. `1PROBE` is genuinely
@@ -637,6 +646,7 @@ remains clear, C4 FAIL reports `SOF set but PCI INTx did not assert (PCI
 | C2 FAIL | Cold boot and retry. A repeatable reset failure disqualifies that controller. |
 | C3 FAIL | DMA/schedule setup did not complete. Cold boot, verify no memory manager is loaded, and retain the full log. |
 | C3 SKIP | The tool could not run the test: out of conventional memory (a large scratchpad, or several controllers in one run) or PAGESIZE without 4 KB support. Not a controller fault and never a disqualification. Boot with more conventional memory free, or qualify one family at a time (`XHCIQUAL xhci`). |
+| xHCI C4 POLL | "Needs polling" (since 2.2.0.3, roadmap-hcd task 36.10): no working interrupt - Interrupt Pin 0, an Interrupt Line DOS cannot use, PCI Interrupt Disable stuck, or the No-Op's completion in the event ring with no interrupt - and the command completed polled. C6 and C8 still run, with the hook already removed, and a run that passes the rest is QUALIFIED WITH CAVEATS (exit 3): `xhci98.sys` polls such a controller (`XhciInterruptMode` 0 or 2), or an MSI-capable OS takes a message interrupt where the controller offers one; the verdict says which. A controller whose IP was never seen gets `XhciInterruptMode` 2 named (automatic mode moves to polling only on a pending bit it can see), its MSI route said as untested, and an MSI or MSI-X found enabled named as a reason IP may not have been seen. Record the C4 note and the `PCI caps:` line. |
 | xHCI/EHCI C4 FAIL | Polling may distinguish a live controller from broken PIC routing. A repeatable legacy-IRQ failure disqualifies the controller for Win98; for Win2000 under an APIC HAL it is suspicious rather than proven - see design doc 01, "What a C4 PASS proves for each target". |
 | OHCI C4 WARN | Expected partial proof. The note says whether PCI INTx status was observed or the PCI 2.3 status mechanism is unavailable; CPU delivery remains unproven. |
 | OHCI C4 FAIL | The controller never asserted SOF, or a PCI 2.3-capable function failed to assert INTx. |
@@ -659,6 +669,10 @@ Exit codes are:
 - `1`: at least one controller was not qualified, or this was a
   probe-only run.
 - `2`: usage error or no selected controller was found.
+- `3` (since 2.2.0.3): no controller failed and at least one is QUALIFIED
+  WITH CAVEATS - no working interrupt, so the driver polls it (or an
+  MSI-capable OS). `3XIRQ`, `4XEMPTY` and `5XDEV` bucket it on its own and
+  say so; `--irq-selftest` gives it for "NO WORKING INTERRUPT".
 
 ## What to record for each machine
 
@@ -808,8 +822,8 @@ leave those two alone.
 
 Which stage answers the routing question. C7 is four PCI config reads
 (`XUSB2PR` 0xD0, `XUSB2PRM` 0xD4, `USB3_PSSEN` 0xD8, `USB3PRM` 0xDC) and needs
-no USB device attached. But it is a Tier C test gated on C4 passing or
-`--poll-only`, so `1PROBE` does not print it and neither does the `3XIRQ`
+no USB device attached. But it is a Tier C test gated on C4 passing (or,
+since 2.2.0.3, reading POLL) or `--poll-only`, so `1PROBE` does not print it and neither does the `3XIRQ`
 self-test. The earliest stage that shows the routing is `2XPOLL`. Look for
 either "all switchable USB2 ports already routed to xHCI" or "USB2 ports NOT
 routed to xHCI - a perfect init will see no connects".

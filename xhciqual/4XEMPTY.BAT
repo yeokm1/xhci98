@@ -15,13 +15,20 @@ rem FIND.EXE is needed on the boot medium.
 set XQRC=0
 if errorlevel 1 set XQRC=1
 if errorlevel 2 set XQRC=2
+if errorlevel 3 set XQRC=3
 if not exist XEMPTY.LOG goto logerr
 if not exist XEMPTY.FLG goto abnormal
+if "%XQRC%"=="3" goto caveats
 if not "%XQRC%"=="0" goto failed
 echo.
 echo XEMPTY.LOG completed normally with a QUALIFIED verdict.
 echo Review the log for any WARN/SKIP lines, cold boot, attach the device,
 echo then run 5XDEV.BAT.
+goto end
+:caveats
+echo XEMPTY.LOG completed normally: QUALIFIED WITH CAVEATS (exit 3) -
+echo no working interrupt, so xhci98.sys polls it. Read the CAVEAT lines,
+echo cold boot, attach the device, then run 5XDEV.BAT.
 goto end
 :failed
 echo XEMPTY.LOG completed normally but NOT QUALIFIED (exit %XQRC%).
