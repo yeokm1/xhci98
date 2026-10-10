@@ -6670,7 +6670,10 @@ PDO group, 19-16 the link state before, 15-12 after (`XHCI_SUSP_ACTIVE` 0,
 11-8 the kind (1 suspend, 2 host resume, 3 device wake), 7-4 the outcome
 (`XHCI_SUSP_OUT_*`), 3-0 the refusal's reason (`XHCI_SUSP_WHY_*`) - then
 `susp.seq.epoch`; `idle.call` (the port) as a callback is called,
-`idle.abandon` and `idle.quarantine`.
+`idle.abandon` and `idle.quarantine`; `susp.done.pool` at the start (the
+completion workers made, 2 expected) and `susp.done.grow` (the pool's size
+after a growth: an IRP waited 500 ms with every worker held by a client's
+callback; record 14 section 3.12).
 
 **Stage B (36.38; record 14 section 8).** With the switch at 1 a SuperSpeed
 device is served too, and DNCTRL enables FUNCTION_WAKE (`0002h`); at 0
