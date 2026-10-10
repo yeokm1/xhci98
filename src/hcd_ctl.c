@@ -2200,6 +2200,13 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     XhciLogNote(ext, "imod.readback", ext->ImodReadback);
     XhciLogNoteAddress(ext, "start.ok", (ULONG)ext->ResourceBase);
 
+    /* Selective suspend's callback thread (design record 14 section 6.1,
+     * task 36.32), while the switch is on, before the enum thread that
+     * queues to it; without it no idle callback is called and stage A
+     * otherwise runs. */
+    if (!NT_SUCCESS(HcdSuspCbStart(hc))) {
+        XhciLogNote(ext, "susp.cbthread.failed", 1);
+    }
     status = hcdThreadStart(hc);
     if (!NT_SUCCESS(status)) {
         hcdStopBody(hc);
@@ -2272,6 +2279,10 @@ static VOID hcdStopBody(PHCD_CONTROLLER hc)
      * registers back.
      */
     HcdEnumDrop(hc);
+    /* The idle callback thread's handoff, once the enum thread has exited
+     * and the devices' slots are settled at their unlink (design record 14
+     * section 4.4). */
+    HcdSuspCbStop(hc);
     (VOID)XhciControllerUpdateFlags(ext,
                                     XHCI_EXT_FLAG_STARTED |
                                         XHCI_EXT_FLAG_INTERRUPTS |

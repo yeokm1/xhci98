@@ -16,7 +16,8 @@ section 9 maps each to where it is answered); the review of revision 10
 was clean (`b2d03d5`). Revision 11, 2026-10-09: section 3.9, the pure
 core's split and the rules implementing it settled (36.29), reviewed with
 its code. Stage A is being built: 36.29 and 36.30 done; section 3.11,
-dispatch's executor, with 36.31.
+dispatch's executor, with 36.31; section 3.12, the idle notification's
+executor, with 36.32.
 
 ## 1. What is asked, and what is not
 
@@ -537,6 +538,76 @@ a hub or SuperSpeed PDO, every answer is today's.
   (`HcdSuspSettleStale`), at PASSIVE_LEVEL with the controller quiesced;
   after a recovery the thread's decision pass does (`XhciSuspDxStale`);
   the stop's teardown settles every slot at its unlink.
+
+### 3.12 The idle notification's executor (36.32)
+
+Sections 6 and 4.4's idle parts, in `src/hcd_susp.c`, called from
+`hcd_urb.c` (the submission), `hcd_pdo.c` (teardown, deletion, revival,
+the system power IRP), `hcd_ctl.c` (the callback thread's start and stop)
+and `hcd_entry.c` (the unload). With the switch at 0, or at a hub or
+SuperSpeed PDO, the idle IRP is held as before (`hcd_urb.c`, its own slot
+`IdleIrp` under the cancel spin lock) and no callback thread exists.
+
+- **The slot** is the PDO's `IdleSlot` with `IdleState`, the callback and
+  its context copied at submission, `IdleBatchCur`, the queue entry
+  (`IdleEntry`, with its batch and epoch, `IdleQueued` while on the queue,
+  `IdleEntryOwned` while queued or claimed) and `IdleOwed`, all under the
+  controller lock. A submission while the slot, the entry or today's
+  `IdleIrp` is owned is BUSY. `PwrStarted` (set at START's reopening,
+  cleared at teardown) is 6.2's "started".
+- **Triggers** (6.5) are applied where the state they name is written:
+  the cancel routine (PdoListLock, then the controller lock; a cancel of a
+  QUEUED or RETURNED IRP ends the episode); teardown and the unlink
+  (`hcdSuspSlotCloseLocked`: CANCELLED, the PDO's own queued entry
+  detached); the system SET_POWER at the PDO for a state other than S0
+  (CANCELLED, the episode ends); D3 accepted at dispatch (POWER_STATE_
+  INVALID, completed after the PDO's report flag is let go, since a
+  completion routine may send a D-IRP at once); `PwrState` written D0
+  from a Dx by dispatch or by the thread (SUCCESS, the episode ends). A
+  trigger that finds the IRP RUNNING is kept in `IdleOwed` (the strongest,
+  by the table's order) for the callback's return; a cancel then comes
+  first.
+- **The episode's end** (`hcdSuspIdleEndLocked`) moves every PDO's
+  `IdleBatchCur` to 0 and, the link ACTIVE and no callback of the device
+  running, settles every RETURNED sibling in D1 or D2 SUCCESS; with one
+  running, its return does it. The refusal and the uncertain outcome that
+  end ACTIVE end it in the sequence's last hold.
+- **The batch** (`hcdSuspIdleBatchLocked`) is formed by the thread's pass
+  for a device it decided nothing to run for, when 6.2's readiness holds
+  (`XhciSuspIdleBatchReady`), every PDO in S0, the controller up and the
+  callback thread running; each entry takes an `IdlePending` reference.
+  The composite logic - readiness, the episode's end and its sibling
+  settlement - lives in those two functions, so the composite-parent
+  devnode of task 36.43 (owner, 2026-10-10) can take it over.
+- **The callback thread** (one per controller, started before the enum
+  thread while the switch is on) wins CLAIMING from IDLE, takes the
+  queue's head under PdoListLock and the controller lock and claims it
+  (`XhciSuspIdleClaim`); RUN calls the callback in IN_CALLBACK; at its
+  return RETURNING settles the IRP (its cancel, else `IdleOwed`) or
+  re-publishes it RETURNED, then settles the siblings of an episode that
+  ended meanwhile; IRPs are completed and references dropped after the
+  phase is IDLE again. The phase is moved under the context's own spin
+  lock, since no compare-exchange import is admitted (the same single
+  winner). An abandoned thread completes its IRP CANCELLED, drops the two
+  references and leaves; its context, with its thread object on NT, stays
+  on a driver-wide list that the unload waits out and frees (4.4's
+  "driver-global list"; the context is not freed by the thread itself).
+- **Teardown** of a PDO keeps 4.4's order: (a), (c) and (d) together
+  (`HcdSuspPdoClose`), then (b) (the URB drain as before), then (e)
+  (`HcdSuspIdleRundown`): a PnP caller waits for `IdlePending` 0 unless the
+  DMA-halt proof is absent (`CommonBufferPinned`) or the controller is
+  released while a callback of the PDO's still runs - then the PDO is
+  quarantined (`IdleQuarantined`, counted): kept, never revived
+  (`hcdDormantFindLocked`), never started again. 4.4 (b)'s three-way split
+  of the URB drain is not needed by this tree: every deletion
+  (`hcdDeletePdo`) follows a REMOVE whose quiesce ran the rundown, or is of
+  a PDO PnP never saw, with no client to submit anything - so the enum
+  thread, which deletes only the latter, never waits on a callback, and a
+  rundown found unfinished at a deletion is the quarantine (the object is
+  kept) rather than a deferred-delete list.
+- **The controller's stop** runs the handoff (`HcdSuspCbStop`) after the
+  enum thread has exited and the devices are dropped (their slots settled
+  at the unlink): steps (1) to (5) as 4.4 has them.
 
 ## 4. Function power state at the device PDO
 

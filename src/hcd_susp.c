@@ -375,6 +375,252 @@ static VOID hcdSuspClaimDue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 }
 
 /* ------------------------------------------------------------------ */
+/* The idle notification's settlements (36.32; sections 6.4, 6.5)      */
+/* ------------------------------------------------------------------ */
+
+#ifndef STATUS_POWER_STATE_INVALID
+#define STATUS_POWER_STATE_INVALID ((NTSTATUS)0xC00002D3L)
+#endif
+
+/* What one hold settled of the idle notification, completed after it: an
+ * IRP with its status, or (Irp NULL) a callback-queue entry's IdlePending
+ * reference let go. One device's chain at most: an IRP and an entry per
+ * PDO, and the claim's or the return's own. */
+#define HCD_SUSP_ITAKE_MAX      (2 * HCD_SUSP_MAX_FUNCS + 4)
+
+typedef struct _HCD_SUSP_ITAKEN {
+    ULONG Count;
+    PHCD_DEVICE_PDO Pdo[HCD_SUSP_ITAKE_MAX];
+    PIRP Irp[HCD_SUSP_ITAKE_MAX];
+    NTSTATUS Status[HCD_SUSP_ITAKE_MAX];
+} HCD_SUSP_ITAKEN, *PHCD_SUSP_ITAKEN;
+
+static VOID hcdSuspITake(PHCD_SUSP_ITAKEN t, PHCD_DEVICE_PDO pdo, PIRP irp,
+                         NTSTATUS status)
+{
+    if (t->Count < HCD_SUSP_ITAKE_MAX) {
+        t->Pdo[t->Count] = pdo;
+        t->Irp[t->Count] = irp;
+        t->Status[t->Count] = status;
+        t->Count++;
+    }
+}
+
+/* Each taken idle IRP completed and its IdlePending reference dropped,
+ * then each entry's: the reference is the PDO's last touch here (4.2's
+ * lifetime counts). Not under any lock: a completion can re-enter the
+ * bus. IRQL: <= DISPATCH_LEVEL (an idle IRP is no power IRP). */
+static VOID hcdSuspIFinish(PHCD_SUSP_ITAKEN t)
+{
+    ULONG i;
+
+    for (i = 0; i < t->Count; i++) {
+        if (t->Irp[i] != NULL) {
+            (VOID)HcdCompleteIrp(t->Irp[i], t->Status[i], 0);
+        }
+        (VOID)InterlockedDecrement(&t->Pdo[i]->IdlePending);
+    }
+    t->Count = 0;
+}
+
+static NTSTATUS hcdSuspIdleStatus(ULONG st)
+{
+    switch (st) {
+    case XHCI_SUSP_ST_SUCCESS:
+        return STATUS_SUCCESS;
+    case XHCI_SUSP_ST_POWER_INVALID:
+        return STATUS_POWER_STATE_INVALID;
+    default:
+        break;
+    }
+    return STATUS_CANCELLED;
+}
+
+/*
+ * One settlement trigger (6.5, XHCI_SUSP_SET_*) reaching the PDO's idle
+ * IRP: claimed by 4.2's handshake and taken with its status, or - its
+ * callback running - owed to the callback's return, the strongest trigger
+ * kept (the table's order). A cancel routine already running keeps the
+ * IRP. Controller lock held.
+ */
+static VOID hcdSuspIdleTriggerLocked(PHCD_DEVICE_PDO pdo, ULONG trigger,
+                                     PHCD_SUSP_ITAKEN t)
+{
+    PIRP irp;
+    ULONG st;
+
+    irp = pdo->IdleSlot;
+    if (irp == NULL) {
+        return;
+    }
+    st = XhciSuspIdleSettle(trigger, pdo->IdleState, pdo->PwrState);
+    if (st == XHCI_SUSP_ST_NONE) {
+        return;
+    }
+    if (st == XHCI_SUSP_ST_PENDING) {
+        if (pdo->IdleOwed == 0 || trigger < pdo->IdleOwed) {
+            pdo->IdleOwed = trigger;
+        }
+        return;
+    }
+    if (!XhciSuspClaim(1, IoSetCancelRoutine(irp, NULL) != NULL)) {
+        return;
+    }
+    pdo->IdleSlot = NULL;
+    pdo->IdleState = XHCI_SUSP_IDLE_NONE;
+    hcdSuspITake(t, pdo, irp, hcdSuspIdleStatus(st));
+}
+
+/*
+ * The episode ends (6.5): no further callback of its batch runs - every
+ * PDO's IdleBatchCur moves to 0, so a queued entry is skipped at its claim
+ * - and, the link ACTIVE, the sixth trigger settles every RETURNED sibling
+ * in D1 or D2. While a callback of the device runs, that settlement is its
+ * return's (hcdSuspCbReturned), "after every RUNNING callback of the batch
+ * has returned". The device's chain stable: the thread, or PdoListLock.
+ * Controller lock held.
+ */
+static VOID hcdSuspIdleEndLocked(PHCD_USB_DEVICE dev, PHCD_SUSP_ITAKEN t)
+{
+    PHCD_DEVICE_PDO pdo;
+    ULONG running;
+
+    running = 0;
+    for (pdo = hcdSuspPdo(dev->Pdo); pdo != NULL; pdo = pdo->Sibling) {
+        pdo->IdleBatchCur = 0;
+        if (pdo->IdleState == XHCI_SUSP_IDLE_RUNNING) {
+            running = 1;
+        }
+    }
+    if (running || dev->Susp.State != XHCI_SUSP_ACTIVE) {
+        return;
+    }
+    for (pdo = hcdSuspPdo(dev->Pdo); pdo != NULL; pdo = pdo->Sibling) {
+        hcdSuspIdleTriggerLocked(pdo, XHCI_SUSP_SET_EPISODE, t);
+    }
+}
+
+/* A PDO's PwrState written D0 from a Dx (6.5's fifth trigger, "having been
+ * Dx, reaches D0 at ACTIVE"): its idle IRP settled SUCCESS, and its own D0
+ * ends the episode. The chain stable; controller lock held. */
+static VOID hcdSuspIdleOwnD0Locked(PHCD_USB_DEVICE dev, PHCD_DEVICE_PDO pdo,
+                                   PHCD_SUSP_ITAKEN t)
+{
+    hcdSuspIdleTriggerLocked(pdo, XHCI_SUSP_SET_D0, t);
+    if (dev != NULL && XhciSuspEpisodeEnds(XHCI_SUSP_EPI_OWN_D0)) {
+        hcdSuspIdleEndLocked(dev, t);
+    }
+}
+
+/*
+ * A PDO's own queued entry taken off the callback queue (teardown's (d),
+ * the unlink), its reference to be let go after the hold; the batch left.
+ * Controller lock held.
+ */
+static ULONG hcdSuspIdleDetachLocked(PHCD_DEVICE_PDO pdo)
+{
+    pdo->IdleBatchCur = 0;
+    if (!pdo->IdleQueued) {
+        return 0;
+    }
+    RemoveEntryList(&pdo->IdleEntry);
+    pdo->IdleQueued = 0;
+    pdo->IdleEntryOwned = 0;
+    return 1;
+}
+
+/*
+ * A batch (6.2): every started function PDO of the device holds an idle
+ * IRP in HELD with PwrState D0, the link ACTIVE, every PDO in S0, the
+ * controller up and its callback thread running. Each such PDO is queued
+ * QUEUED with the new batch number, the epoch and an IdlePending reference
+ * for its entry. Returns whether one was formed (the caller wakes the
+ * callback thread). Thread only, controller lock held.
+ */
+static ULONG hcdSuspIdleBatchLocked(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    PXHCI_SUSP_IDLE_FUNC f;
+    PHCD_DEVICE_PDO pdo;
+    ULONG s0;
+    ULONG n;
+
+    if (hc->SuspCb == NULL || hc->PowerDown) {
+        return 0;
+    }
+    f = hc->SuspIdle;
+    s0 = 1;
+    n = 0;
+    for (pdo = hcdSuspPdo(dev->Pdo); pdo != NULL && n < HCD_SUSP_MAX_FUNCS;
+         pdo = pdo->Sibling) {
+        f[n].Started = pdo->PwrStarted;
+        f[n].Closed = pdo->PwrClosed;
+        f[n].IdleState = pdo->IdleState;
+        f[n].PwrState = pdo->PwrState;
+        if (pdo->Common.SystemPower != PowerSystemWorking) {
+            s0 = 0;
+        }
+        n++;
+    }
+    if (!XhciSuspIdleBatchReady(f, n, dev->Susp.State, s0)) {
+        return 0;
+    }
+    dev->IdleBatch++;
+    if (dev->IdleBatch == 0) {
+        dev->IdleBatch = 1;
+    }
+    for (pdo = hcdSuspPdo(dev->Pdo); pdo != NULL; pdo = pdo->Sibling) {
+        if (!pdo->PwrStarted || pdo->PwrClosed) {
+            continue;
+        }
+        pdo->IdleState = XHCI_SUSP_IDLE_QUEUED;
+        pdo->IdleBatchCur = dev->IdleBatch;
+        pdo->IdleEntryBatch = dev->IdleBatch;
+        pdo->IdleEntryEpoch = hc->PowerEpoch;
+        pdo->IdleQueued = 1;
+        pdo->IdleEntryOwned = 1;
+        (VOID)InterlockedIncrement(&pdo->IdlePending);
+        InsertTailList(&hc->IdleQueue, &pdo->IdleEntry);
+    }
+    hc->IdleBatches++;
+    return 1;
+}
+
+/*
+ * The callback thread's context (4.4): its own nonpaged allocation, apart
+ * from the controller extension, so a thread that teardown abandoned in a
+ * callback never reaches the controller again. Phase changes only by a
+ * compare-and-move under the context's own spin lock (no compare-exchange
+ * import is admitted; a spin lock gives the same single winner). Hc is
+ * read only in a phase the thread won (CLAIMING, RETURNING). The running
+ * callback's PDO, IRP, batch and the callback itself are the thread's. An
+ * abandoned context goes on a driver-wide list that the unload waits out.
+ */
+typedef VOID (NTAPI *HCD_SUSP_IDLE_CALLBACK)(PVOID context);
+
+typedef struct _HCD_SUSP_CB {
+    KSPIN_LOCK Lock;
+    ULONG Phase;                /* XHCI_SUSP_PH_*, under Lock            */
+    PHCD_CONTROLLER Hc;
+    KEVENT Wake;                /* synchronization: work, or EXITING     */
+    KEVENT Exited;              /* notification: the thread leaves       */
+    PVOID ThreadObject;         /* NT: referenced; 9x: NULL (Exited)     */
+    PHCD_DEVICE_PDO Pdo;
+    PIRP Irp;
+    ULONG Batch;
+    HCD_SUSP_IDLE_CALLBACK Callback;
+    PVOID Context;
+    struct _HCD_SUSP_CB *Next;  /* the abandoned list                    */
+} HCD_SUSP_CB, *PHCD_SUSP_CB;
+
+/* The callback thread woken: a batch queued. IRQL: <= DISPATCH_LEVEL. */
+static VOID hcdSuspCbKick(PHCD_CONTROLLER hc)
+{
+    if (hc->SuspCb != NULL) {
+        (VOID)KeSetEvent(&hc->SuspCb->Wake, IO_NO_INCREMENT, FALSE);
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* The gate and the restart (3.2)                                      */
 /* ------------------------------------------------------------------ */
 
@@ -714,9 +960,10 @@ static ULONG hcdSuspU0(PHCD_CONTROLLER hc, PHCD_PORT q)
 
 /* The sequence's end, in the hold that makes its state visible: a STALL's
  * WAIT_WAKEs claimed, then the refusal's latch (XhciSuspLatch's
- * contract), then a due wake claim. Controller lock held. */
+ * contract), then a due wake claim; a refusal or an uncertain outcome that
+ * ended ACTIVE ends the idle episode (6.5). Controller lock held. */
 static VOID hcdSuspEndLocked(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
-                             PHCD_SUSP_TAKEN t)
+                             PHCD_SUSP_TAKEN t, PHCD_SUSP_ITAKEN it)
 {
     ULONG n;
 
@@ -730,6 +977,12 @@ static VOID hcdSuspEndLocked(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         XhciSuspLatch(&dev->Susp, hc->SuspFuncs, n);
     }
     hcdSuspClaimDue(hc, dev, t);
+    if (dev->Susp.State == XHCI_SUSP_ACTIVE &&
+        (dev->Susp.Outcome == XHCI_SUSP_OUT_REFUSED ||
+         dev->Susp.Outcome == XHCI_SUSP_OUT_UNCERTAIN) &&
+        XhciSuspEpisodeEnds(XHCI_SUSP_EPI_REFUSED)) {
+        hcdSuspIdleEndLocked(dev, it);
+    }
 }
 
 /*
@@ -741,12 +994,14 @@ static ULONG hcdSuspRun(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG step,
                         ULONG wait)
 {
     HCD_SUSP_TAKEN taken;
+    HCD_SUSP_ITAKEN itaken;
     PHCD_PORT q;
     KIRQL oldIrql;
     ULONG result;
     ULONG group;
 
     taken.Count = 0;
+    itaken.Count = 0;
     q = hcdSuspPort(hc, dev);
     while (step != XHCI_SUSP_STEP_END) {
         result = XHCI_SUSP_RES_TIMEOUT;
@@ -800,12 +1055,13 @@ static ULONG hcdSuspRun(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG step,
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
         step = XhciSuspAdvance(&dev->Susp, result, hc->SuspClockMs, &wait);
         if (step == XHCI_SUSP_STEP_END) {
-            hcdSuspEndLocked(hc, dev, &taken);
+            hcdSuspEndLocked(hc, dev, &taken, &itaken);
         } else {
             hcdSuspClaimDue(hc, dev, &taken);
         }
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         hcdSuspFinish(&taken);
+        hcdSuspIFinish(&itaken);
     }
     XHCI_DBG_VALUE("hcd: suspend sequence, slot/kind/outcome/state",
                    (dev->SlotId << 24) | (dev->Susp.Kind << 16) |
@@ -850,17 +1106,21 @@ static ULONG hcdSuspDecideOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     PXHCI_SUSP_FUNC funcs;
     XHCI_SUSP_DECISION d;
     HCD_SUSP_TAKEN taken;
+    HCD_SUSP_ITAKEN itaken;
     PHCD_PORT q;
     KIRQL oldIrql;
     ULONG step;
     ULONG wait;
     ULONG kind;
+    ULONG batch;
     ULONG n;
     ULONG i;
 
     pdos = hc->SuspPdos;
     funcs = hc->SuspFuncs;
     taken.Count = 0;
+    itaken.Count = 0;
+    batch = 0;
     step = XHCI_SUSP_STEP_END;
     wait = 0;
     kind = 0;
@@ -882,6 +1142,10 @@ static ULONG hcdSuspDecideOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     for (i = 0; i < n; i++) {
         pdos[i]->WokeHold = funcs[i].WokeHold;
         if (funcs[i].ToD0) {
+            if (pdos[i]->PwrState != XHCI_SUSP_D0) {
+                /* 6.5: having been Dx, D0 at ACTIVE. */
+                hcdSuspIdleOwnD0Locked(dev, pdos[i], &itaken);
+            }
             pdos[i]->PwrState = XHCI_SUSP_D0;
             if (!funcs[i].CompleteD0) {
                 /* A START's D0, with no IRP to carry its report. */
@@ -910,8 +1174,17 @@ static ULONG hcdSuspDecideOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
                                  hc->SuspClockMs, &wait);
         }
     }
+    if (kind == 0) {
+        /* No sequence: a batch of idle callbacks, when 6.2's readiness
+         * holds (it asks the link ACTIVE). */
+        batch = hcdSuspIdleBatchLocked(hc, dev);
+    }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     hcdSuspFinish(&taken);
+    hcdSuspIFinish(&itaken);
+    if (batch) {
+        hcdSuspCbKick(hc);
+    }
     if (kind == 0) {
         return 0;
     }
@@ -1216,11 +1489,14 @@ ULONG HcdSuspPdoSetPower(PHCD_DEVICE_PDO pdo, PIRP irp, NTSTATUS *status)
     PHCD_CONTROLLER hc;
     PHCD_USB_DEVICE dev;
     XHCI_SUSP_ADMIT_IN in;
+    HCD_SUSP_ITAKEN itaken;
     KIRQL listIrql;
     KIRQL oldIrql;
     ULONG answer;
+    ULONG prev;
     ULONG ns;
 
+    itaken.Count = 0;
     stack = IoGetCurrentIrpStackLocation(irp);
     if (stack->Parameters.Power.State.DeviceState < PowerDeviceD0 ||
         stack->Parameters.Power.State.DeviceState > PowerDeviceD3) {
@@ -1248,6 +1524,7 @@ ULONG HcdSuspPdoSetPower(PHCD_DEVICE_PDO pdo, PIRP irp, NTSTATUS *status)
     in.PowerDown = hc->PowerDown;
     in.Link = (dev != NULL) ? dev->Susp.State : XHCI_SUSP_GONE;
     in.SiblingD0 = (dev != NULL) ? hcdSuspSiblingD0(dev, pdo) : 0;
+    prev = pdo->PwrState;
     answer = XhciSuspAdmit(&in, pdo->PwrState, &ns);
     pdo->PwrWanted = in.Requested;
     pdo->PwrState = ns;
@@ -1255,6 +1532,16 @@ ULONG HcdSuspPdoSetPower(PHCD_DEVICE_PDO pdo, PIRP irp, NTSTATUS *status)
     if (ns == XHCI_SUSP_D0) {
         /* 3.9: a D0 written here ends the PDO's hold after a wake. */
         pdo->WokeHold = 0;
+    }
+    /* The idle notification's triggers (6.5): its PDO accepting D3
+     * settles its idle IRP POWER_STATE_INVALID at acceptance; a D0
+     * written here from a Dx, on an ACTIVE link, settles it SUCCESS and
+     * ends the episode. Completed after the report flag is let go, since
+     * a completion routine may send a D-IRP here at once. */
+    if (in.Requested == XHCI_SUSP_D3) {
+        hcdSuspIdleTriggerLocked(pdo, XHCI_SUSP_SET_D3, &itaken);
+    } else if (ns == XHCI_SUSP_D0 && prev != XHCI_SUSP_D0) {
+        hcdSuspIdleOwnD0Locked(dev, pdo, &itaken);
     }
     if (answer == XHCI_SUSP_ADMIT_PEND) {
         pdo->PwrIrp = irp;
@@ -1266,6 +1553,7 @@ ULONG HcdSuspPdoSetPower(PHCD_DEVICE_PDO pdo, PIRP irp, NTSTATUS *status)
     KeReleaseSpinLock(&hc->PdoListLock, listIrql);
     if (answer == XHCI_SUSP_ADMIT_PEND) {
         hcdSuspReportLeave(pdo);
+        hcdSuspIFinish(&itaken);
         HcdThreadWake(hc);
         *status = STATUS_PENDING;
         return 1;
@@ -1276,6 +1564,7 @@ ULONG HcdSuspPdoSetPower(PHCD_DEVICE_PDO pdo, PIRP irp, NTSTATUS *status)
                               stack->Parameters.Power.State);
     }
     hcdSuspReportLeave(pdo);
+    hcdSuspIFinish(&itaken);
     PoStartNextPowerIrp(irp);
     *status = HcdCompleteIrp(irp, STATUS_SUCCESS, irp->IoStatus.Information);
     return 1;
@@ -1394,39 +1683,55 @@ VOID HcdSuspPdoCaps(PHCD_DEVICE_PDO pdo, PDEVICE_CAPABILITIES caps)
 }
 
 /* The slot's claims, completed after the hold: the D-IRP SUCCESS (a D0's
- * power state recorded), the WAIT_WAKE with `wakeStatus`. */
-static VOID hcdSuspSlotFinish(PHCD_DEVICE_PDO pdo, PIRP pwr, ULONG pwrD0,
-                              PIRP wake, NTSTATUS wakeStatus)
+ * power state recorded), the WAIT_WAKE with `wakeStatus`, the idle IRP
+ * CANCELLED and a detached entry's reference let go. */
+static VOID hcdSuspSlotFinish(PHCD_SUSP_SETTLE s, NTSTATUS wakeStatus)
 {
-    if (pwr != NULL) {
-        hcdSuspCompletePower(pdo, pwr, pwrD0);
+    if (s->Pwr != NULL) {
+        hcdSuspCompletePower(s->Pdo, s->Pwr, s->PwrD0);
     }
-    if (wake != NULL) {
-        hcdSuspCompleteWake(pdo, wake, wakeStatus);
+    if (s->Wake != NULL) {
+        hcdSuspCompleteWake(s->Pdo, s->Wake, wakeStatus);
+    }
+    if (s->Idle != NULL) {
+        (VOID)HcdCompleteIrp(s->Idle, STATUS_CANCELLED, 0);
+        (VOID)InterlockedDecrement(&s->Pdo->IdlePending);
+    }
+    if (s->IdleEntry) {
+        (VOID)InterlockedDecrement(&s->Pdo->IdlePending);
     }
 }
 
-/* The slot's IRPs claimed and admission closed (4.4 (a), (c)), in the
- * caller's hold: the D-IRP has no cancel routine; the WAIT_WAKE is the
- * claimer's only if its routine is cleared here. Controller lock held. */
-static VOID hcdSuspSlotCloseLocked(PHCD_DEVICE_PDO pdo, PIRP *pwr,
-                                   PULONG pwrD0, PIRP *wake)
+/* The slot's IRPs claimed and admission closed (4.4 (a), (c), (d)), in the
+ * caller's hold: the D-IRP has no cancel routine; the WAIT_WAKE and the
+ * idle IRP are the claimer's only if their routine is cleared here; an
+ * idle IRP whose callback runs is owed CANCELLED to its return (6.5's
+ * second trigger), and the PDO's own queued entry is detached.
+ * Controller lock held. */
+static VOID hcdSuspSlotCloseLocked(PHCD_DEVICE_PDO pdo, PHCD_SUSP_SETTLE s)
 {
+    HCD_SUSP_ITAKEN it;
     PIRP irp;
 
+    s->Pdo = pdo;
     pdo->PwrClosed = 1;
+    pdo->PwrStarted = 0;
     pdo->PwrSeq++;
     pdo->WokeHold = 0;
-    *pwr = pdo->PwrIrp;
-    *pwrD0 = (pdo->PwrWanted == XHCI_SUSP_D0) ? 1UL : 0UL;
+    s->Pwr = pdo->PwrIrp;
+    s->PwrD0 = (pdo->PwrWanted == XHCI_SUSP_D0) ? 1UL : 0UL;
     pdo->PwrIrp = NULL;
-    *wake = NULL;
+    s->Wake = NULL;
     irp = pdo->WaitWakeIrp;
     if (irp != NULL &&
         XhciSuspClaim(1, IoSetCancelRoutine(irp, NULL) != NULL)) {
         pdo->WaitWakeIrp = NULL;
-        *wake = irp;
+        s->Wake = irp;
     }
+    s->IdleEntry = hcdSuspIdleDetachLocked(pdo);
+    it.Count = 0;
+    hcdSuspIdleTriggerLocked(pdo, XHCI_SUSP_SET_GONE, &it);
+    s->Idle = (it.Count != 0) ? it.Irp[0] : NULL;
 }
 
 /*
@@ -1438,26 +1743,24 @@ static VOID hcdSuspSlotCloseLocked(PHCD_DEVICE_PDO pdo, PIRP *pwr,
 VOID HcdSuspPdoClose(PHCD_DEVICE_PDO pdo, ULONG removal)
 {
     PHCD_CONTROLLER hc;
+    HCD_SUSP_SETTLE s;
     KIRQL oldIrql;
-    PIRP pwr;
-    PIRP wake;
-    ULONG pwrD0;
 
     (VOID)InterlockedIncrement(&pdo->Busy);
     hc = pdo->Controller;
     if (hc != NULL) {
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-        hcdSuspSlotCloseLocked(pdo, &pwr, &pwrD0, &wake);
+        hcdSuspSlotCloseLocked(pdo, &s);
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         HcdThreadWake(hc);
     } else {
         /* The controller is released: no other party reaches the slot
-         * but a WAIT_WAKE's cancel routine, which the claim excludes. */
-        hcdSuspSlotCloseLocked(pdo, &pwr, &pwrD0, &wake);
+         * but a cancel routine, which the claim excludes; the callback
+         * queue went with the controller's stop (HcdSuspCbStop). */
+        hcdSuspSlotCloseLocked(pdo, &s);
     }
     (VOID)InterlockedDecrement(&pdo->Busy);
-    hcdSuspSlotFinish(pdo, pwr, pwrD0, wake,
-                      removal ? STATUS_NO_SUCH_DEVICE : STATUS_CANCELLED);
+    hcdSuspSlotFinish(&s, removal ? STATUS_NO_SUCH_DEVICE : STATUS_CANCELLED);
 }
 
 /* At REMOVE: every D-IRP and WAIT_WAKE completion has returned - a cancel
@@ -1499,6 +1802,11 @@ ULONG HcdSuspPdoReopen(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
         HcdRelativeMs(&due, 1);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
     }
+    /* The idle rundown too (4.4, 36.32): a quarantined PDO is never
+     * started again. */
+    if (pdo->PwrClosed && !HcdSuspIdleRundown(pdo, 1)) {
+        return 0;
+    }
     hcdSuspReportEnter(pdo);
     KeAcquireSpinLock(&hc->PdoListLock, &listIrql);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
@@ -1515,6 +1823,15 @@ ULONG HcdSuspPdoReopen(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
     report = 0;
     pdo->PwrSwitch = hc->SuspOn;
     pdo->PwrClosed = 0;
+    pdo->PwrStarted = 1;
+    if (pdo->IdleSlot == NULL) {
+        /* 4.4: IdleState NONE and no batch; after a teardown the rundown
+         * has emptied the slot, so nothing of an earlier device carries
+         * over. A START with no teardown before it keeps a held IRP. */
+        pdo->IdleState = XHCI_SUSP_IDLE_NONE;
+        pdo->IdleBatchCur = 0;
+        pdo->IdleOwed = 0;
+    }
     pdo->PwrWanted = XHCI_SUSP_D0;
     pdo->PwrSeq++;
     pdo->WokeHold = 0;
@@ -1554,17 +1871,18 @@ ULONG HcdSuspUnlinkLocked(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo,
     KIRQL oldIrql;
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    hcdSuspSlotCloseLocked(pdo, &out->Pwr, &out->PwrD0, &out->Wake);
+    hcdSuspSlotCloseLocked(pdo, out);
     XhciControllerLockRelease(&hc->Hc, oldIrql);
-    out->Pdo = pdo;
-    return (out->Pwr != NULL || out->Wake != NULL) ? 1UL : 0UL;
+    return (out->Pwr != NULL || out->Wake != NULL || out->Idle != NULL ||
+            out->IdleEntry)
+               ? 1UL
+               : 0UL;
 }
 
 /* IRQL: PASSIVE_LEVEL. */
 VOID HcdSuspUnlinkFinish(PHCD_SUSP_SETTLE s)
 {
-    hcdSuspSlotFinish(s->Pdo, s->Pwr, s->PwrD0, s->Wake,
-                      STATUS_NO_SUCH_DEVICE);
+    hcdSuspSlotFinish(s, STATUS_NO_SUCH_DEVICE);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1627,5 +1945,651 @@ VOID HcdSuspSettleStale(PHCD_CONTROLLER hc)
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         KeReleaseSpinLock(&hc->PdoListLock, listIrql);
         hcdSuspFinish(&taken);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* The idle notification (36.32; design record 14 sections 4.4, 6, 3.12) */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The idle IRP's cancel routine (4.2): it always completes the IRP. It
+ * releases the cancel spin lock first, reaches the controller under the
+ * PDO's Busy count, clears the slot if it still names the IRP - a cancel
+ * of a QUEUED or RETURNED IRP ends the episode (6.4) - and completes it
+ * CANCELLED, then what the episode's end settled. IRQL: DISPATCH_LEVEL.
+ */
+static VOID NTAPI hcdSuspIdleCancel(PDEVICE_OBJECT DeviceObject, PIRP irp)
+{
+    PHCD_DEVICE_PDO pdo;
+    PHCD_CONTROLLER hc;
+    HCD_SUSP_ITAKEN taken;
+    KIRQL listIrql;
+    KIRQL oldIrql;
+    ULONG prev;
+
+    pdo = (PHCD_DEVICE_PDO)DeviceObject->DeviceExtension;
+    IoReleaseCancelSpinLock(irp->CancelIrql);
+    taken.Count = 0;
+    (VOID)InterlockedIncrement(&pdo->Busy);
+    hc = pdo->Controller;
+    if (hc != NULL) {
+        KeAcquireSpinLock(&hc->PdoListLock, &listIrql);
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        if (pdo->IdleSlot == irp) {
+            prev = pdo->IdleState;
+            pdo->IdleSlot = NULL;
+            pdo->IdleState = XHCI_SUSP_IDLE_NONE;
+            hc->IdleCancels++;
+            if ((prev == XHCI_SUSP_IDLE_QUEUED ||
+                 prev == XHCI_SUSP_IDLE_RETURNED) &&
+                pdo->Device != NULL &&
+                XhciSuspEpisodeEnds(XHCI_SUSP_EPI_CANCEL)) {
+                hcdSuspIdleEndLocked(pdo->Device, &taken);
+            }
+        }
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        KeReleaseSpinLock(&hc->PdoListLock, listIrql);
+    } else if (pdo->IdleSlot == irp) {
+        pdo->IdleSlot = NULL;
+        pdo->IdleState = XHCI_SUSP_IDLE_NONE;
+    }
+    (VOID)InterlockedDecrement(&pdo->Busy);
+    (VOID)HcdCompleteIrp(irp, STATUS_CANCELLED, 0);
+    (VOID)InterlockedDecrement(&pdo->IdlePending);
+    hcdSuspIFinish(&taken);
+}
+
+/*
+ * IOCTL_INTERNAL_USB_SUBMIT_IDLE_NOTIFICATION at a stage A PDO (6.1 to
+ * 6.4): refused, or held in HELD with its cancel routine, the callback
+ * and its context copied. Returns 0 when the PDO is not stage A's - a
+ * hub, SuperSpeed, or the switch at 0: today's hold (hcd_urb.c), its
+ * callback never called. The caller holds the PDO's Busy count and has
+ * checked the controller and the callback. IRQL: <= DISPATCH_LEVEL.
+ */
+ULONG HcdSuspIdleSubmit(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc, PIRP irp,
+                        PVOID callback, PVOID context, NTSTATUS *status)
+{
+    KIRQL oldIrql;
+    ULONG answer;
+    ULONG back;
+
+    if (!hcdSuspPdoEligible(hc, pdo)) {
+        return 0;
+    }
+    back = 0;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    answer = XhciSuspIdleSubmit(0, 1, pdo->PwrClosed,
+                                (pdo->IdleSlot != NULL ||
+                                 pdo->IdleEntryOwned ||
+                                 pdo->IdleIrp != NULL) ? 1UL : 0UL);
+    if (answer == XHCI_SUSP_ST_PENDING) {
+        pdo->IdleSlot = irp;
+        pdo->IdleState = XHCI_SUSP_IDLE_HELD;
+        pdo->IdleCb = callback;
+        pdo->IdleCbContext = context;
+        pdo->IdleOwed = 0;
+        (VOID)InterlockedIncrement(&pdo->IdlePending);
+        IoMarkIrpPending(irp);
+        (VOID)IoSetCancelRoutine(irp, hcdSuspIdleCancel);
+        if (XhciSuspPublish(irp->Cancel,
+                            irp->Cancel &&
+                                IoSetCancelRoutine(irp, NULL) != NULL) ==
+            XHCI_SUSP_PUB_TAKE_BACK) {
+            pdo->IdleSlot = NULL;
+            pdo->IdleState = XHCI_SUSP_IDLE_NONE;
+            back = 1;
+        }
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (answer == XHCI_SUSP_ST_PENDING) {
+        XHCI_DBG_VALUE("hcd: idle notification held for stage A, port",
+                       pdo->Port);
+        HcdThreadWake(hc);
+        if (back) {
+            (VOID)HcdCompleteIrp(irp, STATUS_CANCELLED, 0);
+            (VOID)InterlockedDecrement(&pdo->IdlePending);
+        }
+        *status = STATUS_PENDING;
+        return 1;
+    }
+    *status = HcdCompleteIrp(irp,
+                             (answer == XHCI_SUSP_ST_BUSY)
+                                 ? STATUS_DEVICE_BUSY
+                                 : STATUS_NO_SUCH_DEVICE,
+                             0);
+    return 1;
+}
+
+/* A system power IRP at the PDO for a state other than S0 (6.5's third
+ * trigger): its idle IRP settled CANCELLED, and the device's episode
+ * ends. The caller holds the PDO's Busy count. IRQL: PASSIVE_LEVEL. */
+VOID HcdSuspIdleSystem(PHCD_DEVICE_PDO pdo, SYSTEM_POWER_STATE state)
+{
+    PHCD_CONTROLLER hc;
+    HCD_SUSP_ITAKEN taken;
+    KIRQL listIrql;
+    KIRQL oldIrql;
+
+    hc = pdo->Controller;
+    if (state == PowerSystemWorking || hc == NULL) {
+        return;
+    }
+    taken.Count = 0;
+    KeAcquireSpinLock(&hc->PdoListLock, &listIrql);
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hcdSuspIdleTriggerLocked(pdo, XHCI_SUSP_SET_SYSTEM, &taken);
+    if (pdo->Device != NULL && XhciSuspEpisodeEnds(XHCI_SUSP_EPI_SYSTEM)) {
+        hcdSuspIdleEndLocked(pdo->Device, &taken);
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    KeReleaseSpinLock(&hc->PdoListLock, listIrql);
+    hcdSuspIFinish(&taken);
+}
+
+/*
+ * Teardown's (e): every idle IRP and entry of the PDO's has let go of it
+ * (IdlePending 0), after (a) to (d) have settled what is the bus's to
+ * settle. A PnP caller (`mayWaitCallback`) waits for a running callback,
+ * which with the DMA-halt proof has nothing left in the bus to wait on; a
+ * deletion does not (it follows a REMOVE whose rundown finished, or is of
+ * a PDO PnP never saw, which had no client to submit one). Without the
+ * proof (CommonBufferPinned), with the controller released while a
+ * callback of the PDO's still runs (an abandoned one), or a callback a
+ * deletion will not wait for: quarantine - 0 is returned, the PDO marked
+ * and counted, and the caller keeps the object (4.4). What remains
+ * otherwise is a completion already under way, waited out as before.
+ * IRQL: PASSIVE_LEVEL.
+ */
+ULONG HcdSuspIdleRundown(PHCD_DEVICE_PDO pdo, ULONG mayWaitCallback)
+{
+    PHCD_CONTROLLER hc;
+    LARGE_INTEGER due;
+    ULONG keep;
+
+    while (pdo->IdlePending != 0) {
+        (VOID)InterlockedIncrement(&pdo->Busy);
+        hc = pdo->Controller;
+        keep = ((hc != NULL && hc->CommonBufferPinned) ||
+                (pdo->IdleRunning && (hc == NULL || !mayWaitCallback)))
+                   ? 1UL
+                   : 0UL;
+        if (keep && !pdo->IdleQuarantined) {
+            pdo->IdleQuarantined = 1;
+            if (hc != NULL) {
+                hc->IdleQuarantined++;
+            }
+            XHCI_DBG_VALUE("hcd: idle rundown unfinished, PDO kept, port",
+                           pdo->Port);
+        }
+        (VOID)InterlockedDecrement(&pdo->Busy);
+        if (keep) {
+            return 0;
+        }
+        HcdRelativeMs(&due, 1);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
+    return 1;
+}
+
+/* The phase moved `from` -> `to` by `actor`, if it still reads `from`
+ * and 4.4 allows the move. Returns whether it moved. IRQL: <=
+ * DISPATCH_LEVEL. */
+static ULONG hcdSuspCbMove(PHCD_SUSP_CB cb, ULONG actor, ULONG from,
+                           ULONG to)
+{
+    KIRQL oldIrql;
+    ULONG moved;
+
+    KeAcquireSpinLock(&cb->Lock, &oldIrql);
+    moved = (cb->Phase == from && XhciSuspPhaseAllowed(actor, from, to))
+                ? 1UL
+                : 0UL;
+    if (moved) {
+        cb->Phase = to;
+    }
+    KeReleaseSpinLock(&cb->Lock, oldIrql);
+    return moved;
+}
+
+static ULONG hcdSuspCbPhase(PHCD_SUSP_CB cb)
+{
+    KIRQL oldIrql;
+    ULONG phase;
+
+    KeAcquireSpinLock(&cb->Lock, &oldIrql);
+    phase = cb->Phase;
+    KeReleaseSpinLock(&cb->Lock, oldIrql);
+    return phase;
+}
+
+/*
+ * CLAIMING (6.3): the queue's head entry taken and claimed by the three-way
+ * claim. Returns 0 for an empty queue, else the claim's answer: RUN with
+ * the callback copied into the context; SKIP with the IRP taken CANCELLED
+ * and the episode ended; LET_GO. The entry's reference is taken to drop
+ * unless the callback runs. PdoListLock then the controller lock, for the
+ * device's chain. IRQL: PASSIVE_LEVEL, the callback thread.
+ */
+static ULONG hcdSuspCbClaim(PHCD_CONTROLLER hc, PHCD_SUSP_CB cb,
+                            PHCD_SUSP_ITAKEN t)
+{
+    XHCI_SUSP_CLAIM_IN in;
+    PHCD_DEVICE_PDO pdo;
+    PLIST_ENTRY entry;
+    KIRQL listIrql;
+    KIRQL oldIrql;
+    PIRP irp;
+    ULONG answer;
+
+    KeAcquireSpinLock(&hc->PdoListLock, &listIrql);
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (IsListEmpty(&hc->IdleQueue)) {
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        KeReleaseSpinLock(&hc->PdoListLock, listIrql);
+        return 0;
+    }
+    entry = RemoveHeadList(&hc->IdleQueue);
+    pdo = CONTAINING_RECORD(entry, HCD_DEVICE_PDO, IdleEntry);
+    pdo->IdleQueued = 0;
+    irp = pdo->IdleSlot;
+    in.IdleState = pdo->IdleState;
+    in.EntryBatch = pdo->IdleEntryBatch;
+    in.BatchCur = pdo->IdleBatchCur;
+    in.Started = pdo->PwrStarted;
+    in.Closed = pdo->PwrClosed;
+    in.PwrState = pdo->PwrState;
+    in.SystemS0 = (pdo->Common.SystemPower == PowerSystemWorking) ? 1UL : 0UL;
+    in.EntryEpoch = pdo->IdleEntryEpoch;
+    in.Epoch = hc->PowerEpoch;
+    in.SlotFull = (irp != NULL) ? 1UL : 0UL;
+    in.Owned = (irp != NULL && IoSetCancelRoutine(irp, NULL) != NULL)
+                   ? 1UL
+                   : 0UL;
+    answer = XhciSuspIdleClaim(&in);
+    if (answer == XHCI_SUSP_CLAIM_RUN) {
+        pdo->IdleState = XHCI_SUSP_IDLE_RUNNING;
+        pdo->IdleRunning = 1;
+        pdo->IdleOwed = 0;
+        cb->Pdo = pdo;
+        cb->Irp = irp;
+        cb->Batch = pdo->IdleEntryBatch;
+        cb->Callback = (HCD_SUSP_IDLE_CALLBACK)pdo->IdleCb;
+        cb->Context = pdo->IdleCbContext;
+        hc->IdleCalls++;
+    } else {
+        pdo->IdleEntryOwned = 0;
+        if (answer == XHCI_SUSP_CLAIM_SKIP) {
+            pdo->IdleSlot = NULL;
+            pdo->IdleState = XHCI_SUSP_IDLE_NONE;
+            hc->IdleSkips++;
+            hcdSuspITake(t, pdo, irp, STATUS_CANCELLED);
+            if (pdo->Device != NULL &&
+                XhciSuspEpisodeEnds(XHCI_SUSP_EPI_SKIP)) {
+                hcdSuspIdleEndLocked(pdo->Device, t);
+            }
+        }
+        hcdSuspITake(t, pdo, NULL, STATUS_SUCCESS);
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    KeReleaseSpinLock(&hc->PdoListLock, listIrql);
+    return answer;
+}
+
+/*
+ * RETURNING (6.4, 6.5): the callback has returned. The IRP the thread owns
+ * is settled by what reached it meanwhile - its cancel first, then the
+ * strongest owed trigger - or else becomes RETURNED and is re-published
+ * by 4.2's handshake, irp->Cancel tested. An episode that ended while it
+ * ran settles its RETURNED siblings in D1 or D2 now (the link ACTIVE),
+ * and a cancel found now ends it. The entry's reference is taken to drop.
+ * IRQL: PASSIVE_LEVEL, the callback thread.
+ */
+static VOID hcdSuspCbReturned(PHCD_CONTROLLER hc, PHCD_SUSP_CB cb,
+                              PHCD_SUSP_ITAKEN t)
+{
+    PHCD_DEVICE_PDO pdo;
+    PHCD_DEVICE_PDO sib;
+    PHCD_USB_DEVICE dev;
+    KIRQL listIrql;
+    KIRQL oldIrql;
+    PIRP irp;
+    ULONG trigger;
+    ULONG st;
+    ULONG ended;
+
+    pdo = cb->Pdo;
+    irp = cb->Irp;
+    ended = 0;
+    KeAcquireSpinLock(&hc->PdoListLock, &listIrql);
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->IdleReturns++;
+    pdo->IdleRunning = 0;
+    pdo->IdleEntryOwned = 0;
+    trigger = irp->Cancel ? XHCI_SUSP_SET_CANCEL : pdo->IdleOwed;
+    pdo->IdleOwed = 0;
+    st = (trigger != 0)
+             ? XhciSuspIdleSettle(trigger, XHCI_SUSP_IDLE_RETURNED,
+                                  pdo->PwrState)
+             : XHCI_SUSP_ST_NONE;
+    if (st != XHCI_SUSP_ST_NONE) {
+        pdo->IdleSlot = NULL;
+        pdo->IdleState = XHCI_SUSP_IDLE_NONE;
+        hcdSuspITake(t, pdo, irp, hcdSuspIdleStatus(st));
+        ended = (trigger == XHCI_SUSP_SET_CANCEL) ? 1UL : 0UL;
+    } else {
+        pdo->IdleState = XHCI_SUSP_IDLE_RETURNED;
+        (VOID)IoSetCancelRoutine(irp, hcdSuspIdleCancel);
+        if (XhciSuspPublish(irp->Cancel,
+                            irp->Cancel &&
+                                IoSetCancelRoutine(irp, NULL) != NULL) ==
+            XHCI_SUSP_PUB_TAKE_BACK) {
+            pdo->IdleSlot = NULL;
+            pdo->IdleState = XHCI_SUSP_IDLE_NONE;
+            hcdSuspITake(t, pdo, irp, STATUS_CANCELLED);
+            ended = 1;
+        }
+    }
+    dev = pdo->Device;
+    if (dev != NULL) {
+        if (ended && XhciSuspEpisodeEnds(XHCI_SUSP_EPI_CANCEL)) {
+            hcdSuspIdleEndLocked(dev, t);
+        } else if (pdo->IdleBatchCur != cb->Batch &&
+                   dev->Susp.State == XHCI_SUSP_ACTIVE) {
+            /* Ended while the callback ran: its siblings' settlement was
+             * left to this return (hcdSuspIdleEndLocked). */
+            for (sib = hcdSuspPdo(dev->Pdo); sib != NULL;
+                 sib = sib->Sibling) {
+                hcdSuspIdleTriggerLocked(sib, XHCI_SUSP_SET_EPISODE, t);
+            }
+        }
+    }
+    hcdSuspITake(t, pdo, NULL, STATUS_SUCCESS);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    KeReleaseSpinLock(&hc->PdoListLock, listIrql);
+}
+
+/*
+ * The callback thread (6.1, 4.4): one per controller while the switch is
+ * on, calling one callback at a time at PASSIVE_LEVEL with no bus lock or
+ * gate held. It dequeues and claims only in CLAIMING, which it wins from
+ * IDLE before it looks at the queue; failing that (EXITING), it leaves.
+ * Abandoned by a teardown in a callback (its IN_CALLBACK -> RETURNING
+ * fails), it touches nothing of the controller: it completes the IRP it
+ * owns CANCELLED, lets go of the PDO's two references and leaves; the
+ * unload waits for it and frees its context (HcdSuspDriverUnload).
+ * IRQL: PASSIVE_LEVEL (a system thread).
+ */
+static VOID NTAPI hcdSuspCbThread(PVOID context)
+{
+    PHCD_SUSP_CB cb;
+    PHCD_CONTROLLER hc;
+    HCD_SUSP_ITAKEN taken;
+    PHCD_DEVICE_PDO pdo;
+    ULONG answer;
+    ULONG more;
+
+    cb = (PHCD_SUSP_CB)context;
+    more = 0;
+    taken.Count = 0;
+    for (;;) {
+        if (!more) {
+            (VOID)KeWaitForSingleObject(&cb->Wake, Executive, KernelMode,
+                                        FALSE, NULL);
+        }
+        more = 0;
+        if (!hcdSuspCbMove(cb, XHCI_SUSP_ACTOR_THREAD, XHCI_SUSP_PH_IDLE,
+                           XHCI_SUSP_PH_CLAIMING)) {
+            break;
+        }
+        hc = cb->Hc;
+        answer = hcdSuspCbClaim(hc, cb, &taken);
+        if (answer != XHCI_SUSP_CLAIM_RUN) {
+            (VOID)hcdSuspCbMove(cb, XHCI_SUSP_ACTOR_THREAD,
+                                XHCI_SUSP_PH_CLAIMING, XHCI_SUSP_PH_IDLE);
+            hcdSuspIFinish(&taken);
+            more = (answer != 0) ? 1UL : 0UL;
+            continue;
+        }
+        (VOID)hcdSuspCbMove(cb, XHCI_SUSP_ACTOR_THREAD,
+                            XHCI_SUSP_PH_CLAIMING, XHCI_SUSP_PH_IN_CALLBACK);
+        cb->Callback(cb->Context);
+        if (!hcdSuspCbMove(cb, XHCI_SUSP_ACTOR_THREAD,
+                           XHCI_SUSP_PH_IN_CALLBACK,
+                           XHCI_SUSP_PH_RETURNING)) {
+            /* ABANDONED (4.4): nothing of the controller is touched. */
+            pdo = cb->Pdo;
+            (VOID)HcdCompleteIrp(cb->Irp, STATUS_CANCELLED, 0);
+            (VOID)InterlockedDecrement(&pdo->IdlePending);
+            (VOID)InterlockedDecrement(&pdo->IdlePending);
+            break;
+        }
+        hcdSuspCbReturned(hc, cb, &taken);
+        (VOID)hcdSuspCbMove(cb, XHCI_SUSP_ACTOR_THREAD,
+                            XHCI_SUSP_PH_RETURNING, XHCI_SUSP_PH_IDLE);
+        hcdSuspIFinish(&taken);
+        more = 1;
+    }
+    (VOID)KeSetEvent(&cb->Exited, IO_NO_INCREMENT, FALSE);
+    (VOID)PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+/* Contexts whose thread a teardown abandoned in a callback, each with its
+ * thread object on NT: the unload waits each thread out before the image
+ * goes, then frees the context (4.4's driver-global list). */
+static KSPIN_LOCK hcdSuspAbandonLock;
+static PHCD_SUSP_CB hcdSuspAbandoned;
+
+/* IRQL: PASSIVE_LEVEL (DriverEntry). */
+VOID HcdSuspDriverInit(VOID)
+{
+    KeInitializeSpinLock(&hcdSuspAbandonLock);
+    hcdSuspAbandoned = NULL;
+}
+
+/* IRQL: PASSIVE_LEVEL (the driver's unload, every device object gone). */
+VOID HcdSuspDriverUnload(VOID)
+{
+    PHCD_SUSP_CB cb;
+    KIRQL oldIrql;
+
+    for (;;) {
+        KeAcquireSpinLock(&hcdSuspAbandonLock, &oldIrql);
+        cb = hcdSuspAbandoned;
+        if (cb != NULL) {
+            hcdSuspAbandoned = cb->Next;
+        }
+        KeReleaseSpinLock(&hcdSuspAbandonLock, oldIrql);
+        if (cb == NULL) {
+            return;
+        }
+        if (cb->ThreadObject != NULL) {
+            (VOID)KeWaitForSingleObject(cb->ThreadObject, Executive,
+                                        KernelMode, FALSE, NULL);
+            ObDereferenceObject(cb->ThreadObject);
+        } else {
+            (VOID)KeWaitForSingleObject(&cb->Exited, Executive, KernelMode,
+                                        FALSE, NULL);
+        }
+        HcdPoolFree(cb);
+    }
+}
+
+/* The thread joined as the controller thread is (hcd_ctl.c: its object
+ * on NT, the event on 9x), then the context freed. IRQL: PASSIVE_LEVEL. */
+static VOID hcdSuspCbJoin(PHCD_SUSP_CB cb)
+{
+    (VOID)KeSetEvent(&cb->Wake, IO_NO_INCREMENT, FALSE);
+    if (cb->ThreadObject != NULL) {
+        (VOID)KeWaitForSingleObject(cb->ThreadObject, Executive, KernelMode,
+                                    FALSE, NULL);
+        ObDereferenceObject(cb->ThreadObject);
+        cb->ThreadObject = NULL;
+    } else {
+        (VOID)KeWaitForSingleObject(&cb->Exited, Executive, KernelMode,
+                                    FALSE, NULL);
+    }
+    HcdPoolFree(cb);
+}
+
+/*
+ * Teardown's step (1) (4.4): every unclaimed entry taken off the queue,
+ * its IRP settled by the three-way claim (claimed: CANCELLED; cancel-owned
+ * or empty: left) and its reference let go, so no PDO waits on an entry
+ * behind a callback that does not return. IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdSuspCbDetach(PHCD_CONTROLLER hc)
+{
+    HCD_SUSP_ITAKEN taken;
+    PHCD_DEVICE_PDO pdo;
+    PLIST_ENTRY entry;
+    KIRQL oldIrql;
+    PIRP irp;
+    ULONG more;
+
+    do {
+        taken.Count = 0;
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        while (!IsListEmpty(&hc->IdleQueue) &&
+               taken.Count + 2 <= HCD_SUSP_ITAKE_MAX) {
+            entry = RemoveHeadList(&hc->IdleQueue);
+            pdo = CONTAINING_RECORD(entry, HCD_DEVICE_PDO, IdleEntry);
+            pdo->IdleQueued = 0;
+            pdo->IdleEntryOwned = 0;
+            pdo->IdleBatchCur = 0;
+            irp = pdo->IdleSlot;
+            if (irp != NULL && pdo->IdleState == XHCI_SUSP_IDLE_QUEUED &&
+                XhciSuspClaim(1, IoSetCancelRoutine(irp, NULL) != NULL)) {
+                pdo->IdleSlot = NULL;
+                pdo->IdleState = XHCI_SUSP_IDLE_NONE;
+                hcdSuspITake(&taken, pdo, irp, STATUS_CANCELLED);
+            }
+            hcdSuspITake(&taken, pdo, NULL, STATUS_SUCCESS);
+        }
+        more = IsListEmpty(&hc->IdleQueue) ? 0UL : 1UL;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        hcdSuspIFinish(&taken);
+    } while (more);
+}
+
+/*
+ * The callback thread started (6.1): only while the switch is on, so the
+ * switch at 0 creates nothing. Referenced on NT as the controller thread
+ * is (hcd_ctl.c). Without it no batch is formed (hcdSuspIdleBatchLocked)
+ * and a stage A idle IRP stays HELD until its own settlement. IRQL:
+ * PASSIVE_LEVEL, the start.
+ */
+NTSTATUS HcdSuspCbStart(PHCD_CONTROLLER hc)
+{
+    PHCD_SUSP_CB cb;
+    HANDLE handle;
+    NTSTATUS status;
+    PUCHAR p;
+    ULONG i;
+
+    InitializeListHead(&hc->IdleQueue);
+    hc->SuspCb = NULL;
+    if (!hc->SuspOn) {
+        return STATUS_SUCCESS;
+    }
+    cb = (PHCD_SUSP_CB)HcdPoolAlloc(sizeof(HCD_SUSP_CB));
+    if (cb == NULL) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    p = (PUCHAR)cb;
+    for (i = 0; i < sizeof(HCD_SUSP_CB); i++) {
+        p[i] = 0;
+    }
+    KeInitializeSpinLock(&cb->Lock);
+    KeInitializeEvent(&cb->Wake, SynchronizationEvent, FALSE);
+    KeInitializeEvent(&cb->Exited, NotificationEvent, FALSE);
+    cb->Phase = XHCI_SUSP_PH_IDLE;
+    cb->Hc = hc;
+    status = PsCreateSystemThread(&handle, THREAD_ALL_ACCESS, NULL, NULL, NULL,
+                                  hcdSuspCbThread, cb);
+    if (!NT_SUCCESS(status)) {
+        HcdPoolFree(cb);
+        return status;
+    }
+    status = STATUS_SUCCESS;
+    if (IoIsWdmVersionAvailable(1, 0x10)) {
+        status = ObReferenceObjectByHandle(handle, THREAD_ALL_ACCESS, NULL,
+                                           KernelMode, &cb->ThreadObject,
+                                           NULL);
+    }
+    (VOID)ZwClose(handle);
+    if (!NT_SUCCESS(status)) {
+        /* As the controller thread's start (hcd_ctl.c): told to leave and
+         * its event waited for. */
+        cb->ThreadObject = NULL;
+        (VOID)hcdSuspCbMove(cb, XHCI_SUSP_ACTOR_TEARDOWN, XHCI_SUSP_PH_IDLE,
+                            XHCI_SUSP_PH_EXITING);
+        hcdSuspCbJoin(cb);
+        return status;
+    }
+    hc->SuspCb = cb;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * The callback thread stopped by teardown's handoff (4.4), once the enum
+ * thread has exited and the devices have gone (their slots settled at the
+ * unlink): (1) the unclaimed entries detached; (2) IDLE -> EXITING won:
+ * the thread joined and its context freed; (3) IN_CALLBACK -> ABANDONED
+ * won: the context and its thread go to the abandoned list and the
+ * controller lets go of them; (4) CLAIMING or RETURNING, which never
+ * block: waited out, then from (1) again; (5) after (2) or (3), (1) once
+ * more. IRQL: PASSIVE_LEVEL, the stop.
+ */
+VOID HcdSuspCbStop(PHCD_CONTROLLER hc)
+{
+    PHCD_SUSP_CB cb;
+    LARGE_INTEGER due;
+    KIRQL oldIrql;
+    ULONG phase;
+
+    cb = hc->SuspCb;
+    if (cb == NULL) {
+        return;
+    }
+    for (;;) {
+        hcdSuspCbDetach(hc);
+        phase = hcdSuspCbPhase(cb);
+        switch (XhciSuspHandoff(phase)) {
+        case XHCI_SUSP_HAND_EXIT:
+            if (!hcdSuspCbMove(cb, XHCI_SUSP_ACTOR_TEARDOWN, phase,
+                               XHCI_SUSP_PH_EXITING)) {
+                continue;
+            }
+            hcdSuspCbDetach(hc);
+            hc->SuspCb = NULL;
+            hcdSuspCbJoin(cb);
+            return;
+        case XHCI_SUSP_HAND_ABANDON:
+            if (!hcdSuspCbMove(cb, XHCI_SUSP_ACTOR_TEARDOWN, phase,
+                               XHCI_SUSP_PH_ABANDONED)) {
+                continue;
+            }
+            hcdSuspCbDetach(hc);
+            hc->SuspCb = NULL;
+            hc->IdleAbandoned++;
+            XHCI_DBG_VALUE("hcd: idle callback abandoned by the stop, count",
+                           hc->IdleAbandoned);
+            KeAcquireSpinLock(&hcdSuspAbandonLock, &oldIrql);
+            cb->Next = hcdSuspAbandoned;
+            hcdSuspAbandoned = cb;
+            KeReleaseSpinLock(&hcdSuspAbandonLock, oldIrql);
+            return;
+        case XHCI_SUSP_HAND_WAIT:
+            HcdRelativeMs(&due, 1);
+            (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+            continue;
+        default:
+            /* Not reached: only this teardown moves the phase to EXITING
+             * or ABANDONED. */
+            hc->SuspCb = NULL;
+            return;
+        }
     }
 }

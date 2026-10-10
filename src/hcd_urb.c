@@ -116,7 +116,8 @@ XHCI_C_ASSERT(ioctl_topology_value,
 #endif
 
 /* USB_IDLE_CALLBACK_INFO (WDK 7.1 usbioctl.h): the callback and its
- * context. Only read for NULL here: the bus never calls the callback. */
+ * context. Today's hold reads it only for NULL; stage A copies both at
+ * submission and calls the callback on its own thread (hcd_susp.c). */
 typedef struct _HCD_IDLE_CALLBACK_INFO {
     PVOID IdleCallback;
     PVOID IdleContext;
@@ -985,6 +986,7 @@ static NTSTATUS hcdIdleSubmit(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
                               PIRP irp, PHCD_IDLE_CALLBACK_INFO info)
 {
     KIRQL cancelIrql;
+    NTSTATUS status;
 
     if (hc == NULL || !pdo->Listed) {
         return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
@@ -992,8 +994,16 @@ static NTSTATUS hcdIdleSubmit(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     if (info == NULL || info->IdleCallback == NULL) {
         return HcdCompleteIrp(irp, STATUS_NO_CALLBACK_ACTIVE, 0);
     }
+    /* Selective suspend's stage A (design record 14 section 6, task
+     * 36.32; hcd_susp.c): a USB 2.0 device PDO with the switch on has its
+     * callback called on the bus's callback thread. Otherwise today's
+     * hold below. */
+    if (HcdSuspIdleSubmit(pdo, hc, irp, info->IdleCallback,
+                          info->IdleContext, &status)) {
+        return status;
+    }
     IoAcquireCancelSpinLock(&cancelIrql);
-    if (pdo->IdleIrp != NULL) {
+    if (pdo->IdleIrp != NULL || pdo->IdleSlot != NULL) {
         IoReleaseCancelSpinLock(cancelIrql);
         return HcdCompleteIrp(irp, STATUS_DEVICE_BUSY, 0);
     }
@@ -1014,17 +1024,18 @@ static NTSTATUS hcdIdleSubmit(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
 }
 
 /*
- * The held idle request, completed STATUS_CANCELLED, and then every
- * completion of one waited out: at a stop, surprise removal or removal of
- * the PDO (hcd_pdo.c, after the dispatches inside it are waited out, so
- * none can hold another), and at its deletion. A cancel routine already
- * called has taken the IRP under the lock; its completion is counted in
- * IdlePending until it has returned, and this waits for that too (Codex
- * review of 28-A.1, round 1, finding 2). IRQL: PASSIVE_LEVEL.
+ * Today's held idle request, completed STATUS_CANCELLED: at a stop,
+ * surprise removal or removal of the PDO (hcd_pdo.c, after the dispatches
+ * inside it are waited out, so none can hold another), and at its
+ * deletion. A cancel routine already called has taken the IRP under the
+ * lock; its completion is counted in IdlePending until it has returned,
+ * and the caller's rundown (hcd_susp.c, HcdSuspIdleRundown, design record
+ * 14 section 4.4 (e)) waits for that too, after the PDO's URBs are
+ * drained (Codex review of 28-A.1, round 1, finding 2). IRQL:
+ * PASSIVE_LEVEL.
  */
 VOID HcdUrbIdleDrain(PHCD_DEVICE_PDO pdo)
 {
-    LARGE_INTEGER due;
     KIRQL cancelIrql;
     PIRP irp;
 
@@ -1039,10 +1050,6 @@ VOID HcdUrbIdleDrain(PHCD_DEVICE_PDO pdo)
     if (irp != NULL) {
         (VOID)HcdCompleteIrp(irp, STATUS_CANCELLED, 0);
         (VOID)InterlockedDecrement(&pdo->IdlePending);
-    }
-    while (pdo->IdlePending != 0) {
-        HcdRelativeMs(&due, 1);
-        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
     }
 }
 
