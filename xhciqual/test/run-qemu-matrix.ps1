@@ -127,12 +127,14 @@ function Connect-Monitor([int]$port) {
 
 function Case([string]$name, [array]$qemuArgs, [string]$command,
               [array]$expect, [string]$pre = "", [string]$post = "",
-              [int]$timeout = 0) {
+              [int]$timeout = 0, [array]$absent = @(), [array]$vga = @()) {
     # $pre is typed at C:\> before the command; $post after "Done.", for a
     # line that reads the exit code (IF ERRORLEVEL ... ECHO ...>COM1) onto
     # the serial log, where $expect is checked. $timeout, when above
     # -TimeoutSeconds, is this case's: a C4 whose ISR never enters waits out
-    # its full second-long loops of delay(1), slow under TCG.
+    # its full second-long loops of delay(1), slow under TCG. $absent (task
+    # 36.48) must appear in neither the serial log nor the screen; $vga must
+    # appear on the final screen.
     [pscustomobject]@{
         Name=$name
         Args=$qemuArgs
@@ -141,6 +143,8 @@ function Case([string]$name, [array]$qemuArgs, [string]$command,
         Pre=$pre
         Post=$post
         Timeout=$timeout
+        Absent=$absent
+        Vga=$vga
     }
 }
 
@@ -148,8 +152,18 @@ $cmd = "xhciqual --serial --no-wait --no-page"
 # Task 11-V.8's read-only quick scan. No --no-wait, because it waits for
 # nothing, and no family selector, because it always scans all three.
 $quick = "xhciqual --quick --serial --no-page"
+# Task 36.48's SMBIOS strings (cases at the end), identifiers included.
+$smbiosArgs = @(
+    "-smbios","type=0,vendor=XQ-BIOS-Vendor,version=XQ-BIOS-1.0,date=10/10/2026",
+    "-smbios","type=1,manufacturer=XQ-Test-Maker,product=XQ-Test-Model,version=XQ-Rev-A,serial=XQSERIAL123,uuid=5a5a5a5a-1234-4321-8765-0123456789ab,sku=XQSKU456,family=XQ-Family",
+    "-smbios","type=2,manufacturer=XQ-Board-Maker,product=XQ-Board-7,version=XQ-B1,serial=XQBSERIAL789,asset=XQBASSET012",
+    "-smbios","type=3,manufacturer=XQ-Chassis,serial=XQCSERIAL345,asset=XQCASSET678",
+    "-smbios","type=4,serial=XQPSERIAL901,asset=XQPASSET234,part=XQPART567")
+$smbiosSecrets = @("XQSERIAL123","XQSKU456","5a5a5a5a","5A5A5A5A","0123456789ab",
+    "0123456789AB","XQBSERIAL789","XQBASSET012","XQCSERIAL345","XQCASSET678",
+    "XQPSERIAL901","XQPASSET234","XQPART567")
 $cases = @(
-    (Case "help" @() "xhciqual --serial --no-page --help" @("PURPOSE","SAFETY - READ BEFORE AN ACTIVE RUN","RECOMMENDED TEST ORDER","RECOMMENDED DEVICES","OHCI WARN proves SOF; its note says if PCI INTx was seen","OUTPUT AND EXIT CODES","photo plus last printed line")),
+    (Case "help" @() "xhciqual --serial --no-page --help" @("PURPOSE","SAFETY - READ BEFORE AN ACTIVE RUN","RECOMMENDED TEST ORDER","RECOMMENDED DEVICES","OHCI WARN proves SOF; its note says if PCI INTx was seen","OUTPUT AND EXIT CODES","--no-sysinfo","photo plus last printed line")),
     (Case "none_default" @() $cmd @("Families: xHCI EHCI OHCI","No selected USB host controller found")),
     (Case "xhci_irq_selftest" @("-device","qemu-xhci,id=hc,msi=off,msix=off") ($cmd+" --irq-selftest") @("IRQ-SELFTEST","Families: xHCI","C3 DMA:      PASS","C4 IRQ:      PASS","C6 ports:    SKIP","IRQ SELF-TEST PASS","Done.")),
     # HCCPARAMS2/FSC: qemu-xhci reports CAPLENGTH 40h, so the register is
@@ -252,7 +266,24 @@ $cases = @(
     (Case "xhci_no_irq_line" @("-device","qemu-xhci,id=hc,addr=5") ($cmd+" xhci") @("C4 IRQ:      POLL","Interrupt Line 255 unusable (not 1-15); No-Op completed polled","==> CONTROLLER QUALIFIED WITH CAVEATS","Also with warnings","since it offers MSI-X (x64","xhcimsi.sys","exit3","Done.") "setilff" "if errorlevel 3 echo exit3>com1"),
     (Case "xhci_irq_selftest_line_dead" @("-device","qemu-xhci,id=hc,addr=5,msi=off,msix=off") ($cmd+" --irq-selftest") @("C4 IRQ:      POLL","IRQ SELF-TEST: NEEDS POLLING","NO WORKING INTERRUPT","exit3","Done.") "setil05" "if errorlevel 3 echo exit3>com1" 180),
     # And a line that works still exits 0, not 3.
-    (Case "xhci_mouse_exit0" @("-device","qemu-xhci,id=hc,p3=0,addr=5,msi=off,msix=off","-device","usb-mouse,bus=hc.0,port=1") ($cmd+" xhci") @("C4 IRQ:      PASS","==> CONTROLLER QUALIFIED for","exit0","Done.") "" "if not errorlevel 1 echo exit0>com1")
+    (Case "xhci_mouse_exit0" @("-device","qemu-xhci,id=hc,p3=0,addr=5,msi=off,msix=off","-device","usb-mouse,bus=hc.0,port=1") ($cmd+" xhci") @("C4 IRQ:      PASS","==> CONTROLLER QUALIFIED for","exit0","Done.") "" "if not errorlevel 1 echo exit0>com1"),
+    #
+    # Task 36.48: the system description in the header. QEMU's -smbios sets
+    # the strings - and every identifier the header must never print: Type 1
+    # serial, UUID and SKU, Type 2 serial and asset tag, Type 3 serial and
+    # asset tag, Type 4 serial, asset tag and part number. Each case asserts
+    # the make and model are named and that none of those appears on the
+    # serial line or the screen. No spaces in the strings: Start-Process
+    # joins the argument list unquoted. The second case takes the SMBIOS 3.0
+    # (64-bit) entry point; the third is the quick scan, whose screen has
+    # the two-line summary and whose serial line has the full block.
+    (Case "smbios_header" ($smbiosArgs + @("-machine","smbios-entry-point-type=32","-device","qemu-xhci,id=hc,msi=off,msix=off")) "xhciqual --serial --no-page xhci --probe-only" @("System:  XQ-Test-Maker XQ-Test-Model, version XQ-Rev-A, family XQ-Family","Board:   XQ-Board-Maker XQ-Board-7","BIOS:    XQ-BIOS-Vendor XQ-BIOS-1.0, 10/10/2026; SMBIOS 2.","32-bit entry at F","CPU:     ","RAM:     ","MB usable (INT 15h E820","DOS:     7.10 (Microsoft); not under Windows","Probe safety: PASS - no PCI configuration writes.","Done.") "" "" 0 $smbiosSecrets),
+    (Case "smbios_header_30" ($smbiosArgs + @("-machine","smbios-entry-point-type=64","-device","qemu-xhci,id=hc,msi=off,msix=off")) "xhciqual --serial --no-page xhci --probe-only" @("System:  XQ-Test-Maker XQ-Test-Model, version XQ-Rev-A, family XQ-Family","BIOS:    XQ-BIOS-Vendor XQ-BIOS-1.0, 10/10/2026; SMBIOS 3.","64-bit entry at F","Done.") "" "" 0 $smbiosSecrets),
+    # The owner's --no-sysinfo: with the same strings set, nothing of the
+    # machine is read or printed - one line says the option skipped it -
+    # and the run is otherwise unchanged.
+    (Case "smbios_no_sysinfo" ($smbiosArgs + @("-device","qemu-xhci,id=hc,msi=off,msix=off")) "xhciqual --serial --no-page xhci --probe-only --no-sysinfo" @("System:  not read - skipped by --no-sysinfo","PROBE-ONLY (read-only)","Probe safety: PASS - no PCI configuration writes.","Done.") "" "" 0 ($smbiosSecrets + @("XQ-Test-Maker","XQ-BIOS-Vendor","CPU:     ","RAM:     ","DOS:     ","SMBIOS 2.","SMBIOS 3."))),
+    (Case "smbios_quick"($smbiosArgs + @("-device","qemu-xhci,id=hc,msi=off,msix=off")) $quick @("System:  XQ-Test-Maker XQ-Test-Model","Board:   XQ-Board-Maker XQ-Board-7","LOOKS QUALIFIED","Probe safety: PASS - no PCI configuration writes.") "" "" 0 $smbiosSecrets @("System: XQ-Test-Maker XQ-Test-Model; BIOS XQ-BIOS-1.0 10/10/2026","CPU: ","; DOS 7.10"))
 )
 if ($CaseName.Count -ne 0) {
     $cases = @($cases | Where-Object { $_.Name -in $CaseName })
@@ -321,6 +352,16 @@ for ($index=0; $index -lt $cases.Count; $index++) {
         foreach ($pattern in $case.Expect) {
             if ($serial -notmatch [regex]::Escape($pattern)) {
                 throw "missing expected output: $pattern"
+            }
+        }
+        foreach ($pattern in $case.Absent) {
+            if (($serial + $vga) -match [regex]::Escape($pattern)) {
+                throw "identifier printed: $pattern"
+            }
+        }
+        foreach ($pattern in $case.Vga) {
+            if ($vga -notmatch [regex]::Escape($pattern)) {
+                throw "missing on screen: $pattern"
             }
         }
         Write-Host "  PASS"

@@ -16,7 +16,7 @@ AFLAGS = -zq
 
 OBJS = main.obj pci.obj quirks.obj xhcicap.obj bringup.obj devid.obj &
        legacy.obj irq.obj irqasm.obj report.obj mmiodiag.obj route.obj &
-       xhci_pirq.obj verdict.obj
+       xhci_pirq.obj verdict.obj sysinfo.obj sysprobe.obj sysasm.obj
 
 # option map -> XHCIQUAL.MAP: keep it paired with each field-test binary so a
 # reported DOS/32A fault EIP can be resolved to a symbol later (docs/contributing/lessons.md).
@@ -41,6 +41,9 @@ irqasm.obj : irqasm.asm
 report.obj : report.c qual.h ../src/xhci_version.h
 mmiodiag.obj : mmiodiag.c qual.h ../src/xhci_version.h
 verdict.obj : verdict.c qual.h ../src/xhci_version.h
+sysinfo.obj : sysinfo.c qual.h ../src/xhci_version.h
+sysprobe.obj : sysprobe.c qual.h ../src/xhci_version.h
+sysasm.obj : sysasm.asm
 # Task 36.11: the routing report shares the driver's reviewed-pair table.
 # Both are built as the host suites build the pure core, with no DDK;
 # -za because the DOS target makes `interrupt` a keyword, which the core
