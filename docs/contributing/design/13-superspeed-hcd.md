@@ -3865,10 +3865,13 @@ text answers all three: stage 2 never asks for more registers than stage
    eligible record asks the pump for exactly what stage 1 asks: today's
    first chunk (`hcdPlanChunk`, at most 32 pages). Inside that request's
    execution routine (`hcdMapExecute`) the record is **promoted** to a
-   whole-URB mapping only when both hold:
+   whole-URB mapping only when all three hold:
    - the HAL handed this request no map registers - `MapRegisterBase` is
      NULL, which is how a HAL says the adapter's transfers need no
-     translation and `MapTransfer` returns the pages' own addresses; and
+     translation and `MapTransfer` returns the pages' own addresses;
+   - the adapter's grant at this start (`hc->MapRegisters`, from
+     `IoGetDmaAdapter`) is exactly `0x80001`, the value every HAL read in
+     11.6.1 reports for a register-free adapter of this description; and
    - promotion is **enabled**, and the controller's **register-free
      check** passed at this start (both below).
 
@@ -3921,7 +3924,8 @@ text answers all three: stage 2 never asks for more registers than stage
      regression check, never as the capability detector: at the
      controller's start, on NT only (98 and ME never send a URB that
      would be promoted, so promotion stays off there whatever the switch
-     says), the HCD maps one 16-page non-paged buffer of its own twice
+     says), and only when the grant is `0x80001` (anything else leaves
+     promotion off without mapping anything), the HCD maps one 16-page non-paged buffer of its own twice
      through the pump - by a 1-register request whose routine, handed a
      NULL base, maps all 16 pages, and by an ordinary 16-register request
      - and the two lists must name the same addresses and lengths element
