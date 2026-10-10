@@ -1359,6 +1359,34 @@ static void test_firsts(void)
              XHCI_FUNC_OK, "an overlapping IAD");
     CHECK_EQ(firsts, 0x1D, "the second IAD ignored: if2, if3 lone");
 
+    /* Whole-branch review (area 1 confirmation): an IAD whose first
+     * interface is absent still takes its present interfaces, as
+     * XhciFuncSplit takes them, so a later overlapping IAD is ignored and
+     * no function straddles two PDOs. Interface 0 renumbered 5, the CDC
+     * IAD widened to 0-2: it takes 1 and 2 (first 1); the UAC IAD (2-3)
+     * overlaps and is ignored; 3, 4 and 5 are alone. */
+    memcpy(cfg, iadCfg, sizeof(iadCfg));
+    cfg[17 + 2] = 5;
+    cfg[9 + 3] = 3;
+    CHECK_EQ(XhciFuncFirsts(cfg, sizeof(iadCfg), &firsts, &beyond),
+             XHCI_FUNC_OK, "an absent-first IAD");
+    CHECK_EQ(firsts, 0x3A, "if1 (its lowest), if3, if4, if5");
+    {
+        XHCI_FUNC_SET set;
+        ULONG i;
+        ULONG lows;
+
+        copy_dev(iadDev);
+        CHECK_EQ(XhciFuncSplit(dev, cfg, sizeof(iadCfg), &set), XHCI_FUNC_OK,
+                 "an absent-first IAD: the split");
+        lows = 0;
+        for (i = 0; i < set.Count; i++) {
+            lows |= set.Func[i].InterfaceMask &
+                    (~set.Func[i].InterfaceMask + 1);
+        }
+        CHECK_EQ(lows, firsts, "the split's functions are Firsts' functions");
+    }
+
     /* Malformed: as XhciFuncSplit. */
     memcpy(cfg, kbCfg, sizeof(kbCfg));
     cfg[18] = 0;

@@ -99,8 +99,10 @@ ULONG XhciFuncConfig(const UCHAR *config, ULONG length, const XHCI_FUNC *func,
  * and every interface (alternate 0) no IAD covers (USB 3.2 9.6.4) - as a
  * mask in *firsts (bit n: bInterfaceNumber n). A first interface above 31
  * cannot be named there, so its function is never armed: *beyond is then 1.
- * An IAD whose bFirstInterface has no interface, or which overlaps an
- * earlier IAD, is ignored, as XhciFuncSplit ignores it. XHCI_FUNC_OK, or
+ * IADs are taken as XhciFuncSplit takes them (the present interfaces of
+ * the range; one overlapping an earlier IAD ignored), so a function never
+ * straddles two PDOs; an IAD whose bFirstInterface is absent names its
+ * lowest present interface. XHCI_FUNC_OK, or
  * XHCI_FUNC_MALFORMED (both 0) for XhciFuncSplit's malformations,
  * XHCI_FUNC_BAD_PARAM.
  */

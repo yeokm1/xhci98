@@ -274,6 +274,7 @@ ULONG XhciFuncFirsts(const UCHAR *config, ULONG length, PULONG firsts,
     ULONG j;
     ULONG overlap;
     ULONG any;
+    ULONG low;
 
     if (config == NULL || firsts == NULL || beyond == NULL) {
         return XHCI_FUNC_BAD_PARAM;
@@ -301,13 +302,15 @@ ULONG XhciFuncFirsts(const UCHAR *config, ULONG length, PULONG firsts,
         }
         present[n >> 5] |= XHCI_FUNC_BIT(n);
     }
-    /* A function is an IAD's interfaces (its bFirstInterface the first) or
-     * one interface no IAD covers (USB 3.2 9.6.4). An IAD whose first
-     * interface is absent, or which overlaps an earlier one, is ignored
-     * here, each interface it names then its own function. XhciFuncSplit's
-     * policy for the absent first interface differs: it keeps the present
-     * interfaces of the IAD's range as one group. Only a malformed
-     * descriptor tells the two apart. */
+    /* A function is an IAD's interfaces or one interface no IAD covers
+     * (USB 3.2 9.6.4), by XhciFuncSplit's own acceptance policy, so that a
+     * function never straddles two PDOs (whole-branch review, area 1
+     * confirmation round): in descriptor order, an IAD takes the present
+     * interfaces of its range unless one is already taken by an earlier
+     * IAD, when it is ignored; an IAD with no present interface takes
+     * nothing. Its first interface is its bFirstInterface, or, that absent
+     * (a malformed descriptor), the lowest interface it took. After the
+     * walk every present interface still untaken is a function alone. */
     for (offset = (ULONG)config[0]; offset < total;
          offset += (ULONG)config[offset]) {
         if ((ULONG)config[offset + 1] != XHCI_FUNC_DT_IAD) {
@@ -315,9 +318,6 @@ ULONG XhciFuncFirsts(const UCHAR *config, ULONG length, PULONG firsts,
         }
         f = (ULONG)config[offset + 2];
         c = (ULONG)config[offset + 3];
-        if ((present[f >> 5] & XHCI_FUNC_BIT(f)) == 0) {
-            continue;
-        }
         for (j = 0; j < 8; j++) {
             range[j] = 0;
         }
@@ -325,19 +325,25 @@ ULONG XhciFuncFirsts(const UCHAR *config, ULONG length, PULONG firsts,
             range[n >> 5] |= XHCI_FUNC_BIT(n);
         }
         overlap = 0;
+        low = 256UL;
         for (j = 0; j < 8; j++) {
             range[j] &= present[j];
             if ((range[j] & covered[j]) != 0) {
                 overlap = 1;
             }
+            if (low == 256UL && range[j] != 0) {
+                for (n = 0; (range[j] & XHCI_FUNC_BIT(n)) == 0; n++) {
+                }
+                low = j * 32UL + n;
+            }
         }
-        if (overlap) {
+        if (overlap || low == 256UL) {
             continue;
         }
         for (j = 0; j < 8; j++) {
             covered[j] |= range[j];
         }
-        first[f >> 5] |= XHCI_FUNC_BIT(f);
+        first[low >> 5] |= XHCI_FUNC_BIT(low);
     }
     any = 0;
     for (j = 0; j < 8; j++) {
