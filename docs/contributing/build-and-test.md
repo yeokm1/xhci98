@@ -6768,9 +6768,9 @@ PCI configuration dword `50h`, the controller's firmware version
 (`FFFFFFFF` if the read failed).
 
 **Reading it in QEMU.** `qemu-xhci` publishes no speed table, so the
-fallback is never taken there and its legs are regression legs (a hub with
-a Low-Speed and a Full-Speed device behind it enumerating as before,
-`Usb2HubSpeedFallbacks` 0). No QEMU leg can present a VL805-like table:
+fallback is never taken there and its legs are regression legs (QEMU's hub with Full-Speed devices behind it - a mouse
+and a keyboard - enumerating as before, `Usb2HubSpeedFallbacks` 0; QEMU
+models no Low-Speed device, so Low Speed rests on host vectors alone). No QEMU leg can present a VL805-like table:
 QEMU's only hub, `usb-hub`, is a Full-Speed hub that sits on a root port
 itself, so a USB 2.0 table of High Speed alone (what task 35.4's
 `XhciPortMapOverridePsi` could install on the `qemu` flavour) would leave
