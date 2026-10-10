@@ -2253,7 +2253,7 @@ SP1 x86 `usbhub.sys` with its PDB):
 
 | | XP SP3, 2000 SP4, 98 SE | 7 SP1 |
 |---|---|---|
-| Output shorter than the 12-byte request | `STATUS_BUFFER_TOO_SMALL` (input length never checked) | the same (input below 4 refused) |
+| Output shorter than the 12-byte request | `STATUS_BUFFER_TOO_SMALL` (input length never checked) | `STATUS_NO_SUCH_DEVICE`: its parameter check (input below 4, output below 13, the port) fails into that one status |
 | `wLength` above output - 12 | `STATUS_BUFFER_TOO_SMALL` | the same |
 | Port 0 or past the hub's ports, or no device on it | `STATUS_INVALID_PARAMETER` (98 SE: success, nothing returned) | `STATUS_NO_SUCH_DEVICE`; no device: success, nothing returned |
 | `bmRequest`, `bRequest` | carried in a reserved URB field and ignored: URB function `GET_DESCRIPTOR_FROM_DEVICE` (0x0B), so the bus sends 80h, 06h | forced to 80h and 06h, written back into the caller's buffer |
@@ -2298,16 +2298,34 @@ inside the root-hub or hub FDO's I/O count. The transfer is not issued there:
 EP0 transfers the bus makes for itself (enumeration, the serial read,
 SET_CONFIGURATION, SET_INTERFACE, CLEAR_FEATURE for a client) are the
 controller thread's alone (`HcdThreadControlOutcome`), because the thread owns
-the scratch buffer and the device's EP0 pause. So the door **pends the IRP**:
-it takes a reference on the device record (as `HcdCfgQueue` does), one more
-count on the FDO's I/O count, arms a cancel routine and queues the IRP on the
-controller's `DoorIrps` list under the controller lock, in the same hold as it
-checks that the device is not `Gone` and that the queue is open, and wakes
-the thread. The thread serves the list in its powered pass after the slow
-IRPs (`HcdCfgService`), at most four a pass so a busy tool does not hold off
-port service, and completes each IRP from the thread when its transfer
-completes; the FDO's count and the device reference are given back after the
-completion.
+the scratch buffer and the device's EP0 pause. So the door **pends the IRP**,
+in section 5.4's lock order:
+
+1. Under `PdoListLock`, the PDO standing for the connection is found (the
+   match `hcdDoorConnection` makes) and, while that listed PDO still names
+   it, its device record is referenced - as a URB's dispatch references it
+   (`hcdDeviceRef`), not through a referenced PDO, whose `Device` could
+   change once the lock is dropped. A root port whose hub has no PDO
+   references the port's record under the controller lock instead, unless
+   it is `Gone`.
+2. Under the controller lock: the queue must be open and the record not
+   `Gone`, else the reference is given back and the request refused. In the
+   same hold the record goes in `DriverContext[0]` and the door FDO's I/O
+   count and its event in `[1]` and `[2]` (the dispatch's own node
+   description is not kept), the FDO's count is raised once more, the IRP is
+   marked pending, its cancel routine armed, and it is listed on the
+   controller's `DoorIrps`.
+3. The thread is woken. The dispatch returns `STATUS_PENDING` without
+   completing the IRP.
+
+The thread serves the list in its powered pass after the slow IRPs
+(`HcdCfgService`), in order, at most four a pass and none begun once 250 ms
+of the pass have gone, the controller's state looked at again before each
+(a single request is bounded by its own wait, below); a pass that leaves any
+wakes the thread again. Each IRP is completed from the thread when its
+transfer completes, then the device reference and last the FDO's count are
+given back. Completion and cancellation run at any IRQL up to
+DISPATCH_LEVEL.
 
 **Serialization with the function driver.** The forwarded request goes
 through the thread's own EP0 path, not a client's queue:
@@ -2324,14 +2342,25 @@ for the length of one transfer.
 - *Timeout:* the thread path's own bound, 5 s to quiet EP0 and 5 s for the
   transfer (`HCD_TRANSFER_WAIT_MS`), usbhub's 5 s on XP. A client transfer
   that keeps EP0 busy past its bound fails the request (`NOT_SENT`, nothing
-  sent, no recovery). A transfer that the device never ends is the bus's
-  rule for every EP0 transfer it issues itself, client-triggered ones
-  included: the scratch may still be written, so the controller is recovered
-  (design record 07). usbhub's cancel leaves the device alone; this one does
-  not, and that is the accepted cost of reusing the one path that serializes
-  with the client (a device that holds a `GET_DESCRIPTOR` for 5 s already
-  meets it at enumeration's serial read). Under XhciTolerance a cycle mark
-  ends the wait as for any thread transfer (35-T.3/4).
+  sent, no recovery). A transfer the device never ends is **withdrawn**,
+  as usbhub's cancel leaves the device alone, rather than meeting the rule
+  of the thread's other transfers, which recover the controller because the
+  scratch may still be written (design record 07): an arbitrary descriptor
+  reaches firmware paths enumeration never does, and a diagnostic tool must
+  not drop every device on the controller. The door's transfer
+  (`HcdThreadControlDoor`) differs from the others only at its deadline,
+  where `hcdEp0Withdraw` - EP0 still paused, so no client transfer is
+  behind it - stops EP0 (Stop Endpoint); if EP0 then reads Stopped and the
+  thread's record is the only one queued, the record leaves the engine's
+  queue, the dequeue moves to the enqueue position (Set TR Dequeue), and
+  behind a TT the hub's buffer is cleared. A stopped TD is not processed
+  again (xHCI 4.6.9), so the scratch is free, and the device drops the
+  unfinished control transfer at the next SETUP. A Stop Endpoint's own
+  Transfer Event completes nothing (`hcd_dev.c`), so a completion seen
+  after the stop is the device's and is answered as one. Any step that
+  fails - a command, EP0 Halted or in Error, another record queued - falls
+  back to the controller recovery, the rule as before. Under XhciTolerance
+  a cycle mark ends the wait as for any thread transfer (35-T.3/4).
 - *Cancellation:* while queued the IRP is cancellable (the cancel-safe queue
   pattern of `hcd_io.c`'s waiting list: the thread takes an IRP only once it
   has cleared its cancel routine, a routine already running takes the IRP
@@ -2352,14 +2381,25 @@ for the length of one transfer.
   completes every queued door IRP at once (`STATUS_DEVICE_NOT_READY`) rather
   than holding a diagnostic request across a power transition or a
   recovery; a pass with the scratch held for a cycle leaves them for the
-  next. The thread closes the queue and completes what is left before it
-  leaves its loop, and the door queues nothing on a closed queue.
+  next. **The queue's rundown** is the thread's last act before it signals
+  its exit and before any controller resource goes: under the controller
+  lock the queue is closed (the door queues nothing on a closed queue), the
+  IRPs whose cancel routines it can clear are completed, and it then waits,
+  outside every lock, until the list is empty and `CancelsRunning` is 0 -
+  a cancel routine the close could not pre-empt unlinks its IRP itself and
+  may still be completing it, and it raises that count before it releases
+  the cancel lock and drops it as its very last access to the controller.
+  This holds whether or not the device records could be freed (a pinned
+  common buffer keeps them, `HcdIoDeviceDrain`), so it does not rest on the
+  device's free waiting the count out.
 
 **Statuses.** A transfer that completes: `STATUS_SUCCESS`. A STALL or
 another device error: `STATUS_UNSUCCESSFUL` (the URB status's NTSTATUS
 through `XhciPipeNtStatus`, as a client URB reads). Not sent within the
-bound, or abandoned for a cycle: `STATUS_CANCELLED`, what usbhub's timeout
-cancel returns. Device gone: `STATUS_DEVICE_NOT_CONNECTED`.
+bound, withdrawn at its deadline, or abandoned for a cycle:
+`STATUS_CANCELLED`, what usbhub's timeout cancel returns. Device gone:
+`STATUS_DEVICE_NOT_CONNECTED`. A queue that is closed, or a pass that
+cannot serve: `STATUS_DEVICE_NOT_READY`.
 
 **Devices not addressed, being reset, suspended.** The door forwards only
 for a device with a PDO (enumerated, addressed and published), or a hub the
