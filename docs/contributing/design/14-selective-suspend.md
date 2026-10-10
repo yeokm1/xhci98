@@ -1058,9 +1058,10 @@ under the controller lock:
   configuration is counted (8.10).
 - `dev->FwCapable`: the subset whose GetStatus(interface) answered bit 0
   set. **Read by the thread after every SET_CONFIGURATION with a nonzero
-  value it completes** - the client's SELECT_CONFIGURATION, the bus's own
-  configuration of a device it splits, and the replay after a reset that
-  re-sends it (`hcd_cfg.c`) - one GetStatus per bit of `FwFirsts`, through
+  value it completes** in a configuration transaction (below) - the
+  client's SELECT_CONFIGURATION of an unsplit device and the bus's own
+  configuration of a device it splits; RESET_PORT's replay keeps the
+  masks unread (below) - one GetStatus per bit of `FwFirsts`, through
   `HcdThreadControlOutcome` while the device is ACTIVE. A STALL, a failure
   or a short answer is "not capable" and counted; a timeout follows the
   thread's ordinary EP0 rules. A new device starts with both masks 0.
@@ -1168,7 +1169,8 @@ left in it under an ACTIVE device holds its I/O. So the refusal's path is
 DISARM (8.5's disarm, its control transfer waiting out SP=1's 10 ms from
 the last stop, since it rings EP0) and then RESTART. A STALL at any
 function's arm is stage A's STALL refusal for the device: every held
-WAIT_WAKE of the device completes `STATUS_NOT_SUPPORTED` (the device said
+WAIT_WAKE of the device that a latched wake has not claimed first (below)
+completes `STATUS_NOT_SUPPORTED` (the device said
 in GetStatus that the function could wake, and then refused; it is not
 offered again until the slots change, 3.9's latch). Function Wake
 notifications latched during a suspension that ends in a refusal are
@@ -1566,10 +1568,10 @@ their regions (the orchestrator reconciles them with 36.33's at merge).
   OBSERVE) armed and unarmed; each step's results at SuperSpeed, a
   refusal before and after some function was armed (DISARM after SP=1's
   10 ms from the last stop, then RESTART; a disarm failure uncertain); the
-  root host resume straight to VERIFY and the root wake branch's unwaited
-  U0; the strict disarm; `XhciSuspObserveSsHub` and
-  `XhciSuspVerifySsHub` over every link state, connection and enable bit
-  and C_PORT_LINK_STATE; `XhciSuspSsHubEvidence`'s precedence
+  root host resume straight to VERIFY and the root wake branch as SIGNAL
+  after the dwell's remainder, then VERIFY; the strict disarm;
+  `XhciSuspObserveSsHub` and `XhciSuspVerifySsHub` over every link state,
+  connection and enable bit and C_PORT_LINK_STATE; `XhciSuspSsHubEvidence`'s precedence
   (disconnect, stale, resume done, never a wake); a notification as
   evidence for a SUSPENDED device; the SuperSpeed wake branch from the
   root sample, the observation's WAKE and a notification, each going to
@@ -1658,7 +1660,9 @@ from a guest.
 - At SuperSpeed a disarm the device does not take cycles the device,
   where stage A's disarm is best effort.
 - A STALL at any function's arm refuses the device's suspend and completes
-  every held WAIT_WAKE `STATUS_NOT_SUPPORTED`, as stage A's STALL.
+  every held WAIT_WAKE `STATUS_NOT_SUPPORTED`, as stage A's STALL - but
+  for those a notification latched during that suspension claimed first
+  (`STATUS_SUCCESS`, 8.4).
 
 ## 9. Review of revision 1 (2026-10-05), where each finding is taken
 
@@ -1785,6 +1789,11 @@ Round 2 found 6 (1 P1, 4 P2, 1 P3), all taken:
 | 4 | The configuration change's failure exits and RESET_PORT interval undefined | 8.3 one transaction per path, entry and every exit; RESET_PORT keeps the masks |
 | 5 | Dormant detachment bypasses the unlink that clears `FwArmed` | 8.5 cleared in `hcdDormantKeep` |
 | 6 | `DevNotifyDropped` counted with the switch at 0 | 8.10 |
+
+Round 3 found 3 (0 P1, 0 P2, 3 P3), all taken: RESET_PORT dropped from
+the read rule (8.3), the root wake vector restated (8.11), the STALL's
+settlement qualified by the wake's claim (8.4, 8.13). The review ended
+there, the first round with no P1 or P2.
 
 ## 10. Tasks and verification (stage A)
 
