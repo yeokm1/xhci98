@@ -49,10 +49,10 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * they are absent and the same defaults stand. */
 #define HCD_VALUE_SETTLE_TOTAL  L"XhciFirstEnumWaitMs"
 #define HCD_VALUE_SETTLE_PORT   L"XhciFirstEnumPortMs"
-/* Task 34.3: the Intel port switchover, on a listed controller unless the
- * value is 0 (absent is on: txtsetup.oem writes none); an exact 2 also on
- * an unlisted Intel one (task 35.5). Read at start, on every Intel
- * controller and no other. */
+/* Task 34.3: the Intel port switchover, on a listed controller when the
+ * value is a nonzero DWORD; absent, another type or 0 is off (task 36.42;
+ * txtsetup.oem writes none); an exact 2 also on an unlisted Intel one
+ * (task 35.5). Read at start, on every Intel controller and no other. */
 #define HCD_VALUE_PORT_SWITCH   L"XhciIntelPortSwitch"
 /* Task 36.3: the Intel PCH interrupt routing quirk; absent, another type
  * or another number than 0 to 2 is 1, the verified E7250 only

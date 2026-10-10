@@ -161,6 +161,53 @@ try {
         "-OemPath", (Join-Path $repo "src\txtsetup-amd64.oem"), "-OutDir", (Join-Path $script:work "pkg-oem-arch"))
     Assert-True ($r.ExitCode -ne 0) "the amd64 txtsetup.oem was staged into an x86 package."
 
+    # --- portsw.vbs (roadmap-hcd task 36.42) --------------------------------
+    #
+    # The port switchover's user script: staged at the package root, byte
+    # for byte, when named (and always from the default paths); a stand-in
+    # package that does not name it does not carry it; a missing one is
+    # refused. The script finds the controller's key by DriverDesc, so the
+    # string it matches is held to both INFs' XhciDesc, and the text a
+    # Windows 98 WSH reads is held to ASCII with CRLF line endings.
+    Write-Step "portsw.vbs is staged at the root and matches the INFs"
+    $pswSrc = Join-Path $repo "src\portsw.vbs"
+    $pswOut = Join-Path $script:work "pkg-psw"
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
+        "-PswScriptPath", $pswSrc, "-OutDir", $pswOut)
+    Assert-True ($r.ExitCode -eq 0) ("a package with portsw.vbs was rejected:`n" + $r.Output)
+    $pswStaged = Join-Path $pswOut "portsw.vbs"
+    Assert-True (Test-Path -LiteralPath $pswStaged) "portsw.vbs is not at the package root."
+    if (Test-Path -LiteralPath $pswStaged) {
+        Assert-True ((Get-StandInSha ([System.IO.File]::ReadAllBytes($pswStaged))) -eq
+                     (Get-StandInSha ([System.IO.File]::ReadAllBytes($pswSrc)))) `
+            "the staged portsw.vbs differs from src\portsw.vbs."
+    }
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $flatOut "portsw.vbs"))) `
+        "a stand-in package that did not name -PswScriptPath carries portsw.vbs."
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
+        "-PswScriptPath", (Join-Path $script:work "no-such.vbs"), "-OutDir", (Join-Path $script:work "pkg-psw-missing"))
+    Assert-True ($r.ExitCode -ne 0) "a missing portsw.vbs was not refused."
+    $pswBytes = [System.IO.File]::ReadAllBytes($pswSrc)
+    $pswBad = @($pswBytes | Where-Object { $_ -ge 0x80 -or ($_ -lt 0x20 -and $_ -ne 9 -and $_ -ne 10 -and $_ -ne 13) })
+    Assert-True ($pswBad.Count -eq 0) "src\portsw.vbs holds a byte outside printable ASCII, TAB, CR and LF."
+    $pswText = [System.IO.File]::ReadAllText($pswSrc)
+    Assert-True (-not ($pswText -match "(?<!`r)`n")) "src\portsw.vbs has a line not ended by CRLF."
+    foreach ($infName in @("src\xhci98.inf", "src\xhci98-amd64.inf")) {
+        $infText = [System.IO.File]::ReadAllText((Join-Path $repo $infName))
+        $descMatch = [regex]::Match($infText, '(?m)^XhciDesc="([^"]*)"')
+        Assert-True $descMatch.Success "$infName has no XhciDesc string this test can read."
+        if ($descMatch.Success) {
+            Assert-True ($pswText.Contains('Const XHCI_DESC = "' + $descMatch.Groups[1].Value + '"')) `
+                "src\portsw.vbs does not look for $infName's XhciDesc, so it would find no controller."
+        }
+    }
+    foreach ($needle in @('"XhciIntelPortSwitch"', '"REG_DWORD"',
+                          'HKLM\System\CurrentControlSet\Services\Class\USB\',
+                          'HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\',
+                          'RESTART WINDOWS')) {
+        Assert-True ($pswText.Contains($needle)) "src\portsw.vbs no longer contains $needle."
+    }
+
     # --- a diagnostic probe driver must never become install media ----------
     Write-Step "a diagnostic probe driver is refused"
     $probeDriver = Join-Path $srcDir "xhci98-probe.sys"
@@ -2002,7 +2049,11 @@ try {
         @{ Find = '$makePackage, "-Flavor", $f, "-Arch", $leg.PkgArch,';
            Why  = "the publisher no longer tells the packager which architecture to build, so every leg would stage the x86 package" },
         @{ Find = 'throw "the release and debug $a binaries are identical - one build was packaged twice."';
-           Why  = "the identical-binary refusal no longer compares within an architecture, where it is the only place a collision could happen" }
+           Why  = "the identical-binary refusal no longer compares within an architecture, where it is the only place a collision could happen" },
+        @{ Find = 'foreach ($name in ($publishable + $uasPublishable + $oemPublishable + $pswPublishable)) {';
+           Why  = "a cut no longer publishes portsw.vbs, the port switchover's user script, beside the INF (roadmap-hcd task 36.42)" },
+        @{ Find = '$pswPublishable = @("portsw.vbs")';
+           Why  = "the port switchover's user script is no longer one of the files a flavour directory may carry" }
     )) {
         Assert-True ($releaserText.Contains($anchor.Find)) `
             ("make-release.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + ".")

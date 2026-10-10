@@ -511,6 +511,13 @@ $uasPublishable = @("xhciuas.inf", "xhciuas.sys")
 # -UploadSetOnly gates it where it is present and does not require it.
 $oemPublishable = @("txtsetup.oem")
 
+# The port switchover's user script (roadmap-hcd task 36.42), published at
+# the root of every flavour directory a cut writes, beside the INF the user
+# installed from. Not an INF-declared file: it is a text file the user runs
+# and the setup engine never reads. A version published before 2.3.0.0 has
+# none, so it is accepted where present and not required of one.
+$pswPublishable = @("portsw.vbs")
+
 # The DDK's obj directory is the one place its vocabulary is still read; the
 # published directory name is built from the flavour and the architecture
 # together by New-ReleaseLegs below, so the flavour word is no longer a
@@ -1402,7 +1409,7 @@ their defaults.
             Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $expected `
                                                -PublishedPaths $publishedPaths `
                                                -InfName $infName -Flavor $f `
-                                               -Also ($uasPublishable + $oemPublishable)
+                                               -Also ($uasPublishable + $oemPublishable + $pswPublishable)
 
             # Copied at the path the INF declares, which is where the check
             # below will look for it. Taking the layout from the gate's parse
@@ -2085,7 +2092,7 @@ runs are what stand between a broken binary and a guest that cannot boot.
         Ensure-Directory $destRoot
         Ensure-Directory $destDir
 
-        foreach ($name in ($publishable + $uasPublishable + $oemPublishable)) {
+        foreach ($name in ($publishable + $uasPublishable + $oemPublishable + $pswPublishable)) {
             $src = Join-Path $pkgDir $name
             if (-not (Test-Path -LiteralPath $src)) {
                 throw "make-package.ps1 produced no '$name' in '$pkgDir'."
@@ -2102,7 +2109,7 @@ runs are what stand between a broken binary and a guest that cannot boot.
         Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected[$leg.Arch] `
                                            -PublishedPaths $declaredPublished[$leg.Arch] `
                                            -InfName "xhci98.inf" -Flavor $leg.Id `
-                                           -Also ($uasPublishable + $oemPublishable)
+                                           -Also ($uasPublishable + $oemPublishable + $pswPublishable)
 
         $sys = Join-Path $destDir "xhci98.sys"
         $info = (Get-Item -LiteralPath $sys).VersionInfo
@@ -2605,6 +2612,7 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $contents += "      SHA-256"
         $contents += ("      {0}" -f $s.UasSha256)
         $contents += "      txtsetup.oem (for Windows 2000 and XP Setup's F6 prompt)"
+        $contents += "      portsw.vbs   (turns XhciIntelPortSwitch on or off; section 9)"
         $contents += ""
     }
     if ($multiArch) {
@@ -3438,8 +3446,9 @@ being unsigned, and no change to this driver can remove them:
 
   * INTEL 7-, 8- AND 9-SERIES CHIPSETS: A DEVICE ON A BLUE CONNECTOR MOVES
     BETWEEN THE USB 2.0 CONTROLLER AND THIS DRIVER when this driver's
-    controller starts or stops, so a drive busy there is disconnected
-    (XhciIntelPortSwitch, section 9).
+    controller starts or stops, so a drive busy there is disconnected.
+    Only with the switchover on (XhciIntelPortSwitch 1 or 2); it is off
+    by default (section 9).
 
   * WINDOWS XP FROM THE F6 FLOPPY: GUI-MODE SETUP ASKS ABOUT THE UNSIGNED
     DRIVER BEFORE THE USB KEYBOARD WORKS. A PS/2 or built-in laptop
@@ -3664,13 +3673,14 @@ means the default each one states.
   XhciIntelPortSwitch  -  the Intel 7/8/9-series port switchover
   ..............................................................
 
-  Default 1: on, for an Intel xHCI with PCI device id 1E31, 8C31, 9C31,
-  8CB1, 9CB1 or 8D31 (7-, 8- and 9-series chipsets, Ivy Bridge to
-  Broadwell, and C610/X99). It is read on every Intel controller and on no
-  other vendor's. On those chipsets each switchable
+  Default 0: off. Set to 1, it is on for an Intel xHCI with PCI device id
+  1E31, 8C31, 9C31, 8CB1, 9CB1 or 8D31 (7-, 8- and 9-series chipsets, Ivy
+  Bridge to Broadwell, and C610/X99). It is read on every Intel controller
+  and on no other vendor's. On those chipsets each switchable
   connector, usually a blue one, is wired to both the USB 2.0 (EHCI) and
   the xHCI controller, and firmware on "Auto", or with no setting,
-  typically leaves it on the USB 2.0 one. This driver moves
+  typically leaves it on the USB 2.0 one, where it works if a USB 2.0
+  driver is loaded. At 1 this driver moves
   those connectors to itself at each start and resume, and hands them back
   when its controller stops and at shutdown.
 
@@ -3678,11 +3688,19 @@ means the default each one states.
   connector is disconnected there when this driver starts and comes back
   under it, and the reverse at a stop: do not have a drive busy there then.
 
-  Set it to 0 to leave the connectors where firmware put them. ONLY 0
-  TURNS IT OFF; absent or any other number is on. Read when the controller
-  starts, so restart after changing it. A stop gives back only the
-  registers the driver itself wrote. Read on a Lenovo B490 (1E31) under
-  Windows 98 SE with NUSB; standby and the other five ids are untested.
+  At 0, absent or not a DWORD, the driver leaves the connectors where
+  firmware put them; 1 or any other number but 2 is on. Up to 2.2.0.0 the
+  default was 1, and an update KEEPS the value already there, so a machine
+  updated from 2.1.1.0 or 2.2.0.0 stays at 1 until it is changed.
+
+  PORTSW.VBS, beside the INF in each RELEASE and DEBUG directory, shows
+  and sets it on every xhci98 controller, with nothing to install, on
+  every Windows this driver runs on. Double-click it, or run
+      cscript //nologo portsw.vbs show     (or 1, or 0)
+  as an administrator. Read when the controller starts, so RESTART
+  WINDOWS after changing it. A stop gives back only the registers the
+  driver itself wrote. Read on a Lenovo B490 (1E31) under Windows 98 SE
+  with NUSB; standby and the other five ids are untested.
 
   Set to exactly 2, it does the same on ANY Intel xHCI controller, listed
   or not, for a chipset with these connectors that the list misses (on a
@@ -3697,8 +3715,8 @@ means the default each one states.
       registers of unknown meaning, at every start, resume, stop and
       shutdown, and the result is unknown. Use 2 only for an Intel chipset
       that has both an EHCI and an xHCI controller and that this driver
-      does not list, and at your own risk. Everyone else should leave the
-      value at 1.
+      does not list, and at your own risk. Everyone else should use 0
+      or 1.
 
   Value 2 has been read on no unlisted Intel controller.
 

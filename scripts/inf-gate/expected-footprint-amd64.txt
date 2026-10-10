@@ -89,7 +89,7 @@ reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciForceBulkOnly|0x00010003|0|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciFastPollFsLs|0x00010003|0|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciFirstEnumWaitMs|0x00010003|5000|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciFirstEnumPortMs|0x00010003|2000|keep
-reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciIntelPortSwitch|0x00010003|1|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciIntelPortSwitch|0x00010003|0|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciIntelIrqRoute|0x00010003|1|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciTolerance|0x00010003|1|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciIntervalCap|0x00010003|1|keep
@@ -144,7 +144,7 @@ reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciForceBulkOnly|0x00010003|0|k
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciFastPollFsLs|0x00010003|0|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciFirstEnumWaitMs|0x00010003|5000|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciFirstEnumPortMs|0x00010003|2000|keep
-reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciIntelPortSwitch|0x00010003|1|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciIntelPortSwitch|0x00010003|0|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciIntelIrqRoute|0x00010003|1|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciTolerance|0x00010003|1|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciIntervalCap|0x00010003|1|keep

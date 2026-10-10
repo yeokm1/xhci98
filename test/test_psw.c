@@ -114,7 +114,8 @@ static ULONG fakeValue(PVOID context, PULONG value)
 
 /* A Lynx Point with four SuperSpeed and fourteen USB 2.0 connectors
  * switchable, all on EHCI, as firmware on Auto leaves it; a Lenovo
- * subsystem id, and XhciIntelPortSwitch at the INF's 1. */
+ * subsystem id, and XhciIntelPortSwitch set to 1 by the user (the INF has
+ * written 0 since task 36.42). */
 static void fakeInit(FAKE_CFG *f, XHCI_PSW_IO *io)
 {
     ULONG i;
@@ -203,11 +204,14 @@ static void test_board(void)
 
 static void test_mode(void)
 {
-    /* A listed controller: on unless an explicit 0; 2 is not a bypass. */
-    CHECK_EQ(XhciPswMode(ID_LISTED, 0, 0), XHCI_PSW_MODE_GATED,
-             "listed, absent is on");
-    CHECK_EQ(XhciPswMode(ID_LISTED, 0, 5), XHCI_PSW_MODE_GATED,
-             "listed, absent is on whatever was left");
+    /* A listed controller: on for a found nonzero value, off when absent
+     * (task 36.42); 2 is not a bypass. */
+    CHECK_EQ(XhciPswMode(ID_LISTED, 0, 0), XHCI_PSW_MODE_OFF,
+             "listed, absent is off");
+    CHECK_EQ(XhciPswMode(ID_LISTED, 0, 5), XHCI_PSW_MODE_OFF,
+             "listed, absent is off whatever was left");
+    CHECK_EQ(XhciPswMode(ID_LISTED, 0, 1), XHCI_PSW_MODE_OFF,
+             "listed, absent is off with a 1 left over");
     CHECK_EQ(XhciPswMode(ID_LISTED, 1, 0), XHCI_PSW_MODE_OFF,
              "listed, an explicit 0 is off");
     CHECK_EQ(XhciPswMode(ID_LISTED, 1, 1), XHCI_PSW_MODE_GATED, "listed, 1");
@@ -225,7 +229,7 @@ static void test_mode(void)
     CHECK_EQ(XhciPswMode(ID_SPT, 1, 0), XHCI_PSW_MODE_OFF,
              "Sunrise Point, 0");
     CHECK_EQ(XhciPswMode(ID_SPT, 1, 1), XHCI_PSW_MODE_OFF,
-             "Sunrise Point, the default 1 writes nothing");
+             "Sunrise Point, 1 writes nothing");
     CHECK_EQ(XhciPswMode(ID_SPT, 1, 2), XHCI_PSW_MODE_BYPASS,
              "Sunrise Point, 2 bypasses the list");
     CHECK_EQ(XhciPswMode(ID_SPT, 1, 3), XHCI_PSW_MODE_OFF,
@@ -557,6 +561,24 @@ static void test_life_start(void)
     CHECK_EQ(life.Found, 1, "the value found");
     CHECK_EQ(f.Count, 2, "the id and the value, no subsystem read when off");
     checkAccess(&f, 1, 'v', FAKE_VALUE, 0, "the value after the id");
+
+    /* Absent, or of another type (the executor's reader refuses both the
+     * same way): off, the default since task 36.42. */
+    fakeInit(&f, &io);
+    f.ValueFound = 0;
+    CHECK_EQ(XhciPswLifeStart(&io, &life, &st), 0, "listed, value absent");
+    CHECK_EQ(life.Decision, XHCI_PSW_DECIDE_OFF, "absent is off");
+    CHECK_EQ(life.Mode, XHCI_PSW_MODE_OFF, "mode off");
+    CHECK_EQ(life.Found, 0, "the value not found");
+    CHECK_EQ(life.Value, 0, "the value logged as 0");
+    CHECK_EQ(life.On, 0, "not on");
+    CHECK_EQ(life.Written, 0, "nothing written");
+    CHECK_EQ(f.Count, 2, "the id and the value, no subsystem read");
+    CHECK_EQ(fakeWrites(&f, XHCI_PSW_USB3_PSSEN) +
+             fakeWrites(&f, XHCI_PSW_XUSB2PR), 0, "no write when absent");
+    CHECK_EQ(XhciPswLifeResume(&io, &life, &st), 0, "no resume route");
+    CHECK_EQ(XhciPswLifeEnd(&io, &life, &st), 0, "no release");
+    CHECK_EQ(f.Count, 2, "the resume and the end touch nothing");
 
     fakeInit(&f, &io);
     f.Id = ID_SPT;

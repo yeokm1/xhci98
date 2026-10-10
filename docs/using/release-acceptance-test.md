@@ -123,9 +123,11 @@ failed" are different findings.
 and C610/X99 a BIOS setting decides which controller owns the USB ports at
 boot: `XUSB2PR` routes the USB 2.0 ports between EHCI and xHCI, so the same
 machine presents a working xHCI or one with nothing on it depending on a
-setting nobody recorded. Since `2.1.1.0` the driver routes the switchable
+setting nobody recorded. Since `2.1.1.0` the driver can route the switchable
 ports to xHCI itself on those chipsets (Intel device ids 1E31, 8C31, 9C31,
-8CB1, 9CB1 and 8D31) unless `XhciIntelPortSwitch` is 0, so on such a machine
+8CB1, 9CB1 and 8D31), since `2.3.0.0` only when `XhciIntelPortSwitch` turns
+it on (1, or 2; the install writes 0, and an update keeps an earlier 1), so
+on such a machine
 also record that value, and keep the 8.4 report's `psw.` records with the
 result: the setting still decides what the machine looks like before the
 driver starts and which connectors are outside the switchable set.
@@ -443,7 +445,7 @@ a 32-bit program, runs under WOW64 against the 64-bit driver; `XHCISNAP
 | 8.4 | `XHCISNAP -o C:\MYDUMP` | It writes `C:\MYDUMP.TXT` and prints the resolved absolute path it wrote it to |
 | 8.5 | Read that file's header | The tool's version and build stamp, the driver's counters, and at level 2 the driver's own note ring below them. A report whose version is not this release's is a report from the wrong build |
 | 8.6 | `XHCISNAP -disable` | It reports the channel off again. A machine left with the channel on is a machine whose diagnostic state anyone using it can read |
-| 8.7 | Record only: look at the driver's own key for `XhciLogVerbosity`, `XhciLogDebugView`, `XhciImodInterval250ns`, `XhciForceBulkOnly`, `XhciFastPollFsLs`, `XhciFirstEnumWaitMs`, `XhciFirstEnumPortMs`, `XhciIntelPortSwitch`, `XhciIntelIrqRoute`, `XhciTolerance`, `XhciIntervalCap` and `XhciAvgTrbEsit`, then read the 8.4 report's "registry values" block | Write down whether each value is there and what its data is. On a fresh install the INF writes all twelve: `XhciImodInterval250ns` `160`, `XhciFirstEnumWaitMs` `5000`, `XhciFirstEnumPortMs` `2000`, `XhciIntelPortSwitch`, `XhciIntelIrqRoute`, `XhciTolerance` and `XhciIntervalCap` `1`, and the other five `0`, and the report shows the interval read and in force. Write down the report's lines for the value read and the interval in force |
+| 8.7 | Record only: look at the driver's own key for `XhciLogVerbosity`, `XhciLogDebugView`, `XhciImodInterval250ns`, `XhciForceBulkOnly`, `XhciFastPollFsLs`, `XhciFirstEnumWaitMs`, `XhciFirstEnumPortMs`, `XhciIntelPortSwitch`, `XhciIntelIrqRoute`, `XhciTolerance`, `XhciIntervalCap` and `XhciAvgTrbEsit`, then read the 8.4 report's "registry values" block | Write down whether each value is there and what its data is. On a fresh install the INF writes all twelve: `XhciImodInterval250ns` `160`, `XhciFirstEnumWaitMs` `5000`, `XhciFirstEnumPortMs` `2000`, `XhciIntelIrqRoute`, `XhciTolerance` and `XhciIntervalCap` `1`, and the other six `0` (`XhciIntelPortSwitch` among them since `2.3.0.0`; an update keeps the `1` an earlier install wrote), and the report shows the interval read and in force. Write down the report's lines for the value read and the interval in force |
 | 8.8 | The SuperSpeed witness: in the 8.4 report, find 5.8's device | The speed the driver decoded from its port, SuperSpeed, and the speed it programmed into the device's slot, SuperSpeed, agreeing. The slot's speed is the report's slot table: `PSIV` is the Speed field of the controller's own Slot Context for the device, and `speed` is that value decoded, `SuperSpeed, 5 Gbit/s, Gen 1x1` for a 5 Gbit/s link. A SuperSpeed device that reads High Speed here ran on the USB 2.0 port of its connector; record which connector it was in |
 
 If nothing comes back (8.4): run `XHCISNAP -probe`, which answers whether the

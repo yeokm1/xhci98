@@ -63,8 +63,9 @@ $repo = Split-Path -Parent $scriptDir
 $trees = @("src", "test", "scripts", "xhcisnap", "xhciqual")
 
 # File kinds the 1998-era toolchain reads. All three rules apply to these.
-# `.oem` is txtsetup.oem, which text-mode Setup reads (task 33.3).
-$toolchainExt = @(".c", ".h", ".asm", ".rc", ".def", ".inf", ".bat", ".cmd", ".oem")
+# `.oem` is txtsetup.oem, which text-mode Setup reads (task 33.3); `.vbs` is
+# src\portsw.vbs, which Windows 98's Script Host reads (roadmap-hcd 36.42).
+$toolchainExt = @(".c", ".h", ".asm", ".rc", ".def", ".inf", ".bat", ".cmd", ".oem", ".vbs")
 $toolchainName = @("makefile", "sources")
 
 # Everything else that is source in this tree. Rules 1 and 2 only - see above.
