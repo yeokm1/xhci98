@@ -2039,7 +2039,7 @@ Root hub, NT paths - every NT target registers the same provider:
 |---|---|---|
 | 2000 SP4 `usb.inf` (5.00.2195.6717) | `[ROOTHUB2.AddReg.NT]` (for `USB\ROOT_HUB20`), `[StandardHub.AddReg.NT]` (`USB\ROOT_HUB`, `USB\CLASS_09`), `[Usb2Hub.AddReg.NT]` (`USB\HubClass`) | `HKR,,EnumPropPages32,,"usbui.dll,USBHubPropPageProvider"` |
 | XP SP3 `usbport.inf` (5.1.2600.5512) | `[ROOTHUB.AddReg.NT]` (`USB\ROOT_HUB` and `USB\ROOT_HUB20` both `=ROOTHUB.Dev`) | same |
-| XP SP3 `usb.inf` | `[StandardHub.AddReg.NT]` | same; `[Composite.DelReg.NT]` deletes `HKR,,EnumPropPages32` for composites |
+| XP SP3 `usb.inf` | `[StandardHub.AddReg.NT]` | same; `[Comp.DelReg.NT]` deletes `HKR,,EnumPropPages32` for composites |
 | XP x64 `usbport.inf` (5.2.3790.1830) | `[ROOTHUB.AddReg.NT]` | same |
 | Vista SP2 x86/x64 `usbport.inf` (6.0.6002.18005) | `[ROOTHUB.AddReg.NT]` | same; plus five `WMIInterface` lines in `[ROOTHUB.Dev.NT.WMI]` |
 | 7 SP1 x86/x64 `usbport.inf` (6.1.7601.17514) | `[ROOTHUB.AddReg.NT]` | same, plus `HKLM,System\CurrentControlSet\Services\usbhub,BootFlags,0x00010003,4`; `[ROOTHUB.Dev.NT]` also `AddPowerSetting=USBPowerSettings`; `.WMI` as Vista |
@@ -2053,7 +2053,7 @@ Root hub, 9x paths - the 16-bit `sysclass.dll` page:
 | NUSB 3.3 `USB2.INF` | `[ROOTHUB2]` `AddReg=Usb2Hub.AddReg` (`USB\ROOT_HUB20`), `[Usb2Hub.Dev]` (`USB\HubClass`) | `[Usb2Hub.AddReg]` `HKR,,DevLoader,,*NTKERN` / `HKR,,NTMPDriver,,usbhub20.sys` / `HKR,,EnumPropPages,,"sysclass.dll,USBHubPropPage"` |
 | NUSB 3.6 `USB2.INF` | same sections | the same three lines (81-84) |
 | NUSB 3.6 `USB.INF` | `[HUB.AddReg]`, the power section | `HKR,,NTMPDriver,,usbhub.sys`; `HKR,,EnumPropPages,,"sysclass.dll,USBHubPropPage"` (line 542) |
-| SweetLow `USB2.INF` | `[ROOTHUB2]` / `[Usb2Hub.Dev]` | the same three lines (76-79); `[Composite.DelReg]` deletes `HKR,,EnumPropPages` |
+| SweetLow `USB2.INF` | `[ROOTHUB2]` / `[Usb2Hub.Dev]` | the same three lines (76-79); `[Comp.DelReg]` deletes `HKR,,EnumPropPages` |
 
 Controller, as the OS INFs write it:
 
@@ -3825,8 +3825,10 @@ its children:** the device's link follows the parent's children - the
 function PDOs - and leaves D0 only when the last of them has (record 14
 section 4.3, unchanged in substance); the parent itself is **not a voter**:
 it is excluded from stage A as a hub PDO is (record 14 section 5.1) - no
-D1/D2 or wake in its capabilities, `WAIT_WAKE` refused, an idle IRP held
-uncalled, a D-IRP recorded and completed at once - so its own D0, which no
+D1/D2 or wake in its capabilities, `WAIT_WAKE` refused, a D-IRP recorded
+and completed at once, and an idle notification never reaching stage A at
+all, since the parent refuses every internal IOCTL `STATUS_NOT_SUPPORTED`
+(above; nothing above its FDO sends one) - so its own D0, which no
 client ever moves, can never hold the device up. The composite readiness of
 the idle batches (record 14 section 6.2, "as the composite parent does")
 stays the bus's, over the same children. The composite FDO does not become
@@ -3866,9 +3868,9 @@ count at creation, and each re-presentation's port and count.
 
 **The INFs and the gates.** Each models section of both files carries one
 more model, `%CompositeDesc%` (`xHCI98 USB Composite Device`) under
-`XHCI98\COMPOSITE`, installed by `Composite.Dev` (98/ME: `DevLoader=*NTKERN`,
-`NTMPDriver=xhci98.sys`), `Composite.Dev.NTx86` / `.NTamd64` and
-`Composite.Dev6.*` (the service; a `DelReg` of `EnumPropPages32`, as XP's
+`XHCI98\COMPOSITE`, installed by `Comp.Dev` (98/ME: `DevLoader=*NTKERN`,
+`NTMPDriver=xhci98.sys`), `Comp.Dev.NTx86` / `.NTamd64` and
+`Comp.Dev6.*` (the service; a `DelReg` of `EnumPropPages32`, as XP's
 own `usb.inf` writes for its composite parent). **A composite section copies
 nothing**, for the hub's reason: the devnode exists only under a running
 `xhci98.sys`, and a device plugged in long after the install must not send
