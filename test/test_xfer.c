@@ -4708,15 +4708,63 @@ static void test_wide_td(void)
     CHECK_EQ(big.td[0].BytesTransferred, 10UL * 4096UL - 4UL,
              "TD 0 keeps its measured length");
 
-    /* Removal, and Set TR Dequeue past it. */
-    big_park(900);
+    /* Removal with a survivor behind it, as the cancel walk does it: the
+     * wrapped 513-TRB head taken off and Set TR Dequeue to the survivor's
+     * first TRB, the command's pointer and DCS read from the ring, on both
+     * laps' cycles. */
+    for (lap = 0; lap < 2; lap++) {
+        XHCI_TRB cmd;
+        ULONG dcs;
+
+        big_park(900);
+        if (lap == 1) {
+            CHECK_EQ(big_submit(0, 513), XHCI_XFER_OK, "a first lap's TD");
+            CHECK_EQ(big_event(big.td[0].LastIndex, XHCI_CC_SUCCESS, 0,
+                               &result), XHCI_XFER_OK, "retired");
+            XhciXferQueueInit(&big.queue);
+            big_fill(900);
+        }
+        CHECK_EQ(big_submit(0, 513), XHCI_XFER_OK, "a wrapped 513-TRB TD");
+        CHECK_EQ(big_submit(1, 4), XHCI_XFER_OK, "a survivor behind it");
+        CHECK_EQ(XhciXferQueueRemove(&big.queue, &big.td[0]), 1,
+                 "the head taken off");
+        CHECK_EQ(XhciRingSetDequeue(&big.ring,
+                                    XhciRingTrbPA(&big.ring,
+                                                  big.td[1].FirstIndex)),
+                 XHCI_RING_OK, "the dequeue moved to the survivor");
+        dcs = XhciRingDequeueCycle(&big.ring);
+        CHECK_EQ(XhciTrbSetTrDequeue(&cmd, FIX_SLOT, FIX_DCI,
+                                     XhciRingDequeuePA(&big.ring), dcs),
+                 XHCI_RING_OK, "the command built");
+        CHECK_EQ(cmd.Param0 & ~0xFUL,
+                 XhciRingTrbPA(&big.ring, big.td[1].FirstIndex),
+                 "its pointer is the survivor's first TRB");
+        CHECK_EQ(cmd.Param0 & 1UL, (big.mem[big.td[1].FirstIndex].Control &
+                                    XHCI_TRB_CYCLE),
+                 "its DCS is the survivor's cycle");
+        CHECK_EQ(big_event(big.td[1].LastIndex, XHCI_CC_SUCCESS, 0, &result),
+                 XHCI_XFER_OK, "the survivor completes");
+        CHECK_EQ(result.Completed, &big.td[1], "alone");
+        CHECK_EQ(XhciRingFree(&big.ring), XhciRingCapacity(&big.ring),
+                 "the ring empty again");
+    }
+
+    /* A drain takes a big TD and a survivor alike, the ring untouched. */
+    big_park(500);
     CHECK_EQ(big_submit(0, 513), XHCI_XFER_OK, "a 513-TRB TD");
-    CHECK_EQ(XhciXferQueueRemove(&big.queue, &big.td[0]), 1, "taken off");
-    CHECK_EQ(XhciRingSetDequeue(&big.ring,
-                                XhciRingTrbPA(&big.ring, big.ring.Enqueue)),
-             XHCI_RING_OK, "the dequeue set past it");
-    CHECK_EQ(XhciRingFree(&big.ring), XhciRingCapacity(&big.ring),
-             "the ring empty again");
+    CHECK_EQ(big_submit(1, 4), XHCI_XFER_OK, "and another");
+    {
+        PXHCI_TRANSFER list;
+        ULONG count;
+        ULONG enq;
+
+        enq = big.ring.Enqueue;
+        list = XhciXferQueueDrain(&big.queue, (LONG)WANT_USBD_CANCELED,
+                                  &count);
+        CHECK_EQ(count, 2, "both drained");
+        CHECK_EQ(list, &big.td[0], "the big one first");
+        CHECK_EQ(big.ring.Enqueue, enq, "the ring untouched");
+    }
 }
 
 int main(void)

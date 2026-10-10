@@ -1321,7 +1321,7 @@ static void test_wide_one_td(void)
 
     seen[0] = seen[1] = seen[2] = seen[3] = 0;
     for (layout = 0; layout < 3; layout++) {
-        for (off = 0; off < 4096UL; off += 512UL) {
+        for (off = 0; off < 4096UL; off++) {
             for (b = 0; b < 2; b++) {
                 n = 0;
                 done = 0;
