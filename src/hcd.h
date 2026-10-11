@@ -2309,6 +2309,7 @@ NTSTATUS HcdMsiFilter(PHCD_CONTROLLER hc, PIRP irp);
 VOID HcdMsiStartLook(PHCD_CONTROLLER hc);
 ULONG HcdMsiRoutines(PHCD_CONTROLLER hc, PVOID *connect, PVOID *disconnect);
 ULONG HcdMsiNoLineOffered(PHCD_CONTROLLER hc);
+ULONG HcdMsiSystem(VOID);
 VOID HcdMsiRemove(PHCD_CONTROLLER hc);
 VOID HcdMsiCountersStart(PHCD_CONTROLLER hc);
 VOID HcdMsiTraceStart(PHCD_CONTROLLER hc, ULONG grant, NTSTATUS status);

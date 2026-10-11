@@ -6599,7 +6599,8 @@ controller's driver key, the first read at every start, the other two at
 `AddDevice` and every start for the next requirements filter, so a change
 takes effect at a disable and enable. `XhciQemuMsgConnectFail` 1 fails a
 message connection without calling `IoConnectInterruptEx`: the start polls
-with reason 12. `XhciMsi86NoStrip` 1 keeps the requirements filter from
+with reason 12 under mode 0, and under mode 3 fails (Code 10) with reason
+17. `XhciMsi86NoStrip` 1 keeps the requirements filter from
 stripping (outcome 5, "disabled"), as the first build did by default for
 R1 and R2's readings; the strip is on by default since 2026-10-10 (leg F
 reads mode 1 with it set, as the message).
@@ -6631,13 +6632,30 @@ accepts.
 message, 3 replaceable, 4 no line offered, 5 unsupported shape, 6
 inconsistent), `msi.filter.outcome` (1 lower failed, 2 no list, 3
 inconsistent, 4 not asked, 5 disabled, 6 no line offered, 7 no interrupt,
-8 no message, 9 unsupported, 10 replaced, 11 no memory),
+8 no message, 9 unsupported, 10 replaced, 11 no memory, 12 replaced with
+the message kept - `XhciInterruptMode` 3),
 `msi.filter.mode.raw`, `msi.filter.mode.from`, `msi.filter.lists`,
 `msi.filter.messages`, `msi.filter.lines`; after the connection
 `msi.connect.status`, `msi.connect.version`, `msi.connected` and the
 delivery and reason again. The counter block's words 96 to 113 carry the
 same (`src\xhci_counters.h`); delivery 3 MSI, 4 MSI-X, 5 a message whose
-capability was not read; reason 13 "forced, no line offered".
+capability was not read; reason 13 "forced, no line offered" (an earlier
+2.3.0.0 build's, like 11).
+
+**`XhciInterruptMode` 1 and 3 refusing a start** (design record 15 revision
+7; task 36.53). Mode 1 is the line only and mode 3 a message only; without
+it the start fails with Code 10 and records why before it returns: the
+counter block's delivery 0 and reason, the `qemu` flavour's `M86 S` record,
+and - with `XhciLogDebugView` 1 - the counter dump (its `intr.delivery` 0
+and `intr.reason`), flushed to DebugView by the start itself; with
+`XhciLogVerbosity` 2 or above the flush also carries the start's notes
+(`intr.mode` 1 or 3, `intr.delivery`, `intr.reason`) and
+`start.refused.delivery` (the reason).
+Reasons: 7 mode 1 with no interrupt or pin 0, 14 mode 1 given a message,
+16 mode 3 given no message (a line, or nothing), 17 mode 3's message not
+connected (no routines - 32-bit with `xhcimsi.sys` not bound - a refused
+connection, or Windows connecting the line instead), 18 mode 3 on Windows
+98 SE, ME, 2000 or XP (32- or 64-bit); 15 is mode 3 running its message.
 
 **The delivery's log notes** (every flavour; design record 15 section 8). At
 start: `intr.mode.read`, `intr.mode`, `intr.delivery`, `intr.reason`,

@@ -408,7 +408,13 @@ static void test_delivery_words(void)
     CHECK_EQ(XHCI_POLL_R_FORCED_POLL, 8, "reason codes");
     CHECK_EQ(XHCI_POLL_R_AUTO_LINE_DEAD, 9, "reason codes");
     CHECK_EQ(XHCI_POLL_R_MESSAGE_NOT_CONNECTED, 12, "reason codes");
-    CHECK_EQ(XHCI_POLL_R_FORCED_NO_LINE_OFFERED, 13, "reason codes, last");
+    CHECK_EQ(XHCI_POLL_R_FORCED_NO_LINE_OFFERED, 13, "reason codes");
+    CHECK_EQ(XHCI_POLL_R_FORCED_LINE_MESSAGE, 14, "reason codes");
+    CHECK_EQ(XHCI_POLL_R_FORCED_MESSAGE, 15, "reason codes");
+    CHECK_EQ(XHCI_POLL_R_FORCED_MESSAGE_NOT_GRANTED, 16, "reason codes");
+    CHECK_EQ(XHCI_POLL_R_FORCED_MESSAGE_NOT_CONNECTED, 17, "reason codes");
+    CHECK_EQ(XHCI_POLL_R_FORCED_MESSAGE_NO_SYSTEM, 18, "reason codes, last");
+    CHECK_EQ(XHCI_POLL_MODE_MESSAGE, 3, "mode 3");
     CHECK_EQ(XHCI_POLL_PIN_UNREADABLE, 2, "pin status, last");
     CHECK_EQ(XHCI_POLL_ROLE_SERVE, 2, "roles, last");
     CHECK_EQ(XHCI_POLL_BUS_WATCH, 4, "bus states, last");
@@ -492,7 +498,8 @@ static void test_msi_words(void)
     CHECK_EQ(XHCI_MSI_OUT_NO_MESSAGE, 8, "outcomes");
     CHECK_EQ(XHCI_MSI_OUT_UNSUPPORTED, 9, "outcomes");
     CHECK_EQ(XHCI_MSI_OUT_REPLACED, 10, "outcomes");
-    CHECK_EQ(XHCI_MSI_OUT_NO_MEMORY, 11, "outcomes, last");
+    CHECK_EQ(XHCI_MSI_OUT_NO_MEMORY, 11, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_REPLACED_MESSAGE, 12, "outcomes, last");
 }
 
 /* 36.22: XhciMaxTransferKB as each start takes it. */

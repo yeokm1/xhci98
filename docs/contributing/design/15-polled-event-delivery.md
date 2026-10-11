@@ -47,6 +47,23 @@ and wherever the effective mode is 1, on both architectures; mode 1 on x86
 with no line offered and no helper fails the start; the connection passes
 no spin lock of its own. Sections 3, 4, 8 and 11 follow.
 
+**Revision 7, 2026-10-11 (owner's decision of that day; roadmap task
+36.53).** `XhciInterruptMode` 1 and 3 become strict, amending the
+decision of 2026-10-09 (section 12, decision 8). **1 is the interrupt
+line only**, on every system: on Vista and 7 a message grant under mode
+1 no longer runs as mode 0, it fails the start, on both architectures
+and whether or not the x86 helper is bound - record 18 section 4.3's
+narrow "no helper and no line offered" condition goes, and reasons 11
+and 13 are no longer produced. **3 is a message-signalled interrupt
+(MSI or MSI-X) only**: on Vista and 7 the requirements filter keeps only
+the message configurations (record 18 section 4.2), the start uses the
+message where one is granted and connected, and fails otherwise - no
+fallback to the line or to polling; on Windows 98 SE, ME, 2000 and XP,
+32- and 64-bit, which have no message-signalled interrupts, mode 3
+fails the start. 0 and 2 are unchanged; 4 and above still run as 0.
+Sections 3, 3.1, 4, 4.3, 8 and 12 follow; reasons 14 to 18 are
+appended.
+
 ## 1. What is asked, and what is not
 
 A registry switch chooses how the bus learns that the controller has written
@@ -165,7 +182,7 @@ with no interrupt.
 
 | Value | Default | Meaning | Out of range |
 |---|---|---|---|
-| `XhciInterruptMode` | 0 | 0 automatic; 1 the line interrupt; 2 polling; 3 the same as 0 (2026-10-09, section 4.3); 4 and above reserved | 4 and above run as 0, the value read recorded (section 8) |
+| `XhciInterruptMode` | 0 | 0 automatic; 1 the line interrupt only; 2 polling; 3 a message-signalled interrupt only (2026-10-11, section 4.3); 4 and above reserved | 4 and above run as 0, the value read recorded (section 8) |
 | `XhciPollIdleMs` | 50 | The poll period when nothing is outstanding (section 6) | 0 runs as 50; above 5000 held to 5000 |
 | `XhciPollActiveMs` | 1 | The poll period while work is outstanding | 0 runs as 1; above the idle period in effect held to it |
 
@@ -173,7 +190,8 @@ A value that is absent, not a four-byte `REG_DWORD`, or unreadable takes
 the default, as `XhciIntelIrqRoute`'s strict reader does; the read status
 is recorded apart from the value (section 8), so a 0 somebody set is told
 from a value never found. The **effective mode** is what the rules below
-act on: 0 for a value of 0, 3 or 4 and above, else the value. Every rule
+act on: 0 for a value of 0 or 4 and above, else the value (1, 2 or 3;
+3 read as 0 from 2026-10-09 to 2026-10-11). Every rule
 in this record that says "mode 0" means the effective mode 0.
 
 Owner's decisions of 2026-10-05 (section 12): the values, their names and
@@ -186,9 +204,9 @@ bound.
   as the release before it; on one with no interrupt, it polls instead of
   failing the start; on one whose line never arrives, it moves to polling
   (section 4.2); and on Vista and 7 it takes a message interrupt where
-  Windows grants one (section 4.3). 3 was the value reserved for MSI and
-  now reads as 0 (2026-10-09), since MSI where granted is already 0's
-  first choice.
+  Windows grants one (section 4.3). It is the only mode that falls back:
+  1 and 3 each name one delivery and fail the start without it
+  (2026-10-11), and 2 always polls.
 - **50 ms idle.** A connect is debounced for 100 ms by the USB 2.0
   specification before a driver acts on it, so a 50 ms look at an idle ring
   adds no delay a user can see to a hot-plug, and costs about 20 timer DPCs
@@ -230,8 +248,10 @@ anything is connected:
   and keeps the start's answer.
 - **The decision** is one pure function in `xhci_poll.c`
   (`XhciPollDecide`, host vectors in `test_poll`), from the effective mode,
-  whether an interrupt resource was given, whether it is a message, and the
-  pin's status and value, to the delivery and the reason.
+  whether an interrupt resource was given, whether it is a message, whether
+  its routines were found, the pin's status and value, and whether the
+  system can grant a message at all (`IoIsWdmVersionAvailable(6, 0)`,
+  since revision 7), to the delivery and the reason.
 
 **A line resource** - every target, and Vista and 7 without a message
 grant:
@@ -245,6 +265,8 @@ grant:
 | 1 | present | not 0, or unreadable | line, as today | forced (pin unreadable, if so) |
 | 1 | present and pin 0, or absent | | none: the start fails as today | forced, no interrupt |
 | 2 | any | any | poll | forced |
+| 3 | any, on Windows 98 SE, ME, 2000 or XP (32- or 64-bit) | any | none: the start fails | forced message, no message interrupts on this system |
+| 3 | present or absent, on Vista or 7 | any | none: the start fails | forced message, none granted |
 
 **A message resource** - Vista and 7 only, where the INF asks for one
 (section 4.3):
@@ -252,21 +274,38 @@ grant:
 | Effective mode | Connection | Delivery | Reason |
 |---|---|---|---|
 | 0 | the message connected | MSI or MSI-X | automatic: message |
-| 1 | the message connected | MSI or MSI-X | line asked for, message granted |
-| 0 or 1 | `IoConnectInterruptEx` not found, or the connection refused | poll | message not connected |
-| 1 | x86, no helper bound, and the requirements filter found no line offered (design record 18 section 4.3) | none: the start fails | forced, no line offered |
+| 0 | `IoConnectInterruptEx` not found, or the connection refused | poll | message not connected |
+| 0 | Windows fell back to the line | line | automatic |
+| 1 | (nothing connected) | none: the start fails | forced line, a message granted |
 | 2 | (nothing connected) | poll | forced |
+| 3 | the message connected | MSI or MSI-X | forced message |
+| 3 | `IoConnectInterruptEx` not found (x86 with no helper bound), the connection refused, or Windows fell back to the line | none: the start fails | forced message, not connected |
 
-The pin plays no part under a message grant. A bound x86 helper whose
-connection fails, and amd64 in every case, keep the "message not
-connected" row under mode 1 too; the failing row is x86's with no helper
-and no line offered alone, as XP fails a forced line with no line. With
-the requirements filter enabled (design record 18 section 4.2), mode 1
-asks Windows for the line before the start, so the mode-1 message rows are
-the fallback where no line was offered or the list was not replaced.
+The pin plays no part under a message grant. With the requirements
+filter enabled (design record 18 section 4.2), mode 1 asks Windows for
+the line and mode 3 for the message before the start, so the failing
+rows are where the list offered no such choice or was not replaced (an
+unadmitted shape, the strip switched off, no memory, no list), or where
+`MSISupported` 0 took the message away before the HCD saw the list.
+Revision 7 replaced two rows of revision 6: mode 1 under a message grant
+ran it as mode 0 ("line asked for, message granted", reason 11), and
+failed only on x86 with no helper bound and no line offered ("forced, no
+line offered", reason 13).
+
+Every failing row ends the start before anything is mapped or connected,
+with the status a forced line with no line has always given:
+`STATUS_DEVICE_CONFIGURATION_ERROR` when an interrupt resource was
+granted, `STATUS_INSUFFICIENT_RESOURCES` when none was - Code 10 either
+way - except mode 3's "not connected" row, which can be known only after
+the connection is tried and so fails there, after the release disconnects
+whatever was connected (a line Windows fell back to), with
+`STATUS_DEVICE_CONFIGURATION_ERROR`. Each failure is recorded before the
+start returns: the delivery none and its reason in the counter block, the
+start-decision event (design record 18 section 9), and the start's log
+notes, flushed to DebugView when `XhciLogDebugView` is set (section 8).
 
 A value of 4 and above is recorded as "reserved value N, run as
-automatic"; 3 is the same as 0 and records nothing extra.
+automatic".
 
 The delivery and reason are held in the controller (`hc`) and copied into
 the core's extension (`EventDelivery`) after the start zeroes it, so the
@@ -592,17 +631,25 @@ resubmitted once the drain has run.
 the controller may take a message-signalled interrupt. It needs one
 message, for Interrupter 0. Decided 2026-10-09 (roadmap 36.15 has the full
 list): mode 0 takes a message where Windows granted one, else the line,
-else polling; 3 reads as 0; **mode 1 forces the line by itself** - the
+else polling; 3 read as 0 until 2026-10-11 (below); **mode 1 forces the line by itself** - the
 requirements filter of design record 18 section 4.2 keeps only the line
-configurations, on x86 and amd64 - and where a message is granted anyway
-(no line offered, the filter disabled or not replacing the list), mode 1
-runs it as 0 and logs that the line was asked for, except on x86 with no
-helper bound and no line offered, where the start fails as XP's does; the
-line is also forced by `MSISupported` 0 in the controller's hardware key;
-a message connection that fails polls for that start; single-message
-MSI-X is admitted; the dead-line rule is the line's only; the routing
-quirk is not active under a message; XP x64 ignores the key and keeps the
-line.
+configurations, on x86 and amd64; the line is also forced by
+`MSISupported` 0 in the controller's hardware key; a message connection
+that fails polls for that start under mode 0; single-message MSI-X is
+admitted; the dead-line rule is the line's only; the routing quirk is not
+active under a message; XP x64 ignores the key and keeps the line.
+
+**Amended 2026-10-11 (owner; revision 7, decision 8).** Mode 1 is the
+line only: where a message is granted anyway (no line offered, the
+filter disabled or not replacing the list) the start fails, on x86 and
+amd64, helper or not; it no longer runs the message as 0. Mode 3, which
+read as 0, is now the message only: on Vista and 7 the requirements
+filter keeps only the message configurations (record 18 section 4.2), a
+granted and connected message runs, and anything else - no message
+granted, the routines not found (x86 with no helper bound), the
+connection refused, or Windows falling back to the line - fails the
+start, with no fallback to the line or to polling; on Windows 98 SE, ME,
+2000, XP and XP x64 mode 3 fails the start, since they grant no message.
 
 **How each architecture reaches `IoConnectInterruptEx`** (36.5's review;
 owner, 2026-10-09). Four review rounds found no way for the one x86
@@ -628,8 +675,9 @@ imports are but not where `IoConnectInterruptEx` is (round 4). So:
   the configurations offering a line, so Windows grants the line and Vista
   and 7 x86 keep the line, the routing quirk and polling exactly as on XP.
   Where the list is not replaced (no line offered, the filter disabled,
-  an unadmitted shape, no memory) a message grant meets the rows below for
-  a routine not found, with record 18 section 4.3's mode-1 exception.
+  an unadmitted shape, no memory) a message grant meets section 4's rows
+  for a routine not found: mode 0 polls, and modes 1 and 3 fail the
+  start.
 - **After a fresh install or an update** on Vista and 7 x86 the INF asks
   for a restart (`Reboot`; owner, 2026-10-09): the helper is boot-start
   and active from the next boot (record 18 section 5).
@@ -642,8 +690,11 @@ driver already uses for NT 6.x's other paths, and the x86 image's one new
 import, `IoGetDeviceObjectPointer`, is a Windows 2000 export with stock
 Windows 98 SE precedent (`1394bus.sys`), called on NT 6 only. A message
 descriptor that reaches the x86 image with no helper answering takes
-section 4's "message not connected" row and polls, or under mode 1 with no
-line offered fails the start (record 18 section 4.3).
+section 4's "message not connected" row and polls under mode 0, and fails
+the start under modes 1 and 3. Mode 3 on those systems fails the start
+before anything is connected (section 4, the first table's mode-3 rows):
+the decision reads `IoIsWdmVersionAvailable(6, 0)`, so a message is never
+looked for there.
 
 **The INF.** On the `Xhci.Dev6.NTamd64` path of `src/xhci98-amd64.inf`
 (Vista and 7 x64), and on the `Xhci.Dev6.NTx86` path of `src/xhci98.inf`
@@ -782,13 +833,18 @@ capability read. `XHCISNAP` names each (36.9).
 **Legs** are 36.16's, on Vista and 7 x64, and on x86 with the helper: QEMU's `qemu-xhci` with `msi=on,msix=off`,
 `msi=off,msix=on` and the launchers' default, under modes 0 and 3, read
 as MSI, MSI-X and whatever Windows granted; `MSISupported` 0 read as the
-line; mode 1 under a grant read as the message with its log note; a
+line; a
 `qemu`-flavour failed connection read as polling with its reason; a
 `MessageNumberLimit` raised by hand, read as a grant of several served as
 one; mode 1 with `MSISupported` 1 read as the line, x86 and x64, once the
 requirements filter is enabled (record 18 leg F); and the down-level
 targets, and Vista and 7 x86 without the helper, reading as the release
 before it (the filter's line), with record 18's legs H, L, U, D and R.
+Revision 7's legs (task 36.53): mode 3 read as the message (the filter's
+outcome "replaced: the message kept"), mode 1 read as the line, and a
+failed start (Code 10) with its reason wherever the named delivery cannot
+be had - mode 3 on 7 x86 without the helper, on XP and on 98 SE; mode 1
+where no line is offered.
 
 ## 5. The poller's lifecycle
 
@@ -1274,9 +1330,14 @@ automatic, 2 automatic with the pin unreadable, 3 automatic: interrupt pin
 0, 4 automatic: no interrupt resource, 5 forced line, 6 forced line with
 the pin unreadable, 7 forced, no interrupt (the start fails), 8 forced
 poll, 9 automatic: line interrupt not delivered (the move), 10 automatic:
-message, 11 line asked for, message granted, 12 message not connected, 13
-forced, no line offered (x86 with no helper bound: the start fails; design
-record 18 section 4.3); pin
+message, 11 line asked for, message granted (revision 6 only: no longer
+produced), 12 message not connected, 13 forced, no line offered (revision 6
+only: x86 with no helper bound, the start failed; no longer produced), 14
+forced line, a message granted (the start fails), 15 forced message (mode
+3, the message connected), 16 forced message, none granted (the start
+fails), 17 forced message, not connected (the start fails), 18 forced
+message, no message interrupts on this system (98 SE, ME, 2000, XP, XP
+x64: the start fails); pin
 status 0 not read, 1 read, 2 unreadable.
 
 The log ring's notes: at start `intr.mode.read`, `intr.mode`,
@@ -1285,6 +1346,21 @@ The log ring's notes: at start `intr.mode.read`, `intr.mode`,
 and `intr.moved.masked`. Nothing per poll or per look. The stop's counter
 dump (`hcdLogCountersLocked`) carries the delivery, the reason and the
 poller's and watcher's counters by the same `intr.*` and `poll.*` names.
+
+**A start the delivery refuses** (revision 7; mode 1 or 3 without its
+delivery, and mode 1 with no interrupt as before) never reaches the stop
+that flushes the ring, since a failed start is never stopped, and its FDO
+goes at the remove that follows, so neither the counter block nor the
+ring could be read afterwards. The refusal therefore records itself: the
+log switches are read, the start's notes above are written with
+`start.refused.delivery` (the reason), and the ring is flushed with the
+counter dump through `HcdLogFlush` - the stop's own flush, from the same
+PASSIVE_LEVEL PnP thread, adding no `DbgPrint` site - before the start
+returns its failure. With `XhciLogDebugView` set a user therefore reads
+the reason in DebugView beside the Code 10 - in the counter dump's
+`intr.reason` at every verbosity, and from verbosity 2, where notes are
+recorded, in the start's notes and `start.refused.delivery` too; the `qemu` flavour's
+start-decision event (record 18 section 9) carries it too.
 
 **The delivery in effect must be capturable** (owner, 2026-10-05): a user
 on a machine that polls automatically and one forced to poll must be told
@@ -1538,8 +1614,8 @@ and that flavour is never published.
   MSI, with `MSISupported` 0), and mode 1 the same, on a target without
   MSI and on Vista and 7 with `MSISupported` 0 or, with the requirements
   filter enabled, `MSISupported` 1 (section 4.3); with a message granted,
-  modes 0 and 3 read as the message, and mode 1 too where no line was
-  offered.
+  modes 0 and 3 read as the message, and mode 1 fails the start where
+  no line was offered (revision 7).
 
 Bench (POLL-E, owner): mode 2 on the E460 and the P14s Gen 1 under Windows 98
 SE, and an MSI-only controller if one is at hand. The synthetic no-interrupt
@@ -1568,6 +1644,16 @@ Taken by the owner on 2026-10-05, each from options with a recommendation:
    stalled-event watchdog the issue 12 plan had held as task 36.4.
 7. (2026-10-08) MSI on Vista and 7, both architectures (section 4.3;
    roadmap 36.15 and 36.16).
+8. (2026-10-11, amending the 2026-10-09 mode rules of section 4.3 and
+   design record 18 sections 4.2 to 4.3a) `XhciInterruptMode` 1 is the
+   interrupt line only on every system: a message grant fails the start
+   (Code 10) rather than running as mode 0. 3 is a message-signalled
+   interrupt (MSI or MSI-X) only: on Vista and 7 the requirements filter
+   keeps only the message configurations, and a message not granted or
+   not connected (32-bit without the helper bound included) fails the
+   start, with no fallback to the line or to polling; on Windows 98 SE,
+   ME, 2000 and XP, 32- and 64-bit, mode 3 fails the start. 0 and 2 are
+   unchanged, and 4 and above still run as 0 (revision 7; task 36.53).
 
 ## 13. The reviews
 
