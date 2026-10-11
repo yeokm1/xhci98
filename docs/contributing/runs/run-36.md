@@ -1372,3 +1372,41 @@ Raw texts: `out\p36-aud\legs\w7x64\*-times.txt`, `legs\w7x86\x86-h5r-times.txt`,
 traces `legs\w7x64\qtrace-{2,3,4}.log` and the local temp directory's
 `qtrace-8.log`; harness `out\p36-aud\kit` (`probe.ps1`, `stall.ps1`,
 `stallplay.ps1`, `launch.ps1 -Display`).
+
+## 36.53 - XhciInterruptMode 1 the line only, 3 a message only (2026-10-11)
+
+Branch `p36-imode` at `4e11974` (2.3.0.0 merged, with 36.51's INFs), the
+`release` and `qemu` packages of that tree, QEMU `qemu-xhci` with its
+default INTx, MSI and MSI-X, development host A. The reason of a refused
+start was read from the `qemu` flavour's `M86 S` record (debugcon) and,
+on XP, also from DebugView on `release`.
+
+| Guest | Mode | Flavour | Result |
+|---|---|---|---|
+| 7 x64 | 0 | release | MSI-X (delivery 4), reason 10; mouse, stick copy fc-clean: PASS |
+| 7 x64 | 3 | release | MSI-X, reason 15, filter outcome 12 (the line choices stripped); mouse, stick: PASS |
+| 7 x64 | 1 | release | the line, reason 5, filter outcome 10; mouse: PASS |
+| 7 x64 | 1, `XhciMsi86InjNoLine` 1 (only a message offered) | qemu | Code 10; `M86 S` grant 2, outcome 6, delivery 0, reason 14, status `C0000182`: PASS |
+| 7 x64 | 3, `XhciQemuMsgConnectFail` 1 | qemu | Code 10; reason 17: PASS |
+| 7 x64 | 3, `MSISupported` 0 and a restart | qemu | Code 10; grant 1, outcome 8, reason 16: PASS |
+| 7 x86, helper bound | 0 | release | MSI-X, reason 10, routines from `xhcimsi.sys`; mouse, stick: PASS |
+| 7 x86, helper disabled | 0 | release | helper ABSENT (`C0000034`); the line, reason 1; mouse, stick: PASS |
+| 7 x86, helper disabled | 3 | release, qemu | Code 10 on both; `M86 S` grant 2, bind 1, outcome 12, reason 17: PASS |
+| Vista x86, helper bound | 0 / 3 / 1 / 2 | release | MSI-X reason 10 / MSI-X reason 15, outcome 12 / line reason 5, outcome 10 / poll reason 8; mouse (and stick under 0 and 3): PASS |
+| Vista x86 | 1, `XhciMsi86InjNoLine` 1 | qemu | Code 10; reason 14 (the trace validator accepted the capture): PASS |
+| Vista x86 | 3, `XhciQemuMsgConnectFail` 1 | qemu | Code 10; outcome 12, reason 17: PASS |
+| XP | 0 | release | the line, reason 1; mouse, stick: PASS |
+| XP | 3 | release, qemu | Code 10 on both; DebugView `intr.reason` and `start.refused.delivery` 18; `M86 S` reason 18, status `C0000182`: PASS |
+| XP | 1 / 2 / 0 again | qemu | line reason 5 / poll reason 8 / line reason 1: PASS |
+| 98 SE | 0 | release | the line, reason 1; mouse, stick: PASS |
+| 98 SE | 3 | qemu | Device Manager: "This device is either not present, not working properly, or does not have all the drivers installed. (Code 10.)"; `M86 S` reason 18: PASS |
+| 98 SE | 1 / 0 again | qemu / release | line reason 5 / line reason 1: PASS |
+
+Every refused start returned `STATUS_DEVICE_CONFIGURATION_ERROR`
+(`C0000182`). Not read: a controller that really offers no line (QEMU's
+always has one; `XhciMsi86InjNoLine` made the list message-only), MSI
+rather than MSI-X under mode 3 (`msi=on,msix=off`), 64-bit Vista, ME,
+2000, XP x64, and `XhciLogDebugView` on 98 SE. `check-msi86-trace.ps1`
+reads an XP or 98 SE capture's `S` record and then refuses the capture
+for having no requirements list, since those systems never send one.
+Raw texts: `out\p36-imode\legs\<guest>\notes.txt` and the files it names.
