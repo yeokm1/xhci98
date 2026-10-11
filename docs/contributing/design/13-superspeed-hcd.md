@@ -1646,6 +1646,17 @@ feedback endpoint's DCI 7 with a lead near 34, and Stopped events grow at
 about 31 a second and commands at about twice that - one `RESET_PIPE` a
 32 ms read, not faster.
 
+**Read on the bench** (owner, 2026-10-11, the E7250, Windows 7 x64, the
+build of `dad964f` installed by replacing the file): the Play 2 played
+cleanly at 44.1 and 48 kHz; `iso.fid1` for DCI 7 at leads 34 and then 32,
+`IsoPacketsAnswered` 13,462, the Stopped events at one a feedback read. The
+feedback endpoint answered about half its reads with a USB Transaction
+Error (202 in some 415), reported per packet and skipped by the class
+driver, with nothing escalated; why is not established (issue 14, section
+7). The flow tracking of review round 2 (`IsoFlowFresh`) came after that
+build; on this device it gives the same Frame IDs, since every feedback
+read follows a `RESET_PIPE`'s new context.
+
 ## 7. The Windows 98 export evidence (task 25.3)
 
 The miniport imported almost nothing because `usbport.sys` did the work; the

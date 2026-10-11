@@ -1,7 +1,7 @@
 # Issue 14 - An asynchronous USB audio device plays only hiss on Windows 7: its every isochronous request names a frame, and on a controller without Contiguous Frame ID the driver refused them all
 
-Status: **fixed in source for the `2.3.0.0` re-cut (roadmap task 36.57); not
-yet observed working on the bench.** Found by the owner on 2026-10-11 at the
+Status: **fixed for the `2.3.0.0` re-cut (roadmap task 36.57), and observed
+working on the bench on 2026-10-11.** Found by the owner on 2026-10-11 at the
 E7250 bench, on the signed `2.3.0.0` cut, and diagnosed the same evening
 from an `XHCISNAP` dump and a static reading of Windows 7's `usbaudio.sys`.
 The refusal at its root has been in the host controller driver since
@@ -167,9 +167,39 @@ window). `test_pipe` walks the Play 2's own descriptors. The note ring
 records the first four first-TD Frame IDs given without CFC (`iso.fid1`) and
 the first four SIA publications of a named frame (`iso.sia`).
 
-**On the bench:** _PLACEHOLDER - the owner's reading of the fix on the
-E7250 (the Play 2 at 44.1 and 48 kHz, and the `XHCISNAP` dump taken during
-it) goes here once taken._
+**On the bench** (owner, 2026-10-11, the E7250 under Windows 7 x64, MSI):
+the build of `dad964f`, test-signed and installed by replacing
+`xhci98.sys` by hand, played the Play 2 correctly at 44.1 kHz and at 48 kHz.
+Its dump at verbosity 3 (`pfix2`, about 46 s after the controller started,
+some 13 s of it playing) reads `IsoPacketsAnswered` 13,462, `IsoSubmits`
+2,122 of which 415 with a Frame ID, 13,317 Success completions, and the
+notes `iso.fid1` for the data endpoint (DCI 2, lead 2) and the feedback
+endpoint (DCI 7, lead `0x22` then `0x20`: 34, then the 32 of each refresh)
+and `iso.sia` for the data endpoint (DCI 2, leads 10 and 11, inside the
+scheduling window). The 420 Stopped - Length Invalid events are the class
+driver's resets, one a feedback read, now at the 32 ms it intends.
+
+The same dump carries 202 USB Transaction Errors, all noted on the feedback
+endpoint (slot 1, DCI 7) and none on the data endpoint: about half of the
+some 415 feedback reads. An isochronous Transaction Error halts nothing; the
+packet is reported failed and `usbaudio.sys`'s completion skips that
+reading and asks for the next one 32 frames on (section 4), so the stream
+runs on the last good feedback value, and the playback was clean. Linux
+reports the same completion code on an isochronous TD as a per-packet
+`-EPROTO` and goes on (`external/linux/xhci-ring.c`, `process_isoc_td`).
+Why the device misses about every second feedback read is not established:
+whether it answers that endpoint less often than its descriptor says, or a
+first-TD Frame ID on this controller lands the read late in its frame, no
+reading here separates. Nothing escalated (no tolerance location charged,
+no containment), so it is judged harmless; it is recorded here to be
+compared on a controller with CFC.
+
+The first attempt at this reading ran the old driver: the test package's
+INF was byte-identical to the installed `2.3.0.0`'s, and Windows 7's
+"Have Disk" update kept the driver store's existing package, so the new
+`xhci98.sys` was never copied. A test build that changes only the binary
+has to be installed by replacing the file (or carry a changed INF, such as
+a new `DriverVer`).
 
 ## 8. What the project keeps from it
 
