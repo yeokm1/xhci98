@@ -1249,6 +1249,10 @@ typedef struct _HCD_CONTROLLER {
     ULONG CancelWork;               /* some pipe has CancelPending        */
     ULONG RetryWork;                /* some queue has RetryWanted (35-T.2,
                                      * HcdCfgRetryService)                */
+    ULONG QemuStreamQuirk;          /* 36.54: QEMU's xHCI (1B36:000D), at
+                                     * each start (record 17 4.12.4)      */
+    ULONG ThreadCommandDepth;       /* HcdThreadCommand calls in progress:
+                                     * the resync runs at the outermost   */
     volatile LONG CancelsRunning;   /* cancel routines past the cancel lock */
     ULONG UrbsCompleted;
     ULONG UrbsGone;
@@ -1901,6 +1905,8 @@ ULONG HcdEnumSettleDeferredAt(PHCD_CONTROLLER hc, ULONG rootPort,
 VOID HcdEnumInit(PHCD_CONTROLLER hc);
 VOID HcdEnumDrop(PHCD_CONTROLLER hc);
 ULONG HcdThreadCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb, PULONG control);
+ULONG HcdThreadCommandRaw(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
+                          PULONG control);
 /*
  * 29-A.5: ask for the device on a SuperSpeed root port to be sent back to
  * its USB 2.0 companion - its link written to SS.Disabled, its slot and PDOs
@@ -2054,6 +2060,7 @@ VOID HcdInjService(PHCD_CONTROLLER hc);
 ULONG HcdInjCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb, PULONG control,
                     PULONG code);
 ULONG HcdInjEpState(PHCD_CONTROLLER hc, ULONG slot, ULONG dci, ULONG state);
+ULONG HcdInjWithholds(PHCD_CONTROLLER hc, ULONG slot, ULONG dci);
 VOID HcdInjEp0Doorbell(PHCD_CONTROLLER hc, struct _HCD_USB_DEVICE *dev);
 ULONG HcdInjClearHalt(PHCD_CONTROLLER hc, ULONG slot, ULONG dci,
                       PULONG outcome);
@@ -2068,6 +2075,11 @@ VOID HcdCfgFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 VOID HcdCfgService(PHCD_CONTROLLER hc);
 VOID HcdCfgCancelService(PHCD_CONTROLLER hc);
 VOID HcdCfgRetryService(PHCD_CONTROLLER hc);
+/* HcdCfgQemuStreamResync's outcomes (36.54, record 17 section 4.12.4). */
+#define HCD_RESYNC_CLEAN        0UL /* done, or nothing to do             */
+#define HCD_RESYNC_RESTOPPED    1UL /* done after stopping it again        */
+#define HCD_RESYNC_FAILED       2UL /* given up; the controller reset asked */
+ULONG HcdCfgQemuStreamResync(PHCD_CONTROLLER hc, ULONG slotId, ULONG dci);
 VOID HcdCfgDeviceGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 PHCD_PIPE HcdCfgPipe(PHCD_USB_DEVICE dev, PVOID handle);
 ULONG HcdCfgParentConfigure(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
