@@ -242,6 +242,115 @@ try {
         Assert-True ($pswText.Contains($needle)) "src\portsw.vbs no longer contains $needle."
     }
 
+    # --- portsw-on.bat and portsw-off.bat (roadmap-hcd task 36.56) ----------
+    #
+    # Staged beside portsw.vbs from its directory, byte for byte; absent from
+    # a stand-in package that did not name the script; a script whose
+    # directory lacks them is refused. Each file is run by COMMAND.COM on
+    # Windows 98 SE and ME and by cmd.exe elsewhere (design record 16 section
+    # 5a), so the split is pinned: COMMAND.COM must reach no line it cannot
+    # parse, and the one cmd.exe line must sit where only cmd.exe goes.
+    Write-Step "portsw-on.bat and portsw-off.bat are staged and COMMAND.COM-safe"
+    $pswBatches = @(
+        @{ Name = "portsw-on.bat";  Value = "1"; Others = @("0", "2") },
+        @{ Name = "portsw-off.bat"; Value = "0"; Others = @("1", "2") }
+    )
+    foreach ($bat in $pswBatches) {
+        $batSrc = Join-Path $repo ("src\" + $bat.Name)
+        $batStaged = Join-Path $pswOut $bat.Name
+        Assert-True (Test-Path -LiteralPath $batStaged) "$($bat.Name) is not at the package root beside portsw.vbs."
+        if ((Test-Path -LiteralPath $batStaged) -and (Test-Path -LiteralPath $batSrc)) {
+            Assert-True ((Get-StandInSha ([System.IO.File]::ReadAllBytes($batStaged))) -eq
+                         (Get-StandInSha ([System.IO.File]::ReadAllBytes($batSrc)))) `
+                "the staged $($bat.Name) differs from src\$($bat.Name)."
+        }
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $flatOut $bat.Name))) `
+            "a stand-in package that did not name -PswScriptPath carries $($bat.Name)."
+    }
+    $pswLoneDir = Join-Path $script:work "psw-lone"
+    New-Item -ItemType Directory -Path $pswLoneDir -Force | Out-Null
+    Copy-Item -LiteralPath $pswSrc -Destination (Join-Path $pswLoneDir "portsw.vbs") -Force
+    Copy-Item -LiteralPath (Join-Path $repo "src\portsw-on.bat") -Destination (Join-Path $pswLoneDir "portsw-on.bat") -Force
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
+        "-PswScriptPath", (Join-Path $pswLoneDir "portsw.vbs"), "-OutDir", (Join-Path $script:work "pkg-psw-lone"))
+    Assert-True ($r.ExitCode -ne 0) "a portsw.vbs with no portsw-off.bat beside it was staged."
+    Assert-True ($r.Output -match "portsw-off\.bat") `
+        ("expected the refusal to name portsw-off.bat. Output:`n" + $r.Output)
+
+    $cmdOnly = '(?i)%~|\bcd\s+/d\b|\bsetlocal\b|\bendlocal\b|\bif\s+/i\b|\bgoto\s+:eof\b|\bpushd\b|\bpopd\b|\bcall\s+:|&&|\|\||\bexit\s+/b\b|%\*|^\s*if\b.*\(|^\s*[()]'
+    $batLineCounts = @()
+    foreach ($bat in $pswBatches) {
+        $batSrc = Join-Path $repo ("src\" + $bat.Name)
+        if (-not (Test-Path -LiteralPath $batSrc)) {
+            Assert-True $false "src\$($bat.Name) is missing."
+            continue
+        }
+        $batBytes = [System.IO.File]::ReadAllBytes($batSrc)
+        $batBad = @($batBytes | Where-Object { $_ -ge 0x7F -or ($_ -lt 0x20 -and $_ -ne 10 -and $_ -ne 13) })
+        Assert-True ($batBad.Count -eq 0) "src\$($bat.Name) holds a byte outside printable ASCII, CR and LF."
+        $batText = [System.IO.File]::ReadAllText($batSrc)
+        Assert-True (-not ($batText -match "(?<!`r)`n")) "src\$($bat.Name) has a line not ended by CRLF."
+        Assert-True (-not ($batText -match "`r(?!`n)")) "src\$($bat.Name) has a CR not followed by LF."
+        Assert-True ($batText.EndsWith("`r`n")) "src\$($bat.Name) does not end with CRLF, so COMMAND.COM may not run its last line."
+        $lines = @($batText.Substring(0, $batText.Length - 2) -split "`r`n")
+        $batLineCounts += $lines.Count
+        foreach ($line in $lines) {
+            Assert-True ($line.Length -le 127) "src\$($bat.Name) has a line past COMMAND.COM's 127 characters: $line"
+        }
+        Assert-True ($lines[0] -ceq "@echo off") "src\$($bat.Name) does not start with @echo off."
+        Assert-True ($lines[$lines.Count - 1] -ceq "pause") "src\$($bat.Name) does not end with pause."
+        $code = @()
+        for ($i = 1; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -notmatch '(?i)^rem(\s|$)') { $code += , @($i, $lines[$i]) }
+        }
+        $split = @('if "%OS%"=="Windows_NT" goto nt', 'goto run', ':nt', 'cd /d "%~dp0"', ':run')
+        for ($k = 0; $k -lt $split.Count; $k++) {
+            Assert-True ($code.Count -gt $k -and $code[$k][1] -ceq $split[$k]) `
+                ("src\$($bat.Name)'s command " + ($k + 1) + " after @echo off is not '" + $split[$k] +
+                 "', so COMMAND.COM could reach a cmd.exe line, or Run as administrator would start in System32.")
+        }
+        $ntLine = -1
+        if ($code.Count -gt 3) { $ntLine = $code[3][0] }
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($i -eq $ntLine) { continue }
+            Assert-True (-not ($lines[$i] -match $cmdOnly)) `
+                "src\$($bat.Name) line $($i + 1) uses cmd.exe syntax where COMMAND.COM runs it: $($lines[$i])"
+            if ($lines[$i] -match '(?i)^(rem|echo)\b') {
+                Assert-True (-not ($lines[$i] -match '[<>|&%]')) `
+                    "src\$($bat.Name) line $($i + 1) carries a redirection or percent character on an echo or rem line: $($lines[$i])"
+            }
+            Assert-True (-not ($lines[$i] -match '(?i)^echo\s+o(n|ff)\s*$')) `
+                "src\$($bat.Name) line $($i + 1) is an echo that COMMAND.COM reads as a switch: $($lines[$i])"
+        }
+        $labels = @($lines | Where-Object { $_ -match '^:' } | ForEach-Object { $_.Substring(1).ToLowerInvariant() })
+        Assert-True ((@($labels | Sort-Object -Unique)).Count -eq $labels.Count) "src\$($bat.Name) has a label twice."
+        foreach ($line in $lines) {
+            if ($line -match '(?i)\bgoto\s+(\S+)\s*$') {
+                Assert-True ($labels -contains $Matches[1].ToLowerInvariant()) `
+                    "src\$($bat.Name) jumps to a label it does not have: $line"
+            }
+        }
+        $pins = @('if not exist portsw.vbs goto nofile', 'cscript //nologo portsw.vbs show',
+                  'if errorlevel 1 goto end', ('cscript //nologo portsw.vbs ' + $bat.Value),
+                  'if errorlevel 3 goto elevate', 'if errorlevel 1 goto refused')
+        $last = -1
+        foreach ($pin in $pins) {
+            $at = [Array]::IndexOf($lines, $pin)
+            Assert-True ($at -gt $last) "src\$($bat.Name) no longer has '$pin' in its place."
+            if ($at -gt $last) { $last = $at }
+        }
+        foreach ($other in $bat.Others) {
+            Assert-True (-not ($batText -match ('(?i)portsw\.vbs\s+' + $other + '\b'))) `
+                "src\$($bat.Name) sets XhciIntelPortSwitch to $other; it sets only $($bat.Value), and 2 is a hand edit."
+        }
+        foreach ($needle in @('RESTART WINDOWS', 'right-click it and choose Run as administrator')) {
+            Assert-True ($batText.Contains($needle)) "src\$($bat.Name) no longer says '$needle'."
+        }
+    }
+    if ($batLineCounts.Count -eq 2) {
+        Assert-True ($batLineCounts[0] -eq $batLineCounts[1]) "portsw-on.bat and portsw-off.bat no longer have the same number of lines; they are one file but for the value."
+    }
+
     # --- a diagnostic probe driver must never become install media ----------
     Write-Step "a diagnostic probe driver is refused"
     $probeDriver = Join-Path $srcDir "xhci98-probe.sys"
@@ -2122,8 +2231,8 @@ try {
            Why  = "a cut no longer publishes portsw.vbs, the port switchover's user script, beside the INF (roadmap-hcd task 36.42)" },
         @{ Find = 'if ($legSigned) { $legCopy += $certPublishable }';
            Why  = "a signed x64 leg no longer publishes xhci98-test.cer beside the binaries it signed (design record 19)" },
-        @{ Find = '$pswPublishable = @("portsw.vbs")';
-           Why  = "the port switchover's user script is no longer one of the files a flavour directory may carry" }
+        @{ Find = '$pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")';
+           Why  = "the port switchover's user script and its two batch files (roadmap-hcd task 36.56) are no longer the files a flavour directory carries beside the INF" }
     )) {
         Assert-True ($releaserText.Contains($anchor.Find)) `
             ("make-release.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + ".")
