@@ -2412,3 +2412,67 @@ the merge.
 Raw texts: `out\p36-dl98\legs\notes-dl98.txt` and each guest's
 `out\p36-dl98\legs\<guest>\notes.txt`, with the debugcon logs, register
 samples and screenshots they name.
+
+## 36.56 - `portsw-on.bat` and `portsw-off.bat`, and the re-cut's binaries (2026-10-11)
+
+**The task.** At the E7250 bench a USB 3 stick copied at USB 2.0 speed
+with the switchover at its default 0. The owner asked for two batch files
+beside `portsw.vbs`, in the current `2.3.0.0` cut, with the driver
+binaries unchanged. Design record 16 revision 5, section 5a "The batch
+files". Branch `p36-pswbat`: `e67f778` (design), `c5e1e29` (the files and
+the packager), `ae65c26` and `9bb2c5b` (review rounds 1 and 2), `837bc17`
+(build-and-test), `bb80117` (two text points from the legs). Review thread
+`01a12ab5`: round 1, two P2 (a partial write reported as "nothing was
+set"; a bare `-PswScriptPath`) and two P3 (escapes in the first,
+blacklist-style syntax check; the symptom's wording); round 2, one P2 (a
+root-relative `-PswScriptPath`) and three P3 (a BOM or UTF-16 file hidden
+by the text read; mixed-case `echo ON`; the package count); round 3,
+nothing; round 4, on `bb80117`, nothing.
+
+**The binaries are the first cut's, restored.** The tree was rebuilt (x86
+and `-amd64` all, every gate) with no driver source change, and all 15
+`.sys` came out the same size but different bytes from
+`out\p36-stamp3\hashes.txt`: the PE link timestamp, the PE checksum and
+the PDB path, which names the worktree. `make-release.ps1` does not
+rebuild; it publishes the build directories. So the first cut's bytes
+were restored into this worktree's build directories
+(`out\p36-pswbat\restore-stamp3.ps1`, log `restore.log`), with the
+orchestrator's approval:
+
+- x86 `release` and `debug` from the cut's `release-x86\` and `debug-x86\`
+  (unsigned); `qemu` from `out\p36-stamp3\pkg-qemu-*`;
+- amd64 `release` from the unsigned `out\p36-stamp3\pkg-release-amd64`;
+- amd64 `debug` from the cut's signed `debug-x64\`, the signature removed:
+  the file cut to its unsigned length, the certificate-table entry zeroed
+  and the PE checksum recomputed. That gave `C232A155...` (`xhci98.sys`)
+  and `D958469D...` (`xhciuas.sys`), the hashes in `hashes.txt`;
+- `XHCISNAP.EXE` and `XHCIQUAL.EXE` (with its `.MAP`) from the cut's tree.
+
+All 17 files were checked against `hashes.txt` before anything was
+written, and all matched. `git diff f09c6aa..HEAD -- src xhcisnap xhciqual`
+(`f09c6aa` built the cut) shows only the two `.bat` files. On that basis
+the source stamps were rewritten beside the restored binaries
+(`source-stamp.ps1 -Write`, then `-Check` exit 0). The tools' mtimes were
+set to the time of the restore, their bytes unchanged. Both steps only
+satisfy the gates' "built from these sources" checks.
+
+The unsigned packages staged from them (`out\p36-pswbat\pkg-release-*`)
+hold every file of `out\p36-stamp3\pkg-release-*` byte for byte, plus the
+two batch files. An unsigned x86 `make-release.ps1` dry run published
+`.sys`, `XHCISNAP` and `XHCIQUAL` equal to `hashes.txt`.
+
+**Legs** (development host A, the package above, fresh overlays):
+
+| Guest | Run | Reading | Verdict |
+|---|---|---|---|
+| 98 SE | double-click in Explorer, typed at `D:\`, the 8.3 name, from `C:\` | 1 then 0 read back; from `C:\` "portsw.vbs was not found", nothing changed; `if errorlevel 2` after an unknown argument: `COMMAND.COM` sees `cscript`'s exit code | PASS (8/8) |
+| ME | double-click, after an Add New Hardware install | 1 then 0; the exit code seen as on 98 SE | PASS (6/6) |
+| 2000 | double-click, typed | 1 then 0; the output was 26 lines, so the header's first line had scrolled off a 25-line console at the pause | PASS (4/4) |
+| XP | double-click, after the `i.bat` install | 1 then 0; the same 26 lines | PASS (4/4) |
+| 7 x64 | Run as administrator; not elevated; the prompt declined | the elevated run started in `System32` and found the script; not elevated, the script raised the prompt and its message box showed the result; declined, nothing changed, but the batch said the result was "shown in the window that opened" | PASS |
+| 98 SE, 2000, 7 x64 | `bb80117`: three-line header, the declined case's text | every window whole at the pause; the declined case says nothing changed | PASS |
+
+On every target a success prints two restart lines, the script's and the
+batch file's. The refusal text (exit code 1) cannot be reached as an
+administrator on these guests, and is held by the self-tests alone. Raw
+notes and shots: `out\p36-pswbat\legs\<guest>\`.

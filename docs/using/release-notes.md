@@ -922,7 +922,9 @@ controller. A standby or hibernate keeps them where they are.
   `0` through the script and says to restart Windows. On Windows 98 SE and
   ME double-click it; on 2000 and XP run it as an administrator; on Vista
   and 7 right-click it and choose Run as administrator. **Then restart
-  Windows.** Neither sets `2`.
+  Windows.** Neither sets `2`. Read in virtual machines on Windows 98 SE,
+  ME, 2000, XP and Windows 7 x64 (run as administrator, and not, where the
+  script asks for the rights itself), each setting and clearing the value.
 - **A USB 3 stick at USB 2.0 speed.** On one of these chipsets, a USB 3
   stick or drive on a switchable connector that copies only at USB 2.0
   speed is most likely still on the USB 2.0 controller, because the

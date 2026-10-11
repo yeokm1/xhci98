@@ -4084,6 +4084,23 @@ self-tests hold the files' syntax (`Get-PswBatchFaults` in
 `scripts\package\test-package.ps1`), and `xhciqual\test\check-bat-eol.ps1`
 their CRLF endings.
 
+Read 2026-10-11 on development host A (task 36.56), the stamped `2.3.0.0`
+`release` package with the two files added, each guest from a fresh
+overlay: Windows 98 SE (double-clicked in Explorer, typed at a prompt in
+the package folder, by its 8.3 name, and once from `C:\`, where it said
+`portsw.vbs` was not found and changed nothing), ME (double-clicked, after
+an Add New Hardware install), 2000 and XP (double-clicked and typed), and
+Windows 7 x64 (Run as administrator, which started in `System32`; not
+elevated, where the script raised the prompt and its message box showed
+the result; and the prompt declined, where nothing changed). Each read
+`1` and then `0` back with `show`. On 98 SE and ME `COMMAND.COM` saw
+`cscript`'s exit code (`if errorlevel 2` after an unknown argument). The
+first texts were changed after these legs (a declined prompt; a header that
+scrolled off a 25-line console on 2000 and XP), and the revised files were
+read again on 98 SE, 2000 and 7 x64, whole at the pause. The refusal text
+(exit code 1) cannot be reached on these guests as an administrator and is
+held by the self-tests alone.
+
 ### Recommended USB Host Chips for Comprehensive Testing
 
 QEMU cannot exercise the quirk-handling code (see "QEMU coverage limits"), so
