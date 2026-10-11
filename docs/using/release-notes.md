@@ -1976,7 +1976,9 @@ or says it was found by reading the code.
   driver - waits for ever on the transfers kept, and only restarting the
   machine ends it. Seen in virtual machines on Windows 98 SE and 2000 with
   the fault made on purpose. Restart the machine instead of disabling the
-  controller. A later release may release what is kept at the stop.
+  controller. A later release is planned to hand back what is kept at the
+  stop, once the driver can prove the controller has left the bus or has
+  stopped writing to memory.
 - **Windows 2000: after the driver recovers the controller, or after a
   resume from hibernation, a USB drive whose volume was mounted may come
   back at Code 31** (same section). The

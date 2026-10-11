@@ -1555,3 +1555,30 @@ Status: not opened, unnumbered and unversioned.
   dequeue and DCS after the reset; legs: the fault 16 injection on XP x64,
   2000 and 7 x64, a UAS copy `fc` clean after it with no replug, and the
   Bulk-Only control unchanged.
+
+## Planned - releasing the transfers kept by a pinned containment
+
+Goal: disabling, updating or removing a controller the driver closed off
+without proof that DMA stopped (record 17's containment, `XHCISNAP`
+"CONTAINED" and "PINNED") completes instead of waiting for ever on the
+transfers kept. Since `2.2.0.0` the driver keeps every transfer the
+controller might still write into, by design, and the release notes list
+the hang under "Known limitations". Phase 36's matrix read it again on
+Windows 2000 (4 of 4 from fresh boots, with selective suspend on and off:
+hidusb's interrupt-IN read kept, its REMOVE waiting) and on Windows 98 SE
+(owner, 2026-10-11: planned after `2.3.0.0`, documented as a limitation).
+
+Status: not opened, unnumbered and unversioned.
+
+- [ ] PCR.1 at the controller's stop or remove, look for proof that it can
+  no longer write to memory, and only then complete the kept transfers as
+  failed: (a) the device has left the bus (its PCI configuration space,
+  the vendor id included, reads all ones), or (b) the device entered D3hot
+  through its PCI power management capability and reads back D3hot, where
+  it may not master (PCI Bus Power Management 1.2). With neither proof the
+  transfers stay kept, as today: a buffer the controller might still write
+  into is never handed back. Record 17 gains the section first, a full
+  review loop on the DMA-safety path, host vectors for each proof, and
+  legs: the all-ones injection then a disable on 98 SE, ME, 2000, XP and
+  7 x64, with and without a client read pending, and the unproven case
+  still holding.
