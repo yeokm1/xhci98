@@ -2118,8 +2118,10 @@ try {
            Why  = "the publisher no longer tells the packager which architecture to build, so every leg would stage the x86 package" },
         @{ Find = 'throw "the release and debug $a binaries are identical - one build was packaged twice."';
            Why  = "the identical-binary refusal no longer compares within an architecture, where it is the only place a collision could happen" },
-        @{ Find = 'foreach ($name in ($declaredPublishable[$leg.Arch] + $uasPublishable + $oemPublishable + $pswPublishable)) {';
+        @{ Find = '$legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $oemPublishable + $pswPublishable';
            Why  = "a cut no longer publishes portsw.vbs, the port switchover's user script, beside the INF (roadmap-hcd task 36.42)" },
+        @{ Find = 'if ($legSigned) { $legCopy += $certPublishable }';
+           Why  = "a signed x64 leg no longer publishes xhci98-test.cer beside the binaries it signed (design record 19)" },
         @{ Find = '$pswPublishable = @("portsw.vbs")';
            Why  = "the port switchover's user script is no longer one of the files a flavour directory may carry" }
     )) {
@@ -2280,6 +2282,228 @@ try {
     Assert-True ($releaserText.Contains('Assert-NoTestClient -Root $uploadRoot')) `
         "make-release.ps1's upload assembly no longer refuses the test client."
 
+
+    # --- the x64 test signature (design record 19) --------------------------
+    #
+    # No key is needed or used here. The judgements are pure functions in
+    # package-common.ps1, driven with synthetic PE images and mock parsed
+    # signatures; the refusals are reached through the scripts' arguments
+    # before any key would be opened. The one thing these cannot reach is
+    # SignTool itself, which the cut's own checks read on the signed bytes.
+    Write-Step "x64 test signature: the signed-image comparison"
+    function New-SyntheticPe {
+        # A minimal PE32+ header in $Size bytes: MZ, e_lfanew 0x80, the PE
+        # signature, optional-header magic 0x20B, 16 data directories, and a
+        # body of non-zero filler so a stray difference is visible.
+        param([int]$Size)
+        $b = New-Object byte[] $Size
+        for ($i = 0x200; $i -lt $Size; $i++) { $b[$i] = [byte](($i * 7 + 3) % 251 + 1) }
+        $b[0] = 0x4D; $b[1] = 0x5A
+        [BitConverter]::GetBytes([int]0x80).CopyTo($b, 0x3C)
+        [BitConverter]::GetBytes([uint32]0x00004550).CopyTo($b, 0x80)
+        $opt = 0x80 + 24
+        [BitConverter]::GetBytes([uint16]0x20B).CopyTo($b, $opt)
+        [BitConverter]::GetBytes([uint32]16).CopyTo($b, $opt + 108)
+        [BitConverter]::GetBytes([uint32]0x1234).CopyTo($b, $opt + 64)
+        return ,$b
+    }
+    function New-SyntheticSigned {
+        # $Unsigned plus a table of $TableLen bytes at the next 8-byte
+        # boundary, the checksum changed and the directory entry pointing at it.
+        param([byte[]]$Unsigned, [int]$TableLen, [byte]$Pad = 0)
+        $at = [int]([math]::Ceiling($Unsigned.Length / 8.0) * 8)
+        $s = New-Object byte[] ($at + $TableLen)
+        [Array]::Copy($Unsigned, $s, $Unsigned.Length)
+        for ($i = $Unsigned.Length; $i -lt $at; $i++) { $s[$i] = $Pad }
+        for ($i = $at; $i -lt $s.Length; $i++) { $s[$i] = 0xC3 }
+        $opt = 0x80 + 24
+        [BitConverter]::GetBytes([uint32]0x9999).CopyTo($s, $opt + 64)
+        [BitConverter]::GetBytes([uint32]$at).CopyTo($s, $opt + 112 + 32)
+        [BitConverter]::GetBytes([uint32]$TableLen).CopyTo($s, $opt + 112 + 36)
+        return ,$s
+    }
+    $peU = New-SyntheticPe -Size 1021
+    $peS = New-SyntheticSigned -Unsigned $peU -TableLen 64
+    Assert-True (Test-SignedImageOf -Signed $peS -Unsigned $peU) `
+        "Test-SignedImageOf refused an image that is the build plus a signature and nothing else."
+    $peBody = [byte[]]$peS.Clone(); $peBody[0x300] = [byte]($peBody[0x300] -bxor 1)
+    Assert-True (-not (Test-SignedImageOf -Signed $peBody -Unsigned $peU)) `
+        "Test-SignedImageOf accepted a signed image whose body differs from the build."
+    $pePad = New-SyntheticSigned -Unsigned $peU -TableLen 64 -Pad 1
+    Assert-True (-not (Test-SignedImageOf -Signed $pePad -Unsigned $peU)) `
+        "Test-SignedImageOf accepted non-zero bytes in the alignment padding before the signature."
+    $peTail = New-Object byte[] ($peS.Length + 8); [Array]::Copy($peS, $peTail, $peS.Length)
+    Assert-True (-not (Test-SignedImageOf -Signed $peTail -Unsigned $peU)) `
+        "Test-SignedImageOf accepted bytes after the certificate table."
+    Assert-True (-not (Test-SignedImageOf -Signed $peS -Unsigned $peS)) `
+        "Test-SignedImageOf accepted an already-signed image as the build."
+    Assert-True (-not (Test-SignedImageOf -Signed $peU -Unsigned $peU)) `
+        "Test-SignedImageOf accepted an unsigned image as the signed one."
+    Assert-True (-not (Test-SignedImageOf -Signed ([System.Text.Encoding]::ASCII.GetBytes("MZ not a driver")) -Unsigned $peU)) `
+        "Test-SignedImageOf accepted a stand-in that is not a PE image."
+    $peFile = Join-Path $script:work "synthetic-unsigned.sys"
+    [System.IO.File]::WriteAllBytes($peFile, $peU)
+    Assert-True ($null -eq (Get-EmbeddedSignature -Path $peFile)) `
+        "Get-EmbeddedSignature read a signature out of an image with an empty certificate-table entry."
+    $threw = $false
+    try { [void](Get-EmbeddedSignature -Path $driver) } catch { $threw = $true }
+    Assert-True $threw "Get-EmbeddedSignature did not refuse a text stand-in as a PE image, so it could pass one as unsigned."
+
+    Write-Step "x64 test signature: the verdict on a parsed signature (mocks)"
+    $tsThumb = "00112233445566778899AABBCCDDEEFF00112233"
+    $tsGood = [pscustomobject]@{ Thumbprint = $tsThumb; Subject = "CN=x"; DigestOid = "1.3.14.3.2.26";
+                                 ContentType = "1.3.6.1.4.1.311.2.1.4"; DataOid = "1.3.6.1.4.1.311.2.1.15";
+                                 IndirectDigestOid = "1.3.14.3.2.26";
+                                 VouchedDigest = "AB"; ImageDigest = "AB"; SignatureValid = $true; Timestamped = $false }
+    Assert-True ((Test-ProjectTestSignature -Signature $tsGood -Thumbprint $tsThumb) -eq "") `
+        "Test-ProjectTestSignature refused the signature record 19 prescribes."
+    $tsCases = @(
+        @{ Name = "unsigned";    Set = $null;                                 Says = "no embedded signature" },
+        @{ Name = "other cert";  Set = @{ Thumbprint = "FF" + $tsThumb.Substring(2) }; Says = "not by the project test certificate" },
+        @{ Name = "SHA-256";     Set = @{ DigestOid = "2.16.840.1.101.3.4.2.1" }; Says = "not SHA-1" },
+        @{ Name = "SHA-256 file"; Set = @{ IndirectDigestOid = "2.16.840.1.101.3.4.2.1" }; Says = "not SHA-1" },
+        @{ Name = "plain CMS";   Set = @{ ContentType = "1.2.840.113549.1.7.1" }; Says = "not an Authenticode PE-image signature" },
+        @{ Name = "not a PE";    Set = @{ DataOid = "1.3.6.1.4.1.311.2.1.25" }; Says = "not an Authenticode PE-image signature" },
+        @{ Name = "bad PKCS #7"; Set = @{ SignatureValid = $false };          Says = "does not verify" },
+        @{ Name = "stale digest"; Set = @{ ImageDigest = "CD" };              Says = "is not the image's" },
+        @{ Name = "no digest";   Set = @{ VouchedDigest = ""; ImageDigest = "" }; Says = "is not the image's" },
+        @{ Name = "timestamped"; Set = @{ Timestamped = $true };              Says = "countersignature" }
+    )
+    foreach ($c in $tsCases) {
+        $mock = $null
+        if ($null -ne $c.Set) {
+            $mock = $tsGood.PSObject.Copy()
+            foreach ($k in $c.Set.Keys) { $mock.$k = $c.Set[$k] }
+        }
+        $why = Test-ProjectTestSignature -Signature $mock -Thumbprint $tsThumb
+        Assert-True ($why -match [regex]::Escape($c.Says)) `
+            ("Test-ProjectTestSignature on the '{0}' mock said '{1}', expected '{2}'." -f $c.Name, $why, $c.Says)
+    }
+
+    Write-Step "x64 test signature: the SpcIndirectDataContent parser (encoded bytes)"
+    # A real encoding of the structure SignTool writes: data { SPC_PE_IMAGE_DATA },
+    # messageDigest { { sha1, NULL }, OCTET STRING of 20 bytes }.
+    $spcDigest = [byte[]](1..20)
+    $spcAlg = [byte[]](0x30, 0x09, 0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x05, 0x00)
+    $spcData = [byte[]](0x30, 0x0C, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F)
+    $spcDigestInfo = [byte[]](@(0x30, 0x21) + $spcAlg + @(0x04, 0x14) + $spcDigest)
+    $spcBody = [byte[]]($spcData + $spcDigestInfo)
+    $spcGood = [byte[]](@(0x30, $spcBody.Length) + $spcBody)
+    $spc = ConvertFrom-SpcIndirectData -Content $spcGood
+    Assert-True ($spc.DataOid -eq "1.3.6.1.4.1.311.2.1.15" -and $spc.DigestOid -eq "1.3.14.3.2.26" -and
+                 $spc.Digest -eq "0102030405060708090A0B0C0D0E0F1011121314") `
+        ("ConvertFrom-SpcIndirectData misread a well-formed encoding: {0} {1} {2}" -f $spc.DataOid, $spc.DigestOid, $spc.Digest)
+    $spcBad = @(
+        @{ Name = "trailing byte";   Bytes = [byte[]]($spcGood + @(0x00)) },
+        @{ Name = "not a SEQUENCE";  Bytes = [byte[]](@(0x31, $spcBody.Length) + $spcBody) },
+        @{ Name = "digest only";     Bytes = [byte[]](@(0x30, 0x16, 0x04, 0x14) + $spcDigest) },
+        @{ Name = "digest not last"; Bytes = [byte[]](@(0x30, ($spcBody.Length + 2)) + $spcBody + @(0x05, 0x00)) },
+        @{ Name = "truncated";       Bytes = [byte[]]($spcGood[0..($spcGood.Length - 2)]) }
+    )
+    # Review round 2: what the parser does not interpret is still validated.
+    # Each variant below is the good encoding with one element changed.
+    function New-SpcVariant {
+        param([byte[]]$Data, [byte[]]$Alg)
+        $di = [byte[]](@(0x30, ($Alg.Length + 22)) + $Alg + @(0x04, 0x14) + $spcDigest)
+        $body = [byte[]]($Data + $di)
+        return ,[byte[]](@(0x30, $body.Length) + $body)
+    }
+    $spcOkValue = New-SpcVariant -Data ([byte[]](0x30, 0x0E, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F,
+                                                 0x30, 0x00)) -Alg $spcAlg
+    $spcOk2 = ConvertFrom-SpcIndirectData -Content $spcOkValue
+    Assert-True ($spcOk2.DataOid -eq "1.3.6.1.4.1.311.2.1.15") `
+        "ConvertFrom-SpcIndirectData refused an empty SpcPeImageData, which its schema allows (both fields optional)."
+    # SpcPeImageData as SignTool writes it: { flags BIT STRING (empty),
+    # file [0] { [2] { [0] IMPLICIT BMPString } } }.
+    $spcPeImage = New-SpcVariant -Data ([byte[]](0x30, 0x17, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F,
+                                                 0x30, 0x09, 0x03, 0x01, 0x00, 0xA0, 0x04, 0xA2, 0x02, 0x80, 0x00)) -Alg $spcAlg
+    Assert-True ((ConvertFrom-SpcIndirectData -Content $spcPeImage).DataOid -eq "1.3.6.1.4.1.311.2.1.15") `
+        "ConvertFrom-SpcIndirectData refused an SpcPeImageData value of the shape SignTool writes."
+    $spcAlgNoParams = [byte[]](0x30, 0x07, 0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A)
+    Assert-True ((ConvertFrom-SpcIndirectData -Content (New-SpcVariant -Data $spcData -Alg $spcAlgNoParams)).DigestOid -eq "1.3.14.3.2.26") `
+        "ConvertFrom-SpcIndirectData refused a digest algorithm with its parameters absent, which DER allows."
+    $spcBad += @(
+        @{ Name = "params 05 FF";      Bytes = (New-SpcVariant -Data $spcData -Alg ([byte[]](0x30, 0x09, 0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x05, 0xFF))) },
+        @{ Name = "params not NULL";   Bytes = (New-SpcVariant -Data $spcData -Alg ([byte[]](0x30, 0x09, 0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x04, 0x00))) },
+        @{ Name = "params then more";  Bytes = (New-SpcVariant -Data $spcData -Alg ([byte[]](0x30, 0x0B, 0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x05, 0x00, 0x05, 0x00))) },
+        @{ Name = "OID unterminated";  Bytes = (New-SpcVariant -Data $spcData -Alg ([byte[]](0x30, 0x0A, 0x06, 0x06, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x81, 0x05, 0x00))) },
+        @{ Name = "OID trailing 0x80"; Bytes = (New-SpcVariant -Data $spcData -Alg ([byte[]](0x30, 0x0A, 0x06, 0x06, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x80, 0x05, 0x00))) },
+        @{ Name = "nested NULL 05 01"; Bytes = (New-SpcVariant -Data ([byte[]](0x30, 0x11, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F,
+                                                                           0x30, 0x03, 0x05, 0x01, 0x00)) -Alg $spcAlg) },
+        @{ Name = "nested BIT STRING"; Bytes = (New-SpcVariant -Data ([byte[]](0x30, 0x11, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F,
+                                                                           0x30, 0x03, 0x03, 0x01, 0x08)) -Alg $spcAlg) },
+        @{ Name = "constructed NULL";  Bytes = (New-SpcVariant -Data ([byte[]](0x30, 0x10, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F,
+                                                                           0x30, 0x02, 0x25, 0x00)) -Alg $spcAlg) },
+        @{ Name = "BIT STRING pad";    Bytes = (New-SpcVariant -Data ([byte[]](0x30, 0x12, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F,
+                                                                           0x30, 0x04, 0x03, 0x02, 0x07, 0xFF)) -Alg $spcAlg) },
+        @{ Name = "SpcString odd";     Bytes = (New-SpcVariant -Data ([byte[]](0x30, 0x18, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F,
+                                                                           0x30, 0x0A, 0x03, 0x01, 0x00, 0xA0, 0x05, 0xA2, 0x03, 0x80, 0x01, 0x41)) -Alg $spcAlg) },        @{ Name = "primitive value";   Bytes = (New-SpcVariant -Data ([byte[]](0x30, 0x0F, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F,
+                                                                           0x05, 0x01, 0x00)) -Alg $spcAlg) },
+        @{ Name = "OID non-minimal";   Bytes = (New-SpcVariant -Data $spcData -Alg ([byte[]](0x30, 0x0A, 0x06, 0x06, 0x2B, 0x0E, 0x03, 0x80, 0x02, 0x1A, 0x05, 0x00))) },
+        @{ Name = "data value broken"; Bytes = (New-SpcVariant -Data ([byte[]](0x30, 0x10, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F,
+                                                                           0x30, 0x02, 0x05, 0x05)) -Alg $spcAlg) },
+        @{ Name = "data two values";   Bytes = (New-SpcVariant -Data ([byte[]](0x30, 0x12, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F,
+                                                                           0x05, 0x00, 0x05, 0x00, 0x05, 0x00)) -Alg $spcAlg) },
+        @{ Name = "long form for 9";   Bytes = (New-SpcVariant -Data $spcData -Alg ([byte[]](0x30, 0x81, 0x09, 0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x05, 0x00))) }
+    )
+    foreach ($c in $spcBad) {
+        $threw = $false
+        try { [void](ConvertFrom-SpcIndirectData -Content $c.Bytes) } catch { $threw = $true }
+        Assert-True $threw ("ConvertFrom-SpcIndirectData accepted the '{0}' encoding, so a CMS message ending in the right digest could pass as Authenticode." -f $c.Name)
+    }
+
+    # The pinned thumbprint is the one design record 19 records, and the
+    # packager signs only after the import gates have read the build, whose
+    # SITES rule needs the objects beside the image (review round 1).
+    $rec19 = [System.IO.File]::ReadAllText((Join-Path $repo "docs\contributing\design\19-x64-test-signing.md"))
+    Assert-True ($rec19.Contains($script:TestSignThumbprint)) `
+        "package-common.ps1's pinned thumbprint $($script:TestSignThumbprint) is not the one design record 19 records."
+    $tsPkgText = [System.IO.File]::ReadAllText($packager)
+    $tsSignAt = $tsPkgText.IndexOf('Invoke-TestSign -Source $DriverPath')
+    $tsHcdAt = $tsPkgText.IndexOf('& powershell.exe @gateArgs')
+    $tsGateAt = $tsPkgText.IndexOf('& powershell.exe @uasGateArgs')
+    $tsMsiAt = $tsPkgText.IndexOf('& powershell.exe @msiGateArgs')
+    $tsStageAt = $tsPkgText.IndexOf('$stageDir = $OutDir + ".staging-"')
+    Assert-True ($tsSignAt -gt 0 -and $tsHcdAt -gt 0 -and $tsGateAt -gt 0 -and $tsMsiAt -gt 0 -and
+                 $tsSignAt -gt $tsHcdAt -and $tsSignAt -gt $tsGateAt -and $tsSignAt -gt $tsMsiAt) `
+        "make-package.ps1 signs before its import gates have read the build, so their SITES rule finds no objects beside the signed copy."
+    Assert-True ($tsSignAt -lt $tsStageAt -and $tsStageAt -gt 0) `
+        "make-package.ps1 no longer signs before it stages, so the staged binaries are not the signed ones."
+
+    Write-Step "x64 test signature: the packager's and the cut's refusals"
+    $tsMissing = Join-Path $script:work "no-such-key.pfx"
+    $r = Invoke-Packager @("-InfPath", $prodInf, "-DriverPath", $driver, "-OutDir", (Join-Path $script:work "pkg-ts-x86"),
+                           "-TestSignPfx", $tsMissing)
+    Assert-True ($r.ExitCode -ne 0 -and $r.Output -match "never signed") `
+        ("make-package.ps1 did not refuse -TestSignPfx on the x86 package. Output:`n" + $r.Output)
+    $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", $amd64Inf, "-DriverPath", $driver,
+                           "-OutDir", (Join-Path $script:work "pkg-ts-nokey"), "-TestSignPfx", $tsMissing)
+    Assert-True ($r.ExitCode -ne 0 -and $r.Output -match "no test-signing key at") `
+        ("make-package.ps1 did not refuse a -TestSignPfx naming no file. Output:`n" + $r.Output)
+    $tsRel = Join-Path $script:work "rel-ts"
+    New-Item -ItemType Directory -Force -Path $tsRel | Out-Null
+    foreach ($bad in @(
+        @{ Args = @("-ReleasesDir", $tsRel);                                            Says = "was given no test-signing key" },
+        @{ Args = @("-ReleasesDir", $tsRel, "-Arch", "x86", "-TestSignPfx", $tsMissing); Says = "publishes none" },
+        @{ Args = @("-ReleasesDir", $tsRel, "-TestSignPfx", $tsMissing);                Says = "no test-signing key at" },
+        @{ Args = @("-UploadSetOnly", "-ReleasesDir", $tsRel, "-TestSignPfx", $tsMissing); Says = "stages nothing" }
+    )) {
+        $r = Invoke-Releaser $bad.Args
+        Assert-True ($r.ExitCode -ne 0) "make-release.ps1 accepted $($bad.Args -join ' ')."
+        Assert-True ($r.Output -match [regex]::Escape($bad.Says)) `
+            ("expected '$($bad.Says)' in the test-signing refusal. Output:`n" + $r.Output)
+    }
+    # And where the cut applies it: the x64 legs' packager runs are given the
+    # key, and both published x64 binaries are held to the signature.
+    foreach ($anchor in @(
+        @{ Find = '$pkgArgs += @("-TestSignPfx", $TestSignPfx)'; Why = "the x64 legs are no longer signed at staging" },
+        @{ Find = 'Assert-TestSigned -Sys $sys -BuiltSys $builtSys'; Why = "the published x64 xhci98.sys is no longer held to the signature" },
+        @{ Find = 'Assert-TestSigned -Sys $Sys -BuiltSys $builtSys'; Why = "the published x64 xhciuas.sys is no longer held to the signature" },
+        @{ Find = '-Signed:$legSigned'; Why = "the UAS check no longer knows the leg is signed" }
+    )) {
+        Assert-True ($releaserText.Contains($anchor.Find)) `
+            ("make-release.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + ".")
+    }
 } finally {
     if (Test-Path -LiteralPath $script:work) {
         Remove-Item -LiteralPath $script:work -Recurse -Force -ErrorAction SilentlyContinue

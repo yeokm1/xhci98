@@ -2579,7 +2579,12 @@ every start**: the package is not signed (next sections), so the driver loads
 only on a boot where F8 -> Disable Driver Signature Enforcement was chosen,
 the choice lasts that one boot, and without it the device sits at Code 39
 with nothing loaded (read on Vista x64, item 3 below) - so the machine can never boot unattended into working
-USB. The release notes carry that beside the tier. **Every clause was taken
+USB. The release notes carry that beside the tier. **That was true of every
+package up to the unsigned `2.2.0.3` cut. Since the owner's decision of
+2026-10-11 the published x64 binaries are test-signed** (design record 19;
+"Since 2.2.0.3 the x64 package is test-signed" below), so a user can instead
+turn on test-signing mode once and start unattended; F8 still works without
+it, and an unsigned package staged for a guest still needs it. **Every clause was taken
 on the `qemu` build**; the `release` flavour was read on 2026-09-18 as
 roadmap task 22.10's sixth and seventh install legs, from the published asset,
 every clause passing, and on Windows 7 x64 that leg was also the first install
@@ -2654,11 +2659,15 @@ as a surprise. **On 2026-09-13 issue 7's fix was run on both, and on both
 32-bit guests too, and every clause passed on all four** (issue 7 section
 7.5): five disable/enable cycles each, and remove and rescan included.
 
-**F8 was the only route until 2026-09-20**, and `TESTSIGNING` is still not
-one. `TESTSIGNING`
+**F8 was the only route until 2026-09-20**, and `TESTSIGNING` was not one
+until the x64 binaries were test-signed. `TESTSIGNING`
 was never tried on either guest and was removed from the roadmap by the owner
-on 2026-09-16: test-signing mode loads a test-signed driver, and this package
-is not signed. **A single QEMU
+on 2026-09-16: test-signing mode loads a test-signed driver, and the package
+was not signed. **Since 2026-10-11 it is the route for a signed package**
+(task 36.50, design record 19): `bcdedit /set testsigning on` once, elevated,
+and a restart - see "Since 2.2.0.3 the x64 package is test-signed" below.
+What follows is the F8 route, which an unsigned package staged for a guest
+still needs. **A single QEMU
 monitor `sendkey f8` is too late on these guests' boot path**, and a
 `system_reset` reaches "Starting Windows" within about 25 seconds. What does
 work, read on Windows 7 x64 on 2026-09-18 (roadmap 22.10, leg 7), is sending
@@ -2779,12 +2788,14 @@ twice for treating one guest's reading as another's.
 Windows XP x64 does not enforce it, which is the whole reason Phase 21 took
 that target first. Vista x64 and Windows 7 x64 both do, and the
 cross-certificate route that once made third-party Windows 7 x64 signing
-possible is no longer available in practice. So `xhci98.sys` loads on these
-systems only on a boot with driver signature enforcement disabled (F8).
-Test-signing mode is not a route for the published package: it loads a
-test-signed driver, and this package is not signed (next section). Design
-record 11 section 6 is the record; the requirement belongs in the release notes
-beside any tier that is claimed, not in a footnote.
+possible is no longer available in practice. So an unsigned `xhci98.sys`
+loads on these systems only on a boot with driver signature enforcement
+disabled (F8). Test-signing mode was not a route for the published package
+while it was unsigned (next section); **since 2026-10-11 the published x64
+binaries are test-signed and it is** ("Since 2.2.0.3 the x64 package is
+test-signed", below). Design record 11 section 6 and design record 19 are
+the record; the requirement belongs in the release notes beside any tier
+that is claimed, not in a footnote.
 
 **F8 works on both guests** (roadmap tasks 21.8 and 22.5). It needs no
 certificate, no catalog and nothing staged. It applies to exactly one boot, by
@@ -2811,7 +2822,9 @@ chicken-and-egg between the boot menu and the controller being installed.
 
 **A test-signed package was proved out host-side on 2026-09-10, before either
 guest existed, and it works end to end with no network and nothing installed.**
-It is kept as a record, not a step: the guest half of that route
+It is kept as a record, not a step - the step is now the packager's (design
+record 19), with the project's own certificate and without the catalog this
+probe also made: the guest half of that route
 (`bcdedit -set TESTSIGNING ON`) was removed by the owner on 2026-09-16 without
 being tried, since no user of the unsigned download can take it without signing
 the driver themselves. The whole toolchain is already in this repository:
@@ -2877,14 +2890,23 @@ What the signature costs and what it does not: the embedded signature appends
 1,024 bytes to the amd64 `release` binary (94,720 to 95,744) and changes
 nothing else. `SignTool verify /pa` then **fails** on the host with "A
 certificate chain processed, but terminated in a root certificate which is not
-trusted by the trust provider" - which is the expected result and is precisely
-the guest-side cost: the test root has to be imported into the guest's
+trusted by the trust provider" - which is the expected result. This probe
+went on to say that the test root had to be imported into the guest's
 **Trusted Root Certification Authorities and Trusted Publishers** stores, both,
-before `bcdedit -set TESTSIGNING ON` buys anything. Nothing from this probe was
+before `bcdedit -set TESTSIGNING ON` bought anything; that was an
+expectation, never read on a guest, and design record 19's route imports
+nothing (its guest legs read whether test-signing mode loads the driver
+without it). Nothing from this probe was
 left behind: the certificate was removed from the host store afterwards, and no
 file in the repository was changed by it.
 
-#### This project does not sign its package, and does not need to
+#### Until 2.2.0.3 this project did not sign its package
+
+**Superseded for the x64 package by the owner on 2026-10-11** (design
+record 19, and the next section): the published x64 binaries are now
+test-signed. What follows is the 2026-09-10 decision as it stood, kept
+because its second half - no catalog, the INF byte-identical - is the half
+that still holds, and its demand-start analysis is why.
 
 **Decided by the owner on 2026-09-10.** Signing a release buys the claimed tier
 nothing. Windows XP x64 and Server 2003 x64 do not enforce kernel-mode code
@@ -2924,6 +2946,55 @@ flagged as such deliberately. Task 21.8 tries the embedded-only route first on
 each guest. If the driver loads, the INF line is never needed. If it does not,
 the catalog question reopens - and then the line is added to a *staged* copy of
 the INF and measured there, before anyone proposes it for the shipping package.
+
+#### Since 2.2.0.3 the x64 package is test-signed
+
+**Owner, 2026-10-11; design record 19 is the authority** (roadmap-hcd task
+36.50). Every published x64 directory carries `xhci98.sys` and
+`xhciuas.sys` with an embedded Authenticode signature by the project's own
+test certificate, `CN=xhci98 project test signing (not trusted)`: SHA-1
+file digest (what Vista verifies), no timestamp (the cut is offline), no
+catalog and both INFs byte-identical (demand-start, as above). The x86
+binaries are never signed.
+
+- **Making and holding the key.** Once, by the maintainer who holds it:
+  `scripts\package\make-testcert.ps1`, which runs record 19 section 4's
+  MakeCert and pvk2pfx commands (WDK 7.1, `tools\WinDDK71\bin\x86`) into
+  the git-ignored `scripts\local\testsign\` or an `-OutDir` outside the
+  tree. The `.pfx` is the private key: never tracked (`*.pfx` and `*.pvk`
+  are ignored everywhere), never packaged, never printed or copied into
+  notes. The repository sits in a synchronised OneDrive folder on the
+  maintainer's machine, so a key under it is synchronised; record 19 says
+  so and the packager takes the key by path.
+- **How a cut signs.** `make-release.ps1 -TestSignPfx <path>` (releases
+  `README.md`, "Cutting a release"); the password from
+  `XHCI98_TESTSIGN_PW` or a prompt. Each x64 leg's `make-package.ps1` signs
+  copies of the two binaries after its import gates have read the build,
+  checks each signature
+  (thumbprint, SHA-1, digest, no timestamp) and that the copy is the build
+  plus the signature and nothing else, and stages `xhci98-test.cer`. The
+  cut repeats both checks on the published copies. **A cut that publishes
+  x64 without the key is refused**, before anything is built.
+- **A clone without the key** builds and stages exactly as before:
+  `make-package.ps1 -Arch amd64` without `-TestSignPfx` gives an unsigned
+  package for its own guests (F8 route above), and `make-release.ps1 -Arch
+  x86` cuts the x86 half. `make-package.ps1 -Flavor qemu -Arch amd64
+  -TestSignPfx ...` gives a signed `qemu` package for a guest that should
+  start in test-signing mode; it is never published.
+- **Verifying.** `tools\WinDDK71\bin\x86\SignTool.exe verify /pa /v
+  <dir>\xhci98.sys` shows the SHA-1 file hash, the chain with the
+  certificate's SHA-1 hash, "File is not timestamped", and then fails on
+  the untrusted root - the expected result (record 19 section 6). The
+  thumbprint to compare is record 19 section 10's.
+- **The test-signing route on the Vista x64 and Windows 7 x64 guests.** An
+  elevated prompt ("Getting the elevated prompt" above: `sendkey
+  ctrl-esc`, `cmd`, `ctrl-shift-ret`, the UAC accelerator), `bcdedit /set
+  testsigning on`, `shutdown -r -t 0`; then a normal start with no F8 and
+  no `advancedoptions` menu (`bcdedit /deletevalue {current}
+  advancedoptions` on an autologon snapshot that carries it). The driver
+  loads, and "Test Mode" shows at the desktop's corner. The install still
+  raises the publisher prompt. `bcdedit /set testsigning off` and a restart
+  undo it. The readings are record 19 section 10's and `runs/run-36.md`'s.
 
 #### And the install path is not the one the INF was written for
 
