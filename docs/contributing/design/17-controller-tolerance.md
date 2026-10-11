@@ -252,6 +252,81 @@ Its count is `BackstopDrains`: drains the backstop queued, evidence of a
 lost or late interrupt, not proof. Cost on a compliant controller: one
 cached memory read per poll.
 
+**Amended for `2.3.0.0` (roadmap-hcd 36.55): the step runs in the
+tolerance clock's DPC, not on the controller thread.** Windows 98 SE
+stopped under it. The run was the `qemu` flavour, `XhciInterruptMode` 1,
+the dead line of record 15 section 11, and a Bulk-Only copy from an
+MS-DOS prompt (`runs/run-36.md`, "36.55"). The controller thread stopped
+being scheduled while the copy's request waited, and it never ran again.
+This happened twice with the thread in two different places: once in its
+loop's 100 ms timed wait, and once between two steps of a pass, runnable
+code that waits on nothing. Through both stops the tolerance clock's
+timer DPC kept running every 100 ms. The power gate was free, and an
+event stood at the dequeue. On a delivery where the backstop is the only
+drain, the request waited for a completion that only the unscheduled
+thread would queue. That is a deadlock. What in the VMM holds the thread
+off was not identified. Every instruction sampled was in the VMM's ring
+0, none in this driver. What was read is that a DPC still runs where the
+thread does not. The step therefore moves to the place that was seen to
+run:
+
+- **Where.** `hcdTolDpc`, first, before it takes `TimerLock` to count the
+  tick and arm the timer again. The DPC never holds both locks. The order
+  follows the frame sampler's DPC: controller work first, re-arm last.
+  `HcdTimersDrain` waits for the re-arm or its refusal, so once it returns
+  nothing of this DPC still touches the controller. The step runs on every
+  tick, so the observation is looked at every 100 ms. Before, it was
+  looked at on each thread pass, at least 100 ms apart and later whenever
+  the thread was busy.
+- **What.** It is the same step. Under the controller lock it checks
+  `hcdDrainAdmitted`, which reads `HcInfoStatus`, `INITIALIZED`, the
+  failure, D0, `SuspendedInD0`, `DpcClosed` and a ring that exists. It
+  peeks at the dequeue and updates the one observation. When the interval
+  has passed, it queues `IsrDpc` through the ISR's admission and counts
+  `BackstopDrains` under the lock. `XhciTolerance` 0 still turns it off,
+  and the qemu flavour's start hold (task 36.4) still holds it back.
+- **No power gate.** The gate is a wait, and a DPC cannot take it. The
+  step does not need it. What the step queues is the ISR's own DPC, and
+  that drain admits itself under the controller lock (`ControllerFailed`,
+  `INITIALIZED`, a poll delivery's service). An interrupt can already
+  queue it at any point of a power transition or a recovery, and the
+  drain has never relied on the gate for that (record 15 section 2). The
+  admission the step reads is a filter, not the safety. A stale read
+  costs one DPC that drains nothing. Record 15 section 7.1's peek in the
+  frame timer's DPC already queues the drain from a timer DPC, with no
+  gate, under a poll delivery.
+- **Bounded.** One peek and at most one insertion per tick. The drain it
+  queues is bounded by `XHCI_DPC_MAX_EVENTS`, as every drain is. The step
+  never drains inline, for section 7.1 of record 15's reason: a drain
+  completes IRPs, and a completion routine resubmits.
+- **The thread no longer takes it, and no thread fallback is kept.** The
+  interval is measured on the tolerance clock, and only this DPC advances
+  that clock. A thread step therefore could never queue a drain at a time
+  the DPC was not running. While the DPC runs, it takes the step on every
+  tick, so a thread step would only repeat the same observation under the
+  same lock. The thread's own waits keep their faster drains:
+  `hcdThreadWaitDrain` (task 36.13) and `HcdCommandDrain` (task 36.4)
+  queue a drain between the slices of a command or EP0 wait as soon as an
+  event stands, without waiting out the interval.
+- **The release.** The ISR is disconnected and the thread stopped before
+  `hcdRelease` closes the DPC. The tolerance clock's DPC, however, runs
+  until `HcdTimersDrain`, which comes after the close. It is a producer
+  racing the close on another processor. The pairing is made explicit:
+  the producer counts `DpcsInFlight` with an interlocked increment and
+  then reads `DpcClosed`. The release raises `DpcClosed` with an
+  interlocked exchange and then waits `DpcsInFlight` out. Both sides
+  order their write before their read, so either the producer sees the
+  close and rolls its count back, or the release sees the count and waits
+  for the DPC. The DPC then runs closed and only retires its count.
+- **Timing.** A lost interrupt is drained at the first tick after the
+  fourth since it was seen, about 300 to 400 ms at the usual clock rates,
+  plus the DPC's own latency. The thread's pacing no longer adds to it.
+  Under mode 1 on a dead line, every completion comes at that pace.
+
+Moving the step off the thread revises this section's first paragraph,
+the owner's design of 2026-10-06 ("a step of its own on each
+controller-thread pass"). Orchestrator decision, owner to confirm.
+
 ### 4.2 The soft retry (35-T.2, unconditional but for an exclusion list)
 
 **Scope.** A USB Transaction Error on a bulk or interrupt endpoint that has

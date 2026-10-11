@@ -144,7 +144,12 @@ The drain and its accounting:
   opportunistic checks reuse that peek with their own staleness rule, and
   under a poll delivery the backstop's queueing is one more producer the
   close sequence above already covers, since it goes through the same
-  admission.
+  admission. **Since `2.3.0.0` (roadmap-hcd 36.55) the step runs in the
+  tolerance clock's timer DPC, not on the controller thread** (record 17
+  section 4.1, "Amended"). Windows 98 SE was seen to leave the thread
+  unscheduled while the DPC kept running. The release now raises
+  `DpcClosed` with an interlocked exchange, because that DPC can race
+  the close.
 
 Timers:
 
@@ -403,7 +408,13 @@ delivers (issue 12 section 2), so the backstop cannot be the observer. The
 poller's own timer and DPC look instead: at a mode 0 start under a line
 delivery the poller is opened in the **watch role** (section 5.2), and its
 DPC runs whatever `hcdThread` is doing, command waits and `XhciTolerance` 0
-included.
+included. Task 36.55 keeps this decision and carries its reason one step
+further. Windows 98 SE was seen to leave `hcdThread` unscheduled
+altogether while a copy waited on a dead line under mode 1. So the
+backstop's own step, which is mode 1's only delivery on such a line, now
+runs in the tolerance clock's DPC as well (record 17 section 4.1,
+"Amended"). The watcher is still the only observer of a dead line. The
+backstop drains and decides nothing about the line.
 
 **A look**, every `XHCI_POLL_WATCH_MS` (100 ms) - a fixed period of the
 watch role's own, independent of `XhciPollIdleMs` and `XhciPollActiveMs`
@@ -1280,7 +1291,8 @@ event not yet drained.
   lifetime across a reset is not otherwise guaranteed. Task 35-T.1's
   lost-interrupt backstop (record 17 section 4.1, `hcd_ctl.c`
   `hcdBackstop`) already takes this peek, under the same lock, on each
-  controller-thread pass; these checks reuse the helper with their own
+  controller-thread pass (since 36.55, on each tick of the tolerance
+  clock's DPC instead); these checks reuse the helper with their own
   staleness rule, which is none: a hit queues the drain at once, since
   under a poll delivery nothing else will come for it before the next
   poll. A hit while `IsrDpc` is already queued costs nothing
@@ -1291,8 +1303,9 @@ event not yet drained.
   work, the thread's own transfers and the command submit; at the end of
   each drain `IsrDpc` runs, in its own controller-lock hold after
   `XhciEventDpc` returns (the service DPC needs none: its decision sees
-  the bounded clause); on each controller-thread pass (`hcdPoll`, beside
-  the backstop); and in the frame timer's DPC (`hcdFrameDpc`, in the hold
+  the bounded clause); on each controller-thread pass (`hcdPoll`; the
+  backstop that stood beside it moved to the tolerance clock's DPC in
+  36.55); and in the frame timer's DPC (`hcdFrameDpc`, in the hold
   it already takes).
 - **On a hit**: queue `IsrDpc` under the admission rule (section 5.2). Never
   drain inline: a drain completes IRPs, a class driver's completion routine
