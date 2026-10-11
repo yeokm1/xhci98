@@ -1247,22 +1247,22 @@ that does not exist, or clear that one yourself.
         #
         # Until 2026-10-04 this warning named the three guests the miniport's
         # amd64 build ran on (tasks 21.5, 21.8 and 22.5). That standing was the
-        # miniport's and left the tree with it: the HCD is a different driver,
-        # and its amd64 build has its first guest leg in task 28-A.2 (XP x64)
-        # and the rest in 28-V.1. Restate this when those legs are read.
+        # miniport's and left the tree with it. Until 2026-10-11 it said no
+        # amd64 build of the HCD had run on real hardware; the owner's 2.3.0.0
+        # bench ran the test-signed x64 drivers under XP x64 and 7 x64 on one
+        # Dell Latitude E7250 (runs/run-36.md, "The owner's bench, 2026-10-11").
         #
-        Write-Warn "This is the successor HCD, not the 1.2.0.0 miniport, and the guests the"
-        Write-Warn "miniport's amd64 build ran on say nothing about it. Its amd64 build is read"
-        Write-Warn "in QEMU guests only (roadmap-hcd.md tasks 28-A.2 and 28-V.1), XP x64 first."
+        Write-Warn "This is the successor HCD, not the 1.2.0.0 miniport. Its amd64 build is read"
+        Write-Warn "in QEMU guests (XP x64, Vista x64, 7 x64) and on one real machine, a Dell"
+        Write-Warn "Latitude E7250 under XP x64 and 7 x64 (the 2.3.0.0 bench)."
         Write-Warn "Windows Server 2003 x64 rests on being the same operating system as XP x64."
         if ($null -ne $testSignCert) {
             Write-Warn "On Vista x64 and 7 x64 the test-signed driver loads in test-signing mode or"
-            Write-Warn "on an F8 start (design record 19). No amd64 build has ever run on real hardware."
+            Write-Warn "on an F8 start (design record 19)."
         } else {
-            Write-Warn "On Vista x64 and 7 x64 this unsigned driver loads only on a boot with"
-            Write-Warn "signature enforcement disabled from F8. No amd64 build has ever run on real hardware."
+            Write-Warn "On Vista x64 and 7 x64 this UNSIGNED driver loads only on a boot with"
+            Write-Warn "signature enforcement disabled from F8; a published x64 package is test-signed."
         }
-        Write-Warn "Treat a guest booted from this media as the experiment it is."
     } else {
         Write-Host "  Win98    Device Manager -> the xHCI device -> Update Driver -> Specify a location"
         Write-Host "  Win2000  Device Manager -> the xHCI device -> Update Driver -> Have Disk"

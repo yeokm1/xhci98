@@ -140,8 +140,9 @@ four directories. It defaulted to `x86` alone until then, because until then no
 amd64 binary of this driver had ever executed.
 
 Read the x64 half of a cut as narrowly as its evidence is: three guests - one
-Windows XP x64 and, from 1.1.0.0, one Vista x64 and one Windows 7 x64 - virtual
-machines only, never real hardware, against the x86 half's install legs.
+Windows XP x64 and, from 1.1.0.0, one Vista x64 and one Windows 7 x64 - and,
+from 2.3.0.0, one real machine, a Dell Latitude E7250 under XP x64 and 7 x64
+(the owner's bench, 2026-10-11), against the x86 half's install legs.
 Publishing it by default is what claiming the target means, not a
 claim that the two halves are equally attested.
 
