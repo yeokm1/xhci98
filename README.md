@@ -301,7 +301,7 @@ A controller with no interrupt pin is polled instead of refused, and so is one w
   2. The controller's interrupt line, where it has one and Windows assigned it.
   3. Polling: no interrupt pin, none assigned, or a granted message that could not connect.
   4. After the start, a line the driver sees raised that never reaches it switches to polling by itself.
-- `1`: the interrupt line. What happens when Windows assigns something else:
+- `1`: the interrupt line.
   - No line at all: the controller fails to start (Code 10).
   - On Vista and 7, a message-signalled interrupt instead (for example because the controller has no line): the driver uses it. If it cannot be connected, the driver polls; on 32-bit Vista and 7 without the helper and with no line offered, the start fails (Code 10).
 - `2`: always poll, at the cost of more processor wake-ups. Use it for an interrupt that fails in a way the driver cannot see in the controller's registers.
