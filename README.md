@@ -218,8 +218,8 @@ The two log values are described in the [release notes](docs/using/release-notes
 
 `XhciImodInterval250ns` sets the shortest gap the controller leaves between two interrupts, in units of 250 ns. A shorter gap makes USB storage faster at the cost of more interrupts.
 
-- `160` (written by the install): 40 us, at most 25,000 interrupts a second. Linux uses the same value.
 - `10` (the lowest accepted): 2.5 us.
+- `160` (written by the install): 40 us, at most 25,000 interrupts a second. Linux uses the same value.
 - `4000`: 1 ms, the controller's own power-on value. It is also used when the value is missing, unreadable or outside `10`-`4000`.
 
 A value out of range is replaced by `4000`, not rounded to the nearest limit, so a mistyped `0` cannot turn moderation off. If you get audio stutter or instability under load, raise it towards `4000` or delete it.
@@ -284,9 +284,9 @@ On the same Intel chipsets, two chipset registers decide which interrupt line th
 
 `XhciIntelIrqRoute` lets the driver read those registers at each start and resume and point the interrupt at the line Windows assigned.
 
+- `0`: read and report only.
 - `1` (default; also absent or any other value): only on the E7250 (`8086:9CB1`, subsystem `1028:062D`, chipset `9CC3`).
 - `2`: on any of the six Intel controllers listed above, each with one of its own chipset ids.
-- `0`: read and report only.
 
 It writes nothing on any other controller, nothing when the interrupt is a message (MSI) rather than a line, nothing while the driver is polling the controller, and on 2000 to 7 nothing when Windows gave the controller an interrupt below 16.
 
@@ -328,8 +328,8 @@ Some controllers reach Low- and Full-Speed devices only through a USB 2.0 hub bu
 
 `XhciUsb2HubSpeedFallback` lets the driver give such a device the standard speed ID, Full Speed `1` or Low Speed `2`, when the table names neither speed and does not use that number for another.
 
-- `1` (default): on.
 - `0`: off; such devices are refused.
+- `1` (default): on.
 
 A controller whose table lists Low and Full Speed, or has no table, is not affected, and a device on a root port of its own is never given a fallback. Restart after changing it.
 
@@ -350,8 +350,8 @@ A fault the driver cannot tie to a transfer re-enumerates the device, as if it h
 
 Each is tried a few times at most; then the port or the controller is held until the device is unplugged or the controller is restarted. None of it acts unless a fault is reported.
 
-- `XhciTolerance` `1` (default): on. `0` turns most of it off.
-- `XhciIntervalCap`: interrupt endpoints polled at least every 32 ms. `1` (default) on AMD controllers, `2` on every controller, `0` off.
+- `XhciTolerance`: `0` turns most of it off; `1` (default) on.
+- `XhciIntervalCap`: interrupt endpoints polled at least every 32 ms. `0` off, `1` (default) on AMD controllers, `2` on every controller.
 - `XhciAvgTrbEsit`: a comparison switch for interrupt endpoints. Leave it at `0` (default).
 
 If a USB device stops working on your machine, send two `XHCISNAP` captures (one while it works, one after it stops) and the controller's id from `XHCIQUAL`. The [release notes](docs/using/release-notes.md), "Controller faults: what the driver does about them", and the package's `readme.txt` have the details, including the exceptions.
