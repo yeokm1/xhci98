@@ -190,11 +190,39 @@ function Assert-DerElements {
     # each read in full (constructed ones recursively), with nothing left
     # over. Used for the parts of SpcIndirectDataContent whose content this
     # project does not interpret, so that they are validated, not skipped.
-    param([byte[]]$B, [int]$At, [int]$End)
+    # The universal primitives whose DER content has rules are held to them
+    # (review round 3): BOOLEAN one byte 00 or FF, INTEGER minimal, BIT
+    # STRING an unused-bit count 0 to 7 (0 when empty), NULL empty, OID
+    # through ConvertFrom-DerOid, BMPString an even length; other primitives
+    # (strings, context-specific IMPLICIT values such as SpcPeImageData's
+    # SpcString) are octets with no rule of their own. Nesting is bounded.
+    param([byte[]]$B, [int]$At, [int]$End, [int]$Depth = 0)
+    if ($Depth -gt 16) { throw "DER: nesting deeper than 16" }
     $p = $At
     while ($p -lt $End) {
         $e = Read-DerTlv -B $B -At $p -Limit $End
-        if ($e.Tag -band 0x20) { Assert-DerElements -B $B -At $e.ValueAt -End $e.End }
+        if ($e.Tag -band 0x20) {
+            Assert-DerElements -B $B -At $e.ValueAt -End $e.End -Depth ($Depth + 1)
+        } else {
+            switch ([int]$e.Tag) {
+                0x01 { if ($e.Length -ne 1 -or ($B[$e.ValueAt] -ne 0x00 -and $B[$e.ValueAt] -ne 0xFF)) { throw "DER: malformed BOOLEAN at $p" } }
+                0x02 {
+                    if ($e.Length -lt 1) { throw "DER: empty INTEGER at $p" }
+                    if ($e.Length -gt 1 -and (($B[$e.ValueAt] -eq 0x00 -and ($B[$e.ValueAt + 1] -band 0x80) -eq 0) -or
+                                              ($B[$e.ValueAt] -eq 0xFF -and ($B[$e.ValueAt + 1] -band 0x80) -ne 0))) {
+                        throw "DER: non-minimal INTEGER at $p"
+                    }
+                }
+                0x03 {
+                    if ($e.Length -lt 1 -or $B[$e.ValueAt] -gt 7 -or ($e.Length -eq 1 -and $B[$e.ValueAt] -ne 0)) {
+                        throw "DER: malformed BIT STRING at $p"
+                    }
+                }
+                0x05 { if ($e.Length -ne 0) { throw "DER: NULL with content at $p" } }
+                0x06 { [void](ConvertFrom-DerOid -B $B -At $e.ValueAt -Length $e.Length) }
+                0x1E { if ($e.Length % 2 -ne 0) { throw "DER: BMPString of odd length at $p" } }
+            }
+        }
         $p = $e.End
     }
     if ($p -ne $End) { throw "DER: elements overrun their container" }
@@ -243,7 +271,7 @@ function ConvertFrom-SpcIndirectData {
     if ($dataType.End -lt $data.End) {
         $value = Read-DerTlv -B $Content -At $dataType.End -Limit $data.End
         if ($value.End -ne $data.End) { throw "SpcIndirectDataContent.data has more than a type and a value" }
-        if ($value.Tag -band 0x20) { Assert-DerElements -B $Content -At $value.ValueAt -End $value.End }
+        Assert-DerElements -B $Content -At $dataType.End -End $data.End
     }
     $digestInfo = Read-DerTlv -B $Content -At $data.End -Limit $outer.End
     if ($digestInfo.Tag -ne 0x30 -or $digestInfo.End -ne $outer.End) { throw "SpcIndirectDataContent.messageDigest is not the last SEQUENCE" }
