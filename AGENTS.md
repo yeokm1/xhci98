@@ -540,6 +540,22 @@ the x86 half's four install legs. `-UploadSetOnly` is the one mode
 that does not follow the default - it derives the architectures from the
 published tree, since every version published before `1.1.0.0` is x86-only.
 
+**Every published x64 directory is test-signed, and only by the packager**
+(owner, 2026-10-11; design record 19 is the authority). `xhci98.sys` and
+`xhciuas.sys` of `release-x64` and `debug-x64` carry an embedded
+Authenticode signature by the project test certificate - SHA-1 file digest,
+no timestamp, no catalog, both INFs unchanged - applied at staging by
+`make-package.ps1 -TestSignPfx` and never by hand, with the certificate's
+public half beside them as `xhci98-test.cer`; `make-release.ps1` refuses a
+cut that would publish an x64 directory without it, with no switch past
+the refusal. The private key (`.pfx`) is held only on the maintainer's
+disk in the git-ignored `scripts\local\testsign\` or a folder outside the
+tree, and is never tracked, packaged, printed, or copied into notes or
+memory; its password comes from `XHCI98_TESTSIGN_PW` or a prompt and is
+never stored. The x86 binaries are never signed. A clone without the key
+stages unsigned packages for its own guests and cannot cut a release with
+an x64 half. This is not Microsoft signing, and no document may imply it.
+
 See `docs/contributing/build-and-test.md` for environment setup, QEMU
 configuration, the install procedure, the two model INFs, and "The files the
 OS supplies: `usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll`";
@@ -681,6 +697,7 @@ UTF-8.
 - Do not place a SET_ADDRESS setup packet on a transfer ring. xHCI forbids software-issued SET_ADDRESS (spec section 4.5.4.1: the xHC blocks it and completes the TRB with TRB Error). The bus addresses a device with the Address Device command in its own enumeration state machine (design record 13 section 5.3), and a SET_ADDRESS a client sends is never put on a ring.
 - Do not use undocumented Win98 kernel internals without documenting why there is no other option.
 - Do not commit a third-party document, binary, or disassembly listing. Record where to fetch it and what it hashes to instead. See "Third-Party Material and Provenance".
+- Do not sign a binary by hand, sign an x86 binary, or let the test-signing key (`.pfx`) or its password reach a tracked file, a package, a log or a note. The packager signs the x64 binaries at staging (design record 19).
 - Do not describe a fact as runtime-observed when it was read out of a disassembly. Tag the method you actually used.
 - Do not write a legal conclusion into any file in this repository. `docs/contributing/legal-provenance.md` records facts, not verdicts.
 - Do not write a development machine's name (its `hostname`) into any tracked file, commit message or report. Name the host by its alias - "development host A", "B", "C" - as every run record here does; the key from name to alias is kept out of the repository (owner, 2026-09-28). Logs that print `$env:COMPUTERNAME` are git-ignored; do not transcribe that field.

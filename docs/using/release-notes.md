@@ -70,16 +70,43 @@ separate build from a separate toolchain, in their own directories with their
 own INFs, for Windows XP x64, Vista x64 and Windows 7 x64. Picking the wrong
 directory is harmless: Windows finds no driver in it and says so.
 
-**On Windows Vista x64 and Windows 7 x64 driver signature enforcement must be
-disabled for the drivers to load, at every start.** Those systems refuse an
-unsigned kernel-mode driver, and these are not signed. On a start where
-enforcement is in force the controller shows Code 39 and nothing plugged into
-it works inside Windows, a USB keyboard or mouse included. The install itself
-can be done on an ordinary start. After each install, the Program
-Compatibility Assistant may say "Windows requires a digitally signed
-driver"; the driver still loads on a start with enforcement disabled (read
-on both systems for the `2.1.1.0` package). 32-bit Vista and Windows 7, and
-Windows XP x64, do not refuse unsigned drivers.
+**From `2.2.0.3` the 64-bit `xhci98.sys` and `xhciuas.sys` are
+test-signed, so on Windows Vista x64 and Windows 7 x64 the driver can run
+in test-signing mode instead of disabling driver signature enforcement with
+F8 at every boot.** Those systems refuse a kernel-mode driver without a
+signature they accept; up to `2.2.0.0` the drivers were not signed, and
+enforcement had to be disabled at every start. Once:
+
+1. Open an elevated Command Prompt: Start, type `cmd`, right-click it, Run
+   as administrator.
+2. `bcdedit /set testsigning on` - a boot setting of the current Windows
+   entry, so it stays on for every boot until it is turned off; no F8 is
+   needed.
+3. Restart. "Test Mode" (with the Windows version and build) appears in a
+   corner of the desktop while it is on.
+4. Install the driver as usual. Windows still says it cannot verify the
+   publisher; choose "Install this driver software anyway".
+
+Check: `bcdedit /enum {current}` shows `testsigning Yes`. Turn it off:
+`bcdedit /set testsigning off` and restart; the driver then needs F8 again,
+or it does not load and the controller shows Code 52 or Code 39, with
+nothing plugged into it working inside Windows, a USB keyboard or mouse
+included.
+
+- With BitLocker on the system drive, suspend BitLocker before changing the
+  boot setting, or the next boot asks for the recovery key.
+- This is not Microsoft signing: the certificate is the project's own test
+  certificate, which no Windows trusts by itself.
+- Importing the `xhci98-test.cer` in the `-x64` directories is not needed
+  for test-signing mode (it only affects the install prompt) and is not
+  recommended.
+- F8 -> "Disable Driver Signature Enforcement" still works as before, for
+  one boot, without test mode. After an install on such a start the Program
+  Compatibility Assistant may say "Windows requires a digitally signed
+  driver"; the driver still loads on a start with enforcement disabled
+  (read on both systems for the `2.1.1.0` package).
+- 32-bit Vista and 7, and XP x64, need neither: they do not refuse unsigned
+  drivers.
 
 ## What this is not
 
@@ -103,10 +130,13 @@ Windows XP x64, do not refuse unsigned drivers.
 - It is not a mass-storage driver for Windows 98 SE. Storage on Windows 98
   SE, Bulk-Only and UAS alike, needs NUSB's mass-storage component; see
   "Windows 98 SE and ME: the stock install, and storage".
-- It is not signed. Windows 98 SE and ME do not check; Windows 2000 and XP
-  warn and install; 32-bit Vista and 7 warn and install; Vista x64 and
-  Windows 7 x64 load it only while driver signature enforcement is disabled
-  (above). No 64-bit Windows after Windows 7 is supported.
+- It is not signed by Microsoft. The 32-bit drivers are not signed at all:
+  Windows 98 SE and ME do not check; Windows 2000 and XP warn and install;
+  32-bit Vista and 7 warn and install. From `2.2.0.3` the 64-bit drivers
+  carry the project's own test signature, which Vista x64 and Windows 7 x64
+  accept only in test-signing mode, and otherwise load only while driver
+  signature enforcement is disabled (above). No 64-bit Windows after
+  Windows 7 is supported.
 - It does not put idle devices to sleep unless you turn that on. Selective
   suspend is new in `2.3.0.0` and off by default; see
   "XhciSelectiveSuspend: putting idle devices to sleep".
@@ -1821,9 +1851,10 @@ or says it was found by reading the code.
 - **No USB storage on a stock Windows 98 SE.** Storage needs NUSB's
   mass-storage component; see "Windows 98 SE and ME: the stock install, and
   storage".
-- **Windows Vista x64 and Windows 7 x64: driver signature enforcement must be
-  disabled** at every start, or the controller sits at Code 39 and nothing on
-  it works. See "What this is".
+- **Windows Vista x64 and Windows 7 x64 need test-signing mode** (from
+  `2.2.0.3`), or driver signature enforcement disabled with F8 at every
+  start; otherwise the controller shows Code 52 or Code 39 and nothing on it
+  works. See "What this is".
 - **Windows 98 SE: a USB audio device can wedge the machine as it loads,
   and it is not this driver's doing.** After a cold boot, attaching a USB
   audio device wedges the guest often, with the taskbar clock stopped and
