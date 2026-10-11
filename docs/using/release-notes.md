@@ -226,6 +226,23 @@ detail, and what each rests on.
   `0`, `XhciSelectiveSuspend` `0` and `XhciUsb2HubSpeedFallback` `1`, each
   the value a missing one reads as, so nothing behaves differently; an
   update keeps a value you set ("Registry settings").
+- **A UAS drive keeps working after a transfer error on its data.** A
+  USB Transaction Error on a UAS drive's data or status stream is now
+  retried in place, as on any other bulk endpoint ("Controller faults:
+  what the driver does about them"); before, the read or write failed and
+  the drive was reset. And after a reset of the drive, the driver starts
+  each of its streams afresh. Read in QEMU on development host A with the
+  error made on purpose; a real drive's error is on the bench.
+- **UAS in QEMU: a workaround for an emulator defect.** QEMU's xHCI (read
+  at QEMU 11.1.0, `hw/usb/hcd-xhci.c`: `xhci_find_stream` calls
+  `xhci_ring_init`, which forces the consumer cycle to 1) ignores the cycle
+  bit a UAS stream's context carries whenever an endpoint is stopped, reset
+  or reconfigured, so a stream whose ring had wrapped an odd number of
+  times stopped moving data: a UAS disk in a QEMU guest could then hang
+  after any transfer error, cancel or reset until it was removed and added
+  again. On QEMU's xHCI alone (PCI ID `1B36:000D`) the driver now gives
+  each stream its cycle back after such a command. Real controllers read
+  that bit and never take this path.
 
 ## Targets and their standing
 
@@ -967,7 +984,8 @@ and then stops in a stated state rather than try for ever:
 - **A transfer error on a bulk or interrupt endpoint** (a USB Transaction
   Error: the device did not answer cleanly) is retried in place, up to three
   times for the same transfer, before the transfer fails as it did up to
-  `2.1.1.0`. Not on the control endpoint, isochronous (audio) or UAS stream
+  `2.1.1.0`. Since `2.3.0.0` that includes a UAS drive's data and status
+  streams. Not on the control endpoint or isochronous (audio)
   endpoints, not for a Low- or Full-Speed device behind a High-Speed hub's
   transaction translator (a mouse or a keyboard plugged into a USB 2.0 hub
   running at High Speed; one behind a Full-Speed-only hub plugged into the

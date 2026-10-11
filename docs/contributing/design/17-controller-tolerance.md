@@ -1691,6 +1691,15 @@ bounded number of times, and name `XHCISNAP`'s new terminal reason;
 code 22 and an invalidation no halt or reset proved; `runs/run-35.md`
 records 35-T.9's second part and the final review's findings.
 
+At revision 12 (roadmap-hcd task 36.54, section 4.12): the release notes'
+"Controller faults" bullet takes UAS streams into the soft retry, and
+"What `2.3.0.0` changes" gains the UAS retry and the QEMU workaround, which
+names the QEMU defect; `build-and-test.md`'s injection section says what
+fault `16` on a stream now reads and what the abandon notes `43` and `44`
+mean; `xhcisnap/README.md` decodes counter words 167 to 172. The
+`README.md` already says only that a transaction error is retried. The
+roadmap's 36.54 carries the legs.
+
 ## 8. Decisions taken (owner, 2026-10-06)
 
 - The work joins Phase 35, and Phase 35's release is `2.2.0.0`.
