@@ -4066,6 +4066,24 @@ batch file at a DOS prompt returns before the export is written (the script
 runs it through Script Host and waits), so a leg's own export needs a
 second `copy` a moment later.
 
+#### `portsw-on.bat` and `portsw-off.bat` (roadmap-hcd task 36.56)
+
+Since task 36.56 every flavour directory also carries `portsw-on.bat` and
+`portsw-off.bat` beside the script (design record 16 section 5a, "The
+batch files"): each shows the value, sets 1 or 0 through
+`cscript //nologo portsw.vbs`, says Windows must be restarted, and pauses.
+The same file runs under `COMMAND.COM` on 98 SE and ME and under `cmd.exe`
+on 2000 and later, so a leg runs each where a user would: double-clicked in
+Explorer in the package folder, and typed at a prompt in that folder; on
+Vista and 7 once through Run as administrator (which starts it in
+`System32`) and once not elevated, where the script raises the elevation
+prompt and the batch file says so. After each, `cscript //nologo
+portsw.vbs show` must read `1 - on, on the listed Intel chipsets` or
+`0 - off`; no restart is needed for that reading. The packager's
+self-tests hold the files' syntax (`Get-PswBatchFaults` in
+`scripts\package\test-package.ps1`), and `xhciqual\test\check-bat-eol.ps1`
+their CRLF endings.
+
 ### Recommended USB Host Chips for Comprehensive Testing
 
 QEMU cannot exercise the quirk-handling code (see "QEMU coverage limits"), so
